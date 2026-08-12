@@ -22,6 +22,8 @@
 
 namespace ash {
 
+using chromeos::AppType;
+
 namespace {
 
 constexpr char kScreenCaptureNotificationId[] = "capture_mode_notification";
@@ -87,9 +89,11 @@ class DisplayParameterizedCaptureModePixelTest
     }
 
     // Create windows so that the screenshot has more contents.
-    window1_ = CreateAppWindow(/*bounds_in_screen=*/gfx::Rect(200, 200));
+    window1_ = CreateWindowWithAppType(AppType::SYSTEM_APP,
+                                       /*bounds_in_screen=*/{200, 200});
     window2_ =
-        CreateAppWindow(/*bounds_in_screen=*/gfx::Rect(220, 220, 100, 100));
+        CreateWindowWithAppType(AppType::SYSTEM_APP,
+                                /*bounds_in_screen=*/{220, 220, 100, 100});
     DecorateWindow(window1_.get(), u"Window1", SK_ColorDKGRAY);
     DecorateWindow(window2_.get(), u"Window2", SK_ColorBLUE);
   }
@@ -173,7 +177,7 @@ TEST_P(DisplayParameterizedCaptureModePixelTest, VideoCaptureNotification) {
       GetScreenshotName(base::StrCat({"video_capture_notification_popup_",
                                       GetDisplayTypeName(GetDisplayType())}),
                         IsNotificationWidthIncreaseEnabled()),
-      /*revision_number=*/6, notification_popup_view));
+      /*revision_number=*/7, notification_popup_view));
 
   test_api()->ToggleBubble();
   auto* notification_view =
@@ -182,7 +186,7 @@ TEST_P(DisplayParameterizedCaptureModePixelTest, VideoCaptureNotification) {
       GetScreenshotName(base::StrCat({"video_capture_notification_view_",
                                       GetDisplayTypeName(GetDisplayType())}),
                         IsNotificationWidthIncreaseEnabled()),
-      /*revision_number=*/6, notification_view));
+      /*revision_number=*/7, notification_view));
 }
 
 }  // namespace ash

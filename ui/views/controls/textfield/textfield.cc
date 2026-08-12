@@ -5,6 +5,7 @@
 #include "ui/views/controls/textfield/textfield.h"
 
 #include <algorithm>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -15,6 +16,7 @@
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notimplemented.h"
 #include "base/strings/utf_string_conversions.h"
@@ -33,6 +35,7 @@
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/base/ime/constants.h"
 #include "ui/base/ime/input_method.h"
+#include "ui/base/ime/text_input_flags.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -89,7 +92,6 @@
 
 #if BUILDFLAG(IS_LINUX)
 #include "ui/base/ime/linux/text_edit_command_auralinux.h"
-#include "ui/base/ime/text_input_flags.h"
 #include "ui/linux/linux_ui.h"
 #endif
 
@@ -139,11 +141,11 @@ ui::TextEditCommand GetTextEditCommandFromMenuCommand(int command_id,
   switch (command_id) {
     case Textfield::kUndo:
       return ui::TextEditCommand::UNDO;
-    case Textfield::kCut:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kCut):
       return ui::TextEditCommand::CUT;
-    case Textfield::kCopy:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kCopy):
       return ui::TextEditCommand::COPY;
-    case Textfield::kPaste:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kPaste):
       return ui::TextEditCommand::PASTE;
     case Textfield::kDelete:
       // The DELETE menu action only works in case of an active selection.
@@ -151,9 +153,9 @@ ui::TextEditCommand GetTextEditCommandFromMenuCommand(int command_id,
         return ui::TextEditCommand::DELETE_FORWARD;
       }
       break;
-    case Textfield::kSelectAll:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll):
       return ui::TextEditCommand::SELECT_ALL;
-    case Textfield::kSelectWord:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kSelectWord):
       return ui::TextEditCommand::SELECT_WORD;
   }
   return ui::TextEditCommand::INVALID_COMMAND;
@@ -426,26 +428,40 @@ bool Textfield::HasSelection(bool primary_only) const {
 }
 
 SkColor Textfield::GetTextColor() const {
-  return text_color_.value_or(
-      GetColorProvider()->GetColor(TypographyProvider::Get().GetColorId(
-          style::CONTEXT_TEXTFIELD, GetTextStyle())));
+  if (text_color_id_.has_value()) {
+    return GetColorProvider()->GetColor(text_color_id_.value());
+  }
+
+  return GetColorProvider()->GetColor(TypographyProvider::Get().GetColorId(
+      style::CONTEXT_TEXTFIELD, GetTextStyle()));
 }
 
-void Textfield::SetTextColor(SkColor color) {
-  text_color_ = color;
-  if (GetWidget()) {
-    SetColor(color);
+void Textfield::SetTextColorId(std::optional<ui::ColorId> color_id) {
+  text_color_id_ = color_id;
+  if (GetWidget() && color_id.has_value()) {
+    SetColor(GetColorProvider()->GetColor(color_id.value()));
+  } else if (GetWidget() && !color_id.has_value()) {
+    SetColor(GetColorProvider()->GetColor(TypographyProvider::Get().GetColorId(
+        style::CONTEXT_TEXTFIELD, GetTextStyle())));
   }
 }
 
 SkColor Textfield::GetBackgroundColor() const {
-  return background_color_.value_or(
-      GetColorProvider()->GetColor(GetReadOnly() || !GetEnabledInViewsSubtree()
-                                       ? ui::kColorTextfieldBackgroundDisabled
-                                       : ui::kColorTextfieldBackground));
+  if (background_color_.has_value()) {
+    return background_color_->ResolveToSkColor(GetColorProvider());
+  }
+
+  return GetColorProvider()->GetColor(
+      GetReadOnly() || !GetEnabledInViewsSubtree()
+          ? ui::kColorTextfieldBackgroundDisabled
+          : ui::kColorTextfieldBackground);
 }
 
-void Textfield::SetBackgroundColor(SkColor color) {
+void Textfield::SetBackgroundColor(std::optional<ui::ColorVariant> color) {
+  if (background_color_ == color) {
+    return;
+  }
+
   background_color_ = color;
   if (GetWidget()) {
     UpdateBackgroundColor();
@@ -461,22 +477,23 @@ void Textfield::SetBackgroundEnabled(bool enabled) {
 }
 
 SkColor Textfield::GetSelectionTextColor() const {
-  return selection_text_color_.value_or(
-      GetColorProvider()->GetColor(ui::kColorTextfieldSelectionForeground));
+  return GetColorProvider()->GetColor(selection_text_color_id_.value_or(
+      ui::kColorTextfieldSelectionForeground));
 }
 
-void Textfield::SetSelectionTextColor(SkColor color) {
-  selection_text_color_ = color;
+void Textfield::SetSelectionTextColorId(std::optional<ui::ColorId> color_id) {
+  selection_text_color_id_ = color_id;
   UpdateSelectionTextColor();
 }
 
 SkColor Textfield::GetSelectionBackgroundColor() const {
-  return selection_background_color_.value_or(
-      GetColorProvider()->GetColor(ui::kColorTextfieldSelectionBackground));
+  return GetColorProvider()->GetColor(selection_background_color_id_.value_or(
+      ui::kColorTextfieldSelectionBackground));
 }
 
-void Textfield::SetSelectionBackgroundColor(SkColor color) {
-  selection_background_color_ = color;
+void Textfield::SetSelectionBackgroundColorId(
+    std::optional<ui::ColorId> color_id) {
+  selection_background_color_id_ = color_id;
   UpdateSelectionBackgroundColor();
 }
 
@@ -528,6 +545,20 @@ void Textfield::SetPlaceholderText(std::u16string_view text) {
   placeholder_text_ = std::u16string(text);
   GetViewAccessibility().SetPlaceholder(base::UTF16ToUTF8(text));
   OnPropertyChanged(&placeholder_text_, PropertyEffects::kPaint);
+}
+
+SkColor Textfield::GetPlaceholderTextColor() const {
+  if (placeholder_text_color_id_.has_value()) {
+    return GetColorProvider()->GetColor(placeholder_text_color_id_.value());
+  }
+  return GetColorProvider()->GetColor(TypographyProvider::Get().GetColorId(
+      style::CONTEXT_TEXTFIELD_PLACEHOLDER,
+      GetInvalid() ? style::STYLE_INVALID : style::STYLE_PRIMARY));
+}
+
+void Textfield::SetPlaceholderTextColorId(std::optional<ui::ColorId> color_id) {
+  placeholder_text_color_id_ = color_id;
+  OnPropertyChanged(&placeholder_text_color_id_, PropertyEffects::kPaint);
 }
 
 gfx::HorizontalAlignment Textfield::GetHorizontalAlignment() const {
@@ -589,7 +620,7 @@ size_t Textfield::GetCursorPosition() const {
 
 void Textfield::SetColor(SkColor value) {
   GetRenderText()->SetColor(value);
-  cursor_view_->layer()->SetColor(value);
+  cursor_view_->layer()->AsSolidColor()->SetColor(SkColor4f::FromColor(value));
   OnPropertyChanged(
       ui::metadata::MakeUniquePropertyKey(&model_, kTextfieldTextColor),
       PropertyEffects::kPaint);
@@ -1179,7 +1210,9 @@ void Textfield::OnFocus() {
   }
 
 #if BUILDFLAG(IS_MAC)
-  if (text_input_type_ == ui::TEXT_INPUT_TYPE_PASSWORD) {
+  if (text_input_type_ == ui::TEXT_INPUT_TYPE_PASSWORD ||
+      text_input_flags_ & ui::TEXT_INPUT_FLAG_HAS_BEEN_PASSWORD ||
+      text_input_flags_ & ui::TEXT_INPUT_FLAG_HAS_BEEN_CUSTOM_PASSWORD) {
     password_input_enabler_ =
         std::make_unique<ui::ScopedPasswordInputEnabler>();
   }
@@ -1233,7 +1266,8 @@ void Textfield::OnThemeChanged() {
   render_text->set_selection_color(GetSelectionTextColor());
   render_text->set_selection_background_focused_color(
       GetSelectionBackgroundColor());
-  cursor_view_->layer()->SetColor(GetTextColor());
+  cursor_view_->layer()->AsSolidColor()->SetColor(
+      SkColor4f::FromColor(GetTextColor()));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1259,6 +1293,21 @@ void Textfield::ShowContextMenuForViewImpl(
     View* source,
     const gfx::Point& point,
     ui::mojom::MenuSourceType source_type) {
+  ui::DataTransferEndpoint data_dst = ui::DataTransferEndpoint(
+      ui::EndpointType::kDefault,
+      {.notify_if_restricted = show_rejection_ui_if_any_});
+  ui::Clipboard::GetForCurrentThread()->GetAllAvailableFormats(
+      ui::ClipboardBuffer::kCopyPaste, data_dst,
+      base::BindOnce(&Textfield::ShowContextMenuForViewImplComplete,
+                     weak_ptr_factory_.GetWeakPtr(), point, source_type));
+}
+
+void Textfield::ShowContextMenuForViewImplComplete(
+    const gfx::Point& point,
+    ui::mojom::MenuSourceType source_type,
+    base::flat_set<ui::ClipboardFormatType> available_formats) {
+  clipboard_contains_text_for_menu_ =
+      available_formats.contains(ui::ClipboardFormatType::PlainTextType());
   UpdateContextMenu();
   context_menu_runner_->RunMenuAt(GetWidget(), nullptr,
                                   gfx::Rect(point, gfx::Size()),
@@ -1563,6 +1612,14 @@ void Textfield::DestroyTouchSelection() {
   touch_selection_controller_.reset();
 }
 
+bool Textfield::IsCommandIdEnabled(int command_id, bool can_paste) const {
+  if (command_id ==
+      std::to_underlying(ui::TouchEditable::MenuCommands::kPaste)) {
+    return !GetReadOnly() && can_paste;
+  }
+  return IsCommandIdEnabled(command_id);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Textfield, ui::SimpleMenuModel::Delegate overrides:
 
@@ -1581,37 +1638,54 @@ bool Textfield::IsCommandIdEnabled(int command_id) const {
     return text_services_context_menu_->IsCommandIdEnabled(command_id);
   }
 
+  // This method is called for menus. For shortcuts, IsTextEditCommandEnabled()
+  // is called instead.
+  if (command_id ==
+      std::to_underlying(ui::TouchEditable::MenuCommands::kPaste)) {
+    return !GetReadOnly() && clipboard_contains_text_for_menu_;
+  }
+
   return IsTextEditCommandEnabled(
       GetTextEditCommandFromMenuCommand(command_id, HasSelection()));
 }
 
-bool Textfield::GetAcceleratorForCommandId(int command_id,
-                                           ui::Accelerator* accelerator) const {
+// static
+bool Textfield::GetStandardAcceleratorForCommandId(
+    int command_id,
+    ui::Accelerator* accelerator) {
   switch (command_id) {
     case kUndo:
       *accelerator = ui::Accelerator(ui::VKEY_Z, ui::EF_PLATFORM_ACCELERATOR);
       return true;
 
-    case kCut:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kCut):
       *accelerator = ui::Accelerator(ui::VKEY_X, ui::EF_PLATFORM_ACCELERATOR);
       return true;
 
-    case kCopy:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kCopy):
       *accelerator = ui::Accelerator(ui::VKEY_C, ui::EF_PLATFORM_ACCELERATOR);
       return true;
 
-    case kPaste:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kPaste):
       *accelerator = ui::Accelerator(ui::VKEY_V, ui::EF_PLATFORM_ACCELERATOR);
       return true;
 
-    case kSelectAll:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll):
       *accelerator = ui::Accelerator(ui::VKEY_A, ui::EF_PLATFORM_ACCELERATOR);
       return true;
 
     default:
-      return text_services_context_menu_->GetAcceleratorForCommandId(
-          command_id, accelerator);
+      return false;
   }
+}
+
+bool Textfield::GetAcceleratorForCommandId(int command_id,
+                                           ui::Accelerator* accelerator) const {
+  if (GetStandardAcceleratorForCommandId(command_id, accelerator)) {
+    return true;
+  }
+  return text_services_context_menu_->GetAcceleratorForCommandId(command_id,
+                                                                 accelerator);
 }
 
 void Textfield::ExecuteCommand(int command_id, int event_flags) {
@@ -1626,8 +1700,10 @@ void Textfield::ExecuteCommand(int command_id, int event_flags) {
 
   if (::features::IsTouchTextEditingRedesignEnabled() &&
       (event_flags & ui::EF_FROM_TOUCH) &&
-      (command_id == Textfield::kSelectAll ||
-       command_id == Textfield::kSelectWord)) {
+      (command_id ==
+           std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll) ||
+       command_id ==
+           std::to_underlying(ui::TouchEditable::MenuCommands::kSelectWord))) {
     CreateTouchSelectionControllerAndNotifyIt();
   }
 }
@@ -2003,15 +2079,11 @@ bool Textfield::IsTextEditCommandEnabled(ui::TextEditCommand command) const {
     case ui::TextEditCommand::COPY:
       return readable && HasSelection();
     case ui::TextEditCommand::PASTE: {
-      if (!editable) {
-        return false;
-      }
-      ui::DataTransferEndpoint data_dst(
-          ui::EndpointType::kDefault,
-          {.notify_if_restricted = show_rejection_ui_if_any_});
-      return ui::Clipboard::GetForCurrentThread()->IsFormatAvailable(
-          ui::ClipboardFormatType::PlainTextType(),
-          ui::ClipboardBuffer::kCopyPaste, &data_dst);
+      // Assume the clipboard contains text. The consequence of this is paste
+      // shortcuts like Ctrl+V will be consumed by this Textfield even if the
+      // clipboard doesn't contain text, and the event will not be propagated to
+      // parent views.
+      return editable;
     }
     case ui::TextEditCommand::SELECT_ALL:
       return !GetText().empty() &&
@@ -2169,14 +2241,6 @@ gfx::Point Textfield::GetLastClickRootLocation() const {
   return selection_controller_.last_click_root_location();
 }
 
-std::u16string Textfield::GetSelectionClipboardText() const {
-  std::u16string selection_clipboard_text;
-  ui::Clipboard::GetForCurrentThread()->ReadText(
-      ui::ClipboardBuffer::kSelection, /* data_dst = */ nullptr,
-      &selection_clipboard_text);
-  return selection_clipboard_text;
-}
-
 void Textfield::ExecuteTextEditCommand(ui::TextEditCommand command) {
   DestroyTouchSelection();
 
@@ -2186,11 +2250,15 @@ void Textfield::ExecuteTextEditCommand(ui::TextEditCommand command) {
     return;
   }
 
-  OnBeforeUserAction();
-
   gfx::SelectionModel selection_model = GetSelectionModel();
-  auto [text_changed, cursor_changed] = DoExecuteTextEditCommand(command);
+  DoExecuteTextEditCommand(
+      command, base::BindOnce(&Textfield::OnTextCommandExecuted,
+                              weak_ptr_factory_.GetWeakPtr(), selection_model));
+}
 
+void Textfield::OnTextCommandExecuted(gfx::SelectionModel selection_model,
+                                      Textfield::EditCommandResult result) {
+  auto [text_changed, cursor_changed] = result;
   cursor_changed |= (GetSelectionModel() != selection_model);
   if (cursor_changed && HasSelection()) {
     UpdateSelectionClipboard();
@@ -2201,17 +2269,18 @@ void Textfield::ExecuteTextEditCommand(ui::TextEditCommand command) {
   OnAfterUserAction();
 }
 
-Textfield::EditCommandResult Textfield::DoExecuteTextEditCommand(
-    ui::TextEditCommand command) {
+void Textfield::DoExecuteTextEditCommand(
+    ui::TextEditCommand command,
+    base::OnceCallback<void(Textfield::EditCommandResult)> callback) {
   bool changed = false;
   bool cursor_changed = false;
   bool add_to_kill_buffer = false;
 
   base::AutoReset<bool> show_rejection_ui(&show_rejection_ui_if_any_, true);
 
-  // Some codepaths may bypass GetCommandForKeyEvent, so any selection-dependent
-  // modifications of the command should happen here.
   switch (command) {
+    // Some codepaths may bypass GetCommandForKeyEvent, so any
+    // selection-dependent modifications of the command should happen here.
     case ui::TextEditCommand::DELETE_TO_BEGINNING_OF_LINE:
     case ui::TextEditCommand::DELETE_TO_BEGINNING_OF_PARAGRAPH:
     case ui::TextEditCommand::DELETE_TO_END_OF_LINE:
@@ -2224,6 +2293,13 @@ Textfield::EditCommandResult Textfield::DoExecuteTextEditCommand(
         command = ui::TextEditCommand::DELETE_FORWARD;
       }
       break;
+
+    // Handle async PASTE separately to avoid splitting On[Before]UserAction
+    // across async boundaries.
+    case ui::TextEditCommand::PASTE:
+      Paste(base::BindOnce(&Textfield::OnPasted, weak_ptr_factory_.GetWeakPtr(),
+                           std::move(callback)));
+      return;
     default:
       break;
   }
@@ -2232,6 +2308,7 @@ Textfield::EditCommandResult Textfield::DoExecuteTextEditCommand(
   gfx::VisualCursorDirection begin = rtl ? gfx::CURSOR_RIGHT : gfx::CURSOR_LEFT;
   gfx::VisualCursorDirection end = rtl ? gfx::CURSOR_LEFT : gfx::CURSOR_RIGHT;
 
+  OnBeforeUserAction();
   switch (command) {
     case ui::TextEditCommand::DELETE_BACKWARD:
       changed = cursor_changed = model_->Backspace(add_to_kill_buffer);
@@ -2386,8 +2463,7 @@ Textfield::EditCommandResult Textfield::DoExecuteTextEditCommand(
       Copy();
       break;
     case ui::TextEditCommand::PASTE:
-      changed = cursor_changed = Paste();
-      break;
+      NOTREACHED();
     case ui::TextEditCommand::SELECT_ALL:
       SelectAll(false);
       break;
@@ -2407,7 +2483,14 @@ Textfield::EditCommandResult Textfield::DoExecuteTextEditCommand(
       NOTREACHED();
   }
 
-  return {changed, cursor_changed};
+  std::move(callback).Run({changed, cursor_changed});
+}
+
+void Textfield::OnPasted(
+    base::OnceCallback<void(Textfield::EditCommandResult)> callback,
+    bool pasted) {
+  OnBeforeUserAction();
+  std::move(callback).Run({pasted, pasted});
 }
 
 void Textfield::OffsetDoubleClickWord(size_t offset) {
@@ -2623,6 +2706,20 @@ ui::TextEditCommand Textfield::GetCommandForKeyEvent(
   }
 }
 
+bool Textfield::SupportsEmoji() const {
+  return true;
+}
+
+#if BUILDFLAG(IS_MAC)
+bool Textfield::SupportsEditableContextMenuItems() const {
+  return true;
+}
+
+bool Textfield::SupportsLookUp() const {
+  return true;
+}
+#endif  // BUILDFLAG(IS_MAC)
+
 ////////////////////////////////////////////////////////////////////////////////
 // Textfield, private:
 
@@ -2677,16 +2774,27 @@ void Textfield::OnAfterPointerAction(bool text_changed,
   UpdateAfterChange(text_change_type, selection_changed);
 }
 
-bool Textfield::PasteSelectionClipboard() {
-  DCHECK(performing_user_action_);
+void Textfield::PasteSelectionClipboard(
+    base::OnceCallback<void(bool)> callback) {
   DCHECK(!GetReadOnly());
-  const std::u16string selection_clipboard_text = GetSelectionClipboardText();
-  if (selection_clipboard_text.empty()) {
-    return false;
+  ui::Clipboard::GetForCurrentThread()->ReadText(
+      ui::ClipboardBuffer::kSelection, /*data_dst=*/std::nullopt,
+      base::BindOnce(&Textfield::OnTextReadForPasteSelectionClipboard,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void Textfield::OnTextReadForPasteSelectionClipboard(
+    base::OnceCallback<void(bool)> callback,
+    std::u16string text) {
+  if (text.empty()) {
+    std::move(callback).Run(false);
+    return;
   }
 
-  model_->InsertText(selection_clipboard_text);
-  return true;
+  OnBeforePointerAction();
+  model_->InsertText(text);
+  OnAfterPointerAction(true, true);
+  std::move(callback).Run(true);
 }
 
 void Textfield::UpdateSelectionClipboard() {
@@ -2893,11 +3001,8 @@ void Textfield::PaintTextAndCursor(gfx::Canvas* canvas) {
 
     canvas->DrawStringRectWithFlags(
         GetPlaceholderText(), placeholder_font_list_.value_or(GetFontList()),
-        placeholder_text_color_.value_or(
-            GetColorProvider()->GetColor(TypographyProvider::Get().GetColorId(
-                style::CONTEXT_TEXTFIELD_PLACEHOLDER,
-                GetInvalid() ? style::STYLE_INVALID : style::STYLE_PRIMARY))),
-        render_text->display_rect(), placeholder_text_draw_flags);
+        GetPlaceholderTextColor(), render_text->display_rect(),
+        placeholder_text_draw_flags);
   }
 
   // If drop cursor is active, draw |render_text| with its text selected.
@@ -2966,53 +3071,125 @@ void Textfield::OnAfterUserAction() {
 }
 
 bool Textfield::Cut() {
-  if (!GetReadOnly() && text_input_type_ != ui::TEXT_INPUT_TYPE_PASSWORD &&
-      model_->Cut()) {
-    if (controller_) {
-      controller_->OnAfterCutOrCopy(ui::ClipboardBuffer::kCopyPaste);
-    }
-    UpdateAccessibleTextSelection();
-    return true;
-  }
-  return false;
-}
-
-bool Textfield::Copy() {
-  if (text_input_type_ != ui::TEXT_INPUT_TYPE_PASSWORD && model_->Copy()) {
-    if (controller_) {
-      controller_->OnAfterCutOrCopy(ui::ClipboardBuffer::kCopyPaste);
-    }
-    return true;
-  }
-  return false;
-}
-
-bool Textfield::Paste() {
-  if (GetReadOnly()) {
+  if (GetReadOnly() || text_input_type_ == ui::TEXT_INPUT_TYPE_PASSWORD) {
     return false;
   }
 
-  bool pasted = false;
+  bool cut = false;
   std::u16string text;
-  // Allow the controller to intercept paste and provide text; if not provided,
-  // fall back to the model's default clipboard handling.
-  if (controller_ && controller_->OnBeforePaste(this, &text)) {
-    pasted = model_->Paste(std::move(text));
+  if (controller_ && controller_->OnBeforeCutOrCopy(this, &text)) {
+    cut = model_->Cut(std::move(text), controller_->CreateClipboardWriter());
   } else {
-    pasted = model_->Paste();
+    cut = model_->Cut();
   }
-
-  if (!pasted) {
+  if (!cut) {
     return false;
   }
 
   if (controller_) {
-    controller_->OnAfterPaste();
+    controller_->OnAfterCutOrCopy(ui::ClipboardBuffer::kCopyPaste);
+  }
+  UpdateAccessibleTextSelection();
+  return true;
+}
+
+bool Textfield::Copy() {
+  if (text_input_type_ == ui::TEXT_INPUT_TYPE_PASSWORD) {
+    return false;
   }
 
-  UpdateAccessibleTextSelection();
+  bool copied = false;
+  std::u16string text;
+  if (controller_ && controller_->OnBeforeCutOrCopy(this, &text)) {
+    copied =
+        model_->Copy(std::move(text), controller_->CreateClipboardWriter());
+  } else {
+    copied = model_->Copy();
+  }
+  if (!copied) {
+    return false;
+  }
 
+  if (controller_) {
+    controller_->OnAfterCutOrCopy(ui::ClipboardBuffer::kCopyPaste);
+  }
   return true;
+}
+
+void Textfield::Paste(base::OnceCallback<void(bool)> callback) {
+  if (GetReadOnly()) {
+    std::move(callback).Run(false);
+    return;
+  }
+
+  auto paste_cb = base::BindOnce(
+      [](base::WeakPtr<Textfield> textfield,
+         base::OnceCallback<void(bool)> callback,
+         std::optional<std::u16string> text) {
+        if (!textfield) {
+          std::move(callback).Run(false);
+          return;
+        }
+        if (text) {
+          textfield->OnTextReadForPaste(std::move(callback), std::move(*text));
+        } else {
+          ui::Clipboard::GetForCurrentThread()->ReadText(
+              ui::ClipboardBuffer::kCopyPaste, /* data_dst = */ std::nullopt,
+              base::BindOnce(&Textfield::OnTextReadForPaste, textfield,
+                             std::move(callback)));
+        }
+      },
+      weak_ptr_factory_.GetWeakPtr(), std::move(callback));
+
+  if (controller_) {
+    controller_->OnBeforePaste(this, std::move(paste_cb));
+  } else {
+    std::move(paste_cb).Run(std::nullopt);
+  }
+}
+
+void Textfield::OnTextReadForPaste(base::OnceCallback<void(bool)> callback,
+                                   std::u16string text) {
+  OnBeforeUserAction();
+  bool pasted = model_->Paste(std::move(text));
+  if (pasted) {
+    if (controller_) {
+      controller_->OnAfterPaste();
+    }
+    UpdateAccessibleTextSelection();
+  }
+  OnAfterUserAction();
+  std::move(callback).Run(pasted);
+}
+
+// static
+std::unique_ptr<views::ViewsTextServicesContextMenu>
+Textfield::UpdateContextMenuContents(Textfield* textfield,
+                                     TextfieldController* controller,
+                                     ui::SimpleMenuModel* menu_contents) {
+  CHECK(textfield);
+  menu_contents->AddItemWithStringId(kUndo, IDS_APP_UNDO);
+  menu_contents->AddSeparator(ui::NORMAL_SEPARATOR);
+  menu_contents->AddItemWithStringId(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCut), IDS_APP_CUT);
+  menu_contents->AddItemWithStringId(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCopy), IDS_APP_COPY);
+  menu_contents->AddItemWithStringId(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kPaste),
+      IDS_APP_PASTE);
+  menu_contents->AddItemWithStringId(kDelete, IDS_APP_DELETE);
+  menu_contents->AddSeparator(ui::NORMAL_SEPARATOR);
+  menu_contents->AddItemWithStringId(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll),
+      IDS_APP_SELECT_ALL);
+
+  // If the controller adds menu commands, also override ExecuteCommand() and
+  // IsCommandIdEnabled() as appropriate, for the commands added.
+  if (controller) {
+    controller->UpdateContextMenu(menu_contents);
+  }
+
+  return ViewsTextServicesContextMenu::Create(menu_contents, textfield);
 }
 
 void Textfield::UpdateContextMenu() {
@@ -3023,24 +3200,8 @@ void Textfield::UpdateContextMenu() {
   context_menu_contents_.reset();
 
   context_menu_contents_ = std::make_unique<ui::SimpleMenuModel>(this);
-  context_menu_contents_->AddItemWithStringId(kUndo, IDS_APP_UNDO);
-  context_menu_contents_->AddSeparator(ui::NORMAL_SEPARATOR);
-  context_menu_contents_->AddItemWithStringId(kCut, IDS_APP_CUT);
-  context_menu_contents_->AddItemWithStringId(kCopy, IDS_APP_COPY);
-  context_menu_contents_->AddItemWithStringId(kPaste, IDS_APP_PASTE);
-  context_menu_contents_->AddItemWithStringId(kDelete, IDS_APP_DELETE);
-  context_menu_contents_->AddSeparator(ui::NORMAL_SEPARATOR);
-  context_menu_contents_->AddItemWithStringId(kSelectAll, IDS_APP_SELECT_ALL);
-
-  // If the controller adds menu commands, also override ExecuteCommand() and
-  // IsCommandIdEnabled() as appropriate, for the commands added.
-  if (controller_) {
-    controller_->UpdateContextMenu(context_menu_contents_.get());
-  }
-
-  text_services_context_menu_ =
-      ViewsTextServicesContextMenu::Create(context_menu_contents_.get(), this);
-
+  text_services_context_menu_ = UpdateContextMenuContents(
+      this, controller_.get(), context_menu_contents_.get());
   context_menu_runner_ = std::make_unique<MenuRunner>(
       context_menu_contents_.get(),
       MenuRunner::HAS_MNEMONICS | MenuRunner::CONTEXT_MENU);
@@ -3388,20 +3549,25 @@ void Textfield::UpdateAccessibleDefaultActionVerb() {
 
 BEGIN_METADATA(Textfield)
 ADD_PROPERTY_METADATA(bool, ReadOnly)
-ADD_PROPERTY_METADATA(std::u16string_view, Text)
+ADD_PROPERTY_METADATA(std::u16string, Text)
 ADD_PROPERTY_METADATA(ui::TextInputType, TextInputType)
 ADD_PROPERTY_METADATA(int, TextInputFlags)
-ADD_PROPERTY_METADATA(SkColor, TextColor, ui::metadata::SkColorConverter)
-ADD_PROPERTY_METADATA(SkColor,
-                      SelectionTextColor,
-                      ui::metadata::SkColorConverter)
+ADD_READONLY_PROPERTY_METADATA(SkColor,
+                               TextColor,
+                               ui::metadata::SkColorConverter)
+ADD_READONLY_PROPERTY_METADATA(SkColor,
+                               SelectionTextColor,
+                               ui::metadata::SkColorConverter)
 ADD_PROPERTY_METADATA(SkColor, BackgroundColor, ui::metadata::SkColorConverter)
 ADD_PROPERTY_METADATA(bool, BackgroundEnabled)
-ADD_PROPERTY_METADATA(SkColor,
-                      SelectionBackgroundColor,
-                      ui::metadata::SkColorConverter)
+ADD_READONLY_PROPERTY_METADATA(SkColor,
+                               SelectionBackgroundColor,
+                               ui::metadata::SkColorConverter)
 ADD_PROPERTY_METADATA(bool, CursorEnabled)
-ADD_PROPERTY_METADATA(std::u16string_view, PlaceholderText)
+ADD_PROPERTY_METADATA(std::u16string, PlaceholderText)
+ADD_READONLY_PROPERTY_METADATA(SkColor,
+                               PlaceholderTextColor,
+                               ui::metadata::SkColorConverter)
 ADD_PROPERTY_METADATA(bool, Invalid)
 ADD_PROPERTY_METADATA(gfx::HorizontalAlignment, HorizontalAlignment)
 ADD_PROPERTY_METADATA(gfx::Range, SelectedRange)

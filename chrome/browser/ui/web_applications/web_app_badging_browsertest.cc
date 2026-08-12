@@ -46,12 +46,13 @@ class WebAppBadgingBrowserTest : public WebAppBrowserTestBase {
     cross_site_app_id_ = InstallPWA(cross_site_frame_url);
 
     // Note: The url for the cross site frame is embedded in the query string.
-    GURL start_url = https_server()->GetURL(
+    GURL start_url = embedded_https_test_server().GetURL(
         "/web_app_badging/badging_with_frames_and_workers.html?url=" +
         cross_site_frame_url.spec());
     main_app_id_ = InstallPWA(start_url);
 
-    GURL sub_start_url = https_server()->GetURL("/web_app_badging/blank.html");
+    GURL sub_start_url =
+        embedded_https_test_server().GetURL("/web_app_badging/blank.html");
     auto sub_app_info =
         WebAppInstallInfo::CreateWithStartUrlForTesting(sub_start_url);
     sub_app_info->scope = sub_start_url;
@@ -268,7 +269,7 @@ class WebAppBadgingBrowserTest : public WebAppBrowserTestBase {
   struct BadgeChange {
     bool was_cleared_ = false;
     bool was_flagged_ = false;
-    std::optional<uint64_t> last_badge_content_ = std::nullopt;
+    std::optional<uint64_t> last_badge_content_;
   };
 
   // Records a single badge update for multiple apps.
@@ -523,7 +524,7 @@ IN_PROC_BROWSER_TEST_F(WebAppBadgingBrowserTest, ClearLastBadgingTime) {
   ExecuteScriptAndWaitForBadgeChange("navigator.setAppBadge()", main_frame_);
   WebAppRegistrar& registrar = provider().registrar_unsafe();
   EXPECT_NE(registrar.GetAppLastBadgingTime(main_app_id()), base::Time());
-  EXPECT_NE(registrar.GetAppLastLaunchTime(main_app_id()), base::Time());
+  EXPECT_TRUE(registrar.GetAppLastLaunchTime(main_app_id()).has_value());
 
   // Browsing data for all origins will be deleted.
   auto filter_builder = content::BrowsingDataFilterBuilder::Create(
@@ -543,7 +544,7 @@ IN_PROC_BROWSER_TEST_F(WebAppBadgingBrowserTest, ClearLastBadgingTime) {
   run_loop.Run();
 
   EXPECT_EQ(registrar.GetAppLastBadgingTime(main_app_id()), base::Time());
-  EXPECT_EQ(registrar.GetAppLastLaunchTime(main_app_id()), base::Time());
+  EXPECT_FALSE(registrar.GetAppLastLaunchTime(main_app_id()).has_value());
 }
 
 }  // namespace web_app

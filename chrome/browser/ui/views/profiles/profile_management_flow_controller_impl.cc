@@ -6,12 +6,12 @@
 
 #include <memory>
 
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/signin_util.h"
-#include "chrome/browser/ui/autofill/popup_controller_common.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/profiles/profile_management_flow_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_management_step_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_management_types.h"
@@ -20,18 +20,18 @@
 #include "chrome/browser/ui/webui/signin/login_ui_service.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service_factory.h"
 #include "content/public/browser/web_contents.h"
-#include "google_apis/gaia/core_account_id.h"
 
 namespace {
 
-void ShowLoginErrorForBrowser(const SigninUIError& error, Browser* browser) {
+void ShowLoginErrorForBrowser(const SigninUIError& error,
+                              BrowserWindowInterface* browser) {
   if (!browser) {
     // TODO(crbug.com/40242414): Make sure we do something or log an error if
     // opening a browser window was not possible.
     return;
   }
-  LoginUIServiceFactory::GetForProfile(browser->profile())
-      ->DisplayLoginResult(browser, error, /*from_profile_picker=*/false);
+  LoginUIServiceFactory::GetForProfile(browser->GetProfile())
+      ->DisplayLoginResult(browser->GetFeatures(), error);
 }
 
 }  // namespace
@@ -63,15 +63,14 @@ void ProfileManagementFlowControllerImpl::
         ProfileManagementStepController::CreateForSignIn(
             host(),
             std::make_unique<ProfilePickerSignInProvider>(
-                host(), access_point, initial_email, std::move(profile_path)),
-            base::BindOnce(
-                &ProfileManagementFlowControllerImpl::HandleSignInCompleted,
-                // Binding as Unretained as `this`
-                // outlives the step controllers.
-                base::Unretained(this)),
-            base::BindOnce(
-                &ProfileManagementFlowControllerImpl::HandleSigninError,
-                base::Unretained(this))));
+                host(), /*delegate=*/this, access_point, initial_email,
+                /*signin_finished_callback=*/
+                base::BindOnce(
+                    &ProfileManagementFlowControllerImpl::HandleSignInCompleted,
+                    // Binding as Unretained as `this`
+                    // outlives the step controllers.
+                    base::Unretained(this)),
+                std::move(profile_path))));
   }
 
   auto pop_back_step = current_step();
@@ -146,9 +145,8 @@ void ProfileManagementFlowControllerImpl::HandleSignInCompleted(
   UnregisterStep(Step::kAccountSelection);
 }
 
-void ProfileManagementFlowControllerImpl::HandleSigninError(
+void ProfileManagementFlowControllerImpl::HandleSigninErrorInBrowser(
     Profile* profile,
-    content::WebContents* contents,
     const SigninUIError& error) {
   CHECK_EQ(Step::kAccountSelection, current_step());
   CHECK(!error.IsOk());

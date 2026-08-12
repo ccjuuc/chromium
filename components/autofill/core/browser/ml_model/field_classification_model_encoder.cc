@@ -6,10 +6,14 @@
 
 #include <stddef.h>
 
+#include <algorithm>
+#include <iterator>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
+#include "base/check.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/to_vector.h"
 #include "base/i18n/case_conversion.h"
@@ -17,9 +21,10 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/common/autofill_util.h"
+#include "components/autofill/core/common/form_field_data.h"
+#include "components/optimization_guide/proto/autofill_field_classification_model_metadata.pb.h"
 #include "third_party/protobuf/src/google/protobuf/repeated_ptr_field.h"
 #include "third_party/re2/src/re2/re2.h"
 
@@ -66,7 +71,25 @@ FieldClassificationModelEncoder::FieldClassificationModelEncoder(
 FieldClassificationModelEncoder::FieldClassificationModelEncoder() = default;
 FieldClassificationModelEncoder::FieldClassificationModelEncoder(
     const FieldClassificationModelEncoder&) = default;
+FieldClassificationModelEncoder::FieldClassificationModelEncoder(
+    FieldClassificationModelEncoder&&) = default;
+FieldClassificationModelEncoder& FieldClassificationModelEncoder::operator=(
+    const FieldClassificationModelEncoder&) = default;
+FieldClassificationModelEncoder& FieldClassificationModelEncoder::operator=(
+    FieldClassificationModelEncoder&&) = default;
 FieldClassificationModelEncoder::~FieldClassificationModelEncoder() = default;
+
+std::string FieldClassificationModelEncoder::FindTokenById(TokenId id) const {
+  // This is inefficient, but it is only used for populating
+  // chrome://autofill-ml-internals, which is a debugging page. A faster
+  // implementation would require using some memory.
+  for (const auto& [token, token_id] : token_to_id_) {
+    if (token_id == id) {
+      return base::UTF16ToUTF8(token);
+    }
+  }
+  return "";
+}
 
 FieldClassificationModelEncoder::TokenId
 FieldClassificationModelEncoder::TokenToId(std::u16string_view token) const {
@@ -124,13 +147,13 @@ FieldClassificationModelEncoder::EncodeField(const FormFieldData& field) const {
         return EncodeAttribute(field.name_attribute());
       case FeaturesEnum::FEATURE_TYPE:
         return EncodeAttribute(base::UTF8ToUTF16(
-            autofill::FormControlTypeToString(field.form_control_type())));
+            FormControlTypeToString(field.form_control_type())));
     }
     return {};
   };
   std::vector<TokenId> output;
   output.reserve(GetFieldEncodingSize(encoding_parameters_));
-  output.emplace_back(cls_token());
+  output.emplace_back(GetClsToken());
 
   for (int feature : encoding_parameters_.features()) {
     std::ranges::move(encode(feature), std::back_inserter(output));

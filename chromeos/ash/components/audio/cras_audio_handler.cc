@@ -25,6 +25,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
 #include "base/system/system_monitor.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chromeos/ash/components/audio/audio_device.h"
 #include "chromeos/ash/components/audio/audio_device_encoding.h"
@@ -43,10 +44,6 @@ namespace {
 
 using ::std::max;
 using ::std::min;
-
-// Default value for unmuting, as a percent in the range [0, 100].
-// Used when sound is unmuted, but volume was less than kMuteThresholdPercent.
-const int kDefaultUnmuteVolumePercent = 4;
 
 // Volume value which should be considered as muted in range [0, 100].
 const int kMuteThresholdPercent = 1;
@@ -84,86 +81,46 @@ bool IsMicrophoneMuteSwitchOn() {
 
 }  // namespace
 
+// A proxy class that implements `media::VideoCaptureObserver` and forwards
+// notifications to `CrasAudioHandler` on the UI thread. This is used to handle
+// the case where `CrasAudioHandler` lives on the UI thread but is registered as
+// a `VideoCaptureObserver` on the IO thread. By using this proxy, we ensure
+// that the thread affinity of the `CheckedObserver` is respected while allowing
+// `CrasAudioHandler` to handle notifications on the UI thread.
+class VideoCaptureObserverProxy : public media::VideoCaptureObserver {
+ public:
+  explicit VideoCaptureObserverProxy(base::WeakPtr<CrasAudioHandler> handler)
+      : handler_(std::move(handler)),
+        ui_task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()) {}
+
+  VideoCaptureObserverProxy(const VideoCaptureObserverProxy&) = delete;
+  VideoCaptureObserverProxy& operator=(const VideoCaptureObserverProxy&) =
+      delete;
+
+  ~VideoCaptureObserverProxy() override = default;
+
+  // media::VideoCaptureObserver:
+  void OnVideoCaptureStarted(media::VideoFacingMode facing) override {
+    ui_task_runner_->PostTask(
+        FROM_HERE, base::BindOnce(&CrasAudioHandler::OnVideoCaptureStarted,
+                                  handler_, facing));
+  }
+
+  void OnVideoCaptureStopped(media::VideoFacingMode facing) override {
+    ui_task_runner_->PostTask(
+        FROM_HERE, base::BindOnce(&CrasAudioHandler::OnVideoCaptureStopped,
+                                  handler_, facing));
+  }
+
+ private:
+  base::WeakPtr<CrasAudioHandler> handler_;
+  scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner_;
+};
+
 // TODO(b/277300962): Clean up the default value and handle the unset case.
 CrasAudioHandler::AudioSurvey::AudioSurvey() : type_(SurveyType::kGeneral) {}
 
 CrasAudioHandler::AudioSurvey::~AudioSurvey() = default;
-
-CrasAudioHandler::AudioObserver::AudioObserver() = default;
-
-CrasAudioHandler::AudioObserver::~AudioObserver() = default;
-
-void CrasAudioHandler::AudioObserver::OnOutputNodeVolumeChanged(
-    uint64_t /* node_id */,
-    int /* volume */) {}
-
-void CrasAudioHandler::AudioObserver::OnInputNodeGainChanged(
-    uint64_t /* node_id */,
-    int /* gain */) {}
-
-void CrasAudioHandler::AudioObserver::OnOutputMuteChanged(bool /* mute_on */) {}
-
-void CrasAudioHandler::AudioObserver::OnInputMuteChanged(
-    bool /* mute_on */,
-    InputMuteChangeMethod /* method */) {}
-
-void CrasAudioHandler::AudioObserver::OnInputMutedByMicrophoneMuteSwitchChanged(
-    bool /* muted */) {}
-
-void CrasAudioHandler::AudioObserver::OnInputMutedBySecurityCurtainChanged(
-    bool /* muted */) {}
-
-void CrasAudioHandler::AudioObserver::OnAudioNodesChanged() {}
-
-void CrasAudioHandler::AudioObserver::OnActiveOutputNodeChanged() {}
-
-void CrasAudioHandler::AudioObserver::OnActiveInputNodeChanged() {}
-
-void CrasAudioHandler::AudioObserver::OnOutputChannelRemixingChanged(
-    bool /* mono_on */) {}
-
-void CrasAudioHandler::AudioObserver::OnVoiceIsolationUIAppearanceChanged(
-    VoiceIsolationUIAppearance appearance) {}
-
-void CrasAudioHandler::AudioObserver::OnNoiseCancellationStateChanged() {}
-
-void CrasAudioHandler::AudioObserver::OnStyleTransferStateChanged() {}
-
-void CrasAudioHandler::AudioObserver::OnForceRespectUiGainsStateChanged() {}
-
-void CrasAudioHandler::AudioObserver::OnHfpMicSrStateChanged() {}
-
-void CrasAudioHandler::AudioObserver::OnSpatialAudioStateChanged() {}
-
-void CrasAudioHandler::AudioObserver::OnHotwordTriggered(
-    uint64_t /* tv_sec */,
-    uint64_t /* tv_nsec */) {}
-
-void CrasAudioHandler::AudioObserver::OnBluetoothBatteryChanged(
-    const std::string& /* address */,
-    uint32_t /* level */) {}
-
-void CrasAudioHandler::AudioObserver::
-    OnNumberOfInputStreamsWithPermissionChanged() {}
-
-void CrasAudioHandler::AudioObserver::OnOutputStarted() {}
-
-void CrasAudioHandler::AudioObserver::OnOutputStopped() {}
-
-void CrasAudioHandler::AudioObserver::OnNonChromeOutputStarted() {}
-
-void CrasAudioHandler::AudioObserver::OnNonChromeOutputStopped() {}
-
-void CrasAudioHandler::AudioObserver::OnSurveyTriggered(
-    const AudioSurvey& /*survey*/) {}
-
-void CrasAudioHandler::AudioObserver::OnSpeakOnMuteDetected() {}
-
-void CrasAudioHandler::AudioObserver::OnNumStreamIgnoreUiGainsChanged(
-    int32_t num) {}
-
-void CrasAudioHandler::AudioObserver::OnNumberOfArcStreamsChanged(int32_t num) {
-}
 
 void CrasAudioHandler::NumberOfNonChromeOutputStreamsChanged() {
   GetNumberOfNonChromeOutputStreams();
@@ -216,32 +173,6 @@ void CrasAudioHandler::Shutdown() {
 // static
 CrasAudioHandler* CrasAudioHandler::Get() {
   return g_cras_audio_handler;
-}
-
-void CrasAudioHandler::OnVideoCaptureStarted(media::VideoFacingMode facing) {
-  DCHECK(main_task_runner_);
-  if (!main_task_runner_->BelongsToCurrentThread()) {
-    main_task_runner_->PostTask(
-        FROM_HERE,
-        base::BindOnce(&CrasAudioHandler::OnVideoCaptureStartedOnMainThread,
-                       weak_ptr_factory_.GetWeakPtr(), facing));
-    return;
-  }
-  // Unittest may call this from the main thread.
-  OnVideoCaptureStartedOnMainThread(facing);
-}
-
-void CrasAudioHandler::OnVideoCaptureStopped(media::VideoFacingMode facing) {
-  DCHECK(main_task_runner_);
-  if (!main_task_runner_->BelongsToCurrentThread()) {
-    main_task_runner_->PostTask(
-        FROM_HERE,
-        base::BindOnce(&CrasAudioHandler::OnVideoCaptureStoppedOnMainThread,
-                       weak_ptr_factory_.GetWeakPtr(), facing));
-    return;
-  }
-  // Unittest may call this from the main thread.
-  OnVideoCaptureStoppedOnMainThread(facing);
 }
 
 void CrasAudioHandler::OnVideoCaptureStartedOnMainThread(
@@ -447,14 +378,6 @@ void CrasAudioHandler::AddAudioObserver(AudioObserver* observer) {
 
 void CrasAudioHandler::RemoveAudioObserver(AudioObserver* observer) {
   observers_.RemoveObserver(observer);
-}
-
-bool CrasAudioHandler::HasKeyboardMic() {
-  return GetKeyboardMic() != nullptr;
-}
-
-bool CrasAudioHandler::HasHotwordDevice() {
-  return GetHotwordDevice() != nullptr;
 }
 
 bool CrasAudioHandler::IsOutputMuted() {
@@ -706,6 +629,17 @@ void CrasAudioHandler::RecordVoiceIsolationPreferredEffectChange(
     audio_config::mojom::AudioEffectType preferred_effect) {
   base::UmaHistogramEnumeration(
       kVoiceIsolationPreferredEffectChangeHistogramName, preferred_effect);
+}
+
+bool CrasAudioHandler::GetKrispNoiseCancellationState() const {
+  return audio_pref_handler_->GetKrispNoiseCancellationState();
+}
+
+void CrasAudioHandler::RefreshKrispNoiseCancellationState() {
+  // Refresh should only update the state in CRAS and leave the preference
+  // as-is.
+  CrasAudioClient::Get()->SetKrispNoiseCancellationEnabled(
+      GetKrispNoiseCancellationState());
 }
 
 bool CrasAudioHandler::IsNoiseCancellationSupportedForDevice(
@@ -971,21 +905,6 @@ void CrasAudioHandler::SetSpatialAudioSupportedForTesting(bool supported) {
   spatial_audio_supported_ = supported;
 }
 
-void CrasAudioHandler::SetKeyboardMicActive(bool active) {
-  const AudioDevice* keyboard_mic = GetKeyboardMic();
-  if (!keyboard_mic) {
-    return;
-  }
-  // Keyboard mic is invisible to chromeos users. It is always added or removed
-  // as additional active node.
-  DCHECK(active_input_node_id_ && active_input_node_id_ != keyboard_mic->id);
-  if (active) {
-    AddActiveNode(keyboard_mic->id, true);
-  } else {
-    RemoveActiveNodeInternal(keyboard_mic->id, true);
-  }
-}
-
 void CrasAudioHandler::SetSpeakOnMuteDetection(bool som_on) {
   CrasAudioClient::Get()->SetSpeakOnMuteDetection(som_on);
   speak_on_mute_detection_on_ = som_on;
@@ -1045,29 +964,6 @@ void CrasAudioHandler::AddActiveNode(uint64_t node_id, bool notify) {
   }
 
   AddAdditionalActiveNode(node_id, notify);
-}
-
-void CrasAudioHandler::ChangeActiveNodes(const NodeIdList& new_active_ids) {
-  AudioDeviceList input_devices;
-  AudioDeviceList output_devices;
-
-  for (uint64_t id : new_active_ids) {
-    const AudioDevice* device = GetDeviceFromId(id);
-    if (!device) {
-      continue;
-    }
-    if (device->is_input) {
-      input_devices.push_back(*device);
-    } else {
-      output_devices.push_back(*device);
-    }
-  }
-  if (!input_devices.empty()) {
-    SetActiveDevices(input_devices, true /* is_input */);
-  }
-  if (!output_devices.empty()) {
-    SetActiveDevices(output_devices, false /* is_input */);
-  }
 }
 
 bool CrasAudioHandler::SetActiveInputNodes(const NodeIdList& node_ids) {
@@ -1139,13 +1035,6 @@ void CrasAudioHandler::SetActiveDevices(const AudioDeviceList& devices,
   if (active_devices_changed) {
     NotifyActiveNodeChanged(is_input);
   }
-}
-
-void CrasAudioHandler::SetHotwordModel(uint64_t node_id,
-                                       const std::string& hotword_model,
-                                       VoidCrasAudioHandlerCallback callback) {
-  CrasAudioClient::Get()->SetHotwordModel(node_id, hotword_model,
-                                          std::move(callback));
 }
 
 void CrasAudioHandler::SwapInternalSpeakerLeftRightChannel(bool swap) {
@@ -1316,23 +1205,6 @@ void CrasAudioHandler::SetOutputMuteLockedBySecurityCurtain(bool mute_on) {
 
   output_mute_forced_by_security_curtain_ = mute_on;
   UpdateAudioOutputMute();
-}
-
-void CrasAudioHandler::AdjustOutputVolumeToAudibleLevel() {
-  if (output_volume_ <= kMuteThresholdPercent) {
-    for (const auto& item : audio_devices_) {
-      int unmute_volume = kDefaultUnmuteVolumePercent;
-      const AudioDevice& device = item.second;
-      if (!device.is_input && device.active) {
-        if (device.type == AudioDeviceType::kUsb) {
-          int32_t number_of_volume_steps = device.number_of_volume_steps;
-          DCHECK(number_of_volume_steps > 0);
-          unmute_volume = 100 / number_of_volume_steps;
-        }
-        SetOutputNodeVolumePercent(device.id, unmute_volume);
-      }
-    }
-  }
 }
 
 void CrasAudioHandler::SetInputMute(bool mute_on,
@@ -1562,6 +1434,16 @@ void CrasAudioHandler::SetupCrasAudioHandler(
   g_cras_audio_handler = this;
 }
 
+void CrasAudioHandler::OnVideoCaptureStarted(media::VideoFacingMode facing) {
+  CHECK(main_task_runner_->BelongsToCurrentThread());
+  OnVideoCaptureStartedOnMainThread(facing);
+}
+
+void CrasAudioHandler::OnVideoCaptureStopped(media::VideoFacingMode facing) {
+  CHECK(main_task_runner_->BelongsToCurrentThread());
+  OnVideoCaptureStoppedOnMainThread(facing);
+}
+
 CrasAudioHandler::~CrasAudioHandler() {
   hdmi_rediscover_timer_.Stop();
   DCHECK(CrasAudioClient::Get());
@@ -1771,10 +1653,6 @@ void CrasAudioHandler::AudioEffectUIAppearanceChanged(
   HandleGetVoiceIsolationUIAppearance(appearance);
 }
 
-void CrasAudioHandler::ResendBluetoothBattery() {
-  CrasAudioClient::Get()->ResendBluetoothBattery();
-}
-
 void CrasAudioHandler::SetPrefHandlerForTesting(
     scoped_refptr<AudioDevicesPrefHandler> audio_pref_handler) {
   audio_pref_handler_->RemoveAudioPrefObserver(this);
@@ -1789,6 +1667,7 @@ void CrasAudioHandler::OnAudioPolicyPrefChanged() {
 void CrasAudioHandler::OnVoiceIsolationPrefChanged() {
   RefreshVoiceIsolationState();
   RefreshVoiceIsolationPreferredEffect();
+  RefreshKrispNoiseCancellationState();
 }
 
 const AudioDevice* CrasAudioHandler::GetDeviceFromId(uint64_t device_id) const {
@@ -1813,26 +1692,6 @@ const AudioDevice* CrasAudioHandler::GetDeviceFromStableDeviceId(
     const AudioDevice& device = item.second;
     if (device.is_input == is_input &&
         device.stable_device_id == stable_device_id) {
-      return &device;
-    }
-  }
-  return nullptr;
-}
-
-const AudioDevice* CrasAudioHandler::GetKeyboardMic() const {
-  for (const auto& item : audio_devices_) {
-    const AudioDevice& device = item.second;
-    if (device.is_input && device.type == AudioDeviceType::kKeyboardMic) {
-      return &device;
-    }
-  }
-  return nullptr;
-}
-
-const AudioDevice* CrasAudioHandler::GetHotwordDevice() const {
-  for (const auto& item : audio_devices_) {
-    const AudioDevice& device = item.second;
-    if (device.is_input && device.type == AudioDeviceType::kHotword) {
       return &device;
     }
   }
@@ -1958,7 +1817,7 @@ void CrasAudioHandler::InitializeAudioAfterCrasServiceAvailable(
   }
 
   // Refreshes voice isolation state in CRAS, in case CRAS restarts.
-  RefreshVoiceIsolationState();
+  OnVoiceIsolationPrefChanged();
 
   // Sets speak-on-mute detection enabled based on local variable, it re-applies
   // the previous state if CRAS restarts.
@@ -2502,7 +2361,7 @@ void CrasAudioHandler::HandleSystemBoots(bool is_input,
 }
 
 bool CrasAudioHandler::ActivateMostRecentActiveDevice(bool is_input) {
-  const base::Value::List& ids =
+  const base::ListValue& ids =
       audio_pref_handler_->GetMostRecentActivatedDeviceIdList(is_input);
   for (int i = ids.size() - 1; i >= 0; i--) {
     std::optional<uint64_t> device_stable_id =
@@ -2520,6 +2379,10 @@ bool CrasAudioHandler::ActivateMostRecentActiveDevice(bool is_input) {
     return true;
   }
   return false;
+}
+
+base::WeakPtr<CrasAudioHandler> CrasAudioHandler::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 bool CrasAudioHandler::ShouldSwitchToHotPlugDevice(
@@ -3481,16 +3344,22 @@ int32_t CrasAudioHandler::NumberOfNonChromeOutputStreams() const {
   return num_active_nonchrome_output_streams_;
 }
 
-int32_t CrasAudioHandler::NumberOfChromeOutputStreams() const {
-  return num_active_output_streams_;
-}
-
 int32_t CrasAudioHandler::NumberOfArcStreams() const {
   return num_arc_streams_;
 }
 
 void CrasAudioHandler::SetNumberOfArcStreamsForTesting(int32_t num) {
   num_arc_streams_ = num;
+}
+
+media::VideoCaptureObserver* CrasAudioHandler::GetVideoCaptureObserver(
+    scoped_refptr<base::SingleThreadTaskRunner> io_task_runner) {
+  if (!video_capture_observer_) {
+    video_capture_observer_ = {
+        new VideoCaptureObserverProxy(GetWeakPtr()),
+        base::OnTaskRunnerDeleter(std::move(io_task_runner))};
+  }
+  return video_capture_observer_.get();
 }
 
 }  // namespace ash

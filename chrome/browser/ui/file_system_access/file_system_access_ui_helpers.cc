@@ -7,8 +7,8 @@
 #include <optional>
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
+#include "base/i18n/rtl.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/url_identity.h"
 #include "content/public/browser/file_system_access_permission_context.h"
@@ -62,6 +62,18 @@ constexpr UrlIdentity::FormatOptions kUrlIdentityOptions{
 
 namespace file_system_access_ui_helper {
 
+std::u16string ElidePath(const base::FilePath& path,
+                         const gfx::FontList& font_list,
+                         float available_pixel_width) {
+  if (path.Extension().empty()) {
+    std::u16string name = path.LossyDisplayName();
+    std::u16string elided = gfx::ElideText(
+        name, font_list, available_pixel_width, gfx::ELIDE_MIDDLE);
+    return base::i18n::GetDisplayStringInLTRDirectionality(elided);
+  }
+  return gfx::ElideFilename(path, font_list, available_pixel_width);
+}
+
 std::u16string GetElidedPathForDisplayAsTitle(
     const content::PathInfo& path_info) {
   // TODO(crbug.com/40254943): Consider moving filename elision logic into a
@@ -73,11 +85,10 @@ std::u16string GetElidedPathForDisplayAsTitle(
   // containing a space will bump to the next line if the file name + preceding
   // text in the title is too long, which is still easy to read because the file
   // name is contiguous.
-  int scalar_numerators =
-      base::Contains(GetPathForDisplayAsPath(path_info).value(),
-                     FILE_PATH_LITERAL(" "))
-          ? 2
-          : 3;
+  int scalar_numerators = GetPathForDisplayAsPath(path_info).value().contains(
+                              FILE_PATH_LITERAL(" "))
+                              ? 2
+                              : 3;
   std::optional<int> preferred_width;
 #if defined(TOOLKIT_VIEWS)
   // views::LayoutProvider::Get() may be null in tests.
@@ -89,8 +100,8 @@ std::u16string GetElidedPathForDisplayAsTitle(
   const int available_pixel_width = preferred_width.value_or(400) *
                                     scalar_numerators /
                                     kAvailablePixelWidthDenominator;
-  return gfx::ElideFilename(GetPathForDisplayAsPath(path_info), gfx::FontList(),
-                            available_pixel_width);
+  return ElidePath(GetPathForDisplayAsPath(path_info), gfx::FontList(),
+                   available_pixel_width);
 }
 
 std::u16string GetPathForDisplayAsParagraph(

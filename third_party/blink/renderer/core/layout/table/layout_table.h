@@ -91,7 +91,7 @@ class TableBorders;
 // Cached column constraints:
 // Column constraints are used in layout. They must be regenerated
 // whenever table geometry changes.
-// The validation state is a IsTableColumnsConstraintsDirty flag
+// The validation state is a IsTableColumnConstraintsDirty flag
 // on LayoutObject. They are invalidated inside
 // LayoutObject::SetNeeds*Layout.
 class CORE_EXPORT LayoutTable : public LayoutBlock {
@@ -143,36 +143,30 @@ class CORE_EXPORT LayoutTable : public LayoutBlock {
     return "LayoutTable";
   }
 
-  void AddChild(LayoutObject* child,
+  void AddChild(LayoutObject* new_child,
                 LayoutObject* before_child = nullptr) override;
 
   void RemoveChild(LayoutObject*) override;
 
   void StyleDidChange(StyleDifference diff,
                       const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
                       const StyleChangeContext&) override;
 
   LayoutBox* CreateAnonymousBoxWithSameTypeAs(
       const LayoutObject* parent) const override;
 
-  LayoutUnit BorderTop() const override;
-  LayoutUnit BorderBottom() const override;
-  LayoutUnit BorderLeft() const override;
-  LayoutUnit BorderRight() const override;
+  PhysicalBoxStrut BorderOutsets() const override;
 
   // The collapsing border model disallows paddings on table.
   // See http://www.w3.org/TR/CSS2/tables.html#collapsing-borders.
-  LayoutUnit PaddingTop() const override;
-  LayoutUnit PaddingBottom() const override;
-  LayoutUnit PaddingLeft() const override;
-  LayoutUnit PaddingRight() const override;
+  PhysicalBoxStrut PaddingOutsets() const override;
 
   // TODO(1151101)
   // ClientLeft/Top are incorrect for tables, but cannot be fixed
   // by subclassing ClientLeft/Top.
 
-  PhysicalRect OverflowClipRect(const PhysicalOffset&,
-                                OverlayScrollbarClipBehavior) const override;
+  PhysicalRect OverflowClipRect(OverlayScrollbarClipBehavior) const override;
 
   bool VisualRectRespectsVisibility() const override {
     NOT_DESTROYED();
@@ -202,9 +196,18 @@ class CORE_EXPORT LayoutTable : public LayoutBlock {
   unsigned EffectiveColumnCount() const;
 
  private:
+  void AddChildBeforeDescendant(LayoutObject* new_child,
+                                LayoutObject* before_descendant,
+                                bool can_be_direct_child);
+
   bool IsTable() const final {
     NOT_DESTROYED();
     return true;
+  }
+
+  bool IsEligibleForSizeContainment() const final {
+    NOT_DESTROYED();
+    return false;
   }
 
   bool CanMergeWith(const LayoutBoxModelObject& other) const override {

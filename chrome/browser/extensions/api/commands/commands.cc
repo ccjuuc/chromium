@@ -15,8 +15,8 @@ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace {
 
-base::Value::Dict CreateCommandValue(const ui::Command& command, bool active) {
-  base::Value::Dict result;
+base::DictValue CreateCommandValue(const ui::Command& command, bool active) {
+  base::DictValue result;
   result.Set("name", command.command_name());
   result.Set("description", command.description());
   result.Set("shortcut", active ? command.accelerator().GetShortcutText()
@@ -26,8 +26,8 @@ base::Value::Dict CreateCommandValue(const ui::Command& command, bool active) {
 
 }  // namespace
 
-ExtensionFunction::ResponseAction GetAllCommandsFunction::Run() {
-  base::Value::List command_list;
+ExtensionFunction::ResponseAction CommandsGetAllFunction::Run() {
+  base::ListValue command_list;
 
   extensions::CommandService* command_service =
       extensions::CommandService::Get(browser_context());

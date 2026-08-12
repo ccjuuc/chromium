@@ -37,6 +37,7 @@ TranslateBubbleModelImpl::TranslateStepToViewState(
     translate::TranslateStep step) {
   switch (step) {
     case translate::TRANSLATE_STEP_BEFORE_TRANSLATE:
+    case translate::TRANSLATE_STEP_AFTER_UNDO:
       return TranslateBubbleModel::VIEW_STATE_BEFORE_TRANSLATE;
     case translate::TRANSLATE_STEP_TRANSLATING:
       return TranslateBubbleModel::VIEW_STATE_TRANSLATING;
@@ -90,6 +91,16 @@ std::u16string TranslateBubbleModelImpl::GetTargetLanguageNameAt(
   // Add 1 to account for unknown language option at index 0 in
   // TranslateUIDelegate language list.
   return ui_languages_manager_->GetLanguageNameAt(index + 1);
+}
+
+std::optional<size_t> TranslateBubbleModelImpl::GetTargetLanguageIndexForCode(
+    const std::string& language_code) const {
+  for (size_t i = 0; i < ui_languages_manager_->GetNumberOfLanguages(); ++i) {
+    if (ui_languages_manager_->GetLanguageCodeAt(i) == language_code) {
+      return i == 0 ? std::nullopt : std::make_optional<size_t>(i - 1);
+    }
+  }
+  return std::nullopt;
 }
 
 std::string TranslateBubbleModelImpl::GetSourceLanguageCode() const {
@@ -160,7 +171,7 @@ void TranslateBubbleModelImpl::RevertTranslation() {
 void TranslateBubbleModelImpl::OnBubbleClosing() {
   // TODO(curranmax): This will mark the UI as closed when the widget has lost
   // focus. This means it is basically impossible for the final state to have
-  // the UI shown. https://crbug.com/1114868.
+  // the UI shown. https://crbug.com/40144098.
   ui_delegate_->OnUIClosedByUser();
 
   if (!translate_executed_) {

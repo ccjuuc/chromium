@@ -47,6 +47,7 @@
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
+#include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_uchar.h"
@@ -63,12 +64,6 @@
 
 class SkString;
 class SkTypeface;
-
-namespace base {
-namespace trace_event {
-class ProcessMemoryDump;
-}  // namespace trace_event
-}  // namespace base
 
 namespace blink {
 
@@ -99,7 +94,6 @@ extern const char kNotoColorEmojiCompat[];
 
 class PLATFORM_EXPORT FontCache final {
   DISALLOW_NEW();
-
  public:
   // FontCache initialisation on Windows depends on a global FontMgr being
   // configured through a call from the browser process. CreateIfNeeded helps
@@ -114,9 +108,6 @@ class PLATFORM_EXPORT FontCache final {
       UChar32,
       const SimpleFontData* font_data_to_substitute,
       FontFallbackPriority = FontFallbackPriority::kText);
-
-  // Also implemented by the platform.
-  void PlatformInit();
 
   const SimpleFontData* GetFontData(
       const FontDescription&,
@@ -143,10 +134,9 @@ class PLATFORM_EXPORT FontCache final {
 
   void AddClient(FontCacheClient*);
 
-  uint16_t Generation();
   void Invalidate();
 
-#if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
   static WebFontPrewarmer* GetFontPrewarmer() { return prewarmer_; }
   static void SetFontPrewarmer(WebFontPrewarmer* prewarmer) {
     prewarmer_ = prewarmer;
@@ -172,6 +162,8 @@ class PLATFORM_EXPORT FontCache final {
 #else
   static const AtomicString& LegacySystemFontFamily();
   static void InvalidateFromAnyThread();
+  bool IsFontFamilyUnavailable(const AtomicString& family_name) const;
+  void MarkFontFamilyAsUnavailable(const AtomicString& family_name);
 #endif
 
 #if !BUILDFLAG(IS_MAC)
@@ -246,9 +238,6 @@ class PLATFORM_EXPORT FontCache final {
 
   static void CrashWithFontInfo(const FontDescription*);
 
-  // Memory reporting
-  void DumpShapeResultCache(base::trace_event::ProcessMemoryDump*);
-
   FontFallbackMap& GetFontFallbackMap();
 
   FontCache(const FontCache&) = delete;
@@ -306,11 +295,23 @@ class PLATFORM_EXPORT FontCache final {
       FontFallbackPriority);
 #endif
 
+  static sk_sp<SkTypeface> MatchFamilyStyle(const char* family_name,
+                                            const SkFontStyle&);
+
+  static sk_sp<SkTypeface> MatchFamilyStyleCharacter(const char* family_name,
+                                                     const SkFontStyle&,
+                                                     const char* bcp47[],
+                                                     int bcp47_count,
+                                                     UChar32 character);
+
   const SimpleFontData* FallbackOnStandardFontStyle(const FontDescription&,
                                                     UChar32);
 
-#if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
   static WebFontPrewarmer* prewarmer_;
+#endif
+
+#if BUILDFLAG(IS_WIN)
   static bool antialiased_text_enabled_;
   static bool lcd_text_enabled_;
   // The system font metrics cache.
@@ -326,8 +327,6 @@ class PLATFORM_EXPORT FontCache final {
   static float device_scale_factor_;
 #endif
 
-  uint16_t generation_ = 0;
-  bool platform_init_ = false;
   HeapHashSet<WeakMember<FontCacheClient>> font_cache_clients_;
   FontPlatformDataCache font_platform_data_cache_;
 
@@ -337,6 +336,7 @@ class PLATFORM_EXPORT FontCache final {
 
 #if BUILDFLAG(IS_MAC)
   CharacterFallbackCache character_fallback_cache_;
+  HashSet<AtomicString> unavailable_font_families_;
 #endif
 
   friend class SimpleFontData;  // For fontDataFromFontPlatformData

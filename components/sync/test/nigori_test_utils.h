@@ -11,10 +11,10 @@
 #include <vector>
 
 #include "base/time/time.h"
-#include "components/sync/engine/nigori/cross_user_sharing_public_key.h"
-#include "components/sync/engine/nigori/key_derivation_params.h"
-#include "components/sync/engine/nigori/nigori.h"
+#include "components/sync/model/crypto/key_derivation_params.h"
+#include "components/sync/model/crypto/nigori.h"
 #include "components/sync/nigori/cross_user_sharing_keys.h"
+#include "components/sync/nigori/cross_user_sharing_public_key.h"
 
 namespace sync_pb {
 

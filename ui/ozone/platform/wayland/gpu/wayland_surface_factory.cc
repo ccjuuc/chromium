@@ -77,7 +77,7 @@ class GLOzoneEGLWayland : public GLOzoneEGL {
   std::unique_ptr<NativePixmapGLBinding> ImportNativePixmap(
       scoped_refptr<gfx::NativePixmap> pixmap,
       viz::SharedImageFormat plane_format,
-      gfx::BufferPlane plane,
+      std::optional<int> plane_index,
       gfx::Size plane_size,
       const gfx::ColorSpace& color_space,
       GLenum target,
@@ -100,13 +100,14 @@ bool GLOzoneEGLWayland::CanImportNativePixmap(viz::SharedImageFormat format) {
 std::unique_ptr<NativePixmapGLBinding> GLOzoneEGLWayland::ImportNativePixmap(
     scoped_refptr<gfx::NativePixmap> pixmap,
     viz::SharedImageFormat plane_format,
-    gfx::BufferPlane plane,
+    std::optional<int> plane_index,
     gfx::Size plane_size,
     const gfx::ColorSpace& color_space,
     GLenum target,
     GLuint texture_id) {
-  return NativePixmapEGLBinding::Create(pixmap, plane_format, plane, plane_size,
-                                        color_space, target, texture_id);
+  return NativePixmapEGLBinding::Create(pixmap, plane_format, plane_index,
+                                        plane_size, color_space, target,
+                                        texture_id);
 }
 
 scoped_refptr<gl::GLSurface> GLOzoneEGLWayland::CreateViewGLSurface(
@@ -198,9 +199,6 @@ gl::EGLDisplayPlatform GLOzoneEGLWayland::GetNativeDisplay() {
 
 bool GLOzoneEGLWayland::LoadGLES2Bindings(
     const gl::GLImplementationParts& impl) {
-  // TODO: It may not be necessary to set this environment variable when using
-  // swiftshader.
-  setenv("EGL_PLATFORM", "wayland", 0);
   return LoadDefaultEGLGLES2Bindings(impl);
 }
 
@@ -324,14 +322,6 @@ bool WaylandSurfaceFactory::SupportsNativePixmaps() const {
   return supports_native_pixmaps;
 }
 
-std::optional<viz::SharedImageFormat>
-WaylandSurfaceFactory::GetPreferredFormatForSolidColor() const {
-  if (!buffer_manager_->SupportsFormat(gfx::BufferFormat::RGBA_8888)) {
-    return viz::SinglePlaneFormat::kBGRA_8888;
-  }
-  return viz::SinglePlaneFormat::kRGBA_8888;
-}
-
 bool WaylandSurfaceFactory::SupportsDrmModifiersFilter() const {
   return true;
 }
@@ -341,25 +331,14 @@ void WaylandSurfaceFactory::SetDrmModifiersFilter(
   buffer_manager_->set_drm_modifiers_filter(std::move(filter));
 }
 
-std::vector<gfx::BufferFormat>
-WaylandSurfaceFactory::GetSupportedFormatsForTexturing() const {
+bool WaylandSurfaceFactory::IsFormatSupportedForTexturing(
+    viz::SharedImageFormat format) const {
 #if defined(WAYLAND_GBM)
   GbmDevice* const gbm_device = buffer_manager_->GetGbmDevice();
-  if (!gbm_device) {
-    return {};
-  }
-
-  std::vector<gfx::BufferFormat> supported_buffer_formats;
-  for (int j = 0; j <= static_cast<int>(gfx::BufferFormat::LAST); ++j) {
-    const gfx::BufferFormat buffer_format = static_cast<gfx::BufferFormat>(j);
-    if (gbm_device->CanCreateBufferForFormat(
-            GetFourCCFormatFromBufferFormat(buffer_format))) {
-      supported_buffer_formats.push_back(buffer_format);
-    }
-  }
-  return supported_buffer_formats;
+  return gbm_device && gbm_device->CanCreateBufferForFormat(
+                           GetFourCCFormatFromSharedImageFormat(format));
 #else
-  return {};
+  return false;
 #endif
 }
 

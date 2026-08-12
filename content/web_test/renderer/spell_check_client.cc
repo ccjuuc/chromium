@@ -57,7 +57,7 @@ void SpellCheckClient::CheckSpelling(
 
 void SpellCheckClient::RequestCheckingOfText(
     const blink::WebString& text,
-    const std::vector<gfx::Range>& spelling_markers,
+    const std::vector<blink::WebSpellingMarker>& spelling_markers,
     blink::WebTextCheckClient::ShouldForceRefreshTextCheckService
         should_force_refresh,
     std::unique_ptr<blink::WebTextCheckingCompletion> completion) {
@@ -100,13 +100,13 @@ void SpellCheckClient::FinishLastTextCheck() {
     while (text.length()) {
       size_t misspelled_position = 0;
       size_t misspelled_length = 0;
-      spell_checker_.SpellCheckWord(blink::WebString::FromUTF16(text),
+      spell_checker_.SpellCheckWord(blink::WebString::FromUtf16(text),
                                     &misspelled_position, &misspelled_length);
       if (!misspelled_length)
         break;
       std::vector<blink::WebString> suggestions;
       spell_checker_.FillSuggestionList(
-          blink::WebString::FromUTF16(
+          blink::WebString::FromUtf16(
               text.substr(misspelled_position, misspelled_length)),
           &suggestions);
       results.push_back(blink::WebTextCheckingResult(

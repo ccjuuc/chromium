@@ -6,10 +6,10 @@
 
 #include <lib/sys/cpp/component_context.h>
 
+#include <algorithm>
 #include <memory>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/fuchsia/process_context.h"
 #include "base/fuchsia/scheduler.h"
@@ -55,24 +55,26 @@ bool AudioManagerFuchsia::HasAudioInputDevices() {
   return HasAudioDevice(true);
 }
 
-void AudioManagerFuchsia::GetAudioInputDeviceNames(
+bool AudioManagerFuchsia::GetAudioInputDeviceNames(
     AudioDeviceNames* device_names) {
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kDisableAudioInput)) {
-    return;
+    return true;
   }
 
   GetAudioDevices(device_names, true);
+  return true;
 }
 
-void AudioManagerFuchsia::GetAudioOutputDeviceNames(
+bool AudioManagerFuchsia::GetAudioOutputDeviceNames(
     AudioDeviceNames* device_names) {
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kDisableAudioOutput)) {
-    return;
+    return true;
   }
 
   GetAudioDevices(device_names, false);
+  return true;
 }
 
 AudioParameters AudioManagerFuchsia::GetInputStreamParameters(
@@ -253,9 +255,9 @@ void AudioManagerFuchsia::OnDeviceRemoved(uint64_t device_token) {
 bool AudioManagerFuchsia::HasAudioDevice(bool is_input) {
   DCHECK(GetTaskRunner()->BelongsToCurrentThread());
 
-  return base::Contains(audio_devices_, is_input, [](const auto& device) {
-    return device.second.is_input;
-  });
+  return std::ranges::contains(
+      audio_devices_, is_input,
+      [](const auto& device) { return device.second.is_input; });
 }
 
 void AudioManagerFuchsia::GetAudioDevices(AudioDeviceNames* device_names,

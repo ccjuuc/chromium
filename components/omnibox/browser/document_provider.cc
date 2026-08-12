@@ -78,7 +78,7 @@ enum class DocumentProviderAllowedReason : int {
   kDriveSettingDisabledObsolete = 4,
   kOffTheRecord = 5,
   kNotLoggedIn = 6,
-  kNotSyncing = 7,
+  kNotSyncing_DEPRECATED = 7,
   kBackoff = 8,
   kDSENotGoogle = 9,
   kInputOnFocusOrEmpty = 10,
@@ -162,11 +162,10 @@ std::vector<T> Concat(std::vector<T>& v1, const std::vector<T>& v2) {
 // Extracts a list of pointers to strings from a DictionaryValue containing a
 // list of objects containing a string field of interest. Note that pointers may
 // be `nullptr` if the value at `field_path` is not found or is not a string.
-std::vector<const std::string*> ExtractResultList(
-    const base::Value::Dict& result,
-    std::string_view list_path,
-    std::string_view field_path) {
-  const base::Value::List* list = result.FindListByDottedPath(list_path);
+std::vector<const std::string*> ExtractResultList(const base::DictValue& result,
+                                                  std::string_view list_path,
+                                                  std::string_view field_path) {
+  const base::ListValue* list = result.FindListByDottedPath(list_path);
   if (!list) {
     return {};
   }
@@ -181,7 +180,7 @@ std::vector<const std::string*> ExtractResultList(
 }
 
 // Return whether `user` owns the doc `result`.
-bool IsOwnedByUser(const std::string& user, const base::Value::Dict& result) {
+bool IsOwnedByUser(const std::string& user, const base::DictValue& result) {
   std::vector<const std::string*> owner_emails = ExtractResultList(
       result, "metadata.owner.emailAddresses", "emailAddress");
   const auto lower_user = base::i18n::ToLower(base::UTF8ToUTF16(user));
@@ -196,7 +195,7 @@ bool IsOwnedByUser(const std::string& user, const base::Value::Dict& result) {
 // Return whether all words in `input` are contained in either the `result`
 // title or owners.
 bool IsCompletelyMatchedInTitleOrOwner(const std::u16string& input,
-                                       const base::Value::Dict& result) {
+                                       const base::DictValue& result) {
   // Accumulate a vector of the title and all owners.
   auto search_strings = ExtractResultList(
       result, "metadata.owner.emailAddresses", "emailAddress");
@@ -321,7 +320,7 @@ bool ValidHostPrefix(const std::string& host) {
 }
 
 // If `value[key]`, returns it. Otherwise, returns `fallback`.
-std::string FindStringKeyOrFallback(const base::Value::Dict& value,
+std::string FindStringKeyOrFallback(const base::DictValue& value,
                                     std::string_view key,
                                     std::string fallback = "") {
   auto* ptr = value.FindString(key);
@@ -391,15 +390,6 @@ bool DocumentProvider::IsDocumentProviderAllowed(
     base::UmaHistogramEnumeration(
         "Omnibox.DocumentSuggest.ProviderAllowed",
         DocumentProviderAllowedReason::kNotEnterpriseEligible);
-    return false;
-  }
-
-  // Sync must be enabled and active.
-  if (!base::FeatureList::IsEnabled(
-          omnibox::kDocumentProviderNoSyncRequirement) &&
-      !client_->IsSyncActive()) {
-    base::UmaHistogramEnumeration("Omnibox.DocumentSuggest.ProviderAllowed",
-                                  DocumentProviderAllowedReason::kNotSyncing);
     return false;
   }
 
@@ -566,7 +556,9 @@ DocumentProvider::DocumentProvider(AutocompleteProviderClient* client,
                                    AutocompleteProviderListener* listener)
     : AutocompleteProvider(AutocompleteProvider::TYPE_DOCUMENT),
       client_(client),
-      debouncer_(std::make_unique<AutocompleteProviderDebouncer>(true, 300)),
+      debouncer_(std::make_unique<AutocompleteProviderDebouncer>(
+          true,
+          omnibox_feature_configs::DocumentProvider::Get().debounce_delay_ms)),
       matches_cache_(20),
       task_runner_(base::SequencedTaskRunner::GetCurrentDefault()) {
   AddListener(listener);
@@ -600,7 +592,9 @@ void DocumentProvider::OnURLLoadComplete(
   // expected to be semi-persistent, it does not make sense to continue to issue
   // requests during the current session after receiving one.
   if (response_code == 400 || response_code == 401 || response_code == 403 ||
-      response_code == 499) {
+      response_code == 499 ||
+      (response_code == 429 &&
+       omnibox_feature_configs::DocumentProvider::Get().backoff_on_429)) {
     bool scope_backoff_to_profile =
         omnibox_feature_configs::DocumentProvider::Get()
             .scope_backoff_to_profile;
@@ -735,7 +729,7 @@ ACMatches DocumentProvider::ParseDocumentSearchResults(
   ACMatches matches;
 
   // Parse the results.
-  const base::Value::List* results = root_val.GetDict().FindList("results");
+  const base::ListValue* results = root_val.GetDict().FindList("results");
   if (!results) {
     return matches;
   }
@@ -756,7 +750,7 @@ ACMatches DocumentProvider::ParseDocumentSearchResults(
       return matches;
     }
 
-    const base::Value::Dict& result = result_value.GetDict();
+    const base::DictValue& result = result_value.GetDict();
     const std::string title = FindStringKeyOrFallback(result, "title");
     const std::string url = FindStringKeyOrFallback(result, "url");
     if (title.empty() || url.empty()) {
@@ -803,7 +797,7 @@ ACMatches DocumentProvider::ParseDocumentSearchResults(
     match.contents =
         AutocompleteMatch::SanitizeString(base::UTF8ToUTF16(title));
     match.contents_class = Classify(match.contents, input_.text());
-    const base::Value::Dict* metadata = result.FindDict("metadata");
+    const base::DictValue* metadata = result.FindDict("metadata");
     if (metadata) {
       const std::string update_time =
           FindStringKeyOrFallback(*metadata, "updateTime");

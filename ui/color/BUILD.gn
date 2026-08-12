@@ -30,7 +30,7 @@ source_set("color_headers") {
   ]
 }
 
-# Keep the deps on this target to a minimum so that chromeos/crosapi can depend on it.
+# Keep the deps on this target to a minimum so that chromeos can depend on it.
 component("color_provider_key") {
   sources = [
     "color_provider_key.cc",
@@ -87,6 +87,15 @@ component("color") {
     ]
     frameworks = [ "AppKit.framework" ]
   }
+
+  if (is_android) {
+    sources += [
+      "android/android_color_roles.h",
+      "android/color_provider_bridge.cc",
+      "android/color_provider_bridge.h",
+    ]
+    deps += [ ":ui_color_jni_headers" ]
+  }
 }
 
 source_set("test_support") {
@@ -108,7 +117,6 @@ source_set("unit_tests") {
     "color_provider_utils_unittest.cc",
     "color_recipe_unittest.cc",
     "color_transform_unittest.cc",
-    "dynamic_color/palette_factory_unittest.cc",
     "sys_color_mixer_unittest.cc",
   ]
 
@@ -179,6 +187,7 @@ component("mixers") {
     "//ui/color/dynamic_color",
     "//ui/gfx:color_utils",
     "//ui/native_theme/features",
+    "//ui/webui:buildflags",
   ]
 
   public_deps = [ "//base" ]
@@ -198,6 +207,43 @@ component("mixers") {
       "win/native_color_mixers_win.h",
     ]
     deps += [ ":accent_color_observer" ]
+  } else if (is_android) {
+    sources += [
+      "android/sys_color_mixer_android.cc",
+      "android/sys_color_mixer_android.h",
+    ]
+  }
+}
+
+if (is_android) {
+  import("//build/config/android/rules.gni")
+  import("//third_party/jni_zero/jni_zero.gni")
+
+  generate_jni("ui_color_jni_headers") {
+    sources = [
+      "android/java/src/org/chromium/ui/color/ColorProviderBridgeFactory.java",
+    ]
+  }
+
+  android_library("ui_color_android_java") {
+    sources = [
+      "android/java/src/org/chromium/ui/color/ColorProviderBridge.java",
+      "android/java/src/org/chromium/ui/color/ColorProviderBridgeFactory.java",
+    ]
+    deps = [
+      "//base:base_java",
+      "//build/android:build_java",
+      "//third_party/androidx:androidx_annotation_annotation_java",
+      "//third_party/jni_zero:jni_zero_java",
+    ]
+    srcjar_deps = [
+      ":ui_color_android_java_enums",
+      ":ui_color_jni_headers",
+    ]
+  }
+
+  java_cpp_enum("ui_color_android_java_enums") {
+    sources = [ "android/android_color_roles.h" ]
   }
 }
 

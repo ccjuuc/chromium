@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/notreached.h"
@@ -231,20 +232,21 @@ bool ReadPixmap(PaintOpReader& reader, SkPixmap& pixmap) {
   }
 
   reader.AlignMemory(alignment);
-  const volatile void* data = reader.ExtractReadableMemory(data_size);
+  auto data = reader.ExtractReadableMemory(data_size);
   if (!reader.valid()) {
     DLOG(ERROR) << "Failed to read pixels";
     return false;
   }
-  if (reinterpret_cast<uintptr_t>(data) % alignment) {
+  if (reinterpret_cast<uintptr_t>(data.data()) % alignment) {
     DLOG(ERROR) << "Pixel pointer not aligned";
     return false;
   }
 
-  // Const-cast away the "volatile" on |pixel_data|. We specifically understand
+  // Const-cast away the "volatile" on `data`. We specifically understand
   // that a malicious caller may change our pixels under us, and are OK with
   // this as the worst case scenario is visual corruption.
-  pixmap = SkPixmap(image_info, const_cast<const void*>(data), row_bytes);
+  pixmap =
+      SkPixmap(image_info, const_cast<const uint8_t*>(data.data()), row_bytes);
   return true;
 }
 
@@ -491,13 +493,11 @@ ClientImageTransferCacheEntry::Image::Image(
 ClientImageTransferCacheEntry::ClientImageTransferCacheEntry(
     const Image& image,
     bool needs_mips,
-    const gfx::HDRMetadata& hdr_metadata,
     sk_sp<SkColorSpace> target_color_space)
     : needs_mips_(needs_mips),
       target_color_space_(target_color_space),
       id_(GetNextId()),
-      image_(image),
-      hdr_metadata_(hdr_metadata) {
+      image_(image) {
   ComputeSize();
 }
 
@@ -532,16 +532,12 @@ bool ClientImageTransferCacheEntry::Serialize(base::span<uint8_t> data) const {
   // We don't need to populate the SerializeOptions here since the writer is
   // only used for serializing primitives.
   PaintOp::SerializeOptions options;
-  PaintOpWriter writer(data.data(), data.size(), options);
+  PaintOpWriter writer(data, options);
 
   DCHECK_EQ(gainmap_image_.has_value(), gainmap_info_.has_value());
   bool has_gainmap = gainmap_image_.has_value();
   writer.Write(has_gainmap);
   writer.Write(needs_mips_);
-  writer.Write(!hdr_metadata_.IsEmpty());
-  if (!hdr_metadata_.IsEmpty()) {
-    writer.Write(hdr_metadata_);
-  }
   writer.Write(target_color_space_.get());
   WriteImage(writer, image_);
 
@@ -560,10 +556,6 @@ void ClientImageTransferCacheEntry::ComputeSize() {
   base::CheckedNumeric<uint32_t> safe_size;
   safe_size += PaintOpWriter::SerializedSize<bool>();  // has_gainmap
   safe_size += PaintOpWriter::SerializedSize<bool>();  // needs_mips
-  safe_size += PaintOpWriter::SerializedSize<bool>();  // has_hdr_metadata
-  if (!hdr_metadata_.IsEmpty()) {
-    safe_size += PaintOpWriter::SerializedSize(hdr_metadata_);
-  }
   safe_size += PaintOpWriter::SerializedSize(target_color_space_.get());
   safe_size += SafeSizeForImage(image_);
   if (gainmap_image_) {
@@ -588,62 +580,6 @@ ServiceImageTransferCacheEntry::ServiceImageTransferCacheEntry(
 ServiceImageTransferCacheEntry& ServiceImageTransferCacheEntry::operator=(
     ServiceImageTransferCacheEntry&& other) = default;
 
-bool ServiceImageTransferCacheEntry::BuildFromHardwareDecodedImage(
-    GrDirectContext* gr_context,
-    std::vector<sk_sp<SkImage>> plane_images,
-    SkYUVAInfo::PlaneConfig plane_config,
-    SkYUVAInfo::Subsampling subsampling,
-    SkYUVColorSpace yuv_color_space,
-    size_t buffer_byte_size,
-    bool needs_mips) {
-  // Only supported on Ganesh for now since this code path is only used on CrOS.
-  CHECK(gr_context);
-  gr_context_ = gr_context;
-  size_ = buffer_byte_size;
-
-  // 1) Generate mipmap chains if requested.
-  if (needs_mips) {
-    DCHECK(plane_sizes_.empty());
-    base::CheckedNumeric<size_t> safe_total_size(0u);
-    for (size_t plane = 0; plane < plane_images.size(); plane++) {
-      plane_images[plane] = SkImages::TextureFromImage(
-          gr_context_, plane_images[plane], skgpu::Mipmapped::kYes,
-          skgpu::Budgeted::kNo);
-      if (!plane_images[plane]) {
-        DLOG(ERROR) << "Could not generate mipmap chain for plane " << plane;
-        return false;
-      }
-      plane_sizes_.push_back(plane_images[plane]->textureSize());
-      safe_total_size += plane_sizes_.back();
-    }
-    if (!safe_total_size.AssignIfValid(&size_)) {
-      DLOG(ERROR) << "Could not calculate the total image size";
-      return false;
-    }
-  }
-  plane_images_ = std::move(plane_images);
-  if (static_cast<size_t>(SkYUVAInfo::NumPlanes(plane_config)) !=
-      plane_images_.size()) {
-    DLOG(ERROR) << "Expected " << SkYUVAInfo::NumPlanes(plane_config)
-                << " planes, got " << plane_images_.size();
-    return false;
-  }
-  yuva_info_ = SkYUVAInfo(plane_images_[0]->dimensions(), plane_config,
-                          subsampling, yuv_color_space);
-
-  // 2) Create a SkImage backed by |plane_images|.
-  // TODO(andrescj): support embedded color profiles for hardware decodes and
-  // pass the color space to MakeYUVImageFromUploadedPlanes.
-  image_ = MakeYUVImageFromUploadedPlanes(
-      gr_context_, /*graphite_recorder=*/nullptr, plane_images_,
-      yuva_info_.value(), SkColorSpace::MakeSRGB());
-  if (!image_) {
-    return false;
-  }
-  DCHECK(image_->isTextureBacked());
-  return true;
-}
-
 size_t ServiceImageTransferCacheEntry::CachedSize() const {
   return size_;
 }
@@ -659,19 +595,12 @@ bool ServiceImageTransferCacheEntry::Deserialize(
   // only used for de-serializing primitives.
   std::vector<uint8_t> scratch_buffer;
   PaintOp::DeserializeOptions options{.scratch_buffer = scratch_buffer};
-  PaintOpReader reader(data.data(), data.size(), options);
+  PaintOpReader reader(data, options);
 
   // Parameters common to RGBA and YUVA images.
   reader.Read(&has_gainmap_);
   bool needs_mips = false;
   reader.Read(&needs_mips);
-  bool has_hdr_metadata = false;
-  reader.Read(&has_hdr_metadata);
-  if (has_hdr_metadata) {
-    gfx::HDRMetadata hdr_metadata_value;
-    reader.Read(&hdr_metadata_value);
-    hdr_metadata_ = hdr_metadata_value;
-  }
   sk_sp<SkColorSpace> target_color_space;
   reader.Read(&target_color_space);
 
@@ -710,9 +639,14 @@ bool ServiceImageTransferCacheEntry::Deserialize(
     reader.Read(&gainmap_info_);
   }
 
-  // Determine if this image will be tone mapped.
+  // Skip color space conversion if this image will be tone mapped.
+  // TODO(https://crbug.com/395659818): This will inappropriately color convert
+  // SDR images with AGTM metadata. This will not affect the rendering result,
+  // but is odd. All of the caching of the color space conversion here should be
+  // removed.
   const bool is_tone_mapped =
-      has_gainmap_ || ToneMapUtil::UseGlobalToneMapFilter(image_->colorSpace());
+      has_gainmap_ || ToneMapUtil::UseGlobalToneMapFilter(image_->colorSpace(),
+                                                          gfx::HDRMetadata());
 
   // Perform color conversion (if no tone mapping is needed).
   if (target_color_space && !is_tone_mapped) {

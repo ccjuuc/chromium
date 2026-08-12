@@ -26,6 +26,7 @@ import androidx.test.uiautomator.UiObject;
 import androidx.test.uiautomator.UiSelector;
 
 import org.hamcrest.Matchers;
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -43,12 +44,14 @@ import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisabledTest;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.PackageManagerWrapper;
 import org.chromium.chrome.browser.ShortcutHelper;
 import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.customtabs.CustomTabActivityTestRule;
 import org.chromium.chrome.browser.customtabs.CustomTabsIntentTestUtils;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeActivityTestRule;
@@ -82,6 +85,8 @@ import java.util.Observer;
 /** Tests the app banners. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+// TODO(http://crbug.com/495529795): Enable side panel and fix this test.
+@DisableFeatures({ChromeFeatureList.ENABLE_ANDROID_SIDE_PANEL})
 public class AmbientBadgeManagerTest {
     @Rule
     public FreshCtaTransitTestRule mTabbedActivityTestRule =
@@ -153,10 +158,7 @@ public class AmbientBadgeManagerTest {
                     null,
                     mInstallIntent);
             PostTask.runOrPostTask(
-                    TaskTraits.UI_DEFAULT,
-                    () -> {
-                        mObserver.onAppDetailsRetrieved(mAppData);
-                    });
+                    TaskTraits.UI_DEFAULT, () -> mObserver.onAppDetailsRetrieved(mAppData));
         }
 
         @Override
@@ -188,14 +190,18 @@ public class AmbientBadgeManagerTest {
         mDetailsDelegate = new MockAppDetailsDelegate();
 
         ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    AppBannerManager.setAppDetailsDelegate(mDetailsDelegate);
-                });
+                () -> AppBannerManager.setAppDetailsDelegate(mDetailsDelegate));
 
         AppBannerManager.ignoreChromeChannelForTesting();
         AppBannerManager.setOverrideSegmentationResultForTesting(true);
         mTestServer = mTabbedActivityTestRule.getTestServer();
         mUiDevice = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
+    }
+
+    @After
+    public void tearDown() {
+        ThreadUtils.runOnUiThreadBlocking(() -> AppBannerManager.setAppDetailsDelegate(null));
+        mDetailsDelegate = null;
     }
 
     private AppBannerManager getAppBannerManager(WebContents webContents) {
@@ -210,12 +216,11 @@ public class AmbientBadgeManagerTest {
     private void assertAppBannerPipelineStatus(int expectedValue) {
         Tab tab = mTabbedActivityTestRule.getActivityTab();
         ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    Assert.assertEquals(
-                            expectedValue,
-                            getAppBannerManager(tab.getWebContents())
-                                    .getPipelineStatusForTesting());
-                });
+                () ->
+                        Assert.assertEquals(
+                                expectedValue,
+                                getAppBannerManager(tab.getWebContents())
+                                        .getPipelineStatusForTesting()));
     }
 
     private void navigateToUrlAndWaitForBannerManager(
@@ -258,10 +263,9 @@ public class AmbientBadgeManagerTest {
 
     private void waitForBadgeStatus(Tab tab, int expectedValue) {
         CriteriaHelper.pollUiThread(
-                () -> {
-                    return getAppBannerManager(tab.getWebContents()).getBadgeStatusForTesting()
-                            == expectedValue;
-                });
+                () ->
+                        getAppBannerManager(tab.getWebContents()).getBadgeStatusForTesting()
+                                == expectedValue);
     }
 
     private void waitForModalBanner(final ChromeActivity activity) throws Exception {
@@ -351,7 +355,7 @@ public class AmbientBadgeManagerTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     if (accept) {
-                        var unused = model.get(MessageBannerProperties.ON_PRIMARY_ACTION).get();
+                        var _ = model.get(MessageBannerProperties.ON_PRIMARY_ACTION).get();
                     } else {
                         dispatcher.dismissMessage(model, DismissReason.GESTURE);
                     }
@@ -366,7 +370,8 @@ public class AmbientBadgeManagerTest {
                         .expectIntRecord(
                                 "Webapp.Install.InstallEvent",
                                 WebappInstallSource.AMBIENT_BADGE_BROWSER_TAB)
-                        .expectIntRecord(INSTALL_PATH_HISTOGRAM_NAME, 1 /* kAmbientInfobar */)
+                        .expectIntRecord(
+                                INSTALL_PATH_HISTOGRAM_NAME, /* value= */ 1) // kAmbientInfobar
                         .build();
 
         triggerInstallWebApp(
@@ -390,7 +395,8 @@ public class AmbientBadgeManagerTest {
                         .expectIntRecord(
                                 "Webapp.Install.InstallEvent",
                                 WebappInstallSource.AMBIENT_BADGE_CUSTOM_TAB)
-                        .expectIntRecord(INSTALL_PATH_HISTOGRAM_NAME, 1 /* kAmbientInfobar */)
+                        .expectIntRecord(
+                                INSTALL_PATH_HISTOGRAM_NAME, /* value= */ 1) // kAmbientInfobar
                         .build();
 
         mCustomTabActivityTestRule.startCustomTabActivityWithIntent(
@@ -476,9 +482,7 @@ public class AmbientBadgeManagerTest {
                                                         MessageIdentifier.INSTALLABLE_AMBIENT_BADGE)
                                                 .get(0)));
         ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    dispatcher.dismissMessage(model, DismissReason.GESTURE);
-                });
+                () -> dispatcher.dismissMessage(model, DismissReason.GESTURE));
         CriteriaHelper.pollUiThread(
                 () ->
                         Criteria.checkThat(

@@ -9,6 +9,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/mojom/permissions/permission.mojom-blink.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom-blink-forward.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
@@ -21,7 +22,7 @@
 
 namespace blink {
 
-class LocalDOMWindow;
+class ExecutionContext;
 
 // This cache keeps track of permission statuses, restricted to the permission
 // element. These permission statuses are not canonical and should not be used
@@ -35,12 +36,12 @@ class LocalDOMWindow;
 class CORE_EXPORT CachedPermissionStatus final
     : public GarbageCollected<CachedPermissionStatus>,
       public mojom::blink::PermissionObserver,
-      public Supplement<LocalDOMWindow> {
+      public Supplement<ExecutionContext> {
  public:
   static const char kSupplementName[];
 
   // Returns the supplement, creating one as needed.
-  static CachedPermissionStatus* From(LocalDOMWindow* window);
+  static CachedPermissionStatus* From(ExecutionContext* context);
 
   using PermissionStatusMap =
       HashMap<mojom::blink::PermissionName, mojom::blink::PermissionStatus>;
@@ -60,7 +61,7 @@ class CORE_EXPORT CachedPermissionStatus final
         PermissionStatusMap initilized_map) = 0;
   };
 
-  explicit CachedPermissionStatus(LocalDOMWindow* local_dom_window);
+  explicit CachedPermissionStatus(ExecutionContext* context);
 
   ~CachedPermissionStatus() override = default;
 
@@ -71,14 +72,15 @@ class CORE_EXPORT CachedPermissionStatus final
   }
 
  private:
-  friend class HTMLPermissionElement;
+  friend class HTMLCapabilityElementBase;
   friend class DocumentLoader;
   friend class CachedPermissionStatusTest;
 
   FRIEND_TEST_ALL_PREFIXES(CachedPermissionStatusTest, RegisterClient);
   FRIEND_TEST_ALL_PREFIXES(CachedPermissionStatusTest,
                            UnregisterClientRemoveObserver);
-  FRIEND_TEST_ALL_PREFIXES(HTMLPemissionElementTest, SetTypeAfterInsertedInto);
+  FRIEND_TEST_ALL_PREFIXES(HTMLCapabilityElementBaseTest,
+                           SetTypeAfterInsertedInto);
 
   // Allow this object to keep track of the Client instances corresponding to
   // it.
@@ -94,7 +96,8 @@ class CORE_EXPORT CachedPermissionStatus final
       mojom::blink::PermissionStatus current_status);
 
   // mojom::blink::PermissionObserver override.
-  void OnPermissionStatusChange(mojom::blink::PermissionStatus status) override;
+  void OnPermissionStatusChange(
+      mojom::blink::PermissionStatusWithDetailsPtr status) override;
 
   // Ensure there is a connection to the permission service and return it.
   mojom::blink::PermissionService* GetPermissionService();

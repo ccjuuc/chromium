@@ -3,10 +3,12 @@
 // found in the LICENSE file.
 
 // clang-format off
+import {COLORS_CSS_SELECTOR} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
 import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import type {CrDrawerElement, CrToolbarElement, CrToolbarSearchFieldElement, SettingsUiElement} from 'chrome://settings/settings.js';
-import {CrSettingsPrefs, Router, routes} from 'chrome://settings/settings.js';
-import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {CrSettingsPrefs, loadTimeData, MAX_QUERY_LENGTH, Router, routes} from 'chrome://settings/settings.js';
+import {assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
 import {eventToPromise} from 'chrome://webui-test/test_util.js';
 // clang-format on
 
@@ -16,15 +18,14 @@ suite('SettingsUIToolbarAndDrawer', function() {
   let toolbar: CrToolbarElement;
   let drawer: CrDrawerElement;
 
-  setup(function() {
+  setup(async function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     ui = document.createElement('settings-ui');
     document.body.appendChild(ui);
-    return CrSettingsPrefs.initialized.then(() => {
-      flush();
-      toolbar = ui.$.toolbar;
-      drawer = ui.$.drawer;
-    });
+    await CrSettingsPrefs.initialized;
+    flush();
+    toolbar = ui.$.toolbar;
+    drawer = ui.$.drawer;
   });
 
   test('showing menu in toolbar is dependent on narrow mode', async function() {
@@ -40,7 +41,7 @@ suite('SettingsUIToolbarAndDrawer', function() {
 
   test('app drawer', async () => {
     assertEquals(null, ui.shadowRoot!.querySelector('cr-drawer settings-menu'));
-    assertFalse(!!drawer.open);
+    assertFalse(drawer.open);
 
     const drawerOpened = eventToPromise('cr-drawer-opened', drawer);
     drawer.openDrawer();
@@ -79,15 +80,14 @@ suite('SettingsUISearch', function() {
   let toolbar: CrToolbarElement;
   let searchField: CrToolbarSearchFieldElement;
 
-  setup(function() {
+  setup(async function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     ui = document.createElement('settings-ui');
     document.body.appendChild(ui);
-    return CrSettingsPrefs.initialized.then(() => {
-      flush();
-      toolbar = ui.$.toolbar;
-      searchField = toolbar.getSearchField();
-    });
+    await CrSettingsPrefs.initialized;
+    flush();
+    toolbar = ui.$.toolbar;
+    searchField = toolbar.getSearchField();
   });
 
   test('URL initiated search propagates to search box', function() {
@@ -110,6 +110,13 @@ suite('SettingsUISearch', function() {
     searchField.setValue(value);
     assertEquals(
         value, Router.getInstance().getQueryParameters().get('search'));
+
+    // Test that overly long queries are truncated.
+    value = value.repeat(300);
+    searchField.setValue(value);
+    assertEquals(
+        value.substring(0, MAX_QUERY_LENGTH),
+        Router.getInstance().getQueryParameters().get('search'));
 
     // Test that search queries are properly URL encoded.
     value = '+++';
@@ -152,5 +159,33 @@ suite('SettingsUISearch', function() {
     toolbar.narrow = false;
     await toolbar.updateComplete;
     assertEquals(ui.$.leftMenu, ui.shadowRoot!.activeElement);
+  });
+});
+
+suite('WebuiRefresh2026', () => {
+  const WEBUI_REFRESH_ATTR = 'webui-refresh-2026';
+  let ui: SettingsUiElement;
+
+  function createSettingsUI() {
+    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+    ui = document.createElement('settings-ui');
+    document.body.appendChild(ui);
+    flush();
+  }
+
+  test('Enabled', async () => {
+    loadTimeData.overrideValues({webuiRefresh2026: WEBUI_REFRESH_ATTR});
+    createSettingsUI();
+    await flushTasks();
+
+    assertNotEquals(null, document.body.querySelector(COLORS_CSS_SELECTOR));
+  });
+
+  test('Disabled', async () => {
+    loadTimeData.overrideValues({webuiRefresh2026: ''});
+    createSettingsUI();
+    await flushTasks();
+
+    assertEquals(null, document.body.querySelector(COLORS_CSS_SELECTOR));
   });
 });

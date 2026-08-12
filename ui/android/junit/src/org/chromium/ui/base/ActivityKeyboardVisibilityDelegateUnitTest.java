@@ -30,9 +30,9 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.supplier.LazyOneshotSupplier;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
-import org.chromium.base.supplier.SettableObservableSupplier;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.ui.KeyboardVisibilityDelegate.KeyboardVisibilityListener;
 
@@ -53,9 +53,9 @@ public class ActivityKeyboardVisibilityDelegateUnitTest {
     @Captor private ArgumentCaptor<View.OnLayoutChangeListener> mOnLayoutChangeListener;
 
     private FrameLayout mRootView;
-    private final SettableObservableSupplier<Integer> mKeyboardInsetSupplier =
+    private final SettableMonotonicObservableSupplier<Integer> mKeyboardInsetSupplier =
             ObservableSuppliers.createMonotonic();
-    private LazyOneshotSupplier<ObservableSupplier<Integer>> mLazyKeyboardInsetSupplier;
+    private LazyOneshotSupplier<MonotonicObservableSupplier<Integer>> mLazyKeyboardInsetSupplier;
     private ActivityKeyboardVisibilityDelegate mKeyboardVisibilityDelegate;
 
     @Before
@@ -149,6 +149,8 @@ public class ActivityKeyboardVisibilityDelegateUnitTest {
 
     private void setRootViewKeyboardInset(int inset) {
         when(mWindowInsets.getInsets(WindowInsets.Type.systemBars()))
+                .thenReturn(Insets.of(0, 0, 0, 0));
+        when(mWindowInsets.getInsetsIgnoringVisibility(WindowInsets.Type.navigationBars()))
                 .thenReturn(Insets.of(0, 0, 0, 0));
         when(mWindowInsets.getInsets(WindowInsets.Type.ime()))
                 .thenReturn(Insets.of(0, 0, 0, inset));

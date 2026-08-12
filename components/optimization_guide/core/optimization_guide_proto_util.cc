@@ -7,7 +7,6 @@
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/optimization_guide/proto/features/common_quality_data.pb.h"
-#include "ui/accessibility/ax_enums.mojom-shared.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/ax_relative_bounds.h"
@@ -101,8 +100,12 @@ optimization_guide::proto::AXStringAttribute StringAttributeToProto(
           AX_SA_IMAGEANNOTATION;
     case ax::mojom::StringAttribute::kImageDataUrl:
       return optimization_guide::proto::AXStringAttribute::AX_SA_IMAGEDATAURL;
+    case ax::mojom::StringAttribute::kMathArg:
+      return optimization_guide::proto::AXStringAttribute::AX_SA_MATHARG;
     case ax::mojom::StringAttribute::kMathContent:
       return optimization_guide::proto::AXStringAttribute::AX_SA_MATHCONTENT;
+    case ax::mojom::StringAttribute::kMathIntent:
+      return optimization_guide::proto::AXStringAttribute::AX_SA_MATHINTENT;
     case ax::mojom::StringAttribute::kInputType:
       return optimization_guide::proto::AXStringAttribute::AX_SA_INPUTTYPE;
     case ax::mojom::StringAttribute::kKeyShortcuts:
@@ -134,6 +137,11 @@ optimization_guide::proto::AXStringAttribute StringAttributeToProto(
       return optimization_guide::proto::AXStringAttribute::AX_SA_VALUE;
     case ax::mojom::StringAttribute::kVirtualContent:
       return optimization_guide::proto::AXStringAttribute::AX_SA_VIRTUALCONTENT;
+    case ax::mojom::StringAttribute::kCanvasAnnotation:
+      return optimization_guide::proto::AXStringAttribute::
+          AX_SA_CANVASANNOTATION;
+    case ax::mojom::StringAttribute::kAriaValueText:
+      return optimization_guide::proto::AXStringAttribute::AX_SA_ARIAVALUETEXT;
   }
 }
 
@@ -493,6 +501,9 @@ optimization_guide::proto::AXStringListAttribute StringListAttributeToProto(
     case ax::mojom::StringListAttribute::kCustomActionDescriptions:
       return optimization_guide::proto::AXStringListAttribute::
           AX_SLA_CUSTOMACTIONDESCRIPTIONS;
+    case ax::mojom::StringListAttribute::kTextOperationReplacementStrings:
+      return optimization_guide::proto::AXStringListAttribute::
+          AX_SLA_TEXTOPERATIONREPLACEMENTSTRINGS;
   }
 }
 

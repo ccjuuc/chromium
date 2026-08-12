@@ -4,12 +4,9 @@
 
 #include <memory>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/callback_list.h"
-#include "base/strings/strcat.h"
-#include "base/strings/string_number_conversions.h"
 #include "base/test/bind.h"
-#include "base/test/simple_test_tick_clock.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
@@ -25,22 +22,18 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
-#include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/performance_controls/memory_saver_bubble_controller.h"
+#include "chrome/browser/ui/performance_controls/memory_saver_chip_tab_helper.h"
 #include "chrome/browser/ui/performance_controls/test_support/memory_saver_interactive_test_mixin.h"
 #include "chrome/browser/ui/recently_audible_helper.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
-#include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_controller.h"
 #include "chrome/browser/ui/views/page_action/page_action_view.h"
 #include "chrome/browser/ui/views/page_action/test_support/page_action_interactive_test_mixin.h"
 #include "chrome/browser/ui/views/performance_controls/memory_saver_bubble_view.h"
-#include "chrome/browser/ui/views/performance_controls/memory_saver_chip_view.h"
 #include "chrome/browser/ui/views/performance_controls/memory_saver_resource_view.h"
-#include "chrome/browser/ui/views/tabs/tab_icon.h"
+#include "chrome/browser/ui/views/tabs/tab/tab_icon.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/browser/ui/webui/test_support/webui_interactive_test_mixin.h"
 #include "chrome/common/webui_url_constants.h"
@@ -52,25 +45,19 @@
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/feature_engagement/public/feature_constants.h"
-#include "components/feature_engagement/public/feature_list.h"
-#include "components/feature_engagement/test/scoped_iph_feature_list.h"
-#include "components/performance_manager/public/decorators/process_metrics_decorator.h"
-#include "components/performance_manager/public/features.h"
 #include "components/performance_manager/public/performance_manager.h"
 #include "components/performance_manager/public/user_tuning/prefs.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_education/views/help_bubble_view.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
-#include "net/dns/mock_host_resolver.h"
 #include "third_party/blink/public/common/switches.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
-#include "ui/base/interaction/polling_state_observer.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/text/bytes_formatting.h"
 #include "ui/gfx/animation/animation.h"
-#include "ui/views/controls/button/button.h"
+#include "ui/gfx/animation/animation_test_api.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/interaction/element_tracker_views.h"
@@ -115,6 +102,7 @@ class MemorySaverDiscardPolicyInteractiveTest
 
   void SetUpOnMainThread() override {
     InteractiveBrowserTest::SetUpOnMainThread();
+    host_resolver()->AddRule("*", "127.0.0.1");
     embedded_test_server()->StartAcceptingConnections();
   }
 
@@ -254,7 +242,7 @@ IN_PROC_BROWSER_TEST_P(MemorySaverDiscardPolicyInteractiveTest,
   ASSERT_TRUE(https_server.Start());
 
   // Grant notification permission by default (only works for secure origins).
-  HostContentSettingsMapFactory::GetForProfile(browser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile())
       ->SetDefaultContentSetting(ContentSettingsType::NOTIFICATIONS,
                                  ContentSetting::CONTENT_SETTING_ALLOW);
   RunTestSequence(InstrumentTab(kFirstTabContents, 0),
@@ -266,45 +254,18 @@ IN_PROC_BROWSER_TEST_P(MemorySaverDiscardPolicyInteractiveTest,
                   TryDiscardTab(0), CheckTabIsDiscarded(0, false));
 }
 
-struct MemorySaverChipInteractiveTestParams {
-  bool web_contents_discard = false;
-  bool page_actions_migration_enabled = false;
-};
-
 // Tests the functionality of the Memory Saver page action chip
 class MemorySaverChipInteractiveTest
     : public PageActionInteractiveTestMixin<
           MemorySaverInteractiveTestMixin<InteractiveBrowserTest>>,
-      public ::testing::WithParamInterface<
-          MemorySaverChipInteractiveTestParams> {
+      public ::testing::WithParamInterface<bool> {
  public:
   MemorySaverChipInteractiveTest() {
-    std::vector<base::test::FeatureRefAndParams> enabled_features;
-    std::vector<base::test::FeatureRef> disabled_features;
-
-    if (GetParam().web_contents_discard) {
-      enabled_features.push_back({features::kWebContentsDiscard, {}});
-    } else {
-      disabled_features.push_back(features::kWebContentsDiscard);
-    }
-    if (GetParam().page_actions_migration_enabled) {
-      enabled_features.push_back(
-          {features::kPageActionsMigration,
-           {{features::kPageActionsMigrationMemorySaver.name, "true"}}});
-    } else {
-      disabled_features.push_back(features::kPageActionsMigration);
-    }
-    scoped_feature_list_.InitWithFeaturesAndParameters(enabled_features,
-                                                       disabled_features);
-    CHECK_EQ(IsPageActionMigrationEnabled(),
-             GetParam().page_actions_migration_enabled);
+    scoped_feature_list_.InitWithFeatureState(features::kWebContentsDiscard,
+                                              GetParam());
   }
 
   ~MemorySaverChipInteractiveTest() override = default;
-
-  bool IsPageActionMigrationEnabled() const {
-    return IsPageActionMigrated(PageActionIconType::kMemorySaver);
-  }
 
   void SetUpOnMainThread() override {
     MemorySaverInteractiveTestMixin::SetUpOnMainThread();
@@ -322,39 +283,25 @@ class MemorySaverChipInteractiveTest
   }
 
   views::BubbleDialogDelegate* GetMemorySaverBubble() {
-    return IsPageActionMigrationEnabled()
-               ? browser()
-                     ->browser_window_features()
-                     ->memory_saver_bubble_controller()
-                     ->bubble_for_testing()
-               : BrowserView::GetBrowserViewForBrowser(browser())
-                     ->GetLocationBarView()
-                     ->page_action_icon_controller()
-                     ->GetIconView(PageActionIconType::kMemorySaver)
-                     ->GetBubble();
+    return browser()
+        ->GetFeatures()
+        .memory_saver_bubble_controller()
+        ->bubble_for_testing();
   }
 
   using PageActionInteractiveTestMixin::WaitForPageActionChipVisible;
 
   auto WaitForPageActionChipVisible() {
-    MultiStep steps;
-    steps += WaitForPageActionChipVisible(kActionShowMemorySaverChip);
+    MultiStep steps = WaitForPageActionChipVisible(kActionShowMemorySaverChip);
     return steps;
   }
 
   auto CheckChipIsExpandedState(bool is_expanded) {
-    MultiStep steps;
-    if (IsPageActionMigrationEnabled()) {
-      steps += Steps(
-          WaitForPageActionChipVisible(),
-          CheckViewProperty(kMemorySaverChipElementId,
-                            &page_actions::PageActionView::ShouldShowLabel,
-                            is_expanded));
-    } else {
-      steps +=
-          CheckViewProperty(kMemorySaverChipElementId,
-                            &PageActionIconView::ShouldShowLabel, is_expanded);
-    }
+    MultiStep steps =
+        Steps(WaitForPageActionChipVisible(),
+              CheckViewProperty(kMemorySaverChipElementId,
+                                &page_actions::PageActionView::ShouldShowLabel,
+                                is_expanded));
     AddDescriptionPrefix(steps, "CheckChipIsExpandedState()");
     return steps;
   }
@@ -367,7 +314,7 @@ class MemorySaverChipInteractiveTest
       size_t non_discard_tab_index,
       const ui::ElementIdentifier& contents_id) {
     MultiStep steps;
-    for (int i = 0; i < MemorySaverChipTabHelper::kChipAnimationCount; i++) {
+    for (int i = 0; i < MemorySaverChipTabHelper::kEducationCount; i++) {
       steps += Steps(SelectTab(kTabStripElementId, non_discard_tab_index),
                      DiscardAndReloadTab(discard_tab_index, contents_id),
                      CheckChipIsExpandedState(true));
@@ -377,13 +324,8 @@ class MemorySaverChipInteractiveTest
   }
 
   auto PressPageActionButton() {
-    MultiStep steps;
-    if (IsPageActionMigrationEnabled()) {
-      steps += Steps(WaitForPageActionChipVisible(),
-                     PressButton(kMemorySaverChipElementId));
-    } else {
-      steps += PressButton(kMemorySaverChipElementId);
-    }
+    MultiStep steps = Steps(WaitForPageActionChipVisible(),
+                            PressButton(kMemorySaverChipElementId));
     AddDescriptionPrefix(steps, "PressPageActionButton()");
     return steps;
   }
@@ -393,13 +335,9 @@ class MemorySaverChipInteractiveTest
   // dismiss the associated bubble. Sending a key event directly to the chip
   // in tests will not. See crbug.com/395901614.
   auto MousePressPageActionButton() {
-    MultiStep steps;
-    if (IsPageActionMigrationEnabled()) {
-      steps += Steps(WaitForPageActionChipVisible(),
-                     MoveMouseTo(kMemorySaverChipElementId), ClickMouse());
-    } else {
-      steps += PressButton(kMemorySaverChipElementId);
-    }
+    MultiStep steps =
+        Steps(WaitForPageActionChipVisible(),
+              MoveMouseTo(kMemorySaverChipElementId), ClickMouse());
     AddDescriptionPrefix(steps, "MousePressPageActionButton()");
     return steps;
   }
@@ -413,7 +351,7 @@ class MemorySaverChipInteractiveTest
   }
 
   // Sets discard usage on the active tab for deterministic UI testing.
-  auto SetTabPreDiscardMemoryUsage(size_t index, base::ByteCount usage) {
+  auto SetTabPreDiscardMemoryUsage(size_t index, base::ByteSize usage) {
     return Do(base::BindLambdaForTesting([=, this]() {
       content::WebContents* web_contents =
           browser()->tab_strip_model()->GetWebContentsAt(index);
@@ -471,9 +409,8 @@ IN_PROC_BROWSER_TEST_P(MemorySaverChipInteractiveTest,
 
 // Page Action chip should stay collapsed when navigating between two
 // discarded tabs
-// TODO(crbug.com/391482960): Re-enable this test
 IN_PROC_BROWSER_TEST_P(MemorySaverChipInteractiveTest,
-                       DISABLED_ChipCollapseRemainCollapse) {
+                       ChipCollapseRemainCollapse) {
   RunTestSequence(
       InstrumentTab(kFirstTabContents, 0),
       NavigateWebContents(kFirstTabContents, GetURL()),
@@ -606,7 +543,7 @@ IN_PROC_BROWSER_TEST_P(MemorySaverChipInteractiveTest, CloseBubbleOnTabSwitch) {
 IN_PROC_BROWSER_TEST_P(MemorySaverChipInteractiveTest,
                        BubbleCorrectlyReportingMemorySaved) {
   // Simulate a page larger than the threshold for showing savings UI.
-  static constexpr base::ByteCount kMemoryUsage = base::GiB(1);
+  static constexpr base::ByteSize kMemoryUsage = base::GiBU(1);
   RunTestSequence(
       InstrumentTab(kFirstTabContents, 0),
       NavigateWebContents(kFirstTabContents, GetURL()),
@@ -647,8 +584,8 @@ IN_PROC_BROWSER_TEST_P(MemorySaverChipInteractiveTest,
       PressButton(MemorySaverBubbleView::kMemorySaverDialogCancelButton),
       WaitForHide(MemorySaverBubbleView::kMemorySaverDialogBodyElementId),
       Do(base::BindLambdaForTesting([=, this]() {
-        PrefService* const pref_service = browser()->profile()->GetPrefs();
-        const base::Value::Dict& discard_exception =
+        PrefService* const pref_service = browser()->GetProfile()->GetPrefs();
+        const base::DictValue& discard_exception =
             pref_service->GetDict(performance_manager::user_tuning::prefs::
                                       kTabDiscardingExceptionsWithTime);
         EXPECT_EQ(1u, discard_exception.size());
@@ -734,7 +671,7 @@ IN_PROC_BROWSER_TEST_P(MemorySaverChipInteractiveTest,
       NavigateWebContents(kFirstTabContents, GetURL()),
       AddInstrumentedTab(kSecondTabContents, GURL(kOtherPage)),
       ForceRefreshMemoryMetrics(), DiscardAndReloadTab(0, kFirstTabContents),
-      SetTabPreDiscardMemoryUsage(0, base::MiB(135)), PressPageActionButton(),
+      SetTabPreDiscardMemoryUsage(0, base::MiBU(135)), PressPageActionButton(),
       WaitForShow(
           MemorySaverBubbleView::kMemorySaverDialogResourceViewElementId),
       Screenshot(MemorySaverBubbleView::kMemorySaverDialogResourceViewElementId,
@@ -810,6 +747,10 @@ class MemorySaverImprovedFaviconTreatmentTest
   }
 
  private:
+  const gfx::AnimationTestApi::RenderModeResetter disable_rich_animations_ =
+      gfx::AnimationTestApi::SetRichAnimationRenderMode(
+          gfx::Animation::RichAnimationRenderMode::FORCE_DISABLED);
+
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
@@ -823,8 +764,6 @@ IN_PROC_BROWSER_TEST_P(MemorySaverImprovedFaviconTreatmentTest,
       InstrumentTab(kFirstTabContents, 0),
       NavigateWebContents(kFirstTabContents, GetURL()),
       AddInstrumentedTab(kSecondTabContents, GURL(kOtherPage)),
-      Do(base::BindLambdaForTesting(
-          [=, this]() { GetTabStripView()->StopAnimating(); })),
       TryDiscardTab(0), CheckTabIsDiscarded(0, true),
       NameView(kFirstTabFavicon, base::BindLambdaForTesting([&]() {
                  return views::AsViewClass<views::View>(GetTabIcon(0));
@@ -855,8 +794,6 @@ IN_PROC_BROWSER_TEST_P(MemorySaverImprovedFaviconTreatmentTest,
       AddInstrumentedTab(
           kPerformanceSettingsTab,
           GURL(chrome::GetSettingsUrl(chrome::kPerformanceSubPage))),
-      Do(base::BindLambdaForTesting(
-          [=, this]() { GetTabStripView()->StopAnimating(); })),
       TryDiscardTab(0), CheckTabIsDiscarded(0, true),
       NameView(kFirstTabFavicon, base::BindLambdaForTesting([&]() {
                  return views::AsViewClass<views::View>(GetTabIcon(0));
@@ -875,7 +812,7 @@ IN_PROC_BROWSER_TEST_P(MemorySaverImprovedFaviconTreatmentTest,
 INSTANTIATE_TEST_SUITE_P(
     ,
     MemorySaverDiscardPolicyInteractiveTest,
-    ::testing::Values(false, true),
+    testing::Bool(),
     [](const ::testing::TestParamInfo<
         MemorySaverDiscardPolicyInteractiveTest::ParamType>& info) {
       return info.param ? "RetainedWebContents" : "UnretainedWebContents";
@@ -884,36 +821,17 @@ INSTANTIATE_TEST_SUITE_P(
 // TODO(crbug.com/404543902): Add cases for new Page Action framework.
 INSTANTIATE_TEST_SUITE_P(,
                          MemorySaverChipInteractiveTest,
-                         ::testing::Values(
-                             MemorySaverChipInteractiveTestParams{
-                                 .web_contents_discard = false,
-                                 .page_actions_migration_enabled = false},
-                             MemorySaverChipInteractiveTestParams{
-                                 .web_contents_discard = true,
-                                 .page_actions_migration_enabled = false},
-                             MemorySaverChipInteractiveTestParams{
-                                 .web_contents_discard = false,
-                                 .page_actions_migration_enabled = true},
-                             MemorySaverChipInteractiveTestParams{
-                                 .web_contents_discard = true,
-                                 .page_actions_migration_enabled = true}),
-
+                         testing::Bool(),
                          [](const ::testing::TestParamInfo<
                              MemorySaverChipInteractiveTest::ParamType>& info) {
-                           return base::StrCat(
-                               {info.param.web_contents_discard
-                                    ? "RetainedWebContents"
-                                    : "UnretainedWebContents",
-                                "_",
-                                info.param.page_actions_migration_enabled
-                                    ? "NewPageAction"
-                                    : "OriginalPageAction"});
+                           return info.param ? "RetainedWebContents"
+                                             : "UnretainedWebContents";
                          });
 
 INSTANTIATE_TEST_SUITE_P(
     ,
     MemorySaverDiscardIndicatorIPHTest,
-    ::testing::Values(false, true),
+    testing::Bool(),
     [](const ::testing::TestParamInfo<
         MemorySaverDiscardIndicatorIPHTest::ParamType>& info) {
       return info.param ? "RetainedWebContents" : "UnretainedWebContents";
@@ -922,7 +840,7 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     ,
     MemorySaverImprovedFaviconTreatmentTest,
-    ::testing::Values(false, true),
+    testing::Bool(),
     [](const ::testing::TestParamInfo<
         MemorySaverImprovedFaviconTreatmentTest::ParamType>& info) {
       return info.param ? "RetainedWebContents" : "UnretainedWebContents";

@@ -39,8 +39,6 @@
 #include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkMatrix.h"
-#include "third_party/skia/include/core/SkShader.h"
-#include "third_party/skia/include/effects/SkGradientShader.h"
 #include "ui/gfx/geometry/clamp_float_geometry.h"
 
 namespace blink {
@@ -51,9 +49,9 @@ Gradient::Gradient(Type type,
                    DegenerateHandling degenerate_handling)
     : type_(type),
       spread_method_(spread_method),
-      premultiplied_alpha_(premultiplied_alpha),
-      degenerate_handling_(degenerate_handling),
-      stops_sorted_(true) {}
+      premultiplied_alpha_(premultiplied_alpha ==
+                           PremultipliedAlpha::kPremultiplied),
+      allow_degenerate_(degenerate_handling == DegenerateHandling::kAllow) {}
 
 Gradient::~Gradient() = default;
 
@@ -71,6 +69,10 @@ void Gradient::AddColorStop(const Gradient::ColorStop& stop) {
 
   stops_.push_back(stop);
   cached_shader_.reset();
+}
+
+void Gradient::AddColorStop(double value, const Color& color) {
+  AddColorStop(ColorStop(gfx::ClampFloatGeometry(value), color));
 }
 
 void Gradient::AddColorStops(const Vector<Gradient::ColorStop>& stops) {
@@ -210,12 +212,12 @@ void Gradient::FillSkiaStops(ColorBuffer& colors, OffsetBuffer& pos) const {
   }
 }
 
-SkGradientShader::Interpolation Gradient::ResolveSkInterpolation() const {
+SkGradient::Interpolation Gradient::ResolveSkInterpolation() const {
   DCHECK(color_space_interpolation_space_ != Color::ColorSpace::kNone);
 
-  using sk_colorspace = SkGradientShader::Interpolation::ColorSpace;
-  using sk_hue_method = SkGradientShader::Interpolation::HueMethod;
-  SkGradientShader::Interpolation sk_interpolation;
+  using sk_colorspace = SkGradient::Interpolation::ColorSpace;
+  using sk_hue_method = SkGradient::Interpolation::HueMethod;
+  SkGradient::Interpolation sk_interpolation;
 
   switch (color_space_interpolation_space_) {
     case Color::ColorSpace::kXYZD65:
@@ -283,10 +285,9 @@ SkGradientShader::Interpolation Gradient::ResolveSkInterpolation() const {
       sk_interpolation.fHueMethod = sk_hue_method::kShorter;
   }
 
-  sk_interpolation.fInPremul =
-      (premultiplied_alpha_ == PremultipliedAlpha::kPremultiplied)
-          ? SkGradientShader::Interpolation::InPremul::kYes
-          : SkGradientShader::Interpolation::InPremul::kNo;
+  sk_interpolation.fInPremul = premultiplied_alpha_
+                                   ? SkGradient::Interpolation::InPremul::kYes
+                                   : SkGradient::Interpolation::InPremul::kNo;
 
   return sk_interpolation;
 }
@@ -392,7 +393,7 @@ class LinearGradient final : public Gradient {
       const ColorBuffer& colors,
       const OffsetBuffer& pos,
       SkTileMode tile_mode,
-      SkGradientShader::Interpolation sk_interpolation,
+      SkGradient::Interpolation sk_interpolation,
       const SkMatrix& local_matrix,
       SkColor4f fallback_color) const override {
     if (GetDegenerateHandling() == DegenerateHandling::kDisallow &&
@@ -438,7 +439,7 @@ class RadialGradient final : public Gradient {
       const ColorBuffer& colors,
       const OffsetBuffer& pos,
       SkTileMode tile_mode,
-      SkGradientShader::Interpolation sk_interpolation,
+      SkGradient::Interpolation sk_interpolation,
       const SkMatrix& local_matrix,
       SkColor4f fallback_color) const override {
     const SkMatrix* matrix = &local_matrix;
@@ -500,7 +501,7 @@ class ConicGradient final : public Gradient {
       const ColorBuffer& colors,
       const OffsetBuffer& pos,
       SkTileMode tile_mode,
-      SkGradientShader::Interpolation sk_interpolation,
+      SkGradient::Interpolation sk_interpolation,
       const SkMatrix& local_matrix,
       SkColor4f fallback_color) const override {
     if (GetDegenerateHandling() == DegenerateHandling::kDisallow &&

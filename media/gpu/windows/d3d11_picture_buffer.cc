@@ -22,14 +22,12 @@ D3D11PictureBuffer::D3D11PictureBuffer(
     ComD3D11Texture2D texture,
     size_t array_slice,
     std::unique_ptr<Texture2DWrapper> texture_wrapper,
-    gfx::Size size,
     size_t picture_index)
     : RefCountedDeleteOnSequence<D3D11PictureBuffer>(
           std::move(delete_task_runner)),
       texture_(std::move(texture)),
       array_slice_(array_slice),
       texture_wrapper_(std::move(texture_wrapper)),
-      size_(size),
       picture_index_(picture_index) {}
 
 D3D11PictureBuffer::~D3D11PictureBuffer() = default;
@@ -37,7 +35,7 @@ D3D11PictureBuffer::~D3D11PictureBuffer() = default;
 D3D11Status D3D11PictureBuffer::Init(
     scoped_refptr<base::SingleThreadTaskRunner> gpu_task_runner,
     GetCommandBufferHelperCB get_helper_cb,
-    ComD3D11VideoDevice video_device,
+    ComD3D11VideoDevice1 video_device,
     const GUID& decoder_guid,
     std::unique_ptr<MediaLog> media_log,
     PictureBufferGPUResourceInitDoneCB
@@ -68,9 +66,8 @@ D3D11Status D3D11PictureBuffer::Init(
 }
 
 D3D11Status D3D11PictureBuffer::ProcessTexture(
-    const gfx::ColorSpace& input_color_space,
     scoped_refptr<gpu::ClientSharedImage>& shared_image_dest) {
-  return texture_wrapper_->ProcessTexture(input_color_space, shared_image_dest);
+  return texture_wrapper_->ProcessTexture(shared_image_dest);
 }
 
 ComD3D11Texture2D D3D11PictureBuffer::Texture() const {

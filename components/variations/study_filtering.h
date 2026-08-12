@@ -5,11 +5,13 @@
 #ifndef COMPONENTS_VARIATIONS_STUDY_FILTERING_H_
 #define COMPONENTS_VARIATIONS_STUDY_FILTERING_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/compiler_specific.h"
 #include "base/component_export.h"
+#include "base/functional/function_ref.h"
 #include "base/time/time.h"
 #include "base/version.h"
 #include "components/variations/client_filterable_state.h"
@@ -40,6 +42,12 @@ bool CheckStudyFormFactor(const Study::Filter& filter,
 COMPONENT_EXPORT(VARIATIONS)
 bool CheckStudyHardwareClass(const Study::Filter& filter,
                              const std::string& hardware_class);
+
+// Checks whether a study is applicable for the given |hardware_manufacturer|
+// per |filter|.
+COMPONENT_EXPORT(VARIATIONS)
+bool CheckStudyHardwareManufacturer(const Study::Filter& filter,
+                                    const std::string& hardware_manufacturer);
 
 // Checks whether a study is applicable for the given |locale| per |filter|.
 COMPONENT_EXPORT(VARIATIONS)
@@ -94,6 +102,12 @@ COMPONENT_EXPORT(VARIATIONS)
 bool CheckStudyGoogleGroup(const Study::Filter& filter,
                            const ClientFilterableState& client_state);
 
+// Checks whether a study is applicable for the given enterprise groups
+// per |filter|.
+COMPONENT_EXPORT(VARIATIONS)
+bool CheckStudyEnterpriseGroup(const Study::Filter& filter,
+                               const ClientFilterableState& client_state);
+
 // Returns the country that should be used for filtering this study, depending
 // on whether the study has session or permanent consistency.
 COMPONENT_EXPORT(VARIATIONS)
@@ -116,12 +130,15 @@ bool ShouldAddStudy(const ProcessedStudy& processed_study,
 
 // Validates and preprocesses studies in |seed|, filters them according to
 // the |client_state| and |layers|, and ensures the result has at most one
-// study with the same name.
+// study with the same name. If |study_filter| is provided, only studies that
+// satisfy this predicate are returned.
 COMPONENT_EXPORT(VARIATIONS)
 std::vector<ProcessedStudy> FilterAndValidateStudies(
     const VariationsSeed& seed,
     const ClientFilterableState& client_state,
-    const VariationsLayers& layers);
+    const VariationsLayers& layers,
+    std::optional<base::FunctionRef<bool(const Study&)>> study_filter =
+        std::nullopt);
 
 }  // namespace variations
 

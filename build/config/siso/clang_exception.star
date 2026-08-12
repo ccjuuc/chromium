@@ -41,6 +41,8 @@ def __step_config(ctx, step_config, use_windows_worker = None):
                 "./obj/chrome/test/fuzzing/webidl_fuzzing/webidlfuzzer_proto_gen/webidlfuzzer_sub7.pb.o",
                 "./obj/chrome/test/fuzzing/webidl_fuzzing/webidlfuzzer_proto_gen/webidlfuzzer_sub8.pb.o",
                 "./obj/chrome/test/fuzzing/webidl_fuzzing/webidlfuzzer_proto_gen/webidlfuzzer_sub9.pb.o",
+                "./obj/services/webnn/webnn_graph_impl_fuzzer/webnn_graph_impl_fuzzer.o",
+                "./obj/services/webnn/webnn_graph_impl_fuzzer__library/webnn_graph_impl_fuzzer.o",
                 # keep-sorted end
             ],
             "timeout": "15m",
@@ -59,6 +61,7 @@ def __step_config(ctx, step_config, use_windows_worker = None):
                 "./obj/content/test/content_browsertests/site_per_process_browsertest.o",
                 "./obj/content/test/content_unittests/auction_runner_unittest.o",
                 "./obj/third_party/abseil-cpp/absl/functional/any_invocable_test/any_invocable_test.o",
+                "./obj/third_party/highway/highway_tests/arithmetic_test.o",
                 "./obj/third_party/highway/highway_tests/cast_test.o",
                 "./obj/third_party/highway/highway_tests/convert_test.o",
                 "./obj/third_party/highway/highway_tests/demote_test.o",

@@ -22,7 +22,6 @@
 #include "third_party/blink/public/common/input/web_gesture_event.h"
 #include "third_party/blink/public/common/input/web_input_event_attribution.h"
 #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -418,28 +417,26 @@ void MainThreadEventQueue::OnGestureScrollEventAck(
 void MainThreadEventQueue::OnGestureScrollStartAck(
     mojom::blink::InputEventResultState ack_state) {
   base::AutoLock lock(shared_state_lock_);
-  shared_state_.gsu_acked_as_consumed_ = false;
+  shared_state_.any_gsu_acked_as_consumed_ = false;
+  shared_state_.last_gsu_acked_as_consumed_ = false;
 }
 
 void MainThreadEventQueue::OnGestureScrollUpdateAck(
     mojom::blink::InputEventResultState ack_state) {
   base::AutoLock lock(shared_state_lock_);
-  if (!shared_state_.gsu_acked_as_consumed_.has_value()) {
+  if (!shared_state_.any_gsu_acked_as_consumed_.has_value()) {
     return;
   }
-  if (*shared_state_.gsu_acked_as_consumed_) {
-    return;
-  }
-  if (ack_state != mojom::blink::InputEventResultState::kConsumed) {
-    return;
-  }
-  shared_state_.gsu_acked_as_consumed_ = true;
+  bool consumed = ack_state == mojom::blink::InputEventResultState::kConsumed;
+  *shared_state_.any_gsu_acked_as_consumed_ |= consumed;
+  shared_state_.last_gsu_acked_as_consumed_ = consumed;
 }
 
 void MainThreadEventQueue::OnGestureScrollEndAck(
     mojom::blink::InputEventResultState ack_state) {
   base::AutoLock lock(shared_state_lock_);
-  shared_state_.gsu_acked_as_consumed_.reset();
+  shared_state_.any_gsu_acked_as_consumed_.reset();
+  shared_state_.last_gsu_acked_as_consumed_.reset();
 }
 
 void MainThreadEventQueue::HandleEvent(
@@ -529,7 +526,7 @@ void MainThreadEventQueue::HandleEvent(
 
   HandledEventCallback event_callback;
   if (is_blocking) {
-    TRACE_EVENT_INSTANT0("input", "Blocking", TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("input", "Blocking");
     event_callback = std::move(callback);
   }
 
@@ -604,8 +601,9 @@ void MainThreadEventQueue::PossiblyScheduleMainFrame() {
       shared_state_.sent_main_frame_request_ = true;
     }
   }
-  if (needs_main_frame)
-    SetNeedsMainFrame(/*urgent=*/false);
+  if (needs_main_frame) {
+    SetNeedsMainFrame(cc::BeginMainFrameReason::kInput, /*urgent=*/false);
+  }
 }
 
 void MainThreadEventQueue::DispatchEvents() {
@@ -738,8 +736,7 @@ void MainThreadEventQueue::DispatchRafAlignedInput(base::TimeTicks frame_time) {
       if (IsRafAlignedEvent(shared_state_.events_.front())) {
         // Throttle touchmoves that are async.
         if (IsAsyncTouchMove(shared_state_.events_.front()) &&
-            ShouldThrottleAsyncTouchMoves(
-                shared_state_.gsu_acked_as_consumed_)) {
+            ShouldThrottleAsyncTouchMoves()) {
           if (shared_state_.events_.size() == 1 &&
               frame_time < shared_state_.last_async_touch_move_timestamp_ +
                                kAsyncTouchMoveInterval) {
@@ -836,7 +833,7 @@ void MainThreadEventQueue::QueueEvent(
     bool urgent =
         ::features::IsEligibleForThrottleMainFrameTo60Hz() &&
         base::FeatureList::IsEnabled(blink::features::kUrgentMainFrameForInput);
-    SetNeedsMainFrame(urgent);
+    SetNeedsMainFrame(cc::BeginMainFrameReason::kInput, urgent);
   }
 
   if (unblocked_callback_info) {
@@ -932,7 +929,8 @@ bool MainThreadEventQueue::HandleEventOnMainThread(
   return handled;
 }
 
-void MainThreadEventQueue::SetNeedsMainFrame(bool urgent) {
+void MainThreadEventQueue::SetNeedsMainFrame(cc::BeginMainFrameReason reason,
+                                             bool urgent) {
   if (main_task_runner_->BelongsToCurrentThread()) {
     if (raf_fallback_timer_) {
       raf_fallback_timer_->Start(
@@ -940,14 +938,14 @@ void MainThreadEventQueue::SetNeedsMainFrame(bool urgent) {
           base::BindOnce(&MainThreadEventQueue::RafFallbackTimerFired, this));
     }
     if (client_) {
-      client_->SetNeedsMainFrame(urgent);
+      client_->SetNeedsMainFrame(reason, urgent);
     }
     return;
   }
 
   main_task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(&MainThreadEventQueue::SetNeedsMainFrame, this, urgent));
+      FROM_HERE, base::BindOnce(&MainThreadEventQueue::SetNeedsMainFrame, this,
+                                reason, urgent));
 }
 
 void MainThreadEventQueue::ClearClient() {
@@ -1078,16 +1076,26 @@ MainThreadEventQueue::GetCompositorThreadOnly() {
   return compositor_thread_only_;
 }
 
-bool MainThreadEventQueue::ShouldThrottleAsyncTouchMoves(
-    std::optional<bool> gsu_acked_as_consumed) {
-  // TODO(441800312): Investigate updating touch moves throttling logic during
-  // scrolls.
-  if (gsu_acked_as_consumed.has_value() &&
-      base::FeatureList::IsEnabled(
-          blink::features::kAsyncTouchMovesImmediatelyAfterScroll)) {
-    // If a gsu is acked as consumed already, async touch moves should indeed be
-    // throttled.
-    return *gsu_acked_as_consumed;
+bool MainThreadEventQueue::ShouldThrottleAsyncTouchMoves() {
+  shared_state_lock_.AssertAcquired();
+  if (base::FeatureList::IsEnabled(
+          blink::features::kUnthrottleAsyncTouchMoves)) {
+    auto param = blink::features::kAsyncTouchMoveThrottlingPolicyParam.Get();
+    if (param ==
+        blink::features::AsyncTouchMoveThrottlingPolicy::kUnthrottledAlways) {
+      return false;
+    }
+    if (param == blink::features::AsyncTouchMoveThrottlingPolicy::
+                     kUnthrottledWhenGsuUnconsumed &&
+        shared_state_.last_gsu_acked_as_consumed_.has_value()) {
+      return *shared_state_.last_gsu_acked_as_consumed_;
+    }
+    return true;
+  }
+
+  // kUnthrottleAsyncTouchMoves is disabled.
+  if (shared_state_.any_gsu_acked_as_consumed_.has_value()) {
+    return *shared_state_.any_gsu_acked_as_consumed_;
   }
   return true;
 }

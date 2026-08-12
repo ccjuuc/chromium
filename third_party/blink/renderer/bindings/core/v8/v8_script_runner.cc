@@ -92,15 +92,14 @@ void ThrowScriptForbiddenException(v8::Isolate* isolate) {
 }
 
 v8::MaybeLocal<v8::Value> ThrowStackOverflowExceptionIfNeeded(
-    v8::Isolate* isolate,
-    v8::MicrotaskQueue* microtask_queue) {
+    ExecutionContext* execution_context) {
+  v8::Isolate* isolate = execution_context->GetIsolate();
   if (V8PerIsolateData::From(isolate)->IsHandlingRecursionLevelError()) {
     // If we are already handling a recursion level error, we should
     // not invoke v8::Function::Call.
     return v8::Undefined(isolate);
   }
-  v8::MicrotasksScope microtasks_scope(
-      isolate, microtask_queue, v8::MicrotasksScope::kDoNotRunMicrotasks);
+  V8DoNotRunMicrotasksScope microtasks_scope(execution_context);
   V8PerIsolateData::From(isolate)->SetIsHandlingRecursionLevelError(true);
 
   ScriptForbiddenScope::AllowUserAgentScript allow_script;
@@ -328,8 +327,8 @@ v8::MaybeLocal<v8::Script> V8ScriptRunner::CompileScript(
   const TextPosition& script_start_position = classic_script.StartPosition();
 
   constexpr const char* kTraceEventCategoryGroup = "v8,devtools.timeline";
-  TRACE_EVENT_BEGIN1(kTraceEventCategoryGroup, "v8.compile", "fileName",
-                     file_name.Utf8());
+  TRACE_EVENT_BEGIN(kTraceEventCategoryGroup, "v8.compile", "fileName",
+                    file_name.Utf8());
   ExecutionContext* execution_context = ExecutionContext::From(script_state);
   probe::V8Compile probe(execution_context, file_name,
                          script_start_position.line_.ZeroBasedInt(),
@@ -346,12 +345,12 @@ v8::MaybeLocal<v8::Script> V8ScriptRunner::CompileScript(
   v8::MaybeLocal<v8::Script> script = CompileScriptInternal(
       isolate, script_state, classic_script, origin, compile_options,
       no_cache_reason, can_use_crowdsourced_compile_hints, &cache_result);
-  TRACE_EVENT_END1(
-      kTraceEventCategoryGroup, "v8.compile", "data",
-      [&](perfetto::TracedValue context) {
+
+  TRACE_EVENT_END(
+      kTraceEventCategoryGroup, "data", [&](perfetto::TracedValue context) {
         inspector_compile_script_event::Data(
-            std::move(context), file_name, script_start_position, cache_result,
-            compile_options == v8::ScriptCompiler::kEagerCompile,
+            std::move(context), file_name, script, script_start_position,
+            cache_result, compile_options == v8::ScriptCompiler::kEagerCompile,
             classic_script.Streamer(), classic_script.NotStreamingReason());
       });
   return script;
@@ -366,8 +365,8 @@ v8::MaybeLocal<v8::Module> V8ScriptRunner::CompileModule(
     const ReferrerScriptInfo& referrer_info) {
   const String file_name = params.SourceURL();
   constexpr const char* kTraceEventCategoryGroup = "v8,devtools.timeline";
-  TRACE_EVENT_BEGIN1(kTraceEventCategoryGroup, "v8.compileModule", "fileName",
-                     file_name.Utf8());
+  TRACE_EVENT_BEGIN(kTraceEventCategoryGroup, "v8.compileModule", "fileName",
+                    file_name.Utf8());
 
   // |resource_is_shared_cross_origin| is always true and |resource_is_opaque|
   // is always false because CORS is enforced to module scripts.
@@ -457,14 +456,13 @@ v8::MaybeLocal<v8::Module> V8ScriptRunner::CompileModule(
     }
   }
 
-  TRACE_EVENT_END1(kTraceEventCategoryGroup, "v8.compileModule", "data",
-                   [&](perfetto::TracedValue context) {
-                     inspector_compile_script_event::Data(
-                         std::move(context), file_name, start_position,
-                         cache_result,
-                         compile_options == v8::ScriptCompiler::kEagerCompile,
-                         streamer, params.NotStreamingReason());
-                   });
+  TRACE_EVENT_END(
+      kTraceEventCategoryGroup, "data", [&](perfetto::TracedValue context) {
+        inspector_compile_script_event::Data(
+            std::move(context), file_name, script, start_position, cache_result,
+            compile_options == v8::ScriptCompiler::kEagerCompile, streamer,
+            params.NotStreamingReason());
+      });
   return script;
 }
 
@@ -484,7 +482,7 @@ v8::MaybeLocal<v8::Value> V8ScriptRunner::RunCompiledScript(
 
   v8::MicrotaskQueue* microtask_queue = ToMicrotaskQueue(context);
   if (GetMicrotasksScopeDepth(isolate, microtask_queue) > kMaxRecursionDepth)
-    return ThrowStackOverflowExceptionIfNeeded(isolate, microtask_queue);
+    return ThrowStackOverflowExceptionIfNeeded(context);
 
   CHECK(!context->ContextLifecycleObserverSet().IsIteratingOverObservers());
 
@@ -496,8 +494,7 @@ v8::MaybeLocal<v8::Value> V8ScriptRunner::RunCompiledScript(
       return v8::MaybeLocal<v8::Value>();
     }
 
-    v8::MicrotasksScope microtasks_scope(isolate, microtask_queue,
-                                         v8::MicrotasksScope::kRunMicrotasks);
+    V8RunMicrotasksScope microtasks_scope(context);
     v8::Local<v8::String> script_url;
     if (!script_name->ToString(isolate->GetCurrentContext())
              .ToLocal(&script_url))
@@ -507,7 +504,7 @@ v8::MaybeLocal<v8::Value> V8ScriptRunner::RunCompiledScript(
     // unpacked.
     String url = ToCoreString(isolate, script_url);
     probe::ExecuteScript probe(context, isolate->GetCurrentContext(), url,
-                               script->GetUnboundScript()->GetId());
+                               script->ScriptId());
     result = script->Run(isolate->GetCurrentContext(), host_defined_options);
   }
 
@@ -606,7 +603,7 @@ ScriptEvaluationResult V8ScriptRunner::CompileAndRunScript(
     V8CodeCache::ProduceCacheOptions produce_cache_options;
     v8::ScriptCompiler::NoCacheReason no_cache_reason;
     Page* page = frame != nullptr ? frame->GetPage() : nullptr;
-    const bool is_http = classic_script->SourceUrl().ProtocolIsInHTTPFamily();
+    const bool is_http = classic_script->SourceUrl().ProtocolIsInHttpFamily();
     const bool might_generate_crowdsourced_compile_hints =
         is_http && page != nullptr &&
         page->GetV8CrowdsourcedCompileHintsProducer().MightGenerateData();
@@ -630,8 +627,7 @@ ScriptEvaluationResult V8ScriptRunner::CompileAndRunScript(
       DEVTOOLS_TIMELINE_TRACE_EVENT_WITH_CATEGORIES(
           TRACE_DISABLED_BY_DEFAULT("devtools.target-rundown"),
           "ScriptCompiled", inspector_target_rundown_event::Data,
-          execution_context, isolate, script_state,
-          script->GetUnboundScript()->GetId());
+          execution_context, isolate, script_state, script->ScriptId());
       maybe_result = V8ScriptRunner::RunCompiledScript(
           isolate, script, origin.GetHostDefinedOptions(), execution_context);
       probe::DidProduceCompilationCache(
@@ -774,7 +770,7 @@ v8::MaybeLocal<v8::Value> V8ScriptRunner::CallAsConstructor(
   v8::MicrotaskQueue* microtask_queue = ToMicrotaskQueue(context);
   int depth = GetMicrotasksScopeDepth(isolate, microtask_queue);
   if (depth >= kMaxRecursionDepth)
-    return ThrowStackOverflowExceptionIfNeeded(isolate, microtask_queue);
+    return ThrowStackOverflowExceptionIfNeeded(context);
 
   CHECK(!context->ContextLifecycleObserverSet().IsIteratingOverObservers());
 
@@ -790,17 +786,16 @@ v8::MaybeLocal<v8::Value> V8ScriptRunner::CallAsConstructor(
   CHECK(constructor->IsFunction());
   v8::Local<v8::Function> function = constructor.As<v8::Function>();
 
-  v8::MicrotasksScope microtasks_scope(isolate, ToMicrotaskQueue(context),
-                                       v8::MicrotasksScope::kRunMicrotasks);
+  V8RunMicrotasksScope microtasks_scope(context);
   probe::CallFunction probe(context, isolate->GetCurrentContext(), function,
                             depth);
 
   if (!depth) {
-    TRACE_EVENT_BEGIN1("devtools.timeline", "FunctionCall", "data",
-                       [&](perfetto::TracedValue ctx) {
-                         inspector_function_call_event::Data(std::move(ctx),
-                                                             context, function);
-                       });
+    TRACE_EVENT_BEGIN("devtools.timeline", "FunctionCall", "data",
+                      [&](perfetto::TracedValue ctx) {
+                        inspector_function_call_event::Data(std::move(ctx),
+                                                            context, function);
+                      });
   }
 
   v8::MaybeLocal<v8::Value> result =
@@ -808,7 +803,7 @@ v8::MaybeLocal<v8::Value> V8ScriptRunner::CallAsConstructor(
   CHECK(!isolate->IsDead());
 
   if (!depth)
-    TRACE_EVENT_END0("devtools.timeline", "FunctionCall");
+    TRACE_EVENT_END("devtools.timeline");
 
   return result;
 }
@@ -828,7 +823,7 @@ v8::MaybeLocal<v8::Value> V8ScriptRunner::CallFunction(
   v8::MicrotaskQueue* microtask_queue = ToMicrotaskQueue(context);
   int depth = GetMicrotasksScopeDepth(isolate, microtask_queue);
   if (depth >= kMaxRecursionDepth)
-    return ThrowStackOverflowExceptionIfNeeded(isolate, microtask_queue);
+    return ThrowStackOverflowExceptionIfNeeded(context);
 
   CHECK(!context->ContextLifecycleObserverSet().IsIteratingOverObservers());
 
@@ -840,14 +835,13 @@ v8::MaybeLocal<v8::Value> V8ScriptRunner::CallFunction(
   DCHECK(!window || !window->GetFrame() ||
          BindingSecurity::ShouldAllowAccessTo(
              ToLocalDOMWindow(function->GetCreationContextChecked()), window));
-  v8::MicrotasksScope microtasks_scope(isolate, microtask_queue,
-                                       v8::MicrotasksScope::kRunMicrotasks);
+  V8RunMicrotasksScope microtasks_scope(context);
   if (!depth) {
-    TRACE_EVENT_BEGIN1("devtools.timeline", "FunctionCall", "data",
-                       [&](perfetto::TracedValue trace_context) {
-                         inspector_function_call_event::Data(
-                             std::move(trace_context), context, function);
-                       });
+    TRACE_EVENT_BEGIN("devtools.timeline", "FunctionCall", "data",
+                      [&](perfetto::TracedValue trace_context) {
+                        inspector_function_call_event::Data(
+                            std::move(trace_context), context, function);
+                      });
   }
 
   probe::CallFunction probe(context, isolate->GetCurrentContext(), function,
@@ -857,7 +851,7 @@ v8::MaybeLocal<v8::Value> V8ScriptRunner::CallFunction(
   CHECK(!isolate->IsDead());
 
   if (!depth)
-    TRACE_EVENT_END0("devtools.timeline", "FunctionCall");
+    TRACE_EVENT_END("devtools.timeline");
 
   return result;
 }
@@ -876,7 +870,8 @@ class ModuleEvaluationRejectionCallback final
 // Spec with TLA: https://github.com/whatwg/html/pull/4352
 ScriptEvaluationResult V8ScriptRunner::EvaluateModule(
     ModuleScript* module_script,
-    RethrowErrorsOption rethrow_errors) {
+    RethrowErrorsOption rethrow_errors,
+    v8::ModuleImportPhase phase) {
   // <spec step="1">If rethrow errors is not given, let it be false.</spec>
 
   // <spec step="2">Let settings be the settings object of script.</spec>
@@ -900,9 +895,7 @@ ScriptEvaluationResult V8ScriptRunner::EvaluateModule(
   // <spec step="4">Prepare to run script given settings.</spec>
   //
   // These are placed here to also cover ModuleRecord::ReportException().
-  v8::MicrotasksScope microtasks_scope(isolate,
-                                       ToMicrotaskQueue(execution_context),
-                                       v8::MicrotasksScope::kRunMicrotasks);
+  V8RunMicrotasksScope microtasks_scope(execution_context);
 
   // Without TLA: <spec step="5">Let evaluationStatus be null.</spec>
   ScriptEvaluationResult result = ScriptEvaluationResult::FromModuleNotRun();
@@ -948,7 +941,9 @@ ScriptEvaluationResult V8ScriptRunner::EvaluateModule(
     // without top-level await.
 
     v8::MaybeLocal<v8::Value> maybe_result =
-        record->Evaluate(script_state->GetContext());
+        (phase == v8::ModuleImportPhase::kDefer)
+            ? record->EvaluateForImportDefer(script_state->GetContext())
+            : record->Evaluate(script_state->GetContext());
 
     if (!try_catch.CanContinue())
       return ScriptEvaluationResult::FromModuleAborted();

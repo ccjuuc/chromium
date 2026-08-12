@@ -11,6 +11,7 @@
 #include "base/check.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -77,8 +78,14 @@ class PerformanceDetectionManagerBrowserTest : public InProcessBrowserTest {
   base::test::ScopedFeatureList feature_list_;
 };
 
+#if BUILDFLAG(IS_MAC)
+// TODO(crbug.com/500854310): Flaky on Mac 13.
+#define MAYBE_DiscardMultiplePages DISABLED_DiscardMultiplePages
+#else
+#define MAYBE_DiscardMultiplePages DiscardMultiplePages
+#endif
 IN_PROC_BROWSER_TEST_F(PerformanceDetectionManagerBrowserTest,
-                       DiscardMultiplePages) {
+                       MAYBE_DiscardMultiplePages) {
   ASSERT_TRUE(AddTabAtIndex(1, GetTestingURL(), ui::PAGE_TRANSITION_TYPED));
   ASSERT_TRUE(AddTabAtIndex(2, GetTestingURL(), ui::PAGE_TRANSITION_TYPED));
   browser()->tab_strip_model()->ActivateTabAt(0);
@@ -93,8 +100,14 @@ IN_PROC_BROWSER_TEST_F(PerformanceDetectionManagerBrowserTest,
   EXPECT_TRUE(GetWebContentsAt(2)->WasDiscarded());
 }
 
+#if BUILDFLAG(IS_MAC)
+// TODO(crbug.com/500854310): Flaky on Mac 13.
+#define MAYBE_DiscardEligibleAndClosedPage DISABLED_DiscardEligibleAndClosedPage
+#else
+#define MAYBE_DiscardEligibleAndClosedPage DiscardEligibleAndClosedPage
+#endif
 IN_PROC_BROWSER_TEST_F(PerformanceDetectionManagerBrowserTest,
-                       DiscardEligibleAndClosedPage) {
+                       MAYBE_DiscardEligibleAndClosedPage) {
   ASSERT_TRUE(AddTabAtIndex(1, GetTestingURL(), ui::PAGE_TRANSITION_TYPED));
   ASSERT_TRUE(AddTabAtIndex(2, GetTestingURL(), ui::PAGE_TRANSITION_TYPED));
 
@@ -131,8 +144,14 @@ IN_PROC_BROWSER_TEST_F(PerformanceDetectionManagerBrowserTest,
   EXPECT_FALSE(manager()->DiscardTabs(page_contexts));
 }
 
+#if BUILDFLAG(IS_MAC)
+// Flaky: https://crbug.com/500854310
+#define MAYBE_PreventDiscardActiveTab DISABLED_PreventDiscardActiveTab
+#else
+#define MAYBE_PreventDiscardActiveTab PreventDiscardActiveTab
+#endif
 IN_PROC_BROWSER_TEST_F(PerformanceDetectionManagerBrowserTest,
-                       PreventDiscardActiveTab) {
+                       MAYBE_PreventDiscardActiveTab) {
   ASSERT_TRUE(AddTabAtIndex(1, GetTestingURL(), ui::PAGE_TRANSITION_TYPED));
   ASSERT_TRUE(AddTabAtIndex(2, GetTestingURL(), ui::PAGE_TRANSITION_TYPED));
 

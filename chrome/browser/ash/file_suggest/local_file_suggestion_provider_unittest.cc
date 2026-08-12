@@ -9,6 +9,7 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
+#include "base/test/run_until.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/file_manager/file_tasks_observer.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
@@ -54,15 +55,11 @@ class LocalFileSuggestionProviderTest : public testing::Test {
   void WriteFile(const base::FilePath& path) {
     CHECK(base::WriteFile(path, "abcd"));
     CHECK(base::PathExists(path));
-    Wait();
   }
 
-  void Wait() { task_environment_.RunUntilIdle(); }
-
   void WaitForProviderToBeInitialized() {
-    while (!provider_->IsInitialized()) {
-      Wait();
-    }
+    ASSERT_TRUE(
+        base::test::RunUntil([&] { return provider_->IsInitialized(); }));
   }
 
   void UpdateResults() {
@@ -88,9 +85,10 @@ class LocalFileSuggestionProviderTest : public testing::Test {
     profile_ = testing_profile_manager_->CreateTestingProfile(
         "primary_profile@test", {});
     provider_ = std::make_unique<LocalFileSuggestionProvider>(
-        profile_, base::BindRepeating(
-                      &LocalFileSuggestionProviderTest::OnSuggestionsUpdated,
-                      base::Unretained(this)));
+        TestingBrowserProcess::GetGlobal()->local_state(), profile_,
+        base::BindRepeating(
+            &LocalFileSuggestionProviderTest::OnSuggestionsUpdated,
+            base::Unretained(this)));
     UpdateResults();
     WaitForProviderToBeInitialized();
   }

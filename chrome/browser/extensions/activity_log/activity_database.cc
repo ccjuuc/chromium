@@ -7,6 +7,7 @@
 #include <string>
 
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/strings/string_util.h"
@@ -44,7 +45,6 @@ ActivityDatabase::ActivityDatabase(ActivityDatabase::Delegate* delegate)
     : delegate_(delegate),
       db_(sql::DatabaseOptions()
               .set_cache_size(32)
-              .set_preload(true)
               // TODO(pwnall): Add a meta table and remove this option.
               .set_mmap_alt_status_discouraged(true)
               .set_enable_views_discouraged(

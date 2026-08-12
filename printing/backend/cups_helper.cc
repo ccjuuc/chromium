@@ -807,8 +807,8 @@ bool ParsePpdCapabilities(cups_dest_t* dest,
     return false;
 
   base::FilePath ppd_file_path;
-  base::ScopedFD ppd_fd =
-      base::CreateAndOpenFdForTemporaryFileInDir(temp_dir, &ppd_file_path);
+  base::ScopedFD ppd_fd = base::CreateAndOpenFdForTemporaryFileInDir(
+      temp_dir, /*name_prefix=*/{}, &ppd_file_path);
   if (!ppd_fd.is_valid())
     return false;
 
@@ -945,9 +945,13 @@ bool ParsePpdCapabilities(cups_dest_t* dest,
       }
 
       // If no default was set in the PPD or if the locale default is not within
-      // the printer's capabilities, select the first on the list.
-      if (!is_default_found)
+      // the printer's capabilities, select the first on the list if possible.
+      if (!is_default_found) {
+        if (caps.papers.empty()) {
+          return false;
+        }
         caps.default_paper = caps.papers[0];
+      }
     }
   }
 

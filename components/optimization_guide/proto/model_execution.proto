@@ -3,13 +3,14 @@
 // found in the LICENSE file.
 
 syntax = "proto2";
-option optimize_for = LITE_RUNTIME;
-option java_package = "org.chromium.components.optimization_guide.proto";
-option java_outer_classname = "ModelExecutionProto";
 
 package optimization_guide.proto;
 
 import "components/optimization_guide/proto/common_types.proto";
+
+option optimize_for = LITE_RUNTIME;
+option java_package = "org.chromium.components.optimization_guide.proto";
+option java_outer_classname = "ModelExecutionProto";
 
 message ExecuteRequest {
   reserved 3;
@@ -20,6 +21,14 @@ message ExecuteRequest {
   // The metadata associated with this request used to understand how to
   // execute the necessary feature models.
   optional Any request_metadata = 2;
+}
+
+// PrivateExecuteRequest is the request for PaicMessage.
+message PrivateExecuteRequest {
+  // The execute request.
+  optional ExecuteRequest request = 1;
+  // The list of variations.
+  repeated int32 variations = 2;
 }
 
 message ExecuteResponse {
@@ -49,14 +58,15 @@ enum ErrorState {
   ERROR_STATE_FILTERED = 4;
   ERROR_STATE_REQUEST_THROTTLED = 5;
   ERROR_STATE_DISABLED = 6;
+  ERROR_STATE_REQUEST_DISABLED = 7;
+  ERROR_STATE_QUOTA_EXCEEDED = 8;
 }
 
 enum ModelExecutionFeature {
-  reserved 9, 10, 11, 16, 19, 21, 22, 25;
+  reserved 2, 9, 10, 11, 16, 19, 21, 22, 25;
 
   MODEL_EXECUTION_FEATURE_UNSPECIFIED = 0;
   MODEL_EXECUTION_FEATURE_COMPOSE = 1;
-  MODEL_EXECUTION_FEATURE_TAB_ORGANIZATION = 2;
   MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH = 3;
   // This test feature cannot be used for launch but can be used for
   // prototyping. Please reach out to optimization_guide OWNERS when looking to
@@ -83,4 +93,18 @@ enum ModelExecutionFeature {
   MODEL_EXECUTION_FEATURE_WALLETABLE_PASS_EXTRACTION = 28;
   MODEL_EXECUTION_FEATURE_ON_DEVICE_SPEECH_RECOGNITION = 29;
   MODEL_EXECUTION_FEATURE_IOS_SMART_TAB_GROUPING = 30;
+  MODEL_EXECUTION_FEATURE_SKILLS = 31;
+  MODEL_EXECUTION_FEATURE_GEMINI_ANTISCAM_PROTECTION = 32;
+  MODEL_EXECUTION_FEATURE_CLASSIFIER = 33;
+  MODEL_EXECUTION_FEATURE_CONTENT_ANNOTATION = 34;
+  MODEL_EXECUTION_FEATURE_FINDS = 35;
+  MODEL_EXECUTION_FEATURE_ANNOTATION_REDUCER_ONE_P_RESOLVER = 36;
+  MODEL_EXECUTION_FEATURE_ANNOTATION_REDUCER_QUERY_CLASSIFIER = 37;
+  MODEL_EXECUTION_FEATURE_CONTEXTUAL_CUEING = 38;
+  MODEL_EXECUTION_FEATURE_ON_DEVICE_SPEECH_RECOGNITION_TINY_GEMMA = 39;
+  MODEL_EXECUTION_FEATURE_UPDATER_CHAT = 40;
+  MODEL_EXECUTION_FEATURE_CARD_RECOMMENDATIONS = 42;
+  MODEL_EXECUTION_FEATURE_READ_ALOUD_SYNTHESIZE = 43;
+  MODEL_EXECUTION_FEATURE_READ_ALOUD_GENERATE_TEXT = 44;
+  MODEL_EXECUTION_FEATURE_CONTEXT_HUB = 45;
 }

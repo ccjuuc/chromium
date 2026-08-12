@@ -7,13 +7,13 @@
 #include "base/notimplemented.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/views/global_media_controls/cast_device_selector_view.h"
 #include "chrome/browser/ui/views/global_media_controls/media_dialog_view.h"
 #include "chrome/browser/ui/views/global_media_controls/media_toolbar_button_view.h"
 #include "chrome/browser/ui/views/media_router/media_router_dialog_controller_views.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-#include "chrome/test/base/interactive_test_utils.h"
 #include "components/global_media_controls/public/views/media_item_ui_updated_view.h"
 
 namespace media_router {
@@ -21,7 +21,8 @@ namespace media_router {
 MediaRouterGmcUiForTest::MediaRouterGmcUiForTest(
     content::WebContents* web_contents)
     : MediaRouterUiForTestBase(web_contents),
-      browser_(chrome::FindBrowserWithTab(web_contents)) {
+      browser_(GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_contents)) {
   DCHECK(browser_);
 }
 
@@ -117,11 +118,10 @@ views::Button* MediaRouterGmcUiForTest::GetSinkButton(
   CHECK(IsDialogShown());
 
   // Get the device selector associated with the list of cast devices.
-  auto& updated_items =
-      MediaDialogView::GetDialogViewForTesting()->GetUpdatedItemsForTesting();
-  CHECK_GE(updated_items.size(), 1u);
-  global_media_controls::MediaItemUIUpdatedView* view =
-      updated_items.begin()->second;
+  auto& items =
+      MediaDialogView::GetDialogViewForTesting()->GetItemsForTesting();
+  CHECK_GE(items.size(), 1u);
+  global_media_controls::MediaItemUIUpdatedView* view = items.begin()->second;
   CHECK(view);
   auto* device_selector =
       static_cast<CastDeviceSelectorView*>(view->GetDeviceSelectorForTesting());

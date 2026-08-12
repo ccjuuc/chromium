@@ -57,18 +57,19 @@ ContextHostResolver::~ContextHostResolver() {
 void ContextHostResolver::OnShutdown() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  CHECK(!shutting_down_);
+  shutting_down_ = true;
+
   CHECK(resolve_context_);
   manager_->DeregisterResolveContext(resolve_context_.get());
   resolve_context_.reset();
-
-  CHECK(!shutting_down_);
-  shutting_down_ = true;
 }
 
 std::unique_ptr<HostResolver::ResolveHostRequest>
 ContextHostResolver::CreateRequestInternal(
     HostResolver::Host host,
     NetworkAnonymizationKey network_anonymization_key,
+    handles::NetworkHandle target_network,
     NetLogWithSource source_net_log,
     std::optional<ResolveHostParameters> optional_parameters) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -85,7 +86,7 @@ ContextHostResolver::CreateRequestInternal(
   CHECK(resolve_context_);
 
   return manager_->CreateRequest(
-      std::move(host), std::move(network_anonymization_key),
+      std::move(host), std::move(network_anonymization_key), target_network,
       std::move(source_net_log), std::move(optional_parameters),
       resolve_context_.get());
 }
@@ -94,40 +95,46 @@ std::unique_ptr<HostResolver::ResolveHostRequest>
 ContextHostResolver::CreateRequest(
     url::SchemeHostPort host,
     NetworkAnonymizationKey network_anonymization_key,
+    handles::NetworkHandle target_network,
     NetLogWithSource source_net_log,
     std::optional<ResolveHostParameters> optional_parameters) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return CreateRequestInternal(
-      Host(std::move(host)), std::move(network_anonymization_key),
-      std::move(source_net_log), std::move(optional_parameters));
+  return CreateRequestInternal(Host(std::move(host)),
+                               std::move(network_anonymization_key),
+                               target_network, std::move(source_net_log),
+                               std::move(optional_parameters));
 }
 
 std::unique_ptr<HostResolver::ResolveHostRequest>
 ContextHostResolver::CreateRequest(
     const HostPortPair& host,
     const NetworkAnonymizationKey& network_anonymization_key,
+    handles::NetworkHandle target_network,
     const NetLogWithSource& source_net_log,
     const std::optional<ResolveHostParameters>& optional_parameters) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return CreateRequestInternal(HostResolver::Host(std::move(host)),
-                               network_anonymization_key, source_net_log,
-                               optional_parameters);
+                               network_anonymization_key, target_network,
+                               source_net_log, optional_parameters);
 }
 
 std::unique_ptr<HostResolver::ServiceEndpointRequest>
 ContextHostResolver::CreateServiceEndpointRequest(
     Host host,
     NetworkAnonymizationKey network_anonymization_key,
+    handles::NetworkHandle target_network,
     NetLogWithSource net_log,
     ResolveHostParameters parameters) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  // TODO(crbug.com/41493696): The ServiceEndpoint API only supports schemeful
-  // hosts for now.
-  CHECK(host.HasScheme());
+
+  if (shutting_down_) {
+    return HostResolver::CreateFailingServiceEndpointRequest(
+        ERR_CONTEXT_SHUT_DOWN);
+  }
 
   // ServiceEndpointRequestImpl::Start() takes care of context shut down.
   return manager_->CreateServiceEndpointRequest(
-      host.AsSchemeHostPort(), std::move(network_anonymization_key),
+      std::move(host), std::move(network_anonymization_key), target_network,
       std::move(net_log), std::move(parameters), resolve_context_.get());
 }
 
@@ -154,7 +161,7 @@ HostCache* ContextHostResolver::GetHostCache() {
   return resolve_context_->host_cache();
 }
 
-base::Value::Dict ContextHostResolver::GetDnsConfigAsValue() const {
+base::DictValue ContextHostResolver::GetDnsConfigAsValue() const {
   return manager_->GetDnsConfigAsValue();
 }
 

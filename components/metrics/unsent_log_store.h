@@ -13,6 +13,7 @@
 #include <string_view>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/gtest_prod_util.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
@@ -144,7 +145,11 @@ class UnsentLogStore : public LogStore {
   std::optional<uint64_t> staged_log_user_id() const override;
   const LogMetadata staged_log_metadata() const override;
   void StageNextLog() override;
-  void DiscardStagedLog(std::string_view reason = "") override;
+
+ protected:
+  void DiscardStagedLogImpl(std::string_view reason) override;
+
+ public:
   void MarkStagedLogAsSent() override;
   void TrimAndPersistUnsentLogs(bool overwrite_in_memory_store) override;
   void LoadPersistedUnsentLogs() override;
@@ -204,7 +209,7 @@ class UnsentLogStore : public LogStore {
   FRIEND_TEST_ALL_PREFIXES(UnsentLogStoreTest, UnsentLogMetadataMetrics);
 
   // Reads the list of logs from |list|.
-  void ReadLogsFromPrefList(const base::Value::List& list);
+  void ReadLogsFromPrefList(const base::ListValue& list);
 
   // Writes the unsent log info to the |metadata_pref_name_| preference.
   void WriteToMetricsPref(base::HistogramBase::Count32 unsent_samples_count,
@@ -225,6 +230,10 @@ class UnsentLogStore : public LogStore {
   void NotifyLogsEvent(base::span<std::unique_ptr<LogInfo>> logs,
                        MetricsLogsEventManager::LogEvent event,
                        std::string_view message = "");
+
+  // Returns the currently staged log.
+  const LogInfo* current_log() const;
+  LogInfo* current_log();
 
   // An object for recording UMA metrics.
   std::unique_ptr<UnsentLogStoreMetrics> metrics_;
@@ -255,8 +264,8 @@ class UnsentLogStore : public LogStore {
   std::vector<std::unique_ptr<LogInfo>> list_;
 
   // The index and type of the log staged for upload. If nothing has been
-  // staged, the index will be -1.
-  int staged_log_index_;
+  // staged, the index will be std::nullopt.
+  std::optional<size_t> staged_log_index_;
 
   // The total number of samples that have been sent from this LogStore.
   base::HistogramBase::Count32 total_samples_sent_ = 0;

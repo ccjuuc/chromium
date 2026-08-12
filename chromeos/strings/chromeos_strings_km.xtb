@@ -44,7 +44,6 @@
 <translation id="1155154308031262006">បញ្ចូល​សារតម្រុយ</translation>
 <translation id="115705039208660697">ម្នាស់</translation>
 <translation id="1164939766849482256">ធាតុរក្សាអេក្រង់ដែលបង្ហាញពេលព្រលឹម​ដល់​ព្រលប់</translation>
-<translation id="1167755866710282443">បើក​ម៉ឺនុយ​ ដើម្បី​ប្ដូរ​គ្រាប់ចុច​តាមបំណង។ អូស​ម៉ឺនុយ ដើម្បី​ផ្លាស់ទី។</translation>
 <translation id="1171349345463658120">បឹងជាប់មាត់សមុទ្រដែលពោរពេញដោយខ្សាច់</translation>
 <translation id="1174073918202301297">បាន​បញ្ចូល​ផ្លូវកាត់</translation>
 <translation id="11743817593307477">ប្រើគ្រាប់ចុច​ព្រួញ ដើម្បីផ្លាស់ទីប៊ូតុងបញ្ជានេះទៅសកម្មភាពហ្គេមដែលអ្នកចង់បាន។ ប្រើគ្រាប់ចុច enter ដើម្បីដាក់ប៊ូតុងបញ្ជា។ ប្រើគ្រាប់ចុច escape ដើម្បីបោះបង់។</translation>
@@ -167,6 +166,7 @@
 <translation id="1621067168122174824">ដំណើរការតេស្តសាកថ្ម</translation>
 <translation id="1622402072367425417">ពពុះដែល​បញ្ចេញពន្លឺ</translation>
 <translation id="1626590945318984973">មិនអាចប្រើ​ផ្លូវកាត់​បានទេ។ សូមចុច​ផ្លូវកាត់ថ្មី​ដោយមិនប្រើ​គ្រាប់ចុច Function និងគ្រាប់ចុច<ph name="META_KEY" />។</translation>
+<translation id="163774412591892664">អ្នកគ្រប់គ្រងរបស់អ្នកបានបិទឧបករណ៍របស់អ្នក និងអាចចូលប្រើទីតាំងរបស់ឧបករណ៍នេះ។</translation>
 <translation id="1639239467298939599">កំពុងដំណើរការ</translation>
 <translation id="1641857168437328880">ឧបករណ៍​បញ្ចូល​ឯកសារ (ម្ខាង)</translation>
 <translation id="1642396894598555413">កង់</translation>
@@ -272,7 +272,6 @@
 <translation id="200669432486043882">ជំនួសឯកសារ</translation>
 <translation id="2006864819935886708">ការតភ្ជាប់</translation>
 <translation id="2008685064673031089">ការស្វែងរកចម្បង</translation>
-<translation id="2011174342667534258">កំណែ SDK៖</translation>
 <translation id="2016697457005847575">សាកល្បងអនុវត្តតាមជំហានដោះស្រាយបញ្ហា</translation>
 <translation id="202500043506723828">EID</translation>
 <translation id="2045814230297767491">សមស្លាបព្រា</translation>
@@ -404,6 +403,7 @@
 <translation id="2618015542787108131">ផ្នូកខ្សាច់</translation>
 <translation id="2619761439309613843">ការផ្ទុក​ឡើងវិញ​ប្រចាំថ្ងៃ</translation>
 <translation id="2620436844016719705">ប្រព័ន្ធ</translation>
+<translation id="2626848494898563581">មិនអាច​ភ្ជាប់ទៅ​សេវាកម្ម Google បានទេ</translation>
 <translation id="2637303424821734920">បិទ - ដើម្បីបង្ហាញអាកាសធាតុក្នុងតំបន់ សូម<ph name="BEGIN_LINK" />បើកសិទ្ធិចូលប្រើទីតាំងប្រព័ន្ធ<ph name="END_LINK" /></translation>
 <translation id="2638662041295312666">រូបភាពចូលគណនី</translation>
 <translation id="2640549051766135490">បានជ្រើសរើស​អាល់ប៊ុម <ph name="TITLE" /> <ph name="DESC" /></translation>
@@ -507,7 +507,6 @@
 <translation id="3211671540163313381">ឌីផេត​សម្រាប់ការរៀបចំ​គ្រាប់ចុច</translation>
 <translation id="3217462202230355157">ត្រូវប្រាកដថា​បានភ្ជាប់​មីក្រូហ្វូន​របស់អ្នក ឬ​សាកល្បង​ចាប់ផ្ដើម <ph name="DEVICE_TYPE" /> របស់អ្នក​ឡើងវិញ</translation>
 <translation id="3226405216343213872">កំពុងរកមើលម៉ាស៊ីនស្កេន</translation>
-<translation id="3226657629376379887">ម៉ឺនុយសកម្មភាព​ប្លង់​</translation>
 <translation id="3227186760713762082">ចែក​តម្លៃ<ph name="CATEGORY_TEXT" />នឹង <ph name="CONVERSION_RATE" /></translation>
 <translation id="3242622575335502454">សិល្បៈ​ឌីជីថល</translation>
 <translation id="3246869037381808805">កិច្ចការបោះពុម្ពដែលចាស់ជាង 1 ថ្ងៃនឹងត្រូវលុបចេញ</translation>
@@ -522,7 +521,6 @@
 <translation id="3291996639387199448">ទិសដៅសោ</translation>
 <translation id="3294437725009624529">ភ្ញៀវ</translation>
 <translation id="3303855915957856445">រកមិនឃើញលទ្ធផលស្វែងរកទេ</translation>
-<translation id="3305294846493618482">ច្រើន​ទៀត</translation>
 <translation id="3310640316857623290">កម្រិតពន្យាររបស់ DNS ខ្ពស់ជាងកម្រិតអនុញ្ញាតខ្លាំង</translation>
 <translation id="3316495615885967552">ការទាញយក​គំរូ​បង្កើត​ចំណងជើង និង​សេចក្ដី​សង្ខេប​ចប់ហើយ</translation>
 <translation id="3321030238473337787">ល្បឿន​ចាក់វីដេអូ</translation>
@@ -581,6 +579,7 @@
 <translation id="3577473026931028326">មានអ្វីមួយខុសប្រក្រតី។ សូមព្យាយាមម្ដងទៀត។</translation>
 <translation id="357889014807611375">Wi-Fi តាមកម្រិត</translation>
 <translation id="3583278742022654445">កម្លាំងរលកសញ្ញាខ្សោយ។ សូមសាកល្បងខិតឱ្យកាន់តែជិតប្រភពរលកសញ្ញា Wi-Fi។</translation>
+<translation id="3586931643579894722">លាក់ព័ត៌មានលំអិត</translation>
 <translation id="3588034708467091142">សូមប្រាកដថា អ្នកត្រូវបានភ្ជាប់ទៅអ៊ីនធឺណិត រួចព្យាយាមម្ដងទៀត។</translation>
 <translation id="3594280220611906414"><ph name="USER_FRIENDLY_APN_NAME" /> គឺជា​ឈ្មោះ​ងាយស្រួលចាំ​សម្រាប់ <ph name="APN_NAME" />។</translation>
 <translation id="3595596368722241419">ថ្មពេញ</translation>
@@ -701,7 +700,6 @@
 <translation id="4126551873361000548">ថយក្រោយ 10 វិនាទី</translation>
 <translation id="4128271910628504223">បញ្ចូល​សារតម្រុយ ដូចជា "គូរព្រៃ​ដែលមាន​ចុះអ័ព្ទ"</translation>
 <translation id="4130035430755296270">បន្តដាក់ព្រួញលើ​សម្រាប់​ជម្រើស​ប្លង់​ច្រើនទៀត</translation>
-<translation id="4130750466177569591">ខ្ញុំយល់ព្រម</translation>
 <translation id="4131410914670010031">ពណ៌ខ្មៅ និងស</translation>
 <translation id="4137700675046373159">នៅថ្ងៃសៅរ៍</translation>
 <translation id="4139326893730851150">ការដំឡើងកំណែ​កម្មវិធីបង្កប់</translation>
@@ -727,6 +725,7 @@
 <translation id="4212169537710712814">ការទាញយក​គំរូ​ប្រតិចារឹក​ជាភាសា<ph name="LANGUAGE_NAME" />បាន​ចប់​ហើយ</translation>
 <translation id="42126664696688958">នាំចេញ</translation>
 <translation id="4213104098953699324">ក្តារចុច USB</translation>
+<translation id="4217571870635786043">ការសរសេរ​តាមអាន​</translation>
 <translation id="4227825898293920515">ពាក្យសម្ងាត់ផុតកំណត់​ក្នុងរយៈពេល <ph name="TIME" /></translation>
 <translation id="4238516577297848345">មិនមានកិច្ចការបោះពុម្ពកំពុងដំណើរការទេ</translation>
 <translation id="4239069858505860023">GPRS</translation>
@@ -1049,7 +1048,6 @@
 <translation id="5606865426897221650">Tab</translation>
 <translation id="5612205513582918357">ឧបករណ៍ថ្នាក់​កំពុង​បង្ហាញ​អេក្រង់​របស់អ្នក​ទៅ <ph name="RECEIVER_NAME" /></translation>
 <translation id="5613201299517339763">អ្នកត្រូវបាននាំ​ចេញពី​គណនី</translation>
-<translation id="5620281292257375798">ផ្ទៃក្នុង​តែប៉ុណ្ណោះ</translation>
 <translation id="5628106863521633649">ភាសាដែល​អាចប្រើបាន</translation>
 <translation id="5630438231335788050">បូហូស</translation>
 <translation id="5631759159893697722">ចំណុច​សំខាន់</translation>
@@ -1165,6 +1163,7 @@
 <translation id="6136285399872347291">លុបថយក្រោយ</translation>
 <translation id="6137614725462089991">បច្ចេកវិទ្យាទំនើប</translation>
 <translation id="6137767437444130246">វិញ្ញាបនបត្រ​អ្នក​ប្រើប្រាស់</translation>
+<translation id="6140948187512243695">បង្ហាញ​ព័ត៌មាន​លម្អិត</translation>
 <translation id="6146993107019042706">ដើម្បី​បញ្ចប់ សូម​បញ្ចូល​ពាក្យសម្ងាត់​ថ្មីរបស់អ្នក</translation>
 <translation id="6147514244879357420">PNG</translation>
 <translation id="6149015141270619212">មិនអាចភ្ជាប់អ៊ីនធឺណិតបានទេ</translation>
@@ -1185,6 +1184,7 @@
 <translation id="6234024205316847054">បង្ហាញគ្រោង</translation>
 <translation id="6243280677745499710">ឥឡូវនេះ​បានកំណត់​ហើយ</translation>
 <translation id="6250316632541035980">សាច់ជ្រូកបីជាន់ និងស៊ុត</translation>
+<translation id="6262413940100821797">អ្នកទទួល​ដែល​មិនស្គាល់</translation>
 <translation id="6265268291107409527">គ្រាប់ចុចដែលបានជ្រើសរើសគឺ <ph name="KEYS" />។ <ph name="ASSIGN_INSTRUCTION" /></translation>
 <translation id="6275224645089671689">ព្រួញទៅស្ដាំ</translation>
 <translation id="6278428485366576908">ធីម</translation>
@@ -1410,11 +1410,8 @@
 <translation id="7177485034254901881"><ph name="DEVICE_TYPE" /> នេះស្ថិតក្រោម​ការគ្រប់គ្រងរបស់ <ph name="MANAGER" />។ អ្នកគ្រប់គ្រង​អាចកំណត់រចនាសម្ព័ន្ធ​ឧបករណ៍​នេះពីចម្ងាយបាន។</translation>
 <translation id="7180611975245234373">ធ្វើឲ្យថ្មីឡើងវិញ…</translation>
 <translation id="7180865173735832675">កែសម្រួល</translation>
-<translation id="7182063559013288142">ហតស្ប៉តដែលភ្ជាប់បានភ្លាមៗ</translation>
-<translation id="7184043045742675738">ចុច​លើ​គ្រាប់ចុច​ណា​មួយ ដើម្បី​ប្ដូរ​ប៊ូតុង​របស់​អ្នក​តាមបំណង។ ប្ដូរទីតាំងគ្រាប់ចុច ដោយ​ប្រើ​កណ្ដុរ ឬ​គ្រាប់ចុច​ព្រួញ។</translation>
 <translation id="7187669805838282391">នៅថ្ងៃពុធ</translation>
 <translation id="7205318498545665455">ជ្រើសរើសមីក្រូហ្វូនរបស់អ្នក</translation>
-<translation id="7206979415662233817">លក្ខខណ្ឌ​ប្រើប្រាស់</translation>
 <translation id="7210635925306941239">ស៊ីលៀប</translation>
 <translation id="7212547870105584639">គ្រប់គ្រង​ការកំណត់ APN បណ្ដាញ។ APN បង្កើត​ការតភ្ជាប់​រវាង​បណ្ដាញ​ចល័ត និង​អ៊ីនធឺណិត។ <ph name="BEGIN_LINK_LEARN_MORE" />ស្វែងយល់បន្ថែម<ph name="END_LINK_LEARN_MORE" /></translation>
 <translation id="7212734716605298123">ការដំឡើងកំណែកម្មវិធីបង្កប់សម្រាប់ឧបករណ៍ខាងក្រៅ</translation>
@@ -1445,11 +1442,6 @@
 <translation id="7319430975418800333">A3</translation>
 <translation id="7321055305895875150">បៃតង និង​កាប់ស្តាំង</translation>
 <translation id="7328475450575141167">ផ្កាបក្សីសួគ៌</translation>
-<translation id="7331297744262591636">អ្នកត្រូវតែ​មានអាយុ​យ៉ាងតិច 18 ឆ្នាំ និង​យល់ព្រមថា​ការប្រើប្រាស់​ផ្ទាំង​រូបភាព AI របស់អ្នក​គឺអនុលោមតាម<ph name="GOOGLE_TERMS_OF_SERVICE_LINK" />លក្ខខណ្ឌ​ប្រើប្រាស់ Google<ph name="END_LINK_GOOGLE_TERMS_OF_SERVICE" /> និង<ph name="BEGIN_LINK_GEN_AI_TERMS_OF_SERVICE" />លក្ខខណ្ឌ​ប្រើប្រាស់បន្ថែម​របស់ AI ដែលមានសមត្ថភាពបង្កើត<ph name="END_LINK_GEN_AI_TERMS_OF_SERVICE" />។
-          <ph name="LINE_BREAK" />
-          <ph name="LINE_BREAK" />
-          អ្នកអាច​ត្រឹមតែ​បង្កើត​ផ្ទាំង​រូបភាព​តាមរយៈ AI សម្រាប់​ការប្រើប្រាស់​លក្ខណៈ​ផ្ទាល់ខ្លួន និង​មិនមែន​ពាណិជ្ជកម្ម​ប៉ុណ្ណោះ។ នៅពេល​ដែលអ្នក​ទទួលបាន​ជំនួយ​ពាក់ព័ន្ធនឹង​ផ្ទាំងរូបភាព អក្សរ​ត្រូវបាន​បញ្ជូនទៅ​ម៉ាស៊ីនមេ Google AI ដើម្បី​បង្កើត​ការណែនាំ​ផ្ទាំងរូបភាព​ដោយ​អនុលោមតាម<ph name="BEGIN_LINK_GOOGLE_PRIVACY_POLICY" />គោលការណ៍ឯកជនភាពរបស់ Google<ph name="END_LINK_GOOGLE_PRIVACY_POLICY" />។ <ph name="BEGIN_LINK_LEARN_MORE" />ស្វែងយល់បន្ថែម<ph name="END_LINK_LEARN_MORE" /></translation>
-<translation id="7343581795491695942"><ph name="QUERY_TEXT" />; <ph name="RESULT_TEXT" />; ចុច "ស្វែងរក" រួមជាមួយ "ដកឃ្លា" ដើម្បីមើល​លទ្ធផល​នៅក្នុង​កម្មវិធីស្វែងរក​នៅលើ Google។</translation>
 <translation id="7343649194310845056">ឧបករណ៍​បណ្ដាញ</translation>
 <translation id="7344788170842919262">ដូច​ដី</translation>
 <translation id="7346768383111016081">ដាក់​ការបញ្ជា​លើសកម្មភាព​ហ្គេម ដើម្បីលេង​ដោយប្រើ​ក្ដារចុច​របស់អ្នក</translation>
@@ -1506,7 +1498,6 @@
 <translation id="7590883480672980941">ការកំណត់ការបញ្ចូល</translation>
 <translation id="7595982850646262331">នៅសល់ <ph name="TIME_VALUE" /> ទៀត</translation>
 <translation id="7600430297804876776">អ្នកគ្រប់គ្រង <ph name="MANAGER" /> បាន​កំណត់​ពេលដែលអាចប្រើ <ph name="DEVICE_TYPE" /> នេះបាន។</translation>
-<translation id="7613724632293948900">ប្ដូរ​ទីតាំង​ដោយ​ប្រើកណ្ដុរ ឬ​គ្រាប់ចុច​ព្រួញ។</translation>
 <translation id="7618216277886673749">ជ្រើសរើសភាសា<ph name="LANGUAGE_NAME" /></translation>
 <translation id="7618774594543487847">ស្រាល</translation>
 <translation id="7620771111601174153">ស្វែងយល់បន្ថែម​នៅក្នុងមជ្ឈមណ្ឌលជំនួយ</translation>
@@ -1640,6 +1631,7 @@
 <translation id="819278132617411009">ប្រើ Google AI ដើម្បី​ឱ្យកាន់តែមាន​ផលិតភាព</translation>
 <translation id="8200772114523450471">បន្ត</translation>
 <translation id="8206859287963243715">ប្រព័ន្ធទូរស័ព្ទ</translation>
+<translation id="8208043093301544621">ទំព័រដើម</translation>
 <translation id="8208861521865154048">អត្ថប្រយោជន៍</translation>
 <translation id="8226628635270268143">ជ្រើសរើស​រូបថត និងអាល់ប៊ុមដែលអ្នកចូលចិត្ត</translation>
 <translation id="8227119283605456246">ភ្ជាប់ឯកសារ</translation>
@@ -1686,6 +1678,7 @@
 <translation id="8420955526972171689">ដំណើរការ​តេស្ត និង​ការដោះស្រាយបញ្ហា​ហាតវែរ</translation>
 <translation id="8422748173858722634">IMEI</translation>
 <translation id="8424039430705546751">ចុះក្រោម</translation>
+<translation id="8427213022735114808">ការសរសេរតាមអាន​បញ្ជូន​សំឡេង​របស់អ្នក​ទៅ Google ដើម្បី​អនុញ្ញាត​ឱ្យ​ប្រើការ​វាយ​បញ្ចូល​ដោយ​សំឡេង​​ទៅក្នុង​កន្លែងបញ្ចូលអក្សរ។</translation>
 <translation id="8428213095426709021">ការកំណត់</translation>
 <translation id="8431300646573772016">អ្វីដែលថ្មីក្នុង ChromeOS</translation>
 <translation id="8433186206711564395">ការ​កំណត់​បណ្ដាញ</translation>
@@ -1724,6 +1717,7 @@
 <translation id="8584654835905316966">តម្រូវឱ្យចាប់ផ្ដើម​ឡើងវិញ ដើម្បីបញ្ចប់ការដំឡើងកម្មវិធី​បង្កប់សម្រាប់ <ph name="DEVICE_NAME" /> ទៅកំណែ <ph name="VERSION" />។ កុំព្យូទ័ររបស់អ្នកប្រហែលជាចាប់​ផ្ដើម​ឡើង​វិញច្រើនដង។ លក្ខណៈដំណើរការនេះត្រូវបានរំពឹងទុក។</translation>
 <translation id="8593058461203131755">ផ្អាក​មេឌៀ</translation>
 <translation id="8620617069779373398">ស្ថានភាពរ៉ូមីង</translation>
+<translation id="8624524972189162859">អ្នកគ្រប់គ្រង <ph name="DOMAIN_NAME" /> របស់អ្នកបានបិទឧបករណ៍របស់អ្នក និងអាចចូលប្រើទីតាំងរបស់ឧបករណ៍នេះ។</translation>
 <translation id="8626489604350149811">សកម្មភាព​ច្រើន​ទៀត​សម្រាប់ <ph name="APN_NAME" /></translation>
 <translation id="86356131183441916">ស្វាយ​ខ្ចី</translation>
 <translation id="8647595191512746911">ការធ្វើប្រតិចារឹកសំឡេង</translation>
@@ -1835,10 +1829,8 @@
 <translation id="9073281213608662541">PAP</translation>
 <translation id="9074739597929991885">ប៊្លូធូស</translation>
 <translation id="9082718469794970195">ប្រើវីដេអូនេះ</translation>
-<translation id="9087578468327036362">រាយការណ៍​អំពី​សំណួរ​នេះ</translation>
 <translation id="9088306295921699330">ការប្រើប្រាស់​បច្ចុប្បន្ន</translation>
 <translation id="9088994563996376283">សម្រួល</translation>
-<translation id="9095775724867566971">Pluginvm</translation>
 <translation id="909856219855259344">ព័ត៌មានបន្ថែមអំពី "កំណត់កាលបរិច្ឆេទ​ឡើងវិញ"</translation>
 <translation id="9100765901046053179">ការកំណត់កម្រិតខ្ពស់</translation>
 <translation id="910415269708673980">ផ្ទុកសំបុត្រ​ឡើងវិញសម្រាប់ <ph name="PRINCIPAL_NAME" /></translation>
@@ -1868,7 +1860,6 @@
 <translation id="921080052717160800">បានកំណត់​រូបភាព​ជា​ផ្ទៃខាងក្រោយ​កាមេរ៉ា</translation>
 <translation id="9211490828691860325">តុនិម្មិត​ទាំងអស់</translation>
 <translation id="9218016617214286986">បង្ហាញ APN ដែលស្គាល់</translation>
-<translation id="932327136139879170">ទំព័រដើម</translation>
 <translation id="939519157834106403">SSID</translation>
 <translation id="945522503751344254">ផ្ញើមតិ</translation>
 <translation id="950520315903467048">បាត់​គ្រាប់ចុចសម្រាប់<ph name="DIRECTION" />។ <ph name="ASSIGN_INSTRUCTION" /></translation>

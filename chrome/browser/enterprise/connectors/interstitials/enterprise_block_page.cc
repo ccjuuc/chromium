@@ -70,7 +70,7 @@ GURL EnterpriseBlockPage::request_url() const {
 }
 
 void EnterpriseBlockPage::PopulateInterstitialStrings(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   PopulateStrings(load_time_data);
 }
 
@@ -111,7 +111,8 @@ void EnterpriseBlockPage::CommandReceived(const std::string& command) {
     case security_interstitials::CMD_OPEN_LOGIN:
     case security_interstitials::CMD_REPORT_PHISHING_ERROR:
       // Not supported by the URL blocking page.
-      NOTREACHED() << "Unsupported command: " << command;
+      LOG(ERROR) << "Unsupported command: " << command;
+      break;
     case security_interstitials::CMD_ERROR:
     case security_interstitials::CMD_TEXT_FOUND:
     case security_interstitials::CMD_TEXT_NOT_FOUND:
@@ -125,9 +126,8 @@ int EnterpriseBlockPage::GetHTMLTemplateId() {
 }
 
 std::string EnterpriseBlockPage::GetCustomMessageForTesting() {
-  base::Value::Dict load_time_data;
+  base::DictValue load_time_data;
   PopulateInterstitialStrings(load_time_data);
   std::string custom_message = *load_time_data.FindString("primaryParagraph");
   return custom_message;
 }
-

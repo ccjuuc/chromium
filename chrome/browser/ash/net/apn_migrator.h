@@ -50,7 +50,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) ApnMigrator
   // Creates an ONC configuration object for the custom APN list Shill property
   // containing |apn_list|, and applies it for the cellular |network|.
   void SetShillCustomApnListForNetwork(const NetworkState& network,
-                                       const base::Value::List* apn_list);
+                                       const base::ListValue* apn_list);
 
   void OnSetShillCustomApnListSuccess(const std::string iccid);
   void OnSetShillCustomApnListFailure(const std::string iccid,
@@ -60,14 +60,17 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) ApnMigrator
   // Migrate the |network|'s custom APNs to the APN Revamp feature. If the
   // migration requires the network's managed properties, this function will
   // invoke an async call, and mark the network as "in migration".
-  void MigrateNetwork(const NetworkState& network);
+  // |username_hash| is the logged-in user's username hash, used to associate
+  // the migrated APNs with the user's profile.
+  void MigrateNetwork(const NetworkState& network,
+                      const std::string& username_hash);
 
   // Finishes the migration process for networks that require managed properties
   // fields.
   void OnGetManagedProperties(std::string iccid,
                               std::string guid,
                               const std::string& service_path,
-                              std::optional<base::Value::Dict> properties,
+                              std::optional<base::DictValue> properties,
                               std::optional<std::string> error);
 
   // Helper func that creates the |default_apn| before creating the

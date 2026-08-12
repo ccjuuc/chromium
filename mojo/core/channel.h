@@ -50,6 +50,8 @@ constexpr bool IsAlignedForChannelMessage(size_t n) {
 class MOJO_SYSTEM_IMPL_EXPORT Channel
     : public base::RefCountedThreadSafe<Channel> {
  public:
+  static constexpr double kMetricSubsamplingProbability = 0.001;
+
   enum class HandlePolicy {
     // If a Channel is constructed in this mode, it will accept messages with
     // platform handle attachements.
@@ -417,8 +419,6 @@ class MOJO_SYSTEM_IMPL_EXPORT Channel
   Channel(const Channel&) = delete;
   Channel& operator=(const Channel&) = delete;
 
-  static void set_use_trivial_messages(bool use_trivial_messages);
-
   bool is_for_ipcz() const { return is_for_ipcz_; }
 
   // SupportsChannelUpgrade will return true if this channel is capable of being
@@ -581,7 +581,7 @@ class MOJO_SYSTEM_IMPL_EXPORT Channel
                                 std::vector<PlatformHandle> handles);
 
  protected:
-  void RecordSentMessageMetrics(size_t payload_size);
+  void RecordSentMessageMetricsSubsampled(size_t payload_size);
 
   // Take delayed messages with increasing message count one by one and dispatch
   // them until there is a new gap.
@@ -593,10 +593,6 @@ class MOJO_SYSTEM_IMPL_EXPORT Channel
   // Records histograms counting sent messages per process type. Must be
   // subsampled.
   static void RecordSentMessageProcessType();
-
-  // Records histograms counting received messages per process type. Must be
-  // subsampled.
-  static void RecordReceivedMessageProcessType();
 
   // Used to store messaged for delayed dispatch. Such message reordering is
   // only needed when SupportsMultipleNotifiers() is true.

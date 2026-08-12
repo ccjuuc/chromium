@@ -12,6 +12,7 @@
 
 namespace password_manager {
 
+struct PasswordForm;
 enum class LogInWithChangedPasswordOutcome;
 
 // Abstract interface for high level interaction related to password change.
@@ -20,11 +21,11 @@ class PasswordChangeServiceInterface {
   // Checks whether current user is eligible to use password change.
   virtual bool IsPasswordChangeAvailable() const = 0;
 
-  // Checks whether password change is eligible for a given `url` and
+  // Checks whether password change is eligible for a given `form` and
   // `page_language`.
   virtual bool IsPasswordChangeSupported(
-      const GURL& url,
-      const autofill::LanguageCode& page_language) const = 0;
+      const PasswordForm& form,
+      bool is_non_password_login_detected) const = 0;
 
   // Records the outcome of the first login attempt
   // using a previously saved APC-password and immediately
@@ -32,6 +33,9 @@ class PasswordChangeServiceInterface {
   virtual void RecordLoginAttemptQuality(
       LogInWithChangedPasswordOutcome outcome,
       const GURL& page_url) const = 0;
+
+  // Add overridden change password URL.
+  virtual void AddChangePasswordUrlOverride(const GURL& url) = 0;
 };
 
 // Return overridden change password URL passed to chrome switch.

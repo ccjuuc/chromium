@@ -17,6 +17,8 @@ namespace views {
 class Widget;
 }
 
+struct BrowserWindowCreateParams;
+
 // A browser window proxy with an associated Aura native window.
 // TODO: replace this with TestBrowserWindowViews.
 class TestBrowserWindowAura : public TestBrowserWindow {
@@ -36,6 +38,7 @@ class TestBrowserWindowAura : public TestBrowserWindow {
   gfx::Rect GetBounds() const override;
 
   std::unique_ptr<Browser> CreateBrowser(Browser::CreateParams* params);
+  std::unique_ptr<Browser> CreateBrowser(BrowserWindowCreateParams params);
 
  private:
   raw_ptr<Browser> browser_;  // not owned
@@ -58,7 +61,8 @@ class TestBrowserWindowViews : public TestBrowserWindow {
   bool IsActive() const override;
   gfx::Rect GetBounds() const override;
 
-  std::unique_ptr<Browser> CreateBrowser(const Browser::CreateParams& params);
+  std::unique_ptr<Browser> CreateBrowser(Browser::CreateParams params);
+  std::unique_ptr<Browser> CreateBrowser(BrowserWindowCreateParams params);
 
  private:
   raw_ptr<Browser> browser_;  // not owned
@@ -76,7 +80,7 @@ std::unique_ptr<Browser> CreateBrowserWithAuraTestWindowForParams(
 
 // Helper that creates a browser with a Widget serving as the BrowserWindow.
 std::unique_ptr<Browser> CreateBrowserWithViewsTestWindowForParams(
-    const Browser::CreateParams& params,
+    Browser::CreateParams params,
     aura::Window* parent = nullptr);
 
 }  // namespace chrome

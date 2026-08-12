@@ -28,18 +28,19 @@
 
 namespace enterprise_companion {
 
-const char kCompanionAppId[] = ENTERPRISE_COMPANION_APPID;
+constexpr char kCompanionAppId[] = ENTERPRISE_COMPANION_APPID;
 
 // Overrides JSON keys.
-const char kCrashUploadUrlKey[] = "crash_upload_url";
-const char kDMEncryptedReportingUrlKey[] = "dm_encrypted_reporting_url";
-const char kDMRealtimeReportingUrlKey[] = "dm_realtime_reporting_url";
-const char kDMServerUrlKey[] = "dm_server_url";
-const char kEventLoggingUrlKey[] = "event_logging_url";
+constexpr char kCrashUploadUrlKey[] = "crash_upload_url";
+constexpr char kDMEncryptedReportingUrlKey[] = "dm_encrypted_reporting_url";
+constexpr char kDMRealtimeReportingUrlKey[] = "dm_realtime_reporting_url";
+constexpr char kDMServerUrlKey[] = "dm_server_url";
+constexpr char kEventLoggingUrlKey[] = "event_logging_url";
 extern const char kEventLoggerMinTimeoutSecKey[] =
     "event-logger-min-timeout-sec";
 #if BUILDFLAG(IS_WIN)
-const char kNamedPipeSecurityDescriptorKey[] = "named-pipe-security-descriptor";
+constexpr char kNamedPipeSecurityDescriptorKey[] =
+    "named-pipe-security-descriptor";
 #endif
 
 namespace {
@@ -121,7 +122,7 @@ class GlobalConstantsImpl : public GlobalConstants {
       return;
     }
 
-    const base::Value::Dict& overrides = parsed_value->GetDict();
+    const base::DictValue& overrides = parsed_value->GetDict();
 
     ApplyOverride(overrides, kCrashUploadUrlKey, crash_upload_url_);
     ApplyOverride(overrides, kDMEncryptedReportingUrlKey,
@@ -140,7 +141,7 @@ class GlobalConstantsImpl : public GlobalConstants {
 #endif
   }
 
-  void ApplyOverride(const base::Value::Dict& overrides,
+  void ApplyOverride(const base::DictValue& overrides,
                      const std::string& key,
                      GURL& value) {
     const std::string* str = overrides.FindString(key);
@@ -150,7 +151,7 @@ class GlobalConstantsImpl : public GlobalConstants {
     }
   }
 
-  void ApplyOverride(const base::Value::Dict& overrides,
+  void ApplyOverride(const base::DictValue& overrides,
                      const std::string& key,
                      base::TimeDelta& value) {
     std::optional<int> override_val = overrides.FindInt(key);
@@ -161,7 +162,7 @@ class GlobalConstantsImpl : public GlobalConstants {
   }
 
 #if BUILDFLAG(IS_WIN)
-  void ApplyOverride(const base::Value::Dict& overrides,
+  void ApplyOverride(const base::DictValue& overrides,
                      const std::string& key,
                      std::wstring& value) {
     const std::string* str = overrides.FindString(key);

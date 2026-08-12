@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/views/frame/multi_contents_view.h"
 #include "chrome/browser/ui/views/frame/multi_contents_view_mini_toolbar.h"
@@ -28,7 +29,7 @@ const auto getDeepActiveElement = [](std::string property) {
          "  while (a && a.shadowRoot && a.shadowRoot.activeElement) {"
          "    a = a.shadowRoot.activeElement;"
          "  }" +
-         std::format("  return a.{};", property) + "}";
+         base::StringPrintf("  return a.%s;", property) + "}";
 };
 }  // namespace
 
@@ -45,7 +46,9 @@ class SplitNewTabPageUiTest
   GURL GetTestUrl() { return embedded_test_server()->GetURL("/title1.html"); }
 };
 
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+// TODO(crbug.com/542635262): Disable on Windows due to flakiness.
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_WIN)
 #define MAYBE_Focus DISABLED_Focus
 #else
 #define MAYBE_Focus Focus
@@ -70,24 +73,19 @@ IN_PROC_BROWSER_TEST_F(SplitNewTabPageUiTest, MAYBE_Focus) {
                     ::testing::Eq("closeButton")),
 
       // Advance focus into the list of open tabs. kSecondTab was the most
-      // recently focused tab, at index 1
+      // recently focused tab.
       SendKeyPress(kMultiContentsViewElementId, ui::VKEY_TAB),
       CheckJsResult(kFourthTab, getDeepActiveElement("tagName"),
                     ::testing::Eq("TAB-SEARCH-ITEM")),
-      CheckJsResult(kFourthTab, getDeepActiveElement("data.tab.url.url"),
+      CheckJsResult(kFourthTab, getDeepActiveElement("data.tab.url"),
                     ::testing::Eq(GetTestUrl().spec())),
-      CheckJsResult(kFourthTab, getDeepActiveElement("data.tab.index"),
-                    ::testing::Eq(1)),
 
-      // Advance focus again. kNewTab was the next most recently focused tab, at
-      // index 0
+      // Advance focus again. kNewTab was the next most recently focused tab.
       SendKeyPress(kMultiContentsViewElementId, ui::VKEY_TAB),
       CheckJsResult(kFourthTab, getDeepActiveElement("tagName"),
                     ::testing::Eq("TAB-SEARCH-ITEM")),
-      CheckJsResult(kFourthTab, getDeepActiveElement("data.tab.url.url"),
+      CheckJsResult(kFourthTab, getDeepActiveElement("data.tab.url"),
                     ::testing::Eq(url::kAboutBlankURL)),
-      CheckJsResult(kFourthTab, getDeepActiveElement("data.tab.index"),
-                    ::testing::Eq(0)),
 
       // Advance focus again. Focus should leave the web contents, to the mini
       // toolbar.
@@ -102,7 +100,7 @@ IN_PROC_BROWSER_TEST_F(SplitNewTabPageUiTest, MAYBE_Focus) {
                [&](const MultiContentsView* multi_contents_view) -> bool {
                  return multi_contents_view->GetActiveContentsContainerView()
                      ->mini_toolbar()
-                     ->image_button_for_testing()
+                     ->close_button_for_testing()
                      ->HasFocus();
                }));
 }

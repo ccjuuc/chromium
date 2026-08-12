@@ -16,6 +16,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.SystemClock;
 import android.text.TextUtils;
+import android.text.format.DateUtils;
 
 import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
@@ -36,7 +37,6 @@ import org.chromium.chrome.browser.browserservices.ui.controller.CurrentPageVeri
 import org.chromium.chrome.browser.browserservices.verification.ChromeOriginVerifier;
 import org.chromium.chrome.browser.browserservices.verification.ChromeOriginVerifierFactory;
 import org.chromium.chrome.browser.customtabs.content.CustomTabActivityTabProvider;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.DestroyObserver;
 import org.chromium.chrome.browser.lifecycle.NativeInitObserver;
@@ -54,6 +54,8 @@ import java.util.Map;
  */
 @NullMarked
 public class AuthTabVerifier implements NativeInitObserver, DestroyObserver {
+    public static final int VERIFICATION_TIMEOUT_MS = 10000;
+
     private static boolean sDelayVerificationForTesting;
 
     private final Activity mActivity;
@@ -147,7 +149,7 @@ public class AuthTabVerifier implements NativeInitObserver, DestroyObserver {
                         .build();
         mVerificationStartTime = SystemClock.elapsedRealtime();
         mOriginVerifier.start(
-                (packageName, unused, verified, online) -> {
+                (packageName, _, verified, online) -> {
                     if (mDestroyed) return;
                     if (verified) {
                         mStatus = VerificationStatus.SUCCESS;
@@ -239,8 +241,7 @@ public class AuthTabVerifier implements NativeInitObserver, DestroyObserver {
             PostTask.postDelayedTask(
                     TaskTraits.UI_DEFAULT,
                     mCallbackController.makeCancelable(this::returnTimeoutAsActivityResult),
-                    ChromeFeatureList.sCctAuthTabEnableHttpsRedirectsVerificationTimeoutMs
-                            .getValue());
+                    VERIFICATION_TIMEOUT_MS);
         }
     }
 
@@ -256,18 +257,24 @@ public class AuthTabVerifier implements NativeInitObserver, DestroyObserver {
         if (mVerificationStartTime != null) {
             long elapsedSinceVerificationStart =
                     SystemClock.elapsedRealtime() - mVerificationStartTime;
-            RecordHistogram.recordTimesHistogram(
-                    "CustomTabs.AuthTab.TimeToDalVerification.SinceStart",
-                    elapsedSinceVerificationStart);
+            RecordHistogram.recordCustomTimesHistogram(
+                    "CustomTabs.AuthTab.TimeToDalVerification.SinceStart2",
+                    elapsedSinceVerificationStart,
+                    1,
+                    100 * DateUtils.SECOND_IN_MILLIS,
+                    50);
             mVerificationStartTime = null;
         }
 
         if (mHttpsReturnAttemptTime != null) {
             long elapsedSinceReturnAttempt =
                     SystemClock.elapsedRealtime() - mHttpsReturnAttemptTime;
-            RecordHistogram.recordTimesHistogram(
-                    "CustomTabs.AuthTab.TimeToDalVerification.SinceFlowCompletion",
-                    elapsedSinceReturnAttempt);
+            RecordHistogram.recordCustomTimesHistogram(
+                    "CustomTabs.AuthTab.TimeToDalVerification.SinceFlowCompletion2",
+                    elapsedSinceReturnAttempt,
+                    1,
+                    100 * DateUtils.SECOND_IN_MILLIS,
+                    50);
             mHttpsReturnAttemptTime = null;
         }
 

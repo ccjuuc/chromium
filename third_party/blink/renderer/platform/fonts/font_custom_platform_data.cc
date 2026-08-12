@@ -32,17 +32,18 @@
 
 #include "third_party/blink/renderer/platform/fonts/font_custom_platform_data.h"
 
+#include "base/containers/heap_array.h"
 #include "base/logging.h"
 #include "build/build_config.h"
 #include "third_party/blink/renderer/platform/fonts/font_cache.h"
 #include "third_party/blink/renderer/platform/fonts/font_platform_data.h"
+#include "third_party/blink/renderer/platform/fonts/font_selection_types.h"
 #include "third_party/blink/renderer/platform/fonts/opentype/font_format_check.h"
 #include "third_party/blink/renderer/platform/fonts/opentype/font_settings.h"
 #include "third_party/blink/renderer/platform/fonts/opentype/variable_axes_names.h"
 #include "third_party/blink/renderer/platform/fonts/palette_interpolation.h"
 #include "third_party/blink/renderer/platform/fonts/web_font_decoder.h"
 #include "third_party/blink/renderer/platform/fonts/web_font_typeface_factory.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 #include "third_party/skia/include/core/SkTypeface.h"
@@ -93,7 +94,7 @@ FontCustomPlatformData::FontCustomPlatformData(PassKey,
 
 FontCustomPlatformData::~FontCustomPlatformData() {
   if (v8::Isolate* isolate = v8::Isolate::TryGetCurrent()) {
-    // Safe cast since WebFontDecoder has max decompressed size of 128MB.
+    // Safe cast since DecodedWebFont has max decompressed size of 128MB.
     external_memory_accounter_.Decrease(isolate, data_size_);
   }
 }
@@ -145,7 +146,8 @@ const FontPlatformData* FontCustomPlatformData::GetFontPlatformData(
         weight_coordinate = {
             kWghtTag,
             SkFloatToScalar(wght_range.clampToRange(selection_request.weight))};
-        synthetic_bold = bold && wght_range.maximum < kBoldThreshold &&
+        bool has_bold_variations = wght_range.maximum > kNormalWeightValue;
+        synthetic_bold = bold && !has_bold_variations &&
                          selection_request.weight >= kBoldThreshold;
       }
     }
@@ -183,7 +185,9 @@ const FontPlatformData* FontCustomPlatformData::GetFontPlatformData(
         slant_coordinate = {
             kSlntTag,
             SkFloatToScalar(slnt_range.clampToRange(-selection_request.slope))};
-        synthetic_italic = italic && slnt_range.maximum < kItalicSlopeValue &&
+        bool has_right_slanted_variations =
+            slnt_range.minimum < kNormalSlopeValue;
+        synthetic_italic = italic && !has_right_slanted_variations &&
                            selection_request.slope >= kItalicSlopeValue;
       }
     }
@@ -258,18 +262,19 @@ const FontPlatformData* FontCustomPlatformData::GetFontPlatformData(
       palette_index = palette_interpolation.RetrievePaletteIndex(palette);
     }
 
-    std::unique_ptr<SkFontArguments::Palette::Override[]> sk_overrides;
+    base::HeapArray<SkFontArguments::Palette::Override> sk_overrides;
     if (palette_index.has_value()) {
       sk_palette.index = *palette_index;
 
       if (color_overrides.size()) {
-        sk_overrides = std::make_unique<SkFontArguments::Palette::Override[]>(
-            color_overrides.size());
+        sk_overrides =
+            base::HeapArray<SkFontArguments::Palette::Override>::Uninit(
+                color_overrides.size());
         for (wtf_size_t i = 0; i < color_overrides.size(); i++) {
           SkColor sk_color = color_overrides[i].color.toSkColor4f().toSkColor();
-          UNSAFE_TODO(sk_overrides[i]) = {color_overrides[i].index, sk_color};
+          sk_overrides[i] = {color_overrides[i].index, sk_color};
         }
-        sk_palette.overrides = sk_overrides.get();
+        sk_palette.overrides = sk_overrides.data();
         sk_palette.overrideCount = color_overrides.size();
       }
 
@@ -305,7 +310,7 @@ String FontCustomPlatformData::FamilyNameForInspector() const {
     }
   }
   font_family_iterator->unref();
-  return String::FromUTF8(base::as_byte_span(localized_string.fString));
+  return String::FromUtf8(base::as_byte_span(localized_string.fString));
 }
 
 String FontCustomPlatformData::GetPostScriptNameOrFamilyNameForInspector()
@@ -316,20 +321,21 @@ String FontCustomPlatformData::GetPostScriptNameOrFamilyNameForInspector()
     return FamilyNameForInspector();
   }
 
-  return postscript_name.c_str();
+  return String(base::as_byte_span(postscript_name));
 }
 
 FontCustomPlatformData* FontCustomPlatformData::Create(
     SharedBuffer* buffer,
     String& ots_parse_message) {
   DCHECK(buffer);
-  WebFontDecoder decoder;
-  sk_sp<SkTypeface> typeface = decoder.Decode(buffer);
-  if (!typeface) {
-    ots_parse_message = decoder.GetErrorString();
+  base::expected<DecodedWebFont, String> decode_result =
+      DecodedWebFont::Create(buffer);
+  if (!decode_result.has_value()) {
+    ots_parse_message = std::move(decode_result).error();
     return nullptr;
   }
-  return Create(std::move(typeface), decoder.DecodedSize());
+  return Create(std::move(decode_result->sk_typeface),
+                decode_result->decoded_size);
 }
 
 FontCustomPlatformData* FontCustomPlatformData::Create(

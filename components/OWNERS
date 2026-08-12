@@ -6,7 +6,7 @@ set noparent
 
 blundell@chromium.org  #{LAST_RESORT_SUGGESTION}
 caitkp@google.com  #{LAST_RESORT_SUGGESTION}
-nyquist@google.com  #{LAST_RESORT_SUGGESTION}
+nyquist@chromium.org  #{LAST_RESORT_SUGGESTION}
 sdefresne@chromium.org  #{LAST_RESORT_SUGGESTION}
 tedchoc@chromium.org  #{LAST_RESORT_SUGGESTION}
 
@@ -22,10 +22,11 @@ per-file browsing_data_strings.grdp=file://components/browsing_data/OWNERS
 per-file collaboration_strings.grdp=file://components/collaboration/OWNERS
 per-file commerce_strings.grdp=file://components/commerce_strings_grdp/OWNERS
 per-file compose_strings.grdp=file://components/compose_strings_grdp/OWNERS
+per-file contextual_cueing_strings.grdp=file://chrome/browser/contextual_cueing/OWNERS
 per-file contextual_tasks_strings.grdp=file://components/contextual_tasks/OWNERS
 per-file crash_strings.grdp=file://components/crash/OWNERS
 per-file dom_distiller_strings.grdp=file://components/dom_distiller/OWNERS
-per-file enterprise_strings.grdp=file://components/enterprise/OWNERS
+per-file enterprise_strings.grdp=file://components/enterprise_strings_grdp/OWNERS
 per-file error_page_strings.grdp=file://components/error_page/OWNERS
 per-file facilitated_payments_strings.grdp=file://components/facilitated_payments/OWNERS
 per-file fullscreen_control_strings.grdp=file://components/fullscreen_control/OWNERS
@@ -46,11 +47,11 @@ per-file paint_preview_strings.grdp=file://components/paint_preview/OWNERS
 per-file password_manager_strings.grdp=file://components/password_manager/OWNERS
 per-file payments_strings.grdp=file://components/payments/OWNERS
 per-file permissions_strings.grdp=file://components/permissions/OWNERS
+per-file personal_context_strings.grdp=file://components/personal_context/OWNERS
 per-file pdf_strings.grdp=file://pdf/OWNERS
 per-file policy_strings.grdp=file://components/policy/OWNERS
 per-file print_media_strings.grdp=file://components/printing/OWNERS
 per-file printing_component_strings.grdp=file://components/printing/OWNERS
-per-file privacy_sandbox_chrome_strings.grdp=file://components/privacy_sandbox/OWNERS
 per-file privacy_sandbox_strings.grd=file://components/privacy_sandbox/OWNERS
 per-file reset_password_strings.grdp=file://components/safe_browsing/OWNERS
 per-file saved_tab_groups_strings.grdp=file://components/saved_tab_groups/OWNERS
@@ -60,7 +61,7 @@ per-file security_interstitials_strings.grdp=file://components/security_intersti
 per-file send_tab_to_self_strings.grdp=file://components/send_tab_to_self/OWNERS
 per-file site_settings_strings.grdp=file://components/browser_ui/site_settings/OWNERS
 per-file site_settings_strings.grdp=file://chrome/browser/resources/settings/site_settings/OWNERS
-per-file sms_strings.grdp=file://content/browser/sms/OWNERS
+per-file smart_tab_sharing.grdp=file://components/contextual_tasks/OWNERS
 per-file ssl_errors_strings.grdp=file://components/ssl_errors/OWNERS
 per-file subresource_filter_strings.grdp=file://components/subresource_filter/OWNERS
 per-file supervised_user_strings.grdp=file://components/supervised_user/OWNERS

@@ -11,7 +11,6 @@
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/table_view/content_configuration/colorful_symbol_content_configuration.h"
 #import "ios/chrome/browser/shared/ui/table_view/content_configuration/table_view_cell_content_configuration.h"
-#import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_styler.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/table_view/table_view_cells_constants.h"
@@ -52,15 +51,18 @@ const NSInteger kDefaultNumberOfLines = 1;
 
 #pragma mark TableViewItem
 
-- (void)configureCell:(LegacyTableViewCell*)cell
-           withStyler:(ChromeTableViewStyler*)styler {
-  [super configureCell:cell withStyler:styler];
+- (void)configureCell:(LegacyTableViewCell*)cell {
+  [super configureCell:cell];
 
   TableViewCellContentConfiguration* contentConfiguration =
       [[TableViewCellContentConfiguration alloc] init];
   switch (self.badgeType) {
     case BadgeType::kNone:
-      contentConfiguration.title = self.text;
+      if (self.textFont || self.textColor) {
+        contentConfiguration.attributedTitle = [self createAttributedTitle];
+      } else {
+        contentConfiguration.title = self.text;
+      }
       break;
     case BadgeType::kNew: {
       NewFeatureBadgeView* newIPHBadgeView =
@@ -82,7 +84,7 @@ const NSInteger kDefaultNumberOfLines = 1;
       break;
     }
     case BadgeType::kNotificationDot: {
-      UIImage* dot = [DefaultSymbolWithPointSize(kCircleFillSymbol, kDotSize)
+      UIImage* dot = [SymbolWithPointSize(SymbolCircleFill, kDotSize)
           imageWithTintColor:[UIColor colorNamed:kBlueColor]];
 
       contentConfiguration.attributedTitle =
@@ -95,6 +97,7 @@ const NSInteger kDefaultNumberOfLines = 1;
   if (self.textLayoutConstraintAxis == UILayoutConstraintAxisVertical) {
     contentConfiguration.subtitle = self.detailText;
     contentConfiguration.subtitleNumberOfLines = self.detailTextNumberOfLines;
+    contentConfiguration.trailingText = self.trailingDetailText;
   } else {
     contentConfiguration.trailingText = self.detailText;
   }
@@ -144,12 +147,29 @@ const NSInteger kDefaultNumberOfLines = 1;
 
 #pragma mark - Private
 
+// Returns an attributed string for the title.
+- (NSMutableAttributedString*)createAttributedTitle {
+  if (!self.textFont && !self.textColor) {
+    return [[NSMutableAttributedString alloc] initWithString:self.text];
+  }
+
+  NSMutableDictionary* attributes = [NSMutableDictionary dictionary];
+  if (self.textFont) {
+    attributes[NSFontAttributeName] = self.textFont;
+  }
+  if (self.textColor) {
+    attributes[NSForegroundColorAttributeName] = self.textColor;
+  }
+  return [[NSMutableAttributedString alloc] initWithString:self.text
+                                                attributes:attributes];
+}
+
 // Returns an attributed string with `image` at the end.
 - (NSAttributedString*)createAttributedTitleWithImage:(UIImage*)image {
-  NSMutableAttributedString* attributedString =
-      [[NSMutableAttributedString alloc] initWithString:self.text];
+  NSMutableAttributedString* attributedString = [self createAttributedTitle];
 
-  UIFont* font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+  UIFont* font =
+      self.textFont ?: [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
   CGFloat yOffset = (font.capHeight - image.size.height) / 2.0;
 
   NSTextAttachment* imageAttachment = [[NSTextAttachment alloc] init];

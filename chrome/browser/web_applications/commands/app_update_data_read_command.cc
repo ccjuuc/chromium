@@ -8,19 +8,29 @@
 #include <optional>
 #include <vector>
 
+#include "base/check_deref.h"
 #include "base/functional/concurrent_closures.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
+#include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_manager_observer.h"
 #include "chrome/browser/web_applications/commands/command_result.h"
 #include "chrome/browser/web_applications/icons/icon_masker.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
+#include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
 #include "chrome/browser/web_applications/proto/web_app.pb.h"
 #include "chrome/browser/web_applications/proto/web_app.to_value.h"
 #include "chrome/browser/web_applications/ui_manager/update_dialog_types.h"
 #include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
+#include "components/keep_alive_registry/keep_alive_types.h"
+#include "components/keep_alive_registry/scoped_keep_alive.h"
+#include "components/webapps/browser/image_visual_diff.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/common/content_features.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -46,8 +56,6 @@ IconPurpose ConvertIconSyncPurposeToImageResourcePurpose(
 
 std::string ToString(AppUpdateDataReadResult read_result) {
   switch (read_result) {
-    case AppUpdateDataReadResult::kFlagNotEnabled:
-      return "flag_not_enabled";
     case AppUpdateDataReadResult::kAppNotInstalled:
       return "app_not_installed";
     case AppUpdateDataReadResult::kAppDoesNotHavePendingUpdate:
@@ -60,6 +68,8 @@ std::string ToString(AppUpdateDataReadResult read_result) {
       return "system_shutdown_while_commands_were_running";
     case AppUpdateDataReadResult::kSuccess:
       return "data_parse_success";
+    case AppUpdateDataReadResult::kInsignificantChangeAfterUpdate:
+      return "insignificant_change_after_update";
   }
 }
 
@@ -67,6 +77,7 @@ std::string ToString(AppUpdateDataReadResult read_result) {
 
 AppUpdateDataReadCommand::AppUpdateDataReadCommand(
     const webapps::AppId& app_id,
+    Profile* profile,
     base::OnceCallback<void(UpdateMetadata)> completed_callback)
     : WebAppCommand<AppLock, AppUpdateDataReadResult, UpdateMetadata>(
           "AppUpdateDataReadCommand",
@@ -80,7 +91,8 @@ AppUpdateDataReadCommand::AppUpdateDataReadCommand(
           /*args_for_shutdown=*/
           std::make_tuple(AppUpdateDataReadResult::kSystemShutdown,
                           std::nullopt)),
-      app_id_(app_id) {
+      app_id_(app_id),
+      profile_(CHECK_DEREF(profile)) {
   GetMutableDebugValue().Set("app_id", app_id);
 }
 
@@ -88,12 +100,6 @@ AppUpdateDataReadCommand::~AppUpdateDataReadCommand() = default;
 
 void AppUpdateDataReadCommand::StartWithLock(std::unique_ptr<AppLock> lock) {
   lock_ = std::move(lock);
-
-  if (!base::FeatureList::IsEnabled(features::kWebAppPredictableAppUpdating)) {
-    ReportResultAndDestroy(AppUpdateDataReadResult::kFlagNotEnabled);
-    return;
-  }
-
   const WebAppRegistrar& registrar = lock_->registrar();
   if (!registrar.AppMatches(app_id_, WebAppFilter::InstalledInChrome())) {
     ReportResultAndDestroy(AppUpdateDataReadResult::kAppNotInstalled);
@@ -197,7 +203,60 @@ void AppUpdateDataReadCommand::OnIconsProcessedCreateIdentity() {
       pending_update_info_.has_name()
           ? std::make_optional(base::UTF8ToUTF16(pending_update_info_.name()))
           : std::nullopt;
+
+  // For url updates, the start_url should be the same before and after.
+  // The WebAppIdentityUpdate code automatically makes the new_start_url equal
+  // to the old one if not populated, signifying that they're both the same.
+  update_.old_start_url = lock_->registrar().GetAppStartUrl(app_id_);
   GetMutableDebugValue().Set("new_name", update_.new_title.has_value());
+
+  // Recheck the icons once they're loaded from the disk to ensure that the
+  // newly loaded icons also have a >10% image diff, otherwise they cannot be
+  // shown on the dialog.
+  if (update_.new_icon.has_value()) {
+    SkBitmap old_bitmap = update_.old_icon.AsBitmap();
+    SkBitmap new_bitmap = update_.new_icon->AsBitmap();
+    CheckImageDiffMoreThanTenPercent(
+        std::move(old_bitmap), std::move(new_bitmap),
+        base::BindOnce(
+            &AppUpdateDataReadCommand::OnImageDiffComputedUpdateIdentity,
+            weak_factory_.GetWeakPtr()));
+    return;
+  }
+
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          &AppUpdateDataReadCommand::OnImageDiffComputedUpdateIdentity,
+          weak_factory_.GetWeakPtr(), /*more_than_ten_percent_diff=*/true));
+}
+
+void AppUpdateDataReadCommand::OnImageDiffComputedUpdateIdentity(
+    bool more_than_ten_percent_diff) {
+  update_.icon_diff_is_insignificant = !more_than_ten_percent_diff;
+
+  // If the changes for the existing update is deemed "insignificant", AKA there
+  // are no update changes, apply the manifest update "silently".
+  if (!update_.GetCombinationChangeIndex()) {
+    auto profile_keep_alive = ScopedProfileKeepAlive::TryAcquire(
+        &profile_.get(), ProfileKeepAliveOrigin::kWebAppUpdate);
+    if (!profile_keep_alive) {
+      // Profile is scheduled for destruction, show the dialog instead.
+      ReportResultAndDestroy(AppUpdateDataReadResult::kSuccess);
+      return;
+    }
+
+    auto keep_alive = std::make_unique<ScopedKeepAlive>(
+        KeepAliveOrigin::APP_MANIFEST_UPDATE, KeepAliveRestartOption::DISABLED);
+    lock_->scheduler().ScheduleApplyPendingManifestUpdate(
+        app_id_, std::move(keep_alive), std::move(profile_keep_alive),
+        base::DoNothing());
+    ReportResultAndDestroy(
+        AppUpdateDataReadResult::kInsignificantChangeAfterUpdate);
+    return;
+  }
+
+  // Allow the update to progress as it should.
   ReportResultAndDestroy(AppUpdateDataReadResult::kSuccess);
 }
 
@@ -206,20 +265,21 @@ void AppUpdateDataReadCommand::ReportResultAndDestroy(
   GetMutableDebugValue().Set("result", ToString(data_read_result));
   CommandResult command_result = CommandResult::kFailure;
   switch (data_read_result) {
+    case AppUpdateDataReadResult::kSystemShutdown:
+      command_result = CommandResult::kFailure;
+      break;
     case AppUpdateDataReadResult::kAppNotInstalled:
     case AppUpdateDataReadResult::kAppDoesNotHavePendingUpdate:
     case AppUpdateDataReadResult::kFailedToReadExistingAppIcons:
     case AppUpdateDataReadResult::kFailedToReadPendingAppIconsWhenRequested:
-    case AppUpdateDataReadResult::kSystemShutdown:
-      command_result = CommandResult::kFailure;
-      break;
-    case AppUpdateDataReadResult::kFlagNotEnabled:
+    case AppUpdateDataReadResult::kInsignificantChangeAfterUpdate:
     case AppUpdateDataReadResult::kSuccess:
       command_result = CommandResult::kSuccess;
       break;
   }
+
   CompleteAndSelfDestruct(command_result, data_read_result,
-                          command_result == CommandResult::kSuccess
+                          data_read_result == AppUpdateDataReadResult::kSuccess
                               ? std::make_optional(update_)
                               : std::nullopt);
 }

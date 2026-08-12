@@ -14,9 +14,9 @@ import androidx.annotation.VisibleForTesting;
 import androidx.preference.Preference;
 
 import org.chromium.base.metrics.RecordHistogram;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
-import org.chromium.base.supplier.SettableObservableSupplier;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
@@ -53,7 +53,7 @@ public class SiteSettings extends BaseSiteSettingsFragment
     public static final String PERMISSION_AUTOREVOCATION_HISTOGRAM_NAME =
             "Settings.SafetyHub.AutorevokeUnusedSitePermissions.Changed";
 
-    private final SettableObservableSupplier<String> mPageTitle =
+    private final SettableMonotonicObservableSupplier<String> mPageTitle =
             ObservableSuppliers.createMonotonic();
 
     @Override
@@ -66,7 +66,7 @@ public class SiteSettings extends BaseSiteSettingsFragment
     }
 
     @Override
-    public ObservableSupplier<String> getPageTitle() {
+    public MonotonicObservableSupplier<String> getPageTitle() {
         return mPageTitle;
     }
 
@@ -198,9 +198,12 @@ public class SiteSettings extends BaseSiteSettingsFragment
             }
 
             if (prefCategory != Type.THIRD_PARTY_COOKIES) {
-                p.setIcon(
-                        SettingsUtils.getTintedIcon(
-                                getContext(), ContentSettingsResources.getIcon(contentType)));
+                int iconId =
+                        requiresTriStateSetting
+                                ? ContentSettingsResources.getTriStateSettingIcon(
+                                        contentType, setting)
+                                : ContentSettingsResources.getIcon(contentType);
+                p.setIcon(SettingsUtils.getTintedIcon(getContext(), iconId));
             }
         }
 

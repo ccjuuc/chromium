@@ -39,9 +39,9 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterBooleanPref(prefs::kSavedTabGroupSpecificsToDataMigration,
                                 false);
   registry->RegisterDictionaryPref(prefs::kDeletedTabGroupIds,
-                                   base::Value::Dict());
+                                   base::DictValue());
   registry->RegisterDictionaryPref(prefs::kLocallyClosedRemoteTabGroupIds,
-                                   base::Value::Dict());
+                                   base::DictValue());
   registry->RegisterBooleanPref(prefs::kDidSyncTabGroupsInLastSession, false);
   registry->RegisterBooleanPref(prefs::kDidEnableSharedTabGroupsInLastSession,
                                 false);
@@ -53,6 +53,8 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
                                 false);
   registry->RegisterBooleanPref(prefs::kHasShownAnyVersionOutOfDateMessage,
                                 false);
+  registry->RegisterBooleanPref(
+      prefs::kSavedTabGroupPinnedPositionToProjectsPositionMigration, false);
 }
 
 void KeepAccountSettingsPrefsOnlyForUsers(

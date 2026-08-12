@@ -4,7 +4,6 @@
 
 #include "chrome/browser/performance_manager/policies/working_set_trimmer_policy.h"
 
-#include "base/metrics/histogram_macros.h"
 #include "base/notimplemented.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
@@ -93,13 +92,13 @@ void WorkingSetTrimmerPolicy::TrimWorkingSet(const ProcessNode* process_node) {
   }
 }
 
-base::Value::Dict WorkingSetTrimmerPolicy::DescribeProcessNodeData(
+base::DictValue WorkingSetTrimmerPolicy::DescribeProcessNodeData(
     const ProcessNode* node) const {
   auto* data = WorkingSetTrimData::Get(ProcessNodeImpl::FromNode(node));
   if (data == nullptr)
-    return base::Value::Dict();
+    return base::DictValue();
 
-  base::Value::Dict ret;
+  base::DictValue ret;
   auto last_trim_age = base::TimeTicks::Now() - data->last_trim_;
 
   ret.Set(

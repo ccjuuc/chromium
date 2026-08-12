@@ -21,6 +21,8 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/task/sequenced_task_runner.h"
 #include "media/base/android/media_codec_util.h"
+#include "media/base/android/media_format_color_space.h"
+#include "media/base/media_switches.h"
 
 namespace media {
 
@@ -34,7 +36,6 @@ class CodecWrapperImpl : public base::RefCountedThreadSafe<CodecWrapperImpl> {
   CodecWrapperImpl(CodecSurfacePair codec_surface_pair,
                    CodecWrapper::OutputReleasedCB output_buffer_release_cb,
                    const gfx::Size& initial_expected_size,
-                   const gfx::ColorSpace& config_color_space,
                    std::optional<gfx::Size> coded_size_alignment);
   CodecWrapperImpl(const CodecWrapperImpl&) = delete;
   CodecWrapperImpl& operator=(const CodecWrapperImpl&) = delete;
@@ -101,7 +102,11 @@ class CodecWrapperImpl : public base::RefCountedThreadSafe<CodecWrapperImpl> {
 
   // The current output size. Updated when DequeueOutputBuffer() reports
   // OUTPUT_FORMAT_CHANGED.
-  gfx::Size size_;
+  gfx::Size media_format_output_size_;
+
+  // The current visible_rect. Updated when DequeueOutputBuffer() reports
+  // OUTPUT_FORMAT_CHANGED.
+  gfx::Rect visible_rect_;
 
   // A callback that's called whenever an output buffer is released back to the
   // codec.
@@ -112,35 +117,36 @@ class CodecWrapperImpl : public base::RefCountedThreadSafe<CodecWrapperImpl> {
   bool elided_eos_pending_ = false;
 
   // Most recently reported color space.
-  gfx::ColorSpace color_space_ = gfx::ColorSpace::CreateSRGB();
+  MediaFormatColorSpace color_space_;
 
   // The alignment to use for width, height when guessing coded size.
   const std::optional<gfx::Size> coded_size_alignment_;
-
-  // Used when the color space can't be retrieved from the codec.
-  const gfx::ColorSpace config_color_space_;
 };
 
 CodecOutputBuffer::CodecOutputBuffer(
     scoped_refptr<CodecWrapperImpl> codec,
     int64_t id,
-    const gfx::Size& size,
-    const gfx::ColorSpace& color_space,
+    const gfx::Size& media_format_output_size,
+    const gfx::Rect& visible_rect,
+    const MediaFormatColorSpace& color_space,
     std::optional<gfx::Size> coded_size_alignment)
     : codec_(std::move(codec)),
       id_(id),
-      size_(size),
+      media_format_output_size_(media_format_output_size),
+      visible_rect_(visible_rect),
       color_space_(color_space),
       coded_size_alignment_(coded_size_alignment) {}
 
 // For testing.
 CodecOutputBuffer::CodecOutputBuffer(
     int64_t id,
-    const gfx::Size& size,
-    const gfx::ColorSpace& color_space,
+    const gfx::Size& media_format_output_size,
+    const gfx::Rect& visible_rect,
+    const MediaFormatColorSpace& color_space,
     std::optional<gfx::Size> coded_size_alignment)
     : id_(id),
-      size_(size),
+      media_format_output_size_(media_format_output_size),
+      visible_rect_(visible_rect),
       color_space_(color_space),
       coded_size_alignment_(coded_size_alignment) {}
 
@@ -164,29 +170,36 @@ bool CodecOutputBuffer::ReleaseToSurface() {
 }
 
 bool CodecOutputBuffer::CanGuessCodedSize() const {
+  if (base::FeatureList::IsEnabled(kUseMediaFormatCodedSize)) {
+    return true;
+  }
   return coded_size_alignment_.has_value();
 }
 
 gfx::Size CodecOutputBuffer::GuessCodedSize() const {
   DCHECK(CanGuessCodedSize());
-  return gfx::Size(base::bits::AlignUpDeprecatedDoNotUse(
-                       size_.width(), coded_size_alignment_->width()),
-                   base::bits::AlignUpDeprecatedDoNotUse(
-                       size_.height(), coded_size_alignment_->height()));
+  if (base::FeatureList::IsEnabled(kUseMediaFormatCodedSize)) {
+    return media_format_output_size_;
+  }
+
+  return gfx::Size(
+      base::bits::AlignUpDeprecatedDoNotUse(visible_rect_.width(),
+                                            coded_size_alignment_->width()),
+      base::bits::AlignUpDeprecatedDoNotUse(visible_rect_.height(),
+                                            coded_size_alignment_->height()));
 }
 
 CodecWrapperImpl::CodecWrapperImpl(
     CodecSurfacePair codec_surface_pair,
     CodecWrapper::OutputReleasedCB output_buffer_release_cb,
     const gfx::Size& initial_expected_size,
-    const gfx::ColorSpace& config_color_space,
     std::optional<gfx::Size> coded_size_alignment)
     : codec_(std::move(codec_surface_pair.first)),
       surface_bundle_(std::move(codec_surface_pair.second)),
-      size_(initial_expected_size),
+      media_format_output_size_(initial_expected_size),
+      visible_rect_(initial_expected_size),
       output_buffer_release_cb_(std::move(output_buffer_release_cb)),
-      coded_size_alignment_(coded_size_alignment),
-      config_color_space_(config_color_space) {
+      coded_size_alignment_(coded_size_alignment) {
   CHECK(codec_);
   DVLOG(2) << __func__;
 }
@@ -373,7 +386,8 @@ CodecWrapperImpl::DequeueStatus CodecWrapperImpl::DequeueOutputBuffer(
         int64_t buffer_id = next_buffer_id_++;
         buffer_ids_[buffer_id] = index;
         *codec_buffer = base::WrapUnique(new CodecOutputBuffer(
-            this, buffer_id, size_, color_space_, coded_size_alignment_));
+            this, buffer_id, media_format_output_size_, visible_rect_,
+            color_space_, coded_size_alignment_));
         return DequeueStatus::Codes::kOk;
       }
       case MediaCodecResult::Codes::kTryAgainLater: {
@@ -385,7 +399,8 @@ CodecWrapperImpl::DequeueStatus CodecWrapperImpl::DequeueOutputBuffer(
       }
       case MediaCodecResult::Codes::kOutputFormatChanged: {
         gfx::Size temp_size;
-        result = codec_->GetOutputSize(&temp_size);
+        gfx::Rect visible_rect;
+        result = codec_->GetOutputSizeAndCropRect(temp_size, visible_rect);
         if (result.code() == MediaCodecResult::Codes::kError) {
           state_ = State::kError;
           return {DequeueStatus::Codes::kError,
@@ -399,22 +414,26 @@ CodecWrapperImpl::DequeueStatus CodecWrapperImpl::DequeueOutputBuffer(
         // change to avoid output errors. We'll either reuse the previous size
         // information or the size provided during configure.
         // See https://crbug.com/1207682.
-        if (!temp_size.IsEmpty())
-          size_ = temp_size;
+        if (!temp_size.IsEmpty()) {
+          media_format_output_size_ = temp_size;
+          visible_rect_ = visible_rect;
+        }
 
         bool error = codec_->GetOutputColorSpace(&color_space_) ==
                      MediaCodecResult::Codes::kError;
+        if (!error && !color_space_.ToGfxColorSpace().IsValid()) {
+          error = true;
+          DVLOG(3) << __func__ << ": unsupported media format:"
+                   << " s:" << color_space_.standard
+                   << " r: " << color_space_.range
+                   << " t: " << color_space_.transfer;
+        }
         UMA_HISTOGRAM_BOOLEAN("Media.Android.GetColorSpaceError", error);
-        if (error && !size_.IsEmpty()) {
-          if (config_color_space_.IsValid()) {
-            color_space_ = config_color_space_;
-          } else {
-            // If we get back an unsupported color space, then just default to
-            // sRGB for < 720p, or 709 otherwise.  It's better than nothing.
-            color_space_ = size_.width() >= 1280
-                               ? gfx::ColorSpace::CreateREC709()
-                               : gfx::ColorSpace::CreateSRGB();
-          }
+        // If we fail to get a color space after we have gotten a valid size,
+        // reset the color space. The higher levels of the stack will decide
+        // the color space (e.g, based on the container settings).
+        if (error && !media_format_output_size_.IsEmpty()) {
+          color_space_ = MediaFormatColorSpace();
         }
         continue;
       }
@@ -479,13 +498,11 @@ bool CodecWrapperImpl::ReleaseCodecOutputBuffer(int64_t id, bool render) {
 CodecWrapper::CodecWrapper(CodecSurfacePair codec_surface_pair,
                            OutputReleasedCB output_buffer_release_cb,
                            const gfx::Size& initial_expected_size,
-                           const gfx::ColorSpace& config_color_space,
                            std::optional<gfx::Size> coded_size_alignment)
     : impl_(base::MakeRefCounted<CodecWrapperImpl>(
           std::move(codec_surface_pair),
           std::move(output_buffer_release_cb),
           initial_expected_size,
-          config_color_space,
           coded_size_alignment)) {}
 
 CodecWrapper::~CodecWrapper() {

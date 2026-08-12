@@ -7,27 +7,26 @@
 #include "base/notimplemented.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "chrome/browser/glic/common/panel_focus_dependent_hotkey_manager.h"
+#include "chrome/browser/glic/common/panel_visibility_dependent_hotkey_manager.h"
 #include "chrome/browser/glic/public/glic_instance.h"
+#include "chrome/browser/glic/selection/selection_overlay_controller.h"
 #include "chrome/browser/glic/service/glic_ui_embedder.h"
 #include "chrome/browser/glic/service/metrics/glic_instance_metrics.h"
-#include "chrome/browser/glic/widget/application_hotkey_delegate.h"
+#include "chrome/browser/glic/widget/conversions.h"
 #include "chrome/browser/glic/widget/glic_inactive_side_panel_ui.h"
-#include "chrome/browser/glic/widget/glic_panel_hotkey_delegate.h"
 #include "chrome/browser/glic/widget/glic_view.h"
 #include "chrome/browser/glic/widget/glic_widget.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/side_panel/side_panel.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
-#include "chrome/browser/ui/views/tabs/tab.h"
 #include "components/tabs/public/tab_interface.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/base_window.h"
 #include "ui/views/view.h"
 
 namespace glic {
@@ -45,10 +44,12 @@ GlicSidePanelUi::GlicSidePanelUi(Profile* profile,
     return;
   }
 
-  application_hotkey_manager_ =
-      MakeApplicationHotkeyManager(weak_ptr_factory_.GetWeakPtr());
-  glic_panel_hotkey_manager_ =
-      MakeGlicWindowHotkeyManager(weak_ptr_factory_.GetWeakPtr());
+  panel_visibility_dependent_hotkey_manager_ =
+      std::make_unique<PanelVisibilityDependentHotkeyManager>(
+          profile_, weak_ptr_factory_.GetWeakPtr());
+  panel_focus_dependent_hotkey_manager_ =
+      std::make_unique<PanelFocusDependentHotkeyManager>(
+          weak_ptr_factory_.GetWeakPtr());
 
   panel_visibility_subscription_ =
       glic_side_panel_coordinator->AddStateCallback(
@@ -72,19 +73,14 @@ GlicSidePanelUi::GlicSidePanelUi(Profile* profile,
 
   // Add capability to show web modal dialogs (e.g. Data Controls Dialogs for
   // enterprise users) via constrained_window APIs.
-  web_modal::WebContentsModalDialogManager::CreateForWebContents(
-      delegate_->host().webui_contents());
-  web_modal::WebContentsModalDialogManager::FromWebContents(
-      delegate_->host().webui_contents())
-      ->SetDelegate(this);
-
+  SetModalDialogDelegate(this);
   panel_state_.kind = mojom::PanelStateKind::kAttached;
 }
 
 std::unique_ptr<views::View> GlicSidePanelUi::CreateView(Profile* profile) {
-  auto glic_view =
-      std::make_unique<GlicView>(profile, GlicWidget::GetInitialSize(),
-                                 glic_panel_hotkey_manager_->GetWeakPtr());
+  auto glic_view = std::make_unique<GlicView>(
+      profile, GlicWidget::GetInitialSize(),
+      panel_focus_dependent_hotkey_manager_->GetAcceleratorTargetWeakPtr());
   glic_view->SetWebContents(delegate_->host().webui_contents());
   glic_view->UpdateBackgroundColor();
   glic_view_ = glic_view->GetWeakPtr();
@@ -95,20 +91,11 @@ GlicSidePanelUi::~GlicSidePanelUi() {
   if (glic_view_) {
     glic_view_->SetWebContents(nullptr);
   }
-  auto* webui_contents = delegate_->host().webui_contents();
-  if (!webui_contents) {
-    return;
-  }
-  auto* dialog_manager =
-      web_modal::WebContentsModalDialogManager::FromWebContents(webui_contents);
-  if (dialog_manager) {
-    dialog_manager->SetDelegate(nullptr);
-  }
+  SetModalDialogDelegate(nullptr);
 }
 
 void GlicSidePanelUi::OnClientReady() {
-  instance_metrics_->OnClientReady(
-      GlicInstanceMetrics::EmbedderType::kSidePanel);
+  instance_metrics_->OnClientReady(EmbedderType::kSidePanel);
 }
 
 Host::EmbedderDelegate* GlicSidePanelUi::GetHostEmbedderDelegate() {
@@ -126,22 +113,6 @@ gfx::Size GlicSidePanelUi::GetPanelSize() {
   return glic_view_->size();
 }
 
-void GlicSidePanelUi::Resize(const gfx::Size& size,
-                             base::TimeDelta duration,
-                             base::OnceClosure callback) {
-  NOTIMPLEMENTED();
-  std::move(callback).Run();
-}
-
-void GlicSidePanelUi::SetDraggableAreas(
-    const std::vector<gfx::Rect>& draggable_areas) {
-  NOTIMPLEMENTED();
-}
-
-void GlicSidePanelUi::EnableDragResize(bool enabled) {
-  NOTIMPLEMENTED();
-}
-
 void GlicSidePanelUi::Attach() {
   // The Side Panel Ui is already attached, do nothing.
 }
@@ -154,16 +125,12 @@ void GlicSidePanelUi::Detach() {
   delegate_->Detach(*tab_);
 }
 
-void GlicSidePanelUi::SetMinimumWidgetSize(const gfx::Size& size) {
-  NOTIMPLEMENTED();
+bool GlicSidePanelUi::IsShowing() const {
+  return GlicSidePanelCoordinator::IsShowing(tab_.get());
 }
 
-bool GlicSidePanelUi::IsShowing() const {
-  auto* glic_side_panel_coordinator = GetGlicSidePanelCoordinator();
-  if (!glic_side_panel_coordinator) {
-    return false;
-  }
-  return glic_side_panel_coordinator->IsShowing();
+bool GlicSidePanelUi::IsShowingOrBackgrounded() const {
+  return GlicSidePanelCoordinator::IsShowingOrBackgrounded(tab_.get());
 }
 
 void GlicSidePanelUi::Focus() {
@@ -187,11 +154,19 @@ void GlicSidePanelUi::SidePanelStateChanged(
   // Showing only happens through glic entrypoint, hiding can also be triggered
   // by side panel coordinator when replacing glic with another entry.
   if (state != GlicSidePanelCoordinator::State::kShown && tab_) {
-    instance_metrics_->OnSidePanelClosed(tab_.get());
+    GlicInstanceMetrics::CloseReason reason =
+        state == GlicSidePanelCoordinator::State::kBackgrounded
+            ? GlicInstanceMetrics::CloseReason::kTabSwitched
+            : GlicInstanceMetrics::CloseReason::kExplicitlyClosed;
+    instance_metrics_->OnSidePanelClosed(tab_.get(), reason);
     panel_state_.kind = mojom::PanelStateKind::kHidden;
     delegate_->NotifyPanelStateChanged();
+    EmbedderCloseReason close_reason =
+        state == GlicSidePanelCoordinator::State::kBackgrounded
+            ? EmbedderCloseReason::kBackgrounded
+            : EmbedderCloseReason::kExplicitlyClosed;
     // NOTE: `this` will be destroyed after this call.
-    delegate_->WillCloseFor(tab_.get());
+    delegate_->DidCloseFor(SidePanelEmbedderKey{*tab_}, close_reason);
   }
 }
 
@@ -207,9 +182,10 @@ void GlicSidePanelUi::CaptureScreenshot(
     glic::mojom::WebClientHandler::CaptureScreenshotCallback callback) {
   if (!tab_) {
     std::move(callback).Run(nullptr);
+    return;
   }
   if (!screenshot_capturer_) {
-    screenshot_capturer_ = std::make_unique<GlicScreenshotCapturer>();
+    screenshot_capturer_ = GlicScreenshotCapturer::Create();
   }
   auto* browser_window = tab_->GetBrowserWindowInterface();
   CHECK(browser_window);
@@ -226,31 +202,51 @@ void GlicSidePanelUi::Show(const ShowOptions& options) {
   panel_state_.kind = mojom::PanelStateKind::kAttached;
   delegate_->NotifyPanelStateChanged();
   delegate_->host().FloatingPanelCanAttachChanged(false);
-  application_hotkey_manager_->InitializeAccelerators();
-  glic_panel_hotkey_manager_->InitializeAccelerators();
+  panel_visibility_dependent_hotkey_manager_->InitializeAccelerators();
+  panel_focus_dependent_hotkey_manager_->InitializeAccelerators();
 
-  bool suppress_animations = false;
-  if (const auto* side_panel_options =
-          std::get_if<SidePanelShowOptions>(&options.embedder_options)) {
-    suppress_animations = side_panel_options->suppress_opening_animation;
-  }
-  glic_side_panel_coordinator->Show(suppress_animations);
+  glic_side_panel_coordinator->Show(ConvertToCoordinatorShowOptions(
+      options, glic_side_panel_coordinator->SupportsPeek()));
 }
 
-void GlicSidePanelUi::Close() {
+void GlicSidePanelUi::Close(const CloseOptions& options) {
   if (screenshot_capturer_) {
     screenshot_capturer_->CloseScreenPicker();
   }
+  CloseSelectionOverlay();
   auto* glic_side_panel_coordinator = GetGlicSidePanelCoordinator();
   if (!glic_side_panel_coordinator) {
     return;
   }
   // NOTE: `this` will be destroyed after this call.
-  glic_side_panel_coordinator->Close();
+  glic_side_panel_coordinator->Close(options);
 }
 
 void GlicSidePanelUi::ClosePanel() {
-  Close();
+  Close(CloseOptions());
+}
+
+void GlicSidePanelUi::SetModalDialogDelegate(
+    web_modal::WebContentsModalDialogManagerDelegate* delegate) {
+  content::WebContents* web_contents = delegate_->host().webui_contents();
+  if (!web_contents) {
+    return;
+  }
+  if (auto* dialog_manager =
+          web_modal::WebContentsModalDialogManager::FromWebContents(
+              web_contents)) {
+    if (delegate || dialog_manager->delegate() == this) {
+      dialog_manager->SetDelegate(delegate);
+    }
+  }
+}
+
+void GlicSidePanelUi::OnReload() {
+  content::WebContents* web_contents = delegate_->host().webui_contents();
+  if (web_contents && glic_view_) {
+    glic_view_->SetWebContents(web_contents);
+  }
+  SetModalDialogDelegate(this);
 }
 
 std::unique_ptr<GlicUiEmbedder> GlicSidePanelUi::CreateInactiveEmbedder()
@@ -279,8 +275,30 @@ bool GlicSidePanelUi::ActivateBrowser() {
   return true;
 }
 
-void GlicSidePanelUi::ShowTitleBarContextMenuAt(gfx::Point event_loc) {
-  // This is floaty-specific. It doesn't make sense in side panel.
+void GlicSidePanelUi::Zoom(mojom::ZoomAction zoom_action) {
+  delegate_->host().Zoom(zoom_action);
+}
+
+bool GlicSidePanelUi::HasSelectionOverlay() {
+  if (!tab_ || !tab_->IsActivated()) {
+    return false;
+  }
+  auto* selection_overlay_controller =
+      SelectionOverlayController::FromTabWebContents(tab_->GetContents());
+  return selection_overlay_controller->state() ==
+         SelectionOverlayController::State::kOverlay;
+}
+
+void GlicSidePanelUi::CloseSelectionOverlay() {
+  if (!tab_ || !tab_->IsActivated()) {
+    return;
+  }
+  auto* selection_overlay_controller =
+      SelectionOverlayController::FromTabWebContents(tab_->GetContents());
+  if (!selection_overlay_controller) {
+    return;
+  }
+  selection_overlay_controller->Close();
 }
 
 base::WeakPtr<views::View> GlicSidePanelUi::GetView() {
@@ -310,6 +328,10 @@ GlicSidePanelCoordinator* GlicSidePanelUi::GetGlicSidePanelCoordinator() const {
 std::string GlicSidePanelUi::DescribeForTesting() {
   return base::StrCat({"SidePanelUi for tab ",
                        base::NumberToString(tab_->GetHandle().raw_value())});
+}
+
+BrowserWindowInterface* GlicSidePanelUi::GetBrowserWindowInterface() {
+  return tab_ ? tab_->GetBrowserWindowInterface() : nullptr;
 }
 
 }  // namespace glic

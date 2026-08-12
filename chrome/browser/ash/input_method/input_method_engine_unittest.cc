@@ -9,7 +9,6 @@
 
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/metrics/histogram_samples.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/strings/stringprintf.h"
@@ -344,7 +343,7 @@ TEST_F(InputMethodEngineTest, TestInvalidCompositionReturnsFalse) {
             false);
 }
 
-// See https://crbug.com/980437.
+// See https://crbug.com/40634497.
 TEST_F(InputMethodEngineTest, TestDisableAfterSetCompositionRange) {
   CreateEngine(true);
   Focus(ui::TEXT_INPUT_TYPE_TEXT);

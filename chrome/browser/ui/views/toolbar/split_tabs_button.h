@@ -16,12 +16,10 @@
 
 class Browser;
 class PinnedToolbarButtonStatusIndicator;
-
-namespace ui {
-class SimpleMenuModel;
-}
+class SplitTabMenuModel;
 
 namespace views {
+class MenuModelAdapter;
 class MenuRunner;
 }  // namespace views
 
@@ -61,10 +59,17 @@ class SplitTabsToolbarButton : public ToolbarButton,
   void UpdateAccessibilityRole(bool has_menu);
   void UpdateAccessibilityLabel(bool is_enabled);
 
+  // If the IPH is showing, notifies that the feature promo was used.
+  void MaybeNotifyIndirectAccessIPHUsed();
+
+  // Aborts the feature promo if we are no longer in a side-by-side split.
+  void MaybeAbortIndirectAccessIPH();
+
   BooleanPrefMember pin_state_;
   raw_ptr<Browser> browser_;
   raw_ptr<PinnedToolbarButtonStatusIndicator> status_indicator_;
-  std::unique_ptr<ui::SimpleMenuModel> split_tab_menu_;
+  std::unique_ptr<SplitTabMenuModel> split_tab_menu_;
+  std::unique_ptr<views::MenuModelAdapter> menu_model_adapter_;
   std::unique_ptr<views::MenuRunner> menu_runner_;
 };
 

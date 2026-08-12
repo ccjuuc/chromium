@@ -4,13 +4,12 @@
 
 #include "net/device_bound_sessions/registration_fetcher_param.h"
 
+#include <algorithm>
+#include <optional>
 #include <vector>
 
-#include "base/base64url.h"
-#include "base/logging.h"
+#include "base/feature_list.h"
 #include "base/strings/escape.h"
-#include "base/strings/string_split.h"
-#include "base/strings/string_util.h"
 #include "net/base/features.h"
 #include "net/base/schemeful_site.h"
 #include "net/device_bound_sessions/session.h"
@@ -26,6 +25,7 @@ constexpr char kAuthCodeParamKey[] = "authorization";
 constexpr char kProviderKeyParamKey[] = "provider_key";
 constexpr char kProviderUrlParamKey[] = "provider_url";
 constexpr char kProviderSessionIdParamKey[] = "provider_session_id";
+constexpr char kAikRequiredParamKey[] = "aik_required";
 
 constexpr char kES256[] = "ES256";
 constexpr char kRS256[] = "RS256";
@@ -58,27 +58,29 @@ RegistrationFetcherParam::~RegistrationFetcherParam() = default;
 RegistrationFetcherParam::RegistrationFetcherParam(
     GURL registration_endpoint,
     std::vector<crypto::SignatureVerifier::SignatureAlgorithm> supported_algos,
-    std::string challenge,
+    std::optional<std::string> challenge,
     std::optional<std::string> authorization,
     std::optional<std::string> provider_key,
     std::optional<GURL> provider_url,
-    std::optional<Session::Id> provider_session_id)
+    std::optional<Session::Id> provider_session_id,
+    AttestationMode attestation_mode)
     : registration_endpoint_(std::move(registration_endpoint)),
       supported_algos_(std::move(supported_algos)),
       challenge_(std::move(challenge)),
       authorization_(std::move(authorization)),
       provider_key_(std::move(provider_key)),
       provider_url_(std::move(provider_url)),
-      provider_session_id_(std::move(provider_session_id)) {}
+      provider_session_id_(std::move(provider_session_id)),
+      attestation_mode_(attestation_mode) {}
 
 std::optional<RegistrationFetcherParam> RegistrationFetcherParam::ParseItem(
     const GURL& request_url,
     const structured_headers::ParameterizedMember& session_registration) {
   std::vector<crypto::SignatureVerifier::SignatureAlgorithm> supported_algos;
   for (const auto& algo_token : session_registration.member) {
-    if (algo_token.item.is_token()) {
+    if (const std::string* token = algo_token.item.GetIfToken()) {
       std::optional<crypto::SignatureVerifier::SignatureAlgorithm> algo =
-          AlgoFromString(algo_token.item.GetString());
+          AlgoFromString(*token);
       if (algo) {
         supported_algos.push_back(*algo);
       };
@@ -89,21 +91,23 @@ std::optional<RegistrationFetcherParam> RegistrationFetcherParam::ParseItem(
   }
 
   GURL registration_endpoint;
-  std::string challenge;
+  std::optional<std::string> challenge;
   std::optional<std::string> authorization;
   std::optional<std::string> provider_key;
   std::optional<GURL> provider_url;
   std::optional<Session::Id> provider_session_id;
+  bool aik_required = false;
   for (const auto& [key, value] : session_registration.params) {
     // The keys for the parameters are unique and must be lower case.
     // Quiche (https://quiche.googlesource.com/quiche), used here,
     // will currently pick the last if there is more than one.
     if (key == kPathParamKey) {
-      if (!value.is_string()) {
-        continue;
+      const std::string* string = value.GetIfString();
+      if (!string) {
+        return std::nullopt;
       }
       std::string unescaped_path = base::UnescapeURLComponent(
-          value.GetString(),
+          *string,
           base::UnescapeRule::PATH_SEPARATORS |
               base::UnescapeRule::URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS);
       // Registration endpoint can be a full URL (samesite with request origin)
@@ -118,28 +122,73 @@ std::optional<RegistrationFetcherParam> RegistrationFetcherParam::ParseItem(
                                          request_url)) {
         registration_endpoint = std::move(candidate_registration_endpoint);
       }
-    } else if (key == kChallengeParamKey && value.is_string()) {
-      challenge = value.GetString();
-    } else if (key == kAuthCodeParamKey && value.is_string()) {
-      authorization = value.GetString();
-    } else if (key == kProviderKeyParamKey && value.is_string()) {
-      provider_key = value.GetString();
-    } else if (key == kProviderUrlParamKey && value.is_string()) {
-      provider_url = GURL(value.GetString());
-    } else if (key == kProviderSessionIdParamKey && value.is_string()) {
-      provider_session_id = Session::Id(value.GetString());
+    } else if (key == kChallengeParamKey) {
+      const std::string* string = value.GetIfString();
+      if (!string) {
+        return std::nullopt;
+      }
+      challenge = *string;
+    } else if (key == kAuthCodeParamKey) {
+      const std::string* string = value.GetIfString();
+      if (!string) {
+        return std::nullopt;
+      }
+      authorization = *string;
+    } else if (key == kProviderKeyParamKey) {
+      const std::string* string = value.GetIfString();
+      if (!string) {
+        return std::nullopt;
+      }
+      provider_key = *string;
+    } else if (key == kProviderUrlParamKey) {
+      const std::string* string = value.GetIfString();
+      if (!string) {
+        return std::nullopt;
+      }
+      provider_url = GURL(*string);
+    } else if (key == kProviderSessionIdParamKey) {
+      const std::string* string = value.GetIfString();
+      if (!string) {
+        return std::nullopt;
+      }
+      provider_session_id = Session::Id(*string);
+    } else if (key == kAikRequiredParamKey &&
+               base::FeatureList::IsEnabled(
+                   features::kDeviceBoundSessionsForSingleSignOn)) {
+      const bool* boolean = value.GetIfBoolean();
+      if (!boolean) {
+        return std::nullopt;
+      }
+      aik_required = *boolean;
     }
 
     // Other params are ignored
   }
 
-  if (!registration_endpoint.is_valid() || challenge.empty()) {
+  if (!registration_endpoint.is_valid()) {
     return std::nullopt;
   }
 
-  if (provider_key.has_value() != provider_url.has_value() ||
-      provider_key.has_value() != provider_session_id.has_value()) {
+  // `provider_key` and `provider_url` must either both be present or
+  // both be absent.
+  if (provider_key.has_value() != provider_url.has_value()) {
     return std::nullopt;
+  }
+
+  if (base::FeatureList::IsEnabled(
+          features::kDeviceBoundSessionsForSingleSignOn)) {
+    // In SSO scenarios, `provider_session_id` can be absent.
+    // However, if `provider_session_id` is present, then `provider_key`
+    // (and by extension `provider_url`) must also be present.
+    if (provider_session_id.has_value() && !provider_key.has_value()) {
+      return std::nullopt;
+    }
+  } else {
+    // In non-SSO scenarios, `provider_session_id` must be present
+    // if and only if `provider_key` is present.
+    if (provider_session_id.has_value() != provider_key.has_value()) {
+      return std::nullopt;
+    }
   }
 
   if (provider_url.has_value() &&
@@ -150,12 +199,14 @@ std::optional<RegistrationFetcherParam> RegistrationFetcherParam::ParseItem(
   return RegistrationFetcherParam(
       std::move(registration_endpoint), std::move(supported_algos),
       std::move(challenge), std::move(authorization), std::move(provider_key),
-      std::move(provider_url), std::move(provider_session_id));
+      std::move(provider_url), std::move(provider_session_id),
+      aik_required ? AttestationMode::kRequired : AttestationMode::kNone);
 }
 
 std::vector<RegistrationFetcherParam> RegistrationFetcherParam::CreateIfValid(
     const GURL& request_url,
-    const net::HttpResponseHeaders* headers) {
+    const net::HttpResponseHeaders* headers,
+    const std::vector<SchemefulSite>& restricted_sites) {
   std::vector<RegistrationFetcherParam> params;
   if (!request_url.is_valid()) {
     return params;
@@ -167,6 +218,13 @@ std::vector<RegistrationFetcherParam> RegistrationFetcherParam::CreateIfValid(
   std::optional<std::string> header_value =
       headers->GetNormalizedHeader(kRegistrationHeaderName);
   if (!header_value) {
+    return params;
+  }
+
+  SchemefulSite site(request_url);
+  if (std::ranges::contains(restricted_sites, site) &&
+      !base::FeatureList::IsEnabled(
+          features::kDeviceBoundSessionsForRestrictedSites)) {
     return params;
   }
 
@@ -193,15 +251,17 @@ std::vector<RegistrationFetcherParam> RegistrationFetcherParam::CreateIfValid(
 RegistrationFetcherParam RegistrationFetcherParam::CreateInstanceForTesting(
     GURL registration_endpoint,
     std::vector<crypto::SignatureVerifier::SignatureAlgorithm> supported_algos,
-    std::string challenge,
+    std::optional<std::string> challenge,
     std::optional<std::string> authorization,
     std::optional<std::string> provider_key,
     std::optional<GURL> provider_url,
-    std::optional<Session::Id> provider_session_id) {
+    std::optional<Session::Id> provider_session_id,
+    AttestationMode attestation_mode) {
   return RegistrationFetcherParam(
       std::move(registration_endpoint), std::move(supported_algos),
       std::move(challenge), std::move(authorization), std::move(provider_key),
-      std::move(provider_url), std::move(provider_session_id));
+      std::move(provider_url), std::move(provider_session_id),
+      attestation_mode);
 }
 
 }  // namespace net::device_bound_sessions

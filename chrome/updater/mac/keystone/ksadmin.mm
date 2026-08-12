@@ -2,16 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "chrome/updater/mac/keystone/ksadmin.h"
 
-#include <stdio.h>
+#include <sys/stat.h>
 
 #include <algorithm>
+#include <iostream>
 #include <map>
 #include <optional>
 #include <string>
@@ -23,13 +19,16 @@
 #include "base/at_exit.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/containers/fixed_flat_map.h"
+#include "base/files/file.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/memory/scoped_refptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
@@ -38,6 +37,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/task/single_thread_task_executor.h"
+#include "base/task/thread_pool.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/time/time.h"
 #include "base/types/expected.h"
@@ -66,8 +66,8 @@ std::map<std::string, std::string> ParseCommandLine(int argc,
   std::map<std::string, std::string> result;
   std::string key;
   for (int i = 1; i < argc; ++i) {
-    std::string arg(argv[i]);
-    if (base::StartsWith(arg, "--")) {
+    std::string arg(UNSAFE_TODO(argv[i]));
+    if (arg.starts_with("--")) {
       key = arg.substr(2);
       size_t eq_idx = key.find('=');
       if (eq_idx == std::string::npos) {
@@ -76,7 +76,7 @@ std::map<std::string, std::string> ParseCommandLine(int argc,
         result[key.substr(0, eq_idx)] = key.substr(eq_idx + 1);
         key = "";
       }
-    } else if (base::StartsWith(arg, "-")) {
+    } else if (arg.starts_with('-')) {
       // Multiple short options could be combined together. For example,
       // command `ksadmin -pP com.google.Chrome` should print Chrome ticket.
       // Split the option substring into switches character by character.
@@ -127,6 +127,10 @@ constexpr char kCommandVersionKey[] = "version-key";
 constexpr char kCommandVersionPath[] = "version-path";
 constexpr char kCommandXCPath[] = "xcpath";
 constexpr char kCommandXattrTagBrand[] = "print-xattr-tag-brand";
+constexpr char kCommandReadPkgTag[] = "read-pkg-tag";
+constexpr char kCommandWriteBrandFile[] = "write-brand-file";
+constexpr char kCommandBrandValue[] = "brand-value";
+constexpr char kCommandTaggedPkgPath[] = "tagged-pkg-path";
 
 bool HasSwitch(const std::string& arg,
                const std::map<std::string, std::string>& switches) {
@@ -182,6 +186,27 @@ std::string SwitchValue(const std::string& arg,
   return switches.contains(alias) ? switches.at(alias) : "";
 }
 
+enum class WriteBrandFileOption {
+  kInvalid,
+  kNever,
+  kIfNeeded,
+  kOverwrite,
+};
+
+WriteBrandFileOption ParseWriteBrandFileOption(const std::string& raw_value) {
+  std::string value = base::ToLowerASCII(raw_value);
+  if (value == "ifneeded") {
+    return WriteBrandFileOption::kIfNeeded;
+  }
+  if (value == "overwrite") {
+    return WriteBrandFileOption::kOverwrite;
+  }
+  if (value == "never" || value.empty()) {
+    return WriteBrandFileOption::kNever;
+  }
+  return WriteBrandFileOption::kInvalid;
+}
+
 std::string KeystoneTicketStorePath(UpdaterScope scope) {
   return GetKeystoneFolderPath(scope)
       ->Append(FILE_PATH_LITERAL("TicketStore"))
@@ -195,8 +220,7 @@ bool IsSystemShim() {
     return false;
   }
 
-  return base::StartsWith(
-      executable_path.value(),
+  return executable_path.value().starts_with(
       GetKeystoneFolderPath(UpdaterScope::kSystem)->value());
 }
 
@@ -215,6 +239,59 @@ UpdaterScope Scope(const std::map<std::string, std::string>& switches) {
                : UpdaterScope::kUser;
   }
   return IsSystemShim() ? UpdaterScope::kSystem : UpdaterScope::kUser;
+}
+
+// If `mode` says it should, tries to write a brand file. If it can't, it logs
+// a warning and moves on, allowing updater registration to continue.
+void MaybeWriteBrandFile(const base::FilePath& path,
+                         const std::string& brand_key,
+                         const std::string& brand_value,
+                         WriteBrandFileOption mode) {
+  CHECK_NE(mode, WriteBrandFileOption::kInvalid);
+  if (mode == WriteBrandFileOption::kNever) {
+    return;
+  }
+
+  const bool overwrite = mode == WriteBrandFileOption::kOverwrite;
+  base::File::Flags create_flag =
+      overwrite ? base::File::FLAG_CREATE_ALWAYS : base::File::FLAG_CREATE;
+  base::File file(path, create_flag | base::File::FLAG_WRITE);
+  if (!file.IsValid()) {
+    if (overwrite || file.error_details() != base::File::FILE_ERROR_EXISTS) {
+      LOG(WARNING) << "Failed to open brand file " << path.value()
+                   << "; error: "
+                   << base::File::ErrorToString(file.error_details());
+    }
+    return;
+  }
+
+  @autoreleasepool {
+    NSDictionary* dict = @{
+      base::SysUTF8ToNSString(brand_key) : base::SysUTF8ToNSString(brand_value)
+    };
+    NSError* error = nil;
+    NSData* data = [NSPropertyListSerialization
+        dataWithPropertyList:dict
+                      format:NSPropertyListXMLFormat_v1_0
+                     options:0
+                       error:&error];
+    if (!data) {
+      LOG(WARNING) << "Failed to serialize brand file plist " << path.value()
+                   << "; error: "
+                   << base::SysNSStringToUTF8(error.localizedDescription);
+      return;
+    }
+
+    if (!file.WriteAtCurrentPosAndCheck(base::apple::NSDataToSpan(data))) {
+      LOG(WARNING) << "Failed to write brand file " << path.value();
+      return;
+    }
+  }
+
+  if (fchmod(file.GetPlatformFile(), 0644) != 0) {
+    PLOG(WARNING) << "Failed to set permissions on " << path.value();
+    return;
+  }
 }
 
 class UpdateCheckResult : public base::RefCountedThreadSafe<UpdateCheckResult> {
@@ -261,6 +338,13 @@ class KSAdminApp : public App {
   void PrintVersion();
   void PrintTickets();
   void PrintXattrTagBrand();
+  void ReadPkgTag();
+  void OnReadPkgTagContent(const std::string& tag_string);
+  void OnReadPkgTagForRegister(RegistrationRequest registration,
+                               const std::string& brand_fallback,
+                               WriteBrandFileOption write_brand_file,
+                               const std::string& tag_string);
+  void OnWriteBrandFileForRegister(RegistrationRequest registration);
 
   void DoUpdateApp(UpdaterScope scope);
   void DoListAppUpdate(UpdaterScope scope);
@@ -362,7 +446,7 @@ bool KSAdminApp::MatchesXCPath(NSString* ticket_path) const {
     NSString* xcpath = base::SysUTF8ToNSString(xcpath_raw);
     xcpath = [xcpath stringByStandardizingPath];
     ticket_path = [ticket_path stringByStandardizingPath];
-    return static_cast<bool>([xcpath isEqual:ticket_path]);
+    return [xcpath isEqual:ticket_path];
   }
 }
 
@@ -379,7 +463,7 @@ void KSAdminApp::ChooseService(
   //
   // If ksadmin is running as `root` and deduces the user updater, this logs
   // an error and shuts the process down with exit code 1.
-  std::optional<UpdaterScope> scope = std::nullopt;
+  std::optional<UpdaterScope> scope;
   if (HasSwitch(kCommandSystemStore)) {
     scope = std::make_optional(UpdaterScope::kSystem);
   } else if (HasSwitch(kCommandUserStore)) {
@@ -475,11 +559,17 @@ void KSAdminApp::PrintUsage(const std::string& error_message) {
       "  --print-tag,-G       Print a ticket's tag. Use with -P.\n"
       "  --print-tickets,-p   Print all tickets. Can filter with -P.\n"
       "  --register,-r        Register a new ticket. Use with -P, -v, -x,\n"
-      "                       -e, -a, -K, -H, -g.\n"
+      "                       -e, -a, -K, -H, -g, --tagged-pkg-path,\n"
+      "                       --write-brand-file.\n"
+      "  --read-pkg-tag PATH  Print tag from PKG file.\n"
       "Action parameters:\n"
       "  --brand-key,-b      Set the brand code key. Use with -P and -B.\n"
       "                      Value must be empty or KSBrandID.\n"
       "  --brand-path,-B     Set the brand code path. Use with -P and -b.\n"
+      "  --brand-value VAL   Set the brand code fallback value.\n"
+      "  --tagged-pkg-path PATH Read tag from PKG and use as brand.\n"
+      "  --write-brand-file VAL Write brand file during registration.\n"
+      "                         Values: ifneeded, overwrite, never.\n"
       "  --productid,-P id   ProductID.\n"
       "  --system-store,-S   Use the system-wide ticket store.\n"
       "  --tag,-g TAG        Set the tag. Use with -P.\n"
@@ -495,7 +585,7 @@ void KSAdminApp::PrintUsage(const std::string& error_message) {
       "If neither -S nor -U are provided, ksadmin will try to deduce the\n"
       "correct store, but may return a ticket with a mismatching xcpath if\n"
       "tickets are present in both stores.\n";
-  printf("%s\n", usage_message.c_str());
+  std::cout << usage_message << "\n";
   Shutdown(error_message.empty() ? 0 : 1);
 }
 
@@ -539,6 +629,84 @@ void KSAdminApp::Register() {
     return;
   }
 
+  const std::string tagged_pkg_path = SwitchValue(kCommandTaggedPkgPath);
+  const std::string brand_value = SwitchValue(kCommandBrandValue);
+  const WriteBrandFileOption write_brand_file =
+      ParseWriteBrandFileOption(SwitchValue(kCommandWriteBrandFile));
+  if (write_brand_file == WriteBrandFileOption::kInvalid) {
+    PrintUsage("--write-brand-file must be one of 'never', 'ifneeded', or "
+               "'overwrite'.");
+    return;
+  }
+
+  if (!tagged_pkg_path.empty()) {
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
+        base::BindOnce(&tagging::BinaryReadTagString,
+                       base::FilePath(tagged_pkg_path)),
+        base::BindOnce(&KSAdminApp::OnReadPkgTagForRegister, this, registration,
+                       brand_value, write_brand_file));
+    return;
+  }
+
+  OnReadPkgTagForRegister(registration, brand_value, write_brand_file,
+                          /*tag_string=*/"");
+}
+
+void KSAdminApp::OnReadPkgTagForRegister(RegistrationRequest registration,
+                                         const std::string& brand_fallback,
+                                         WriteBrandFileOption write_brand_file,
+                                         const std::string& tag_string) {
+  if (write_brand_file == WriteBrandFileOption::kNever) {
+    OnWriteBrandFileForRegister(registration);
+    return;
+  }
+
+  std::string brand_to_use = brand_fallback;
+  if (!tag_string.empty()) {
+    tagging::TagArgs tag_args{};
+    if (tagging::Parse(tag_string, {}, tag_args) ==
+        tagging::ErrorCode::kSuccess) {
+      if (!tag_args.brand_code.empty()) {
+        brand_to_use = tag_args.brand_code;
+      }
+    }
+  }
+
+  if (brand_to_use.empty()) {
+    LOG(WARNING) << "No brand was found; cannot write brand file.";
+    OnWriteBrandFileForRegister(registration);
+    return;
+  }
+
+  registration.brand_code = brand_to_use;
+
+  if (write_brand_file != WriteBrandFileOption::kNever) {
+    const base::FilePath brand_path = registration.brand_path;
+    if (brand_path.empty()) {
+      LOG(ERROR) << "--write-brand-file requires --brand-path.";
+      Shutdown(1);
+      return;
+    }
+
+    const std::string brand_key = SwitchValue(kCommandBrandKey);
+    const std::string key_to_use =
+        brand_key.empty() ? base::SysNSStringToUTF8(kCRUTicketBrandKey)
+                          : brand_key;
+
+    base::ThreadPool::PostTaskAndReply(
+        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
+        base::BindOnce(&MaybeWriteBrandFile, brand_path, key_to_use,
+                       brand_to_use, write_brand_file),
+        base::BindOnce(&KSAdminApp::OnWriteBrandFileForRegister, this,
+                       registration));
+    return;
+  }
+
+  OnWriteBrandFileForRegister(registration);
+}
+
+void KSAdminApp::OnWriteBrandFileForRegister(RegistrationRequest registration) {
   UpdaterScope scope =
       geteuid() == 0 ? UpdaterScope::kSystem : UpdaterScope::kUser;
   MaybeInstallUpdater(scope);
@@ -574,13 +742,13 @@ void KSAdminApp::DoUpdateApp(UpdaterScope scope) {
       UpdateService::PolicySameVersionUpdate::kNotAllowed, /*language=*/{},
       base::BindRepeating([](const UpdateService::UpdateState& update_state) {
         if (update_state.state == UpdateService::UpdateState::State::kUpdated) {
-          printf("Finished updating (errors=%d reboot=%s)\n", 0, "YES");
+          std::cout << "Finished updating (errors=0 reboot=YES)\n";
         }
       }),
       base::BindOnce(
           [](base::OnceCallback<void(int)> cb, UpdateService::Result result) {
             if (result == UpdateService::Result::kSuccess) {
-              printf("Available updates: (\n)\n");
+              std::cout << "Available updates: (\n)\n";
               std::move(cb).Run(0);
             } else {
               LOG(ERROR) << "Error code: " << result;
@@ -622,18 +790,18 @@ void KSAdminApp::DoListAppUpdate(UpdaterScope scope) {
             if (result == UpdateService::Result::kSuccess) {
               // This output format must not be changed, because the Keystone
               // Registration Framework is expecting the exact format.
-              printf("Available updates: (\n");
+              std::cout << "Available updates: (\n";
               if (!update_check_result->next_version().empty()) {
-                printf("\t{\n"
-                       "\tkServerProductID = \"%s\";\n"
-                       "\tkServerDisplayVersion = \"%s\";\n"
-                       "\tkServerVersion = \"%s\";\n"
-                       "\t}\n",
-                       update_check_result->app_id().c_str(),
-                       update_check_result->next_version().c_str(),
-                       update_check_result->next_version().c_str());
+                std::cout << "\t{\n"
+                          << "\tkServerProductID = \""
+                          << update_check_result->app_id() << "\";\n"
+                          << "\tkServerDisplayVersion = \""
+                          << update_check_result->next_version() << "\";\n"
+                          << "\tkServerVersion = \""
+                          << update_check_result->next_version() << "\";\n"
+                          << "\t}\n";
               }
-              printf(")\n");
+              std::cout << ")\n";
               std::move(cb).Run(0);
             } else {
               LOG(ERROR) << "Error code: " << result;
@@ -681,9 +849,9 @@ int KSAdminApp::PrintKeystoneTag(UpdaterScope scope,
     KSTicket* ticket =
         [store objectForKey:[base::SysUTF8ToNSString(app_id) lowercaseString]];
     if (ticket) {
-      printf("%s\n", base::SysNSStringToUTF8([ticket determineTag]).c_str());
+      std::cout << base::SysNSStringToUTF8([ticket determineTag]) << "\n";
     } else {
-      printf("No ticket for %s\n", app_id.c_str());
+      std::cout << "No ticket for " << app_id << "\n";
       return 1;
     }
   }
@@ -716,8 +884,7 @@ void KSAdminApp::DoPrintTag(UpdaterScope scope) {
                 });
         if (it != std::end(states)) {
           KSTicket* ticket = TicketFromAppState(*it);
-          printf("%s\n",
-                 base::SysNSStringToUTF8([ticket determineTag]).c_str());
+          std::cout << base::SysNSStringToUTF8([ticket determineTag]) << "\n";
 
         } else {
           // Fallback to print tag from legacy Keystone tickets if there's no
@@ -732,7 +899,7 @@ void KSAdminApp::DoPrintTag(UpdaterScope scope) {
 }
 
 void KSAdminApp::PrintVersion() {
-  printf("%s\n", kUpdaterVersion);
+  std::cout << kUpdaterVersion << "\n";
   Shutdown(0);
 }
 
@@ -745,8 +912,8 @@ bool KSAdminApp::PrintKeystoneTickets(UpdaterScope scope,
     if (app_id.empty()) {
       if (store.count > 0) {
         for (NSString* key in store) {
-          printf("%s\n",
-                 base::SysNSStringToUTF8([store[key] description]).c_str());
+          std::cout << base::SysNSStringToUTF8([store[key] description])
+                    << "\n";
         }
         return true;
       }
@@ -754,12 +921,12 @@ bool KSAdminApp::PrintKeystoneTickets(UpdaterScope scope,
       KSTicket* ticket = [store
           objectForKey:[base::SysUTF8ToNSString(app_id) lowercaseString]];
       if (ticket) {
-        printf("%s\n", base::SysNSStringToUTF8([ticket description]).c_str());
+        std::cout << base::SysNSStringToUTF8([ticket description]) << "\n";
         return true;
       }
     }
 
-    printf("No tickets.\n");
+    std::cout << "No tickets.\n";
     return false;
   }
 }
@@ -781,7 +948,7 @@ void KSAdminApp::DoPrintTickets(UpdaterScope scope) {
             continue;
           }
           KSTicket* ticket = TicketFromAppState(state);
-          printf("%s\n", base::SysNSStringToUTF8([ticket description]).c_str());
+          std::cout << base::SysNSStringToUTF8([ticket description]) << "\n";
           ticket_printed = true;
         }
 
@@ -814,7 +981,40 @@ void KSAdminApp::PrintXattrTagBrand() {
   }
 
   // Empty brand code is not an error.
-  printf("%s\n", tag_result->brand_code.c_str());
+  std::cout << tag_result->brand_code << "\n";
+  Shutdown(0);
+}
+
+void KSAdminApp::ReadPkgTag() {
+  const std::string path_str = SwitchValue(kCommandReadPkgTag);
+  if (path_str.empty()) {
+    LOG(ERROR) << kCommandReadPkgTag << " requires a path.";
+    Shutdown(1);
+    return;
+  }
+
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
+      base::BindOnce(&tagging::BinaryReadTagString, base::FilePath(path_str)),
+      base::BindOnce(&KSAdminApp::OnReadPkgTagContent, this));
+}
+
+void KSAdminApp::OnReadPkgTagContent(const std::string& tag_string) {
+  if (tag_string.empty()) {
+    LOG(ERROR) << "Can't read tag from PKG";
+    Shutdown(1);
+    return;
+  }
+
+  tagging::TagArgs tag_args;
+  const tagging::ErrorCode error = tagging::Parse(tag_string, {}, tag_args);
+  if (error != tagging::ErrorCode::kSuccess) {
+    LOG(ERROR) << "Can't parse tag string: " << error;
+    Shutdown(1);
+    return;
+  }
+
+  std::cout << tag_args.brand_code << "\n";
   Shutdown(0);
 }
 
@@ -835,6 +1035,7 @@ void KSAdminApp::FirstTaskRun() {
       {kCommandPrintTickets, &KSAdminApp::PrintTickets},
       {kCommandRegister, &KSAdminApp::Register},
       {kCommandXattrTagBrand, &KSAdminApp::PrintXattrTagBrand},
+      {kCommandReadPkgTag, &KSAdminApp::ReadPkgTag},
   };
   for (const auto& [command, method] : commands) {
     if (HasSwitch(command)) {

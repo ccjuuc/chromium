@@ -56,7 +56,9 @@ void WaitUntilTabResumptionTileVisibleOrTimeout(bool should_show) {
 }
 
 NSString* const kGroupName = @"1group";
-const char kZeroSecondsThreshold[] = "0";
+
+// Threshold value of 0 seconds for testing immediate relaunch.
+NSNumber* const kZeroSecondsThreshold = @0;
 
 }  // namespace
 
@@ -67,20 +69,10 @@ const char kZeroSecondsThreshold[] = "0";
 @implementation StartSurfaceTestCase
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
-  AppLaunchConfiguration config;
+  AppLaunchConfiguration config = [super appConfigurationForTestCase];
   config.relaunch_policy = ForceRelaunchByCleanShutdown;
 
   config.additional_args.push_back("--test-ios-module-ranker=tab_resumption");
-
-  if ([self isRunningTest:@selector(FLAKY_testShowTabGroupInGridOnStart)] ||
-      [self isRunningTest:@selector
-            (testDoNotShowTabGroupInGridOnStartInIncognitoMode)]) {
-    config.features_enabled_and_params.push_back(
-        {kShowTabGroupInGridOnStart,
-         {{{kShowTabGroupInGridInactiveDurationInSeconds,
-            kZeroSecondsThreshold}}}});
-    return config;
-  }
 
   return config;
 }
@@ -93,6 +85,8 @@ const char kZeroSecondsThreshold[] = "0";
 }
 
 - (void)tearDownHelper {
+  [ChromeEarlGrey
+      removeUserDefaultsObjectForKey:kShowTabGroupInGridInactiveDurationKey];
   ResetMakeHomeSurfaceOpenImmediately();
   [super tearDownHelper];
 }
@@ -199,11 +193,13 @@ const char kZeroSecondsThreshold[] = "0";
 
 // Tests that the tab group in grid view is opened if Chrome is activated in the
 // right time interval.
-// TODO(crbug.com/462071614): Re-enable flaky test. This test is flaky due
-// to devices possibly running under Stage Manager, hence the app never goes
-// in the background. These tests expect the app to be backgrounding, and
-// fail.
-- (void)FLAKY_testShowTabGroupInGridOnStart {
+- (void)testShowTabGroupInGridOnStart {
+  [ChromeEarlGrey setUserDefaultsObject:kZeroSecondsThreshold
+                                 forKey:kShowTabGroupInGridInactiveDurationKey];
+  // This test needs to be in the interval between the
+  // ShowTabGroupInGridInactiveDurationInSeconds and the HomeSurfaceDuration.
+  ResetMakeHomeSurfaceOpenImmediately();
+
   [ChromeEarlGreyUI openTabGrid];
 
   // Create a tab group with an item at 0.
@@ -218,7 +214,7 @@ const char kZeroSecondsThreshold[] = "0";
       performAction:grey_tap()];
 
   // Simulate background then foreground activation.
-  [[AppLaunchManager sharedManager] backgroundAndForegroundApp];
+  [self backgroundAndForegroundApp];
 
   // Check that the tab group in grid view is open
   [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridCellAtIndex(0)]
@@ -242,7 +238,7 @@ const char kZeroSecondsThreshold[] = "0";
       performAction:grey_tap()];
 
   // Simulate background then foreground activation.
-  [[AppLaunchManager sharedManager] backgroundAndForegroundApp];
+  [self backgroundAndForegroundApp];
 
   // Check that the tab group in grid view is not open.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridCellAtIndex(0)]
@@ -252,6 +248,12 @@ const char kZeroSecondsThreshold[] = "0";
 // Tests that the tab group in grid view is not opened if Chrome is activated in
 // the right time interval but in Incognito mode.
 - (void)testDoNotShowTabGroupInGridOnStartInIncognitoMode {
+  [ChromeEarlGrey setUserDefaultsObject:kZeroSecondsThreshold
+                                 forKey:kShowTabGroupInGridInactiveDurationKey];
+  // This test needs to be in the interval between the
+  // ShowTabGroupInGridInactiveDurationInSeconds and the HomeSurfaceDuration.
+  ResetMakeHomeSurfaceOpenImmediately();
+
   [ChromeEarlGrey openNewIncognitoTab];
 
   [ChromeEarlGreyUI openTabGrid];
@@ -268,7 +270,7 @@ const char kZeroSecondsThreshold[] = "0";
       performAction:grey_tap()];
 
   // Simulate background then foreground activation.
-  [[AppLaunchManager sharedManager] backgroundAndForegroundApp];
+  [self backgroundAndForegroundApp];
 
   // Check that the tab group in grid view is not open.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridCellAtIndex(0)]
@@ -296,7 +298,7 @@ const char kZeroSecondsThreshold[] = "0";
                   @"One tab was expected to be open");
 
   // Simulate background then foreground activation.
-  [[AppLaunchManager sharedManager] backgroundAndForegroundApp];
+  [self backgroundAndForegroundApp];
 
   // Assert NTP is visible by checking that the fake omnibox is here.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::FakeOmnibox()]

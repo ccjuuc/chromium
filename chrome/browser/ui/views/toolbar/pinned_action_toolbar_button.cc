@@ -8,20 +8,22 @@
 #include <type_traits>
 
 #include "base/auto_reset.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/metrics/user_metrics.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/customize_chrome/side_panel_controller.h"
 #include "chrome/browser/ui/layout_constants.h"
+#include "chrome/browser/ui/side_panel/side_panel_action_callback.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_ids.h"
 #include "chrome/browser/ui/views/event_utils.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_action_callback.h"
 #include "chrome/browser/ui/views/toolbar/pinned_action_toolbar_button_menu_model.h"
 #include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.h"
 #include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container_layout.h"
@@ -35,6 +37,7 @@
 #include "ui/actions/actions.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/menu_separator_types.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/insets.h"
@@ -60,12 +63,17 @@ DEFINE_UI_CLASS_PROPERTY_KEY(
     std::underlying_type_t<PinnedToolbarActionFlexPriority>(
         PinnedToolbarActionFlexPriority::kLow))
 
+DEFINE_UI_CLASS_PROPERTY_TYPE(CreateCustomPinnedActionToolbarButtonCallback*)
+DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(
+    CreateCustomPinnedActionToolbarButtonCallback,
+    kCustomPinnedActionToolbarButtonFactoryKey)
+
 PinnedActionToolbarButton::PinnedActionToolbarButton(
     Browser* browser,
     actions::ActionId action_id,
     base::WeakPtr<PinnedToolbarActionsContainer> container)
     : ToolbarButton(
-          PressedCallback(),
+          views::Button::PressedCallback(),
           std::make_unique<PinnedActionToolbarButtonMenuModel>(browser,
                                                                action_id),
           nullptr,
@@ -73,14 +81,18 @@ PinnedActionToolbarButton::PinnedActionToolbarButton(
       browser_(browser),
       action_id_(action_id),
       container_(container) {
-  SetProperty(views::kElementIdentifierKey,
-              kPinnedActionToolbarButtonElementId);
-  ConfigureInkDropForToolbar(this);
+  if (auto element_id =
+          pinned_toolbar_actions::GetElementIdentifierForAction(action_id)) {
+    SetProperty(views::kElementIdentifierKey, element_id);
+  }
+  ConfigureInkDrop(this);
   SetHorizontalAlignment(gfx::ALIGN_CENTER);
   // Pinned action toolbar buttons have right margin and no left margin.
-  SetProperty(views::kMarginsKey,
-              gfx::Insets::TLBR(
-                  0, 0, 0, GetLayoutConstant(TOOLBAR_ICON_DEFAULT_MARGIN)));
+  SetProperty(
+      views::kMarginsKey,
+      gfx::Insets::TLBR(
+          0, 0, 0,
+          GetLayoutConstant(LayoutConstant::kToolbarIconDefaultMargin)));
   set_drag_controller(container_.get());
   GetViewAccessibility().SetDescription(
       std::u16string(), ax::mojom::DescriptionFrom::kAttributeExplicitlyEmpty);
@@ -158,7 +170,8 @@ void PinnedActionToolbarButton::SetPinned(bool pinned) {
 bool PinnedActionToolbarButton::OnKeyPressed(const ui::KeyEvent& event) {
   std::optional<event_utils::ReorderDirection> reorder_direction =
       event_utils::GetReorderCommandForKeyboardEvent(event);
-  if (reorder_direction && pinned_ && browser_->profile()->IsRegularProfile()) {
+  if (reorder_direction && pinned_ &&
+      browser_->GetProfile()->IsRegularProfile()) {
     int move_by = 0;
     switch (*reorder_direction) {
       case event_utils::ReorderDirection::kPrevious:
@@ -201,7 +214,9 @@ void PinnedActionToolbarButton::Layout(PassKey) {
       image_container_view()->GetLocalBounds();
   const int new_x = image_container_bounds.x() +
                     (image_container_bounds.width() - status_rect.width()) / 2;
-  const int new_y = image_container_bounds.bottom() + kStatusIndicatorSpacing;
+  const int new_y =
+      image_container_bounds.bottom() +
+      (features::IsRoundedIconsEnabled() ? 0 : kStatusIndicatorSpacing);
   // Set the new origin for status_rect
   status_rect.set_origin(gfx::Point(new_x, new_y));
   status_indicator_->SetBoundsRect(status_rect);
@@ -252,19 +267,8 @@ bool PinnedActionToolbarButton::ShouldShowEphemerallyInToolbar() {
 }
 
 void PinnedActionToolbarButton::SetActionEngaged(bool action_engaged) {
-  if (!IsActive()) {
-    SetProperty(
-        kToolbarButtonFlexPriorityKey,
-        action_engaged
-            ? static_cast<
-                  std::underlying_type_t<PinnedToolbarActionFlexPriority>>(
-                  PinnedToolbarActionFlexPriority::kMedium)
-            : static_cast<
-                  std::underlying_type_t<PinnedToolbarActionFlexPriority>>(
-                  PinnedToolbarActionFlexPriority::kLow));
-    InvalidateLayout();
-  }
   action_engaged_ = action_engaged;
+  UpdateFlexPriority();
 }
 
 void PinnedActionToolbarButton::HideStatusIndicator() {
@@ -285,26 +289,29 @@ void PinnedActionToolbarButton::OnAnchorCountChanged(size_t anchor_count) {
   // small enough that icons must overflow. Update the
   // kToolbarButtonFlexPriorityKey to make sure icons are forced visible or able
   // to overflow.
-  if (anchor_count > 0) {
+  has_anchor_ = anchor_count > 0;
+  UpdateFlexPriority();
+  if (!has_anchor_) {
+    container_->MaybeRemovePoppedOutButtonFor(GetActionId());
+  }
+}
+
+void PinnedActionToolbarButton::UpdateFlexPriority() {
+  PinnedToolbarActionFlexPriority priority =
+      PinnedToolbarActionFlexPriority::kLow;
+  if (has_anchor_) {
+    priority = PinnedToolbarActionFlexPriority::kHigh;
+  } else if (action_engaged_) {
+    priority = PinnedToolbarActionFlexPriority::kMedium;
+  }
+
+  if (static_cast<PinnedToolbarActionFlexPriority>(
+          GetProperty(kToolbarButtonFlexPriorityKey)) != priority) {
     SetProperty(
         kToolbarButtonFlexPriorityKey,
         static_cast<std::underlying_type_t<PinnedToolbarActionFlexPriority>>(
-            PinnedToolbarActionFlexPriority::kHigh));
+            priority));
     InvalidateLayout();
-    has_anchor_ = true;
-  } else {
-    SetProperty(
-        kToolbarButtonFlexPriorityKey,
-        action_engaged_
-            ? static_cast<
-                  std::underlying_type_t<PinnedToolbarActionFlexPriority>>(
-                  PinnedToolbarActionFlexPriority::kMedium)
-            : static_cast<
-                  std::underlying_type_t<PinnedToolbarActionFlexPriority>>(
-                  PinnedToolbarActionFlexPriority::kLow));
-    InvalidateLayout();
-    has_anchor_ = false;
-    container_->MaybeRemovePoppedOutButtonFor(GetActionId());
   }
 }
 
@@ -324,8 +331,7 @@ void PinnedActionToolbarButtonActionViewInterface::ActionItemChangedImpl(
   ButtonActionViewInterface::ActionItemChangedImpl(action_item);
 
   if (action_view_->IsIconVisible() &&
-      actions::IsActionItemClass<actions::StatefulImageActionItem>(
-          action_item)) {
+      actions::IsActionClass<actions::StatefulImageActionItem>(action_item)) {
     auto* stateful_action_item =
         static_cast<actions::StatefulImageActionItem*>(action_item);
     if (stateful_action_item->GetStatefulImage().IsVectorIcon()) {
@@ -338,24 +344,6 @@ void PinnedActionToolbarButtonActionViewInterface::ActionItemChangedImpl(
   // Update whether the action is engaged before updating the view.
   action_view_->SetActionEngaged(
       action_item->GetProperty(kActionItemUnderlineIndicatorKey));
-
-  bool is_pinnable = true;
-  switch (static_cast<actions::ActionPinnableState>(
-      action_item->GetProperty(actions::kActionItemPinnableKey))) {
-    case actions::ActionPinnableState::kNotPinnable:
-      is_pinnable = false;
-      break;
-    case actions::ActionPinnableState::kPinnable:
-    case actions::ActionPinnableState::kEnterpriseControlled:
-      is_pinnable = true;
-      break;
-    default:
-      NOTREACHED();
-  }
-
-  if (!is_pinnable && action_view_->IsPinned()) {
-    action_view_->SetVisible(false);
-  }
 
   OnViewChangedImpl(action_item);
 
@@ -382,21 +370,35 @@ void PinnedActionToolbarButtonActionViewInterface::InvokeActionImpl(
       action_view_->SetNeedsDelayedDestruction(true);
   action_item->InvokeAction(
       actions::ActionInvocationContext::Builder()
-          .SetProperty(
-              kSidePanelOpenTriggerKey,
-              static_cast<std::underlying_type_t<SidePanelOpenTrigger>>(
-                  SidePanelOpenTrigger::kPinnedEntryToolbarButton))
+          .SetProperty(kSidePanelOpenTriggerKey,
+                       SidePanelOpenTrigger::kPinnedEntryToolbarButton)
           .Build());
 }
 
 void PinnedActionToolbarButtonActionViewInterface::OnViewChangedImpl(
     actions::ActionItem* action_item) {
+  bool is_pinnable = true;
+  switch (static_cast<actions::ActionPinnableState>(
+      action_item->GetProperty(actions::kActionItemPinnableKey))) {
+    case actions::ActionPinnableState::kNotPinnable:
+      is_pinnable = false;
+      break;
+    case actions::ActionPinnableState::kPinnable:
+    case actions::ActionPinnableState::kEnterpriseControlled:
+      is_pinnable = true;
+      break;
+    default:
+      NOTREACHED();
+  }
+
+  if (!is_pinnable && action_view_->IsPinned()) {
+    action_view_->SetVisible(false);
+  }
+
   // Update the button's icon. If the action item is a stateful image action
   // item, use the stateful image. Otherwise, use the action item's image.
   ui::ImageModel image_model;
-
-  if (actions::IsActionItemClass<actions::StatefulImageActionItem>(
-          action_item)) {
+  if (actions::IsActionClass<actions::StatefulImageActionItem>(action_item)) {
     image_model = static_cast<actions::StatefulImageActionItem*>(action_item)
                       ->GetStatefulImage();
   } else {

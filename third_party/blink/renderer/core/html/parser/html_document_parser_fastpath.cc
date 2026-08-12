@@ -13,6 +13,7 @@
 #include "base/containers/span.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/trace_event/trace_event.h"
 #include "third_party/blink/renderer/core/dom/attribute.h"
@@ -379,8 +380,10 @@ String ScanTextResult<UChar>::TextToString() const {
 //   events that may be fired. Allowing this could be problematic if the fast
 //   path fails. For example, the 'onload' event of an <img> would be called
 //   multiple times if parsing fails.
-// - Fails if a text is encountered larger than Text::kDefaultLengthLimit. This
-//   requires special processing.
+// - When the SplitLargeTextNodes feature is enabled, fails if a text is
+//   encountered larger than
+//   HTMLConstructionSite::kObsoleteTextNodeLengthLimit. This requires special
+//   processing.
 // - Fails if a deep hierarchy is encountered. This is both to avoid a crash,
 //   but also at a certain depth elements get added as siblings vs children (see
 //   use of HTMLConstructionSite::kMaximumHTMLParserDOMTreeDepth).
@@ -451,7 +454,7 @@ class HTMLFastPathParser {
     return false;
   }
 
-  int NumberOfBytesParsed() const { return sizeof(Char) * pos_; }
+  size_t NumberOfBytesParsed() const { return sizeof(Char) * pos_; }
 
   HtmlFastPathResult parse_result() const { return parse_result_; }
 
@@ -618,6 +621,15 @@ class HTMLFastPathParser {
 
     struct Li : ContainerTag<HTMLLIElement, PermittedParents::kFlowContent> {
       static constexpr auto tagname = base::span_from_cstring("li");
+      static Element* ParseChild(HTMLFastPathParser& self) {
+        bool was_inside_of_tag_li = self.inside_of_tag_li_;
+        self.inside_of_tag_li_ = true;
+        Element* res =
+            ContainerTag<HTMLLIElement,
+                         PermittedParents::kFlowContent>::ParseChild(self);
+        self.inside_of_tag_li_ = was_inside_of_tag_li;
+        return res;
+      }
     };
 
     struct Label
@@ -1283,13 +1295,16 @@ class HTMLFastPathParser {
       DCHECK(scanned_text.text.empty() || !scanned_text.escaped_text);
       if (!scanned_text.text.empty()) {
         const auto text = scanned_text.text;
-        if (text.size() >= Text::kDefaultLengthLimit) {
+        if (RuntimeEnabledFeatures::SplitLargeTextNodesEnabled() &&
+            text.size() >= HTMLConstructionSite::kObsoleteTextNodeLengthLimit) {
           return Fail(HtmlFastPathResult::kFailedBigText);
         }
         parent->ParserAppendChildInDocumentFragment(
             Text::Create(document_, scanned_text.TryCanonicalizeString()));
       } else if (scanned_text.escaped_text) {
-        if (scanned_text.escaped_text->size() >= Text::kDefaultLengthLimit) {
+        if (RuntimeEnabledFeatures::SplitLargeTextNodesEnabled() &&
+            scanned_text.escaped_text->size() >=
+                HTMLConstructionSite::kObsoleteTextNodeLengthLimit) {
           return Fail(HtmlFastPathResult::kFailedBigText);
         }
         parent->ParserAppendChildInDocumentFragment(
@@ -1386,12 +1401,19 @@ class HTMLFastPathParser {
       attribute_names_.push_back(attribute.LocalName().Impl());
       attribute_buffer_.push_back(std::move(attribute));
     }
-    std::sort(attribute_names_.begin(), attribute_names_.end());
-    if (std::adjacent_find(attribute_names_.begin(), attribute_names_.end()) !=
-        attribute_names_.end()) {
-      // Found duplicate attributes. We would have to ignore repeated
-      // attributes, but leave this to the general parser instead.
-      return Fail(HtmlFastPathResult::kFailedParsingAttributes);
+    if (attribute_names_.size() == 2) {
+      if (attribute_names_[0] == attribute_names_[1]) {
+        return Fail(HtmlFastPathResult::kFailedParsingAttributes);
+      }
+    } else if (attribute_names_.size() > 2) {
+      std::sort(attribute_names_.begin(), attribute_names_.end());
+      if (std::adjacent_find(attribute_names_.begin(),
+                             attribute_names_.end()) !=
+          attribute_names_.end()) {
+        // Found duplicate attributes. We would have to ignore repeated
+        // attributes, but leave this to the general parser instead.
+        return Fail(HtmlFastPathResult::kFailedParsingAttributes);
+      }
     }
     parent->ParserSetAttributes(attribute_buffer_);
     attribute_buffer_.clear();
@@ -1576,9 +1598,7 @@ bool CanUseFastPath(Document& document,
   }
 
   // Disable when tracing is enabled to preserve trace behavior.
-  bool tracing_enabled = false;
-  TRACE_EVENT_CATEGORY_GROUP_ENABLED("devtools.timeline", &tracing_enabled);
-  if (tracing_enabled) {
+  if (TRACE_EVENT_CATEGORY_ENABLED("devtools.timeline")) {
     LogFastPathResult(HtmlFastPathResult::kFailedTracingEnabled);
     return false;
   }
@@ -1601,13 +1621,6 @@ bool CanUseFastPath(Document& document,
     return false;
   }
 
-  // TODO(crbug.com/1453291) For now, declarative DOM Parts are not supported by
-  // the fast path parser.
-  if (RuntimeEnabledFeatures::DOMPartsAPIEnabled() && template_element &&
-      template_element->hasAttribute(html_names::kParsepartsAttr)) {
-    LogFastPathResult(HtmlFastPathResult::kFailedUnsupportedContextTag);
-    return false;
-  }
   return true;
 }
 
@@ -1772,11 +1785,10 @@ bool TryParsingHTMLFragmentImpl(const base::span<const Char>& source,
                                 HTMLFragmentParsingBehaviorSet behavior,
                                 bool* failed_because_unsupported_tag) {
   base::ElapsedTimer parse_timer;
-  int number_of_bytes_parsed;
   HTMLFastPathParser<Char> parser{source, document, root_node};
   const bool success = parser.Run(context_element, behavior);
   LogFastPathResult(parser.parse_result());
-  number_of_bytes_parsed = parser.NumberOfBytesParsed();
+  size_t number_of_bytes_parsed = parser.NumberOfBytesParsed();
   // The time needed to parse is typically < 1ms (even at the 99%).
   if (success) {
     UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
@@ -1811,11 +1823,13 @@ bool TryParsingHTMLFragmentImpl(const base::span<const Char>& source,
     }
   }
   if (success) {
-    UMA_HISTOGRAM_COUNTS_10M("Blink.HTMLFastPathParser.SuccessfulParseSize",
-                             number_of_bytes_parsed);
+    UMA_HISTOGRAM_COUNTS_10M(
+        "Blink.HTMLFastPathParser.SuccessfulParseSize",
+        base::saturated_cast<uint32_t>(number_of_bytes_parsed));
   } else {
-    UMA_HISTOGRAM_COUNTS_10M("Blink.HTMLFastPathParser.AbortedParseSize",
-                             number_of_bytes_parsed);
+    UMA_HISTOGRAM_COUNTS_10M(
+        "Blink.HTMLFastPathParser.AbortedParseSize",
+        base::saturated_cast<uint32_t>(number_of_bytes_parsed));
   }
   return success;
 }

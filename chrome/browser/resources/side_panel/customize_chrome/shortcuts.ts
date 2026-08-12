@@ -18,7 +18,6 @@ import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import {CustomizeChromeAction, recordCustomizeChromeAction} from './common.js';
-import type {CustomizeChromePageCallbackRouter, CustomizeChromePageHandlerInterface} from './customize_chrome.mojom-webui.js';
 import {CustomizeChromeApiProxy} from './customize_chrome_api_proxy.js';
 import {getCss} from './shortcuts.css.js';
 import {getHtml} from './shortcuts.html.js';
@@ -30,6 +29,15 @@ export interface ShortcutsElement {
     showToggle: CrToggleElement,
     radioSelection: CrRadioGroupElement,
   };
+}
+
+interface ShortcutConfig {
+  type: TileType;
+  title: string;
+  description: string;
+  buttonName: string;
+  containerName: string;
+  disabled: boolean;
 }
 
 export class ShortcutsElement extends CrLitElement {
@@ -47,7 +55,7 @@ export class ShortcutsElement extends CrLitElement {
 
   static override get properties() {
     return {
-      shortcutsType_: {type: Object},
+      shortcutsType_: {type: Number},
       initialized_: {type: Boolean},
       radioSelection_: {type: String},
       show_: {type: Boolean},
@@ -55,7 +63,6 @@ export class ShortcutsElement extends CrLitElement {
       showEnterpriseShortcuts_: {type: Boolean},
       shortcutConfigs_: {type: Array},
       disabledShortcuts_: {type: Array},
-      ntpEnterpriseShortcutsMixingAllowed_: {type: Boolean},
     };
   }
 
@@ -65,34 +72,24 @@ export class ShortcutsElement extends CrLitElement {
   protected accessor show_: boolean = false;
   protected accessor showPersonalShortcuts_: boolean = false;
   protected accessor showEnterpriseShortcuts_: boolean = false;
-  protected accessor shortcutConfigs_: any[] = [];
+  protected accessor shortcutConfigs_: ShortcutConfig[] = [];
   protected accessor disabledShortcuts_: TileType[] = [];
-  protected accessor ntpEnterpriseShortcutsMixingAllowed_: boolean =
-      loadTimeData.getBoolean('ntpEnterpriseShortcutsMixingAllowed');
 
   private setMostVisitedSettingsListenerId_: number|null = null;
 
-  private callbackRouter_: CustomizeChromePageCallbackRouter;
-  private pageHandler_: CustomizeChromePageHandlerInterface;
-
-  constructor() {
-    super();
-    this.pageHandler_ = CustomizeChromeApiProxy.getInstance().handler;
-    this.callbackRouter_ = CustomizeChromeApiProxy.getInstance().callbackRouter;
-  }
+  private apiProxy_: CustomizeChromeApiProxy =
+      CustomizeChromeApiProxy.getInstance();
 
   override connectedCallback() {
     super.connectedCallback();
     this.setMostVisitedSettingsListenerId_ =
-        this.callbackRouter_.setMostVisitedSettings.addListener(
+        this.apiProxy_.callbackRouter.setMostVisitedSettings.addListener(
             (shortcutsTypes: TileType[], shortcutsVisible: boolean,
              shortcutsPersonalVisible: boolean,
              disabledShortcuts: TileType[]) => {
-              // If enterprise shortcuts mixing is allowed, only track personal
-              // shortcut types in `shortcutsType_`.
-              this.shortcutsType_ = shortcutsTypes.find(
-                  t => !this.ntpEnterpriseShortcutsMixingAllowed_ ||
-                      t !== TileType.kEnterpriseShortcuts);
+              // Only track personal shortcut types in `shortcutsType_`.
+              this.shortcutsType_ =
+                  shortcutsTypes.find(t => t !== TileType.kEnterpriseShortcuts);
               this.show_ = shortcutsVisible;
               this.disabledShortcuts_ = disabledShortcuts;
               this.showPersonalShortcuts_ = shortcutsPersonalVisible;
@@ -100,13 +97,14 @@ export class ShortcutsElement extends CrLitElement {
                   shortcutsTypes.includes(TileType.kEnterpriseShortcuts);
               this.initialized_ = true;
             });
-    this.pageHandler_.updateMostVisitedSettings();
+    this.apiProxy_.handler.updateMostVisitedSettings();
   }
 
   override disconnectedCallback() {
     super.disconnectedCallback();
     assert(this.setMostVisitedSettingsListenerId_);
-    this.callbackRouter_.removeListener(this.setMostVisitedSettingsListenerId_);
+    this.apiProxy_.callbackRouter.removeListener(
+        this.setMostVisitedSettingsListenerId_);
   }
 
   override willUpdate(changedProperties: PropertyValues<this>) {
@@ -126,7 +124,7 @@ export class ShortcutsElement extends CrLitElement {
     }
   }
 
-  private computeShortcutConfigs_() {
+  private computeShortcutConfigs_(): ShortcutConfig[] {
     return [
       {
         type: TileType.kEnterpriseShortcuts,
@@ -158,14 +156,13 @@ export class ShortcutsElement extends CrLitElement {
 
   private setMostVisitedSettings_() {
     const types: TileType[] = [];
-    if (this.ntpEnterpriseShortcutsMixingAllowed_ &&
-        this.showEnterpriseShortcuts_) {
+    if (this.showEnterpriseShortcuts_) {
       types.push(TileType.kEnterpriseShortcuts);
     }
     if (this.shortcutsType_ !== undefined) {
       types.push(this.shortcutsType_);
     }
-    this.pageHandler_.setMostVisitedSettings(
+    this.apiProxy_.handler.setMostVisitedSettings(
         types,
         /* shortcutsVisible= */ this.show_,
         /* shortcutsPersonalVisible= */ this.showPersonalShortcuts_);
@@ -190,9 +187,6 @@ export class ShortcutsElement extends CrLitElement {
   }
 
   private setShowPersonalShortcuts_(show: boolean) {
-    if (!this.ntpEnterpriseShortcutsMixingAllowed_) {
-      return;
-    }
     if (this.showPersonalShortcuts_ === show) {
       return;
     }
@@ -209,9 +203,6 @@ export class ShortcutsElement extends CrLitElement {
   }
 
   private setShowEnterpriseShortcuts_(show: boolean) {
-    if (!this.ntpEnterpriseShortcutsMixingAllowed_) {
-      return;
-    }
     if (this.showEnterpriseShortcuts_ === show) {
       return;
     }
@@ -227,7 +218,7 @@ export class ShortcutsElement extends CrLitElement {
     this.setShowEnterpriseShortcuts_(!this.showEnterpriseShortcuts_);
   }
 
-  protected onRadioSelectionChanged_(e: CustomEvent<{value: string}>) {
+  protected onRadioSelectionSelectedChanged_(e: CustomEvent<{value: string}>) {
     if (e.detail.value === this.radioSelection_) {
       return;
     }
@@ -238,7 +229,8 @@ export class ShortcutsElement extends CrLitElement {
     this.setMostVisitedSettings_();
   }
 
-  protected onOptionClick_(type: TileType) {
+  protected onOptionClick_(e: Event) {
+    const type = Number((e.currentTarget as HTMLElement).dataset['type']);
     if (this.shortcutsType_ === type) {
       return;
     }
@@ -255,12 +247,9 @@ export class ShortcutsElement extends CrLitElement {
   }
 
   protected getRadioSelectionShortcutConfigs_() {
-    // If ntpEnterpriseShortcutsMixingAllowed_ is true, do not show enterprise
-    // shortcut types in the radio selection.
+    // Only show personal shortcut types in the radio selection.
     return this.shortcutConfigs_.filter(
-        item => (!this.ntpEnterpriseShortcutsMixingAllowed_ ||
-                 item.type !== TileType.kEnterpriseShortcuts) &&
-            !item.disabled);
+        item => item.type !== TileType.kEnterpriseShortcuts && !item.disabled);
   }
 
   protected getEnterpriseShortcutConfigs_() {
@@ -269,9 +258,10 @@ export class ShortcutsElement extends CrLitElement {
   }
 
   protected showEnterprisePersonalMixedSidepanel_() {
-    return this.ntpEnterpriseShortcutsMixingAllowed_ &&
-        !this.disabledShortcuts_.includes(TileType.kEnterpriseShortcuts);
+    return !this.disabledShortcuts_.includes(TileType.kEnterpriseShortcuts);
   }
+
+
 }
 
 declare global {

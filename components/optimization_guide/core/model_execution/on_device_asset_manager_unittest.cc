@@ -9,12 +9,11 @@
 #include "base/files/file_path.h"
 #include "base/functional/callback_helpers.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/test.pb.h"
 #include "base/test/test_future.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
 #include "components/optimization_guide/core/delivery/model_provider_registry.h"
-#include "components/optimization_guide/core/delivery/test_model_info_builder.h"
 #include "components/optimization_guide/core/delivery/test_optimization_guide_model_provider.h"
 #include "components/optimization_guide/core/model_execution/model_execution_prefs.h"
 #include "components/optimization_guide/core/model_execution/on_device_features.h"
@@ -26,7 +25,6 @@
 #include "components/optimization_guide/core/model_execution/test/fake_model_broker.h"
 #include "components/optimization_guide/core/model_execution/test/feature_config_builder.h"
 #include "components/optimization_guide/core/model_execution/test/test_on_device_model_component_state_manager.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_proto_util.h"
 #include "components/optimization_guide/core/optimization_guide_util.h"
 #include "components/optimization_guide/public/mojom/model_broker.mojom-shared.h"
@@ -62,6 +60,10 @@ class OnDeviceAssetManagerTest : public testing::Test {
     task_environment_.FastForwardBy(base::Seconds(1));
   }
 
+  void UpdateSafetyTarget(const ModelInfo& info) {
+    UpdateTarget(proto::OPTIMIZATION_TARGET_GENERALIZED_SAFETY, info);
+  }
+
   PrefService* local_state() { return &broker_.local_state(); }
 
   bool IsSupplementalModelRegistered() {
@@ -85,7 +87,7 @@ TEST_F(OnDeviceAssetManagerTest,
   EXPECT_TRUE(IsSupplementalModelRegistered());
 }
 
-TEST_F(OnDeviceAssetManagerTest, RegistersTextSafetyModelIfEnabled) {
+TEST_F(OnDeviceAssetManagerTest, RegistersTextSafetyModel) {
   CreateAssetManager();
 
   // Text safety model should not be registered until the base model is ready.
@@ -96,14 +98,6 @@ TEST_F(OnDeviceAssetManagerTest, RegistersTextSafetyModelIfEnabled) {
   EXPECT_TRUE(IsSupplementalModelRegistered());
 }
 
-TEST_F(OnDeviceAssetManagerTest, DoesNotRegisterTextSafetyIfNotEnabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures({}, {features::kTextSafetyClassifier});
-  InstallBaseModel();
-  CreateAssetManager();
-  EXPECT_FALSE(IsSupplementalModelRegistered());
-}
-
 TEST_F(OnDeviceAssetManagerTest, DoesNotNotifyServiceControllerWrongTarget) {
   InstallBaseModel();
   CreateAssetManager();
@@ -112,7 +106,7 @@ TEST_F(OnDeviceAssetManagerTest, DoesNotNotifyServiceControllerWrongTarget) {
                fake_safety.model_info());
 
   EXPECT_FALSE(broker_.GetOrCreateBrokerState()
-                   .service_controller()
+                   .base_model_controller()
                    .GetSafetyClientForTesting()
                    .safety_model_info());
 }
@@ -121,10 +115,9 @@ TEST_F(OnDeviceAssetManagerTest, NotifiesServiceController) {
   InstallBaseModel();
   CreateAssetManager();
   FakeSafetyModelAsset fake_safety(ComposeSafetyConfig());
-  UpdateTarget(proto::OPTIMIZATION_TARGET_TEXT_SAFETY,
-               fake_safety.model_info());
+  UpdateSafetyTarget(fake_safety.model_info());
   ASSERT_TRUE(broker_.GetOrCreateBrokerState()
-                  .service_controller()
+                  .base_model_controller()
                   .GetSafetyClientForTesting()
                   .safety_model_info());
 }
@@ -136,7 +129,7 @@ TEST_F(OnDeviceAssetManagerTest, UpdateLanguageDetection) {
   UpdateTarget(proto::OPTIMIZATION_TARGET_LANGUAGE_DETECTION,
                fake_language.model_info());
   EXPECT_EQ(fake_language.model_path(), broker_.GetOrCreateBrokerState()
-                                            .service_controller()
+                                            .base_model_controller()
                                             .GetSafetyClientForTesting()
                                             .language_detection_model_path());
 }
@@ -147,75 +140,77 @@ TEST_F(OnDeviceAssetManagerTest, UpdateSafetyModel) {
   FakeSafetyModelAsset fake_safety_asset(ComposeSafetyConfig());
   // Safety model info is valid but no metadata.
   {
-    base::HistogramTester histogram_tester;
-
-    std::unique_ptr<optimization_guide::ModelInfo> model_info =
-        TestModelInfoBuilder()
-            .SetVersion(10)
-            .SetAdditionalFiles(fake_safety_asset.AdditionalFiles())
-            .Build();
-    UpdateTarget(proto::OPTIMIZATION_TARGET_TEXT_SAFETY, *model_info);
-    histogram_tester.ExpectUniqueSample(
-        "OptimizationGuide.ModelExecution."
-        "OnDeviceTextSafetyModelMetadataValidity",
-        TextSafetyModelMetadataValidity::kNoMetadata, 1);
+    optimization_guide::ModelInfo model_info = {
+        .model_file_path =
+            base::FilePath::FromUTF8Unsafe(kTestAbsoluteFilePath),
+        .additional_files = fake_safety_asset.AdditionalFiles(),
+        .version = 10,
+    };
+    UpdateSafetyTarget(model_info);
+    EXPECT_FALSE(broker_.GetOrCreateBrokerState()
+                     .base_model_controller()
+                     .GetSafetyClientForTesting()
+                     .safety_model_info());
   }
 
   // Safety model info is valid but metadata is of wrong type.
   {
-    base::HistogramTester histogram_tester;
-
     proto::Any any;
     any.set_type_url("garbagetype");
-    std::unique_ptr<optimization_guide::ModelInfo> model_info =
-        TestModelInfoBuilder()
-            .SetVersion(20)
-            .SetAdditionalFiles(fake_safety_asset.AdditionalFiles())
-            .SetModelMetadata(any)
-            .Build();
-    UpdateTarget(proto::OPTIMIZATION_TARGET_TEXT_SAFETY, *model_info);
-    histogram_tester.ExpectUniqueSample(
-        "OptimizationGuide.ModelExecution."
-        "OnDeviceTextSafetyModelMetadataValidity",
-        TextSafetyModelMetadataValidity::kMetadataWrongType, 1);
+    optimization_guide::ModelInfo model_info = {
+        .model_file_path =
+            base::FilePath::FromUTF8Unsafe(kTestAbsoluteFilePath),
+        .additional_files = fake_safety_asset.AdditionalFiles(),
+        .version = 20,
+        .model_metadata = any,
+    };
+    UpdateSafetyTarget(model_info);
+    EXPECT_FALSE(broker_.GetOrCreateBrokerState()
+                     .base_model_controller()
+                     .GetSafetyClientForTesting()
+                     .safety_model_info());
   }
 
   // Safety model info is valid but no feature configs.
   {
-    base::HistogramTester histogram_tester;
-
     proto::TextSafetyModelMetadata model_metadata;
-    std::unique_ptr<optimization_guide::ModelInfo> model_info =
-        TestModelInfoBuilder()
-            .SetVersion(30)
-            .SetAdditionalFiles(fake_safety_asset.AdditionalFiles())
-            .SetModelMetadata(AnyWrapProto(model_metadata))
-            .Build();
-    UpdateTarget(proto::OPTIMIZATION_TARGET_TEXT_SAFETY, *model_info);
-    histogram_tester.ExpectUniqueSample(
-        "OptimizationGuide.ModelExecution."
-        "OnDeviceTextSafetyModelMetadataValidity",
-        TextSafetyModelMetadataValidity::kNoFeatureConfigs, 1);
+    optimization_guide::ModelInfo model_info = {
+        .model_file_path =
+            base::FilePath::FromUTF8Unsafe(kTestAbsoluteFilePath),
+        .additional_files = fake_safety_asset.AdditionalFiles(),
+        .version = 30,
+        .model_metadata = AnyWrapProto(model_metadata),
+    };
+    UpdateSafetyTarget(model_info);
+    auto* safety_model_info = broker_.GetOrCreateBrokerState()
+                                  .base_model_controller()
+                                  .GetSafetyClientForTesting()
+                                  .safety_model_info();
+    ASSERT_TRUE(safety_model_info);
+    EXPECT_FALSE(safety_model_info->GetConfig(
+        ToModelExecutionFeatureProto(mojom::OnDeviceFeature::kCompose)));
   }
 
   // Safety model info is valid and metadata has feature configs.
   {
-    base::HistogramTester histogram_tester;
-
     proto::TextSafetyModelMetadata model_metadata;
     model_metadata.add_feature_text_safety_configurations()->set_feature(
         ToModelExecutionFeatureProto(mojom::OnDeviceFeature::kCompose));
-    std::unique_ptr<optimization_guide::ModelInfo> model_info =
-        TestModelInfoBuilder()
-            .SetVersion(40)
-            .SetAdditionalFiles(fake_safety_asset.AdditionalFiles())
-            .SetModelMetadata(AnyWrapProto(model_metadata))
-            .Build();
-    UpdateTarget(proto::OPTIMIZATION_TARGET_TEXT_SAFETY, *model_info);
-    histogram_tester.ExpectUniqueSample(
-        "OptimizationGuide.ModelExecution."
-        "OnDeviceTextSafetyModelMetadataValidity",
-        TextSafetyModelMetadataValidity::kValid, 1);
+    optimization_guide::ModelInfo model_info = {
+        .model_file_path =
+            base::FilePath::FromUTF8Unsafe(kTestAbsoluteFilePath),
+        .additional_files = fake_safety_asset.AdditionalFiles(),
+        .version = 40,
+        .model_metadata = AnyWrapProto(model_metadata),
+    };
+    UpdateSafetyTarget(model_info);
+    auto* safety_model_info = broker_.GetOrCreateBrokerState()
+                                  .base_model_controller()
+                                  .GetSafetyClientForTesting()
+                                  .safety_model_info();
+    ASSERT_TRUE(safety_model_info);
+    EXPECT_TRUE(safety_model_info->GetConfig(
+        ToModelExecutionFeatureProto(mojom::OnDeviceFeature::kCompose)));
   }
 
   // Duplicate model info is ignored.
@@ -225,13 +220,14 @@ TEST_F(OnDeviceAssetManagerTest, UpdateSafetyModel) {
     proto::TextSafetyModelMetadata model_metadata;
     model_metadata.add_feature_text_safety_configurations()->set_feature(
         ToModelExecutionFeatureProto(mojom::OnDeviceFeature::kCompose));
-    std::unique_ptr<optimization_guide::ModelInfo> model_info =
-        TestModelInfoBuilder()
-            .SetVersion(40)
-            .SetAdditionalFiles(fake_safety_asset.AdditionalFiles())
-            .SetModelMetadata(AnyWrapProto(model_metadata))
-            .Build();
-    UpdateTarget(proto::OPTIMIZATION_TARGET_TEXT_SAFETY, *model_info);
+    optimization_guide::ModelInfo model_info = {
+        .model_file_path =
+            base::FilePath::FromUTF8Unsafe(kTestAbsoluteFilePath),
+        .additional_files = fake_safety_asset.AdditionalFiles(),
+        .version = 40,
+        .model_metadata = AnyWrapProto(model_metadata),
+    };
+    UpdateSafetyTarget(model_info);
     histogram_tester.ExpectTotalCount(
         "OptimizationGuide.ModelExecution.OnDeviceTextSafetyUpdateSkipped", 1);
   }

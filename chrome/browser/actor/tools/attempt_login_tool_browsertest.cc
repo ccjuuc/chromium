@@ -7,19 +7,24 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
-#include "chrome/browser/actor/actor_features.h"
+#include "chrome/browser/actor/actor_keyed_service.h"
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/actor/execution_engine.h"
 #include "chrome/browser/actor/tools/tool_request.h"
 #include "chrome/browser/actor/tools/tools_test_util.h"
+#include "chrome/browser/actor/tools/wait_tool.h"
 #include "chrome/browser/affiliations/affiliation_service_factory.h"
+#include "chrome/browser/autofill/actor/one_time_tokens/actor_login_context.h"
+#include "chrome/browser/autofill/actor/one_time_tokens/actor_one_time_token_filling_service.h"
 #include "chrome/browser/optimization_guide/mock_optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
-#include "chrome/browser/password_manager/actor_login/actor_login_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/actor.mojom.h"
 #include "chrome/common/actor/action_result.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/testing_browser_process.h"
+#include "components/actor/core/actor_features.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "components/affiliations/core/browser/mock_affiliation_service.h"
 #include "components/favicon/core/test/mock_favicon_service.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
@@ -27,13 +32,28 @@
 #include "components/optimization_guide/core/model_quality/test_model_quality_logs_uploader_service.h"
 #include "components/optimization_guide/proto/features/actor_login.pb.h"
 #include "components/optimization_guide/proto/model_quality_service.pb.h"
+#include "components/password_manager/core/browser/actor_login/actor_login_service.h"
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/test_navigation_observer.h"
+#include "google_apis/gaia/gaia_urls.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/test/base/ui_test_utils.h"
+#else
+#include "base/android/android_info.h"
+#endif
+
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
 
 using actor::webui::mojom::UserGrantedPermissionDuration;
 using base::test::TestFuture;
@@ -70,6 +90,29 @@ const SkBitmap GenerateSquareBitmap(int size, SkColor color) {
   return bitmap;
 }
 
+void PostFederatedLoginResumeAfterClick(
+    std::unique_ptr<ExecutionEngineStateWaiter>& state_waiter,
+    Profile* profile,
+    tabs::TabInterface* tab,
+    content::webid::FederatedLoginResult fed_result,
+    MockActorLoginService::FederatedLoginResumeCallback resume_callback) {
+  auto* actor_service = actor::ActorKeyedService::Get(profile);
+  actor::ActorTask* task = actor_service->GetTaskFromTab(*tab);
+  // ExecutionEngineStateWaiter is notified before the state change, so we need
+  // to asynchronously resume.
+  auto async_resume = base::BindOnce(
+      [](MockActorLoginService::FederatedLoginResumeCallback resume_callback,
+         content::webid::FederatedLoginResult fed_result) {
+        base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE, base::BindOnce(std::move(resume_callback), fed_result));
+      },
+      std::move(resume_callback), fed_result);
+  // Wait until the next tool invoke (for the click).
+  state_waiter = std::make_unique<ExecutionEngineStateWaiter>(
+      std::move(async_resume), task->GetExecutionEngine(),
+      ExecutionEngine::State::kToolInvoke);
+}
+
 std::unique_ptr<KeyedService> CreateMockAffiliationService(
     content::BrowserContext* context) {
   auto service = std::make_unique<
@@ -77,12 +120,14 @@ std::unique_ptr<KeyedService> CreateMockAffiliationService(
   ON_CALL(*service, GetAffiliationsAndBranding(_, _))
       .WillByDefault(base::test::RunOnceCallbackRepeatedly<1>(
           std::vector<affiliations::Facet>(), /*success=*/true));
+  ON_CALL(*service, UpdateAffiliationsAndBranding(_, _))
+      .WillByDefault(base::test::RunOnceCallbackRepeatedly<1>());
   return service;
 }
 
 class MockExecutionEngine : public ExecutionEngine {
  public:
-  explicit MockExecutionEngine(Profile* profile) : ExecutionEngine(profile) {}
+  explicit MockExecutionEngine(ActorTask& task) : ExecutionEngine(task) {}
   ~MockExecutionEngine() override = default;
 
   // Type alias to get around the comma in the flat_map template. MOCK_METHOD
@@ -108,13 +153,12 @@ class ActorAttemptLoginToolTest : public ActorToolsTest {
     scoped_feature_list_.InitWithFeatures(
         /*enabled_features=*/
         {password_manager::features::kActorLogin,
-         password_manager::features::
-             kActorLoginPermissionsUseStrongAffiliations,
          password_manager::features::kActorLoginQualityLogs,
-         password_manager::features::kActorLoginGetCredentialsNoLoginForm,
-         actor::kGlicEnableAutoLoginDialogs,
-         actor::kGlicEnableAutoLoginPersistedPermissions},
-        /*disabled_features=*/{});
+         features::kGlicActor},
+        // TODO(crbug.com/480920277): Remove the FedCM flag once the prototyping
+        // is complete.
+        /*disabled_features=*/{kGlicCrossOriginNavigationGating,
+                               features::kFedCmEmbedderInitiatedLogin});
   }
 
   ~ActorAttemptLoginToolTest() override = default;
@@ -132,6 +176,14 @@ class ActorAttemptLoginToolTest : public ActorToolsTest {
   }
 
   void SetUpOnMainThread() override {
+#if BUILDFLAG(IS_ANDROID)
+    // TODO(crbug.com/517620110): Decouple test from Glic eligibility criteria.
+    if (base::android::android_info::sdk_int() <
+        base::android::android_info::SDK_VERSION_S) {
+      GTEST_SKIP() << "Actor requires Android S+ to run";
+    }
+#endif
+
     ActorToolsTest::SetUpOnMainThread();
     ASSERT_TRUE(embedded_https_test_server().Start());
     ASSERT_TRUE(embedded_test_server()->Start());
@@ -160,9 +212,9 @@ class ActorAttemptLoginToolTest : public ActorToolsTest {
                 g_browser_process->local_state()));
   }
 
-  std::unique_ptr<ExecutionEngine> CreateExecutionEngine(
-      Profile* profile) override {
-    return std::make_unique<::testing::NiceMock<MockExecutionEngine>>(profile);
+  static std::unique_ptr<ExecutionEngine> CreateExecutionEngine(
+      ActorTask& task) {
+    return std::make_unique<::testing::NiceMock<MockExecutionEngine>>(task);
   }
 
   MockActorLoginService& mock_login_service() { return mock_login_service_; }
@@ -194,6 +246,8 @@ class ActorAttemptLoginToolTest : public ActorToolsTest {
   MockActorLoginService mock_login_service_;
   base::test::ScopedFeatureList scoped_feature_list_;
   base::CallbackListSubscription create_services_subscription_;
+  ScopedExecutionEngineFactory mock_execution_engine_factory_{
+      base::BindRepeating(ActorAttemptLoginToolTest::CreateExecutionEngine)};
 };
 
 IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolTest, Basic) {
@@ -210,7 +264,7 @@ IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolTest, Basic) {
   ActResultFuture result;
   actor_task().Act(ToRequestList(action), result.GetCallback());
   ExpectOkResult(result);
-  EXPECT_TRUE(RequiresPageStabilization(*result.Get<2>().back().result));
+  EXPECT_TRUE(RequiresPageStabilization(*result.Get().back().result));
 
   const auto& last_credential_used =
       mock_login_service().last_credential_used();
@@ -221,6 +275,84 @@ IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolTest, Basic) {
       uploaded_logs()[0]->actor_login().quality().permission_picked(),
       optimization_guide::proto::ActorLoginQuality_PermissionOption_ALLOW_ONCE);
 }
+
+IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolTest,
+                       TrackingCallbackPassedToLoginService) {
+  const GURL url =
+      embedded_https_test_server().GetURL("example.com", "/actor/blank.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+
+  actor_login::Credential credential = MakeTestCredential(
+      u"username", url, /*immediately_available_to_login=*/true);
+  // Setting persistent permission to `true` so that `AttemptLoginTool` passes
+  // `true` for `should_use_strong_matching` when starting password filling.
+  credential.has_persistent_permission = true;
+  mock_login_service().SetCredential(credential);
+  mock_login_service().SetLoginStatus(
+      actor_login::LoginStatusResult::kSuccessUsernameAndPasswordFilled);
+
+  std::unique_ptr<ToolRequest> action = MakeAttemptLoginRequest(*active_tab());
+  ActResultFuture result;
+  actor_task().Act(ToRequestList(action), result.GetCallback());
+  ExpectOkResult(result);
+
+  actor_login::FrameFillingStartedCallback frame_filling_started_cb =
+      mock_login_service().last_frame_filling_started_cb();
+  ASSERT_TRUE(frame_filling_started_cb);
+  content::FrameTreeNodeId main_frame_id =
+      web_contents()->GetPrimaryMainFrame()->GetFrameTreeNodeId();
+  std::move(frame_filling_started_cb)
+      .Run(/*global_frame_ids=*/{main_frame_id.value()});
+
+  std::optional<autofill::ActorLoginContext> login_context =
+      actor_task()
+          .GetExecutionEngine()
+          .GetActorOneTimeTokenFillingService()
+          .ConsumeLoginContext();
+  ASSERT_TRUE(login_context.has_value());
+  EXPECT_EQ(login_context->origin, url::Origin::Create(url));
+  EXPECT_TRUE(login_context->should_use_strong_matching);
+  EXPECT_TRUE(login_context->navigations_per_frame.contains(main_frame_id));
+}
+
+#if BUILDFLAG(IS_ANDROID)
+IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolTest,
+                       WaitsForAffiliationUpdateOnAndroid) {
+  const GURL url =
+      embedded_https_test_server().GetURL("example.com", "/actor/blank.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+  mock_login_service().SetCredential(MakeTestCredential(
+      u"username", url, /*immediately_available_to_login=*/true));
+  mock_login_service().SetLoginStatus(
+      actor_login::LoginStatusResult::kSuccessUsernameAndPasswordFilled);
+  base::RunLoop run_loop;
+  base::OnceClosure affiliation_update_callback;
+  EXPECT_CALL(*mock_affiliation_service(), UpdateAffiliationsAndBranding)
+      .WillOnce([&](const std::vector<affiliations::FacetURI>&,
+                    base::OnceClosure cb) {
+        affiliation_update_callback = std::move(cb);
+        run_loop.Quit();
+      });
+
+  std::unique_ptr<ToolRequest> action = MakeAttemptLoginRequest(*active_tab());
+  ActResultFuture result;
+  actor_task().Act(ToRequestList(action), result.GetCallback());
+  // Wait for the affiliation update to be requested.
+  run_loop.Run();
+
+  // Verify that `Act` hasn't finished yet, and `AttemptLogin` hasn't been
+  // called.
+  EXPECT_FALSE(result.IsReady());
+  EXPECT_FALSE(mock_login_service().last_credential_used().has_value());
+
+  // Now invoke the affiliation callback.
+  ASSERT_TRUE(affiliation_update_callback);
+  std::move(affiliation_update_callback).Run();
+  // The tool should now complete successfully.
+  ExpectOkResult(result);
+  EXPECT_TRUE(mock_login_service().last_credential_used().has_value());
+}
+#endif
 
 IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolTest, NoCredentials) {
   const GURL url =
@@ -301,7 +433,7 @@ IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolTest,
   mock_login_service().SetCredential(MakeTestCredential(
       u"username", url, /*immediately_available_to_login=*/false));
   mock_login_service().SetLoginStatus(
-      actor_login::LoginStatusResult::kSuccessUsernameAndPasswordFilled);
+      actor_login::LoginStatusResult::kErrorNoSigninForm);
 
   std::unique_ptr<ToolRequest> action = MakeAttemptLoginRequest(*active_tab());
   ActResultFuture result;
@@ -313,6 +445,12 @@ IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolTest,
 
 IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolTest,
                        MultipleCredentialsOnlyOneAvailable) {
+  if (base::FeatureList::IsEnabled(features::kFedCmEmbedderInitiatedLogin)) {
+    // This behaviour does not apply when federated credentials are supported
+    // where we allow password selection regardless of availability.
+    GTEST_SKIP();
+  }
+
   const GURL url =
       embedded_https_test_server().GetURL("example.com", "/actor/blank.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
@@ -353,7 +491,7 @@ IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolTest, OnlyUsernameFilled) {
   ActResultFuture result;
   actor_task().Act(ToRequestList(action), result.GetCallback());
   ExpectOkResult(result);
-  EXPECT_TRUE(RequiresPageStabilization(*result.Get<2>().back().result));
+  EXPECT_TRUE(RequiresPageStabilization(*result.Get().back().result));
 }
 
 IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolTest, OnlyPasswordFilled) {
@@ -371,7 +509,7 @@ IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolTest, OnlyPasswordFilled) {
   ActResultFuture result;
   actor_task().Act(ToRequestList(action), result.GetCallback());
   ExpectOkResult(result);
-  EXPECT_TRUE(RequiresPageStabilization(*result.Get<2>().back().result));
+  EXPECT_TRUE(RequiresPageStabilization(*result.Get().back().result));
 }
 
 IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolTest,
@@ -734,6 +872,12 @@ class ActorAttemptLoginToolTestWithFaviconService
 
   void SetUpOnMainThread() override {
     ActorAttemptLoginToolTest::SetUpOnMainThread();
+#if BUILDFLAG(IS_ANDROID)
+    if (base::android::android_info::sdk_int() <
+        base::android::android_info::SDK_VERSION_S) {
+      return;
+    }
+#endif
     ON_CALL(mock_execution_engine(), GetFaviconService())
         .WillByDefault(Return(&mock_favicon_service_));
 
@@ -755,6 +899,38 @@ class ActorAttemptLoginToolTestWithFaviconService
 
  private:
   favicon::MockFaviconService mock_favicon_service_;
+};
+
+class ActorAttemptLoginToolFederatedTest : public ActorAttemptLoginToolTest {
+ public:
+  ActorAttemptLoginToolFederatedTest() {
+    scoped_feature_list_.InitAndEnableFeature(
+        features::kFedCmEmbedderInitiatedLogin);
+  }
+
+  ~ActorAttemptLoginToolFederatedTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// One of the federated tests intentionally triggers the observation timeout. We
+// shorten that timeout so that the test completes in a reasonable amount of
+// time.
+class ActorAttemptLoginToolFederatedShortDelayTest
+    : public ActorAttemptLoginToolFederatedTest {
+ public:
+  ActorAttemptLoginToolFederatedShortDelayTest() {
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        {{features::kGlicActor,
+          {{features::kActorObservationDelayTimeout.name, "1s"}}}},
+        {});
+  }
+
+  ~ActorAttemptLoginToolFederatedShortDelayTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolTestWithFaviconService, NoService) {
@@ -925,6 +1101,329 @@ IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolTestWithFaviconService,
       mock_login_service().last_credential_used();
   ASSERT_TRUE(last_credential_used.has_value());
   EXPECT_EQ(u"username1", last_credential_used->username);
+}
+
+IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolFederatedTest,
+                       FederatedLoginClicksProviderButton) {
+  const GURL idp_url = GURL("https://accounts.google.com");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/sign_in_page.html");
+  const GURL signin_success_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/simple.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+
+  mock_login_service().SetCredential(
+      MakeTestCredentialFederated(u"username", idp_url));
+  mock_login_service().SetLoginStatus(
+      actor_login::LoginStatusResult::kRequiresButtonClick);
+  std::unique_ptr<ExecutionEngineStateWaiter> state_waiter = nullptr;
+  mock_login_service().SetFederatedLoginDelay(base::BindOnce(
+      &PostFederatedLoginResumeAfterClick, std::ref(state_waiter), GetProfile(),
+      active_tab(), content::webid::FederatedLoginResult::kSuccess));
+
+  std::optional<int> password_button_id =
+      content::GetDOMNodeId(*main_frame(), "#submit-button");
+  ASSERT_TRUE(password_button_id);
+  std::optional<int> provider_button_id =
+      content::GetDOMNodeId(*main_frame(), "#provider-button");
+  ASSERT_TRUE(provider_button_id);
+
+  std::unique_ptr<ToolRequest> action = MakeAttemptLoginRequestByNodeIds(
+      *active_tab(), password_button_id, provider_button_id);
+
+  ActResultFuture result;
+  actor_task().Act(ToRequestList(action), result.GetCallback());
+  ExpectOkResult(result);
+
+  const auto& action_results = result.Get();
+  // Although we have multiple tools invoked internally, we should not expose
+  // this to the caller.
+  EXPECT_EQ(1, action_results.size());
+
+  EXPECT_EQ(signin_success_url, web_contents()->GetLastCommittedURL());
+  EXPECT_TRUE(mock_login_service().last_sequence_succeeded());
+}
+
+IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolFederatedTest,
+                       PasswordLoginClicksSubmitButton) {
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/sign_in_page.html");
+  const GURL signin_success_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/simple.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+
+  mock_login_service().SetCredential(MakeTestCredential(
+      u"username", url, /*immediately_available_to_login=*/true));
+  mock_login_service().SetLoginStatus(
+      actor_login::LoginStatusResult::kSuccessUsernameAndPasswordFilled);
+
+  std::optional<int> password_button_id =
+      content::GetDOMNodeId(*main_frame(), "#submit-button");
+  ASSERT_TRUE(password_button_id);
+  std::optional<int> provider_button_id =
+      content::GetDOMNodeId(*main_frame(), "#provider-button");
+  ASSERT_TRUE(provider_button_id);
+
+  std::unique_ptr<ToolRequest> action = MakeAttemptLoginRequestByNodeIds(
+      *active_tab(), password_button_id, provider_button_id);
+
+  ActResultFuture result;
+  actor_task().Act(ToRequestList(action), result.GetCallback());
+  ExpectOkResult(result);
+
+  const auto& action_results = result.Get();
+  // Although we have multiple tools invoked internally, we should not expose
+  // this to the caller.
+  EXPECT_EQ(1, action_results.size());
+
+  GURL::Replacements replacements;
+  replacements.ClearQuery();
+  EXPECT_EQ(
+      signin_success_url.ReplaceComponents(replacements),
+      web_contents()->GetLastCommittedURL().ReplaceComponents(replacements));
+  EXPECT_TRUE(mock_login_service().last_sequence_succeeded());
+}
+
+IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolFederatedTest,
+                       FederatedLoginProviderErrorAfterClick) {
+  const GURL idp_url = GURL("https://accounts.google.com");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/sign_in_page.html");
+  const GURL signin_success_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/simple.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+
+  mock_login_service().SetCredential(
+      MakeTestCredentialFederated(u"username", idp_url));
+  mock_login_service().SetLoginStatus(
+      actor_login::LoginStatusResult::kRequiresButtonClick);
+  std::unique_ptr<ExecutionEngineStateWaiter> state_waiter = nullptr;
+  mock_login_service().SetFederatedLoginDelay(base::BindOnce(
+      &PostFederatedLoginResumeAfterClick, std::ref(state_waiter), GetProfile(),
+      active_tab(), content::webid::FederatedLoginResult::kIdpReturnedError));
+
+  std::optional<int> password_button_id =
+      content::GetDOMNodeId(*main_frame(), "#submit-button");
+  ASSERT_TRUE(password_button_id);
+  std::optional<int> provider_button_id =
+      content::GetDOMNodeId(*main_frame(), "#provider-button");
+  ASSERT_TRUE(provider_button_id);
+
+  std::unique_ptr<ToolRequest> action = MakeAttemptLoginRequestByNodeIds(
+      *active_tab(), password_button_id, provider_button_id);
+
+  ActResultFuture result;
+  actor_task().Act(ToRequestList(action), result.GetCallback());
+  ExpectErrorResult(result,
+                    mojom::ActionResultCode::kLoginFederatedIdpReturnedError);
+
+  const auto& action_results = result.Get();
+  // Although we have multiple tools invoked internally, we should not expose
+  // this to the caller.
+  EXPECT_EQ(1, action_results.size());
+
+  EXPECT_FALSE(mock_login_service().last_sequence_succeeded());
+}
+
+IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolFederatedShortDelayTest,
+                       FederatedLoginTimeoutDuringObservationDelay) {
+  const GURL idp_url = GURL("https://accounts.google.com");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/sign_in_page.html");
+  const GURL signin_success_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/simple.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+
+  mock_login_service().SetCredential(
+      MakeTestCredentialFederated(u"username", idp_url));
+  mock_login_service().SetLoginStatus(
+      actor_login::LoginStatusResult::kRequiresButtonClick);
+  // Intentionally never resume. We expect the observation delay logic to time
+  // us out.
+  mock_login_service().SetFederatedLoginDelay(base::DoNothing());
+
+  std::optional<int> password_button_id =
+      content::GetDOMNodeId(*main_frame(), "#submit-button");
+  ASSERT_TRUE(password_button_id);
+  std::optional<int> provider_button_id =
+      content::GetDOMNodeId(*main_frame(), "#provider-button");
+  ASSERT_TRUE(provider_button_id);
+
+  std::unique_ptr<ToolRequest> action = MakeAttemptLoginRequestByNodeIds(
+      *active_tab(), password_button_id, provider_button_id);
+
+  ActResultFuture result;
+  actor_task().Act(ToRequestList(action), result.GetCallback());
+  ExpectErrorResult(result, mojom::ActionResultCode::kLoginFederatedTimeout);
+
+  const auto& action_results = result.Get();
+  // Although we have multiple tools invoked internally, we should not expose
+  // this to the caller.
+  EXPECT_EQ(1, action_results.size());
+
+  EXPECT_FALSE(mock_login_service().last_sequence_succeeded());
+}
+
+#if !BUILDFLAG(IS_ANDROID)
+IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolFederatedTest,
+                       FederatedLoginClicksProviderButtonWithPopup) {
+  const GURL idp_url = GURL("https://accounts.google.com");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/sign_in_page.html");
+  const GURL signin_success_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/simple.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+
+  mock_login_service().SetCredential(
+      MakeTestCredentialFederated(u"username", idp_url));
+  mock_login_service().SetLoginStatus(
+      actor_login::LoginStatusResult::kRequiresButtonClick);
+
+  std::optional<int> password_button_id =
+      content::GetDOMNodeId(*main_frame(), "#submit-button");
+  ASSERT_TRUE(password_button_id);
+  std::optional<int> provider_popup_button_id =
+      content::GetDOMNodeId(*main_frame(), "#provider-popup-button");
+  ASSERT_TRUE(provider_popup_button_id);
+
+  // We need to perform a useless action on the tab, in order to get the actor
+  // overlay to show. Otherwise, the WebContentsAddedObserver below will confuse
+  // it for the popup triggered by the attempt login action.
+  std::unique_ptr<ToolRequest> click_on_nothing_action =
+      MakeClickRequest(*active_tab(), gfx::Point(1, 1));
+  ActResultFuture click_result;
+  actor_task().Act(ToRequestList(click_on_nothing_action),
+                   click_result.GetCallback());
+  ExpectOkResult(click_result);
+
+  std::unique_ptr<ToolRequest> action = MakeAttemptLoginRequestByNodeIds(
+      *active_tab(), password_button_id, provider_popup_button_id);
+
+  tabs::TabInterface* original_tab = active_tab();
+
+  // Open a new unrelated tab in the foreground.
+  const GURL other_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/blank.html");
+  ui_test_utils::NavigateToURLWithDisposition(
+      browser(), other_url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+
+  content::CreateAndLoadWebContentsObserver web_contents_observer(
+      1, base::BindRepeating([](content::WebContents* web_contents) {
+        return !web_contents->GetWebUI();
+      }));
+
+  ActResultFuture result;
+  actor_task().Act(ToRequestList(action), result.GetCallback());
+  ExpectOkResult(result);
+
+  const auto& action_results = result.Get();
+  // Although we have multiple tools invoked internally, we should not expose
+  // this to the caller.
+  EXPECT_EQ(1, action_results.size());
+
+  content::WebContents* new_contents = web_contents_observer.Wait();
+  ASSERT_TRUE(new_contents);
+
+  bool platform_supports_programmatic_window_activation = true;
+#if BUILDFLAG(IS_OZONE)
+  if (::ui::OzonePlatform::RunningOnWaylandForTest()) {
+    platform_supports_programmatic_window_activation = false;
+  }
+#endif
+  if (platform_supports_programmatic_window_activation) {
+    // Since a different tab was in the foreground, the popup should not have
+    // been focused.
+    EXPECT_FALSE(new_contents->GetRenderWidgetHostView()->HasFocus());
+  }
+
+  content::TestNavigationObserver navigation_observer(
+      original_tab->GetContents());
+  EXPECT_TRUE(content::ExecJs(new_contents,
+                              "window.opener.postMessage('signin-complete');"));
+  navigation_observer.Wait();
+
+  EXPECT_EQ(signin_success_url, navigation_observer.last_navigation_url());
+  EXPECT_TRUE(mock_login_service().last_sequence_succeeded());
+}
+#endif
+
+IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolFederatedTest,
+                       FederatedLoginFailedButtonClick) {
+  WaitTool::SetNoDelayForTesting();
+
+  const GURL idp_url = GURL("https://accounts.google.com");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/sign_in_page.html");
+  const GURL signin_success_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/simple.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+
+  mock_login_service().SetCredential(
+      MakeTestCredentialFederated(u"username", idp_url));
+  mock_login_service().SetLoginStatus(
+      actor_login::LoginStatusResult::kRequiresButtonClick);
+
+  std::optional<int> password_button_id =
+      content::GetDOMNodeId(*main_frame(), "#submit-button");
+  ASSERT_TRUE(password_button_id);
+  std::optional<int> provider_button_id =
+      content::GetDOMNodeId(*main_frame(), "#provider-button");
+  ASSERT_TRUE(provider_button_id);
+
+  ASSERT_TRUE(content::ExecJs(
+      main_frame(),
+      "document.getElementById('provider-button').disabled = true;"));
+
+  std::unique_ptr<ToolRequest> login_action = MakeAttemptLoginRequestByNodeIds(
+      *active_tab(), password_button_id, provider_button_id);
+
+  // This helps confirm that the click tool is sequenced correctly. The click
+  // should fail before this, so we should not see a second action that
+  // succeeded.
+  std::unique_ptr<ToolRequest> other_action = MakeWaitRequest();
+
+  ActResultFuture result;
+  actor_task().Act(ToRequestList(login_action, other_action),
+                   result.GetCallback());
+  ExpectErrorResult(result, mojom::ActionResultCode::kElementDisabled);
+
+  const auto& action_results = result.Get();
+  // The caller should see the failed click as the attempt login action failing.
+  EXPECT_EQ(1, action_results.size());
+
+  EXPECT_FALSE(mock_login_service().last_sequence_succeeded());
+}
+
+IN_PROC_BROWSER_TEST_F(ActorAttemptLoginToolFederatedTest,
+                       FederatedLoginButtonNotProvided) {
+  const GURL idp_url = GURL("https://accounts.google.com");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/sign_in_page.html");
+  const GURL signin_success_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/simple.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+
+  mock_login_service().SetCredential(
+      MakeTestCredentialFederated(u"username", idp_url));
+  mock_login_service().SetLoginStatus(
+      actor_login::LoginStatusResult::kRequiresButtonClick);
+
+  std::optional<int> password_button_id =
+      content::GetDOMNodeId(*main_frame(), "#submit-button");
+  ASSERT_TRUE(password_button_id);
+
+  // Intentionally do not identify the provider button.
+  std::optional<int> provider_button_id;
+
+  std::unique_ptr<ToolRequest> action = MakeAttemptLoginRequestByNodeIds(
+      *active_tab(), password_button_id, provider_button_id);
+
+  ActResultFuture result;
+  actor_task().Act(ToRequestList(action), result.GetCallback());
+  ExpectErrorResult(result, mojom::ActionResultCode::kArgumentsInvalid);
+
+  EXPECT_FALSE(mock_login_service().last_sequence_succeeded());
 }
 
 }  // namespace

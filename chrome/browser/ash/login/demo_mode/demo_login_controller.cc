@@ -11,6 +11,7 @@
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
+#include "base/check_deref.h"
 #include "base/check_is_test.h"
 #include "base/command_line.h"
 #include "base/functional/callback_helpers.h"
@@ -25,9 +26,6 @@
 #include "base/uuid.h"
 #include "base/values.h"
 #include "chrome/browser/ash/login/demo_mode/demo_mode_dimensions.h"
-#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/webui/ash/login/online_login_utils.h"
 #include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
@@ -173,10 +171,6 @@ constexpr net::NetworkTrafficAnnotationTag kCleanUpTrafficAnnotation =
               "Not implemented."
           })");
 
-scoped_refptr<network::SharedURLLoaderFactory> GetUrlLoaderFactory() {
-  return g_browser_process->shared_url_loader_factory();
-}
-
 GURL GetDemoModeServerBaseUrl() {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   return GURL(
@@ -253,7 +247,8 @@ std::unique_ptr<network::SimpleURLLoader> CreateDemoAccountURLLoader(
 // Send demo account related http requests to server. i.e. setup request,
 // cleanup request.
 void SendDemoAccountRequest(
-    const base::Value::Dict& post_data,
+    network::mojom::URLLoaderFactory& url_loader_factory,
+    const base::DictValue& post_data,
     network::SimpleURLLoader* url_loader,
     base::OnceCallback<void(std::optional<std::string> response_body)>
         callback) {
@@ -265,7 +260,7 @@ void SendDemoAccountRequest(
   CHECK(base::JSONWriter::Write(post_data, &request_string));
   url_loader->AttachStringForUpload(request_string, kContentTypeJSON);
   url_loader->SetTimeoutDuration(kDemoAccountRequestTimeout);
-  url_loader->DownloadToString(GetUrlLoaderFactory().get(), std::move(callback),
+  url_loader->DownloadToString(&url_loader_factory, std::move(callback),
                                kMaxResponseSize);
 }
 
@@ -274,7 +269,7 @@ void LogServerResponseError(const std::string& error_response, bool is_setup) {
     return;
   }
 
-  std::optional<base::Value::Dict> error(base::JSONReader::ReadDict(
+  std::optional<base::DictValue> error(base::JSONReader::ReadDict(
       error_response, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
   const std::string response_name =
       base::StringPrintf("%s response error:", is_setup ? "Setup" : "Clean up");
@@ -343,39 +338,24 @@ void RemoveGaiaUsersOnDevice() {
   }
 }
 
-policy::DeviceCloudPolicyManagerAsh* GetDeviceCloudPolicyManager() {
-  auto* platform_part = g_browser_process->platform_part();
-  if (!platform_part) {
-    LOG(ERROR) << "platform_part is null.";
-    return nullptr;
-  }
-  auto* policy_connector_ash = platform_part->browser_policy_connector_ash();
-  if (!policy_connector_ash) {
-    LOG(ERROR) << "browser_policy_connector_ash is null.";
-    return nullptr;
-  }
-
-  return policy_connector_ash->GetDeviceCloudPolicyManager();
-}
-
-base::Value::Dict GetDeviceInfo() {
+base::DictValue GetDeviceInfo(PrefService& local_state) {
   // Full ChromeOS version, for example: R127-15919.0.0_stable-channel.
   const std::string version = demo_mode::GetChromeOSVersionString();
 
   // This field "country" is intended to be used to control region specific
   // behaviors, including TOS agreement, focus backend services and etc.
-  const std::string country = demo_mode::Country();
+  const std::string country = demo_mode::Country(local_state);
 
-  const std::string retailer = demo_mode::RetailerName();
-  const std::string store_id = demo_mode::StoreNumber();
+  const std::string retailer = demo_mode::RetailerName(local_state);
+  const std::string store_id = demo_mode::StoreNumber(local_state);
 
   const std::string board = demo_mode::Board();
   const std::string_view model = demo_mode::Model();
 
   // This field "locale" is used to set the language of the demo account.
-  const std::string locale = demo_mode::Locale();
+  const std::string locale = demo_mode::Locale(local_state);
 
-  return base::Value::Dict()
+  return base::DictValue()
       .Set(kBuildVersion, version)
       .Set(kCountry, country)
       .Set(kRetailer, retailer)
@@ -388,24 +368,31 @@ base::Value::Dict GetDeviceInfo() {
 }  // namespace
 
 DemoLoginController::DemoLoginController(
+    PrefService* local_state,
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+    policy::DeviceCloudPolicyManagerAsh* device_cloud_policy_manager_ash,
     base::RepeatingClosure configure_auto_login_callback)
-    : configure_auto_login_callback_(std::move(configure_auto_login_callback)) {
-  state_ = State::kLoadingAvailibility;
-
-  auto* cloud_policy_manager = GetDeviceCloudPolicyManager();
-  if (!cloud_policy_manager) {
+    : local_state_(CHECK_DEREF(local_state)),
+      shared_url_loader_factory_(std::move(shared_url_loader_factory)),
+      device_cloud_policy_manager_ash_(device_cloud_policy_manager_ash),
+      configure_auto_login_callback_(std::move(configure_auto_login_callback)) {
+  CHECK(shared_url_loader_factory_);
+  if (!device_cloud_policy_manager_ash_) {
     CHECK_IS_TEST();
     state_ = State::kReadyForLoginWithDemoAccount;
     return;
   }
 
-  is_policy_manager_connected_ = cloud_policy_manager->IsConnected();
+  state_ = State::kLoadingAvailibility;
+
+  is_policy_manager_connected_ =
+      device_cloud_policy_manager_ash_->IsConnected();
 
   // Sign in experience relies on DM Token for device verification. DM Token is
   // fetched using policy client, so we need to wait for policy manager to be
   // connected.
   if (!is_policy_manager_connected_) {
-    observation_.Observe(cloud_policy_manager);
+    observation_.Observe(device_cloud_policy_manager_ash_.get());
 
     // `DemoLoginController::OnDeviceCloudPolicyManagerConnected` might not be
     // triggered if there is a network issue.
@@ -465,7 +452,7 @@ void DemoLoginController::SendSetupDemoAccountRequest() {
   CHECK(!url_loader_);
 
   const auto sign_in_scoped_device_id = GenerateSigninScopedDeviceId();
-  std::optional<base::Value::Dict> device_identifier =
+  std::optional<base::DictValue> device_identifier =
       GetDeviceIdentifier(sign_in_scoped_device_id);
   if (!device_identifier) {
     OnSetupDemoAccountError(ResultCode::kCloudPolicyNotConnected);
@@ -482,11 +469,11 @@ void DemoLoginController::SendSetupDemoAccountRequest() {
     return;
   }
 
-  auto post_data = base::Value::Dict().Set(
-      kDeviceIdentifier, std::move(device_identifier.value()));
+  auto post_data = base::DictValue().Set(kDeviceIdentifier,
+                                         std::move(device_identifier.value()));
 
   if (features::IsSendDeviceInfoToDemoServerEnabled()) {
-    base::Value::Dict device_info = GetDeviceInfo();
+    base::DictValue device_info = GetDeviceInfo(local_state_.get());
     post_data.Set(kDeviceInfo, std::move(device_info));
   }
 
@@ -495,7 +482,7 @@ void DemoLoginController::SendSetupDemoAccountRequest() {
                                  kSetupAccountTrafficAnnotation);
 
   SendDemoAccountRequest(
-      post_data, url_loader_.get(),
+      *shared_url_loader_factory_.get(), post_data, url_loader_.get(),
       base::BindOnce(&DemoLoginController::OnSetupDemoAccountComplete,
                      weak_ptr_factory_.GetWeakPtr(), sign_in_scoped_device_id));
 }
@@ -570,10 +557,9 @@ void DemoLoginController::HandleSetupDemoAcountResponse(
   DemoSessionMetricsRecorder::SetCurrentSessionType(
       DemoSessionMetricsRecorder::SessionType::kSignedInDemoSession);
 
-  auto* local_state = g_browser_process->local_state();
-  local_state->SetString(prefs::kDemoAccountGaiaId, *gaia_id);
-  local_state->SetString(prefs::kDemoModeSessionIdentifier,
-                         sign_in_scoped_device_id);
+  local_state_->SetString(prefs::kDemoAccountGaiaId, *gaia_id);
+  local_state_->SetString(prefs::kDemoModeSessionIdentifier,
+                          sign_in_scoped_device_id);
   // TODO(crbug.com/383198613): Wait device local account policy loaded since we
   // applied that policy to demo account.
   LoginDemoAccount(*email, GaiaId(*gaia_id), *auth_code,
@@ -632,11 +618,10 @@ void DemoLoginController::MaybeCleanupPreviousDemoAccount() {
   RemoveGaiaUsersOnDevice();
 
   // Clean up last gaia user on server side.
-  auto* local_state = g_browser_process->local_state();
   const GaiaId gaia_id_to_clean_up =
-      GaiaId(local_state->GetString(prefs::kDemoAccountGaiaId));
+      GaiaId(local_state_->GetString(prefs::kDemoAccountGaiaId));
   const std::string login_scope_device_id =
-      local_state->GetString(prefs::kDemoModeSessionIdentifier);
+      local_state_->GetString(prefs::kDemoModeSessionIdentifier);
   // For the first session of demo account, `gaia_id_to_clean_up and session
   // identifier`could be empty.
   if (gaia_id_to_clean_up.empty() || login_scope_device_id.empty()) {
@@ -644,9 +629,9 @@ void DemoLoginController::MaybeCleanupPreviousDemoAccount() {
     return;
   }
 
-  auto post_data = base::Value::Dict();
+  auto post_data = base::DictValue();
 
-  std::optional<base::Value::Dict> device_identifier =
+  std::optional<base::DictValue> device_identifier =
       GetDeviceIdentifier(login_scope_device_id);
   if (!device_identifier) {
     OnCleanUpDemoAccountError(ResultCode::kCloudPolicyNotConnected);
@@ -677,7 +662,7 @@ void DemoLoginController::MaybeCleanupPreviousDemoAccount() {
                                  kCleanUpTrafficAnnotation);
 
   SendDemoAccountRequest(
-      post_data, url_loader_.get(),
+      *shared_url_loader_factory_.get(), post_data, url_loader_.get(),
       base::BindOnce(&DemoLoginController::OnCleanUpDemoAccountComplete,
                      weak_ptr_factory_.GetWeakPtr()));
 }
@@ -692,9 +677,8 @@ void DemoLoginController::OnCleanUpDemoAccountComplete(
 
     // Clear the the gaia_id and sign_in_scoped_device_id in pref to prevent
     // repeating cleanups.
-    auto* local_state = g_browser_process->local_state();
-    local_state->ClearPref(prefs::kDemoAccountGaiaId);
-    local_state->ClearPref(prefs::kDemoModeSessionIdentifier);
+    local_state_->ClearPref(prefs::kDemoAccountGaiaId);
+    local_state_->ClearPref(prefs::kDemoModeSessionIdentifier);
 
     if (cleanup_request_callback_for_testing_) {
       std::move(cleanup_request_callback_for_testing_).Run();
@@ -724,14 +708,14 @@ void DemoLoginController::OnCleanUpDemoAccountError(
   }
 }
 
-std::optional<base::Value::Dict> DemoLoginController::GetDeviceIdentifier(
+std::optional<base::DictValue> DemoLoginController::GetDeviceIdentifier(
     const std::string& login_scope_device_id) {
   // The class member `policy_manager_for_testing_` is set during testing.
   // If it's not set, it means we're not in the testing environment, so we
-  // can get the real policy manager from `policy_connector_ash`.
+  // can get the real policy manager `device_cloud_policy_manager_ash_`.
   policy::CloudPolicyManager* policy_manager =
       policy_manager_for_testing_ ? policy_manager_for_testing_
-                                  : GetDeviceCloudPolicyManager();
+                                  : device_cloud_policy_manager_ash_.get();
 
   if (!policy_manager) {
     LOG(ERROR)
@@ -750,7 +734,7 @@ std::optional<base::Value::Dict> DemoLoginController::GetDeviceIdentifier(
   }
   std::string dm_token = client->dm_token();
   std::string client_id = client->client_id();
-  return base::Value::Dict()
+  return base::DictValue()
       .Set(kDMToken, dm_token)
       .Set(kClientID, client_id)
       .Set(kDeviceMachineId, GetMachineID())

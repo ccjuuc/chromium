@@ -27,7 +27,10 @@ import org.robolectric.Robolectric;
 import org.robolectric.shadows.ShadowActivity;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.autofill.anchored_dialog.AnchoredDialogCoordinator;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.layouts.LayoutStateProvider;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.components.autofill.payments.AutofillSaveIbanUiInfo;
@@ -36,6 +39,7 @@ import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import java.util.Collections;
 
 @RunWith(BaseRobolectricTestRunner.class)
+@EnableFeatures(ChromeFeatureList.CCT_DONT_OVERRIDE_INTENT_MIME_TYPE)
 public final class AutofillSaveIbanBottomSheetCoordinatorTest {
     private static final AutofillSaveIbanUiInfo TEST_IBAN_UI_INFO =
             new AutofillSaveIbanUiInfo.Builder()
@@ -44,7 +48,7 @@ public final class AutofillSaveIbanBottomSheetCoordinatorTest {
                     .withDescriptionText("")
                     .withIbanValue("CH5604835012345678009")
                     .withTitleText("Save IBAN?")
-                    .withLegalMessageLines(Collections.EMPTY_LIST)
+                    .withLegalMessageLines(Collections.emptyList())
                     .withLogoIcon(0)
                     .withTitleText("")
                     .build();
@@ -53,6 +57,7 @@ public final class AutofillSaveIbanBottomSheetCoordinatorTest {
 
     @Mock private AutofillSaveIbanBottomSheetBridge mDelegate;
     @Mock private BottomSheetController mBottomSheetController;
+    @Mock private AnchoredDialogCoordinator mAnchoredDialogCoordinator;
     @Mock private LayoutStateProvider mLayoutStateProvider;
     @Mock private TabModel mTabModel;
 
@@ -72,6 +77,7 @@ public final class AutofillSaveIbanBottomSheetCoordinatorTest {
                         TEST_IBAN_UI_INFO,
                         mActivity,
                         mBottomSheetController,
+                        mAnchoredDialogCoordinator,
                         mLayoutStateProvider,
                         mTabModel);
     }

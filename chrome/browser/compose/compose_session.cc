@@ -14,7 +14,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/strings/string_tokenizer.h"
 #include "base/strings/utf_string_conversions.h"
@@ -29,9 +28,10 @@
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_dialogs.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
 #include "chrome/browser/ui/hats/survey_config.h"
 #include "chrome/common/compose/type_conversions.h"
@@ -899,7 +899,9 @@ void ComposeSession::OpenBugReportingLink() {
 void ComposeSession::OpenComposeLearnMorePage() {
   if (base::FeatureList::IsEnabled(
           compose::features::kEnableComposeProactiveNudge)) {
-    Browser* browser = chrome::FindBrowserWithTab(web_contents_);
+    BrowserWindowInterface* browser =
+        GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+            web_contents_);
     CHECK(browser);
 
     chrome::ShowSettingsSubPage(browser, chrome::kAiHelpMeWriteSubpage);
@@ -967,7 +969,7 @@ bool ComposeSession::CanShowFeedbackPage() {
 }
 
 void ComposeSession::OpenFeedbackPage(std::string feedback_id) {
-  base::Value::Dict feedback_metadata;
+  base::DictValue feedback_metadata;
   feedback_metadata.Set("log_id", feedback_id);
 
   chrome::ShowFeedbackPage(
@@ -979,7 +981,7 @@ void ComposeSession::OpenFeedbackPage(std::string feedback_id) {
       l10n_util::GetStringUTF8(IDS_COMPOSE_FEEDBACK_PLACEHOLDER),
       /*category_tag=*/"compose",
       /*extra_diagnostics=*/std::string(),
-      /*autofill_metadata=*/base::Value::Dict(), std::move(feedback_metadata));
+      /*autofill_metadata=*/base::DictValue(), std::move(feedback_metadata));
 }
 
 void ComposeSession::SetUserFeedback(compose::mojom::UserFeedback feedback) {
@@ -1151,9 +1153,9 @@ void ComposeSession::UpdateInnerTextAndContinueComposeIfNecessary(
   }
 
   if (node_offset.has_value()) {
-    page_metadata_->set_page_inner_text_offset(node_offset.value());
+    page_metadata_->set_page_inner_text_offset(*node_offset);
   }
-  page_metadata_->set_trimmed_page_inner_text(trimmed_inner_text);
+  page_metadata_->set_trimmed_page_inner_text(std::move(trimmed_inner_text));
 
   page_metadata_->set_page_inner_text(std::move(inner_text));
 

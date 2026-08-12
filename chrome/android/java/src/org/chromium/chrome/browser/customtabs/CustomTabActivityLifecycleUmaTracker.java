@@ -4,9 +4,6 @@
 
 package org.chromium.chrome.browser.customtabs;
 
-import static org.chromium.build.NullUtil.assertNonNull;
-import static org.chromium.build.NullUtil.assumeNonNull;
-
 import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
@@ -27,12 +24,10 @@ import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.customtabs.features.TabInteractionRecorder;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
-import org.chromium.chrome.browser.lifecycle.NativeInitObserver;
 import org.chromium.chrome.browser.lifecycle.PauseResumeWithNativeObserver;
 import org.chromium.chrome.browser.lifecycle.StartStopWithNativeObserver;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
-import org.chromium.chrome.browser.webapps.WebappCustomTabTimeSpentLogger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -41,7 +36,7 @@ import java.util.function.Supplier;
 /** Handles recording User Metrics for Custom Tab Activity. */
 @NullMarked
 public class CustomTabActivityLifecycleUmaTracker
-        implements PauseResumeWithNativeObserver, StartStopWithNativeObserver, NativeInitObserver {
+        implements PauseResumeWithNativeObserver, StartStopWithNativeObserver {
     /**
      * Identifier used for last CCT client App. Used as suffix for histogram
      * "CustomTabs.RetainableSessionsV2.TimeBetweenLaunch".
@@ -64,7 +59,6 @@ public class CustomTabActivityLifecycleUmaTracker
     private final Supplier<Bundle> mSavedInstanceStateSupplier;
     private final Activity mActivity;
 
-    private @Nullable WebappCustomTabTimeSpentLogger mWebappTimeSpentLogger;
     private boolean mIsInitialResume = true;
 
     private void recordIncognitoLaunchReason() {
@@ -76,29 +70,6 @@ public class CustomTabActivityLifecycleUmaTracker
                 "CustomTabs.IncognitoCctCallerId",
                 incognitoCctCallerId,
                 BrowserServicesIntentDataProvider.IncognitoCctCallerId.NUM_ENTRIES);
-
-        // Record which 1P app launched Incognito CCT.
-        if (incognitoCctCallerId
-                == BrowserServicesIntentDataProvider.IncognitoCctCallerId.GOOGLE_APPS) {
-            String sendersPackageName = mIntentDataProvider.getClientPackageName();
-            @IntentHandler.ExternalAppId
-            int externalId = IntentHandler.mapPackageToExternalAppId(sendersPackageName);
-            if (externalId != IntentHandler.ExternalAppId.OTHER) {
-                RecordHistogram.recordEnumeratedHistogram(
-                        "CustomTabs.ClientAppId.Incognito",
-                        externalId,
-                        IntentHandler.ExternalAppId.NUM_ENTRIES);
-            } else {
-                // Using package name didn't give any meaningful insight on who launched the
-                // Incognito CCT, falling back to check if they provided EXTRA_APPLICATION_ID.
-                var intent = assertNonNull(mIntentDataProvider.getIntent());
-                externalId = IntentHandler.determineExternalIntentSource(intent, mActivity);
-                RecordHistogram.recordEnumeratedHistogram(
-                        "CustomTabs.ClientAppId.Incognito",
-                        externalId,
-                        IntentHandler.ExternalAppId.NUM_ENTRIES);
-            }
-        }
     }
 
     private void recordUserAction() {
@@ -112,12 +83,6 @@ public class CustomTabActivityLifecycleUmaTracker
     private void recordMetrics() {
         if (mIntentDataProvider.isOffTheRecord()) {
             recordIncognitoLaunchReason();
-        } else {
-            var intent = assertNonNull(mIntentDataProvider.getIntent());
-            @IntentHandler.ExternalAppId
-            int externalId = IntentHandler.determineExternalIntentSource(intent, mActivity);
-            RecordHistogram.recordEnumeratedHistogram(
-                    "CustomTabs.ClientAppId", externalId, IntentHandler.ExternalAppId.NUM_ENTRIES);
         }
     }
 
@@ -166,21 +131,10 @@ public class CustomTabActivityLifecycleUmaTracker
         }
 
         mIsInitialResume = false;
-
-        mWebappTimeSpentLogger =
-                WebappCustomTabTimeSpentLogger.createInstanceAndStartTimer(
-                        assumeNonNull(mIntentDataProvider.getIntent())
-                                .getIntExtra(
-                                        CustomTabIntentDataProvider.EXTRA_BROWSER_LAUNCH_SOURCE,
-                                        CustomTabIntentDataProvider.LaunchSourceType.OTHER));
     }
 
     @Override
-    public void onPauseWithNative() {
-        if (mWebappTimeSpentLogger != null) {
-            mWebappTimeSpentLogger.onPause();
-        }
-    }
+    public void onPauseWithNative() {}
 
     @Override
     public void onStartWithNative() {
@@ -192,13 +146,6 @@ public class CustomTabActivityLifecycleUmaTracker
     public void onStopWithNative() {
         CustomTabsConnection.getInstance()
                 .setCustomTabIsInForeground(mIntentDataProvider.getSession(), false);
-    }
-
-    @Override
-    public void onFinishNativeInitialization() {
-        if (mWebappTimeSpentLogger != null) {
-            mWebappTimeSpentLogger.onPause();
-        }
     }
 
     /**

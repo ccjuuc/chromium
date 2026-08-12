@@ -4,11 +4,12 @@
 
 #include "chrome/browser/webauthn/passkey_unlock_manager.h"
 
-#include "base/test/scoped_feature_list.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
+#include "chrome/browser/trusted_vault/trusted_vault_encryption_keys_tab_helper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/webauthn/enclave_authenticator_browsertest_base.h"
@@ -16,9 +17,9 @@
 #include "chrome/browser/webauthn/enclave_manager_factory.h"
 #include "chrome/browser/webauthn/passkey_unlock_manager_factory.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "components/trusted_vault/trusted_vault_histograms.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
-#include "device/fido/public/features.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/http/http_status_code.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -29,7 +30,7 @@
 
 // These tests are also disabled under MSAN. The enclave subprocess is written
 // in Rust and FFI from Rust to C++ doesn't work in Chromium at this time
-// (crbug.com/1369167).
+// (crbug.com/40240570).
 #if !defined(MEMORY_SANITIZER)
 
 namespace webauthn {
@@ -63,7 +64,7 @@ HandleEncryptionUnlockPageRequest(
 
 class MockPasskeyUnlockManagerObserver : public PasskeyUnlockManager::Observer {
  public:
-  MOCK_METHOD(void, OnPasskeyUnlockManagerStateChanged, (), (override));
+  MOCK_METHOD(void, OnPasskeyErrorUiStateChanged, (), (override));
   MOCK_METHOD(void, OnPasskeyUnlockManagerShuttingDown, (), (override));
   MOCK_METHOD(void, OnPasskeyUnlockManagerIsReady, (), (override));
 };
@@ -76,11 +77,11 @@ class PasskeyUnlockManagerBrowserTest : public EnclaveAuthenticatorTestBase {
 
   webauthn::PasskeyUnlockManager* passkey_unlock_manager() {
     return webauthn::PasskeyUnlockManagerFactory::GetForProfile(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   signin::IdentityManager* identity_manager() {
-    return IdentityManagerFactory::GetForProfile(browser()->profile());
+    return IdentityManagerFactory::GetForProfile(browser()->GetProfile());
   }
 
   SyncServiceImplHarness* sync_harness() {
@@ -89,7 +90,8 @@ class PasskeyUnlockManagerBrowserTest : public EnclaveAuthenticatorTestBase {
     }
 
     sync_harness_ = SyncServiceImplHarness::Create(
-        browser()->profile(), SyncServiceImplHarness::SigninType::FAKE_SIGNIN);
+        browser()->GetProfile(),
+        SyncServiceImplHarness::SigninType::FAKE_SIGNIN);
     return sync_harness_.get();
   }
 
@@ -97,30 +99,27 @@ class PasskeyUnlockManagerBrowserTest : public EnclaveAuthenticatorTestBase {
     ASSERT_TRUE(sync_harness()->SetupSync());
     ASSERT_TRUE(
         identity_manager()->HasPrimaryAccount(signin::ConsentLevel::kSync));
- }
+  }
 
  protected:
   void SetUpOnMainThread() override {
-    EnclaveAuthenticatorTestBase::SetUpOnMainThread();
     // Make the browser's network stack route requests to the
     // embedded_test_server.
     host_resolver()->AddRule("*", "127.0.0.1");
     embedded_test_server()->RegisterRequestHandler(
         base::BindRepeating(&HandleEncryptionUnlockPageRequest));
-    ASSERT_TRUE(embedded_test_server()->Start());
+
+    EnclaveAuthenticatorTestBase::SetUpOnMainThread();
 
     base::test::TestFuture<void> load_future;
     EnclaveManager* enclave_manager =
         EnclaveManagerFactory::GetAsEnclaveManagerForProfile(
-            browser()->profile());
+            browser()->GetProfile());
     enclave_manager->Load(load_future.GetCallback());
     ASSERT_TRUE(load_future.Wait());
 
     EnableSync();
   }
-
- private:
-  base::test::ScopedFeatureList feature_list_{device::kPasskeyUnlockManager};
 };
 
 IN_PROC_BROWSER_TEST_F(PasskeyUnlockManagerBrowserTest, IsCreated) {
@@ -133,22 +132,28 @@ IN_PROC_BROWSER_TEST_F(PasskeyUnlockManagerBrowserTest,
                        OpensNewTabWithPasskeyUnlockUrl) {
   TabStripModel* tab_strip_model = browser()->tab_strip_model();
   int initial_tab_count = tab_strip_model->count();
+  base::HistogramTester histogram_tester;
 
-  PasskeyUnlockManager::OpenTabWithPasskeyUnlockChallenge(browser());
+  PasskeyUnlockManager::OpenTabWithPasskeyUnlockChallenge(
+      browser(), trusted_vault::TrustedVaultUserActionTriggerForUMA::
+                     kPasskeyUnlockProfileMenu);
 
   // Ensure that a new tab with an expected URL has been added.
   EXPECT_EQ(initial_tab_count + 1, tab_strip_model->count());
   content::WebContents* new_contents = tab_strip_model->GetActiveWebContents();
   ASSERT_TRUE(new_contents);
-#if BUILDFLAG(IS_CHROMEOS)
-  EXPECT_EQ(GURL("https://accounts.google.com/encryption/unlock/"
-                 "chromeos?kdi=CAESDgoMaHdfcHJvdGVjdGVk"),
-            new_contents->GetVisibleURL());
-#else
-  EXPECT_EQ(GURL("https://accounts.google.com/encryption/unlock/"
-                 "desktop?kdi=CAESDgoMaHdfcHJvdGVjdGVk"),
-            new_contents->GetVisibleURL());
-#endif
+  EXPECT_THAT(
+      new_contents->GetVisibleURL().spec(),
+      testing::StartsWith("https://accounts.google.com/encryption/unlock/"));
+  histogram_tester.ExpectUniqueSample(
+      "TrustedVault.RecoveryFlowTriggeredEndpoint",
+      trusted_vault::TrustedVaultRecoveryFlowEndpoint::kDesktop, 1);
+  TrustedVaultEncryptionKeysTabHelper* tab_helper =
+      TrustedVaultEncryptionKeysTabHelper::FromWebContents(new_contents);
+  ASSERT_TRUE(tab_helper);
+  EXPECT_EQ(tab_helper->user_action_trigger(),
+            trusted_vault::TrustedVaultUserActionTriggerForUMA::
+                kPasskeyUnlockProfileMenu);
 }
 
 IN_PROC_BROWSER_TEST_F(PasskeyUnlockManagerBrowserTest,
@@ -158,9 +163,9 @@ IN_PROC_BROWSER_TEST_F(PasskeyUnlockManagerBrowserTest,
   passkey_unlock_manager()->AddObserver(&observer);
 
   base::test::TestFuture<void> event_future;
-  EXPECT_CALL(observer, OnPasskeyUnlockManagerStateChanged())
+  EXPECT_CALL(observer, OnPasskeyErrorUiStateChanged())
       .WillOnce([&event_future]() {
-        // Signal the TestFuture when OnPasskeyUnlockManagerStateChanged is
+        // Signal the TestFuture when OnPasskeyErrorUiStateChanged is
         // called.
         event_future.SetValue();
       });

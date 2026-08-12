@@ -35,21 +35,22 @@
 
 @implementation ConsistencyPromoSigninCoordinatorTestCase
 
-- (AppLaunchConfiguration)appConfigurationForTestCase {
-  AppLaunchConfiguration config = [super appConfigurationForTestCase];
-
-  if ([self isRunningTest:@selector(testFromSettingsWithAuthError)]) {
-    config.features_enabled.push_back(switches::kEnableIdentityInAuthError);
-  }
-
-  return config;
-}
-
 - (void)setUp {
   [super setUp];
   // Resets the number of dismissals for web sign-in.
   [ChromeEarlGrey setIntegerValue:0
                       forUserPref:prefs::kSigninWebSignDismissalCount];
+}
+
+- (AppLaunchConfiguration)appConfigurationForTestCase {
+  AppLaunchConfiguration config;
+  if ([self isRunningTest:@selector
+            (testConsistencyPromoSigninHiddenWhenNoAccountsSignedIn)]) {
+    config.features_disabled.push_back(switches::kNoAccountWebSignin);
+  } else {
+    config.features_enabled.push_back(switches::kNoAccountWebSignin);
+  }
+  return config;
 }
 
 // Tests that ConsistencyPromoSigninCoordinator shows up, and then skips it.
@@ -64,6 +65,28 @@
                                           ConsistencySigninSkipButtonMatcher()]
       performAction:grey_tap()];
   [ChromeEarlGreyUI waitForAppToIdle];
+  [SigninEarlGreyUI verifyWebSigninIsVisible:NO];
+}
+
+// Tests that ConsistencyPromoSigninCoordinator is surfaced when there are
+// noAccounts available.
+- (void)testConsistencyPromoSigninShownWhenNoAccountsSignedIn {
+  GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
+  const GURL url = self.testServer->GetURL("/echo");
+
+  [SigninEarlGrey triggerConsistencyPromoSigninDialogWithURL:url];
+
+  [SigninEarlGreyUI verifyWebSigninIsVisible:YES];
+}
+
+// Tests that ConsistencyPromoSigninCoordinator is NOT surfaced when there are
+// noAccounts available and kNoAccountWebSignin is disabled.
+- (void)testConsistencyPromoSigninHiddenWhenNoAccountsSignedIn {
+  GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
+  const GURL url = self.testServer->GetURL("/echo");
+
+  [SigninEarlGrey triggerConsistencyPromoSigninDialogWithURL:url];
+
   [SigninEarlGreyUI verifyWebSigninIsVisible:NO];
 }
 
@@ -102,15 +125,7 @@
 // Removes the only identity while the error dialog is opened. Once the identity
 // is removed, the web sign-in dialog needs to update itself to show the version
 // with no identity.
-// TODO(crbug.com/346537324): Test fails on device.
-#if TARGET_OS_SIMULATOR
-#define MAYBE_testRemoveLastIdentityWithSigninErrorDialogNoDismiss \
-  testRemoveLastIdentityWithSigninErrorDialogNoDismiss
-#else
-#define MAYBE_testRemoveLastIdentityWithSigninErrorDialogNoDismiss \
-  DISABLED_testRemoveLastIdentityWithSigninErrorDialogNoDismiss
-#endif
-- (void)MAYBE_testRemoveLastIdentityWithSigninErrorDialogNoDismiss {
+- (void)testRemoveLastIdentityWithSigninErrorDialogNoDismiss {
   FakeSystemIdentity* fakeIdentity = [FakeSystemIdentity fakeIdentity1];
   [SigninEarlGrey addFakeIdentity:fakeIdentity];
   GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
@@ -140,15 +155,7 @@
 }
 
 // Display an error dialog and then dismiss the web sign-in dialog.
-// TODO(crbug.com/346537324): Test fails on device.
-#if TARGET_OS_SIMULATOR
-#define MAYBE_testGetErrorDialogAndSkipWebSigninDialog \
-  testGetErrorDialogAndSkipWebSigninDialog
-#else
-#define MAYBE_testGetErrorDialogAndSkipWebSigninDialog \
-  DISABLED_testGetErrorDialogAndSkipWebSigninDialog
-#endif
-- (void)MAYBE_testGetErrorDialogAndSkipWebSigninDialog {
+- (void)testGetErrorDialogAndSkipWebSigninDialog {
   FakeSystemIdentity* fakeIdentity = [FakeSystemIdentity fakeIdentity1];
   [SigninEarlGrey addFakeIdentity:fakeIdentity];
   GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");

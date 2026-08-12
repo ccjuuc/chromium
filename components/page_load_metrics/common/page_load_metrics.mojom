@@ -4,14 +4,15 @@
 
 module page_load_metrics.mojom;
 
-import "mojo/public/mojom/base/byte_count.mojom";
+import "mojo/public/mojom/base/byte_size.mojom";
 import "mojo/public/mojom/base/shared_memory.mojom";
 import "mojo/public/mojom/base/time.mojom";
+import "mojo/public/mojom/base/unguessable_token.mojom";
 import "services/network/public/mojom/request_priority.mojom";
 import "third_party/blink/public/mojom/loader/javascript_framework_detection.mojom";
+import "third_party/blink/public/mojom/navigation/navigation_type_for_navigation_api.mojom";
 import "third_party/blink/public/mojom/use_counter/use_counter_feature.mojom";
 import "ui/gfx/geometry/mojom/geometry.mojom";
-import "mojo/public/mojom/base/unguessable_token.mojom";
 
 // TimeDeltas below relative to navigation start.
 struct DocumentTiming {
@@ -65,6 +66,10 @@ struct LargestContentfulPaintTiming {
   // TODO(crbug.com/40489779): Use an optional enum.
   bool image_request_priority_valid = false;
   network.mojom.RequestPriority image_request_priority_value;
+
+  // The offset of the corresponding soft navigation; 0 otherwise.
+  // See SoftNavigationMetrics.soft_navigation_offset.
+  uint64 soft_navigation_offset;
 };
 
 // TimeDeltas below relative to navigation start.
@@ -111,6 +116,9 @@ struct MonotonicPaintTiming {
 
   // Time when the first contentful thing (image, text, etc.) is painted.
   mojo_base.mojom.TimeTicks? first_contentful_paint;
+
+  // Time when the first contentful paint was submitted to compositor.
+  mojo_base.mojom.TimeTicks? first_contentful_paint_submitted;
 };
 
 // TimeDeltas below represent durations of time during the page load.
@@ -182,6 +190,65 @@ struct DomainLookupTiming {
   mojo_base.mojom.TimeDelta? domain_lookup_end;
 };
 
+// Represents Unicode scripts (and Emojis) that we track for font fallback.
+// This is a curated subset of ICU's UScriptCode (plus kEmoji) designed
+// specifically for tracking high-impact font fallback categories in UMA.
+// LINT.IfChange(ScriptType)
+enum ScriptType {
+  // Catch-all for scripts not explicitly listed below.
+  kOther = 0,
+  // Latin script (USCRIPT_LATIN).
+  kLatin = 1,
+  // Han (CJK Ideographs) script (USCRIPT_HAN).
+  kHan = 2,
+  // Hangul script (USCRIPT_HANGUL).
+  kHangul = 3,
+  // Hiragana script (USCRIPT_HIRAGANA).
+  kHiragana = 4,
+  // Katakana script (USCRIPT_KATAKANA).
+  kKatakana = 5,
+  // Arabic script (USCRIPT_ARABIC).
+  kArabic = 6,
+  // Bengali script (USCRIPT_BENGALI).
+  kBengali = 7,
+  // Devanagari script (USCRIPT_DEVANAGARI).
+  kDevanagari = 8,
+  // Cyrillic script (USCRIPT_CYRILLIC).
+  kCyrillic = 9,
+  // Common script (USCRIPT_COMMON), used for math, symbols, etc.
+  kCommon = 10,
+  // Emojis (detected via fallback priority instead of script code).
+  kEmoji = 11,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/page/histograms.xml:GWSFontFallbackScript)
+
+struct ScriptFallbackInfo {
+  // The script type (or Emoji) of the fallback character.
+  ScriptType script_type;
+  // The number of fallback events for this script/Emoji.
+  uint32 fallback_count;
+};
+
+struct FontLoadingMetrics {
+  // Total cumulative time spent in character fallback.
+  mojo_base.mojom.TimeDelta? fallback_duration;
+
+  // Total number of character fallback events.
+  uint32 fallback_count;
+
+  // Duration of the first fallback event in the process.
+  mojo_base.mojom.TimeDelta? fallback_initial_duration;
+
+  // NGShapeCache hits.
+  uint32 shape_cache_hit_count;
+
+  // NGShapeCache misses.
+  uint32 shape_cache_miss_count;
+
+  // Detailed fallback metrics per script.
+  array<ScriptFallbackInfo> script_fallback_metrics;
+};
+
 // PageLoadTiming contains timing metrics associated with a page load. Many of
 // the metrics here are based on the Navigation Timing spec:
 // http://www.w3.org/TR/navigation-timing/.
@@ -243,25 +310,21 @@ struct FrameMetadata {
   // These are packed blink::LoadingBehaviorFlag enums.
   int32 behavior_flags = 0;
 
-  // For the main frame, the rect is the main frame document size (at (0,0));
-  // for a subframe, the rect is frame's intersection rect with the main frame
-  // in the main frame's coordinate system, and is an empty rect when there is
-  // no intersection with the main frame. This is only set for the first time
-  // the intersection rectangle is initially computed, and for any subsequent
-  // changes, and is null otherwise (i.e. hasn't changed).
-  gfx.mojom.Rect? main_frame_intersection_rect;
+  // The main frame's document rectangle, originating at (0,0) and encapsulating
+  // the document's dimensions. Set only for the outermost main frame when
+  // initially computed or upon subsequent changes. Null if unchanged.
+  gfx.mojom.Rect? main_frame_rect;
 
-  // The main frame's viewport rectangle (encapsulating the dimensions and the
-  // scroll position) in the main frame's coordinate system. This is only set
-  // for the main frame, for the first time the viewport rectangle is initially
-  // computed, and for any subsequent changes, and is null otherwise (i.e.
-  // hasn't changed).
+  // The main frame's viewport rectangle (encapsulating dimensions and
+  // scroll position) in the main frame's coordinate system. Set only for the
+  // outermost main frame when initially computed or upon subsequent changes.
+  // Null if unchanged.
   gfx.mojom.Rect? main_frame_viewport_rect;
 
   // A map of ad element node IDs to their bounding rectangles in the main
-  // frame's coordinate system. Empty rectangles are used to signal the removal
-  // of the element. This is only populated for the main frame, for the first
-  // time each rectangle is initially computed and for any subsequent changes.
+  // frame's coordinate system. An empty rectangle signals the removal of an
+  // element. Populated only for the outermost main frame when a rectangle is
+  // initially computed or subsequently changed.
   map<int32, gfx.mojom.Rect> main_frame_ad_rects;
 
   // Detected versions of JavaScript frameworks in the page.
@@ -495,19 +558,19 @@ struct ResourceDataUpdate {
 
   // Network bytes received for the resource since the last timing update
   // from renderer to browser.
-  mojo_base.mojom.ByteCount delta_bytes;
+  mojo_base.mojom.ByteSize delta_bytes;
 
   // Total network bytes received for the resource across timing updates. This
   // is the aggregate of the |delta_bytes| from each timing update.
-  mojo_base.mojom.ByteCount received_data_length;
+  mojo_base.mojom.ByteSize received_data_length;
 
   // The length of the response body for the resource before removing any
   // content encodings. Only set for complete resources.
-  mojo_base.mojom.ByteCount encoded_body_length;
+  mojo_base.mojom.ByteSize encoded_body_length;
 
   // The length of the response body in bytes for the resource after decoding.
   // Only set for complete resources.
-  mojo_base.mojom.ByteCount decoded_body_length;
+  mojo_base.mojom.ByteSize decoded_body_length;
 
   // Whether this resource load has completed.
   bool is_complete;
@@ -538,21 +601,17 @@ struct ResourceDataUpdate {
 };
 
 // Timestamp and layout shift score of a layout shift.
+// See https://github.com/WICG/layout-instability/blob/main/README.md
+// and https://web.dev/articles/cls.
 struct LayoutShift {
   mojo_base.mojom.TimeTicks layout_shift_time;
   double layout_shift_score;
+  // Whether this layout shift occurred after a user input or document scroll.
+  bool after_input_or_scroll;
 };
 
 // Metrics about how a RenderFrame rendered since the last UpdateTiming call.
 struct FrameRenderDataUpdate {
-  // How much visible elements in the frame shifted (https://bit.ly/3fQz29y) since
-  // the last timing update.
-  float layout_shift_delta;
-
-  // How much visible elements in the frame shifted (https://bit.ly/3fQz29y),
-  // before a user input or document scroll, since the last timing update.
-  float layout_shift_delta_before_input_or_scroll;
-
   // New layout shifts with timestamps.
   array<LayoutShift> new_layout_shifts;
 };
@@ -563,19 +622,17 @@ struct CpuTiming {
   mojo_base.mojom.TimeDelta task_time;
 };
 
-// Data for user interaction latencies.
-struct InputTiming {
-  array<UserInteractionLatency> user_interaction_latencies;
-};
-
 // The latency and the type of a user interaction.
-struct UserInteractionLatency {
-  mojo_base.mojom.TimeDelta interaction_latency;
+struct EventTiming {
+  mojo_base.mojom.TimeDelta duration;
   // The one-based offset of the interaction in time-based order; 1 for the
   // first interaction, 2 for the second, etc.
-  uint64 interaction_offset;
-  // The time the interaction occurred, relative to navigation start.
-  mojo_base.mojom.TimeTicks interaction_time;
+  uint64 interaction_id;
+  // The time the interaction occurred.
+  mojo_base.mojom.TimeTicks start_time;
+  // The time the processing on the main thread started; used for
+  // determining to which soft navigation this measurement should be attributed.
+  mojo_base.mojom.TimeTicks processing_start;
 };
 
 // Sent from renderer to browser process when the PageLoadTiming for the
@@ -594,15 +651,12 @@ interface PageLoadMetrics {
                array<ResourceDataUpdate> resources,
                FrameRenderDataUpdate render_data,
                CpuTiming cpu_load_timing,
-               InputTiming input_timing_delta,
+               array<EventTiming> event_timings,
                SubresourceLoadMetrics? subresource_load_metrics,
-               SoftNavigationMetrics soft_navigation_metrics);
-
-  // Set up a shared memory used to transfer smoothness data from the renderer
-  // to the browser. The structures is defined in
-  // //cc/metrics/ukm_dropped_frames_data.h
-  SetUpSharedMemoryForDroppedFrames(
-    mojo_base.mojom.ReadOnlySharedMemoryRegion dropped_frames_memory);
+               array<SoftNavigationMetrics> soft_navigation_metrics,
+               array<LargestContentfulPaintTiming> soft_largest_contentful_paint,
+               array<CustomUserTimingMark> custom_user_timings,
+               FontLoadingMetrics? font_loading_metrics);
 
   // Called when performance entries are added via `performance.mark()` from the
   // outermost main frame in renderer, except for the case when standard
@@ -638,26 +692,34 @@ struct BackForwardCacheTiming {
 // The metrics are to be added in a SoftNavigation Event which is parallel to
 // a PageLoad event.
 struct SoftNavigationMetrics {
-  // The number of soft navigations that occur during a page load.
-  uint64 count;
+  // A unique number assigned to this soft navigation from the start of the
+  // page load, 1, 2, 3, ... n. For the last soft navigation, it is synonymous
+  // with a count of the soft navigations for the page load.
+  uint64 soft_navigation_offset;
 
   // The start time of a soft navigation. It is the time the user initializes
-  // the soft navigation. It is relative to navigation start.
+  // the soft navigation. It is relative to navigation start, and is the time
+  // origin for calculating the loading performance of the soft navigation,
+  // e.g. LCP.
   mojo_base.mojom.TimeDelta start_time;
 
-  // The renderer side navigation id that increments when a soft navigation
-  // happens.
-  uint32 navigation_id;
+  // The TimeTicks value that we use for slicing the performance timeline;
+  // specifically, for layout shifts (LayoutShift) and interactions
+  // (EventTiming) in a PageLoadMetrics.UpdateTiming call, we distinguish
+  // measurements belonging before or after this soft navigation by comparing
+  // with this value. Only its ordering relative to other event TimeTicks is
+  // meaningful; the absolute value is not a wall-clock timestamp. This is only
+  // a Chrome-internal mechanism and never recorded to UKM. Note: For our web
+  // exposed (experimental) API, PerformanceEntry.navigationId serves the same
+  // purpose.
+  mojo_base.mojom.TimeTicks soft_navigation_slicing_time;
+
+  // The type of the soft navigation.
+  blink.mojom.NavigationTypeForNavigationApi navigation_type;
 
   // Identifies the same document navigation for the initial URL change.
   // This allows us to map to the UKM Source ID in the browser side,
   // and therefore attribute the metrics to the correct URL
   // when any corresponding soft navigation completes.
-  mojo_base.mojom.UnguessableToken? same_document_metrics_token;
-
-  // The LargestContentfulPaint of a soft navigation, that is, the largest
-  // contentful paint that happened after a soft navigation is detected and
-  // before the next soft navigation is detected or page end.
-  // The timings are relative to the soft navigation start.
-  LargestContentfulPaintTiming largest_contentful_paint;
+  mojo_base.mojom.UnguessableToken same_document_metrics_token;
 };

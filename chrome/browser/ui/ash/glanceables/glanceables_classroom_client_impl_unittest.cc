@@ -33,6 +33,7 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/ash/components/policy/policy_blocklist_service/ash_policy_blocklist_service_factory.h"
+#include "components/policy/core/browser/url_list/url_list_policy_pref_names.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/services/app_service/public/cpp/app.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
@@ -171,7 +172,7 @@ TEST_F(GlanceablesClassroomClientImplIsDisabledByAdminTest, Default) {
 TEST_F(GlanceablesClassroomClientImplIsDisabledByAdminTest,
        NoClassroomInContextualGoogleIntegrationsPref) {
   auto prefs = GetDefaultPrefs();
-  base::Value::List enabled_integrations;
+  base::ListValue enabled_integrations;
   enabled_integrations.Append(prefs::kGoogleCalendarIntegrationName);
   enabled_integrations.Append(prefs::kGoogleTasksIntegrationName);
   prefs->SetList(prefs::kContextualGoogleIntegrationsConfiguration,
@@ -201,7 +202,7 @@ TEST_F(GlanceablesClassroomClientImplIsDisabledByAdminTest,
 TEST_F(GlanceablesClassroomClientImplIsDisabledByAdminTest,
        BlockedClassroomUrl) {
   auto prefs = GetDefaultPrefs();
-  base::Value::List blocklist;
+  base::ListValue blocklist;
   blocklist.Append("classroom.google.com");
   prefs->SetManagedPref(policy::policy_prefs::kUrlBlocklist,
                         std::move(blocklist));
@@ -245,8 +246,7 @@ class GlanceablesClassroomClientImplTest : public testing::Test {
     ASSERT_TRUE(test_server_.Start());
 
     gaia_urls_overrider_ = std::make_unique<GaiaUrlsOverriderForTesting>(
-        base::CommandLine::ForCurrentProcess(), "classroom_api_origin_url",
-        test_server_.base_url().spec());
+        "classroom_api_origin_url", test_server_.base_url().spec());
     ASSERT_EQ(GaiaUrls::GetInstance()->classroom_api_origin_url(),
               test_server_.base_url().spec());
   }

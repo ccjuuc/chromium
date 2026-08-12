@@ -10,7 +10,6 @@
 
 #include "base/auto_reset.h"
 #include "base/debug/alias.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
@@ -47,16 +46,10 @@
 namespace syncer {
 namespace {
 
-// A kill switch for clearing metadata for full update data types if they have
-// any unsynced entities.
-BASE_FEATURE(kSyncClearMetadataOnUnsyncedEntitiesForFullUpdateTypes,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 const char kErrorSiteHistogramPrefix[] = "Sync.DataTypeErrorSite.";
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
-//
 // LINT.IfChange(SyncMetadataConsistency)
 enum class SyncMetadataConsistency {
   // Stored metadata is consistent with the activation request.
@@ -72,7 +65,7 @@ enum class SyncMetadataConsistency {
 
   kMaxValue = kAuthenticatedGaiaIdMismatch,
 };
-// LINT.ThenChange(//tools/metrics/histograms/metadata/sync/enums.xml:SyncMetadataConsistency)
+// LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:SyncMetadataConsistency)
 
 SyncMetadataConsistency GetSyncMetadataConsistency(
     const sync_pb::DataTypeState& data_type_state,
@@ -230,7 +223,7 @@ void ClientTagBasedDataTypeProcessor::ModelReadyToSync(
     if (IsInitialSyncAtLeastPartiallyDone(
             data_type_state.initial_sync_state())) {
       entity_tracker_ = std::make_unique<ProcessorEntityTracker>(
-          type_, data_type_state, batch->TakeAllMetadata());
+          data_type_state, batch->TakeAllMetadata());
       RecordDataTypeNumUnsyncedEntitiesOnModelReady(type_, *entity_tracker_);
     } else {
       // If initial sync isn't done, there must be no entity metadata (if there
@@ -471,8 +464,9 @@ void ClientTagBasedDataTypeProcessor::ReportErrorImpl(const ModelError& error,
     return;
   }
 
-  const std::string type_suffix = DataTypeToHistogramSuffix(type_);
-  base::UmaHistogramEnumeration(kErrorSiteHistogramPrefix + type_suffix, site);
+  const std::string_view type_suffix = DataTypeToHistogramSuffix(type_);
+  base::UmaHistogramEnumeration(
+      base::StrCat({kErrorSiteHistogramPrefix, type_suffix}), site);
 
   if (dump_stack_) {
     // Upload a stack trace if possible.
@@ -606,7 +600,7 @@ void ClientTagBasedDataTypeProcessor::Put(
     // been sent to the server yet, and the bridge is trying to re-create this
     // entity with a new storage key. In such case, we should reuse the existing
     // entity.
-    entity = entity_tracker_->GetEntityForTagHash(data->client_tag_hash);
+    entity = entity_tracker_->GetEntityForClientTagHash(data->client_tag_hash);
     if (entity != nullptr) {
       CHECK(storage_key != entity->storage_key());
       if (!entity->metadata().is_deleted()) {
@@ -631,7 +625,7 @@ void ClientTagBasedDataTypeProcessor::Put(
         data->modification_time = data->creation_time;
       }
 
-      entity = entity_tracker_->AddUnsyncedLocal(storage_key, std::move(data),
+      entity = entity_tracker_->AddLocalCreation(storage_key, std::move(data),
                                                  std::move(trimmed_specifics),
                                                  std::move(unique_position));
     }
@@ -693,7 +687,7 @@ void ClientTagBasedDataTypeProcessor::UpdateStorageKey(
   CHECK(entity_tracker_);
 
   const ProcessorEntity* entity =
-      entity_tracker_->GetEntityForTagHash(client_tag_hash);
+      entity_tracker_->GetEntityForClientTagHash(client_tag_hash);
   CHECK(entity);
 
   CHECK(entity->storage_key().empty());
@@ -865,15 +859,13 @@ void ClientTagBasedDataTypeProcessor::OnCommitCompleted(
 
   for (const CommitResponseData& data : committed_response_list) {
     ProcessorEntity* entity =
-        entity_tracker_->GetEntityForTagHash(data.client_tag_hash);
+        entity_tracker_->GetEntityForClientTagHash(data.client_tag_hash);
     if (entity == nullptr) {
       // This can happen (rarely) if the entity got untracked while a Commit was
       // ongoing, or if the server sent a bogus response (unlikely).
       DLOG(ERROR) << "Received commit response for missing item."
                   << " type: " << DataTypeToDebugString(type_)
                   << " client_tag_hash: " << data.client_tag_hash;
-      base::UmaHistogramEnumeration("Sync.CommitResponseForUnknownEntity",
-                                    DataTypeHistogramValue(type_));
       continue;
     }
 
@@ -978,6 +970,12 @@ void ClientTagBasedDataTypeProcessor::OnUpdateReceived(
     ReportIfError(OnFullUpdateReceived(data_type_state, std::move(updates),
                                        std::move(gc_directive)),
                   ErrorSite::kApplyFullUpdates);
+  } else if (gc_directive && gc_directive->clear_metadata()) {
+    OverrideAllServerMetadataToForceApplyUpdates(updates);
+    ReportIfError(
+        ApplyFullUpdateAsIncrementalUpdate(data_type_state, std::move(updates),
+                                           std::move(gc_directive.value())),
+        ErrorSite::kApplyIncrementalUpdatesWithClearAllDirective);
   } else if (!HasClearAllDirective(gc_directive)) {
     // Incremental update or empty update with sync metadata only (e.g. progress
     // marker).
@@ -1012,10 +1010,8 @@ void ClientTagBasedDataTypeProcessor::OnUpdateReceived(
 
   CHECK(entity_tracker_);
   // If there were entities with empty storage keys, they should have been
-  // updated by bridge as part of ApplyIncrementalSyncChanges.
-  // TODO(crbug.com/339260002): This check used to trigger sometimes; verify
-  // whether it still does after crrev.com/c/6979865.
-  DUMP_WILL_BE_CHECK(entity_tracker_->AllStorageKeysPopulated());
+  // updated by the bridge as part of ApplyIncrementalSyncChanges.
+  CHECK(entity_tracker_->AllStorageKeysPopulated());
   // There may be new reasons to commit by the time this function is done.
   NudgeForCommitIfNeeded();
 }
@@ -1130,7 +1126,7 @@ ProcessorEntity* ClientTagBasedDataTypeProcessor::TrackEntityUponFullUpdate(
   // TODO(crbug.com/41406929): The CreateEntity() call below assumes that no
   // entity with this client_tag_hash exists already, but in some cases it
   // does.
-  if (entity_tracker_->GetEntityForTagHash(client_tag_hash)) {
+  if (entity_tracker_->GetEntityForClientTagHash(client_tag_hash)) {
     DLOG(ERROR) << "Received duplicate client_tag_hash " << client_tag_hash
                 << " for " << DataTypeToDebugString(type_);
   }
@@ -1153,6 +1149,7 @@ std::optional<ModelError> ClientTagBasedDataTypeProcessor::OnFullUpdateReceived(
   std::unique_ptr<MetadataChangeList> metadata_changes =
       bridge_->CreateMetadataChangeList();
   CHECK(model_ready_to_sync_);
+  CHECK(!model_error_);
 
   // Check that the worker correctly marked initial sync as (at least) partially
   // done for this update.
@@ -1177,7 +1174,7 @@ std::optional<ModelError> ClientTagBasedDataTypeProcessor::OnFullUpdateReceived(
 
   if (!entity_tracker_) {
     entity_tracker_ = std::make_unique<ProcessorEntityTracker>(
-        type_, data_type_state, EntityMetadataMap());
+        data_type_state, EntityMetadataMap());
   }
 
   // All existing sync entities are either deleted (in the full update case) or
@@ -1201,6 +1198,9 @@ std::optional<ModelError> ClientTagBasedDataTypeProcessor::OnFullUpdateReceived(
   // If there is already an error (this can happen if one of the metadata
   // writes failed), don't even send the data to the bridge.
   if (model_error_) {
+    // Do not call metadata_changes->DropAllChanges() here because the in-memory
+    // implementation of MetadataChangeList is not expected to cause any errors,
+    // and the other implementations don't support this method.
     return model_error_;
   }
 
@@ -1403,12 +1403,12 @@ void ClientTagBasedDataTypeProcessor::GetAllNodesForDebugging(
 
   std::unique_ptr<DataBatch> batch = bridge_->GetAllDataForDebugging();
   if (!batch) {
-    std::move(callback).Run(base::Value::List());
+    std::move(callback).Run(base::ListValue());
     return;
   }
 
-  base::Value::List all_nodes;
-  std::string type_string = DataTypeToDebugString(type_);
+  base::ListValue all_nodes;
+  std::string_view type_string = DataTypeToDebugString(type_);
 
   while (batch->HasNext()) {
     auto [storage_key, data] = batch->Next();
@@ -1428,7 +1428,7 @@ void ClientTagBasedDataTypeProcessor::GetAllNodesForDebugging(
       data->client_tag_hash = entity->GetClientTagHash();
     }
 
-    base::Value::Dict node = data->ToDictionaryValue();
+    base::DictValue node = data->ToDictionaryValue();
     node.Set("dataType", type_string);
     // Copy the whole metadata message into the dictionary (if existing).
     if (entity != nullptr) {
@@ -1445,7 +1445,7 @@ void ClientTagBasedDataTypeProcessor::GetAllNodesForDebugging(
   // UNIQUE_SERVER_TAG to check if the node is root node. isChildOf in
   // sync_node_browser.js uses dataType to check if root node is parent of real
   // data node. NON_UNIQUE_NAME will be the name of node to display.
-  auto rootnode = base::Value::Dict()
+  auto rootnode = base::DictValue()
                       .Set("PARENT_ID", "r")
                       .Set("UNIQUE_SERVER_TAG", type_string)
                       .Set("IS_DIR", true)
@@ -1508,15 +1508,11 @@ bool ClientTagBasedDataTypeProcessor::ShouldClearPersistedMetadata(
   // Check that there are no empty/missing storage keys.
   for (const auto& [storage_key, _] : metadata_map) {
     if (storage_key.empty()) {
-      base::UmaHistogramEnumeration("Sync.ClearMetadataDueToEmptyStorageKey",
-                                    DataTypeHistogramValue(type_));
       return true;
     }
   }
 
-  if (!bridge_->SupportsIncrementalUpdates() &&
-      base::FeatureList::IsEnabled(
-          kSyncClearMetadataOnUnsyncedEntitiesForFullUpdateTypes)) {
+  if (!bridge_->SupportsIncrementalUpdates()) {
     for (const auto& [_, entity_metadata] : metadata_map) {
       // Bridges that do not support incremental updates (i.e. full-update
       // types) must be read-only and therefore should not have any unsynced
@@ -1542,9 +1538,12 @@ void ClientTagBasedDataTypeProcessor::
   const SyncMetadataConsistency sync_metadata_consistency =
       GetSyncMetadataConsistency(entity_tracker_->data_type_state(),
                                  activation_request_, type_);
+
+  // TODO(crbug.com/40897441): remove once the account mismatch case is
+  // resolved.
+  const std::string_view type_suffix = DataTypeToHistogramSuffix(type_);
   base::UmaHistogramEnumeration(
-      base::StrCat({"Sync.DataTypeMetadataConsistency.",
-                    DataTypeToHistogramSuffix(type_)}),
+      base::StrCat({"Sync.DataTypeMetadataConsistency.", type_suffix}),
       sync_metadata_consistency);
 
   switch (sync_metadata_consistency) {
@@ -1617,7 +1616,7 @@ sync_pb::UniquePosition ClientTagBasedDataTypeProcessor::UniquePositionAfter(
   }
 
   const ProcessorEntity* target_entity =
-      entity_tracker_->GetEntityForTagHash(target_client_tag_hash);
+      entity_tracker_->GetEntityForClientTagHash(target_client_tag_hash);
   if (ShouldReuseTrackedUniquePositionFor(target_entity, position_before,
                                           UniquePosition())) {
     CHECK(target_entity);
@@ -1642,7 +1641,7 @@ sync_pb::UniquePosition ClientTagBasedDataTypeProcessor::UniquePositionBefore(
   }
 
   const ProcessorEntity* target_entity =
-      entity_tracker_->GetEntityForTagHash(target_client_tag_hash);
+      entity_tracker_->GetEntityForClientTagHash(target_client_tag_hash);
   if (ShouldReuseTrackedUniquePositionFor(target_entity, UniquePosition(),
                                           position_after)) {
     CHECK(target_entity);
@@ -1683,7 +1682,7 @@ sync_pb::UniquePosition ClientTagBasedDataTypeProcessor::UniquePositionBetween(
   }
 
   const ProcessorEntity* target_entity =
-      entity_tracker_->GetEntityForTagHash(target_client_tag_hash);
+      entity_tracker_->GetEntityForClientTagHash(target_client_tag_hash);
   if (ShouldReuseTrackedUniquePositionFor(target_entity, position_before,
                                           position_after)) {
     CHECK(target_entity);
@@ -1703,7 +1702,7 @@ ClientTagBasedDataTypeProcessor::UniquePositionForInitialEntity(
   CHECK(entity_tracker_);
 
   const ProcessorEntity* target_entity =
-      entity_tracker_->GetEntityForTagHash(target_client_tag_hash);
+      entity_tracker_->GetEntityForClientTagHash(target_client_tag_hash);
   if (ShouldReuseTrackedUniquePositionFor(target_entity, UniquePosition(),
                                           UniquePosition())) {
     CHECK(target_entity);
@@ -1789,7 +1788,7 @@ ClientTagBasedDataTypeProcessor::ApplyFullUpdateAsIncrementalUpdate(
     sync_pb::GarbageCollectionDirective gc_directive) {
   // The initial sync must be handled by a normal full update path.
   CHECK(IsTrackingMetadata());
-  CHECK(HasClearAllDirective(gc_directive));
+  CHECK(HasClearAllDirective(gc_directive) || gc_directive.clear_metadata());
 
   const absl::flat_hash_set<ClientTagHash> updated_client_tag_hashes =
       GetClientTagHashes(updates);
@@ -1845,6 +1844,28 @@ ClientTagBasedDataTypeProcessor::ApplyFullUpdateAsIncrementalUpdate(
 
   return OnIncrementalUpdateReceived(type_state, std::move(updates),
                                      std::move(gc_directive));
+}
+
+void ClientTagBasedDataTypeProcessor::
+    OverrideAllServerMetadataToForceApplyUpdates(
+        const syncer::UpdateResponseDataList& updates) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(entity_tracker_);
+
+  for (const auto& update : updates) {
+    ProcessorEntity* entity = entity_tracker_->GetEntityForClientTagHash(
+        update.entity.client_tag_hash);
+    if (entity) {
+      // For both synced and unsynced entities, the server version is overridden
+      // to `response_version - 1`.
+      // For synced entities, this ensures the update is applied.
+      // For unsynced entities, this forces a conflict resolution, which will
+      // resolve in favor of the local change (preserving it) while correctly
+      // updating and persisting the server ID.
+      entity->OverrideServerMetadata(update.entity.id,
+                                     update.response_version - 1);
+    }
+  }
 }
 
 }  // namespace syncer

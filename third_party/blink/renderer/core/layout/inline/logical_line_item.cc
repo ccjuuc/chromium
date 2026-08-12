@@ -6,6 +6,7 @@
 
 #include "base/containers/adapters.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_item_result.h"
+#include "third_party/blink/renderer/core/layout/inline/used_font.h"
 
 namespace blink {
 
@@ -40,6 +41,19 @@ const ComputedStyle* LogicalLineItem::Style() const {
   if (inline_item)
     return inline_item->Style();
   return nullptr;
+}
+
+UsedFont LogicalLineItem::GetUsedFont() const {
+  const Font* font = Style()->GetFont();
+  DCHECK(font);
+  float scale = 1.0f;
+  if (text_fit_scale) {
+    if (text_fit_scale->font) {
+      font = text_fit_scale->font.Get();
+    }
+    scale = text_fit_scale->scale;
+  }
+  return UsedFont(*font, scale);
 }
 
 std::ostream& operator<<(std::ostream& stream, const LogicalLineItem& item) {
@@ -127,7 +141,7 @@ void LogicalLineItem::Trace(Visitor* visitor) const {
   visitor->Trace(layout_object);
   visitor->Trace(out_of_flow_positioned_box);
   visitor->Trace(unpositioned_float);
-  visitor->Trace(fit_text_scale);
+  visitor->Trace(text_fit_scale);
 }
 
 void LogicalLineItems::Trace(Visitor* visitor) const {

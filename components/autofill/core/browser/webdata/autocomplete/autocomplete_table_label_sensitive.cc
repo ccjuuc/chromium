@@ -8,15 +8,22 @@
 
 #include "components/autofill/core/browser/webdata/autocomplete/autocomplete_table_label_sensitive.h"
 
-#include <memory>
+#include <stddef.h>
+#include <stdint.h>
+
+#include <ctime>
+#include <limits>
+#include <optional>
+#include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/check_deref.h"
 #include "base/i18n/case_conversion.h"
 #include "base/i18n/unicodestring.h"
-#include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/time/time.h"
 #include "components/autofill/core/browser/webdata/autocomplete/autocomplete_entry_label_sensitive.h"
 #include "components/autofill/core/browser/webdata/autofill_table_utils.h"
@@ -24,12 +31,16 @@
 #include "components/autofill/core/common/autofill_constants.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "components/webdata/common/web_database.h"
+#include "components/webdata/common/web_database_table.h"
 #include "sql/statement.h"
+#include "sql/statement_id.h"
+#include "sql/table_management_helpers.h"
 #include "sql/transaction.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
-#include "ui/base/l10n/l10n_util.h"
+#include "third_party/icu/source/common/unicode/normalizer2.h"
 #include "third_party/icu/source/common/unicode/uchar.h"
 #include "third_party/icu/source/common/unicode/unistr.h"
+#include "third_party/icu/source/common/unicode/urename.h"
 #include "third_party/icu/source/common/unicode/utypes.h"
 
 namespace autofill {
@@ -80,8 +91,16 @@ time_t GetEndTime(base::Time end) {
 //   3. Caps length at 50 characters.
 //   4. ICU-aware: correctly handles characters from scripts such as emojis,
 //   Kanji, Hangul, Greek, Cyrillic, etc.
+//   5. Unicode NFKC normalization - canonicalization for string comparison.
 std::u16string NormalizeLabel(std::u16string_view label_view) {
   icu::UnicodeString uni_label(label_view.data(), label_view.length());
+
+  UErrorCode status = U_ZERO_ERROR;
+  const icu::Normalizer2* normalizer =
+      icu::Normalizer2::getNFKCInstance(status);
+  if (U_SUCCESS(status)) {
+    uni_label = normalizer->normalize(uni_label, status);
+  }
 
   int32_t start = 0;
   int32_t end = uni_label.length() - 1;
@@ -112,8 +131,14 @@ std::u16string NormalizeLabel(std::u16string_view label_view) {
 AutocompleteSearchResultLabelSensitive::AutocompleteSearchResultLabelSensitive(
     std::u16string value,
     const MatchingType matching_type,
+    std::u16string query_name,
+    std::u16string query_label,
     const int count)
-    : value_(std::move(value)), matching_type_(matching_type), count_(count) {}
+    : value_(std::move(value)),
+      matching_type_(matching_type),
+      query_name_(std::move(query_name)),
+      query_label_(std::move(query_label)),
+      count_(count) {}
 
 AutocompleteSearchResultLabelSensitive::
     ~AutocompleteSearchResultLabelSensitive() = default;
@@ -121,6 +146,17 @@ AutocompleteSearchResultLabelSensitive::
 AutocompleteTableLabelSensitive::AutocompleteTableLabelSensitive() = default;
 
 AutocompleteTableLabelSensitive::~AutocompleteTableLabelSensitive() = default;
+
+AutocompleteSearchResultLabelSensitive::AutocompleteSearchResultLabelSensitive(
+    const AutocompleteSearchResultLabelSensitive& other) = default;
+AutocompleteSearchResultLabelSensitive&
+AutocompleteSearchResultLabelSensitive::operator=(
+    const AutocompleteSearchResultLabelSensitive& other) = default;
+AutocompleteSearchResultLabelSensitive::AutocompleteSearchResultLabelSensitive(
+    AutocompleteSearchResultLabelSensitive&& other) = default;
+AutocompleteSearchResultLabelSensitive&
+AutocompleteSearchResultLabelSensitive::operator=(
+    AutocompleteSearchResultLabelSensitive&& other) = default;
 
 // static
 AutocompleteTableLabelSensitive*
@@ -201,10 +237,12 @@ bool AutocompleteTableLabelSensitive::GetFormValuesForElementNameAndLabel(
       // MatchingType::kUnknown (= 0), should never happen.
       "    ELSE 0 "
       "  END AS matching_type, "
+      "  name AS query_name, "
+      "  label AS query_label, "
       "  MAX(count) AS max_count "
       "FROM autocomplete, inputs "
       "WHERE (name = inputs._name OR (label != '' AND label_normalized = "
-      "inputs._label)) AND value_lower LIKE inputs._prefix "
+      "inputs._label)) AND value_lower LIKE inputs._prefix ESCAPE '\\' "
       "GROUP BY value, matching_type "
       "ORDER BY "
       "  CASE "
@@ -215,7 +253,8 @@ bool AutocompleteTableLabelSensitive::GetFormValuesForElementNameAndLabel(
       "LIMIT ?"));
   s.BindString16(0, name);
   s.BindString16(1, NormalizeLabel(label));
-  s.BindString16(2, base::i18n::ToLower(prefix) + u"%");
+  s.BindString16(2,
+                 EscapeLikePattern(base::i18n::ToLower(prefix), u'\\') + u"%");
 
   // Later in this function we remove duplicates. Potentially every matching
   // type can return entries with identical values. So to make sure we will
@@ -230,7 +269,9 @@ bool AutocompleteTableLabelSensitive::GetFormValuesForElementNameAndLabel(
     AutocompleteSearchResultLabelSensitive current_result(
         /*value=*/s.ColumnString16(0),
         /*matching_type=*/ToSafeMatchingType(s.ColumnInt(1)),
-        /*count=*/s.ColumnInt(2));
+        /*query_name=*/s.ColumnString16(2),
+        /*query_label=*/s.ColumnString16(3),
+        /*count=*/s.ColumnInt(4));
     if (seen_results.insert(current_result).second) {
       entries.push_back(current_result);
     }
@@ -248,10 +289,12 @@ bool AutocompleteTableLabelSensitive::RemoveFormElementsAddedBetween(
   // Query for the name, label, value, count, and access dates of all form
   // elements that were used between the given times.
   sql::Statement s;
-  SelectBuilder(db(), s, kAutocompleteTableLabelSensitive,
-                {kName, kLabel, kValue, kCount, kDateCreated, kDateLastUsed},
-                "WHERE (date_created >= ? AND date_created < ?) OR "
-                "      (date_last_used >= ? AND date_last_used < ?)");
+  sql::SelectBuilder(
+      *db(), s, kAutocompleteTableLabelSensitive,
+      {kName, kLabel, kValue, kCount, kDateCreated, kDateLastUsed},
+      /*modifiers=*/
+      "WHERE (date_created >= ? AND date_created < ?) OR "
+      "      (date_last_used >= ? AND date_last_used < ?)");
   s.BindInt64(0, delete_begin_time_t);
   s.BindInt64(1, delete_end_time_t);
   s.BindInt64(2, delete_begin_time_t);
@@ -305,8 +348,9 @@ bool AutocompleteTableLabelSensitive::RemoveFormElementsAddedBetween(
 
   // As a single transaction, remove or update the elements appropriately.
   sql::Statement s_delete;
-  DeleteBuilder(db(), s_delete, kAutocompleteTableLabelSensitive,
-                "date_created >= ? AND date_last_used < ?");
+  sql::DeleteBuilder(
+      *db(), s_delete, kAutocompleteTableLabelSensitive,
+      /*where_clause=*/"date_created >= ? AND date_last_used < ?");
   s_delete.BindInt64(0, delete_begin_time_t);
   s_delete.BindInt64(1, delete_end_time_t);
   sql::Transaction transaction(db());
@@ -316,11 +360,11 @@ bool AutocompleteTableLabelSensitive::RemoveFormElementsAddedBetween(
   if (!s_delete.Run()) {
     return false;
   }
+  sql::Statement s_update;
+  sql::UpdateBuilder(*db(), s_update, kAutocompleteTableLabelSensitive,
+                     {kDateCreated, kDateLastUsed, kCount},
+                     /*where_clause=*/"name = ? AND label = ? AND value = ?");
   for (const auto& update : updates) {
-    sql::Statement s_update;
-    UpdateBuilder(db(), s_update, kAutocompleteTableLabelSensitive,
-                  {kDateCreated, kDateLastUsed, kCount},
-                  "name = ? AND label = ? AND value = ?");
     s_update.BindInt64(0, update.date_created);
     s_update.BindInt64(1, update.date_last_used);
     s_update.BindInt(2, update.count);
@@ -330,6 +374,7 @@ bool AutocompleteTableLabelSensitive::RemoveFormElementsAddedBetween(
     if (!s_update.Run()) {
       return false;
     }
+    s_update.Reset(/*clear_bound_vars=*/true);
   }
   if (!transaction.Commit()) {
     return false;
@@ -343,8 +388,9 @@ bool AutocompleteTableLabelSensitive::RemoveExpiredFormElements() {
       AutofillClock::Now() - kAutocompleteRetentionPolicyPeriod;
 
   sql::Statement delete_data_statement;
-  DeleteBuilder(db(), delete_data_statement, kAutocompleteTableLabelSensitive,
-                "date_last_used < ?");
+  sql::DeleteBuilder(*db(), delete_data_statement,
+                     kAutocompleteTableLabelSensitive,
+                     /*where_clause=*/"date_last_used < ?");
   delete_data_statement.BindInt64(0, expiration_time.ToTimeT());
   return delete_data_statement.Run();
 }
@@ -354,16 +400,17 @@ bool AutocompleteTableLabelSensitive::RemoveFormElement(
     std::u16string_view label,
     std::u16string_view value) {
   sql::Statement s;
-  DeleteBuilder(db(), s, kAutocompleteTableLabelSensitive,
-                "(name = ? OR (label_normalized = ? AND "
-                "label_normalized != '')) AND value = ?");
+  sql::DeleteBuilder(*db(), s, kAutocompleteTableLabelSensitive,
+                     /*where_clause=*/
+                     "(name = ? OR (label_normalized = ? AND "
+                     "label_normalized != '')) AND value = ?");
   s.BindString16(0, name);
   s.BindString16(1, NormalizeLabel(label));
   s.BindString16(2, value);
   return s.Run();
 }
 
-int AutocompleteTableLabelSensitive::GetCountOfValuesContainedBetween(
+int64_t AutocompleteTableLabelSensitive::GetCountOfValuesContainedBetween(
     base::Time begin,
     base::Time end) {
   const time_t begin_time_t = begin.ToTimeT();
@@ -384,14 +431,15 @@ int AutocompleteTableLabelSensitive::GetCountOfValuesContainedBetween(
     // This might happen in case of I/O errors. See crbug.com/332263206.
     return 0;
   }
-  return s.ColumnInt(0);
+  return s.ColumnInt64(0);
 }
 
 bool AutocompleteTableLabelSensitive::GetAllAutocompleteEntries(
     std::vector<AutocompleteEntryLabelSensitive>* entries) {
   sql::Statement s;
-  SelectBuilder(db(), s, kAutocompleteTableLabelSensitive,
-                {kName, kLabel, kValue, kDateCreated, kDateLastUsed});
+  sql::CachedSelectBuilder(
+      SQL_FROM_HERE, *db(), s, kAutocompleteTableLabelSensitive,
+      {kName, kLabel, kValue, kDateCreated, kDateLastUsed});
 
   while (s.Step()) {
     std::u16string name = s.ColumnString16(0);
@@ -412,9 +460,11 @@ AutocompleteTableLabelSensitive::GetAutocompleteEntryLabelSensitive(
     std::u16string_view label,
     std::u16string_view value) {
   sql::Statement s;
-  SelectBuilder(db(), s, kAutocompleteTableLabelSensitive,
-                {kDateCreated, kDateLastUsed},
-                "WHERE name = ? AND label = ? AND value = ?");
+  sql::CachedSelectBuilder(SQL_FROM_HERE, *db(), s,
+                           kAutocompleteTableLabelSensitive,
+                           {kDateCreated, kDateLastUsed},
+                           /*modifiers=*/
+                           "WHERE name = ? AND label = ? AND value = ?");
   s.BindString16(0, name);
   s.BindString16(1, label);
   s.BindString16(2, value);
@@ -441,7 +491,8 @@ bool AutocompleteTableLabelSensitive::AddFormFieldValueTime(
 
   // Always try to update counts of all entries that would contribute to correct
   // suggestion.
-  sql::Statement update_statement(db()->GetUniqueStatement(
+  sql::Statement update_statement(db()->GetCachedStatement(
+      SQL_FROM_HERE,
       "UPDATE autocomplete SET date_last_used = ?, count = count + 1 "
       "WHERE (name = ? OR (label_normalized = ? AND label_normalized != '')) "
       "AND value = ?"));
@@ -458,9 +509,11 @@ bool AutocompleteTableLabelSensitive::AddFormFieldValueTime(
                                           element.value())
            .has_value()) {
     sql::Statement create_statement;
-    InsertBuilder(db(), create_statement, kAutocompleteTableLabelSensitive,
-                  {kName, kLabel, kLabelNormalized, kValue, kValueLower,
-                   kDateCreated, kDateLastUsed, kCount});
+    sql::CachedInsertBuilder(
+        SQL_FROM_HERE, *db(), create_statement,
+        kAutocompleteTableLabelSensitive,
+        {kName, kLabel, kLabelNormalized, kValue, kValueLower, kDateCreated,
+         kDateLastUsed, kCount});
     create_statement.BindString16(0, element.name());
     create_statement.BindString16(1, element.label());
     create_statement.BindString16(2, NormalizeLabel(element.label()));
@@ -476,32 +529,32 @@ bool AutocompleteTableLabelSensitive::AddFormFieldValueTime(
 
 bool AutocompleteTableLabelSensitive::InitMainTable() {
   if (!db()->DoesTableExist(kAutocompleteTableLabelSensitive)) {
-    return CreateTable(db(), kAutocompleteTableLabelSensitive,
-                       {{kName, "VARCHAR"},
-                        {kLabel, "VARCHAR"},
-                        {kLabelNormalized, "VARCHAR"},
-                        {kValue, "VARCHAR"},
-                        {kValueLower, "VARCHAR"},
-                        {kDateCreated, "INTEGER DEFAULT 0"},
-                        {kDateLastUsed, "INTEGER DEFAULT 0"},
-                        {kCount, "INTEGER DEFAULT 1"}},
-                       {kName, kLabel, kValue})
+    return sql::CreateTable(*db(), kAutocompleteTableLabelSensitive,
+                            {{kName, "VARCHAR"},
+                             {kLabel, "VARCHAR"},
+                             {kLabelNormalized, "VARCHAR"},
+                             {kValue, "VARCHAR"},
+                             {kValueLower, "VARCHAR"},
+                             {kDateCreated, "INTEGER DEFAULT 0"},
+                             {kDateLastUsed, "INTEGER DEFAULT 0"},
+                             {kCount, "INTEGER DEFAULT 1"}},
+                            {kName, kLabel, kValue})
            // Used by query in GetFormValuesForElementNameAndLabel
-           && CreateIndex(db(), kAutocompleteTableLabelSensitive,
-                          {kName, kLabelNormalized, kValueLower})
+           && sql::CreateIndex(*db(), kAutocompleteTableLabelSensitive,
+                               {kName, kLabelNormalized, kValueLower})
 
            // Used by query in GetFormValuesForElementNameAndLabel
-           && CreateIndex(db(), kAutocompleteTableLabelSensitive,
-                          {kLabelNormalized, kValueLower})
+           && sql::CreateIndex(*db(), kAutocompleteTableLabelSensitive,
+                               {kLabelNormalized, kValueLower})
 
            // Used by query in RemoveFormElement,
            // GetCountOfValuesContainedBetween, AddFormFieldValueTime
-           && CreateIndex(db(), kAutocompleteTableLabelSensitive,
-                          {kValue, kDateLastUsed})
+           && sql::CreateIndex(*db(), kAutocompleteTableLabelSensitive,
+                               {kValue, kDateLastUsed})
 
            // Used by query in GetAutocompleteEntryLabelSensitive
-           && CreateIndex(db(), kAutocompleteTableLabelSensitive,
-                          {kName, kLabel, kValue});
+           && sql::CreateIndex(*db(), kAutocompleteTableLabelSensitive,
+                               {kName, kLabel, kValue});
   }
   return true;
 }

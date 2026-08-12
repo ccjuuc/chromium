@@ -28,6 +28,9 @@ namespace optimization_guide {
 class MqlsFeatureMetadata;
 class ModelQualityLogEntry;
 
+// Returns the URL endpoint for the model quality service.
+GURL GetModelQualityLogsUploaderServiceURL();
+
 class ModelQualityLogsUploaderService {
  public:
   ModelQualityLogsUploaderService(
@@ -47,6 +50,9 @@ class ModelQualityLogsUploaderService {
 
   // Sets system metadata, including the UMA system profile.
   virtual void SetSystemMetadata(proto::LoggingMetadata* logging_metadata);
+
+  // Returns the performance class to include in logs.
+  virtual proto::PerformanceClass GetPerformanceClass();
 
   // Returns the WeakPtr for uploading logs during model qualtiy logs
   // destruction.

@@ -70,16 +70,25 @@ class CORE_EXPORT FlexLayoutAlgorithm
       Phase phase,
       HeapVector<Member<LayoutBox>>* oof_children = nullptr);
   void ApplyReversals(FlexLineVector* flex_lines);
+  // `effective_gap_between_lines` is an out parameter that receives the
+  // effective gap (base gap + content distribution). `total_row_gap_count` is
+  // an out parameter that receives the unfragmented row gap count: for row flex
+  // containers, it is the number of gaps between flex lines while for column
+  // flex containers, it is the sum of the gaps within each flex line.
   LayoutResult::EStatus GiveItemsFinalPositionAndSize(
       FlexLineVector* flex_lines,
       Vector<EBreakBetween>* row_break_between_outputs,
-      std::optional<FlexGapAccumulator>& gap_accumulator);
+      std::optional<FlexGapAccumulator>& gap_accumulator,
+      LayoutUnit& effective_gap_between_lines,
+      wtf_size_t* total_row_gap_count);
   LayoutResult::EStatus GiveItemsFinalPositionAndSizeForFragmentation(
       FlexLineVector* flex_lines,
       Vector<EBreakBetween>* row_break_between_outputs,
       FlexBreakTokenData::FlexBreakBeforeRow* break_before_row,
       LayoutUnit* total_intrinsic_block_size,
-      std::optional<FlexGapAccumulator>& gap_accumulator);
+      std::optional<FlexGapAccumulator>& gap_accumulator,
+      LayoutUnit effective_gap_between_lines,
+      const FlexGapBreakTokenData* previous_gap_data);
   LayoutResult::EStatus PropagateFlexItemInfo(
       const FlexItem&,
       const PhysicalBoxFragment&,
@@ -88,12 +97,15 @@ class CORE_EXPORT FlexLayoutAlgorithm
       LogicalOffset offset);
 
   // Computes and updates the adjustment for `flex_line` to account for gap
-  // suppression during fragmentation. In column-based flex containers, `gap`
-  // represents the item gap. In row-based flex containers, it represents the
-  // row gap. The `previous_content_block_end` indicates the end offset of the
-  // previous item (in column flex) or the previous row/line (in row flex). The
-  // previous row block end accounts for any additional space available before a
-  // gap due to alignment.
+  // suppression during fragmentation. `gap` represents the effective gap, which
+  // includes both the base CSS gap value and any additional spacing from
+  // content distribution (e.g., space-between, space-around). In column-based
+  // flex containers, `gap` represents the effective item gap. In row-based flex
+  // containers, it represents the effective row gap. The
+  // `previous_content_block_end` indicates the end offset of the previous item
+  // (in column flex) or the previous row/line (in row flex). The previous row
+  // block end accounts for any additional space available before a gap due to
+  // alignment.
   //
   // When an item or row overflows the current fragmentainer, this function
   // calculates and suppresses the gap that would otherwise appear at the top of
@@ -152,7 +164,7 @@ class CORE_EXPORT FlexLayoutAlgorithm
       bool is_row_item,
       FlexColumnBreakInfo* flex_column_break_info) {
     return ::blink::BreakBeforeChildIfNeeded(
-        GetConstraintSpace(), child, layout_result, fragmentainer_block_offset,
+        child, layout_result, fragmentainer_block_offset,
         FragmentainerCapacityForChildren(), has_container_separation,
         &container_builder_, is_row_item, flex_column_break_info);
   }
@@ -234,7 +246,7 @@ class CORE_EXPORT FlexLayoutAlgorithm
   // within a row flex container.
   bool has_processed_first_line_ = false;
 
-  std::unique_ptr<DevtoolsFlexInfo> layout_info_for_devtools_;
+  DevtoolsFlexInfo* layout_info_for_devtools_ = nullptr;
 
   // The block size of the entire flex container (ignoring any fragmentation).
   LayoutUnit total_block_size_;

@@ -28,6 +28,7 @@
 #include "media/base/video_util.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "skia/ext/rgba_to_yuva.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -37,7 +38,6 @@
 #include "third_party/skia/include/core/SkImageInfo.h"
 #include "third_party/skia/include/core/SkPixmap.h"
 #include "ui/gfx/color_space.h"
-#include "ui/gfx/color_transform.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size.h"
@@ -482,79 +482,9 @@ class VideoCaptureOverlayRenderTest
         png_color_space.ToSkColorSpace());
     SkBitmap canonical_bitmap;
     CHECK(canonical_bitmap.tryAllocPixels(canonical_format, 0));
-
-    // Populate |canonical_bitmap| with data from the frame. For I420, use
-    // gfx::ColorTransform to map back from YUV→RGB.
-    switch (frame.format()) {
-      case media::PIXEL_FORMAT_ARGB: {
-        // Map from the video frame's ARGB format to the canonical
-        // representation.
-        const SkImageInfo frame_format = SkImageInfo::Make(
-            frame.visible_rect().width(), frame.visible_rect().height(),
-            kBGRA_8888_SkColorType, kUnpremul_SkAlphaType,
-            frame.ColorSpace().ToSkColorSpace());
-        canonical_bitmap.writePixels(
-            SkPixmap(frame_format, frame.visible_data(VideoFrame::Plane::kARGB),
-                     frame.stride(VideoFrame::Plane::kARGB)),
-            0, 0);
-        break;
-      }
-
-      case media::PIXEL_FORMAT_I420: {
-        // Map from I420 planar [0,255] (of which only [16,235] is used) values
-        // to interleaved [0.0,1.0] values.
-        const gfx::Size& size = frame.visible_rect().size();
-        auto colors = base::HeapArray<gfx::ColorTransform::TriStim>::WithSize(
-            size.GetArea());
-        int pos = 0;
-        for (int row = 0; row < size.height(); ++row) {
-          const uint8_t* y =
-              UNSAFE_TODO(frame.visible_data(VideoFrame::Plane::kY) +
-                          (row * frame.stride(VideoFrame::Plane::kY)));
-          const uint8_t* u =
-              UNSAFE_TODO(frame.visible_data(VideoFrame::Plane::kU) +
-                          ((row / 2) * frame.stride(VideoFrame::Plane::kU)));
-          const uint8_t* v =
-              UNSAFE_TODO(frame.visible_data(VideoFrame::Plane::kV) +
-                          ((row / 2) * frame.stride(VideoFrame::Plane::kV)));
-          for (int col = 0; col < size.width(); ++col) {
-            colors[pos].SetPoint(UNSAFE_TODO(y[col]) / 255.0f,
-                                 UNSAFE_TODO(u[col / 2]) / 255.0f,
-                                 UNSAFE_TODO(v[col / 2]) / 255.0f);
-            ++pos;
-          }
-        }
-
-        // Execute the YUV→RGB conversion.
-        gfx::ColorTransform::NewColorTransform(frame.ColorSpace(),
-                                               png_color_space)
-            ->Transform(colors.data(), size.GetArea());
-
-        // Map back from interleaved [0.0,1.0] values to intervealed ARGB,
-        // setting alpha=100%.
-        const auto ToClamped255 = [](float value) -> uint32_t {
-          value = (value * 255.0f) + 0.5f /* rounding */;
-          return base::saturated_cast<uint8_t>(value);
-        };
-        pos = 0;
-        for (int row = 0; row < size.height(); ++row) {
-          base::span<uint32_t> out =
-              UNSAFE_SKBITMAP_GETADDR32(canonical_bitmap, 0, row);
-          for (int col = 0; col < size.width(); ++col) {
-            out[col] = ((UINT32_C(255) << SK_A32_SHIFT) |
-                        (ToClamped255(colors[pos].x()) << SK_R32_SHIFT) |
-                        (ToClamped255(colors[pos].y()) << SK_G32_SHIFT) |
-                        (ToClamped255(colors[pos].z()) << SK_B32_SHIFT));
-            ++pos;
-          }
-        }
-
-        break;
-      }
-
-      default:
-        NOTREACHED();
-    }
+    skia::ConvertYUVAToRGBA(frame.GetVisibleSkYUVAInfo(), frame.BitDepth(),
+                            frame.GetVisiblePlanesSkPixmaps(),
+                            canonical_bitmap.pixmap());
 
     // Determine the full path to the golden file to compare the results.
     base::FilePath golden_file_path;

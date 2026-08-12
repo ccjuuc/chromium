@@ -5,6 +5,7 @@
 import 'chrome://diagnostics/routine_result_entry.js';
 import 'chrome://webui-test/chromeos/mojo_webui_test_support.js';
 
+import {getRoutineFailureMessage} from 'chrome://diagnostics/diagnostics_utils.js';
 import {RoutineGroup} from 'chrome://diagnostics/routine_group.js';
 import {ExecutionProgress, ResultStatusItem} from 'chrome://diagnostics/routine_list_executor.js';
 import {RoutineResultEntryElement} from 'chrome://diagnostics/routine_result_entry.js';
@@ -14,7 +15,7 @@ import type {TextBadgeElement} from 'chrome://diagnostics/text_badge.js';
 import {BadgeType} from 'chrome://diagnostics/text_badge.js';
 import {loadTimeData} from 'chrome://resources/ash/common/load_time_data.m.js';
 import {assert} from 'chrome://resources/js/assert.js';
-import {assertEquals, assertTrue} from 'chrome://webui-test/chromeos/chai_assert.js';
+import {assertEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
 import {isVisible} from 'chrome://webui-test/test_util.js';
 
@@ -250,6 +251,12 @@ suite('routineResultEntryTestSuite', function() {
           getFailedTestContainer(),
           loadTimeData.getString('lanConnectivityFailedText'));
     });
+  });
+
+  test('GoogleServicesConnectivityFailureMessage', () => {
+    assertEquals(
+        loadTimeData.getString('googleServicesConnectivityFailedText'),
+        getRoutineFailureMessage(RoutineType.kGoogleServicesConnectivity));
   });
 
   test('AnnouncesForRunningAndFailure', () => {

@@ -1,5 +1,7 @@
 include_rules = [
+  "+chromeos/dbus/power",
   "+components/policy/core/common",
+  "+components/certificate_matching",
 ]
 
 specific_include_rules = {

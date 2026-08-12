@@ -16,6 +16,9 @@
 
 namespace autofill {
 
+using ::testing::AllOf;
+using ::testing::Field;
+using ::testing::Optional;
 using SaveCardBottomSheetModelFieldsTest = PlatformTest;
 
 // Verfies each field of the model correctly maps to the AutofillSaveCardUiInfo
@@ -36,7 +39,7 @@ TEST_F(SaveCardBottomSheetModelFieldsTest,
       TestLegalMessageLine("Legal message");
   std::u16string loading_description = std::u16string(u"Loading description");
 
-  autofill::AutofillSaveCardUiInfo ui_info = autofill::AutofillSaveCardUiInfo();
+  AutofillSaveCardUiInfo ui_info = AutofillSaveCardUiInfo();
   ui_info.logo_icon_id = logo_icon_id;
   ui_info.logo_icon_description = logo_icon_description;
   ui_info.title_text = title_text;
@@ -50,13 +53,13 @@ TEST_F(SaveCardBottomSheetModelFieldsTest,
   ui_info.legal_message_lines = {legal_message_line};
   ui_info.loading_description = loading_description;
 
-  std::unique_ptr<SaveCardBottomSheetModel> model = std::make_unique<
-      SaveCardBottomSheetModel>(
-      std::move(ui_info),
-      std::make_unique<autofill::AutofillSaveCardDelegate>(
-          static_cast<autofill::payments::PaymentsAutofillClient::
-                          UploadSaveCardPromptCallback>(base::DoNothing()),
-          autofill::payments::PaymentsAutofillClient::SaveCreditCardOptions{}));
+  std::unique_ptr<SaveCardBottomSheetModel> model =
+      std::make_unique<SaveCardBottomSheetModel>(
+          std::move(ui_info),
+          std::make_unique<AutofillSaveCardDelegate>(
+              static_cast<payments::PaymentsAutofillClient::
+                              UploadSaveCardPromptCallback>(base::DoNothing()),
+              payments::PaymentsAutofillClient::SaveCreditCardOptions{}));
   EXPECT_EQ(model->logo_icon_id(), logo_icon_id);
   EXPECT_EQ(model->logo_icon_description(), logo_icon_description);
   EXPECT_EQ(model->title(), title_text);
@@ -74,10 +77,11 @@ TEST_F(SaveCardBottomSheetModelFieldsTest,
 class MockAutofillSaveCardDelegate : public AutofillSaveCardDelegate {
  public:
   MockAutofillSaveCardDelegate(
-      std::variant<autofill::payments::PaymentsAutofillClient::
-                       LocalSaveCardPromptCallback,
-                   autofill::payments::PaymentsAutofillClient::
-                       UploadSaveCardPromptCallback> save_card_callback)
+      std::variant<
+          payments::PaymentsAutofillClient::LocalSaveCardPromptCallback,
+          payments::PaymentsAutofillClient::UploadSaveCardPromptCallback,
+          payments::PaymentsAutofillClient::CardSaveAndFillDialogCallback>
+          save_card_callback)
       : AutofillSaveCardDelegate(
             std::move(save_card_callback),
             payments::PaymentsAutofillClient::SaveCreditCardOptions()) {}
@@ -86,6 +90,11 @@ class MockAutofillSaveCardDelegate : public AutofillSaveCardDelegate {
 
   MOCK_METHOD(void, OnUiAccepted, (base::OnceClosure), (override));
   MOCK_METHOD(void, OnUiCanceled, (), (override));
+  MOCK_METHOD(
+      void,
+      OnUiUpdatedAndAcceptedForSaveAndFill,
+      (payments::PaymentsAutofillClient::UserProvidedCardSaveAndFillDetails),
+      (override));
 };
 
 class MockSaveCardBottomSheetModelObserver
@@ -98,20 +107,17 @@ class SaveCardBottomSheetModelTest : public PlatformTest {
  public:
   explicit SaveCardBottomSheetModelTest(bool for_upload = true) {
     using Variant = std::variant<
-        autofill::payments::PaymentsAutofillClient::LocalSaveCardPromptCallback,
-        autofill::payments::PaymentsAutofillClient::
-            UploadSaveCardPromptCallback>;
+        payments::PaymentsAutofillClient::LocalSaveCardPromptCallback,
+        payments::PaymentsAutofillClient::UploadSaveCardPromptCallback,
+        payments::PaymentsAutofillClient::CardSaveAndFillDialogCallback>;
     std::unique_ptr<MockAutofillSaveCardDelegate> delegate =
         std::make_unique<MockAutofillSaveCardDelegate>(
-            for_upload
-                ? Variant(
-                      static_cast<autofill::payments::PaymentsAutofillClient::
-                                      UploadSaveCardPromptCallback>(
-                          base::DoNothing()))
-                : Variant(
-                      static_cast<autofill::payments::PaymentsAutofillClient::
-                                      LocalSaveCardPromptCallback>(
-                          base::DoNothing())));
+            for_upload ? Variant(static_cast<payments::PaymentsAutofillClient::
+                                                 UploadSaveCardPromptCallback>(
+                             base::DoNothing()))
+                       : Variant(static_cast<payments::PaymentsAutofillClient::
+                                                 LocalSaveCardPromptCallback>(
+                             base::DoNothing())));
     save_card_delegate_ = delegate.get();
     save_card_bottom_sheet_model_ = std::make_unique<SaveCardBottomSheetModel>(
         AutofillSaveCardUiInfo(), std::move(delegate));
@@ -199,6 +205,43 @@ TEST_F(SaveCardBottomSheetModelTestForLocalSave, OnAccepted) {
   save_card_bottom_sheet_model_->OnAccepted();
   EXPECT_EQ(save_card_bottom_sheet_model_->save_card_state(),
             SaveCardBottomSheetModel::SaveCardState::kSaved);
+}
+
+// Tests that `OnUpdatedAndAcceptedForSaveAndFill` forwards all details
+// to the underlying cross-platform AutofillSaveCardDelegate.
+TEST_F(SaveCardBottomSheetModelTest, OnUpdatedAndAcceptedForSaveAndFill) {
+  payments::PaymentsAutofillClient::UserProvidedCardSaveAndFillDetails details;
+  details.card_number = u"5555555555554444";
+  details.cardholder_name = u"John Doe";
+  details.expiration_date_month = u"12";
+  details.expiration_date_year = u"2030";
+  details.security_code = u"123";
+  details.nickname = u"My Test Card";
+
+  EXPECT_CALL(
+      *static_cast<MockAutofillSaveCardDelegate*>(save_card_delegate_),
+      OnUiUpdatedAndAcceptedForSaveAndFill(AllOf(
+          Field(&payments::PaymentsAutofillClient::
+                    UserProvidedCardSaveAndFillDetails::card_number,
+                u"5555555555554444"),
+          Field(&payments::PaymentsAutofillClient::
+                    UserProvidedCardSaveAndFillDetails::cardholder_name,
+                u"John Doe"),
+          Field(&payments::PaymentsAutofillClient::
+                    UserProvidedCardSaveAndFillDetails::expiration_date_month,
+                u"12"),
+          Field(&payments::PaymentsAutofillClient::
+                    UserProvidedCardSaveAndFillDetails::expiration_date_year,
+                u"2030"),
+          Field(&payments::PaymentsAutofillClient::
+                    UserProvidedCardSaveAndFillDetails::security_code,
+                Optional(std::u16string(u"123"))),
+          Field(&payments::PaymentsAutofillClient::
+                    UserProvidedCardSaveAndFillDetails::nickname,
+                Optional(std::u16string(u"My Test Card"))))));
+
+  save_card_bottom_sheet_model_->OnUpdatedAndAcceptedForSaveAndFill(
+      std::move(details));
 }
 
 }  // namespace autofill

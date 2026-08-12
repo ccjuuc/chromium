@@ -22,9 +22,8 @@
 #include "chrome/browser/chromeos/extensions/telemetry/api/common/util.h"
 #include "chrome/browser/chromeos/extensions/telemetry/api/routines/diagnostic_routine.h"
 #include "chrome/browser/chromeos/extensions/telemetry/api/routines/diagnostic_routine_info.h"
-#include "chrome/browser/chromeos/extensions/telemetry/api/routines/remote_diagnostic_routines_service_strategy.h"
 #include "chrome/common/chromeos/extensions/api/diagnostics.h"
-#include "chromeos/crosapi/mojom/telemetry_diagnostic_routine_service.mojom.h"
+#include "chromeos/ash/services/cros_healthd/public/cpp/service_connection.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
@@ -42,7 +41,6 @@ namespace chromeos {
 
 namespace {
 
-namespace crosapi = ::crosapi::mojom;
 namespace cx_diag = api::os_diagnostics;
 
 void NotifyExtensionAppUiClosed(
@@ -54,7 +52,7 @@ void NotifyExtensionAppUiClosed(
   auto event = std::make_unique<extensions::Event>(
       extensions::events::OS_DIAGNOSTICS_ON_ROUTINE_EXCEPTION,
       cx_diag::OnRoutineException::kEventName,
-      base::Value::List().Append(exception.ToValue()), browser_context);
+      base::ListValue().Append(exception.ToValue()), browser_context);
 
   // The `EventRouter` might be unavailable in unittests.
   if (!extensions::EventRouter::Get(browser_context)) {
@@ -94,7 +92,7 @@ DiagnosticRoutineManager::~DiagnosticRoutineManager() = default;
 base::expected<base::Uuid, DiagnosticRoutineManager::Error>
 DiagnosticRoutineManager::CreateRoutine(
     extensions::ExtensionId extension_id,
-    crosapi::TelemetryDiagnosticRoutineArgumentPtr routine_argument) {
+    ash::cros_healthd::mojom::RoutineArgumentPtr routine_argument) {
   if (app_ui_observers_.find(extension_id) == app_ui_observers_.end()) {
     auto observer = CreateAppUiObserver(extension_id);
     if (!observer.has_value()) {
@@ -104,18 +102,19 @@ DiagnosticRoutineManager::CreateRoutine(
     app_ui_observers_.emplace(extension_id, std::move(observer.value()));
   }
 
-  crosapi::TelemetryDiagnosticRoutineArgument::Tag routine_argument_tag =
+  ash::cros_healthd::mojom::RoutineArgument::Tag routine_argument_tag =
       routine_argument->which();
 
-  mojo::PendingRemote<crosapi::TelemetryDiagnosticRoutineControl>
-      control_remote;
-  mojo::PendingReceiver<crosapi::TelemetryDiagnosticRoutineObserver>
+  mojo::PendingRemote<ash::cros_healthd::mojom::RoutineControl> control_remote;
+  mojo::PendingReceiver<ash::cros_healthd::mojom::RoutineObserver>
       observer_receiver;
 
-  GetRemoteService()->CreateRoutine(
-      std::move(routine_argument),
-      control_remote.InitWithNewPipeAndPassReceiver(),
-      observer_receiver.InitWithNewPipeAndPassRemote());
+  // Register the two objects with cros_healthd.
+  ash::cros_healthd::ServiceConnection::GetInstance()
+      ->GetRoutinesService()
+      ->CreateRoutine(std::move(routine_argument),
+                      control_remote.InitWithNewPipeAndPassReceiver(),
+                      observer_receiver.InitWithNewPipeAndPassRemote());
 
   auto uuid = base::Uuid::GenerateRandomV4();
   DiagnosticRoutineInfo routine_info(extension_id, uuid, browser_context_,
@@ -155,7 +154,7 @@ bool DiagnosticRoutineManager::StartRoutineForExtension(
     return false;
   }
 
-  routine->get()->GetRemote()->Start();
+  routine->get()->GetControl().Start();
   return true;
 }
 
@@ -179,7 +178,7 @@ void DiagnosticRoutineManager::CancelRoutineForExtension(
 bool DiagnosticRoutineManager::ReplyToRoutineInquiryForExtension(
     const extensions::ExtensionId& extension_id,
     const base::Uuid& routine_id,
-    crosapi::TelemetryDiagnosticRoutineInquiryReplyPtr reply) {
+    ash::cros_healthd::mojom::RoutineInquiryReplyPtr reply) {
   auto it = routines_per_extension_.find(extension_id);
   if (it == routines_per_extension_.end()) {
     return false;
@@ -195,16 +194,8 @@ bool DiagnosticRoutineManager::ReplyToRoutineInquiryForExtension(
     return false;
   }
 
-  routine->get()->GetRemote()->ReplyToInquiry(std::move(reply));
+  routine->get()->GetControl().ReplyInquiry(std::move(reply));
   return true;
-}
-
-void DiagnosticRoutineManager::IsRoutineArgumentSupported(
-    crosapi::TelemetryDiagnosticRoutineArgumentPtr arg,
-    base::OnceCallback<void(crosapi::TelemetryExtensionSupportStatusPtr)>
-        callback) {
-  GetRemoteService()->IsRoutineArgumentSupported(std::move(arg),
-                                                 std::move(callback));
 }
 
 void DiagnosticRoutineManager::OnExtensionUnloaded(
@@ -213,14 +204,6 @@ void DiagnosticRoutineManager::OnExtensionUnloaded(
     extensions::UnloadedExtensionReason reason) {
   routines_per_extension_.erase(extension->id());
   app_ui_observers_.erase(extension->id());
-}
-
-mojo::Remote<crosapi::TelemetryDiagnosticRoutinesService>&
-DiagnosticRoutineManager::GetRemoteService() {
-  if (!remote_strategy_) {
-    remote_strategy_ = RemoteDiagnosticRoutineServiceStrategy::Create();
-  }
-  return remote_strategy_->GetRemoteService();
 }
 
 void DiagnosticRoutineManager::OnAppUiClosed(

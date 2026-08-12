@@ -52,6 +52,7 @@
 #include "chrome/browser/first_run/upgrade_util.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/browser/win/browser_util.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/install_static/install_util.h"
@@ -103,9 +104,9 @@ void CreateAndMarshalGoogleUpdate3Web(
         ::CoCreateInstance(__uuidof(GoogleUpdate3WebSystemClass), nullptr,
                            CLSCTX_ALL, IID_PPV_ARGS(&unknown));
     if (FAILED(hr)) {
-      TRACE_EVENT_INSTANT1(
-          "startup", "InvokeGoogleUpdateForRename CoCreateInstance failed",
-          TRACE_EVENT_SCOPE_THREAD, "hr", hr);
+      TRACE_EVENT_INSTANT("startup",
+                          "InvokeGoogleUpdateForRename CoCreateInstance failed",
+                          "hr", hr);
       LOG(ERROR) << "CoCreate GoogleUpdate3WebSystemClass failed; hr = "
                  << std::hex << hr;
       return;
@@ -114,10 +115,10 @@ void CreateAndMarshalGoogleUpdate3Web(
   const HRESULT hr = ::CoMarshalInterThreadInterfaceInStream(
       __uuidof(IUnknown), unknown.Get(), &result->stream);
   if (FAILED(hr)) {
-    TRACE_EVENT_INSTANT1("startup",
-                         "InvokeGoogleUpdateForRename "
-                         "CoMarshalInterThreadInterfaceInStream failed",
-                         TRACE_EVENT_SCOPE_THREAD, "hr", hr);
+    TRACE_EVENT_INSTANT("startup",
+                        "InvokeGoogleUpdateForRename "
+                        "CoMarshalInterThreadInterfaceInStream failed",
+                        "hr", hr);
     LOG(ERROR) << "CoMarshalInterThreadInterfaceInStream "
                   "GoogleUpdate3WebSystemClass failed; hr = "
                << std::hex << hr;
@@ -160,9 +161,8 @@ Microsoft::WRL::ComPtr<IUnknown> CreateGoogleUpdate3Web() {
           timer.Elapsed());
       creation_timeout.Set(base::Value(static_cast<int>(timeout.InSeconds()) +
                                        kDefaultTimeoutIncrementSeconds));
-      TRACE_EVENT_INSTANT0(
-          "startup", "InvokeGoogleUpdateForRename CoCreateInstance timed out",
-          TRACE_EVENT_SCOPE_THREAD);
+      TRACE_EVENT_INSTANT(
+          "startup", "InvokeGoogleUpdateForRename CoCreateInstance timed out");
       LOG(ERROR) << "CoCreate GoogleUpdate3WebSystemClass timed out";
       return {};
     }
@@ -181,9 +181,9 @@ Microsoft::WRL::ComPtr<IUnknown> CreateGoogleUpdate3Web() {
         ::CoUnmarshalInterface(result->stream.Get(), __uuidof(IUnknown),
                                IID_PPV_ARGS_Helper(&unknown));
     if (FAILED(hr)) {
-      TRACE_EVENT_INSTANT1(
+      TRACE_EVENT_INSTANT(
           "startup", "InvokeGoogleUpdateForRename CoUnmarshalInterface failed",
-          TRACE_EVENT_SCOPE_THREAD, "hr", hr);
+          "hr", hr);
       LOG(ERROR)
           << "CoUnmarshalInterface GoogleUpdate3WebSystemClass failed; hr = "
           << std::hex << hr;
@@ -203,9 +203,9 @@ Microsoft::WRL::ComPtr<IUnknown> CreateGoogleUpdate3Web() {
         ::CoCreateInstance(__uuidof(GoogleUpdate3WebSystemClass), nullptr,
                            CLSCTX_ALL, IID_PPV_ARGS(&unknown));
     if (FAILED(hr)) {
-      TRACE_EVENT_INSTANT1(
-          "startup", "InvokeGoogleUpdateForRename CoCreateInstance failed",
-          TRACE_EVENT_SCOPE_THREAD, "hr", hr);
+      TRACE_EVENT_INSTANT("startup",
+                          "InvokeGoogleUpdateForRename CoCreateInstance failed",
+                          "hr", hr);
       LOG(ERROR) << "CoCreate GoogleUpdate3WebSystemClass failed; hr = "
                  << std::hex << hr;
       return {};
@@ -219,7 +219,7 @@ Microsoft::WRL::ComPtr<IUnknown> CreateGoogleUpdate3Web() {
 bool InvokeGoogleUpdateForRename() {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   // This has been identified as very slow on some startups. Detailed trace
-  // events below try to shine a light on each steps. crbug.com/1252004
+  // events below try to shine a light on each steps. crbug.com/40792898
   TRACE_EVENT0("startup", "upgrade_util::InvokeGoogleUpdateForRename");
 
   Microsoft::WRL::ComPtr<IUnknown> unknown = CreateGoogleUpdate3Web();
@@ -236,9 +236,9 @@ bool InvokeGoogleUpdateForRename() {
       FAILED(hr)) {
     hr = unknown.As(&update3web);
     if (FAILED(hr)) {
-      TRACE_EVENT_INSTANT1(
+      TRACE_EVENT_INSTANT(
           "startup", "InvokeGoogleUpdateForRename QI IGoogleUpdate3Web failed",
-          TRACE_EVENT_SCOPE_THREAD, "hr", hr);
+          "hr", hr);
       LOG(ERROR) << "QI IGoogleUpdate3Web failed; hr = " << std::hex << hr;
       return false;
     }
@@ -248,9 +248,9 @@ bool InvokeGoogleUpdateForRename() {
   {
     Microsoft::WRL::ComPtr<IDispatch> dispatch;
     if (HRESULT hr = update3web->createAppBundleWeb(&dispatch); FAILED(hr)) {
-      TRACE_EVENT_INSTANT1(
+      TRACE_EVENT_INSTANT(
           "startup", "InvokeGoogleUpdateForRename createAppBundleWeb failed",
-          TRACE_EVENT_SCOPE_THREAD, "hr", hr);
+          "hr", hr);
       LOG(ERROR) << "createAppBundleWeb failed; hr = " << std::hex << hr;
       return false;
     }
@@ -260,9 +260,9 @@ bool InvokeGoogleUpdateForRename() {
         FAILED(hr)) {
       hr = dispatch.As(&bundle);
       if (FAILED(hr)) {
-        TRACE_EVENT_INSTANT1(
+        TRACE_EVENT_INSTANT(
             "startup", "InvokeGoogleUpdateForRename QI IAppBundleWeb failed",
-            TRACE_EVENT_SCOPE_THREAD, "hr", hr);
+            "hr", hr);
         LOG(ERROR) << "QI IAppBundleWeb failed; hr = " << std::hex << hr;
         return false;
       }
@@ -270,9 +270,9 @@ bool InvokeGoogleUpdateForRename() {
   }
 
   if (HRESULT hr = bundle->initialize(); FAILED(hr)) {
-    TRACE_EVENT_INSTANT1(
-        "startup", "InvokeGoogleUpdateForRename bundle->initialize failed",
-        TRACE_EVENT_SCOPE_THREAD, "hr", hr);
+    TRACE_EVENT_INSTANT("startup",
+                        "InvokeGoogleUpdateForRename bundle->initialize failed",
+                        "hr", hr);
     LOG(ERROR) << "bundle->initialize failed; hr = " << std::hex << hr;
     return false;
   }
@@ -280,10 +280,10 @@ bool InvokeGoogleUpdateForRename() {
   if (HRESULT hr = bundle->createInstalledApp(
           base::win::ScopedBstr(install_static::GetAppGuid()).Get());
       FAILED(hr)) {
-    TRACE_EVENT_INSTANT1(
+    TRACE_EVENT_INSTANT(
         "startup",
-        "InvokeGoogleUpdateForRename bundle->createInstalledApp failed",
-        TRACE_EVENT_SCOPE_THREAD, "hr", hr);
+        "InvokeGoogleUpdateForRename bundle->createInstalledApp failed", "hr",
+        hr);
     LOG(ERROR) << "bundle->createInstalledApp failed; hr = " << std::hex << hr;
     return false;
   }
@@ -292,9 +292,9 @@ bool InvokeGoogleUpdateForRename() {
   {
     Microsoft::WRL::ComPtr<IDispatch> app_dispatch;
     if (HRESULT hr = bundle->get_appWeb(0, &app_dispatch); FAILED(hr)) {
-      TRACE_EVENT_INSTANT1(
+      TRACE_EVENT_INSTANT(
           "startup", "InvokeGoogleUpdateForRename bundle->get_appWeb failed",
-          TRACE_EVENT_SCOPE_THREAD, "hr", hr);
+          "hr", hr);
       LOG(ERROR) << "bundle->get_appWeb failed; hr = " << std::hex << hr;
       return false;
     }
@@ -304,9 +304,9 @@ bool InvokeGoogleUpdateForRename() {
         FAILED(hr)) {
       hr = app_dispatch.As(&app);
       if (FAILED(hr)) {
-        TRACE_EVENT_INSTANT1("startup",
-                             "InvokeGoogleUpdateForRename QI IAppWeb failed",
-                             TRACE_EVENT_SCOPE_THREAD, "hr", hr);
+        TRACE_EVENT_INSTANT("startup",
+                            "InvokeGoogleUpdateForRename QI IAppWeb failed",
+                            "hr", hr);
         LOG(ERROR) << "QI IAppWeb failed; hr = " << std::hex << hr;
         return false;
       }
@@ -320,9 +320,9 @@ bool InvokeGoogleUpdateForRename() {
             base::win::ScopedBstr(installer::kCmdRenameChromeExe).Get(),
             &command_dispatch);
         FAILED(hr)) {
-      TRACE_EVENT_INSTANT1(
-          "startup", "InvokeGoogleUpdateForRename app->get_command failed",
-          TRACE_EVENT_SCOPE_THREAD, "hr", hr);
+      TRACE_EVENT_INSTANT("startup",
+                          "InvokeGoogleUpdateForRename app->get_command failed",
+                          "hr", hr);
       LOG(ERROR) << "app->get_command failed; hr = " << std::hex << hr;
       return false;
     }
@@ -333,9 +333,9 @@ bool InvokeGoogleUpdateForRename() {
         FAILED(hr)) {
       hr = command_dispatch.As(&app_command_web);
       if (FAILED(hr)) {
-        TRACE_EVENT_INSTANT1(
+        TRACE_EVENT_INSTANT(
             "startup", "InvokeGoogleUpdateForRename QI IAppCommandWeb failed",
-            TRACE_EVENT_SCOPE_THREAD, "hr", hr);
+            "hr", hr);
         LOG(ERROR) << "QI IAppCommandWeb failed; hr = " << std::hex << hr;
         return false;
       }
@@ -355,10 +355,10 @@ bool InvokeGoogleUpdateForRename() {
                                      base::win::ScopedVariant::kEmptyVariant,
                                      base::win::ScopedVariant::kEmptyVariant);
         FAILED(hr)) {
-      TRACE_EVENT_INSTANT1(
+      TRACE_EVENT_INSTANT(
           "startup",
-          "InvokeGoogleUpdateForRename app_command_web->execute failed",
-          TRACE_EVENT_SCOPE_THREAD, "hr", hr);
+          "InvokeGoogleUpdateForRename app_command_web->execute failed", "hr",
+          hr);
       LOG(ERROR) << "app_command_web->execute failed; hr = " << std::hex << hr;
       return false;
     }
@@ -368,10 +368,10 @@ bool InvokeGoogleUpdateForRename() {
          base::TimeTicks::Now() < deadline;
          base::PlatformThread::Sleep(base::Seconds(1))) {
       if (HRESULT hr = app_command_web->get_status(&status); FAILED(hr)) {
-        TRACE_EVENT_INSTANT1(
+        TRACE_EVENT_INSTANT(
             "startup",
             "InvokeGoogleUpdateForRename app_command_web->get_status failed",
-            TRACE_EVENT_SCOPE_THREAD, "hr", hr);
+            "hr", hr);
         LOG(ERROR) << "app_command_web->get_status failed; hr = " << std::hex
                    << hr;
         return false;
@@ -381,9 +381,9 @@ bool InvokeGoogleUpdateForRename() {
       }
     }
     if (status != COMMAND_STATUS_COMPLETE) {
-      TRACE_EVENT_INSTANT1(
+      TRACE_EVENT_INSTANT(
           "startup", "InvokeGoogleUpdateForRename !COMMAND_STATUS_COMPLETE",
-          TRACE_EVENT_SCOPE_THREAD, "status", status);
+          "status", status);
       LOG(ERROR) << "AppCommand timed out with status code " << status;
       return false;
     }
@@ -391,26 +391,25 @@ bool InvokeGoogleUpdateForRename() {
 
   DWORD exit_code = 0;
   if (HRESULT hr = app_command_web->get_exitCode(&exit_code); FAILED(hr)) {
-    TRACE_EVENT_INSTANT1(
+    TRACE_EVENT_INSTANT(
         "startup",
         "InvokeGoogleUpdateForRename app_command_web->get_exitCode failed",
-        TRACE_EVENT_SCOPE_THREAD, "hr", hr);
+        "hr", hr);
     LOG(ERROR) << "app_command_web->get_exitCode failed; hr = " << std::hex
                << hr;
     return false;
   }
 
   if (exit_code != installer::RENAME_SUCCESSFUL) {
-    TRACE_EVENT_INSTANT1("startup",
-                         "InvokeGoogleUpdateForRename !RENAME_SUCCESSFUL",
-                         TRACE_EVENT_SCOPE_THREAD, "exit_code", exit_code);
+    TRACE_EVENT_INSTANT("startup",
+                        "InvokeGoogleUpdateForRename !RENAME_SUCCESSFUL",
+                        "exit_code", exit_code);
     LOG(ERROR) << "Rename process failed with exit code " << exit_code;
     return false;
   }
 
-  TRACE_EVENT_INSTANT0("startup",
-                       "InvokeGoogleUpdateForRename RENAME_SUCCESSFUL",
-                       TRACE_EVENT_SCOPE_THREAD);
+  TRACE_EVENT_INSTANT("startup",
+                      "InvokeGoogleUpdateForRename RENAME_SUCCESSFUL");
 
   return true;
 #else   // BUILDFLAG(GOOGLE_CHROME_BRANDING)
@@ -424,6 +423,15 @@ namespace upgrade_util {
 
 bool RelaunchChromeBrowserImpl(const base::CommandLine& command_line) {
   TRACE_EVENT0("startup", "upgrade_util::RelaunchChromeBrowserImpl");
+
+  if (command_line.HasSwitch(switches::kIsolated)) {
+    // Isolated browser does not fully support relaunch, so rather than try and
+    // launch a browser which will shortly be killed by the job object
+    // termination in the parent stub process, simply don't launch any new
+    // browser to avoid polluting metrics with abnormal terminations.
+    // TODO(crbug.com/490449890): Fix this issue by solving isolated relaunch.
+    return true;
+  }
 
   base::FilePath chrome_exe;
   if (!base::PathService::Get(base::FILE_EXE, &chrome_exe)) {
@@ -442,6 +450,33 @@ bool RelaunchChromeBrowserImpl(const base::CommandLine& command_line) {
   launch_options.current_directory = chrome_exe.DirName();
   // Give the new process the right to bring its windows to the foreground.
   launch_options.grant_foreground_privilege = true;
+
+  // Ensure this process is terminated before letting the child process reach
+  // ChromeMain(...).
+  base::win::ScopedHandle parent_handle_for_child;
+  if (base::FeatureList::IsEnabled(features::kRelaunchWaitForParentProcess)) {
+    // Create a real, inheritable duplicate of our own process handle.
+    HANDLE handle;
+    BOOL duplicate_ok =
+        ::DuplicateHandle(::GetCurrentProcess(), ::GetCurrentProcess(),
+                          ::GetCurrentProcess(), &handle, SYNCHRONIZE,
+                          /*bInheritHandle=*/TRUE,
+                          /*dwOptions=*/0);
+
+    if (duplicate_ok) {
+      parent_handle_for_child.Set(handle);
+
+      // Pass the handle value (as an integer string) to the child.
+      chrome_exe_command_line.AppendSwitchASCII(
+          switches::kWaitForParentHandle,
+          base::NumberToString(
+              base::win::HandleToUint32(parent_handle_for_child.get())));
+
+      launch_options.handles_to_inherit.push_back(
+          parent_handle_for_child.get());
+    }
+  }
+
   return base::LaunchProcess(chrome_exe_command_line, launch_options).IsValid();
 }
 

@@ -24,9 +24,19 @@ class CORE_EXPORT LayoutGridLanes : public LayoutBlock {
     return "LayoutGridLanes";
   }
 
+  bool HasTopOverflow() const override;
+  bool HasLeftOverflow() const override;
+
   bool HasCachedPlacementData() const;
   const GridPlacementData& CachedPlacementData() const;
   void SetCachedPlacementData(GridPlacementData&& placement_data);
+
+  void AddChild(LayoutObject* new_child, LayoutObject* before_child) override;
+  void RemoveChild(LayoutObject* child) override;
+  void StyleDidChange(StyleDifference diff,
+                      const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
+                      const StyleChangeContext&) override;
 
   // TODO(almaher): We are missing subgrid methods, similar to LayoutGrid.
 
@@ -53,9 +63,6 @@ class CORE_EXPORT LayoutGridLanes : public LayoutBlock {
     NOT_DESTROYED();
     return true;
   }
-
-  // TODO(almaher): Do we need special overrides of AddChild(),
-  // RemoveChild(), StyleDidChange(), MarkGridDirty() etc?
 
   // Caches grid-lanes placement data for DevTools inspector highlighting.
   // This avoids recomputing during inspector queries.

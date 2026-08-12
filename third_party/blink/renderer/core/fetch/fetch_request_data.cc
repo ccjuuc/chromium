@@ -55,7 +55,7 @@ namespace {
 bool IsExcludedHeaderForServiceWorkerFetchEvent(const String& header_name) {
   // Excluding Sec-Fetch-... headers as suggested in
   // https://crbug.com/949997#c4.
-  if (header_name.StartsWithIgnoringASCIICase("sec-fetch-")) {
+  if (header_name.StartsWithIgnoringAsciiCase("sec-fetch-")) {
     return true;
   }
 
@@ -95,8 +95,9 @@ FetchRequestData* FetchRequestData::Create(
   for (const auto& pair : fetch_api_request->headers) {
     // TODO(leonhsl): Check sources of |fetch_api_request.headers| to make clear
     // whether we really need this filter.
-    if (EqualIgnoringASCIICase(pair.key, "referer"))
+    if (EqualIgnoringAsciiCase(pair.key, "referer")) {
       continue;
+    }
     if (for_service_worker_fetch_event == ForServiceWorkerFetchEvent::kTrue &&
         IsExcludedHeaderForServiceWorkerFetchEvent(pair.key)) {
       continue;
@@ -190,6 +191,7 @@ FetchRequestData* FetchRequestData::Create(
   request->SetIntegrity(fetch_api_request->integrity);
   request->SetKeepalive(fetch_api_request->keepalive);
   request->SetIsHistoryNavigation(fetch_api_request->is_history_navigation);
+  request->SetIsReloadNavigation(fetch_api_request->is_reload);
   request->SetPriority(ConvertRequestPriorityToResourceLoadPriority(
       fetch_api_request->priority));
   if (fetch_api_request->fetch_window_id)
@@ -200,11 +202,6 @@ FetchRequestData* FetchRequestData::Create(
         std::move(*(fetch_api_request->trust_token_params->Clone().get()));
     request->SetTrustTokenParams(trust_token_params);
   }
-
-  request->SetAttributionReportingEligibility(
-      fetch_api_request->attribution_reporting_eligibility);
-  request->SetAttributionReportingSupport(
-      fetch_api_request->attribution_reporting_support);
 
   if (fetch_api_request->service_worker_race_network_request_token) {
     request->SetServiceWorkerRaceNetworkRequestToken(
@@ -236,15 +233,10 @@ FetchRequestData* FetchRequestData::CloneExceptBody() {
   request->fetch_priority_hint_ = fetch_priority_hint_;
   request->original_destination_ = original_destination_;
   request->keepalive_ = keepalive_;
-  request->browsing_topics_ = browsing_topics_;
-  request->ad_auction_headers_ = ad_auction_headers_;
-  request->shared_storage_writable_ = shared_storage_writable_;
   request->is_history_navigation_ = is_history_navigation_;
+  request->is_reload_navigation_ = is_reload_navigation_;
   request->window_id_ = window_id_;
   request->trust_token_params_ = trust_token_params_;
-  request->attribution_reporting_eligibility_ =
-      attribution_reporting_eligibility_;
-  request->attribution_reporting_support_ = attribution_reporting_support_;
   request->service_worker_race_network_request_token_ =
       service_worker_race_network_request_token_;
   request->retry_options_ = retry_options_;

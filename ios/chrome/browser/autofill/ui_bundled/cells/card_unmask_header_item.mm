@@ -5,11 +5,13 @@
 #import "ios/chrome/browser/autofill/ui_bundled/cells/card_unmask_header_item.h"
 
 #import "base/apple/foundation_util.h"
+#import "base/feature_list.h"
 #import "build/branding_buildflags.h"
 #import "components/autofill/core/common/autofill_payments_features.h"
 #import "components/grit/components_scaled_resources.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
+#import "ios/chrome/browser/shared/ui/table_view/table_view_utils.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/table_view/table_view_cells_constants.h"
@@ -48,9 +50,8 @@ const CGFloat kGooglePayBadgeHeight = 16;
 
 #pragma mark - TableViewHeaderFooterItem
 
-- (void)configureHeaderFooterView:(CardUnmaskHeaderView*)cardUnmaskHeaderView
-                       withStyler:(ChromeTableViewStyler*)styler {
-  [super configureHeaderFooterView:cardUnmaskHeaderView withStyler:styler];
+- (void)configureHeaderFooterView:(CardUnmaskHeaderView*)cardUnmaskHeaderView {
+  [super configureHeaderFooterView:cardUnmaskHeaderView];
   cardUnmaskHeaderView.titleLabel.text = _titleText;
   cardUnmaskHeaderView.instructionsLabel.text = _instructionsText;
 }
@@ -99,10 +100,10 @@ const CGFloat kGooglePayBadgeHeight = 16;
                          constant:kTableViewImagePadding],
       [_titleLabel.leadingAnchor
           constraintEqualToAnchor:self.contentView.leadingAnchor
-                         constant:HorizontalPadding()],
+                         constant:ChromeTableViewHorizontalPadding()],
       [_titleLabel.trailingAnchor
           constraintEqualToAnchor:self.contentView.trailingAnchor
-                         constant:-HorizontalPadding()],
+                         constant:-ChromeTableViewHorizontalPadding()],
 
       // Instructions label
       [_instructionsLabel.topAnchor
@@ -110,17 +111,16 @@ const CGFloat kGooglePayBadgeHeight = 16;
                          constant:kUISpacing],
       [_instructionsLabel.leadingAnchor
           constraintEqualToAnchor:self.contentView.leadingAnchor
-                         constant:HorizontalPadding()],
+                         constant:ChromeTableViewHorizontalPadding()],
       [_instructionsLabel.trailingAnchor
           constraintEqualToAnchor:self.contentView.trailingAnchor
-                         constant:-HorizontalPadding()],
+                         constant:-ChromeTableViewHorizontalPadding()],
       [_instructionsLabel.bottomAnchor
           constraintEqualToAnchor:self.contentView.bottomAnchor
                          constant:-kTableViewLargeVerticalSpacing],
     ]];
 
-    [self registerForTraitChanges:TraitCollectionSetForTraits(
-                                      @[ UITraitUserInterfaceStyle.class ])
+    [self registerForTraitChanges:@[ UITraitUserInterfaceStyle.class ]
                        withAction:@selector(userInterfaceStyleDidChange)];
   }
   return self;
@@ -177,8 +177,12 @@ const CGFloat kGooglePayBadgeHeight = 16;
 // UIUserInterfaceStyle (light/dark mode).
 - (UIImage*)googlePayBadgeImage {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  Symbol symbol = base::FeatureList::IsEnabled(
+                      autofill::features::kAutofillEnableGradientGoogleLogos)
+                      ? SymbolGooglePayV2
+                      : SymbolGooglePay;
   return MakeSymbolMulticolor(
-      CustomSymbolWithPointSize(kGooglePaySymbol, kGooglePayBadgeHeight));
+      SymbolWithPointSize(symbol, kGooglePayBadgeHeight));
 #else
   return NativeImage(IDR_AUTOFILL_GOOGLE_PAY);
 #endif

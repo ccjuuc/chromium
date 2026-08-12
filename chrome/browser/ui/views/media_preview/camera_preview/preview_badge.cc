@@ -9,6 +9,7 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
@@ -34,7 +35,7 @@ std::unique_ptr<views::View> CreatePreviewBadge() {
   const int kVerticalInset = 2;
   const int kBorderThickness = 0;
   const int kRoundedRadius =
-      GetLayoutConstant(LOCATION_BAR_CHILD_CORNER_RADIUS);
+      GetLayoutConstant(LayoutConstant::kLocationBarChildCornerRadius);
   badge_view->SetBorder(views::CreateRoundedRectBorder(
       kBorderThickness, kRoundedRadius,
       gfx::Insets::TLBR(kVerticalInset, kLeftInset, kVerticalInset,
@@ -44,7 +45,9 @@ std::unique_ptr<views::View> CreatePreviewBadge() {
       ui::kColorSysTertiaryContainer, kRoundedRadius));
 
   const int kIconSize = 12;
-  const auto& icon = vector_icons::kVideocamChromeRefreshIcon;
+  const auto& icon = features::IsRoundedIconsEnabled()
+                         ? vector_icons::kVideocamIcon
+                         : vector_icons::kVideocamChromeRefreshOldIcon;
   const auto image_model = ui::ImageModel::FromVectorIcon(
       icon, ui::kColorSysOnTertiaryContainer, kIconSize);
   badge_view->AddChildView(

@@ -4,15 +4,23 @@
 
 #include "components/autofill/core/browser/data_manager/addresses/account_name_email_strike_manager.h"
 
-#include <algorithm>
+#include <variant>
 
-#include "base/feature_list.h"
+#include "base/check.h"
+#include "base/containers/flat_set.h"
+#include "base/containers/span.h"
 #include "base/metrics/histogram_functions.h"
+#include "components/autofill/core/browser/data_manager/addresses/account_name_email_store.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
+#include "components/autofill/core/browser/filling/form_filler.h"
+#include "components/autofill/core/browser/foundations/autofill_manager.h"
 #include "components/autofill/core/browser/suggestions/addresses/address_suggestion_generator.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
+#include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_prefs.h"
+#include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
+#include "components/autofill/core/common/unique_ids.h"
 #include "components/prefs/pref_service.h"
 
 namespace autofill {
@@ -48,20 +56,19 @@ AccountNameEmailStrikeManager::~AccountNameEmailStrikeManager() {
   // `AccountNameEmailStore::ApplyChange()` would lead to overrecording because
   // those two methods are also called as the result of a profile being removed
   // on a different device using the same account.
-  if (not_selected_count ==
-      features::kAutofillNameAndEmailProfileNotSelectedThreshold.Get()) {
+  if (not_selected_count == AccountNameEmailStore::kNotSelectedThreshold) {
     base::UmaHistogramBoolean(
         "Autofill.ProfileDeleted.ImplicitAccountNameEmail", true);
   } else if (not_selected_count <
-             features::kAutofillNameAndEmailProfileNotSelectedThreshold.Get()) {
+             AccountNameEmailStore::kNotSelectedThreshold) {
     base::UmaHistogramBoolean(
         "Autofill.ProfileDeleted.ImplicitAccountNameEmail", false);
   }
 }
 
 void AccountNameEmailStrikeManager::OnSuggestionsShown(
-    autofill::AutofillManager& manager,
-    base::span<const autofill::Suggestion> suggestions) {
+    AutofillManager& manager,
+    base::span<const Suggestion> suggestions) {
   was_name_email_profile_suggestion_shown_ =
       was_name_email_profile_suggestion_shown_ ||
       ContainsProfileSuggestionWithRecordType(
@@ -72,8 +79,10 @@ void AccountNameEmailStrikeManager::OnSuggestionsShown(
 void AccountNameEmailStrikeManager::OnFillOrPreviewForm(
     AutofillManager& manager,
     FormGlobalId form_id,
+    FieldGlobalId trigger_field_id,
     mojom::ActionPersistence action_persistence,
     const base::flat_set<FieldGlobalId>& filled_field_ids,
+    const base::flat_map<FieldGlobalId, DenseSet<FieldFillingSkipReason>>&,
     const FillingPayload& filling_payload) {
   if (action_persistence != mojom::ActionPersistence::kFill) {
     return;

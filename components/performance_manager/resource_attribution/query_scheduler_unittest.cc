@@ -8,8 +8,7 @@
 #include <set>
 #include <utility>
 
-#include "base/byte_count.h"
-#include "base/containers/enum_set.h"
+#include "base/byte_size.h"
 #include "base/location.h"
 #include "base/process/process.h"
 #include "base/run_loop.h"
@@ -118,9 +117,9 @@ TEST_F(ResourceAttrQuerySchedulerTest, AddRemoveQueries) {
         mock_graph.other_process.get()}) {
     memory_delegate_factory_.memory_summaries()[node->GetResourceContext()] =
         MemoryMeasurementDelegate::MemorySummaryMeasurement{
-            .resident_set_size = base::KiB(1),
-            .private_footprint = base::KiB(2),
-            .private_swap = base::KiB(3),
+            .resident_set_size = base::KiBU(1),
+            .private_footprint = base::KiBU(2),
+            .private_swap = base::KiBU(3),
         };
   }
 

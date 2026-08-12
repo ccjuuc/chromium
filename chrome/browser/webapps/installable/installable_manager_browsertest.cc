@@ -26,6 +26,9 @@
 #include "chrome/browser/ssl/https_upgrades_util.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/platform_browser_test.h"
+#include "components/favicon/content/content_favicon_driver.h"
+#include "components/favicon/core/favicon_driver.h"
+#include "components/favicon/core/favicon_driver_observer.h"
 #include "components/webapps/browser/banners/app_banner_manager.h"
 #include "components/webapps/browser/features.h"
 #include "components/webapps/browser/installable/installable_data.h"
@@ -33,6 +36,7 @@
 #include "components/webapps/browser/installable/installable_icon_fetcher.h"
 #include "components/webapps/browser/installable/installable_logging.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/prerender_test_util.h"
@@ -41,6 +45,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/manifest/manifest_util.h"
+#include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -90,6 +95,39 @@ testing::Matcher<const blink::Manifest::DisplayOverride&> DisplayOverrideIs(
     blink::mojom::DisplayMode display) {
   return testing::Property(&blink::Manifest::DisplayOverride::display, display);
 }
+
+class FaviconUpdateWaiter : public favicon::FaviconDriverObserver {
+ public:
+  explicit FaviconUpdateWaiter(content::WebContents* web_contents)
+      : driver_(favicon::ContentFaviconDriver::FromWebContents(web_contents)) {
+    driver_->AddObserver(this);
+  }
+
+  ~FaviconUpdateWaiter() override { driver_->RemoveObserver(this); }
+
+  void Wait() {
+    if (favicon_updated_) {
+      return;
+    }
+    run_loop_.Run();
+  }
+
+  // favicon::FaviconDriverObserver:
+  void OnFaviconUpdated(favicon::FaviconDriver* favicon_driver,
+                        favicon::FaviconDriverObserver::NotificationIconType
+                            notification_icon_type,
+                        const GURL& icon_url,
+                        bool icon_url_changed,
+                        const gfx::Image& image) override {
+    favicon_updated_ = true;
+    run_loop_.Quit();
+  }
+
+ private:
+  raw_ptr<favicon::FaviconDriver> driver_;
+  bool favicon_updated_ = false;
+  base::RunLoop run_loop_;
+};
 
 }  // anonymous namespace
 
@@ -349,7 +387,7 @@ IN_PROC_BROWSER_TEST_F(InstallableManagerBrowserTest, ManagerInIncognito) {
   // Ensure that the InstallableManager returns an error if called in an
   // incognito profile.
   Browser* incognito_browser =
-      OpenURLOffTheRecord(browser()->profile(), GURL("about:blank"));
+      OpenURLOffTheRecord(browser()->GetProfile(), GURL("about:blank"));
   content::WebContents* web_contents =
       incognito_browser->tab_strip_model()->GetActiveWebContents();
   auto manager = std::make_unique<InstallableManager>(web_contents);
@@ -381,13 +419,7 @@ IN_PROC_BROWSER_TEST_F(InstallableManagerBrowserTest, ManagerInIncognito) {
 }
 #endif
 
-// TODO(crbug.com/379660142) Re-enable this test once the flakiness is fixed.
-#if BUILDFLAG(IS_ANDROID)
-#define MAYBE_CheckNoManifest DISABLED_CheckNoManifest
-#else
-#define MAYBE_CheckNoManifest CheckNoManifest
-#endif
-IN_PROC_BROWSER_TEST_F(InstallableManagerBrowserTest, MAYBE_CheckNoManifest) {
+IN_PROC_BROWSER_TEST_F(InstallableManagerBrowserTest, CheckNoManifest) {
   // Ensure that a page with no manifest returns the appropriate error and with
   // null fields for everything.
   base::HistogramTester histograms;
@@ -451,9 +483,6 @@ IN_PROC_BROWSER_TEST_F(InstallableManagerBrowserTest, CheckManifestOnly) {
   EXPECT_FALSE(blink::IsEmptyManifest(tester->manifest()));
   EXPECT_FALSE(tester->manifest_url().is_empty());
 
-  EXPECT_TRUE(tester->primary_icon_url().is_empty());
-  EXPECT_EQ(nullptr, tester->primary_icon());
-  EXPECT_FALSE(tester->has_maskable_primary_icon());
   EXPECT_TRUE(tester->installable_check_passed());
   EXPECT_EQ(std::vector<InstallableStatusCode>{}, tester->errors());
 }
@@ -474,9 +503,6 @@ IN_PROC_BROWSER_TEST_F(InstallableManagerBrowserTest,
   EXPECT_FALSE(blink::IsEmptyManifest(tester->manifest()));
   EXPECT_FALSE(tester->manifest_url().is_empty());
 
-  EXPECT_TRUE(tester->primary_icon_url().is_empty());
-  EXPECT_EQ(nullptr, tester->primary_icon());
-  EXPECT_FALSE(tester->has_maskable_primary_icon());
   EXPECT_TRUE(tester->installable_check_passed());
   EXPECT_EQ(std::vector<InstallableStatusCode>{}, tester->errors());
 }
@@ -508,8 +534,6 @@ IN_PROC_BROWSER_TEST_F(InstallableManagerBrowserTest, FetchWebPageMetaData) {
     EXPECT_EQ(u"Web app banner test page", tester->metadata().title);
     EXPECT_EQ(u"description", tester->metadata().description);
 
-    EXPECT_TRUE(tester->primary_icon_url().is_empty());
-    EXPECT_EQ(nullptr, tester->primary_icon());
     EXPECT_EQ(std::vector<InstallableStatusCode>{}, tester->errors());
   }
 
@@ -966,13 +990,7 @@ IN_PROC_BROWSER_TEST_F(InstallableManagerBrowserTest, CheckMaskableIcon) {
   }
 }
 
-// Flaky on Mac. TODO(crbug.com/333331507): Re-enable once the issue is fixed.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_CheckFavicon DISABLED_CheckFavicon
-#else
-#define MAYBE_CheckFavicon CheckFavicon
-#endif
-IN_PROC_BROWSER_TEST_F(InstallableManagerBrowserTest, MAYBE_CheckFavicon) {
+IN_PROC_BROWSER_TEST_F(InstallableManagerBrowserTest, CheckFavicon) {
   // Checks that InstallableManager chooses the correct primary icon when
   // fetching favicon.
 
@@ -985,11 +1003,13 @@ IN_PROC_BROWSER_TEST_F(InstallableManagerBrowserTest, MAYBE_CheckFavicon) {
     std::unique_ptr<CallbackTester> tester(
         new CallbackTester(run_loop.QuitClosure()));
 
-    NavigateAndRunInstallableManager(
-        tester.get(), installableParams,
-        GetUrlOfPageWithManifestAndTags(
-            "/banners/manifest_no_icon.json",
-            {{"icon", "/banners/256x256-red.png"}}));
+    FaviconUpdateWaiter waiter(web_contents());
+    NavigateToPath(GetUrlOfPageWithManifestAndTags(
+        "/banners/manifest_no_icon.json",
+        {{"icon", "/banners/256x256-red.png"}}));
+    waiter.Wait();
+
+    RunInstallableManager(tester.get(), installableParams);
     run_loop.Run();
 
     EXPECT_FALSE(blink::IsEmptyManifest(tester->manifest()));
@@ -1007,11 +1027,13 @@ IN_PROC_BROWSER_TEST_F(InstallableManagerBrowserTest, MAYBE_CheckFavicon) {
     std::unique_ptr<CallbackTester> tester(
         new CallbackTester(run_loop.QuitClosure()));
 
-    NavigateAndRunInstallableManager(
-        tester.get(), installableParams,
-        GetUrlOfPageWithManifestAndTags(
-            "/banners/manifest_one_icon.json",
-            {{"icon", "/banners/256x256-red.png"}}));
+    FaviconUpdateWaiter waiter(web_contents());
+    NavigateToPath(GetUrlOfPageWithManifestAndTags(
+        "/banners/manifest_one_icon.json",
+        {{"icon", "/banners/256x256-red.png"}}));
+    waiter.Wait();
+
+    RunInstallableManager(tester.get(), installableParams);
     run_loop.Run();
 
     EXPECT_FALSE(blink::IsEmptyManifest(tester->manifest()));
@@ -1033,12 +1055,13 @@ IN_PROC_BROWSER_TEST_F(InstallableManagerBrowserTest, MAYBE_CheckFavicon) {
     std::unique_ptr<CallbackTester> tester(
         new CallbackTester(run_loop.QuitClosure()));
 
-    NavigateAndRunInstallableManager(
-        tester.get(), installableParams,
-        GetUrlOfPageWithManifestAndTags(
-            "/banners/manifest_no_icon.json",
-            {{"icon", "/banners/256x256-red.png"}}));
+    FaviconUpdateWaiter waiter(web_contents());
+    NavigateToPath(GetUrlOfPageWithManifestAndTags(
+        "/banners/manifest_no_icon.json",
+        {{"icon", "/banners/256x256-red.png"}}));
+    waiter.Wait();
 
+    RunInstallableManager(tester.get(), installableParams);
     run_loop.Run();
 
     EXPECT_FALSE(blink::IsEmptyManifest(tester->manifest()));
@@ -1455,7 +1478,8 @@ IN_PROC_BROWSER_TEST_F(InstallableManagerAllowlistOriginBrowserTest,
   // TODO(crbug.com/361129282): Remove scoped http allowlisting once the
   // `unsafely-treat-insecure-origin-as-secure` flag adds to the HTTP allowlist.
   ScopedAllowHttpForHostnamesForTesting allow_http(
-      {"www.google.com", "maps.google.com"}, browser()->profile()->GetPrefs());
+      {"www.google.com", "maps.google.com"},
+      browser()->GetProfile()->GetPrefs());
   // The allowlisted origin should be regarded as secure.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(kInsecureOrigin)));
   content::WebContents* contents =
@@ -1631,9 +1655,6 @@ IN_PROC_BROWSER_TEST_F(InstallableManagerBrowserTest,
                   DisplayOverrideIs(blink::mojom::DisplayMode::kMinimalUi),
                   DisplayOverrideIs(blink::mojom::DisplayMode::kStandalone)));
 
-  EXPECT_TRUE(tester->primary_icon_url().is_empty());
-  EXPECT_EQ(nullptr, tester->primary_icon());
-  EXPECT_FALSE(tester->has_maskable_primary_icon());
   EXPECT_TRUE(tester->installable_check_passed());
   EXPECT_EQ(std::vector<InstallableStatusCode>{}, tester->errors());
 }
@@ -1716,7 +1737,7 @@ IN_PROC_BROWSER_TEST_F(InstallableManagerInPrerenderingBrowserTest,
   // Loads a page in the prerendering.
   const std::string path = "/banners/manifest_test_page.html";
   auto prerender_url = embedded_test_server()->GetURL(path);
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_helper()->AddPrerender(prerender_url);
   content::test::PrerenderHostObserver host_observer(*web_contents(), host_id);
 
@@ -1817,7 +1838,7 @@ IN_PROC_BROWSER_TEST_F(InstallableManagerInPrerenderingBrowserTest,
       embedded_test_server()->GetURL("/banners/manifest_test_page.html");
   // OnResetData() should not be called on the prerendering.
   EXPECT_CALL(*manager.get(), OnResetData()).Times(0);
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_helper()->AddPrerender(prerender_url);
 
   content::test::PrerenderHostObserver host_observer(*web_contents(), host_id);
@@ -1900,7 +1921,7 @@ IN_PROC_BROWSER_TEST_F(InstallableManagerInPrerenderingBrowserTest,
       embedded_test_server()->GetURL("/banners/no_manifest_test_page.html");
   // OnResetData() should not be called on the prerendering.
   EXPECT_CALL(*manager.get(), OnResetData()).Times(0);
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_helper()->AddPrerender(prerender_url);
 
   content::test::PrerenderHostObserver host_observer(*web_contents(), host_id);

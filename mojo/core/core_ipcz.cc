@@ -651,8 +651,11 @@ MojoResult MojoWrapPlatformSharedMemoryRegionIpcz(
   if (!platform_handles || !num_bytes || !guid || !mojo_handle) {
     return MOJO_RESULT_INVALID_ARGUMENT;
   }
+  // SAFETY: The caller is a C-API which cannot be spanified further
+  // up the stack. The caller guarantees that `platform_handles` points to
+  // `num_platform_handles` elements.
   auto buffer = ipcz_driver::SharedBuffer::CreateForMojoWrapper(
-      UNSAFE_TODO(base::span(platform_handles, num_platform_handles)),
+      UNSAFE_BUFFERS(base::span(platform_handles, num_platform_handles)),
       num_bytes, *guid, access_mode);
   if (!buffer) {
     return MOJO_RESULT_INVALID_ARGUMENT;
@@ -685,6 +688,11 @@ MojoResult MojoUnwrapPlatformSharedMemoryRegionIpcz(
   const base::UnguessableToken guid = buffer->region().GetGUID();
   const uint32_t size = static_cast<uint32_t>(buffer->region().GetSize());
 
+  // SAFETY: The caller is a C-API which cannot be spanified further
+  // up the stack. The caller guarantees that `platform_handles` points to
+  // `*num_platform_handles` elements.
+  auto platform_handles_span =
+      UNSAFE_BUFFERS(base::span(platform_handles, *num_platform_handles));
   uint32_t capacity = *num_platform_handles;
   uint32_t required_handles = 1;
 #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_ANDROID)
@@ -698,7 +706,7 @@ MojoResult MojoUnwrapPlatformSharedMemoryRegionIpcz(
     return MOJO_RESULT_RESOURCE_EXHAUSTED;
   }
 
-  PlatformHandle handles[2];
+  std::array<PlatformHandle, 2> handles = {};
   base::subtle::ScopedPlatformSharedMemoryHandle region_handle =
       buffer->region().PassPlatformHandle();
 #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_ANDROID)
@@ -709,8 +717,8 @@ MojoResult MojoUnwrapPlatformSharedMemoryRegionIpcz(
 #endif
 
   for (size_t i = 0; i < required_handles; ++i) {
-    PlatformHandle::ToMojoPlatformHandle(std::move(UNSAFE_TODO(handles[i])),
-                                         UNSAFE_TODO(&platform_handles[i]));
+    PlatformHandle::ToMojoPlatformHandle(std::move(handles[i]),
+                                         &platform_handles_span[i]);
   }
 
   *num_bytes = size;
@@ -756,8 +764,11 @@ MojoResult MojoAttachMessagePipeToInvitationIpcz(
       (options && options->struct_size < sizeof(*options))) {
     return MOJO_RESULT_INVALID_ARGUMENT;
   }
+  // SAFETY: The caller is a C-API which cannot be spanified further
+  // up the stack. The caller guarantees that `name` points to
+  // `name_num_bytes` bytes.
   return invitation->Attach(
-      UNSAFE_TODO(
+      UNSAFE_BUFFERS(
           base::span(static_cast<const uint8_t*>(name), name_num_bytes)),
       message_pipe_handle);
 }
@@ -773,8 +784,11 @@ MojoResult MojoExtractMessagePipeFromInvitationIpcz(
       (options && options->struct_size < sizeof(*options))) {
     return MOJO_RESULT_INVALID_ARGUMENT;
   }
+  // SAFETY: The caller is a C-API which cannot be spanified further
+  // up the stack. The caller guarantees that `name` points to
+  // `name_num_bytes` bytes.
   return invitation->Extract(
-      UNSAFE_TODO(
+      UNSAFE_BUFFERS(
           base::span(static_cast<const uint8_t*>(name), name_num_bytes)),
       message_pipe_handle);
 }

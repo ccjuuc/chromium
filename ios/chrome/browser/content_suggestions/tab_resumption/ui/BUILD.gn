@@ -5,10 +5,8 @@
 source_set("ui") {
   sources = [
     "tab_resumption_commands.h",
-    "tab_resumption_consumer.h",
-    "tab_resumption_consumer_source.h",
-    "tab_resumption_item.h",
-    "tab_resumption_item.mm",
+    "tab_resumption_config.h",
+    "tab_resumption_config.mm",
     "tab_resumption_view.h",
     "tab_resumption_view.mm",
   ]
@@ -23,6 +21,7 @@ source_set("ui") {
     "//ios/chrome/browser/content_suggestions/public:constants",
     "//ios/chrome/browser/content_suggestions/shop_card/ui:card_data",
     "//ios/chrome/browser/content_suggestions/tab_resumption/public:constants",
+    "//ios/chrome/browser/ntp/ui_bundled:theme",
     "//ios/chrome/browser/price_notifications/ui_bundled/cells",
     "//ios/chrome/browser/shared/public/features",
     "//ios/chrome/browser/shared/ui/symbols",
@@ -38,7 +37,7 @@ source_set("ui") {
 
 source_set("unit_tests") {
   testonly = true
-  sources = [ "tab_resumption_item_unittest.mm" ]
+  sources = [ "tab_resumption_config_unittest.mm" ]
   deps = [
     ":ui",
     "//base",

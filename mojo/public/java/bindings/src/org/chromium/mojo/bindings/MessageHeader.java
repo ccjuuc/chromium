@@ -45,6 +45,9 @@ public class MessageHeader {
     /** Flag for a header of a message that is a response to a sync method. */
     public static final int MESSAGE_IS_SYNC_FLAG = 1 << 2;
 
+    private static final int KNOWN_FLAGS =
+            (MESSAGE_EXPECTS_RESPONSE_FLAG | MESSAGE_IS_RESPONSE_FLAG | MESSAGE_IS_SYNC_FLAG);
+
     private final DataHeader mDataHeader;
     private final int mInterfaceId;
     private final int mMethodId;
@@ -74,7 +77,7 @@ public class MessageHeader {
      * Constructor, parsing the header from a message. Should only be used by {@link Message}
      * itself.
      */
-    MessageHeader(Message message) {
+    MessageHeader(Message message) throws DeserializationException {
         Decoder decoder = new Decoder(message);
         mDataHeader = decoder.readDataHeader();
         validateDataHeader(mDataHeader);
@@ -159,9 +162,7 @@ public class MessageHeader {
      * knows about in order to allow this class to work with future version of the header format.
      */
     public boolean hasExactFlags(int expectedFlags) {
-        int knownFlags =
-                (MESSAGE_EXPECTS_RESPONSE_FLAG | MESSAGE_IS_RESPONSE_FLAG | MESSAGE_IS_SYNC_FLAG);
-        return (getFlags() & knownFlags) == expectedFlags;
+        return (getFlags() & KNOWN_FLAGS) == expectedFlags;
     }
 
     /**
@@ -201,7 +202,7 @@ public class MessageHeader {
     }
 
     /** Validate that the given {@link DataHeader} can be the data header of a message header. */
-    private static void validateDataHeader(DataHeader dataHeader) {
+    private static void validateDataHeader(DataHeader dataHeader) throws DeserializationException {
         if (dataHeader.elementsOrVersion < SIMPLE_MESSAGE_VERSION) {
             throw new DeserializationException(
                     "Incorrect number of fields, expecting at least "

@@ -8,15 +8,12 @@ include_rules = [
   # Whenever possible, avoid adding new //chrome dependencies to this list.
   "+chrome/browser/ui/browser_window/public/browser_window_interface.h",
   "+chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h",
-  "+chrome/browser/ui/chrome_pages.h",
-  "+chrome/browser/ui/settings_window_manager_chromeos.h",
   "+chrome/grit",
 ]
 
 specific_include_rules = {
   'device_settings_interactive_uitest\\.cc': [
     '+ash/shell.h',
-    "+chrome/browser/ui/browser_list.h",
     "+chrome/test",
     '+device/udev_linux/fake_udev_loader.h',
   ],

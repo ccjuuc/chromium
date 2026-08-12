@@ -9,7 +9,6 @@
 
 #include <optional>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
@@ -22,6 +21,7 @@
 #include "extensions/browser/extension_function.h"
 #include "extensions/browser/extension_function_histogram_value.h"
 #include "extensions/common/api/bluetooth_socket.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace device {
 class BluetoothSocket;
@@ -56,7 +56,7 @@ class BluetoothSocketAsyncApiFunction : public ExtensionFunction {
   int AddSocket(BluetoothApiSocket* socket);
   BluetoothApiSocket* GetSocket(int api_resource_id);
   void RemoveSocket(int api_resource_id);
-  std::unordered_set<int>* GetSocketIds();
+  absl::flat_hash_set<int>* GetSocketIds();
 
  private:
   raw_ptr<ApiResourceManager<BluetoothApiSocket>> manager_;
@@ -126,7 +126,7 @@ class BluetoothSocketListenFunction : public BluetoothSocketAsyncApiFunction {
       const std::optional<std::string>& name,
       device::BluetoothAdapter::CreateServiceCallback callback,
       device::BluetoothAdapter::CreateServiceErrorCallback error_callback) = 0;
-  virtual base::Value::List CreateResults() = 0;
+  virtual base::ListValue CreateResults() = 0;
 
   virtual int socket_id() const = 0;
   virtual const std::string& uuid() const = 0;
@@ -164,7 +164,7 @@ class BluetoothSocketListenUsingRfcommFunction
                      device::BluetoothAdapter::CreateServiceCallback callback,
                      device::BluetoothAdapter::CreateServiceErrorCallback
                          error_callback) override;
-  base::Value::List CreateResults() override;
+  base::ListValue CreateResults() override;
 
  protected:
   ~BluetoothSocketListenUsingRfcommFunction() override;
@@ -192,7 +192,7 @@ class BluetoothSocketListenUsingL2capFunction
                      device::BluetoothAdapter::CreateServiceCallback callback,
                      device::BluetoothAdapter::CreateServiceErrorCallback
                          error_callback) override;
-  base::Value::List CreateResults() override;
+  base::ListValue CreateResults() override;
 
  protected:
   ~BluetoothSocketListenUsingL2capFunction() override;

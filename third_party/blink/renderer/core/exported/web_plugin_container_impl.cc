@@ -34,6 +34,7 @@
 #include "build/build_config.h"
 #include "third_party/blink/public/common/input/web_coalesced_input_event.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_drag_data.h"
 #include "third_party/blink/public/platform/web_string.h"
@@ -56,6 +57,7 @@
 #include "third_party/blink/renderer/core/clipboard/data_object.h"
 #include "third_party/blink/renderer/core/clipboard/data_transfer.h"
 #include "third_party/blink/renderer/core/clipboard/system_clipboard.h"
+#include "third_party/blink/renderer/core/display_lock/display_lock_utilities.h"
 #include "third_party/blink/renderer/core/dom/dom_node_ids.h"
 #include "third_party/blink/renderer/core/dom/events/native_event_listener.h"
 #include "third_party/blink/renderer/core/events/drag_event.h"
@@ -90,6 +92,7 @@
 #include "third_party/blink/renderer/core/page/focus_controller.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/pointer_lock_controller.h"
+#include "third_party/blink/renderer/core/paint/paint_info.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/script/classic_script.h"
 #include "third_party/blink/renderer/core/scroll/scroll_animator_base.h"
@@ -160,18 +163,60 @@ void WebPluginContainerImpl::UpdateAllLifecyclePhases() {
     return;
 
   web_plugin_->UpdateAllLifecyclePhases(DocumentUpdateReason::kPlugin);
+
+  // A display lock on the plugin element itself or one of its same-document
+  // ancestors (e.g. content-visibility:hidden) is not reflected in the frame's
+  // throttling bits, so recompute it every lifecycle and forward on change.
+  const bool element_display_locked =
+      DisplayLockUtilities::LockedInclusiveAncestorPreventingPaint(*element_) !=
+      nullptr;
+  if (element_display_locked != element_display_locked_) {
+    element_display_locked_ = element_display_locked;
+    SendThrottlingStatus();
+  }
 }
 
-void WebPluginContainerImpl::Paint(GraphicsContext& context,
-                                   PaintFlags,
+void WebPluginContainerImpl::UpdateRenderThrottlingStatus(
+    bool is_throttled,
+    bool subtree_throttled,
+    bool display_locked) {
+  if (is_throttled == is_throttled_ &&
+      subtree_throttled == subtree_throttled_ &&
+      display_locked == frame_display_locked_) {
+    return;
+  }
+  is_throttled_ = is_throttled;
+  subtree_throttled_ = subtree_throttled;
+  frame_display_locked_ = display_locked;
+  SendThrottlingStatus();
+}
+
+void WebPluginContainerImpl::SendThrottlingStatus() {
+  if (web_plugin_) {
+    web_plugin_->UpdateRenderThrottlingStatus(
+        is_throttled_, subtree_throttled_,
+        frame_display_locked_ || element_display_locked_);
+  }
+}
+
+void WebPluginContainerImpl::Paint(const PaintInfo& paint_info,
                                    const CullRect& cull_rect,
                                    const gfx::Vector2d& paint_offset) const {
   // Don't paint anything if the plugin doesn't intersect.
-  if (!cull_rect.Intersects(FrameRect()))
+  if (!cull_rect.Intersects(DeprecatedFrameRect())) {
     return;
+  }
 
-  gfx::Rect visual_rect = FrameRect();
+  gfx::Rect visual_rect = DeprecatedFrameRect();
   visual_rect.Offset(paint_offset);
+
+  GraphicsContext& context = paint_info.context;
+
+  if ((paint_info.GetPaintFlags() & PaintFlag::kPrivacyPreserving) &&
+      !element_->GetExecutionContext()->GetSecurityOrigin()->CanReadContent(
+          element_->GetDocument().CompleteURL(element_->Url()))) {
+    return;
+  }
 
   if (WantsWheelEvents()) {
     context.GetPaintController().RecordHitTestData(
@@ -186,7 +231,13 @@ void WebPluginContainerImpl::Paint(GraphicsContext& context,
         visual_rect);
   }
 
-  if (layer_) {
+  if (element_->GetTrackedElementSubRects()) {
+    const auto* sub_rects = element_->GetTrackedElementSubRects();
+    context.GetPaintController().RecordTrackedElementData(
+        *GetLayoutEmbeddedContent(), visual_rect, *sub_rects);
+  }
+
+  if (layer_ && !paint_info.ShouldOmitCompositingInfo()) {
     layer_->SetBounds(Size());
     layer_->SetIsDrawable(true);
     layer_->SetHitTestable(true);
@@ -194,7 +245,7 @@ void WebPluginContainerImpl::Paint(GraphicsContext& context,
     // WebPlugin::paint.
     RecordForeignLayer(context, *element_->GetLayoutObject(),
                        DisplayItem::kForeignLayerPlugin, layer_,
-                       FrameRect().origin() + paint_offset);
+                       DeprecatedLocation() + paint_offset);
     return;
   }
 
@@ -437,7 +488,7 @@ void WebPluginContainerImpl::PrintPage(int page_index, GraphicsContext& gc) {
     return;
 
   DrawingRecorder recorder(gc, *element_->GetLayoutObject(),
-                           DisplayItem::kWebPlugin, FrameRect());
+                           DisplayItem::kWebPlugin, DeprecatedFrameRect());
   gc.Save();
 
   cc::PaintCanvas* canvas = gc.Canvas();
@@ -458,7 +509,7 @@ void WebPluginContainerImpl::Copy() {
 
   LocalFrame* frame = element_->GetDocument().GetFrame();
   frame->GetSystemClipboard()->WriteHTML(web_plugin_->SelectionAsMarkup(),
-                                         KURL());
+                                         NullUrl());
   String text = web_plugin_->SelectionAsText();
   ReplaceNBSPWithSpace(text);
   frame->GetSystemClipboard()->WritePlainText(text);
@@ -595,7 +646,7 @@ bool WebPluginContainerImpl::IsRectTopmost(const gfx::Rect& rect) {
     return false;
 
   gfx::Rect frame_rect = rect;
-  frame_rect.Offset(Location().OffsetFromOrigin());
+  frame_rect.Offset(DeprecatedLocation().OffsetFromOrigin());
   HitTestLocation location((PhysicalRect(frame_rect)));
   HitTestResult result = frame->GetEventHandler().HitTestResultAtLocation(
       location, HitTestRequest::kReadOnly | HitTestRequest::kActive |
@@ -798,12 +849,13 @@ void WebPluginContainerImpl::Dispose() {
 }
 
 void WebPluginContainerImpl::SetFrameRect(const gfx::Rect& rect) {
-  gfx::Rect old_rect(FrameRect());
+  gfx::Rect old_rect(DeprecatedFrameRect());
   EmbeddedContentView::SetFrameRect(rect);
   // We need to report every time SetFrameRect is called, even if there is no
   // change (if there is a change, FrameRectsChanged will do the reporting).
-  if (old_rect == FrameRect())
+  if (old_rect == DeprecatedFrameRect()) {
     PropagateFrameRects();
+  }
 }
 
 void WebPluginContainerImpl::Trace(Visitor* visitor) const {
@@ -858,11 +910,12 @@ void WebPluginContainerImpl::HandleDragEvent(MouseEvent& event) {
   if (drag_status == kWebDragStatusUnknown)
     return;
 
-  DataTransfer* data_transfer = event.getDataTransfer();
-  WebDragData drag_data = data_transfer->GetDataObject()->ToWebDragData();
+  DataTransfer* data_transfer = event.dataTransfer();
+  WebDragData drag_data =
+      data_transfer->GetDataObject()->ToWebDragData(nullptr);
   DragOperationsMask drag_operation_mask = data_transfer->SourceOperation();
   gfx::PointF drag_screen_location(event.screenX(), event.screenY());
-  gfx::Point location(Location());
+  gfx::Point location(DeprecatedLocation());
   gfx::PointF drag_location(event.AbsoluteLocation().x() - location.x(),
                             event.AbsoluteLocation().y() - location.y());
 
@@ -1093,10 +1146,11 @@ void WebPluginContainerImpl::ComputeClipRectsForPlugin(
 
   // The frameRect is already in absolute space of the local frame to the
   // plugin so map it up to the root frame.
-  window_rect = FrameRect();
+  window_rect = DeprecatedFrameRect();
   PhysicalRect layout_window_rect =
       element_->GetDocument().View()->GetLayoutView()->LocalToAbsoluteRect(
-          PhysicalRect(window_rect), kTraverseDocumentBoundaries);
+          PhysicalRect(window_rect),
+          {MapCoordinatesMode::kTraverseDocumentBoundaries});
 
   window_rect = ToPixelSnappedRect(layout_window_rect);
 
@@ -1105,12 +1159,14 @@ void WebPluginContainerImpl::ComputeClipRectsForPlugin(
       PhysicalOffset(), PhysicalSize(root_view->GetFrameView()->Size())));
 
   unclipped_int_local_rect = ToEnclosingRect(box->AbsoluteToLocalRect(
-      unclipped_root_frame_rect, kTraverseDocumentBoundaries));
+      unclipped_root_frame_rect,
+      {MapCoordinatesMode::kTraverseDocumentBoundaries}));
   // As a performance optimization, map the clipped rect separately if is
   // different than the unclipped rect.
   if (clipped_root_frame_rect != unclipped_root_frame_rect) {
     clipped_local_rect = ToEnclosingRect(box->AbsoluteToLocalRect(
-        clipped_root_frame_rect, kTraverseDocumentBoundaries));
+        clipped_root_frame_rect,
+        {MapCoordinatesMode::kTraverseDocumentBoundaries}));
   } else {
     clipped_local_rect = unclipped_int_local_rect;
   }
@@ -1128,6 +1184,11 @@ void WebPluginContainerImpl::CalculateGeometry(gfx::Rect& window_rect,
     ComputeClipRectsForPlugin(element_, window_rect, clip_rect,
                               unobscured_rect);
   }
+}
+
+mojom::blink::WebFeature WebPluginContainerImpl::SvgFilterPaintedCounter()
+    const {
+  return mojom::blink::WebFeature::kSvgFilterPaintedOnWebPlugin;
 }
 
 }  // namespace blink

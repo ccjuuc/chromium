@@ -8,7 +8,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/time/time.h"
 #include "chrome/browser/payments/browser_binding/browser_bound_key_deleter_service.h"
 #include "chrome/browser/profiles/profile.h"
@@ -42,11 +41,6 @@ void BrowserBoundKeyDeleterServiceDesktop::RemoveInvalidBBKs() {
   // LocalCredentialManagement are required to remove browser bound keys.
   if (!web_data_service_ || !browser_bound_key_store_ ||
       !local_credential_management_) {
-    return;
-  }
-
-  if (!base::FeatureList::IsEnabled(
-          blink::features::kSecurePaymentConfirmationBrowserBoundKeys)) {
     return;
   }
 
@@ -94,7 +88,7 @@ void BrowserBoundKeyDeleterServiceDesktop::OnEnumerateComplete(
     }
 
     std::erase_if(browser_bound_keys, [&valid_credentials](auto& bbk_meta) {
-      return base::Contains(valid_credentials, bbk_meta.passkey);
+      return valid_credentials.contains(bbk_meta.passkey);
     });
   } else {
     // When finding local credentials is not supported on the platform, find

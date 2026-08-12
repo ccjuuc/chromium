@@ -14,12 +14,14 @@
 <translation id="1321004960118052490">आपके इनऐक्टिव आइटम की संख्या नहीं बढ़ेगी</translation>
 <translation id="1329584516321524826">अभी-अभी अपडेट किया गया</translation>
 <translation id="1340839264183302272">ग्रुप छोड़ें</translation>
+<translation id="1386966479075994683">टैब को बड़ा करें</translation>
 <translation id="1403729629346559879">{NUMBER_OF_TABS,plural, =1{शेयर किए गए, <ph name="TABS_COUNT_ONE" /> टैब वाले टैब ग्रुप <ph name="TITLE_OF_GROUP" /> को बड़ा करें. इसका लेबल <ph name="CARD_LABEL" /> और रंग <ph name="COLOR_NAME" /> है.}one{शेयर किए गए, <ph name="TABS_COUNT_MANY" /> टैब वाले टैब ग्रुप <ph name="TITLE_OF_GROUP" /> को बड़ा करें. इसका लेबल <ph name="CARD_LABEL" /> और रंग <ph name="COLOR_NAME" /> है.}other{शेयर किए गए, <ph name="TABS_COUNT_MANY" /> टैब वाले टैब ग्रुप <ph name="TITLE_OF_GROUP" /> को बड़ा करें. इसका लेबल <ph name="CARD_LABEL" /> और रंग <ph name="COLOR_NAME" /> है.}}</translation>
 <translation id="1486715732399361704">आपको अपने सभी टैब ग्रुप, यहां दिख सकते हैं</translation>
 <translation id="149054111719651807">{NUM_MINS,plural, =1{<ph name="NUM_MINS_ONE" /> मिनट पहले बनाया गया}one{<ph name="NUM_MINS_MANY" /> मिनट पहले बनाया गया}other{<ph name="NUM_MINS_MANY" /> मिनट पहले बनाया गया}}</translation>
 <translation id="1499635324672558517">क्या सभी गुप्त टैब बंद करने हैं?</translation>
 <translation id="1501480321619201731">ग्रुप मिटाएं</translation>
 <translation id="1553638665176794706">{TABS_COUNT,plural, =1{<ph name="TABS_COUNT_ONE" /> इनऐक्टिव आइटम}one{<ph name="TABS_COUNT_MANY" /> इनऐक्टिव आइटम}other{<ph name="TABS_COUNT_MANY" /> इनऐक्टिव आइटम}}</translation>
+<translation id="1568067597247500137">साइट म्यूट करें</translation>
 <translation id="1645759014353344461"><ph name="TABS_COUNT_MANY" /> टैब ग्रुप में शामिल किए गए</translation>
 <translation id="1657719826150349398">टैब को नीचे ले जाएं</translation>
 <translation id="1670942869417022142">ऑडियो म्यूट किया गया है</translation>
@@ -30,12 +32,14 @@
 <translation id="1828808367831369073"><ph name="TABS_COUNT_ONE" /> टैब ग्रुप में शामिल किया गया</translation>
 <translation id="1844381456014878100">7 दिनों तक कोई गतिविधि न होने पर</translation>
 <translation id="1869137256605757565">{TABS_COUNT,plural, =1{<ph name="TABS_COUNT_ONE" /> टैब}one{<ph name="TABS_COUNT_MANY" /> टैब}other{<ph name="TABS_COUNT_MANY" /> टैब}}</translation>
+<translation id="1894429470045525403">{TAB_COUNT,plural, =1{रीडिंग लिस्ट में टैब जोड़ें}one{रीडिंग लिस्ट में टैब जोड़ें}other{रीडिंग लिस्ट में टैब जोड़ें}}</translation>
 <translation id="1909810060368225529">सूचना: शेयर किए गए इस टैब ग्रुप में किए जाने वाले बदलाव, सभी लोगों को दिखेंगे. आपके शेयर किए गए टैब ग्रुप में, सभी लोग बदलाव कर सकते हैं</translation>
 <translation id="1925363809167540686">{TAB_COUNT,plural, =1{टैब को पिन करें}one{टैब को पिन करें}other{टैब पिन करें}}</translation>
 <translation id="1982637982196732906">इनऐक्टिव सेक्शन में मूव करें</translation>
 <translation id="2050597508048557928">{TABS_COUNT,plural, =1{चुना गया <ph name="TABS_COUNT_ONE" /> टैब को बुकमार्क करें}one{चुना गया <ph name="TABS_COUNT_MANY" /> टैब को बुकमार्क करें}other{चुने गए <ph name="TABS_COUNT_MANY" /> टैब को बुकमार्क करें}}</translation>
 <translation id="2055057176188061528">कोई टैब ग्रुप चुनें या एक नया टैब ग्रुप बनाएं</translation>
 <translation id="2074527029802029717">टैब बड़ी करें</translation>
+<translation id="2111670510994270194">दाईं ओर नया टैब खोलें</translation>
 <translation id="2118649612461486615">स्टोर की जानकारी</translation>
 <translation id="2123073051266141035">{INCOGNITO_TABS_COUNT,plural, =1{बंद किए गए टैब और ग्रुप, 'हाल ही के टैब' सेक्शन और 'टैब ग्रुप' सेक्शन में जाकर फिर से खोले जा सकते हैं. हालांकि, गुप्त टैब आपको इन सेक्शन में नहीं दिखेगा.}one{बंद किए गए टैब और ग्रुप, 'हाल ही के टैब' सेक्शन और 'टैब ग्रुप' सेक्शन में जाकर फिर से खोले जा सकते हैं. हालांकि, # गुप्त टैब आपको इन सेक्शन में नहीं दिखेगा.}other{बंद किए गए टैब और ग्रुप, 'हाल ही के टैब' सेक्शन और 'टैब ग्रुप' सेक्शन में जाकर फिर से खोले जा सकते हैं. हालांकि, # गुप्त टैब आपको इन सेक्शन में नहीं दिखेंगे.}}</translation>
 <translation id="2153899164605463849">{TAB_COUNT,plural, =1{साइट अनम्यूट करें}one{साइट अनम्यूट करें}other{साइटें अनम्यूट करें}}</translation>
@@ -43,10 +47,12 @@
 <translation id="22623456902492423">{TABS_COUNT,plural, =1{टैब को ग्रुप से अलग करें}one{टैब को ग्रुप से अलग करें}other{टैब को ग्रुप से अलग करें}}</translation>
 <translation id="2271452184061378400">आपके टैब ग्रुप यहां सेव किए जाते हैं</translation>
 <translation id="2277224997687551299">ग्रुप के नाम में बदलाव करें</translation>
+<translation id="2289567621059034186">नीचे नया टैब खोलें</translation>
 <translation id="2330212241471632770">{TABS_COUNT,plural, =1{बुकमार्क टैब}one{बुकमार्क टैब}other{बुकमार्क टैब}}</translation>
 <translation id="2359808026110333948">जारी रखें</translation>
 <translation id="2371084566192454134">टैब और टैब ग्रुप</translation>
 <translation id="2375257132547014176">{TABS_COUNT,plural, =1{<ph name="TABS_COUNT_ONE" /> टैब वाले <ph name="TITLE_OF_GROUP" /> टैब ग्रुप को छोटा करें.}one{<ph name="TABS_COUNT_MANY" /> टैब वाले <ph name="TITLE_OF_GROUP" /> टैब ग्रुप को छोटा करें.}other{<ph name="TABS_COUNT_MANY" /> टैब वाले <ph name="TITLE_OF_GROUP" /> टैब ग्रुप को छोटा करें.}}</translation>
+<translation id="2476179388576975626">पिक्चर में पिक्चर</translation>
 <translation id="2498435670446402865">टैब ग्रुप का नाम बदलें</translation>
 <translation id="2536366509642644298">"<ph name="TAB_GROUP_NAME_1" />" और "<ph name="TAB_GROUP_NAME_2" />" टैब ग्रुप अब मौजूद नहीं हैं</translation>
 <translation id="2539705006853443997">{TABS_COUNT,plural, =1{<ph name="TABS_COUNT_ONE" /> टैब छोटा करें.}one{<ph name="TABS_COUNT_MANY" /> टैब वाले टैब ग्रुप को छोटा करें.}other{<ph name="TABS_COUNT_MANY" /> टैब वाले टैब ग्रुप को छोटा करें.}}</translation>
@@ -73,7 +79,10 @@
 <translation id="3052964831964880138"><ph name="PRODUCT_NAME" /> की कीमत <ph name="PRICE_DROP" /> कम हुई है</translation>
 <translation id="3078350928901129212">टैब ग्रुप के कलर आइकॉन का रंग <ph name="COLOR_NAME" /> है</translation>
 <translation id="311432875115153175">टैब ग्रुप की सूची बंद कर दी गई है</translation>
+<translation id="3152596030350326139">टैब को हॉरिज़ॉन्टल तरीके से दिखाएं</translation>
+<translation id="31806439105337256">टैब को वर्टिकल तरीके से दिखाएं</translation>
 <translation id="3194464645767632461">रेटिंग</translation>
+<translation id="3228962656492373217">नीचे दिए गए टैब बंद करें</translation>
 <translation id="3269930881809501915">{TABS_COUNT,plural, =1{<ph name="TABS_COUNT_ONE" /> टैब को ग्रुप में जोड़ें}one{<ph name="TABS_COUNT_MANY" /> टैब को ग्रुप में जोड़ें}other{<ph name="TABS_COUNT_MANY" /> टैब, ग्रुप में जोड़ें}}</translation>
 <translation id="3328308545011660196">सुझाव: ऐसा लगता है कि <ph name="NUMBER_OF_TABS" /> टैब एक-दूसरे से मिलते-जुलते हैं. इनका ग्रुप बनाएं?</translation>
 <translation id="3330595302841061275">{DAY_COUNT,plural, =1{1 दिन तक कोई गतिविधि न होने पर}one{<ph name="DAY_COUNT_MANY" /> दिन तक कोई गतिविधि न होने पर}other{<ph name="DAY_COUNT_MANY" /> दिनों तक कोई गतिविधि न होने पर}}</translation>
@@ -88,7 +97,6 @@
 <translation id="3849789634341518784">{TAB_COUNT,plural, =1{टैब को अनपिन करें}one{टैब को अनपिन करें}other{टैब अनपिन करें}}</translation>
 <translation id="3940195383040445971">टैब पर कीमतों को ट्रैक करें</translation>
 <translation id="3940717704786481856">{NUMBER_OF_TABS_ADDED,plural, =1{<ph name="ONE_ADDED" /> नया टैब, <ph name="ANY_CLOSED" /> बंद किया गया}one{<ph name="MANY_ADDED" /> नया टैब, <ph name="ANY_CLOSED" /> बंद किया गया}other{<ph name="MANY_ADDED" /> नए टैब, <ph name="ANY_CLOSED" /> बंद किए गए}}</translation>
-<translation id="3954615705217314756">{TABS_COUNT,plural, =1{टैब को ग्रुप में शामिल करें}one{टैब को ग्रुप में शामिल करें}other{टैब को ग्रुप में शामिल करें}}</translation>
 <translation id="3962134438902735041">{TABS_COUNT,plural, =1{चुने गए <ph name="TABS_COUNT_ONE" /> टैब को अनपिन करें}one{चुने गए <ph name="TABS_COUNT_MANY" /> टैब को अनपिन करें}other{चुने गए <ph name="TABS_COUNT_MANY" /> टैब अनपिन करें}}</translation>
 <translation id="4009732926939031387">{NUM_DAYS,plural, =1{<ph name="NUM_DAYS_ONE" /> दिन पहले बनाया गया}one{<ph name="NUM_DAYS_MANY" /> दिन पहले बनाया गया}other{<ph name="NUM_DAYS_MANY" /> दिन पहले बनाया गया}}</translation>
 <translation id="4076226664360336092">टैब ग्रुप की सूची, पूरी स्क्रीन पर खोल दी गई है</translation>
@@ -121,13 +129,17 @@
 <translation id="5042769431350623987">{WINDOW_COUNT,plural, =1{टैब को नई विंडो पर ले जाएं}one{टैब को दूसरी विंडो पर ले जाएं}other{टैब को किसी दूसरी विंडो पर ले जाएं}}</translation>
 <translation id="5073204694187207510">फ़ुलस्क्रीन ग्रिड को छिपाएं</translation>
 <translation id="5076161749301278626">स्टोर की समीक्षाएं देखें?</translation>
+<translation id="5093447877601682598">टैब बार के बारे में सुझाव/राय दें या शिकायत करें</translation>
 <translation id="5161254044473106830">टाइटल आवश्‍यक</translation>
+<translation id="5204584298075822291">टैब को छोटा करें</translation>
 <translation id="524477996738997490">{AUTO_DELETE_DELAY,plural, =1{Chrome, इनऐक्टिव टैब और टैब ग्रुप को <ph name="AUTO_DELETE_DELAY_ONE" /> महीने के बाद अपने-आप बंद कर देता है. सेटिंग में जाकर इसे बदला जा सकता है.}one{Chrome, इनऐक्टिव टैब और टैब ग्रुप को <ph name="AUTO_DELETE_DELAY_MANY" /> महीने के बाद अपने-आप बंद कर देता है. सेटिंग में जाकर इसे बदला जा सकता है.}other{Chrome, इनऐक्टिव टैब और टैब ग्रुप को <ph name="AUTO_DELETE_DELAY_MANY" /> महीनों के बाद अपने-आप बंद कर देता है. सेटिंग में जाकर इसे बदला जा सकता है.}}</translation>
+<translation id="5254233580564156835">मेमोरी का इस्तेमाल: <ph name="MEMORY_USAGE" /></translation>
 <translation id="5339733443032484186">आपका आखिरी टैब</translation>
 <translation id="5380159289133845234">डुप्लीकेट टैब संग्रहित करें</translation>
 <translation id="5446043142172831860">टैब हटाएं और ग्रुप छोड़ें</translation>
 <translation id="5490235265819901748">टैब ग्रुप बड़ा किया गया</translation>
 <translation id="5494920125229734069">सभी को चुनें</translation>
+<translation id="5505998972479309757">{LIMIT_COUNT,plural, =1{ज़्यादा से ज़्यादा <ph name="LIMIT_COUNT_ONE" /> फ़ाइल, टैब या इमेज जोड़ें}one{ज़्यादा से ज़्यादा <ph name="LIMIT_COUNT_MANY" /> फ़ाइल, टैब या इमेज जोड़ें}other{ज़्यादा से ज़्यादा <ph name="LIMIT_COUNT_MANY" /> फ़ाइलें, टैब या इमेज जोड़ें}}</translation>
 <translation id="5551694449008560081">{NUMBER_OF_TABS,plural, =1{<ph name="COLOR_NAME" /> रंग और <ph name="TABS_COUNT_ONE" /> टैब वाले टैब ग्रुप को बंद करें.}one{<ph name="COLOR_NAME" /> रंग और <ph name="TABS_COUNT_MANY" /> टैब वाले टैब ग्रुप को बंद करें.}other{<ph name="COLOR_NAME" /> रंग और <ph name="TABS_COUNT_MANY" /> टैब वाले टैब ग्रुप को बंद करें.}}</translation>
 <translation id="5556417849629758491">स्क्रीन पर सबसे ऊपर मौजूद विकल्प से स्टोर की जानकारी देखें</translation>
 <translation id="5627941783489838464">टैब के बारे में कोई अपडेट नहीं है</translation>
@@ -141,6 +153,7 @@
 <translation id="6051432659151380973">आपके टैब ग्रुप अपने-आप सेव होते हैं</translation>
 <translation id="6054741997831917303">इस आइटम की कीमत <ph name="PREVIOUS_PRICE" /> से कम होकर <ph name="NEW_PRICE" /> हो गई है</translation>
 <translation id="6109251075362363230">अब सभी डुप्लीकेट टैब भी संग्रहित किए जाएंगे. हालांकि, सबसे हाल ही में इस्तेमाल किए गए डुप्लीकेट टैब को संग्रहित नहीं किया जाएगा.</translation>
+<translation id="612596694132302162">साइट अनम्यूट करें</translation>
 <translation id="6149218574440723463">{TABS_COUNT,plural, =1{चुना गया <ph name="TABS_COUNT_ONE" /> आइटम बंद करें}one{चुना गया <ph name="TABS_COUNT_MANY" /> आइटम बंद करें}other{चुने गए <ph name="TABS_COUNT_MANY" /> आइटम बंद करें}}</translation>
 <translation id="61924696525243173">{WINDOW_COUNT,plural, =1{ग्रुप को दूसरी विंडो पर ले जाएं}one{ग्रुप को दूसरी विंडो पर ले जाएं}other{ग्रुप को दूसरी विंडो पर ले जाएं}}</translation>
 <translation id="6212374449852603982">{TAB_COUNT,plural, =1{टैब को दाईं ओर ले जाएं}one{टैब को दाईं ओर ले जाएं}other{टैब दाईं ओर ले जाएं}}</translation>
@@ -160,11 +173,13 @@
 <translation id="6589356853295569750">शेयर किए गए टैब ग्रुप में बदलावों की सूचना वाली विंडो पूरी स्क्रीन पर दिख रही है</translation>
 <translation id="6590332670428149473"><ph name="COLOR_NAME" /> रंग में मौजूद शेयर किए गए टैब ग्रुप <ph name="TITLE_OF_GROUP" /> के लिए, टैब ग्रुप का ऐक्शन मेन्यू खोलें.</translation>
 <translation id="6615455863669487791">मुझे दिखाएं</translation>
+<translation id="6686490380836145850">दाईं ओर के टैब बंद करें</translation>
 <translation id="6694634756612002311">शेयर करने की सुविधा मैनेज करें</translation>
 <translation id="6709297274997495821">टैब चुनें</translation>
 <translation id="6744956528665271406">ग्रुप का रंग बदलें</translation>
 <translation id="6784585810034073638">{TAB_COUNT,plural, =1{<ph name="TAB_COUNT1" /> टैब वाले <ph name="TITLE_OF_GROUP" /> नाम के ग्रुप में जोड़ें}one{<ph name="TAB_COUNT1" /> टैब वाले <ph name="TITLE_OF_GROUP" /> नाम के ग्रुप में जोड़ें}other{<ph name="TAB_COUNT1" /> टैब वाले <ph name="TITLE_OF_GROUP" /> नाम के ग्रुप में जोड़ें}}</translation>
 <translation id="6818926723028410516">आइटम चुनें</translation>
+<translation id="68541483639528434">अन्य टैब बंद करें</translation>
 <translation id="6856809498882026482">एक साथ कई टैब चुनने का मोड छिपाएं</translation>
 <translation id="6957436309971790274">21 दिनों तक कोई गतिविधि न होने पर</translation>
 <translation id="7064815189603108598">{NUMBER_OF_TABS,plural, =1{<ph name="COLOR_NAME" /> रंग और <ph name="TABS_COUNT_ONE" /> टैब वाले शेयर किए गए टैब ग्रुप <ph name="TITLE_OF_GROUP" /> को बड़ा करें.}one{<ph name="COLOR_NAME" /> रंग और <ph name="TABS_COUNT_MANY" /> टैब वाले शेयर किए गए टैब ग्रुप <ph name="TITLE_OF_GROUP" /> को बड़ा करें.}other{<ph name="COLOR_NAME" /> रंग और <ph name="TABS_COUNT_MANY" /> टैब वाले शेयर किए गए टैब ग्रुप <ph name="TITLE_OF_GROUP" /> को बड़ा करें.}}</translation>
@@ -173,7 +188,6 @@
 <translation id="7129458170538955174">इस स्टोर के बारे में जानकारी आधी स्क्रीन पर खुली हुई है</translation>
 <translation id="7204204600596740190">एक साथ कई टैब चुनने का मोड</translation>
 <translation id="7211038039686180558">टैब ग्रुप, आपके साइन-इन किए हुए सभी डिवाइसों में अपने-आप सेव और अपडेट हो जाते हैं</translation>
-<translation id="731648547091221002"><ph name="COLOR_NAME" /> को चुना गया</translation>
 <translation id="7326879924029668159">सामान लौटाने की नीति वगैरह देखें</translation>
 <translation id="7352298686197644113">देखें कि आपके खोले गए टैब में मौजूद किस आइटम की कीमत कम हुई है</translation>
 <translation id="7369451074646620503">"<ph name="TAB_GROUP_NAME" />" टैब ग्रुप अब मौजूद नहीं है</translation>
@@ -195,12 +209,10 @@
 <translation id="7792771145871471484">सुझावों की समीक्षा करें.</translation>
 <translation id="7792860826279960128">शेयर किए गए टैब ग्रुप में बदलावों की सूचना वाली विंडो आधी स्क्रीन पर दिख रही है</translation>
 <translation id="7825973332242257878">टैब ग्रुप</translation>
-<translation id="7838146321400849846">{TABS_COUNT,plural, =1{चुने गए <ph name="TABS_COUNT_ONE" /> टैब का ग्रुप बनाएं}one{चुने गए <ph name="TABS_COUNT_MANY" /> टैब का ग्रुप बनाएं}other{चुने गए <ph name="TABS_COUNT_MANY" /> टैब का ग्रुप बनाएं}}</translation>
 <translation id="7853202427316060426">गतिविधि</translation>
 <translation id="7854360405711302755">{REVIEWS,plural, =1{ <ph name="CURRENT_RATING" />/<ph name="RATING_BASELINE" /> रेटिंग, <ph name="REVIEWS_COUNT_ONE" /> समीक्षा}one{<ph name="CURRENT_RATING" />/<ph name="RATING_BASELINE" /> रेटिंग, <ph name="REVIEWS_COUNT_MANY" /> समीक्षा}other{<ph name="CURRENT_RATING" />/<ph name="RATING_BASELINE" /> रेटिंग, <ph name="REVIEWS_COUNT_MANY" /> समीक्षाएं}}</translation>
 <translation id="7885132941432959125">टैब को दाईं ओर ले जाएं</translation>
 <translation id="7887334752153342268">डुप्लीकेट</translation>
-<translation id="7939917283308035850"><ph name="COLOR_NAME" /> को नहीं चुना गया</translation>
 <translation id="7961015016161918242">कभी नहीं</translation>
 <translation id="7966321538264951561">सुझावों को खारिज करें.</translation>
 <translation id="796696298310625748">{WINDOW_COUNT,plural, =1{इस टैब को नई विंडो पर ले जाएं}one{इस टैब को दूसरी विंडो पर ले जाएं}other{इस टैब को दूसरी विंडो पर ले जाएं}}</translation>
@@ -223,7 +235,6 @@
 <translation id="8428213095426709021">सेटिंग</translation>
 <translation id="855081842937141170">टैब छोटा करें</translation>
 <translation id="8633025649649592204">हाल की गतिविधि</translation>
-<translation id="8635822281281406185">ज़्यादा से ज़्यादा 10 फ़ाइलें, टैब या इमेज जोड़ें</translation>
 <translation id="8712637175834984815">समझ लिया</translation>
 <translation id="8714939927607906138">कम कीमत</translation>
 <translation id="8730621377337864115">हो गया</translation>

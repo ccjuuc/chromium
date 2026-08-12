@@ -2,14 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {
-  directive,
-  Directive,
-  ElementPart,
-  nothing,
-  PartInfo,
-  PartType,
-} from 'chrome://resources/mwc/lit/index.js';
+import type {ElementPart, PartInfo} from 'chrome://resources/mwc/lit/index.js';
+import {directive, Directive, nothing, PartType} from 'chrome://resources/mwc/lit/index.js';
 
 import {assert, assertInstanceof} from '../../assert.js';
 import * as tooltip from '../../tooltip.js';

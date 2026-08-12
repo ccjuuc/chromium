@@ -46,9 +46,9 @@ class NearbyInternalsElement extends PolymerElement {
     };
   }
 
-  private selectedTabIndex_: number;
-  private path_: string;
-  private tabNames_: string[];
+  declare private selectedTabIndex_: number;
+  declare private path_: string;
+  declare private tabNames_: string[];
 
   /**
    * Updates the current tab location to reflect selection change
@@ -81,8 +81,7 @@ class NearbyInternalsElement extends PolymerElement {
    * Updates the selection property on path change.
    */
   private pathChanged_(newValue: string): void {
-    this.selectedTabIndex_ =
-        Number(this.selectedTabFromPath_(newValue.substr(1)));
+    this.selectedTabIndex_ = this.selectedTabFromPath_(newValue.substr(1));
   }
 }
 

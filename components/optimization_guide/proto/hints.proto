@@ -10,6 +10,7 @@ option java_outer_classname = "HintsProto";
 package optimization_guide.proto;
 
 import "components/optimization_guide/proto/common_types.proto";
+import "components/optimization_guide/proto/filter_execution_metadata.proto";
 import "components/optimization_guide/proto/loading_predictor_metadata.proto";
 
 // Information about the hint that the client already has for a host.
@@ -95,6 +96,8 @@ message RequestContextMetadata {
   oneof metadata {
     // Only filled in when RequestContext is CONTEXT_PAGE_INSIGHTS_HUB.
     PageInsightsHubRequestContextMetadata page_insights_hub_metadata = 1;
+    // Only filled in when RequestContext is CONTEXT_FILTER_EXECUTION.
+    FilterExecutionRequestContextMetadata filter_execution_metadata = 2;
   }
 }
 
@@ -141,6 +144,7 @@ message GetHintsResponse {
 // OptimizationType enum at http://shortn/_t8G1sv8yAS (Google-internal link).
 // Additionally, these values must be synchronized with the OptimizationType
 // enum in enums.xml and optimization/histograms.xml for metric recording.
+// Next ID: 134
 enum OptimizationType {
   // Values for obsolete optimizations.
   reserved 11, 12, 16, 29, 32, 66, 68, 72, 73, 89, 94, 95, 96, 101;
@@ -338,13 +342,13 @@ enum OptimizationType {
   BUY_NOW_PAY_LATER_ALLOWLIST_KLARNA = 102;
 
   // This optimization helps determine if this merchant page should be blocked
-  // for the buy now pay later flow with Affirm.
+  // for the buy now pay later flow with Affirm on desktop.
   BUY_NOW_PAY_LATER_BLOCKLIST_AFFIRM = 103;
   // This optimization helps determine if this merchant page should be blocked
-  // for the buy now pay later flow with Zip.
+  // for the buy now pay later flow with Zip on desktop.
   BUY_NOW_PAY_LATER_BLOCKLIST_ZIP = 104;
   // This optimization helps determine if this merchant page should be blocked
-  // for the buy now pay later flow with Klarna.
+  // for the buy now pay later flow with Klarna on desktop.
   BUY_NOW_PAY_LATER_BLOCKLIST_KLARNA = 105;
 
   // Blocklist for the Lens Overlay EDU action chip.
@@ -368,13 +372,13 @@ enum OptimizationType {
   READER_MODE_ELIGIBLE = 112;
 
   // This optimization helps determine if this merchant page is a good candidate
-  // for enabling buy now pay later flow with Affirm on Android OS.
+  // for enabling buy now pay later flow with Affirm on Chrome Android.
   BUY_NOW_PAY_LATER_ALLOWLIST_AFFIRM_ANDROID = 113;
   // This optimization helps determine if this merchant page is a good candidate
-  // for enabling buy now pay later flow with Zip on Android OS.
+  // for enabling buy now pay later flow with Zip on Chrome Android.
   BUY_NOW_PAY_LATER_ALLOWLIST_ZIP_ANDROID = 114;
   // This optimization helps determine if this merchant page is a good candidate
-  // for enabling buy now pay later flow with Klarna on Android OS.
+  // for enabling buy now pay later flow with Klarna on Chrome Android.
   BUY_NOW_PAY_LATER_ALLOWLIST_KLARNA_ANDROID = 115;
   // Provides information about whether we may trigger Autofill on a page
   // element in an iframe with this origin during an actor task.
@@ -386,6 +390,42 @@ enum OptimizationType {
   // Provides information about whether a page is eligible for walletable
   // event pass detection.
   WALLETABLE_PASS_DETECTION_EVENT_PASS_ALLOWLIST = 118;
+  // Provides the set of Skills to display on the current page.
+  SKILLS = 119;
+  // Provides information about whether the PSP hosts are eligible for Pix
+  // payments.
+  PIX_PSP_ALLOWLIST = 120;
+  // Provides information about whether the page is eligible for Indigo.
+  // Note: this enumerator name doesn't currently match the Google internal
+  // repository, but will be renamed to match later on.
+  INDIGO = 121;
+  // Provides information about the page theme for Finds.
+  FINDS_PAGE_THEME = 122;
+  // Provides information on if this merchant page is a good candidate for
+  // Omnibox-chip-triggered Autofill.
+  OMNIBOX_AUTOFILL_IFRAME_ALLOWLIST = 123;
+  // This optimization helps determine if this merchant page should be blocked
+  // for the buy now pay later flow with Affirm on Chrome Android.
+  BUY_NOW_PAY_LATER_BLOCKLIST_AFFIRM_ANDROID = 124;
+  // This optimization helps determine if this merchant page should be blocked
+  // for the buy now pay later flow with Zip on Chrome Android.
+  BUY_NOW_PAY_LATER_BLOCKLIST_ZIP_ANDROID = 125;
+  // This optimization helps determine if this merchant page should be blocked
+  // for the buy now pay later flow with Klarna on Chrome Android.
+  BUY_NOW_PAY_LATER_BLOCKLIST_KLARNA_ANDROID = 126;
+  // The below optimizations provide information about merchant URLs that only
+  // Curinos supports for credit card category benefits.
+  CURINOS_CREDIT_CARD_FLIGHT_BENEFITS = 127;
+  CURINOS_CREDIT_CARD_HOTEL_BENEFITS = 128;
+  CURINOS_CREDIT_CARD_CAR_RENTAL_BENEFITS = 129;
+  // The following optimizations provide information about URLs that support
+  // filtering based on semantic breakdown; see go/magic-filters:dd.
+  FILTER_TASKS_SUPPORTED = 130;
+  FILTER_EXTRACT_ATTRIBUTES = 131;
+  // This optimization helps determine if a page should be blocked for the
+  // Autofill AtMemory feature.
+  AUTOFILL_AT_MEMORY_BLOCKED = 132;
+  FILTER_EXECUTION_STRATEGY = 133;
 }
 
 // Presents semantics for how page load URLs should be matched.

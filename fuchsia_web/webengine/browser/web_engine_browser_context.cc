@@ -30,8 +30,8 @@
 #include "fuchsia_web/webengine/switches.h"
 #include "media/capabilities/in_memory_video_decode_stats_db_impl.h"
 #include "media/mojo/services/video_decode_perf_history.h"
+#include "net/base/switches.h"
 #include "net/http/http_util.h"
-#include "services/network/public/cpp/network_switches.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace {
@@ -41,9 +41,9 @@ std::unique_ptr<WebEngineNetLogObserver> CreateNetLogObserver() {
 
   const base::CommandLine* command_line =
       base::CommandLine::ForCurrentProcess();
-  if (command_line->HasSwitch(network::switches::kLogNetLog)) {
+  if (command_line->HasSwitch(net::switches::kLogNetLog)) {
     base::FilePath log_path =
-        command_line->GetSwitchValuePath(network::switches::kLogNetLog);
+        command_line->GetSwitchValuePath(net::switches::kLogNetLog);
     result = std::make_unique<WebEngineNetLogObserver>(log_path);
   }
 
@@ -122,20 +122,12 @@ WebEngineBrowserContext::GetSpecialStoragePolicy() {
 
 content::PlatformNotificationService*
 WebEngineBrowserContext::GetPlatformNotificationService() {
-#ifdef WEB_ENGINE_ENABLE_PUSH_MESSAGING_API
   return &platform_notification_service_;
-#else
-  return nullptr;
-#endif
 }
 
 content::PushMessagingService*
 WebEngineBrowserContext::GetPushMessagingService() {
-#ifdef WEB_ENGINE_ENABLE_PUSH_MESSAGING_API
   return &push_messaging_service_;
-#else
-  return nullptr;
-#endif
 }
 
 content::StorageNotificationService*
@@ -208,13 +200,10 @@ WebEngineBrowserContext::WebEngineBrowserContext(
       client_hints_delegate_(network_quality_tracker,
                              IsJavaScriptAllowedCallback(),
                              embedder_support::GetUserAgentMetadata()),
-      reduce_accept_language_delegate_(GetAcceptLanguages())
-#ifdef WEB_ENGINE_ENABLE_PUSH_MESSAGING_API
-      ,
+      reduce_accept_language_delegate_(GetAcceptLanguages()),
       push_messaging_service_(*this,
                               *os_crypt_async,
                               *network_connection_tracker)
-#endif
 {
   SimpleKeyMap::GetInstance()->Associate(this, &simple_factory_key_);
 

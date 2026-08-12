@@ -132,7 +132,7 @@ class MEDIA_EXPORT DecoderSelector {
   SEQUENCE_CHECKER(sequence_checker_);
 
   CreateDecodersCB create_decoders_cb_;
-  raw_ptr<MediaLog> media_log_;
+  const std::unique_ptr<MediaLog> media_log_;
 
   raw_ptr<StreamTraits, AcrossTasksDanglingUntriaged> traits_ = nullptr;
   raw_ptr<DemuxerStream, AcrossTasksDanglingUntriaged> stream_ = nullptr;
@@ -159,6 +159,10 @@ class MEDIA_EXPORT DecoderSelector {
   // Indicates that the first decoder in `decoders_` is a platform decoder and
   // should maintain its place when FilterAndSortAvailableDecoders() runs.
   bool prefer_prepended_platform_decoder_ = false;
+
+  // True if Initialize() fails with a DecoderStatus::Codes::kTooManyDecoders.
+  // Used to surface a better error message if we fail to find a decoder.
+  bool ran_out_of_decoders_ = false;
 
   base::WeakPtrFactory<DecoderSelector> weak_this_factory_{this};
 };

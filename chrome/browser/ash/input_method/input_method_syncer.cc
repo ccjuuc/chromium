@@ -6,12 +6,12 @@
 
 #include <algorithm>
 #include <optional>
-#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "base/check_deref.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
@@ -19,12 +19,12 @@
 #include "base/strings/string_util.h"
 #include "base/task/task_runner.h"
 #include "base/task/thread_pool.h"
-#include "chrome/common/pref_names.h"
 #include "components/application_locale_storage/application_locale_storage.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/sync_preferences/pref_service_syncable.h"
 #include "content/public/browser/browser_thread.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "ui/base/ime/ash/component_extension_ime_manager.h"
 #include "ui/base/ime/ash/extension_ime_util.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -39,7 +39,7 @@ void CheckAndResolveInputMethodIDs(
     const InputMethodDescriptors& supported_descriptors,
     std::vector<std::string>* values) {
   // Extract the supported input method IDs into a set.
-  std::set<std::string> supported_input_method_ids;
+  absl::flat_hash_set<std::string> supported_input_method_ids;
   for (const auto& descriptor : supported_descriptors) {
     supported_input_method_ids.insert(descriptor.id());
   }
@@ -71,7 +71,7 @@ std::string CheckAndResolveLocales(const std::string& app_locale,
       languages, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
 
   // Remove unsupported language values.
-  auto accept_language_codes = base::MakeFlatSet<std::string>(
+  base::flat_set<std::string> accept_language_codes(
       l10n_util::GetAcceptLanguagesForLocale(app_locale));
   std::erase_if(values, [&accept_language_codes](const std::string& value) {
     if (accept_language_codes.contains(value)) {
@@ -89,15 +89,14 @@ std::string CheckAndResolveLocales(const std::string& app_locale,
 void MergeLists(std::vector<std::string_view>* dest,
                 const std::vector<std::string_view>& src) {
   // Keep track of already-added tokens.
-  std::set<std::string_view> unique_tokens(dest->begin(), dest->end());
+  absl::flat_hash_set<std::string_view> unique_tokens(dest->begin(),
+                                                      dest->end());
 
   for (const auto& token : src) {
     // Skip token if it's already in |dest|.
-    if (binary_search(unique_tokens.begin(), unique_tokens.end(), token)) {
-      continue;
+    if (auto [it, inserted] = unique_tokens.insert(token); inserted) {
+      dest->push_back(token);
     }
-    dest->push_back(token);
-    unique_tokens.insert(token);
   }
 }
 
@@ -120,14 +119,15 @@ InputMethodSyncer::~InputMethodSyncer() {
 void InputMethodSyncer::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterStringPref(
-      prefs::kLanguagePreloadEnginesSyncable, "",
+      ash::prefs::kLanguagePreloadEnginesSyncable, "",
       user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF);
   registry->RegisterStringPref(
-      prefs::kLanguageEnabledImesSyncable, "",
+      ash::prefs::kLanguageEnabledImesSyncable, "",
       user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF);
   // Locally tracks whether we should do the first-sync merge, hence not a
   // syncable pref itself.
-  registry->RegisterBooleanPref(prefs::kLanguageShouldMergeInputMethods, false);
+  registry->RegisterBooleanPref(ash::prefs::kLanguageShouldMergeInputMethods,
+                                false);
 }
 
 void InputMethodSyncer::Initialize() {
@@ -137,19 +137,19 @@ void InputMethodSyncer::Initialize() {
 
   preferred_languages_syncable_.Init(
       language::prefs::kPreferredLanguagesSyncable, prefs_);
-  preload_engines_syncable_.Init(prefs::kLanguagePreloadEnginesSyncable,
+  preload_engines_syncable_.Init(ash::prefs::kLanguagePreloadEnginesSyncable,
                                  prefs_);
-  enabled_imes_syncable_.Init(prefs::kLanguageEnabledImesSyncable, prefs_);
+  enabled_imes_syncable_.Init(ash::prefs::kLanguageEnabledImesSyncable, prefs_);
 
   BooleanPrefMember::NamedChangeCallback callback = base::BindRepeating(
       &InputMethodSyncer::OnPreferenceChanged, base::Unretained(this));
   preferred_languages_.Init(language::prefs::kPreferredLanguages, prefs_,
                             callback);
-  preload_engines_.Init(prefs::kLanguagePreloadEngines, prefs_, callback);
-  enabled_imes_.Init(prefs::kLanguageEnabledImes, prefs_, callback);
+  preload_engines_.Init(ash::prefs::kLanguagePreloadEngines, prefs_, callback);
+  enabled_imes_.Init(ash::prefs::kLanguageEnabledImes, prefs_, callback);
 
   // If we have already synced but haven't merged input methods yet, do so now.
-  if (prefs_->GetBoolean(prefs::kLanguageShouldMergeInputMethods) &&
+  if (prefs_->GetBoolean(ash::prefs::kLanguageShouldMergeInputMethods) &&
       !(preferred_languages_syncable_.GetValue().empty() &&
         preload_engines_syncable_.GetValue().empty() &&
         enabled_imes_syncable_.GetValue().empty())) {
@@ -159,8 +159,8 @@ void InputMethodSyncer::Initialize() {
 
 void InputMethodSyncer::MergeSyncedPrefs() {
   // This should only be done after the first ever sync.
-  DCHECK(prefs_->GetBoolean(prefs::kLanguageShouldMergeInputMethods));
-  prefs_->SetBoolean(prefs::kLanguageShouldMergeInputMethods, false);
+  DCHECK(prefs_->GetBoolean(ash::prefs::kLanguageShouldMergeInputMethods));
+  prefs_->SetBoolean(ash::prefs::kLanguageShouldMergeInputMethods, false);
   merging_ = true;
 
   std::vector<std::string_view> synced_tokens;
@@ -210,10 +210,10 @@ void InputMethodSyncer::MergeSyncedPrefs() {
   // Second, set the local prefs, incorporating new values from the sync server.
   preload_engines_.SetValue(AddSupportedInputMethodValues(
       preload_engines_.GetValue(), preload_engines_syncable,
-      prefs::kLanguagePreloadEngines));
+      ash::prefs::kLanguagePreloadEngines));
   enabled_imes_.SetValue(AddSupportedInputMethodValues(
       enabled_imes_.GetValue(), enabled_imes_syncable,
-      prefs::kLanguageEnabledImes));
+      ash::prefs::kLanguageEnabledImes));
 
   // Remove unsupported locales before updating the local languages preference.
   const std::string& app_locale = application_locale_storage_->Get();
@@ -237,12 +237,12 @@ std::string InputMethodSyncer::AddSupportedInputMethodValues(
       synced_pref, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
 
   // Check and convert the new tokens.
-  if (pref_name == prefs::kLanguagePreloadEngines ||
-      pref_name == prefs::kLanguageEnabledImes) {
+  if (pref_name == ash::prefs::kLanguagePreloadEngines ||
+      pref_name == ash::prefs::kLanguageEnabledImes) {
     InputMethodManager* manager = InputMethodManager::Get();
     InputMethodDescriptors supported_descriptors;
 
-    if (pref_name == prefs::kLanguagePreloadEngines) {
+    if (pref_name == ash::prefs::kLanguagePreloadEngines) {
       // Add the available component extension IMEs.
       ComponentExtensionIMEManager* component_extension_manager =
           manager->GetComponentExtensionIMEManager();
@@ -277,10 +277,11 @@ void InputMethodSyncer::FinishMerge(const std::string& languages) {
 
 void InputMethodSyncer::OnPreferenceChanged(const std::string& pref_name) {
   DCHECK(pref_name == language::prefs::kPreferredLanguages ||
-         pref_name == prefs::kLanguagePreloadEngines ||
-         pref_name == prefs::kLanguageEnabledImes);
+         pref_name == ash::prefs::kLanguagePreloadEngines ||
+         pref_name == ash::prefs::kLanguageEnabledImes);
 
-  if (merging_ || prefs_->GetBoolean(prefs::kLanguageShouldMergeInputMethods)) {
+  if (merging_ ||
+      prefs_->GetBoolean(ash::prefs::kLanguageShouldMergeInputMethods)) {
     return;
   }
 
@@ -301,7 +302,7 @@ void InputMethodSyncer::OnPreferenceChanged(const std::string& pref_name) {
 
 void InputMethodSyncer::OnIsSyncingChanged() {
   // Only merge once.
-  if (!prefs_->GetBoolean(prefs::kLanguageShouldMergeInputMethods)) {
+  if (!prefs_->GetBoolean(ash::prefs::kLanguageShouldMergeInputMethods)) {
     return;
   }
   // Wait for the correct type of prefs to sync before merging.

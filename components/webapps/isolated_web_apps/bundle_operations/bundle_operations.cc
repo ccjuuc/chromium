@@ -36,7 +36,6 @@ using IntegrityBlockResult =
 void OnTrustAndSignaturesOfBundleChecked(
     base::WeakPtr<content::BrowserContext> browser_context,
     const web_package::SignedWebBundleId& expected_web_bundle_id,
-    bool is_dev_mode_bundle,
     base::OnceCallback<void(IntegrityBlockResult)> callback,
     base::expected<std::unique_ptr<SignedWebBundleReader>,
                    UnusableSwbnFileError> status) {
@@ -52,11 +51,15 @@ void OnTrustAndSignaturesOfBundleChecked(
         std::move(callback).Run(base::unexpected(error.ToString()));
       });
 
+  // Validate that the bundle's identity matches its ID. Soft key rotation is
+  // not supported here because this function is used for IWA modification
+  // operations (installs, updates, etc.), which must always use the most
+  // up-to-date keys. See go/iwa-soft-key-rotation for more details.
   auto validation_result =
       IsolatedWebAppValidator::ValidateIntegrityBlockAndMetadata(
           browser_context.get(), expected_web_bundle_id,
           reader->GetIntegrityBlock(), reader->GetPrimaryURL(),
-          reader->GetEntries(), is_dev_mode_bundle);
+          reader->GetEntries(), /*allow_soft_key_rotation=*/false);
   UmaLogExpectedStatus("WebApp.Isolated.SwbnFileUsability", validation_result);
 
   IntegrityBlockResult integrity_block_result =
@@ -88,11 +91,10 @@ void ReadSignedWebBundleIdInsecurely(
       }).Then(std::move(callback)));
 }
 
-void ValidateSignedWebBundleTrustAndSignatures(
+void ValidateSignedWebBundleSignatures(
     content::BrowserContext* browser_context,
     const base::FilePath& path,
     const web_package::SignedWebBundleId& expected_web_bundle_id,
-    bool is_dev_mode_bundle,
     base::OnceCallback<void(IntegrityBlockResult)> callback) {
   auto create_reader = base::BindOnce(
       &SignedWebBundleReader::Create, path,
@@ -100,7 +102,7 @@ void ValidateSignedWebBundleTrustAndSignatures(
       /*verify_signatures=*/true,
       base::BindOnce(&OnTrustAndSignaturesOfBundleChecked,
                      browser_context->GetWeakPtr(), expected_web_bundle_id,
-                     is_dev_mode_bundle, std::move(callback)));
+                     std::move(callback)));
 
   if (auto* provider = IwaClient::GetInstance()->GetRuntimeDataProvider()) {
     provider->OnBestEffortRuntimeDataReady().Post(FROM_HERE,

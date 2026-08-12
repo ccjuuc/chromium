@@ -6,7 +6,7 @@
 #define CHROME_BROWSER_ENTERPRISE_WATERMARK_WATERMARK_EXAMPLE_H_
 
 #include "base/memory/raw_ptr.h"
-#include "chrome/browser/enterprise/watermark/watermark_view.h"
+#include "chrome/browser/enterprise/data_protection/data_protection_overlay_view.h"
 #include "ui/views/controls/slider.h"
 #include "ui/views/controls/textarea/textarea.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
@@ -19,9 +19,9 @@ class Checkbox;
 class Label;
 }  // namespace views
 
-namespace enterprise_watermark {
-class WatermarkView;
-}  // namespace enterprise_watermark
+namespace enterprise_data_protection {
+class DataProtectionOverlayView;
+}  // namespace enterprise_data_protection
 
 struct SliderInfo {
   std::string label;
@@ -56,27 +56,30 @@ class VIEWS_EXAMPLES_EXPORT WatermarkExample
   std::unique_ptr<views::BoxLayoutView> AddSliderGroup(
       const std::string& name,
       const std::vector<SliderInfo>& slider_info,
-      std::vector<views::Slider*>& sliders,
-      std::vector<views::Label*>& labels);
+      std::vector<raw_ptr<views::Slider>>& sliders,
+      std::vector<raw_ptr<views::Label>>& labels);
 
-  raw_ptr<enterprise_watermark::WatermarkView> watermark_view_;
-  std::vector<views::Slider*> rotation_sliders_;
-  std::vector<views::Label*> rotation_slider_labels_;
-  std::vector<views::Slider*> translate_sliders_;
-  std::vector<views::Label*> translate_slider_labels_;
+  raw_ptr<enterprise_data_protection::DataProtectionOverlayView>
+      watermark_view_;
+  std::vector<raw_ptr<views::Slider>> rotation_sliders_;
+  std::vector<raw_ptr<views::Label>> rotation_slider_labels_;
+  std::vector<raw_ptr<views::Slider>> translate_sliders_;
+  std::vector<raw_ptr<views::Label>> translate_slider_labels_;
   raw_ptr<views::Checkbox> background_checkbox_;
 };
 
 class WatermarkTextArea : public views::Textarea {
   METADATA_HEADER(WatermarkTextArea, views::Textarea)
  public:
-  explicit WatermarkTextArea(enterprise_watermark::WatermarkView* view);
+  explicit WatermarkTextArea(
+      enterprise_data_protection::DataProtectionOverlayView* view);
 
   // views::Textfield
   void OnTextChanged() override;
 
  private:
-  raw_ptr<enterprise_watermark::WatermarkView> watermark_view_;
+  raw_ptr<enterprise_data_protection::DataProtectionOverlayView>
+      watermark_view_;
 };
 
 #endif  // CHROME_BROWSER_ENTERPRISE_WATERMARK_WATERMARK_EXAMPLE_H_

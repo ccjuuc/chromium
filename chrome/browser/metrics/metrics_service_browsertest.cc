@@ -179,13 +179,14 @@ IN_PROC_BROWSER_TEST_F(MetricsServiceBrowserTest, CloseRenderersNormally) {
       "Stability.Counts2", metrics::StabilityEventType::kRendererCrash, 0);
 }
 
-// Child crashes fail the process on ASan (see crbug.com/411251,
-// crbug.com/368525).
+// Child crashes fail the process on ASan (see crbug.com/40383003,
+// crbug.com/40363314).
+// TODO(crbug.com/487848164): Flaky on Windows.
 // Note to sheriffs: Do not disable these tests if they starts to flake. If
 // either of these tests start to fail then changes likely need to be made
 // elsewhere in crash processing, metrics analysis, and dashboards. Please
 // consult Stability Team before disabling.
-#if defined(ADDRESS_SANITIZER)
+#if defined(ADDRESS_SANITIZER) || BUILDFLAG(IS_WIN)
 #define MAYBE_CrashRenderers DISABLED_CrashRenderers
 #define MAYBE_CheckCrashRenderers DISABLED_CheckCrashRenderers
 #else
@@ -216,7 +217,7 @@ IN_PROC_BROWSER_TEST_F(MetricsServiceBrowserTest, MAYBE_CrashRenderers) {
 
 // Test is disabled on Windows AMR64 because
 // TerminateWithHeapCorruption() isn't expected to work there.
-// See: https://crbug.com/1054423
+// See: https://crbug.com/40119520
 #if BUILDFLAG(IS_WIN)
 // TODO(crbug.com/380550755): Unfortuntely, it's flaky on non-arm64.
 // Previously, this was turned off only if defined(ARCH_CPU_ARM64).
@@ -260,11 +261,13 @@ IN_PROC_BROWSER_TEST_F(MetricsServiceBrowserTest, MAYBE_CheckCrashRenderers) {
 #elif BUILDFLAG(IS_MAC)
   VerifyRendererExitCodeIsSignal(histogram_tester, SIGTRAP);
 #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-#if defined(OFFICIAL_BUILD)
+#if defined(ARCH_CPU_ARM64)
+  VerifyRendererExitCodeIsSignal(histogram_tester, SIGTRAP);
+#elif defined(OFFICIAL_BUILD)
   VerifyRendererExitCodeIsSignal(histogram_tester, SIGILL);
 #else
   VerifyRendererExitCodeIsSignal(histogram_tester, SIGSEGV);
-#endif  // defined(OFFICIAL_BUILD)
+#endif  // defined(ARCH_CPU_ARM64)
 #endif
 }
 
@@ -286,7 +289,7 @@ IN_PROC_BROWSER_TEST_F(MetricsServiceBrowserTest, CrashRenderersInRust) {
 #if BUILDFLAG(IS_WIN) && !defined(ADDRESS_SANITIZER)
 IN_PROC_BROWSER_TEST_F(MetricsServiceBrowserTest, OOMRenderers) {
   // Disable stack traces during this test since DbgHelp is unreliable in
-  // low-memory conditions (see crbug.com/692564).
+  // low-memory conditions (see crbug.com/41302062).
   base::CommandLine::ForCurrentProcess()->AppendSwitch(
       switches::kDisableInProcessStackTraces);
 

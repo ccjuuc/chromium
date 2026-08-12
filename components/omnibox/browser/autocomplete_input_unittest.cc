@@ -220,6 +220,10 @@ TEST(AutocompleteInputTest, InputType) {
       {u"foo local", metrics::OmniboxInputType::QUERY},
       {u"local", metrics::OmniboxInputType::UNKNOWN},
       {u".local", metrics::OmniboxInputType::UNKNOWN},
+      {u"foo.internal", metrics::OmniboxInputType::URL},
+      {u"foo internal", metrics::OmniboxInputType::QUERY},
+      {u"internal", metrics::OmniboxInputType::UNKNOWN},
+      {u".internal", metrics::OmniboxInputType::UNKNOWN},
   });
 
   for (size_t i = 0; i < std::size(input_cases); ++i) {
@@ -577,4 +581,51 @@ TEST(AutocompleteInputTest, ParseUrlLookalikeWithSearchQuery) {
   EXPECT_FALSE(parts.password.is_nonempty());
   EXPECT_EQ(metrics::OmniboxInputType::QUERY, input_type);
   EXPECT_FALSE(canonicalized_url.is_valid());
+}
+
+TEST(AutocompleteInputTest, SanitizeString) {
+  AutocompleteInput input;
+
+  // Test that set_current_title sanitizes the string (trims all whitespace and
+  // removes invalid chars).
+  input.set_current_title(u"  title \r\n\t ");
+  EXPECT_EQ(u"title", input.current_title());
+
+  // Test explicit SanitizeString call.
+  EXPECT_EQ(u"foo", AutocompleteInput::SanitizeString(u"  foo  "));
+  EXPECT_EQ(u"  foo  ", AutocompleteInput::SanitizeString(
+                            u"  foo  ", /*trim_whitespace=*/false));
+  EXPECT_EQ(u"bar", AutocompleteInput::SanitizeString(u"bar\r\n\t"));
+}
+
+TEST(AutocompleteInputTest, SuggestInventory) {
+  AutocompleteInput input;
+  // Should default to SUGGEST_INVENTORY_DEFAULT.
+  EXPECT_EQ(omnibox::SuggestInventory::SUGGEST_INVENTORY_DEFAULT,
+            input.suggest_inventory());
+
+  input.set_suggest_inventory(
+      omnibox::SuggestInventory::SUGGEST_INVENTORY_TRAVEL);
+  EXPECT_EQ(omnibox::SuggestInventory::SUGGEST_INVENTORY_TRAVEL,
+            input.suggest_inventory());
+
+  input.Clear();
+  // Clear should reset it back to default.
+  EXPECT_EQ(omnibox::SuggestInventory::SUGGEST_INVENTORY_DEFAULT,
+            input.suggest_inventory());
+}
+
+TEST(AutocompleteInputTest, ContextFlags) {
+  AutocompleteInput input;
+  EXPECT_FALSE(input.has_previous_submitted_thread_context());
+  EXPECT_FALSE(input.has_auto_suggested_tab());
+
+  input.set_has_previous_submitted_thread_context(true);
+  input.set_has_auto_suggested_tab(true);
+  EXPECT_TRUE(input.has_previous_submitted_thread_context());
+  EXPECT_TRUE(input.has_auto_suggested_tab());
+
+  input.Clear();
+  EXPECT_FALSE(input.has_previous_submitted_thread_context());
+  EXPECT_FALSE(input.has_auto_suggested_tab());
 }

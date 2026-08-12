@@ -38,14 +38,16 @@ source_set("coordinator") {
   deps = [
     ":ui_bundled",
     "//components/ui_metrics",
+    "//components/ukm/ios:ukm_url_recorder",
     "//ios/chrome/browser/context_menu/ui_bundled:coordinator",
-    "//ios/chrome/browser/fullscreen/ui_bundled:coordinators",
+    "//ios/chrome/browser/fullscreen/ui_bundled",
     "//ios/chrome/browser/overscroll_actions/ui_bundled",
     "//ios/chrome/browser/shared/coordinator/chrome_coordinator",
     "//ios/chrome/browser/shared/model/browser",
     "//ios/chrome/browser/shared/model/profile",
     "//ios/chrome/browser/shared/model/web_state_list",
     "//ios/chrome/browser/shared/public/commands",
+    "//ios/chrome/browser/shared/public/features",
     "//ios/chrome/browser/shared/ui/util",
     "//ios/chrome/browser/tabs/model:dependency_installer",
     "//ios/chrome/browser/web/model",
@@ -53,6 +55,7 @@ source_set("coordinator") {
     "//ios/chrome/common/ui/util",
     "//ios/web",
     "//ios/web/public/ui",
+    "//services/metrics/public/cpp:ukm_builders",
   ]
 }
 

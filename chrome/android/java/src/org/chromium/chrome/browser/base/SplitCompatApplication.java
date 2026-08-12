@@ -47,8 +47,8 @@ import org.chromium.components.crash.CustomAssertionHandler;
 import org.chromium.components.crash.PureJavaExceptionHandler;
 import org.chromium.components.crash.PureJavaExceptionHandler.JavaExceptionReporter;
 import org.chromium.components.crash.PureJavaExceptionHandler.JavaExceptionReporterFactory;
-import org.chromium.components.embedder_support.application.FontPreloadingWorkaround;
 import org.chromium.components.module_installer.util.ModuleUtil;
+import org.chromium.components.policy.PolicyCache;
 import org.chromium.ui.base.ResourceBundle;
 
 import java.util.function.Supplier;
@@ -183,7 +183,7 @@ public class SplitCompatApplication extends Application {
                             throw new RuntimeException(
                                     "Starting in 64-bit mode requires the 64-bit native library. If"
                                             + " the device is 64-bit only, see alternatives here: "
-                                            + "https://crbug.com/1303857#c7.",
+                                            + "https://crbug.com/40217494#comment8.",
                                     unsatisfiedLinkError);
                         } else if (cannotLoadIn32Bit()) {
                             throw new RuntimeException(
@@ -192,30 +192,28 @@ public class SplitCompatApplication extends Application {
                         }
                         throw unsatisfiedLinkError;
                     };
+
+            // These shared preference objects are needed later when we initialize the feature list.
+            // Constructing the objects now will kick start a background thread to read the relevant
+            // file on disk, which will speed up the feature list initialization later.
+            ContextUtils.getAppSharedPreferences();
+            PolicyCache.get().getSharedPreferences();
         }
 
         maybeInitProcessType();
         LibraryLoader.getInstance().setLinkerImplementation(ProductConfig.USE_CHROMIUM_LINKER);
         ResourceBundle.setAvailablePakLocales(ProductConfig.LOCALES);
 
-        // Renderer and GPU processes have command line passed to them via IPC
-        // (see ChildProcessService.java).
-        if (isBrowserProcess && ChromeFeatureList.sLoadNativeEarly.isEnabled()) {
+        if (isBrowserProcess) {
+            // Renderer and GPU processes have command line passed to them via IPC
+            // (see ChildProcessService.java).
             CommandLineInitUtil.initCommandLine(
                     COMMAND_LINE_FILE, SplitCompatApplication::shouldUseDebugFlags);
-        }
-
-        if (isBrowserProcess
-                && ChromeFeatureList.sLoadNativeEarly.isEnabled()
-                && ChromeFeatureList.sInitFeatureListEarly.getValue()) {
             PathUtils.setPrivateDataDirectorySuffix(PRIVATE_DATA_DIRECTORY_SUFFIX);
             // Register for activity lifecycle callbacks. Must be done before any activities are
             // created and is needed only by processes that use the ApplicationStatus api (which
             // for Chrome is just the browser process).
             ApplicationStatus.initialize(this);
-        }
-
-        if (isBrowserProcess) {
             performBrowserProcessPreloading(context);
         }
 
@@ -228,28 +226,8 @@ public class SplitCompatApplication extends Application {
             checkAppBeingReplaced();
             DexFixer.scheduleDexFix();
 
-            if (!ChromeFeatureList.sLoadNativeEarly.isEnabled()
-                    || !ChromeFeatureList.sInitFeatureListEarly.getValue()) {
-                PathUtils.setPrivateDataDirectorySuffix(PRIVATE_DATA_DIRECTORY_SUFFIX);
-            }
-
-            // Renderer and GPU processes have command line passed to them via IPC
-            // (see ChildProcessService.java).
-            if (!ChromeFeatureList.sLoadNativeEarly.isEnabled()) {
-                CommandLineInitUtil.initCommandLine(
-                        COMMAND_LINE_FILE, SplitCompatApplication::shouldUseDebugFlags);
-            }
-
             TraceEvent.maybeEnableEarlyTracing(/* readCommandLine= */ true);
             TraceEvent.begin(ATTACH_BASE_CONTEXT_EVENT);
-
-            // Register for activity lifecycle callbacks. Must be done before any activities are
-            // created and is needed only by processes that use the ApplicationStatus api (which
-            // for Chrome is just the browser process).
-            if (!ChromeFeatureList.sLoadNativeEarly.isEnabled()
-                    || !ChromeFeatureList.sInitFeatureListEarly.getValue()) {
-                ApplicationStatus.initialize(this);
-            }
 
             ColdStartTracker.initialize();
 
@@ -305,7 +283,6 @@ public class SplitCompatApplication extends Application {
         super.onCreate();
         // These can't go in attachBaseContext because Context.getApplicationContext() (which
         // they use under-the-hood) does not work until after it returns.
-        FontPreloadingWorkaround.maybeInstallWorkaround(this);
         MemoryPressureMonitor.INSTANCE.registerComponentCallbacks();
         getImpl().onCreate();
     }
@@ -394,7 +371,7 @@ public class SplitCompatApplication extends Application {
     private static void checkAppBeingReplaced() {
         // During app update the old apk can still be triggered by broadcasts and spin up an
         // out-of-date application. Kill old applications in this bad state. See
-        // http://crbug.com/658130 for more context and http://b.android.com/56296 for the bug.
+        // http://crbug.com/41282225 for more context and http://b.android.com/56296 for the bug.
         if (ContextUtils.getApplicationContext().getAssets() == null) {
             throw new RuntimeException("App out of date, getResources() null, closing app.");
         }

@@ -7,7 +7,6 @@
 #include <string>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/task/sequenced_task_runner.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/base/privacy_mode.h"
@@ -53,11 +52,13 @@ bool QuicSessionPoolPeer::HasActiveSession(
     const ProxyChain& proxy_chain,
     SessionUsage session_usage,
     bool require_dns_https_alpn,
-    bool disable_cert_verification_network_fetches) {
+    bool disable_cert_verification_network_fetches,
+    handles::NetworkHandle target_network) {
   return pool->HasActiveSession(QuicSessionKey(
       server_id, privacy_mode, proxy_chain, session_usage, SocketTag(),
       network_anonymization_key, SecureDnsPolicy::kAllow,
-      require_dns_https_alpn, disable_cert_verification_network_fetches));
+      require_dns_https_alpn, disable_cert_verification_network_fetches,
+      target_network));
 }
 
 bool QuicSessionPoolPeer::HasActiveJob(QuicSessionPool* pool,
@@ -68,7 +69,8 @@ bool QuicSessionPoolPeer::HasActiveJob(QuicSessionPool* pool,
       server_id, privacy_mode, ProxyChain::Direct(), SessionUsage::kDestination,
       SocketTag(), NetworkAnonymizationKey(), SecureDnsPolicy::kAllow,
       require_dns_https_alpn,
-      /*disable_cert_verification_network_fetches=*/false));
+      /*disable_cert_verification_network_fetches=*/false,
+      handles::kInvalidNetworkHandle));
 }
 
 // static
@@ -81,7 +83,8 @@ QuicChromiumClientSession* QuicSessionPoolPeer::GetPendingSession(
       server_id, privacy_mode, ProxyChain::Direct(), SessionUsage::kDestination,
       SocketTag(), NetworkAnonymizationKey(), SecureDnsPolicy::kAllow,
       /*require_dns_https_alpn=*/false,
-      /*disable_cert_verification_network_fetches=*/false);
+      /*disable_cert_verification_network_fetches=*/false,
+      handles::kInvalidNetworkHandle);
   QuicSessionAliasKey key(std::move(destination), session_key);
   DCHECK(pool->HasActiveJob(session_key));
   DCHECK_EQ(pool->all_sessions_.size(), 1u);
@@ -98,18 +101,24 @@ QuicChromiumClientSession* QuicSessionPoolPeer::GetActiveSession(
     const ProxyChain& proxy_chain,
     SessionUsage session_usage,
     bool require_dns_https_alpn,
-    bool disable_cert_verification_network_fetches) {
+    bool disable_cert_verification_network_fetches,
+    handles::NetworkHandle target_network) {
   QuicSessionKey session_key(
       server_id, privacy_mode, proxy_chain, session_usage, SocketTag(),
       network_anonymization_key, SecureDnsPolicy::kAllow,
-      require_dns_https_alpn, disable_cert_verification_network_fetches);
+      require_dns_https_alpn, disable_cert_verification_network_fetches,
+      target_network);
   DCHECK(pool->HasActiveSession(session_key));
   return pool->active_sessions_[session_key];
 }
 
 bool QuicSessionPoolPeer::IsLiveSession(QuicSessionPool* pool,
                                         QuicChromiumClientSession* session) {
-  return base::Contains(pool->all_sessions_, session);
+  return pool->all_sessions_.contains(session);
+}
+
+size_t QuicSessionPoolPeer::GetNumLiveSessions(QuicSessionPool* pool) {
+  return pool->all_sessions_.size();
 }
 
 void QuicSessionPoolPeer::SetTaskRunner(
@@ -121,6 +130,11 @@ void QuicSessionPoolPeer::SetTaskRunner(
 void QuicSessionPoolPeer::SetTickClock(QuicSessionPool* pool,
                                        const base::TickClock* tick_clock) {
   pool->tick_clock_ = tick_clock;
+}
+
+void QuicSessionPoolPeer::SetClockForTesting(QuicSessionPool* pool,
+                                             base::Clock* clock) {
+  pool->clock_for_testing_ = clock;
 }
 
 quic::QuicTime::Delta QuicSessionPoolPeer::GetPingTimeout(
@@ -147,8 +161,22 @@ bool QuicSessionPoolPeer::CryptoConfigCacheIsEmpty(
                                                   std::move(key));
 }
 
+bool QuicSessionPoolPeer::CryptoConfigSessionCacheIsEmpty(
+    QuicSessionPool* pool,
+    QuicSessionPool::QuicCryptoClientConfigKey key) {
+  return pool->CryptoConfigSessionCacheIsEmptyForTesting(  // IN-TEST
+      std::move(key));
+}
+
 size_t QuicSessionPoolPeer::GetNumDegradingSessions(QuicSessionPool* pool) {
   return pool->connectivity_monitor_.GetNumDegradingSessions();
+}
+
+QuicSessionEstablishmentReason
+QuicSessionPoolPeer::DetermineQuicSessionEstablishmentReasonForTesting(
+    QuicSessionPool* pool,
+    const QuicSessionKey& session_key) {
+  return pool->DetermineQuicSessionEstablishmentReason(session_key);
 }
 
 void QuicSessionPoolPeer::SetAlarmFactory(

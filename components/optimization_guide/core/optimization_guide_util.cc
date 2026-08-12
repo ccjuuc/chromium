@@ -69,8 +69,6 @@ std::string_view GetStringNameForModelExecutionFeature(
   switch (feature) {
     case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH:
       return "WallpaperSearch";
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TAB_ORGANIZATION:
-      return "TabOrganization";
     case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_COMPOSE:
       return "Compose";
     case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST:
@@ -120,8 +118,45 @@ std::string_view GetStringNameForModelExecutionFeature(
         MODEL_EXECUTION_FEATURE_ON_DEVICE_SPEECH_RECOGNITION:
       return "OnDeviceSpeechRecognition";
     case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_ON_DEVICE_SPEECH_RECOGNITION_TINY_GEMMA:
+      return "SpeechRecognitionSmallExpertModel";
+    case proto::ModelExecutionFeature::
         MODEL_EXECUTION_FEATURE_IOS_SMART_TAB_GROUPING:
       return "IosSmartTabGrouping";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_SKILLS:
+      return "Skills";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_GEMINI_ANTISCAM_PROTECTION:
+      return "GeminiAntiscamProtection";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_CLASSIFIER:
+      return "Classifier";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_CONTENT_ANNOTATION:
+      return "ContentAnnotation";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_FINDS:
+      return "Finds";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_ANNOTATION_REDUCER_ONE_P_RESOLVER:
+      return "AnnotationReducerOnePResolver";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_ANNOTATION_REDUCER_QUERY_CLASSIFIER:
+      return "AnnotationReducerQueryClassifier";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_CONTEXTUAL_CUEING:
+      return "ContextualCueing";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_UPDATER_CHAT:
+      return "UpdaterChat";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_CARD_RECOMMENDATIONS:
+      return "CardRecommendations";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_CONTEXT_HUB:
+      return "ContextHub";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_READ_ALOUD_GENERATE_TEXT:
+      return "ReadAloudGenerateText";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_READ_ALOUD_SYNTHESIZE:
+      return "ReadAloudSynthesize";
     case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_UNSPECIFIED:
       return "Unknown";
       // Must be in sync with the ModelExecutionFeature variant in
@@ -147,6 +182,24 @@ optimization_guide::proto::OriginInfo GetClientOriginInfo() {
   optimization_guide::proto::OriginInfo origin_info;
   origin_info.set_platform(GetPlatform());
   return origin_info;
+}
+
+optimization_guide::proto::ChromePlatform GetChromePlatform() {
+#if BUILDFLAG(IS_WIN)
+  return optimization_guide::proto::CHROME_PLATFORM_WINDOWS;
+#elif BUILDFLAG(IS_IOS)
+  return optimization_guide::proto::CHROME_PLATFORM_IOS;
+#elif BUILDFLAG(IS_MAC)
+  return optimization_guide::proto::CHROME_PLATFORM_MAC;
+#elif BUILDFLAG(IS_CHROMEOS)
+  return optimization_guide::proto::CHROME_PLATFORM_CHROMEOS;
+#elif BUILDFLAG(IS_ANDROID)
+  return optimization_guide::proto::CHROME_PLATFORM_ANDROID;
+#elif BUILDFLAG(IS_LINUX)
+  return optimization_guide::proto::CHROME_PLATFORM_LINUX;
+#else
+  return optimization_guide::proto::CHROME_PLATFORM_UNKNOWN;
+#endif
 }
 
 void LogFeatureFlagsInfo(OptimizationGuideLogger* optimization_guide_logger,

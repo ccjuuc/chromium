@@ -10,7 +10,11 @@ NSString* const kAutofillProfileTableViewID = @"kAutofillProfileTableViewID";
 NSString* const kAutofillAddressSwitchViewId = @"kAutofillAddressSwitchViewId";
 NSString* const kAutofillAddressManagedViewId =
     @"kAutofillAddressManagedViewId";
-
+NSString* const kEnhancedAutofillTableViewId = @"kEnhancedAutofillTableViewId";
+NSString* const kSuggestionsFromGeminiTableViewId =
+    @"kSuggestionsFromGeminiTableViewId";
+NSString* const kAutofillVerificationSwitchTableViewId =
+    @"kAutofillVerificationSwitchTableViewId";
 NSString* const kAutofillCreditCardTableViewId =
     @"kAutofillCreditCardTableViewId";
 NSString* const kAutofillCreditCardSwitchViewId =
@@ -27,6 +31,10 @@ NSString* const kAutofillSaveSecurityCodesSwitchViewId =
     @"kAutofillSaveSecurityCodesSwitchViewId";
 NSString* const kAutofillSecurityCvcsTableViewId =
     @"kAutofillSecurityCvcsTableViewId";
+NSString* const kEnhancedAutofillSwitchViewId =
+    @"kEnhancedAutofillSwitchViewId";
+NSString* const kSuggestionsFromGeminiSwitchViewId =
+    @"kSuggestionsFromGeminiSwitchViewId";
 
 NSString* const kAutofillCreditCardEditTableViewId =
     @"kAutofillCreditCardEditTableViewId";
@@ -35,3 +43,8 @@ NSString* const kAutofillAddressMigrateToAccountButtonId =
     @"kAutofillAddressMigrateToAccountButtonId";
 
 NSString* const kAutofillEditButtonCellId = @"kAutofillEditButtonCellId";
+
+NSString* const kAutofillPayOverTimeCellId = @"kAutofillPayOverTimeCellId";
+
+NSString* const kAutofillBnplTableViewId = @"kAutofillBnplTableViewId";
+NSString* const kAutofillBnplSwitchViewId = @"kAutofillBnplSwitchViewId";

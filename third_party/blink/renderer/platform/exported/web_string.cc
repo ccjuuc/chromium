@@ -30,7 +30,6 @@
 
 #include "third_party/blink/public/platform/web_string.h"
 
-#include "base/strings/latin1_string_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_view_util.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
@@ -42,12 +41,12 @@
 #include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
 STATIC_ASSERT_ENUM(blink::Utf8ConversionMode::kLenient,
-                   blink::WebString::UTF8ConversionMode::kLenient);
+                   blink::WebString::Utf8ConversionMode::kLenient);
 STATIC_ASSERT_ENUM(blink::Utf8ConversionMode::kStrict,
-                   blink::WebString::UTF8ConversionMode::kStrict);
+                   blink::WebString::Utf8ConversionMode::kStrict);
 STATIC_ASSERT_ENUM(
     blink::Utf8ConversionMode::kStrictReplacingErrors,
-    blink::WebString::UTF8ConversionMode::kStrictReplacingErrorsWithFFFD);
+    blink::WebString::Utf8ConversionMode::kStrictReplacingErrors);
 
 namespace blink {
 
@@ -73,8 +72,8 @@ bool WebString::Is8Bit() const {
   return impl_->Is8Bit();
 }
 
-std::string WebString::Utf8(UTF8ConversionMode mode) const {
-  return String(impl_).Utf8(static_cast<Utf8ConversionMode>(mode));
+std::string WebString::Utf8(Utf8ConversionMode mode) const {
+  return String(impl_).Utf8(static_cast<blink::Utf8ConversionMode>(mode));
 }
 
 WebString WebString::Substring(size_t pos, size_t len) const {
@@ -82,15 +81,15 @@ WebString WebString::Substring(size_t pos, size_t len) const {
                                  base::checked_cast<wtf_size_t>(len)));
 }
 
-WebString WebString::FromUTF8(std::string_view s) {
-  return String::FromUTF8(s);
+WebString WebString::FromUtf8(std::string_view s) {
+  return String::FromUtf8(s);
 }
 
 std::u16string WebString::Utf16() const {
   return impl_ ? impl_->ToU16String() : std::u16string();
 }
 
-WebString WebString::FromUTF16(std::optional<std::u16string_view> s) {
+WebString WebString::FromUtf16(std::optional<std::u16string_view> s) {
   if (!s.has_value()) {
     return WebString();
   }
@@ -106,7 +105,7 @@ WebString WebString::FromLatin1(std::string_view s) {
 }
 
 std::string WebString::Ascii() const {
-  DCHECK(ContainsOnlyASCII());
+  DCHECK(ContainsOnlyAscii());
 
   if (IsEmpty())
     return std::string();
@@ -120,11 +119,11 @@ std::string WebString::Ascii() const {
   return std::string(utf16.begin(), utf16.end());
 }
 
-bool WebString::ContainsOnlyASCII() const {
-  return String(impl_).ContainsOnlyASCIIOrEmpty();
+bool WebString::ContainsOnlyAscii() const {
+  return String(impl_).ContainsOnlyAsciiOrEmpty();
 }
 
-WebString WebString::FromASCII(std::string_view s) {
+WebString WebString::FromAscii(std::string_view s) {
   DCHECK(base::IsStringASCII(s));
   return FromLatin1(s);
 }

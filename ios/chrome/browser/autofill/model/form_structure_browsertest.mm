@@ -8,10 +8,12 @@
 #import <vector>
 
 #import "base/apple/foundation_util.h"
+#import "base/containers/fixed_flat_set.h"
 #import "base/files/file_enumerator.h"
 #import "base/files/file_path.h"
 #import "base/files/file_util.h"
 #import "base/memory/ptr_util.h"
+#import "base/no_destructor.h"
 #import "base/path_service.h"
 #import "base/strings/strcat.h"
 #import "base/strings/string_util.h"
@@ -21,6 +23,9 @@
 #import "base/task/thread_pool/thread_pool_instance.h"
 #import "base/test/ios/wait_util.h"
 #import "base/test/scoped_feature_list.h"
+#import "base/threading/thread_restrictions.h"
+#import "base/time/time.h"
+#import "base/time/time_override.h"
 #import "components/autofill/core/browser/foundations/autofill_manager_test_api.h"
 #import "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #import "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
@@ -64,7 +69,6 @@ using base::test::ios::kWaitForJSCompletionTimeout;
 using base::test::ios::WaitUntilConditionOrTimeout;
 
 namespace autofill {
-
 namespace {
 
 const base::FilePath::CharType kFeatureName[] = FILE_PATH_LITERAL("autofill");
@@ -75,6 +79,8 @@ base::FilePath GetTestDataDir() {
   base::PathService::Get(ios::DIR_TEST_DATA, &dir);
   return dir;
 }
+
+#if !BUILDFLAG(USE_INTERNAL_AUTOFILL_PATTERNS)
 
 base::FilePath GetIOSInputDirectory() {
   base::FilePath dir;
@@ -88,7 +94,6 @@ base::FilePath GetIOSInputDirectory() {
       .AppendASCII("input");
 }
 
-#if !BUILDFLAG(USE_INTERNAL_AUTOFILL_PATTERNS)
 base::FilePath GetIOSOutputDirectory() {
   base::FilePath dir;
   CHECK(base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &dir));
@@ -100,35 +105,48 @@ base::FilePath GetIOSOutputDirectory() {
       .Append(kTestName)
       .AppendASCII("output");
 }
-#endif
 
-const std::vector<base::FilePath> GetTestFiles() {
-  base::FilePath dir(GetIOSInputDirectory());
-  std::string input_list_string;
-  if (!base::ReadFileToString(dir.AppendASCII("autofill_test_files"),
-                              &input_list_string)) {
-    return {};
-  }
-  std::vector<base::FilePath> result;
-  for (std::string_view piece :
-       base::SplitStringPiece(input_list_string, "\n", base::TRIM_WHITESPACE,
-                              base::SPLIT_WANT_NONEMPTY)) {
-    result.push_back(dir.AppendASCII(piece));
-  }
-  return result;
+const std::vector<base::FilePath>& GetTestFiles() {
+  static const base::NoDestructor<std::vector<base::FilePath>> files([] {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    base::FilePath dir(GetIOSInputDirectory());
+    std::string input_list_string;
+    if (!base::ReadFileToString(dir.AppendASCII("autofill_test_files"),
+                                &input_list_string)) {
+      return std::vector<base::FilePath>{};
+    }
+    std::vector<base::FilePath> result;
+    for (std::string_view piece :
+         base::SplitStringPiece(input_list_string, "\n", base::TRIM_WHITESPACE,
+                                base::SPLIT_WANT_NONEMPTY)) {
+      result.push_back(dir.AppendASCII(piece));
+    }
+    return result;
+  }());
+  return *files;
 }
 
-}  // namespace
+constexpr int kMaxFilesInShard = 20;
+
+int GetNumShards() {
+  const size_t num_files = GetTestFiles().size();
+  return std::max(1, static_cast<int>((num_files + kMaxFilesInShard - 1) /
+                                      kMaxFilesInShard));
+}
+#else   // !BUILDFLAG(USE_INTERNAL_AUTOFILL_PATTERNS)
+int GetNumShards() {
+  return 1;
+}
+#endif  // !BUILDFLAG(USE_INTERNAL_AUTOFILL_PATTERNS)
 
 // Test fixture for verifying Autofill heuristics. Each input is an HTML
 // file that contains one or more forms. The corresponding output file lists the
 // heuristically detected type for each field.
 // This is based on FormStructureBrowserTest from the Chromium Project.
 // TODO(crbug.com/41015125): Unify the tests.
-class FormStructureBrowserTest
-    : public PlatformTest,
-      public testing::DataDrivenTest,
-      public testing::WithParamInterface<base::FilePath> {
+class FormStructureBrowserTest : public PlatformTest,
+                                 public testing::DataDrivenTest,
+                                 public testing::WithParamInterface<int> {
  public:
   FormStructureBrowserTest(const FormStructureBrowserTest&) = delete;
   FormStructureBrowserTest& operator=(const FormStructureBrowserTest&) = delete;
@@ -162,11 +180,15 @@ class FormStructureBrowserTest
       base::span<const FormStructure* const> forms);
 
   web::WebState* web_state() const { return web_state_.get(); }
+  static base::Time GetTestTime() { return test_time_; }
+
+  static inline base::Time test_time_;
+  std::unique_ptr<base::subtle::ScopedTimeClockOverrides> time_override_;
 
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   web::ScopedTestingWebClient web_client_;
   web::WebTaskEnvironment task_environment_;
-  autofill::test::AutofillBrowserTestEnvironment autofill_test_environment_;
+  test::AutofillBrowserTestEnvironment autofill_test_environment_;
   std::unique_ptr<TestProfileIOS> profile_;
   std::unique_ptr<web::WebState> web_state_;
   std::unique_ptr<AutofillClient> autofill_client_;
@@ -183,6 +205,10 @@ class FormStructureBrowserTest
 FormStructureBrowserTest::FormStructureBrowserTest()
     : DataDrivenTest(GetTestDataDir(), kFeatureName, kTestName),
       web_client_(std::make_unique<ChromeWebClient>()) {
+  std::ignore = base::Time::FromString("Sat, 01 Feb 2025 09:00:00 +0000",
+                                       &FormStructureBrowserTest::test_time_);
+  time_override_ = std::make_unique<base::subtle::ScopedTimeClockOverrides>(
+      &FormStructureBrowserTest::GetTestTime, nullptr, nullptr);
   TestProfileIOS::Builder builder;
   builder.AddTestingFactory(
       IOSChromeProfilePasswordStoreFactory::GetInstance(),
@@ -201,13 +227,13 @@ FormStructureBrowserTest::FormStructureBrowserTest()
   feature_list_.InitWithFeatures(
       // Enabled
       {
-          // TODO(crbug.com/40741721): Remove once shared labels are launched.
-          features::kAutofillEnableSupportForParsingWithSharedLabels,
           // TODO(crbug.com/40266396): Remove once launched.
           features::kAutofillEnableExpirationDateImprovements,
           features::kAutofillIgnoreCheckableElements,
           // TODO(crbug.com/369503318): Remove once launched.
           features::kAutofillSupportSplitZipCode,
+          features::kAutofillSupportStandaloneZipCodeGlobally,
+          features::kAutofillEnableOneTimeCodeHeuristics,
       },
       // Disabled
       {
@@ -260,6 +286,11 @@ void FormStructureBrowserTest::SetUp() {
 }
 
 void FormStructureBrowserTest::TearDown() {
+  autofill_manager_injector_.reset();
+  autofill_client_.reset();
+  suggestion_controller_ = nil;
+  autofill_agent_ = nil;
+  password_controller_ = nil;
   web::test::WaitForBackgroundTasks();
   web_state_.reset();
 }
@@ -343,53 +374,65 @@ std::string FormStructureBrowserTest::FormStructuresToString(
   return base::JoinString(forms_string, "\n");
 }
 
-namespace {
-
 #if !BUILDFLAG(USE_INTERNAL_AUTOFILL_PATTERNS)
 // To disable a data driven test, please add the name of the test file
 // (i.e., "NNN_some_site.html") as a literal to the initializer_list given
-// to the failing_test_names constructor.
-const auto& GetFailingTestNames() {
-  static std::set<std::string> failing_test_names{
-      // TODO(crbug.com/40266699): These pages contains iframes. Until filling
-      // across iframes is also supported on iOS, iOS has has different
-      // expectations compared to non-iOS platforms.
-      "049_register_ebay.com.html",
-      "148_payment_dickblick.com.html",
-      // TODO(crbug.com/40229922): These pages contain labels which are only
-      // inferred by the label detection improvements that haven't been
-      // implemented on iOS.
-      "074_register_threadless.com.html",
-      "097_register_alaskaair.com.html",
-      "115_checkout_walgreens.com.html",
-      "116_cc_checkout_walgreens.com.html",
-      "150_checkout_venus.com_search_field.html",
-  };
-  return failing_test_names;
+// to the kFailingTestNames constructor.
+bool IsFailingTestName(const std::string& test_name) {
+  if (test_name == "132_bug_469012.html") {
+    if (@available(iOS 27.0, *)) {
+      return false;
+    }
+    return true;
+  }
+  static constexpr auto kFailingTestNames =
+      base::MakeFixedFlatSet<std::string_view>({
+          // TODO(crbug.com/40266699): These pages contains iframes. Until
+          // filling across iframes is also supported on iOS, iOS has has
+          // different expectations compared to non-iOS platforms.
+          "049_register_ebay.com.html",
+          "148_payment_dickblick.com.html",
+          // TODO(crbug.com/40229922): These pages contain labels which are only
+          // inferred by the label detection improvements that haven't been
+          // implemented on iOS.
+          "074_register_threadless.com.html",
+          "097_register_alaskaair.com.html",
+          "115_checkout_walgreens.com.html",
+          "116_cc_checkout_walgreens.com.html",
+          "150_checkout_venus.com_search_field.html",
+          // TODO(crbug.com/473467160): Analyze the root causes of these
+          // regressions.
+          "110_checkout_harryanddavid.com.html",
+          "123_bug_459132.html",
+      });
+  return kFailingTestNames.contains(test_name);
 }
-#endif
-
-}  // namespace
+#endif  // !BUILDFLAG(USE_INTERNAL_AUTOFILL_PATTERNS)
 
 // If disabling a test, prefer to add the name names of the specific test cases
-// to GetFailingTestNames(), directly above, instead of renaming the test to
+// to IsFailingTestName(), directly above, instead of renaming the test to
 // DISABLED_DataDrivenHeuristics.
-// TODO(crbug.com/432460380): Test is crashing and it is unclear to me how to
-// get the name of the specific test case.
-TEST_P(FormStructureBrowserTest, DISABLED_DataDrivenHeuristics) {
+TEST_P(FormStructureBrowserTest, DataDrivenHeuristics) {
 #if BUILDFLAG(USE_INTERNAL_AUTOFILL_PATTERNS)
   GTEST_SKIP() << "DataDrivenHeuristics tests are only supported with legacy "
                   "parsing patterns";
-#else
-  bool is_expected_to_pass =
-      !base::Contains(GetFailingTestNames(), GetParam().BaseName().value());
-  RunOneDataDrivenTest(GetParam(), GetIOSOutputDirectory(),
-                       is_expected_to_pass);
-#endif
+#else   // BUILDFLAG(USE_INTERNAL_AUTOFILL_PATTERNS)
+  const int shard = GetParam();
+  const int num_shards = GetNumShards();
+  const std::vector<base::FilePath>& files = GetTestFiles();
+  for (size_t i = shard; i < files.size(); i += num_shards) {
+    const base::FilePath& file = files[i];
+    SCOPED_TRACE("Running " + file.MaybeAsASCII());
+    const bool is_expected_to_pass =
+        !IsFailingTestName(file.BaseName().value());
+    RunOneDataDrivenTest(file, GetIOSOutputDirectory(), is_expected_to_pass);
+  }
+#endif  // BUILDFLAG(USE_INTERNAL_AUTOFILL_PATTERNS)
 }
 
 INSTANTIATE_TEST_SUITE_P(AllForms,
                          FormStructureBrowserTest,
-                         testing::ValuesIn(GetTestFiles()));
+                         testing::Range(0, GetNumShards()));
 
+}  // namespace
 }  // namespace autofill

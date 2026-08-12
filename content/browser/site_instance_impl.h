@@ -172,18 +172,18 @@ class CONTENT_EXPORT SiteInstanceImpl final : public SiteInstance {
   RenderProcessHost* GetOrCreateProcessForTesting() override;
   SiteInstanceGroupId GetSiteInstanceGroupId() override;
   BrowserContext* GetBrowserContext() override;
-  const GURL& GetSiteURL() const override;
-  const StoragePartitionConfig& GetStoragePartitionConfig() override;
+  const SecurityPrincipal& GetSecurityPrincipal() const override;
   scoped_refptr<SiteInstance> GetRelatedSiteInstance(const GURL& url) override;
   bool IsRelatedSiteInstance(const SiteInstance* instance) override;
   size_t GetRelatedActiveContentsCount() override;
   bool RequiresDedicatedProcess() override;
-  bool IsSandboxed() override;
   bool IsSameSiteWithURL(const GURL& url) override;
-  bool IsGuest() override;
   SiteInstanceProcessAssignment GetLastProcessAssignmentOutcome() override;
   void WriteIntoTrace(perfetto::TracedProto<TraceProto> context) override;
   int EstimateOriginAgentClusterOverheadForMetrics() override;
+
+  perfetto::protos::pbzero::SiteInstance::SiteInstanceProcessAssignment
+  SiteInstanceProcessAssignmentToProto() const;
 
   // Returns the current RenderProcessHost being used to render pages for this
   // SiteInstance. If there is no RenderProcessHost (because either none has
@@ -276,7 +276,7 @@ class CONTENT_EXPORT SiteInstanceImpl final : public SiteInstance {
   // this SiteInstance.
   // TODO(wjmaclean): eventually this function will replace const GURL&
   // GetSiteURL().
-  const SiteInfo& GetSiteInfo();
+  const SiteInfo& GetSiteInfo() const;
 
   // Derives a new SiteInfo based on this SiteInstance's current state, and
   // the information provided in `url_info`. This function is slightly different
@@ -333,6 +333,10 @@ class CONTENT_EXPORT SiteInstanceImpl final : public SiteInstance {
   // Returns true if this SiteInstance is for a site that contains PDF contents.
   bool IsPdf();
 
+  // Returns true if this SiteInstance is for privileged contents (a WebContents
+  // created with PrivilegedParams).
+  bool IsPrivileged();
+
   // Set the web site that this SiteInstance is rendering pages for.
   // This includes the scheme and registered domain, but not the port.  If the
   // URL does not have a valid registered domain, then the full hostname is
@@ -342,10 +346,18 @@ class CONTENT_EXPORT SiteInstanceImpl final : public SiteInstance {
   // SiteInstance.
   void SetSite(const UrlInfo& url_info);
 
-  // Same as above, but for SiteInfo. The above version should be used in most
-  // cases, unless the UrlInfo is unavailable, such as for sandboxed srcdoc
-  // frames.
-  void SetSite(const SiteInfo& site_info);
+  // Directly assigns the precomputed |site_info| and |original_url| to this
+  // SiteInstance, avoiding redundant recalculation of the SiteInfo.
+  // |original_url| specifies the first GURL navigated to in this SiteInstance.
+  // Used in the precomputed SiteInfo navigation path.
+  void SetSiteInfoAndOriginalUrl(const SiteInfo& site_info,
+                                 const GURL& original_url);
+
+  // Directly assigns the |site_info| to this SiteInstance. Used in cases where
+  // the original URL is not available or not applicable, such as when creating
+  // a SiteInstance for a fenced frame (which reuses the embedder's SiteInfo),
+  // or when creating guest or sandboxed SiteInstances from a SiteInfo directly.
+  void SetSiteInfo(const SiteInfo& site_info);
 
   // Similar to SetSite(), but first attempts to convert this object to a
   // default SiteInstance if |url_info| can be placed inside a default
@@ -653,9 +665,16 @@ class CONTENT_EXPORT SiteInstanceImpl final : public SiteInstance {
   class DefaultSiteInstanceState;
   std::unique_ptr<DefaultSiteInstanceState> default_site_instance_state_;
 
-  // Keeps track of whether we need to verify that the StoragePartition
-  // information does not change when `site_info_` is set.
-  bool verify_storage_partition_info_ = false;
+  // Tracks whether GetSiteInfo() was accessed before SetSiteInfoInternal()
+  // was called. When true, SetSiteInfoInternal() will verify that the
+  // StoragePartition information does not change from the default one when
+  // `site_info_` is set. This check contains some redundancy, because
+  // accessing SiteInfo does not always imply retrieving the
+  // StoragePartitionConfig from it, but this is better than adding an extra
+  // flag to SiteInfo to track StoragePartitionConfig access.
+  // Marked mutable as it is set in a const method, is used only for
+  // detecting bugs and does not modify the logical state of the SiteInstance.
+  mutable bool has_accessed_unassigned_site_info_ = false;
 
   // Tracks the number of active documents currently in this SiteInstance that
   // use the same URL-derived SiteInfo. Note that this might be different from

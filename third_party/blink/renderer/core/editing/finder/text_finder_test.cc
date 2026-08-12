@@ -26,7 +26,6 @@
 #include "third_party/blink/renderer/core/frame/visual_viewport.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
-#include "third_party/blink/renderer/core/layout/text_autosizer.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/script/classic_script.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
@@ -177,51 +176,6 @@ TEST_F(TextFinderTest, FindTextSimple) {
   EXPECT_EQ(20u, active_match->endOffset());
 }
 
-TEST_F(TextFinderTest, FindTextAutosizing) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(blink::features::kForceOffTextAutosizing);
-  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(
-      "XXXXFindMeYYYYfindmeZZZZ");
-  GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kTest);
-
-  int identifier = 0;
-  WebString search_text(String("FindMe"));
-  auto find_options =
-      mojom::blink::FindOptions::New();  // Default + add testing flag.
-  find_options->run_synchronously_for_testing = true;
-  bool wrap_within_frame = true;
-
-  // Set viewport scale to 20 in order to simulate zoom-in
-  GetDocument().GetPage()->SetDefaultPageScaleLimits(1, 20);
-  GetDocument().GetPage()->SetPageScaleFactor(20);
-  VisualViewport& visual_viewport =
-      GetDocument().GetPage()->GetVisualViewport();
-
-  // Enforce autosizing
-  GetDocument().GetSettings()->SetTextAutosizingEnabled(true);
-  GetDocument().GetSettings()->SetTextAutosizingWindowSizeOverride(
-      gfx::Size(20, 20));
-  GetDocument().GetTextAutosizer()->UpdatePageInfo();
-  GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kTest);
-
-  // In case of autosizing, scale _should_ change
-  ASSERT_TRUE(GetTextFinder().Find(identifier, search_text, *find_options,
-                                   wrap_within_frame));
-  ASSERT_TRUE(GetTextFinder().ActiveMatch());
-  ASSERT_EQ(1, visual_viewport.Scale());  // in this case to 1
-
-  // Disable autosizing and reset scale to 20
-  visual_viewport.SetScale(20);
-  GetDocument().GetSettings()->SetTextAutosizingEnabled(false);
-  GetDocument().GetTextAutosizer()->UpdatePageInfo();
-  GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kTest);
-
-  ASSERT_TRUE(GetTextFinder().Find(identifier, search_text, *find_options,
-                                   wrap_within_frame));
-  ASSERT_TRUE(GetTextFinder().ActiveMatch());
-  ASSERT_EQ(20, visual_viewport.Scale());
-}
-
 TEST_F(TextFinderTest, FindTextNotFound) {
   GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(
       "XXXXFindMeYYYYfindmeZZZZ");
@@ -238,7 +192,7 @@ TEST_F(TextFinderTest, FindTextNotFound) {
   EXPECT_FALSE(GetTextFinder().ActiveMatch());
 }
 
-TEST_F(TextFinderTest, FindTextInShadowDOM) {
+TEST_F(TextFinderTest, FindTextInShadowDom) {
   GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(
       "<b>FOO</b><i slot='bar'>foo</i>");
   ShadowRoot& shadow_root =
@@ -405,7 +359,7 @@ TEST_F(TextFinderTest, ScopeTextMatchesRepeated) {
   EXPECT_EQ(FindInPageRect(text_node, 14, text_node, 20), match_rects[1]);
 }
 
-TEST_F(TextFinderTest, ScopeTextMatchesWithShadowDOM) {
+TEST_F(TextFinderTest, ScopeTextMatchesWithShadowDom) {
   GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(
       "<b>FOO</b><i slot='bar'>foo</i>");
   ShadowRoot& shadow_root =
@@ -511,7 +465,7 @@ TEST_F(TextFinderTest, SequentialMatches) {
   EXPECT_EQ(FindInPageRect(text_node, 4, text_node, 6), match_rects[2]);
 }
 
-TEST_F(TextFinderTest, FindTextJavaScriptUpdatesDOM) {
+TEST_F(TextFinderTest, FindTextJavaScriptUpdatesDom) {
   GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(
       "<b>XXXXFindMeYYYY</b><i></i>");
   GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kTest);
@@ -569,7 +523,7 @@ TEST_F(TextFinderTest, FindTextJavaScriptUpdatesDOM) {
             match_rects[1]);
 }
 
-TEST_F(TextFinderTest, FindTextJavaScriptUpdatesDOMAfterNoMatches) {
+TEST_F(TextFinderTest, FindTextJavaScriptUpdatesDomAfterNoMatches) {
   GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(
       "<b>XXXXYYYY</b><i></i>");
   GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kTest);

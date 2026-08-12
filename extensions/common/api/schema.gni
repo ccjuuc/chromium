@@ -2,7 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
+import("//components/guest_view/buildflags/buildflags.gni")
 import("//extensions/buildflags/buildflags.gni")
 
 # APIs and features included in both normal desktop builds and the experimental
@@ -10,28 +10,27 @@ import("//extensions/buildflags/buildflags.gni")
 # TODO(https://crbug.com/356905053): Continue moving more here.
 extensions_api_schema_files_ = [
   "alarms.webidl",
-  "declarative_net_request.idl",
+  "declarative_net_request.webidl",
   "dns.webidl",
   "events.json",
-  "extension_types.json",
-  "file_handlers.webidl",
-  "icon_variants.idl",
   "i18n.json",
   "idle.json",
   "management.json",
   "metrics_private.json",
-  "offscreen.idl",
-  "power.idl",
-  "protocol_handlers.webidl",
+  "offscreen.webidl",
+  "power.webidl",
+  "proxy.json",
   "runtime.json",
+  "scripting.idl",
   "storage.json",
   "system_cpu.webidl",
+  "system_display.webidl",
   "system_memory.webidl",
   "system_network.webidl",
   "test.json",
-  "types.json",
-  "user_scripts.idl",
+  "user_scripts.webidl",
   "web_request.json",
+  "webstore_private.json",
 ]
 
 # Schemas that should be used only to auto-generate the C++ types.
@@ -39,64 +38,85 @@ extensions_api_schema_files_ = [
 # parsing.
 extensions_types_only_schema_files_ = [
   "chrome_url_overrides.webidl",
-  "content_scripts.idl",
+  "content_scripts.webidl",
   "cross_origin_isolation.webidl",
+  "extension_types.json",
   "extensions_manifest_types.json",
+  "file_handlers.webidl",
   "incognito.json",
+  "mime_handlers.webidl",
   "oauth2.webidl",
+  "protocol_handlers.webidl",
   "requirements.json",
   "shared_module.webidl",
+  "types.json",
   "web_accessible_resources_mv2.webidl",
   "web_accessible_resources.webidl",
 ]
+
+if (enable_guest_view) {
+  extensions_api_schema_files_ += [
+    "guest_view_internal.json",
+    "web_view_internal.json",
+  ]
+  extensions_types_only_schema_files_ += [
+    "extension_options_internal.webidl",
+    "icon_variants.idl",
+  ]
+}
 
 # APIs that are not currently supported on the experimental desktop-android.
 if (enable_extensions) {
   extensions_api_schema_files_ += [
     "app_current_window_internal.webidl",
     "app_runtime.webidl",
-    "app_view_guest_internal.json",
-    "app_window.idl",
+    "app_window.webidl",
     "audio.webidl",
-    "automation_internal.idl",
-    "automation.idl",
-    "bluetooth_low_energy.webidl",
-    "bluetooth_private.idl",
-    "bluetooth_socket.webidl",
-    "bluetooth.webidl",
+    "automation_internal.webidl",
     "cec_private.webidl",
     "clipboard.webidl",
-    "extension_options_internal.webidl",
-    "feedback_private.idl",
+    "feedback_private.webidl",
     "file_system.idl",
-    "guest_view_internal.json",
     "hid.idl",
-    "mime_handler_private.idl",
-    "mime_handler_view_guest_internal.json",
-    "mojo_private.idl",
-    "networking_private.idl",
-    "printer_provider_internal.idl",
-    "printer_provider.idl",
-    "scripts_internal.idl",
-    "serial.idl",
+    "mime_handler.webidl",
+    "networking_private.webidl",
+    "printer_provider_internal.webidl",
+    "printer_provider.webidl",
     "socket.idl",
     "sockets_tcp_server.idl",
     "sockets_tcp.idl",
     "sockets_udp.idl",
-    "system_display.webidl",
     "system_storage.webidl",
-    "usb.webidl",
-    "virtual_keyboard_private.json",
-    "virtual_keyboard.webidl",
-    "web_view_internal.json",
+  ]
+  extensions_types_only_schema_files_ += [
+    # While the automation API defines a lot of APIs, they are all marked
+    # as [nocompile] and implemented in JS. As such, we somewhat-misleadingly
+    # categorize it as "types_only".
+    "automation.webidl",
+    "mime_handler_private.idl",
+    "mojo_private.webidl",
+    "scripts_internal.webidl",
   ]
 
   if (is_chromeos) {
     extensions_api_schema_files_ += [
+      "app_view_guest_internal.json",
+      "bluetooth_low_energy.webidl",
+      "bluetooth_private.webidl",
+      "bluetooth_socket.webidl",
+      "bluetooth.webidl",
       "diagnostics.webidl",
-      "media_perception_private.idl",
+      "media_perception_private.webidl",
+      "serial.webidl",
+      "usb.webidl",
+      "virtual_keyboard_private.json",
+      "virtual_keyboard.webidl",
       "webcam_private.webidl",
     ]
+  } else {
+    # On non-ChromeOS platforms the USB API is not supported but the types are
+    # still used by other APIs (e.g. printerProvider).
+    extensions_types_only_schema_files_ += [ "usb.webidl" ]
   }
 }
 
@@ -107,8 +127,7 @@ if (enable_extensions) {
 if (enable_desktop_android_extensions) {
   extensions_types_only_schema_files_ += [
     "clipboard.webidl",
-    "scripts_internal.idl",
-    "system_display.webidl",
+    "scripts_internal.webidl",
     "usb.webidl",
     "virtual_keyboard_private.json",
     "virtual_keyboard.webidl",
@@ -127,6 +146,7 @@ extensions_api_uncompiled_sources =
 extensions_api_uncompiled_bundle_schema_sources =
     get_path_info([
                     "declarative_web_request.json",
+                    "dom.json",
                     "web_view_request.json",
                   ],
                   "abspath")

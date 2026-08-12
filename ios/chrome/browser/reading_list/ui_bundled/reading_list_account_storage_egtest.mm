@@ -5,8 +5,8 @@
 #import "base/ios/ios_util.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/test/ios/wait_util.h"
-#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_pref_names.h"
+#import "components/sync/base/command_line_switches.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey_ui_test_util.h"
 #import "ios/chrome/browser/authentication/test/signin_matchers.h"
@@ -26,7 +26,7 @@
 #import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
-#import "ios/chrome/test/earl_grey/web_http_server_chrome_test_case.h"
+#import "ios/chrome/test/earl_grey/chrome_test_case.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
 #import "ui/base/l10n/l10n_util.h"
@@ -97,6 +97,13 @@ std::unique_ptr<net::test_server::HttpResponse> StandardResponse(
 @end
 
 @implementation ReadingListAccountStorageTestCase
+
+- (AppLaunchConfiguration)appConfigurationForTestCase {
+  AppLaunchConfiguration config = [super appConfigurationForTestCase];
+  config.additional_args.push_back(std::string("--") +
+                                   syncer::kSyncShortNudgeDelayForTest);
+  return config;
+}
 
 - (void)setUp {
   [super setUp];
@@ -341,7 +348,7 @@ std::unique_ptr<net::test_server::HttpResponse> StandardResponse(
   // Add last syncing account to mimic signing out without clearing data.
   [ChromeEarlGrey
       setStringValue:[FakeSystemIdentity fakeIdentity1].gaiaId.ToNSString()
-         forUserPref:prefs::kGoogleServicesLastSyncingGaiaId];
+         forUserPref:prefs::kGoogleServicesSyncingGaiaIdMigratedToSignedIn];
 
   OpenReadingList();
   [SigninEarlGreyUI
@@ -546,7 +553,8 @@ std::unique_ptr<net::test_server::HttpResponse> StandardResponse(
 // Test that after sign-in with the Reading List promo, if two items are added
 // and one is removed, then after a sign-out and a new sign-in with the Reading
 // List sign-in promo with the same account, the removed item is not visible.
-- (void)testRemoveItemAfterSignInThenRefreshSignin {
+// TODO(crbug.com/474063690): Re-enable this test once it has been fixed.
+- (void)FLAKY_testRemoveItemAfterSignInThenRefreshSignin {
   // Sign-in with the Reading List Promo.
   FakeSystemIdentity* fakeIdentity = [FakeSystemIdentity fakeIdentity1];
   [SigninEarlGrey addFakeIdentity:fakeIdentity];
@@ -617,8 +625,14 @@ std::unique_ptr<net::test_server::HttpResponse> StandardResponse(
                                           grey_sufficientlyVisible(), nil)]
       performAction:grey_tap()];
   // Dismiss the sign-in snackbar.
+  [ChromeEarlGrey
+      waitForUIElementToAppearWithMatcher:SignedInSnackbar(
+                                              fakeIdentity.userEmail)];
   [[EarlGrey selectElementWithMatcher:SignedInSnackbar(fakeIdentity.userEmail)]
       performAction:grey_tap()];
+  [ChromeEarlGrey
+      waitForUIElementToDisappearWithMatcher:SignedInSnackbar(
+                                                 fakeIdentity.userEmail)];
 
   [ChromeEarlGrey
       waitForSyncTransportStateActiveWithTimeout:kSyncActiveTimeout];
@@ -637,8 +651,11 @@ std::unique_ptr<net::test_server::HttpResponse> StandardResponse(
   OpenReadingList();
   [ChromeEarlGrey
       waitForUIElementToAppearWithMatcher:VisibleReadingListItem(kPage1Title)];
+  [ChromeEarlGreyUI waitForAppToIdle];
   [[EarlGrey selectElementWithMatcher:VisibleReadingListItem(kPage1Title)]
       performAction:grey_longPressWithDuration(kLongPressDuration)];
+  [ChromeEarlGrey
+      waitForUIElementToAppearWithMatcher:ReadingListMarkAsReadButton()];
   [[EarlGrey selectElementWithMatcher:ReadingListMarkAsReadButton()]
       performAction:grey_tap()];
   // Verify that the unread and the read sections headers are visible.
@@ -657,33 +674,66 @@ std::unique_ptr<net::test_server::HttpResponse> StandardResponse(
   // Verify that both items are visible and only one of them is unread.
   [ChromeEarlGrey
       waitForUIElementToAppearWithMatcher:ReadingListItem(kPage1Title)];
-  [[EarlGrey selectElementWithMatcher:VisibleReadingListItem(kPage2Title)]
-      assertWithMatcher:grey_notNil()];
-  GREYAssertEqual([ReadingListAppInterface readEntriesCount], 1,
-                  @"The read entries count is incorrect.");
-  GREYAssertEqual([ReadingListAppInterface unreadEntriesCount], 1,
-                  @"The unread entries count is incorrect.");
+  [ChromeEarlGrey
+      waitForUIElementToAppearWithMatcher:VisibleReadingListItem(kPage2Title)];
+  ConditionBlock initialWaitCondition = ^{
+    return [ReadingListAppInterface readEntriesCount] == 1 &&
+           [ReadingListAppInterface unreadEntriesCount] == 1;
+  };
+  GREYAssertTrue(
+      base::test::ios::WaitUntilConditionOrTimeout(
+          base::test::ios::kWaitForUIElementTimeout, initialWaitCondition),
+      @"Reading list entries count did not match expected counts (1 read, 1 "
+      @"unread).");
+
+  // Wait for sync to upload the reading list items to the fake sync server
+  // before signing out.
+  [ChromeEarlGrey
+      waitForSyncServerEntitiesWithType:syncer::READING_LIST
+                                   name:self.testServer->GetURL(kPage1URL)
+                                            .spec()
+                                  count:1
+                                timeout:kSyncActiveTimeout];
+  [ChromeEarlGrey
+      waitForSyncServerEntitiesWithType:syncer::READING_LIST
+                                   name:self.testServer->GetURL(kPage2URL)
+                                            .spec()
+                                  count:1
+                                timeout:kSyncActiveTimeout];
+
   // Sign-out and sign-in with the same account.
   [SigninEarlGrey signOut];
+  [SigninEarlGreyUI
+      verifySigninPromoVisibleWithMode:SigninPromoViewModeSigninWithAccount];
   [[EarlGrey
       selectElementWithMatcher:grey_allOf(PrimarySignInButton(),
                                           grey_sufficientlyVisible(), nil)]
       performAction:grey_tap()];
   // Dismiss the sign-in snackbar.
+  [ChromeEarlGrey
+      waitForUIElementToAppearWithMatcher:SignedInSnackbar(
+                                              fakeIdentity.userEmail)];
   [[EarlGrey selectElementWithMatcher:SignedInSnackbar(fakeIdentity.userEmail)]
       performAction:grey_tap()];
+  [ChromeEarlGrey
+      waitForUIElementToDisappearWithMatcher:SignedInSnackbar(
+                                                 fakeIdentity.userEmail)];
 
   [ChromeEarlGrey
       waitForSyncTransportStateActiveWithTimeout:kSyncActiveTimeout];
   // Verify that both items are visible and only one of them is unread.
-  [[EarlGrey selectElementWithMatcher:VisibleReadingListItem(kPage1Title)]
-      assertWithMatcher:grey_notNil()];
-  [[EarlGrey selectElementWithMatcher:VisibleReadingListItem(kPage2Title)]
-      assertWithMatcher:grey_notNil()];
-  GREYAssertEqual([ReadingListAppInterface readEntriesCount], 1,
-                  @"The read entries count is incorrect.");
-  GREYAssertEqual([ReadingListAppInterface unreadEntriesCount], 1,
-                  @"The unread entries count is incorrect.");
+  [ChromeEarlGrey
+      waitForUIElementToAppearWithMatcher:VisibleReadingListItem(kPage1Title)];
+  [ChromeEarlGrey
+      waitForUIElementToAppearWithMatcher:VisibleReadingListItem(kPage2Title)];
+  ConditionBlock waitCondition = ^{
+    return [ReadingListAppInterface readEntriesCount] == 1 &&
+           [ReadingListAppInterface unreadEntriesCount] == 1;
+  };
+  GREYAssertTrue(base::test::ios::WaitUntilConditionOrTimeout(
+                     base::test::ios::kWaitForUIElementTimeout, waitCondition),
+                 @"Reading list entries count did not match expected counts (1 "
+                 @"read, 1 unread).");
 }
 
 @end

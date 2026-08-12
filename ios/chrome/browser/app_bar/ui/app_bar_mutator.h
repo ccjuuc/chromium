@@ -5,11 +5,22 @@
 #ifndef IOS_CHROME_BROWSER_APP_BAR_UI_APP_BAR_MUTATOR_H_
 #define IOS_CHROME_BROWSER_APP_BAR_UI_APP_BAR_MUTATOR_H_
 
+#import <UIKit/UIKit.h>
+
+#import "ios/chrome/browser/app_bar/ui/app_bar_consumer.h"
+
 // The mutator protocol for the AppBar.
 @protocol AppBarMutator <NSObject>
 
 // Creates a new tab for the current mode.
-- (void)createNewTab;
+- (void)createNewTabFromView:(UIView*)sender;
+
+// Creates a new tab group for the current mode.
+- (void)createNewTabGroupFromView:(UIView*)sender;
+
+// Handles the assistant button tap with the given `state`.
+- (void)assistantButtonTappedWithState:(AppBarAssistantButtonState)state
+                              fromView:(UIView*)sender;
 
 @end
 

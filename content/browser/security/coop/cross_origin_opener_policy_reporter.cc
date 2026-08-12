@@ -69,10 +69,13 @@ FrameTreeNode* TopLevelOpener(FrameTreeNode* frame) {
 // Remove sensitive data from URL used in reports.
 std::string SanitizedURL(const GURL& url) {
   // Strip username, password and ref fragment from the URL.
-  // Keep only the valid http/https ones.
   //
-  // Note: This is the exact same operation used in
-  // ReportingServiceImpl::QueueReport() for the |url|.
+  // Note: This uses GURL::GetAsReferrer() which restricts the URL to
+  // http/https schemes. This is inconsistent with the COOP specification's
+  // "sanitize a URL for a report" algorithm
+  // (https://html.spec.whatwg.org/multipage/browsers.html#sanitize-url-report),
+  // which has no scheme restrictions, but it matches the operation used in
+  // ReportingServiceImpl::QueueReport().
   return url.GetAsReferrer().spec();
 }
 
@@ -115,7 +118,7 @@ CrossOriginOpenerPolicyReporter::CrossOriginOpenerPolicyReporter(
       context_referrer_url_(SanitizedURL(context_referrer_url)),
       coop_(coop),
       network_anonymization_key_(network_anonymization_key) {
-  DCHECK(!reporting_source_.is_empty());
+  CHECK(!reporting_source_.is_empty(), base::NotFatalUntil::M152);
 }
 
 CrossOriginOpenerPolicyReporter::~CrossOriginOpenerPolicyReporter() = default;
@@ -194,7 +197,7 @@ void CrossOriginOpenerPolicyReporter::QueueNavigationToCOOPReport(
   if (!endpoint)
     return;
 
-  base::Value::Dict body;
+  base::DictValue body;
   body.Set(kDisposition,
            is_report_only ? kDispositionReporting : kDispositionEnforce);
   body.Set(kPreviousURL,
@@ -218,7 +221,7 @@ void CrossOriginOpenerPolicyReporter::QueueNavigationAwayFromCOOPReport(
   std::string sanitized_next_url;
   if (is_current_source || same_origin_with_next)
     sanitized_next_url = SanitizedURL(next_url);
-  base::Value::Dict body;
+  base::DictValue body;
   body.Set(kNextURL, sanitized_next_url);
   body.Set(kType, kTypeFromResponse);
   QueueNavigationReport(std::move(body), *endpoint, is_report_only);
@@ -237,10 +240,11 @@ void CrossOriginOpenerPolicyReporter::QueueAccessReport(
 
   const std::string& endpoint = coop_.report_only_reporting_endpoint.value();
 
-  DCHECK(base::FeatureList::IsEnabled(
-      network::features::kCrossOriginOpenerPolicy));
+  CHECK(
+      base::FeatureList::IsEnabled(network::features::kCrossOriginOpenerPolicy),
+      base::NotFatalUntil::M152);
 
-  base::Value::Dict body;
+  base::DictValue body;
   body.Set(kType, network::CoopAccessReportTypeToString(report_type));
   body.Set(kDisposition, kDispositionReporting);
   body.Set(kEffectivePolicy, ToString(coop_.report_only_value));
@@ -280,7 +284,7 @@ void CrossOriginOpenerPolicyReporter::QueueAccessReport(
 }
 
 void CrossOriginOpenerPolicyReporter::QueueNavigationReport(
-    base::Value::Dict body,
+    base::DictValue body,
     const std::string& endpoint,
     bool is_report_only) {
   body.Set(kDisposition,

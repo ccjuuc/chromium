@@ -10,9 +10,9 @@
 #include <memory>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/thread_restrictions.h"
@@ -191,12 +191,12 @@ class GLOzoneEGLGbm : public GLOzoneEGL {
   std::unique_ptr<NativePixmapGLBinding> ImportNativePixmap(
       scoped_refptr<gfx::NativePixmap> pixmap,
       viz::SharedImageFormat plane_format,
-      gfx::BufferPlane plane,
+      std::optional<int> plane_index,
       gfx::Size plane_size,
       const gfx::ColorSpace& color_space,
       GLenum target,
       GLuint texture_id) override {
-    return NativePixmapEGLBinding::Create(pixmap, plane_format, plane,
+    return NativePixmapEGLBinding::Create(pixmap, plane_format, plane_index,
                                           plane_size, color_space, target,
                                           texture_id);
   }
@@ -206,48 +206,19 @@ class GLOzoneEGLGbm : public GLOzoneEGL {
   gl::EGLDisplayPlatform native_display_;
 };
 
-std::vector<gfx::BufferFormat> EnumerateSupportedBufferFormatsForTexturing() {
-  std::vector<gfx::BufferFormat> supported_buffer_formats;
-  // We cannot use FileEnumerator here because the sandbox is already closed.
-  constexpr char kRenderNodeFilePattern[] = "/dev/dri/renderD%d";
-  for (int i = 128; /* end on first card# that does not exist */; i++) {
-    base::FilePath dev_path(FILE_PATH_LITERAL(
-        base::StringPrintf(kRenderNodeFilePattern, i).c_str()));
-
-    ScopedAllowBlockingForGbmSurface scoped_allow_blocking;
-    base::File dev_path_file(dev_path,
-                             base::File::FLAG_OPEN | base::File::FLAG_READ);
-    if (!dev_path_file.IsValid())
-      break;
-
-    // Skip the virtual graphics memory manager device.
-    ScopedDrmVersionPtr version(drmGetVersion(dev_path_file.GetPlatformFile()));
-    if (!version || base::EqualsCaseInsensitiveASCII(version->name, "vgem")) {
-      continue;
-    }
-
-    ScopedGbmDevice device(gbm_create_device(dev_path_file.GetPlatformFile()));
-    if (!device) {
-      LOG(ERROR) << "Couldn't create Gbm Device at " << dev_path.MaybeAsASCII();
-      continue;
-    }
-    VLOG(1) << "Found Gbm Device at " << dev_path.MaybeAsASCII();
-
-    for (int j = 0; j <= static_cast<int>(gfx::BufferFormat::LAST); ++j) {
-      const gfx::BufferFormat buffer_format = static_cast<gfx::BufferFormat>(j);
-      if (base::Contains(supported_buffer_formats, buffer_format))
-        continue;
-      if (gbm_device_is_format_supported(
-              device.get(), GetFourCCFormatFromBufferFormat(buffer_format),
-              GBM_BO_USE_TEXTURING)) {
-        supported_buffer_formats.push_back(buffer_format);
-      }
-    }
-  }
-  return supported_buffer_formats;
-}
-
 }  // namespace
+
+GbmSurfaceFactory::GbmDeviceAndFile::GbmDeviceAndFile(base::File file,
+                                                      ScopedGbmDevice device)
+    : file(std::move(file)), device(std::move(device)) {}
+
+GbmSurfaceFactory::GbmDeviceAndFile::~GbmDeviceAndFile() = default;
+
+GbmSurfaceFactory::GbmDeviceAndFile::GbmDeviceAndFile(GbmDeviceAndFile&&) =
+    default;
+
+GbmSurfaceFactory::GbmDeviceAndFile&
+GbmSurfaceFactory::GbmDeviceAndFile::operator=(GbmDeviceAndFile&&) = default;
 
 GbmSurfaceFactory::GbmSurfaceFactory(DrmThreadProxy* drm_thread_proxy)
     : egl_implementation_(
@@ -339,7 +310,8 @@ scoped_refptr<gfx::NativePixmap> GbmSurfaceFactory::CreateNativePixmapForVulkan(
   base::ScopedFD vk_image_fd(dup(buffer->GetPlaneFd(0)));
   DCHECK(vk_image_fd.is_valid());
 
-  // TODO(spang): Fix this for formats other than gfx::BufferFormat::BGRA_8888
+  // TODO(spang): Fix this for formats other than
+  // viz::SinglePlaneFormat::kBGRA_8888
   DCHECK_EQ(viz::SinglePlaneFormat::kBGRA_8888,
             display::DisplaySnapshot::PrimaryFormat());
   VkFormat vk_format = VK_FORMAT_B8G8R8A8_SRGB;
@@ -442,8 +414,21 @@ GbmSurfaceFactory::CreateNativePixmapFromHandle(
   // valid and can be further importer by standard means.
   if (!get_protected_native_pixmap_callback_.is_null()) {
     auto protected_pixmap = get_protected_native_pixmap_callback_.Run(handle);
-    if (protected_pixmap)
+    if (protected_pixmap) {
+      // The substituted pixmap is used in place of the supplied handle, so it
+      // must match the geometry the caller will use to bind it.
+      // See https://crbug.com/501762862
+      if (protected_pixmap->GetBufferSize() != size ||
+          protected_pixmap->GetSharedImageFormat() != format) {
+        LOG(ERROR) << "Protected pixmap ("
+                   << protected_pixmap->GetBufferSize().ToString() << ", "
+                   << protected_pixmap->GetSharedImageFormat().ToString()
+                   << ") does not match requested geometry (" << size.ToString()
+                   << ", " << format.ToString() << ")";
+        return nullptr;
+      }
       return protected_pixmap;
+    }
   }
 
   return CreateNativePixmapFromHandleInternal(widget, size, format,
@@ -477,9 +462,56 @@ void GbmSurfaceFactory::SetGetProtectedNativePixmapDelegate(
   get_protected_native_pixmap_callback_ = get_protected_native_pixmap_callback;
 }
 
-std::vector<gfx::BufferFormat>
-GbmSurfaceFactory::GetSupportedFormatsForTexturing() const {
-  return EnumerateSupportedBufferFormatsForTexturing();
+bool GbmSurfaceFactory::IsFormatSupportedForTexturing(
+    viz::SharedImageFormat format) const {
+  base::AutoLock lock(gbm_devices_lock_);
+  if (!gbm_devices_initialized_) {
+    // We cannot use FileEnumerator here because the sandbox is already closed.
+    constexpr char kRenderNodeFilePattern[] = "/dev/dri/renderD%d";
+    for (int i = 128; /* end on first card# that does not exist */; i++) {
+      base::FilePath dev_path(FILE_PATH_LITERAL(
+          base::StringPrintf(kRenderNodeFilePattern, i).c_str()));
+
+      ScopedAllowBlockingForGbmSurface scoped_allow_blocking;
+      base::File dev_path_file(dev_path,
+                               base::File::FLAG_OPEN | base::File::FLAG_READ);
+      if (!dev_path_file.IsValid()) {
+        break;
+      }
+
+      // Skip the virtual graphics memory manager device.
+      ScopedDrmVersionPtr version(
+          drmGetVersion(dev_path_file.GetPlatformFile()));
+      if (!version || base::EqualsCaseInsensitiveASCII(version->name, "vgem")) {
+        continue;
+      }
+
+      ScopedGbmDevice device(
+          gbm_create_device(dev_path_file.GetPlatformFile()));
+      if (!device) {
+        LOG(ERROR) << "Couldn't create Gbm Device at "
+                   << dev_path.MaybeAsASCII();
+        continue;
+      }
+      VLOG(1) << "Found Gbm Device at " << dev_path.MaybeAsASCII();
+
+      gbm_devices_.push_back(
+          GbmDeviceAndFile(std::move(dev_path_file), std::move(device)));
+    }
+    gbm_devices_initialized_ = true;
+    base::UmaHistogramCounts100("Ozone.Drm.GbmDeviceCount",
+                                gbm_devices_.size());
+  }
+
+  for (const auto& device_and_file : gbm_devices_) {
+    if (gbm_device_is_format_supported(
+            device_and_file.device.get(),
+            GetFourCCFormatFromSharedImageFormat(format),
+            GBM_BO_USE_TEXTURING)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace ui

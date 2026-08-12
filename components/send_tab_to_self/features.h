@@ -20,34 +20,82 @@ namespace send_tab_to_self {
 // user interacts with it either by dismissing or openning it.
 BASE_DECLARE_FEATURE(kSendTabToSelfEnableNotificationTimeOut);
 
-// If this feature is enabled, allow the user to receive Send Tab to Self
-// notifications as a push notification to their target iOS device.
-BASE_DECLARE_FEATURE(kSendTabToSelfIOSPushNotifications);
+// If this feature is enabled, form fields will be extracted from the outgoing
+// tab and propagated to the target device.
+BASE_DECLARE_FEATURE(kSendTabToSelfPropagateFormFields);
 
-// Param for whether or not to include the URL image in the push notification
-// for the kSendTabToSelfIOSPushNotifications feature.
-extern const char kSendTabIOSPushNotificationsURLImageParam[];
+// If this feature is enabled, the scroll position will be captured and
+// propagated to the target device using a text fragment selector.
+BASE_DECLARE_FEATURE(kSendTabToSelfPropagateScrollPosition);
 
-// Convenience method for determining when SendTabIOSPushNotifications is
-// enabled with a URL image in the notification.
-bool IsSendTabIOSPushNotificationsEnabledWithURLImage();
+// If this feature is enabled, more granular "last active" timestamps will be
+// shown in the device picker.
+BASE_DECLARE_FEATURE(kSendTabToSelfImprovedLastActiveLabels);
+
+// If this feature is enabled, the back/forward history of the shared tab will
+// be captured and propagated to the target device.
+BASE_DECLARE_FEATURE(kSendTabToSelfPropagateNavigationHistory);
+
+// If this feature is enabled, received tabs will be automatically opened
+// in the foreground if Chrome is currently being used.
+BASE_DECLARE_FEATURE(kSendTabToSelfAutoOpen);
+
+#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
+// If this feature is enabled along with kSendTabToSelfAutoOpen, received tabs
+// will be automatically opened in the background even while in the Tab Grid.
+BASE_DECLARE_FEATURE(kSendTabToSelfSupportAutoOpenInTabGrid);
+#endif  // BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
+
+// If this feature is enabled, several UIs on desktop are enhanced, like showing
+// a list of devices directly in the context menu, the new Desktop device picker
+// flow, and the visually enhanced STTS target device picker bubble.
+BASE_DECLARE_FEATURE(kSendTabToSelfEnhancedDesktopUI);
+
+// If this feature is enabled, a toast will be shown after a tab is successfully
+// sent.
+BASE_DECLARE_FEATURE(kSendTabToSelfPostSendToast);
+
+// If this feature is enabled, "Send to your device" entry points will be added
+// to the Omnibox context menu.
+BASE_DECLARE_FEATURE(kSendTabToSelfExtraEntryPoints);
+
+// If this feature is enabled, desktop entry points get submenu treatment as
+// part of the enhanced desktop UI v2.
+BASE_DECLARE_FEATURE(kSendTabToSelfEnhancedDesktopUIv2);
+
+#if BUILDFLAG(IS_ANDROID)
+// If this feature is enabled, physical double-tap gestures will be detected
+// and used to trigger sending tabs to self on Android devices.
+BASE_DECLARE_FEATURE(kSendTabToSelfGesture);
+
+// If this feature is enabled, a Sent Tab To Self notification will open
+// the appropriate native app if it is available.
+BASE_DECLARE_FEATURE(kSendTabToSelfOpenNativeApp);
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+// If this feature is enabled, the target device picker will use an enhanced
+// bottom sheet UI.
+BASE_DECLARE_FEATURE(kSendTabToSelfEnhancedBottomsheet);
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
 
 #if BUILDFLAG(IS_IOS)
-// Param for the iOS Magic Stack Card variant for the
-// kSendTabToSelfIOSPushNotifications feature.
-extern const char kSendTabIOSPushNotificationsWithMagicStackCardParam[];
 
-// Convenience method for determining when SendTabIOSPushNotifications is
-// enabled with Magic Stack Card.
-bool IsSendTabIOSPushNotificationsEnabledWithMagicStackCard();
+// If this feature is enabled, target devices are displayed as individual
+// actions in the native iOS Share Sheet.
+BASE_DECLARE_FEATURE(kSendTabToSelfIOSShareSheetDeviceList);
 
-// Param for the iOS Tab Reminders variant for the
-// `kSendTabToSelfIOSPushNotifications` feature.
-extern const char kSendTabIOSPushNotificationsWithTabRemindersParam[];
+// If this feature is enabled, prevents duplicate SendTabToSelfBrowserAgent
+// instances from logging outcomes for the same entry (e.g. regular vs inactive
+// browser).
+BASE_DECLARE_FEATURE(kSendTabToSelfIOSLimitToRegularBrowsers);
 
-// Convenience method for determining when `kSendTabToSelfIOSPushNotifications`
-// is enabled with Tab Reminders.
-bool IsSendTabIOSPushNotificationsEnabledWithTabReminders();
+// If this feature is enabled, users can schedule tab reminder iOS push
+// notifications.
+BASE_DECLARE_FEATURE(kIOSTabReminders);
+
+// Convenience method for determining when `kIOSTabReminders` is enabled.
+bool AreIOSTabRemindersEnabled();
 
 // Parameter representing the default time offset initially presented in the
 // 'Set a Reminder' UI half-sheet. Users can select a different offset manually.
@@ -58,6 +106,12 @@ extern const char kReminderNotificationsDefaultTimeOffset[];
 // controlled by the `kReminderNotificationsDefaultTimeOffset` Finch parameter.
 const base::TimeDelta GetReminderNotificationsDefaultTimeOffset();
 #endif  // BUILDFLAG(IS_IOS)
+
+#if BUILDFLAG(IS_ANDROID)
+// If this feature is enabled, dynamic shortcuts will be registered for other
+// syncing devices.
+BASE_DECLARE_FEATURE(kSendTabToSelfDynamicShortcuts);
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace send_tab_to_self
 

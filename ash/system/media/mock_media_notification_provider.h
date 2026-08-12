@@ -7,6 +7,7 @@
 
 #include "ash/system/media/media_notification_provider.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "url/origin.h"
 
 namespace views {
 class View;
@@ -33,13 +34,15 @@ class MockMediaNotificationProvider : public MediaNotificationProvider {
   MOCK_METHOD(global_media_controls::MediaItemManager*,
               GetMediaItemManager,
               ());
+  MOCK_METHOD(void,
+              UpdateMediaItemSourceOrigin,
+              (const std::string&, const std::optional<url::Origin>&),
+              (override));
 
   void AddObserver(MediaNotificationProviderObserver* observer) override {}
   void RemoveObserver(MediaNotificationProviderObserver* observer) override {}
   bool HasActiveNotifications() override;
   bool HasFrozenNotifications() override;
-  void SetColorTheme(
-      const media_message_center::NotificationTheme& color_theme) override {}
   std::unique_ptr<global_media_controls::MediaItemUIDeviceSelector>
   BuildDeviceSelectorView(
       const std::string& id,

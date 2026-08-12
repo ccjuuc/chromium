@@ -30,6 +30,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
@@ -38,9 +39,10 @@ import org.mockito.junit.MockitoRule;
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.metrics.RecordHistogram;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
+import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.omnibox.UrlBarEditingTextStateProvider;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxImageSupplier;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
@@ -49,7 +51,6 @@ import org.chromium.chrome.browser.omnibox.suggestions.SuggestionHost;
 import org.chromium.chrome.browser.omnibox.suggestions.basic.BasicSuggestionProcessor.BookmarkState;
 import org.chromium.chrome.browser.omnibox.suggestions.carousel.BaseCarouselSuggestionItemViewBuilder;
 import org.chromium.chrome.browser.omnibox.suggestions.carousel.BaseCarouselSuggestionViewProperties;
-import org.chromium.chrome.browser.omnibox.test.R;
 import org.chromium.chrome.browser.share.ShareDelegate;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.components.browser_ui.widget.tile.TileViewProperties;
@@ -57,6 +58,7 @@ import org.chromium.components.omnibox.AutocompleteInput;
 import org.chromium.components.omnibox.AutocompleteMatch;
 import org.chromium.components.omnibox.AutocompleteMatchBuilder;
 import org.chromium.components.omnibox.OmniboxSuggestionType;
+import org.chromium.components.omnibox.action.OmniboxActionDelegate;
 import org.chromium.components.omnibox.suggestions.OmniboxSuggestionUiType;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -75,25 +77,25 @@ public final class MostVisitedTilesProcessorUnitTest {
     private static final GURL NAV_URL_2 = JUnitTestGURLs.URL_2;
     private static final GURL SEARCH_URL = JUnitTestGURLs.SEARCH_URL;
 
-    public @Rule MockitoRule mockitoRule = MockitoJUnit.rule();
+    @Rule public final MockitoRule mockitoRule = MockitoJUnit.rule();
 
     private Context mContext;
     private PropertyModel mPropertyModel;
     private MostVisitedTilesProcessor mProcessor;
     private List<AutocompleteMatch> mMatches;
 
-    private final ArgumentCaptor<Callback<Bitmap>> mFavIconCallbackCaptor =
-            ArgumentCaptor.forClass(Callback.class);
-    private final ArgumentCaptor<Callback<Bitmap>> mGenIconCallbackCaptor =
-            ArgumentCaptor.forClass(Callback.class);
-    private @Mock Bitmap mFaviconBitmap;
-    private @Mock SuggestionHost mSuggestionHost;
-    private @Mock OmniboxImageSupplier mImageSupplier;
-    private @Mock AutocompleteInput mInput;
-    private @Mock UrlBarEditingTextStateProvider mTextProvider;
-    private @Mock Supplier<Tab> mTabSupplier;
-    private @Mock Supplier<ShareDelegate> mShareDelegateSupplier;
-    private @Mock BookmarkState mBookmarkState;
+    @Captor private ArgumentCaptor<Callback<Drawable>> mFavIconCallbackCaptor;
+    @Captor private ArgumentCaptor<Callback<Drawable>> mGenIconCallbackCaptor;
+    @Mock private Bitmap mFaviconBitmap;
+    @Mock private Drawable mFallbackDrawable;
+    @Mock private SuggestionHost mSuggestionHost;
+    @Mock private OmniboxImageSupplier mImageSupplier;
+    @Mock private AutocompleteInput mInput;
+    @Mock private UrlBarEditingTextStateProvider mTextProvider;
+    @Mock private Supplier<Tab> mTabSupplier;
+    @Mock private Supplier<ShareDelegate> mShareDelegateSupplier;
+    @Mock private BookmarkState mBookmarkState;
+    @Mock private OmniboxActionDelegate mActionDelegate;
 
     static class TileData {
         public final String title;
@@ -131,7 +133,8 @@ public final class MostVisitedTilesProcessorUnitTest {
                         mBookmarkState,
                         mTabSupplier,
                         mShareDelegateSupplier,
-                        new ObservableSupplierImpl<>(ControlsPosition.TOP));
+                        ObservableSuppliers.createNonNull(ControlsPosition.TOP),
+                        mActionDelegate);
         mProcessor = new MostVisitedTilesProcessor(uiContext);
         OmniboxResourceProvider.disableCachesForTesting();
     }
@@ -217,7 +220,8 @@ public final class MostVisitedTilesProcessorUnitTest {
                         mBookmarkState,
                         mTabSupplier,
                         mShareDelegateSupplier,
-                        new ObservableSupplierImpl<>(ControlsPosition.TOP));
+                        ObservableSuppliers.createNonNull(ControlsPosition.TOP),
+                        mActionDelegate);
         mProcessor = new MostVisitedTilesProcessor(uiContext);
         List<ListItem> tileList =
                 populateMatchesForHorizontalRenderGroup(0, new TileData("title", NAV_URL, false));
@@ -236,7 +240,9 @@ public final class MostVisitedTilesProcessorUnitTest {
                 populateMatchesForHorizontalRenderGroup(0, new TileData("title", NAV_URL, false));
 
         verify(mImageSupplier, times(1)).fetchFavicon(eq(NAV_URL), any());
-        mFavIconCallbackCaptor.getValue().onResult(mFaviconBitmap);
+        mFavIconCallbackCaptor
+                .getValue()
+                .onResult(new BitmapDrawable(mContext.getResources(), mFaviconBitmap));
         verifyNoMoreInteractions(mImageSupplier);
 
         // Since we "retrieved" an icon from LargeIconBridge, we should not generate a fallback.
@@ -259,8 +265,8 @@ public final class MostVisitedTilesProcessorUnitTest {
         mFavIconCallbackCaptor.getValue().onResult(null);
 
         // We should now observe a request to generate bitmap.
-        verify(mImageSupplier).generateFavicon(eq(NAV_URL), mFavIconCallbackCaptor.capture());
-        mFavIconCallbackCaptor.getValue().onResult(mFaviconBitmap);
+        verify(mImageSupplier).generateFavicon(eq(NAV_URL), mGenIconCallbackCaptor.capture());
+        mGenIconCallbackCaptor.getValue().onResult(mFallbackDrawable);
         verifyNoMoreInteractions(mImageSupplier);
 
         // Since we "retrieved" an icon from LargeIconBridge, we should not generate a fallback.
@@ -269,9 +275,7 @@ public final class MostVisitedTilesProcessorUnitTest {
 
         Drawable drawable = tileModel.get(TileViewProperties.ICON);
         assertEquals(BaseCarouselSuggestionItemViewBuilder.ViewType.TILE_VIEW, tileItem.type);
-        assertThat(drawable, instanceOf(BitmapDrawable.class));
-        Bitmap bitmap = ((BitmapDrawable) drawable).getBitmap();
-        assertEquals(mFaviconBitmap, bitmap);
+        assertEquals(mFallbackDrawable, drawable);
     }
 
     @Test
@@ -284,8 +288,8 @@ public final class MostVisitedTilesProcessorUnitTest {
         mFavIconCallbackCaptor.getValue().onResult(null);
 
         // We should now observe a request to generate bitmap. Return null.
-        verify(mImageSupplier).generateFavicon(eq(NAV_URL), mFavIconCallbackCaptor.capture());
-        mFavIconCallbackCaptor.getValue().onResult(null);
+        verify(mImageSupplier).generateFavicon(eq(NAV_URL), mGenIconCallbackCaptor.capture());
+        mGenIconCallbackCaptor.getValue().onResult(null);
         verifyNoMoreInteractions(mImageSupplier);
 
         // Since we failed all retrieve attempts, we should keep using fallback icons.
@@ -334,15 +338,15 @@ public final class MostVisitedTilesProcessorUnitTest {
         // on the list, rather than placement of the tile.
         tileList.get(1).model.get(TileViewProperties.ON_CLICK).onClick(null);
         ordered.verify(mSuggestionHost, times(1))
-                .onSuggestionClicked(eq(mMatches.get(1)), eq(3), eq(NAV_URL));
+                .onSuggestionClicked(eq(mMatches.get(1)), eq(3), eq(NAV_URL), eq(0));
 
         tileList.get(2).model.get(TileViewProperties.ON_CLICK).onClick(null);
         ordered.verify(mSuggestionHost, times(1))
-                .onSuggestionClicked(eq(mMatches.get(2)), eq(3), eq(NAV_URL_2));
+                .onSuggestionClicked(eq(mMatches.get(2)), eq(3), eq(NAV_URL_2), eq(0));
 
         tileList.get(0).model.get(TileViewProperties.ON_CLICK).onClick(null);
         ordered.verify(mSuggestionHost, times(1))
-                .onSuggestionClicked(eq(mMatches.get(0)), eq(3), eq(SEARCH_URL));
+                .onSuggestionClicked(eq(mMatches.get(0)), eq(3), eq(SEARCH_URL), eq(0));
 
         verifyNoMoreInteractions(mSuggestionHost);
 
@@ -385,15 +389,15 @@ public final class MostVisitedTilesProcessorUnitTest {
         // on the list, rather than placement of the tile.
         tileList.get(1).model.get(TileViewProperties.ON_CLICK).onClick(null);
         ordered.verify(mSuggestionHost, times(1))
-                .onSuggestionClicked(eq(mMatches.get(1)), eq(3), eq(NAV_URL));
+                .onSuggestionClicked(eq(mMatches.get(1)), eq(3), eq(NAV_URL), eq(0));
 
         tileList.get(2).model.get(TileViewProperties.ON_CLICK).onClick(null);
         ordered.verify(mSuggestionHost, times(1))
-                .onSuggestionClicked(eq(mMatches.get(2)), eq(3), eq(NAV_URL_2));
+                .onSuggestionClicked(eq(mMatches.get(2)), eq(3), eq(NAV_URL_2), eq(0));
 
         tileList.get(0).model.get(TileViewProperties.ON_CLICK).onClick(null);
         ordered.verify(mSuggestionHost, times(1))
-                .onSuggestionClicked(eq(mMatches.get(0)), eq(3), eq(SEARCH_URL));
+                .onSuggestionClicked(eq(mMatches.get(0)), eq(3), eq(SEARCH_URL), eq(0));
 
         verifyNoMoreInteractions(mSuggestionHost);
 

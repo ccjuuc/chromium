@@ -49,6 +49,7 @@ source_set("chromeos") {
     "//media/mojo/common",
     "//remoting/base",
     "//remoting/host:clipboard",
+    "//remoting/host/base",
     "//ui/base/cursor/mojom:cursor_type",
     "//ui/display/manager",
     "//ui/wm",
@@ -70,6 +71,7 @@ source_set("browser_interop") {
     "//base",
     "//chrome/browser:browser_process",
     "//chrome/browser:browser_public_dependencies",
+    "//chrome/browser/net",
     "//content/public/browser",
     "//net",
     "//remoting/base",
@@ -142,6 +144,7 @@ source_set("unit_tests") {
   testonly = true
 
   sources = [
+    "ash_mojom_video_consumer_unittest.cc",
     "audio_helper_chromeos_impl_unittest.cc",
     "clipboard_aura_unittest.cc",
     "file_session_storage_unittest.cc",
@@ -168,12 +171,14 @@ source_set("unit_tests") {
     "//remoting/host:common",
     "//remoting/host:test_support",
     "//remoting/host/it2me:common",
+    "//remoting/host/mojom",
     "//remoting/proto",
     "//remoting/resources",
     "//services/network:test_support",
     "//skia",
     "//testing/gmock",
     "//testing/gtest",
+    "//ui/base/clipboard:clipboard_test_support",
     "//ui/display/manager",
   ]
 

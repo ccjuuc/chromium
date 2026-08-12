@@ -109,7 +109,7 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
             @FlowType int type,
             DataSharingTabManager tabManager,
             SigninAndHistorySyncActivityLauncher signinAndHistorySyncActivityLauncher,
-            LoadingFullscreenCoordinator loadingFullscreenCoordinator,
+            @Nullable LoadingFullscreenCoordinator loadingFullscreenCoordinator,
             @Nullable Callback<Runnable> switchToTabSwitcherCallback,
             Callback<Callback<Boolean>> startAccountRefreshCallback) {
         mNativePtr = CollaborationControllerDelegateImplJni.get().createNativeObject(this);
@@ -124,6 +124,7 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
         mStartAccountRefreshCallback = startAccountRefreshCallback;
 
         if (mFlowType == FlowType.JOIN) {
+            assert loadingFullscreenCoordinator != null;
             // The screen should not animate in order to hide all ongoing transitions immediately
             // after this call.
             loadingFullscreenCoordinator.startLoading(this::destroy, /* animate= */ false);
@@ -192,10 +193,9 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
 
         PropertyModel model;
         Runnable exitRunnable =
-                () -> {
-                    CollaborationControllerDelegateImplJni.get()
-                            .runResultCallback(Outcome.SUCCESS, resultCallback);
-                };
+                () ->
+                        CollaborationControllerDelegateImplJni.get()
+                                .runResultCallback(Outcome.SUCCESS, resultCallback);
         if (errorType == Type.UPDATE_CHROME_UI_FOR_VERSION_OUT_OF_DATE) {
             model =
                     VersioningModalDialog.showWithCustomMessage(
@@ -432,7 +432,7 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
     private @Nullable Intent createFullscreenSigninIntent() {
         mThreadChecker.assertOnValidThread();
         FullscreenSigninAndHistorySyncConfig fullscreenConfig =
-                new FullscreenSigninAndHistorySyncConfig.Builder(
+                FullscreenSigninAndHistorySyncConfig.builder(
                                 mActivity.getString(R.string.collaboration_signin_title),
                                 mActivity.getString(R.string.collaboration_signin_description),
                                 mActivity.getString(R.string.collaboration_signin_sync_dismiss),
@@ -854,8 +854,10 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
         if (mFeatureEngagementLock != null) {
             mFeatureEngagementLock.release();
         }
-        if (mExitCallback != 0) {
-            CollaborationControllerDelegateImplJni.get().deleteExitCallback(mExitCallback);
+        long tempCallback = mExitCallback;
+        mExitCallback = 0;
+        if (tempCallback != 0) {
+            CollaborationControllerDelegateImplJni.get().deleteExitCallback(tempCallback);
         }
     }
 
@@ -873,7 +875,9 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
         mThreadChecker.assertOnValidThread();
         long tempCallback = mExitCallback;
         mExitCallback = 0;
-        CollaborationControllerDelegateImplJni.get().runExitCallback(tempCallback);
+        if (tempCallback != 0) {
+            CollaborationControllerDelegateImplJni.get().runExitCallback(tempCallback);
+        }
     }
 
     @SuppressWarnings("NullAway")

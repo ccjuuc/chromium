@@ -6,13 +6,15 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/lazy_instance.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/trace_event/trace_event.h"
@@ -42,7 +44,7 @@
 #include "url/gurl.h"
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
 #include "chrome/browser/ui/signin/signin_view_controller.h"  // nogncheck crbug.com/423799622
 #endif
@@ -98,17 +100,34 @@ void IdentityAPI::EraseGaiaIdForExtension(const std::string& extension_id) {
 void IdentityAPI::EraseStaleGaiaIdsForAllExtensions() {
   // Refresh tokens haven't been loaded yet. Wait for OnRefreshTokensLoaded() to
   // fire.
-  if (!identity_manager_->AreRefreshTokensLoaded())
+  if (!identity_manager_->AreRefreshTokensLoaded()) {
     return;
+  }
   auto accounts = GetAccountsWithRefreshTokensForExtensions();
   for (const ExtensionId& extension_id : extension_prefs_->GetExtensions()) {
     std::optional<GaiaId> gaia_id = GetGaiaIdForExtension(extension_id);
-    if (!gaia_id)
+    if (!gaia_id) {
       continue;
-    if (!base::Contains(accounts, *gaia_id, &CoreAccountInfo::gaia)) {
+    }
+    if (!std::ranges::contains(accounts, *gaia_id, &CoreAccountInfo::gaia)) {
       EraseGaiaIdForExtension(extension_id);
     }
   }
+}
+
+base::ScopedClosureRunner IdentityAPI::StartTrackingWebAuthFlow(
+    const extensions::ExtensionId& extension_id) {
+  if (active_web_auth_flows_.insert(extension_id).second) {
+    return base::ScopedClosureRunner(
+        base::BindOnce(&IdentityAPI::StopTrackingWebAuthFlow,
+                       weak_ptr_factory_.GetWeakPtr(), extension_id));
+  }
+  return base::ScopedClosureRunner();
+}
+
+void IdentityAPI::StopTrackingWebAuthFlow(
+    const extensions::ExtensionId& extension_id) {
+  active_web_auth_flows_.erase(extension_id);
 }
 
 void IdentityAPI::Shutdown() {
@@ -171,7 +190,7 @@ void IdentityAPI::MaybeShowChromeSigninDialog(
   }
 
   chrome::ScopedTabbedBrowserDisplayer displayer(profile_);
-  Browser* browser = displayer.browser();
+  BrowserWindowInterface* browser = displayer.browser_window_interface();
   if (!browser) {
     DVLOG(1) << "Could not create a browser to show Extensions Chrome Sign in "
                 "dialog.";
@@ -283,8 +302,9 @@ void IdentityAPI::FireOnAccountSignInChanged(const GaiaId& gaia_id,
       events::IDENTITY_ON_SIGN_IN_CHANGED,
       api::identity::OnSignInChanged::kEventName, std::move(args), profile_));
 
-  if (on_signin_changed_callback_for_testing_)
+  if (on_signin_changed_callback_for_testing_) {
     on_signin_changed_callback_for_testing_.Run(event.get());
+  }
 
   event_router_->BroadcastEvent(std::move(event));
 }

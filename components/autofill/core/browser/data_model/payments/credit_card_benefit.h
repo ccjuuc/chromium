@@ -12,6 +12,7 @@
 #include "base/time/time.h"
 #include "base/types/id_type.h"
 #include "base/types/strong_alias.h"
+#include "components/autofill/core/browser/data_model/payments/enum_types.mojom.h"
 #include "url/origin.h"
 
 namespace autofill {
@@ -25,6 +26,16 @@ class CreditCardMerchantBenefit;
 using CreditCardBenefit = std::variant<CreditCardFlatRateBenefit,
                                        CreditCardCategoryBenefit,
                                        CreditCardMerchantBenefit>;
+
+enum class CreditCardBenefitType {
+  kUnknown = 0,
+  kFlatRate = 1,
+  kCategory = 2,
+  kMerchant = 3,
+  kMaxValue = kMerchant,
+};
+
+CreditCardBenefitType GetTypeForCardBenefit(const CreditCardBenefit& benefit);
 
 class CreditCardBenefitBase {
  public:
@@ -123,26 +134,10 @@ class CreditCardFlatRateBenefit : public CreditCardBenefitBase {
 // for purchasing a subscription service online with the linked card.
 class CreditCardCategoryBenefit : public CreditCardBenefitBase {
  public:
-  // Represents the category of purchases that the benefit can be applied to.
-  // The category numbering should match
-  // `google3/moneta/integrator/common/instrument/instrument_offer.proto`.
-  enum class BenefitCategory {
-    kUnknownBenefitCategory = 0,
-    kSubscription = 1,
-    kFlights = 2,
-    kDining = 3,
-    kEntertainment = 4,
-    kStreaming = 5,
-    kGroceryStores = 6,
-    kAirMilesPartner = 7,
-    kAlcoholStores = 8,
-    kDrugstores = 9,
-    kOfficeSupplies = 10,
-    kRecurringBills = 11,
-    kTransit = 12,
-    kTravel = 13,
-    kWholesaleClubs = 14,
-  };
+  using BenefitCategory = mojom::BenefitCategory;
+
+  // Returns true if the given `benefit_category` is a travel subcategory.
+  static bool IsTravelSubcategory(BenefitCategory benefit_category);
 
   CreditCardCategoryBenefit(BenefitId benefit_id,
                             LinkedCardInstrumentId linked_card_instrument_id,

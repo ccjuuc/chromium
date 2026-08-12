@@ -11,10 +11,10 @@
 #include "base/format_macros.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "net/base/completion_repeating_callback.h"
 #include "net/base/host_port_pair.h"
@@ -66,9 +66,9 @@ PacFileDataWithSource::PacFileDataWithSource(const PacFileDataWithSource&) =
 PacFileDataWithSource& PacFileDataWithSource::operator=(
     const PacFileDataWithSource&) = default;
 
-base::Value::Dict PacFileDecider::PacSource::NetLogParams(
+base::DictValue PacFileDecider::PacSource::NetLogParams(
     const GURL& effective_pac_url) const {
-  base::Value::Dict dict;
+  base::DictValue dict;
   std::string source;
   switch (type) {
     case PacSource::WPAD_DHCP:
@@ -282,8 +282,10 @@ int PacFileDecider::DoQuickCheck() {
       pac_file_fetcher_->GetRequestContext()->host_resolver();
   resolve_request_ = host_resolver->CreateRequest(
       HostPortPair(std::move(host), 80),
-      pac_file_fetcher_->isolation_info().network_anonymization_key(), net_log_,
-      parameters);
+      pac_file_fetcher_->isolation_info().network_anonymization_key(),
+      // TODO(crbug.com/516746450): Support targeting a network when fetching
+      // PAC files.
+      handles::kInvalidNetworkHandle, net_log_, parameters);
 
   CompletionRepeatingCallback callback = base::BindRepeating(
       &PacFileDecider::OnIOCompletion, base::Unretained(this));

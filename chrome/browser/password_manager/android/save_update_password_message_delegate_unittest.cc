@@ -12,13 +12,16 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram.h"
+#include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/android/android_theme_resources.h"
 #include "chrome/browser/android/resource_mapper.h"
 #include "chrome/browser/password_edit_dialog/android/password_edit_dialog_bridge_delegate.h"
+#include "chrome/browser/password_manager/android/mock_password_manager_error_message_helper_bridge.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
 #include "chrome/grit/branded_strings.h"
@@ -31,9 +34,13 @@
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_form_metrics_recorder.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
+#include "components/password_manager/core/browser/password_store/fake_password_store_backend.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
+#include "components/password_manager/core/browser/password_store/test_password_store.h"
 #include "components/password_manager/core/browser/stub_password_manager_client.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
+#include "components/sync/test/test_sync_service.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/public/test/web_contents_tester.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -127,6 +134,18 @@ class MockPasswordManagerClient
               (password_manager::ErrorMessageFlowType,
                password_manager::PasswordStoreBackendErrorType),
               (override));
+  MOCK_METHOD(password_manager::PasswordStoreInterface*,
+              GetAccountPasswordStore,
+              (),
+              (const, override));
+  MOCK_METHOD(password_manager::PasswordStoreInterface*,
+              GetProfilePasswordStore,
+              (),
+              (const, override));
+  MOCK_METHOD(const syncer::SyncService*,
+              GetSyncService,
+              (),
+              (const, override));
 };
 
 class SaveUpdatePasswordMessageDelegateTest
@@ -161,8 +180,10 @@ class SaveUpdatePasswordMessageDelegateTest
   void ExpectDismissMessageCall();
   void DismissMessage(messages::DismissReason dismiss_reason);
   void DestroyDelegate();
+  void DismissSaveUpdatePasswordPrompt();
 
-  TestDeviceLockBridge* test_bridge();
+  TestDeviceLockBridge* test_device_lock_bridge();
+  MockPasswordManagerErrorMessageHelperBridge* helper_bridge();
   bool is_password_saved();
 
   messages::MessageWrapper* GetMessageWrapper();
@@ -214,6 +235,9 @@ class SaveUpdatePasswordMessageDelegateTest
 
   void FastForward() { task_environment()->FastForwardBy(base::Seconds(1)); }
 
+  scoped_refptr<password_manager::TestPasswordStore> password_store_;
+  scoped_refptr<password_manager::TestPasswordStore> account_store_;
+
  private:
   PasswordForm pending_credentials_;
   GURL password_form_url_;
@@ -221,10 +245,14 @@ class SaveUpdatePasswordMessageDelegateTest
   ukm::SourceId ukm_source_id_;
   messages::MockMessageDispatcherBridge message_dispatcher_bridge_;
   std::unique_ptr<MockPasswordEditDialog> mock_password_edit_dialog_;
-  raw_ptr<TestDeviceLockBridge> test_bridge_;
+  raw_ptr<TestDeviceLockBridge> test_device_lock_bridge_ = nullptr;
   std::unique_ptr<SaveUpdatePasswordMessageDelegate> delegate_;
   bool is_password_saved_ = false;
   MockPasswordManagerClient password_manager_client_;
+  std::vector<password_manager::StoredCredential> best_matches_;
+  // The `helper_bridge_` is owned by the `delegate_`.
+  raw_ptr<MockPasswordManagerErrorMessageHelperBridge> helper_bridge_ = nullptr;
+  syncer::TestSyncService sync_service_;
 };
 
 SaveUpdatePasswordMessageDelegateTest::SaveUpdatePasswordMessageDelegateTest()
@@ -236,24 +264,46 @@ void SaveUpdatePasswordMessageDelegateTest::SetUp() {
   autofill::ChromeAutofillClient::CreateForWebContents(web_contents());
   ukm_source_id_ = ukm::UkmRecorder::GetNewSourceID();
   metrics_recorder_ = base::MakeRefCounted<PasswordFormMetricsRecorder>(
-      true /*is_main_frame_secure*/, ukm_source_id_, nullptr /*pref_service*/);
+      true /*is_main_frame_secure*/, ukm_source_id_, nullptr /*pref_service*/,
+      password_manager_client_.GetProfileMetricsService());
   NavigateAndCommit(GURL(kDefaultUrl));
 
-  auto bridge = std::make_unique<TestDeviceLockBridge>();
-  test_bridge_ = bridge.get();
+  password_store_ = base::MakeRefCounted<password_manager::TestPasswordStore>();
+  password_store_->Init();
+  account_store_ = base::MakeRefCounted<password_manager::TestPasswordStore>();
+  account_store_->Init();
+  ON_CALL(password_manager_client_, GetProfilePasswordStore())
+      .WillByDefault(Return(password_store_.get()));
+  ON_CALL(password_manager_client_, GetAccountPasswordStore())
+      .WillByDefault(Return(account_store_.get()));
+  ON_CALL(password_manager_client_, GetSyncService())
+      .WillByDefault(Return(&sync_service_));
+
+  std::unique_ptr<TestDeviceLockBridge> device_lock_bridge =
+      std::make_unique<TestDeviceLockBridge>();
+  test_device_lock_bridge_ = device_lock_bridge.get();
+  std::unique_ptr<MockPasswordManagerErrorMessageHelperBridge>
+      mock_helper_bridge =
+          std::make_unique<MockPasswordManagerErrorMessageHelperBridge>();
+  helper_bridge_ = mock_helper_bridge.get();
   delegate_ = std::make_unique<SaveUpdatePasswordMessageDelegate>(
       base::PassKey<class SaveUpdatePasswordMessageDelegateTest>(),
       base::BindRepeating(
           &SaveUpdatePasswordMessageDelegateTest::CreatePasswordEditDialog,
           base::Unretained(this)),
-      std::move(bridge));
+      std::move(device_lock_bridge), std::move(mock_helper_bridge));
 
   messages::MessageDispatcherBridge::SetInstanceForTesting(
       &message_dispatcher_bridge_);
 }
 
 void SaveUpdatePasswordMessageDelegateTest::TearDown() {
+  if (delegate_) {
+    delegate_->DismissSaveUpdatePasswordPrompt();
+  }
   messages::MessageDispatcherBridge::SetInstanceForTesting(nullptr);
+  password_store_->ShutdownOnUIThread();
+  account_store_->ShutdownOnUIThread();
   ChromeRenderViewHostTestHarness::TearDown();
 }
 
@@ -262,7 +312,7 @@ SaveUpdatePasswordMessageDelegateTest::CreateFormManager(
     const GURL& password_form_url,
     const std::vector<PasswordForm>& best_matches) {
   password_form_url_ = password_form_url;
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       std::make_unique<testing::NiceMock<MockPasswordFormManagerForUI>>();
   ON_CALL(*form_manager, GetPendingCredentials())
       .WillByDefault(ReturnRef(pending_credentials_));
@@ -270,14 +320,19 @@ SaveUpdatePasswordMessageDelegateTest::CreateFormManager(
       .WillByDefault(Return(password_manager::metrics_util::
                                 CredentialSourceType::kPasswordManager));
   ON_CALL(*form_manager, GetURL()).WillByDefault(ReturnRef(password_form_url_));
-  ON_CALL(*form_manager, GetBestMatches()).WillByDefault(Return(best_matches));
+  best_matches_ = password_manager::FromPasswordForms(best_matches);
+  ON_CALL(*form_manager, GetBestMatches()).WillByDefault([this]() {
+    return base::span<const password_manager::StoredCredential>(best_matches_);
+  });
   ON_CALL(*form_manager, GetFederatedMatches())
-      .WillByDefault(Return(base::span<const PasswordForm>()));
+      .WillByDefault(
+          Return(base::span<const password_manager::StoredCredential>()));
   ON_CALL(*form_manager, GetMetricsRecorder())
       .WillByDefault(Return(metrics_recorder_.get()));
-  ON_CALL(*form_manager, Save())
-      .WillByDefault(testing::Invoke(
-          this, &SaveUpdatePasswordMessageDelegateTest::RecordPasswordSaved));
+  ON_CALL(*form_manager, IsFetchCompleted()).WillByDefault(Return(true));
+  ON_CALL(*form_manager, Save()).WillByDefault([this]() {
+    RecordPasswordSaved();
+  });
   ON_CALL(*form_manager, GetPasswordStoreForSaving(_))
       .WillByDefault([](const PasswordForm& form) -> PasswordForm::Store {
         return form.IsUsingAccountStore() ? PasswordForm::Store::kAccountStore
@@ -386,8 +441,18 @@ void SaveUpdatePasswordMessageDelegateTest::DestroyDelegate() {
   delegate_.reset();
 }
 
-TestDeviceLockBridge* SaveUpdatePasswordMessageDelegateTest::test_bridge() {
-  return test_bridge_;
+void SaveUpdatePasswordMessageDelegateTest::DismissSaveUpdatePasswordPrompt() {
+  delegate_->DismissSaveUpdatePasswordPrompt();
+}
+
+TestDeviceLockBridge*
+SaveUpdatePasswordMessageDelegateTest::test_device_lock_bridge() {
+  return test_device_lock_bridge_;
+}
+
+MockPasswordManagerErrorMessageHelperBridge*
+SaveUpdatePasswordMessageDelegateTest::helper_bridge() {
+  return helper_bridge_;
 }
 
 bool SaveUpdatePasswordMessageDelegateTest::is_password_saved() {
@@ -458,8 +523,9 @@ void SaveUpdatePasswordMessageDelegateTest::VerifyUkmMetrics(
     PasswordFormMetricsRecorder::BubbleDismissalReason
         expected_dismissal_reason,
     bool update_password) {
-  const auto& entries =
-      ukm_recorder.GetEntriesByName(ukm::builders::PasswordForm::kEntryName);
+  const std::vector<raw_ptr<const ukm::mojom::UkmEntry, VectorExperimental>>&
+      entries = ukm_recorder.GetEntriesByName(
+          ukm::builders::PasswordForm::kEntryName);
   EXPECT_EQ(1u, entries.size());
   for (const ukm::mojom::UkmEntry* entry : entries) {
     EXPECT_EQ(ukm_source_id_, entry->source_id);
@@ -490,7 +556,7 @@ void SaveUpdatePasswordMessageDelegateTest::VerifyUkmMetrics(
 // Tests that secondary menu icon is set for the save password message
 TEST_F(SaveUpdatePasswordMessageDelegateTest, CogButton_SavePassword) {
   SetPendingCredentials(kUsername, kPassword);
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/false,
                  /*update_password=*/false);
@@ -506,7 +572,7 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest, CogButton_SavePassword) {
 TEST_F(SaveUpdatePasswordMessageDelegateTest,
        CogButton_SingleCredUpdatePassword) {
   SetPendingCredentials(kUsername, kPassword);
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/false,
                  /*update_password=*/true);
@@ -522,7 +588,7 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
 TEST_F(SaveUpdatePasswordMessageDelegateTest,
        NoCogButton_MultipleCredUpdatePassword) {
   SetPendingCredentials(kUsername, kPassword);
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), two_forms_best_matches());
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/false,
                  /*update_password=*/true);
@@ -535,13 +601,13 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
 // Tests that the previous prompt gets dismissed when the new one is enqueued.
 TEST_F(SaveUpdatePasswordMessageDelegateTest, OnlyOnePromptAtATime) {
   SetPendingCredentials(kUsername, kPassword);
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
                  /*update_password=*/false);
 
   ExpectDismissMessageCall();
-  auto form_manager2 =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager2 =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   EnqueueMessage(std::move(form_manager2), /*user_signed_in=*/true,
                  /*update_password=*/false);
@@ -554,7 +620,7 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest, SaveOnActionClick) {
   base::HistogramTester histogram_tester;
   ukm::TestAutoSetUkmRecorder test_ukm_recorder;
 
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   EXPECT_CALL(*form_manager, Save());
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/false,
@@ -579,7 +645,7 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest, DontSaveOnDismiss) {
   base::HistogramTester histogram_tester;
   ukm::TestAutoSetUkmRecorder test_ukm_recorder;
 
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   EXPECT_CALL(*form_manager, Save()).Times(0);
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/false,
@@ -598,13 +664,307 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest, DontSaveOnDismiss) {
       password_manager::metrics_util::CLICKED_CANCEL, 1);
 }
 
+// Tests that the trusted vault key retrieval flow is started when the
+// user clicks the "Save" button, in case the Trusted Vault was locked.
+TEST_F(SaveUpdatePasswordMessageDelegateTest,
+       StartTrustedVaultKeyRetrievalFlowOnSavePassword) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      password_manager::features::kPasswordSaveInContextErrorResolution);
+  std::unique_ptr<password_manager::FakePasswordStoreBackend>
+      fake_account_backend =
+          std::make_unique<password_manager::FakePasswordStoreBackend>();
+  fake_account_backend->ReturnErrorOnRequest(
+      password_manager::PasswordStoreBackendError(
+          password_manager::PasswordStoreBackendErrorType::
+              kKeyRetrievalRequired));
+  scoped_refptr<password_manager::PasswordStore> account_store =
+      base::MakeRefCounted<password_manager::PasswordStore>(
+          std::move(fake_account_backend));
+  account_store->Init();
+  ON_CALL(*GetClient(), GetAccountPasswordStore())
+      .WillByDefault(Return(account_store.get()));
+
+  base::HistogramTester histogram_tester;
+  ukm::TestAutoSetUkmRecorder test_ukm_recorder;
+
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
+      CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
+  EnqueueMessage(std::move(form_manager), /*user_signed_in=*/false,
+                 /*update_password=*/false);
+  EXPECT_NE(nullptr, GetMessageWrapper());
+  EXPECT_CALL(*helper_bridge(),
+              StartTrustedVaultKeyRetrievalFlow(
+                  _, trusted_vault::TrustedVaultUserActionTriggerForUMA::
+                         kPasswordSavePrompt));
+  TriggerActionClick();
+  EXPECT_EQ(nullptr, GetMessageWrapper());
+}
+
+// Tests that the password is saved after trusted vault key is retrieved.
+TEST_F(SaveUpdatePasswordMessageDelegateTest,
+       SavePasswordAfterTrustedVaultKeyRetrieval) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      password_manager::features::kPasswordSaveInContextErrorResolution);
+
+  account_store_->ReturnErrorOnRequest(
+      password_manager::PasswordStoreBackendError(
+          password_manager::PasswordStoreBackendErrorType::
+              kKeyRetrievalRequired));
+
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
+      CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
+  MockPasswordFormManagerForUI* raw_form_manager = form_manager.get();
+  EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
+                 /*update_password=*/false);
+  EXPECT_NE(nullptr, GetMessageWrapper());
+  EXPECT_CALL(*helper_bridge(),
+              StartTrustedVaultKeyRetrievalFlow(
+                  _, trusted_vault::TrustedVaultUserActionTriggerForUMA::
+                         kPasswordSavePrompt));
+  TriggerActionClick();
+  EXPECT_EQ(nullptr, GetMessageWrapper());
+
+  EXPECT_FALSE(is_password_saved());
+
+  // Simulate that the trusted vault key was successfully retrieved.
+  account_store_->ReturnErrorOnRequest(std::nullopt);
+  base::RunLoop run_loop;
+  EXPECT_CALL(*raw_form_manager, Save()).WillOnce([&run_loop, this]() {
+    RecordPasswordSaved();
+    run_loop.Quit();
+  });
+  account_store_->NotifyAboutError();
+  run_loop.Run();
+}
+
+// Tests that the password is updated after trusted vault key is retrieved.
+TEST_F(SaveUpdatePasswordMessageDelegateTest,
+       UpdatePasswordAfterTrustedVaultKeyRetrieval) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      password_manager::features::kPasswordSaveInContextErrorResolution);
+
+  account_store_->ReturnErrorOnRequest(
+      password_manager::PasswordStoreBackendError(
+          password_manager::PasswordStoreBackendErrorType::
+              kKeyRetrievalRequired));
+
+  SetPendingCredentials(kUsername, kPassword);
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
+      CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
+  MockPasswordFormManagerForUI* raw_form_manager = form_manager.get();
+  EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
+                 /*update_password=*/true);
+  EXPECT_NE(nullptr, GetMessageWrapper());
+  EXPECT_CALL(*helper_bridge(),
+              StartTrustedVaultKeyRetrievalFlow(
+                  _, trusted_vault::TrustedVaultUserActionTriggerForUMA::
+                         kPasswordSavePrompt));
+  TriggerActionClick();
+  EXPECT_EQ(nullptr, GetMessageWrapper());
+
+  EXPECT_FALSE(is_password_saved());
+
+  // Simulate that the trusted vault key was successfully retrieved.
+  account_store_->ReturnErrorOnRequest(std::nullopt);
+  base::RunLoop run_loop;
+  EXPECT_CALL(*raw_form_manager, Save()).WillOnce([&run_loop, this]() {
+    RecordPasswordSaved();
+    run_loop.Quit();
+  });
+  account_store_->NotifyAboutError();
+  run_loop.Run();
+}
+
+// Tests that the password is not saved if the delegate is cleared (e.g., due
+// to navigation or tab destruction in Chrome) after the user initiated the
+// trusted vault unlock activity, but before it completed.
+TEST_F(SaveUpdatePasswordMessageDelegateTest,
+       NoSaveIfDelegateClearedWhileWaitingForVaultUnlock) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      password_manager::features::kPasswordSaveInContextErrorResolution);
+
+  account_store_->ReturnErrorOnRequest(
+      password_manager::PasswordStoreBackendError(
+          password_manager::PasswordStoreBackendErrorType::
+              kKeyRetrievalRequired));
+
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
+      CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
+  EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
+                 /*update_password=*/false);
+  EXPECT_NE(nullptr, GetMessageWrapper());
+  EXPECT_CALL(*helper_bridge(),
+              StartTrustedVaultKeyRetrievalFlow(
+                  _, trusted_vault::TrustedVaultUserActionTriggerForUMA::
+                         kPasswordSavePrompt));
+  TriggerActionClick();
+  EXPECT_EQ(nullptr, GetMessageWrapper());
+
+  EXPECT_FALSE(is_password_saved());
+
+  // Simulate lifecycle cleanup (e.g. user navigating away) while the vault
+  // unlock is in progress.
+  DismissSaveUpdatePasswordPrompt();
+
+  // Simulate that the trusted vault key was resolved *after* dismissal.
+  account_store_->ReturnErrorOnRequest(std::nullopt);
+  account_store_->NotifyAboutError();
+  base::RunLoop run_loop;
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, run_loop.QuitClosure());
+  run_loop.Run();
+
+  // Password should NOT be saved.
+  EXPECT_FALSE(is_password_saved());
+}
+
+// Tests that the password is not saved when a non-resolution error is
+// encountered.
+TEST_F(SaveUpdatePasswordMessageDelegateTest,
+       NonResolutionErrorDoesNotSavePassword) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      password_manager::features::kPasswordSaveInContextErrorResolution);
+
+  account_store_->ReturnErrorOnRequest(
+      password_manager::PasswordStoreBackendError(
+          password_manager::PasswordStoreBackendErrorType::
+              kKeyRetrievalRequired));
+
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
+      CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
+  EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
+                 /*update_password=*/false);
+  EXPECT_NE(nullptr, GetMessageWrapper());
+  EXPECT_CALL(*helper_bridge(),
+              StartTrustedVaultKeyRetrievalFlow(
+                  _, trusted_vault::TrustedVaultUserActionTriggerForUMA::
+                         kPasswordSavePrompt));
+  TriggerActionClick();
+  EXPECT_EQ(nullptr, GetMessageWrapper());
+
+  EXPECT_FALSE(is_password_saved());
+
+  // Simulate a different error occurring instead of resolution.
+  account_store_->SetError(password_manager::ActionableError::kSignInNeeded);
+  account_store_->NotifyAboutError();
+  base::RunLoop run_loop;
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, run_loop.QuitClosure());
+  run_loop.Run();
+
+  // Password should NOT be saved.
+  EXPECT_FALSE(is_password_saved());
+}
+
+// Tests that the password is saved after the trusted vault key is retrieved
+// when the user accepts the password edit dialog.
+TEST_F(SaveUpdatePasswordMessageDelegateTest,
+       DialogSaveAfterTrustedVaultKeyRetrieval) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      password_manager::features::kPasswordSaveInContextErrorResolution);
+
+  account_store_->ReturnErrorOnRequest(
+      password_manager::PasswordStoreBackendError(
+          password_manager::PasswordStoreBackendErrorType::
+              kKeyRetrievalRequired));
+
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
+      CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
+  MockPasswordFormManagerForUI* raw_form_manager = form_manager.get();
+  MockPasswordEditDialog* mock_dialog = PreparePasswordEditDialog();
+
+  EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
+                 /*update_password=*/false);
+  EXPECT_NE(nullptr, GetMessageWrapper());
+  EXPECT_CALL(*mock_dialog, ShowPasswordEditDialog);
+  TriggerPasswordEditDialog(/*update_password=*/false);
+  EXPECT_EQ(nullptr, GetMessageWrapper());
+
+  EXPECT_CALL(*raw_form_manager, Save()).Times(0);
+  EXPECT_CALL(*helper_bridge(),
+              StartTrustedVaultKeyRetrievalFlow(
+                  _, trusted_vault::TrustedVaultUserActionTriggerForUMA::
+                         kPasswordSavePrompt));
+
+  TriggerDialogAcceptedCallback(/*username=*/kUsername,
+                                /*password=*/kPassword);
+  TriggerDialogDismissedCallback(/*dialog_accepted=*/true);
+
+  EXPECT_FALSE(is_password_saved());
+
+  // Simulate that the trusted vault key was successfully retrieved.
+  base::RunLoop run_loop;
+  EXPECT_CALL(*raw_form_manager, Save()).WillOnce([&run_loop, this]() {
+    RecordPasswordSaved();
+    run_loop.Quit();
+  });
+  account_store_->ReturnErrorOnRequest(std::nullopt);
+  account_store_->NotifyAboutError();
+  run_loop.Run();
+}
+
+// Tests that the password is updated after the trusted vault key is retrieved
+// when the user accepts the password edit dialog.
+TEST_F(SaveUpdatePasswordMessageDelegateTest,
+       DialogUpdateAfterTrustedVaultKeyRetrieval) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      password_manager::features::kPasswordSaveInContextErrorResolution);
+
+  account_store_->ReturnErrorOnRequest(
+      password_manager::PasswordStoreBackendError(
+          password_manager::PasswordStoreBackendErrorType::
+              kKeyRetrievalRequired));
+
+  SetPendingCredentials(kUsername, kPassword);
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
+      CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
+  MockPasswordFormManagerForUI* raw_form_manager = form_manager.get();
+  MockPasswordEditDialog* mock_dialog = PreparePasswordEditDialog();
+
+  EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
+                 /*update_password=*/true);
+  EXPECT_NE(nullptr, GetMessageWrapper());
+  EXPECT_CALL(*mock_dialog, ShowPasswordEditDialog);
+  TriggerPasswordEditDialog(/*update_password=*/true);
+  EXPECT_EQ(nullptr, GetMessageWrapper());
+
+  EXPECT_CALL(*raw_form_manager, Save()).Times(0);
+  EXPECT_CALL(*helper_bridge(),
+              StartTrustedVaultKeyRetrievalFlow(
+                  _, trusted_vault::TrustedVaultUserActionTriggerForUMA::
+                         kPasswordSavePrompt));
+
+  TriggerDialogAcceptedCallback(/*username=*/kUsername,
+                                /*password=*/kPassword);
+  TriggerDialogDismissedCallback(/*dialog_accepted=*/true);
+
+  EXPECT_FALSE(is_password_saved());
+
+  // Simulate that the trusted vault key was successfully retrieved.
+  base::RunLoop run_loop;
+  EXPECT_CALL(*raw_form_manager, Save()).WillOnce([&run_loop, this]() {
+    RecordPasswordSaved();
+    run_loop.Quit();
+  });
+  account_store_->ReturnErrorOnRequest(std::nullopt);
+  account_store_->NotifyAboutError();
+  run_loop.Run();
+}
+
 // Tests that password form is not saved and metrics recorded correctly when the
 // message is autodismissed.
 TEST_F(SaveUpdatePasswordMessageDelegateTest, MetricOnAutodismissTimer) {
   base::HistogramTester histogram_tester;
   ukm::TestAutoSetUkmRecorder test_ukm_recorder;
 
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   EXPECT_CALL(*form_manager, Save()).Times(0);
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/false,
@@ -631,7 +991,7 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest, UpdatePasswordWithSingleForm) {
   SetPendingCredentials(kUsername, kPassword);
   std::vector<PasswordForm> single_form_best_matches = {
       CreatePasswordForm(kUsername, kPassword)};
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), single_form_best_matches);
   EXPECT_CALL(*form_manager, Save());
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
@@ -660,7 +1020,7 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
   base::HistogramTester histogram_tester;
   ukm::TestAutoSetUkmRecorder test_ukm_recorder;
 
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), two_forms_best_matches());
   EXPECT_CALL(*form_manager, Save());
   MockPasswordEditDialog* mock_dialog = PreparePasswordEditDialog();
@@ -693,9 +1053,9 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
   base::HistogramTester histogram_tester;
   ukm::TestAutoSetUkmRecorder test_ukm_recorder;
 
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
-  MockPasswordFormManagerForUI* form_manager_pointer = form_manager.get();
+  MockPasswordFormManagerForUI* raw_form_manager = form_manager.get();
   MockPasswordEditDialog* mock_dialog = PreparePasswordEditDialog();
 
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/false,
@@ -705,7 +1065,7 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
   TriggerPasswordEditDialog(/*update_password=*/false);
 
   EXPECT_EQ(nullptr, GetMessageWrapper());
-  EXPECT_CALL(*form_manager_pointer, Save());
+  EXPECT_CALL(*raw_form_manager, Save());
   TriggerDialogAcceptedCallback(/*username=*/kUsername,
                                 /*password=*/kPassword);
   // The real password edit dialog triggers dialog dismissed delegate inside.
@@ -730,14 +1090,14 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
   base::HistogramTester histogram_tester;
   ukm::TestAutoSetUkmRecorder test_ukm_recorder;
 
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
-  MockPasswordFormManagerForUI* form_manager_pointer = form_manager.get();
+  MockPasswordFormManagerForUI* raw_form_manager = form_manager.get();
 
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/false,
                  /*update_password=*/false);
   EXPECT_NE(nullptr, GetMessageWrapper());
-  EXPECT_CALL(*form_manager_pointer, Blocklist());
+  EXPECT_CALL(*raw_form_manager, Blocklist());
   TriggerNeverSaveMenuItem();
 
   CommitPasswordFormMetrics();
@@ -760,9 +1120,9 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
   base::HistogramTester histogram_tester;
   ukm::TestAutoSetUkmRecorder test_ukm_recorder;
 
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
-  MockPasswordFormManagerForUI* form_manager_pointer = form_manager.get();
+  MockPasswordFormManagerForUI* raw_form_manager = form_manager.get();
   MockPasswordEditDialog* mock_dialog = PreparePasswordEditDialog();
 
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
@@ -772,7 +1132,7 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
   TriggerPasswordEditDialog(/*update_password=*/true);
 
   EXPECT_EQ(nullptr, GetMessageWrapper());
-  EXPECT_CALL(*form_manager_pointer, Save());
+  EXPECT_CALL(*raw_form_manager, Save());
   TriggerDialogAcceptedCallback(/*username=*/kUsername,
                                 /*password=*/kPassword);
 
@@ -801,9 +1161,9 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
   base::HistogramTester histogram_tester;
   ukm::TestAutoSetUkmRecorder test_ukm_recorder;
 
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
-  MockPasswordFormManagerForUI* form_manager_pointer = form_manager.get();
+  MockPasswordFormManagerForUI* raw_form_manager = form_manager.get();
   MockPasswordEditDialog* mock_dialog = PreparePasswordEditDialog();
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/false,
                  /*update_password=*/false);
@@ -811,7 +1171,7 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
   EXPECT_CALL(*mock_dialog, ShowPasswordEditDialog);
   TriggerPasswordEditDialog(/*update_password=*/false);
   EXPECT_EQ(nullptr, GetMessageWrapper());
-  EXPECT_CALL(*form_manager_pointer, Save()).Times(0);
+  EXPECT_CALL(*raw_form_manager, Save()).Times(0);
   TriggerDialogDismissedCallback(/*dialog_accepted=*/false);
 
   CommitPasswordFormMetrics();
@@ -834,10 +1194,10 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
       ui::WindowAndroid::CreateForTesting();
   window.get()->get()->AddChild(web_contents()->GetNativeView());
 
-  test_bridge()->SetShouldShowDeviceLockUi(true);
+  test_device_lock_bridge()->SetShouldShowDeviceLockUi(true);
 
   // Launch save password UI and click the save button.
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   EXPECT_CALL(*form_manager, Save());
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/false,
@@ -846,12 +1206,12 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
   TriggerActionClick();
 
   // Verify that device lock UI is shown but password is not saved yet.
-  EXPECT_EQ(1, test_bridge()->device_lock_ui_shown_count());
+  EXPECT_EQ(1, test_device_lock_bridge()->device_lock_ui_shown_count());
   EXPECT_EQ(false, is_password_saved());
 
   // Verify that password is saved after receiving the callback that device lock
   // was set.
-  test_bridge()->SimulateDeviceLockComplete(true);
+  test_device_lock_bridge()->SimulateDeviceLockComplete(true);
   EXPECT_EQ(true, is_password_saved());
 }
 
@@ -864,11 +1224,10 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
   std::unique_ptr<ui::WindowAndroid::ScopedWindowAndroidForTesting> window =
       ui::WindowAndroid::CreateForTesting();
   window.get()->get()->AddChild(web_contents()->GetNativeView());
-
-  test_bridge()->SetShouldShowDeviceLockUi(true);
+  test_device_lock_bridge()->SetShouldShowDeviceLockUi(true);
 
   // Launch save password UI and click the save button.
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   EXPECT_CALL(*form_manager, Save());
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/false,
@@ -877,12 +1236,12 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
   TriggerActionClick();
 
   // Verify that device lock UI is shown but password is not saved yet.
-  EXPECT_EQ(1, test_bridge()->device_lock_ui_shown_count());
+  EXPECT_EQ(1, test_device_lock_bridge()->device_lock_ui_shown_count());
   EXPECT_EQ(false, is_password_saved());
 
   // Verify that password is updated after receiving the callback that device
   // lock was set.
-  test_bridge()->SimulateDeviceLockComplete(true);
+  test_device_lock_bridge()->SimulateDeviceLockComplete(true);
   EXPECT_EQ(true, is_password_saved());
 }
 
@@ -896,10 +1255,10 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
       ui::WindowAndroid::CreateForTesting();
   window.get()->get()->AddChild(web_contents()->GetNativeView());
 
-  test_bridge()->SetShouldShowDeviceLockUi(true);
+  test_device_lock_bridge()->SetShouldShowDeviceLockUi(true);
 
   // Launch save password UI and click the save button.
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   EXPECT_CALL(*form_manager, Save()).Times(0);
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/false,
@@ -908,26 +1267,246 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
   TriggerActionClick();
 
   // Verify that device lock UI is shown.
-  EXPECT_EQ(1, test_bridge()->device_lock_ui_shown_count());
+  EXPECT_EQ(1, test_device_lock_bridge()->device_lock_ui_shown_count());
 
   // Verify that password is not saved after device lock was not set.
-  test_bridge()->SimulateDeviceLockComplete(false);
+  test_device_lock_bridge()->SimulateDeviceLockComplete(false);
 }
 
 // Tests that password is not saved if device lock UI needs to be shown but is
 // not.
 TEST_F(SaveUpdatePasswordMessageDelegateTest,
        SavePassword_DeviceLockUiNotShown) {
-  test_bridge()->SetShouldShowDeviceLockUi(true);
+  test_device_lock_bridge()->SetShouldShowDeviceLockUi(true);
 
   // Launch save password UI and click the save button.
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   EXPECT_CALL(*form_manager, Save()).Times(0);
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/false,
                  /*update_password=*/false);
   EXPECT_NE(nullptr, GetMessageWrapper());
   TriggerActionClick(messages::DismissReason::UNKNOWN);
+}
+
+// Tests that the password is not saved and trusted vault key retrieval flow
+// starts when trusted vault key is needed, but device lock is not, during save
+// password.
+TEST_F(SaveUpdatePasswordMessageDelegateTest,
+       SavePassword_TrustedVaultKeyNeeded_DeviceLockNotNeeded) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      password_manager::features::kPasswordSaveInContextErrorResolution);
+
+  account_store_->SetError(
+      password_manager::ActionableError::kTrustedVaultKeyNeeded);
+  test_device_lock_bridge()->SetShouldShowDeviceLockUi(false);
+
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
+      CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
+  EXPECT_CALL(*form_manager, Save()).Times(0);
+  EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
+                 /*update_password=*/false);
+  EXPECT_NE(nullptr, GetMessageWrapper());
+  EXPECT_CALL(
+      *helper_bridge(),
+      StartTrustedVaultKeyRetrievalFlow(
+          web_contents(), trusted_vault::TrustedVaultUserActionTriggerForUMA::
+                              kPasswordSavePrompt));
+
+  TriggerActionClick();
+
+  EXPECT_FALSE(is_password_saved());
+}
+
+// Tests that the password is not saved and trusted vault key retrieval flow
+//  starts when trusted vault key is needed, but device lock is not, during
+//  update
+// password.
+TEST_F(SaveUpdatePasswordMessageDelegateTest,
+       UpdatePassword_TrustedVaultKeyNeeded_DeviceLockNotNeeded) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      password_manager::features::kPasswordSaveInContextErrorResolution);
+  account_store_->SetError(
+      password_manager::ActionableError::kTrustedVaultKeyNeeded);
+  test_device_lock_bridge()->SetShouldShowDeviceLockUi(false);
+
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
+      CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
+  EXPECT_CALL(*form_manager, Save()).Times(0);
+  EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
+                 /*update_password=*/true);
+  EXPECT_NE(nullptr, GetMessageWrapper());
+  EXPECT_CALL(
+      *helper_bridge(),
+      StartTrustedVaultKeyRetrievalFlow(
+          web_contents(), trusted_vault::TrustedVaultUserActionTriggerForUMA::
+                              kPasswordSavePrompt));
+
+  TriggerActionClick();
+
+  EXPECT_FALSE(is_password_saved());
+}
+
+// Tests helper behaviour when device lock is set successfully, but a trusted
+// vault key is also needed during save password: device lock UI is shown and
+// trusted vault key retrieval flow is started.
+TEST_F(SaveUpdatePasswordMessageDelegateTest,
+       SavePassword_DeviceLockAndTrustedVaultKeyNeeded_DeviceLockSet) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      password_manager::features::kPasswordSaveInContextErrorResolution);
+
+  std::unique_ptr<ui::WindowAndroid::ScopedWindowAndroidForTesting> window =
+      ui::WindowAndroid::CreateForTesting();
+  window.get()->get()->AddChild(web_contents()->GetNativeView());
+
+  account_store_->SetError(
+      password_manager::ActionableError::kTrustedVaultKeyNeeded);
+  // TODO(crbug.com/483652585): Call the callback from the test bridge
+  // asynchronously so the behaviour matches the state in production.
+  test_device_lock_bridge()->SetShouldShowDeviceLockUi(true);
+
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
+      CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
+  EXPECT_CALL(*form_manager, Save()).Times(0);
+  EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
+                 /*update_password=*/false);
+  EXPECT_NE(nullptr, GetMessageWrapper());
+  TriggerActionClick();
+
+  EXPECT_EQ(1, test_device_lock_bridge()->device_lock_ui_shown_count());
+  EXPECT_FALSE(is_password_saved());
+  EXPECT_CALL(
+      *helper_bridge(),
+      StartTrustedVaultKeyRetrievalFlow(
+          web_contents(), trusted_vault::TrustedVaultUserActionTriggerForUMA::
+                              kPasswordSavePrompt));
+
+  test_device_lock_bridge()->SimulateDeviceLockComplete(true);
+
+  EXPECT_FALSE(is_password_saved());
+}
+
+// Tests helper behaviour when device lock is set successfully, but a trusted
+// vault key is also needed during update password: device lock UI is shown and
+// trusted vault key retrieval flow is started.
+TEST_F(SaveUpdatePasswordMessageDelegateTest,
+       UpdatePassword_DeviceLockAndTrustedVaultKeyNeeded_DeviceLockSet) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      password_manager::features::kPasswordSaveInContextErrorResolution);
+
+  std::unique_ptr<ui::WindowAndroid::ScopedWindowAndroidForTesting> window =
+      ui::WindowAndroid::CreateForTesting();
+  window.get()->get()->AddChild(web_contents()->GetNativeView());
+
+  account_store_->SetError(
+      password_manager::ActionableError::kTrustedVaultKeyNeeded);
+  test_device_lock_bridge()->SetShouldShowDeviceLockUi(true);
+
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
+      CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
+  EXPECT_CALL(*form_manager, Save()).Times(0);
+  EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
+                 /*update_password=*/true);
+  EXPECT_NE(nullptr, GetMessageWrapper());
+  TriggerActionClick();
+
+  EXPECT_EQ(1, test_device_lock_bridge()->device_lock_ui_shown_count());
+  EXPECT_FALSE(is_password_saved());
+  EXPECT_CALL(
+      *helper_bridge(),
+      StartTrustedVaultKeyRetrievalFlow(
+          web_contents(), trusted_vault::TrustedVaultUserActionTriggerForUMA::
+                              kPasswordSavePrompt));
+
+  test_device_lock_bridge()->SimulateDeviceLockComplete(true);
+
+  EXPECT_FALSE(is_password_saved());
+}
+
+// Tests helper behaviour when device lock is not set, and a trusted vault
+// key is also needed during save password: device lock UI is shown and trusted
+// vault key retrieval flow is not started because the device lock is not set
+// up.
+TEST_F(SaveUpdatePasswordMessageDelegateTest,
+       SavePassword_DeviceLockAndTrustedVaultKeyNeeded_DeviceLockNotSet) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      password_manager::features::kPasswordSaveInContextErrorResolution);
+
+  std::unique_ptr<ui::WindowAndroid::ScopedWindowAndroidForTesting> window =
+      ui::WindowAndroid::CreateForTesting();
+  window.get()->get()->AddChild(web_contents()->GetNativeView());
+
+  account_store_->SetError(
+      password_manager::ActionableError::kTrustedVaultKeyNeeded);
+  test_device_lock_bridge()->SetShouldShowDeviceLockUi(true);
+
+  EXPECT_CALL(
+      *helper_bridge(),
+      StartTrustedVaultKeyRetrievalFlow(
+          web_contents(), trusted_vault::TrustedVaultUserActionTriggerForUMA::
+                              kPasswordSavePrompt))
+      .Times(0);
+
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
+      CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
+  EXPECT_CALL(*form_manager, Save()).Times(0);
+  EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
+                 /*update_password=*/false);
+  EXPECT_NE(nullptr, GetMessageWrapper());
+  TriggerActionClick();
+
+  EXPECT_EQ(1, test_device_lock_bridge()->device_lock_ui_shown_count());
+  EXPECT_FALSE(is_password_saved());
+
+  test_device_lock_bridge()->SimulateDeviceLockComplete(false);
+
+  EXPECT_FALSE(is_password_saved());
+}
+
+// Tests helper behaviour when device lock is not set, and a trusted vault
+// key is also needed during update password: device lock UI is shown and
+// trusted vault key retrieval flow is not started because the device lock is
+// not set up.
+TEST_F(SaveUpdatePasswordMessageDelegateTest,
+       UpdatePassword_DeviceLockAndTrustedVaultKeyNeeded_DeviceLockNotSet) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      password_manager::features::kPasswordSaveInContextErrorResolution);
+
+  std::unique_ptr<ui::WindowAndroid::ScopedWindowAndroidForTesting> window =
+      ui::WindowAndroid::CreateForTesting();
+  window.get()->get()->AddChild(web_contents()->GetNativeView());
+
+  account_store_->SetError(
+      password_manager::ActionableError::kTrustedVaultKeyNeeded);
+  test_device_lock_bridge()->SetShouldShowDeviceLockUi(true);
+
+  EXPECT_CALL(
+      *helper_bridge(),
+      StartTrustedVaultKeyRetrievalFlow(
+          web_contents(), trusted_vault::TrustedVaultUserActionTriggerForUMA::
+                              kPasswordSavePrompt))
+      .Times(0);
+
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
+      CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
+  EXPECT_CALL(*form_manager, Save()).Times(0);
+  EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
+                 /*update_password=*/true);
+  EXPECT_NE(nullptr, GetMessageWrapper());
+  TriggerActionClick();
+
+  EXPECT_EQ(1, test_device_lock_bridge()->device_lock_ui_shown_count());
+  EXPECT_FALSE(is_password_saved());
+
+  test_device_lock_bridge()->SimulateDeviceLockComplete(false);
+
+  EXPECT_FALSE(is_password_saved());
 }
 
 // Tests parameterized with different feature states
@@ -937,7 +1516,7 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
 TEST_F(SaveUpdatePasswordMessageDelegateTest,
        MessagePropertyValues_SavePassword) {
   SetPendingCredentials(kUsername, kPassword);
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   const bool is_signed_in = false;
   const bool is_update = false;
@@ -963,7 +1542,7 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
 TEST_F(SaveUpdatePasswordMessageDelegateTest,
        MessagePropertyValues_UpdatePassword) {
   SetPendingCredentials(kUsername, kPassword, /*is_account_store=*/false);
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   const bool is_signed_in = false;
   const bool is_update = true;
@@ -990,7 +1569,7 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
 TEST_F(SaveUpdatePasswordMessageDelegateTest,
        SignedInDescription_SavePassword) {
   SetPendingCredentials(kUsername, kPassword, /*is_account_store=*/true);
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   const bool is_signed_in = true;
   const bool is_update = false;
@@ -1009,17 +1588,19 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
 TEST_F(SaveUpdatePasswordMessageDelegateTest,
        SignedInDescription_SavePasswordNonDisplayableEmail) {
   SetPendingCredentials(kUsername, kPassword, /*is_account_store=*/true);
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   const bool is_signed_in = true;
   const bool is_update = false;
 
-  std::optional<AccountInfo> account_info;
-  account_info = AccountInfo();
-  account_info.value().email = kAccountEmail;
-  account_info.value().full_name = kAccountFullName;
-  AccountCapabilitiesTestMutator mutator(&account_info.value().capabilities);
+  AccountCapabilities account_capabilities;
+  AccountCapabilitiesTestMutator mutator(&account_capabilities);
   mutator.set_can_have_email_address_displayed(false);
+  std::optional<AccountInfo> account_info =
+      AccountInfo::Builder(GaiaId("test_gaia"), kAccountEmail)
+          .SetFullName(kAccountFullName)
+          .UpdateAccountCapabilitiesWith(account_capabilities)
+          .Build();
 
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/is_signed_in,
                  /*update_password=*/is_update, account_info);
@@ -1035,7 +1616,7 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
 TEST_F(SaveUpdatePasswordMessageDelegateTest,
        SignedInDescription_UpdatePassword) {
   SetPendingCredentials(kUsername, kPassword, /*is_account_store=*/true);
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   const bool is_signed_in = true;
   const bool is_update = true;
@@ -1056,7 +1637,7 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
   SetPendingCredentials(kUsername, kPassword, /*is_account_store=*/true);
   std::vector<PasswordForm> single_form_best_matches = {
       CreatePasswordForm(kUsername, kPassword, true)};
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), single_form_best_matches);
   const bool is_signed_in = true;
   const bool is_update = true;
@@ -1077,7 +1658,7 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
   SetPendingCredentials(kUsername, kPassword, /*is_account_store=*/false);
   std::vector<PasswordForm> single_form_best_matches = {
       CreatePasswordForm(kUsername, kPassword, false)};
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), single_form_best_matches);
   const bool is_update = true;
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
@@ -1096,17 +1677,19 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
 TEST_F(SaveUpdatePasswordMessageDelegateTest,
        SignedInDescription_UpdatePasswordNonDisplayableEmail) {
   SetPendingCredentials(kUsername, kPassword, /*is_account_store=*/true);
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   const bool is_signed_in = true;
   const bool is_update = true;
 
-  std::optional<AccountInfo> account_info;
-  account_info = AccountInfo();
-  account_info.value().email = kAccountEmail;
-  account_info.value().full_name = kAccountFullName;
-  AccountCapabilitiesTestMutator mutator(&account_info.value().capabilities);
+  AccountCapabilities account_capabilities;
+  AccountCapabilitiesTestMutator mutator(&account_capabilities);
   mutator.set_can_have_email_address_displayed(false);
+  std::optional<AccountInfo> account_info =
+      AccountInfo::Builder(GaiaId("test_gaia"), kAccountEmail)
+          .SetFullName(kAccountFullName)
+          .UpdateAccountCapabilitiesWith(account_capabilities)
+          .Build();
 
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/is_signed_in,
                  /*update_password=*/is_update, account_info);
@@ -1116,18 +1699,6 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
   DismissMessage(messages::DismissReason::UNKNOWN);
 }
 
-TEST_F(SaveUpdatePasswordMessageDelegateTest, RecordsPromptShownWhenEnqueuing) {
-  base::HistogramTester histogram_tester;
-  SetPendingCredentials(kUsername, kPassword, /*is_account_store=*/true);
-  auto form_manager =
-      CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
-  EnqueueMessage(std::move(form_manager), /*user_signed_in=*/false,
-                 /*update_password=*/false);
-  histogram_tester.ExpectUniqueSample(
-      "PasswordManager.FormSubmissionsVsSavePrompts",
-      password_manager::metrics_util::SaveFlowStep::kSavePromptShown, 1);
-  DismissMessage(messages::DismissReason::UNKNOWN);
-}
 
 // Tests `IsUsingAccountStorage` returns false if the credential being
 // updated comes from the local storage, despite the user being signed in,
@@ -1135,7 +1706,7 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest, RecordsPromptShownWhenEnqueuing) {
 TEST_F(SaveUpdatePasswordMessageDelegateTest,
        LocalCredentialNotUsingAccountStorage) {
   SetPendingCredentials(kUsername, kPassword, /*is_account_store=*/false);
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
                  /*update_password=*/true);
@@ -1151,7 +1722,7 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
 // the account store.
 TEST_F(SaveUpdatePasswordMessageDelegateTest, CredentialUsingAccountStorage) {
   SetPendingCredentials(kUsername, kPassword, /*is_account_store=*/true);
-  auto form_manager =
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(GURL(kDefaultUrl), empty_best_matches());
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
                  /*update_password=*/true);
@@ -1175,7 +1746,8 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
   best_matches[0].SetPasswordBackupNote(backup_password);
   best_matches[0].type =
       password_manager::PasswordForm::Type::kChangeSubmission;
-  auto form_manager = CreateFormManager(GURL(kDefaultUrl), best_matches);
+  std::unique_ptr<MockPasswordFormManagerForUI> form_manager =
+      CreateFormManager(GURL(kDefaultUrl), best_matches);
   EXPECT_CALL(*form_manager, Save());
   EnqueueMessage(std::move(form_manager), /*user_signed_in=*/true,
                  /*update_password=*/true);
@@ -1189,8 +1761,9 @@ TEST_F(SaveUpdatePasswordMessageDelegateTest,
       password_manager::metrics_util::PasswordChangeRecoveryFlowState::
           kPrimaryPasswordUpdated,
       1);
-  const auto& entries = test_ukm_recorder.GetEntriesByName(
-      ukm::builders::PasswordManager_ChangeRecovery::kEntryName);
+  const std::vector<raw_ptr<const ukm::mojom::UkmEntry, VectorExperimental>>&
+      entries = test_ukm_recorder.GetEntriesByName(
+          ukm::builders::PasswordManager_ChangeRecovery::kEntryName);
   test_ukm_recorder.ExpectEntryMetric(
       entries[0],
       ukm::builders::PasswordManager_ChangeRecovery::

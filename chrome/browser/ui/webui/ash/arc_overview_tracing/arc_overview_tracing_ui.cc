@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 
+#include "ash/constants/webui_url_constants.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/thread_pool.h"
 #include "base/values.h"
@@ -17,12 +18,12 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/browser_resources.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
+#include "content/public/common/url_constants.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "ui/aura/window.h"
 #include "ui/base/webui/web_ui_util.h"
@@ -42,7 +43,7 @@ constexpr char kJavascriptDomain[] = "cr.ArcOverviewTracing.";
 void CreateAndAddOverviewDataSource(Profile* profile) {
   content::WebUIDataSource* const source =
       content::WebUIDataSource::CreateAndAdd(
-          profile, chrome::kChromeUIArcOverviewTracingHost);
+          profile, ash::kChromeUIArcOverviewTracingHost);
   source->UseStringsJs();
   source->SetDefaultResource(IDR_ARC_OVERVIEW_TRACING_HTML);
   source->AddResourcePath(kArcOverviewTracingJsPath,
@@ -55,7 +56,7 @@ void CreateAndAddOverviewDataSource(Profile* profile) {
       network::mojom::CSPDirectiveName::ScriptSrc,
       "script-src chrome://resources 'self';");
 
-  base::Value::Dict localized_strings;
+  base::DictValue localized_strings;
   const std::string& app_locale = g_browser_process->GetApplicationLocale();
   webui::SetLoadTimeDataDefaults(app_locale, &localized_strings);
   source->AddLocalizedStrings(localized_strings);
@@ -71,7 +72,7 @@ std::unique_ptr<Result> LoadGraphicsModel(const std::string& json_text) {
                                     "Failed to load tracing model");
   }
 
-  base::Value::Dict model = graphics_model.Serialize();
+  base::DictValue model = graphics_model.Serialize();
   return std::make_unique<Result>(base::Value(std::move(model)),
                                   base::FilePath(), "Tracing model is loaded");
 }
@@ -132,7 +133,7 @@ class Handler : public content::WebUIMessageHandler, public ui::EventHandler {
   }
 
  private:
-  void HandleLoadFromText(const base::Value::List& args) {
+  void HandleLoadFromText(const base::ListValue& args) {
     DCHECK_EQ(1U, args.size());
     if (!args[0].is_string()) {
       LOG(ERROR) << "Invalid input";
@@ -193,7 +194,7 @@ class Handler : public content::WebUIMessageHandler, public ui::EventHandler {
     }
   }
 
-  void HandleSetMaxTime(const base::Value::List& args) {
+  void HandleSetMaxTime(const base::ListValue& args) {
     if (args.size() != 1) {
       LOG(ERROR) << "Expect 1 numeric arg";
       return;
@@ -219,7 +220,7 @@ class Handler : public content::WebUIMessageHandler, public ui::EventHandler {
 
 ArcOverviewTracingUIConfig::ArcOverviewTracingUIConfig()
     : DefaultWebUIConfig(content::kChromeUIScheme,
-                         chrome::kChromeUIArcOverviewTracingHost) {}
+                         ash::kChromeUIArcOverviewTracingHost) {}
 
 bool ArcOverviewTracingUIConfig::IsWebUIEnabled(
     content::BrowserContext* browser_context) {

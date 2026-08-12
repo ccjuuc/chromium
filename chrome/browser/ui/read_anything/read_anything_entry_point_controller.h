@@ -7,8 +7,11 @@
 
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/read_anything/read_anything_enums.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/user_education/common/feature_promo/feature_promo_result.h"
 #include "ui/actions/actions.h"
+
+class ReadAnythingController;
 
 namespace read_anything {
 
@@ -22,8 +25,13 @@ class ReadAnythingEntryPointController {
   ~ReadAnythingEntryPointController();
 
   // Toggles Reading Mode on or off.
+  // This and other methods below can handle null `bwi`.
   static void InvokePageAction(BrowserWindowInterface* bwi,
                                const actions::ActionInvocationContext& context);
+
+  // Returns whether Reading Mode is currently showing. This handles both
+  // Immersive and Side Panel reading mode.
+  static bool IsUIShowing(BrowserWindowInterface* bwi);
 
   // Shows Reading Mode.
   static void ShowUI(BrowserWindowInterface* bwi,
@@ -31,12 +39,9 @@ class ReadAnythingEntryPointController {
 
   // Shows or hides the omnibox entry point and the IPH for it.
   // show_promo_callback is called with the result of whether the IPH was shown.
-  // TODO(crbug.com/447418049): Ensure immersive reading mode shows and hides
-  // the omnibox entry point too, and use the callback here, or refactor such
-  // that immersive and side panel share the same logic.
   static void UpdatePageActionVisibility(
       bool should_show_page_action,
-      BrowserWindowInterface* bwi,
+      tabs::TabInterface* tab,
       base::OnceCallback<void(user_education::FeaturePromoResult promo_result)>
           show_promo_callback = {});
 
@@ -44,9 +49,35 @@ class ReadAnythingEntryPointController {
   // user.
   static void OnPageActionIgnored(BrowserWindowInterface* bwi);
 
- private:
+  // Does the necessary setup to get the signal from the optimization guide on
+  // whether the current page is a good candidate for reading mode. This must be
+  // called before CheckIfShouldSuggestReadingMode.
+  static void RegisterForSuggestReadingMode(Profile* profile);
+
+  // Checks whether to suggest reading mode to the user on the current page and
+  // asynchronously returns the result via `result_callback`. This is
+  // asynchronous because it runs some heuristics to determine if the page is a
+  // good candidate for reading mode.
+  static void CheckIfShouldSuggestReadingMode(
+      BrowserWindowInterface* bwi,
+      base::OnceCallback<void(bool)> result_callback);
+
+  static base::AutoReset<size_t> SetMinPdfTextLengthForTesting(size_t length);
+
+  static int CheckCountForTesting();
+  static void ResetCheckCountForTesting();
+
+  // Toggles Reading Mode between shown and hidden. ToggleUI will close Reading
+  // Mode if it is already open. Skips ActionInvocationContext processing and
+  // receives a ReadAnythingOpenTrigger directly.
   static void ToggleUI(BrowserWindowInterface* bwi,
                        ReadAnythingOpenTrigger open_trigger);
+
+ private:
+  // Returns false if the reading mode suggestion should be hidden immediately
+  // for the current page. This check uses very basic information about the
+  // browser and checks for any explicitly blocked sites.
+  static bool CheckIfShouldSuggestReadingModeNaive(BrowserWindowInterface* bwi);
 };
 
 }  // namespace read_anything

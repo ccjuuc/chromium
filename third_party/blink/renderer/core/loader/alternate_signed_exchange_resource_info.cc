@@ -45,7 +45,7 @@ void AddAlternateUrlIfValid(
     HashMap<AlternateSignedExchangeMachingKey, KURL>* alternate_urls) {
   if (!header.Valid() || header.Url().empty() || !header.Anchor().has_value() ||
       header.Anchor()->empty() ||
-      !EqualIgnoringASCIICase(header.Rel(), kAlternate) ||
+      !EqualIgnoringAsciiCase(header.Rel(), kAlternate) ||
       header.MimeType() != kSignedExchangeMimeType) {
     return;
   }
@@ -64,7 +64,7 @@ CreateEntryForLinkHeaderIfValid(
     const HashMap<AlternateSignedExchangeMachingKey, KURL>& alternate_urls) {
   if (!header.Valid() || header.Url().empty() ||
       header.HeaderIntegrity().empty() ||
-      !EqualIgnoringASCIICase(header.Rel(), kAllowedAltSxg)) {
+      !EqualIgnoringAsciiCase(header.Rel(), kAllowedAltSxg)) {
     return nullptr;
   }
   const KURL anchor_url(header.Url());
@@ -176,7 +176,9 @@ AlternateSignedExchangeResourceInfo::FindMatchingEntry(
       matcher.FindBestMatchingVariantKey(variants, variant_keys_list);
   if (variant_keys_list_it == variant_keys_list.end())
     return nullptr;
-  return entries[variant_keys_list_it - variant_keys_list.begin()].get();
+  return entries[CheckedDistance(variant_keys_list.cbegin(),
+                                 variant_keys_list_it)]
+      .get();
 }
 
 }  // namespace blink

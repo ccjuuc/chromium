@@ -92,12 +92,18 @@ export class ViewerZoomButtonElement extends CrLitElement {
         ;
   }
 
-  protected fireClick_() {
+  protected onClick_() {
     // We cannot attach an on-click to the entire viewer-zoom-button, as this
     // will include clicks on the margins. Instead, proxy clicks on the FAB
     // through.
     this.fire('fabclick');
     this.activeIndex = (this.activeIndex + 1) % this.icons_.length;
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'viewer-zoom-button': ViewerZoomButtonElement;
   }
 }
 

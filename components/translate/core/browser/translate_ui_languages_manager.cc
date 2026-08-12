@@ -6,9 +6,10 @@
 
 #include <algorithm>
 
+#include "base/i18n/language_tag.h"
 #include "base/i18n/string_compare.h"
+#include "base/i18n/tag_converters.h"
 #include "base/metrics/field_trial_params.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -19,12 +20,28 @@
 #include "components/translate/core/browser/translate_client.h"
 #include "components/translate/core/browser/translate_download_manager.h"
 #include "components/translate/core/browser/translate_driver.h"
+#include "components/translate/core/common/translate_language_matcher.h"
 #include "components/translate/core/common/translate_util.h"
 #include "components/variations/variations_associated_data.h"
 #include "net/base/url_util.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace translate {
+namespace {
+
+using ::base::i18n::GetKnownLanguageTag;
+using ::base::i18n::GetLanguageTagFromString;
+using ::base::i18n::LanguageTag;
+
+LanguageTag GetTranslateLanguageTag(std::string_view tag) {
+  if (tag == "und") {
+    return GetKnownLanguageTag("und");
+  }
+  return GetTranslateLanguageMatcher().MatchOrDefault(
+      GetLanguageTagFromString(tag).value_or(GetKnownLanguageTag("und")));
+}
+
+}  // namespace
 
 TranslateUILanguagesManager::TranslateUILanguagesManager(
     const std::vector<std::string>& language_codes,
@@ -37,16 +54,21 @@ TranslateUILanguagesManager::TranslateUILanguagesManager(
       TranslateDownloadManager::GetInstance()->application_locale();
 
   // Reserve additional space for unknown language option.
-  std::vector<std::string>::size_type languages_size = language_codes.size();
+  size_t languages_size = language_codes.size();
   languages_size += 1;
   languages_.reserve(languages_size);
 
   // Preparing for the alphabetical order in the locale.
   std::unique_ptr<icu::Collator> collator = CreateCollator(locale);
   for (const std::string& language_code : language_codes) {
+    std::optional<LanguageTag> tag = GetLanguageTagFromString(language_code);
+    if (!tag) {
+      continue;
+    }
+
     std::u16string language_name =
         l10n_util::GetDisplayNameForLocale(language_code, locale, true);
-    languages_.emplace_back(std::move(language_code), std::move(language_name));
+    languages_.emplace_back(*std::move(tag), std::move(language_name));
   }
 
   // Sort |languages_| in alphabetical order according to the display name.
@@ -76,17 +98,20 @@ TranslateUILanguagesManager::TranslateUILanguagesManager(
         return lhs.first < rhs.first;
       });
 
-  languages_.emplace_back(language_detection::kUnknownLanguageCode,
+  languages_.emplace_back(base::i18n::GetKnownLanguageTag("und"),
                           GetUnknownLanguageDisplayName());
   std::rotate(languages_.rbegin(), languages_.rbegin() + 1, languages_.rend());
 
+  LanguageTag source_language_tag = GetTranslateLanguageTag(source_language);
+  LanguageTag target_language_tag = GetTranslateLanguageTag(target_language);
   for (std::vector<LanguageNamePair>::const_iterator iter = languages_.begin();
        iter != languages_.end(); ++iter) {
-    const std::string& language_code = iter->first;
-    if (language_code == source_language) {
+    const LanguageTag& language_tag = iter->first;
+
+    if (language_tag == source_language_tag) {
       source_language_index_ = iter - languages_.begin();
     }
-    if (language_code == target_language) {
+    if (language_tag == target_language_tag) {
       target_language_index_ = iter - languages_.begin();
     }
   }
@@ -125,7 +150,7 @@ std::string TranslateUILanguagesManager::GetTargetLanguageCode() const {
 
 std::string TranslateUILanguagesManager::GetLanguageCodeAt(size_t index) const {
   DCHECK_LT(index, GetNumberOfLanguages());
-  return languages_[index].first;
+  return std::string(languages_[index].first.tag_string());
 }
 
 std::u16string TranslateUILanguagesManager::GetLanguageNameAt(
@@ -153,8 +178,9 @@ bool TranslateUILanguagesManager::UpdateSourceLanguage(
   if (GetSourceLanguageCode() == language_code) {
     return false;
   }
+  LanguageTag language_tag = GetTranslateLanguageTag(language_code);
   for (size_t i = 0; i < languages_.size(); ++i) {
-    if (languages_[i].first.compare(language_code) == 0) {
+    if (languages_[i].first == language_tag) {
       UpdateSourceLanguageIndex(i);
       return true;
     }
@@ -179,8 +205,9 @@ bool TranslateUILanguagesManager::UpdateTargetLanguage(
   if (GetTargetLanguageCode() == language_code) {
     return false;
   }
+  LanguageTag language_tag = GetTranslateLanguageTag(language_code);
   for (size_t i = 0; i < languages_.size(); ++i) {
-    if (languages_[i].first.compare(language_code) == 0) {
+    if (languages_[i].first == language_tag) {
       UpdateTargetLanguageIndex(i);
       return true;
     }

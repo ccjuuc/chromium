@@ -69,8 +69,6 @@ typedef NS_ENUM(NSInteger, BubbleViewType) {
   BubbleViewTypeWithClose,
   // Bubble view with title and text.
   BubbleViewTypeRich,
-  // Bubble view with title, text and snooze button.
-  BubbleViewTypeRichWithSnooze,
   // Bubble view with title, text, and a next button.
   BubbleViewTypeRichWithNext,
 };
@@ -92,7 +90,8 @@ enum class IPHDismissalReasonType {
   kTappedAnchorView = 8,
   kVoiceOverAnnouncementEnded = 9,
   kSwipedAsInstructedByGestureIPH = 10,
-  kMaxValue = kSwipedAsInstructedByGestureIPH,
+  kTappedNext = 11,
+  kMaxValue = kTappedNext,
 };
 
 // The page that should be highlighted in the Bubble PageControl.

@@ -12,26 +12,28 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/logging.h"
 #include "base/observer_list.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
 #include "components/sync/base/data_type.h"
+#include "components/sync/base/features.h"
 #include "components/sync/base/sync_invalidation.h"
 #include "components/sync/engine/cancelation_signal.h"
 #include "components/sync/engine/configure_reason.h"
+#include "components/sync/engine/cryptographer.h"
 #include "components/sync/engine/data_type_connector_proxy.h"
 #include "components/sync/engine/data_type_worker.h"
 #include "components/sync/engine/engine_components_factory.h"
+#include "components/sync/engine/keystore_keys_handler.h"
 #include "components/sync/engine/loopback_server/loopback_connection_manager.h"
 #include "components/sync/engine/net/http_post_provider_factory.h"
 #include "components/sync/engine/net/sync_server_connection_manager.h"
 #include "components/sync/engine/net/url_translator.h"
-#include "components/sync/engine/nigori/cryptographer.h"
-#include "components/sync/engine/nigori/key_derivation_params.h"
-#include "components/sync/engine/nigori/keystore_keys_handler.h"
 #include "components/sync/engine/polling_constants.h"
+#include "components/sync/engine/required_passphrase_verifier.h"
 #include "components/sync/engine/sync_scheduler.h"
 #include "components/sync/engine/update_handler.h"
 #include "components/sync/protocol/sync_enums.pb.h"
@@ -187,7 +189,8 @@ void SyncManagerImpl::Init(InitArgs* args) {
   cycle_context_ = args->engine_components_factory->BuildContext(
       connection_manager_.get(), args->extensions_activity, listeners,
       &debug_info_event_listener_, data_type_registry_.get(), args->cache_guid,
-      args->birthday, args->bag_of_chips, args->poll_interval);
+      args->birthday, args->bag_of_chips, args->poll_interval,
+      args->account_email, args->sync_access_token_fetcher);
   scheduler_ = args->engine_components_factory->BuildScheduler(
       name_, cycle_context_.get(), args->cancelation_signal,
       args->enable_local_sync_backend);
@@ -206,12 +209,12 @@ void SyncManagerImpl::Init(InitArgs* args) {
 }
 
 void SyncManagerImpl::OnPassphraseRequired(
-    const KeyDerivationParams& key_derivation_params,
-    const sync_pb::EncryptedData& pending_keys) {
+    std::unique_ptr<RequiredPassphraseVerifier> verifier) {
   // Does nothing.
 }
 
-void SyncManagerImpl::OnPassphraseAccepted() {
+void SyncManagerImpl::OnPassphraseAccepted(
+    const CustomPassphraseBootstrapToken& bootstrap_token) {
   // Does nothing.
 }
 
@@ -220,6 +223,14 @@ void SyncManagerImpl::OnTrustedVaultKeyRequired() {
 }
 
 void SyncManagerImpl::OnTrustedVaultKeyAccepted() {
+  // Does nothing.
+}
+
+void SyncManagerImpl::OnKeystoreKeysRequired() {
+  // Does nothing.
+}
+
+void SyncManagerImpl::OnKeystoreKeysAccepted() {
   // Does nothing.
 }
 
@@ -261,12 +272,11 @@ void SyncManagerImpl::StartConfiguration() {
 
 void SyncManagerImpl::UpdateCredentials(const SyncCredentials& credentials) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(!base::FeatureList::IsEnabled(kSyncUsePropagatedAccessToken));
   DCHECK(initialized_);
 
-  cycle_context_->set_account_name(credentials.email);
-
   observing_network_connectivity_changes_ = true;
-  if (!connection_manager_->SetAccessToken(credentials.access_token)) {
+  if (!connection_manager_->SetAccessTokenInfo(credentials.access_token_info)) {
     return;  // Auth token is known to be invalid, so exit early.
   }
 
@@ -277,7 +287,8 @@ void SyncManagerImpl::UpdateCredentials(const SyncCredentials& credentials) {
 
 void SyncManagerImpl::InvalidateCredentials() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  connection_manager_->SetAccessToken(std::string());
+  CHECK(!base::FeatureList::IsEnabled(kSyncUsePropagatedAccessToken));
+  connection_manager_->SetAccessTokenInfo(signin::AccessTokenInfo());
 }
 
 void SyncManagerImpl::AddObserver(SyncManager::Observer* observer) {
@@ -324,7 +335,8 @@ void SyncManagerImpl::ShutdownOnSyncThread() {
   initialized_ = false;
 }
 
-void SyncManagerImpl::OnConnectionChanged(network::mojom::ConnectionType type) {
+void SyncManagerImpl::OnConnectionChanged(
+    net::NetworkChangeNotifier::ConnectionType type) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!observing_network_connectivity_changes_) {
     DVLOG(1) << "Network change dropped.";

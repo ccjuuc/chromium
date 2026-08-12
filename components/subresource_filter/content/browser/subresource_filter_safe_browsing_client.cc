@@ -18,6 +18,7 @@
 #include "components/subresource_filter/content/browser/subresource_filter_safe_browsing_client_request.h"
 #include "content/public/browser/browser_thread.h"
 #include "third_party/perfetto/include/perfetto/tracing/track.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace subresource_filter {
 
@@ -26,7 +27,16 @@ SubresourceFilterSafeBrowsingClient::CheckResult::ToTracedValue() const {
   auto value = std::make_unique<base::trace_event::TracedValue>();
   value->SetInteger("request_id", request_id);
   value->SetInteger("threat_type", static_cast<int>(threat_type));
-  value->SetValue("threat_metadata", threat_metadata.ToTracedValue().get());
+
+  value->BeginDictionary("subresource_filter_match");
+  for (const auto& it : subresource_filter_match) {
+    value->BeginArray("match_metadata");
+    value->AppendInteger(static_cast<int>(it.first));
+    value->AppendInteger(static_cast<int>(it.second));
+    value->EndArray();
+  }
+  value->EndDictionary();
+
   value->SetInteger("duration (us)",
                     (base::TimeTicks::Now() - start_time).InMicroseconds());
   value->SetBoolean("finished", finished);
@@ -36,10 +46,13 @@ SubresourceFilterSafeBrowsingClient::CheckResult::ToTracedValue() const {
 SubresourceFilterSafeBrowsingClient::SubresourceFilterSafeBrowsingClient(
     scoped_refptr<safe_browsing::SafeBrowsingDatabaseManager> database_manager,
     SafeBrowsingPageActivationThrottle* throttle,
-    scoped_refptr<base::SingleThreadTaskRunner> throttle_task_runner)
+    scoped_refptr<base::SingleThreadTaskRunner> throttle_task_runner,
+    base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+        v5_get_hash_protocol_manager)
     : database_manager_(std::move(database_manager)),
       throttle_(throttle),
-      throttle_task_runner_(std::move(throttle_task_runner)) {
+      throttle_task_runner_(std::move(throttle_task_runner)),
+      v5_get_hash_protocol_manager_(v5_get_hash_protocol_manager) {
   CHECK(database_manager_);
 }
 
@@ -53,14 +66,15 @@ void SubresourceFilterSafeBrowsingClient::CheckUrl(const GURL& url,
   CHECK(!url.is_empty());
 
   auto request = std::make_unique<SubresourceFilterSafeBrowsingClientRequest>(
-      request_id, start_time, database_manager_, this);
+      request_id, start_time, database_manager_, this,
+      v5_get_hash_protocol_manager_);
   auto* raw_request = request.get();
   CHECK(requests_.find(raw_request) == requests_.end());
   requests_[raw_request] = std::move(request);
-  TRACE_EVENT_BEGIN(TRACE_DISABLED_BY_DEFAULT("loading"),
-                    "SubresourceFilterSBCheck",
-                    perfetto::Track::FromPointer(raw_request), "check_result",
-                    std::make_unique<base::trace_event::TracedValue>());
+  TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("loading"),
+                      "SubresourceFilterSBCheck",
+                      perfetto::Flow::FromPointer(raw_request), "check_result",
+                      std::make_unique<base::trace_event::TracedValue>());
   raw_request->Start(url);
   // Careful, |raw_request| can be destroyed after this line.
 }
@@ -69,10 +83,10 @@ void SubresourceFilterSafeBrowsingClient::OnCheckBrowseUrlResult(
     SubresourceFilterSafeBrowsingClientRequest* request,
     const CheckResult& check_result) {
   CHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  TRACE_EVENT_END(
-      TRACE_DISABLED_BY_DEFAULT("loading"), /* SubresourceFilterSBCheck */
-      perfetto::Track::FromPointer(request), "check_result",
-      check_result.ToTracedValue());
+  TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("loading"),
+                      "SubresourceFilterSBResult",
+                      perfetto::TerminatingFlow::FromPointer(request),
+                      "check_result", check_result.ToTracedValue());
   CHECK(requests_.find(request) != requests_.end());
   requests_.erase(request);
   if (throttle_) {

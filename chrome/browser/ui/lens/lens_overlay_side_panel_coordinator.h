@@ -14,8 +14,8 @@
 #include "chrome/browser/ui/chrome_web_modal_dialog_manager_delegate.h"
 #include "chrome/browser/ui/lens/lens_overlay_translate_options.h"
 #include "chrome/browser/ui/lens/lens_search_controller.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_observer.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_observer.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -23,7 +23,6 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "third_party/lens_server_proto/lens_overlay_selection_type.pb.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/models/menu_model.h"
 #include "ui/menus/simple_menu_model.h"
@@ -47,6 +46,7 @@ namespace lens {
 
 class LensOverlaySidePanelNavigationThrottle;
 class LensSearchboxController;
+enum LensOverlaySelectionType : int;
 
 // Data struct representing a previous search query.
 struct SearchQuery {
@@ -104,7 +104,7 @@ class LensOverlaySidePanelCoordinator
   // exist and then shows it.
   void RegisterEntryAndShow();
 
-  SidePanelEntry::PanelType GetPanelType() const;
+  SidePanelType GetPanelType() const;
 
   // Cleans up the side panel entry and closes the side panel.
   void DeregisterEntryAndCleanup();
@@ -146,9 +146,9 @@ class LensOverlaySidePanelCoordinator
 
   // Handles rendering text highlights on the main browser window based on
   // navigations from the side panel. Returns true if handled, false otherwise.
-  // `nav_url` refers to the URL that the side panel was set to navigate to. It
-  // is compared to the URL of the current open tab.
-  bool MaybeHandleTextDirectives(const GURL& nav_url);
+  // The URL is extracted from the `navigation_handle` and compared to the URL
+  // of the current open tab.
+  bool MaybeHandleTextDirectives(content::NavigationHandle* navigation_handle);
 
   // Handles seeking videos on the main browser window based on navigations from
   // the side panel. Returns true if handled, false otherwise. `nav_url` refers
@@ -345,9 +345,9 @@ class LensOverlaySidePanelCoordinator
   // Callback for when the `text_finder` identifies the provided text directives
   // on the page. If all the directives were found, then this function will
   // create highlights on the page for each. Otherwise, it will open the
-  // `nav_url` in a new tab.
+  // URL in `params` in a new tab.
   void OnTextFinderLookupComplete(
-      const GURL& nav_url,
+      const content::OpenURLParams& params,
       const std::vector<std::pair<std::string, bool>>& lookup_results);
 
   // Opens the provided url params in the main browser as a new tab.
@@ -405,7 +405,7 @@ class LensOverlaySidePanelCoordinator
 
   // A pending url to be loaded in the side panel. Needed when the side
   // panel is not yet bound at the time of a request.
-  std::optional<GURL> pending_side_panel_url_ = std::nullopt;
+  std::optional<GURL> pending_side_panel_url_;
 
   // Whether the side panel should show the error page.
   bool side_panel_should_show_error_page_ = false;

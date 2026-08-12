@@ -70,8 +70,6 @@ const char kSelectDriveIdentityEntryActionsHistogram[] =
     "Mobile.ContextMenu.SelectDriveIdentityEntry.Actions";
 const char kTabGroupIndicatorEntryActionsHistogram[] =
     "Mobile.ContextMenu.TabGroupIndicatorEntry.Actions";
-const char kAutofillManualFallbackPlusAddressEntryActionsHistogram[] =
-    "Mobile.ContextMenu.AutofillManualFallbackPlusAddressEntry.Actions";
 const char kTabGroupIndicatorNTPEntryActionsHistogram[] =
     "Mobile.ContextMenu.TabGroupIndicatorNTPEntry.Actions";
 const char kLastVisitedHistoryEntryActionsHistogram[] =
@@ -82,8 +80,7 @@ const char kContextMenuReaderModeImageLinkActionsHistogram[] =
     "Mobile.ContextMenu.ReaderModeImageLink.Actions";
 const char kContextMenuReaderModeLinkActionsHistogram[] =
     "Mobile.ContextMenu.ReaderModeLink.Actions";
-const char kContextMenuTabGroupOverflowMenuHistogram[] =
-    "Mobile.ContextMenu.TabGroupOverflowMenu.Actions";
+
 // LINT.ThenChange(/tools/metrics/histograms/metadata/mobile/histograms.xml)
 }  // namespace
 
@@ -155,7 +152,7 @@ const char* GetActionsHistogramName(MenuScenarioHistogram scenario) {
     case kMenuScenarioHistogramTabGroupIndicatorEntry:
       return kTabGroupIndicatorEntryActionsHistogram;
     case kMenuScenarioHistogramAutofillManualFallbackPlusAddressEntry:
-      return kAutofillManualFallbackPlusAddressEntryActionsHistogram;
+      NOTREACHED();
     case kMenuScenarioHistogramTabGroupIndicatorNTPEntry:
       return kTabGroupIndicatorNTPEntryActionsHistogram;
     case kMenuScenarioHistogramLastVisitedHistoryEntry:
@@ -167,7 +164,7 @@ const char* GetActionsHistogramName(MenuScenarioHistogram scenario) {
     case kMenuScenarioHistogramReaderModeContextMenuLink:
       return kContextMenuReaderModeLinkActionsHistogram;
     case kMenuScenarioHistogramTabGroupOverflowMenu:
-      return kContextMenuTabGroupOverflowMenuHistogram;
+      NOTREACHED();
     case kMenuScenarioHistogramSadTab:
       return KContextMenuLinkActionsHistogram;
     case kMenuScenarioHistogramCount:

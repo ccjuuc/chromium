@@ -4,11 +4,15 @@
 
 #import "ios/chrome/browser/browser_view/ui_bundled/tab_lifecycle_mediator.h"
 
+#import "components/webauthn/ios/ios_passkey_client_commands.h"
+#import "components/webauthn/ios/passkey_tab_helper.h"
 #import "ios/chrome/browser/app_launcher/model/app_launcher_tab_helper.h"
+#import "ios/chrome/browser/autofill/atmemory/public/at_memory_commands.h"
+#import "ios/chrome/browser/autofill/model/autofill_ai_util.h"
 #import "ios/chrome/browser/autofill/model/autofill_tab_helper.h"
 #import "ios/chrome/browser/autofill/model/bottom_sheet/autofill_bottom_sheet_tab_helper.h"
 #import "ios/chrome/browser/autofill/model/form_suggestion_tab_helper.h"
-#import "ios/chrome/browser/browser_container/model/edit_menu_tab_helper.h"
+#import "ios/chrome/browser/browser_content/model/edit_menu_tab_helper.h"
 #import "ios/chrome/browser/commerce/model/price_notifications/price_notifications_tab_helper.h"
 #import "ios/chrome/browser/contextual_panel/model/contextual_panel_tab_helper.h"
 #import "ios/chrome/browser/download/coordinator/download_manager_coordinator.h"
@@ -17,10 +21,11 @@
 #import "ios/chrome/browser/enterprise/data_controls/model/data_controls_tab_helper.h"
 #import "ios/chrome/browser/find_in_page/model/find_tab_helper.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_controller.h"
-#import "ios/chrome/browser/intelligence/bwg/model/bwg_tab_helper.h"
+#import "ios/chrome/browser/intelligence/bwg/model/gemini_tab_helper.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/itunes_urls/model/itunes_urls_handler_tab_helper.h"
 #import "ios/chrome/browser/lens/model/lens_tab_helper.h"
+#import "ios/chrome/browser/mini_map/model/mini_map_tab_helper.h"
 #import "ios/chrome/browser/ntp/model/new_tab_page_tab_helper.h"
 #import "ios/chrome/browser/overscroll_actions/model/overscroll_actions_tab_helper.h"
 #import "ios/chrome/browser/passwords/model/password_tab_helper.h"
@@ -32,11 +37,12 @@
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/autofill_commands.h"
-#import "ios/chrome/browser/shared/public/commands/bwg_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/contextual_sheet_commands.h"
-#import "ios/chrome/browser/shared/public/commands/data_controls_commands.h"
+#import "ios/chrome/browser/shared/public/commands/enterprise_commands.h"
 #import "ios/chrome/browser/shared/public/commands/file_upload_panel_commands.h"
+#import "ios/chrome/browser/shared/public/commands/fullscreen_commands.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/help_commands.h"
 #import "ios/chrome/browser/shared/public/commands/lens_commands.h"
 #import "ios/chrome/browser/shared/public/commands/mini_map_commands.h"
@@ -51,7 +57,6 @@
 #import "ios/chrome/browser/ssl/model/captive_portal_tab_helper.h"
 #import "ios/chrome/browser/supervised_user/model/supervised_user_error_container.h"
 #import "ios/chrome/browser/tab_insertion/model/tab_insertion_browser_agent.h"
-#import "ios/chrome/browser/tabs/model/tabs_dependency_installer.h"
 #import "ios/chrome/browser/tabs/model/tabs_dependency_installer_bridge.h"
 #import "ios/chrome/browser/web/model/annotations/annotations_tab_helper.h"
 #import "ios/chrome/browser/web/model/choose_file/choose_file_tab_helper.h"
@@ -77,8 +82,7 @@
 
 - (instancetype)initWithBrowser:(Browser*)browser {
   if ((self = [super init])) {
-    _dependencyInstallerBridge.StartObserving(
-        self, browser, TabsDependencyInstaller::Policy::kOnlyRealized);
+    _dependencyInstallerBridge.StartObserving(self, browser);
     _browser = browser;
   }
   return self;
@@ -125,6 +129,13 @@
     passwordTabHelper->SetDispatcher(_commandDispatcher);
   }
 
+  webauthn::PasskeyTabHelper* passkeyTabHelper =
+      webauthn::PasskeyTabHelper::FromWebState(webState);
+  if (passkeyTabHelper) {
+    passkeyTabHelper->SetIOSPasskeyClientCommandsHandler(
+        HandlerForProtocol(_commandDispatcher, IOSPasskeyClientCommands));
+  }
+
   AutofillBottomSheetTabHelper* bottomSheetTabHelper =
       AutofillBottomSheetTabHelper::FromWebState(webState);
   if (bottomSheetTabHelper) {
@@ -154,10 +165,10 @@
   OverscrollActionsTabHelper::FromWebState(webState)->SetDelegate(
       _overscrollActionsDelegate);
 
-  data_controls::DataControlsTabHelper::GetOrCreateForWebState(webState)
-      ->SetDataControlsCommandsHandler(
-          HandlerForProtocol(_commandDispatcher, DataControlsCommands));
-  data_controls::DataControlsTabHelper::GetOrCreateForWebState(webState)
+  data_controls::DataControlsTabHelper::FromWebState(webState)
+      ->SetEnterpriseCommandsHandler(
+          HandlerForProtocol(_commandDispatcher, EnterpriseCommands));
+  data_controls::DataControlsTabHelper::FromWebState(webState)
       ->SetSnackbarHandler(
           static_cast<id<SnackbarCommands>>(_commandDispatcher));
 
@@ -169,15 +180,14 @@
       static_cast<id<SnackbarCommands>>(_commandDispatcher));
 
   DCHECK(_tabHelperDelegate);
-  NetExportTabHelper::GetOrCreateForWebState(webState)->SetDelegate(
-      _tabHelperDelegate);
+  NetExportTabHelper::FromWebState(webState)->SetDelegate(_tabHelperDelegate);
 
   id<WebContentCommands> webContentsHandler =
       HandlerForProtocol(_commandDispatcher, WebContentCommands);
   DCHECK(webContentsHandler);
-  ITunesUrlsHandlerTabHelper::GetOrCreateForWebState(webState)
-      ->SetWebContentsHandler(webContentsHandler);
-  PassKitTabHelper::GetOrCreateForWebState(webState)->SetWebContentsHandler(
+  ITunesUrlsHandlerTabHelper::FromWebState(webState)->SetWebContentsHandler(
+      webContentsHandler);
+  PassKitTabHelper::FromWebState(webState)->SetWebContentsHandler(
       webContentsHandler);
 
   DCHECK(_baseViewController);
@@ -186,8 +196,12 @@
     id<AutofillCommands> autofillHandler =
         HandlerForProtocol(_commandDispatcher, AutofillCommands);
     autofillTabHelper->SetAutofillHandler(autofillHandler);
-    autofillTabHelper->SetSnackbarHandler(
-        static_cast<id<SnackbarCommands>>(_commandDispatcher));
+    id<AtMemoryCommands> atMemoryHandler =
+        autofill::IsAutofillAtMemoryEnabled()
+            ? HandlerForProtocol(_commandDispatcher, AtMemoryCommands)
+            : nil;
+    autofillTabHelper->SetCommandHandlers(
+        static_cast<id<SnackbarCommands>>(_commandDispatcher), atMemoryHandler);
   }
 
   ReaderModeTabHelper* readerModeTabHelper =
@@ -199,14 +213,13 @@
   }
 
   DCHECK(_printCoordinator);
-  PrintTabHelper::GetOrCreateForWebState(webState)->set_printer(
-      _printCoordinator);
+  PrintTabHelper::FromWebState(webState)->set_printer(_printCoordinator);
 
   RepostFormTabHelper::FromWebState(webState)->SetDelegate(_repostFormDelegate);
 
   DCHECK(_tabInsertionBrowserAgent);
-  CaptivePortalTabHelper::GetOrCreateForWebState(webState)
-      ->SetTabInsertionBrowserAgent(_tabInsertionBrowserAgent);
+  CaptivePortalTabHelper::FromWebState(webState)->SetTabInsertionBrowserAgent(
+      _tabInsertionBrowserAgent);
 
   NewTabPageTabHelper::FromWebState(webState)->SetDelegate(
       _NTPTabHelperDelegate);
@@ -220,6 +233,12 @@
         HandlerForProtocol(_commandDispatcher, MiniMapCommands));
     annotationsTabHelper->SetUnitConversionCommands(
         HandlerForProtocol(_commandDispatcher, UnitConversionCommands));
+  }
+
+  MiniMapTabHelper* miniMapTabHelper = MiniMapTabHelper::FromWebState(webState);
+  if (miniMapTabHelper) {
+    miniMapTabHelper->SetMiniMapCommands(
+        HandlerForProtocol(_commandDispatcher, MiniMapCommands));
   }
 
   PriceNotificationsTabHelper* priceNotificationsTabHelper =
@@ -250,39 +269,40 @@
     editMenuTabHelper->SetEditMenuBuilder(self.editMenuBuilder);
   }
 
-  BwgTabHelper* BWGTabHelper = BwgTabHelper::FromWebState(webState);
-  if (BWGTabHelper) {
-    id<BWGCommands> BWGCommandsHandler =
-        HandlerForProtocol(_commandDispatcher, BWGCommands);
-    BWGTabHelper->SetBwgCommandsHandler(BWGCommandsHandler);
+  GeminiTabHelper* geminiTabHelper = GeminiTabHelper::FromWebState(webState);
+  if (geminiTabHelper) {
+    id<GeminiCommands> geminiHandler =
+        HandlerForProtocol(_commandDispatcher, GeminiCommands);
+    geminiTabHelper->SetGeminiHandler(geminiHandler);
 
-    // TODO(crbug.com/455903668): Remove this or refactor to
-    // `HandlerForProtocol`.
-    if (IsWebPageReportedImagesSheetEnabled()) {
-      BWGTabHelper->SetSnackbarCommandsHandler(
-          static_cast<id<SnackbarCommands>>(_commandDispatcher));
-    }
+    geminiTabHelper->SetLocationBarBadgeCommandsHandler(
+        id<LocationBarBadgeCommands>(_commandDispatcher));
 
-    if (IsAskGeminiChipEnabled()) {
-      BWGTabHelper->SetLocationBarBadgeCommandsHandler(
-          id<LocationBarBadgeCommands>(_commandDispatcher));
+    if (IsGeminiImageRemixToolEnabled()) {
+      id<HelpCommands> helpCommandsHandler =
+          HandlerForProtocol(_commandDispatcher, HelpCommands);
+      geminiTabHelper->SetHelpCommandsHandler(helpCommandsHandler);
     }
   }
 
   FindTabHelper* findTabHelper = FindTabHelper::FromWebState(webState);
   if (findTabHelper) {
-    FullscreenController* fullscreenController =
-        FullscreenController::FromBrowser(self.browser);
-    findTabHelper->SetFullscreenController(fullscreenController);
+    if (IsFullscreenRefactoringEnabled()) {
+      id<FullscreenCommands> fullscreenHandler = HandlerForProtocol(
+          self.browser->GetCommandDispatcher(), FullscreenCommands);
+      findTabHelper->SetFullscreenHandler(fullscreenHandler);
+    } else {
+      FullscreenController* fullscreenController =
+          FullscreenController::FromBrowser(self.browser);
+      findTabHelper->SetFullscreenController(fullscreenController);
+    }
   }
 
-  if (base::FeatureList::IsEnabled(kIOSCustomFileUploadMenu)) {
-    ChooseFileTabHelper* chooseFileTabHelper =
-        ChooseFileTabHelper::FromWebState(webState);
-    if (chooseFileTabHelper) {
-      chooseFileTabHelper->SetFileUploadPanelHandler(
-          HandlerForProtocol(_commandDispatcher, FileUploadPanelCommands));
-    }
+  ChooseFileTabHelper* chooseFileTabHelper =
+      ChooseFileTabHelper::FromWebState(webState);
+  if (chooseFileTabHelper) {
+    chooseFileTabHelper->SetFileUploadPanelHandler(
+        HandlerForProtocol(_commandDispatcher, FileUploadPanelCommands));
   }
 }
 
@@ -305,6 +325,12 @@
     passwordTabHelper->SetDispatcher(nil);
   }
 
+  webauthn::PasskeyTabHelper* passkeyTabHelper =
+      webauthn::PasskeyTabHelper::FromWebState(webState);
+  if (passkeyTabHelper) {
+    passkeyTabHelper->SetIOSPasskeyClientCommandsHandler(nil);
+  }
+
   AutofillBottomSheetTabHelper* bottomSheetTabHelper =
       AutofillBottomSheetTabHelper::FromWebState(webState);
   if (bottomSheetTabHelper) {
@@ -324,22 +350,22 @@
 
   OverscrollActionsTabHelper::FromWebState(webState)->SetDelegate(nil);
 
-  data_controls::DataControlsTabHelper::GetOrCreateForWebState(webState)
-      ->SetDataControlsCommandsHandler(nil);
-  data_controls::DataControlsTabHelper::GetOrCreateForWebState(webState)
+  data_controls::DataControlsTabHelper::FromWebState(webState)
+      ->SetEnterpriseCommandsHandler(nil);
+  data_controls::DataControlsTabHelper::FromWebState(webState)
       ->SetSnackbarHandler(nil);
 
   DownloadManagerTabHelper::FromWebState(webState)->SetDelegate(nil);
   DownloadManagerTabHelper::FromWebState(webState)->SetSnackbarHandler(nil);
 
-  NetExportTabHelper::GetOrCreateForWebState(webState)->SetDelegate(nil);
+  NetExportTabHelper::FromWebState(webState)->SetDelegate(nil);
 
   AutofillTabHelper* autofillTabHelper =
       AutofillTabHelper::FromWebState(webState);
   if (autofillTabHelper) {
     autofillTabHelper->SetBaseViewController(nil);
     autofillTabHelper->SetAutofillHandler(nil);
-    autofillTabHelper->SetSnackbarHandler(nil);
+    autofillTabHelper->SetCommandHandlers(nil, nil);
   }
 
   ReaderModeTabHelper* readerModeTabHelper =
@@ -348,12 +374,12 @@
     readerModeTabHelper->SetReaderModeHandler(nil);
   }
 
-  PrintTabHelper::GetOrCreateForWebState(webState)->set_printer(nil);
+  PrintTabHelper::FromWebState(webState)->set_printer(nil);
 
   RepostFormTabHelper::FromWebState(webState)->SetDelegate(nil);
 
-  CaptivePortalTabHelper::GetOrCreateForWebState(webState)
-      ->SetTabInsertionBrowserAgent(nil);
+  CaptivePortalTabHelper::FromWebState(webState)->SetTabInsertionBrowserAgent(
+      nil);
 
   NewTabPageTabHelper::FromWebState(webState)->SetDelegate(nil);
 
@@ -363,6 +389,11 @@
     annotationsTabHelper->SetBaseViewController(nil);
     annotationsTabHelper->SetMiniMapCommands(nil);
     annotationsTabHelper->SetUnitConversionCommands(nil);
+  }
+
+  MiniMapTabHelper* miniMapTabHelper = MiniMapTabHelper::FromWebState(webState);
+  if (miniMapTabHelper) {
+    miniMapTabHelper->SetMiniMapCommands(nil);
   }
 
   PriceNotificationsTabHelper* priceNotificationsTabHelper =
@@ -391,28 +422,28 @@
 
   FormSuggestionTabHelper::RemoveFromWebState(webState);
 
-  BwgTabHelper* BWGTabHelper = BwgTabHelper::FromWebState(webState);
-  if (BWGTabHelper) {
-    BWGTabHelper->SetBwgCommandsHandler(nil);
-    if (IsWebPageReportedImagesSheetEnabled()) {
-      BWGTabHelper->SetSnackbarCommandsHandler(nil);
-    }
-    if (IsAskGeminiChipEnabled()) {
-      BWGTabHelper->SetLocationBarBadgeCommandsHandler(nil);
+  GeminiTabHelper* geminiTabHelper = GeminiTabHelper::FromWebState(webState);
+  if (geminiTabHelper) {
+    geminiTabHelper->SetGeminiHandler(nil);
+    geminiTabHelper->SetLocationBarBadgeCommandsHandler(nil);
+    if (IsGeminiImageRemixToolEnabled()) {
+      geminiTabHelper->SetHelpCommandsHandler(nil);
     }
   }
 
   FindTabHelper* findTabHelper = FindTabHelper::FromWebState(webState);
   if (findTabHelper) {
-    findTabHelper->SetFullscreenController(nullptr);
+    if (IsFullscreenRefactoringEnabled()) {
+      findTabHelper->SetFullscreenHandler(nil);
+    } else {
+      findTabHelper->SetFullscreenController(nullptr);
+    }
   }
 
-  if (base::FeatureList::IsEnabled(kIOSCustomFileUploadMenu)) {
-    ChooseFileTabHelper* chooseFileTabHelper =
-        ChooseFileTabHelper::FromWebState(webState);
-    if (chooseFileTabHelper) {
-      chooseFileTabHelper->SetFileUploadPanelHandler(nil);
-    }
+  ChooseFileTabHelper* chooseFileTabHelper =
+      ChooseFileTabHelper::FromWebState(webState);
+  if (chooseFileTabHelper) {
+    chooseFileTabHelper->SetFileUploadPanelHandler(nil);
   }
 }
 

@@ -13,7 +13,7 @@
 namespace toolbar {
 
 void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
-  base::Value::List default_pinned_actions;
+  base::ListValue default_pinned_actions;
   const std::optional<std::string>& chrome_labs_action =
       actions::ActionIdMap::ActionIdToString(kActionShowChromeLabs);
   // ActionIdToStringMappings are not initialized in unit tests, therefore will
@@ -23,11 +23,13 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
     default_pinned_actions.Append(chrome_labs_action.value());
   }
 
-  if (features::HasTabSearchToolbarButton()) {
-    const std::optional<std::string>& tab_search_action =
-        actions::ActionIdMap::ActionIdToString(kActionTabSearch);
-    if (tab_search_action.has_value()) {
-      default_pinned_actions.Append(tab_search_action.value());
+  if (base::FeatureList::IsEnabled(
+          features::kTabsFromOtherDevicesSidePanelPinnedByDefault)) {
+    const std::optional<std::string>& tabs_from_other_devices_action =
+        actions::ActionIdMap::ActionIdToString(
+            kActionSidePanelShowTabsFromOtherDevices);
+    if (tabs_from_other_devices_action.has_value()) {
+      default_pinned_actions.Append(tabs_from_other_devices_action.value());
     }
   }
 
@@ -43,9 +45,8 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterBooleanPref(
       prefs::kPinnedCastMigrationComplete, false,
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-  registry->RegisterBooleanPref(
-      prefs::kTabSearchMigrationComplete, false,
-      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterBooleanPref(prefs::kTabsFromOtherDevicesAutoPinnedMigration,
+                                false);
 }
 
 }  // namespace toolbar

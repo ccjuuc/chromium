@@ -29,18 +29,18 @@
 #include "components/supervised_user/core/common/features.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "extensions/browser/extension_util.h"
 #include "extensions/browser/supervised_user_extensions_delegate.h"
+#include "extensions/browser/ui_util.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/icons/extension_icon_set.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/permissions/permission_set.h"
+#include "extensions/strings/grit/extensions_strings.h"
 #include "google_apis/gaia/gaia_auth_fetcher.h"
 #include "google_apis/gaia/gaia_constants.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "ui/accessibility/ax_enums.mojom-shared.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/interaction/element_identifier.h"
@@ -683,7 +683,7 @@ void ParentPermissionDialogView::ShowDialogInternal() {
 
 void ParentPermissionDialogView::LoadParentEmailAddresses() {
   supervised_user::SupervisedUserService* service =
-      SupervisedUserServiceFactory::GetForProfile(params_->profile);
+      supervised_user::SupervisedUserServiceFactory::GetForProfile(params_->profile);
 
   if (service->GetCustodian()) {
     parent_permission_email_addresses_.push_back(
@@ -710,7 +710,7 @@ void ParentPermissionDialogView::CloseWithReason(
 GaiaId ParentPermissionDialogView::GetParentObfuscatedGaiaID(
     const std::u16string& parent_email) const {
   supervised_user::SupervisedUserService* service =
-      SupervisedUserServiceFactory::GetForProfile(params_->profile);
+      supervised_user::SupervisedUserServiceFactory::GetForProfile(params_->profile);
 
   if (service->GetCustodian() && service->GetCustodian()->GetEmailAddress() ==
                                      base::UTF16ToUTF8(parent_email)) {
@@ -844,7 +844,8 @@ void ParentPermissionDialogView::InitializeExtensionData(
   // Create the dialog's message using the extension's name.
   params_->message = l10n_util::GetStringFUTF16(
       IDS_PARENT_PERMISSION_PROMPT_GO_GET_A_PARENT_FOR_EXTENSION_LABEL,
-      extensions::util::GetFixupExtensionNameForUIDisplay(extension->name()));
+      extensions::ui_util::GetFixupExtensionNameForUIDisplay(
+          extension->name()));
 
   ShowDialogInternal();
 }

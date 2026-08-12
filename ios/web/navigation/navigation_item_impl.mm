@@ -70,7 +70,12 @@ NavigationItemImpl::NavigationItemImpl(
       timestamp_(TimeFromProto(storage.timestamp())),
       user_agent_type_(UserAgentTypeFromProto(storage.user_agent())),
       http_request_headers_(
-          HttpRequestHeadersFromProto(storage.http_request_headers())) {
+          HttpRequestHeadersFromProto(storage.http_request_headers())),
+      was_created_automatically_(storage.was_created_automatically()) {
+  if (!storage.internal_scroll_to_text_fragment().empty()) {
+    internal_scroll_to_text_fragment_ =
+        storage.internal_scroll_to_text_fragment();
+  }
   // While the virtual URL is persisted, the original request URL and the
   // non-virtual URL needs to be set upon NavigationItem creation. Since
   // GetVirtualURL() returns `url_` for the non-overridden case, this will
@@ -122,6 +127,13 @@ void NavigationItemImpl::SerializeToProto(
     storage.set_security_scoped_file_resource(
         static_cast<const char*>(security_scoped_file_resource_.bytes),
         security_scoped_file_resource_.length);
+  }
+  if (was_created_automatically_) {
+    storage.set_was_created_automatically(was_created_automatically_);
+  }
+  if (internal_scroll_to_text_fragment_.has_value()) {
+    storage.set_internal_scroll_to_text_fragment(
+        internal_scroll_to_text_fragment_.value());
   }
 }
 
@@ -182,6 +194,16 @@ void NavigationItemImpl::SetTitle(const std::u16string& title) {
 
 const std::u16string& NavigationItemImpl::GetTitle() const {
   return title_;
+}
+
+void NavigationItemImpl::SetInternalScrollToTextFragment(
+    const std::optional<std::string>& internal_scroll_to_text_fragment) {
+  internal_scroll_to_text_fragment_ = internal_scroll_to_text_fragment;
+}
+
+const std::optional<std::string>&
+NavigationItemImpl::GetInternalScrollToTextFragment() const {
+  return internal_scroll_to_text_fragment_;
 }
 
 const std::u16string& NavigationItemImpl::GetTitleForDisplay() const {
@@ -316,6 +338,14 @@ bool NavigationItemImpl::IsCreatedFromHashChange() const {
   return is_created_from_hash_change_;
 }
 
+void NavigationItemImpl::SetWasCreatedAutomatically(bool value) {
+  was_created_automatically_ = value;
+}
+
+bool NavigationItemImpl::WasCreatedAutomatically() const {
+  return was_created_automatically_;
+}
+
 void NavigationItemImpl::SetShouldSkipSerialization(bool skip) {
   should_skip_serialization_ = skip;
 }
@@ -410,6 +440,7 @@ NavigationItemImpl::NavigationItemImpl(const NavigationItemImpl& item)
       url_(item.url_),
       referrer_(item.referrer_),
       virtual_url_(item.virtual_url_),
+      internal_scroll_to_text_fragment_(item.internal_scroll_to_text_fragment_),
       title_(item.title_),
       transition_type_(item.transition_type_),
       favicon_status_(item.favicon_status_),

@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/feature_list.h"
-#include "base/strings/escape.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/page_info/merchant_trust_service_factory.h"
@@ -11,17 +9,15 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/page_info/merchant_trust_side_panel.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/page_info/web_view_side_panel_view.h"
 #include "chrome/browser/ui/views/side_panel/side_panel.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/page_info/core/features.h"
 #include "components/page_info/core/merchant_trust_service.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -76,7 +72,7 @@ class MerchantTrustSidePanelCoordinatorBrowserTest
     host_resolver()->AddRule("*", "127.0.0.1");
     service_ = static_cast<MockMerchantTrustService*>(
         MerchantTrustServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-            browser()->profile(),
+            browser()->GetProfile(),
             base::BindRepeating(&MerchantTrustSidePanelCoordinatorBrowserTest::
                                     BuildMockMerchantTrustService,
                                 base::Unretained(this))));
@@ -101,10 +97,7 @@ class MerchantTrustSidePanelCoordinatorBrowserTest
   }
 
   SidePanelEntry* GetMerchantTrustEntryForActiveTab() {
-    return browser()
-        ->GetActiveTabInterface()
-        ->GetTabFeatures()
-        ->side_panel_registry()
+    return SidePanelRegistry::From(browser()->GetActiveTabInterface())
         ->GetEntryForKey(
             SidePanelEntry::Key(SidePanelEntry::Id::kMerchantTrust));
   }
@@ -300,11 +293,11 @@ IN_PROC_BROWSER_TEST_F(MerchantTrustSidePanelCoordinatorBrowserTest,
   EXPECT_TRUE(IsMerchantTrustSidePanelOpen());
 
   // Close side panel.
-  browser()->GetFeatures().side_panel_ui()->Close(
-      SidePanelEntry::PanelType::kContent);
+  browser()->GetFeatures().side_panel_ui()->Close();
   ASSERT_TRUE(base::test::RunUntil([&]() {
-    return browser()->GetBrowserView().contents_height_side_panel()->state() ==
-           SidePanel::State::kClosed;
+    return BrowserView::GetBrowserViewForBrowser(browser())
+               ->side_panel()
+               ->state() == SidePanel::State::kClosed;
   }));
   EXPECT_FALSE(IsMerchantTrustSidePanelOpen());
 

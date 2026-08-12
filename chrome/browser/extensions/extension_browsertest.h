@@ -16,6 +16,7 @@
 #include "chrome/browser/extensions/extension_browsertest_platform_delegate.h"
 #include "chrome/browser/extensions/scoped_test_mv2_enabler.h"
 #include "chrome/browser/extensions/updater/extension_updater.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/platform_browser_test.h"
 #include "extensions/browser/browsertest_util.h"
 #include "extensions/browser/disable_reason.h"
@@ -32,8 +33,6 @@
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
-class BrowserWindowInterface;
-class OwningTestTabModel;
 class Profile;
 
 namespace content {
@@ -244,13 +243,6 @@ class ExtensionBrowserTest : public PlatformBrowserTest,
   [[nodiscard]] bool NavigateToURL(content::WebContents* web_contents,
                                    const GURL& url);
 
-  // Navigates the active tab in `browser_window` to a `url` in and waits until
-  // the load stops. Returns true on success.
-  // NOTE: Only supported on Win/Mac/Linux/ChromeOS. Intentionally fails on
-  // Android.
-  [[nodiscard]] bool NavigateToURL(BrowserWindowInterface* browser_window,
-                                   const GURL& url);
-
   // Puts the current tab title in |title|. Returns true on success.
   bool GetCurrentTabTitle(std::u16string* title);
 
@@ -259,6 +251,11 @@ class ExtensionBrowserTest : public PlatformBrowserTest,
   // for `url`.
   content::WebContents* PlatformOpenURLOffTheRecord(Profile* profile,
                                                     const GURL& url);
+
+  // Creates a browser window of `type` using the test's profile from
+  // GetProfile().
+  BrowserWindowInterface* CreateBrowserWindowWithType(
+      BrowserWindowInterface::Type type);
 
   // Creates a new incognito browser window using the incognito profile owned
   // by the test's profile from GetProfile().
@@ -408,7 +405,8 @@ class ExtensionBrowserTest : public PlatformBrowserTest,
         const_cast<const ExtensionBrowserTest&>(*this).embedded_test_server());
   }
 
-  // Set to "chrome/test/data/extensions". Derived classes may override.
+  // Set to "chrome/test/data/extensions". Derived classes may override. For
+  // example, ExtensionApiTest uses "chrome/test/data/extensions/api_test".
   base::FilePath test_data_dir_;
 
   const ContextType context_type_;
@@ -448,9 +446,6 @@ class ExtensionBrowserTest : public PlatformBrowserTest,
   ExtensionId last_loaded_extension_id_;
 
 #if BUILDFLAG(IS_ANDROID)
-  // Tab model used for incognito tab support.
-  std::unique_ptr<OwningTestTabModel> incognito_tab_model_;
-
   // Feature flags overrides are only used on Android.
   base::test::ScopedFeatureList feature_list_;
 #endif

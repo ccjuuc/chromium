@@ -7,11 +7,10 @@
 #include <unordered_set>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/strings/stringprintf.h"
 #include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
 #include "chromeos/ash/experiences/arc/arc_features.h"
@@ -37,11 +36,12 @@ class ArcUsbHostBridgeFactory
   static constexpr const char* kName = "ArcUsbHostBridgeFactory";
 
   static ArcUsbHostBridgeFactory* GetInstance() {
-    return base::Singleton<ArcUsbHostBridgeFactory>::get();
+    static base::NoDestructor<ArcUsbHostBridgeFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcUsbHostBridgeFactory>;
+  friend base::NoDestructor<ArcUsbHostBridgeFactory>;
   ArcUsbHostBridgeFactory() = default;
   ~ArcUsbHostBridgeFactory() override = default;
 };
@@ -358,7 +358,7 @@ void ArcUsbHostBridge::OnDeviceAdded(
   DCHECK(device_info);
 
   // Update the device list.
-  DCHECK(!base::Contains(devices_, device_info->guid));
+  DCHECK(!devices_.contains(device_info->guid));
   std::string guid = device_info->guid;
   devices_.insert(std::make_pair(guid, std::move(device_info)));
 

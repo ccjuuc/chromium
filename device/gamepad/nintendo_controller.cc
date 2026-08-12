@@ -393,6 +393,14 @@ void UnpackSwitchAnalogStickCalibration(
   }
 }
 
+void InitializeNintendoPad(Gamepad& pad) {
+  pad.buttons_length = SWITCH_BUTTON_INDEX_COUNT;
+  for (size_t i = 0; i < pad.buttons_length; ++i) {
+    pad.buttons[i].used = true;
+  }
+  pad.axes_length = AXIS_INDEX_COUNT;
+}
+
 // Unpack one frame of IMU data into |imu_data|.
 void UnpackSwitchImuData(base::span<const uint8_t, 12> data,
                          NintendoController::SwitchImuData* imu_data) {
@@ -620,8 +628,7 @@ void UpdateButtonForLeftSide(const Gamepad& src_pad,
         break;
     }
   }
-  UNSAFE_TODO(dst_pad.buttons[remapped_index]) =
-      UNSAFE_TODO(src_pad.buttons[button_index]);
+  dst_pad.buttons[remapped_index] = src_pad.buttons[button_index];
 }
 
 // Update the state for a single button. The button state is taken from
@@ -676,8 +683,7 @@ void UpdateButtonForRightSide(const Gamepad& src_pad,
         NOTREACHED();
     }
   }
-  UNSAFE_TODO(dst_pad.buttons[remapped_index]) =
-      UNSAFE_TODO(src_pad.buttons[button_index]);
+  dst_pad.buttons[remapped_index] = src_pad.buttons[button_index];
 }
 
 // Update the state for a single axis. The axis state is taken from the axis at
@@ -690,7 +696,7 @@ void UpdateAxisForLeftSide(const Gamepad& src_pad,
                            size_t axis_index,
                            bool horizontal) {
   size_t remapped_index = axis_index;
-  double axis_value = UNSAFE_TODO(src_pad.axes[axis_index]);
+  double axis_value = src_pad.axes[axis_index];
   // The internal axis values assume a docked orientation for Joy-Cons. If a
   // Joy-Con is used by itself, remap the axis indices and adjust the sign on
   // the axis value for a horizontal orientation.
@@ -709,7 +715,7 @@ void UpdateAxisForLeftSide(const Gamepad& src_pad,
         NOTREACHED();
     }
   }
-  UNSAFE_TODO(dst_pad.axes[remapped_index]) = axis_value;
+  dst_pad.axes[remapped_index] = axis_value;
 }
 
 // Update the state for a single axis. The axis state is taken from the axis at
@@ -722,7 +728,7 @@ void UpdateAxisForRightSide(const Gamepad& src_pad,
                             size_t axis_index,
                             bool horizontal) {
   size_t remapped_index = axis_index;
-  double axis_value = UNSAFE_TODO(src_pad.axes[axis_index]);
+  double axis_value = src_pad.axes[axis_index];
   // The internal axis values assume a docked orientation for Joy-Cons. If a
   // Joy-Con is used by itself, remap the axis indices and adjust the sign on
   // the axis value for a horizontal orientation.
@@ -741,7 +747,7 @@ void UpdateAxisForRightSide(const Gamepad& src_pad,
         NOTREACHED();
     }
   }
-  UNSAFE_TODO(dst_pad.axes[remapped_index]) = axis_value;
+  dst_pad.axes[remapped_index] = axis_value;
 }
 
 // Convert the vibration parameters |frequency| and |amplitude| into a set of
@@ -858,6 +864,7 @@ NintendoController::NintendoController(int source_id,
       output_report_size_bytes_(0),
       device_info_(std::move(device_info)),
       hid_manager_(hid_manager) {
+  InitializeNintendoPad(pad_);
   if (device_info_) {
     output_report_size_bytes_ = device_info_->max_output_report_size;
     gamepad_id_ = GamepadIdList::Get().GetGamepadId(device_info_->product_name,
@@ -874,6 +881,7 @@ NintendoController::NintendoController(
     std::unique_ptr<NintendoController> composite2,
     mojom::HidManager* hid_manager)
     : source_id_(source_id), is_composite_(true), hid_manager_(hid_manager) {
+  InitializeNintendoPad(pad_);
   // Require exactly one left component and one right component, but allow them
   // to be provided in either order.
   DCHECK(composite1);
@@ -1040,13 +1048,15 @@ GamepadStandardMappingFunction NintendoController::GetMappingFunction() const {
     return GetGamepadStandardMappingFunction(
         kProductNameSwitchCompositeDevice, kVendorNintendo,
         kProductSwitchChargingGrip,
-        /*hid_specification_version=*/0, /*version_number=*/0, bus_type_);
+        /*hid_specification_version=*/0, /*version_number=*/0, bus_type_,
+        kGamepadDriverUnknown);
   } else {
     return GetGamepadStandardMappingFunction(
         device_info_->product_name, device_info_->vendor_id,
         device_info_->product_id,
 
-        /*hid_specification_version=*/0, /*version_number=*/0, bus_type_);
+        /*hid_specification_version=*/0, /*version_number=*/0, bus_type_,
+        kGamepadDriverUnknown);
   }
 }
 
@@ -1291,10 +1301,16 @@ void NintendoController::HandleInputReport(
 
 void NintendoController::HandleUsbInputReport81(
     const std::vector<uint8_t>& report_bytes) {
+  if (report_bytes.size() < sizeof(UsbInputReport81)) {
+    return;
+  }
   const auto* ack_report = UNSAFE_TODO(
       reinterpret_cast<const UsbInputReport81*>(report_bytes.data()));
   switch (ack_report->subtype) {
     case kSubTypeRequestMac: {
+      if (report_bytes.size() < sizeof(MacAddressReport)) {
+        return;
+      }
       const auto* mac_report = UNSAFE_TODO(
           reinterpret_cast<const MacAddressReport*>(report_bytes.data()));
       mac_address_ = UnpackSwitchMacAddress(mac_report->mac_data);
@@ -1333,6 +1349,9 @@ void NintendoController::HandleUsbInputReport81(
 
 void NintendoController::HandleInputReport21(
     const std::vector<uint8_t>& report_bytes) {
+  if (report_bytes.size() < sizeof(SpiReadReport)) {
+    return;
+  }
   const auto* spi_report =
       UNSAFE_TODO(reinterpret_cast<const SpiReadReport*>(report_bytes.data()));
   if (UpdateGamepadFromControllerData(spi_report->controller_data, cal_data_,
@@ -1365,6 +1384,9 @@ void NintendoController::HandleInputReport21(
 
 void NintendoController::HandleInputReport30(
     const std::vector<uint8_t>& report_bytes) {
+  if (report_bytes.size() < sizeof(ControllerDataReport)) {
+    return;
+  }
   const auto* controller_report = UNSAFE_TODO(
       reinterpret_cast<const ControllerDataReport*>(report_bytes.data()));
   // Each input report contains three frames of IMU data.
@@ -1383,6 +1405,10 @@ void NintendoController::HandleInputReport30(
 void NintendoController::ContinueInitSequence(
     uint8_t report_id,
     const std::vector<uint8_t>& report_bytes) {
+  if (report_bytes.size() < sizeof(UsbInputReport81) ||
+      report_bytes.size() < sizeof(SpiReadReport)) {
+    return;
+  }
   const auto* ack_report = UNSAFE_TODO(
       reinterpret_cast<const UsbInputReport81*>(report_bytes.data()));
   const auto* spi_report =

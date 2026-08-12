@@ -57,8 +57,15 @@ export class CrA11yAnnouncerDemoElement extends CrLitElement {
     announcer.announce('Page has loaded.');
   }
 
-  protected onForceShowAnnouncerChanged_(e: CustomEvent<{value: boolean}>) {
+  protected onForceShowAnnouncerCheckedChanged_(
+      e: CustomEvent<{value: boolean}>) {
     this.forceShowAnnouncer_ = e.detail.value;
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'cr-a11y-announcer-demo': CrA11yAnnouncerDemoElement;
   }
 }
 

@@ -13,8 +13,8 @@
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
-#include "chrome/browser/password_manager/account_password_store_factory.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -160,15 +160,15 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingPrivateApiBrowserTest, GetReferrerChain) {
   int tab_id = sessions::SessionTabHelper::IdForTab(web_contents).id();
 
   std::optional<base::Value> referrer_chain =
-      RunGetReferrerChainFunction(browser()->profile(), tab_id);
+      RunGetReferrerChainFunction(browser()->GetProfile(), tab_id);
   ASSERT_TRUE(referrer_chain);
 }
 
 IN_PROC_BROWSER_TEST_F(SafeBrowsingPrivateApiBrowserTest,
                        GetReferrerChainForNonSafeBrowsingUser) {
   // Disable Safe Browsing.
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
-                                               false);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
+                                                  false);
 
   const std::vector<GURL> urls = {
       embedded_test_server()->GetURL("foo.test", "/title1.html"),
@@ -188,7 +188,7 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingPrivateApiBrowserTest,
   int tab_id = sessions::SessionTabHelper::IdForTab(web_contents).id();
 
   std::optional<base::Value> referrer_chain =
-      RunGetReferrerChainFunction(browser()->profile(), tab_id);
+      RunGetReferrerChainFunction(browser()->GetProfile(), tab_id);
   ASSERT_FALSE(referrer_chain);
 }
 

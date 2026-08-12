@@ -49,6 +49,7 @@
 #include "third_party/blink/renderer/platform/feature_context.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap_observer_list.h"
+#include "third_party/blink/renderer/platform/loader/fetch/guardrail_policy_asset_type.h"
 #include "third_party/blink/renderer/platform/loader/fetch/https_state.h"
 #include "third_party/blink/renderer/platform/loader/fetch/loader_freeze_mode.h"
 #include "third_party/blink/renderer/platform/mojo/mojo_binding_context.h"
@@ -85,6 +86,7 @@ class CoreProbeSink;
 class DOMWrapperWorld;
 class ErrorEvent;
 class EventTarget;
+class FetchRequestData;
 class FrameOrWorkerScheduler;
 class KURL;
 class OriginTrialContext;
@@ -171,9 +173,9 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
 
   virtual bool IsContextThread() const { return true; }
 
-  virtual bool ShouldInstallV8Extensions() const { return false; }
-
   virtual void MaybeRecordNetworkRequestUrlForPushEvents(const KURL& url) {}
+  virtual void MaybeRecordFetchError(int net_error_code,
+                                     const FetchRequestData* request_data) {}
 
   virtual void CountUseOnlyInCrossSiteIframe(mojom::blink::WebFeature feature) {
   }
@@ -257,6 +259,7 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
   void CountDeprecation(WebFeature feature) override;
 
   bool IsContextPaused() const;
+  bool IsContextFrozen() const;
   LoaderFreezeMode GetLoaderFreezeMode() const;
   mojom::FrameLifecycleState ContextPauseState() const {
     return lifecycle_state_;
@@ -289,7 +292,8 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
   // Returns a referrer to be used in the "Determine request's Referrer"
   // algorithm defined in the Referrer Policy spec.
   // https://w3c.github.io/webappsec-referrer-policy/#determine-requests-referrer
-  virtual String OutgoingReferrer() const;
+  String OutgoingReferrer() const;
+  virtual KURL OutgoingReferrerUrl() const;
 
   // Parses a referrer policy directive using either Header or Meta rules and
   // sets the context to use that policy. If the supplied policy is invalid,
@@ -310,6 +314,16 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
   }
   void SetPolicyContainer(std::unique_ptr<PolicyContainer> container);
   std::unique_ptr<PolicyContainer> TakePolicyContainer();
+
+  // Called when the `policy_container_`'s PolicyContainerPolicies change. The
+  // `initiator_state_token` passed to this function is the same passed to the
+  // `policy_container_` policy update functions (which will send it to the
+  // browser process). Execution contexts that may start navigations (i.e.
+  // LocalFrameWindow) should update their `initiator_state_token` to the
+  // updated version, so that navigations they start afterwards are associated
+  // with the right state of PolicyContainerPolicies.
+  virtual void SetInitiatorStateToken(
+      const base::UnguessableToken& initiator_state_token) {}
 
   virtual CoreProbeSink* GetProbeSink() { return nullptr; }
 
@@ -360,6 +374,8 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
       ReportOptions report_option = ReportOptions::kDoNotReport,
       const String& message = g_empty_string,
       const String& source_file = g_empty_string);
+
+  PolicyValue GetDocumentPolicyValue(mojom::blink::DocumentPolicyFeature) const;
 
   // Report policy violations is delegated to Document because in order
   // to both remain const qualified and output console message, needs
@@ -477,6 +493,22 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
 
   void SetCanvasNoiseToken(std::optional<NoiseToken> token) {
     canvas_noise_token_ = token;
+  }
+
+  // Returns the policy state for network-efficiency-guardrails in this
+  // document.
+  virtual std::optional<mojom::blink::PolicyDisposition>
+  GetGuardrailsPolicyState() const {
+    return std::nullopt;
+  }
+
+  // Check for guardrails policy state and report large asset violation if
+  // necessary. Returns true if a violation was reported.
+  virtual bool CheckGuardrailsPolicyForAssetSize(
+      GuardrailPolicyAssetType asset_type,
+      size_t bytes,
+      const KURL& url) const {
+    return false;
   }
 
  protected:

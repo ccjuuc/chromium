@@ -145,9 +145,7 @@ public class DownloadPage extends BasicNativePage implements DownloadManagerCoor
                 ObservableSuppliers.createNonNull(false);
 
         final Callback<Boolean> recalculateState =
-                (ignored) -> {
-                    combinedSupplier.set(getActiveHandler.get() != null);
-                };
+                _ -> combinedSupplier.set(getActiveHandler.get() != null);
 
         BackPressHandler adapterHandler =
                 new BackPressHandler() {
@@ -167,7 +165,8 @@ public class DownloadPage extends BasicNativePage implements DownloadManagerCoor
                 };
 
         for (BackPressHandler handler : mDownloadCoordinator.getBackPressHandlers()) {
-            handler.getHandleBackPressChangedSupplier().addObserver(recalculateState);
+            handler.getHandleBackPressChangedSupplier()
+                    .addSyncObserverAndPostIfNonNull(recalculateState);
         }
 
         // The passed value here is ignored. We could technically pass null, but that would trigger

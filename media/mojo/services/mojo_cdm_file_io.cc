@@ -6,10 +6,14 @@
 
 #include <utility>
 
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notreached.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "media/cdm/cdm_helpers.h"
@@ -19,6 +23,10 @@
 namespace media {
 
 namespace {
+
+perfetto::NamedTrack GetTracingTrack(const MojoCdmFileIO* file_io) {
+  return perfetto::NamedTrack::FromPointer("media::MojoCdmFileIO", file_io);
+}
 
 using ClientStatus = cdm::FileIOClient::Status;
 using FileStatus = media::mojom::CdmFile::Status;
@@ -80,9 +88,8 @@ void MojoCdmFileIO::Open(const char* file_name, uint32_t file_name_size) {
   state_ = State::kOpening;
   file_name_ = file_name_string;
 
-  TRACE_EVENT_BEGIN("media", "MojoCdmFileIO::Open",
-                    perfetto::Track::FromPointer(this), "file_name",
-                    file_name_);
+  TRACE_EVENT_BEGIN("media", "MojoCdmFileIO::Open", GetTracingTrack(this),
+                    "file_name", file_name_);
 
   // Wrap the callback to detect the case when the mojo connection is
   // terminated prior to receiving the response. This avoids problems if the
@@ -103,7 +110,7 @@ void MojoCdmFileIO::OnFileOpened(
 
   // This logs the end of the async Open() request, and separately logs
   // how long the client takes in OnOpenComplete().
-  TRACE_EVENT_END("media", perfetto::Track::FromPointer(this), "status",
+  TRACE_EVENT_END("media", GetTracingTrack(this), "status",
                   ConvertStorageStatus(status));
   switch (status) {
     case StorageStatus::kSuccess:
@@ -145,9 +152,8 @@ void MojoCdmFileIO::Read() {
     return;
   }
 
-  TRACE_EVENT_BEGIN("media", "MojoCdmFileIO::Read",
-                    perfetto::Track::FromPointer(this), "file_name",
-                    file_name_);
+  TRACE_EVENT_BEGIN("media", "MojoCdmFileIO::Read", GetTracingTrack(this),
+                    "file_name", file_name_);
 
   state_ = State::kReading;
 
@@ -168,8 +174,8 @@ void MojoCdmFileIO::OnFileRead(FileStatus status,
 
   // This logs the end of the async Read() request, and separately logs
   // how long the client takes in OnReadComplete().
-  TRACE_EVENT_END("media", perfetto::Track::FromPointer(this), "bytes_read",
-                  data.size(), "status", ConvertFileStatus(status));
+  TRACE_EVENT_END("media", GetTracingTrack(this), "bytes_read", data.size(),
+                  "status", ConvertFileStatus(status));
 
   if (status != FileStatus::kSuccess) {
     DVLOG(1) << "Failed to read file " << file_name_;
@@ -214,9 +220,8 @@ void MojoCdmFileIO::Write(const uint8_t* data, uint32_t data_size) {
                               data_size / 1024, kSizeKBMin, kMaxFileSizeKB,
                               kSizeKBBuckets);
 
-  TRACE_EVENT_BEGIN("media", "MojoCdmFileIO::Write",
-                    perfetto::Track::FromPointer(this), "file_name", file_name_,
-                    "bytes_to_write", data_size);
+  TRACE_EVENT_BEGIN("media", "MojoCdmFileIO::Write", GetTracingTrack(this),
+                    "file_name", file_name_, "bytes_to_write", data_size);
 
   state_ = State::kWriting;
 
@@ -237,7 +242,7 @@ void MojoCdmFileIO::OnFileWritten(FileStatus status) {
 
   // This logs the end of the async Write() request, and separately logs
   // how long the client takes in OnWriteComplete().
-  TRACE_EVENT_END("media", perfetto::Track::FromPointer(this), "status",
+  TRACE_EVENT_END("media", GetTracingTrack(this), "status",
                   ConvertFileStatus(status));
 
   if (status != FileStatus::kSuccess) {

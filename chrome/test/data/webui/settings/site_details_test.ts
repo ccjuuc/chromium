@@ -4,6 +4,7 @@
 
 // clang-format off
 import {isChromeOS} from 'chrome://resources/js/platform.js';
+import {assert} from 'chrome://resources/js/assert.js';
 import {webUIListenerCallback} from 'chrome://resources/js/cr.js';
 import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import type {SiteDetailsElement, WebsiteUsageBrowserProxy} from 'chrome://settings/lazy_load.js';
@@ -57,9 +58,9 @@ suite('SiteDetails', function() {
   // in test_site_settings_prefs_browser_proxy.ts.
   setup(function() {
     loadTimeData.overrideValues({
-      enableWebPrintingContentSetting: true,
       // <if expr="is_chromeos">
       enableSmartCardReadersContentSetting: true,
+      enableWebPrintingContentSetting: true,
       // </if>
     });
     prefs = createSiteSettingsPrefs(
@@ -136,6 +137,9 @@ suite('SiteDetails', function() {
               [createRawSiteException('https://foo.com:443', {
                 setting: ContentSetting.BLOCK,
               })]),
+          createContentSettingTypeToValuePair(
+              ContentSettingsTypes.WEB_PRINTING,
+              [createRawSiteException('https://foo.com:443')]),
           // </if>
           createContentSettingTypeToValuePair(
               ContentSettingsTypes.SERIAL_PORTS,
@@ -170,9 +174,6 @@ suite('SiteDetails', function() {
               ContentSettingsTypes.WEB_APP_INSTALLATION,
               [createRawSiteException('https://foo.com:443')]),
           createContentSettingTypeToValuePair(
-              ContentSettingsTypes.WEB_PRINTING,
-              [createRawSiteException('https://foo.com:443')]),
-          createContentSettingTypeToValuePair(
               ContentSettingsTypes.WINDOW_MANAGEMENT,
               [createRawSiteException('https://foo.com:443')]),
           createContentSettingTypeToValuePair(
@@ -195,9 +196,6 @@ suite('SiteDetails', function() {
               [createRawSiteException('https://foo.com:443')]),
           createContentSettingTypeToValuePair(
               ContentSettingsTypes.POINTER_LOCK,
-              [createRawSiteException('https://foo.com:443')]),
-          createContentSettingTypeToValuePair(
-              ContentSettingsTypes.LOCAL_NETWORK_ACCESS,
               [createRawSiteException('https://foo.com:443')]),
           createContentSettingTypeToValuePair(
               ContentSettingsTypes.LOCAL_NETWORK,
@@ -229,9 +227,11 @@ suite('SiteDetails', function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
   });
 
-  function createSiteDetails(origin: string, prefs?: {[key: string]: any}) {
+  function createSiteDetails(origin: string, prefs?: Record<string, unknown>) {
     const siteDetailsElement = document.createElement('site-details');
-    siteDetailsElement.prefs = prefs;
+    if (prefs) {
+      siteDetailsElement.prefs = prefs;
+    }
     document.body.appendChild(siteDetailsElement);
     Router.getInstance().navigateTo(
         routes.SITE_SETTINGS_SITE_DETAILS,
@@ -331,9 +331,9 @@ suite('SiteDetails', function() {
     browserProxy.setPrefs(prefs);
     testElement = createSiteDetails('https://foo.com:443');
 
-    await browserProxy.whenCalled('isOriginValid').then(async () => {
-      await browserProxy.whenCalled('getOriginPermissions');
-    });
+    await browserProxy.whenCalled('isOriginValid');
+    await browserProxy.whenCalled('getOriginPermissions');
+    await flushTasks();
 
     const siteDetailsPermissions =
         testElement.shadowRoot!.querySelectorAll('site-details-permission');
@@ -397,7 +397,7 @@ suite('SiteDetails', function() {
               testElement.shadowRoot!.querySelectorAll(
                   'site-details-permission');
           const javascriptOptimizerPermission =
-              siteDetailsPermissions.values().find(siteDetailsPermission => {
+              Array.from(siteDetailsPermissions).find(siteDetailsPermission => {
                 return siteDetailsPermission.category ===
                     ContentSettingsTypes.JAVASCRIPT_OPTIMIZER;
               });
@@ -476,7 +476,7 @@ suite('SiteDetails', function() {
     });
   });
 
-  test('permissions update dynamically', function() {
+  test('permissions update dynamically', async function() {
     browserProxy.setPrefs(prefs);
     const origin = 'https://foo.com:443';
     testElement = createSiteDetails(origin);
@@ -487,44 +487,37 @@ suite('SiteDetails', function() {
         elem => elem.category === ContentSettingsTypes.NOTIFICATIONS)!;
 
     // Wait for all the permissions to be populated initially.
-    return browserProxy.whenCalled('isOriginValid')
-        .then(() => {
-          return browserProxy.whenCalled('getOriginPermissions');
-        })
-        .then(() => {
-          // Make sure initial state is as expected.
-          assertEquals(ContentSetting.ASK, notificationPermission.site.setting);
-          assertEquals(
-              SiteSettingSource.POLICY, notificationPermission.site.source);
-          assertEquals(
-              ContentSetting.ASK, notificationPermission.$.permission.value);
+    await browserProxy.whenCalled('isOriginValid');
+    await browserProxy.whenCalled('getOriginPermissions');
+    await flushTasks();
 
-          // Set new prefs and make sure only that permission is updated.
-          const newException = createRawSiteException(origin, {
-            embeddingOrigin: origin,
-            origin: origin,
-            setting: ContentSetting.BLOCK,
-            source: SiteSettingSource.DEFAULT,
-          });
-          browserProxy.resetResolver('getOriginPermissions');
-          browserProxy.setSingleException(
-              ContentSettingsTypes.NOTIFICATIONS, newException);
-          return browserProxy.whenCalled('getOriginPermissions');
-        })
-        .then((args) => {
-          // The notification pref was just updated, so make sure the call to
-          // getOriginPermissions was to check notifications.
-          assertTrue(args[1].includes(ContentSettingsTypes.NOTIFICATIONS));
+    // Make sure initial state is as expected.
+    assertEquals(ContentSetting.ASK, notificationPermission.site.setting);
+    assertEquals(SiteSettingSource.POLICY, notificationPermission.site.source);
+    assertEquals(ContentSetting.ASK, notificationPermission.$.permission.value);
 
-          // Check |notificationPermission| now shows the new permission value.
-          assertEquals(
-              ContentSetting.BLOCK, notificationPermission.site.setting);
-          assertEquals(
-              SiteSettingSource.DEFAULT, notificationPermission.site.source);
-          assertEquals(
-              ContentSetting.DEFAULT,
-              notificationPermission.$.permission.value);
-        });
+    // Set new prefs and make sure only that permission is updated.
+    const newException = createRawSiteException(origin, {
+      embeddingOrigin: origin,
+      origin: origin,
+      setting: ContentSetting.BLOCK,
+      source: SiteSettingSource.DEFAULT,
+    });
+    browserProxy.resetResolver('getOriginPermissions');
+    browserProxy.setSingleException(
+        ContentSettingsTypes.NOTIFICATIONS, newException);
+    const args = await browserProxy.whenCalled('getOriginPermissions');
+    await flushTasks();
+
+    // The notification pref was just updated, so make sure the call to
+    // getOriginPermissions was to check notifications.
+    assertTrue(args[1].includes(ContentSettingsTypes.NOTIFICATIONS));
+
+    // Check |notificationPermission| now shows the new permission value.
+    assertEquals(ContentSetting.BLOCK, notificationPermission.site.setting);
+    assertEquals(SiteSettingSource.DEFAULT, notificationPermission.site.source);
+    assertEquals(
+        ContentSetting.DEFAULT, notificationPermission.$.permission.value);
   });
 
   test('invalid origins navigate back', async function() {
@@ -659,4 +652,118 @@ suite('SiteDetails', function() {
             routes.SITE_SETTINGS_ALL.path,
             Router.getInstance().getCurrentRoute().path);
       });
+
+  test('sub app permission explanation', async function() {
+    const isolatedAppOrigin = 'isolated-app://hubeit66v45f5a2n';
+    const regularOrigin = 'https://foo.com:443';
+
+    // Add exceptions for isolatedAppOrigin to prefs so that getOriginPermissions
+    // doesn't assert.
+    browserProxy.getCategoryListForTest(isolatedAppOrigin).forEach(category => {
+      prefs.exceptions[category].push(createRawSiteException(isolatedAppOrigin));
+    });
+
+    browserProxy.setPrefs(prefs);
+    browserProxy.setSubAppsPermissionExplanation({
+      isSubApp: true,
+      hasSubApps: false,
+      appName: 'Sub App',
+      parentAppName: 'Parent App',
+      parentAppOrigin: 'isolated-app://hubeit66v45f5a2n',
+    });
+
+    testElement = createSiteDetails(isolatedAppOrigin);
+    await browserProxy.whenCalled('getSubAppsPermissionExplanation');
+    await flushTasks();
+
+    const explanation = testElement.shadowRoot!.querySelector<HTMLElement>(
+        '#subAppsPermissionExplanation');
+    assert(explanation);
+    assertFalse(explanation.hidden);
+    const linkElement = explanation.querySelector('localized-link');
+    assert(linkElement);
+
+    // Should contain both app name and parent app name.
+    assertTrue(linkElement.localizedString.includes('Sub App'));
+    assertTrue(linkElement.localizedString.includes('Parent App'));
+
+    browserProxy.resetResolver('getSubAppsPermissionExplanation');
+    browserProxy.setSubAppsPermissionExplanation({
+      isSubApp: false,
+      hasSubApps: true,
+      appName: 'Parent App',
+    });
+
+    // Navigate again with isolated app origin.
+    Router.getInstance().navigateTo(
+        routes.SITE_SETTINGS_SITE_DETAILS,
+        new URLSearchParams('site=' + isolatedAppOrigin));
+
+    await browserProxy.whenCalled('getSubAppsPermissionExplanation');
+    await flushTasks();
+
+    assertFalse(explanation.hidden);
+    assertTrue(linkElement.localizedString.includes('Parent App'));
+
+    browserProxy.resetResolver('getSubAppsPermissionExplanation');
+    browserProxy.setSubAppsPermissionExplanation({
+      isSubApp: false,
+      hasSubApps: false,
+    });
+
+    // Navigate with a regular origin
+    Router.getInstance().navigateTo(
+        routes.SITE_SETTINGS_SITE_DETAILS,
+        new URLSearchParams('site=' + regularOrigin));
+
+    await browserProxy.whenCalled('getSubAppsPermissionExplanation');
+    await flushTasks();
+
+    assertTrue(explanation.hidden);
+    assertEquals('', linkElement.localizedString);
+  });
+
+  test('sub app permission explanation link click', async function() {
+    const subAppOrigin = 'isolated-app://sub-app';
+    const parentAppOrigin = 'isolated-app://parent-app';
+
+    // Add exceptions for subAppOrigin and parentAppOrigin to prefs so that
+    // getOriginPermissions doesn't assert.
+    browserProxy.getCategoryListForTest(subAppOrigin).forEach(category => {
+      prefs.exceptions[category].push(createRawSiteException(subAppOrigin));
+    });
+    browserProxy.getCategoryListForTest(parentAppOrigin).forEach(category => {
+      prefs.exceptions[category].push(createRawSiteException(parentAppOrigin));
+    });
+
+    browserProxy.setPrefs(prefs);
+    browserProxy.setSubAppsPermissionExplanation({
+      isSubApp: true,
+      hasSubApps: false,
+      appName: 'Sub App',
+      parentAppName: 'Parent App',
+      parentAppOrigin: parentAppOrigin,
+    });
+
+    testElement = createSiteDetails(subAppOrigin);
+    await browserProxy.whenCalled('getSubAppsPermissionExplanation');
+    await flushTasks();
+
+    const explanation = testElement.shadowRoot!.querySelector<HTMLElement>(
+        '#subAppsPermissionExplanation');
+    assert(explanation);
+    assertFalse(explanation.hidden);
+    const linkElement = explanation.querySelector('localized-link');
+    assert(linkElement);
+
+    // Click the link and verify navigation.
+    linkElement.dispatchEvent(new CustomEvent('link-clicked'));
+
+    assertEquals(
+        routes.SITE_SETTINGS_SITE_DETAILS.path,
+        Router.getInstance().getCurrentRoute().path);
+    assertEquals(
+        parentAppOrigin,
+        Router.getInstance().getQueryParameters().get('site'));
+  });
 });

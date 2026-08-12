@@ -7,12 +7,11 @@ package org.chromium.chrome.browser.supervised_user.website_approval;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.signin.base.AccountInfo;
-import org.chromium.components.signin.base.CoreAccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.ui.modelutil.PropertyModel;
 
@@ -66,23 +65,18 @@ class WebsiteApprovalMediator {
         IdentityManager identityManager =
                 IdentityServicesProvider.get().getIdentityManager(mProfile);
         assumeNonNull(identityManager);
-        String childEmail =
-                CoreAccountInfo.getEmailFrom(
-                        identityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN));
-        if (childEmail == null) {
+        @Nullable AccountInfo accountInfo = identityManager.getPrimaryAccountInfo();
+        if (accountInfo == null) {
             // This is an unexpected window condition: there is no signed in account.
             // TODO(crbug.com/40843544): dismiss the bottom sheet.
             return;
         }
-        AccountInfo childAccountInfo =
-                identityManager.findExtendedAccountInfoByEmailAddress(childEmail);
 
-        String childNameProperty = childEmail;
-        if (childAccountInfo != null && !childAccountInfo.getGivenName().isEmpty()) {
-            childNameProperty = childAccountInfo.getGivenName();
-        }
-
-        mModel.set(WebsiteApprovalProperties.CHILD_NAME, childNameProperty);
+        mModel.set(
+                WebsiteApprovalProperties.CHILD_NAME,
+                accountInfo.getGivenName().isEmpty()
+                        ? accountInfo.getEmail()
+                        : accountInfo.getGivenName());
 
         // Now show the actual content.
         mBottomSheetController.requestShowContent(mSheetContent, true);

@@ -11,8 +11,10 @@
 #include "base/strings/to_string.h"
 #include "base/time/clock.h"
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
+#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_metrics_helper.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
+#include "chrome/browser/web_applications/scheduler/apply_pending_manifest_update_result.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
 #include "chrome/browser/web_applications/web_app_install_manager.h"
 #include "chrome/browser/web_applications/web_app_proto_utils.h"
@@ -20,6 +22,7 @@
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
+#include "url/origin.h"
 
 namespace web_app {
 namespace {
@@ -80,34 +83,11 @@ std::ostream& operator<<(std::ostream& os,
   }
 }
 
-std::ostream& operator<<(std::ostream& os,
-                         ApplyPendingManifestUpdateResult stage) {
-  switch (stage) {
-    case ApplyPendingManifestUpdateResult::kSystemShutdown:
-      return os << "kSystemShutdown";
-    case ApplyPendingManifestUpdateResult::kAppNotInstalled:
-      return os << "kAppNotInstalled";
-    case ApplyPendingManifestUpdateResult::kIconChangeAppliedSuccessfully:
-      return os << "kIconChangeAppliedSuccessfully";
-    case ApplyPendingManifestUpdateResult::
-        kFailedToOverwriteIconsFromPendingIcons:
-      return os << "kFailedToOverwriteIconsFromPendingIcons";
-    case ApplyPendingManifestUpdateResult::kNoPendingUpdate:
-      return os << "kNoPendingUpdate";
-    case ApplyPendingManifestUpdateResult::kFailedToRemovePendingIconsFromDisk:
-      return os << "kFailedToRemovePendingIconsFromDisk";
-    case ApplyPendingManifestUpdateResult::kAppNameUpdatedSuccessfully:
-      return os << "kAppNameUpdatedSuccessfully";
-    case ApplyPendingManifestUpdateResult::kAppNameAndIconsUpdatedSuccessfully:
-      return os << "kAppNameAndIconsUpdatedSuccessfully";
-  }
-}
-
 ApplyPendingManifestUpdateCommand::ApplyPendingManifestUpdateCommand(
     const webapps::AppId& app_id,
     std::unique_ptr<ScopedKeepAlive> keep_alive,
     std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive,
-    CompletedCallback callback)
+    ApplyPendingManifestUpdateCompletedCallback callback)
     : WebAppCommand<AppLock, ApplyPendingManifestUpdateResult>(
           "ApplyPendingManifestUpdateCommand",
           AppLockDescription(app_id),
@@ -138,7 +118,8 @@ void ApplyPendingManifestUpdateCommand::StartWithLock(
   CHECK_EQ(stage_, ApplyPendingManifestUpdateCommandStage::kNotStarted);
   SetStage(ApplyPendingManifestUpdateCommandStage::kAquiringAppLock);
   lock_ = std::move(lock);
-  if (!lock_->registrar().IsInRegistrar(app_id_)) {
+  if (!lock_->registrar().AppMatches(app_id_,
+                                     WebAppFilter::IsAppSurfaceableToUser())) {
     CompleteCommandAndSelfDestruct(
         ApplyPendingManifestUpdateResult::kAppNotInstalled);
     return;
@@ -302,6 +283,17 @@ void ApplyPendingManifestUpdateCommand::DeletePendingUpdateInfoThenComplete(
 
 void ApplyPendingManifestUpdateCommand::CompleteCommandAndSelfDestruct(
     ApplyPendingManifestUpdateResult check_result) {
+  // For sub apps send UKM in addition to UMA that is sent via callback chaining
+  // in the constructor.
+  const WebAppRegistrar& registrar = lock_->registrar();
+  const WebApp* app = registrar.GetAppById(app_id_);
+
+  if (app && app->parent_app_id()) {
+    IsolatedWebAppMetricsHelper::ReportSubAppPendingUpdateResult(
+        url::Origin::Create(registrar.GetAppStartUrl(*app->parent_app_id())),
+        check_result);
+  }
+
   GetMutableDebugValue().Set("result", base::ToString(check_result));
 
   CommandResult command_result;

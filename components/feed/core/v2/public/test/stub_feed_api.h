@@ -10,7 +10,6 @@
 #include "components/feed/core/proto/v2/store.pb.h"
 #include "components/feed/core/v2/public/feed_api.h"
 #include "components/feed/core/v2/public/persistent_key_value_store.h"
-#include "components/feed/core/v2/public/test/stub_web_feed_subscriptions.h"
 
 namespace feed {
 
@@ -31,10 +30,7 @@ class StubPersistentKeyValueStore : public PersistentKeyValueStore {
 
 class StubFeedApi : public FeedApi {
  public:
-  WebFeedSubscriptions& subscriptions() override;
-
-  SurfaceId CreateSurface(const StreamType& type,
-                          SingleWebFeedEntryPoint entry_point) override;
+  SurfaceId CreateSurface(const StreamType& type) override;
   void DestroySurface(SurfaceId surface) override {}
   void AttachSurface(SurfaceId surface_id, SurfaceRenderer* renderer) override {
   }
@@ -42,13 +38,9 @@ class StubFeedApi : public FeedApi {
   void UpdateUserProfileOnLinkClick(
       const GURL& url,
       const std::vector<int64_t>& entity_mids) override {}
-  void AddUnreadContentObserver(const StreamType& stream_type,
-                                UnreadContentObserver* observer) override {}
-  void RemoveUnreadContentObserver(const StreamType& stream_type,
-                                   UnreadContentObserver* observer) override {}
   bool IsArticlesListVisible() override;
   std::string GetSessionId() const override;
-  void ExecuteRefreshTask(RefreshTaskId task_id) override {}
+  void ExecuteRefreshTask() override {}
   void LoadMore(SurfaceId surface_id,
                 base::OnceCallback<void(bool)> callback) override {}
   void ManualRefresh(SurfaceId surface_id,
@@ -123,14 +115,8 @@ class StubFeedApi : public FeedApi {
       const feedui::StreamUpdate& stream_update) override {}
   base::Time GetLastFetchTime(SurfaceId surface_id) override;
   std::vector<std::string> GetFeedUrls(SurfaceId surface_id) override;
-  void SetContentOrder(const StreamType& stream_type,
-                       ContentOrder content_order) override {}
-  ContentOrder GetContentOrder(const StreamType& stream_type) const override;
-  ContentOrder GetContentOrderFromPrefs(const StreamType& stream_type) override;
-  void IncrementFollowedFromWebPageMenuCount() override {}
 
  private:
-  StubWebFeedSubscriptions web_feed_subscriptions_;
   StubPersistentKeyValueStore persistent_key_value_store_;
 };
 

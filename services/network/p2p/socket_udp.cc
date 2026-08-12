@@ -6,7 +6,7 @@
 
 #include <tuple>
 
-#include "base/containers/contains.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
@@ -27,7 +27,6 @@
 #include "services/network/throttling/throttling_network_interceptor.h"
 #include "services/network/throttling/throttling_p2p_network_interceptor.h"
 #include "third_party/perfetto/include/perfetto/tracing/track.h"
-#include "third_party/webrtc/media/base/rtp_utils.h"
 #include "third_party/webrtc/rtc_base/time_utils.h"
 
 namespace {
@@ -361,7 +360,7 @@ bool P2PSocketUdp::HandleReadResult(int result) {
   if (result > 0) {
     auto data = recv_buffer_->first(static_cast<size_t>(result));
 
-    if (!base::Contains(connected_peers_, recv_address_)) {
+    if (!connected_peers_.contains(recv_address_)) {
       P2PSocket::StunMessageType type;
       bool stun = GetStunPacketType(data, &type);
       if ((stun && IsRequestOrResponse(type))) {
@@ -413,12 +412,18 @@ bool P2PSocketUdp::HandleReadResult(int result) {
   return true;
 }
 
-bool P2PSocketUdp::DoSend(const P2PPendingPacket& packet) {
+bool P2PSocketUdp::DoSend(P2PPendingPacket packet) {
   int64_t send_time_us = webrtc::TimeMicros();
+  int64_t send_time_ms = send_time_us / 1000;
 
-  if (!net::IsPortAllowedForIpEndpoint(packet.to)) {
-    OnError();
-    return false;
+  if (base::FeatureList::IsEnabled(kEnforceP2PSocketPortRestrictions)) {
+    bool is_restricted_port =
+        !net::IsPortAllowedForIpEndpoint(packet.to) ||
+        !net::IsPortAllowedForScheme(packet.to.port(), "stun");
+    if (is_restricted_port) {
+      OnError();
+      return false;
+    }
   }
 
   // The peer is considered not connected until the first incoming STUN
@@ -426,7 +431,7 @@ bool P2PSocketUdp::DoSend(const P2PPendingPacket& packet) {
   // messages to that peer and they are throttled using the |throttler_|. This
   // has to be done here instead of Send() to ensure P2PMsg_OnSendComplete
   // messages are sent in correct order.
-  if (!base::Contains(connected_peers_, packet.to)) {
+  if (!connected_peers_.contains(packet.to)) {
     P2PSocket::StunMessageType type = P2PSocket::StunMessageType();
     bool stun = GetStunPacketType(packet.data->first(packet.size), &type);
     if (!stun || type == STUN_DATA_INDICATION) {
@@ -442,7 +447,7 @@ bool P2PSocketUdp::DoSend(const P2PPendingPacket& packet) {
       // and in the same order it generates them, so we need to respond even
       // when the packet is dropped.
       send_completions_.emplace_back(packet.id, packet.packet_options.packet_id,
-                                     send_time_us / 1000);
+                                     send_time_ms);
       // Do not reset the socket.
       return true;
     }
@@ -455,12 +460,20 @@ bool P2PSocketUdp::DoSend(const P2PPendingPacket& packet) {
       static_cast<net::DiffServCodePoint>(packet.packet_options.dscp),
       packet.packet_options.ect_1 ? net::ECN_ECT1 : net::ECN_NOT_ECT);
 
-  webrtc::ApplyPacketOptions(
-      webrtc::ArrayView<uint8_t>(packet.data->bytes(), packet.size),
-      packet.packet_options.packet_time_params, send_time_us);
+  bool success = DoSendToSocket(packet, send_time_ms);
+  if (success) {
+    delegate_->DumpPacket(packet.data->first(packet.size), /*incoming=*/false);
+  }
+  return success;
+}
+
+bool P2PSocketUdp::DoSendToSocket(const P2PPendingPacket& packet,
+                                  int64_t send_time_ms) {
+  CHECK(!send_pending_);
+
   auto callback_binding = base::BindRepeating(
       &P2PSocketUdp::OnSend, base::Unretained(this), packet.id,
-      packet.packet_options.packet_id, send_time_us / 1000);
+      packet.packet_options.packet_id, send_time_ms);
 
   // TODO(crbug.com/40489281): Pass traffic annotation after
   // DatagramSocketServer is updated.
@@ -477,16 +490,19 @@ bool P2PSocketUdp::DoSend(const P2PPendingPacket& packet) {
 
   if (result == net::ERR_IO_PENDING) {
     send_pending_ = true;
-  } else {
-    if (!HandleSendResult(packet.id, packet.packet_options.packet_id,
-                          send_time_us / 1000, result)) {
-      return false;
-    }
+    return true;
   }
 
-  delegate_->DumpPacket(packet.data->first(packet.size), false);
+  if (IsRetryableSendError(result)) {
+    send_pending_ = true;
+    StartSendRetryTimer(packet, send_time_ms);
+    LOG(ERROR) << "Retrying after P2PSocketUdp::Send error: " << result
+               << ", retry #" << send_retry_count_;
+    return true;
+  }
 
-  return true;
+  return HandleSendResult(packet.id, packet.packet_options.packet_id,
+                          send_time_ms, result);
 }
 
 void P2PSocketUdp::OnSend(uint64_t packet_id,
@@ -504,18 +520,73 @@ void P2PSocketUdp::OnSend(uint64_t packet_id,
   }
 
   // Send next packets if we have them waiting in the buffer.
+  SendQueuedPackets();
+}
+
+void P2PSocketUdp::SendQueuedPackets() {
   while (!send_queue_.empty() && !send_pending_) {
     P2PPendingPacket packet = send_queue_.front();
     send_queue_.pop_front();
-    if (!DoSend(packet))
+    if (!DoSend(std::move(packet))) {
+      // When `DoSend()` fails, `P2PSocket::OnError()` destroys `this` object.
+      // Do not reference `this` afterwards.
       return;
+    }
   }
+
+  ProcessSendCompletions();
+}
+
+bool P2PSocketUdp::IsRetryableSendError(int socket_result_code) const {
+  if (socket_result_code != net::ERR_NO_BUFFER_SPACE) {
+    return false;
+  }
+  return send_retry_count_ < kMaxSendRetries;
+}
+
+void P2PSocketUdp::StartSendRetryTimer(P2PPendingPacket packet,
+                                       int64_t send_time_ms) {
+  CHECK_LT(send_retry_count_, kMaxSendRetries);
+
+  // Double the `delay` interval for each retry.
+  base::TimeDelta delay = base::Milliseconds(UINT64_C(1) << send_retry_count_);
+  ++send_retry_count_;
+
+  send_retry_timer_.Start(
+      FROM_HERE, delay,
+      base::BindOnce(&P2PSocketUdp::OnRetrySendToSocket, base::Unretained(this),
+                     std::move(packet), send_time_ms));
+}
+
+void P2PSocketUdp::OnRetrySendToSocket(const P2PPendingPacket& packet,
+                                       int64_t send_time_ms) {
+  CHECK(send_pending_);
+  send_pending_ = false;
+
+  if (!client_ || !delegate_) {
+    // The socket is in an error state.
+    return;
+  }
+
+  if (!DoSendToSocket(packet, send_time_ms)) {
+    // When `DoSendToSocket()` fails, `P2PSocket::OnError()` destroys `this`
+    // object. Do not reference `this` afterwards.
+    return;
+  }
+
+  SendQueuedPackets();
 }
 
 bool P2PSocketUdp::HandleSendResult(uint64_t packet_id,
                                     int32_t transport_sequence_number,
                                     int64_t send_time_ms,
                                     int result) {
+  CHECK(!send_pending_);
+  send_retry_count_ = 0;
+
+  int result_to_record = std::min(result, static_cast<int>(net::OK));
+  UMA_HISTOGRAM_SPARSE("WebRTC.P2P.UDP.SendResult", result_to_record);
+
   // End the in-process "UdpAsyncSendTo" event.
   TRACE_EVENT_END("p2p", perfetto::Track(packet_id), "result", result);
   // End the "Send" event in the Global parent track - the corresponding
@@ -571,7 +642,7 @@ bool P2PSocketUdp::SendPacket(base::span<const uint8_t> data,
   } else {
     P2PPendingPacket packet(packet_info.destination, data,
                             packet_info.packet_options, packet_info.packet_id);
-    result = DoSend(packet);
+    result = DoSend(std::move(packet));
   }
   return result;
 }
@@ -594,7 +665,7 @@ void P2PSocketUdp::SendFromInterceptor(const P2PPendingPacket& packet) {
   if (send_pending_) {
     send_queue_.push_back(packet);
   } else {
-    std::ignore = DoSend(packet);
+    std::ignore = DoSend(std::move(packet));
   }
 }
 

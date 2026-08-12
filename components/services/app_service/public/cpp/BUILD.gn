@@ -2,10 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-# Component for the core data structures and types used by App Service. Large
-# parts of the codebase are dependent on this target (via
-# //chromeos/crosapi/mojom), so this must have minimal deps to avoid circular
-# chains.
+# Component for the core data structures and types used by App Service.
 component("app_types") {
   output_name = "APP_TYPES"
   sources = [
@@ -17,13 +14,12 @@ component("app_types") {
     "app_types.h",
     "capability_access.cc",
     "capability_access.h",
-    "features.cc",
-    "features.h",
     "icon_effects.h",
     "icon_types.cc",
     "icon_types.h",
     "intent_filter.cc",
     "intent_filter.h",
+    "launch_result.h",
     "menu.cc",
     "menu.h",
     "package_id.cc",
@@ -43,14 +39,35 @@ component("app_types") {
   public_deps = [
     "//base",
     "//components/services/app_service/public/protos",
+    "//url",
   ]
 
   deps = [
     ":macros",
     "//third_party/abseil-cpp:absl",
     "//ui/gfx",
-    "//url",
   ]
+}
+
+component("app_service") {
+  defines = [ "IS_APP_SERVICE_IMPL" ]
+  sources = [
+    "app_service.cc",
+    "app_service.h",
+  ]
+  deps = [
+    ":app_types",
+    ":intents",
+    "//base",
+  ]
+
+  if (is_chromeos) {
+    sources += [
+      "app_service_registry.cc",
+      "app_service_registry.h",
+    ]
+    deps += [ "//components/account_id" ]
+  }
 }
 
 # This target is separate from //components/services/app_service because not all
@@ -67,7 +84,6 @@ if (is_chromeos) {
     ]
     deps = [
       ":macros",
-      "//ash/public/cpp",
       "//content/public/browser",
       "//skia",
       "//ui/aura",
@@ -141,6 +157,25 @@ source_set("app_icon_info") {
 
   deps = [
     "//base",
+    "//url",
+  ]
+
+  visibility = [ "//components/services/app_service/*" ]
+}
+
+source_set("app_launch_params") {
+  sources = [
+    "app_launch_params.cc",
+    "app_launch_params.h",
+  ]
+
+  deps = [
+    ":app_types",
+    ":intents",
+    "//base",
+    "//ui/base:types",
+    "//ui/display/types",
+    "//ui/gfx/geometry",
     "//url",
   ]
 
@@ -287,12 +322,6 @@ source_set("app_shortcut_image") {
     "//skia",
     "//ui/gfx",
   ]
-
-  visibility = [ "//components/services/app_service/*" ]
-}
-
-source_set("crosapi_utils") {
-  sources = [ "crosapi_utils.h" ]
 
   visibility = [ "//components/services/app_service/*" ]
 }

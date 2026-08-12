@@ -28,13 +28,17 @@
                  @"Wrong number of opened tabs");
 
   // Open a second tab.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::NewTabButton()]
+  [[EarlGrey
+      selectElementWithMatcher:
+          grey_accessibilityID(@"TabStripNewTabButtonAccessibilityIdentifier")]
       performAction:grey_tap()];
   GREYAssertTrue([ChromeEarlGrey mainTabCount] == 2,
                  @"Wrong number of opened tabs");
 
   // Open a third tab.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::NewTabButton()]
+  [[EarlGrey
+      selectElementWithMatcher:
+          grey_accessibilityID(@"TabStripNewTabButtonAccessibilityIdentifier")]
       performAction:grey_tap()];
   GREYAssertTrue([ChromeEarlGrey mainTabCount] == 3,
                  @"Wrong number of opened tabs");
@@ -49,9 +53,9 @@
   // TODO(crbug.com/41010830):  Make this test also handle the 'collapsed' tab
   // case.
   const int kNumberOfTabs = 3;
-  [ChromeEarlGreyUI openNewTab];
+  [ChromeEarlGrey openNewTab];
   [ChromeEarlGrey loadURL:GURL("chrome://about")];
-  [ChromeEarlGreyUI openNewTab];
+  [ChromeEarlGrey openNewTab];
   [ChromeEarlGrey loadURL:GURL("chrome://version")];
 
   // Note that the tab ordering wraps.  E.g. if A, B, and C are open,

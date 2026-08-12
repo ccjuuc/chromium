@@ -57,17 +57,40 @@ void LogTaskNudgeClick(ActorTaskNudgeState nudge_state) {
       GetActorUiMetricName("TaskNudge.", ToString(nudge_state), ".Click"));
 }
 
+void LogGlobalTaskIndicatorClick(ActorTaskNudgeState nudge_state) {
+  DCHECK_NE(nudge_state.text,
+            ActorTaskNudgeState::Text::kMultipleTasksNeedAttention)
+      << "MultipleTasksNeedAttention state is deprecated.";
+  base::RecordComputedAction(GetActorUiMetricName(
+      "GlobalTaskIndicator.", ToString(nudge_state), ".Click"));
+}
+
 void RecordTaskListBubbleRows(size_t count) {
   base::UmaHistogramCounts100(GetActorUiMetricName("TaskListBubble.Rows"),
                               count);
 }
 
+void RecordTaskIconError(ActorUiTaskIconError error) {
+  base::UmaHistogramEnumeration(GetActorUiMetricName("TaskIcon.Error"), error);
+}
+
 void RecordTaskNudgeShown(ActorTaskNudgeState nudge_state) {
+  DCHECK_NE(nudge_state.text, ActorTaskNudgeState::Text::kDefault)
+      << "Nudge is hidden in default state so it cannot be shown.";
   DCHECK_NE(nudge_state.text,
             ActorTaskNudgeState::Text::kMultipleTasksNeedAttention)
       << "MultipleTasksNeedAttention state is deprecated.";
   base::UmaHistogramEnumeration(GetActorUiMetricName("TaskNudge.Shown"),
                                 nudge_state.text);
+}
+
+void RecordGlobalTaskIndicatorNudgeShown(ActorTaskNudgeState nudge_state) {
+  DCHECK_NE(nudge_state.text,
+            ActorTaskNudgeState::Text::kMultipleTasksNeedAttention)
+      << "MultipleTasksNeedAttention state is deprecated.";
+  base::UmaHistogramEnumeration(
+      GetActorUiMetricName("GlobalTaskIndicator.Nudge.Shown"),
+      nudge_state.text);
 }
 
 void RecordActuatingTabWebContentsAttached() {
@@ -113,6 +136,13 @@ void RecordModelPageTargetType(ModelPageTargetType target_type) {
 void RecordGetDomNodeResult(GetDomNodeResult result) {
   base::UmaHistogramEnumeration("Actor.DomNodeGeometry.GetDomNodeResult",
                                 result);
+}
+
+void RecordRendererResolvedTargetResult(
+    RendererResolvedTargetResult target_result) {
+  base::UmaHistogramEnumeration(
+      GetEventDispatcherHistogramName("RendererResolvedTargetResult"),
+      target_result);
 }
 
 }  // namespace actor::ui

@@ -15,7 +15,7 @@
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/scoped_java_ref.h"
-#include "chrome/browser/mandatory_reauth/android/mandatory_reauth_opt_in_view_android.h"
+#include "chrome/browser/mandatory_reauth/android/mandatory_reauth_opt_in_view_android.h"  // nogncheck
 #endif
 
 namespace autofill {
@@ -44,7 +44,7 @@ class MandatoryReauthBubbleControllerImpl
   std::u16string GetExplanationText() const override;
   void OnBubbleClosed(PaymentsUiClosedReason closed_reason) override;
 #if BUILDFLAG(IS_ANDROID)
-  void OnClosed(JNIEnv* env, jint closed_reason);
+  void OnClosed(JNIEnv* env, int32_t closed_reason);
 #endif
   AutofillBubbleBase* GetBubbleView() override;
   bool IsIconVisible() override;

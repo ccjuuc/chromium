@@ -9,6 +9,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card_benefit_test_api.h"
+#include "components/autofill/core/browser/integrators/optimization_guide/mock_autofill_optimization_guide_decider.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics_test_base.h"
 #include "components/autofill/core/browser/payments/constants.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
@@ -64,7 +65,7 @@ class CardMetadataFormEventMetricsTest
 
     // Add a Mastercard masked server card.
     card_ = test::WithCvc(test::GetMaskedServerCard());
-    card_.SetNetworkForMaskedCard(autofill::kMasterCard);
+    card_.SetNetworkForMaskedCard(kMasterCard);
     card_.set_guid(kCardGuid);
     card_.set_issuer_id(issuer_id());
     if (issuer_id() == kCapitalOneCardIssuerId && card_has_static_art_image()) {
@@ -222,10 +223,11 @@ TEST_P(CardMetadataFormEventMetricsTest, LogSelectedMetrics) {
       form(), form().fields().back().global_id());
   DidShowAutofillSuggestions(form(), /*field_index=*/form().fields().size() - 1,
                              SuggestionType::kCreditCardEntry);
-  autofill_manager().FillOrPreviewForm(mojom::ActionPersistence::kFill, form(),
-                                       form().fields().back().global_id(),
-                                       paydm().GetCreditCardByGUID(kCardGuid),
-                                       AutofillTriggerSource::kPopup);
+  autofill_manager().FillOrPreviewForm(
+      mojom::ActionPersistence::kFill, form().global_id(),
+      form().fields().back().global_id(),
+      paydm().GetCreditCardByGUID(kCardGuid), AutofillTriggerSource::kPopup,
+      /*blocked_fields=*/{});
 
   // Verify that:
   // 1. if the card suggestion selected had metadata,
@@ -271,10 +273,11 @@ TEST_P(CardMetadataFormEventMetricsTest, LogSelectedMetrics) {
       0);
 
   // Select the suggestion again.
-  autofill_manager().FillOrPreviewForm(mojom::ActionPersistence::kFill, form(),
-                                       form().fields().back().global_id(),
-                                       paydm().GetCreditCardByGUID(kCardGuid),
-                                       AutofillTriggerSource::kPopup);
+  autofill_manager().FillOrPreviewForm(
+      mojom::ActionPersistence::kFill, form().global_id(),
+      form().fields().back().global_id(),
+      paydm().GetCreditCardByGUID(kCardGuid), AutofillTriggerSource::kPopup,
+      /*blocked_fields=*/{});
 
   EXPECT_THAT(
       histogram_tester.GetAllSamples("Autofill.FormEvents.CreditCard"),
@@ -329,10 +332,11 @@ TEST_P(CardMetadataFormEventMetricsTest, LogFilledMetrics) {
                              SuggestionType::kCreditCardEntry);
   EXPECT_CALL(credit_card_access_manager(), FetchCreditCard)
       .WillOnce(base::test::RunOnceCallback<1>(card()));
-  autofill_manager().FillOrPreviewForm(mojom::ActionPersistence::kFill, form(),
-                                       form().fields().back().global_id(),
-                                       paydm().GetCreditCardByGUID(kCardGuid),
-                                       AutofillTriggerSource::kPopup);
+  autofill_manager().FillOrPreviewForm(
+      mojom::ActionPersistence::kFill, form().global_id(),
+      form().fields().back().global_id(),
+      paydm().GetCreditCardByGUID(kCardGuid), AutofillTriggerSource::kPopup,
+      /*blocked_fields=*/{});
 
   // Verify that:
   // 1. if the card suggestion filled had metadata,
@@ -379,10 +383,11 @@ TEST_P(CardMetadataFormEventMetricsTest, LogFilledMetrics) {
   // Fill the suggestion again.
   EXPECT_CALL(credit_card_access_manager(), FetchCreditCard)
       .WillOnce(base::test::RunOnceCallback<1>(card()));
-  autofill_manager().FillOrPreviewForm(mojom::ActionPersistence::kFill, form(),
-                                       form().fields().back().global_id(),
-                                       paydm().GetCreditCardByGUID(kCardGuid),
-                                       AutofillTriggerSource::kPopup);
+  autofill_manager().FillOrPreviewForm(
+      mojom::ActionPersistence::kFill, form().global_id(),
+      form().fields().back().global_id(),
+      paydm().GetCreditCardByGUID(kCardGuid), AutofillTriggerSource::kPopup,
+      /*blocked_fields=*/{});
 
   EXPECT_THAT(
       histogram_tester.GetAllSamples("Autofill.FormEvents.CreditCard"),
@@ -419,10 +424,11 @@ TEST_P(CardMetadataFormEventMetricsTest, LogSubmitMetrics) {
       form(), form().fields().back().global_id());
   EXPECT_CALL(credit_card_access_manager(), FetchCreditCard)
       .WillOnce(base::test::RunOnceCallback<1>(card()));
-  autofill_manager().FillOrPreviewForm(mojom::ActionPersistence::kFill, form(),
-                                       form().fields().back().global_id(),
-                                       paydm().GetCreditCardByGUID(kCardGuid),
-                                       AutofillTriggerSource::kPopup);
+  autofill_manager().FillOrPreviewForm(
+      mojom::ActionPersistence::kFill, form().global_id(),
+      form().fields().back().global_id(),
+      paydm().GetCreditCardByGUID(kCardGuid), AutofillTriggerSource::kPopup,
+      /*blocked_fields=*/{});
   SubmitForm(form());
 
   // Verify that:
@@ -535,10 +541,10 @@ TEST_P(CardMetadataLatencyMetricsTest, LogMetrics) {
                              SuggestionType::kCreditCardEntry);
   task_environment_.FastForwardBy(base::Seconds(2));
   autofill_manager().FillOrPreviewForm(
-      mojom::ActionPersistence::kFill, form(),
+      mojom::ActionPersistence::kFill, form().global_id(),
       form().fields().front().global_id(),
       paydm().GetCreditCardByGUID(kTestMaskedCardId),
-      AutofillTriggerSource::kPopup);
+      AutofillTriggerSource::kPopup, /*blocked_fields=*/{});
 
   std::string latency_histogram_prefix =
       "Autofill.CreditCard.SelectionLatencySinceShown.";
@@ -575,19 +581,40 @@ TEST_P(CardMetadataLatencyMetricsTest, LogMetrics) {
 // TODO(crbug.com/346399130): Reduce the amount of '_ONCE' metric tests.
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 // Params:
-// 1. Whether card benefit feature flag is enabled.
-// 2. Benefit source of the card with a benefit available.
+// 1. Benefit source of the card with a benefit available.
 class CardBenefitFormEventMetricsTest
     : public AutofillMetricsBaseTest,
-      public testing::TestWithParam<std::tuple<bool, std::string_view>> {
+      public testing::TestWithParam<
+          std::tuple<std::string_view, CreditCardBenefitType>> {
  public:
   CardBenefitFormEventMetricsTest() = default;
   ~CardBenefitFormEventMetricsTest() override = default;
+
+  std::string_view benefit_source() const { return std::get<0>(GetParam()); }
+  CreditCardBenefitType benefit_type() const { return std::get<1>(GetParam()); }
 
   // Adding a benefit for the card on client.
   void AddBenefitToCard(CreditCard& card) {
     card.set_product_terms_url(GURL("https://www.example.com/term"));
     CreditCardBenefit benefit = test::GetActiveCreditCardFlatRateBenefit();
+    switch (benefit_type()) {
+      case CreditCardBenefitType::kFlatRate:
+        break;
+      case CreditCardBenefitType::kCategory:
+        benefit = test::GetActiveCreditCardCategoryBenefit();
+        break;
+      case CreditCardBenefitType::kMerchant: {
+        CreditCardMerchantBenefit merchant_benefit =
+            test::GetActiveCreditCardMerchantBenefit();
+        test_api(merchant_benefit)
+            .SetMerchantDomains(
+                {url::Origin::Create(GURL("https://example.test"))});
+        benefit = merchant_benefit;
+        break;
+      }
+      default:
+        break;
+    }
     test_api(benefit).SetLinkedCardInstrumentId(
         CreditCardBenefitBase::LinkedCardInstrumentId(card.instrument_id()));
     paydm().AddCreditCardBenefitForTest(benefit);
@@ -603,7 +630,7 @@ class CardBenefitFormEventMetricsTest
   // Adding an additional card from the same benefit source.
   void AddAdditionalCardWithBenefit() {
     CreditCard card = test::GetMaskedServerCard2();
-    card_.set_benefit_source(benefit_source());
+    card.set_benefit_source(benefit_source());
     AddBenefitToCard(card);
 
     test_paydm().AddServerCreditCard(card);
@@ -621,9 +648,9 @@ class CardBenefitFormEventMetricsTest
   void ShowSuggestionsAndSelectCard(const CreditCard* card) {
     ShowCardSuggestions();
     autofill_manager().FillOrPreviewForm(
-        mojom::ActionPersistence::kFill, form(),
+        mojom::ActionPersistence::kFill, form().global_id(),
         form().fields()[credit_card_number_field_index()].global_id(), card,
-        AutofillTriggerSource::kPopup);
+        AutofillTriggerSource::kPopup, /*blocked_fields=*/{});
   }
 
   // Simulating selecting and filling the given `card` from a list of
@@ -633,9 +660,18 @@ class CardBenefitFormEventMetricsTest
         .WillOnce(base::test::RunOnceCallback<1>(*card));
     ShowCardSuggestions();
     autofill_manager().FillOrPreviewForm(
-        mojom::ActionPersistence::kFill, form(),
+        mojom::ActionPersistence::kFill, form().global_id(),
         form().fields()[credit_card_number_field_index()].global_id(), card,
-        AutofillTriggerSource::kPopup);
+        AutofillTriggerSource::kPopup, /*blocked_fields=*/{});
+  }
+
+  // Simulates clicking the CVC field. This will trigger a new fetch of
+  // suggestions, which in turn updates the metadata logging context.
+  void SelectCvcField() {
+    autofill_manager().OnAskForValuesToFillTest(
+        form(), form().fields()[cvc_field_index()].global_id());
+    DidShowAutofillSuggestions(form(), cvc_field_index(),
+                               SuggestionType::kCreditCardEntry);
   }
 
   const CreditCard* GetCreditCard() {
@@ -651,33 +687,30 @@ class CardBenefitFormEventMetricsTest
                            .fields = {{.role = CREDIT_CARD_NAME_FULL},
                                       {.role = CREDIT_CARD_NUMBER},
                                       {.role = CREDIT_CARD_EXP_MONTH},
-                                      {.role = CREDIT_CARD_EXP_2_DIGIT_YEAR}},
+                                      {.role = CREDIT_CARD_EXP_2_DIGIT_YEAR},
+                                      {.role = CREDIT_CARD_VERIFICATION_CODE}},
                            .action = ""});
     credit_card_number_field_index_ = 1;
+    cvc_field_index_ = 4;
 
     // Add a masked server card.
     card_ = test::GetMaskedServerCard();
     card_.set_benefit_source(benefit_source());
     test_paydm().AddServerCreditCard(card_);
 
-    // Initialize features based on test params.
-    scoped_feature_list_.InitWithFeatureStates(
-        /*feature_states=*/
-        {{features::kAutofillEnableCardBenefitsSync, true},
-         {features::kAutofillEnableCardBenefitsForAmericanExpress,
-          card_benefits_are_enabled()},
-         {features::kAutofillEnableCardBenefitsForBmo,
-          card_benefits_are_enabled()},
-         {features::kAutofillEnableFlatRateCardBenefitsFromCurinos,
-          card_benefits_are_enabled()}});
+    scoped_feature_list_.InitAndEnableFeature(
+        features::kAutofillEnableCardBenefitsSync);
+
+    if (benefit_type() == CreditCardBenefitType::kCategory) {
+      ON_CALL(*static_cast<MockAutofillOptimizationGuideDecider*>(
+                  autofill_client().GetAutofillOptimizationGuideDecider()),
+              AttemptToGetEligibleCreditCardBenefitCategory)
+          .WillByDefault(testing::Return(
+              CreditCardCategoryBenefit::BenefitCategory::kSubscription));
+    }
   }
 
   void TearDown() override { TearDownHelper(); }
-
-  // Return whether the benefit feature flag is enabled.
-  bool card_benefits_are_enabled() const { return std::get<0>(GetParam()); }
-  // Return the benefit source of the card saved on the client.
-  std::string_view benefit_source() const { return std::get<1>(GetParam()); }
 
   const FormData& form() const { return form_; }
   CreditCard& card() { return card_; }
@@ -685,6 +718,7 @@ class CardBenefitFormEventMetricsTest
   int credit_card_number_field_index() const {
     return credit_card_number_field_index_;
   }
+  int cvc_field_index() const { return cvc_field_index_; }
 
   // Returns the benefit source for benefit source specific form events.
   const std::string_view GetSuffix() const {
@@ -693,6 +727,7 @@ class CardBenefitFormEventMetricsTest
 
  private:
   int credit_card_number_field_index_;
+  int cvc_field_index_;
   CreditCard card_;
   std::string local_card_guid_;
   FormData form_;
@@ -702,15 +737,12 @@ class CardBenefitFormEventMetricsTest
 INSTANTIATE_TEST_SUITE_P(
     /*no prefix*/,
     CardBenefitFormEventMetricsTest,
-    testing::Combine(testing::Bool(),
-                     testing::Values(kAmexCardBenefitSource,
+    testing::Combine(testing::Values(kAmexCardBenefitSource,
                                      kBmoCardBenefitSource,
-                                     kCurinosCardBenefitSource)),
-    [](auto& info) {
-      return base::StrCat({std::get<0>(info.param) ? "BenefitFeatureEnabled_"
-                                                   : "BenefitFeatureDisabled_",
-                           std::get<1>(info.param)});
-    });
+                                     kCurinosCardBenefitSource),
+                     testing::Values(CreditCardBenefitType::kFlatRate,
+                                     CreditCardBenefitType::kCategory,
+                                     CreditCardBenefitType::kMerchant)));
 
 // =============================
 //    Benefits metrics: Shown
@@ -735,6 +767,10 @@ TEST_P(
   histogram_tester.ExpectBucketCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
       CardBenefitFormEvent::kSuggestionWithBenefitShown, 1);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      CardBenefitFormEvent::kSuggestionWithBenefitShown, 1);
 
   // Show the popup again.
   ShowCardSuggestions();
@@ -744,6 +780,10 @@ TEST_P(
       CardBenefitFormEvent::kSuggestionWithBenefitShown, 1);
   histogram_tester.ExpectBucketCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      CardBenefitFormEvent::kSuggestionWithBenefitShown, 1);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
       CardBenefitFormEvent::kSuggestionWithBenefitShown, 1);
 }
 
@@ -762,6 +802,10 @@ TEST_P(
                                     0);
   histogram_tester.ExpectTotalCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      0);
+  histogram_tester.ExpectTotalCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
       0);
 }
 
@@ -788,6 +832,11 @@ TEST_P(
       0);
   histogram_tester.ExpectBucketCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      CardBenefitFormEvent::kSuggestionWithBenefitShownWithMultipleServerCards,
+      0);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
       CardBenefitFormEvent::kSuggestionWithBenefitShownWithMultipleServerCards,
       0);
 }
@@ -817,6 +866,11 @@ TEST_P(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
       CardBenefitFormEvent::kSuggestionWithBenefitShownWithMultipleServerCards,
       1);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      CardBenefitFormEvent::kSuggestionWithBenefitShownWithMultipleServerCards,
+      1);
 
   // Show the popup again.
   ShowCardSuggestions();
@@ -827,6 +881,11 @@ TEST_P(
       1);
   histogram_tester.ExpectBucketCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      CardBenefitFormEvent::kSuggestionWithBenefitShownWithMultipleServerCards,
+      1);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
       CardBenefitFormEvent::kSuggestionWithBenefitShownWithMultipleServerCards,
       1);
 }
@@ -852,6 +911,11 @@ TEST_P(
 
   histogram_tester.ExpectBucketCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      CardBenefitFormEvent::kSuggestionWithBenefitShownWithMultipleServerCards,
+      1);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
       CardBenefitFormEvent::kSuggestionWithBenefitShownWithMultipleServerCards,
       1);
 }
@@ -880,6 +944,11 @@ TEST_P(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
       CardBenefitFormEvent::kSuggestionWithBenefitShownWithMultipleServerCards,
       0);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      CardBenefitFormEvent::kSuggestionWithBenefitShownWithMultipleServerCards,
+      0);
 }
 
 // =============================
@@ -905,6 +974,10 @@ TEST_P(
   histogram_tester.ExpectBucketCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
       CardBenefitFormEvent::kSuggestionWithBenefitSelected, 1);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      CardBenefitFormEvent::kSuggestionWithBenefitSelected, 1);
 
   // Select the suggestion again.
   ShowSuggestionsAndSelectCard(GetCreditCard());
@@ -914,6 +987,10 @@ TEST_P(
       CardBenefitFormEvent::kSuggestionWithBenefitSelected, 1);
   histogram_tester.ExpectBucketCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      CardBenefitFormEvent::kSuggestionWithBenefitSelected, 1);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
       CardBenefitFormEvent::kSuggestionWithBenefitSelected, 1);
 }
 
@@ -932,6 +1009,10 @@ TEST_P(
                                     0);
   histogram_tester.ExpectTotalCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      0);
+  histogram_tester.ExpectTotalCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
       0);
 }
 
@@ -971,7 +1052,19 @@ TEST_P(
           kSuggestionWithBenefitSelectedWithMultipleServerCards,
       0);
   histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      CardBenefitFormEvent::
+          kSuggestionWithBenefitSelectedWithMultipleServerCards,
+      0);
+  histogram_tester.ExpectBucketCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      CardBenefitFormEvent::
+          kSuggestionWithoutBenefitSelectedWithMultipleServerCards,
+      0);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
       CardBenefitFormEvent::
           kSuggestionWithoutBenefitSelectedWithMultipleServerCards,
       0);
@@ -1004,6 +1097,12 @@ TEST_P(
       CardBenefitFormEvent::
           kSuggestionWithBenefitSelectedWithMultipleServerCards,
       1);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      CardBenefitFormEvent::
+          kSuggestionWithBenefitSelectedWithMultipleServerCards,
+      1);
 
   // Select the suggestion again.
   ShowSuggestionsAndSelectCard(GetCreditCard());
@@ -1015,6 +1114,12 @@ TEST_P(
       1);
   histogram_tester.ExpectBucketCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      CardBenefitFormEvent::
+          kSuggestionWithBenefitSelectedWithMultipleServerCards,
+      1);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
       CardBenefitFormEvent::
           kSuggestionWithBenefitSelectedWithMultipleServerCards,
       1);
@@ -1046,6 +1151,12 @@ TEST_P(
       CardBenefitFormEvent::
           kSuggestionWithoutBenefitSelectedWithMultipleServerCards,
       0);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      CardBenefitFormEvent::
+          kSuggestionWithoutBenefitSelectedWithMultipleServerCards,
+      0);
 }
 
 // Tests that when we have multiple server cards without any benefits available,
@@ -1073,6 +1184,10 @@ TEST_P(
   histogram_tester.ExpectTotalCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
       0);
+  histogram_tester.ExpectTotalCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      0);
 }
 
 // =============================
@@ -1098,6 +1213,10 @@ TEST_P(
   histogram_tester.ExpectBucketCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
       CardBenefitFormEvent::kSuggestionWithBenefitFilled, 1);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      CardBenefitFormEvent::kSuggestionWithBenefitFilled, 1);
 
   // Fill the suggestion again.
   ShowSuggestionsThenSelectAndFillCard(GetCreditCard());
@@ -1107,6 +1226,10 @@ TEST_P(
       CardBenefitFormEvent::kSuggestionWithBenefitFilled, 1);
   histogram_tester.ExpectBucketCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      CardBenefitFormEvent::kSuggestionWithBenefitFilled, 1);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
       CardBenefitFormEvent::kSuggestionWithBenefitFilled, 1);
 }
 
@@ -1125,6 +1248,10 @@ TEST_P(
                                     0);
   histogram_tester.ExpectTotalCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      0);
+  histogram_tester.ExpectTotalCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
       0);
 }
 
@@ -1161,7 +1288,18 @@ TEST_P(
       CardBenefitFormEvent::kSuggestionWithBenefitFilledWithMultipleServerCards,
       0);
   histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      CardBenefitFormEvent::kSuggestionWithBenefitFilledWithMultipleServerCards,
+      0);
+  histogram_tester.ExpectBucketCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      CardBenefitFormEvent::
+          kSuggestionWithoutBenefitFilledWithMultipleServerCards,
+      0);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
       CardBenefitFormEvent::
           kSuggestionWithoutBenefitFilledWithMultipleServerCards,
       0);
@@ -1192,6 +1330,11 @@ TEST_P(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
       CardBenefitFormEvent::kSuggestionWithBenefitFilledWithMultipleServerCards,
       1);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      CardBenefitFormEvent::kSuggestionWithBenefitFilledWithMultipleServerCards,
+      1);
 
   // Filling the suggestion again.
   ShowSuggestionsThenSelectAndFillCard(GetCreditCard());
@@ -1202,6 +1345,11 @@ TEST_P(
       1);
   histogram_tester.ExpectBucketCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      CardBenefitFormEvent::kSuggestionWithBenefitFilledWithMultipleServerCards,
+      1);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
       CardBenefitFormEvent::kSuggestionWithBenefitFilledWithMultipleServerCards,
       1);
 }
@@ -1232,6 +1380,12 @@ TEST_P(
       CardBenefitFormEvent::
           kSuggestionWithoutBenefitFilledWithMultipleServerCards,
       0);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      CardBenefitFormEvent::
+          kSuggestionWithoutBenefitFilledWithMultipleServerCards,
+      0);
 }
 
 // Tests that when we have multiple server cards without any benefits available,
@@ -1258,6 +1412,10 @@ TEST_P(
   histogram_tester.ExpectTotalCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
       0);
+  histogram_tester.ExpectTotalCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      0);
 }
 
 // Tests that when we have one server card with a benefit available, we only log
@@ -1280,6 +1438,37 @@ TEST_P(
   histogram_tester.ExpectBucketCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
       CardBenefitFormEvent::kSuggestionWithBenefitSubmitted, 1);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      CardBenefitFormEvent::kSuggestionWithBenefitSubmitted, 1);
+}
+
+// Tests that when we have one server card with a benefit available, we log
+// `kSuggestionWithBenefitSubmitted` after the benefit card is filled, the CVC
+// field is selected/focused, and the form is submitted (in this order).
+TEST_P(
+    CardBenefitFormEventMetricsTest,
+    Metrics_OneServerCardWithBenefitAvailable_LogSuggestionWithBenefitSubmitted_CvcFieldSelected) {
+  base::HistogramTester histogram_tester;
+
+  // Add server card with a benefit available.
+  AddBenefitToCard(card());
+
+  ShowSuggestionsThenSelectAndFillCard(GetCreditCard());
+  SelectCvcField();
+  SubmitForm(form());
+
+  histogram_tester.ExpectBucketCount(
+      "Autofill.FormEvents.CreditCard.Benefits",
+      CardBenefitFormEvent::kSuggestionWithBenefitSubmitted, 1);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      CardBenefitFormEvent::kSuggestionWithBenefitSubmitted, 1);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      CardBenefitFormEvent::kSuggestionWithBenefitSubmitted, 1);
 }
 
 // Tests that when we have one server card without a benefit available, we don't
@@ -1298,6 +1487,10 @@ TEST_P(
                                     0);
   histogram_tester.ExpectTotalCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      0);
+  histogram_tester.ExpectTotalCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
       0);
 }
 
@@ -1338,7 +1531,19 @@ TEST_P(
           kSuggestionWithBenefitSubmittedWithMultipleServerCards,
       0);
   histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      CardBenefitFormEvent::
+          kSuggestionWithBenefitSubmittedWithMultipleServerCards,
+      0);
+  histogram_tester.ExpectBucketCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      CardBenefitFormEvent::
+          kSuggestionWithoutBenefitSubmittedWithMultipleServerCards,
+      0);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
       CardBenefitFormEvent::
           kSuggestionWithoutBenefitSubmittedWithMultipleServerCards,
       0);
@@ -1372,6 +1577,12 @@ TEST_P(
       CardBenefitFormEvent::
           kSuggestionWithBenefitSubmittedWithMultipleServerCards,
       1);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      CardBenefitFormEvent::
+          kSuggestionWithBenefitSubmittedWithMultipleServerCards,
+      1);
 }
 
 // Tests that when we have multiple server cards with one having benefits
@@ -1396,8 +1607,16 @@ TEST_P(
       CardBenefitFormEvent::
           kSuggestionWithoutBenefitSubmittedWithMultipleServerCards,
       1);
-  histogram_tester.ExpectTotalCount(
+  histogram_tester.ExpectBucketCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      CardBenefitFormEvent::
+          kSuggestionWithoutBenefitSubmittedWithMultipleServerCards,
+      0);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      CardBenefitFormEvent::
+          kSuggestionWithoutBenefitSubmittedWithMultipleServerCards,
       0);
 }
 
@@ -1426,6 +1645,53 @@ TEST_P(
                                     0);
   histogram_tester.ExpectTotalCount(
       base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      0);
+  histogram_tester.ExpectTotalCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      0);
+}
+
+// Tests that when we have multiple server cards, with one card having benefits
+// available, `kSuggestionWithBenefitSubmittedWithMultipleServerCards` will not
+// be logged after the benefit card is filled and then the non-benefit card is
+// filled (in this order).
+TEST_P(
+    CardBenefitFormEventMetricsTest,
+    Metrics_MultipleServerCardsWithOneBenefitAvailable_DoesNotLogAnySubmittedWithMultipleServerCardMetrics) {
+  base::HistogramTester histogram_tester;
+
+  // Add a server card with a benefit available.
+  AddBenefitToCard(card());
+
+  // Add a server card without a benefit available.
+  CreditCard server_card_without_benefit = test::GetMaskedServerCard();
+  test_paydm().AddServerCreditCard(server_card_without_benefit);
+
+  // Simulate filling the server card with a benefit available.
+  ShowSuggestionsThenSelectAndFillCard(GetCreditCard());
+
+  // Simulate filling the server card but without a benefit available.
+  ShowSuggestionsThenSelectAndFillCard(&server_card_without_benefit);
+
+  // Simulate submitting the server card without a benefit available.
+  SubmitForm(form());
+
+  histogram_tester.ExpectBucketCount(
+      "Autofill.FormEvents.CreditCard.Benefits",
+      CardBenefitFormEvent::
+          kSuggestionWithBenefitSubmittedWithMultipleServerCards,
+      0);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix()}),
+      CardBenefitFormEvent::
+          kSuggestionWithBenefitSubmittedWithMultipleServerCards,
+      0);
+  histogram_tester.ExpectBucketCount(
+      base::StrCat({"Autofill.FormEvents.CreditCard.Benefits.", GetSuffix(),
+                    ".", GetCardBenefitTypeSuffix(benefit_type())}),
+      CardBenefitFormEvent::
+          kSuggestionWithBenefitSubmittedWithMultipleServerCards,
       0);
 }
 
@@ -1457,9 +1723,9 @@ class CardBenefitFormEventMetricsInvalidBenefitSourceTest
   void ShowSuggestionsAndSelectCard(const CreditCard* card) {
     ShowCardSuggestions();
     autofill_manager().FillOrPreviewForm(
-        mojom::ActionPersistence::kFill, form(),
+        mojom::ActionPersistence::kFill, form().global_id(),
         form().fields()[credit_card_number_field_index()].global_id(), card,
-        AutofillTriggerSource::kPopup);
+        AutofillTriggerSource::kPopup, /*blocked_fields=*/{});
   }
 
   // Simulating selecting and filling the given `card` from a list of
@@ -1469,9 +1735,9 @@ class CardBenefitFormEventMetricsInvalidBenefitSourceTest
         .WillOnce(base::test::RunOnceCallback<1>(*card));
     ShowCardSuggestions();
     autofill_manager().FillOrPreviewForm(
-        mojom::ActionPersistence::kFill, form(),
+        mojom::ActionPersistence::kFill, form().global_id(),
         form().fields()[credit_card_number_field_index()].global_id(), card,
-        AutofillTriggerSource::kPopup);
+        AutofillTriggerSource::kPopup, /*blocked_fields=*/{});
   }
 
   void SetUp() override {
@@ -1487,14 +1753,8 @@ class CardBenefitFormEventMetricsInvalidBenefitSourceTest
                            .action = ""});
     credit_card_number_field_index_ = 1;
 
-    // Initialize features.
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/
-        {features::kAutofillEnableCardBenefitsSync,
-         features::kAutofillEnableCardBenefitsForAmericanExpress,
-         features::kAutofillEnableCardBenefitsForBmo,
-         features::kAutofillEnableFlatRateCardBenefitsFromCurinos},
-        /*disabled_features=*/{});
+    scoped_feature_list_.InitAndEnableFeature(
+        features::kAutofillEnableCardBenefitsSync);
   }
 
   void TearDown() override { TearDownHelper(); }

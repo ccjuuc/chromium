@@ -7,13 +7,16 @@
 
 #include <memory>
 
+#include "base/callback_list.h"
 #include "base/memory/raw_ref.h"
-#include "chrome/browser/ui/views/page_action/page_action_controller.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
+#include "ui/views/view_tracker.h"
 
 class Profile;
-class ScopedWindowCallToAction;
+class ScopedCallToActionLock;
 
 // Controller for the Lens Overlay "Homework" page action chip that appears in
 // the omnibox.
@@ -23,7 +26,8 @@ class ScopedWindowCallToAction;
 // manages its visibility via the PageActionController, and handles user
 // interactions. An instance of this class is created and owned by
 // `tabs::TabFeatures` and is associated with a specific tab.
-class LensOverlayHomeworkPageActionController {
+class LensOverlayHomeworkPageActionController
+    : public content::WebContentsObserver {
  public:
   DECLARE_USER_DATA(LensOverlayHomeworkPageActionController);
 
@@ -31,7 +35,7 @@ class LensOverlayHomeworkPageActionController {
       tabs::TabInterface& tab_interface,
       Profile& profile,
       page_actions::PageActionController& page_action_controller);
-  ~LensOverlayHomeworkPageActionController();
+  ~LensOverlayHomeworkPageActionController() override;
 
   LensOverlayHomeworkPageActionController(
       const LensOverlayHomeworkPageActionController&) = delete;
@@ -50,6 +54,16 @@ class LensOverlayHomeworkPageActionController {
   void HandlePageActionEvent(bool is_from_keyboard);
 
  private:
+  // content::WebContentsObserver:
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override;
+
+  void OnTabWillDetach(tabs::TabInterface* tab,
+                       tabs::TabInterface::DetachReason reason);
+  void OnTabWillDiscardContents(tabs::TabInterface* tab,
+                                content::WebContents* discarded,
+                                content::WebContents* replacement);
+
   // Determines whether the page action icon should be shown.
   bool ShouldShow();
 
@@ -68,7 +82,10 @@ class LensOverlayHomeworkPageActionController {
   ui::ScopedUnownedUserData<LensOverlayHomeworkPageActionController>
       scoped_unowned_user_data_;
 
-  std::unique_ptr<ScopedWindowCallToAction> scoped_window_call_to_action_ptr_;
+  base::CallbackListSubscription tab_will_discard_contents_subscription_;
+  base::CallbackListSubscription tab_will_detach_subscription_;
+
+  std::unique_ptr<ScopedCallToActionLock> scoped_call_to_action_lock_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_LOCATION_BAR_LENS_OVERLAY_HOMEWORK_PAGE_ACTION_CONTROLLER_H_

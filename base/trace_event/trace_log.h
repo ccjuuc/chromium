@@ -8,24 +8,20 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <map>
 #include <memory>
-#include <string>
-#include <unordered_map>
-#include <vector>
 
 #include "base/base_export.h"
 #include "base/functional/callback.h"
-#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
-#include "base/threading/platform_thread.h"
-#include "base/time/time_override.h"
-#include "base/trace_event/builtin_categories.h"
+#include "base/process/process_handle.h"
+#include "base/synchronization/lock.h"
+#include "base/thread_annotations.h"
 #include "base/trace_event/trace_config.h"
 #include "base/trace_event/trace_event_impl.h"
 #include "build/build_config.h"
-#include "third_party/perfetto/include/perfetto/tracing/core/trace_config.h"
+#include "third_party/perfetto/include/perfetto/tracing/core/trace_config.h"  // IWYU pragma: keep
+#include "third_party/perfetto/include/perfetto/tracing/tracing.h"
 
 namespace perfetto {
 namespace trace_processor {
@@ -60,14 +56,6 @@ class BASE_EXPORT TraceLog {
   // Disables tracing for all categories.
   void SetDisabled();
 
-  void SetArgumentFilterPredicate(
-      const ArgumentFilterPredicate& argument_filter_predicate);
-  ArgumentFilterPredicate GetArgumentFilterPredicate() const;
-
-  void SetMetadataFilterPredicate(
-      const MetadataFilterPredicate& metadata_filter_predicate);
-  MetadataFilterPredicate GetMetadataFilterPredicate() const;
-
   // Flush all collected events to the given output callback. The callback will
   // be called one or more times either synchronously or asynchronously from
   // the current thread with IPC-bite-size chunks. The string format is
@@ -86,13 +74,9 @@ class BASE_EXPORT TraceLog {
   // Cancels tracing and discards collected data.
   void CancelTracing(const OutputCallback& cb);
 
-  ProcessId process_id() const { return process_id_; }
-
   // Exposed for unittesting:
   // Allows clearing up our singleton instance.
   static void ResetForTesting();
-
-  void SetProcessID(ProcessId process_id);
 
  private:
   friend class base::NoDestructor<TraceLog>;
@@ -114,12 +98,6 @@ class BASE_EXPORT TraceLog {
   // This lock protects TraceLog member accesses (except for members protected
   // by thread_info_lock_) from arbitrary threads.
   mutable Lock lock_;
-
-  ProcessId process_id_;
-
-  // Set when asynchronous Flush is in progress.
-  ArgumentFilterPredicate argument_filter_predicate_;
-  MetadataFilterPredicate metadata_filter_predicate_;
 
   std::unique_ptr<perfetto::TracingSession> tracing_session_;
   perfetto::TraceConfig perfetto_config_;

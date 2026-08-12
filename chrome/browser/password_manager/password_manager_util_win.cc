@@ -10,8 +10,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "base/compiler_specific.h"
-
 // SECURITY_WIN32 must be defined in order to get
 // EXTENDED_NAME_FORMAT enumeration.
 #define SECURITY_WIN32 1
@@ -19,17 +17,18 @@
 #undef SECURITY_WIN32
 
 #include <optional>
+#include <string_view>
 
 #include "base/containers/heap_array.h"
+#include "base/containers/span.h"
+#include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/hang_watcher.h"
 #include "base/threading/scoped_thread_priority.h"
 #include "base/time/time.h"
-#include "base/win/atl.h"
 #include "base/win/ntsecapi_shim.h"
 #include "base/win/win_util.h"
 #include "base/win/wincred_shim.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/password_manager/password_manager_util_win.h"
 #include "chrome/grit/branded_strings.h"
 #include "components/password_manager/core/browser/password_manager.h"
@@ -132,8 +131,10 @@ DWORD CredentialBufferValidator::IsValid(ULONG auth_package,
   LUID luid;
   HANDLE token = INVALID_HANDLE_VALUE;
 
-  UNSAFE_TODO(
-      strcpy_s(source.SourceName, std::size(source.SourceName), "Chrome"));
+  std::string_view source_str = "Chrome";
+  auto source_name_span = base::span(source.SourceName);
+  source_name_span.copy_prefix_from(base::as_chars(base::span(source_str)));
+  source_name_span[source_str.size()] = '\0';
   if (!AllocateLocallyUniqueId(&source.SourceIdentifier)) {
     return GetLastError();
   }
@@ -193,7 +194,7 @@ void PasswordCheckPrefs::Write(PrefService* local_state) {
 
 int64_t GetPasswordLastChanged(const WCHAR* username) {
   // Mitigate the issues caused by loading DLLs on a background thread
-  // (http://crbug/973868).
+  // (http://crbug.com/41464781).
   SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY();
 
   LPUSER_INFO_1 user_info = nullptr;
@@ -220,12 +221,15 @@ bool CheckBlankPasswordWithPrefs(const WCHAR* username,
   // If the user name has a backslash, then it is of the form DOMAIN\username.
   // NetUserGetInfo() (called from GetPasswordLastChanged()) as well as
   // LogonUser() below only wants the username portion.
-  LPCWSTR backslash = UNSAFE_TODO(wcschr(username, L'\\'));
-  if (backslash) {
-    username = UNSAFE_TODO(backslash + 1);
+  std::wstring_view username_view(username);
+
+  size_t backslash_pos = username_view.find(L'\\');
+
+  if (backslash_pos != std::wstring_view::npos) {
+    username_view = username_view.substr(backslash_pos + 1);
   }
 
-  int64_t last_changed = GetPasswordLastChanged(username);
+  int64_t last_changed = GetPasswordLastChanged(username_view.data());
 
   // If we cannot determine when the password was last changed
   // then assume the password is not blank
@@ -242,14 +246,14 @@ bool CheckBlankPasswordWithPrefs(const WCHAR* username,
 
   if (need_recheck) {
     // Mitigate the issues caused by loading DLLs on a background thread
-    // (http://crbug/973868).
+    // (http://crbug.com/41464781).
     SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY();
 
     HANDLE handle = INVALID_HANDLE_VALUE;
 
     // Attempt to login using blank password.
     DWORD logon_result =
-        LogonUser(username, L".", L"", LOGON32_LOGON_INTERACTIVE,
+        LogonUser(username_view.data(), L".", L"", LOGON32_LOGON_INTERACTIVE,
                   LOGON32_PROVIDER_DEFAULT, &handle);
 
     auto last_error = GetLastError();
@@ -276,8 +280,7 @@ bool CheckBlankPasswordWithPrefs(const WCHAR* username,
 }
 
 // Wrapper around CheckBlankPasswordWithPrefs to be called on UI thread.
-bool CheckBlankPassword(const WCHAR* username) {
-  PrefService* local_state = g_browser_process->local_state();
+bool CheckBlankPassword(const WCHAR* username, PrefService* local_state) {
   PasswordCheckPrefs prefs;
   prefs.Read(local_state);
   bool result = CheckBlankPasswordWithPrefs(username, &prefs);
@@ -287,18 +290,21 @@ bool CheckBlankPassword(const WCHAR* username) {
 
 // Returns true if there is device authentication present on the machine, false
 // otherwise.
-bool DeviceAuthenticationPresent(const WCHAR* username) {
+bool DeviceAuthenticationPresent(const WCHAR* username,
+                                 PrefService* local_state) {
   // If the machine is domain-joined, we should not check whether the password
   // is blank and we should assume there is a password and thus there is device
   // authentication present. Otherwise, if there is a non-blank password, also
   // return that there is device authentication present.
-  return base::win::IsEnrolledToDomain() || !CheckBlankPassword(username);
+  return base::win::IsEnrolledToDomain() ||
+         !CheckBlankPassword(username, local_state);
 }
 
 }  // namespace
 
 bool AuthenticateUser(gfx::NativeWindow window,
-                      const std::u16string& password_prompt) {
+                      const std::u16string& password_prompt,
+                      PrefService* local_state) {
   bool retval = false;
   WCHAR cur_username[CREDUI_MAX_USERNAME_LENGTH + 1] = {};
   DWORD cur_username_length = std::size(cur_username);
@@ -312,7 +318,7 @@ bool AuthenticateUser(gfx::NativeWindow window,
 
   // If there is no device authentication set up on the machine, then
   // automatically authenticate the user.
-  if (!DeviceAuthenticationPresent(cur_username)) {
+  if (!DeviceAuthenticationPresent(cur_username, local_state)) {
     return true;
   }
 
@@ -329,7 +335,7 @@ bool AuthenticateUser(gfx::NativeWindow window,
 
   // Never consider the current scope as hung. The hang watching deadline (if
   // any) is not valid since the user can take unbounded time to answer the
-  // password prompt (http://crbug.com/806174)
+  // password prompt (http://crbug.com/40560071)
   base::HangWatcher::InvalidateActiveExpectations();
 
   CredentialBufferValidator validator;
@@ -371,7 +377,7 @@ bool AuthenticateUser(gfx::NativeWindow window,
   return retval;
 }
 
-bool CanAuthenticateWithScreenLock() {
+bool CanAuthenticateWithScreenLock(PrefService* local_state) {
   WCHAR cur_username[CREDUI_MAX_USERNAME_LENGTH + 1] = {};
   DWORD cur_username_length = std::size(cur_username);
   if (!GetUserNameEx(NameSamCompatible, cur_username, &cur_username_length)) {
@@ -379,7 +385,7 @@ bool CanAuthenticateWithScreenLock() {
     return false;
   }
 
-  return DeviceAuthenticationPresent(cur_username);
+  return DeviceAuthenticationPresent(cur_username, local_state);
 }
 
 }  // namespace password_manager_util_win

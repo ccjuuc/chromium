@@ -2,19 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
-#pragma allow_unsafe_libc_calls
-#endif
-
 #include <drm.h>
 #include <fcntl.h>
 #include <gbm.h>
 #include <string.h>
 #include <xf86drm.h>
 
+#include <algorithm>
+#include <array>
+#include <string_view>
+
 #include "base/bits.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/files/file.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/memory_mapped_file.h"
@@ -138,7 +137,7 @@ void TestStatefulDecoderAllocations(uint32_t codec_fourcc,
 
     // VGEM in the version name describes a virtual driver which
     // is not what is desired for the tests.
-    if (strncmp(version->name, "vgem", 4)) {
+    if (version && !std::string_view(version->name).starts_with("vgem")) {
       drm_path = name;
       break;
     }
@@ -170,6 +169,7 @@ void TestStatefulDecoderAllocations(uint32_t codec_fourcc,
   const int bo_num_planes = gbm_bo_get_plane_count(bo);
   std::vector<size_t> strides =
       VideoFrame::ComputeStrides(PIXEL_FORMAT_NV12, coded_size);
+  ASSERT_GE(strides.size(), static_cast<size_t>(bo_num_planes));
   for (int i = 0; i < bo_num_planes; ++i) {
     size_t s = base::bits::AlignUp(strides[i], static_cast<size_t>(64));
     EXPECT_EQ(s, gbm_bo_get_stride_for_plane(bo, i));
@@ -198,6 +198,9 @@ TEST_P(V4L2MinigbmTest, AllocateAndCompareWithMinigbm) {
       VideoCodecProfileToV4L2PixFmt(video_codec_profile, /*slice_based=*/false);
   const bool is_stateful =
       device->Open(V4L2Device::Type::kDecoder, fourcc_stateful);
+  if (!is_stateful) {
+    GTEST_SKIP() << "Testing only supported for stateful devices";
+  }
 
   constexpr auto kCapsRequired = V4L2_CAP_VIDEO_M2M_MPLANE | V4L2_CAP_STREAMING;
   struct v4l2_capability caps;
@@ -206,25 +209,23 @@ TEST_P(V4L2MinigbmTest, AllocateAndCompareWithMinigbm) {
     GTEST_SKIP() << "Device doesn't support expected capabilities";
   }
 
-  constexpr uint32_t desired_v4l2_pixel_formats[] = {V4L2_PIX_FMT_NV12,
-                                                     V4L2_PIX_FMT_NV12M};
+  constexpr auto desired_v4l2_pixel_formats =
+      std::to_array<uint32_t>({V4L2_PIX_FMT_NV12, V4L2_PIX_FMT_NV12M});
   std::vector<uint32_t> supported_v4l2_pixel_formats =
       EnumerateSupportedPixFmts(base::BindRepeating(&V4L2Device::Ioctl, device),
                                 V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
   int32_t chosen_v4l2_pixel_format = 0;
   for (const auto supported_v4l2_pixel_format : supported_v4l2_pixel_formats) {
-    if (base::Contains(desired_v4l2_pixel_formats,
-                       supported_v4l2_pixel_format)) {
+    if (std::ranges::contains(desired_v4l2_pixel_formats,
+                              supported_v4l2_pixel_format)) {
       chosen_v4l2_pixel_format = supported_v4l2_pixel_format;
       break;
     }
   }
   ASSERT_GT(chosen_v4l2_pixel_format, 0);
 
-  if (is_stateful) {
-    TestStatefulDecoderAllocations(fourcc_stateful, device,
-                                   chosen_v4l2_pixel_format, resolution);
-  }
+  TestStatefulDecoderAllocations(fourcc_stateful, device,
+                                 chosen_v4l2_pixel_format, resolution);
 }
 
 constexpr VideoCodecProfile kVideoCodecProfiles[] = {H264PROFILE_BASELINE};

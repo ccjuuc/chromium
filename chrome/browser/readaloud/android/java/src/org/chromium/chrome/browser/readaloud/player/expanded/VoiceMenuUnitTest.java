@@ -42,7 +42,7 @@ import org.chromium.ui.modelutil.PropertyModel;
 
 import java.util.List;
 
-/** Unit tests for {@link VoiceMenuSheetContent}. */
+/** Unit tests for {@link VoiceMenu}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 public class VoiceMenuUnitTest {
@@ -179,9 +179,8 @@ public class VoiceMenuUnitTest {
     }
 
     private static RadioButton getRadioButton(MenuItem item) {
-        return (RadioButton) item.findViewById(R.id.readaloud_radio_button);
+        return item.findViewById(R.id.readaloud_radio_button);
     }
-
 
     @Test
     public void testEmptyVoiceList() {

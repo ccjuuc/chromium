@@ -16,16 +16,19 @@
 #include "base/time/time.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "net/base/io_buffer.h"
+#include "net/base/network_handle.h"
 #include "net/http/http_response_headers.h"
+#include "net/log/net_log_with_source.h"
 #include "net/third_party/quiche/src/quiche/quic/core/quic_session.h"
 #include "net/third_party/quiche/src/quiche/quic/core/quic_time.h"
 #include "net/third_party/quiche/src/quiche/quic/core/quic_types.h"
+#include "services/network/local_network_access_checker.h"
 #include "services/network/network_context.h"
-#include "services/network/private_network_access_checker.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/ip_address_space_util.h"
-#include "services/network/public/cpp/private_network_access_check_result.h"
-#include "services/network/public/mojom/url_loader_network_service_observer.mojom-data-view.h"
+#include "services/network/public/cpp/local_network_access_check_result.h"
+#include "services/network/public/mojom/http_request_headers.mojom.h"
+#include "services/network/public/mojom/url_loader_network_service_observer.mojom-shared.h"
 #include "services/network/public/mojom/web_transport.mojom.h"
 
 namespace network {
@@ -35,21 +38,56 @@ namespace {
 net::WebTransportParameters CreateParameters(
     const std::vector<mojom::WebTransportCertificateFingerprintPtr>&
         fingerprints,
-    std::vector<std::string> application_protocols) {
+    std::vector<std::string> application_protocols,
+    mojom::WebTransportCongestionControl congestion_control,
+    std::optional<uint16_t>
+        anticipated_concurrent_incoming_unidirectional_streams,
+    std::optional<uint16_t>
+        anticipated_concurrent_incoming_bidirectional_streams,
+    std::vector<net::HttpRequestHeaders::HeaderKeyValuePair>
+        additional_headers) {
   net::WebTransportParameters params;
   params.enable_web_transport_http3 = true;
   params.application_protocols = std::move(application_protocols);
+
+  switch (congestion_control) {
+    case mojom::WebTransportCongestionControl::kDefault:
+      params.congestion_control_hint =
+          net::WebTransportParameters::CongestionControlHint::kDefault;
+      break;
+    case mojom::WebTransportCongestionControl::kThroughput:
+      params.congestion_control_hint =
+          net::WebTransportParameters::CongestionControlHint::kThroughput;
+      break;
+    case mojom::WebTransportCongestionControl::kLowLatency:
+      params.congestion_control_hint =
+          net::WebTransportParameters::CongestionControlHint::kLowLatency;
+      break;
+    default:
+      NOTREACHED();
+  }
+
+  params.anticipated_concurrent_incoming_unidirectional_streams =
+      anticipated_concurrent_incoming_unidirectional_streams;
+  params.anticipated_concurrent_incoming_bidirectional_streams =
+      anticipated_concurrent_incoming_bidirectional_streams;
 
   for (const auto& fingerprint : fingerprints) {
     params.server_certificate_fingerprints.push_back(
         quic::CertificateFingerprint{.algorithm = fingerprint->algorithm,
                                      .fingerprint = fingerprint->fingerprint});
   }
+  params.additional_headers = std::move(additional_headers);
   return params;
 }
 
 base::TimeDelta ToTimeDelta(absl::Duration duration) {
   return base::Microseconds(absl::ToInt64Microseconds(duration));
+}
+
+webtransport::StreamPriority ToStreamPriority(
+    const mojom::WebTransportStreamPriority& p) {
+  return {p.send_group_id.value_or(0), p.send_order};
 }
 
 mojom::WebTransportStatsPtr StatsToMojom(
@@ -178,6 +216,12 @@ class WebTransport::Stream final {
   void NotifyFinFromClient() {
     has_received_fin_from_client_ = true;
     MaySendFin();
+  }
+
+  void SetPriority(const webtransport::StreamPriority& priority) {
+    if (outgoing_) {
+      outgoing_->SetPriority(priority);
+    }
   }
 
   void Abort(uint8_t code) {
@@ -410,6 +454,12 @@ WebTransport::WebTransport(
     const std::vector<mojom::WebTransportCertificateFingerprintPtr>&
         fingerprints,
     const std::vector<std::string>& application_protocols,
+    mojom::WebTransportCongestionControl congestion_control,
+    std::optional<uint16_t>
+        anticipated_concurrent_incoming_unidirectional_streams,
+    std::optional<uint16_t>
+        anticipated_concurrent_incoming_bidirectional_streams,
+    std::vector<net::HttpRequestHeaders::HeaderKeyValuePair> additional_headers,
     NetworkContext* context,
     mojo::PendingRemote<mojom::WebTransportHandshakeClient> handshake_client,
     mojo::PendingRemote<mojom::URLLoaderNetworkServiceObserver>
@@ -420,8 +470,17 @@ WebTransport::WebTransport(
           origin,
           this,
           key,
+          // TODO(crbug.com/495684670): Consider exposing this at the network
+          // service layer once a need arises.
+          net::handles::kInvalidNetworkHandle,
           context->url_request_context(),
-          CreateParameters(fingerprints, std::move(application_protocols)))),
+          CreateParameters(
+              fingerprints,
+              std::move(application_protocols),
+              congestion_control,
+              anticipated_concurrent_incoming_unidirectional_streams,
+              anticipated_concurrent_incoming_bidirectional_streams,
+              std::move(additional_headers)))),
       url_(url),
       origin_(origin),
       context_(context),
@@ -453,6 +512,7 @@ void WebTransport::SendDatagram(base::span<const uint8_t> data,
 void WebTransport::CreateStream(
     mojo::ScopedDataPipeConsumerHandle readable,
     mojo::ScopedDataPipeProducerHandle writable,
+    mojom::WebTransportStreamPriorityPtr priority,
     base::OnceCallback<void(bool, uint32_t)> callback) {
   // |readable| is non-nullable, |writable| is nullable.
   DCHECK(readable);
@@ -477,6 +537,9 @@ void WebTransport::CreateStream(
     quic::WebTransportStream* const stream =
         session->OpenOutgoingBidirectionalStream();
     DCHECK(stream);
+    if (priority) {
+      stream->SetPriority(ToStreamPriority(*priority));
+    }
     streams_.insert(std::make_pair(
         stream->GetStreamId(),
         std::make_unique<Stream>(this, stream, std::move(readable),
@@ -496,6 +559,9 @@ void WebTransport::CreateStream(
   quic::WebTransportStream* const stream =
       session->OpenOutgoingUnidirectionalStream();
   DCHECK(stream);
+  if (priority) {
+    stream->SetPriority(ToStreamPriority(*priority));
+  }
   streams_.insert(std::make_pair(
       stream->GetStreamId(),
       std::make_unique<Stream>(this, stream, std::move(readable))));
@@ -540,6 +606,16 @@ void WebTransport::StopSending(uint32_t stream, uint8_t code) {
   it->second->StopSending(code);
 }
 
+void WebTransport::SetStreamPriority(
+    uint32_t stream,
+    mojom::WebTransportStreamPriorityPtr priority) {
+  auto it = streams_.find(stream);
+  if (it == streams_.end()) {
+    return;
+  }
+  it->second->SetPriority(ToStreamPriority(*priority));
+}
+
 void WebTransport::SetOutgoingDatagramExpirationDuration(
     base::TimeDelta duration) {
   if (torn_down_ || closing_) {
@@ -581,12 +657,9 @@ void WebTransport::Close(mojom::WebTransportCloseInfoPtr close_info) {
   transport_->Close(close_info_to_pass);
 }
 
-void WebTransport::CloseIfNonceMatches(base::UnguessableToken nonce) {
-  transport_->CloseIfNonceMatches(nonce);
-}
-
 void WebTransport::OnLocalNetworkAccessCheck(
     const net::IPEndPoint& server_address,
+    const net::NetLogWithSource& net_log,
     net::CompletionOnceCallback callback) {
   if (!base::FeatureList::IsEnabled(
           features::kLocalNetworkAccessChecksWebTransport)) {
@@ -599,27 +672,31 @@ void WebTransport::OnLocalNetworkAccessCheck(
   //
   // WebTransport has no `url_load_options` available for overriding in
   // content/public/browser/content_browser_client.h.
-  PrivateNetworkAccessChecker checker(
-      url_,
-      origin_,
+  LocalNetworkAccessChecker checker(
+      url_, origin_,
       /*required_ip_address_space=*/network::mojom::IPAddressSpace::kUnknown,
       client_security_state_.get(), /*url_load_options=*/0);
 
-  PrivateNetworkAccessCheckResult check_result = checker.Check(server_address);
+  LocalNetworkAccessCheckResult check_result = checker.Check(server_address);
   std::optional<mojom::CorsError> cors_error =
-      PrivateNetworkAccessCheckResultToCorsError(check_result);
+      LocalNetworkAccessCheckResultToCorsError(check_result);
   if (!cors_error.has_value()) {
     std::move(callback).Run(net::OK);
     return;
   }
 
   if (url_loader_network_observer_ &&
-      check_result == PrivateNetworkAccessCheckResult::kLNAPermissionRequired) {
+      check_result == LocalNetworkAccessCheckResult::kLNAPermissionRequired) {
+    // WebTransport connections are not cached, so just use kDirect.
+    mojom::TransportType transport_type = mojom::TransportType::kDirect;
+
     url_loader_network_observer_->OnLocalNetworkAccessPermissionRequired(
-        // WebTransport connections are not cached, so just pass kDirect.
-        mojom::TransportType::kDirect, *checker.ResponseAddressSpace(),
+        transport_type, *checker.ResponseAddressSpace(),
         base::BindOnce(
             [](base::WeakPtr<WebTransport> weak_self,
+               const net::NetLogWithSource& net_log,
+               const mojom::TransportType transport_type,
+               const mojom::IPAddressSpace address_space,
                net::CompletionOnceCallback callback,
                mojom::LocalNetworkAccessResult result) {
               if (!weak_self) {
@@ -629,12 +706,27 @@ void WebTransport::OnLocalNetworkAccessCheck(
                 // `WebTransport`.
                 return;
               }
+
+              net_log.AddEvent(
+                  net::NetLogEventType::
+                      LOCAL_NETWORK_ACCESS_PERMISSION_REQUESTED,
+                  [&] {
+                    return base::DictValue()
+                        .Set("address_space",
+                             IPAddressSpaceToStringPiece(address_space))
+                        .Set("transport_type",
+                             TransportTypeToStringPiece(transport_type))
+                        .Set("result",
+                             LocalNetworkAccessResultToStringPiece(result));
+                  });
+
               std::move(callback).Run(
                   result == mojom::LocalNetworkAccessResult::kGranted
                       ? net::OK
                       : net::ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS);
             },
-            weak_factory_.GetWeakPtr(), std::move(callback)));
+            weak_factory_.GetWeakPtr(), net_log, transport_type,
+            *checker.ResponseAddressSpace(), std::move(callback)));
   } else {
     std::move(callback).Run(net::ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS);
   }
@@ -659,10 +751,19 @@ void WebTransport::OnConnected(
   }
 
   DCHECK(handshake_client_);
+  CHECK(response_headers);
+
+  // https://fetch.spec.whatwg.org/#forbidden-response-header-name
+  auto filtered_response_headers =
+      base::MakeRefCounted<net::HttpResponseHeaders>(
+          response_headers->raw_headers());
+  filtered_response_headers->RemoveHeader("Set-Cookie");
+  filtered_response_headers->RemoveHeader("Set-Cookie2");
 
   handshake_client_->OnConnectionEstablished(
       receiver_.BindNewPipeAndPassRemote(),
-      client_.BindNewPipeAndPassReceiver(), std::move(response_headers),
+      client_.BindNewPipeAndPassReceiver(),
+      std::move(filtered_response_headers),
       transport_->session()->GetNegotiatedSubprotocol(),
       StatsToMojom(transport_->session()->GetSessionStats()));
 
@@ -672,6 +773,13 @@ void WebTransport::OnConnected(
   // then resets the mojo endpoints.
   receiver_.set_disconnect_handler(
       base::BindOnce(&WebTransport::Dispose, base::Unretained(this)));
+
+  // A GOAWAY travels on the connection's control stream, independently of the
+  // CONNECT stream carrying this handshake, so drain signal can be received
+  // before the CONNECT. Send drain now if that happened.
+  if (draining_received_) {
+    client_->OnDraining();
+  }
 }
 
 void WebTransport::OnConnectionFailed(const net::WebTransportError& error) {
@@ -725,6 +833,18 @@ void WebTransport::OnError(const net::WebTransportError& error) {
   DCHECK(!handshake_client_);
 
   TearDown();
+}
+
+void WebTransport::OnDraining() {
+  if (torn_down_ || closing_ || draining_received_) {
+    return;
+  }
+
+  draining_received_ = true;
+
+  if (client_.is_bound()) {
+    client_->OnDraining();
+  }
 }
 
 void WebTransport::OnIncomingBidirectionalStreamAvailable() {

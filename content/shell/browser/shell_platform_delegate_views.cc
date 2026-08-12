@@ -9,7 +9,6 @@
 #include <memory>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
@@ -33,6 +32,7 @@
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
+#include "ui/views/controls/webview/web_contents_set_background_color.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/layout/box_layout_view.h"
 #include "ui/views/layout/flex_layout_types.h"
@@ -261,7 +261,7 @@ class ShellView : public views::BoxLayoutView,
       std::string text = base::UTF16ToUTF8(url_entry_->GetText());
       GURL url(text);
       if (!url.has_scheme()) {
-        url = GURL(std::string("http://") + std::string(text));
+        url = GURL(std::string("http://") + text);
         url_entry_->SetText(base::ASCIIToUTF16(url.spec()));
       }
       shell_->LoadURL(url);
@@ -352,7 +352,7 @@ ShellPlatformDelegate::~ShellPlatformDelegate() = default;
 void ShellPlatformDelegate::CreatePlatformWindow(
     Shell* shell,
     const gfx::Size& initial_size) {
-  DCHECK(!base::Contains(shell_data_map_, shell));
+  DCHECK(!shell_data_map_.contains(shell));
   ShellData& shell_data = shell_data_map_[shell];
 
   shell_data.content_size = initial_size;
@@ -386,23 +386,29 @@ void ShellPlatformDelegate::CreatePlatformWindow(
 }
 
 gfx::NativeWindow ShellPlatformDelegate::GetNativeWindow(Shell* shell) {
-  DCHECK(base::Contains(shell_data_map_, shell));
+  DCHECK(shell_data_map_.contains(shell));
   ShellData& shell_data = shell_data_map_[shell];
 
   return shell_data.window_widget->GetNativeWindow();
 }
 
 void ShellPlatformDelegate::CleanUp(Shell* shell) {
-  DCHECK(base::Contains(shell_data_map_, shell));
+  DCHECK(shell_data_map_.contains(shell));
   shell_data_map_.erase(shell);
 }
 
 void ShellPlatformDelegate::SetContents(Shell* shell) {
-  DCHECK(base::Contains(shell_data_map_, shell));
+  DCHECK(shell_data_map_.contains(shell));
   ShellData& shell_data = shell_data_map_[shell];
 
   ShellViewForWidget(shell_data.window_widget)
       ->SetWebContents(shell->web_contents(), shell_data.content_size);
+
+  SkColor bg_color = shell_data.window_widget->GetColorProvider()->GetColor(
+      ui::kColorWindowBackground);
+  views::WebContentsSetBackgroundColor::CreateForWebContentsWithColor(
+      shell->web_contents(), bg_color);
+
   shell_data.window_widget->GetNativeWindow()->GetHost()->Show();
   shell_data.window_widget->Show();
 }
@@ -418,7 +424,7 @@ void ShellPlatformDelegate::EnableUIControl(Shell* shell,
   if (Shell::ShouldHideToolbar())
     return;
 
-  DCHECK(base::Contains(shell_data_map_, shell));
+  DCHECK(shell_data_map_.contains(shell));
   ShellData& shell_data = shell_data_map_[shell];
 
   auto* view = ShellViewForWidget(shell_data.window_widget);
@@ -435,7 +441,7 @@ void ShellPlatformDelegate::SetAddressBarURL(Shell* shell, const GURL& url) {
   if (Shell::ShouldHideToolbar())
     return;
 
-  DCHECK(base::Contains(shell_data_map_, shell));
+  DCHECK(shell_data_map_.contains(shell));
   ShellData& shell_data = shell_data_map_[shell];
 
   ShellViewForWidget(shell_data.window_widget)->SetAddressBarURL(url);
@@ -445,7 +451,7 @@ void ShellPlatformDelegate::SetIsLoading(Shell* shell, bool loading) {}
 
 void ShellPlatformDelegate::SetTitle(Shell* shell,
                                      const std::u16string& title) {
-  DCHECK(base::Contains(shell_data_map_, shell));
+  DCHECK(shell_data_map_.contains(shell));
   ShellData& shell_data = shell_data_map_[shell];
 
   shell_data.window_widget->widget_delegate()->SetTitle(title);
@@ -455,7 +461,7 @@ void ShellPlatformDelegate::MainFrameCreated(Shell* shell,
                                              RenderFrameHost* main_frame) {}
 
 bool ShellPlatformDelegate::DestroyShell(Shell* shell) {
-  DCHECK(base::Contains(shell_data_map_, shell));
+  DCHECK(shell_data_map_.contains(shell));
   ShellData& shell_data = shell_data_map_[shell];
 
   shell_data.window_widget->CloseNow();

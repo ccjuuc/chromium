@@ -73,6 +73,8 @@ class TestHooks : public AnimationDelegate {
                                               const Tile* tile,
                                               bool update_damage) {}
   virtual void DidRunBeginMainFrame() {}
+  virtual void DidSendEarlyFinalBeginMainFrameOnThread(
+      LayerTreeHostImpl* host_impl) {}
   virtual void DidReceivePresentationTimeOnThread(
       LayerTreeHostImpl* host_impl,
       uint32_t frame_token,
@@ -112,6 +114,7 @@ class TestHooks : public AnimationDelegate {
   virtual void WillApplyCompositorChanges() {}
   virtual void BeginMainFrame(const viz::BeginFrameArgs& args) {}
   virtual void WillBeginMainFrame() {}
+  virtual void DidUpdateLayers() {}
   virtual void DidBeginMainFrame() {}
   virtual void UpdateLayerTreeHost() {}
   virtual void DidInitializeLayerTreeFrameSink() {}

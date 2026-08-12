@@ -13,6 +13,7 @@
 #include "base/containers/fixed_flat_set.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
@@ -32,23 +33,21 @@
 #include "components/url_matcher/url_matcher.h"
 #include "components/url_matcher/url_util.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/weak_document_ptr.h"
+#include "content/public/browser/web_contents.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 #include "url/origin.h"
-
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
-#include "chrome/browser/sharing/click_to_call/click_to_call_ui_controller.h"
-#include "chrome/browser/sharing/click_to_call/click_to_call_utils.h"
-#endif
 
 #if BUILDFLAG(IS_ANDROID)
 #include "components/navigation_interception/intercept_navigation_delegate.h"
 #else
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"  // nogncheck
 #include "components/url_formatter/elide_url.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #endif
@@ -71,6 +70,7 @@ ExternalProtocolHandler::Delegate* g_external_protocol_handler_delegate =
 
 constexpr auto kDeniedSchemes = base::MakeFixedFlatSet<std::string_view>({
     "afp",
+    "applescript",
     "data",
     "disk",
     "disks",
@@ -200,10 +200,11 @@ void LaunchUrlWithoutSecurityCheckWithDelegate(
   // Avoid calling CloseContents if the tab is not in this browser's tab strip
   // model; this can happen if the protocol was initiated by something
   // internal to Chrome.
-  Browser* browser = chrome::FindBrowserWithTab(web_contents);
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
   if (browser && web_contents->GetController().IsInitialNavigation() &&
-      browser->tab_strip_model()->count() > 1 &&
-      browser->tab_strip_model()->GetIndexOfWebContents(web_contents) !=
+      browser->GetTabStripModel()->count() > 1 &&
+      browser->GetTabStripModel()->GetIndexOfWebContents(web_contents) !=
           TabStripModel::kNoTab) {
     // Defer destruction of `WebContents` to avoid synchronously destroying
     // NavigationURLLoader(Impl) here. See https://issues.chromium.org/361600654
@@ -242,19 +243,6 @@ void OnDefaultSchemeClientWorkerFinished(
   // handling flow).
   bool chrome_is_default_handler = state == shell_integration::IS_DEFAULT;
 
-  // On ChromeOS, Click to Call is integrated into the external protocol dialog.
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
-  if (web_contents && ShouldOfferClickToCallForURL(
-                          web_contents->GetBrowserContext(), escaped_url)) {
-    // Handle tel links by opening the Click to Call dialog. This will call back
-    // into LaunchUrlWithoutSecurityCheck if the user selects a system handler.
-    ClickToCallUiController::ShowDialog(
-        web_contents, initiating_origin, std::move(initiator_document),
-        escaped_url, chrome_is_default_handler, program_name);
-    return;
-  }
-#endif
-
   if (chrome_is_default_handler) {
     if (delegate)
       delegate->BlockRequest();
@@ -281,7 +269,9 @@ void OnDefaultSchemeClientWorkerFinished(
                  << url_formatter::FormatOriginForSecurityDisplay(
                         initiating_origin.value_or(url::Origin()))
                  << ", web_contents?" << !!web_contents << ", browser?"
-                 << (web_contents && chrome::FindBrowserWithTab(web_contents));
+                 << (web_contents &&
+                     GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+                         web_contents));
       base::debug::DumpWithoutCrashing();
       return;
     }
@@ -307,12 +297,12 @@ bool IsSchemeOriginPairAllowedByPolicy(const std::string& scheme,
   if (!initiating_origin)
     return false;
 
-  const base::Value::List& exempted_protocols =
+  const base::ListValue& exempted_protocols =
       prefs->GetList(prefs::kAutoLaunchProtocolsFromOrigins);
 
-  const base::Value::List* origin_patterns = nullptr;
+  const base::ListValue* origin_patterns = nullptr;
   for (const base::Value& entry : exempted_protocols) {
-    const base::Value::Dict& protocol_origins_map = entry.GetDict();
+    const base::DictValue& protocol_origins_map = entry.GetDict();
     const std::string* protocol = protocol_origins_map.FindString(
         policy::external_protocol::kProtocolNameKey);
     DCHECK(protocol);
@@ -428,10 +418,10 @@ ExternalProtocolHandler::BlockState ExternalProtocolHandler::GetBlockState(
 
     if (MayRememberAllowDecisionsForThisOrigin(initiating_origin)) {
       // Check if there is a matching {Origin+Protocol} pair exemption:
-      const base::Value::Dict& allowed_origin_protocol_pairs =
+      const base::DictValue& allowed_origin_protocol_pairs =
           profile_prefs->GetDict(
               prefs::kProtocolHandlerPerOriginAllowedProtocols);
-      const base::Value::Dict* allowed_protocols_for_origin =
+      const base::DictValue* allowed_protocols_for_origin =
           allowed_origin_protocol_pairs.FindDict(
               initiating_origin->Serialize());
       if (allowed_protocols_for_origin) {
@@ -470,11 +460,11 @@ void ExternalProtocolHandler::SetBlockState(
           profile_prefs, prefs::kProtocolHandlerPerOriginAllowedProtocols);
 
       const std::string serialized_origin = initiating_origin.Serialize();
-      base::Value::Dict* allowed_protocols_for_origin =
+      base::DictValue* allowed_protocols_for_origin =
           update_allowed_origin_protocol_pairs->FindDict(serialized_origin);
       if (!allowed_protocols_for_origin) {
         update_allowed_origin_protocol_pairs->Set(serialized_origin,
-                                                  base::Value::Dict());
+                                                  base::DictValue());
         allowed_protocols_for_origin =
             update_allowed_origin_protocol_pairs->FindDict(serialized_origin);
       }
@@ -525,7 +515,7 @@ void ExternalProtocolHandler::LaunchUrl(
   // TODO(mgiuca): This essentially amounts to "remove illegal characters from
   // the URL", something that probably should be done by the GURL constructor
   // itself. The GURL constructor does do it in some cases (e.g., mailto) but
-  // not in general. https://crbug.com/788244.
+  // not in general. https://crbug.com/40551459.
   std::string escaped_url_string = base::EscapeExternalHandlerValue(url.spec());
   GURL escaped_url(escaped_url_string);
 

@@ -9,28 +9,24 @@
 
 #include "base/no_destructor.h"
 #include "build/build_config.h"
-#include "chrome/browser/themes/theme_service.h"
-#include "chrome/browser/themes/theme_service_factory.h"
-#include "chrome/browser/ui/views/frame/browser_frame_view_layout_linux.h"
+#include "chrome/browser/ui/browser_init_state.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view_linux.h"
 #include "chrome/browser/ui/views/frame/browser_native_widget_aura_linux.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/picture_in_picture_browser_frame_view.h"
 #include "chrome/browser/ui/views/tabs/dragging/tab_drag_controller.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
-#include "third_party/skia/include/core/SkRRect.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-shared.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
-#include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/linux/linux_ui.h"
-#include "ui/native_theme/native_theme.h"
 #include "ui/ozone/public/ozone_platform.h"
 #include "ui/platform_window/extensions/wayland_extension.h"
 #include "ui/platform_window/extensions/x11_extension.h"
 #include "ui/platform_window/platform_window_init_properties.h"
+#include "ui/views/window/frame_view_utils_linux.h"
 
 namespace {
 
@@ -42,8 +38,8 @@ bool ShouldCreateGlobalMenuBar() {
 }
 #endif
 
-std::unordered_set<std::string>& SentStartupIds() {
-  static base::NoDestructor<std::unordered_set<std::string>> sent_startup_ids;
+absl::flat_hash_set<std::string>& SentStartupIds() {
+  static base::NoDestructor<absl::flat_hash_set<std::string>> sent_startup_ids;
   return *sent_startup_ids;
 }
 
@@ -87,7 +83,6 @@ BrowserDesktopWindowTreeHostLinux::BrowserDesktopWindowTreeHostLinux(
                                      ? views::Widget::FrameType::kForceCustom
                                      : views::Widget::FrameType::kForceNative);
 
-  theme_observation_.Observe(ui::NativeTheme::GetInstanceForNativeUi());
   if (auto* linux_ui = ui::LinuxUi::instance()) {
     scale_observation_.Observe(linux_ui);
   }
@@ -106,7 +101,7 @@ void BrowserDesktopWindowTreeHostLinux::AddAdditionalInitProperties(
     ui::PlatformWindowInitProperties* properties) {
   views::DesktopWindowTreeHostLinux::AddAdditionalInitProperties(params,
                                                                  properties);
-  auto* profile = browser_view_->browser()->profile();
+  auto* profile = browser_view_->browser()->GetProfile();
   const auto* linux_ui_theme = ui::LinuxUiTheme::GetForProfile(profile);
   properties->prefer_dark_theme =
       linux_ui_theme && linux_ui_theme->PreferDarkTheme();
@@ -124,35 +119,6 @@ bool BrowserDesktopWindowTreeHostLinux::UsesNativeSystemMenu() const {
 void BrowserDesktopWindowTreeHostLinux::FrameTypeChanged() {
   DesktopWindowTreeHostPlatform::FrameTypeChanged();
   UpdateFrameHints();
-}
-
-bool BrowserDesktopWindowTreeHostLinux::SupportsMouseLock() {
-  auto* wayland_extension = ui::GetWaylandToplevelExtension(*platform_window());
-  if (!wayland_extension) {
-    return false;
-  }
-
-  return wayland_extension->SupportsPointerLock();
-}
-
-void BrowserDesktopWindowTreeHostLinux::LockMouse(aura::Window* window) {
-  DesktopWindowTreeHostLinux::LockMouse(window);
-
-  if (SupportsMouseLock()) {
-    auto* wayland_extension =
-        ui::GetWaylandToplevelExtension(*platform_window());
-    wayland_extension->LockPointer(true /*enabled*/);
-  }
-}
-
-void BrowserDesktopWindowTreeHostLinux::UnlockMouse(aura::Window* window) {
-  DesktopWindowTreeHostLinux::UnlockMouse(window);
-
-  if (SupportsMouseLock()) {
-    auto* wayland_extension =
-        ui::GetWaylandToplevelExtension(*platform_window());
-    wayland_extension->LockPointer(false /*enabled*/);
-  }
 }
 
 void BrowserDesktopWindowTreeHostLinux::TabDraggingKindChanged(
@@ -221,51 +187,9 @@ void BrowserDesktopWindowTreeHostLinux::UpdateFrameHints() {
     // Set the opaque region.
     std::vector<gfx::Rect> opaque_region;
     if (IsShowingFrame(native_widget_->UseCustomFrame(), window_state)) {
-      // The opaque region is a list of rectangles that contain only fully
-      // opaque pixels of the window.  We need to convert the clipping
-      // rounded-rect into this format.
-      SkRRect rrect = view->GetRestoredClipRegion();
-      gfx::RectF rectf = gfx::SkRectToRectF(rrect.rect());
-      rectf.Scale(scale);
-      // It is acceptable to omit some pixels that are opaque, but the region
-      // must not include any translucent pixels.  Therefore, we must
-      // conservatively scale to the enclosed rectangle.
-      gfx::Rect rect = gfx::ToEnclosedRect(rectf);
-
-      // Create the initial region from the clipping rectangle without rounded
-      // corners.
-      SkRegion region(gfx::RectToSkIRect(rect));
-
-      // Now subtract out the small rectangles that cover the corners.
-      struct {
-        SkRRect::Corner corner;
-        bool left;
-        bool upper;
-      } kCorners[] = {
-          {SkRRect::kUpperLeft_Corner, true, true},
-          {SkRRect::kUpperRight_Corner, false, true},
-          {SkRRect::kLowerLeft_Corner, true, false},
-          {SkRRect::kLowerRight_Corner, false, false},
-      };
-      for (const auto& corner : kCorners) {
-        auto radii = rrect.radii(corner.corner);
-        auto rx = std::ceil(scale * radii.x());
-        auto ry = std::ceil(scale * radii.y());
-        auto corner_rect = SkIRect::MakeXYWH(
-            corner.left ? rect.x() : rect.right() - rx,
-            corner.upper ? rect.y() : rect.bottom() - ry, rx, ry);
-        region.op(corner_rect, SkRegion::kDifference_Op);
-      }
-
-      auto translucent_top_area_rect = SkIRect::MakeXYWH(
-          rect.x(), rect.y(), rect.width(),
-          std::ceil(view->GetTranslucentTopAreaHeight() * scale - rect.y()));
-      region.op(translucent_top_area_rect, SkRegion::kDifference_Op);
-
-      // Convert the region to a list of rectangles.
-      for (SkRegion::Iterator i(region); !i.done(); i.next()) {
-        opaque_region.push_back(gfx::SkIRectToRect(i.rect()));
-      }
+      opaque_region =
+          views::GetRestoredOpaqueRegion(view->GetRestoredClipRegion(), scale,
+                                         view->GetTranslucentTopAreaHeight());
     } else {
       // The entire window except for the translucent top is opaque.
       gfx::Rect opaque_region_dip(widget_size);
@@ -328,8 +252,10 @@ void BrowserDesktopWindowTreeHostLinux::Show(
   DesktopWindowTreeHostLinux::Show(show_state, restore_bounds);
 
   const std::string& startup_id =
-      browser_view_->browser()->create_params().startup_id;
-  if (!startup_id.empty() && !SentStartupIds().count(startup_id)) {
+      BrowserInitState::From(browser_view_->browser())
+          ->create_params()
+          .startup_id;
+  if (!startup_id.empty() && !SentStartupIds().contains(startup_id)) {
     platform_window()->NotifyStartupComplete(startup_id);
     SentStartupIds().insert(startup_id);
   }
@@ -402,6 +328,7 @@ void BrowserDesktopWindowTreeHostLinux::OnWindowTiledStateChanged(
 
 void BrowserDesktopWindowTreeHostLinux::OnNativeThemeUpdated(
     ui::NativeTheme* observed_theme) {
+  views::DesktopWindowTreeHostLinux::OnNativeThemeUpdated(observed_theme);
   UpdateFrameHints();
 }
 

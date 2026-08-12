@@ -34,8 +34,10 @@ import org.mockito.quality.Strictness;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.settings.MainSettings;
@@ -47,13 +49,11 @@ import org.chromium.chrome.browser.signin.services.SigninMetricsUtilsJni;
 import org.chromium.chrome.browser.sync.settings.AccountManagementFragment;
 import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncHelper;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.util.browser.signin.SigninTestRule;
 import org.chromium.components.externalauth.ExternalAuthUtils;
 import org.chromium.components.signin.base.CoreAccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
 import org.chromium.components.signin.test.util.TestAccounts;
 import org.chromium.ui.test.util.MockitoHelper;
@@ -62,6 +62,10 @@ import org.chromium.ui.test.util.MockitoHelper;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @DisableFeatures(ChromeFeatureList.SETTINGS_MULTI_COLUMN)
+@DoNotBatch(
+        reason =
+                "This test suite tests sign-in and sign-out which modifies account and sign-in"
+                        + " state at the process level.")
 public class SigninSignoutIntegrationTest {
     @Rule
     public final SettingsActivityTestRule<AccountManagementFragment> mSettingsActivityTestRule =
@@ -136,17 +140,14 @@ public class SigninSignoutIntegrationTest {
                                 withParent(withId(R.id.account_picker_state_collapsed))))
                 .perform(click());
 
-        CriteriaHelper.pollUiThread(
-                () -> mSigninManager.getIdentityManager().hasPrimaryAccount(ConsentLevel.SIGNIN));
+        CriteriaHelper.pollUiThread(() -> mSigninManager.getIdentityManager().hasPrimaryAccount());
         verify(mSignInStateObserverMock).onSignedIn();
         verify(mSignInStateObserverMock, never()).onSignedOut();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     Assert.assertEquals(
                             TestAccounts.ACCOUNT1,
-                            mSigninManager
-                                    .getIdentityManager()
-                                    .getPrimaryAccountInfo(ConsentLevel.SIGNIN));
+                            mSigninManager.getIdentityManager().getPrimaryAccountInfo());
                     Assert.assertTrue(
                             mSigninManager.getIdentityManager().isClearPrimaryAccountAllowed());
                 });
@@ -160,8 +161,7 @@ public class SigninSignoutIntegrationTest {
         mSigninTestRule.addAccount(TestAccounts.CHILD_ACCOUNT_NON_DISPLAYABLE_EMAIL);
 
         // The child account will be automatically signed in.
-        CriteriaHelper.pollUiThread(
-                () -> mSigninManager.getIdentityManager().hasPrimaryAccount(ConsentLevel.SIGNIN));
+        CriteriaHelper.pollUiThread(() -> mSigninManager.getIdentityManager().hasPrimaryAccount());
         verify(mSignInStateObserverMock).onSignedIn();
     }
 
@@ -179,8 +179,7 @@ public class SigninSignoutIntegrationTest {
     @LargeTest
     public void testChildAccountSignIn() {
         mSigninTestRule.addChildTestAccountThenWaitForSignin();
-        CriteriaHelper.pollUiThread(
-                () -> mSigninManager.getIdentityManager().hasPrimaryAccount(ConsentLevel.SIGNIN));
+        CriteriaHelper.pollUiThread(() -> mSigninManager.getIdentityManager().hasPrimaryAccount());
 
         verify(mSignInStateObserverMock).onSignedIn();
         verify(mSignInStateObserverMock, never()).onSignedOut();
@@ -191,7 +190,7 @@ public class SigninSignoutIntegrationTest {
     public void testSecondaryAccountRemovedOnChildAccountSignIn() {
         mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
 
-        try (var unused = mSigninTestRule.blockGetAccountsUpdate(true)) {
+        try (var _ = mSigninTestRule.blockGetAccountsUpdateAndPopulateCache()) {
             // Remove TestAccounts.ACCOUNT1 from the device so that its still signed in.
             mSigninTestRule.removeAccount(TestAccounts.ACCOUNT1.getId());
 
@@ -204,8 +203,7 @@ public class SigninSignoutIntegrationTest {
         // SigninChecker should kick in and switch the primary account to the supervised account.
         CriteriaHelper.pollUiThread(
                 () -> {
-                    CoreAccountInfo account =
-                            mSigninTestRule.getPrimaryAccount(ConsentLevel.SIGNIN);
+                    CoreAccountInfo account = mSigninTestRule.getPrimaryAccount();
                     return account != null
                             && TestAccounts.CHILD_ACCOUNT.getId().equals(account.getId());
                 });
@@ -216,9 +214,7 @@ public class SigninSignoutIntegrationTest {
                 () -> {
                     Assert.assertFalse(
                             "Account should be signed out!",
-                            mSigninManager
-                                    .getIdentityManager()
-                                    .hasPrimaryAccount(ConsentLevel.SIGNIN));
+                            mSigninManager.getIdentityManager().hasPrimaryAccount());
                 });
     }
 }

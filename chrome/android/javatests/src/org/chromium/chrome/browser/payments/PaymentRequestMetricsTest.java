@@ -16,25 +16,28 @@ import org.junit.runner.RunWith;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.autofill.AutofillTestHelper;
 import org.chromium.chrome.browser.autofill.PersonalDataManager.CreditCard;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.AppPresence;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.FactorySpeed;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.components.autofill.AutofillProfile;
 import org.chromium.components.payments.Event2;
 import org.chromium.components.payments.PaymentFeatureList;
+import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.concurrent.TimeoutException;
 
 /** A payment integration test to validate the logging of Payment Request metrics. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/376100658
 public class PaymentRequestMetricsTest {
     @Rule
     public PaymentRequestTestRule mPaymentRequestTestRule =
@@ -42,10 +45,10 @@ public class PaymentRequestMetricsTest {
 
     @Before
     public void setUp() throws TimeoutException {
-        AutofillTestHelper mHelper = new AutofillTestHelper();
+        AutofillTestHelper helper = new AutofillTestHelper();
         // The user has a shipping address and a credit card associated with that address on disk.
-        String mBillingAddressId =
-                mHelper.setProfile(
+        String billingAddressId =
+                helper.setProfile(
                         AutofillProfile.builder()
                                 .setFullName("Jon Doe")
                                 .setCompanyName("Google")
@@ -57,10 +60,10 @@ public class PaymentRequestMetricsTest {
                                 .setPhoneNumber("650-253-0000")
                                 .setLanguageCode("en-US")
                                 .build());
-        mHelper.setCreditCard(
+        helper.setCreditCard(
                 new CreditCard(
                         "",
-                        "https://example.test",
+                        /* isUserConfirmed= */ true,
                         true,
                         "Jon Doe",
                         "4111111111111111",
@@ -69,7 +72,7 @@ public class PaymentRequestMetricsTest {
                         "2050",
                         "visa",
                         R.drawable.visa_card,
-                        mBillingAddressId,
+                        billingAddressId,
                         /* serverId= */ ""));
     }
 
@@ -249,6 +252,7 @@ public class PaymentRequestMetricsTest {
     @Test
     @MediumTest
     @Feature({"Payments"})
+    @DisabledTest(message = "https://crbug.com/502914394")
     public void testAbortMetrics_UserAborted_TabClosed() throws TimeoutException {
         // Install the apps so the user can complete the Payment Request.
         mPaymentRequestTestRule.addPaymentAppFactory(
@@ -443,7 +447,7 @@ public class PaymentRequestMetricsTest {
     @Feature({"Payments"})
     @DisabledTest(
             message =
-                    "crbug.com/1260121 - The test deterministically fails in local run. "
+                    "crbug.com/40798033 - The test deterministically fails in local run. "
                             + "Efforts are needed to fix the test or the implementation code.")
     public void testShownLoggedOnlyOnce() throws TimeoutException {
         // Initiate a payment request.

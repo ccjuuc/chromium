@@ -12,6 +12,7 @@
 #import "ios/chrome/browser/credential_provider/model/credential_provider_util.h"
 #import "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #import "url/gurl.h"
+#import "url/origin.h"
 
 namespace {
 
@@ -30,7 +31,7 @@ password_manager::PasswordForm PasswordFormFromCredential(
   DCHECK(url.is_valid());
 
   form.url = password_manager_util::StripAuthAndParams(url);
-  form.signon_realm = form.url.DeprecatedGetOriginAsURL().spec();
+  form.signon_realm = url::Origin::Create(form.url).GetURL().spec();
   form.username_value = SysNSStringToUTF16(credential.username);
   form.password_value = SysNSStringToUTF16(credential.password);
   form.times_used_in_html_form = credential.rank;
@@ -91,6 +92,12 @@ password_manager::PasswordForm PasswordFormFromCredential(
 
   DCHECK(serviceIdentifier.length);
 
+  base::Time max_time =
+      std::max({passwordForm.date_created, passwordForm.date_last_filled,
+                passwordForm.date_last_used});
+  int64_t lastUsedTimeMicroseconds =
+      max_time.ToDeltaSinceWindowsEpoch().InMicroseconds();
+
   BOOL inAccountStore = (passwordForm.in_store ==
                          password_manager::PasswordForm::Store::kAccountStore);
   return [self initWithFavicon:favicon
@@ -102,7 +109,8 @@ password_manager::PasswordForm PasswordFormFromCredential(
                    serviceName:serviceName
       registryControlledDomain:registryControlledDomain
                       username:SysUTF16ToNSString(passwordForm.username_value)
-                          note:note];
+                          note:note
+                  lastUsedTime:lastUsedTimeMicroseconds];
 }
 
 @end

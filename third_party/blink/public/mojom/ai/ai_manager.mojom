@@ -4,13 +4,14 @@
 
 module blink.mojom;
 
+import "services/on_device_model/public/mojom/download_observer.mojom";
 import "third_party/blink/public/mojom/ai/ai_common.mojom";
+import "third_party/blink/public/mojom/ai/ai_semantic_embedder.mojom";
 import "third_party/blink/public/mojom/ai/ai_language_model.mojom";
 import "third_party/blink/public/mojom/ai/ai_proofreader.mojom";
 import "third_party/blink/public/mojom/ai/ai_rewriter.mojom";
 import "third_party/blink/public/mojom/ai/ai_summarizer.mojom";
 import "third_party/blink/public/mojom/ai/ai_writer.mojom";
-import "third_party/blink/public/mojom/ai/model_download_progress_observer.mojom";
 
 // LINT.IfChange(ModelAvailabilityCheckResult)
 enum ModelAvailabilityCheckResult {
@@ -70,6 +71,14 @@ enum ModelAvailabilityCheckResult {
   // The on-device model is not available because the enterprise policy
   // disables the feature.
   kUnavailableEnterprisePolicyDisabled = 20,
+  // The specified options are not supported with the requested performance
+  // preference.
+  kUnavailableIncompatiblePreferenceOptions = 21,
+  // The specified options are not supported with speculative decoding (MTP).
+  kUnavailableIncompatibleSpeculativeDecodingOptions = 22,
+  // The device does not have sufficient disk space to build caches for the
+  // on-device model.
+  kUnavailableInsufficientDiskSpaceForCaches = 23,
 
   // Append new line here
 };
@@ -119,7 +128,21 @@ interface AIManagerCreateProofreaderClient {
   OnError(AIManagerCreateClientError error, QuotaErrorInfo? quota_error_info);
 };
 
+
+// The client interface that receives an AISemanticEmbedder from an AIManager.
+interface AIManagerCreateSemanticEmbedderClient {
+  // Called with a created embedder's mojo interface as a result for the
+  // CreateSemanticEmbedder() method of the AIManager.
+  OnResult(pending_remote<blink.mojom.AISemanticEmbedder> embedder);
+
+  // Called when the manager cannot create an AISemanticEmbedder.
+  OnError(AIManagerCreateClientError error);
+};
+
 // The manager that could create a new session for the model.
+//
+// This interface is implemented by the browser process and called by the
+// renderer process (untrusted).
 interface AIManager {
   // Returns language model availability info from the underlying service.
   CanCreateLanguageModel(AILanguageModelCreateOptions options) =>
@@ -128,7 +151,8 @@ interface AIManager {
   // Creation will be aborted if the client is disconnected.
   CreateLanguageModel(
     pending_remote<AIManagerCreateLanguageModelClient> client,
-    AILanguageModelCreateOptions options
+    AILanguageModelCreateOptions options,
+    pending_remote<on_device_model.mojom.DownloadObserver>? monitor
   );
   // Returns summarizer model availability info from the underlying service.
   // TODO(crbug.com/390477782): `options` field is optional since it is not
@@ -140,7 +164,8 @@ interface AIManager {
   // Creation will be aborted if the client is disconnected.
   CreateSummarizer(
     pending_remote<AIManagerCreateSummarizerClient> client,
-    AISummarizerCreateOptions options);
+    AISummarizerCreateOptions options,
+    pending_remote<on_device_model.mojom.DownloadObserver>? monitor);
   // Returns the model params for the language model API.
   GetLanguageModelParams() => (
     AILanguageModelParams? language_model_params
@@ -153,7 +178,8 @@ interface AIManager {
   // `shared_context` in `options` is a string that is set in the
   // AIWriterCreateOptions when the JS API `ai.writer.create()` is called.
   CreateWriter(pending_remote<AIManagerCreateWriterClient> client,
-               AIWriterCreateOptions options);
+               AIWriterCreateOptions options,
+               pending_remote<on_device_model.mojom.DownloadObserver>? monitor);
   // Returns rewriter model availability info from the underlying service.
   CanCreateRewriter(AIRewriterCreateOptions options) =>
       (ModelAvailabilityCheckResult result);
@@ -162,17 +188,27 @@ interface AIManager {
   // `shared_context`, `tone` and `length` in `options` are set in the
   // AIRewriterCreateOptions when the JS API `ai.rewriter.create()` is called.
   CreateRewriter(pending_remote<AIManagerCreateRewriterClient> client,
-                 AIRewriterCreateOptions options);
+                 AIRewriterCreateOptions options,
+                 pending_remote<on_device_model.mojom.DownloadObserver>? monitor);
   // Returns proofreader model availability info from the underlying service.
   CanCreateProofreader(AIProofreaderCreateOptions options) =>
       (ModelAvailabilityCheckResult result);
   // Creates a new proofreader, passing the result or error to the client.
   // Creation will be aborted if the client is disconnected.
   CreateProofreader(pending_remote<AIManagerCreateProofreaderClient> client,
-                    AIProofreaderCreateOptions options);
-  // Registers the observer that will be notified when the on device model
-  // download progress is updated.
-  AddModelDownloadProgressObserver(
-    pending_remote<ModelDownloadProgressObserver> observer_remote
+                    AIProofreaderCreateOptions options,
+                    pending_remote<on_device_model.mojom.DownloadObserver>? monitor);
+  // Returns embedder model availability info from the underlying service.
+  CanCreateSemanticEmbedder() => (ModelAvailabilityCheckResult result);
+
+  // Creates an embedder, passing the result or error to the client.
+  // Creation will be aborted if the client is disconnected.
+  CreateSemanticEmbedder(
+    pending_remote<AIManagerCreateSemanticEmbedderClient> client,
+    // If `monitor` is provided, the client will receive download progress
+    // updates if the model needs to be downloaded. If it is not provided, the
+    // download will still proceed if necessary, but the client will only be
+    // notified upon completion or failure via the `client` interface.
+    pending_remote<on_device_model.mojom.DownloadObserver>? monitor
   );
 };

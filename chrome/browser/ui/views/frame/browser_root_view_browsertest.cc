@@ -11,10 +11,15 @@
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/defaults.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -36,14 +41,15 @@ class BrowserRootViewBrowserTest : public InProcessBrowserTest {
       delete;
 
   BrowserRootView* browser_root_view() {
-    BrowserView* browser_view = static_cast<BrowserView*>(browser()->window());
+    BrowserView* browser_view =
+        BrowserView::GetBrowserViewForBrowser(browser());
     return static_cast<BrowserRootView*>(
         browser_view->GetWidget()->GetRootView());
   }
 
   void PerformMouseWheelOnTabStrip(const gfx::Vector2d& offset) {
-    TabStrip* tabstrip =
-        BrowserView::GetBrowserViewForBrowser(browser())->tabstrip();
+    TabStrip* tabstrip = BrowserView::GetBrowserViewForBrowser(browser())
+                             ->horizontal_tab_strip_for_testing();
     const gfx::Point tabstrip_center = tabstrip->GetLocalBounds().CenterPoint();
     const gfx::Point location = views::View::ConvertPointToTarget(
         tabstrip, browser_root_view(), tabstrip_center);
@@ -84,7 +90,7 @@ class BrowserRootViewBrowserTest : public InProcessBrowserTest {
   }
 };
 
-// Clear drop info after performing drop. http://crbug.com/838791
+// Clear drop info after performing drop. http://crbug.com/41386560
 IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, ClearDropInfo) {
   ui::OSExchangeData data;
   data.SetURL(GURL("http://www.chromium.org/"), std::u16string());
@@ -100,7 +106,7 @@ IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, ClearDropInfo) {
   EXPECT_FALSE(browser_root_view()->drop_info_);
 }
 
-// Make sure plain string is droppable. http://crbug.com/838794
+// Make sure plain string is droppable. http://crbug.com/41386563
 IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, PlainString) {
   ui::OSExchangeData data;
   data.SetString(u"Plain string");
@@ -112,7 +118,7 @@ IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, PlainString) {
 }
 
 // Clear drop target when the widget is being destroyed.
-// http://crbug.com/1001942
+// http://crbug.com/40050082
 IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, ClearDropTarget) {
   ui::OSExchangeData data;
   data.SetURL(GURL("http://www.chromium.org/"), std::u16string());
@@ -177,6 +183,52 @@ IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, WheelTabChange) {
   EXPECT_EQ(1, model->active_index());
 }
 
+class BrowserRootViewWithVerticalTabsBrowserTest
+    : public BrowserRootViewBrowserTest {
+ public:
+  BrowserRootViewWithVerticalTabsBrowserTest() {
+    scoped_feature_list_.InitAndEnableFeature(tabs::kVerticalTabs);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(BrowserRootViewWithVerticalTabsBrowserTest,
+                       WheelTabChange) {
+  if (!browser_defaults::kScrollEventChangesTab) {
+    GTEST_SKIP() << "Test does not apply to this platform.";
+  }
+
+  TabStripModel* model = browser()->tab_strip_model();
+
+  while (model->count() < 2) {
+    ASSERT_TRUE(
+        AddTabAtIndex(0, GURL(url::kAboutBlankURL), ui::PAGE_TRANSITION_LINK));
+  }
+
+  tabs::VerticalTabStripStateController::From(browser())
+      ->SetVerticalTabsEnabled(true);
+  RunScheduledLayouts();
+
+  model->ActivateTabAt(1);
+  ASSERT_EQ(1, model->active_index());
+
+  const gfx::Vector2d kWheelUp(0, ui::MouseWheelEvent::kWheelDelta);
+
+  // When Vertical Tabs is enabled, the active tab should not change.
+  PerformMouseWheelOnTabStrip(kWheelUp);
+  EXPECT_EQ(1, model->active_index());
+
+  tabs::VerticalTabStripStateController::From(browser())
+      ->SetVerticalTabsEnabled(false);
+  RunScheduledLayouts();
+
+  // When Vertical Tabs is disabled, the active tab should change.
+  PerformMouseWheelOnTabStrip(kWheelUp);
+  EXPECT_EQ(0, model->active_index());
+}
+
 IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest,
                        WheelTabChangeWithCollapsedTabGroups) {
   if (!browser_defaults::kScrollEventChangesTab) {
@@ -184,8 +236,8 @@ IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest,
   }
 
   TabStripModel* model = browser()->tab_strip_model();
-  TabStrip* tabstrip =
-      BrowserView::GetBrowserViewForBrowser(browser())->tabstrip();
+  TabStrip* tabstrip = BrowserView::GetBrowserViewForBrowser(browser())
+                           ->horizontal_tab_strip_for_testing();
   ASSERT_TRUE(model->SupportsTabGroups());
 
   // Create 5 tabs, with the leftmost, center, and rightmost in collapsed tab

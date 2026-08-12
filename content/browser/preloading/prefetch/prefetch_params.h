@@ -53,7 +53,7 @@ bool PrefetchStartsSpareRenderer();
 // The default amount of time `PrefetchService` will keep an owned
 // `PrefetchContainer` alive. If this value is zero or less, the service will
 // keep the prefetch forever. This can be overridden in the `PrefetchContainer`.
-base::TimeDelta PrefetchContainerDefaultTtlInPrefetchService();
+CONTENT_EXPORT base::TimeDelta PrefetchContainerDefaultTtlInPrefetchService();
 
 // Returns if the specified host should have the prefetch proxy bypassed for
 // testing purposes. Currently this is only used for WPT test servers.
@@ -61,7 +61,7 @@ CONTENT_EXPORT bool ShouldPrefetchBypassProxyForTestHost(std::string_view host);
 
 // Whether only prefetched resources with a text/html MIME type should be used.
 // If this is false, there is no MIME type restriction.
-bool PrefetchServiceHTMLOnly();
+CONTENT_EXPORT bool PrefetchServiceHTMLOnly();
 
 // The maximum time a prefetched response is servable.
 CONTENT_EXPORT base::TimeDelta PrefetchCacheableDuration();
@@ -101,27 +101,24 @@ CONTENT_EXPORT base::TimeDelta PrefetchBlockUntilHeadTimeout(
     bool is_nav_prerender);
 
 // Gets the histogram suffix for the given `prefetch_type` and
-// `embedder_histogram_suffix`.
-// `embedder_histogram_suffix` will be utilized directly to generate the
+// `histogram_suffix`.
+// `histogram_suffix` will be utilized directly to generate the
 // histogram names. `TriggerTypeAndEagerness` in
 // //tools/metrics/histograms/metadata/prefetch/histograms.xml should be updated
 // if we start using a new one.
 CONTENT_EXPORT std::string GetMetricsSuffixTriggerTypeAndEagerness(
     const PrefetchType prefetch_type,
-    const std::optional<std::string>& embedder_histogram_suffix);
+    const std::optional<std::string>& histogram_suffix);
 
 // The max number of immediate prefetches allowed.
 inline constexpr size_t kMaxNumberOfImmediatePrefetchesPerPage = 50;
-// The max number of non-immediate prefetches allowed.
-inline constexpr size_t kMaxNumberOfNonImmediatePrefetchesPerPage = 2;
+// The max number of conservative prefetches allowed.
+inline constexpr size_t kMaxNumberOfConservativePrefetchesPerPage = 2;
 
 // Returns true if NIK prefetch scope is enabled. See crbug.com/1502326
 bool PrefetchNIKScopeEnabled();
 
 size_t GetPrefetchDataPipeTeeBodySizeLimit();
-
-// Returns true iff we should use `PrefetchScheduler`.
-CONTENT_EXPORT bool UsePrefetchScheduler();
 
 }  // namespace content
 

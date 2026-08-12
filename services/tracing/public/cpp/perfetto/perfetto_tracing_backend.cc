@@ -8,6 +8,7 @@
 #include "base/command_line.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
@@ -335,7 +336,9 @@ class ConsumerEndpoint : public perfetto::ConsumerEndpoint,
 
   ~ConsumerEndpoint() override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    consumer_.ExtractAsDangling()->OnDisconnect();  // May delete |consumer_|.
+    if (consumer_) {
+      consumer_.ExtractAsDangling()->OnDisconnect();  // May delete |consumer_|.
+    }
   }
 
   base::WeakPtr<ConsumerEndpoint> GetWeakPtr() {
@@ -417,7 +420,6 @@ class ConsumerEndpoint : public perfetto::ConsumerEndpoint,
         tracing_session_host_->DisableTracingAndEmitJson(
             data_source.config().chrome_config().json_agent_label_filter(),
             std::move(producer_handle),
-            data_source.config().chrome_config().privacy_filtering_enabled(),
             base::BindOnce(&ConsumerEndpoint::OnReadBuffersComplete,
                            base::Unretained(this)));
         return;
@@ -519,16 +521,9 @@ class ConsumerEndpoint : public perfetto::ConsumerEndpoint,
       });
     }
 
-    bool privacy_filtering_enabled = false;
-    for (const auto& data_source : trace_config_.data_sources()) {
-      if (data_source.config().chrome_config().privacy_filtering_enabled()) {
-        privacy_filtering_enabled = true;
-      }
-    }
     consumer_host_->CloneSession(
         tracing_session_host_.BindNewPipeAndPassReceiver(),
         tracing_session_client_.BindNewPipeAndPassRemote(), *uuid,
-        privacy_filtering_enabled,
         base::BindOnce(
             [](ConsumerEndpoint* endpoint, bool success,
                const std::string& error, const base::Token& uuid) {
@@ -622,6 +617,13 @@ class ConsumerEndpoint : public perfetto::ConsumerEndpoint,
     tracing_session_client_.reset();
     drainer_.reset();
     tokenizer_.reset();
+
+    if (consumer_) {
+      perfetto::Consumer* consumer = consumer_.ExtractAsDangling();
+      consumer_ = nullptr;
+      consumer->OnDisconnect();
+      return;
+    }
   }
 
   void OnReadBuffersComplete() {

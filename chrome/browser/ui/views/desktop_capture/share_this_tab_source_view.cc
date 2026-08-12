@@ -19,7 +19,6 @@
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/text_constants.h"
-#include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/layout_provider.h"
 
 namespace {
@@ -174,7 +173,7 @@ void ShareThisTabSourceView::Refresh() {
                               weak_factory_.GetWeakPtr());
 
   view->CopyFromSurface(
-      gfx::Rect(), gfx::Size(),
+      gfx::Rect(), gfx::Size(), base::TimeDelta(),
       base::BindPostTask(thumbnail_task_runner_,
                          base::BindOnce(&HandleCapturedBitmap, std::move(reply),
                                         last_hash_, kPreviewRect.size())));

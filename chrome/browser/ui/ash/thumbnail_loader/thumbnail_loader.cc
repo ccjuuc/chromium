@@ -20,6 +20,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
 #include "chrome/browser/ash/file_manager/fileapi_util.h"
+#include "chrome/browser/ash/fileapi/file_system_backend.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chromeos/ash/components/file_manager/app_id.h"
 #include "extensions/browser/api/messaging/channel_endpoint.h"
@@ -33,7 +34,6 @@
 #include "net/base/data_url.h"
 #include "net/base/mime_util.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
 #include "services/data_decoder/public/cpp/decode_image.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "storage/browser/file_system/file_system_context.h"
@@ -44,6 +44,7 @@
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/image/image_skia.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace ash {
 
@@ -188,12 +189,11 @@ using ThumbnailDataCallback = base::OnceCallback<void(const std::string& data)>;
 
 // Handles a parsed message sent from image loader extension in response to a
 // thumbnail request.
-void HandleParsedThumbnailResponse(
-    const std::string& request_id,
-    ThumbnailDataCallback callback,
-    data_decoder::DataDecoder::ValueOrError result) {
+void HandleParsedThumbnailResponse(const std::string& request_id,
+                                   ThumbnailDataCallback callback,
+                                   const base::JSONReader::Result& result) {
   if (!result.has_value()) {
-    VLOG(2) << "Failed to parse request response " << result.error();
+    VLOG(2) << "Failed to parse request response " << result.error().message;
     std::move(callback).Run("");
     return;
   }
@@ -242,11 +242,12 @@ class ThumbnailLoaderNativeMessageHost : public extensions::NativeMessageHost {
     }
     response_received_ = true;
 
-    // Detach the callback from the message host in case the extension closes
-    // connection by the time the response is parsed.
-    data_decoder::DataDecoder::ParseJsonIsolated(
-        message, base::BindOnce(&HandleParsedThumbnailResponse, request_id_,
-                                std::move(callback_)));
+    // JSONReader is now safe for rule of 2.
+    base::JSONReader::Result result =
+        base::JSONReader::ReadAndReturnValueWithError(message,
+                                                      base::JSON_PARSE_RFC);
+
+    HandleParsedThumbnailResponse(request_id_, std::move(callback_), result);
 
     client_->CloseChannel("");
     client_ = nullptr;
@@ -301,8 +302,7 @@ void ThumbnailLoader::Load(const ThumbnailRequest& request,
                            ImageCallback callback) {
   // Get the file's last modified time - this will be used for cache lookup in
   // the image loader extension.
-  GURL source_url = extensions::Extension::GetBaseURLFromExtensionId(
-      file_manager::kImageLoaderExtensionId);
+  GURL source_url = file_manager::util::GetImageLoaderBaseURL();
   file_manager::util::GetMetadataForPath(
       file_manager::util::GetFileSystemContextForSourceURL(profile_,
                                                            source_url),
@@ -338,15 +338,21 @@ void ThumbnailLoader::LoadForFileWithMetadata(
     return;
   }
 
+  const GURL image_loader_url = file_manager::util::GetImageLoaderBaseURL();
+  storage::FileSystemContext* const file_system_context =
+      file_manager::util::GetFileSystemContextForSourceURL(profile_,
+                                                           image_loader_url);
+  auto* const backend = ash::FileSystemBackend::Get(*file_system_context);
+  base::FilePath virtual_path;
   GURL thumbnail_url;
-  if (!file_manager::util::ConvertAbsoluteFilePathToFileSystemUrl(
-          profile_, request.file_path,
-          extensions::Extension::GetBaseURLFromExtensionId(
-              file_manager::kImageLoaderExtensionId),
-          &thumbnail_url)) {
+  if (!backend || !backend->GetVirtualPath(request.file_path, &virtual_path) ||
+      !file_manager::util::ConvertAbsoluteFilePathToFileSystemUrl(
+          profile_, request.file_path, image_loader_url, &thumbnail_url)) {
     std::move(callback).Run(/*bitmap=*/nullptr, base::File::FILE_ERROR_FAILED);
     return;
   }
+  backend->GrantFileAccessToOrigin(url::Origin::Create(image_loader_url),
+                                   virtual_path);
 
   extensions::MessageService* const message_service =
       extensions::MessageService::Get(profile_);
@@ -366,7 +372,7 @@ void ThumbnailLoader::LoadForFileWithMetadata(
 
   // Generate an image loader request. The request type is defined in
   // ui/file_manager/image_loader/load_image_request.js.
-  base::Value::Dict request_dict;
+  base::DictValue request_dict;
   request_dict.Set("taskId", base::Value(request_id.ToString()));
   request_dict.Set("url", base::Value(thumbnail_url.spec()));
   request_dict.Set("timestamp", base::TimeToValue(file_info.last_modified));

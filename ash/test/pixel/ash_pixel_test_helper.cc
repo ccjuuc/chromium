@@ -9,14 +9,13 @@
 #include "ash/test/ash_test_util.h"
 #include "ash/wallpaper/wallpaper_controller_impl.h"
 #include "base/base_switches.h"
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/functional/callback.h"
 #include "base/i18n/base_i18n_switches.h"
 #include "base/run_loop.h"
 #include "base/system/sys_info.h"
-#include "chromeos/constants/chromeos_features.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "chromeos/dbus/power_manager/power_supply_properties.pb.h"
 
@@ -45,15 +44,13 @@ AshPixelTestHelper::AshPixelTestHelper(pixel_test::InitParams params)
         ::switches::kForceUIDirection, ::switches::kForceDirectionRTL);
   }
 
-  scoped_feature_list_.InitWithFeatureState(
-      chromeos::features::kDisableSystemBlur, !IsSystemBlurEnabled());
   if (!IsSystemBlurEnabled()) {
     // This switch simulates a device with less than 4GB of memory, which is
     // necessary to disable system blur. See
     // `chromeos::features::IsSystemBlurEnabled()`.
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
         switches::kEnableLowEndDeviceMode);
-    CHECK_EQ(base::SysInfo::AmountOfPhysicalMemory(), base::MiB(512));
+    CHECK_EQ(base::SysInfo::AmountOfTotalPhysicalMemory(), base::MiBU(512));
   }
 }
 

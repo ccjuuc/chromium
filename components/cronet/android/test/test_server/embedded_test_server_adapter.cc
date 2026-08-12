@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
-#pragma allow_unsafe_libc_calls
-#endif
-
 #include "components/cronet/android/test/test_server/embedded_test_server_adapter.h"
 
 #include <memory>
@@ -60,6 +55,15 @@ class NativeTestServerHandleRequestCallback final {
   jni_zero::ScopedJavaGlobalRef<jobject> java_callback_;
 };
 
+struct NativeTestServerOCSPConfig final {
+  net::test_server::EmbeddedTestServer::OCSPConfig ocsp_config;
+};
+
+struct NativeTestServerServerCertificateConfig final {
+  net::test_server::EmbeddedTestServer::ServerCertificateConfig
+      server_certificate_config;
+};
+
 }  // namespace cronet
 
 namespace jni_zero {
@@ -81,6 +85,18 @@ std::unique_ptr<cronet::NativeTestServerHandleRequestCallback>
 FromJniType<std::unique_ptr<cronet::NativeTestServerHandleRequestCallback>>(
     JNIEnv* env,
     const JavaRef<jobject>& java_handle_request_callback);
+
+template <>
+cronet::NativeTestServerOCSPConfig
+FromJniType<cronet::NativeTestServerOCSPConfig>(
+    JNIEnv* env,
+    const JavaRef<jobject>& java_ocsp_config);
+
+template <>
+cronet::NativeTestServerServerCertificateConfig
+FromJniType<cronet::NativeTestServerServerCertificateConfig>(
+    JNIEnv* env,
+    const JavaRef<jobject>& java_server_certificate_config);
 
 }  // namespace jni_zero
 
@@ -122,6 +138,38 @@ FromJniType<std::unique_ptr<cronet::NativeTestServerHandleRequestCallback>>(
     const JavaRef<jobject>& java_handle_request_callback) {
   return std::make_unique<cronet::NativeTestServerHandleRequestCallback>(
       java_handle_request_callback);
+}
+
+template <>
+cronet::NativeTestServerOCSPConfig
+FromJniType<cronet::NativeTestServerOCSPConfig>(
+    JNIEnv* env,
+    const JavaRef<jobject>& java_ocsp_config) {
+  const auto response_type =
+      cronet::Java_NativeTestServer_getOCSPConfigResponseType(env,
+                                                              java_ocsp_config);
+  cronet::NativeTestServerOCSPConfig ocsp_config = {
+      .ocsp_config =
+          net::test_server::EmbeddedTestServer::OCSPConfig(response_type)};
+  if (response_type == net::test_server::EmbeddedTestServer::OCSPConfig::
+                           ResponseType::kSuccessful) {
+    // See the documentation of OCSPConfig#responseType for why we do this.
+    ocsp_config.ocsp_config.single_responses.push_back({});
+  }
+  return ocsp_config;
+}
+
+template <>
+cronet::NativeTestServerServerCertificateConfig
+FromJniType<cronet::NativeTestServerServerCertificateConfig>(
+    JNIEnv* env,
+    const JavaRef<jobject>& java_server_certificate_config) {
+  cronet::NativeTestServerServerCertificateConfig server_certificate_config;
+  server_certificate_config.server_certificate_config.stapled_ocsp_config =
+      cronet::Java_NativeTestServer_getServerCertificateConfigStapledOCSPConfig(
+          env, java_server_certificate_config)
+          .ocsp_config;
+  return server_certificate_config;
 }
 
 }  // namespace jni_zero
@@ -167,7 +215,8 @@ std::unique_ptr<net::test_server::HttpResponse> UseEncodingInResponse(
   // Each of these is a compression of the string "The quick brown fox jumps
   // over the lazy dog\n".
   std::string_view encoding =
-      std::string_view(request.relative_url).substr(strlen(kUseEncodingPath));
+      std::string_view(request.relative_url)
+          .substr(UNSAFE_TODO(strlen(kUseEncodingPath)));
   auto http_response = std::make_unique<net::test_server::BasicHttpResponse>();
   if (encoding == "brotli") {
     static const uint8_t kCompressed[] = {
@@ -217,7 +266,8 @@ std::unique_ptr<net::test_server::HttpResponse> SetAndEchoCookieInResponse(
   std::string cookie_line;
   DCHECK(base::StartsWith(request.relative_url, kSetCookiePath,
                           base::CompareCase::INSENSITIVE_ASCII));
-  cookie_line = request.relative_url.substr(strlen(kSetCookiePath));
+  cookie_line =
+      request.relative_url.substr(UNSAFE_TODO(strlen(kSetCookiePath)));
   auto http_response = std::make_unique<net::test_server::BasicHttpResponse>();
   http_response->set_code(net::HTTP_OK);
   http_response->set_content(cookie_line);
@@ -290,37 +340,42 @@ std::unique_ptr<net::test_server::HttpResponse> CronetTestRequestHandler(
 
 namespace cronet {
 
-static long JNI_NativeTestServer_Create(
-    JNIEnv* env,
-    std::string& test_files_root,
-    std::string& test_data_dir,
-    bool use_https,
-    net::EmbeddedTestServer::ServerCertificate certificate) {
+static long JNI_NativeTestServer_Create(JNIEnv* env,
+                                        const std::string& test_files_root,
+                                        const std::string& test_data_dir,
+                                        net::EmbeddedTestServer::Type type) {
   base::InitAndroidTestPaths(base::FilePath(test_data_dir));
-  return reinterpret_cast<long>(new EmbeddedTestServerAdapter(
-      base::FilePath(test_files_root),
-      (use_https ? net::test_server::EmbeddedTestServer::TYPE_HTTPS
-                 : net::test_server::EmbeddedTestServer::TYPE_HTTP),
-      certificate));
+  return reinterpret_cast<long>(
+      new EmbeddedTestServerAdapter(base::FilePath(test_files_root), type));
 }
 
 EmbeddedTestServerAdapter::EmbeddedTestServerAdapter(
     const base::FilePath& test_files_root,
-    net::EmbeddedTestServer::Type server_type,
-    net::EmbeddedTestServer::ServerCertificate server_certificate)
+    net::EmbeddedTestServer::Type server_type)
     : test_server(net::EmbeddedTestServer(server_type)) {
   test_server.RegisterRequestHandler(
       base::BindRepeating(&CronetTestRequestHandler, &test_server));
   test_server.ServeFilesFromDirectory(test_files_root);
   net::test_server::RegisterDefaultHandlers(&test_server);
+}
+
+void EmbeddedTestServerAdapter::SetSSLConfigWithServerCertificate(
+    JNIEnv* env,
+    net::EmbeddedTestServer::ServerCertificate server_certificate) {
   test_server.SetSSLConfig(server_certificate);
+}
+
+void EmbeddedTestServerAdapter::SetSSLConfigWithServerCertificateConfig(
+    JNIEnv* env,
+    const NativeTestServerServerCertificateConfig& server_certificate_config) {
+  test_server.SetSSLConfig(server_certificate_config.server_certificate_config);
 }
 
 EmbeddedTestServerAdapter::~EmbeddedTestServerAdapter() = default;
 
 void EmbeddedTestServerAdapter::EnableConnectProxy(
     JNIEnv* env,
-    std::vector<std::string>& urls) {
+    const std::vector<std::string>& urls) {
   std::vector<net::HostPortPair> destinations;
   for (auto& url : urls) {
     destinations.push_back(net::HostPortPair::FromURL(GURL(url)));
@@ -394,7 +449,7 @@ std::string EmbeddedTestServerAdapter::GetFileURL(
 
 void EmbeddedTestServerAdapter::RegisterRequestHandler(
     JNIEnv* env,
-    std::unique_ptr<NativeTestServerHandleRequestCallback>& callback) {
+    std::unique_ptr<NativeTestServerHandleRequestCallback>&& callback) {
   test_server.RegisterRequestHandler(
       base::BindRepeating(&NativeTestServerHandleRequestCallback::operator(),
                           base::Owned(std::move(callback))));

@@ -9,10 +9,13 @@
 #import "base/i18n/message_formatter.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/strings/utf_string_conversions.h"
+#import "ios/chrome/browser/composebox/public/composebox_constants.h"
+#import "ios/chrome/browser/composebox/shared/ui/composebox_ui_constants.h"
 #import "ios/chrome/browser/composebox/ui/composebox_input_item_view.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
+#import "ios/chrome/common/ui/util/pointer_interaction_util.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util.h"
 
@@ -24,7 +27,7 @@ const CGFloat kCloseButtonTrailing = 8.0;
 /// The point size for the symbol icons.
 const CGFloat kSymbolSize = 24.0;
 /// The size of the close icon.
-const CGFloat kCloseIconSize = 20;
+const CGFloat kCloseIconSize = 22;
 /// The alpha value for the close button.
 const CGFloat kCloseButtonAlpha = 0.9;
 }  // namespace
@@ -79,12 +82,15 @@ const CGFloat kCloseButtonAlpha = 0.9;
       [_closeButton.centerYAnchor
           constraintEqualToAnchor:self.contentView.centerYAnchor],
     ]];
+
+    [self addInteraction:[[ViewPointerInteraction alloc] init]];
   }
   return self;
 }
 
 - (void)prepareForReuse {
   [super prepareForReuse];
+  _associatedItem = nil;
   [_inputItemView prepareForReuse];
 }
 
@@ -92,6 +98,7 @@ const CGFloat kCloseButtonAlpha = 0.9;
 
 - (void)configureWithItem:(ComposeboxInputItem*)item
                     theme:(ComposeboxTheme*)theme {
+  _associatedItem = item;
   [_inputItemView configureWithItem:item theme:theme];
 
   BOOL isLoading = item.state == ComposeboxInputItemState::kLoading ||
@@ -117,8 +124,12 @@ const CGFloat kCloseButtonAlpha = 0.9;
     _scrimView.backgroundColor = theme.inputItemBackgroundColor;
   }
 
+  UIImageSymbolConfiguration* config = [UIImageSymbolConfiguration
+      configurationWithPointSize:kCloseIconSize
+                          weight:UIImageSymbolWeightLight
+                           scale:UIImageSymbolScaleDefault];
   UIImage* image = SymbolWithPalette(
-      DefaultSymbolWithPointSize(kXMarkCircleFillSymbol, kCloseIconSize), @[
+      SymbolWithConfiguration(SymbolXMarkCircleFill, config), @[
         [UIColor colorNamed:kTextSecondaryColor],
         [theme.inputItemBackgroundColor
             colorWithAlphaComponent:kCloseButtonAlpha]
@@ -128,12 +139,21 @@ const CGFloat kCloseButtonAlpha = 0.9;
   _inputItemView.backgroundColor = theme.inputItemBackgroundColor;
 
   self.isAccessibilityElement = YES;
+  self.accessibilityIdentifier = kComposeboxCarouselItemAccessibilityIdentifier;
   switch (item.type) {
-    case ComposeboxInputItemType::kComposeboxInputItemTypeImage:
-      self.accessibilityLabel = l10n_util::GetNSString(
-          IDS_IOS_COMPOSEBOX_ATTACHMENT_IMAGE_ACCESSIBILITY_LABEL);
+    case ComposeboxInputItemType::kComposeboxInputItemTypeImage: {
+      std::u16string pattern = l10n_util::GetStringUTF16(
+          IDS_IOS_COMPOSEBOX_ATTACHMENT_IMAGE_INDEXED_ACCESSIBILITY_LABEL);
+      std::u16string message =
+          base::i18n::MessageFormatter::FormatWithNamedArgs(
+              pattern, "index", static_cast<int>(item.uploadIndex + 1));
+      self.accessibilityLabel = base::SysUTF16ToNSString(message);
+      self.accessibilityTraits |= UIAccessibilityTraitImage;
       break;
-    case ComposeboxInputItemType::kComposeboxInputItemTypeFile: {
+    }
+    case ComposeboxInputItemType::kComposeboxInputItemTypeRawFile:
+    case ComposeboxInputItemType::kComposeboxInputItemTypePDF:
+    case ComposeboxInputItemType::kComposeboxInputItemTypeDrive: {
       std::u16string title = base::SysNSStringToUTF16(item.title);
       std::u16string pattern = l10n_util::GetStringUTF16(
           IDS_IOS_COMPOSEBOX_ATTACHMENT_FILE_ACCESSIBILITY_LABEL);
@@ -141,6 +161,7 @@ const CGFloat kCloseButtonAlpha = 0.9;
           base::i18n::MessageFormatter::FormatWithNamedArgs(pattern, "title",
                                                             title);
       self.accessibilityLabel = base::SysUTF16ToNSString(message);
+      self.accessibilityTraits &= ~UIAccessibilityTraitImage;
       break;
     }
     case ComposeboxInputItemType::kComposeboxInputItemTypeTab: {
@@ -151,25 +172,29 @@ const CGFloat kCloseButtonAlpha = 0.9;
           base::i18n::MessageFormatter::FormatWithNamedArgs(pattern, "title",
                                                             title);
       self.accessibilityLabel = base::SysUTF16ToNSString(message);
+      self.accessibilityTraits &= ~UIAccessibilityTraitImage;
       break;
     }
   }
 
+  __weak __typeof(self) weakSelf = self;
   self.accessibilityCustomActions = @[ [[UIAccessibilityCustomAction alloc]
-      initWithName:
-          l10n_util::GetNSString(
-              IDS_IOS_COMPOSEBOX_DELETE_ATTACHMENT_ACCESSIBILITY_CUSTOM_ACTION)
-             image:image
-            target:self
-          selector:@selector(closeButtonTapped)] ];
+       initWithName:
+           l10n_util::GetNSString(
+               IDS_IOS_COMPOSEBOX_DELETE_ATTACHMENT_ACCESSIBILITY_CUSTOM_ACTION)
+              image:image
+      actionHandler:^BOOL(UIAccessibilityCustomAction* action) {
+        return [weakSelf closeButtonTapped];
+      }] ];
 }
 
 #pragma mark Private helpers
 
 /// Called when the close button is tapped, notifying the delegate to remove the
 /// item.
-- (void)closeButtonTapped {
+- (BOOL)closeButtonTapped {
   [self.delegate composeboxInputItemCellDidTapCloseButton:self];
+  return YES;
 }
 
 #pragma mark - Private methods
@@ -198,7 +223,7 @@ const CGFloat kCloseButtonAlpha = 0.9;
   UIImageSymbolConfiguration* symbolConfig =
       [UIImageSymbolConfiguration configurationWithPointSize:kSymbolSize];
   UIImage* errorImage =
-      DefaultSymbolWithConfiguration(kErrorCircleSymbol, symbolConfig);
+      SymbolWithConfiguration(SymbolErrorCircle, symbolConfig);
   _errorIconView = [[UIImageView alloc] initWithImage:errorImage];
   _errorIconView.translatesAutoresizingMaskIntoConstraints = NO;
   _errorIconView.tintColor = [UIColor whiteColor];
@@ -208,6 +233,8 @@ const CGFloat kCloseButtonAlpha = 0.9;
 - (void)setupCloseButton {
   _closeButton = [UIButton buttonWithType:UIButtonTypeSystem];
   _closeButton.translatesAutoresizingMaskIntoConstraints = NO;
+  _closeButton.accessibilityIdentifier =
+      kComposeboxInputItemCellCloseButtonAccessibilityIdentifier;
   _closeButton.isAccessibilityElement = NO;
   [_closeButton addTarget:self
                    action:@selector(closeButtonTapped)

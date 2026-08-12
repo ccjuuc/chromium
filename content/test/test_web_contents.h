@@ -77,7 +77,8 @@ class TestWebContents : public WebContentsImpl, public WebContentsTester {
   // Override to cache the tab switch start time without going through
   // VisibleTimeRequestTrigger.
   void SetTabSwitchStartTime(base::TimeTicks start_time,
-                             bool destination_is_loaded) final;
+                             bool destination_is_loaded,
+                             bool had_saved_frame_at_start) final;
 
   // WebContentsTester implementation.
   void CommitPendingNavigation() override;
@@ -180,7 +181,7 @@ class TestWebContents : public WebContentsImpl, public WebContentsTester {
 
   TestRenderFrameHost* GetSpeculativePrimaryMainFrame();
 
-  FrameTreeNodeId AddPrerender(const GURL& url) override;
+  PrerenderHostId AddPrerender(const GURL& url) override;
   TestRenderFrameHost* AddPrerenderAndCommitNavigation(
       const GURL& url) override;
   std::unique_ptr<NavigationSimulator> AddPrerenderAndStartNavigation(
@@ -209,9 +210,22 @@ class TestWebContents : public WebContentsImpl, public WebContentsTester {
   void SetMediaCaptureRawDeviceIdsOpened(blink::mojom::MediaStreamType type,
                                          std::vector<std::string> ids) override;
   void SetCurrentlyPlayingVideoCount(int count) override;
+  void SetHasPictureInPictureDocument(
+      bool has_picture_in_picture_document) override;
 
   void OnIgnoredUIEvent() override;
   bool GetIgnoredUIEventCalled() const;
+
+  void GetRenderWidgetHostAtPointAsynchronously(
+      RenderWidgetHostViewBase* root_view,
+      const gfx::PointF& point,
+      base::OnceCallback<void(base::WeakPtr<RenderWidgetHostViewBase>,
+                              std::optional<gfx::PointF>)> callback) override;
+
+  void SetDeferGetRenderWidgetHostAtPoint(bool defer) {
+    defer_get_render_widget_host_at_point_ = defer;
+  }
+  void TriggerGetRenderWidgetHostAtPointAsynchronouslyCallback();
 
  protected:
   // The deprecated WebContentsTester still needs to subclass this.
@@ -232,15 +246,15 @@ class TestWebContents : public WebContentsImpl, public WebContentsTester {
           blink_popup_widget_host,
       mojo::PendingAssociatedReceiver<blink::mojom::WidgetHost>
           blink_widget_host,
-      mojo::PendingAssociatedRemote<blink::mojom::Widget> blink_widget)
-      override;
+      mojo::PendingAssociatedRemote<blink::mojom::Widget> blink_widget,
+      GlobalRenderFrameHostId creator_frame_id) override;
   WebContents* ShowCreatedWindow(
       RenderFrameHostImpl* opener,
       int route_id,
       WindowOpenDisposition disposition,
       const blink::mojom::WindowFeatures& window_features,
       bool user_gesture) override;
-  void ShowCreatedWidget(int process_id,
+  void ShowCreatedWidget(ChildProcessId process_id,
                          int route_id,
                          const gfx::Rect& initial_rect,
                          const gfx::Rect& initial_anchor_rect) override;
@@ -278,6 +292,9 @@ class TestWebContents : public WebContentsImpl, public WebContentsTester {
       media_capture_raw_device_ids_opened_;
   std::optional<int> playing_video_count_;
   bool ignored_ui_event_called_ = false;
+
+  bool defer_get_render_widget_host_at_point_ = false;
+  base::OnceClosure deferred_get_render_widget_host_at_point_callback_;
 };
 
 }  // namespace content

@@ -9,36 +9,41 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
+#include "ash/login/resources/grit/ash_login_strings.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/accessibility/magnification_manager.h"
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
+#include "chrome/browser/ash/login/fjord_oobe/fjord_oobe_util.h"
 #include "chrome/browser/ash/login/screens/welcome_screen.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ash/policy/enrollment/enrollment_requisition_manager.h"
 #include "chrome/browser/ash/system/input_device_settings.h"
 #include "chrome/browser/ash/system/timezone_util.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/ui/ash/login/input_events_blocker.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/webui/ash/login/core_oobe_handler.h"
-#include "chrome/browser/ui/webui/ash/login/fjord_oobe_util.h"
 #include "chrome/browser/ui/webui/ash/login/l10n_util.h"
 #include "chrome/browser/ui/webui/ash/login/oobe_ui.h"
 #include "chrome/browser/ui/webui/ash/login/reset_screen_handler.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/dbus/constants/dbus_switches.h"
+#include "components/application_locale_storage/application_locale_storage.h"
 #include "components/login/localized_values_builder.h"
 #include "components/prefs/pref_service.h"
 #include "components/strings/grit/components_strings.h"
@@ -63,20 +68,20 @@ WelcomeScreenHandler::~WelcomeScreenHandler() = default;
 void WelcomeScreenHandler::Show() {
   // TODO(crbug.com/1105387): Part of initial screen logic.
   PrefService* prefs = g_browser_process->local_state();
-  if (prefs->GetBoolean(prefs::kFactoryResetRequested)) {
+  if (prefs->GetBoolean(ash::prefs::kFactoryResetRequested)) {
     DCHECK(LoginDisplayHost::default_host());
     LoginDisplayHost::default_host()->StartWizard(ResetView::kScreenId);
     return;
   }
 
-  base::Value::Dict welcome_screen_params;
+  base::DictValue welcome_screen_params;
   welcome_screen_params.Set("isDeveloperMode",
                             base::CommandLine::ForCurrentProcess()->HasSwitch(
                                 chromeos::switches::kSystemDevMode));
   ShowInWebUI(std::move(welcome_screen_params));
 }
 
-void WelcomeScreenHandler::SetLanguageList(base::Value::List language_list) {
+void WelcomeScreenHandler::SetLanguageList(base::ListValue language_list) {
   language_list_ = std::move(language_list);
   GetOobeUI()->GetCoreOobe()->ReloadContent();
 }
@@ -106,7 +111,10 @@ void WelcomeScreenHandler::DeclareLocalizedValues(
   if (fjord_util::ShouldShowFjordOobe()) {
     builder->Add("welcomeScreenGreeting", IDS_FJORD_WELCOME_MESSAGE);
     builder->Add("welcomeScreenGreetingSubtitle", IDS_EMPTY_STRING);
-  } else if (policy::EnrollmentRequisitionManager::IsMeetDevice()) {
+  } else if (
+      // TODO(crbug.com/489929275): Avoid using g_browser_process.
+      policy::EnrollmentRequisitionManager::IsMeetDevice(
+          CHECK_DEREF(g_browser_process->local_state()))) {
     builder->Add("welcomeScreenGreeting", IDS_REMORA_CONFIRM_MESSAGE);
     builder->Add("welcomeScreenGreetingSubtitle", IDS_EMPTY_STRING);
   } else if (switches::IsRevenBranding()) {
@@ -230,7 +238,7 @@ void WelcomeScreenHandler::DeclareJSCallbacks() {
               &WelcomeScreenHandler::HandleRecordChromeVoxHintSpokenSuccess);
 }
 
-void WelcomeScreenHandler::GetAdditionalParameters(base::Value::Dict* dict) {
+void WelcomeScreenHandler::GetAdditionalParameters(base::DictValue* dict) {
   // GetAdditionalParameters() is called when OOBE language is updated.
   // This happens in two different cases:
   //
@@ -251,25 +259,31 @@ void WelcomeScreenHandler::GetAdditionalParameters(base::Value::Dict* dict) {
     return;
   }
 
-  const std::string application_locale =
-      g_browser_process->GetApplicationLocale();
+  // TODO(crbug.com/489929275): Avoid using g_bowser_process.
+  PrefService& local_state = CHECK_DEREF(g_browser_process->local_state());
+  const ApplicationLocaleStorage& application_locale_storage = CHECK_DEREF(
+      g_browser_process->GetFeatures()->application_locale_storage());
+
   input_method::InputMethodManager* input_method_manager =
       input_method::InputMethodManager::Get();
   const std::string selected_input_method =
       input_method_manager->GetActiveIMEState()->GetCurrentInputMethod().id();
 
-  base::Value::List language_list = language_list_.Clone();
+  base::ListValue language_list = language_list_.Clone();
 
   if (language_list.empty()) {
     language_list = GetMinimalUILanguageList();
   }
 
   dict->Set("languageList", std::move(language_list));
-  dict->Set("inputMethodsList", GetAndActivateOobeInputMethods(
-                                    application_locale, selected_input_method,
-                                    input_method_manager));
+  dict->Set("inputMethodsList",
+            GetAndActivateOobeInputMethods(application_locale_storage.Get(),
+                                           selected_input_method,
+                                           input_method_manager));
   dict->Set("timezoneList", GetTimezoneList());
-  dict->Set("demoModeCountryList", DemoSession::GetCountryList());
+  dict->Set("demoModeCountryList",
+            DemoSession::GetCountryList(local_state,
+                                        application_locale_storage.Get()));
 
   // If this switch is set allow to open advanced options and configure device
   // requisition.
@@ -299,7 +313,7 @@ void WelcomeScreenHandler::HandleRecordChromeVoxHintSpokenSuccess() {
 }
 
 void WelcomeScreenHandler::UpdateA11yState(const A11yState& state) {
-  base::Value::Dict a11y_info;
+  base::DictValue a11y_info;
   a11y_info.Set("highContrastEnabled", state.high_contrast);
   a11y_info.Set("largeCursorEnabled", state.large_cursor);
   a11y_info.Set("spokenFeedbackEnabled", state.spoken_feedback);
@@ -311,20 +325,20 @@ void WelcomeScreenHandler::UpdateA11yState(const A11yState& state) {
 }
 
 // static
-base::Value::List WelcomeScreenHandler::GetTimezoneList() {
+base::ListValue WelcomeScreenHandler::GetTimezoneList() {
   std::string current_timezone_id;
   CrosSettings::Get()->GetString(kSystemTimezone, &current_timezone_id);
 
-  base::Value::List timezone_list;
-  base::Value::List timezones = ash::system::GetTimezoneList();
+  base::ListValue timezone_list;
+  base::ListValue timezones = ash::system::GetTimezoneList();
   for (const auto& value : timezones) {
     CHECK(value.is_list());
-    const base::Value::List& timezone = value.GetList();
+    const base::ListValue& timezone = value.GetList();
 
     const std::string& timezone_id = timezone[0].GetString();
     const std::string& timezone_name = timezone[1].GetString();
 
-    base::Value::Dict timezone_option;
+    base::DictValue timezone_option;
     timezone_option.Set("value", timezone_id);
     timezone_option.Set("title", timezone_name);
     timezone_option.Set("selected", timezone_id == current_timezone_id);

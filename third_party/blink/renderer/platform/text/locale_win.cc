@@ -38,6 +38,7 @@
 
 #include "base/check_op.h"
 #include "base/memory/ptr_util.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_util.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/win/web_sandbox_support.h"
@@ -72,7 +73,7 @@ String GetLocaleInfoString(LCID lcid, LCTYPE type, bool defaults_for_locale) {
   StringBuffer<UChar> buffer(buffer_size_with_nul);
   auto span = buffer.Span();
   ::GetLocaleInfo(lcid, type, base::as_writable_wcstr(span.data()),
-                  span.size());
+                  base::checked_cast<int>(span.size()));
   buffer.Shrink(buffer_size_with_nul - 1);
   return String::Adopt(buffer);
 }
@@ -85,7 +86,7 @@ Vector<String> GetLocaleInfoStrings(LCID lcid,
                                     bool defaults_for_locale,
                                     bool allow_empty) {
   Vector<String> result;
-  result.reserve(types.size());
+  result.reserve(base::checked_cast<wtf_size_t>(types.size()));
   for (const auto& type : types) {
     result.push_back(GetLocaleInfoString(lcid, type, defaults_for_locale));
     if (result.back().empty() && !allow_empty) {
@@ -114,10 +115,7 @@ unsigned GetFirstDayOfWeek(LCID lcid, bool defaults_for_locale) {
 }
 
 String ExtractLanguageCode(const String& locale) {
-  wtf_size_t dash_position = locale.find('-');
-  if (dash_position == kNotFound)
-    return locale;
-  return locale.Left(dash_position);
+  return locale.substr(0, locale.find('-'));
 }
 
 LCID LCIDFromLocaleInternal(LCID user_default_lcid,
@@ -210,7 +208,7 @@ Vector<String> GetShortMonthLabels(LCID lcid, bool defaults_for_locale) {
   return GetLocaleInfoStrings(lcid, kTypes, defaults_for_locale, false);
 }
 
-Vector<String> GetTimeAMPMLabels(LCID lcid, bool defaults_for_locale) {
+Vector<String> GetTimeAmPmLabels(LCID lcid, bool defaults_for_locale) {
   WebSandboxSupport* proxy = Platform::Current()->GetSandboxSupport();
   if (proxy && proxy->IsLocaleProxyEnabled()) {
     return Vector<String>(proxy->AmPmLabels(lcid, defaults_for_locale));
@@ -271,7 +269,7 @@ void CommitLiteralToken(StringBuilder& literal_buffer,
                         StringBuilder& converted) {
   if (literal_buffer.length() <= 0)
     return;
-  DateTimeFormat::QuoteAndappend(literal_buffer.ToString(), converted);
+  DateTimeFormat::QuoteAndAppend(StringView(literal_buffer), converted);
   literal_buffer.Clear();
 }
 
@@ -323,7 +321,7 @@ String ConvertWindowsDateTimeFormat(const String& format) {
       } else {
         last_quote_can_be_literal = true;
       }
-    } else if (IsASCIIAlpha(ch)) {
+    } else if (IsAsciiAlpha(ch)) {
       CommitLiteralToken(literal_buffer, converted);
       wtf_size_t symbol_start = i;
       wtf_size_t count = CountContinuousLetters(format, i);
@@ -418,7 +416,7 @@ unsigned LocaleWin::FirstDayOfWeek() {
   return first_day_of_week_;
 }
 
-bool LocaleWin::IsRTL() {
+bool LocaleWin::IsRtl() {
   unicode::CharDirection dir = unicode::Direction(MonthLabels()[0][0]);
   return dir == unicode::kRightToLeft || dir == unicode::kRightToLeftArabic;
 }
@@ -513,9 +511,9 @@ const Vector<String>& LocaleWin::ShortStandAloneMonthLabels() {
   return ShortMonthLabels();
 }
 
-const Vector<String>& LocaleWin::TimeAMPMLabels() {
+const Vector<String>& LocaleWin::TimeAmPmLabels() {
   if (time_ampm_labels_.empty()) {
-    time_ampm_labels_ = GetTimeAMPMLabels(lcid_, defaults_for_locale_);
+    time_ampm_labels_ = GetTimeAmPmLabels(lcid_, defaults_for_locale_);
   }
   return time_ampm_labels_;
 }
@@ -578,7 +576,7 @@ void LocaleWin::InitializeLocaleData() {
   } else {
     DCHECK_GE(digits.length(), 10u);
     for (wtf_size_t i = 0; i < 10; ++i) {
-      symbols.push_back(digits.Substring(i, 1));
+      symbols.push_back(digits.substr(i, 1));
     }
   }
   DCHECK_EQ(symbols.size(), kDecimalSeparatorIndex);

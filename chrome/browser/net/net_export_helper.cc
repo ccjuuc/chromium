@@ -14,7 +14,7 @@
 #include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
 #include "extensions/buildflags/buildflags.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "chrome/browser/ui/webui/extensions/extension_basic_info.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
@@ -27,31 +27,39 @@
 #include "chrome/browser/net/service_providers_win.h"
 #endif
 
+#if BUILDFLAG(IS_ANDROID)
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/task/thread_pool.h"
+#endif
+
 namespace chrome_browser_net {
 
-base::Value::Dict GetPrerenderInfo(Profile* profile) {
+base::DictValue GetPrerenderInfo(Profile* profile) {
   prerender::NoStatePrefetchManager* no_state_prefetch_manager =
       prerender::NoStatePrefetchManagerFactory::GetForBrowserContext(profile);
   if (no_state_prefetch_manager) {
     return no_state_prefetch_manager->CopyAsDict();
   } else {
-    base::Value::Dict dict;
+    base::DictValue dict;
     dict.Set("enabled", false);
     dict.Set("omnibox_enabled", false);
     return dict;
   }
 }
 
-base::Value::List GetExtensionInfo(Profile* profile) {
-  base::Value::List extension_list;
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+base::ListValue GetExtensionInfo(Profile* profile) {
+  base::ListValue extension_list;
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   auto* extension_registrar = extensions::ExtensionRegistrar::Get(profile);
   if (extension_registrar) {
     const extensions::ExtensionSet extensions =
         extensions::ExtensionRegistry::Get(profile)
             ->GenerateInstalledExtensionsSet();
     for (const auto& extension : extensions) {
-      base::Value::Dict extension_info;
+      base::DictValue extension_info;
       bool enabled = extension_registrar->IsExtensionEnabled(extension->id());
       extensions::GetExtensionBasicInfo(extension.get(), enabled,
                                         &extension_info);
@@ -63,14 +71,14 @@ base::Value::List GetExtensionInfo(Profile* profile) {
 }
 
 #if BUILDFLAG(IS_WIN)
-base::Value::Dict GetWindowsServiceProviders() {
-  base::Value::Dict service_providers;
+base::DictValue GetWindowsServiceProviders() {
+  base::DictValue service_providers;
 
   WinsockLayeredServiceProviderList layered_providers;
   GetWinsockLayeredServiceProviders(&layered_providers);
-  base::Value::List layered_provider_list;
+  base::ListValue layered_provider_list;
   for (const auto& provider : layered_providers) {
-    base::Value::Dict service_dict;
+    base::DictValue service_dict;
     service_dict.Set("name", base::AsString16(provider.name));
     service_dict.Set("version", provider.version);
     service_dict.Set("chain_length", provider.chain_length);
@@ -84,9 +92,9 @@ base::Value::Dict GetWindowsServiceProviders() {
 
   WinsockNamespaceProviderList namespace_providers;
   GetWinsockNamespaceProviders(&namespace_providers);
-  base::Value::List namespace_list;
+  base::ListValue namespace_list;
   for (const auto& provider : namespace_providers) {
-    base::Value::Dict namespace_dict;
+    base::DictValue namespace_dict;
     namespace_dict.Set("name", base::AsString16(provider.name));
     namespace_dict.Set("active", provider.active);
     namespace_dict.Set("version", provider.version);
@@ -97,6 +105,23 @@ base::Value::Dict GetWindowsServiceProviders() {
   service_providers.Set("namespace_providers", std::move(namespace_list));
 
   return service_providers;
+}
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+void PublishNetLogToDownloads(const base::FilePath& file_path) {
+  base::ThreadPool::PostTask(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+      base::BindOnce(
+          [](const base::FilePath& path) {
+            if (!base::CopyFileToDownloadsCollection(path,
+                                                     "application/json")) {
+              DLOG(ERROR) << "Failed to copy net-export log to public "
+                             "Downloads collection: "
+                          << path.value();
+            }
+          },
+          file_path));
 }
 #endif
 

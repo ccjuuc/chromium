@@ -26,6 +26,9 @@ bool IsIdPRegistrationEnabled();
 // Whether the well-known enforcement is bypassed.
 bool IsWithoutWellKnownEnforcementEnabled();
 
+// Whether subdomain-first discovery for well-known file is enabled.
+bool IsWebIdentitySubdomainEnabled();
+
 // Whether the Web Identity Digital Credentials API is enabled.
 bool IsDigitalCredentialsEnabled();
 
@@ -44,9 +47,6 @@ bool IsAutofillEnabled();
 // Whether nonce usage in params is enabled.
 bool IsNonceInParamsEnabled();
 
-// Whether showing the non-string token is enabled.
-bool IsNonStringTokenEnabled();
-
 // Controls whether FedCM requires explicit accounts_endpoint and
 // login_url in well-known files when using client_metadata.
 bool IsWellKnownEndpointValidationEnabled();
@@ -57,14 +57,17 @@ bool IsPreservePortsForTestingEnabled();
 // Whether accessing error attribute is enabled.
 bool IsErrorAttributeEnabled();
 
-// Whether the check for an embedder disabling auto sign-in is enabled.
-bool IsFedCmEmbedderCheckEnabled();
-
 // Whether navigation interception is enabled.
 bool IsNavigationInterceptionEnabled();
 
-// Whethere navigation cancellation is enabled.
-bool IsNavigationCancellationEnabled();
+// Whether embedder initiated login is enabled.
+bool IsEmbedderInitiatedLoginEnabled();
+
+// Whether the ambient UI is enabled.
+bool IsFedCmAmbientUIEnabled();
+
+// Whether native IdPs are enabled.
+bool IsFedCmNativeIdPsEnabled();
 
 }  // namespace content::webid
 

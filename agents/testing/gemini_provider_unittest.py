@@ -113,18 +113,38 @@ class GetSandboxFlagsUnittest(unittest.TestCase):
         self.mock_get_container_path.return_value = '/usr/bin:/bin'
         self.mock_get_sandbox_image_tag.return_value = 'fake/image:latest'
 
-        flags, error = gemini_provider._get_sandbox_flags()
+        flags, error = gemini_provider._get_sandbox_flags(
+            gemini_cli_cmd=['gemini'])
 
         self.assertEqual(error, '')
         self.assertIn(f'-v {fake_depot_tools_path.as_posix()}:/depot_tools',
                       flags)
         self.assertIn('-e PATH=/depot_tools:/usr/bin:/bin', flags)
 
+    def test_get_sandbox_flags_with_home_dir(self):
+        """Tests sandbox flags when home_dir is provided."""
+        fake_depot_tools_path = pathlib.Path('/fake/depot_tools')
+        self.mock_get_depot_tools_path.return_value = fake_depot_tools_path
+        self.mock_get_container_path.return_value = '/usr/bin:/bin'
+        self.mock_get_sandbox_image_tag.return_value = 'fake/image:latest'
+        fake_home_dir = pathlib.Path('/fake/home')
+
+        flags, error = gemini_provider._get_sandbox_flags(
+            gemini_cli_cmd=['gemini'], home_dir=fake_home_dir)
+
+        self.assertEqual(error, '')
+        self.assertIn(f'-v {fake_depot_tools_path.as_posix()}:/depot_tools',
+                      flags)
+        self.assertIn(
+            f'-v {(fake_home_dir / "mock_bin").as_posix()}:/mock_bin', flags)
+        self.assertIn('-e PATH=/mock_bin:/depot_tools:/usr/bin:/bin', flags)
+
     def test_get_sandbox_flags_no_depot_tools(self):
         """Tests that an error is returned when depot_tools is not found."""
         self.mock_get_depot_tools_path.return_value = None
 
-        flags, error = gemini_provider._get_sandbox_flags()
+        flags, error = gemini_provider._get_sandbox_flags(
+            gemini_cli_cmd=['gemini'])
 
         self.assertEqual(flags, [])
         self.assertEqual(
@@ -138,7 +158,8 @@ class GetSandboxFlagsUnittest(unittest.TestCase):
         self.mock_get_container_path.return_value = None
         self.mock_get_sandbox_image_tag.return_value = 'fake/image:latest'
 
-        flags, error = gemini_provider._get_sandbox_flags()
+        flags, error = gemini_provider._get_sandbox_flags(
+            gemini_cli_cmd=['gemini'])
 
         self.assertEqual(flags, [])
         self.assertEqual(
@@ -163,12 +184,19 @@ class ConfigureGeminiCliUnittest(fake_filesystem_unittest.TestCase):
         self.assertTrue(os.path.exists(settings_file))
         with open(settings_file, 'r', encoding='utf-8') as f:
             settings = json.load(f)
-        self.assertEqual(settings, {
-            'telemetry': {
-                'enabled': True,
-                'outfile': str(telemetry_outfile),
-            },
-        })
+        self.assertEqual(
+            settings, {
+                'general': {
+                    'retryFetchErrors': True,
+                },
+                'telemetry': {
+                    'enabled': True,
+                    'outfile': str(telemetry_outfile),
+                },
+                'tools': {
+                    'useRipgrep': True,
+                },
+            })
 
     def test_updates_existing_settings_file(self):
         """Tests that an existing settings file is updated."""
@@ -186,11 +214,52 @@ class ConfigureGeminiCliUnittest(fake_filesystem_unittest.TestCase):
             settings = json.load(f)
         self.assertEqual(
             settings, {
+                'general': {
+                    'retryFetchErrors': True,
+                },
                 'other_setting': 'value',
                 'telemetry': {
                     'enabled': True,
                     'outfile': str(telemetry_outfile)
-                }
+                },
+                'tools': {
+                    'useRipgrep': True,
+                },
+            })
+
+    def test_updates_existing_general_settings(self):
+        """Tests that existing general settings are updated."""
+        home_dir = pathlib.Path('/fake/home')
+        telemetry_outfile = pathlib.Path('/fake/telemetry.json')
+        gemini_dir = home_dir / '.gemini'
+        os.makedirs(gemini_dir)
+        settings_file = gemini_dir / 'settings.json'
+        with open(settings_file, 'w', encoding='utf-8') as f:
+            json.dump(
+                {
+                    'general': {
+                        'retryFetchErrors': False,
+                        'someOtherSetting': True,
+                    },
+                }, f)
+
+        gemini_provider._configure_gemini_cli(home_dir, telemetry_outfile)
+
+        with open(settings_file, 'r', encoding='utf-8') as f:
+            settings = json.load(f)
+        self.assertEqual(
+            settings, {
+                'general': {
+                    'retryFetchErrors': True,
+                    'someOtherSetting': True,
+                },
+                'telemetry': {
+                    'enabled': True,
+                    'outfile': str(telemetry_outfile),
+                },
+                'tools': {
+                    'useRipgrep': True,
+                },
             })
 
     def test_updates_existing_telemetry_settings(self):
@@ -213,12 +282,19 @@ class ConfigureGeminiCliUnittest(fake_filesystem_unittest.TestCase):
 
         with open(settings_file, 'r', encoding='utf-8') as f:
             settings = json.load(f)
-        self.assertEqual(settings, {
-            'telemetry': {
-                'enabled': True,
-                'outfile': str(telemetry_outfile),
-            },
-        })
+        self.assertEqual(
+            settings, {
+                'general': {
+                    'retryFetchErrors': True,
+                },
+                'telemetry': {
+                    'enabled': True,
+                    'outfile': str(telemetry_outfile),
+                },
+                'tools': {
+                    'useRipgrep': True,
+                },
+            })
 
     def test_creates_trusted_folders_file(self):
         """Tests that a new trusted folders file is created."""
@@ -270,10 +346,10 @@ class GetGeminiCliArgumentsUnittest(fake_filesystem_unittest.TestCase):
         self.addCleanup(get_sandbox_image_tag_patcher.stop)
 
         gemini_helpers_patcher = unittest.mock.patch(
-            'gemini_provider.gemini_helpers.get_gemini_executable')
+            'gemini_provider.gemini_helpers.get_gemini_command')
         self.mock_gemini_helpers = gemini_helpers_patcher.start()
         self.addCleanup(gemini_helpers_patcher.stop)
-        self.mock_gemini_helpers.return_value = 'gemini'
+        self.mock_gemini_helpers.return_value = ['gemini']
 
         load_templates_patcher = unittest.mock.patch(
             'gemini_provider._load_templates')
@@ -291,7 +367,8 @@ class GetGeminiCliArgumentsUnittest(fake_filesystem_unittest.TestCase):
             provider_vars, provider_config, user_prompt)
 
         self.assertEqual(error, '')
-        self.assertEqual(args.command, ['gemini', '-y'])
+        self.assertEqual(args.command,
+                         ['gemini', '-y', '--model', 'gemini-3-flash-preview'])
         self.assertIsNone(args.home_dir)
         self.assertEqual(args.timeout_seconds,
                          gemini_provider.DEFAULT_TIMEOUT_SECONDS)
@@ -311,7 +388,9 @@ class GetGeminiCliArgumentsUnittest(fake_filesystem_unittest.TestCase):
             provider_vars, provider_config, user_prompt)
 
         self.assertEqual(error, '')
-        self.assertEqual(args.command, ['/custom/gemini', '-y'])
+        self.assertEqual(
+            args.command,
+            ['/custom/gemini', '-y', '--model', 'gemini-3-flash-preview'])
 
     def test_sandbox_enabled(self):
         """Tests that sandbox flags are added when sandbox is enabled."""
@@ -324,9 +403,25 @@ class GetGeminiCliArgumentsUnittest(fake_filesystem_unittest.TestCase):
             provider_vars, provider_config, user_prompt)
 
         self.assertEqual(error, '')
-        self.assertEqual(args.command, ['gemini', '-y', '--sandbox'])
+        self.assertEqual(
+            args.command,
+            ['gemini', '-y', '--model', 'gemini-3-flash-preview', '--sandbox'])
         self.assertIn('SANDBOX_FLAGS', args.env)
         self.assertEqual(args.env['SANDBOX_FLAGS'], '--sandbox-flag')
+
+    def test_sandbox_enabled_with_home_dir(self):
+        """Tests that enabled sandbox flags are called with home_dir."""
+        self.mock_get_sandbox_flags.return_value = (['--sandbox-flag'], '')
+        provider_vars = {'sandbox': True, 'home_dir': '/custom/home'}
+        provider_config = {}
+        user_prompt = 'test prompt'
+
+        _, error = gemini_provider._get_gemini_cli_arguments(
+            provider_vars, provider_config, user_prompt)
+
+        self.assertEqual(error, '')
+        self.mock_get_sandbox_flags.assert_called_once_with(
+            ['gemini'], pathlib.Path('/custom/home'))
 
     def test_sandbox_flag_error(self):
         """Tests that an error is returned when _get_sandbox_flags fails."""
@@ -457,7 +552,8 @@ class RunGeminiCliWithOutputStreamingUnittest(fake_filesystem_unittest.TestCase
     def test_successful_execution(self):
         """Tests a successful execution of the gemini CLI."""
         args = gemini_provider.GeminiCliArguments(
-            command=['gemini', '-y'],
+            base_gemini_cli_cmd=['gemini'],
+            gemini_cli_args=['-y'],
             home_dir=None,
             env={},
             timeout_seconds=10,
@@ -490,7 +586,8 @@ class RunGeminiCliWithOutputStreamingUnittest(fake_filesystem_unittest.TestCase
             'Fake error')
         self.mock_popen.return_value.poll.return_value = None
         args = gemini_provider.GeminiCliArguments(
-            command=['gemini', '-y'],
+            base_gemini_cli_cmd=['gemini'],
+            gemini_cli_args=['-y'],
             home_dir=None,
             env={},
             timeout_seconds=10,
@@ -797,7 +894,8 @@ class CallApiUnittest(fake_filesystem_unittest.TestCase):
         context = {'vars': {}}
         self.mock_get_gemini_cli_arguments.return_value = (
             gemini_provider.GeminiCliArguments(
-                command=['gemini', '-y'],
+                base_gemini_cli_cmd=['gemini'],
+                gemini_cli_args=['-y'],
                 home_dir=pathlib.Path('/fake/home'),
                 env={},
                 timeout_seconds=10,
@@ -840,7 +938,8 @@ class CallApiUnittest(fake_filesystem_unittest.TestCase):
         context = {'vars': {}}
         self.mock_get_gemini_cli_arguments.return_value = (
             gemini_provider.GeminiCliArguments(
-                command=['gemini', '-y'],
+                base_gemini_cli_cmd=['gemini'],
+                gemini_cli_args=['-y'],
                 home_dir=None,
                 env={},
                 timeout_seconds=10,
@@ -865,7 +964,8 @@ class CallApiUnittest(fake_filesystem_unittest.TestCase):
         context = {'vars': {}}
         self.mock_get_gemini_cli_arguments.return_value = (
             gemini_provider.GeminiCliArguments(
-                command=['gemini', '-y'],
+                base_gemini_cli_cmd=['gemini'],
+                gemini_cli_args=['-y'],
                 home_dir=None,
                 env={},
                 timeout_seconds=123,
@@ -892,7 +992,8 @@ class CallApiUnittest(fake_filesystem_unittest.TestCase):
         context = {'vars': {}}
         self.mock_get_gemini_cli_arguments.return_value = (
             gemini_provider.GeminiCliArguments(
-                command=['gemini', '-y'],
+                base_gemini_cli_cmd=['gemini'],
+                gemini_cli_args=['-y'],
                 home_dir=None,
                 env={},
                 timeout_seconds=123,
@@ -917,7 +1018,8 @@ class CallApiUnittest(fake_filesystem_unittest.TestCase):
         context = {'vars': {}}
         self.mock_get_gemini_cli_arguments.return_value = (
             gemini_provider.GeminiCliArguments(
-                command=['gemini', '-y'],
+                base_gemini_cli_cmd=['gemini'],
+                gemini_cli_args=['-y'],
                 home_dir=None,
                 env={},
                 timeout_seconds=123,
@@ -937,6 +1039,157 @@ class CallApiUnittest(fake_filesystem_unittest.TestCase):
         self.assertEqual(
             result['error'],
             'An unexpected error occurred: Fake unexpected error')
+
+    @unittest.mock.patch('gemini_provider._install_mock_commands')
+    def test_call_api_installs_mocks(self, mock_install_mock_commands):
+        """Tests that call_api installs mock commands when home_dir is set."""
+        options = {'config': {'mocks': [{'command': 'foo', 'rules': []}]}}
+        context = {'vars': {}}
+        self.mock_get_gemini_cli_arguments.return_value = (
+            gemini_provider.GeminiCliArguments(
+                base_gemini_cli_cmd=['gemini'],
+                gemini_cli_args=['-y'],
+                home_dir=pathlib.Path('/fake/home'),
+                env={},
+                timeout_seconds=10,
+                system_prompt='system prompt',
+                template_prompt='template prompt',
+                user_prompt='user prompt',
+                console_width=80,
+            ),
+            '',
+        )
+        self.fs.create_file('GEMINI.md')
+
+        gemini_provider.call_api('test prompt', options, context)
+
+        mock_install_mock_commands.assert_called_once_with(
+            options['config'], pathlib.Path('/fake/home'))
+
+
+class GetEnvWithOverridesUnittest(unittest.TestCase):
+    """Unit tests for the `_get_env_with_overrides` function."""
+
+    @unittest.mock.patch.dict(os.environ, {'PATH': '/original/path'},
+                              clear=True)
+    def test_no_overrides(self):
+        env = gemini_provider._get_env_with_overrides()
+        self.assertEqual(env, {'PATH': '/original/path'})
+
+    @unittest.mock.patch.dict(os.environ, {'PATH': '/original/path'},
+                              clear=True)
+    def test_with_home(self):
+        home = pathlib.Path('/fake/home')
+        env = gemini_provider._get_env_with_overrides(home=home)
+        self.assertEqual(env['HOME'], str(home))
+        self.assertEqual(env['PATH'], f'{home / "mock_bin"}:/original/path')
+
+    @unittest.mock.patch.dict(os.environ, {}, clear=True)
+    def test_with_sandbox_flags(self):
+        env = gemini_provider._get_env_with_overrides(
+            sandbox_flags=['--flag1', '--flag2'])
+        self.assertEqual(env['SANDBOX_FLAGS'], '--flag1 --flag2')
+
+    @unittest.mock.patch.dict(os.environ, {}, clear=True)
+    def test_with_sandbox_image(self):
+        env = gemini_provider._get_env_with_overrides(
+            sandbox_image='fake/image:tag')
+        self.assertEqual(env['GEMINI_SANDBOX_IMAGE'], 'fake/image:tag')
+
+
+class InstallSkillsUnittest(fake_filesystem_unittest.TestCase):
+    """Unit tests for the `_install_skills` function."""
+
+    def setUp(self):
+        self.setUpPyfakefs()
+
+    def test_no_skills_or_no_home(self):
+        # Verify it doesn't fail/do anything
+        gemini_provider._install_skills(None, pathlib.Path('/fake/home'))
+        gemini_provider._install_skills(['skill1'], None)
+        self.assertFalse(os.path.exists('/fake/home/.gemini/skills'))
+
+    def test_install_skills_from_agents_path(self):
+        self.fs.create_dir('agents/skills/skill1')
+        self.fs.create_file('agents/skills/skill1/SKILL.md',
+                            contents='skill1 content')
+        home_dir = pathlib.Path('/fake/home')
+
+        gemini_provider._install_skills(['skill1'], home_dir)
+
+        dest_path = home_dir / '.gemini' / 'skills' / 'skill1'
+        self.assertTrue(os.path.exists(dest_path / 'SKILL.md'))
+        with open(dest_path / 'SKILL.md', 'r', encoding='utf-8') as f:
+            self.assertEqual(f.read(), 'skill1 content')
+
+    def test_install_skills_from_internal_path(self):
+        self.fs.create_dir('internal/agents/skills/skill2')
+        self.fs.create_file('internal/agents/skills/skill2/SKILL.md',
+                            contents='skill2 content')
+        home_dir = pathlib.Path('/fake/home')
+
+        gemini_provider._install_skills(['skill2'], home_dir)
+
+        dest_path = home_dir / '.gemini' / 'skills' / 'skill2'
+        self.assertTrue(os.path.exists(dest_path / 'SKILL.md'))
+        with open(dest_path / 'SKILL.md', 'r', encoding='utf-8') as f:
+            self.assertEqual(f.read(), 'skill2 content')
+
+    def test_skill_not_found(self):
+        home_dir = pathlib.Path('/fake/home')
+        with self.assertRaises(FileNotFoundError):
+            gemini_provider._install_skills(['nonexistent'], home_dir)
+
+
+class InstallMockCommandsUnittest(fake_filesystem_unittest.TestCase):
+    """Unit tests for the `_install_mock_commands` function."""
+
+    def setUp(self):
+        self.setUpPyfakefs()
+
+    def test_no_mocks(self):
+        home_dir = pathlib.Path('/fake/home')
+        gemini_provider._install_mock_commands({}, home_dir)
+        self.assertFalse(os.path.exists(home_dir / 'mock_bin'))
+
+    def test_mock_without_command_name(self):
+        home_dir = pathlib.Path('/fake/home')
+        config = {'mocks': [{'rules': []}]}
+        with self.assertRaisesRegex(ValueError,
+                                    'Mock command has no command name'):
+            gemini_provider._install_mock_commands(config, home_dir)
+
+    def test_install_mock_commands(self):
+        home_dir = pathlib.Path('/fake/home')
+        config = {
+            'mocks': [{
+                'command':
+                'my-cmd',
+                'rules': [{
+                    'args': ['--help'],
+                    'stdout': 'help output',
+                    'exit_code': 0
+                }, {
+                    'args': ['--fail'],
+                    'stderr': 'error occurred',
+                    'exit_code': 1
+                }]
+            }]
+        }
+
+        gemini_provider._install_mock_commands(config, home_dir)
+
+        mock_bin_dir = home_dir / 'mock_bin'
+        self.assertTrue(os.path.exists(mock_bin_dir / 'my-cmd'))
+
+        # Verify script contents
+        script_content = (mock_bin_dir / 'my-cmd').read_text(encoding='utf-8')
+        self.assertIn('RULES = [', script_content)
+        self.assertIn('help output', script_content)
+        self.assertIn('error occurred', script_content)
+        if os.name == 'posix':
+            self.assertEqual(
+                os.stat(mock_bin_dir / 'my-cmd').st_mode & 0o777, 0o755)
 
 
 if __name__ == '__main__':

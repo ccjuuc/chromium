@@ -28,7 +28,6 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/browser/plugin_service.h"
 #include "content/public/browser/render_frame_host.h"
-#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/webplugininfo.h"
 #include "content/public/test/browser_test.h"
@@ -64,23 +63,16 @@ class PluginInfoHostImplTest : public InProcessBrowserTest {
   PluginInfoHostImplTest() {}
 
   void SetUpOnMainThread() override {
-    int active_render_process_id = browser()
-                                       ->tab_strip_model()
-                                       ->GetActiveWebContents()
-                                       ->GetPrimaryMainFrame()
-                                       ->GetProcess()
-                                       ->GetDeprecatedID();
-
+    auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
     plugin_info_host_impl_ = std::make_unique<PluginInfoHostImpl>(
-        active_render_process_id, browser()->profile());
+        web_contents->GetPrimaryMainFrame()->GetGlobalFrameToken(),
+        browser()->GetProfile());
   }
 
   void TearDownOnMainThread() override { plugin_info_host_impl_.reset(); }
 
  protected:
-  PluginInfoPtr GetPluginInfo(const GURL& url,
-                              const url::Origin& origin,
-                              const std::string& mime_type) {
+  PluginInfoPtr GetPluginInfo(const GURL& url, const std::string& mime_type) {
     PluginInfoPtr plugin_info;
 
     base::MockCallback<PluginInfoHost::GetPluginInfoCallback> mock_callback;
@@ -88,15 +80,14 @@ class PluginInfoHostImplTest : public InProcessBrowserTest {
 
     base::RunLoop run_loop;
     plugin_info_host_impl_->GetPluginInfo(
-        url, origin, mime_type,
-        mock_callback.Get().Then(run_loop.QuitClosure()));
+        url, mime_type, mock_callback.Get().Then(run_loop.QuitClosure()));
     run_loop.Run();
 
     return plugin_info;
   }
 
   void SetAlwaysOpenPdfExternally() {
-    PluginPrefs::GetForProfile(browser()->profile())
+    PluginPrefs::GetForProfile(browser()->GetProfile())
         ->SetAlwaysOpenPdfExternallyForTests(true);
   }
 
@@ -125,7 +116,7 @@ class PluginInfoHostImplBidiTestBase : public PluginInfoHostImplTest {
 // direction affects the PDF viewer extension, as the plugin name is derived
 // from the extension name, and the extension name may be adjusted to include
 // Unicode bidirectional control characters in RTL mode. These extra control
-// characters can break string comparisons (see crbug.com/1404260).
+// characters can break string comparisons (see crbug.com/40885917).
 class PluginInfoHostImplBidiTest : public PluginInfoHostImplBidiTestBase,
                                    public testing::WithParamInterface<bool> {
  public:
@@ -159,16 +150,16 @@ IN_PROC_BROWSER_TEST_F(PluginInfoHostImplTest, CoverAllPlugins) {
 }
 
 IN_PROC_BROWSER_TEST_F(PluginInfoHostImplTest, GetPluginInfoForFlash) {
-  PluginInfoPtr plugin_info = GetPluginInfo(GURL("fake.swf"), url::Origin(),
-                                            "application/x-shockwave-flash");
+  PluginInfoPtr plugin_info =
+      GetPluginInfo(GURL("fake.swf"), "application/x-shockwave-flash");
   ASSERT_TRUE(plugin_info);
 
   EXPECT_EQ(PluginStatus::kNotFound, plugin_info->status);
 }
 
 IN_PROC_BROWSER_TEST_F(PluginInfoHostImplTest, GetPluginInfoForFutureSplash) {
-  PluginInfoPtr plugin_info = GetPluginInfo(GURL("fake.spl"), url::Origin(),
-                                            "application/futuresplash");
+  PluginInfoPtr plugin_info =
+      GetPluginInfo(GURL("fake.spl"), "application/futuresplash");
   ASSERT_TRUE(plugin_info);
 
   EXPECT_EQ(PluginStatus::kNotFound, plugin_info->status);
@@ -186,7 +177,7 @@ IN_PROC_BROWSER_TEST_P(PluginInfoHostImplBidiTest,
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
   PluginInfoPtr plugin_info =
-      GetPluginInfo(GURL("fake.pdf"), url::Origin(), pdf::kPDFMimeType);
+      GetPluginInfo(GURL("fake.pdf"), pdf::kPDFMimeType);
   ASSERT_TRUE(plugin_info);
 
   EXPECT_EQ(PluginStatus::kAllowed, plugin_info->status);
@@ -215,14 +206,20 @@ IN_PROC_BROWSER_TEST_P(PluginInfoHostImplBidiTest,
   // Background color hard-coded in `GetPdfBackgroundColor()`.
   EXPECT_EQ(SkColorSetRGB(40, 40, 40), plugin_info->plugin.background_color);
 
-  // Has PDF MIME type.
-  ASSERT_THAT(plugin_info->plugin.mime_types, SizeIs(1));
+  // Has the PDF MIME types: application/pdf and text/pdf.
+  ASSERT_THAT(plugin_info->plugin.mime_types, SizeIs(2));
 
   WebPluginMimeType mime_type = plugin_info->plugin.mime_types[0];
   EXPECT_EQ(pdf::kPDFMimeType, mime_type.mime_type);
   EXPECT_THAT(mime_type.file_extensions, ElementsAre("pdf"));
   EXPECT_EQ(u"", mime_type.description);
   EXPECT_THAT(mime_type.additional_params, IsEmpty());
+
+  WebPluginMimeType text_pdf_mime_type = plugin_info->plugin.mime_types[1];
+  EXPECT_EQ("text/pdf", text_pdf_mime_type.mime_type);
+  EXPECT_THAT(text_pdf_mime_type.file_extensions, IsEmpty());
+  EXPECT_EQ(u"", text_pdf_mime_type.description);
+  EXPECT_THAT(text_pdf_mime_type.additional_params, IsEmpty());
 }
 
 IN_PROC_BROWSER_TEST_P(PluginInfoHostImplBidiTest,
@@ -230,7 +227,7 @@ IN_PROC_BROWSER_TEST_P(PluginInfoHostImplBidiTest,
   SetAlwaysOpenPdfExternally();
 
   PluginInfoPtr plugin_info =
-      GetPluginInfo(GURL("fake.pdf"), url::Origin(), pdf::kPDFMimeType);
+      GetPluginInfo(GURL("fake.pdf"), pdf::kPDFMimeType);
   ASSERT_TRUE(plugin_info);
 
   // PDF viewer extension is disabled by PDF content setting.
@@ -248,8 +245,8 @@ IN_PROC_BROWSER_TEST_F(PluginInfoHostImplTest,
   const std::string kGroupId = "chromium-pdf-plugin";
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
-  PluginInfoPtr plugin_info = GetPluginInfo(GURL("fake.pdf"), url::Origin(),
-                                            pdf::kInternalPluginMimeType);
+  PluginInfoPtr plugin_info =
+      GetPluginInfo(GURL("fake.pdf"), pdf::kInternalPluginMimeType);
   ASSERT_TRUE(plugin_info);
 
   EXPECT_EQ(PluginStatus::kAllowed, plugin_info->status);
@@ -284,8 +281,8 @@ IN_PROC_BROWSER_TEST_F(PluginInfoHostImplTest,
                        GetPluginInfoForPdfInternalPluginWhenDisabled) {
   SetAlwaysOpenPdfExternally();
 
-  PluginInfoPtr plugin_info = GetPluginInfo(GURL("fake.pdf"), url::Origin(),
-                                            pdf::kInternalPluginMimeType);
+  PluginInfoPtr plugin_info =
+      GetPluginInfo(GURL("fake.pdf"), pdf::kInternalPluginMimeType);
   ASSERT_TRUE(plugin_info);
 
   // Internal PDF plugin is not affected by PDF content setting.

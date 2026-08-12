@@ -13,7 +13,6 @@
 
 #include "base/auto_reset.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/memory/ref_counted.h"
 #include "base/no_destructor.h"
 #include "base/run_loop.h"
@@ -25,12 +24,12 @@
 #include "base/uuid.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/preloading/chrome_preloading.h"
+#include "chrome/browser/preloading/preloading_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/in_memory_database.h"
 #include "components/history/core/browser/url_database.h"
-#include "components/no_state_prefetch/browser/no_state_prefetch_field_trial.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_match_type.h"
@@ -276,7 +275,7 @@ class AutocompleteActionPredictorTest
     for (size_t i = 0; i < std::size(TestUrlDb()); ++i) {
       DBCacheKey key = {TestUrlDb()[i].user_text, TestUrlDb()[i].url};
 
-      bool deleted = !base::Contains(expected, i);
+      bool deleted = !std::ranges::contains(expected, i);
       EXPECT_EQ(deleted, db_cache()->find(key) == db_cache()->end());
       EXPECT_EQ(deleted, db_id_cache()->find(key) == db_id_cache()->end());
     }
@@ -452,7 +451,7 @@ TEST_P(AutocompleteActionPredictorTest, DeleteRowsFromCaches) {
     bool deleted = (i < 2);
     EXPECT_EQ(deleted, db_cache()->find(key) == db_cache()->end());
     EXPECT_EQ(deleted, db_id_cache()->find(key) == db_id_cache()->end());
-    EXPECT_EQ(deleted, base::Contains(id_list, all_ids[i]));
+    EXPECT_EQ(deleted, std::ranges::contains(id_list, all_ids[i]));
   }
 }
 
@@ -482,8 +481,8 @@ TEST_P(AutocompleteActionPredictorTest, DeleteOldIdsFromCaches) {
   EXPECT_EQ(all_ids.size() - expected.size(), db_id_cache()->size());
 
   for (auto it = all_ids.begin(); it != all_ids.end(); ++it) {
-    bool in_expected = base::Contains(expected, *it);
-    bool in_list = base::Contains(id_list, *it);
+    bool in_expected = std::ranges::contains(expected, *it);
+    bool in_list = std::ranges::contains(id_list, *it);
     EXPECT_EQ(in_expected, in_list);
   }
 }
@@ -504,8 +503,8 @@ TEST_P(AutocompleteActionPredictorTest,
 
     DBCacheKey deleted_key = {TestUrlConfidenceDb()[i].user_text,
                               TestUrlConfidenceDb()[i].url};
-    EXPECT_FALSE(base::Contains(*db_cache(), deleted_key));
-    EXPECT_FALSE(base::Contains(*db_id_cache(), deleted_key));
+    EXPECT_FALSE(db_cache()->contains(deleted_key));
+    EXPECT_FALSE(db_id_cache()->contains(deleted_key));
   }
 }
 
@@ -530,8 +529,8 @@ TEST_P(AutocompleteActionPredictorTest,
   for (size_t i = 0; i < count_to_remove; ++i) {
     DBCacheKey deleted_key = {TestUrlConfidenceDb()[i].user_text,
                               TestUrlConfidenceDb()[i].url};
-    EXPECT_FALSE(base::Contains(*db_cache(), deleted_key));
-    EXPECT_FALSE(base::Contains(*db_id_cache(), deleted_key));
+    EXPECT_FALSE(db_cache()->contains(deleted_key));
+    EXPECT_FALSE(db_id_cache()->contains(deleted_key));
   }
 }
 
@@ -642,7 +641,7 @@ TEST_P(AutocompleteActionPredictorTest,
   auto test = [this](const std::u16string& user_text,
                      bool should_be_registered) {
     predictor()->RegisterTransitionalMatches(user_text, AutocompleteResult());
-    bool registered = base::Contains(
+    bool registered = std::ranges::contains(
         *transitional_matches(), user_text,
         &AutocompleteActionPredictor::TransitionalMatch::user_text);
     EXPECT_EQ(registered, should_be_registered);
@@ -725,6 +724,27 @@ TEST_P(AutocompleteActionPredictorTest, UpdateDatabaseFromTransitionalMatches) {
   EXPECT_TRUE(it != db_cache()->end());
   ASSERT_EQ(it->second.number_of_hits, 0);
   ASSERT_EQ(it->second.number_of_misses, 1);
+}
+
+TEST_P(AutocompleteActionPredictorTest,
+       DecideActionByConfidenceWithDuiPrerenderingFeatureFlag) {
+  // When enabled (default), confidence above threshold returns
+  // ACTION_PRERENDER.
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndEnableFeature(features::kOmniboxDuiPrerendering);
+    EXPECT_EQ(AutocompleteActionPredictor::ACTION_PRERENDER,
+              AutocompleteActionPredictor::DecideActionByConfidence(0.8));
+  }
+
+  // When disabled, confidence above threshold does not return ACTION_PRERENDER.
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndDisableFeature(
+        features::kOmniboxDuiPrerendering);
+    EXPECT_NE(AutocompleteActionPredictor::ACTION_PRERENDER,
+              AutocompleteActionPredictor::DecideActionByConfidence(0.8));
+  }
 }
 
 }  // namespace predictors

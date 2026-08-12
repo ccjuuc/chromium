@@ -6,9 +6,9 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "ash/constants/web_app_id_constants.h"
 #include "ash/webui/projector_app/public/cpp/projector_app_constants.h"
 #include "ash/webui/projector_app/untrusted_projector_ui.h"
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "base/files/file_path.h"
 #include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
@@ -16,11 +16,12 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
+#include "chrome/browser/ui/web_applications/web_app_launch_navigation_handle_user_data.h"
 #include "chrome/browser/web_applications/web_app_tab_helper.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_manager/user.h"
 #include "components/webapps/browser/launch_queue/launch_params.h"
-#include "components/webapps/browser/launch_queue/launch_queue.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
@@ -104,14 +105,19 @@ void SendFilesToProjectorApp(std::vector<base::FilePath> files) {
   }
 
   webapps::LaunchParams launch_params;
-  launch_params.started_new_navigation = false;
-  launch_params.app_id = ash::kChromeUIUntrustedProjectorSwaAppId;
+  launch_params.set_started_new_navigation(false);
+  launch_params.set_app_id(ash::kChromeUIUntrustedProjectorSwaAppId);
   // Sending files should not navigate the app. This argument is used for
   // storage isolation, and won't impact navigation. It should be in scope of
   // the current WebContent's origin.
-  launch_params.target_url = web_contents->GetVisibleURL();
-  launch_params.paths = std::move(files);
-  web_app::WebAppTabHelper::FromWebContents(web_contents)
-      ->EnsureLaunchQueue()
-      .Enqueue(std::move(launch_params));
+  launch_params.set_target_url(web_contents->GetVisibleURL());
+  launch_params.set_paths(std::move(files));
+
+  // Dispatch the launch params directly instead of waiting for the navigation
+  // to finish, as `started_new_navigation` is set to false for the launch
+  // params.
+  web_app::WebAppLaunchNavigationHandleUserData::DispatchLaunchParams(
+      web_contents, std::move(launch_params),
+      apps::LaunchContainer::kLaunchContainerNone,
+      apps::LaunchSource::kUnknown);
 }

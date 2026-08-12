@@ -10,6 +10,7 @@
 #import "components/prefs/pref_service.h"
 #import "components/prefs/scoped_user_pref_update.h"
 #import "components/prefs/testing_pref_service.h"
+#import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/ntp/model/set_up_list_item_type.h"
 #import "ios/chrome/browser/ntp/model/set_up_list_prefs.h"
 #import "ios/chrome/browser/push_notification/model/constants.h"
@@ -24,6 +25,8 @@
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "testing/platform_test.h"
@@ -41,8 +44,7 @@ class NotificationsOptInMediatorTest : public PlatformTest {
 
     auth_service_ = AuthenticationServiceFactory::GetForProfile(profile);
     prefs_ = profile->GetPrefs();
-    scoped_feature_list_.InitWithFeatures(
-        {kContentPushNotifications, kSafetyCheckNotifications}, {});
+    scoped_feature_list_.InitWithFeatures({kContentPushNotifications}, {});
     consumer_ = OCMStrictProtocolMock(@protocol(NotificationsOptInConsumer));
   }
 
@@ -75,8 +77,10 @@ class NotificationsOptInMediatorTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
     return builder;
   }
 

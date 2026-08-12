@@ -7,6 +7,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <vector>
 
@@ -14,10 +15,11 @@
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/scoped_observation.h"
 #include "base/uuid.h"
 #include "base/version_info/channel.h"
 #include "components/contextual_tasks/internal/ai_thread_sync_bridge.h"
-#include "components/contextual_tasks/internal/contextual_task_sync_bridge.h"
+#include "components/contextual_tasks/internal/gemini_thread_sync_bridge.h"
 #include "components/contextual_tasks/internal/proto/ai_thread_entity.pb.h"
 #include "components/contextual_tasks/internal/proto/contextual_task_entity.pb.h"
 #include "components/contextual_tasks/public/context_decorator.h"
@@ -25,9 +27,9 @@
 #include "components/contextual_tasks/public/contextual_tasks_service.h"
 #include "components/sessions/core/session_id.h"
 #include "components/sync/model/data_type_store.h"
+#include "third_party/omnibox_proto/chrome_aim_entry_point.pb.h"
 #include "url/gurl.h"
 
-class AimEligibilityService;
 class PrefService;
 
 namespace signin {
@@ -42,17 +44,17 @@ struct ContextDecorationParams;
 
 class ContextualTasksServiceImpl : public ContextualTasksService,
                                    public AiThreadSyncBridge::Observer,
-                                   public ContextualTaskSyncBridge::Observer {
+                                   public GeminiThreadSyncBridge::Observer {
  public:
   ContextualTasksServiceImpl(
       version_info::Channel channel,
       syncer::RepeatingDataTypeStoreFactory data_type_store_factory,
       std::unique_ptr<CompositeContextDecorator> composite_context_decorator,
-      AimEligibilityService* aim_eligibility_service,
       signin::IdentityManager* identity_manager,
       PrefService* pref_service,
       bool supports_ephemeral_only,
-      base::RepeatingCallback<size_t()> get_active_task_count_callback);
+      base::RepeatingCallback<size_t()> get_active_task_count_callback,
+      base::RepeatingCallback<bool()> is_gemini_threads_enabled);
   ~ContextualTasksServiceImpl() override;
 
   ContextualTasksServiceImpl(const ContextualTasksServiceImpl&) = delete;
@@ -60,7 +62,6 @@ class ContextualTasksServiceImpl : public ContextualTasksService,
       delete;
 
   // ContextualTasksService implementation.
-  FeatureEligibility GetFeatureEligibility() override;
   bool IsInitialized() override;
   ContextualTask CreateTask() override;
   ContextualTask CreateTaskFromUrl(const GURL& url) override;
@@ -95,17 +96,24 @@ class ContextualTasksServiceImpl : public ContextualTasksService,
       SessionID tab_id) const override;
   std::vector<SessionID> GetTabsAssociatedWithTask(
       const base::Uuid& tab_id) const override;
-  void ClearAllTabAssociationsForTask(const base::Uuid& task_id) override;
+  void SetLastActiveTask(const base::Uuid& task_id) override;
   void GetContextForTask(
       const base::Uuid& task_id,
       const std::set<ContextualTaskContextSource>& sources,
       std::unique_ptr<ContextDecorationParams> params,
       base::OnceCallback<void(std::unique_ptr<ContextualTaskContext>)>
           context_callback) override;
+  void GetThreadUrlFromTaskId(const base::Uuid& task_id,
+                              const std::string& locale,
+                              omnibox::ChromeAimEntryPoint entry_point,
+                              base::OnceCallback<void(GURL)> callback) override;
   void AddObserver(ContextualTasksService::Observer* observer) override;
   void RemoveObserver(ContextualTasksService::Observer* observer) override;
   base::WeakPtr<syncer::DataTypeControllerDelegate>
   GetAiThreadControllerDelegate() override;
+  base::WeakPtr<syncer::DataTypeControllerDelegate>
+  GetGeminiThreadControllerDelegate() override;
+  bool IsGeminiThreadsEligible() override;
 
   size_t GetTabIdMapSizeForTesting() const;
 
@@ -121,11 +129,14 @@ class ContextualTasksServiceImpl : public ContextualTasksService,
                    const std::string& server_id);
 
   void RemoveTaskInternal(const base::Uuid& task_id, TriggerSource source);
+  void OnThreadRemovedRemotelyInternal(
+      ThreadType thread_filter,
+      const std::vector<base::Uuid>& thread_ids);
 
   void SetAiThreadSyncBridgeForTesting(
       std::unique_ptr<AiThreadSyncBridge> bridge);
-  void SetContextualTaskSyncBridgeForTesting(
-      std::unique_ptr<ContextualTaskSyncBridge> bridge);
+  void SetGeminiThreadSyncBridgeForTesting(
+      std::unique_ptr<GeminiThreadSyncBridge> bridge);
 
   // AiThreadSyncBridge::Observer implementation.
   void OnThreadDataStoreLoaded() override;
@@ -134,11 +145,12 @@ class ContextualTasksServiceImpl : public ContextualTasksService,
   void OnThreadRemovedRemotely(
       const std::vector<base::Uuid>& thread_ids) override;
 
-  // ContextualTaskSyncBridge::Observer implementation.
-  void OnContextualTaskDataStoreLoaded() override;
-  void OnTaskAddedOrUpdatedRemotely(
-      const std::vector<ContextualTask>& contextual_tasks) override;
-  void OnTaskRemovedRemotely(const std::vector<base::Uuid>& task_ids) override;
+  // GeminiThreadSyncBridge::Observer implementation.
+  void OnGeminiThreadDataStoreLoaded() override;
+  void OnGeminiThreadAddedOrUpdatedRemotely(
+      const std::vector<sync_pb::GeminiThreadSpecifics>& specifics) override;
+  void OnGeminiThreadRemovedRemotely(
+      const std::vector<base::Uuid>& thread_ids) override;
 
   void NotifyTaskAdded(const ContextualTask& task, TriggerSource source);
   void NotifyTaskUpdated(const ContextualTask& task, TriggerSource source);
@@ -160,14 +172,17 @@ class ContextualTasksServiceImpl : public ContextualTasksService,
   // given tab.
   std::map<SessionID, base::Uuid> tab_to_task_;
 
+  // The ID of the last active task, used as a fallback for sticky chat.
+  std::optional<base::Uuid> last_active_task_id_;
+
   // The entry point for the decorator chain that enriches the context.
   std::unique_ptr<CompositeContextDecorator> composite_context_decorator_;
 
-  // Obsevers of the model.
+  // Observers of the model.
   base::ObserverList<ContextualTasksService::Observer> observers_;
 
   std::unique_ptr<AiThreadSyncBridge> ai_thread_sync_bridge_;
-  std::unique_ptr<ContextualTaskSyncBridge> contextual_task_sync_bridge_;
+  std::unique_ptr<GeminiThreadSyncBridge> gemini_thread_sync_bridge_;
 
   // Barrier to run OnDataStoresLoaded() after both sync bridges have loaded
   // their data.
@@ -176,16 +191,23 @@ class ContextualTasksServiceImpl : public ContextualTasksService,
   // Callback to retrieve the number of active tasks.
   base::RepeatingCallback<size_t()> get_active_task_count_callback_;
 
+  // Callback to determine if the profile is eligible for Gemini threads.
+  base::RepeatingCallback<bool()> is_gemini_threads_enabled_callback_;
+
   // Whether the service is initialized.
   bool is_initialized_ = false;
 
-  raw_ptr<AimEligibilityService> aim_eligibility_service_;
   raw_ptr<signin::IdentityManager> identity_manager_;
 
   const raw_ptr<PrefService> pref_service_;
   // Whether the service only supports ephemeral tasks.
   const bool supports_ephemeral_only_;
 
+  base::ScopedObservation<AiThreadSyncBridge, AiThreadSyncBridge::Observer>
+      ai_thread_observation_{this};
+  base::ScopedObservation<GeminiThreadSyncBridge,
+                          GeminiThreadSyncBridge::Observer>
+      gemini_thread_observation_{this};
   base::WeakPtrFactory<ContextualTasksServiceImpl> weak_ptr_factory_{this};
 };
 

@@ -237,6 +237,13 @@ ci.builder(
                     ),
                 ),
             ],
+            "content_browsertests": [
+                targets.mixin(
+                    swarming = targets.swarming(
+                        shards = 24,
+                    ),
+                ),
+            ],
             "chrome_wpt_tests": targets.remove(
                 reason = "Wptrunner does not work on Fuchsia",
             ),
@@ -259,6 +266,7 @@ ci.builder(
         ),
     ],
     contact_team_email = "chrome-fuchsia-engprod@google.com",
+    execution_timeout = 4 * time.hour,
 )
 
 ci.builder(
@@ -309,7 +317,6 @@ ci.builder(
             "fuchsia-large-device-spec",
             "isolate_profile_data",
             "linux-jammy",
-            "retry_only_failed_tests",
             targets.mixin(
                 swarming = targets.swarming(
                     dimensions = {

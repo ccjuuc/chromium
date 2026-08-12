@@ -10,19 +10,24 @@ import static androidx.browser.customtabs.CustomTabsIntent.COLOR_SCHEME_LIGHT;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.net.Uri;
 import android.provider.Browser;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.TextView;
 
+import androidx.annotation.Nullable;
 import androidx.annotation.Px;
 import androidx.annotation.VisibleForTesting;
 import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import org.chromium.base.Callback;
 import org.chromium.base.IntentUtils;
+import org.chromium.base.Log;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.blink.mojom.RpContext;
 import org.chromium.blink.mojom.RpMode;
@@ -36,10 +41,14 @@ import org.chromium.chrome.browser.ui.android.webid.data.IdentityProviderData;
 import org.chromium.chrome.browser.ui.android.webid.data.IdentityProviderMetadata;
 import org.chromium.chrome.browser.ui.android.webid.data.RelyingPartyData;
 import org.chromium.chrome.browser.ui.signin.account_picker.AccountPickerItemDecoration;
+import org.chromium.chrome.browser.webid.DigitalAssetLinksVerifier;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.components.embedder_support.util.Origin;
 import org.chromium.content.webid.IdentityRequestDialogDismissReason;
 import org.chromium.content.webid.IdentityRequestDialogLinkType;
+import org.chromium.content_public.browser.ContentFeatureMap;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.content_public.common.ContentFeatures;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.base.WindowAndroid.ActivityStateObserver;
 import org.chromium.ui.modelutil.LayoutViewBuilder;
@@ -51,6 +60,8 @@ import org.chromium.ui.util.ColorUtils;
 import org.chromium.url.GURL;
 
 import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -61,6 +72,7 @@ import java.util.Map;
  */
 public class AccountSelectionCoordinator
         implements AccountSelectionComponent, ActivityStateObserver {
+    private static final String TAG = "AccountSelection";
     private static final Map<Integer, WeakReference<AccountSelectionComponent.Delegate>>
             sFedCMDelegateMap = new HashMap<>();
 
@@ -83,6 +95,7 @@ public class AccountSelectionCoordinator
             WindowAndroid windowAndroid,
             BottomSheetController sheetController,
             @RpMode.EnumType int rpMode,
+            boolean canShowUi,
             AccountSelectionComponent.Delegate delegate) {
         mTab = tab;
         mBottomSheetController = sheetController;
@@ -124,7 +137,8 @@ public class AccountSelectionCoordinator
                         avatarSize,
                         rpMode,
                         context,
-                        windowAndroid.getModalDialogManager());
+                        windowAndroid.getModalDialogManager(),
+                        canShowUi);
 
         // If this object is corresponding to the custom tab opened by showModalDialog, this
         // is the first chance to associate it with the opener, so do so now.
@@ -166,22 +180,22 @@ public class AccountSelectionCoordinator
         SimpleRecyclerViewAdapter adapter = new SimpleRecyclerViewAdapter(sheetItems);
         adapter.registerType(
                 AccountSelectionProperties.ITEM_TYPE_ACCOUNT,
-                new LayoutViewBuilder(
+                new LayoutViewBuilder<>(
                         rpMode == RpMode.ACTIVE
                                 ? R.layout.account_selection_active_mode_account_item
                                 : R.layout.account_selection_account_item),
                 AccountSelectionViewBinder::bindAccountView);
         adapter.registerType(
                 AccountSelectionProperties.ITEM_TYPE_LOGIN,
-                new LayoutViewBuilder(
+                new LayoutViewBuilder<>(
                         rpMode == RpMode.ACTIVE
                                 ? R.layout.account_selection_active_mode_add_account_row_item
                                 : R.layout.account_selection_add_account_row_item),
                 AccountSelectionViewBinder::bindLoginButtonView);
         adapter.registerType(
                 AccountSelectionProperties.ITEM_TYPE_SEPARATOR,
-                new LayoutViewBuilder(R.layout.account_selection_login_buttons_start_separator),
-                (unusedModel, unusedView, unusedKey) -> {});
+                new LayoutViewBuilder<>(R.layout.account_selection_login_buttons_start_separator),
+                (_, _, _) -> {});
         sheetItemListView.setAdapter(adapter);
 
         return contentView;
@@ -234,16 +248,21 @@ public class AccountSelectionCoordinator
 
     @Override
     public void close() {
+        mMediator.close();
+        // If this is the opener (not the popup), we only need to close the mediator.
         if (mOpenerDelegate == null) {
-            // Close the bottom sheet.
-            mMediator.close();
             return;
         }
-        // This is the popup.
+        // This is the popup, so we also need to finish the CCT activity.
         Activity activity = mWindowAndroid.getActivity().get();
         if (activity != null) {
             activity.finish();
         }
+    }
+
+    @Override
+    public void setCanShowUi(boolean canShowUi) {
+        mMediator.setCanShowUi(canShowUi);
     }
 
     @Override
@@ -267,7 +286,30 @@ public class AccountSelectionCoordinator
 
     @Override
     public WebContents showModalDialog(GURL url) {
+        if (ContentFeatureMap.isEnabled(ContentFeatures.FED_CM_NATIVE_ID_PS)) {
+            findVerifiedApp(
+                    url,
+                    appPackage -> {
+                        if (appPackage == null) {
+                            launchCct(url);
+                            return;
+                        }
+                        launchNativeApp(appPackage, url);
+                    });
+            return null;
+        }
+
+        launchCct(url);
+        // CCT is opened asynchronously, and we do not have the WebContents for it yet.
+        return null;
+    }
+
+    private void launchCct(GURL url) {
         Context context = mWindowAndroid.getContext().get();
+        if (context == null) {
+            return;
+        }
+
         CustomTabsIntent customTabIntent =
                 new CustomTabsIntent.Builder()
                         .setShowTitle(true)
@@ -294,8 +336,21 @@ public class AccountSelectionCoordinator
         mWindowAndroid.addActivityStateObserver(this);
         context.startActivity(intent);
         mMediator.onModalDialogOpened();
-        // CCT is opened asynchronously, and we do not have the WebContents for it yet.
-        return null;
+    }
+
+    private void findVerifiedApp(GURL url, Callback<String> callback) {
+        List<String> packages = getNativeAppPackages(url);
+        Origin origin = Origin.create(url.getSpec());
+        DigitalAssetLinksVerifier.checkPackages(
+                packages,
+                origin,
+                index -> {
+                    if (index != -1) {
+                        callback.onResult(packages.get(index));
+                    } else {
+                        callback.onResult(null);
+                    }
+                });
     }
 
     @Override
@@ -359,6 +414,62 @@ public class AccountSelectionCoordinator
     @VisibleForTesting
     AccountSelectionMediator getMediator() {
         return mMediator;
+    }
+
+    private List<String> getNativeAppPackages(GURL url) {
+        Log.i(TAG, "getNativeAppPackages url=" + url.getSpec());
+        Context context = mWindowAndroid.getContext().get();
+        if (context == null) {
+            Log.i(TAG, "Context is null");
+            return Collections.emptyList();
+        }
+
+        PackageManager pm = context.getPackageManager();
+        Intent intent = new Intent(Intent.ACTION_VIEW);
+        intent.addCategory(Intent.CATEGORY_BROWSABLE);
+
+        // Query with MIME type
+        intent.setDataAndType(Uri.parse(url.getSpec()), "application/web-identity+json");
+        List<ResolveInfo> resolveInfos = pm.queryIntentActivities(intent, 0);
+        if (resolveInfos == null || resolveInfos.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<String> targetPackages = new ArrayList<>();
+        for (ResolveInfo info : resolveInfos) {
+            targetPackages.add(info.activityInfo.packageName);
+        }
+
+        return targetPackages;
+    }
+
+    private void launchNativeApp(String packageName, GURL url) {
+        Intent intent = new Intent(Intent.ACTION_VIEW);
+        intent.addCategory(Intent.CATEGORY_BROWSABLE);
+        intent.setDataAndType(Uri.parse(url.getSpec()), "application/web-identity+json");
+        intent.setPackage(packageName);
+        boolean launched = mWindowAndroid.showIntent(intent, new NativeAppIntentCallback(), null);
+        if (launched) {
+            mMediator.onModalDialogOpened();
+        }
+    }
+
+    private class NativeAppIntentCallback implements WindowAndroid.IntentCallback {
+        public NativeAppIntentCallback() {}
+
+        @Override
+        public void onIntentCompleted(int resultCode, @Nullable Intent data) {
+            String token = null;
+            if (data != null) {
+                token = data.getStringExtra("token");
+            }
+            if (token == null || resultCode != Activity.RESULT_OK) {
+                mDelegate.onDismissed(IdentityRequestDialogDismissReason.OTHER);
+            } else {
+                mDelegate.onNativeAppResult(token);
+            }
+            mMediator.onModalDialogClosed();
+        }
     }
 
     private int getFedCmId() {

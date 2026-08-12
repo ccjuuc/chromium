@@ -9,10 +9,22 @@ import("//testing/test.gni")
 
 source_set("headless") {
   sources = [
-    "headless_mode_platform.h",
     "headless_mode_switches.h",
     "headless_mode_util.cc",
     "headless_mode_util.h",
+  ]
+
+  deps = [
+    "//base",
+    "//ui/gfx",
+  ]
+}
+
+source_set("initializer") {
+  sources = [
+    "headless_mode_init.cc",
+    "headless_mode_init.h",
+    "headless_mode_platform.h",
   ]
 
   if (is_mac) {
@@ -21,8 +33,11 @@ source_set("headless") {
 
   configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
+  public_deps = [ ":headless" ]
+
   deps = [
     "//base",
+    "//chrome/common:constants",
     "//chrome/common:non_code_constants",
     "//content/public/common",
     "//ui/gfx",
@@ -75,60 +90,78 @@ if (!is_android) {
     ]
   }
 
+  source_set("headless_extra_parts") {
+    sources = [
+      "chrome_browser_main_extra_parts_headless.cc",
+      "chrome_browser_main_extra_parts_headless.h",
+    ]
+
+    configs += [ "//build/config/compiler:wexit_time_destructors" ]
+
+    deps = [
+      ":headless",
+      "//base",
+      "//chrome/browser:main_extra_parts",
+      "//components/headless/clipboard",
+    ]
+  }
+
   source_set("browser_tests") {
     testonly = true
     defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
 
     sources = [
-      "headless_mode_browsertest.cc",
-      "headless_mode_browsertest.h",
+      "test/headless_mode_browsertest.cc",
+      "test/headless_mode_browsertest.h",
     ]
 
     if (is_linux || is_win || is_mac) {
       sources += [
-        "headless_mode_browsertest_utils.h",
-        "headless_mode_command_browsertest.cc",
-        "headless_mode_devtooled_browsertest.cc",
-        "headless_mode_devtooled_browsertest.h",
-        "headless_mode_protocol_browsertest.cc",
-        "headless_mode_protocol_browsertest.h",
         "test/headless_browser_test_utils.cc",
         "test/headless_browser_test_utils.h",
+        "test/headless_mode_browsertest_utils.h",
+        "test/headless_mode_command_browsertest.cc",
+        "test/headless_mode_devtooled_browsertest.cc",
+        "test/headless_mode_devtooled_browsertest.h",
+        "test/headless_mode_protocol_browsertest.cc",
+        "test/headless_mode_protocol_browsertest.h",
       ]
     }
 
     if (is_linux) {
-      sources += [ "headless_mode_browsertest_linux.cc" ]
+      sources += [ "test/headless_mode_browsertest_linux.cc" ]
     }
 
     if (is_win) {
-      sources += [ "headless_mode_browsertest_win.cc" ]
+      sources += [ "test/headless_mode_browsertest_win.cc" ]
     }
 
     if (is_mac) {
-      sources += [ "headless_mode_browsertest_mac.mm" ]
+      sources += [ "test/headless_mode_browsertest_mac.mm" ]
     }
 
     deps = [
-      ":headless",
+      ":initializer",
       "//base",
       "//chrome/browser",
       "//chrome/browser/infobars",
+      "//chrome/browser/ui/views/exclusive_access",
+      "//chrome/common:constants",
       "//chrome/test:test_support",
+      "//components/headless/clipboard",
       "//content/test:test_support",
       "//pdf",
       "//testing/gmock",
       "//testing/gtest",
+      "//ui/base/clipboard:clipboard_test_support",
     ]
 
     if (is_linux || is_win || is_mac) {
       deps += [
-        "//chrome/browser/infobars",
         "//chrome/browser/profiles",
         "//chrome/browser/ui",
         "//chrome/browser/ui/views/frame:toolbar_button_provider",
         "//components/devtools/simple_devtools_protocol_client",
-        "//components/headless/clipboard",
         "//components/headless/command_handler",
         "//components/headless/command_handler:switches",
         "//components/headless/select_file_dialog",
@@ -141,6 +174,10 @@ if (!is_android) {
         "//ui/gfx",
         "//ui/views",
       ]
+    }
+
+    if (is_mac) {
+      deps += [ "//components/remote_cocoa/app_shim" ]
     }
 
     if (use_aura && is_win) {
@@ -165,5 +202,31 @@ if (!is_android) {
     # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
     # enable the diagnostic by removing this line.
     configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+  }
+}
+
+source_set("interactive_ui_tests") {
+  testonly = true
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+  sources = []
+  if (is_win) {
+    sources += [ "test/headless_mode_interactive_uitest_win.cc" ]
+  }
+  deps = [
+    ":initializer",
+    "//base",
+    "//chrome/browser",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//skia",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//ui/gfx",
+  ]
+  if (use_aura && is_win) {
+    deps += [
+      "//ui/aura",
+      "//ui/compositor",
+    ]
   }
 }

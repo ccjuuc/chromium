@@ -85,7 +85,8 @@ class CONTENT_EXPORT PrefetchResponseReader final
   //
   // `CreateRequestHandler()` is responsible for the final check for servability
   // and can return a null PrefetchRequestHandler if the final check fails (even
-  // if `GetServableState()` previously returned `kServable`).
+  // if `GetMatchResolverAction().kind()` was previously `kMaybeServe` with
+  // `is_expired` false).
   //
   // The caller is responsible for:
   // - Cookie-related checks and processing.
@@ -93,16 +94,23 @@ class CONTENT_EXPORT PrefetchResponseReader final
   //   copying isolated cookies if needed.
   //   `PrefetchResponseReader::CreateRequestHandler()`,
   //   `PrefetchResponseReader::Servable()` nor
-  //   `PrefetchContainer::GetServableState()` don't perform cookie-related
-  //   checks.
-  // - Checking `Servable()`/`GetServableState()`.
+  //   `PrefetchContainer::GetMatchResolverAction()` don't perform
+  //   cookie-related checks.
+  // - Checking `Servable()` (via `PrefetchContainer::GetMatchResolverAction()`)
   //   `cacheable_duration` is checked only there.
   std::pair<PrefetchRequestHandler, base::WeakPtr<ServiceWorkerClient>>
   CreateRequestHandler();
 
   bool Servable(base::TimeDelta cacheable_duration) const;
   bool IsWaitingForResponse() const;
-  const network::mojom::URLResponseHead* GetHead() const { return head_.get(); }
+
+  // Returns non-null on:
+  // - `LoadState::kResponseReceived` (always)
+  // - `LoadState::kCompleted` (always)
+  // - `LoadState::kFailedResponseReceived` (always)
+  // - `LoadState::kFailed` (only when transitioning from
+  //   `LoadState::kResponseReceived` or `LoadState::kFailedResponseReceived`).
+  const network::mojom::URLResponseHeadPtr& GetHead() const { return head_; }
 
   // True if this response had Vary: Cookie (or Vary: *), and a Cookie-Indices
   // header also applies.
@@ -158,6 +166,11 @@ class CONTENT_EXPORT PrefetchResponseReader final
 
   LoadState load_state() const { return load_state_; }
 
+  const std::optional<network::URLLoaderCompletionStatus>& completion_status()
+      const {
+    return completion_status_;
+  }
+
   base::WeakPtr<PrefetchResponseReader> GetWeakPtr() {
     return weak_ptr_factory_.GetWeakPtr();
   }
@@ -167,11 +180,6 @@ class CONTENT_EXPORT PrefetchResponseReader final
   using ServingUrlLoaderClientId = mojo::RemoteSetElementId;
 
   friend class base::RefCounted<PrefetchResponseReader>;
-  // This is necessary because `PrefetchContainerObserver` emulates a callback
-  // that we will provide in the future.
-  //
-  // TODO(crbug.com/400761083): Remove it.
-  friend class PrefetchContainerObserver;
 
   ~PrefetchResponseReader() override;
 
@@ -204,9 +212,7 @@ class CONTENT_EXPORT PrefetchResponseReader final
 
   // network::mojom::URLLoader
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_headers,
+      network::HttpRequestHeadersUpdateParams headers_update_params,
       const std::optional<GURL>& new_url) override;
   void SetPriority(net::RequestPriority priority,
                    int32_t intra_priority_value) override;
@@ -316,6 +322,9 @@ class CONTENT_EXPORT PrefetchResponseReader final
 
   base::WeakPtrFactory<PrefetchResponseReader> weak_ptr_factory_{this};
 };
+
+std::ostream& operator<<(std::ostream& ostream,
+                         PrefetchResponseReader::LoadState load_state);
 
 }  // namespace content
 

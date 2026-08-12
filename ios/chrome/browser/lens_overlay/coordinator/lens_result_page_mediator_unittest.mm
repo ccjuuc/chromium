@@ -6,16 +6,20 @@
 
 #import "base/memory/raw_ptr.h"
 #import "base/test/scoped_feature_list.h"
+#import "components/sync/test/test_sync_service.h"
 #import "components/variations/scoped_variations_ids_provider.h"
 #import "components/variations/variations_ids_provider.h"
 #import "ios/chrome/browser/lens_overlay/coordinator/lens_result_page_mediator_delegate.h"
+#import "ios/chrome/browser/lens_overlay/ui/lens_overlay_bottom_sheet_presentation_commands.h"
 #import "ios/chrome/browser/lens_overlay/ui/lens_result_page_consumer.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/navigation/navigation_manager.h"
 #import "ios/web/public/navigation/web_state_policy_decider.h"
@@ -81,8 +85,10 @@ class LensResultPageMediatorTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
     profile_ = std::move(builder).Build();
 
     web::WebState::CreateParams params(profile_.get());
@@ -95,11 +101,11 @@ class LensResultPageMediatorTest : public PlatformTest {
     mock_consumer_ =
         [OCMockObject niceMockForProtocol:@protocol(LensResultPageConsumer)];
     mock_application_handler_ =
-        [OCMockObject mockForProtocol:@protocol(ApplicationCommands)];
+        [OCMockObject mockForProtocol:@protocol(SceneCommands)];
     fake_delegate_ = [[FakeLensResultPageMediatorDelegate alloc] init];
     mediator_.delegate = fake_delegate_;
     mediator_.consumer = mock_consumer_;
-    mediator_.applicationHandler = mock_application_handler_;
+    mediator_.sceneHandler = mock_application_handler_;
   }
 
   ~LensResultPageMediatorTest() override {
@@ -174,7 +180,7 @@ class LensResultPageMediatorTest : public PlatformTest {
   std::unique_ptr<TestProfileIOS> profile_;
   web::FakeWebStateDelegate browser_web_state_delegate_;
   OCMockObject<LensResultPageConsumer>* mock_consumer_;
-  OCMockObject<ApplicationCommands>* mock_application_handler_;
+  OCMockObject<SceneCommands>* mock_application_handler_;
   FakeLensResultPageMediatorDelegate* fake_delegate_;
 
   // Call `AttachFakeWebState()` to use `fake_web_state_`.
@@ -273,6 +279,40 @@ TEST_F(LensResultPageMediatorTest, ShouldAllowAnyNavigationNotInMainFrame) {
                                      /*target_frame_is_main=*/false));
   EXPECT_TRUE(TestShouldAllowRequest(@"https://www.google.com",
                                      /*target_frame_is_main=*/false));
+}
+
+// Tests that search bar is reshown when navigating away from AIM overlay
+// via a new document (non-same-document) navigation such as a region search.
+TEST_F(LensResultPageMediatorTest,
+       ShouldReshowSearchBarOnNewNavigationFromAIMOverlay) {
+  AttachFakeWebState();
+  id mock_bottom_sheet_commands = [OCMockObject
+      mockForProtocol:@protocol(LensOverlayBottomSheetPresentationCommands)];
+  mediator_.bottomSheetCommands = mock_bottom_sheet_commands;
+
+  // Simulate navigation to AIM overlay (same-document with aimos=1).
+  web::FakeNavigationContext aim_context;
+  aim_context.SetUrl(GURL(
+      "https://www.google.com/search?q=test&lns_surface=4&vsrid=1#aimos=1"));
+  aim_context.SetIsSameDocument(YES);
+
+  [[mock_bottom_sheet_commands expect] requestMaximizeBottomSheet];
+  [[mock_bottom_sheet_commands expect] hideSearchBar];
+
+  fake_web_state_->OnNavigationStarted(&aim_context);
+  [mock_bottom_sheet_commands verify];
+
+  // Simulate followup region search navigation (new document to region SRP
+  // URL).
+  web::FakeNavigationContext region_search_context;
+  region_search_context.SetUrl(
+      GURL("https://www.google.com/search?q=region&lns_surface=4"));
+  region_search_context.SetIsSameDocument(NO);
+
+  [[mock_bottom_sheet_commands expect] showSearchBar];
+
+  fake_web_state_->OnNavigationStarted(&region_search_context);
+  [mock_bottom_sheet_commands verify];
 }
 
 }  // namespace

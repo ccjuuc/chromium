@@ -21,6 +21,7 @@
 #include "components/autofill/core/browser/form_structure_test_api.h"
 #include "components/autofill/core/browser/foundations/test_autofill_client.h"
 #include "components/autofill/core/browser/integrators/optimization_guide/mock_autofill_optimization_guide_decider.h"
+#include "components/autofill/core/browser/metrics/payments/iban_metrics.h"
 #include "components/autofill/core/browser/payments/iban_manager_test_api.h"
 #include "components/autofill/core/browser/suggestions/suggestion_type.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
@@ -633,6 +634,7 @@ TEST_F(IbanManagerTest, Metrics_LocalIbanSuggestionSelected) {
       *autofill_field_, *autofill_field_, autofill_client_,
       mock_callback.GetNewRef()));
   Suggestion suggestion(kIbanValue, SuggestionType::kIbanEntry);
+  iban_manager_.OnIbanSuggestionsShown(autofill_field_->global_id());
   iban_manager_.OnSingleFieldSuggestionSelected(suggestion);
 
   histogram_tester.ExpectBucketCount(
@@ -642,6 +644,10 @@ TEST_F(IbanManagerTest, Metrics_LocalIbanSuggestionSelected) {
       "Autofill.Iban.Suggestions",
       autofill_metrics::IbanSuggestionsEvent::kLocalIbanSuggestionSelectedOnce,
       1);
+
+  histogram_tester.ExpectBucketCount(
+      "Autofill.FormEvents.Iban",
+      autofill_metrics::IbanFormEvent::kServerIbanSelected, 0);
 
   EXPECT_TRUE(iban_manager_.OnGetSingleFieldSuggestions(*form_structure_,
       *autofill_field_, *autofill_field_, autofill_client_,
@@ -655,6 +661,9 @@ TEST_F(IbanManagerTest, Metrics_LocalIbanSuggestionSelected) {
       "Autofill.Iban.Suggestions",
       autofill_metrics::IbanSuggestionsEvent::kLocalIbanSuggestionSelectedOnce,
       1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.FormEvents.Iban",
+      autofill_metrics::IbanFormEvent::kServerIbanSelected, 0);
 }
 
 // Test that the metrics for server IBAN suggestion selected (once and total
@@ -670,6 +679,8 @@ TEST_F(IbanManagerTest, Metrics_ServerIbanSuggestionSelected) {
   test_api(iban_manager_).set_most_recent_suggestions_shown_field_global_id(
     autofill_field_->global_id());
 
+  iban_manager_.OnIbanSuggestionsShown(autofill_field_->global_id());
+
   // Simulate request for suggestions and select one suggested IBAN.
   MockSuggestionsReturnedCallback mock_callback;
   EXPECT_TRUE(iban_manager_.OnGetSingleFieldSuggestions(*form_structure_,
@@ -684,6 +695,9 @@ TEST_F(IbanManagerTest, Metrics_ServerIbanSuggestionSelected) {
       "Autofill.Iban.Suggestions",
       autofill_metrics::IbanSuggestionsEvent::kServerIbanSuggestionSelectedOnce,
       1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.FormEvents.Iban",
+      autofill_metrics::IbanFormEvent::kServerIbanSelected, 1);
 
   EXPECT_TRUE(iban_manager_.OnGetSingleFieldSuggestions(*form_structure_,
       *autofill_field_, *autofill_field_, autofill_client_,
@@ -697,6 +711,9 @@ TEST_F(IbanManagerTest, Metrics_ServerIbanSuggestionSelected) {
       "Autofill.Iban.Suggestions",
       autofill_metrics::IbanSuggestionsEvent::kServerIbanSuggestionSelectedOnce,
       1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.FormEvents.Iban",
+      autofill_metrics::IbanFormEvent::kServerIbanSelected, 1);
 }
 
 TEST_F(IbanManagerTest, Metrics_SuggestionSelected_CountryOfSelectedIban) {

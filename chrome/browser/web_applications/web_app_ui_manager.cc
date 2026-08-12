@@ -4,37 +4,11 @@
 
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
 
-#include "base/auto_reset.h"
 #include "base/feature_list.h"
-#include "chrome/browser/web_applications/web_app_callback_app_identity.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 
 namespace web_app {
 
-namespace {
-
-// Keeps track of whether the testing code has set an action to be performed
-// when the app identity update confirmation dialog is set to show. The behavior
-// is determined by the IdentityUpdateDialogAction enum in
-// web_app_ui_manager.h.
-std::optional<AppIdentityUpdate>
-    g_auto_resolve_app_identity_update_dialog_for_testing = std::nullopt;
-
-}  // namespace
-
-base::AutoReset<std::optional<AppIdentityUpdate>>
-SetIdentityUpdateDialogActionForTesting(  // IN-TEST
-    std::optional<AppIdentityUpdate> auto_accept_action) {
-  return base::AutoReset<std::optional<AppIdentityUpdate>>(
-      &g_auto_resolve_app_identity_update_dialog_for_testing,
-      auto_accept_action);
-}
-
-std::optional<AppIdentityUpdate>
-GetIdentityUpdateDialogActionForTesting() {  // IN-TEST
-  return g_auto_resolve_app_identity_update_dialog_for_testing;
-}
 
 // static
 apps::AppLaunchParams WebAppUiManager::CreateAppLaunchParamsWithoutWindowConfig(
@@ -53,8 +27,7 @@ apps::AppLaunchParams WebAppUiManager::CreateAppLaunchParamsWithoutWindowConfig(
     launch_source = apps::LaunchSource::kFromFileManager;
   }
 
-  if (base::FeatureList::IsEnabled(features::kDesktopPWAsRunOnOsLogin) &&
-      command_line.HasSwitch(switches::kAppRunOnOsLoginMode)) {
+  if (command_line.HasSwitch(switches::kAppRunOnOsLoginMode)) {
     launch_source = apps::LaunchSource::kFromOsLogin;
   } else if (protocol_handler_launch_url.has_value()) {
     launch_source = apps::LaunchSource::kFromProtocolHandler;
@@ -101,6 +74,10 @@ void WebAppUiManager::NotifyReadyToCommitNavigation(
     content::NavigationHandle* navigation_handle) {
   for (WebAppUiManagerObserver& observer : observers_)
     observer.OnReadyToCommitNavigation(app_id, navigation_handle);
+}
+
+FakeWebAppUiManager* WebAppUiManager::AsFakeWebAppUiManagerForTesting() {
+  return nullptr;
 }
 
 }  // namespace web_app

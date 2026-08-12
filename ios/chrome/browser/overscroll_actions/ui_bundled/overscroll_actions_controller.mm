@@ -20,6 +20,7 @@
 #import "ios/chrome/browser/fullscreen/ui_bundled/scoped_fullscreen_disabler.h"
 #import "ios/chrome/browser/overscroll_actions/ui_bundled/overscroll_actions_gesture_recognizer.h"
 #import "ios/chrome/browser/overscroll_actions/ui_bundled/overscroll_actions_view.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/rtl_geometry.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/side_swipe/ui_bundled/side_swipe_constants.h"
@@ -136,8 +137,8 @@ UIEdgeInsets TopContentInset(UIScrollView* scrollView, CGFloat topInset) {
 @end
 
 @interface OverscrollActionsController () <CRWWebViewScrollViewProxyObserver,
-                                           UIGestureRecognizerDelegate,
-                                           OverscrollActionsViewDelegate> {
+                                           OverscrollActionsViewDelegate,
+                                           UIGestureRecognizerDelegate> {
   // Display link used to animate the bounce back effect.
   CADisplayLink* _dpLink;
   SpringInsetState _bounceState;
@@ -464,9 +465,16 @@ UIEdgeInsets TopContentInset(UIScrollView* scrollView, CGFloat topInset) {
   // positive while scrolling the main content, resetting the insets causes
   // after scrolling is done seems wrong.
 #if !BUILDFLAG(USE_BLINK)
+  // When the user lets go of the overscroll, a `_dpLink` is created to animate
+  // the bounce back. Checking `isBounceAnimationRunning` prevents prematurely
+  // resetting the content inset, allowing the overscroll to gracefully ease
+  // back.
+  BOOL isBounceAnimationRunning = (_dpLink != nil);
+
   if (contentOffset.y >= 0 ||
       self.overscrollState == OverscrollState::NO_PULL_STARTED ||
-      self.overscrollActionView.selectedAction == OverscrollAction::NONE) {
+      (!isBounceAnimationRunning &&
+       self.overscrollActionView.selectedAction == OverscrollAction::NONE)) {
     [self resetScrollViewTopContentInset];
   }
 #endif
@@ -616,6 +624,9 @@ UIEdgeInsets TopContentInset(UIScrollView* scrollView, CGFloat topInset) {
 }
 
 - (BOOL)viewportAdjustsContentInset {
+  if (IsFullscreenRefactoringEnabled()) {
+    return _webViewProxy.shouldUseViewContentInset;
+  }
   if (_webViewProxy.shouldUseViewContentInset) {
     return YES;
   }
@@ -937,23 +948,38 @@ UIEdgeInsets TopContentInset(UIScrollView* scrollView, CGFloat topInset) {
     return;
   }
 
-  // Ask the delegate for a fullscreen controller. It may return nothing if
-  // (for example) the UI is in the middle of teardown.
-  FullscreenController* fullscreenController =
-      [self.delegate fullscreenControllerForOverscrollActionsController:self];
-  if (!fullscreenController) {
-    return;
-  }
-
   // Disabling fullscreen will show the toolbars, which may potentially produce
   // a `-scrollViewDidScroll` event if the browser viewport insets need to be
   // updated.  `_ignoreScrollForDisabledFullscreen` is set to YES while the
   // viewport insets are being updated for the disabled state so that this
   // scroll event can be ignored.
   _ignoreScrollForDisabledFullscreen = YES;
-  _fullscreenDisabler =
-      std::make_unique<ScopedFullscreenDisabler>(fullscreenController);
+  _fullscreenDisabler = [self createFullscreenDisabler];
   _ignoreScrollForDisabledFullscreen = NO;
+}
+
+// Creates a ScopedFullscreenDisabler.
+- (std::unique_ptr<ScopedFullscreenDisabler>)createFullscreenDisabler {
+  if (IsFullscreenRefactoringEnabled()) {
+    id<FullscreenCommands> fullscreenHandler =
+        [self.delegate fullscreenHandlerForOverscrollActionsController:self];
+    if (!fullscreenHandler) {
+      return nullptr;
+    }
+
+    return std::make_unique<ScopedFullscreenDisabler>(fullscreenHandler,
+                                                      /*animated=*/NO);
+  } else {
+    // Ask the delegate for a fullscreen controller. It may return nothing if
+    // (for example) the UI is in the middle of teardown.
+    FullscreenController* fullscreenController =
+        [self.delegate fullscreenControllerForOverscrollActionsController:self];
+    if (!fullscreenController) {
+      return nullptr;
+    }
+
+    return std::make_unique<ScopedFullscreenDisabler>(fullscreenController);
+  }
 }
 
 #pragma mark - Bounce dynamic

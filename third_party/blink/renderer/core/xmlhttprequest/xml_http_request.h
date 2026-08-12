@@ -24,13 +24,11 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_XMLHTTPREQUEST_XML_HTTP_REQUEST_H_
 
 #include <memory>
-#include <optional>
 
 #include "base/containers/span.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "services/network/public/mojom/attribution.mojom-blink.h"
 #include "services/network/public/mojom/trust_tokens.mojom-blink.h"
 #include "services/network/public/mojom/url_loader_factory.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
@@ -63,7 +61,6 @@
 
 namespace blink {
 
-class AttributionReportingRequestOptions;
 class Blob;
 class BlobDataHandle;
 class DOMArrayBuffer;
@@ -76,6 +73,7 @@ class ExecutionContext;
 class FormData;
 class PrivateToken;
 class ScriptState;
+class ScriptValue;
 class TextResourceDecoder;
 class ThreadableLoader;
 class URLSearchParams;
@@ -141,8 +139,7 @@ class CORE_EXPORT XMLHttpRequest final
                         const AtomicString& value,
                         ExceptionState&);
   void setPrivateToken(const PrivateToken*, ExceptionState&);
-  void setAttributionReporting(const AttributionReportingRequestOptions*,
-                               ExceptionState&);
+  void setAttributionReporting(const ScriptValue&);
   void overrideMimeType(const AtomicString& override, ExceptionState&);
   String getAllResponseHeaders() const;
   const AtomicString& getResponseHeader(const AtomicString&) const;
@@ -368,10 +365,6 @@ class CORE_EXPORT XMLHttpRequest final
   bool async_ = true;
 
   bool with_credentials_ = false;
-
-  network::mojom::AttributionReportingEligibility
-      attribution_reporting_eligibility_ =
-          network::mojom::AttributionReportingEligibility::kUnset;
 
   // Used to skip m_responseDocument creation if it's done previously. We need
   // this separate flag since m_responseDocument can be 0 for some cases.

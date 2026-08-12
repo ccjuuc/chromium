@@ -4,12 +4,18 @@
 
 #include "remoting/host/chromoting_host_services_client.h"
 
+#include "base/check.h"
 #include "base/environment.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/sequence_checker.h"
+#include "base/strings/string_util.h"
 #include "build/build_config.h"
+#include "components/named_mojo_ipc_server/endpoint_options.h"
 #include "components/named_mojo_ipc_server/named_mojo_ipc_server_client_util.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/platform/named_platform_channel.h"
+#include "mojo/public/cpp/platform/platform_channel_endpoint.h"
 #include "mojo/public/cpp/system/invitation.h"
 #include "remoting/base/constants.h"
 #include "remoting/host/ipc_constants.h"
@@ -17,60 +23,79 @@
 
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
-
-#include "base/win/sid.h"
-#include "remoting/host/win/acl_util.h"
 #endif
 
 namespace remoting {
 
 namespace {
 
-bool g_initialized = false;
-
 mojo::PendingRemote<mojom::ChromotingHostServices> ConnectToServer(
-    const mojo::NamedPlatformChannel::ServerName& server_name) {
-  auto endpoint = named_mojo_ipc_server::ConnectToServer(server_name);
-  if (!endpoint.is_valid()) {
-    LOG(WARNING) << "Cannot connect to IPC through server name " << server_name
-                 << ". Endpoint is invalid.";
-    return {};
-  }
+    const std::vector<mojo::NamedPlatformChannel::ServerName>& server_names) {
+  for (const auto& server_name : server_names) {
+    mojo::PlatformChannelEndpoint endpoint;
 #if BUILDFLAG(IS_WIN)
-  DWORD peer_session_id;
-  if (!GetNamedPipeServerSessionId(endpoint.platform_handle().GetHandle().get(),
-                                   &peer_session_id)) {
-    PLOG(ERROR) << "GetNamedPipeServerSessionId failed";
-    return {};
-  }
-  // '0' (default) corresponds to the session the network process runs in.
-  if (peer_session_id != 0) {
-    LOG(ERROR)
-        << "Cannot establish connection with IPC server running in session: "
-        << peer_session_id;
-    return {};
-  }
+    mojo::NamedPlatformChannel::Options options;
+    options.server_name = server_name;
+    options.verify_server_privilege = true;
+    endpoint = named_mojo_ipc_server::ConnectToServer(options);
+#else
+    endpoint = named_mojo_ipc_server::ConnectToServer(server_name);
 #endif
-  auto invitation = mojo::IncomingInvitation::Accept(std::move(endpoint));
-  auto message_pipe =
-      invitation.ExtractMessagePipe(kChromotingHostServicesMessagePipeId);
-  return mojo::PendingRemote<mojom::ChromotingHostServices>(
-      std::move(message_pipe), /* version= */ 0);
+    if (!endpoint.is_valid()) {
+      VLOG(1) << "Cannot connect to IPC through server name " << server_name
+              << ". Endpoint is invalid.";
+      continue;
+    }
+#if BUILDFLAG(IS_WIN)
+    DWORD peer_session_id;
+    if (!GetNamedPipeServerSessionId(
+            endpoint.platform_handle().GetHandle().get(), &peer_session_id)) {
+      PLOG(ERROR) << "GetNamedPipeServerSessionId failed";
+      continue;
+    }
+    // '0' (default) corresponds to the session the network process runs in.
+    if (peer_session_id != 0) {
+      LOG(ERROR)
+          << "Cannot establish connection with IPC server running in session: "
+          << peer_session_id;
+      continue;
+    }
+#endif
+    auto invitation = mojo::IncomingInvitation::Accept(std::move(endpoint));
+    auto message_pipe =
+        invitation.ExtractMessagePipe(kChromotingHostServicesMessagePipeId);
+    return mojo::PendingRemote<mojom::ChromotingHostServices>(
+        std::move(message_pipe), /* version= */ 0);
+  }
+  LOG(WARNING) << "Failed to connect to any ChromotingHostServices IPC server: "
+               << base::JoinString(
+                      server_names,
+                      mojo::NamedPlatformChannel::ServerNameFromUTF8(", "));
+  return {};
 }
 
 }  // namespace
 
 ChromotingHostServicesClient::ChromotingHostServicesClient()
-    : ChromotingHostServicesClient(GetChromotingHostServicesServerName()) {}
+    : ChromotingHostServicesClient(
+#if BUILDFLAG(IS_LINUX)
+          std::vector{GetChromotingHostServicesServerName(),
+                      GetLegacyChromotingHostServicesServerName()}
+#else
+          std::vector{GetChromotingHostServicesServerName()}
+#endif
+      ) {
+}
 
 ChromotingHostServicesClient::ChromotingHostServicesClient(
     const mojo::NamedPlatformChannel::ServerName& server_name)
+    : ChromotingHostServicesClient(std::vector{server_name}) {}
+
+ChromotingHostServicesClient::ChromotingHostServicesClient(
+    const std::vector<mojo::NamedPlatformChannel::ServerName>& server_names)
     : ChromotingHostServicesClient(
           base::Environment::Create(),
-          base::BindRepeating(&ConnectToServer, server_name)) {
-  DCHECK(g_initialized)
-      << "ChromotingHostServicesClient::Initialize() has not been called.";
-}
+          base::BindRepeating(&ConnectToServer, server_names)) {}
 
 ChromotingHostServicesClient::ChromotingHostServicesClient(
     std::unique_ptr<base::Environment> environment,
@@ -80,23 +105,6 @@ ChromotingHostServicesClient::ChromotingHostServicesClient(
 
 ChromotingHostServicesClient::~ChromotingHostServicesClient() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-}
-
-// static
-bool ChromotingHostServicesClient::Initialize() {
-  DCHECK(!g_initialized);
-#if BUILDFLAG(IS_WIN)
-  // The network process running under the LocalService account verifies the
-  // session ID of the client process, which normally isn't allowed since the
-  // network process has reduced trust level, so we add an ACL to allow it.
-  g_initialized = AddProcessAccessRightForWellKnownSid(
-      base::win::WellKnownSid::kLocalService,
-      PROCESS_QUERY_LIMITED_INFORMATION);
-#else
-  // Other platforms don't need initialization.
-  g_initialized = true;
-#endif
-  return g_initialized;
 }
 
 mojom::ChromotingSessionServices*

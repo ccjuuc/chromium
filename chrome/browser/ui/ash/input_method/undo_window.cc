@@ -7,16 +7,18 @@
 #include <iostream>
 
 #include "ash/public/cpp/style/color_provider.h"
+#include "ash/resources/vector_icons/vector_icons.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ash/input_method/assistive_window_properties.h"
 #include "chrome/browser/ui/ash/input_method/border_factory.h"
 #include "chrome/browser/ui/ash/input_method/colors.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/bubble/bubble_border.h"
@@ -89,10 +91,10 @@ UndoWindow::UndoWindow(gfx::NativeView parent, AssistiveDelegate* delegate)
 }
 
 void UndoWindow::OnThemeChanged() {
-  undo_button_->SetImageModel(
-      views::Button::ButtonState::STATE_NORMAL,
-      ui::ImageModel::FromVectorIcon(
-          kAutocorrectUndoIcon, cros_tokens::kIconColorPrimary, kIconSize));
+  undo_button_->SetImageModel(views::Button::ButtonState::STATE_NORMAL,
+                              ui::ImageModel::FromVectorIcon(
+                                  ash::kAutocorrectUndoIcon,
+                                  cros_tokens::kIconColorPrimary, kIconSize));
   undo_button_->SetEnabledTextColors(cros_tokens::kTextColorSecondary);
 
   const auto* const color_provider = GetColorProvider();
@@ -106,8 +108,11 @@ void UndoWindow::OnThemeChanged() {
   // TODO(crbug.com/1099044): Update and use cros colors.
   learn_more_button_->SetImageModel(
       views::Button::ButtonState::STATE_NORMAL,
-      ui::ImageModel::FromVectorIcon(vector_icons::kSettingsOutlineIcon,
-                                     ui::kColorIconSecondary));
+      ui::ImageModel::FromVectorIcon(
+          features::IsRoundedIconsEnabled()
+              ? vector_icons::kSettingsIcon
+              : vector_icons::kSettingsOutlineOldIcon,
+          ui::kColorIconSecondary));
 
   BubbleDialogDelegateView::OnThemeChanged();
 }

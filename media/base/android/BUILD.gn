@@ -48,6 +48,8 @@ if (is_android) {
       "media_drm_bridge_factory.h",
       "media_drm_storage_bridge.cc",
       "media_drm_storage_bridge.h",
+      "media_format_color_space.cc",
+      "media_format_color_space.h",
       "media_server_crash_listener.cc",
       "media_server_crash_listener.h",
     ]
@@ -79,6 +81,7 @@ if (is_android) {
       "media_codec_loop_unittest.cc",
       "media_codec_util_unittest.cc",
       "media_drm_bridge_unittest.cc",
+      "media_format_color_space_unittest.cc",
     ]
 
     deps = [
@@ -117,7 +120,6 @@ if (is_android) {
   generate_jni("media_jni_headers") {
     sources = [
       "java/src/org/chromium/media/AudioManagerAndroid.java",
-      "java/src/org/chromium/media/AudioTrackOutputStream.java",
       "java/src/org/chromium/media/CodecProfileLevelList.java",
       "java/src/org/chromium/media/HdrMetadata.java",
       "java/src/org/chromium/media/MediaCodecBridge.java",
@@ -128,6 +130,10 @@ if (is_android) {
       "java/src/org/chromium/media/MediaServerCrashListener.java",
       "java/src/org/chromium/media/VideoAcceleratorUtil.java",
     ]
+
+    if (enable_passthrough_audio_codecs) {
+      sources += [ "java/src/org/chromium/media/AudioTrackOutputStream.java" ]
+    }
   }
 
   java_cpp_enum("java_enums") {
@@ -158,6 +164,7 @@ if (is_android) {
       ":display_java",
       ":media_java_resources",
       "//base:base_java",
+      "//base:flagged_apis_java",
       "//build/android:build_java",
       "//third_party/android_deps:guava_android_java",
       "//third_party/androidx:androidx_annotation_annotation_java",
@@ -175,7 +182,6 @@ if (is_android) {
     sources = [
       "java/src/org/chromium/media/AudioDeviceListener.java",
       "java/src/org/chromium/media/AudioManagerAndroid.java",
-      "java/src/org/chromium/media/AudioTrackOutputStream.java",
       "java/src/org/chromium/media/CodecProfileLevelList.java",
       "java/src/org/chromium/media/CommunicationDeviceListener.java",
       "java/src/org/chromium/media/CommunicationDeviceSelector.java",
@@ -195,21 +201,31 @@ if (is_android) {
       "java/src/org/chromium/media/ScreenResolutionUtil.java",
       "java/src/org/chromium/media/VideoAcceleratorUtil.java",
     ]
+
+    if (enable_passthrough_audio_codecs) {
+      sources += [ "java/src/org/chromium/media/AudioTrackOutputStream.java" ]
+    }
   }
 
   # TODO (b/146418831): Replace with androidx version
   android_library("display_java") {
     sources = [ "java/src/org/chromium/media/DisplayCompat.java" ]
 
-    deps = [ "//third_party/androidx:androidx_annotation_annotation_java" ]
+    deps = [
+      "//base:build_info_java",
+      "//third_party/androidx:androidx_annotation_annotation_java",
+    ]
   }
 
   robolectric_binary("media_base_junit_tests") {
     sources = [
-      "java/src/test/org/chromium/media/AudioTrackOutputStreamTest.java",
       "java/src/test/org/chromium/media/CommunicationDeviceListenerTest.java",
       "java/src/test/org/chromium/media/MediaFormatBuilderTest.java",
     ]
+    if (enable_passthrough_audio_codecs) {
+      sources +=
+          [ "java/src/test/org/chromium/media/AudioTrackOutputStreamTest.java" ]
+    }
     deps = [
       ":media_java",
       "//base:base_java",

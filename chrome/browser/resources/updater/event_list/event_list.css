@@ -12,26 +12,13 @@
   --separator-color:  var(--google-grey-300);
   color: var(--cr-primary-text-color);
   display: block;
-  padding: 16px;
+  padding: 0 16px;
 }
 
 @media (prefers-color-scheme: dark) {
   :host {
     --separator-color: var(--google-grey-700);
   }
-}
-
-.event-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 8px 0;
-  list-style: none;
-  padding-inline-start: 0;
-}
-
-raw-event-details {
-  margin-top: 4px;
 }
 
 .filter-bar-container {
@@ -67,4 +54,18 @@ filter-bar {
 
 .expand-collapse-controls {
   margin: 0;
+}
+
+.event-count {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  font-style: italic;
+  color: var(--cr-fallback-color-on-surface-subtle);
+}
+
+.event-count > span {
+  margin: 0 4px;
 }

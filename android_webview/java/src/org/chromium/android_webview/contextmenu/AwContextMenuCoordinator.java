@@ -68,6 +68,7 @@ public class AwContextMenuCoordinator {
     private WebContentsObserver mWebContentsObserver;
     private final boolean mIsDragDropEnabled;
     private final boolean mUsePopupWindow;
+    private boolean mDismissed;
 
     AwContextMenuCoordinator(
             WindowAndroid windowAndroid,
@@ -97,6 +98,9 @@ public class AwContextMenuCoordinator {
     }
 
     public void dismiss() {
+        if (mDismissed) return;
+        mDismissed = true;
+
         if (mWebContentsObserver != null) {
             mWebContentsObserver.observe(null);
         }
@@ -115,6 +119,8 @@ public class AwContextMenuCoordinator {
             mCurrentPopulator.onMenuClosed();
             mCurrentPopulator = null;
         }
+
+        mParams.destroy();
     }
 
     void displayMenu() {
@@ -208,8 +214,9 @@ public class AwContextMenuCoordinator {
                         mWindowAndroid.getWindow(),
                         mWebContents,
                         mParams,
-                        0,
-                        true,
+                        /* leftContentOffsetPx= */ 0,
+                        /* topContentOffsetPx= */ 0,
+                        /* usePopupWindow= */ true,
                         dragDispatchingTargetView);
 
         Integer desiredPopupContentWidth = null;
@@ -287,17 +294,17 @@ public class AwContextMenuCoordinator {
     private void registerViewTypes(ModelListAdapter adapter) {
         adapter.registerType(
                 ListItemType.HEADER,
-                new LayoutViewBuilder(R.layout.aw_context_menu_header),
+                new LayoutViewBuilder<>(R.layout.aw_context_menu_header),
                 AwContextMenuHeaderViewBinder::bind);
 
         adapter.registerType(
                 ListItemType.DIVIDER,
-                new LayoutViewBuilder(R.layout.aw_context_menu_divider),
+                new LayoutViewBuilder<>(R.layout.aw_context_menu_divider),
                 (model, view, propertyKey) -> {});
 
         adapter.registerType(
                 ListItemType.CONTEXT_MENU_ITEM,
-                new LayoutViewBuilder(R.layout.aw_context_menu_row),
+                new LayoutViewBuilder<>(R.layout.aw_context_menu_row),
                 AwContextMenuItemViewBinder::bind);
     }
 

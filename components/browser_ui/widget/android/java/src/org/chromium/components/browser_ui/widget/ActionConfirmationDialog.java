@@ -7,7 +7,8 @@ package org.chromium.components.browser_ui.widget;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.content.Context;
-import android.content.res.Resources;
+import android.text.TextUtils;
+import android.text.method.LinkMovementMethod;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.Button;
@@ -17,7 +18,6 @@ import android.widget.TextView;
 import androidx.annotation.ColorInt;
 import androidx.annotation.IntDef;
 import androidx.annotation.StringRes;
-import androidx.core.util.Function;
 
 import org.chromium.base.CallbackController;
 import org.chromium.base.supplier.OneshotSupplier;
@@ -39,6 +39,7 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Objects;
 
 /** Dialog that asks the user if they're certain they want to perform and action. */
 @NullMarked
@@ -55,6 +56,16 @@ public class ActionConfirmationDialog {
 
         /** Configure dismissal to happen later via {@link DismissHandler#dismissBlocking(int)}. */
         int DISMISS_LATER = 1;
+    }
+
+    /** A handle to the shown dialog that can be used to dismiss it programmatically. */
+    public interface DialogHandle {
+        /**
+         * Programmatically dismiss the dialog if it is currently showing.
+         *
+         * @param cause The cause for the dismissal.
+         */
+        void dismiss(@DialogDismissalCause int cause);
     }
 
     @FunctionalInterface
@@ -80,7 +91,7 @@ public class ActionConfirmationDialog {
     }
 
     /** Handles dismissals for the dialog. */
-    public interface DismissHandler {
+    public interface DismissHandler extends DialogHandle {
         /**
          * Blocks dismissal until the returned {@link Runnable} is run. May dismiss on a timeout if
          * this condition is not fulfilled within a minimum time threshold.
@@ -143,6 +154,11 @@ public class ActionConfirmationDialog {
          */
         void setPropertyModel(PropertyModel propertyModel) {
             mPropertyModel = propertyModel;
+        }
+
+        @Override
+        public void dismiss(@DialogDismissalCause int dismissalCause) {
+            mModalDialogManager.dismissDialog(mPropertyModel, dismissalCause);
         }
 
         @Override
@@ -234,7 +250,7 @@ public class ActionConfirmationDialog {
             assert barrierId != null;
             assert mBarrier != null;
 
-            boolean removed = mBarrier.remove(barrierId);
+            boolean removed = mBarrier.remove(/* element */ barrierId);
             assert removed : "Repeate call to removeFromBarrier " + barrierId.intValue();
 
             if (mBarrier.isEmpty() && mBarrierDismissRunnable != null) {
@@ -277,33 +293,160 @@ public class ActionConfirmationDialog {
     }
 
     /**
+     * Immutable parameters for the confirmation dialog.
+     *
+     * <p>Build instances via {@link Builder}. The params object intentionally does not retain a
+     * {@link Context} so it is safe to keep around without leaking an Activity.
+     */
+    public static final class ConfirmationDialogParams {
+        // The title of the dialog.
+        private final String mTitle;
+        // The description of the dialog.
+        private final CharSequence mDescription;
+        // The text for the positive button.
+        private final String mPositiveButtonText;
+        // The text for the negative button.
+        private final String mNegativeButtonText;
+        // Whether to show the "don't show again" checkbox.
+        private final boolean mSupportStopShowing;
+
+        private ConfirmationDialogParams(Builder builder) {
+            mTitle = builder.mTitle;
+            mDescription = builder.mDescription;
+            mPositiveButtonText = builder.mPositiveButtonText;
+            mNegativeButtonText = builder.mNegativeButtonText;
+            mSupportStopShowing = builder.mSupportStopShowing;
+        }
+
+        @Override
+        public String toString() {
+            return "ConfirmationDialogParams{"
+                    + "mTitle='"
+                    + mTitle
+                    + '\''
+                    + ", mDescription="
+                    + mDescription
+                    + ", mPositiveButtonText='"
+                    + mPositiveButtonText
+                    + '\''
+                    + ", mNegativeButtonText='"
+                    + mNegativeButtonText
+                    + '\''
+                    + ", mSupportStopShowing="
+                    + mSupportStopShowing
+                    + '}';
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null) return false;
+            if (!(o instanceof ConfirmationDialogParams)) return false;
+            ConfirmationDialogParams that = (ConfirmationDialogParams) o;
+            return mSupportStopShowing == that.mSupportStopShowing
+                    && Objects.equals(mTitle, that.mTitle)
+                    && Objects.equals(mDescription, that.mDescription)
+                    && Objects.equals(mPositiveButtonText, that.mPositiveButtonText)
+                    && Objects.equals(mNegativeButtonText, that.mNegativeButtonText);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(
+                    mTitle,
+                    mDescription,
+                    mPositiveButtonText,
+                    mNegativeButtonText,
+                    mSupportStopShowing);
+        }
+
+        /**
+         * Builder for {@link ConfirmationDialogParams}.
+         *
+         * <p>The builder holds a {@link Context} only for resolving string resources. The
+         * {@link Context} is dropped at {@link #build()} time and is never stored on the resulting
+         * params object.
+         */
+        public static final class Builder {
+            private final Context mContext;
+            private String mTitle = "";
+            private CharSequence mDescription = "";
+            private String mPositiveButtonText = "";
+            private String mNegativeButtonText = "";
+            private boolean mSupportStopShowing;
+
+            public Builder(Context context) {
+                mContext = context;
+            }
+
+            public Builder withTitle(String title) {
+                mTitle = title;
+                return this;
+            }
+
+            public Builder withTitle(@StringRes int titleRes) {
+                mTitle = mContext.getString(titleRes);
+                return this;
+            }
+
+            public Builder withDescription(CharSequence description) {
+                mDescription = description;
+                return this;
+            }
+
+            public Builder withDescription(@StringRes int descriptionRes) {
+                mDescription = mContext.getText(descriptionRes);
+                return this;
+            }
+
+            public Builder withPositiveButton(String positiveButtonText) {
+                mPositiveButtonText = positiveButtonText;
+                return this;
+            }
+
+            public Builder withPositiveButton(@StringRes int positiveButtonRes) {
+                mPositiveButtonText = mContext.getString(positiveButtonRes);
+                return this;
+            }
+
+            public Builder withNegativeButton(String negativeButtonText) {
+                mNegativeButtonText = negativeButtonText;
+                return this;
+            }
+
+            public Builder withNegativeButton(@StringRes int negativeButtonRes) {
+                mNegativeButtonText = mContext.getString(negativeButtonRes);
+                return this;
+            }
+
+            public Builder withSupportStopShowing(boolean supportStopShowing) {
+                mSupportStopShowing = supportStopShowing;
+                return this;
+            }
+
+            public ConfirmationDialogParams build() {
+                return new ConfirmationDialogParams(this);
+            }
+        }
+    }
+
+    /**
      * Shows an action confirmation dialog.
      *
-     * @param titleResolver Resolves a title for the dialog.
-     * @param descriptionResolver Resolves a description for the dialog.
-     * @param positiveButtonRes The string to show for the positive button.
-     * @param negativeButtonRes The string to show for the negative button.
-     * @param supportStopShowing Whether to show a checkbox to permanently disable the dialog via a
-     *     pref.
+     * @param params The parameters for the dialog.
      * @param confirmationDialogHandler The callback to invoke on exit of the dialog.
+     * @return A {@link DialogHandle} that can be used to dismiss the dialog programmatically.
      */
-    public void show(
-            Function<Resources, String> titleResolver,
-            Function<Resources, String> descriptionResolver,
-            @StringRes int positiveButtonRes,
-            @StringRes int negativeButtonRes,
-            boolean supportStopShowing,
-            ConfirmationDialogHandler confirmationDialogHandler) {
-        Resources resources = mContext.getResources();
-
+    public DialogHandle show(
+            ConfirmationDialogParams params, ConfirmationDialogHandler confirmationDialogHandler) {
         View customView =
                 LayoutInflater.from(mContext).inflate(R.layout.action_confirmation_dialog, null);
         TextView descriptionTextView = customView.findViewById(R.id.description_text_view);
         CheckBox stopShowingCheckBox = customView.findViewById(R.id.stop_showing_check_box);
-        stopShowingCheckBox.setVisibility(supportStopShowing ? View.VISIBLE : View.GONE);
+        stopShowingCheckBox.setVisibility(params.mSupportStopShowing ? View.VISIBLE : View.GONE);
 
-        String descriptionText = descriptionResolver.apply(resources);
-        descriptionTextView.setText(descriptionText);
+        descriptionTextView.setText(params.mDescription);
+        descriptionTextView.setMovementMethod(LinkMovementMethod.getInstance());
 
         StopShowingDelegate stopShowingDelegate =
                 (buttonClickResult) -> {
@@ -313,20 +456,20 @@ public class ActionConfirmationDialog {
                             && stopShowingCheckBox.isChecked();
                 };
 
-        String titleText = titleResolver.apply(resources);
-        String positiveText = resources.getString(positiveButtonRes);
-        String negativeText = resources.getString(negativeButtonRes);
-
         DismissHandlerImpl dismissHandler =
                 new DismissHandlerImpl(
                         mModalDialogManager, confirmationDialogHandler, stopShowingDelegate);
         OneshotSupplierImpl<PropertyModel> modelSupplier = new OneshotSupplierImpl<>();
         View buttonBarView =
-                createCustomButtonBarView(mContext, modelSupplier, positiveText, negativeText);
+                createCustomButtonBarView(
+                        mContext,
+                        modelSupplier,
+                        params.mPositiveButtonText,
+                        params.mNegativeButtonText);
         PropertyModel model =
                 new PropertyModel.Builder(ModalDialogProperties.ALL_KEYS)
                         .with(ModalDialogProperties.CONTROLLER, dismissHandler)
-                        .with(ModalDialogProperties.TITLE, titleText)
+                        .with(ModalDialogProperties.TITLE, params.mTitle)
                         .with(ModalDialogProperties.CANCEL_ON_TOUCH_OUTSIDE, true)
                         .with(ModalDialogProperties.CUSTOM_VIEW, customView)
                         .with(ModalDialogProperties.CUSTOM_BUTTON_BAR_VIEW, buttonBarView)
@@ -334,6 +477,8 @@ public class ActionConfirmationDialog {
         modelSupplier.set(model);
         dismissHandler.setPropertyModel(model);
         mModalDialogManager.showDialog(model, ModalDialogType.APP);
+
+        return dismissHandler;
     }
 
     private static View createCustomButtonBarView(
@@ -345,8 +490,13 @@ public class ActionConfirmationDialog {
                 createSpinnerButton(
                         context, modelSupplier, /* isPositiveButton= */ true, positiveText);
         SpinnerButtonWrapper negativeButtonSpinner =
-                createSpinnerButton(
-                        context, modelSupplier, /* isPositiveButton= */ false, negativeText);
+                TextUtils.isEmpty(negativeText)
+                        ? null
+                        : createSpinnerButton(
+                                context,
+                                modelSupplier,
+                                /* isPositiveButton= */ false,
+                                negativeText);
         return ModalDialogViewUtils.createCustomButtonBarView(
                 context, positiveButtonSpinner, negativeButtonSpinner);
     }

@@ -11,6 +11,14 @@ import type {BitmapN32} from '//resources/mojo/skia/public/mojom/bitmap.mojom-we
  */
 
 /**
+ * Declare url type enum type
+ */
+export enum UrlType {
+  GEMINI_REGULAR = 0,
+  GEMINI_GUIDED_LEARNING = 1,
+}
+
+/**
  * Declare tab information
  */
 export declare interface TabInfo {
@@ -18,6 +26,7 @@ export declare interface TabInfo {
   title: string;
   url: string;
   favicon: string;
+  urlType?: UrlType;
 }
 /**
  * Declare a browser window information
@@ -96,6 +105,7 @@ export enum CreateSessionResult {
   SUCCESS = 1,
   HTTP_ERROR = 2,
   NETWORK_RESTRICTION = 3,
+  MAX_STUDENTS_EXCEEDED = 4,
 }
 
 export enum StudentStatusDetail {
@@ -118,6 +128,12 @@ export enum StudentStatusDetail {
   NOT_ADDED_NOT_CONFIGURED = 8,
 
   MULTIPLE_DEVICE_SIGNED_IN = 9,
+}
+
+export enum GeminiEnablementState {
+  UNKNOWN = 0,
+  ENABLED = 1,
+  DISABLED = 2,
 }
 
 /**
@@ -176,6 +192,7 @@ export enum MaterialType {
   YOUTUBE_VIDEO = 2,
   LINK = 3,
   FORM = 4,
+  GUIDED_LEARNING = 5,
 }
 
 /**
@@ -273,6 +290,7 @@ export declare interface StudentActivity {
   // multi-group.
   joinMethod: JoinMethod;
   viewScreenSessionCode?: string;
+  geminiState: GeminiEnablementState;
 }
 
 /**
@@ -297,11 +315,6 @@ export declare interface NetworkInfo {
  * The delegate which exposes privileged function to App
  */
 export declare interface ClientApiDelegate {
-  /**
-   * Request authentication for the webview.
-   */
-  authenticateWebview(): Promise<boolean>;
-
   /**
    * Get a list of Window tabs opened on device.
    */
@@ -403,11 +416,6 @@ export declare interface ClientApiDelegate {
       url: string, permission: Permission,
       setting: PermissionSetting): Promise<boolean>;
 
-  /**
-   * Close the tab with tabId.
-   */
-  closeTab(tabId: number): Promise<boolean>;
-
   openFeedbackDialog(): Promise<void>;
 
   /**
@@ -451,6 +459,11 @@ export declare interface ClientApiDelegate {
    * Stop the current screen share presentation for the student.
    */
   stopPresentingStudentScreen(): Promise<boolean>;
+
+  /**
+   * Get Gemini enabled status.
+   */
+  getGeminiStatus(): Promise<boolean>;
 }
 
 /**

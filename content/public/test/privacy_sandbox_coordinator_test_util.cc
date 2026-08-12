@@ -20,9 +20,6 @@
 #include "base/strings/string_view_util.h"
 #include "base/test/test_future.h"
 #include "base/values.h"
-#include "content/browser/interest_group/bidding_and_auction_server_key_fetcher.h"
-#include "content/browser/interest_group/interest_group_auction.h"
-#include "content/public/browser/interest_group_manager.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/origin.h"
 
@@ -31,21 +28,21 @@ namespace content {
 std::string CreatePrivacySandboxCoordinatorSerializedPublicKeys(
     const url::Origin& coordinator,
     base::span<const url::Origin> origins) {
-  base::Value::Dict origin_scoped_keys;
+  base::DictValue origin_scoped_keys;
   for (const auto& origin : origins) {
-    base::Value::Dict key;
+    base::DictValue key;
     key.Set("key", base::Base64Encode(kTestPrivacySandboxCoordinatorPublicKey));
     key.Set("id", kTestPrivacySandboxCoordinatorIdString);
-    base::Value::List keys;
+    base::ListValue keys;
     keys.Append(std::move(key));
 
-    base::Value::Dict origin_dict;
+    base::DictValue origin_dict;
     origin_dict.Set("keys", std::move(keys));
 
     origin_scoped_keys.Set(origin.Serialize(), std::move(origin_dict));
   }
 
-  base::Value::Dict coordinator_response;
+  base::DictValue coordinator_response;
   coordinator_response.Set("originScopedKeys", std::move(origin_scoped_keys));
 
   std::optional<std::string> serialized_response =
@@ -54,20 +51,6 @@ std::string CreatePrivacySandboxCoordinatorSerializedPublicKeys(
   return std::move(serialized_response).value();
 }
 
-void ConfigureTestPrivacySandboxCoordinatorKeys(
-    InterestGroupManager* interest_group_manager,
-    InterestGroupManager::TrustedServerAPIType api_type,
-    const url::Origin& coordinator,
-    base::span<const url::Origin> origins) {
-  base::test::TestFuture<std::optional<std::string>> future;
-  interest_group_manager->AddTrustedServerKeysDebugOverride(
-      api_type, coordinator,
-      CreatePrivacySandboxCoordinatorSerializedPublicKeys(coordinator,
-                                                          {origins}),
-      future.GetCallback());
-  ASSERT_TRUE(future.Wait());
-  EXPECT_FALSE(future.Get()) << *future.Get();
-}
 
 std::string GetTestPrivacySandboxCoordinatorPrivateKey() {
   return std::string(

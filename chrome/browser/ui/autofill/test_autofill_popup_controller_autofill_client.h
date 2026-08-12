@@ -15,6 +15,8 @@
 #include "chrome/browser/ui/autofill/mock_autofill_popup_view.h"
 #include "components/autofill/content/browser/test_content_autofill_client.h"
 #include "components/autofill/core/browser/foundations/autofill_manager.h"
+#include "components/autofill/core/browser/integrators/at_memory/at_memory_query_service.h"
+#include "components/autofill/core/browser/integrators/at_memory/mock_at_memory_query_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace autofill {
@@ -29,8 +31,13 @@ class TestAutofillPopupControllerAutofillClient
   explicit TestAutofillPopupControllerAutofillClient(
       content::WebContents* web_contents)
       : TestContentAutofillClient(web_contents) {
-    ON_CALL(*popup_view(), CreateSubPopupView)
-        .WillByDefault(::testing::Return(sub_popup_view()->GetWeakPtr()));
+    ON_CALL(popup_view_, CreateSubPopupView)
+        .WillByDefault(::testing::Return(sub_popup_view_.GetWeakPtr()));
+
+    auto mock_service =
+        std::make_unique<::testing::NiceMock<MockAtMemoryQueryService>>();
+    mock_at_memory_query_service_ = mock_service.get();
+    set_at_memory_query_service(std::move(mock_service));
   }
 
   ~TestAutofillPopupControllerAutofillClient() override { DoHide(); }
@@ -48,9 +55,10 @@ class TestAutofillPopupControllerAutofillClient
     if (!suggestion_controller_) {
       suggestion_controller_ =
           (new Controller(manager.external_delegate().GetWeakPtrForTest(),
-                          &GetWebContents(), gfx::RectF()))
+                          &GetWebContents(), manager.driver().GetFrameToken(),
+                          gfx::RectF()))
               ->GetWeakPtr();
-      test_api(cast_suggestion_controller()).SetView(popup_view_->GetWeakPtr());
+      test_api(cast_suggestion_controller()).SetView(popup_view_.GetWeakPtr());
       manager_of_last_controller_ = manager.GetWeakPtr();
       ON_CALL(cast_suggestion_controller(), Hide)
           .WillByDefault(
@@ -59,9 +67,13 @@ class TestAutofillPopupControllerAutofillClient
     return cast_suggestion_controller();
   }
 
-  MockAutofillPopupView* popup_view() { return popup_view_.get(); }
+  MockAutofillPopupView* popup_view() { return &popup_view_; }
 
-  MockAutofillPopupView* sub_popup_view() { return sub_popup_view_.get(); }
+  MockAutofillPopupView* sub_popup_view() { return &sub_popup_view_; }
+
+  MockAtMemoryQueryService* at_memory_query_service() {
+    return mock_at_memory_query_service_;
+  }
 
  private:
   void DoHide(SuggestionHidingReason reason) {
@@ -83,10 +95,9 @@ class TestAutofillPopupControllerAutofillClient
   base::WeakPtr<AutofillSuggestionController> suggestion_controller_;
   base::WeakPtr<AutofillManager> manager_of_last_controller_;
 
-  std::unique_ptr<MockAutofillPopupView> popup_view_ =
-      std::make_unique<::testing::NiceMock<MockAutofillPopupView>>();
-  std::unique_ptr<MockAutofillPopupView> sub_popup_view_ =
-      std::make_unique<::testing::NiceMock<MockAutofillPopupView>>();
+  ::testing::NiceMock<MockAutofillPopupView> popup_view_;
+  ::testing::NiceMock<MockAutofillPopupView> sub_popup_view_;
+  raw_ptr<MockAtMemoryQueryService> mock_at_memory_query_service_ = nullptr;
 };
 
 }  // namespace autofill

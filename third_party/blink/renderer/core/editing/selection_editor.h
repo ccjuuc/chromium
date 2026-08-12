@@ -45,12 +45,17 @@ class SelectionEditor final : public GarbageCollected<SelectionEditor> {
   SelectionEditor& operator=(const SelectionEditor&) = delete;
   void Dispose();
 
-  const SelectionInDOMTree& GetSelectionInDOMTree() const;
+  const SelectionInDomTree& GetSelectionInDomTree() const;
 
-  VisibleSelection ComputeVisibleSelectionInDOMTree() const;
+  VisibleSelection ComputeVisibleSelectionInDomTree() const;
   VisibleSelectionInFlatTree ComputeVisibleSelectionInFlatTree() const;
   bool ComputeAbsoluteBounds(gfx::Rect& anchor, gfx::Rect& focus) const;
-  void SetSelectionAndEndTyping(const SelectionInDOMTree&);
+  void SetSelectionAndEndTyping(const SelectionInDomTree&);
+
+  // Sets the ContainsSelectionFocus flag on the style-owning layout object
+  // and triggers layout invalidation if needed for text-overflow.
+  static void SetContainsSelectionFocusFlag(LayoutObject* style_owner,
+                                            bool value);
 
   void DidAttachDocument(Document*);
 
@@ -66,12 +71,12 @@ class SelectionEditor final : public GarbageCollected<SelectionEditor> {
   void DidChangeChildren(const ContainerNode::ChildrenChange& change);
   void DidMergeTextNodes(const Text& merged_node,
                          const NodeWithIndex& node_to_be_removed_with_index,
-                         unsigned old_length);
+                         wtf_size_t old_length);
   void DidSplitTextNode(const Text&);
   void DidUpdateCharacterData(CharacterData*,
-                              unsigned offset,
-                              unsigned old_length,
-                              unsigned new_length);
+                              wtf_size_t offset,
+                              wtf_size_t old_length,
+                              wtf_size_t new_length);
   void NodeChildrenWillBeRemoved(ContainerNode&);
   void NodeWillBeRemoved(Node&);
 
@@ -80,6 +85,11 @@ class SelectionEditor final : public GarbageCollected<SelectionEditor> {
  private:
   Document& GetDocument() const;
   LocalFrame* GetFrame() const { return frame_.Get(); }
+
+  // Marks |style_owner_node| and its block children for layout to re-evaluate
+  // text-overflow truncation. Posted as a deferred task (see
+  // SetContainsSelectionFocusFlag()) to avoid dirtying layout synchronously.
+  static void InvalidateTextOverflowLayoutForNode(Node* style_owner_node);
 
   void AssertSelectionValid() const;
   void ClearVisibleSelection();
@@ -96,13 +106,13 @@ class SelectionEditor final : public GarbageCollected<SelectionEditor> {
   void UpdateCachedAbsoluteBoundsIfNeeded() const;
 
   void DidFinishTextChange(const Position& anchor, const Position& focus);
-  void DidFinishDOMMutation();
+  void DidFinishDomMutation();
   void DidInsertNode(const Node&);
 
   WeakMember<Document> document_;
   Member<LocalFrame> frame_;
 
-  SelectionInDOMTree selection_;
+  SelectionInDomTree selection_;
 
   // If document is root, document.getSelection().addRange(range) is cached on
   // this.

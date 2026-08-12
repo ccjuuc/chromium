@@ -16,9 +16,7 @@
 #include "chrome/browser/chromeos/extensions/telemetry/api/common/app_ui_observer.h"
 #include "chrome/browser/chromeos/extensions/telemetry/api/routines/diagnostic_routine.h"
 #include "chrome/browser/chromeos/extensions/telemetry/api/routines/diagnostic_routine_info.h"
-#include "chrome/browser/chromeos/extensions/telemetry/api/routines/remote_diagnostic_routines_service_strategy.h"
-#include "chromeos/crosapi/mojom/telemetry_diagnostic_routine_service.mojom.h"
-#include "chromeos/crosapi/mojom/telemetry_extension_exception.mojom.h"
+#include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_routines.mojom.h"
 #include "content/public/browser/browser_context.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/browser/extension_registry.h"
@@ -27,7 +25,6 @@
 #include "extensions/browser/unloaded_extension_reason.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_id.h"
-#include "mojo/public/cpp/bindings/remote.h"
 
 namespace chromeos {
 
@@ -64,7 +61,7 @@ class DiagnosticRoutineManager : public extensions::BrowserContextKeyedAPI,
 
   base::expected<base::Uuid, Error> CreateRoutine(
       extensions::ExtensionId extension_id,
-      crosapi::mojom::TelemetryDiagnosticRoutineArgumentPtr routine_argument);
+      ash::cros_healthd::mojom::RoutineArgumentPtr routine_argument);
   // Tries to start the routine with `routine_id`, returns true if successful,
   // otherwise false.
   bool StartRoutineForExtension(extensions::ExtensionId extension_id,
@@ -77,12 +74,7 @@ class DiagnosticRoutineManager : public extensions::BrowserContextKeyedAPI,
   bool ReplyToRoutineInquiryForExtension(
       const extensions::ExtensionId& extension_id,
       const base::Uuid& routine_id,
-      crosapi::mojom::TelemetryDiagnosticRoutineInquiryReplyPtr reply);
-
-  void IsRoutineArgumentSupported(
-      crosapi::mojom::TelemetryDiagnosticRoutineArgumentPtr arg,
-      base::OnceCallback<
-          void(crosapi::mojom::TelemetryExtensionSupportStatusPtr)> callback);
+      ash::cros_healthd::mojom::RoutineInquiryReplyPtr reply);
 
   // `ExtensionRegistryObserver`:
   void OnExtensionUnloaded(content::BrowserContext* browser_context,
@@ -104,9 +96,6 @@ class DiagnosticRoutineManager : public extensions::BrowserContextKeyedAPI,
   // enters the finished state. We are removing the routine in that case.
   void OnRoutineExceptionOrFinished(DiagnosticRoutineInfo info);
 
-  mojo::Remote<crosapi::mojom::TelemetryDiagnosticRoutinesService>&
-  GetRemoteService();
-
   // extensions::BrowserContextKeyedAPI:
   static const char* service_name() { return "DiagnosticRoutineManager"; }
   static const bool kServiceIsCreatedInGuestMode = false;
@@ -118,7 +107,6 @@ class DiagnosticRoutineManager : public extensions::BrowserContextKeyedAPI,
                  std::vector<std::unique_ptr<DiagnosticRoutine>>>
       routines_per_extension_;
 
-  std::unique_ptr<RemoteDiagnosticRoutineServiceStrategy> remote_strategy_;
   raw_ptr<content::BrowserContext> browser_context_;
 };
 

@@ -2,66 +2,68 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
 
 #include "media/base/mac/channel_layout_util_mac.h"
 
 #include <memory>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/logging.h"
+#include "base/numerics/safe_math.h"
 #include "media/base/channel_layout.h"
 
 namespace media {
 
 ScopedAudioChannelLayout::ScopedAudioChannelLayout(size_t layout_size)
-    : layout_(layout_size) {}
+    : layout_memory_(base::HeapArray<uint8_t>::Uninit(layout_size)) {}
 
 ScopedAudioChannelLayout::~ScopedAudioChannelLayout() = default;
 
-bool AudioChannelLabelToChannel(AudioChannelLabel input_channel,
-                                Channels* output_channel) {
+std::optional<Channels> AudioChannelLabelToChannel(
+    AudioChannelLabel input_channel) {
   switch (input_channel) {
     case kAudioChannelLabel_Left:
-      *output_channel = Channels::LEFT;
-      break;
+      return Channels::LEFT;
     case kAudioChannelLabel_Right:
-      *output_channel = Channels::RIGHT;
-      break;
+      return Channels::RIGHT;
     case kAudioChannelLabel_Center:
     case kAudioChannelLabel_Mono:
-      *output_channel = Channels::CENTER;
-      break;
+      return Channels::CENTER;
     case kAudioChannelLabel_LFEScreen:
-      *output_channel = Channels::LFE;
-      break;
+      return Channels::LFE;
     case kAudioChannelLabel_RearSurroundLeft:
-      *output_channel = Channels::BACK_LEFT;
-      break;
+      return Channels::BACK_LEFT;
     case kAudioChannelLabel_RearSurroundRight:
-      *output_channel = Channels::BACK_RIGHT;
-      break;
+      return Channels::BACK_RIGHT;
     case kAudioChannelLabel_LeftCenter:
-      *output_channel = Channels::LEFT_OF_CENTER;
-      break;
+      return Channels::LEFT_OF_CENTER;
     case kAudioChannelLabel_RightCenter:
-      *output_channel = Channels::RIGHT_OF_CENTER;
-      break;
+      return Channels::RIGHT_OF_CENTER;
     case kAudioChannelLabel_CenterSurround:
-      *output_channel = Channels::BACK_CENTER;
-      break;
+      return Channels::BACK_CENTER;
     case kAudioChannelLabel_LeftSurround:
-      *output_channel = Channels::SIDE_LEFT;
-      break;
+      return Channels::SIDE_LEFT;
     case kAudioChannelLabel_RightSurround:
-      *output_channel = Channels::SIDE_RIGHT;
-      break;
+      return Channels::SIDE_RIGHT;
+    case kAudioChannelLabel_LeftTopFront:
+      return Channels::TOP_FRONT_LEFT;
+    case kAudioChannelLabel_RightTopFront:
+      return Channels::TOP_FRONT_RIGHT;
+    case kAudioChannelLabel_LeftTopRear:
+      return Channels::TOP_BACK_LEFT;
+    case kAudioChannelLabel_RightTopRear:
+      return Channels::TOP_BACK_RIGHT;
+    case kAudioChannelLabel_TopCenterSurround:
+      return Channels::TOP_CENTER;
+    case kAudioChannelLabel_CenterTopFront:
+      return Channels::TOP_FRONT_CENTER;
+    case kAudioChannelLabel_TopBackCenter:
+      return Channels::TOP_BACK_CENTER;
     default:
-      return false;
+      return std::nullopt;
   }
-  return true;
 }
 
 AudioChannelLabel ChannelToAudioChannelLabel(Channels input_channel) {
@@ -88,12 +90,27 @@ AudioChannelLabel ChannelToAudioChannelLabel(Channels input_channel) {
       return kAudioChannelLabel_LeftSurround;
     case Channels::SIDE_RIGHT:
       return kAudioChannelLabel_RightSurround;
+    case Channels::TOP_FRONT_LEFT:
+      return kAudioChannelLabel_LeftTopFront;
+    case Channels::TOP_FRONT_RIGHT:
+      return kAudioChannelLabel_RightTopFront;
+    case Channels::TOP_BACK_LEFT:
+      return kAudioChannelLabel_LeftTopRear;
+    case Channels::TOP_BACK_RIGHT:
+      return kAudioChannelLabel_RightTopRear;
+    case Channels::TOP_CENTER:
+      return kAudioChannelLabel_TopCenterSurround;
+    case Channels::TOP_FRONT_CENTER:
+      return kAudioChannelLabel_CenterTopFront;
+    case Channels::TOP_BACK_CENTER:
+      return kAudioChannelLabel_TopBackCenter;
   }
 }
 
 std::unique_ptr<ScopedAudioChannelLayout> ChannelLayoutToAudioChannelLayout(
-    ChannelLayout input_layout,
-    int input_channels) {
+    ChannelLayoutConfig input_config) {
+  const ChannelLayout input_layout = input_config.channel_layout();
+  const int input_channels = input_config.channels();
   CHECK_GT(input_layout, CHANNEL_LAYOUT_UNSUPPORTED);
   CHECK_GT(input_channels, 0);
 
@@ -102,17 +119,29 @@ std::unique_ptr<ScopedAudioChannelLayout> ChannelLayoutToAudioChannelLayout(
   //
   // Code modeled after example from Apple documentation here:
   // https://developer.apple.com/library/content/qa/qa1627/_index.html
-  int output_layout_size =
-      offsetof(AudioChannelLayout, mChannelDescriptions[input_channels]);
+  // Modified to use `size_t` and `base::CheckedNumeric` to prevent integer
+  // truncation and overflow.
+  // `AudioChannelLayout` already includes one `AudioChannelDescription` in its
+  // definition, so we allocate space for `input_channels - 1` additional
+  // descriptions.
+  base::CheckedNumeric<size_t> checked_layout_size =
+      sizeof(AudioChannelLayout) +
+      base::CheckedNumeric<size_t>(input_channels - 1) *
+          sizeof(AudioChannelDescription);
+  size_t output_layout_size = 0;
+  if (!checked_layout_size.AssignIfValid(&output_layout_size)) {
+    DLOG(ERROR) << "Invalid AudioChannelLayout size.";
+    return nullptr;
+  }
+
   auto new_layout =
       std::make_unique<ScopedAudioChannelLayout>(output_layout_size);
 
   new_layout->layout()->mNumberChannelDescriptions = input_channels;
   new_layout->layout()->mChannelLayoutTag =
       kAudioChannelLayoutTag_UseChannelDescriptions;
-  AudioChannelDescription* descriptions =
-      new_layout->layout()->mChannelDescriptions;
 
+  auto descriptions = GetDescriptions(*new_layout->layout());
   if (input_layout == CHANNEL_LAYOUT_DISCRETE) {
     // For the discrete case, mark all channels as unknown.
     for (int ch = 0; ch < input_channels; ++ch) {
@@ -127,7 +156,9 @@ std::unique_ptr<ScopedAudioChannelLayout> ChannelLayoutToAudioChannelLayout(
   } else {
     for (int ch = 0; ch <= CHANNELS_MAX; ++ch) {
       const int order = ChannelOrder(input_layout, static_cast<Channels>(ch));
-      if (order == -1) {
+      // We only allocate up to `input_channels`, skip if past what was
+      // allocated for.
+      if (order == -1 || order >= input_channels) {
         continue;
       }
       descriptions[order].mChannelLabel =
@@ -143,12 +174,14 @@ bool AudioChannelLayoutToChannelLayout(const AudioChannelLayout& input_layout,
                                        ChannelLayout* output_layout) {
   OSStatus result = noErr;
   UInt32 size = 0;
-  AudioChannelFlags tag = input_layout.mChannelLayoutTag;
+  AudioChannelLayoutTag tag = input_layout.mChannelLayoutTag;
+  const bool new_descriptions =
+      tag != kAudioChannelLayoutTag_UseChannelDescriptions;
   if (tag == kAudioChannelLayoutTag_UseChannelBitmap) {
     result = AudioFormatGetPropertyInfo(
         kAudioFormatProperty_ChannelLayoutForBitmap, sizeof(UInt32),
         &input_layout.mChannelBitmap, &size);
-  } else if (tag != kAudioChannelLayoutTag_UseChannelDescriptions) {
+  } else if (new_descriptions) {
     result =
         AudioFormatGetPropertyInfo(kAudioFormatProperty_ChannelLayoutForTag,
                                    sizeof(AudioChannelLayoutTag), &tag, &size);
@@ -164,7 +197,7 @@ bool AudioChannelLayoutToChannelLayout(const AudioChannelLayout& input_layout,
     result = AudioFormatGetProperty(
         kAudioFormatProperty_ChannelLayoutForBitmap, sizeof(UInt32),
         &input_layout.mChannelBitmap, &size, new_layout.layout());
-  } else if (tag != kAudioChannelLayoutTag_UseChannelDescriptions) {
+  } else if (new_descriptions) {
     result = AudioFormatGetProperty(kAudioFormatProperty_ChannelLayoutForTag,
                                     sizeof(AudioChannelLayoutTag), &tag, &size,
                                     new_layout.layout());
@@ -174,39 +207,32 @@ bool AudioChannelLayoutToChannelLayout(const AudioChannelLayout& input_layout,
     return false;
   }
 
-  UInt32 channel_count = 0;
-  if (tag != kAudioChannelLayoutTag_UseChannelDescriptions) {
-    new_layout.layout()->mChannelLayoutTag =
-        kAudioChannelLayoutTag_UseChannelDescriptions;
-    channel_count = new_layout.layout()->mNumberChannelDescriptions;
-  } else {
-    channel_count = input_layout.mNumberChannelDescriptions;
-  }
-  CHECK_GT(static_cast<int>(channel_count), 0);
+  // SAFETY: Length of channel descriptions is provided by the CoreAudio layer
+  // above and is guaranteed to match mChannelDescriptions here.
+  auto& layout = new_descriptions ? *new_layout.layout() : input_layout;
+  const auto descriptions = GetDescriptions(layout);
+  CHECK_GT(descriptions.size(), 0u);
 
   std::vector<Channels> channels_to_match;
-  for (UInt32 i = 0; i < channel_count; i++) {
-    Channels channel;
-    auto channelLabel =
-        tag == kAudioChannelLayoutTag_UseChannelDescriptions
-            ? input_layout.mChannelDescriptions[i].mChannelLabel
-            : new_layout.layout()->mChannelDescriptions[i].mChannelLabel;
-    if (!AudioChannelLabelToChannel(channelLabel, &channel)) {
+  for (const AudioChannelDescription& description : descriptions) {
+    const std::optional<Channels> maybe_channel =
+        AudioChannelLabelToChannel(description.mChannelLabel);
+    if (!maybe_channel) {
       return false;
     }
-    channels_to_match.push_back(channel);
+    channels_to_match.push_back(*maybe_channel);
   }
 
   for (int i = 0; i <= ChannelLayout::CHANNEL_LAYOUT_MAX; i++) {
-    ChannelLayout layout = static_cast<ChannelLayout>(i);
-    if (static_cast<UInt32>(ChannelLayoutToChannelCount(layout)) !=
-        channel_count) {
+    ChannelLayout chrome_layout = static_cast<ChannelLayout>(i);
+    if (static_cast<UInt32>(ChannelLayoutToChannelCount(chrome_layout)) !=
+        descriptions.size()) {
       continue;
     }
 
     bool matched = true;
     for (const auto& channel : channels_to_match) {
-      auto channel_order = ChannelOrder(layout, channel);
+      auto channel_order = ChannelOrder(chrome_layout, channel);
       if (channel_order == -1) {
         matched = false;
         break;
@@ -214,7 +240,7 @@ bool AudioChannelLayoutToChannelLayout(const AudioChannelLayout& input_layout,
     }
 
     if (matched) {
-      *output_layout = layout;
+      *output_layout = chrome_layout;
       return true;
     }
   }

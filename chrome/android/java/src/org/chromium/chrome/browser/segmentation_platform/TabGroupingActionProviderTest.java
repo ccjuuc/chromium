@@ -28,7 +28,8 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
 import org.chromium.chrome.browser.tab.Tab;
@@ -52,7 +53,7 @@ public class TabGroupingActionProviderTest {
     @Mock private TabWindowManager mTabWindowManager;
 
     @Mock private GroupSuggestionsButtonController mController;
-    private ObservableSupplierImpl<GroupSuggestionsButtonController> mControllerSupplier;
+    private SettableNonNullObservableSupplier<GroupSuggestionsButtonController> mControllerSupplier;
 
     private static final int WINDOW_ID = 1234;
 
@@ -63,7 +64,7 @@ public class TabGroupingActionProviderTest {
         when(mWindowAndroid.getActivity()).thenReturn(new WeakReference<>(mActivity));
         final Context context = RuntimeEnvironment.getApplication();
         when(mWindowAndroid.getContext()).thenReturn(new WeakReference<>(context));
-        mControllerSupplier = new ObservableSupplierImpl<>(mController);
+        mControllerSupplier = ObservableSuppliers.createNonNull(mController);
     }
 
     @Test
@@ -75,9 +76,7 @@ public class TabGroupingActionProviderTest {
         var provider = new TabGroupingActionProvider(mControllerSupplier);
         var signalAccumulator =
                 new SignalAccumulator(
-                        new Handler(),
-                        mTab,
-                        Map.of(AdaptiveToolbarButtonVariant.TAB_GROUPING, provider));
+                        new Handler(), Map.of(AdaptiveToolbarButtonVariant.TAB_GROUPING, provider));
         provider.getAction(mTab, signalAccumulator);
         Shadows.shadowOf(Looper.getMainLooper()).idle();
 
@@ -94,9 +93,7 @@ public class TabGroupingActionProviderTest {
         var provider = new TabGroupingActionProvider(mControllerSupplier);
         var signalAccumulator =
                 new SignalAccumulator(
-                        new Handler(),
-                        mTab,
-                        Map.of(AdaptiveToolbarButtonVariant.TAB_GROUPING, provider));
+                        new Handler(), Map.of(AdaptiveToolbarButtonVariant.TAB_GROUPING, provider));
         provider.getAction(mTab, signalAccumulator);
         Shadows.shadowOf(Looper.getMainLooper()).idle();
 

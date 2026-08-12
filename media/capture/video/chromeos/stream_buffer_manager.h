@@ -16,16 +16,11 @@
 #include "base/containers/queue.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/task/single_thread_task_runner.h"
 #include "media/capture/video/chromeos/camera_device_context.h"
 #include "media/capture/video/chromeos/camera_device_delegate.h"
 #include "media/capture/video/chromeos/mojom/camera3.mojom.h"
 #include "media/capture/video_capture_types.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
-
-namespace gfx {
-class GpuMemoryBuffer;
-}  // namespace gfx
 
 namespace gpu {
 class ClientSharedImage;

@@ -4,18 +4,12 @@
 
 package org.chromium.chrome.browser.tab;
 
-import android.app.Activity;
-import android.content.Context;
-import android.content.Intent;
-import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.PorterDuff;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
-import android.net.Uri;
 import android.os.Handler;
 import android.view.KeyEvent;
 
@@ -28,7 +22,6 @@ import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.ObserverList.RewindableIterator;
-import org.chromium.base.PackageManagerUtils;
 import org.chromium.base.lifetime.Destroyable;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -38,10 +31,8 @@ import org.chromium.chrome.browser.app.bluetooth.BluetoothNotificationService;
 import org.chromium.chrome.browser.app.serial.SerialNotificationService;
 import org.chromium.chrome.browser.app.usb.UsbNotificationService;
 import org.chromium.chrome.browser.bluetooth.BluetoothNotificationManager;
-import org.chromium.chrome.browser.document.ChromeLauncherActivity;
 import org.chromium.chrome.browser.gesturenav.NativePageBitmapCapturer;
 import org.chromium.chrome.browser.media.MediaCaptureNotificationServiceImpl;
-import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
 import org.chromium.chrome.browser.policy.PolicyAuditor;
 import org.chromium.chrome.browser.policy.PolicyAuditorJni;
 import org.chromium.chrome.browser.serial.SerialNotificationManager;
@@ -50,8 +41,11 @@ import org.chromium.chrome.browser.util.PictureInPictureWindowOptions;
 import org.chromium.chrome.browser.util.WindowFeatures;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+import org.chromium.components.embedder_support.delegate.WebContentsDelegateAndroid.ImmersivePlaybackConfirmationCallback;
 import org.chromium.components.find_in_page.FindMatchRectsDetails;
 import org.chromium.components.find_in_page.FindNotificationDetails;
+import org.chromium.content_public.browser.ImmersiveProjectionType;
+import org.chromium.content_public.browser.ImmersiveStereoMode;
 import org.chromium.content_public.browser.InvalidateTypes;
 import org.chromium.content_public.browser.RenderFrameHost;
 import org.chromium.content_public.browser.WebContents;
@@ -188,55 +182,6 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
         mDelegate.setContentsBounds(source, bounds);
     }
 
-    @CalledByNative
-    @Override
-    protected boolean openInAppOrChromeFromCct(GURL gurl) {
-        Intent intent =
-                new Intent(Intent.ACTION_VIEW, Uri.parse(gurl.getSpec()))
-                        .addCategory(Intent.CATEGORY_BROWSABLE);
-
-        ResolveInfo defaultActivity =
-                PackageManagerUtils.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY);
-
-        if (defaultActivity != null) {
-            // Check if the default activity is a chooser
-            List<ResolveInfo> handlers =
-                    PackageManagerUtils.queryIntentActivities(
-                            intent, PackageManager.GET_RESOLVED_FILTER);
-            for (ResolveInfo handler : handlers) {
-                String packageName = handler.activityInfo.packageName;
-                String activityName = handler.activityInfo.name;
-                if (packageName.equals(defaultActivity.activityInfo.packageName)
-                        && activityName.equals(defaultActivity.activityInfo.name)) {
-                    intent.setClassName(packageName, activityName);
-                    break;
-                }
-            }
-        }
-
-        // Fallback to Chrome if no supporting app was found
-        if (intent.getComponent() == null) {
-            intent.setClass(ContextUtils.getApplicationContext(), ChromeLauncherActivity.class);
-        }
-
-        Context context = mTab.getContext();
-
-        int flags = Intent.FLAG_ACTIVITY_NEW_TASK;
-        // If we're in in multi window it's fine to open multiple instances
-        if (context instanceof Activity
-                && MultiWindowUtils.getInstance().isInMultiWindowMode((Activity) context)) {
-            flags |= Intent.FLAG_ACTIVITY_MULTIPLE_TASK;
-        }
-
-        intent.setFlags(flags);
-        try {
-            context.startActivity(intent);
-            return true;
-        } catch (RuntimeException e) {
-            return false;
-        }
-    }
-
     // WebContentsDelegateAndroid
 
     @Override
@@ -256,7 +201,7 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
 
     @Override
     public boolean addMessageToConsole(int level, String message, int lineNumber, String sourceId) {
-        // Only output console.log messages on debug variants of Android OS. crbug/869804
+        // Only output console.log messages on debug variants of Android OS. crbug.com/41405346
         return !AndroidInfo.isDebugAndroid();
     }
 
@@ -297,6 +242,11 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
     @Override
     public void handleKeyboardEvent(KeyEvent event) {
         mDelegate.handleKeyboardEvent(event);
+    }
+
+    @Override
+    public boolean canEnterFullscreenModeForTab(RenderFrameHost renderFrameHost) {
+        return mDelegate.canEnterFullscreenModeForTab(renderFrameHost);
     }
 
     @Override
@@ -390,7 +340,7 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
 
     @Override
     public void visibleSSLStateChanged() {
-        PolicyAuditor auditor = PolicyAuditor.maybeCreate();
+        PolicyAuditor auditor = PolicyAuditor.maybeGetInstance();
         if (auditor != null) {
             WebContents webContents = mTab.getWebContents();
             // Speculative fix for crbug.com/384566650
@@ -457,6 +407,12 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
         return mDelegate.shouldEnableEmbeddedMediaExperience();
     }
 
+    @CalledByNative
+    @Override
+    protected boolean isDocumentPictureInPictureBlockedBySystem() {
+        return mDelegate.isDocumentPictureInPictureBlockedBySystem();
+    }
+
     /**
      * @return web preferences for enabling Picture-in-Picture.
      */
@@ -464,25 +420,6 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
     @Override
     protected boolean isPictureInPictureEnabled() {
         return mDelegate.isPictureInPictureEnabled();
-    }
-
-    /**
-     * @return Night mode enabled/disabled for this Tab. To be used to propagate the preferred color
-     *     scheme to the renderer.
-     */
-    @CalledByNative
-    @Override
-    protected boolean isNightModeEnabled() {
-        return mDelegate.isNightModeEnabled();
-    }
-
-    /**
-     * @return web preference for force dark mode.
-     */
-    @CalledByNative
-    @Override
-    protected boolean isForceDarkWebContentEnabled() {
-        return mDelegate.isForceDarkWebContentEnabled();
     }
 
     /**
@@ -673,6 +610,20 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
     @Override
     public boolean isTrustedWebActivity(WebContents webContents) {
         return mDelegate.isTrustedWebActivity(webContents);
+    }
+
+    @CalledByNative
+    @Override
+    protected boolean isImmersivePlaybackEnabled() {
+        return mDelegate.isImmersivePlaybackEnabled();
+    }
+
+    @Override
+    public void requestImmersivePlaybackConfirmation(
+            @ImmersiveStereoMode int stereoMode,
+            @ImmersiveProjectionType int projectionType,
+            ImmersivePlaybackConfirmationCallback callback) {
+        mDelegate.requestImmersivePlaybackConfirmation(stereoMode, projectionType, callback);
     }
 
     @Override

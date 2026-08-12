@@ -21,6 +21,7 @@
 #import "base/strings/sys_string_conversions.h"
 #import "base/types/fixed_array.h"
 #import "ios/chrome/test/earl_grey/chrome_egtest_plugin_client.h"
+#import "ios/testing/test_expectations.h"
 #import "ui/base/l10n/l10n_util_mac.h"
 #import "ui/base/resource/resource_bundle.h"
 

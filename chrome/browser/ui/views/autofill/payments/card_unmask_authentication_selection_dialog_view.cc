@@ -17,7 +17,7 @@
 #include "content/public/browser/web_contents.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
-#include "ui/gfx/image/image_skia_operations.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/bubble/bubble_frame_view.h"
@@ -37,9 +37,14 @@ ui::ImageModel GetAuthenticationModeIcon(
     const CardUnmaskChallengeOption& challenge_option) {
   switch (challenge_option.type) {
     case CardUnmaskChallengeOptionType::kSmsOtp:
-      return ui::ImageModel::FromVectorIcon(vector_icons::kSmsIcon);
+      return ui::ImageModel::FromVectorIcon(::features::IsRoundedIconsEnabled()
+                                                ? vector_icons::kSmsIcon
+                                                : vector_icons::kSmsOldIcon);
     case CardUnmaskChallengeOptionType::kEmailOtp:
-      return ui::ImageModel::FromVectorIcon(vector_icons::kEmailOutlineIcon);
+      return ui::ImageModel::FromVectorIcon(
+          ::features::IsRoundedIconsEnabled()
+              ? vector_icons::kMailIcon
+              : vector_icons::kEmailOutlineOldIcon);
     case CardUnmaskChallengeOptionType::kCvc:
       // CVC auth has its own authentication dialog in the single challenge
       // option case.

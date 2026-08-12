@@ -10,8 +10,8 @@
 #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
 #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_source.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/split_tabs/split_tab_id.h"
 #include "components/tabs/public/split_tab_data.h"
-#include "components/tabs/public/split_tab_id.h"
 
 namespace split_tabs {
 
@@ -61,7 +61,7 @@ SplitTabActiveLocation GetLastActiveTabLocation(
   const bool first_tab_activated = last_active_index == first_tab_index;
 
   if (split_tab_data->visual_data()->split_layout() ==
-      SplitTabLayout::kVertical) {
+      SplitTabLayout::kSideBySide) {
     return first_tab_activated ? SplitTabActiveLocation::kStart
                                : SplitTabActiveLocation::kEnd;
   } else {

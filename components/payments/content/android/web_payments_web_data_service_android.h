@@ -12,6 +12,7 @@
 #include "base/android/scoped_java_ref.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "components/payments/content/android/jni_headers/WebPaymentsWebDataService_shared_jni.h"
 #include "components/payments/content/web_payments_web_data_service.h"
 #include "components/webdata/common/web_data_results.h"
 #include "components/webdata/common/web_data_service_base.h"
@@ -51,7 +52,8 @@ class WebPaymentsWebDataServiceAndroid {
   // Adds the web app |jmanifest_sections|.
   void AddPaymentWebAppManifest(
       JNIEnv* env,
-      const base::android::JavaRef<jobjectArray>& jmanifest_sections);
+      const base::android::JavaRef<JArray<JWebAppManifestSection>>&
+          jmanifest_sections);
 
   // Gets the payment |jmethod_name|'s manifest asynchronously from the web data
   // service. Return true if the result will be returned through |jcallback|.
@@ -69,13 +71,12 @@ class WebPaymentsWebDataServiceAndroid {
       const base::android::JavaRef<jobject>& jcallback);
 
  private:
-  void OnWebDataServiceRequestDone(WebDataServiceBase::Handle h,
-                                   std::unique_ptr<WDTypedResult> result);
-  void OnWebAppManifestRequestDone(JNIEnv* env,
-                                   WebDataServiceBase::Handle h,
-                                   std::unique_ptr<WDTypedResult> result);
+  void OnWebAppManifestRequestDone(
+      base::android::ScopedJavaGlobalRef<jobject> jcallback,
+      WebDataServiceBase::Handle h,
+      std::unique_ptr<WDTypedResult> result);
   void OnPaymentMethodManifestRequestDone(
-      JNIEnv* env,
+      base::android::ScopedJavaGlobalRef<jobject> jcallback,
       WebDataServiceBase::Handle h,
       std::unique_ptr<WDTypedResult> result);
   scoped_refptr<WebPaymentsWebDataService> GetWebPaymentsWebDataService();
@@ -84,11 +85,6 @@ class WebPaymentsWebDataServiceAndroid {
 
   // Pointer to the java counterpart.
   JavaObjectWeakGlobalRef weak_java_obj_;
-
-  // Map of request handle and its correspond callback.
-  std::map<WebDataServiceBase::Handle,
-           std::unique_ptr<base::android::ScopedJavaGlobalRef<jobject>>>
-      web_data_service_requests_;
 
   base::WeakPtrFactory<WebPaymentsWebDataServiceAndroid> weak_ptr_factory_{
       this};

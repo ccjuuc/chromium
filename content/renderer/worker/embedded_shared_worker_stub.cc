@@ -66,7 +66,8 @@ EmbeddedSharedWorkerStub::EmbeddedSharedWorkerStub(
         coep_reporting_observer,
     mojo::PendingReceiver<blink::mojom::ReportingObserver>
         dip_reporting_observer,
-    const std::vector<std::string>& cors_exempt_header_list)
+    const std::vector<std::string>& cors_exempt_header_list,
+    bool cross_origin_isolated)
     : receiver_(this, std::move(receiver)) {
   DCHECK(main_script_load_params);
   DCHECK(pending_subresource_loader_factory_bundle);
@@ -126,11 +127,11 @@ EmbeddedSharedWorkerStub::EmbeddedSharedWorkerStub(
 
   impl_ = blink::WebSharedWorker::CreateAndStart(
       token, info->url, info->options->type, info->options->credentials,
-      blink::WebString::FromUTF8(info->options->name),
+      blink::WebString::FromUtf8(info->options->name),
       blink::WebSecurityOrigin(constructor_key.origin()),
       blink::WebSecurityOrigin(origin), is_constructor_secure_context,
-      blink::WebString::FromUTF8(user_agent), ua_metadata,
-      ToWebContentSecurityPolicies(std::move(info->content_security_policies)),
+      blink::WebString::FromUtf8(user_agent), ua_metadata,
+      ToWebContentSecurityPolicies(info->content_security_policies),
       FetchClientSettingsObjectFromMojomToWeb(
           info->outside_fetch_client_settings_object),
       devtools_worker_token, std::move(content_settings),
@@ -139,7 +140,8 @@ EmbeddedSharedWorkerStub::EmbeddedSharedWorkerStub(
       ToWebPolicyContainer(std::move(policy_container)),
       std::move(web_worker_fetch_context), std::move(host), this, ukm_source_id,
       require_cross_site_request_for_cookies,
-      std::move(coep_reporting_observer), std::move(dip_reporting_observer));
+      std::move(coep_reporting_observer), std::move(dip_reporting_observer),
+      cross_origin_isolated);
 
   // If the host drops its connection, then self-destruct.
   receiver_.set_disconnect_handler(base::BindOnce(
@@ -203,6 +205,14 @@ void EmbeddedSharedWorkerStub::Connect(int connection_request_id,
 
 void EmbeddedSharedWorkerStub::Terminate() {
   impl_->TerminateWorkerContext();
+}
+
+void EmbeddedSharedWorkerStub::Freeze() {
+  impl_->Freeze();
+}
+
+void EmbeddedSharedWorkerStub::Resume() {
+  impl_->Resume();
 }
 
 }  // namespace content

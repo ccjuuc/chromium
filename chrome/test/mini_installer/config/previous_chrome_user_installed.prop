@@ -52,6 +52,10 @@
     "HKEY_CURRENT_USER\\Software\\Classes\\$CHROME_DIRECT_LAUNCH_SCHEME": {
       "exists": "required",
       "values": {
+        "": {
+          "type": "SZ",
+          "data": "URL:$CHROME_DIRECT_LAUNCH_SCHEME"
+        },
         "URL Protocol": {
           "type": "SZ",
           "data": ""
@@ -86,6 +90,12 @@
         "Version": {
           "type": "SZ",
           "data": "$PREVIOUS_VERSION_MINI_INSTALLER_FILE_VERSION"
+        },
+        "EstimatedSize": {
+          "type": "DWORD"
+        },
+        "InstallDate": {
+          "type": "SZ"
         }
       },
       "wow_key": "KEY_WOW64_32KEY"

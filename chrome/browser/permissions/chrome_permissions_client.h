@@ -10,11 +10,12 @@
 #include "base/no_destructor.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "components/content_settings/core/common/content_settings.h"
+#include "components/permissions/embedded_permission_prompt_flow_model.h"
 #include "components/permissions/features.h"
 #include "components/permissions/permission_request_enums.h"
-#include "components/permissions/permission_uma_util.h"
+#include "components/permissions/permission_uma_constants.h"
 #include "components/permissions/permissions_client.h"
 #include "components/permissions/resolvers/permission_prompt_options.h"
 
@@ -89,6 +90,7 @@ class ChromePermissionsClient : public permissions::PermissionsClient {
   void OnPromptResolved(
       const permissions::PermissionRequest* request,
       permissions::PermissionAction action,
+      const PromptOptions& prompt_options,
       permissions::PermissionPromptDisposition prompt_disposition,
       permissions::PermissionPromptDispositionReason prompt_disposition_reason,
       std::optional<QuietUiReason> quiet_ui_reason,
@@ -111,19 +113,30 @@ class ChromePermissionsClient : public permissions::PermissionsClient {
       const GURL& origin) override;
   bool CanBypassEmbeddingOriginCheck(const GURL& requesting_origin,
                                      const GURL& embedding_origin) override;
-  std::optional<GURL> OverrideCanonicalOrigin(
+  std::optional<GURL> GetCanonicalOriginOverride(
       const GURL& requesting_origin,
       const GURL& embedding_origin) override;
-  // Checks if `requesting_origin` and `embedding_origin` are the new tab page
-  // origins.
-  bool DoURLsMatchNewTabPage(const GURL& requesting_origin,
-                             const GURL& embedding_origin) override;
+  std::optional<GURL> GetEmbeddingOriginOverride(
+      const GURL& requesting_origin,
+      content::RenderFrameHost* render_frame_host) override;
+
+  bool IsFromNewTabPage(content::WebContents* web_contents,
+                        const GURL& requester,
+                        bool already_overrode_requester) override;
+
+  bool IsPrivilegedInternalWebUI(content::WebContents* web_contents,
+                                 const GURL& requester,
+                                 bool already_overrode_requester) override;
+
+  bool IsPrivilegedInternalWebUIForUIRouting(
+      content::WebContents* web_contents) override;
+
 #if BUILDFLAG(IS_ANDROID)
   bool IsDseOrigin(content::BrowserContext* browser_context,
                    const url::Origin& origin) override;
   std::unique_ptr<PermissionMessageDelegate> MaybeCreateMessageUI(
       content::WebContents* web_contents,
-      ContentSettingsType type,
+      const permissions::PermissionRequest& request,
       base::WeakPtr<permissions::PermissionPromptAndroid> prompt) override;
   void RepromptForAndroidPermissions(
       content::WebContents* web_contents,
@@ -140,6 +153,11 @@ class ChromePermissionsClient : public permissions::PermissionsClient {
   std::unique_ptr<permissions::PermissionPrompt> CreatePrompt(
       content::WebContents* web_contents,
       permissions::PermissionPrompt::Delegate* delegate) override;
+  std::unique_ptr<
+      permissions::EmbeddedPermissionPromptFlowModel::PromptContentScrim>
+  CreatePromptContentScrim(
+      content::WebContents* web_contents,
+      permissions::EmbeddedPermissionPromptFlowModel* flow_model) override;
 #endif
 
   bool HasDevicePermission(ContentSettingsType type) const override;
@@ -160,6 +178,10 @@ class ChromePermissionsClient : public permissions::PermissionsClient {
       content::WebContents* web_contents) const override;
 
  private:
+  bool IsPrivilegedInternalWebUIForUIRouting(
+      const url::Origin& embedding_origin);
+  url::Origin GetEmbeddingOrigin(content::WebContents* web_contents);
+  url::Origin GetGoogleURLOrigin();
   friend base::NoDestructor<ChromePermissionsClient>;
 
   ChromePermissionsClient() = default;

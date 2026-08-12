@@ -115,7 +115,7 @@ class AppViewTest : public extensions::PlatformAppBrowserTest,
   // `continueEmbedding` function which does this.
   void ContinueEmbedding(const extensions::Extension* app, bool allow_request) {
     content::WebContents* host_contents =
-        extensions::ProcessManager::Get(browser()->profile())
+        extensions::ProcessManager::Get(browser()->GetProfile())
             ->GetBackgroundHostForExtension(app->id())
             ->host_contents();
     ASSERT_TRUE(content::WaitForLoadStop(host_contents));
@@ -128,7 +128,7 @@ class AppViewTest : public extensions::PlatformAppBrowserTest,
   void SetUpOnMainThread() override {
     extensions::PlatformAppBrowserTest::SetUpOnMainThread();
     test_guest_view_manager_ = factory_.GetOrCreateTestGuestViewManager(
-        browser()->profile(),
+        browser()->GetProfile(),
         ExtensionsAPIClient::Get()->CreateGuestViewManagerDelegate());
   }
 
@@ -231,7 +231,7 @@ IN_PROC_BROWSER_TEST_P(AppViewTest, KillGuestWithInvalidInstanceID) {
       LoadAndLaunchPlatformApp("app_view/bad_app", "AppViewTest.LAUNCHED");
 
   content::RenderProcessHost* bad_app_render_process_host =
-      extensions::AppWindowRegistry::Get(browser()->profile())
+      extensions::AppWindowRegistry::Get(browser()->GetProfile())
           ->GetCurrentAppWindowForApp(bad_app->id())
           ->web_contents()
           ->GetPrimaryMainFrame()
@@ -248,7 +248,7 @@ IN_PROC_BROWSER_TEST_P(AppViewTest, KillGuestWithInvalidInstanceID) {
   // Call the desired function to verify that the |bad_app| gets killed if
   // the provided |guest_instance_id| is not mapped to any "GuestView"'s.
   extensions::AppViewGuest::CompletePendingRequest(
-      browser()->profile(), GURL("about:blank"), invalid_guest_instance_id,
+      browser()->GetProfile(), GURL("about:blank"), invalid_guest_instance_id,
       bad_app->id(), bad_app_render_process_host);
   exit_observer.Wait();
   EXPECT_FALSE(exit_observer.did_exit_normally());
@@ -272,7 +272,7 @@ IN_PROC_BROWSER_TEST_P(AppViewTest,
       LoadAndLaunchPlatformApp("app_view/bad_app", "AppViewTest.LAUNCHED");
   // The host app attemps to embed the guest
   EXPECT_TRUE(
-      content::ExecJs(extensions::AppWindowRegistry::Get(browser()->profile())
+      content::ExecJs(extensions::AppWindowRegistry::Get(browser()->GetProfile())
                           ->GetCurrentAppWindowForApp(host_app->id())
                           ->web_contents(),
                       base::StringPrintf("onAppCommand('%s', '%s');", "EMBED",
@@ -285,19 +285,59 @@ IN_PROC_BROWSER_TEST_P(AppViewTest,
   int guest_instance_id =
       extensions::AppViewGuest::GetAllRegisteredInstanceIdsForTesting()[0];
   content::RenderProcessHostWatcher bad_app_obs(
-      extensions::ProcessManager::Get(browser()->profile())
+      extensions::ProcessManager::Get(browser()->GetProfile())
           ->GetBackgroundHostForExtension(bad_app->id())
           ->render_process_host(),
       content::RenderProcessHostWatcher::WATCH_FOR_PROCESS_EXIT);
-  base::Value::Dict fake_embed_request_param;
+  base::DictValue fake_embed_request_param;
   fake_embed_request_param.Set(appview::kGuestInstanceID, guest_instance_id);
   fake_embed_request_param.Set(appview::kEmbedderID, host_app->id());
   extensions::AppRuntimeEventRouter::DispatchOnEmbedRequestedEvent(
-      browser()->profile(), std::move(fake_embed_request_param), bad_app);
+      browser()->GetProfile(), std::move(fake_embed_request_param), bad_app);
   bad_app_obs.Wait();
   EXPECT_FALSE(bad_app_obs.did_exit_normally());
   // Now ask the guest to continue embedding.
   ContinueEmbedding(guest_app, true);
+}
+
+IN_PROC_BROWSER_TEST_P(AppViewTest, NoCrossProfilePendingRequestCollision) {
+  // Existing test utilities don't handle opening apps in other profiles. For
+  // ease of testing, we simulate an app making an embed request in another
+  // profile and leaving it pending.
+  const base::UnguessableToken other_profile_token =
+      base::UnguessableToken::Create();
+  const int colliding_id = 1;
+  extensions::AppViewGuest::AddFakePendingRequestForTesting(other_profile_token,
+                                                            colliding_id);
+
+  // Now in the original profile, embed an app normally.
+  const extensions::Extension* host_app =
+      LoadAndLaunchPlatformApp("app_view/host_app", "AppViewTest.LAUNCHED");
+  const extensions::Extension* guest_app =
+      InstallPlatformApp("app_view/guest_app");
+
+  ExtensionTestMessageListener on_embed_requested_listener(
+      "AppViewTest.EmbedRequested");
+  ASSERT_TRUE(content::ExecJs(
+      extensions::AppWindowRegistry::Get(browser()->GetProfile())
+          ->GetCurrentAppWindowForApp(host_app->id())
+          ->web_contents(),
+      content::JsReplace("onAppCommand($1, $2);", "EMBED", guest_app->id())));
+  ASSERT_TRUE(on_embed_requested_listener.WaitUntilSatisfied());
+  EXPECT_EQ(
+      2u,
+      extensions::AppViewGuest::GetAllRegisteredInstanceIdsForTesting().size());
+
+  ContinueEmbedding(guest_app, true);
+
+  guest_view::GuestViewBase* guest =
+      test_guest_view_manager()->WaitForSingleGuestViewCreated();
+  EXPECT_EQ(browser()->GetProfile(), guest->browser_context());
+  EXPECT_TRUE(test_guest_view_manager()->WaitUntilAttachedAndLoaded(guest));
+
+  EXPECT_EQ(
+      1u,
+      extensions::AppViewGuest::GetAllRegisteredInstanceIdsForTesting().size());
 }
 
 // Load an AppView which loads a WebView with a text field. The embedding app
@@ -324,9 +364,7 @@ IN_PROC_BROWSER_TEST_P(AppViewTest, FocusWebViewInAppView) {
     return !!webview_guest;
   })) << "Timeout waiting for webview focus";
 
-  content::SimulateKeyPress(embedder_web_contents,
-                            ui::DomKey::FromCharacter('F'), ui::DomCode::US_F,
-                            ui::VKEY_F, false, false, false, false);
+  content::SimulateCharTyped(embedder_web_contents, 'F');
   EXPECT_TRUE(
       content::ExecJs(webview_guest->GetGuestMainFrame(), "waitForInput();"));
 }

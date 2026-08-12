@@ -8,8 +8,9 @@
 #include <utility>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
 #include "base/task/single_thread_task_runner.h"
 #include "pdf/pdfium/pdfium_searchify.h"
 
@@ -114,7 +115,7 @@ bool PDFiumOnDemandSearchifier::IsPageScheduled(uint32_t page_index) const {
     return true;
   }
 
-  return base::Contains(pages_queue_, page_index);
+  return std::ranges::contains(pages_queue_, page_index);
 }
 
 void PDFiumOnDemandSearchifier::SchedulePage(uint32_t page_index) {
@@ -210,8 +211,8 @@ void PDFiumOnDemandSearchifier::CommitResultsToPage() {
   }
 
   if (!current_page_ocr_results_.empty()) {
-    // If the page is being painted or cannot be unloaded, wait.
-    if (!current_page_->PageCanBeUnloaded() ||
+    // Wait if the text page cannot be reloaded, or the page is being painted.
+    if (!current_page_->CanReloadTextPage() ||
         engine_->IsPageScheduledForPaint(current_page_->index())) {
       if (state_ == State::kWaitingForResults) {
         state_ = State::kWaitingForPageAvailability;

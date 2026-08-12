@@ -49,12 +49,12 @@ void PageNodeImplDescriber::OnTakenFromGraph(Graph* graph) {
   graph->GetNodeDataDescriberRegistry()->UnregisterDescriber(this);
 }
 
-base::Value::Dict PageNodeImplDescriber::DescribePageNodeData(
+base::DictValue PageNodeImplDescriber::DescribePageNodeData(
     const PageNode* page_node) const {
   const PageNodeImpl* page_node_impl = PageNodeImpl::FromNode(page_node);
   DCHECK_CALLED_ON_VALID_SEQUENCE(page_node_impl->sequence_checker_);
 
-  base::Value::Dict result;
+  base::DictValue result;
 
   result.Set("visibility_change_time",
              TimeDeltaFromNowToValue(page_node_impl->visibility_change_time_));
@@ -72,7 +72,8 @@ base::Value::Dict PageNodeImplDescriber::DescribePageNodeData(
   result.Set("navigation_id",
              base::NumberToString(page_node_impl->navigation_id_));
   result.Set("contents_mime_type", page_node_impl->contents_mime_type_);
-  result.Set("browser_context_id", page_node_impl->browser_context_id_);
+  result.Set("browser_context_id",
+             page_node_impl->browser_context_id_.ToString());
   result.Set("type", PageNode::ToString(page_node_impl->type_.value()));
   result.Set("is_visible", page_node_impl->is_visible_.value());
   result.Set("is_audible", page_node_impl->is_audible_.value());
@@ -94,7 +95,7 @@ base::Value::Dict PageNodeImplDescriber::DescribePageNodeData(
   result.Set("resource_context",
              page_node_impl->GetResourceContext().ToString());
 
-  base::Value::Dict estimates;
+  base::DictValue estimates;
   estimates.Set("private_footprint_kb",
                 base::NumberToString(
                     page_node_impl->EstimatePrivateFootprintSize().InKiB()));

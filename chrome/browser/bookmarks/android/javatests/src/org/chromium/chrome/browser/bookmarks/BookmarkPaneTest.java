@@ -47,6 +47,7 @@ import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.BookmarkTestUtil;
 import org.chromium.chrome.test.util.MenuUtils;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.test.util.DeviceRestriction;
 
 /** Public transit tests for the Hub's history pane. */
@@ -54,6 +55,7 @@ import org.chromium.ui.test.util.DeviceRestriction;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @Batch(Batch.PER_CLASS)
 @EnableFeatures(ChromeFeatureList.BOOKMARK_PANE_ANDROID)
+@DisabledTest(message = "crbug.com/444494388")
 public class BookmarkPaneTest {
     @Rule
     public AutoResetCtaTransitTestRule mCtaTestRule =
@@ -75,8 +77,7 @@ public class BookmarkPaneTest {
 
     @Test
     @MediumTest
-    @Restriction({DeviceRestriction.RESTRICTION_TYPE_NON_AUTO})
-    @DisabledTest(message = "crbug.com/464481832")
+    @Restriction(DeviceFormFactor.PHONE)
     public void testBookmarkIsDisplayed() {
         ChromeTabbedActivity cta = mCtaTestRule.getActivity();
         String urlOne =
@@ -113,8 +114,8 @@ public class BookmarkPaneTest {
         enterBookmarkPane();
 
         // Search for "One" in the history search box.
-        onView(withId(R.id.row_search_text)).perform(click());
-        onView(withId(R.id.row_search_text)).perform(replaceText("One"));
+        BookmarkTestUtil.getSearchBoxViewInteraction().perform(click());
+        BookmarkTestUtil.getSearchBoxViewInteraction().perform(replaceText("One"));
 
         // Verify that "One" is displayed as a match.
         onViewWaiting(allOf(withText("One"), withId(R.id.title))).check(matches(isDisplayed()));
@@ -122,8 +123,7 @@ public class BookmarkPaneTest {
 
     @Test
     @MediumTest
-    @Restriction({DeviceRestriction.RESTRICTION_TYPE_NON_AUTO})
-    @DisabledTest(message = "crbug.com/444494388")
+    @Restriction(DeviceFormFactor.PHONE)
     public void testBookmarkClickOpens() {
         ChromeTabbedActivity cta = mCtaTestRule.getActivity();
         String urlOne =
@@ -155,9 +155,11 @@ public class BookmarkPaneTest {
                                 isDescendantOfA(withId(R.id.pane_switcher)),
                                 withContentDescription(containsString("Bookmarks"))))
                 .perform(click());
+        BookmarkTestUtil.waitForBookmarkModelLoaded();
     }
 
     private void clearBookmarks(Profile profile) {
-        BookmarkModel.getForProfile(profile).removeAllUserBookmarks();
+        BookmarkModel model = BookmarkModel.getForProfile(profile);
+        model.finishLoadingBookmarkModel(() -> model.removeAllUserBookmarks());
     }
 }

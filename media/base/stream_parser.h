@@ -80,6 +80,7 @@ class MEDIA_EXPORT StreamParser {
     // tracks may be selected for use by the parser.
     int detected_audio_track_count = 0;
     int detected_video_track_count = 0;
+    int detected_metadata_track_count = 0;
   };
 
   // Indicates completion of parser initialization.
@@ -142,6 +143,10 @@ class MEDIA_EXPORT StreamParser {
   // method does not need to invoke the EndMediaSegmentCB since the parser reset
   // algorithm already resets the segment parsing state.
   virtual void Flush() = 0;
+
+  // Called when the source buffer is marked as end-of-stream.
+  // Allows the parser to drain/emit any remaining delayed frames.
+  virtual void MarkEndOfStream() {}
 
   // Returns the MSE byte stream format registry's "Generate Timestamps Flag"
   // for the byte stream corresponding to this parser.

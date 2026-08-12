@@ -43,15 +43,18 @@ export function setupEnhancedProtectionMessage() {
       });
     }
   }
-  enhancedProtectionMessage.classList.remove('hidden');
 
-  const billing =
-      interstitialType === 'SAFEBROWSING' && loadTimeData.getBoolean('billing');
+  if (enhancedProtectionMessage) {
+    enhancedProtectionMessage.classList.remove('hidden');
 
-  let className = 'ssl-enhanced-protection-message';
-  if (interstitialType === 'SAFEBROWSING' && !billing) {
-    className = 'safe-browsing-enhanced-protection-message';
+    const billing = interstitialType === 'SAFEBROWSING' &&
+        loadTimeData.getBoolean('billing');
+
+    let className = 'ssl-enhanced-protection-message';
+    if (interstitialType === 'SAFEBROWSING' && !billing) {
+      className = 'safe-browsing-enhanced-protection-message';
+    }
+
+    enhancedProtectionMessage.classList.add(className);
   }
-
-  enhancedProtectionMessage.classList.add(className);
 }

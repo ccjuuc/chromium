@@ -19,7 +19,6 @@
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "components/policy/policy_export.h"
-#include "components/prefs/pref_change_registrar.h"
 #include "components/url_matcher/url_matcher.h"
 #include "components/url_matcher/url_util.h"
 #include "url/gurl.h"
@@ -57,16 +56,18 @@ class POLICY_EXPORT URLBlocklist {
   // URLs matching one of the |filters| will be blocked. The filter format is
   // documented at
   // http://www.chromium.org/administrators/url-blocklist-filter-format.
-  void Block(const base::Value::List& filters);
+  void Block(const base::ListValue& filters);
 
   // URLs matching one of the |filters| will be allowed. If a URL is both
   // blocked and allowed, allow takes precedence.
-  void Allow(const base::Value::List& filters);
+  void Allow(const base::ListValue& filters);
 
   // Returns true if the URL is blocked.
   bool IsURLBlocked(const GURL& url) const;
 
   URLBlocklistState GetURLBlocklistState(const GURL& url) const;
+
+  void SetDowngradeAllowlistWildcardToNeutral(bool downgrade);
 
  private:
   // Returns the highest priority filter in `filters_` matching the given URL,
@@ -74,6 +75,7 @@ class POLICY_EXPORT URLBlocklist {
   const url_matcher::util::FilterComponents* GetHighestPriorityFilterFor(
       const GURL& url) const;
 
+  bool downgrade_allowlist_wildcard_to_neutral_ = true;
   base::MatcherStringPattern::ID id_ = 0;
   std::map<base::MatcherStringPattern::ID, url_matcher::util::FilterComponents>
       filters_;
@@ -88,10 +90,19 @@ class BlocklistSource {
 
   // Returns the blocklist which can contains URLs, domain/subdomains and
   // schemes.
-  virtual const base::Value::List* GetBlocklistSpec() const = 0;
+  virtual const base::ListValue* GetBlocklistSpec() const = 0;
 
   // Returns exceptions to the blocklist.
-  virtual const base::Value::List* GetAllowlistSpec() const = 0;
+  virtual const base::ListValue* GetAllowlistSpec() const = 0;
+
+  // Returns true if matching level of allowlist wildcard '*' is downgraded to
+  // neutral.
+  //
+  // By default, setting '*' to URLAllowlist policy is considered a no-op.
+  // However, some callers of URLBlocklist (e.g. OnTaskBlocklist) rely on its
+  // old behavior. Provide a way to control when `BlocklistSource` is
+  // overridden.
+  virtual bool DowngradeAllowlistWildcardToNeutral() const = 0;
 
   // Adds an observer that will be called when the blocklist changes.
   virtual void SetBlocklistObserver(base::RepeatingClosure observer) = 0;

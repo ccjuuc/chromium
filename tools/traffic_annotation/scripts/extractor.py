@@ -104,6 +104,7 @@ JAVA_LANGUAGE = Language(name='Java',
 LANGUAGE_MAPPING: Dict[str, Language] = {
     '.cc': CPP_LANGUAGE,
     '.mm': CPP_LANGUAGE,
+    '.h': CPP_LANGUAGE,
     '.java': JAVA_LANGUAGE,
 }
 
@@ -325,6 +326,11 @@ def extract_annotations(file_path: Path, contents: str) -> List[Annotation]:
 
 
 def main():
+  # Ensure consistent LF line endings on all platforms, so that the output is
+  # the same regardless of whether this runs on Windows or Linux.
+  sys.stdout.reconfigure(newline='\n')
+  sys.stderr.reconfigure(newline='\n')
+
   parser = argparse.ArgumentParser()
   parser.add_argument('--options-file',
                       type=Path,

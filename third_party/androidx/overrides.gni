@@ -16,7 +16,8 @@ template("define_override_androidx_targets") {
       "//third_party/androidx:*",
     ]
 
-    # AndroidVectorResources has no local modifications but is an internal class so must be compiled again.
+    # AndroidVectorResources has no local modifications but is an internal class
+    # so must be compiled again.
     sources = [
       "local_modifications/compose_ui/java/androidx/compose/ui/graphics/vector/compat/AndroidVectorResources.android.kt",
       "local_modifications/compose_ui/java/androidx/compose/ui/graphics/vector/compat/XmlVectorParser.android.kt",
@@ -50,6 +51,7 @@ template("define_override_androidx_targets") {
   }
 
   android_library("core_overrides_java") {
+    chromium_code = false
     resources_package = "androidx.core"
     visibility = [
       ":*",
@@ -78,6 +80,7 @@ template("define_override_androidx_targets") {
   }
 
   android_library("androidx_recyclerview_recyclerview_overrides_java") {
+    chromium_code = false
     resources_package = "androidx.recyclerview"
     sources = [
       "local_modifications/recyclerview/java/org/chromium/ui/recyclerview/widget/ItemTouchHelper2.java",

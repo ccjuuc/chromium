@@ -11,17 +11,24 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/notreached.h"
 #include "base/time/time.h"
+#include "build/android_buildflags.h"
+#include "build/build_config.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node.h"
 #include "components/bookmarks/browser/bookmark_storage.h"
 #include "components/favicon_base/favicon_types.h"
+#include "components/os_crypt/async/browser/test_utils.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #include "ui/gfx/image/image.h"
 
 namespace bookmarks {
 
-TestBookmarkClient::TestBookmarkClient() = default;
+TestBookmarkClient::TestBookmarkClient(
+    os_crypt_async::OSCryptAsync* os_crypt_async)
+    : os_crypt_async_(os_crypt_async) {}
 
 TestBookmarkClient::~TestBookmarkClient() = default;
 
@@ -86,7 +93,7 @@ bool TestBookmarkClient::HasFaviconLoadTasks() const {
 }
 
 void TestBookmarkClient::SetIsSyncFeatureEnabledIncludingBookmarks(bool value) {
-  is_sync_feature_enabled_including_bookmarks_for_uma = value;
+  is_sync_feature_enabled_including_bookmarks_ = value;
 }
 
 void TestBookmarkClient::SetAccountBookmarkSyncMetadataAndScheduleWrite(
@@ -106,7 +113,7 @@ LoadManagedNodeCallback TestBookmarkClient::GetLoadManagedNodeCallback() {
 }
 
 bool TestBookmarkClient::IsSyncFeatureEnabledIncludingBookmarks() {
-  return is_sync_feature_enabled_including_bookmarks_for_uma;
+  return is_sync_feature_enabled_including_bookmarks_;
 }
 
 bool TestBookmarkClient::CanSetPermanentNodeTitle(
@@ -116,6 +123,25 @@ bool TestBookmarkClient::CanSetPermanentNodeTitle(
 
 bool TestBookmarkClient::IsNodeManaged(const BookmarkNode* node) {
   return node && node->HasAncestor(unowned_managed_node_.get());
+}
+
+// static
+bool TestBookmarkClient::IsDesktopFormFactorByDefault() {
+// TODO(crbug.com/509156770): Replace this ifdef with a call to
+// DeviceInfo::is_desktop() once it returns the correct value for desktop
+// Android tests.
+#if BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_DESKTOP_ANDROID)
+  return false;
+#elif BUILDFLAG(IS_IOS)
+  return false;
+#else
+  return true;
+#endif
+}
+
+BookmarkFormFactor TestBookmarkClient::GetBookmarkFormFactor() {
+  return IsDesktopFormFactorByDefault() ? BookmarkFormFactor::kDesktop
+                                        : BookmarkFormFactor::kMobile;
 }
 
 std::string TestBookmarkClient::EncodeLocalOrSyncableBookmarkSyncMetadata() {
@@ -167,6 +193,17 @@ void TestBookmarkClient::SchedulePersistentTimerForDailyMetrics(
 
 void TestBookmarkClient::TriggerPersistentLogInterval() {
   metrics_callback_.Run();
+}
+
+void TestBookmarkClient::GetEncryptor(
+    base::OnceCallback<void(scoped_refptr<os_crypt_async::Encryptor> encryptor)>
+        callback) {
+  if (os_crypt_async_) {
+    os_crypt_async_->GetInstance(std::move(callback));
+  } else {
+    os_crypt_async::GetTestOSCryptAsyncForTesting()->GetInstance(
+        std::move(callback));
+  }
 }
 
 }  // namespace bookmarks

@@ -9,11 +9,10 @@
 #include <memory>
 #include <string>
 
-#include "base/containers/contains.h"
+#include "base/check.h"
 #include "base/containers/heap_array.h"
 #include "base/containers/span_writer.h"
 #include "base/hash/hash.h"
-#include "base/metrics/histogram_macros.h"
 #include "gpu/command_buffer/service/shader_manager.h"
 #include "third_party/angle/src/common/angle_version_info.h"
 
@@ -51,7 +50,7 @@ bool ProgramCache::HasSuccessfullyCompiledShader(
     const std::string& shader_signature) const {
   Hash sha;
   ComputeShaderHash(shader_signature, sha);
-  return base::Contains(compiled_shaders_, sha);
+  return compiled_shaders_.contains(sha);
 }
 
 ProgramCache::LinkedProgramStatus ProgramCache::GetLinkedProgramStatus(
@@ -183,21 +182,6 @@ void ProgramCache::ComputeProgramHash(
   CHECK(buffer.Write(base::byte_span_from_ref(transform_feedback_buffer_mode)));
   CHECK_EQ(buffer.remaining(), 0u);  // Verify the size was computed correctly.
   result = base::SHA1Hash(buffer_storage);
-}
-
-void ProgramCache::HandleMemoryPressure(
-    base::MemoryPressureLevel memory_pressure_level) {
-  if (memory_pressure_level == base::MEMORY_PRESSURE_LEVEL_NONE) {
-    return;
-  }
-
-  // Set a low limit on cache size for MEMORY_PRESSURE_LEVEL_MODERATE.
-  size_t limit = max_size_bytes_ / 4;
-  if (memory_pressure_level == base::MEMORY_PRESSURE_LEVEL_CRITICAL) {
-    limit = 0;
-  }
-
-  Trim(limit);
 }
 
 size_t ProgramCache::HashHasher::operator()(const Hash& hash) const {

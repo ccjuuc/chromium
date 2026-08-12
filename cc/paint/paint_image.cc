@@ -4,6 +4,8 @@
 
 #include "cc/paint/paint_image.h"
 
+#include <algorithm>
+#include <cmath>
 #include <memory>
 #include <sstream>
 #include <utility>
@@ -16,6 +18,7 @@
 #include "cc/paint/paint_image_generator.h"
 #include "cc/paint/paint_record.h"
 #include "cc/paint/skia_paint_image_generator.h"
+#include "cc/paint/texture_backing.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkCPURecorder.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
@@ -26,7 +29,10 @@
 #include "third_party/skia/include/core/SkSize.h"
 #include "third_party/skia/include/core/SkYUVAPixmaps.h"
 #include "third_party/skia/include/gpu/ganesh/GrBackendSurface.h"
+#include "third_party/skia/include/private/SkGainmapInfo.h"
+#include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/skia_conversions.h"
+#include "ui/gfx/hdr_metadata.h"
 
 namespace cc {
 namespace {
@@ -47,6 +53,13 @@ ImageHeaderMetadata::ImageHeaderMetadata(const ImageHeaderMetadata& other) =
 ImageHeaderMetadata& ImageHeaderMetadata::operator=(
     const ImageHeaderMetadata& other) = default;
 ImageHeaderMetadata::ImageHeaderMetadata::~ImageHeaderMetadata() = default;
+
+AnimatedImageFrameIndexMap::AnimatedImageFrameIndexMap() = default;
+AnimatedImageFrameIndexMap::AnimatedImageFrameIndexMap(
+    base::sorted_unique_t sorted_unique,
+    const std::vector<std::pair<int, size_t>>& entries)
+    : base::flat_map<int, size_t>(sorted_unique, entries) {}
+AnimatedImageFrameIndexMap::~AnimatedImageFrameIndexMap() = default;
 
 PaintImage::PaintImage() = default;
 PaintImage::PaintImage(const PaintImage& other) = default;
@@ -195,6 +208,17 @@ gpu::Mailbox PaintImage::GetMailbox() const {
   return texture_backing_->GetMailbox();
 }
 
+void PaintImage::BindTextureBacking(
+    scoped_refptr<TextureBackingContext> context) const {
+  DCHECK(texture_backing_);
+  texture_backing_->Bind(std::move(context));
+}
+
+void PaintImage::UnbindTextureBacking() const {
+  DCHECK(texture_backing_);
+  texture_backing_->Unbind();
+}
+
 const scoped_refptr<PaintWorkletInput> PaintImage::GetPaintWorkletInput()
     const {
   if (!IsPaintWorklet()) {
@@ -226,6 +250,10 @@ void PaintImage::CreateSkImage() {
         std::make_unique<SkiaPaintImageGenerator>(paint_image_generator_,
                                                   kDefaultFrameIndex,
                                                   kDefaultGeneratorClientId));
+    if (reinterpret_as_srgb_) {
+      cached_sk_image_ =
+          cached_sk_image_->reinterpretColorSpace(SkColorSpace::MakeSRGB());
+    }
   }
 }
 
@@ -482,6 +510,20 @@ std::string PaintImage::FrameKey::ToString() const {
   str << "content_id: " << content_id_ << ","
       << "frame_index: " << frame_index_;
   return str.str();
+}
+
+float PaintImage::GetMaximumRenderedHdrHeadroom() const {
+  if (HasGainmapInfo()) {
+    const SkGainmapInfo& gainmap_info = GetGainmapInfo();
+    float max_ratio = std::max({gainmap_info.fGainmapRatioMax[0],
+                                gainmap_info.fGainmapRatioMax[1],
+                                gainmap_info.fGainmapRatioMax[2]});
+    return std::log2(max_ratio);
+  }
+  if (color_space() && gfx::ColorSpace(*color_space()).IsHDR()) {
+    return std::log2(gfx::HdrMetadataExtendedRange::kDefaultHdrHeadroom);
+  }
+  return 0.0f;
 }
 
 }  // namespace cc

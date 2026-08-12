@@ -154,28 +154,10 @@ class TrackingProxyTaskRunner : public base::SingleThreadTaskRunner {
 
 void AddExtensionToDictionary(const std::string& extension_id,
                               const std::string& update_url,
-                              base::Value::Dict& dict) {
-  auto value = base::Value::Dict().Set(
+                              base::DictValue& dict) {
+  auto value = base::DictValue().Set(
       extensions::ExternalProviderImpl::kExternalUpdateUrl, update_url);
   dict.Set(extension_id, std::move(value));
-}
-
-base::Value::Dict CreateExtensionsDictionary(
-    std::initializer_list<std::string> extensions) {
-  base::Value::Dict result;
-
-  for (std::string extension_id : extensions) {
-    AddExtensionToDictionary(extension_id, "http://download.url", result);
-  }
-  return result;
-}
-
-std::vector<std::string> GetKeys(const base::Value::Dict& dict) {
-  std::vector<std::string> keys;
-  for (auto [key, _] : dict) {
-    keys.push_back(key);
-  }
-  return keys;
 }
 
 }  // namespace
@@ -235,16 +217,16 @@ void DeviceLocalAccountExternalCacheTest::SetUp() {
       base::MakeRefCounted<chromeos::DeviceLocalAccountExternalPolicyLoader>();
 
   external_cache_ = std::make_unique<DeviceLocalAccountExternalCache>(
-      /*ash_loader=*/
+      TestingBrowserProcess::GetGlobal()->shared_url_loader_factory(),
+      /*loader=*/
       base::BindRepeating(
           [](scoped_refptr<chromeos::DeviceLocalAccountExternalPolicyLoader>
                  loader,
-             const std::string&, base::Value::Dict cached_extensions) {
+             const std::string&, base::DictValue cached_extensions) {
             loader->OnExtensionListsUpdated(cached_extensions);
           },
           extension_loader_),
-      /*lacros_loader=*/
-      base::DoNothing(), kAccountId, cache_dir_);
+      kAccountId, cache_dir_);
   provider_ = std::make_unique<extensions::ExternalProviderImpl>(
       &visitor_, extension_loader_, profile, ManifestLocation::kExternalPolicy,
       ManifestLocation::kExternalPolicyDownload,
@@ -313,8 +295,7 @@ TEST_F(DeviceLocalAccountExternalCacheTest, ForceInstallListEmpty) {
   EXPECT_CALL(visitor_, OnExternalProviderReady(provider_.get())).Times(1);
   external_cache_->StartCache(
       base::SingleThreadTaskRunner::GetCurrentDefault());
-  external_cache_->UpdateExtensionsList(base::Value::Dict(),
-                                        base::Value::Dict());
+  external_cache_->UpdateExtensionsList(base::DictValue());
   base::RunLoop().RunUntilIdle();
   VerifyAndResetVisitorCallExpectations();
 
@@ -335,7 +316,7 @@ TEST_F(DeviceLocalAccountExternalCacheTest, ForceInstallListEmpty) {
 // extension.
 TEST_F(DeviceLocalAccountExternalCacheTest, ForceInstallListSet) {
   extensions::ExtensionUpdateFoundTestObserver extension_update_found_observer;
-  base::Value::Dict dict;
+  base::DictValue dict;
   AddExtensionToDictionary(kExtensionId,
                            extension_urls::GetWebstoreUpdateUrl().spec(), dict);
 
@@ -343,7 +324,7 @@ TEST_F(DeviceLocalAccountExternalCacheTest, ForceInstallListSet) {
   auto cache_task_runner = base::MakeRefCounted<TrackingProxyTaskRunner>(
       base::SingleThreadTaskRunner::GetCurrentDefault());
   external_cache_->StartCache(cache_task_runner);
-  external_cache_->UpdateExtensionsList(std::move(dict), base::Value::Dict());
+  external_cache_->UpdateExtensionsList(std::move(dict));
 
   // Spin the loop, allowing the loader to process the force-install list.
   // Verify that the loader announces an empty extension list.
@@ -384,39 +365,5 @@ TEST_F(DeviceLocalAccountExternalCacheTest, ForceInstallListSet) {
   EXPECT_FALSE(cache_task_runner->has_pending_tasks());
 }
 
-TEST_F(DeviceLocalAccountExternalCacheTest,
-       ShouldSeparateAshAndLacrosExtensions) {
-  base::Value::Dict ash_extension_prefs =
-      CreateExtensionsDictionary({"ash-extension", "shared-extension"});
-  base::Value::Dict lacros_extension_prefs =
-      CreateExtensionsDictionary({"lacros-extension", "shared-extension"});
-
-  base::test::TestFuture<const std::string&, base::Value::Dict> ash_loader;
-  base::test::TestFuture<const std::string&, base::Value::Dict> lacros_loader;
-
-  DeviceLocalAccountExternalCache cache{ash_loader.GetRepeatingCallback(),
-                                        lacros_loader.GetRepeatingCallback(),
-                                        "<the-user-id>", cache_dir_};
-
-  cache.UpdateExtensionsList(ash_extension_prefs.Clone(),
-                             lacros_extension_prefs.Clone());
-
-  // Pretend the extensions have been downloaded by the cache.
-  cache.SetCacheResponseForTesting(CreateExtensionsDictionary(
-      {"ash-extension", "lacros-extension", "shared-extension"}));
-
-  auto [user_id_sent_to_ash, extensions_sent_to_ash] = ash_loader.Take();
-  EXPECT_EQ(user_id_sent_to_ash, "<the-user-id>");
-  EXPECT_THAT(
-      GetKeys(extensions_sent_to_ash),
-      ::testing::UnorderedElementsAre("ash-extension", "shared-extension"));
-
-  auto [user_id_sent_to_lacros, extensions_sent_to_lacros] =
-      lacros_loader.Take();
-  EXPECT_EQ(user_id_sent_to_lacros, "<the-user-id>");
-  EXPECT_THAT(
-      GetKeys(extensions_sent_to_lacros),
-      ::testing::UnorderedElementsAre("lacros-extension", "shared-extension"));
-}
 
 }  // namespace chromeos

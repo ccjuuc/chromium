@@ -21,8 +21,8 @@
 #include "base/trace_event/memory_allocator_dump_guid.h"
 #include "base/trace_event/memory_dump_provider.h"
 #include "base/types/pass_key.h"
+#include "components/services/storage/dom_storage/db_status.h"
 #include "components/services/storage/dom_storage/dom_storage_database.h"
-#include "storage/common/database/db_status.h"
 #include "third_party/leveldatabase/env_chromium.h"
 
 namespace base {
@@ -82,27 +82,26 @@ class DomStorageDatabaseLevelDB
   // fails when the version in the database is not supported.
   //
   // To create an in-memory database, provide an empty `directory`.
+  //
+  // When `write_tag_file` is true, writes the experimental tag file inside the
+  // (on-disk) database directory after a successful open. `Open()` fails if the
+  // tag cannot be written.
   static StatusOr<std::unique_ptr<DomStorageDatabaseLevelDB>> Open(
+      StorageType storage_type,
       const base::FilePath& directory,
-      const std::string& name,
       const std::optional<base::trace_event::MemoryAllocatorDumpGuid>&
           memory_dump_id,
       KeyView version_key,
       int64_t min_supported_version,
-      int64_t max_supported_version);
+      int64_t max_supported_version,
+      bool write_tag_file);
 
-  using StatusCallback = base::OnceCallback<void(DbStatus)>;
-
-  static void Destroy(
-      const base::FilePath& directory,
-      const std::string& name,
-      scoped_refptr<base::SequencedTaskRunner> blocking_task_runner,
-      StatusCallback callback);
+  static DbStatus Destroy(const base::FilePath& directory);
 
  private:
   DomStorageDatabaseLevelDB(
+      StorageType storage_type,
       const base::FilePath& directory,
-      const std::string& name,
       const std::optional<base::trace_event::MemoryAllocatorDumpGuid>&
           memory_dump_id);
 

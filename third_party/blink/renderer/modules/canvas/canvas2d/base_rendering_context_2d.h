@@ -14,6 +14,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/notreached.h"
 #include "base/time/time.h"
+#include "cc/paint/paint_record.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_canvas_fill_rule.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_image_smoothing_quality.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_rendering_context.h"
@@ -24,6 +25,7 @@
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/graphics/canvas_2d_color_params.h"
 #include "third_party/blink/renderer/platform/graphics/canvas_deferred_paint_record.h"
+#include "third_party/blink/renderer/platform/graphics/flush_reason.h"
 #include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/heap/forward.h"  // IWYU pragma: keep (blink::Visitor)
@@ -48,17 +50,13 @@ class Rect;
 class Vector2d;
 }  // namespace gfx
 
-namespace viz {
-class SharedImageFormat;
-}
-
 namespace blink {
 
-class Canvas2dGPUTransferOption;
+class Canvas2DResourceProvider;
+class Canvas2DBitmapProvider;
 class CanvasContextCreationAttributesCore;
 class CanvasRenderingContext2DSettings;
 class ExceptionState;
-class GPUTexture;
 class ImageData;
 class ImageDataSettings;
 class TextCluster;
@@ -71,7 +69,7 @@ class V8CanvasTextBaseline;
 class V8CanvasDirection;
 class V8CanvasFontKerning;
 class V8CanvasFontVariantCaps;
-class V8GPUTextureFormat;
+class V8UnionElementOrElementImage;
 enum class PredefinedColorSpace;
 
 class MODULES_EXPORT BaseRenderingContext2D : public CanvasRenderingContext,
@@ -95,14 +93,6 @@ class MODULES_EXPORT BaseRenderingContext2D : public CanvasRenderingContext,
   BaseRenderingContext2D& operator=(const BaseRenderingContext2D&) = delete;
 
   void ResetInternal() override;
-
-  base::ByteSize AllocatedBufferSize() const override {
-    auto* provider = GetResourceProvider();
-    if (provider) {
-      return provider->EstimatedSizeInBytes();
-    }
-    return base::ByteSize();
-  }
 
   CanvasRenderingContext2DSettings* getContextAttributes() const;
 
@@ -139,27 +129,8 @@ class MODULES_EXPORT BaseRenderingContext2D : public CanvasRenderingContext,
                     int dirty_height,
                     ExceptionState&);
 
-  // Transfers a canvas' existing back-buffer to a GPUTexture for use in a
-  // WebGPU pipeline. The canvas' image can be used as a texture, or the texture
-  // can be bound as a color attachment and modified. After its texture is
-  // transferred, the canvas will be reset into an empty, freshly-initialized
-  // state.
-  GPUTexture* transferToGPUTexture(const Canvas2dGPUTransferOption*,
-                                   ExceptionState& exception_state);
-
-  // Replaces the canvas' back-buffer texture with the passed-in GPUTexture.
-  // The GPUTexture immediately becomes inaccessible to WebGPU.
-  // A GPUValidationError will occur if the GPUTexture is used after
-  // `transferBackFromGPUTexture` is called.
-  void transferBackFromGPUTexture(ExceptionState& exception_state);
-
-  // Returns the format of the GPUTexture that `transferToGPUTexture` will
-  // return. This is useful if you need to create the WebGPU render pipeline
-  // before `transferToGPUTexture` is first called.
-  V8GPUTextureFormat getTextureFormat() const;
-
   virtual bool CanCreateResourceProvider() = 0;
-  virtual CanvasResourceProvider* GetOrCreateResourceProvider() = 0;
+  virtual bool InitializeResourceProvider() = 0;
 
   String lang() const;
   void setLang(const String&);
@@ -219,31 +190,64 @@ class MODULES_EXPORT BaseRenderingContext2D : public CanvasRenderingContext,
     return context_lost_mode_ != kNotLostContext;
   }
 
+  DOMMatrix* drawElementImage(const V8UnionElementOrElementImage* element,
+                              double dx,
+                              double dy,
+                              ExceptionState& exception_state);
+  DOMMatrix* drawElementImage(const V8UnionElementOrElementImage* element,
+                              double dx,
+                              double dy,
+                              double dwidth,
+                              double dheight,
+                              ExceptionState& exception_state);
+  DOMMatrix* drawElementImage(const V8UnionElementOrElementImage* element,
+                              double sx,
+                              double sy,
+                              double swidth,
+                              double sheight,
+                              double dx,
+                              double dy,
+                              ExceptionState& exception_state);
+  DOMMatrix* drawElementImage(const V8UnionElementOrElementImage* element,
+                              double sx,
+                              double sy,
+                              double swidth,
+                              double sheight,
+                              double dx,
+                              double dy,
+                              double dwidth,
+                              double dheight,
+                              ExceptionState& exception_state);
+
+  DOMMatrix* DrawElementInternal(const V8UnionElementOrElementImage* element,
+                                 std::optional<double> sx,
+                                 std::optional<double> sy,
+                                 std::optional<double> swidth,
+                                 std::optional<double> sheight,
+                                 double x,
+                                 double y,
+                                 std::optional<double> dwidth,
+                                 std::optional<double> dheight,
+                                 ExceptionState& exception_state);
+
+  scoped_refptr<const cc::AnimatedImageFrameIndexMap>
+  GetAnimatedImageFrameIndexMap(uint32_t id) const override;
+
   void Trace(Visitor*) const override;
 
   // Implementing methods from CanvasRenderingContext
-  SkAlphaType GetAlphaType() const final {
-    return color_params_.GetAlphaType();
-  }
-  viz::SharedImageFormat GetSharedImageFormat() const final {
-    return color_params_.GetSharedImageFormat();
-  }
-  gfx::ColorSpace GetColorSpace() const final {
-    return color_params_.GetGfxColorSpace();
+  bool IsOpaque() const final {
+    return color_params_.GetAlphaType() == kOpaque_SkAlphaType;
   }
   void DisableAccelerationForCanvas2D() final { DisableAcceleration(); }
-  bool Is2DCanvasAccelerated() const final;
   void PageVisibilityChanged() override {}
   void RestoreCanvasMatrixClipStack(cc::PaintCanvas* c) const final;
   void Reset() override;
-  scoped_refptr<StaticBitmapImage> PaintRenderingResultsToSnapshot(
-      SourceDrawingBuffer source_buffer) final;
+  void DidFlush() override;
 
   void SetRestoreFailedCallbackForTesting(base::RepeatingClosure callback) {
     on_restore_failed_callback_for_testing_ = std::move(callback);
   }
-
-  bool IsResourceProviderValid();
 
   HeapTaskRunnerTimer<BaseRenderingContext2D>
       dispatch_context_lost_event_timer_;
@@ -253,6 +257,11 @@ class MODULES_EXPORT BaseRenderingContext2D : public CanvasRenderingContext,
   unsigned try_restore_context_attempt_count_ = 0;
 
  protected:
+  std::optional<cc::PaintRecord> FlushCanvasInternal(
+      Canvas2DResourceProvider* shared_image_provider,
+      Canvas2DBitmapProvider* bitmap_provider,
+      FlushReason reason);
+
   explicit BaseRenderingContext2D(
       CanvasRenderingContextHost* canvas,
       const CanvasContextCreationAttributesCore& attrs,
@@ -282,9 +291,6 @@ class MODULES_EXPORT BaseRenderingContext2D : public CanvasRenderingContext,
   void TryRestoreContextEvent(TimerBase*);
   void RestoreFromInvalidSizeIfNeeded() override;
 
-  virtual std::unique_ptr<CanvasResourceProvider> ReplaceResourceProvider(
-      std::unique_ptr<CanvasResourceProvider>) = 0;
-
   static const char kInheritString[];
 
   // Override to prematurely disable acceleration because of a readback.
@@ -295,11 +301,15 @@ class MODULES_EXPORT BaseRenderingContext2D : public CanvasRenderingContext,
     return false;
   }
 
+  virtual void DidFlushRecording(const cc::PaintRecord& recording,
+                                 bool clear_frame,
+                                 FlushReason reason) {}
+
   bool context_restorable_{true};
+  Canvas2DColorParams color_params_;
 
  private:
   virtual bool IsHibernating() const { return false; }
-  virtual CanvasResourceProvider* GetResourceProvider() const { NOTREACHED(); }
   virtual void EnableAccelerationIfPossible() {}
   void DrawTextInternal(const String& text,
                         double x,
@@ -320,12 +330,9 @@ class MODULES_EXPORT BaseRenderingContext2D : public CanvasRenderingContext,
 
   int num_readbacks_performed_ = 0;
   unsigned read_count_ = 0;
-  Member<GPUTexture> webgpu_access_texture_ = nullptr;
-  std::unique_ptr<CanvasResourceProviderSharedImage>
-      resource_provider_from_webgpu_access_;
-  Canvas2DColorParams color_params_;
-  bool need_dispatch_context_restored_ = false;
   base::RepeatingClosure on_restore_failed_callback_for_testing_;
+  Vector<scoped_refptr<const cc::AnimatedImageFrameIndexMap>>
+      animated_image_frame_index_maps_;
 };
 
 }  // namespace blink

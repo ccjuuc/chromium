@@ -27,7 +27,8 @@ struct Frame {
 class MyXRMock : public MockXRDeviceHookBase {
  public:
   void ProcessSubmittedFrameUnlocked(
-      const std::vector<device::ViewData>& views) final;
+      const std::vector<device::ViewData>& views,
+      const std::vector<device::LayerData>& layers) final;
   void WaitGetDeviceConfig(
       device_test::mojom::XRTestHook::WaitGetDeviceConfigCallback callback)
       final {
@@ -62,7 +63,8 @@ uint32_t ParseColorFrameId(const device::Color& color) {
 }
 
 void MyXRMock::ProcessSubmittedFrameUnlocked(
-    const std::vector<device::ViewData>& views) {
+    const std::vector<device::ViewData>& views,
+    const std::vector<device::LayerData>& layers) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(mock_device_sequence_);
   base::AutoLock lock(frame_data_lock);
   // Since we clear the entire context to a single color, every view in the
@@ -178,11 +180,11 @@ WEBXR_VR_ALL_RUNTIMES_BROWSER_TEST_F(TestPresentationPoses) {
 
       // Validate that each frame is only seen once for each eye.
       DLOG(ERROR) << "Frame id: " << frame_id;
-      if (data.eye == device::XrEye::kLeft) {
+      if (data.eye == device::mojom::XREye::kLeft) {
         ASSERT_TRUE(seen_left.find(frame_id) == seen_left.end())
             << "Frame for left eye submitted more than once";
         seen_left.insert(frame_id);
-      } else if (data.eye == device::XrEye::kRight) {
+      } else if (data.eye == device::mojom::XREye::kRight) {
         ASSERT_TRUE(seen_right.find(frame_id) == seen_right.end())
             << "Frame for right eye submitted more than once";
         seen_right.insert(frame_id);

@@ -38,7 +38,6 @@
 #include "third_party/blink/renderer/core/layout/layout_video.h"
 #include "third_party/blink/renderer/core/resize_observer/resize_observer.h"
 #include "third_party/blink/renderer/core/resize_observer/resize_observer_entry.h"
-#include "ui/accessibility/accessibility_features.h"
 
 namespace blink {
 
@@ -118,17 +117,20 @@ void TextTrackContainer::ObserveSizeChanges(Element& element) {
 
 void TextTrackContainer::UpdateDefaultFontSize(
     LayoutObject* media_layout_object) {
-  if (!media_layout_object || !IsA<LayoutVideo>(media_layout_object))
+  const LayoutVideo* video = DynamicTo<LayoutVideo>(media_layout_object);
+  if (!video) {
     return;
+  }
   // FIXME: The video size is used to calculate the font size (a workaround
   // for lack of per-spec vh/vw support) but the whole media element is used
   // for cue rendering. This is inconsistent. See also the somewhat related
   // spec bug: https://www.w3.org/Bugs/Public/show_bug.cgi?id=28105
-  PhysicalSize video_size = To<LayoutBox>(media_layout_object)->ContentSize();
+  const PhysicalSize video_size = video->PhysicalContentBoxRect().size;
   LayoutUnit smallest_dimension = std::min(video_size.height, video_size.width);
   float font_size = smallest_dimension * 0.05f;
-  if (media_layout_object->GetFrame())
-    font_size /= media_layout_object->GetFrame()->LayoutZoomFactor();
+  if (const LocalFrame* frame = video->GetFrame()) {
+    font_size /= frame->LayoutZoomFactor();
+  }
 
   // Avoid excessive FP precision issue.
   // C11 5.2.4.2.2:9 requires assignment and cast to remove extra precision, but
@@ -211,10 +213,7 @@ void TextTrackContainer::UpdateDisplay(HTMLMediaElement& media_element,
     if (!cue->track() || !cue->track()->IsRendered() || !cue->IsActive())
       continue;
 
-    if (!cue->track()->IsSpokenKind()) {
-      cue->UpdateDisplay(*this);
-    }
-
+    cue->UpdateDisplay(*this);
     cue->UpdatePastAndFutureNodes(movie_time);
   }
 

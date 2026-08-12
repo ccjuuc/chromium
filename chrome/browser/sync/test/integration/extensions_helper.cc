@@ -48,7 +48,7 @@ bool AllProfilesHaveSameExtensions() {
 std::string InstallExtension(Profile* profile, int index) {
   return SyncExtensionHelper::GetInstance()->InstallExtension(
       profile, CreateFakeExtensionName(index),
-      extensions::Manifest::TYPE_EXTENSION);
+      extensions::Manifest::Type::kExtension);
 }
 
 std::string InstallExtensionForAllProfiles(int index) {
@@ -110,6 +110,11 @@ bool IsIncognitoEnabled(Profile* profile, int index) {
 
 void InstallExtensionsPendingForSync(Profile* profile) {
   SyncExtensionHelper::GetInstance()->InstallExtensionsPendingForSync(profile);
+}
+
+extensions::ExtensionId GetExtensionId(int index) {
+  return SyncExtensionHelper::GetInstance()->GetExtensionId(
+      CreateFakeExtensionName(index));
 }
 
 }  // namespace extensions_helper

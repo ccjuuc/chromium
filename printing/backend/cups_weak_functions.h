@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifndef PRINTING_BACKEND_CUPS_WEAK_FUNCTIONS_H_
+#define PRINTING_BACKEND_CUPS_WEAK_FUNCTIONS_H_
+
 #include <cups/ppd.h>
 
 #include "build/build_config.h"
@@ -16,8 +19,4 @@ static_assert(BUILDFLAG(IS_LINUX));
 
 WEAK_CUPS_FN(httpConnect2);
 
-// These may be removed when Amazon Linux 2 reaches EOL (30 Jun 2026).
-WEAK_CUPS_FN(cupsFindDestDefault);
-WEAK_CUPS_FN(cupsFindDestSupported);
-WEAK_CUPS_FN(cupsUserAgent);
-WEAK_CUPS_FN(ippValidateAttributes);
+#endif  // PRINTING_BACKEND_CUPS_WEAK_FUNCTIONS_H_

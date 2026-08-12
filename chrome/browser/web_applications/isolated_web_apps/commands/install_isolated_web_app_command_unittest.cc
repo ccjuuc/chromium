@@ -4,7 +4,6 @@
 
 #include "chrome/browser/web_applications/isolated_web_apps/commands/install_isolated_web_app_command.h"
 
-#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -33,14 +32,14 @@
 #include "base/types/expected.h"
 #include "base/version.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
-#include "chrome/browser/web_applications/isolated_web_apps/commands/isolated_web_app_install_command_helper.h"
 #include "chrome/browser/web_applications/isolated_web_apps/install/isolated_web_app_install_source.h"
-#include "chrome/browser/web_applications/isolated_web_apps/install/pending_install_info.h"
+#include "chrome/browser/web_applications/isolated_web_apps/install/non_installed_bundle_inspection_context.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_trust_checker.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/key_distribution/test_utils.h"
 #include "chrome/browser/web_applications/locks/lock.h"
+#include "chrome/browser/web_applications/model/web_app_icon_types.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
 #include "chrome/browser/web_applications/test/fake_web_contents_manager.h"
 #include "chrome/browser/web_applications/test/mock_data_retriever.h"
@@ -52,7 +51,6 @@
 #include "chrome/browser/web_applications/web_app_constants.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
-#include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_install_utils.h"
 #include "chrome/browser/web_applications/web_app_management_type.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
@@ -191,7 +189,7 @@ class InstallIsolatedWebAppCommandTest : public WebAppTest {
 
     auto& icon_state = web_contents_manager().GetOrCreateIconState(
         application_url.Resolve(kIconPath));
-    icon_state.bitmaps = {web_app::CreateSquareIcon(32, SK_ColorRED)};
+    icon_state.bitmaps = {CreateSquareIcon(32, SK_ColorRED)};
 
     return {page_state, icon_state};
   }
@@ -389,17 +387,11 @@ TEST_F(InstallIsolatedWebAppCommandTest, CommandLocksOnAppId) {
   base::test::TestFuture<base::expected<InstallIsolatedWebAppCommandSuccess,
                                         InstallIsolatedWebAppCommandError>>
       test_future;
-  auto command_helper = std::make_unique<IsolatedWebAppInstallCommandHelper>(
-      url_info, web_contents_manager().CreateDataRetriever());
-
   auto command = std::make_unique<InstallIsolatedWebAppCommand>(
       url_info, IsolatedWebAppInstallSource::FromDevUi(CreateDevProxySource()),
-      /*expected_version=*/std::nullopt,
-      content::WebContents::Create(
-          content::WebContents::CreateParams(profile())),
+      /*expected_version=*/std::nullopt, *profile(),
       /*optional_keep_alive=*/nullptr,
-      /*optional_profile_keep_alive=*/nullptr, test_future.GetCallback(),
-      std::move(command_helper));
+      /*optional_profile_keep_alive=*/nullptr, test_future.GetCallback());
 
   EXPECT_THAT(
       command->InitialLockRequestForTesting(),
@@ -585,12 +577,12 @@ TEST_F(InstallIsolatedWebAppCommandManifestIconsTest,
 
   EXPECT_THAT(ExecuteCommand(Parameters{.url_info = url_info}), HasValue());
 
-  base::test::TestFuture<std::map<SquareSizePx, SkBitmap>> test_future;
+  base::test::TestFuture<OrderedSizeToBitmap> test_future;
   web_app_icon_manager().ReadIconAndResize(url_info.app_id(), IconPurpose::ANY,
                                            SquareSizePx{1},
                                            test_future.GetCallback());
 
-  std::map<SquareSizePx, SkBitmap> icon_bitmaps = test_future.Get();
+  OrderedSizeToBitmap icon_bitmaps = test_future.Get();
 
   EXPECT_THAT(icon_bitmaps,
               UnorderedElementsAre(Pair(_, ResultOf(
@@ -722,6 +714,52 @@ TEST_F(InstallIsolatedWebAppCommandTest,
   EXPECT_THAT(histogram_tester_.GetAllSamples("WebApp.Isolated.InstallError"),
               BucketsAre(base::Bucket(
                   /*IWAInstallError::kCantValidateManifest*/ 5, 1)));
+}
+
+TEST_F(InstallIsolatedWebAppCommandTest, UpdateManifestUrlIgnoredInDevMode) {
+  auto app =
+      IsolatedWebAppBuilder(ManifestBuilder().SetUpdateManifestUrl(GURL(
+                                "https://example.com/update_manifest.json")))
+          .BuildBundle(test::GetDefaultEd25519KeyPair());
+  auto install_source =
+      IsolatedWebAppInstallSource::FromDevUi(IwaSourceBundleDevModeWithFileOp(
+          app->path(), IwaSourceBundleDevFileOp::kCopy));
+  app->FakeInstallPageState(profile());
+  app->TrustSigningKey();
+  IsolatedWebAppUrlInfo url_info = CreateEd25519IsolatedWebAppUrlInfo();
+
+  EXPECT_THAT(ExecuteCommand(Parameters{.url_info = url_info,
+                                        .install_source = install_source}),
+              HasValue());
+
+  const WebApp* installed_app =
+      web_app_registrar().GetAppById(url_info.app_id());
+  EXPECT_NE(installed_app, nullptr);
+  EXPECT_EQ(installed_app->isolation_data()->update_manifest_url(),
+            std::nullopt);
+}
+
+TEST_F(InstallIsolatedWebAppCommandTest, UpdateManifestUrlSavedInProdMode) {
+  auto app =
+      IsolatedWebAppBuilder(ManifestBuilder().SetUpdateManifestUrl(GURL(
+                                "https://example.com/update_manifest.json")))
+          .BuildBundle(test::GetDefaultEd25519KeyPair());
+  auto install_source = IsolatedWebAppInstallSource::FromExternalPolicy(
+      IwaSourceBundleProdModeWithFileOp(app->path(),
+                                        IwaSourceBundleProdFileOp::kCopy));
+  app->FakeInstallPageState(profile());
+  app->TrustSigningKey();
+  IsolatedWebAppUrlInfo url_info = CreateEd25519IsolatedWebAppUrlInfo();
+
+  EXPECT_THAT(ExecuteCommand(Parameters{.url_info = url_info,
+                                        .install_source = install_source}),
+              HasValue());
+
+  const WebApp* installed_app =
+      web_app_registrar().GetAppById(url_info.app_id());
+  EXPECT_NE(installed_app, nullptr);
+  EXPECT_EQ(installed_app->isolation_data()->update_manifest_url(),
+            GURL("https://example.com/update_manifest.json"));
 }
 
 TEST_F(InstallIsolatedWebAppCommandTest, FailsWhenAppInstalledAlready) {

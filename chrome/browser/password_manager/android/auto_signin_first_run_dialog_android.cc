@@ -7,7 +7,7 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
-#include "chrome/browser/password_manager/password_manager_settings_service_factory.h"
+#include "chrome/browser/password_manager/factories/password_manager_settings_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/passwords/ui_utils.h"
 #include "chrome/grit/branded_strings.h"
@@ -93,7 +93,7 @@ void AutoSigninFirstRunDialogAndroid::OnTurnOffClicked(JNIEnv* env) {
   DCHECK(!profile->IsOffTheRecord());
   password_manager::PasswordManagerSettingsService* service =
       PasswordManagerSettingsServiceFactory::GetForProfile(profile);
-  // The service can be null if the password manger is not available, but there
+  // The service can be null if the password manager is not available, but there
   // shouldn't be any credential to auto-sign in with in that case.
   CHECK(service);
   service->TurnOffAutoSignIn();
@@ -101,15 +101,6 @@ void AutoSigninFirstRunDialogAndroid::OnTurnOffClicked(JNIEnv* env) {
 }
 
 void AutoSigninFirstRunDialogAndroid::CancelDialog(JNIEnv* env) {}
-
-void AutoSigninFirstRunDialogAndroid::OnLinkClicked(JNIEnv* env) {
-  web_contents_->OpenURL(
-      content::OpenURLParams(
-          GURL(password_manager::kPasswordManagerHelpCenterSmartLock),
-          content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-          ui::PAGE_TRANSITION_LINK, false /* is_renderer_initiated */),
-      /*navigation_handle_callback=*/{});
-}
 
 void AutoSigninFirstRunDialogAndroid::WebContentsDestroyed() {
   if (dialog_jobject_) {

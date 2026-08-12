@@ -28,13 +28,11 @@ class DesktopNativeWidgetAura;
 
 namespace ui {
 class LinuxUi;
-class NativeTheme;
 }  // namespace ui
 
 class BrowserDesktopWindowTreeHostLinux
     : public BrowserDesktopWindowTreeHost,
       public views::DesktopWindowTreeHostLinux,
-      ui::NativeThemeObserver,
       ui::DeviceScaleFactorObserver {
  public:
   BrowserDesktopWindowTreeHostLinux(
@@ -80,9 +78,6 @@ class BrowserDesktopWindowTreeHostLinux
   void CloseNow() override;
   void Show(ui::mojom::WindowShowState show_state,
             const gfx::Rect& restore_bounds) override;
-  bool SupportsMouseLock() override;
-  void LockMouse(aura::Window* window) override;
-  void UnlockMouse(aura::Window* window) override;
   void ClientDestroyedWidget() override;
 
   // ui::X11ExtensionDelegate:
@@ -112,8 +107,6 @@ class BrowserDesktopWindowTreeHostLinux
   std::unique_ptr<DbusAppmenu> dbus_appmenu_;
 #endif
 
-  base::ScopedObservation<ui::NativeTheme, ui::NativeThemeObserver>
-      theme_observation_{this};
   base::ScopedObservation<ui::LinuxUi, ui::DeviceScaleFactorObserver>
       scale_observation_{this};
 };

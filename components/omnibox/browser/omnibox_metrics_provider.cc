@@ -19,8 +19,11 @@
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_provider.h"
 #include "components/omnibox/browser/autocomplete_result.h"
+#include "components/omnibox/browser/cross_device_tab_provider.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/omnibox/browser/omnibox_log.h"
+#include "components/omnibox/common/logger.h"
+#include "components/omnibox/common/omnibox_metrics_utils.h"
 #include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
@@ -160,18 +163,19 @@ constexpr base::TimeDelta kDefaultTimeDelta = base::Milliseconds(-1);
 
 }  // namespace
 
-OmniboxMetricsProvider::OmniboxMetricsProvider() = default;
+OmniboxMetricsProvider::OmniboxMetricsProvider()
+    : subscription_(OmniboxEventGlobalTracker::GetInstance()->RegisterCallback(
+          base::BindRepeating(&OmniboxMetricsProvider::OnURLOpenedFromOmnibox,
+                              base::Unretained(this)))) {}
 
 OmniboxMetricsProvider::~OmniboxMetricsProvider() = default;
 
 void OmniboxMetricsProvider::OnRecordingEnabled() {
-  subscription_ = OmniboxEventGlobalTracker::GetInstance()->RegisterCallback(
-      base::BindRepeating(&OmniboxMetricsProvider::OnURLOpenedFromOmnibox,
-                          base::Unretained(this)));
+  metrics_recording_enabled_ = true;
 }
 
 void OmniboxMetricsProvider::OnRecordingDisabled() {
-  subscription_ = {};
+  metrics_recording_enabled_ = false;
 }
 
 void OmniboxMetricsProvider::ProvideCurrentSessionData(
@@ -263,6 +267,8 @@ OmniboxMetricsProvider::GetClientSummarizedResultType(
            ClientSummarizedResultType::kSearch},
           {OmniboxEventProto::Suggestion::HISTORY_EMBEDDINGS_ANSWER,
            ClientSummarizedResultType::kUrl},
+          {OmniboxEventProto::Suggestion::CROSS_DEVICE_TAB,
+           ClientSummarizedResultType::kUrl},
       });
 
   const auto it = kResultTypesToClientSummarizedResultTypes.find(type);
@@ -272,10 +278,22 @@ OmniboxMetricsProvider::GetClientSummarizedResultType(
 }
 
 void OmniboxMetricsProvider::OnURLOpenedFromOmnibox(OmniboxLog* log) {
-  RecordOmniboxEvent(*log);
-  RecordMetrics(*log);
-  RecordZeroPrefixPrecisionRecallUsage(*log);
-  RecordContextualSearchPrecisionRecallUsage(*log);
+  // Log search navigations to debug logs.
+  if (log && log->selection.line >= 0 &&
+      static_cast<size_t>(log->selection.line) < log->result->size()) {
+    const AutocompleteMatch& match = log->result->match_at(log->selection.line);
+    if (AutocompleteMatch::IsSearchType(match.type)) {
+      OMNIBOX_LOG("search_nav") << log->final_destination_url.spec();
+    }
+  }
+
+  // Record UMA/UKM metrics only when metrics recording is enabled.
+  if (metrics_recording_enabled_) {
+    RecordOmniboxEvent(*log);
+    RecordMetrics(*log);
+    RecordZeroPrefixPrecisionRecallUsage(*log);
+    RecordContextualSearchPrecisionRecallUsage(*log);
+  }
 }
 
 void OmniboxMetricsProvider::RecordOmniboxEvent(const OmniboxLog& log) {
@@ -400,6 +418,69 @@ void OmniboxMetricsProvider::RecordMetrics(const OmniboxLog& log) {
       "Omnibox.SuggestionUsed.ClientSummarizedResultType",
       client_summarized_result_type);
 
+  // Only log when an active tool or model is specified to avoid logging regular
+  // searches.
+  if (log.input_state.active_tool != omnibox::TOOL_MODE_UNSPECIFIED ||
+      log.input_state.active_model != omnibox::MODEL_MODE_UNSPECIFIED) {
+    bool has_non_trivial_match = false;
+    for (const auto& match : *log.result) {
+      if (!match.IsVerbatimType()) {
+        has_non_trivial_match = true;
+        break;
+      }
+    }
+
+    std::string tool_str = GetToolModeString(log.input_state.active_tool);
+    std::string model_str = GetModelModeString(log.input_state.active_model);
+
+    bool tool_specified =
+        log.input_state.active_tool != omnibox::TOOL_MODE_UNSPECIFIED;
+    bool model_specified =
+        log.input_state.active_model != omnibox::MODEL_MODE_UNSPECIFIED;
+
+    if (tool_specified) {
+      base::UmaHistogramBoolean(
+          base::StrCat(
+              {"Omnibox.NonTrivialSuggestions.Recall.ByToolType.", tool_str}),
+          has_non_trivial_match);
+    }
+    if (model_specified) {
+      base::UmaHistogramBoolean(
+          base::StrCat(
+              {"Omnibox.NonTrivialSuggestions.Recall.ByModel.", model_str}),
+          has_non_trivial_match);
+    }
+    if (tool_specified && model_specified) {
+      base::UmaHistogramBoolean(
+          base::StrCat({"Omnibox.NonTrivialSuggestions.Recall.ByToolType.",
+                        tool_str, ".ByModel.", model_str}),
+          has_non_trivial_match);
+    }
+
+    if (has_non_trivial_match) {
+      bool selected_non_trivial = !autocomplete_match.IsVerbatimType();
+
+      if (tool_specified) {
+        base::UmaHistogramBoolean(
+            base::StrCat({"Omnibox.NonTrivialSuggestions.Precision.ByToolType.",
+                          tool_str}),
+            selected_non_trivial);
+      }
+      if (model_specified) {
+        base::UmaHistogramBoolean(
+            base::StrCat({"Omnibox.NonTrivialSuggestions.Precision.ByModel.",
+                          model_str}),
+            selected_non_trivial);
+      }
+      if (tool_specified && model_specified) {
+        base::UmaHistogramBoolean(
+            base::StrCat({"Omnibox.NonTrivialSuggestions.Precision.ByToolType.",
+                          tool_str, ".ByModel.", model_str}),
+            selected_non_trivial);
+      }
+    }
+  }
+
   if (log.session->zero_prefix_search_suggestions_shown_in_session ||
       log.session->typed_search_suggestions_shown_in_session) {
     base::UmaHistogramEnumeration(
@@ -464,6 +545,8 @@ void OmniboxMetricsProvider::RecordMetrics(const OmniboxLog& log) {
                       page_context}),
         ClientSummarizedResultType::kUrl);
   }
+
+  CrossDeviceTabProvider::RecordInteractionMetrics(log);
 
   // Log UKM event.
   if (log.ukm_source_id == ukm::kInvalidSourceId) {

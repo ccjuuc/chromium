@@ -9,6 +9,7 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import android.content.Intent;
 
 import com.google.android.gms.cast.CastDevice;
+import com.google.android.gms.cast.MediaInfo;
 import com.google.android.gms.cast.MediaStatus;
 import com.google.android.gms.cast.framework.media.RemoteMediaClient;
 
@@ -59,7 +60,7 @@ public abstract class BaseNotificationController
 
     @Override
     public void onSessionEnded() {
-        MediaNotificationManager.clear(getNotificationId());
+        MediaNotificationManager.hideForAllTabs(getNotificationId());
         mNotificationBuilder = null;
     }
 
@@ -116,7 +117,7 @@ public abstract class BaseNotificationController
         RemoteMediaClient remoteMediaClient = mSessionController.getRemoteMediaClient();
         assumeNonNull(remoteMediaClient);
 
-        com.google.android.gms.cast.MediaInfo info = remoteMediaClient.getMediaInfo();
+        MediaInfo info = remoteMediaClient.getMediaInfo();
         if (info == null) return;
 
         com.google.android.gms.cast.MediaMetadata metadata = info.getMetadata();

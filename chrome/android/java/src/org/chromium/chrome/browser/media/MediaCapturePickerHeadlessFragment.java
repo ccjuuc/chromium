@@ -18,7 +18,6 @@ import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentActivity;
 import androidx.fragment.app.FragmentManager;
 
-import org.chromium.base.ApplicationStatus;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 
@@ -55,13 +54,9 @@ public class MediaCapturePickerHeadlessFragment extends Fragment {
 
     private MediaProjectionManager mMediaProjectionManager;
     private ActivityResultLauncher<Intent> mLauncher;
-    private @Nullable Delegate mNextDelegate;
+    /* package */ @Nullable Delegate mNextDelegate;
 
-    public static @Nullable MediaCapturePickerHeadlessFragment getInstanceForCurrentActivity() {
-        var activity = (FragmentActivity) ApplicationStatus.getLastTrackedFocusedActivity();
-        if (activity == null) {
-            return null;
-        }
+    public static MediaCapturePickerHeadlessFragment getInstance(FragmentActivity activity) {
         FragmentManager fragmentManager = activity.getSupportFragmentManager();
         var fragment =
                 (MediaCapturePickerHeadlessFragment)
@@ -100,14 +95,12 @@ public class MediaCapturePickerHeadlessFragment extends Fragment {
                             }
                             mNextDelegate = null;
                         });
-
-        // This fragment has no UI so we can retain it.
-        setRetainInstance(true);
     }
 
-    public void startAndroidCapturePrompt(Delegate delegate) {
+    public void startAndroidCapturePrompt(Delegate delegate, @Nullable Intent intent) {
         assert mNextDelegate == null;
         mNextDelegate = delegate;
-        mLauncher.launch(mMediaProjectionManager.createScreenCaptureIntent());
+        mLauncher.launch(
+                intent != null ? intent : mMediaProjectionManager.createScreenCaptureIntent());
     }
 }

@@ -12,7 +12,6 @@
 #include <string_view>
 #include <utility>
 
-#include "ash/webui/boca_receiver_app_ui/mojom/boca_receiver.mojom-data-view.h"
 #include "ash/webui/boca_receiver_app_ui/mojom/boca_receiver.mojom.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
@@ -415,7 +414,6 @@ TEST_F(BocaReceiverUntrustedPageHandlerTest, StartRequestedNoCodeThenWithCode) {
   url_loader_factory_.WaitForRequest(get_connection_url_);
   url_loader_factory_.SimulateResponseForPendingRequest(
       get_connection_url_.spec(), connection_info_no_code);
-  task_environment_.RunUntilIdle();
 
   url_loader_factory_.AddResponse(get_connection_url_.spec(),
                                   CreateConnectionInfo(kConnectionId));

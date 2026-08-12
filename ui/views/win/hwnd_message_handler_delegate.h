@@ -51,6 +51,12 @@ class VIEWS_EXPORT HWNDMessageHandlerDelegate {
   // will handle it or Chrome will custom draw it.
   virtual FrameMode GetFrameMode() const = 0;
 
+  // Shows the custom system menu at the given screen coordinates.
+  virtual void ShowCustomSystemMenu(const gfx::Point& screen_point) = 0;
+
+  // Returns true if the window uses the native system menu.
+  virtual bool UsesNativeSystemMenu() const = 0;
+
   // True if a frame should be drawn. This will return true for some windows
   // that don't have a visible frame. Those usually have the WS_POPUP style, for
   // which Windows will remove the frame automatically if the frame mode is
@@ -166,6 +172,9 @@ class VIEWS_EXPORT HWNDMessageHandlerDelegate {
   virtual void HandleBeginUserResize() = 0;
   virtual void HandleEndUserResize() = 0;
 
+  virtual void HandleBeginUserDrag() = 0;
+  virtual void HandleEndUserDrag() = 0;
+
   // Called when the window's position changed.
   virtual void HandleMove() = 0;
 
@@ -242,13 +251,6 @@ class VIEWS_EXPORT HWNDMessageHandlerDelegate {
   // Called when a gesture event is received. Returns true if the event was
   // handled by the delegate.
   virtual bool HandleGestureEvent(ui::GestureEvent* event) = 0;
-
-  // Called when the window size is about to change.
-  virtual void HandleWindowSizeChanging() = 0;
-
-  // Called after HandleWindowSizeChanging() when it's determined the window
-  // size didn't actually change.
-  virtual void HandleWindowSizeUnchanged() = 0;
 
   // Called when the window scale factor has changed.
   virtual void HandleWindowScaleFactorChanged(float window_scale_factor) = 0;

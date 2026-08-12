@@ -16,6 +16,7 @@
 #include "chrome/browser/ash/login/screens/mock_error_screen.h"
 #include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/browser/ash/login/wizard_context.h"
+#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
 #include "chrome/browser/ui/webui/ash/login/fake_update_required_screen_handler.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -58,10 +59,14 @@ class UpdateRequiredScreenUnitTest : public testing::Test {
     network_handler_test_helper_ = std::make_unique<NetworkHandlerTestHelper>();
     network_handler_test_helper_->AddDefaultProfiles();
 
-    mock_error_screen_ =
-        std::make_unique<MockErrorScreen>(mock_error_view_.AsWeakPtr());
+    mock_error_screen_ = std::make_unique<MockErrorScreen>(
+        TestingBrowserProcess::GetGlobal()->local_state(),
+        mock_error_view_.AsWeakPtr());
 
     update_required_screen_ = std::make_unique<UpdateRequiredScreen>(
+        TestingBrowserProcess::GetGlobal()
+            ->platform_part()
+            ->browser_policy_connector_ash(),
         fake_view_.get()->AsWeakPtr(), mock_error_screen_.get(),
         base::DoNothing());
 
@@ -113,7 +118,7 @@ TEST_F(UpdateRequiredScreenUnitTest, HandlesNoUpdate) {
   update_required_screen_->Show(wizard_context_.get());
   EXPECT_EQ(fake_view_->ui_state(),
             UpdateRequiredView::UPDATE_REQUIRED_MESSAGE);
-  base::Value::List args;
+  base::ListValue args;
   args.Append(kUserActionUpdateButtonClicked);
   update_required_screen_->HandleUserAction(args);
 
@@ -132,7 +137,7 @@ TEST_F(UpdateRequiredScreenUnitTest, HandlesUpdateExists) {
   update_required_screen_->Show(wizard_context_.get());
   EXPECT_EQ(fake_view_->ui_state(),
             UpdateRequiredView::UPDATE_REQUIRED_MESSAGE);
-  base::Value::List args;
+  base::ListValue args;
   args.Append(kUserActionUpdateButtonClicked);
   update_required_screen_->HandleUserAction(args);
 
@@ -163,7 +168,7 @@ TEST_F(UpdateRequiredScreenUnitTest, HandlesCellularPermissionNeeded) {
   EXPECT_EQ(fake_view_->ui_state(),
             UpdateRequiredView::UPDATE_REQUIRED_MESSAGE);
   {
-    base::Value::List args;
+    base::ListValue args;
     args.Append(kUserActionUpdateButtonClicked);
     update_required_screen_->HandleUserAction(args);
   }
@@ -178,7 +183,7 @@ TEST_F(UpdateRequiredScreenUnitTest, HandlesCellularPermissionNeeded) {
   SetUpdateEngineStatus(update_engine::Operation::NEED_PERMISSION_TO_UPDATE);
 
   {
-    base::Value::List args;
+    base::ListValue args;
     args.Append(kUserActionAcceptUpdateOverCellular);
     update_required_screen_->HandleUserAction(args);
   }

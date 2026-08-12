@@ -6,9 +6,13 @@
 
 #include <memory>
 
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/containers/circular_deque.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "base/notreached.h"
 #include "base/task/sequenced_task_runner.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "storage/browser/blob/blob_data_builder.h"
@@ -324,7 +328,7 @@ class FileTransportStrategy : public BlobTransportStrategy {
   void OnReply(BlobDataBuilder::FutureFile future_file,
                scoped_refptr<ShareableFileReference> file_reference,
                std::optional<base::Time> time_file_modified) {
-    if (!time_file_modified) {
+    if (!time_file_modified || time_file_modified->is_null()) {
       // Writing to the file failed in the renderer.
       std::move(result_callback_).Run(BlobStatus::ERR_FILE_WRITE_FAILED);
       return;
@@ -334,8 +338,9 @@ class FileTransportStrategy : public BlobTransportStrategy {
         future_file.Populate(std::move(file_reference), *time_file_modified);
     DCHECK(populate_result);
 
-    if (--num_unresolved_requests_ == 0)
+    if (--num_unresolved_requests_ == 0) {
       std::move(result_callback_).Run(BlobStatus::DONE);
+    }
   }
 
   const BlobStorageLimits limits_;

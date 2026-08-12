@@ -9,6 +9,59 @@
 #import "base/strings/sys_string_conversions.h"
 
 namespace overflow_menu {
+
+namespace {
+// Ingests overflow_menu::Destination `destination` and records the
+// corresponding UMA action based when it is displayed on NTP.
+void RecordUmaActionForDestinationOnNtp(Destination destination) {
+  switch (destination) {
+    case Destination::Bookmarks:
+      base::RecordAction(
+          base::UserMetricsAction("MobileMenuAllBookmarksOnNTP"));
+      break;
+    case Destination::History:
+      base::RecordAction(base::UserMetricsAction("MobileMenuHistoryOnNTP"));
+      break;
+    case Destination::ReadingList:
+      base::RecordAction(base::UserMetricsAction("MobileMenuReadingListOnNTP"));
+      break;
+    case Destination::Passwords:
+      base::RecordAction(base::UserMetricsAction("MobileMenuPasswordsOnNTP"));
+      break;
+    case Destination::PriceNotifications:
+      base::RecordAction(
+          base::UserMetricsAction("MobileMenuPriceNotificationsOnNTP"));
+      break;
+    case Destination::Downloads:
+      base::RecordAction(base::UserMetricsAction(
+          "MobileDownloadFolderUIShownFromToolsMenuOnNTP"));
+      break;
+    case Destination::RecentTabs:
+      base::RecordAction(base::UserMetricsAction("MobileMenuRecentTabsOnNTP"));
+      break;
+    case Destination::SiteInfo:
+      base::RecordAction(
+          base::UserMetricsAction("MobileMenuSiteInformationOnNTP"));
+      break;
+    case Destination::Settings:
+      base::RecordAction(base::UserMetricsAction("MobileMenuSettingsOnNTP"));
+      break;
+    case Destination::WhatsNew:
+      base::RecordAction(base::UserMetricsAction("MobileMenuWhatsNewOnNTP"));
+      break;
+    case overflow_menu::Destination::SpotlightDebugger:
+      // No need to log metrics for a debug-only feature.
+      break;
+    case overflow_menu::Destination::Cobalt:
+      // No need to log metrics yet.
+      break;
+    case overflow_menu::Destination::LevelUp:
+      // No need to log metrics yet.
+      break;
+  }
+}
+}  // namespace
+
 // WARNING - PLEASE READ: Sadly, we cannot switch over strings in C++, so be
 // very careful when updating this method to ensure all enums are accounted for.
 // LINT.IfChange(stringToDestination)
@@ -35,6 +88,10 @@ std::optional<Destination> DestinationForStringName(std::string destination) {
     return overflow_menu::Destination::WhatsNew;
   } else if (destination == "overflow_menu::Destination::SpotlightDebugger") {
     return overflow_menu::Destination::SpotlightDebugger;
+  } else if (destination == "overflow_menu::Destination::Cobalt") {
+    return overflow_menu::Destination::Cobalt;
+  } else if (destination == "overflow_menu::Destination::LevelUp") {
+    return overflow_menu::Destination::LevelUp;
   } else {
     return std::nullopt;
   }
@@ -68,6 +125,10 @@ std::string StringNameForDestination(Destination destination) {
       return "overflow_menu::Destination::WhatsNew";
     case overflow_menu::Destination::SpotlightDebugger:
       return "overflow_menu::Destination::SpotlightDebugger";
+    case overflow_menu::Destination::Cobalt:
+      return "overflow_menu::Destination::Cobalt";
+    case overflow_menu::Destination::LevelUp:
+      return "overflow_menu::Destination::LevelUp";
   }
 }
 // LINT.ThenChange(:stringToDestination)
@@ -118,13 +179,17 @@ std::optional<ActionType> ActionTypeForStringName(std::string action) {
     return overflow_menu::ActionType::AskBWG;
   } else if (action == "HideToolbars") {
     return overflow_menu::ActionType::HideToolbars;
-  } else if (action == "TabGroup") {
-    return overflow_menu::ActionType::TabGroup;
+  } else if (action == "ShareThisPage") {
+    return overflow_menu::ActionType::ShareThisPage;
+  } else if (action == "Identity") {
+    return overflow_menu::ActionType::Identity;
+  } else if (action == "CustomizeHomePage") {
+    return overflow_menu::ActionType::CustomizeHomePage;
   } else {
     return std::nullopt;
   }
 }
-// LINT.ThenChange(ios/chrome/browser/popup_menu/overflow_menu/public/overflow_menu_constants.cc:actionTypeToString)
+// LINT.ThenChange(/ios/chrome/browser/popup_menu/overflow_menu/public/overflow_menu_constants.cc:actionTypeToString)
 
 // LINT.IfChange(actionTypeToString)
 std::string StringNameForActionType(ActionType action) {
@@ -171,15 +236,27 @@ std::string StringNameForActionType(ActionType action) {
       return "AskBWG";
     case overflow_menu::ActionType::HideToolbars:
       return "HideToolbars";
-    case overflow_menu::ActionType::TabGroup:
-      return "TabGroup";
+    case overflow_menu::ActionType::TabGroupDeprecated:
+      NOTREACHED();
+    case overflow_menu::ActionType::ShareThisPage:
+      return "ShareThisPage";
+    case overflow_menu::ActionType::SigninDeprecated:
+      NOTREACHED();
+    case overflow_menu::ActionType::Identity:
+      return "Identity";
+    case overflow_menu::ActionType::CustomizeHomePage:
+      return "CustomizeHomePage";
   }
 }
-// LINT.ThenChange(ios/chrome/browser/popup_menu/overflow_menu/public/overflow_menu_constants.cc:stringToActionType)
+// LINT.ThenChange(/ios/chrome/browser/popup_menu/overflow_menu/public/overflow_menu_constants.cc:stringToActionType)
 
 // WARNING - PLEASE READ: Sadly, we cannot switch over strings in C++, so be
 // very careful when updating this method to ensure all enums are accounted for.
-void RecordUmaActionForDestination(Destination destination) {
+void RecordUmaActionForDestination(Destination destination, bool on_ntp) {
+  if (on_ntp) {
+    RecordUmaActionForDestinationOnNtp(destination);
+  }
+
   switch (destination) {
     case Destination::Bookmarks:
       base::RecordAction(base::UserMetricsAction("MobileMenuAllBookmarks"));
@@ -215,6 +292,12 @@ void RecordUmaActionForDestination(Destination destination) {
       break;
     case overflow_menu::Destination::SpotlightDebugger:
       // No need to log metrics for a debug-only feature.
+      break;
+    case overflow_menu::Destination::Cobalt:
+      // No need to log metrics yet.
+      break;
+    case overflow_menu::Destination::LevelUp:
+      // No need to log metrics yet.
       break;
   }
 }

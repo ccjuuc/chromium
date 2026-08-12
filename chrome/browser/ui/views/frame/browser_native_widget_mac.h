@@ -5,16 +5,27 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_NATIVE_WIDGET_MAC_H_
 #define CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_NATIVE_WIDGET_MAC_H_
 
+#include <optional>
+
+#include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/command_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/frame/browser_native_widget.h"
+#include "chrome/browser/ui/views/frame/glass_frame_service.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/mojom/window_show_state.mojom-forward.h"
+#include "ui/native_theme/native_theme.h"
 #include "ui/views/widget/native_widget_mac.h"
 
 class BrowserWidget;
 class BrowserView;
 @class BrowserWindowTouchBarController;
 @class BrowserWindowTouchBarViewsDelegate;
+namespace tabs {
+enum class VerticalTabStripCollapseState;
+class VerticalTabStripStateController;
+}  // namespace tabs
 
 ////////////////////////////////////////////////////////////////////////////////
 //  BrowserNativeWidgetMac is a NativeWidgetMac subclass that provides
@@ -39,6 +50,8 @@ class BrowserNativeWidgetMac : public views::NativeWidgetMac,
   void OnFocusWindowToolbar() override;
   void OnWindowFullscreenTransitionStart() override;
   void OnWindowFullscreenTransitionComplete() override;
+  void OnWindowWillStartLiveResize() override;
+  void OnWindowDidEndLiveResize() override;
   void OnWidgetDestroyed(views::Widget* widget) override;
 
   // Overridden from BrowserNativeWidget:
@@ -77,14 +90,42 @@ class BrowserNativeWidgetMac : public views::NativeWidgetMac,
       const remote_cocoa::mojom::CreateWindowParams* params) override;
   remote_cocoa::ApplicationHost* GetRemoteCocoaApplicationHost() override;
   void OnWindowInitialized() override;
+  void OnWidgetInitDone() override;
+  void OnWidgetThemeChanged(views::Widget* widget) override;
   void OnWindowDestroying(gfx::NativeWindow window) override;
+  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
 
   // Overridden from CommandObserver:
   void EnabledStateChangedForCommand(int id, bool enabled) override;
 
  private:
+  bool IsGlassEligible() const;
+  void UpdateGlassEligibility(bool is_glass_eligible);
+  void UpdateBackgroundGeometry();
+  void UpdateBackgroundColor();
+  std::optional<int> GetGlassFrameHeight() const;
+  std::optional<int> GetGlassFrameWidth() const;
+  void OnVerticalTabStripModeChanged(
+      tabs::VerticalTabStripStateController* controller);
+  void OnVerticalTabStripCollapseChanged(
+      tabs::VerticalTabStripCollapseState state);
+  void OnVerticalTabStripResizingChanged(bool is_resizing);
+
   raw_ptr<BrowserView> browser_view_;  // Weak. Our ClientView.
   BrowserWindowTouchBarViewsDelegate* __strong touch_bar_delegate_;
+  NSView* __strong background_view_;
+  NSView* __strong tint_view_;
+
+  std::optional<ui::NativeTheme::PreferredColorScheme>
+      last_preferred_color_scheme_;
+  std::optional<SkColor> last_theme_color_;
+  std::optional<bool> last_is_vertical_tabs_;
+  std::optional<bool> last_is_glass_eligible_;
+  bool is_window_live_resizing_ = false;
+  base::CallbackListSubscription vertical_tab_subscription_;
+  base::CallbackListSubscription vertical_tab_collapse_subscription_;
+  base::CallbackListSubscription vertical_tab_resizing_subscription_;
+  base::CallbackListSubscription glass_frame_service_subscription_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_NATIVE_WIDGET_MAC_H_

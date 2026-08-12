@@ -54,7 +54,6 @@
 #include "base/win/process_startup_helper.h"
 #include "base/win/win_util.h"
 #include "base/win/windows_version.h"
-#include "ui/base/win/atl_module.h"
 #include "ui/gfx/switches.h"
 #endif
 
@@ -137,31 +136,8 @@ void CommonSubprocessInit() {
 #if !defined(OFFICIAL_BUILD) && BUILDFLAG(IS_WIN)
   base::RouteStdioToConsole(false);
   LoadLibraryA("dbghelp.dll");
+  LoadLibraryA("msdia140.dll");
 #endif
-}
-
-void InitTimeTicksAtUnixEpoch() {
-  const auto* command_line = base::CommandLine::ForCurrentProcess();
-  if (!command_line->HasSwitch(switches::kTimeTicksAtUnixEpoch)) {
-    return;
-  }
-
-  std::string time_ticks_at_unix_epoch_as_string =
-      command_line->GetSwitchValueASCII(switches::kTimeTicksAtUnixEpoch);
-
-  int64_t time_ticks_at_unix_epoch_delta_micro;
-  if (!base::StringToInt64(time_ticks_at_unix_epoch_as_string,
-                           &time_ticks_at_unix_epoch_delta_micro)) {
-    return;
-  }
-
-  base::TimeDelta time_ticks_at_unix_epoch_delta =
-      base::Microseconds(time_ticks_at_unix_epoch_delta_micro);
-
-  base::TimeTicks time_ticks_at_unix_epoch =
-      base::TimeTicks() + time_ticks_at_unix_epoch_delta;
-
-  base::TimeTicks::SetSharedUnixEpoch(time_ticks_at_unix_epoch);
 }
 
 // Apply metadata to samples collected by the StackSamplingProfiler when tracing
@@ -246,7 +222,6 @@ NO_STACK_PROTECTOR int RunContentProcess(
 
 #if BUILDFLAG(IS_WIN)
     base::win::RegisterInvalidParamHandler();
-    ui::win::CreateATLModuleIfNeeded();
 #endif  // BUILDFLAG(IS_WIN)
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -270,8 +245,6 @@ NO_STACK_PROTECTOR int RunContentProcess(
 
     base::SetProcessTitleFromCommandLine(argv);
 #endif  // !BUILDFLAG(IS_ANDROID)
-
-    InitTimeTicksAtUnixEpoch();
 
 // On Android setlocale() is not supported, and we don't override the signal
 // handlers so we can get a stack trace when crashing.

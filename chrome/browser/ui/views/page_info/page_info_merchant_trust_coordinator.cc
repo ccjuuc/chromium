@@ -7,13 +7,9 @@
 #include <memory>
 
 #include "chrome/browser/ui/page_info/chrome_page_info_ui_delegate.h"
-#include "chrome/browser/ui/views/controls/page_switcher_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_merchant_trust_content_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_merchant_trust_controller.h"
-#include "components/page_info/core/page_info_types.h"
-#include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "ui/base/l10n/l10n_util.h"
 
 PageInfoMerchantTrustCoordinator::PageInfoMerchantTrustCoordinator(
     content::WebContents* web_contents)
@@ -39,7 +35,6 @@ void PageInfoMerchantTrustCoordinator::OnViewIsDeleting(
   controller_ = nullptr;
 }
 
-void PageInfoMerchantTrustCoordinator::OnBubbleOpened(
-    page_info::MerchantBubbleOpenReferrer referrer) {
-  controller_->MerchantBubbleOpened(referrer);
+void PageInfoMerchantTrustCoordinator::OnBubbleOpened() {
+  controller_->MerchantBubbleOpened();
 }

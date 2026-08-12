@@ -4,13 +4,13 @@
 
 #include "chrome/browser/ui/webui/print_preview/print_preview_ui.h"
 
+#include <algorithm>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/check.h"
 #include "base/containers/flat_map.h"
-#include "base/containers/id_map.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
@@ -23,6 +23,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "base/unguessable_token.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
@@ -30,7 +31,6 @@
 #include "chrome/browser/pdf/pdf_extension_util.h"
 #include "chrome/browser/printing/background_printing_manager.h"
 #include "chrome/browser/printing/pdf_nup_converter_client.h"
-#include "chrome/browser/printing/print_compositor_util.h"
 #include "chrome/browser/printing/print_job_manager.h"
 #include "chrome/browser/printing/print_preview_data_service.h"
 #include "chrome/browser/printing/print_preview_dialog_controller.h"
@@ -56,6 +56,7 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_data_source.h"
@@ -66,7 +67,9 @@
 #include "printing/nup_parameters.h"
 #include "printing/print_job_constants.h"
 #include "printing/printing_features.h"
+#include "printing/printing_utils.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
+#include "ui/accessibility/ax_tree_update.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/gfx/geometry/rect.h"
@@ -95,6 +98,12 @@ using content::WebContents;
 namespace printing {
 
 namespace {
+
+// TODO(crbug.com/518763216): Remove flag once it is fully rolled out.
+// Enables sending non-modifiable (PDF) documents to the print compositor.
+BASE_FEATURE(kPdfWatermarkPrintCompositor,
+             "PdfWatermarkPrintCompositor",
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 #if BUILDFLAG(IS_MAC)
 const char16_t kBasicPrintShortcut[] = u"(⌥⌘P)";
@@ -141,17 +150,12 @@ WebContents* GetInitiator(content::WebUI* web_ui) {
 }
 
 // Mapping from PrintPreviewUI ID to print preview request ID.
-using PrintPreviewRequestIdMap = base::flat_map<int, int>;
+using PrintPreviewRequestIdMap = base::flat_map<base::UnguessableToken, int>;
 
 PrintPreviewRequestIdMap& GetPrintPreviewRequestIdMap() {
   static base::NoDestructor<PrintPreviewRequestIdMap> map;
   return *map;
 }
-
-// PrintPreviewUI IDMap used to avoid exposing raw pointer addresses to WebUI.
-// Only accessed on the UI thread.
-base::LazyInstance<base::IDMap<PrintPreviewUI*>>::DestructorAtExit
-    g_print_preview_ui_id_map = LAZY_INSTANCE_INITIALIZER;
 
 void AddPrintPreviewStrings(content::WebUIDataSource* source) {
   static constexpr webui::LocalizedString kLocalizedStrings[] = {
@@ -321,7 +325,7 @@ void AddPrintPreviewStrings(content::WebUIDataSource* source) {
 #endif
 
   // Register strings for the PDF viewer, so that $i18n{} replacements work.
-  base::Value::Dict pdf_strings = pdf_extension_util::GetStrings(
+  base::DictValue pdf_strings = pdf_extension_util::GetStrings(
       pdf_extension_util::PdfViewerContext::kPrintPreview);
   source->AddLocalizedStrings(pdf_strings);
 }
@@ -401,6 +405,32 @@ PrintPreviewHandler* CreatePrintPreviewHandlers(content::WebUI* web_ui) {
   web_ui->AddMessageHandler(std::move(plural_string_handler));
 
   return handler_ptr;
+}
+
+// Checks if the print source is modifiable (HTML) or not (PDF).
+bool IsSourceModifiable(content::WebUI* web_ui) {
+  auto* dialog_controller = PrintPreviewDialogController::GetInstance();
+  CHECK(dialog_controller);
+  std::optional<bool> maybe_is_pdf =
+      dialog_controller->IsPrintingPdf(web_ui->GetWebContents());
+  CHECK(maybe_is_pdf.has_value());
+  return !maybe_is_pdf.value();
+}
+
+// Validates the metafile configuration.
+// If the compositor is active:
+// - Modifiable (HTML) content must NOT have a valid metafile parameter during
+//   the MetafileReadyForPrinting IPC because the document is composed
+//   page-by-page in prior IPCs.
+// - Non-modifiable (PDF) content MUST have a valid metafile because it is
+//   composed all at once before sending to the printer preview.
+bool IsValidMetafile(bool compositor_active,
+                     bool is_modifiable,
+                     bool has_valid_metafile) {
+  if (compositor_active) {
+    return has_valid_metafile != is_modifiable;
+  }
+  return has_valid_metafile;
 }
 
 }  // namespace
@@ -492,31 +522,30 @@ bool PrintPreviewUI::IsBound() const {
 void PrintPreviewUI::ClearPreviewUIId() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  if (!id_) {
+  if (id_.is_empty()) {
     return;
   }
 
   receiver_.reset();
-  PrintPreviewDataService::GetInstance()->RemoveEntry(*id_);
-  GetPrintPreviewRequestIdMap().erase(*id_);
-  g_print_preview_ui_id_map.Get().Remove(*id_);
-  id_.reset();
+  PrintPreviewDataService::GetInstance()->RemoveEntry(id_);
+  GetPrintPreviewRequestIdMap().erase(id_);
+  id_ = base::UnguessableToken();
 }
 
 scoped_refptr<base::RefCountedMemory>
 PrintPreviewUI::GetPrintPreviewDataForIndex(int index) const {
-  return PrintPreviewDataService::GetInstance()->GetDataEntry(*id_, index);
+  return PrintPreviewDataService::GetInstance()->GetDataEntry(id_, index);
 }
 
 void PrintPreviewUI::SetPrintPreviewDataForIndex(
     int index,
     scoped_refptr<base::RefCountedMemory> data) {
-  PrintPreviewDataService::GetInstance()->SetDataEntry(*id_, index,
+  PrintPreviewDataService::GetInstance()->SetDataEntry(id_, index,
                                                        std::move(data));
 }
 
 void PrintPreviewUI::ClearAllPreviewData() {
-  PrintPreviewDataService::GetInstance()->RemoveEntry(*id_);
+  PrintPreviewDataService::GetInstance()->RemoveEntry(id_);
 }
 
 void PrintPreviewUI::NotifyUIPreviewPageReady(
@@ -539,7 +568,7 @@ void PrintPreviewUI::NotifyUIPreviewPageReady(
   if (g_test_delegate) {
     g_test_delegate->DidRenderPreviewPage(web_ui()->GetWebContents());
   }
-  handler_->SendPagePreviewReady(base::checked_cast<int>(page_index), *id_,
+  handler_->SendPagePreviewReady(base::checked_cast<int>(page_index), id_,
                                  request_id);
 }
 
@@ -581,7 +610,7 @@ void PrintPreviewUI::NotifyUIPreviewDocumentReady(
 
   SetPrintPreviewDataForIndex(COMPLETE_PREVIEW_DOCUMENT_INDEX,
                               std::move(data_bytes));
-  handler_->OnPrintPreviewReady(*id_, request_id);
+  handler_->OnPrintPreviewReady(id_, request_id);
 }
 
 bool PrintPreviewUI::ShouldUseCompositor() const {
@@ -589,12 +618,11 @@ bool PrintPreviewUI::ShouldUseCompositor() const {
     return false;
   }
 
-  auto* dialog_controller = PrintPreviewDialogController::GetInstance();
-  CHECK(dialog_controller);
-  const mojom::RequestPrintPreviewParams* request_params =
-      dialog_controller->GetRequestParams(web_ui()->GetWebContents());
-  CHECK(request_params);
-  return request_params->is_modifiable;
+  if (base::FeatureList::IsEnabled(kPdfWatermarkPrintCompositor)) {
+    return true;
+  }
+
+  return IsSourceModifiable(web_ui());
 }
 
 void PrintPreviewUI::OnCompositePdfPageDone(
@@ -786,20 +814,20 @@ void PrintPreviewUI::AddPdfPageForNupConversion(
 
 // static
 bool PrintPreviewUI::ShouldCancelRequest(
-    const std::optional<int32_t>& preview_ui_id,
+    const base::UnguessableToken& preview_ui_id,
     int request_id) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  if (!preview_ui_id) {
+  if (preview_ui_id.is_empty()) {
     return true;
   }
 
   auto& map = GetPrintPreviewRequestIdMap();
-  auto it = map.find(*preview_ui_id);
+  auto it = map.find(preview_ui_id);
   return it == map.end() || request_id != it->second;
 }
 
-std::optional<int32_t> PrintPreviewUI::GetIDForPrintPreviewUI() const {
+base::UnguessableToken PrintPreviewUI::GetIDForPrintPreviewUI() const {
   return id_;
 }
 
@@ -838,7 +866,7 @@ void PrintPreviewUI::OnPrintPreviewRequest(int request_id) {
         "PrintPreview.InitializationTime",
         base::TimeTicks::Now() - initial_preview_start_time_);
   }
-  GetPrintPreviewRequestIdMap()[*id_] = request_id;
+  GetPrintPreviewRequestIdMap()[id_] = request_id;
 }
 
 void PrintPreviewUI::DidStartPreview(mojom::DidStartPreviewParamsPtr params,
@@ -892,17 +920,13 @@ void PrintPreviewUI::DidGetDefaultPageLayout(
   // Save printable_area_in_points information for N-up conversion.
   printable_area_ = ToEnclosedRect(printable_area_in_points);
 
-  if (page_layout_in_points->margin_top < 0 ||
-      page_layout_in_points->margin_left < 0 ||
-      page_layout_in_points->margin_bottom < 0 ||
-      page_layout_in_points->margin_right < 0 ||
-      page_layout_in_points->content_width < 0 ||
+  if (page_layout_in_points->content_width < 0 ||
       page_layout_in_points->content_height < 0) {
     // Even though it early returns here, it doesn't block printing the page.
     return;
   }
 
-  base::Value::Dict layout;
+  base::DictValue layout;
   layout.Set(kSettingMarginTop, page_layout_in_points->margin_top);
   layout.Set(kSettingMarginLeft, page_layout_in_points->margin_left);
   layout.Set(kSettingMarginBottom, page_layout_in_points->margin_bottom);
@@ -930,8 +954,8 @@ bool PrintPreviewUI::OnPendingPreviewPage(uint32_t page_index) {
 void PrintPreviewUI::OnCancelPendingPreviewRequest() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  if (id_) {
-    GetPrintPreviewRequestIdMap()[*id_] = -1;
+  if (!id_.is_empty()) {
+    GetPrintPreviewRequestIdMap()[id_] = -1;
   }
 }
 
@@ -1013,10 +1037,9 @@ void PrintPreviewUI::DidPrepareDocumentForPreview(int32_t document_cookie,
     return;
   }
 
-  PRINTER_LOG(EVENT) << "Compositing for document type "
-                     << GetCompositorDocumentType();
+  PRINTER_LOG(EVENT) << "Compositing for PDF document type";
   client->PrepareToCompositeDocument(
-      document_cookie, render_frame_host, GetCompositorDocumentType(),
+      document_cookie, *render_frame_host,
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
           base::BindOnce(&PrintPreviewUI::OnPrepareForDocumentToPdfDone,
                          weak_ptr_factory_.GetWeakPtr(), request_id),
@@ -1059,7 +1082,7 @@ void PrintPreviewUI::DidPreviewPage(mojom::DidPreviewPageParamsPtr params,
       return;
     }
 
-    // Use utility process to convert Skia metafile to PDF or XPS.
+    // Use utility process to convert Skia metafile to PDF.
     client->CompositePage(
         params->document_cookie, render_frame_host, content,
         mojo::WrapCallbackWithDefaultInvokeIfNotRun(
@@ -1082,15 +1105,13 @@ void PrintPreviewUI::MetafileReadyForPrinting(
   // Always try to stop the worker.
   StopWorker(params->document_cookie);
 
-  const bool composite_document_using_individual_pages = ShouldUseCompositor();
+  const bool use_compositor = ShouldUseCompositor();
+  const bool is_modifiable = IsSourceModifiable(web_ui());
   const base::ReadOnlySharedMemoryRegion& metafile =
       params->content->metafile_data_region;
 
-  // When the Print Compositor is active, the print document is composed from
-  // the individual pages, so |metafile| should be invalid.
-  // When it is inactive, the print document is composed from |metafile|.
-  // So if this comparison succeeds, that means the renderer sent bad data.
-  if (composite_document_using_individual_pages == metafile.IsValid()) {
+  // Validate that the metafile state matches expectations.
+  if (!IsValidMetafile(use_compositor, is_modifiable, metafile.IsValid())) {
     return;
   }
 
@@ -1099,7 +1120,7 @@ void PrintPreviewUI::MetafileReadyForPrinting(
     return;
   }
 
-  if (composite_document_using_individual_pages) {
+  if (use_compositor) {
     // Don't bother compositing if this request has been cancelled already.
     if (ShouldCancelRequest(id_, request_id)) {
       return;
@@ -1114,16 +1135,36 @@ void PrintPreviewUI::MetafileReadyForPrinting(
       return;
     }
 
-    // Page metafile is used to composite into the document at same time.
-    // Need to provide particulars of how many pages are required before
-    // document will be completed.
     auto* client = PrintCompositeClient::FromWebContents(web_contents);
-    client->FinishDocumentComposition(
-        params->document_cookie, params->expected_pages_count,
-        mojo::WrapCallbackWithDefaultInvokeIfNotRun(
-            std::move(callback),
-            mojom::PrintCompositor::Status::kCompositingFailure,
-            base::ReadOnlySharedMemoryRegion()));
+    auto wrapped_callback = mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+        std::move(callback),
+        mojom::PrintCompositor::Status::kCompositingFailure,
+        base::ReadOnlySharedMemoryRegion());
+
+    if (is_modifiable) {
+      // Page metafile is used to composite into the document at same time.
+      // Need to provide particulars of how many pages are required before
+      // document will be completed.
+      client->FinishDocumentComposition(
+          params->document_cookie, params->expected_pages_count,
+          std::move(wrapped_callback));
+    } else {
+      content::RenderFrameHost* render_frame_host =
+          PrintViewManager::FromWebContents(web_contents)->print_preview_rfh();
+      if (!render_frame_host) {
+        return;
+      }
+      if (!LooksLikePdf(
+              metafile
+                  .MapAt(0, std::min<size_t>(1024, metafile.GetSize()))
+                  .GetMemoryAsSpan<const uint8_t>())) {
+        return;
+      }
+      client->CompositeDocument(
+          params->document_cookie, *render_frame_host, *params->content,
+          /*is_pdf=*/true, ui::AXTreeUpdate(),
+          mojom::GenerateDocumentOutline::kNone, std::move(wrapped_callback));
+    }
   } else {
     NotifyUIPreviewDocumentReady(
         request_id,
@@ -1184,10 +1225,10 @@ void PrintPreviewUI::ClearAllPreviewDataForTest() {
 
 void PrintPreviewUI::SetPreviewUIId() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(!id_);
+  DCHECK(id_.is_empty());
 
-  id_ = g_print_preview_ui_id_map.Get().Add(this);
-  GetPrintPreviewRequestIdMap()[*id_] = -1;
+  id_ = base::UnguessableToken::Create();
+  GetPrintPreviewRequestIdMap()[id_] = -1;
 }
 
 }  // namespace printing

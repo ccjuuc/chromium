@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/location.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
@@ -23,8 +23,8 @@
 #include "content/public/browser/devtools_manager_delegate.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/test/navigation_simulator.h"
+#include "content/public/test/test_content_browser_client.h"
 #include "content/public/test/test_utils.h"
-#include "content/test/test_content_browser_client.h"
 #include "content/test/test_render_view_host.h"
 #include "content/test/test_web_contents.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -190,7 +190,7 @@ class TestExternalAgentDelegate : public DevToolsExternalAgentProxyDelegate {
   std::map<std::string, int> event_counter_;
 
   void recordEvent(const std::string& name) {
-    if (!base::Contains(event_counter_, name)) {
+    if (!std::ranges::contains(event_counter_, name)) {
       event_counter_[name] = 0;
     }
     event_counter_[name] = event_counter_[name] + 1;

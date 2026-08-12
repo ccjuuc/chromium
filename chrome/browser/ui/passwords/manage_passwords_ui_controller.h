@@ -15,7 +15,6 @@
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ui/autofill/bubble_controller_base.h"
-#include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/passwords/manage_passwords_state.h"
 #include "chrome/browser/ui/passwords/passwords_client_ui_delegate.h"
 #include "chrome/browser/ui/passwords/passwords_leak_dialog_delegate.h"
@@ -51,14 +50,18 @@ inline constexpr int kMaxNumberOfTimesBiometricAuthForFillingPromoWillBeShown =
     3;
 }
 
+namespace actions {
+class ActionItem;
+}
+
 class AccountChooserPrompt;
 class AutoSigninFirstRunPrompt;
 class CredentialLeakPrompt;
-class ManagePasswordsIconView;
 class CredentialLeakDialogController;
 class CredentialManagerDialogController;
 class PasswordBaseDialogController;
 class ManagePasswordsPageActionController;
+class ManagePasswordsAutoSigninToastDelegate;
 
 // Per-tab class to control the Omnibox password icon and bubble.
 class ManagePasswordsUIController
@@ -102,10 +105,11 @@ class ManagePasswordsUIController
   void OnAutomaticPasswordSave(
       std::unique_ptr<password_manager::PasswordFormManagerForUI> form_manager,
       bool is_update_confirmation) override;
+
   void OnPasswordAutofilled(
-      base::span<const password_manager::PasswordForm> password_forms,
+      base::span<const password_manager::StoredCredential> password_credentials,
       const url::Origin& origin,
-      base::span<const password_manager::PasswordForm> federated_matches)
+      base::span<const password_manager::StoredCredential> federated_matches)
       override;
   void OnCredentialLeak(
       password_manager::LeakedPasswordDetails details) override;
@@ -132,16 +136,11 @@ class ManagePasswordsUIController
       password_manager::PasswordStoreInterface* store,
       const password_manager::PasswordStoreChangeList& changes) override;
   void OnLoginsRetained(password_manager::PasswordStoreInterface* store,
-                        const std::vector<password_manager::PasswordForm>&
+                        const std::vector<password_manager::StoredCredential>&
                             retained_passwords) override;
-
-  // Set the state of the Omnibox icon, and possibly show the associated bubble
-  // without user interaction.
-  virtual void UpdateIconAndBubbleState(ManagePasswordsIconView* icon);
-
-  // Called if the password change flow finishes successfully. It ensures the
-  // correct state after the flow.
-  void OnPasswordChangeFinishedSuccessfully();
+  void OnErrorStateChanged(
+      password_manager::PasswordStoreInterface* store,
+      password_manager::ActionableError new_state) override;
 
   // True iff the bubble is to be opened automatically.
   bool IsAutomaticallyOpeningBubble() const {
@@ -211,6 +210,14 @@ class ManagePasswordsUIController
   void NavigateToPasswordChangeSettings() override;
   void OnMouseEntered() override;
   void OnMouseExited() override;
+  // Returns true if the only blocking error is a trusted vault error.
+  bool IsSavingBlockedByTrustedVaultError() const override;
+  // Ensures that the password will be saved after resolution of the trusted
+  // vault error (or saves the password immediately if the trusted vault error
+  // is already resolved).
+  void SavePasswordAfterTrustedVaultErrorResolution() override;
+  // Starts the UI flow that allows to fix the trusted vault error.
+  void StartTrustedVaultErrorResolutionFlow() override;
   // Skips user os level authentication during the life time of the returned
   // object. To be used in tests of flows that require user authentication.
   [[nodiscard]] std::unique_ptr<base::AutoReset<bool>>
@@ -234,15 +241,21 @@ class ManagePasswordsUIController
   void HideBubble(bool initiated_by_bubble_manager) override;
   void OnBubbleDiscarded() override {}
   bool CanBeReshown() const override;
+  bool ShouldReshowOnTabVisible() const override;
   autofill::BubbleType GetBubbleType() const override;
   bool IsShowingBubble() const override;
   bool IsMouseHovered() const override;
   base::WeakPtr<BubbleControllerBase> GetBubbleControllerBaseWeakPtr() override;
 
-  // Opens change password bubble and passes `username` and `new_password` that
-  // should be displayed on it.
+  // PasswordsLeakDialogDelegate:
+  void NavigateToPasswordCheckup(
+      password_manager::PasswordCheckReferrer referrer) override;
+  void OnLeakDialogHidden() override;
+  void OnPasswordChangeFinishedSuccessfully() override;
   void ShowChangePasswordBubble(const std::u16string& username,
-                                const std::u16string& new_password);
+                                const std::u16string& new_password) override;
+
+  void ShowAutoSignInToast();
 
  protected:
   explicit ManagePasswordsUIController(content::WebContents* web_contents);
@@ -260,11 +273,11 @@ class ManagePasswordsUIController
       actions::ActionItem* passwords_action_item);
 
   // Called to create the account chooser dialog. Mocked in tests.
-  virtual AccountChooserPrompt* CreateAccountChooser(
+  virtual std::unique_ptr<AccountChooserPrompt> CreateAccountChooser(
       CredentialManagerDialogController* controller);
 
-  // Called to create the account chooser dialog. Mocked in tests.
-  virtual AutoSigninFirstRunPrompt* CreateAutoSigninPrompt(
+  // Called to create the auto sign-in prompt dialog. Mocked in tests.
+  virtual std::unique_ptr<AutoSigninFirstRunPrompt> CreateAutoSigninPrompt(
       CredentialManagerDialogController* controller);
 
   // Called to create the credentials leaked dialog.
@@ -297,11 +310,6 @@ class ManagePasswordsUIController
   friend class content::WebContentsUserData<ManagePasswordsUIController>;
 
   void OnReauthCompleted();
-
-  // PasswordsLeakDialogDelegate:
-  void NavigateToPasswordCheckup(
-      password_manager::PasswordCheckReferrer referrer) override;
-  void OnLeakDialogHidden() override;
 
   enum class BubbleStatus {
     NOT_SHOWN,
@@ -386,8 +394,14 @@ class ManagePasswordsUIController
   // the `autofill::BubbleManager` queue.
   bool BubbleManagerHasPasswordBubbleInQueue() const;
 
+  // Called when the auto sign-in toast is closed.
+  void OnAutoSignInToastClosed();
+
   // Timeout in seconds for the manual fallback for saving.
   static int save_fallback_timeout_in_seconds_;
+
+  std::unique_ptr<ManagePasswordsAutoSigninToastDelegate>
+      auto_signin_toast_delegate_;
 
   // The wrapper around current state and data.
   ManagePasswordsState passwords_data_;
@@ -419,7 +433,6 @@ class ManagePasswordsUIController
 
   password_manager::ui::State last_page_action_state_ =
       password_manager::ui::INACTIVE_STATE;
-  bool last_page_action_is_blocklisted_ = false;
 
   // Whether the mouse is currently hovering over the bubble.
   bool is_mouse_hovered_ = false;
@@ -427,6 +440,12 @@ class ManagePasswordsUIController
   // Bool to indicate that the bubble is shown by the user gesture. This value
   // is cached when the bubble is requested to be shown.
   bool user_action_ = false;
+
+  // The current class observes the changes of the password manager's storage
+  // error state. If this bool is true, we will save the password upon receiving
+  // the notification that the error state is fixed (and the trusted vault error
+  // is resolved).
+  bool save_password_after_trusted_vault_error_resolution_ = false;
 
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
   bool was_biometric_authentication_for_filling_promo_shown_ = false;

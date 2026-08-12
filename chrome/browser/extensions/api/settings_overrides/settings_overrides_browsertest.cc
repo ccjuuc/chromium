@@ -60,7 +60,7 @@ namespace {
 // Prepopulated id hardcoded in test_extension. We select it to be a
 // prepopulated ID unlikely to match an engine that is part of the TopEngines
 // tier for the environments where the test run, but still matches some
-// known engine (context around these requirements: https://crbug.com/1500526).
+// known engine (context around these requirements: https://crbug.com/40940777).
 // The default set of engines (when no country is available) has ids 1, 2
 // and 3. The ID 83 is associated with mail.ru, chosen because it's not part
 // of the prepopulated set where we run tests.
@@ -105,11 +105,13 @@ std::unique_ptr<TemplateURLData> TestExtensionSearchEngine(Profile* profile) {
 
 testing::AssertionResult VerifyTemplateURLServiceLoad(
     TemplateURLService* service) {
-  if (service->loaded())
+  if (service->loaded()) {
     return testing::AssertionSuccess();
+  }
   search_test_utils::WaitForTemplateURLServiceToLoad(service);
-  if (service->loaded())
+  if (service->loaded()) {
     return testing::AssertionSuccess();
+  }
   return testing::AssertionFailure() << "TemplateURLService isn't loaded";
 }
 
@@ -203,7 +205,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowserTest, PRE_OverridenDSEPersists) {
 // default_search_manager correctly determines extension overriden DSE
 // from profile.
 IN_PROC_BROWSER_TEST_F(ExtensionBrowserTest, OverridenDSEPersists) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   TemplateURLPrepopulateData::Resolver* prepopulate_data_resolver =
       TemplateURLPrepopulateData::ResolverFactory::GetForProfile(profile);
   DefaultSearchManager default_manager(
@@ -308,12 +310,12 @@ class ExtensionsDisabledWithSettingsOverrideAPI : public ExtensionBrowserTest {
   FeatureSwitch::ScopedOverride prompt_for_external_extensions_;
 };
 
-// The following test combo is a regression test for https://crbug.com/828295.
+// The following test combo is a regression test for https://crbug.com/41380408.
 // When extensions are disabled with --disable-extensions, no
 // extension-controlled prefs were loaded. However, external extensions (such as
 // those from policy or specified in the registry) are still loaded with
 // --disable-extensions (this itself is somewhat strange; see
-// https://crbug.com/833540). This caused a CHECK failure in the settings
+// https://crbug.com/41383647). This caused a CHECK failure in the settings
 // overrides API when an external extension used the API and
 // --disable-extensions was also used.
 // As a fix, we ensure that we load extension-controlled preferences for
@@ -337,7 +339,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsDisabledWithSettingsOverrideAPI,
 IN_PROC_BROWSER_TEST_F(ExtensionsDisabledWithSettingsOverrideAPI,
                        TestSettingsOverridesWithExtensionsDisabled) {
   // The external extension was actually uninstalled at this point (see
-  // https://crbug.com/833540). However, it was first loaded, before being
+  // https://crbug.com/41383647). However, it was first loaded, before being
   // orphaned, which would have caused the settings API to look at the
   // extension controlled preferences. As long as this didn't crash, the test
   // succeeded.

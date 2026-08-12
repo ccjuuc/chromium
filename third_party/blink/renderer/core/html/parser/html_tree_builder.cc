@@ -28,6 +28,8 @@
 
 #include <memory>
 
+#include "base/feature_list.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/document_fragment.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
@@ -51,6 +53,7 @@
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/mathml_names.h"
+#include "third_party/blink/renderer/core/sanitizer/sanitizer.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/core/xlink_names.h"
 #include "third_party/blink/renderer/core/xml_names.h"
@@ -76,7 +79,59 @@ namespace {
 inline bool IsHTMLSpaceOrReplacementCharacter(UChar character) {
   return IsHTMLSpace<UChar>(character) || character == kReplacementCharacter;
 }
+
+enum class FeatureResetMode {
+  kUseCached,
+  kResetForTesting,
+};
+
+bool DeferTreeBuilderFlushEnabled(
+    FeatureResetMode reset_mode = FeatureResetMode::kUseCached) {
+  static bool kEnabled =
+      base::FeatureList::IsEnabled(features::kDeferTreeBuilderFlush);
+  if (reset_mode == FeatureResetMode::kResetForTesting) {
+    kEnabled = base::FeatureList::IsEnabled(features::kDeferTreeBuilderFlush);
+  }
+  return kEnabled;
+}
+
+base::TimeDelta DeferTreeBuilderFlushInitialInterval(
+    FeatureResetMode reset_mode = FeatureResetMode::kUseCached) {
+  static base::TimeDelta kInterval =
+      features::kDeferTreeBuilderFlushInitialInterval.Get();
+  if (reset_mode == FeatureResetMode::kResetForTesting) {
+    kInterval = features::kDeferTreeBuilderFlushInitialInterval.Get();
+  }
+  return kInterval;
+}
+
+base::TimeDelta DeferTreeBuilderFlushMaxInterval(
+    FeatureResetMode reset_mode = FeatureResetMode::kUseCached) {
+  static base::TimeDelta kInterval =
+      features::kDeferTreeBuilderFlushMaxInterval.Get();
+  if (reset_mode == FeatureResetMode::kResetForTesting) {
+    kInterval = features::kDeferTreeBuilderFlushMaxInterval.Get();
+  }
+  return kInterval;
+}
+
+double DeferTreeBuilderFlushMultiplier(
+    FeatureResetMode reset_mode = FeatureResetMode::kUseCached) {
+  static double kMultiplier = features::kDeferTreeBuilderFlushMultiplier.Get();
+  if (reset_mode == FeatureResetMode::kResetForTesting) {
+    kMultiplier = features::kDeferTreeBuilderFlushMultiplier.Get();
+  }
+  return kMultiplier;
+}
+
 }  // namespace
+
+void HTMLTreeBuilder::ResetCachedFeaturesForTesting() {
+  DeferTreeBuilderFlushEnabled(FeatureResetMode::kResetForTesting);
+  DeferTreeBuilderFlushInitialInterval(FeatureResetMode::kResetForTesting);
+  DeferTreeBuilderFlushMaxInterval(FeatureResetMode::kResetForTesting);
+  DeferTreeBuilderFlushMultiplier(FeatureResetMode::kResetForTesting);
+}
 
 static TextPosition UninitializedPositionValue1() {
   return TextPosition(OrdinalNumber::FromOneBasedInt(-1),
@@ -251,8 +306,7 @@ class HTMLTreeBuilder::CharacterTokenBuffer {
       return {String(), WhitespaceMode::kNotAllWhitespace};
     }
     if (length == start - end_) {  // It's all whitespace.
-      return {String(characters_.Substring(start, start - end_)),
-              whitespace_mode};
+      return {String(characters_.substr(start, start - end_)), whitespace_mode};
     }
 
     // All HTML spaces are ASCII.
@@ -288,19 +342,24 @@ HTMLTreeBuilder::HTMLTreeBuilder(HTMLDocumentParser* parser,
                                  ParserContentPolicy parser_content_policy,
                                  const HTMLParserOptions& options,
                                  bool include_shadow_roots,
-                                 ContainerNode* fragment_target,
+                                 DocumentFragment* fragment_target,
                                  Element* fragment_context_element,
-                                 CustomElementRegistry* registry)
+                                 CustomElementRegistry* registry,
+                                 StreamingSanitizer* sanitizer,
+                                 ParserRootInsertionPoint* root_insertion_point)
     : tree_(parser->ReentryPermit(),
             document,
             parser_content_policy,
             fragment_target,
             fragment_context_element,
-            registry),
+            registry,
+            sanitizer,
+            root_insertion_point),
       insertion_mode_(kInitialMode),
       original_insertion_mode_(kInitialMode),
       should_skip_leading_newline_(false),
       include_shadow_roots_(include_shadow_roots),
+      is_text_document_(document.IsTextDocument()),
       frameset_ok_(true),
       parser_(parser),
       script_to_process_start_position_(UninitializedPositionValue1()),
@@ -309,22 +368,28 @@ HTMLTreeBuilder::HTMLTreeBuilder(HTMLDocumentParser* parser,
                                  Document& document,
                                  ParserContentPolicy parser_content_policy,
                                  const HTMLParserOptions& options,
-                                 bool include_shadow_roots)
+                                 bool include_shadow_roots,
+                                 CustomElementRegistry* registry,
+                                 StreamingSanitizer* sanitizer)
     : HTMLTreeBuilder(parser,
                       document,
                       parser_content_policy,
                       options,
                       include_shadow_roots,
-                      nullptr,
-                      nullptr,
-                      nullptr) {}
+                      /*fragment_target=*/nullptr,
+                      /*fragment_context_element=*/nullptr,
+                      registry,
+                      sanitizer,
+                      /*root_insertion_point=*/nullptr) {}
 HTMLTreeBuilder::HTMLTreeBuilder(HTMLDocumentParser* parser,
-                                 ContainerNode* fragment_target,
+                                 DocumentFragment* fragment_target,
                                  Element* context_element,
                                  ParserContentPolicy parser_content_policy,
                                  const HTMLParserOptions& options,
                                  bool include_shadow_roots,
-                                 CustomElementRegistry* registry)
+                                 CustomElementRegistry* registry,
+                                 StreamingSanitizer* sanitizer,
+                                 ParserRootInsertionPoint* root_insertion_point)
     : HTMLTreeBuilder(parser,
                       fragment_target->GetDocument(),
                       parser_content_policy,
@@ -332,7 +397,9 @@ HTMLTreeBuilder::HTMLTreeBuilder(HTMLDocumentParser* parser,
                       include_shadow_roots,
                       fragment_target,
                       context_element,
-                      registry) {
+                      registry,
+                      sanitizer,
+                      root_insertion_point) {
   DCHECK(IsMainThread());
   fragment_context_.Init(fragment_target, context_element);
 
@@ -340,8 +407,8 @@ HTMLTreeBuilder::HTMLTreeBuilder(HTMLDocumentParser* parser,
   // http://www.whatwg.org/specs/web-apps/current-work/multipage/the-end.html#fragment-case
   // For efficiency, we skip step 4.2 ("Let root be a new html element with no
   // attributes") and instead use the DocumentFragment as a root node.
-  tree_.OpenElements()->PushRootNode(MakeGarbageCollected<HTMLStackItem>(
-      fragment_target, HTMLStackItem::kItemForDocumentFragmentNode));
+  tree_.OpenElements()->PushRootNode(
+      HTMLStackItem::CreateForDocumentFragment(fragment_target));
 
   if (IsA<HTMLTemplateElement>(*context_element))
     template_insertion_modes_.push_back(kTemplateContentsMode);
@@ -352,18 +419,13 @@ HTMLTreeBuilder::HTMLTreeBuilder(HTMLDocumentParser* parser,
 HTMLTreeBuilder::~HTMLTreeBuilder() = default;
 
 void HTMLTreeBuilder::FragmentParsingContext::Init(
-    ContainerNode* fragment_target,
+    DocumentFragment* fragment_target,
     Element* context_element) {
   DCHECK(fragment_target);
-  DCHECK((RuntimeEnabledFeatures::DocumentPatchingEnabled() &&
-          ((fragment_target == context_element) ||
-           fragment_target->IsShadowRoot() &&
-               To<ShadowRoot>(fragment_target)->host() == context_element)) ||
-         (fragment_target->IsDocumentFragment() &&
-          !fragment_target->HasChildren()));
+  DCHECK(!fragment_target->HasChildren());
   fragment_target_ = fragment_target;
-  context_element_stack_item_ = MakeGarbageCollected<HTMLStackItem>(
-      context_element, HTMLStackItem::kItemForContextElement);
+  context_element_stack_item_ =
+      HTMLStackItem::CreateForContextElement(context_element);
 }
 
 void HTMLTreeBuilder::FragmentParsingContext::Trace(Visitor* visitor) const {
@@ -425,15 +487,44 @@ void HTMLTreeBuilder::ConstructTree(AtomicHTMLToken* token) {
   parser_->tokenizer().SetForceNullCharacterReplacement(
       GetInsertionMode() == kTextMode || in_foreign_content);
   parser_->tokenizer().SetShouldAllowCDATA(in_foreign_content);
-  if (RuntimeEnabledFeatures::DOMPartsAPIEnabled()) {
-    parser_->tokenizer().SetShouldAllowDOMParts(tree_.InParsePartsScope());
-  }
 
   tree_.ExecuteQueuedTasks();
   // We might be detached now.
 }
 
 void HTMLTreeBuilder::ProcessToken(AtomicHTMLToken* token) {
+  if (!options_.scripting_flag && tree_.OpenElements() &&
+      tree_.OpenElements()->Topmost(HTMLTag::kNoscript)) {
+    bool is_markup = token->GetType() == HTMLToken::kStartTag ||
+                     token->GetType() == HTMLToken::kComment ||
+                     (token->GetType() == HTMLToken::kEndTag &&
+                      token->GetHTMLTag() != HTMLTag::kNoscript) ||
+                     token->HasEntity();
+    if (is_markup) {
+      Document* document = parser_->GetDocument();
+      if (IsParsingFragment() && fragment_context_.ContextElement()->HasTagName(
+                                     html_names::kTemplateTag)) {
+        UseCounter::Count(
+            document, WebFeature::kNoscriptMarkupWithScriptingDisabledTemplate);
+      } else if (document->IsDOMParserDocument()) {
+        UseCounter::Count(
+            document,
+            WebFeature::kNoscriptMarkupWithScriptingDisabledDOMParser);
+      } else if (document->IsXHRDocument()) {
+        UseCounter::Count(document,
+                          WebFeature::kNoscriptMarkupWithScriptingDisabledXHR);
+      } else if (document->GetFrame() != nullptr) {
+        UseCounter::Count(
+            document,
+            WebFeature::kNoscriptMarkupWithScriptingDisabledIframeSandbox);
+      } else {
+        UseCounter::Count(
+            document,
+            WebFeature::kNoscriptMarkupWithScriptingDisabledNoBrowsingContext);
+      }
+    }
+  }
+
   if (token->GetType() == HTMLToken::kCharacter) {
     ProcessCharacter(token);
     return;
@@ -464,10 +555,31 @@ void HTMLTreeBuilder::ProcessToken(AtomicHTMLToken* token) {
     case HTMLToken::kEndOfFile:
       ProcessEndOfFile(token);
       break;
-    case HTMLToken::kDOMPart:
-      ProcessDOMPart(token);
+    case HTMLToken::kProcessingInstruction:
+      ProcessProcessingInstruction(token);
       break;
   }
+}
+
+void HTMLTreeBuilder::ProcessProcessingInstruction(AtomicHTMLToken* token) {
+  DCHECK_EQ(token->GetType(), HTMLToken::kProcessingInstruction);
+  if (GetInsertionMode() == kInitialMode ||
+      GetInsertionMode() == kBeforeHTMLMode ||
+      GetInsertionMode() == kAfterAfterBodyMode ||
+      GetInsertionMode() == kAfterAfterFramesetMode) {
+    tree_.InsertProcessingInstructionOnDocument(token);
+    return;
+  }
+  if (GetInsertionMode() == kAfterBodyMode) {
+    tree_.InsertProcessingInstructionOnHTMLHtmlElement(token);
+    return;
+  }
+  if (GetInsertionMode() == kInTableTextMode) {
+    DefaultForInTableText();
+    ProcessProcessingInstruction(token);
+    return;
+  }
+  tree_.InsertProcessingInstruction(token);
 }
 
 void HTMLTreeBuilder::ProcessDoctypeToken(AtomicHTMLToken* token) {
@@ -551,7 +663,7 @@ void MapLoweredLocalNameToName(PrefixedNameToQualifiedNameMap* map,
   for (size_t i = 0; i < names.size(); ++i) {
     const QualifiedName& name = *names[i];
     const AtomicString& local_name = name.LocalName();
-    AtomicString lowered_local_name = local_name.LowerASCII();
+    AtomicString lowered_local_name = local_name.ToAsciiLower();
     if (lowered_local_name != local_name)
       map->insert(lowered_local_name, name);
   }
@@ -670,7 +782,6 @@ void HTMLTreeBuilder::ProcessStartTagForInBody(AtomicHTMLToken* token) {
     case HTMLTag::kBase:
     case HTMLTag::kBasefont:
     case HTMLTag::kBgsound:
-    case HTMLTag::kCommand:
     case HTMLTag::kLink:
     case HTMLTag::kMeta:
     case HTMLTag::kNoframes:
@@ -752,7 +863,8 @@ void HTMLTreeBuilder::ProcessStartTagForInBody(AtomicHTMLToken* token) {
       // Per spec https://html.spec.whatwg.org/C/#parsing-main-inbody,
       // section "A start tag whose tag name is "input""
       if (tree_.OpenElements()->InScope(HTMLTag::kSelect)) {
-        bool parent_select = IsA<HTMLSelectElement>(tree_.CurrentNode());
+        HTMLSelectElement* parent_select =
+            DynamicTo<HTMLSelectElement>(tree_.CurrentNode());
         bool parent_option_optgroup =
             IsA<HTMLOptionElement>(tree_.CurrentNode()) ||
             IsA<HTMLOptGroupElement>(tree_.CurrentNode());
@@ -777,6 +889,16 @@ void HTMLTreeBuilder::ProcessStartTagForInBody(AtomicHTMLToken* token) {
                             WebFeature::kInputParsedAncestorSelect);
         }
 
+        if (parent_select && !parent_select->WasOptionInserted()) {
+          if (RuntimeEnabledFeatures::InputInSelectEnabled()) {
+            // <input> tags are allowed inside <select> if they come before any
+            // of the <option>s.
+            add_select_end_tag = false;
+          }
+          UseCounter::Count(tree_.CurrentNode()->GetDocument(),
+                            WebFeature::kInputParsedParentSelectNoOptions);
+        }
+
         if (add_select_end_tag) {
           tree_.OpenElements()->TopNode()->AddConsoleMessage(
               mojom::blink::ConsoleMessageSource::kJavaScript,
@@ -794,7 +916,7 @@ void HTMLTreeBuilder::ProcessStartTagForInBody(AtomicHTMLToken* token) {
           token->GetAttributeItem(html_names::kTypeAttr);
       bool disable_frameset =
           !type_attribute ||
-          !EqualIgnoringASCIICase(type_attribute->Value(), "hidden");
+          !EqualIgnoringAsciiCase(type_attribute->Value(), "hidden");
 
       tree_.ReconstructTheActiveFormattingElements();
       tree_.InsertSelfClosingHTMLElementDestroyingToken(token);
@@ -829,16 +951,20 @@ void HTMLTreeBuilder::ProcessStartTagForInBody(AtomicHTMLToken* token) {
       should_skip_leading_newline_ = true;
       frameset_ok_ = false;
       break;
-    case HTMLTag::kForm:
-      if (tree_.IsFormElementPointerNonNull() && !IsParsingTemplateContents()) {
+    case HTMLTag::kForm: {
+      bool is_parsing_template_contents = IsParsingTemplateContents();
+      if (tree_.IsFormElementPointerNonNull() &&
+          !is_parsing_template_contents) {
         ParseError(token);
         UseCounter::Count(tree_.CurrentNode()->GetDocument(),
                           WebFeature::kHTMLParseErrorNestedForm);
         break;
       }
       ProcessFakePEndTagIfPInButtonScope();
-      tree_.InsertHTMLFormElement(token);
+      tree_.InsertHTMLFormElement(token, /*is_demoted=*/false,
+                                  is_parsing_template_contents);
       break;
+    }
     case HTMLTag::kDd:
     case HTMLTag::kDt:
       ProcessCloseWhenNestedTag<IsDdOrDt>(token);
@@ -1058,6 +1184,13 @@ void HTMLTreeBuilder::ProcessStartTagForInBody(AtomicHTMLToken* token) {
     case HTMLTag::kTr:
       ParseError(token);
       break;
+    case HTMLTag::kCommand:
+      if (!RuntimeEnabledFeatures::HTMLCommandElementRemovalEnabled()) {
+        bool did_process = ProcessStartTagForInHead(token);
+        DCHECK(did_process);
+        break;
+      }
+      [[fallthrough]];
     default:
       if (token->GetName() == mathml_names::kMathTag.LocalName()) {
         tree_.ReconstructTheActiveFormattingElements();
@@ -1133,11 +1266,6 @@ bool HTMLTreeBuilder::ProcessTemplateEndTag(AtomicHTMLToken* token) {
   ResetInsertionModeAppropriately();
   if (template_stack_item) {
     DCHECK(template_stack_item->IsElementNode());
-    HTMLTemplateElement* template_element =
-        DynamicTo<HTMLTemplateElement>(template_stack_item->GetElement());
-    if (DocumentFragment* template_content = template_element->getContent()) {
-      tree_.FinishedTemplateElement(template_content);
-    }
   }
   return true;
 }
@@ -1235,7 +1363,7 @@ void HTMLTreeBuilder::ProcessStartTagForInTable(AtomicHTMLToken* token) {
       Attribute* type_attribute =
           token->GetAttributeItem(html_names::kTypeAttr);
       if (type_attribute &&
-          EqualIgnoringASCIICase(type_attribute->Value(), "hidden")) {
+          EqualIgnoringAsciiCase(type_attribute->Value(), "hidden")) {
         ParseError(token);
         tree_.InsertSelfClosingHTMLElementDestroyingToken(token);
         return;
@@ -1243,13 +1371,18 @@ void HTMLTreeBuilder::ProcessStartTagForInTable(AtomicHTMLToken* token) {
       // break to hit "anything else" case.
       break;
     }
-    case HTMLTag::kForm:
+    case HTMLTag::kForm: {
+      bool is_parsing_template_contents = IsParsingTemplateContents();
       ParseError(token);
-      if (tree_.IsFormElementPointerNonNull() && !IsParsingTemplateContents())
+      if (tree_.IsFormElementPointerNonNull() &&
+          !is_parsing_template_contents) {
         return;
-      tree_.InsertHTMLFormElement(token, true);
+      }
+      tree_.InsertHTMLFormElement(token, /*is_demoted=*/true,
+                                  is_parsing_template_contents);
       tree_.OpenElements()->Pop();
       return;
+    }
     case HTMLTag::kTemplate:
       ProcessTemplateStartTag(token);
       return;
@@ -1397,10 +1530,8 @@ void HTMLTreeBuilder::ProcessStartTag(AtomicHTMLToken* token) {
           return;
         case CAPTION_COL_OR_COLGROUP_CASES:
         case TABLE_BODY_CONTEXT_CASES:
-          // FIXME: This is slow.
-          if (!tree_.OpenElements()->InTableScope(HTMLTag::kTbody) &&
-              !tree_.OpenElements()->InTableScope(HTMLTag::kThead) &&
-              !tree_.OpenElements()->InTableScope(HTMLTag::kTfoot)) {
+          if (!tree_.OpenElements()->InTableScope(
+                  {HTMLTag::kTbody, HTMLTag::kThead, HTMLTag::kTfoot})) {
             DCHECK(IsParsingFragmentOrTemplateContents());
             ParseError(token);
             return;
@@ -1635,19 +1766,21 @@ void HTMLTreeBuilder::CallTheAdoptionAgency(AtomicHTMLToken* token) {
     return;
   }
 
-  // 1, 2, 3 and 16 are covered by the for() loop.
+  // 3, 4.1 and 4.2 are covered by the loop condition.
   for (int i = 0; i < kOuterIterationLimit; ++i) {
     // 4.
     // ClosestElementInScopeWithName() returns null for non-html tags.
-    if (!token->IsValidHTMLTag())
+    if (!token->IsValidHTMLTag()) {
       return ProcessAnyOtherEndTagForInBody(token);
+    }
     Element* formatting_element =
         tree_.ActiveFormattingElements()->ClosestElementInScopeWithName(
             token->GetName());
-    // 4.a
-    if (!formatting_element)
+    // 4.3
+    if (!formatting_element) {
       return ProcessAnyOtherEndTagForInBody(token);
-    // 4.c
+    }
+    // 4.5
     if ((tree_.OpenElements()->Contains(formatting_element)) &&
         !tree_.OpenElements()->InScope(formatting_element)) {
       ParseError(token);
@@ -1655,7 +1788,7 @@ void HTMLTreeBuilder::CallTheAdoptionAgency(AtomicHTMLToken* token) {
       DVLOG(1) << "Not implemented.";
       return;
     }
-    // 4.b
+    // 4.4
     HTMLStackItem* formatting_element_item =
         tree_.OpenElements()->Find(formatting_element);
     if (!formatting_element_item) {
@@ -1663,80 +1796,155 @@ void HTMLTreeBuilder::CallTheAdoptionAgency(AtomicHTMLToken* token) {
       tree_.ActiveFormattingElements()->Remove(formatting_element);
       return;
     }
-    // 4.d
-    if (formatting_element != tree_.CurrentElement())
+    // 4.6
+    if (formatting_element != tree_.CurrentElement()) {
       ParseError(token);
-    // 5.
+    }
+    // 4.7
     HTMLStackItem* furthest_block =
         tree_.OpenElements()->FurthestBlockForFormattingElement(
             formatting_element);
-    // 6.
+    // 4.8
     if (!furthest_block) {
       tree_.OpenElements()->PopUntilPopped(formatting_element);
       tree_.ActiveFormattingElements()->Remove(formatting_element);
       return;
     }
-    // 7.
+    // 4.9
     DCHECK(furthest_block->IsAboveItemInStack(formatting_element_item));
     HTMLStackItem* common_ancestor = formatting_element_item->NextItemInStack();
-    // 8.
+    // 4.10
     HTMLFormattingElementList::Bookmark bookmark =
         tree_.ActiveFormattingElements()->BookmarkFor(formatting_element);
-    // 9.
+    // 4.11
     HTMLStackItem* node = furthest_block;
     HTMLStackItem* next_node = node->NextItemInStack();
     HTMLStackItem* last_node = furthest_block;
-    // 9.1, 9.2, 9.3 and 9.11 are covered by the for() loop.
-    for (int j = 0; j < kInnerIterationLimit; ++j) {
-      // 9.4
-      node = next_node;
-      DCHECK(node);
-      // Save node->next() for the next iteration in case node is deleted in
-      // 9.5.
-      next_node = node->NextItemInStack();
-      // 9.5
-      if (!tree_.ActiveFormattingElements()->Contains(node->GetElement())) {
-        tree_.OpenElements()->Remove(node->GetElement());
-        node = nullptr;
-        continue;
-      }
-      // 9.6
-      if (node == formatting_element_item) {
-        break;
-      }
-      // 9.7
-      HTMLStackItem* new_item = tree_.CreateElementFromSavedToken(node);
+    if (RuntimeEnabledFeatures::HTMLAdoptionAlgorithmNewStepsEnabled()) {
+      bool node_in_active_formatting_elements = false;
+      // 4.12
+      int inner_loop_counter = 0;
+      while (true) {
+        // 4.13
+        // 4.13.1
+        inner_loop_counter++;
+        // 4.13.2
+        node = next_node;
+        DCHECK(node);
+        // Save node->next() for the next iteration in case node is deleted in
+        // 4.13.5.
+        next_node = node->NextItemInStack();
+        // 4.13.3
+        // This loop is guaranteed to terminate because formatting_element_item
+        // is always present higher up in the stack of open elements.
+        if (node == formatting_element_item) {
+          break;
+        }
+        node_in_active_formatting_elements =
+            tree_.ActiveFormattingElements()->Contains(node->GetElement());
+        // 4.13.4
+        if (inner_loop_counter > kInnerIterationLimit &&
+            node_in_active_formatting_elements) {
+          DCHECK(bookmark.Mark());
+          // Cache the bookmark's element to regenerate it after the removal.
+          Element* bookmark_element = bookmark.Mark()->GetElement();
+          bool has_been_moved = bookmark.HasBeenMoved();
+          tree_.ActiveFormattingElements()->Remove(node->GetElement());
+          bookmark =
+              tree_.ActiveFormattingElements()->BookmarkFor(bookmark_element);
+          if (has_been_moved) {
+            // BookmarkFor creates a 'before' bookmark; if the original was
+            // moved, we must explicitly convert it back to an 'after' bookmark
+            // relative to its current mark.
+            bookmark.MoveToAfter(bookmark.Mark());
+          }
+          // Set to false so the subsequent step (4.13.5) removes the node from
+          // the stack of open elements and continues the inner loop.
+          node_in_active_formatting_elements = false;
+        }
+        // 4.13.5
+        if (!node_in_active_formatting_elements) {
+          tree_.OpenElements()->Remove(node->GetElement());
+          node = nullptr;
+          continue;
+        }
+        // 4.13.6
+        HTMLStackItem* new_item = tree_.CreateElementFromSavedToken(node);
+        HTMLFormattingElementList::Entry* node_entry =
+            tree_.ActiveFormattingElements()->Find(node->GetElement());
+        node_entry->ReplaceElement(new_item);
+        tree_.OpenElements()->Replace(node, new_item);
+        node = new_item;
 
-      HTMLFormattingElementList::Entry* node_entry =
-          tree_.ActiveFormattingElements()->Find(node->GetElement());
-      node_entry->ReplaceElement(new_item);
-      tree_.OpenElements()->Replace(node, new_item);
-      node = new_item;
+        // 4.13.7
+        if (last_node == furthest_block) {
+          bookmark.MoveToAfter(node_entry);
+        }
+        // 4.13.8
+        tree_.Reparent(node, last_node);
+        // 4.13.9
+        last_node = node;
+      }
+    } else {
+      // 9.1, 9.2, 9.3 and 9.11 are covered by the for() loop.
+      for (int j = 0; j < kInnerIterationLimit; ++j) {
+        // 9.4
+        node = next_node;
+        DCHECK(node);
+        // Save node->next() for the next iteration in case node is deleted in
+        // 9.5.
+        next_node = node->NextItemInStack();
+        // 9.5
+        if (!tree_.ActiveFormattingElements()->Contains(node->GetElement())) {
+          tree_.OpenElements()->Remove(node->GetElement());
+          node = nullptr;
+          continue;
+        }
+        // 9.6
+        if (node == formatting_element_item) {
+          break;
+        }
+        // 9.7
+        HTMLStackItem* new_item = tree_.CreateElementFromSavedToken(node);
+        HTMLFormattingElementList::Entry* node_entry =
+            tree_.ActiveFormattingElements()->Find(node->GetElement());
+        node_entry->ReplaceElement(new_item);
+        tree_.OpenElements()->Replace(node, new_item);
+        node = new_item;
 
-      // 9.8
-      if (last_node == furthest_block)
-        bookmark.MoveToAfter(node_entry);
-      // 9.9
-      tree_.Reparent(node, last_node);
-      // 9.10
-      last_node = node;
+        // 9.8
+        if (last_node == furthest_block) {
+          bookmark.MoveToAfter(node_entry);
+        }
+        // 9.9
+        tree_.Reparent(node, last_node);
+        // 9.10
+        last_node = node;
+      }
     }
-    // 10.
+    // 4.14
     tree_.InsertAlreadyParsedChild(common_ancestor, last_node);
-    // 11.
+    // 4.15
     HTMLStackItem* new_item =
         tree_.CreateElementFromSavedToken(formatting_element_item);
-    // 12.
+    // 4.16
     tree_.TakeAllChildren(new_item, furthest_block);
-    // 13.
+    // 4.17
     tree_.Reparent(furthest_block, new_item);
-    // 14.
+    // 4.18
     tree_.ActiveFormattingElements()->SwapTo(formatting_element, new_item,
                                              bookmark);
-    // 15.
+    // 4.19
     tree_.OpenElements()->Remove(formatting_element);
     tree_.OpenElements()->InsertAbove(new_item, furthest_block);
   }
+}
+
+void HTMLTreeBuilder::SetInsertionMode(InsertionMode mode) {
+  if (mode == kTextMode && insertion_mode_ != kTextMode) {
+    last_text_mode_flush_time_ = std::nullopt;
+  }
+  insertion_mode_ = mode;
 }
 
 void HTMLTreeBuilder::ResetInsertionModeAppropriately() {
@@ -1811,10 +2019,8 @@ void HTMLTreeBuilder::ProcessEndTagForInTableBody(AtomicHTMLToken* token) {
       SetInsertionMode(kInTableMode);
       return;
     case HTMLTag::kTable:
-      // FIXME: This is slow.
-      if (!tree_.OpenElements()->InTableScope(HTMLTag::kTbody) &&
-          !tree_.OpenElements()->InTableScope(HTMLTag::kThead) &&
-          !tree_.OpenElements()->InTableScope(HTMLTag::kTfoot)) {
+      if (!tree_.OpenElements()->InTableScope(
+              {HTMLTag::kTbody, HTMLTag::kThead, HTMLTag::kTfoot})) {
         DCHECK(IsParsingFragmentOrTemplateContents());
         ParseError(token);
         return;
@@ -2385,12 +2591,6 @@ void HTMLTreeBuilder::ProcessComment(AtomicHTMLToken* token) {
   tree_.InsertComment(token);
 }
 
-void HTMLTreeBuilder::ProcessDOMPart(AtomicHTMLToken* token) {
-  DCHECK_EQ(token->GetType(), HTMLToken::kDOMPart);
-  DCHECK(tree_.InParsePartsScope());
-  tree_.InsertDOMPart(token);
-}
-
 void HTMLTreeBuilder::ProcessCharacter(AtomicHTMLToken* token) {
   DCHECK_EQ(token->GetType(), HTMLToken::kCharacter);
   CharacterTokenBuffer buffer(token);
@@ -2721,12 +2921,17 @@ bool HTMLTreeBuilder::ProcessStartTagForInHead(AtomicHTMLToken* token) {
     case HTMLTag::kBase:
     case HTMLTag::kBasefont:
     case HTMLTag::kBgsound:
-    case HTMLTag::kCommand:
     case HTMLTag::kLink:
     case HTMLTag::kMeta:
       tree_.InsertSelfClosingHTMLElementDestroyingToken(token);
       // Note: The custom processing for the <meta> tag is done in
       // HTMLMetaElement::process().
+      return true;
+    case html_names::HTMLTag::kCommand:
+      if (RuntimeEnabledFeatures::HTMLCommandElementRemovalEnabled()) {
+        return false;
+      }
+      tree_.InsertSelfClosingHTMLElementDestroyingToken(token);
       return true;
     case HTMLTag::kTitle:
       ProcessGenericRCDATAStartTag(token);
@@ -2834,10 +3039,10 @@ void HTMLTreeBuilder::ProcessTokenInForeignContent(AtomicHTMLToken* token) {
     case HTMLToken::kUninitialized:
       NOTREACHED();
     case HTMLToken::DOCTYPE:
-    // TODO(crbug.com/1453291) This needs to be expanded to properly handle
-    // foreign content (e.g. <svg>) inside an element with `parseparts`.
-    case HTMLToken::kDOMPart:
       ParseError(token);
+      break;
+    case HTMLToken::kProcessingInstruction:
+      tree_.InsertProcessingInstruction(token);
       break;
     case HTMLToken::kStartTag: {
       const HTMLTag tag = token->GetHTMLTag();
@@ -2981,6 +3186,46 @@ void HTMLTreeBuilder::Finished() {
 #endif
   // Warning, this may detach the parser. Do not do anything else after this.
   tree_.FinishedParsing();
+}
+
+void HTMLTreeBuilder::Flush() {
+  // In kTextMode (raw text elements like script, style, etc.), character
+  // data is still accumulating and will be flushed when the closing end tag
+  // arrives. Skipping the flush here avoids O(n^2) string copies.
+  // However, to avoid starving incremental rendering for large text blocks,
+  // we use an exponential backoff strategy. We always want to avoid the
+  // O(n^2) string copies for text documents, because they generate a single
+  // <pre> with a potentially very large amount of content.
+  const bool defer_text_run =
+      insertion_mode_ == kTextMode ||
+      (is_text_document_ &&
+       !RuntimeEnabledFeatures::SplitLargeTextNodesEnabled());
+  if (defer_text_run && DeferTreeBuilderFlushEnabled()) {
+    base::TimeTicks now = base::TimeTicks::Now();
+
+    // The first Flush() is allowed immediately and starts the throttling.
+    if (!last_text_mode_flush_time_.has_value()) {
+      last_text_mode_flush_time_ = now;
+      current_text_mode_flush_interval_ =
+          DeferTreeBuilderFlushInitialInterval();
+      tree_.Flush();
+      return;
+    }
+
+    // Each throttled flush extends the timer for the next flush.
+    if (now - *last_text_mode_flush_time_ >=
+        current_text_mode_flush_interval_) {
+      last_text_mode_flush_time_ = now;
+      current_text_mode_flush_interval_ = std::min(
+          current_text_mode_flush_interval_ * DeferTreeBuilderFlushMultiplier(),
+          DeferTreeBuilderFlushMaxInterval());
+      tree_.Flush();
+      return;
+    }
+    return;
+  }
+
+  tree_.Flush();
 }
 
 void HTMLTreeBuilder::ParseError(AtomicHTMLToken*) {}

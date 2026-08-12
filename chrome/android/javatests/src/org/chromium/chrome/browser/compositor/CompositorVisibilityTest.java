@@ -9,6 +9,7 @@ import android.view.View;
 
 import androidx.test.filters.SmallTest;
 
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
@@ -58,6 +59,17 @@ public class CompositorVisibilityTest {
                 public void invalidateAccessibilityProvider() {}
             };
 
+    @After
+    public void tearDown() {
+        if (mCompositorView != null) {
+            ThreadUtils.runOnUiThreadBlocking(
+                    () -> {
+                        mCompositorView.shutDown();
+                        mCompositorView = null;
+                    });
+        }
+    }
+
     // Verify that setVisibility on |mCompositorView| is transferred to its children.  Otherwise,
     // the underlying surface is not destroyed.  This can interfere with VR, which hides the
     // CompositorView and creates its own surfaces.  The compositor surfaces can show up when the VR
@@ -84,7 +96,7 @@ public class CompositorVisibilityTest {
     // The surfaceview should be attached during construction, so that the application window knows
     // to set the blending hint correctly on the surface.  Otherwise, it will have to setFormat()
     // when the SurfaceView is attached to the CompositorView, which causes visual artifacts when
-    // the surface is torn down and re-created (crbug.com/704866).
+    // the surface is torn down and re-created (crbug.com/40512358).
     @Test
     @SmallTest
     public void testSurfaceViewIsAttachedImmediately() throws Throwable {

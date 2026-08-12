@@ -11,10 +11,10 @@
 
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/strings/string_util.h"
 #include "base/win/registry.h"
 #include "chrome/updater/tag.h"
 #include "chrome/updater/util/win_util.h"
@@ -115,7 +115,7 @@ std::optional<std::wstring> GetLastInstallerResultUIString(
                  key->ReadValueDW(kRegValueLastInstallerResult,
                                   &last_installer_result) == ERROR_SUCCESS &&
                  last_installer_result ==
-                     static_cast<DWORD>(InstallerApiResult::kCustomError) &&
+                     std::to_underlying(InstallerApiResult::kCustomError) &&
                  key->ReadValue(kRegValueLastInstallerResultUIString, &val) ==
                      ERROR_SUCCESS &&
                  !val.empty()

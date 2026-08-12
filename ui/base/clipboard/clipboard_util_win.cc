@@ -2,14 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "ui/base/clipboard/clipboard_util_win.h"
 
 #include <shellapi.h>
+#include <shldisp.h>  // For IDataObjectAsyncCapability
 #include <wininet.h>  // For INTERNET_MAX_URL_LENGTH.
 #include <wrl/client.h>
 
@@ -19,8 +15,13 @@
 #include <string_view>
 #include <utility>
 
+#include "base/compiler_specific.h"
+#include "base/containers/to_vector.h"
+#include "base/feature_list.h"
 #include "base/files/file_util.h"
+#include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/numerics/checked_math.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -34,6 +35,7 @@
 #include "net/base/filename_util.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/base/clipboard/custom_data_helper.h"
+#include "ui/base/ui_base_features.h"
 #include "url/gurl.h"
 
 namespace ui {
@@ -42,6 +44,51 @@ namespace {
 
 constexpr STGMEDIUM kNullStorageMedium = {.tymed = TYMED_NULL,
                                           .pUnkForRelease = nullptr};
+
+// Returns the locked HGLOBAL contents as UTF-16, bounded by size() and
+// truncated at the first embedded NUL. Untrusted external sources may omit a
+// NUL terminator, so size() is authoritative; reading via data() alone would
+// scan past the allocation.
+std::u16string HGlobalAsWideString(base::win::ScopedHGlobal<wchar_t*>& data) {
+  if (!data.data()) {
+    return std::u16string();
+  }
+  std::u16string out = base::WideToUTF16(
+      std::wstring_view(data.data(), data.size() / sizeof(wchar_t)));
+  if (size_t pos = out.find(u'\0'); pos != std::u16string::npos) {
+    out.resize(pos);
+  }
+  return out;
+}
+
+// Returns the locked HGLOBAL contents as UTF-16, decoding the bytes as UTF-8
+// and bounded by size(), truncated at the first embedded NUL. Untrusted
+// external sources may omit a NUL terminator, so size() is authoritative;
+// reading via data() alone would scan past the allocation.
+std::u16string HGlobalAsString(base::win::ScopedHGlobal<char*>& data) {
+  if (!data.data()) {
+    return std::u16string();
+  }
+  std::string out(data.data(), data.size());
+  if (size_t pos = out.find('\0'); pos != std::string::npos) {
+    out.resize(pos);
+  }
+  return base::UTF8ToUTF16(out);
+}
+
+// Result type for virtual file extraction: pairs of (temp_file_path,
+// display_name).
+using VirtualFileResults =
+    std::vector<std::pair<base::FilePath, base::FilePath>>;
+
+// A surviving (non-directory) virtual file: its unique display name plus the
+// original FILEGROUPDESCRIPTOR index, used as the CFSTR_FILECONTENTS lindex.
+// Skipping directory descriptors makes the filtered position diverge from the
+// descriptor index, so the index must be carried explicitly.
+struct VirtualFileNameWithIndex {
+  base::FilePath display_name;
+  LONG content_index;
+};
 
 bool HasData(IDataObject* data_object, const ClipboardFormatType& format) {
   FORMATETC format_etc = format.ToFormatEtc();
@@ -101,6 +148,48 @@ void SplitUrlAndTitle(const std::u16string& str,
   } else {
     *url = GURL(str);
     title->assign(str);
+  }
+}
+
+// Parses a BookmarkListType clipboard payload. Accepts a JSON array of
+// objects with a required "url" string and an optional "title" string.
+// On success, appends each entry to url_infos as {GURL(url), title}.
+//
+// Example JSON payload:
+// [
+//   { "url": "https://chromium.org", "title": "Chromium Project" },
+//   { "url": "https://www.mozilla.org", "title": "Mozilla Home" }
+// ]
+void ParseBookmarkListData(const std::u16string& str,
+                           std::vector<ClipboardUrlInfo>& url_infos) {
+  const std::string utf8_payload = base::UTF16ToUTF8(str);
+
+  std::optional<base::Value> json_payload =
+      base::JSONReader::Read(utf8_payload, base::JSON_PARSE_RFC);
+
+  if (json_payload && json_payload->is_list()) {
+    for (const base::Value& item : json_payload->GetList()) {
+      if (!item.is_dict()) {
+        continue;
+      }
+
+      const auto& dict = item.GetDict();
+      const std::string* url_str = dict.FindString("url");
+      if (!url_str) {
+        continue;
+      }
+      GURL url(*url_str);
+      if (!url.is_valid()) {
+        continue;
+      }
+
+      std::u16string title;
+      if (const std::string* title_str = dict.FindString("title")) {
+        title = base::UTF8ToUTF16(*title_str);
+      }
+
+      url_infos.emplace_back(std::move(url), std::move(title));
+    }
   }
 }
 
@@ -233,14 +322,12 @@ base::FilePath WriteFileContentsToTempFile(const base::FilePath& suggested_name,
   return temp_path;
 }
 
-std::vector<
-    std::pair</*temp path*/ base::FilePath, /*display name*/ base::FilePath>>
-WriteAllFileContentsToTempFiles(
+VirtualFileResults WriteAllFileContentsToTempFiles(
     const std::vector<base::FilePath>& display_names,
     const std::vector<HGLOBAL>& memory_backed_contents) {
   DCHECK_EQ(display_names.size(), memory_backed_contents.size());
 
-  std::vector<std::pair<base::FilePath, base::FilePath>> filepaths_and_names;
+  VirtualFileResults filepaths_and_names;
   for (size_t i = 0; i < display_names.size(); i++) {
     base::FilePath temp_path = WriteFileContentsToTempFile(
         display_names[i], memory_backed_contents[i]);
@@ -321,10 +408,30 @@ HGLOBAL CopyFileContentsToHGlobal(IDataObject* data_object, LONG index) {
               content.pstm->Seek(zero_displacement, STREAM_SEEK_SET, nullptr);
         }
 
-        // Copy all data to the file stream.
-        ULARGE_INTEGER max_bytes;
-        max_bytes.QuadPart = std::numeric_limits<uint64_t>::max();
-        hr = content.pstm->CopyTo(stream.Get(), max_bytes, nullptr, nullptr);
+        if (base::FeatureList::IsEnabled(features::kVirtualFileChunkedRead)) {
+          // Read in chunks and write to the destination stream
+          constexpr ULONG kChunkSize = 16 * 1024 * 1024;  // 16 MB
+          auto buffer = std::make_unique<char[]>(kChunkSize);
+          ULONG bytes_read = 0;
+          while (SUCCEEDED(hr = content.pstm->Read(buffer.get(), kChunkSize,
+                                                   &bytes_read)) &&
+                 bytes_read > 0) {
+            ULONG bytes_written = 0;
+            hr = stream->Write(buffer.get(), bytes_read, &bytes_written);
+            if (FAILED(hr) || bytes_written != bytes_read) {
+              hr = E_FAIL;
+              break;
+            }
+          }
+          if (hr == S_OK && bytes_read == 0) {
+            LOG(WARNING) << "Source stream returned S_OK with zero bytes read.";
+          }
+        } else {
+          // Copy all data to the file stream.
+          ULARGE_INTEGER max_bytes;
+          max_bytes.QuadPart = std::numeric_limits<uint64_t>::max();
+          hr = content.pstm->CopyTo(stream.Get(), max_bytes, nullptr, nullptr);
+        }
 
         if (SUCCEEDED(hr_seek)) {
           // Restore the stream pointer to its original position.
@@ -352,7 +459,8 @@ HGLOBAL CopyFileContentsToHGlobal(IDataObject* data_object, LONG index) {
     hdata = ::GlobalAlloc(GHND, data_source.size());
     if (hdata) {
       base::win::ScopedHGlobal<char*> data_destination(hdata);
-      memcpy(data_destination.data(), data_source.data(), data_source.size());
+      UNSAFE_TODO(memcpy(data_destination.data(), data_source.data(),
+                         data_source.size()));
     }
   }
 
@@ -360,6 +468,41 @@ HGLOBAL CopyFileContentsToHGlobal(IDataObject* data_object, LONG index) {
   ReleaseStgMedium(&content);
 
   return hdata;
+}
+
+// Extracts virtual file contents and writes them to temp files asynchronously
+// on a worker thread.
+VirtualFileResults ExtractVirtualFiles(
+    Microsoft::WRL::ComPtr<IStream> marshaled_data_object_stream,
+    const std::vector<VirtualFileNameWithIndex>& files) {
+  base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
+                                                base::BlockingType::MAY_BLOCK);
+
+  // Unmarshal the IDataObject from the stream.
+  Microsoft::WRL::ComPtr<IDataObject> data_object;
+  HRESULT hr = ::CoGetInterfaceAndReleaseStream(
+      marshaled_data_object_stream.Get(), IID_PPV_ARGS(&data_object));
+  // CoGetInterfaceAndReleaseStream already released the stream;
+  // Detach() prevents ComPtr destructor from double-releasing.
+  marshaled_data_object_stream.Detach();
+
+  if (FAILED(hr) || !data_object) {
+    LOG(WARNING) << "CoGetInterfaceAndReleaseStream failed: "
+                 << (FAILED(hr) ? hr : E_UNEXPECTED);
+    return {};
+  }
+
+  std::vector<base::FilePath> display_names;
+  display_names.reserve(files.size());
+  std::vector<HGLOBAL> memory_backed_contents;
+  memory_backed_contents.reserve(files.size());
+  for (const auto& file : files) {
+    display_names.push_back(file.display_name);
+    memory_backed_contents.push_back(
+        CopyFileContentsToHGlobal(data_object.Get(), file.content_index));
+  }
+
+  return WriteAllFileContentsToTempFiles(display_names, memory_backed_contents);
 }
 
 std::wstring ConvertString(const char* string) {
@@ -393,7 +536,7 @@ struct FileGroupDescriptorData<FILEGROUPDESCRIPTORA> {
 // Use template parameter of FILEGROUPDESCRIPTORW for retrieving Unicode data
 // and FILEGROUPDESCRIPTORA for ascii.
 template <typename FileGroupDescriptorType>
-std::optional<std::vector<base::FilePath>> GetVirtualFilenames(
+std::optional<std::vector<VirtualFileNameWithIndex>> GetVirtualFilenames(
     IDataObject* data_object) {
   STGMEDIUM medium;
 
@@ -402,17 +545,34 @@ std::optional<std::vector<base::FilePath>> GetVirtualFilenames(
     return std::nullopt;
   }
 
-  std::vector<base::FilePath> filenames;
+  std::vector<VirtualFileNameWithIndex> filenames;
+  // Display names already added, used only for uniquification (the
+  // case-insensitive de-dup must see the prior names, not the indices).
+  std::vector<base::FilePath> unique_names;
 
   {
-    base::win::ScopedHGlobal<FileGroupDescriptorType*> fgd(medium.hGlobal);
-    if (!fgd.data()) {
+    base::win::ScopedHGlobal<FileGroupDescriptorType*> descriptor(
+        medium.hGlobal);
+    if (!descriptor.data()) {
       return std::nullopt;
     }
 
-    unsigned int num_files = fgd->cItems;
+    unsigned int num_files = descriptor->cItems;
     // We expect there to be at least one file in here.
-    DCHECK_GE(num_files, 1u);
+    if (num_files < 1u) {
+      return std::nullopt;
+    }
+    // We expect the medium to contain enough data for at least cItems file
+    // group descriptor.
+    const auto required_size =
+        base::CheckMul(num_files, sizeof(decltype(descriptor->fgd[0])));
+    const auto end_offset =
+        required_size + offsetof(FileGroupDescriptorType, fgd);
+    if (end_offset.IsInvalidOr([&descriptor](size_t result) {
+          return descriptor.size() < result;
+        })) {
+      return std::nullopt;
+    }
 
     // Value to be incremented to ensure a unique display name, as it is
     // possible that the filenames found in the file group descriptor are not
@@ -422,22 +582,38 @@ std::optional<std::vector<base::FilePath>> GetVirtualFilenames(
 
     for (size_t i = 0; i < num_files; i++) {
       // Folder entries not currently supported--skip this item.
-      if ((fgd->fgd[i].dwFlags & FD_ATTRIBUTES) &&
-          (fgd->fgd[i].dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+      if ((UNSAFE_TODO(descriptor->fgd[i]).dwFlags & FD_ATTRIBUTES) &&
+          (UNSAFE_TODO(descriptor->fgd[i]).dwFileAttributes &
+           FILE_ATTRIBUTE_DIRECTORY)) {
         DLOG(WARNING) << "GetVirtualFilenames: display name '"
-                      << ConvertString(fgd->fgd[i].cFileName)
+                      << ConvertString(
+                             UNSAFE_TODO(descriptor->fgd[i]).cFileName)
                       << "' refers to a directory (not supported).";
         continue;
       }
       base::FilePath display_name = GetUniqueVirtualFilename(
-          ConvertString(fgd->fgd[i].cFileName), filenames, &uniquifier);
+          ConvertString(UNSAFE_TODO(descriptor->fgd[i]).cFileName),
+          unique_names, &uniquifier);
 
-      filenames.push_back(display_name);
+      unique_names.push_back(display_name);
+      filenames.push_back({display_name, static_cast<LONG>(i)});
     }
   }
 
   ReleaseStgMedium(&medium);
   return filenames;
+}
+
+// Tries the Unicode (W) descriptor first, then the ASCII (A) descriptor,
+// preserving each surviving entry's original descriptor index.
+std::optional<std::vector<VirtualFileNameWithIndex>>
+GetVirtualFilenamesWithIndices(IDataObject* data_object) {
+  std::optional<std::vector<VirtualFileNameWithIndex>> filenames =
+      GetVirtualFilenames<FILEGROUPDESCRIPTORW>(data_object);
+  if (filenames) {
+    return filenames;
+  }
+  return GetVirtualFilenames<FILEGROUPDESCRIPTORA>(data_object);
 }
 
 template <typename FileGroupDescriptorType>
@@ -450,10 +626,28 @@ bool GetFileNameFromFirstDescriptor(IDataObject* data_object,
     return false;
 
   {
-    base::win::ScopedHGlobal<FileGroupDescriptorType*> fgd(medium.hGlobal);
+    base::win::ScopedHGlobal<FileGroupDescriptorType*> descriptor(
+        medium.hGlobal);
+    // We expect valid data in the file group descriptor.
+    if (!descriptor.data()) {
+      return false;
+    }
     // We expect there to be at least one file in here.
-    DCHECK_GE(fgd->cItems, 1u);
-    filename->assign(ConvertString(fgd->fgd[0].cFileName));
+    if (descriptor->cItems < 1u) {
+      return false;
+    }
+    // We expect the medium to contain enough data for at least cItems file
+    // group descriptor.
+
+    if (base::CheckAdd(offsetof(FileGroupDescriptorType, fgd),
+                       base::CheckMul(descriptor->cItems,
+                                      sizeof(decltype(descriptor->fgd[0]))))
+            .IsInvalidOr(
+                [&](size_t result) { return descriptor.size() < result; })) {
+      return false;
+    }
+
+    filename->assign(ConvertString(descriptor->fgd[0].cFileName));
   }
   ReleaseStgMedium(&medium);
   return true;
@@ -468,6 +662,7 @@ bool HasUrl(IDataObject* data_object, bool convert_filenames) {
   return HasData(data_object, ClipboardFormatType::MozUrlType()) ||
          HasData(data_object, ClipboardFormatType::UrlType()) ||
          HasData(data_object, ClipboardFormatType::UrlAType()) ||
+         HasData(data_object, ClipboardFormatType::BookmarkListType()) ||
          (convert_filenames && HasFilenames(data_object));
 }
 
@@ -478,10 +673,30 @@ bool HasFilenames(IDataObject* data_object) {
          HasData(data_object, ClipboardFormatType::FilenameAType());
 }
 
+// Some virtual file providers like Windows ZIP Shell Folder
+// advertise these formats (CF_HDROP, CFSTR_FILENAME) in QueryGetData but fail
+// on GetData, so it must be checked if those formats can provide data to
+// correctly identify real files.
+bool HasRealFiles(IDataObject* data_object) {
+  DCHECK(data_object);
+  STGMEDIUM medium;
+  if (GetData(data_object, ClipboardFormatType::CFHDropType(), &medium) ||
+      GetData(data_object, ClipboardFormatType::FilenameType(), &medium) ||
+      GetData(data_object, ClipboardFormatType::FilenameAType(), &medium)) {
+    ReleaseStgMedium(&medium);
+    return true;
+  }
+  return false;
+}
+
 bool HasVirtualFilenames(IDataObject* data_object) {
   DCHECK(data_object);
+  const bool has_real_files = base::FeatureList::IsEnabled(
+                                  features::kUseClipboardStrictVirtualFileCheck)
+                                  ? HasRealFiles(data_object)
+                                  : HasFilenames(data_object);
   // Favor real files on the file system over virtual files.
-  return !HasFilenames(data_object) &&
+  return !has_real_files &&
          HasData(data_object, ClipboardFormatType::FileContentAtIndexType(0)) &&
          (HasData(data_object, ClipboardFormatType::FileDescriptorType()) ||
           HasData(data_object, ClipboardFormatType::FileDescriptorAType()));
@@ -489,7 +704,10 @@ bool HasVirtualFilenames(IDataObject* data_object) {
 
 bool HasFileContents(IDataObject* data_object) {
   DCHECK(data_object);
-  return HasData(data_object, ClipboardFormatType::FileContentZeroType()) &&
+  FORMATETC format_etc =
+      ClipboardFormatType::FileContentAtIndexType(0).ToFormatEtc();
+  format_etc.tymed = TYMED_HGLOBAL | TYMED_ISTREAM;
+  return SUCCEEDED(data_object->QueryGetData(&format_etc)) &&
          (HasData(data_object, ClipboardFormatType::FileDescriptorType()) ||
           HasData(data_object, ClipboardFormatType::FileDescriptorAType()));
 }
@@ -506,38 +724,56 @@ bool HasPlainText(IDataObject* data_object) {
          HasData(data_object, ClipboardFormatType::PlainTextAType());
 }
 
-bool GetUrl(IDataObject* data_object,
-            GURL* url,
-            std::u16string* title,
-            bool convert_filenames) {
-  DCHECK(data_object && url && title);
+bool GetUrlInfos(IDataObject* data_object,
+                 std::vector<ClipboardUrlInfo>& url_infos,
+                 bool convert_filenames) {
+  DCHECK(data_object);
   if (!HasUrl(data_object, convert_filenames))
     return false;
 
   // Try to extract a URL from |data_object| in a variety of formats.
   STGMEDIUM store;
-  if (GetUrlFromHDrop(data_object, url, title))
+  GURL url;
+  std::u16string title;
+  if (GetUrlFromHDrop(data_object, &url, &title)) {
+    url_infos.emplace_back(url, title);
     return true;
+  }
 
+  // Check for the BookmarkListType clipboard format, which contains a JSON
+  // array of URLs and titles.
+  if (GetData(data_object, ClipboardFormatType::BookmarkListType(), &store)) {
+    {
+      base::win::ScopedHGlobal<wchar_t*> data(store.hGlobal);
+      ParseBookmarkListData(HGlobalAsWideString(data), url_infos);
+    }
+    ReleaseStgMedium(&store);
+    return !url_infos.empty();
+  }
+
+  // Check for single URL formats, including CFSTR_INETURLW,
+  // text/x-moz-url(a bookmark), or a text/uri-list that happens to
+  // contain only one URL.
   if (GetData(data_object, ClipboardFormatType::MozUrlType(), &store) ||
       GetData(data_object, ClipboardFormatType::UrlType(), &store)) {
     {
-      // Mozilla URL format or Unicode URL
       base::win::ScopedHGlobal<wchar_t*> data(store.hGlobal);
-      SplitUrlAndTitle(base::WideToUTF16(data.data()), url, title);
+      SplitUrlAndTitle(HGlobalAsWideString(data), &url, &title);
+      url_infos.emplace_back(url, title);
     }
     ReleaseStgMedium(&store);
-    return url->is_valid();
+    return url_infos[0].url.is_valid();
   }
 
+  // Check for single URL format(CFSTR_INETURLA),
   if (GetData(data_object, ClipboardFormatType::UrlAType(), &store)) {
     {
-      // URL using ASCII
       base::win::ScopedHGlobal<char*> data(store.hGlobal);
-      SplitUrlAndTitle(base::UTF8ToUTF16(data.data()), url, title);
+      SplitUrlAndTitle(HGlobalAsString(data), &url, &title);
+      url_infos.emplace_back(url, title);
     }
     ReleaseStgMedium(&store);
-    return url->is_valid();
+    return url_infos[0].url.is_valid();
   }
 
   if (convert_filenames) {
@@ -545,11 +781,37 @@ bool GetUrl(IDataObject* data_object,
     if (!GetFilenames(data_object, &filenames))
       return false;
     DCHECK_GT(filenames.size(), 0U);
-    *url = net::FilePathToFileURL(base::FilePath(filenames[0]));
-    return url->is_valid();
+    GURL file_url = net::FilePathToFileURL(base::FilePath(filenames[0]));
+    if (file_url.is_valid()) {
+      url_infos.emplace_back(file_url, u"");
+    }
+    return !url_infos.empty();
   }
 
   return false;
+}
+
+std::vector<std::wstring> GetFilenames(HDROP hdrop) {
+  std::vector<std::wstring> filenames;
+  if (!hdrop) {
+    return filenames;
+  }
+
+  const unsigned num_files = DragQueryFileW(hdrop, 0xffffffff, 0, 0);
+  for (unsigned int i = 0; i < num_files; ++i) {
+    const UINT required_len = DragQueryFileW(hdrop, i, nullptr, 0);
+    if (!required_len) {
+      continue;
+    }
+    const UINT buffer_size = required_len + 1;
+    std::wstring filename;
+    if (!DragQueryFileW(hdrop, i, base::WriteInto(&filename, buffer_size),
+                        buffer_size)) {
+      continue;
+    }
+    filenames.push_back(std::move(filename));
+  }
+  return filenames;
 }
 
 bool GetFilenames(IDataObject* data_object,
@@ -562,19 +824,7 @@ bool GetFilenames(IDataObject* data_object,
   if (GetData(data_object, ClipboardFormatType::CFHDropType(), &medium)) {
     {
       base::win::ScopedHGlobal<HDROP> hdrop(medium.hGlobal);
-      if (!hdrop.data()) {
-        return false;
-      }
-
-      const int kMaxFilenameLen = 4096;
-      const unsigned num_files = DragQueryFileW(hdrop.data(), 0xffffffff, 0, 0);
-      for (unsigned int i = 0; i < num_files; ++i) {
-        wchar_t filename[kMaxFilenameLen];
-        if (!DragQueryFileW(hdrop.data(), i, filename, kMaxFilenameLen)) {
-          continue;
-        }
-        filenames->push_back(filename);
-      }
+      *filenames = GetFilenames(hdrop.data());
     }
     ReleaseStgMedium(&medium);
     return !filenames->empty();
@@ -585,7 +835,9 @@ bool GetFilenames(IDataObject* data_object,
       // filename using Unicode
       base::win::ScopedHGlobal<wchar_t*> data(medium.hGlobal);
       if (data.data() && data.data()[0]) {
-        filenames->push_back(data.data());
+        std::wstring filename(data.data(), data.size() / sizeof(wchar_t));
+        filename.resize(std::min(filename.size(), filename.find(L'\0')));
+        filenames->push_back(std::move(filename));
       }
     }
     ReleaseStgMedium(&medium);
@@ -597,7 +849,9 @@ bool GetFilenames(IDataObject* data_object,
       // filename using ASCII
       base::win::ScopedHGlobal<char*> data(medium.hGlobal);
       if (data.data() && data.data()[0]) {
-        filenames->push_back(base::SysNativeMBToWide(data.data()));
+        std::string mb(data.data(), data.size());
+        mb.resize(std::min(mb.size(), mb.find('\0')));
+        filenames->push_back(base::SysNativeMBToWide(mb));
       }
     }
     ReleaseStgMedium(&medium);
@@ -638,12 +892,13 @@ STGMEDIUM CreateStorageForFileNames(const std::vector<FileInfo>& filenames) {
   drop_files->pFiles = sizeof(DROPFILES);
   drop_files->fWide = TRUE;
 
-  wchar_t* data = reinterpret_cast<wchar_t*>(
-      reinterpret_cast<BYTE*>(drop_files) + kDropFilesHeaderSizeInBytes);
+  wchar_t* data = reinterpret_cast<wchar_t*>(UNSAFE_TODO(
+      reinterpret_cast<BYTE*>(drop_files) + kDropFilesHeaderSizeInBytes));
 
   size_t next_filename_offset = 0;
   for (const auto& filename : filenames) {
-    wcscpy(data + next_filename_offset, filename.path.value().c_str());
+    UNSAFE_TODO(
+        wcscpy(data + next_filename_offset, filename.path.value().c_str()));
     // Skip the terminating null character of the filename.
     next_filename_offset += filename.path.value().length() + 1;
   }
@@ -662,43 +917,130 @@ std::optional<std::vector<base::FilePath>> GetVirtualFilenames(
   // Nothing prevents the drag source app from using the CFSTR_FILEDESCRIPTORA
   // ANSI format (e.g., it could be that it doesn't support Unicode). So need to
   // check for both the ANSI and Unicode file group descriptors.
-
-  // Unicode.
-  std::optional<std::vector<base::FilePath>> filenames =
-      ui::GetVirtualFilenames<FILEGROUPDESCRIPTORW>(data_object);
-  if (filenames) {
-    return filenames;
+  std::optional<std::vector<VirtualFileNameWithIndex>> filenames_with_indices =
+      GetVirtualFilenamesWithIndices(data_object);
+  if (!filenames_with_indices) {
+    return std::nullopt;
   }
 
-  // ASCII.
-  return ui::GetVirtualFilenames<FILEGROUPDESCRIPTORA>(data_object);
+  std::vector<base::FilePath> filenames;
+  filenames.reserve(filenames_with_indices->size());
+  for (const auto& entry : *filenames_with_indices) {
+    filenames.push_back(entry.display_name);
+  }
+  return filenames;
+}
+
+// Checks if the data object supports async operations via
+// IDataObjectAsyncCapability.
+Microsoft::WRL::ComPtr<IDataObjectAsyncCapability>
+GetAsyncCapabilityIfSupported(IDataObject* data_object) {
+  if (!base::FeatureList::IsEnabled(features::kAsyncVirtualFileExtraction)) {
+    return nullptr;
+  }
+
+  Microsoft::WRL::ComPtr<IDataObjectAsyncCapability> async_capability;
+  HRESULT hr = data_object->QueryInterface(IID_PPV_ARGS(&async_capability));
+  if (FAILED(hr)) {
+    return nullptr;
+  }
+
+  BOOL supports_async = FALSE;
+  hr = async_capability->GetAsyncMode(&supports_async);
+  if (FAILED(hr) || !supports_async) {
+    return nullptr;
+  }
+
+  return async_capability;
+}
+
+// Marshals the IDataObject to a stream for cross-thread COM access.
+Microsoft::WRL::ComPtr<IStream> MarshalDataObjectToStream(
+    IDataObject* data_object) {
+  Microsoft::WRL::ComPtr<IStream> marshaled_stream;
+  HRESULT hr = ::CoMarshalInterThreadInterfaceInStream(
+      IID_IDataObject, data_object, &marshaled_stream);
+  if (FAILED(hr) || !marshaled_stream) {
+    LOG(WARNING) << "CoMarshalInterThreadInterfaceInStream failed: " << hr;
+    return nullptr;
+  }
+  return marshaled_stream;
+}
+
+// Posts the virtual file extraction work to a background thread.
+void PostVirtualFileExtractionTask(
+    Microsoft::WRL::ComPtr<IStream> marshaled_stream,
+    Microsoft::WRL::ComPtr<IDataObjectAsyncCapability> async_capability,
+    const std::vector<VirtualFileNameWithIndex>& files,
+    base::OnceCallback<void(const VirtualFileResults&)> callback) {
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
+      base::BindOnce(&ExtractVirtualFiles, marshaled_stream, files),
+      base::BindOnce(
+          [](Microsoft::WRL::ComPtr<IDataObjectAsyncCapability> async_cap,
+             base::OnceCallback<void(const VirtualFileResults&)> cb,
+             const VirtualFileResults& result) {
+            if (async_cap) {
+              HRESULT op_result = result.empty() ? E_FAIL : S_OK;
+              DWORD effect = result.empty() ? DROPEFFECT_NONE : DROPEFFECT_COPY;
+              async_cap->EndOperation(op_result, nullptr, effect);
+            }
+            std::move(cb).Run(result);
+          },
+          async_capability, std::move(callback)));
 }
 
 void GetVirtualFilesAsTempFiles(
     IDataObject* data_object,
-    base::OnceCallback<
-        void(const std::vector<std::pair</*temp path*/ base::FilePath,
-                                         /*display name*/ base::FilePath>>&)>
-        callback) {
-  // Retrieve the display names of the virtual files.
-  std::optional<std::vector<base::FilePath>> display_names =
-      GetVirtualFilenames(data_object);
-  if (!display_names) {
+    base::OnceCallback<void(const VirtualFileResults&)> callback) {
+  // Favor real files on the file system over virtual files; bail out if this
+  // data object should not surface virtual files.
+  if (!HasVirtualFilenames(data_object)) {
     std::move(callback).Run({});
     return;
   }
 
-  // Write the file contents to global memory.
-  std::vector<HGLOBAL> memory_backed_contents;
-  for (size_t i = 0; i < display_names.value().size(); i++) {
-    HGLOBAL hdata = CopyFileContentsToHGlobal(data_object, i);
-    memory_backed_contents.push_back(hdata);
+  // Retrieve the display names of the virtual files along with their original
+  // descriptor indices.
+  std::optional<std::vector<VirtualFileNameWithIndex>> files =
+      GetVirtualFilenamesWithIndices(data_object);
+  if (!files) {
+    std::move(callback).Run({});
+    return;
   }
 
-  // Queue a task to actually write the temp files on a worker thread.
+  // Try async extraction if supported.
+  if (auto async_capability = GetAsyncCapabilityIfSupported(data_object)) {
+    async_capability->StartOperation(nullptr);
+
+    if (auto marshaled_stream = MarshalDataObjectToStream(data_object)) {
+      PostVirtualFileExtractionTask(std::move(marshaled_stream),
+                                    std::move(async_capability), files.value(),
+                                    std::move(callback));
+      return;
+    }
+
+    // Marshal failed, end the async operation.
+    async_capability->EndOperation(E_FAIL, nullptr, DROPEFFECT_NONE);
+  }
+
+  // Fallback: async not supported or marshal failed. Copy file contents to
+  // global memory on the UI thread, using each entry's original descriptor
+  // index as the CFSTR_FILECONTENTS lindex.
+  std::vector<base::FilePath> display_names;
+  display_names.reserve(files->size());
+  std::vector<HGLOBAL> memory_backed_contents;
+  memory_backed_contents.reserve(files->size());
+  for (const auto& file : *files) {
+    display_names.push_back(file.display_name);
+    memory_backed_contents.push_back(
+        CopyFileContentsToHGlobal(data_object, file.content_index));
+  }
+
+  // Write the temp files on a worker thread.
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
-      base::BindOnce(&WriteAllFileContentsToTempFiles, display_names.value(),
+      base::BindOnce(&WriteAllFileContentsToTempFiles, display_names,
                      memory_backed_contents),
       std::move(callback));  // callback on the UI thread
 }
@@ -713,7 +1055,7 @@ bool GetPlainText(IDataObject* data_object, std::u16string* plain_text) {
     {
       // Unicode text
       base::win::ScopedHGlobal<wchar_t*> data(store.hGlobal);
-      plain_text->assign(base::as_u16cstr(data.data()));
+      plain_text->assign(HGlobalAsWideString(data));
     }
     ReleaseStgMedium(&store);
     return true;
@@ -723,7 +1065,7 @@ bool GetPlainText(IDataObject* data_object, std::u16string* plain_text) {
     {
       // ASCII text
       base::win::ScopedHGlobal<char*> data(store.hGlobal);
-      plain_text->assign(base::UTF8ToUTF16(data.data()));
+      plain_text->assign(HGlobalAsString(data));
     }
     ReleaseStgMedium(&store);
     return true;
@@ -731,10 +1073,9 @@ bool GetPlainText(IDataObject* data_object, std::u16string* plain_text) {
 
   // If a file is dropped on the window, it does not provide either of the
   // plain text formats, so here we try to forcibly get a url.
-  GURL url;
-  std::u16string title;
-  if (GetUrl(data_object, &url, &title, false)) {
-    *plain_text = base::UTF8ToUTF16(url.spec());
+  std::vector<ClipboardUrlInfo> url_infos;
+  if (GetUrlInfos(data_object, url_infos, false)) {
+    *plain_text = base::UTF8ToUTF16(url_infos.front().url.spec());
     return true;
   }
   return false;
@@ -770,32 +1111,70 @@ bool GetHtml(IDataObject* data_object,
   {
     // text/html
     base::win::ScopedHGlobal<wchar_t*> data(store.hGlobal);
-    html->assign(base::as_u16cstr(data.data()));
+    html->assign(HGlobalAsWideString(data));
   }
   ReleaseStgMedium(&store);
   return true;
 }
 
+bool ReadStreamToVector(IStream* stream, std::vector<uint8_t>* out) {
+  DCHECK(stream);
+  DCHECK(out);
+  STATSTG statstg;
+  if (FAILED(stream->Stat(&statstg, STATFLAG_NONAME)) ||
+      statstg.cbSize.QuadPart == 0) {
+    return false;
+  }
+  const size_t total_size = static_cast<size_t>(statstg.cbSize.QuadPart);
+  out->resize(total_size);
+  const LARGE_INTEGER zero = {};
+  stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+  // Loop to handle partial reads.
+  size_t bytes_remaining = total_size;
+  uint8_t* ptr = out->data();
+  while (bytes_remaining > 0) {
+    ULONG bytes_read = 0;
+    HRESULT hr = stream->Read(ptr, base::checked_cast<ULONG>(bytes_remaining),
+                              &bytes_read);
+    if (FAILED(hr) || bytes_read == 0) {
+      out->clear();
+      return false;
+    }
+    UNSAFE_TODO(ptr += bytes_read);
+    bytes_remaining -= bytes_read;
+  }
+  return true;
+}
+
 bool GetFileContents(IDataObject* data_object,
                      std::wstring* filename,
-                     std::string* file_contents) {
+                     std::vector<uint8_t>* file_contents) {
   DCHECK(data_object && filename && file_contents);
   if (!HasFileContents(data_object))
     return false;
 
   STGMEDIUM content;
-  // The call to GetData can be very slow depending on what is in
-  // |data_object|.
-  if (GetData(data_object, ClipboardFormatType::FileContentZeroType(),
-              &content)) {
+
+  FORMATETC format_etc =
+      ClipboardFormatType::FileContentAtIndexType(0).ToFormatEtc();
+  // Request only TYMED_HGLOBAL and TYMED_ISTREAM.
+  // TYMED_ISTORAGE (e.g. .msg files dragged from Outlook) is excluded here;
+  // it is currently handled via CopyFileContentsToHGlobal() in the
+  // GetVirtualFilesAsTempFiles() path, which converts IStorage to HGLOBAL
+  // and writes the result to a temp file.
+  // TODO(crbug.com/41452260): Add native TYMED_ISTORAGE support on the drop
+  // target side to read IStorage data directly into memory and avoid temp
+  // file creation.
+  format_etc.tymed = TYMED_HGLOBAL | TYMED_ISTREAM;
+  // The call to GetData can be very slow depending on what is in |data_object|.
+  if (SUCCEEDED(data_object->GetData(&format_etc, &content))) {
     if (TYMED_HGLOBAL == content.tymed) {
-      base::win::ScopedHGlobal<char*> data(content.hGlobal);
-      file_contents->assign(data.data(), data.size());
+      base::win::ScopedHGlobal<uint8_t*> data(content.hGlobal);
+      *file_contents = base::ToVector(data);
     } else if (TYMED_ISTREAM == content.tymed) {
-      // For example, files dragged out of a ZIP Folder.
-      HGLOBAL hdata = CopyFileContentsToHGlobal(data_object, 0);
-      base::win::ScopedHGlobal<char*> data(hdata);
-      file_contents->assign(data.data(), data.size());
+      if (!ReadStreamToVector(content.pstm, file_contents)) {
+        file_contents->clear();
+      }
     }
     ReleaseStgMedium(&content);
   }
@@ -1044,15 +1423,15 @@ void CFHtmlExtractMetadata(std::string_view cf_html,
     static constexpr char kStartFragmentStr[] = "StartFragment:";
     size_t start_fragment_start = cf_html.find(kStartFragmentStr);
     if (start_fragment_start != std::string::npos) {
-      *fragment_start = static_cast<size_t>(atoi(
-          cf_html.data() + start_fragment_start + strlen(kStartFragmentStr)));
+      *fragment_start = static_cast<size_t>(atoi(UNSAFE_TODO(
+          cf_html.data() + start_fragment_start + strlen(kStartFragmentStr))));
     }
 
     static constexpr char kEndFragmentStr[] = "EndFragment:";
     size_t end_fragment_start = cf_html.find(kEndFragmentStr);
     if (end_fragment_start != std::string::npos) {
-      *fragment_end = static_cast<size_t>(
-          atoi(cf_html.data() + end_fragment_start + strlen(kEndFragmentStr)));
+      *fragment_end = static_cast<size_t>(atoi(UNSAFE_TODO(
+          cf_html.data() + end_fragment_start + strlen(kEndFragmentStr))));
     }
   } else {
     *fragment_start = cf_html.find('>', tag_start) + 1;

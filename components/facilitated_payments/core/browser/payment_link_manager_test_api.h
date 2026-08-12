@@ -47,6 +47,11 @@ class PaymentLinkManagerTestApi {
     payment_link_manager_->is_payment_app_available_ = is_payment_app_available;
   }
 
+  void set_api_client_creator(
+      FacilitatedPaymentsApiClientCreator api_client_creator) {
+    payment_link_manager_->api_client_creator_ = std::move(api_client_creator);
+  }
+
   bool is_device_bound() {
     return payment_link_manager_->is_device_bound_for_logging_;
   }
@@ -114,6 +119,15 @@ class PaymentLinkManagerTestApi {
   void OnTransactionResult(base::TimeTicks start_time,
                            PurchaseActionResult result) {
     payment_link_manager_->OnTransactionResult(start_time, result);
+  }
+
+  const std::vector<autofill::Ewallet>& supported_ewallet_creation_options()
+      const {
+    return payment_link_manager_->supported_ewallet_creation_options_;
+  }
+
+  const std::vector<autofill::Ewallet>& supported_ewallets() const {
+    return payment_link_manager_->supported_ewallets_;
   }
 
  private:

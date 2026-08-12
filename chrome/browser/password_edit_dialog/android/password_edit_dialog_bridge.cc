@@ -69,21 +69,22 @@ void PasswordEditDialogBridge::Dismiss() {
   Java_PasswordEditDialogBridge_dismiss(env, java_password_dialog_);
 }
 
-void PasswordEditDialogBridge::OnDialogAccepted(JNIEnv* env,
-                                                std::u16string& username,
-                                                std::u16string& password) {
+void PasswordEditDialogBridge::OnDialogAccepted(
+    JNIEnv* env,
+    const std::u16string& username,
+    const std::u16string& password) {
   delegate_->HandleSavePasswordFromDialog(username, password);
 }
 
 void PasswordEditDialogBridge::OnDialogDismissed(JNIEnv* env,
-                                                 jboolean dialogAccepted) {
+                                                 bool dialogAccepted) {
   java_password_dialog_.Reset();
   delegate_->HandleDialogDismissed(dialogAccepted);
 }
 
-jboolean PasswordEditDialogBridge::IsUsingAccountStorage(
+bool PasswordEditDialogBridge::IsUsingAccountStorage(
     JNIEnv* env,
-    std::u16string& username) {
+    const std::u16string& username) {
   return delegate_->IsUsingAccountStorage(username);
 }
 

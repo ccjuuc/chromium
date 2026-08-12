@@ -17,6 +17,7 @@
 #include "components/password_manager/core/browser/password_manager_client.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/password_manager_util.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/common/password_manager_ui.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -28,20 +29,23 @@ using password_manager_util::GetMatchType;
 namespace {
 
 std::vector<std::unique_ptr<PasswordForm>> DeepCopyMatchingCredentials(
-    base::span<const PasswordForm> password_forms) {
+    base::span<const password_manager::StoredCredential> password_credentials) {
   std::vector<std::unique_ptr<PasswordForm>> result;
-  result.reserve(password_forms.size());
-  for (const PasswordForm& form : password_forms) {
-    result.push_back(std::make_unique<PasswordForm>(form));
+  result.reserve(password_credentials.size());
+  for (const auto& cred : password_credentials) {
+    result.push_back(
+        std::make_unique<PasswordForm>(password_manager::ToPasswordForm(cred)));
   }
   return result;
 }
 
-void AppendDeepCopyVector(base::span<const PasswordForm> forms,
-                          std::vector<std::unique_ptr<PasswordForm>>* result) {
-  result->reserve(result->size() + forms.size());
-  for (const password_manager::PasswordForm& form : forms) {
-    result->push_back(std::make_unique<PasswordForm>(form));
+void AppendDeepCopyVector(
+    base::span<const password_manager::StoredCredential> credentials,
+    std::vector<std::unique_ptr<PasswordForm>>* result) {
+  result->reserve(result->size() + credentials.size());
+  for (const auto& cred : credentials) {
+    result->push_back(
+        std::make_unique<PasswordForm>(password_manager::ToPasswordForm(cred)));
   }
 }
 
@@ -84,6 +88,7 @@ ManagePasswordsState::~ManagePasswordsState() = default;
 
 void ManagePasswordsState::OnPendingPassword(
     std::unique_ptr<PasswordFormManagerForUI> form_manager) {
+  CHECK(form_manager->IsFetchCompleted());
   ClearData();
   form_manager_ = std::move(form_manager);
   local_credentials_forms_ =
@@ -96,6 +101,7 @@ void ManagePasswordsState::OnPendingPassword(
 
 void ManagePasswordsState::OnUpdatePassword(
     std::unique_ptr<password_manager::PasswordFormManagerForUI> form_manager) {
+  CHECK(form_manager->IsFetchCompleted());
   ClearData();
   form_manager_ = std::move(form_manager);
   local_credentials_forms_ =
@@ -127,6 +133,7 @@ void ManagePasswordsState::OnAutoSignin(
 
 void ManagePasswordsState::OnAutomaticPasswordSave(
     std::unique_ptr<PasswordFormManagerForUI> form_manager) {
+  CHECK(form_manager->IsFetchCompleted());
   ClearData();
   form_manager_ = std::move(form_manager);
   local_credentials_forms_ =
@@ -145,6 +152,7 @@ void ManagePasswordsState::OnSubmittedGeneratedPassword(
         state == password_manager::ui::UPDATE_CONFIRMATION_STATE ||
         state == password_manager::ui::GENERATED_PASSWORD_CONFIRMATION_STATE);
   if (form_manager) {
+    CHECK(form_manager->IsFetchCompleted());
     ClearData();
     form_manager_ = std::move(form_manager);
   }
@@ -187,11 +195,12 @@ void ManagePasswordsState::OnSubmittedGeneratedPassword(
 }
 
 void ManagePasswordsState::OnPasswordAutofilled(
-    base::span<const PasswordForm> password_forms,
+    base::span<const password_manager::StoredCredential> password_credentials,
     url::Origin origin,
-    base::span<const PasswordForm> federated_matches) {
-  CHECK(!password_forms.empty() || !federated_matches.empty());
-  auto local_credentials_forms = DeepCopyMatchingCredentials(password_forms);
+    base::span<const password_manager::StoredCredential> federated_matches) {
+  CHECK(!password_credentials.empty() || !federated_matches.empty());
+  auto local_credentials_forms =
+      DeepCopyMatchingCredentials(password_credentials);
   AppendDeepCopyVector(federated_matches, &local_credentials_forms);
 
   // Delete |form_manager_| only when the parameters are processed. They may be
@@ -215,6 +224,7 @@ void ManagePasswordsState::OnInactive() {
 
 void ManagePasswordsState::OnPasswordMovable(
     std::unique_ptr<PasswordFormManagerForUI> form_to_move) {
+  CHECK(form_to_move->IsFetchCompleted());
   ClearData();
   form_manager_ = std::move(form_to_move);
   local_credentials_forms_ =
@@ -295,7 +305,8 @@ void ManagePasswordsState::ProcessLoginsChanged(
     if (change.type() != password_manager::PasswordStoreChange::REMOVE) {
       all_changes_are_deletion = false;
     }
-    const PasswordForm& changed_form = change.form();
+    PasswordForm changed_form =
+        password_manager::ToPasswordForm(change.credential());
     if (changed_form.blocked_by_user) {
       continue;
     }
@@ -369,8 +380,8 @@ void ManagePasswordsState::SetState(password_manager::ui::State state) {
   autofill::LogManager* log_manager = client_->GetCurrentLogManager();
   if (log_manager && log_manager->IsLoggingActive()) {
     password_manager::BrowserSavePasswordProgressLogger logger(log_manager);
-    logger.LogNumber(autofill::SavePasswordProgressLogger::STRING_NEW_UI_STATE,
-                     state);
+    logger.LogString(autofill::SavePasswordProgressLogger::STRING_NEW_UI_STATE,
+                     password_manager::ui::StateToString(state));
   }
   state_ = state;
 }

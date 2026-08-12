@@ -15,8 +15,6 @@ class DataTypeControllerDelegate;
 
 namespace password_manager {
 
-class AffiliatedMatchHelper;
-
 // This class processes passwords stored in local storage (not associated to any
 // account).
 class PasswordStoreAndroidLocalBackend : public PasswordStoreBackend,
@@ -31,34 +29,33 @@ class PasswordStoreAndroidLocalBackend : public PasswordStoreBackend,
   ~PasswordStoreAndroidLocalBackend() override;
 
   // PasswordStoreBackend implementation.
-  void InitBackend(AffiliatedMatchHelper* affiliated_match_helper,
-                   RemoteChangesReceived remote_form_changes_received,
+  void InitBackend(RemoteChangesReceived remote_form_changes_received,
                    base::RepeatingClosure sync_enabled_or_disabled_cb,
                    base::OnceCallback<void(bool)> completion) override;
   void Shutdown(base::OnceClosure shutdown_completed) override;
-  bool IsAbleToSavePasswords() override;
-  void GetAllLoginsAsync(LoginsOrErrorReply callback) override;
+  ActionableError GetError() override;
+  void GetAllLoginsAsync(BackendLoginsOrErrorReply callback) override;
   void GetAllLoginsWithAffiliationAndBrandingAsync(
-      LoginsOrErrorReply callback) override;
-  void GetAutofillableLoginsAsync(LoginsOrErrorReply callback) override;
+      BackendLoginsOrErrorReply callback) override;
+  void GetAutofillableLoginsAsync(BackendLoginsOrErrorReply callback) override;
   void FillMatchingLoginsAsync(
-      LoginsOrErrorReply callback,
+      BackendLoginsOrErrorReply callback,
       bool include_psl,
       const std::vector<PasswordFormDigest>& forms) override;
-  void GetGroupedMatchingLoginsAsync(const PasswordFormDigest& form_digest,
-                                     LoginsOrErrorReply callback) override;
-  void AddLoginAsync(const PasswordForm& form,
+  void GetGroupedMatchingLoginsAsync(
+      const PasswordFormDigest& form_digest,
+      BackendLoginsOrErrorReply callback) override;
+  void AddLoginAsync(StoredCredential cred,
                      PasswordChangesOrErrorReply callback) override;
-  void UpdateLoginAsync(const PasswordForm& form,
+  void UpdateLoginAsync(StoredCredential cred,
                         PasswordChangesOrErrorReply callback) override;
   void RemoveLoginAsync(const base::Location& location,
-                        const PasswordForm& form,
+                        StoredCredential cred,
                         PasswordChangesOrErrorReply callback) override;
   void RemoveLoginsCreatedBetweenAsync(
       const base::Location& location,
       base::Time delete_begin,
       base::Time delete_end,
-      base::OnceCallback<void(bool)> sync_completion,
       PasswordChangesOrErrorReply callback) override;
   void DisableAutoSignInForOriginsAsync(
       const base::RepeatingCallback<bool(const GURL&)>& origin_filter,
@@ -72,12 +69,9 @@ class PasswordStoreAndroidLocalBackend : public PasswordStoreBackend,
  private:
   // PasswordStoreAndroidBackend implementation.
   void RecoverOnError(AndroidBackendAPIErrorCode error) override;
-  void OnCallToGMSCoreSucceeded() override;
   std::string GetAccountToRetryOperation() override;
   PasswordStoreBackendMetricsRecorder::PasswordStoreAndroidBackendType
   GetStorageType() override;
-
-  bool should_disable_saving_due_to_error_ = false;
 
   base::WeakPtrFactory<PasswordStoreAndroidLocalBackend> weak_ptr_factory_{
       this};

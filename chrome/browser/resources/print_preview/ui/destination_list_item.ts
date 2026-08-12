@@ -9,7 +9,7 @@ import '/strings.m.js';
 
 import {assert} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {removeHighlights} from 'chrome://resources/js/search_highlight_utils.js';
+import {removeHighlights, stripDiacritics} from 'chrome://resources/js/search_highlight_utils.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
@@ -55,6 +55,10 @@ export class PrintPreviewDestinationListItemElement extends CrLitElement {
     }
   }
 
+  override firstUpdated() {
+    this.addEventListener('focus', this.onFocus_.bind(this));
+  }
+
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
 
@@ -95,7 +99,7 @@ export class PrintPreviewDestinationListItemElement extends CrLitElement {
     const matches = !this.searchQuery ?
         [] :
         this.destination.extraPropertiesToMatch.filter(
-            p => p.match(this.searchQuery!));
+            p => stripDiacritics(p).match(this.searchQuery!));
     this.searchHint_ = matches.length === 0 ?
         (this.destination.extraPropertiesToMatch.find(p => !!p) || '') :
         matches.join(' ');
@@ -109,6 +113,16 @@ export class PrintPreviewDestinationListItemElement extends CrLitElement {
     }
     return loadTimeData.getStringF(
         'extensionDestinationIconTooltip', this.destination.extensionName);
+  }
+
+  private onFocus_() {
+    if (!this.destination || !this.destination.isExtension) {
+      return;
+    }
+
+    const icon = this.shadowRoot.querySelector<HTMLElement>('.extension-icon');
+    assert(!!icon);
+    icon.focus();
   }
 }
 

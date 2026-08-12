@@ -4,7 +4,6 @@
 
 package org.chromium.chrome.browser.tasks.tab_management;
 
-import static org.chromium.base.test.util.Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE;
 import static org.chromium.ui.test.util.RenderTestRule.Component.UI_BROWSER_MOBILE_TAB_SWITCHER_GRID;
 
 import android.app.Activity;
@@ -32,7 +31,8 @@ import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.browser.actor.ui.ActorUiTabController.UiTabState;
+import org.chromium.chrome.browser.actor.ui.TabIndicatorStatus;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab_ui.ThumbnailProvider.MultiThumbnailMetadata;
@@ -53,7 +53,6 @@ import java.util.List;
 @RunWith(ParameterizedRunner.class)
 @UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
-@Restriction({RESTRICTION_TYPE_NON_LOW_END_DEVICE})
 @Batch(Batch.PER_CLASS)
 @DisabledTest(message = "https://crbug.com/424204696")
 public class TabGridViewRenderTest {
@@ -79,7 +78,7 @@ public class TabGridViewRenderTest {
     public ChromeRenderTestRule mRenderTestRule =
             ChromeRenderTestRule.Builder.withPublicCorpus()
                     .setBugComponent(UI_BROWSER_MOBILE_TAB_SWITCHER_GRID)
-                    .setRevision(1)
+                    .setRevision(2)
                     .build();
 
     public TabGridViewRenderTest(boolean isNightModeEnabled) {
@@ -91,7 +90,7 @@ public class TabGridViewRenderTest {
     public void setUp() throws Exception {
         mActivityTestRule.launchActivity(null);
         mActivity = mActivityTestRule.getActivity();
-        mActivity.setTheme(org.chromium.chrome.test.R.style.Theme_BrowserUI_DayNight);
+        mActivity.setTheme(R.style.Theme_BrowserUI_DayNight);
 
         FrameLayout.LayoutParams params =
                 new FrameLayout.LayoutParams(
@@ -109,7 +108,7 @@ public class TabGridViewRenderTest {
                                             .inflate(R.layout.tab_grid_card_item, view, false);
                     view.addView(mTabGridView);
 
-                    initModel();
+                    mModel = createModel(false);
                     PropertyModelChangeProcessor.create(
                             mModel, mTabGridView, TabGridViewBinder::bindTab);
                 });
@@ -142,6 +141,57 @@ public class TabGridViewRenderTest {
         mRenderTestRule.render(mTabGridView, "tab_grid_view_highlight_incognito");
     }
 
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    public void testCardView_Focused() throws IOException {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mModel = createModel(false);
+                    PropertyModelChangeProcessor.create(
+                            mModel, mTabGridView, TabGridViewBinder::bindTab);
+                    mTabGridView.setFocusable(true);
+                    mTabGridView.requestFocus();
+                });
+        mRenderTestRule.render(mTabGridView, "tab_grid_view_focused");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    public void testCardView_FocusedIncognito() throws IOException {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mModel = createModel(true);
+                    PropertyModelChangeProcessor.create(
+                            mModel, mTabGridView, TabGridViewBinder::bindTab);
+                    mTabGridView.setFocusable(true);
+                    mTabGridView.requestFocus();
+                });
+        mRenderTestRule.render(mTabGridView, "tab_grid_view_focused_incognito");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    public void testCardView_ActorActiveIndicator() throws IOException {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mModel = createModel(false);
+                    UiTabState state =
+                            new UiTabState(
+                                    Tab.INVALID_TAB_ID,
+                                    /* actorOverlay= */ null,
+                                    /* handoffButton= */ null,
+                                    TabIndicatorStatus.STATIC,
+                                    /* borderGlowVisible= */ false);
+                    mModel.set(TabProperties.ACTOR_UI_STATE, state);
+                    PropertyModelChangeProcessor.create(
+                            mModel, mTabGridView, TabGridViewBinder::bindTab);
+                });
+        mRenderTestRule.render(mTabGridView, "tab_grid_view_actor_active_indicator");
+    }
+
     public void pollForHighlight(boolean isHighlighted) {
         View cardWrapper = mTabGridView.findViewById(R.id.card_wrapper);
         int neededVisibility = isHighlighted ? View.VISIBLE : View.INVISIBLE;
@@ -152,15 +202,14 @@ public class TabGridViewRenderTest {
                                 && cardWrapper.getAlpha() == neededAlpha);
     }
 
-    public void initModel() {
-        mModel =
-                new PropertyModel.Builder(TabProperties.ALL_KEYS_TAB_GRID)
-                        .with(TabProperties.TAB_ACTION_STATE, TabActionState.CLOSABLE)
-                        .with(TabProperties.IS_INCOGNITO, false)
-                        .with(TabProperties.TAB_ID, Tab.INVALID_TAB_ID)
-                        .with(TabProperties.IS_SELECTED, false)
-                        .with(TabProperties.THUMBNAIL_FETCHER, mNullThumbnailFetcher)
-                        .with(TabProperties.GRID_CARD_SIZE, new Size(500, 600))
-                        .build();
+    public PropertyModel createModel(boolean isIncognito) {
+        return new PropertyModel.Builder(TabProperties.ALL_KEYS_TAB_GRID)
+                .with(TabProperties.TAB_ACTION_STATE, TabActionState.CLOSABLE)
+                .with(TabProperties.IS_INCOGNITO, isIncognito)
+                .with(TabProperties.TAB_ID, Tab.INVALID_TAB_ID)
+                .with(TabProperties.IS_SELECTED, false)
+                .with(TabProperties.THUMBNAIL_FETCHER, mNullThumbnailFetcher)
+                .with(TabProperties.GRID_CARD_SIZE, new Size(500, 600))
+                .build();
     }
 }

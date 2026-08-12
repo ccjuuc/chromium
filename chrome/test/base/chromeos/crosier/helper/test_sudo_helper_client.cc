@@ -16,6 +16,7 @@
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
@@ -72,7 +73,7 @@ TestSudoHelperClient::~TestSudoHelperClient() {
 bool TestSudoHelperClient::WaitForServer(base::TimeDelta max_wait) {
   base::ElapsedTimer elapsed;
 
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(kKeyMethod, kMethodRunCommand);
   dict.Set(kKeyCommand, "true");
 
@@ -101,7 +102,7 @@ TestSudoHelperClient::Result TestSudoHelperClient::RunCommand(
   // expected in this testing context.
   base::ScopedAllowBlockingForTesting allow_blocking;
 
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(kKeyMethod, kMethodRunCommand);
   dict.Set(kKeyCommand, command);
 
@@ -117,7 +118,7 @@ TestSudoHelperClient::Result TestSudoHelperClient::StartSessionManager(
 
   session_manager_stopped_callback_ = std::move(stopped_callback);
 
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(kKeyMethod, kMethodStartSessionManager);
 
   base::ScopedFD sock;
@@ -147,7 +148,7 @@ TestSudoHelperClient::Result TestSudoHelperClient::StopSessionManager() {
   CHECK(session_manager_watcher_thread_)
       << "Unsupported because session manager is not started from this client.";
 
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(kKeyMethod, kMethodStopSessionManager);
 
   return SendDictAndGetResult(dict);
@@ -171,10 +172,10 @@ base::ScopedFD TestSudoHelperClient::ConnectToServer(
     const base::FilePath& client_path) {
   base::ScopedFD client_sock = crosier::CreateSocketAndBind(client_path);
 
-  struct sockaddr_un addr = {0};
+  struct sockaddr_un addr = {};
   addr.sun_family = AF_UNIX;
-  UNSAFE_TODO(strncpy(addr.sun_path, server_path_.c_str(),
-                      sizeof(sockaddr_un::sun_path)));
+  auto sun_path_span = base::span(addr.sun_path);
+  sun_path_span.first(server_path_.size()).copy_from(base::span(server_path_));
 
   socklen_t addr_len =
       offsetof(struct sockaddr_un, sun_path) + server_path_.size();
@@ -186,7 +187,7 @@ base::ScopedFD TestSudoHelperClient::ConnectToServer(
 }
 
 TestSudoHelperClient::Result TestSudoHelperClient::SendDictAndGetResult(
-    const base::Value::Dict& dict,
+    const base::DictValue& dict,
     base::ScopedFD* out_sock,
     bool fatal_on_connection_error) {
   Result result;
@@ -216,7 +217,7 @@ TestSudoHelperClient::Result TestSudoHelperClient::SendDictAndGetResult(
 
   // Reads the 1 byte return code.
   signed char byte_buffer = 0;
-  crosier::ReadBuffer(sock, &byte_buffer, 1);
+  crosier::ReadBuffer(sock, base::byte_span_from_ref(byte_buffer));
   result.return_code = byte_buffer;
 
   // Reads the output.
@@ -244,7 +245,7 @@ void TestSudoHelperClient::ReadSessionManagerEventOnWatcherThread(
            base::PlatformThread::CurrentId());
 
   signed char byte_buffer = 0;
-  crosier::ReadBuffer(sock, &byte_buffer, 1);
+  crosier::ReadBuffer(sock, base::byte_span_from_ref(byte_buffer));
   CHECK_EQ(byte_buffer, 0);
 
   std::string output = crosier::ReadString(sock);

@@ -20,7 +20,7 @@ namespace {
 
 // Returns true in situations where we allow background updates on metered
 // networks.
-bool AllowBackgroundUpdatesOnMeteredNetwork() {
+constexpr bool AllowBackgroundUpdatesOnMeteredNetwork() {
   // TODO(crbug.com/40199605): Modify this function to enable background updates
   // on metered networks when a toggle is set in the browser.
   return true;
@@ -28,7 +28,7 @@ bool AllowBackgroundUpdatesOnMeteredNetwork() {
 
 bool IsConnectionedMetered() {
   // Because NLM could deadlock in Win10 versions pre-RS5, don't run the code
-  // for those versions (see crbug.com/1254492).
+  // for those versions (see crbug.com/40199610).
   if (base::win::GetVersion() < base::win::Version::WIN10_RS5) {
     return false;
   }

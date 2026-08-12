@@ -98,7 +98,7 @@ bool IsContextValid(v8::Local<v8::Context> context) {
   if (is_context_valid) {
     // As long as the context is valid, there should be an associated
     // JSRunner.
-    // TODO(devlin): (Likely) Remove this once https://crbug.com/819968, since
+    // TODO(devlin): (Likely) Remove this once https://crbug.com/41375376, since
     // this shouldn't necessarily be a hard dependency. At least downgrade it
     // to a DCHECK.
     CHECK(JSRunner::Get(context));
@@ -139,7 +139,7 @@ void InvalidateContext(v8::Local<v8::Context> context) {
   data->Invalidate();
 }
 
-std::string GetPlatformString() {
+std::string_view GetPlatformString() {
 #if BUILDFLAG(IS_CHROMEOS)
   return "chromeos";
 #elif BUILDFLAG(IS_LINUX)
@@ -169,10 +169,15 @@ ContextInvalidationListener::ContextInvalidationListener(
 }
 
 ContextInvalidationListener::~ContextInvalidationListener() {
+  Dispose();
+}
+
+void ContextInvalidationListener::Dispose() {
   // We may have already removed ourselves as a listener (in OnInvalidated())
   // if the context was invalidated previously. Check the context first.
   if (context_invalidation_data_) {
     context_invalidation_data_->RemoveListener(this);
+    context_invalidation_data_ = nullptr;
   }
 }
 

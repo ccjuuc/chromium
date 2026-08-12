@@ -4,27 +4,62 @@
 
 #include "components/autofill/core/browser/integrators/one_time_tokens/otp_field_detector.h"
 
+#include <memory>
+#include <utility>
+
+#include "base/callback_list.h"
+#include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
+#include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
+#include "components/autofill/core/browser/foundations/autofill_driver.h"
+#include "components/autofill/core/common/autofill_features.h"
+#include "components/autofill/core/common/unique_ids.h"
+#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 
 namespace autofill {
 
 namespace {
 
-// Returns if `form` in `manager` contains at least one `ONE_TIME_CODE` field.
+// Returns true if the form contains at least one ONE_TIME_CODE field and
+// all ONE_TIME_CODE fields in the form are same-site with the main frame's
+// origin.
 [[nodiscard]] bool IsOtpForm(const FormStructure& form) {
-  return std::ranges::any_of(
-      form.fields(), [](const std::unique_ptr<AutofillField>& f) {
-        return f->Type().GetTypes().contains(ONE_TIME_CODE) &&
-               f->is_focusable();
-      });
+  const bool restrict_to_same_tld = base::FeatureList::IsEnabled(
+      features::kAutofillRestrictOtpToSameTldPlusOne);
+
+  bool has_otp_field = false;
+  for (const std::unique_ptr<AutofillField>& f : form.fields()) {
+    if (!f->Type().GetTypes().contains(ONE_TIME_CODE) || !f->is_focusable()) {
+      continue;
+    }
+    has_otp_field = true;
+    if (!restrict_to_same_tld) {
+      return true;
+    }
+
+    if (!net::registry_controlled_domains::SameDomainOrHost(
+            f->origin(), form.main_frame_origin(),
+            net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES)) {
+      // TODO(crbug.com/441433533): Consider making this less strict by
+      // introducing a field-level check in the manager instead of dropping
+      // the entire form.
+      return false;
+    }
+  }
+
+  return has_otp_field;
 }
 
-// Returns if `form` in `manager` contains at least one `ONE_TIME_CODE` field.
+// Returns true if the `form_id` in `manager` contains at least one ONE_TIME_CODE
+// field and all ONE_TIME_CODE fields in the form are same-site with the main
+// frame's origin.
 [[nodiscard]] bool IsOtpForm(const AutofillManager& manager,
-                             FormGlobalId form) {
-  const FormStructure* form_structure = manager.FindCachedFormById(form);
+                             FormGlobalId form_id) {
+  const FormStructure* form_structure = manager.FindCachedFormById(form_id);
   return form_structure && IsOtpForm(*form_structure);
 }
 
@@ -64,7 +99,8 @@ bool OtpFieldDetector::IsOtpFieldPresent() const {
 
 void OtpFieldDetector::OnFieldTypesDetermined(AutofillManager& manager,
                                               FormGlobalId form,
-                                              FieldTypeSource source) {
+                                              FieldTypeSource source,
+                                              bool small_forms_were_parsed) {
   if (IsOtpForm(manager, form)) {
     AddFormAndNotifyIfNecessary(form);
   } else {
@@ -83,15 +119,15 @@ void OtpFieldDetector::OnAfterFormsSeen(
 
 void OtpFieldDetector::OnAutofillManagerStateChanged(
     AutofillManager& manager,
-    AutofillDriver::LifecycleState previous,
-    AutofillDriver::LifecycleState current) {
-  if (current != AutofillDriver::LifecycleState::kActive) {
+    AutofillDriver::LifecycleState old_state,
+    AutofillDriver::LifecycleState new_state) {
+  if (new_state != AutofillDriver::LifecycleState::kActive) {
     manager.ForEachCachedForm([&](const FormStructure& form) {
       RemoveFormAndNotifyIfNecessary(form.global_id());
     });
   } else {
     manager.ForEachCachedForm([&](const FormStructure& form) {
-      if (IsOtpForm(manager, form.global_id())) {
+      if (IsOtpForm(form)) {
         AddFormAndNotifyIfNecessary(form.global_id());
       }
     });

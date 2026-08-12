@@ -8,6 +8,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
+#include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/trace_event/trace_event.h"
 #include "components/viz/common/resources/shared_image_format.h"
@@ -97,8 +98,7 @@ V4L2CaptureDelegateGpuHelper::~V4L2CaptureDelegateGpuHelper() = default;
 
 int V4L2CaptureDelegateGpuHelper::OnIncomingCapturedData(
     VideoCaptureDevice::Client* client,
-    const uint8_t* sample,
-    size_t sample_size,
+    base::span<const uint8_t> sample,
     const VideoCaptureFormat& capture_format,
     const gfx::ColorSpace& data_color_space,
     int rotation,
@@ -164,8 +164,9 @@ int V4L2CaptureDelegateGpuHelper::OnIncomingCapturedData(
   }
 
   int status = ConvertCaptureDataToNV12(
-      sample, sample_size, capture_format, dimensions, data_color_space,
-      rotation, scoped_mapping->GetMemoryForPlane(VideoFrame::Plane::kY).data(),
+      sample.data(), sample.size(), capture_format, dimensions,
+      data_color_space, rotation,
+      scoped_mapping->GetMemoryForPlane(VideoFrame::Plane::kY).data(),
       scoped_mapping->GetMemoryForPlane(VideoFrame::Plane::kUV).data(),
       scoped_mapping->Stride(VideoFrame::Plane::kY),
       scoped_mapping->Stride(VideoFrame::Plane::kUV));

@@ -18,6 +18,7 @@
 #import "base/task/sequenced_task_runner.h"
 #import "base/test/gmock_callback_support.h"
 #import "base/test/ios/wait_util.h"
+#import "base/trace_event/named_trigger.h"
 #import "components/sessions/core/session_id.h"
 #import "ios/web/common/uikit_ui_util.h"
 #import "ios/web/js_messaging/web_frames_manager_impl.h"
@@ -416,17 +417,37 @@ TEST_F(WebStateImplTest, DelegateTest) {
   web_state.CancelDialogs();
   EXPECT_TRUE(presenter->cancel_dialogs_called());
 
-  // Test that OnAuthRequired() is called.
+  // Test that OnAuthRequired() for HTTP authentication method is called.
   EXPECT_FALSE(delegate.last_authentication_request());
   NSURLProtectionSpace* protection_space = [[NSURLProtectionSpace alloc] init];
   NSURLCredential* credential = [[NSURLCredential alloc] init];
-  WebStateDelegate::AuthCallback callback;
-  web_state.OnAuthRequired(protection_space, credential, std::move(callback));
+  WebStateDelegate::HTTPAuthCallback http_callback = base::DoNothing();
+  web_state.OnAuthRequired(protection_space, credential,
+                           std::move(http_callback));
   ASSERT_TRUE(delegate.last_authentication_request());
   EXPECT_EQ(delegate.last_authentication_request()->web_state, &web_state);
   EXPECT_EQ(delegate.last_authentication_request()->protection_space,
             protection_space);
   EXPECT_EQ(delegate.last_authentication_request()->credential, credential);
+  ASSERT_TRUE(delegate.last_authentication_request()->http_auth_callback);
+  ASSERT_FALSE(
+      delegate.last_authentication_request()->client_cert_auth_callback);
+
+  delegate.ClearLastAuthenticationRequest();
+
+  // Test that OnAuthRequired() for Client Cert authentication method is called.
+  EXPECT_FALSE(delegate.last_authentication_request());
+  WebStateDelegate::ClientCertAuthCallback client_cert_callback =
+      base::DoNothing();
+  web_state.OnAuthRequired(protection_space, std::move(client_cert_callback));
+  ASSERT_TRUE(delegate.last_authentication_request());
+  EXPECT_EQ(delegate.last_authentication_request()->web_state, &web_state);
+  EXPECT_EQ(delegate.last_authentication_request()->protection_space,
+            protection_space);
+  EXPECT_EQ(delegate.last_authentication_request()->credential, nullptr);
+  ASSERT_TRUE(
+      delegate.last_authentication_request()->client_cert_auth_callback);
+  ASSERT_FALSE(delegate.last_authentication_request()->http_auth_callback);
 }
 
 // Verifies that GlobalWebStateObservers are called when expected.
@@ -1149,6 +1170,72 @@ TEST_F(WebStateImplTest, SerializeMetadataToProto) {
     EXPECT_EQ(metadata.active_page().page_title(), base::UTF16ToUTF8(title));
     EXPECT_EQ(metadata.active_page().page_url(), visible_url.spec());
   }
+}
+
+TEST_F(WebStateImplTest, TestIsCustomOpenPanelSupported) {
+  // Test realized state created via CreateParams.
+  WebStateImpl web_state =
+      WebStateImpl(WebState::CreateParams(GetBrowserState()));
+
+  EXPECT_FALSE(web_state.IsCustomOpenPanelSupported());
+
+  web_state.SetCustomOpenPanelSupported(true);
+  EXPECT_TRUE(web_state.IsCustomOpenPanelSupported());
+
+  web_state.SetCustomOpenPanelSupported(false);
+  EXPECT_FALSE(web_state.IsCustomOpenPanelSupported());
+
+  // Test unrealized state.
+  proto::WebStateStorage storage;
+  proto::WebStateMetadataStorage metadata;
+  WebStateImpl unrealized_web_state = WebStateImpl(
+      GetBrowserState(), web::WebStateID::NewUnique(), metadata,
+      base::ReturnValueOnce(std::make_optional(std::move(storage))),
+      base::ReturnValueOnce<NSData*>(nil));
+
+  ASSERT_FALSE(unrealized_web_state.IsRealized());
+  EXPECT_FALSE(unrealized_web_state.IsCustomOpenPanelSupported());
+}
+
+class TestNamedTriggerManager : public base::trace_event::NamedTriggerManager {
+ public:
+  TestNamedTriggerManager() {
+    base::trace_event::NamedTriggerManager::SetInstance(this);
+  }
+  ~TestNamedTriggerManager() override {
+    base::trace_event::NamedTriggerManager::SetInstance(nullptr);
+  }
+
+  bool DoEmitNamedTrigger(const std::string& trigger_name,
+                          std::optional<int32_t> value,
+                          uint64_t flow_id) override {
+    last_trigger_name_ = trigger_name;
+    return true;
+  }
+
+  const std::string& last_trigger_name() const { return last_trigger_name_; }
+
+ private:
+  std::string last_trigger_name_;
+};
+
+// Verifies that "navigation-start" trigger is emitted when navigation starts.
+TEST_F(WebStateImplTest, NavigationStartTrigger) {
+  TestNamedTriggerManager trigger_manager;
+
+  std::unique_ptr<WebStateImpl> web_state =
+      std::make_unique<WebStateImpl>(WebState::CreateParams(GetBrowserState()));
+
+  EXPECT_TRUE(trigger_manager.last_trigger_name().empty());
+
+  std::unique_ptr<NavigationContextImpl> context =
+      NavigationContextImpl::CreateNavigationContext(
+          web_state.get(), GURL(), /*has_user_gesture=*/true,
+          ui::PageTransition::PAGE_TRANSITION_AUTO_BOOKMARK,
+          /*is_renderer_initiated=*/true);
+  web_state->OnNavigationStarted(context.get());
+
+  EXPECT_EQ(trigger_manager.last_trigger_name(), "navigation-start");
 }
 
 }  // namespace web

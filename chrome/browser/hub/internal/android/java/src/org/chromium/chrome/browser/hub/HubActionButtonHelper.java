@@ -20,6 +20,7 @@ import androidx.core.widget.TextViewCompat;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.ui.actions.button.FullButtonData;
 
 /** Helper class for Hub action button operations. */
 @NullMarked
@@ -50,34 +51,46 @@ public class HubActionButtonHelper {
     }
 
     /** Sets up color mixer for the action button. */
-    public static void setColorMixer(Button button, HubColorMixer mixer) {
-        Context context = button.getContext();
-        boolean isGtsUpdateEnabled = HubUtils.isGtsUpdateEnabled();
-        if (isGtsUpdateEnabled) {
-            mixer.registerBlend(
-                    new SingleHubViewColorBlend(
-                            PANE_COLOR_BLEND_ANIMATION_DURATION_MS,
-                            colorScheme ->
-                                    HubColors.getToolbarActionButtonIconColor(context, colorScheme),
-                            color -> updateActionButtonIconColorInternal(button, context, color)));
+    public static void setColorMixer(Button button, @Nullable HubColorMixer mixer) {
+        HubColorMixerRegistrationHelper helper =
+                (HubColorMixerRegistrationHelper) button.getTag(R.id.hub_color_mixer_helper);
+        if (helper == null) {
+            helper = new HubColorMixerRegistrationHelper();
+            button.setTag(R.id.hub_color_mixer_helper, helper);
 
-            mixer.registerBlend(
-                    new SingleHubViewColorBlend(
-                            PANE_COLOR_BLEND_ANIMATION_DURATION_MS,
-                            colorScheme ->
-                                    HubColors.getToolbarActionButtonBackgroundColor(
-                                            context, colorScheme),
-                            color -> updateActionButtonColorInternal(button, context, color)));
-        } else {
-            mixer.registerBlend(
-                    new SingleHubViewColorBlend(
-                            PANE_COLOR_BLEND_ANIMATION_DURATION_MS,
-                            colorScheme -> HubColors.getIconColor(context, colorScheme),
-                            interpolatedColor -> {
-                                updateActionButtonIconColorInternal(
-                                        button, context, interpolatedColor);
-                            }));
+            Context context = button.getContext();
+            boolean isGtsUpdateEnabled = HubUtils.isGtsUpdateEnabled();
+            if (isGtsUpdateEnabled) {
+                helper.registerBlend(
+                        new SingleHubViewColorBlend(
+                                PANE_COLOR_BLEND_ANIMATION_DURATION_MS,
+                                colorScheme ->
+                                        HubColors.getToolbarActionButtonIconColor(
+                                                context, colorScheme),
+                                color ->
+                                        updateActionButtonIconColorInternal(
+                                                button, context, color)));
+
+                helper.registerBlend(
+                        new SingleHubViewColorBlend(
+                                PANE_COLOR_BLEND_ANIMATION_DURATION_MS,
+                                colorScheme ->
+                                        HubColors.getToolbarActionButtonBackgroundColor(
+                                                context, colorScheme),
+                                color -> updateActionButtonColorInternal(button, context, color)));
+            } else {
+                helper.registerBlend(
+                        new SingleHubViewColorBlend(
+                                PANE_COLOR_BLEND_ANIMATION_DURATION_MS,
+                                colorScheme -> HubColors.getIconColor(context, colorScheme),
+                                interpolatedColor -> {
+                                    updateActionButtonIconColorInternal(
+                                            button, context, interpolatedColor);
+                                }));
+            }
         }
+
+        helper.setColorMixer(mixer);
     }
 
     /** Updates action button icon color. */

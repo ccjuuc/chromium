@@ -7,6 +7,7 @@
 #import "base/memory/raw_ptr.h"
 #import "base/metrics/histogram_functions.h"
 #import "base/metrics/user_metrics.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_metrics.h"
 #import "components/sync/base/user_selectable_type.h"
 #import "components/sync/service/sync_service.h"
@@ -35,9 +36,7 @@ HistorySyncResult HistorySyncSkipReasonToHistorySyncResult(
   switch (skip_reason) {
     case history_sync::HistorySyncSkipReason::kNone:
       // History sync should not be skipped if the reason is `kNone`.
-      NOTREACHED(base::NotFatalUntil::M145);
-      // Need to return a value until `NOTREACHED` doesn't return.
-      return HistorySyncResult::kSuccess;
+      NOTREACHED();
     case history_sync::HistorySyncSkipReason::kNotSignedIn:
       return HistorySyncResult::kPrimaryIdentityRemoved;
     case history_sync::HistorySyncSkipReason::kAlreadyOptedIn:
@@ -162,8 +161,7 @@ HistorySyncResult HistorySyncSkipReasonToHistorySyncResult(
   signin::IdentityManager* identityManager =
       IdentityManagerFactory::GetForProfile(profile);
   // Need to be signed in to open the history sync dialog.
-  CHECK(identityManager->HasPrimaryAccount(signin::ConsentLevel::kSignin),
-        base::NotFatalUntil::M145);
+  CHECK(identityManager->HasPrimaryAccount(signin::ConsentLevel::kSignin));
   _mediator = [[HistorySyncMediator alloc]
       initWithAuthenticationService:authenticationService
         chromeAccountManagerService:chromeAccountManagerService

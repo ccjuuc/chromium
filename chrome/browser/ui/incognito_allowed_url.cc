@@ -9,15 +9,19 @@
 
 #include "build/build_config.h"
 #include "chrome/browser/signin/signin_promo.h"
-#include "chrome/common/url_constants.h"
+#include "chrome/common/webui_url_constants.h"
 #include "components/password_manager/content/common/web_ui_constants.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "url/gurl.h"
 
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/webui_url_constants.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 namespace {
 
 bool IsHostAllowedInIncognito(const GURL& url) {
-  std::string scheme = url.GetScheme();
+  std::string_view scheme = url.scheme();
   std::string_view host = url.host();
   if (scheme != content::kChromeUIScheme) {
     return true;
@@ -42,7 +46,7 @@ bool IsHostAllowedInIncognito(const GURL& url) {
   return host != chrome::kChromeUIAppLauncherPageHost &&
          host != chrome::kChromeUISettingsHost &&
 #if BUILDFLAG(IS_CHROMEOS)
-         host != chrome::kChromeUIOSSettingsHost &&
+         host != ash::kChromeUIOSSettingsHost &&
 #endif
          host != chrome::kChromeUIHelpHost &&
          host != chrome::kChromeUIHistoryHost &&
@@ -53,7 +57,7 @@ bool IsHostAllowedInIncognito(const GURL& url) {
 }  // namespace
 
 bool IsURLAllowedInIncognito(const GURL& url) {
-  if (url.GetScheme() == content::kViewSourceScheme) {
+  if (url.scheme() == content::kViewSourceScheme) {
     // A view-source URL is allowed in incognito mode only if the URL itself
     // is allowed in incognito mode. Remove the "view-source:" from the start
     // of the URL and validate the rest.

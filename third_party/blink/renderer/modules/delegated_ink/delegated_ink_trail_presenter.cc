@@ -16,6 +16,7 @@
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 #include "ui/gfx/delegated_ink_metadata.h"
 
 namespace blink {
@@ -79,7 +80,8 @@ void DelegatedInkTrailPresenter::updateInkTrailStartPoint(
   // zoom factor. Convert to absolute point so that a point from the root frame
   // is obtained in the case of an iframe.
   gfx::PointF point = evt->AbsoluteLocation();
-  point = layout_view->LocalToAbsolutePoint(point, kTraverseDocumentBoundaries);
+  point = layout_view->LocalToAbsolutePoint(
+      point, {MapCoordinatesMode::kTraverseDocumentBoundaries});
   // Convert to visual viewport space so that page scale factor is taken into
   // consideration.
   const VisualViewport& visual_viewport =
@@ -93,21 +95,22 @@ void DelegatedInkTrailPresenter::updateInkTrailStartPoint(
   // viewport accounts for the full window. Convert everything to root frame
   // coordinates in order to make sure offsets aren't lost along the way.
   PhysicalRect border_box_rect_absolute = layout_box->LocalToAbsoluteRect(
-      layout_box->PhysicalBorderBoxRect(), kTraverseDocumentBoundaries);
+      layout_box->PhysicalBorderBoxRect(),
+      {MapCoordinatesMode::kTraverseDocumentBoundaries});
 
   while (layout_view->GetFrame()->OwnerLayoutObject()) {
     PhysicalRect frame_visual_viewport_absolute =
         layout_view->LocalToAbsoluteRect(
-            PhysicalRect(
-                layout_view->GetScrollableArea()->VisibleContentRect()),
-            kTraverseDocumentBoundaries);
+            PhysicalRect(layout_view->GetScrollableArea()->VisibleContentRect(
+                kExcludeScrollbars)),
+            {MapCoordinatesMode::kTraverseDocumentBoundaries});
     border_box_rect_absolute.Intersect(frame_visual_viewport_absolute);
 
     layout_view = layout_view->GetFrame()->OwnerLayoutObject()->View();
   }
 
   border_box_rect_absolute.Intersect(
-      PhysicalRect(visual_viewport.VisibleContentRect()));
+      PhysicalRect(visual_viewport.VisibleContentRect(kExcludeScrollbars)));
 
   gfx::RectF area = gfx::RectF(border_box_rect_absolute);
   area = visual_viewport.RootFrameToViewport(area);
@@ -134,11 +137,10 @@ void DelegatedInkTrailPresenter::updateInkTrailStartPoint(
           point_visual_viewport, diameter_in_physical_pixels, color.Rgb(),
           evt->PlatformTimeStamp(), area, is_hovering);
 
-  TRACE_EVENT_WITH_FLOW1("delegated_ink_trails",
-                         "DelegatedInkTrailPresenter::updateInkTrailStartPoint",
-                         TRACE_ID_GLOBAL(metadata->trace_id()),
-                         TRACE_EVENT_FLAG_FLOW_OUT, "metadata",
-                         metadata->ToString());
+  TRACE_EVENT("delegated_ink_trails",
+              "DelegatedInkTrailPresenter::updateInkTrailStartPoint",
+              perfetto::Flow::Global(metadata->trace_id()), "metadata",
+              metadata->ToString());
 
   if (last_delegated_ink_metadata_timestamp_ == metadata->timestamp())
     return;

@@ -9,8 +9,8 @@
 #import "base/apple/foundation_util.h"
 #import "base/test/ios/wait_util.h"
 #import "base/values.h"
+#import "ios/web/public/test/fakes/crw_fake_script_message_handler.h"
 #import "ios/web/public/test/js_test_util.h"
-#import "ios/web/test/fakes/crw_fake_script_message_handler.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
 #import "testing/platform_test.h"
@@ -18,6 +18,11 @@
 
 using base::test::ios::kWaitForJSCompletionTimeout;
 using base::test::ios::WaitUntilConditionOrTimeout;
+
+@interface CustomObject : NSObject
+@end
+@implementation CustomObject
+@end
 
 namespace web {
 
@@ -136,13 +141,13 @@ TEST_F(WebViewJsUtilsTest, ValueResultFromDictionaryWKResult) {
 
   std::unique_ptr<base::Value> value(
       web::ValueResultFromWKResult(test_dictionary));
-  base::Value::Dict* dictionary = value->GetIfDict();
+  base::DictValue* dictionary = value->GetIfDict();
   EXPECT_NE(nullptr, dictionary);
 
   std::string* value1 = dictionary->FindString("Key1");
   EXPECT_EQ("Value1", *value1);
 
-  base::Value::Dict const* inner_dictionary = dictionary->FindDict("Key2");
+  base::DictValue const* inner_dictionary = dictionary->FindDict("Key2");
   EXPECT_NE(nullptr, inner_dictionary);
 
   EXPECT_EQ(42, *inner_dictionary->FindDouble("Key3"));
@@ -155,7 +160,7 @@ TEST_F(WebViewJsUtilsTest, ValueResultFromArrayWKResult) {
 
   std::unique_ptr<base::Value> value(web::ValueResultFromWKResult(test_array));
   ASSERT_TRUE(value->is_list());
-  const base::Value::List& list = value->GetList();
+  const base::ListValue& list = value->GetList();
 
   size_t list_size = 3;
   ASSERT_EQ(list_size, list.size());
@@ -193,8 +198,8 @@ TEST_F(WebViewJsUtilsTest, ValueResultFromDictionaryWithDepthCheckWKResult) {
   // `kMaximumParsingRecursionDepth`.
   std::unique_ptr<base::Value> value =
       web::ValueResultFromWKResult(test_dictionary);
-  base::Value::Dict* current_dictionary = value->GetIfDict();
-  base::Value::Dict* inner_dictionary = nullptr;
+  base::DictValue* current_dictionary = value->GetIfDict();
+  base::DictValue* inner_dictionary = nullptr;
 
   EXPECT_NE(nullptr, current_dictionary);
 
@@ -223,8 +228,8 @@ TEST_F(WebViewJsUtilsTest, ValueResultFromArrayWithDepthCheckWKResult) {
   // Check that parsing the array stopped at a depth of
   // `kMaximumParsingRecursionDepth`.
   std::unique_ptr<base::Value> value = web::ValueResultFromWKResult(test_array);
-  base::Value::List* current_list = nullptr;
-  base::Value::List* inner_list = nullptr;
+  base::ListValue* current_list = nullptr;
+  base::ListValue* inner_list = nullptr;
 
   ASSERT_TRUE(value->is_list());
   current_list = &value->GetList();
@@ -301,10 +306,10 @@ TEST_F(WebViewJsUtilsTest, NSObjectFromNoneValueResult) {
 // Tests that NSObjectFromValueResult converts Value::Type::DICT to
 // NSDictionary.
 TEST_F(WebViewJsUtilsTest, NSObjectFromDictValueResult) {
-  base::Value::Dict test_dict;
+  base::DictValue test_dict;
   test_dict.Set("Key1", "Value1");
 
-  base::Value::Dict inner_test_dict;
+  base::DictValue inner_test_dict;
   inner_test_dict.Set("Key3", 42);
   test_dict.Set("Key2", std::move(inner_test_dict));
 
@@ -322,12 +327,44 @@ TEST_F(WebViewJsUtilsTest, NSObjectFromDictValueResult) {
   EXPECT_NSEQ(@(42), inner_dictionary[@"Key3"]);
 }
 
+// Tests that NSDictionaryFromValue converts base::DictValue to NSDictionary.
+TEST_F(WebViewJsUtilsTest, NSDictionaryFromValue) {
+  base::DictValue test_dict;
+  test_dict.Set("Key1", "Value1");
+
+  base::DictValue inner_test_dict;
+  inner_test_dict.Set("Key3", 42);
+  test_dict.Set("Key2", std::move(inner_test_dict));
+
+  id wk_result = web::NSDictionaryFromValue(test_dict);
+  EXPECT_TRUE(wk_result);
+  EXPECT_TRUE([wk_result isKindOfClass:[NSDictionary class]]);
+
+  NSDictionary* wk_result_dictionary =
+      base::apple::ObjCCastStrict<NSDictionary>(wk_result);
+  EXPECT_NSEQ(@"Value1", wk_result_dictionary[@"Key1"]);
+
+  NSDictionary* inner_dictionary = wk_result_dictionary[@"Key2"];
+  EXPECT_TRUE(inner_dictionary);
+  EXPECT_NSEQ(@(42), inner_dictionary[@"Key3"]);
+}
+
+// Tests that NSDictionaryFromValue converts empty base::DictValue to empty
+// NSDictionary.
+TEST_F(WebViewJsUtilsTest, NSDictionaryFromEmptyValue) {
+  base::DictValue empty_dict;
+  id wk_result = web::NSDictionaryFromValue(empty_dict);
+  EXPECT_TRUE(wk_result);
+  EXPECT_TRUE([wk_result isKindOfClass:[NSDictionary class]]);
+  EXPECT_NSEQ(@{}, wk_result);
+}
+
 // Tests that NSObjectFromValueResult converts Value::Type::LIST to NSArray.
 TEST_F(WebViewJsUtilsTest, NSObjectFromListValueResult) {
-  base::Value::List test_list;
+  base::ListValue test_list;
   test_list.Append("Value1");
 
-  base::Value::List inner_test_list;
+  base::ListValue inner_test_list;
   inner_test_list.Append(true);
   test_list.Append(std::move(inner_test_list));
 
@@ -568,6 +605,174 @@ TEST_F(WebViewJsUtilsTest, RegisterExistingFrames) {
                                                 WKContentWorld.pageWorld));
   EXPECT_EQ(1, GetExistingFramesScriptCallCount(
                    web_view, frame_info, WKContentWorld.defaultClientWorld));
+}
+
+// Tests that ExecuteAsyncJavaScript waits for a Promise to resolve.
+TEST_F(WebViewJsUtilsTest, ExecuteAsyncJavaScriptWaitsForPromise) {
+  WKWebView* web_view = [[WKWebView alloc] init];
+  WKFrameInfo* frame_info = GetMainFrameWKFrameInfo(web_view);
+
+  __block bool complete = false;
+  __block id block_result = nil;
+
+  NSString* script = @"return new Promise(resolve => {"
+                     @"  setTimeout(() => resolve('resolved_value'), 100);"
+                     @"});";
+
+  web::ExecuteAsyncJavaScript(web_view, WKContentWorld.pageWorld, frame_info,
+                              script, /*arguments=*/nil,
+                              ^(id result, NSError* error) {
+                                block_result = [result copy];
+                                complete = true;
+                              });
+
+  ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
+    return complete;
+  }));
+
+  EXPECT_NSEQ(@"resolved_value", block_result);
+}
+
+// Tests that ExecuteAsyncJavaScript safely handles arguments that could
+// otherwise cause JS injection.
+TEST_F(WebViewJsUtilsTest, ExecuteAsyncJavaScriptInjectionSafety) {
+  WKWebView* web_view = [[WKWebView alloc] init];
+  WKFrameInfo* frame_info = GetMainFrameWKFrameInfo(web_view);
+
+  __block bool complete = false;
+  __block id block_result = nil;
+
+  NSString* dangerous_string = @"'; alert(1); var x = '";
+  NSDictionary* args = @{@"input" : dangerous_string};
+
+  NSString* script = @"return input;";
+
+  web::ExecuteAsyncJavaScript(web_view, WKContentWorld.pageWorld, frame_info,
+                              script, args, ^(id result, NSError* error) {
+                                block_result = [result copy];
+                                complete = true;
+                              });
+
+  ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
+    return complete;
+  }));
+
+  EXPECT_NSEQ(dangerous_string, block_result);
+}
+
+// Tests that ExecuteAsyncJavaScript safely handles parameter names that could
+// otherwise cause JS injection.
+TEST_F(WebViewJsUtilsTest, ExecuteAsyncJavaScriptParameterNameInjectionSafety) {
+  WKWebView* web_view = [[WKWebView alloc] init];
+  WKFrameInfo* frame_info = GetMainFrameWKFrameInfo(web_view);
+
+  __block bool complete = false;
+  __block id block_result = nil;
+
+  NSString* dangerous_key = @"input'; alert(1); var x = '";
+  NSDictionary* args = @{dangerous_key : @"value"};
+
+  NSString* script = @"return true;";
+
+  web::ExecuteAsyncJavaScript(web_view, WKContentWorld.pageWorld, frame_info,
+                              script, args, ^(id result, NSError* error) {
+                                block_result = [result copy];
+                                complete = true;
+                              });
+
+  ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
+    return complete;
+  }));
+
+  EXPECT_TRUE(complete);
+  EXPECT_FALSE(block_result);
+}
+
+// Tests that passing an arbitrary custom NSObject results in an error.
+TEST_F(WebViewJsUtilsTest, ExecuteAsyncJavaScriptCustomObjectArgument) {
+  WKWebView* web_view = [[WKWebView alloc] init];
+  WKFrameInfo* frame_info = GetMainFrameWKFrameInfo(web_view);
+
+  __block bool complete = false;
+  __block NSError* block_error = nil;
+
+  CustomObject* custom_object = [[CustomObject alloc] init];
+  NSDictionary* args = @{@"input" : custom_object};
+  NSString* script = @"return input;";
+
+  web::ExecuteAsyncJavaScript(web_view, WKContentWorld.pageWorld, frame_info,
+                              script, args, ^(id result, NSError* error) {
+                                block_error = [error copy];
+                                complete = true;
+                              });
+
+  ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
+    return complete;
+  }));
+  // WKJavaScriptExceptionMessage
+  // Function argument values must be one of the following types, or contain
+  // only the following types: NSNumber, NSNull, NSDate, NSString, NSArray, and
+  // NSDictionary
+  EXPECT_TRUE(block_error);
+}
+
+// Tests that 'await' can be used directly within the script body.
+TEST_F(WebViewJsUtilsTest, ExecuteAsyncJavaScriptWithAwait) {
+  WKWebView* web_view = [[WKWebView alloc] init];
+  WKFrameInfo* frame_info = GetMainFrameWKFrameInfo(web_view);
+
+  __block bool complete = false;
+  __block id block_result = nil;
+
+  NSString* script = @"const asyncHelper = (val) => Promise.resolve(val * 2);"
+                     @"const result = await asyncHelper(21);"
+                     @"return result;";
+
+  web::ExecuteAsyncJavaScript(web_view, WKContentWorld.pageWorld, frame_info,
+                              script, /*arguments=*/nil,
+                              ^(id result, NSError* error) {
+                                block_result = [result copy];
+                                complete = true;
+                              });
+
+  ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
+    return complete;
+  }));
+
+  EXPECT_NSEQ(@42, block_result);
+}
+
+// Tests that a rejected Promise in JavaScript results in an NSError.
+TEST_F(WebViewJsUtilsTest, ExecuteAsyncJavaScriptHandlesRejection) {
+  WKWebView* web_view = [[WKWebView alloc] init];
+  WKFrameInfo* frame_info = GetMainFrameWKFrameInfo(web_view);
+
+  __block bool complete = false;
+  __block NSError* block_error = nil;
+
+  NSString* script = @"return Promise.reject(new Error('Async Failure'));";
+
+  web::ExecuteAsyncJavaScript(web_view, WKContentWorld.pageWorld, frame_info,
+                              script, /*arguments=*/nil,
+                              ^(id result, NSError* error) {
+                                block_error = [error copy];
+                                complete = true;
+                              });
+
+  ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
+    return complete;
+  }));
+
+  EXPECT_TRUE(block_error);
+  EXPECT_NSEQ(block_error.domain, WKErrorDomain);
+
+  EXPECT_EQ(WKErrorJavaScriptExceptionOccurred, block_error.code);
+
+  NSString* exception_message =
+      block_error.userInfo[@"WKJavaScriptExceptionMessage"];
+
+  EXPECT_TRUE([(exception_message ?: block_error.localizedDescription)
+      containsString:@"Async Failure"]);
 }
 
 }  // namespace web

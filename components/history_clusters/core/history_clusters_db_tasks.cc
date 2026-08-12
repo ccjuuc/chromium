@@ -6,7 +6,6 @@
 
 #include <algorithm>
 
-#include "base/containers/contains.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
@@ -160,7 +159,8 @@ bool GetAnnotatedVisitsToCluster::AddUnclusteredVisits(
     // parameter setting below.
     const bool is_clustered =
         !recluster_
-            ? db->GetClusterIdContainingVisit(visit.visit_row.visit_id) > 0
+            ? (db->GetClusterIdContainingVisit(visit.visit_row.visit_id))
+                      .value() > 0
             : false;
     if (is_clustered && recent_first_)
       continuation_params_.exhausted_unclustered_visits = true;
@@ -213,9 +213,9 @@ void GetAnnotatedVisitsToCluster::AddIncompleteVisits(
     // https://crbug.com/1252047.
     history::VisitID visit_id =
         incomplete_visit_context_annotations.visit_row.visit_id;
-    if (base::Contains(annotated_visits_, visit_id, [](const auto& visit) {
-          return visit.visit_row.visit_id;
-        })) {
+    if (std::ranges::contains(
+            annotated_visits_, visit_id,
+            [](const auto& visit) { return visit.visit_row.visit_id; })) {
       continue;
     }
 

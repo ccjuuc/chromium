@@ -31,7 +31,8 @@ class WebGLShaderPixelLocalStorage final : public WebGLExtension {
   void framebufferTexturePixelLocalStorageWEBGL(GLint plane,
                                                 WebGLTexture*,
                                                 GLint level,
-                                                GLint layer);
+                                                GLint layer,
+                                                GLbitfield usage);
   void framebufferPixelLocalClearValuefvWEBGL(GLint plane,
                                               base::span<const GLfloat>,
                                               GLuint src_offset);
@@ -61,7 +62,7 @@ class WebGLShaderPixelLocalStorage final : public WebGLExtension {
                                size_t src_length,
                                GLuint src_offset);
 
-  const bool coherent_;
+  bool coherent_;
   GLint max_pls_planes_ = 0;
 };
 

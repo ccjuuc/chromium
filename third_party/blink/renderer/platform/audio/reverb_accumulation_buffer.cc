@@ -31,86 +31,90 @@
 #include <algorithm>
 
 #include "base/compiler_specific.h"
+#include "base/numerics/safe_conversions.h"
 #include "third_party/blink/renderer/platform/audio/vector_math.h"
 
 namespace blink {
 
 ReverbAccumulationBuffer::ReverbAccumulationBuffer(uint32_t length)
-    : buffer_(length), read_index_(0), read_time_frame_(0) {}
+    : buffer_(length), read_index_(0) {}
 
-void ReverbAccumulationBuffer::ReadAndClear(float* destination,
-                                            uint32_t number_of_frames) {
-  uint32_t buffer_length = buffer_.size();
+void ReverbAccumulationBuffer::ReadAndClear(base::span<float> destination) {
+  const size_t buffer_length = buffer_.size();
+  const size_t number_of_frames = destination.size();
 
   DCHECK_LE(read_index_, buffer_length);
   DCHECK_LE(number_of_frames, buffer_length);
 
-  uint32_t frames_available = buffer_length - read_index_;
-  uint32_t number_of_frames1 = std::min(number_of_frames, frames_available);
-  uint32_t number_of_frames2 = number_of_frames - number_of_frames1;
+  const size_t frames_available = buffer_length - read_index_;
+  const size_t number_of_frames1 = std::min(number_of_frames, frames_available);
+  const size_t number_of_frames2 = number_of_frames - number_of_frames1;
 
-  float* source = buffer_.Data();
-  UNSAFE_TODO(memcpy(destination, source + read_index_,
-                     sizeof(float) * number_of_frames1));
-  UNSAFE_TODO(
-      memset(source + read_index_, 0, sizeof(float) * number_of_frames1));
+  base::span<float> source = buffer_.as_span();
+  destination.first(number_of_frames1)
+      .copy_from(source.subspan(read_index_, number_of_frames1));
+  std::ranges::fill(source.subspan(read_index_, number_of_frames1), 0.0f);
 
   // Handle wrap-around if necessary
   if (number_of_frames2 > 0) {
-    UNSAFE_TODO(memcpy(destination + number_of_frames1, source,
-                       sizeof(float) * number_of_frames2));
-    UNSAFE_TODO(memset(source, 0, sizeof(float) * number_of_frames2));
+    destination.subspan(number_of_frames1, number_of_frames2)
+        .copy_from(source.first(number_of_frames2));
+    std::ranges::fill(source.first(number_of_frames2), 0.0f);
   }
 
-  read_index_ = (read_index_ + number_of_frames) % buffer_length;
-  read_time_frame_ += number_of_frames;
+  read_index_ = base::checked_cast<uint32_t>((read_index_ + number_of_frames) %
+                                             buffer_length);
 }
 
 void ReverbAccumulationBuffer::UpdateReadIndex(
     uint32_t* read_index,
     uint32_t number_of_frames) const {
   // Update caller's readIndex
-  *read_index = (*read_index + number_of_frames) % buffer_.size();
+  *read_index = base::checked_cast<uint32_t>((*read_index + number_of_frames) %
+                                             buffer_.size());
 }
 
-uint32_t ReverbAccumulationBuffer::Accumulate(float* source,
-                                              uint32_t number_of_frames,
+uint32_t ReverbAccumulationBuffer::Accumulate(base::span<const float> source,
                                               uint32_t* read_index,
                                               size_t delay_frames) {
-  uint32_t buffer_length = buffer_.size();
+  const size_t number_of_frames = source.size();
+  const size_t buffer_length = buffer_.size();
 
-  uint32_t write_index = (*read_index + delay_frames) % buffer_length;
+  const size_t write_index = (*read_index + delay_frames) % buffer_length;
 
   // Update caller's readIndex
-  *read_index = (*read_index + number_of_frames) % buffer_length;
+  *read_index = base::checked_cast<uint32_t>((*read_index + number_of_frames) %
+                                             buffer_length);
 
-  uint32_t frames_available = buffer_length - write_index;
-  uint32_t number_of_frames1 = std::min(number_of_frames, frames_available);
-  uint32_t number_of_frames2 = number_of_frames - number_of_frames1;
+  const size_t frames_available = buffer_length - write_index;
+  const size_t number_of_frames1 = std::min(number_of_frames, frames_available);
+  const size_t number_of_frames2 = number_of_frames - number_of_frames1;
 
-  float* destination = buffer_.Data();
+  base::span<float> destination = buffer_.as_span();
 
   DCHECK_LE(write_index, buffer_length);
   DCHECK_LE(number_of_frames1 + write_index, buffer_length);
   DCHECK_LE(number_of_frames2, buffer_length);
 
-  vector_math::Vadd(source, 1, UNSAFE_TODO(destination + write_index), 1,
-                    UNSAFE_TODO(destination + write_index), 1,
-                    number_of_frames1);
+  vector_math::Vadd(source.first(number_of_frames1),
+                    destination.subspan(write_index, number_of_frames1),
+                    destination.subspan(write_index, number_of_frames1),
+                    base::checked_cast<uint32_t>(number_of_frames1));
 
   // Handle wrap-around if necessary
   if (number_of_frames2 > 0) {
-    vector_math::Vadd(UNSAFE_TODO(source + number_of_frames1), 1, destination,
-                      1, destination, 1, number_of_frames2);
+    vector_math::Vadd(source.subspan(number_of_frames1, number_of_frames2),
+                      destination.first(number_of_frames2),
+                      destination.first(number_of_frames2),
+                      base::checked_cast<uint32_t>(number_of_frames2));
   }
 
-  return write_index;
+  return base::checked_cast<uint32_t>(write_index);
 }
 
 void ReverbAccumulationBuffer::Reset() {
   buffer_.Zero();
   read_index_ = 0;
-  read_time_frame_ = 0;
 }
 
 }  // namespace blink

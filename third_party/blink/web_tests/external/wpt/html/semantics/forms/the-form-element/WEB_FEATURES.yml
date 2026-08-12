@@ -1,8 +1,5 @@
-features:
-- name: constraint-validation
-  files:
-  - form-checkvalidity.html
-- name: base
-  files:
-  - form-action-reflection-with-base-url.html
-  - form-action-submission-with-base-url.html
+rules:
+- form-checkvalidity.html: [constraint-validation]
+- form-action-reflection-with-base-url.html: [base]
+- form-action-submission-with-base-url.html: [base]
+- "*": [form]

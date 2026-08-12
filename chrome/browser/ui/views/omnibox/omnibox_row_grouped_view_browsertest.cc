@@ -6,6 +6,7 @@
 
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_view_views_test.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_result_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_row_view.h"
@@ -15,9 +16,9 @@
 #include "components/omnibox/browser/autocomplete_provider.h"
 #include "components/omnibox/browser/autocomplete_result.h"
 #include "components/omnibox/browser/fake_autocomplete_provider.h"
-#include "components/omnibox/browser/suggestion_group_util.h"
 #include "components/omnibox/common/omnibox_feature_configs.h"
 #include "content/public/test/browser_test.h"
+#include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/animation/slide_animation.h"
 
 class OmniboxRowGroupedViewBrowserTest : public OmniboxPopupViewViewsTest {
@@ -26,6 +27,14 @@ class OmniboxRowGroupedViewBrowserTest : public OmniboxPopupViewViewsTest {
     feature_list_.InitAndEnableFeature(
         omnibox_feature_configs::ContextualSearch::
             kLoadingSuggestionsAnimation);
+  }
+
+  void SetUp() override {
+    if (base::FeatureList::IsEnabled(omnibox::internal::kWebUIOmniboxPopup)) {
+      GTEST_SKIP() << "Views popup code shouldn't run when kWebUIOmniboxPopup "
+                      "is enabled.";
+    }
+    OmniboxPopupViewViewsTest::SetUp();
   }
 
   void SetUpOnMainThread() override {
@@ -58,7 +67,7 @@ class OmniboxRowGroupedViewBrowserTest : public OmniboxPopupViewViewsTest {
     edit_model()->SetUserText(u"foo");
     AutocompleteInput input(
         u"foo", metrics::OmniboxEventProto::BLANK,
-        ChromeAutocompleteSchemeClassifier(browser()->profile()));
+        ChromeAutocompleteSchemeClassifier(browser()->GetProfile()));
     input.set_omit_asynchronous_matches(true);
     controller()->autocomplete_controller()->Start(input);
     ASSERT_TRUE(controller()->IsPopupOpen());

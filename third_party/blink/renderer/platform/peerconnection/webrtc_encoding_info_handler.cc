@@ -7,7 +7,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "media/mojo/clients/mojo_video_encoder_metrics_provider.h"
@@ -47,7 +46,7 @@ WebrtcEncodingInfoHandler::WebrtcEncodingInfoHandler(
       audio_encoder_factory_->GetSupportedEncoders();
   for (const auto& audio_spec : supported_audio_specs) {
     supported_audio_codecs_.insert(
-        String::FromUTF8(audio_spec.format.name).LowerASCII());
+        String::FromUtf8(audio_spec.format.name).ToAsciiLower());
   }
 }
 
@@ -57,6 +56,7 @@ void WebrtcEncodingInfoHandler::EncodingInfo(
     const std::optional<webrtc::SdpAudioFormat> sdp_audio_format,
     const std::optional<webrtc::SdpVideoFormat> sdp_video_format,
     const String video_scalability_mode,
+    std::optional<gfx::Size> video_resolution,
     OnMediaCapabilitiesEncodingInfoCallback callback) const {
   DCHECK(sdp_audio_format || sdp_video_format);
 
@@ -65,8 +65,8 @@ void WebrtcEncodingInfoHandler::EncodingInfo(
   bool power_efficient = true;
   if (sdp_audio_format) {
     const String codec_name =
-        String::FromUTF8(sdp_audio_format->name).LowerASCII();
-    supported = base::Contains(supported_audio_codecs_, codec_name);
+        String::FromUtf8(sdp_audio_format->name).ToAsciiLower();
+    supported = supported_audio_codecs_.Contains(codec_name);
     // Audio is always assumed to be power efficient whenever it is
     // supported.
     power_efficient = supported;
@@ -81,9 +81,13 @@ void WebrtcEncodingInfoHandler::EncodingInfo(
         !video_scalability_mode.IsNull()
             ? std::make_optional(video_scalability_mode.Utf8())
             : std::nullopt;
+    std::optional<webrtc::Resolution> resolution;
+    if (video_resolution) {
+      resolution = {video_resolution->width(), video_resolution->height()};
+    }
     webrtc::VideoEncoderFactory::CodecSupport support =
         video_encoder_factory_->QueryCodecSupport(*sdp_video_format,
-                                                  scalability_mode);
+                                                  scalability_mode, resolution);
 
     supported = support.is_supported;
     power_efficient = support.is_power_efficient;

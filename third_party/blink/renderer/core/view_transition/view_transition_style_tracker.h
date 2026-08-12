@@ -243,13 +243,23 @@ class ViewTransitionStyleTracker
       const AtomicString& container_name) const;
 
   void InvalidateBackdropFilterCompositingProperties();
+  bool IsOldSnapshotFrozen() const {
+    return state_ == State::kOldSnapshotFrozen;
+  }
 
  private:
   class ImageWrapperPseudoElement;
 
   // These state transitions are executed in a serial order unless the
   // transition is aborted.
-  enum class State { kIdle, kCapturing, kCaptured, kStarted, kFinished };
+  enum class State {
+    kIdle,
+    kCapturing,
+    kOldSnapshotFrozen,
+    kCaptured,
+    kStarted,
+    kFinished
+  };
   static const char* StateToString(State state);
 
   AtomicString ComputeContainingGroupName(
@@ -259,6 +269,15 @@ class ViewTransitionStyleTracker
   AtomicString GenerateAutoName(Element&, const TreeScope*, bool allow_from_id);
 
   bool NeedsSnapshotForCapture() const;
+
+  // Determines if there is an element with view-transition-scope: all between
+  // the child's node and the root node (non-inclusive). The check needs to be
+  // more exhaustive than checking paint layers since v-t-s can be on elements
+  // that do not create a paint layer, as well as elements with
+  // "display: contents", which will not even have a layout object. The search
+  // is non-inclusive of the root because a v-t-s on the scoped element itself
+  // does not terminate tag discovery.
+  bool HasContainmentBoundary(PaintLayer* root, PaintLayer* child) const;
 
   struct ElementData : public GarbageCollected<ElementData> {
     void Trace(Visitor* visitor) const;
@@ -324,10 +343,10 @@ class ViewTransitionStyleTracker
     // pseudo. This also includes the border offset from the border box to the
     // content area.
     base::flat_map<CSSPropertyID, String> group_children_css_properties;
-    gfx::Vector2d border_offset;
+    gfx::Vector2dF border_offset;
 
     // Border offset as of capture time.
-    gfx::Vector2d cached_border_offset;
+    gfx::Vector2dF cached_border_offset;
 
     // This only contains properties that need to be animated, which is a
     // subset of `captured_css_properties`.
@@ -506,6 +525,12 @@ class ViewTransitionStyleTracker
   Vector<AtomicString> view_transition_names_;
 
   bool in_get_computed_style_scope_ = false;
+
+  // Whether or not to automatically apply overflow: clip to nested group
+  // children. Determined by inspecting the overflow property of the scoped
+  // element if a scoped-view-transitions. Unless overflow is set to visible,
+  // automatically apply overflow: clip to the group-children.
+  bool apply_overflow_clip_ = false;
 };
 
 }  // namespace blink

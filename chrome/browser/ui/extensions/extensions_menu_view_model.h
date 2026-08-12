@@ -5,17 +5,22 @@
 #ifndef CHROME_BROWSER_UI_EXTENSIONS_EXTENSIONS_MENU_VIEW_MODEL_H_
 #define CHROME_BROWSER_UI_EXTENSIONS_EXTENSIONS_MENU_VIEW_MODEL_H_
 
+#include <optional>
+#include <string>
+
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
+#include "chrome/browser/tab_list/tab_list_interface_observer.h"
 #include "chrome/browser/ui/extensions/extension_action_view_model.h"
-#include "chrome/browser/ui/tabs/tab_list_interface.h"
-#include "chrome/browser/ui/tabs/tab_list_interface_observer.h"
 #include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
 #include "extensions/browser/permissions_manager.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_id.h"
+#include "ui/base/models/image_model.h"
+#include "url/origin.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -48,30 +53,32 @@ class ExtensionsMenuViewModel : public extensions::PermissionsManager::Observer,
   // Observer used to notify platforms about changes to the model.
   class Observer : public base::CheckedObserver {
    public:
-    // Notifies the delegate that the active web contents changed to
-    // `web_contents`.
-    virtual void OnActiveWebContentsChanged(
-        content::WebContents* web_contents) = 0;
+    // Notifies the delegate that the active web contents changed, which may
+    // have impacted the model's content (e.g host access requests may have
+    // changed).
+    virtual void OnPageNavigation() = 0;
 
-    // Notifies the delegate that a new host access request was added or updated
-    // for `extension_id` on `web_contents`.
-    virtual void OnHostAccessRequestAddedOrUpdated(
+    // Notifies the delegate that a new host access request was added
+    // with `extension_id` on `index`.
+    virtual void OnHostAccessRequestAdded(
         const extensions::ExtensionId& extension_id,
-        content::WebContents* web_contents) = 0;
+        int index) = 0;
+
+    // Notifies the delegate that host access request with `extension_id` was
+    // updates on `index`.
+    virtual void OnHostAccessRequestUpdated(
+        const extensions::ExtensionId& extension_id,
+        int index) = 0;
 
     // Notifies the delegate that the host access request for
-    // `extension_id` was removed.
+    // `extension_id` on `index` was removed.
     virtual void OnHostAccessRequestRemoved(
-        const extensions::ExtensionId& extension_id) = 0;
+        const extensions::ExtensionId& extension_id,
+        int index) = 0;
 
     // Notifies the delegate that host access requests on the current site were
     // cleared.
     virtual void OnHostAccessRequestsCleared() = 0;
-
-    // Notifies the delegate that the host access requests for `extension_id` on
-    // the current site was dismissed.
-    virtual void OnHostAccessRequestDismissedByUser(
-        const extensions::ExtensionId& extension_id) = 0;
 
     virtual void OnShowHostAccessRequestsInToolbarChanged(
         const extensions::ExtensionId& extension_id,
@@ -85,8 +92,19 @@ class ExtensionsMenuViewModel : public extensions::PermissionsManager::Observer,
     virtual void OnActionRemoved(const ToolbarActionsModel::ActionId& action_id,
                                  int index) = 0;
 
-    // Called when an action is updated in the menu model.
-    virtual void OnActionUpdated() = 0;
+    // Called when an action is updated in the menu model. This doesn't cover
+    // icon updates because (a) icons are loaded asynchronously and (b) they
+    // only require updating the icon and no other fields (e.g an action update
+    // can include a permissions change which affects other views apart from the
+    // action menu entry). An action update could affect the action order in the
+    // menu entries. Therefore, we pass the new `index`.
+    virtual void OnActionUpdated(const ToolbarActionsModel::ActionId& action_id,
+                                 int index) = 0;
+
+    // Called when an action icon is updated.
+    virtual void OnActionIconUpdated(
+        const ToolbarActionsModel::ActionId& action_id,
+        int index) = 0;
 
     // Called after all actions are added in the menu model after menu model
     // construction.
@@ -102,18 +120,19 @@ class ExtensionsMenuViewModel : public extensions::PermissionsManager::Observer,
 
   // The type of optional section to display in the menu.
   enum class OptionalSection {
-    // A section alerting the user that a page reload is required for changes to
-    // take effect.
-    kReloadPage,
     // A section listing extensions that have host access requests to the
     // current
     // site.
     kHostAccessRequests,
     // No optional section should be displayed.
-    kNone
+    kNone,
+    // A section alerting the user that a page reload is required for changes to
+    // take effect.
+    kReloadPage
   };
 
   // A generic structure for UI controls (buttons, toggles, radio buttons).
+  // This struct is mirrored in Java (ExtensionsMenuTypes.java).
   struct ControlState {
     // Represents the availability and interactivity the control.
     enum class Status {
@@ -140,6 +159,18 @@ class ExtensionsMenuViewModel : public extensions::PermissionsManager::Observer,
     std::u16string tooltip_text;
     // The checked/toggled state. False for buttons with no on/off state.
     bool is_on = false;
+    // The icon for the control. Empty if not applicable.
+    ui::ImageModel icon;
+  };
+
+  // Hold the information for an extension's host access request.
+  struct HostAccessRequest {
+    // The if of the extension.
+    extensions::ExtensionId extension_id;
+    // The display name for the extension.
+    std::u16string extension_name;
+    // The display icon for the extension.
+    ui::ImageModel extension_icon;
   };
 
   // Holds the information for an extension's site permissions in the extensions
@@ -155,6 +186,8 @@ class ExtensionsMenuViewModel : public extensions::PermissionsManager::Observer,
     std::u16string extension_name;
     // THe display icon for the extension.
     ui::ImageModel extension_icon;
+    // The origin that site permissions are for.
+    url::Origin origin;
     // The state for the 'on click' site access option.
     ControlState on_click_option;
     // The state for the 'on site' site access option.
@@ -179,12 +212,17 @@ class ExtensionsMenuViewModel : public extensions::PermissionsManager::Observer,
 
   // Holds the information about how the extension's menu entry should look
   // like. This will be used by the platform delegate as needed.
+  // This struct is mirrored in Java (ExtensionsMenuTypes.java).
   struct MenuEntryState {
     MenuEntryState();
     MenuEntryState(const MenuEntryState&);
     MenuEntryState& operator=(const MenuEntryState&);
     ~MenuEntryState();
 
+    // The id of the extension in the menu entry.
+    extensions::ExtensionId extension_id;
+    // The state for the action button.
+    ControlState action_button;
     // The state for the context menu button.
     ControlState context_menu_button;
     // The state for the site access toggle.
@@ -193,6 +231,8 @@ class ExtensionsMenuViewModel : public extensions::PermissionsManager::Observer,
     ControlState site_permissions_button;
     // Whether the extension is installed from an enterprise policy.
     bool is_enterprise;
+    // The origin that was active when this state was computed.
+    url::Origin origin;
   };
 
   ExtensionsMenuViewModel(BrowserWindowInterface* browser, Delegate* delegate);
@@ -201,12 +241,15 @@ class ExtensionsMenuViewModel : public extensions::PermissionsManager::Observer,
       delete;
   ~ExtensionsMenuViewModel() override;
 
+  content::WebContents* GetActiveWebContents();
+
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
   // Updates the extension's site access for the current site.
   void UpdateSiteAccess(
       const extensions::ExtensionId& extension_id,
+      const url::Origin& target_origin,
       extensions::PermissionsManager::UserSiteAccess site_access);
 
   // Allows the extension's host access request to the current site.
@@ -221,14 +264,19 @@ class ExtensionsMenuViewModel : public extensions::PermissionsManager::Observer,
       bool show);
 
   // Grants the extension site access to the current site.
-  void GrantSiteAccess(const extensions::ExtensionId& extension_id);
+  void GrantSiteAccess(const extensions::ExtensionId& extension_id,
+                       const url::Origin& target_origin);
 
   // Revokes the extension's site access from the current site.
-  void RevokeSiteAccess(const extensions::ExtensionId& extension_id);
+  void RevokeSiteAccess(const extensions::ExtensionId& extension_id,
+                        const url::Origin& target_origin);
 
   // Update the site setting's for the current site.
   void UpdateSiteSetting(
       extensions::PermissionsManager::UserSiteSetting site_setting);
+
+  // Executes the primary action for the extension with `extension_id`.
+  void ExecuteAction(const extensions::ExtensionId& extension_id);
 
   // Reloads the current web contents.
   void ReloadWebContents();
@@ -237,11 +285,23 @@ class ExtensionsMenuViewModel : public extensions::PermissionsManager::Observer,
   // `extension_id`.
   bool CanShowSitePermissionsPage(const extensions::ExtensionId& extension_id);
 
+  // Returns the action button state for an extension's menu entry.
+  ControlState GetActionButtonState(const extensions::ExtensionId& extension_id,
+                                    const gfx::Size& icon_size);
+
+  // Returns the icon for an extension's action at `action_index`.
+  ui::ImageModel GetActionIcon(int action_index, const gfx::Size& icon_size);
+
   // Returns the state for the extension's context menu button.
   ControlState GetContextMenuButtonState(
       const extensions::ExtensionId& extension_id);
   ControlState GetContextMenuButtonState(
       ExtensionActionViewModel* action_model);
+
+  // Returns the host access request information for an extension.
+  HostAccessRequest GetHostAccessRequest(
+      const extensions::ExtensionId& extension_id,
+      const gfx::Size& icon_size);
 
   // Returns the site access permissions state for an extension. This will crash
   // if called when the user cannot modify the extension site permissions, as
@@ -254,8 +314,10 @@ class ExtensionsMenuViewModel : public extensions::PermissionsManager::Observer,
   ControlState GetExtensionShowRequestsToggleState(
       const extensions::ExtensionId& extension_id);
 
-  // Returns the menu item state for an extension.
-  MenuEntryState GetMenuEntryState(const extensions::ExtensionId& extension_id);
+  // Returns the menu item state for an extension. `action_icon_size` is the
+  // size the extension icon should have.
+  MenuEntryState GetMenuEntryState(const extensions::ExtensionId& extension_id,
+                                   const gfx::Size& action_icon_size);
 
   // Returns the optional section to display in the menu.
   OptionalSection GetOptionalSection();
@@ -268,6 +330,16 @@ class ExtensionsMenuViewModel : public extensions::PermissionsManager::Observer,
   action_models() {
     return action_models_;
   }
+
+  // Returns the id's of the extensions that have valid host access requests for
+  // the current site.
+  const std::vector<extensions::ExtensionId>& host_access_requests() {
+    return host_access_requests_;
+  }
+
+  // Returns whether the view model has been populated after action models were
+  // initialized.
+  bool is_populated() { return is_populated_; }
 
   // PermissionsManager::Observer:
   void OnHostAccessRequestAdded(const extensions::ExtensionId& extension_id,
@@ -301,20 +373,50 @@ class ExtensionsMenuViewModel : public extensions::PermissionsManager::Observer,
   // Sometimes, menu can stay open when tab changes (e.g keyboard shortcuts) or
   // due to the extension (e.g extension switching the active tab). Thus, we
   // listen for active tab changes to properly update the menu content.
-  void OnActiveTabChanged(tabs::TabInterface* tab) override;
+  void OnActiveTabChanged(TabListInterface& tab_list,
+                          tabs::TabInterface* tab) override;
+  void OnTabListDestroyed(TabListInterface& tab_list) override;
 
   // content::WebContentsObserver:
   void DidFinishNavigation(content::NavigationHandle* handle) override;
 
  private:
-  // Populates the action models in alphabetical order.
-  void PopulateActionModels();
+  // Populates `action_models_` and `host_access_requests_` after actions
+  // have been initialized.
+  void Populate();
+
+  // Creates the action view model for the given action ID and registers an icon
+  // update observer.
+  std::unique_ptr<ExtensionActionViewModel> CreateAndObserveActionViewModel(
+      const ToolbarActionsModel::ActionId& action_id);
+
+  // Adds `extension_id` to `host_access_requests` in the correct sorted
+  // order and notifies observers.
+  void AddHostAccessRequest(const extensions::ExtensionId& extension_id);
+
+  // Removes `extension_id` from `host_access_requests` and notifies
+  // observers.
+  void RemoveHostAccessRequest(const extensions::ExtensionId& extension_id);
+
+  // Updates `host_access_requests_` with the extensions that have active host
+  // access requests, clearing any existent ones. This should be called when
+  // actions are initialized, or on page navigations.
+  void UpdateHostAccessRequests();
 
   // Returns the extension action view model for the given `extension_id`.
   ExtensionActionViewModel* GetActionViewModel(
       const extensions::ExtensionId& extension_id) const;
 
-  content::WebContents* GetActiveWebContents();
+  // Returns the index of the action with `extension_id` in `action_models_`, if
+  // existent.
+  std::optional<int> GetActionIndex(
+      const extensions::ExtensionId& extension_id) const;
+
+  // Callback for when an icon in `action_models_` updates.
+  void OnActionIconUpdated(const extensions::ExtensionId& extension_id);
+
+  // Updates the model when web contents changed, and notifies observers.
+  void OnWebContentsChanged(content::WebContents* web_contents);
 
   // The browser window that the extensions menu is in.
   raw_ptr<BrowserWindowInterface> browser_;
@@ -325,8 +427,20 @@ class ExtensionsMenuViewModel : public extensions::PermissionsManager::Observer,
   // The delegate to retrieve platform-specific information.
   raw_ptr<Delegate> delegate_;
 
+  // Whether the view model has been populated after action models were
+  // initialized.
+  bool is_populated_ = false;
+
   // The actions models ordered alphabetically by their action name.
   std::vector<std::unique_ptr<ExtensionActionViewModel>> action_models_;
+
+  // Map of action IDs to their respective `ExtensionActionViewModel` update
+  // subscriptions for icon updates.
+  std::map<ToolbarActionsModel::ActionId, base::CallbackListSubscription>
+      action_icon_subscriptions_;
+
+  // The extensions that have valid host access requests on the current site.
+  std::vector<extensions::ExtensionId> host_access_requests_;
 
   base::ScopedObservation<extensions::PermissionsManager,
                           extensions::PermissionsManager::Observer>

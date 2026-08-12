@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_ENTERPRISE_SIGNIN_PROFILE_MANAGEMENT_DISCLAIMER_SERVICE_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,7 @@
 #include "chrome/browser/enterprise/signin/managed_profile_creation_controller.h"
 #include "chrome/browser/enterprise/signin/managed_profile_creator.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
 #include "chrome/browser/ui/webui/signin/turn_sync_on_helper_policy_fetch_tracker.h"
 #include "components/keyed_service/core/keyed_service.h"
@@ -80,7 +82,23 @@ class ProfileManagementDisclaimerService
   }
 
   base::ScopedClosureRunner DisableManagementDisclaimerUntilReset();
-  [[nodiscard]] base::ScopedClosureRunner AutoAcceptManagementDisclaimerUntilReset();
+  [[nodiscard]] base::ScopedClosureRunner
+  AutoAcceptManagementDisclaimerUntilReset();
+
+  // Returns whether the device signals disclaimer is required for this profile.
+  bool IsDeviceSignalsDisclaimerRequired(
+      BrowserWindowInterface* browser = nullptr) const;
+
+  // Marks the consent as granted in the profile preferences.
+  void OnDeviceSignalsCollectionConsentGranted();
+
+  void OpenPrivacyPolicyArticlePopUp(bool is_modal_dialog);
+
+  // The device signals disclaimer is gated behind --no-first-run, however for
+  // accurate browser tests it can be bypassed using this function.
+  inline void SetBypassNoFirstRunForTesting(bool new_value) {
+    bypass_no_first_run_ = new_value;
+  }
 
  private:
   struct ResetableState {
@@ -96,12 +114,13 @@ class ProfileManagementDisclaimerService
     std::unique_ptr<ManagedProfileCreationController>
         profile_creation_controller;
 
-    signin_metrics::AccessPoint access_point =
-        signin_metrics::AccessPoint::kUnknown;
     base::WeakPtr<Profile> profile_to_continue_in;
     CoreAccountId account_id;
     bool profile_creation_required_by_policy = false;
     bool cancelable = true;
+
+    // The access point always has a value if the account_id is set.
+    std::optional<signin_metrics::AccessPoint> access_point;
 
     // Callbacks to be executed the user chooses which profile to be managed and
     // whether management is required by policy. The first parameter is the
@@ -145,6 +164,19 @@ class ProfileManagementDisclaimerService
   void OnRegisteredForPolicy(bool is_from_cached_registration_result,
                              bool is_managed_account);
 
+  // Opens the device signals disclaimer dialog if the following conditions
+  // apply for the current profile:
+  // - The user has accepted profile management notice.
+  // - The user has NOT granted permanent device signals collection permission
+  //    (device_signals::prefs::kDeviceSignalsPermanentConsentReceived)
+  // BrowserWindowInterface weak pointers for all open dialogs are kept in
+  // `opened_device_signals_disclaimers_`.
+  void MaybeShowDeviceSignalsDisclaimerDialog(BrowserWindowInterface* browser);
+
+  void HandleDeviceSignalsDisclaimerChoice(
+      base::WeakPtr<BrowserWindowInterface> source_browser,
+      signin::DeviceSignalsDisclaimerResult result);
+
   // signin::IdentityManager::Observer:
   void OnPrimaryAccountChanged(
       const signin::PrimaryAccountChangeEvent& event_details) override;
@@ -165,6 +197,11 @@ class ProfileManagementDisclaimerService
   bool auto_accept_management_ = false;
   bool enable_management_disclaimer_ = true;
   SigninPrefs signin_prefs_;
+
+  std::vector<base::WeakPtr<BrowserWindowInterface>>
+      opened_device_signals_disclaimers_;
+  base::WeakPtr<BrowserWindowInterface> privacy_article_browser_;
+  bool bypass_no_first_run_ = false;
 
   std::map<CoreAccountId, std::unique_ptr<TurnSyncOnHelperPolicyFetchTracker>>
       policy_fetch_tracker_by_account_id_;

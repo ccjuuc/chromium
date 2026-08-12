@@ -59,7 +59,9 @@
   [entrypointCopy layoutIfNeeded];
   entrypointCopy.alpha = 0;
 
-  [_contextProvider expandInputPlateForDismissal];
+  CGRect targetFrame = [entrypointCopy convertRect:entrypointCopy.bounds
+                                            toView:nil];
+  [_contextProvider expandInputPlateForDismissalToFrame:targetFrame];
   [UIView
       animateKeyframesWithDuration:[self transitionDuration:transitionContext]
       delay:0
@@ -71,6 +73,10 @@
                                       animations:^{
                                         [inputPlateView.superview
                                                 .superview layoutIfNeeded];
+                                        closeButton.alpha = 0;
+                                        closeButton.transform =
+                                            CGAffineTransformMakeScale(0.9,
+                                                                       0.9);
                                       }];
         [UIView addKeyframeWithRelativeStartTime:0.2
                                 relativeDuration:0.6
@@ -83,9 +89,6 @@
                             relativeDuration:0.6
                                   animations:^{
                                     inputPlateView.alpha = 0;
-                                    closeButton.alpha = 0;
-                                    closeButton.transform =
-                                        CGAffineTransformMakeScale(0.9, 0.9);
                                   }];
         // Briefly show the copy then fade the entire composebox view.
         [UIView addKeyframeWithRelativeStartTime:0.5

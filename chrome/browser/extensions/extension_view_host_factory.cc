@@ -11,9 +11,9 @@
 #include "chrome/browser/extensions/browser_extension_window_controller.h"
 #include "chrome/browser/extensions/extension_view_host.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/web_contents.h"
@@ -25,6 +25,7 @@
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h"  // nogncheck
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
@@ -58,13 +59,15 @@ class ExtensionViewHostBrowserDelegate : public ExtensionViewHost::Delegate {
   content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
       content::WebContents* source,
       const input::NativeWebKeyboardEvent& event) override {
-    return browser_->PreHandleKeyboardEvent(source, event);
+    return BrowserWebContentsDelegate::From(browser_)->PreHandleKeyboardEvent(
+        source, event);
   }
 
   std::unique_ptr<content::EyeDropper> OpenEyeDropper(
       content::RenderFrameHost* frame,
       content::EyeDropperListener* listener) override {
-    return browser_->OpenEyeDropper(frame, listener);
+    return BrowserWebContentsDelegate::From(browser_)->OpenEyeDropper(frame,
+                                                                      listener);
   }
 
   WindowController* GetExtensionWindowController() override {
@@ -105,7 +108,8 @@ class ExtensionViewHostTabDelegate : public ExtensionViewHost::Delegate {
     if (browser == nullptr) {
       return content::KeyboardEventProcessingResult::NOT_HANDLED;
     }
-    return browser->PreHandleKeyboardEvent(source, event);
+    return BrowserWebContentsDelegate::From(browser)->PreHandleKeyboardEvent(
+        source, event);
   }
 
   std::unique_ptr<content::EyeDropper> OpenEyeDropper(
@@ -115,7 +119,8 @@ class ExtensionViewHostTabDelegate : public ExtensionViewHost::Delegate {
     if (browser == nullptr) {
       return nullptr;
     }
-    return browser->OpenEyeDropper(frame, listener);
+    return BrowserWebContentsDelegate::From(browser)->OpenEyeDropper(frame,
+                                                                     listener);
   }
 
   WindowController* GetExtensionWindowController() override {
@@ -128,7 +133,9 @@ class ExtensionViewHostTabDelegate : public ExtensionViewHost::Delegate {
 
  private:
   Browser* FindBrowser() const {
-    return chrome::FindBrowserWithTab(web_contents_);
+    auto* browser = GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+        web_contents_);
+    return browser ? browser->GetBrowserForMigrationOnly() : nullptr;
   }
 
   raw_ptr<content::WebContents> web_contents_;

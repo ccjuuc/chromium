@@ -4,21 +4,26 @@
 
 package org.chromium.chrome.browser.tabbed_mode;
 
-import android.content.Context;
+import android.app.Activity;
 
 import androidx.appcompat.content.res.AppCompatResources;
 
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.Callback;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.NullableObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ActivityTabProvider;
-import org.chromium.chrome.browser.ai.AiAssistantService;
-import org.chromium.chrome.browser.ai.PageSummaryButtonController;
 import org.chromium.chrome.browser.bookmarks.AddToBookmarksToolbarButtonController;
 import org.chromium.chrome.browser.bookmarks.BookmarkModel;
 import org.chromium.chrome.browser.bookmarks.TabBookmarker;
+import org.chromium.chrome.browser.browser_controls.BrowserControlsVisibilityManager;
+import org.chromium.chrome.browser.glic.GlicButtonDelegate;
+import org.chromium.chrome.browser.glic.GlicToolbarButtonController;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab_group_suggestion.toolbar.GroupSuggestionsButtonController;
 import org.chromium.chrome.browser.tab_group_suggestion.toolbar.GroupSuggestionsButtonDataProvider;
 import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
@@ -29,42 +34,72 @@ import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonControl
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonVariant;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarFeatures;
 import org.chromium.chrome.browser.toolbar.adaptive.OptionalNewTabButtonController;
+import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
 import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.ui.base.DeviceFormFactor;
-import org.chromium.ui.modaldialog.ModalDialogManager;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
 
 /** Implements tabbed browser-specific behavior of adaptive toolbar button. */
 @NullMarked
 public class TabbedAdaptiveToolbarBehavior implements AdaptiveToolbarBehavior {
-    private final Context mContext;
+    private final Activity mActivity;
     private final ActivityTabProvider mActivityTabProvider;
     private final ActivityLifecycleDispatcher mActivityLifecycleDispatcher;
-    private final Supplier<TabBookmarker> mTabBookmarkerSupplier;
-    private final ObservableSupplier<BookmarkModel> mBookmarkModelSupplier;
+    private final Supplier<@Nullable TabBookmarker> mTabBookmarkerSupplier;
+    private final NullableObservableSupplier<BookmarkModel> mBookmarkModelSupplier;
     private final Supplier<@Nullable TabCreatorManager> mTabCreatorManagerSupplier;
     private final Runnable mRegisterVoiceSearchRunnable;
     private final Supplier<GroupSuggestionsButtonController>
             mGroupSuggestionsButtonControllerSupplier;
-    private final Supplier<TabModelSelector> mTabModelSelectorSupplier;
-    private final Supplier<ModalDialogManager> mModalDialogManagerSupplier;
-    private final ObservableSupplier<@StripVisibilityState Integer> mTabStripVisibilitySupplier;
+    private final Supplier<@Nullable TabModelSelector> mTabModelSelectorSupplier;
+    private final MonotonicObservableSupplier<@StripVisibilityState Integer>
+            mTabStripVisibilitySupplier;
+    private final GlicButtonDelegate mToggleGlicCallback;
+    private final Supplier<@Nullable ChromeAndroidTask> mChromeAndroidTaskSupplier;
+    private final BrowserControlsVisibilityManager mBrowserControlsVisibilityManager;
+    private final NonNullObservableSupplier<Boolean> mIsVerticalTabsActiveSupplier;
+    private final NonNullObservableSupplier<Boolean> mIsGlicPinnedSupplier;
+    private @Nullable Callback<Boolean> mGlicVerticalTabsObserver;
+    private @Nullable GlicToolbarButtonController mGlicButtonController;
 
+    /**
+     * @param activity The Android activity.
+     * @param activityLifecycleDispatcher Dispatcher for activity lifecycle events.
+     * @param tabCreatorManagerSupplier Used to create new tabs.
+     * @param tabBookmarkerSupplier Used to bookmark tabs.
+     * @param bookmarkModelSupplier Used to access bookmark data.
+     * @param activityTabProvider Provider for the active tab.
+     * @param registerVoiceSearchRunnable Runnable to register voice search.
+     * @param groupSuggestionsButtonController Used to control group suggestions on the toolbar.
+     * @param tabModelSelectorSupplier Used to access the current tab model.
+     * @param tabStripVisibilitySupplier Used to check or observe tab strip visibility.
+     * @param toggleGlicCallback Callback to toggle the Glic UI.
+     * @param chromeAndroidTaskSupplier Supplier for the ChromeAndroidTask.
+     * @param browserControlsVisibilityManager Manager for browser controls.
+     * @param isVerticalTabsActiveSupplier Supplier for VerticalTabs enabled state.
+     * @param isGlicPinnedSupplier Supplier for Glic pinned state.
+     */
     public TabbedAdaptiveToolbarBehavior(
-            Context context,
+            Activity activity,
             ActivityLifecycleDispatcher activityLifecycleDispatcher,
             Supplier<@Nullable TabCreatorManager> tabCreatorManagerSupplier,
-            Supplier<TabBookmarker> tabBookmarkerSupplier,
-            ObservableSupplier<BookmarkModel> bookmarkModelSupplier,
+            Supplier<@Nullable TabBookmarker> tabBookmarkerSupplier,
+            NullableObservableSupplier<BookmarkModel> bookmarkModelSupplier,
             ActivityTabProvider activityTabProvider,
             Runnable registerVoiceSearchRunnable,
             Supplier<GroupSuggestionsButtonController> groupSuggestionsButtonController,
-            Supplier<TabModelSelector> tabModelSelectorSupplier,
-            Supplier<ModalDialogManager> modalDialogManagerSupplier,
-            ObservableSupplier<@StripVisibilityState Integer> tabStripVisibilitySupplier) {
-        mContext = context;
+            Supplier<@Nullable TabModelSelector> tabModelSelectorSupplier,
+            MonotonicObservableSupplier<@StripVisibilityState Integer> tabStripVisibilitySupplier,
+            GlicButtonDelegate toggleGlicCallback,
+            Supplier<@Nullable ChromeAndroidTask> chromeAndroidTaskSupplier,
+            BrowserControlsVisibilityManager browserControlsVisibilityManager,
+            NonNullObservableSupplier<Boolean> isVerticalTabsActiveSupplier,
+            NonNullObservableSupplier<Boolean> isGlicPinnedSupplier) {
+        mActivity = activity;
         mActivityLifecycleDispatcher = activityLifecycleDispatcher;
         mTabCreatorManagerSupplier = tabCreatorManagerSupplier;
         mTabBookmarkerSupplier = tabBookmarkerSupplier;
@@ -73,72 +108,134 @@ public class TabbedAdaptiveToolbarBehavior implements AdaptiveToolbarBehavior {
         mRegisterVoiceSearchRunnable = registerVoiceSearchRunnable;
         mGroupSuggestionsButtonControllerSupplier = groupSuggestionsButtonController;
         mTabModelSelectorSupplier = tabModelSelectorSupplier;
-        mModalDialogManagerSupplier = modalDialogManagerSupplier;
         mTabStripVisibilitySupplier = tabStripVisibilitySupplier;
+        mToggleGlicCallback = toggleGlicCallback;
+        mChromeAndroidTaskSupplier = chromeAndroidTaskSupplier;
+        mBrowserControlsVisibilityManager = browserControlsVisibilityManager;
+        mIsVerticalTabsActiveSupplier = isVerticalTabsActiveSupplier;
+        mIsGlicPinnedSupplier = isGlicPinnedSupplier;
     }
 
     @Override
     public void registerPerSurfaceButtons(
             AdaptiveToolbarButtonController controller,
             Supplier<@Nullable Tracker> trackerSupplier) {
-        var newTabButton =
-                new OptionalNewTabButtonController(
-                        mContext,
-                        AppCompatResources.getDrawable(mContext, R.drawable.new_tab_icon),
-                        mActivityLifecycleDispatcher,
-                        mTabCreatorManagerSupplier,
-                        mActivityTabProvider,
-                        trackerSupplier,
-                        mTabStripVisibilitySupplier);
-        controller.addButtonVariant(AdaptiveToolbarButtonVariant.NEW_TAB, newTabButton);
+        if (!BottomBarConfigUtils.isBottomBarEnabled(mActivity)) {
+            var newTabButton =
+                    new OptionalNewTabButtonController(
+                            mActivity,
+                            AppCompatResources.getDrawable(mActivity, R.drawable.new_tab_icon),
+                            mActivityLifecycleDispatcher,
+                            mTabCreatorManagerSupplier,
+                            mActivityTabProvider,
+                            trackerSupplier,
+                            mTabStripVisibilitySupplier);
+            controller.addButtonVariant(AdaptiveToolbarButtonVariant.NEW_TAB, newTabButton);
+        }
         var addToBookmarks =
                 new AddToBookmarksToolbarButtonController(
                         mActivityTabProvider.asObservable(),
-                        mContext,
+                        mActivity,
                         mActivityLifecycleDispatcher,
                         mTabBookmarkerSupplier,
                         trackerSupplier,
                         mBookmarkModelSupplier);
         controller.addButtonVariant(AdaptiveToolbarButtonVariant.ADD_TO_BOOKMARKS, addToBookmarks);
-        var pageSummary =
-                new PageSummaryButtonController(
-                        mContext,
-                        mModalDialogManagerSupplier.get(),
-                        mActivityTabProvider,
-                        AiAssistantService.getInstance(),
-                        trackerSupplier);
-        controller.addButtonVariant(AdaptiveToolbarButtonVariant.PAGE_SUMMARY, pageSummary);
         if (AdaptiveToolbarFeatures.isTabGroupingPageActionEnabled()) {
             var tabGrouping =
                     new GroupSuggestionsButtonDataProvider(
                             mActivityTabProvider,
-                            mContext,
-                            AppCompatResources.getDrawable(mContext, R.drawable.ic_widgets),
+                            mActivity,
+                            AppCompatResources.getDrawable(mActivity, R.drawable.ic_widgets),
                             mGroupSuggestionsButtonControllerSupplier,
                             mTabModelSelectorSupplier);
             controller.addButtonVariant(AdaptiveToolbarButtonVariant.TAB_GROUPING, tabGrouping);
         }
 
+        if (!BottomBarConfigUtils.isBottomBarEnabled(mActivity)) {
+            mGlicButtonController =
+                    new GlicToolbarButtonController(
+                            mActivity,
+                            mActivityTabProvider,
+                            mToggleGlicCallback,
+                            trackerSupplier,
+                            mChromeAndroidTaskSupplier,
+                            mBrowserControlsVisibilityManager,
+                            mTabModelSelectorSupplier,
+                            controller::recomputeUiState);
+            controller.addButtonVariant(AdaptiveToolbarButtonVariant.GLIC, mGlicButtonController);
+        }
+
+        mGlicVerticalTabsObserver = state -> controller.recomputeUiState();
+        mIsVerticalTabsActiveSupplier.addSyncObserver(mGlicVerticalTabsObserver);
+        mIsGlicPinnedSupplier.addSyncObserver(mGlicVerticalTabsObserver);
         mRegisterVoiceSearchRunnable.run();
     }
 
     @Override
     public int resultFilter(List<Integer> segmentationResults) {
-        return AdaptiveToolbarBehavior.defaultResultFilter(mContext, segmentationResults);
+        boolean skipGlic = mIsVerticalTabsActiveSupplier.get() && mIsGlicPinnedSupplier.get();
+        TabModelSelector selector = mTabModelSelectorSupplier.get();
+        if (selector != null) {
+            Profile profile = selector.getCurrentModel().getProfile();
+            if (profile != null
+                    && mGlicButtonController != null
+                    && mGlicButtonController.shouldForciblyShowGlicButton(profile)
+                    && !skipGlic) {
+                return AdaptiveToolbarButtonVariant.GLIC;
+            }
+        }
+        if (skipGlic) {
+            List<Integer> filteredResults = new ArrayList<>();
+            for (int result : segmentationResults) {
+                if (result != AdaptiveToolbarButtonVariant.GLIC) filteredResults.add(result);
+            }
+            segmentationResults = filteredResults;
+        }
+
+        List<Integer> filteredResults;
+        if (!BottomBarConfigUtils.isBottomBarEnabled(mActivity)) {
+            filteredResults = segmentationResults;
+        } else {
+            filteredResults = new ArrayList<>();
+            for (int result : segmentationResults) {
+                if (result != AdaptiveToolbarButtonVariant.GLIC
+                        && result != AdaptiveToolbarButtonVariant.NEW_TAB) {
+                    filteredResults.add(result);
+                }
+            }
+        }
+
+        return AdaptiveToolbarBehavior.defaultResultFilter(mActivity, filteredResults);
     }
 
     @Override
     public boolean canShowManualOverride(int manualOverride) {
+        // Ignore manual overrides for GLIC and New Tab when the Android Bottom Bar is enabled as
+        // these buttons have a dedicated spot in the bottom bar.
+        if (BottomBarConfigUtils.isBottomBarEnabled(mActivity)
+                && (manualOverride == AdaptiveToolbarButtonVariant.GLIC
+                        || manualOverride == AdaptiveToolbarButtonVariant.NEW_TAB)) {
+            return false;
+        }
         return true;
     }
 
     @Override
     public boolean useRawResults() {
-        return DeviceFormFactor.isNonMultiDisplayContextOnTablet(mContext);
+        return DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity);
     }
 
     @Override
-    public @AdaptiveToolbarButtonVariant int getSegmentationDefault() {
-        return AdaptiveToolbarFeatures.getDefaultButtonVariant(mContext);
+    public @AdaptiveToolbarButtonVariant int getSegmentationDefault(Profile profile) {
+        return AdaptiveToolbarFeatures.getDefaultButtonVariant(mActivity, profile);
+    }
+
+    @Override
+    public void destroy() {
+        if (mGlicVerticalTabsObserver != null) {
+            mIsVerticalTabsActiveSupplier.removeObserver(mGlicVerticalTabsObserver);
+            mIsGlicPinnedSupplier.removeObserver(mGlicVerticalTabsObserver);
+        }
     }
 }

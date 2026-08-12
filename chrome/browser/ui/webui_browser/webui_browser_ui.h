@@ -7,14 +7,19 @@
 
 #include <memory>
 
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_key.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
 #include "chrome/browser/ui/webui/metrics_reporter/metrics_reporter.h"
 #include "chrome/browser/ui/webui_browser/bookmark_bar.mojom.h"
 #include "chrome/browser/ui/webui_browser/browser.mojom.h"
-#include "chrome/browser/ui/webui_browser/extensions_bar.mojom.h"
 #include "chrome/browser/ui/webui_browser/webui_browser_window.h"
+#include "components/browser_apis/bookmarks/bookmarks_service.h"
+#include "components/browser_apis/tab_drag/tab_drag_api.mojom.h"
 #include "components/browser_apis/tab_strip/tab_strip_api.mojom.h"
+#include "components/browser_apis/tab_strip/tab_strip_experiment_api.mojom.h"
+#include "components/browser_apis/tab_strip/tab_strip_ui_controller.mojom.h"
+#include "components/browser_apis/ui_controllers/toolbar/extensions_bar.mojom.h"
 #include "components/guest_contents/common/guest_contents.mojom.h"
+#include "components/omnibox/browser/searchbox.mojom.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_controller.h"
 #include "content/public/browser/webui_config.h"
@@ -32,10 +37,6 @@ class BrowserContext;
 namespace contextual_search {
 class ContextualSearchSessionHandle;
 }  // namespace contextual_search
-
-namespace searchbox::mojom {
-class PageHandler;
-}  // namespace searchbox::mojom
 
 namespace ui {
 class TrackedElementHandler;
@@ -58,7 +59,8 @@ class WebUIBrowserUIConfig
 class WebUIBrowserUI : public ui::MojoWebUIController,
                        public webui_browser::mojom::PageHandlerFactory,
                        public bookmark_bar::mojom::PageHandlerFactory,
-                       public extensions_bar::mojom::PageHandlerFactory {
+                       public extensions_bar::mojom::PageHandlerFactory,
+                       public searchbox::mojom::PageHandlerFactory {
  public:
   explicit WebUIBrowserUI(content::WebUI* web_ui);
   ~WebUIBrowserUI() override;
@@ -68,17 +70,24 @@ class WebUIBrowserUI : public ui::MojoWebUIController,
   void BindInterface(
       mojo::PendingReceiver<bookmark_bar::mojom::PageHandlerFactory> receiver);
   void BindInterface(
+      mojo::PendingReceiver<bookmarks_api::mojom::BookmarksService> receiver);
+  void BindInterface(
       mojo::PendingReceiver<extensions_bar::mojom::PageHandlerFactory>
           receiver);
-  void BindInterface(mojo::PendingReceiver<searchbox::mojom::PageHandler>
-                         pending_page_handler);
+  void BindInterface(
+      mojo::PendingReceiver<searchbox::mojom::PageHandlerFactory>
+          receiver);
   void BindInterface(
       mojo::PendingReceiver<guest_contents::mojom::GuestContentsHost> receiver);
   void BindInterface(
       mojo::PendingReceiver<tabs_api::mojom::TabStripService> receiver);
   void BindInterface(
-      mojo::PendingReceiver<tracked_element::mojom::TrackedElementHandler>
+      mojo::PendingReceiver<tabs_api::mojom::TabStripExperimentService>
           receiver);
+  void BindInterface(
+      mojo::PendingReceiver<tabs_api::mojom::TabDragService> receiver);
+  void BindInterface(
+      mojo::PendingReceiver<tabs_api::mojom::TabStripUIController> receiver);
 
   void BookmarkBarStateChanged(BookmarkBar::AnimateChangeType change_type);
   void ShowSidePanel(SidePanelEntryKey side_panel_entry_key);
@@ -86,7 +95,7 @@ class WebUIBrowserUI : public ui::MojoWebUIController,
 
   Browser* browser() { return browser_; }
   WebUIBrowserWindow* browser_window() {
-    return static_cast<WebUIBrowserWindow*>(browser_->window());
+    return WebUIBrowserWindow::FromBrowser(browser_);
   }
 
   webui_browser::mojom::Page* page() {
@@ -94,20 +103,20 @@ class WebUIBrowserUI : public ui::MojoWebUIController,
     return page_.is_bound() ? page_.get() : nullptr;
   }
 
+  RealboxHandler* realbox_handler_for_testing() {
+    return realbox_handler_.get();
+  }
+
   base::WeakPtr<WebUIBrowserUI> GetWeakPtr();
 
  private:
   WEB_UI_CONTROLLER_TYPE_DECL();
-  // Lazily creates and returns a reference to the owned contextual search
-  // session handle for `realbox_handler_`.
-  contextual_search::ContextualSearchSessionHandle*
-  GetOrCreateContextualSessionHandle();
+
   // webui_browser::mojom::PageHandlerFactory:
   void CreatePageHandler(
       mojo::PendingRemote<webui_browser::mojom::Page> page,
       mojo::PendingReceiver<webui_browser::mojom::PageHandler> receiver)
       override;
-  void GetTabStripInset(GetTabStripInsetCallback callback) override;
 
   // bookmark_bar::mojom::PageHandlerFactory:
   void CreatePageHandler(mojo::PendingRemote<bookmark_bar::mojom::Page> page,
@@ -120,10 +129,20 @@ class WebUIBrowserUI : public ui::MojoWebUIController,
       mojo::PendingReceiver<extensions_bar::mojom::PageHandler> receiver)
       override;
 
+  // searchbox::mojom::PageHandlerFactory:
+  void CreatePageHandler(
+      mojo::PendingRemote<searchbox::mojom::Page> page,
+      mojo::PendingReceiver<searchbox::mojom::PageHandler> receiver) override;
+
   // Returns the list of known element identifiers. These elements are HTML
   // elements tracked by ui/webui/tracked_element. Used for anchoring secondary
   // UIs.
   const std::vector<ui::ElementIdentifier>& GetKnownElementIdentifiers() const;
+
+  // Lazily creates and returns a reference to the owned contextual search
+  // session handle for `realbox_handler_`.
+  contextual_search::ContextualSearchSessionHandle*
+  GetOrCreateContextualSessionHandle();
 
   // Must outlive `realbox_handler_`.
   std::unique_ptr<contextual_search::ContextualSearchSessionHandle>
@@ -141,6 +160,9 @@ class WebUIBrowserUI : public ui::MojoWebUIController,
       bookmark_bar_page_factory_receiver_{this};
   mojo::Receiver<extensions_bar::mojom::PageHandlerFactory>
       extensions_bar_page_factory_receiver_{this};
+
+  mojo::Receiver<searchbox::mojom::PageHandlerFactory>
+      searchbox_page_factory_receiver_{this};
 
   raw_ptr<Browser> browser_;
 

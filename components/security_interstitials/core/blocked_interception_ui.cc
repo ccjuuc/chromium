@@ -17,7 +17,7 @@
 namespace security_interstitials {
 
 BlockedInterceptionUI::BlockedInterceptionUI(const GURL& request_url,
-                                             int cert_error,
+                                             net::Error cert_error,
                                              const net::SSLInfo& ssl_info,
                                              ControllerClient* controller)
     : request_url_(request_url),
@@ -40,7 +40,7 @@ BlockedInterceptionUI::~BlockedInterceptionUI() {
 }
 
 void BlockedInterceptionUI::PopulateStringsForHTML(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   // Shared with other SSL errors.
   common_string_util::PopulateSSLLayoutStrings(cert_error_, load_time_data);
   common_string_util::PopulateSSLDebuggingStrings(

@@ -8,6 +8,7 @@
 
 #include <memory>
 
+#include "base/containers/flat_map.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
@@ -15,8 +16,10 @@
 #include "components/segmentation_platform/internal/execution/processing/feature_processor_state.h"
 #include "components/segmentation_platform/internal/metadata/metadata_writer.h"
 #include "components/segmentation_platform/public/input_context.h"
-#include "components/sessions/core/serialized_navigation_entry.h"
 #include "components/sessions/core/session_id.h"
+#include "components/sync_sessions/fake_open_tabs_ui_delegate.h"
+#include "components/sync_sessions/mock_session_sync_service.h"
+#include "components/sync_sessions/open_tabs_ui_delegate.h"
 #include "components/sync_sessions/synced_session.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -27,6 +30,7 @@ namespace {
 
 using ::testing::_;
 using ::testing::Return;
+using MockSessionSyncService = sync_sessions::MockSessionSyncService;
 
 constexpr char kLocalTabName[] = "local";
 constexpr char kRemoteTabName1[] = "remote_1";
@@ -35,95 +39,17 @@ const base::TimeDelta kTime1 = base::Minutes(15);
 const base::TimeDelta kTime2 = base::Minutes(10);
 const base::TimeDelta kTime3 = base::Minutes(5);
 
-std::unique_ptr<sync_sessions::SyncedSession> CreateNewSession(
-    const std::string& tab_guid,
-    const base::Time& session_time) {
-  auto session = std::make_unique<sync_sessions::SyncedSession>();
-  session->SetModifiedTime(session_time);
+void AddTabToSession(sync_sessions::SyncedSession* session,
+                     const std::string& tab_guid,
+                     const base::Time& session_time) {
   auto window = std::make_unique<sync_sessions::SyncedSessionWindow>();
   auto tab = std::make_unique<sessions::SessionTab>();
   tab->timestamp = session_time;
   tab->guid = tab_guid;
+  tab->tab_id = SessionID::NewUnique();
   window->wrapped_window.tabs.push_back(std::move(tab));
   session->windows[SessionID::NewUnique()] = std::move(window);
-  return session;
 }
-
-class MockSessionSyncService : public sync_sessions::SessionSyncService {
- public:
-  MockSessionSyncService() = default;
-  ~MockSessionSyncService() override = default;
-
-  MOCK_METHOD(syncer::GlobalIdMapper*,
-              GetGlobalIdMapper,
-              (),
-              (const, override));
-  MOCK_METHOD(sync_sessions::OpenTabsUIDelegate*,
-              GetOpenTabsUIDelegate,
-              (),
-              (override));
-  MOCK_METHOD(base::CallbackListSubscription,
-              SubscribeToForeignSessionsChanged,
-              (const base::RepeatingClosure& cb),
-              (override));
-  MOCK_METHOD(base::WeakPtr<syncer::DataTypeControllerDelegate>,
-              GetControllerDelegate,
-              ());
-};
-
-class MockOpenTabsUIDelegate : public sync_sessions::OpenTabsUIDelegate {
- public:
-  MockOpenTabsUIDelegate() {
-    local_session_ =
-        CreateNewSession(kLocalTabName, base::Time::Now() - kTime2);
-    foreign_sessions_owned_.push_back(
-        CreateNewSession(kRemoteTabName1, base::Time::Now() - kTime1));
-    foreign_sessions_.push_back(foreign_sessions_owned_.back().get());
-    foreign_sessions_owned_.push_back(
-        CreateNewSession(kRemoteTabName2, base::Time::Now() - kTime3));
-    foreign_sessions_.push_back(foreign_sessions_owned_.back().get());
-  }
-
-  bool GetAllForeignSessions(
-      std::vector<raw_ptr<const sync_sessions::SyncedSession,
-                          VectorExperimental>>* sessions) override {
-    *sessions = foreign_sessions_;
-    std::ranges::sort(*sessions, std::greater(),
-                      [](const sync_sessions::SyncedSession* session) {
-                        return session->GetModifiedTime();
-                      });
-
-    return !sessions->empty();
-  }
-
-  bool GetLocalSession(
-      const sync_sessions::SyncedSession** local_session) override {
-    *local_session = local_session_.get();
-    return *local_session != nullptr;
-  }
-
-  MOCK_METHOD3(GetForeignTab,
-               bool(const std::string& tag,
-                    const SessionID tab_id,
-                    const sessions::SessionTab** tab));
-
-  MOCK_METHOD1(DeleteForeignSession, void(const std::string& tag));
-
-  MOCK_METHOD1(
-      GetForeignSession,
-      std::vector<const sessions::SessionWindow*>(const std::string& tag));
-
-  MOCK_METHOD2(GetForeignSessionTabs,
-               bool(const std::string& tag,
-                    std::vector<const sessions::SessionTab*>* tabs));
-
- private:
-  std::vector<std::unique_ptr<sync_sessions::SyncedSession>>
-      foreign_sessions_owned_;
-  std::vector<raw_ptr<const sync_sessions::SyncedSession, VectorExperimental>>
-      foreign_sessions_;
-  std::unique_ptr<sync_sessions::SyncedSession> local_session_;
-};
 
 }  // namespace
 
@@ -139,6 +65,20 @@ class TabSessionSourceTest : public testing::Test {
                                                      tab_fetcher_.get());
     EXPECT_CALL(session_sync_service_, GetOpenTabsUIDelegate())
         .WillRepeatedly(Return(&open_tabs_delegate_));
+
+    const base::Time now = base::Time::Now();
+    open_tabs_delegate_.local_session()->SetSessionTag(kLocalTabName);
+    open_tabs_delegate_.local_session()->SetModifiedTime(now - kTime2);
+    AddTabToSession(open_tabs_delegate_.local_session(), kLocalTabName,
+                    now - kTime2);
+
+    AddTabToSession(
+        open_tabs_delegate_.AddForeignSession(kRemoteTabName1, now - kTime1),
+        kRemoteTabName1, now - kTime1);
+
+    AddTabToSession(
+        open_tabs_delegate_.AddForeignSession(kRemoteTabName2, now - kTime3),
+        kRemoteTabName2, now - kTime3);
   }
 
   void TearDown() override {
@@ -181,21 +121,27 @@ class TabSessionSourceTest : public testing::Test {
   base::test::TaskEnvironment task_env_;
   MockSessionSyncService session_sync_service_;
   std::unique_ptr<TabFetcher> tab_fetcher_;
-  MockOpenTabsUIDelegate open_tabs_delegate_;
+  sync_sessions::FakeOpenTabsUIDelegate open_tabs_delegate_;
   std::unique_ptr<TabSessionSource> tab_source_;
 };
 
 TEST_F(TabSessionSourceTest, Bucketize) {
-  EXPECT_NEAR(TabSessionSource::BucketizeExp(0, /*max_buckets*/50), 0, 0.01);
-  EXPECT_NEAR(TabSessionSource::BucketizeLinear(0, /*max_buckets*/10), 0, 0.01);
-  EXPECT_NEAR(TabSessionSource::BucketizeExp(1, /*max_buckets*/50), 1, 0.01);
-  EXPECT_NEAR(TabSessionSource::BucketizeLinear(1, /*max_buckets*/10), 1, 0.01);
-  EXPECT_NEAR(TabSessionSource::BucketizeExp(5, /*max_buckets*/50), 4, 0.01);
-  EXPECT_NEAR(TabSessionSource::BucketizeLinear(5, /*max_buckets*/10), 5, 0.01);
-  EXPECT_NEAR(TabSessionSource::BucketizeExp(10, /*max_buckets*/50), 8, 0.01);
-  EXPECT_NEAR(TabSessionSource::BucketizeLinear(10, /*max_buckets*/10), 10, 0.01);
-  EXPECT_NEAR(TabSessionSource::BucketizeExp(pow(2, 60), /*max_buckets*/50), pow(2, 50), 0.01);
-  EXPECT_NEAR(TabSessionSource::BucketizeLinear(16, /*max_buckets*/10), 10, 0.01);
+  EXPECT_NEAR(TabSessionSource::BucketizeExp(0, /*max_buckets*/ 50), 0, 0.01);
+  EXPECT_NEAR(TabSessionSource::BucketizeLinear(0, /*max_buckets*/ 10), 0,
+              0.01);
+  EXPECT_NEAR(TabSessionSource::BucketizeExp(1, /*max_buckets*/ 50), 1, 0.01);
+  EXPECT_NEAR(TabSessionSource::BucketizeLinear(1, /*max_buckets*/ 10), 1,
+              0.01);
+  EXPECT_NEAR(TabSessionSource::BucketizeExp(5, /*max_buckets*/ 50), 4, 0.01);
+  EXPECT_NEAR(TabSessionSource::BucketizeLinear(5, /*max_buckets*/ 10), 5,
+              0.01);
+  EXPECT_NEAR(TabSessionSource::BucketizeExp(10, /*max_buckets*/ 50), 8, 0.01);
+  EXPECT_NEAR(TabSessionSource::BucketizeLinear(10, /*max_buckets*/ 10), 10,
+              0.01);
+  EXPECT_NEAR(TabSessionSource::BucketizeExp(pow(2, 60), /*max_buckets*/ 50),
+              pow(2, 50), 0.01);
+  EXPECT_NEAR(TabSessionSource::BucketizeLinear(16, /*max_buckets*/ 10), 10,
+              0.01);
 }
 
 TEST_F(TabSessionSourceTest, ProcessLocal) {
@@ -214,21 +160,6 @@ TEST_F(TabSessionSourceTest, ProcessLocal) {
       ui::PAGE_TRANSITION_AUTO_SUBFRAME);
   picked_tab->current_navigation_index = 1;
   SessionID id = picked_tab->tab_id;
-
-  EXPECT_CALL(open_tabs_delegate_, GetForeignTab(_, _, _))
-      .WillOnce([&picked_tab](const std::string& tag, SessionID tab_id,
-                              const sessions::SessionTab** tab) {
-        *tab = picked_tab.get();
-        return true;
-      });
-  EXPECT_CALL(open_tabs_delegate_, GetForeignSession(_))
-      .WillOnce([&local_session](const std::string& tag) {
-        std::vector<const sessions::SessionWindow*> windows;
-        for (const auto& [window_id, window] : local_session->windows) {
-          windows.push_back(&window->wrapped_window);
-        }
-        return windows;
-      });
 
   Tensor result = GetResult(local_session->GetSessionTag(), id);
   EXPECT_NEAR(result[TabSessionSource::kInputTimeSinceModifiedSec].float_val,
@@ -260,21 +191,6 @@ TEST_F(TabSessionSourceTest, ProcessForeign) {
   picked_tab->navigations.back().set_timestamp(base::Time::Now() - kNavTime1);
   picked_tab->current_navigation_index = 1;
   SessionID id = picked_tab->tab_id;
-
-  EXPECT_CALL(open_tabs_delegate_, GetForeignTab(_, _, _))
-      .WillOnce([&picked_tab](const std::string& tag, SessionID tab_id,
-                              const sessions::SessionTab** tab) {
-        *tab = picked_tab.get();
-        return true;
-      });
-  EXPECT_CALL(open_tabs_delegate_, GetForeignSession(_))
-      .WillOnce([&picked_session](const std::string& tag) {
-        std::vector<const sessions::SessionWindow*> windows;
-        for (const auto& [window_id, window] : picked_session->windows) {
-          windows.push_back(&window->wrapped_window);
-        }
-        return windows;
-      });
 
   Tensor result = GetResult(picked_session->GetSessionTag(), id);
   EXPECT_NEAR(result[TabSessionSource::kInputTimeSinceModifiedSec].float_val,

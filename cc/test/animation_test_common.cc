@@ -24,6 +24,13 @@ using gfx::KeyframeModel;
 
 namespace cc {
 
+double ToMilliseconds(std::optional<base::TimeTicks> time_ticks) {
+  if (!time_ticks) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  return (time_ticks.value() - base::TimeTicks()).InMillisecondsF();
+}
+
 int AddOpacityTransition(Animation* target,
                          double duration,
                          float start_opacity,
@@ -75,6 +82,7 @@ int AddAnimatedTransform(Animation* target,
       std::move(curve), id, AnimationIdProvider::NextGroupId(),
       KeyframeModel::TargetPropertyId(TargetProperty::TRANSFORM)));
   keyframe_model->set_needs_synchronized_start_time(true);
+  keyframe_model->set_hold_time(base::TimeDelta());
 
   target->AddKeyframeModel(std::move(keyframe_model));
   return id;

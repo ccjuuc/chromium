@@ -7,7 +7,10 @@
 #include <string>
 #include <utility>
 
+#include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/accelerator_table.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/side_panel/read_anything/read_anything_untrusted_page_handler.h"
 #include "chrome/browser/ui/webui/theme_source.h"
@@ -17,13 +20,20 @@
 #include "chrome/grit/side_panel_read_anything_resources_map.h"
 #include "chrome/grit/side_panel_shared_resources.h"
 #include "chrome/grit/side_panel_shared_resources_map.h"
+#include "ui/webui/tracked_element/tracked_element_handler_document_singleton.h"
+#if BUILDFLAG(IS_MAC)
+#include "chrome/browser/global_keyboard_shortcuts_mac.h"
+#endif
 #include "components/strings/grit/components_strings.h"
+#include "components/user_education/webui/help_bubble_handler.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "ui/accessibility/accessibility_features.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/webui/web_ui_util.h"
+#include "ui/strings/grit/ui_strings.h"
 #include "ui/views/style/platform_style.h"
 #include "ui/webui/resources/grit/webui_resources.h"
 #include "ui/webui/webui_util.h"
@@ -48,6 +58,9 @@ ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
       {"readAnythingLoadingMessage", IDS_READ_ANYTHING_LOADING},
       {"lineSpacingTitle", IDS_READING_MODE_LINE_SPACING_COMBOBOX_LABEL},
       {"fontNameTitle", IDS_READING_MODE_FONT_NAME_COMBOBOX_LABEL},
+      {"appearanceTitle", IDS_READING_MODE_APPEARANCE_LABEL},
+      {"textSettingsTitle", IDS_READING_MODE_TEXT_STYLE_LABEL},
+      {"mediaTitle", IDS_READING_MODE_MEDIA_LABEL},
       {"themeTitle", IDS_READING_MODE_COLORS_COMBOBOX_LABEL},
       {"letterSpacingTitle", IDS_READING_MODE_LETTER_SPACING_COMBOBOX_LABEL},
       {"fontSizeTitle", IDS_READING_MODE_FONT_SIZE},
@@ -57,9 +70,10 @@ ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
       {"yellowColorTitle", IDS_READING_MODE_YELLOW_COLOR_LABEL},
       {"blueColorTitle", IDS_READING_MODE_BLUE_COLOR_LABEL},
       {"highContrastColorTitle", IDS_READING_MODE_HIGH_CONTRAST_COLOR_LABEL},
-      {"lowContrastColorTitle", IDS_READING_MODE_LOW_CONTRAST_COLOR_LABEL},
-      {"sepiaLightColorTitle", IDS_READING_MODE_SEPIA_LIGHT_COLOR_LABEL},
-      {"sepiaDarkColorTitle", IDS_READING_MODE_SEPIA_DARK_COLOR_LABEL},
+      {"lowContrastLightColorTitle",
+       IDS_READING_MODE_LOW_CONTRAST_LIGHT_COLOR_LABEL},
+      {"lowContrastDarkColorTitle",
+       IDS_READING_MODE_LOW_CONTRAST_DARK_COLOR_LABEL},
       {"fontResetTitle", IDS_READING_MODE_FONT_RESET},
       {"fontResetTooltip", IDS_READING_MODE_FONT_RESET_TOOLTIP},
       {"autoHighlightTitle", IDS_READING_MODE_AUTO_HIGHLIGHT_LABEL},
@@ -67,21 +81,43 @@ ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
       {"phraseHighlightTitle", IDS_READING_MODE_PHRASE_HIGHLIGHT_LABEL},
       {"sentenceHighlightTitle", IDS_READING_MODE_SENTENCE_HIGHLIGHT_LABEL},
       {"noHighlightTitle", IDS_READING_MODE_OFF_HIGHLIGHT_LABEL},
+      {"turnLineFocusOffTitle", IDS_READING_MODE_TURN_LINE_FOCUS_OFF_LABEL},
       {"lineFocusWindowHeading", IDS_READING_MODE_LINE_FOCUS_WINDOW_HEADING},
-      {"lineFocusOneLineTitle",
-       IDS_READING_MODE_LINE_FOCUS_HIGHLIGHT_1_LINE_LABEL},
+      {"lineFocusStyleHeading", IDS_READING_MODE_LINE_FOCUS_STYLE_HEADING},
+      {"lineFocusOneLineTitle", IDS_READING_MODE_LINE_FOCUS_SMALL_FOCUS_LABEL},
+      {"lineFocusOneLineAriaLabel",
+       IDS_READING_MODE_LINE_FOCUS_SMALL_FOCUS_LABEL_SCREENREADER},
       {"lineFocusThreeLineTitle",
-       IDS_READING_MODE_LINE_FOCUS_HIGHLIGHT_3_LINE_LABEL},
-      {"lineFocusFiveLineTitle",
-       IDS_READING_MODE_LINE_FOCUS_HIGHLIGHT_5_LINE_LABEL},
+       IDS_READING_MODE_LINE_FOCUS_MEDIUM_FOCUS_LABEL},
+      {"lineFocusThreeLineAriaLabel",
+       IDS_READING_MODE_LINE_FOCUS_MEDIUM_FOCUS_LABEL_SCREENREADER},
+      {"lineFocusFiveLineTitle", IDS_READING_MODE_LINE_FOCUS_LARGE_FOCUS_LABEL},
+      {"lineFocusFiveLineAriaLabel",
+       IDS_READING_MODE_LINE_FOCUS_LARGE_FOCUS_LABEL_SCREENREADER},
+      {"lineFocusUnderlineTitle", IDS_READING_MODE_LINE_FOCUS_UNDERLINE_LABEL},
+      {"lineFocusUnderlineAriaLabel",
+       IDS_READING_MODE_LINE_FOCUS_UNDERLINE_LABEL_SCREENREADER},
       {"lineFocusLineHeading", IDS_READING_MODE_LINE_FOCUS_LINE_HEADING},
+      {"lineFocusMovementHeading",
+       IDS_READING_MODE_LINE_FOCUS_MOVEMENT_HEADING},
       {"lineFocusStaticLineTitle",
        IDS_READING_MODE_LINE_FOCUS_STATIC_LINE_LABEL},
+      {"lineFocusStaticTitle", IDS_READING_MODE_LINE_FOCUS_STATIC_LABEL},
+      {"lineFocusStaticAriaLabel",
+       IDS_READING_MODE_LINE_FOCUS_STATIC_LABEL_SCREENREADER},
       {"lineFocusCursorLineTitle",
        IDS_READING_MODE_LINE_FOCUS_CURSOR_LINE_LABEL},
+      {"lineFocusCursorLineAriaLabel",
+       IDS_READING_MODE_LINE_FOCUS_CURSOR_LINE_LABEL_SCREENREADER},
       {"lineFocusOffTitle", IDS_READING_MODE_LINE_FOCUS_OFF_LABEL},
+      {"lineFocusOffAriaLabel",
+       IDS_READING_MODE_LINE_FOCUS_OFF_LABEL_SCREENREADER},
+      {"lineFocusOnTitle", IDS_READING_MODE_LINE_FOCUS_ON_LABEL},
+      {"lineFocusOnAriaLabel",
+       IDS_READING_MODE_LINE_FOCUS_ON_LABEL_SCREENREADER},
       {"turnHighlightOff", IDS_READING_MODE_TURN_HIGHLIGHT_OFF},
       {"turnHighlightOn", IDS_READING_MODE_TURN_HIGHLIGHT_ON},
+      {"lineFocusShortcutLabel", IDS_READING_MODE_LINE_FOCUS_SHORTCUT_LABEL},
       {"lineSpacingStandardTitle", IDS_READING_MODE_SPACING_COMBOBOX_STANDARD},
       {"lineSpacingLooseTitle", IDS_READING_MODE_SPACING_COMBOBOX_LOOSE},
       {"lineSpacingVeryLooseTitle",
@@ -100,6 +136,8 @@ ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
       {"previousSentenceLabel", IDS_READING_MODE_NAVIGATE_PREVIOUS_SENTENCE},
       {"nextSentenceLabel", IDS_READING_MODE_NAVIGATE_NEXT_SENTENCE},
       {"moreOptionsLabel", IDS_READING_MODE_MORE_OPTIONS},
+      {"settingsLabel", IDS_READING_MODE_SETTINGS},
+      {"translateLabel", IDS_READING_MODE_TRANSLATE},
       {"voiceSpeedLabel", IDS_READING_MODE_VOICE_SPEED},
       {"voiceHighlightLabel", IDS_READING_MODE_VOICE_HIGHLIGHT},
       {"voiceSpeedWithRateLabel", IDS_READING_MODE_VOICE_SPEED_WITH_RATE},
@@ -119,6 +157,9 @@ ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
       {"imagesLabel", IDS_READING_MODE_IMAGES_LABEL},
       {"disableImagesLabel", IDS_READING_MODE_DISABLE_IMAGES_BUTTON_LABEL},
       {"enableImagesLabel", IDS_READING_MODE_ENABLE_IMAGES_BUTTON_LABEL},
+      {"pinLabel", IDS_READING_MODE_PIN_LABEL},
+      {"disablePinLabel", IDS_READING_MODE_DISABLE_PIN_BUTTON_LABEL},
+      {"enablePinLabel", IDS_READING_MODE_ENABLE_PIN_BUTTON_LABEL},
       {"readingModeToolbarLabel", IDS_READING_MODE_TOOLBAR_LABEL},
       {"readingModeReadAloudToolbarLabel",
        IDS_READING_MODE_READ_ALOUD_TOOLBAR_LABEL},
@@ -156,6 +197,7 @@ ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
       {"readingModeVoiceDownloadedMessage",
        IDS_READING_MODE_VOICE_DOWNLOADED_MESSAGE},
       {"menu", IDS_MENU},
+      {"newBadgeLabel", IDS_NEW_BADGE},
       {"selected", IDS_READING_MODE_ITEM_SELECTED},
       {"allocationError", IDS_READING_MODE_LANGUAGE_MENU_NO_SPACE},
       {"allocationErrorHighQuality",
@@ -174,6 +216,16 @@ ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
   for (const auto& str : kLocalizedStrings) {
     webui::AddLocalizedString(source, str.name, str.id);
   }
+  ui::Accelerator reading_mode_accelerator;
+  std::u16string reading_mode_shortcut;
+  if (GetAcceleratorForCommandId(IDC_SHOW_READING_MODE_KEYBOARD,
+                                 &reading_mode_accelerator)) {
+    reading_mode_shortcut = reading_mode_accelerator.GetShortcutText();
+  }
+
+  source->AddString("readingModeClose",
+                    l10n_util::GetStringFUTF16(IDS_READING_MODE_CLOSE,
+                                               reading_mode_shortcut));
 
   // Rather than call `webui::SetupWebUIDataSource`, manually set up source
   // here. This ensures that if CSPs change in a way that is safe for chrome://
@@ -186,13 +238,18 @@ ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
   source->AddResourcePath("test_loader.html", IDR_WEBUI_TEST_LOADER_HTML);
   webui::EnableTrustedTypesCSP(source);
   source->AddResourcePaths(kSidePanelReadAnythingResources);
-  source->AddResourcePath("",
-                          IDR_SIDE_PANEL_READ_ANYTHING_APP_READ_ANYTHING_HTML);
+  source->SetDefaultResource(
+      IDR_SIDE_PANEL_READ_ANYTHING_APP_READ_ANYTHING_HTML);
   source->AddResourcePaths(kSidePanelSharedResources);
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::ScriptSrc,
       "script-src 'self' chrome-untrusted://resources "
-      "chrome-untrusted://webui-test;");
+      "chrome-untrusted://webui-test https://translate.googleapis.com "
+      "https://translate.google.com;");
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::ConnectSrc,
+      "connect-src 'self' https://translate.googleapis.com "
+      "https://translate.google.com;");
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::StyleSrc,
       "style-src 'self' chrome-untrusted://resources chrome-untrusted://theme "
@@ -203,7 +260,14 @@ ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
       "https://fonts.gstatic.com;");
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::ImgSrc,
-      "img-src 'self' data: chrome-untrusted://resources;");
+      "img-src 'self' data: chrome://resources https: "
+      "chrome-untrusted://resources;");
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::TrustedTypes,
+      "trusted-types goog#html reader-mode-policy lit-html-desktop "
+      "static-types "
+      "parse-html-subset polymer-html-literal "
+      "polymer-template-event-attribute-policy;");
   raw_ptr<Profile> profile = Profile::FromWebUI(web_ui);
 
   // If the ThemeSource isn't added here, since Read Anything is
@@ -211,6 +275,11 @@ ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
   // is opened.
   content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(
                                            profile, /*serve_untrusted=*/true));
+
+  ui::TrackedElementHandlerDocumentSingleton::Register(
+      this,
+      std::vector<ui::ElementIdentifier>{kReadAnythingViewModeElementId,
+                                         kReadAnythingSettingsButtonElementId});
 }
 
 ReadAnythingUntrustedUI::~ReadAnythingUntrustedUI() = default;
@@ -224,6 +293,22 @@ void ReadAnythingUntrustedUI::BindInterface(
   read_anything_page_factory_receiver_.Bind(std::move(receiver));
 }
 
+void ReadAnythingUntrustedUI::BindInterface(
+    mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandlerFactory>
+        receiver) {
+  help_bubble_handler_factory_receiver_.reset();
+  help_bubble_handler_factory_receiver_.Bind(std::move(receiver));
+}
+
+void ReadAnythingUntrustedUI::CreateHelpBubbleHandler(
+    mojo::PendingRemote<help_bubble::mojom::HelpBubbleClient> client,
+    mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandler> handler) {
+  help_bubble_handler_ = std::make_unique<user_education::HelpBubbleHandler>(
+      std::move(handler), std::move(client),
+      ui::TrackedElementHandlerDocumentSingleton::GetOrCreate(
+          web_ui()->GetRenderFrameHost()));
+}
+
 void ReadAnythingUntrustedUI::CreateUntrustedPageHandler(
     mojo::PendingRemote<read_anything::mojom::UntrustedPage> page,
     mojo::PendingReceiver<read_anything::mojom::UntrustedPageHandler>
@@ -233,16 +318,6 @@ void ReadAnythingUntrustedUI::CreateUntrustedPageHandler(
       std::make_unique<ReadAnythingUntrustedPageHandler>(
           std::move(page), std::move(receiver), web_ui(),
           /*use_screen_ai_service=*/true);
-
-  // This code is called as part of a screen2x data generation workflow, where
-  // the browser is opened by a CLI and the read-anything side panel is
-  // automatically opened. Therefore we force the UI to show right away rather
-  // than waiting for all UI artifacts to load, as in the general case.
-  if (features::IsDataCollectionModeForScreen2xEnabled()) {
-    if (embedder()) {
-      embedder()->ShowUI();
-    }
-  }
 }
 
 void ReadAnythingUntrustedUI::ShouldShowUI() {

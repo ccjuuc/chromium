@@ -12,6 +12,9 @@
 #include <optional>
 
 #include "base/containers/flat_map.h"
+#include "base/containers/flat_set.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
@@ -20,6 +23,7 @@
 #include "content/browser/media/media_power_experiment_manager.h"
 #include "content/browser/media/session/media_session_controllers_manager.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/document_user_data.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/media_player_id.h"
 #include "content/public/browser/render_frame_host.h"
@@ -58,6 +62,34 @@ namespace content {
 
 class AudibleMetrics;
 class WebContentsImpl;
+
+// Used to authorize a frame to bypass the browser's audio service for
+// audibility, when using `MediaFoundationRenderer`. This is stored as
+// `DocumentUserData` on the `RenderFrameHost`. The authorization is now tied to
+// a specific player instance and is no longer document-wide for the lifetime of
+// the document.
+class CONTENT_EXPORT AudibilityBypassTracker
+    : public DocumentUserData<AudibilityBypassTracker> {
+ public:
+  ~AudibilityBypassTracker() override;
+
+  using ScopedGrant = base::ScopedClosureRunner;
+
+  static ScopedGrant AddGrant(RenderFrameHost* rfh);
+  static bool ClaimGrant(const MediaPlayerId& id);
+  static void ReleaseGrant(const MediaPlayerId& id);
+
+ private:
+  friend class DocumentUserData<AudibilityBypassTracker>;
+  explicit AudibilityBypassTracker(RenderFrameHost* rfh);
+  DOCUMENT_USER_DATA_KEY_DECL();
+
+  static void RevokeGrant(GlobalRenderFrameHostId rfh_id, int grant_id);
+
+  int next_grant_id_ = 0;
+  base::flat_set<int> pending_grants_;
+  base::flat_map<MediaPlayerId, int> active_grants_;
+};
 
 // This class manages all RenderFrame based media related managers at the
 // browser side. It receives IPC messages from media RenderFrameObservers and
@@ -100,6 +132,9 @@ class CONTENT_EXPORT MediaWebContentsObserver
   void DidStartNavigation(NavigationHandle* navigation_handle) override;
   void RenderFrameHostChanged(RenderFrameHost* old_host,
                               RenderFrameHost* new_host) override;
+
+  // Called when an audibility bypass grant is revoked.
+  void OnAudibilityBypassRevoked(const MediaPlayerId& id);
 
   // MediaPlayerObserverClient implementation.
   void GetHasPlayedBefore(GetHasPlayedBeforeCallback callback) override;
@@ -223,10 +258,11 @@ class CONTENT_EXPORT MediaWebContentsObserver
         media_session::mojom::RemotePlaybackMetadataPtr
             remote_playback_metadata) override;
     void OnVideoVisibilityChanged(bool meets_visibility_threshold) override;
+    void NotifyAudioStreamMonitorIfNeeded();
+    void OnVideoFrameAvailabilityChanged(bool available) override;
 
    private:
     PlayerInfo* GetPlayerInfo();
-    void NotifyAudioStreamMonitorIfNeeded();
 
     void OnReceivedMediaDeviceSalt(
         const std::string& hashed_device_id,
@@ -272,8 +308,8 @@ class CONTENT_EXPORT MediaWebContentsObserver
   PlayerInfo* GetPlayerInfo(const MediaPlayerId& id) const;
 
   void OnMediaMetadataChanged(const MediaPlayerId& player_id,
-                              bool has_video,
                               bool has_audio,
+                              bool has_video,
                               media::MediaContentType media_content_type);
 
   void OnMediaEffectivelyFullscreenChanged(

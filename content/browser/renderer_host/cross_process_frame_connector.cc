@@ -24,6 +24,7 @@
 #include "third_party/blink/public/common/frame/frame_visual_properties.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/mojom/frame/intrinsic_sizing_info.mojom.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/gfx/geometry/dip_util.h"
 
@@ -185,10 +186,12 @@ void CrossProcessFrameConnector::SendIntrinsicSizingInfoToParent(
     blink::mojom::IntrinsicSizingInfoPtr sizing_info) {
   // The width/height should not be negative since gfx::SizeF will clamp
   // negative values to zero.
-  DCHECK((sizing_info->size.width() >= 0.f) &&
-         (sizing_info->size.height() >= 0.f));
-  DCHECK((sizing_info->aspect_ratio.width() >= 0.f) &&
-         (sizing_info->aspect_ratio.height() >= 0.f));
+  CHECK(
+      (sizing_info->size.width() >= 0.f) && (sizing_info->size.height() >= 0.f),
+      base::NotFatalUntil::M152);
+  CHECK((sizing_info->aspect_ratio.width() >= 0.f) &&
+            (sizing_info->aspect_ratio.height() >= 0.f),
+        base::NotFatalUntil::M152);
   if (!frame_proxy_in_parent_renderer_->is_render_frame_proxy_live())
     return;
   frame_proxy_in_parent_renderer_->GetAssociatedRemoteFrame()
@@ -204,8 +207,6 @@ void CrossProcessFrameConnector::SynchronizeVisualProperties(
   screen_infos_ = visual_properties.screen_infos;
   local_surface_id_ = visual_properties.local_surface_id;
 
-  capture_sequence_number_ = visual_properties.capture_sequence_number;
-
   SetRectInParentView(visual_properties.rect_in_local_root);
   SetLocalFrameSize(visual_properties.local_frame_size);
 
@@ -215,7 +216,7 @@ void CrossProcessFrameConnector::SynchronizeVisualProperties(
   view_->UpdateScreenInfo();
 
   RenderWidgetHostImpl* render_widget_host = view_->host();
-  DCHECK(render_widget_host);
+  CHECK(render_widget_host, base::NotFatalUntil::M152);
 
   render_widget_host->SetAutoResize(visual_properties.auto_resize_enabled,
                                     visual_properties.min_size_for_auto_resize,
@@ -240,6 +241,23 @@ input::RenderWidgetHostViewInput*
 CrossProcessFrameConnector::GetRootViewInput() {
   return GetRootRenderWidgetHostView();
 }
+
+double CrossProcessFrameConnector::GetCssZoomFactor() {
+  return last_received_css_zoom_factor_;
+}
+
+const gfx::Size& CrossProcessFrameConnector::GetLocalFrameSizeInPixels() {
+  return local_frame_size_in_pixels_;
+}
+
+const gfx::Size& CrossProcessFrameConnector::GetLocalFrameSizeInDip() {
+  return local_frame_size_in_dip_;
+}
+
+const gfx::Rect& CrossProcessFrameConnector::GetRectInParentViewInDip() {
+  return rect_in_parent_view_in_dip_;
+}
+
 
 void CrossProcessFrameConnector::UpdateCursor(const ui::Cursor& cursor) {
   RenderWidgetHostViewBase* root_view = GetRootRenderWidgetHostView();
@@ -287,21 +305,33 @@ void CrossProcessFrameConnector::UnlockPointer() {
     root_view->UnlockPointer();
 }
 
+const blink::mojom::ViewportIntersectionState&
+CrossProcessFrameConnector::GetIntersectionState() {
+  return intersection_state_;
+}
+
+const viz::LocalSurfaceId& CrossProcessFrameConnector::GetLocalSurfaceId() {
+  return local_surface_id_;
+}
+
+const display::ScreenInfos& CrossProcessFrameConnector::GetScreenInfos() {
+  return screen_infos_;
+}
+
 void CrossProcessFrameConnector::OnSynchronizeVisualProperties(
     const blink::FrameVisualProperties& visual_properties) {
-  TRACE_EVENT_WITH_FLOW2(
+  TRACE_EVENT(
       TRACE_DISABLED_BY_DEFAULT("viz.surface_id_flow"),
       "CrossProcessFrameConnector::OnSynchronizeVisualProperties Receive "
       "Message",
-      TRACE_ID_GLOBAL(visual_properties.local_surface_id.submission_trace_id()),
-      TRACE_EVENT_FLAG_FLOW_IN, "message",
-      "FrameHostMsg_SynchronizeVisualProperties", "new_local_surface_id",
-      visual_properties.local_surface_id.ToString());
+      perfetto::TerminatingFlow::Global(
+          visual_properties.local_surface_id.submission_trace_id()),
+      "message", "FrameHostMsg_SynchronizeVisualProperties",
+      "new_local_surface_id", visual_properties.local_surface_id.ToString());
   // If the |rect_in_local_root| or current ScreenInfo of the frame has
   // changed, then the viz::LocalSurfaceId must also change.
   if ((last_received_local_frame_size_ != visual_properties.local_frame_size ||
        screen_infos_.current() != visual_properties.screen_infos.current() ||
-       capture_sequence_number() != visual_properties.capture_sequence_number ||
        last_received_zoom_level_ != visual_properties.zoom_level ||
        last_received_css_zoom_factor_ != visual_properties.css_zoom_factor) &&
       local_surface_id_ == visual_properties.local_surface_id) {
@@ -427,7 +457,17 @@ CrossProcessFrameConnector::GetRootRenderWidgetHostView() {
   RenderFrameHostImpl* root =
       current_child_frame_host()
           ->GetOutermostMainFrameOrEmbedderExcludingProspectiveOwners();
-  return static_cast<RenderWidgetHostViewBase*>(root->GetView());
+
+  auto* view = static_cast<RenderWidgetHostViewBase*>(root->GetView());
+  // GetOutermostMainFrameOrEmbedderExcludingProspectiveOwners doesn't go
+  // outside to embedder if the WebContents is embedded via SurfaceEmbed. In
+  // that case, the root view that we got is a RenderWidgetHostViewChildFrame
+  // for the main frame of the inner WebContents and we need to get root view
+  // from it again for the real root view.
+  if (view && view->IsRenderWidgetHostViewChildFrame()) {
+    view = view->GetRootView();
+  }
+  return view;
 }
 
 RenderWidgetHostViewBase*
@@ -452,16 +492,15 @@ void CrossProcessFrameConnector::DisableAutoResize() {
   frame_proxy_in_parent_renderer_->DisableAutoResize();
 }
 
-bool CrossProcessFrameConnector::IsInert() const {
+bool CrossProcessFrameConnector::IsInert() {
   return is_inert_;
 }
 
-cc::TouchAction CrossProcessFrameConnector::InheritedEffectiveTouchAction()
-    const {
+cc::TouchAction CrossProcessFrameConnector::InheritedEffectiveTouchAction() {
   return inherited_effective_touch_action_;
 }
 
-bool CrossProcessFrameConnector::IsHidden() const {
+bool CrossProcessFrameConnector::IsHidden() {
   return visibility_ == blink::mojom::FrameVisibility::kNotRendered;
 }
 
@@ -470,8 +509,11 @@ void CrossProcessFrameConnector::DidUpdateVisualProperties(
   frame_proxy_in_parent_renderer_->DidUpdateVisualProperties(metadata);
 }
 
-void CrossProcessFrameConnector::SetVisibilityForChildViews(
-    bool visible) const {
+bool CrossProcessFrameConnector::HasSize() {
+  return has_size_;
+}
+
+void CrossProcessFrameConnector::SetVisibilityForChildViews(bool visible) {
   current_child_frame_host()->SetVisibilityForChildViews(visible);
 }
 
@@ -534,15 +576,15 @@ void CrossProcessFrameConnector::UpdateRenderThrottlingStatus(
   }
 }
 
-bool CrossProcessFrameConnector::IsThrottled() const {
+bool CrossProcessFrameConnector::IsThrottled() {
   return is_throttled_;
 }
 
-bool CrossProcessFrameConnector::IsSubtreeThrottled() const {
+bool CrossProcessFrameConnector::IsSubtreeThrottled() {
   return subtree_throttled_;
 }
 
-bool CrossProcessFrameConnector::IsDisplayLocked() const {
+bool CrossProcessFrameConnector::IsDisplayLocked() {
   return display_locked_;
 }
 
@@ -616,7 +658,7 @@ void CrossProcessFrameConnector::DelegateWasShown() {
 
 bool CrossProcessFrameConnector::IsVisible() {
   if (visibility_ == blink::mojom::FrameVisibility::kNotRendered ||
-      intersection_state().viewport_intersection.IsEmpty()) {
+      GetIntersectionState().viewport_intersection.IsEmpty()) {
     return false;
   }
 
@@ -633,6 +675,15 @@ bool CrossProcessFrameConnector::IsVisible() {
 
 Visibility CrossProcessFrameConnector::EmbedderVisibility() {
   return current_child_frame_host()->delegate()->GetVisibility();
+}
+
+void CrossProcessFrameConnector::SetKeepSurfaceAlive(bool keep_alive) {
+  // Not needed here; since the necessary work will be done on the parent
+  // view (unless people start capturing frames or such).
+}
+
+bool CrossProcessFrameConnector::IsKeepingAlive() const {
+  return false;
 }
 
 RenderFrameHostImpl* CrossProcessFrameConnector::current_child_frame_host()

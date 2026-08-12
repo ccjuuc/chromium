@@ -117,13 +117,16 @@ function selectTab(id) {
   for (let i = 0; i !== tabContents.length; i++) {
     const tabContent = tabContents[i];
     const tabHeader = tabHeaders[i];
+    const tabButton = tabHeader.querySelector('button');
     if (tabContent.id === id) {
       tabContent.classList.add('selected');
       tabHeader.classList.add('selected');
+      tabButton.setAttribute('aria-current', 'true');
       found = true;
     } else {
       tabContent.classList.remove('selected');
       tabHeader.classList.remove('selected');
+      tabButton.removeAttribute('aria-current');
     }
   }
   if (!found) {
@@ -1088,11 +1091,12 @@ function validatePort(input) {
 }
 
 function validateLocation(input) {
-  const match = input.value.match(/^([a-zA-Z0-9\.\-_]+):(\d+)$/);
+  const match =
+      input.value.match(/^(?:[a-zA-Z0-9\.\-_]+|\[[a-fA-F0-9:]+\]):(\d+)$/);
   if (!match) {
     return false;
   }
-  const port = parseInt(match[2]);
+  const port = parseInt(match[1]);
   return port <= 65535;
 }
 

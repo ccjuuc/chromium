@@ -31,8 +31,10 @@
 #include "third_party/blink/renderer/core/inspector/inspector_dom_debugger_agent.h"
 
 #include "third_party/blink/renderer/bindings/core/v8/js_based_event_listener.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_css_pseudo_element.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_event_target.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_node.h"
+#include "third_party/blink/renderer/core/dom/css_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/dom_node_ids.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
@@ -75,7 +77,7 @@ String EventListenerBreakpointKey(const String& event_name,
                                   const String& target_name) {
   if (target_name.empty() || target_name == "*")
     return StrCat({event_name, "$$*"});
-  return StrCat({event_name, "$$", target_name.LowerASCII()});
+  return StrCat({event_name, "$$", target_name.ToAsciiLower()});
 }
 }  // namespace
 
@@ -170,8 +172,13 @@ void InspectorDOMDebuggerAgent::EventListenersInfoForTarget(
     bool pierce,
     InspectorDOMAgent::IncludeWhitespaceEnum include_whitespace,
     V8EventListenerInfoList* event_information) {
-  // Special-case nodes, respect depth and pierce parameters in case of nodes.
   Node* node = V8Node::ToWrappable(isolate, value);
+  if (!node) {
+    if (CSSPseudoElement* css_pseudo =
+            V8CSSPseudoElement::ToWrappable(isolate, value)) {
+      node = css_pseudo->GetPseudoElement();
+    }
+  }
   if (node) {
     if (depth < 0)
       depth = INT_MAX;
@@ -195,11 +202,9 @@ void InspectorDOMDebuggerAgent::EventListenersInfoForTarget(
 
 InspectorDOMDebuggerAgent::InspectorDOMDebuggerAgent(
     v8::Isolate* isolate,
-    InspectorDOMAgent* dom_agent,
-    v8_inspector::V8InspectorSession* v8_session)
+    InspectorDOMAgent* dom_agent)
     : isolate_(isolate),
       dom_agent_(dom_agent),
-      v8_session_(v8_session),
       enabled_(&agent_state_, /*default_value=*/false),
       pause_on_all_xhrs_(&agent_state_, /*default_value=*/false),
       xhr_breakpoints_(&agent_state_, /*default_value=*/false),
@@ -262,9 +267,10 @@ protocol::Response InspectorDOMDebuggerAgent::RemoveBreakpoint(
   return protocol::Response::Success();
 }
 
-void InspectorDOMDebuggerAgent::DidInvalidateStyleAttr(Node* node) {
-  if (HasBreakpoint(node, AttributeModified))
-    BreakProgramOnDOMEvent(node, AttributeModified, false);
+void InspectorDOMDebuggerAgent::DidInvalidateStyleAttr(Element* element) {
+  if (HasBreakpoint(element, AttributeModified)) {
+    BreakProgramOnDOMEvent(element, AttributeModified, false);
+  }
 }
 
 void InspectorDOMDebuggerAgent::DidInsertDOMNode(Node* node) {
@@ -437,7 +443,7 @@ protocol::Response InspectorDOMDebuggerAgent::getEventListeners(
   v8::Local<v8::Context> context;
   std::unique_ptr<v8_inspector::StringBuffer> error;
   std::unique_ptr<v8_inspector::StringBuffer> object_group;
-  if (!v8_session_->unwrapObject(&error, ToV8InspectorStringView(object_id),
+  if (!V8Session()->unwrapObject(&error, ToV8InspectorStringView(object_id),
                                  &object, &context, &object_group)) {
     return protocol::Response::ServerError(
         ToCoreString(std::move(error)).Utf8());
@@ -500,10 +506,11 @@ InspectorDOMDebuggerAgent::BuildObjectForEventListener(
           .setLineNumber(location.GetLineNumber())
           .setColumnNumber(location.GetColumnNumber())
           .build();
-  if (object_group_id.length()) {
-    value->setHandler(v8_session_->wrapObject(
-        context, function, object_group_id, false /* generatePreview */));
-    value->setOriginalHandler(v8_session_->wrapObject(
+  V8SessionHolder session = V8Session();
+  if (session && object_group_id.length()) {
+    value->setHandler(session->wrapObject(context, function, object_group_id,
+                                          false /* generatePreview */));
+    value->setOriginalHandler(session->wrapObject(
         context, info.handler, object_group_id, false /* generatePreview */));
   }
   if (info.backend_node_id)
@@ -573,7 +580,7 @@ void InspectorDOMDebuggerAgent::BreakProgramOnDOMEvent(Node* target,
   description->setString("type", DomTypeName(breakpoint_type));
   std::vector<uint8_t> json;
   ConvertCBORToJSON(SpanFrom(description->Serialize()), &json);
-  v8_session_->breakProgram(
+  V8Session()->breakProgram(
       ToV8InspectorStringView(
           v8_inspector::protocol::Debugger::API::Paused::ReasonEnum::DOM),
       v8_inspector::StringView(json.data(), json.size()));
@@ -627,9 +634,9 @@ void InspectorDOMDebuggerAgent::PauseOnNativeEventIfNeeded(
   auto listener = ToV8InspectorStringView(
       v8_inspector::protocol::Debugger::API::Paused::ReasonEnum::EventListener);
   if (synchronous)
-    v8_session_->breakProgram(listener, json_view);
+    V8Session()->breakProgram(listener, json_view);
   else
-    v8_session_->schedulePauseOnNextStatement(listener, json_view);
+    V8Session()->schedulePauseOnNextStatement(listener, json_view);
 }
 
 std::unique_ptr<protocol::DictionaryValue>
@@ -652,7 +659,7 @@ InspectorDOMDebuggerAgent::PreparePauseOnNativeEventData(
 }
 
 void InspectorDOMDebuggerAgent::CancelNativeBreakpoint() {
-  v8_session_->cancelPauseOnNextStatement();
+  V8Session()->cancelPauseOnNextStatement();
 }
 
 void InspectorDOMDebuggerAgent::Will(const probe::UserCallback& probe) {
@@ -697,8 +704,9 @@ String InspectorDOMDebuggerAgent::MatchXHRBreakpoints(const String& url) const {
   if (pause_on_all_xhrs_.Get())
     return g_empty_string;
   for (const String& breakpoint : xhr_breakpoints_.Keys()) {
-    if (url.Contains(breakpoint))
+    if (url.contains(breakpoint)) {
       return breakpoint;
+    }
   }
   return String();
 }
@@ -715,7 +723,7 @@ void InspectorDOMDebuggerAgent::WillSendXMLHttpOrFetchNetworkRequest(
   event_data->setString("url", url);
   std::vector<uint8_t> json;
   ConvertCBORToJSON(SpanFrom(event_data->Serialize()), &json);
-  v8_session_->breakProgram(
+  V8Session()->breakProgram(
       ToV8InspectorStringView(
           v8_inspector::protocol::Debugger::API::Paused::ReasonEnum::XHR),
       v8_inspector::StringView(json.data(), json.size()));
@@ -789,7 +797,7 @@ void InspectorDOMDebuggerAgent::OnContentSecurityPolicyViolation(
   auto listener = ToV8InspectorStringView(
       v8_inspector::protocol::Debugger::API::Paused::ReasonEnum::CSPViolation);
 
-  v8_session_->breakProgram(listener, json_view);
+  V8Session()->breakProgram(listener, json_view);
 }
 
 }  // namespace blink

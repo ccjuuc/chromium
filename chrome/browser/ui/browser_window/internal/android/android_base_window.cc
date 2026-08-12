@@ -23,8 +23,8 @@ using base::android::ScopedJavaLocalRef;
 }  // namespace
 
 // Implements Java |AndroidBaseWindow.Natives#create|.
-static jlong JNI_AndroidBaseWindow_Create(JNIEnv* env,
-                                          const JavaRef<jobject>& caller) {
+static int64_t JNI_AndroidBaseWindow_Create(JNIEnv* env,
+                                            const JavaRef<jobject>& caller) {
   return reinterpret_cast<intptr_t>(new AndroidBaseWindow(env, caller));
 }
 
@@ -121,6 +121,14 @@ void AndroidBaseWindow::Activate() {
 void AndroidBaseWindow::Deactivate() {
   Java_AndroidBaseWindow_deactivate(AttachCurrentThread(),
                                     java_android_base_window_);
+}
+
+bool AndroidBaseWindow::CanResize(
+    ui::WindowResizePrecheckResult& result) const {
+  result = static_cast<ui::WindowResizePrecheckResult>(
+      Java_AndroidBaseWindow_canResize(AttachCurrentThread(),
+                                       java_android_base_window_));
+  return result == ui::WindowResizePrecheckResult::kOk;
 }
 
 void AndroidBaseWindow::Maximize() {

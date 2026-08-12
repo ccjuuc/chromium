@@ -9,6 +9,10 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/url_constants.h"
+#include "ash/strings/grit/ash_strings.h"
+#include "ash/webui/settings/public/constants/routes.mojom.h"
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/i18n/timezone.h"
 #include "base/json/json_reader.h"
@@ -18,25 +22,24 @@
 #include "base/strings/string_view_util.h"
 #include "base/values.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/consent_auditor/consent_auditor_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
-#include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/extensions/app_launch_params.h"
 #include "chrome/browser/ui/extensions/application_launch.h"
 #include "chrome/browser/ui/webui/ash/diagnostics_dialog/diagnostics_dialog.h"
-#include "chrome/common/url_constants.h"
-#include "chrome/common/webui_url_constants.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
+#include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
+#include "components/application_locale_storage/application_locale_storage.h"
 #include "components/consent_auditor/consent_auditor.h"
-#include "components/signin/public/base/consent_level.h"
-#include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/user_manager/known_user.h"
+#include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
+#include "components/user_manager/user_type.h"
+#include "content/public/browser/url_data_source.h"
 #include "crypto/obsolete/sha1.h"
 #include "extensions/browser/app_window/app_window.h"
 #include "extensions/browser/app_window/app_window_registry.h"
@@ -228,10 +231,17 @@ ArcSupportHost::ErrorInfo::ErrorInfo(const ErrorInfo&) = default;
 ArcSupportHost::ErrorInfo& ArcSupportHost::ErrorInfo::operator=(
     const ArcSupportHost::ErrorInfo&) = default;
 
-ArcSupportHost::ArcSupportHost(Profile* profile)
-    : profile_(profile),
+ArcSupportHost::ArcSupportHost(
+    PrefService* local_state,
+    const ApplicationLocaleStorage* application_locale_storage,
+    Profile* profile)
+    : local_state_(CHECK_DEREF(local_state)),
+      application_locale_storage_(CHECK_DEREF(application_locale_storage)),
+      profile_(profile),
       request_open_app_callback_(base::BindRepeating(&RequestOpenApp)) {
   DCHECK(profile_);
+  content::URLDataSource::Add(profile_,
+                              std::make_unique<ThemeSource>(profile_));
 }
 
 ArcSupportHost::~ArcSupportHost() {
@@ -281,7 +291,7 @@ void ArcSupportHost::Close() {
     return;
   }
 
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set(kAction, kActionCloseWindow);
   message_host_->SendMessage(message);
 
@@ -311,7 +321,7 @@ void ArcSupportHost::ShowPage(UIPage ui_page) {
     return;
   }
 
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set(kAction, kActionShowPage);
   switch (ui_page) {
     case UIPage::TERMS:
@@ -347,7 +357,7 @@ void ArcSupportHost::ShowError(ErrorInfo error_info,
     return;
   }
 
-  base::Value::Dict message_args;
+  base::DictValue message_args;
   message_args.Set(kAction, kActionShowErrorPage);
   int message_id;
 #define MAP_ERROR(name, id) \
@@ -436,7 +446,7 @@ void ArcSupportHost::SendPreferenceCheckboxUpdate(
   if (!message_host_)
     return;
 
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set(kAction, action_name);
   message.Set(kEnabled, data.is_enabled);
   message.Set(kManaged, data.is_managed);
@@ -516,7 +526,7 @@ bool ArcSupportHost::Initialize() {
   const bool is_child =
       user_manager::UserManager::Get()->IsLoggedInAsChildUser();
 
-  base::Value::Dict loadtime_data;
+  base::DictValue loadtime_data;
   loadtime_data.Set("appWindow", l10n_util::GetStringUTF16(
                                      IDS_ARC_PLAYSTORE_ICON_TITLE_BETA));
   loadtime_data.Set("greetingHeader",
@@ -587,8 +597,8 @@ bool ArcSupportHost::Initialize() {
   if (ash::features::IsCrosPrivacyHubLocationEnabled()) {
     loadtime_data.Set("textLocationService",
                       l10n_util::GetStringUTF16(
-                          is_child ? IDS_CROS_OPT_IN_LOCATION_SETTING_CHILD
-                                   : IDS_CROS_OPT_IN_LOCATION_SETTING));
+                          is_child ? IDS_ARC_CROS_OPT_IN_LOCATION_SETTING_CHILD
+                                   : IDS_ARC_CROS_OPT_IN_LOCATION_SETTING));
   } else {
     loadtime_data.Set("textLocationService",
                       l10n_util::GetStringUTF16(
@@ -621,9 +631,9 @@ bool ArcSupportHost::Initialize() {
     loadtime_data.Set(
         "learnMoreLocationServices",
         l10n_util::GetStringFUTF16(
-            is_child ? IDS_CROS_OPT_IN_LEARN_MORE_LOCATION_SERVICES_CHILD
-                     : IDS_CROS_OPT_IN_LEARN_MORE_LOCATION_SERVICES,
-            chrome::kPrivacyHubGeolocationAccuracyLearnMoreURL));
+            is_child ? IDS_ARC_CROS_OPT_IN_LEARN_MORE_LOCATION_SERVICES_CHILD
+                     : IDS_ARC_CROS_OPT_IN_LEARN_MORE_LOCATION_SERVICES,
+            ash::external_urls::kPrivacyHubGeolocationAccuracyLearnMoreURL));
   } else {
     loadtime_data.Set(
         "learnMoreLocationServices",
@@ -646,23 +656,25 @@ bool ArcSupportHost::Initialize() {
                     l10n_util::GetStringUTF16(IDS_ARC_POPUP_HELP_LOADING));
 
   loadtime_data.Set(kArcManaged, is_arc_managed_);
-  loadtime_data.Set("isOwnerProfile",
-                    ash::ProfileHelper::IsOwnerProfile(profile_));
+  loadtime_data.Set(
+      "isOwnerProfile",
+      user_manager::UserManager::Get()->IsOwnerUser(
+          ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile_)));
 
   const std::string& country_code = base::CountryCodeForCurrentTimezone();
   loadtime_data.Set("countryCode", country_code);
 
-  const std::string& app_locale = g_browser_process->GetApplicationLocale();
+  const std::string& app_locale = application_locale_storage_->Get();
   webui::SetLoadTimeDataDefaults(app_locale, &loadtime_data);
   loadtime_data.Set("locale", app_locale);
 
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set(kAction, kActionInitialize);
   message.Set(kData, std::move(loadtime_data));
 
-  user_manager::KnownUser known_user(g_browser_process->local_state());
+  user_manager::KnownUser known_user(&local_state_.get());
   const std::string device_id = known_user.GetDeviceId(
-      multi_user_util::GetAccountIdFromProfile(profile_));
+      CHECK_DEREF(ash::AnnotatedAccountId::Get(profile_)));
   message.Set(kDeviceId, device_id);
 
   message_host_->SendMessage(message);
@@ -678,7 +690,7 @@ void ArcSupportHost::SetWindowBound(const display::Display& display) {
   if (!message_host_)
     return;
 
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set(kAction, kActionSetWindowBounds);
   message.Set(kDisplayWorkareaX, display.work_area().x());
   message.Set(kDisplayWorkareaY, display.work_area().y());
@@ -687,7 +699,7 @@ void ArcSupportHost::SetWindowBound(const display::Display& display) {
   message_host_->SendMessage(message);
 }
 
-void ArcSupportHost::OnMessage(const base::Value::Dict& message) {
+void ArcSupportHost::OnMessage(const base::DictValue& message) {
   const std::string* event = message.FindString(kEvent);
   if (!event) {
     NOTREACHED();
@@ -733,13 +745,10 @@ void ArcSupportHost::OnMessage(const base::Value::Dict& message) {
       is_location_service_enabled = false;
     }
 
-    auto* identity_manager = IdentityManagerFactory::GetForProfile(profile_);
-    // This class doesn't care about browser sync consent.
-    DCHECK(identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin));
-    GaiaId gaia_id =
-        identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
-            .gaia;
-    bool is_child = user_manager::UserManager::Get()->IsLoggedInAsChildUser();
+    const auto& user = CHECK_DEREF(
+        ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile_));
+    GaiaId gaia_id = user.GetAccountId().GetGaiaId();
+    bool is_child = user.GetType() == user_manager::UserType::kChild;
 
     // Record acceptance of ToS if it was shown to the user, otherwise simply
     // record acceptance of an empty ToS.
@@ -785,8 +794,8 @@ void ArcSupportHost::OnMessage(const base::Value::Dict& message) {
 
       if (ash::features::IsCrosPrivacyHubLocationEnabled()) {
         location_service_consent.add_description_grd_ids(
-            is_child ? IDS_CROS_OPT_IN_LOCATION_SETTING_CHILD
-                     : IDS_CROS_OPT_IN_LOCATION_SETTING);
+            is_child ? IDS_ARC_CROS_OPT_IN_LOCATION_SETTING_CHILD
+                     : IDS_ARC_CROS_OPT_IN_LOCATION_SETTING);
       } else {
         location_service_consent.add_description_grd_ids(
             is_child ? IDS_ARC_OPT_IN_LOCATION_SETTING_CHILD
@@ -839,7 +848,11 @@ void ArcSupportHost::OnMessage(const base::Value::Dict& message) {
     error_delegate_->OnErrorPageShown(
         message.FindBool(kNetworkTestsShown).value_or(false));
   } else if (*event == kEventOnOpenPrivacySettingsPageClicked) {
-    chrome::ShowSettingsSubPageForProfile(profile_, chrome::kPrivacySubPage);
+    auto* user =
+        ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile_);
+    ash::SettingsAppManager::Get()->Open(
+        CHECK_DEREF(user),
+        {.sub_page = chromeos::settings::mojom::kPrivacyHubSubpagePath});
   } else if (*event == kEventRequestWindowBounds) {
     SetWindowBound(display::Screen::Get()->GetDisplayForNewWindows());
   } else {

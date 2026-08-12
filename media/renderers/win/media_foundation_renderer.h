@@ -33,6 +33,7 @@
 #include "media/renderers/win/media_foundation_protection_manager.h"
 #include "media/renderers/win/media_foundation_renderer_extension.h"
 #include "media/renderers/win/media_foundation_source_wrapper.h"
+#include "ui/gfx/geometry/rect.h"
 
 namespace media {
 
@@ -66,8 +67,9 @@ class MEDIA_EXPORT MediaFoundationRenderer
     kFailedToInitDCompTextureWrapper = 14,
     kFailedToSetPlaybackRate = 15,
     kFailedToGetMediaEngineEx = 16,
+    kFailedToSetOutputRect = 17,
     // Add new values here and update `kMaxValue`. Never reuse existing values.
-    kMaxValue = kFailedToGetMediaEngineEx,
+    kMaxValue = kFailedToSetOutputRect,
   };
 
   // An enum for recording MediaFoundationRenderer playback detected rendered
@@ -119,6 +121,9 @@ class MEDIA_EXPORT MediaFoundationRenderer
                      SetOutputRectCB callback) override;
 
   void SetGpuProcessAdapterLuid(LUID gpu_process_adapter_luid);
+  void SetTargetWindowRect(const gfx::Rect& target_window_rect);
+
+  MediaEngineNotifyImpl* GetMediaEngineNotifyForTesting() const;
 
  private:
   enum class StopSendingStatisticsReason {
@@ -192,6 +197,12 @@ class MEDIA_EXPORT MediaFoundationRenderer
   // handles between the two processes for Frame Server mode.
   LUID gpu_process_adapter_luid_;
 
+  // Target window rectangle for GPU adapter selection in multi-adapter
+  // systems. The virtual video window will be positioned at this rect to
+  // ensure Media Foundation selects the correct GPU adapter for HWDRM
+  // playback.
+  gfx::Rect target_window_rect_;
+
   // This is used for testing.
   const bool is_testing_;
 
@@ -244,6 +255,7 @@ class MEDIA_EXPORT MediaFoundationRenderer
 
   bool has_reported_playing_ = false;
   bool has_reported_significant_playback_ = false;
+  bool had_error_ = false;
 
   // Value saved from last call to SetLatencyHint(). Latency hint can only be
   // used to determine real-time mode on MediaEngine creation.

@@ -38,6 +38,10 @@ class BackingStoreTestBase : public testing::Test {
 
   void CreateFactoryAndBackingStore();
 
+  std::unique_ptr<BucketContext> CreateBucketContext(
+      bool use_sqlite,
+      const base::FilePath& data_path);
+
   void UpdateDatabaseVersion(indexed_db::BackingStore::Database& db,
                              int64_t version);
 
@@ -47,14 +51,26 @@ class BackingStoreTestBase : public testing::Test {
 
   // Commits both phase one and two of `transaction`. This also verifies commit
   // steps are successful.
-  void CommitTransactionAndVerify(BackingStore::Transaction& transaction);
+  void CommitTransactionAndVerify(
+      std::unique_ptr<BackingStore::Transaction> transaction);
   // Commits only phase one of `transaction` and returns true iff successful.
   bool CommitTransactionPhaseOneAndVerify(
       BackingStore::Transaction& transaction);
 
   std::vector<PartitionedLock> CreateDummyLock();
 
+  std::vector<PartitionedLock> AcquireDatabaseLocks(const std::u16string& name);
+
+  void CreateObjectStore(BackingStore::Database& db);
+
   void DestroyFactoryAndBackingStore();
+
+  // Migrates the entire backing store and attempts to verify cloning worked.
+  void MigrateAndVerifyBackingStore();
+
+  // Some tests bypass `BucketContext::Open()`, and therefore need to call this
+  // to reset the close timer.
+  base::ScopedClosureRunner SimulateFactoryRequest();
 
   BackingStore* backing_store();
 
@@ -71,6 +87,8 @@ class BackingStoreTestBase : public testing::Test {
   static IndexedDBExternalObject CreateFileSystemAccessHandle();
 
  protected:
+  static const int64_t kObjectStoreId1 = 1;
+
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 
@@ -93,7 +111,7 @@ class BackingStoreTestBase : public testing::Test {
   raw_ptr<BackingStore> backing_store_ = nullptr;
 
  private:
-  base::AutoReset<std::optional<bool>> sqlite_override_;
+  bool use_sqlite_;
 };
 
 class BackingStoreWithExternalObjectsTestBase : public BackingStoreTestBase {

@@ -24,16 +24,22 @@
 #include "base/time/time.h"
 #include "base/trace_event/named_trigger.h"
 #include "base/trace_event/trace_event.h"
+#include "chrome/browser/omnibox/geolocation_header_service_factory.h"
 #include "chrome/browser/preloading/chrome_preloading.h"
 #include "chrome/browser/preloading/prefetch/search_prefetch/field_trial_settings.h"
 #include "chrome/browser/preloading/prefetch/search_prefetch/streaming_search_prefetch_url_loader.h"
+#include "chrome/browser/preloading/preloading_features.h"
 #include "chrome/browser/preloading/prerender/prerender_manager.h"
 #include "chrome/browser/preloading/prerender/prerender_utils.h"
+#include "chrome/browser/preloading/prerender/search_prewarm_progress_service.h"
+#include "chrome/browser/preloading/prerender/search_prewarm_progress_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "components/embedder_support/user_agent_utils.h"
+#include "components/omnibox/browser/geolocation_header_service.h"
+#include "components/omnibox/common/omnibox_features.h"
 #include "components/prefs/pref_service.h"
 #include "components/search_engines/template_url_service.h"
 #include "content/public/browser/client_hints.h"
@@ -138,21 +144,19 @@ void MaybeRecordTraceFromSearchPrefetchRequestStartToNavigationIntercepted(
 
   const char kSearchPrefetchRequestStartToNavigationIntercepted[] =
       "SearchPrefetchRequestStartToNavigationIntercepted";
-  const auto trace_id =
-      TRACE_ID_WITH_SCOPE(kSearchPrefetchRequestStartToNavigationIntercepted,
-                          TRACE_ID_LOCAL(search_prefetch_request));
+  auto track = perfetto::NamedTrack::FromPointer(
+      kSearchPrefetchRequestStartToNavigationIntercepted,
+      search_prefetch_request);
   TRACE_EVENT_BEGIN("navigation",
-                    kSearchPrefetchRequestStartToNavigationIntercepted,
-                    perfetto::Track::FromPointer(search_prefetch_request),
+                    kSearchPrefetchRequestStartToNavigationIntercepted, track,
                     time_start_prefetch_request);
-  TRACE_EVENT_END("navigation",
-                  perfetto::Track::FromPointer(search_prefetch_request),
-                  base::TimeTicks::Now());
+  TRACE_EVENT_END("navigation", track, base::TimeTicks::Now());
 }
 
 }  // namespace
 
 SearchPrefetchRequest::SearchPrefetchRequest(
+    Profile& profile,
     const GURL& canonical_search_url,
     const GURL& prefetch_url,
     bool navigation_prefetch,
@@ -167,6 +171,16 @@ SearchPrefetchRequest::SearchPrefetchRequest(
               : nullptr),
       report_error_callback_(std::move(report_error_callback)) {
   base::trace_event::EmitNamedTrigger("search-prefetch-start");
+  auto* prewarm_service =
+      SearchPrewarmProgressServiceFactory::GetForProfile(&profile);
+  if (!prewarm_service) {
+    return;
+  }
+  prewarm_progress_service_ = prewarm_service->GetWeakPtr();
+  prewarm_finished_subscription_ =
+      prewarm_progress_service_->RegisterSearchPrewarmFinishedCallback(
+          base::BindRepeating(&SearchPrefetchRequest::OnSearchPrewarmFinished,
+                              weak_factory_.GetWeakPtr()));
 }
 
 SearchPrefetchRequest::~SearchPrefetchRequest() {
@@ -181,6 +195,24 @@ SearchPrefetchRequest::~SearchPrefetchRequest() {
   // In this case, there is no StreamingSearchPrefetchURLLoader instance that
   // would be needed.
   streaming_url_loader_.reset();
+}
+
+SearchPrefetchRequest::PendingRequest::PendingRequest(
+    Profile& profile,
+    content::WebContents* web_contents)
+    : profile(&profile), web_contents(web_contents->GetWeakPtr()) {}
+
+SearchPrefetchRequest::PendingRequest::~PendingRequest() = default;
+
+void SearchPrefetchRequest::OnSearchPrewarmFinished() {
+  if (!pending_request_) {
+    return;
+  }
+  if (pending_request_->web_contents) {
+    StartPrefetchRequest(pending_request_->profile,
+                         *pending_request_->web_contents);
+  }
+  pending_request_.reset();
 }
 
 // static
@@ -272,32 +304,39 @@ bool SearchPrefetchRequest::StartPrefetchRequest(
   resource_request->headers.SetHeader(
       net::HttpRequestHeaders::kUserAgent,
       GetUserAgentValue(prefetch_url_, web_contents));
-  if (!base::FeatureList::IsEnabled(
-          blink::features::kRemovePurposeHeaderForPrefetch)) {
-    resource_request->headers.SetHeader(blink::kPurposeHeaderName,
-                                        blink::kSecPurposePrefetchHeaderValue);
-  }
   resource_request->headers.SetHeader(blink::kSecPurposeHeaderName,
                                       blink::kSecPurposePrefetchHeaderValue);
   resource_request->headers.SetHeader(
       net::HttpRequestHeaders::kAccept,
       content::FrameAcceptHeaderValue(/*allow_sxg_responses=*/true, profile));
 
+  if (base::FeatureList::IsEnabled(omnibox::kPlatformAgnosticXGeo)) {
+    GeolocationHeaderService* geo_service =
+        GeolocationHeaderServiceFactory::GetForProfile(profile);
+    if (geo_service) {
+      std::optional<std::string> geo_header = geo_service->GetLocationHeader(
+          resource_request->url, /*for_automatic_sending=*/true);
+      if (geo_header) {
+        resource_request->headers.SetHeader("X-Geo", geo_header.value());
+      }
+    }
+  } else {
 #if BUILDFLAG(IS_ANDROID)
-  base::TimeTicks geo_header_start_timestamp = base::TimeTicks::Now();
-  std::optional<std::string> geo_header =
-      GetGeolocationHeaderIfAllowed(resource_request->url, profile);
-  if (geo_header) {
-    resource_request->headers.AddHeaderFromString(geo_header.value());
+    base::TimeTicks geo_header_start_timestamp = base::TimeTicks::Now();
+    std::optional<std::string> geo_header =
+        GetGeolocationHeaderIfAllowed(resource_request->url, profile);
+    if (geo_header) {
+      resource_request->headers.AddHeaderFromString(geo_header.value());
 
-    std::string histogram_name =
-        "Omnibox.SearchPrefetch.GeoLocationHeaderTime.";
-    histogram_name.append(navigation_prefetch_ ? "NavigationPrefetch"
-                                               : "SuggestionPrefetch");
-    base::UmaHistogramTimes(
-        histogram_name, (base::TimeTicks::Now() - geo_header_start_timestamp));
-  }
+      std::string histogram_name =
+          "Omnibox.SearchPrefetch.GeoLocationHeaderTime.";
+      histogram_name.append(navigation_prefetch_ ? "NavigationPrefetch"
+                                                 : "SuggestionPrefetch");
+      base::UmaHistogramTimes(histogram_name, (base::TimeTicks::Now() -
+                                               geo_header_start_timestamp));
+    }
 #endif  // BUILDFLAG(IS_ANDROID)
+  }
 
   // Before sending out the request, allow throttles to modify the request (not
   // the URL). The rest of the URL Loader throttle calls are captured in the
@@ -343,6 +382,17 @@ bool SearchPrefetchRequest::StartPrefetchRequest(
         return false;
       }
     }
+  }
+
+  if (prewarm_progress_service_ &&
+      prewarm_progress_service_->ShouldThrottleSearchPreloads()) {
+    CHECK(!pending_request_);
+    pending_request_.emplace(*profile, &web_contents);
+    // Return true to indicate that the request is accepted and ownership is
+    // transferred to SearchPrefetchService (which puts it in `prefetches_`).
+    // The actual network request is deferred until OnSearchPrewarmFinished is
+    // called.
+    return true;
   }
 
   prefetch_url_ = resource_request->url;
@@ -445,12 +495,6 @@ void SearchPrefetchRequest::MarkPrefetchAsComplete() {
 void SearchPrefetchRequest::MarkPrefetchAsServed() {
   SetSearchPrefetchStatus(
       SearchPrefetchStatus::kPrefetchServedForRealNavigation);
-  UMA_HISTOGRAM_TIMES("Omnibox.SearchPrefetch.ClickToNavigationIntercepted",
-                      base::TimeTicks::Now() - time_clicked_);
-}
-
-void SearchPrefetchRequest::RecordClickTime() {
-  time_clicked_ = base::TimeTicks::Now();
 }
 
 scoped_refptr<StreamingSearchPrefetchURLLoader>
@@ -472,7 +516,7 @@ SearchPrefetchRequest::CreateResponseReader() {
   if (!servable_response_code_received_) {
     // It is not expected to reach here, as DSE prerender should only be
     // triggered after `this` received servable response. But other triggers may
-    // unexpectedly trigger prerendering due to https://crbug.com/1484914.
+    // unexpectedly trigger prerendering due to https://crbug.com/40282403.
     return {};
   }
   TRACE_EVENT0("loading", "SearchPrefetchRequest::CreateResponseReader");

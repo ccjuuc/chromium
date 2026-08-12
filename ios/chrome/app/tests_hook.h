@@ -20,6 +20,12 @@ class SystemIdentityManager;
 class TabGroupService;
 class TrustedVaultClientBackend;
 @class UIImage;
+@class UIWindow;
+@protocol ReauthenticationProtocol;
+
+namespace contextual_search {
+class ContextualSearchService;
+}  // namespace contextual_search
 
 namespace base {
 class TimeDelta;
@@ -54,13 +60,11 @@ class BulkLeakCheckServiceInterface;
 class RecipientsFetcher;
 }  // namespace password_manager
 
-namespace plus_addresses {
-class PlusAddressService;
-}  // namespace plus_addresses
-
 namespace tab_groups {
 class TabGroupSyncService;
 }  // namespace tab_groups
+
+class Browser;
 
 namespace tests_hook {
 
@@ -131,9 +135,12 @@ bool DelayAppLaunchPromos();
 // of identifiers that contains identifiers of UIScene that are active.
 bool NeverPurgeDiscardedSessionsData();
 
-// Returns true if the UI should be minimal for testing (after loading a
+// Returns true if the UI should be minimal for testing.
+bool ShouldLoadMinimalAppUI();
+
+// Loads a minimal UI for testing in the given window (usually after loading a
 // simple UILabel into the first UIWindow).
-bool LoadMinimalAppUI();
+void LoadMinimalAppUI(UIWindow* window);
 
 // Returns a policy provider that should be installed as the platform policy
 // provider when testing. May return nullptr.
@@ -178,11 +185,6 @@ std::unique_ptr<ShareKitService> CreateShareKitService(
 // factory will be used if this hook returns a nullptr.
 std::unique_ptr<password_manager::BulkLeakCheckServiceInterface>
 GetOverriddenBulkLeakCheckService();
-
-// Returns a plus address service that should be used when testing. The real
-// factory will be used if this hook returns a nullptr.
-std::unique_ptr<plus_addresses::PlusAddressService>
-GetOverriddenPlusAddressService();
 
 // Returns a recipients fetcher instance that should be used in EG tests. The
 // real instance will be used if this hook returns a nullptr.
@@ -238,6 +240,17 @@ UIImage* GetPHPickerViewControllerImage();
 // The real factory will be used if this hook returns null.
 std::unique_ptr<AimEligibilityService> CreateAimEligibilityService(
     ProfileIOS* profile);
+
+// Returns a mock ContextualSearchService for testing.
+// The real factory will be used if this hook returns null.
+std::unique_ptr<contextual_search::ContextualSearchService>
+CreateContextualSearchService(ProfileIOS* profile);
+
+// Injects fake tabs into the given browser.
+void InjectFakeTabsInBrowser(Browser* browser);
+
+// Returns a fake reauthentication module to be used in tests.
+id<ReauthenticationProtocol> GetFakeReauthenticationModule();
 
 }  // namespace tests_hook
 

@@ -4,19 +4,12 @@
 
 #include "chrome/browser/glic/host/context/glic_share_image_handler.h"
 
-#include "base/strings/escape.h"
-#include "base/strings/strcat.h"
-#include "base/strings/utf_string_conversions.h"
-#include "base/task/single_thread_task_runner.h"
+#include "base/feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/enterprise/data_protection/data_protection_clipboard_utils.h"
-#include "chrome/browser/glic/fre/glic_fre_controller.h"
-#include "chrome/browser/glic/host/context/glic_page_context_fetcher.h"
 #include "chrome/browser/glic/host/guest_util.h"
-#include "chrome/browser/glic/public/glic_instance.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
-#include "chrome/browser/glic/widget/glic_window_controller.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/chrome_features.h"
 #include "content/public/browser/clipboard_types.h"
@@ -36,30 +29,11 @@ namespace glic {
 
 namespace {
 
-// Based on URLToImageMarkup from clipboard_utilities.cc.
-std::u16string GetImageMarkup(const GURL& src_url,
-                              content::RenderFrameHost* rfh) {
-  if (!src_url.is_valid()) {
-    return u"";
-  }
-  std::u16string alt = u"";
-  auto* contents = content::WebContents::FromRenderFrameHost(rfh);
-  if (contents) {
-    std::u16string title = base::EscapeForHTML(contents->GetTitle());
-    if (!title.empty()) {
-      alt = base::StrCat({u" alt=\"", title, u"\""});
-    }
-  }
-  std::u16string spec = base::EscapeForHTML(base::UTF8ToUTF16(src_url.spec()));
-  return base::StrCat({u"<img src=\"", spec, u"\"", alt, u"></img>"});
-}
-
 constexpr int kShareThumbnailMinSize = 500 * 500;
 constexpr int kShareThumbnailMaxWidth = 1000;
 constexpr int kShareThumbnailMaxHeight = 1000;
-constexpr base::TimeDelta kShareTimeoutSeconds = base::Seconds(60);
-constexpr base::TimeDelta kGlicPanelPollIntervalMilliseconds =
-    base::Milliseconds(60);
+constexpr int kShareThumbnailMaxSize =
+    kShareThumbnailMaxWidth * kShareThumbnailMaxHeight * 4;
 
 mojom::AdditionalContextPtr CreateAdditionalContext(
     const GURL& src_url,
@@ -67,18 +41,16 @@ mojom::AdditionalContextPtr CreateAdditionalContext(
     const url::Origin& frame_origin,
     base::span<const uint8_t> thumbnail_data,
     tabs::TabHandle handle,
-    const std::string& mime_type,
-    mojom::TabContextPtr tab_context) {
+    const std::string& mime_type) {
   // TODO(b:448726704): update to use an Image part.
   auto context = glic::mojom::AdditionalContext::New();
   std::vector<glic::mojom::AdditionalContextPartPtr> parts;
   auto context_data = mojom::ContextData::New();
+  context->source = glic::mojom::AdditionalContextSource::kShareContextMenu;
   context_data->mime_type = mime_type;
   context_data->data = mojo_base::BigBuffer(thumbnail_data);
   parts.push_back(
       mojom::AdditionalContextPart::NewData(std::move(context_data)));
-  parts.push_back(
-      mojom::AdditionalContextPart::NewTabContext(std::move(tab_context)));
   context->name = src_url.spec();
   context->tab_id = handle.raw_value();
   context->origin = frame_origin;
@@ -114,10 +86,6 @@ void GlicShareImageHandler::ShareContextImage(
     ShareComplete(ShareImageResult::kFailedReplacedByNewShare);
   }
 
-  // Since we have no share in progress, we should not be waiting for the panel
-  // to be ready.
-  CHECK(!glic_panel_ready_timer_.IsRunning());
-
   Reset();
   is_share_in_progress_ = true;
   service_->metrics()->OnShareImageStarted();
@@ -128,17 +96,12 @@ void GlicShareImageHandler::ShareContextImage(
   frame_origin_ = render_frame_host->GetLastCommittedOrigin();
   render_frame_host_id_ = render_frame_host->GetGlobalId();
 
-  // Listen for navigations and WebContents destruction.
-  Observe(tab->GetContents());
+  MaybeStartObservingNavigation(tab);
 
-  // Listen for WebContents discards.
-  will_discard_web_contents_subscription_ = tab->RegisterWillDiscardContents(
-      base::BindRepeating(&GlicShareImageHandler::OnWillDiscardContents,
-                          base::Unretained(this)));
-
-  // Listen for tab detachment.
-  will_detach_subscription_ = tab->RegisterWillDetach(base::BindRepeating(
-      &GlicShareImageHandler::OnWillDetach, base::Unretained(this)));
+  if (!MaybeStartObservingEligibility(tab)) {
+    ShareComplete(ShareImageResult::kFailedNoTabContext);
+    return;
+  }
 
   // Store the InterfacePtr into the callback so that it's kept alive until
   // there's either a connection error or a response.
@@ -185,6 +148,9 @@ void GlicShareImageHandler::OnReceivedImage(
   // Close the remote since we've received our thumbnail.
   chrome_render_frame_remote_.reset();
 
+  // Also stop observing eligibility.
+  eligibility_subscription_ = base::CallbackListSubscription();
+
   if (thumbnail_data.empty()) {
     ShareComplete(ShareImageResult::kFailedNoImage);
     return;
@@ -196,50 +162,160 @@ void GlicShareImageHandler::OnReceivedImage(
     return;
   }
 
-  mime_type_ = mime_type;
-  thumbnail_data_ = thumbnail_data;
-
-  auto options = mojom::GetTabContextOptions::New();
-  // Ensure we don't have a huge number; matches actor_keyed_service.cc.
-  options->max_meta_tags = 32;
-  options->include_annotated_page_content = true;
-
-  FetchPageContext(tab, *options,
-                   base::BindOnce(&GlicShareImageHandler::OnReceivedTabContext,
-                                  weak_ptr_factory_.GetWeakPtr()));
-}
-
-void GlicShareImageHandler::OnReceivedTabContext(
-    base::expected<glic::mojom::GetContextResultPtr,
-                   page_content_annotations::FetchPageContextErrorDetails>
-        result) {
-  if (!result.has_value() || !result.value()->is_tab_context()) {
-    ShareComplete(ShareImageResult::kFailedNoTabContext);
-    return;
-  }
-
-  auto* render_frame_host =
-      content::RenderFrameHost::FromID(render_frame_host_id_);
-  if (!render_frame_host) {
-    ShareComplete(ShareImageResult::kFailedNoFrame);
-    return;
-  }
-
-  additional_context_ = CreateAdditionalContext(
-      src_url_, frame_url_, frame_origin_, thumbnail_data_, tab_handle_,
-      mime_type_, std::move(result.value()->get_tab_context()));
-
-  tabs::TabInterface* tab = tab_handle_.Get();
-  if (!tab) {
-    ShareComplete(ShareImageResult::kFailedNoTab);
-    return;
-  }
-
-  content::RenderFrameHost* rfh =
-      content::RenderFrameHost::FromID(render_frame_host_id_);
+  auto* rfh = content::RenderFrameHost::FromID(render_frame_host_id_);
   if (!rfh) {
     ShareComplete(ShareImageResult::kFailedNoFrame);
     return;
+  }
+
+  auto additional_context =
+      CreateAdditionalContext(src_url_, frame_url_, frame_origin_,
+                              thumbnail_data, tab_handle_, mime_type);
+
+  content::ClipboardEndpoint source(
+      ui::DataTransferEndpoint(
+          rfh->GetMainFrame()->GetLastCommittedURL(),
+          {.off_the_record = rfh->GetBrowserContext()->IsOffTheRecord()}),
+      base::BindRepeating(
+          [](content::GlobalRenderFrameHostId rfh_id)
+              -> content::BrowserContext* {
+            auto* rfh = content::RenderFrameHost::FromID(rfh_id);
+            return rfh ? rfh->GetBrowserContext() : nullptr;
+          },
+          rfh->GetGlobalId()),
+      *rfh);
+
+  ui::ClipboardMetadata metadata;
+  metadata.format_type = ui::ClipboardFormatType::PngType();
+  metadata.size = thumbnail_data.size();
+
+  bool do_policy_checks =
+      AreClipboardPolicyChecksRequired(thumbnail_data.size());
+  PolicyCheck policy_check =
+      do_policy_checks ? PolicyCheck::kClipboard : PolicyCheck::kNone;
+
+  Target target =
+      base::FeatureList::IsEnabled(features::kGlicShareImageNoNewConversation)
+          ? Target(*tab, DefaultConversation())
+          : Target(*tab, NewConversation());
+  GlicInvokeOptions invoke_options(std::move(target),
+                                   mojom::InvocationSource::kSharedImage);
+  invoke_options.additional_context = AdditionalTabContext(
+      std::move(additional_context), render_frame_host_id_, policy_check);
+  invoke_options.fre_override = mojom::FreOverride::kTrustFirstClick;
+  invoke_options.fre_completion_wait_mode = FreCompletionWaitMode::kNever;
+  invoke_options.on_error = base::BindOnce(
+      &GlicShareImageHandler::OnInvokeError, weak_ptr_factory_.GetWeakPtr());
+  invoke_options.on_success = base::BindOnce(
+      &GlicShareImageHandler::OnInvokeSuccess, weak_ptr_factory_.GetWeakPtr());
+  current_invocation_instance_ = service_->Invoke(std::move(invoke_options));
+  StopObservingNavigation();
+}
+
+void GlicShareImageHandler::OnInvokeError(GlicInvokeError error) {
+  switch (error) {
+    case GlicInvokeError::kUnknown:
+      ShareComplete(ShareImageResult::kFailedUnknown);
+      break;
+    case GlicInvokeError::kTimeout:
+      ShareComplete(ShareImageResult::kFailedTimedOut);
+      break;
+    case GlicInvokeError::kInvalidConversationId:
+      ShareComplete(ShareImageResult::kFailedInvalidConversationId);
+      break;
+    case GlicInvokeError::kInvalidTab:
+      ShareComplete(ShareImageResult::kFailedNoTab);
+      break;
+    case GlicInvokeError::kTabClosed:
+      ShareComplete(ShareImageResult::kFailedNoTab);
+      break;
+    case GlicInvokeError::kInstanceDestroyed:
+      ShareComplete(ShareImageResult::kFailedLostInstance);
+      break;
+    case GlicInvokeError::kInvokeInProgress:
+      ShareComplete(ShareImageResult::kFailedInvokeInProgress);
+      break;
+    case GlicInvokeError::kInvalidConfiguration:
+      ShareComplete(ShareImageResult::kFailedInvalidConfiguration);
+      break;
+    case GlicInvokeError::kAdditionalContextSawNavigation:
+      ShareComplete(ShareImageResult::kFailedSawNavigation);
+      break;
+    case GlicInvokeError::kAdditionalContextFailedCopyPolicy:
+      ShareComplete(ShareImageResult::kFailedClipboardCopyPolicy);
+      break;
+    case GlicInvokeError::kAdditionalContextFailedPastePolicy:
+      ShareComplete(ShareImageResult::kFailedClipboardPastePolicy);
+      break;
+    case GlicInvokeError::kAdditionalContextNoSourceFrame:
+      ShareComplete(ShareImageResult::kFailedNoFrame);
+      break;
+    case GlicInvokeError::kAdditionalContextNoClientFrame:
+      ShareComplete(ShareImageResult::kFailedNoClientFrame);
+      break;
+    case GlicInvokeError::kAdditionalContextNoClipboardMetadata:
+      ShareComplete(ShareImageResult::kFailedNoClipboardMetadata);
+      break;
+    case GlicInvokeError::kInstanceNotFound:
+      ShareComplete(ShareImageResult::kFailedLostInstance);
+      break;
+    case GlicInvokeError::kCancelled:
+      ShareComplete(ShareImageResult::kFailedCancelled);
+      break;
+    case GlicInvokeError::kProfileNotEnabled:
+      ShareComplete(ShareImageResult::kFailedProfileNotEnabled);
+      break;
+    case GlicInvokeError::kSuperseded:
+      ShareComplete(ShareImageResult::kFailedSuperseded);
+      break;
+  }
+}
+
+void GlicShareImageHandler::OnInvokeSuccess() {
+  ShareComplete(ShareImageResult::kSentImageToClient);
+}
+
+void GlicShareImageHandler::ShareComplete(ShareImageResult result) {
+  if (result != ShareImageResult::kSentImageToClient &&
+      result != ShareImageResult::kFailedClipboardPastePolicy &&
+      result != ShareImageResult::kFailedClipboardCopyPolicy) {
+    // Policy checks already show UI when they fail and don't need a toast.
+    MaybeShowErrorToast(tab_handle_.Get());
+  }
+  service_->metrics()->OnShareImageComplete(result);
+  Reset();
+}
+
+void GlicShareImageHandler::MaybeShowErrorToast(tabs::TabInterface* tab) {
+  if (!tab) {
+    return;
+  }
+#if !BUILDFLAG(IS_ANDROID)  // TODO(b/478008740): Implement for android.
+  if (BrowserWindowInterface* browser = tab->GetBrowserWindowInterface()) {
+    if (auto* controller = browser->GetFeatures().toast_controller()) {
+      controller->MaybeShowToast(ToastParams(ToastId::kGlicShareImageFailed));
+    }
+  }
+#endif
+}
+
+void GlicShareImageHandler::StopObservingNavigation() {
+  // Ensure we're not observing any WebContents.
+  Observe(nullptr);
+
+  // Ensure we don't subscribe to discards of this WebContents.
+  will_discard_web_contents_subscription_ = base::CallbackListSubscription();
+
+  // Ensure we don't subscribe to tab detachment.
+  will_detach_subscription_ = base::CallbackListSubscription();
+}
+
+bool GlicShareImageHandler::AreClipboardPolicyChecksRequired(
+    std::optional<size_t> size) {
+  content::RenderFrameHost* rfh =
+      content::RenderFrameHost::FromID(render_frame_host_id_);
+  if (!rfh) {
+    return false;
   }
 
   content::ClipboardEndpoint source(
@@ -257,223 +333,90 @@ void GlicShareImageHandler::OnReceivedTabContext(
 
   ui::ClipboardMetadata metadata;
   metadata.format_type = ui::ClipboardFormatType::PngType();
-  metadata.size = thumbnail_data_.size();
+  metadata.size = size.value_or(kShareThumbnailMaxSize);
 
-  content::ClipboardPasteData data;
-  data.png = thumbnail_data_;
-  data.html = GetImageMarkup(src_url_, rfh);
+  bool copy_check_required =
+      enterprise_data_protection::IsCopyPolicyCheckRequired(source, metadata);
 
-  enterprise_data_protection::IsClipboardCopyAllowedByPolicy(
-      source, metadata, data,
-      base::BindOnce(&GlicShareImageHandler::OnCopyPolicyCheckComplete,
-                     weak_ptr_factory_.GetWeakPtr()));
+  ui::DataTransferEndpoint dte(glic::GetGuestURL());
+  content::ClipboardEndpoint paste_destination(
+      dte, base::BindRepeating(
+               [](GlicKeyedService* service) -> content::BrowserContext* {
+                 return service->profile();
+               },
+               base::Unretained(&service_.get())));
+
+  bool paste_check_required =
+      enterprise_data_protection::IsPastePolicyCheckRequired(
+          source, paste_destination, metadata);
+
+  return copy_check_required || paste_check_required;
 }
 
-void GlicShareImageHandler::OnCopyPolicyCheckComplete(
-    const ui::ClipboardFormatType& data_type,
-    const content::ClipboardPasteData& data,
-    std::optional<std::u16string> replacement_data) {
-  if (replacement_data.has_value() || data.empty()) {
-    ShareComplete(ShareImageResult::kFailedClipboardCopyPolicy);
+void GlicShareImageHandler::MaybeStartObservingNavigation(
+    tabs::TabInterface* tab) {
+  if (!AreClipboardPolicyChecksRequired(std::nullopt)) {
     return;
   }
 
-  tabs::TabInterface* tab = tab_handle_.Get();
+  // Listen for navigations and WebContents destruction.
+  Observe(tab->GetContents());
+
+  // Listen for WebContents discards.
+  will_discard_web_contents_subscription_ = tab->RegisterWillDiscardContents(
+      base::BindRepeating(&GlicShareImageHandler::OnWillDiscardContents,
+                          base::Unretained(this)));
+
+  // Listen for tab detachment.
+  will_detach_subscription_ = tab->RegisterWillDetach(base::BindRepeating(
+      &GlicShareImageHandler::OnWillDetach, base::Unretained(this)));
+}
+
+bool GlicShareImageHandler::MaybeStartObservingEligibility(
+    tabs::TabInterface* tab) {
   if (!tab) {
-    ShareComplete(ShareImageResult::kFailedNoTab);
-    return;
+    return false;
   }
-  BrowserWindowInterface* browser = tab->GetBrowserWindowInterface();
-  if (!browser) {
-    ShareComplete(ShareImageResult::kFailedNoBrowser);
-    return;
+  auto* helper = tabs::PageContextEligibilityHelper::From(tab);
+  if (!helper) {
+    return false;
   }
+  eligibility_subscription_ =
+      helper->RegisterEligibilityChangeCallback(base::BindRepeating(
+          &GlicShareImageHandler::OnPageContextEligibilityChanged,
+          weak_ptr_factory_.GetWeakPtr()));
 
-  auto* instance = service_->GetInstanceForTab(tab);
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    if (instance &&
-        instance->GetPanelState().kind == mojom::PanelStateKind::kDetached) {
-      CHECK(instance->IsShowing()) << ", should be showing if detached";
-      service_->CloseFloatingPanel();
-    }
-    // We always want to call ToggleUI for multi-instance to force a new
-    // instance to be created.
-    glic_panel_open_time_ = base::TimeTicks::Now();
-    // Note: if the FRE was showing, this will just cause it to be reshown.
-    service_->ToggleUI(browser, /*prevent_close=*/true,
-                       mojom::InvocationSource::kSharedImage);
-  } else if (!instance || !instance->IsShowing()) {
-    glic_panel_open_time_ = base::TimeTicks::Now();
-    // Note: if the FRE was showing, this will just cause it to be reshown.
-    service_->ToggleUI(browser, /*prevent_close=*/true,
-                       mojom::InvocationSource::kSharedImage);
-  }
-
-  PerformPastePolicyCheckWhenReady();
+  return helper->IsPageContextEligible() ==
+         optimization_guide::PageContextEligibilityStatus::kEligible;
 }
 
-void GlicShareImageHandler::PerformPastePolicyCheckWhenReady() {
-  tabs::TabInterface* tab = tab_handle_.Get();
-  if (!tab) {
-    ShareComplete(ShareImageResult::kFailedNoTab);
-  } else if (IsClientReady(*tab)) {
-    glic_panel_ready_timer_.Stop();
-    DoPastePolicyCheck();
-  } else if (base::TimeTicks::Now() - glic_panel_open_time_ >
-             kShareTimeoutSeconds) {
-    ShareComplete(ShareImageResult::kFailedTimedOut);
-  } else if (!glic_panel_ready_timer_.IsRunning()) {
-    glic_panel_ready_timer_.Start(
-        FROM_HERE, kGlicPanelPollIntervalMilliseconds,
-        base::BindRepeating(
-            &GlicShareImageHandler::PerformPastePolicyCheckWhenReady,
-            base::Unretained(this)));
-  }
-}
-
-void GlicShareImageHandler::DoPastePolicyCheck() {
-  auto* tab = tab_handle_.Get();
-  if (!tab) {
-    ShareComplete(ShareImageResult::kFailedNoTab);
+void GlicShareImageHandler::OnPageContextEligibilityChanged(
+    optimization_guide::PageContextEligibilityStatus eligibility) {
+  if (eligibility !=
+      optimization_guide::PageContextEligibilityStatus::kEligible) {
+    ShareComplete(ShareImageResult::kFailedNoTabContext);
     return;
   }
-
-  auto* instance = service_->GetInstanceForTab(tab);
-  if (!instance) {
-    ShareComplete(ShareImageResult::kFailedNoInstance);
-    return;
-  }
-
-  auto* host = &instance->host();
-  auto* glic_rfh = host->GetGuestMainFrame();
-  if (!glic_rfh) {
-    ShareComplete(ShareImageResult::kFailedNoFrame);
-    return;
-  }
-
-  auto get_browser_context =
-      [](content::GlobalRenderFrameHostId rfh_id) -> content::BrowserContext* {
-    auto* rfh = content::RenderFrameHost::FromID(rfh_id);
-    return rfh ? rfh->GetBrowserContext() : nullptr;
-  };
-
-  content::ClipboardEndpoint destination(
-      ui::DataTransferEndpoint(
-          glic_rfh->GetLastCommittedURL(),
-          {.off_the_record = glic_rfh->GetBrowserContext()->IsOffTheRecord()}),
-      base::BindRepeating(get_browser_context, glic_rfh->GetGlobalId()),
-      *glic_rfh);
-
-  auto* source_rfh = content::RenderFrameHost::FromID(render_frame_host_id_);
-  if (!source_rfh) {
-    ShareComplete(ShareImageResult::kFailedNoFrame);
-    return;
-  }
-
-  content::ClipboardEndpoint source(
-      ui::DataTransferEndpoint(
-          source_rfh->GetMainFrame()->GetLastCommittedURL(),
-          {.off_the_record =
-               source_rfh->GetBrowserContext()->IsOffTheRecord()}),
-      base::BindRepeating(get_browser_context, source_rfh->GetGlobalId()),
-      *source_rfh);
-
-  ui::ClipboardMetadata metadata;
-  metadata.format_type = ui::ClipboardFormatType::PngType();
-  metadata.size = thumbnail_data_.size();
-
-  content::ClipboardPasteData paste_data;
-  paste_data.png = thumbnail_data_;
-  paste_data.html = GetImageMarkup(src_url_, source_rfh);
-
-  enterprise_data_protection::PasteIfAllowedByPolicy(
-      source, destination, metadata, std::move(paste_data),
-      base::BindOnce(&GlicShareImageHandler::OnPastePolicyCheckComplete,
-                     weak_ptr_factory_.GetWeakPtr()));
-}
-
-void GlicShareImageHandler::OnPastePolicyCheckComplete(
-    std::optional<content::ClipboardPasteData> data) {
-  if (!data || data->png.empty()) {
-    ShareComplete(ShareImageResult::kFailedClipboardPastePolicy);
-    return;
-  }
-  tabs::TabInterface* tab = tab_handle_.Get();
-  if (!tab) {
-    ShareComplete(ShareImageResult::kFailedNoTab);
-    return;
-  }
-
-  // At this point, we are no longer concerned with observing navigations or
-  // WebContents destruction.
-  StopObservingNavigation();
-
-  if (!IsClientReady(*tab)) {
-    ShareComplete(ShareImageResult::kFailedClientUnreadied);
-  }
-
-  ShareComplete(ShareImageResult::kSuccess);
-}
-
-bool GlicShareImageHandler::IsClientReady(tabs::TabInterface& tab) {
-  if (GlicInstance* instance = service_->GetInstanceForTab(&tab)) {
-    return instance->host().IsReady();
-  }
-  return false;
-}
-
-void GlicShareImageHandler::ShareComplete(ShareImageResult result) {
-  if (result == ShareImageResult::kSuccess) {
-    service_->SendAdditionalContext(tab_handle_,
-                                    std::move(additional_context_));
-  } else if (result != ShareImageResult::kFailedClipboardPastePolicy &&
-             result != ShareImageResult::kFailedClipboardCopyPolicy) {
-    // Policy checks already show UI when they fail and don't need a toast.
-    MaybeShowErrorToast(tab_handle_.Get());
-  }
-  service_->metrics()->OnShareImageComplete(result);
-  Reset();
-}
-
-void GlicShareImageHandler::MaybeShowErrorToast(tabs::TabInterface* tab) {
-  if (!tab) {
-    return;
-  }
-#if !BUILDFLAG(IS_ANDROID)
-  if (BrowserWindowInterface* browser = tab->GetBrowserWindowInterface()) {
-    if (auto* controller = browser->GetFeatures().toast_controller()) {
-      controller->MaybeShowToast(ToastParams(ToastId::kGlicShareImageFailed));
-    }
-  }
-#else  // TODO(b/470059315): Implement for android
-#endif
-}
-
-void GlicShareImageHandler::StopObservingNavigation() {
-  // Ensure we're not observing any WebContents.
-  Observe(nullptr);
-
-  // Ensure we don't subscribe to discards of this WebContents.
-  will_discard_web_contents_subscription_ = base::CallbackListSubscription();
-
-  // Ensure we don't subscribe to tab detachment.
-  will_detach_subscription_ = base::CallbackListSubscription();
 }
 
 void GlicShareImageHandler::Reset() {
   // TODO(b:461529494): Put this state in a struct.
-  glic_panel_open_time_ = base::TimeTicks();
-  glic_panel_ready_timer_.Stop();
-  additional_context_.reset();
   chrome_render_frame_remote_.reset();
+  eligibility_subscription_ = base::CallbackListSubscription();
   tab_handle_ = tabs::TabHandle::Null();
   render_frame_host_id_ = content::GlobalRenderFrameHostId();
   src_url_ = GURL();
   frame_url_ = GURL();
   frame_origin_ = url::Origin();
-  thumbnail_data_.clear();
-  mime_type_ = "";
   StopObservingNavigation();
+
+  if (is_share_in_progress_ && current_invocation_instance_) {
+    // Since we invalidate the weak pointers below, the invoke callbacks will
+    // not work. I.e., we should not see GlicInvokeError::kCancelled due to
+    // the following.
+    current_invocation_instance_->CancelInvoke();
+    current_invocation_instance_.reset();
+  }
 
   // Ensure that async callbacks aren't invoked.
   weak_ptr_factory_.InvalidateWeakPtrs();

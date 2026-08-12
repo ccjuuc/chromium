@@ -5,8 +5,10 @@
 #import "ios/chrome/browser/authentication/fullscreen_signin_screen/coordinator/fullscreen_signin_screen_coordinator.h"
 
 #import "base/apple/foundation_util.h"
+#import "base/feature_list.h"
 #import "base/metrics/histogram_functions.h"
 #import "base/strings/sys_string_conversions.h"
+#import "components/signin/public/base/signin_switches.h"
 #import "ios/chrome/browser/authentication/fullscreen_signin_screen/coordinator/fullscreen_signin_screen_mediator.h"
 #import "ios/chrome/browser/authentication/fullscreen_signin_screen/coordinator/fullscreen_signin_screen_mediator_delegate.h"
 #import "ios/chrome/browser/authentication/fullscreen_signin_screen/ui/fullscreen_signin_screen_consumer.h"
@@ -24,7 +26,9 @@
 #import "ios/chrome/browser/first_run/public/first_run_util.h"
 #import "ios/chrome/browser/first_run/tos/coordinator/tos_coordinator.h"
 #import "ios/chrome/browser/first_run/uma/coordinator/uma_coordinator.h"
+#import "ios/chrome/browser/metrics/model/ios_profile_metrics_service_factory.h"
 #import "ios/chrome/browser/shared/coordinator/chrome_coordinator/animated_coordinator.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
@@ -35,14 +39,17 @@
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service_factory.h"
 #import "ios/chrome/browser/signin/model/constants.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
+#import "ios/chrome/browser/signin/model/system_identity_manager.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 
 @interface FullscreenSigninScreenCoordinator () <
+    ExternalPrivacyContextUIProvider,
     FullscreenSigninScreenMediatorDelegate,
     FullscreenSigninScreenViewControllerDelegate,
     IdentityChooserCoordinatorDelegate,
-    UIAdaptivePresentationControllerDelegate,
+    SceneStateObserver,
     TOSCoordinatorDelegate,
+    UIAdaptivePresentationControllerDelegate,
     UMACoordinatorDelegate>
 
 // First run screen delegate.
@@ -58,7 +65,7 @@
 @property(nonatomic, assign) AuthenticationService* authenticationService;
 // Coordinator used to manage the TOS page.
 @property(nonatomic, strong) TOSCoordinator* TOSCoordinator;
-// Coordinator to show the metric reportingn dialog.
+// Coordinator to show the metric reporting dialog.
 @property(nonatomic, strong) UMACoordinator* UMACoordinator;
 // Coordinator to choose an identity.
 @property(nonatomic, strong)
@@ -74,6 +81,8 @@
   signin_metrics::AccessPoint _accessPoint;
   signin_metrics::PromoAction _promoAction;
   ChangeProfileContinuationProvider _changeProfileContinuationProvider;
+  // YES if the coordinator is finishing the sign-in flow.
+  BOOL _finishing;
 }
 
 @synthesize baseNavigationController = _baseNavigationController;
@@ -91,8 +100,7 @@
   self = [super initWithBaseViewController:navigationController
                                    browser:browser];
   if (self) {
-    CHECK_EQ(browser->type(), Browser::Type::kRegular,
-             base::NotFatalUntil::M145);
+    CHECK_EQ(browser->type(), Browser::Type::kRegular);
     CHECK(changeProfileContinuationProvider);
     _baseNavigationController = navigationController;
     _delegate = delegate;
@@ -117,10 +125,11 @@
 
   self.authenticationService =
       AuthenticationServiceFactory::GetForProfile(profile);
-  if (self.authenticationService->GetPrimaryIdentity(
-          signin::ConsentLevel::kSignin)) {
-    // Don't show the sign-in screen since the user is already signed in.
-    [_delegate screenWillFinishPresenting];
+  if (!self.canSwitchAccount &&
+      self.authenticationService->GetPrimaryIdentity()) {
+    // If account switch is not possible, don't show the sign-in screen when the
+    // user is already signed in.
+    [_delegate firstRunScreenCoordinatorWantsToBeStopped:self];
     return;
   }
 
@@ -137,6 +146,8 @@
   PrefService* localPrefService = GetApplicationContext()->GetLocalState();
   PrefService* prefService = profile->GetPrefs();
   syncer::SyncService* syncService = SyncServiceFactory::GetForProfile(profile);
+  metrics::ProfileMetricsService* profileMetricsService =
+      IOSProfileMetricsServiceFactory::GetForProfile(profile);
   self.mediator = [[FullscreenSigninScreenMediator alloc]
           initWithAccountManagerService:self.accountManagerService
                   authenticationService:self.authenticationService
@@ -144,8 +155,10 @@
                        localPrefService:localPrefService
                             prefService:prefService
                             syncService:syncService
+                       selectedIdentity:self.identity
                             accessPoint:_accessPoint
                             promoAction:_promoAction
+                  profileMetricsService:profileMetricsService
       changeProfileContinuationProvider:_changeProfileContinuationProvider];
   self.mediator.consumer = self.viewController;
   self.mediator.delegate = self;
@@ -155,9 +168,21 @@
   BOOL animated = self.baseNavigationController.topViewController != nil;
   [self.baseNavigationController setViewControllers:@[ self.viewController ]
                                            animated:animated];
+  if (base::FeatureList::IsEnabled(switches::kBuildExternalPrivacyContext)) {
+    GetApplicationContext()
+        ->GetSystemIdentityManager()
+        ->RegisterExternalPrivacyContextProvider(self);
+    [self.browser->GetSceneState() addObserver:self];
+  }
 }
 
 - (void)stop {
+  if (base::FeatureList::IsEnabled(switches::kBuildExternalPrivacyContext)) {
+    GetApplicationContext()
+        ->GetSystemIdentityManager()
+        ->UnregisterExternalPrivacyContextProvider(self);
+    [self.browser->GetSceneState() removeObserver:self];
+  }
   [self stopAddAccountCoordinator];
   [self stopIdentityChooserCoordinator];
   self.delegate = nil;
@@ -235,7 +260,8 @@
            base::NotFatalUntil::M151);
   [self stopAddAccountCoordinator];
   if (signinResult == SigninCoordinatorResultSuccess &&
-      self.accountManagerService->IsValidIdentity(signinCompletionIdentity)) {
+      self.accountManagerService->IsValidIdentity(
+          signinCompletionIdentity.gaiaId)) {
     self.mediator.selectedIdentity = signinCompletionIdentity;
     self.mediator.addedAccount = YES;
   }
@@ -243,7 +269,21 @@
 
 // Starts the sign in process.
 - (void)startSignIn {
+  if (self.mediator.signinInProgress) {
+    // Skip sign-in if there is a double tap.
+    // See crbug.com/478202195.
+    return;
+  }
+
   DCHECK(self.mediator.selectedIdentity);
+  if ([self.mediator.selectedIdentity
+          isEqual:self.authenticationService->GetPrimaryIdentity()]) {
+    // Dismiss the signin screen if user tries to sign-in with an account
+    // already signed in. See crbug.com/537715404.
+    [self finishPresentingWithSignIn:NO];
+    return;
+  }
+
   AuthenticationFlow* authenticationFlow =
       [[AuthenticationFlow alloc] initWithBrowser:self.browser
                                          identity:self.mediator.selectedIdentity
@@ -253,18 +293,22 @@
                          presentingViewController:self.viewController
                                        anchorView:nil
                                        anchorRect:CGRectNull];
+  // During FRE, allows sign-in even if the account needs to be reauthenticated.
+  authenticationFlow.skipReauthIfNeeded =
+      _accessPoint == signin_metrics::AccessPoint::kStartPage;
   [self.mediator startSignInWithAuthenticationFlow:authenticationFlow];
 }
 
 // Calls the mediator and the delegate when the coordinator is finished.
 - (void)finishPresentingWithSignIn:(BOOL)signIn {
+  _finishing = YES;
   [self.mediator finishPresentingWithSignIn:signIn];
-  [self.delegate screenWillFinishPresenting];
+  [self.delegate firstRunScreenCoordinatorWantsToBeStopped:self];
 }
 
 // Shows the UMA dialog so the user can manage metric reporting.
 - (void)showUMADialog {
-  CHECK(!self.UMACoordinator, base::NotFatalUntil::M144);
+  CHECK(!self.UMACoordinator);
   self.UMACoordinator = [[UMACoordinator alloc]
       initWithBaseViewController:self.viewController
                          browser:self.browser
@@ -274,7 +318,7 @@
 }
 
 - (void)showTOSPage {
-  CHECK(!self.TOSCoordinator, base::NotFatalUntil::M144);
+  CHECK(!self.TOSCoordinator);
   self.mediator.TOSLinkWasTapped = YES;
   self.TOSCoordinator =
       [[TOSCoordinator alloc] initWithBaseViewController:self.viewController
@@ -287,35 +331,33 @@
 
 - (void)fullscreenSigninScreenMediatorDidFinishSignin:
     (FullscreenSigninScreenMediator*)mediator {
-  CHECK_EQ(mediator, self.mediator, base::NotFatalUntil::M140);
+  CHECK_EQ(mediator, self.mediator);
   [self finishPresentingWithSignIn:YES];
 }
 
 - (void)fullscreenSigninScreenMediatorWantsToBeDismissed:
     (FullscreenSigninScreenMediator*)mediator {
-  CHECK_EQ(mediator, self.mediator, base::NotFatalUntil::M141);
+  CHECK_EQ(mediator, self.mediator);
   [self finishPresentingWithSignIn:NO];
 }
 
 #pragma mark - IdentityChooserCoordinatorDelegate
 
-- (void)identityChooserCoordinatorDidClose:
-    (IdentityChooserCoordinator*)coordinator {
-  CHECK_EQ(self.identityChooserCoordinator, coordinator);
-  [self stopIdentityChooserCoordinator];
-}
-
 - (void)identityChooserCoordinatorDidTapOnAddAccount:
     (IdentityChooserCoordinator*)coordinator {
   CHECK_EQ(self.identityChooserCoordinator, coordinator);
   DCHECK(!self.addAccountSigninCoordinator);
+  [self stopIdentityChooserCoordinator];
   [self triggerAddAccount];
 }
 
 - (void)identityChooserCoordinator:(IdentityChooserCoordinator*)coordinator
-                 didSelectIdentity:(id<SystemIdentity>)identity {
+      didCloseWithSelectedIdentity:(id<SystemIdentity>)identity {
   CHECK_EQ(self.identityChooserCoordinator, coordinator);
-  self.mediator.selectedIdentity = identity;
+  if (identity) {
+    self.mediator.selectedIdentity = identity;
+  }
+  [self stopIdentityChooserCoordinator];
 }
 
 #pragma mark - PromoStyleViewControllerDelegate
@@ -361,18 +403,29 @@
   }
   self.identityChooserCoordinator = [[IdentityChooserCoordinator alloc]
       initWithBaseViewController:self.viewController
-                         browser:self.browser];
+                         browser:self.browser
+                 defaultIdentity:self.mediator.selectedIdentity];
   self.identityChooserCoordinator.delegate = self;
   self.identityChooserCoordinator.origin = point;
   [self.identityChooserCoordinator start];
-  self.identityChooserCoordinator.selectedIdentity =
-      self.mediator.selectedIdentity;
+}
+
+- (void)fullscreenSigninScreenViewControllerViewDidLoad:
+    (FullscreenSigninScreenViewController*)viewController {
+  [self notifyProviderReadyIfUIAvailable];
+}
+
+#pragma mark - SceneStateObserver
+
+- (void)sceneState:(SceneState*)sceneState
+    transitionedToActivationLevel:(SceneActivationLevel)level {
+  [self notifyProviderReadyIfUIAvailable];
 }
 
 #pragma mark - TOSCoordinatorDelegate
 
 - (void)TOSCoordinatorWantsToBeStopped:(TOSCoordinator*)coordinator {
-  CHECK_EQ(self.TOSCoordinator, coordinator, base::NotFatalUntil::M144);
+  CHECK_EQ(self.TOSCoordinator, coordinator);
   [self.TOSCoordinator stop];
   self.TOSCoordinator.delegate = nil;
   self.TOSCoordinator = nil;
@@ -387,6 +440,52 @@
   [self stopUMACoordinator];
   DCHECK(self.mediator);
   self.mediator.UMAReportingUserChoice = UMAReportingUserChoice;
+}
+
+#pragma mark - ExternalPrivacyContextUIProvider
+
+- (UIViewController*)viewControllerForExternalPrivacyContext {
+  if (![self isUIAvailableToShowIOSPrompt]) {
+    return nil;
+  }
+  return self.viewController;
+}
+
+- (void)blockUIForExternalPrivacyContextBuild {
+  CHECK([self isUIAvailableToShowIOSPrompt]);
+  [self.viewController setUIEnabled:NO];
+}
+
+- (void)unblockUIOnExternalPrivacyContextBuilt {
+  [self.viewController setUIEnabled:YES];
+}
+
+#pragma mark - Private
+
+- (void)notifyProviderReadyIfUIAvailable {
+  if (base::FeatureList::IsEnabled(switches::kBuildExternalPrivacyContext) &&
+      [self isUIAvailableToShowIOSPrompt]) {
+    GetApplicationContext()
+        ->GetSystemIdentityManager()
+        ->ExternalPrivacyContextProviderReady(self);
+  }
+}
+
+- (BOOL)isUIAvailableToShowIOSPrompt {
+  if (_finishing) {
+    return NO;
+  }
+  if (self.mediator.signinInProgress) {
+    return NO;
+  }
+  if (self.TOSCoordinator || self.identityChooserCoordinator ||
+      self.addAccountSigninCoordinator || self.UMACoordinator) {
+    return NO;
+  }
+  if (!self.viewController) {
+    return NO;
+  }
+  return YES;
 }
 
 @end

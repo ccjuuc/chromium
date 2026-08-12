@@ -187,25 +187,21 @@ PhoneHubManagerImpl::PhoneHubManagerImpl(
           std::make_unique<InvalidConnectionDisconnector>(
               connection_manager_.get(),
               phone_model_.get())),
-      camera_roll_manager_(features::IsPhoneHubCameraRollEnabled()
-                               ? std::make_unique<CameraRollManagerImpl>(
-                                     message_receiver_.get(),
-                                     message_sender_.get(),
-                                     multidevice_setup_client,
-                                     connection_manager_.get(),
-                                     std::move(camera_roll_download_manager))
-                               : nullptr),
+      camera_roll_manager_(std::make_unique<CameraRollManagerImpl>(
+          message_receiver_.get(),
+          message_sender_.get(),
+          multidevice_setup_client,
+          connection_manager_.get(),
+          std::move(camera_roll_download_manager))),
       feature_setup_response_processor_(
           std::make_unique<FeatureSetupResponseProcessor>(
               message_receiver_.get(),
               multidevice_feature_access_manager_.get())),
-      ping_manager_(features::IsPhoneHubPingOnBubbleOpenEnabled()
-                        ? std::make_unique<PingManagerImpl>(
-                              connection_manager_.get(),
-                              feature_status_provider_.get(),
-                              message_receiver_.get(),
-                              message_sender_.get())
-                        : nullptr) {}
+      ping_manager_(
+          std::make_unique<PingManagerImpl>(connection_manager_.get(),
+                                            feature_status_provider_.get(),
+                                            message_receiver_.get(),
+                                            message_sender_.get())) {}
 
 PhoneHubManagerImpl::~PhoneHubManagerImpl() = default;
 

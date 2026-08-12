@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.ntp_customization;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
+import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType.MAIN;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType.SINGLE_THEME_COLLECTION;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType.THEME_COLLECTIONS;
 
@@ -37,6 +38,7 @@ public class NtpCustomizationBottomSheetContent implements BottomSheetContent {
     private final Supplier<Integer> mContainerHeightSupplier;
     private final Supplier<Integer> mMaxSheetWidthSupplier;
     private final int mNtpCustomizationBottomSheetBottomPadding;
+    private final boolean mIsNtpCustomizationSyncEnabled;
 
     NtpCustomizationBottomSheetContent(
             View contentView,
@@ -56,6 +58,7 @@ public class NtpCustomizationBottomSheetContent implements BottomSheetContent {
                         .getResources()
                         .getDimensionPixelSize(
                                 R.dimen.ntp_customization_bottom_sheet_layout_padding_bottom);
+        mIsNtpCustomizationSyncEnabled = NtpCustomizationUtils.isNTPCustomizationSyncEnabled();
     }
 
     @Override
@@ -105,7 +108,7 @@ public class NtpCustomizationBottomSheetContent implements BottomSheetContent {
             if (contentHeight != RECYCLER_VIEW_INVALID_HEIGHT) {
                 float contentRatio = (float) contentHeight / containerHeight;
                 if (contentRatio > 0.5) {
-                    return 0.5f;
+                    return Math.min(contentRatio, MAX_HEIGHT_RATIO);
                 }
             }
         }
@@ -159,28 +162,31 @@ public class NtpCustomizationBottomSheetContent implements BottomSheetContent {
     @Override
     public int getSheetHalfHeightAccessibilityStringId() {
         return NtpCustomizationUtils.getSheetHalfHeightAccessibilityStringId(
-                assumeNonNull(mCurrentBottomSheetTypeSupplier.get()));
+                mCurrentBottomSheetTypeSupplier.get());
     }
 
     @Override
     public int getSheetFullHeightAccessibilityStringId() {
         return NtpCustomizationUtils.getSheetFullHeightAccessibilityStringId(
-                assumeNonNull(mCurrentBottomSheetTypeSupplier.get()));
+                mCurrentBottomSheetTypeSupplier.get());
     }
 
     @Override
     public int getSheetClosedAccessibilityStringId() {
+        // The accessibility string is hardcoded here because mCurrentBottomSheetTypeSupplier.get()
+        // will always return null in this function since mCurrentBottomSheet is set to null upon
+        // dismissal.
         return R.string.ntp_customization_main_bottom_sheet_closed;
     }
 
-    /** Sets up ObservableSupplierImpl<Boolean> when opening the bottom sheet. */
+    /** Sets up the supplier when opening the bottom sheet. */
     void onSheetOpened() {
         // Sets the value in the supplier to true to indicate that back press should be handled by
         // the bottom sheet.
         mBackPressStateChangedSupplier.set(true);
     }
 
-    /** Sets up ObservableSupplierImpl<Boolean> when closing the bottom sheet. */
+    /** Sets up the supplier when closing the bottom sheet. */
     void onSheetClosed() {
         // Sets the value in the supplier to false to indicate that back press should not be handled
         // by the bottom sheet.
@@ -250,6 +256,8 @@ public class NtpCustomizationBottomSheetContent implements BottomSheetContent {
             return mContentView.findViewById(R.id.theme_collections_recycler_view);
         } else if (bottomSheetType == SINGLE_THEME_COLLECTION) {
             return mContentView.findViewById(R.id.single_theme_collection_recycler_view);
+        } else if (bottomSheetType == MAIN && mIsNtpCustomizationSyncEnabled) {
+            return mContentView.findViewById(R.id.ntp_theme_sync_history_recycler_view);
         }
         return null;
     }

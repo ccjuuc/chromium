@@ -38,6 +38,10 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+#if BUILDFLAG(IS_MAC)
+#include "base/mac/mac_util.h"
+#endif
+
 namespace {
 
 using ::download::DownloadDangerType;
@@ -208,16 +212,19 @@ class DownloadBubbleUpdateServiceTest : public testing::Test {
   }
 
   // Forwards to the below version.
-  void InitDownloadItem(DownloadState state,
-                        const std::string& guid,
-                        bool is_paused,
-                        base::Time start_time = base::Time::Now(),
-                        const webapps::AppId* web_app_id = nullptr,
-                        bool is_crx = false,
-                        bool observe = true) {
+  void InitDownloadItem(
+      DownloadState state,
+      const std::string& guid,
+      bool is_paused,
+      base::Time start_time = base::Time::Now(),
+      const webapps::AppId* web_app_id = nullptr,
+      bool is_crx = false,
+      bool observe = true,
+      download::DownloadItem::DownloadCreationType creation_type =
+          download::DownloadItem::TYPE_ACTIVE_DOWNLOAD) {
     InitDownloadItem(*download_manager_, *update_service_, download_items_,
                      profile_, state, guid, is_paused, start_time, web_app_id,
-                     is_crx, observe);
+                     is_crx, observe, creation_type);
   }
 
   void InitDownloadItem(
@@ -231,7 +238,9 @@ class DownloadBubbleUpdateServiceTest : public testing::Test {
       base::Time start_time = base::Time::Now(),
       const webapps::AppId* web_app_id = nullptr,
       bool is_crx = false,
-      bool observe = true) {
+      bool observe = true,
+      download::DownloadItem::DownloadCreationType creation_type =
+          download::DownloadItem::TYPE_ACTIVE_DOWNLOAD) {
     size_t index = download_items.size();
     download_items.push_back(std::make_unique<NiceMockDownloadItem>());
     auto& item = *download_items[index];
@@ -265,6 +274,8 @@ class DownloadBubbleUpdateServiceTest : public testing::Test {
     EXPECT_CALL(item, IsDone()).WillRepeatedly(Return(false));
     EXPECT_CALL(item, IsTransient()).WillRepeatedly(Return(false));
     EXPECT_CALL(item, IsPaused()).WillRepeatedly(Return(is_paused));
+    EXPECT_CALL(item, GetDownloadCreationType())
+        .WillRepeatedly(Return(creation_type));
     EXPECT_CALL(item, GetTargetDisposition())
         .WillRepeatedly(
             Return(is_crx ? download::DownloadItem::TARGET_DISPOSITION_OVERWRITE
@@ -464,6 +475,32 @@ TEST_F(DownloadBubbleUpdateServiceTest, AddsNonCrxDownloadItems) {
   EXPECT_EQ(models[0]->GetContentId().id, "new_download");
   EXPECT_THAT(update_service_->TakeAccessibleAlertsForAnnouncement(nullptr),
               UnorderedElementsAre(HasSubstr16(u"new_download")));
+}
+
+TEST_F(DownloadBubbleUpdateServiceTest, AlertsBasedOnCreationType) {
+  // 1. History-imported downloads should not trigger alerts.
+  InitDownloadItem(*download_manager_, *update_service_, download_items_,
+                   profile_, DownloadState::IN_PROGRESS, "history_import",
+                   /*is_paused=*/false, base::Time::Now(),
+                   /*web_app_id=*/nullptr,
+                   /*is_crx=*/false, /*observe=*/false,
+                   download::DownloadItem::TYPE_HISTORY_IMPORT);
+  update_service_->OnDownloadCreated(download_manager_.get(),
+                                     &GetDownloadItem(0));
+  EXPECT_THAT(update_service_->TakeAccessibleAlertsForAnnouncement(nullptr),
+              IsEmpty());
+
+  // 2. Active downloads should trigger alerts.
+  InitDownloadItem(*download_manager_, *update_service_, download_items_,
+                   profile_, DownloadState::IN_PROGRESS, "active_download",
+                   /*is_paused=*/false, base::Time::Now(),
+                   /*web_app_id=*/nullptr,
+                   /*is_crx=*/false, /*observe=*/false,
+                   download::DownloadItem::TYPE_ACTIVE_DOWNLOAD);
+  update_service_->OnDownloadCreated(download_manager_.get(),
+                                     &GetDownloadItem(1));
+  EXPECT_THAT(update_service_->TakeAccessibleAlertsForAnnouncement(nullptr),
+              UnorderedElementsAre(HasSubstr16(u"active_download")));
 }
 
 TEST_F(DownloadBubbleUpdateServiceTest, DelaysCrx) {
@@ -675,6 +712,13 @@ TEST_F(DownloadBubbleUpdateServiceTest, DoesNotAddExpiredItems) {
 }
 
 TEST_F(DownloadBubbleUpdateServiceTest, PrunesExpiredItems) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
   base::Time now = base::Time::Now();
   base::Time two_hours_ago = now - base::Hours(2);
   // Add some items that are currently recent enough to add.
@@ -714,6 +758,13 @@ TEST_F(DownloadBubbleUpdateServiceTest, PrunesExpiredItems) {
 }
 
 TEST_F(DownloadBubbleUpdateServiceTest, DoesNotBackfillIfNotForced) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
   update_service_->set_max_num_items_to_show_for_testing(3);
   update_service_->set_extra_items_to_cache_for_testing(0);
   base::Time now = base::Time::Now();
@@ -759,6 +810,13 @@ TEST_F(DownloadBubbleUpdateServiceTest, DoesNotBackfillIfNotForced) {
 }
 
 TEST_F(DownloadBubbleUpdateServiceTest, BackfillsSynchronouslyIfForced) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
   update_service_->set_max_num_items_to_show_for_testing(3);
   update_service_->set_extra_items_to_cache_for_testing(0);
   base::Time now = base::Time::Now();
@@ -793,6 +851,13 @@ TEST_F(DownloadBubbleUpdateServiceTest, BackfillsSynchronouslyIfForced) {
 }
 
 TEST_F(DownloadBubbleUpdateServiceTest, CachesExtraItems) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
   update_service_->set_max_num_items_to_show_for_testing(3);
   // Cache an extra item.
   update_service_->set_extra_items_to_cache_for_testing(1);
@@ -948,6 +1013,7 @@ TEST_F(DownloadBubbleUpdateServiceTest, GetDisplayInfo_InProgress) {
   EXPECT_EQ(info.paused_count, 2);
   EXPECT_TRUE(info.has_unactioned);
   EXPECT_FALSE(info.has_deep_scanning);
+  EXPECT_FALSE(info.has_content_check);
 }
 
 TEST_F(DownloadBubbleUpdateServiceTest,
@@ -975,6 +1041,7 @@ TEST_F(DownloadBubbleUpdateServiceTest,
   EXPECT_EQ(info.paused_count, 2);
   EXPECT_TRUE(info.has_unactioned);
   EXPECT_FALSE(info.has_deep_scanning);
+  EXPECT_FALSE(info.has_content_check);
 }
 
 TEST_F(DownloadBubbleUpdateServiceTest,
@@ -1001,6 +1068,7 @@ TEST_F(DownloadBubbleUpdateServiceTest,
   EXPECT_EQ(info.paused_count, 2);
   EXPECT_TRUE(info.has_unactioned);
   EXPECT_FALSE(info.has_deep_scanning);
+  EXPECT_FALSE(info.has_content_check);
 }
 
 TEST_F(DownloadBubbleUpdateServiceTest, GetDisplayInfo_UpdateForDangerous) {
@@ -1029,6 +1097,7 @@ TEST_F(DownloadBubbleUpdateServiceTest, GetDisplayInfo_UpdateForDangerous) {
   EXPECT_EQ(info.paused_count, 2);
   EXPECT_TRUE(info.has_unactioned);
   EXPECT_FALSE(info.has_deep_scanning);
+  EXPECT_FALSE(info.has_content_check);
 }
 
 TEST_F(DownloadBubbleUpdateServiceTest, GetDisplayInfoForWebApp) {

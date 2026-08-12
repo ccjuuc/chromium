@@ -23,7 +23,6 @@ namespace autofill {
 
 class AutofillDriver;
 class AutofillManager;
-class ContentAutofillDriver;
 
 // `AutofillContextMenuManager` is responsible for adding/executing Autofill
 // related context menu items. `RenderViewContextMenu` is intended to own and
@@ -71,10 +70,9 @@ class AutofillContextMenuManager : public RenderViewContextMenuObserver {
   // suggest.
   void MaybeAddAutofillManualFallbackItems();
 
-  // Checks if the plus address context menu entry can be shown for the
-  // currently focused field.
-  bool ShouldAddPlusAddressManualFallbackItem(
-      ContentAutofillDriver& autofill_driver);
+  // Adds the AtMemory manual fallback item if the feature is enabled. Returns
+  // true if the item was added, false otherwise.
+  bool MaybeAddAtMemoryItem();
 
   // Checks if the currently focused field is a password field and whether
   // password filling is enabled.
@@ -110,9 +108,9 @@ class AutofillContextMenuManager : public RenderViewContextMenuObserver {
   void ExecuteAutofillFeedbackCommand(const LocalFrameToken& frame_token,
                                       AutofillManager& manager);
 
-  // Triggers Plus Address suggestions on the field that the context menu was
+  // Triggers @memory search popup on the field that the context menu was
   // opened on.
-  void ExecuteFallbackForPlusAddressesCommand(AutofillDriver& driver);
+  void ExecuteFallbackForAtMemoryCommand(AutofillDriver& driver);
 
   // Triggers passwords suggestions on the field that the context menu was
   // opened on.

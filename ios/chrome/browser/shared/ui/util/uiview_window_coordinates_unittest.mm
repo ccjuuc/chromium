@@ -6,17 +6,34 @@
 
 #import "base/test/ios/wait_util.h"
 #import "ios/chrome/browser/shared/ui/util/util_swift.h"
+#import "ios/chrome/test/app/uikit_test_util.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/platform_test.h"
 
 using base::test::ios::kWaitForUIElementTimeout;
 using base::test::ios::WaitUntilConditionOrTimeout;
 
+// A minimal UIWindow subclass to use in tests that doesn't register globally
+// and tracks whether it gets deallocated.
+@interface TestUIWindow : UIWindow
+@property(nonatomic, assign) BOOL* deallocatedPtr;
+@end
+
+@implementation TestUIWindow
+- (void)dealloc {
+  if (self.deallocatedPtr) {
+    *self.deallocatedPtr = YES;
+  }
+}
+@end
+
 // Sets up a window and a view.
 class UIViewWindowCoordinatesTest : public PlatformTest {
  protected:
   UIViewWindowCoordinatesTest()
-      : window_([[UIWindow alloc] init]), view_([[UIView alloc] init]) {}
+      : window_([[UIWindow alloc]
+            initWithWindowScene:chrome_test_util::GetAnyWindowScene()]),
+        view_([[UIView alloc] init]) {}
 
   UIWindow* window_;
   UIView* view_;
@@ -92,4 +109,51 @@ TEST_F(UIViewWindowCoordinatesTest, ChangeFrameOfParentView) {
   EXPECT_TRUE(WaitUntilConditionOrTimeout(kWaitForUIElementTimeout, ^{
     return callback_called;
   }));
+}
+
+// Verifies that destroying the window while the view continues to observe it
+// doesn't cause a Use-After-Free access of the mirror view.
+TEST_F(UIViewWindowCoordinatesTest, WindowDeallocationRegressionTest) {
+  __block __weak UIView* weakNotifyingView = nil;
+  BOOL windowDeallocated = NO;
+
+  @autoreleasepool {
+    // Instantiate a freestanding window not attached to a scene so it can be
+    // deallocated directly.
+    TestUIWindow* local_window =
+        [[TestUIWindow alloc] initWithFrame:CGRectMake(0, 0, 100, 100)];
+    local_window.deallocatedPtr = &windowDeallocated;
+
+    // Attach the view and register the observer.
+    view_.cr_onWindowCoordinatesChanged = ^(UIView* view) {
+      // NOP
+    };
+    [local_window addSubview:view_];
+
+    // Force layout to instantiate the mirror view.
+    [local_window layoutIfNeeded];
+
+    // Find the NotifyingView in the hierarchy to track its lifetime.
+    for (UIView* subview in local_window.subviews) {
+      if ([NSStringFromClass([subview class])
+              containsString:@"NotifyingView"]) {
+        weakNotifyingView = subview;
+        break;
+      }
+    }
+    EXPECT_NE(weakNotifyingView, nil);
+
+    // Remove reference to allow deallocation.
+    local_window = nil;
+  }
+
+  // Ensure the window and notifying view are actually deallocated.
+  EXPECT_TRUE(WaitUntilConditionOrTimeout(kWaitForUIElementTimeout, ^{
+    return (BOOL)(windowDeallocated && weakNotifyingView == nil);
+  }));
+
+  // Now the internal associated object is DANGLING (if buggy).
+  // Accessing the property setter triggers cleanup which reads the dangling
+  // pointer.
+  view_.cr_onWindowCoordinatesChanged = nil;
 }

@@ -14,18 +14,18 @@ namespace execution_context_priority {
 
 // This voter tracks frame nodes and casts a vote for each of them, whose value
 // depends on their visibility. A visible frame will receive a
-// TaskPriority::USER_BLOCKING vote, while a non-visible frame will receive a
-// TaskPriority::LOWEST vote.
-// If the kUnimportantFrame feature is enabled, a lesser
-// TaskPriority::USER_VISIBLE vote is cast for frames that are deemed
-// unimportant.
-// Note: This FrameNodeObserver can affect the initial priority of a frame and
-// thus uses `OnBeforeFrameNodeAdded`.
+// Process::Priority::kUserBlocking vote, while a non-visible frame will receive
+// a Process::Priority::kMinValue vote. If the kUnimportantFrame feature is
+// enabled, a lesser ProcessPriority::kUserVisible vote is cast for frames that
+// are deemed unimportant. Note: This FrameNodeObserver can affect the initial
+// priority of a frame and thus uses `OnBeforeFrameNodeAdded`.
 class FrameVisibilityVoter : public PriorityVoter, public FrameNodeObserver {
  public:
   static const char kFrameVisibilityReason[];
 
-  FrameVisibilityVoter();
+  // If `ignore_main_frame_visibility` is true, this voter will not cast votes
+  // for main frame nodes; only subframes will have their visibility considered.
+  explicit FrameVisibilityVoter(bool ignore_main_frame_visibility);
   ~FrameVisibilityVoter() override;
 
   FrameVisibilityVoter(const FrameVisibilityVoter&) = delete;
@@ -50,7 +50,10 @@ class FrameVisibilityVoter : public PriorityVoter, public FrameNodeObserver {
   VoterId voter_id() const { return voting_channel_.voter_id(); }
 
  private:
+  bool ShouldVoteForFrame(const FrameNode* frame_node) const;
+
   VotingChannel voting_channel_;
+  const bool ignore_main_frame_visibility_;
 };
 
 }  // namespace execution_context_priority

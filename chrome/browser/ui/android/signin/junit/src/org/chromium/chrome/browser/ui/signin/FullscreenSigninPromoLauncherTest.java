@@ -5,9 +5,9 @@
 package org.chromium.chrome.browser.ui.signin;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
@@ -25,15 +25,21 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.robolectric.ParameterizedRobolectricTestRunner;
+import org.robolectric.ParameterizedRobolectricTestRunner.Parameters;
 
 import org.chromium.base.FakeTimeTestRule;
+import org.chromium.base.FeatureOverrides;
 import org.chromium.base.TimeUtils;
-import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.preferences.Pref;
+import org.chromium.chrome.browser.prefs.LocalStatePrefs;
+import org.chromium.chrome.browser.prefs.LocalStatePrefsJni;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
+import org.chromium.chrome.browser.signin.services.SigninManager;
 import org.chromium.chrome.browser.signin.services.SigninPreferencesManager;
 import org.chromium.chrome.test.OverrideContextWrapperTestRule;
 import org.chromium.chrome.test.util.browser.signin.AccountManagerTestRule;
@@ -46,15 +52,44 @@ import org.chromium.components.signin.test.util.TestAccounts;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.components.user_prefs.UserPrefsJni;
 
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
-/** Tests for {@link FullscreenSigninPromoLauncher}. */
-@RunWith(BaseRobolectricTestRunner.class)
-@DisableFeatures({SigninFeatures.FORCE_STARTUP_SIGNIN_PROMO})
-@EnableFeatures({SigninFeatures.FULLSCREEN_SIGN_IN_PROMO_USE_DATE})
+/**
+ * Tests for {@link FullscreenSigninPromoLauncher}.
+ *
+ * <p>TODO(crbug.com/493130564): Revert to regular runner after
+ * MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS launch.
+ */
+@RunWith(ParameterizedRobolectricTestRunner.class)
+@DisableFeatures({
+    SigninFeatures.FORCE_STARTUP_SIGNIN_PROMO,
+    SigninFeatures.SUPPORT_FORCED_SIGNIN_POLICY
+})
+@EnableFeatures(
+        SigninFeatures.FULLSCREEN_SIGN_IN_PROMO_USE_DATE
+                + FullscreenSigninPromoLauncherTest.INTERVAL)
 public class FullscreenSigninPromoLauncherTest {
+    // One day interval.
+    static final String INTERVAL = ":interval/1";
+    private static final long TWO_DAYS_IN_MILLIS = TimeUnit.DAYS.toMillis(2);
     private static final int CURRENT_MAJOR_VERSION = 42;
+
+    @Parameters(name = "{index}_isIdentityMgrMigration={0}")
+    public static Collection parameters() {
+        return Arrays.asList(true, false);
+    }
+
+    public FullscreenSigninPromoLauncherTest(boolean isIdentityManagerMigrationEnabled) {
+        FeatureOverrides.overrideFlag(
+                SigninFeatures.MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS,
+                isIdentityManagerMigrationEnabled);
+    }
+
+    @Rule public BaseRobolectricTestRule mBaseRule = new BaseRobolectricTestRule();
+
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     private final FakeAccountManagerFacade mFakeAccountManagerFacade =
@@ -74,8 +109,13 @@ public class FullscreenSigninPromoLauncherTest {
 
     @Mock private PrefService mPrefServiceMock;
 
+    @Mock private LocalStatePrefs.Natives mLocalStatePrefsNativeMock;
+
+    @Mock private PrefService mLocalPrefsServiceMock;
+
     @Mock private IdentityManager mIdentityManagerMock;
 
+    @Mock private SigninManager mSigninManagerMock;
     @Mock private SigninAndHistorySyncActivityLauncher mFullscreenSigninLauncherMock;
 
     @Mock private Profile mProfile;
@@ -91,16 +131,21 @@ public class FullscreenSigninPromoLauncherTest {
     @Before
     public void setUp() {
         mTimeInPast = TimeUtils.currentTimeMillis();
-        mFakeTimeTestRule.advanceMillis(1000);
+        mFakeTimeTestRule.advanceMillis(TWO_DAYS_IN_MILLIS);
+
+        LocalStatePrefsJni.setInstanceForTesting(mLocalStatePrefsNativeMock);
+        LocalStatePrefs.setNativePrefsLoadedForTesting(true);
+        when(mLocalStatePrefsNativeMock.getPrefService()).thenReturn(mLocalPrefsServiceMock);
+        when(mLocalPrefsServiceMock.getBoolean(Pref.FORCE_BROWSER_SIGNIN)).thenReturn(false);
 
         UserPrefsJni.setInstanceForTesting(mUserPrefsNativeMock);
-        IdentityServicesProvider.setInstanceForTests(mock(IdentityServicesProvider.class));
-        when(IdentityServicesProvider.get().getIdentityManager(mProfile))
-                .thenReturn(mIdentityManagerMock);
+        IdentityServicesProvider.setIdentityManagerForTesting(mIdentityManagerMock);
+        IdentityServicesProvider.setSigninManagerForTesting(mSigninManagerMock);
         when(mUserPrefsNativeMock.get(mProfile)).thenReturn(mPrefServiceMock);
         when(mPrefServiceMock.getString(Pref.GOOGLE_SERVICES_LAST_SYNCING_USERNAME)).thenReturn("");
         mAutomotiveContextWrapperTestRule.setIsAutomotive(false);
         when(mContext.getString(anyInt())).thenReturn("string");
+        when(mSigninManagerMock.isSigninSupported(anyBoolean())).thenReturn(true);
     }
 
     @After
@@ -111,8 +156,8 @@ public class FullscreenSigninPromoLauncherTest {
     @Test
     public void whenAccountCacheNotPopulated() {
         mAccountManagerTestRule.addAccount(TestAccounts.ACCOUNT1);
-        mFakeAccountManagerFacade.blockGetAccounts(/* populateCache= */ false);
-        mPrefManager.setSigninPromoNextShowTime(mTimeInPast);
+        mAccountManagerTestRule.blockGetAccountsUpdate();
+        mPrefManager.setSigninPromoLastShownTimeWithRandomOffset(mTimeInPast);
 
         Assert.assertFalse(
                 FullscreenSigninPromoLauncher.launchPromoIfNeeded(
@@ -120,28 +165,43 @@ public class FullscreenSigninPromoLauncherTest {
 
         verify(mFullscreenSigninLauncherMock, never())
                 .createFullscreenSigninIntent(any(), any(), any(), anyInt());
-        Assert.assertEquals(mTimeInPast, mPrefManager.getSigninPromoNextShowTime());
+        Assert.assertEquals(
+                mTimeInPast, mPrefManager.getSigninPromoLastShownTimeWithRandomOffset());
     }
 
     @Test
     public void whenNextShowTimeIsNotReached() {
-        long timeInFuture = TimeUtils.currentTimeMillis() + 1000;
-        mPrefManager.setSigninPromoNextShowTime(timeInFuture);
+        mTimeInPast = TimeUtils.currentTimeMillis();
+        mPrefManager.setSigninPromoLastShownTimeWithRandomOffset(mTimeInPast);
+        mFakeTimeTestRule.advanceMillis(100);
 
         Assert.assertFalse(
                 FullscreenSigninPromoLauncher.launchPromoIfNeeded(
                         mContext, mProfile, mFullscreenSigninLauncherMock, CURRENT_MAJOR_VERSION));
 
-        Assert.assertEquals(timeInFuture, mPrefManager.getSigninPromoNextShowTime());
+        Assert.assertEquals(
+                mTimeInPast, mPrefManager.getSigninPromoLastShownTimeWithRandomOffset());
     }
 
     @Test
-    public void whenNextShowTimeNotRecorded() {
+    public void whenLastShownTimeIsInTheFuture() {
+        long timeInFuture = TimeUtils.currentTimeMillis() + TWO_DAYS_IN_MILLIS;
+        mPrefManager.setSigninPromoLastShownTimeWithRandomOffset(timeInFuture);
+
         Assert.assertFalse(
                 FullscreenSigninPromoLauncher.launchPromoIfNeeded(
                         mContext, mProfile, mFullscreenSigninLauncherMock, CURRENT_MAJOR_VERSION));
 
-        assertSigninPromoNextShowTimeInRange();
+        assertSigninPromoRandomTimeOffsetInRange();
+    }
+
+    @Test
+    public void whenRandomOffsetNotRecorded() {
+        Assert.assertFalse(
+                FullscreenSigninPromoLauncher.launchPromoIfNeeded(
+                        mContext, mProfile, mFullscreenSigninLauncherMock, CURRENT_MAJOR_VERSION));
+
+        Assert.assertNotEquals(-1, mPrefManager.getSigninPromoLastShownTimeWithRandomOffset());
     }
 
     @Test
@@ -168,11 +228,10 @@ public class FullscreenSigninPromoLauncherTest {
                 .thenReturn(mSigninIntent);
 
         Assert.assertTrue(
-                FullscreenSigninPromoLauncher.launchPromoIfNeeded(
-                        mContext, mProfile, mFullscreenSigninLauncherMock, CURRENT_MAJOR_VERSION));
+                FullscreenSigninPromoLauncher.launchPromoIfForced(
+                        mContext, mProfile, mFullscreenSigninLauncherMock));
 
         verify(mContext).startActivity(mSigninIntent);
-        assertSigninPromoNextShowTimeInRange();
     }
 
     @Test
@@ -188,17 +247,32 @@ public class FullscreenSigninPromoLauncherTest {
                 .thenReturn(mSigninIntent);
 
         Assert.assertTrue(
-                FullscreenSigninPromoLauncher.launchPromoIfNeeded(
-                        mContext, mProfile, mFullscreenSigninLauncherMock, CURRENT_MAJOR_VERSION));
+                FullscreenSigninPromoLauncher.launchPromoIfForced(
+                        mContext, mProfile, mFullscreenSigninLauncherMock));
 
         verify(mContext).startActivity(mSigninIntent);
-        assertSigninPromoNextShowTimeInRange();
+    }
+
+    @Test
+    @EnableFeatures(SigninFeatures.SUPPORT_FORCED_SIGNIN_POLICY)
+    public void promoShownWhenSigninForcedByPolicy() {
+        mAccountManagerTestRule.addAccount(TestAccounts.ACCOUNT1);
+        when(mLocalPrefsServiceMock.getBoolean(Pref.FORCE_BROWSER_SIGNIN)).thenReturn(true);
+        when(mFullscreenSigninLauncherMock.createFullscreenSigninIntent(
+                        eq(mContext), eq(mProfile), any(), eq(SigninAccessPoint.FORCED_SIGNIN)))
+                .thenReturn(mSigninIntent);
+
+        Assert.assertTrue(
+                FullscreenSigninPromoLauncher.launchPromoIfForced(
+                        mContext, mProfile, mFullscreenSigninLauncherMock));
+
+        verify(mContext).startActivity(mSigninIntent);
     }
 
     @Test
     public void manuallySignedOutReturnsFalse() {
         mAccountManagerTestRule.addAccount(TestAccounts.ACCOUNT1);
-        mPrefManager.setSigninPromoNextShowTime(mTimeInPast);
+        mPrefManager.setSigninPromoLastShownTimeWithRandomOffset(mTimeInPast);
         when(mPrefServiceMock.getString(Pref.GOOGLE_SERVICES_LAST_SYNCING_USERNAME))
                 .thenReturn(TestAccounts.ACCOUNT1.getEmail());
 
@@ -209,7 +283,18 @@ public class FullscreenSigninPromoLauncherTest {
         verify(mFakeAccountManagerFacade, never()).getAccounts();
         verify(mFullscreenSigninLauncherMock, never())
                 .createFullscreenSigninIntent(any(), any(), any(), anyInt());
-        Assert.assertEquals(mTimeInPast, mPrefManager.getSigninPromoNextShowTime());
+        Assert.assertEquals(
+                mTimeInPast, mPrefManager.getSigninPromoLastShownTimeWithRandomOffset());
+    }
+
+    @Test
+    public void whenSigninNotSupportedShouldReturnFalse() {
+        mAccountManagerTestRule.addAccount(TestAccounts.ACCOUNT1);
+        when(mSigninManagerMock.isSigninSupported(true)).thenReturn(false);
+
+        Assert.assertFalse(
+                FullscreenSigninPromoLauncher.launchPromoIfNeeded(
+                        mContext, mProfile, mFullscreenSigninLauncherMock, CURRENT_MAJOR_VERSION));
     }
 
     @Test
@@ -227,7 +312,7 @@ public class FullscreenSigninPromoLauncherTest {
 
     @Test
     public void whenNoAccountsShouldReturnFalse() {
-        mPrefManager.setSigninPromoNextShowTime(mTimeInPast);
+        mPrefManager.setSigninPromoLastShownTimeWithRandomOffset(mTimeInPast);
 
         Assert.assertFalse(
                 FullscreenSigninPromoLauncher.launchPromoIfNeeded(
@@ -236,22 +321,20 @@ public class FullscreenSigninPromoLauncherTest {
         verify(mFakeAccountManagerFacade).getAccounts();
         verify(mFullscreenSigninLauncherMock, never())
                 .createFullscreenSigninIntent(any(), any(), any(), anyInt());
-        Assert.assertEquals(mTimeInPast, mPrefManager.getSigninPromoNextShowTime());
+        Assert.assertEquals(
+                mTimeInPast, mPrefManager.getSigninPromoLastShownTimeWithRandomOffset());
     }
 
     @Test
     public void whenNoAccountListStoredShouldReturnTrue() {
         mAccountManagerTestRule.addAccount(TestAccounts.ACCOUNT1);
-        when(mIdentityManagerMock.findExtendedAccountInfoByEmailAddress(
-                        TestAccounts.ACCOUNT1.getEmail()))
-                .thenReturn(TestAccounts.ACCOUNT1);
         when(mFullscreenSigninLauncherMock.createFullscreenSigninIntent(
                         eq(mContext),
                         eq(mProfile),
                         any(),
                         eq(SigninAccessPoint.FULLSCREEN_SIGNIN_PROMO)))
                 .thenReturn(mSigninIntent);
-        mPrefManager.setSigninPromoNextShowTime(mTimeInPast);
+        mPrefManager.setSigninPromoLastShownTimeWithRandomOffset(mTimeInPast);
 
         // Old implementation hasn't been storing account list
         Assert.assertTrue(
@@ -262,17 +345,14 @@ public class FullscreenSigninPromoLauncherTest {
         Assert.assertArrayEquals(
                 mPrefManager.getSigninPromoLastAccountEmails().toArray(),
                 new String[] {TestAccounts.ACCOUNT1.getEmail()});
-        assertSigninPromoNextShowTimeInRange();
+        assertSigninPromoRandomTimeOffsetInRange();
     }
 
     @Test
     public void whenNoAccountListStoredOnAutoShouldReturnFalse() {
         mAutomotiveContextWrapperTestRule.setIsAutomotive(true);
         mAccountManagerTestRule.addAccount(TestAccounts.ACCOUNT1);
-        when(mIdentityManagerMock.findExtendedAccountInfoByEmailAddress(
-                        TestAccounts.ACCOUNT1.getEmail()))
-                .thenReturn(TestAccounts.ACCOUNT1);
-        mPrefManager.setSigninPromoNextShowTime(mTimeInPast);
+        mPrefManager.setSigninPromoLastShownTimeWithRandomOffset(mTimeInPast);
 
         Assert.assertFalse(
                 FullscreenSigninPromoLauncher.launchPromoIfNeeded(
@@ -284,16 +364,14 @@ public class FullscreenSigninPromoLauncherTest {
                         eq(mProfile),
                         any(),
                         eq(SigninAccessPoint.FULLSCREEN_SIGNIN_PROMO));
-        Assert.assertEquals(mTimeInPast, mPrefManager.getSigninPromoNextShowTime());
+        Assert.assertEquals(
+                mTimeInPast, mPrefManager.getSigninPromoLastShownTimeWithRandomOffset());
         Assert.assertEquals(null, mPrefManager.getSigninPromoLastAccountEmails());
     }
 
     @Test
     public void whenHasNewAccountShouldReturnTrue() {
         mAccountManagerTestRule.addAccount(TestAccounts.AADC_ADULT_ACCOUNT);
-        when(mIdentityManagerMock.findExtendedAccountInfoByEmailAddress(
-                        TestAccounts.AADC_ADULT_ACCOUNT.getEmail()))
-                .thenReturn(TestAccounts.AADC_ADULT_ACCOUNT);
         mAccountManagerTestRule.addAccount(TestAccounts.ACCOUNT2);
         when(mFullscreenSigninLauncherMock.createFullscreenSigninIntent(
                         eq(mContext),
@@ -301,7 +379,7 @@ public class FullscreenSigninPromoLauncherTest {
                         any(),
                         eq(SigninAccessPoint.FULLSCREEN_SIGNIN_PROMO)))
                 .thenReturn(mSigninIntent);
-        mPrefManager.setSigninPromoNextShowTime(mTimeInPast);
+        mPrefManager.setSigninPromoLastShownTimeWithRandomOffset(mTimeInPast);
         mPrefManager.setSigninPromoLastAccountEmails(Set.of(TestAccounts.ACCOUNT1.getEmail()));
 
         Assert.assertTrue(
@@ -310,18 +388,15 @@ public class FullscreenSigninPromoLauncherTest {
 
         verify(mContext).startActivity(mSigninIntent);
         Assert.assertEquals(2, mPrefManager.getSigninPromoLastAccountEmails().size());
-        assertSigninPromoNextShowTimeInRange();
+        assertSigninPromoRandomTimeOffsetInRange();
     }
 
     @Test
     public void whenHasNewAccountOnAutoShouldReturnFalse() {
         mAutomotiveContextWrapperTestRule.setIsAutomotive(true);
         mAccountManagerTestRule.addAccount(TestAccounts.AADC_ADULT_ACCOUNT);
-        when(mIdentityManagerMock.findExtendedAccountInfoByEmailAddress(
-                        TestAccounts.AADC_ADULT_ACCOUNT.getEmail()))
-                .thenReturn(TestAccounts.AADC_ADULT_ACCOUNT);
         mAccountManagerTestRule.addAccount(TestAccounts.ACCOUNT2);
-        mPrefManager.setSigninPromoNextShowTime(mTimeInPast);
+        mPrefManager.setSigninPromoLastShownTimeWithRandomOffset(mTimeInPast);
         mPrefManager.setSigninPromoLastAccountEmails(Set.of(TestAccounts.ACCOUNT1.getEmail()));
 
         Assert.assertFalse(
@@ -334,7 +409,8 @@ public class FullscreenSigninPromoLauncherTest {
                         eq(mProfile),
                         any(),
                         eq(SigninAccessPoint.FULLSCREEN_SIGNIN_PROMO));
-        Assert.assertEquals(mTimeInPast, mPrefManager.getSigninPromoNextShowTime());
+        Assert.assertEquals(
+                mTimeInPast, mPrefManager.getSigninPromoLastShownTimeWithRandomOffset());
         Assert.assertArrayEquals(
                 new String[] {TestAccounts.ACCOUNT1.getEmail()},
                 mPrefManager.getSigninPromoLastAccountEmails().toArray());
@@ -343,7 +419,7 @@ public class FullscreenSigninPromoLauncherTest {
     @Test
     public void whenAccountListUnchangedShouldReturnFalse() {
         mAccountManagerTestRule.addAccount(TestAccounts.ACCOUNT1);
-        mPrefManager.setSigninPromoNextShowTime(mTimeInPast);
+        mPrefManager.setSigninPromoLastShownTimeWithRandomOffset(mTimeInPast);
         mPrefManager.setSigninPromoLastAccountEmails(Set.of(TestAccounts.ACCOUNT1.getEmail()));
 
         Assert.assertFalse(
@@ -352,7 +428,8 @@ public class FullscreenSigninPromoLauncherTest {
 
         verify(mFullscreenSigninLauncherMock, never())
                 .createFullscreenSigninIntent(any(), any(), any(), anyInt());
-        Assert.assertEquals(mTimeInPast, mPrefManager.getSigninPromoNextShowTime());
+        Assert.assertEquals(
+                mTimeInPast, mPrefManager.getSigninPromoLastShownTimeWithRandomOffset());
         Assert.assertArrayEquals(
                 mPrefManager.getSigninPromoLastAccountEmails().toArray(),
                 new String[] {TestAccounts.ACCOUNT1.getEmail()});
@@ -361,7 +438,7 @@ public class FullscreenSigninPromoLauncherTest {
     @Test
     public void whenNoNewAccountsShouldReturnFalse() {
         mAccountManagerTestRule.addAccount(TestAccounts.ACCOUNT1);
-        mPrefManager.setSigninPromoNextShowTime(mTimeInPast);
+        mPrefManager.setSigninPromoLastShownTimeWithRandomOffset(mTimeInPast);
         mPrefManager.setSigninPromoLastAccountEmails(
                 Set.of(TestAccounts.ACCOUNT1.getEmail(), TestAccounts.ACCOUNT2.getEmail()));
 
@@ -371,7 +448,8 @@ public class FullscreenSigninPromoLauncherTest {
 
         verify(mFullscreenSigninLauncherMock, never())
                 .createFullscreenSigninIntent(any(), any(), any(), anyInt());
-        Assert.assertEquals(mTimeInPast, mPrefManager.getSigninPromoNextShowTime());
+        Assert.assertEquals(
+                mTimeInPast, mPrefManager.getSigninPromoLastShownTimeWithRandomOffset());
         Assert.assertEquals(2, mPrefManager.getSigninPromoLastAccountEmails().size());
     }
 
@@ -386,7 +464,7 @@ public class FullscreenSigninPromoLauncherTest {
     @Test
     public void testSigninFlowFailsToLaunch() {
         mAccountManagerTestRule.addAccount(TestAccounts.ACCOUNT1);
-        mPrefManager.setSigninPromoNextShowTime(mTimeInPast);
+        mPrefManager.setSigninPromoLastShownTimeWithRandomOffset(mTimeInPast);
         when(mFullscreenSigninLauncherMock.createFullscreenSigninIntent(
                         eq(mContext),
                         eq(mProfile),
@@ -399,14 +477,15 @@ public class FullscreenSigninPromoLauncherTest {
                         mContext, mProfile, mFullscreenSigninLauncherMock, CURRENT_MAJOR_VERSION));
 
         verify(mContext, never()).startActivity(any());
-        Assert.assertEquals(mTimeInPast, mPrefManager.getSigninPromoNextShowTime());
+        Assert.assertEquals(
+                mTimeInPast, mPrefManager.getSigninPromoLastShownTimeWithRandomOffset());
         Assert.assertEquals(null, mPrefManager.getSigninPromoLastAccountEmails());
     }
 
-    private void assertSigninPromoNextShowTimeInRange() {
-        long nextShowTime = mPrefManager.getSigninPromoNextShowTime();
-        long lo = TimeUtils.currentTimeMillis() + TimeUnit.DAYS.toMillis(53);
-        long hi = TimeUtils.currentTimeMillis() + TimeUnit.DAYS.toMillis(67);
+    private void assertSigninPromoRandomTimeOffsetInRange() {
+        long nextShowTime = mPrefManager.getSigninPromoLastShownTimeWithRandomOffset();
+        long lo = TimeUtils.currentTimeMillis() - TimeUnit.DAYS.toMillis(13);
+        long hi = TimeUtils.currentTimeMillis();
         Assert.assertTrue(nextShowTime >= lo && nextShowTime <= hi);
     }
 }

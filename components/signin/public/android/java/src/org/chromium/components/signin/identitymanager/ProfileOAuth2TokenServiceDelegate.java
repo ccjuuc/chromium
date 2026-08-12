@@ -8,6 +8,7 @@ import androidx.annotation.MainThread;
 import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
 import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
@@ -31,6 +32,7 @@ import org.chromium.google_apis.gaia.GoogleServiceAuthErrorState;
  * <p>
  */
 @NullMarked
+@JNINamespace("signin")
 final class ProfileOAuth2TokenServiceDelegate {
     private final long mNativePtr;
     private final AccountManagerFacade mAccountManagerFacade;
@@ -111,7 +113,7 @@ final class ProfileOAuth2TokenServiceDelegate {
     @MainThread
     void updateAuthErrorForTesting(CoreAccountId accountId, GoogleServiceAuthError authError) {
         ProfileOAuth2TokenServiceDelegateJni.get()
-                .updateAuthErrorFromJava(
+                .updateAuthError(
                         mNativePtr, accountId, authError, /* fireAuthErrorChanged= */ false);
     }
 
@@ -141,7 +143,7 @@ final class ProfileOAuth2TokenServiceDelegate {
          * @param authError The {@link GoogleServiceAuthError} to set for the account.
          * @param fireAuthErrorChanged Whether observers should be notified of this update.
          */
-        void updateAuthErrorFromJava(
+        void updateAuthError(
                 long nativeProfileOAuth2TokenServiceDelegateAndroid,
                 @JniType("CoreAccountId") CoreAccountId accountId,
                 @JniType("GoogleServiceAuthError") GoogleServiceAuthError authError,

@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 #include "content/browser/blob_storage/file_backed_blob_factory_frame_impl.h"
+
 #include "content/browser/blob_storage/chrome_blob_storage_context.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/render_process_host.h"
 #include "url/gurl.h"
@@ -28,12 +28,12 @@ FileBackedBlobFactoryFrameImpl::FileBackedBlobFactoryFrameImpl(
 
 GURL FileBackedBlobFactoryFrameImpl::GetCurrentUrl() {
   // TODO(b/276857839): handling of fenced frames is still in discussion. For
-  // now we use an invalid GURL as destination URL. This will allow access to
-  // unrestricted files but block access to restricted ones.
+  // now we use an invalid GURL as destination URL, which causes file access to
+  // be denied when a ScopedFileAccessDelegate is installed.
   if (render_frame_host().IsNestedWithinFencedFrame()) {
     return GURL();
   }
-  return render_frame_host().GetOutermostMainFrame()->GetLastCommittedURL();
+  return render_frame_host().GetLastCommittedURL();
 }
 
 mojo::ReportBadMessageCallback

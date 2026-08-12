@@ -10,11 +10,12 @@ import static org.hamcrest.CoreMatchers.is;
 
 import static org.chromium.base.test.transit.Condition.whether;
 import static org.chromium.base.test.transit.SimpleConditions.instrumentationThreadCondition;
+import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.app.Activity;
-import android.app.ActivityManager;
 import android.content.Context;
 import android.view.View;
+import android.view.WindowManager;
 
 import androidx.test.espresso.Espresso;
 import androidx.test.espresso.Root;
@@ -26,6 +27,7 @@ import androidx.test.platform.app.InstrumentationRegistry;
 
 import org.hamcrest.Matcher;
 
+import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
 import org.chromium.base.test.util.ForgivingClickAction;
@@ -53,10 +55,8 @@ public class ViewElement<ViewT extends View> extends Element<ViewT> implements V
     /**
      * Minimum percentage of the View that needs to be displayed for a ViewElement's enter
      * Conditions to be considered fulfilled.
-     *
-     * <p>Matches Espresso's preconditions for ViewActions like click().
      */
-    public static final int MIN_DISPLAYED_PERCENT = 90;
+    public static final int MIN_DISPLAYED_PERCENT = 51;
 
     private final ViewSpec<ViewT> mViewSpec;
     private final Options mOptions;
@@ -108,6 +108,7 @@ public class ViewElement<ViewT extends View> extends Element<ViewT> implements V
         return DisplayedCondition.newOptions()
                 .withExpectEnabled(options.mExpectEnabled)
                 .withExpectDisabled(options.mExpectDisabled)
+                .withEffectiveVisibility(options.mExpectedEffectiveVisibility)
                 .withDisplayingAtLeast(options.mDisplayedPercentageRequired)
                 .withSettleTimeMs(options.mInitialSettleTimeMs);
     }
@@ -115,7 +116,13 @@ public class ViewElement<ViewT extends View> extends Element<ViewT> implements V
     @Override
     public @Nullable Condition createExitCondition() {
         if (mOptions.mScoped) {
-            return new NotDisplayedAnymoreCondition(this, mViewSpec.getViewMatcher());
+            return new NotDisplayedAnymoreCondition(
+                    () -> {
+                        Root rootMatched = getDisplayedCondition().getRootMatched();
+                        assert rootMatched != null;
+                        return RootSpec.specificRoot(rootMatched.getDecorView());
+                    },
+                    mViewSpec.getViewMatcher());
         } else {
             return null;
         }
@@ -126,13 +133,13 @@ public class ViewElement<ViewT extends View> extends Element<ViewT> implements V
         return mViewSpec;
     }
 
-    /** Returns a {@link ViewSpec} to declare a descandant of this ViewElement. */
+    /** Returns a {@link ViewSpec} to declare a descendant of this ViewElement. */
     @SafeVarargs
     public final ViewSpec<View> descendant(Matcher<View>... viewMatcher) {
         return mViewSpec.descendant(viewMatcher);
     }
 
-    /** Returns a {@link ViewSpec} to declare a descandant of this ViewElement. */
+    /** Returns a {@link ViewSpec} to declare a descendant of this ViewElement. */
     @SafeVarargs
     public final <DescendantViewT extends View> ViewSpec<DescendantViewT> descendant(
             Class<DescendantViewT> viewClass, Matcher<View>... viewMatcher) {
@@ -154,16 +161,20 @@ public class ViewElement<ViewT extends View> extends Element<ViewT> implements V
 
     @Override
     public TripBuilder clickTo() {
-        if (mOptions.mDisplayedPercentageRequired > 90) {
-            return performViewActionTo(ViewActions.click());
-        } else {
+        if (mOptions.mDisplayedPercentageRequired <= 90) {
             return performViewActionTo(ForgivingClickAction.forgivingClick());
+        } else {
+            return performViewActionTo(ViewActions.click());
         }
     }
 
     @Override
     public TripBuilder longPressTo() {
-        return performViewActionTo(ViewActions.longClick());
+        if (mOptions.mDisplayedPercentageRequired <= 90) {
+            return performViewActionTo(ForgivingClickAction.forgivingLongClick());
+        } else {
+            return performViewActionTo(ViewActions.longClick());
+        }
     }
 
     @Override
@@ -197,7 +208,8 @@ public class ViewElement<ViewT extends View> extends Element<ViewT> implements V
                             // This is crucial in multiwindow. Even when two tasks are displayed
                             // side-by-side, only the window of the task last interacted with is
                             // focused.
-                            if (!rootMatched.getDecorView().hasWindowFocus()) {
+                            if (isWindowFocusable(rootMatched)
+                                    && !rootMatched.getDecorView().hasWindowFocus()) {
                                 Log.i(TAG, "Root does not have window focus, moving to front.");
                                 focusWindow(rootMatched);
                             }
@@ -206,6 +218,12 @@ public class ViewElement<ViewT extends View> extends Element<ViewT> implements V
                                     .inRoot(withDecorView(is(rootMatched.getDecorView())))
                                     .perform(action);
                         });
+    }
+
+    private static boolean isWindowFocusable(Root rootMatched) {
+        WindowManager.LayoutParams windowLayoutParams = rootMatched.getWindowLayoutParams2();
+        assumeNonNull(windowLayoutParams);
+        return (windowLayoutParams.flags & WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) == 0;
     }
 
     private void focusWindow(Root rootMatched) {
@@ -227,10 +245,8 @@ public class ViewElement<ViewT extends View> extends Element<ViewT> implements V
 
         Triggers.runTo(
                         () -> {
-                            ActivityManager activityManager =
-                                    (ActivityManager)
-                                            activity.getSystemService(Context.ACTIVITY_SERVICE);
-                            activityManager.moveTaskToFront(activity.getTaskId(), 0);
+                            ApiCompatibilityUtils.moveTaskToFront(
+                                    activity, activity.getTaskId(), 0);
                         })
                 .withContext(this)
                 .waitForAnd(
@@ -281,12 +297,25 @@ public class ViewElement<ViewT extends View> extends Element<ViewT> implements V
                 .inRoot(withDecorView(is(rootMatched.getDecorView())));
     }
 
-    /** Extra options for declaring ViewElements. */
+    /**
+     * Extra options for declaring ViewElements.
+     *
+     * <p>By default:
+     *
+     * <ul>
+     *   <li>Views are expected to be {@link View#VISIBLE}.
+     *   <li>Views are expected to be displayed >= 51% ({@link #MIN_DISPLAYED_PERCENT}).
+     *   <li>Views are expected to be enabled.
+     * </ul>
+     *
+     * These can be overridden by the {@link Builder} methods.
+     */
     public static class Options {
         static final Options DEFAULT = new Options();
         protected boolean mScoped = true;
         protected boolean mExpectEnabled = true;
         protected boolean mExpectDisabled;
+        protected int mExpectedEffectiveVisibility = View.VISIBLE;
         protected int mDisplayedPercentageRequired = ViewElement.MIN_DISPLAYED_PERCENT;
         protected int mInitialSettleTimeMs;
         protected @Nullable RootSpec mRootSpec;
@@ -312,7 +341,7 @@ public class ViewElement<ViewT extends View> extends Element<ViewT> implements V
             /**
              * Expect the View to be disabled instead of enabled.
              *
-             * <p>This is different than passing an isEnabled() Matcher.If the matcher was, for
+             * <p>This is different than passing an isEnabled() Matcher. If the matcher was, for
              * example |allOf(withId(ID), isEnabled())|, the exit condition would be considered
              * fulfilled if the View became disabled. Meanwhile, using this option makes the exit
              * condition only be considered fulfilled if no Views |withId(ID)|, enabled or not, were
@@ -331,10 +360,21 @@ public class ViewElement<ViewT extends View> extends Element<ViewT> implements V
                 return this;
             }
 
+            /** Expect the View to be INVISIBLE rather than VISIBLE. */
+            public Builder expectInvisible() {
+                mExpectedEffectiveVisibility = View.INVISIBLE;
+                return this;
+            }
+
+            /** Expect the View to be GONE rather than VISIBLE. */
+            public Builder expectGone() {
+                mExpectedEffectiveVisibility = View.GONE;
+                return this;
+            }
+
             /**
              * Changes the minimum percentage of the View that needs be displayed to fulfill the
-             * enter Condition. Default is >=90% visible, which matches the minimum requirement for
-             * ViewInteractions like click().
+             * enter Condition. Default is >= 51% visible ({@link #MIN_DISPLAYED_PERCENT}).
              */
             public Builder displayingAtLeast(int percentage) {
                 mDisplayedPercentageRequired = percentage;
@@ -358,6 +398,7 @@ public class ViewElement<ViewT extends View> extends Element<ViewT> implements V
                 mScoped = optionsToClone.mScoped;
                 mExpectDisabled = optionsToClone.mExpectDisabled;
                 mExpectEnabled = optionsToClone.mExpectEnabled;
+                mExpectedEffectiveVisibility = optionsToClone.mExpectedEffectiveVisibility;
                 mDisplayedPercentageRequired = optionsToClone.mDisplayedPercentageRequired;
                 mInitialSettleTimeMs = optionsToClone.mInitialSettleTimeMs;
                 mRootSpec = optionsToClone.mRootSpec;
@@ -391,9 +432,26 @@ public class ViewElement<ViewT extends View> extends Element<ViewT> implements V
         return newOptions().allowDisabled().build();
     }
 
+    /** Convenience {@link Options} setting expectInvisible(). */
+    public static Options expectInvisibleOption() {
+        return newOptions().expectInvisible().build();
+    }
+
+    /** Convenience {@link Options} setting expectGone(). */
+    public static Options expectGoneOption() {
+        return newOptions().expectGone().build();
+    }
+
     /** Convenience {@link Options} setting displayingAtLeast(). */
     public static Options displayingAtLeastOption(int percentage) {
         return newOptions().displayingAtLeast(percentage).build();
+    }
+
+    /**
+     * @param settleTimeMs the time to wait for the View to settle in ms.
+     */
+    public static Options initialSettleTimeOption(int settleTimeMs) {
+        return newOptions().initialSettleTime(settleTimeMs).build();
     }
 
     /** Convenience {@link Options} setting rootSpec(). */

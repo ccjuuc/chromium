@@ -18,6 +18,7 @@
 #   visibility (optional)
 #       Normal meaning.
 JSON_TO_STRUCT_FILES = [
+  "//tools/json_comment_eater/json_comment_eater.py",
   "//tools/json_to_struct/aggregation.py",
   "//tools/json_to_struct/element_generator.py",
   "//tools/json_to_struct/java_element_generator.py",
@@ -70,7 +71,10 @@ template("json_to_struct") {
 
     sources = get_target_outputs(":$action_name")
 
-    deps = [ ":$action_name" ]
+    deps = [
+      ":$action_name",
+      "//base",
+    ]
 
     if (defined(invoker.deps)) {
       deps += invoker.deps

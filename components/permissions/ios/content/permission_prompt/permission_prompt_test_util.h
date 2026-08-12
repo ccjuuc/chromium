@@ -13,10 +13,10 @@
 
 namespace permissions {
 
-class MockPermissionPromptDelegate : public PermissionPrompt::Delegate {
+class StubPermissionPromptDelegate : public PermissionPrompt::Delegate {
  public:
-  MockPermissionPromptDelegate();
-  ~MockPermissionPromptDelegate() override;
+  StubPermissionPromptDelegate();
+  ~StubPermissionPromptDelegate() override;
 
   // PermissionPrompt::Delegate:
   const std::vector<std::unique_ptr<PermissionRequest>>& Requests() override;
@@ -25,14 +25,15 @@ class MockPermissionPromptDelegate : public PermissionPrompt::Delegate {
 
   GURL GetEmbeddingOrigin() const override;
 
-  void Accept() override;
-  void AcceptThisTime() override;
-  void Deny() override;
-  void Dismiss() override;
-  void Ignore() override;
+  void Accept(const PromptOptions& prompt_options) override;
+  void AcceptThisTime(const PromptOptions& prompt_options) override;
+  void Deny(const PromptOptions& prompt_options) override;
+  void Dismiss(const PromptOptions& prompt_options) override;
+  void Ignore(const PromptOptions& prompt_options) override;
 
   GeolocationAccuracy GetInitialGeolocationAccuracySelection() const override;
-  void SetPromptOptions(PromptOptions prompt_options) override;
+  std::optional<GeolocationPromptType> GetGeolocationPromptType()
+      const override;
   void FinalizeCurrentRequests() override;
   void OpenHelpCenterLink(const ui::Event& event) override;
   void PreIgnoreQuietPrompt() override;
@@ -50,6 +51,7 @@ class MockPermissionPromptDelegate : public PermissionPrompt::Delegate {
   void SetManageClicked() override;
   void SetLearnMoreClicked() override;
   void SetHatsShownCallback(base::OnceCallback<void()> callback) override;
+  void SwitchToLoudPrompt() override;
 
   content::WebContents* GetAssociatedWebContents() override;
 
@@ -58,6 +60,11 @@ class MockPermissionPromptDelegate : public PermissionPrompt::Delegate {
   bool RecreateView() override;
 
   const PermissionPrompt* GetCurrentPrompt() const override;
+
+  EmbeddedPermissionPromptFlowModel* GetEmbeddedPromptFlowModel()
+      const override;
+  void CalculateCurrentVariantForEmbeddedPrompt() override;
+  void AdvanceOrFinalizeEmbeddedPromptFlow() override;
 
   void AddRequest(std::unique_ptr<PermissionRequest> request);
 
@@ -70,7 +77,7 @@ class MockPermissionPromptDelegate : public PermissionPrompt::Delegate {
   bool accept_called_ = false;
   bool accept_this_time_called_ = false;
   bool deny_called_ = false;
-  base::WeakPtrFactory<MockPermissionPromptDelegate> weak_factory_{this};
+  base::WeakPtrFactory<StubPermissionPromptDelegate> weak_factory_{this};
 };
 
 class MockPermissionPromptIOS : public PermissionPromptIOS {

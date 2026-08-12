@@ -38,6 +38,8 @@ struct SameSizeAsPolicyContainerPolicies {
   network::mojom::WebSandboxFlags sandbox_flags;
   bool is_credentialless;
   bool can_navigate_top_without_user_gesture;
+  std::optional<AgentClusterKey::CrossOriginIsolationKey>
+      cross_origin_isolation_key_override;
 };
 
 }  // namespace
@@ -101,13 +103,15 @@ TEST(PolicyContainerPoliciesTest, CloneIsEqual) {
   PolicyContainerPolicies policies(
       network::mojom::ReferrerPolicy::kAlways,
       network::mojom::IPAddressSpace::kUnknown,
-      /*allow_non_secure_local_network_access=*/true,
       /*is_web_secure_context=*/true, std::move(connection_allowlists),
       std::move(csps), coop, coep, std::move(dip), ip,
       network::IntegrityPolicy(), sandbox_flags,
       /*is_credentialless=*/true,
       /*can_navigate_top_without_user_gesture=*/true,
-      /*cross_origin_isolation_enabled_by_dip=*/false);
+      /*cross_origin_isolation_enabled_by_dip=*/false,
+      AgentClusterKey::CrossOriginIsolationKey(
+          url::Origin::Create(GURL("https://site.example/")),
+          blink::mojom::CrossOriginIsolationMode::kConcrete, false));
 
   EXPECT_THAT(policies.Clone(), Eq(ByRef(policies)));
 }
@@ -118,8 +122,11 @@ TEST(PolicyContainerHostTest, ReferrerPolicy) {
   EXPECT_EQ(network::mojom::ReferrerPolicy::kDefault,
             policy_container->referrer_policy());
 
+  base::UnguessableToken new_initiator_state_token =
+      base::UnguessableToken::Create();
   static_cast<blink::mojom::PolicyContainerHost*>(policy_container.get())
-      ->SetReferrerPolicy(network::mojom::ReferrerPolicy::kAlways);
+      ->SetReferrerPolicy(network::mojom::ReferrerPolicy::kAlways,
+                          new_initiator_state_token);
   EXPECT_EQ(network::mojom::ReferrerPolicy::kAlways,
             policy_container->referrer_policy());
 }

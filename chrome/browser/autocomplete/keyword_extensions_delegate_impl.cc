@@ -174,7 +174,7 @@ void KeywordExtensionsDelegateImpl::OnOmniboxSuggestionsReady(
   // unless the full keyword had been typed.
   int first_relevance = KeywordProvider::CalculateRelevance(
       input.type(), /*complete=*/true, /*support_replacement=*/true,
-      input.prefer_keyword(), input.allow_exact_keyword_match());
+      input.in_keyword_mode(), input.allow_exact_keyword_match());
 
   for (const ExtensionSuggestion& suggestion : suggestions) {
     // Because these matches are async, we should never let them become the
@@ -182,11 +182,13 @@ void KeywordExtensionsDelegateImpl::OnOmniboxSuggestionsReady(
     // interaction.
     extension_suggest_matches_.push_back(provider_->CreateAutocompleteMatch(
         template_url, input, keyword.length(),
-        base::UTF8ToUTF16(suggestion.content), false, --first_relevance,
-        suggestion.deletable));
+        AutocompleteMatch::SanitizeString(
+            base::UTF8ToUTF16(suggestion.content)),
+        false, --first_relevance, suggestion.deletable));
 
     AutocompleteMatch* match = &extension_suggest_matches_.back();
-    match->contents.assign(base::UTF8ToUTF16(suggestion.description));
+    match->contents.assign(AutocompleteMatch::SanitizeString(
+        base::UTF8ToUTF16(suggestion.description)));
 
     // No match should have empty classifications.
     CHECK(!suggestion.match_classifications.empty());
@@ -200,6 +202,10 @@ void KeywordExtensionsDelegateImpl::OnOmniboxSuggestionsReady(
 }
 
 void KeywordExtensionsDelegateImpl::OnOmniboxDefaultSuggestionChanged() {
+  if (provider_->done()) {
+    return;
+  }
+
   TemplateURLService* model = provider_->GetTemplateURLService();
   DCHECK(model);
 

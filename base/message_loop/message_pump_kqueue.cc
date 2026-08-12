@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "base/message_loop/message_pump_kqueue.h"
 
 #include <sys/errno.h>
@@ -19,6 +14,7 @@
 #include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/mac/mac_util.h"
+#include "base/message_loop/message_pump_wakeup_counter.h"
 #include "base/notreached.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/task/task_features.h"
@@ -320,7 +316,7 @@ bool MessagePumpKqueue::WatchFileDescriptor(int fd,
   return true;
 }
 
-void MessagePumpKqueue::SetWakeupTimerEvent(const base::TimeTicks& wakeup_time,
+void MessagePumpKqueue::SetWakeupTimerEvent(base::TimeTicks wakeup_time,
                                             base::TimeDelta leeway,
                                             kevent64_s* timer_event) {
   // The ident of the wakeup timer. There's only the one timer as the pair
@@ -441,6 +437,7 @@ bool MessagePumpKqueue::DoInternalWork(Delegate* delegate,
     // No events to dispatch so no need to call ProcessEvents().
     return false;
   }
+  MessagePumpWakeupCounter::GetForCurrentThread().RecordWakeup();
 
   PCHECK(rv > 0) << "kevent64";
   return ProcessEvents(delegate, static_cast<size_t>(rv));
@@ -528,9 +525,8 @@ bool MessagePumpKqueue::ProcessEvents(Delegate* delegate, size_t count) {
   return did_work;
 }
 
-void MessagePumpKqueue::MaybeUpdateWakeupTimer(
-    const base::TimeTicks& wakeup_time,
-    base::TimeDelta leeway) {
+void MessagePumpKqueue::MaybeUpdateWakeupTimer(base::TimeTicks wakeup_time,
+                                               base::TimeDelta leeway) {
   if (wakeup_time == scheduled_wakeup_time_) {
     // No change in the timer setting necessary.
     return;

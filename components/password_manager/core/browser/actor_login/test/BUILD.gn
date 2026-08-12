@@ -8,8 +8,14 @@ source_set("test_support") {
   sources = [
     "actor_login_test_util.cc",
     "actor_login_test_util.h",
+    "fake_actor_login_delegate_client.cc",
+    "fake_actor_login_delegate_client.h",
+    "fake_actor_login_siwg_controller.cc",
+    "fake_actor_login_siwg_controller.h",
     "mock_actor_login_delegate.cc",
     "mock_actor_login_delegate.h",
+    "mock_actor_login_permission_service.cc",
+    "mock_actor_login_permission_service.h",
     "mock_actor_login_quality_logger.cc",
     "mock_actor_login_quality_logger.h",
   ]
@@ -17,6 +23,7 @@ source_set("test_support") {
   visibility = [
     "//chrome/browser/password_manager/actor_login:*",
     "//chrome/browser/password_manager/actor_login/internal:*",
+    "//components/password_manager/core/browser/actor_login:*",
     "//components/password_manager/core/browser/actor_login/internal:*",
   ]
 
@@ -25,11 +32,12 @@ source_set("test_support") {
     "//components/autofill/core/common",
     "//components/autofill/core/common:test_support",
     "//components/optimization_guide/core:model_execution",
-    "//components/optimization_guide/proto:optimization_guide_proto_gen",
+    "//components/optimization_guide/proto:optimization_guide_proto",
     "//components/password_manager/core/browser",
     "//components/password_manager/core/browser:password_form",
     "//components/password_manager/core/browser/actor_login:common",
     "//components/password_manager/core/browser/actor_login/internal:delegate",
+    "//components/prefs",
     "//testing/gmock",
     "//url",
   ]

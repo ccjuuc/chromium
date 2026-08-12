@@ -12,8 +12,12 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
+#include "chrome/browser/glic/glic_pref_names.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
+#include "chrome/browser/profiles/profile.h"
+#include "components/optimization_guide/content/browser/media_transcript_provider.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/document_picture_in_picture_window_controller.h"
 #include "content/public/browser/media_session.h"
 #include "content/public/browser/render_frame_host.h"
@@ -35,8 +39,8 @@ GlicMediaContext::~GlicMediaContext() {
   for (const auto& pair : transcripts_by_title_) {
     const auto& transcript = pair.second;
     if (transcript->max_transcript_size_ > 0) {
-      UMA_HISTOGRAM_COUNTS_1M("Glic.Media.TotalContextLength",
-                              transcript->max_transcript_size_);
+      UMA_HISTOGRAM_COUNTS_10M("Glic.Media.TotalContextLength",
+                               transcript->max_transcript_size_);
     }
   }
 }
@@ -79,8 +83,8 @@ bool GlicMediaContext::OnResult(const media::SpeechRecognitionResult& result) {
     HandleNonFinalResult(transcript, std::move(new_chunk));
   } else {
     // Record timestamp metric for final result.
-    base::UmaHistogramExactLinear("Glic.Media.TimestampCount", timestamp_count,
-                                  10);
+    base::UmaHistogramExactLinear("Glic.Media.TimestampRangeCount",
+                                  timestamp_count, 10);
     HandleFinalResult(transcript, std::move(new_chunk));
   }
 
@@ -138,6 +142,16 @@ void GlicMediaContext::HandleFinalResult(Transcript* transcript,
     // chunk can be added in media time order.
     transcript->transcript_chunks_.erase(transcript->nonfinal_chunk_it_);
     transcript->nonfinal_chunk_it_ = transcript->transcript_chunks_.end();
+  }
+
+  if (transcript->next_sequence_number_ == 0) {
+    content::WebContents* web_contents =
+        content::WebContents::FromRenderFrameHost(&render_frame_host());
+
+    if (auto* provider =
+            optimization_guide::MediaTranscriptProvider::GetFor(web_contents)) {
+      provider->OnTranscriptionBeginForFrame(&render_frame_host());
+    }
   }
 
   // Process final result.
@@ -229,26 +243,25 @@ void GlicMediaContext::TrimTranscript(Transcript* transcript) {
   }
 }
 
-std::string GlicMediaContext::GetContext() const {
-  const Transcript* transcript = GetTranscriptIfExists();
-  if (!transcript) {
-    return "";
-  }
-
-  std::vector<std::string_view> pieces;
-  for (const auto& chunk : transcript->transcript_chunks_) {
-    pieces.push_back(chunk.text);
-  }
-  return base::JoinString(pieces, "");
-}
-
 std::list<GlicMediaContext::TranscriptChunk>
 GlicMediaContext::GetTranscriptChunks() const {
   const Transcript* transcript = GetTranscriptIfExists();
-  if (!transcript) {
+  // Don't return transcripts if we don't have any final chunk.
+  if (!transcript || transcript->next_sequence_number_ == 0) {
     return {};
   }
   return transcript->transcript_chunks_;
+}
+
+bool GlicMediaContext::HasTranscriptChunks() const {
+  const Transcript* transcript = GetTranscriptIfExists();
+  // We don't have transcripts if we don't have any final chunk.
+  return transcript && transcript->next_sequence_number_ > 0 &&
+         !transcript->transcript_chunks_.empty();
+}
+
+void GlicMediaContext::ClearAllTranscripts() {
+  transcripts_by_title_.clear();
 }
 
 void GlicMediaContext::OnPeerConnectionAdded() {
@@ -270,6 +283,13 @@ bool GlicMediaContext::IsExcludedFromTranscript() const {
   content::WebContents* web_contents =
       content::WebContents::FromRenderFrameHost(&render_frame_host());
   if (!web_contents) {
+    return true;
+  }
+
+  Profile* profile =
+      Profile::FromBrowserContext(web_contents->GetBrowserContext());
+  if (!profile->GetPrefs()->GetBoolean(
+          glic::prefs::kGlicMediaUnderstandingEnabled)) {
     return true;
   }
 

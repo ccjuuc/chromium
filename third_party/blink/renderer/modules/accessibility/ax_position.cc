@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/modules/accessibility/ax_position.h"
 
+#include "base/containers/span.h"
 #include "third_party/blink/renderer/core/accessibility/ax_object_cache.h"
 #include "third_party/blink/renderer/core/dom/container_node.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -445,10 +446,9 @@ int AXPosition::MaxTextOffset() const {
     return container_object_->ComputedName().length();
   // TODO(nektar): Remove all this logic once we switch to
   // AXObject::TextLength().
-  const bool is_atomic_inline_level =
-      layout_object->IsInline() && layout_object->IsAtomicInlineLevel();
-  if (!is_atomic_inline_level && !layout_object->IsText())
+  if (!layout_object->IsAtomicInline() && !layout_object->IsText()) {
     return container_object_->ComputedName().length();
+  }
 
   // TODO(crbug.com/1149171): OffsetMappingBuilder does not properly
   // compute offset mappings for empty LayoutText objects. Other text objects
@@ -929,13 +929,9 @@ const PositionWithAffinity AXPosition::ToPositionWithAffinity(
         Position(*container_node, adjusted_position.TextOffset()), affinity_);
   }
 
-  // TODO(crbug.com/567964): LayoutObject::IsAtomicInlineLevel() also includes
-  // block-level replaced elements. We need to explicitly exclude them via
-  // LayoutObject::IsInline().
   const bool supports_ng_offset_mapping =
       layout_object &&
-      ((layout_object->IsInline() && layout_object->IsAtomicInlineLevel()) ||
-       layout_object->IsText());
+      (layout_object->IsAtomicInline() || layout_object->IsText());
   const OffsetMapping* container_offset_mapping = nullptr;
   if (supports_ng_offset_mapping) {
     LayoutBlockFlow* formatting_context =
@@ -1046,7 +1042,7 @@ int AXPosition::GetLeadingIgnoredCharacterCount(const OffsetMapping* mapping,
     }
 
     if (unit.TextContentStart() != previous_content_end) {
-      String substring = text.Substring(
+      String substring = text.DeprecatedSubstring(
           previous_content_end, unit.TextContentStart() - previous_content_end);
       String unignored = substring.RemoveCharacters(IsIgnoredCharacter);
       count += substring.length() - unignored.length();

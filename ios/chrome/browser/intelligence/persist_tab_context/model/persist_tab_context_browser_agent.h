@@ -18,15 +18,18 @@ namespace web {
 class WebState;
 }  // namespace web
 
-class PageContentCacheBridgeService;
+class PageContentCacheService;
 @class PersistTabContextStateObserver;
 
 // PersistTabContextBrowserAgent allows saving and retrieving saved page
 // contexts. Page contexts are retrieved and saved to storage when a tab is
-// backgrounded (either switched tab or closed app). The page contexts that are
-// stored contain information on tab content such as the APC and the inner_text,
-// along with the page title and url. Once a tab is closed, its page context is
-// deleted from storage.
+// backgrounded (either switched tab or backgrounded app). The page contexts
+// that are stored contain information on tab content such as the APC and the
+// inner_text, along with the page title and url. Once a tab is closed, its page
+// context is deleted from storage. They're also deleted when their TTL expires.
+//
+// *NOTE*: We do not store snapshots for the persisted tab contexts, since that
+// would be duplicately stored. Those need to be fetched separately.
 class PersistTabContextBrowserAgent
     : public BrowserUserData<PersistTabContextBrowserAgent>,
       public web::WebStateObserver,
@@ -46,8 +49,6 @@ class PersistTabContextBrowserAgent
       std::string,
       std::optional<std::unique_ptr<optimization_guide::proto::PageContext>>>;
 
-  // TODO(crbug.com/454689025): This browser agent's API is not yet approved for
-  // use by clients. DO NOT USE.
   // Asynchronously fetches a single page context associated with the given
   // `webstate_unique_id`.
   void GetSingleContextAsync(
@@ -56,8 +57,6 @@ class PersistTabContextBrowserAgent
                                   optimization_guide::proto::PageContext>>)>
           callback);
 
-  // TODO(crbug.com/454689025): This browser agent's API is not yet approved for
-  // use by clients. DO NOT USE.
   // Asynchronously fetches multiple page contexts for the provided vector of
   // `webstate_unique_ids`.
   void GetMultipleContextsAsync(
@@ -78,6 +77,7 @@ class PersistTabContextBrowserAgent
       web::PageLoadCompletionStatus load_completion_status) override;
 
  private:
+  friend class PersistTabContextBrowserAgentTest;
   friend class BrowserUserData<PersistTabContextBrowserAgent>;
 
   explicit PersistTabContextBrowserAgent(Browser* browser);
@@ -114,9 +114,8 @@ class PersistTabContextBrowserAgent
                               PageContextWrapperCallbackResponse response);
 
   // Writes the page context to the PageContentCache.
-  void WriteContextToContentCache(
-      web::WebState* web_state,
-      const PageContextWrapperCallbackResponse& response);
+  void WriteContextToContentCache(web::WebState* web_state,
+                                  PageContextWrapperCallbackResponse response);
 
   // Deletes a page context from the PageContentCache.
   void DeleteContextFromContentCache(int64_t tab_id);
@@ -140,6 +139,17 @@ class PersistTabContextBrowserAgent
   // which case the last tab's page context should be saved to storage.
   __strong PersistTabContextStateAgent* persist_tab_context_state_agent_;
 
+  // Schedules a background task to delete the legacy directory used for
+  // filesystem storage.
+  void RemoveFilesystemStorage();
+
+  // Schedules a background task to delete the legacy directory used for SQLite
+  // storage.
+  void RemoveSqliteStorage();
+
+  // Runs cleanup tasks on the PageContentCache.
+  void RunCacheCleanup();
+
   // Profile-specific file path to store page contexts at in the app's cache.
   base::FilePath storage_directory_path_;
 
@@ -152,7 +162,7 @@ class PersistTabContextBrowserAgent
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
   // The keyed service used to access the PageContentCache in.
-  raw_ptr<PageContentCacheBridgeService> page_content_cache_service_ = nullptr;
+  raw_ptr<PageContentCacheService> page_content_cache_service_ = nullptr;
 
   // Use PageContentCache for storage as opposed to the direct filesystem.
   const bool use_page_content_cache_;

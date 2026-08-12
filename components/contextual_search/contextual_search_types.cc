@@ -4,7 +4,17 @@
 
 #include "components/contextual_search/contextual_search_types.h"
 
+#include <optional>
+
 namespace contextual_search {
+
+bool IsTerminalContextStatus(ContextUploadStatus status) {
+  return status == ContextUploadStatus::kUploadFailed ||
+         status == ContextUploadStatus::kUploadSuccessful ||
+         status == ContextUploadStatus::kValidationFailed ||
+         status == ContextUploadStatus::kUploadExpired ||
+         status == ContextUploadStatus::kUploadReplaced;
+}
 
 FileInfo::FileInfo() = default;
 FileInfo::FileInfo(const FileInfo& other) {
@@ -32,5 +42,21 @@ FileInfo& FileInfo::operator=(const FileInfo& other) {
   return *this;
 }
 FileInfo::~FileInfo() = default;
+
+std::optional<int64_t> FileInfo::GetContextId() const {
+  if (request_id) {
+    return request_id->context_id();
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> FileInfo::GetInjectedInputId() const {
+  if (input_data && input_data->modality_chip_props.has_value() &&
+      input_data->modality_chip_props->has_id()) {
+    return std::string(input_data->modality_chip_props->id());
+  } else {
+    return std::nullopt;
+  }
+}
 
 }  // namespace contextual_search

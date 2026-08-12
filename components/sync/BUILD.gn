@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 import("//testing/test.gni")
+import("//third_party/protobuf/proto_library.gni")
 
 group("sync") {
   public_deps = [
@@ -11,6 +12,12 @@ group("sync") {
     "//components/sync/nigori",
     "//components/sync/service",
   ]
+}
+
+proto_library("test_support_proto") {
+  testonly = true
+
+  sources = [ "test/unknown_fields.proto" ]
 }
 
 static_library("test_support") {
@@ -27,8 +34,12 @@ static_library("test_support") {
     "test/data_type_store_test_util.h",
     "test/data_type_test_util.cc",
     "test/data_type_test_util.h",
+    "test/embedded_fake_server_adapter.cc",
+    "test/embedded_fake_server_adapter.h",
     "test/entity_builder_factory.cc",
     "test/entity_builder_factory.h",
+    "test/fake_connection_manager.cc",
+    "test/fake_connection_manager.h",
     "test/fake_cryptographer.cc",
     "test/fake_cryptographer.h",
     "test/fake_data_type_connector.cc",
@@ -41,6 +52,8 @@ static_library("test_support") {
     "test/fake_data_type_processor.h",
     "test/fake_data_type_sync_bridge.cc",
     "test/fake_data_type_sync_bridge.h",
+    "test/fake_device_statistics_request.cc",
+    "test/fake_device_statistics_request.h",
     "test/fake_server.cc",
     "test/fake_server.h",
     "test/fake_server_http_post_provider.cc",
@@ -67,8 +80,6 @@ static_library("test_support") {
     "test/forwarding_data_type_local_change_processor.h",
     "test/mock_commit_queue.cc",
     "test/mock_commit_queue.h",
-    "test/mock_connection_manager.cc",
-    "test/mock_connection_manager.h",
     "test/mock_data_type_controller_delegate.cc",
     "test/mock_data_type_controller_delegate.h",
     "test/mock_data_type_local_change_processor.cc",
@@ -109,6 +120,8 @@ static_library("test_support") {
     "test/sync_change_processor_wrapper_for_test.h",
     "test/sync_client_mock.cc",
     "test/sync_client_mock.h",
+    "test/sync_service_crypto_test_utils.cc",
+    "test/sync_service_crypto_test_utils.h",
     "test/sync_service_impl_bundle.cc",
     "test/sync_service_impl_bundle.h",
     "test/sync_user_settings_mock.cc",
@@ -124,6 +137,8 @@ static_library("test_support") {
     "test/test_sync_user_settings.h",
     "test/trackable_mock_invalidation.cc",
     "test/trackable_mock_invalidation.h",
+    "test/unknown_field_util.cc",
+    "test/unknown_field_util.h",
   ]
 
   public_deps = [
@@ -139,6 +154,7 @@ static_library("test_support") {
   ]
 
   deps = [
+    ":test_support_proto",
     "//base",
     "//base/test:test_support",
     "//components/bookmarks/browser",
@@ -147,6 +163,7 @@ static_library("test_support") {
     "//components/prefs:test_support",
     "//components/signin/public/base",
     "//components/signin/public/identity_manager:test_support",
+    "//components/sync_device_info",
     "//components/version_info",
     "//components/version_info:generate_version_info",
     "//google_apis",
@@ -155,6 +172,7 @@ static_library("test_support") {
     "//services/network:test_support",
     "//services/network/public/cpp",
     "//testing/gtest",
+    "//third_party/zlib/google:compression_utils",
     "//ui/gfx",
     "//url",
   ]
@@ -166,6 +184,7 @@ source_set("unit_tests") {
   testonly = true
   sources = [
     "base/client_tag_hash_unittest.cc",
+    "base/custom_passphrase_bootstrap_token_unittest.cc",
     "base/data_type_unittest.cc",
     "base/deletion_origin_unittest.cc",
     "base/page_transition_conversion_unittest.cc",
@@ -195,9 +214,6 @@ source_set("unit_tests") {
     "engine/loopback_server/persistent_unique_client_entity_unittest.cc",
     "engine/net/http_bridge_unittest.cc",
     "engine/net/sync_server_connection_manager_unittest.cc",
-    "engine/nigori/cross_user_sharing_public_key_unittest.cc",
-    "engine/nigori/cross_user_sharing_public_private_key_pair_unittest.cc",
-    "engine/nigori/nigori_unittest.cc",
     "engine/sync_manager_impl_unittest.cc",
     "engine/sync_scheduler_impl_unittest.cc",
     "engine/syncer_proto_util_unittest.cc",
@@ -206,6 +222,9 @@ source_set("unit_tests") {
     "invalidations/sync_invalidations_service_impl_unittest.cc",
     "model/client_tag_based_data_type_processor_unittest.cc",
     "model/client_tag_based_remote_update_handler_unittest.cc",
+    "model/crypto/agile_symmetric_key_set_unittest.cc",
+    "model/crypto/agile_symmetric_key_unittest.cc",
+    "model/crypto/nigori_unittest.cc",
     "model/data_type_store_backend_unittest.cc",
     "model/data_type_store_impl_unittest.cc",
     "model/data_type_store_service_impl_unittest.cc",
@@ -213,6 +232,7 @@ source_set("unit_tests") {
     "model/data_type_sync_bridge_unittest.cc",
     "model/in_memory_metadata_change_list_unittest.cc",
     "model/mutable_data_batch_unittest.cc",
+    "model/processor_entity_metadata_unittest.cc",
     "model/processor_entity_tracker_unittest.cc",
     "model/processor_entity_unittest.cc",
     "model/string_ordinal_unittest.cc",
@@ -220,6 +240,8 @@ source_set("unit_tests") {
     "model/sync_data_unittest.cc",
     "model/syncable_service_based_bridge_unittest.cc",
     "nigori/cross_user_sharing_keys_unittest.cc",
+    "nigori/cross_user_sharing_public_key_unittest.cc",
+    "nigori/cross_user_sharing_public_private_key_pair_unittest.cc",
     "nigori/cryptographer_impl_unittest.cc",
     "nigori/keystore_keys_cryptographer_unittest.cc",
     "nigori/nigori_data_type_processor_unittest.cc",
@@ -227,6 +249,7 @@ source_set("unit_tests") {
     "nigori/nigori_state_unittest.cc",
     "nigori/nigori_storage_impl_unittest.cc",
     "nigori/nigori_sync_bridge_impl_unittest.cc",
+    "nigori/sync_encryption_handler_observer_list_unittest.cc",
     "protocol/collaboration_metadata_unittest.cc",
     "protocol/entity_data_unittest.cc",
     "protocol/proto_enum_conversions_unittest.cc",
@@ -236,6 +259,8 @@ source_set("unit_tests") {
     "service/data_type_controller_unittest.cc",
     "service/data_type_manager_impl_unittest.cc",
     "service/device_statistics_request_impl_unittest.cc",
+    "service/device_statistics_scheduler_unittest.cc",
+    "service/device_statistics_tracker_unittest.cc",
     "service/glue/sync_engine_impl_unittest.cc",
     "service/glue/sync_transport_data_prefs_unittest.cc",
     "service/history_sync_session_durations_metrics_recorder_unittest.cc",
@@ -257,6 +282,7 @@ source_set("unit_tests") {
     "service/sync_user_settings_impl_unittest.cc",
     "service/syncable_service_based_data_type_controller_unittest.cc",
     "service/trusted_vault_synthetic_field_trial_unittest.cc",
+    "test/unknown_field_util_unittest.cc",
   ]
 
   configs += [ "//build/config:precompiled_headers" ]
@@ -269,16 +295,18 @@ source_set("unit_tests") {
   deps = [
     ":sync",
     ":test_support",
+    ":test_support_proto",
     "//base",
     "//base/test:test_support",
     "//components/gcm_driver:test_support",
+    "//components/metrics",
+    "//components/network_time",
     "//components/os_crypt/async/browser:test_support",
-    "//components/os_crypt/sync",
-    "//components/os_crypt/sync:test_support",
     "//components/prefs:test_support",
     "//components/saved_tab_groups/public:prefs",
     "//components/signin/public/base:test_support",
     "//components/signin/public/identity_manager:test_support",
+    "//components/sync/model/crypto",
     "//components/sync_preferences:test_support",
     "//components/trusted_vault:test_support",
     "//components/variations:test_support",

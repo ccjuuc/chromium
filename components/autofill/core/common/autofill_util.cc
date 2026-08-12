@@ -4,6 +4,7 @@
 
 #include "components/autofill/core/common/autofill_util.h"
 
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -18,8 +19,13 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "components/autofill/core/common/autofill_constants.h"
 #include "components/autofill/core/common/autofill_features.h"
+#include "components/autofill/core/common/autofill_regex_constants.h"
+#include "components/autofill/core/common/autofill_regexes.h"
 #include "components/autofill/core/common/autofill_switches.h"
+#include "components/autofill/core/common/form_data.h"
+#include "components/autofill/core/common/form_field_data.h"
 
 namespace autofill {
 
@@ -97,16 +103,16 @@ std::u16string RemoveWhitespace(std::u16string_view value) {
 }
 
 std::u16string SanitizeCreditCardFieldValue(std::u16string_view value) {
-  std::u16string sanitized;
   // We remove whitespace as well as some invisible unicode characters.
-  base::TrimWhitespace(value, base::TRIM_ALL, &sanitized);
-  base::TrimString(sanitized,
-                   std::u16string({base::i18n::kRightToLeftMark,
-                                   base::i18n::kLeftToRightMark}),
-                   &sanitized);
+  value = base::TrimWhitespace(value, base::TRIM_ALL);
+  value = base::TrimString(value,
+                           std::u16string({base::i18n::kRightToLeftMark,
+                                           base::i18n::kLeftToRightMark}),
+                           base::TRIM_ALL);
   // Some sites have ____-____-____-____ in their credit card number fields, for
   // example.
-  base::RemoveChars(sanitized, u"-_", &sanitized);
+  std::u16string sanitized;
+  base::RemoveChars(value, u"-_", &sanitized);
   return sanitized;
 }
 
@@ -131,6 +137,7 @@ bool IsFillable(FocusedFieldType focused_field_type) {
     case FocusedFieldType::kFillableUsernameField:
     case FocusedFieldType::kFillablePasswordField:
     case FocusedFieldType::kFillableWebauthnTaggedField:
+    case FocusedFieldType::kContenteditableField:
       return true;
     case FocusedFieldType::kUnfillableElement:
     case FocusedFieldType::kUnknown:
@@ -183,10 +190,32 @@ IsPasswordRequestManuallyTriggered IsPasswordsAutofillManuallyTriggered(
       AutofillSuggestionTriggerSource::kManualFallbackPasswords);
 }
 
-bool IsPlusAddressesManuallyTriggered(
-    AutofillSuggestionTriggerSource trigger_source) {
-  return trigger_source ==
-         AutofillSuggestionTriggerSource::kManualFallbackPlusAddresses;
+// If any new @memory trigger source is added, all callers need to be reviewed.
+// Many assume that there are only two possible values.
+bool IsAtMemoryTriggerSource(AutofillSuggestionTriggerSource trigger_source) {
+  switch (trigger_source) {
+    case AutofillSuggestionTriggerSource::kAtMemoryContextMenu:
+    case AutofillSuggestionTriggerSource::kAtMemoryKeyboardShortcut:
+    case AutofillSuggestionTriggerSource::kAtMemoryTriggerString:
+      return true;
+    case AutofillSuggestionTriggerSource::kUnspecified:
+    case AutofillSuggestionTriggerSource::kFormControlElementClicked:
+    case AutofillSuggestionTriggerSource::kTextareaFocusedWithoutClick:
+    case AutofillSuggestionTriggerSource::kContentEditableClicked:
+    case AutofillSuggestionTriggerSource::kTextFieldValueChanged:
+    case AutofillSuggestionTriggerSource::kTextFieldDidReceiveKeyDown:
+    case AutofillSuggestionTriggerSource::kOpenTextDataListChooser:
+    case AutofillSuggestionTriggerSource::kPasswordManager:
+    case AutofillSuggestionTriggerSource::kiOS:
+    case AutofillSuggestionTriggerSource::kManualFallbackPasswords:
+    case AutofillSuggestionTriggerSource::kComposeDialogLostFocus:
+    case AutofillSuggestionTriggerSource::kComposeDelayedProactiveNudge:
+    case AutofillSuggestionTriggerSource::kPasswordManagerProcessedFocusedField:
+    case AutofillSuggestionTriggerSource::kProactivePasswordRecovery:
+    case AutofillSuggestionTriggerSource::kGlic:
+    case AutofillSuggestionTriggerSource::kAtMemoryInactivityNudge:
+      return false;
+  }
 }
 
 bool IsPaymentsFieldSwappingEnabled() {
@@ -199,11 +228,53 @@ std::u16string GetButtonTitlesString(const ButtonTitleList& titles_list) {
   return base::JoinString(titles, u",");
 }
 
-bool IsFormPerfectlyFilled(const FormData& form) {
-  return std::none_of(form.fields().begin(), form.fields().end(),
-                      [](const FormFieldData& field) {
-                        return field.is_user_edited() && !field.is_autofilled();
-                      });
+bool IsFormDataPerfectlyFilled(const FormData& form) {
+  return std::ranges::none_of(form.fields(), [](const FormFieldData& field) {
+    return (field.properties_mask() & kUserTyped) &&
+           !field.is_autofilled_according_to_renderer();
+  });
+}
+
+bool LikelyAugmentedPhoneCountryCode(const FormFieldData& field) {
+  // The limits for the number of <option>s in a <select> field in between which
+  // we consider a field to possibly be a phone country code field.
+  constexpr size_t kMinOptions = 5;
+  constexpr size_t kMaxOptions = kMaxSelectOptionsForCountryCode;
+
+  // Minimum percentage of matching options required (Details below).
+  constexpr size_t kMinPercentage = 90;
+
+  // Number of <options>s in a <select> up to which `kMinPercentage` does not
+  // apply. (Details below)
+  constexpr size_t kThresholdLowRange = 10;
+
+  // We don't have heuristics to detect a field as a phone country code if the
+  // field is not a <select> element.
+  if (field.form_control_type() != FormControlType::kSelectOne) {
+    return false;
+  }
+
+  // If `field` has too few or too many options --> Not a phone country code.
+  if (field.options().size() < kMinOptions ||
+      field.options().size() >= kMaxOptions) {
+    return false;
+  }
+
+  // Count the number of options matching `kAugmentedPhoneCountryCodeRe`.
+  size_t matching_options =
+      std::ranges::count_if(field.options(), [](const SelectOption& option) {
+        return MatchesRegex<kAugmentedPhoneCountryCodeParsingRe>(option.text);
+      });
+
+  // (1) Low range.
+  // All options or all but one option should match.
+  if (field.options().size() <= kThresholdLowRange) {
+    return matching_options + 1 >= field.options().size();
+  }
+
+  // (2) High range.
+  // At least `kMinPercentage`% of the field's options should match.
+  return matching_options * 100 >= field.options().size() * kMinPercentage;
 }
 
 }  // namespace autofill

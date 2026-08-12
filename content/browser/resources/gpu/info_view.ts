@@ -5,9 +5,8 @@
 import {assert} from 'chrome://resources/js/assert.js';
 import {CustomElement} from 'chrome://resources/js/custom_element.js';
 
-import type {AngleFeature, BrowserBridge, ClientInfo, FeatureStatus, Problem} from './browser_bridge.js';
+import type {AngleFeature, BrowserBridge, ClientInfo, Data, FeatureStatus, Problem} from './browser_bridge.js';
 import {getTemplate} from './info_view.html.js';
-
 // <if expr="enable_vulkan">
 import {VulkanInfo} from './vulkan_info.js';
 // </if>
@@ -147,11 +146,6 @@ function createElem(
   return elem;
 }
 
-export interface Data {
-  description: string;
-  id?: string;
-  value: string;
-}
 
 export interface ArrayData {
   description: string;
@@ -268,7 +262,7 @@ function createLinkPair(textContent: string, href: string) {
 function getDataValue(data: Data|ArrayData): string {
   return Array.isArray(data.value) ?
       data.value.map(data => getDataValue(data)).join(',') :
-      data.value;
+      data.value.toString();
 }
 
 /**
@@ -296,8 +290,8 @@ function getActiveGPU(data: Data[]|ArrayData[]) {
 }
 
 /** convert a value to a string or empty string if null or undefined */
-function safeString(value: any) {
-  return typeof value === 'undefined' || value === null ? '' : value.toString();
+function safeString(value: unknown) {
+  return typeof value === 'undefined' || value === null ? '' : String(value);
 }
 
 const kSections = {
@@ -674,6 +668,7 @@ export class InfoViewElement extends CustomElement {
       'skia_graphite': 'Skia Graphite',
       'webnn': 'WebNN',
       'trees_in_viz': 'TreesInViz',
+      'webgpu_on_vk_via_gl_interop': 'WebGPU interop',
     };
 
     const statusMap: Record<string, {label: string, class: string}> = {

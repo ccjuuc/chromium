@@ -12,10 +12,8 @@ build_webui("build") {
   static_files = [ "new_tab_footer.html" ]
 
   ts_files = [
-    "app.ts",
     "app.html.ts",
-    "browser_proxy.ts",
-    "customize_buttons_proxy.ts",
+    "app.ts",
     "window_proxy.ts",
   ]
   css_files = [ "app.css" ]

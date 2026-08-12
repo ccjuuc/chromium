@@ -53,8 +53,8 @@ typedef NS_OPTIONS(NSInteger, CWVPasswordLeakType) {
 };
 
 // All possible types of progress dialogs shown during an Autofill operation.
-// This is kept up to date with autofill::AutofillProgressDialogType in
-// components/autofill/core/browser/ui/autofill_progress_dialog_type.h.
+// This is kept up to date with autofill::AutofillProgressUiType in
+// components/autofill/core/browser/ui/payments/autofill_progress_ui_type.h.
 typedef NS_ENUM(NSInteger, CWVAutofillProgressDialogType) {
   // An invalid or unspecified type.
   CWVAutofillProgressDialogTypeUnspecified = 0,
@@ -98,7 +98,7 @@ typedef void (^ProceduralBlock)(void);
 // |userInitiated| is YES if field was focused as a result of user interaction.
 - (void)autofillController:(CWVAutofillController*)autofillController
     didFocusOnFieldWithIdentifier:(NSString*)fieldIdentifier
-                        fieldType:(NSString*)fieldType
+                        fieldType:(NSInteger)fieldType
                          formName:(NSString*)formName
                           frameID:(NSString*)frameID
                             value:(NSString*)value
@@ -109,7 +109,7 @@ typedef void (^ProceduralBlock)(void);
 // interaction.
 - (void)autofillController:(CWVAutofillController*)autofillController
     didInputInFieldWithIdentifier:(NSString*)fieldIdentifier
-                        fieldType:(NSString*)fieldType
+                        fieldType:(NSInteger)fieldType
                          formName:(NSString*)formName
                           frameID:(NSString*)frameID
                             value:(NSString*)value
@@ -119,20 +119,29 @@ typedef void (^ProceduralBlock)(void);
 // |userInitiated| is YES if field was blurred as a result of user interaction.
 - (void)autofillController:(CWVAutofillController*)autofillController
     didBlurOnFieldWithIdentifier:(NSString*)fieldIdentifier
-                       fieldType:(NSString*)fieldType
+                       fieldType:(NSInteger)fieldType
                         formName:(NSString*)formName
                          frameID:(NSString*)frameID
                            value:(NSString*)value
                    userInitiated:(BOOL)userInitiated;
 
-// Called when a form was submitted.
-// |userInitiated| is YES if form was submitted as a result of user interaction.
-// |perfectFilling| is true if the user submitted the form
-// without manually changing any of the autofilled data.
+// TODO(crbug.com/477630132): Remove this method.
+// DEPRECATED. Use
+// `-autofillController:didSubmitFormWithName:frameID:perfectFilling:` instead.
+// Called when a form was submitted. |userInitiated| is YES if form was
+// submitted as a result of user interaction. |perfectFilling| is true if the
+// user submitted the form without manually changing any of the autofilled data.
 - (void)autofillController:(CWVAutofillController*)autofillController
      didSubmitFormWithName:(NSString*)formName
                    frameID:(NSString*)frameID
              userInitiated:(BOOL)userInitiated
+            perfectFilling:(BOOL)perfectFilling;
+
+// Called when a form was submitted. |perfectFilling| is true if the user
+// submitted the form without manually changing any of the autofilled data.
+- (void)autofillController:(CWVAutofillController*)autofillController
+     didSubmitFormWithName:(NSString*)formName
+                   frameID:(NSString*)frameID
             perfectFilling:(BOOL)perfectFilling;
 
 // Called when |forms| are found in a frame with |frameID|.

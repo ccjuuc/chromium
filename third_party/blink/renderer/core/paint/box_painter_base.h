@@ -84,6 +84,7 @@ class BoxPainterBase {
       const PaintInfo&,
       const PhysicalRect&,
       const ComputedStyle&,
+      std::optional<BorderShapeReferenceRects> border_shape_rects,
       PhysicalBoxSides sides_to_include = PhysicalBoxSides());
 
   static void PaintInsetBoxShadowWithInnerRect(const PaintInfo&,
@@ -161,6 +162,16 @@ class BoxPainterBase {
                                  const PhysicalRect&,
                                  const PhysicalRect& scrolled_paint_rect,
                                  bool object_has_multiple_boxes);
+  void PaintFillLayerBorderAreaFillBox(const PaintInfo&,
+                                       const FillLayerInfo&,
+                                       Image*,
+                                       SkBlendMode composite_op,
+                                       const BackgroundImageGeometry&,
+                                       const PhysicalRect&,
+                                       const PhysicalRect& scrolled_paint_rect,
+                                       BackgroundBleedAvoidance,
+                                       bool include_text,
+                                       bool object_has_multiple_boxes);
   virtual void PaintTextClipMask(const PaintInfo&,
                                  const gfx::Rect& mask_rect,
                                  const PhysicalOffset& paint_offset,
@@ -176,11 +187,23 @@ class BoxPainterBase {
       BackgroundBleedAvoidance,
       bool is_painting_background_in_contents_space,
       PaintFlags paint_flags) const = 0;
+  // The node that the paint-timing path attributes a fill-layer image to,
+  // resolved by the subclass with LayoutObject::GeneratingNode(). Kept separate
+  // from `node_` so DevTools and image-animation paths continue to see the raw
+  // box node. Only called when a layer actually draws an image: resolving it
+  // walks the layout tree and dereferences the Node, and box painters are
+  // constructed for every box in every paint phase.
+  virtual Node* ImageGeneratingNode() const = 0;
   static void PaintInsetBoxShadow(
       const PaintInfo&,
       const ContouredRect&,
       const ComputedStyle&,
       PhysicalBoxSides sides_to_include = PhysicalBoxSides());
+  static void PaintInsetBoxShadowForBorderShape(
+      const PaintInfo&,
+      const PhysicalRect&,
+      const ComputedStyle&,
+      std::optional<BorderShapeReferenceRects> border_shape_rects);
 
  private:
   const Document& document_;

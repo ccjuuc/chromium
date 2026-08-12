@@ -4,7 +4,8 @@
 
 #include <jni.h>
 
-#include "chrome/browser/signin/identity_manager_provider.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "components/password_manager/core/browser/leak_detection/leak_detection_check_impl.h"
 #include "components/safety_check/safety_check.h"
 #include "components/user_prefs/user_prefs.h"
@@ -14,15 +15,15 @@
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "chrome/browser/safety_check/android/jni_headers/SafetyCheckBridge_jni.h"
 
-static jboolean JNI_SafetyCheckBridge_UserSignedIn(
+static bool JNI_SafetyCheckBridge_UserSignedIn(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& jhandle) {
   return password_manager::LeakDetectionCheckImpl::HasAccountForRequest(
-      signin::GetIdentityManagerForBrowserContext(
-          content::BrowserContextFromJavaHandle(jhandle)));
+      IdentityManagerFactory::GetForProfile(Profile::FromBrowserContext(
+          content::BrowserContextFromJavaHandle(jhandle))));
 }
 
-static jint JNI_SafetyCheckBridge_CheckSafeBrowsing(
+static int32_t JNI_SafetyCheckBridge_CheckSafeBrowsing(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& jhandle) {
   return static_cast<int>(

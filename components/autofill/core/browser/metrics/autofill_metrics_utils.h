@@ -5,9 +5,18 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_METRICS_AUTOFILL_METRICS_UTILS_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_METRICS_AUTOFILL_METRICS_UTILS_H_
 
+#include <stdint.h>
+
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_structure.h"
-#include "components/autofill/core/browser/metrics/autofill_metrics.h"
+#include "components/autofill/core/browser/form_types.h"
+#include "components/autofill/core/browser/suggestions/suggestion_util.h"
+#include "components/autofill/core/common/aliases.h"
+#include "components/autofill/core/common/dense_set.h"
+#include "components/autofill/core/common/unique_ids.h"
 
 namespace autofill::autofill_metrics {
 
@@ -94,27 +103,32 @@ SettingsVisibleFieldTypeForMetrics ConvertSettingsVisibleFieldTypeForMetrics(
 
 // Returns the set of all fillable form types for `form.`
 DenseSet<FormTypeNameForLogging> GetFormTypesForLogging(
-    const FormStructure& form);
+    const FormStructure& form,
+    AutocompleteUnrecognizedBehavior ac_unrecognized_behavior);
 
 // Returns GetFormTypesForLogging() where entries need to correspond to
 // `FormType::kAddressForm`.
 DenseSet<FormTypeNameForLogging> GetAddressFormTypesForLogging(
-    const FormStructure& form);
+    const FormStructure& form,
+    AutocompleteUnrecognizedBehavior ac_unrecognized_behavior);
 
 // Returns GetFormTypesForLogging() where entries need to correspond to
 // `FormType::kOneTimePasswordForm`.
 DenseSet<FormTypeNameForLogging> GetOneTimePasswordTypesForLogging(
-    const FormStructure& form);
+    const FormStructure& form,
+    AutocompleteUnrecognizedBehavior ac_unrecognized_behavior);
 
 // Returns GetFormTypesForLogging() where entries need to correspond to
 // `FormType::kLoyaltyCardForm`.
 DenseSet<FormTypeNameForLogging> GetLoyaltyFormTypesForLogging(
-    const FormStructure& form);
+    const FormStructure& form,
+    AutocompleteUnrecognizedBehavior ac_unrecognized_behavior);
 
 // Returns GetFormTypesForLogging() where entries need to correspond to
 // `FormType::kCreditCardForm` or `FormType::kStandaloneCvcForm`.
 DenseSet<FormTypeNameForLogging> GetCreditCardFormTypesForLogging(
-    const FormStructure& form);
+    const FormStructure& form,
+    AutocompleteUnrecognizedBehavior ac_unrecognized_behavior);
 
 // Returns true if `profile` has at least 2 fields of the types
 // `ADDRESS_HOME_CITY`, `ADDRESS_HOME_STATE`, `ADDRESS_HOME_STREET_ADDRESS` or

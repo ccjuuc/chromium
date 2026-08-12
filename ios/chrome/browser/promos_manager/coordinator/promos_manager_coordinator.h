@@ -8,20 +8,17 @@
 #import "ios/chrome/browser/promos_manager/coordinator/promos_manager_ui_handler.h"
 #import "ios/chrome/browser/shared/coordinator/chrome_coordinator/chrome_coordinator.h"
 
-@protocol ApplicationCommands;
 @protocol CredentialProviderPromoCommands;
-@protocol DockingPromoCommands;
+@protocol SceneCommands;
 
 // Coordinator for displaying app-wide promos.
 @interface PromosManagerCoordinator : ChromeCoordinator <PromosManagerUIHandler>
 
-- (instancetype)
-        initWithBaseViewController:(UIViewController*)viewController
-                           browser:(Browser*)browser
-                applicationHandler:(id<ApplicationCommands>)applicationHandler
-    credentialProviderPromoHandler:
-        (id<CredentialProviderPromoCommands>)credentialProviderPromoHandler
-               dockingPromoHandler:(id<DockingPromoCommands>)dockingPromoHandler
+- (instancetype)initWithBaseViewController:(UIViewController*)viewController
+                                   browser:(Browser*)browser
+                              sceneHandler:(id<SceneCommands>)sceneHandler
+            credentialProviderPromoHandler:(id<CredentialProviderPromoCommands>)
+                                               credentialProviderPromoHandler
     NS_DESIGNATED_INITIALIZER;
 
 - (instancetype)initWithBaseViewController:(UIViewController*)viewController

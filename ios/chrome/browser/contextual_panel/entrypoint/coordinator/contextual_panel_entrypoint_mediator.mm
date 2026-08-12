@@ -12,6 +12,7 @@
 #import "base/strings/sys_string_conversions.h"
 #import "base/timer/timer.h"
 #import "components/feature_engagement/public/tracker.h"
+#import "ios/chrome/browser/contextual_panel/entrypoint/coordinator/contextual_panel_entrypoint_constants.h"
 #import "ios/chrome/browser/contextual_panel/entrypoint/coordinator/contextual_panel_entrypoint_mediator_delegate.h"
 #import "ios/chrome/browser/contextual_panel/entrypoint/ui/contextual_panel_entrypoint_consumer.h"
 #import "ios/chrome/browser/contextual_panel/entrypoint/ui/contextual_panel_entrypoint_visibility_delegate.h"
@@ -24,7 +25,7 @@
 #import "ios/chrome/browser/infobars/model/infobar_badge_tab_helper.h"
 #import "ios/chrome/browser/infobars/model/infobar_badge_tab_helper_observer.h"
 #import "ios/chrome/browser/infobars/model/infobar_badge_tab_helper_observer_bridge.h"
-#import "ios/chrome/browser/intelligence/bwg/model/bwg_tab_helper.h"
+#import "ios/chrome/browser/intelligence/bwg/model/gemini_tab_helper.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list_observer_bridge.h"
 #import "ios/chrome/browser/shared/public/commands/contextual_panel_entrypoint_iph_commands.h"
@@ -119,9 +120,8 @@
         _infobarBadgeObserverBridge.get());
 
     if (_webStateList->GetActiveWebState()) {
-      _infobarBadgeObservation->Observe(
-          InfobarBadgeTabHelper::GetOrCreateForWebState(
-              _webStateList->GetActiveWebState()));
+      _infobarBadgeObservation->Observe(InfobarBadgeTabHelper::FromWebState(
+          _webStateList->GetActiveWebState()));
     }
   }
   return self;
@@ -269,8 +269,7 @@
 
   // Register observer bridge for the new WebState's InfobarBadgeTabHelper.
   _infobarBadgeObservation->Observe(
-      InfobarBadgeTabHelper::GetOrCreateForWebState(
-          status.new_active_web_state));
+      InfobarBadgeTabHelper::FromWebState(status.new_active_web_state));
 
   ContextualPanelTabHelper* contextualPanelTabHelper =
       ContextualPanelTabHelper::FromWebState(status.new_active_web_state);
@@ -294,20 +293,13 @@
   if (!active_web_state || active_web_state->IsBeingDestroyed()) {
     return;
   }
-  if (tabHelper !=
-      InfobarBadgeTabHelper::GetOrCreateForWebState(active_web_state)) {
+  if (tabHelper != InfobarBadgeTabHelper::FromWebState(active_web_state)) {
     return;
   }
 
   size_t badgesCount = tabHelper->GetInfobarBadgesCount();
 
   BOOL infobarBadgesCurrentlyShown = badgesCount > 0;
-
-  // Disable contextual panel separator when Proactive Suggestions Framework is
-  // enabled to prevent conflicts.
-  if (IsProactiveSuggestionsFrameworkEnabled()) {
-    infobarBadgesCurrentlyShown = NO;
-  }
 
   if (_infobarBadgesCurrentlyShown == infobarBadgesCurrentlyShown) {
     return;
@@ -346,10 +338,10 @@
 
   // Prevents entrypoint from showing while the Gemini promo is showing.
   if (IsPageActionMenuEnabled()) {
-    BwgTabHelper* BWGTabHelper =
-        BwgTabHelper::FromWebState(_webStateList->GetActiveWebState());
-    if (BWGTabHelper) {
-      if (BWGTabHelper->ShouldPreventContextualPanelEntryPoint()) {
+    GeminiTabHelper* geminiTabHelper =
+        GeminiTabHelper::FromWebState(_webStateList->GetActiveWebState());
+    if (geminiTabHelper) {
+      if (geminiTabHelper->ShouldPreventContextualPanelEntryPoint()) {
         [self.consumer hideEntrypoint];
         return;
       }
@@ -426,8 +418,7 @@
 
   _transitionToDefaultEntrypointTimer = std::make_unique<base::OneShotTimer>();
   _transitionToDefaultEntrypointTimer->Start(
-      FROM_HERE,
-      base::Seconds(LargeContextualPanelEntrypointDisplayedInSeconds()),
+      FROM_HERE, kLargeContextualPanelEntrypointDisplayDuration,
       base::BindOnce(^{
         [weakSelf cleanupAndTransitionToSmallEntrypoint];
       }));
@@ -444,7 +435,7 @@
   _transitionToEntrypointLoudMomentTimer =
       std::make_unique<base::OneShotTimer>();
   _transitionToEntrypointLoudMomentTimer->Start(
-      FROM_HERE, base::Seconds(LargeContextualPanelEntrypointDelayInSeconds()),
+      FROM_HERE, kLargeContextualPanelEntrypointAppearanceDelay,
       base::BindOnce(^{
         [weakSelf setupAndTransitionToLargeEntrypoint];
       }));
@@ -493,8 +484,7 @@
   __weak ContextualPanelEntrypointMediator* weakSelf = self;
   _transitionToDefaultEntrypointTimer = std::make_unique<base::OneShotTimer>();
   _transitionToDefaultEntrypointTimer->Start(
-      FROM_HERE,
-      base::Seconds(LargeContextualPanelEntrypointDisplayedInSeconds()),
+      FROM_HERE, kLargeContextualPanelEntrypointDisplayDuration,
       base::BindOnce(^{
         [weakSelf dismissEntrypointIPHAnimated:YES];
         [weakSelf.delegate enableFullscreen];
@@ -506,7 +496,7 @@
   _transitionToEntrypointLoudMomentTimer =
       std::make_unique<base::OneShotTimer>();
   _transitionToEntrypointLoudMomentTimer->Start(
-      FROM_HERE, base::Seconds(LargeContextualPanelEntrypointDelayInSeconds()),
+      FROM_HERE, kLargeContextualPanelEntrypointAppearanceDelay,
       base::BindOnce(^{
         [weakSelf setupAndShowEntrypointIPH];
       }));

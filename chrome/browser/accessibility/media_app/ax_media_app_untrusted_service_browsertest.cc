@@ -37,7 +37,6 @@
 #include "services/screen_ai/public/mojom/screen_ai_service.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/accessibility/ax_action_data.h"
-#include "ui/accessibility/ax_enums.mojom-shared.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_event_generator.h"
 #include "ui/accessibility/ax_node.h"
@@ -120,7 +119,7 @@ class AXMediaAppUntrustedServiceTest : public InProcessBrowserTest {
         pageReceiver = pageRemote.InitWithNewPipeAndPassReceiver();
 
     service_ = std::make_unique<TestAXMediaAppUntrustedService>(
-        *browser()->profile(), browser()->window()->GetNativeWindow(),
+        *browser()->GetProfile(), browser()->GetWindow()->GetNativeWindow(),
         std::move(pageRemote));
     ASSERT_NE(nullptr, service_.get());
     service_->SetMediaAppForTesting(&fake_media_app_);

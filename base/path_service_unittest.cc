@@ -4,8 +4,9 @@
 
 #include "base/path_service.h"
 
+#include <algorithm>
+
 #include "base/base_paths.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -50,6 +51,12 @@ bool ReturnsValidPath(int key) {
   // |result| is true and !path.empty() is the best we can do.
   bool check_path_exists = true;
 
+#if BUILDFLAG(IS_ANDROID)
+  // Returns path within the .apk. e.g.: .../base.apk!/lib/x86_64
+  if (key == DIR_MODULE) {
+    check_path_exists = false;
+  }
+#endif
 #if BUILDFLAG(IS_POSIX)
   // If chromium has never been started on this account, the cache path may not
   // exist.
@@ -143,8 +150,9 @@ TEST_F(PathServiceTest, Get) {
   constexpr std::array<BasePathKey, 0> kUnsupportedKeys = {};
 #endif  // BUILDFLAG(IS_ANDROID)
   for (int key = PATH_START + 1; key < PATH_END; ++key) {
-    EXPECT_PRED1(Contains(kUnsupportedKeys, key) ? &ReturnsInvalidPath
-                                                 : &ReturnsValidPath,
+    EXPECT_PRED1(std::ranges::contains(kUnsupportedKeys, key)
+                     ? &ReturnsInvalidPath
+                     : &ReturnsValidPath,
                  key);
   }
 #if BUILDFLAG(IS_WIN)

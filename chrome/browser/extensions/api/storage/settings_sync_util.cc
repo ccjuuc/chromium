@@ -29,8 +29,9 @@ base::WeakPtr<syncer::SyncableService> GetSyncableServiceOnBackendSequence(
     base::WeakPtr<SyncValueStoreCache> sync_cache,
     syncer::DataType type) {
   DCHECK(IsOnBackendSequence());
-  if (!sync_cache)
+  if (!sync_cache) {
     return nullptr;
+  }
   return sync_cache->GetSyncableService(type)->AsWeakPtr();
 }
 
@@ -114,7 +115,7 @@ syncer::SyncChange CreateDelete(const ExtensionId& extension_id,
                                 syncer::DataType type) {
   return syncer::SyncChange(
       FROM_HERE, syncer::SyncChange::ACTION_DELETE,
-      CreateData(extension_id, key, base::Value(base::Value::Dict()), type));
+      CreateData(extension_id, key, base::Value(base::DictValue()), type));
 }
 
 base::OnceCallback<base::WeakPtr<syncer::SyncableService>()>

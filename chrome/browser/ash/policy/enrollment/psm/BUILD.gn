@@ -2,14 +2,10 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-
 assert(is_chromeos)
 
 static_library("psm") {
   sources = [
-    "fake_rlwe_dmserver_client.cc",
-    "fake_rlwe_dmserver_client.h",
     "rlwe_dmserver_client.h",
     "rlwe_dmserver_client_impl.cc",
     "rlwe_dmserver_client_impl.h",

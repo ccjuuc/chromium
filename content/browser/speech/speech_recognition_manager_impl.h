@@ -33,6 +33,7 @@ class MediaStreamManager;
 class MediaStreamUIProxy;
 class SpeechRecognitionManagerDelegate;
 class SpeechRecognizer;
+struct GlobalRenderFrameHostId;
 
 // This is the manager for speech recognition. It is a single instance in
 // the browser process and can serve several requests. Each recognition request
@@ -61,6 +62,13 @@ class CONTENT_EXPORT SpeechRecognitionManagerImpl
   // issued when it is not created yet or destroyed (by BrowserMainLoop).
   static SpeechRecognitionManagerImpl* GetInstance();
 
+  // Returns the number of sessions tracked by FrameSessionTracker.
+  static int GetSessionTrackerCountForTesting(
+      GlobalRenderFrameHostId global_id);
+
+  static bool IsOptimizationGuideSpeechModel(
+      const SpeechRecognitionSessionConfig& config);
+
   // SpeechRecognitionManager implementation.
   int CreateSession(const SpeechRecognitionSessionConfig& config) override;
   int CreateSession(
@@ -73,8 +81,8 @@ class CONTENT_EXPORT SpeechRecognitionManagerImpl
           audio_forwarder_config) override;
   void StartSession(int session_id) override;
   void AbortSession(int session_id) override;
-  void AbortAllSessionsForRenderFrame(int render_process_id,
-                                      int render_frame_id) override;
+  void AbortAllSessionsForRenderFrame(
+      GlobalRenderFrameHostId global_id) override;
   void StopAudioCaptureForSession(int session_id) override;
   void UpdateRecognitionContextForSession(
       int session_id,
@@ -171,6 +179,10 @@ class CONTENT_EXPORT SpeechRecognitionManagerImpl
                                   bool ask_user,
                                   bool is_allowed);
 
+  void LogBackendSpecificErrorOccurred(
+      const SpeechRecognitionSessionConfig& config,
+      media::mojom::SpeechRecognitionErrorCode error_code);
+
   // Callback to get back the result of a media request. |devices| is an array
   // of devices approved to be used for the request, |devices| is empty if the
   // users deny the request.
@@ -216,9 +228,6 @@ class CONTENT_EXPORT SpeechRecognitionManagerImpl
   bool is_dispatching_event_ = false;
   std::unique_ptr<SpeechRecognitionManagerDelegate> delegate_;
   const int requester_id_;
-
-  mojo::Remote<media::mojom::SpeechRecognitionContext>
-      speech_recognition_context_;
 
   // Used for posting asynchronous tasks (on the IO thread) without worrying
   // about this class being destroyed in the meanwhile (due to browser shutdown)

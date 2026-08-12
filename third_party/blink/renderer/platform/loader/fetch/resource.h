@@ -30,8 +30,9 @@
 
 #include "base/auto_reset.h"
 #include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/gtest_prod_util.h"
-#include "base/memory/memory_pressure_listener.h"
+#include "base/memory_coordinator/memory_consumer.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "mojo/public/cpp/base/big_buffer.h"
@@ -42,7 +43,7 @@
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_counted_set.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 #include "third_party/blink/renderer/platform/heap/prefinalizer.h"
-#include "third_party/blink/renderer/platform/instrumentation/memory_pressure_listener.h"
+#include "third_party/blink/renderer/platform/instrumentation/memory_coordinator/memory_consumer_registration.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/web_process_memory_dump.h"
 #include "third_party/blink/renderer/platform/loader/fetch/integrity_metadata.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_client.h"
@@ -71,6 +72,11 @@ class Clock;
 }
 
 namespace blink {
+
+PLATFORM_EXPORT BASE_DECLARE_FEATURE(
+    kPreventExtensionResourceFetchAcrossIsolatedWorlds);
+PLATFORM_EXPORT BASE_DECLARE_FEATURE(
+    kPreventCrossWorldServiceWorkerResourceReuse);
 
 class BackgroundResponseProcessorFactory;
 class BlobDataHandle;
@@ -104,12 +110,16 @@ enum class ResourceType : uint8_t {
   kMaxValue = kDictionary
 };
 
+// Returns the "as" attribute value string for a given ResourceType.
+// https://html.spec.whatwg.org/C/#preload-destination
+PLATFORM_EXPORT String GetAsAttributeFromResourceType(ResourceType);
+
 // A resource that is held in the cache. Classes who want to use this object
 // should derive from ResourceClient, to get the function calls in case the
 // requested data has arrived. This class also does the actual communication
 // with the loader to obtain the resource from the network.
 class PLATFORM_EXPORT Resource : public GarbageCollected<Resource>,
-                                 public base::MemoryPressureListener {
+                                 public base::MemoryConsumer {
   USING_PRE_FINALIZER(Resource, Dispose);
 
  public:
@@ -155,6 +165,12 @@ class PLATFORM_EXPORT Resource : public GarbageCollected<Resource>,
 
     // Match fails due to different script types.
     kScriptTypeDoesNotMatch,
+
+    // Match fails because it's a cross-world extension resource request.
+    kCrossWorldExtensionResourceMismatch,
+
+    // Match fails because it's a cross-world service worker resource request.
+    kCrossWorldServiceWorkerResourceMismatch,
   };
 
   Resource(const Resource&) = delete;
@@ -290,7 +306,7 @@ class PLATFORM_EXPORT Resource : public GarbageCollected<Resource>,
       scoped_refptr<base::SingleThreadTaskRunner> loader_task_runner) {}
   virtual void DidReceiveDecodedData(
       const String& data,
-      std::unique_ptr<ParkableStringImpl::SecureDigest> digest) {}
+      std::unique_ptr<SecureStringDigest> digest) {}
   void SetResponse(const ResourceResponse&);
   const ResourceResponse& GetResponse() const { return response_; }
   ResourceResponse& GetMutableResponseForTesting() { return response_; }
@@ -348,7 +364,7 @@ class PLATFORM_EXPORT Resource : public GarbageCollected<Resource>,
   bool StaleRevalidationStarted() const { return stale_revalidation_started_; }
   void SetStaleRevalidationStarted() { stale_revalidation_started_ = true; }
 
-  const IntegrityMetadataSet& IntegrityMetadata() const {
+  const IntegrityMetadataSet& GetIntegrityMetadata() const {
     return options_.integrity_metadata;
   }
   bool PassedIntegrityChecks() const {
@@ -459,7 +475,7 @@ class PLATFORM_EXPORT Resource : public GarbageCollected<Resource>,
   }
 
   // Sets the ResourceRequest to be tagged as an ad.
-  void SetIsAdResource();
+  void SetIsAdResource(AdProvenance ad_provenance);
 
   void DidRemoveClientOrObserver();
 
@@ -540,6 +556,7 @@ class PLATFORM_EXPORT Resource : public GarbageCollected<Resource>,
   // Call this when the resource is successfully retrieved from MemoryCache.
   void IncrementMemoryCacheHitCount() { ++memory_cache_hit_count_; }
   uint32_t MemoryCacheHitCount() const { return memory_cache_hit_count_; }
+  double DecayedHitScore() const { return decayed_hit_score_; }
 
  private:
   friend class ResourceLoader;
@@ -553,8 +570,9 @@ class PLATFORM_EXPORT Resource : public GarbageCollected<Resource>,
 
   String ReasonNotDeletable() const;
 
-  // MemoryPressureListener overrides:
-  void OnMemoryPressure(base::MemoryPressureLevel) override;
+  // base::MemoryConsumer overrides:
+  void OnReleaseMemory() override;
+  void OnUpdateMemoryLimit() override;
 
   void CheckResourceIntegrity();
   void TriggerNotificationForFinishObservers(base::SingleThreadTaskRunner*);
@@ -588,6 +606,7 @@ class PLATFORM_EXPORT Resource : public GarbageCollected<Resource>,
   bool is_preloaded_by_early_hints_ = false;
 
   uint32_t memory_cache_hit_count_ = 0;
+  double decayed_hit_score_ = 0.0;
 
   enum class RevalidationStatus {
     kNoRevalidatingOrFailed,  // not in revalidate procedure or
@@ -632,7 +651,7 @@ class PLATFORM_EXPORT Resource : public GarbageCollected<Resource>,
 
   WebScopedVirtualTimePauser virtual_time_pauser_;
 
-  MemoryPressureListenerRegistration memory_pressure_listener_registration_;
+  MemoryConsumerRegistration memory_consumer_registration_;
 };
 
 class ResourceFactory {

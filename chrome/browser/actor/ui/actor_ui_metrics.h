@@ -26,12 +26,21 @@ void LogTaskListBubbleRowClicked();
 // This fails if the nudge is in the default state.
 void LogTaskNudgeClick(ActorTaskNudgeState nudge_state);
 
+// Logs a click on the global task indicator.
+void LogGlobalTaskIndicatorClick(ActorTaskNudgeState nudge_state);
+
 // Recorded when the task list bubble is shown.
 // `count` is the number of rows shown in the bubble.
 void RecordTaskListBubbleRows(size_t count);
 
+// Recorded when an error happens in the ActorUiTaskIcon.
+void RecordTaskIconError(ActorUiTaskIconError error);
+
 // Recorded when the task nudge is shown.
 void RecordTaskNudgeShown(ActorTaskNudgeState nudge_state);
+
+// Recorded when the global task indicator nudge is shown.
+void RecordGlobalTaskIndicatorNudgeShown(ActorTaskNudgeState nudge_state);
 
 // Records web content attachment for the actuating tab.
 void RecordActuatingTabWebContentsAttached();
@@ -58,6 +67,11 @@ void RecordComputedTargetResult(ComputedTargetResult target_result);
 
 // Recorded when the model page target type is determined.
 void RecordModelPageTargetType(ModelPageTargetType target_type);
+
+// Recorded when the renderer resolved target result is retrieved by the event
+// dispatcher.
+void RecordRendererResolvedTargetResult(
+    RendererResolvedTargetResult target_result);
 
 }  // namespace actor::ui
 #endif  // CHROME_BROWSER_ACTOR_UI_ACTOR_UI_METRICS_H_

@@ -18,9 +18,8 @@
 #include "base/test/bind.h"
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/test_future.h"
 #include "build/build_config.h"
-#include "content/browser/attribution_reporting/test/mock_attribution_data_host_manager.h"
-#include "content/browser/attribution_reporting/test/mock_attribution_manager.h"
 #include "content/browser/back_forward_cache_test_util.h"
 #include "content/browser/loader/keep_alive_request_browsertest_util.h"
 #include "content/browser/loader/keep_alive_url_loader.h"
@@ -46,6 +45,7 @@
 #include "net/http/http_request_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/test/embedded_test_server/controllable_http_response.h"
+#include "net/test/embedded_test_server/expectation_handler.h"
 #include "net/test/embedded_test_server/request_handler_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -57,6 +57,7 @@ namespace content {
 namespace {
 
 using testing::Contains;
+using testing::Not;
 using testing::Pair;
 
 constexpr char16_t kPromiseResolvedPageTitle[] = u"Resolved";
@@ -976,83 +977,6 @@ IN_PROC_BROWSER_TEST_P(FetchKeepAlivePreMigrationBrowserTest,
       ExpectedFailedRequests(/*browser=*/0));
 }
 
-class KeepAliveURLAttributionReportingBrowserTest
-    : public FetchKeepAliveCommonTestBase,
-      public ::testing::WithParamInterface<std::string> {
- protected:
-  void SetUp() override {
-    // Attribution Reporting API only supports HTTPS requests.
-    SetUseHttps();
-    FetchKeepAliveCommonTestBase::SetUp();
-  }
-
-  void SetUpOnMainThread() override {
-    auto mock_manager = std::make_unique<MockAttributionManager>();
-    auto mock_data_host_manager =
-        std::make_unique<MockAttributionDataHostManager>();
-    mock_manager->SetDataHostManager(std::move(mock_data_host_manager));
-    static_cast<StoragePartitionImpl*>(
-        web_contents()->GetBrowserContext()->GetDefaultStoragePartition())
-        ->OverrideAttributionManagerForTesting(std::move(mock_manager));
-
-    FetchKeepAliveCommonTestBase::SetUpOnMainThread();
-  }
-
-  const FeaturesType& GetEnabledFeatures() override {
-    static const FeaturesType enabled_features =
-        GetDefaultEnabledBackForwardCacheFeaturesForTesting(
-            {{blink::features::kKeepAliveInBrowserMigration, {}}});
-    return enabled_features;
-  }
-};
-
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    KeepAliveURLAttributionReportingBrowserTest,
-    ::testing::Values(net::HttpRequestHeaders::kGetMethod,
-                      net::HttpRequestHeaders::kPostMethod),
-    [](const testing::TestParamInfo<
-        KeepAliveURLAttributionReportingBrowserTest::ParamType>& info) {
-      return info.param;
-    });
-
-IN_PROC_BROWSER_TEST_P(KeepAliveURLAttributionReportingBrowserTest,
-                       ReceiveViolatingCSPRedirect_NotForwarded) {
-  const std::string method = GetParam();
-  const char violating_csp_redirect_target[] =
-      "http://b.test/beacon-redirected";
-  auto request_handler =
-      std::move(RegisterRequestHandlers({kKeepAliveEndpoint})[0]);
-  ASSERT_TRUE(server()->Start());
-  const GURL allowed_csp_url = server()->GetURL(kAllowedCspHost, "/");
-
-  auto* data_host_manager = static_cast<MockAttributionDataHostManager*>(
-      AttributionManager::FromWebContents(web_contents())
-          ->GetDataHostManager());
-  EXPECT_CALL(*data_host_manager, NotifyBackgroundRegistrationStarted).Times(1);
-  EXPECT_CALL(*data_host_manager, NotifyBackgroundRegistrationData).Times(0);
-  EXPECT_CALL(*data_host_manager, NotifyBackgroundRegistrationCompleted)
-      .Times(1);
-
-  // Set up redirects according to the following redirect chain:
-  // fetch("http://a.test:<port>/beacon", keepalive: true)
-  // --> http://b.test/beacon-redirected
-  ASSERT_NO_FATAL_FAILURE(
-      LoadPageWithKeepAliveRequestAndSendResponseAfterUnload(
-          GetKeepAlivePageURL(
-              method, /*num_requests=*/1,
-              GetConnectSrcCSPHeader(url::Origin::Create(allowed_csp_url))),
-          request_handler.get(),
-          base::StringPrintf(k301Response, violating_csp_redirect_target)));
-
-  // The redirect doesn't match CSP source from the 1st page, so the loader is
-  // terminated.
-  // While the 1st page is unloaded, the disconnection may not propagate to
-  // browser process in time, such that calling
-  // `WaitforTotalCompleteProcessed()` here might be flaky.
-  loaders_observer().WaitForTotalOnComplete({net::ERR_BLOCKED_BY_CSP});
-}
-
 class KeepAliveFetchRetryBrowserTest
     : public FetchKeepAliveCommonTestBase,
       public ::testing::WithParamInterface<std::string> {
@@ -1190,16 +1114,14 @@ IN_PROC_BROWSER_TEST_P(KeepAliveFetchRetryBrowserTest,
 // Test failing a load due to HTTP 500 error. The request should not be retried.
 IN_PROC_BROWSER_TEST_P(KeepAliveFetchRetryBrowserTest,
                        FailedNotRetried_HTTPError) {
-  net::test_server::ControllableHttpResponse response(server(),
-                                                      kKeepAliveEndpoint);
+  net::test_server::ExpectationHandler handler(server());
+  // Send a HTTP 500 response. This should not be retried, as it's not a network
+  // error
+  handler.OnRequest(kKeepAliveEndpoint)
+      .RespondWith(net::HTTP_INTERNAL_SERVER_ERROR, "text/html", "");
   ASSERT_TRUE(server()->Start());
   const auto beacon_url = server()->GetURL(kPrimaryHost, kKeepAliveEndpoint);
   LoadPageAndTriggerFetchKeepaliveWithRetry(beacon_url);
-  // Send a HTTP 500 response. This should not be retried, as it's not a network
-  // error.
-  response.WaitForRequest();
-  response.Send(net::HTTP_INTERNAL_SERVER_ERROR);
-  response.Done();
   loaders_observer().WaitForTotalOnReceiveResponse(1);
   loaders_observer().WaitForTotalOnComplete({net::OK});
   loaders_observer().WaitForTotalOnCompleteForwarded({net::OK});
@@ -1408,7 +1330,6 @@ IN_PROC_BROWSER_TEST_P(KeepAliveFetchRetryBrowserTest,
   static_cast<StoragePartitionImpl*>(
       web_contents()->GetBrowserContext()->GetDefaultStoragePartition())
       ->ClearData(StoragePartition::REMOVE_KEEPALIVE_LOADS_ATTEMPTING_RETRY,
-                  StoragePartition::QUOTA_MANAGED_STORAGE_MASK_ALL,
                   blink::StorageKey(), base::Time(), base::Time::Max(),
                   run_loop.QuitClosure());
   run_loop.Run();
@@ -1482,6 +1403,123 @@ IN_PROC_BROWSER_TEST_P(KeepAliveFetchRetryBrowserTest, RetryOptionsSet) {
                                                    beacon_url)));
 }
 
-// TODO(crbug.com/417930271): test unload, redirects, timeout, attribution.
+// TODO(crbug.com/417930271): test unload, redirects, timeout.
+
+// Regression test for crbug.com/489744805: when the renderer is disconnected
+// (page unloaded), the browser-side EndReceiveRedirect() must strip the
+// Authorization header on cross-origin redirect per Fetch spec Step 13.
+//
+// Authorization is stripped before the redirect, so no CORS preflight is
+// needed (Authorization is a non-safelisted header).
+IN_PROC_BROWSER_TEST_P(KeepAliveURLBrowserTest,
+                       CrossOriginRedirectStripsAuthorizationAfterUnload) {
+  const std::string method = GetParam();
+  const char redirect_target[] = "/beacon-redirected";
+  auto request_handlers =
+      RegisterRequestHandlers({kKeepAliveEndpoint, redirect_target});
+  ASSERT_TRUE(server()->Start());
+
+  // Navigate to a.test and send a keepalive fetch with Authorization header.
+  ASSERT_TRUE(NavigateToURL(web_contents(),
+                            server()->GetURL(kPrimaryHost, "/title1.html")));
+  const auto cross_origin_target =
+      server()->GetURL(kSecondaryHost, redirect_target);
+  ASSERT_TRUE(ExecJs(web_contents(),
+                     JsReplace(R"(
+    fetch($1, {
+      keepalive: true,
+      method: $2,
+      headers: {'Authorization': 'Bearer SECRET_TOKEN'},
+    });
+  )",
+                               kKeepAliveEndpoint, method),
+                     content::EXECUTE_SCRIPT_NO_RESOLVE_PROMISES));
+
+  // Wait for the initial same-origin request.
+  request_handlers[0]->WaitForRequest();
+  EXPECT_THAT(request_handlers[0]->http_request()->headers,
+              Contains(Pair(net::HttpRequestHeaders::kAuthorization,
+                            "Bearer SECRET_TOKEN")));
+
+  // Navigate away to disconnect the renderer.
+  ASSERT_TRUE(NavigateToURL(web_contents(), GURL("about:blank")));
+
+  // Send the cross-origin redirect. The browser handles this via
+  // EndReceiveRedirect() since the renderer is disconnected.
+  request_handlers[0]->Send(
+      base::StringPrintf(k301Response, cross_origin_target.spec().c_str()));
+  request_handlers[0]->Done();
+
+  loaders_observer().WaitForTotalOnReceiveRedirectProcessed(1);
+
+  // Wait for the redirected request. Authorization was stripped, so no CORS
+  // preflight is needed.
+  request_handlers[1]->WaitForRequest();
+  EXPECT_NE(request_handlers[1]->http_request()->method_string, "OPTIONS");
+
+  // The Authorization header must be stripped on cross-origin redirect.
+  EXPECT_THAT(
+      request_handlers[1]->http_request()->headers,
+      Not(Contains(Pair(net::HttpRequestHeaders::kAuthorization, testing::_))));
+  request_handlers[1]->Send(
+      "HTTP/1.1 200 OK\r\n"
+      "Access-Control-Allow-Origin: *\r\n"
+      "Content-Type: text/plain\r\n"
+      "\r\n"
+      "OK");
+  request_handlers[1]->Done();
+}
+
+// Verify that Authorization header is preserved on same-origin redirect
+// when the browser handles it after page unload.
+IN_PROC_BROWSER_TEST_P(KeepAliveURLBrowserTest,
+                       SameOriginRedirectPreservesAuthorizationAfterUnload) {
+  const std::string method = GetParam();
+  const char redirect_target[] = "/beacon-redirected";
+  auto request_handlers =
+      RegisterRequestHandlers({kKeepAliveEndpoint, redirect_target});
+  ASSERT_TRUE(server()->Start());
+
+  // Navigate to a.test and send a keepalive fetch with Authorization header.
+  ASSERT_TRUE(NavigateToURL(web_contents(),
+                            server()->GetURL(kPrimaryHost, "/title1.html")));
+  const auto same_origin_target =
+      server()->GetURL(kPrimaryHost, redirect_target);
+  ASSERT_TRUE(ExecJs(web_contents(),
+                     JsReplace(R"(
+    fetch($1, {
+      keepalive: true,
+      method: $2,
+      headers: {'Authorization': 'Bearer SECRET_TOKEN'},
+    });
+  )",
+                               kKeepAliveEndpoint, method),
+                     content::EXECUTE_SCRIPT_NO_RESOLVE_PROMISES));
+
+  // Wait for the initial same-origin request.
+  request_handlers[0]->WaitForRequest();
+  EXPECT_THAT(request_handlers[0]->http_request()->headers,
+              Contains(Pair(net::HttpRequestHeaders::kAuthorization,
+                            "Bearer SECRET_TOKEN")));
+
+  // Navigate away to disconnect the renderer.
+  ASSERT_TRUE(NavigateToURL(web_contents(), GURL("about:blank")));
+
+  // Send the same-origin redirect.
+  request_handlers[0]->Send(
+      base::StringPrintf(k301Response, same_origin_target.spec().c_str()));
+  request_handlers[0]->Done();
+
+  loaders_observer().WaitForTotalOnReceiveRedirectProcessed(1);
+
+  // Wait for the redirected request on a.test (same-origin, no preflight).
+  request_handlers[1]->WaitForRequest();
+  // The Authorization header must be preserved on same-origin redirect.
+  EXPECT_THAT(request_handlers[1]->http_request()->headers,
+              Contains(Pair(net::HttpRequestHeaders::kAuthorization,
+                            "Bearer SECRET_TOKEN")));
+  request_handlers[1]->Send(k200TextResponse);
+  request_handlers[1]->Done();
+}
 
 }  // namespace content

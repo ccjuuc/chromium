@@ -19,6 +19,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import android.view.View;
 import android.widget.FrameLayout;
 
 import androidx.test.ext.junit.rules.ActivityScenarioRule;
@@ -34,21 +35,25 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.ParameterizedRobolectricTestRunner;
 import org.robolectric.ParameterizedRobolectricTestRunner.Parameter;
 import org.robolectric.ParameterizedRobolectricTestRunner.Parameters;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.DeviceInfo;
 import org.chromium.base.supplier.LazyOneshotSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplierImpl;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.supplier.SettableNullableObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRule;
+import org.chromium.base.test.RobolectricUtil;
+import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.base.test.util.UserActionTester;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
+import org.chromium.chrome.browser.hub.HubColorMixer.ColorBlendProgress;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileProvider;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.toolbar.menu_button.MenuButtonCoordinator;
+import org.chromium.chrome.browser.ui.actions.button.DisplayButtonData;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityClient;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandler.BackPressResult;
@@ -102,18 +107,19 @@ public class HubCoordinatorUnitTest {
             mIncognitoTabSwitcherBackPressSupplier = ObservableSuppliers.createNonNull(false);
     private final SettableNullableObservableSupplier<Tab> mTabSupplier =
             ObservableSuppliers.createNullable();
-    private final ObservableSupplierImpl<Integer> mPreviousLayoutTypeSupplier =
-            new ObservableSupplierImpl<>();
-    private final ObservableSupplierImpl<DisplayButtonData> mReferenceButtonDataSupplier =
-            new ObservableSupplierImpl<>();
+    private final SettableMonotonicObservableSupplier<Integer> mPreviousLayoutTypeSupplier =
+            ObservableSuppliers.createMonotonic();
+    private SettableMonotonicObservableSupplier<DisplayButtonData> mReferenceButtonDataSupplier;
     private final SettableNonNullObservableSupplier<Boolean> mRegularHubSearchEnabledStateSupplier =
             ObservableSuppliers.createNonNull(false);
     private final SettableNonNullObservableSupplier<Boolean>
             mIncognitoHubSearchEnabledStateSupplier = ObservableSuppliers.createNonNull(false);
     private final OneshotSupplierImpl<ProfileProvider> mProfileProviderSupplier =
             new OneshotSupplierImpl<>();
-    private final ObservableSupplierImpl<EdgeToEdgeController> mEdgeToEdgeSupplier =
-            new ObservableSupplierImpl<>();
+    private final SettableMonotonicObservableSupplier<EdgeToEdgeController> mEdgeToEdgeSupplier =
+            ObservableSuppliers.createMonotonic();
+    private final SettableNullableObservableSupplier<ColorBlendProgress>
+            mSwipeAnimationProgressSupplier = ObservableSuppliers.createNullable();
     private PaneManager mPaneManager;
     private FrameLayout mRootView;
     private HubCoordinator mHubCoordinator;
@@ -123,7 +129,7 @@ public class HubCoordinatorUnitTest {
         DeviceInfo.setIsXrForTesting(mIsXrDevice);
 
         TrackerFactory.setTrackerForTests(mTracker);
-        mReferenceButtonDataSupplier.set(mReferenceButtonData);
+        mReferenceButtonDataSupplier = ObservableSuppliers.createMonotonic(mReferenceButtonData);
         when(mProfileProvider.getOriginalProfile()).thenReturn(mProfile);
         mProfileProviderSupplier.set(mProfileProvider);
         when(mTabSwitcherPane.getPaneId()).thenReturn(PaneId.TAB_SWITCHER);
@@ -131,31 +137,31 @@ public class HubCoordinatorUnitTest {
         when(mTabSwitcherPane.getHandleBackPressChangedSupplier())
                 .thenReturn(mTabSwitcherBackPressSupplier);
         when(mTabSwitcherPane.getActionButtonDataSupplier())
-                .thenReturn(new ObservableSupplierImpl<>());
+                .thenReturn(ObservableSuppliers.alwaysNull());
         when(mTabSwitcherPane.getReferenceButtonDataSupplier())
                 .thenReturn(mReferenceButtonDataSupplier);
         when(mTabSwitcherPane.getHubSearchEnabledStateSupplier())
                 .thenReturn(mRegularHubSearchEnabledStateSupplier);
         when(mTabSwitcherPane.getHubSearchBoxVisibilitySupplier())
-                .thenReturn(new ObservableSupplierImpl<>());
+                .thenReturn(ObservableSuppliers.alwaysFalse());
         when(mIncognitoTabSwitcherPane.getPaneId()).thenReturn(PaneId.INCOGNITO_TAB_SWITCHER);
         when(mIncognitoTabSwitcherPane.getColorScheme()).thenReturn(HubColorScheme.INCOGNITO);
         when(mIncognitoTabSwitcherPane.getHandleBackPressChangedSupplier())
                 .thenReturn(mIncognitoTabSwitcherBackPressSupplier);
         when(mIncognitoTabSwitcherPane.getActionButtonDataSupplier())
-                .thenReturn(new ObservableSupplierImpl<>());
+                .thenReturn(ObservableSuppliers.alwaysNull());
         when(mIncognitoTabSwitcherPane.getReferenceButtonDataSupplier())
                 .thenReturn(mReferenceButtonDataSupplier);
         when(mIncognitoTabSwitcherPane.getHubSearchEnabledStateSupplier())
                 .thenReturn(mIncognitoHubSearchEnabledStateSupplier);
         when(mIncognitoTabSwitcherPane.getHubSearchBoxVisibilitySupplier())
-                .thenReturn(new ObservableSupplierImpl<>());
+                .thenReturn(ObservableSuppliers.alwaysFalse());
         when(mTab.getId()).thenReturn(TAB_ID);
         when(mTab.isIncognito()).thenReturn(false);
         when(mHubLayoutController.getPreviousLayoutTypeSupplier())
                 .thenReturn(mPreviousLayoutTypeSupplier);
         when(mHubLayoutController.getIsAnimatingSupplier())
-                .thenReturn(new ObservableSupplierImpl<>());
+                .thenReturn(ObservableSuppliers.alwaysFalse());
 
         PaneListBuilder builder =
                 new PaneListBuilder(new DefaultPaneOrderController())
@@ -193,9 +199,10 @@ public class HubCoordinatorUnitTest {
                         mSearchActivityClient,
                         mEdgeToEdgeSupplier,
                         mHubColorMixer,
+                        mSwipeAnimationProgressSupplier,
                         /* xrSpaceModeObservableSupplier= */ null,
                         /* defaultPaneId= */ PaneId.TAB_SWITCHER);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         mRootView.getChildCount();
         assertNotEquals(0, mRootView.getChildCount());
     }
@@ -343,6 +350,42 @@ public class HubCoordinatorUnitTest {
     }
 
     @Test
+    public void testCloseButtonWithTab() {
+        UserActionTester userActionTester = new UserActionTester();
+        mTabSupplier.set(mTab);
+
+        View closeButton = mRootView.findViewById(R.id.toolbar_close_button);
+        if (mIsXrDevice) {
+            assertNull(closeButton);
+            return;
+        }
+        assertNotNull(closeButton);
+        closeButton.performClick();
+
+        verify(mHubLayoutController).selectTabAndHideHubLayout(eq(TAB_ID));
+        verify(mTabSwitcherPane, never()).createNewTab();
+        assertEquals(1, userActionTester.getActionCount("Hub.CloseButtonPressed"));
+    }
+
+    @Test
+    public void testCloseButtonWithNullTab() {
+        UserActionTester userActionTester = new UserActionTester();
+        mTabSupplier.set(null);
+
+        View closeButton = mRootView.findViewById(R.id.toolbar_close_button);
+        if (mIsXrDevice) {
+            assertNull(closeButton);
+            return;
+        }
+        assertNotNull(closeButton);
+        closeButton.performClick();
+
+        verify(mHubLayoutController, never()).selectTabAndHideHubLayout(anyInt());
+        verify(mTabSwitcherPane).createNewTab();
+        assertEquals(1, userActionTester.getActionCount("Hub.CloseButtonPressed"));
+    }
+
+    @Test
     public void testFocusPane() {
         reset(mPaneManager);
         mHubCoordinator.focusPane(PaneId.TAB_SWITCHER);
@@ -388,6 +431,7 @@ public class HubCoordinatorUnitTest {
                                             mSearchActivityClient,
                                             mEdgeToEdgeSupplier,
                                             mHubColorMixer,
+                                            mSwipeAnimationProgressSupplier,
                                             null,
                                             /* defaultPaneId= */ PaneId.TAB_SWITCHER);
 
@@ -431,6 +475,7 @@ public class HubCoordinatorUnitTest {
                                             mSearchActivityClient,
                                             mEdgeToEdgeSupplier,
                                             mHubColorMixer,
+                                            mSwipeAnimationProgressSupplier,
                                             null,
                                             /* defaultPaneId= */ PaneId.TAB_SWITCHER);
 
@@ -438,5 +483,68 @@ public class HubCoordinatorUnitTest {
 
                             coordinator.destroy();
                         });
+    }
+
+    @Test
+    public void onSwipeSwitchComplete_recordsHistograms() {
+        var leftSwipeWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord("Android.Hub.PaneSwiped.Left", PaneId.TAB_SWITCHER)
+                        .expectNoRecords("Android.Hub.PaneSwiped.Right")
+                        .build();
+        mHubCoordinator.onSwipeSwitchComplete(true);
+        leftSwipeWatcher.assertExpected("Expected a left swipe to be recorded.");
+
+        var rightSwipeWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "Android.Hub.PaneSwiped.Right", PaneId.INCOGNITO_TAB_SWITCHER)
+                        .expectNoRecords("Android.Hub.PaneSwiped.Left")
+                        .build();
+        mHubCoordinator.onSwipeSwitchComplete(false);
+        rightSwipeWatcher.assertExpected("Expected a right swipe to be recorded.");
+    }
+
+    @Test
+    public void onSwipeSwitchComplete_cyclesToNextPane() {
+        mHubCoordinator.onSwipeSwitchComplete(true);
+        verify(mPaneManager).focusPane(PaneId.INCOGNITO_TAB_SWITCHER);
+    }
+
+    @Test
+    public void onSwipeSwitchComplete_cyclesToPreviousPane() {
+        mHubCoordinator.onSwipeSwitchComplete(false);
+        verify(mPaneManager).focusPane(PaneId.INCOGNITO_TAB_SWITCHER);
+    }
+
+    @Test
+    public void onSwipeSwitchComplete_wrapsAroundFromLastPane() {
+        reset(mPaneManager);
+        assertTrue(mPaneManager.focusPane(PaneId.INCOGNITO_TAB_SWITCHER));
+        mHubCoordinator.onSwipeSwitchComplete(true);
+        verify(mPaneManager).focusPane(PaneId.TAB_SWITCHER);
+    }
+
+    @Test
+    public void onSwipeSwitchCancel_setsLoadHintToWarm() {
+        mHubCoordinator.onSwipeSwitchCancel(true);
+        verify(mIncognitoTabSwitcherPane).notifyLoadHint(LoadHint.WARM);
+
+        mHubCoordinator.onSwipeSwitchCancel(false);
+        verify(mIncognitoTabSwitcherPane, times(2)).notifyLoadHint(LoadHint.WARM);
+    }
+
+    @Test
+    public void testOnSwipeDragProgress_blendsColors() {
+        mHubCoordinator.onSwipeDragProgress(0.5f, true);
+        assertEquals(
+                new ColorBlendProgress(HubColorScheme.DEFAULT, HubColorScheme.INCOGNITO, 0.5f),
+                mSwipeAnimationProgressSupplier.get());
+    }
+
+    @Test
+    public void testOnSwipeSwitchCancel_resetsColorBlendProgress() {
+        mHubCoordinator.onSwipeSwitchCancel(true);
+        assertNull(mSwipeAnimationProgressSupplier.get());
     }
 }

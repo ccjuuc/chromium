@@ -5,6 +5,8 @@
 #include "third_party/blink/renderer/core/css/css_dynamic_range_limit_mix_value.h"
 
 #include "base/memory/values_equivalent.h"
+#include "third_party/blink/renderer/core/css/css_primitive_value.h"
+#include "third_party/blink/renderer/core/css/css_value.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink::cssvalue {
@@ -15,7 +17,7 @@ bool CSSDynamicRangeLimitMixValue::Equals(
     return false;
   }
   CHECK(limits_.size() == other.percentages_.size());
-  for (size_t i = 0; i < limits_.size(); ++i) {
+  for (wtf_size_t i = 0; i < limits_.size(); ++i) {
     if (!base::ValuesEquivalent(limits_[i], other.limits_[i]) ||
         !base::ValuesEquivalent(percentages_[i], other.percentages_[i])) {
       return false;
@@ -27,7 +29,7 @@ bool CSSDynamicRangeLimitMixValue::Equals(
 String CSSDynamicRangeLimitMixValue::CustomCSSText() const {
   StringBuilder result;
   result.Append("dynamic-range-limit-mix(");
-  for (size_t i = 0; i < limits_.size(); ++i) {
+  for (wtf_size_t i = 0; i < limits_.size(); ++i) {
     result.Append(limits_[i]->CssText());
     result.Append(" ");
     result.Append(percentages_[i]->CssText());
@@ -37,6 +39,20 @@ String CSSDynamicRangeLimitMixValue::CustomCSSText() const {
   }
   result.Append(")");
   return result.ReleaseString();
+}
+
+bool CSSDynamicRangeLimitMixValue::HasRandomFunctions() const {
+  for (const CSSValue* limit : limits_) {
+    if (limit->HasRandomFunctions()) {
+      return true;
+    }
+  }
+  for (const CSSPrimitiveValue* percentage : percentages_) {
+    if (percentage->HasRandomFunctions()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void CSSDynamicRangeLimitMixValue::TraceAfterDispatch(

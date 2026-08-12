@@ -15,9 +15,17 @@ const SAMPLE_ITEM_HEIGHT = 56;
 const SAMPLE_AVAIL_HEIGHT =
     SAMPLE_HEIGHT_VIEWPORT_ITEM_COUNT * SAMPLE_ITEM_HEIGHT;
 
-class TestItem extends CrLitElement {
+class TestItemElement extends CrLitElement {
   static get is() {
     return 'test-item';
+  }
+
+  override render() {
+    return html`
+<div style="height: 48px; padding: 4px;">
+  <span>${this.name}</span>
+  <button>click item</button>
+</div>`;
   }
 
   static override get properties() {
@@ -29,14 +37,6 @@ class TestItem extends CrLitElement {
     };
   }
 
-  override render() {
-    return html`
-<div style="height: 48px; padding: 4px;">
-  <span>${this.name}</span>
-  <button>click item</button>
-</div>`;
-  }
-
   override focus() {
     this.shadowRoot.querySelector('button')!.focus();
   }
@@ -44,26 +44,12 @@ class TestItem extends CrLitElement {
   accessor name: string = '';
 }
 
-customElements.define('test-item', TestItem);
+customElements.define(TestItemElement.is, TestItemElement);
 
-class TestApp extends CrLitElement {
+class TestAppElement extends CrLitElement {
   static get is() {
     return 'test-app';
   }
-
-  static override get properties() {
-    return {
-      chunkSize: {type: Number},
-      listItems: {type: Array},
-      restoreFocusElement_: {type: Object},
-      scrollOffset: {type: Number},
-    };
-  }
-
-  accessor chunkSize: number = 0;
-  accessor listItems: Array<{name: string}> = [];
-  accessor scrollOffset: number = 0;
-  private accessor restoreFocusElement_: HTMLElement|null = null;
 
   override render() {
     return html`
@@ -80,26 +66,31 @@ class TestApp extends CrLitElement {
     </lazy-list>`;
   }
 
+  static override get properties() {
+    return {
+      chunkSize: {type: Number},
+      listItems: {type: Array},
+      restoreFocusElement_: {type: Object},
+      scrollOffset: {type: Number},
+    };
+  }
+
+  accessor chunkSize: number = 0;
+  accessor listItems: Array<{name: string}> = [];
+  accessor scrollOffset: number = 0;
+  private accessor restoreFocusElement_: HTMLElement|null = null;
+
   private onRenderedItemsChanged_() {
     this.restoreFocusElement_ = this.shadowRoot.querySelector('[name="Two"]');
   }
 }
 
-customElements.define('test-app', TestApp);
+customElements.define(TestAppElement.is, TestAppElement);
 
-class TestDocumentTargetApp extends CrLitElement {
+class TestDocumentTargetAppElement extends CrLitElement {
   static get is() {
     return 'test-document-target-app';
   }
-
-  static override get properties() {
-    return {
-      listItems: {type: Array},
-      scrollOffset: {type: Number},
-    };
-  }
-
-  accessor listItems: Array<{name: string}> = [];
 
   override render() {
     return html`
@@ -111,24 +102,25 @@ class TestDocumentTargetApp extends CrLitElement {
           `}>
     </lazy-list>`;
   }
-}
-
-customElements.define('test-document-target-app', TestDocumentTargetApp);
-
-class TestListPaddingApp extends CrLitElement {
-  static get is() {
-    return 'test-list-padding-app';
-  }
 
   static override get properties() {
     return {
-      chunkSize: {type: Number},
       listItems: {type: Array},
+      scrollOffset: {type: Number},
     };
   }
 
-  accessor chunkSize: number = 0;
   accessor listItems: Array<{name: string}> = [];
+  accessor scrollOffset: number = 0;
+}
+
+customElements.define(
+    TestDocumentTargetAppElement.is, TestDocumentTargetAppElement);
+
+class TestListPaddingAppElement extends CrLitElement {
+  static get is() {
+    return 'test-list-padding-app';
+  }
 
   override render() {
     return html`
@@ -143,26 +135,38 @@ class TestListPaddingApp extends CrLitElement {
           `}>
     </lazy-list>`;
   }
+
+  static override get properties() {
+    return {
+      chunkSize: {type: Number},
+      listItems: {type: Array},
+    };
+  }
+
+  accessor chunkSize: number = 0;
+  accessor listItems: Array<{name: string}> = [];
 }
 
-customElements.define('test-list-padding-app', TestListPaddingApp);
+customElements.define(TestListPaddingAppElement.is, TestListPaddingAppElement);
 
 suite('CrLazyListTest', () => {
-  let lazyList: CrLazyListElement;
-  let testApp: TestApp;
+  let lazyList: CrLazyListElement<{name: string}>;
+  let testApp: TestAppElement;
 
   async function setupTest(
       sampleData: Array<{name: string}>, scrollOffset: number = 0,
       chunkSize: number = 0) {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
-    testApp = document.createElement('test-app') as TestApp;
+    testApp = document.createElement('test-app') as TestAppElement;
     testApp.style.height = `${SAMPLE_AVAIL_HEIGHT}px`;
     testApp.style.maxHeight = `${SAMPLE_AVAIL_HEIGHT}px`;
     testApp.style.display = 'block';
     testApp.style.overflowY = 'auto';
     testApp.style.overflowX = 'hidden';
     document.body.appendChild(testApp);
-    lazyList = testApp.shadowRoot.querySelector('cr-lazy-list')!;
+    lazyList =
+        testApp.shadowRoot.querySelector<CrLazyListElement<{name: string}>>(
+            'cr-lazy-list')!;
     assertTrue(!!lazyList);
     const listFilled = eventToPromise('viewport-filled', lazyList);
     testApp.chunkSize = chunkSize;
@@ -173,8 +177,8 @@ suite('CrLazyListTest', () => {
     await microtasksFinished();
   }
 
-  function queryItems(): NodeListOf<TestItem> {
-    return lazyList.querySelectorAll<TestItem>('test-item');
+  function queryItems(): NodeListOf<TestItemElement> {
+    return lazyList.querySelectorAll<TestItemElement>('test-item');
   }
 
   function getTestItems(count: number): Array<{name: string}> {
@@ -334,14 +338,16 @@ suite('CrLazyListTest', () => {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     const testDocumentTargetApp =
         document.createElement('test-document-target-app') as
-        TestDocumentTargetApp;
+        TestDocumentTargetAppElement;
     testDocumentTargetApp.style.display = 'block';
     testDocumentTargetApp.style.overflowY = 'auto';
     testDocumentTargetApp.style.overflowX = 'hidden';
     document.body.appendChild(testDocumentTargetApp);
     testDocumentTargetApp.listItems = getTestItems(3);
 
-    lazyList = testDocumentTargetApp.shadowRoot.querySelector('cr-lazy-list')!;
+    lazyList =
+        testDocumentTargetApp.shadowRoot
+            .querySelector<CrLazyListElement<{name: string}>>('cr-lazy-list')!;
     assertTrue(!!lazyList);
     await eventToPromise('viewport-filled', lazyList);
     await microtasksFinished();
@@ -489,10 +495,12 @@ suite('CrLazyListTest', () => {
     assertEquals(active, newButton);
   });
 
-  function setUpListPaddingApp(chunkSize: number = 0): TestListPaddingApp {
+  function setUpListPaddingApp(chunkSize: number = 0):
+      TestListPaddingAppElement {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     const testListPaddingApp =
-        document.createElement('test-list-padding-app') as TestListPaddingApp;
+        document.createElement('test-list-padding-app') as
+        TestListPaddingAppElement;
     testListPaddingApp.style.display = 'block';
     testListPaddingApp.style.overflowY = 'auto';
     testListPaddingApp.style.overflowX = 'hidden';
@@ -507,7 +515,9 @@ suite('CrLazyListTest', () => {
     const testListPaddingApp = setUpListPaddingApp();
     testListPaddingApp.listItems = getTestItems(12);
 
-    lazyList = testListPaddingApp.shadowRoot.querySelector('cr-lazy-list')!;
+    lazyList =
+        testListPaddingApp.shadowRoot
+            .querySelector<CrLazyListElement<{name: string}>>('cr-lazy-list')!;
     assertTrue(!!lazyList);
     await eventToPromise('viewport-filled', lazyList);
     await microtasksFinished();
@@ -519,7 +529,9 @@ suite('CrLazyListTest', () => {
     const testListPaddingApp = setUpListPaddingApp(3);
     testListPaddingApp.listItems = getTestItems(12);
 
-    lazyList = testListPaddingApp.shadowRoot.querySelector('cr-lazy-list')!;
+    lazyList =
+        testListPaddingApp.shadowRoot
+            .querySelector<CrLazyListElement<{name: string}>>('cr-lazy-list')!;
     assertTrue(!!lazyList);
     await eventToPromise('viewport-filled', lazyList);
     await microtasksFinished();
@@ -553,20 +565,10 @@ suite('CrLazyListTest', () => {
     assertEquals(0, queryItems().length);
   });
 
-  class TestListWithVariedHeightsApp extends CrLitElement {
+  class TestListWithVariedHeightsAppElement extends CrLitElement {
     static get is() {
       return 'test-list-with-varied-heights-app';
     }
-
-    static override get properties() {
-      return {
-        itemSize: {type: Number},
-        listItems: {type: Array},
-      };
-    }
-
-    accessor itemSize: number|undefined;
-    accessor listItems: Array<{height: number}> = [];
 
     static override get styles() {
       return css`
@@ -588,10 +590,21 @@ suite('CrLazyListTest', () => {
             `}>
       </cr-lazy-list>`;
     }
+
+    static override get properties() {
+      return {
+        itemSize: {type: Number},
+        listItems: {type: Array},
+      };
+    }
+
+    accessor itemSize: number|undefined;
+    accessor listItems: Array<{height: number}> = [];
   }
 
   customElements.define(
-      TestListWithVariedHeightsApp.is, TestListWithVariedHeightsApp);
+      TestListWithVariedHeightsAppElement.is,
+      TestListWithVariedHeightsAppElement);
 
   test('Uses itemSize property instead of calculating', async () => {
     const viewSize = 100;
@@ -605,7 +618,7 @@ suite('CrLazyListTest', () => {
 
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     let testApp = document.createElement('test-list-with-varied-heights-app') as
-        TestListWithVariedHeightsApp;
+        TestListWithVariedHeightsAppElement;
     testApp.listItems = items;
     testApp.itemSize = typicalItemSize;
     testApp.style.height = `${viewSize}px`;
@@ -621,7 +634,7 @@ suite('CrLazyListTest', () => {
     // No itemSize specified should mean the actual height is used.
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     testApp = document.createElement('test-list-with-varied-heights-app') as
-        TestListWithVariedHeightsApp;
+        TestListWithVariedHeightsAppElement;
     testApp.listItems = items;
     testApp.style.height = `${viewSize}px`;
     document.body.appendChild(testApp);

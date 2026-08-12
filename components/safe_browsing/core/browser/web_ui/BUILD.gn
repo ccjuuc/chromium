@@ -12,14 +12,18 @@ source_set("info_singleton") {
     "web_ui_info_singleton.h",
   ]
 
-  deps = [
-    ":event_observer",
+  public_deps = [
     ":util",
     "//components/safe_browsing:buildflags",
     "//components/safe_browsing/core/browser",
     "//components/safe_browsing/core/browser:download_check_result",
     "//components/safe_browsing/core/browser/hashprefix_realtime:hash_realtime_service",
     "//components/safe_browsing/core/browser/realtime:url_lookup_service_base",
+    "//services/network/public/mojom",
+  ]
+
+  deps = [
+    ":event_observer",
     "//components/sync/protocol",
   ]
 }
@@ -41,7 +45,8 @@ source_set("handler") {
     "//components/password_manager/core/browser:hash_password_manager",
     "//components/safe_browsing/core/browser:download_check_result",
     "//components/safe_browsing/core/browser:referrer_chain_provider",
-    "//components/safe_browsing/core/browser/db:v4_local_database_manager",
+    "//components/safe_browsing/core/browser/db:sb_local_database_manager",
+    "//components/safe_browsing/core/common:features",
     "//components/safe_browsing/core/common/proto:csd_proto",
     "//components/safe_browsing/core/common/proto:csd_proto_extras",
     "//components/user_prefs",
@@ -77,7 +82,6 @@ source_set("event_observer_impl") {
     ":event_observer",
     ":util",
     "//base",
-    "//components/safe_browsing/core/browser/db:hit_report",
   ]
 }
 
@@ -98,7 +102,6 @@ source_set("util") {
     "//components/safe_browsing:buildflags",
     "//components/safe_browsing/core/browser:download_check_result",
     "//components/safe_browsing/core/browser:referring_app_info",
-    "//components/safe_browsing/core/browser/db:hit_report",
     "//components/safe_browsing/core/common/proto:csd_proto",
     "//components/safe_browsing/core/common/proto:csd_proto_extras",
     "//components/safe_browsing/core/common/proto:realtimeapi_proto",
@@ -107,9 +110,23 @@ source_set("util") {
     "//components/safe_browsing/core/common/proto:safebrowsingv5_proto_extras",
     "//components/safe_browsing/core/common/proto:webui_proto",
     "//components/sync/protocol",
+    "//net",
+    "//url",
   ]
 
   if (!is_android) {
     deps += [ "//components/enterprise/common/proto:upload_request_response_extras_to_value" ]
   }
+}
+
+source_set("cr_safe_browsing_log") {
+  sources = [
+    "cr_safe_browsing_log.cc",
+    "cr_safe_browsing_log.h",
+  ]
+
+  deps = [
+    ":info_singleton",
+    "//base",
+  ]
 }

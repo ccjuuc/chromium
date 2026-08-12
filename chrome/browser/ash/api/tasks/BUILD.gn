@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-
 assert(is_chromeos)
 
 static_library("tasks") {
@@ -20,16 +18,14 @@ static_library("tasks") {
     "//ash",
     "//ash/constants",
     "//base",
-    "//chrome/browser/apps/app_service",
-    "//chrome/browser/ash/profiles",
     "//chrome/browser/profiles:profile",
-    "//chrome/browser/signin",
-    "//chrome/browser/web_applications",
+    "//chromeos/ash/components/browser_context_helper",
     "//chromeos/ash/components/policy/policy_blocklist_service",
+    "//chromeos/ash/components/signin:identity_manager_provider",
     "//components/account_id",
     "//components/policy/content",
     "//components/policy/core/browser",
-    "//components/services/app_service/public/cpp:app_types",
+    "//components/services/app_service",
     "//components/signin/public/identity_manager",
     "//components/user_manager",
     "//google_apis",

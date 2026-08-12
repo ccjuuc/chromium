@@ -4,9 +4,9 @@
 
 #include "third_party/blink/public/common/custom_handlers/protocol_handler_utils.h"
 
+#include <algorithm>
 #include <string_view>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -96,13 +96,27 @@ bool IsValidCustomHandlerScheme(std::string_view scheme,
     if (scheme.length() < 2) {
       return false;
     }
-    return std::ranges::all_of(
+    bool is_valid_format = std::ranges::all_of(
         base::SplitStringPiece(scheme, "-", base::KEEP_WHITESPACE,
                                base::SPLIT_WANT_ALL),
         [](std::string_view chunk) {
           return !chunk.empty() &&
                  std::ranges::all_of(chunk, &base::IsAsciiAlpha<char>);
         });
+    if (!is_valid_format) {
+      return false;
+    }
+
+    // Blocks sensitive schemes.
+    std::string lower_scheme = base::ToLowerASCII(scheme);
+    static constexpr const char* const kProtocolBlocklist[] = {
+        "http",        "https",  "file",
+        "ms-settings", "chrome", "chrome-extension",
+        "isolated-app"};
+    if (std::ranges::contains(kProtocolBlocklist, lower_scheme)) {
+      return false;
+    }
+    return true;
   }
 
   static constexpr const char* const kProtocolSafelist[] = {
@@ -113,7 +127,7 @@ bool IsValidCustomHandlerScheme(std::string_view scheme,
       "webcal",  "wtai",   "xmpp"};
 
   std::string lower_scheme = base::ToLowerASCII(scheme);
-  if (base::Contains(kProtocolSafelist, lower_scheme)) {
+  if (std::ranges::contains(kProtocolSafelist, lower_scheme)) {
     return true;
   }
   if (lower_scheme == "ftp" || lower_scheme == "ftps" ||

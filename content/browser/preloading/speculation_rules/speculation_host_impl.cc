@@ -73,6 +73,29 @@ bool CandidatesAreValid(
   return true;
 }
 
+// A renderer-selected candidate may only be enacted when the feature behind the
+// selecting `heuristic` is enabled, mirroring the browser-side gating in
+// AnchorElementInteractionHostImpl and PreloadingDecider. This stops a
+// compromised renderer from enacting via a disabled heuristic.
+bool HeuristicMayEnact(blink::mojom::SpeculationHeuristic heuristic) {
+  switch (heuristic) {
+    case blink::mojom::SpeculationHeuristic::kPointerDown:
+    case blink::mojom::SpeculationHeuristic::kPointerHover:
+      return true;
+    case blink::mojom::SpeculationHeuristic::kViewportModerate:
+      // The param mirrors
+      // PreloadingDecider::OnModerateViewportHeuristicTriggered, which only
+      // enacts candidates when it is set.
+      return base::FeatureList::IsEnabled(
+                 blink::features::kPreloadingModerateViewportHeuristics) &&
+             blink::features::
+                 kPreloadingModerateViewportHeuristicsEnactCandidates.Get();
+    case blink::mojom::SpeculationHeuristic::kViewportEager:
+      return base::FeatureList::IsEnabled(
+          blink::features::kPreloadingEagerViewportHeuristics);
+  }
+}
+
 }  // namespace
 
 // static
@@ -91,18 +114,36 @@ SpeculationHostImpl::SpeculationHostImpl(
 
 SpeculationHostImpl::~SpeculationHostImpl() = default;
 
+bool SpeculationHostImpl::ValidateFrameState() {
+  // Window gets inactive randomly by user-interaction, which is not avoidable.
+  if (!render_frame_host().IsActive()) {
+    return false;
+  }
+  // Sending messages from sub frames won't happen unless it is compromised.
+  if (render_frame_host().GetParent()) {
+    mojo::ReportBadMessage(
+        "SpeculationHost mojo message is sent from a subframe.");
+    return false;
+  }
+  return true;
+}
+
 void SpeculationHostImpl::UpdateSpeculationCandidates(
     std::vector<blink::mojom::SpeculationCandidatePtr> candidates,
     bool enable_cross_origin_prerender_iframes) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  if (!CandidatesAreValid(candidates))
+  if (!CandidatesAreValid(candidates)) {
     return;
+  }
 
   // Only handle messages from an active main frame.
-  if (!render_frame_host().IsActive())
+  // TODO(crbug.com/489033320): Validate with ValidateFrameState().
+  if (!render_frame_host().IsActive()) {
     return;
-  if (render_frame_host().GetParent())
+  }
+  if (render_frame_host().GetParent()) {
     return;
+  }
 
   auto* preloading_decider =
       PreloadingDecider::GetOrCreateForCurrentDocument(&render_frame_host());
@@ -110,30 +151,72 @@ void SpeculationHostImpl::UpdateSpeculationCandidates(
       candidates, enable_cross_origin_prerender_iframes);
 }
 
+void SpeculationHostImpl::EnactCandidate(
+    blink::mojom::SpeculationCandidatePtr candidate,
+    blink::mojom::SpeculationHeuristic heuristic) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  // The renderer must only send EnactCandidate when renderer-side heuristics
+  // are enabled; reject the message otherwise.
+  if (!base::FeatureList::IsEnabled(
+          blink::features::kSpeculationRulesRendererSideHeuristics)) {
+    mojo::ReportBadMessage("SH_ENACT_CANDIDATE_FEATURE_DISABLED");
+    return;
+  }
+
+  // The heuristic that selected the candidate must have its browser-side
+  // feature (and enactment param) enabled.
+  if (!HeuristicMayEnact(heuristic)) {
+    mojo::ReportBadMessage("SH_ENACT_CANDIDATE_HEURISTIC_DISABLED");
+    return;
+  }
+
+  // Validate the candidate the same way as UpdateSpeculationCandidates. A
+  // compromised renderer must not be able to enact an invalid candidate.
+  std::vector<blink::mojom::SpeculationCandidatePtr> singleton;
+  singleton.push_back(std::move(candidate));
+  if (!CandidatesAreValid(singleton)) {
+    return;
+  }
+
+  // A pointer-hover selection must target a "moderate" or "eager" candidate
+  // (matching PreloadingDecider::OnPointerHover). A compromised renderer must
+  // not be able to enact a candidate with a different eagerness via the hover
+  // heuristic.
+  if (heuristic == blink::mojom::SpeculationHeuristic::kPointerHover) {
+    const blink::mojom::SpeculationEagerness eagerness =
+        singleton.front()->eagerness;
+    if (eagerness != blink::mojom::SpeculationEagerness::kModerate &&
+        eagerness != blink::mojom::SpeculationEagerness::kEager) {
+      mojo::ReportBadMessage("SH_ENACT_CANDIDATE_INVALID_HOVER_EAGERNESS");
+      return;
+    }
+  }
+
+  // Only handle messages from an active main frame.
+  // TODO(crbug.com/489033320): Validate with ValidateFrameState().
+  if (!render_frame_host().IsActive()) {
+    return;
+  }
+  if (render_frame_host().GetParent()) {
+    return;
+  }
+
+  auto* preloading_decider =
+      PreloadingDecider::GetOrCreateForCurrentDocument(&render_frame_host());
+  preloading_decider->EnactRendererSelectedCandidate(
+      std::move(singleton.front()), heuristic);
+}
+
 void SpeculationHostImpl::OnLCPPredicted() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  if (!ValidateFrameState()) {
+    return;
+  }
   auto* preloading_decider =
       PreloadingDecider::GetOrCreateForCurrentDocument(&render_frame_host());
   preloading_decider->OnLCPPredicted();
 }
 
-void SpeculationHostImpl::InitiatePreview(const GURL& url) {
-  if (!base::FeatureList::IsEnabled(blink::features::kLinkPreview)) {
-    mojo::ReportBadMessage("SH_PREVIEW");
-    return;
-  }
 
-  // Link Preview is not allowed in a frame with untrusted network disabled.
-  if (render_frame_host().IsUntrustedNetworkDisabled()) {
-    return;
-  }
-
-  WebContents* web_contents =
-      WebContents::FromRenderFrameHost(&render_frame_host());
-  CHECK(web_contents);
-  WebContentsDelegate* delegate = web_contents->GetDelegate();
-  CHECK(delegate);
-  delegate->InitiatePreview(*web_contents, url);
-}
 
 }  // namespace content

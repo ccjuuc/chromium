@@ -7,7 +7,7 @@ package org.chromium.chrome.browser.tab_group_suggestion;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.OneshotSupplierImpl;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -17,6 +17,7 @@ import org.chromium.chrome.browser.hub.PaneId;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabCreationState;
 import org.chromium.chrome.browser.tab.TabLaunchType;
+import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
@@ -38,27 +39,23 @@ public class SuggestionEventObserver {
     private final TabModelObserver mTabModelObserver =
             new TabModelObserver() {
                 @Override
-                public void didSelectTab(
-                        Tab tab,
-                        @org.chromium.chrome.browser.tab.TabSelectionType int type,
-                        int lastId) {
+                public void didSelectTab(Tab tab, @TabSelectionType int type, int lastId) {
                     @TabSelectionCause
                     int selectionType =
                             switch (type) {
-                                case org.chromium.chrome.browser.tab.TabSelectionType
-                                        .FROM_CLOSE -> TabSelectionCause.FROM_CLOSE_ACTIVE_TAB;
-                                case org.chromium.chrome.browser.tab.TabSelectionType
-                                        .FROM_EXIT -> TabSelectionCause.FROM_APP_EXIT;
-                                case org.chromium.chrome.browser.tab.TabSelectionType
-                                        .FROM_NEW -> TabSelectionCause.FROM_NEW_TAB;
-                                case org.chromium.chrome.browser.tab.TabSelectionType
-                                        .FROM_USER -> TabSelectionCause.FROM_USER;
-                                case org.chromium.chrome.browser.tab.TabSelectionType
-                                        .FROM_OMNIBOX -> TabSelectionCause.FROM_OMNIBOX;
-                                case org.chromium.chrome.browser.tab.TabSelectionType
-                                        .FROM_UNDO -> TabSelectionCause.FROM_UNDO_CLOSURE;
-                                default -> throw new IllegalArgumentException(
-                                        "Unknown selection typ: " + type);
+                                case TabSelectionType.FROM_CLOSE ->
+                                        TabSelectionCause.FROM_CLOSE_ACTIVE_TAB;
+                                case TabSelectionType.FROM_EXIT -> TabSelectionCause.FROM_APP_EXIT;
+                                case TabSelectionType.FROM_NEW -> TabSelectionCause.FROM_NEW_TAB;
+                                case TabSelectionType.FROM_DRAG, TabSelectionType.FROM_USER ->
+                                        TabSelectionCause.FROM_USER;
+                                case TabSelectionType.FROM_OMNIBOX ->
+                                        TabSelectionCause.FROM_OMNIBOX;
+                                case TabSelectionType.FROM_UNDO ->
+                                        TabSelectionCause.FROM_UNDO_CLOSURE;
+                                default ->
+                                        throw new IllegalArgumentException(
+                                                "Unknown selection typ: " + type);
                             };
                     mGroupSuggestionsService.didSelectTab(
                             tab.getId(), tab.getUrl(), selectionType, lastId);
@@ -91,8 +88,8 @@ public class SuggestionEventObserver {
                 }
             };
 
-    private @Nullable ObservableSupplier<Boolean> mHubVisibilitySupplier;
-    private @Nullable ObservableSupplier<Pane> mFocusedPaneSupplier;
+    private @Nullable MonotonicObservableSupplier<Boolean> mHubVisibilitySupplier;
+    private @Nullable MonotonicObservableSupplier<Pane> mFocusedPaneSupplier;
 
     /** Creates the observer. */
     public SuggestionEventObserver(
@@ -144,7 +141,7 @@ public class SuggestionEventObserver {
         hubManagerSupplier.runSyncOrOnAvailable(
                 hubManager -> {
                     mHubVisibilitySupplier = hubManager.getHubVisibilitySupplier();
-                    mHubVisibilitySupplier.addObserver(mHubVisibilityObserver);
+                    mHubVisibilitySupplier.addSyncObserverAndPostIfNonNull(mHubVisibilityObserver);
                     mFocusedPaneSupplier = hubManager.getPaneManager().getFocusedPaneSupplier();
                 });
     }

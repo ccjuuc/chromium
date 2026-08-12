@@ -16,6 +16,7 @@
 #include "base/cpu.h"
 #include "base/debug/leak_annotations.h"
 #include "base/files/file.h"
+#include "base/files/file_path.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
@@ -31,7 +32,6 @@
 #include "chromecast/browser/cast_content_browser_client.h"
 #include "chromecast/browser/cast_feature_list_creator.h"
 #include "chromecast/chromecast_buildflags.h"
-#include "chromecast/common/cast_resource_delegate.h"
 #include "chromecast/common/global_descriptors.h"
 #include "chromecast/gpu/cast_content_gpu_client.h"
 #include "chromecast/renderer/cast_content_renderer_client.h"
@@ -77,6 +77,10 @@ std::optional<int> CastMainDelegate::BasicStartupComplete() {
       logging::LOG_TO_SYSTEM_DEBUG_LOG | logging::LOG_TO_STDERR;
 
   const base::CommandLine* command_line(base::CommandLine::ForCurrentProcess());
+  std::string cast_assets_dir = command_line->GetSwitchValueASCII(switches::kCastAssetsDir);
+  if (!cast_assets_dir.empty()) {
+    base::PathService::Override(base::DIR_ASSETS, base::FilePath::FromASCII(cast_assets_dir));
+  }
   std::string process_type =
       command_line->GetSwitchValueASCII(switches::kProcessType);
 
@@ -326,9 +330,6 @@ void CastMainDelegate::InitializeResourceBundle() {
 
   ui::SetLocalePaksStoredInApk(true);
 #endif  // BUILDFLAG(IS_ANDROID)
-
-  resource_delegate_.reset(new CastResourceDelegate());
-
   // Override ui::DIR_LOCALES to point to the chromecast_locales directory.
   CHECK(base::PathService::OverrideAndCreateIfNeeded(
       ui::DIR_LOCALES,
@@ -340,8 +341,7 @@ void CastMainDelegate::InitializeResourceBundle() {
   // TODO(gunsch): Use LOAD_COMMON_RESOURCES once ResourceBundle no longer
   // hardcodes resource file names.
   ui::ResourceBundle::InitSharedInstanceWithLocale(
-      "en-US", resource_delegate_.get(),
-      ui::ResourceBundle::DO_NOT_LOAD_COMMON_RESOURCES);
+      "en-US", nullptr, ui::ResourceBundle::DO_NOT_LOAD_COMMON_RESOURCES);
 
 #if BUILDFLAG(IS_ANDROID)
   ui::ResourceBundle::GetSharedInstance().AddDataPackFromFileRegion(

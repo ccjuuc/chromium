@@ -10,24 +10,25 @@ import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.CalledByNative;
 
+import org.chromium.base.CallbackUtils;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.TimeUtils;
-import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
-import org.chromium.chrome.browser.sync.TrustedVaultClient;
 import org.chromium.chrome.browser.sync.ui.SyncTrustedVaultProxyActivity;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.signin.AccountManagerFacadeProvider;
+import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.base.CoreAccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.sync.SyncService;
+import org.chromium.components.trusted_vault.TrustedVaultClient;
 import org.chromium.components.trusted_vault.TrustedVaultUserActionTriggerForUMA;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.ui.base.WindowAndroid;
@@ -64,7 +65,7 @@ public class PasswordManagerErrorMessageHelperBridge {
         // It is possible that the account is removed from Chrome between the password manager
         // calling the Google Play Services backend and Chrome receiving the reply. In that
         // case, the error is no longer relevant/fixable.
-        if (identityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN) == null) return false;
+        if (identityManager.getPrimaryAccountInfo() == null) return false;
 
         PrefService prefService = UserPrefs.get(profile);
         long lastShownTimestamp =
@@ -94,21 +95,14 @@ public class PasswordManagerErrorMessageHelperBridge {
         IdentityManager identityManager =
                 IdentityServicesProvider.get().getIdentityManager(profile);
         assert identityManager != null : "Regular profile should have an IdentityManager";
-        final CoreAccountInfo primaryAccountInfo =
-                identityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN);
+        final @Nullable AccountInfo primaryAccountInfo = identityManager.getPrimaryAccountInfo();
         // If the account has been removed before calling this method, there are no credentials to
         // update.
         if (primaryAccountInfo == null) return;
         final Activity activity = windowAndroid.getActivity().get();
         assert activity != null : "Activity should not be null";
         AccountManagerFacadeProvider.getInstance()
-                .updateCredentials(
-                        CoreAccountInfo.getAndroidAccountFrom(primaryAccountInfo),
-                        activity,
-                        (success) -> {
-                            RecordHistogram.recordBooleanHistogram(
-                                    "PasswordManager.UPMUpdateSignInCredentialsSucces", success);
-                        });
+                .updateCredentials(primaryAccountInfo.getId(), activity, (success) -> {});
     }
 
     /**
@@ -136,6 +130,8 @@ public class PasswordManagerErrorMessageHelperBridge {
                                     SyncTrustedVaultProxyActivity.createKeyRetrievalProxyIntent(
                                             intent, trustedVaultUserActionTriggerForUMA);
                             IntentUtils.safeStartActivity(activity, proxyIntent);
-                        });
+                        },
+                        // Ignore failure.
+                        CallbackUtils.emptyCallback());
     }
 }

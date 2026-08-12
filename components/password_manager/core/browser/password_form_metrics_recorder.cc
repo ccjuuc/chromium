@@ -7,11 +7,11 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <string_view>
 #include <variant>
 
 #include "base/check_deref.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
@@ -23,6 +23,7 @@
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "components/autofill/core/common/password_generation_util.h"
+#include "components/metrics/profile_metrics_service.h"
 #include "components/password_manager/core/browser/form_fetcher.h"
 #include "components/password_manager/core/browser/password_bubble_experiment.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
@@ -141,21 +142,17 @@ UsernamePasswordsState CalculateUsernamePasswordsState(
     // or both. In the last case we use the control type of the form as a
     // tie-break, if this is `password`, the user likely typed a password,
     // otherwise a username.
-    bool is_possibly_saved_username_in_profile_store = base::Contains(
-        saved_usernames,
+    bool is_possibly_saved_username_in_profile_store = saved_usernames.contains(
         std::make_pair(value, PasswordForm::Store::kProfileStore));
-    bool is_possibly_saved_username_in_account_store = base::Contains(
-        saved_usernames,
+    bool is_possibly_saved_username_in_account_store = saved_usernames.contains(
         std::make_pair(value, PasswordForm::Store::kAccountStore));
     bool is_possibly_saved_username =
         is_possibly_saved_username_in_profile_store ||
         is_possibly_saved_username_in_account_store;
 
-    bool is_possibly_saved_password_in_profile_store = base::Contains(
-        saved_passwords,
+    bool is_possibly_saved_password_in_profile_store = saved_passwords.contains(
         std::make_pair(value, PasswordForm::Store::kProfileStore));
-    bool is_possibly_saved_password_in_account_store = base::Contains(
-        saved_passwords,
+    bool is_possibly_saved_password_in_account_store = saved_passwords.contains(
         std::make_pair(value, PasswordForm::Store::kAccountStore));
     bool is_possibly_saved_password =
         is_possibly_saved_password_in_profile_store ||
@@ -313,12 +310,14 @@ metrics_util::BrowserAssistedLoginType FillingAssistanceToLoginAssistance(
 PasswordFormMetricsRecorder::PasswordFormMetricsRecorder(
     bool is_main_frame_secure,
     ukm::SourceId source_id,
-    PrefService* pref_service)
+    PrefService* pref_service,
+    metrics::ProfileMetricsService* profile_metrics_service)
     : clock_(base::DefaultClock::GetInstance()),
       is_main_frame_secure_(is_main_frame_secure),
       source_id_(source_id),
       ukm_entry_builder_(source_id),
-      pref_service_(pref_service) {}
+      pref_service_(pref_service),
+      profile_metrics_service_(CHECK_DEREF(profile_metrics_service)) {}
 
 PasswordFormMetricsRecorder::~PasswordFormMetricsRecorder() {
   if (submit_result_ == SubmitResult::kNotSubmitted) {
@@ -424,8 +423,8 @@ PasswordFormMetricsRecorder::~PasswordFormMetricsRecorder() {
       std::holds_alternative<FillingAssistance>(filling_assistance_)) {
     FillingAssistance filling_assistance =
         std::get<FillingAssistance>(filling_assistance_);
-    UMA_HISTOGRAM_ENUMERATION("PasswordManager.FillingAssistance",
-                              filling_assistance);
+    profile_metrics_service_->UmaHistogramEnumeration(
+        "PasswordManager.FillingAssistance", filling_assistance);
 
     metrics_util::RecordBrowserAssistedLogin(
         FillingAssistanceToLoginAssistance(filling_assistance));
@@ -434,24 +433,25 @@ PasswordFormMetricsRecorder::~PasswordFormMetricsRecorder() {
         static_cast<int64_t>(filling_assistance));
 
     if (is_main_frame_secure_) {
-      UMA_HISTOGRAM_ENUMERATION(
+      profile_metrics_service_->UmaHistogramEnumeration(
           "PasswordManager.FillingAssistance.SecureOrigin", filling_assistance);
       if (is_mixed_content_form_) {
-        UMA_HISTOGRAM_ENUMERATION("PasswordManager.FillingAssistance.MixedForm",
-                                  filling_assistance);
+        profile_metrics_service_->UmaHistogramEnumeration(
+            "PasswordManager.FillingAssistance.MixedForm", filling_assistance);
       }
     } else {
-      UMA_HISTOGRAM_ENUMERATION(
+      profile_metrics_service_->UmaHistogramEnumeration(
           "PasswordManager.FillingAssistance.InsecureOrigin",
           filling_assistance);
     }
 
     if (account_storage_usage_level_) {
-      std::string suffix =
+      std::string_view suffix =
           metrics_util::GetPasswordAccountStorageUsageLevelHistogramSuffix(
               *account_storage_usage_level_);
-      base::UmaHistogramEnumeration(
-          "PasswordManager.FillingAssistance." + suffix, filling_assistance);
+      profile_metrics_service_->UmaHistogramEnumeration(
+          base::StrCat({"PasswordManager.FillingAssistance.", suffix}),
+          filling_assistance);
     }
 
     if (filling_source_) {
@@ -535,12 +535,6 @@ PasswordFormMetricsRecorder::~PasswordFormMetricsRecorder() {
 
   ukm_entry_builder_.Record(ukm::UkmRecorder::Get());
 
-#if BUILDFLAG(IS_ANDROID)
-  if (form_submission_reached_) {
-    LogFormSubmissionsVsSavePromptsHistogram(
-        metrics_util::SaveFlowStep::kFormSubmitted);
-  }
-#endif
 }
 
 void PasswordFormMetricsRecorder::SetGeneratedPasswordStatus(
@@ -555,6 +549,14 @@ void PasswordFormMetricsRecorder::LogSubmitPassed() {
           metrics_util::PASSWORD_SUBMITTED);
     }
   }
+
+  if (actor_login_start_time_.has_value()) {
+    base::TimeDelta duration =
+        base::TimeTicks::Now() - actor_login_start_time_.value();
+    base::UmaHistogramMediumTimes(
+        "PasswordManager.ActorLogin.TimeFromAttemptToSuccess", duration);
+  }
+
   base::RecordAction(base::UserMetricsAction("PasswordManager_LoginPassed"));
   ukm_entry_builder_.SetSubmission_Observed(1 /*true*/);
   ukm_entry_builder_.SetSubmission_SubmissionResult(
@@ -601,6 +603,11 @@ void PasswordFormMetricsRecorder::SetSubmittedFormType(
 void PasswordFormMetricsRecorder::SetSubmissionIndicatorEvent(
     autofill::mojom::SubmissionIndicatorEvent event) {
   ukm_entry_builder_.SetSubmission_Indicator(static_cast<int>(event));
+}
+
+void PasswordFormMetricsRecorder::SetActorLoginStartTime(
+    base::TimeTicks start_time) {
+  actor_login_start_time_ = start_time;
 }
 
 void PasswordFormMetricsRecorder::RecordDetailedUserAction(
@@ -665,7 +672,7 @@ void PasswordFormMetricsRecorder::RecordFirstWaitForUsernameReason(
 }
 
 void PasswordFormMetricsRecorder::RecordMatchedFormType(
-    const PasswordForm& form) {
+    const StoredCredential& form) {
   if (std::exchange(recorded_preferred_matched_password_type_, true)) {
     return;
   }
@@ -707,7 +714,7 @@ void PasswordFormMetricsRecorder::RecordPotentialPreferredMatch(
 }
 
 void PasswordFormMetricsRecorder::RecordFillSuggestionHasGroupedMatch(
-    base::span<const PasswordForm> best_matches) {
+    base::span<const StoredCredential> best_matches) {
   // Do not record the UMA if there is nothing to fill.
   if (best_matches.empty()) {
     return;
@@ -717,7 +724,7 @@ void PasswordFormMetricsRecorder::RecordFillSuggestionHasGroupedMatch(
   }
   base::UmaHistogramBoolean(
       "PasswordManager.FillSuggestionsHasGroupedMatch",
-      std::ranges::find_if(best_matches, [](const PasswordForm& match) {
+      std::ranges::find_if(best_matches, [](const StoredCredential& match) {
         return password_manager_util::GetMatchType(match) ==
                password_manager_util::GetLoginMatchType::kGrouped;
       }) != best_matches.end());

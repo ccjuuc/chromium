@@ -71,10 +71,16 @@ bool SetAsDefaultBrowser() {
                                      toOpenURLsWithScheme:@"https"
                                         completionHandler:^(NSError*){
                                         }];
-  [NSWorkspace.sharedWorkspace setDefaultApplicationAtURL:app_bundle
-                                        toOpenContentType:UTTypeHTML
-                                        completionHandler:^(NSError*){
-                                        }];
+  // On macOS 26.4+, setting the HTML content type triggers a separate Finder
+  // confirmation dialog in addition to the System Settings dialog for URL
+  // schemes, resulting in duplicate prompts. Skip the content type registration
+  // on affected versions to avoid this. See https://crbug.com/496408111.
+  if (base::mac::MacOSVersion() < 26'04'00) {
+    [NSWorkspace.sharedWorkspace setDefaultApplicationAtURL:app_bundle
+                                          toOpenContentType:UTTypeHTML
+                                          completionHandler:^(NSError*){
+                                          }];
+  }
   // TODO(https://crbug.com/40248220): Passing empty completion handlers,
   // above, is kinda broken, but given that this API is synchronous, nothing
   // better can be done. This entire API should be rebuilt.
@@ -293,6 +299,10 @@ DefaultWebClientState IsDefaultHandlerForUTType(const std::string& type) {
 }
 
 std::string GetDirectLaunchUrlScheme() {
+  // IMPORTANT: This logic is duplicated in build/apple/tweak_info_plist.py
+  // to configure the Info.plist at build time, and in
+  // chrome/installer/mac/signing/modification.py to remove it for non-stable
+  // channels during signing. Ensure all are kept in sync.
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   if (!chrome::IsSideBySideCapable()) {
     // If the current Chrome build is not capable of side-by-side installation

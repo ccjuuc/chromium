@@ -25,6 +25,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/common/buildflags.h"
+#include "components/activity_reporter/activity_reporter.h"
 #include "components/keep_alive_registry/keep_alive_state_observer.h"
 #include "components/metrics_services_manager/metrics_services_manager.h"
 #include "components/prefs/persistent_pref_store.h"
@@ -64,6 +65,10 @@ namespace embedder_support {
 class OriginTrialsSettingsStorage;
 }  // namespace embedder_support
 
+#if BUILDFLAG(IS_WIN)
+#include "chrome/browser/win/isolated_browser_support.h"
+#endif  // BUILDFLAG(IS_WIN)
+
 namespace extensions {
 class ExtensionsBrowserClient;
 }
@@ -93,6 +98,10 @@ class SodaInstaller;
 namespace screen_ai {
 class ScreenAIInstallState;
 }  // namespace screen_ai
+
+namespace supervised_user {
+class DeviceParentalControls;
+}  // namespace supervised_user
 
 // Real implementation of BrowserProcess that creates and returns the services.
 class BrowserProcessImpl : public BrowserProcess,
@@ -156,7 +165,6 @@ class BrowserProcessImpl : public BrowserProcess,
 
   // BrowserProcess implementation.
   void EndSession() override;
-  void FlushLocalStateAndReply(base::OnceClosure reply) override;
   metrics_services_manager::MetricsServicesManager* GetMetricsServicesManager()
       override;
   metrics::MetricsService* metrics_service() override;
@@ -187,6 +195,7 @@ class BrowserProcessImpl : public BrowserProcess,
   printing::PrintPreviewDialogController* print_preview_dialog_controller()
       override;
   printing::BackgroundPrintingManager* background_printing_manager() override;
+  supervised_user::DeviceParentalControls& device_parental_controls() override;
 #if !BUILDFLAG(IS_ANDROID)
   IntranetRedirectDetector* intranet_redirect_detector() override;
 #endif
@@ -212,6 +221,7 @@ class BrowserProcessImpl : public BrowserProcess,
   void StartAutoupdateTimer() override;
 #endif
 
+  activity_reporter::ActivityReporter* activity_reporter() override;
   component_updater::ComponentUpdateService* component_updater() override;
 #if BUILDFLAG(IS_CHROMEOS)
   MediaFileSystemRegistry* media_file_system_registry() override;
@@ -228,7 +238,11 @@ class BrowserProcessImpl : public BrowserProcess,
   SerialPolicyAllowedPorts* serial_policy_allowed_ports() override;
 #if !BUILDFLAG(IS_ANDROID)
   HidSystemTrayIcon* hid_system_tray_icon() override;
+  void set_hid_system_tray_icon_for_test(
+      std::unique_ptr<HidSystemTrayIcon> icon) override;
   UsbSystemTrayIcon* usb_system_tray_icon() override;
+  void set_usb_system_tray_icon_for_test(
+      std::unique_ptr<UsbSystemTrayIcon> icon) override;
 #endif
 
   os_crypt_async::OSCryptAsync* os_crypt_async() override;
@@ -274,6 +288,12 @@ class BrowserProcessImpl : public BrowserProcess,
 
   // ApplicationLocaleStorage callback
   void OnLocaleChanged(const std::string& new_locale);
+
+#if BUILDFLAG(IS_WIN)
+  void UpdateProcessIsolationState();
+  void OnProcessIsolationStateSet(
+      base::expected<chrome::IsolationState, HRESULT> result);
+#endif  // BUILDFLAG(IS_WIN)
 
   // Methods called to control our lifetime. The browser process can be "pinned"
   // to make sure it keeps running.
@@ -354,6 +374,9 @@ class BrowserProcessImpl : public BrowserProcess,
       background_printing_manager_;
 #endif
 
+  std::unique_ptr<supervised_user::DeviceParentalControls>
+      device_parental_controls_;
+
 #if BUILDFLAG(ENABLE_CHROME_NOTIFICATIONS)
   // Manager for desktop notification UI.
   bool created_notification_ui_manager_ = false;
@@ -422,6 +445,8 @@ class BrowserProcessImpl : public BrowserProcess,
   void OnPendingRestartResult(bool is_update_pending_restart);
   void RestartBackgroundInstance();
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+
+  std::unique_ptr<activity_reporter::ActivityReporter> activity_reporter_;
 
   // component updater is normally not used under ChromeOS due
   // to concerns over integrity of data shared between profiles,

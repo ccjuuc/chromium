@@ -5,27 +5,35 @@
 #include "components/autofill/core/browser/payments/full_card_request.h"
 
 #include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 
+#include "base/check.h"
 #include "base/check_deref.h"
 #include "base/check_op.h"
 #include "base/functional/bind.h"
+#include "base/memory/weak_ptr.h"
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "base/values.h"
 #include "build/build_config.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/metrics/payments/better_auth_metrics.h"
 #include "components/autofill/core/browser/metrics/payments/card_unmask_authentication_metrics.h"
 #include "components/autofill/core/browser/payments/autofill_payments_feature_availability.h"
+#include "components/autofill/core/browser/payments/card_unmask_challenge_option.h"
+#include "components/autofill/core/browser/payments/client_behavior_constants.h"
 #include "components/autofill/core/browser/payments/payments_network_interface.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
 #include "components/autofill/core/browser/payments/payments_util.h"
-#include "components/autofill/core/common/autofill_clock.h"
-#include "components/autofill/core/common/autofill_payments_features.h"
+#include "components/autofill/core/browser/ui/payments/card_unmask_prompt_options.h"
 #include "url/origin.h"
 
 namespace autofill::payments {
@@ -74,7 +82,7 @@ void FullCardRequest::GetFullCardViaFIDO(
     CreditCard card,
     PaymentsAutofillClient::UnmaskCardReason reason,
     base::WeakPtr<ResultDelegate> result_delegate,
-    base::Value::Dict fido_assertion_info,
+    base::DictValue fido_assertion_info,
     std::optional<GURL> last_committed_primary_main_frame_origin,
     std::optional<std::string> context_token) {
   GetFullCardImpl(std::move(card), reason, result_delegate, nullptr,
@@ -89,7 +97,7 @@ void FullCardRequest::GetFullCardImpl(
     PaymentsAutofillClient::UnmaskCardReason reason,
     base::WeakPtr<ResultDelegate> result_delegate,
     base::WeakPtr<UIDelegate> ui_delegate,
-    std::optional<base::Value::Dict> fido_assertion_info,
+    std::optional<base::DictValue> fido_assertion_info,
     std::optional<GURL> last_committed_primary_main_frame_origin,
     std::optional<std::string> context_token,
     std::optional<CardUnmaskChallengeOption> selected_challenge_option) {

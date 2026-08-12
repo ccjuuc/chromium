@@ -6,6 +6,7 @@
 
 #import <UIKit/UIKit.h>
 
+#import "ios/chrome/browser/home_customization/ui/home_customization_accessibility_identifiers.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
@@ -42,6 +43,7 @@ const CGFloat kEyedropperSymbolSize = 15.0;
   if (self) {
     self.contentView.backgroundColor = UIColor.clearColor;
     self.isAccessibilityElement = YES;
+    self.accessibilityIdentifier = kCustomColorCellAccessibilityIdentifier;
     self.accessibilityTraits |= UIAccessibilityTraitButton;
 
     // Outer container view that holds the highlight border.
@@ -60,8 +62,8 @@ const CGFloat kEyedropperSymbolSize = 15.0;
     [_borderWrapperView addSubview:_innerContentView];
 
     // Eye dropper icon.
-    UIImage* eyeDropperIcon = DefaultSymbolTemplateWithPointSize(
-        kEyedropperSymbol, kEyedropperSymbolSize);
+    UIImage* eyeDropperIcon =
+        SymbolTemplateWithPointSize(SymbolEyedropper, kEyedropperSymbolSize);
 
     _symbolImageView = [[UIImageView alloc] initWithImage:eyeDropperIcon];
     _symbolImageView.translatesAutoresizingMaskIntoConstraints = NO;

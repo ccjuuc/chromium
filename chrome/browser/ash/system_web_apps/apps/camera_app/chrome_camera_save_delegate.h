@@ -11,6 +11,7 @@
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "chrome/browser/ash/policy/skyvault/drive_upload_observer.h"
 #include "chrome/browser/ash/policy/skyvault/odfs_skyvault_uploader.h"
 #include "chrome/browser/ash/policy/skyvault/policy_utils.h"
 #include "chromeos/ash/experiences/camera/camera_save_handler.h"
@@ -38,11 +39,18 @@ class ChromeCameraSaveDelegate : public CameraSaveHandler::Delegate {
   base::FilePath GetOneDriveUploadFolder() const override;
   base::FilePath GetGoogleDriveRoot() const override;
   base::FilePath GetFinalPathRelativeToRoot() const override;
-  void PerformUpload(const base::FilePath& upload_from_path,
-                     int64_t file_size,
-                     const gfx::Image& thumbnail,
-                     base::RepeatingCallback<void(int64_t)> progress_callback,
-                     base::OnceCallback<void(bool)> done_callback) override;
+  void PerformUpload(
+      const base::FilePath& upload_from_path,
+      int64_t file_size,
+      const gfx::Image& thumbnail,
+      base::RepeatingCallback<void(int64_t)> progress_callback,
+      base::OnceCallback<void(bool, std::optional<base::FilePath>)>
+          done_callback) override;
+  void CancelUploads() override;
+  void OpenFileInImageEditor(const base::FilePath& file_path) override;
+  void DeleteFileOnOneDrive(const base::FilePath& file_path,
+                            base::OnceCallback<void(bool)> callback) override;
+  void OpenCameraApp() override;
 
   bool is_onedrive() const {
     return destination_ ==
@@ -53,19 +61,25 @@ class ChromeCameraSaveDelegate : public CameraSaveHandler::Delegate {
            policy::local_user_files::FileSaveDestination::kGoogleDrive;
   }
 
-  std::string GetPathFromPref() const;
   void CancelUploads(base::OnceClosure cancel_closure);
   void OnOnedriveUploadDone(
       const std::string& file_name,
-      base::OnceCallback<void(bool)> callback,
+      base::OnceCallback<void(bool, std::optional<base::FilePath>)> callback,
       storage::FileSystemURL,
       std::optional<ash::cloud_upload::OdfsSkyvaultUploader::UploadError>,
       base::FilePath);
+  void OnGoogleDriveUploadDone(
+      const std::string& file_name,
+      base::OnceCallback<void(bool, std::optional<base::FilePath>)> callback,
+      bool success);
 
   const raw_ptr<content::BrowserContext> context_;
   const policy::local_user_files::FileSaveDestination destination_;
+  const std::string path_from_pref_;
   std::map<std::string, base::WeakPtr<ash::cloud_upload::OdfsSkyvaultUploader>>
       onedrive_uploaders_;
+  std::map<std::string, base::WeakPtr<ash::cloud_upload::DriveUploadObserver>>
+      google_drive_uploaders_;
   base::WeakPtrFactory<ChromeCameraSaveDelegate> weak_ptr_factory_{this};
 };
 

@@ -39,6 +39,7 @@
 #include "third_party/blink/renderer/core/editing/markers/composition_marker.h"
 #include "third_party/blink/renderer/core/editing/markers/document_marker.h"
 #include "third_party/blink/renderer/core/editing/markers/document_marker_group.h"
+#include "third_party/blink/renderer/core/editing/markers/preview_stylus_gesture_marker.h"
 #include "third_party/blink/renderer/core/editing/markers/suggestion_marker.h"
 #include "third_party/blink/renderer/core/editing/markers/text_match_marker.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
@@ -50,6 +51,7 @@ namespace blink {
 
 class Document;
 class DocumentMarkerList;
+class Element;
 class Highlight;
 class SuggestionMarkerProperties;
 
@@ -73,6 +75,8 @@ class CORE_EXPORT DocumentMarkerController final
                             ui::mojom::ImeTextSpanUnderlineStyle,
                             Color text_color,
                             Color background_color);
+  void AddPreviewStylusGestureMarker(const EphemeralRange&,
+                                     Color background_color);
   void AddActiveSuggestionMarker(const EphemeralRange&,
                                  Color underline_color,
                                  ui::mojom::ImeTextSpanThickness,
@@ -82,9 +86,20 @@ class CORE_EXPORT DocumentMarkerController final
   void AddSuggestionMarker(const EphemeralRange&,
                            const SuggestionMarkerProperties&);
   void AddTextFragmentMarker(const EphemeralRange&);
-  void AddCustomHighlightMarker(const EphemeralRange&,
-                                const String& highlight_name,
-                                const Member<Highlight> highlight);
+  // Adds custom highlight markers for the Text nodes the range covers. When
+  // `on_element_node` is non-null, the range is iterated with object
+  // replacement characters emitted, and the callback is invoked for each
+  // Element the range crosses as a non-Text node (e.g. a replaced
+  // <img>/<object>). It is up to the caller to filter to the elements it
+  // cares about (e.g. tracking replaced elements covered by the highlight in
+  // this same pass). Marker creation itself still happens only for Text
+  // nodes, so the markers produced are identical whether or not the callback
+  // is supplied.
+  void AddCustomHighlightMarker(
+      const EphemeralRange&,
+      const String& highlight_name,
+      const Member<Highlight> highlight,
+      base::FunctionRef<void(const Element&)>* on_element_node = nullptr);
   void AddGlicMarker(const EphemeralRange&);
 
   void MoveMarkers(const Text& src_node, int length, const Text& dst_node);
@@ -109,8 +124,8 @@ class CORE_EXPORT DocumentMarkerController final
   // Returns true if markers within a range defined by a text node,
   // |start_offset| and |end_offset| are found.
   bool SetTextMatchMarkersActive(const Text&,
-                                 unsigned start_offset,
-                                 unsigned end_offset,
+                                 wtf_size_t start_offset,
+                                 wtf_size_t end_offset,
                                  bool);
 
   // TODO(rlanday): can these methods for retrieving markers be consolidated
@@ -142,8 +157,8 @@ class CORE_EXPORT DocumentMarkerController final
   // are provided as to which one). Otherwise, this method will return null.
   DocumentMarker* FirstMarkerIntersectingOffsetRange(
       const Text&,
-      unsigned start_offset,
-      unsigned end_offset,
+      wtf_size_t start_offset,
+      wtf_size_t end_offset,
       DocumentMarker::MarkerTypes);
   // Wrappers for FirstMarker functions that return the DocumentMarkerGroup for
   // the found DocumentMarker.
@@ -175,8 +190,8 @@ class CORE_EXPORT DocumentMarkerController final
       DocumentMarker::MarkerTypes = DocumentMarker::MarkerTypes::All()) const;
   DocumentMarkerVector MarkersFor(const Text&,
                                   DocumentMarker::MarkerType,
-                                  unsigned start_offset,
-                                  unsigned end_offset) const;
+                                  wtf_size_t start_offset,
+                                  wtf_size_t end_offset) const;
   DocumentMarkerVector Markers() const;
 
   // Apply a function to all the markers of a particular type. The
@@ -203,9 +218,9 @@ class CORE_EXPORT DocumentMarkerController final
 #endif
 
   void DidUpdateCharacterData(CharacterData*,
-                              unsigned offset,
-                              unsigned old_length,
-                              unsigned new_length);
+                              wtf_size_t offset,
+                              wtf_size_t old_length,
+                              wtf_size_t new_length);
 
   void StartGlicMarkerAnimationIfNeeded();
 
@@ -219,7 +234,8 @@ class CORE_EXPORT DocumentMarkerController final
   void AddMarkerInternal(
       const EphemeralRange&,
       base::FunctionRef<DocumentMarker*(int, int)> create_marker_from_offsets,
-      const TextIteratorBehavior& iterator_behavior = {});
+      const TextIteratorBehavior& iterator_behavior = {},
+      base::FunctionRef<void(const Element&)>* on_element_node = nullptr);
   void AddMarkerToNode(const Text&, DocumentMarker*);
   DocumentMarkerGroup* GetMarkerGroupForMarker(const DocumentMarker* marker);
 
@@ -234,8 +250,8 @@ class CORE_EXPORT DocumentMarkerController final
   void RemoveMarkersFromList(MarkerMap::iterator, DocumentMarker::MarkerType);
   void RemoveMarkers(TextIterator&, DocumentMarker::MarkerTypes);
   void RemoveMarkersInternal(const Text&,
-                             unsigned start_offset,
-                             int length,
+                             wtf_size_t start_offset,
+                             wtf_size_t length,
                              DocumentMarker::MarkerType);
   // Searches marker_map for key. Returns the mapped value if it is present,
   // otherwise nullptr.

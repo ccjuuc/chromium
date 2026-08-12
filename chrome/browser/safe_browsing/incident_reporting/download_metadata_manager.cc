@@ -21,7 +21,6 @@
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ref.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -319,7 +318,7 @@ void DownloadMetadataManager::AddDownloadManager(
       GetCoordinatorForBrowserContext(browser_context);
 
   // Nothing to do if this coordinator is already being observed.
-  if (base::Contains(contexts_, coordinator)) {
+  if (contexts_.contains(coordinator)) {
     return;
   }
 
@@ -333,7 +332,7 @@ void DownloadMetadataManager::SetRequest(download::DownloadItem* item,
   download::SimpleDownloadManagerCoordinator* const coordinator =
       GetCoordinatorForBrowserContext(
           content::DownloadItemUtils::GetBrowserContext(item));
-  DCHECK(base::Contains(contexts_, coordinator));
+  DCHECK(contexts_.contains(coordinator));
   contexts_[coordinator]->SetRequest(
       item, std::make_unique<ClientDownloadRequest>(*request));
 }

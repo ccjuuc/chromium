@@ -49,6 +49,10 @@ FullRestoreReadHandler::FullRestoreReadHandler() {
 
 FullRestoreReadHandler::~FullRestoreReadHandler() = default;
 
+void FullRestoreReadHandler::OnWillDestroyEnv() {
+  env_observer_.Reset();
+}
+
 void FullRestoreReadHandler::OnWindowInitialized(aura::Window* window) {
   int32_t window_id = window->GetProperty(app_restore::kRestoreWindowIdKey);
 
@@ -223,7 +227,7 @@ bool FullRestoreReadHandler::HasBrowser(const base::FilePath& profile_path) {
 
 bool FullRestoreReadHandler::HasWindowInfo(int32_t restore_window_id) {
   if (!SessionID::IsValidValue(restore_window_id) ||
-      !base::Contains(should_check_restore_data_, active_profile_path_)) {
+      !should_check_restore_data_.contains(active_profile_path_)) {
     return false;
   }
 
@@ -254,7 +258,7 @@ std::unique_ptr<app_restore::WindowInfo> FullRestoreReadHandler::GetWindowInfo(
 std::unique_ptr<app_restore::WindowInfo>
 FullRestoreReadHandler::GetWindowInfoForActiveProfile(
     int32_t restore_window_id) {
-  if (!base::Contains(should_check_restore_data_, active_profile_path_))
+  if (!should_check_restore_data_.contains(active_profile_path_))
     return nullptr;
   return GetWindowInfo(restore_window_id);
 }

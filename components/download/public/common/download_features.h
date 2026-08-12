@@ -27,12 +27,19 @@ COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(
 
 // Whether to show blocked sensitive downloads on download home.
 COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(kShowBlockedSensitiveDownload);
-#endif
 
-// On downloads-related UI surfaces, attribute the download to the initiator
-// origin of the download request in UI displays, rather than the URL of the
-// download itself.
-COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(kDisplayInitiatorOrigin);
+// Whether to show the download scanning state on download home.
+COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(kShowDownloadScanningState);
+
+// Whether to offer a compact list view (small thumbnails + text metadata) for
+// images and videos on the Android Downloads page, in place of the default
+// large preview cards. See crbug.com/505631139.
+COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(kDownloadsCompactListView);
+
+// Whether to remap generic MIME types (like application/octet-stream) to more
+// specific MIME types deduced from the filename extension on Android.
+COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(kRemapGenericMimeType);
+#endif
 
 // Whether download notification service uses new unified API based on offline
 // item and native persistence of notification IDs.
@@ -71,7 +78,23 @@ COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(
 // Whether to enable save package for off the record mode.
 COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(
     kEnableSavePackageForOffTheRecord);
+
+// Whether to open the downloaded file in Files app if cannot open in Chrome.
+COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(
+    kOpenDownloadInFilesAppIfNoHandlerFound);
+
+// Whether to open the downloaded file in a new tab instead of a Custom Tab on
+// Desktop Android.
+COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(kOpenDownloadInNewTab);
+
+// Whether to enable "Save As" context menu option.
+COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(
+    kEnableDownloadSaveAsContextMenu);
 #endif  // BUILDFLAG(IS_ANDROID)
+
+// Whether to defer download history loading until first use.
+COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(
+    kDeferredDownloadHistoryLoading);
 }  // namespace features
 
 }  // namespace download

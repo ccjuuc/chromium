@@ -5,34 +5,26 @@
 #include "components/update_client/op_download.h"
 
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
-#include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/task/sequenced_task_runner.h"
-#include "base/task/thread_pool.h"
 #include "base/types/expected.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "components/update_client/cancellation.h"
-#include "components/update_client/component.h"
 #include "components/update_client/configurator.h"
 #include "components/update_client/crx_downloader.h"
 #include "components/update_client/crx_downloader_factory.h"
 #include "components/update_client/protocol_definition.h"
-#include "components/update_client/task_traits.h"
 #include "components/update_client/update_client_errors.h"
 #include "components/update_client/update_client_metrics.h"
-#include "components/update_client/update_engine.h"
-#include "components/update_client/utils.h"
 #include "url/gurl.h"
 
 namespace update_client {
@@ -67,8 +59,8 @@ const char* DownloaderToString(CrxDownloader::DownloadMetrics::Downloader d) {
   }
 }
 
-base::Value::Dict MakeEvent(const CrxDownloader::DownloadMetrics& dm) {
-  base::Value::Dict event;
+base::DictValue MakeEvent(const CrxDownloader::DownloadMetrics& dm) {
+  base::DictValue event;
   event.Set("eventtype", protocol_request::kEventDownload);
   event.Set("eventresult", static_cast<int>(dm.error == 0));
   event.Set("downloader", DownloaderToString(dm.downloader));
@@ -100,7 +92,7 @@ void DownloadComplete(
     const std::string& id,
     scoped_refptr<CrxDownloader> crx_downloader,
     scoped_refptr<Cancellation> cancellation,
-    base::RepeatingCallback<void(base::Value::Dict)> event_adder,
+    base::RepeatingCallback<void(base::DictValue)> event_adder,
     base::OnceCallback<void(base::expected<base::FilePath, CategorizedError>)>
         callback,
     const CrxDownloader::Result& download_result) {
@@ -121,7 +113,7 @@ void DownloadComplete(
             std::move(callback),
             base::unexpected<CategorizedError>(
                 {.category = ErrorCategory::kService,
-                 .code = static_cast<int>(ServiceError::CANCELLED)})));
+                 .code = std::to_underlying(ServiceError::CANCELLED)})));
     return;
   }
 
@@ -139,54 +131,16 @@ void DownloadComplete(
       FROM_HERE, base::BindOnce(std::move(callback), download_result.response));
 }
 
-void HandleAvailableSpace(
-    scoped_refptr<Configurator> config,
-    const std::string& id,
-    scoped_refptr<Cancellation> cancellation,
-    bool is_foreground,
-    const std::vector<GURL>& urls,
-    int64_t size,
-    const std::string& hash,
-    CrxDownloader::ProgressCallback progress_callback,
-    base::RepeatingCallback<void(base::Value::Dict)> event_adder,
-    base::OnceCallback<void(base::expected<base::FilePath, CategorizedError>)>
-        callback,
-    int64_t available_bytes) {
-  if (available_bytes / 2 <= size) {
-    VLOG(1) << "available_bytes: " << available_bytes
-            << ", download size: " << size;
-    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE,
-        base::BindOnce(
-            std::move(callback),
-            base::unexpected<CategorizedError>(
-                {.category = ErrorCategory::kDownload,
-                 .code = static_cast<int>(CrxDownloaderError::DISK_FULL)})));
-    return;
-  }
-  scoped_refptr<CrxDownloader> crx_downloader =
-      config->GetCrxDownloaderFactory()->MakeCrxDownloader(
-          config->GetProdId(),
-          CanDoBackgroundDownload(is_foreground,
-                                  config->EnabledBackgroundDownloader(), size));
-  crx_downloader->set_progress_callback(progress_callback);
-  cancellation->OnCancel(crx_downloader->StartDownload(
-      urls, hash,
-      base::BindOnce(&DownloadComplete, id, crx_downloader, cancellation,
-                     event_adder, std::move(callback))));
-}
-
 }  // namespace
 
 base::OnceClosure DownloadOperation(
     scoped_refptr<Configurator> config,
     const std::string& id,
-    base::RepeatingCallback<int64_t(const base::FilePath&)> get_available_space,
     bool is_foreground,
     const std::vector<GURL>& urls,
     int64_t size,
     const std::string& hash,
-    base::RepeatingCallback<void(base::Value::Dict)> event_adder,
+    base::RepeatingCallback<void(base::DictValue)> event_adder,
     base::RepeatingCallback<void(ComponentState)> state_tracker,
     CrxDownloader::ProgressCallback progress_callback,
     const base::FilePath& file,
@@ -195,27 +149,21 @@ base::OnceClosure DownloadOperation(
   state_tracker.Run(ComponentState::kDownloading);
   auto cancellation = base::MakeRefCounted<Cancellation>();
   progress_callback.Run(-1, -1);
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, kTaskTraits,
-      base::BindOnce(
-          [](base::RepeatingCallback<int64_t(const base::FilePath&)>
-                 get_available_space) {
-            base::ScopedTempDir temp_dir;
-            return CreateScopedTempDirectory(temp_dir)
-                       ? get_available_space.Run(temp_dir.GetPath())
-                       : int64_t{0};
-          },
-          get_available_space),
-      base::BindOnce(&HandleAvailableSpace, config, id, cancellation,
-                     is_foreground, urls, size, hash,
-                     base::BindRepeating(
-                         [](CrxDownloader::ProgressCallback progress_callback,
-                            int64_t file_size, int64_t downloaded_bytes,
-                            int64_t /*content_length*/) {
-                           progress_callback.Run(downloaded_bytes, file_size);
-                         },
-                         progress_callback, size),
-                     event_adder, std::move(callback)));
+  scoped_refptr<CrxDownloader> crx_downloader =
+      config->GetCrxDownloaderFactory()->MakeCrxDownloader(
+          config->GetProdId(),
+          CanDoBackgroundDownload(is_foreground,
+                                  config->EnabledBackgroundDownloader(), size));
+  crx_downloader->set_progress_callback(base::BindRepeating(
+      [](CrxDownloader::ProgressCallback progress_callback, int64_t file_size,
+         int64_t downloaded_bytes, int64_t /*content_length*/) {
+        progress_callback.Run(downloaded_bytes, file_size);
+      },
+      progress_callback, size));
+  cancellation->OnCancel(crx_downloader->StartDownload(
+      urls, hash,
+      base::BindOnce(&DownloadComplete, id, crx_downloader, cancellation,
+                     event_adder, std::move(callback))));
   return base::BindOnce(&Cancellation::Cancel, cancellation);
 }
 

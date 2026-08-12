@@ -34,6 +34,7 @@ config("glib_common_config") {
     "-Werror=implicit-function-declaration",
     "-Werror=missing-prototypes",
     "-Werror=pointer-sign",
+    "-fsigned-char",
   ]
 
   # gvariant.c triggers a -Walloc-size warning which seems benign; see
@@ -570,7 +571,35 @@ shared_library("gio") {
     ":glib",
     ":gmodule",
     ":gobject",
-    "//third_party/gvdb",
+    "//third_party/gvdb:gvdb_reader",
     "//third_party/zlib",
   ]
+}
+
+if (current_toolchain == host_toolchain) {
+  executable("glib-compile-schemas") {
+    testonly = true
+
+    sources = [ "src/gio/glib-compile-schemas.c" ]
+
+    configs += [ ":glib_common_config" ]
+
+    include_dirs = [
+      "include/gio",
+      "src/gio",
+    ]
+
+    deps = [
+      ":gio",
+      ":glib",
+      ":gmodule",
+      ":gobject",
+      "//third_party/gvdb:gvdb_builder",
+    ]
+
+    ldflags = [ "-Wl,-rpath=\$ORIGIN" ]
+
+    configs -= [ "//build/config/compiler:chromium_code" ]
+    configs += [ "//build/config/compiler:no_chromium_code" ]
+  }
 }

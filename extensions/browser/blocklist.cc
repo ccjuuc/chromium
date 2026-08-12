@@ -10,10 +10,12 @@
 #include <utility>
 
 #include "base/callback_list.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/lazy_instance.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/weak_ptr.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
 #include "base/observer_list.h"
 #include "base/task/single_thread_task_runner.h"
 #include "components/prefs/pref_service.h"
@@ -32,6 +34,10 @@
 #include "extensions/common/extension_id.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
+namespace safe_browsing {
+class V5GetHashProtocolManager;
+}
 
 using content::BrowserThread;
 using safe_browsing::SafeBrowsingDatabaseManager;
@@ -95,6 +101,17 @@ class SafeBrowsingClientImpl
                                      extension_ids);
   }
 
+  // SafeBrowsingDatabaseManager::Client impl:
+  base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+  GetV5GetHashProtocolManager() override {
+    // Extension blocklist checks just check the local database; they don't
+    // make get hash requests. So, there's no need to provide a
+    // V5GetHashProtocolManager.
+    // TODO(crbug.com/372395685): Refactor so this override is unneeded once the
+    // v4 code is deprecated.
+    NOTREACHED();
+  }
+
  private:
   friend class base::RefCountedThreadSafe<SafeBrowsingClientImpl>;
 
@@ -116,6 +133,7 @@ class SafeBrowsingClientImpl
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
     if (database_manager->CheckExtensionIDs(extension_ids, this)) {
       // Definitely not blocklisted. Callback immediately.
+      LogBlocklistedCount(0);
       callback_task_runner_->PostTask(
           FROM_HERE,
           base::BindOnce(std::move(callback_), std::set<ExtensionId>()));
@@ -128,8 +146,14 @@ class SafeBrowsingClientImpl
 
   void OnCheckExtensionsResult(const std::set<ExtensionId>& hits) override {
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    LogBlocklistedCount(hits.size());
     std::move(callback_).Run(hits);
     Release();  // Balanced in StartCheck.
+  }
+
+  void LogBlocklistedCount(int count) {
+    base::UmaHistogramCounts100("Extensions.SafeBrowsing.BlocklistedCount",
+                                count);
   }
 
   scoped_refptr<base::SingleThreadTaskRunner> callback_task_runner_;
@@ -140,22 +164,6 @@ void CheckOneExtensionState(Blocklist::IsBlocklistedCallback callback,
                             const Blocklist::BlocklistStateMap& state_map) {
   std::move(callback).Run(state_map.empty() ? NOT_BLOCKLISTED
                                             : state_map.begin()->second);
-}
-
-void GetMalwareFromBlocklistStateMap(
-    Blocklist::GetMalwareIDsCallback callback,
-    const Blocklist::BlocklistStateMap& state_map) {
-  std::set<ExtensionId> malware;
-  for (const auto& state_pair : state_map) {
-    // TODO(oleg): UNKNOWN is treated as MALWARE for backwards compatibility.
-    // In future GetMalwareIDs will be removed and the caller will have to
-    // deal with BLOCKLISTED_UNKNOWN state returned from GetBlocklistedIDs.
-    if (state_pair.second == BLOCKLISTED_MALWARE ||
-        state_pair.second == BLOCKLISTED_UNKNOWN) {
-      malware.insert(state_pair.first);
-    }
-  }
-  std::move(callback).Run(malware);
 }
 
 }  // namespace
@@ -199,12 +207,6 @@ void Blocklist::GetBlocklistedIDs(const std::set<ExtensionId>& ids,
       SafeBrowsingDatabaseManager::Client::GetPassKey(), ids,
       base::BindOnce(&Blocklist::GetBlocklistStateForIDs,
                      weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
-}
-
-void Blocklist::GetMalwareIDs(const std::set<ExtensionId>& ids,
-                              GetMalwareIDsCallback callback) {
-  GetBlocklistedIDs(ids, base::BindOnce(&GetMalwareFromBlocklistStateMap,
-                                        std::move(callback)));
 }
 
 void Blocklist::IsBlocklisted(const ExtensionId& extension_id,
@@ -297,7 +299,7 @@ void Blocklist::OnBlocklistStateReceived(const ExtensionId& id,
 
     bool have_all_in_cache = true;
     for (const auto& id_str : ids) {
-      if (!base::Contains(blocklist_state_cache_, id_str)) {
+      if (!blocklist_state_cache_.contains(id_str)) {
         have_all_in_cache = false;
         break;
       }

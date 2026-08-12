@@ -20,6 +20,7 @@ import android.graphics.drawable.Drawable;
 
 import androidx.test.core.app.ApplicationProvider;
 
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -35,9 +36,8 @@ import org.robolectric.annotation.Config;
 import org.chromium.base.Callback;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features;
+import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.homepage.HomepageManager;
 import org.chromium.chrome.browser.logo.LogoBridge.Logo;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
@@ -47,11 +47,17 @@ import org.chromium.components.search_engines.TemplateUrl;
 import org.chromium.components.search_engines.TemplateUrlService;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.ui.util.ColorUtils;
 
 /** Unit tests for the {@link LogoMediator}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 public class LogoMediatorUnitTest {
+
+    private static final String TEST_ANIMATED_LOGO_URL = "http://animated-logo.com";
+    private static final String TEST_CLICK_URL = "http://click-url.com";
+    private static final String TEST_LOG_URL = "http://log-url.com";
+    private static final String TEST_LOG_URL_NETWORK = "http://log-url-network.com";
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private Profile mProfile;
@@ -68,9 +74,13 @@ public class LogoMediatorUnitTest {
 
     @Mock Callback<Logo> mOnLogoAvailableCallback;
 
+    @Mock DoodleCache mDoodleCache;
+
     @Captor
     private ArgumentCaptor<TemplateUrlService.TemplateUrlServiceObserver>
             mTemplateUrlServiceObserverArgumentCaptor;
+
+    @Captor private ArgumentCaptor<LogoBridge.LogoObserver> mLogoObserverArgumentCaptor;
 
     private Context mContext;
     private PropertyModel mLogoModel;
@@ -85,6 +95,7 @@ public class LogoMediatorUnitTest {
         when(mTemplateUrlService.getDefaultSearchEngineTemplateUrl()).thenReturn(mTemplateUrl);
         when(mTemplateUrl.getKeyword()).thenReturn(null);
 
+        DoodleCache.setInstanceForTesting(mDoodleCache);
         LogoBridgeJni.setInstanceForTesting(mLogoBridgeJniMock);
 
         ThreadUtils.runOnUiThreadBlocking(
@@ -93,37 +104,15 @@ public class LogoMediatorUnitTest {
         mLogoModel = new PropertyModel(LogoProperties.ALL_KEYS);
     }
 
-    @Test
-    @Features.DisableFeatures(ChromeFeatureList.ANDROID_LOGO_VIEW_REFACTOR)
-    public void testDseChangedAndGoogleIsDseAndDoodleIsSupported_disabled() {
-        LogoMediator logoMediator = createMediator();
-        Assert.assertNotNull(logoMediator.getDefaultGoogleLogo(mContext));
-
-        verify(mTemplateUrlService)
-                .addObserver(mTemplateUrlServiceObserverArgumentCaptor.capture());
-        mTemplateUrlServiceObserverArgumentCaptor.getValue().onTemplateURLServiceChanged();
-
-        verify(mLogoBridge, times(1)).getCurrentLogo(any());
+    @After
+    public void tearDown() {
+        DoodleCache.setInstanceForTesting(null);
     }
 
     @Test
     public void testDseChangedAndGoogleIsDseAndDoodleIsSupported() {
         LogoMediator logoMediator = createMediator(mContext.getDrawable(R.drawable.ic_google_logo));
         Assert.assertNotNull(logoMediator.getDefaultGoogleLogoDrawable());
-
-        verify(mTemplateUrlService)
-                .addObserver(mTemplateUrlServiceObserverArgumentCaptor.capture());
-        mTemplateUrlServiceObserverArgumentCaptor.getValue().onTemplateURLServiceChanged();
-
-        verify(mLogoBridge, times(1)).getCurrentLogo(any());
-    }
-
-    @Test
-    @Features.DisableFeatures(ChromeFeatureList.ANDROID_LOGO_VIEW_REFACTOR)
-    public void testDseChangedAndGoogleIsNotDse_disabled() {
-        LogoMediator logoMediator = createMediator();
-        when(mTemplateUrlService.isDefaultSearchEngineGoogle()).thenReturn(false);
-        Assert.assertNull(logoMediator.getDefaultGoogleLogo(mContext));
 
         verify(mTemplateUrlService)
                 .addObserver(mTemplateUrlServiceObserverArgumentCaptor.capture());
@@ -166,6 +155,122 @@ public class LogoMediatorUnitTest {
         logoMediator.updateVisibility(/* animationEnabled= */ false);
 
         verify(mLogoBridge, times(1)).getCurrentLogo(any());
+    }
+
+    @Test
+    public void testLoadLogoUpdatesCache() {
+        LogoMediator logoMediator = createMediator();
+        logoMediator.setHasLogoLoadedForCurrentSearchEngineForTesting(false);
+        when(mTemplateUrlService.isDefaultSearchEngineGoogle()).thenReturn(false);
+        Logo logo =
+                new Logo(
+                        /* image= */ null,
+                        /* darkImage= */ null,
+                        /* onClickUrl= */ null,
+                        /* altText= */ null,
+                        /* animatedLogoUrl= */ null,
+                        /* darkAnimatedLogoUrl= */ null,
+                        TEST_LOG_URL_NETWORK);
+
+        logoMediator.updateVisibility(/* animationEnabled= */ false);
+
+        verify(mLogoBridge).getCurrentLogo(mLogoObserverArgumentCaptor.capture());
+        mLogoObserverArgumentCaptor.getValue().onLogoAvailable(logo, false);
+
+        verify(mDoodleCache).updateCachedDoodle(logo, null);
+        verify(mLogoBridge).recordImpression(TEST_LOG_URL_NETWORK);
+    }
+
+    @Test
+    public void testLoadLogoFromCache() {
+        LogoMediator logoMediator = createMediator();
+        logoMediator.setHasLogoLoadedForCurrentSearchEngineForTesting(false);
+        Logo cachedLogo =
+                new Logo(
+                        /* image= */ null,
+                        /* darkImage= */ null,
+                        TEST_CLICK_URL,
+                        /* altText= */ null,
+                        /* animatedLogoUrl= */ null,
+                        /* darkAnimatedLogoUrl= */ null,
+                        TEST_LOG_URL);
+        when(mDoodleCache.getCachedDoodle(any())).thenReturn(cachedLogo);
+
+        var histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord("NewTabPage.LogoShown", 0)
+                        .expectIntRecord("NewTabPage.LogoShown.FromCache", 0)
+                        .build();
+
+        logoMediator.updateVisibility(/* animationEnabled= */ true);
+
+        histogramWatcher.assertExpected();
+
+        // Should use cached logo and not call bridge
+        verify(mLogoBridge, never()).getCurrentLogo(any());
+        assertEquals(cachedLogo, mLogoModel.get(LogoProperties.LOGO));
+        // Animation should be disabled when loading from cache
+        Assert.assertFalse(mLogoModel.get(LogoProperties.ANIMATION_ENABLED));
+        verify(mLogoBridge).recordImpression(TEST_LOG_URL);
+    }
+
+    @Test
+    public void testLoadAnimatedLogoFromCache() {
+        LogoMediator logoMediator = createMediator();
+        logoMediator.setHasLogoLoadedForCurrentSearchEngineForTesting(false);
+        Logo cachedLogo =
+                new Logo(
+                        /* image= */ null,
+                        /* darkImage= */ null,
+                        /* onClickUrl= */ TEST_CLICK_URL,
+                        /* altText= */ null,
+                        /* animatedLogoUrl= */ TEST_ANIMATED_LOGO_URL,
+                        /* darkAnimatedLogoUrl= */ null,
+                        TEST_LOG_URL);
+        when(mDoodleCache.getCachedDoodle(any())).thenReturn(cachedLogo);
+
+        var histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord("NewTabPage.LogoShown", 1)
+                        .expectIntRecord("NewTabPage.LogoShown.FromCache", 1)
+                        .build();
+
+        logoMediator.updateVisibility(/* animationEnabled= */ true);
+
+        histogramWatcher.assertExpected();
+
+        // Should use cached logo and not call bridge
+        verify(mLogoBridge, never()).getCurrentLogo(any());
+        assertEquals(cachedLogo, mLogoModel.get(LogoProperties.LOGO));
+        // Animation should be disabled when loading from cache
+        Assert.assertFalse(mLogoModel.get(LogoProperties.ANIMATION_ENABLED));
+        verify(mLogoBridge).recordImpression(TEST_LOG_URL);
+    }
+
+    @Test
+    public void testLoadAnimatedLogoFromCache_DarkMode() {
+        ColorUtils.setInNightModeForTesting(true);
+        try {
+            LogoMediator logoMediator = createMediator();
+            logoMediator.setHasLogoLoadedForCurrentSearchEngineForTesting(false);
+            Logo cachedLogo =
+                    new Logo(
+                            null,
+                            null,
+                            TEST_CLICK_URL,
+                            null,
+                            TEST_ANIMATED_LOGO_URL,
+                            "http://dark-animated-logo.com",
+                            /* logUrl= */ null);
+            when(mDoodleCache.getCachedDoodle(any())).thenReturn(cachedLogo);
+
+            logoMediator.updateVisibility(/* animationEnabled= */ true);
+
+            assertEquals(
+                    "http://dark-animated-logo.com", logoMediator.getAnimatedLogoUrlForTesting());
+        } finally {
+            ColorUtils.setInNightModeForTesting(null);
+        }
     }
 
     @Test
@@ -244,10 +349,20 @@ public class LogoMediatorUnitTest {
     @Test
     public void testIsDefaultGoogleLogoShown() {
         LogoMediator logoMediator = createMediator();
-        Logo logo = mock(Logo.class);
+
+        when(mTemplateUrlService.isDefaultSearchEngineGoogle()).thenReturn(true);
+        verify(mTemplateUrlService)
+                .addObserver(mTemplateUrlServiceObserverArgumentCaptor.capture());
+        mTemplateUrlServiceObserverArgumentCaptor.getValue().onTemplateURLServiceChanged();
 
         logoMediator.setShouldShowLogoForTesting(true);
         mLogoModel.set(LogoProperties.VISIBILITY, true);
+        assertTrue(logoMediator.isDefaultGoogleLogoShown());
+
+        Logo logo = mock(Logo.class);
+        mLogoModel.set(LogoProperties.LOGO, logo);
+        Assert.assertFalse(logoMediator.isDefaultGoogleLogoShown());
+
         mLogoModel.set(LogoProperties.LOGO, null);
         assertTrue(logoMediator.isDefaultGoogleLogoShown());
 
@@ -258,20 +373,66 @@ public class LogoMediatorUnitTest {
         mLogoModel.set(LogoProperties.VISIBILITY, false);
         Assert.assertFalse(logoMediator.isDefaultGoogleLogoShown());
 
+        when(mTemplateUrlService.isDefaultSearchEngineGoogle()).thenReturn(false);
+        mTemplateUrlServiceObserverArgumentCaptor.getValue().onTemplateURLServiceChanged();
         logoMediator.setShouldShowLogoForTesting(true);
         mLogoModel.set(LogoProperties.VISIBILITY, true);
-        mLogoModel.set(LogoProperties.LOGO, logo);
         Assert.assertFalse(logoMediator.isDefaultGoogleLogoShown());
     }
 
     @Test
-    public void testUpdateDefaultGoogleLogo() {
+    public void testUpdateDefaultGoogleLogo_NoDoodle() {
         LogoMediator logoMediator = createMediator();
         Drawable drawable = mock(Drawable.class);
         logoMediator.updateDefaultGoogleLogo(drawable);
 
         assertEquals(drawable, logoMediator.getDefaultGoogleLogoDrawable());
         assertTrue(mLogoModel.get(LogoProperties.SHOW_DEFAULT_GOOGLE_LOGO));
+    }
+
+    @Test
+    public void testUpdateDefaultGoogleLogo_WithDoodle() {
+        LogoMediator logoMediator = createMediator();
+        Logo logo = mock(Logo.class);
+        mLogoModel.set(LogoProperties.LOGO, logo);
+
+        Drawable drawable = mock(Drawable.class);
+        Assert.assertThrows(
+                AssertionError.class, () -> logoMediator.updateDefaultGoogleLogo(drawable));
+    }
+
+    @Test
+    public void testOnLogoClicked_AfterDestroy() {
+        LogoMediator logoMediator = createMediator();
+        logoMediator.destroy();
+
+        logoMediator.onLogoClicked(false);
+
+        verify(mLogoClickedCallback, never()).onResult(any());
+    }
+
+    @Test
+    public void testOnLogoClicked_LazyImageFetcher() {
+        LogoMediator logoMediator = createMediator();
+        Assert.assertNull(logoMediator.getImageFetcherForTesting());
+
+        logoMediator.setAnimatedLogoUrlForTesting(TEST_ANIMATED_LOGO_URL);
+
+        logoMediator.onLogoClicked(false);
+
+        Assert.assertNotNull(logoMediator.getImageFetcherForTesting());
+    }
+
+    @Test
+    public void testOnLogoClicked_StaticLogo_OpensUrl() {
+        LogoMediator logoMediator = createMediator();
+        logoMediator.setOnLogoClickUrlForTesting(TEST_CLICK_URL);
+
+        logoMediator.onLogoClicked(false);
+
+        ArgumentCaptor<LoadUrlParams> captor = ArgumentCaptor.forClass(LoadUrlParams.class);
+        verify(mLogoClickedCallback).onResult(captor.capture());
+        assertEquals(TEST_CLICK_URL, captor.getValue().getUrl());
     }
 
     private LogoMediator createMediator() {
@@ -296,10 +457,44 @@ public class LogoMediatorUnitTest {
                         mLogoModel,
                         mOnLogoAvailableCallback,
                         null,
-                        new CachedTintedBitmap(
-                                R.drawable.google_logo, R.color.google_logo_tint_color),
                         defaultGoogleLogoDrawable);
         logoMediator.setLogoBridgeForTesting(mLogoBridge);
         return logoMediator;
+    }
+
+    @Test
+    public void testDuplicatePingsAreSuppressed() {
+        LogoMediator logoMediator = createMediator();
+        logoMediator.setHasLogoLoadedForCurrentSearchEngineForTesting(false);
+        when(mTemplateUrlService.isDefaultSearchEngineGoogle()).thenReturn(false);
+
+        logoMediator.updateVisibility(false);
+
+        verify(mLogoBridge).getCurrentLogo(mLogoObserverArgumentCaptor.capture());
+
+        Logo cachedLogo =
+                new Logo(
+                        /* image= */ null,
+                        /* darkImage= */ null,
+                        TEST_CLICK_URL,
+                        /* altText= */ null,
+                        /* animatedLogoUrl= */ null,
+                        /* darkAnimatedLogoUrl= */ null,
+                        TEST_LOG_URL);
+        Logo freshLogo =
+                new Logo(
+                        /* image= */ null,
+                        /* darkImage= */ null,
+                        TEST_CLICK_URL,
+                        /* altText= */ null,
+                        /* animatedLogoUrl= */ null,
+                        /* darkAnimatedLogoUrl= */ null,
+                        TEST_LOG_URL);
+
+        mLogoObserverArgumentCaptor.getValue().onLogoAvailable(cachedLogo, true);
+        mLogoObserverArgumentCaptor.getValue().onLogoAvailable(freshLogo, false);
+
+        // Should only record impression once
+        verify(mLogoBridge, times(1)).recordImpression(TEST_LOG_URL);
     }
 }

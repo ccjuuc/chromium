@@ -11,6 +11,7 @@ class MockChromiumCommit:
                  host,
                  position='refs/heads/master@{#123}',
                  change_id='Iba5eba11',
+                 link='',
                  author='Fake author',
                  subject='Fake subject',
                  body='Fake body',
@@ -19,6 +20,7 @@ class MockChromiumCommit:
         self.position = position
         self.sha = hashlib.sha1(position.encode('utf-8')).hexdigest()
         self._change_id = change_id
+        self._link = link
         self._author = author
         self._subject = subject
         self._body = body
@@ -55,8 +57,11 @@ class MockChromiumCommit:
     def message(self):
         return self.subject() + '\n\n' + self.body()
 
-    def format_patch(self):
-        return self._patch
+    def format_patch(self) -> bytes:
+        return self._patch.encode()
 
     def change_id(self):
         return self._change_id
+
+    def link(self):
+        return self._link

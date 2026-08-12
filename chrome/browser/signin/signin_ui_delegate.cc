@@ -24,8 +24,7 @@ void SigninUiDelegate::ShowTurnSyncOnUI(
     bool user_already_signed_in) {
   // TODO(crbug.com/417950948): Delete this function when removing the Sync
   // feature.
-  CHECK(!base::FeatureList::IsEnabled(
-      syncer::kReplaceSyncPromosWithSignInPromos));
+  CHECK(!syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
   // TurnSyncOnHelper is suicidal (it will delete itself once it finishes
   // enabling sync).
   new TurnSyncOnHelper(profile, EnsureBrowser(profile), access_point,
@@ -37,8 +36,7 @@ void SigninUiDelegate::ShowHistorySyncOptinUI(
     Profile* profile,
     const CoreAccountId& account_id,
     signin_metrics::AccessPoint access_point) {
-  CHECK(
-      base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos));
+  CHECK(syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
   HistorySyncOptinService* history_sync_optin_service =
       HistorySyncOptinServiceFactory::GetForProfile(profile);
   CHECK(history_sync_optin_service);
@@ -54,10 +52,10 @@ void SigninUiDelegate::ShowHistorySyncOptinUI(
 }
 
 // static
-Browser* SigninUiDelegate::EnsureBrowser(Profile* profile) {
+BrowserWindowInterface* SigninUiDelegate::EnsureBrowser(Profile* profile) {
   DCHECK(profile);
   chrome::ScopedTabbedBrowserDisplayer displayer(profile);
-  return displayer.browser();
+  return displayer.browser_window_interface();
 }
 
 }  // namespace signin_ui_util

@@ -18,30 +18,37 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "base/version.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/ui/views/web_apps/isolated_web_apps/isolated_web_app_installer_model.h"
 #include "chrome/browser/ui/views/web_apps/isolated_web_apps/isolated_web_app_installer_view.h"
+#include "chrome/browser/ui/views/web_apps/isolated_web_apps/isolated_web_app_installer_view_impl.h"
 #include "chrome/browser/ui/views/web_apps/isolated_web_apps/test_isolated_web_app_installer_model_observer.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_trust_checker.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolation_data.h"
 #include "chrome/browser/web_applications/isolated_web_apps/signed_web_bundle_metadata.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
+#include "chrome/browser/web_applications/model/dialog_image_info.h"
+#include "chrome/browser/web_applications/model/isolation_data.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
 #include "chrome/browser/web_applications/test/fake_web_app_ui_manager.h"
 #include "chrome/browser/web_applications/test/fake_web_contents_manager.h"
 #include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/test/web_app_icon_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
+#include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
 #include "chrome/common/chrome_features.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/prefs/pref_service.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_id.h"
+#include "components/webapps/isolated_web_apps/public/iwa_runtime_data_provider.h"
 #include "components/webapps/isolated_web_apps/scheme.h"
+#include "components/webapps/isolated_web_apps/test_support/fake_iwa_runtime_data_provider.h"
 #include "components/webapps/isolated_web_apps/test_support/signing_keys.h"
 #include "components/webapps/isolated_web_apps/types/source.h"
 #include "components/webapps/isolated_web_apps/types/storage_location.h"
@@ -51,13 +58,19 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/manifest/manifest.h"
+#include "ui/base/l10n/l10n_util.h"
+#include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/controls/styled_label.h"
+#include "ui/views/layout/box_layout_view.h"
+#include "ui/views/test/test_layout_provider.h"
+#include "ui/views/view_utils.h"
+#include "ui/views/window/dialog_delegate.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_pref_names.h"
 #include "base/values.h"
 #include "chrome/browser/ash/app_restore/full_restore_service_factory.h"
-#include "chrome/browser/ui/views/web_apps/isolated_web_apps/pref_observer.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -86,24 +99,12 @@ MATCHER_P3(WithMetadata, app_id, app_name, version, "") {
       arg, result_listener);
 }
 
-IsolatedWebAppUrlInfo CreateAndWriteTestBundle(
-    const base::FilePath& bundle_path,
-    const std::string& version) {
-  const std::unique_ptr<web_app::BundledIsolatedWebApp> bundle =
-      IsolatedWebAppBuilder(ManifestBuilder().SetVersion(version))
-          .BuildBundle(bundle_path, test::GetDefaultEd25519KeyPair());
-  bundle->TrustSigningKey();
-
-  return IsolatedWebAppUrlInfo::CreateFromSignedWebBundleId(
-      bundle->web_bundle_id());
-}
-
 SignedWebBundleMetadata CreateMetadata(const std::u16string& app_name,
                                        const std::string& version) {
   DialogImageInfo image_info;
   image_info.is_maskable = true;
   auto url_info = IsolatedWebAppUrlInfo::CreateFromSignedWebBundleId(
-      web_package::SignedWebBundleId::CreateRandomForProxyMode());
+      test::GetDefaultEd25519WebBundleId());
   return SignedWebBundleMetadata::CreateForTesting(
       url_info, IwaSourceBundleProdMode(base::FilePath()), app_name,
       *IwaVersion::Create(version), std::move(image_info),
@@ -141,10 +142,13 @@ class MockView : public IsolatedWebAppInstallerView {
   MOCK_METHOD(void, ShowDisabledScreen, (), (override));
   MOCK_METHOD(void, ShowGetMetadataScreen, (), (override));
   MOCK_METHOD(void, UpdateGetMetadataProgress, (double progress), (override));
-  MOCK_METHOD(void,
-              ShowMetadataScreen,
-              (const SignedWebBundleMetadata& bundle_metadata),
-              (override));
+  MOCK_METHOD(
+      void,
+      ShowMetadataScreen,
+      (const SignedWebBundleMetadata& bundle_metadata,
+       const std::vector<UpdateManifest::ChannelMetadata>& available_channels),
+      (override));
+
   MOCK_METHOD(void,
               ShowInstallScreen,
               (const SignedWebBundleMetadata& bundle_metadata),
@@ -156,46 +160,9 @@ class MockView : public IsolatedWebAppInstallerView {
               (override));
   MOCK_METHOD(views::Widget*,
               ShowDialog,
-              (const IsolatedWebAppInstallerModel::Dialog& dialog),
+              (const IsolatedWebAppInstallerModel::Dialog& dialog,
+               const views::DialogDelegate* delegate),
               (override));
-};
-
-// Fake pref observer that mimics the behavior of an actual observer. i.e.
-// posts callback to run:
-// - Once on `Start()`.
-// - Every time the pref value is changed.
-class FakeIsolatedWebAppsEnabledPrefObserver
-    : public IsolatedWebAppsEnabledPrefObserver {
- public:
-  explicit FakeIsolatedWebAppsEnabledPrefObserver(bool initial_value) {
-    // The pref only exists for ChromeOS, for all other OSs, we just post
-    // callback with |true|.
-#if !BUILDFLAG(IS_CHROMEOS)
-    initial_value = true;
-#endif
-    value_ = initial_value;
-  }
-
-  void Start(PrefChangedCallback callback) override {
-    CHECK(!callback_);
-    callback_ = callback;
-    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(callback_, value_));
-  }
-
-  void Reset() override { callback_.Reset(); }
-
-  void UpdatePref(bool value) {
-    if (value_ != value) {
-      value_ = value;
-      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce(callback_, value_));
-    }
-  }
-
- private:
-  PrefChangedCallback callback_;
-  bool value_;
 };
 
 }  // namespace
@@ -204,8 +171,12 @@ class IsolatedWebAppInstallerViewControllerTest : public ::testing::Test {
  public:
   void SetUp() override {
     scoped_feature_list_.InitWithFeatures(
-        {features::kIsolatedWebApps, features::kIsolatedWebAppDevMode}, {});
+        {features::kIsolatedWebApps, features::kIsolatedWebAppDevMode,
+         features::kIsolatedWebAppUnmanagedInstall},
+        {});
     ASSERT_TRUE(scoped_temp_dir_.CreateUniqueTempDir());
+
+    resetter_ = IwaRuntimeDataProvider::SetInstanceForTesting(&data_provider_);
 
     TestingProfile::Builder profile_builder;
     profile_ = profile_builder.Build();
@@ -214,6 +185,9 @@ class IsolatedWebAppInstallerViewControllerTest : public ::testing::Test {
     ash::full_restore::FullRestoreServiceFactory::GetInstance()
         ->SetTestingFactory(profile_.get(),
                             base::BindRepeating(&NullServiceFactory));
+    // Default the pref to true for most tests.
+    profile()->GetPrefs()->SetBoolean(ash::prefs::kIsolatedWebAppsEnabled,
+                                      true);
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
     // Launching requires real os integration.
@@ -264,6 +238,25 @@ class IsolatedWebAppInstallerViewControllerTest : public ::testing::Test {
         CreateDefaultManifest(iwa_url, *IwaVersion::Create(version));
   }
 
+  IsolatedWebAppUrlInfo CreateAndWriteTestBundle(
+      const base::FilePath& bundle_path,
+      const std::string& version) {
+    const std::unique_ptr<web_app::BundledIsolatedWebApp> bundle =
+        IsolatedWebAppBuilder(ManifestBuilder().SetVersion(version))
+            .BuildBundle(bundle_path, test::GetDefaultEd25519KeyPair());
+    bundle->TrustSigningKey();
+
+    data_provider_.Update([&](auto& update) {
+      update.AddToUserInstallAllowlist(
+          bundle->web_bundle_id(),
+          IwaRuntimeDataProvider::UserInstallAllowlistItemData(
+              /*enterprise_name=*/"fancy comp"));
+    });
+
+    return IsolatedWebAppUrlInfo::CreateFromSignedWebBundleId(
+        bundle->web_bundle_id());
+  }
+
  private:
   content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
@@ -272,6 +265,8 @@ class IsolatedWebAppInstallerViewControllerTest : public ::testing::Test {
   base::ScopedTempDir scoped_temp_dir_;
   data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
   std::unique_ptr<TestingProfile> profile_;
+  FakeIwaRuntimeDataProvider data_provider_;
+  std::optional<base::AutoReset<IwaRuntimeDataProvider*>> resetter_;
 };
 
 TEST_F(IsolatedWebAppInstallerViewControllerTest,
@@ -281,10 +276,8 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
   MockIconAndPageState(url_info);
 
   IsolatedWebAppInstallerModel model{IwaSourceBundleProdMode(bundle_path)};
-  auto pref_observer =
-      std::make_unique<FakeIsolatedWebAppsEnabledPrefObserver>(true);
-  IsolatedWebAppInstallerViewController controller(
-      profile(), fake_provider(), &model, std::move(pref_observer));
+  IsolatedWebAppInstallerViewController controller(profile(), fake_provider(),
+                                                   &model);
   testing::StrictMock<MockView> view;
   controller.SetViewForTesting(&view);
 
@@ -292,7 +285,8 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
   EXPECT_CALL(view, ShowGetMetadataScreen());
   EXPECT_CALL(
       view, ShowMetadataScreen(WithMetadata("hoealecpbefphiclhampllbdbdpfmfpi",
-                                            u"test app name", "7.7.7")));
+                                            u"test app name", "7.7.7"),
+                               _));
 
   controller.Start(base::DoNothing(), base::DoNothing());
 
@@ -312,10 +306,8 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
   MockIconAndPageState(url_info);
 
   IsolatedWebAppInstallerModel model{IwaSourceBundleProdMode(bundle_path)};
-  auto pref_observer =
-      std::make_unique<FakeIsolatedWebAppsEnabledPrefObserver>(true);
-  IsolatedWebAppInstallerViewController controller(
-      profile(), fake_provider(), &model, std::move(pref_observer));
+  IsolatedWebAppInstallerViewController controller(profile(), fake_provider(),
+                                                   &model);
   testing::StrictMock<MockView> view;
   controller.SetViewForTesting(&view);
 
@@ -324,7 +316,8 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
   EXPECT_CALL(
       view,
       ShowDialog(
-          VariantWith<IsolatedWebAppInstallerModel::BundleInvalidDialog>(_)));
+          VariantWith<IsolatedWebAppInstallerModel::BundleInvalidDialog>(_),
+          _));
 
   controller.Start(base::DoNothing(), base::DoNothing());
 
@@ -341,12 +334,9 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
   InstallTestBundle("2.0");
 
   IsolatedWebAppInstallerModel model{IwaSourceBundleProdMode(bundle_path)};
-  model.SetStep(Step::kGetMetadata);
 
-  auto pref_observer =
-      std::make_unique<FakeIsolatedWebAppsEnabledPrefObserver>(true);
-  IsolatedWebAppInstallerViewController controller(
-      profile(), fake_provider(), &model, std::move(pref_observer));
+  IsolatedWebAppInstallerViewController controller(profile(), fake_provider(),
+                                                   &model);
   testing::StrictMock<MockView> view;
   controller.SetViewForTesting(&view);
 
@@ -356,7 +346,8 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
       view,
       ShowDialog(
           VariantWith<
-              IsolatedWebAppInstallerModel::BundleAlreadyInstalledDialog>(_)));
+              IsolatedWebAppInstallerModel::BundleAlreadyInstalledDialog>(_),
+          _));
 
   controller.Start(base::DoNothing(), base::DoNothing());
 
@@ -373,12 +364,9 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
   InstallTestBundle("1.0");
 
   IsolatedWebAppInstallerModel model{IwaSourceBundleProdMode(bundle_path)};
-  model.SetStep(Step::kGetMetadata);
 
-  auto pref_observer =
-      std::make_unique<FakeIsolatedWebAppsEnabledPrefObserver>(true);
-  IsolatedWebAppInstallerViewController controller(
-      profile(), fake_provider(), &model, std::move(pref_observer));
+  IsolatedWebAppInstallerViewController controller(profile(), fake_provider(),
+                                                   &model);
   testing::StrictMock<MockView> view;
   controller.SetViewForTesting(&view);
 
@@ -388,7 +376,8 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
       view,
       ShowDialog(
           VariantWith<
-              IsolatedWebAppInstallerModel::BundleAlreadyInstalledDialog>(_)));
+              IsolatedWebAppInstallerModel::BundleAlreadyInstalledDialog>(_),
+          _));
 
   controller.Start(base::DoNothing(), base::DoNothing());
 
@@ -404,10 +393,8 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
   model.SetSignedWebBundleMetadata(metadata);
   model.SetStep(Step::kShowMetadata);
 
-  auto pref_observer =
-      std::make_unique<FakeIsolatedWebAppsEnabledPrefObserver>(true);
-  IsolatedWebAppInstallerViewController controller(
-      profile(), fake_provider(), &model, std::move(pref_observer));
+  IsolatedWebAppInstallerViewController controller(profile(), fake_provider(),
+                                                   &model);
   testing::StrictMock<MockView> view;
   controller.SetViewForTesting(&view);
 
@@ -415,7 +402,8 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
       view,
       ShowDialog(
           VariantWith<IsolatedWebAppInstallerModel::ConfirmInstallationDialog>(
-              _)));
+              _),
+          _));
 
   controller.OnAccept();
 
@@ -432,10 +420,8 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
   model.SetDialog(IsolatedWebAppInstallerModel::ConfirmInstallationDialog{
       base::DoNothing()});
 
-  auto pref_observer =
-      std::make_unique<FakeIsolatedWebAppsEnabledPrefObserver>(true);
-  IsolatedWebAppInstallerViewController controller(
-      profile(), fake_provider(), &model, std::move(pref_observer));
+  IsolatedWebAppInstallerViewController controller(profile(), fake_provider(),
+                                                   &model);
   testing::StrictMock<MockView> view;
   controller.SetViewForTesting(&view);
 
@@ -465,10 +451,8 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
   model.SetDialog(IsolatedWebAppInstallerModel::ConfirmInstallationDialog{
       base::DoNothing()});
 
-  auto pref_observer =
-      std::make_unique<FakeIsolatedWebAppsEnabledPrefObserver>(true);
-  IsolatedWebAppInstallerViewController controller(
-      profile(), fake_provider(), &model, std::move(pref_observer));
+  IsolatedWebAppInstallerViewController controller(profile(), fake_provider(),
+                                                   &model);
   testing::StrictMock<MockView> view;
   controller.SetViewForTesting(&view);
 
@@ -480,12 +464,14 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
 
   TestIsolatedWebAppInstallerModelObserver(&model).WaitForStepChange(
       Step::kInstallSuccess);
-  EXPECT_EQ(
-      proto::InstallState::INSTALLED_WITH_OS_INTEGRATION,
-      fake_provider()->registrar_unsafe().GetInstallState(url_info.app_id()));
+  EXPECT_TRUE(fake_provider()->registrar_unsafe().AppMatches(
+      url_info.app_id(), WebAppFilter::IsIsolatedApp()));
 }
 
 TEST_F(IsolatedWebAppInstallerViewControllerTest, CanLaunchAppAfterInstall) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitFromCommandLine("IwaUpdateChannelsInInstaller", "");
+
   base::FilePath bundle_path = CreateBundlePath("test_bundle.swbn");
   IsolatedWebAppUrlInfo url_info = CreateAndWriteTestBundle(bundle_path, "1.0");
   MockIconAndPageState(url_info, "1.0");
@@ -502,10 +488,8 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest, CanLaunchAppAfterInstall) {
   model.SetDialog(IsolatedWebAppInstallerModel::ConfirmInstallationDialog{
       base::DoNothing()});
 
-  auto pref_observer =
-      std::make_unique<FakeIsolatedWebAppsEnabledPrefObserver>(true);
-  IsolatedWebAppInstallerViewController controller(
-      profile(), fake_provider(), &model, std::move(pref_observer));
+  IsolatedWebAppInstallerViewController controller(profile(), fake_provider(),
+                                                   &model);
   testing::StrictMock<MockView> view;
   controller.SetViewForTesting(&view);
 
@@ -542,15 +526,14 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
       url_info, IwaSourceBundleProdMode(bundle_path), u"app name",
       *IwaVersion::Create("2.0"), std::move(image_info),
       /*enterprise_name=*/"Google LLC");
+
   model.SetSignedWebBundleMetadata(metadata);
   model.SetStep(Step::kShowMetadata);
   model.SetDialog(IsolatedWebAppInstallerModel::ConfirmInstallationDialog{
       base::DoNothing()});
 
-  auto pref_observer =
-      std::make_unique<FakeIsolatedWebAppsEnabledPrefObserver>(true);
-  IsolatedWebAppInstallerViewController controller(
-      profile(), fake_provider(), &model, std::move(pref_observer));
+  IsolatedWebAppInstallerViewController controller(profile(), fake_provider(),
+                                                   &model);
   testing::StrictMock<MockView> view;
   controller.SetViewForTesting(&view);
 
@@ -560,14 +543,14 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
       view,
       ShowDialog(
           VariantWith<IsolatedWebAppInstallerModel::InstallationFailedDialog>(
-              _)));
+              _),
+          _));
 
   controller.OnChildDialogAccepted();
 
   TestIsolatedWebAppInstallerModelObserver(&model).WaitForChildDialog();
-  EXPECT_NE(
-      proto::InstallState::INSTALLED_WITH_OS_INTEGRATION,
-      fake_provider()->registrar_unsafe().GetInstallState(url_info.app_id()));
+  EXPECT_FALSE(fake_provider()->registrar_unsafe().AppMatches(
+      url_info.app_id(), WebAppFilter::InstalledInOperatingSystemForTesting()));
 }
 
 TEST_F(IsolatedWebAppInstallerViewControllerTest,
@@ -579,10 +562,8 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
   model.SetStep(Step::kInstall);
   model.SetDialog(IsolatedWebAppInstallerModel::InstallationFailedDialog{});
 
-  auto pref_observer =
-      std::make_unique<FakeIsolatedWebAppsEnabledPrefObserver>(true);
-  IsolatedWebAppInstallerViewController controller(
-      profile(), fake_provider(), &model, std::move(pref_observer));
+  IsolatedWebAppInstallerViewController controller(profile(), fake_provider(),
+                                                   &model);
 
   testing::StrictMock<MockView> view;
   controller.SetViewForTesting(&view);
@@ -590,13 +571,107 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
 
   EXPECT_CALL(view, ShowGetMetadataScreen());
 
+  EXPECT_CALL(view, UpdateGetMetadataProgress(_)).Times(AnyNumber());
   controller.OnChildDialogAccepted();
 
   TestIsolatedWebAppInstallerModelObserver(&model).WaitForStepChange(
       Step::kGetMetadata);
 }
 
+TEST_F(IsolatedWebAppInstallerViewControllerTest,
+       SetsDefaultChannelWhenNoUpdateManifestUrl) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitFromCommandLine("IwaUpdateChannelsInInstaller", "");
+
+  base::FilePath bundle_path = CreateBundlePath("test_bundle.swbn");
+
+  // Create a standard test bundle. By default, this does not have an
+  // update_manifest_url configured in the ManifestBuilder.
+  IsolatedWebAppUrlInfo url_info = CreateAndWriteTestBundle(bundle_path, "1.0");
+  MockIconAndPageState(url_info);
+
+  IsolatedWebAppInstallerModel model{IwaSourceBundleProdMode(bundle_path)};
+  IsolatedWebAppInstallerViewController controller(profile(), fake_provider(),
+                                                   &model);
+  testing::StrictMock<MockView> view;
+  controller.SetViewForTesting(&view);
+
+  EXPECT_CALL(view, UpdateGetMetadataProgress(_)).Times(AnyNumber());
+  EXPECT_CALL(view, ShowGetMetadataScreen());
+  EXPECT_CALL(view, ShowMetadataScreen(_, _));
+
+  controller.Start(base::DoNothing(), base::DoNothing());
+
+  // Wait for the installability check to finish and transition to the metadata
+  // screen.
+  TestIsolatedWebAppInstallerModelObserver(&model).WaitForStepChange(
+      Step::kShowMetadata);
+
+  // Verify the fallback logic: There should be exactly 1 channel, and it must
+  // be "default".
+  const std::vector<UpdateManifest::ChannelMetadata>& channels =
+      model.available_channels();
+  ASSERT_EQ(channels.size(), 1u);
+  EXPECT_EQ(channels[0].channel().ToString(), "default");
+}
+
+TEST_F(IsolatedWebAppInstallerViewControllerTest,
+       ChannelsEmptyWhenFeatureDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(kIwaUpdateChannelsInInstaller);
+
+  base::FilePath bundle_path = CreateBundlePath("test_bundle.swbn");
+  IsolatedWebAppUrlInfo url_info = CreateAndWriteTestBundle(bundle_path, "1.0");
+  MockIconAndPageState(url_info);
+
+  IsolatedWebAppInstallerModel model{IwaSourceBundleProdMode(bundle_path)};
+  IsolatedWebAppInstallerViewController controller(profile(), fake_provider(),
+                                                   &model);
+  testing::StrictMock<MockView> view;
+  controller.SetViewForTesting(&view);
+
+  EXPECT_CALL(view, UpdateGetMetadataProgress(_)).Times(AnyNumber());
+  EXPECT_CALL(view, ShowGetMetadataScreen());
+  EXPECT_CALL(view, ShowMetadataScreen(_, _));
+
+  controller.Start(base::DoNothing(), base::DoNothing());
+
+  TestIsolatedWebAppInstallerModelObserver(&model).WaitForStepChange(
+      Step::kShowMetadata);
+
+  const std::vector<UpdateManifest::ChannelMetadata>& channels =
+      model.available_channels();
+  EXPECT_TRUE(channels.empty());
+}
+
 #if BUILDFLAG(IS_CHROMEOS)
+
+TEST_F(IsolatedWebAppInstallerViewControllerTest,
+       TransitionsToDisabledStepWhenUnmanagedInstallDisabled) {
+  base::test::ScopedFeatureList disable_feature;
+  disable_feature.InitAndDisableFeature(
+      features::kIsolatedWebAppUnmanagedInstall);
+
+  profile()->GetPrefs()->SetBoolean(
+      prefs::kIsolatedWebAppUserInstallationEnabled, false);
+
+  base::FilePath bundle_path = CreateBundlePath("test_bundle.swbn");
+  IsolatedWebAppUrlInfo url_info = CreateAndWriteTestBundle(bundle_path, "1.0");
+  MockIconAndPageState(url_info);
+
+  IsolatedWebAppInstallerModel model{IwaSourceBundleProdMode(bundle_path)};
+  IsolatedWebAppInstallerViewController controller(profile(), fake_provider(),
+                                                   &model);
+  testing::StrictMock<MockView> view;
+  controller.SetViewForTesting(&view);
+
+  EXPECT_CALL(view, ShowDisabledScreen());
+
+  controller.Start(base::DoNothing(), base::DoNothing());
+
+  TestIsolatedWebAppInstallerModelObserver(&model).WaitForStepChange(
+      Step::kDisabled);
+}
 
 TEST_F(IsolatedWebAppInstallerViewControllerTest,
        ChangingPrefToFalseDisablesInstaller) {
@@ -604,13 +679,11 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
   IsolatedWebAppUrlInfo url_info = CreateAndWriteTestBundle(bundle_path, "1.0");
   MockIconAndPageState(url_info);
 
+  profile()->GetPrefs()->SetBoolean(ash::prefs::kIsolatedWebAppsEnabled, true);
+
   IsolatedWebAppInstallerModel model{IwaSourceBundleProdMode(bundle_path)};
-  auto pref_observer =
-      std::make_unique<FakeIsolatedWebAppsEnabledPrefObserver>(true);
-  FakeIsolatedWebAppsEnabledPrefObserver* raw_pref_observer =
-      pref_observer.get();
-  IsolatedWebAppInstallerViewController controller(
-      profile(), fake_provider(), &model, std::move(pref_observer));
+  IsolatedWebAppInstallerViewController controller(profile(), fake_provider(),
+                                                   &model);
   testing::StrictMock<MockView> view;
   controller.SetViewForTesting(&view);
 
@@ -618,7 +691,8 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
   EXPECT_CALL(view, ShowGetMetadataScreen());
   EXPECT_CALL(
       view, ShowMetadataScreen(WithMetadata("hoealecpbefphiclhampllbdbdpfmfpi",
-                                            u"test app name", "7.7.7")));
+                                            u"test app name", "7.7.7"),
+                               _));
 
   controller.Start(base::DoNothing(), base::DoNothing());
 
@@ -627,7 +701,7 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
 
   EXPECT_CALL(view, ShowDisabledScreen());
 
-  raw_pref_observer->UpdatePref(false);
+  profile()->GetPrefs()->SetBoolean(ash::prefs::kIsolatedWebAppsEnabled, false);
 
   model_observer.WaitForStepChange(Step::kDisabled);
 }
@@ -638,13 +712,11 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
   IsolatedWebAppUrlInfo url_info = CreateAndWriteTestBundle(bundle_path, "1.0");
   MockIconAndPageState(url_info);
 
+  profile()->GetPrefs()->SetBoolean(ash::prefs::kIsolatedWebAppsEnabled, false);
+
   IsolatedWebAppInstallerModel model{IwaSourceBundleProdMode(bundle_path)};
-  auto pref_observer =
-      std::make_unique<FakeIsolatedWebAppsEnabledPrefObserver>(false);
-  FakeIsolatedWebAppsEnabledPrefObserver* raw_pref_observer =
-      pref_observer.get();
-  IsolatedWebAppInstallerViewController controller(
-      profile(), fake_provider(), &model, std::move(pref_observer));
+  IsolatedWebAppInstallerViewController controller(profile(), fake_provider(),
+                                                   &model);
   testing::StrictMock<MockView> view;
   controller.SetViewForTesting(&view);
 
@@ -661,11 +733,81 @@ TEST_F(IsolatedWebAppInstallerViewControllerTest,
   EXPECT_CALL(view, ShowGetMetadataScreen());
   EXPECT_CALL(
       view, ShowMetadataScreen(WithMetadata("hoealecpbefphiclhampllbdbdpfmfpi",
-                                            u"test app name", "7.7.7")));
+                                            u"test app name", "7.7.7"),
+                               _));
 
-  raw_pref_observer->UpdatePref(true);
+  profile()->GetPrefs()->SetBoolean(ash::prefs::kIsolatedWebAppsEnabled, true);
 
   model_observer.WaitForStepChange(Step::kShowMetadata);
 }
+
+TEST_F(IsolatedWebAppInstallerViewControllerTest, DisabledViewAccessibility) {
+  views::test::TestLayoutProvider layout_provider;
+  base::FilePath bundle_path = CreateBundlePath("test_bundle.swbn");
+  IsolatedWebAppInstallerModel model{IwaSourceBundleProdMode(bundle_path)};
+
+  // Force dialog state to disabled by disabling the pref.
+  profile()->GetPrefs()->SetBoolean(ash::prefs::kIsolatedWebAppsEnabled, false);
+
+  IsolatedWebAppInstallerViewController controller(profile(), fake_provider(),
+                                                   &model);
+  auto view = std::make_unique<IsolatedWebAppInstallerViewImpl>(&controller);
+  controller.SetViewForTesting(view.get());
+  view->ShowDisabledScreen();
+
+  ASSERT_GE(view->children().size(), 5);
+  // DisabledView instance (the class is internal so parent class checked)
+  auto disabled_view = view->children()[0];
+  ASSERT_TRUE(views::IsViewClass<views::BoxLayoutView>(disabled_view));
+
+  // The view hierarchy is: disabled view-> header box -> [icon, title,
+  // subtitle]
+  ASSERT_EQ(disabled_view->children().size(), 1);
+  ASSERT_EQ(disabled_view->children()[0]->children().size(), 3);
+  views::StyledLabel* subtitle_label = views::AsViewClass<views::StyledLabel>(
+      disabled_view->children()[0]->children()[2]);
+  ASSERT_NE(subtitle_label, nullptr);
+
+  // Set bounds to non-zero to make sure that layout creates children.
+  subtitle_label->SetBounds(0, 0, 1000, 1000);
+
+  // The subtitle hosts an inline link, so StyledLabel exposes it as a paragraph
+  // (rather than static text) to keep the link reachable in the platform tree.
+  EXPECT_EQ(subtitle_label->GetViewAccessibility().GetCachedRole(),
+            ax::mojom::Role::kParagraph);
+
+  // Fail early if no children were created, to see if that's the problem.
+  ASSERT_GE(subtitle_label->children().size(), 2u)
+      << "No children created in subtitle_label. Size: "
+      << subtitle_label->children().size();
+
+  // Verify child accessibility names and roles.
+  bool found_link = false;
+  bool found_static_text = false;
+
+  std::u16string link_text =
+      l10n_util::GetStringUTF16(IDS_IWA_INSTALLER_DISABLED_CHANGE_PREFERENCE);
+  std::u16string full_text = l10n_util::GetStringFUTF16(
+      IDS_IWA_INSTALLER_DISABLED_SUBTITLE, link_text);
+
+  for (views::View* child : subtitle_label->children()) {
+    std::u16string name = child->GetViewAccessibility().GetCachedName();
+    ax::mojom::Role role = child->GetViewAccessibility().GetCachedRole();
+
+    if (name == link_text) {
+      found_link = true;
+      EXPECT_EQ(role, ax::mojom::Role::kLink);
+    } else if (!name.empty() && full_text.find(name) != std::u16string::npos) {
+      found_static_text = true;
+      EXPECT_EQ(role, ax::mojom::Role::kStaticText);
+    }
+  }
+
+  EXPECT_TRUE(found_link);
+  EXPECT_TRUE(found_static_text);
+  // Prevent dangling pointer (the view is destroyed first)
+  controller.SetViewForTesting(nullptr);
+}
+
 #endif  // BUILDFLAG(IS_CHROMEOS)
 }  // namespace web_app

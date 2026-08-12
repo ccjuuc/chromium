@@ -8,6 +8,8 @@
 #include <string>
 
 #include "base/check_deref.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/android/resource_mapper.h"
 #include "chrome/browser/autofill/android/autofill_ai_save_update_entity_prompt_controller.h"
@@ -15,6 +17,7 @@
 #include "chrome/browser/ui/android/autofill/autofill_ai_save_update_entity_prompt_view_android.h"
 #include "chrome/browser/ui/android/autofill/save_update_address_profile_prompt_view_android.h"
 #include "chrome/browser/ui/autofill/autofill_ai/autofill_ai_import_string_utils.h"
+#include "chrome/browser/ui/autofill/autofill_dialog_controller_impl.h"
 #include "chrome/browser/ui/autofill/autofill_message_controller.h"
 #include "chrome/browser/ui/autofill/autofill_message_model.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
@@ -52,7 +55,6 @@ std::u16string GetMessageDescription(content::WebContents* web_contents,
 
 int GetMessageIconResourceId(const EntityInstance& entity) {
   if (entity.record_type() == EntityInstance::RecordType::kServerWallet) {
-    // TODO: crbug.com/460410690 - Use colorful icon for branded builds.
     return IDR_ANDROID_AUTOFILL_WALLET;
   }
   switch (entity.type().name()) {
@@ -70,6 +72,10 @@ int GetMessageIconResourceId(const EntityInstance& entity) {
       return IDR_ANDROID_AUTOFILL_VEHICLE;
     case EntityTypeName::kFlightReservation:
       NOTREACHED() << "Entity is read only and doesn't support save prompts.";
+    case EntityTypeName::kOrder:
+      NOTREACHED() << "Entity is read only and doesn't support save prompts.";
+    case EntityTypeName::kShipment:
+      NOTREACHED() << "Entity is read only and doesn't support save prompts.";
   }
   NOTREACHED();
 }
@@ -78,60 +84,90 @@ int GetMessageIconResourceId(const EntityInstance& entity) {
 
 AutofillAiSaveUpdateEntityFlowManager::AutofillAiSaveUpdateEntityFlowManager(
     content::WebContents* web_contents,
-    AutofillMessageController* autofill_message_controller)
+    AutofillMessageController* autofill_message_controller,
+    AutofillDialogController* autofill_dialog_controller,
+    std::string app_locale)
     : web_contents_(web_contents),
-      autofill_message_controller_(CHECK_DEREF(autofill_message_controller)) {}
+      autofill_message_controller_(CHECK_DEREF(autofill_message_controller)),
+      autofill_dialog_controller_(CHECK_DEREF(autofill_dialog_controller)),
+      app_locale_(std::move(app_locale)) {}
 
 AutofillAiSaveUpdateEntityFlowManager::
     ~AutofillAiSaveUpdateEntityFlowManager() = default;
 
 void AutofillAiSaveUpdateEntityFlowManager::OfferSave(
-    const EntityInstance& entity,
+    EntityInstance entity,
     std::optional<EntityInstance> old_entity,
-    AutofillClient::EntityImportPromptResultCallback prompt_closed_callback) {
-  prompt_closed_callback_ = std::move(prompt_closed_callback);
+    AutofillClient::EntityImportPromptResultCallback prompt_result_callback) {
+  if (prompt_result_callback_) {
+    return;
+  }
+  prompt_result_callback_ = std::move(prompt_result_callback);
   autofill_message_controller_->Show(
-      CreateMessageModel(entity, /*is_save_prompt=*/!old_entity.has_value()));
+      CreateMessageModel(std::move(entity), std::move(old_entity)));
+}
+
+void AutofillAiSaveUpdateEntityFlowManager::ShowLocalSaveNotification() {
+  std::u16string google_wallet_text =
+      l10n_util::GetStringUTF16(IDS_AUTOFILL_GOOGLE_WALLET_TITLE);
+  autofill_dialog_controller_->Show(
+      l10n_util::GetStringUTF16(
+          IDS_AUTOFILL_AI_SAVE_OR_UPDATE_ENTITY_FAILED_WALLET_SAVE_DIALOG_TITLE),
+      l10n_util::GetStringFUTF16(
+          IDS_AUTOFILL_AI_SAVE_OR_UPDATE_ENTITY_FAILED_WALLET_SAVE_DIALOG_DESCRIPTION,
+          std::move(google_wallet_text)),
+      l10n_util::GetStringUTF16(
+          IDS_AUTOFILL_AI_SNACK_BAR_CONFIRMATION_BUTTON_LABEL),
+      base::DoNothing());
 }
 
 std::unique_ptr<AutofillMessageModel>
 AutofillAiSaveUpdateEntityFlowManager::CreateMessageModel(
-    const EntityInstance& entity,
-    bool is_save_prompt) {
+    EntityInstance entity,
+    std::optional<EntityInstance> old_entity) {
   // Binding with base::Unretained(this) is safe here because
   // AutofillAiSaveUpdateEntityMessageController owns message_. Callbacks won't
   // be called after the current object is destroyed.
   auto message = std::make_unique<messages::MessageWrapper>(
       messages::MessageIdentifier::SAVE_UPDATE_ENTITY);
 
-  message->SetTitle(GetPromptTitle(entity.type().name(), is_save_prompt));
-  message->SetDescription(GetMessageDescription(
-      web_contents_,
-      entity.record_type() == EntityInstance::RecordType::kServerWallet));
+  const bool is_server_wallet =
+      entity.record_type() == EntityInstance::RecordType::kServerWallet;
+  message->SetTitle(GetPromptTitle(entity.type().name(), !old_entity,
+                                   /*is_banner_prompt=*/true,
+                                   is_server_wallet));
+  message->SetDescription(
+      GetMessageDescription(web_contents_, is_server_wallet));
   message->SetDescriptionMaxLines(kDescriptionMaxLines);
-  message->SetPrimaryButtonText(GetPrimaryButtonText(is_save_prompt));
+  message->SetPrimaryButtonText(
+      l10n_util::GetStringUTF16(GetPrimaryButtonTextId(!old_entity)));
   message->SetPrimaryButtonTextMaxLines(1);
   message->SetIconResourceId(
       ResourceMapper::MapToJavaDrawableId(GetMessageIconResourceId(entity)));
+  // TODO: crbug.com/460410690 - Fix the tinting issue for unbranded icons.
+  message->DisableIconTint();
 
   return std::make_unique<AutofillMessageModel>(
       std::move(message), AutofillMessageModel::Type::kEntitySaveUpdateFlow,
       base::BindOnce(
           &AutofillAiSaveUpdateEntityFlowManager::OnMessagePrimaryAction,
-          weak_ptr_factory_.GetWeakPtr(), entity),
+          weak_ptr_factory_.GetWeakPtr(), std::move(entity),
+          std::move(old_entity)),
       base::BindOnce(&AutofillAiSaveUpdateEntityFlowManager::OnMessageDismissed,
                      weak_ptr_factory_.GetWeakPtr()));
 }
 
 void AutofillAiSaveUpdateEntityFlowManager::OnMessagePrimaryAction(
-    const EntityInstance& entity) {
+    EntityInstance entity,
+    std::optional<EntityInstance> old_entity) {
   auto prompt_view_android =
       std::make_unique<AutofillAiSaveUpdateEntityPromptViewAndroid>(
           web_contents_);
   save_update_entity_prompt_controller_ =
       std::make_unique<AutofillAiSaveUpdateEntityPromptController>(
-          std::move(prompt_view_android), entity.type().name(),
-          std::move(prompt_closed_callback_));
+          web_contents_, std::move(prompt_view_android), std::move(entity),
+          std::move(old_entity), app_locale_,
+          std::move(prompt_result_callback_));
   save_update_entity_prompt_controller_->DisplayPrompt();
 }
 
@@ -144,21 +180,20 @@ void AutofillAiSaveUpdateEntityFlowManager::OnMessageDismissed(
       break;
     case messages::DismissReason::GESTURE:
       // User explicitly dismissed the message.
-      RunPromptClosedCallback(
-          AutofillClient::AutofillAiBubbleClosedReason::kClosed);
+      RunPromptClosedCallback(AutofillClient::AutofillAiBubbleResult::kClosed);
       break;
     default:
       // Dismissal for any other reason like timeout, tab switch, etc.
       RunPromptClosedCallback(
-          AutofillClient::AutofillAiBubbleClosedReason::kNotInteracted);
+          AutofillClient::AutofillAiBubbleResult::kNotInteracted);
       break;
   }
 }
 
 void AutofillAiSaveUpdateEntityFlowManager::RunPromptClosedCallback(
-    AutofillClient::AutofillAiBubbleClosedReason decision) {
-  if (prompt_closed_callback_) {
-    std::move(prompt_closed_callback_).Run(decision);
+    AutofillClient::AutofillAiBubbleResult result) {
+  if (prompt_result_callback_) {
+    std::move(prompt_result_callback_).Run(result, std::nullopt, {});
   }
 }
 

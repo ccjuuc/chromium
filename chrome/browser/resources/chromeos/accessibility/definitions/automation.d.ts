@@ -4,9 +4,9 @@
 
 /**
  * @fileoverview Definitions for chrome.automation API
- * Generated from: extensions/common/api/automation.idl
+ * Generated from: extensions/common/api/automation.webidl
  * run `tools/json_schema_compiler/compiler.py
- * extensions/common/api/automation.idl -g ts_definitions` to regenerate.
+ * extensions/common/api/automation.webidl -g ts_definitions` to regenerate.
  */
 
 
@@ -50,7 +50,7 @@ declare namespace chrome {
       FOCUS = 'focus',
       FOCUS_AFTER_MENU_CLOSE = 'focusAfterMenuClose',
       FOCUS_CHANGED = 'focusChanged',
-      FOCUS_CONTEXT = 'focusContext',
+      FOCUS_CONTEXT_DEPRECATED = 'focusContextDeprecated',
       GRABBED_CHANGED = 'grabbedChanged',
       HASPOPUP_CHANGED = 'haspopupChanged',
       HIDE = 'hide',

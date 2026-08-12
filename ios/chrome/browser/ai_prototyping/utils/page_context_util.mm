@@ -10,6 +10,7 @@
 #import "base/files/file_util.h"
 #import "base/functional/bind.h"
 #import "base/scoped_observation.h"
+#import "base/strings/stringprintf.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/time/time.h"
 #import "components/optimization_guide/proto/features/common_quality_data.pb.h"
@@ -17,6 +18,9 @@
 #import "ios/web/public/web_state_observer.h"
 
 namespace {
+// Limit the lengh of sanitized url used as filename to prevent error from
+// filename being too long.
+NSUInteger kUrlLengthLimit = 50;
 
 // Self-deleting observer that waits for a page to finish loading.
 class SelfDestructivePageLoadObserver : public web::WebStateObserver {
@@ -59,8 +63,9 @@ SavePageContextResult SaveProtoToPath(
                                  withIntermediateDirectories:YES
                                                   attributes:nil
                                                        error:nil]) {
-    result.error_message = std::format("Could not create output directory",
-                                       file_path.DirName().value().c_str());
+    result.error_message =
+        base::StringPrintf("Could not create output directory %s",
+                           file_path.DirName().value().c_str());
   }
 
   // Convert base::FilePath path to a C_style string for fopen.
@@ -74,16 +79,16 @@ SavePageContextResult SaveProtoToPath(
   FILE* fp = fopen(c_file_path, "wb");
   if (fp == nullptr) {
     result.error_message =
-        std::format("Could not open file {} for writing. Error: {}",
-                    c_file_path, strerror(errno));
+        base::StringPrintf("Could not open file %s for writing. Error: %s",
+                           c_file_path, strerror(errno));
     return result;
   }
   // Get the file descriptor from the FILE pointer.
   int fd = fileno(fp);
   if (fd == -1) {
     result.error_message =
-        std::format("Could not get file descriptor for {}. Error: {}",
-                    c_file_path, strerror(errno));
+        base::StringPrintf("Could not get file descriptor for %s. Error: %s",
+                           c_file_path, strerror(errno));
     fclose(fp);
     return result;
   }
@@ -93,14 +98,14 @@ SavePageContextResult SaveProtoToPath(
   // Close the file
   if (fclose(fp) != 0) {
     result.error_message =
-        std::format("Could not close file '{}' properly. Error: {}",
-                    c_file_path, strerror(errno));
+        base::StringPrintf("Could not close file '%s' properly. Error: %s",
+                           c_file_path, strerror(errno));
     return result;
   }
   if (!success) {
-    result.error_message =
-        std::format("Failed to serialize protobuf message to file: '{}'.",
-                    c_file_path, strerror(errno));
+    result.error_message = base::StringPrintf(
+        "Failed to serialize protobuf message to file: '%s'. Error: %s",
+        c_file_path, strerror(errno));
     return result;
   }
   result.success = true;
@@ -123,10 +128,20 @@ SavePageContextResult& SavePageContextResult::operator=(
 
 PageContextWrapper* CreatePageContextWrapper(
     web::WebState* web_state,
+    bool rich_extraction,
     base::OnceCallback<void(PageContextWrapperCallbackResponse)>
         completion_callback) {
+  PageContextWrapperConfigBuilder builder;
+  if (rich_extraction) {
+    builder.SetUseRichExtraction(true)
+        .SetUseRefactoredExtractor(true)
+        .SetGraftCrossOriginFrameContent(true)
+        .SetExtractPaidContent(true);
+  }
+  PageContextWrapperConfig config = builder.Build();
   PageContextWrapper* page_context_wrapper = [[PageContextWrapper alloc]
         initWithWebState:web_state
+                  config:config
       completionCallback:std::move(completion_callback)];
   [page_context_wrapper setShouldGetAnnotatedPageContent:YES];
   [page_context_wrapper setShouldGetSnapshot:YES];
@@ -185,6 +200,9 @@ SavePageContextResult SaveSerializedPageContextToDisk(
 std::string FileNameForPageContext(
     const optimization_guide::proto::PageContext& page_context) {
   NSString* urlString = base::SysUTF8ToNSString(page_context.url());
+  if ([urlString length] > kUrlLengthLimit) {
+    urlString = [urlString substringToIndex:kUrlLengthLimit];
+  }
   NSString* fileName =
       [SanitizeUrl(urlString) stringByAppendingString:@".txtpb"];
   return base::SysNSStringToUTF8(fileName);

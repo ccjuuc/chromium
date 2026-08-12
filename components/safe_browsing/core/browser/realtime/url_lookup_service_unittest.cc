@@ -18,6 +18,7 @@
 #include "build/build_config.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/safe_browsing/buildflags.h"
+#include "components/safe_browsing/core/browser/intelligent_scan_delegate.h"
 #include "components/safe_browsing/core/browser/referrer_chain_provider.h"
 #include "components/safe_browsing/core/browser/referring_app_info.h"
 #include "components/safe_browsing/core/browser/safe_browsing_token_fetcher.h"
@@ -33,6 +34,7 @@
 #include "net/http/http_status_code.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/test/test_network_context.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "services/network/test/test_utils.h"
 #include "testing/platform_test.h"
@@ -76,6 +78,28 @@ class MockReferrerChainProvider : public ReferrerChainProvider {
                AttributionResult(const GURL& event_url,
                                  int user_gesture_count_limit,
                                  ReferrerChain* out_referrer_chain));
+};
+
+class MockIntelligentScanDelegate : public IntelligentScanDelegate {
+ public:
+  MOCK_METHOD(bool,
+              ShouldRequestIntelligentScan,
+              (ClientPhishingRequest*),
+              (override));
+  MOCK_METHOD(ModelType, GetIntelligentScanModelType, (bool), (override));
+  MOCK_METHOD(std::optional<base::UnguessableToken>,
+              StartIntelligentScan,
+              (std::string, IntelligentScanDoneCallback),
+              (override));
+  MOCK_METHOD(bool,
+              CancelIntelligentScan,
+              (const base::UnguessableToken&),
+              (override));
+  MOCK_METHOD(bool,
+              ShouldShowScamWarning,
+              (std::optional<IntelligentScanVerdict>),
+              (override));
+  MOCK_METHOD(void, OnScamWarningShown, (), (override));
 };
 
 bool GetRequestProto(const network::ResourceRequest& request,
@@ -143,6 +167,58 @@ class WaitableMockRTLookupResponseCallback {
   }
 };
 
+class MockDnsNetworkContext : public network::TestNetworkContext {
+ public:
+  void ResolveHost(
+      network::mojom::HostResolverHostPtr host,
+      const net::NetworkAnonymizationKey& network_anonymization_key,
+      network::mojom::ResolveHostParametersPtr optional_parameters,
+      mojo::PendingRemote<network::mojom::ResolveHostClient> response_client)
+      override {
+    resolve_host_called_count_++;
+    mojo::Remote<network::mojom::ResolveHostClient> client(
+        std::move(response_client));
+
+    if (simulate_timeout_) {
+      // Keep the client alive to simulate a timeout without mojo disconnecting.
+      pending_clients_.push_back(std::move(client));
+      return;
+    }
+
+    if (simulated_error_ != net::OK) {
+      client->OnComplete(simulated_error_,
+                         net::ResolveErrorInfo(simulated_error_),
+                         /*resolved_addresses=*/net::AddressList(),
+                         /*alternative_endpoints=*/{});
+      return;
+    }
+
+    net::IPAddress address_ipv4;
+    CHECK(address_ipv4.AssignFromIPLiteral("192.168.1.1"));
+
+    net::IPAddress address_ipv6;
+    CHECK(address_ipv6.AssignFromIPLiteral("2001:db8::1"));
+
+    std::vector<net::IPEndPoint> endpoints = {net::IPEndPoint(address_ipv4, 0),
+                                              net::IPEndPoint(address_ipv6, 0)};
+
+    client->OnComplete(net::OK, net::ResolveErrorInfo(net::OK),
+                       net::AddressList(endpoints),
+                       /*alternative_endpoints=*/{});
+  }
+
+  int resolve_host_called_count() const { return resolve_host_called_count_; }
+  void reset_called_count() { resolve_host_called_count_ = 0; }
+  void set_simulate_timeout(bool timeout) { simulate_timeout_ = timeout; }
+  void set_simulated_error(net::Error error) { simulated_error_ = error; }
+
+ private:
+  int resolve_host_called_count_ = 0;
+  bool simulate_timeout_ = false;
+  net::Error simulated_error_ = net::OK;
+  std::vector<mojo::Remote<network::mojom::ResolveHostClient>> pending_clients_;
+};
+
 }  // namespace
 
 class RealTimeUrlLookupServiceTest : public PlatformTest {
@@ -165,6 +241,8 @@ class RealTimeUrlLookupServiceTest : public PlatformTest {
         &test_pref_service_,
         /*sync_observer=*/nullptr);
     referrer_chain_provider_ = std::make_unique<MockReferrerChainProvider>();
+    intelligent_scan_delegate_ =
+        std::make_unique<MockIntelligentScanDelegate>();
 
     auto token_fetcher = std::make_unique<TestSafeBrowsingTokenFetcher>();
     raw_token_fetcher_ = token_fetcher->AsWeakPtr();
@@ -199,7 +277,13 @@ class RealTimeUrlLookupServiceTest : public PlatformTest {
                                 GetMinAllowedTimestampForReferrerChains,
                             base::Unretained(this)),
         referrer_chain_provider_.get(),
-        /*webui_delegate=*/nullptr);
+        /*webui_delegate=*/nullptr, intelligent_scan_delegate_.get(),
+        base::BindRepeating(
+            [](RealTimeUrlLookupServiceTest* test)
+                -> network::mojom::NetworkContext* {
+              return &test->mock_network_context_;
+            },
+            base::Unretained(this)));
   }
 
   void TearDown() override {
@@ -222,10 +306,17 @@ class RealTimeUrlLookupServiceTest : public PlatformTest {
       std::optional<internal::ReferringAppInfo> referring_app_info =
           std::nullopt) {
     base::test::TestFuture<std::unique_ptr<RTLookupRequest>> future;
+
+    // Needed because these unittests all skip MaybeSendRequest()
+    RealTimeUrlLookupServiceBase::PendingRTLookupRequestData request_data;
+    rt_service_->pending_requests_.emplace(url, std::move(request_data));
+
     rt_service_->StartFillingRequestProto(
         url, is_sampled_report, SessionID::InvalidValue(), referring_app_info,
         future.GetCallback());
-    return future.Take();
+    auto request = future.Take();
+    rt_service_->pending_requests_.erase(url);
+    return request;
   }
 
   std::unique_ptr<RTLookupResponse> GetCachedRealTimeUrlVerdict(
@@ -412,15 +503,56 @@ class RealTimeUrlLookupServiceTest : public PlatformTest {
   sync_preferences::TestingPrefServiceSyncable test_pref_service_;
   base::test::ScopedFeatureList feature_list_;
   std::unique_ptr<MockReferrerChainProvider> referrer_chain_provider_;
+  std::unique_ptr<MockIntelligentScanDelegate> intelligent_scan_delegate_;
+  MockDnsNetworkContext mock_network_context_;
 };
 
-TEST_F(RealTimeUrlLookupServiceTest, StartFillingRequestProto) {
+class RealTimeUrlLookupServiceStartFillingRequestProtoTest
+    : public RealTimeUrlLookupServiceTest,
+      public ::testing::WithParamInterface<bool> {
+ public:
+  RealTimeUrlLookupServiceStartFillingRequestProtoTest() {
+    feature_list_.InitWithFeatureState(kSafeBrowsingWaitForDnsForRealTimeLookup,
+                                       GetParam());
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         RealTimeUrlLookupServiceStartFillingRequestProtoTest,
+                         ::testing::Bool());
+
+TEST_P(RealTimeUrlLookupServiceStartFillingRequestProtoTest,
+       StartFillingRequestProto) {
   GURL url("http://example.com/");
+
+  EXPECT_CALL(*referrer_chain_provider_,
+              IdentifyReferrerChainByPendingEventURL(_, _, _))
+      .WillRepeatedly([](const GURL& event_url, int user_gesture_count_limit,
+                         ReferrerChain* out_referrer_chain) {
+        out_referrer_chain->Add();
+        return ReferrerChainProvider::SUCCESS;
+      });
+
   for (size_t i = 0; i < 2; i++) {
+    mock_network_context_.reset_called_count();
     auto result =
         StartFillingRequestProto(url, /*is_sampled_report=*/i % 2 == 0);
     ASSERT_TRUE(result);
     EXPECT_EQ(url, result->url());
+
+    // kSafeBrowsingWaitForDnsForRealTimeLookup path
+    if (GetParam()) {
+      EXPECT_EQ(mock_network_context_.resolve_host_called_count(), 1);
+      ASSERT_EQ(result->referrer_chain_size(), 1);
+      ASSERT_EQ(result->referrer_chain(0).ip_addresses_size(), 1);
+      EXPECT_EQ(result->referrer_chain(0).ip_addresses(0), "192.168.1.1");
+    } else {
+      EXPECT_EQ(mock_network_context_.resolve_host_called_count(), 0);
+    }
+
     if (i % 2 == 0) {
       EXPECT_EQ(/* sampled report */ 2, result->report_type());
     } else {
@@ -440,6 +572,173 @@ TEST_F(RealTimeUrlLookupServiceTest, StartFillingRequestProto) {
     EXPECT_TRUE(result->population().is_under_advanced_protection());
 #endif
   }
+}
+
+TEST_F(RealTimeUrlLookupServiceTest, DnsResolutionFails) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kSafeBrowsingWaitForDnsForRealTimeLookup);
+  mock_network_context_.set_simulated_error(net::ERR_NAME_NOT_RESOLVED);
+
+  GURL url("http://example.com/");
+  EXPECT_CALL(*referrer_chain_provider_,
+              IdentifyReferrerChainByPendingEventURL(_, _, _))
+      .WillRepeatedly([](const GURL& event_url, int user_gesture_count_limit,
+                         ReferrerChain* out_referrer_chain) {
+        out_referrer_chain->Add();
+        return ReferrerChainProvider::SUCCESS;
+      });
+
+  base::HistogramTester histogram_tester;
+  auto result = StartFillingRequestProto(url, /*is_sampled_report=*/false);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(mock_network_context_.resolve_host_called_count(), 1);
+  ASSERT_EQ(result->referrer_chain_size(), 1);
+  // IP addresses should be empty since DNS failed.
+  EXPECT_EQ(result->referrer_chain(0).ip_addresses_size(), 0);
+
+  histogram_tester.ExpectUniqueSample(
+      "SafeBrowsing.RT.DnsResolution.Result",
+      RealTimeUrlLookupServiceBase::DnsResolutionResult::kError, 1);
+  histogram_tester.ExpectTotalCount("SafeBrowsing.RT.DnsResolution.Time", 1);
+}
+
+TEST_F(RealTimeUrlLookupServiceTest, DnsResolutionTimesOut) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kSafeBrowsingWaitForDnsForRealTimeLookup);
+  mock_network_context_.set_simulate_timeout(true);
+
+  GURL url("http://example.com/");
+  EXPECT_CALL(*referrer_chain_provider_,
+              IdentifyReferrerChainByPendingEventURL(_, _, _))
+      .WillRepeatedly([](const GURL& event_url, int user_gesture_count_limit,
+                         ReferrerChain* out_referrer_chain) {
+        out_referrer_chain->Add();
+        return ReferrerChainProvider::SUCCESS;
+      });
+
+  base::HistogramTester histogram_tester;
+  auto result = StartFillingRequestProto(url, /*is_sampled_report=*/false);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(mock_network_context_.resolve_host_called_count(), 1);
+  ASSERT_EQ(result->referrer_chain_size(), 1);
+  // IP addresses should be empty since DNS timed out.
+  EXPECT_EQ(result->referrer_chain(0).ip_addresses_size(), 0);
+
+  histogram_tester.ExpectUniqueSample(
+      "SafeBrowsing.RT.DnsResolution.Result",
+      RealTimeUrlLookupServiceBase::DnsResolutionResult::kTimeout, 1);
+  histogram_tester.ExpectTotalCount("SafeBrowsing.RT.DnsResolution.Time", 1);
+}
+
+TEST_F(RealTimeUrlLookupServiceTest, DnsResolutionSkipped) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kSafeBrowsingWaitForDnsForRealTimeLookup);
+  mock_network_context_.set_simulated_error(net::ERR_DNS_DIRECT_ONLY);
+
+  GURL url("http://example.com/");
+  EXPECT_CALL(*referrer_chain_provider_,
+              IdentifyReferrerChainByPendingEventURL(_, _, _))
+      .WillRepeatedly([](const GURL& event_url, int user_gesture_count_limit,
+                         ReferrerChain* out_referrer_chain) {
+        out_referrer_chain->Add();
+        return ReferrerChainProvider::SUCCESS;
+      });
+
+  base::HistogramTester histogram_tester;
+  auto result = StartFillingRequestProto(url, /*is_sampled_report=*/false);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(mock_network_context_.resolve_host_called_count(), 1);
+  ASSERT_EQ(result->referrer_chain_size(), 1);
+  // IP addresses should be empty since DNS was skipped.
+  EXPECT_EQ(result->referrer_chain(0).ip_addresses_size(), 0);
+
+  histogram_tester.ExpectUniqueSample(
+      "SafeBrowsing.RT.DnsResolution.Result",
+      RealTimeUrlLookupServiceBase::DnsResolutionResult::kSkipped, 1);
+  histogram_tester.ExpectTotalCount("SafeBrowsing.RT.DnsResolution.Time", 1);
+}
+
+class RealTimeUrlLookupServiceWithDmToken : public RealTimeUrlLookupService {
+ public:
+  using RealTimeUrlLookupService::RealTimeUrlLookupService;
+  std::optional<std::string> GetDMTokenString() const override {
+    return "dummy-dm-token";
+  }
+};
+
+TEST_F(RealTimeUrlLookupServiceTest, LocalIpAndDnsResolutionCompletes) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kSafeBrowsingWaitForDnsForRealTimeLookup);
+
+  auto token_fetcher = std::make_unique<TestSafeBrowsingTokenFetcher>();
+  raw_token_fetcher_ = token_fetcher->AsWeakPtr();
+  rt_service_ = std::make_unique<RealTimeUrlLookupServiceWithDmToken>(
+      test_shared_loader_factory_, cache_manager_.get(),
+      base::BindRepeating(
+          [](PrefService* pref_service) {
+            ChromeUserPopulation population;
+            population.set_user_population(
+                IsEnhancedProtectionEnabled(*pref_service)
+                    ? ChromeUserPopulation::ENHANCED_PROTECTION
+                : IsExtendedReportingEnabled(*pref_service)
+                    ? ChromeUserPopulation::EXTENDED_REPORTING
+                    : ChromeUserPopulation::SAFE_BROWSING);
+            population.set_profile_management_status(
+                ChromeUserPopulation::NOT_MANAGED);
+            population.set_is_history_sync_enabled(true);
+            population.set_is_under_advanced_protection(true);
+            population.set_is_incognito(false);
+            return population;
+          },
+          &test_pref_service_),
+      &test_pref_service_, std::move(token_fetcher),
+      base::BindRepeating(
+          &RealTimeUrlLookupServiceTest::AreTokenFetchesConfiguredInClient,
+          base::Unretained(this)),
+      /*is_off_the_record=*/false,
+      /*variations_service_getter=*/
+      base::BindRepeating(
+          []() -> variations::VariationsService* { return nullptr; }),
+      base::BindRepeating(&RealTimeUrlLookupServiceTest::
+                              GetMinAllowedTimestampForReferrerChains,
+                          base::Unretained(this)),
+      referrer_chain_provider_.get(),
+      /*webui_delegate=*/nullptr, intelligent_scan_delegate_.get(),
+      base::BindRepeating(
+          [](RealTimeUrlLookupServiceTest* test)
+              -> network::mojom::NetworkContext* {
+            return &test->mock_network_context_;
+          },
+          base::Unretained(this)));
+
+  GURL url("http://example.com/");
+  EXPECT_CALL(*referrer_chain_provider_,
+              IdentifyReferrerChainByPendingEventURL(_, _, _))
+      .WillRepeatedly([](const GURL& event_url, int user_gesture_count_limit,
+                         ReferrerChain* out_referrer_chain) {
+        out_referrer_chain->Add();
+        return ReferrerChainProvider::SUCCESS;
+      });
+
+  base::HistogramTester histogram_tester;
+  auto result = StartFillingRequestProto(url, /*is_sampled_report=*/false);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(mock_network_context_.resolve_host_called_count(), 1);
+  ASSERT_EQ(result->referrer_chain_size(), 1);
+  // IP addresses should be populated.
+  ASSERT_EQ(result->referrer_chain(0).ip_addresses_size(), 1);
+  EXPECT_EQ(result->referrer_chain(0).ip_addresses(0), "192.168.1.1");
+
+  // TODO(crbug.com/394602691): Remove Android build exclusion once IP address
+  // support becomes a requirement for Android devices.
+#if !BUILDFLAG(IS_ANDROID)
+  EXPECT_FALSE(result->local_ips().empty());
+#endif
+
+  histogram_tester.ExpectUniqueSample(
+      "SafeBrowsing.RT.DnsResolution.Result",
+      RealTimeUrlLookupServiceBase::DnsResolutionResult::kSuccess, 1);
+  histogram_tester.ExpectTotalCount("SafeBrowsing.RT.DnsResolution.Time", 1);
 }
 
 TEST_F(RealTimeUrlLookupServiceTest, TestFillReferringAppInfo) {
@@ -514,6 +813,47 @@ TEST_F(RealTimeUrlLookupServiceTest, TestFillReferringAppInfo) {
   }
 }
 
+TEST_F(RealTimeUrlLookupServiceTest, TestFillLlamaForcedTriggerCapability) {
+  SetSafeBrowsingState(&test_pref_service_,
+                       SafeBrowsingState::ENHANCED_PROTECTION);
+  struct {
+    IntelligentScanDelegate::ModelType model_type;
+    IntelligentScanModelType expected_proto_model_type;
+  } kTestCases[] = {
+      {IntelligentScanDelegate::ModelType::kNotSupportedOnDevice,
+       IntelligentScanModelType::NOT_SUPPORTED},
+      {IntelligentScanDelegate::ModelType::kNotSupportedServerSide,
+       IntelligentScanModelType::NOT_SUPPORTED},
+      {IntelligentScanDelegate::ModelType::kOnDevice,
+       IntelligentScanModelType::ON_DEVICE_MODEL},
+      {IntelligentScanDelegate::ModelType::kServerSide,
+       IntelligentScanModelType::SERVER_SIDE_MODEL},
+  };
+
+  for (const auto& test_case : kTestCases) {
+    SCOPED_TRACE(base::StringPrintf("model_type: %d",
+                                    static_cast<int>(test_case.model_type)));
+    EXPECT_CALL(*intelligent_scan_delegate_, GetIntelligentScanModelType(_))
+        .WillOnce(Return(test_case.model_type));
+    auto result = StartFillingRequestProto(GURL("http://example.com/"),
+                                           /*is_sampled_report=*/false);
+    EXPECT_EQ(result->llama_forced_trigger_capability().supported_model_type(),
+              test_case.expected_proto_model_type);
+  }
+}
+
+TEST_F(RealTimeUrlLookupServiceTest,
+       TestFillLlamaForcedTriggerCapability_EnhancedProtectionDisabled) {
+  SetSafeBrowsingState(&test_pref_service_,
+                       SafeBrowsingState::STANDARD_PROTECTION);
+  EXPECT_CALL(*intelligent_scan_delegate_, GetIntelligentScanModelType(_))
+      .Times(0);
+  auto result = StartFillingRequestProto(GURL("http://example.com/"),
+                                         /*is_sampled_report=*/false);
+  EXPECT_EQ(result->llama_forced_trigger_capability().supported_model_type(),
+            IntelligentScanModelType::NOT_SUPPORTED);
+}
+
 TEST_F(RealTimeUrlLookupServiceTest, TestSanitizeURL) {
   struct SanitizeUrlCase {
     const char* url;
@@ -576,6 +916,23 @@ TEST_F(RealTimeUrlLookupServiceTest, TestGetSBThreatTypeForRTThreatType) {
             RealTimeUrlLookupServiceBase::GetSBThreatTypeForRTThreatType(
                 RTLookupResponse::ThreatInfo::MANAGED_POLICY,
                 RTLookupResponse::ThreatInfo::SAFE));
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(kSuspiciousSiteWarnings);
+    EXPECT_EQ(SB_THREAT_TYPE_WARNABLE_SUSPICIOUS_SITE,
+              RealTimeUrlLookupServiceBase::GetSBThreatTypeForRTThreatType(
+                  RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING,
+                  RTLookupResponse::ThreatInfo::WARN));
+  }
+
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndDisableFeature(kSuspiciousSiteWarnings);
+    EXPECT_EQ(SB_THREAT_TYPE_SAFE,
+              RealTimeUrlLookupServiceBase::GetSBThreatTypeForRTThreatType(
+                  RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING,
+                  RTLookupResponse::ThreatInfo::WARN));
+  }
   EXPECT_EQ(SB_THREAT_TYPE_SAFE,
             RealTimeUrlLookupServiceBase::GetSBThreatTypeForRTThreatType(
                 RTLookupResponse::ThreatInfo::UNWANTED_SOFTWARE,

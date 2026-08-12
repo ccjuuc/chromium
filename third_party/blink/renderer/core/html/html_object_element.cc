@@ -100,15 +100,15 @@ void HTMLObjectElement::ParseAttribute(
   if (name == html_names::kFormAttr) {
     FormAttributeChanged();
   } else if (name == html_names::kTypeAttr) {
-    SetServiceType(params.new_value.LowerASCII());
-    wtf_size_t pos = service_type_.Find(";");
+    SetServiceType(params.new_value.ToAsciiLower());
+    wtf_size_t pos = service_type_.find(';');
     if (pos != kNotFound)
-      SetServiceType(service_type_.Left(pos));
+      SetServiceType(service_type_.substr(0, pos));
     // TODO(crbug.com/572908): What is the right thing to do here? Should we
     // suppress the reload stuff when a persistable widget-type is specified?
     ReloadPluginOnAttributeChange(name);
   } else if (name == html_names::kDataAttr) {
-    SetUrl(StripLeadingAndTrailingHTMLSpaces(params.new_value));
+    SetUrl(StripLeadingAndTrailingHtmlSpaces(params.new_value));
     if (GetLayoutObject() && IsImageType()) {
       SetNeedsPluginUpdate(true);
       if (!image_loader_)
@@ -154,8 +154,9 @@ bool HTMLObjectElement::HasFallbackContent() const {
 
 bool HTMLObjectElement::HasValidClassId() const {
   if (MIMETypeRegistry::IsJavaAppletMIMEType(service_type_) &&
-      ClassId().StartsWithIgnoringASCIICase("java:"))
+      ClassId().StartsWithIgnoringAsciiCase("java:")) {
     return true;
+  }
 
   // HTML5 says that fallback content should be rendered if a non-empty
   // classid is specified for which the UA can't find a suitable plugin.
@@ -183,7 +184,7 @@ void HTMLObjectElement::ReloadPluginOnAttributeChange(
   }
   SetNeedsPluginUpdate(true);
   if (needs_invalidation)
-    ReattachOnPluginChangeIfNeeded();
+    ReattachOnPluginChangeIfNeeded(/*require_layout=*/true);
 }
 
 // TODO(crbug.com/572908): This should be unified with
@@ -258,7 +259,7 @@ void HTMLObjectElement::ChildrenChanged(const ChildrenChange& change) {
   HTMLPlugInElement::ChildrenChanged(change);
   if (isConnected() && !UseFallbackContent()) {
     SetNeedsPluginUpdate(true);
-    ReattachOnPluginChangeIfNeeded();
+    ReattachOnPluginChangeIfNeeded(/*require_layout=*/true);
   }
 }
 
@@ -335,9 +336,8 @@ void HTMLObjectElement::RenderFallbackContent(
   ReattachFallbackContent();
 }
 
-V8UnionTrustedScriptURLOrUSVString* HTMLObjectElement::data() {
-  return MakeGarbageCollected<V8UnionTrustedScriptURLOrUSVString>(
-      GetURLAttribute(html_names::kDataAttr));
+String HTMLObjectElement::data() {
+  return GetURLAttribute(html_names::kDataAttr);
 }
 
 void HTMLObjectElement::setData(const V8UnionTrustedScriptURLOrUSVString* value,
@@ -352,9 +352,8 @@ void HTMLObjectElement::setData(const V8UnionTrustedScriptURLOrUSVString* value,
                                 AtomicString(compliant_value));
 }
 
-V8UnionTrustedScriptURLOrUSVString* HTMLObjectElement::codeBase() {
-  return MakeGarbageCollected<V8UnionTrustedScriptURLOrUSVString>(
-      GetURLAttribute(html_names::kCodebaseAttr));
+String HTMLObjectElement::codeBase() {
+  return GetURLAttribute(html_names::kCodebaseAttr);
 }
 
 void HTMLObjectElement::setCodeBase(
@@ -393,10 +392,11 @@ bool HTMLObjectElement::ContainsJavaApplet() const {
 
   for (HTMLElement& child : Traversal<HTMLElement>::ChildrenOf(*this)) {
     if (IsA<HTMLParamElement>(child) &&
-        EqualIgnoringASCIICase(child.GetNameAttribute(), "type") &&
+        EqualIgnoringAsciiCase(child.GetNameAttribute(), "type") &&
         MIMETypeRegistry::IsJavaAppletMIMEType(
-            child.FastGetAttribute(html_names::kValueAttr).GetString()))
+            child.FastGetAttribute(html_names::kValueAttr).GetString())) {
       return true;
+    }
 
     auto* html_image_element = DynamicTo<HTMLObjectElement>(child);
     if (html_image_element && html_image_element->ContainsJavaApplet())

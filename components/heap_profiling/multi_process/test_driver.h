@@ -7,6 +7,7 @@
 
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/process/process_handle.h"
 #include "base/synchronization/waitable_event.h"
@@ -101,8 +102,8 @@ class TestDriver {
                      bool success,
                      std::string trace_json);
 
-  bool ValidateBrowserAllocations(const base::Value::Dict& dump_json);
-  bool ValidateRendererAllocations(const base::Value::Dict& dump_json);
+  bool ValidateBrowserAllocations(const base::DictValue& dump_json);
+  bool ValidateRendererAllocations(const base::DictValue& dump_json);
 
   bool ShouldProfileBrowser();
   bool ShouldProfileRenderer();
@@ -122,7 +123,7 @@ class TestDriver {
 
   // Allocations made by this class. Intentionally leaked, since deallocating
   // them would trigger a large number of IPCs, which is slow.
-  std::vector<char*> leaks_;
+  std::vector<raw_ptr<char>> leaks_;
 
   // Sum of size of all variadic allocations.
   size_t total_variadic_allocations_ = 0;

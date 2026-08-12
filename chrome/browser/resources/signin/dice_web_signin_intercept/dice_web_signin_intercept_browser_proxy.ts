@@ -31,6 +31,7 @@ export interface InterceptionParameters {
   interceptedAccount: AccountInfo;
   primaryAccount: AccountInfo;
   useV2Design: boolean;
+  useV2ProfileSwitchDesign: boolean;
   showManagedDisclaimer: boolean;
   interceptedProfileBadgeColor: string;
   primaryProfileBadgeColor: string;
@@ -79,11 +80,12 @@ export class DiceWebSigninInterceptBrowserProxyImpl implements
   }
 
   pageLoaded() {
-    return sendWithPromise('pageLoaded');
+    return sendWithPromise<InterceptionParameters>('pageLoaded');
   }
 
   chromeSigninPageLoaded(): Promise<ChromeSigninInterceptionParameters> {
-    return sendWithPromise('chromeSigninPageLoaded');
+    return sendWithPromise<ChromeSigninInterceptionParameters>(
+        'chromeSigninPageLoaded');
   }
 
   initializedWithHeight(height: number) {

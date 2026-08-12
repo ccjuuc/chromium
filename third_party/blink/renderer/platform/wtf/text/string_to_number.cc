@@ -20,15 +20,15 @@ bool IsCharacterAllowedInBase(UChar);
 
 template <>
 bool IsCharacterAllowedInBase<10>(UChar c) {
-  return IsASCIIDigit(c);
+  return IsAsciiDigit(c);
 }
 
 template <>
 bool IsCharacterAllowedInBase<16>(UChar c) {
-  return IsASCIIHexDigit(c);
+  return IsAsciiHexDigit(c);
 }
 
-template <typename IntegralType, typename CharType, int base>
+template <typename IntegralType, int base, typename CharType>
 static inline IntegralType ToIntegralType(base::span<const CharType> chars,
                                           NumberParsingOptions options,
                                           NumberParsingResult* parsing_result) {
@@ -79,12 +79,13 @@ static inline IntegralType ToIntegralType(base::span<const CharType> chars,
     --length;
     IntegralType digit_value;
     CharType c = data[index];
-    if (IsASCIIDigit(c))
+    if (IsAsciiDigit(c)) {
       digit_value = c - '0';
-    else if (c >= 'a')
+    } else if (c >= 'a') {
       digit_value = c - 'a' + 10;
-    else
+    } else {
       digit_value = c - 'A' + 10;
+    }
 
     if (is_negative) {
       if (!kIsSigned && options.AcceptMinusZeroForUnsigned()) {
@@ -142,181 +143,229 @@ bye:
   return result == NumberParsingResult::kSuccess ? value : 0;
 }
 
-template <typename IntegralType, typename CharType, int base>
-static inline IntegralType ToIntegralType(base::span<const CharType> data,
-                                          NumberParsingOptions options,
-                                          bool* ok) {
+template <typename IntegralType, int base, typename CharType>
+static inline std::optional<IntegralType> ToIntegralType(
+    base::span<const CharType> data,
+    NumberParsingOptions options) {
   NumberParsingResult result;
-  IntegralType value =
-      ToIntegralType<IntegralType, CharType, base>(data, options, &result);
-  if (ok)
-    *ok = result == NumberParsingResult::kSuccess;
-  return value;
+  auto value = ToIntegralType<IntegralType, base>(data, options, &result);
+  return result == NumberParsingResult::kSuccess ? std::make_optional(value)
+                                                 : std::nullopt;
 }
 
 unsigned CharactersToUInt(base::span<const LChar> data,
                           NumberParsingOptions options,
                           NumberParsingResult* result) {
-  return ToIntegralType<unsigned, LChar, 10>(data, options, result);
+  return ToIntegralType<unsigned, 10>(data, options, result);
 }
 
 unsigned CharactersToUInt(base::span<const UChar> data,
                           NumberParsingOptions options,
                           NumberParsingResult* result) {
-  return ToIntegralType<unsigned, UChar, 10>(data, options, result);
+  return ToIntegralType<unsigned, 10>(data, options, result);
 }
 
-unsigned HexCharactersToUInt(base::span<const LChar> data,
-                             NumberParsingOptions options,
-                             bool* ok) {
-  return ToIntegralType<unsigned, LChar, 16>(data, options, ok);
+std::optional<uint32_t> HexCharactersToUInt(base::span<const LChar> data,
+                                            NumberParsingOptions options) {
+  return ToIntegralType<uint32_t, 16>(data, options);
 }
 
-unsigned HexCharactersToUInt(base::span<const UChar> data,
-                             NumberParsingOptions options,
-                             bool* ok) {
-  return ToIntegralType<unsigned, UChar, 16>(data, options, ok);
+std::optional<uint32_t> HexCharactersToUInt(base::span<const UChar> data,
+                                            NumberParsingOptions options) {
+  return ToIntegralType<uint32_t, 16>(data, options);
 }
 
-uint64_t HexCharactersToUInt64(base::span<const LChar> data,
-                               NumberParsingOptions options,
-                               bool* ok) {
-  return ToIntegralType<uint64_t, LChar, 16>(data, options, ok);
+std::optional<uint64_t> HexCharactersToUInt64(base::span<const LChar> data,
+                                              NumberParsingOptions options) {
+  return ToIntegralType<uint64_t, 16>(data, options);
 }
 
-uint64_t HexCharactersToUInt64(base::span<const UChar> data,
-                               NumberParsingOptions options,
-                               bool* ok) {
-  return ToIntegralType<uint64_t, UChar, 16>(data, options, ok);
+std::optional<uint64_t> HexCharactersToUInt64(base::span<const UChar> data,
+                                              NumberParsingOptions options) {
+  return ToIntegralType<uint64_t, 16>(data, options);
 }
 
-int CharactersToInt(base::span<const LChar> data,
-                    NumberParsingOptions options,
-                    bool* ok) {
-  return ToIntegralType<int, LChar, 10>(data, options, ok);
+std::optional<int32_t> CharactersToInt(base::span<const LChar> data,
+                                       NumberParsingOptions options) {
+  return ToIntegralType<int32_t, 10>(data, options);
 }
 
-int CharactersToInt(base::span<const UChar> data,
-                    NumberParsingOptions options,
-                    bool* ok) {
-  return ToIntegralType<int, UChar, 10>(data, options, ok);
+std::optional<int32_t> CharactersToInt(base::span<const UChar> data,
+                                       NumberParsingOptions options) {
+  return ToIntegralType<int32_t, 10>(data, options);
 }
 
-int CharactersToInt(const StringView& string,
-                    NumberParsingOptions options,
-                    bool* ok) {
-  return VisitCharacters(
-      string, [&](auto chars) { return CharactersToInt(chars, options, ok); });
+std::optional<uint32_t> CharactersToUInt(base::span<const LChar> data,
+                                         NumberParsingOptions options) {
+  return ToIntegralType<uint32_t, 10>(data, options);
 }
 
-unsigned CharactersToUInt(base::span<const LChar> data,
-                          NumberParsingOptions options,
-                          bool* ok) {
-  return ToIntegralType<unsigned, LChar, 10>(data, options, ok);
+std::optional<uint32_t> CharactersToUInt(base::span<const UChar> data,
+                                         NumberParsingOptions options) {
+  return ToIntegralType<uint32_t, 10>(data, options);
 }
 
-unsigned CharactersToUInt(base::span<const UChar> data,
-                          NumberParsingOptions options,
-                          bool* ok) {
-  return ToIntegralType<unsigned, UChar, 10>(data, options, ok);
+std::optional<int64_t> CharactersToInt64(base::span<const LChar> data,
+                                         NumberParsingOptions options) {
+  return ToIntegralType<int64_t, 10>(data, options);
 }
 
-int64_t CharactersToInt64(base::span<const LChar> data,
-                          NumberParsingOptions options,
-                          bool* ok) {
-  return ToIntegralType<int64_t, LChar, 10>(data, options, ok);
+std::optional<int64_t> CharactersToInt64(base::span<const UChar> data,
+                                         NumberParsingOptions options) {
+  return ToIntegralType<int64_t, 10>(data, options);
 }
 
-int64_t CharactersToInt64(base::span<const UChar> data,
-                          NumberParsingOptions options,
-                          bool* ok) {
-  return ToIntegralType<int64_t, UChar, 10>(data, options, ok);
+std::optional<uint64_t> CharactersToUInt64(base::span<const LChar> data,
+                                           NumberParsingOptions options) {
+  return ToIntegralType<uint64_t, 10>(data, options);
 }
 
-uint64_t CharactersToUInt64(base::span<const LChar> data,
-                            NumberParsingOptions options,
-                            bool* ok) {
-  return ToIntegralType<uint64_t, LChar, 10>(data, options, ok);
-}
-
-uint64_t CharactersToUInt64(base::span<const UChar> data,
-                            NumberParsingOptions options,
-                            bool* ok) {
-  return ToIntegralType<uint64_t, UChar, 10>(data, options, ok);
+std::optional<uint64_t> CharactersToUInt64(base::span<const UChar> data,
+                                           NumberParsingOptions options) {
+  return ToIntegralType<uint64_t, 10>(data, options);
 }
 
 enum TrailingJunkPolicy { kDisallowTrailingJunk, kAllowTrailingJunk };
 
-template <typename CharType, TrailingJunkPolicy policy>
-static inline double ToDoubleType(base::span<const CharType> data,
-                                  bool* ok,
-                                  size_t& parsed_length) {
+template <TrailingJunkPolicy policy, typename CharType>
+static inline std::optional<double> ToDoubleType(
+    base::span<const CharType> data,
+    size_t& parsed_length) {
   size_t length = data.size();
   size_t leading_spaces_length = 0;
   while (leading_spaces_length < length &&
-         IsASCIISpace(data[leading_spaces_length]))
+         IsAsciiSpace(data[leading_spaces_length])) {
     ++leading_spaces_length;
+  }
 
   double number =
       ParseDouble(data.subspan(leading_spaces_length), parsed_length);
   if (!parsed_length) {
-    if (ok)
-      *ok = false;
-    return 0.0;
+    return std::nullopt;
   }
 
   parsed_length += leading_spaces_length;
-  if (ok)
-    *ok = policy == kAllowTrailingJunk || parsed_length == length;
+  if (policy != kAllowTrailingJunk && parsed_length != length) {
+    return std::nullopt;
+  }
   return number;
 }
 
-double CharactersToDouble(base::span<const LChar> data, bool* ok) {
+template <TrailingJunkPolicy policy, typename CharType>
+static inline std::optional<double> ToDoubleType(
+    base::span<const CharType> data) {
   size_t parsed_length;
-  return ToDoubleType<LChar, kDisallowTrailingJunk>(data, ok, parsed_length);
+  return ToDoubleType<policy>(data, parsed_length);
 }
 
-double CharactersToDouble(base::span<const UChar> data, bool* ok) {
-  size_t parsed_length;
-  return ToDoubleType<UChar, kDisallowTrailingJunk>(data, ok, parsed_length);
+std::optional<double> CharactersToDouble(base::span<const LChar> data) {
+  return ToDoubleType<kDisallowTrailingJunk>(data);
+}
+
+std::optional<double> CharactersToDouble(base::span<const UChar> data) {
+  return ToDoubleType<kDisallowTrailingJunk>(data);
 }
 
 double CharactersToDouble(base::span<const LChar> data, size_t& parsed_length) {
-  return ToDoubleType<LChar, kAllowTrailingJunk>(data, nullptr, parsed_length);
+  return ToDoubleType<kAllowTrailingJunk>(data, parsed_length).value_or(0);
 }
 
 double CharactersToDouble(base::span<const UChar> data, size_t& parsed_length) {
-  return ToDoubleType<UChar, kAllowTrailingJunk>(data, nullptr, parsed_length);
+  return ToDoubleType<kAllowTrailingJunk>(data, parsed_length).value_or(0);
 }
 
-float CharactersToFloat(base::span<const LChar> data, bool* ok) {
-  // FIXME: This will return ok even when the string fits into a double but
+std::optional<float> CharactersToFloat(base::span<const LChar> data) {
+  std::optional<double> value = ToDoubleType<kDisallowTrailingJunk>(data);
+  // FIXME: This will return a value even when the string fits into a double but
   // not a float.
-  size_t parsed_length;
-  return static_cast<float>(
-      ToDoubleType<LChar, kDisallowTrailingJunk>(data, ok, parsed_length));
+  return value ? std::make_optional(static_cast<float>(*value)) : std::nullopt;
 }
 
-float CharactersToFloat(base::span<const UChar> data, bool* ok) {
-  // FIXME: This will return ok even when the string fits into a double but
+std::optional<float> CharactersToFloat(base::span<const UChar> data) {
+  std::optional<double> value = ToDoubleType<kDisallowTrailingJunk>(data);
+  // FIXME: This will return a value even when the string fits into a double but
   // not a float.
-  size_t parsed_length;
-  return static_cast<float>(
-      ToDoubleType<UChar, kDisallowTrailingJunk>(data, ok, parsed_length));
+  return value ? std::make_optional(static_cast<float>(*value)) : std::nullopt;
 }
 
 float CharactersToFloat(base::span<const LChar> data, size_t& parsed_length) {
-  // FIXME: This will return ok even when the string fits into a double but
+  // FIXME: This will return a value even when the string fits into a double but
   // not a float.
   return static_cast<float>(
-      ToDoubleType<LChar, kAllowTrailingJunk>(data, nullptr, parsed_length));
+      ToDoubleType<kAllowTrailingJunk>(data, parsed_length).value_or(0));
 }
 
 float CharactersToFloat(base::span<const UChar> data, size_t& parsed_length) {
-  // FIXME: This will return ok even when the string fits into a double but
+  // FIXME: This will return a value even when the string fits into a double but
   // not a float.
   return static_cast<float>(
-      ToDoubleType<UChar, kAllowTrailingJunk>(data, nullptr, parsed_length));
+      ToDoubleType<kAllowTrailingJunk>(data, parsed_length).value_or(0));
+}
+
+std::optional<int32_t> StringToInt(const StringView& input,
+                                   NumberParsingOptions options) {
+  return VisitCharacters(
+      input, [&](auto chars) { return CharactersToInt(chars, options); });
+}
+
+std::optional<uint32_t> StringToUint(const StringView& input,
+                                     NumberParsingOptions options) {
+  return VisitCharacters(
+      input, [&](auto chars) { return CharactersToUInt(chars, options); });
+}
+
+std::optional<int64_t> StringToInt64(const StringView& input,
+                                     NumberParsingOptions options) {
+  return input.Is8Bit() ? CharactersToInt64(input.Span8(), options)
+                        : CharactersToInt64(input.Span16(), options);
+}
+
+std::optional<uint64_t> StringToUint64(const StringView& input,
+                                       NumberParsingOptions options) {
+  return input.Is8Bit() ? CharactersToUInt64(input.Span8(), options)
+                        : CharactersToUInt64(input.Span16(), options);
+}
+
+std::optional<uint32_t> HexStringToUint(const StringView& input,
+                                        NumberParsingOptions options) {
+  return input.Is8Bit() ? HexCharactersToUInt(input.Span8(), options)
+                        : HexCharactersToUInt(input.Span16(), options);
+}
+
+std::optional<uint64_t> HexStringToUint64(const StringView& input,
+                                          NumberParsingOptions options) {
+  return input.Is8Bit() ? HexCharactersToUInt64(input.Span8(), options)
+                        : HexCharactersToUInt64(input.Span16(), options);
+}
+
+std::optional<int32_t> StringToIntStrict(const StringView& input) {
+  constexpr NumberParsingOptions kOption = NumberParsingOptions::Strict();
+  return input.Is8Bit() ? CharactersToInt(input.Span8(), kOption)
+                        : CharactersToInt(input.Span16(), kOption);
+}
+
+std::optional<uint32_t> StringToUintStrict(const StringView& input) {
+  constexpr NumberParsingOptions kOption = NumberParsingOptions::Strict();
+  return input.Is8Bit() ? CharactersToUInt(input.Span8(), kOption)
+                        : CharactersToUInt(input.Span16(), kOption);
+}
+
+std::optional<int32_t> StringToIntLoose(const StringView& input) {
+  return StringToInt(input, NumberParsingOptions::Loose());
+}
+
+std::optional<uint32_t> StringToUintLoose(const StringView& input) {
+  return StringToUint(input, NumberParsingOptions::Loose());
+}
+
+std::optional<double> StringToDouble(const StringView& input) {
+  return input.Is8Bit() ? CharactersToDouble(input.Span8())
+                        : CharactersToDouble(input.Span16());
+}
+
+std::optional<float> StringToFloat(const StringView& input) {
+  return input.Is8Bit() ? CharactersToFloat(input.Span8())
+                        : CharactersToFloat(input.Span16());
 }
 
 }  // namespace blink

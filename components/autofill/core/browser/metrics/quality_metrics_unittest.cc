@@ -5,11 +5,14 @@
 #include "components/autofill/core/browser/metrics/quality_metrics.h"
 
 #include <optional>
+#include <string>
 
 #include "base/base64.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/metrics/user_action_tester.h"
+#include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_parsing/determine_regex_types.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager_test_api.h"
@@ -18,6 +21,7 @@
 #include "components/autofill/core/browser/metrics/ukm_metrics_test_utils.h"
 #include "components/autofill/core/browser/test_utils/autofill_form_test_utils.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/form_data_test_api.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -105,29 +109,29 @@ TEST_F(QualityMetricsTest, QualityMetrics) {
       .fields = {{.role = NAME_FIRST,
                   .heuristic_type = NAME_FULL,
                   .value = u"Elvis Aaron Presley",
-                  .is_autofilled = true},
+                  .is_autofilled_according_to_renderer = true},
                  {.role = EMAIL_ADDRESS,
                   .heuristic_type = PHONE_HOME_NUMBER,
                   .value = u"buddy@gmail.com",
-                  .is_autofilled = false},
+                  .is_autofilled_according_to_renderer = false},
                  {.role = NAME_FIRST,
                   .heuristic_type = NAME_FULL,
                   .value = u"",
-                  .is_autofilled = false},
+                  .is_autofilled_according_to_renderer = false},
                  {.role = EMAIL_ADDRESS,
                   .heuristic_type = PHONE_HOME_NUMBER,
                   .value = u"garbage",
-                  .is_autofilled = false},
+                  .is_autofilled_according_to_renderer = false},
                  {.role = NO_SERVER_DATA,
                   .heuristic_type = UNKNOWN_TYPE,
                   .value = u"USA",
                   .form_control_type = FormControlType::kSelectOne,
-                  .is_autofilled = false},
+                  .is_autofilled_according_to_renderer = false},
                  {.role = PHONE_HOME_CITY_AND_NUMBER,
                   .heuristic_type = PHONE_HOME_CITY_AND_NUMBER,
                   .value = u"2345678901",
                   .form_control_type = FormControlType::kInputTelephone,
-                  .is_autofilled = true}},
+                  .is_autofilled_according_to_renderer = true}},
       .renderer_id = test::MakeFormRendererId(),
       .main_frame_origin = url::Origin::Create(autofill_driver().url())};
 
@@ -213,13 +217,11 @@ class AlternativeNameFieldValueCharacterSetTest
 // Test that the metric for the alternative name field value character set is
 // recorded correctly.
 TEST_P(AlternativeNameFieldValueCharacterSetTest, LoggedCorrectly) {
-  base::test::ScopedFeatureList features{
-      autofill::features::kAutofillSupportPhoneticNameForJP};
 
   test::FormDescription form_description = {
       .fields = {{.role = ALTERNATIVE_FULL_NAME,
                   .value = GetParam().name,
-                  .is_autofilled = true}},
+                  .is_autofilled_according_to_renderer = true}},
       .renderer_id = test::MakeFormRendererId(),
       .main_frame_origin = url::Origin::Create(autofill_driver().url())};
 
@@ -275,7 +277,7 @@ TEST_F(QualityMetricsTest, LoggedCorrectlyForRationalizationOk) {
        // RATIONALIZATION_OK because it's a type mismatch.
        CreateTestFormField("Phone3", "phone3", "Elvis Aaron Presley",
                            FormControlType::kInputText)});
-  test_api(form).field(2).set_is_autofilled(true);
+  test_api(form).field(2).set_is_autofilled_according_to_renderer(true);
 
   std::vector<FieldType> heuristic_types = {NAME_FULL,
                                             ADDRESS_HOME_LINE1,
@@ -324,7 +326,7 @@ TEST_F(QualityMetricsTest, LoggedCorrectlyForRationalizationGood) {
        // RATIONALIZATION_GOOD because it's empty.
        CreateTestFormField("Phone1", "phone1", "",
                            FormControlType::kInputText)});
-  test_api(form).field(2).set_is_autofilled(true);
+  test_api(form).field(2).set_is_autofilled_according_to_renderer(true);
 
   std::vector<FieldType> field_types = {NAME_FULL, ADDRESS_HOME_LINE1,
                                         PHONE_HOME_CITY_AND_NUMBER,
@@ -365,7 +367,6 @@ TEST_F(QualityMetricsTest, LoggedCorrectlyForRationalizationBad) {
       CreateTestFormField("Phone1", "phone1", "12345678901",
                           FormControlType::kInputText),
   });
-  test_api(form).field(2).set_is_autofilled(true);
 
   std::vector<FieldType> heuristic_types = {NAME_FULL, ADDRESS_HOME_LINE1,
                                             PHONE_HOME_CITY_AND_NUMBER,
@@ -380,6 +381,7 @@ TEST_F(QualityMetricsTest, LoggedCorrectlyForRationalizationBad) {
   FormStructure* form_structure =
       test_api(autofill_manager()).FindCachedFormById(form.global_id());
   ASSERT_TRUE(form_structure);
+  form_structure->field(2)->AddFieldModifier(FieldModifier::kAutofill);
   form_structure->RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                LanguageCode(""), nullptr);
 
@@ -412,7 +414,6 @@ TEST_F(QualityMetricsTest, LoggedCorrectlyForOnlyFillWhenFocusedField) {
        // FALSE_NEGATIVE_MISMATCH + RATIONALIZATION_OK
        CreateTestFormField("Phone3", "phone3", "Elvis Aaron Presley",
                            FormControlType::kInputText)});
-  test_api(form).field(2).set_is_autofilled(true);
 
   std::vector<FieldType> heuristic_types = {NAME_FULL,
                                             ADDRESS_HOME_LINE1,
@@ -433,6 +434,7 @@ TEST_F(QualityMetricsTest, LoggedCorrectlyForOnlyFillWhenFocusedField) {
   FormStructure* form_structure =
       test_api(autofill_manager()).FindCachedFormById(form.global_id());
   ASSERT_TRUE(form_structure);
+  form_structure->field(2)->AddFieldModifier(FieldModifier::kAutofill);
   form_structure->RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                LanguageCode(""), nullptr);
 
@@ -800,8 +802,8 @@ TEST_F(QualityMetricsTest, NoSubmission) {
                            FormControlType::kSelectOne),
        CreateTestFormField("Phone", "phone", "2345678901",
                            FormControlType::kInputTelephone)});
-  test_api(form).field(0).set_is_autofilled(true);
-  test_api(form).field(-1).set_is_autofilled(true);
+  test_api(form).field(0).set_is_autofilled_according_to_renderer(true);
+  test_api(form).field(-1).set_is_autofilled_according_to_renderer(true);
 
   std::vector<FieldType> heuristic_types = {
       NAME_FULL,         PHONE_HOME_NUMBER, NAME_FULL,
@@ -889,9 +891,9 @@ TEST_F(QualityMetricsTest, BasedOnAutocomplete) {
   std::unique_ptr<FormStructure> form_structure =
       std::make_unique<FormStructure>(form);
   FormStructure* form_structure_ptr = form_structure.get();
-  const RegexPredictions regex_predictions =
-      DetermineRegexTypes(GeoIpCountryCode(""), LanguageCode(""),
-                          form_structure->ToFormData(), nullptr);
+  const RegexPredictions regex_predictions = DetermineRegexTypes(
+      GeoIpCountryCode(""), LanguageCode(""), form_structure->ToFormData(),
+      nullptr, /*ignore_small_forms=*/true);
   regex_predictions.ApplyTo(form_structure->fields());
   form_structure->RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                LanguageCode(""), nullptr);
@@ -912,10 +914,10 @@ TEST_F(QualityMetricsTest, BasedOnAutocomplete) {
   base::HistogramTester histogram_tester;
   test_api(autofill_manager())
       .OnLoadedServerPredictions(
-          response_string, test::GetEncodedSignatures(*form_structure_ptr));
+          response_string, test::GetEncodedSignatures(*form_structure_ptr),
+          {form});
 
-  // Verify that ParseServerPredictionsQueryResponse was called (here and
-  // below).
+  // Verify that the server response was parsed (here and below).
   EXPECT_THAT(
       histogram_tester.GetAllSamples("Autofill.ServerQueryResponse"),
       BucketsInclude(Bucket(AutofillMetrics::QUERY_RESPONSE_RECEIVED, 1),
@@ -967,45 +969,6 @@ TEST_F(QualityMetricsTest, BasedOnAutocomplete) {
     histogram_tester.ExpectTotalCount(aggregate_histogram, 3);
     histogram_tester.ExpectTotalCount(by_field_type_histogram, 4);
   }
-}
-
-// Tests that the Autofill.LabelInference.InferredLabelSource.AtSubmission2
-// metric is emitted correctly.
-TEST_F(QualityMetricsTest, InferredLabelSourceAtSubmissionMetric) {
-  const AutofillProfile& profile =
-      *personal_data().address_data_manager().GetProfileByGUID(kTestProfileId);
-
-  // Create a form and fill the `name_field` and `country_field` with values
-  // from the `profile`, ensuring that they have a possible type. The
-  // `street_field` is filled with an unknown value, which makes sure that it
-  // doesn't have a possible type.
-  // The `FormFieldData::label_source` of the fields is set manually, since
-  // this test doesn't run label inference.
-  FormFieldData name_field;
-  name_field.set_value(profile.GetInfo(
-      NAME_FULL, personal_data().address_data_manager().app_locale()));
-  name_field.set_label_source(FormFieldData::LabelSource::kUnknown);
-  FormFieldData street_field;
-  street_field.set_value(u"unknown");
-  street_field.set_label_source(FormFieldData::LabelSource::kForId);
-  FormFieldData country_field;
-  country_field.set_value(
-      profile.GetInfo(ADDRESS_HOME_COUNTRY,
-                      personal_data().address_data_manager().app_locale()));
-  country_field.set_label_source(FormFieldData::LabelSource::kLabelTag);
-  const FormData form = CreateForm({name_field, street_field, country_field});
-  autofill_manager().AddSeenForm(
-      test::WithoutValues(form),
-      {NAME_FIRST, ADDRESS_HOME_LINE1, ADDRESS_HOME_COUNTRY});
-
-  // Expect that the label source of all fields with a possible type is logged
-  // on form submission.
-  base::HistogramTester histogram_tester;
-  SubmitForm(form);
-  EXPECT_THAT(histogram_tester.GetAllSamples(
-                  "Autofill.LabelInference.InferredLabelSource.AtSubmission2"),
-              BucketsAre(Bucket(name_field.label_source(), 1),
-                         Bucket(country_field.label_source(), 1)));
 }
 
 // Tests that precision metric is recorded for email field predictions.
@@ -1109,6 +1072,42 @@ TEST_F(QualityMetricsTest, EmailPredictionCorrectnessRecallMetric) {
     SubmitForm(form);
     histogram_tester.ExpectTotalCount(precision_histogram, 0);
   }
+}
+
+// Tests that when split ZIP support is enabled and a 9-digit ZIP is stored in
+// the profile, a heuristic prediction of `ADDRESS_HOME_ZIP_PREFIX` for a
+// 5-digit entry is logged as a true positive.
+TEST_F(QualityMetricsTest, SplitZip_PrefixPredictionIsTruePositive) {
+  base::test::ScopedFeatureList scoped_feature_list{
+      features::kAutofillSupportSplitZipCode};
+
+  personal_data().test_address_data_manager().ClearProfiles();
+  AutofillProfile profile(i18n_model_definition::kLegacyHierarchyCountryCode);
+  test::SetProfileInfo(&profile, test::SetProfileInfoOptionsBuilder()
+                                     .with_country("US")
+                                     .with_zipcode("79401-1234")
+                                     .Build());
+  personal_data().address_data_manager().AddProfile(profile);
+
+  test::FormDescription form_description = {
+      .description_for_logging = "SplitZip_PrefixPredictionIsTruePositive",
+      .fields = {{.heuristic_type = ADDRESS_HOME_ZIP_PREFIX, .value = u"79401"},
+                 {.heuristic_type = ADDRESS_HOME_ZIP_SUFFIX, .value = u"1234"}},
+  };
+
+  FormData form = GetAndAddSeenForm(form_description);
+
+  base::HistogramTester histogram_tester;
+  SubmitForm(form);
+
+  EXPECT_THAT(histogram_tester.GetAllSamples(
+                  "Autofill.FieldPredictionQuality.ByFieldType.Heuristic"),
+              BucketsAre(Bucket(GetFieldTypeGroupPredictionQualityMetric(
+                                    ADDRESS_HOME_ZIP_PREFIX, TRUE_POSITIVE),
+                                1),
+                         Bucket(GetFieldTypeGroupPredictionQualityMetric(
+                                    ADDRESS_HOME_ZIP_SUFFIX, TRUE_POSITIVE),
+                                1)));
 }
 
 }  // namespace autofill::autofill_metrics

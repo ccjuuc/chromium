@@ -35,17 +35,40 @@
 
 #include "third_party/blink/renderer/core/animation/animation.h"
 #include "third_party/blink/renderer/core/animation/css/css_animation.h"
+#include "third_party/blink/renderer/core/animation/css/css_timeline_map.h"
+#include "third_party/blink/renderer/core/animation/deferred_timeline.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/document_lifecycle.h"
+#include "third_party/blink/renderer/core/dom/trigger_scoped_name.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 
 namespace blink {
 
 class AnimationTimeline;
 class Document;
 class PaintArtifactCompositor;
+
+class CORE_EXPORT SVGImageAnimationsToReset final
+    : public GarbageCollected<SVGImageAnimationsToReset> {
+ public:
+  void Trace(Visitor* visitor) const;
+
+  void Clear();
+  void Add(CSSAnimation&);
+  void Resume();
+
+  bool HasAnimationsForTesting() const {
+    return !animations_to_resume_.empty();
+  }
+  bool HasAnimationForTesting(const CSSAnimation&) const;
+
+ private:
+  HeapVector<Member<CSSAnimation>> animations_to_resume_;
+};
 
 class CORE_EXPORT DocumentAnimations final
     : public GarbageCollected<DocumentAnimations> {
@@ -64,6 +87,8 @@ class CORE_EXPORT DocumentAnimations final
   void GetAnimationsTargetingTreeScope(HeapVector<Member<Animation>>&,
                                        const TreeScope&);
 
+  void RetargetAnimationsForPseudoElement(PseudoElement* new_effect_target);
+
   // Updates existing animations as part of generating a new (document
   // lifecycle) frame. Note that this considers and updates state for
   // both composited and non-composited animations.
@@ -77,6 +102,8 @@ class CORE_EXPORT DocumentAnimations final
   void MarkAnimationsCompositorPending();
 
   HeapVector<Member<Animation>> getAnimations(const TreeScope&);
+  void PrepareAnimationsForSVGImageReset(
+      SVGImageAnimationsToReset& animations_to_reset);
 
   // Detach compositor timelines to prevent further ticking of any animations
   // associated with the timelines.  Detached timelines may be subsequently
@@ -91,11 +118,17 @@ class CORE_EXPORT DocumentAnimations final
     return timelines_;
   }
 
-  static void UpdateTriggerAttachment(
+  using TriggerAttachmentMap =
+      HeapHashMap<Member<const TriggerScopedName>,
+                  std::pair<Member<AnimationTrigger>,
+                            Member<const StyleTriggerAttachment>>>;
+  static void FindRelevantTriggerAttachments(
       CSSAnimation& animation,
-      base::FunctionRef<void(AnimationTrigger& trigger,
-                             const StyleTriggerAttachment& attachment)>
-          function);
+      TriggerScopedNameMap& global_trigger_map,
+      TriggerAttachmentMap& relevant_attachments_out);
+  static void UpdateTriggerAttachments(
+      CSSAnimation& animation,
+      const TriggerAttachmentMap& relevant_attachments);
 
   void AddAnimationTrigger(AnimationTrigger& trigger);
 
@@ -105,18 +138,19 @@ class CORE_EXPORT DocumentAnimations final
   // names declared in the trigger-instantiating property with the names
   // declared in the animation-trigger property.
   void UpdateAnimationTriggerAttachments();
-  // These two functions serve the same purpose as
-  // UpdateAnimationTriggerAttachments above but restricts the updates to
-  // animations with animation-trigger declarations, which is more efficient.
-  // They are only used behind a flag while the renderer hang in
-  // crbug.com/447174988 is investigated.
-  // TODO(crbug.com/447174988): Remove UpdateAnimationTriggerAttachments when
-  // the bug is resolved.
-  void ExecutePendingTriggerAttachmentUpdates();
-  void AddPendingTriggerAttachmentUpdate(CSSAnimation* animation);
-  void RemovePendingTriggerAttachmentUpdate(CSSAnimation* animation);
+  void AddTriggeredAnimation(CSSAnimation* animation);
 
-  void UpdateCompositorAnimationTriggers();
+  const HeapHashSet<WeakMember<CSSAnimation>>& TriggeredAnimationsForTesting()
+      const {
+    return triggered_animations_;
+  }
+
+  void UpdateCompositorAnimationTriggers(
+      const PaintArtifactCompositor* paint_artifact_compositor);
+
+  DeferredTimeline& GetGlobalDeferredTimeline(const AtomicString& name) {
+    return *global_deferred_timelines_.Find(*document_, name);
+  }
 
   uint64_t current_transition_generation_;
   void Trace(Visitor*) const;
@@ -135,7 +169,15 @@ class CORE_EXPORT DocumentAnimations final
   HeapHashSet<WeakMember<AnimationTrigger>> triggers_;
   // Animations which should be attached to triggers after style and layout
   // updates.
-  HeapHashSet<WeakMember<CSSAnimation>> pending_trigger_attachment_updates_;
+  HeapHashSet<WeakMember<CSSAnimation>> triggered_animations_;
+  // In the new timeline name scoping model, names have document-global
+  // visibility by default. This is implementing by having CSSAnimations::
+  // FindAncestor[Deferred]Timeline() look up names in this map
+  // as a last resort.
+  //
+  // Only used when the CSSTimelineScopeGlobal flag is enabled.
+  CSSDeferredTimelineMap global_deferred_timelines_{StyleTimelineScope{
+      StyleTimelineScope::Type::kAll, /*names=*/Vector<AtomicString>()}};
 };
 
 }  // namespace blink

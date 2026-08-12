@@ -48,11 +48,21 @@
 // complete.
 + (BOOL)setUpListItemAutofillInMagicStackIsComplete;
 
+// Returns YES if the Safari Import SetUpListItemView item in the Magic Stack is
+// complete.
++ (BOOL)setUpListItemSafariImportInMagicStackIsComplete;
+
 // Returns the current color palette of the NTP's background.
 + (NewTabPageColorPalette*)currentBackgroundColor;
 
 // Returns whether the NTP has a custom background image.
 + (BOOL)hasBackgroundImage;
+
+// Returns the width of the Magic Stack collection view.
++ (CGFloat)magicStackCollectionViewWidth;
+
+// Returns the width of the first cell in the Magic Stack.
++ (CGFloat)magicStackFirstCellWidth;
 
 @end
 

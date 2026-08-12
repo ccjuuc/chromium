@@ -5,11 +5,14 @@
 #include "chrome/browser/ui/android/extensions/extension_action_popup_contents.h"
 
 #include "base/android/jni_string.h"
-#include "base/notimplemented.h"
+#include "chrome/browser/devtools/devtools_toggle_action.h"
+#include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/extensions/extension_view_host.h"
 #include "chrome/browser/extensions/extension_view_host_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/internal/android/android_browser_window.h"
+#include "components/input/native_web_keyboard_event.h"
+#include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_action.h"
@@ -37,10 +40,11 @@ constexpr gfx::Size kMaxSize = {800, 600};
 }  // namespace
 
 ExtensionActionPopupContents::ExtensionActionPopupContents(
-    std::unique_ptr<ExtensionViewHost> host)
-    : host_(std::move(host)) {
+    std::unique_ptr<ExtensionViewHost> host,
+    bool inspect_with_devtools)
+    : host_(std::move(host)), inspect_with_devtools_(inspect_with_devtools) {
   java_object_ = Java_ExtensionActionPopupContents_Constructor(
-      AttachCurrentThread(), reinterpret_cast<jlong>(this),
+      AttachCurrentThread(), reinterpret_cast<int64_t>(this),
       host_->host_contents());
   host_->set_view(this);
   // Handle the containing view calling window.close();
@@ -102,11 +106,17 @@ void ExtensionActionPopupContents::RenderFrameCreated(
 bool ExtensionActionPopupContents::HandleKeyboardEvent(
     content::WebContents* source,
     const input::NativeWebKeyboardEvent& event) {
-  NOTIMPLEMENTED();
-  return false;
+  return Java_ExtensionActionPopupContents_handleKeyboardEvent(
+      AttachCurrentThread(), java_object_, source->GetJavaWebContents(),
+      event.os_event);
 }
 
 void ExtensionActionPopupContents::OnLoaded() {
+  if (inspect_with_devtools_) {
+    DevToolsWindow::OpenDevToolsWindow(
+        host_->host_contents(), DevToolsToggleAction::ShowConsolePanel(),
+        DevToolsOpenedByAction::kContextMenuInspect);
+  }
   Java_ExtensionActionPopupContents_onLoaded(AttachCurrentThread(),
                                              java_object_);
 }
@@ -136,30 +146,11 @@ void ExtensionActionPopupContents::HandleCloseExtensionHost(
 // popup.
 static ScopedJavaLocalRef<jobject> JNI_ExtensionActionPopupContents_Create(
     JNIEnv* env,
-    jlong browser_window_interface_ptr,
-    std::string& action_id,
-    int tab_id) {
-  BrowserWindowInterface* browser =
-      reinterpret_cast<BrowserWindowInterface*>(browser_window_interface_ptr);
-  Profile* profile = browser->GetProfile();
-
-  ExtensionRegistry* registry = ExtensionRegistry::Get(profile);
-  DCHECK(registry);
-
-  ExtensionActionManager* manager = ExtensionActionManager::Get(profile);
-  DCHECK(manager);
-
-  const Extension* extension =
-      registry->enabled_extensions().GetByID(action_id);
-  DCHECK(extension);
-
-  ExtensionAction* action = manager->GetExtensionAction(*extension);
-  DCHECK(action);
-
-  GURL popup_url = action->GetPopupUrl(tab_id);
-
-  std::unique_ptr<ExtensionViewHost> host =
-      ExtensionViewHostFactory::CreatePopupHost(*extension, popup_url, browser);
+    int64_t extension_view_host_ptr,
+    bool inspect_with_devtools) {
+  std::unique_ptr<ExtensionViewHost> host(
+      reinterpret_cast<extensions::ExtensionViewHost*>(
+          extension_view_host_ptr));
   DCHECK(host);
 
   // The ExtensionActionPopupContents C++ object's lifetime is managed by its
@@ -170,7 +161,7 @@ static ScopedJavaLocalRef<jobject> JNI_ExtensionActionPopupContents_Create(
   // of this C++ object. Therefore, 'new' is used here, and ownership is
   // effectively passed to the Java-controlled lifecycle.
   ExtensionActionPopupContents* popup =
-      new ExtensionActionPopupContents(std::move(host));
+      new ExtensionActionPopupContents(std::move(host), inspect_with_devtools);
   return popup->GetJavaObject();
 }
 

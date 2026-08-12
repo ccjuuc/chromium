@@ -14,12 +14,20 @@
 
 namespace web {
 
+class AnnotationTextManagerTest;
+
+extern const int kMaxAnnotationsTextLength;
+extern const int kMaxAnnotationsMetadataLength;
+
 /**
  * Handles JS communication for the annotations feature.
  */
 class AnnotationsJavaScriptFeature : public JavaScriptFeature {
  public:
   static AnnotationsJavaScriptFeature* GetInstance();
+  static void SetInstanceForTesting(AnnotationsJavaScriptFeature* instance);
+
+  ~AnnotationsJavaScriptFeature() override;
 
   // Triggers the JS text extraction code. Async calls `OnTextExtracted` on
   // `AnnotationsTextManager` when done using provided `seq_id`.
@@ -39,8 +47,6 @@ class AnnotationsJavaScriptFeature : public JavaScriptFeature {
   // Triggers the JS decoration removal code for a single type.
   virtual void RemoveDecorationsWithType(WebState* web_state,
                                          const std::string& type);
-  // Triggers the JS highlight removal code.
-  virtual void RemoveHighlight(WebState* web_state);
 
  protected:
   // JavaScriptFeature:
@@ -48,14 +54,19 @@ class AnnotationsJavaScriptFeature : public JavaScriptFeature {
                              const ScriptMessage& script_message) override;
   std::optional<std::string> GetScriptMessageHandlerName() const override;
   AnnotationsJavaScriptFeature();
-  ~AnnotationsJavaScriptFeature() override;
 
  private:
   friend class base::NoDestructor<AnnotationsJavaScriptFeature>;
+  friend class AnnotationTextManagerTest;
+
+  // Constructor that allows disabling trusted event checks, e.g. for testing.
+  explicit AnnotationsJavaScriptFeature(bool trusted_event_check_enabled);
 
   AnnotationsJavaScriptFeature(const AnnotationsJavaScriptFeature&) = delete;
   AnnotationsJavaScriptFeature& operator=(const AnnotationsJavaScriptFeature&) =
       delete;
+
+  bool trusted_event_check_enabled_ = true;
 };
 
 }  // namespace web

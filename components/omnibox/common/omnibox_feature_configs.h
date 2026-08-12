@@ -5,6 +5,9 @@
 #ifndef COMPONENTS_OMNIBOX_COMMON_OMNIBOX_FEATURE_CONFIGS_H_
 #define COMPONENTS_OMNIBOX_COMMON_OMNIBOX_FEATURE_CONFIGS_H_
 
+#include <string>
+#include <unordered_set>
+
 #include "base/feature_list.h"
 #include "base/gtest_prod_util.h"
 #include "base/metrics/field_trial_params.h"
@@ -164,34 +167,6 @@ struct AiMode : Config<AiMode> {
   bool check_ai_eligibility_gws_side = false;
 };
 
-// If enabled, show the AIM entrypoint in the omnibox.
-struct AiModeOmniboxEntryPoint : Config<AiModeOmniboxEntryPoint> {
-  AiModeOmniboxEntryPoint();
-  // Whether the AIM entrypoint is enabled for all users.
-  bool enabled;
-  // Whether the AIM entrypoint is enabled only for users whose locale is set to
-  // English and who are located in the US. Has no effect if `enabled` is true.
-  bool enabledEnUs;
-
-  // Never display AIM hint text.
-  bool hide_aim_hint_text;
-
-  // Whether to hide the AIM hint text on NTP open.
-  bool hide_aim_hint_text_on_ntp_open;
-
-  // Whether to hide the other (non-AIM) page actions on NTP.
-  bool hide_other_page_actions_on_ntp;
-
-  // The maximum number of times the hint can be shown per day.
-  int aim_hint_impression_limit_daily;
-
-  // The maximum number of times the hint can be shown in total.
-  int aim_hint_impression_limit_total;
-
-  // Whether impression limits for the AIM hint are enabled.
-  bool enable_hint_impression_limits;
-};
-
 // A config struct for features related to contextual search in omnibox.
 struct ContextualSearch : Config<ContextualSearch> {
   ContextualSearch();
@@ -330,6 +305,8 @@ struct MiaZPS : Config<MiaZPS> {
   bool suppress_psuggest_backfill_with_mia;
 };
 
+BASE_DECLARE_FEATURE(kEmbeddedPermissionEnabled);
+
 // A config struct for the omnibox toolbelt.
 struct Toolbelt : Config<Toolbelt> {
   DECLARE_FEATURE(kOmniboxToolbelt);
@@ -416,6 +393,8 @@ struct DocumentProvider : Config<DocumentProvider> {
   bool enabled;
   // The minimum input length required before requesting document suggestions.
   size_t min_query_length;
+  // The delay in milliseconds to debounce requests by.
+  int debounce_delay_ms;
   // Whether to scope backoff state to the profile instead of the current
   // window.
   bool scope_backoff_to_profile;
@@ -428,6 +407,8 @@ struct DocumentProvider : Config<DocumentProvider> {
   // the string representation expected by `base::TimeDeltaFromString()` (e.g.
   // "10m" or "12h"). Has no effect when `scope_backoff_to_profile` is false.
   base::TimeDelta backoff_duration;
+  // Whether to trigger backoff when the response code is HTTP 429.
+  bool backoff_on_429;
 };
 
 // If enabled, pretends all matches are allowed to be default. This is very
@@ -446,32 +427,6 @@ struct ForceAllowedToBeDefault : Config<ForceAllowedToBeDefault> {
   bool enabled;
 };
 
-// If enabled, NTP Realbox second column will allow displaying contextual and
-// trending suggestions.
-struct RealboxContextualAndTrendingSuggestions
-    : Config<RealboxContextualAndTrendingSuggestions> {
-  DECLARE_FEATURE(kRealboxContextualAndTrendingSuggestions);
-  RealboxContextualAndTrendingSuggestions();
-  RealboxContextualAndTrendingSuggestions(
-      const RealboxContextualAndTrendingSuggestions&);
-  RealboxContextualAndTrendingSuggestions(
-      RealboxContextualAndTrendingSuggestions&&);
-  RealboxContextualAndTrendingSuggestions& operator=(
-      const RealboxContextualAndTrendingSuggestions&);
-  RealboxContextualAndTrendingSuggestions& operator=(
-      RealboxContextualAndTrendingSuggestions&&);
-  ~RealboxContextualAndTrendingSuggestions();
-  bool enabled;
-
-  // The total number of matches a Section can contain across all Groups.
-  size_t total_limit;
-  // The total number of matches the `omnibox::GROUP_PREVIOUS_SEARCH_RELATED`
-  // Group can contain.
-  size_t contextual_suggestions_limit;
-  // The total number of matches the `omnibox::GROUP_TRENDS` Group can contain.
-  size_t trending_suggestions_limit;
-};
-
 // If enabled, injects a mock search engine using the same format as policy
 // `EnterpriseSearchAggregatorSettings` to be applied. Ignored if feature
 // policy is set.
@@ -486,8 +441,6 @@ struct SearchAggregatorProvider : Config<SearchAggregatorProvider> {
   // Minimum length input must be to run the
   // `EnterpriseSearchAggregatorProvider`.
   int min_query_length;
-  // If true, the response will be parsed in a utility process.
-  bool parse_response_in_utility_process;
   // If true, the newer Discovery Engine OAuth scope will be used in suggestions
   // requests.
   bool use_discovery_engine_oauth_scope;
@@ -538,7 +491,7 @@ struct SearchAggregatorProvider : Config<SearchAggregatorProvider> {
 
   bool AreMockEnginesValid() const;
   std::vector<base::Value> CreateMockSearchEngines() const;
-  base::Value::Dict CreateMockSearchAggregator(bool featured_by_policy) const;
+  base::DictValue CreateMockSearchAggregator(bool featured_by_policy) const;
 
   // The search engine name, shown in the Omnibox.
   std::string name;
@@ -655,6 +608,27 @@ struct ComposeboxSuggestionLimit : Config<ComposeboxSuggestionLimit> {
   size_t max_aim_suggestions;
   // Max number of contextual zps suggestions to show.
   size_t max_contextual_suggestions;
+};
+
+// Enables the short suggest path for the specified clients.
+struct SuggestPathClientConfig : Config<SuggestPathClientConfig> {
+  DECLARE_FEATURE(kUseShortSuggestPathV1);
+
+  SuggestPathClientConfig();
+  SuggestPathClientConfig(const SuggestPathClientConfig&);
+  SuggestPathClientConfig(SuggestPathClientConfig&&);
+  SuggestPathClientConfig& operator=(const SuggestPathClientConfig&);
+  SuggestPathClientConfig& operator=(SuggestPathClientConfig&&);
+  ~SuggestPathClientConfig();
+
+  bool enabled;
+  // Whether the short path is enabled for all clients.
+  bool enable_for_all = false;
+  // Set of client names allowed to use the short path.
+  std::unordered_set<std::string> allowed_clients;
+
+  // Returns whether the short path should be used for the given client.
+  bool ShouldUseShortPath(const std::string& client_name) const;
 };
 
 // Do not add new configs here at the bottom by default. They should be ordered

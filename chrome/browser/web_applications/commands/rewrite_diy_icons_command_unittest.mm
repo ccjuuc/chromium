@@ -16,6 +16,7 @@
 #include "chrome/browser/web_applications/os_integration/mac/icon_utils.h"
 #include "chrome/browser/web_applications/os_integration/web_app_file_handler_manager.h"
 #include "chrome/browser/web_applications/os_integration/web_app_protocol_handler_manager.h"
+#include "chrome/browser/web_applications/scheduler/rewrite_diy_icons_result.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_test.h"
@@ -68,7 +69,8 @@ class RewriteDiyIconsCommandTest : public WebAppTest {
   // Explicitly sets the DIY app's masked state to `masked_on_mac`.
   webapps::AppId InstallDiyApp(bool set_masked_on_mac = false) {
     auto install_info = std::make_unique<WebAppInstallInfo>(
-        GURL("https://example.com/manifest"), GURL("https://example.com/app"));
+        webapps::ManifestId(GURL("https://example.com/manifest")),
+        GURL("https://example.com/app"));
     install_info->title = u"Test DIY App";
     install_info->scope = GURL("https://example.com/");
     install_info->is_diy_app = true;
@@ -97,7 +99,8 @@ class RewriteDiyIconsCommandTest : public WebAppTest {
 
   webapps::AppId InstallNonDiyApp() {
     auto install_info = std::make_unique<WebAppInstallInfo>(
-        GURL("https://example.com/manifest"), GURL("https://example.com/app"));
+        webapps::ManifestId(GURL("https://example.com/manifest")),
+        GURL("https://example.com/app"));
     install_info->title = u"Test Regular App";
     install_info->scope = GURL("https://example.com/");
     install_info->is_diy_app = false;

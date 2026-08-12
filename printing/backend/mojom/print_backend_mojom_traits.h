@@ -122,8 +122,8 @@ struct EnumTraits<printing::mojom::AdvancedCapabilityType,
                   ::printing::AdvancedCapability::Type> {
   static printing::mojom::AdvancedCapabilityType ToMojom(
       ::printing::AdvancedCapability::Type input);
-  static bool FromMojom(printing::mojom::AdvancedCapabilityType input,
-                        ::printing::AdvancedCapability::Type* output);
+  static ::printing::AdvancedCapability::Type FromMojom(
+      printing::mojom::AdvancedCapabilityType input);
 };
 
 template <>
@@ -168,42 +168,6 @@ struct StructTraits<printing::mojom::AdvancedCapabilityDataView,
                    ::printing::AdvancedCapability* out);
 };
 #endif  // BUILDFLAG(IS_CHROMEOS)
-
-#if BUILDFLAG(IS_WIN)
-template <>
-struct StructTraits<printing::mojom::PageOutputQualityAttributeDataView,
-                    ::printing::PageOutputQualityAttribute> {
-  static const std::string& display_name(
-      const ::printing::PageOutputQualityAttribute& p) {
-    return p.display_name;
-  }
-
-  static const std::string& name(
-      const ::printing::PageOutputQualityAttribute& p) {
-    return p.name;
-  }
-
-  static bool Read(printing::mojom::PageOutputQualityAttributeDataView data,
-                   printing::PageOutputQualityAttribute* out);
-};
-
-template <>
-struct StructTraits<printing::mojom::PageOutputQualityDataView,
-                    printing::PageOutputQuality> {
-  static const std::vector<::printing::PageOutputQualityAttribute>& qualities(
-      const ::printing::PageOutputQuality& p) {
-    return p.qualities;
-  }
-
-  static const std::optional<std::string>& default_quality(
-      const ::printing::PageOutputQuality& p) {
-    return p.default_quality;
-  }
-
-  static bool Read(printing::mojom::PageOutputQualityDataView data,
-                   printing::PageOutputQuality* out);
-};
-#endif  // BUILDFLAG(IS_WIN)
 
 template <>
 struct StructTraits<printing::mojom::PrinterSemanticCapsAndDefaultsDataView,
@@ -288,13 +252,6 @@ struct StructTraits<printing::mojom::PrinterSemanticCapsAndDefaultsDataView,
     return p.print_scaling_type_default;
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
-
-#if BUILDFLAG(IS_WIN)
-  static const std::optional<printing::PageOutputQuality>& page_output_quality(
-      const printing::PrinterSemanticCapsAndDefaults& p) {
-    return p.page_output_quality;
-  }
-#endif  // BUILDFLAG(IS_WIN)
 
   static bool Read(printing::mojom::PrinterSemanticCapsAndDefaultsDataView data,
                    printing::PrinterSemanticCapsAndDefaults* out);

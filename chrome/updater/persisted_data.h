@@ -15,6 +15,7 @@
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/updater/registration_data.h"
 #include "chrome/updater/updater_scope.h"
 #include "components/update_client/persisted_data.h"
@@ -200,11 +201,11 @@ class PersistedData : public base::RefCountedThreadSafe<PersistedData>,
   ~PersistedData() override;
 
   // Returns nullptr if the app key does not exist.
-  const base::Value::Dict* GetAppKey(const std::string& id) const;
+  const base::DictValue* GetAppKey(const std::string& id) const;
 
   // Returns an existing or newly created app key under a root pref.
-  base::Value::Dict* GetOrCreateAppKey(const std::string& id,
-                                       base::Value::Dict& root);
+  base::DictValue* GetOrCreateAppKey(const std::string& id,
+                                     base::DictValue& root);
 
   std::optional<int> GetInteger(const std::string& id,
                                 const std::string& key) const;
@@ -222,7 +223,6 @@ class PersistedData : public base::RefCountedThreadSafe<PersistedData>,
 };
 
 void RegisterPersistedDataPrefs(scoped_refptr<PrefRegistrySimple> registry);
-void MigrateObsoletePersistedDataPrefs(PrefService* pref_service);
 
 }  // namespace updater
 

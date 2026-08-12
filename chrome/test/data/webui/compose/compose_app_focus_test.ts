@@ -9,7 +9,7 @@ import {StyleModifier} from 'chrome-untrusted://compose/compose.mojom-webui.js';
 import {ComposeApiProxyImpl} from 'chrome-untrusted://compose/compose_api_proxy.js';
 import {ComposeStatus} from 'chrome-untrusted://compose/compose_enums.mojom-webui.js';
 import {assertEquals} from 'chrome-untrusted://webui-test/chai_assert.js';
-import {flushTasks} from 'chrome-untrusted://webui-test/polymer_test_util.js';
+import {microtasksFinished} from 'chrome-untrusted://webui-test/test_util.js';
 
 import {TestComposeApiProxy} from './test_compose_api_proxy.js';
 
@@ -21,7 +21,7 @@ suite('ComposeApp', function() {
     document.body.appendChild(app);
 
     await testProxy.whenCalled('requestInitialState');
-    await flushTasks();
+    await microtasksFinished();
     return app;
   }
 
@@ -47,11 +47,11 @@ suite('ComposeApp', function() {
   test('RefocusesInputOnInvalidate', async () => {
     const app = await createApp();
     app.$.textarea.value = 'short';
-    app.$.textarea.dispatchEvent(new CustomEvent('value-changed'));
+    await microtasksFinished();
     app.$.submitButton.focus();
     app.$.submitButton.click();
-    await flushTasks();
-    assertEquals(app.$.textarea, app.shadowRoot!.activeElement);
+    await microtasksFinished();
+    assertEquals(app.$.textarea, app.shadowRoot.activeElement);
   });
 
   test('FocusesEditInput', async () => {
@@ -62,18 +62,22 @@ suite('ComposeApp', function() {
       }),
     });
     const app = await createApp();
-    assertEquals(app.$.editTextarea, app.shadowRoot!.activeElement);
+    assertEquals(app.$.editTextarea, app.shadowRoot.activeElement);
   });
 
   test('FocusesEditInputAfterSubmitInput', async () => {
     const app = await createApp();
     app.$.textarea.value = 'test value one';
+    await microtasksFinished();
     app.$.submitButton.click();
 
     await testProxy.whenCalled('compose');
     await mockResponse();
-
-    assertEquals(app.$.textarea, app.shadowRoot!.activeElement);
+    // One wait for the app to update state and call focus, one more wait for
+    // the textarea to focus the edit button.
+    await microtasksFinished();
+    await microtasksFinished();
+    assertEquals(app.$.textarea, app.shadowRoot.activeElement);
   });
 
   test('FocusesModifierMenuAfterRewrite', async () => {
@@ -88,7 +92,7 @@ suite('ComposeApp', function() {
     await testProxy.whenCalled('rewrite');
     await mockResponse(true);
 
-    assertEquals(app.$.modifierMenu, app.shadowRoot!.activeElement);
+    assertEquals(app.$.modifierMenu, app.shadowRoot.activeElement);
   });
 
   test('FocusesUndoOrRedoButtonAfterUndoClick', async () => {
@@ -115,18 +119,18 @@ suite('ComposeApp', function() {
     testProxy.setUndoResponseWithUndoAndRedo(true, false);
     appWithUndo.$.undoButton.click();
     await testProxy.whenCalled('undo');
-    await flushTasks();
+    await microtasksFinished();
     assertEquals(
-        appWithUndo.$.undoButton, appWithUndo.shadowRoot!.activeElement);
+        appWithUndo.$.undoButton, appWithUndo.shadowRoot.activeElement);
 
     // If undo is disabled after the undo action, the redo button gains
     // focus.
     testProxy.setUndoResponseWithUndoAndRedo(false, true);
     appWithUndo.$.undoButton.click();
     await testProxy.whenCalled('undo');
-    await flushTasks();
+    await microtasksFinished();
     assertEquals(
-        appWithUndo.$.redoButton, appWithUndo.shadowRoot!.activeElement);
+        appWithUndo.$.redoButton, appWithUndo.shadowRoot.activeElement);
   });
 
   test('FocusesUndoOrRedoButtonAfterRedoClick', async () => {
@@ -153,16 +157,16 @@ suite('ComposeApp', function() {
     testProxy.setRedoResponseWithUndoAndRedo(false, true);
     appWithRedo.$.redoButton.click();
     await testProxy.whenCalled('redo');
-    await flushTasks();
+    await microtasksFinished();
     assertEquals(
-        appWithRedo.$.redoButton, appWithRedo.shadowRoot!.activeElement);
+        appWithRedo.$.redoButton, appWithRedo.shadowRoot.activeElement);
 
     // If redo is disabled after the redo action, the undo button gains focus.
     testProxy.setRedoResponseWithUndoAndRedo(true, false);
     appWithRedo.$.redoButton.click();
     await testProxy.whenCalled('redo');
-    await flushTasks();
+    await microtasksFinished();
     assertEquals(
-        appWithRedo.$.undoButton, appWithRedo.shadowRoot!.activeElement);
+        appWithRedo.$.undoButton, appWithRedo.shadowRoot.activeElement);
   });
 });

@@ -4,6 +4,8 @@
 
 import {assert} from '//resources/js/assert.js';
 
+import {getReadingModeTextNodes} from '../shared/tree_traversal.js';
+
 import type {ReadAloudModelBrowserProxy} from './read_aloud_model_browser_proxy.js';
 import type {OffsetByNode, Segment, SegmentedSentence, Sentence} from './read_aloud_types.js';
 import {DomReadAloudNode, ReadAloudNode} from './read_aloud_types.js';
@@ -92,6 +94,15 @@ export class TsReadModelImpl implements ReadAloudModelBrowserProxy {
     this.resetState_();
     const textNodes = this.getAllTextNodesFrom_(context.domNode());
     if (!textNodes.length) {
+      // If there are no text nodes, set the initialization state to prevent
+      // indeterminate states. This can happen when there are invisible elements
+      // that are being ignored by read aloud.
+      // Do not set this if the context node is a DocumentFragment, which
+      // happens when Readability is enabled and the fragment has just been
+      // appended to the DOM (and therefore emptied).
+      if (context.domNode()?.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) {
+        this.initialized_ = true;
+      }
       return;
     }
 
@@ -288,10 +299,24 @@ export class TsReadModelImpl implements ReadAloudModelBrowserProxy {
       nodes: OffsetByNode[], fullText: string, currentSentence: Sentence|null,
       previousSentence: Sentence): Sentence|null {
     assert(nodes.length > 0, 'attempting to merge superscript with no nodes');
-    const superscriptNode = nodes[0]!;
-    const superscriptText = superscriptNode.node.getText().trim();
 
-    const superscriptStartIndex: number =
+    // Find the first superscript node that has non-empty text.
+    let superscriptText = '';
+    for (const node of nodes) {
+      if (!node.node.isSuperscript()) {
+        break;
+      }
+      superscriptText = node.node.getText().trim();
+      if (superscriptText) {
+        break;
+      }
+    }
+
+    if (!superscriptText) {
+      return currentSentence;
+    }
+
+    let superscriptStartIndex: number =
         currentSentence!.text.indexOf(superscriptText);
     if (superscriptStartIndex === -1 ||
         currentSentence!.text.substring(0, superscriptStartIndex).trim() !==
@@ -305,11 +330,16 @@ export class TsReadModelImpl implements ReadAloudModelBrowserProxy {
         // block of superscript text.
         return currentSentence;
       }
+      superscriptStartIndex =
+          superscriptIndexInBothSentences - previousSentence.text.length;
     }
 
     // The sentence starts with a superscript. Merge it with the previous
     // sentence.
     const superscriptEndIndex = superscriptStartIndex + superscriptText.length;
+    if (superscriptEndIndex <= 0) {
+      return currentSentence;
+    }
 
     // Update sentence buffer to contain the superscript.
     const endOfSuperscriptInSentenceIndex =
@@ -431,93 +461,21 @@ export class TsReadModelImpl implements ReadAloudModelBrowserProxy {
   }
 
   private getAllTextNodesFrom_(node: Node|undefined): DomReadAloudNode[] {
-    const textNodes: DomReadAloudNode[] = [];
     if (!node) {
-      return textNodes;
-    }
-    const treeWalker = document.createTreeWalker(node, NodeFilter.SHOW_ALL);
-    let currentNode;
-
-    while (currentNode = treeWalker.nextNode()) {
-      if (currentNode.nodeType === Node.ELEMENT_NODE) {
-        this.addNodeForListElement(currentNode, textNodes);
-      } else if (currentNode.nodeType === Node.TEXT_NODE) {
-        // Don't filter out text nodes that are just whitespace. Filtering
-        // out these nodes can cause two different nodes to be improperly
-        // grouped as the same word.
-        // e.g.
-        // <a>link</a> <a>hyperlink</a> would be incorrectly spoken as
-        // "linkhyperlink" instead of "link hyperlink" if the whitespace
-        // was filtered out. This would cause issues with highlighting.
-        if (currentNode.textContent) {
-          const readAloudNode = ReadAloudNode.create(currentNode);
-          if (readAloudNode instanceof DomReadAloudNode) {
-            textNodes.push(readAloudNode);
-          }
-        }
-      }
-    }
-    return textNodes;
-  }
-
-  private addNodeForListElement(
-      currentNode: Node, textNodes: DomReadAloudNode[]) {
-    const element = currentNode as HTMLElement;
-
-    // If there is an ordered list, add the numbers as read aloud nodes, since
-    // these aren't considered "text" nodes and won't be spoken by read aloud
-    // otherwise.
-    if (element.tagName === 'LI' && element.parentElement &&
-        element.parentElement.tagName === 'OL') {
-      const number = this.getLiNumber(element as HTMLLIElement);
-
-      if (number > -1) {
-        // Create the text node (e.g., "1. "). A newline is added to the
-        // beginning of the node to ensure that it is not accidentally
-        // grouped with the previous text node for sentence segmentation.
-        const markerNode = document.createTextNode('\n' + number + '. ');
-        const readAloudNode = ReadAloudNode.create(markerNode);
-        if (readAloudNode instanceof DomReadAloudNode) {
-          textNodes.push(readAloudNode);
-        }
-      }
-    }
-  }
-
-  private getLiNumber(liElement: HTMLLIElement) {
-    const ol = liElement.closest('ol');
-    if (!ol) {
-      // Not in an ordered list.
-      return -1;
+      return [];
     }
 
-    // Get the list's starting number. Default is 1 unless the start attribute
-    // is set by the developer.
-    let counter = ol.start || 1;
+    const nodes = getReadingModeTextNodes(node);
 
-    // Iterate through all <li> elements in the <ol>
-    for (const item of ol.children) {
-      if (item.tagName !== 'LI') {
-        // Skip non-<li> elements
-        continue;
-      }
-
-      // If the developer set an explicit 'value' on *this* <li>, honor that.
-      // If it's 0, it means the attribute isn't set.
-      if ((item as HTMLLIElement).value > 0) {
-        counter = (item as HTMLLIElement).value;
-      }
-
-      if (item === liElement) {
-        return counter;
-      }
-
-      // It's not the selected <li>, so increment the counter for the next loop
-      counter++;
-    }
-
-    // Should not happen
-    return -1;
+    // Convert raw DOM nodes into the speech-wrapped DomReadAloudNode class,
+    // filtering out any null value nodes.
+    return nodes
+        .map(n => {
+          const readAloudNode = ReadAloudNode.create(n);
+          return readAloudNode instanceof DomReadAloudNode ? readAloudNode :
+                                                             null;
+        })
+        .filter((n): n is DomReadAloudNode => !!n);
   }
 
   private getWordHighlightSegment(

@@ -46,7 +46,7 @@ void PolicyValueStore::SetCurrentPolicy(const policy::PolicyMap& policy) {
   DCHECK(IsOnBackendSequence());
   // Convert |policy| to a dictionary value. Only include mandatory policies
   // for now.
-  base::Value::Dict current_policy;
+  base::DictValue current_policy;
   for (const auto& it : policy) {
     if (it.second.level == policy::POLICY_LEVEL_MANDATORY) {
       current_policy.Set(it.first, it.second.value_unsafe()->Clone());
@@ -57,7 +57,7 @@ void PolicyValueStore::SetCurrentPolicy(const policy::PolicyMap& policy) {
   // TODO(joaodasilva): it'd be better to have a less expensive way of
   // determining which keys are currently stored, or of determining which keys
   // must be removed.
-  base::Value::Dict previous_policy;
+  base::DictValue previous_policy;
   ValueStore::ReadResult read_result = delegate_->Get();
 
   if (!read_result.status().ok()) {
@@ -74,8 +74,9 @@ void PolicyValueStore::SetCurrentPolicy(const policy::PolicyMap& policy) {
   // anymore.
   std::vector<std::string> removed_keys;
   for (auto kv : previous_policy) {
-    if (!current_policy.Find(kv.first))
+    if (!current_policy.Find(kv.first)) {
       removed_keys.push_back(kv.first);
+    }
   }
 
   value_store::ValueStoreChangeList changes;
@@ -156,9 +157,8 @@ ValueStore::WriteResult PolicyValueStore::Set(WriteOptions options,
   return WriteResult(ReadOnlyError());
 }
 
-ValueStore::WriteResult PolicyValueStore::Set(
-    WriteOptions options,
-    const base::Value::Dict& settings) {
+ValueStore::WriteResult PolicyValueStore::Set(WriteOptions options,
+                                              const base::DictValue& settings) {
   return WriteResult(ReadOnlyError());
 }
 

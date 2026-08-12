@@ -58,11 +58,19 @@ class MojoRenderInputRouterDelegateImpl
   void RendererInputResponsivenessChanged(
       bool is_responsive,
       std::optional<base::TimeTicks> ack_timeout_ts) override;
+  void OnInputRouterActive() override;
+
+  bool is_active() const { return is_active_; }
 
   void SetRenderInputRouterDelegateRemoteForTesting(
       mojo::PendingAssociatedRemote<input::mojom::RenderInputRouterDelegate>
           remote) {
     rir_delegate_remote_.Bind(std::move(remote));
+  }
+  void BindClientReceiverForTesting(
+      mojo::PendingAssociatedReceiver<
+          input::mojom::RenderInputRouterDelegateClient> receiver) {
+    rir_delegate_client_receiver_.Bind(std::move(receiver));
   }
 
  private:
@@ -70,6 +78,10 @@ class MojoRenderInputRouterDelegateImpl
       rir_delegate_client_receiver_{this};
   mojo::AssociatedRemote<input::mojom::RenderInputRouterDelegate>
       rir_delegate_remote_;
+
+  // Whether the viz process accepts input events. This is set to true when
+  // `OnInputRouterActive` is called.
+  bool is_active_ = false;
 
   // It is safe to use `raw_ref` here since RenderWidgetHostImpl owns this class
   // and is bound to outlive |this|.

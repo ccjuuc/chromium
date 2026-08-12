@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "gpu/command_buffer/service/shared_image/d3d_image_backing_factory.h"
 
 #include <dawn/dawn_proc.h>
@@ -19,6 +14,7 @@
 #include <utility>
 
 #include "base/bits.h"
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
@@ -58,7 +54,6 @@
 #include "third_party/skia/include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "third_party/skia/include/gpu/graphite/Surface.h"
 #include "third_party/skia/include/private/chromium/GrPromiseImageTexture.h"
-#include "ui/gfx/buffer_format_util.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/gpu_memory_buffer_handle.h"
@@ -97,12 +92,12 @@ void FillNV12(uint8_t* data,
               uint8_t u_fill_value,
               uint8_t v_fill_value) {
   const size_t kYPlaneSize = size.width() * size.height();
-  memset(data, y_fill_value, kYPlaneSize);
-  uint8_t* uv_data = data + kYPlaneSize;
+  UNSAFE_TODO(memset(data, y_fill_value, kYPlaneSize));
+  uint8_t* uv_data = UNSAFE_TODO(data + kYPlaneSize);
   const size_t kUVPlaneSize = kYPlaneSize / 2;
   for (size_t i = 0; i < kUVPlaneSize; i += 2) {
-    uv_data[i] = u_fill_value;
-    uv_data[i + 1] = v_fill_value;
+    UNSAFE_TODO(uv_data[i]) = u_fill_value;
+    UNSAFE_TODO(uv_data[i + 1]) = v_fill_value;
   }
 }
 
@@ -113,14 +108,14 @@ void CheckNV12(const uint8_t* data,
                uint8_t u_fill_value,
                uint8_t v_fill_value) {
   const size_t kYPlaneSize = stride * size.height();
-  const uint8_t* uv_data = data + kYPlaneSize;
+  const uint8_t* uv_data = UNSAFE_TODO(data + kYPlaneSize);
   for (int i = 0; i < size.height(); i++) {
     for (int j = 0; j < size.width(); j++) {
       // ASSERT instead of EXPECT to exit on first failure to avoid log spam.
-      ASSERT_EQ(*(data + i * stride + j), y_fill_value);
+      ASSERT_EQ(UNSAFE_TODO(*(data + i * stride + j)), y_fill_value);
       if (i < size.height() / 2) {
         const uint8_t uv_value = (j % 2 == 0) ? u_fill_value : v_fill_value;
-        ASSERT_EQ(*(uv_data + i * stride + j), uv_value);
+        ASSERT_EQ(UNSAFE_TODO(*(uv_data + i * stride + j)), uv_value);
       }
     }
   }
@@ -172,19 +167,19 @@ class D3DImageBackingFactoryTest
     scoped_refptr<gl::GLShareGroup> share_group = new gl::GLShareGroup();
 
     auto gr_context_type = GetParam();
-    if (gr_context_type == GrContextType::kGraphiteDawn)
-    {
+    if (gr_context_type == GrContextType::kGraphiteDawn) {
+      features::InitSkiaGraphiteDefaultParamsForTesting();
       dawn_context_provider_ =
           DawnContextProvider::Create(GpuPreferences(), GpuFeatureInfo());
     }
     context_state_ = base::MakeRefCounted<SharedContextState>(
         std::move(share_group), surface_, context_,
         /*use_virtualized_gl_contexts=*/false, base::DoNothing(),
-        gr_context_type, nullptr, nullptr, dawn_context_provider_.get());
+        gr_context_type, /*vulkan_context_provider=*/nullptr,
+        dawn_context_provider_.get());
     context_state_->InitializeSkia(GpuPreferences(), workarounds);
-    auto feature_info =
-        base::MakeRefCounted<gles2::FeatureInfo>(workarounds, GpuFeatureInfo());
-    context_state_->InitializeGL(GpuPreferences(), std::move(feature_info));
+    context_state_->InitializeGL(GpuPreferences(), workarounds,
+                                 GpuFeatureInfo());
     copy_manager_ = base::MakeRefCounted<SharedImageCopyManager>();
     copy_manager_->AddStrategy(std::make_unique<SharedMemoryCopyStrategy>());
   }
@@ -231,16 +226,17 @@ class D3DImageBackingFactoryTest
         SkImageInfo::Make(size.width(), size.height(), kRGBA_8888_SkColorType,
                           kOpaque_SkAlphaType, nullptr);
 
-    const int num_pixels = size.width() * size.height();
+    const size_t num_pixels = static_cast<size_t>(size.width()) * size.height();
     std::vector<uint8_t> dst_pixels(num_pixels * 4);
 
     // Read back pixels from Sk Image.
     EXPECT_TRUE(ReadPixels(sk_image, dst_info, dst_pixels.data(),
                            dst_info.minRowBytes(), 0, 0));
 
-    for (int i = 0; i < num_pixels; i++) {
+    auto dst_pixels_span = base::span(dst_pixels);
+    for (size_t i = 0; i < num_pixels; i++) {
       // Compare the pixel values.
-      const uint8_t* pixel = dst_pixels.data() + (i * 4);
+      auto pixel = dst_pixels_span.subspan(i * 4u, 4u);
       EXPECT_EQ(pixel[0], expected_color[0]);
       EXPECT_EQ(pixel[1], expected_color[1]);
       EXPECT_EQ(pixel[2], expected_color[2]);
@@ -290,7 +286,7 @@ class D3DImageBackingFactoryTest
   void RunOverlayTest(bool use_shared_handle, bool use_factory);
   void RunCreateSharedImageFromHandleTest(DXGI_FORMAT dxgi_format);
   void RunCreateFromSharedMemoryMultiplanarTest(bool use_async_copy);
-  void RunMultiplanarUploadAndReadback(bool use_upload_subresource);
+  void RunMultiplanarUploadAndReadback();
 
   static constexpr wgpu::FeatureName kRequiredFeatures[] = {
       // We need to request internal usage to be able to do operations with
@@ -320,9 +316,10 @@ TEST_P(D3DImageBackingFactoryTest, GL_SkiaGL) {
       SHARED_IMAGE_USAGE_GLES2_WRITE | SHARED_IMAGE_USAGE_DISPLAY_READ;
   const gpu::SurfaceHandle surface_handle = gpu::kNullSurfaceHandle;
   auto backing = shared_image_factory_->CreateSharedImage(
-      mailbox, format, surface_handle, size, color_space,
-      kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage, "TestLabel",
-      /*is_thread_safe=*/false);
+      mailbox,
+      {format, size, color_space, kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType,
+       usage, "TestLabel"},
+      surface_handle, /*is_thread_safe=*/false);
   ASSERT_NE(backing, nullptr);
 
   GLenum expected_target = GL_TEXTURE_2D;
@@ -394,9 +391,10 @@ TEST_P(D3DImageBackingFactoryTest, Dawn_SkiaGL) {
   const gpu::SharedImageUsageSet usage =
       SHARED_IMAGE_USAGE_WEBGPU_WRITE | SHARED_IMAGE_USAGE_DISPLAY_READ;
   auto backing = shared_image_factory_->CreateSharedImage(
-      mailbox, format, surface_handle, size, color_space,
-      kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage, "TestLabel",
-      /*is_thread_safe=*/false);
+      mailbox,
+      {format, size, color_space, kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType,
+       usage, "TestLabel"},
+      surface_handle, /*is_thread_safe=*/false);
   ASSERT_NE(backing, nullptr);
 
   std::unique_ptr<SharedImageRepresentationFactoryRef> factory_ref =
@@ -481,12 +479,15 @@ void D3DImageBackingFactoryTest::CheckDawnPixels(
       instance.WaitAny(1, &wait_info, std::numeric_limits<uint64_t>::max());
   DCHECK(status == wgpu::WaitStatus::Success);
 
-  const uint8_t* dst_pixels =
-      reinterpret_cast<const uint8_t*>(buffer.GetConstMappedRange());
-  for (int row = 0; row < size.height(); row++) {
-    for (int col = 0; col < size.width(); col++) {
+  // SAFETY: buffer.GetConstMappedRange() returns a pointer to a mapped range
+  // of size buffer_size.
+  auto dst_pixels_span = UNSAFE_BUFFERS(
+      base::span(reinterpret_cast<const uint8_t*>(buffer.GetConstMappedRange()),
+                 buffer_size));
+  for (size_t row = 0; row < static_cast<size_t>(size.height()); row++) {
+    for (size_t col = 0; col < static_cast<size_t>(size.width()); col++) {
       // Compare the pixel values.
-      const uint8_t* pixel = dst_pixels + (row * buffer_stride) + col * 4;
+      auto pixel = dst_pixels_span.subspan(row * buffer_stride + col * 4u, 4u);
       EXPECT_EQ(pixel[0], expected_color[0]);
       EXPECT_EQ(pixel[1], expected_color[1]);
       EXPECT_EQ(pixel[2], expected_color[2]);
@@ -580,9 +581,10 @@ TEST_P(D3DImageBackingFactoryTest, Dawn_ConcurrentReads) {
       SHARED_IMAGE_USAGE_WEBGPU_READ | SHARED_IMAGE_USAGE_WEBGPU_WRITE |
       SHARED_IMAGE_USAGE_DISPLAY_READ | SHARED_IMAGE_USAGE_DISPLAY_WRITE;
   auto backing = shared_image_factory_->CreateSharedImage(
-      mailbox, format, surface_handle, size, color_space,
-      kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage, "TestLabel",
-      /*is_thread_safe=*/false);
+      mailbox,
+      {format, size, color_space, kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType,
+       usage, "TestLabel"},
+      surface_handle, /*is_thread_safe=*/false);
   ASSERT_NE(backing, nullptr);
 
   std::unique_ptr<SharedImageRepresentationFactoryRef> factory_ref =
@@ -667,9 +669,10 @@ TEST_P(D3DImageBackingFactoryTest, GL_Dawn_Skia_UnclearTexture) {
                                          SHARED_IMAGE_USAGE_WEBGPU_WRITE;
   const gpu::SurfaceHandle surface_handle = gpu::kNullSurfaceHandle;
   auto backing = shared_image_factory_->CreateSharedImage(
-      mailbox, format, surface_handle, size, color_space,
-      kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage, "TestLabel",
-      /*is_thread_safe=*/false);
+      mailbox,
+      {format, size, color_space, kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType,
+       usage, "TestLabel"},
+      surface_handle, /*is_thread_safe=*/false);
   ASSERT_NE(backing, nullptr);
 
   GLenum expected_target = GL_TEXTURE_2D;
@@ -778,9 +781,10 @@ TEST_P(D3DImageBackingFactoryTest, UnclearDawn_SkiaFails) {
       SHARED_IMAGE_USAGE_DISPLAY_READ | SHARED_IMAGE_USAGE_WEBGPU_WRITE;
   const gpu::SurfaceHandle surface_handle = gpu::kNullSurfaceHandle;
   auto backing = shared_image_factory_->CreateSharedImage(
-      mailbox, format, surface_handle, size, color_space,
-      kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage, "TestLabel",
-      /*is_thread_safe=*/false);
+      mailbox,
+      {format, size, color_space, kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType,
+       usage, "TestLabel"},
+      surface_handle, /*is_thread_safe=*/false);
   ASSERT_NE(backing, nullptr);
 
   std::unique_ptr<SharedImageRepresentationFactoryRef> factory_ref =
@@ -858,9 +862,10 @@ TEST_P(D3DImageBackingFactoryTest, SkiaAccessFirstFails) {
   const gpu::SharedImageUsageSet usage = SHARED_IMAGE_USAGE_DISPLAY_READ;
   const gpu::SurfaceHandle surface_handle = gpu::kNullSurfaceHandle;
   auto backing = shared_image_factory_->CreateSharedImage(
-      mailbox, format, surface_handle, size, color_space,
-      kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage, "TestLabel",
-      /*is_thread_safe=*/false);
+      mailbox,
+      {format, size, color_space, kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType,
+       usage, "TestLabel"},
+      surface_handle, /*is_thread_safe=*/false);
   ASSERT_NE(backing, nullptr);
 
   std::unique_ptr<SharedImageRepresentationFactoryRef> factory_ref =
@@ -888,8 +893,9 @@ TEST_P(D3DImageBackingFactoryTest, CreateFromPixelData) {
   const gpu::SharedImageUsageSet usage = SHARED_IMAGE_USAGE_DISPLAY_READ;
   const std::vector<uint8_t> pixel_data = {0x01, 0x02, 0x03, 0x04};
   auto backing = shared_image_factory_->CreateSharedImage(
-      mailbox, format, size, color_space, kTopLeft_GrSurfaceOrigin,
-      kPremul_SkAlphaType, usage, "TestLabel",
+      mailbox,
+      {format, size, color_space, kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType,
+       usage, "TestLabel"},
       /*is_thread_safe=*/false, base::span<const uint8_t>(pixel_data));
   ASSERT_NE(backing, nullptr);
 
@@ -954,9 +960,10 @@ void D3DImageBackingFactoryTest::RunCreateSharedImageFromHandleTest(
   auto dup_handle = gpu_memory_buffer_handle.Clone();
 
   auto backing = shared_image_factory_->CreateSharedImage(
-      mailbox, format, size, color_space, surface_origin, alpha_type, usage,
-      "TestLabel", /*is_thread_safe=*/false,
-      std::move(gpu_memory_buffer_handle));
+      mailbox,
+      {format, size, color_space, surface_origin, alpha_type, usage,
+       "TestLabel"},
+      /*is_thread_safe=*/false, std::move(gpu_memory_buffer_handle));
   ASSERT_NE(backing, nullptr);
 
   EXPECT_EQ(backing->format(), format);
@@ -976,8 +983,10 @@ void D3DImageBackingFactoryTest::RunCreateSharedImageFromHandleTest(
   // shared handle state and texture with the first backing.
   auto dup_mailbox = Mailbox::Generate();
   auto dup_backing = shared_image_factory_->CreateSharedImage(
-      dup_mailbox, format, size, color_space, surface_origin, alpha_type, usage,
-      "TestLabel", /*is_thread_safe=*/false, std::move(dup_handle));
+      dup_mailbox,
+      {format, size, color_space, surface_origin, alpha_type, usage,
+       "TestLabel"},
+      /*is_thread_safe=*/false, std::move(dup_handle));
   ASSERT_NE(dup_backing, nullptr);
 
   EXPECT_EQ(dup_backing->format(), format);
@@ -1035,6 +1044,87 @@ TEST_P(D3DImageBackingFactoryTest, CreateSharedImageFromHandleFormatTYPELESS) {
   RunCreateSharedImageFromHandleTest(DXGI_FORMAT_R8G8B8A8_TYPELESS);
 }
 
+TEST_P(D3DImageBackingFactoryTest, InvalidExternalFence) {
+  Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device =
+      shared_image_factory_->GetDeviceForTesting();
+  if (!gfx::D3DSharedFence::IsSupported(d3d11_device.Get())) {
+    GTEST_SKIP();
+  }
+
+  const auto format = viz::SinglePlaneFormat::kRGBA_8888;
+  const gfx::Size size(1, 1);
+  const auto color_space = gfx::ColorSpace::CreateSRGB();
+  const gpu::SharedImageUsageSet usage =
+      SHARED_IMAGE_USAGE_GLES2_READ | SHARED_IMAGE_USAGE_DISPLAY_READ;
+
+  D3D11_TEXTURE2D_DESC desc;
+  desc.Width = size.width();
+  desc.Height = size.height();
+  desc.MipLevels = 1;
+  desc.ArraySize = 1;
+  desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  desc.SampleDesc.Count = 1;
+  desc.SampleDesc.Quality = 0;
+  desc.Usage = D3D11_USAGE_DEFAULT;
+  desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+  desc.CPUAccessFlags = 0;
+  desc.MiscFlags =
+      D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED;
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> d3d11_texture;
+  HRESULT hr = d3d11_device->CreateTexture2D(&desc, nullptr, &d3d11_texture);
+  ASSERT_EQ(hr, S_OK);
+
+  Microsoft::WRL::ComPtr<IDXGIResource1> dxgi_resource;
+  hr = d3d11_texture.As(&dxgi_resource);
+  ASSERT_EQ(hr, S_OK);
+
+  HANDLE shared_handle;
+  hr = dxgi_resource->CreateSharedHandle(
+      nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr,
+      &shared_handle);
+  ASSERT_EQ(hr, S_OK);
+
+  gfx::GpuMemoryBufferHandle gmb_handle{
+      gfx::DXGIHandle(base::win::ScopedHandle(shared_handle))};
+
+  auto mailbox = Mailbox::Generate();
+  auto backing = shared_image_factory_->CreateSharedImage(
+      mailbox,
+      SharedImageInfo(format, size, color_space, kTopLeft_GrSurfaceOrigin,
+                      kPremul_SkAlphaType, usage, "TestLabel"),
+      /*is_thread_safe=*/false, std::move(gmb_handle));
+  ASSERT_NE(backing, nullptr);
+
+  D3DImageBacking* d3d_backing = static_cast<D3DImageBacking*>(backing.get());
+
+  // Create a dummy event handle to use as an invalid fence handle.
+  HANDLE dummy_handle = ::CreateEvent(nullptr, FALSE, FALSE, nullptr);
+  ASSERT_NE(dummy_handle, nullptr);
+  auto invalid_fence = gfx::D3DSharedFence::CreateFromScopedHandle(
+      base::win::ScopedHandle(dummy_handle), gfx::DXGIHandleToken());
+
+  // Inject the invalid fence.
+  d3d_backing->UpdateExternalFence(invalid_fence);
+
+  std::unique_ptr<SharedImageRepresentationFactoryRef> factory_ref =
+      shared_image_manager_.Register(std::move(backing),
+                                     memory_type_tracker_.get());
+
+  // Produce a representation and try to BeginAccess.
+  auto gl_representation =
+      shared_image_representation_factory_->ProduceGLTexturePassthrough(
+          mailbox);
+  ASSERT_TRUE(gl_representation);
+
+  // BeginAccess should fail because GetPendingWaitFences will fail on the
+  // invalid fence.
+  std::unique_ptr<GLTexturePassthroughImageRepresentation::ScopedAccess>
+      scoped_access = gl_representation->BeginScopedAccess(
+          GL_SHARED_IMAGE_ACCESS_MODE_READ_CHROMIUM,
+          SharedImageRepresentation::AllowUnclearedAccess::kYes);
+  EXPECT_FALSE(scoped_access);
+}
+
 // Tests that writing to a Skia representation of a D3DImageBacking created
 // from a shared handle is reflected in a second backing created from the
 // same handle.
@@ -1084,12 +1174,16 @@ TEST_P(D3DImageBackingFactoryTest, SkiaWriteReadWithSharedHandle) {
   auto handle2 = handle1.Clone();
 
   auto backing1 = shared_image_factory_->CreateSharedImage(
-      mailbox1, format, size, color_space, surface_origin, alpha_type, usage,
-      "TestLabel", /*is_thread_safe=*/false, std::move(handle1));
+      mailbox1,
+      {format, size, color_space, surface_origin, alpha_type, usage,
+       "TestLabel"},
+      /*is_thread_safe=*/false, std::move(handle1));
   ASSERT_TRUE(backing1);
   auto backing2 = shared_image_factory_->CreateSharedImage(
-      mailbox2, format, size, color_space, surface_origin, alpha_type, usage,
-      "TestLabel", /*is_thread_safe=*/false, std::move(handle2));
+      mailbox2,
+      {format, size, color_space, surface_origin, alpha_type, usage,
+       "TestLabel"},
+      /*is_thread_safe=*/false, std::move(handle2));
   ASSERT_TRUE(backing2);
 
   D3DImageBacking* backing1_d3d = static_cast<D3DImageBacking*>(backing1.get());
@@ -1137,9 +1231,10 @@ TEST_P(D3DImageBackingFactoryTest, Dawn_ReuseExternalImage) {
       SHARED_IMAGE_USAGE_DISPLAY_READ | SHARED_IMAGE_USAGE_WEBGPU_WRITE;
   const gpu::SurfaceHandle surface_handle = gpu::kNullSurfaceHandle;
   auto backing = shared_image_factory_->CreateSharedImage(
-      mailbox, format, surface_handle, size, color_space,
-      kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage, "TestLabel",
-      /*is_thread_safe=*/false);
+      mailbox,
+      {format, size, color_space, kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType,
+       usage, "TestLabel"},
+      surface_handle, /*is_thread_safe=*/false);
   ASSERT_NE(backing, nullptr);
 
   std::unique_ptr<SharedImageRepresentationFactoryRef> factory_ref =
@@ -1252,9 +1347,10 @@ TEST_P(D3DImageBackingFactoryTest, Dawn_HasLastRef) {
       SHARED_IMAGE_USAGE_DISPLAY_READ | SHARED_IMAGE_USAGE_WEBGPU_READ;
   const gpu::SurfaceHandle surface_handle = gpu::kNullSurfaceHandle;
   auto backing = shared_image_factory_->CreateSharedImage(
-      mailbox, format, surface_handle, size, color_space,
-      kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage, "TestLabel",
-      /*is_thread_safe=*/false);
+      mailbox,
+      {format, size, color_space, kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType,
+       usage, "TestLabel"},
+      surface_handle, /*is_thread_safe=*/false);
   ASSERT_NE(backing, nullptr);
 
   std::unique_ptr<SharedImageRepresentationFactoryRef> factory_ref =
@@ -1365,8 +1461,9 @@ D3DImageBackingFactoryTest::CreateVideoImage(const gfx::Size& size,
     DCHECK(gmb_handle.dxgi_handle().IsValid());
 
     shared_image_backing = shared_image_factory_->CreateSharedImage(
-        mailbox, viz::MultiPlaneFormat::kNV12, size, gfx::ColorSpace(),
-        kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage, "TestLabel",
+        mailbox,
+        {viz::MultiPlaneFormat::kNV12, size, gfx::ColorSpace(),
+         kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage, "TestLabel"},
         /*is_thread_safe=*/false, std::move(gmb_handle));
     if (!shared_image_backing) {
       return {};
@@ -1380,11 +1477,13 @@ D3DImageBackingFactoryTest::CreateVideoImage(const gfx::Size& size,
                                                  d3d11_texture);
     }
     shared_image_backing = D3DImageBacking::Create(
-        mailbox, viz::MultiPlaneFormat::kNV12, size, gfx::ColorSpace(),
-        kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage, "TestLabel",
+        mailbox,
+        SharedImageInfo(viz::MultiPlaneFormat::kNV12, size, gfx::ColorSpace(),
+                        kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage,
+                        "TestLabel"),
         d3d11_texture, std::move(dxgi_shared_handle_state),
         context_state_->GetGLFormatCaps(), GL_TEXTURE_EXTERNAL_OES,
-        /*array_slice=*/0, /*plane_index=*/0u);
+        /*array_slice=*/0);
     // Need to clear the backing created with shared handle.
     shared_image_backing->SetCleared();
   }
@@ -1676,9 +1775,10 @@ void D3DImageBackingFactoryTest::RunCreateFromSharedMemoryMultiplanarTest(
   // memory support.
   auto backing = CompoundImageBacking::CreateSharedMemoryForTesting(
       shared_image_factory_.get(), copy_manager_, mailbox,
-      std::move(shm_gmb_handle), viz::MultiPlaneFormat::kNV12, size,
-      gfx::ColorSpace(), kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage,
-      "TestLabel");
+      std::move(shm_gmb_handle),
+      SharedImageInfo(viz::MultiPlaneFormat::kNV12, size, gfx::ColorSpace(),
+                      kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage,
+                      "TestLabel"));
   EXPECT_NE(backing, nullptr);
 
   EXPECT_EQ(backing->mailbox(), mailbox);
@@ -1810,23 +1910,7 @@ TEST_P(D3DImageBackingFactoryTest, CreateFromSharedMemoryMultiplanarAsyncCopy) {
 
 // Verifies that a multi-planar NV12 image can be created without DXGI handle
 // for use with software GMBs.
-void D3DImageBackingFactoryTest::RunMultiplanarUploadAndReadback(
-    bool use_update_subresource) {
-  base::test::ScopedFeatureList feature_list;
-  if (use_update_subresource) {
-    feature_list.InitAndEnableFeature(
-        features::kD3DBackingUploadWithUpdateSubresource);
-  } else {
-    feature_list.InitAndDisableFeature(
-        features::kD3DBackingUploadWithUpdateSubresource);
-  }
-
-  // Recreate a new share image factory which will pick up the
-  // kD3DBackingUploadWithUpdateSubresource feature.
-  shared_image_factory_ = std::make_unique<D3DImageBackingFactory>(
-      gl::QueryD3D11DeviceObjectFromANGLE(),
-      shared_image_manager_.dxgi_shared_handle_manager(), GLFormatCaps());
-
+void D3DImageBackingFactoryTest::RunMultiplanarUploadAndReadback() {
   constexpr gfx::Size size(32, 32);
   constexpr size_t kDataSize = size.width() * size.height() * 3 / 2;
   constexpr SkAlphaType alpha_type = kPremul_SkAlphaType;
@@ -1838,9 +1922,10 @@ void D3DImageBackingFactoryTest::RunMultiplanarUploadAndReadback(
   const gpu::Mailbox mailbox = gpu::Mailbox::Generate();
 
   auto owned_backing = shared_image_factory_->CreateSharedImage(
-      mailbox, format, kNullSurfaceHandle, size, color_space,
-      kTopLeft_GrSurfaceOrigin, alpha_type, usage, "TestLabel",
-      /*is_thread_safe=*/false);
+      mailbox,
+      {format, size, color_space, kTopLeft_GrSurfaceOrigin, alpha_type, usage,
+       "TestLabel"},
+      kNullSurfaceHandle, /*is_thread_safe=*/false);
   ASSERT_NE(owned_backing, nullptr);
   SharedImageBacking* backing = owned_backing.get();
 
@@ -1866,7 +1951,7 @@ void D3DImageBackingFactoryTest::RunMultiplanarUploadAndReadback(
                                     viz::ToClosestSkColorType(format, plane),
                                     alpha_type, color_space.ToSkColorSpace());
       DCHECK_LE(info.computeMinByteSize() + plane_offset, kDataSize);
-      pixmaps.emplace_back(info, buffer.data() + plane_offset,
+      pixmaps.emplace_back(info, UNSAFE_TODO(buffer.data() + plane_offset),
                            info.minRowBytes());
       plane_offset += info.computeMinByteSize();
     }
@@ -1875,11 +1960,6 @@ void D3DImageBackingFactoryTest::RunMultiplanarUploadAndReadback(
   // Upload initial data into the image.
   backing->UploadFromMemory(pixmaps);
   backing->SetCleared();
-
-  // If UpdateSubresource() is used, the staging texture shouldn't be created.
-  EXPECT_EQ(
-      !static_cast<D3DImageBacking*>(backing)->HasStagingTextureForTesting(),
-      use_update_subresource);
 
   auto skia_representation = shared_image_representation_factory_->ProduceSkia(
       mailbox, context_state_);
@@ -1963,12 +2043,131 @@ void D3DImageBackingFactoryTest::RunMultiplanarUploadAndReadback(
 }
 
 TEST_P(D3DImageBackingFactoryTest, MultiplanarUploadAndReadback) {
-  RunMultiplanarUploadAndReadback(/*use_update_subresource=*/false);
+  RunMultiplanarUploadAndReadback();
 }
 
-TEST_P(D3DImageBackingFactoryTest,
-       MultiplanarUploadAndReadbackWithUpdateSubresource) {
-  RunMultiplanarUploadAndReadback(/*use_update_subresource=*/true);
+// Verifies that UploadFromMemory flushes pending Graphite commands. Draws blue
+// via Skia, then uploads red pixels. The final result should be red.
+TEST_P(D3DImageBackingFactoryTest, UploadAfterSkiaWrite) {
+  const auto format = viz::SinglePlaneFormat::kRGBA_8888;
+  const gfx::Size size(4, 4);
+  const auto color_space = gfx::ColorSpace::CreateSRGB();
+  const gpu::SharedImageUsageSet usage =
+      SHARED_IMAGE_USAGE_DISPLAY_READ | SHARED_IMAGE_USAGE_DISPLAY_WRITE |
+      SHARED_IMAGE_USAGE_CPU_UPLOAD;
+  const auto mailbox = Mailbox::Generate();
+
+  auto owned_backing = shared_image_factory_->CreateSharedImage(
+      mailbox,
+      {format, size, color_space, kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType,
+       usage, "TestLabel"},
+      kNullSurfaceHandle, /*is_thread_safe=*/false);
+  ASSERT_TRUE(owned_backing);
+  SharedImageBacking* backing = owned_backing.get();
+
+  auto factory_ref = shared_image_manager_.Register(std::move(owned_backing),
+                                                    memory_type_tracker_.get());
+  ASSERT_TRUE(factory_ref);
+
+  // Write blue via Skia.
+  {
+    auto skia_representation =
+        shared_image_representation_factory_->ProduceSkia(mailbox,
+                                                          context_state_);
+    ASSERT_TRUE(skia_representation);
+
+    auto scoped_write_access = skia_representation->BeginScopedWriteAccess(
+        /*begin_semaphores=*/nullptr, /*end_semaphores=*/nullptr,
+        SharedImageRepresentation::AllowUnclearedAccess::kYes);
+    ASSERT_TRUE(scoped_write_access);
+
+    SkCanvas* canvas = scoped_write_access->surface()->getCanvas();
+    canvas->clear(SkColors::kBlue);
+    context_state_->FlushWriteAccess(scoped_write_access.get());
+    skia_representation->SetCleared();
+  }
+
+  // Upload red pixels. This should flush any pending Graphite commands first,
+  // then overwrite the texture with red.
+  const size_t num_pixels = size.width() * size.height();
+  std::vector<uint8_t> red_pixels(num_pixels * 4);
+  for (size_t i = 0; i < num_pixels; i++) {
+    red_pixels[i * 4 + 0] = 255;
+    red_pixels[i * 4 + 1] = 0;
+    red_pixels[i * 4 + 2] = 0;
+    red_pixels[i * 4 + 3] = 255;
+  }
+  auto info = SkImageInfo::Make(size.width(), size.height(),
+                                kRGBA_8888_SkColorType, kPremul_SkAlphaType,
+                                color_space.ToSkColorSpace());
+  std::vector<SkPixmap> pixmaps = {
+      SkPixmap(info, red_pixels.data(), info.minRowBytes())};
+  ASSERT_TRUE(backing->UploadFromMemory(pixmaps));
+
+  // Verify the final color is red.
+  CheckSkiaPixels(mailbox, size, {255, 0, 0, 255});
+}
+
+// Verifies that ReadbackToMemory flushes pending Graphite commands. Draws blue
+// via Skia, then reads back. The result should be blue.
+TEST_P(D3DImageBackingFactoryTest, ReadbackAfterSkiaWrite) {
+  const auto format = viz::SinglePlaneFormat::kRGBA_8888;
+  const gfx::Size size(4, 4);
+  const auto color_space = gfx::ColorSpace::CreateSRGB();
+  const gpu::SharedImageUsageSet usage =
+      SHARED_IMAGE_USAGE_DISPLAY_READ | SHARED_IMAGE_USAGE_DISPLAY_WRITE |
+      SHARED_IMAGE_USAGE_CPU_READ;
+  const auto mailbox = Mailbox::Generate();
+
+  auto owned_backing = shared_image_factory_->CreateSharedImage(
+      mailbox,
+      {format, size, color_space, kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType,
+       usage, "TestLabel"},
+      kNullSurfaceHandle, /*is_thread_safe=*/false);
+  ASSERT_TRUE(owned_backing);
+  SharedImageBacking* backing = owned_backing.get();
+
+  auto factory_ref = shared_image_manager_.Register(std::move(owned_backing),
+                                                    memory_type_tracker_.get());
+  ASSERT_TRUE(factory_ref);
+
+  // Write blue via Skia.
+  {
+    auto skia_representation =
+        shared_image_representation_factory_->ProduceSkia(mailbox,
+                                                          context_state_);
+    ASSERT_TRUE(skia_representation);
+
+    auto scoped_write_access = skia_representation->BeginScopedWriteAccess(
+        /*begin_semaphores=*/nullptr, /*end_semaphores=*/nullptr,
+        SharedImageRepresentation::AllowUnclearedAccess::kYes);
+    ASSERT_TRUE(scoped_write_access);
+
+    SkCanvas* canvas = scoped_write_access->surface()->getCanvas();
+    canvas->clear(SkColors::kBlue);
+    context_state_->FlushWriteAccess(scoped_write_access.get());
+    skia_representation->SetCleared();
+  }
+
+  // Read back pixels. This should flush any pending Graphite commands first,
+  // then read the correct blue data from the texture.
+  const size_t num_pixels = size.width() * size.height();
+  std::vector<uint8_t> readback_pixels(num_pixels * 4, 0);
+  auto info = SkImageInfo::Make(size.width(), size.height(),
+                                kRGBA_8888_SkColorType, kPremul_SkAlphaType,
+                                color_space.ToSkColorSpace());
+  std::vector<SkPixmap> pixmaps = {
+      SkPixmap(info, readback_pixels.data(), info.minRowBytes())};
+  ASSERT_TRUE(backing->ReadbackToMemory(pixmaps));
+
+  // Verify every pixel is blue (RGBA: 0, 0, 255, 255).
+  const uint8_t kExpectedColor[] = {0, 0, 255, 255};  // Blue
+  for (size_t i = 0; i < num_pixels; ++i) {
+    for (size_t j = 0; j < 4; ++j) {
+      ASSERT_EQ(readback_pixels[i * 4 + j], UNSAFE_TODO(kExpectedColor[j]))
+          << "Mismatch at pixel " << i << " component " << j;
+    }
+  }
 }
 
 TEST_P(D3DImageBackingFactoryTest, CanCreateScanoutBacking) {
@@ -2010,9 +2209,10 @@ TEST_P(D3DImageBackingFactoryTest, CanProduceDCompTextureOverlay) {
   const gpu::Mailbox mailbox = gpu::Mailbox::Generate();
 
   auto owned_backing = shared_image_factory_->CreateSharedImage(
-      mailbox, format, kNullSurfaceHandle, size, color_space,
-      kTopLeft_GrSurfaceOrigin, alpha_type, usage, "TestLabel",
-      /*is_thread_safe=*/false);
+      mailbox,
+      {format, size, color_space, kTopLeft_GrSurfaceOrigin, alpha_type, usage,
+       "TestLabel"},
+      kNullSurfaceHandle, /*is_thread_safe=*/false);
   ASSERT_NE(owned_backing, nullptr);
   SharedImageBacking* backing = owned_backing.get();
 
@@ -2052,9 +2252,10 @@ TEST_P(D3DImageBackingFactoryTest, CanProduceVideoForExternalDevice) {
   const gpu::Mailbox mailbox = gpu::Mailbox::Generate();
 
   auto owned_backing = shared_image_factory_->CreateSharedImage(
-      mailbox, format, kNullSurfaceHandle, size, color_space,
-      kTopLeft_GrSurfaceOrigin, alpha_type, usage, "TestLabel",
-      /*is_thread_safe=*/false);
+      mailbox,
+      {format, size, color_space, kTopLeft_GrSurfaceOrigin, alpha_type, usage,
+       "TestLabel"},
+      kNullSurfaceHandle, /*is_thread_safe=*/false);
   ASSERT_NE(owned_backing, nullptr);
 
   std::unique_ptr<SharedImageRepresentationFactoryRef> shared_image_ref =
@@ -2190,13 +2391,14 @@ TEST_F(D3DImageBackingFactoryBufferTest, CreateSharedImageImportToDawn) {
   constexpr uint32_t kBufferSize = 4;
   const gpu::Mailbox mailbox = gpu::Mailbox::Generate();
   auto backing = shared_image_factory_->CreateSharedImage(
-      mailbox, viz::SharedImageFormat(), gpu::kNullSurfaceHandle,
-      gfx::Size(kBufferSize, 1), gfx::ColorSpace(), kTopLeft_GrSurfaceOrigin,
-      kUnknown_SkAlphaType,
-      gpu::SHARED_IMAGE_USAGE_WEBGPU_READ |
-          gpu::SHARED_IMAGE_USAGE_WEBGPU_WRITE |
-          gpu::SHARED_IMAGE_USAGE_WEBGPU_SHARED_BUFFER,
-      "TestLabel", false);
+      mailbox,
+      {viz::SharedImageFormat(), gfx::Size(kBufferSize, 1), gfx::ColorSpace(),
+       kTopLeft_GrSurfaceOrigin, kUnknown_SkAlphaType,
+       gpu::SHARED_IMAGE_USAGE_WEBGPU_READ |
+           gpu::SHARED_IMAGE_USAGE_WEBGPU_WRITE |
+           gpu::SHARED_IMAGE_USAGE_WEBGPU_SHARED_BUFFER,
+       "TestLabel"},
+      gpu::kNullSurfaceHandle, false);
 
   // Register the backing and create a wgpu::Buffer from it.
   std::unique_ptr<SharedImageRepresentationFactoryRef> factory_ref =
@@ -2223,7 +2425,7 @@ TEST_F(D3DImageBackingFactoryBufferTest, CreateSharedImageImportToDawn) {
 
   constexpr uint32_t kBufferData = 0x12345678;
   uint32_t* mapped_range = static_cast<uint32_t*>(src_buffer.GetMappedRange());
-  std::memcpy(mapped_range, &kBufferData, kBufferSize);
+  UNSAFE_TODO(std::memcpy(mapped_range, &kBufferData, kBufferSize));
   src_buffer.Unmap();
 
   // Copy data from the mappable buffer to the imported buffer.

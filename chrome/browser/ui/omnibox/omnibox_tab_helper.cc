@@ -7,13 +7,14 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 
+#include "base/check.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/observer_list.h"
 #include "base/strings/strcat.h"
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
-#include "chrome/browser/page_content_annotations/page_content_extraction_service.h"
 #include "chrome/browser/page_content_annotations/page_content_extraction_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -23,11 +24,18 @@
 #include "components/omnibox/common/omnibox_feature_configs.h"
 #include "components/omnibox/common/omnibox_focus_state.h"
 #include "components/optimization_guide/proto/features/common_quality_data.pb.h"
+#include "components/page_content_annotations/content/page_content_extraction_service.h"
+#include "components/search_engines/search_engine_type.h"
+#include "components/search_engines/search_engine_utils.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/page.h"
 #include "content/public/browser/render_frame_host.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
+#include "ui/base/page_transition_types.h"
+#include "url/gurl.h"
+#include "url/url_util.h"
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(OmniboxTabHelper);
 
@@ -70,6 +78,13 @@ PaywallSignal ToPaywallSignal(std::optional<bool> paywall_signal) {
 }  // namespace
 
 OmniboxTabHelper::~OmniboxTabHelper() = default;
+
+// static
+void OmniboxTabHelper::ClearOmniboxInputState(
+    content::WebContents* web_contents) {
+  web_contents->SetUserData(kOmniboxStateKey, nullptr);
+}
+
 OmniboxTabHelper::OmniboxTabHelper(content::WebContents* contents,
                                    Profile* profile)
     : content::WebContentsUserData<OmniboxTabHelper>(*contents),
@@ -136,16 +151,25 @@ std::optional<bool> OmniboxTabHelper::IsPagePaywalled() {
 
 void OmniboxTabHelper::OnPageContentExtracted(
     content::Page& page,
-    const optimization_guide::proto::AnnotatedPageContent& page_content) {
+    page_content_annotations::PageContent page_content) {
+  page_content_annotations::RefCountedAnnotatedPageContentPtr
+      annotated_page_content_ptr =
+          page_content_annotations::GetAnnotatedPageContentPtrFromPageContent(
+              page_content);
+  if (!annotated_page_content_ptr) {
+    return;
+  }
+
   // Ignore if the APC does not belong to the primary page of this tabs web
   // contents.
   if (&page != &(GetWebContents().GetPrimaryPage())) {
     return;
   }
   page_has_apc_paywall_signal_ =
-      page_content.has_main_frame_data() &&
-      page_content.main_frame_data().has_paid_content_metadata() &&
-      page_content.main_frame_data()
+      annotated_page_content_ptr->data.has_main_frame_data() &&
+      annotated_page_content_ptr->data.main_frame_data()
+          .has_paid_content_metadata() &&
+      annotated_page_content_ptr->data.main_frame_data()
           .paid_content_metadata()
           .contains_paid_content();
 }
@@ -197,6 +221,27 @@ void OmniboxTabHelper::DOMContentLoaded(
     return;
   }
   dom_content_loaded_time_ = base::ElapsedTimer();
+}
+
+void OmniboxTabHelper::DidFinishNavigation(
+    content::NavigationHandle* navigation_handle) {
+  if (!navigation_handle->HasCommitted() ||
+      !navigation_handle->IsInPrimaryMainFrame()) {
+    return;
+  }
+
+  // Only report navigations that originated from the omnibox.
+  const ui::PageTransition transition = navigation_handle->GetPageTransition();
+  if (ui::PageTransitionCoreTypeIs(transition, ui::PAGE_TRANSITION_GENERATED) ||
+      ui::PageTransitionCoreTypeIs(transition, ui::PAGE_TRANSITION_KEYWORD)) {
+    const SearchEngineType search_engine_type =
+        navigation_handle->GetURL().is_valid()
+            ? search_engine_utils::GetEngineType(navigation_handle->GetURL())
+            : SEARCH_ENGINE_OTHER;
+
+    base::UmaHistogramEnumeration("Omnibox.SearchEngineType.PostNavigation",
+                                  search_engine_type, SEARCH_ENGINE_MAX);
+  }
 }
 
 void OmniboxTabHelper::MaybeLogNavigationToPopupShownTimings(

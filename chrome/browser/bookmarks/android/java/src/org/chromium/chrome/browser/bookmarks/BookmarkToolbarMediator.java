@@ -19,6 +19,7 @@ import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.build.annotations.RequiresNonNull;
+import org.chromium.chrome.browser.bookmarks.BookmarkModel.BookmarkDeleteObserver;
 import org.chromium.chrome.browser.bookmarks.BookmarkUiPrefs.BookmarkRowDisplayPref;
 import org.chromium.chrome.browser.bookmarks.BookmarkUiPrefs.BookmarkRowSortOrder;
 import org.chromium.chrome.browser.bookmarks.BookmarkUiPrefs.Observer;
@@ -29,8 +30,8 @@ import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.components.bookmarks.BookmarkId;
 import org.chromium.components.bookmarks.BookmarkItem;
 import org.chromium.components.bookmarks.BookmarkType;
-import org.chromium.components.browser_ui.widget.dragreorder.DragReorderableRecyclerViewAdapter;
-import org.chromium.components.browser_ui.widget.dragreorder.DragReorderableRecyclerViewAdapter.DragListener;
+import org.chromium.components.browser_ui.widget.dragreorder.DragTouchHandler;
+import org.chromium.components.browser_ui.widget.dragreorder.DragTouchHandler.DragListener;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectableListToolbar.NavigationButton;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectionDelegate;
 import org.chromium.ui.base.Clipboard;
@@ -77,8 +78,8 @@ class BookmarkToolbarMediator
     private final Context mContext;
     private final Profile mProfile;
     private final PropertyModel mModel;
-    private final DragReorderableRecyclerViewAdapter mDragReorderableRecyclerViewAdapter;
-    private final SelectionDelegate mSelectionDelegate;
+    private final DragTouchHandler mDragTouchHandler;
+    private final SelectionDelegate<BookmarkId> mSelectionDelegate;
     private final BookmarkModel mBookmarkModel;
     private final BookmarkOpener mBookmarkOpener;
     private final BookmarkUiPrefs mBookmarkUiPrefs;
@@ -88,6 +89,7 @@ class BookmarkToolbarMediator
     private final BookmarkManagerOpener mBookmarkManagerOpener;
     private final SnackbarManager mSnackbarManager;
     private final Clipboard mClipboard;
+    private final @Nullable BookmarkDeleteObserver mBookmarkDeleteObserver;
 
     // TODO(crbug.com/40255666): Remove reference to BookmarkDelegate if possible.
     private @Nullable BookmarkDelegate mBookmarkDelegate;
@@ -99,7 +101,7 @@ class BookmarkToolbarMediator
             Context context,
             Profile profile,
             PropertyModel model,
-            DragReorderableRecyclerViewAdapter dragReorderableRecyclerViewAdapter,
+            DragTouchHandler dragTouchHandler,
             OneshotSupplier<BookmarkDelegate> bookmarkDelegateSupplier,
             SelectionDelegate<BookmarkId> selectionDelegate,
             BookmarkModel bookmarkModel,
@@ -110,14 +112,15 @@ class BookmarkToolbarMediator
             BooleanSupplier incognitoEnabledSupplier,
             BookmarkManagerOpener bookmarkManagerOpener,
             SnackbarManager snackbarManager,
-            Clipboard clipboard) {
+            Clipboard clipboard,
+            @Nullable BookmarkDeleteObserver bookmarkDeleteObserver) {
         mContext = context;
         mProfile = profile;
         mModel = model;
 
         mModel.set(BookmarkToolbarProperties.MENU_ID_CLICKED_FUNCTION, this::onMenuIdClick);
-        mDragReorderableRecyclerViewAdapter = dragReorderableRecyclerViewAdapter;
-        mDragReorderableRecyclerViewAdapter.addDragListener(this);
+        mDragTouchHandler = dragTouchHandler;
+        mDragTouchHandler.addDragListener(this);
         mSelectionDelegate = selectionDelegate;
         mSelectionDelegate.addObserver(this);
         mBookmarkModel = bookmarkModel;
@@ -130,6 +133,7 @@ class BookmarkToolbarMediator
         mBookmarkManagerOpener = bookmarkManagerOpener;
         mSnackbarManager = snackbarManager;
         mClipboard = clipboard;
+        mBookmarkDeleteObserver = bookmarkDeleteObserver;
 
         mModel.set(BookmarkToolbarProperties.SORT_MENU_IDS, SORT_MENU_IDS);
         mModel.set(
@@ -223,7 +227,8 @@ class BookmarkToolbarMediator
         } else if (id == R.id.selection_mode_delete_menu_id) {
             List<BookmarkId> list = mSelectionDelegate.getSelectedItemsAsList();
             if (list.size() >= 1) {
-                mBookmarkModel.deleteBookmarks(list.toArray(new BookmarkId[0]));
+                mBookmarkModel.deleteBookmarks(
+                        mBookmarkDeleteObserver, list.toArray(new BookmarkId[0]));
                 RecordUserAction.record("MobileBookmarkManagerDeleteBulk");
             }
             return true;
@@ -284,7 +289,7 @@ class BookmarkToolbarMediator
 
     @Override
     public void onDestroy() {
-        mDragReorderableRecyclerViewAdapter.removeDragListener(this);
+        mDragTouchHandler.removeDragListener(this);
         mSelectionDelegate.removeObserver(this);
         mBookmarkUiPrefs.removeObserver(mBookmarkUiPrefsObserver);
 
@@ -338,8 +343,17 @@ class BookmarkToolbarMediator
         String title;
         @NavigationButton int navigationButton;
         Resources res = mContext.getResources();
-        if (mCurrentFolder.equals(mBookmarkModel.getRootFolderId())) {
-            title = res.getString(R.string.bookmarks);
+        boolean isDesktopLayout = BookmarkUtils.isDesktopBookmarksLayoutEnabled();
+        boolean isRootFolder = mCurrentFolder.equals(mBookmarkModel.getRootFolderId());
+        boolean isTopLevelFolder =
+                (folderItem.getParentId() != null
+                                && folderItem
+                                        .getParentId()
+                                        .equals(mBookmarkModel.getRootFolderId()))
+                        || mBookmarkModel.isReadingListFolder(mCurrentFolder);
+
+        if (isRootFolder || (isDesktopLayout && isTopLevelFolder)) {
+            title = isRootFolder ? res.getString(R.string.bookmarks) : folderItem.getTitle();
             navigationButton = NavigationButton.NONE;
         } else if (mBookmarkModel.getTopLevelFolderIds().contains(folderItem.getParentId())
                 && TextUtils.isEmpty(folderItem.getTitle())) {
@@ -407,61 +421,44 @@ class BookmarkToolbarMediator
     }
 
     private void updateSelectedMenuItemVisibility(List<BookmarkId> selectedBookmarks) {
-        boolean showEdit = selectedBookmarks.size() == 1;
-        boolean showOpenInNewTab = selectedBookmarks.size() > 0;
-        boolean showOpenInIncognito =
-                selectedBookmarks.size() > 0 && mIncognitoEnabledSupplier.getAsBoolean();
-        boolean showMove = selectedBookmarks.size() > 0;
-        boolean showCopyLink = selectedBookmarks.size() == 1;
-        boolean showMarkRead;
-        boolean showMarkUnread;
+        int numSelected = selectedBookmarks.size();
+        boolean hasFolder = false;
+        boolean hasPartnerBookmark = false;
+        boolean hasOnlyReadingListItems = true;
+        boolean hasSelection = numSelected > 0;
+        int numRead = 0;
 
-        // It does not make sense to open a folder in new tab or copy a folder link.
         for (BookmarkId bookmark : selectedBookmarks) {
             BookmarkItem item = mBookmarkModel.getBookmarkById(bookmark);
-            if (item != null && item.isFolder()) {
-                showOpenInNewTab = false;
-                showOpenInIncognito = false;
-                showCopyLink = false;
-                break;
-            }
-        }
+            if (item == null) continue;
 
-        boolean hasPartnerBoomarkSelected = false;
-        // Partner bookmarks can't move, so if the selection includes a partner bookmark,
-        // disable the move button.
-        for (BookmarkId bookmark : selectedBookmarks) {
-            if (bookmark.getType() == BookmarkType.PARTNER) {
-                hasPartnerBoomarkSelected = true;
-                showMove = false;
-                break;
-            }
-        }
-        if (hasPartnerBoomarkSelected) {
-            showMove = false;
-            showEdit = false;
-        }
-
-        // Compute whether all selected bookmarks are reading list items and add up the number
-        // of read items.
-        int numReadingListItems = 0;
-        int numRead = 0;
-        for (int i = 0; i < selectedBookmarks.size(); i++) {
-            BookmarkId bookmark = selectedBookmarks.get(i);
-            BookmarkItem bookmarkItem = mBookmarkModel.getBookmarkById(bookmark);
-            assumeNonNull(bookmarkItem);
+            if (item.isFolder()) hasFolder = true;
+            if (bookmark.getType() == BookmarkType.PARTNER) hasPartnerBookmark = true;
             if (bookmark.getType() == BookmarkType.READING_LIST) {
-                numReadingListItems++;
-                if (bookmarkItem.isRead()) numRead++;
+                if (item.isRead()) numRead++;
+            } else {
+                hasOnlyReadingListItems = false;
             }
         }
+
+        // Partner bookmarks can't move or be edited, so if the selection includes a partner
+        // bookmark, disable the move and edit buttons. Only one bookmark can be edited at a time,
+        // but any non-zero amount can be moved at a time.
+        boolean showEdit = !hasPartnerBookmark && numSelected == 1;
+        boolean showMove = !hasPartnerBookmark && numSelected > 0;
+
+        // It does not make sense to open a folder in new tab or copy a folder link, so do not show
+        // these options if any folder is part of the selection. Only one link can be copied at a
+        // time, but any amount can be opened; to open in incognito it must be enabled.
+        boolean showCopyLink = !hasFolder && numSelected == 1;
+        boolean showOpenInNewTab = !hasFolder && numSelected > 0;
+        boolean showOpenInIncognito =
+                !hasFolder && numSelected > 0 && mIncognitoEnabledSupplier.getAsBoolean();
 
         // Only show the "mark as" options when all selections are reading list items and
-        // have the same read state.
-        boolean onlyReadingListSelected =
-                selectedBookmarks.size() > 0 && numReadingListItems == selectedBookmarks.size();
-        showMarkRead = onlyReadingListSelected && numRead == 0;
-        showMarkUnread = onlyReadingListSelected && numRead == selectedBookmarks.size();
+        // have the same read state; 'Read' when all items are unread, and vice versa.
+        boolean showMarkRead = hasOnlyReadingListItems && hasSelection && numRead == 0;
+        boolean showMarkUnread = hasOnlyReadingListItems && hasSelection && numRead == numSelected;
 
         mModel.set(BookmarkToolbarProperties.SELECTION_MODE_SHOW_EDIT, showEdit);
         mModel.set(BookmarkToolbarProperties.SELECTION_MODE_SHOW_OPEN_IN_NEW_TAB, showOpenInNewTab);

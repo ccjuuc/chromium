@@ -73,9 +73,6 @@ CORE_EXPORT bool NeedsLayoutTreeUpdate(const PositionInFlatTree&);
 // Returns true if |node| has "user-select:contain".
 CORE_EXPORT bool IsUserSelectContain(const Node& /* node */);
 
-// Returns true if element is input element or has editable style.
-CORE_EXPORT bool IsEditableElement(const Node&);
-
 CORE_EXPORT bool IsEditable(const Node&);
 CORE_EXPORT bool IsRichlyEditable(const Node&);
 
@@ -123,9 +120,12 @@ CORE_EXPORT Node* EnclosingNodeOfType(
     EditingBoundaryCrossingRule = kCannotCrossEditingBoundary);
 
 HTMLSpanElement* TabSpanElement(const Node*);
-Element* TableElementJustAfter(const VisiblePosition&);
+CORE_EXPORT Element* TableElementJustBefore(const Position&);
+CORE_EXPORT Element* TableElementJustBefore(const PositionInFlatTree&);
 CORE_EXPORT Element* TableElementJustBefore(const VisiblePosition&);
 CORE_EXPORT Element* TableElementJustBefore(const VisiblePositionInFlatTree&);
+Element* TableElementJustAfter(const Position&);
+Element* TableElementJustAfter(const VisiblePosition&);
 Element* EnclosingTableCell(const Position&);
 Element* EnclosingTableCell(const PositionInFlatTree&);
 
@@ -160,21 +160,23 @@ inline bool CanHaveChildrenForEditing(const Node* node) {
 bool IsAtomicNode(const Node*);
 bool IsAtomicNodeInFlatTree(const Node*);
 CORE_EXPORT bool IsEnclosingBlock(const Node*);
-CORE_EXPORT bool IsTabHTMLSpanElement(const Node*);
-bool IsTabHTMLSpanElementTextNode(const Node*);
-bool IsMailHTMLBlockquoteElement(const Node*);
+// Returns true if the specified node is an HTMLSpanElement and its first child
+// is a Text, contains a TAB character, and the style has white-space:pre.
+CORE_EXPORT bool IsTabSpanElement(const Node*);
+bool IsTabSpanElementTextNode(const Node*);
+bool IsMailHtmlBlockquoteElement(const Node*);
 // Returns true if the specified node is visible <table>. We don't want to add
 // invalid nodes to <table> elements.
 bool IsDisplayInsideTable(const Node*);
 bool IsTableCell(const Node*);
 bool IsTablePartElement(const Node*);
-bool IsHTMLListElement(const Node*);
+bool IsHtmlListElement(const Node*);
 bool IsListItem(const Node*);
 bool IsListItemTag(const Node*);
 bool IsListElementTag(const Node*);
-bool IsPresentationalHTMLElement(const Node*);
+bool IsPresentationalHtmlElement(const Node*);
 CORE_EXPORT bool IsRenderedAsNonInlineTableImageOrHR(const Node*);
-bool IsNonTableCellHTMLBlockElement(const Node*);
+bool IsNonTableCellHtmlBlockElement(const Node*);
 bool IsBlockFlowElement(const Node&);
 bool IsInPasswordField(const Position&);
 CORE_EXPORT TextDirection DirectionOfEnclosingBlockOf(const Position&);
@@ -197,11 +199,18 @@ PositionInFlatTree NextCandidate(const PositionInFlatTree&);
 Position PreviousCandidate(const Position&);
 PositionInFlatTree PreviousCandidate(const PositionInFlatTree&);
 
-CORE_EXPORT Position NextVisuallyDistinctCandidate(const Position&);
-CORE_EXPORT PositionInFlatTree
-NextVisuallyDistinctCandidate(const PositionInFlatTree&);
-Position PreviousVisuallyDistinctCandidate(const Position&);
-PositionInFlatTree PreviousVisuallyDistinctCandidate(const PositionInFlatTree&);
+CORE_EXPORT Position NextVisuallyDistinctCandidate(
+    const Position&,
+    EditingBoundaryCrossingRule = kCannotCrossEditingBoundary);
+CORE_EXPORT PositionInFlatTree NextVisuallyDistinctCandidate(
+    const PositionInFlatTree&,
+    EditingBoundaryCrossingRule = kCannotCrossEditingBoundary);
+Position PreviousVisuallyDistinctCandidate(
+    const Position&,
+    EditingBoundaryCrossingRule = kCannotCrossEditingBoundary);
+PositionInFlatTree PreviousVisuallyDistinctCandidate(
+    const PositionInFlatTree&,
+    EditingBoundaryCrossingRule = kCannotCrossEditingBoundary);
 
 // This is a |const Node&| versions of two deprecated functions above.
 inline Position FirstPositionInOrBeforeNode(const Node& node) {
@@ -234,8 +243,9 @@ CORE_EXPORT PositionInFlatTree PreviousPositionOf(const PositionInFlatTree&,
 CORE_EXPORT PositionInFlatTree NextPositionOf(const PositionInFlatTree&,
                                               PositionMoveType);
 
-CORE_EXPORT int PreviousGraphemeBoundaryOf(const Node&, int current);
-CORE_EXPORT int NextGraphemeBoundaryOf(const Node&, int current);
+CORE_EXPORT wtf_size_t PreviousGraphemeBoundaryOf(const Node&,
+                                                  wtf_size_t current);
+CORE_EXPORT wtf_size_t NextGraphemeBoundaryOf(const Node&, wtf_size_t current);
 
 // Comparison functions on Position
 // Note: These functions reside in "compare_positions.cc" instead of
@@ -243,7 +253,7 @@ CORE_EXPORT int NextGraphemeBoundaryOf(const Node&, int current);
 
 // |disconnected| is optional output parameter having true if specified
 // positions don't have common ancestor.
-int16_t ComparePositionsInDOMTree(const Node* container_a,
+int16_t ComparePositionsInDomTree(const Node* container_a,
                                   int offset_a,
                                   const Node* container_b,
                                   int offset_b,
@@ -304,8 +314,8 @@ Position PositionAfterNode(const Node&);
 
 int16_t ComparePositions(const VisiblePosition&, const VisiblePosition&);
 
-CORE_EXPORT int IndexForVisiblePosition(const VisiblePosition&,
-                                        ContainerNode*& scope);
+CORE_EXPORT wtf_size_t IndexForVisiblePosition(const VisiblePosition&,
+                                               ContainerNode*& scope);
 EphemeralRange MakeRange(const VisiblePosition&, const VisiblePosition&);
 EphemeralRange NormalizeRange(const EphemeralRange&);
 EphemeralRangeInFlatTree NormalizeRange(const EphemeralRangeInFlatTree&);
@@ -361,11 +371,11 @@ inline bool IsCollapsibleWhitespace(UChar c) {
   return c == ' ' || c == '\n';
 }
 
-String StringWithRebalancedWhitespace(const String&,
+String StringWithRebalancedWhitespace(const StringView&,
                                       bool start_is_start_of_paragraph,
                                       bool should_emit_nbs_pbefore_end);
 
-CORE_EXPORT String RepeatString(const String&, unsigned);
+CORE_EXPORT String RepeatString(const String&, wtf_size_t);
 
 // -------------------------------------------------------------------------
 // Distance calculation functions
@@ -406,7 +416,7 @@ DispatchEventResult DispatchBeforeInputDataTransfer(Node*,
 
 // Helper function to dispatch beforeinput and input events whose inputType is
 // insertReplacementText.
-void InsertTextAndSendInputEventsOfTypeInsertReplacementText(
+CORE_EXPORT void InsertTextAndSendInputEventsOfTypeInsertReplacementText(
     LocalFrame&,
     const String&,
     bool allow_edit_context = false);

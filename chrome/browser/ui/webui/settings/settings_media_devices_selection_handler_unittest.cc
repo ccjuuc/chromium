@@ -109,7 +109,7 @@ class MediaDevicesSelectionHandlerTest
 
   void SendSetPreferredCaptureDeviceMessage(const std::string& type,
                                             const std::string id) {
-    base::Value::List setDefaultArgs;
+    base::ListValue setDefaultArgs;
     setDefaultArgs.Append(type);
     setDefaultArgs.Append(id);
     test_web_ui_.ProcessWebUIMessage(GURL(), "setPreferredCaptureDevice",
@@ -117,7 +117,7 @@ class MediaDevicesSelectionHandlerTest
   }
 
   void SendInitializeCaptureDevicesMessage(const std::string& type) {
-    base::Value::List getDefaultArgs;
+    base::ListValue getDefaultArgs;
     getDefaultArgs.Append(kMic);
     test_web_ui_.ProcessWebUIMessage(GURL(), "initializeCaptureDevices",
                                      std::move(getDefaultArgs));
@@ -240,6 +240,24 @@ TEST_F(MediaDevicesSelectionHandlerTest,
   // list.
   ASSERT_NO_FATAL_FAILURE(VerifyUpdateDevicesMenu(
       {kUsbDevice, kExpectedDefaultDevice, kIntegratedDevice}, kUsbDevice));
+}
+
+TEST_F(MediaDevicesSelectionHandlerTest, SanitizeAirPodsDeviceName) {
+  const media::AudioDeviceDescription kAirpods{
+      /*display_name=*/"AirPods (Bluetooth)",
+      /*unique_id=*/"airpods_id",
+      /*group_id=*/"airpods_group_id"};
+
+  fake_audio_service_.AddFakeInputDevice(kAirpods);
+
+  ASSERT_TRUE(WaitForUpdateDevicesMenuCall(kMic));
+
+  media::AudioDeviceDescription sanitizedAirpods = kAirpods;
+  sanitizedAirpods.device_name = "AirPods (Bluetooth)";
+
+  // Verify that the airPods device name has been sanitized.
+  ASSERT_NO_FATAL_FAILURE(
+      VerifyUpdateDevicesMenu({sanitizedAirpods}, sanitizedAirpods));
 }
 
 TEST_F(MediaDevicesSelectionHandlerTest, InitializeCaptureDevices_Camera) {

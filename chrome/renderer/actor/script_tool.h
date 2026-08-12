@@ -6,10 +6,13 @@
 #define CHROME_RENDERER_ACTOR_SCRIPT_TOOL_H_
 
 #include <cstdint>
+#include <optional>
 
+#include "base/memory/weak_ptr.h"
+#include "base/unguessable_token.h"
 #include "chrome/common/actor.mojom.h"
-#include "chrome/common/actor/task_id.h"
 #include "chrome/renderer/actor/tool_base.h"
+#include "components/actor/core/task_id.h"
 
 namespace content {
 class RenderFrame;
@@ -22,6 +25,7 @@ class ScriptTool : public ToolBase {
  public:
   ScriptTool(content::RenderFrame& frame,
              TaskId task_id,
+             base::UnguessableToken execution_id,
              Journal& journal,
              mojom::ToolTargetPtr target,
              mojom::ObservedToolTargetPtr observed_target,
@@ -30,11 +34,15 @@ class ScriptTool : public ToolBase {
   ~ScriptTool() override;
 
   // actor::ToolBase
+  ValidationResult Validate() override;
   void Execute(ToolFinishedCallback callback) override;
+  void Cancel() override;
   std::string DebugString() const override;
 
  private:
   mojom::ScriptToolActionPtr action_;
+  std::optional<base::UnguessableToken> execution_id_;
+  base::WeakPtrFactory<ScriptTool> weak_ptr_factory_{this};
 };
 
 }  // namespace actor

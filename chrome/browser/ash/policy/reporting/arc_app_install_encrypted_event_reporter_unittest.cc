@@ -15,11 +15,9 @@
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/ash/policy/reporting/app_install_event_log_manager_wrapper.h"
 #include "chrome/browser/ash/policy/reporting/arc_app_install_event_log.h"
-#include "chrome/browser/ash/policy/reporting/arc_app_install_event_log_manager.h"
 #include "chrome/browser/ash/policy/reporting/install_event_log_util.h"
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/network/network_handler_test_helper.h"
@@ -93,8 +91,9 @@ TEST_F(AppInstallEventEncryptedReporterTest, Default) {
 
   EXPECT_CALL(*report_queue.get(), AddRecord).Times(3);
 
-  auto reporter =
-      ArcAppInstallEncryptedEventReporter(std::move(report_queue), &profile_);
+  auto reporter = ArcAppInstallEncryptedEventReporter(
+      TestingBrowserProcess::GetGlobal()->local_state(),
+      std::move(report_queue), &profile_);
 
   reporter.Add(packages, std::move(event_success));
   reporter.Add(packages, std::move(event_started));

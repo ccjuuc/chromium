@@ -17,7 +17,9 @@ const char kVersionSwitchName[] = "version";
 const char kProcessTypeController[] = "controller";
 const char kProcessTypeDaemon[] = "daemon";
 const char kProcessTypeDesktop[] = "desktop";
-const char kProcessTypeHost[] = "host";
+const char kProcessTypeNetwork[] = "network";
+const char kProcessTypePeerConnection[] = "peer_connection";
+const char kProcessTypeSingleProcessHost[] = "single_process_host";
 const char kProcessTypeRdpDesktopSession[] = "rdp_desktop_session";
 const char kProcessTypeEvaluateCapability[] = "evaluate_capability";
 const char kProcessTypeFileChooser[] = "file_chooser";
@@ -48,6 +50,9 @@ const char kOutputSwitchName[] = "output";
 
 const char kMojoPipeToken[] = "mojo-pipe-token";
 const char kCrashServerPipeHandle[] = "crash-server-pipe-handle";
+
+const char kEnablePeerConnectionProcessSwitch[] =
+    "enable-peer-connection-process";
 
 #if BUILDFLAG(IS_APPLE)
 const char kCheckPermissionSwitchName[] = "check-permission";

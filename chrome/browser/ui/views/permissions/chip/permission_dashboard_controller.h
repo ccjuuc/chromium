@@ -9,22 +9,26 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "chrome/browser/ui/views/bubble/webui_bubble_reopen_suppressor.h"
 #include "chrome/browser/ui/views/location_bar/content_setting_image_view.h"
-#include "chrome/browser/ui/views/permissions/chip/permission_chip_view.h"
-#include "chrome/browser/ui/views/permissions/chip/permission_dashboard_view.h"
+#include "chrome/browser/ui/views/permissions/chip/permission_chip_interface.h"
 #include "content/public/browser/global_routing_id.h"
+#include "ui/views/mouse_constants.h"
 #include "ui/views/view_tracker.h"
 
-class LocationBarView;
+class LocationBar;
 class ChipController;
 class ContentSettingImageModel;
+class PermissionDashboardInterface;
 
-class PermissionDashboardController : public PermissionChipView::Observer {
+class PermissionDashboardController : public PermissionChipInterface::Observer {
  public:
   PermissionDashboardController(
-      LocationBarView* location_bar_view,
-      PermissionDashboardView* permission_dashboard_view);
+      LocationBar* location_bar,
+      ContentSettingImageViewDelegate* content_settings_image_delegate,
+      PermissionDashboardInterface* permission_dashboard);
 
   ~PermissionDashboardController() override;
   PermissionDashboardController(const PermissionDashboardController&) = delete;
@@ -35,16 +39,18 @@ class PermissionDashboardController : public PermissionChipView::Observer {
     return request_chip_controller_.get();
   }
 
-  PermissionDashboardView* permission_dashboard_view() {
-    return permission_dashboard_view_;
+  PermissionDashboardInterface* permission_dashboard() {
+    return permission_dashboard_;
   }
 
   // This method updates UI based on `ContentSettingImageModel` state. Returns
   // `true` if there are user-visible changes, otherwise returns `false`.
-  bool Update(ContentSettingImageModel* indicator_model,
-              ContentSettingImageView::Delegate* delegate);
+  //
+  // Assumes that `content_settings_image_delegate` passed to the constructor is
+  // appropriate to use with `indicator_model`.
+  bool Update(ContentSettingImageModel* indicator_model);
 
-  // PermissionChipView::Observer
+  // PermissionChipInterface::Observer
   void OnChipVisibilityChanged(bool is_visible) override;
   void OnExpandAnimationEnded() override;
   void OnCollapseAnimationEnded() override;
@@ -62,11 +68,22 @@ class PermissionDashboardController : public PermissionChipView::Observer {
   }
 
   views::View* page_info_for_testing() {
-    return page_info_bubble_tracker_.view();
+    return page_info_bubble_suppressor_.GetWidget()
+               ? page_info_bubble_suppressor_.GetWidget()
+                     ->widget_delegate()
+                     ->GetContentsView()
+               : nullptr;
   }
   void ShowPageInfoDialogForTesting() { ShowPageInfoDialog(); }
 
-  void DoNotCollapseForTesting() { do_no_collapse_for_testing_ = true; }
+  void DoNotCollapseForTesting();
+
+  void HideIndicatorsForTesting() { HideIndicators(); }
+
+  void SetSuppressionThresholdForTesting(base::TimeDelta threshold) {
+    page_info_bubble_suppressor_.SetSuppressionThresholdForTesting(  // IN-TEST
+        threshold);
+  }
 
  private:
   void StartCollapseTimer();
@@ -75,17 +92,21 @@ class PermissionDashboardController : public PermissionChipView::Observer {
   void ShowBubble();
   void ShowPageInfoDialog();
   // Actions executed when the user closes the page info dialog.
-  void OnPageInfoBubbleClosed(views::Widget::ClosedReason closed_reason,
-                              bool reload_prompt);
   void OnIndicatorsChipButtonPressed();
   std::u16string GetIndicatorTitle(ContentSettingImageModel* model);
+  std::u16string GetSensorsIndicatorTitle(ContentSettingImageModel* model);
+  std::u16string GetMediaStreamIndicatorTitle(ContentSettingImageModel* model);
 
-  // `LocationBarView` owns this.
-  raw_ptr<LocationBarView> location_bar_view_ = nullptr;
-  raw_ptr<PermissionDashboardView> permission_dashboard_view_ = nullptr;
-  // Currently only Camera and Mic are supported.
+  // The implementation of `LocationBar` owns this.
+  raw_ptr<LocationBar> location_bar_ = nullptr;
+
+  // This image delegate is passed w/the location bar, and this class assumes
+  // that it's the appropriate delegate to use for everything shown.
+  raw_ptr<ContentSettingImageViewDelegate> content_setting_image_delegate_ =
+      nullptr;
+  raw_ptr<PermissionDashboardInterface> permission_dashboard_ = nullptr;
+  // Currently Camera, Mic and Sensors are supported.
   raw_ptr<ContentSettingImageModel> content_setting_image_model_ = nullptr;
-  raw_ptr<ContentSettingImageView::Delegate> delegate_;
   std::unique_ptr<ChipController> request_chip_controller_;
   // A timer used to collapse indicators after a delay.
   base::OneShotTimer collapse_timer_;
@@ -98,15 +119,11 @@ class PermissionDashboardController : public PermissionChipView::Observer {
   bool is_verbose_ = false;
   bool blocked_on_system_level_ = false;
   content::GlobalRenderFrameHostId main_frame_id_;
-  views::ViewTracker page_info_bubble_tracker_;
-
-  // This is used to check if the PageInfo bubble was showing in the last mouse
-  // press event. If this is true then PageInfo bubble should not be shown
-  // again. This flag is necessary because the bubble gets dismissed before the
-  // button handles the mouse release event.
   bool should_suppress_reopening_page_info_ = false;
+  WebUIBubbleReopenSuppressor page_info_bubble_suppressor_;
 
-  base::ScopedObservation<PermissionChipView, PermissionChipView::Observer>
+  base::ScopedObservation<PermissionChipInterface,
+                          PermissionChipInterface::Observer>
       observation_{this};
   base::WeakPtrFactory<PermissionDashboardController> weak_factory_{this};
 };

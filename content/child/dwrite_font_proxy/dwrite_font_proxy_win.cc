@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "content/child/dwrite_font_proxy/dwrite_font_proxy_win.h"
 
 #include <stddef.h>
@@ -15,10 +10,10 @@
 #include <utility>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/debug/crash_logging.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -130,7 +125,7 @@ void DWriteFontCollectionProxy::InitializePrewarmerForTesting(
 inline DWriteFontFamilyProxy* DWriteFontCollectionProxy::GetFamilyLockRequired(
     UINT32 family_index) {
   if (family_index < families_.size())
-    return families_[family_index].Get();
+    return UNSAFE_TODO(families_[family_index]).Get();
   return nullptr;
 }
 
@@ -486,8 +481,10 @@ DWriteFontFamilyProxy* DWriteFontCollectionProxy::GetOrCreateFamilyLockRequired(
   DCHECK(IsValidFamilyIndex(family_index));
 
   if (family_index < families_.size()) {
-    if (DWriteFontFamilyProxy* family = families_[family_index].Get())
+    if (DWriteFontFamilyProxy* family =
+            UNSAFE_TODO(families_[family_index]).Get()) {
       return family;
+    }
   }
 
   const UINT32 family_count = GetFontFamilyCountLockRequired();
@@ -503,7 +500,7 @@ DWriteFontFamilyProxy* DWriteFontCollectionProxy::GetOrCreateFamilyLockRequired(
   DCHECK(SUCCEEDED(hr));
   DCHECK_LT(family_index, families_.size());
 
-  families_[family_index] = family;
+  UNSAFE_TODO(families_[family_index]) = family;
   return family.Get();
 }
 
@@ -742,7 +739,7 @@ HRESULT FontFileEnumerator::GetCurrentFontFile(IDWriteFontFile** file) {
   // CreateCustomFontFileReference ends up calling
   // DWriteFontCollectionProxy::CreateStreamFromKey.
   HRESULT hr = factory_->CreateCustomFontFileReference(
-      reinterpret_cast<const void*>(&files_[current_file_]),
+      reinterpret_cast<const void*>(&UNSAFE_TODO(files_[current_file_])),
       sizeof(files_[current_file_]), loader_.Get() /*IDWriteFontFileLoader*/,
       file);
   DCHECK(SUCCEEDED(hr));
@@ -797,7 +794,7 @@ HRESULT FontFileStream::ReadFileFragment(const void** fragment_start,
     return E_FAIL;
   if (fragment_offset + fragment_size > data_.length())
     return E_FAIL;
-  *fragment_start = data_.data() + fragment_offset;
+  *fragment_start = UNSAFE_TODO(data_.data() + fragment_offset);
   *fragment_context = nullptr;
   return S_OK;
 }

@@ -5,20 +5,25 @@
 #ifndef CHROME_RENDERER_ACCESSIBILITY_READ_ANYTHING_READ_ANYTHING_APP_MODEL_H_
 #define CHROME_RENDERER_ACCESSIBILITY_READ_ANYTHING_READ_ANYTHING_APP_MODEL_H_
 
+#include <algorithm>
 #include <map>
 #include <memory>
+#include <numeric>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
+#include "base/check.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/time/time.h"
-#include "base/timer/timer.h"
+#include "chrome/common/read_anything/read_anything.mojom-shared.h"
 #include "chrome/common/read_anything/read_anything.mojom.h"
 #include "chrome/common/read_anything/read_anything_util.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_event_generator.h"
 #include "ui/accessibility/ax_node_id_forward.h"
 #include "ui/accessibility/ax_tree_id.h"
@@ -54,6 +59,36 @@ class ReadAnythingAppModel {
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/accessibility/enums.xml:ReadAnythingEmptyState)
 
+  // Enum for keeping track of the current distillation method being used by the
+  // ReadAnythingAppController.
+  enum class DistillationMethod {
+    kScreen2x = 0,
+    kReadability = 1,
+    kMaxValue = kReadability,
+  };
+
+  // Enum for tracking the side panel's distillation mode. This determines
+  // whether the view is derived from the main content article or from
+  // a specific user selection in the main panel.
+  // TODO: crbug.com/503024139 - Track when we switch modes.
+  enum class SidePanelDistillationMode {
+    kMainContent = 0,
+    kSelection = 1,
+    kMaxValue = kSelection,
+  };
+
+  // Enum for logging selection attempts before Readability mapping is complete.
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  //
+  // LINT.IfChange(ReadAnythingEarlySelection)
+  enum class EarlySelection {
+    kSidePanelSelection = 0,
+    kMainPanelSelection = 1,
+    kMaxValue = kMainPanelSelection,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/accessibility/enums.xml:ReadAnythingEarlySelection)
+
   struct AXTreeInfo {
     explicit AXTreeInfo(std::unique_ptr<ui::AXTreeManager> manager);
     AXTreeInfo(const AXTreeInfo&) = delete;
@@ -85,10 +120,70 @@ class ReadAnythingAppModel {
     // latest tree is a new page.
     bool is_reload = false;
 
+    // Whether the latest tree is the "What's New" page.
+    bool is_whats_new = false;
+
     // TODO(41496290): Include any information that is associated with a
     // particular AXTree, namely is_pdf. Right now, this is set every time the
     // active ax tree id changes; instead, it should be set once when a new tree
     // is added.
+  };
+
+  // Stores the necessary information to determine if one link is different
+  // from another when interacting with a link from Readability distilled
+  // content.
+  struct AnchorData {
+    AnchorData();
+    ~AnchorData();
+    AnchorData(const AnchorData& other);
+    AnchorData& operator=(const AnchorData& other);
+
+    // The value of the HTML 'id' attribute (e.g., <a id="my-link">).
+    std::string html_id;
+
+    // The accessible name or visible text of the link, used by screen readers.
+    std::string name;
+
+    // The HTML 'target' attribute, indicating where to open the link (e.g.,
+    // "_blank").
+    std::string target;
+
+    // The text content of the node immediately following this link.
+    std::string text_after;
+
+    // The text content of the node immediately preceding this link.
+    std::string text_before;
+
+    // The HTML 'title' attribute, typically shown as a hover tooltip.
+    std::string title;
+
+    ui::AXNodeID id;
+  };
+
+  // Represents a segment of text within an AXNode. A distilled Readability
+  // block may be mapped to multiple AXNodes (e.g., a paragraph with a link
+  // inside); each part of that mapping is a MappingSegment.
+  struct MappingSegment {
+    ui::AXNodeID id;
+    // The 0-based start and end character offsets within the *Readability
+    // block's* text content that correspond to this AXNode.
+    int start;
+    int end;
+    // The 0-based character offset within the *AXNode's* own text content where
+    // this segment begins.
+    int ax_node_offset;
+  };
+
+  // Represents a segment of the flattened |global_ax_tree_text_| and the AXNode
+  // it comes from. This metadata allows the mapping algorithm for text
+  // selection to translate a character range found in |global_ax_tree_text_|
+  // back into its original AXNode and relative offset.
+  struct AXNodeSegment {
+    ui::AXNodeID id;
+    std::u16string text;
+    // The 0-based starting index of this node's text within the
+    // concatenated |global_ax_tree_text_| string.
+    size_t start_offset;
   };
 
   // Represents a grouping of AXTreeUpdates received in the same accessibility
@@ -99,12 +194,25 @@ class ReadAnythingAppModel {
   // rather than just a single vector containing all updates from multiple
   // accessibility events. This is so that Unserialize can be called in
   // batches on the group of Updates received from each call to
-  // AccessibilityEventReceived. Otherwise, intermediary updates might
+  // ApplyAccessibilityUpdates. Otherwise, intermediary updates might
   // cause tree inconsistency issues with the final update.
   using PendingUpdates = std::map<ui::AXTreeID, std::vector<Updates>>;
 
   static constexpr char kEmptyStateHistogramName[] =
       "Accessibility.ReadAnything.EmptyState";
+
+  static constexpr char kEarlySelectionHistogramName[] =
+      "Accessibility.ReadAnything.Readability.EarlySelection";
+
+  // Hardcoded list of words that are likely associated with "key points"
+  // sections on websites.
+  static constexpr char kKeyPointsRegex[] =
+      "\\b(key points|summary|tl;?dr|takeaways|what to know|in brief|"
+      "at a glance|the bottom line|fast facts|highlights|the gist|"
+      "need to know|overview|the short version|quick hits|key findings|"
+      "the big picture|in a nutshell|wrap up|quick read|"
+      "ai(-generated)? summary|bullet points|basic explainer|key facts|"
+      "why it matters)\\b";
 
   ReadAnythingAppModel();
   ReadAnythingAppModel(const ReadAnythingAppModel&) = delete;
@@ -114,6 +222,17 @@ class ReadAnythingAppModel {
   bool requires_distillation() const { return requires_distillation_; }
   void set_requires_distillation(bool requires_distillation) {
     requires_distillation_ = requires_distillation;
+  }
+
+  bool requires_readability_distillation() const {
+    if (!features::IsReadAnythingWithReadabilityEnabled()) {
+      return false;
+    }
+    return requires_readability_distillation_;
+  }
+  void set_requires_readability_distillation(
+      bool requires_readability_distillation) {
+    requires_readability_distillation_ = requires_readability_distillation;
   }
 
   bool requires_post_process_selection() const {
@@ -140,6 +259,13 @@ class ReadAnythingAppModel {
   bool redraw_required() const { return redraw_required_; }
   void reset_redraw_required() { redraw_required_ = false; }
 
+  bool reset_distillation_delay_timer() const {
+    return reset_distillation_delay_timer_;
+  }
+  void set_reset_distillation_delay_timer(bool reset) {
+    reset_distillation_delay_timer_ = reset;
+  }
+
   int unprocessed_selections_from_reading_mode() {
     return selections_from_reading_mode_;
   }
@@ -156,6 +282,13 @@ class ReadAnythingAppModel {
   int words_distilled() const { return words_distilled_; }
   void set_words_distilled(const int words_distilled) {
     words_distilled_ = words_distilled;
+  }
+
+  std::optional<base::TimeTicks> page_start_time() const {
+    return page_start_time_;
+  }
+  void set_page_start_time(std::optional<base::TimeTicks> time) {
+    page_start_time_ = time;
   }
 
   std::optional<base::TimeTicks> line_focus_session_start_time() const {
@@ -189,6 +322,22 @@ class ReadAnythingAppModel {
     return supported_fonts_;
   }
 
+  // Returns the cached list of supported fonts. The first
+  // `kReadAnythingMaxRecentFonts` are the recently used fonts.
+  const std::vector<std::string>& prioritized_supported_fonts() const {
+    return prioritized_supported_fonts_;
+  }
+
+  // Adds the given font to the list of recently used fonts, trims the list to
+  // the limit `kReadAnythingMaxRecentFonts`, and updates the prioritized
+  // supported fonts list.
+  void UpdateRecentlyUsedFonts(const std::string& font);
+
+  // Updates the prioritized supported fonts list based on the recently used
+  // fonts and supported fonts.
+  void UpdatePrioritizedSupportedFonts(
+      const std::vector<std::string>& recently_used_fonts = {});
+
   const std::string& font_name() const { return font_name_; }
   void set_font_name(std::string font_name) {
     font_name_ = std::move(font_name);
@@ -202,6 +351,56 @@ class ReadAnythingAppModel {
   bool images_enabled() const { return images_enabled_; }
   void set_images_enabled(bool images_enabled) {
     images_enabled_ = images_enabled;
+  }
+
+  // Returns the distillation method that produced the content currently
+  // visible in the UI. This is used by the WebUI to correctly interpret
+  // and render the current model data.
+  DistillationMethod current_content_distillation_method() const {
+    return current_content_distillation_method_;
+  }
+  void set_current_content_distillation_method(DistillationMethod method) {
+    current_content_distillation_method_ = method;
+  }
+
+  // Returns the distillation method that will be used for the next content
+  // update. Note: For Readability, distillation occurs in the browser process,
+  // so this represents the source of the next content update we will receive.
+  DistillationMethod next_distillation_method() const {
+    return next_distillation_method_;
+  }
+  void set_next_distillation_method(DistillationMethod method) {
+    next_distillation_method_ = method;
+  }
+  bool is_readability_next_distillation_method() const {
+    return next_distillation_method() == DistillationMethod::kReadability;
+  }
+  bool is_readability_current_distillation_method() const {
+    return current_content_distillation_method_ ==
+           DistillationMethod::kReadability;
+  }
+  bool should_apply_accessibility_updates_for_readability() const {
+    // Accessibility updates for Readability shouldn't be applied outside
+    // of the regular accessibility update process if Readability is disabled.
+    if (!features::IsReadAnythingWithReadabilityEnabled()) {
+      return false;
+    }
+
+    if (is_readability_next_distillation_method() &&
+        distillation_state_ ==
+            read_anything::mojom::ReadAnythingDistillationState::
+                kDistillationInProgress) {
+      return true;
+    }
+
+    if (is_readability_current_distillation_method() &&
+        distillation_state_ ==
+            read_anything::mojom::ReadAnythingDistillationState::
+                kDistillationWithContent) {
+      return true;
+    }
+
+    return false;
   }
 
   read_anything::mojom::LetterSpacing letter_spacing() const {
@@ -223,34 +422,118 @@ class ReadAnythingAppModel {
     color_theme_ = color_theme;
   }
 
-  read_anything::mojom::LineFocus line_focus() const { return line_focus_; }
-  void set_line_focus(read_anything::mojom::LineFocus line_focus) {
-    line_focus_ = line_focus;
+  read_anything::mojom::LineFocus last_non_disabled_line_focus() const {
+    return last_non_disabled_line_focus_;
+  }
+  void set_last_non_disabled_line_focus(
+      read_anything::mojom::LineFocus last_non_disabled_line_focus) {
+    last_non_disabled_line_focus_ = last_non_disabled_line_focus;
+  }
+
+  bool line_focus_enabled() const { return line_focus_enabled_; }
+  void set_line_focus_enabled(bool line_focus_enabled) {
+    line_focus_enabled_ = line_focus_enabled;
   }
 
   // Sometimes iframes can return selection objects that have a valid id but
   // aren't in the tree.
   bool has_selection() const {
-    return start_.is_valid() && GetAXNode(start_.id);
+    if (IsWhatsNew()) {
+      return start_.is_valid() && end_.is_valid() &&
+             GetAXNodeFromRoot(start_.id) && GetAXNodeFromRoot(end_.id);
+    }
+    return start_.is_valid() && end_.is_valid() && GetAXNode(start_.id) &&
+           GetAXNode(end_.id);
   }
   ui::AXNodeID start_node_id() const { return start_.id; }
   ui::AXNodeID end_node_id() const { return end_.id; }
   int start_offset() const { return start_.offset; }
   int end_offset() const { return end_.offset; }
 
-  bool distillation_in_progress() const { return distillation_in_progress_; }
-  void set_distillation_in_progress(bool distillation_in_progress) {
-    distillation_in_progress_ = distillation_in_progress;
+  bool screen2x_distiller_running() const {
+    return screen2x_distiller_running_;
+  }
+  void set_screen2x_distiller_running(bool screen2x_distiller_running) {
+    screen2x_distiller_running_ = screen2x_distiller_running;
   }
 
-  // The following methods are used for the screen2x data collection pipeline.
-  // They all have CHECKs to ensure that the DataCollectionModeForScreen2x
-  // feature flag is enabled.
-  bool ScreenAIServiceReadyForDataCollection() const;
-  void SetScreenAIServiceReadyForDataCollection();
-  bool PageFinishedLoadingForDataCollection() const;
-  void SetDataCollectionForScreen2xCallback(
-      base::OnceCallback<void()> callback);
+  bool should_extract_anchors_from_tree_for_readability() const {
+    return should_extract_anchors_from_tree_for_readability_;
+  }
+  void set_should_extract_anchors_from_tree_for_readability(
+      bool should_extract_anchors_from_tree_for_readability) {
+    should_extract_anchors_from_tree_for_readability_ =
+        should_extract_anchors_from_tree_for_readability;
+  }
+
+  bool distillation_in_progress() {
+    return distillation_state() ==
+               read_anything::mojom::ReadAnythingDistillationState::
+                   kDistillationInProgress ||
+           screen2x_distiller_running();
+  }
+
+  // Processes the tree anchors.
+  // Returns true indicating that the tree was successfully processed and we can
+  // notify the frontend that anchors are ready.
+  bool ProcessAXTreeAnchors();
+  void ResetAXTreeAnchors();
+  const std::map<std::string, std::vector<AnchorData>>& ax_tree_anchors()
+      const {
+    return ax_tree_anchors_;
+  }
+
+  const std::vector<std::u16string>& readability_text_blocks() const {
+    return readability_text_blocks_;
+  }
+  void set_readability_text_blocks(std::vector<std::u16string> blocks) {
+    readability_text_blocks_ = std::move(blocks);
+  }
+
+  bool should_map_rendered_text_to_tree_for_readability() const {
+    return should_map_rendered_text_to_tree_for_readability_;
+  }
+  void set_should_map_rendered_text_to_tree_for_readability(
+      bool should_map_rendered_text_to_tree_for_readability) {
+    should_map_rendered_text_to_tree_for_readability_ =
+        should_map_rendered_text_to_tree_for_readability;
+  }
+
+  const std::vector<std::vector<MappingSegment>>& text_to_ax_map() const {
+    return text_to_ax_map_;
+  }
+
+  // Maps the distilled rendered text from the WebUI with the AXtree.
+  // Returns true if the AXtree was successfully processed and we can
+  // notify the frontend that the mapping is ready.
+  bool MapRenderedTextToTree(const std::vector<std::u16string>& blocks);
+
+  // Returns the AX mapping for the given index. This is the primary interface
+  // for the WebUI to consume the results of the mapping algorithm. The index
+  // corresponds to the index of the block in readability_text_blocks_ and
+  // text_to_ax_map_.
+  std::vector<MappingSegment> GetAXMapping(size_t index) const;
+
+  const std::u16string& global_ax_tree_text() const {
+    return global_ax_tree_text_;
+  }
+  const std::vector<AXNodeSegment>& flattened_ax_tree_nodes() const {
+    return flattened_ax_tree_nodes_;
+  }
+
+  bool is_readability_mapping_in_progress() const {
+    return is_readability_mapping_in_progress_;
+  }
+  void set_is_readability_mapping_in_progress(bool ready) {
+    is_readability_mapping_in_progress_ = ready;
+  }
+
+  bool has_logged_early_selection() const {
+    return has_logged_early_selection_;
+  }
+  void set_has_logged_early_selection(bool logged) {
+    has_logged_early_selection_ = logged;
+  }
 
   bool page_finished_loading() const { return page_finished_loading_; }
   void set_page_finished_loading(bool page_finished_loading) {
@@ -296,6 +579,7 @@ class ReadAnythingAppModel {
   void SetUrlInformationCallback(base::OnceCallback<void()> callback);
   bool IsDocs() const;
   bool IsReload() const;
+  bool IsWhatsNew() const;
 
   const std::set<ui::AXNodeID>* GetCurrentlyVisibleNodes() const;
 
@@ -318,7 +602,9 @@ class ReadAnythingAppModel {
       bool links_enabled,
       bool images_enabled,
       read_anything::mojom::Colors color,
-      read_anything::mojom::LineFocus line_focus);
+      read_anything::mojom::LineFocus last_non_disabled_line_focus,
+      bool line_focus_enabled,
+      const std::vector<std::string>& recently_used_fonts);
 
   void OnScroll(bool on_selection, bool from_reading_mode) const;
 
@@ -336,11 +622,28 @@ class ReadAnythingAppModel {
   // the distilled content.
   bool PostProcessSelection();
 
+  // Synchronizes the model's selection endpoints (start_ and end_) with the
+  // latest state of the active accessibility tree. Ensures that the endpoints
+  // are stored in forward tree order.
+  void UpdateSelectionEndpoints();
+
+  // Returns true if the user's current selection is entirely contained within
+  // the distilled article content (display_node_ids_).
+  bool IsSelectionInDistilledContent() const;
+
+  // Traverses the accessibility tree to populate |selection_node_ids_| with
+  // the nodes required to render a custom user selection in the side panel.
+  void ComputeSelectionNodeIdsForSelectionMode();
+
   // Computes display nodes from the content nodes. These display nodes will be
   // displayed in the Read Anything app.ts by default.
   void ComputeDisplayNodeIdsForDistilledTree();
 
   ui::AXSerializableTree* GetActiveTree() const;
+
+  // Returns the active AXTree if it is available, initialized, and contains a
+  // root node. Returns nullptr otherwise.
+  ui::AXSerializableTree* GetValidActiveTree() const;
 
   bool ContainsTree(const ui::AXTreeID& tree_id) const;
 
@@ -350,10 +653,25 @@ class ReadAnythingAppModel {
 
   void ClearPendingUpdates();
 
-  void AccessibilityEventReceived(const ui::AXTreeID& tree_id,
-                                  Updates& updates,
-                                  std::vector<ui::AXEvent>& events,
-                                  bool speech_playing);
+  // Applies accessibility updates to the AXTree with the given tree_id.
+  // Unserializes the updates, processes generated events, and updates the
+  // model's state.
+  void ApplyAccessibilityUpdates(const ui::AXTreeID& tree_id,
+                                 Updates& updates,
+                                 std::vector<ui::AXEvent>& events);
+
+  // Queues accessibility updates to be processed later. This is used when
+  // the controller decides to not process the updates immediately to avoid
+  // interrupting the user experience. The updates are stored in
+  // pending_updates_.
+  void QueueAccessibilityUpdates(const ui::AXTreeID& tree_id,
+                                 Updates& updates,
+                                 std::vector<ui::AXEvent>& events);
+
+  // Ensures that the AXTree with the given tree_id exists in the model's
+  // tree_infos_ map. If the tree does not exist, a new one is created.
+  // Also updates the active tree ID if necessary.
+  void PrepareForAXTreeUpdates(const ui::AXTreeID& tree_id);
 
   void OnAXTreeDestroyed(const ui::AXTreeID& tree_id);
 
@@ -368,6 +686,7 @@ class ReadAnythingAppModel {
 
   void AdjustTextSize(int increment);
   void ResetTextSize();
+  void SetDefaultDistillationMethod();
 
   // PDF handling.
   bool is_pdf() const { return is_pdf_; }
@@ -379,15 +698,105 @@ class ReadAnythingAppModel {
   // TODO: crbug.com/416483312 - Longer term, reading mode should support
   // distilling from multiple trees, if they have important content.
   // Currently, reading mode only distills from a child tree if the root tree
-  // has no distillable content.
+  // has no distillable content or if the page is a PDF.
 
   // Signal if reading mode should allow use of child trees for the active tree
-  // if the web content's root AXTree has no distillable content.
+  // if the web content's root AXTree has no distillable content or if the page
+  // is a PDF.
   void AllowChildTreeForActiveTree(bool use_child_tree);
 
   bool SelectionNodesContainedInDistilledContent() const;
 
+  read_anything::mojom::ReadAnythingPresentationState
+  active_presentation_state() const {
+    return active_presentation_state_;
+  }
+  void set_active_presentation_state(
+      read_anything::mojom::ReadAnythingPresentationState
+          active_presentation_state) {
+    active_presentation_state_ = active_presentation_state;
+  }
+  bool is_active_presentation_state_opened() const {
+    return active_presentation_state_ ==
+               read_anything::mojom::ReadAnythingPresentationState::
+                   kInSidePanel ||
+           active_presentation_state_ ==
+               read_anything::mojom::ReadAnythingPresentationState::
+                   kInImmersiveOverlay;
+  }
+
+  read_anything::mojom::ReadAnythingDistillationState distillation_state()
+      const {
+    return distillation_state_;
+  }
+  void set_distillation_state(
+      read_anything::mojom::ReadAnythingDistillationState distillation_state) {
+    distillation_state_ = distillation_state;
+  }
+
+  SidePanelDistillationMode side_panel_distillation_mode() const {
+    return side_panel_distillation_mode_;
+  }
+
+  bool has_pending_selection() const { return has_pending_selection_; }
+
+  // If the original page has something that looks like a key points section.
+  // This is a rough heuristic intended for metrics only and is not guaranteed.
+  bool MaybeHasKeyPointsSection() const;
+  bool IsNodeLikelyKeyPoints(ui::AXNode* node) const;
+  std::string GetKeyPointsRegex() const { return kKeyPointsRegex; }
+
  private:
+  // TODO(crbug.com/513618559): Move text selection mapping algorithm logic
+  // into static utility methods / class.
+  // An index for searching substrings within the flattened
+  // |global_ax_tree_text_|. It uses a Suffix Array to find any string in O(log
+  // N) time, where N is the length of the article.
+  struct SuffixArray {
+    SuffixArray();
+    ~SuffixArray();
+
+    // A non-owning reference to the text being indexed.
+    std::u16string_view text;
+
+    // A list of starting indices of all suffixes in |text|, sorted
+    // lexicographically.
+    std::vector<uint32_t> suffix_array;
+
+    // Build the index for the given text. This must be called before FindRange.
+    void Build(std::u16string_view text);
+
+    // Finds the range of all occurrences of |query| within the indexed text.
+    // Returns a pair of iterators into |suffix_array| defining the range
+    // [begin, end). The number of occurrences is std::distance(begin, end).
+    std::pair<std::vector<uint32_t>::const_iterator,
+              std::vector<uint32_t>::const_iterator>
+    FindRange(std::u16string_view query) const;
+  };
+
+  // A confirmed alignment point between a distilled Readability block and a
+  // character range in the global flattened AXTree text.
+  struct AlignmentAnchor {
+    size_t block_index;
+    size_t block_start;
+    size_t block_end;
+    size_t ax_start;
+    size_t ax_end;
+  };
+
+  // Represents a specific slice of text within a distilled Readability block
+  // that is still waiting to be mapped. Used by GapSubstring alignment to
+  // narrow down the search as anchors are "pinned".
+  struct TextRange {
+    size_t block_index;
+    // Character offsets within readability_text_blocks_[block_index].
+    size_t start;
+    size_t end;
+
+    size_t length() const { return end > start ? end - start : 0; }
+    bool empty() const { return length() == 0; }
+  };
+
   struct SelectionEndpoint {
     enum class Source {
       kAnchor,
@@ -407,6 +816,8 @@ class ReadAnythingAppModel {
 
   ui::AXSerializableTree* GetTreeFromId(const ui::AXTreeID& tree_id) const;
 
+  ui::AXNode* GetAXNodeFromRoot(const ui::AXNodeID& ax_node_id) const;
+
   void ResetSelection();
 
   bool ContentNodesOnlyContainHeadings();
@@ -419,20 +830,113 @@ class ReadAnythingAppModel {
 
   // The tree size arguments are used to determine if distillation of a PDF is
   // necessary.
-  void ProcessGeneratedEvents(const ui::AXEventGenerator& event_generator,
+  void ProcessGeneratedEvents(const ui::AXTreeID& tree_id,
+                              const ui::AXEventGenerator& event_generator,
                               size_t prev_tree_size,
                               size_t tree_size);
 
-  // Runs the data collection for screen2x pipeline, provided in the form of a
-  // callback from the ReadAnythingAppController. This should only be called
-  // when the DataCollectionModeForScreen2x feature is enabled.
-  void MaybeRunDataCollectionForScreen2xCallback();
+  void EnsureAXTreeExists(const ui::AXTreeID& tree_id);
 
-  void OnPageLoadTimerTriggered();
-  void OnTreeChangeTimerTriggered();
+  void UpdateActiveTreeIfNeeded(const ui::AXTreeID& tree_id);
 
   void SetFontSize(double font_size, int increment = 0);
   void SetUkmSourceId(ukm::SourceId ukm_source_id);
+  std::map<std::string, std::vector<AnchorData>> CollectAnchorsFromAXTree(
+      ui::AXSerializableTree* tree);
+
+  // Identifies blocks that appear exactly once in both the original AXTree
+  // and the distilled Readability output.
+  std::vector<AlignmentAnchor> FindGloballyUniqueBlocks(
+      const std::vector<std::u16string>& blocks,
+      const SuffixArray& index,
+      const base::flat_map<std::u16string_view, int>& block_counts);
+
+  // Filters alignment anchor candidates using the Longest Increasing
+  // Subsequence (LIS) algorithm based on AXTree positions. Establishing a
+  // monotonic order is required for the recursive gap alignment step in the
+  // text selection mapping algorithm, as it  ensures that the search ranges
+  // between anchors are valid and sequential.
+  std::vector<AlignmentAnchor> FilterMonotonicAnchors(
+      std::vector<AlignmentAnchor> candidates);
+
+  // Recursively fills the gaps between established anchors by searching for the
+  // longest common unique substrings.
+  void GapSubstringAlignment(const std::vector<std::u16string>& blocks,
+                             const SuffixArray& index,
+                             const std::vector<AlignmentAnchor>& major_anchors);
+
+  // Converts the gap search space from block indices into unmapped TextRanges
+  // to trigger AlignSubstring for the defined gap.
+  void AlignGap(const std::vector<std::u16string>& blocks,
+                const SuffixArray& index,
+                size_t block_start,
+                size_t block_end,
+                size_t ax_start,
+                size_t ax_end);
+
+  // Recursively finds and maps the Longest Locally Unique Common Substring
+  // (LULCS) within a specific distilled and AXTree gap.
+  void AlignSubstring(const std::vector<std::u16string>& blocks,
+                      const SuffixArray& index,
+                      std::vector<TextRange> distilled_ranges,
+                      size_t ax_start,
+                      size_t ax_end);
+
+  // Sequentially maps the longest possible substrings for any remaining text
+  // within a gap.
+  void AlignRelativeOrder(const std::vector<std::u16string>& blocks,
+                          const SuffixArray& index,
+                          std::vector<TextRange> distilled_ranges,
+                          size_t ax_start,
+                          size_t ax_end);
+
+  // Searches for the Longest Locally Unique Common Substring (LULCS) that
+  // appears exactly once in the AXTree gap [ax_start, ax_end).
+  //
+  // The algorithm iterates through unmapped blocks, using binary search on
+  // substring length and the Suffix Array index to find global occurrences
+  // in O(log N) time. It then filters for local uniqueness within the
+  // current gap, pruning candidates shorter than the current best match.
+  //
+  // Complexity: O(G * L * log L * log N) average case, where G is the number
+  // of ranges, L is block length, and N is article length.
+  AlignmentAnchor FindLongestLocallyUniqueSubstring(
+      const std::vector<std::u16string>& blocks,
+      const SuffixArray& index,
+      const std::vector<TextRange>& distilled_ranges,
+      size_t ax_start,
+      size_t ax_end);
+
+  // Identifies all AXNodes that contribute to a given range from
+  // |global_ax_tree_text_| and creates MappingSegments with offsets relative to
+  // the distilled block.
+  // Args:
+  //  |ax_start|:  The start index of the match in |global_ax_tree_text|.
+  //  |ax_end|:    The end index (exclusive) in |global_ax_tree_text|.
+  //  |block_internal_offset|: The starting character position of this match
+  // within the rendered Readability block (usually 0 for whole-block matches).
+  std::vector<MappingSegment> CreateSegmentsForMatch(
+      size_t ax_start,
+      size_t ax_end,
+      size_t block_internal_offset);
+
+  // Traverses the AXTree to create a flattened text representation for the text
+  // selection mapping algorithm.
+  void FlattenAXTree(ui::AXSerializableTree* tree);
+
+  // Logs the execution time for each step of the Readability mapping algorithm.
+  void RecordReadabilityMappingMetrics(
+      const std::vector<std::u16string>& blocks,
+      base::TimeDelta total_duration,
+      base::TimeDelta flattening_duration,
+      base::TimeDelta suffix_array_duration,
+      base::TimeDelta initial_anchors_duration,
+      base::TimeDelta gap_alignment_duration);
+
+  // Checks if a candidate AXTree range overlaps with text that has already
+  // been mapped to a distilled block. This prevents multiple mappings to the
+  // same page's text.
+  bool IsAXRangeOccupied(size_t ax_start, size_t ax_end) const;
 
   // State.
   std::map<ui::AXTreeID, std::unique_ptr<AXTreeInfo>> tree_infos_;
@@ -467,7 +971,7 @@ class ReadAnythingAppModel {
   // Distillation is slow and happens out-of-process when Screen2x is running.
   // This boolean marks when distillation is in progress to avoid sending
   // new distillation requests during that time.
-  bool distillation_in_progress_ = false;
+  bool screen2x_distiller_running_ = false;
 
   // A mapping of a tree ID to a queue of pending updates on the active AXTree,
   // which will be unserialized once distillation completes.
@@ -498,6 +1002,9 @@ class ReadAnythingAppModel {
   std::vector<std::string> supported_fonts_ =
       GetSupportedFonts(base_language_code_);
 
+  // Cached set of fonts based on supported fonts and recently used fonts.
+  std::vector<std::string> prioritized_supported_fonts_;
+
   // Theme information.
   std::string font_name_ = supported_fonts_.front();
   float font_size_;
@@ -510,8 +1017,9 @@ class ReadAnythingAppModel {
   read_anything::mojom::Colors color_theme_ =
       read_anything::mojom::Colors::kDefaultValue;
 
-  read_anything::mojom::LineFocus line_focus_ =
-      read_anything::mojom::LineFocus::kDefaultValue;
+  read_anything::mojom::LineFocus last_non_disabled_line_focus_ =
+      read_anything::mojom::LineFocus::kMediumStaticWindow;
+  bool line_focus_enabled_ = false;
 
   // Invariant: Either both endpoints are `!is_valid()`, or they are both valid
   // and non-equal.
@@ -519,12 +1027,18 @@ class ReadAnythingAppModel {
   SelectionEndpoint end_;
 
   bool requires_distillation_ = false;
+  bool requires_readability_distillation_ = false;
   bool reset_draw_timer_ = false;
   bool requires_post_process_selection_ = false;
+  bool has_pending_selection_ = false;
   int selections_from_reading_mode_ = 0;
   int words_seen_ = 0;
   int words_heard_ = 0;
   int words_distilled_ = 0;
+
+  // The time when the page successfully distills. Used to measure the time
+  // spent on a page with Reading mode.
+  std::optional<base::TimeTicks> page_start_time_;
 
   // Line focus session information. Used for logging.
   std::optional<base::TimeTicks> line_focus_session_start_time_;
@@ -532,17 +1046,6 @@ class ReadAnythingAppModel {
   int line_focus_scroll_distance_ = 0;
   int line_focus_keyboard_lines_ = 0;
   int line_focus_speech_lines_ = 0;
-
-  // For screen2x data collection, Chrome is launched from the CLI to open one
-  // webpage. We record the result of the distill() call for this entire
-  // webpage, so we only make the call once the webpage finished loading and
-  // screen ai has loaded.
-  bool screen_ai_service_ready_for_data_collection_ = false;
-  bool waiting_for_page_load_completion_timer_trigger_ = true;
-  bool waiting_for_tree_change_timer_trigger_ = true;
-  base::OneShotTimer timer_since_page_load_for_data_collection_;
-  base::RetainingOneShotTimer timer_since_tree_changed_for_data_collection_;
-  base::OnceCallback<void()> data_collection_for_screen2x_callback_;
 
   // Whether the webpage has finished loading or not.
   bool page_finished_loading_ = false;
@@ -555,6 +1058,79 @@ class ReadAnythingAppModel {
 
   bool will_hide_ = false;
 
+  // Whether the distillation delay timer should be reset.
+  bool reset_distillation_delay_timer_ = false;
+
+  // Whether we should traverse the tree to find all the anchors on it.
+  bool should_extract_anchors_from_tree_for_readability_;
+  // Holds a map of an URL string with all the AX Tree Nodes that are related
+  // to that specific URL.
+  std::map<std::string, std::vector<AnchorData>> ax_tree_anchors_;
+
+  // Holds the text blocks extracted from the current rendered distillation. A
+  // "block" represents the textContent of a non-whitespace DOM text node from
+  // the WebUI. Blocks are used as one of the inputs along with the AXTree for
+  // the select text mapping algorithm. This algorithm maps these rendered
+  // blocks back to their source AXNodes.
+  std::vector<std::u16string> readability_text_blocks_;
+
+  // Whether we should execute the mapping algorithm between the rendered text
+  // and the AXtree that is used to populate the nodestore for a readability
+  // distillation.
+  bool should_map_rendered_text_to_tree_for_readability_ = false;
+
+  // A mapping from a distilled Readability text block (by index) to its
+  // corresponding AXTree segments.
+  //
+  // Structure:
+  // The index of this vector matches the index of the block in
+  // readability_text_blocks_.
+  //   - Each entry is a vector of MappingSegments, because one distilled block
+  //     might correspond to multiple underlying AXNodes (e.g., a paragraph
+  //     containing a link).
+  //   - If a block fails to map, the entry at that index will be an empty
+  //     vector.
+  std::vector<std::vector<MappingSegment>> text_to_ax_map_;
+
+  // A contiguous string representation of all leaf text nodes in the original
+  // page's AXTree, in reading order. This serves as the global "search space"
+  // for the select text mapping algorithm.
+  std::u16string global_ax_tree_text_;
+
+  // A mapping that links character offsets in |global_ax_tree_text_| back to
+  // their source AXNodes. Each segment stores the AXNodeID and its starting
+  // position within the global string. This is used to translate mapping
+  // results back into AXTree coordinates.
+  std::vector<AXNodeSegment> flattened_ax_tree_nodes_;
+
+  // Keeps track of which parts of the |global_ax_tree_text_| have already been
+  // assigned to a full distilled block. Needed to ensure GapSubstringAlignment
+  // doesn't map something to already mapped text in a gap (Ex: a shuffled
+  // unique block not in the monotonic anchor list).
+  // Each pair is [start, end)
+  std::vector<std::pair<size_t, size_t>> occupied_ax_ranges_;
+
+  // The minimum number of characters required for a substring to be considered
+  // an anchor during GapSubstringAlignment mapping.
+  static constexpr size_t kMinAnchorLength = 3;
+
+  // The minimum number of characters required for a substring to be considered
+  // valid during RelativeOrderAlignment mapping.
+  static constexpr size_t kMinSequentialMatchLength = 5;
+
+  // The distillation method that will be used for the next content update.
+  DistillationMethod next_distillation_method_;
+
+  // The distillation method that produced the content currently visible in the
+  // UI.
+  DistillationMethod current_content_distillation_method_;
+
+  // Tracks whether the side panel distillation is derived from the main content
+  // article (even for an empty distillation) or from a specific user
+  // selection in the main panel.
+  SidePanelDistillationMode side_panel_distillation_mode_ =
+      SidePanelDistillationMode::kMainContent;
+
   std::map<ui::AXTreeID, ukm::SourceId> pending_ukm_sources_;
 
   // Possible child tree ids that could be used to distill content if the
@@ -565,6 +1141,19 @@ class ReadAnythingAppModel {
   // If reading mode should attempt to use child trees to distill content. This
   // should only be true if the root tree has no distillable content.
   bool may_use_child_for_active_tree_ = false;
+
+  // Whether the Readability-to-AXTree mapping algorithm is running or has
+  // finished / not started.
+  bool is_readability_mapping_in_progress_ = false;
+
+  // Whether an early selection attempt has been logged for the current page.
+  bool has_logged_early_selection_ = false;
+
+  read_anything::mojom::ReadAnythingPresentationState
+      active_presentation_state_ =
+          read_anything::mojom::ReadAnythingPresentationState::kUndefined;
+  read_anything::mojom::ReadAnythingDistillationState distillation_state_ =
+      read_anything::mojom::ReadAnythingDistillationState::kNotAttempted;
 
   // List of observers of model state changes.
   base::ObserverList<ModelObserver, /*check_empty=*/true> observers_;

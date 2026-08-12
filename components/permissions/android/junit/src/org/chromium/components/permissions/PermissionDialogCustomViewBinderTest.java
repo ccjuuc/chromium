@@ -15,7 +15,6 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.TextView;
 
-import androidx.appcompat.content.res.AppCompatResources;
 import androidx.core.content.res.ResourcesCompat;
 import androidx.test.filters.SmallTest;
 
@@ -89,6 +88,10 @@ public class PermissionDialogCustomViewBinderTest {
     @Test
     @SmallTest
     public void testIcon_WithTint() {
+        testIcon_WithTintImpl();
+    }
+
+    private void testIcon_WithTintImpl() {
         Drawable drawable =
                 ResourcesCompat.getDrawable(
                         mActivity.getResources(),
@@ -99,7 +102,7 @@ public class PermissionDialogCustomViewBinderTest {
         mPropertyModel.set(PermissionDialogCustomViewProperties.ICON, drawable);
         mPropertyModel.set(
                 PermissionDialogCustomViewProperties.ICON_TINT,
-                AppCompatResources.getColorStateList(mActivity, iconTint));
+                mActivity.getColorStateList(iconTint));
 
         TextViewWithCompoundDrawables permissionDialogMessageText =
                 mCustomView.findViewById(R.id.text);
@@ -116,7 +119,7 @@ public class PermissionDialogCustomViewBinderTest {
     @Test
     @SmallTest
     public void testIcon_ResetTint() {
-        testIcon_WithTint();
+        testIcon_WithTintImpl();
 
         mPropertyModel.set(PermissionDialogCustomViewProperties.ICON_TINT, null);
 

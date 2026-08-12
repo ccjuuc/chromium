@@ -17,9 +17,10 @@
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
+#include "chrome/browser/infobars/infobar_features.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/collected_cookies_infobar_delegate.h"
 #include "chrome/browser/ui/ui_features.h"
@@ -172,9 +173,15 @@ class PageSpecificSiteDataDialogModelDelegate : public ui::DialogModelDelegate {
     }
 
     if (status_changed_) {
-      CollectedCookiesInfoBarDelegate::Create(
-          infobars::ContentInfoBarManager::FromWebContents(
-              web_contents_.get()));
+      if (infobars::IsInfoBarMigrated(
+              infobars::InfoBarDelegate::COLLECTED_COOKIES_INFOBAR_DELEGATE)) {
+        PageSpecificSiteDataDialogController::ShowCollectedCookiesInfoBar(
+            web_contents_.get());
+      } else {
+        CollectedCookiesInfoBarDelegate::Create(
+            infobars::ContentInfoBarManager::FromWebContents(
+                web_contents_.get()));
+      }
     }
 
     // Reset the dialog reference in the user data. If the dialog is opened
@@ -313,7 +320,9 @@ class PageSpecificSiteDataDialogModelDelegate : public ui::DialogModelDelegate {
   }
 
   void OnManageOnDeviceSiteDataClicked() {
-    Browser* browser = chrome::FindBrowserWithTab(web_contents_.get());
+    BrowserWindowInterface* browser =
+        GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+            web_contents_.get());
     chrome::ShowSettingsSubPage(browser, chrome::kOnDeviceSiteDataSubpage);
   }
 

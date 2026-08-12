@@ -309,7 +309,10 @@ void GetAndroidCdmCapability(const std::string& key_system,
   }
 
   // Multiple processes are not allowed, so call MediaDrmBridge directly.
-  if (!MediaDrmBridge::IsKeySystemSupported(key_system)) {
+  auto supported_containers =
+      media::MediaDrmBridge::GetSupportedContainers(key_system);
+
+  if (supported_containers.empty()) {
     std::move(cdm_capability_cb)
         .Run(base::unexpected(
             media::CdmCapabilityQueryStatus::kUnsupportedKeySystem));
@@ -322,7 +325,7 @@ void GetAndroidCdmCapability(const std::string& key_system,
     security_level = is_secure ? media::MediaDrmBridge::SECURITY_LEVEL_1
                                : media::MediaDrmBridge::SECURITY_LEVEL_3;
   }
-  auto version = MediaDrmBridge::GetVersion(key_system, security_level);
+  auto version = MediaDrmBridge::MaybeGetVersion(key_system, security_level);
   if (!version.has_value() &&
       version.error() ==
           media::CreateCdmStatus::kAndroidFailedL1SecurityLevel) {
@@ -334,12 +337,9 @@ void GetAndroidCdmCapability(const std::string& key_system,
     return;
   }
 
-  bool webm_supported =
-      MediaDrmBridge::IsKeySystemSupportedWithType(key_system, "video/webm");
-  bool mp4_supported =
-      MediaDrmBridge::IsKeySystemSupportedWithType(key_system, "video/mp4");
   DetermineKeySystemSupport(key_system, is_secure, std::move(cdm_capability_cb),
-                            webm_supported, mp4_supported,
+                            supported_containers.contains("video/webm"),
+                            supported_containers.contains("video/mp4"),
                             version.value_or(base::Version()));
 }
 

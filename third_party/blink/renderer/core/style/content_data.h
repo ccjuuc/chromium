@@ -27,6 +27,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_CONTENT_DATA_H_
 
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/css/css_symbols_value.h"
 #include "third_party/blink/renderer/core/css/css_value.h"
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/core/style/style_image.h"
@@ -39,6 +40,7 @@
 
 namespace blink {
 
+class CounterStyle;
 class LayoutObject;
 class TreeScope;
 class StyleEngine;
@@ -122,11 +124,8 @@ class ImageContentData final : public ContentData {
   LayoutObject* CreateLayoutObject(LayoutObject& owner) const override;
 
   bool Equals(const ContentData& data) const override {
-    if (!data.IsImage()) {
-      return false;
-    }
-    return *static_cast<const ImageContentData&>(data).GetImage() ==
-           *GetImage();
+    const auto* other = DynamicTo<ImageContentData>(data);
+    return other && *other->GetImage() == *GetImage();
   }
 
   void Trace(Visitor*) const override;
@@ -187,10 +186,8 @@ class TextContentData final : public ContentData {
   LayoutObject* CreateLayoutObject(LayoutObject& owner) const override;
 
   bool Equals(const ContentData& data) const override {
-    if (!data.IsText()) {
-      return false;
-    }
-    return static_cast<const TextContentData&>(data).GetText() == GetText();
+    const auto* other = DynamicTo<TextContentData>(data);
+    return other && other->GetText() == GetText();
   }
 
   String DebugString() const override { return text_; }
@@ -219,10 +216,8 @@ class AltTextContentData final : public ContentData {
   LayoutObject* CreateLayoutObject(LayoutObject& owner) const override;
 
   bool Equals(const ContentData& data) const override {
-    if (!data.IsAltText()) {
-      return false;
-    }
-    return static_cast<const AltTextContentData&>(data).GetText() == GetText();
+    const auto* other = DynamicTo<AltTextContentData>(data);
+    return other && other->GetText() == GetText();
   }
 
   String DebugString() const override { return StrCat({"<alt: ", text_, ">"}); }
@@ -248,29 +243,37 @@ struct CounterData {
   CounterData(const AtomicString& identifier,
               const AtomicString& style,
               const AtomicString& separator,
-              const TreeScope* tree_scope)
+              const TreeScope* tree_scope,
+              const CounterStyle* symbols_counter_style = nullptr)
       : identifier(identifier),
         list_style(style),
         separator(separator),
-        tree_scope(tree_scope) {}
+        tree_scope(tree_scope),
+        symbols_counter_style(symbols_counter_style) {}
 
-  void Trace(Visitor* v) const { v->Trace(tree_scope); }
+  void Trace(Visitor*) const;
 
   AtomicString identifier;
   AtomicString list_style;
   AtomicString separator;
   Member<const TreeScope> tree_scope;
+
+  // The anonymous counter style built eagerly from a symbols() function; null
+  // for a named <counter-style>. It is the source of truth for the symbols()
+  // computed value.
+  Member<const CounterStyle> symbols_counter_style;
 };
 
 class CounterContentData : public ContentData {
   friend class ContentData;
 
  public:
-  CounterContentData(const AtomicString& identifier,
-                     const AtomicString& style,
-                     const AtomicString& separator,
-                     const TreeScope* tree_scope)
-      : counter_data_(identifier, style, separator, tree_scope) {}
+  CounterContentData(
+      const AtomicString& identifier,
+      const AtomicString& style,
+      const AtomicString& separator,
+      const TreeScope* tree_scope,
+      const cssvalue::CSSSymbolsValue* list_style_symbols_function = nullptr);
 
   explicit CounterContentData(CounterData counter_data)
       : counter_data_(std::move(counter_data)) {}
@@ -283,6 +286,13 @@ class CounterContentData : public ContentData {
   const AtomicString& Separator() const { return counter_data_.separator; }
   const TreeScope* GetTreeScope() const { return counter_data_.tree_scope; }
 
+  const CounterStyle* GetSymbolsCounterStyle() const {
+    return counter_data_.symbols_counter_style.Get();
+  }
+
+  const CounterStyle& ResolveCounterStyle(
+      const StyleEngine& style_engine) const;
+
   void Trace(Visitor*) const override;
 
   String DebugString() const override { return "<counter>"; }
@@ -293,17 +303,7 @@ class CounterContentData : public ContentData {
   }
 
  protected:
-  bool Equals(const ContentData& data) const override {
-    if (!data.IsCounter()) {
-      return false;
-    }
-    const CounterContentData& other =
-        static_cast<const CounterContentData&>(data);
-    return Identifier() == other.Identifier() &&
-           ListStyle() == other.ListStyle() &&
-           Separator() == other.Separator() &&
-           GetTreeScope() == other.GetTreeScope();
-  }
+  bool Equals(const ContentData& data) const override;
 
   CounterData counter_data_;
 };
@@ -340,12 +340,9 @@ class AltCounterContentData : public CounterContentData {
   }
 
   bool Equals(const ContentData& data) const override {
-    if (!data.IsAltCounter()) {
-      return false;
-    }
-    const AltCounterContentData& other =
-        static_cast<const AltCounterContentData&>(data);
-    return CounterContentData::Equals(other) && GetText() == other.GetText();
+    const auto* other = DynamicTo<AltCounterContentData>(data);
+    return other && CounterContentData::Equals(*other) &&
+           GetText() == other->GetText();
   }
 
   // Text value of counter() or counters() to be used in ax object.
@@ -370,10 +367,8 @@ class QuoteContentData final : public ContentData {
   LayoutObject* CreateLayoutObject(LayoutObject& owner) const override;
 
   bool Equals(const ContentData& data) const override {
-    if (!data.IsQuote()) {
-      return false;
-    }
-    return static_cast<const QuoteContentData&>(data).Quote() == Quote();
+    const auto* other = DynamicTo<QuoteContentData>(data);
+    return other && other->Quote() == Quote();
   }
 
   String DebugString() const override { return "<quote>"; }

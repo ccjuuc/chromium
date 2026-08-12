@@ -25,16 +25,16 @@ base::android::ScopedJavaLocalRef<jobject> ToJavaPermissionsData(
 
 std::vector<PermissionsData> GetRevokedPermissions(Profile* profile);
 
-void RegrantPermissions(Profile* profile, std::string& primary_pattern);
+void RegrantPermissions(Profile* profile, const std::string& primary_pattern);
 
 void UndoRegrantPermissions(Profile* profile,
-                            PermissionsData& permissions_data);
+                            const PermissionsData& permissions_data);
 
 void ClearRevokedPermissionsReviewList(Profile* profile);
 
 void RestoreRevokedPermissionsReviewList(
     Profile* profile,
-    std::vector<PermissionsData>& permissions_data_list);
+    const std::vector<PermissionsData>& permissions_data_list);
 
 namespace jni_zero {
 

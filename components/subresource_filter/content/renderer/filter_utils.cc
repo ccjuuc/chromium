@@ -31,7 +31,6 @@ url_pattern_index::proto::ElementType ToElementType(
     case network::mojom::RequestDestination::kServiceWorker:
     case network::mojom::RequestDestination::kAudioWorklet:
     case network::mojom::RequestDestination::kPaintWorklet:
-    case network::mojom::RequestDestination::kSharedStorageWorklet:
     case network::mojom::RequestDestination::kSharedWorker:
       return url_pattern_index::proto::ELEMENT_TYPE_SCRIPT;
     case network::mojom::RequestDestination::kStyle:
@@ -51,7 +50,7 @@ url_pattern_index::proto::ElementType ToElementType(
 
     case network::mojom::RequestDestination::kDocument:
     case network::mojom::RequestDestination::kWebIdentity:
-    case network::mojom::RequestDestination::kDictionary:
+    case network::mojom::RequestDestination::kCompressionDictionary:
     case network::mojom::RequestDestination::kReport:
     case network::mojom::RequestDestination::kManifest:
     default:

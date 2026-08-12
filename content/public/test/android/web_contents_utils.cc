@@ -46,7 +46,7 @@ void JavaScriptResultCallback(const ScopedJavaGlobalRef<jobject>& callback,
 static void JNI_WebContentsUtils_ReportAllFrameSubmissions(
     JNIEnv* env,
     const JavaRef<jobject>& jweb_contents,
-    jboolean enabled) {
+    bool enabled) {
   WebContents* web_contents = WebContents::FromJavaWebContents(jweb_contents);
   RenderFrameMetadataProviderImpl* provider =
       RenderWidgetHostImpl::From(web_contents->GetRenderViewHost()->GetWidget())
@@ -113,11 +113,8 @@ static void JNI_WebContentsUtils_NotifyCopyableViewInWebContents(
       WebContents::FromJavaWebContents(jweb_contents));
 
   NotifyCopyableViewInWebContents(
-      web_contents, base::BindOnce(
-                        [](const ScopedJavaGlobalRef<jobject>& inner_callback) {
-                          base::android::RunRunnableAndroid(inner_callback);
-                        },
-                        ScopedJavaGlobalRef<jobject>(done_callback)));
+      web_contents, base::BindOnce(jni_zero::RunRunnable,
+                                   ScopedJavaGlobalRef<>(done_callback)));
 }
 
 static void JNI_WebContentsUtils_SimulateEndOfPaintHolding(

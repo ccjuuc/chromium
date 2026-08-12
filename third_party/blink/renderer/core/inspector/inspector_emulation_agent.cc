@@ -4,6 +4,9 @@
 
 #include "third_party/blink/renderer/core/inspector/inspector_emulation_agent.h"
 
+#include "base/feature_list.h"
+#include "third_party/blink/public/common/buildflags.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/input/web_touch_event.h"
 #include "third_party/blink/public/common/loader/network_utils.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
@@ -87,6 +90,11 @@ void ApplySafeAreaInsetOverride(
   }
 }
 
+perfetto::NamedTrack GetTracingTrack(InspectorEmulationAgent* ptr) {
+  return perfetto::NamedTrack::FromPointer("blink::InspectorEmulationAgent",
+                                           ptr);
+}
+
 }  // namespace
 
 InspectorEmulationAgent::InspectorEmulationAgent(
@@ -154,7 +162,9 @@ void InspectorEmulationAgent::Restore() {
       reinterpret_cast<char*>(save_serialized_ua_metadata_override.data()),
       save_serialized_ua_metadata_override.size()));
   serialized_ua_metadata_override_.Set(save_serialized_ua_metadata_override);
-  setCPUThrottlingRate(cpu_throttling_rate_.Get());
+  if (cpu_throttling_rate_.Get() != 1.0) {
+    setCPUThrottlingRate(cpu_throttling_rate_.Get());
+  }
 
   if (int concurrency = hardware_concurrency_override_.Get())
     setHardwareConcurrencyOverride(concurrency);
@@ -267,7 +277,9 @@ protocol::Response InspectorEmulationAgent::disable() {
   if (!emulated_vision_deficiency_.Get().IsNull())
     setEmulatedVisionDeficiency(String("none"));
   setEmulatedOSTextScale(std::nullopt);
-  setCPUThrottlingRate(1);
+  if (cpu_throttling_rate_.Get() != 1.0) {
+    setCPUThrottlingRate(1.0);
+  }
   if (emulate_focus_.Get()) {
     setFocusEmulationEnabled(false);
   }
@@ -580,7 +592,7 @@ protocol::Response InspectorEmulationAgent::setVirtualTimePolicy(
   virtual_time_controller_.SetVirtualTimePolicy(scheduler_policy);
   if (virtual_time_budget_ms.value_or(0) > 0) {
     TRACE_EVENT_BEGIN("renderer.scheduler", "VirtualTimeBudget",
-                      perfetto::Track::FromPointer(this), "budget",
+                      GetTracingTrack(this), "budget",
                       virtual_time_budget_ms.value());
     const base::TimeDelta budget_amount =
         base::Milliseconds(virtual_time_budget_ms.value());
@@ -588,9 +600,16 @@ protocol::Response InspectorEmulationAgent::setVirtualTimePolicy(
         budget_amount,
         BindOnce(&InspectorEmulationAgent::VirtualTimeBudgetExpired,
                  WrapWeakPersistent(this)));
-    for (DocumentLoader* loader : pending_document_loaders_)
+    // SetDefersLoading() can synchronously run author script (virtual time
+    // forces kForceSynchronousParsing) which may spin a nested message loop
+    // and re-enter WillCommitLoad(), mutating |pending_document_loaders_|.
+    // Move to a local snapshot first so the live iterators cannot be
+    // invalidated.
+    HeapVector<Member<DocumentLoader>> loaders =
+        std::move(pending_document_loaders_);
+    for (DocumentLoader* loader : loaders) {
       loader->SetDefersLoading(LoaderFreezeMode::kNone);
-    pending_document_loaders_.clear();
+    }
   }
 
   if (max_virtual_time_task_starvation_count.value_or(0)) {
@@ -663,7 +682,7 @@ protocol::Response InspectorEmulationAgent::setNavigatorOverrides(
 }
 
 void InspectorEmulationAgent::VirtualTimeBudgetExpired() {
-  TRACE_EVENT_END("renderer.scheduler", perfetto::Track::FromPointer(this));
+  TRACE_EVENT_END("renderer.scheduler", GetTracingTrack(this));
   // Disregard the event if the agent is disabled. Another agent may take care
   // of pausing the time in case of an in-process frame swap.
   if (!enabled_) {
@@ -740,7 +759,9 @@ protocol::Response InspectorEmulationAgent::setDeviceMetricsOverride(
     std::unique_ptr<protocol::Emulation::ScreenOrientation>,
     std::unique_ptr<protocol::Page::Viewport>,
     std::unique_ptr<protocol::Emulation::DisplayFeature>,
-    std::unique_ptr<protocol::Emulation::DevicePosture>) {
+    std::unique_ptr<protocol::Emulation::DevicePosture>,
+    std::optional<String> scrollbar_type,
+    std::optional<bool> screen_orientation_lock_emulation) {
   // We don't have to do anything other than reply to the client, as the
   // emulation parameters should have already been updated by the handling of
   // blink::mojom::FrameWidget::EnableDeviceEmulation.
@@ -1026,6 +1047,16 @@ protocol::Response InspectorEmulationAgent::setDisabledImageTypes(
       disabled_image_types_.Set(StrCat({prefix, type}), true);
       continue;
     }
+#if BUILDFLAG(ENABLE_JXL_DECODER)
+    // Keep the compile-time guard in addition to the runtime feature check:
+    // some downstream builds have custom JXL integration tied to
+    // ENABLE_JXL_DECODER.
+    if (DisabledImageTypeEnum::Jxl == type &&
+        base::FeatureList::IsEnabled(features::kJXLImageFormat)) {
+      disabled_image_types_.Set(StrCat({prefix, type}), true);
+      continue;
+    }
+#endif
     disabled_image_types_.Clear();
     return protocol::Response::InvalidParams("Invalid image type");
   }

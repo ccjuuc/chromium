@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.app.tab_activity_glue;
 
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -21,81 +23,73 @@ import android.app.ActivityManager.AppTask;
 import android.content.Context;
 import android.graphics.Rect;
 
-import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
-import org.robolectric.annotation.Implementation;
-import org.robolectric.annotation.Implements;
+import org.robolectric.RuntimeEnvironment;
+import org.robolectric.Shadows;
 
 import org.chromium.base.AconfigFlaggedApiDelegate;
 import org.chromium.base.Token;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
-import org.chromium.chrome.browser.app.tab_activity_glue.ActivityTabWebContentsDelegateAndroidUnitTest.ShadowWebContentsDarkModeController;
+import org.chromium.chrome.browser.customtabs.PopupCreator;
+import org.chromium.chrome.browser.customtabs.PopupCreatorFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.night_mode.WebContentsDarkModeController;
+import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabCreator;
 import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter.MergeNotificationType;
+import org.chromium.chrome.browser.tabmodel.TabGroupMergeNotificationType;
+import org.chromium.chrome.browser.tabmodel.TabModel;
+import org.chromium.chrome.browser.ui.ExclusiveAccessManager;
 import org.chromium.chrome.browser.util.AndroidTaskUtils;
+import org.chromium.chrome.browser.util.PictureInPictureWindowOptions;
 import org.chromium.chrome.browser.util.WindowFeatures;
-import org.chromium.content_public.browser.BrowserContextHandle;
+import org.chromium.content_public.browser.RenderFrameHost;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.display.DisplayAndroid;
 import org.chromium.ui.display.DisplayAndroidManager;
 import org.chromium.ui.mojom.WindowOpenDisposition;
-import org.chromium.ui.util.ColorUtils;
 import org.chromium.url.GURL;
 
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
-/** Unit test for {@link ActivityTabWebContentsDelegateAndroid}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(shadows = {ShadowWebContentsDarkModeController.class})
 @EnableFeatures(ChromeFeatureList.DARKEN_WEBSITES_CHECKBOX_IN_THEMES_SETTING)
 @DisableFeatures({
     ChromeFeatureList.FORCE_WEB_CONTENTS_DARK_MODE,
-    ChromeFeatureList.ANDROID_WINDOW_POPUP_LARGE_SCREEN,
     ChromeFeatureList.DOCUMENT_PICTURE_IN_PICTURE_API
 })
 public class ActivityTabWebContentsDelegateAndroidUnitTest {
-    @Implements(WebContentsDarkModeController.class)
-    static class ShadowWebContentsDarkModeController {
-        static boolean sGlobalSettingsEnabled;
-        static GURL sBlockedUrl;
-
-        @Implementation
-        public static boolean isEnabledForUrl(BrowserContextHandle browserContextHandle, GURL url) {
-            return sGlobalSettingsEnabled && !url.equals(sBlockedUrl);
-        }
-    }
-
     static class TestActivityTabWebContentsDelegateAndroid
             extends ActivityTabWebContentsDelegateAndroid {
-        private final TabGroupModelFilter mTabGroupModelFilter;
+        private final TabModel mTabModel;
         private Map<WebContents, Tab> mTabMap;
         private boolean mIsPopup;
+        private boolean mIsDocumentPictureInPictureEnabled;
 
+        // Mockito.mock() returns raw Supplier; pass through to parameterized super ctor.
+        @SuppressWarnings("unchecked")
         public TestActivityTabWebContentsDelegateAndroid(
                 Tab tab,
                 Activity activity,
                 TabCreatorManager tabCreatorManager,
-                TabGroupModelFilter tabGroupModelFilter) {
+                TabModel tabModel,
+                ExclusiveAccessManager exclusiveAccessManager) {
             super(
                     tab,
                     activity,
@@ -107,8 +101,9 @@ public class ActivityTabWebContentsDelegateAndroidUnitTest {
                     mock(Supplier.class),
                     mock(Supplier.class),
                     mock(Supplier.class),
-                    null);
-            mTabGroupModelFilter = tabGroupModelFilter;
+                    mock(Supplier.class),
+                    exclusiveAccessManager);
+            mTabModel = tabModel;
             mTabMap = new HashMap<>();
         }
 
@@ -118,8 +113,8 @@ public class ActivityTabWebContentsDelegateAndroidUnitTest {
         }
 
         @Override
-        protected TabGroupModelFilter getTabGroupModelFilter(Tab tab) {
-            return mTabGroupModelFilter;
+        protected TabModel getTabModel(Tab tab) {
+            return mTabModel;
         }
 
         public void setTabMap(Map<WebContents, Tab> tabMap) {
@@ -134,6 +129,16 @@ public class ActivityTabWebContentsDelegateAndroidUnitTest {
         public void setIsPopup(boolean isPopup) {
             mIsPopup = isPopup;
         }
+
+        @Override
+        protected boolean isDocumentPictureInPictureEnabled() {
+            return mIsDocumentPictureInPictureEnabled;
+        }
+
+        public void setIsDocumentPictureInPictureEnabled(
+                boolean isDocumentPictureInPictureEnabled) {
+            mIsDocumentPictureInPictureEnabled = isDocumentPictureInPictureEnabled;
+        }
     }
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -144,12 +149,18 @@ public class ActivityTabWebContentsDelegateAndroidUnitTest {
     @Mock Tab mTab;
     @Mock TabCreatorManager mTabCreatorManager;
     @Mock TabCreator mTabCreator;
-    @Mock TabGroupModelFilter mTabGroupModelFilter;
+    @Mock TabModel mTabModel;
     @Mock ActivityManager mActivityManager;
     @Mock AconfigFlaggedApiDelegate mFlaggedApiDelegate;
     @Mock DisplayAndroid mDisplayAndroid;
     @Mock DisplayAndroidManager mDisplayAndroidManager;
     @Mock AppTask mAppTask;
+    @Mock PopupCreator mPopupCreator;
+    @Mock MultiWindowUtils mMultiWindowUtils;
+    @Mock ExclusiveAccessManager mExclusiveAccessManager;
+    @Mock RenderFrameHost mRenderFrameHost;
+
+    @Captor private ArgumentCaptor<CompletableFuture<Boolean>> mFutureCaptor;
 
     GURL mUrl1 = new GURL("https://url1.com");
     GURL mUrl2 = new GURL("https://url2.com");
@@ -163,9 +174,11 @@ public class ActivityTabWebContentsDelegateAndroidUnitTest {
 
     @Before
     public void setup() {
+        MultiWindowUtils.setInstanceForTesting(mMultiWindowUtils);
+        PopupCreatorFactory.setInstanceForTesting(mPopupCreator);
         mTabWebContentsDelegateAndroid =
                 new TestActivityTabWebContentsDelegateAndroid(
-                        mTab, mActivity, mTabCreatorManager, mTabGroupModelFilter);
+                        mTab, mActivity, mTabCreatorManager, mTabModel, mExclusiveAccessManager);
         DisplayAndroidManager.setInstanceForTesting(mDisplayAndroidManager);
         AconfigFlaggedApiDelegate.setInstanceForTesting(mFlaggedApiDelegate);
         AndroidTaskUtils.setAppTaskForTesting(mAppTask);
@@ -184,77 +197,39 @@ public class ActivityTabWebContentsDelegateAndroidUnitTest {
         doReturn(mDisplayAndroid).when(mDisplayAndroidManager).getDisplayMatching(any());
     }
 
-    @After
-    public void tearDown() {
-        ShadowWebContentsDarkModeController.sBlockedUrl = null;
+    private void setRepositionPermission(boolean granted) {
+        android.app.Application app = RuntimeEnvironment.getApplication();
+        org.robolectric.shadows.ShadowApplication shadowApp = Shadows.shadowOf(app);
+        if (granted) {
+            shadowApp.grantPermissions("android.permission.REPOSITION_SELF_WINDOWS");
+        } else {
+            shadowApp.denyPermissions("android.permission.REPOSITION_SELF_WINDOWS");
+        }
     }
 
     @Test
-    public void testIsNightMode() {
-        ColorUtils.setInNightModeForTesting(true);
-        Assert.assertTrue(
-                "#isNightModeEnabled is false.",
-                mTabWebContentsDelegateAndroid.isNightModeEnabled());
+    public void testIsDocumentPictureInPictureBlockedBySystem() {
+        setRepositionPermission(true);
+        // Test in app fullscreen (not multi-window mode) -> Blocked.
+        when(mMultiWindowUtils.isInMultiWindowMode(mActivity)).thenReturn(false);
+        assertTrue(mTabWebContentsDelegateAndroid.isDocumentPictureInPictureBlockedBySystem());
 
-        ColorUtils.setInNightModeForTesting(false);
-        Assert.assertFalse(
-                "isNightModeEnabled is true.", mTabWebContentsDelegateAndroid.isNightModeEnabled());
+        // Test in multi-window mode -> Not blocked.
+        when(mMultiWindowUtils.isInMultiWindowMode(mActivity)).thenReturn(true);
+        assertFalse(mTabWebContentsDelegateAndroid.isDocumentPictureInPictureBlockedBySystem());
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.FORCE_WEB_CONTENTS_DARK_MODE)
-    public void testForceDarkWebContent_ForceEnabled() {
-        assertForceDarkEnabledForWebContents(true);
+    public void
+            testIsDocumentPictureInPictureBlockedBySystem_BlockedWhenCurrentBrowserNotDefault() {
+        // Test when the current browser is NOT the default browser -> Blocked even in multi-window
+        // mode.
+        setRepositionPermission(false);
+        when(mMultiWindowUtils.isInMultiWindowMode(mActivity)).thenReturn(true);
+        assertTrue(mTabWebContentsDelegateAndroid.isDocumentPictureInPictureBlockedBySystem());
     }
 
     @Test
-    @DisableFeatures({
-        ChromeFeatureList.DARKEN_WEBSITES_CHECKBOX_IN_THEMES_SETTING,
-        ChromeFeatureList.FORCE_WEB_CONTENTS_DARK_MODE
-    })
-    public void testForceDarkWebContent_ThemeSettingsFeatureDisabled() {
-        assertForceDarkEnabledForWebContents(false);
-    }
-
-    @Test
-    public void testForceDarkWebContent_WebContentsNotReady() {
-        doReturn(null).when(mTab).getWebContents();
-        assertForceDarkEnabledForWebContents(false);
-    }
-
-    @Test
-    public void testForceDarkWebContent_LightTheme() {
-        ColorUtils.setInNightModeForTesting(false);
-        assertForceDarkEnabledForWebContents(false);
-    }
-
-    @Test
-    public void testForceDarkWebContent_DarkTheme_GlobalSettingDisabled() {
-        ColorUtils.setInNightModeForTesting(true);
-        ShadowWebContentsDarkModeController.sGlobalSettingsEnabled = false;
-        assertForceDarkEnabledForWebContents(false);
-    }
-
-    @Test
-    public void testForceDarkWebContent_DarkTheme_GlobalSettingEnabled() {
-        ColorUtils.setInNightModeForTesting(true);
-        ShadowWebContentsDarkModeController.sGlobalSettingsEnabled = true;
-        assertForceDarkEnabledForWebContents(true);
-    }
-
-    @Test
-    public void testForceDarkWebContent_DarkTheme_DisabledForUrl() {
-        ColorUtils.setInNightModeForTesting(true);
-        ShadowWebContentsDarkModeController.sGlobalSettingsEnabled = true;
-        ShadowWebContentsDarkModeController.sBlockedUrl = mUrl1;
-        assertForceDarkEnabledForWebContents(false);
-
-        doReturn(mUrl2).when(mWebContents).getVisibleUrl();
-        assertForceDarkEnabledForWebContents(true);
-    }
-
-    @Test
-    @EnableFeatures(ChromeFeatureList.GROUP_NEW_TAB_WITH_PARENT)
     public void testAddNewContentsNotInTabGroup() {
         WebContents newWebContents = mock(WebContents.class);
         Map<WebContents, Tab> tabMap =
@@ -269,11 +244,10 @@ public class ActivityTabWebContentsDelegateAndroidUnitTest {
                 new WindowFeatures(),
                 false,
                 null);
-        verify(mTabGroupModelFilter, never()).mergeListOfTabsToGroup(any(), any(), anyInt());
+        verify(mTabModel, never()).mergeListOfTabsToGroup(any(), any(), anyInt());
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.GROUP_NEW_TAB_WITH_PARENT)
     public void testAddNewContentsToTabGroup() {
         WebContents newWebContents = mock(WebContents.class);
         Tab parentTab = mock(Tab.class);
@@ -281,10 +255,9 @@ public class ActivityTabWebContentsDelegateAndroidUnitTest {
         doReturn(Token.createRandom()).when(parentTab).getTabGroupId();
         doReturn(newTab)
                 .when(mTabCreator)
-                .createTabWithWebContents(
-                        any(), anyBoolean(), any(), anyInt(), any(), anyBoolean());
-        doReturn(true).when(mTabGroupModelFilter).isTabInTabGroup(any());
-        doReturn(true).when(mTabGroupModelFilter).isTabModelRestored();
+                .createTabWithWebContents(any(), anyBoolean(), any(), anyInt(), any(), any());
+        doReturn(true).when(mTabModel).isTabInTabGroup(any());
+        doReturn(true).when(mTabModel).isTabModelRestored();
         Map<WebContents, Tab> tabMap = Map.of(mWebContents, parentTab, newWebContents, newTab);
         mTabWebContentsDelegateAndroid.setTabMap(tabMap);
 
@@ -296,21 +269,21 @@ public class ActivityTabWebContentsDelegateAndroidUnitTest {
                 new WindowFeatures(),
                 false,
                 null);
-        verify(mTabGroupModelFilter)
+        verify(mTabModel)
                 .mergeListOfTabsToGroup(
-                        Arrays.asList(newTab), parentTab, MergeNotificationType.DONT_NOTIFY);
+                        Arrays.asList(newTab),
+                        parentTab,
+                        TabGroupMergeNotificationType.DONT_NOTIFY);
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_WINDOW_POPUP_LARGE_SCREEN)
-    public void testAddNewContentsAddToTabModelWhenPopupsNotEnabled() {
-        PopupCreator.setArePopupsEnabledForTesting(false);
+    public void testAddNewContentsDoesNotAddToTabModelWhenMovingTabToPopupIsSuccessful() {
+        when(mPopupCreator.moveTabToNewPopup(any(), any())).thenReturn(true);
         WebContents newWebContents = mock(WebContents.class);
         Tab newTab = mock(Tab.class);
         doReturn(newTab)
                 .when(mTabCreator)
-                .createTabWithWebContents(
-                        any(), anyBoolean(), any(), anyInt(), any(), anyBoolean());
+                .createTabWithWebContents(any(), anyBoolean(), any(), anyInt(), any(), any());
 
         mTabWebContentsDelegateAndroid.addNewContents(
                 mWebContents,
@@ -322,9 +295,45 @@ public class ActivityTabWebContentsDelegateAndroidUnitTest {
                 null);
 
         verify(mTabCreator, times(1))
-                .createTabWithWebContents(any(), anyBoolean(), any(), anyInt(), any(), eq(true));
-        verify(mTabCreator, never())
-                .createTabWithWebContents(any(), anyBoolean(), any(), anyInt(), any(), eq(false));
+                .createTabWithWebContents(
+                        any(), anyBoolean(), any(), anyInt(), any(), mFutureCaptor.capture());
+        CompletableFuture<Boolean> capturedFuture = mFutureCaptor.getValue();
+        assertTrue(
+                "The final decision to add the tab to the TabModel should have already been made",
+                capturedFuture.isDone());
+        assertFalse(
+                "The final decision to add the tab to the TabModel should be negative",
+                capturedFuture.getNow(null));
+    }
+
+    @Test
+    public void testAddNewContentsAddToTabModelWhenMovingTabToPopupIsUnsuccessful() {
+        when(mPopupCreator.moveTabToNewPopup(any(), any())).thenReturn(false);
+        WebContents newWebContents = mock(WebContents.class);
+        Tab newTab = mock(Tab.class);
+        doReturn(newTab)
+                .when(mTabCreator)
+                .createTabWithWebContents(any(), anyBoolean(), any(), anyInt(), any(), any());
+
+        mTabWebContentsDelegateAndroid.addNewContents(
+                mWebContents,
+                newWebContents,
+                new GURL("https://foo.com"),
+                WindowOpenDisposition.NEW_POPUP,
+                new WindowFeatures(),
+                true,
+                null);
+
+        verify(mTabCreator, times(1))
+                .createTabWithWebContents(
+                        any(), anyBoolean(), any(), anyInt(), any(), mFutureCaptor.capture());
+        CompletableFuture<Boolean> capturedFuture = mFutureCaptor.getValue();
+        assertTrue(
+                "The final decision to add the tab to the TabModel should have already been made",
+                capturedFuture.isDone());
+        assertTrue(
+                "The final decision to add the tab to the TabModel should be positive",
+                capturedFuture.getNow(null));
     }
 
     @Test
@@ -347,7 +356,76 @@ public class ActivityTabWebContentsDelegateAndroidUnitTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_WINDOW_POPUP_LARGE_SCREEN)
+    @EnableFeatures(ChromeFeatureList.DOCUMENT_PICTURE_IN_PICTURE_API)
+    public void testAddNewContents_DocumentPictureInPicture_Enabled() {
+        mTabWebContentsDelegateAndroid.setIsDocumentPictureInPictureEnabled(true);
+        when(mPopupCreator.moveWebContentsToNewDocumentPictureInPictureWindow(any(), any(), any()))
+                .thenReturn(true);
+
+        WebContents newWebContents = mock(WebContents.class);
+        PictureInPictureWindowOptions options =
+                new PictureInPictureWindowOptions(new Rect(0, 0, 100, 100), false);
+
+        boolean result =
+                mTabWebContentsDelegateAndroid.addNewContents(
+                        mWebContents,
+                        newWebContents,
+                        new GURL("https://foo.com"),
+                        WindowOpenDisposition.NEW_PICTURE_IN_PICTURE,
+                        new WindowFeatures(),
+                        true,
+                        options);
+
+        assertTrue(result);
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.DOCUMENT_PICTURE_IN_PICTURE_API)
+    public void testAddNewContents_DocumentPictureInPicture_Disabled() {
+        mTabWebContentsDelegateAndroid.setIsDocumentPictureInPictureEnabled(false);
+
+        WebContents newWebContents = mock(WebContents.class);
+        PictureInPictureWindowOptions options =
+                new PictureInPictureWindowOptions(new Rect(0, 0, 100, 100), false);
+
+        boolean result =
+                mTabWebContentsDelegateAndroid.addNewContents(
+                        mWebContents,
+                        newWebContents,
+                        new GURL("https://foo.com"),
+                        WindowOpenDisposition.NEW_PICTURE_IN_PICTURE,
+                        new WindowFeatures(),
+                        true,
+                        options);
+
+        assertFalse(result);
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.DOCUMENT_PICTURE_IN_PICTURE_API)
+    public void testAddNewContents_DocumentPictureInPicture_Enabled_LaunchFailed() {
+        mTabWebContentsDelegateAndroid.setIsDocumentPictureInPictureEnabled(true);
+        when(mPopupCreator.moveWebContentsToNewDocumentPictureInPictureWindow(any(), any(), any()))
+                .thenReturn(false);
+
+        WebContents newWebContents = mock(WebContents.class);
+        PictureInPictureWindowOptions options =
+                new PictureInPictureWindowOptions(new Rect(0, 0, 100, 100), false);
+
+        boolean result =
+                mTabWebContentsDelegateAndroid.addNewContents(
+                        mWebContents,
+                        newWebContents,
+                        new GURL("https://foo.com"),
+                        WindowOpenDisposition.NEW_PICTURE_IN_PICTURE,
+                        new WindowFeatures(),
+                        true,
+                        options);
+
+        assertFalse(result);
+    }
+
+    @Test
     public void testSetContentsBoundsClampsBounds() {
         mTabWebContentsDelegateAndroid.setIsPopup(true);
         mTabWebContentsDelegateAndroid.setContentsBounds(
@@ -362,17 +440,6 @@ public class ActivityTabWebContentsDelegateAndroidUnitTest {
     }
 
     @Test
-    @DisableFeatures(ChromeFeatureList.ANDROID_WINDOW_POPUP_LARGE_SCREEN)
-    public void testSetContentsBoundsNoOpIfFlagDisabled() {
-        mTabWebContentsDelegateAndroid.setIsPopup(true);
-
-        mTabWebContentsDelegateAndroid.setContentsBounds(mWebContents, new Rect(0, 0, 400, 400));
-
-        verify(mFlaggedApiDelegate, never()).moveTaskTo(any(), anyInt(), any());
-    }
-
-    @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_WINDOW_POPUP_LARGE_SCREEN)
     public void testSetContentsBoundsNoOpIfDelegateNull() {
         mTabWebContentsDelegateAndroid.setIsPopup(true);
         AconfigFlaggedApiDelegate.setInstanceForTesting(null);
@@ -382,7 +449,6 @@ public class ActivityTabWebContentsDelegateAndroidUnitTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_WINDOW_POPUP_LARGE_SCREEN)
     public void testSetContentsBoundsNoOpIfNotPopup() {
         mTabWebContentsDelegateAndroid.setIsPopup(false);
 
@@ -392,7 +458,6 @@ public class ActivityTabWebContentsDelegateAndroidUnitTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_WINDOW_POPUP_LARGE_SCREEN)
     public void testSetContentsBoundsNoOpIfNoDisplayMatching() {
         doReturn(null).when(mDisplayAndroidManager).getDisplayMatching(any());
 
@@ -402,10 +467,23 @@ public class ActivityTabWebContentsDelegateAndroidUnitTest {
         verify(mFlaggedApiDelegate, never()).moveTaskTo(any(), anyInt(), any());
     }
 
-    private void assertForceDarkEnabledForWebContents(boolean isEnabled) {
-        Assert.assertEquals(
-                "Value of #isForceDarkWebContentEnabled is different than test settings.",
-                isEnabled,
-                mTabWebContentsDelegateAndroid.isForceDarkWebContentEnabled());
+    @Test
+    @DisableFeatures({ChromeFeatureList.ENABLE_EXCLUSIVE_ACCESS_MANAGER})
+    public void testCanEnterFullscreenModeForTab_exclusiveAccessManagerDisabled() {
+        assertTrue(mTabWebContentsDelegateAndroid.canEnterFullscreenModeForTab(mRenderFrameHost));
+        verify(mExclusiveAccessManager, never()).canEnterFullscreenModeForTab(any());
+    }
+
+    @Test
+    @EnableFeatures({ChromeFeatureList.ENABLE_EXCLUSIVE_ACCESS_MANAGER})
+    public void testCanEnterFullscreenModeForTab_exclusiveAccessManagerEnabled() {
+        when(mExclusiveAccessManager.canEnterFullscreenModeForTab(mRenderFrameHost))
+                .thenReturn(true);
+        assertTrue(mTabWebContentsDelegateAndroid.canEnterFullscreenModeForTab(mRenderFrameHost));
+        verify(mExclusiveAccessManager, times(1)).canEnterFullscreenModeForTab(mRenderFrameHost);
+
+        when(mExclusiveAccessManager.canEnterFullscreenModeForTab(mRenderFrameHost))
+                .thenReturn(false);
+        assertFalse(mTabWebContentsDelegateAndroid.canEnterFullscreenModeForTab(mRenderFrameHost));
     }
 }

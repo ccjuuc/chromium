@@ -22,7 +22,6 @@
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
-#include "chrome/common/chrome_features.h"
 #include "components/webapps/common/web_app_id.h"
 
 namespace web_app {
@@ -43,7 +42,8 @@ void InstallAppLocallyCommand::StartWithLock(
     std::unique_ptr<AppLock> app_lock) {
   app_lock_ = std::move(app_lock);
 
-  if (!app_lock_->registrar().IsInRegistrar(app_id_)) {
+  if (!app_lock_->registrar().AppMatches(
+          app_id_, WebAppFilter::IsAppSurfaceableToUser())) {
     GetMutableDebugValue().Set("command_result", "app_not_in_registry");
     CompleteAndSelfDestruct(CommandResult::kSuccess);
     return;
@@ -58,7 +58,7 @@ void InstallAppLocallyCommand::StartWithLock(
     if (web_app_to_update) {
       web_app_to_update->SetInstallState(
           proto::InstallState::INSTALLED_WITH_OS_INTEGRATION);
-        web_app_to_update->AddSource(WebAppManagement::kUserInstalled);
+      web_app_to_update->AddSource(WebAppManagement::kUserInstalled);
     }
   }
 

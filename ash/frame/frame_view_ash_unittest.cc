@@ -38,6 +38,7 @@
 #include "ui/aura/window_targeter.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/accelerators/test_accelerator_target.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/test/draw_waiter_for_test.h"
@@ -294,7 +295,9 @@ TEST_F(FrameViewAshTest, ToggleTabletModeOnMinimizedWindow) {
   // Restore icon for size button in maximized window state. Compare by name
   // because the address may not be the same for different build targets in the
   // component build.
-  EXPECT_STREQ(views::kWindowControlRestoreIcon.name,
+  EXPECT_STREQ(::features::IsRoundedIconsEnabled()
+                   ? views::kChromeRestoreIcon.name
+                   : views::kWindowControlRestoreOldIcon.name,
                test.size_button()->icon_definition_for_test()->name);
   widget->Minimize();
 
@@ -306,7 +309,9 @@ TEST_F(FrameViewAshTest, ToggleTabletModeOnMinimizedWindow) {
   // maximized window state, which is restore icon.
   ::wm::Unminimize(widget->GetNativeWindow());
   EXPECT_TRUE(widget->IsMaximized());
-  EXPECT_STREQ(views::kWindowControlRestoreIcon.name,
+  EXPECT_STREQ(::features::IsRoundedIconsEnabled()
+                   ? views::kChromeRestoreIcon.name
+                   : views::kWindowControlRestoreOldIcon.name,
                test.size_button()->icon_definition_for_test()->name);
 }
 
@@ -403,7 +408,8 @@ TEST_F(FrameViewAshTest, NoCrashOnTabletChangesWithinWindowDestruction) {
         window_observation_{this};
   };
 
-  auto test_window = CreateTestWindow(gfx::Rect(200, 200));
+  auto test_window =
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, {200, 200});
   WindowTestObserver obs(test_window.get());
   test_window.reset();
 }
@@ -491,6 +497,31 @@ TEST_F(FrameViewAshTest, HeaderVisibilityInFullscreen) {
 }
 
 namespace {
+
+struct WideFrameTestContext {
+  std::unique_ptr<views::WidgetDelegate> delegate;
+  std::unique_ptr<views::Widget> widget;
+  raw_ptr<WideFrameView> view = nullptr;
+};
+
+WideFrameTestContext CreateWideFrame(views::Widget* target) {
+  WideFrameTestContext context;
+  context.delegate = std::make_unique<views::WidgetDelegate>();
+  context.view = context.delegate->SetContentsView(
+      std::make_unique<WideFrameView>(target));
+
+  views::Widget::InitParams params(
+      views::Widget::InitParams::CLIENT_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_POPUP);
+  params.delegate = context.delegate.get();
+  params.bounds = WideFrameView::GetFrameBounds(target);
+  params.name = "WideFrameView";
+  params.parent = target->GetNativeWindow();
+  params.opacity = views::Widget::InitParams::WindowOpacity::kOpaque;
+  context.widget = std::make_unique<views::Widget>();
+  context.widget->Init(std::move(params));
+  return context;
+}
 
 class TestButtonModel : public chromeos::CaptionButtonModel {
  public:
@@ -708,7 +739,9 @@ TEST_F(FrameViewAshTest, CustomButtonModel) {
   EXPECT_TRUE(test_api.menu_button()->GetEnabled());
 
   // zoom button
-  EXPECT_STREQ(views::kWindowControlMaximizeIcon.name,
+  EXPECT_STREQ(::features::IsRoundedIconsEnabled()
+                   ? views::kChromeMaximizeIcon.name
+                   : views::kWindowControlMaximizeOldIcon.name,
                test_api.size_button()->icon_definition_for_test()->name);
   model_ptr->set_zoom_mode(true);
   frame_view->SizeConstraintsChanged();
@@ -731,8 +764,8 @@ TEST_F(FrameViewAshTest, WideFrame) {
   delegate->SetCanMaximize(true);
   widget->Maximize();
 
-  std::unique_ptr<WideFrameView> wide_frame_view =
-      std::make_unique<WideFrameView>(widget.get());
+  auto wide_frame_context = CreateWideFrame(widget.get());
+  WideFrameView* wide_frame_view = wide_frame_context.view;
   wide_frame_view->GetWidget()->Show();
 
   chromeos::HeaderView* wide_header_view = wide_frame_view->header_view();
@@ -756,7 +789,11 @@ TEST_F(FrameViewAshTest, WideFrame) {
   ImmersiveFullscreenController::EnableForWidget(widget.get(), true);
   EXPECT_TRUE(header_view->in_immersive_mode());
   EXPECT_TRUE(wide_header_view->in_immersive_mode());
-  EXPECT_TRUE(header_view->GetVisible());
+
+  // The animation is disabled, therefore the frame is unrevealed immediately.
+  EXPECT_FALSE(header_view->GetVisible());
+  EXPECT_FALSE(controller.IsRevealed());
+
   // The height should be ~(33 *.5)
   wide_header_view->SetVisibleFraction(0.5);
   EXPECT_NEAR(16, wide_header_view->GetPreferredOnScreenHeight(), 1);
@@ -805,32 +842,40 @@ TEST_F(FrameViewAshTest, WideFrameButton) {
       views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET, delegate,
       desks_util::GetActiveDeskContainerId(), gfx::Rect(100, 0, 400, 500));
   widget->Maximize();
-  std::unique_ptr<WideFrameView> wide_frame_view =
-      std::make_unique<WideFrameView>(widget.get());
+  auto wide_frame_context = CreateWideFrame(widget.get());
+  WideFrameView* wide_frame_view = wide_frame_context.view;
   wide_frame_view->GetWidget()->Show();
   chromeos::HeaderView* header_view = wide_frame_view->header_view();
   FrameCaptionButtonContainerView::TestApi test_api(
       header_view->caption_button_container());
 
-  EXPECT_STREQ(views::kWindowControlRestoreIcon.name,
+  EXPECT_STREQ(::features::IsRoundedIconsEnabled()
+                   ? views::kChromeRestoreIcon.name
+                   : views::kWindowControlRestoreOldIcon.name,
                test_api.size_button()->icon_definition_for_test()->name);
 
   widget->SetFullscreen(true);
   views::test::RunScheduledLayout(header_view);
-  EXPECT_STREQ(views::kWindowControlRestoreIcon.name,
+  EXPECT_STREQ(::features::IsRoundedIconsEnabled()
+                   ? views::kChromeRestoreIcon.name
+                   : views::kWindowControlRestoreOldIcon.name,
                test_api.size_button()->icon_definition_for_test()->name);
   {
     WMEvent event(WM_EVENT_PIN);
     WindowState::Get(widget->GetNativeWindow())->OnWMEvent(&event);
     views::test::RunScheduledLayout(header_view);
-    EXPECT_STREQ(views::kWindowControlRestoreIcon.name,
+    EXPECT_STREQ(::features::IsRoundedIconsEnabled()
+                     ? views::kChromeRestoreIcon.name
+                     : views::kWindowControlRestoreOldIcon.name,
                  test_api.size_button()->icon_definition_for_test()->name);
   }
   {
     WMEvent event(WM_EVENT_LOCKED_FULLSCREEN);
     WindowState::Get(widget->GetNativeWindow())->OnWMEvent(&event);
     views::test::RunScheduledLayout(header_view);
-    EXPECT_STREQ(views::kWindowControlRestoreIcon.name,
+    EXPECT_STREQ(::features::IsRoundedIconsEnabled()
+                     ? views::kChromeRestoreIcon.name
+                     : views::kWindowControlRestoreOldIcon.name,
                  test_api.size_button()->icon_definition_for_test()->name);
   }
 }
@@ -846,8 +891,8 @@ TEST_F(FrameViewAshTest, MoveFullscreenWideFrameBetweenDisplay) {
       views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET, delegate,
       desks_util::GetActiveDeskContainerId(), gfx::Rect(100, 0, 400, 500));
   widget->SetFullscreen(true);
-  std::unique_ptr<WideFrameView> wide_frame_view =
-      std::make_unique<WideFrameView>(widget.get());
+  auto wide_frame_context = CreateWideFrame(widget.get());
+  WideFrameView* wide_frame_view = wide_frame_context.view;
   wide_frame_view->GetWidget()->Show();
   ASSERT_EQ(display_list[0].id(),
             screen->GetDisplayNearestWindow(widget->GetNativeWindow()).id());
@@ -995,8 +1040,8 @@ TEST_P(FrameViewAshFrameColorTest, WideFrameInitialColor) {
   window->SetProperty(kFrameActiveColorKey, new_active_color);
   window->SetProperty(kFrameInactiveColorKey, new_inactive_color);
 
-  std::unique_ptr<WideFrameView> wide_frame_view =
-      std::make_unique<WideFrameView>(widget.get());
+  auto wide_frame_context = CreateWideFrame(widget.get());
+  WideFrameView* wide_frame_view = wide_frame_context.view;
   chromeos::HeaderView* wide_header_view = wide_frame_view->header_view();
   DefaultFrameHeader* header = wide_header_view->GetFrameHeader();
   EXPECT_EQ(new_active_color, header->active_frame_color_);

@@ -10,14 +10,17 @@
 #include <memory>
 #include <utility>
 
+#include "base/byte_size.h"
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/process/kill.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/types/expected.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/api/messaging/native_messaging_host_manifest.h"
 #include "chrome/browser/extensions/api/messaging/native_messaging_launch_from_native.h"
@@ -39,13 +42,13 @@ namespace {
 // Maximum message size in bytes for messages received from Native Messaging
 // hosts. Message size is limited mainly to prevent Chrome from crashing when
 // native application misbehaves (e.g. starts writing garbage to the pipe).
-const size_t kMaximumNativeMessageSize = 1024 * 1024;
+constexpr size_t kMaximumNativeMessageSize = 1024 * 1024;
 
 // Message header contains 4-byte integer size of the message.
-const size_t kMessageHeaderSize = 4;
+constexpr size_t kMessageHeaderSize = 4;
 
 // Size of the buffer to be allocated for each read.
-const size_t kReadBufferSize = 4096;
+constexpr size_t kReadBufferSize = 4096;
 
 base::FilePath GetProfilePathIfEnabled(
     Profile* profile,
@@ -180,8 +183,15 @@ void NativeMessageProcessHost::OnHostProcessLaunched(
 void NativeMessageProcessHost::OnMessage(const std::string& json) {
   DCHECK(task_runner_->BelongsToCurrentThread());
 
-  if (closed_)
+  if (closed_) {
     return;
+  }
+
+  // Set the max value to the 64MB message size limit.
+  constexpr size_t kMaxSizeToRecord = 1024 * 1024 * 64;
+  base::UmaHistogramCustomCounts(
+      "Extensions.NativeMessaging.MessageSize.Extension", json.size(), 1,
+      kMaxSizeToRecord, 50);
 
   // Allocate new buffer for the message.
   scoped_refptr<net::IOBufferWithSize> buffer =
@@ -206,8 +216,9 @@ void NativeMessageProcessHost::OnMessage(const std::string& json) {
   // Send() may be called before the host process is started. In that case the
   // message will be written when OnHostProcessLaunched() is called. If it's
   // already started then write the message now.
-  if (write_stream_)
+  if (write_stream_) {
     DoWrite();
+  }
 }
 
 void NativeMessageProcessHost::Start(Client* client) {
@@ -225,8 +236,9 @@ NativeMessageProcessHost::task_runner() const {
 }
 
 void NativeMessageProcessHost::WaitRead() {
-  if (closed_)
+  if (closed_) {
     return;
+  }
 
   DCHECK(!read_pending_);
 
@@ -250,15 +262,15 @@ void NativeMessageProcessHost::DoRead() {
 
   while (!closed_ && !read_pending_) {
     read_buffer_ = base::MakeRefCounted<net::IOBufferWithSize>(kReadBufferSize);
-    int result =
+    HandleReadResult(
         read_stream_->Read(read_buffer_.get(), kReadBufferSize,
                            base::BindOnce(&NativeMessageProcessHost::OnRead,
-                                          weak_factory_.GetWeakPtr()));
-    HandleReadResult(result);
+                                          weak_factory_.GetWeakPtr())));
   }
 }
 
-void NativeMessageProcessHost::OnRead(int result) {
+void NativeMessageProcessHost::OnRead(
+    base::expected<base::ByteSize, net::Error> result) {
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK(read_pending_);
   read_pending_ = false;
@@ -267,19 +279,26 @@ void NativeMessageProcessHost::OnRead(int result) {
   WaitRead();
 }
 
-void NativeMessageProcessHost::HandleReadResult(int result) {
+void NativeMessageProcessHost::HandleReadResult(
+    base::expected<base::ByteSize, net::Error> result) {
   DCHECK(task_runner_->BelongsToCurrentThread());
 
-  if (closed_)
+  if (closed_) {
     return;
+  }
 
-  if (result > 0) {
-    ProcessIncomingData(read_buffer_->data(), result);
-  } else if (result == net::ERR_IO_PENDING) {
+  if (result.has_value()) {
+    if (result->is_positive()) {
+      ProcessIncomingData(read_buffer_->data(),
+                          base::checked_cast<int>(result->InBytes()));
+    } else {
+      // result == 0 means EOF, pipe closed.
+      Close(kNativeHostExited);
+    }
+  } else if (result.error() == net::ERR_IO_PENDING) {
     read_pending_ = true;
-  } else if (result == 0 || result == net::ERR_CONNECTION_RESET) {
-    // On Windows we get net::ERR_CONNECTION_RESET for a broken pipe, while on
-    // Posix read() returns 0 in that case.
+  } else if (result.error() == net::ERR_CONNECTION_RESET) {
+    // On Windows we get net::ERR_CONNECTION_RESET for a broken pipe.
     Close(kNativeHostExited);
   } else {
     Close(kHostInputOutputError);
@@ -293,8 +312,9 @@ void NativeMessageProcessHost::ProcessIncomingData(
   incoming_data_.append(data, data_size);
 
   while (true) {
-    if (incoming_data_.size() < kMessageHeaderSize)
+    if (incoming_data_.size() < kMessageHeaderSize) {
       return;
+    }
 
     // TODO(crbug.com/428945428): Fix unsafe uses of std::string::data().
     size_t message_size =
@@ -307,8 +327,13 @@ void NativeMessageProcessHost::ProcessIncomingData(
       return;
     }
 
-    if (incoming_data_.size() < message_size + kMessageHeaderSize)
+    if (incoming_data_.size() < message_size + kMessageHeaderSize) {
       return;
+    }
+
+    base::UmaHistogramCustomCounts(
+        "Extensions.NativeMessaging.MessageSize.NativeApp", message_size, 1,
+        kMaximumNativeMessageSize, 50);
 
     client_->PostMessageFromNativeHost(
         incoming_data_.substr(kMessageHeaderSize, message_size));
@@ -323,8 +348,9 @@ void NativeMessageProcessHost::DoWrite() {
   while (!write_pending_ && !closed_) {
     if (!current_write_buffer_.get() ||
         !current_write_buffer_->BytesRemaining()) {
-      if (write_queue_.empty())
+      if (write_queue_.empty()) {
         return;
+      }
       scoped_refptr<net::IOBufferWithSize> buffer =
           std::move(write_queue_.front());
       int buffer_size = buffer->size();
@@ -333,31 +359,40 @@ void NativeMessageProcessHost::DoWrite() {
       write_queue_.pop();
     }
 
-    int result = write_stream_->Write(
+    HandleWriteResult(write_stream_->Write(
         current_write_buffer_.get(), current_write_buffer_->BytesRemaining(),
         base::BindOnce(&NativeMessageProcessHost::OnWritten,
-                       weak_factory_.GetWeakPtr()));
-    HandleWriteResult(result);
+                       weak_factory_.GetWeakPtr())));
   }
 }
 
-void NativeMessageProcessHost::HandleWriteResult(int result) {
+void NativeMessageProcessHost::HandleWriteResult(
+    base::expected<base::ByteSize, net::Error> result) {
   DCHECK(task_runner_->BelongsToCurrentThread());
 
-  if (result <= 0) {
-    if (result == net::ERR_IO_PENDING) {
+  if (!result.has_value()) {
+    if (result.error() == net::ERR_IO_PENDING) {
       write_pending_ = true;
     } else {
-      LOG(ERROR) << "Error when writing to Native Messaging host: " << result;
+      LOG(ERROR) << "Error when writing to Native Messaging host: "
+                 << result.error();
       Close(kHostInputOutputError);
     }
     return;
   }
 
-  current_write_buffer_->DidConsume(result);
+  if (result->is_zero()) {
+    LOG(ERROR) << "Error when writing to Native Messaging host: unexpected "
+                  "zero-length write";
+    Close(kHostInputOutputError);
+    return;
+  }
+
+  current_write_buffer_->DidConsume(base::checked_cast<int>(result->InBytes()));
 }
 
-void NativeMessageProcessHost::OnWritten(int result) {
+void NativeMessageProcessHost::OnWritten(
+    base::expected<base::ByteSize, net::Error> result) {
   DCHECK(task_runner_->BelongsToCurrentThread());
 
   DCHECK(write_pending_);

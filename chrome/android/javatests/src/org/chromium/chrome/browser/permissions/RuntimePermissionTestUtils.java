@@ -18,14 +18,13 @@ import org.chromium.base.ApkInfo;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.permissions.PermissionTestRule.PermissionUpdateWaiter;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.browser.LocationSettingsTestUtil;
 import org.chromium.content_public.browser.test.util.JavaScriptUtils;
-import org.chromium.content_public.browser.test.util.TouchCommon;
 import org.chromium.device.geolocation.LocationProviderOverrider;
 import org.chromium.device.geolocation.MockLocationProvider;
 import org.chromium.ui.modaldialog.DialogDismissalCause;
@@ -50,7 +49,7 @@ public class RuntimePermissionTestUtils {
         ALREADY_GRANTED, // Also implies "ASSERT_NEVER_ASKED"
     }
 
-    /** Utility delegate for to provide the permissions to be requested and the runtime response. */
+    /** Utility delegate to provide the permissions to be requested and the runtime response. */
     public static class TestAndroidPermissionDelegate implements AndroidPermissionDelegate {
         private RuntimePromptResponse mResponse;
         private final Set<String> mRequestablePermissions;
@@ -58,8 +57,8 @@ public class RuntimePermissionTestUtils {
 
         public TestAndroidPermissionDelegate(
                 final String[] requestablePermissions, final RuntimePromptResponse response) {
-            mRequestablePermissions = new TreeSet(Arrays.asList(requestablePermissions));
-            mGrantedPermissions = new TreeSet();
+            mRequestablePermissions = new TreeSet<>(Arrays.asList(requestablePermissions));
+            mGrantedPermissions = new TreeSet<>();
             mResponse = response;
             if (mResponse == RuntimePromptResponse.ALREADY_GRANTED) {
                 mGrantedPermissions.addAll(mRequestablePermissions);
@@ -124,6 +123,8 @@ public class RuntimePermissionTestUtils {
     public static void setupGeolocationSystemMock(boolean enabled) {
         LocationSettingsTestUtil.setSystemLocationSettingEnabled(enabled);
         LocationProviderOverrider.setLocationProviderImpl(new MockLocationProvider());
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> LocationProviderOverrider.clearCachedGeopositionsForTesting());
     }
 
     public static void setupGeolocationSystemMock() {
@@ -175,6 +176,33 @@ public class RuntimePermissionTestUtils {
             final String javascriptToExecute,
             final @StringRes int missingPermissionPromptTextId)
             throws Exception {
+        runTestInternal(
+                activity,
+                permissionTestRule,
+                testAndroidPermissionDelegate,
+                testUrl,
+                expectPermissionAllowed,
+                promptDecision,
+                waitForMissingPermissionPrompt,
+                waitForUpdater,
+                javascriptToExecute,
+                missingPermissionPromptTextId,
+                /* useForgivingClick= */ false);
+    }
+
+    private static void runTestInternal(
+            final ChromeActivity activity,
+            final PermissionTestRule permissionTestRule,
+            final TestAndroidPermissionDelegate testAndroidPermissionDelegate,
+            final String testUrl,
+            final boolean expectPermissionAllowed,
+            final @PermissionTestRule.PromptDecision int promptDecision,
+            final boolean waitForMissingPermissionPrompt,
+            final boolean waitForUpdater,
+            final String javascriptToExecute,
+            final @StringRes int missingPermissionPromptTextId,
+            final boolean useForgivingClick)
+            throws Exception {
         activity.getWindowAndroid().setAndroidPermissionDelegate(testAndroidPermissionDelegate);
 
         final Tab tab = ThreadUtils.runOnUiThreadBlocking(() -> activity.getActivityTab());
@@ -192,10 +220,9 @@ public class RuntimePermissionTestUtils {
                 });
 
         if (javascriptToExecute != null && !javascriptToExecute.isEmpty()) {
-            JavaScriptUtils.executeJavaScriptAndWaitForResult(
+            JavaScriptUtils.executeJavaScriptWithUserGestureAndWaitForResult(
                     ThreadUtils.runOnUiThreadBlocking(() -> tab.getWebContents()),
-                    "functionToRun = '" + javascriptToExecute + "'");
-            TouchCommon.singleClickView(ThreadUtils.runOnUiThreadBlocking(() -> tab.getView()));
+                    javascriptToExecute);
         }
 
         PropertyModel askPermissionDialogModel = null;
@@ -207,7 +234,11 @@ public class RuntimePermissionTestUtils {
                     ThreadUtils.runOnUiThreadBlocking(activity::getModalDialogManager);
             askPermissionDialogModel = manager.getCurrentDialogForTest();
 
-            PermissionTestRule.replyToDialog(promptDecision, activity);
+            if (useForgivingClick) {
+                PermissionTestRule.replyToDialogForgiving(promptDecision, activity);
+            } else {
+                PermissionTestRule.replyToDialog(promptDecision, activity);
+            }
 
             if (waitForMissingPermissionPrompt) {
                 // Wait for Chrome to inform user that a permission is missing --> different dialog
@@ -282,5 +313,35 @@ public class RuntimePermissionTestUtils {
                 waitForUpdater,
                 javascriptToExecute,
                 missingPermissionPromptTextId);
+    }
+
+    /**
+     * Identical to {@link #runTest} but uses {@link PermissionTestRule#replyToDialogForgiving} to
+     * bypass Espresso's default 90% visibility requirement for clicks.
+     */
+    public static void runTestForgiving(
+            final PermissionTestRule permissionTestRule,
+            final TestAndroidPermissionDelegate testAndroidPermissionDelegate,
+            final String testUrl,
+            final boolean expectPermissionAllowed,
+            final @PermissionTestRule.PromptDecision int promptDecision,
+            final boolean waitForMissingPermissionPrompt,
+            final boolean waitForUpdater,
+            final String javascriptToExecute,
+            final @StringRes int missingPermissionPromptTextId)
+            throws Exception {
+        final ChromeActivity activity = permissionTestRule.getActivity();
+        runTestInternal(
+                activity,
+                permissionTestRule,
+                testAndroidPermissionDelegate,
+                testUrl,
+                expectPermissionAllowed,
+                promptDecision,
+                waitForMissingPermissionPrompt,
+                waitForUpdater,
+                javascriptToExecute,
+                missingPermissionPromptTextId,
+                /* useForgivingClick= */ true);
     }
 }

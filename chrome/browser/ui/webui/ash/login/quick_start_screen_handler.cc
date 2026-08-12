@@ -4,8 +4,8 @@
 
 #include "chrome/browser/ui/webui/ash/login/quick_start_screen_handler.h"
 
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "base/values.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/login/localized_values_builder.h"
 #include "quick_start_screen_handler.h"
 
@@ -24,7 +24,7 @@ void QuickStartScreenHandler::SetPIN(const std::string pin) {
   CallExternalAPI("setPin", pin);
 }
 
-void QuickStartScreenHandler::SetQRCode(base::Value::List blob,
+void QuickStartScreenHandler::SetQRCode(base::ListValue blob,
                                         const std::string url) {
   CallExternalAPI("setQRCode", std::move(blob), url);
 }

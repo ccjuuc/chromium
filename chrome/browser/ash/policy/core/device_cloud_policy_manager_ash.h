@@ -20,13 +20,8 @@
 #include "components/policy/core/common/schema_registry.h"
 #include "components/user_manager/user_manager.h"
 
-namespace reporting {
-class MetricReportingManager;
-class OsUpdatesReporter;
-class UserAddedRemovedReporter;
-class UserEventReporterHelper;
-class UserSessionActivityReporter;
-}  // namespace reporting
+class PrefRegistrySimple;
+class PrefService;
 
 namespace ash {
 namespace attestation {
@@ -45,8 +40,17 @@ namespace base {
 class SequencedTaskRunner;
 }  // namespace base
 
-class PrefRegistrySimple;
-class PrefService;
+namespace network {
+class SharedURLLoaderFactory;
+}  // namespace network
+
+namespace reporting {
+class MetricReportingManager;
+class OsUpdatesReporter;
+class UserAddedRemovedReporter;
+class UserEventReporterHelper;
+class UserSessionActivityReporter;
+}  // namespace reporting
 
 namespace policy {
 
@@ -54,7 +58,6 @@ class StartCrdSessionJobDelegate;
 class DeviceCloudPolicyStoreAsh;
 class EuiccStatusUploader;
 class ForwardingSchemaRegistry;
-class HeartbeatScheduler;
 class LookupKeyUploader;
 class ManagedSessionService;
 class ReportingUserTracker;
@@ -97,7 +100,11 @@ class DeviceCloudPolicyManagerAsh : public CloudPolicyManager,
   void Init(SchemaRegistry* registry) override;
 
   // Initializes state keys.
-  void Initialize(PrefService* local_state);
+  // `local_state` must be non-null and must be valid until Shutdown().
+  // `shared_url_loader_factory` must be non-null.
+  void Initialize(
+      PrefService* local_state,
+      scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory);
 
   void AddDeviceCloudPolicyManagerObserver(Observer* observer);
   void RemoveDeviceCloudPolicyManagerObserver(Observer* observer);
@@ -166,8 +173,6 @@ class DeviceCloudPolicyManagerAsh : public CloudPolicyManager,
   void OnUserToBeRemoved(const AccountId& account_id) override;
   void OnUserRemoved(const AccountId& account_id,
                      user_manager::UserRemovalReason reason) override;
-
-  HeartbeatScheduler* GetHeartbeatSchedulerForTesting() const;
 
   reporting::OsUpdatesReporter* GetOsUpdatesReporter() const;
 
@@ -238,10 +243,6 @@ class DeviceCloudPolicyManagerAsh : public CloudPolicyManager,
   // Helper object that handles uploading system logs to the server.
   std::unique_ptr<SystemLogUploader> syslog_uploader_;
 
-  // Helper object that handles sending heartbeats over the GCM channel to
-  // the server, to monitor connectivity.
-  std::unique_ptr<HeartbeatScheduler> heartbeat_scheduler_;
-
   // Object that initiates device metrics collection and reporting.
   std::unique_ptr<reporting::MetricReportingManager> metric_reporting_manager_;
 
@@ -252,7 +253,9 @@ class DeviceCloudPolicyManagerAsh : public CloudPolicyManager,
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
   // PrefService instance to read the policy refresh rate from.
-  raw_ptr<PrefService, DanglingUntriaged> local_state_;
+  raw_ptr<PrefService> local_state_;
+
+  scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory_;
 
   base::CallbackListSubscription state_keys_update_subscription_;
 

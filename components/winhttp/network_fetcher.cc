@@ -23,7 +23,6 @@
 #include "base/numerics/safe_math.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions_win.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
@@ -34,6 +33,7 @@
 #include "components/winhttp/proxy_info.h"
 #include "components/winhttp/scoped_hinternet.h"
 #include "components/winhttp/scoped_winttp_proxy_info.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "url/url_constants.h"
 
 namespace winhttp {
@@ -75,6 +75,10 @@ NetworkFetcher::NetworkFetcher(
 
 NetworkFetcher::~NetworkFetcher() {
   DVLOG(3) << __func__;
+  if (request_handle_.is_valid()) {
+    ::WinHttpSetStatusCallback(request_handle_.get(), nullptr,
+                               WINHTTP_CALLBACK_FLAG_ALL_NOTIFICATIONS, 0);
+  }
 }
 
 void NetworkFetcher::HandleClosing() {
@@ -92,14 +96,20 @@ void NetworkFetcher::Close() {
 
 void NetworkFetcher::CompleteFetch() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!fetch_complete_callback_) {
+    return;
+  }
+  const int reported_response_code =
+      FAILED(net_error_) ? net_error_ : response_code_;
   if (!file_.IsValid()) {
-    std::move(fetch_complete_callback_).Run(response_code_);
+    std::move(fetch_complete_callback_).Run(reported_response_code);
     return;
   }
   base::ThreadPool::PostTaskAndReply(
       FROM_HERE, kTaskTraits,
-      base::BindOnce([](base::File& file) { file.Close(); }, std::ref(file_)),
-      base::BindOnce(&NetworkFetcher::CompleteFetch, this));
+      base::BindOnce([](base::File file) { file.Close(); }, std::move(file_)),
+      base::BindOnce(std::move(fetch_complete_callback_),
+                     reported_response_code));
 }
 
 HRESULT NetworkFetcher::QueryHeaderString(const std::wstring& name,
@@ -151,6 +161,7 @@ void NetworkFetcher::PostRequest(
     FetchProgressCallback fetch_progress_callback,
     FetchCompleteCallback fetch_complete_callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(url_.is_empty());
 
   url_ = url;
   fetch_started_callback_ = std::move(fetch_started_callback);
@@ -178,6 +189,7 @@ base::OnceClosure NetworkFetcher::DownloadToFile(
     FetchProgressCallback fetch_progress_callback,
     FetchCompleteCallback fetch_complete_callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(url_.is_empty());
 
   url_ = url;
   file_path_ = file_path;
@@ -303,7 +315,7 @@ ScopedHInternet NetworkFetcher::OpenRequest() {
     flags |= WINHTTP_FLAG_SECURE;
   }
   return ScopedHInternet(::WinHttpOpenRequest(
-      connect_handle_.get(), verb_.data(),
+      connect_handle_.get(), verb_.c_str(),
       base::SysUTF8ToWide(path_for_request_).c_str(), nullptr,
       WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
 }
@@ -586,7 +598,7 @@ void __stdcall NetworkFetcher::WinHttpStatusCallback(HINTERNET handle,
       CHECK(info);
       CHECK_EQ(info_len, sizeof(uint32_t));
       info_string = base::ASCIIToWide(
-          base::StringPrintf("%#x", *static_cast<uint32_t*>(info)));
+          absl::StrFormat("%#x", *static_cast<uint32_t*>(info)));
       break;
     default:
       status_string = "unknown callback";
@@ -595,13 +607,12 @@ void __stdcall NetworkFetcher::WinHttpStatusCallback(HINTERNET handle,
 
   std::string msg;
   if (!status_string.empty()) {
-    base::StringAppendF(&msg, "status=%s", status_string.data());
+    absl::StrAppendFormat(&msg, "status=%s", status_string);
   } else {
-    base::StringAppendF(&msg, "status=%#lx", status);
+    absl::StrAppendFormat(&msg, "status=%#lx", status);
   }
   if (!info_string.empty()) {
-    base::StringAppendF(&msg, ", info=%s",
-                        base::SysWideToUTF8(info_string).c_str());
+    absl::StrAppendFormat(&msg, ", info=%s", base::SysWideToUTF8(info_string));
   }
   VLOG(3) << "WinHttp status callback:" << " handle=" << handle << ", " << msg;
 

@@ -64,17 +64,22 @@ SVGParsingError SVGLengthList::SetValueAsString(const String& value) {
   if (value.empty())
     return SVGParseStatus::kNoError;
 
-  return VisitCharacters(value,
-                         [&](auto chars) { return ParseInternal(chars); });
+  SVGParsingError status =
+      VisitCharacters(value, [&](auto chars) { return ParseInternal(chars); });
+  if (status != SVGParseStatus::kNoError) {
+    Clear();
+  }
+  return status;
 }
 
-void SVGLengthList::Add(const SVGPropertyBase* other,
+bool SVGLengthList::Add(const SVGPropertyBase* other,
                         const SVGElement* context_element) {
   auto* other_list = To<SVGLengthList>(other);
   if (length() != other_list->length())
-    return;
+    return true;
   for (uint32_t i = 0; i < length(); ++i)
     at(i)->Add(other_list->at(i), context_element);
+  return true;
 }
 
 SVGLength* SVGLengthList::CreatePaddingItem() const {

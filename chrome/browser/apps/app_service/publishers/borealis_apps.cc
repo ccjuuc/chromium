@@ -7,19 +7,17 @@
 #include <optional>
 
 #include "ash/public/cpp/app_menu_constants.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/apps/app_service/app_icon/app_icon_factory.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/menu_util.h"
 #include "chrome/browser/apps/app_service/publishers/guest_os_apps.h"
-#include "chrome/browser/ash/borealis/borealis_app_launcher.h"
 #include "chrome/browser/ash/borealis/borealis_app_uninstaller.h"
-#include "chrome/browser/ash/borealis/borealis_context_manager.h"
 #include "chrome/browser/ash/borealis/borealis_features.h"
-#include "chrome/browser/ash/borealis/borealis_metrics.h"
+#include "chrome/browser/ash/borealis/borealis_installer.h"
 #include "chrome/browser/ash/borealis/borealis_prefs.h"
 #include "chrome/browser/ash/borealis/borealis_service.h"
 #include "chrome/browser/ash/borealis/borealis_service_factory.h"
@@ -30,7 +28,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/experiences/guest_os/borealis/motd/borealis_motd_dialog.h"
 #include "components/prefs/pref_service.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace {
@@ -241,10 +241,10 @@ void BorealisApps::LaunchAppWithIntent(const std::string& app_id,
                                        LaunchSource launch_source,
                                        WindowInfoPtr window_info,
                                        LaunchCallback callback) {
-  borealis::BorealisServiceFactory::GetForProfile(profile())
-      ->AppLauncher()
-      .Launch(app_id, borealis::BorealisLaunchSource::kSteamInstallerApp,
-              base::DoNothing());
+  // Borealis is being removed, instead of launching the application
+  // the MOTD will be shown with information about the removal and an
+  // option to uninstall it.
+  borealis::BorealisMOTDDialog::MaybeShow(profile(), base::DoNothing());
 }
 
 void BorealisApps::SetPermission(const std::string& app_id,

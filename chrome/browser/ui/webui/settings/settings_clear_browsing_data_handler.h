@@ -19,7 +19,7 @@
 #include "chrome/browser/ui/webui/settings/settings_page_ui_handler.h"
 #include "components/browsing_data/core/browsing_data_utils.h"
 #include "components/browsing_data/core/counters/browsing_data_counter.h"
-#include "components/search/search_provider_observer.h"
+#include "components/search_engines/template_url_service.h"
 #include "components/search_engines/template_url_service_observer.h"
 #include "components/sync/service/sync_service.h"
 
@@ -60,7 +60,7 @@ class ClearBrowsingDataHandler : public SettingsPageUIHandler,
                            UpdateSyncState_NonGoogleDseNotPrepopulated);
 
   // Clears browsing data, called by Javascript.
-  void HandleClearBrowsingData(const base::Value::List& value);
+  void HandleClearBrowsingData(const base::ListValue& value);
 
   // Called when a clearing task finished. |webui_callback_id| is provided
   // by the WebUI action that initiated it.
@@ -72,10 +72,10 @@ class ClearBrowsingDataHandler : public SettingsPageUIHandler,
       uint64_t failed_data_types);
 
   // Initializes the dialog UI. Called by JavaScript when the DOM is ready.
-  void HandleInitialize(const base::Value::List& args);
+  void HandleInitialize(const base::ListValue& args);
 
   // Returns the current sync state to the WebUI.
-  void HandleGetSyncState(const base::Value::List& args);
+  void HandleGetSyncState(const base::ListValue& args);
 
   // Called by WebUI when the user takes an action that warrants restarting
   // counters.
@@ -85,7 +85,7 @@ class ClearBrowsingDataHandler : public SettingsPageUIHandler,
   // should be reconciled with `HandleTimePeriodChanged` below which likewise
   // triggers on the dropdown change, but only after the deletion has been
   // executed and prefs updated.
-  void HandleRestartCounters(const base::Value::List& args);
+  void HandleRestartCounters(const base::ListValue& args);
 
   // Implementation of SyncServiceObserver.
   void OnStateChanged(syncer::SyncService* sync) override;
@@ -95,7 +95,7 @@ class ClearBrowsingDataHandler : public SettingsPageUIHandler,
   virtual void UpdateSyncState();
 
   // Create a SyncStateEvent containing the current sync state.
-  base::Value::Dict CreateSyncStateEvent();
+  base::DictValue CreateSyncStateEvent();
 
   // Finds out whether we should show notice about other forms of history stored
   // in user's account.
@@ -107,17 +107,15 @@ class ClearBrowsingDataHandler : public SettingsPageUIHandler,
   void UpdateHistoryDeletionDialog(bool show);
 
   // Adds a browsing data |counter|.
-  void AddCounter(std::unique_ptr<browsing_data::BrowsingDataCounter> counter,
-                  browsing_data::ClearBrowsingDataTab tab);
+  void AddCounter(std::unique_ptr<browsing_data::BrowsingDataCounter> counter);
 
   // Updates a counter text according to the |result|.
   void UpdateCounterText(
       std::unique_ptr<browsing_data::BrowsingDataCounter::Result> result);
 
-  // Restarts |counters_basic_| or |counters_advanced_| depending on the |basic|
-  // argument, and instructs them to calculate the data volume for
+  // Restarts |counters_| and instructs them to calculate the data volume for
   // the |time_period|.
-  void RestartCounters(bool basic, browsing_data::TimePeriod time_period);
+  void RestartCounters(browsing_data::TimePeriod time_period);
 
   // Record changes to the time period preferences.
   void HandleTimePeriodChanged(const std::string& pref_name);
@@ -129,10 +127,7 @@ class ClearBrowsingDataHandler : public SettingsPageUIHandler,
   raw_ptr<Profile> profile_;
 
   // Counters that calculate the data volume for individual data types.
-  std::vector<std::unique_ptr<browsing_data::BrowsingDataCounter>>
-      counters_basic_;
-  std::vector<std::unique_ptr<browsing_data::BrowsingDataCounter>>
-      counters_advanced_;
+  std::vector<std::unique_ptr<browsing_data::BrowsingDataCounter>> counters_;
 
   // SyncService to observe sync state changes.
   raw_ptr<syncer::SyncService> sync_service_;

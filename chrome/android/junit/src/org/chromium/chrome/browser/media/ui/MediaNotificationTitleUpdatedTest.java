@@ -24,13 +24,12 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowKeyguardManager;
-import org.robolectric.shadows.ShadowLooper;
 import org.robolectric.shadows.ShadowNotification;
 
 import org.chromium.base.ContextUtils;
-import org.chromium.base.ScreenOffBroadcastReceiver;
-import org.chromium.base.test.BaseRobolectricTestRule;
+import org.chromium.base.ScreenStateReceiver;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.R;
 import org.chromium.components.browser_ui.media.MediaNotificationController;
 import org.chromium.components.browser_ui.media.MediaSessionHelper;
@@ -74,16 +73,16 @@ public class MediaNotificationTitleUpdatedTest extends MediaNotificationTestBase
                                 .getSystemService(Context.KEYGUARD_SERVICE);
         mShadowKeyguardManager = Shadows.shadowOf(keyguardManager);
 
-        ScreenOffBroadcastReceiver.getInstance();
-        BaseRobolectricTestRule.runAllBackgroundAndUi();
+        ScreenStateReceiver.getInstance();
+        RobolectricUtil.runAllBackgroundAndUi();
     }
 
     @After
     @Override
     public void tearDown() {
         super.tearDown();
-        ScreenOffBroadcastReceiver.resetForTesting();
-        BaseRobolectricTestRule.runAllBackgroundAndUi();
+        ScreenStateReceiver.resetForTesting();
+        RobolectricUtil.runAllBackgroundAndUi();
     }
 
     @Test
@@ -121,7 +120,7 @@ public class MediaNotificationTitleUpdatedTest extends MediaNotificationTestBase
         assertNotNull(getController().mMediaNotificationInfo);
 
         advanceTimeByMillis(HIDE_NOTIFICATION_DELAY_MILLIS);
-        assertNull(getController().mMediaNotificationInfo);
+        assertNull(getController());
     }
 
     @Test
@@ -137,7 +136,7 @@ public class MediaNotificationTitleUpdatedTest extends MediaNotificationTestBase
                 /* isControllable= */ false, /* isSuspended= */ false);
 
         // Should be hidden immediately
-        assertNull(getController().mMediaNotificationInfo);
+        assertNull(getController());
     }
 
     @Test
@@ -158,7 +157,7 @@ public class MediaNotificationTitleUpdatedTest extends MediaNotificationTestBase
         simulateScreenLock();
 
         // Should be hidden immediately
-        assertNull(getController().mMediaNotificationInfo);
+        assertNull(getController());
     }
 
     @Test
@@ -181,7 +180,7 @@ public class MediaNotificationTitleUpdatedTest extends MediaNotificationTestBase
         mShadowKeyguardManager.setKeyguardLocked(true);
         ContextUtils.getApplicationContext().sendBroadcast(new Intent(Intent.ACTION_SCREEN_OFF));
         Shadows.shadowOf(Looper.getMainLooper()).runToEndOfTasks();
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
     }
 
     @Test
@@ -198,7 +197,7 @@ public class MediaNotificationTitleUpdatedTest extends MediaNotificationTestBase
         assertNotNull(getController().mMediaNotificationInfo);
 
         advanceTimeByMillis(HIDE_NOTIFICATION_DELAY_MILLIS);
-        assertNull(getController().mMediaNotificationInfo);
+        assertNull(getController());
     }
 
     @Test

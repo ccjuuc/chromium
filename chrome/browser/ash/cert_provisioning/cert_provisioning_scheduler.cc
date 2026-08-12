@@ -11,7 +11,6 @@
 #include <unordered_set>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
@@ -30,7 +29,6 @@
 #include "chrome/browser/ash/platform_keys/platform_keys_service_factory.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
 #include "chromeos/ash/components/platform_keys/platform_keys.h"
@@ -200,7 +198,7 @@ void CertProvisioningSchedulerImpl::ScheduleRenewal(
     base::TimeDelta delay) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  if (base::Contains(scheduled_renewals_, profile_id)) {
+  if (scheduled_renewals_.contains(profile_id)) {
     return;
   }
 
@@ -292,11 +290,11 @@ void CertProvisioningSchedulerImpl::DailyUpdateWorkers() {
 void CertProvisioningSchedulerImpl::DeserializeWorkers() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  const base::Value::Dict& saved_workers =
+  const base::DictValue& saved_workers =
       pref_service_->GetDict(GetPrefNameForSerialization(cert_scope_));
 
   for (const auto kv : saved_workers) {
-    const base::Value::Dict& saved_worker = kv.second.GetDict();
+    const base::DictValue& saved_worker = kv.second.GetDict();
 
     std::unique_ptr<CertProvisioningWorker> worker =
         CertProvisioningWorkerFactory::Get()->Deserialize(
@@ -408,7 +406,7 @@ void CertProvisioningSchedulerImpl::UpdateWorkerListWithExistingCerts(
   }
 
   for (const auto& profile : profiles) {
-    if (base::Contains(failed_cert_profiles_, profile.profile_id)) {
+    if (failed_cert_profiles_.contains(profile.profile_id)) {
       continue;
     }
 
@@ -484,11 +482,17 @@ void CertProvisioningSchedulerImpl::CreateCertProvisioningWorker(
     CertProfile cert_profile) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
+  std::string id = GenerateCertProvisioningId();
+  if (id.empty()) {
+    // If the id generation fails, something is seriously wrong with the system.
+    // The cert profile will be retried later, as if it failed here.
+    return;
+  }
+
   std::unique_ptr<CertProvisioningWorker> worker =
       CertProvisioningWorkerFactory::Get()->Create(
-          GenerateCertProvisioningId(), cert_scope_, profile_, pref_service_,
-          cert_profile, cert_provisioning_client_.get(),
-          invalidator_factory_->Create(),
+          std::move(id), cert_scope_, profile_, pref_service_, cert_profile,
+          cert_provisioning_client_.get(), invalidator_factory_->Create(),
           base::BindRepeating(
               &CertProvisioningSchedulerImpl::OnVisibleStateChanged,
               weak_factory_.GetWeakPtr()),
@@ -630,7 +634,7 @@ std::optional<CertProfile> CertProvisioningSchedulerImpl::GetOneCertProfile(
   const base::Value& profile_list = pref_service_->GetValue(pref_name_);
 
   for (const base::Value& cur_profile : profile_list.GetList()) {
-    const base::Value::Dict& cur_profile_dict = cur_profile.GetDict();
+    const base::DictValue& cur_profile_dict = cur_profile.GetDict();
     const CertProfileId* id = cur_profile_dict.FindString(kCertProfileIdKey);
     if (!id || (*id != cert_profile_id)) {
       continue;

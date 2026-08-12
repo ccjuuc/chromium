@@ -30,6 +30,9 @@ source_set("tests") {
     "equals_unittest.cc",
     "extra_cpp_template_unittest.cc",
     "feature_unittest.cc",
+    "fixed_array_size_unittest.cc",
+    "fixed_array_size_unittest_mojom_traits.cc",
+    "fixed_array_size_unittest_mojom_traits.h",
     "flush_async_unittest.cc",
     "handle_passing_unittest.cc",
     "hash_unittest.cc",
@@ -43,6 +46,8 @@ source_set("tests") {
     "native_struct_unittest.cc",
     "new_endpoint_types_unittest.cc",
     "nullable_value_types_unittest.cc",
+    "race_condition_scheduler.cc",
+    "race_condition_scheduler.h",
     "receiver_callback_unittest.cc",
     "receiver_set_unittest.cc",
     "receiver_unittest.cc",
@@ -63,6 +68,8 @@ source_set("tests") {
     "sync_handle_registry_unittest.cc",
     "sync_method_unittest.cc",
     "test_helpers_unittest.cc",
+    "testable_multiplex_router.cc",
+    "testable_multiplex_router.h",
     "type_conversion_unittest.cc",
     "union_unittest.cc",
     "validation_context_unittest.cc",
@@ -91,7 +98,7 @@ source_set("tests") {
     "//mojo/public/interfaces/bindings/tests:test_interfaces_for_containers_of_optionals",
     "//mojo/public/interfaces/bindings/tests:test_struct_traits_interfaces",
     "//testing/gtest",
-    "//third_party/ipcz/src:ipcz_test_support_chromium",
+    "//third_party/ipcz/src:ipcz_test_support",
   ]
 
   if (is_ios) {
@@ -207,6 +214,7 @@ mojom("test_mojom") {
     "enum_headers_unittest.test-mojom",
     "feature_unittest.test-mojom",
     "feature_unittest_other.test-mojom",
+    "fixed_array_size_unittest.test-mojom",
     "flush_async_unittest.test-mojom",
     "idle_tracking_unittest.test-mojom",
     "interface_unittest.test-mojom",
@@ -238,6 +246,15 @@ mojom("test_mojom") {
         },
       ]
       traits_headers = [ "default_construct_unittest_mojom_traits.h" ]
+    },
+    {
+      types = [
+        {
+          mojom = "mojo.test.fixed_array_size_unittest.mojom.Struct3"
+          cpp = "::mojo::test::fixed_array_size_unittest::TypemappedStruct3"
+        },
+      ]
+      traits_headers = [ "fixed_array_size_unittest_mojom_traits.h" ]
     },
     {
       types = [

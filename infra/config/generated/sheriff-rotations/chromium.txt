@@ -1,7 +1,6 @@
 ci/ASAN Debug
 ci/ASAN Release
 ci/ASAN Release Media
-ci/ASan Debug (32-bit x86 with V8-ARM)
 ci/ASan Release (32-bit x86 with V8-ARM)
 ci/ASan Release Media (32-bit x86 with V8-ARM)
 ci/Centipede High End Upload Linux ASan
@@ -41,15 +40,12 @@ ci/Linux Tests
 ci/Linux Tests (dbg)(1)
 ci/Linux UBSan Builder
 ci/Linux UBSan Tests
-ci/MSAN Release (chained origins)
-ci/MSAN Release (no origins)
 ci/Mac ASAN Release
 ci/Mac ASAN Release Media
 ci/Mac ASan 64 Builder
 ci/Mac ASan 64 Tests (1)
 ci/Mac Builder
 ci/Mac Builder (dbg)
-ci/Mac12 Tests
 ci/Mac13 Tests
 ci/Network Service Linux
 ci/TSAN Debug
@@ -87,6 +83,8 @@ ci/ios-simulator
 ci/ios-simulator-full-configs
 ci/ios-simulator-noncq
 ci/linux-archive-rel
+ci/linux-arm64-dbg
+ci/linux-arm64-dbg-tests
 ci/linux-bfcache-rel
 ci/linux-blink-asan-rel
 ci/linux-blink-leak-rel
@@ -102,6 +100,7 @@ ci/linux-chromeos-dbg
 ci/linux-chromeos-rel
 ci/linux-extended-tracing-rel
 ci/linux-gcc-rel
+ci/linux-no-initial-webui-rel
 ci/linux-oi-rel
 ci/linux-presubmit
 ci/linux-v4l2-codec-rel
@@ -120,12 +119,14 @@ ci/mac-arm64-dbg
 ci/mac-arm64-libfuzzer-asan-rel-tests
 ci/mac-arm64-on-arm64-rel
 ci/mac-arm64-rel
+ci/mac-no-initial-webui-rel
 ci/mac-official
-ci/mac12-arm64-rel-tests
 ci/mac13-arm64-rel-tests
 ci/mac14-arm64-rel-tests
 ci/mac15-arm64-rel-tests
 ci/mac15-x64-rel-tests
+ci/mac26-arm64-rel-tests
+ci/mac26-x64-rel-tests
 ci/win-archive-rel
 ci/win-arm64-dbg
 ci/win-arm64-rel
@@ -136,3 +137,4 @@ ci/win-x64-libfuzzer-asan-rel-tests
 ci/win11-arm64-rel-tests
 ci/win32-archive-rel
 ci/win32-official
+ci/windows-no-initial-webui-rel

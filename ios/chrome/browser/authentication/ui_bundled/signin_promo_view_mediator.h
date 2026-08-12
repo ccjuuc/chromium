@@ -15,7 +15,6 @@
 class AuthenticationService;
 class ChromeAccountManagerService;
 class PrefService;
-@protocol SigninPresenter;
 @protocol AccountSettingsPresenter;
 typedef NS_ENUM(NSUInteger, SigninCoordinatorResult);
 @class SigninPromoViewConfigurator;
@@ -41,20 +40,24 @@ class PrefRegistrySyncable;
 }  // namespace user_prefs
 
 // Enums for the sign-in promo view state. Those states are sequential, with no
-// way to go backwards. All states can be skipped except `NeverVisible` and
-// `Invalid`.
+// way to go backwards. All states can be skipped except `kNotYetDisplayed` and
+// `kDisconnected`.
 enum class SigninPromoViewState {
-  // Initial state. When -[SigninPromoViewMediator disconnect] is called with
-  // that state, no metrics is recorded.
-  kNeverVisible,
-  // None of the buttons has been used yet.
-  kUnused,
+  // Initial state, before the first time the view is displayed. If the state
+  // is still `kNotYetDisplayed` when -[SigninPromoViewMediator disconnect] is
+  // called, it means the view was never displayed, thus no metrics are
+  // recorded.
+  kNotYetDisplayed,
+  // None of the buttons has been used yet. The view has been displayed, but may
+  // have been removed again if the promo is not useful anymore.
+  kHadNoInteraction,
   // Sign-in buttons have been used at least once.
-  kUsedAtLeastOnce,
-  // Sign-in promo has been closed.
+  kUserInteracted,
+  // The user tapped on the button to remove the sign-in promo from the view
+  // displaying the promo.
   kClosed,
-  // Sign-in promo view has been removed.
-  kInvalid,
+  // The mediator has been disconnected.
+  kDisconnected,
 };
 
 // The action performed when accepting the promo.
@@ -117,9 +120,9 @@ enum class SigninPromoAction {
 // initial sync is in progress.
 @property(nonatomic, assign, readonly) BOOL showSpinner;
 
-// Returns YES if the sign-in promo view is `Invalid`, `Closed` or invisible.
-@property(nonatomic, assign, readonly, getter=isInvalidClosedOrNeverVisible)
-    BOOL invalidClosedOrNeverVisible;
+// Returns YES if the sign-in promo view is in a state where its buttons may be
+// used.
+@property(nonatomic, assign, readonly, getter=isUsable) BOOL usable;
 
 // The action performed when accepting the promo. kInstantSignin by default.
 @property(nonatomic, assign) SigninPromoAction signinPromoAction;
@@ -178,11 +181,11 @@ enum class SigninPromoAction {
 - (void)signinPromoViewIsHidden;
 
 // Disconnects the mediator, this method needs to be called when the sign-in
-// promo view is removed from the view hierarchy (it or one of its superviews is
-// removed). The mediator should not be used after this called.
+// promo view is removed from the view hierarchy (either the promo or one of its
+// superviews is removed). The mediator should not be used after this is called.
 - (void)disconnect;
 
-// Callback for the SigninPresenter.
+// Callback for the Signin.
 - (void)signinDidCompleteWithResult:(SigninCoordinatorResult)result;
 
 @end

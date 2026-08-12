@@ -32,8 +32,6 @@ class GlicMediaContext : public content::DocumentUserData<GlicMediaContext>,
 
   bool OnResult(const media::SpeechRecognitionResult&);
 
-  std::string GetContext() const;
-
   void OnPeerConnectionAdded();
   void OnPeerConnectionRemoved();
   void OnPipPeerConnectionAdded();
@@ -80,6 +78,12 @@ class GlicMediaContext : public content::DocumentUserData<GlicMediaContext>,
 
   // Returns a copy of the transcript chunks.
   std::list<TranscriptChunk> GetTranscriptChunks() const;
+
+  // Returns whether there are any final transcript chunks.
+  bool HasTranscriptChunks() const;
+
+  // Clears all stored transcripts.
+  void ClearAllTranscripts();
 
  protected:
   // Gets the current media session, if one exists. Virtual for testing.

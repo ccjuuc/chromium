@@ -9,7 +9,6 @@
 #include <utility>
 
 #include "base/base64.h"
-#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/json/values_util.h"
 #include "base/pickle.h"
@@ -156,9 +155,7 @@ ContentRevision ToContentRevision(const std::string& str) {
 std::string SerializeDebugStreamData(const DebugStreamData& data) {
   base::Pickle pickle;
   PickleDebugStreamData(data, pickle);
-  const uint8_t* pickle_data_ptr = static_cast<const uint8_t*>(pickle.data());
-  return base::Base64Encode(
-      UNSAFE_TODO(base::span<const uint8_t>(pickle_data_ptr, pickle.size())));
+  return base::Base64Encode(pickle.AsBytes());
 }
 
 std::optional<DebugStreamData> DeserializeDebugStreamData(
@@ -166,11 +163,12 @@ std::optional<DebugStreamData> DeserializeDebugStreamData(
   std::string binary_data;
   if (!base::Base64Decode(base64_encoded, &binary_data))
     return std::nullopt;
-  base::Pickle pickle =
-      base::Pickle::WithUnownedBuffer(base::as_byte_span(binary_data));
   DebugStreamData result;
-  if (!UnpickleDebugStreamData(base::PickleIterator(pickle), result))
+  if (!UnpickleDebugStreamData(
+          base::PickleIterator::WithData(base::as_byte_span(binary_data)),
+          result)) {
     return std::nullopt;
+  }
   return result;
 }
 
@@ -179,9 +177,8 @@ DebugStreamData::~DebugStreamData() = default;
 DebugStreamData::DebugStreamData(const DebugStreamData&) = default;
 DebugStreamData& DebugStreamData::operator=(const DebugStreamData&) = default;
 
-base::Value::Dict PersistentMetricsDataToDict(
-    const PersistentMetricsData& data) {
-  base::Value::Dict dict;
+base::DictValue PersistentMetricsDataToDict(const PersistentMetricsData& data) {
+  base::DictValue dict;
   dict.Set("day_start", base::TimeToValue(data.current_day_start));
   dict.Set("time_spent_in_feed",
            base::TimeDeltaToValue(data.accumulated_time_spent_in_feed));
@@ -195,7 +192,7 @@ base::Value::Dict PersistentMetricsDataToDict(
 }
 
 PersistentMetricsData PersistentMetricsDataFromDict(
-    const base::Value::Dict& dict) {
+    const base::DictValue& dict) {
   PersistentMetricsData result;
   std::optional<base::Time> day_start =
       base::ValueToTime(dict.Find("day_start"));

@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <string_view>
 #include <vector>
 
@@ -27,8 +28,7 @@ class Origin;
 
 namespace visitedlink {
 
-// number of bytes in the salt
-#define LINK_SALT_LENGTH 8
+using LinkSalt = std::array<uint8_t, 8>;
 
 // A multiprocess-safe database of the visited links for the browser. There
 // should be exactly one process that has write access (implemented by
@@ -66,8 +66,14 @@ class VisitedLinkCommon {
   typedef int32_t Hash;
 
   // A fingerprint or hash value that does not exist
-  static const Fingerprint null_fingerprint_;
-  static const Hash null_hash_;
+  static constexpr Fingerprint kNullFingerprint = 0;
+  static constexpr Hash kNullHash = -1;
+
+  // The constant salt used for pseudo-partitioned visited links.
+  // Pseudo-partitioning does not use per-origin salts, so a constant salt
+  // is used to adhere to the partitioned infrastructure. This is used in
+  // Android WebView. See crbug.com/506963484 for more context.
+  static constexpr uint64_t kPseudoPartitionedConstantSalt = 0;
 
   VisitedLinkCommon();
 
@@ -80,6 +86,12 @@ class VisitedLinkCommon {
   Fingerprint ComputeURLFingerprint(std::string_view canonical_url) const {
     return ComputeURLFingerprint(canonical_url, salt_);
   }
+
+  // Computes the pseudo-partitioned fingerprint.
+  // Puts the canonical URL into all three partitioned key components
+  // and uses a constant static salt. Used by Android WebView.
+  static Fingerprint ComputePseudoPartitionedFingerprint(
+      std::string_view canonical_url);
 
   // Looks up the given key in the table. Returns true if found. Does not
   // modify the hashtable.
@@ -111,7 +123,7 @@ class VisitedLinkCommon {
     uint32_t length;
 
     // goes into salt_
-    uint8_t salt[LINK_SALT_LENGTH];
+    LinkSalt salt;
 
     // Padding to ensure the Fingerprint table is aligned. Without this, reading
     // from the table causes unaligned reads.
@@ -144,7 +156,7 @@ class VisitedLinkCommon {
   // contain endian issues.
   Fingerprint FingerprintAt(int32_t table_offset) const {
     if (!hash_table_)
-      return null_fingerprint_;
+      return kNullFingerprint;
     return UNSAFE_TODO(hash_table_[table_offset]);
   }
 
@@ -152,9 +164,8 @@ class VisitedLinkCommon {
   // same algorithm can be re-used by the table rebuilder, so you will have to
   // pass the salt as a parameter. See the non-static version above if you
   // want to use the current class' salt.
-  static Fingerprint ComputeURLFingerprint(
-      std::string_view canonical_url,
-      const uint8_t salt[LINK_SALT_LENGTH]);
+  static Fingerprint ComputeURLFingerprint(std::string_view canonical_url,
+                                           LinkSalt salt);
 
   // Computes the fingerprint of the given VisitedLink using the provided
   // per-origin `salt`.
@@ -173,7 +184,7 @@ class VisitedLinkCommon {
   // into the hashtable.
   static Hash HashFingerprint(Fingerprint fingerprint, int32_t table_length) {
     if (table_length == 0)
-      return null_hash_;
+      return kNullHash;
     return static_cast<Hash>(fingerprint % table_length);
   }
   // Uses the current hashtable.
@@ -190,8 +201,20 @@ class VisitedLinkCommon {
   // the number of items in the hash table
   int32_t table_length_ = 0;
 
+  // TODO(crbug.com/517136103): Remove salt_ once migration has landed.
   // salt used for each URL when computing the fingerprint
-  uint8_t salt_[LINK_SALT_LENGTH] = {};
+  LinkSalt salt_ = {};
+
+  // If true, we should resolve unpartitioned query styles (e.g. IsVisited(URL))
+  // by computing the pseudo-partitioned fingerprint (using the link URL for
+  // each field in the triple key and using salt
+  // kPseudoPartitionedConstantSalt). Android WebView does not partition
+  // :visited links. However, it must use the partitioned storage infrastructure
+  // as we move away from the unpartitioned :visited link infrastructure.
+  // Therefore, :visited links on Android WebView are pseudo-partitioned in that
+  // they utilize the existing partitioned hashtable without truly partitioning
+  // the links.
+  bool is_pseudo_partitioned_ = false;
 };
 
 }  // namespace visitedlink

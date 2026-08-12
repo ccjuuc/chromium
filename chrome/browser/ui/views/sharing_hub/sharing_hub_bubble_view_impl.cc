@@ -43,14 +43,14 @@ constexpr int kInterItemPadding = 4;
 }  // namespace
 
 SharingHubBubbleViewImpl::SharingHubBubbleViewImpl(
-    views::View* anchor_view,
+    views::BubbleAnchor anchor,
     share::ShareAttempt attempt,
     SharingHubBubbleController* controller)
-    : LocationBarBubbleDelegateView(anchor_view,
+    : LocationBarBubbleDelegateView(anchor,
                                     attempt.web_contents.get(),
                                     /*autosize=*/true),
       attempt_(attempt) {
-  DCHECK(anchor_view);
+  DCHECK(!anchor.IsNull());
   DCHECK(controller);
 
   SetBackgroundColor(ui::kColorMenuBackground);
@@ -59,7 +59,7 @@ SharingHubBubbleViewImpl::SharingHubBubbleViewImpl(
   set_fixed_width(views::LayoutProvider::Get()->GetDistanceMetric(
       views::DISTANCE_BUBBLE_PREFERRED_WIDTH));
   RegisterWindowClosingCallback(base::BindOnce(
-      &SharingHubBubbleViewImpl::OnWindowClosing, base::Unretained(this)));
+      &SharingHubBubbleViewImpl::OnWindowClosing, weak_factory_.GetWeakPtr()));
   SetEnableArrowKeyTraversal(true);
   SetShowCloseButton(false);
   SetShowTitle(false);

@@ -9,6 +9,7 @@
 #include "base/values.h"
 #include "content/public/browser/storage_partition.h"
 #include "services/network/public/cpp/request_destination.h"
+#include "services/network/public/cpp/url_util.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 
 namespace content {
@@ -16,13 +17,6 @@ namespace content {
 namespace {
 
 constexpr char kType[] = "dip";
-
-GURL StripUsernameAndPassword(const GURL& url) {
-  GURL::Replacements replacements;
-  replacements.ClearUsername();
-  replacements.ClearPassword();
-  return url.ReplaceComponents(replacements);
-}
 
 }  // namespace
 
@@ -39,8 +33,8 @@ DocumentIsolationPolicyReporter::DocumentIsolationPolicyReporter(
       report_only_endpoint_(report_only_endpoint),
       reporting_source_(reporting_source),
       network_anonymization_key_(network_anonymization_key) {
-  DCHECK(storage_partition_);
-  DCHECK(!reporting_source_.is_empty());
+  CHECK(storage_partition_, base::NotFatalUntil::M152);
+  CHECK(!reporting_source_.is_empty(), base::NotFatalUntil::M152);
 }
 
 DocumentIsolationPolicyReporter::~DocumentIsolationPolicyReporter() = default;
@@ -49,7 +43,7 @@ void DocumentIsolationPolicyReporter::QueueCorpViolationReport(
     const GURL& blocked_url,
     network::mojom::RequestDestination destination,
     bool report_only) {
-  GURL url_to_pass = StripUsernameAndPassword(blocked_url);
+  GURL url_to_pass = network::SerializeResponseUrlForReporting(blocked_url);
   QueueAndNotify(
       {{"type", "corp"},
        {"blockedURL", url_to_pass.spec()},
@@ -88,7 +82,7 @@ void DocumentIsolationPolicyReporter::QueueAndNotify(
         kType, context_url_, blink::mojom::ReportBody::New(std::move(list))));
   }
   if (endpoint) {
-    base::Value::Dict body_to_pass;
+    base::DictValue body_to_pass;
     for (const auto& pair : body) {
       body_to_pass.Set(pair.first, pair.second);
     }

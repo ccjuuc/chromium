@@ -38,6 +38,7 @@
 #include "third_party/blink/renderer/modules/peerconnection/rtc_rtp_sender.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_stats_report.h"
 #include "third_party/blink/renderer/modules/peerconnection/web_rtc_stats_report_callback_resolver.h"
+#include "third_party/blink/renderer/platform/heap/cross_thread_persistent.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_encoded_video_stream_transformer.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_stats.h"
@@ -161,8 +162,8 @@ ScriptPromise<RTCStatsReport> RTCRtpReceiver::getStats(
   auto* resolver =
       MakeGarbageCollected<ScriptPromiseResolver<RTCStatsReport>>(script_state);
   auto promise = resolver->Promise();
-  receiver_->GetStats(
-      BindOnce(WebRTCStatsReportCallbackResolver, WrapPersistent(resolver)));
+  receiver_->GetStats(CrossThreadBindOnce(WebRTCStatsReportCallbackResolver,
+                                          WrapCrossThreadPersistent(resolver)));
   return promise;
 }
 
@@ -291,7 +292,7 @@ RTCRtpCapabilities* RTCRtpReceiver::getCapabilities(ScriptState* state,
       base::checked_cast<wtf_size_t>(rtc_capabilities->codecs.size()));
   for (const auto& rtc_codec : rtc_capabilities->codecs) {
     auto* codec = RTCRtpCodecCapability::Create();
-    codec->setMimeType(String::FromUTF8(rtc_codec.mime_type()));
+    codec->setMimeType(String::FromUtf8(rtc_codec.mime_type()));
     if (rtc_codec.clock_rate)
       codec->setClockRate(rtc_codec.clock_rate.value());
     if (rtc_codec.num_channels)
@@ -307,7 +308,7 @@ RTCRtpCapabilities* RTCRtpReceiver::getCapabilities(ScriptState* state,
           sdp_fmtp_line += parameter.first + "=" + parameter.second;
         }
       }
-      codec->setSdpFmtpLine(sdp_fmtp_line.c_str());
+      codec->setSdpFmtpLine(String(sdp_fmtp_line));
     }
     codecs.push_back(codec);
   }
@@ -318,7 +319,7 @@ RTCRtpCapabilities* RTCRtpReceiver::getCapabilities(ScriptState* state,
       rtc_capabilities->header_extensions.size()));
   for (const auto& rtc_header_extension : rtc_capabilities->header_extensions) {
     auto* header_extension = RTCRtpHeaderExtensionCapability::Create();
-    header_extension->setUri(String::FromUTF8(rtc_header_extension.uri));
+    header_extension->setUri(String::FromUtf8(rtc_header_extension.uri));
     header_extensions.push_back(header_extension);
   }
   capabilities->setHeaderExtensions(header_extensions);

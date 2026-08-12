@@ -9,12 +9,12 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/notimplemented.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/uuid.h"
 #include "device/bluetooth/bluetooth_adapter_android.h"
 #include "device/bluetooth/bluetooth_remote_gatt_descriptor_android.h"
 #include "device/bluetooth/bluetooth_remote_gatt_service_android.h"
@@ -79,9 +79,9 @@ std::string BluetoothRemoteGattCharacteristicAndroid::GetIdentifier() const {
 }
 
 BluetoothUUID BluetoothRemoteGattCharacteristicAndroid::GetUUID() const {
-  return device::BluetoothUUID(ConvertJavaStringToUTF8(
+  return device::BluetoothUUID(
       Java_ChromeBluetoothRemoteGattCharacteristic_getUUID(
-          AttachCurrentThread(), j_characteristic_)));
+          AttachCurrentThread(), j_characteristic_));
 }
 
 const std::vector<uint8_t>& BluetoothRemoteGattCharacteristicAndroid::GetValue()
@@ -271,7 +271,7 @@ void BluetoothRemoteGattCharacteristicAndroid::CreateGattRemoteDescriptor(
         chrome_bluetooth_device) {
   std::string instanceIdString = ConvertJavaStringToUTF8(env, instanceId);
 
-  DCHECK(!base::Contains(descriptors_, instanceIdString));
+  DCHECK(!descriptors_.contains(instanceIdString));
   AddDescriptor(BluetoothRemoteGattDescriptorAndroid::Create(
       instanceIdString, bluetooth_gatt_descriptor_wrapper,
       chrome_bluetooth_device));

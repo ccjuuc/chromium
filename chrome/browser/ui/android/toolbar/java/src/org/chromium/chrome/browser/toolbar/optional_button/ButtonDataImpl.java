@@ -4,15 +4,12 @@
 
 package org.chromium.chrome.browser.toolbar.optional_button;
 
-import android.content.res.Resources;
 import android.graphics.drawable.Drawable;
-import android.view.View.OnClickListener;
 
 import androidx.annotation.StringRes;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonVariant;
 import org.chromium.chrome.browser.user_education.IphCommandBuilder;
 
 import java.util.Objects;
@@ -26,56 +23,20 @@ public class ButtonDataImpl implements ButtonData {
 
     private @SuppressWarnings("NullAway.Init") ButtonSpec mButtonSpec;
 
+    /** Creates a new, empty {@link ButtonDataImpl} instance. */
     public ButtonDataImpl() {}
 
-    public ButtonDataImpl(
-            boolean canShow,
-            @Nullable Drawable drawable,
-            OnClickListener onClickListener,
-            String contentDescription,
-            boolean supportsTinting,
-            @Nullable IphCommandBuilder iphCommandBuilder,
-            boolean isEnabled,
-            @AdaptiveToolbarButtonVariant int buttonVariant,
-            int tooltipTextResId) {
-        this(
-                canShow,
-                drawable,
-                onClickListener,
-                contentDescription,
-                /* actionChipLabelResId= */ Resources.ID_NULL,
-                supportsTinting,
-                iphCommandBuilder,
-                isEnabled,
-                buttonVariant,
-                tooltipTextResId);
-    }
-
-    public ButtonDataImpl(
-            boolean canShow,
-            @Nullable Drawable drawable,
-            OnClickListener onClickListener,
-            String contentDescription,
-            @StringRes int actionChipLabelResId,
-            boolean supportsTinting,
-            @Nullable IphCommandBuilder iphCommandBuilder,
-            boolean isEnabled,
-            @AdaptiveToolbarButtonVariant int buttonVariant,
-            @StringRes int tooltipTextResId) {
+    /**
+     * Creates a new {@link ButtonDataImpl} with the specified properties.
+     *
+     * @param canShow Whether the button can be shown in the current state.
+     * @param isEnabled Whether the button is enabled and clickable.
+     * @param buttonSpec The visual and behavioral specification for the button.
+     */
+    public ButtonDataImpl(boolean canShow, boolean isEnabled, ButtonSpec buttonSpec) {
         mCanShow = canShow;
         mIsEnabled = isEnabled;
-        mButtonSpec =
-                new ButtonSpec(
-                        drawable,
-                        onClickListener,
-                        /* onLongClickListener= */ null,
-                        contentDescription,
-                        supportsTinting,
-                        iphCommandBuilder,
-                        buttonVariant,
-                        actionChipLabelResId,
-                        tooltipTextResId,
-                        /* hasErrorBadge= */ false);
+        mButtonSpec = buttonSpec;
     }
 
     @Override
@@ -98,74 +59,65 @@ public class ButtonDataImpl implements ButtonData {
         return mButtonSpec;
     }
 
+    /**
+     * Sets the visual and behavioral specification for this button.
+     *
+     * @param buttonSpec The new {@link ButtonSpec}.
+     */
     public void setButtonSpec(ButtonSpec buttonSpec) {
         mButtonSpec = buttonSpec;
     }
 
+    /**
+     * Sets whether this button can be shown in the current state.
+     *
+     * @param canShow {@code true} if the button can be shown, {@code false} otherwise.
+     */
     public void setCanShow(boolean canShow) {
         mCanShow = canShow;
     }
 
+    /**
+     * Sets whether a text bubble (IPH) should be shown instead of an animation.
+     *
+     * @param show {@code true} if the text bubble should be shown, {@code false} otherwise.
+     */
     public void setShouldShowTextBubble(boolean show) {
         mShouldShowTextBubble = show;
     }
 
+    /**
+     * Sets whether this button is enabled and clickable.
+     *
+     * @param enabled {@code true} if the button should be enabled, {@code false} otherwise.
+     */
     public void setEnabled(boolean enabled) {
         mIsEnabled = enabled;
     }
 
     /** Convenience method to update the IPH command builder. */
     public void updateIphCommandBuilder(@Nullable IphCommandBuilder iphCommandBuilder) {
-        ButtonSpec currentSpec = getButtonSpec();
-        ButtonSpec newSpec =
-                new ButtonSpec(
-                        currentSpec.getDrawable(),
-                        currentSpec.getOnClickListener(),
-                        currentSpec.getOnLongClickListener(),
-                        currentSpec.getContentDescription(),
-                        currentSpec.getSupportsTinting(),
-                        iphCommandBuilder,
-                        currentSpec.getButtonVariant(),
-                        currentSpec.getActionChipLabelResId(),
-                        currentSpec.getHoverTooltipTextId(),
-                        currentSpec.hasErrorBadge());
-        setButtonSpec(newSpec);
+        setButtonSpec(
+                new ButtonSpec.Builder(getButtonSpec())
+                        .setIphCommandBuilder(iphCommandBuilder)
+                        .build());
     }
 
     /** Convenience method to update the action chip string resource ID. */
     public void updateActionChipResourceId(@StringRes int newActionChipResourceId) {
-        ButtonSpec currentSpec = getButtonSpec();
-        ButtonSpec newSpec =
-                new ButtonSpec(
-                        currentSpec.getDrawable(),
-                        currentSpec.getOnClickListener(),
-                        currentSpec.getOnLongClickListener(),
-                        currentSpec.getContentDescription(),
-                        currentSpec.getSupportsTinting(),
-                        currentSpec.getIphCommandBuilder(),
-                        currentSpec.getButtonVariant(),
-                        newActionChipResourceId,
-                        currentSpec.getHoverTooltipTextId(),
-                        currentSpec.hasErrorBadge());
-        setButtonSpec(newSpec);
+        setButtonSpec(
+                new ButtonSpec.Builder(getButtonSpec())
+                        .setActionChipLabelResId(newActionChipResourceId)
+                        .build());
     }
 
-    /** Convenience method to update the action chip string resource ID. */
+    /**
+     * Convenience method to update the button's drawable icon.
+     *
+     * @param newDrawable The new {@link Drawable} icon, or {@code null} to clear it.
+     */
     public void updateDrawable(@Nullable Drawable newDrawable) {
-        ButtonSpec currentSpec = getButtonSpec();
-        ButtonSpec newSpec =
-                new ButtonSpec(
-                        newDrawable,
-                        currentSpec.getOnClickListener(),
-                        currentSpec.getOnLongClickListener(),
-                        currentSpec.getContentDescription(),
-                        currentSpec.getSupportsTinting(),
-                        currentSpec.getIphCommandBuilder(),
-                        currentSpec.getButtonVariant(),
-                        currentSpec.getActionChipLabelResId(),
-                        currentSpec.getHoverTooltipTextId(),
-                        currentSpec.hasErrorBadge());
-        setButtonSpec(newSpec);
+        setButtonSpec(new ButtonSpec.Builder(getButtonSpec()).setDrawable(newDrawable).build());
     }
 
     @Override

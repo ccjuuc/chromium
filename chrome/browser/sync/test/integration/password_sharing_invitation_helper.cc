@@ -10,18 +10,18 @@
 
 #include "base/containers/span.h"
 #include "base/uuid.h"
-#include "components/sync/engine/nigori/cross_user_sharing_public_key.h"
+#include "components/sync/nigori/cross_user_sharing_public_key.h"
 #include "components/sync/nigori/cryptographer_impl.h"
 
 namespace password_sharing_helper {
 
 namespace {
-constexpr char kSignonRealm[] = "signon_realm";
+constexpr char kSignonRealm[] = "http://abc.com/";
 constexpr char kOrigin[] = "http://abc.com/";
 constexpr char kUsernameElement[] = "username_element";
 constexpr char kPasswordElement[] = "password_element";
 constexpr char kPasswordDisplayName[] = "password_display_name";
-constexpr char kPasswordAvatarUrl[] = "http://avatar.url/";
+constexpr char kPasswordAvatarUrl[] = "http://abc.com/avatar.png";
 
 constexpr char kSenderEmail[] = "sender@gmail.com";
 constexpr char kSenderDisplayName[] = "Sender Name";
@@ -45,7 +45,7 @@ std::unique_ptr<syncer::CryptographerImpl> InitializeCryptographer(
       syncer::CryptographerImpl::CreateEmpty();
 
   // Clone `key_pair` since the cryptographer requires it to be moved.
-  cryptographer->SetKeyPair(
+  cryptographer->SetCrossUserSharingKeyPair(
       syncer::CrossUserSharingPublicPrivateKeyPair(key_pair.GetRawPrivateKey()),
       kDefaultKeyVersion);
   cryptographer->SelectDefaultCrossUserSharingKey(kDefaultKeyVersion);

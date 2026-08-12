@@ -7,9 +7,16 @@
 #include <string_view>
 
 #include "base/compiler_specific.h"
+#include "remoting/base/buildflags.h"
 #include "remoting/base/source_location.h"
 
+#if BUILDFLAG(REMOTING_MULTI_PROCESS)
+#include "remoting/host/mojom/desktop_session.mojom-shared.h"
+#endif  // BUILDFLAG(REMOTING_MULTI_PROCESS)
+
 namespace mojo {
+
+#if BUILDFLAG(REMOTING_MULTI_PROCESS)
 
 // static
 bool mojo::StructTraits<remoting::mojom::AudioPacketDataView,
@@ -97,6 +104,7 @@ bool mojo::StructTraits<remoting::mojom::DesktopEnvironmentOptionsDataView,
   out_options->set_enable_notifications(data_view.enable_notifications());
   out_options->set_terminate_upon_input(data_view.terminate_upon_input());
   out_options->set_enable_remote_webauthn(data_view.enable_remote_webauthn());
+  out_options->set_enable_security_key(data_view.enable_security_key());
 
   if (!data_view.ReadDesktopCaptureOptions(
           out_options->desktop_capture_options())) {
@@ -205,12 +213,8 @@ bool mojo::StructTraits<remoting::mojom::FileTransferErrorDataView,
   }
   out_error->set_type(type);
 
-  std::optional<int32_t> api_error_code;
-  if (!data_view.ReadApiErrorCode(&api_error_code)) {
-    return false;
-  }
-  if (api_error_code) {
-    out_error->set_api_error_code(*api_error_code);
+  if (data_view.api_error_code().has_value()) {
+    out_error->set_api_error_code(data_view.api_error_code().value());
   }
 
   std::string function;
@@ -278,20 +282,12 @@ bool mojo::StructTraits<remoting::mojom::KeyEventDataView,
   out_event->set_usb_keycode(data_view.usb_keycode());
   out_event->set_lock_states(data_view.lock_states());
 
-  std::optional<bool> caps_lock_state;
-  if (!data_view.ReadCapsLockState(&caps_lock_state)) {
-    return false;
-  }
-  if (caps_lock_state.has_value()) {
-    out_event->set_caps_lock_state(*caps_lock_state);
+  if (data_view.caps_lock_state().has_value()) {
+    out_event->set_caps_lock_state(data_view.caps_lock_state().value());
   }
 
-  std::optional<bool> num_lock_state;
-  if (!data_view.ReadNumLockState(&num_lock_state)) {
-    return false;
-  }
-  if (num_lock_state.has_value()) {
-    out_event->set_num_lock_state(*num_lock_state);
+  if (data_view.num_lock_state().has_value()) {
+    out_event->set_num_lock_state(data_view.num_lock_state().value());
   }
 
   return true;
@@ -344,20 +340,12 @@ bool mojo::StructTraits<remoting::mojom::MouseEventDataView,
                         ::remoting::protocol::MouseEvent>::
     Read(remoting::mojom::MouseEventDataView data_view,
          ::remoting::protocol::MouseEvent* out_event) {
-  std::optional<int32_t> x;
-  if (!data_view.ReadX(&x)) {
-    return false;
-  }
-  if (x.has_value()) {
-    out_event->set_x(*x);
+  if (data_view.x().has_value()) {
+    out_event->set_x(data_view.x().value());
   }
 
-  std::optional<int32_t> y;
-  if (!data_view.ReadY(&y)) {
-    return false;
-  }
-  if (y.has_value()) {
-    out_event->set_y(*y);
+  if (data_view.y().has_value()) {
+    out_event->set_y(data_view.y().value());
   }
 
   if (data_view.button() != remoting::mojom::MouseButton::kUndefined) {
@@ -368,60 +356,42 @@ bool mojo::StructTraits<remoting::mojom::MouseEventDataView,
     out_event->set_button(mouse_button);
   }
 
-  std::optional<bool> button_down;
-  if (!data_view.ReadButtonDown(&button_down)) {
-    return false;
-  }
-  if (button_down.has_value()) {
-    out_event->set_button_down(*button_down);
+  if (data_view.button_down().has_value()) {
+    out_event->set_button_down(data_view.button_down().value());
   }
 
-  std::optional<float> wheel_delta_x;
-  if (!data_view.ReadWheelDeltaX(&wheel_delta_x)) {
-    return false;
-  }
-  if (wheel_delta_x.has_value()) {
-    out_event->set_wheel_delta_x(*wheel_delta_x);
+  if (data_view.wheel_delta_x().has_value()) {
+    out_event->set_wheel_delta_x(data_view.wheel_delta_x().value());
   }
 
-  std::optional<float> wheel_delta_y;
-  if (!data_view.ReadWheelDeltaY(&wheel_delta_y)) {
-    return false;
-  }
-  if (wheel_delta_y.has_value()) {
-    out_event->set_wheel_delta_y(*wheel_delta_y);
+  if (data_view.wheel_delta_y().has_value()) {
+    out_event->set_wheel_delta_y(data_view.wheel_delta_y().value());
   }
 
-  std::optional<float> wheel_ticks_x;
-  if (!data_view.ReadWheelTicksX(&wheel_ticks_x)) {
-    return false;
-  }
-  if (wheel_ticks_x.has_value()) {
-    out_event->set_wheel_ticks_x(*wheel_ticks_x);
+  if (data_view.wheel_ticks_x().has_value()) {
+    out_event->set_wheel_ticks_x(data_view.wheel_ticks_x().value());
   }
 
-  std::optional<float> wheel_ticks_y;
-  if (!data_view.ReadWheelTicksY(&wheel_ticks_y)) {
-    return false;
-  }
-  if (wheel_ticks_y.has_value()) {
-    out_event->set_wheel_ticks_y(*wheel_ticks_y);
+  if (data_view.wheel_ticks_y().has_value()) {
+    out_event->set_wheel_ticks_y(data_view.wheel_ticks_y().value());
   }
 
-  std::optional<int32_t> delta_x;
-  if (!data_view.ReadDeltaX(&delta_x)) {
-    return false;
-  }
-  if (delta_x.has_value()) {
-    out_event->set_delta_x(*delta_x);
+  if (data_view.delta_x().has_value()) {
+    out_event->set_delta_x(data_view.delta_x().value());
   }
 
-  std::optional<int32_t> delta_y;
-  if (!data_view.ReadDeltaY(&delta_y)) {
-    return false;
+  if (data_view.delta_y().has_value()) {
+    out_event->set_delta_y(data_view.delta_y().value());
   }
-  if (delta_y.has_value()) {
-    out_event->set_delta_y(*delta_y);
+
+  remoting::mojom::FractionalCoordinateDataView fractional_coordinate_data_view;
+  data_view.GetFractionalCoordinateDataView(&fractional_coordinate_data_view);
+
+  if (!fractional_coordinate_data_view.is_null()) {
+    mojo::StructTraits<remoting::mojom::FractionalCoordinateDataView,
+                       ::remoting::protocol::FractionalCoordinate>::
+        Read(fractional_coordinate_data_view,
+             out_event->mutable_fractional_coordinate());
   }
 
   return true;
@@ -527,7 +497,10 @@ bool mojo::StructTraits<remoting::mojom::VideoTrackLayoutDataView,
                         ::remoting::protocol::VideoTrackLayout>::
     Read(remoting::mojom::VideoTrackLayoutDataView data_view,
          ::remoting::protocol::VideoTrackLayout* out_track) {
-  out_track->set_screen_id(data_view.screen_id());
+  std::optional<int64_t> screen_id = data_view.screen_id();
+  if (screen_id.has_value()) {
+    out_track->set_screen_id(screen_id.value());
+  }
 
   std::string media_stream_id;
   if (!data_view.ReadMediaStreamId(&media_stream_id)) {
@@ -583,8 +556,18 @@ bool mojo::StructTraits<remoting::mojom::VideoLayoutDataView,
 
   out_layout->set_primary_screen_id(data_view.primary_screen_id());
 
+  std::optional<::remoting::protocol::VideoLayout::PixelType> pixel_type;
+  if (!data_view.ReadPixelType(&pixel_type)) {
+    return false;
+  }
+  if (pixel_type.has_value()) {
+    out_layout->set_pixel_type(pixel_type.value());
+  }
+
   return true;
 }
+
+#endif  // BUILDFLAG(REMOTING_MULTI_PROCESS)
 
 // static
 bool mojo::StructTraits<remoting::mojom::SourceLocationDataView,
@@ -605,6 +588,8 @@ bool mojo::StructTraits<remoting::mojom::SourceLocationDataView,
   return true;
 }
 
+#if BUILDFLAG(REMOTING_MULTI_PROCESS)
+
 // static
 bool mojo::StructTraits<remoting::mojom::FractionalCoordinateDataView,
                         ::remoting::protocol::FractionalCoordinate>::
@@ -615,5 +600,41 @@ bool mojo::StructTraits<remoting::mojom::FractionalCoordinateDataView,
   out_coordinate->set_y(data_view.y());
   return true;
 }
+
+// static
+bool mojo::StructTraits<remoting::mojom::MicrophoneControlDataView,
+                        ::remoting::protocol::MicrophoneControl>::
+    Read(remoting::mojom::MicrophoneControlDataView data_view,
+         ::remoting::protocol::MicrophoneControl* out_control) {
+  out_control->set_enable(data_view.enable());
+  return true;
+}
+
+// static
+bool mojo::StructTraits<remoting::mojom::IpcFifoBufferReaderDataView,
+                        std::unique_ptr<remoting::IpcFifoBufferReader>>::
+    Read(remoting::mojom::IpcFifoBufferReaderDataView data_view,
+         std::unique_ptr<remoting::IpcFifoBufferReader>* out_reader) {
+  mojo::ScopedDataPipeConsumerHandle consumer_handle =
+      data_view.TakeConsumerHandle();
+  if (!consumer_handle.is_valid()) {
+    return false;
+  }
+  *out_reader = std::make_unique<remoting::IpcFifoBufferReader>(
+      std::move(consumer_handle));
+  return true;
+}
+
+// static
+bool mojo::StructTraits<remoting::mojom::AudioSampleInfoDataView,
+                        ::remoting::protocol::AudioSampleInfo>::
+    Read(remoting::mojom::AudioSampleInfoDataView data_view,
+         ::remoting::protocol::AudioSampleInfo* out_info) {
+  out_info->sampling_rate = data_view.sampling_rate();
+  out_info->channels = data_view.channels();
+  return true;
+}
+
+#endif  // BUILDFLAG(REMOTING_MULTI_PROCESS)
 
 }  // namespace mojo

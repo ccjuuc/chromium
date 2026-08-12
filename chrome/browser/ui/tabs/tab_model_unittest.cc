@@ -8,6 +8,7 @@
 
 #include "base/test/mock_callback.h"
 #include "chrome/browser/sessions/session_tab_helper_factory.h"
+#include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -16,6 +17,7 @@
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/sessions/core/session_id.h"
 #include "components/tabs/public/tab_handle_factory.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
@@ -81,6 +83,33 @@ TEST_F(TabModelTest, TabModelDidInsert) {
   EXPECT_CALL(did_insert_callback, Run).Times(1);
   tab_strip_src.InsertDetachedTabAt(0, std::move(tab_model),
                                     AddTabTypes::ADD_NONE);
+}
+
+TEST_F(TabModelTest, DetachTabModelGetBrowser) {
+  MockBrowserWindowInterface bwi;
+  TestTabStripModelDelegate delegate;
+  delegate.SetBrowserWindowInterface(&bwi);
+
+  // Create a source tab strip.
+  TabStripModel tab_strip_src(&delegate, profile());
+  AppendTab(tab_strip_src);
+  AppendTab(tab_strip_src);
+
+  // Detach the first tab.
+  std::unique_ptr<TabModel> tab_model =
+      tab_strip_src.DetachTabAtForInsertion(0);
+  TabModel* tab_model_ptr = tab_model.get();
+
+  // Verify GetBrowserWindowInterface returns nullptr.
+  EXPECT_EQ(nullptr, tab_model_ptr->GetBrowserWindowInterface());
+
+  // Attach to a destination tab strip.
+  TabStripModel tab_strip_dst(&delegate, profile());
+  tab_strip_dst.InsertDetachedTabAt(0, std::move(tab_model),
+                                    AddTabTypes::ADD_NONE);
+
+  // Verify GetBrowserWindowInterface returns the browser interface.
+  EXPECT_EQ(&bwi, tab_model_ptr->GetBrowserWindowInterface());
 }
 
 TEST_F(TabModelTest, IsSelected) {
@@ -194,6 +223,135 @@ TEST_F(TabModelTest, SplitViewVisibleAndActiveCallbacks) {
   tab_strip.ActivateTabAt(0);
   testing::Mock::VerifyAndClearExpectations(&did_tab_0_activate_callback);
   testing::Mock::VerifyAndClearExpectations(&did_tab_1_activate_callback);
+}
+
+// Verifies that when the active tab changes, only the newly-activated tab is
+// notified that it entered the foreground. This exercises the direct
+// notification from TabStripModel, and guards against both missing and spurious
+// activation notifications.
+TEST_F(TabModelTest, DidActivateNotifiesOnlyNewlyActiveTab) {
+  TestTabStripModelDelegate delegate;
+  TabStripModel tab_strip(&delegate, profile());
+  AppendTab(tab_strip);
+  AppendTab(tab_strip);
+  AppendTab(tab_strip);
+  ASSERT_EQ(3, tab_strip.count());
+
+  // Establish a known starting point: the last tab is active.
+  tab_strip.ActivateTabAt(2);
+
+  std::vector<base::CallbackListSubscription> subscriptions;
+
+  // The tab we are about to activate should be notified exactly once, with
+  // itself as the argument.
+  RepeatingTabCallback did_tab_0_activate_callback;
+  EXPECT_CALL(did_tab_0_activate_callback, Run(tab_strip.GetTabAtIndex(0)))
+      .Times(1);
+  subscriptions.push_back(tab_strip.GetTabAtIndex(0)->RegisterDidActivate(
+      did_tab_0_activate_callback.Get()));
+
+  // A tab that is not becoming active (including the one leaving the
+  // foreground) must not be notified.
+  RepeatingTabCallback did_tab_1_activate_callback;
+  EXPECT_CALL(did_tab_1_activate_callback, Run).Times(0);
+  subscriptions.push_back(tab_strip.GetTabAtIndex(1)->RegisterDidActivate(
+      did_tab_1_activate_callback.Get()));
+
+  RepeatingTabCallback did_tab_2_activate_callback;
+  EXPECT_CALL(did_tab_2_activate_callback, Run).Times(0);
+  subscriptions.push_back(tab_strip.GetTabAtIndex(2)->RegisterDidActivate(
+      did_tab_2_activate_callback.Get()));
+
+  tab_strip.ActivateTabAt(0);
+
+  testing::Mock::VerifyAndClearExpectations(&did_tab_0_activate_callback);
+  testing::Mock::VerifyAndClearExpectations(&did_tab_1_activate_callback);
+  testing::Mock::VerifyAndClearExpectations(&did_tab_2_activate_callback);
+}
+
+// Verifies that each activation delivers exactly one foreground notification to
+// the tab becoming active, across repeated active-tab changes.
+TEST_F(TabModelTest, DidActivateNotifiesOnEachActivation) {
+  TestTabStripModelDelegate delegate;
+  TabStripModel tab_strip(&delegate, profile());
+  AppendTab(tab_strip);
+  AppendTab(tab_strip);
+  ASSERT_EQ(2, tab_strip.count());
+
+  tab_strip.ActivateTabAt(0);
+
+  std::vector<base::CallbackListSubscription> subscriptions;
+
+  RepeatingTabCallback did_tab_0_activate_callback;
+  RepeatingTabCallback did_tab_1_activate_callback;
+  subscriptions.push_back(tab_strip.GetTabAtIndex(0)->RegisterDidActivate(
+      did_tab_0_activate_callback.Get()));
+  subscriptions.push_back(tab_strip.GetTabAtIndex(1)->RegisterDidActivate(
+      did_tab_1_activate_callback.Get()));
+
+  // Switch back and forth; each tab should be notified once per time it becomes
+  // active. Re-activating the already-active tab should not notify anyone.
+  EXPECT_CALL(did_tab_1_activate_callback, Run).Times(1);
+  tab_strip.ActivateTabAt(1);
+  tab_strip.ActivateTabAt(1);
+  testing::Mock::VerifyAndClearExpectations(&did_tab_1_activate_callback);
+
+  EXPECT_CALL(did_tab_0_activate_callback, Run).Times(1);
+  tab_strip.ActivateTabAt(0);
+  testing::Mock::VerifyAndClearExpectations(&did_tab_0_activate_callback);
+}
+
+TEST_F(TabModelTest, TabModelBlockedStateChanged) {
+  TestTabStripModelDelegate delegate;
+  TabStripModel tab_strip(&delegate, profile());
+  AppendTab(tab_strip);
+  tabs::TabModel* const tab_model =
+      static_cast<tabs::TabModel*>(tab_strip.GetTabAtIndex(0));
+
+  base::MockCallback<TabInterface::BlockedStateChangedCallback>
+      blocked_state_changed_callback;
+  EXPECT_CALL(blocked_state_changed_callback, Run).Times(1);
+  base::CallbackListSubscription subscription =
+      tab_model->RegisterBlockedStateChanged(
+          blocked_state_changed_callback.Get());
+  tab_model->SetBlocked(true);
+  testing::Mock::VerifyAndClearExpectations(&blocked_state_changed_callback);
+}
+
+TEST_F(TabModelTest, LoadIfNeeded) {
+  TestTabStripModelDelegate delegate;
+  TabStripModel tab_strip(&delegate, profile());
+  AppendTab(tab_strip);
+  tabs::TabModel* const tab_model =
+      static_cast<tabs::TabModel*>(tab_strip.GetTabAtIndex(0));
+
+  content::WebContents* contents = tab_model->GetContents();
+  EXPECT_FALSE(contents->GetController().NeedsReload());
+  contents->GetController().SetNeedsReload();
+  EXPECT_TRUE(contents->GetController().NeedsReload());
+  tab_model->LoadIfNeeded();
+  EXPECT_FALSE(contents->GetController().NeedsReload());
+}
+
+TEST_F(TabModelTest, Getters) {
+  TestTabStripModelDelegate delegate;
+  TabStripModel tab_strip(&delegate, profile());
+  AppendTab(tab_strip);
+  tabs::TabModel* const tab_model =
+      static_cast<tabs::TabModel*>(tab_strip.GetTabAtIndex(0));
+
+  content::WebContents* contents = tab_model->GetContents();
+  content::WebContentsTester* tester =
+      content::WebContentsTester::For(contents);
+
+  tester->SetTitle(u"Test Title");
+  tester->NavigateAndCommit(GURL("https://example.com"));
+  base::Time active_time = base::Time::FromSecondsSinceUnixEpoch(100);
+  tester->SetLastActiveTime(active_time);
+
+  EXPECT_EQ(u"Test Title", tab_model->GetTitle());
+  EXPECT_EQ(GURL("https://example.com"), tab_model->GetURL());
+  EXPECT_EQ(active_time, tab_model->GetLastActiveTime());
 }
 
 }  // namespace tabs

@@ -29,12 +29,12 @@ class CONTENT_EXPORT ConfigFetcher {
  public:
   struct CONTENT_EXPORT FetchError {
     FetchError(const FetchError& info);
-    FetchError(blink::mojom::FederatedAuthRequestResult result,
+    FetchError(blink::mojom::FederatedRequestResult result,
                RequestIdTokenStatus token_status,
                std::optional<std::string> additional_console_error_message);
     ~FetchError();
 
-    blink::mojom::FederatedAuthRequestResult result;
+    blink::mojom::FederatedRequestResult result;
     RequestIdTokenStatus token_status;
     std::optional<std::string> additional_console_error_message;
   };
@@ -74,7 +74,6 @@ class CONTENT_EXPORT ConfigFetcher {
   // Starts fetch of config and well-known files. Start() should be called at
   // most once per ConfigFetcher instance.
   void Start(const std::vector<FetchRequest>& requested_providers,
-             blink::mojom::RpMode rp_mode,
              int icon_ideal_size,
              int icon_minimum_size,
              RequesterCallback callback);
@@ -97,7 +96,7 @@ class CONTENT_EXPORT ConfigFetcher {
   // Called when fetching either the config endpoint or the well-known
   // endpoint fails.
   void OnError(FetchResult& fetch_result,
-               blink::mojom::FederatedAuthRequestResult result,
+               blink::mojom::FederatedRequestResult result,
                RequestIdTokenStatus token_status,
                std::optional<std::string> additional_console_error_message);
 

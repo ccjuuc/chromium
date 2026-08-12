@@ -59,7 +59,7 @@ CSSNumericValue* CSSMathRandom::step() {
 }
 
 std::optional<CSSNumericSumValue> CSSMathRandom::SumValue() const {
-  // TODO(crbug.com/413385732): Spec and implement sum value for random():
+  // TODO(crbug.com/475807587): Spec and implement sum value for random():
   // https://drafts.css-houdini.org/css-typed-om/#create-a-sum-value
   return std::nullopt;
 }
@@ -99,7 +99,8 @@ CSSMathExpressionNode* CSSMathRandom::ToCalcExpressionNode() const {
     operands.push_back(operand);
   }
   return CSSMathExpressionRandomFunction::Create(
-      RandomValueSharing::Fixed(random_base_value_), std::move(operands));
+      RandomCacheKey::Fixed(random_base_value_), std::move(operands),
+      /*percentages_depend_on_used_value=*/false);
 }
 
 }  // namespace blink

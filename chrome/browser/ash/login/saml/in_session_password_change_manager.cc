@@ -9,15 +9,17 @@
 #include <string>
 #include <utility>
 
+#include "ash/constants/ash_features.h"
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/public/cpp/session/session_controller.h"
 #include "base/check.h"
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/task/task_traits.h"
 #include "base/time/time.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/saml/password_change_success_notification.h"
 #include "chrome/browser/ash/login/saml/password_expiry_notification.h"
 #include "chrome/browser/ash/login/saml/password_sync_token_fetcher.h"
@@ -167,11 +169,13 @@ void RecheckPasswordExpiryTask::CancelPendingRecheck() {
 
 // static
 std::unique_ptr<InSessionPasswordChangeManager>
-InSessionPasswordChangeManager::CreateIfEnabled(Profile* primary_profile) {
+InSessionPasswordChangeManager::CreateIfEnabled(PrefService* local_state,
+                                                Profile* primary_profile) {
   if (primary_profile->GetPrefs()->GetBoolean(
           prefs::kSamlInSessionPasswordChangeEnabled)) {
     std::unique_ptr<InSessionPasswordChangeManager> manager =
-        std::make_unique<InSessionPasswordChangeManager>(primary_profile);
+        std::make_unique<InSessionPasswordChangeManager>(local_state,
+                                                         primary_profile);
     manager->MaybeShowExpiryNotification();
     RecordEvent(InSessionPasswordChangeEvent::kManagerCreated);
     return manager;
@@ -195,8 +199,10 @@ InSessionPasswordChangeManager* InSessionPasswordChangeManager::Get() {
 }
 
 InSessionPasswordChangeManager::InSessionPasswordChangeManager(
+    PrefService* local_state,
     Profile* primary_profile)
-    : primary_profile_(primary_profile),
+    : local_state_(CHECK_DEREF(local_state)),
+      primary_profile_(primary_profile),
       primary_user_(ProfileHelper::Get()->GetUserByProfile(primary_profile)),
       urgent_warning_days_(kUrgentWarningDays) {
   DCHECK(primary_user_);
@@ -233,9 +239,26 @@ void InSessionPasswordChangeManager::ResetForTesting() {
 void InSessionPasswordChangeManager::MaybeShowExpiryNotification() {
   // We are checking password expiry now, and this function will decide if we
   // want to check again in the future, so for now, make sure there are no other
-  // pending tasks to check aggain.
+  // pending tasks to check again.
   recheck_task_.CancelPendingRecheck();
 
+  if (ash::features::IsManagedLocalPinAndPasswordEnabled()) {
+    auth_factor_helper_.CheckHasOnlinePasswordAndContinue(
+        primary_user_->GetAccountId(),
+        /*on_has_online_password=*/
+        base::BindOnce(&InSessionPasswordChangeManager::
+                           MaybeShowExpiryNotificationInternal,
+                       weak_ptr_factory_.GetWeakPtr()),
+        /*on_no_online_password=*/
+        base::BindOnce(
+            &InSessionPasswordChangeManager::DismissExpiryNotification,
+            weak_ptr_factory_.GetWeakPtr()));
+  } else {
+    MaybeShowExpiryNotificationInternal();
+  }
+}
+
+void InSessionPasswordChangeManager::MaybeShowExpiryNotificationInternal() {
   PrefService* prefs = primary_profile_->GetPrefs();
   if (!prefs->GetBoolean(prefs::kSamlInSessionPasswordChangeEnabled)) {
     DismissExpiryNotification();
@@ -443,7 +466,7 @@ void InSessionPasswordChangeManager::OnLockStateChanged(bool locked) {
 void InSessionPasswordChangeManager::OnTokenCreated(
     const std::string& sync_token) {
   // Set token value in local state.
-  user_manager::KnownUser known_user(g_browser_process->local_state());
+  user_manager::KnownUser known_user(&local_state_.get());
   known_user.SetPasswordSyncToken(primary_user_->GetAccountId(), sync_token);
 }
 

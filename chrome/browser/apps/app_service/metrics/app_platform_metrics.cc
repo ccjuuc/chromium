@@ -13,6 +13,8 @@
 #include "base/json/values_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/time/default_tick_clock.h"
+#include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
@@ -185,9 +187,11 @@ void RecordAppLaunchPerAppTypeV2(apps::AppTypeNameV2 app_type_name_v2) {
                                 app_type_name_v2);
 }
 
-base::TimeDelta GetDurationAndResetStartTime(base::TimeTicks& start_time) {
-  base::TimeDelta duration = base::TimeTicks::Now() - start_time;
-  start_time = base::TimeTicks::Now();
+base::TimeDelta GetDurationAndResetStartTime(
+    base::TimeTicks& start_time,
+    const base::TickClock& tick_clock) {
+  base::TimeDelta duration = tick_clock.NowTicks() - start_time;
+  start_time = tick_clock.NowTicks();
   return duration;
 }
 
@@ -317,7 +321,7 @@ AppPlatformMetrics::UsageTime::UsageTime() = default;
 AppPlatformMetrics::UsageTime::~UsageTime() = default;
 
 AppPlatformMetrics::UsageTime::UsageTime(const base::Value& value) {
-  const base::Value::Dict* data_dict = value.GetIfDict();
+  const base::DictValue* data_dict = value.GetIfDict();
   if (!data_dict) {
     return;
   }
@@ -365,8 +369,8 @@ AppPlatformMetrics::UsageTime::UsageTime(const base::Value& value) {
   window_is_closed = true;
 }
 
-base::Value::Dict AppPlatformMetrics::UsageTime::ConvertToDict() const {
-  base::Value::Dict usage_time_dict;
+base::DictValue AppPlatformMetrics::UsageTime::ConvertToDict() const {
+  base::DictValue usage_time_dict;
   usage_time_dict.Set(kUsageTimeAppIdKey, app_id);
   usage_time_dict.Set(kUsageTimeAppPublisherIdKey, app_publisher_id);
   usage_time_dict.Set(kUsageTimeAppTypeKey,
@@ -381,8 +385,11 @@ base::Value::Dict AppPlatformMetrics::UsageTime::ConvertToDict() const {
 AppPlatformMetrics::AppPlatformMetrics(
     Profile* profile,
     apps::AppRegistryCache& app_registry_cache,
-    InstanceRegistry& instance_registry)
-    : profile_(profile), app_registry_cache_(app_registry_cache) {
+    InstanceRegistry& instance_registry,
+    const base::TickClock* tick_clock)
+    : profile_(profile),
+      app_registry_cache_(app_registry_cache),
+      tick_clock_(CHECK_DEREF(tick_clock)) {
   app_registry_cache_observer_.Observe(&app_registry_cache);
   instance_registry_observation_.Observe(&instance_registry);
   if (chromeos::IsManagedGuestSession()) {
@@ -940,14 +947,15 @@ void AppPlatformMetrics::SetWindowActivated(
     return;
   }
 
-  running_start_time_[instance_id].start_time = base::TimeTicks::Now();
+  running_start_time_[instance_id].start_time = tick_clock_->NowTicks();
   running_start_time_[instance_id].app_type_name = app_type_name;
   running_start_time_[instance_id].app_type_name_v2 = app_type_name_v2;
 
   ++activated_count_[app_type_name];
   should_refresh_activated_count_pref = true;
 
-  start_time_per_five_minutes_[instance_id].start_time = base::TimeTicks::Now();
+  start_time_per_five_minutes_[instance_id].start_time =
+      tick_clock_->NowTicks();
   start_time_per_five_minutes_[instance_id].app_type_name = app_type_name;
   start_time_per_five_minutes_[instance_id].app_type_name_v2 = app_type_name_v2;
   start_time_per_five_minutes_[instance_id].app_id = app_id;
@@ -972,10 +980,10 @@ void AppPlatformMetrics::SetWindowInActivated(
   AppTypeNameV2 app_type_name_v2 = it->second.app_type_name_v2;
 
   running_duration_[app_type_name] +=
-      base::TimeTicks::Now() - it->second.start_time;
+      tick_clock_->NowTicks() - it->second.start_time;
 
   base::TimeDelta running_time =
-      base::TimeTicks::Now() -
+      tick_clock_->NowTicks() -
       start_time_per_five_minutes_[instance_id].start_time;
   app_type_running_time_per_five_minutes_[app_type_name] += running_time;
   app_type_v2_running_time_per_five_minutes_[app_type_name_v2] += running_time;
@@ -1017,8 +1025,8 @@ void AppPlatformMetrics::ClearRunningDuration() {
   running_duration_.clear();
   activated_count_.clear();
 
-  profile_->GetPrefs()->SetDict(kAppRunningDuration, base::Value::Dict());
-  profile_->GetPrefs()->SetDict(kAppActivatedCount, base::Value::Dict());
+  profile_->GetPrefs()->SetDict(kAppRunningDuration, base::DictValue());
+  profile_->GetPrefs()->SetDict(kAppActivatedCount, base::DictValue());
 }
 
 void AppPlatformMetrics::ReadInstalledApps() {
@@ -1079,7 +1087,7 @@ void AppPlatformMetrics::RecordAppsCount(AppType app_type) {
 void AppPlatformMetrics::RecordAppsRunningDuration() {
   for (auto& it : running_start_time_) {
     running_duration_[it.second.app_type_name] +=
-        GetDurationAndResetStartTime(it.second.start_time);
+        GetDurationAndResetStartTime(it.second.start_time, *tick_clock_);
   }
 
   base::TimeDelta total_running_duration;
@@ -1110,7 +1118,7 @@ void AppPlatformMetrics::RecordAppsRunningDuration() {
 void AppPlatformMetrics::RecordAppsUsageTime() {
   for (auto& it : start_time_per_five_minutes_) {
     base::TimeDelta running_time =
-        GetDurationAndResetStartTime(it.second.start_time);
+        GetDurationAndResetStartTime(it.second.start_time, *tick_clock_);
     app_type_running_time_per_five_minutes_[it.second.app_type_name] +=
         running_time;
     app_type_v2_running_time_per_five_minutes_[it.second.app_type_name_v2] +=
@@ -1279,7 +1287,7 @@ void AppPlatformMetrics::SaveUsageTime() {
 }
 
 void AppPlatformMetrics::LoadAppsUsageTimeUkmFromPref() {
-  const base::Value::Dict& usage_time_dict =
+  const base::DictValue& usage_time_dict =
       profile_->GetPrefs()->GetDict(kAppUsageTime);
 
   for (auto it : usage_time_dict) {
@@ -1365,7 +1373,7 @@ void AppPlatformMetrics::ClearAppsUsageTimeForInstance(
 void AppPlatformMetrics::UpdateMetricsBeforeShutdown() {
   for (auto& it : running_start_time_) {
     running_duration_[it.second.app_type_name] +=
-        GetDurationAndResetStartTime(it.second.start_time);
+        GetDurationAndResetStartTime(it.second.start_time, *tick_clock_);
   }
 
   RecordAppsUsageTime();

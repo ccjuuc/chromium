@@ -2,10 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
 #include "media/audio/apple/audio_low_latency_input.h"
 
 #include <CoreServices/CoreServices.h>
@@ -13,17 +9,20 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
+#include <utility>
 
 #include "base/apple/foundation_util.h"
 #include "base/apple/osstatus_logging.h"
 #include "base/apple/scoped_cftyperef.h"
 #include "base/apple/scoped_mach_port.h"
+#include "base/compiler_specific.h"
+#include "base/debug/leak_annotations.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/mac/mac_util.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
@@ -74,10 +73,46 @@ constexpr base::TimeDelta kMaxErrorTimeout = base::Seconds(1);
 // if input callbacks have started, and false otherwise.
 constexpr base::TimeDelta kInputCallbackStartTimeout = base::Seconds(5);
 
-// TODO(crbug.com/354625679): For now, our pipeline is set for only
-// kSampleFormatS16 only. We plan to implement changes to take higher bit depths
-// such as 24bit or 32bit float.
-constexpr SampleFormat kSampleFormat = kSampleFormatS16;
+constexpr char kChosenSampleFormatHistogram[] =
+    "Media.Audio.Capture.Mac.AUAudioInputStream.ChosenSampleFormat";
+
+// Proxy to intercept callbacks and prevent Use-After-Free on teardown failure.
+class AUCallbackProxy {
+ public:
+  explicit AUCallbackProxy(raw_ptr<AUAudioInputStream> stream)
+      : stream_(stream) {}
+
+  void Detach() {
+    base::AutoLock al(lock_);
+    stream_ = nullptr;
+  }
+
+  OSStatus OnDataIsAvailable(AudioUnitRenderActionFlags* flags,
+                             const AudioTimeStamp* time_stamp,
+                             UInt32 bus_number,
+                             UInt32 number_of_frames) {
+    base::AutoLock al(lock_);
+    if (stream_) {
+      return stream_->OnDataIsAvailable(flags, time_stamp, bus_number,
+                                        number_of_frames);
+    }
+    return kAudioUnitErr_Uninitialized;
+  }
+
+ private:
+  base::Lock lock_;
+  raw_ptr<AUAudioInputStream> stream_ GUARDED_BY(lock_);
+};
+
+// Logs and returns true if `result` is an error.
+static bool CheckAndLogFailure(OSStatus result, std::string_view message) {
+  if (result == noErr) {
+    return false;
+  }
+
+  OSSTATUS_DLOG(ERROR, result) << message;
+  return true;
+}
 
 // Returns true if the format flags in |format_flags| has the "non-interleaved"
 // flag (kAudioFormatFlagIsNonInterleaved) cleared (set to 0).
@@ -91,7 +126,7 @@ static std::string FourCharFormatCodeToString(UInt32 code) {
   char code_string[5];
   // Converts a 32-bit integer from the host’s native byte order to big-endian.
   UInt32 code_id = CFSwapInt32HostToBig(code);
-  bcopy(&code_id, code_string, 4);
+  UNSAFE_TODO(bcopy(&code_id, code_string, 4));
   code_string[4] = '\0';
   return std::string(code_string);
 }
@@ -152,25 +187,17 @@ AUAudioInputStream::AUAudioInputStream(
 
 #if BUILDFLAG(IS_MAC)
   if (!(input_params.effects() & AudioParameters::ECHO_CANCELLER)) {
-    LogMessageEverywhere(__FUNCTION__, "No voice processing requested");
+    SendLog("No voice processing requested");
   } else if (!IsEchoCancellationSupported(audio_device_id, input_params)) {
-    LogMessageEverywhere(
-        __FUNCTION__,
-        "Can't apply voice processing, echo cancellation not supported");
+    SendLog("Can't apply voice processing, echo cancellation not supported");
   } else {
-    const bool got_default_device =
-        AudioManagerMac::GetDefaultOutputDevice(&output_device_id_for_aec_);
+    const bool got_default_device = AudioManagerMac::GetDefaultOutputDevice(
+        &output_device_id_for_aec_, log_callback_);
     if (got_default_device) {
       use_voice_processing_ = true;
-      LogMessageEverywhere(
-          __FUNCTION__,
-          base::StringPrintf(
-              "Voice processing: on, output_device_id_for_aec_: 0x%x",
-              output_device_id_for_aec_));
+      SendLog("Voice processing: on");
     } else {
-      LogMessageEverywhere(
-          __FUNCTION__,
-          "Can't apply voice processing, default output device not found");
+      SendLog("Can't apply voice processing, default output device not found");
     }
   }
 #endif
@@ -179,13 +206,13 @@ AUAudioInputStream::AUAudioInputStream(
   format_.mSampleRate = input_params.sample_rate();
   format_.mFormatID = kAudioFormatLinearPCM;
   format_.mFormatFlags =
-      kLinearPCMFormatFlagIsPacked | kLinearPCMFormatFlagIsSignedInteger;
+      kLinearPCMFormatFlagIsPacked | kLinearPCMFormatFlagIsFloat;
   DCHECK(FormatIsInterleaved(format_.mFormatFlags));
-  format_.mBitsPerChannel = SampleFormatToBitsPerChannel(kSampleFormat);
+  format_.mBitsPerChannel = SampleFormatToBitsPerChannel(sample_format_);
   format_.mChannelsPerFrame = input_params.channels();
   format_.mFramesPerPacket = 1;  // uncompressed audio
   format_.mBytesPerPacket = format_.mBytesPerFrame =
-      input_params.GetBytesPerFrame(kSampleFormat);
+      input_params.GetBytesPerFrame(sample_format_);
   format_.mReserved = 0;
 
   DVLOG(1) << __FUNCTION__ << " this " << this;
@@ -227,8 +254,7 @@ AudioInputStream::OpenOutcome AUAudioInputStream::Open() {
   // HandleError() to ensure that the error type is added to UMA stats.
 #if BUILDFLAG(IS_MAC)
   if (input_device_id_ == kAudioObjectUnknown) {
-    LOG(ERROR) << "Device ID is unknown";
-    HandleError(kAudioUnitErr_InvalidElement);
+    HandleError(kAudioUnitErr_InvalidElement, "Open failed: unknown device ID");
     return OpenOutcome::kFailed;
   }
 #endif
@@ -237,9 +263,8 @@ AudioInputStream::OpenOutcome AUAudioInputStream::Open() {
   const int sample_rate =
       manager_->HardwareSampleRateForDevice(input_device_id_);
   DCHECK_EQ(sample_rate, format_.mSampleRate);
-
-  log_callback_.Run(base::StrCat(
-      {"AU in: Open using ", use_voice_processing_ ? "VPAU" : "AUHAL"}));
+  SendLog(base::StringPrintf("Open using %s",
+                             use_voice_processing_ ? "VPAU" : "AUHAL"));
 
   const bool success =
       use_voice_processing_ ? OpenVoiceProcessingAU() : OpenAUHAL();
@@ -249,7 +274,7 @@ AudioInputStream::OpenOutcome AUAudioInputStream::Open() {
 
     // The hardware latency is fixed and will not change during the call.
 #if BUILDFLAG(IS_MAC)
-  hardware_latency_ = core_audio_mac::GetHardwareLatency(
+  hardware_latency_ = CoreAudioUtilMac::GetHardwareLatency(
       audio_unit_, input_device_id_, kAudioDevicePropertyScopeInput,
       format_.mSampleRate, /*is_input=*/true);
 #else
@@ -281,16 +306,15 @@ bool AUAudioInputStream::OpenAUHAL() {
 
   // Find a component that meets the description in |desc|.
   AudioComponent comp = AudioComponentFindNext(nullptr, &desc);
-  DCHECK(comp);
   if (!comp) {
-    HandleError(kAudioUnitErr_NoConnection);
+    HandleError(kAudioUnitErr_NoConnection, "AudioComponentFindNext() failed.");
     return false;
   }
 
   // Get access to the service provided by the specified Audio Unit.
   OSStatus result = AudioComponentInstanceNew(comp, &audio_unit_);
   if (result) {
-    HandleError(result);
+    HandleError(result, "AudioComponentInstanceNew() failed.");
     return false;
   }
 
@@ -304,7 +328,7 @@ bool AUAudioInputStream::OpenAUHAL() {
   //  positive effects of it in our UMA stats.
   result = AudioUnitInitialize(audio_unit_);
   if (result != noErr) {
-    HandleError(result);
+    HandleError(result, "AudioUnitInitialize() failed.");
     return false;
   }
 #endif
@@ -330,7 +354,7 @@ bool AUAudioInputStream::OpenAUHAL() {
         audio_unit_, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input,
         AUElement::INPUT, &enableIO, sizeof(enableIO));
     if (result != noErr) {
-      HandleError(result);
+      HandleError(result, "Enabling IO on AU input failed");
       return false;
     }
   }
@@ -342,7 +366,7 @@ bool AUAudioInputStream::OpenAUHAL() {
         audio_unit_, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output,
         AUElement::OUTPUT, &disableIO, sizeof(disableIO));
     if (result != noErr) {
-      HandleError(result);
+      HandleError(result, "Disabling IO on AU output failed");
       return false;
     }
   }
@@ -356,22 +380,23 @@ bool AUAudioInputStream::OpenAUHAL() {
                            &input_device_id_, sizeof(input_device_id_));
 
   if (result != noErr) {
-    HandleError(result);
+    HandleError(result, "Setting AU output device failed");
     return false;
   }
 #endif
 
   // Register the input procedure for the AUHAL. This procedure will be called
   // when the AUHAL has received new data from the input device.
+  data_callback_proxy_ = std::make_unique<AUCallbackProxy>(this);
   AURenderCallbackStruct callback;
   callback.inputProc = &DataIsAvailable;
-  callback.inputProcRefCon = this;
+  callback.inputProcRefCon = data_callback_proxy_.get();
   result = AudioUnitSetProperty(
       audio_unit_, kAudioOutputUnitProperty_SetInputCallback,
       kAudioUnitScope_Global, AUElement::OUTPUT, &callback, sizeof(callback));
 
   if (result != noErr) {
-    HandleError(result);
+    HandleError(result, "Setting AU input callback failed.");
     return false;
   }
 
@@ -384,28 +409,26 @@ bool AUAudioInputStream::OpenAUHAL() {
   result =
       manager_->GetInputDeviceStreamFormat(audio_unit_, &input_device_format);
   if (result != noErr) {
-    HandleError(result);
+    HandleError(result,
+                "Getting selected input device's stream format failed.");
     return false;
   }
 
   DVLOG(1) << "Input device stream format:\n" << input_device_format;
   if (input_device_format.mSampleRate != format_.mSampleRate) {
-    LOG(ERROR) << "Input device's sample rate does not match the client's "
-                  "sample rate; input_device_format="
-               << input_device_format;
-    result = kAudioUnitErr_FormatNotSupported;
-    HandleError(result);
+    HandleError(kAudioUnitErr_FormatNotSupported,
+                "Input device's sample rate does not match the client's "
+                "sample rate");
     return false;
   }
 
   // Modify the IO buffer size if not already set correctly for the selected
   // device. The status of other active audio input and output streams is
   // involved in the final setting.
-
   if (!manager_->MaybeChangeBufferSize(input_device_id_, audio_unit_, 1,
                                        input_params_.frames_per_buffer())) {
-    result = kAudioUnitErr_FormatNotSupported;
-    HandleError(result);
+    HandleError(kAudioUnitErr_FormatNotSupported,
+                "Modifying IO buffer size failed.");
     return false;
   }
 
@@ -432,20 +455,22 @@ bool AUAudioInputStream::OpenAUHAL() {
   // Set up the the desired (output) format.
   // For obtaining input from a device, the device format is always expressed
   // on the output scope of the AUHAL's Element 1.
-  result = AudioUnitSetProperty(audio_unit_, kAudioUnitProperty_StreamFormat,
-                                kAudioUnitScope_Output, AUElement::INPUT,
-                                &format_, sizeof(format_));
+  result = ConfigureFormat();
+
   if (result != noErr) {
-    HandleError(result);
+    base::UmaHistogramEnumeration(kChosenSampleFormatHistogram,
+                                  kUnknownSampleFormat);
+    HandleError(result, "Setting device format to fallback format S16 failed.");
     return false;
   }
+  base::UmaHistogramEnumeration(kChosenSampleFormatHistogram, sample_format_);
 
   // Finally, initialize the audio unit and ensure that it is ready to render.
   // Allocates memory according to the maximum number of audio frames
   // it can produce in response to a single render call.
   result = AudioUnitInitialize(audio_unit_);
   if (result != noErr) {
-    HandleError(result);
+    HandleError(result, "AudioUnitInitialize() failed.");
     return false;
   }
 
@@ -468,14 +493,14 @@ bool AUAudioInputStream::OpenVoiceProcessingAU() {
   AudioComponent comp = AudioComponentFindNext(nullptr, &desc);
   DCHECK(comp);
   if (!comp) {
-    HandleError(kAudioUnitErr_NoConnection);
+    HandleError(kAudioUnitErr_NoConnection, "AudioComponentFindNext() failed.");
     return false;
   }
 
   // Get access to the service provided by the specified Audio Unit.
   OSStatus result = AudioComponentInstanceNew(comp, &audio_unit_);
-  if (result) {
-    HandleError(result);
+  if (result != noErr) {
+    HandleError(result, "AudioComponentInstanceNew() failed.");
     return false;
   }
 
@@ -486,7 +511,7 @@ bool AUAudioInputStream::OpenVoiceProcessingAU() {
                            &input_device_id_, sizeof(input_device_id_));
 
   if (result != noErr) {
-    HandleError(result);
+    HandleError(result, "Setting AU input device failed");
     return false;
   }
 
@@ -497,21 +522,22 @@ bool AUAudioInputStream::OpenVoiceProcessingAU() {
       sizeof(output_device_id_for_aec_));
 
   if (result != noErr) {
-    HandleError(result);
+    HandleError(result, "Setting AU output device for AEC failed.");
     return false;
   }
 
   // Register the input procedure for the AUHAL. This procedure will be called
   // when the AUHAL has received new data from the input device.
+  data_callback_proxy_ = std::make_unique<AUCallbackProxy>(this);
   AURenderCallbackStruct callback;
   callback.inputProc = &DataIsAvailable;
-  callback.inputProcRefCon = this;
+  callback.inputProcRefCon = data_callback_proxy_.get();
 
   result = AudioUnitSetProperty(
       audio_unit_, kAudioOutputUnitProperty_SetInputCallback,
       kAudioUnitScope_Global, AUElement::INPUT, &callback, sizeof(callback));
   if (result != noErr) {
-    HandleError(result);
+    HandleError(result, "Setting AU input callback failed");
     return false;
   }
 
@@ -521,7 +547,7 @@ bool AUAudioInputStream::OpenVoiceProcessingAU() {
       audio_unit_, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input,
       AUElement::OUTPUT, &callback, sizeof(callback));
   if (result != noErr) {
-    HandleError(result);
+    HandleError(result, "Setting AU render callback failed.");
     return false;
   }
 
@@ -534,16 +560,16 @@ bool AUAudioInputStream::OpenVoiceProcessingAU() {
   result =
       manager_->GetInputDeviceStreamFormat(audio_unit_, &input_device_format);
   if (result != noErr) {
-    HandleError(result);
+    HandleError(result,
+                "Getting selected input device's stream format failed.");
     return false;
   }
 
   DVLOG(1) << "Input device stream format: " << input_device_format;
   if (input_device_format.mSampleRate != format_.mSampleRate) {
-    LOG(ERROR)
-        << "Input device's sample rate does not match the client's sample rate";
-    result = kAudioUnitErr_FormatNotSupported;
-    HandleError(result);
+    HandleError(
+        kAudioUnitErr_FormatNotSupported,
+        "Input device's sample rate does not match the client's sample rate");
     return false;
   }
 
@@ -552,8 +578,8 @@ bool AUAudioInputStream::OpenVoiceProcessingAU() {
   // involved in the final setting.
   if (!manager_->MaybeChangeBufferSize(input_device_id_, audio_unit_, 1,
                                        input_params_.frames_per_buffer())) {
-    result = kAudioUnitErr_FormatNotSupported;
-    HandleError(result);
+    HandleError(kAudioUnitErr_FormatNotSupported,
+                "Modifying IO buffer size failed.");
     return false;
   }
 
@@ -571,8 +597,60 @@ bool AUAudioInputStream::OpenVoiceProcessingAU() {
                       static_cast<UInt32>(input_params_.frames_per_buffer()))
       << "AUHAL is using best match of IO buffer size: " << buffer_frame_size;
 
+  // Set up the the desired input and output format.
+  // For obtaining input from a device, the device format is always expressed
+  // on the output scope of the AUHAL's Element 1.
+  result = ConfigureFormatForVoiceProcessing();
+  if (result != noErr) {
+    base::UmaHistogramEnumeration(kChosenSampleFormatHistogram,
+                                  kUnknownSampleFormat);
+    HandleError(result, "Fallback format S16 format rejected for VPAU.");
+    return false;
+  }
+  base::UmaHistogramEnumeration(kChosenSampleFormatHistogram, sample_format_);
+
+  // Finally, initialize the audio unit and ensure that it is ready to render.
+  // Allocates memory according to the maximum number of audio frames
+  // it can produce in response to a single render call.
+  result = AudioUnitInitialize(audio_unit_);
+  if (result != noErr) {
+    HandleError(result, "AudioUnitInitialize() failed.");
+    return false;
+  }
+
+  UndoDucking(output_device_id_for_aec_);
+#endif
+  return true;
+}
+
+OSStatus AUAudioInputStream::SetInputStreamFormat(
+    const AudioStreamBasicDescription& format,
+    SampleFormat uma_format) {
+  OSStatus res = AudioUnitSetProperty(
+      audio_unit_, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output,
+      AUElement::INPUT, &format, sizeof(format));
+
+  if (res == noErr) {
+    sample_format_ = uma_format;
+  }
+  return res;
+}
+
+AudioStreamBasicDescription AUAudioInputStream::GetFallbackFormat(
+    const AudioStreamBasicDescription& source_format) {
+  AudioStreamBasicDescription s16 = source_format;
+  s16.mFormatFlags =
+      kLinearPCMFormatFlagIsPacked | kLinearPCMFormatFlagIsSignedInteger;
+  s16.mBitsPerChannel = SampleFormatToBitsPerChannel(kSampleFormatS16);
+  s16.mBytesPerPacket = s16.mBytesPerFrame =
+      s16.mChannelsPerFrame * SampleFormatToBytesPerChannel(kSampleFormatS16);
+
+  return s16;
+}
+
+OSStatus AUAudioInputStream::ConfigureFormatForVoiceProcessing() {
   // The built-in device claims to be stereo. VPAU claims 5 channels (for me)
-  // but refuses to work in stereo. Just accept stero for now, use mono
+  // but refuses to work in stereo. Just accept stereo for now, use mono
   // internally and upmix.
   AudioStreamBasicDescription mono_format = format_;
   if (format_.mChannelsPerFrame == 2) {
@@ -581,37 +659,37 @@ bool AUAudioInputStream::OpenVoiceProcessingAU() {
     mono_format.mBytesPerFrame = mono_format.mBytesPerPacket;
   }
 
-  // Set up the the desired (output) format.
-  // For obtaining input from a device, the device format is always expressed
-  // on the output scope of the AUHAL's Element 1.
-  result = AudioUnitSetProperty(audio_unit_, kAudioUnitProperty_StreamFormat,
-                                kAudioUnitScope_Output, AUElement::INPUT,
-                                &mono_format, sizeof(mono_format));
-  if (result != noErr) {
-    HandleError(result);
-    return false;
-  }
+  OSStatus result = SetInputStreamFormat(mono_format, kSampleFormatF32);
 
-  result = AudioUnitSetProperty(audio_unit_, kAudioUnitProperty_StreamFormat,
+  if (result == noErr) {
+    return AudioUnitSetProperty(audio_unit_, kAudioUnitProperty_StreamFormat,
                                 kAudioUnitScope_Input, AUElement::OUTPUT,
                                 &mono_format, sizeof(mono_format));
-  if (result != noErr) {
-    HandleError(result);
-    return false;
   }
 
-  // Finally, initialize the audio unit and ensure that it is ready to render.
-  // Allocates memory according to the maximum number of audio frames
-  // it can produce in response to a single render call.
-  result = AudioUnitInitialize(audio_unit_);
-  if (result != noErr) {
-    HandleError(result);
-    return false;
+  SendLog("F32 format rejected for VPAU. Falling back to S16.", result);
+
+  mono_format = GetFallbackFormat(mono_format);
+  format_ = GetFallbackFormat(format_);
+  result = SetInputStreamFormat(mono_format, kSampleFormatS16);
+  if (result == noErr) {
+    result = AudioUnitSetProperty(audio_unit_, kAudioUnitProperty_StreamFormat,
+                                  kAudioUnitScope_Input, AUElement::OUTPUT,
+                                  &mono_format, sizeof(mono_format));
+  }
+  return result;
+}
+
+OSStatus AUAudioInputStream::ConfigureFormat() {
+  OSStatus result = SetInputStreamFormat(format_, kSampleFormatF32);
+
+  if (result == noErr) {
+    return result;
   }
 
-  UndoDucking(output_device_id_for_aec_);
-#endif
-  return true;
+  SendLog("F32 format rejected. Falling back to S16.", result);
+  format_ = GetFallbackFormat(format_);
+  return SetInputStreamFormat(format_, kSampleFormatS16);
 }
 
 void AUAudioInputStream::SetSystemAGC(bool enable) {
@@ -623,14 +701,14 @@ void AUAudioInputStream::SetSystemAGC(bool enable) {
       kAudioUnitScope_Global, AUElement::INPUT, &current_agc_setting,
       &property_size);
   if (result != noErr) {
-    HandleError(result);
-    LogMessageEverywhere(__FUNCTION__, "Error reading System AGC property");
+    base::AutoLock al(lock_);
+    HandleErrorAndNotify_Locked(Error::kStartupFailed, result,
+                                "Error reading System AGC property");
     return;
   }
 
-  LogMessageEverywhere(__FUNCTION__,
-                       base::StringPrintf("Default System AGC property: %s",
-                                          current_agc_setting ? "On" : "Off"));
+  SendLog(base::StringPrintf("Default System AGC property: %s",
+                             current_agc_setting ? "On" : "Off"));
 
   if (current_agc_setting != enable) {
     UInt32 new_agc_setting = enable;
@@ -640,14 +718,14 @@ void AUAudioInputStream::SetSystemAGC(bool enable) {
                                   &new_agc_setting, sizeof(new_agc_setting));
 
     if (result != noErr) {
-      HandleError(result);
-      LogMessageEverywhere(__FUNCTION__, "Error setting System AGC property");
+      base::AutoLock al(lock_);
+      HandleErrorAndNotify_Locked(Error::kStartupFailed, result,
+                                  "Error setting System AGC property");
       return;
     }
 
-    LogMessageEverywhere(
-        __FUNCTION__, base::StringPrintf("Changed System AGC property to: %s",
-                                         new_agc_setting ? "On" : "Off"));
+    SendLog(base::StringPrintf("Changed System AGC property to: %s",
+                               new_agc_setting ? "On" : "Off"));
   }
 }
 
@@ -655,27 +733,33 @@ void AUAudioInputStream::Start(AudioInputCallback* callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DVLOG(1) << __FUNCTION__ << " this " << this;
   DCHECK(callback);
-  DCHECK(!sink_);
   DLOG_IF(ERROR, !audio_unit_) << "Open() has not been called successfully";
   if (IsRunning())
     return;
 
+  stop_failed_ = false;
+
 #if BUILDFLAG(IS_MAC)
   // Check if we should defer Start() for http://crbug.com/160920.
   if (manager_->ShouldDeferStreamStart()) {
-    LOG(WARNING) << "Start of input audio is deferred";
+    SendLog("Start of input audio is deferred");
     // Use a cancellable closure so that if Stop() is called before Start()
     // actually runs, we can cancel the pending start.
     deferred_start_cb_.Reset(base::BindOnce(&AUAudioInputStream::Start,
                                             base::Unretained(this), callback));
     manager_->GetTaskRunner()->PostDelayedTask(
         FROM_HERE, deferred_start_cb_.callback(),
-        base::Seconds(AudioManagerMac::kStartDelayInSecsForPowerEvents));
+        base::Seconds(std::to_underlying(
+            AudioManagerMac::kStartDelayInSecsForPowerEvents)));
     return;
   }
 #endif
 
-  sink_ = callback;
+  {
+    base::AutoLock al(lock_);
+    DCHECK(!sink_);
+    sink_ = callback;
+  }
   last_success_time_ = base::TimeTicks::Now();
 
   // Don't disable built-in noise suppression when using VPAU.
@@ -687,9 +771,12 @@ void AUAudioInputStream::Start(AudioInputCallback* callback) {
   }
   StartAgc();
   OSStatus result = AudioOutputUnitStart(audio_unit_);
-  OSSTATUS_DLOG_IF(ERROR, result != noErr, result)
-      << "Failed to start acquiring data";
   if (result != noErr) {
+    {
+      base::AutoLock al(lock_);
+      HandleErrorAndNotify_Locked(Error::kStartupFailed, result,
+                                  "AudioOutputUnitStart failed");
+    }
     Stop();
     return;
   }
@@ -714,7 +801,7 @@ void AUAudioInputStream::Start(AudioInputCallback* callback) {
 void AUAudioInputStream::Stop() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   deferred_start_cb_.Cancel();
-  DVLOG(1) << __FUNCTION__ << " this " << this;
+  SendLog(__FUNCTION__);
 
   StopAgc();
   if (noise_reduction_suppressed_) {
@@ -730,6 +817,8 @@ void AUAudioInputStream::Stop() {
     // Stop the I/O audio unit.
     OSStatus result = AudioOutputUnitStop(audio_unit_);
     DCHECK_EQ(result, noErr);
+    stop_failed_ |= CheckAndLogFailure(result, "Failed to stop audio unit.");
+
     // Add a DCHECK here just in case. AFAIK, the call to AudioOutputUnitStop()
     // seems to set this state synchronously, hence it should always report
     // false after a successful call.
@@ -739,20 +828,22 @@ void AUAudioInputStream::Stop() {
     // It does not allocate or free memory resources.
     result = AudioUnitReset(audio_unit_, kAudioUnitScope_Global, 0);
     DCHECK_EQ(result, noErr);
-    OSSTATUS_DLOG_IF(ERROR, result != noErr, result)
-        << "Failed to stop acquiring data";
+    stop_failed_ |= CheckAndLogFailure(result, "Failed to stop acquiring data");
   }
 
   SetInputCallbackIsActive(false);
   ReportAndResetStats();
-  sink_ = nullptr;
-  fifo_.Clear();
+  {
+    base::AutoLock al(lock_);
+    sink_ = nullptr;
+    fifo_.Clear();
+  }
   got_input_callback_ = false;
 }
 
 void AUAudioInputStream::Close() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  DVLOG(1) << __FUNCTION__ << " this " << this;
+  SendLog(__FUNCTION__);
 
   // It is valid to call Close() before calling open or Start().
   // It is also valid to call Close() after Start() has been called.
@@ -812,14 +903,11 @@ void AUAudioInputStream::SetOutputDeviceForAec(
   }
 
   if (audio_device_id == kAudioObjectUnknown) {
-    LogMessageEverywhere(
-        __FUNCTION__,
-        base::StringPrintf("Unable to resolve output device id for AEC: %s",
-                           output_device_id));
+    SendLog("Unable to resolve output device id for AEC");
     return;
   }
 
-  if (core_audio_mac::GetDeviceTransportType(audio_device_id) !=
+  if (CoreAudioUtilMac(log_callback_).GetDeviceTransportType(audio_device_id) !=
       kAudioDeviceTransportTypeAggregate) {
     output_device_id_for_aec_ = audio_device_id;
   } else {
@@ -829,10 +917,7 @@ void AUAudioInputStream::SetOutputDeviceForAec(
         AudioManagerMac::FindFirstOutputSubdevice(audio_device_id);
 
     if (audio_subdevice_id == kAudioObjectUnknown) {
-      LogMessageEverywhere(
-          __FUNCTION__, base::StringPrintf("AU in: Unable to find an output "
-                                           "subdevice in aggregate device '%s'",
-                                           output_device_id));
+      SendLog("Unable to find an output subdevice in aggregate device");
       return;
     }
     if (audio_subdevice_id == output_device_id_for_aec_) {
@@ -844,10 +929,7 @@ void AUAudioInputStream::SetOutputDeviceForAec(
     output_device_id_for_aec_ = audio_subdevice_id;
   }
 
-  LogMessageEverywhere(
-      __FUNCTION__,
-      base::StringPrintf("AU in: Output device for AEC changed to '%s' (0x%x)",
-                         output_device_id.c_str(), output_device_id_for_aec_));
+  SendLog("Output device for AEC changed");
 
   // Only restart the stream if it has previously been started.
   if (audio_unit_) {
@@ -878,7 +960,7 @@ bool AUAudioInputStream::IsEchoCancellationSupported(
   }
 
   std::optional<uint32_t> device_transport_type =
-      core_audio_mac::GetDeviceTransportType(audio_device_id);
+      CoreAudioUtilMac().GetDeviceTransportType(audio_device_id);
   if (!device_transport_type) {
     VLOG(1) << "Failed to get device transport type for device 0x" << std::hex
             << audio_device_id;
@@ -909,6 +991,15 @@ void AUAudioInputStream::ReinitializeVoiceProcessingAudioUnit() {
     DCHECK_EQ(result, noErr);
   }
 
+  // Temporarily clear the sink under lock so in-flight callbacks drain
+  // before we close the AudioUnit.
+  AudioInputCallback* temp_sink = nullptr;
+  {
+    base::AutoLock al(lock_);
+    temp_sink = sink_;
+    sink_ = nullptr;
+  }
+
   CloseAudioUnit();
 
   // Reset things to a state similar to before the audio unit was opened.
@@ -919,18 +1010,22 @@ void AUAudioInputStream::ReinitializeVoiceProcessingAudioUnit() {
 
   OpenVoiceProcessingAU();
 
+  // Restore the sink under lock.
+  {
+    base::AutoLock al(lock_);
+    sink_ = temp_sink;
+  }
+
   if (was_running) {
     result = AudioOutputUnitStart(audio_unit_);
     if (result != noErr) {
-      OSSTATUS_DLOG(ERROR, result) << "Failed to start acquiring data";
+      SendLog("Failed to start acquiring data", result);
       Stop();
       return;
     }
   }
 
-  log_callback_.Run(base::StringPrintf(
-      "AU in: Successfully reinitialized AEC for output device id=0x%x.",
-      output_device_id_for_aec_));
+  SendLog("Successfully reinitialized AEC for output device");
 }
 
 // static
@@ -945,12 +1040,12 @@ OSStatus AUAudioInputStream::DataIsAvailable(void* context,
   DCHECK_EQ(bus_number, 1u);
   // No data buffer should be allocated at this stage.
   DCHECK(!io_data);
-  AUAudioInputStream* self = reinterpret_cast<AUAudioInputStream*>(context);
+  AUCallbackProxy* proxy = reinterpret_cast<AUCallbackProxy*>(context);
   // Propagate render action flags, time stamp, bus number and number
   // of frames requested to the AudioUnitRender() call where the actual data
   // is received from the input device via the output scope of the audio unit.
-  return self->OnDataIsAvailable(flags, time_stamp, bus_number,
-                                 number_of_frames);
+  return proxy->OnDataIsAvailable(flags, time_stamp, bus_number,
+                                  number_of_frames);
 }
 
 OSStatus AUAudioInputStream::OnDataIsAvailable(
@@ -958,6 +1053,11 @@ OSStatus AUAudioInputStream::OnDataIsAvailable(
     const AudioTimeStamp* time_stamp,
     UInt32 bus_number,
     UInt32 number_of_frames) {
+  base::AutoLock al(lock_);
+  if (!sink_) {
+    return kAudioUnitErr_Uninitialized;
+  }
+
   TRACE_EVENT1("audio", "AUAudioInputStream::OnDataIsAvailable", "frames",
                number_of_frames);
 
@@ -1009,17 +1109,19 @@ OSStatus AUAudioInputStream::OnDataIsAvailable(
         audio_buffer->mDataByteSize / audio_buffer->mNumberChannels;
     mono_buffer->mData = audio_buffer->mData;
 
-    TRACE_EVENT_BEGIN0("audio", "AudioUnitRender");
-    result = AudioUnitRender(audio_unit_, flags, time_stamp, bus_number,
-                             number_of_frames, &mono_buffer_list);
-    TRACE_EVENT_END0("audio", "AudioUnitRender");
+    {
+      TRACE_EVENT("audio", "AudioUnitRender");
+      result = AudioUnitRender(audio_unit_, flags, time_stamp, bus_number,
+                               number_of_frames, &mono_buffer_list);
+    }
     // ... then upmix it by copying it out to two channels.
     UpmixMonoToStereoInPlace(audio_buffer, format_.mBitsPerChannel / 8);
   } else {
-    TRACE_EVENT_BEGIN0("audio", "AudioUnitRender");
-    result = AudioUnitRender(audio_unit_, flags, time_stamp, bus_number,
-                             number_of_frames, &audio_buffer_list_);
-    TRACE_EVENT_END0("audio", "AudioUnitRender");
+    {
+      TRACE_EVENT("audio", "AudioUnitRender");
+      result = AudioUnitRender(audio_unit_, flags, time_stamp, bus_number,
+                               number_of_frames, &audio_buffer_list_);
+    }
   }
 
   if (result == noErr) {
@@ -1030,9 +1132,7 @@ OSStatus AUAudioInputStream::OnDataIsAvailable(
     return Provide(number_of_frames, &audio_buffer_list_, time_stamp);
   }
 
-  TRACE_EVENT_INSTANT0("audio", "AudioUnitRender error",
-                       TRACE_EVENT_SCOPE_THREAD);
-  OSSTATUS_LOG(ERROR, result) << "AudioUnitRender() failed ";
+  TRACE_EVENT_INSTANT("audio", "AudioUnitRender error");
 
   if (result == kAudioUnitErr_TooManyFramesToProcess ||
       result == kAudioUnitErr_CannotDoInCurrentContext) {
@@ -1058,13 +1158,15 @@ OSStatus AUAudioInputStream::OnDataIsAvailable(
     LOG(ERROR) << "Too long sequence of " << err << " errors!";
   }
 
-  HandleError(result);
+  HandleErrorAndNotify_Locked(Error::kRuntimeError, result,
+                              "AudioUnitRender() failed");
   return result;
 }
 
 OSStatus AUAudioInputStream::Provide(UInt32 number_of_frames,
                                      AudioBufferList* io_data,
                                      const AudioTimeStamp* time_stamp) {
+  lock_.AssertAcquired();
   TRACE_EVENT1("audio", "AUAudioInputStream::Provide", "number_of_frames",
                number_of_frames);
   glitch_helper_.OnFramesReceived(*time_stamp, number_of_frames);
@@ -1111,8 +1213,8 @@ OSStatus AUAudioInputStream::Provide(UInt32 number_of_frames,
                          input_params_.frames_per_buffer()) +
         1;
     DLOG(WARNING) << "Increasing FIFO capacity by " << blocks << " blocks";
-    TRACE_EVENT_INSTANT1("audio", "Increasing FIFO capacity",
-                         TRACE_EVENT_SCOPE_THREAD, "increased by", blocks);
+    TRACE_EVENT_INSTANT("audio", "Increasing FIFO capacity", "increased by",
+                        blocks);
     fifo_.IncreaseCapacity(blocks);
   }
 
@@ -1120,10 +1222,10 @@ OSStatus AUAudioInputStream::Provide(UInt32 number_of_frames,
   capture_time -= AudioTimestampHelper::FramesToTime(fifo_.GetAvailableFrames(),
                                                      format_.mSampleRate);
 
-  peak_detector_.FindPeak(audio_data_span, kSampleFormat);
+  peak_detector_.FindPeak(audio_data_span, sample_format_);
 
   // Copy captured (and interleaved) data into FIFO.
-  fifo_.Push(audio_data_span, number_of_frames, kSampleFormat);
+  fifo_.Push(audio_data_span, number_of_frames, sample_format_);
 
   // Consume and deliver the data when the FIFO has a block of available data.
   while (fifo_.available_blocks()) {
@@ -1162,23 +1264,36 @@ bool AUAudioInputStream::IsRunning() {
   OSStatus error = AudioUnitGetProperty(
       audio_unit_, kAudioOutputUnitProperty_IsRunning, kAudioUnitScope_Global,
       AUElement::OUTPUT, &is_running, &size);
-  OSSTATUS_DLOG_IF(ERROR, error != noErr, error)
-      << "AudioUnitGetProperty(kAudioOutputUnitProperty_IsRunning) failed";
+  if (error != noErr) {
+    SendLog("AudioUnitGetProperty(kAudioOutputUnitProperty_IsRunning) failed",
+            error);
+  }
   DVLOG(1) << " this " << this << " IsRunning: " << is_running;
   return (error == noErr && is_running);
 }
 
 void AUAudioInputStream::HandleError(OSStatus err,
+                                     const char* message,
                                      const base::Location& location) {
   // Log the latest OSStatus error message and also change the sign of the
   // error if no callbacks are active. I.e., the sign of the error message
   // carries one extra level of information.
   base::UmaHistogramSparse("Media.InputErrorMac",
                            GetInputCallbackIsActive() ? err : (err * -1));
-  LOG(ERROR) << "Input error " << logging::DescriptionFromOSStatus(err) << " ("
-             << err << ") at line " << location.line_number();
-  if (sink_)
-    sink_->OnError();
+  SendLog(base::StringPrintf("%s at line %d", message, location.line_number()),
+          err);
+}
+
+void AUAudioInputStream::HandleErrorAndNotify_Locked(
+    Error error_code,
+    OSStatus err,
+    const char* message,
+    const base::Location& location) {
+  lock_.AssertAcquired();
+  HandleError(err, message, location);
+  if (sink_) {
+    sink_->OnError(error_code);
+  }
 }
 
 void AUAudioInputStream::SetInputCallbackIsActive(bool enabled) {
@@ -1211,27 +1326,75 @@ void AUAudioInputStream::CloseAudioUnit() {
   DVLOG(1) << __FUNCTION__ << " this " << this;
   if (!audio_unit_)
     return;
-  OSStatus result = AudioUnitUninitialize(audio_unit_);
-  OSSTATUS_DLOG_IF(ERROR, result != noErr, result)
-      << "AudioUnitUninitialize() failed.";
+
+  bool close_failed = false;
+
+  // Clear the input callback.
+  AURenderCallbackStruct callback;
+  callback.inputProc = nullptr;
+  callback.inputProcRefCon = nullptr;
+  OSStatus result = AudioUnitSetProperty(
+      audio_unit_, kAudioOutputUnitProperty_SetInputCallback,
+      kAudioUnitScope_Global,
+      use_voice_processing_ ? AUElement::INPUT : AUElement::OUTPUT, &callback,
+      sizeof(callback));
+  close_failed |=
+      CheckAndLogFailure(result, "Failed to clear AU input callback.");
+
+  if (use_voice_processing_) {
+    AURenderCallbackStruct playout_callback;
+    playout_callback.inputProc = nullptr;
+    playout_callback.inputProcRefCon = nullptr;
+    result =
+        AudioUnitSetProperty(audio_unit_, kAudioUnitProperty_SetRenderCallback,
+                             kAudioUnitScope_Input, AUElement::OUTPUT,
+                             &playout_callback, sizeof(playout_callback));
+    close_failed |=
+        CheckAndLogFailure(result, "Failed to clear AU render callback.");
+  }
+
+  result = AudioUnitUninitialize(audio_unit_);
+  close_failed |= CheckAndLogFailure(result, "AudioUnitUninitialize() failed.");
   result = AudioComponentInstanceDispose(audio_unit_);
-  OSSTATUS_DLOG_IF(ERROR, result != noErr, result)
-      << "AudioComponentInstanceDispose() failed.";
+  close_failed |=
+      CheckAndLogFailure(result, "AudioComponentInstanceDispose() failed.");
   audio_unit_ = 0;
+
+  if (data_callback_proxy_) {
+    data_callback_proxy_->Detach();
+    if (close_failed || stop_failed_) {
+      // INTENTIONAL LEAK
+      // The OS failed to release the IOProc. The CoreAudio thread might still
+      // fire. We leak the proxy so the OS thread reads valid memory instead of
+      // triggering a Use-After-Free.
+      ANNOTATE_LEAKING_OBJECT_PTR(data_callback_proxy_.get());
+      data_callback_proxy_.release();
+    } else {
+      data_callback_proxy_.reset();
+    }
+  }
+  stop_failed_ = false;
 }
 
 void AUAudioInputStream::ReportAndResetStats() {
-  std::optional<std::string> log_message = glitch_helper_.LogAndReset("AU in");
+  std::optional<std::string> log_message;
+  size_t local_number_of_frames_provided = 0;
+  {
+    base::AutoLock al(lock_);
+    log_message = glitch_helper_.LogAndReset("AU in");
+    local_number_of_frames_provided = number_of_frames_provided_;
+    number_of_frames_provided_ = 0;
+  }
+
   if (log_message) {
     log_callback_.Run(*log_message);
   }
 
-  if (number_of_frames_provided_) {
+  if (local_number_of_frames_provided) {
     // A value of 0 indicates that we got the buffer size we asked for.
     base::UmaHistogramCounts10000("Media.Audio.Capture.FramesProvided",
-                                  number_of_frames_provided_);
+                                  local_number_of_frames_provided);
   }
-  number_of_frames_provided_ = 0;
 }
 
 // TODO(ossu): Ideally, we'd just use the mono stream directly. However, since
@@ -1264,18 +1427,24 @@ void AUAudioInputStream::UpmixMonoToStereoInPlace(AudioBuffer* audio_buffer,
     int in_offset = (bytes_per_sample * i);
     int out_offset = (channels * bytes_per_sample * i);
     for (int b = 0; b < bytes_per_sample; ++b) {
-      const char byte = byte_ptr[in_offset + b];
-      byte_ptr[out_offset + b] = byte;
-      byte_ptr[out_offset + bytes_per_sample + b] = byte;
+      const char byte = UNSAFE_TODO(byte_ptr[in_offset + b]);
+      UNSAFE_TODO(byte_ptr[out_offset + b]) = byte;
+      UNSAFE_TODO(byte_ptr[out_offset + bytes_per_sample + b]) = byte;
     }
   }
 }
 
-void AUAudioInputStream::LogMessageEverywhere(const char* function_name,
-                                              const std::string& message) {
-  log_callback_.Run("AU in" + base::StringPrintf(" [this=%p] ", this) +
-                    message);
-  VLOG(1) << function_name << " [this=" << this << "] " << message;
+void AUAudioInputStream::SendLog(const std::string& message, OSStatus result) {
+  if (result != noErr) {
+    OSSTATUS_VLOG(1, result) << "AU in: " << message;
+    log_callback_.Run(
+        base::StringPrintf("AU in: [this=%p] %s (OSStatus error %d: %s)", this,
+                           message.c_str(), static_cast<int>(result),
+                           logging::DescriptionFromOSStatus(result).c_str()));
+  } else {
+    VLOG(1) << "AU in: [this=" << this << "] " << message;
+    log_callback_.Run(base::StringPrintf("AU in: [this=%p] ", this) + message);
+  }
 }
 
 }  // namespace media

@@ -17,6 +17,7 @@
 #include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
+#include "components/unexportable_keys/background_task_origin.h"
 #include "components/unexportable_keys/unexportable_key_service_impl.h"
 #include "components/unexportable_keys/unexportable_key_task_manager.h"
 #include "crypto/scoped_fake_unexportable_key_provider.h"
@@ -45,6 +46,8 @@ constexpr crypto::SignatureVerifier::SignatureAlgorithm
     kAcceptableAlgorithms[] = {crypto::SignatureVerifier::ECDSA_SHA256};
 constexpr unexportable_keys::BackgroundTaskPriority kTaskPriority =
     unexportable_keys::BackgroundTaskPriority::kUserBlocking;
+constexpr unexportable_keys::BackgroundTaskOrigin kTaskOrigin =
+    unexportable_keys::BackgroundTaskOrigin::kDeviceBoundSessionCredentials;
 
 perf_test::PerfResultReporter SetUpDbscSSReporter(const std::string& story) {
   perf_test::PerfResultReporter reporter(kMetricPrefixDbscSS, story);
@@ -80,13 +83,14 @@ class DBSCSessionStorePerfTest : public testing::Test {
     return loaded_sessions;
   }
 
-  unexportable_keys::UnexportableKeyId GenerateNewKey() {
-    base::test::TestFuture<
-        unexportable_keys::ServiceErrorOr<unexportable_keys::UnexportableKeyId>>
+  unexportable_keys::UnexportableSigningKeyId GenerateNewSigningKey() {
+    base::test::TestFuture<unexportable_keys::ServiceErrorOr<
+        unexportable_keys::UnexportableSigningKeyId>>
         generate_future;
     key_service_.GenerateSigningKeySlowlyAsync(
         kAcceptableAlgorithms, kTaskPriority, generate_future.GetCallback());
-    unexportable_keys::ServiceErrorOr<unexportable_keys::UnexportableKeyId>
+    unexportable_keys::ServiceErrorOr<
+        unexportable_keys::UnexportableSigningKeyId>
         key_id = generate_future.Get();
     CHECK(key_id.has_value());
     return *key_id;
@@ -111,14 +115,15 @@ class DBSCSessionStorePerfTest : public testing::Test {
                          refresh_url,
                          std::move(scope),
                          std::move(cookie_credentials),
-                         GenerateNewKey(),
+                         GenerateNewSigningKey(),
                          /*allowed_refresh_initiators=*/{}};
     auto session_or_error = Session::CreateIfValid(params);
     ASSERT_TRUE(session_or_error.has_value());
     std::unique_ptr<Session> session = std::move(*session_or_error);
     ASSERT_TRUE(session);
 
-    store_->SaveSession(SchemefulSite(GURL(url_str)), *session);
+    store_->SaveSession(SchemefulSite(GURL(url_str)), *session,
+                        SessionStore::SaveSessionMode::kNewSession);
   }
 
   unsigned int NumSessionsInStore() { return store_->GetAllSessions().size(); }
@@ -166,7 +171,7 @@ class DBSCSessionStorePerfTest : public testing::Test {
   crypto::ScopedFakeUnexportableKeyProvider scoped_key_provider_;
   unexportable_keys::UnexportableKeyTaskManager task_manager_;
   unexportable_keys::UnexportableKeyServiceImpl key_service_{
-      task_manager_, crypto::UnexportableKeyProvider::Config()};
+      task_manager_, kTaskOrigin, crypto::UnexportableKeyProvider::Config()};
   base::Time perf_measurement_start_;
 };
 

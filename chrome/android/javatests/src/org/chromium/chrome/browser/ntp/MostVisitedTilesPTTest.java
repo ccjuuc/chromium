@@ -8,6 +8,7 @@ import android.os.Build;
 
 import androidx.test.filters.MediumTest;
 
+import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.ClassRule;
 import org.junit.FixMethodOrder;
@@ -63,6 +64,10 @@ public class MostVisitedTilesPTTest {
     public static void beforeClass() {
         sSiteSuggestions =
                 NewTabPageTestUtils.createFakeSiteSuggestions(sTestServerRule.getServer());
+    }
+
+    @Before
+    public void setUp() {
         FakeMostVisitedSites mostVisitedSites = new FakeMostVisitedSites();
         mostVisitedSites.setTileSuggestions(sSiteSuggestions);
         sSuggestionsDeps.getFactory().mostVisitedSites = mostVisitedSites;
@@ -70,29 +75,13 @@ public class MostVisitedTilesPTTest {
 
     @Test
     @MediumTest
-    @DisableFeatures({ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION})
-    public void testClickFirstMVT_DisableMvtCustomization() {
+    public void testClickFirstMVT() {
         doClickMVTTest(0);
     }
 
     @Test
     @MediumTest
-    @EnableFeatures({ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION})
-    public void testClickFirstMVT_EnableMvtCustomization() {
-        doClickMVTTest(0);
-    }
-
-    @Test
-    @MediumTest
-    @DisableFeatures({ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION})
-    public void testClickLastMVT_DisableMvtCustomization() {
-        doClickMVTTest(7);
-    }
-
-    @Test
-    @MediumTest
-    @EnableFeatures({ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION})
-    public void testClickLastMVT_EnableMvtCustomization() {
+    public void testClickLastMVT() {
         doClickMVTTest(7);
     }
 

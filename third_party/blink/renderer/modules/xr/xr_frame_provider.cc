@@ -17,6 +17,7 @@
 #include "third_party/blink/renderer/core/frame/navigator.h"
 #include "third_party/blink/renderer/core/imagebitmap/image_bitmap.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
+#include "third_party/blink/renderer/core/timing/dom_window_performance.h"
 #include "third_party/blink/renderer/modules/webgpu/gpu_device.h"
 #include "third_party/blink/renderer/modules/webgpu/gpu_texture.h"
 #include "third_party/blink/renderer/modules/xr/xr_gpu_binding.h"
@@ -30,9 +31,9 @@
 #include "third_party/blink/renderer/modules/xr/xr_viewport.h"
 #include "third_party/blink/renderer/modules/xr/xr_webgl_drawing_context.h"
 #include "third_party/blink/renderer/modules/xr/xr_webgl_layer.h"
-#include "third_party/blink/renderer/platform/graphics/gpu/xr_frame_transport.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/xr_frame_transport_delegate.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 #include "ui/display/display.h"
 #include "ui/gfx/geometry/transform.h"
 
@@ -115,7 +116,10 @@ void XRFrameProvider::OnSessionStarted(
         BindOnce(&XRFrameProvider::OnProviderConnectionError,
                  WrapWeakPersistent(this), WrapWeakPersistent(session)));
 
-    frame_transport_->RegisterFrameRenderedCallback(BindRepeating(
+    frame_transport_->RegisterFrameTransferredCallback(blink::BindRepeating(
+        &XRFrameProvider::OnTransferComplete, WrapWeakPersistent(this)));
+
+    frame_transport_->RegisterFrameRenderedCallback(blink::BindRepeating(
         &XRFrameProvider::OnRenderComplete, WrapWeakPersistent(this)));
 
     if (session_ptr->layer_manager) {
@@ -274,8 +278,9 @@ void XRFrameProvider::ScheduleImmersiveFrame(
   frame_data_time_.StartTimer();
   // `this` is an okay TRACE ID here, since we are only allowed one immersive
   // session at a time.
-  TRACE_EVENT_BEGIN("xr", "RequestImmersiveFrame",
-                    perfetto::Track::FromPointer(this));
+  TRACE_EVENT_BEGIN(
+      "xr", "RequestImmersiveFrame",
+      perfetto::NamedTrack::FromPointer("blink::XRFrameProvider", this));
   immersive_data_provider_->GetFrameData(
       std::move(options), BindOnce(&XRFrameProvider::OnImmersiveFrameData,
                                    WrapWeakPersistent(this)));
@@ -302,14 +307,16 @@ void XRFrameProvider::ScheduleNonImmersiveFrame(
 
   // Calls |OnNonImmersiveVSync|
   window->document()->RequestAnimationFrame(
-      MakeGarbageCollected<XRFrameProviderRequestCallback>(this));
+      MakeGarbageCollected<XRFrameProviderRequestCallback>(this),
+      FrameCallbackType::kInternal);
 }
 
 void XRFrameProvider::OnImmersiveFrameData(
     device::mojom::blink::XRFrameDataPtr data) {
   frame_data_time_.StopTimer();
-  TRACE_EVENT_END("xr", /*RequestImmersiveFrame*/
-                  perfetto::Track::FromPointer(this));
+  TRACE_EVENT_END(
+      "xr", /*RequestImmersiveFrame*/
+      perfetto::NamedTrack::FromPointer("blink::XRFrameProvider", this));
   TRACE_EVENT0("gpu", "OnImmersiveFrameData");
 
   if (data.is_null()) {
@@ -463,7 +470,8 @@ void XRFrameProvider::OnNonImmersiveFrameData(
     DVLOG(1) << __func__ << ": NO FRAME DATA!";
     request->value = nullptr;
     window->document()->RequestAnimationFrame(
-        MakeGarbageCollected<XRFrameProviderRequestCallback>(this));
+        MakeGarbageCollected<XRFrameProviderRequestCallback>(this),
+        FrameCallbackType::kInternal);
   }
 }
 
@@ -658,11 +666,8 @@ double XRFrameProvider::UpdateImmersiveFrameTime(
       *first_immersive_frame_time_ + current_frame_time_from_first_frame;
 
   double high_res_now_ms =
-      window->document()
-          ->Loader()
-          ->GetTiming()
-          .MonotonicTimeToZeroBasedDocumentTime(current_frame_time)
-          .InMillisecondsF();
+      DOMWindowPerformance::performance(*window)
+          ->MonotonicTimeToDOMHighResTimeStamp(current_frame_time);
 
   return high_res_now_ms;
 }
@@ -671,6 +676,8 @@ void XRFrameProvider::SubmitLayer(device::LayerId layer_id,
                                   XrLayerClient* client,
                                   bool was_changed) {
   CHECK(client);
+  std::unique_ptr<SharedImageHolder> image_ref = client->DoneWithSharedBuffer();
+
   CHECK(immersive_session_);
   CHECK(client->session());
   CHECK_EQ(client->session(), immersive_session_);
@@ -696,32 +703,25 @@ void XRFrameProvider::SubmitLayer(device::LayerId layer_id,
   }
 
   if (frame_transport_->DrawingIntoSharedBuffer()) {
-    // Image is written to shared buffer already. No need to hold it.
+    // Image is written to shared buffer already. The layer now takes
+    // ownership of the SharedImageHolder, which contains the SyncToken.
     DVLOG(3) << __func__ << ": FrameSubmit for SharedBuffer mode";
     any_layer_changed_ = true;
-    layer_ids_.push_back(layer_id);
+    layers_.emplace_back(layer_id, std::move(image_ref));
     return;
   } else {
     CHECK_NE(client->session()->GraphicsApi(), XRGraphicsBinding::Api::kWebGPU)
         << "WebGPU layers only support shared buffer submission modes";
   }
 
-  scoped_refptr<StaticBitmapImage> image_ref =
-      client->TransferToStaticBitmapImage();
+  image_ref = client->TransferToSharedImageHolder();
 
   if (!image_ref) {
     return;
   }
 
-  // Hardware-accelerated rendering should always be texture backed. Ensure this
-  // is the case, don't attempt to render if using an unexpected drawing path.
-  if (!image_ref->IsTextureBacked()) {
-    NOTREACHED() << "WebXR requires hardware-accelerated rendering to texture";
-  }
-
   any_layer_changed_ = true;
-  current_frame_images_.push_back(image_ref);
-  layer_ids_.push_back(layer_id);
+  layers_.emplace_back(layer_id, std::move(image_ref));
 }
 
 // TODO(bajones): This only works because we're restricted to a single layer at
@@ -815,12 +815,11 @@ void XRFrameProvider::UpdateLayerViewports(XRProjectionLayer* layer) {
 
 void XRFrameProvider::ClearCachedLayersData() {
   any_layer_changed_ = false;
-  current_frame_images_.clear();
-  layer_ids_.clear();
+  layers_.clear();
 }
 
-void XRFrameProvider::SubmitFrame(
-    XRFrameTransportDelegate* transport_delegate) {
+void XRFrameProvider::SubmitFrame(XRFrameTransportDelegate* transport_delegate,
+                                  gpu::SharedImageExportResult export_result) {
   CHECK(transport_delegate);
 
   if (!immersive_presentation_provider_.is_bound()) {
@@ -833,8 +832,6 @@ void XRFrameProvider::SubmitFrame(
   // Ensure temporary data is always reset.
   bool was_any_layer_changed = any_layer_changed_;
   any_layer_changed_ = false;
-  auto image_refs = std::move(current_frame_images_);
-  auto layer_ids = std::move(layer_ids_);
 
   if (frame_id_ < 0) {
     // There is no valid frame_id_, and the browser side is not currently
@@ -859,7 +856,8 @@ void XRFrameProvider::SubmitFrame(
     // Just tell the device side that there was no submitted frame instead of
     // executing the implicit end-of-frame submit.
     frame_transport_->FrameSubmitMissing(immersive_presentation_provider_.get(),
-                                         transport_delegate, this_frame_id);
+                                         std::move(export_result),
+                                         this_frame_id);
     dropped_frames_++;
 
     return;
@@ -867,18 +865,17 @@ void XRFrameProvider::SubmitFrame(
 
   frame_transport_->FramePreImage(transport_delegate);
 
-  // The backend expects an empty layer ID list if the 'layers' feature is not
-  // enabled.
+  // The backend expects layer ID list to contain a single element (i.e. the
+  // base layer) if the 'layers' feature is not enabled.
   if (!layer_manager_.is_bound()) {
     // At this case, only a single layer should exist since the
     // layers feature is not enabled.
-    CHECK_EQ(layer_ids.size(), 1U);
-    layer_ids.clear();
+    CHECK_EQ(layers_.size(), 1U);
   }
 
   bool succeeded = frame_transport_->FrameSubmit(
       immersive_presentation_provider_.get(), transport_delegate,
-      std::move(layer_ids), std::move(image_refs), this_frame_id);
+      std::move(layers_), std::move(export_result), this_frame_id);
 
   succeeded ? num_frames_++ : dropped_frames_++;
   if (succeeded) {
@@ -928,6 +925,14 @@ void XRFrameProvider::SendFrameData() {
   if (xr_->GetWebXrInternalsRendererListener()) {
     xr_->GetWebXrInternalsRendererListener()->OnFrameData(
         std::move(xr_frame_stat));
+  }
+}
+
+void XRFrameProvider::OnTransferComplete(
+    bool succeeded,
+    const Vector<device::LayerId>& layer_ids) {
+  if (succeeded && immersive_session_) {
+    immersive_session_->OnTransferComplete(layer_ids);
   }
 }
 

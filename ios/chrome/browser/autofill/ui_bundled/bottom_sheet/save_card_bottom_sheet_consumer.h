@@ -9,6 +9,7 @@
 #import <UIKit/UIKit.h>
 
 #import "ios/chrome/browser/autofill/model/message/save_card_message_with_links.h"
+#import "ios/chrome/browser/autofill/ui_bundled/autofill_credit_card_ui_type.h"
 
 // Enum specifying the logo to be used for the image above the title of the
 // bottomsheet.
@@ -20,7 +21,7 @@ typedef NS_ENUM(NSInteger, AboveTitleImageLogoType) {
   kChromeLogo,
 
   // Used for upload save.
-  kGooglePayLogo
+  kGoogleWalletLogo
 };
 
 // Consumer interface for updating the save card bottomsheet UI.
@@ -64,6 +65,15 @@ typedef NS_ENUM(NSInteger, AboveTitleImageLogoType) {
 
 // Updates bottomsheet to show card upload is successful.
 - (void)showConfirmationState;
+
+@optional
+// Sets the validity state and error message for a specific field.
+- (void)setField:(AutofillCreditCardUIType)type
+         isValid:(BOOL)isValid
+    errorMessage:(NSString*)errorMessage;
+
+// Sets whether the save button should be enabled.
+- (void)setSaveButtonEnabled:(BOOL)enabled;
 
 @end
 

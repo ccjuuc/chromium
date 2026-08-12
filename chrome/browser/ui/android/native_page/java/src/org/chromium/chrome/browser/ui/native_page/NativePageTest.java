@@ -4,6 +4,7 @@
 
 package org.chromium.chrome.browser.ui.native_page;
 
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 
@@ -13,7 +14,11 @@ import org.junit.runner.RunWith;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.ui.native_page.NativePage.NativePageType;
+import org.chromium.components.extensions.ExtensionsBuildflags;
 import org.chromium.url.GURL;
 
 /** Tests public methods in NativePage. */
@@ -96,6 +101,54 @@ public class NativePageTest {
     }
 
     @Test
+    @EnableFeatures(ChromeFeatureList.SETTINGS_IN_TAB)
+    @Config(qualifiers = "sw600dp")
+    public void testNativePageType_Settings() {
+        String url = "chrome://settings";
+        GURL gurl = new GURL(url);
+        Assert.assertEquals(
+                "Settings page should be a native page",
+                NativePageType.SETTINGS,
+                NativePage.nativePageType(gurl, null, false, false, false));
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.SETTINGS_IN_TAB)
+    @Config(qualifiers = "sw600dp")
+    public void testNativePageType_SettingsInIncognito() {
+        String url = "chrome://settings";
+        GURL gurl = new GURL(url);
+        Assert.assertEquals(
+                "Settings page should not exist in incognito",
+                NativePageType.NONE,
+                NativePage.nativePageType(gurl, null, /* isIncognito= */ true, false, false));
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.SETTINGS_IN_TAB)
+    @Config(qualifiers = "sw320dp")
+    public void testNativePageType_SettingsOnPhone() {
+        String url = "chrome://settings";
+        GURL gurl = new GURL(url);
+        Assert.assertEquals(
+                "Settings page should not be a native page on phone",
+                NativePageType.NONE,
+                NativePage.nativePageType(gurl, null, false, false, false));
+    }
+
+    @Test
+    @DisableFeatures(ChromeFeatureList.SETTINGS_IN_TAB)
+    @Config(qualifiers = "sw600dp")
+    public void testNativePageType_SettingsDisabled() {
+        String url = "chrome://settings";
+        GURL gurl = new GURL(url);
+        Assert.assertEquals(
+                "Settings page should not be a native page",
+                NativePageType.NONE,
+                NativePage.nativePageType(gurl, null, false, false, false));
+    }
+
+    @Test
     public void testNativePageType_Pdf() {
         String url1 = "chrome-native://pdf/link?url=xyz";
         String url2 = "chrome-native://pdf/link?url=abc";
@@ -103,21 +156,87 @@ public class NativePageTest {
         GURL gurl1 = new GURL(url1);
 
         NativePage candidatePage = mock(NativePage.class);
+        final boolean incognito = true;
+        final boolean urlTyped = true;
+        final boolean loadPdf = true;
         doReturn(url1).when(candidatePage).getUrl();
         Assert.assertEquals(
-                "Candidate page should be reused when url matches",
+                "Pdf page should be created for non-pdf -> pdf",
+                NativePageType.PDF,
+                NativePage.nativePageType(gurl1, candidatePage, !incognito, !urlTyped, loadPdf));
+
+        doReturn(true).when(candidatePage).isPdf();
+        doReturn(true).when(candidatePage).shouldReusePage(eq(url1), eq(url1), eq(!urlTyped));
+        Assert.assertEquals(
+                "Candidate page should be reused for pdf -> pdf",
                 NativePageType.CANDIDATE,
-                NativePage.nativePageType(gurl1, candidatePage, false, true));
+                NativePage.nativePageType(gurl1, candidatePage, !incognito, !urlTyped, loadPdf));
+
+        doReturn(false).when(candidatePage).shouldReusePage(eq(url1), eq(url1), eq(!urlTyped));
+        Assert.assertEquals(
+                "Pdf page should be created for pdf activity restart",
+                NativePageType.PDF,
+                NativePage.nativePageType(gurl1, candidatePage, !incognito, !urlTyped, loadPdf));
 
         doReturn(url2).when(candidatePage).getUrl();
+        doReturn(true).when(candidatePage).shouldReusePage(eq(url2), eq(url1), eq(!urlTyped));
         Assert.assertEquals(
-                "Candidate page should not be reused when url does not match",
-                NativePageType.PDF,
-                NativePage.nativePageType(gurl1, candidatePage, false, true));
+                "Candidate page should be reused for pdf pages",
+                NativePageType.CANDIDATE,
+                NativePage.nativePageType(gurl1, candidatePage, !incognito, !urlTyped, loadPdf));
 
         Assert.assertEquals(
                 "Native page should not be created without associated pdf download",
                 NativePageType.NONE,
-                NativePage.nativePageType(gurl1, candidatePage, false, false));
+                NativePage.nativePageType(gurl1, candidatePage, !incognito, !urlTyped, !loadPdf));
+    }
+
+    @Test
+    @DisableFeatures({
+        ChromeFeatureList.CHROME_NATIVE_URL_OVERRIDING,
+        ChromeFeatureList.MIGRATE_MANAGEMENT_TO_WEBUI_ON_MOBILE
+    })
+    public void testManagementPage_Mobile_FeatureDisabled() {
+        if (ExtensionsBuildflags.ENABLE_EXTENSIONS_CORE) {
+            return;
+        }
+        GURL url = new GURL("chrome://management");
+        Assert.assertEquals(
+                "Management page should be native on mobile when feature is disabled",
+                NativePageType.MANAGEMENT,
+                NativePage.nativePageType(url, null, false, false, false));
+        Assert.assertTrue(
+                "isNativePageUrl should be true on mobile when feature is disabled",
+                NativePage.isNativePageUrl(url, false, false));
+    }
+
+    @Test
+    @DisableFeatures(ChromeFeatureList.CHROME_NATIVE_URL_OVERRIDING)
+    @EnableFeatures(ChromeFeatureList.MIGRATE_MANAGEMENT_TO_WEBUI_ON_MOBILE)
+    public void testManagementPage_Mobile_FeatureEnabled() {
+        if (ExtensionsBuildflags.ENABLE_EXTENSIONS_CORE) {
+            return;
+        }
+        GURL url = new GURL("chrome://management");
+        Assert.assertEquals(
+                "Management page should be WebUI on mobile when feature is enabled",
+                NativePageType.NONE,
+                NativePage.nativePageType(url, null, false, false, false));
+        Assert.assertFalse(
+                "isNativePageUrl should be false on mobile when feature is enabled",
+                NativePage.isNativePageUrl(url, false, false));
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.CHROME_NATIVE_URL_OVERRIDING)
+    public void testManagementPage_Desktop() {
+        GURL url = new GURL("chrome://management");
+        Assert.assertEquals(
+                "Management page should be WebUI on desktop",
+                NativePageType.NONE,
+                NativePage.nativePageType(url, null, false, false, false));
+        Assert.assertFalse(
+                "isNativePageUrl should be false on desktop",
+                NativePage.isNativePageUrl(url, false, false));
     }
 }

@@ -74,9 +74,27 @@ INSTANTIATE_TEST_SUITE_P(
                     "a channel name can even have emoji 🚂",
                     "日本"));
 
+TEST(UpdateManifestTest, ErrorToString) {
+  EXPECT_EQ(UpdateManifest::ErrorToString(
+                UpdateManifest::JsonFormatError::kRootNotADictionary),
+            "Root is not a dictionary");
+  EXPECT_EQ(UpdateManifest::ErrorToString(
+                UpdateManifest::JsonFormatError::kChannelsNotADictionary),
+            "'channels' field is not a dictionary");
+  EXPECT_EQ(UpdateManifest::ErrorToString(
+                UpdateManifest::JsonFormatError::kChannelNotADictionary),
+            "Channel entry is not a dictionary");
+  EXPECT_EQ(UpdateManifest::ErrorToString(
+                UpdateManifest::JsonFormatError::kVersionsNotAnArray),
+            "'versions' field is not an array");
+  EXPECT_EQ(UpdateManifest::ErrorToString(
+                UpdateManifest::JsonFormatError::kVersionEntryNotADictionary),
+            "Version entry is not a dictionary");
+}
+
 TEST(UpdateManifestTest, FailsToParseManifestWithoutKeys) {
   auto update_manifest = UpdateManifest::CreateFromJson(
-      base::Value(base::Value::Dict()), GURL("https://c.de/um.json"));
+      base::Value(base::DictValue()), GURL("https://c.de/um.json"));
 
   EXPECT_THAT(
       update_manifest,
@@ -85,7 +103,7 @@ TEST(UpdateManifestTest, FailsToParseManifestWithoutKeys) {
 
 TEST(UpdateManifestTest, FailsToParseManifestWithoutVersions) {
   auto update_manifest = UpdateManifest::CreateFromJson(
-      base::Value(base::Value::Dict().Set("foo", base::Value::List())),
+      base::Value(base::DictValue().Set("foo", base::ListValue())),
       GURL("https://c.de/um.json"));
 
   EXPECT_THAT(
@@ -106,7 +124,7 @@ TEST(UpdateManifestTest, ParsesManifestWithEmptyVersions) {
   ASSERT_OK_AND_ASSIGN(
       auto update_manifest,
       UpdateManifest::CreateFromJson(
-          base::Value(base::Value::Dict().Set("versions", base::Value::List())),
+          base::Value(base::DictValue().Set("versions", base::ListValue())),
           GURL("https://c.de/um.json")));
 
   EXPECT_THAT(update_manifest.versions(), IsEmpty());
@@ -116,11 +134,11 @@ TEST(UpdateManifestTest, ParsesManifestWithAdditionalKeys) {
   ASSERT_OK_AND_ASSIGN(
       auto update_manifest,
       UpdateManifest::CreateFromJson(
-          base::Value(base::Value::Dict()
+          base::Value(base::DictValue()
                           .Set("foo", base::Value(123))
                           .Set("versions",
-                               base::Value::List().Append(
-                                   base::Value::Dict()
+                               base::ListValue().Append(
+                                   base::DictValue()
                                        .Set("version", "1.2.3")
                                        .Set("src", "https://example.com")))),
           GURL("https://c.de/um.json")));
@@ -136,9 +154,9 @@ TEST(UpdateManifestTest, ParsesManifestWithVersion) {
   ASSERT_OK_AND_ASSIGN(
       auto update_manifest,
       UpdateManifest::CreateFromJson(
-          base::Value(base::Value::Dict().Set(
-              "versions", base::Value::List().Append(
-                              base::Value::Dict()
+          base::Value(base::DictValue().Set(
+              "versions", base::ListValue().Append(
+                              base::DictValue()
                                   .Set("version", "1.2.3")
                                   .Set("src", "https://example.com")))),
           GURL("https://c.de/um.json")));
@@ -154,12 +172,12 @@ TEST(UpdateManifestTest, ParsesManifestWithRelativeSrc) {
   ASSERT_OK_AND_ASSIGN(
       auto update_manifest,
       UpdateManifest::CreateFromJson(
-          base::Value(base::Value::Dict().Set(
-              "versions", base::Value::List()
-                              .Append(base::Value::Dict()
+          base::Value(base::DictValue().Set(
+              "versions", base::ListValue()
+                              .Append(base::DictValue()
                                           .Set("version", "1.2.3")
                                           .Set("src", "foo/bar"))
-                              .Append(base::Value::Dict()
+                              .Append(base::DictValue()
                                           .Set("version", "2.3.4")
                                           .Set("src", "/foo/bar")))),
           GURL("https://c.de/sub/um.json")));
@@ -178,9 +196,9 @@ TEST(UpdateManifestTest, ParsesManifestWithRelativeSrc) {
 TEST(UpdateManifestTest, ParsesManifestWithRelativeSrc2) {
   ASSERT_OK_AND_ASSIGN(auto update_manifest,
                        UpdateManifest::CreateFromJson(
-                           base::Value(base::Value::Dict().Set(
-                               "versions", base::Value::List().Append(
-                                               base::Value::Dict()
+                           base::Value(base::DictValue().Set(
+                               "versions", base::ListValue().Append(
+                                               base::DictValue()
                                                    .Set("version", "1.2.3")
                                                    .Set("src", "foo/bar")))),
                            GURL("https://c.de/um")));
@@ -196,11 +214,11 @@ TEST(UpdateManifestTest, IgnoresVersionsWithoutUrl) {
   ASSERT_OK_AND_ASSIGN(
       auto update_manifest,
       UpdateManifest::CreateFromJson(
-          base::Value(base::Value::Dict().Set(
+          base::Value(base::DictValue().Set(
               "versions",
-              base::Value::List()
-                  .Append(base::Value::Dict().Set("src", "https://example.com"))
-                  .Append(base::Value::Dict()
+              base::ListValue()
+                  .Append(base::DictValue().Set("src", "https://example.com"))
+                  .Append(base::DictValue()
                               .Set("version", "2.0.0")
                               .Set("src", "https://example2.com")))),
           GURL("https://c.de/um.json")));
@@ -216,11 +234,11 @@ TEST(UpdateManifestTest, IgnoresVersionsWithoutSrc) {
   ASSERT_OK_AND_ASSIGN(
       auto update_manifest,
       UpdateManifest::CreateFromJson(
-          base::Value(base::Value::Dict().Set(
+          base::Value(base::DictValue().Set(
               "versions",
-              base::Value::List()
-                  .Append(base::Value::Dict().Set("version", "1.0.0"))
-                  .Append(base::Value::Dict()
+              base::ListValue()
+                  .Append(base::DictValue().Set("version", "1.0.0"))
+                  .Append(base::DictValue()
                               .Set("version", "2.0.0")
                               .Set("src", "https://example2.com")))),
           GURL("https://c.de/um.json")));
@@ -236,9 +254,9 @@ TEST(UpdateManifestTest, ParsesManifestWithAdditionalVersionKeys) {
   ASSERT_OK_AND_ASSIGN(
       auto update_manifest,
       UpdateManifest::CreateFromJson(
-          base::Value(base::Value::Dict().Set(
-              "versions", base::Value::List().Append(
-                              base::Value::Dict()
+          base::Value(base::DictValue().Set(
+              "versions", base::ListValue().Append(
+                              base::DictValue()
                                   .Set("foo", 123)
                                   .Set("version", "1.2.3")
                                   .Set("src", "https://example.com")))),
@@ -255,17 +273,17 @@ TEST(UpdateManifestTest, ParsesManifestWithVersionChannels) {
   ASSERT_OK_AND_ASSIGN(
       auto update_manifest,
       UpdateManifest::CreateFromJson(
-          base::Value(base::Value::Dict().Set(
+          base::Value(base::DictValue().Set(
               "versions",
-              base::Value::List()
-                  .Append(base::Value::Dict()
+              base::ListValue()
+                  .Append(base::DictValue()
                               .Set("channels",
-                                   base::Value::List().Append("beta").Append(
+                                   base::ListValue().Append("beta").Append(
                                        "stable"))
                               .Set("version", "1.2.3")
                               .Set("src", "https://example.com"))
-                  .Append(base::Value::Dict()
-                              .Set("channels", base::Value::List())
+                  .Append(base::DictValue()
+                              .Set("channels", base::ListValue())
                               .Set("version", "1.2.4")
                               .Set("src", "https://example.com")))),
           GURL("https://c.de/um.json")));
@@ -287,24 +305,24 @@ TEST(UpdateManifestTest, IgnoresChannelOrder) {
   ASSERT_OK_AND_ASSIGN(
       auto update_manifest1,
       UpdateManifest::CreateFromJson(
-          base::Value(base::Value::Dict().Set(
+          base::Value(base::DictValue().Set(
               "versions",
-              base::Value::List().Append(
-                  base::Value::Dict()
+              base::ListValue().Append(
+                  base::DictValue()
                       .Set("channels",
-                           base::Value::List().Append("beta").Append("stable"))
+                           base::ListValue().Append("beta").Append("stable"))
                       .Set("version", "1.2.3")
                       .Set("src", "https://example.com")))),
           GURL("https://c.de/um.json")));
   ASSERT_OK_AND_ASSIGN(
       auto update_manifest2,
       UpdateManifest::CreateFromJson(
-          base::Value(base::Value::Dict().Set(
+          base::Value(base::DictValue().Set(
               "versions",
-              base::Value::List().Append(
-                  base::Value::Dict()
+              base::ListValue().Append(
+                  base::DictValue()
                       .Set("channels",
-                           base::Value::List().Append("stable").Append("beta"))
+                           base::ListValue().Append("stable").Append("beta"))
                       .Set("version", "1.2.3")
                       .Set("src", "https://example.com")))),
           GURL("https://c.de/um.json")));
@@ -323,12 +341,12 @@ TEST(UpdateManifestTest, DoesNotAllowEmptyChannels) {
   ASSERT_OK_AND_ASSIGN(
       auto update_manifest,
       UpdateManifest::CreateFromJson(
-          base::Value(base::Value::Dict().Set(
+          base::Value(base::DictValue().Set(
               "versions",
-              base::Value::List().Append(
-                  base::Value::Dict()
+              base::ListValue().Append(
+                  base::DictValue()
                       .Set("channels",
-                           base::Value::List().Append("").Append("stable"))
+                           base::ListValue().Append("").Append("stable"))
                       .Set("version", "1.2.3")
                       .Set("src", "https://example.com")))),
           GURL("https://c.de/um.json")));
@@ -339,12 +357,12 @@ TEST(UpdateManifestTest, ParsesManifestWithMultipleVersions) {
   ASSERT_OK_AND_ASSIGN(
       auto update_manifest,
       UpdateManifest::CreateFromJson(
-          base::Value(base::Value::Dict().Set(
-              "versions", base::Value::List()
-                              .Append(base::Value::Dict()
+          base::Value(base::DictValue().Set(
+              "versions", base::ListValue()
+                              .Append(base::DictValue()
                                           .Set("version", "1.2.3")
                                           .Set("src", "https://example.com"))
-                              .Append(base::Value::Dict()
+                              .Append(base::DictValue()
                                           .Set("version", "3.0.0")
                                           .Set("src", "http://localhost")))),
           GURL("https://c.de/um.json")));
@@ -364,21 +382,21 @@ TEST(UpdateManifestTest, OverwritesRepeatedEntriesWithSameVersion) {
   ASSERT_OK_AND_ASSIGN(
       auto update_manifest,
       UpdateManifest::CreateFromJson(
-          base::Value(base::Value::Dict().Set(
-              "versions", base::Value::List()
-                              .Append(base::Value::Dict()
+          base::Value(base::DictValue().Set(
+              "versions", base::ListValue()
+                              .Append(base::DictValue()
                                           .Set("version", "3.0.0")
                                           .Set("src", "https://v3-1.com"))
-                              .Append(base::Value::Dict()
+                              .Append(base::DictValue()
                                           .Set("version", "3.0.0")
                                           .Set("src", "https://v3-2.com"))
-                              .Append(base::Value::Dict()
+                              .Append(base::DictValue()
                                           .Set("version", "5.0.0")
                                           .Set("src", "https://v5-1.com"))
-                              .Append(base::Value::Dict()
+                              .Append(base::DictValue()
                                           .Set("version", "3.0.0")
                                           .Set("src", "https://v3-3.com"))
-                              .Append(base::Value::Dict()
+                              .Append(base::DictValue()
                                           .Set("version", "5.0.0")
                                           .Set("src", "https://v5-2.com")))),
           GURL("https://c.de/um.json")));
@@ -401,9 +419,9 @@ TEST_P(UpdateManifestValidVersionTest, ParsesValidVersion) {
   ASSERT_OK_AND_ASSIGN(
       auto update_manifest,
       UpdateManifest::CreateFromJson(
-          base::Value(base::Value::Dict().Set(
-              "versions", base::Value::List().Append(
-                              base::Value::Dict()
+          base::Value(base::DictValue().Set(
+              "versions", base::ListValue().Append(
+                              base::DictValue()
                                   .Set("version", GetParam())
                                   .Set("src", "https://example.com")))),
           GURL("https://c.de/um.json")));
@@ -425,12 +443,12 @@ TEST_P(UpdateManifestInvalidVersionTest, IgnoresEntriesWithInvalidVersions) {
   ASSERT_OK_AND_ASSIGN(
       auto update_manifest,
       UpdateManifest::CreateFromJson(
-          base::Value(base::Value::Dict().Set(
-              "versions", base::Value::List()
-                              .Append(base::Value::Dict()
+          base::Value(base::DictValue().Set(
+              "versions", base::ListValue()
+                              .Append(base::DictValue()
                                           .Set("version", GetParam())
                                           .Set("src", "https://example.com"))
-                              .Append(base::Value::Dict()
+                              .Append(base::DictValue()
                                           .Set("version", "99.99.99")
                                           .Set("src", "https://example.com")))),
           GURL("https://c.de/um.json")));
@@ -451,9 +469,9 @@ using UpdateManifestValidSrcTest = testing::TestWithParam<std::string>;
 TEST_P(UpdateManifestValidSrcTest, ParsesValidSrc) {
   ASSERT_OK_AND_ASSIGN(auto update_manifest,
                        UpdateManifest::CreateFromJson(
-                           base::Value(base::Value::Dict().Set(
-                               "versions", base::Value::List().Append(
-                                               base::Value::Dict()
+                           base::Value(base::DictValue().Set(
+                               "versions", base::ListValue().Append(
+                                               base::DictValue()
                                                    .Set("version", "1.0.0")
                                                    .Set("src", GetParam())))),
                            GURL("https://c.de/um.json")));
@@ -478,12 +496,12 @@ TEST_P(UpdateManifestInvalidSrcTest, IgnoresEntriesWithInvalidSrc) {
   ASSERT_OK_AND_ASSIGN(
       auto update_manifest,
       UpdateManifest::CreateFromJson(
-          base::Value(base::Value::Dict().Set(
-              "versions", base::Value::List()
-                              .Append(base::Value::Dict()
+          base::Value(base::DictValue().Set(
+              "versions", base::ListValue()
+                              .Append(base::DictValue()
                                           .Set("version", "1.0.0")
                                           .Set("src", GetParam()))
-                              .Append(base::Value::Dict()
+                              .Append(base::DictValue()
                                           .Set("version", "99.99.99")
                                           .Set("src", "https://example.com")))),
           GURL("https://c.de/um.json")));
@@ -512,11 +530,11 @@ class UpdateManifestSecureOriginAllowlistTest : public ::testing::Test {
 };
 
 TEST_F(UpdateManifestSecureOriginAllowlistTest, CanSetHttpOriginsAsTrusted) {
-  auto update_manifest_json = base::Value(base::Value::Dict().Set(
+  auto update_manifest_json = base::Value(base::DictValue().Set(
       "versions",
-      base::Value::List().Append(base::Value::Dict()
-                                     .Set("version", "1.0.0")
-                                     .Set("src", "http://example.com"))));
+      base::ListValue().Append(base::DictValue()
+                                   .Set("version", "1.0.0")
+                                   .Set("src", "http://example.com"))));
 
   {
     ASSERT_OK_AND_ASSIGN(
@@ -548,21 +566,21 @@ TEST(GetLatestVersionTest, CalculatesLatestVersionCorrectly) {
   ASSERT_OK_AND_ASSIGN(
       auto update_manifest,
       UpdateManifest::CreateFromJson(
-          base::Value(base::Value::Dict().Set(
-              "versions", base::Value::List()
-                              .Append(base::Value::Dict()
+          base::Value(base::DictValue().Set(
+              "versions", base::ListValue()
+                              .Append(base::DictValue()
                                           .Set("version", "3.99.123")
                                           .Set("src", "https://v3.com"))
-                              .Append(base::Value::Dict()
+                              .Append(base::DictValue()
                                           .Set("version", "5.6.0")
                                           .Set("src", "https://v5.com"))
-                              .Append(base::Value::Dict()
+                              .Append(base::DictValue()
                                           .Set("version", "10.3.0")
                                           .Set("src", "https://v10.com"))
-                              .Append(base::Value::Dict()
+                              .Append(base::DictValue()
                                           .Set("version", "10.11.0")
                                           .Set("src", "https://v10.com"))
-                              .Append(base::Value::Dict()
+                              .Append(base::DictValue()
                                           .Set("version", "4.5.0")
                                           .Set("src", "https://v4.com")))),
           GURL("https://c.de/um.json")));
@@ -583,27 +601,27 @@ TEST(GetLatestVersionTest, CalculatesLatestVersionForChannel) {
   ASSERT_OK_AND_ASSIGN(
       auto update_manifest,
       UpdateManifest::CreateFromJson(
-          base::Value(base::Value::Dict().Set(
+          base::Value(base::DictValue().Set(
               "versions",
-              base::Value::List()
-                  .Append(base::Value::Dict()
-                              .Set("version", "3.99.123")
-                              .Set("src", "https://v3.com")
-                              .Set("channels",
-                                   base::Value::List().Append("default")))
-                  .Append(base::Value::Dict()
+              base::ListValue()
+                  .Append(
+                      base::DictValue()
+                          .Set("version", "3.99.123")
+                          .Set("src", "https://v3.com")
+                          .Set("channels", base::ListValue().Append("default")))
+                  .Append(base::DictValue()
                               .Set("version", "5.6.0")
                               .Set("src", "https://v5.com")
                               .Set("channels",
-                                   base::Value::List().Append("default").Append(
+                                   base::ListValue().Append("default").Append(
                                        "beta")))
-                  .Append(base::Value::Dict()
+                  .Append(base::DictValue()
                               .Set("version", "10.3.0")
                               .Set("src", "https://v10.com"))
-                  .Append(base::Value::Dict()
+                  .Append(base::DictValue()
                               .Set("version", "10.11.0")
                               .Set("src", "https://v10.com"))
-                  .Append(base::Value::Dict()
+                  .Append(base::DictValue()
                               .Set("version", "4.5.0")
                               .Set("src", "https://v4.com")))),
           GURL("https://c.de/um.json")));
@@ -792,6 +810,97 @@ TEST(UpdateManifestParsesChannelMetadataTest, ChannelName) {
                                       /*display_name=*/std::nullopt)));
     EXPECT_THAT(channel_metadata.GetDisplayName(), Eq("another_name"));
   }
+}
+
+TEST(UpdateManifestParsesChannelMetadataTest, ChannelNameInvalidNotAString) {
+  ASSERT_OK_AND_ASSIGN(base::Value json,
+                       base::JSONReader::ReadAndReturnValueWithError(
+                           R"({
+    "channels": {
+      "default": {
+        "name": []
+      }
+    },
+    "versions": []
+  })",
+                           base::JSON_PARSE_CHROMIUM_EXTENSIONS));
+  ASSERT_OK_AND_ASSIGN(
+      auto update_manifest,
+      UpdateManifest::CreateFromJson(json, GURL("https://c.de/um.json")));
+
+  auto channel_metadata =
+      update_manifest.GetChannelMetadata(UpdateChannel::default_channel());
+  EXPECT_THAT(channel_metadata,
+              Eq(UpdateManifest::ChannelMetadata(
+                  /*update_channel=*/UpdateChannel::default_channel(),
+                  /*display_name=*/std::nullopt)));
+  EXPECT_THAT(channel_metadata.GetDisplayName(), Eq("default"));
+}
+
+TEST(UpdateManifestParsesChannelMetadataTest, ChannelNameInvalidEmpty) {
+  ASSERT_OK_AND_ASSIGN(base::Value json,
+                       base::JSONReader::ReadAndReturnValueWithError(
+                           R"({
+    "channels": {
+      "default": {
+        "name": ""
+      }
+    },
+    "versions": []
+  })",
+                           base::JSON_PARSE_CHROMIUM_EXTENSIONS));
+  ASSERT_OK_AND_ASSIGN(
+      auto update_manifest,
+      UpdateManifest::CreateFromJson(json, GURL("https://c.de/um.json")));
+
+  auto channel_metadata =
+      update_manifest.GetChannelMetadata(UpdateChannel::default_channel());
+  EXPECT_THAT(channel_metadata,
+              Eq(UpdateManifest::ChannelMetadata(
+                  /*update_channel=*/UpdateChannel::default_channel(),
+                  /*display_name=*/std::nullopt)));
+}
+
+TEST(UpdateManifestParsesChannelMetadataTest, ChannelNameInvalidTooLong) {
+  std::string too_long_name(257, 'a');
+  ASSERT_OK_AND_ASSIGN(
+      auto update_manifest,
+      UpdateManifest::CreateFromJson(
+          base::Value(
+              base::DictValue()
+                  .Set("versions", base::ListValue())
+                  .Set("channels", base::DictValue().Set(
+                                       "default", base::DictValue().Set(
+                                                      "name", too_long_name)))),
+          GURL("https://c.de/um.json")));
+
+  auto channel_metadata =
+      update_manifest.GetChannelMetadata(UpdateChannel::default_channel());
+  EXPECT_THAT(channel_metadata,
+              Eq(UpdateManifest::ChannelMetadata(
+                  /*update_channel=*/UpdateChannel::default_channel(),
+                  /*display_name=*/std::nullopt)));
+}
+
+TEST(UpdateManifestParsesChannelMetadataTest, ChannelNameValidMaxLength) {
+  std::string max_length_name(256, 'a');
+  ASSERT_OK_AND_ASSIGN(
+      auto update_manifest,
+      UpdateManifest::CreateFromJson(
+          base::Value(base::DictValue()
+                          .Set("versions", base::ListValue())
+                          .Set("channels",
+                               base::DictValue().Set(
+                                   "default", base::DictValue().Set(
+                                                  "name", max_length_name)))),
+          GURL("https://c.de/um.json")));
+
+  auto channel_metadata =
+      update_manifest.GetChannelMetadata(UpdateChannel::default_channel());
+  EXPECT_THAT(channel_metadata,
+              Eq(UpdateManifest::ChannelMetadata(
+                  /*update_channel=*/UpdateChannel::default_channel(),
+                  /*display_name=*/max_length_name)));
 }
 
 }  // namespace

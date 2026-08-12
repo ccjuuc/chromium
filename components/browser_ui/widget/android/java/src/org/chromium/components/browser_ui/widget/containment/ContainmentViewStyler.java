@@ -4,12 +4,22 @@
 
 package org.chromium.components.browser_ui.widget.containment;
 
+import android.content.Context;
+import android.content.res.ColorStateList;
+import android.content.res.TypedArray;
+import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.RelativeLayout;
+
+import androidx.core.graphics.ColorUtils;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+import org.chromium.components.browser_ui.widget.R;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,8 +40,55 @@ public class ContainmentViewStyler {
             return;
         }
         view.setBackground(
-                createRoundedDrawable(
-                        style.getTopRadius(), style.getBottomRadius(), style.getBackgroundColor()));
+                createInteractiveRoundedDrawable(
+                        view.getContext(),
+                        style.getTopRadius(),
+                        style.getBottomRadius(),
+                        style.getBackgroundColor()));
+    }
+
+    /**
+     * Creates a rounded drawable with a ripple effect for interactive states, including hover.
+     *
+     * @param context The context used to resolve the ripple color.
+     * @param topRadius The radius for the top corners.
+     * @param bottomRadius The radius for the bottom corners.
+     * @param color The background color of the drawable.
+     * @return A new {@link Drawable} with the specified properties.
+     */
+    public static Drawable createInteractiveRoundedDrawable(
+            Context context, float topRadius, float bottomRadius, int color) {
+        // Create a background that changes color when hovered.
+        float hoverAlpha = context.getResources().getFloat(R.dimen.containment_item_hover_alpha);
+        int hoverTint =
+                ColorUtils.setAlphaComponent(
+                        SemanticColorUtils.getDefaultTextColor(context), (int) (255 * hoverAlpha));
+
+        // Composite the hover tint over the base color so it blends naturally.
+        int hoverColor = ColorUtils.compositeColors(hoverTint, color);
+
+        ColorStateList colorStateList =
+                new ColorStateList(
+                        new int[][] {new int[] {android.R.attr.state_hovered}, new int[] {}},
+                        new int[] {hoverColor, color});
+
+        Drawable content = createRoundedDrawable(topRadius, bottomRadius, colorStateList);
+        Drawable mask = createRoundedDrawable(topRadius, bottomRadius, Color.WHITE);
+
+        ColorStateList rippleColor;
+        TypedArray a =
+                context.obtainStyledAttributes(new int[] {android.R.attr.colorControlHighlight});
+        try {
+            rippleColor = a.getColorStateList(0);
+        } finally {
+            a.recycle();
+        }
+
+        if (rippleColor == null) {
+            rippleColor = ColorStateList.valueOf(Color.TRANSPARENT);
+        }
+
+        return new RippleDrawable(rippleColor, content, mask);
     }
 
     /**
@@ -72,7 +129,7 @@ public class ContainmentViewStyler {
             ViewGroup viewGroup = (ViewGroup) view;
             for (int i = 0; i < viewGroup.getChildCount(); i++) {
                 View child = viewGroup.getChildAt(i);
-                if (child instanceof android.widget.RelativeLayout) {
+                if (child instanceof RelativeLayout) {
                     View titleView = child.findViewById(android.R.id.title);
                     if (titleView != null) {
                         child.setPadding(0, 0, 0, 0);
@@ -102,6 +159,19 @@ public class ContainmentViewStyler {
      * @return A new {@link Drawable} with the specified properties.
      */
     public static Drawable createRoundedDrawable(float topRadius, float bottomRadius, int color) {
+        return createRoundedDrawable(topRadius, bottomRadius, ColorStateList.valueOf(color));
+    }
+
+    /**
+     * Creates a rounded drawable with the specified top and bottom radii and ColorStateList.
+     *
+     * @param topRadius The radius for the top corners.
+     * @param bottomRadius The radius for the bottom corners.
+     * @param color The background color state list of the drawable.
+     * @return A new {@link Drawable} with the specified properties.
+     */
+    public static Drawable createRoundedDrawable(
+            float topRadius, float bottomRadius, ColorStateList color) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.RECTANGLE);
         drawable.setColor(color);
@@ -136,7 +206,7 @@ public class ContainmentViewStyler {
         }
     }
 
-    private static void recursivelyFindStyledViews(View current, List<View> list) {
+    public static void recursivelyFindStyledViews(View current, List<View> list) {
         // We are looking for views that implement ContainmentItem, which are the
         // user-perceptible items in a preference that need to be individually styled.
         if (current instanceof ContainmentItem && current.getVisibility() == View.VISIBLE) {

@@ -4,20 +4,32 @@
 
 #include "components/autofill/core/browser/webdata/autofill_webdata_backend_impl.h"
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "base/check.h"
-#include "base/check_is_test.h"
 #include "base/check_op.h"
 #include "base/debug/alias.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
+#include "base/memory/ref_counted_delete_on_sequence.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "base/observer_list.h"
-#include "base/strings/string_number_conversions.h"
+#include "base/supports_user_data.h"
 #include "base/task/sequenced_task_runner.h"
-#include "base/uuid.h"
+#include "build/buildflag.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/payments/autofill_offer_data.h"
 #include "components/autofill/core/browser/data_model/payments/autofill_wallet_usage_data.h"
@@ -27,11 +39,14 @@
 #include "components/autofill/core/browser/data_model/payments/credit_card_cloud_token_data.h"
 #include "components/autofill/core/browser/data_model/payments/iban.h"
 #include "components/autofill/core/browser/data_model/payments/payments_metadata.h"
-#include "components/autofill/core/browser/geo/autofill_country.h"
+#include "components/autofill/core/browser/data_model/valuables/loyalty_card.h"
+#include "components/autofill/core/browser/data_model/valuables/valuable_types.h"
 #include "components/autofill/core/browser/payments/payments_customer_data.h"
 #include "components/autofill/core/browser/webdata/addresses/address_autofill_table.h"
 #include "components/autofill/core/browser/webdata/autocomplete/autocomplete_entry.h"
+#include "components/autofill/core/browser/webdata/autocomplete/autocomplete_entry_label_sensitive.h"
 #include "components/autofill/core/browser/webdata/autocomplete/autocomplete_table.h"
+#include "components/autofill/core/browser/webdata/autocomplete/autocomplete_table_label_sensitive.h"
 #include "components/autofill/core/browser/webdata/autofill_ai/entity_table.h"
 #include "components/autofill/core/browser/webdata/autofill_change.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
@@ -40,11 +55,14 @@
 #include "components/autofill/core/browser/webdata/payments/server_cvc.h"
 #include "components/autofill/core/browser/webdata/valuables/valuables_table.h"
 #include "components/autofill/core/common/autofill_clock.h"
+#include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/dense_set.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/protocol/autofill_specifics.pb.h"
+#include "components/webdata/common/web_data_results.h"
 #include "components/webdata/common/web_database_backend.h"
+#include "sql/database.h"
 
 namespace autofill {
 
@@ -132,11 +150,12 @@ enum class Result {
   kRemoveEntityInstance_Failure = 301,
   kRemoveEntityInstancesModifiedBetween_Success = 310,
   kRemoveEntityInstancesModifiedBetween_Failure = 311,
-  kClearLocalCvcsUpToMay2025_Success = 312,
-  kClearLocalCvcsUpToMay2025_Failure = 313,
+  // Clearing local CVCs up to May 2025 (312, 313) is deprecated.
   kCleanupForCrbug445879524_Success = 314,
   kCleanupForCrbug445879524_Failure = 315,
-  kMaxValue = kCleanupForCrbug445879524_Failure,
+  kAddOrUpdateValuableMetadata_Success = 316,
+  kAddOrUpdateValuableMetadata_Failure = 317,
+  kMaxValue = kAddOrUpdateValuableMetadata_Failure,
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:AutofillWebDataBackendImplOperationResult)
 
@@ -146,6 +165,16 @@ enum class Result {
 void ReportResult(Result result) {
   base::UmaHistogramEnumeration(
       "WebDatabase.AutofillWebDataBackendImpl.OperationResult", result);
+}
+
+bool SupportsSyncingEntityMetadata(const EntityInstance& entity_instance) {
+  switch (entity_instance.record_type()) {
+    case EntityInstance::RecordType::kServerWallet:
+      return true;
+    case EntityInstance::RecordType::kLocal:
+    case EntityInstance::RecordType::kPersonalContext:
+      return false;
+  }
 }
 
 }  // namespace
@@ -164,15 +193,44 @@ AutofillWebDataBackendImpl::AutofillWebDataBackendImpl(
 
 AutofillWebDataBackendImpl::~AutofillWebDataBackendImpl() {
   DCHECK(owning_task_runner()->RunsTasksInCurrentSequence());
-  // Explicitly destroy user-data ownees (i.e., the sync bridges) first as their
-  // destructors may call into this AutofillWebDataBackendImpl.
-  user_data_.ClearAllUserData();
 }
 
 void AutofillWebDataBackendImpl::ShutdownOnUISequence() {
   DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
   weak_ptr_factory_for_ui_lifecycle_.InvalidateWeakPtrsAndDoom();
   DCHECK(!this_during_ui_lifecycle_);
+
+  // We want to destroy the user-data ownees (i.e., the sync bridges) before
+  // GetDatabase() becomes null to avoid nullptr dereferences.
+  //
+  // The below hack achieves that for the following reason.
+  //
+  // WebDataServiceWrapper::Shutdown() calls
+  // - AutofillWebDataBackendImpl::ShutdownOnUISequence() and
+  // - WebDatabaseService::ShutdownDatabase().
+  //
+  // Both functions post a task to the DB sequence:
+  // - AutofillWebDataBackendImpl::ShutdownOnUISequence() destroys
+  //   the sync bridges.
+  // - WebDatabaseService::ShutdownDatabase() resets the database.
+  //
+  // Since those tasks are posted to a sequenced task runner, they're executed
+  // in that order.
+  //
+  // Since this is the only callpath that resets the database, our hack ensures
+  // that the sync bridges are destroyed before GetDatabase() becomes nullptr.
+  //
+  // See crbug.com/474706752#comment21 for details.
+  //
+  // If this hack is removed, the ~AutofillWebDataService() must explicitly call
+  // `user_data_.ClearAllUserData()` because the sync bridges may call into
+  // `this` during their destruction.
+  owning_task_runner()->PostTask(
+      FROM_HERE, BindOnce(
+                     [](scoped_refptr<AutofillWebDataBackendImpl> self) {
+                       self->user_data_.ClearAllUserData();
+                     },
+                     scoped_refptr(this)));
 }
 
 void AutofillWebDataBackendImpl::AddObserver(
@@ -220,27 +278,42 @@ std::unique_ptr<WDTypedResult>
 AutofillWebDataBackendImpl::RemoveExpiredAutocompleteEntries(WebDatabase* db) {
   DCHECK(owning_task_runner()->RunsTasksInCurrentSequence());
   AutocompleteChangeList changes;
-  if (AutocompleteTable::FromWebDatabase(db)->RemoveExpiredFormElements(
-          changes)) {
-    if (!changes.empty()) {
-      // Post the notifications including the list of affected keys.
-      // This is sent here so that work resulting from this notification
-      // will be done on the DB sequence, and not the UI sequence.
-      for (auto& db_observer : db_observer_list_)
-        db_observer.AutocompleteEntriesChanged(changes);
+  const bool old_table_write_success =
+      AutocompleteTable::FromWebDatabase(db)->RemoveExpiredFormElements(
+          changes);
+  if (old_table_write_success && !changes.empty()) {
+    // Post the notifications including the list of affected keys.
+    // This is sent here so that work resulting from this notification
+    // will be done on the DB sequence, and not the UI sequence.
+    for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+         db_observer_list_) {
+      db_observer.AutocompleteEntriesChanged(changes);
     }
   }
 
-  return std::make_unique<WDResult<size_t>>(AUTOFILL_CLEANUP_RESULT,
-                                            changes.size());
+  if (base::FeatureList::IsEnabled(
+          features::kAutofillLabelSensitiveAutocomplete)) {
+    const bool new_table_write_success =
+        AutocompleteTableLabelSensitive::FromWebDatabase(db)
+            ->RemoveExpiredFormElements();
+    return std::make_unique<WDResult<bool>>(
+        AUTOFILL_CLEANUP_RESULT,
+        new_table_write_success && old_table_write_success);
+  } else {
+    return std::make_unique<WDResult<bool>>(AUTOFILL_CLEANUP_RESULT,
+                                            old_table_write_success);
+  }
 }
+
 void AutofillWebDataBackendImpl::NotifyOfAutofillProfileChanged(
     const AutofillProfileChange& change) {
   DCHECK(owning_task_runner()->RunsTasksInCurrentSequence());
 
   // DB sequence notification.
-  for (auto& db_observer : db_observer_list_)
+  for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+       db_observer_list_) {
     db_observer.AutofillProfileChanged(change);
+  }
 }
 
 void AutofillWebDataBackendImpl::NotifyOfCreditCardChanged(
@@ -248,8 +321,10 @@ void AutofillWebDataBackendImpl::NotifyOfCreditCardChanged(
   DCHECK(owning_task_runner()->RunsTasksInCurrentSequence());
 
   // DB sequence notification.
-  for (auto& db_observer : db_observer_list_)
+  for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+       db_observer_list_) {
     db_observer.CreditCardChanged(change);
+  }
 }
 
 void AutofillWebDataBackendImpl::NotifyOfIbanChanged(const IbanChange& change) {
@@ -301,7 +376,7 @@ void AutofillWebDataBackendImpl::NotifyOnEntityInstanceChanged(
   }
 
   // Notify about potential server metadata changes.
-  if (change.data_model().IsServerInstance()) {
+  if (SupportsSyncingEntityMetadata(change.data_model())) {
     EntityInstanceMetadataChange::Type metadata_change_type = [&] {
       switch (change.type()) {
         case EntityInstanceChange::ADD:
@@ -342,22 +417,35 @@ WebDatabase::State AutofillWebDataBackendImpl::AddFormElements(
     WebDatabase* db) {
   DCHECK(owning_task_runner()->RunsTasksInCurrentSequence());
   AutocompleteChangeList changes;
-  if (!AutocompleteTable::FromWebDatabase(db)->AddFormFieldValues(fields,
-                                                                  &changes)) {
+  const bool old_table_write_success =
+      AutocompleteTable::FromWebDatabase(db)->AddFormFieldValues(fields,
+                                                                 &changes);
+  if (old_table_write_success) {
+    // Post the notifications including the list of affected keys.
+    // This is sent here so that work resulting from this notification will be
+    // done on the DB sequence, and not the UI sequence.
+    for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+         db_observer_list_) {
+      db_observer.AutocompleteEntriesChanged(changes);
+    }
+  }
+
+  const bool new_table_write_successful_or_not_needed =
+      !base::FeatureList::IsEnabled(
+          features::kAutofillLabelSensitiveAutocomplete) ||
+      AutocompleteTableLabelSensitive::FromWebDatabase(db)->AddFormFieldValues(
+          fields);
+
+  if (old_table_write_success && new_table_write_successful_or_not_needed) {
+    ReportResult(Result::kAddFormElements_Success);
+    return WebDatabase::COMMIT_NEEDED;
+  } else {
     ReportResult(Result::kAddFormElements_Failure);
     return WebDatabase::COMMIT_NOT_NEEDED;
   }
-
-  // Post the notifications including the list of affected keys.
-  // This is sent here so that work resulting from this notification will be
-  // done on the DB sequence, and not the UI sequence.
-  for (auto& db_observer : db_observer_list_)
-    db_observer.AutocompleteEntriesChanged(changes);
-
-  ReportResult(Result::kAddFormElements_Success);
-  return WebDatabase::COMMIT_NEEDED;
 }
 
+// TODO(crbug.com/507327886): Remove after feature launch.
 std::unique_ptr<WDTypedResult>
 AutofillWebDataBackendImpl::GetFormValuesForElementName(
     const std::u16string& name,
@@ -372,48 +460,93 @@ AutofillWebDataBackendImpl::GetFormValuesForElementName(
       AUTOFILL_VALUE_RESULT, entries);
 }
 
+std::unique_ptr<WDTypedResult>
+AutofillWebDataBackendImpl::GetFormValuesForElementNameAndLabel(
+    std::u16string_view name,
+    std::u16string_view label,
+    std::u16string_view prefix,
+    int limit,
+    WebDatabase* db) {
+  DCHECK(owning_task_runner()->RunsTasksInCurrentSequence());
+  std::vector<AutocompleteSearchResultLabelSensitive> entries;
+  const bool get_form_values_success =
+      AutocompleteTableLabelSensitive::FromWebDatabase(db)
+          ->GetFormValuesForElementNameAndLabel(name, label, prefix, limit,
+                                                entries);
+  DCHECK(get_form_values_success);
+  return std::make_unique<
+      WDResult<std::vector<AutocompleteSearchResultLabelSensitive>>>(
+      AUTOCOMPLETE_SEARCH_RESULT, std::move(entries));
+}
+
 WebDatabase::State AutofillWebDataBackendImpl::RemoveFormElementsAddedBetween(
     base::Time delete_begin,
     base::Time delete_end,
     WebDatabase* db) {
   DCHECK(owning_task_runner()->RunsTasksInCurrentSequence());
   AutocompleteChangeList changes;
-  if (AutocompleteTable::FromWebDatabase(db)->RemoveFormElementsAddedBetween(
-          delete_begin, delete_end, changes)) {
-    if (!changes.empty()) {
-      // Post the notifications including the list of affected keys.
-      // This is sent here so that work resulting from this notification
-      // will be done on the DB sequence, and not the UI sequence.
-      for (auto& db_observer : db_observer_list_)
-        db_observer.AutocompleteEntriesChanged(changes);
+  const bool old_table_write_success =
+      AutocompleteTable::FromWebDatabase(db)->RemoveFormElementsAddedBetween(
+          delete_begin, delete_end, changes);
+  if (old_table_write_success && !changes.empty()) {
+    // Post the notifications including the list of affected keys.
+    // This is sent here so that work resulting from this notification
+    // will be done on the DB sequence, and not the UI sequence.
+    for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+         db_observer_list_) {
+      db_observer.AutocompleteEntriesChanged(changes);
     }
+  }
+
+  const bool new_table_write_successful_or_not_needed =
+      !base::FeatureList::IsEnabled(
+          features::kAutofillLabelSensitiveAutocomplete) ||
+      AutocompleteTableLabelSensitive::FromWebDatabase(db)
+          ->RemoveFormElementsAddedBetween(delete_begin, delete_end);
+
+  if (old_table_write_success && new_table_write_successful_or_not_needed) {
     ReportResult(Result::kRemoveFormElementsAddedBetween_Success);
     return WebDatabase::COMMIT_NEEDED;
+  } else {
+    ReportResult(Result::kRemoveFormElementsAddedBetween_Failure);
+    return WebDatabase::COMMIT_NOT_NEEDED;
   }
-  ReportResult(Result::kRemoveFormElementsAddedBetween_Failure);
-  return WebDatabase::COMMIT_NOT_NEEDED;
 }
 
-WebDatabase::State AutofillWebDataBackendImpl::RemoveFormValueForElementName(
-    const std::u16string& name,
-    const std::u16string& value,
+WebDatabase::State
+AutofillWebDataBackendImpl::RemoveFormValueForElementNameAndLabel(
+    std::u16string_view name,
+    std::u16string_view label,
+    std::u16string_view value,
     WebDatabase* db) {
   DCHECK(owning_task_runner()->RunsTasksInCurrentSequence());
-
-  if (AutocompleteTable::FromWebDatabase(db)->RemoveFormElement(name, value)) {
+  const bool old_table_write_success =
+      AutocompleteTable::FromWebDatabase(db)->RemoveFormElement(
+          std::u16string(name), std::u16string(value));
+  if (old_table_write_success) {
     AutocompleteChangeList changes;
-    changes.push_back(AutocompleteChange(AutocompleteChange::REMOVE,
-                                         AutocompleteKey(name, value)));
+    changes.push_back(AutocompleteChange(
+        AutocompleteChange::REMOVE,
+        AutocompleteKey(std::u16string(name), std::u16string(value))));
 
     // Post the notifications including the list of affected keys.
-    for (auto& db_observer : db_observer_list_)
+    for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+         db_observer_list_) {
       db_observer.AutocompleteEntriesChanged(changes);
-
+    }
+  }
+  const bool new_table_write_successful_or_not_needed =
+      !base::FeatureList::IsEnabled(
+          features::kAutofillLabelSensitiveAutocomplete) ||
+      AutocompleteTableLabelSensitive::FromWebDatabase(db)->RemoveFormElement(
+          name, label, value);
+  if (old_table_write_success && new_table_write_successful_or_not_needed) {
     ReportResult(Result::kRemoveFormValueForElementName_Success);
     return WebDatabase::COMMIT_NEEDED;
+  } else {
+    ReportResult(Result::kRemoveFormValueForElementName_Failure);
+    return WebDatabase::COMMIT_NOT_NEEDED;
   }
-  ReportResult(Result::kRemoveFormValueForElementName_Failure);
-  return WebDatabase::COMMIT_NOT_NEEDED;
 }
 
 WebDatabase::State AutofillWebDataBackendImpl::AddAutofillProfile(
@@ -439,8 +572,10 @@ WebDatabase::State AutofillWebDataBackendImpl::AddAutofillProfile(
   // observers with `db_profile`.
   AutofillProfileChange change(AutofillProfileChange::ADD, profile.guid(),
                                std::move(*db_profile));
-  for (auto& db_observer : db_observer_list_)
+  for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+       db_observer_list_) {
     db_observer.AutofillProfileChanged(change);
+  }
 
   ui_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(std::move(on_success), std::move(change)));
@@ -481,8 +616,10 @@ WebDatabase::State AutofillWebDataBackendImpl::UpdateAutofillProfile(
   // observers with `db_profile`.
   AutofillProfileChange change(AutofillProfileChange::UPDATE, profile.guid(),
                                std::move(*db_profile));
-  for (auto& db_observer : db_observer_list_)
+  for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+       db_observer_list_) {
     db_observer.AutofillProfileChanged(change);
+  }
 
   ui_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(std::move(on_success), std::move(change)));
@@ -515,8 +652,10 @@ WebDatabase::State AutofillWebDataBackendImpl::RemoveAutofillProfile(
   // Notify observers. Even for removals the profile is a necessary part of the
   // AutofillProfileChange, so downstream code an distinguish by RecordType.
   AutofillProfileChange change(change_type, guid, *profile);
-  for (auto& db_observer : db_observer_list_)
+  for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+       db_observer_list_) {
     db_observer.AutofillProfileChanged(change);
+  }
 
   ui_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(std::move(on_success), std::move(change)));
@@ -570,7 +709,7 @@ WebDatabase::State AutofillWebDataBackendImpl::UpdateEntityMetadata(
     return WebDatabase::COMMIT_NOT_NEEDED;
   }
 
-  if (entity.IsServerInstance()) {
+  if (SupportsSyncingEntityMetadata(entity)) {
     EntityInstanceMetadataChange change(EntityInstanceMetadataChange::UPDATE,
                                         entity.guid(), entity.metadata());
     NotifyOnServerEntityMetadataChanged(change);
@@ -631,15 +770,49 @@ std::unique_ptr<WDTypedResult> AutofillWebDataBackendImpl::GetLoyaltyCards(
       ValuablesTable::FromWebDatabase(db)->GetLoyaltyCards());
 }
 
+WebDatabase::State AutofillWebDataBackendImpl::UpdateValuableMetadata(
+    const ValuableMetadata& metadata,
+    WebDatabase* db) {
+  DCHECK(owning_task_runner()->RunsTasksInCurrentSequence());
+  ValuablesTable* table = ValuablesTable::FromWebDatabase(db);
+  if (!table->AddOrUpdateValuableMetadata(metadata)) {
+    ReportResult(Result::kAddOrUpdateValuableMetadata_Failure);
+    return WebDatabase::COMMIT_NOT_NEEDED;
+  }
+
+  ValuableMetadataChange change(ValuableMetadataChange::UPDATE,
+                                metadata.valuable_id, metadata);
+  NotifyOnValuableMetadataChanged(change);
+
+  ReportResult(Result::kAddOrUpdateValuableMetadata_Success);
+  return WebDatabase::COMMIT_NEEDED;
+}
+
+void AutofillWebDataBackendImpl::NotifyOnValuableMetadataChanged(
+    const ValuableMetadataChange& change) {
+  DCHECK(owning_task_runner()->RunsTasksInCurrentSequence());
+
+  for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+       db_observer_list_) {
+    db_observer.ValuableMetadataChanged(change);
+  }
+}
+
 std::unique_ptr<WDTypedResult>
 AutofillWebDataBackendImpl::GetCountOfValuesContainedBetween(base::Time begin,
                                                              base::Time end,
                                                              WebDatabase* db) {
   DCHECK(owning_task_runner()->RunsTasksInCurrentSequence());
-  int value =
-      AutocompleteTable::FromWebDatabase(db)->GetCountOfValuesContainedBetween(
-          begin, end);
-  return std::make_unique<WDResult<int>>(AUTOFILL_VALUE_RESULT, value);
+  if (base::FeatureList::IsEnabled(
+          features::kAutofillLabelSensitiveAutocomplete)) {
+    const int64_t value = AutocompleteTableLabelSensitive::FromWebDatabase(db)
+                              ->GetCountOfValuesContainedBetween(begin, end);
+    return std::make_unique<WDResult<int64_t>>(INT64_RESULT, value);
+  } else {
+    const int64_t value = AutocompleteTable::FromWebDatabase(db)
+                              ->GetCountOfValuesContainedBetween(begin, end);
+    return std::make_unique<WDResult<int64_t>>(INT64_RESULT, value);
+  }
 }
 
 WebDatabase::State AutofillWebDataBackendImpl::UpdateAutocompleteEntries(
@@ -665,7 +838,8 @@ WebDatabase::State AutofillWebDataBackendImpl::AddCreditCard(
     return WebDatabase::COMMIT_NOT_NEEDED;
   }
 
-  for (auto& db_observer : db_observer_list_) {
+  for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+       db_observer_list_) {
     db_observer.CreditCardChanged(CreditCardChange(
         CreditCardChange::ADD, credit_card.guid(), credit_card));
   }
@@ -693,7 +867,8 @@ WebDatabase::State AutofillWebDataBackendImpl::UpdateCreditCard(
     return WebDatabase::COMMIT_NOT_NEEDED;
   }
 
-  for (auto& db_observer : db_observer_list_) {
+  for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+       db_observer_list_) {
     db_observer.CreditCardChanged(CreditCardChange(
         CreditCardChange::UPDATE, credit_card.guid(), credit_card));
   }
@@ -730,7 +905,8 @@ WebDatabase::State AutofillWebDataBackendImpl::RemoveCreditCard(
     return WebDatabase::COMMIT_NOT_NEEDED;
   }
 
-  for (auto& db_observer : db_observer_list_) {
+  for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+       db_observer_list_) {
     db_observer.CreditCardChanged(
         CreditCardChange(CreditCardChange::REMOVE, guid, *card));
   }
@@ -768,7 +944,8 @@ WebDatabase::State AutofillWebDataBackendImpl::UpdateServerCardMetadata(
     return WebDatabase::COMMIT_NOT_NEEDED;
   }
 
-  for (auto& db_observer : db_observer_list_) {
+  for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+       db_observer_list_) {
     db_observer.CreditCardChanged(
         CreditCardChange(CreditCardChange::UPDATE, card.server_id(), card));
   }
@@ -804,7 +981,8 @@ WebDatabase::State AutofillWebDataBackendImpl::AddLocalIban(const Iban& iban,
     return WebDatabase::COMMIT_NOT_NEEDED;
   }
 
-  for (auto& db_observer : db_observer_list_) {
+  for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+       db_observer_list_) {
     db_observer.IbanChanged(IbanChange(IbanChange::ADD, iban.guid(), iban));
   }
   ReportResult(Result::kAddIban_Success);
@@ -829,7 +1007,8 @@ WebDatabase::State AutofillWebDataBackendImpl::UpdateLocalIban(
     return WebDatabase::COMMIT_NOT_NEEDED;
   }
 
-  for (auto& db_observer : db_observer_list_) {
+  for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+       db_observer_list_) {
     db_observer.IbanChanged(IbanChange(IbanChange::UPDATE, iban.guid(), iban));
   }
   ReportResult(Result::kUpdateIban_Success);
@@ -852,7 +1031,8 @@ WebDatabase::State AutofillWebDataBackendImpl::RemoveLocalIban(
     return WebDatabase::COMMIT_NOT_NEEDED;
   }
 
-  for (auto& db_observer : db_observer_list_) {
+  for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+       db_observer_list_) {
     db_observer.IbanChanged(IbanChange(IbanChange::REMOVE, guid, *iban));
   }
   ReportResult(Result::kRemoveIban_Success);
@@ -870,7 +1050,8 @@ WebDatabase::State AutofillWebDataBackendImpl::UpdateServerIbanMetadata(
     return WebDatabase::COMMIT_NOT_NEEDED;
   }
 
-  for (auto& db_observer : db_observer_list_) {
+  for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+       db_observer_list_) {
     db_observer.IbanChanged(
         IbanChange(IbanChange::UPDATE, iban.instrument_id(), iban));
   }
@@ -889,7 +1070,8 @@ WebDatabase::State AutofillWebDataBackendImpl::AddServerCvc(
   if (PaymentsAutofillTable::FromWebDatabase(db)->AddServerCvc(server_cvc)) {
     const ServerCvcChange change{ServerCvcChange::ADD, instrument_id,
                                  server_cvc};
-    for (auto& db_observer : db_observer_list_) {
+    for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+         db_observer_list_) {
       // TODO(crbug.com/40929129): Add integration tests for Add, Remove and
       // Update for Wallet Credential data.
       db_observer.ServerCvcChanged(change);
@@ -911,7 +1093,8 @@ WebDatabase::State AutofillWebDataBackendImpl::UpdateServerCvc(
   if (PaymentsAutofillTable::FromWebDatabase(db)->UpdateServerCvc(server_cvc)) {
     const ServerCvcChange change{ServerCvcChange::UPDATE, instrument_id,
                                  server_cvc};
-    for (auto& db_observer : db_observer_list_) {
+    for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+         db_observer_list_) {
       db_observer.ServerCvcChanged(change);
     }
     ReportResult(Result::kUpdateServerCvc_Success);
@@ -931,7 +1114,8 @@ WebDatabase::State AutofillWebDataBackendImpl::RemoveServerCvc(
     // passed to the ServerCvcChange
     const ServerCvcChange change{ServerCvcChange::REMOVE, instrument_id,
                                  ServerCvc{}};
-    for (auto& db_observer : db_observer_list_) {
+    for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+         db_observer_list_) {
       db_observer.ServerCvcChanged(change);
     }
     ReportResult(Result::kRemoveServerCvc_Success);
@@ -954,7 +1138,8 @@ WebDatabase::State AutofillWebDataBackendImpl::ClearServerCvcs(
       const ServerCvcChange change{ServerCvcChange::REMOVE,
                                    server_cvc_from_list->instrument_id,
                                    ServerCvc{}};
-      for (auto& db_observer : db_observer_list_) {
+      for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+           db_observer_list_) {
         db_observer.ServerCvcChanged(change);
       }
     }
@@ -972,17 +1157,6 @@ WebDatabase::State AutofillWebDataBackendImpl::ClearLocalCvcs(WebDatabase* db) {
     return WebDatabase::COMMIT_NEEDED;
   }
   ReportResult(Result::kClearLocalCvcs_Failure);
-  return WebDatabase::COMMIT_NOT_NEEDED;
-}
-
-WebDatabase::State AutofillWebDataBackendImpl::ClearLocalCvcsUpToMay2025(
-    WebDatabase* db) {
-  DCHECK(owning_task_runner()->RunsTasksInCurrentSequence());
-  if (PaymentsAutofillTable::FromWebDatabase(db)->ClearLocalCvcsUpToMay2025()) {
-    ReportResult(Result::kClearLocalCvcsUpToMay2025_Success);
-    return WebDatabase::COMMIT_NEEDED;
-  }
-  ReportResult(Result::kClearLocalCvcsUpToMay2025_Failure);
   return WebDatabase::COMMIT_NOT_NEEDED;
 }
 
@@ -1118,7 +1292,8 @@ WebDatabase::State AutofillWebDataBackendImpl::AddServerCreditCardForTesting(
     return WebDatabase::COMMIT_NOT_NEEDED;
   }
 
-  for (auto& db_observer : db_observer_list_) {
+  for (AutofillWebDataServiceObserverOnDBSequence& db_observer :
+       db_observer_list_) {
     db_observer.CreditCardChanged(CreditCardChange(
         CreditCardChange::ADD, credit_card.guid(), credit_card));
   }

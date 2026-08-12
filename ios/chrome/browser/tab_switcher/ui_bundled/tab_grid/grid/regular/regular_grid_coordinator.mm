@@ -82,27 +82,6 @@ constexpr CGFloat kFacePileAvatarSize = 16;
   return _mediator;
 }
 
-#pragma mark - Superclass overrides
-
-- (LegacyGridTransitionLayout*)legacyTransitionLayout {
-  if (self.tabGroupCoordinator) {
-    return [self.tabGroupCoordinator.viewController
-                .gridViewController legacyTransitionLayout];
-  }
-
-  LegacyGridTransitionLayout* transitionLayout =
-      [_gridViewController legacyTransitionLayout];
-
-  if (IsPinnedTabsEnabled()) {
-    LegacyGridTransitionLayout* pinnedTabsTransitionLayout =
-        [self.pinnedTabsViewController legacyTransitionLayout];
-
-    return [self combineTransitionLayout:transitionLayout
-                    withTransitionLayout:pinnedTabsTransitionLayout];
-  }
-
-  return transitionLayout;
-}
 
 - (TabGridTransitionLayout*)transitionLayout {
   if (self.tabGroupCoordinator) {
@@ -209,7 +188,7 @@ constexpr CGFloat kFacePileAvatarSize = 16;
         [[TabGridEmptyStateView alloc] initWithPage:TabGridPageRegularTabs];
     gridViewController.emptyStateView.accessibilityIdentifier =
         kTabGridRegularTabsEmptyStateIdentifier;
-    gridViewController.theme = GridThemeLight;
+    gridViewController.theme = GridTheme::kDynamic;
     gridViewController.suggestedActionsDelegate = _mediator;
 
     self.gridContainerViewController.containedViewController =

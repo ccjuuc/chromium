@@ -8,7 +8,6 @@
 #include <string>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/callback_helpers.h"
 #include "base/no_destructor.h"
 #include "build/build_config.h"
@@ -17,6 +16,7 @@
 #include "device/vr/openxr/openxr_util.h"
 #include "device/vr/public/cpp/features.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "third_party/blink/public/common/features_generated.h"
 #include "third_party/openxr/src/include/openxr/openxr.h"
 
 namespace device {
@@ -32,7 +32,10 @@ const std::vector<mojom::XRSessionFeature>& GetSupportedFeatures() {
                           mojom::XRSessionFeature::REF_SPACE_UNBOUNDED,
                           mojom::XRSessionFeature::ANCHORS,
                           mojom::XRSessionFeature::HAND_INPUT,
-                          mojom::XRSessionFeature::SECONDARY_VIEWS}};
+                          mojom::XRSessionFeature::SECONDARY_VIEWS,
+                          mojom::XRSessionFeature::HIT_TEST,
+                          mojom::XRSessionFeature::LIGHT_ESTIMATION,
+                          mojom::XRSessionFeature::DEPTH}};
 
   return *kSupportedFeatures;
 }
@@ -91,15 +94,15 @@ OpenXrDevice::OpenXrDevice(
         mojom::XRSessionFeature::WEBGPU);
   }
 
-  // Only support hit test if the feature flag is enabled.
-  if (device::features::IsOpenXrArEnabled()) {
-    device_data.supported_features.emplace_back(
-        mojom::XRSessionFeature::HIT_TEST);
-    device_data.supported_features.emplace_back(
-        mojom::XRSessionFeature::LIGHT_ESTIMATION);
-    device_data.supported_features.emplace_back(mojom::XRSessionFeature::DEPTH);
+  // Only support Plane Detection if the feature flag is enabled.
+  if (base::FeatureList::IsEnabled(features::kWebXRPlaneDetection)) {
     device_data.supported_features.emplace_back(
         mojom::XRSessionFeature::PLANE_DETECTION);
+  }
+  // Only support Mesh Detection if the feature flag is enabled.
+  if (base::FeatureList::IsEnabled(blink::features::kWebXRMeshDetection)) {
+    device_data.supported_features.emplace_back(
+        mojom::XRSessionFeature::MESH_DETECTION);
   }
 
   SetDeviceData(std::move(device_data));
@@ -136,8 +139,14 @@ void OpenXrDevice::RequestSession(
   request_session_callback_ = std::move(callback);
 
   OpenXrCreateInfo create_info;
-  create_info.render_process_id = options->render_process_id;
-  create_info.render_frame_id = options->render_frame_id;
+#if BUILDFLAG(IS_ANDROID)
+  if (options->renderer_information) {
+    create_info.render_process_id =
+        options->renderer_information->render_process_id;
+    create_info.render_frame_id =
+        options->renderer_information->render_frame_id;
+  }
+#endif
   create_info.needs_separate_activity =
       OpenXrApiWrapper::NeedsSeparateActivity();
   platform_helper_->CreateInstanceWithCreateInfo(
@@ -193,11 +202,15 @@ void OpenXrDevice::OnCreateInstanceResult(
   auto on_visibility_state_changed = base::BindRepeating(
       &OpenXrDevice::OnVisibilityStateChanged, weak_ptr_factory_.GetWeakPtr());
 
+  auto session_ended_callback = base::BindOnce(&OpenXrDevice::OnSessionEnded,
+                                               weak_ptr_factory_.GetWeakPtr());
+
   render_loop_->task_runner()->PostTask(
       FROM_HERE, base::BindOnce(&OpenXrRenderLoop::RequestSession,
                                 base::Unretained(render_loop_.get()),
                                 std::move(on_visibility_state_changed),
-                                std::move(options), std::move(my_callback)));
+                                std::move(options), std::move(my_callback),
+                                std::move(session_ended_callback)));
 }
 
 void OpenXrDevice::OnRequestSessionResult(
@@ -239,10 +252,18 @@ void OpenXrDevice::ForceEndSession(ExitXrPresentReason reason) {
         base::BindOnce(&OpenXrRenderLoop::ExitPresent,
                        base::Unretained(render_loop_.get()), reason));
     render_loop_.reset();
+  } else {
+    // If we have a render loop, the act of it finishing shutting down will call
+    // OnSessionEnded for us.
+    OnSessionEnded();
   }
+}
 
+void OpenXrDevice::OnSessionEnded() {
   OnExitPresent();
   exclusive_controller_receiver_.reset();
+
+  render_loop_.reset();
 
   extension_helper_.reset();
   if (instance_ != XR_NULL_HANDLE) {

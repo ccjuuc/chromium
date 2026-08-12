@@ -55,7 +55,8 @@ class WebsiteUsageObserverTest : public ::testing::Test {
     ASSERT_TRUE(profile_manager_.SetUp());
     profile_ = profile_manager_.CreateTestingProfile(kTestUserId);
     website_metrics_ = std::make_unique<::apps::WebsiteMetrics>(
-        profile_, /*user_type_by_device_type=*/0);
+        profile_, /*user_type_by_device_type=*/0,
+        *base::DefaultTickClock::GetInstance());
     auto mock_website_metrics_retriever =
         std::make_unique<MockWebsiteMetricsRetriever>();
     EXPECT_CALL(*mock_website_metrics_retriever, GetWebsiteMetrics(_))
@@ -71,7 +72,7 @@ class WebsiteUsageObserverTest : public ::testing::Test {
   }
 
   void SetAllowlistedUrls(const std::vector<std::string>& allowlisted_urls) {
-    base::Value::List allowed_urls;
+    base::ListValue allowed_urls;
     for (const auto& url : allowlisted_urls) {
       allowed_urls.Append(url);
     }
@@ -81,7 +82,7 @@ class WebsiteUsageObserverTest : public ::testing::Test {
 
   void SetAllowlistedTelemetryTypes(
       const std::vector<std::string>& allowlisted_telemetry_types) {
-    base::Value::List allowed_telemetry_types;
+    base::ListValue allowed_telemetry_types;
     for (const auto& telemetry_type : allowlisted_telemetry_types) {
       allowed_telemetry_types.Append(telemetry_type);
     }

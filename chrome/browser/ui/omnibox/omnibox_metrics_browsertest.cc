@@ -25,6 +25,8 @@
 #include "components/search_engines/search_engine_type.h"
 #include "components/search_engines/template_url_service.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
+#include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 
 using metrics::OmniboxEventProto;
@@ -42,7 +44,7 @@ class OmniboxMetricsTest : public InProcessBrowserTest {
     // loaded. Make sure it is loaded so that the autocomplete results are
     // consistent.
     search_test_utils::WaitForTemplateURLServiceToLoad(
-        TemplateURLServiceFactory::GetForProfile(browser()->profile()));
+        TemplateURLServiceFactory::GetForProfile(browser()->GetProfile()));
 
     // Prevent the stop timer from killing the hints fetch early, which might
     // cause test flakiness due to timeout.
@@ -51,16 +53,14 @@ class OmniboxMetricsTest : public InProcessBrowserTest {
 
  protected:
   AutocompleteController* controller() {
-    return browser()
-        ->window()
+    return BrowserWindow::FromBrowser(browser())
         ->GetLocationBar()
         ->GetOmniboxController()
         ->autocomplete_controller();
   }
 
   OmniboxEditModel* model() {
-    return browser()
-        ->window()
+    return BrowserWindow::FromBrowser(browser())
         ->GetLocationBar()
         ->GetOmniboxController()
         ->edit_model();
@@ -70,7 +70,7 @@ class OmniboxMetricsTest : public InProcessBrowserTest {
 IN_PROC_BROWSER_TEST_F(OmniboxMetricsTest, LogSearchEngineUsed) {
   AutocompleteInput input(
       u"z", metrics::OmniboxEventProto::NTP,
-      ChromeAutocompleteSchemeClassifier(browser()->profile()));
+      ChromeAutocompleteSchemeClassifier(browser()->GetProfile()));
   controller()->Start(input);
   WaitForAutocompleteDone(browser());
   EXPECT_TRUE(controller()->done());
@@ -85,8 +85,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxMetricsTest, LogSearchEngineUsed) {
 
   base::HistogramTester histogram_tester;
   model()->SetPopupSelection(OmniboxPopupSelection(0));
-  model()->OpenSelectionForTesting(base::TimeTicks(),
-                                   WindowOpenDisposition::CURRENT_TAB);
+  model()->OpenCurrentSelection(base::TimeTicks(),
+                                WindowOpenDisposition::CURRENT_TAB);
   WaitForAutocompleteDone(browser());
   EXPECT_TRUE(controller()->done());
 
@@ -95,4 +95,42 @@ IN_PROC_BROWSER_TEST_F(OmniboxMetricsTest, LogSearchEngineUsed) {
   histogram_tester.ExpectUniqueSample(
       "Omnibox.SearchEngineType.Fallback.DefaultSearchProvider",
       SEARCH_ENGINE_GOOGLE, 1);
+}
+
+IN_PROC_BROWSER_TEST_F(OmniboxMetricsTest, LogSearchEngineUsed_PostNavigation) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  TemplateURLService* template_url_service =
+      TemplateURLServiceFactory::GetForProfile(browser()->GetProfile());
+  TemplateURLData data;
+  data.SetShortName(u"custom");
+  data.SetKeyword(u"custom");
+  data.SetURL(
+      embedded_test_server()
+          ->GetURL(
+              "/server-redirect?https://www.google.com/search?q={searchTerms}")
+          .spec());
+  TemplateURL* template_url =
+      template_url_service->Add(std::make_unique<TemplateURL>(data));
+  template_url_service->SetUserSelectedDefaultSearchProvider(template_url);
+
+  AutocompleteInput input(
+      u"z", metrics::OmniboxEventProto::NTP,
+      ChromeAutocompleteSchemeClassifier(browser()->GetProfile()));
+  controller()->Start(input);
+  WaitForAutocompleteDone(browser());
+  EXPECT_TRUE(controller()->done());
+
+  base::HistogramTester histogram_tester;
+  model()->SetPopupSelection(OmniboxPopupSelection(0));
+  model()->OpenCurrentSelection(base::TimeTicks(),
+                                WindowOpenDisposition::CURRENT_TAB);
+
+  content::WaitForLoadStop(
+      browser()->tab_strip_model()->GetActiveWebContents());
+
+  histogram_tester.ExpectUniqueSample("Omnibox.SearchEngineType",
+                                      SEARCH_ENGINE_OTHER, 1);
+  histogram_tester.ExpectUniqueSample("Omnibox.SearchEngineType.PostNavigation",
+                                      SEARCH_ENGINE_GOOGLE, 1);
 }

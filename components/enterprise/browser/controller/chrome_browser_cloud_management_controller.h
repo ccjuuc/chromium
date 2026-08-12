@@ -35,8 +35,11 @@ class DeviceTrustKeyManager;
 }  // namespace enterprise_connectors
 
 namespace enterprise_reporting {
+class BrowserLaunchEventController;
 class ReportingDelegateFactory;
 class ReportScheduler;
+class SaasUsageReportScheduler;
+class SaasUsageReportingDelegateFactory;
 }  // namespace enterprise_reporting
 
 namespace client_certificates {
@@ -47,6 +50,7 @@ namespace policy {
 class ChromeBrowserCloudManagementRegistrar;
 class ClientDataDelegate;
 class ConfigurationPolicyProvider;
+class EnterpriseGroupsBrowserHandler;
 class MachineLevelUserCloudPolicyManager;
 class MachineLevelUserCloudPolicyFetcher;
 
@@ -146,6 +150,15 @@ class ChromeBrowserCloudManagementController
     virtual std::unique_ptr<enterprise_reporting::ReportingDelegateFactory>
     GetReportingDelegateFactory() = 0;
 
+    // Gets the platform-specific SaaS usage reporting delegate factory.
+    virtual std::unique_ptr<
+        enterprise_reporting::SaasUsageReportingDelegateFactory>
+    GetSaasUsageReportingDelegateFactory() = 0;
+
+    // Creates the platform-specific browser launch event controller.
+    virtual std::unique_ptr<enterprise_reporting::BrowserLaunchEventController>
+    CreateBrowserLaunchEventController() = 0;
+
     // Creates a platform-specific DeviceTrustKeyManager instance.
     virtual std::unique_ptr<enterprise_connectors::DeviceTrustKeyManager>
     CreateDeviceTrustKeyManager();
@@ -172,6 +185,10 @@ class ChromeBrowserCloudManagementController
 
     // Returns the platform-specific client data delegate.
     virtual std::unique_ptr<ClientDataDelegate> CreateClientDataDelegate() = 0;
+
+    virtual void StartExtensionInstallPolicyInvalidator();
+
+    virtual bool CanStartExtensionInstallPolicyInvalidator() const;
 
     // Postpones controller initialization until |ReadyToInit()| is true.
     // Implemented in the delegate because the reason why initialization needs
@@ -243,6 +260,8 @@ class ChromeBrowserCloudManagementController
       PrefService* local_state,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
 
+  void MaybeStartExtensionInstallPolicyInvalidator();
+
   bool WaitUntilPolicyEnrollmentFinished();
 
   void AddObserver(Observer* observer);
@@ -296,7 +315,7 @@ class ChromeBrowserCloudManagementController
   void InvalidatePolicies();
   void UnenrollCallback(const std::string& metric_name, bool success);
 
-  void CreateReportScheduler();
+  void InitializeReporting();
 
   // Implementation of |DeferrableCreatePolicyManager| that can be invoked right
   // away or bound to a callback to be executed later.
@@ -318,10 +337,16 @@ class ChromeBrowserCloudManagementController
       cloud_management_registrar_;
   std::unique_ptr<MachineLevelUserCloudPolicyFetcher> policy_fetcher_;
 
+  std::unique_ptr<EnterpriseGroupsBrowserHandler> enterprise_groups_handler_;
+
   // Time at which the enrollment process was started.  Used to log UMA metric.
   base::Time enrollment_start_time_;
 
   std::unique_ptr<enterprise_reporting::ReportScheduler> report_scheduler_;
+  std::unique_ptr<enterprise_reporting::SaasUsageReportScheduler>
+      saas_usage_report_scheduler_;
+  std::unique_ptr<enterprise_reporting::BrowserLaunchEventController>
+      browser_launch_controller_;
 
   std::unique_ptr<CloudPolicyClient> cloud_policy_client_;
 

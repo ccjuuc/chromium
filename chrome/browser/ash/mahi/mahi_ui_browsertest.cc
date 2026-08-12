@@ -13,8 +13,8 @@
 #include "ash/system/mahi/mahi_ui_update.h"
 #include "ash/system/mahi/test/mock_mahi_ui_controller_delegate.h"
 #include "ash/test/ash_test_util.h"
+#include "ash/webui/settings/public/constants/routes_util.h"
 #include "ash/wm/window_util.h"
-#include "base/containers/contains.h"
 #include "base/functional/callback.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
@@ -24,6 +24,7 @@
 #include "chrome/browser/ash/mahi/mahi_test_util.h"
 #include "chrome/browser/ash/mahi/mahi_ui_browser_test_base.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/browser/ui/views/mahi/mahi_menu_constants.h"
 #include "chrome/browser/ui/views/mahi/mahi_menu_view.h"
@@ -92,7 +93,7 @@ class UiUpdateRecorder {
   }
 
   bool HasUpdate(MahiUiUpdateType type) const {
-    return base::Contains(received_updates_, type);
+    return received_updates_.contains(type);
   }
 
  private:
@@ -195,14 +196,14 @@ IN_PROC_BROWSER_TEST_F(MahiUiBrowserTest, OnContextMenuClickedSettings) {
   WaitForSettingsToLoad();
 
   // Verify that the Settings page is opened in a new window.
-  const Browser* const settings_browser =
+  const BrowserWindowInterface* const settings_browser =
       chrome::SettingsWindowManager::GetInstance()->FindBrowserForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   ASSERT_TRUE(settings_browser);
   EXPECT_NE(browser(), settings_browser);
   EXPECT_EQ(
-      GURL(chrome::GetOSSettingsUrl(std::string())),
-      settings_browser->tab_strip_model()->GetActiveWebContents()->GetURL());
+      GURL(chromeos::settings::GetOSSettingsUrl(std::string())),
+      settings_browser->GetTabStripModel()->GetActiveWebContents()->GetURL());
 }
 
 IN_PROC_BROWSER_TEST_F(MahiUiBrowserTest, OnContextMenuClickedSummary) {
@@ -385,14 +386,14 @@ IN_PROC_BROWSER_TEST_F(PendingConsentStatusMahiUiBrowserTest,
   WaitForSettingsToLoad();
 
   // Verify that the Settings page is opened in a new window.
-  const Browser* const settings_browser =
+  const BrowserWindowInterface* const settings_browser =
       chrome::SettingsWindowManager::GetInstance()->FindBrowserForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   ASSERT_TRUE(settings_browser);
   EXPECT_NE(browser(), settings_browser);
   EXPECT_EQ(
-      GURL(chrome::GetOSSettingsUrl(std::string())),
-      settings_browser->tab_strip_model()->GetActiveWebContents()->GetURL());
+      GURL(chromeos::settings::GetOSSettingsUrl(std::string())),
+      settings_browser->GetTabStripModel()->GetActiveWebContents()->GetURL());
 }
 
 // MahiUiWithDisclaimerViewBrowserTest -----------------------------------------

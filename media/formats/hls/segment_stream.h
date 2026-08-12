@@ -9,6 +9,7 @@
 
 #include "base/containers/queue.h"
 #include "base/sequence_checker.h"
+#include "base/time/time.h"
 #include "media/formats/hls/media_playlist.h"
 #include "media/formats/hls/media_segment.h"
 
@@ -67,6 +68,10 @@ class MEDIA_EXPORT SegmentStream {
   // future somewhere.
   void ResetExpectingFutureManifest(base::TimeDelta new_start_time);
 
+  // Sets whether this stream is seekable. Used when transitioning from live to
+  // VOD.
+  void SetSeekable(bool seekable);
+
  private:
   class SegmentIndex {
    public:
@@ -93,7 +98,7 @@ class MEDIA_EXPORT SegmentStream {
   // duration, queuing the last 3 segments achieves RFC compliance.
   void SkipEarlySegmentsForLiveStream();
 
-  const bool seekable_;
+  bool seekable_;
   base::TimeDelta next_segment_start_;
 
   base::queue<scoped_refptr<MediaSegment>> segments_;
@@ -101,6 +106,9 @@ class MEDIA_EXPORT SegmentStream {
 
   SegmentIndex highest_segment_index_ = {0, 0};
   std::optional<GURL> previous_segment_init_segment_;
+
+  std::optional<base::Time> last_popped_segment_pdt_;
+  base::TimeDelta last_popped_segment_duration_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

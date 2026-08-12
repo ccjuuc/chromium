@@ -1,4 +1,4 @@
-// Copyright 2025 The Chromium Authors
+// Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,187 +7,114 @@
 
 #include <optional>
 #include <string>
-#include <vector>
 
-#include "base/callback_list.h"
+#include "base/containers/circular_deque.h"
 #include "base/containers/lru_cache.h"
-#include "base/containers/queue.h"
-#include "base/memory/weak_ptr.h"
+#include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
-#include "chrome/browser/contextual_cueing/contextual_cueing_enums.h"
+#include "build/build_config.h"
+#include "chrome/browser/contextual_cueing/cue_target.h"
 #include "chrome/browser/contextual_cueing/nudge_cap_tracker.h"
-#include "chrome/browser/page_content_annotations/page_content_extraction_service.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "services/metrics/public/cpp/ukm_source_id.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
-class OptimizationGuideKeyedService;
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/contextual_cueing/internals/contextual_cueing_internals.mojom.h"
+#endif
+
 class PrefService;
-class TemplateURLService;
-
-namespace content {
-class WebContents;
-}  // namespace content
-
-namespace predictors {
-class LoadingPredictor;
-}  // namespace predictors
-
-namespace tabs {
-enum class GlicNudgeActivity;
-}  // namespace tabs
 
 namespace contextual_cueing {
 
-class ZeroStateSuggestionsRequest;
+enum class ContextualCueingDecision;
 
-using GlicSuggestionsCallbackList =
-    base::OnceCallbackList<void(std::vector<std::string>)>;
-using GlicSuggestionsCallback = GlicSuggestionsCallbackList::CallbackType;
-
-class ContextualCueingService
-    : public KeyedService,
-      page_content_annotations::PageContentExtractionService::Observer {
+class ContextualCueingService : public KeyedService {
  public:
-  ContextualCueingService(
-      page_content_annotations::PageContentExtractionService*
-          page_content_extraction_service,
-      OptimizationGuideKeyedService* optimization_guide_keyed_service,
-      predictors::LoadingPredictor* loading_predictor,
-      PrefService* pref_service,
-      TemplateURLService* template_url_service);
+  static constexpr size_t kMaxShownCues = 20;
+
+  explicit ContextualCueingService(PrefService* pref_service);
   ~ContextualCueingService() override;
 
-  // Reports a page load happened to `url`, and is used to keep track of quiet
+  // Reports a page load occurred. This is used to keep track of quiet
   // page loads requirement after a cueing UI is shown.
   void ReportPageLoad();
 
-  // Called when cueing nudge activity happens.
-  void OnNudgeActivity(content::WebContents* web_contents,
-                       base::TimeTicks document_available_time,
-                       bool is_dynamic,
-                       tabs::GlicNudgeActivity activity);
+  // Called when the user clicks the cue action button.
+  void OnCueClicked(CueTargetType type);
 
-  // Should be called when the cueing UI is shown for the tab with `url`.
-  void CueingNudgeShown(const GURL& url);
+  // Called when the user dismisses the cue.
+  void OnCueDismissed(CueTargetType type);
 
-  // Should be called when the cueing UI is dismissed by the user.
-  void CueingNudgeDismissed();
+  // Called when the cue is shown to the user.
+  void OnCueShown(const GURL& url, CueTargetType type);
 
-  // Should be called when the nudge is clicked on by the user.
-  void CueingNudgeClicked();
+  // Returns true if a nudge can be shown.
+  ContextualCueingDecision CanShowCue(const GURL& url) const;
 
-  // Returns if a nudge should be shown and is not blocked by feature
-  // engagement constraints for navigation to `url`, and if not, why.
-  NudgeDecision CanShowNudge(const GURL& url);
+  // Returns the UCB score for the given target, incorporating per-target
+  // interaction stats and UCB hyperparameters from Finch.
+  double GetUcbScore(CueTargetType type) const;
 
-  base::WeakPtr<ContextualCueingService> GetWeakPtr() {
-    return weak_ptr_factory_.GetWeakPtr();
+  // Returns the per-target interaction stats for the given target.
+  const TargetStats& GetStatsForTarget(CueTargetType type) const;
+
+  // Returns the total number of impressions across all targets.
+  int GetTotalImpressions() const;
+
+#if !BUILDFLAG(IS_ANDROID)
+  using CueLogPtr = contextual_cueing_internals::mojom::CueLogPtr;
+
+  // Logs metadata for a cue shown to the user for WebUI debugging.
+  void LogCueShownMetadata(CueLogPtr cue_log);
+
+  // Returns the list of shown cues for WebUI debugging.
+  const base::circular_deque<CueLogPtr>& shown_cues() const {
+    return shown_cues_;
   }
-
-  // Informs `this` to prepare fetching for zero state suggestions for GLIC.
-  // Note that this *will not* actually do the fetch and it is intended for the
-  // caller to call `GetContextualGlicZeroStateSuggestions` to actually fetch
-  // the suggestions.
-  void PrepareToFetchContextualGlicZeroStateSuggestions(
-      content::WebContents* web_contents);
-
-  // Returns zero state suggestions for focused tab for GLIC. Virtual for
-  // testing.
-  virtual void GetContextualGlicZeroStateSuggestionsForFocusedTab(
-      content::WebContents* web_contents,
-      bool is_fre,
-      std::optional<std::vector<std::string>> supported_tools,
-      GlicSuggestionsCallback callback);
-
-  // Returns whether suggestions are going to be generated. Invokes `callback`
-  // with zero state suggestions for pinned tabs as represented by
-  // `pinned_web_contents`. Virtual for testing.
-  virtual bool GetContextualGlicZeroStateSuggestionsForPinnedTabs(
-      std::vector<content::WebContents*> pinned_web_contents,
-      bool is_fre,
-      std::optional<std::vector<std::string>> supported_tools,
-      const content::WebContents* focused_tab,
-      GlicSuggestionsCallback callback);
-
-  // Returns the pinned tabs that are in an outstanding request if there is one.
-  std::optional<std::vector<content::WebContents*>>
-  GetOutstandingPinnedTabsContents();
+#endif
 
  private:
-  // page_content_annotations::PageContentExtractionService::Observer:
-  void OnPageContentExtracted(
-      content::Page& page,
-      const optimization_guide::proto::AnnotatedPageContent& page_content)
-      override;
-
-  // Returns true if nudge should not be shown due to the backoff rule.
-  bool IsNudgeBlockedByBackoffRule() const;
-
-  // Returns true if the given url is of a page type eligible for contextual
-  // suggestions.
-  bool IsPageTypeEligibleForContextualSuggestions(GURL url) const;
-
-  // Utility method to create the initial zero state suggestions request.
-  std::unique_ptr<ZeroStateSuggestionsRequest> MakeZeroStateSuggestionsRequest(
-      const std::vector<content::WebContents*>& web_contents_list,
-      bool is_fre,
-      std::optional<std::vector<std::string>> supported_tools,
-      const content::WebContents* focused_tab);
-
-  // Callback invoked when pinned tabs suggestions are received.
-  void OnPinnedTabsSuggestionsReceived(
-      bool is_fre,
-      base::TimeTicks fetch_begin_time,
-      base::WeakPtr<ZeroStateSuggestionsRequest> pinned_tabs_request,
-      GlicSuggestionsCallback callback,
-      std::vector<std::string> suggestions);
-
-  // Tracker to limit the number of nudges shown over a certain duration.
-  NudgeCapTracker recent_nudge_tracker_;
-
-  // Number of times the cueing nudge has been dismissed (i.e. closed by the
-  // user). This count resets to 0 if nudge is clicked on by the user.
-  int dismiss_count_ = 0;
-
-  // The end of the backoff period triggered by the last nudge dismissal.
-  std::optional<base::TimeTicks> dismiss_backoff_end_time_;
-
-  // The end of the backoff period triggered by the last shown nudge.
-  std::optional<base::TimeTicks> shown_backoff_end_time_;
-
   // A counter for how many subsequent page load events will be prevented from
   // showing a nudge. This is to limit the frequency at which consecutive page
   // loads can trigger nudges.
   size_t remaining_quiet_loads_ = 0;
 
+  // The end of the backoff period triggered by the last shown nudge.
+  std::optional<base::TimeTicks> shown_backoff_end_time_;
+
+  // Number of times the cueing nudge has been dismissed (i.e. closed by the
+  // user). This count resets to 0 if nudge is clicked on by the user.
+  int dismiss_count_ = 0;
+
+  // The end of the backoff period triggered by the last dismissed nudge.
+  std::optional<base::TimeTicks> dismiss_backoff_end_time_;
+
+  // The end of the backoff period triggered by the last clicked nudge.
+  std::optional<base::TimeTicks> click_backoff_end_time_;
+
+  // Tracker to limit the number of nudges shown over a certain duration.
+  NudgeCapTracker recent_nudge_tracker_;
+
   // Maintains the recently visited origins along with their nudge cap tracking.
   base::LRUCache<url::Origin, NudgeCapTracker> recent_visited_origins_;
 
-  // Holds the latest pinned tabs zero state suggestions request.
-  std::unique_ptr<ZeroStateSuggestionsRequest>
-      pinned_tabs_zero_state_suggestions_request_;
+  // Per-target interaction stats used by the UCB scorer.
+  absl::flat_hash_map<CueTargetType, TargetStats> target_stats_;
 
-  raw_ptr<page_content_annotations::PageContentExtractionService>
-      page_content_extraction_service_ = nullptr;
+  // Writes the stats for `type` to the profile prefs.
+  void WriteStatsToPref(CueTargetType type);
 
-  raw_ptr<OptimizationGuideKeyedService> optimization_guide_keyed_service_ =
-      nullptr;
-
-  raw_ptr<predictors::LoadingPredictor> loading_predictor_ = nullptr;
-
-  raw_ptr<PrefService> pref_service_ = nullptr;
-
-  raw_ptr<TemplateURLService> template_url_service_ = nullptr;
-
-  // Stores model execution url to save look up time.
-  GURL mes_url_;
+  // Not owned. Guaranteed to outlive this service (profile lifetime).
+  const raw_ptr<PrefService> profile_prefs_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 
-  base::WeakPtrFactory<ContextualCueingService> weak_ptr_factory_{this};
+#if !BUILDFLAG(IS_ANDROID)
+  base::circular_deque<CueLogPtr> shown_cues_;
+#endif
 };
 
 }  // namespace contextual_cueing

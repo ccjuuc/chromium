@@ -97,11 +97,6 @@ SecurityEventSyncBridgeImpl::GetControllerDelegate() {
   return change_processor()->GetControllerDelegate();
 }
 
-std::unique_ptr<syncer::MetadataChangeList>
-SecurityEventSyncBridgeImpl::CreateMetadataChangeList() {
-  return syncer::DataTypeStore::WriteBatch::CreateMetadataChangeList();
-}
-
 std::optional<syncer::ModelError>
 SecurityEventSyncBridgeImpl::MergeFullSyncData(
     std::unique_ptr<syncer::MetadataChangeList> metadata_change_list,
@@ -165,6 +160,14 @@ std::string SecurityEventSyncBridgeImpl::GetStorageKey(
   return GetStorageKeyFromSpecifics(entity_data.specifics.security_event());
 }
 
+sync_pb::EntitySpecifics
+SecurityEventSyncBridgeImpl::TrimAllSupportedFieldsFromRemoteSpecifics(
+    const sync_pb::EntitySpecifics& entity_specifics) const {
+  // Clears all fields by default to avoid the memory and I/O overhead of an
+  // additional copy of the data.
+  return sync_pb::EntitySpecifics();
+}
+
 bool SecurityEventSyncBridgeImpl::IsEntityDataValid(
     const syncer::EntityData& entity_data) const {
   // SECURITY_EVENTS is a commit only data type so this method is not called.
@@ -174,6 +177,7 @@ bool SecurityEventSyncBridgeImpl::IsEntityDataValid(
 void SecurityEventSyncBridgeImpl::ApplyDisableSyncChanges(
     std::unique_ptr<syncer::MetadataChangeList> delete_metadata_change_list) {
   store_->DeleteAllDataAndMetadata(
+      std::move(delete_metadata_change_list),
       base::BindOnce(&SecurityEventSyncBridgeImpl::OnStoreCommit,
                      weak_ptr_factory_.GetWeakPtr()));
 }

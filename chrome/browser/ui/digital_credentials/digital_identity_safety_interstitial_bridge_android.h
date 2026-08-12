@@ -9,6 +9,7 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
+#include "chrome/browser/ui/android/digital_credentials/jni_headers/DigitalIdentitySafetyInterstitialBridge_shared_jni.h"
 #include "content/public/browser/digital_identity_provider.h"
 
 namespace content {
@@ -40,12 +41,13 @@ class DigitalIdentitySafetyInterstitialBridgeAndroid {
       content::DigitalIdentityProvider::DigitalIdentityInterstitialCallback
           callback);
 
-  void OnInterstitialDone(JNIEnv* env, jint status_for_metrics);
+  void OnInterstitialDone(JNIEnv* env, int32_t status_for_metrics);
 
  private:
   void Abort();
 
-  base::android::ScopedJavaGlobalRef<jobject> j_bridge_;
+  base::android::ScopedJavaGlobalRef<JDigitalIdentitySafetyInterstitialBridge>
+      j_bridge_;
 
   content::DigitalIdentityProvider::DigitalIdentityInterstitialCallback
       callback_;

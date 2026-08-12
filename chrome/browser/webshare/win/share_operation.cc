@@ -17,6 +17,7 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/win/core_winrt_util.h"
 #include "base/win/post_async_results.h"
@@ -25,6 +26,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/webshare/share_service_impl.h"
 #include "chrome/browser/webshare/win/show_share_ui_for_window_operation.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
@@ -229,7 +231,9 @@ class DataWriterFileStreamWriter final : public storage::FileStreamWriter {
 
 // Represents an ongoing operation of writing to an IOutputStream.
 class OutputStreamWriteOperation
-    : public base::RefCounted<OutputStreamWriteOperation> {
+    : public base::RefCountedThreadSafe<
+          OutputStreamWriteOperation,
+          content::BrowserThread::DeleteOnIOThread> {
  public:
   OutputStreamWriteOperation(
       content::BrowserContext::BlobContextGetter blob_context_getter,
@@ -256,9 +260,23 @@ class OutputStreamWriteOperation
   }
 
  private:
-  friend class base::RefCounted<OutputStreamWriteOperation>;
+  friend class base::RefCountedThreadSafe<
+      OutputStreamWriteOperation,
+      content::BrowserThread::DeleteOnIOThread>;
+  friend struct content::BrowserThread::DeleteOnThread<
+      content::BrowserThread::IO>;
+  friend class base::DeleteHelper<OutputStreamWriteOperation>;
 
-  ~OutputStreamWriteOperation() = default;
+  ~OutputStreamWriteOperation() {
+    // Though at the time of this writing the only thing this class owns that
+    // needs to be destroyed on the IO thread is the FileWriterDelegate (because
+    // it owns a BlobReader, which owns a BlobDataSnapshot, which must be
+    // destroyed on the IO thread), this class is largely IO-centric, so to
+    // protect against future changes that may modify what needs to be destroyed
+    // on the IO thread we broadly enforce the class as a whole is always
+    // destroyed there.
+    DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  }
 
   void WriteStreamOnIOThread() {
     DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
@@ -382,6 +400,14 @@ void ShareOperation::Run(SharedFiles files,
   // the operation.
   if (!web_contents_) {
     Complete(blink::mojom::ShareError::CANCELED);
+    return;
+  }
+
+  // If the tab is no longer active, return permission denied.
+  tabs::TabInterface* tab_interface =
+      tabs::TabInterface::MaybeGetFromContents(web_contents_.get());
+  if (tab_interface && !tab_interface->IsActivated()) {
+    Complete(blink::mojom::ShareError::PERMISSION_DENIED);
     return;
   }
 
@@ -577,11 +603,8 @@ bool ShareOperation::PutShareContentInDataPackage(SharedFiles files,
                 // No additional work is needed when the write has been
                 // completed, but a callback is created to hold a reference
                 // to the |operation| until the operation has completed.
-                operation->WriteStream(
-                    stream,
-                    base::BindOnce(
-                        [](scoped_refptr<OutputStreamWriteOperation>) {},
-                        operation));
+                operation->WriteStream(stream,
+                                       base::DoNothingWithBoundArgs(operation));
                 return S_OK;
               });
       // The Callback function may return null in the E_OUTOFMEMORY case

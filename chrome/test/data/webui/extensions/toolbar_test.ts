@@ -10,7 +10,7 @@ import {microtasksFinished} from 'chrome://webui-test/test_util.js';
 import {TestService} from './test_service.js';
 import {createExtensionInfo, testVisible} from './test_util.js';
 
-suite('ExtensionToolbarTest', function() {
+suite('ExtensionsToolbarTest', function() {
   let mockDelegate: TestService;
   let toolbar: ExtensionsToolbarElement;
 
@@ -34,7 +34,7 @@ suite('ExtensionToolbarTest', function() {
   test('Layout', async () => {
     const boundTestVisible = testVisible.bind(null, toolbar);
     boundTestVisible('#devMode', true);
-    assertEquals(toolbar.$.devMode.disabled, false);
+    assertFalse(toolbar.$.devMode.disabled);
     boundTestVisible('#loadUnpacked', false);
     boundTestVisible('#packExtensions', false);
     boundTestVisible('#updateNow', false);
@@ -42,7 +42,7 @@ suite('ExtensionToolbarTest', function() {
     await microtasksFinished();
 
     boundTestVisible('#devMode', true);
-    assertEquals(toolbar.$.devMode.disabled, false);
+    assertFalse(toolbar.$.devMode.disabled);
     boundTestVisible('#loadUnpacked', true);
     boundTestVisible('#packExtensions', true);
     boundTestVisible('#updateNow', true);

@@ -11,12 +11,10 @@
 #include <utility>
 
 #include "base/base64.h"
-#include "base/containers/contains.h"
 #include "base/files/file_util.h"
 #include "base/i18n/rtl.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_view_util.h"
 #include "base/strings/stringprintf.h"
@@ -24,6 +22,8 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "base/time/time.h"
+#include "base/token.h"
 #include "chrome/browser/new_tab_page/one_google_bar/one_google_bar_data.h"
 #include "chrome/browser/new_tab_page/one_google_bar/one_google_bar_service_factory.h"
 #include "chrome/browser/policy/chrome_policy_blocklist_service_factory.h"
@@ -88,17 +88,30 @@ std::string AsyncParamDataAsCSV(
   return csv.substr(1);
 }
 
+// Validates that the background image path is either exactly "background.jpg"
+// or a 32-character hex token followed by "background.jpg". This prevents
+// directory traversal (crbug.com/497241148). The analogous serialization
+// logic can be found in
+// `NtpCustomBackgroundService::SetBackgroundToLocalResourceWithId()` and
+// `WallpaperSearchBackgroundManager::SelectLocalBackgroundImage()`.
+bool IsValidBackgroundImagePath(std::string_view path) {
+  std::optional<std::string_view> prefix =
+      base::RemoveSuffix(path, "background.jpg");
+  if (!prefix) {
+    return false;
+  }
+  return prefix->empty() || base::Token::FromString(*prefix).has_value();
+}
+
 std::map<std::string, std::string> ExtractQueryParams(
     std::string_view query_params) {
   std::map<std::string, std::string> params;
-  url::Component query(0, query_params.length());
+  url::Component query(query_params);
   url::Component key, value;
   while (url::ExtractQueryKeyValue(query_params, &query, &key, &value)) {
-    url::RawCanonOutputW<kMaxUriDecodeLen> output;
-    url::DecodeURLEscapeSequences(query_params.substr(value.begin, value.len),
-                                  url::DecodeURLMode::kUTF8OrIsomorphic,
-                                  &output);
-    params.insert({std::string(query_params.substr(key.begin, key.len)),
+    url::UrlEscapeDecoder<kMaxUriDecodeLen> output(
+        value.AsViewOn(query_params), url::DecodeUrlMode::kUtf8OrIsomorphic);
+    params.insert({std::string(key.AsViewOn(query_params)),
                    base::UTF16ToUTF8(output.view())});
   }
 
@@ -234,16 +247,24 @@ void UntrustedSource::StartDataRequest(
     // Parse all query parameters to hash map and decode values.
     std::map<std::string, std::string> params = ExtractQueryParams(url.query());
 
+    auto lookup_or_default = [&params](const std::string& key,
+                                       absl::string_view default_value) {
+      if (auto it = params.find(key); it != params.end()) {
+        return std::string_view(it->second);
+      }
+      return default_value;
+    };
+
     // Extract desired values.
-    ServeBackgroundImage(
-        params.count("url") == 1 ? GURL(params["url"]) : GURL(),
-        params.count("url2x") == 1 ? GURL(params["url2x"]) : GURL(),
-        params.count("size") == 1 ? params["size"] : "cover",
-        params.count("repeatX") == 1 ? params["repeatX"] : "no-repeat",
-        params.count("repeatY") == 1 ? params["repeatY"] : "no-repeat",
-        params.count("positionX") == 1 ? params["positionX"] : "center",
-        params.count("positionY") == 1 ? params["positionY"] : "center", "none",
-        std::move(callback));
+    ServeBackgroundImage(GURL(lookup_or_default("url", "")),
+                         GURL(lookup_or_default("url2x", "")),
+                         lookup_or_default("size", "cover"),
+                         lookup_or_default("repeatX", "no-repeat"),
+                         lookup_or_default("repeatY", "no-repeat"),
+                         lookup_or_default("positionX", "center"),
+                         lookup_or_default("positionY", "center"),
+                         lookup_or_default("scrimDisplay", "none"),
+                         std::move(callback));
     return;
   }
   if (path == "background_image.js") {
@@ -252,7 +273,7 @@ void UntrustedSource::StartDataRequest(
         IDR_NEW_TAB_PAGE_UNTRUSTED_BACKGROUND_IMAGE_JS));
     return;
   }
-  if (base::EndsWith(path, "background.jpg")) {
+  if (IsValidBackgroundImagePath(path)) {
     base::ThreadPool::PostTaskAndReplyWithResult(
         FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
         base::BindOnce(&ReadBackgroundImageData,
@@ -300,8 +321,7 @@ bool UntrustedSource::ShouldServiceRequest(
   return path == "one-google-bar" || path == "one_google_bar.js" ||
          path == "one_google_bar_api.js" || path == "image" ||
          path == "background_image" || path == "custom_background_image" ||
-         path == "background_image.js" ||
-         base::Contains(path, "background.jpg");
+         path == "background_image.js" || IsValidBackgroundImagePath(path);
 }
 
 void UntrustedSource::OnOneGoogleBarDataUpdated() {
@@ -349,12 +369,12 @@ void UntrustedSource::OnOneGoogleBarServiceShuttingDown() {
 void UntrustedSource::ServeBackgroundImage(
     const GURL& url,
     const GURL& url_2x,
-    const std::string& size,
-    const std::string& repeat_x,
-    const std::string& repeat_y,
-    const std::string& position_x,
-    const std::string& position_y,
-    const std::string& scrim_display,
+    std::string_view size,
+    std::string_view repeat_x,
+    std::string_view repeat_y,
+    std::string_view position_x,
+    std::string_view position_y,
+    std::string_view scrim_display,
     content::URLDataSource::GotDataCallback callback) {
   if (!IsURLAllowed(url)) {
     std::move(callback).Run(base::MakeRefCounted<base::RefCountedString>());

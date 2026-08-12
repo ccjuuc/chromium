@@ -15,6 +15,7 @@
 #include "components/user_education/common/feature_promo/feature_promo_handle.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/gfx/animation/throb_animation.h"
 #include "ui/views/view.h"
 
 class ToolbarView;
@@ -32,11 +33,10 @@ class BrowserAppMenuButton : public AppMenuButton {
 
   // Returns true if a text is set and is visible.
   bool IsLabelPresentAndVisible() const;
-  void SetTypeAndSeverity(
-      AppMenuIconController::TypeAndSeverity type_and_severity);
 
   // Shows the app menu. |run_types| denotes the MenuRunner::RunTypes associated
   // with the menu.
+  using AppMenuButton::ShowMenu;
   void ShowMenu(int run_types);
 
   // Opens the app menu immediately during a drag-and-drop operation.
@@ -50,12 +50,21 @@ class BrowserAppMenuButton : public AppMenuButton {
   void UpdateInkdrop();
 
   // AppMenuButton:
+  void SetTypeAndSeverity(
+      AppMenuIconController::TypeAndSeverity type_and_severity) override;
+  void OnMenuClosed() override;
   void OnThemeChanged() override;
   // Updates the presentation according to |severity_| and the theme provider.
   void UpdateIcon() override;
 
+  // ToolbarButton:
+  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
+
   // Need to override to implement the Expand and Collapse actions.
   bool HandleAccessibleAction(const ui::AXActionData& action_data) override;
+
+  // views::View:
+  gfx::Size GetMinimumSize() const override;
 
  private:
   void OnTouchUiChanged();
@@ -73,11 +82,6 @@ class BrowserAppMenuButton : public AppMenuButton {
 
   // Sets the padding values depending on whether label is visible.
   void UpdateLayoutInsets();
-
-  // TODO(mickeyburks): Highlight menu items through TutorialDescription
-  // Returns an AlertMenuItem which indicates the app menu item that
-  // should be alerted while certain tutorials are running.
-  AlertMenuItem GetAlertItemForRunningTutorial();
 
   AppMenuIconController::TypeAndSeverity type_and_severity_{
       AppMenuIconController::IconType::kNone,

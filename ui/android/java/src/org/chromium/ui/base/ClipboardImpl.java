@@ -16,6 +16,7 @@ import android.os.Build;
 import android.os.PersistableBundle;
 import android.text.Html;
 import android.text.Spanned;
+import android.text.TextUtils;
 import android.text.style.CharacterStyle;
 import android.text.style.ParagraphStyle;
 import android.text.style.UpdateAppearance;
@@ -26,6 +27,7 @@ import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
 
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.ContentUriUtils;
@@ -50,6 +52,7 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /** Simple proxy that provides C++ code with an access pathway to the Android clipboard. */
 @JNINamespace("ui")
@@ -71,6 +74,10 @@ public class ClipboardImpl extends Clipboard
 
     // This mime type annotates that clipboard contains a PNG image.
     private static final String PNG_MIME_TYPE = "image/png";
+
+    // LINT.IfChange(kMimeTypeDataTransferCustomData)
+    public static final String CHROME_WEB_CUSTOM_DATA_MIME_TYPE = "chromium/x-web-custom-data";
+    // LINT.ThenChange(/ui/base/clipboard/clipboard_constants.h:kMimeTypeDataTransferCustomData)
 
     private static @Nullable Boolean sSkipImageMimeTypeCheckForTesting;
 
@@ -95,11 +102,22 @@ public class ClipboardImpl extends Clipboard
         // getPrimaryClip() has been observed to throw unexpected exceptions for some devices (see
         // crbug.com/654802 and b/31501780)
         try {
-            return mClipboardManager
-                    .getPrimaryClip()
-                    .getItemAt(0)
-                    .coerceToText(mContext)
-                    .toString();
+            ClipData.Item item = mClipboardManager.getPrimaryClip().getItemAt(0);
+
+            // Reject non-URIs or URIs that point to this app when pasting as text. This prevents
+            // malicious apps from using us to read our own private files via coerceToText().
+            if (UiAndroidFeatureMap.isEnabled(
+                    UiAndroidFeatures.CLIPBOARD_CONFUSED_DEPUTY_DEFENSE_TEXT)) {
+                Uri uri = item.getUri();
+                if (item.getText() == null && uri != null) {
+                    if (!ContentResolver.SCHEME_CONTENT.equals(uri.getScheme())
+                            || ContentUriUtils.isUriFromThisApp(uri)) {
+                        return null;
+                    }
+                }
+            }
+
+            return item.coerceToText(mContext).toString();
         } catch (Exception e) {
             return null;
         }
@@ -131,7 +149,14 @@ public class ClipboardImpl extends Clipboard
     public @Nullable String clipDataToHtmlText(@Nullable ClipData clipData) {
         ClipDescription description = clipData.getDescription();
         if (description.hasMimeType(ClipDescription.MIMETYPE_TEXT_HTML)) {
-            return clipData.getItemAt(0).getHtmlText();
+            String html = clipData.getItemAt(0).getHtmlText();
+            if (!TextUtils.isEmpty(html)) {
+                return html;
+            }
+            Uri uri = clipData.getItemAt(0).getUri();
+            if (uri != null && !ContentUriUtils.isOpenableFile(uri)) {
+                return ContentUriUtils.readTextFromUri(uri, ClipDescription.MIMETYPE_TEXT_HTML);
+            }
         }
 
         if (description.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN)) {
@@ -288,6 +313,19 @@ public class ClipboardImpl extends Clipboard
         Uri uri = getImageUri();
         if (uri == null) return null;
 
+        // Only honor URIs originating from this app when they match the exact one recorded during a
+        // copy operation. Other apps' URIs are bounded by the OS grant model.
+        if (UiAndroidFeatureMap.isEnabled(
+                UiAndroidFeatures.CLIPBOARD_CONFUSED_DEPUTY_DEFENSE_IMAGES)) {
+            if (!ContentResolver.SCHEME_CONTENT.equals(uri.getScheme())) {
+                return null;
+            }
+            if (ContentUriUtils.isUriFromThisApp(uri)
+                    && !uri.equals(getImageUriIfSharedByThisApp())) {
+                return null;
+            }
+        }
+
         ContentResolver cr = ContextUtils.getApplicationContext().getContentResolver();
         String mimeType = cr.getType(uri);
         if (!PNG_MIME_TYPE.equalsIgnoreCase(mimeType)) {
@@ -361,7 +399,16 @@ public class ClipboardImpl extends Clipboard
             ClipData clipData = mClipboardManager.getPrimaryClip();
             for (int i = 0; i < clipData.getItemCount(); i++) {
                 Uri uri = clipData.getItemAt(i).getUri();
-                if (uri != null) {
+                if (ContentUriUtils.isOpenableFile(uri)) {
+                    // Reject non-URIs or URIs originating from this app to prevent the
+                    // browser from opening private files on behalf of an untrusted paste request.
+                    if (UiAndroidFeatureMap.isEnabled(
+                            UiAndroidFeatures.CLIPBOARD_CONFUSED_DEPUTY_DEFENSE_FILES)) {
+                        if (!ContentResolver.SCHEME_CONTENT.equals(uri.getScheme())
+                                || ContentUriUtils.isUriFromThisApp(uri)) {
+                            continue;
+                        }
+                    }
                     String uriString = uri.toString();
                     String displayName = ContentUriUtils.maybeGetDisplayName(uriString);
                     if (displayName == null) {
@@ -384,7 +431,16 @@ public class ClipboardImpl extends Clipboard
             ClipData clipData = mClipboardManager.getPrimaryClip();
             for (int i = 0; i < clipData.getItemCount(); i++) {
                 Uri uri = clipData.getItemAt(i).getUri();
-                if (uri != null) {
+                if (ContentUriUtils.isOpenableFile(uri)) {
+                    // Reject non-URIs or URIs originating from this app to prevent the browser from
+                    // opening private iles on behalf of an untrusted paste request.
+                    if (UiAndroidFeatureMap.isEnabled(
+                            UiAndroidFeatures.CLIPBOARD_CONFUSED_DEPUTY_DEFENSE_FILES)) {
+                        if (!ContentResolver.SCHEME_CONTENT.equals(uri.getScheme())
+                                || ContentUriUtils.isUriFromThisApp(uri)) {
+                            continue;
+                        }
+                    }
                     return true;
                 }
             }
@@ -414,6 +470,68 @@ public class ClipboardImpl extends Clipboard
     @Override
     void setHTMLText(final String html, final String text) {
         setPrimaryClipNoException(ClipData.newHtmlText("html", text, html));
+    }
+
+    @Override
+    protected void setClipboardText(
+            @JniType("std::map<std::string, std::string>") Map<String, String> textData) {
+        String html = textData.get(ClipDescription.MIMETYPE_TEXT_HTML);
+        String text = textData.get(ClipDescription.MIMETYPE_TEXT_PLAIN);
+        String webCustomData = textData.get(CHROME_WEB_CUSTOM_DATA_MIME_TYPE);
+
+        ArrayList<String> mimeTypes = new ArrayList<>();
+        ClipData.Item item = null;
+
+        if (html != null && text != null) {
+            mimeTypes.add(ClipDescription.MIMETYPE_TEXT_HTML);
+            mimeTypes.add(ClipDescription.MIMETYPE_TEXT_PLAIN);
+            item = new ClipData.Item(text, html);
+        } else if (text != null) {
+            mimeTypes.add(ClipDescription.MIMETYPE_TEXT_PLAIN);
+            item = new ClipData.Item(text);
+        }
+        if (webCustomData != null) {
+            mimeTypes.add(CHROME_WEB_CUSTOM_DATA_MIME_TYPE);
+            if (item == null) {
+                item = new ClipData.Item("");
+            }
+        }
+
+        if (item == null) {
+            clear();
+            return;
+        }
+
+        ClipDescription description = new ClipDescription("data", mimeTypes.toArray(new String[0]));
+        if (webCustomData != null) {
+            PersistableBundle extras = new PersistableBundle();
+            extras.putString(CHROME_WEB_CUSTOM_DATA_MIME_TYPE, webCustomData);
+            description.setExtras(extras);
+        }
+
+        ClipData clip = new ClipData(description, item);
+        setPrimaryClipNoException(clip);
+    }
+
+    @Override
+    protected boolean hasClipboardDataForMimeType(@JniType("std::string") String mimeType) {
+        ClipDescription description = mClipboardManager.getPrimaryClipDescription();
+        return description != null && description.hasMimeType(mimeType);
+    }
+
+    @Override
+    protected @JniType("std::optional<std::string>") @Nullable String getCustomClipData(
+            @JniType("std::string") String customMimeType) {
+        ClipData clipData = mClipboardManager.getPrimaryClip();
+        if (clipData == null || !hasClipboardDataForMimeType(customMimeType)) {
+            return null;
+        }
+        ClipDescription description = clipData.getDescription();
+        PersistableBundle extras = description.getExtras();
+        if (extras != null && extras.containsKey(customMimeType)) {
+            return extras.getString(customMimeType);
+        }
+        return null;
     }
 
     @Override
@@ -448,28 +566,33 @@ public class ClipboardImpl extends Clipboard
 
             @Override
             protected void onPostExecute(@Nullable ClipData clipData) {
-                if (setPrimaryClipNoException(clipData) && notifyOnSuccess) {
-                    showToastIfNeeded(R.string.image_copied);
-                }
-
-                // Storing timestamp is for avoiding accessing the system clipboard data, which may
-                // cause the clipboard access notification to show up, when we try to clean up the
-                // image file. There is a small chance that the clipboard image is updated between
-                // |setPrimaryClipNoException| and |getImageTimestamp|, and we will get a wrong
-                // timestamp. But it is okay since the timestamp is for deciding if the image file
-                // need to be deleted. If the timestamp is wrong here, we just keep the image file a
-                // little longer than expected.
-                long imageTimestamp = getImageTimestamp();
-
-                if (mImageFileProvider == null) {
-                    mPendingCopiedImageMetadata =
-                            new ImageFileProvider.ClipboardFileMetadata(uri, imageTimestamp);
-                } else {
-                    mImageFileProvider.storeLastCopiedImageMetadata(
-                            new ImageFileProvider.ClipboardFileMetadata(uri, imageTimestamp));
-                }
+                setImageUri(uri, clipData, notifyOnSuccess);
             }
         }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+    }
+
+    @Override
+    public void setImageUri(Uri uri, ClipData clipData, boolean notifyOnSuccess) {
+        if (setPrimaryClipNoException(clipData) && notifyOnSuccess) {
+            showToastIfNeeded(R.string.image_copied);
+        }
+
+        // Storing timestamp is for avoiding accessing the system clipboard data, which may
+        // cause the clipboard access notification to show up, when we try to clean up the
+        // image file. There is a small chance that the clipboard image is updated between
+        // |setPrimaryClipNoException| and |getImageTimestamp|, and we will get a wrong
+        // timestamp. But it is okay since the timestamp is for deciding if the image file
+        // need to be deleted. If the timestamp is wrong here, we just keep the image file a
+        // little longer than expected.
+        long imageTimestamp = getImageTimestamp();
+
+        if (mImageFileProvider == null) {
+            mPendingCopiedImageMetadata =
+                    new ImageFileProvider.ClipboardFileMetadata(uri, imageTimestamp);
+        } else {
+            mImageFileProvider.storeLastCopiedImageMetadata(
+                    new ImageFileProvider.ClipboardFileMetadata(uri, imageTimestamp));
+        }
     }
 
     @Override

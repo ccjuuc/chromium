@@ -19,6 +19,7 @@
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/rand_util.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
@@ -26,7 +27,7 @@
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "components/client_update_protocol/ecdsa.h"
+#include "components/client_update_protocol/cup.h"
 #include "components/network_time/network_time_pref_names.h"
 #include "components/network_time/time_tracker/time_tracker.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -106,44 +107,45 @@ constexpr base::FeatureParam<NetworkTimeTracker::FetchBehavior> kFetchBehavior{
     &kFetchBehaviorOptions};
 
 // Number of time measurements performed in a given network time calculation.
-const uint32_t kNumTimeMeasurements = 7;
+constexpr uint32_t kNumTimeMeasurements = 7;
 
 // Maximum time lapse before deserialized data are considered stale.
-const uint32_t kSerializedDataMaxAgeDays = 7;
+constexpr uint32_t kSerializedDataMaxAgeDays = 7;
 
 // Name of a pref that stores the wall clock time, via
 // |InMillisecondsFSinceUnixEpoch|.
-const char kPrefTime[] = "local";
+constexpr char kPrefTime[] = "local";
 
 // Name of a pref that stores the tick clock time, via |ToInternalValue|.
-const char kPrefTicks[] = "ticks";
+constexpr char kPrefTicks[] = "ticks";
 
 // Name of a pref that stores the time uncertainty, via |ToInternalValue|.
-const char kPrefUncertainty[] = "uncertainty";
+constexpr char kPrefUncertainty[] = "uncertainty";
 
 // Name of a pref that stores the network time via
 // |InMillisecondsFSinceUnixEpoch|.
-const char kPrefNetworkTime[] = "network";
+constexpr char kPrefNetworkTime[] = "network";
 
 // Time server's maximum allowable clock skew, in seconds.  (This is a property
 // of the time server that we happen to know.  It's unlikely that it would ever
 // be that badly wrong, but all the same it's included here to document the very
 // rough nature of the time service provided by this class.)
-const uint32_t kTimeServerMaxSkewSeconds = 10;
+constexpr uint32_t kTimeServerMaxSkewSeconds = 10;
 
-const char kTimeServiceURL[] = "http://clients2.google.com/time/1/current";
+constexpr char kTimeServiceURL[] = "http://clients2.google.com/time/1/current";
 
 // This is an ECDSA prime256v1 named-curve key.
-const int kKeyVersion = 9;
-constexpr auto kPubKey = std::to_array<uint8_t>(
-    {0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02,
-     0x01, 0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07, 0x03,
-     0x42, 0x00, 0x04, 0x51, 0x8B, 0x06, 0x03, 0x4D, 0xEA, 0x13, 0xC3, 0x32,
-     0x9B, 0x15, 0x73, 0xD6, 0xBC, 0x47, 0x33, 0x3F, 0xB6, 0x95, 0x0E, 0x5D,
-     0x52, 0x73, 0x70, 0x5D, 0xE4, 0x92, 0xBD, 0xFD, 0xC5, 0xB9, 0xC6, 0x51,
-     0x81, 0x2D, 0x8B, 0x46, 0xC4, 0x4C, 0xB0, 0xA5, 0xC6, 0xDB, 0x5B, 0xE4,
-     0xDB, 0x80, 0x57, 0x6B, 0x4D, 0x08, 0x9C, 0x3D, 0x8B, 0xC2, 0xD9, 0x27,
-     0x9A, 0xDE, 0x3D, 0xE2, 0xCC, 0x0A, 0x20});
+constexpr int kKeyVersion = 10;
+constexpr auto kPubKey = std::to_array<uint8_t>({
+    0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02,
+    0x01, 0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07, 0x03,
+    0x42, 0x00, 0x04, 0x46, 0xA2, 0x10, 0xBA, 0xE7, 0xBE, 0xEA, 0x5D, 0xD7,
+    0xD0, 0x2F, 0xB3, 0xBF, 0x08, 0xC7, 0xD1, 0xA7, 0x0B, 0xCD, 0xED, 0xD8,
+    0x25, 0x29, 0x61, 0xCE, 0xF4, 0x86, 0x78, 0x33, 0x28, 0xBA, 0xB4, 0xC8,
+    0xC5, 0x60, 0xB6, 0x3B, 0xD7, 0x73, 0x0F, 0x6D, 0xF4, 0x14, 0x10, 0x06,
+    0x2B, 0xC9, 0x70, 0xD3, 0x16, 0x09, 0x17, 0x87, 0xFD, 0xCA, 0x62, 0x61,
+    0x91, 0x70, 0x86, 0xE4, 0x11, 0x95, 0x85,
+});
 
 std::string GetServerProof(
     scoped_refptr<net::HttpResponseHeaders> response_headers) {
@@ -231,7 +233,7 @@ void NetworkTimeTracker::Initialize(
 
   // Finish initialization by checking whether network time mapping data is
   // available in the prefs, and if so, use it to initialize the time tracker.
-  const base::Value::Dict& time_mapping =
+  const base::DictValue& time_mapping =
       pref_service_->GetDict(prefs::kNetworkTimeMapping);
   std::optional<double> time_js = time_mapping.FindDouble(kPrefTime);
   std::optional<double> ticks_js = time_mapping.FindDouble(kPrefTicks);
@@ -305,7 +307,10 @@ void NetworkTimeTracker::UpdateNetworkTime(base::Time network_time,
   tracker_.emplace(time_at_last_measurement, ticks_at_last_measurement,
                    network_time_at_last_measurement, network_time_uncertainty);
 
-  base::Value::Dict time_mapping;
+  base::UmaHistogramMediumTimes("NetworkTime.NetworkTimeUncertainty",
+                                network_time_uncertainty);
+
+  base::DictValue time_mapping;
   time_mapping.Set(kPrefTime,
                    time_at_last_measurement.InMillisecondsFSinceUnixEpoch());
   time_mapping.Set(
@@ -469,8 +474,8 @@ void NetworkTimeTracker::CheckTime() {
     return;
   }
 
-  std::string query_string;
-  query_signer_.SignRequest("", &query_string);
+  std::string query_string =
+      query_signer_.PrepareRequestParameters(/*request_body=*/"");
   GURL::Replacements replacements;
   replacements.SetQueryStr(query_string);
   GURL url = server_url_.ReplaceComponents(replacements);
@@ -538,7 +543,7 @@ bool NetworkTimeTracker::UpdateTimeFromResponse(
     return false;
   }
   response.remove_prefix(5);  // Skips leading )]}'\n
-  std::optional<base::Value::Dict> value = base::JSONReader::ReadDict(
+  std::optional<base::DictValue> value = base::JSONReader::ReadDict(
       response, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!value) {
     DVLOG(1) << "not a dictionary";

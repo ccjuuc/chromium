@@ -3,16 +3,17 @@
 # found in the LICENSE file.
 
 import("//ui/webui/resources/tools/build_webui.gni")
+import("//ui/webui/webui_features.gni")
 
-assert(!is_android)
+assert(enable_webui_ntp)
 
 build_webui("build") {
   grd_prefix = "new_tab_shared"
   grd_resource_path_prefix = "shared"
 
   ts_files = [
-    "customize_buttons/customize_buttons.ts",
     "customize_buttons/customize_buttons.html.ts",
+    "customize_buttons/customize_buttons.ts",
     "customize_buttons/icons.html.ts",
   ]
   css_files = [ "customize_buttons/customize_buttons.css" ]

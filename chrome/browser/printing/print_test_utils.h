@@ -25,20 +25,20 @@ extern const char kPrinterName[];
 inline constexpr int kPrinterDpi = 600;
 
 // Some common paper sizes that can be used for fake device configurations.
-extern const PrinterSemanticCapsAndDefaults::Paper kPaperLetter;
-extern const PrinterSemanticCapsAndDefaults::Paper kPaperLegal;
+PrinterSemanticCapsAndDefaults::Paper GetPaperLetter();
+PrinterSemanticCapsAndDefaults::Paper GetPaperLegal();
 
 // Support values for `MakeDefaultPrintSettings()`.
 inline constexpr int kPrinterDefaultRenderDpi = 72;
 constexpr gfx::Size kPrinterCapabilitiesDpi(kPrinterDefaultRenderDpi,
                                             kPrinterDefaultRenderDpi);
 inline constexpr int kPrintSettingsCopies = 42;
-extern const std::vector<gfx::Size> kPrinterCapabilitiesDefaultDpis;
-extern const PrinterBasicInfoOptions kPrintInfoOptions;
+std::vector<gfx::Size> GetPrinterCapabilitiesDefaultDpis();
+PrinterBasicInfoOptions GetPrintInfoOptions();
 
 // Creates a print ticket with some default values. Based on ticket creation in
 // chrome/browser/resources/print_preview/native_layer.js.
-base::Value::Dict GetPrintTicket(mojom::PrinterType type);
+base::DictValue GetPrintTicket(mojom::PrinterType type);
 
 // Make some settings which correspond to the defaults for the indicated
 // printer.

@@ -8,7 +8,7 @@
 
 #include <utility>
 
-#include "base/metrics/histogram_macros.h"
+#include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/trace_id_helper.h"
 #include "content/public/browser/render_frame_host.h"
@@ -18,6 +18,7 @@
 #include "content/public/browser/web_contents.h"
 #include "media/capture/mojom/video_capture_buffer.mojom.h"
 #include "third_party/perfetto/include/perfetto/tracing/track.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 
@@ -129,14 +130,13 @@ void BackgroundThumbnailVideoCapturer::OnFrameCaptured(
     return;
   }
 
-  TRACE_EVENT_INSTANT1("ui", "Tab.Preview.VideoCaptureFrameReceived",
-                       TRACE_EVENT_SCOPE_THREAD, "frame_number",
-                       num_received_frames_);
+  TRACE_EVENT_INSTANT("ui", "Tab.Preview.VideoCaptureFrameReceived",
+                      "frame_number", num_received_frames_);
   ++num_received_frames_;
 
   uint64_t frame_id = base::trace_event::GetNextGlobalTraceId();
-  TRACE_EVENT_WITH_FLOW0("ui", "Tab.Preview.ProcessVideoCaptureFrame", frame_id,
-                         TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("ui", "Tab.Preview.ProcessVideoCaptureFrame",
+              perfetto::Flow::ProcessScoped(frame_id));
 
   // The SkBitmap's pixels will be marked as immutable, but the installPixels()
   // API requires a non-const pointer. So, cast away the const.
@@ -167,14 +167,16 @@ void BackgroundThumbnailVideoCapturer::OnFrameCaptured(
   effective_content_rect.Inset(scroll_insets);
 
   const gfx::Size bitmap_size(content_rect.right(), content_rect.bottom());
+  const SkImageInfo image_info = SkImageInfo::MakeN32(
+      bitmap_size.width(), bitmap_size.height(), kPremul_SkAlphaType,
+      info->color_space.ToSkColorSpace());
+  const size_t row_bytes =
+      media::VideoFrame::RowBytes(media::VideoFrame::Plane::kARGB,
+                                  info->pixel_format, info->coded_size.width());
+  CHECK_GE(mapping.size(), image_info.computeByteSize(row_bytes));
   SkBitmap frame;
   frame.installPixels(
-      SkImageInfo::MakeN32(bitmap_size.width(), bitmap_size.height(),
-                           kPremul_SkAlphaType,
-                           info->color_space.ToSkColorSpace()),
-      pixels,
-      media::VideoFrame::RowBytes(media::VideoFrame::Plane::kARGB,
-                                  info->pixel_format, info->coded_size.width()),
+      image_info, pixels, row_bytes,
       [](void* addr, void* context) {
         delete static_cast<FramePinner*>(context);
       },

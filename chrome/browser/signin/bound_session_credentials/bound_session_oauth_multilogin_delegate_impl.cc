@@ -5,8 +5,10 @@
 #include "chrome/browser/signin/bound_session_credentials/bound_session_oauth_multilogin_delegate_impl.h"
 
 #include "base/check_deref.h"
+#include "base/containers/to_vector.h"
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/signin/bound_session_credentials/bound_session_cookie_refresh_service.h"
+#include "chrome/browser/signin/bound_session_credentials/bound_session_key.h"
 #include "chrome/browser/signin/bound_session_credentials/bound_session_params.pb.h"
 #include "chrome/browser/signin/bound_session_credentials/bound_session_params_util.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -15,12 +17,16 @@
 
 namespace {
 
-GURL ConvertDeviceBoundSessionDomainToUrl(
+// Returns a site URL corresponding to given `domain`. Returns an empty `GURL`
+// if `domain` isn't supported.
+GURL GetSiteForDeviceBoundSessionDomainIfSupported(
     OAuthMultiloginResult::DeviceBoundSession::Domain domain) {
   using enum OAuthMultiloginResult::DeviceBoundSession::Domain;
   switch (domain) {
     case kGoogle:
       return GURL("https://google.com");
+    case kYoutube:
+      return GURL();
     case kUnknown:
       // This shouldn't happen as unknown domains should be filtered out before
       // (at server response parsing).
@@ -74,6 +80,16 @@ void BoundSessionOAuthMultiLoginDelegateImpl::OnCookiesSet() {
   bound_sessions_params_.reset();
 }
 
+std::vector<std::pair<GURL, std::string>>
+BoundSessionOAuthMultiLoginDelegateImpl::GetAllSessions() const {
+  if (!bound_session_cookie_refresh_service_) {
+    return {};
+  }
+  return base::ToVector(
+      bound_session_cookie_refresh_service_->GetAllSessions(),
+      [](const auto& key) { return std::make_pair(key.site, key.session_id); });
+}
+
 std::vector<bound_session_credentials::BoundSessionParams>
 BoundSessionOAuthMultiLoginDelegateImpl::CreateBoundSessionsParams(
     const OAuthMultiloginResult& result) {
@@ -98,13 +114,17 @@ BoundSessionOAuthMultiLoginDelegateImpl::CreateBoundSessionsParams(
   std::vector<bound_session_credentials::BoundSessionParams>
       bound_sessions_params;
   for (const auto* device_bound_session : sessions_to_register) {
+    GURL site = GetSiteForDeviceBoundSessionDomainIfSupported(
+        device_bound_session->domain);
+    if (site.is_empty()) {
+      ++invalid_params_count;
+      continue;
+    }
     bound_session_credentials::BoundSessionParams params =
         bound_session_credentials::
             CreateBoundSessionsParamsFromRegistrationPayload(
                 *device_bound_session->register_session_payload,
-                GaiaUrls::GetInstance()->oauth_multilogin_url(),
-                ConvertDeviceBoundSessionDomainToUrl(
-                    device_bound_session->domain),
+                GaiaUrls::GetInstance()->oauth_multilogin_url(), site,
                 wrapped_binding_key_str,
                 bound_session_credentials::SessionOrigin::SESSION_ORIGIN_OAML);
     if (!bound_session_credentials::AreParamsValid(params)) {

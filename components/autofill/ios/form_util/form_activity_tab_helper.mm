@@ -7,7 +7,6 @@
 #import <Foundation/Foundation.h>
 
 #import <optional>
-#import <variant>
 
 #import "base/debug/crash_logging.h"
 #import "base/debug/dump_without_crashing.h"
@@ -21,6 +20,7 @@
 #import "base/strings/strcat.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/strings/utf_string_conversions.h"
+#import "base/types/expected.h"
 #import "base/values.h"
 #import "components/autofill/core/common/autofill_data_validation.h"
 #import "components/autofill/core/common/autofill_util.h"
@@ -121,8 +121,8 @@ std::string GetFormSubmissionDetectionMetricName(std::string_view suffix) {
        ".", suffix});
 }
 
-void RecordFormActivityMetrics(const base::Value::Dict& message_body) {
-  const base::Value::Dict* metadata = message_body.FindDict("metadata");
+void RecordFormActivityMetrics(const base::DictValue& message_body) {
+  const base::DictValue* metadata = message_body.FindDict("metadata");
 
   if (!metadata) {
     // Don't record metrics if no metadata because all the data for calculating
@@ -156,7 +156,7 @@ void RecordFormActivityMetrics(const base::Value::Dict& message_body) {
 }
 
 // Record the form submission count metrics provided in the `message_body`.
-void RecordFormSubmissionCountMetrics(const base::Value::Dict& message_body) {
+void RecordFormSubmissionCountMetrics(const base::DictValue& message_body) {
   if (!base::FeatureList::IsEnabled(kAutofillCountFormSubmissionInRenderer)) {
     return;
   }
@@ -192,8 +192,7 @@ void RecordFormSubmissionCountMetrics(const base::Value::Dict& message_body) {
   if (!source) {
     SCOPED_CRASH_KEY_NUMBER("FormSubmissionReport", "invalid-source",
                             static_cast<int>(*source));
-    NOTREACHED(base::NotFatalUntil::M141);
-    return;
+    NOTREACHED();
   }
 
   // Record one histogram for each count and type as we want to see
@@ -275,10 +274,6 @@ std::optional<std::pair<WebFrame*, LocalFrameToken>> GetIsolatedFrame(
     const std::string& page_world_frame_id,
     const std::string& remote_frame_token,
     web::WebState* web_state) {
-  if (!base::FeatureList::IsEnabled(kAutofillIsolatedWorldForJavascriptIos)) {
-    return std::nullopt;
-  }
-
   std::optional<LocalFrameToken> local_frame_token =
       LookupLocalFrame(remote_frame_token, web_state);
 
@@ -332,7 +327,7 @@ void FormActivityTabHelper::RemoveObserver(FormActivityObserver* observer) {
   observers_.RemoveObserver(observer);
 }
 
-void HandleSubmissionError(const base::Value::Dict& message) {
+void HandleSubmissionError(const base::DictValue& message) {
   const std::string* error_stack = message.FindString("errorStack");
   const std::string* error_message = message.FindString("errorMessage");
   std::optional<bool> is_programmatic =
@@ -354,12 +349,12 @@ void HandleSubmissionError(const base::Value::Dict& message) {
 void FormActivityTabHelper::OnFormMessageReceived(
     web::WebState* web_state,
     const web::ScriptMessage& message) {
-  if (!message.body() || !message.body()->is_dict()) {
+  if (!message.legacy_body() || !message.legacy_body()->is_dict()) {
     // Ignore invalid message.
     return;
   }
 
-  const auto& message_body = message.body()->GetDict();
+  const auto& message_body = message.legacy_body()->GetDict();
 
   RecordFormActivityMetrics(message_body);
 
@@ -385,6 +380,10 @@ void FormActivityTabHelper::HandleFormActivity(
   FormActivityParams params;
   if (!FormActivityParams::FromMessage(message, &params)) {
     return;
+  }
+  if (force_submitted_by_user_for_testing_ &&
+      params.type == FormActivityParams::ActivityType::kFocus) {
+    params.has_user_gesture = true;
   }
 
   web::WebFramesManager* frames_manager =
@@ -420,13 +419,13 @@ void FormActivityTabHelper::HandleFormRemoval(
 void FormActivityTabHelper::FormSubmissionHandler(
     web::WebState* web_state,
     const web::ScriptMessage& message) {
-  if (!message.body() || !message.body()->is_dict()) {
+  if (!message.legacy_body() || !message.legacy_body()->is_dict()) {
     // Ignore invalid message.
     RecordFormSubmissionOutcome(FormSubmissionOutcome::kInvalidMessageBody);
     return;
   }
 
-  const base::Value::Dict& message_body = message.body()->GetDict();
+  const base::DictValue& message_body = message.legacy_body()->GetDict();
   const std::string* frame_id = message_body.FindString("frameID");
   if (!frame_id) {
     RecordFormSubmissionOutcome(FormSubmissionOutcome::kNoFrameID);
@@ -480,7 +479,8 @@ void FormActivityTabHelper::FormSubmissionHandler(
   // the main page (using logic from the popup blocker), or if the keyboard
   // is visible.
   BOOL submitted_by_user = message.is_user_interacting() ||
-                           web_state->GetWebViewProxy().keyboardVisible;
+                           web_state->GetWebViewProxy().keyboardVisible ||
+                           force_submitted_by_user_for_testing_;
 
   std::string form_name;
   if (maybe_form_name) {
@@ -490,7 +490,7 @@ void FormActivityTabHelper::FormSubmissionHandler(
   FieldDataManager* fieldDataManager =
       FieldDataManagerFactoryIOS::FromWebFrame(sender_frame);
 
-  const base::Value::Dict* form_data = message_body.FindDict("formData");
+  const base::DictValue* form_data = message_body.FindDict("formData");
   if (!form_data) {
     RecordFormSubmissionOutcome(FormSubmissionOutcome::kMissingFormData);
     return;
@@ -501,20 +501,20 @@ void FormActivityTabHelper::FormSubmissionHandler(
   // the id of the frame that contains the forms. For page world forms, we set
   // FormData::host_frame with the corresponding isolated world frame in
   // `local_frame_token`.
-  std::variant<FormData, ExtractFormDataFailure> form_or_failure =
-      autofill::ExtractFormDataOrFailure(
-          *form_data, true, base::UTF8ToUTF16(form_name),
+  base::expected<FormData, ExtractFormDataFailure> form_or_failure =
+      autofill::ExtractFormData(
+          *form_data, /*form_name_filter=*/base::UTF8ToUTF16(form_name),
           web_state->GetLastCommittedURL(), sender_frame->GetSecurityOrigin(),
-          *fieldDataManager, *frame_id, local_frame_token);
+          sender_frame->GetUrl(), *fieldDataManager, *frame_id,
+          local_frame_token);
 
-  if (std::holds_alternative<ExtractFormDataFailure>(form_or_failure)) {
+  if (!form_or_failure.has_value()) {
     RecordFormSubmissionOutcome(FormSubmissionOutcome::kFormExtractionFailure);
-    RecordFormExtractionFailure(
-        std::get<ExtractFormDataFailure>(form_or_failure));
+    RecordFormExtractionFailure(form_or_failure.error());
     return;
   }
 
-  FormData form = std::get<FormData>(form_or_failure);
+  FormData form = std::move(form_or_failure).value();
 
   if (std::optional<bool> programmatic_submission =
           message_body.FindBool("programmaticSubmission")) {
@@ -524,7 +524,7 @@ void FormActivityTabHelper::FormSubmissionHandler(
 
   // A form is considered "perfectly filled" if none of its fields were edited
   // by the user, unless that field was autofilled in the first place.
-  const bool perfect_filling = IsFormPerfectlyFilled(form);
+  const bool perfect_filling = IsFormDataPerfectlyFilled(form);
 
   for (auto& observer : observers_) {
     observer.DocumentSubmitted(web_state, sender_frame, form, submitted_by_user,

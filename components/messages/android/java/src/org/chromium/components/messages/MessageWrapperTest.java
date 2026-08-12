@@ -90,6 +90,12 @@ public class MessageWrapperTest {
                 2,
                 messageProperties.get(MessageBannerProperties.SECONDARY_ICON_RESOURCE_ID));
 
+        message.setSecondaryIconContentDescription("Secondary icon desc");
+        Assert.assertEquals(
+                "Secondary icon content description doesn't match provided value",
+                "Secondary icon desc",
+                messageProperties.get(MessageBannerProperties.SECONDARY_ICON_CONTENT_DESCRIPTION));
+
         Assert.assertNull(
                 "Initially icon should not be set",
                 messageProperties.get(MessageBannerProperties.ICON));
@@ -106,7 +112,7 @@ public class MessageWrapperTest {
         final long nativePtr = 1;
         MessageWrapper message = MessageWrapper.create(nativePtr, MessageIdentifier.TEST_MESSAGE);
         PropertyModel messageProperties = message.getMessageProperties();
-        var unused = messageProperties.get(MessageBannerProperties.ON_PRIMARY_ACTION).get();
+        var _ = messageProperties.get(MessageBannerProperties.ON_PRIMARY_ACTION).get();
         Mockito.verify(mNativeMock).handleActionClick(nativePtr);
         messageProperties.get(MessageBannerProperties.ON_SECONDARY_ACTION).run();
         Mockito.verify(mNativeMock).handleSecondaryActionClick(nativePtr);
@@ -125,7 +131,7 @@ public class MessageWrapperTest {
         PropertyModel messageProperties = message.getMessageProperties();
 
         message.clearNativePtr();
-        var unused = messageProperties.get(MessageBannerProperties.ON_PRIMARY_ACTION).get();
+        var _ = messageProperties.get(MessageBannerProperties.ON_PRIMARY_ACTION).get();
         Mockito.verify(mNativeMock, never()).handleActionClick(nativePtr);
         messageProperties.get(MessageBannerProperties.ON_SECONDARY_ACTION).run();
         Mockito.verify(mNativeMock, never()).handleSecondaryActionClick(nativePtr);

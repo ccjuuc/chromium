@@ -2,9 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <algorithm>
-
-#include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -15,20 +12,14 @@
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager_test_utils.h"
-#include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/geo/autofill_country.h"
 #include "components/autofill/core/browser/geo/test_region_data_loader.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
 #include "components/autofill/core/browser/ui/country_combobox_model.h"
 #include "components/autofill/core/browser/ui/region_combobox_model.h"
-#include "components/payments/content/payment_request_spec.h"
-#include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/test/browser_test.h"
-#include "content/public/test/browser_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/libaddressinput/src/cpp/include/libaddressinput/null_storage.h"
-#include "third_party/libaddressinput/src/cpp/include/libaddressinput/source.h"
 #include "ui/views/controls/combobox/combobox.h"
 #include "ui/views/controls/label.h"
 
@@ -55,7 +46,7 @@ constexpr base::Time kJanuary2017 =
 
 }  // namespace
 
-// This test suite is flaky on desktop platforms (crbug.com/1073972) and tests
+// This test suite is flaky on desktop platforms (crbug.com/40686589) and tests
 // UI that is soon to be deprecated, so it is disabled.
 class DISABLED_PaymentRequestShippingAddressEditorTest
     : public PaymentRequestBrowserTestBase {
@@ -245,7 +236,7 @@ IN_PROC_BROWSER_TEST_F(DISABLED_PaymentRequestShippingAddressEditorTest,
                                /*accept_empty_phone_number=*/false);
 }
 
-// Disabled for flakiness: crbug.com/799028
+// Disabled for flakiness: crbug.com/40556740
 IN_PROC_BROWSER_TEST_F(DISABLED_PaymentRequestShippingAddressEditorTest,
                        DISABLED_EnterAcceleratorSyncData) {
   NavigateTo("/payment_request_dynamic_shipping_test.html");
@@ -574,7 +565,7 @@ IN_PROC_BROWSER_TEST_F(DISABLED_PaymentRequestShippingAddressEditorTest,
             request->state()->selected_shipping_option_error_profile());
 }
 
-// Flaky on ozone: https://crbug.com/1216184
+// Flaky on ozone: https://crbug.com/40184706
 #if BUILDFLAG(IS_OZONE)
 #define MAYBE_FocusFirstField_Name DISABLED_FocusFirstField_Name
 #else
@@ -603,7 +594,7 @@ IN_PROC_BROWSER_TEST_F(DISABLED_PaymentRequestShippingAddressEditorTest,
   EXPECT_TRUE(textfield->HasFocus());
 }
 
-// Flaky on ozone: https://crbug.com/1216184
+// Flaky on ozone: https://crbug.com/40184706
 #if BUILDFLAG(IS_OZONE)
 #define MAYBE_FocusFirstInvalidField_NotName \
   DISABLED_FocusFirstInvalidField_NotName

@@ -163,9 +163,7 @@ constexpr CGFloat kSymbolSize = 22;
                                                 .bottomAnchor
                                    constant:-8];
 
-  NSArray<UITrait>* traits =
-      TraitCollectionSetForTraits(@[ UITraitVerticalSizeClass.class ]);
-  [self registerForTraitChanges:traits
+  [self registerForTraitChanges:@[ UITraitVerticalSizeClass.class ]
                      withTarget:self.view
                          action:@selector(setNeedsUpdateConstraints)];
 }
@@ -201,14 +199,15 @@ constexpr CGFloat kSymbolSize = 22;
 - (UIImage*)createQRCodeImage {
   NSData* urlData =
       [[self.pageURL absoluteString] dataUsingEncoding:NSUTF8StringEncoding];
-  return GenerateQRCode(urlData, kQRCodeImageSize);
+  return GenerateQRCode(urlData, kQRCodeImageSize,
+                        self.traitCollection.displayScale);
 }
 
 // Helper to create the toolbar items.
 - (void)createLeftItems {
   NSMutableArray* regularHeightItems = [[NSMutableArray alloc] init];
   NSMutableArray* compactHeightItems = [[NSMutableArray alloc] init];
-  UIImage* helpImage = DefaultSymbolWithPointSize(kHelpSymbol, kSymbolSize);
+  UIImage* helpImage = SymbolWithPointSize(SymbolHelp, kSymbolSize);
   UIBarButtonItem* helpButton =
       [[UIBarButtonItem alloc] initWithImage:helpImage
                                        style:UIBarButtonItemStylePlain

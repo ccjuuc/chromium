@@ -4,14 +4,14 @@
 
 #include "remoting/host/linux/gnome_headless_detector.h"
 
+#include <algorithm>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
+#include "base/strings/string_util.h"
 #include "remoting/base/logging.h"
 #include "remoting/host/linux/dbus_interfaces/org_freedesktop_systemd1_Manager.h"
 #include "remoting/host/linux/dbus_interfaces/org_freedesktop_systemd1_Service.h"
-#include "remoting/host/linux/dbus_interfaces/org_freedesktop_systemd1_Unit.h"
 
 namespace remoting {
 
@@ -29,43 +29,41 @@ void GnomeHeadlessDetector::Start(GDBusConnectionRef connection,
   dbus_connection_ = std::move(connection);
   callback_ = std::move(callback);
 
-  dbus_connection_.Call<org_freedesktop_systemd1_Manager::GetUnit>(
+  dbus_connection_.Call<org_freedesktop_systemd1_Manager::ListUnitsByPatterns>(
       kSystemdBusName, "/org/freedesktop/systemd1",
-      std::tuple("org.gnome.Shell@wayland.service"),
-      base::BindOnce(&GnomeHeadlessDetector::OnGetUnitReply,
+      std::tuple(std::vector<std::string>{"active"},
+                 std::vector<std::string>{"org.gnome.Shell@*.service"}),
+      base::BindOnce(&GnomeHeadlessDetector::OnListUnitsByPatternsReply,
                      weak_factory_.GetWeakPtr()));
 }
 
-void GnomeHeadlessDetector::OnGetUnitReply(
-    base::expected<std::tuple<gvariant::ObjectPath>, Loggable> result) {
+void GnomeHeadlessDetector::OnListUnitsByPatternsReply(
+    base::expected<std::tuple<std::vector<GVariantRef<"(ssssssouso)">>>,
+                   Loggable> result) {
   if (!result.has_value()) {
-    LOG(ERROR) << "GetUnit failed: " << result.error();
+    LOG(ERROR) << "ListUnitsByPatterns failed: " << result.error();
     std::move(callback_).Run(false);
     return;
   }
 
-  systemd_unit_path_ = std::get<0>(result.value());
-
-  dbus_connection_.GetProperty<org_freedesktop_systemd1_Unit::ActiveState>(
-      kSystemdBusName, systemd_unit_path_,
-      base::BindOnce(&GnomeHeadlessDetector::OnActiveStateReply,
-                     weak_factory_.GetWeakPtr()));
-}
-
-void GnomeHeadlessDetector::OnActiveStateReply(
-    base::expected<std::string, Loggable> result) {
-  if (!result.has_value()) {
-    LOG(ERROR) << "Failed to get ActiveState: " << result.error();
+  const auto& units = std::get<0>(result.value());
+  if (units.empty()) {
+    LOG(ERROR) << "No active GNOME Shell unit found.";
+    std::move(callback_).Run(false);
+    return;
+  }
+  if (units.size() > 1) {
+    std::vector<std::string> unit_names;
+    for (const auto& unit : units) {
+      unit_names.push_back(unit.get<0>().Into<std::string>());
+    }
+    LOG(ERROR) << "Multiple active GNOME Shell units found: "
+               << base::JoinString(unit_names, ", ");
     std::move(callback_).Run(false);
     return;
   }
 
-  if (result.value() != "active") {
-    LOG(ERROR) << "GNOME Shell service is not running, ActiveState returned: "
-               << result.value();
-    std::move(callback_).Run(false);
-    return;
-  }
+  systemd_unit_path_ = units[0].get<6>().Into<gvariant::ObjectPath>();
 
   dbus_connection_.GetProperty<org_freedesktop_systemd1_Service::ExecStart>(
       kSystemdBusName, systemd_unit_path_,
@@ -101,7 +99,7 @@ void GnomeHeadlessDetector::OnExecStartReply(
 
   auto args = exec_start.get<1>().Into<std::vector<std::string>>();
   constexpr char kHeadlessArg[] = "--headless";
-  if (!base::Contains(args, kHeadlessArg)) {
+  if (!std::ranges::contains(args, kHeadlessArg)) {
     HOST_LOG << "Did not find '" << kHeadlessArg << "' in gnome-shell args";
     std::move(callback_).Run(false);
     return;

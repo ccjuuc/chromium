@@ -25,6 +25,7 @@ import org.chromium.android_webview.AwContents;
 import org.chromium.android_webview.AwCookieManager;
 import org.chromium.android_webview.AwSettings;
 import org.chromium.android_webview.client_hints.AwUserAgentMetadata;
+import org.chromium.android_webview.common.AwSwitches;
 import org.chromium.android_webview.test.util.CookieUtils;
 import org.chromium.android_webview.test.util.JSUtils;
 import org.chromium.base.test.util.CallbackHelper;
@@ -45,9 +46,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Test suite for user-agent client hints.
- * Notes: When verifying sec-ch-ua-mobile client hints value on WebView tests, we can't assume
- * mobile is always true because there is some test bots don't set to use mobile user-agent.
+ * Test suite for user-agent client hints. Notes: When verifying sec-ch-ua-mobile client hints value
+ * on WebView tests, we can't assume mobile is always true because there is some test bots don't set
+ * to use mobile user-agent.
  */
 @DoNotBatch(reason = "These tests conflict with each other.")
 @RunWith(Parameterized.class)
@@ -96,6 +97,7 @@ public class ClientHintsTest extends AwParameterizedTest {
     @SmallTest
     @Feature({"AndroidWebView"})
     @CommandLineFlags.Add({
+        "enable-features=BypassClientHintsSSLCertStatusForTest",
         ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"
     })
     public void testClientHintsDefault() throws Throwable {
@@ -369,9 +371,7 @@ public class ClientHintsTest extends AwParameterizedTest {
     @Test
     @SmallTest
     @Feature({"AndroidWebView"})
-    @CommandLineFlags.Add({
-        ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"
-    })
+    @CommandLineFlags.Add({ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"})
     public void testCriticalClientHints() throws Throwable {
         // Initial test setup.
         final TestAwContentsClient contentsClient = new TestAwContentsClient();
@@ -420,9 +420,7 @@ public class ClientHintsTest extends AwParameterizedTest {
     @Test
     @SmallTest
     @Feature({"AndroidWebView", "Preferences"})
-    @CommandLineFlags.Add({
-        ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"
-    })
+    @CommandLineFlags.Add({ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"})
     public void testOverrideUserAgentMetadataGetApi() throws Throwable {
         final TestAwContentsClient contentsClient = new TestAwContentsClient();
         final AwContents contents =
@@ -453,9 +451,7 @@ public class ClientHintsTest extends AwParameterizedTest {
     @Test
     @SmallTest
     @Feature({"AndroidWebView", "Preferences"})
-    @CommandLineFlags.Add({
-        ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"
-    })
+    @CommandLineFlags.Add({ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"})
     public void testOverrideUserAgentMetadataInvalidBitness() throws Throwable {
         try {
             getClientHintsWithOverrides(
@@ -473,9 +469,7 @@ public class ClientHintsTest extends AwParameterizedTest {
     @Test
     @SmallTest
     @Feature({"AndroidWebView", "Preferences"})
-    @CommandLineFlags.Add({
-        ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"
-    })
+    @CommandLineFlags.Add({ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"})
     public void testOverrideUserAgentMetadataDefaultBitness() throws Throwable {
         // Override with bitness 0, we expect it return an empty string.
         ClientHintsTestResult clientHintsResult =
@@ -497,9 +491,7 @@ public class ClientHintsTest extends AwParameterizedTest {
     @Test
     @SmallTest
     @Feature({"AndroidWebView", "Preferences"})
-    @CommandLineFlags.Add({
-        ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"
-    })
+    @CommandLineFlags.Add({ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"})
     public void testOverrideUserAgentMetadataValidBitness() throws Throwable {
         ClientHintsTestResult clientHintsResult =
                 getClientHintsWithOverrides(
@@ -518,9 +510,7 @@ public class ClientHintsTest extends AwParameterizedTest {
     @Test
     @SmallTest
     @Feature({"AndroidWebView", "Preferences"})
-    @CommandLineFlags.Add({
-        ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"
-    })
+    @CommandLineFlags.Add({ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"})
     public void testOverrideUserAgentMetadataOverrideBrand() throws Throwable {
         // override with empty full version
         ClientHintsTestResult clientHintsResult =
@@ -553,9 +543,7 @@ public class ClientHintsTest extends AwParameterizedTest {
     @Test
     @SmallTest
     @Feature({"AndroidWebView", "Preferences"})
-    @CommandLineFlags.Add({
-        ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"
-    })
+    @CommandLineFlags.Add({ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"})
     public void testOverrideUserAgentMetadataInvalidBrand() throws Throwable {
         // Test invalid input brand array: size only 2.
         try {
@@ -595,9 +583,7 @@ public class ClientHintsTest extends AwParameterizedTest {
     @Test
     @SmallTest
     @Feature({"AndroidWebView", "Preferences"})
-    @CommandLineFlags.Add({
-        ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"
-    })
+    @CommandLineFlags.Add({ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"})
     public void testOverrideUserAgentMetadataClearOverride() throws Throwable {
         final TestAwContentsClient contentsClient = new TestAwContentsClient();
         final AwContents contents =
@@ -697,9 +683,7 @@ public class ClientHintsTest extends AwParameterizedTest {
     @Test
     @SmallTest
     @Feature({"AndroidWebView", "Preferences"})
-    @CommandLineFlags.Add({
-        ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"
-    })
+    @CommandLineFlags.Add({ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"})
     public void testOverrideUserAgentMetadataClearOverrideWithCustomUA() throws Throwable {
         final TestAwContentsClient contentsClient = new TestAwContentsClient();
         final AwContents contents =
@@ -783,9 +767,7 @@ public class ClientHintsTest extends AwParameterizedTest {
     @Test
     @SmallTest
     @Feature({"AndroidWebView", "Preferences"})
-    @CommandLineFlags.Add({
-        ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"
-    })
+    @CommandLineFlags.Add({ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"})
     public void testOverrideUserAgentMetadataClearOverrideVerifyGetApi() throws Throwable {
         final TestAwContentsClient contentsClient = new TestAwContentsClient();
         final AwContents contents =
@@ -942,7 +924,10 @@ public class ClientHintsTest extends AwParameterizedTest {
     @SmallTest
     @Feature({"AndroidWebView"})
     @SkipMutations(reason = "This test depends on AwSettings.setUserAgentString()")
-    @CommandLineFlags.Add({"enable-features=ReduceUserAgentMinorVersion"})
+    @CommandLineFlags.Add({
+        AwSwitches.WEBVIEW_REDUCE_USER_AGENT_MINOR_VERSION,
+        "enable-features=ReduceUserAgentMinorVersion",
+    })
     public void testDefaultUserAgentEnableReductionOverride() throws Throwable {
         String defaultUserAgent = getDefaultUserAgent();
         // Verify user-agent minor version is reduced.
@@ -959,6 +944,8 @@ public class ClientHintsTest extends AwParameterizedTest {
     @Feature({"AndroidWebView"})
     @SkipMutations(reason = "This test depends on AwSettings.setUserAgentString()")
     @CommandLineFlags.Add({
+        AwSwitches.WEBVIEW_REDUCE_USER_AGENT_MINOR_VERSION,
+        AwSwitches.WEBVIEW_REDUCE_UA_ANDROID_VERSION_DEVICE_MODEL,
         "enable-features=ReduceUserAgentMinorVersion,WebViewReduceUAAndroidVersionDeviceModel"
     })
     public void testDefaultUserAgentEnableAllReduction() throws Throwable {
@@ -967,6 +954,62 @@ public class ClientHintsTest extends AwParameterizedTest {
         Matcher uaMatcher = Pattern.compile(WEBVIEW_REDUCED_UA_PATTERN).matcher(defaultUserAgent);
         Assert.assertTrue(uaMatcher.find());
         Assert.assertEquals("Linux; Android 10; K; wv", uaMatcher.group(1));
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView"})
+    @SkipMutations(reason = "This test is about a feature flag and not settings.")
+    @CommandLineFlags.Add({
+        AwSwitches.WEBVIEW_REDUCE_USER_AGENT_MINOR_VERSION,
+        "enable-features=ReduceUserAgentMinorVersion",
+    })
+    public void testNavigatorPlatformWithReduceUserAgentMinorVersionEnabled() throws Throwable {
+        verifyNavigatorPlatform("Linux armv81");
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView"})
+    @SkipMutations(reason = "This test is about a feature flag and not settings.")
+    public void testNavigatorPlatformWithReduceUserAgentMinorVersionDisabled() throws Throwable {
+        verifyNavigatorPlatform(getUnreducedPlatform());
+    }
+
+    private String getUnreducedPlatform() {
+        // Mirror the implementation of NavigatorID::platform().
+        // See third_party/blink/renderer/core/frame/navigator_id.cc.
+        return System.getProperty("os.name") + " " + System.getProperty("os.arch");
+    }
+
+    private void verifyNavigatorPlatform(String expectedPlatform) throws Throwable {
+        final TestAwContentsClient contentClient = new TestAwContentsClient();
+        final AwContents contents =
+                mActivityTestRule
+                        .createAwTestContainerViewOnMainSync(contentClient)
+                        .getAwContents();
+        AwActivityTestRule.enableJavaScriptOnUiThread(contents);
+        contents.getSettings().setJavaScriptEnabled(true);
+
+        final AwEmbeddedTestServer server =
+                AwEmbeddedTestServer.createAndStartServer(
+                        InstrumentationRegistry.getInstrumentation().getTargetContext());
+        try {
+            // A simple page is enough, use client_hints.html as it's known to exist.
+            final String url = server.getURL("/android_webview/test/data/client_hints.html");
+            loadUrlSync(contents, contentClient.getOnPageFinishedHelper(), url);
+
+            String platform =
+                    JSUtils.executeJavaScriptAndWaitForResult(
+                            InstrumentationRegistry.getInstrumentation(),
+                            contents,
+                            contentClient.getOnEvaluateJavaScriptResultHelper(),
+                            "navigator.platform");
+
+            Assert.assertEquals("\"" + expectedPlatform + "\"", platform);
+        } finally {
+            server.stopAndDestroyServer();
+        }
     }
 
     private void verifyOverrideUaAndOverrideUaMetadata(String overrideUserAgent) throws Throwable {
@@ -1298,8 +1341,8 @@ public class ClientHintsTest extends AwParameterizedTest {
             String actualTitle = mActivityTestRule.getTitleOnUiThread(contents);
             String[] uaItems = actualTitle.split("\\|");
             // 3 navigator.userAgentData priorities.
-            int expect_total_hints = 3;
-            Assert.assertEquals(expect_total_hints, uaItems.length);
+            int expectTotalHints = 3;
+            Assert.assertEquals(expectTotalHints, uaItems.length);
 
             // System default low-entropy user-agent client hints will always be available in
             // Javascript API even if users change the user-agent to a totally different value.

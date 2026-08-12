@@ -14,6 +14,7 @@ import static org.chromium.chrome.browser.hub.HubColorMixer.COLOR_MIXER;
 import android.app.Activity;
 import android.graphics.drawable.Drawable;
 import android.view.LayoutInflater;
+import android.view.View;
 import android.widget.Button;
 import android.widget.FrameLayout;
 
@@ -29,17 +30,22 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
+import org.chromium.base.Callback;
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.Features.EnableFeatures;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.toolbar.TabSwitcherDrawable;
-import org.chromium.chrome.browser.toolbar.TabSwitcherDrawable.TabSwitcherDrawableLocation;
+import org.chromium.chrome.browser.ui.actions.button.DelegateButtonData;
+import org.chromium.chrome.browser.ui.actions.button.DisplayButtonData;
+import org.chromium.chrome.browser.ui.actions.button.DrawableButtonData;
+import org.chromium.chrome.browser.ui.actions.button.FullButtonData;
+import org.chromium.chrome.browser.ui.actions.button.ResourceButtonData;
+import org.chromium.chrome.browser.ui.android.bars_common.TabSwitcherDrawable;
+import org.chromium.chrome.browser.ui.android.bars_common.TabSwitcherDrawable.TabSwitcherDrawableLocation;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -63,13 +69,13 @@ public class HubToolbarViewRenderTest {
     public ChromeRenderTestRule mRenderTestRule =
             ChromeRenderTestRule.Builder.withPublicCorpus()
                     .setBugComponent(ChromeRenderTestRule.Component.UI_BROWSER_MOBILE_HUB)
-                    .setRevision(13)
+                    .setRevision(14)
                     .build();
 
     @Mock private TabSwitcherDrawable.Observer mTabSwitcherDrawableObserver;
     @Mock private Pane mPane;
 
-    private ObservableSupplierImpl<Pane> mFocusedPaneSupplier;
+    private SettableMonotonicObservableSupplier<Pane> mFocusedPaneSupplier;
     private Activity mActivity;
     private HubToolbarView mToolbar;
     private PropertyModel mPropertyModel;
@@ -81,11 +87,6 @@ public class HubToolbarViewRenderTest {
         mActivityTestRule.launchActivity(null);
         mActivity = mActivityTestRule.getActivity();
         mActivity.setTheme(R.style.Theme_BrowserUI_DayNight);
-        if (!ChromeFeatureList.sGridTabSwitcherUpdate.isEnabled()) {
-            mActivity
-                    .getTheme()
-                    .applyStyle(R.style.HubToolbarActionButtonStyleOverlay_Baseline, true);
-        }
         ThreadUtils.runOnUiThreadBlocking(this::setUpOnUi);
     }
 
@@ -95,10 +96,13 @@ public class HubToolbarViewRenderTest {
                 (FrameLayout) inflater.inflate(R.layout.hub_toolbar_layout, null, false);
         mToolbar = toolbarContainer.findViewById(R.id.hub_toolbar);
         mActivity.setContentView(toolbarContainer);
-        mFocusedPaneSupplier = new ObservableSupplierImpl<>();
+        mFocusedPaneSupplier = ObservableSuppliers.createMonotonic();
         mColorMixer =
                 new HubColorMixerImpl(
-                        mActivity, new ObservableSupplierImpl<>(true), mFocusedPaneSupplier);
+                        mActivity,
+                        ObservableSuppliers.alwaysTrue(),
+                        mFocusedPaneSupplier,
+                        ObservableSuppliers.alwaysNull());
         mPropertyModel =
                 new PropertyModel.Builder(HubToolbarProperties.ALL_KEYS)
                         .with(COLOR_MIXER, mColorMixer)
@@ -119,7 +123,7 @@ public class HubToolbarViewRenderTest {
     }
 
     private FullButtonData enabledButtonData(@DrawableRes int drawableRes) {
-        return makeButtonData(drawableRes, () -> {});
+        return makeButtonData(drawableRes, view -> {});
     }
 
     private FullButtonData disabledButtonData(@DrawableRes int drawableRes) {
@@ -127,17 +131,17 @@ public class HubToolbarViewRenderTest {
     }
 
     private FullButtonData makeButtonData(
-            @DrawableRes int drawableRes, @Nullable Runnable onPress) {
+            @DrawableRes int drawableRes, @Nullable Callback<View> onPress) {
         DisplayButtonData displayButtonData =
                 new ResourceButtonData(
                         R.string.button_new_tab, R.string.button_new_tab, drawableRes);
-        return new DelegateButtonData(displayButtonData, onPress);
+        return new DelegateButtonData.Builder(displayButtonData).setOnPress(onPress).build();
     }
 
-    private FullButtonData makeButtonData(Drawable drawable, @Nullable Runnable onPress) {
+    private FullButtonData makeButtonData(Drawable drawable, @Nullable Callback<View> onPress) {
         DisplayButtonData displayButtonData =
                 new DrawableButtonData(R.string.button_new_tab, R.string.button_new_tab, drawable);
-        return new DelegateButtonData(displayButtonData, onPress);
+        return new DelegateButtonData.Builder(displayButtonData).setOnPress(onPress).build();
     }
 
     @Test
@@ -188,7 +192,6 @@ public class HubToolbarViewRenderTest {
     @Test
     @MediumTest
     @Feature({"RenderTest"})
-    @EnableFeatures({ChromeFeatureList.GRID_TAB_SWITCHER_UPDATE})
     public void testActionButtonWithGTSUpdate() throws Exception {
         FullButtonData enabledButtonData = enabledButtonData(R.drawable.new_tab_icon);
         FullButtonData disabledButtonData = disabledButtonData(R.drawable.new_tab_icon);
@@ -268,7 +271,6 @@ public class HubToolbarViewRenderTest {
     @Test
     @MediumTest
     @Feature({"RenderTest"})
-    @EnableFeatures({ChromeFeatureList.GRID_TAB_SWITCHER_UPDATE})
     @DisabledTest(message = "https://crbug.com/419357373")
     public void testPaneSwitcherWithGtsUpdate() throws Exception {
         FullButtonData actionButtonData = enabledButtonData(R.drawable.new_tab_icon);
@@ -339,7 +341,7 @@ public class HubToolbarViewRenderTest {
 
         FullButtonData actionButtonData = enabledButtonData(R.drawable.new_tab_icon);
         List<FullButtonData> paneSwitcherButtonData = new ArrayList<>();
-        paneSwitcherButtonData.add(makeButtonData(tabSwitcherDrawable, () -> {}));
+        paneSwitcherButtonData.add(makeButtonData(tabSwitcherDrawable, view -> {}));
         paneSwitcherButtonData.add(enabledButtonData(R.drawable.incognito_small));
 
         ThreadUtils.runOnUiThreadBlocking(
@@ -376,7 +378,7 @@ public class HubToolbarViewRenderTest {
 
         FullButtonData actionButtonData = enabledButtonData(R.drawable.new_tab_icon);
         List<FullButtonData> paneSwitcherButtonData = new ArrayList<>();
-        paneSwitcherButtonData.add(makeButtonData(tabSwitcherDrawable, () -> {}));
+        paneSwitcherButtonData.add(makeButtonData(tabSwitcherDrawable, view -> {}));
         paneSwitcherButtonData.add(enabledButtonData(R.drawable.incognito_small));
 
         ThreadUtils.runOnUiThreadBlocking(

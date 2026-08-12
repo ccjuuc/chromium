@@ -37,7 +37,9 @@ LayoutTextFragment::LayoutTextFragment(Node* node,
                                        const String& str,
                                        int start_offset,
                                        int length)
-    : LayoutText(node, str ? str.Substring(start_offset, length) : String()),
+    : LayoutText(
+          node,
+          str ? str.DeprecatedSubstring(start_offset, length) : String()),
       start_(start_offset),
       fragment_length_(length),
       is_remaining_text_layout_object_(false),
@@ -58,15 +60,15 @@ LayoutTextFragment* LayoutTextFragment::Create(Node* node,
                                                   length);
 }
 
-LayoutTextFragment* LayoutTextFragment::CreateAnonymous(Document& doc,
+LayoutTextFragment* LayoutTextFragment::CreateAnonymous(Document& document,
                                                         const String& text,
                                                         unsigned start,
                                                         unsigned length) {
   LayoutTextFragment* fragment =
       LayoutTextFragment::Create(nullptr, text, start, length);
-  fragment->SetDocumentForAnonymous(&doc);
+  fragment->SetDocumentForAnonymous(document);
   if (length)
-    doc.View()->IncrementVisuallyNonEmptyCharacterCount(length);
+    document.View()->IncrementVisuallyNonEmptyCharacterCount(length);
   return fragment;
 }
 
@@ -105,7 +107,7 @@ String LayoutTextFragment::OriginalText() const {
   String result = CompleteText();
   if (!result)
     return String();
-  return result.Substring(Start(), FragmentLength());
+  return result.DeprecatedSubstring(Start(), FragmentLength());
 }
 
 void LayoutTextFragment::TextDidChange() {
@@ -228,6 +230,14 @@ void LayoutTextFragment::UpdateHitTestResult(
 
 DOMNodeId LayoutTextFragment::OwnerNodeId(bool) const {
   NOT_DESTROYED();
+
+  // Anonymous list marker text content belongs to the marker pseudo-element.
+  if (!GetNode() && Parent() && Parent()->IsListMarker()) {
+    if (Node* marker_node = Parent()->GetNode()) {
+      return marker_node->GetDomNodeId();
+    }
+  }
+
   Node* node = AssociatedTextNode();
   return node ? node->GetDomNodeId() : kInvalidDOMNodeId;
 }

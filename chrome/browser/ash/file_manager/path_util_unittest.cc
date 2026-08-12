@@ -98,6 +98,7 @@ class FileManagerPathUtilTest : public testing::Test {
         profile_.get(),
         base::BindLambdaForTesting([](content::BrowserContext* context) {
           return std::unique_ptr<KeyedService>(std::make_unique<VolumeManager>(
+              TestingBrowserProcess::GetGlobal()->local_state(),
               Profile::FromBrowserContext(context), nullptr, nullptr,
               ash::disks::DiskMountManager::GetInstance(), nullptr,
               VolumeManager::GetMtpStorageInfoCallback()));
@@ -591,11 +592,11 @@ TEST_F(FileManagerPathUtilTest, ConvertBetweenFileSystemURLAndPathInsideVM) {
       profile_.get(), FilePath("/path/not/under/mount"), vm_mount,
       /*map_crostini_home=*/false, &url));
 
-  // Special case for PluginVM case-insensitive hostname matching.
+  // The ChromeOS hostname is matched case-insensitively.
   EXPECT_TRUE(ConvertPathInsideVMToFileSystemURL(
-      profile_.get(), FilePath("//chromeos/MyFiles/path/in/pluginvm"),
+      profile_.get(), FilePath("//chromeos/MyFiles/path/in/shared"),
       FilePath("//ChromeOS"), /*map_crostini_home=*/false, &url));
-  EXPECT_EQ("Downloads-testing_profile%40test-hash/path/in/pluginvm",
+  EXPECT_EQ("Downloads-testing_profile%40test-hash/path/in/shared",
             url.virtual_path().value());
 
   profile_.reset();
@@ -1398,10 +1399,6 @@ TEST_F(FileManagerPathUtilTest, GetDisplayablePathTest) {
       {
           "/mount_path/my_files/Downloads/foo",
           "My files/Downloads/foo",
-      },
-      {
-          "/mount_path/my_files/PvmDefault",
-          "My files/Windows files",
       },
       {
           "/mount_path/my_files/Camera/foo",

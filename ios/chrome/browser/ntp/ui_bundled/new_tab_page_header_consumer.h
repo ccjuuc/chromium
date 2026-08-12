@@ -8,21 +8,14 @@
 #import <UIKit/UIKit.h>
 
 @class NewTabPageColorPalette;
-@class SearchEngineLogoMediator;
 
 // Handles updates to the NTP header.
 @protocol NewTabPageHeaderConsumer <NSObject>
-
-// Exposes view and methods to drive the doodle.
-// TODO(crbug.com/436228514): The mediator should not be passed to the
-// consumer.
-- (void)setSearchEngineLogoMediator:
-    (SearchEngineLogoMediator*)searchEngineLogoMediator;
-
 // Sets whether voice search is currently enabled.
 - (void)setVoiceSearchIsEnabled:(BOOL)voiceSearchIsEnabled;
 
 // Update account particle disc error badge.
+// `name` may be nil.
 - (void)updateADPBadgeWithErrorFound:(BOOL)hasAccountError
                                 name:(NSString*)name
                                email:(NSString*)email;
@@ -35,6 +28,12 @@
 
 // Whether AIM is allowed.
 - (void)setAIMAllowed:(BOOL)allowed;
+
+// Whether the current session is eligible for fusebox.
+- (void)setFuseboxEligible:(BOOL)eligible;
+
+// Whether the omnibox is pinned to the bottom position.
+- (void)setOmniboxInBottomPosition:(BOOL)isBottomOmnibox;
 
 @end
 

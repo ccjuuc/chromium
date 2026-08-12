@@ -5,6 +5,7 @@
 #include "ash/wm/workspace/backdrop_controller.h"
 
 #include <algorithm>
+#include <ranges>
 #include <utility>
 
 #include "ash/accessibility/accessibility_controller.h"
@@ -24,7 +25,6 @@
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
 #include "base/auto_reset.h"
-#include "base/containers/adapters.h"
 #include "base/functional/bind.h"
 #include "chromeos/ash/components/audio/sounds.h"
 #include "ui/aura/client/aura_constants.h"
@@ -303,7 +303,7 @@ void BackdropController::UpdateBackdrop() {
 
 aura::Window* BackdropController::GetTopmostWindowWithBackdrop() {
   const aura::Window::Windows windows = container_->children();
-  for (aura::Window* window : base::Reversed(windows)) {
+  for (aura::Window* window : std::views::reverse(windows)) {
     if (window == backdrop_window_)
       continue;
 
@@ -458,8 +458,8 @@ void BackdropController::EnsureBackdropWidget() {
   // The backdrop window in always on top container can be reparented without
   // this when the window is set to fullscreen.
   AlwaysOnTopController::SetDisallowReparent(backdrop_window_);
-  backdrop_window_->layer()->SetColor(
-      WindowBackdrop::Get(window_having_backdrop_)->GetBackdropColor());
+  backdrop_window_->layer()->AsSolidColor()->SetColor(SkColor4f::FromColor(
+      WindowBackdrop::Get(window_having_backdrop_)->GetBackdropColor()));
 
   WindowState::Get(backdrop_window_)->set_allow_set_bounds_direct(true);
   UpdateAccessibilityMode();
@@ -540,8 +540,10 @@ void BackdropController::Show() {
   // Update backdrop color.
   const SkColor backdrop_color =
       WindowBackdrop::Get(window_having_backdrop_)->GetBackdropColor();
-  if (backdrop_window_->layer()->GetTargetColor() != backdrop_color)
-    backdrop_window_->layer()->SetColor(backdrop_color);
+  auto* backdrop_layer = backdrop_window_->layer()->AsSolidColor();
+  if (backdrop_layer->GetTargetColor().toSkColor() != backdrop_color) {
+    backdrop_layer->SetColor(SkColor4f::FromColor(backdrop_color));
+  }
 
   // Update the stcking, only after we determine we can show the backdrop. The
   // backdrop needs to be immediately behind the window that needs a backdrop.

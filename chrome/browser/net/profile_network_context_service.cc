@@ -11,7 +11,6 @@
 #include "base/base64.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/containers/flat_map.h"
 #include "base/containers/span.h"
 #include "base/containers/to_vector.h"
 #include "base/feature_list.h"
@@ -21,7 +20,6 @@
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_split.h"
@@ -43,6 +41,7 @@
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/privacy_sandbox/privacy_sandbox_settings_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/ssl/sct_reporting_service.h"
 #include "chrome/browser/ssl/sct_reporting_service_factory.h"
 #include "chrome/browser/webid/federated_identity_permission_context.h"
@@ -53,6 +52,7 @@
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/common/webui_url_constants.h"
 #include "components/certificate_transparency/pref_names.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
@@ -64,15 +64,16 @@
 #include "components/embedder_support/pref_names.h"
 #include "components/embedder_support/switches.h"
 #include "components/enterprise/buildflags/buildflags.h"
+#include "components/enterprise/connectors/core/connectors_prefs.h"
 #include "components/language/core/browser/language_prefs.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/metrics/metrics_pref_names.h"
+#include "components/metrics/metrics_reporting_choice_service.h"
 #include "components/permissions/features.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/privacy_sandbox/privacy_sandbox_prefs.h"
-#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/first_party_sets_handler.h"
@@ -139,7 +140,7 @@
 #include "net/ssl/client_cert_store_empty.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/common/constants.h"
 #endif
 
@@ -172,6 +173,25 @@
 #include "components/unexportable_keys/mojom/unexportable_key_service_proxy_impl.h"  // nogncheck
 #endif
 
+#include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
+#include "components/domain_reliability/domain_reliability_prefs.h"
+
+class ChromeDomainReliabilityDelegate
+    : public domain_reliability::DomainReliabilityServiceDelegate {
+ public:
+  ChromeDomainReliabilityDelegate() = default;
+  ~ChromeDomainReliabilityDelegate() override = default;
+
+  bool IsDomainReliabilityAllowed() const override {
+    return g_browser_process->local_state()->GetBoolean(
+        domain_reliability::prefs::kDomainReliabilityAllowedByPolicy);
+  }
+
+  bool IsMetricsAndCrashReportingEnabled() const override {
+    return ChromeMetricsServiceAccessor::IsMetricsAndCrashReportingEnabled();
+  }
+};
+
 namespace {
 
 bool* g_discard_domain_reliability_uploads_for_testing = nullptr;
@@ -179,7 +199,7 @@ bool* g_discard_domain_reliability_uploads_for_testing = nullptr;
 const char kHttpCacheFinchExperimentGroups[] =
     "profile_network_context_service.http_cache_finch_experiment_groups";
 
-std::vector<std::string> TranslateStringArray(const base::Value::List& list) {
+std::vector<std::string> TranslateStringArray(const base::ListValue& list) {
   std::vector<std::string> strings;
   for (const base::Value& value : list) {
     DCHECK(value.is_string());
@@ -313,14 +333,10 @@ std::unique_ptr<net::ClientCertStore> GetWrappedCertStore(
   }
 
   client_certificates::CertificateProvisioningService*
-      browser_provisioning_service = nullptr;
-  if (client_certificates::features::
-          IsManagedBrowserClientCertificateEnabled()) {
-    browser_provisioning_service =
-        g_browser_process->browser_policy_connector()
-            ->chrome_browser_cloud_management_controller()
-            ->GetCertificateProvisioningService();
-  }
+      browser_provisioning_service =
+          g_browser_process->browser_policy_connector()
+              ->chrome_browser_cloud_management_controller()
+              ->GetCertificateProvisioningService();
 
   if (!browser_provisioning_service && !profile_provisioning_service) {
     return platform_store;
@@ -417,7 +433,19 @@ bool MaybeAddCertWithConstraints(
 constexpr std::string_view kDiskCacheExperimentNameSeparator = " ";
 constexpr std::string_view kDiskCacheExperimentNameNone = "None";
 
-bool GetHttpCacheBackendResetParam(PrefService* local_state) {
+bool GetHttpCacheBackendResetParam(
+    Profile* profile,
+    const base::FilePath& relative_partition_path) {
+  // Only reset the HTTP cache for the default partition, as resetting
+  // non-default partitions is not critical for experiment performance metrics.
+  // Non-default partitions share profile preferences. If a non-default
+  // partition initialized first and updated the shared pref, the default
+  // partition would skip its reset. We also avoid tracking per-partition
+  // state to prevent pref leaks for deleted partitions.
+  if (!relative_partition_path.empty()) {
+    return false;
+  }
+  PrefService* profile_prefs = profile->GetPrefs();
   // Get the field trial groups.  If the server cannot be reached, then
   // this corresponds to "None" for each experiment.
   base::FieldTrial* isolation_key_field_trial =
@@ -446,8 +474,10 @@ bool GetHttpCacheBackendResetParam(PrefService* local_state) {
                                  ? credentials_field_trial->group_name()
                                  : kDiskCacheExperimentNameNone);
 
-  // Add the disk cache backend experiment group if active.
-  if (backend_field_trial) {
+  // Add the disk cache backend experiment group if active, and the
+  // DiskCacheBackendResetCacheOnGroupChange param is true.
+  if (backend_field_trial &&
+      net::features::kDiskCacheBackendResetCacheOnGroupChange.Get()) {
     experiment_parts.push_back(backend_field_trial->group_name());
   }
 
@@ -455,12 +485,34 @@ bool GetHttpCacheBackendResetParam(PrefService* local_state) {
       base::JoinString(experiment_parts, kDiskCacheExperimentNameSeparator);
 
   const std::string previous_field_trial_status =
-      local_state->GetString(kHttpCacheFinchExperimentGroups);
-  local_state->SetString(kHttpCacheFinchExperimentGroups,
-                         current_field_trial_status);
+      profile_prefs->GetString(kHttpCacheFinchExperimentGroups);
+  profile_prefs->SetString(kHttpCacheFinchExperimentGroups,
+                           current_field_trial_status);
 
-  return !previous_field_trial_status.empty() &&
-         current_field_trial_status != previous_field_trial_status;
+  // If `previous_field_trial_status` is empty, it means this is either a new
+  // profile or we upgraded from a version before M150 where this pref was
+  // browser-wide instead of profile-specific.
+  // In the latter case, if the user is now in an active experiment group,
+  // we should reset the cache to ensure they don't use a stale cache from
+  // a different experiment state.
+  //
+  // For a new profile, we don't need to reset the cache as it is already
+  // empty.
+  //
+  // TODO(crbug.com/515559895): This is a temporary logic for M150 migration
+  // and can be removed after a few milestones when most users have upgraded.
+  if (previous_field_trial_status.empty()) {
+    bool is_current_default = true;
+    for (std::string_view part : experiment_parts) {
+      if (part != kDiskCacheExperimentNameNone) {
+        is_current_default = false;
+        break;
+      }
+    }
+    return !is_current_default && !profile->IsNewProfile();
+  }
+
+  return current_field_trial_status != previous_field_trial_status;
 }
 
 }  // namespace
@@ -560,17 +612,6 @@ ProfileNetworkContextService::ProfileNetworkContextService(Profile* profile)
       base::BindRepeating(&ProfileNetworkContextService::
                               UpdateCorsNonWildcardRequestHeadersSupport,
                           base::Unretained(this)));
-
-#if BUILDFLAG(ENABLE_REPORTING)
-  if (base::FeatureList::IsEnabled(
-          net::features::kReportingApiEnableEnterpriseCookieIssues)) {
-    pref_change_registrar_.Add(
-        prefs::kReportingEndpoints,
-        base::BindRepeating(
-            &ProfileNetworkContextService::UpdateEnterpriseReportingEndpoints,
-            base::Unretained(this)));
-  }
-#endif  // BUILDFLAG(ENABLE_REPORTING)
 }
 
 ProfileNetworkContextService::~ProfileNetworkContextService() = default;
@@ -617,6 +658,9 @@ void ProfileNetworkContextService::RegisterProfilePrefs(
   registry->RegisterListPref(prefs::kCACertificatesWithConstraints);
   registry->RegisterListPref(prefs::kCADistrustedCertificates);
   registry->RegisterListPref(prefs::kCAHintCertificates);
+  // For information about whether to reset the HTTP Cache or not, defaults
+  // to the empty string, which does not prompt a reset.
+  registry->RegisterStringPref(kHttpCacheFinchExperimentGroups, "");
 #if !BUILDFLAG(IS_CHROMEOS)
   // Include user added platform certs by default.
   registry->RegisterBooleanPref(prefs::kCAPlatformIntegrationEnabled, true);
@@ -637,10 +681,6 @@ void ProfileNetworkContextService::RegisterLocalStatePrefs(
   registry->RegisterIntegerPref(
       prefs::kAmbientAuthenticationInPrivateModesEnabled,
       static_cast<int>(net::AmbientAuthAllowedProfileTypes::kRegularOnly));
-
-  // For information about whether to reset the HTTP Cache or not, defaults
-  // to the empty string, which does not prompt a reset.
-  registry->RegisterStringPref(kHttpCacheFinchExperimentGroups, "");
 }
 
 void ProfileNetworkContextService::DisableQuicIfNotAllowed() {
@@ -674,28 +714,16 @@ void ProfileNetworkContextService::OnThirdPartyCookieBlockingChanged(
       });
 }
 
-void ProfileNetworkContextService::OnMitigationsEnabledFor3pcdChanged(
-    bool enable) {
-  profile_->ForEachLoadedStoragePartition(
-      [&](content::StoragePartition* storage_partition) {
-        storage_partition->GetCookieManagerForBrowserProcess()
-            ->SetMitigationsEnabledFor3pcd(enable);
-      });
-}
-
 std::string ProfileNetworkContextService::ComputeAcceptLanguage() const {
   // TODO:(https://crbug.com/40224802) Return only single language without
   // expanding the language list if the DisableReduceAcceptLanguage deprecation
   // trial ends.
 
-  if (profile_->IsOffTheRecord()) {
-    // In incognito mode return only the first language.
-    return ComputeAcceptLanguageFromPref(
-        language::GetFirstLanguage(pref_accept_language_.GetValue()));
-  }
   return ComputeAcceptLanguageFromPref(
       content::ReduceAcceptLanguageUtils::GetLanguagesWithMaxCount(
-          pref_accept_language_.GetValue()));
+          profile_->IsOffTheRecord() ? language::GetIncognitoLanguageList(
+                                           pref_accept_language_.GetValue())
+                                     : pref_accept_language_.GetValue()));
 }
 
 void ProfileNetworkContextService::UpdateReferrersEnabled() {
@@ -709,9 +737,9 @@ void ProfileNetworkContextService::UpdateReferrersEnabled() {
 
 network::mojom::CTPolicyPtr ProfileNetworkContextService::GetCTPolicy() {
   auto* prefs = profile_->GetPrefs();
-  const base::Value::List& ct_excluded =
+  const base::ListValue& ct_excluded =
       prefs->GetList(certificate_transparency::prefs::kCTExcludedHosts);
-  const base::Value::List& ct_excluded_spkis =
+  const base::ListValue& ct_excluded_spkis =
       prefs->GetList(certificate_transparency::prefs::kCTExcludedSPKIs);
 
   std::vector<std::string> excluded(TranslateStringArray(ct_excluded));
@@ -798,7 +826,7 @@ ProfileNetworkContextService::GetCertificatePolicy(
   // Add trust anchors with constraints outside the cert
   for (const base::Value& cert_with_constraints :
        prefs->GetList(prefs::kCACertificatesWithConstraints)) {
-    const base::Value::Dict* cert_with_constraints_dict =
+    const base::DictValue* cert_with_constraints_dict =
         cert_with_constraints.GetIfDict();
     if (!cert_with_constraints_dict) {
       continue;
@@ -806,14 +834,14 @@ ProfileNetworkContextService::GetCertificatePolicy(
 
     const std::string* cert_b64 =
         cert_with_constraints_dict->FindString("certificate");
-    const base::Value::Dict* constraints_dict =
+    const base::DictValue* constraints_dict =
         cert_with_constraints_dict->FindDict("constraints");
     if (!constraints_dict) {
       continue;
     }
-    const base::Value::List* permitted_cidrs =
+    const base::ListValue* permitted_cidrs =
         constraints_dict->FindList("permitted_cidrs");
-    const base::Value::List* permitted_dns_names =
+    const base::ListValue* permitted_dns_names =
         constraints_dict->FindList("permitted_dns_names");
 
     // Need to have a cert, and at least one set of restrictions.
@@ -1087,38 +1115,6 @@ void ProfileNetworkContextService::UpdateSSLComplianceConfig() {
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(ENABLE_REPORTING)
-base::flat_map<std::string, GURL>
-ProfileNetworkContextService::GetEnterpriseReportingEndpoints() const {
-  using FlatMap = base::flat_map<std::string, GURL>;
-  // Create the underlying container first to allow sorting to
-  // be done in a single pass.
-  FlatMap::container_type pairs;
-  const base::Value::Dict& pref_dict =
-      profile_->GetPrefs()->GetDict(prefs::kReportingEndpoints);
-  pairs.reserve(pref_dict.size());
-  // The iterator for base::Value::Dict returns a temporary value when
-  // dereferenced, so a const reference is not used below.
-  for (const auto [endpoint_name, endpoint_url] : pref_dict) {
-    GURL endpoint(endpoint_url.GetString());
-    if (endpoint.is_valid() && endpoint.SchemeIsCryptographic()) {
-      pairs.emplace_back(endpoint_name, std::move(endpoint));
-    }
-  }
-  return FlatMap(std::move(pairs));
-}
-
-void ProfileNetworkContextService::UpdateEnterpriseReportingEndpoints() {
-  base::flat_map<std::string, GURL> endpoints =
-      GetEnterpriseReportingEndpoints();
-  profile_->ForEachLoadedStoragePartition(
-      [&](content::StoragePartition* storage_partition) {
-        storage_partition->GetNetworkContext()->SetEnterpriseReportingEndpoints(
-            endpoints);
-      });
-}
-#endif
-
 // static
 network::mojom::CookieManagerParamsPtr
 ProfileNetworkContextService::CreateCookieManagerParams(
@@ -1134,7 +1130,15 @@ ProfileNetworkContextService::CreateCookieManagerParams(
   // (chrome://new-tab-page), etc.
   out->secure_origin_cookies_allowed_schemes.push_back(
       content::kChromeUIScheme);
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if !BUILDFLAG(IS_ANDROID)
+  // TODO(crbug.com/483614998): Granting Lens side panel is a temporary
+  // exception to use SameSite cookies while it migrates to a <webview>
+  // approach. This should not be done for other untrusted WebUI.
+  out->secure_origin_cookies_allowed_origins.push_back(
+      url::Origin::Create(GURL(chrome::kChromeUILensUntrustedSidePanelURL)));
+#endif
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // TODO(chlily): To be consistent with the content_settings version of
   // CookieSettings, we should probably also add kExtensionScheme to the list of
   // matching_scheme_cookies_allowed_schemes.
@@ -1168,12 +1172,6 @@ ProfileNetworkContextService::CreateCookieManagerParams(
 
   out->cookie_access_delegate_type =
       network::mojom::CookieAccessDelegateType::USE_CONTENT_SETTINGS;
-
-  out->mitigations_enabled_for_3pcd =
-      cookie_settings.MitigationsEnabledFor3pcd();
-
-  out->tracking_protection_enabled_for_3pcd = base::FeatureList::IsEnabled(
-      content_settings::features::kTrackingProtection3pcd);
 
   return out;
 }
@@ -1319,6 +1317,25 @@ ProfileNetworkContextService::CreateClientCertStore() {
 #endif
 }
 
+#if BUILDFLAG(ENTERPRISE_CACHE_ENCRYPTION)
+void ProfileNetworkContextService::SaveEncryptedCachePrimaryKey(
+    const std::vector<uint8_t>& encrypted_primary_key) {
+  if (profile_) {
+    profile_->GetPrefs()->SetString(
+        enterprise_connectors::kEncryptedCachePrimaryKey,
+        base::Base64Encode(encrypted_primary_key));
+  }
+}
+
+std::vector<uint8_t>
+ProfileNetworkContextService::GetEncryptedCachePrimaryKey() {
+  std::string encoded_encrypted_primary_key = profile_->GetPrefs()->GetString(
+      enterprise_connectors::kEncryptedCachePrimaryKey);
+  return base::Base64Decode(encoded_encrypted_primary_key).value_or({});
+}
+
+#endif  // BUILDFLAG(ENTERPRISE_CACHE_ENCRYPTION)
+
 void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
     bool in_memory,
     const base::FilePath& relative_partition_path,
@@ -1404,9 +1421,20 @@ void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
 
 #if BUILDFLAG(ENTERPRISE_CACHE_ENCRYPTION)
     if (enterprise_encryption::ShouldEncryptHttpCache(profile_->GetPrefs())) {
-      g_browser_process->system_network_context_manager()
-          ->AddCacheEncryptionProviderToNetworkContextParams(
-              network_context_params);
+      if (!cache_encryption_provider_) {
+        cache_encryption_provider_ = std::make_unique<
+            enterprise_encryption::CacheEncryptionProviderImpl>(
+            g_browser_process->os_crypt_async(), GetEncryptedCachePrimaryKey(),
+            base::BindRepeating(
+                &ProfileNetworkContextService::SaveEncryptedCachePrimaryKey,
+                weak_factory_.GetWeakPtr()));
+      }
+      mojo::PendingRemote<network::mojom::CacheEncryptionProvider>
+          cache_encryption_provider_remote =
+              cache_encryption_provider_->BindNewRemote();
+
+      network_context_params->encryption_provider =
+          std::move(cache_encryption_provider_remote);
     }
 #endif  // BUILDFLAG(ENTERPRISE_CACHE_ENCRYPTION)
 
@@ -1416,12 +1444,6 @@ void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
 #if BUILDFLAG(ENABLE_REPORTING)
     network_context_params->file_paths->reporting_and_nel_store_database_name =
         base::FilePath(chrome::kReportingAndNelStoreFilename);
-
-    if (base::FeatureList::IsEnabled(
-            net::features::kReportingApiEnableEnterpriseCookieIssues)) {
-      network_context_params->enterprise_reporting_endpoints =
-          GetEnterpriseReportingEndpoints();
-    }
 #endif  // BUILDFLAG(ENABLE_REPORTING)
 
     if (relative_partition_path.empty()) {  // This is the main partition.
@@ -1442,7 +1464,7 @@ void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
     network_context_params->file_paths->device_bound_sessions_database_name =
         base::FilePath(chrome::kDeviceBoundSessionsFilename);
   }
-  const base::Value::List& hsts_policy_bypass_list =
+  const base::ListValue& hsts_policy_bypass_list =
       profile_->GetPrefs()->GetList(prefs::kHSTSPolicyBypassList);
   for (const auto& value : hsts_policy_bypass_list) {
     const std::string* string_value = value.GetIfString();
@@ -1469,15 +1491,17 @@ void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
   network_context_params->ct_policy = GetCTPolicy();
   cert_verifier_creation_params->ct_policy = GetCTPolicy();
 
-  if (domain_reliability::ShouldCreateService()) {
+  ChromeDomainReliabilityDelegate delegate;
+  if (domain_reliability::ShouldCreateService(&delegate)) {
     network_context_params->enable_domain_reliability = true;
     network_context_params->domain_reliability_upload_reporter =
         domain_reliability::kUploadReporterString;
     network_context_params->discard_domain_reliablity_uploads =
         g_discard_domain_reliability_uploads_for_testing
             ? *g_discard_domain_reliability_uploads_for_testing
-            : !g_browser_process->local_state()->GetBoolean(
-                  metrics::prefs::kMetricsReportingEnabled);
+            : !metrics::MetricsReportingChoiceService::
+                  IsBasicMetricsReportingEnabled(
+                      g_browser_process->local_state());
   }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -1529,18 +1553,8 @@ void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
       GetCertificatePolicy(GetPartitionPath(relative_partition_path));
 #endif  // BUILDFLAG(CHROME_ROOT_STORE_CERT_MANAGEMENT_UI)
 
-#if BUILDFLAG(IS_CHROMEOS)
-  // Disable idle sockets close on memory pressure if configured by finch or
-  // about://flags.
-  if (base::FeatureList::IsEnabled(
-          chromeos::features::kDisableIdleSocketsCloseOnMemoryPressure)) {
-    network_context_params->disable_idle_sockets_close_on_memory_pressure =
-        true;
-  }
-#endif
-
   network_context_params->reset_http_cache_backend =
-      GetHttpCacheBackendResetParam(g_browser_process->local_state());
+      GetHttpCacheBackendResetParam(profile_, relative_partition_path);
 
 #if BUILDFLAG(ENTERPRISE_CACHE_ENCRYPTION)
   // Enable encrypted HTTP cache if the enterprise policy is set.
@@ -1585,6 +1599,11 @@ void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
 
   network_context_params->device_bound_sessions_enabled =
       base::FeatureList::IsEnabled(net::features::kDeviceBoundSessions);
+  // Restrict sessions on google.com and youtube.com so that we can run
+  // an experiment to understand their session's impact on Chrome's
+  // special cookie handling for these sites.
+  network_context_params->device_bound_sessions_restricted_sites =
+      signin_util::GetDeviceBoundSessionRestrictedSites();
 
 #if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
   if (base::FeatureList::IsEnabled(net::features::kDeviceBoundSessions) &&
@@ -1596,8 +1615,8 @@ void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
         receiver = uks_remote.InitWithNewPipeAndPassReceiver();
     unexportable_keys::UnexportableKeyServiceProxyImpl* uks =
         UnexportableKeyServiceFactory::
-            RecreateMojoProxyForProfileAndPurposeWithReceiver(
-                profile_,
+            RecreateMojoProxyForStoragePartitionPathAndPurposeWithReceiver(
+                profile_, relative_partition_path,
                 unexportable_keys::KeyPurpose::kDeviceBoundSessionCredentials,
                 std::move(receiver));
     if (uks) {

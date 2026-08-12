@@ -142,11 +142,11 @@ RootCompositorFrameSinkImpl::Create(
   output_surface->SetNeedsSwapSizeNotifications(
       params->send_swap_size_notifications);
 
-#if BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE_X11)
+#if BUILDFLAG(IS_LINUX) && BUILDFLAG(SUPPORTS_OZONE_X11)
   // For X11, we need notify client about swap completion after resizing, so the
   // client can use it for synchronize with X11 WM.
   output_surface->SetNeedsSwapSizeNotifications(true);
-#endif  // BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE_X11)
+#endif  // BUILDFLAG(IS_LINUX) && BUILDFLAG(SUPPORTS_OZONE_X11)
 
   // Create some sort of a BeginFrameSource, depending on the platform and
   // |params|.
@@ -178,7 +178,7 @@ RootCompositorFrameSinkImpl::Create(
             frame_sink_manager,
             std::move(params->external_begin_frame_controller),
             std::move(params->external_begin_frame_controller_client),
-            restart_id);
+            restart_id, params->wait_for_all_frame_sinks);
     external_begin_frame_source_mojo =
         static_cast<ExternalBeginFrameSourceMojo*>(
             external_begin_frame_source.get());
@@ -223,7 +223,7 @@ RootCompositorFrameSinkImpl::Create(
       external_begin_frame_source =
           std::make_unique<ExternalBeginFrameSourceMac>(
               restart_id, params->renderer_settings.display_id,
-              output_surface.get());
+              params->refresh_rate, output_surface.get());
       created_external_begin_frame_source_mac = true;
 #endif
       if (!external_begin_frame_source && !synthetic_begin_frame_source) {
@@ -240,12 +240,12 @@ RootCompositorFrameSinkImpl::Create(
   BeginFrameSource* begin_frame_source = synthetic_begin_frame_source.get();
   if (external_begin_frame_source)
     begin_frame_source = external_begin_frame_source.get();
-  DCHECK(begin_frame_source);
+  CHECK(begin_frame_source);
 
   auto task_runner = base::SingleThreadTaskRunner::GetCurrentDefault();
 
   const auto& capabilities = output_surface->capabilities();
-  DCHECK_GT(capabilities.pending_swap_params.max_pending_swaps, 0);
+  CHECK_GT(capabilities.pending_swap_params.max_pending_swaps, 0);
   auto scheduler = std::make_unique<DisplayScheduler>(
       begin_frame_source, task_runner.get(), capabilities.pending_swap_params,
       hint_session_factory, run_all_compositor_stages_before_draw);
@@ -281,7 +281,8 @@ RootCompositorFrameSinkImpl::Create(
       std::move(params->display_private), std::move(display_client),
       std::move(synthetic_begin_frame_source),
       std::move(external_begin_frame_source), std::move(display),
-      hw_support_for_multiple_refresh_rates));
+      hw_support_for_multiple_refresh_rates,
+      params->enable_video_conference_matcher));
 
   // Set up the callback for updating VSyncParameters.
 #if !BUILDFLAG(IS_APPLE)
@@ -319,6 +320,15 @@ RootCompositorFrameSinkImpl::Create(
 }
 
 RootCompositorFrameSinkImpl::~RootCompositorFrameSinkImpl() {
+#if BUILDFLAG(IS_MAC)
+  if (external_begin_frame_source()) {
+    // Reset update_vsync_params_callback_ as it should not be called in
+    // destructor.
+    external_begin_frame_source()->SetUpdateVSyncParametersCallback(
+        UpdateVSyncParametersCallback());
+  }
+#endif
+
   support_->frame_sink_manager()->UnregisterBeginFrameSource(
       begin_frame_source());
 }
@@ -328,7 +338,7 @@ void RootCompositorFrameSinkImpl::DidEvictSurface(const SurfaceId& surface_id) {
   if (!current_surface_id.is_valid()) {
     return;
   }
-  DCHECK_EQ(surface_id.frame_sink_id(), current_surface_id.frame_sink_id());
+  CHECK_EQ(surface_id.frame_sink_id(), current_surface_id.frame_sink_id());
 
   // This matches CompositorFrameSinkSupport's eviction logic, which will
   // evict `surface_id` or matching but older ones. Avoid overwriting the
@@ -347,13 +357,6 @@ const SurfaceId& RootCompositorFrameSinkImpl::CurrentSurfaceId() const {
 void RootCompositorFrameSinkImpl::SetDisplayVisible(bool visible) {
   display_->SetVisible(visible);
 }
-
-#if BUILDFLAG(IS_WIN)
-void RootCompositorFrameSinkImpl::DisableSwapUntilResize(
-    DisableSwapUntilResizeCallback callback) {
-  display_->DisableSwapUntilResize(std::move(callback));
-}
-#endif
 
 void RootCompositorFrameSinkImpl::Resize(const gfx::Size& size) {
   if (!display_->resize_based_on_root_surface())
@@ -439,7 +442,8 @@ RootCompositorFrameSinkImpl::GetSupportedFrameIntervals() {
         display_frame_interval_);
   }
 
-  return {display_frame_interval_, display_frame_interval_ * 2};
+  return BeginFrameSource::GetDefaultSupportedFrameIntervals(
+      display_frame_interval_);
 }
 
 void RootCompositorFrameSinkImpl::UpdateVSyncParameters() {
@@ -465,21 +469,36 @@ void RootCompositorFrameSinkImpl::ForceImmediateDrawAndSwapIfPossible() {
   display_->ForceImmediateDrawAndSwapIfPossible();
 }
 
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_MAC)
 void RootCompositorFrameSinkImpl::UpdateRefreshRate(float refresh_rate) {
   if (external_begin_frame_source_)
     external_begin_frame_source_->UpdateRefreshRate(refresh_rate);
 }
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_MAC)
 
+#if BUILDFLAG(IS_ANDROID)
 void RootCompositorFrameSinkImpl::SetAdaptiveRefreshRateInfo(
-    bool has_support,
-    float suggested_high,
-    float device_scale_factor) {
+    mojom::AdaptiveRefreshRateInfoPtr info) {
   supports_adaptive_refresh_rate_ =
-      has_support && base::FeatureList::IsEnabled(
-                         features::kUseFrameIntervalDeciderAdaptiveFrameRate);
-  suggested_frame_interval_high_ = base::Hertz(suggested_high);
-  device_scale_factor_ = device_scale_factor;
+      info->has_support &&
+      base::FeatureList::IsEnabled(
+          features::kUseFrameIntervalDeciderAdaptiveFrameRate);
+  suggested_frame_interval_high_ = base::Hertz(info->suggested_high);
+  device_scale_factor_ = info->device_scale_factor;
+  adaptive_refresh_rate_velocity_points_.clear();
+  if (!info->velocity_mapping.empty()) {
+    adaptive_refresh_rate_velocity_points_.reserve(
+        info->velocity_mapping.size());
+    for (auto& point : info->velocity_mapping) {
+      adaptive_refresh_rate_velocity_points_.push_back(*point);
+    }
+  } else {
+    // The hard-coded values are copied from AOSP
+    // View.convertVelocityToFrameRate.
+    adaptive_refresh_rate_velocity_points_.emplace_back(120, 300);
+    adaptive_refresh_rate_velocity_points_.emplace_back(80, 125);
+    adaptive_refresh_rate_velocity_points_.emplace_back(60, 0);
+  }
   UpdateFrameIntervalDeciderSettings();
 }
 
@@ -508,6 +527,11 @@ void RootCompositorFrameSinkImpl::SetSupportedRefreshRates(
   for (float rate : supported_refresh_rates) {
     const base::TimeDelta interval = base::Hertz(rate);
     exact_supported_refresh_rates_[interval] = rate;
+  }
+
+  if (!exact_supported_refresh_rates_.empty() && display_) {
+    display_->NotifyMinSupportedVsyncInterval(
+        exact_supported_refresh_rates_.begin()->first);
   }
 
   UpdateFrameIntervalDeciderSettings();
@@ -607,7 +631,8 @@ RootCompositorFrameSinkImpl::RootCompositorFrameSinkImpl(
     std::unique_ptr<SyntheticBeginFrameSource> synthetic_begin_frame_source,
     std::unique_ptr<ExternalBeginFrameSource> external_begin_frame_source,
     std::unique_ptr<Display> display,
-    bool hw_support_for_multiple_refresh_rates)
+    bool hw_support_for_multiple_refresh_rates,
+    bool enable_video_conference_matcher)
     : compositor_frame_sink_client_(std::move(frame_sink_client)),
       compositor_frame_sink_receiver_(this, std::move(frame_sink_receiver)),
       display_client_(std::move(display_client)),
@@ -619,9 +644,10 @@ RootCompositorFrameSinkImpl::RootCompositorFrameSinkImpl(
           /*is_root=*/true)),
       synthetic_begin_frame_source_(std::move(synthetic_begin_frame_source)),
       external_begin_frame_source_(std::move(external_begin_frame_source)),
-      display_(std::move(display)) {
-  DCHECK(display_);
-  DCHECK(begin_frame_source());
+      display_(std::move(display)),
+      enable_video_conference_matcher_(enable_video_conference_matcher) {
+  CHECK(display_);
+  CHECK(begin_frame_source());
   frame_sink_manager->RegisterBeginFrameSource(begin_frame_source(),
                                                support_->frame_sink_id());
   display_->Initialize(this, support_->frame_sink_manager()->surface_manager());
@@ -631,7 +657,7 @@ RootCompositorFrameSinkImpl::RootCompositorFrameSinkImpl(
   // client wants to refresh the content. It works two ways - a client setting a
   // preferred refresh rate and the system throttling the refresh rate in case
   // of battery saving or any other events.
-  DCHECK(hw_support_for_multiple_refresh_rates);
+  CHECK(hw_support_for_multiple_refresh_rates);
   use_preferred_interval_ = true;
 #else
   if (!hw_support_for_multiple_refresh_rates) {
@@ -664,8 +690,10 @@ void RootCompositorFrameSinkImpl::UpdateFrameIntervalDeciderSettings() {
 #if BUILDFLAG(IS_ANDROID)
   if (supports_adaptive_refresh_rate_) {
     matchers.push_back(std::make_unique<UserInputBoostMatcher>());
-    matchers.push_back(
-        std::make_unique<SlowScrollThrottleMatcher>(device_scale_factor_));
+    if (!adaptive_refresh_rate_velocity_points_.empty()) {
+      matchers.push_back(std::make_unique<SlowScrollThrottleMatcher>(
+          device_scale_factor_, adaptive_refresh_rate_velocity_points_));
+    }
   } else {
     matchers.push_back(std::make_unique<InputBoostMatcher>());
   }
@@ -687,9 +715,11 @@ void RootCompositorFrameSinkImpl::UpdateFrameIntervalDeciderSettings() {
     matchers.push_back(std::make_unique<OnlyVideoMatcher>());
   }
 
-  // Only desktop platforms get VideoConferenceMatcher.
-  matchers.push_back(std::make_unique<VideoConferenceMatcher>());
 #endif
+
+  if (enable_video_conference_matcher_) {
+    matchers.push_back(std::make_unique<VideoConferenceMatcher>());
+  }
 
   FrameIntervalDecider::Settings settings = decider->settings();
   if (interval_decider_use_fixed_intervals_) {
@@ -809,7 +839,7 @@ void RootCompositorFrameSinkImpl::DisplayOutputSurfaceLost() {
 void RootCompositorFrameSinkImpl::DisplayWillDrawAndSwap(
     bool will_draw_and_swap,
     AggregatedRenderPassList* render_passes) {
-  DCHECK(support_->GetHitTestAggregator());
+  CHECK(support_->GetHitTestAggregator());
   support_->GetHitTestAggregator()->Aggregate(display_->CurrentSurfaceId());
 
   if (external_begin_frame_source_ &&
@@ -878,16 +908,16 @@ RootCompositorFrameSinkImpl::StopOverdrawTracking() {
 }
 
 void RootCompositorFrameSinkImpl::DisplayDidReceiveCALayerParams(
-    const gfx::CALayerParams& ca_layer_params) {
+    gfx::CALayerParams ca_layer_params) {
 #if BUILDFLAG(IS_APPLE)
   // If |ca_layer_params| should have content only when there exists a client
   // to send it to.
-  DCHECK(ca_layer_params.is_empty || display_client_);
+  CHECK(ca_layer_params.IsEmpty() || display_client_);
   if (last_ca_layer_params_ == ca_layer_params &&
       base::TimeTicks::Now() < next_forced_ca_layer_params_update_time_) {
     return;
   }
-  last_ca_layer_params_ = ca_layer_params;
+  last_ca_layer_params_ = ca_layer_params.CloneWithoutFence();
   // OnDisplayReceivedCALayerParams() is ultimately responsible for triggering
   // updates to vsync. VSync may change dynamically. To ensure the value is
   // updated correctly, OnDisplayReceivedCALayerParams() is periodically called,
@@ -895,8 +925,10 @@ void RootCompositorFrameSinkImpl::DisplayDidReceiveCALayerParams(
   // DisplayLinkMac, which is responsible for querying for vsync updates.
   next_forced_ca_layer_params_update_time_ =
       base::TimeTicks::Now() + base::Seconds(10);
-  if (display_client_)
-    display_client_->OnDisplayReceivedCALayerParams(ca_layer_params);
+  if (display_client_) {
+    display_client_->OnDisplayReceivedCALayerParams(std::move(ca_layer_params));
+  }
+
 #else
   NOTREACHED();
 #endif
@@ -908,13 +940,13 @@ void RootCompositorFrameSinkImpl::DisplayDidCompleteSwapWithSize(
   if (display_client_ && enable_swap_completion_callback_) {
     display_client_->DidCompleteSwapWithSize(pixel_size);
   }
-#elif BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE_X11)
+#elif BUILDFLAG(IS_LINUX) && BUILDFLAG(SUPPORTS_OZONE_X11)
   if (display_client_ && pixel_size != last_swap_pixel_size_) {
     last_swap_pixel_size_ = pixel_size;
     display_client_->DidCompleteSwapWithNewSize(last_swap_pixel_size_);
   }
 #else  // !BUILDFLAG(IS_ANDROID) && !(BUILDFLAG(IS_LINUX) &&
-       // BUILDFLAG(IS_OZONE_X11))
+       // BUILDFLAG(SUPPORTS_OZONE_X11))
   NOTREACHED();
 #endif
 }

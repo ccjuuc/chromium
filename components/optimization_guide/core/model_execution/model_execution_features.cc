@@ -6,7 +6,6 @@
 
 #include <optional>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/notreached.h"
@@ -18,14 +17,15 @@ namespace optimization_guide::features::internal {
 
 // Settings visibility features.
 BASE_FEATURE(kComposeSettingsVisibility, base::FEATURE_DISABLED_BY_DEFAULT);
-BASE_FEATURE(kTabOrganizationSettingsVisibility,
-             base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kWallpaperSearchSettingsVisibility,
              base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kHistorySearchSettingsVisibility,
              base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kFindsSettingsVisibility, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kPasswordChangeSubmission,
              "PasswordChangeSubmissionSettingsVisibility",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kContextualCueingSettingsVisibility,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 const base::FeatureParam<std::string> kPerformanceClassListForHistorySearch(
@@ -38,11 +38,13 @@ const base::FeatureParam<std::string> kPerformanceClassListForHistorySearch(
 // Note: ComposeGraduated is enabled by default because the feature is
 // country-restricted at runtime.
 BASE_FEATURE(kComposeGraduated, base::FEATURE_ENABLED_BY_DEFAULT);
-BASE_FEATURE(kTabOrganizationGraduated, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kWallpaperSearchGraduated, base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kFindsGraduated, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kModelExecutionCapabilityDisable,
              base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPrivateExecuteRequest, base::FEATURE_ENABLED_BY_DEFAULT);
 
 bool IsGraduatedFeature(UserVisibleFeatureKey feature) {
   bool is_graduated = false;
@@ -50,9 +52,6 @@ bool IsGraduatedFeature(UserVisibleFeatureKey feature) {
     // Actual features.
     case UserVisibleFeatureKey::kCompose:
       is_graduated = base::FeatureList::IsEnabled(kComposeGraduated);
-      break;
-    case UserVisibleFeatureKey::kTabOrganization:
-      is_graduated = base::FeatureList::IsEnabled(kTabOrganizationGraduated);
       break;
     case UserVisibleFeatureKey::kWallpaperSearch:
       is_graduated = base::FeatureList::IsEnabled(kWallpaperSearchGraduated);
@@ -63,6 +62,13 @@ bool IsGraduatedFeature(UserVisibleFeatureKey feature) {
       break;
     case UserVisibleFeatureKey::kPasswordChangeSubmission:
       break;
+    case UserVisibleFeatureKey::kFinds:
+      is_graduated = base::FeatureList::IsEnabled(kFindsGraduated);
+      break;
+    case UserVisibleFeatureKey::kContextualCueing:
+      // Contextual cueing is currently planned to always be opt-out.
+      is_graduated = false;
+      break;
   }
   return is_graduated;
 }
@@ -72,14 +78,16 @@ const base::Feature* GetFeatureToUseToCheckSettingsVisibility(
   switch (feature) {
     case UserVisibleFeatureKey::kCompose:
       return &kComposeSettingsVisibility;
-    case UserVisibleFeatureKey::kTabOrganization:
-      return &kTabOrganizationSettingsVisibility;
     case UserVisibleFeatureKey::kWallpaperSearch:
       return &kWallpaperSearchSettingsVisibility;
     case UserVisibleFeatureKey::kHistorySearch:
       return &kHistorySearchSettingsVisibility;
     case UserVisibleFeatureKey::kPasswordChangeSubmission:
       return &kPasswordChangeSubmission;
+    case UserVisibleFeatureKey::kFinds:
+      return &kFindsSettingsVisibility;
+    case UserVisibleFeatureKey::kContextualCueing:
+      return &kContextualCueingSettingsVisibility;
   }
 }
 

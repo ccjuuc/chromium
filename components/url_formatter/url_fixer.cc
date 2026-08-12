@@ -273,37 +273,6 @@ inline void FixupPassword(const std::string& text,
   url->append(text, part.begin, part.len);
 }
 
-void FixupHost(const std::string& text,
-               const url::Component& part,
-               bool has_scheme,
-               const std::string& desired_tld,
-               std::string* url) {
-  if (!part.is_valid()) {
-    return;
-  }
-
-  // Make domain valid.
-  // Strip all leading dots and all but one trailing dot, unless the user only
-  // typed dots, in which case their input is totally invalid and we should just
-  // leave it unchanged.
-  std::string domain(text, part.begin, part.len);
-  const size_t first_nondot(domain.find_first_not_of('.'));
-  if (first_nondot != std::string::npos) {
-    domain.erase(0, first_nondot);
-    size_t last_nondot(domain.find_last_not_of('.'));
-    DCHECK(last_nondot != std::string::npos);
-    last_nondot += 2;  // Point at second period in ending string
-    if (last_nondot < domain.length()) {
-      domain.erase(last_nondot);
-    }
-  }
-
-  // Add any user-specified TLD, if applicable.
-  AddDesiredTLD(desired_tld, &domain);
-
-  url->append(domain);
-}
-
 void FixupPort(const std::string& text,
                const url::Component& part,
                std::string* url) {
@@ -366,8 +335,8 @@ bool HasPort(const std::string& original_text,
                                      url::ParserMode::kSpecialURL)) {
     ++port_end;
   }
-  std::string_view port_piece(UNSAFE_TODO(original_text.data() + port_start),
-                              port_end - port_start);
+  std::string_view port_piece =
+      std::string_view(original_text).substr(port_start, port_end - port_start);
   if (port_piece.empty()) {
     return false;
   }
@@ -400,8 +369,7 @@ bool GetValidScheme(const std::string& text,
   canon_scheme->clear();
 
   // Locate everything up to (but not including) the first ':'
-  if (!url::ExtractScheme(text.data(), static_cast<int>(text.length()),
-                          scheme_component)) {
+  if (!url::ExtractScheme(text, scheme_component)) {
     return false;
   }
 
@@ -454,9 +422,9 @@ std::string SegmentURLInternal(std::string* text, url::Parsed* parts) {
 
   std::string scheme;
 #if BUILDFLAG(IS_WIN)
-  int trimmed_length = static_cast<int>(trimmed.length());
-  if (url::DoesBeginWindowsDriveSpec(trimmed.data(), 0, trimmed_length) ||
-      url::DoesBeginUNCPath(trimmed.data(), 0, trimmed_length, true)) {
+  std::string_view trimmed_view(trimmed);
+  if (url::DoesBeginWindowsDriveSpec(trimmed_view, 0) ||
+      url::DoesBeginUncPath(trimmed_view, 0, true)) {
     scheme = url::kFileScheme;
   }
 #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
@@ -554,12 +522,36 @@ std::string SegmentURLInternal(std::string* text, url::Parsed* parts) {
 
 }  // namespace
 
+void FixupHost(std::string domain,
+               const std::string& desired_tld,
+               std::string* url) {
+  // Make domain valid.
+  // Strip all leading dots and all but one trailing dot, unless the user only
+  // typed dots, in which case their input is totally invalid and we should just
+  // leave it unchanged.
+  const size_t first_nondot(domain.find_first_not_of('.'));
+  if (first_nondot != std::string::npos) {
+    domain.erase(0, first_nondot);
+    size_t last_nondot(domain.find_last_not_of('.'));
+    DCHECK(last_nondot != std::string::npos);
+    last_nondot += 2;  // Point at second period in ending string
+    if (last_nondot < domain.length()) {
+      domain.erase(last_nondot);
+    }
+  }
+
+  // Add any user-specified TLD, if applicable.
+  AddDesiredTLD(desired_tld, &domain);
+
+  url->append(domain);
+}
+
 std::string SegmentURL(std::string_view text, url::Parsed* parts) {
   std::string mutable_text(text);
   return SegmentURLInternal(&mutable_text, parts);
 }
 
-std::u16string SegmentURL(const std::u16string& text, url::Parsed* parts) {
+std::u16string SegmentURL(std::u16string_view text, url::Parsed* parts) {
   std::string text_utf8 = base::UTF16ToUTF8(text);
   url::Parsed parts_utf8;
   std::string scheme_utf8 = SegmentURL(text_utf8, &parts_utf8);
@@ -638,7 +630,10 @@ GURL FixupURLInternal(const std::string& text,
       url.append("@");
     }
 
-    FixupHost(trimmed, parts.host, parts.scheme.is_valid(), desired_tld, &url);
+    if (parts.host.is_valid()) {
+      FixupHost(trimmed.substr(parts.host.begin, parts.host.len),
+                 desired_tld, &url);
+    }
     if (chrome_url && !parts.host.is_valid()) {
       url.append(kChromeUIDefaultHost);
     }

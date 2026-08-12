@@ -48,21 +48,26 @@ constexpr gin::V8SnapshotFileType kSnapshotType =
 class BlinkPlatformForTesting : public blink::Platform {
  public:
   BlinkPlatformForTesting() {
-#if BUILDFLAG(ENABLE_PDF_INK2)
     chrome_pdf::SetPdfTestTaskEnvironment(&task_environment_);
-#endif  // BUILDFLAG(ENABLE_PDF_INK2)
   }
   BlinkPlatformForTesting(const BlinkPlatformForTesting&) = delete;
   BlinkPlatformForTesting& operator=(const BlinkPlatformForTesting&) = delete;
   ~BlinkPlatformForTesting() override {
     main_thread_scheduler_->Shutdown();
-#if BUILDFLAG(ENABLE_PDF_INK2)
     chrome_pdf::SetPdfTestTaskEnvironment(nullptr);
-#endif  // BUILDFLAG(ENABLE_PDF_INK2)
   }
 
   blink::scheduler::WebThreadScheduler* GetMainThreadScheduler() {
     return main_thread_scheduler_.get();
+  }
+
+  // Required for binders to work, for testing, run on a single thread.
+  scoped_refptr<base::SequencedTaskRunner> MediaThreadTaskRunner() override {
+    return base::SequencedTaskRunner::GetCurrentDefault();
+  }
+
+  scoped_refptr<base::SingleThreadTaskRunner> GetIOTaskRunner() const override {
+    return base::SingleThreadTaskRunner::GetCurrentDefault();
   }
 
  private:

@@ -155,21 +155,23 @@ GURL ComposeboxOmniboxClient::GetNavigationEntryURL() const {
 
 metrics::OmniboxEventProto::PageClassification
 ComposeboxOmniboxClient::GetPageClassification(bool is_prefetch) const {
-  BOOL is_in_ai_mode =
-      ([delegate_ composeboxMode] == ComposeboxMode::kAIM) ||
-      ([delegate_ composeboxMode] == ComposeboxMode::kImageGeneration);
+  BOOL is_in_regular_search =
+      [delegate_ composeboxMode] == ComposeboxMode::kRegularSearch;
 
-  if (is_in_ai_mode) {
-    return location_bar_->GetLocationBarModel()
-        ->GetOmniboxComposeboxPageClassification();
+  if (is_in_regular_search) {
+    return location_bar_->GetLocationBarModel()->GetPageClassification(
+        is_prefetch);
   }
 
-  return location_bar_->GetLocationBarModel()->GetPageClassification(
-      is_prefetch);
+  return location_bar_->GetLocationBarModel()
+      ->GetOmniboxComposeboxPageClassification();
 }
 
 std::optional<lens::proto::LensOverlaySuggestInputs>
 ComposeboxOmniboxClient::GetLensOverlaySuggestInputs() const {
+  if (!delegate_) {
+    return std::nullopt;
+  }
   return [delegate_ suggestInputs];
 }
 
@@ -350,10 +352,15 @@ void ComposeboxOmniboxClient::OnAutocompleteAccept(
                      isSearchType:AutocompleteMatch::IsSearchType(match.type)];
 }
 
-base::WeakPtr<OmniboxClient> ComposeboxOmniboxClient::AsWeakPtr() {
+base::WeakPtr<OmniboxClientIOS> ComposeboxOmniboxClient::AsWeakPtr() {
   return weak_factory_.GetWeakPtr();
 }
 
-omnibox::ChromeAimToolsAndModels ComposeboxOmniboxClient::AimToolMode() const {
-  return [delegate_ composeboxToolMode];
+omnibox::InputState ComposeboxOmniboxClient::GetInputState() const {
+  std::optional<contextual_search::InputState> state = [delegate_ inputState];
+  return state.value_or(omnibox::InputState());
+}
+
+bool ComposeboxOmniboxClient::ShouldSkipZeroSuggestRequest() const {
+  return [delegate_ awaitingAttachmentSignals];
 }

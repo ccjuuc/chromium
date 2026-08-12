@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/extensions/cws_info_service.h"
+#include "extensions/browser/cws_info_service.h"
 
 #include "base/command_line.h"
 #include "base/test/bind.h"
@@ -10,13 +10,13 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/extensions/chrome_extension_registrar_delegate.h"
 #include "chrome/browser/extensions/cws_info_service_factory.h"
-#include "chrome/browser/extensions/cws_item_service.pb.h"
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/test/browser_task_environment.h"
+#include "extensions/browser/cws_item_service.pb.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
@@ -30,6 +30,10 @@
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(IS_MAC)
+#include "base/mac/mac_util.h"
+#endif
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -135,10 +139,15 @@ CWSInfoServiceTest::CWSInfoServiceTest()
   extension_registry_ = ExtensionRegistry::Get(profile_.get());
 
   // Create CWSInfoService instance.
-  cws_info_service_ = CWSInfoService::Get(profile_.get());
+  cws_info_service_ = CWSInfoServiceFactory::GetForProfile(profile_.get());
 
   // Skip official Google API key check for testing.
   cws_info_service_->SetSkipApiCheckForTesting(true);
+
+  // Sets the SharedURLLoaderFactory, as CWSInfoService relies on a browser
+  // context that does not provide its own GetURLLoaderFactory() override.
+  cws_info_service_->SetSharedURLLoaderFactoryForTesting(
+      test_url_loader_factory_.GetSafeWeakWrapper());
 
   extension_registrar_delegate_ =
       std::make_unique<ChromeExtensionRegistrarDelegate>(profile_.get());
@@ -231,6 +240,14 @@ TEST_F(CWSInfoServiceTest, IgnoresNonCWSExtensions) {
 }
 
 TEST_F(CWSInfoServiceTest, HandlesNetworkErrorAndBadServerResponse) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
+
   base::HistogramTester histogram_tester;
   scoped_refptr<const Extension> test1 =
       AddExtension("test1", /* updates_from_cws= */ true);
@@ -375,6 +392,13 @@ TEST_F(CWSInfoServiceTest, HandlesMultipleRequestsPerInfoCheck) {
 }
 
 TEST_F(CWSInfoServiceTest, SchedulesStartupAndPeriodicInfoChecks) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
   // Add an extension to cause queries to CWS.
   scoped_refptr<const Extension> test1 =
       AddExtension("test1", /*updates_from_cws=*/true);
@@ -434,6 +458,13 @@ TEST_F(CWSInfoServiceTest, SchedulesStartupAndPeriodicInfoChecks) {
 // If there are no new extensions installed, CWS Info is only
 // requested after a fetch interval has elapsed.
 TEST_F(CWSInfoServiceTest, UpdatesExistingInfoAtUpdateIntervals) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
   // Add an extension to cause queries to CWS.
   scoped_refptr<const Extension> test1 =
       AddExtension("test1", /*updates_from_cws=*/true);

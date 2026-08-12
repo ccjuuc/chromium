@@ -7,11 +7,18 @@
 #include <memory>
 
 #include "base/functional/bind.h"
+#include "base/memory/singleton.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/default_browser/default_browser_controller.h"
+#include "chrome/browser/default_browser/default_browser_manager.h"
+#include "chrome/browser/ui/startup/default_browser_prompt/default_browser_bubble_dialog_manager.h"
 #include "chrome/browser/ui/startup/default_browser_prompt/default_browser_infobar_manager.h"
+#include "chrome/browser/ui/startup/default_browser_prompt/default_browser_modal_dialog_manager.h"
+#include "chrome/browser/ui/startup/default_browser_prompt/default_browser_surface_manager.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 
@@ -23,21 +30,46 @@
 
 namespace {
 
+using default_browser::DefaultBrowserManager;
+using default_browser::DefaultBrowserPromptSurface;
+
 bool ShouldShowPrompts() {
   PrefService* local_state = g_browser_process->local_state();
 
-  const int declined_count =
-      local_state->GetInteger(prefs::kDefaultBrowserDeclinedCount);
-  const base::Time last_declined_time =
-      local_state->GetTime(prefs::kDefaultBrowserLastDeclinedTime);
+  int declined_count =
+      local_state->GetInteger(prefs::kDefaultBrowserInfobarDeclinedCount);
+  base::Time last_declined_time =
+      local_state->GetTime(prefs::kDefaultBrowserInfobarLastDeclinedTime);
+
   constexpr int kMaxPromptCount = 5;
   constexpr int kRepromptDurationDays = 21;
 
-  // A negative value for the max prompt count indicates that the prompt
-  // should be shown indefinitely. Otherwise, don't show the prompt if
-  // declined count equals or exceeds the max prompt count. A max prompt count
-  // of zero should mean that the prompt is never shown.
-  if (declined_count >= kMaxPromptCount) {
+  int max_prompt_count = kMaxPromptCount;
+  int reprompt_duration_days = kRepromptDurationDays;
+
+  if (default_browser::IsDefaultBrowserPromptSurfacesEnabled()) {
+    declined_count =
+        local_state->GetInteger(prefs::kDefaultBrowserDeclinedCount);
+    last_declined_time =
+        local_state->GetTime(prefs::kDefaultBrowserLastDeclinedTime);
+
+    constexpr int kFrameworkMaxPromptCount = 5;
+    constexpr int kFrameworkRepromptDurationDays = 14;
+
+    max_prompt_count = kFrameworkMaxPromptCount;
+    reprompt_duration_days = kFrameworkRepromptDurationDays;
+  }
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+  if (base::FeatureList::IsEnabled(features::kSeparateDefaultAndPinPrompt)) {
+    max_prompt_count =
+        features::kSeparateDefaultAndPinPromptDefaultMaxCount.Get();
+    reprompt_duration_days =
+        features::kSeparateDefaultAndPinPromptDefaultCooldownDays.Get();
+  }
+#endif
+
+  if (declined_count >= max_prompt_count) {
     return false;
   }
 
@@ -48,8 +80,41 @@ bool ShouldShowPrompts() {
 
   // Show if it has been long enough since the last declined time
   return (base::Time::Now() - last_declined_time) >
-         base::Days(kRepromptDurationDays);
+         base::Days(reprompt_duration_days);
 }
+
+DefaultBrowserPromptSurface GetPromptSurface() {
+  constexpr int kExperimentSurfaceMaxDeclines = 3;
+
+  PrefService* local_state = g_browser_process->local_state();
+  const int decline_count =
+      local_state->GetInteger(prefs::kDefaultBrowserDeclinedCount);
+
+  if (decline_count >= kExperimentSurfaceMaxDeclines) {
+    return DefaultBrowserPromptSurface::kInfobar;
+  }
+  return default_browser::GetDefaultBrowserPromptSurface();
+}
+
+#if BUILDFLAG(IS_WIN)
+browser_util::PinAppToTaskbarChannel GetPinToTaskbarChannel(
+    DefaultBrowserPromptSurface prompt_surface) {
+  switch (prompt_surface) {
+    case DefaultBrowserPromptSurface::kInfobar:
+      return browser_util::PinAppToTaskbarChannel::kDefaultBrowserInfoBar;
+    case DefaultBrowserPromptSurface::kBubbleDialog:
+      return browser_util::PinAppToTaskbarChannel::kDefaultBrowserBubbleDialog;
+    case DefaultBrowserPromptSurface::kModalDialogWithSettingsIllustration:
+      return browser_util::PinAppToTaskbarChannel::
+          kDefaultBrowserModalDialogWithSettingsImage;
+    case DefaultBrowserPromptSurface::kModalDialogWithoutSettingsIllustration:
+      return browser_util::PinAppToTaskbarChannel::
+          kDefaultBrowserModalDialogWithoutSettingsImage;
+    default:
+      NOTREACHED();
+  }
+}
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace
 
@@ -58,8 +123,7 @@ DefaultBrowserPromptManager* DefaultBrowserPromptManager::GetInstance() {
   return base::Singleton<DefaultBrowserPromptManager>::get();
 }
 
-DefaultBrowserPromptManager::DefaultBrowserPromptManager()
-    : infobar_manager_(std::make_unique<DefaultBrowserInfoBarManager>()) {}
+DefaultBrowserPromptManager::DefaultBrowserPromptManager() = default;
 
 DefaultBrowserPromptManager::~DefaultBrowserPromptManager() = default;
 
@@ -71,30 +135,67 @@ bool DefaultBrowserPromptManager::MaybeShowPrompt() {
   }
 
 #if BUILDFLAG(IS_WIN)
+  // If the experiment to separate the default browser prompt and the pin to
+  // taskbar prompt is enabled, do not offer to pin to taskbar.
+  if (base::FeatureList::IsEnabled(features::kSeparateDefaultAndPinPrompt)) {
+    ShowPrompts(/*can_pin_to_taskbar=*/false);
+    return true;
+  }
+
   // On Windows, before showing the info bar, determine whether or not to
   // offer to pin to taskbar, and store that result in `this`.
   // base::Unretained is safe because DefaultBrowserInfobarManager is owned by
   // global singleton - DefaultBrowserPromptManager.
   browser_util::ShouldOfferToPin(
       ShellUtil::GetBrowserModelId(InstallUtil::IsPerUserInstall()),
-      browser_util::PinAppToTaskbarChannel::kDefaultBrowserInfoBar,
+      GetPinToTaskbarChannel(GetPromptSurface()),
       base::BindOnce(&DefaultBrowserPromptManager::OnCanPinToTaskbarResult,
                      base::Unretained(this)));
   return true;
 #else
-  infobar_manager_->ShowInfoBars(/*can_pin_to_taskbar=*/false);
+  ShowPrompts(/*can_pin_to_taskbar=*/false);
   return true;
 #endif  // BUILDFLAG(IS_WIN)
 }
 
 void DefaultBrowserPromptManager::OnCanPinToTaskbarResult(
     bool should_offer_to_pin) {
-  infobar_manager_->ShowInfoBars(/*can_pin_to_taskbar=*/should_offer_to_pin);
+  ShowPrompts(/*can_pin_to_taskbar=*/should_offer_to_pin);
+}
+
+void DefaultBrowserPromptManager::ShowPrompts(bool can_pin_to_taskbar) {
+  DefaultBrowserPromptSurface prompt_surface = GetPromptSurface();
+
+  switch (prompt_surface) {
+    case DefaultBrowserPromptSurface::kInfobar:
+      prompt_surface_manager_ =
+          std::make_unique<DefaultBrowserInfoBarManager>();
+      break;
+    case DefaultBrowserPromptSurface::kBubbleDialog:
+      prompt_surface_manager_ =
+          std::make_unique<DefaultBrowserBubbleDialogManager>();
+      break;
+    case DefaultBrowserPromptSurface::kModalDialogWithSettingsIllustration:
+      prompt_surface_manager_ =
+          std::make_unique<default_browser::DefaultBrowserModalDialogManager>(
+              /*use_settings_illustration=*/true);
+      break;
+    case DefaultBrowserPromptSurface::kModalDialogWithoutSettingsIllustration:
+      prompt_surface_manager_ =
+          std::make_unique<default_browser::DefaultBrowserModalDialogManager>(
+              /*use_settings_illustration=*/false);
+      break;
+  }
+  CHECK(prompt_surface_manager_);
+
+  prompt_surface_manager_->Show(can_pin_to_taskbar);
 }
 
 void DefaultBrowserPromptManager::CloseAllPrompts(CloseReason close_reason) {
-  infobar_manager_->CloseAllInfoBars();
-
+  if (prompt_surface_manager_) {
+    prompt_surface_manager_->CloseAll();
+    prompt_surface_manager_.reset();
+  }
   if (close_reason == CloseReason::kAccept) {
     SetAppMenuItemVisibility(false);
   }

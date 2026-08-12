@@ -99,7 +99,10 @@ class OutsideSettingsCSPDelegate final
   // SecurityContext of either parent context or WorkerOrWorkletGlobalScope.
   void SetSandboxFlags(network::mojom::blink::WebSandboxFlags) override {}
   void SetRequireTrustedTypes() override {}
-  void AddInsecureRequestPolicy(mojom::blink::InsecureRequestPolicy) override {}
+  void ApplyInsecureRequestPolicy(
+      mojom::blink::InsecureRequestPolicy) override {}
+  void NotifyBrowserOfInsecureRequestPolicy(
+      mojom::blink::InsecureRequestPolicy) override {}
   void DisableEval(const String& error_message) override {}
   void SetWasmEvalErrorMessage(const String& error_message) override {}
 
@@ -225,6 +228,7 @@ WorkerOrWorkletGlobalScope::WorkerOrWorkletGlobalScope(
     bool is_worker_loaded_from_data_url,
     bool is_default_world_of_isolate)
     : ExecutionContext(isolate, agent),
+      ActiveScriptWrappable<WorkerOrWorkletGlobalScope>({}),
       is_creator_secure_context_(is_creator_secure_context),
       name_(name),
       parent_devtools_token_(parent_devtools_token),
@@ -269,6 +273,10 @@ v8::Local<v8::Object> WorkerOrWorkletGlobalScope::AssociateWithWrapper(
                 "as the wrapper.";
 }
 
+bool WorkerOrWorkletGlobalScope::HasPendingActivity() const {
+  return !ExecutionContext::IsContextDestroyed();
+}
+
 void WorkerOrWorkletGlobalScope::CountUse(WebFeature feature) {
   DCHECK(IsContextThread());
 
@@ -276,8 +284,9 @@ void WorkerOrWorkletGlobalScope::CountUse(WebFeature feature) {
   // the assumption is broken. Don't count features while the context is
   // destroyed.
   // TODO(https://crbug.com/1298450): Fix the lifetime of WorkerReportingProxy.
-  if (IsContextDestroyed())
+  if (ExecutionContext::IsContextDestroyed()) {
     return;
+  }
 
   DCHECK_NE(feature, WebFeature::kPageVisits);
   DCHECK_LE(feature, WebFeature::kMaxValue);
@@ -332,7 +341,7 @@ void WorkerOrWorkletGlobalScope::CountWebDXFeature(WebDXFeature feature) {
   // the assumption is broken. Don't count features while the context is
   // destroyed.
   // TODO(https://crbug.com/40058806): Fix the lifetime of WorkerReportingProxy.
-  if (IsContextDestroyed()) {
+  if (ExecutionContext::IsContextDestroyed()) {
     return;
   }
 

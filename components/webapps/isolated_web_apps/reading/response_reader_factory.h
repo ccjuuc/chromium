@@ -9,7 +9,7 @@
 #include <optional>
 #include <string>
 
-#include "base/containers/enum_set.h"
+#include "base/component_export.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
@@ -35,7 +35,7 @@ namespace web_app {
 // guaranteed to have previously read a valid integrity block and metadata, as
 // well as to have verified that the signatures are valid (unless
 // `skip_signature_verification` is set).
-class IsolatedWebAppResponseReaderFactory {
+class COMPONENT_EXPORT(ISOLATED_WEB_APPS) IsolatedWebAppResponseReaderFactory {
  public:
   explicit IsolatedWebAppResponseReaderFactory(content::BrowserContext*);
   virtual ~IsolatedWebAppResponseReaderFactory();
@@ -49,24 +49,15 @@ class IsolatedWebAppResponseReaderFactory {
       base::expected<std::unique_ptr<IsolatedWebAppResponseReader>,
                      UnusableSwbnFileError>)>;
 
-  enum class Flag {
-    kMinValue,
-    kDevModeBundle = kMinValue,
-    kSkipSignatureVerification,
-    kMaxValue = kSkipSignatureVerification
-  };
-  using Flags = base::EnumSet<Flag, Flag::kMinValue, Flag::kMaxValue>;
-
   virtual void CreateResponseReader(
       const base::FilePath& web_bundle_path,
       const web_package::SignedWebBundleId& web_bundle_id,
-      Flags flags,
+      bool verify_signatures,
       Callback callback);
 
  private:
   void OnReaderCreated(const base::FilePath& web_bundle_path,
                        const web_package::SignedWebBundleId& web_bundle_id,
-                       Flags flags,
                        Callback callback,
                        base::expected<std::unique_ptr<SignedWebBundleReader>,
                                       UnusableSwbnFileError> status);

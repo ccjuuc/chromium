@@ -58,7 +58,7 @@ class MultiCaptureDataTestBase : public policy::PolicyTest {
   void SetAllowedOriginsPolicy(
       const std::vector<std::string>& allowlisted_origins) {
     policy::PolicyMap policies;
-    base::Value::List allowed_origins;
+    base::ListValue allowed_origins;
     for (const auto& allowed_origin : allowlisted_origins) {
       allowed_origins.Append(base::Value(allowed_origin));
     }
@@ -99,7 +99,7 @@ class MultiCaptureDataTest : public MultiCaptureDataTestBase,
 IN_PROC_BROWSER_TEST_P(MultiCaptureDataTest, TestExactOrigins) {
   EXPECT_EQ(GetParam().expected_is_get_all_screens_media_allowed,
             multi_capture::MultiCaptureDataServiceFactory::GetForBrowserContext(
-                browser()->profile())
+                browser()->GetProfile())
                 ->IsMultiCaptureAllowed(GURL(GetParam().testing_url)));
 }
 
@@ -202,7 +202,7 @@ class MultiCaptureDataDynamicRefreshTest
          GetParam().expected_allowed_origins) {
       EXPECT_TRUE(
           multi_capture::MultiCaptureDataServiceFactory::GetForBrowserContext(
-              browser()->profile())
+              browser()->GetProfile())
               ->IsMultiCaptureAllowed(GURL(expected_allowed_origin)));
     }
 
@@ -210,7 +210,7 @@ class MultiCaptureDataDynamicRefreshTest
          GetParam().expected_forbidden_origins) {
       EXPECT_FALSE(
           multi_capture::MultiCaptureDataServiceFactory::GetForBrowserContext(
-              browser()->profile())
+              browser()->GetProfile())
               ->IsMultiCaptureAllowed(GURL(expected_forbidden_origin)));
     }
   }

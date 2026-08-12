@@ -22,9 +22,9 @@ class WebBundledCodeCacheGeneratorTest : public testing::Test {
       const WebString& module_code,
       const WebBundledCodeCacheGenerator::SerializedCodeCacheData& cache_data) {
     v8::Local<v8::String> module_source =
-        v8::String::NewFromUtf8(isolate, module_code.Utf8().c_str(),
-                                v8::NewStringType::kNormal,
-                                module_code.Utf8().size())
+        v8::String::NewFromUtf8(
+            isolate, module_code.Utf8().c_str(), v8::NewStringType::kNormal,
+            base::checked_cast<int>(module_code.Utf8().size()))
             .ToLocalChecked();
 
     v8::ScriptOrigin origin(
@@ -60,7 +60,7 @@ TEST_F(WebBundledCodeCacheGeneratorTest, ValidJavaScriptModule) {
   v8::Isolate* isolate = scope.GetIsolate();
 
   // Request generation of code cache data for a given module.
-  const WebString module_code = WebString::FromUTF8(
+  const WebString module_code = WebString(
       "export const message = 'Hello, world!'; export function greet() { "
       "return message; }");
   WebBundledCodeCacheGenerator::SerializedCodeCacheData cache_data =
@@ -80,7 +80,7 @@ TEST_F(WebBundledCodeCacheGeneratorTest, ValidJavaScriptModuleWithDeps) {
 
   // Request generation of code cache data for a given module with external
   // dependencies.
-  const WebString module_code = WebString::FromUTF8(
+  const WebString module_code = WebString(
       "import { add } from './math.js'; export function calculate(a, b) { "
       "return add(a, b); }");
   WebBundledCodeCacheGenerator::SerializedCodeCacheData cache_data =
@@ -100,7 +100,7 @@ TEST_F(WebBundledCodeCacheGeneratorTest, InvalidJavaScriptModuleSyntax) {
 
   // Request generation of code cache data for a given module with incorrect
   // syntax.
-  const WebString module_code = WebString::FromUTF8("export const = 5;");
+  const WebString module_code = WebString("export const = 5;");
   WebBundledCodeCacheGenerator::SerializedCodeCacheData cache_data =
       WebBundledCodeCacheGenerator::CreateSerializedCodeCacheForModule(
           isolate, module_code);
@@ -114,7 +114,7 @@ TEST_F(WebBundledCodeCacheGeneratorTest, EmptyJavaScriptModule) {
   v8::Isolate* isolate = scope.GetIsolate();
 
   // Request generation of code cache data for a an empty module.
-  const WebString module_code = WebString::FromUTF8("");
+  const WebString module_code = WebString("");
   WebBundledCodeCacheGenerator::SerializedCodeCacheData cache_data =
       WebBundledCodeCacheGenerator::CreateSerializedCodeCacheForModule(
           isolate, module_code);
@@ -129,7 +129,7 @@ TEST_F(WebBundledCodeCacheGeneratorTest, VerifyCacheDataTypeId) {
   v8::Isolate* isolate = scope.GetIsolate();
 
   // Request generation of code cache data for a given module.
-  const WebString module_code = WebString::FromUTF8(
+  const WebString module_code = WebString(
       "export const message = 'Hello, world!'; export function greet() { "
       "return message; }");
   WebBundledCodeCacheGenerator::SerializedCodeCacheData cache_data =

@@ -3,21 +3,19 @@
 // found in the LICENSE file.
 
 import type {ProductInfo} from 'chrome://resources/cr_components/commerce/shared.mojom-webui.js';
-import type {PriceInsightsInfo, ProductSpecifications, UserFeedback} from 'chrome://resources/cr_components/commerce/shopping_service.mojom-webui.js';
+import type {PriceInsightsInfo, ShoppingServiceHandlerInterface} from 'chrome://resources/cr_components/commerce/shopping_service.mojom-webui.js';
 import {PriceInsightsInfo_PriceBucket} from 'chrome://resources/cr_components/commerce/shopping_service.mojom-webui.js';
-import type {ShoppingServiceBrowserProxy} from 'chrome://resources/cr_components/commerce/shopping_service_browser_proxy.js';
-import type {Uuid} from 'chrome://resources/mojo/mojo/public/mojom/base/uuid.mojom-webui.js';
 import type {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
-import {TestBrowserProxy as BaseTestBrowserProxy} from 'chrome://webui-test/test_browser_proxy.js';
+import {TestBrowserProxy} from 'chrome://webui-test/test_browser_proxy.js';
 
-export class TestBrowserProxy extends BaseTestBrowserProxy implements
-    ShoppingServiceBrowserProxy {
+export class TestPageHandler extends TestBrowserProxy implements
+    ShoppingServiceHandlerInterface {
   private product_: ProductInfo = {
     title: '',
     clusterTitle: '',
     domain: '',
-    imageUrl: {url: ''},
-    productUrl: {url: ''},
+    imageUrl: '',
+    productUrl: '',
     currentPrice: '',
     previousPrice: '',
     clusterId: BigInt(0),
@@ -29,16 +27,12 @@ export class TestBrowserProxy extends BaseTestBrowserProxy implements
     typicalLowPrice: '',
     typicalHighPrice: '',
     catalogAttributes: '',
-    jackpot: {url: ''},
+    jackpot: '',
     bucket: PriceInsightsInfo_PriceBucket.kUnknown,
     hasMultipleCatalogs: false,
     history: [],
     locale: '',
     currencyCode: '',
-  };
-  private productSpecs_: ProductSpecifications = {
-    products: [],
-    productDimensionMap: new Map<bigint, string>(),
   };
 
   constructor() {
@@ -54,36 +48,22 @@ export class TestBrowserProxy extends BaseTestBrowserProxy implements
       'getPriceInsightsInfoForUrl',
       'getProductInfoForUrl',
       'getProductInfoForUrls',
-      'getProductSpecificationsForUrls',
-      'getAllProductSpecificationsSets',
-      'getProductSpecificationsSetByUuid',
-      'addProductSpecificationsSet',
-      'deleteProductSpecificationsSet',
-      'setNameForProductSpecificationsSet',
-      'setUrlsForProductSpecificationsSet',
-      'setProductSpecificationsUserFeedback',
-      'getProductSpecificationsFeatureState',
     ]);
   }
 
   getPriceInsightsInfoForUrl(url: Url) {
     this.methodCalled('getPriceInsightsInfoForUrl', url);
-    return Promise.resolve({priceInsightsInfo: this.priceInsights_});
+    return Promise.resolve({url, priceInsightsInfo: this.priceInsights_});
   }
 
   getProductInfoForUrl(url: Url) {
     this.methodCalled('getProductInfoForUrl', url);
-    return Promise.resolve({productInfo: this.product_});
+    return Promise.resolve({url, productInfo: this.product_});
   }
 
   getProductInfoForUrls(urls: Url[]) {
     this.methodCalled('getProductInfoForUrls', urls);
     return Promise.resolve({productInfos: [this.product_]});
-  }
-
-  getProductSpecificationsForUrls(urls: Url[]) {
-    this.methodCalled('getProductSpecificationsForUrls', urls);
-    return Promise.resolve({productSpecs: this.productSpecs_});
   }
 
   getProductInfoForCurrentUrl() {
@@ -102,16 +82,16 @@ export class TestBrowserProxy extends BaseTestBrowserProxy implements
   }
 
   getUrlInfosForRecentlyViewedTabs() {
-    this.methodCalled('getUrlInfosForRecentlyVisitedTabs');
+    this.methodCalled('getUrlInfosForRecentlyViewedTabs');
     return Promise.resolve({urlInfos: []});
   }
 
-  openUrlInNewTab() {
-    this.methodCalled('openUrlInNewTab');
+  openUrlInNewTab(url: Url) {
+    this.methodCalled('openUrlInNewTab', url);
   }
 
-  switchToOrOpenTab() {
-    this.methodCalled('switchToOrOpenTab');
+  switchToOrOpenTab(url: Url) {
+    this.methodCalled('switchToOrOpenTab', url);
   }
 
   isShoppingListEligible() {
@@ -122,43 +102,5 @@ export class TestBrowserProxy extends BaseTestBrowserProxy implements
   getPriceTrackingStatusForCurrentUrl() {
     this.methodCalled('getPriceTrackingStatusForCurrentUrl');
     return Promise.resolve({tracked: false});
-  }
-
-  getAllProductSpecificationsSets() {
-    this.methodCalled('getAllProductSpecificationsSets');
-    return Promise.resolve({sets: []});
-  }
-
-  getProductSpecificationsSetByUuid(uuid: Uuid) {
-    this.methodCalled('getProductSpecificationsSetByUuid', uuid);
-    return Promise.resolve({set: null});
-  }
-
-  addProductSpecificationsSet(name: string, urls: Url[]) {
-    this.methodCalled('addProductSpecificationsSet', name, urls);
-    return Promise.resolve({createdSet: null});
-  }
-
-  deleteProductSpecificationsSet(uuid: Uuid) {
-    this.methodCalled('deleteProductSpecificationsSet', uuid);
-  }
-
-  setNameForProductSpecificationsSet(uuid: Uuid, name: string) {
-    this.methodCalled('setNameForProductSpecificationsSet', uuid, name);
-    return Promise.resolve({updatedSet: null});
-  }
-
-  setUrlsForProductSpecificationsSet(uuid: Uuid, urls: Url[]) {
-    this.methodCalled('setUrlsForProductSpecificationsSet', uuid, urls);
-    return Promise.resolve({updatedSet: null});
-  }
-
-  setProductSpecificationsUserFeedback(feedback: UserFeedback) {
-    this.methodCalled('setUrlsForProductSpecificationsSet', feedback);
-  }
-
-  getProductSpecificationsFeatureState() {
-    this.methodCalled('getProductSpecificationsFeatureState');
-    return Promise.resolve({state: null});
   }
 }

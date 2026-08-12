@@ -13,9 +13,11 @@
 #include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/types/strong_alias.h"
 #include "components/autofill/core/browser/payments/payments_access_token_fetcher.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "google_apis/gaia/google_service_auth_error.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace signin {
 class IdentityManager;
@@ -148,7 +150,7 @@ class MultipleRequestPaymentsNetworkInterfaceBase {
   }
 
   // Caller of this function should not modify the operations map directly.
-  const std::unordered_map<RequestId, std::unique_ptr<RequestOperation>>&
+  const absl::flat_hash_map<RequestId, std::unique_ptr<RequestOperation>>&
   operations_for_testing() const {
     return operations_;
   }
@@ -166,7 +168,7 @@ class MultipleRequestPaymentsNetworkInterfaceBase {
   bool is_off_the_record_;
 
   // The map holding reference to all owned, active request operations.
-  std::unordered_map<RequestId, std::unique_ptr<RequestOperation>> operations_;
+  absl::flat_hash_map<RequestId, std::unique_ptr<RequestOperation>> operations_;
 };
 
 }  // namespace autofill::payments

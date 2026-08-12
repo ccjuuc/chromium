@@ -8,11 +8,11 @@
 #include <libevdev/libevdev.h>
 #include <linux/input.h>
 
+#include <algorithm>
+
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
-#include "base/metrics/histogram_functions.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -42,26 +42,6 @@
 namespace ui {
 
 namespace {
-
-constexpr int kNumTimeBuckets = 13;
-float ClickDurationMetricBuckets[kNumTimeBuckets] = {
-    0.15, 0.16, 0.17, 0.18, 0.19, 0.2, 0.25, 0.3, 0.35, 0.45, 0.55, 0.65, 0.75,
-};
-const char* ClickDurationMetricNames[kNumTimeBuckets] = {
-    "Ozone.GestureInterpreterLibevdevCros.TouchpadClick.150ms",
-    "Ozone.GestureInterpreterLibevdevCros.TouchpadClick.160ms",
-    "Ozone.GestureInterpreterLibevdevCros.TouchpadClick.170ms",
-    "Ozone.GestureInterpreterLibevdevCros.TouchpadClick.180ms",
-    "Ozone.GestureInterpreterLibevdevCros.TouchpadClick.190ms",
-    "Ozone.GestureInterpreterLibevdevCros.TouchpadClick.200ms",
-    "Ozone.GestureInterpreterLibevdevCros.TouchpadClick.250ms",
-    "Ozone.GestureInterpreterLibevdevCros.TouchpadClick.300ms",
-    "Ozone.GestureInterpreterLibevdevCros.TouchpadClick.350ms",
-    "Ozone.GestureInterpreterLibevdevCros.TouchpadClick.450ms",
-    "Ozone.GestureInterpreterLibevdevCros.TouchpadClick.550ms",
-    "Ozone.GestureInterpreterLibevdevCros.TouchpadClick.650ms",
-    "Ozone.GestureInterpreterLibevdevCros.TouchpadClick.750ms",
-};
 
 // Convert libevdev device class to libgestures device class.
 GestureInterpreterDeviceClass GestureDeviceClass(Evdev* evdev) {
@@ -131,42 +111,10 @@ const int kGestureScrollFingerCount = 2;
 // Number of fingers for swipe gestures.
 const int kGestureSwipeFingerCount = 3;
 
-static constexpr unsigned int kModifierEvdevCodes[] = {
-    KEY_LEFTALT,  KEY_RIGHTALT,  KEY_LEFTMETA,  KEY_RIGHTMETA,
-    KEY_LEFTCTRL, KEY_RIGHTCTRL, KEY_LEFTSHIFT, KEY_RIGHTSHIFT};
-
+static constexpr auto kModifierEvdevCodes = std::to_array<unsigned int>(
+    {KEY_LEFTALT, KEY_RIGHTALT, KEY_LEFTMETA, KEY_RIGHTMETA, KEY_LEFTCTRL,
+     KEY_RIGHTCTRL, KEY_LEFTSHIFT, KEY_RIGHTSHIFT});
 }  // namespace
-
-void GestureInterpreterLibevdevCros::RecordClickMetric(stime_t duration,
-                                                       float movement) {
-  int time_bucket;
-  // Tap-to-click will have 0 duration, which we want to exclude.
-  if (duration <= 0.0) {
-    return;
-  }
-  for (time_bucket = 0; time_bucket < kNumTimeBuckets; time_bucket++) {
-    if (duration <= UNSAFE_TODO(ClickDurationMetricBuckets[time_bucket])) {
-      break;
-    }
-  }
-  // Don't record clicks longer than the maximum duration we care about.
-  if (time_bucket == kNumTimeBuckets) {
-    return;
-  }
-
-  // Create buckets for movement distances under 10.0 mm in increments of
-  // 1.0 mm, with a separate bucket for exactly 0 movement.
-  int num_move_buckets = 11;
-  int move_bucket = (int)std::ceil(movement);
-  // Clicks with movement above 10.0 mm are assumed to be intentional drag
-  // gestures.
-  if (move_bucket >= num_move_buckets) {
-    return;
-  }
-  base::UmaHistogramExactLinear(
-      UNSAFE_TODO(ClickDurationMetricNames[time_bucket]), move_bucket,
-      num_move_buckets);
-}
 
 GestureInterpreterLibevdevCros::GestureInterpreterLibevdevCros(
     int id,
@@ -231,13 +179,6 @@ void GestureInterpreterLibevdevCros::OnLibEvdevCrosOpen(
       this);
   GestureInterpreterSetCallback(interpreter_, OnGestureReadyHelper, this);
 
-  if (base::FeatureList::IsEnabled(kEnableFastTouchpadClick)) {
-    GesturesProp* property =
-        property_provider_->GetProperty(id_, "Wiggle Button Down Timeout");
-    if (property) {
-      property->SetDoubleValue(std::vector<double>(1, 0.15));
-    }
-  }
 }
 
 void GestureInterpreterLibevdevCros::OnLibEvdevCrosEvent(Evdev* evdev,
@@ -248,8 +189,7 @@ void GestureInterpreterLibevdevCros::OnLibEvdevCrosEvent(Evdev* evdev,
   // If the device has keys on it, dispatch any presses/release.
   UNSAFE_TODO(DispatchChangedKeys(evdev->key_state_bitmask, timestamp));
 
-  HardwareState hwstate;
-  UNSAFE_TODO(memset(&hwstate, 0, sizeof(hwstate)));
+  HardwareState hwstate = {};
   hwstate.timestamp = timestamp;
 
   // Mouse.
@@ -266,10 +206,9 @@ void GestureInterpreterLibevdevCros::OnLibEvdevCrosEvent(Evdev* evdev,
 
   // Touch.
   base::FixedArray<FingerState> fingers(Event_Get_Slot_Count(evdev));
-  UNSAFE_TODO(memset(fingers.data(), 0, fingers.memsize()));
   int current_finger = 0;
   for (int i = 0; i < evstate->slot_count; i++) {
-    MtSlotPtr slot = UNSAFE_TODO(&evstate->slots[i]);
+    MtSlotPtr slot = &evstate->slots[i];
     if (slot->tracking_id == -1)
       continue;
     fingers[current_finger].touch_major = slot->touch_major;
@@ -390,7 +329,6 @@ void GestureInterpreterLibevdevCros::OnGestureMove(const Gesture* gesture,
 
   cursor_->MoveCursor(gfx::Vector2dF(move->dx, move->dy));
   gfx::Vector2dF ordinal_delta(move->ordinal_dx, move->ordinal_dy);
-  click_movement_ += ordinal_delta;
   dispatcher_->DispatchMouseMoveEvent(
       MouseMoveEventParams(id_, EF_NONE, cursor_->GetLocation(), &ordinal_delta,
                            PointerDetails(EventPointerType::kMouse),
@@ -620,16 +558,6 @@ void GestureInterpreterLibevdevCros::DispatchMouseButton(unsigned int button,
                                                          stime_t time) {
   if (!SetMouseButtonState(button, down))
     return;  // No change.
-
-  if (!is_mouse_ && !is_pointing_stick_ && button == BTN_LEFT) {
-    if (down) {
-      click_down_time_ = time;
-      click_movement_.set_x(0);
-      click_movement_.set_y(0);
-    } else {
-      RecordClickMetric(time - click_down_time_, click_movement_.Length());
-    }
-  }
 
   MouseButtonMapType map_type = MouseButtonMapType::kNone;
   if (is_mouse_)

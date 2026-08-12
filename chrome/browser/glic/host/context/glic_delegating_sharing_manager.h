@@ -5,6 +5,8 @@
 #ifndef CHROME_BROWSER_GLIC_HOST_CONTEXT_GLIC_DELEGATING_SHARING_MANAGER_H_
 #define CHROME_BROWSER_GLIC_HOST_CONTEXT_GLIC_DELEGATING_SHARING_MANAGER_H_
 
+#include "base/memory/raw_ptr.h"
+#include "chrome/browser/glic/host/context/glic_pin_candidate_provider.h"
 #include "chrome/browser/glic/public/context/glic_sharing_manager.h"
 
 namespace glic {
@@ -15,13 +17,13 @@ class GlicSharingManagerImpl;
 // Provides stable external api state (e.g. callback list subscriptions), while
 // also enabling hot-swapping of internal delegate.
 //
-// Retains its own callback list subsciptions (calls to `Add*Callback` are not
+// Retains its own callback list subscriptions (calls to `Add*Callback` are not
 // delegated), but notify calls from current delegate are
-// forwarded and all non-callback-subsciptions methods are delegated directly.
+// forwarded and all non-callback-subscriptions methods are delegated directly.
 //
 // This base class doesn't expose a method to set the delegate, to do so use one
 // of the derived classes below instead.
-class GlicDelegatingSharingManagerBase : public GlicSharingManager {
+class GlicDelegatingSharingManagerBase : public GlicSharingManagerInternal {
  public:
   GlicDelegatingSharingManagerBase();
   ~GlicDelegatingSharingManagerBase() override;
@@ -50,7 +52,7 @@ class GlicDelegatingSharingManagerBase : public GlicSharingManager {
   base::CallbackListSubscription AddTabPinningStatusChangedCallback(
       TabPinningStatusChangedCallback callback) override;
   using PinnedTabsChangedCallback =
-      base::RepeatingCallback<void(const std::vector<content::WebContents*>&)>;
+      base::RepeatingCallback<void(const std::vector<tabs::TabInterface*>&)>;
   base::CallbackListSubscription AddPinnedTabsChangedCallback(
       PinnedTabsChangedCallback callback) override;
   using PinnedTabDataChangedCallback =
@@ -64,6 +66,8 @@ class GlicDelegatingSharingManagerBase : public GlicSharingManager {
       TabPinningStatusEventCallback callback) override;
   bool PinTabs(base::span<const tabs::TabHandle> tab_handles,
                GlicPinTrigger trigger) override;
+  void SetPinTrigger(tabs::TabHandle tab_handle,
+                     GlicPinTrigger trigger) override;
   bool UnpinTabs(base::span<const tabs::TabHandle> tab_handles,
                  GlicUnpinTrigger trigger) override;
   void UnpinAllTabs(GlicUnpinTrigger trigger) override;
@@ -74,28 +78,35 @@ class GlicDelegatingSharingManagerBase : public GlicSharingManager {
   int32_t GetMaxPinnedTabs() const override;
   int32_t GetNumPinnedTabs() const override;
   bool IsTabPinned(tabs::TabHandle tab_handle) const override;
+  bool IsTabShared(tabs::TabInterface* tab) const override;
+  bool IsTabFocused(tabs::TabHandle tab_handle) const override;
   int32_t SetMaxPinnedTabs(uint32_t max_pinned_tabs) override;
-  std::vector<content::WebContents*> GetPinnedTabs() const override;
+  std::vector<tabs::TabInterface*> GetPinnedTabs() const override;
+  std::optional<GlicGetContextError> CheckPreliminaryContextSharingEligibility(
+      tabs::TabHandle tab_handle) const override;
+
   void GetContextFromTab(
       tabs::TabHandle tab_handle,
-      const mojom::GetTabContextOptions& options,
+      const mojom::TabContextOptions& options,
       base::OnceCallback<void(GlicGetContextResult)> callback) override;
   void GetContextForActorFromTab(
       tabs::TabHandle tab_handle,
-      const mojom::GetTabContextOptions& options,
+      const mojom::TabContextOptions& options,
       base::OnceCallback<void(GlicGetContextResult)> callback) override;
-  void SubscribeToPinCandidates(
-      mojom::GetPinCandidatesOptionsPtr options,
-      mojo::PendingRemote<mojom::PinCandidatesObserver> observer) override;
+  void GetImageBytes(
+      tabs::TabHandle tab_handle,
+      const std::string& document_id,
+      int32_t dom_node_id,
+      base::OnceCallback<void(GlicGetImageBytesResult)> callback) override;
+
   void OnConversationTurnSubmitted() override;
-  GlicFocusedBrowserManagerInterface& focused_browser_manager() override;
-  base::WeakPtr<GlicSharingManager> GetWeakPtr() override;
+  base::WeakPtr<GlicSharingManagerInternal> GetWeakPtr() override;
 
  protected:
   // Sets the sharing manager delegate. Notifies all subscribers for all
   // callback list subscriptions.
-  void SetDelegate(GlicSharingManager* sharing_manager_delegate);
-  GlicSharingManager* GetDelegate();
+  void SetDelegate(GlicSharingManagerInternal* sharing_manager_delegate);
+  GlicSharingManagerInternal* GetDelegate();
 
  private:
   // Callbacks for subscribing to delegate (will be forwarded).
@@ -106,7 +117,7 @@ class GlicDelegatingSharingManagerBase : public GlicSharingManager {
   void OnTabPinningStatusEventCallback(tabs::TabInterface* tab,
                                        GlicPinningStatusEvent event);
   void OnPinnedTabsChangedCallback(
-      const std::vector<content::WebContents*>& pinnned_tabs);
+      const std::vector<tabs::TabInterface*>& pinned_tabs);
   void OnPinnedTabDataChangedCallback(const TabDataChange& tab_data_change);
 
   // Refreshes all internal subscriptions to point at current delegate.
@@ -118,9 +129,9 @@ class GlicDelegatingSharingManagerBase : public GlicSharingManager {
   // Forces notifications where possible.
   // TODO(b:444463509): split sharing manager interface up so it's clear which
   // notifications we actually force (i.e. what delegation is possible).
-  void ForceNotify(const std::vector<content::WebContents*>& old_pinned_tabs);
+  void ForceNotify(const std::vector<tabs::TabInterface*>& old_pinned_tabs);
 
-  raw_ptr<GlicSharingManager> sharing_manager_delegate_;
+  raw_ptr<GlicSharingManagerInternal> sharing_manager_delegate_;
 
   // Callback lists. Maintains its own callback lists to seamlessly support
   // hot-swapping delegate.
@@ -134,7 +145,7 @@ class GlicDelegatingSharingManagerBase : public GlicSharingManager {
       tab_pinning_status_changed_callback_list_;
   base::RepeatingCallbackList<void(tabs::TabInterface*, GlicPinningStatusEvent)>
       tab_pinning_status_event_callback_list_;
-  base::RepeatingCallbackList<void(const std::vector<content::WebContents*>&)>
+  base::RepeatingCallbackList<void(const std::vector<tabs::TabInterface*>&)>
       pinned_tabs_changed_callback_list_;
   base::RepeatingCallbackList<void(const TabDataChange&)>
       pinned_tab_data_changed_callback_list_;
@@ -156,7 +167,7 @@ class GlicDelegatingSharingManagerBase : public GlicSharingManager {
 // but does not support `SubscribeToPinCandidates`.
 //
 // TODO(crbug.com/444463509): Once we remove single instance mode, split
-// GlicSharingManager interface so we don't allow calls to
+// GlicSharingManagerInternal interface so we don't allow calls to
 // `SubscribeToPinCandidates` (currently triggers NOTREACHED).
 class GlicDelegatingSharingManager : public GlicDelegatingSharingManagerBase {
  public:
@@ -171,13 +182,14 @@ class GlicDelegatingSharingManager : public GlicDelegatingSharingManagerBase {
 // Behaves just like `GlicDelegatingSharingManager`, but crashes if a delegate
 // is set with a different PinnedTabManager instance than the previous delegate.
 //
-// Useful for cases where non-pinning sharing bevhavior must change on the fly,
+// Useful for cases where non-pinning sharing behavior must change on the fly,
 // but not pinning behavior (e.g. attach/detach behavior for side panel).
 //
 // TODO(crbug.com/444463509): Enforce invariant at compile time and move
 // GlicPinnedTabManager out of WeakPtr.
 class GlicStablePinningDelegatingSharingManager
-    : public GlicDelegatingSharingManagerBase {
+    : public GlicDelegatingSharingManagerBase,
+      public GlicPinCandidateProvider {
  public:
   explicit GlicStablePinningDelegatingSharingManager(
       GlicSharingManagerImpl* sharing_manager_delegate);
@@ -198,7 +210,7 @@ class GlicStablePinningDelegatingSharingManager
 
  private:
   // Last known state for glic window being active. We hold this so we can set
-  // it on delegate swaps (delegates are not longer able to subscribe directly).
+  // it on delegate swaps (delegates are no longer able to subscribe directly).
   bool glic_window_active_ = false;
 };
 

@@ -7,7 +7,6 @@
 
 #include <vector>
 
-#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/permissions/permission_prompt.h"
 #include "components/permissions/permission_request.h"
@@ -31,8 +30,10 @@ class EmbeddedPermissionPromptViewDelegate {
   GetPermissionPromptDelegate() const = 0;
 
   // Requests list the current prompt view is representing for.
-  virtual const std::vector<base::WeakPtr<permissions::PermissionRequest>>&
-  Requests() const = 0;
+  const std::vector<std::unique_ptr<permissions::PermissionRequest>>& Requests()
+      const {
+    return GetPermissionPromptDelegate()->Requests();
+  }
 
  protected:
   virtual ~EmbeddedPermissionPromptViewDelegate() = default;

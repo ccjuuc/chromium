@@ -5,6 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_UNACCELERATED_STATIC_BITMAP_IMAGE_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_UNACCELERATED_STATIC_BITMAP_IMAGE_H_
 
+#include "base/functional/function_ref.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread_checker.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
@@ -21,10 +22,16 @@ class PLATFORM_EXPORT UnacceleratedStaticBitmapImage final
   // The ImageOrientation should be derived from the source of the image data.
   static scoped_refptr<UnacceleratedStaticBitmapImage> Create(
       sk_sp<SkImage>,
-      ImageOrientation orientation = ImageOrientationEnum::kDefault);
+      ImageOrientation orientation = ImageOrientationEnum::kDefault,
+      const gfx::HDRMetadata& hdr_metadata = {});
   static scoped_refptr<UnacceleratedStaticBitmapImage> Create(
       PaintImage,
       ImageOrientation orientation = ImageOrientationEnum::kDefault);
+  static scoped_refptr<StaticBitmapImage> CreateFromRaster(
+      const gfx::Size& size,
+      base::FunctionRef<void(cc::PaintCanvas&)> draw_callback,
+      scoped_refptr<const cc::AnimatedImageFrameIndexMap>
+          animated_image_frame_index_map);
 
   bool IsOpaque() override;
 
@@ -37,10 +44,6 @@ class PLATFORM_EXPORT UnacceleratedStaticBitmapImage final
   PaintImage PaintImageForCurrentFrame() override;
 
   void Transfer() final;
-
-  bool CopyToResourceProvider(
-      CanvasResourceProviderSharedImage* resource_provider,
-      const gfx::Rect& copy_rect) override;
 
   SkImageInfo GetSkImageInfo() const;
   gfx::Size GetSize() const override {
@@ -57,8 +60,14 @@ class PLATFORM_EXPORT UnacceleratedStaticBitmapImage final
         GetSkImageInfo().colorType());
   }
 
+  const gfx::HDRMetadata& GetHdrMetadata() const override {
+    return paint_image_.GetHDRMetadata();
+  }
+
  private:
-  UnacceleratedStaticBitmapImage(sk_sp<SkImage>, ImageOrientation);
+  UnacceleratedStaticBitmapImage(sk_sp<SkImage>,
+                                 ImageOrientation,
+                                 const gfx::HDRMetadata&);
   UnacceleratedStaticBitmapImage(PaintImage, ImageOrientation);
 
   PaintImage paint_image_;

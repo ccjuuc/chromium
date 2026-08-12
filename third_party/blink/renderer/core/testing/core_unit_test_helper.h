@@ -99,6 +99,7 @@ class RenderingTestChromeClient : public EmptyChromeClient {
       WebInputEvent::Type injected_type) override;
 
   void ScheduleAnimation(const LocalFrameView*,
+                         cc::BeginMainFrameReason,
                          base::TimeDelta,
                          bool) override {
     animation_scheduled_ = true;
@@ -116,13 +117,14 @@ class RenderingTest : public PageTestBase {
   USING_FAST_MALLOC(RenderingTest);
 
  public:
-  RenderingTest(base::test::TaskEnvironment::TimeSource time_source);
+  explicit RenderingTest(LocalFrameClient* = nullptr);
+  explicit RenderingTest(base::test::TaskEnvironment::TimeSource time_source,
+                         LocalFrameClient* = nullptr);
+
   virtual FrameSettingOverrideFunction SettingOverrider() const {
     return nullptr;
   }
   virtual RenderingTestChromeClient& GetChromeClient() const;
-
-  explicit RenderingTest(LocalFrameClient* = nullptr);
 
   const Node* HitTest(int x, int y);
   const HitTestResult::NodeSet& RectBasedHitTest(const PhysicalRect& rect);
@@ -205,7 +207,7 @@ constexpr PhysicalRect::PhysicalRect(int left, int top, int width, int height)
 // changes. The rect is in the coordinate space of the document's scrolling
 // contents. This method deals with outlines and overflow.
 PhysicalRect VisualRectInDocument(const LayoutObject& object,
-                                  VisualRectFlags = kDefaultVisualRectFlags);
+                                  VisualRectFlags = {});
 
 // Returns the rect that should have raster invalidated whenever the specified
 // object changes. The rect is in the object's local physical coordinate space.

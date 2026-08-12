@@ -151,7 +151,7 @@ CastNetworkContexts::GetSystemURLLoaderFactory() {
 
   network::mojom::URLLoaderFactoryParamsPtr params =
       network::mojom::URLLoaderFactoryParams::New();
-  params->process_id = network::mojom::kBrowserProcessId;
+  params->process_id = network::OriginatingProcessId::browser();
   params->is_orb_enabled = false;
   params->is_trusted = true;
   GetSystemContext()->CreateURLLoaderFactory(
@@ -242,15 +242,6 @@ void CastNetworkContexts::ConfigureDefaultNetworkContextParams(
   network_context_params->cookie_encryption_provider =
       cookie_encryption_provider_->BindNewRemote();
 
-  // Disable idle sockets close on memory pressure, if instructed by DCS. On
-  // memory constrained devices:
-  // 1. if idle sockets are closed when memory pressure happens, cast_shell will
-  // close and re-open lots of connections to server.
-  // 2. if idle sockets are kept alive when memory pressure happens, this may
-  // cause JS engine gc frequently, leading to JS suspending.
-  network_context_params->disable_idle_sockets_close_on_memory_pressure =
-      IsFeatureEnabled(kDisableIdleSocketsCloseOnMemoryPressure);
-
   AddProxyToNetworkContextParams(network_context_params);
 
   network_context_params->cors_exempt_header_list.insert(
@@ -329,7 +320,9 @@ void CastNetworkContexts::AddProxyToNetworkContextParams(
   if (!proxy_config_service_) {
     pref_proxy_config_tracker_impl_ =
         std::make_unique<PrefProxyConfigTrackerImpl>(
-            CastBrowserProcess::GetInstance()->pref_service(), nullptr);
+            CastBrowserProcess::GetInstance()->pref_service(),
+            /*proxy_config_service_task_runner=*/nullptr,
+            /*policy_service=*/nullptr);
     proxy_config_service_ =
         pref_proxy_config_tracker_impl_->CreateTrackingProxyConfigService(
             nullptr);

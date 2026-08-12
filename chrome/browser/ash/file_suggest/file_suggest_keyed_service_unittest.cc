@@ -9,7 +9,6 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/ash/drive/drive_integration_service.h"
 #include "chrome/browser/ash/drive/drive_integration_service_factory.h"
 #include "chrome/browser/ash/file_suggest/file_suggest_keyed_service_factory.h"
@@ -17,7 +16,6 @@
 #include "chrome/browser/ash/file_suggest/file_suggest_util.h"
 #include "chrome/browser/ash/file_suggest/mock_file_suggest_keyed_service.h"
 #include "chrome/browser/ash/file_suggest/mock_file_suggest_keyed_service_observer.h"
-#include "chrome/browser/global_features.h"
 #include "chrome/browser/ui/ash/holding_space/scoped_test_mount_point.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -56,7 +54,6 @@ class FileSuggestKeyedServiceTest : public testing::Test {
 };
 
 TEST_F(FileSuggestKeyedServiceTest, GetSuggestData) {
-  base::HistogramTester tester;
   drive::DriveIntegrationServiceFactory::GetInstance()
       ->GetForProfile(profile_)
       ->SetEnabled(true);
@@ -68,14 +65,9 @@ TEST_F(FileSuggestKeyedServiceTest, GetSuggestData) {
                                 suggest_data) {
             EXPECT_FALSE(suggest_data.has_value());
           }));
-  tester.ExpectBucketCount(
-      "Ash.Search.DriveFileSuggestDataValidation.Status",
-      /*sample=*/DriveSuggestValidationStatus::kDriveFSNotMounted,
-      /*expected_count=*/0);
 }
 
 TEST_F(FileSuggestKeyedServiceTest, DisabledByPolicy) {
-  base::HistogramTester tester;
   drive::DriveIntegrationServiceFactory::GetInstance()
       ->GetForProfile(profile_)
       ->SetEnabled(true);
@@ -138,9 +130,6 @@ class FileSuggestKeyedServiceRemoveTest : public FileSuggestKeyedServiceTest {
         FileSuggestKeyedServiceFactory::GetInstance(),
         base::BindRepeating(
             &MockFileSuggestKeyedService::BuildMockFileSuggestKeyedService,
-            TestingBrowserProcess::GetGlobal()
-                ->GetFeatures()
-                ->application_locale_storage(),
             temp_dir_.GetPath().Append("proto"))}};
   }
 

@@ -18,15 +18,18 @@ const char kNTPCustomizationNewBadgeTappedAction[] =
     "MobileNTPCustomizationNewBadgeTapped";
 const char kNTPMIAEntryPointTappedAction[] = "MobileNTPMIAEntryPointTapped";
 const char kNTPIncognitoButtonTappedAction[] = "MobileNTPIncognitoButtonTapped";
+const char kNTPAIMPlusButtonTappedAction[] = "MobileNTPAIMPlusButtonTapped";
 
 #pragma mark - Histograms
 
 const char kActionOnNTPHistogram[] = "IOS.NTP.Click";
 const char kActionOnStartHistogram[] = "IOS.Start.Click";
+const char kActionOnHomeHistogram[] = "IOS.Home.Click";
 const char kNTPTimeSpentHistogram[] = "NewTabPage.TimeSpent";
 const char kStartTimeSpentHistogram[] = "IOS.Start.TimeSpent";
 const char kNTPImpressionHistogram[] = "IOS.NTP.Impression";
 const char kStartImpressionHistogram[] = "IOS.Start.Impression";
+const char kHomeImpressionHistogram[] = "IOS.Home.Impression";
 const char kNTPImpressionCustomizationStateHistogram[] =
     "IOS.NTP.Impression.CustomizationState";
 const char kNTPOverscrollActionHistogram[] = "IOS.NTP.OverscrollAction";

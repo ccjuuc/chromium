@@ -31,7 +31,7 @@ class ImageSkia;
 }  // namespace gfx
 
 namespace web_app {
-class ChromeIwaRuntimeDataProvider;
+class IwaRuntimeDataProvider;
 class WebAppProvider;
 }  // namespace web_app
 
@@ -96,13 +96,13 @@ class MultiCaptureDataService : public KeyedService,
   void OnIconReceived(const webapps::AppId& app_id, gfx::ImageSkia icon);
   bool MaybeAddAppToCaptureAppLists(const webapps::AppId& app_id);
 
-  const raw_ref<web_app::ChromeIwaRuntimeDataProvider> data_provider_;
+  const raw_ref<web_app::IwaRuntimeDataProvider> data_provider_;
   const raw_ptr<web_app::WebAppProvider> provider_;
   const raw_ptr<PrefService> prefs_;
 
   bool is_initialized_ = false;
 
-  base::Value::List multi_screen_capture_allowlist_on_login_;
+  base::ListValue multi_screen_capture_allowlist_on_login_;
   std::set<std::string> app_without_notification_bundle_ids_;
 
   std::map<webapps::AppId, std::string> capture_apps_with_notification_;

@@ -2,16 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/renderers/video_resource_updater.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/read_only_shared_memory_region.h"
@@ -24,7 +20,9 @@
 #include "components/viz/test/test_raster_interface.h"
 #include "components/viz/test/test_shared_image_interface_provider.h"
 #include "gpu/GLES2/gl2extchromium.h"
+#include "gpu/command_buffer/client/test_shared_image_interface.h"
 #include "gpu/command_buffer/common/mailbox.h"
+#include "gpu/command_buffer/common/shared_image_capabilities.h"
 #include "media/base/media_switches.h"
 #include "media/base/video_frame.h"
 #include "skia/ext/skcolorspace_primaries.h"
@@ -159,7 +157,8 @@ class VideoResourceUpdaterTest : public testing::Test {
     constexpr int kMaxDimension = 5;
     constexpr gfx::Size kSize = gfx::Size(kMaxDimension, kMaxDimension);
     constexpr gfx::Rect kVisibleRect = gfx::Rect(2, 1, 3, 3);
-    static std::array<uint8_t, 2 * kMaxDimension * kMaxDimension> y16_data = {
+    constexpr int kElementCount = 2 * kMaxDimension * kMaxDimension;
+    alignas(uint16_t) static std::array<uint8_t, kElementCount> y16_data = {
         0, 0, 0, 0, 0,    0,    0,    0,    0,    0,
         0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
         0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
@@ -236,7 +235,6 @@ class VideoResourceUpdaterTest : public testing::Test {
         format, shared_image, kMailboxSyncToken,
         base::BindOnce(&VideoResourceUpdaterTest::SetReleaseSyncToken,
                        base::Unretained(this)),
-        size,                // coded_size
         gfx::Rect(size),     // visible_rect
         size,                // natural_size
         base::TimeDelta());  // timestamp
@@ -246,7 +244,7 @@ class VideoResourceUpdaterTest : public testing::Test {
 
   scoped_refptr<VideoFrame> CreateTestRGBAHardwareVideoFrame() {
     return CreateTestHardwareVideoFrame(viz::SinglePlaneFormat::kRGBA_8888,
-                                        PIXEL_FORMAT_ARGB, kSRGBColorSpace,
+                                        PIXEL_FORMAT_ABGR, kSRGBColorSpace,
                                         GL_TEXTURE_2D,
                                         /*needs_raster_access=*/false);
   }
@@ -254,7 +252,7 @@ class VideoResourceUpdaterTest : public testing::Test {
   scoped_refptr<VideoFrame> CreateTestStreamTextureHardwareVideoFrame(
       bool needs_copy) {
     scoped_refptr<VideoFrame> video_frame = CreateTestHardwareVideoFrame(
-        viz::SinglePlaneFormat::kRGBA_8888, PIXEL_FORMAT_ARGB, kSRGBColorSpace,
+        viz::SinglePlaneFormat::kRGBA_8888, PIXEL_FORMAT_ABGR, kSRGBColorSpace,
         GL_TEXTURE_EXTERNAL_OES, /*needs_raster_access=*/needs_copy);
     video_frame->metadata().copy_required = needs_copy;
     return video_frame;
@@ -263,7 +261,7 @@ class VideoResourceUpdaterTest : public testing::Test {
 #if BUILDFLAG(IS_WIN)
   scoped_refptr<VideoFrame> CreateTestDCompSurfaceVideoFrame() {
     scoped_refptr<VideoFrame> video_frame = CreateTestHardwareVideoFrame(
-        viz::SinglePlaneFormat::kRGBA_8888, PIXEL_FORMAT_ARGB, kSRGBColorSpace,
+        viz::SinglePlaneFormat::kRGBA_8888, PIXEL_FORMAT_ABGR, kSRGBColorSpace,
         GL_TEXTURE_EXTERNAL_OES, /*needs_raster_access=*/false);
     video_frame->metadata().dcomp_surface = true;
     return video_frame;
@@ -382,15 +380,16 @@ TEST_F(VideoResourceUpdaterTest, SoftwareFrameRGBNonOrigin) {
     const auto bytes_per_row = video_frame->row_bytes(VideoFrame::Plane::kARGB);
     const auto bytes_per_element =
         VideoFrame::BytesPerElement(fmt, VideoFrame::Plane::kARGB);
-    auto* dest_pixels = raster_->last_upload() + rect.y() * bytes_per_row +
-                        rect.x() * bytes_per_element;
+    auto* dest_pixels =
+        UNSAFE_TODO(raster_->last_upload() + rect.y() * bytes_per_row +
+                    rect.x() * bytes_per_element);
     auto* src_pixels = video_frame->visible_data(VideoFrame::Plane::kARGB);
 
     // Pixels are 0xFFFFFFFF, so channel reordering doesn't matter.
     for (int y = 0; y < rect.height(); ++y) {
       for (int x = 0; x < rect.width() * bytes_per_element; ++x) {
         const auto pos = y * bytes_per_row + x;
-        ASSERT_EQ(src_pixels[pos], dest_pixels[pos]);
+        ASSERT_EQ(UNSAFE_TODO(src_pixels[pos]), UNSAFE_TODO(dest_pixels[pos]));
       }
     }
   }
@@ -416,14 +415,15 @@ TEST_F(VideoResourceUpdaterTest, SoftwareFrameY16NonOrigin) {
                            video_frame->coded_size().width());
   const auto bytes_per_element =
       VideoFrame::BytesPerElement(kOutputFormat, VideoFrame::Plane::kARGB);
-  auto* dest_pixels = raster_->last_upload() + rect.y() * bytes_per_row +
-                      rect.x() * bytes_per_element;
+  auto* dest_pixels =
+      UNSAFE_TODO(raster_->last_upload() + rect.y() * bytes_per_row +
+                  rect.x() * bytes_per_element);
 
   // Pixels are 0xFFFFFFFF, so channel reordering doesn't matter.
   for (int y = 0; y < rect.height(); ++y) {
     for (int x = 0; x < rect.width() * bytes_per_element; ++x) {
       const auto pos = y * bytes_per_row + x;
-      ASSERT_EQ(0xFF, dest_pixels[pos]);
+      ASSERT_EQ(0xFF, UNSAFE_TODO(dest_pixels[pos]));
     }
   }
 }
@@ -963,10 +963,10 @@ TEST_F(VideoResourceUpdaterTest,
 TEST_F(VideoResourceUpdaterTest, CreateForHardwarePlanes_SingleP010HDR) {
   constexpr auto kHDR10ColorSpace = gfx::ColorSpace::CreateHDR10();
   gfx::HDRMetadata hdr_metadata{};
-  hdr_metadata.smpte_st_2086 =
-      gfx::HdrMetadataSmpteSt2086(SkNamedPrimariesExt::kP3,
-                                  /*luminance_max=*/1000,
-                                  /*luminance_min=*/0);
+  hdr_metadata.SetMDCV(skhdr::MasteringDisplayColorVolume{
+      .fDisplayPrimaries = SkNamedPrimariesExt::kP3,
+      .fMaximumDisplayMasteringLuminance = 1000,
+      .fMinimumDisplayMasteringLuminance = 0});
   std::unique_ptr<VideoResourceUpdater> updater = CreateUpdaterForHardware();
   EXPECT_EQ(0u, GetSharedImageCount());
   scoped_refptr<VideoFrame> video_frame = CreateTestHardwareVideoFrame(

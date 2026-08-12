@@ -11,10 +11,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.robolectric.Shadows.shadowOf;
 
-import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundImageType.CHROME_COLOR;
-import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundImageType.DEFAULT;
-import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundImageType.IMAGE_FROM_DISK;
-import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundImageType.THEME_COLLECTION;
+import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.CHROME_COLOR;
+import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.DEFAULT;
+import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.IMAGE_FROM_DISK;
+import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.THEME_COLLECTION;
 
 import android.content.Context;
 import android.graphics.drawable.Drawable;
@@ -29,6 +29,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
@@ -51,6 +52,7 @@ public class NtpThemeBottomSheetViewUnitTest {
     @Mock private NtpThemeListItemView mThemeCollectionsSection;
     @Mock private OnClickListener mOnClickListener;
     @Mock private NtpThemeListThemeCollectionItemIconView mThemeCollectionsItemIconView;
+    @Captor private ArgumentCaptor<Pair<Drawable, Drawable>> mDrawablePairCaptor;
 
     private NtpThemeBottomSheetView mNtpThemeBottomSheetView;
     private Context mContext;
@@ -86,12 +88,12 @@ public class NtpThemeBottomSheetViewUnitTest {
     }
 
     @Test
-    public void testSetSectionTrailingIconVisibility() {
-        mNtpThemeBottomSheetView.setSectionTrailingIconVisibility(DEFAULT, true);
-        verify(mDefaultSection).setTrailingIconVisibility(eq(true));
+    public void testUpdateSectionTrailingIcon() {
+        mNtpThemeBottomSheetView.updateSectionTrailingIcon(DEFAULT, true);
+        verify(mDefaultSection).updateTrailingIcon(eq(true), eq(DEFAULT));
 
-        mNtpThemeBottomSheetView.setSectionTrailingIconVisibility(IMAGE_FROM_DISK, false);
-        verify(mUploadAnImageSection).setTrailingIconVisibility(eq(false));
+        mNtpThemeBottomSheetView.updateSectionTrailingIcon(IMAGE_FROM_DISK, false);
+        verify(mUploadAnImageSection).updateTrailingIcon(eq(false), eq(IMAGE_FROM_DISK));
     }
 
     @Test
@@ -112,10 +114,9 @@ public class NtpThemeBottomSheetViewUnitTest {
         final Pair<Drawable, Drawable> pair = new Pair<>(primaryDrawable, secondaryDrawable);
         mNtpThemeBottomSheetView.setLeadingIconForThemeCollections(pair);
 
-        ArgumentCaptor<Pair<Drawable, Drawable>> captor = ArgumentCaptor.forClass(Pair.class);
-        verify(mThemeCollectionsItemIconView).setImageDrawablePair(captor.capture());
+        verify(mThemeCollectionsItemIconView).setImageDrawablePair(mDrawablePairCaptor.capture());
 
-        Pair<Drawable, Drawable> capturedPair = captor.getValue();
+        Pair<Drawable, Drawable> capturedPair = mDrawablePairCaptor.getValue();
         ShadowDrawable shadowPrimary = shadowOf(capturedPair.first);
         assertEquals(
                 R.drawable.upload_an_image_icon_for_theme_bottom_sheet,

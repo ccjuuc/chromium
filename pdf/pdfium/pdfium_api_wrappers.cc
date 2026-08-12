@@ -13,14 +13,15 @@
 #include <utility>
 
 #include "base/check_op.h"
-#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/numerics/checked_math.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "pdf/pdf_rect.h"
 #include "pdf/pdfium/pdfium_api_string_buffer_adapter.h"
 #include "printing/units.h"
 #include "third_party/pdfium/public/cpp/fpdf_scopers.h"
+#include "third_party/pdfium/public/fpdf_catalog.h"
 #include "third_party/pdfium/public/fpdf_edit.h"
 #include "third_party/pdfium/public/fpdfview.h"
 #include "ui/gfx/geometry/rect.h"
@@ -178,7 +179,6 @@ std::optional<PdfRect> GetPageObjectBounds(FPDF_PAGEOBJECT page_object) {
 std::u16string GetPageObjectMarkName(FPDF_PAGEOBJECTMARK mark) {
   // FPDFPageObjMark_GetName() naturally handles null `mark` inputs, so no
   // explicit check.
-
   std::u16string name;
   // NOLINT used below because this is required by the PDFium API interaction.
   unsigned long buflen_bytes = 0;  // NOLINT(runtime/int)
@@ -204,6 +204,74 @@ std::u16string GetPageObjectMarkName(FPDF_PAGEOBJECTMARK mark) {
   CHECK_EQ(actual_buflen_bytes, buflen_bytes);
   adapter.Close(expected_size);
   return name;
+}
+
+std::optional<int> GetPageObjectMarkIntParam(FPDF_PAGEOBJECTMARK mark,
+                                             const std::string& key) {
+  int value;
+  if (!FPDFPageObjMark_GetParamIntValue(mark, key.c_str(), &value)) {
+    return std::nullopt;
+  }
+  return value;
+}
+
+std::optional<float> GetPageObjectMarkFloatParam(FPDF_PAGEOBJECTMARK mark,
+                                                 const std::string& key) {
+  float value;
+  if (!FPDFPageObjMark_GetParamFloatValue(mark, key.c_str(), &value)) {
+    return std::nullopt;
+  }
+  return value;
+}
+
+std::optional<std::u16string> GetPageObjectMarkStringParam(
+    FPDF_PAGEOBJECTMARK mark,
+    const std::string& key) {
+  // FPDFPageObjMark_GetParamStringValue() naturally handles null `mark` inputs,
+  // so no explicit check.
+  std::u16string value;
+  unsigned long buflen_bytes = 0;
+  if (!FPDFPageObjMark_GetParamStringValue(mark, key.c_str(), nullptr, 0,
+                                           &buflen_bytes) ||
+      buflen_bytes == 0) {
+    return std::nullopt;
+  }
+
+  // PDFium should never return an odd number of bytes for 16-bit chars.
+  static_assert(sizeof(FPDF_WCHAR) == sizeof(char16_t));
+  CHECK_EQ(buflen_bytes % 2, 0u);
+
+  const size_t expected_size = base::checked_cast<size_t>(buflen_bytes / 2);
+  PDFiumAPIStringBufferAdapter adapter(&value, expected_size,
+                                       /*check_expected_size=*/true);
+  unsigned long actual_buflen_bytes = 0;
+  bool result = FPDFPageObjMark_GetParamStringValue(
+      mark, key.c_str(), static_cast<FPDF_WCHAR*>(adapter.GetData()),
+      buflen_bytes, &actual_buflen_bytes);
+  CHECK(result);
+
+  CHECK_EQ(actual_buflen_bytes, buflen_bytes);
+  adapter.Close(expected_size);
+  return value;
+}
+
+std::optional<std::vector<unsigned char>> GetPageObjectMarkBlobParam(
+    FPDF_PAGEOBJECTMARK mark,
+    const std::string& key) {
+  // FPDFPageObjMark_GetParamBlobValue() naturally handles null `mark` inputs,
+  // so no explicit check.
+  unsigned long buflen = 0;
+  if (!FPDFPageObjMark_GetParamBlobValue(mark, key.c_str(), nullptr, 0,
+                                         &buflen) ||
+      buflen == 0) {
+    return std::nullopt;
+  }
+  std::vector<unsigned char> value(buflen);
+  unsigned long actual_buflen = 0;
+  CHECK(FPDFPageObjMark_GetParamBlobValue(mark, key.c_str(), value.data(),
+                                          buflen, &actual_buflen));
+  CHECK_EQ(actual_buflen, buflen);
+  return value;
 }
 
 std::optional<PdfRect> GetTextCharBox(FPDF_TEXTPAGE text_page, int index) {
@@ -298,8 +366,7 @@ bool RenderPageToDC(FPDF_PAGE page,
     FPDF_RenderPageBitmap(bitmap.get(), page, 0, 0, dest.width(), dest.height(),
                           rotate, flags);
     int stride = FPDFBitmap_GetStride(bitmap.get());
-    BITMAPINFO bmi;
-    UNSAFE_TODO(memset(&bmi, 0, sizeof(bmi)));
+    BITMAPINFO bmi = {};
     bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     bmi.bmiHeader.biWidth = dest.width();
     bmi.bmiHeader.biHeight = -dest.height();  // top-down image
@@ -319,5 +386,11 @@ bool RenderPageToDC(FPDF_PAGE page,
   return true;
 }
 #endif  // BUILDFLAG(IS_WIN)
+
+std::string GetDocumentLanguage(FPDF_DOCUMENT document) {
+  return base::UTF16ToUTF8(CallPDFiumWideStringBufferApi(
+      base::BindRepeating(&FPDFCatalog_GetLanguage, document),
+      /*check_expected_size=*/true));
+}
 
 }  // namespace chrome_pdf

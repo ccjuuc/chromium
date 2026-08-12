@@ -4,14 +4,20 @@
 
 #include "chrome/browser/ui/browser_manager_service.h"
 
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "chrome/browser/ui/browser_active_state_manager/browser_active_state_manager.h"
 #include "chrome/browser/ui/browser_manager_service_factory.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 #if !BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
+#include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -27,6 +33,51 @@ class MockBrowserCollectionObserver : public BrowserCollectionObserver {
   MOCK_METHOD(void, OnBrowserDeactivated, (BrowserWindowInterface * browser));
 };
 
+// Helper class to observe browser close events and verify that the closing
+// browser is correctly filtered out by BrowserManagerService queries while
+// browser objects are in a pending-delete state.
+class FilterVerifier : public BrowserCollectionObserver {
+ public:
+  FilterVerifier(BrowserManagerService* service,
+                 BrowserWindowInterface* closing_browser,
+                 size_t expected_remaining_size)
+      : service_(service),
+        closing_browser_(closing_browser),
+        expected_remaining_size_(expected_remaining_size) {}
+
+  void OnBrowserClosed(BrowserWindowInterface* browser) override {
+    if (browser == closing_browser_) {
+      EXPECT_TRUE(browser->IsDeleteScheduled());
+      EXPECT_EQ(expected_remaining_size_ == 0, service_->IsEmpty());
+      EXPECT_EQ(expected_remaining_size_, service_->GetSize());
+
+      std::vector<BrowserWindowInterface*> visited;
+      service_->ForEach(
+          [&visited](BrowserWindowInterface* b) {
+            visited.push_back(b);
+            return true;
+          },
+          BrowserCollection::Order::kCreation);
+
+      EXPECT_EQ(expected_remaining_size_, visited.size());
+      for (auto* b : visited) {
+        EXPECT_NE(b, closing_browser_);
+      }
+
+      called_ = true;
+      closing_browser_ = nullptr;
+    }
+  }
+
+  bool called() const { return called_; }
+
+ private:
+  raw_ptr<BrowserManagerService> service_;
+  raw_ptr<BrowserWindowInterface> closing_browser_;
+  size_t expected_remaining_size_;
+  bool called_ = false;
+};
+
 class BrowserManagerServiceTest : public InProcessBrowserTest {
  protected:
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -40,13 +91,13 @@ class BrowserManagerServiceTest : public InProcessBrowserTest {
   // TODO(crbug.com/356183782): Consider rewriting this test as an interactive
   // ui test and using ui_test_utils::BringBrowserWindowToFront() instead.
   void ActivatePrimaryBrowser(Browser* const secondary_browser) {
-    browser()->DidBecomeActive();
-    secondary_browser->DidBecomeInactive();
+    BrowserActiveStateManager::From(browser())->DidBecomeActive();
+    BrowserActiveStateManager::From(secondary_browser)->DidBecomeInactive();
   }
 
   void ActivateSecondaryBrowser(Browser* const secondary_browser) {
-    secondary_browser->DidBecomeActive();
-    browser()->DidBecomeInactive();
+    BrowserActiveStateManager::From(secondary_browser)->DidBecomeActive();
+    BrowserActiveStateManager::From(browser())->DidBecomeInactive();
   }
 };
 
@@ -82,6 +133,40 @@ IN_PROC_BROWSER_TEST_F(BrowserManagerServiceTest,
   // Close secondary browser and expect events.
   EXPECT_CALL(observer, OnBrowserClosed(secondary_browser)).Times(1);
   CloseBrowserSynchronously(secondary_browser);
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserManagerServiceTest,
+                       FilterDeletedScheduledBrowsers) {
+  BrowserManagerService* service =
+      BrowserManagerServiceFactory::GetForProfile(GetProfile());
+  ASSERT_NE(service, nullptr);
+
+  BrowserWindowInterface* second_browser = CreateBrowser(GetProfile());
+
+  FilterVerifier verifier(service, second_browser, 1u);
+  base::ScopedObservation<ProfileBrowserCollection, BrowserCollectionObserver>
+      observation{&verifier};
+  observation.Observe(service);
+
+  CloseBrowserSynchronously(second_browser);
+  EXPECT_TRUE(verifier.called());
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserManagerServiceTest,
+                       FilterDeletedScheduledLastBrowser) {
+  BrowserManagerService* service =
+      BrowserManagerServiceFactory::GetForProfile(GetProfile());
+  ASSERT_NE(service, nullptr);
+
+  BrowserWindowInterface* main_browser = browser();
+
+  FilterVerifier verifier(service, main_browser, 0u);
+  base::ScopedObservation<ProfileBrowserCollection, BrowserCollectionObserver>
+      observation{&verifier};
+  observation.Observe(service);
+
+  CloseBrowserSynchronously(main_browser);
+  EXPECT_TRUE(verifier.called());
 }
 
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -126,8 +211,61 @@ IN_PROC_BROWSER_TEST_F(BrowserManagerServiceTest,
   testing::Mock::VerifyAndClearExpectations(&primary_observer);
   testing::Mock::VerifyAndClearExpectations(&secondary_observer);
 
-  // Close secondary browser and expect events.
+  // Close secondary browser and expect events. Ensure the secondary profile is
+  // not destroyed before the end of the test to prevent UAF crashes.
+  ScopedProfileKeepAlive profile_keep_alive(
+      secondary_browser->GetProfile(), ProfileKeepAliveOrigin::kBrowserWindow);
   EXPECT_CALL(secondary_observer, OnBrowserClosed(secondary_browser)).Times(1);
   CloseBrowserSynchronously(secondary_browser);
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserManagerServiceTest,
+                       OTRProfileShutdownNotifiesObserver) {
+  GlobalBrowserCollection* global_collection =
+      GlobalBrowserCollection::GetInstance();
+  ASSERT_NE(global_collection, nullptr);
+  const size_t initial_size = global_collection->GetSize();
+
+  // Primary test browser.
+  ASSERT_GE(initial_size, 1u);
+
+  // Create an OTR profile.
+  Profile* original_profile = GetProfile()->GetOriginalProfile();
+  Profile* otr_profile = original_profile->GetOffTheRecordProfile(
+      Profile::OTRProfileID::CreateUniqueForDevTools(),
+      /*create_if_needed=*/true);
+  ASSERT_NE(otr_profile, nullptr);
+
+  Browser* otr_browser =
+      CreateBrowserWindow(
+          BrowserWindowCreateParams(otr_profile, /*from_user_gesture=*/true))
+          ->GetBrowserForMigrationOnly();
+  EXPECT_EQ(global_collection->GetSize(), initial_size + 1);
+
+  // Observe the GlobalBrowserCollection to verify close events are emitted.
+  MockBrowserCollectionObserver global_observer;
+  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
+      global_observation{&global_observer};
+  global_observation.Observe(global_collection);
+
+  // Expect that GlobalBrowserCollection is notified of the browser closing
+  // when the OTR profile is destroyed.
+  EXPECT_CALL(global_observer, OnBrowserClosed(otr_browser)).Times(1);
+
+  original_profile->DestroyOffTheRecordProfile(otr_profile);
+  testing::Mock::VerifyAndClearExpectations(&global_observer);
+
+  // GlobalBrowserCollection should no longer reference the destroyed browser.
+  EXPECT_EQ(global_collection->GetSize(), initial_size);
+
+  // Access the browser's profile to trigger the dangling pointer dereference
+  // (if there's any).
+  size_t count = 0;
+  global_collection->ForEach([&count](BrowserWindowInterface* browser) {
+    EXPECT_NE(browser->GetProfile(), nullptr);
+    count++;
+    return true;
+  });
+  EXPECT_EQ(count, initial_size);
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS)

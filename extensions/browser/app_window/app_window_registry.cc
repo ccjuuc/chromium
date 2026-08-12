@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "base/containers/contains.h"
+#include "base/no_destructor.h"
 #include "base/observer_list.h"
 #include "base/strings/stringprintf.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
@@ -177,7 +177,7 @@ void AppWindowRegistry::DevToolsAgentHostDetached(
 }
 
 void AppWindowRegistry::AddAppWindowToList(AppWindow* app_window) {
-  if (base::Contains(app_windows_, app_window))
+  if (std::ranges::contains(app_windows_, app_window))
     return;
   app_windows_.push_back(app_window);
 }
@@ -223,7 +223,8 @@ AppWindowRegistry* AppWindowRegistry::Factory::GetForBrowserContext(
 }
 
 AppWindowRegistry::Factory* AppWindowRegistry::Factory::GetInstance() {
-  return base::Singleton<AppWindowRegistry::Factory>::get();
+  static base::NoDestructor<AppWindowRegistry::Factory> instance;
+  return instance.get();
 }
 
 AppWindowRegistry::Factory::Factory()

@@ -5,30 +5,30 @@
 package org.chromium.chrome.browser.tasks.tab_management;
 
 import static org.chromium.build.NullUtil.assertNonNull;
-import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.content.Context;
 
 import org.chromium.base.supplier.LazyOneshotSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.NonNullObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplier;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
-import org.chromium.base.supplier.SettableObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.data_sharing.DataSharingTabManager;
-import org.chromium.chrome.browser.hub.DelegateButtonData;
-import org.chromium.chrome.browser.hub.FullButtonData;
 import org.chromium.chrome.browser.hub.LoadHint;
 import org.chromium.chrome.browser.hub.Pane;
 import org.chromium.chrome.browser.hub.PaneBase;
 import org.chromium.chrome.browser.hub.PaneId;
 import org.chromium.chrome.browser.hub.PaneManager;
-import org.chromium.chrome.browser.hub.ResourceButtonData;
 import org.chromium.chrome.browser.profiles.ProfileProvider;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
+import org.chromium.chrome.browser.tabmodel.TabModel;
+import org.chromium.chrome.browser.ui.actions.button.DelegateButtonData;
+import org.chromium.chrome.browser.ui.actions.button.FullButtonData;
+import org.chromium.chrome.browser.ui.actions.button.ResourceButtonData;
+import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.tab_ui.R;
 import org.chromium.components.tab_group_sync.TabGroupUiActionHandler;
@@ -40,23 +40,25 @@ import java.util.function.Supplier;
 /** A {@link Pane} representing the tab group UI. Contains opened and closed tab groups. */
 @NullMarked
 public class TabGroupsPane extends PaneBase {
-    private final LazyOneshotSupplier<TabGroupModelFilter> mTabGroupModelFilterSupplier;
+    private final LazyOneshotSupplier<TabModel> mTabModelSupplier;
     private final OneshotSupplier<ProfileProvider> mProfileProviderSupplier;
     private final Supplier<PaneManager> mPaneManagerSupplier;
     private final Supplier<TabGroupUiActionHandler> mTabGroupUiActionHandlerSupplier;
-    private final Supplier<ModalDialogManager> mModalDialogManagerSupplier;
-    private final SettableObservableSupplier<FullButtonData> mActionButtonSupplier =
+    private final Supplier<@Nullable ModalDialogManager> mModalDialogManagerSupplier;
+    private final MonotonicObservableSupplier<FullButtonData> mEmptyActionButtonDataSupplier =
+            ObservableSuppliers.alwaysNull();
+    private final SettableMonotonicObservableSupplier<FullButtonData> mActionButtonSupplier =
             ObservableSuppliers.createMonotonic();
     private final SettableNonNullObservableSupplier<Boolean> mHairlineVisibilitySupplier =
             ObservableSuppliers.createNonNull(false);
     private final DataSharingTabManager mDataSharingTabManager;
 
     private @Nullable TabGroupListCoordinator mTabGroupListCoordinator;
-    private final ObservableSupplier<EdgeToEdgeController> mEdgeToEdgeSupplier;
+    private final MonotonicObservableSupplier<EdgeToEdgeController> mEdgeToEdgeSupplier;
 
     /**
      * @param context Used to inflate UI.
-     * @param tabGroupModelFilterSupplier Used to pull tab data from.
+     * @param tabModelSupplier Used to pull tab data from.
      * @param onToolbarAlphaChange Observer to notify when alpha changes during animations.
      * @param profileProviderSupplier Used to fetch the current profile.
      * @param paneManagerSupplier Used to switch and communicate with other panes.
@@ -67,16 +69,16 @@ public class TabGroupsPane extends PaneBase {
      */
     TabGroupsPane(
             Context context,
-            LazyOneshotSupplier<TabGroupModelFilter> tabGroupModelFilterSupplier,
+            LazyOneshotSupplier<TabModel> tabModelSupplier,
             DoubleConsumer onToolbarAlphaChange,
             OneshotSupplier<ProfileProvider> profileProviderSupplier,
             Supplier<PaneManager> paneManagerSupplier,
             Supplier<TabGroupUiActionHandler> tabGroupUiActionHandlerSupplier,
-            Supplier<ModalDialogManager> modalDialogManagerSupplier,
-            ObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier,
+            Supplier<@Nullable ModalDialogManager> modalDialogManagerSupplier,
+            MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier,
             DataSharingTabManager dataSharingTabManager) {
         super(PaneId.TAB_GROUPS, context, onToolbarAlphaChange);
-        mTabGroupModelFilterSupplier = tabGroupModelFilterSupplier;
+        mTabModelSupplier = tabModelSupplier;
         mProfileProviderSupplier = profileProviderSupplier;
         mPaneManagerSupplier = paneManagerSupplier;
         mTabGroupUiActionHandlerSupplier = tabGroupUiActionHandlerSupplier;
@@ -87,21 +89,22 @@ public class TabGroupsPane extends PaneBase {
                 new TabGroupCreationUiDelegate(
                         context,
                         modalDialogManagerSupplier,
-                        paneManagerSupplier,
-                        mTabGroupModelFilterSupplier::get,
+                        (Supplier<@Nullable PaneManager>) paneManagerSupplier,
+                        mTabModelSupplier::get,
                         TabGroupCreationDialogManager::new);
         mActionButtonSupplier.set(
-                new DelegateButtonData(
-                        new ResourceButtonData(
-                                R.string.button_new_tab_group,
-                                R.string.button_new_tab_group,
-                                R.drawable.new_tab_icon),
-                        flow::newTabGroupFlow));
+                new DelegateButtonData.Builder(
+                                new ResourceButtonData(
+                                        R.string.button_new_tab_group,
+                                        R.string.button_new_tab_group,
+                                        R.drawable.new_tab_icon))
+                        .setOnPress(view -> flow.newTabGroupFlow())
+                        .build());
         mReferenceButtonDataSupplier.set(
                 new ResourceButtonData(
                         R.string.accessibility_tab_groups,
                         R.string.accessibility_tab_groups,
-                        R.drawable.ic_features_24dp));
+                        R.drawable.ic_grid_view_24dp));
     }
 
     @SuppressWarnings("NullAway")
@@ -120,11 +123,11 @@ public class TabGroupsPane extends PaneBase {
             mTabGroupListCoordinator =
                     new TabGroupListCoordinator(
                             mContext,
-                            assumeNonNull(mTabGroupModelFilterSupplier.get()),
+                            assertNonNull(mTabModelSupplier.get()),
                             assertNonNull(mProfileProviderSupplier.get()),
-                            mPaneManagerSupplier.get(),
-                            mTabGroupUiActionHandlerSupplier.get(),
-                            mModalDialogManagerSupplier.get(),
+                            assertNonNull(mPaneManagerSupplier.get()),
+                            assertNonNull(mTabGroupUiActionHandlerSupplier.get()),
+                            assertNonNull(mModalDialogManagerSupplier.get()),
                             mHairlineVisibilitySupplier::set,
                             mEdgeToEdgeSupplier,
                             mDataSharingTabManager);
@@ -135,7 +138,11 @@ public class TabGroupsPane extends PaneBase {
     }
 
     @Override
-    public ObservableSupplier<FullButtonData> getActionButtonDataSupplier() {
+    public MonotonicObservableSupplier<FullButtonData> getActionButtonDataSupplier() {
+        if (BottomBarConfigUtils.isBottomBarEnabled(mContext)
+                && BottomBarConfigUtils.shouldShowOnGts()) {
+            return mEmptyActionButtonDataSupplier;
+        }
         return mActionButtonSupplier;
     }
 

@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 
+#include "base/base_switches.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/hash/hash.h"
@@ -22,7 +23,6 @@
 #include "chrome/browser/preloading/preloading_prefs.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
-#include "components/variations/variations_switches.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/preloading_data.h"
 #include "content/public/browser/site_instance.h"
@@ -168,7 +168,7 @@ bool MaySendTraffic() {
   static const bool may_send_traffic = [] {
     // Use a fixed state for benchmarking.
     if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-            variations::switches::kEnableBenchmarking)) {
+            ::switches::kEnableBenchmarking)) {
 #if BUILDFLAG(IS_ANDROID)
       return true;
 #else
@@ -180,7 +180,7 @@ bool MaySendTraffic() {
         blink::features::kPredictorTrafficClientEnabledPercent.Get();
 
     // This isn't user facing, so we'll just re-roll for each session.
-    return base::RandInt(0, 99) < enabled_percent;
+    return base::RandIntInclusive(0, 99) < enabled_percent;
   }();
 
   return may_send_traffic;
@@ -216,7 +216,7 @@ NavigationPredictor::NavigationPredictor(
   // When using content::Page::IsPrimary, bfcache can cause returning a false in
   // the back/forward navigation. So, DCHECK only checks if current page is
   // prerendering until deciding how to handle bfcache navigations. See also
-  // https://crbug.com/1239310.
+  // https://crbug.com/40193806.
   DCHECK(!IsPrerendering(render_frame_host));
 
   navigation_start_ = NowTicks();

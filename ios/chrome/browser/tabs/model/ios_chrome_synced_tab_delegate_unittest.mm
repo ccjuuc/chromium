@@ -10,6 +10,7 @@
 #import "components/signin/public/base/signin_metrics.h"
 #import "components/sync/base/features.h"
 #import "components/sync/protocol/sync_enums.pb.h"
+#import "components/sync/test/test_sync_service.h"
 #import "components/sync_sessions/sync_sessions_client.h"
 #import "components/sync_sessions/test_synced_window_delegates_getter.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
@@ -22,6 +23,8 @@
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/navigation/navigation_item.h"
 #import "ios/web/public/test/fakes/fake_navigation_manager.h"
@@ -139,6 +142,10 @@ class FakeSyncSessionsClient : public sync_sessions::SyncSessionsClient {
     return nullptr;
   }
   base::WeakPtr<SyncSessionsClient> AsWeakPtr() override { return nullptr; }
+  std::optional<std::string> GetSessionDisplayNameFromDeviceInfo(
+      const std::string& session_tag) const override {
+    return std::nullopt;
+  }
 
   sync_sessions::TestSyncedWindowDelegatesGetter window_delegates_getter_;
 };
@@ -153,8 +160,10 @@ TEST_F(IOSChromeSyncedTabDelegateTest,
   TestProfileIOS::Builder builder;
   builder.AddTestingFactory(
       AuthenticationServiceFactory::GetInstance(),
-      AuthenticationServiceFactory::GetFactoryWithDelegate(
+      AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
           std::make_unique<FakeAuthenticationServiceDelegate>()));
+  builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                            base::BindRepeating(&CreateTestSyncService));
   TestProfileIOS* profile =
       profile_manager.AddProfileWithBuilder(std::move(builder));
 
@@ -168,16 +177,15 @@ TEST_F(IOSChromeSyncedTabDelegateTest,
   system_identity_manager->AddIdentity(identity);
   AuthenticationService* authentication_service =
       AuthenticationServiceFactory::GetForProfile(profile);
-  if (AreSeparateProfilesForManagedAccountsEnabled()) {
-    // With multi-profile, `profile` is considered to be the personal profile,
-    // and the managed account gets assigned to a separate managed profile. Move
-    // it into the personal profile so that signin becomes possible.
-    GetApplicationContext()
-        ->GetAccountProfileMapper()
-        ->MoveManagedAccountToPersonalProfileForTesting(identity.gaiaId);
-  }
+  // With multi-profile, `profile` is considered to be the personal profile,
+  // and the managed account gets assigned to a separate managed profile. Move
+  // it into the personal profile so that signin becomes possible.
+  GetApplicationContext()
+      ->GetAccountProfileMapper()
+      ->MoveManagedAccountToPersonalProfileForTesting(identity.gaiaId);
+
   authentication_service->SignIn(identity,
-                                 signin_metrics::AccessPoint::kUnknown);
+                                 signin_metrics::AccessPoint::kStartPage);
 
   // Create a navigation entry (so that there's something to sync).
   auto navigation_manager = std::make_unique<web::FakeNavigationManager>();

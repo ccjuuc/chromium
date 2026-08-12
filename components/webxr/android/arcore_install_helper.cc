@@ -7,7 +7,11 @@
 #include <memory>
 #include <utility>
 
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/notreached.h"
 #include "base/time/time.h"
 #include "components/messages/android/message_dispatcher_bridge.h"
 #include "components/resources/android/theme_resources.h"
@@ -41,7 +45,7 @@ ArCoreInstallHelper::ArCoreInstallHelper() {
       AttachCurrentThread());
 
   java_install_utils_ = Java_ArCoreInstallUtils_create(
-      AttachCurrentThread(), reinterpret_cast<jlong>(this));
+      AttachCurrentThread(), reinterpret_cast<int64_t>(this));
 }
 
 ArCoreInstallHelper::~ArCoreInstallHelper() {
@@ -50,13 +54,12 @@ ArCoreInstallHelper::~ArCoreInstallHelper() {
                                             java_install_utils_);
   }
 
-  RunInstallFinishedCallback(false);
+  RunInstallFinishedCallback(content::XrInstallResult::kFailed);
 }
 
 void ArCoreInstallHelper::EnsureInstalled(
-    int render_process_id,
-    int render_frame_id,
-    base::OnceCallback<void(bool)> install_callback) {
+    const content::GlobalRenderFrameHostId& frame_id,
+    base::OnceCallback<void(content::XrInstallResult)> install_callback) {
   DVLOG(1) << __func__ << ": java_install_utils_.is_null()="
            << java_install_utils_.is_null();
 
@@ -64,24 +67,24 @@ void ArCoreInstallHelper::EnsureInstalled(
   install_finished_callback_ = std::move(install_callback);
 
   if (java_install_utils_.is_null()) {
-    RunInstallFinishedCallback(false);
+    RunInstallFinishedCallback(content::XrInstallResult::kFailed);
     return;
   }
 
   // ARCore is not installed or requires an update.
   if (Java_ArCoreInstallUtils_shouldRequestInstallSupportedArCore(
           AttachCurrentThread())) {
-    ShowMessage(render_process_id, render_frame_id);
+    ShowMessage(frame_id);
     return;
   }
 
-  // ARCore did not need to be installed/updated so mock out that its
-  // installation succeeded.
-  OnRequestInstallSupportedArCoreResult(nullptr, true);
+  // ARCore did not need to be installed/updated.
+  RunInstallFinishedCallback(
+      content::XrInstallResult::kSuccessAlreadyInstalled);
 }
 
-void ArCoreInstallHelper::ShowMessage(int render_process_id,
-                                      int render_frame_id) {
+void ArCoreInstallHelper::ShowMessage(
+    const content::GlobalRenderFrameHostId& frame_id) {
   DVLOG(1) << __func__;
 
   ArCoreAvailability availability = static_cast<ArCoreAvailability>(
@@ -90,7 +93,7 @@ void ArCoreInstallHelper::ShowMessage(int render_process_id,
   int button_text = -1;
   switch (availability) {
     case ArCoreAvailability::kUnsupportedDeviceNotCapable: {
-      RunInstallFinishedCallback(false);
+      RunInstallFinishedCallback(content::XrInstallResult::kFailed);
       return;  // No need to process further
     }
     case ArCoreAvailability::kUnknownChecking:
@@ -116,8 +119,7 @@ void ArCoreInstallHelper::ShowMessage(int render_process_id,
   message_ = std::make_unique<messages::MessageWrapper>(
       messages::MessageIdentifier::AR_CORE_UPGRADE,
       base::BindOnce(&ArCoreInstallHelper::HandleMessagePrimaryAction,
-                     base::Unretained(this), render_process_id,
-                     render_frame_id),
+                     base::Unretained(this), frame_id),
       base::BindOnce(&ArCoreInstallHelper::HandleMessageDismissed,
                      base::Unretained(this)));
 
@@ -132,7 +134,7 @@ void ArCoreInstallHelper::ShowMessage(int render_process_id,
   message_->SetDuration(kMessageTimeout.InMilliseconds());
 
   message_dispatcher_bridge->EnqueueMessage(
-      message_.get(), GetWebContents(render_process_id, render_frame_id),
+      message_.get(), GetWebContents(frame_id),
       messages::MessageScopeType::NAVIGATION,
       messages::MessagePriority::kNormal);
 }
@@ -149,12 +151,11 @@ void ArCoreInstallHelper::HandleMessageDismissed(
   message_.reset();
 }
 
-void ArCoreInstallHelper::HandleMessagePrimaryAction(int render_process_id,
-                                                     int render_frame_id) {
+void ArCoreInstallHelper::HandleMessagePrimaryAction(
+    const content::GlobalRenderFrameHostId& frame_id) {
   // When completed, java will call: OnRequestInstallSupportedArCoreResult
   Java_ArCoreInstallUtils_requestInstallSupportedArCore(
-      AttachCurrentThread(), java_install_utils_,
-      GetJavaWebContents(render_process_id, render_frame_id));
+      AttachCurrentThread(), java_install_utils_, GetJavaWebContents(frame_id));
 }
 
 void ArCoreInstallHelper::OnRequestInstallSupportedArCoreResult(JNIEnv* env,
@@ -162,12 +163,15 @@ void ArCoreInstallHelper::OnRequestInstallSupportedArCoreResult(JNIEnv* env,
   DVLOG(1) << __func__;
 
   // Nothing else to do, simply call the deferred callback.
-  RunInstallFinishedCallback(success);
+  RunInstallFinishedCallback(success
+                                 ? content::XrInstallResult::kSuccessInstalled
+                                 : content::XrInstallResult::kFailed);
 }
 
-void ArCoreInstallHelper::RunInstallFinishedCallback(bool succeeded) {
+void ArCoreInstallHelper::RunInstallFinishedCallback(
+    content::XrInstallResult result) {
   if (install_finished_callback_) {
-    std::move(install_finished_callback_).Run(succeeded);
+    std::move(install_finished_callback_).Run(result);
   }
 }
 

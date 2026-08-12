@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/webui/ash/login/osauth/local_data_loss_warning_screen_handler.h"
 
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "chrome/browser/ui/webui/ash/login/base_screen_handler.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/login/localized_values_builder.h"
@@ -20,7 +21,7 @@ LocalDataLossWarningScreenHandler::~LocalDataLossWarningScreenHandler() =
 void LocalDataLossWarningScreenHandler::Show(bool is_owner,
                                              const std::string& email,
                                              bool can_go_back) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("isOwner", is_owner);
   dict.Set("email", email);
   dict.Set("canGoBack", can_go_back);

@@ -195,7 +195,7 @@ TEST_F(ExternalProviderImplChromeOSTest, AppMode) {
 
 // Normal mode, standalone app should be installed, because sync is enabled but
 // not running.
-// flaky: crbug.com/854206
+// flaky: crbug.com/41395446
 TEST_F(ExternalProviderImplChromeOSTest, DISABLED_Standalone) {
   InitServiceWithExternalProviders(true);
 
@@ -207,7 +207,7 @@ TEST_F(ExternalProviderImplChromeOSTest, DISABLED_Standalone) {
 }
 
 // Should include only subset of default apps
-// flaky: crbug.com/854206
+// flaky: crbug.com/41395446
 TEST_F(ExternalProviderImplChromeOSTest, DISABLED_StandaloneChild) {
   InitServiceWithExternalProvidersAndUserType(true /* standalone */,
                                               true /* is_child */);
@@ -240,10 +240,6 @@ TEST_F(ExternalProviderImplChromeOSTest, SyncDisabled) {
 TEST_F(ExternalProviderImplChromeOSTest, PolicyDisabled) {
   InitServiceWithExternalProviders(true);
 
-  // Log user in, start sync.
-  TestingBrowserProcess::GetGlobal()->SetProfileManager(
-      std::make_unique<ProfileManagerWithoutInit>(temp_dir().GetPath()));
-
   auto identity_test_env_profile_adaptor =
       std::make_unique<IdentityTestEnvironmentProfileAdaptor>(profile());
   identity_test_env_profile_adaptor->identity_test_env()
@@ -263,8 +259,6 @@ TEST_F(ExternalProviderImplChromeOSTest, PolicyDisabled) {
       observer.WaitForExtensionLoaded();
   EXPECT_EQ(loaded_extension->id(), kStandaloneAppId);
   EXPECT_TRUE(registry()->GetInstalledExtension(kStandaloneAppId));
-
-  TestingBrowserProcess::GetGlobal()->SetProfileManager(nullptr);
 }
 
 // User signed in, sync service started, install app when priority sync is

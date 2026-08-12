@@ -25,7 +25,6 @@
 
 #include "third_party/blink/renderer/core/dom/class_collection.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
-#include "third_party/blink/renderer/core/dom/node_rare_data.h"
 #include "third_party/blink/renderer/core/html/collection_type.h"
 #include "third_party/blink/renderer/core/html/document_all_name_collection.h"
 #include "third_party/blink/renderer/core/html/document_name_collection.h"
@@ -205,14 +204,6 @@ HTMLCollection::~HTMLCollection() = default;
 void HTMLCollection::InvalidateCache(Document* old_document) const {
   collection_items_cache_.Invalidate();
   InvalidateIdNameCacheMaps(old_document);
-}
-
-unsigned HTMLCollection::length() const {
-  return collection_items_cache_.NodeCount(*this);
-}
-
-Element* HTMLCollection::item(unsigned offset) const {
-  return collection_items_cache_.NodeAt(*this, offset);
 }
 
 static inline bool IsMatchingHTMLElement(const HTMLCollection& html_collection,
@@ -566,9 +557,9 @@ void HTMLCollection::NamedItems(const AtomicString& name,
 
   const NamedItemCache& cache = GetNamedItemCache();
   if (const auto* id_results = cache.GetElementsById(name))
-    result.AppendVector(*id_results);
+    result.append_range(*id_results);
   if (const auto* name_results = cache.GetElementsByName(name))
-    result.AppendVector(*name_results);
+    result.append_range(*name_results);
 }
 
 bool HTMLCollection::HasNamedItems(const AtomicString& name) const {

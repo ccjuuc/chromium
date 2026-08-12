@@ -22,7 +22,14 @@ EventFlags EventFlagsFromAndroidMetaState(int meta_state) {
   if ((meta_state & AMETA_CTRL_ON) != 0) {
     flags |= EF_CONTROL_DOWN;
   }
-  if ((meta_state & AMETA_ALT_ON) != 0) {
+  if ((meta_state & AMETA_ALT_LEFT_ON) != 0) {
+    flags |= EF_ALT_DOWN;
+  }
+  if ((meta_state & AMETA_ALT_RIGHT_ON) != 0) {
+    flags |= EF_ALTGR_DOWN;
+  }
+  if ((meta_state & (AMETA_ALT_LEFT_ON | AMETA_ALT_RIGHT_ON)) == 0 &&
+      (meta_state & AMETA_ALT_ON) != 0) {
     flags |= EF_ALT_DOWN;
   }
   if ((meta_state & AMETA_META_ON) != 0) {
@@ -47,6 +54,9 @@ int AndroidMetaStateFromEventFlags(EventFlags event_flags) {
   if (event_flags & EF_ALT_DOWN) {
     meta_state |= AMETA_ALT_ON;
   }
+  if (event_flags & EF_ALTGR_DOWN) {
+    meta_state |= AMETA_ALT_RIGHT_ON;
+  }
   if (event_flags & EF_COMMAND_DOWN) {
     meta_state |= AMETA_META_ON;
   }
@@ -60,25 +70,25 @@ int AndroidMetaStateFromEventFlags(EventFlags event_flags) {
 EventFlags EventFlagsFromAndroidButtonState(int button_state) {
   int flags = EF_NONE;
 
-  if ((button_state & JNI_MotionEvent::BUTTON_BACK) != 0) {
+  if ((button_state & MotionEventJni::BUTTON_BACK) != 0) {
     flags |= EF_BACK_MOUSE_BUTTON;
   }
-  if ((button_state & JNI_MotionEvent::BUTTON_FORWARD) != 0) {
+  if ((button_state & MotionEventJni::BUTTON_FORWARD) != 0) {
     flags |= EF_FORWARD_MOUSE_BUTTON;
   }
-  if ((button_state & JNI_MotionEvent::BUTTON_PRIMARY) != 0) {
+  if ((button_state & MotionEventJni::BUTTON_PRIMARY) != 0) {
     flags |= EF_LEFT_MOUSE_BUTTON;
   }
-  if ((button_state & JNI_MotionEvent::BUTTON_SECONDARY) != 0) {
+  if ((button_state & MotionEventJni::BUTTON_SECONDARY) != 0) {
     flags |= EF_RIGHT_MOUSE_BUTTON;
   }
-  if ((button_state & JNI_MotionEvent::BUTTON_TERTIARY) != 0) {
+  if ((button_state & MotionEventJni::BUTTON_TERTIARY) != 0) {
     flags |= EF_MIDDLE_MOUSE_BUTTON;
   }
-  if ((button_state & JNI_MotionEvent::BUTTON_STYLUS_PRIMARY) != 0) {
+  if ((button_state & MotionEventJni::BUTTON_STYLUS_PRIMARY) != 0) {
     flags |= EF_LEFT_MOUSE_BUTTON;
   }
-  if ((button_state & JNI_MotionEvent::BUTTON_STYLUS_SECONDARY) != 0) {
+  if ((button_state & MotionEventJni::BUTTON_STYLUS_SECONDARY) != 0) {
     flags |= EF_RIGHT_MOUSE_BUTTON;
   }
 

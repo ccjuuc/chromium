@@ -30,7 +30,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.LooperMode;
 
 import org.chromium.base.IntentUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -48,13 +47,12 @@ import org.chromium.chrome.browser.customtabs.features.toolbar.BrowserServicesTh
 import org.chromium.chrome.browser.document.ChromeLauncherActivity;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.theme.TopUiThemeColorProvider;
+import org.chromium.chrome.browser.theme.ToolbarThemeColorProvider;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateManager;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 
 @RunWith(BaseRobolectricTestRunner.class)
-@LooperMode(LooperMode.Mode.PAUSED)
 public class BrowserServicesThemeColorProviderUnitTest {
     private static final int LIGHT_COLOR = Color.GREEN;
     private static final int DARK_COLOR = Color.BLACK;
@@ -62,7 +60,7 @@ public class BrowserServicesThemeColorProviderUnitTest {
     @Rule public MockitoRule mockitoRule = MockitoJUnit.rule();
 
     @Mock public Tab tab;
-    @Mock public TopUiThemeColorProvider mTopUiThemeColorProvider;
+    @Mock public ToolbarThemeColorProvider mToolbarThemeColorProvider;
     @Mock public CustomTabActivityTabProvider mCustomTabActivityTabProvider;
     @Mock public DesktopWindowStateManager mDesktopWindowStateManager;
     @Mock public TabObserverRegistrar mTabObserverRegistrar;
@@ -83,7 +81,7 @@ public class BrowserServicesThemeColorProviderUnitTest {
         return new BrowserServicesThemeColorProvider(
                 mContext,
                 intentDataProvider,
-                mTopUiThemeColorProvider,
+                mToolbarThemeColorProvider,
                 mCustomTabActivityTabProvider,
                 mTabObserverRegistrar,
                 mActivityLifecycleDispatcher,
@@ -234,8 +232,7 @@ public class BrowserServicesThemeColorProviderUnitTest {
     public void testLightColorTabTheme_TabColorWithLightScheme() {
         // emulate not incognito tab with page theme
         when(tab.getThemeColor()).thenReturn(LIGHT_COLOR);
-        when(mTopUiThemeColorProvider.calculateColor(eq(tab), eq(LIGHT_COLOR)))
-                .thenReturn(LIGHT_COLOR);
+        when(mToolbarThemeColorProvider.getToolbarBackgroundColor(eq(tab))).thenReturn(LIGHT_COLOR);
         var intentDataProvider =
                 buildCctIntentDataProvider(
                         COLOR_SCHEME_LIGHT,
@@ -257,8 +254,7 @@ public class BrowserServicesThemeColorProviderUnitTest {
     public void testDarkColorTabTheme_TabColorWithDarkScheme() {
         // emulate not incognito tab with page theme
         when(tab.getThemeColor()).thenReturn(DARK_COLOR);
-        when(mTopUiThemeColorProvider.calculateColor(eq(tab), eq(DARK_COLOR)))
-                .thenReturn(DARK_COLOR);
+        when(mToolbarThemeColorProvider.getToolbarBackgroundColor(eq(tab))).thenReturn(DARK_COLOR);
         var intentDataProvider =
                 buildCctIntentDataProvider(
                         COLOR_SCHEME_LIGHT,
@@ -341,6 +337,39 @@ public class BrowserServicesThemeColorProviderUnitTest {
                 "Should be chrome default scheme",
                 BrandedColorScheme.APP_DEFAULT,
                 actual.brandedColorScheme);
+    }
+
+    @Test
+    public void testSSLStateUpdateRecomputesTheme() {
+        when(mCustomTabActivityTabProvider.get()).thenReturn(tab);
+        when(mToolbarThemeColorProvider.getToolbarBackgroundColor(eq(tab))).thenReturn(LIGHT_COLOR);
+        var intentDataProvider =
+                buildCctIntentDataProvider(
+                        COLOR_SCHEME_LIGHT,
+                        /* schemeParams= */ null,
+                        /* isOpenedByChrome= */ false,
+                        /* isIncognito= */ false);
+        var themeColorProvider = createThemeColorProvider(intentDataProvider);
+        themeColorProvider.setUseTabTheme(true);
+
+        assertEquals(
+                "Should use the page theme color before the SSL state changes",
+                LIGHT_COLOR,
+                themeColorProvider.getThemeColor());
+
+        int defaultColor = ChromeColors.getDefaultThemeColor(mContext, false);
+        when(mToolbarThemeColorProvider.getToolbarBackgroundColor(eq(tab)))
+                .thenReturn(defaultColor);
+        themeColorProvider.getTabObserver().onSSLStateUpdated(tab);
+
+        assertEquals(
+                "Should refresh the theme color when the SSL state changes",
+                defaultColor,
+                themeColorProvider.getThemeColor());
+        assertEquals(
+                "Should refresh the color scheme when the SSL state changes",
+                BrandedColorScheme.APP_DEFAULT,
+                themeColorProvider.getBrandedColorScheme());
     }
 
     @Test

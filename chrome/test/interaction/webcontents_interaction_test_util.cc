@@ -30,13 +30,14 @@
 #include "base/timer/elapsed_timer.h"
 #include "base/uuid.h"
 #include "base/values.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_list_observer.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/contents_web_view.h"
@@ -50,7 +51,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
-#include "ui/base/interaction/framework_specific_implementation.h"
+#include "ui/base/interaction/safe_castable.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/rect.h"
@@ -293,7 +294,7 @@ void ExecuteJsLocal(const content::ToRenderFrameHost& execution_target,
 std::string DeepQueryToJSON(
     const WebContentsInteractionTestUtil::DeepQuery& where) {
   // Safely convert the selector list in `where` to a JSON/JS list.
-  base::Value::List selector_list;
+  base::ListValue selector_list;
   for (const auto& selector : where) {
     selector_list.Append(selector);
   }
@@ -996,15 +997,17 @@ void WebContentsInteractionTestUtil::OnPollEvent(
 
 class TabWebContentsInteractionTestUtil::NewTabWatcher
     : public TabStripModelObserver,
-      public BrowserListObserver {
+      public BrowserCollectionObserver {
  public:
   NewTabWatcher(TabWebContentsInteractionTestUtil* owner,
                 BrowserWindowInterface* browser)
       : owner_(owner), browser_(browser) {
     if (browser_) {
+      // TODO(crbug.com/452120900): TabStripModel auto-unregistered by dtor
       browser_->GetTabStripModel()->AddObserver(this);
     } else {
-      BrowserList::GetInstance()->AddObserver(this);
+      global_browser_observation_.Observe(
+          GlobalBrowserCollection::GetInstance());
       ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
           [this](BrowserWindowInterface* browser) {
             browser->GetTabStripModel()->AddObserver(this);
@@ -1013,20 +1016,17 @@ class TabWebContentsInteractionTestUtil::NewTabWatcher
     }
   }
 
-  ~NewTabWatcher() override {
-    BrowserList::GetInstance()->RemoveObserver(this);
-  }
+  ~NewTabWatcher() override = default;
 
   BrowserWindowInterface* browser() { return browser_; }
 
  private:
-  // BrowserListObserver:
-  void OnBrowserAdded(Browser* browser) override {
+  // BrowserCollectionObserver:
+  void OnBrowserCreated(BrowserWindowInterface* browser) override {
     CHECK(!browser_);
+    // TODO(crbug.com/452120900): TabStripModel auto-unregistered by dtor
     browser->GetTabStripModel()->AddObserver(this);
   }
-
-  void OnBrowserRemoved(Browser* browser) override { CHECK(!browser_); }
 
   // TabStripModelObserver:
   void OnTabStripModelChanged(
@@ -1046,6 +1046,8 @@ class TabWebContentsInteractionTestUtil::NewTabWatcher
 
   const raw_ptr<TabWebContentsInteractionTestUtil> owner_;
   const raw_ptr<BrowserWindowInterface> browser_;
+  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
+      global_browser_observation_{this};
 };
 
 TabWebContentsInteractionTestUtil::TabWebContentsInteractionTestUtil(
@@ -1124,7 +1126,7 @@ void TabWebContentsInteractionTestUtil::OnTabStripModelChanged(
       // We won't handle deleted reason here, since we already capture
       // WebContentsDestroyed().
       if (removed_tab.remove_reason ==
-          TabStripModelChange::RemoveReason::kInsertedIntoOtherTabStrip) {
+          TabRemovedReason::kInsertedIntoOtherTabStrip) {
         DiscardCurrentElement();
         Observe(nullptr);
       }

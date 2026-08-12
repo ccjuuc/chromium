@@ -240,6 +240,8 @@ void BestEffortCheckOCSP(const std::string& raw_response,
 // |spki_hashes| - that is, situations in which the OS methods of detecting
 // a known root flag a certificate as known, but its hash is not known as part
 // of the built-in list.
+// TODO(crbug.com/347047630): Remove this after the new histogram has
+// accumulated sufficient history.
 void RecordTrustAnchorHistogram(const std::vector<SHA256HashValue>& spki_hashes,
                                 bool is_issued_by_known_root) {
   int32_t id = 0;
@@ -261,9 +263,8 @@ void RecordTrustAnchorHistogram(const std::vector<SHA256HashValue>& spki_hashes,
 
 // Inspects the signature algorithms in a single certificate |cert|.
 //
-//   * Sets |verify_result->has_sha1| to true if the certificate uses SHA1.
-//
-// Returns false if the signature algorithm was unknown or mismatched.
+// Returns false if the signature algorithm was unknown, mismatched, or
+// not allowed.
 [[nodiscard]] bool InspectSignatureAlgorithmForCert(
     const CRYPTO_BUFFER* cert,
     CertVerifyResult* verify_result) {
@@ -285,9 +286,15 @@ void RecordTrustAnchorHistogram(const std::vector<SHA256HashValue>& spki_hashes,
     return false;
   }
 
-  verify_result->has_sha1 =
-      *cert_algorithm == bssl::SignatureAlgorithm::kRsaPkcs1Sha1 ||
-      *cert_algorithm == bssl::SignatureAlgorithm::kEcdsaSha1;
+  if (*cert_algorithm == bssl::SignatureAlgorithm::kRsaPkcs1Sha1 ||
+      *cert_algorithm == bssl::SignatureAlgorithm::kEcdsaSha1) {
+    // The underlying verifier has likely already failed due to the SHA-1
+    // signature, double-checking here is mostly unnecessary. (The only case
+    // this is check is expected to be load-bearing is when cronet is running
+    // on an old Android (before Android 10) that allows SHA-1 signatures.)
+    return false;
+  }
+
   return true;
 }
 
@@ -323,8 +330,6 @@ void RecordTrustAnchorHistogram(const std::vector<SHA256HashValue>& spki_hashes,
     return true;
   }
 
-  DCHECK(!verify_result->has_sha1);
-
   // Fill in hash algorithms for the certificates, excluding the
   // final one (which is presumably the trust anchor; may be incorrect for
   // partial chains).
@@ -339,13 +344,13 @@ void RecordTrustAnchorHistogram(const std::vector<SHA256HashValue>& spki_hashes,
   return true;
 }
 
-base::Value::Dict CertVerifyParams(X509Certificate* cert,
-                                   const std::string& hostname,
-                                   const std::string& ocsp_response,
-                                   const std::string& sct_list,
-                                   int flags,
-                                   CRLSet* crl_set) {
-  base::Value::Dict dict;
+base::DictValue CertVerifyParams(X509Certificate* cert,
+                                 const std::string& hostname,
+                                 const std::string& ocsp_response,
+                                 const std::string& sct_list,
+                                 int flags,
+                                 CRLSet* crl_set) {
+  base::DictValue dict;
   dict.Set("certificates", NetLogX509CertificateList(cert));
   if (!ocsp_response.empty()) {
     dict.Set("stapled_ocsp_response",
@@ -524,21 +529,6 @@ int CertVerifyProc::Verify(X509Certificate* cert,
       rv = MapCertStatusToNetError(verify_result->cert_status);
   }
 
-  if (verify_result->has_sha1)
-    verify_result->cert_status |= CERT_STATUS_SHA1_SIGNATURE_PRESENT;
-
-  // Flag certificates using weak signature algorithms.
-  bool sha1_allowed = (flags & VERIFY_ENABLE_SHA1_LOCAL_ANCHORS) &&
-                      !verify_result->is_issued_by_known_root;
-  if (!sha1_allowed && verify_result->has_sha1) {
-    verify_result->cert_status |= CERT_STATUS_WEAK_SIGNATURE_ALGORITHM;
-    // Avoid replacing a more serious error, such as an OS/library failure,
-    // by ensuring that if verification failed, it failed with a certificate
-    // error.
-    if (rv == OK || IsCertificateError(rv))
-      rv = MapCertStatusToNetError(verify_result->cert_status);
-  }
-
   // Flag certificates using too long validity periods.
   if (verify_result->is_issued_by_known_root && HasTooLongValidity(*cert)) {
     verify_result->cert_status |= CERT_STATUS_VALIDITY_TOO_LONG;
@@ -599,8 +589,8 @@ void CertVerifyProc::LogNameNormalizationResult(
     const std::string& histogram_suffix,
     NameNormalizationResult result) {
   base::UmaHistogramEnumeration(
-      std::string("Net.CertVerifier.NameNormalizationPrivateRoots") +
-          histogram_suffix,
+      base::StrCat(
+          {"Net.CertVerifier.NameNormalizationPrivateRoots", histogram_suffix}),
       result);
 }
 

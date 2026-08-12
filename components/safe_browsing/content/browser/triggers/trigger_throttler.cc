@@ -6,7 +6,6 @@
 
 #include <algorithm>
 
-#include "base/containers/contains.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -86,7 +85,7 @@ bool TriggerThrottler::TriggerCanFire(const TriggerType trigger_type) const {
 
   // Other triggers are capped, see how many times this trigger has already
   // fired.
-  if (!base::Contains(trigger_events_, trigger_type)) {
+  if (!trigger_events_.contains(trigger_type)) {
     return true;
   }
 
@@ -157,7 +156,7 @@ void TriggerThrottler::LoadTriggerEventsFromPref() {
     return;
   }
 
-  const base::Value::Dict& event_dict =
+  const base::DictValue& event_dict =
       local_state_prefs_->GetDict(prefs::kSafeBrowsingTriggerEventTimestamps);
   for (auto trigger_pair : event_dict) {
     // Check that the first item in the pair is convertible to a trigger type
@@ -187,9 +186,9 @@ void TriggerThrottler::WriteTriggerEventsToPref() {
     return;
   }
 
-  base::Value::Dict trigger_dict;
+  base::DictValue trigger_dict;
   for (const auto& trigger_item : trigger_events_) {
-    base::Value::List timestamps;
+    base::ListValue timestamps;
     for (const base::Time timestamp : trigger_item.second) {
       timestamps.Append(timestamp.InSecondsFSinceUnixEpoch());
     }
@@ -207,13 +206,13 @@ size_t TriggerThrottler::GetDailyQuotaForTrigger(
   size_t quota = 0;
   switch (trigger_type) {
     case TriggerType::SECURITY_INTERSTITIAL:
-    case TriggerType::GAIA_PASSWORD_REUSE:
     case TriggerType::APK_DOWNLOAD:
     case TriggerType::PHISHY_SITE_INTERACTION:
       return kUnlimitedTriggerQuota;
 
     case TriggerType::DEPRECATED_AD_POPUP:
     case TriggerType::DEPRECATED_AD_REDIRECT:
+    case TriggerType::GAIA_PASSWORD_REUSE:  // Will be deprecated.
       return 0;
 
     case TriggerType::AD_SAMPLE:

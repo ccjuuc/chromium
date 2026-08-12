@@ -19,18 +19,18 @@ AccountInfo SimulateExplicitSignIn(
     Profile* profile,
     signin::IdentityTestEnvironment* identity_test_env,
     std::optional<std::string> email) {
-  CHECK(switches::IsExtensionsExplicitBrowserSigninEnabled());
-
   auto account_info = identity_test_env->MakeAccountAvailable(
       signin::AccountAvailabilityOptionsBuilder()
           .AsPrimary(signin::ConsentLevel::kSignin)
           .WithAccessPoint(signin_metrics::AccessPoint::kExtensionInstallBubble)
           .Build(email.value_or("testy@mctestface.com")));
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
   bool has_explicit_sign_in =
       SigninPrefs(*profile->GetPrefs())
           .GetExtensionsExplicitBrowserSignin(account_info.gaia);
   CHECK(has_explicit_sign_in);
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
   return account_info;
 }

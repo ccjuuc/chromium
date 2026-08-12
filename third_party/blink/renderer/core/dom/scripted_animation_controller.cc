@@ -83,7 +83,7 @@ void ScriptedAnimationController::ContextLifecycleStateChanged(
     ScheduleAnimationIfNeeded();
 }
 
-void ScriptedAnimationController::DispatchEventsAndCallbacksForPrinting() {
+void ScriptedAnimationController::DispatchMediaQueryListEventsAndCallbacks() {
   DispatchEvents(BindRepeating([](Event* event) {
     return event->InterfaceName() ==
            event_interface_names::kMediaQueryListEvent;
@@ -94,22 +94,24 @@ void ScriptedAnimationController::DispatchEventsAndCallbacksForPrinting() {
 void ScriptedAnimationController::ScheduleVideoFrameCallbacksExecution(
     ExecuteVfcCallback execute_vfc_callback) {
   vfc_execution_queue_.push_back(std::move(execute_vfc_callback));
-  ScheduleAnimationIfNeeded();
+  ScheduleAnimationIfNeeded(cc::BeginMainFrameReason::kVideoFrameCallback);
 }
 
 ScriptedAnimationController::CallbackId
-ScriptedAnimationController::RegisterFrameCallback(FrameCallback* callback) {
+ScriptedAnimationController::RegisterFrameCallback(FrameCallback* callback,
+                                                   FrameCallbackType type) {
   // If we no longer have a context, there is no need to register the callback.
   if (!GetExecutionContext()) {
     return 0;
   }
-  CallbackId id = callback_collection_.RegisterFrameCallback(callback);
-  ScheduleAnimationIfNeeded();
+  CallbackId id = callback_collection_.RegisterFrameCallback(callback, type);
+  ScheduleAnimationIfNeeded(cc::BeginMainFrameReason::kRAF);
   return id;
 }
 
-void ScriptedAnimationController::CancelFrameCallback(CallbackId id) {
-  callback_collection_.CancelFrameCallback(id);
+void ScriptedAnimationController::CancelFrameCallback(CallbackId id,
+                                                      FrameCallbackType type) {
+  callback_collection_.CancelFrameCallback(id, type);
 }
 
 bool ScriptedAnimationController::HasFrameCallback() const {
@@ -226,9 +228,8 @@ void ScriptedAnimationController::EnqueuePerFrameEvent(Event* event) {
 void ScriptedAnimationController::EnqueueMediaQueryChangeListeners(
     HeapVector<Member<MediaQueryListListener>>& listeners) {
   for (const auto& listener : listeners) {
-    if (!media_query_list_listeners_set_.Contains(listener)) {
+    if (media_query_list_listeners_set_.insert(listener).is_new_entry) {
       media_query_list_listeners_.push_back(listener);
-      media_query_list_listeners_set_.insert(listener);
     }
   }
   DCHECK_EQ(media_query_list_listeners_.size(),
@@ -236,7 +237,8 @@ void ScriptedAnimationController::EnqueueMediaQueryChangeListeners(
   ScheduleAnimationIfNeeded();
 }
 
-void ScriptedAnimationController::ScheduleAnimationIfNeeded() {
+void ScriptedAnimationController::ScheduleAnimationIfNeeded(
+    cc::BeginMainFrameReason reason) {
   if (!GetExecutionContext() || GetExecutionContext()->IsContextPaused())
     return;
 
@@ -245,7 +247,7 @@ void ScriptedAnimationController::ScheduleAnimationIfNeeded() {
     return;
 
   if (HasScheduledFrameTasks()) {
-    frame->View()->ScheduleAnimation();
+    frame->View()->ScheduleAnimation(reason);
     return;
   }
 }

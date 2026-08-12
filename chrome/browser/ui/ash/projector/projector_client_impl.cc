@@ -8,12 +8,11 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "ash/constants/web_app_id_constants.h"
 #include "ash/projector/projector_metrics.h"
 #include "ash/public/cpp/projector/projector_controller.h"
 #include "ash/public/cpp/projector/projector_new_screencast_precondition.h"
 #include "ash/webui/projector_app/projector_app_client.h"
-#include "ash/webui/projector_app/public/cpp/projector_app_constants.h"
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "base/check.h"
 #include "base/check_deref.h"
 #include "base/containers/fixed_flat_map.h"
@@ -36,6 +35,7 @@
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chromeos/ash/components/login/login_state/login_state.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "components/application_locale_storage/application_locale_storage.h"
 #include "components/soda/soda_installer.h"
 #include "content/public/browser/download_manager.h"
@@ -164,9 +164,6 @@ void ProjectorClientImpl::StartSpeechRecognition() {
       availability.use_on_device
           ? app_locale
           : GetLocaleOrLanguageForServerSideRecognition(app_locale);
-  const std::string experiment_recognizer_routing_key =
-      ash::features::IsProjectorUseUSMForS3Enabled() ? kUSMExperimentRoutingId
-                                                     : "";
 
   speech_recognizer_ = std::make_unique<SpeechRecognitionRecognizerClientImpl>(
       weak_ptr_factory_.GetWeakPtr(), ProfileManager::GetActiveUserProfile(),
@@ -176,8 +173,7 @@ void ProjectorClientImpl::StartSpeechRecognition() {
           /*enable_formatting=*/true, locale,
           /*is_server_based=*/!availability.use_on_device,
           media::mojom::RecognizerClientType::kProjector,
-          /*skip_continuously_empty_audio=*/false,
-          experiment_recognizer_routing_key));
+          /*skip_continuously_empty_audio=*/false, kUSMExperimentRoutingId));
   if (!availability.use_on_device) {
     RecordOnDeviceToServerSpeechRecognitionFallbackReason(
         GetFallbackReason(availability.on_device_availability));
@@ -322,6 +318,10 @@ void ProjectorClientImpl::OnFileSystemMountFailed() {
       controller_->GetNewScreencastPrecondition());
 }
 
+void ProjectorClientImpl::OnDriveIntegrationServiceDestroyed() {
+  drive_observation_.Reset();
+}
+
 void ProjectorClientImpl::OnUserSessionStarted(bool is_primary_user) {
   if (!is_primary_user || !pref_change_registrar_.IsEmpty()) {
     return;
@@ -341,10 +341,14 @@ void ProjectorClientImpl::OnUserSessionStarted(bool is_primary_user) {
 }
 
 void ProjectorClientImpl::MaybeSwitchDriveIntegrationServiceObservation() {
-  if (drive::DriveIntegrationService* const service =
-          ProjectorDriveFsProvider::GetActiveDriveIntegrationService()) {
-    Observe(service);
+  drive::DriveIntegrationService* const service =
+      ProjectorDriveFsProvider::GetActiveDriveIntegrationService();
+  if (!service || service == drive_observation_.GetSource()) {
+    return;
   }
+
+  drive_observation_.Reset();
+  drive_observation_.Observe(service);
 }
 
 void ProjectorClientImpl::SpeechRecognitionEnded(bool forced) {

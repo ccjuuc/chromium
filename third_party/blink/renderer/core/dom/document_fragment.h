@@ -26,13 +26,14 @@
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/container_node.h"
-#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/parser_content_policy.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 
 namespace blink {
 
+class Document;
 class DocumentPartRoot;
+class StreamingSanitizer;
 
 class CORE_EXPORT DocumentFragment : public ContainerNode {
   DEFINE_WRAPPERTYPEINFO();
@@ -45,11 +46,13 @@ class CORE_EXPORT DocumentFragment : public ContainerNode {
   void ParseHTML(const String&,
                  Element* context_element,
                  CustomElementRegistry*,
-                 ParserContentPolicy = kAllowScriptingContent);
+                 ParserContentPolicy = kAllowScriptingContent,
+                 StreamingSanitizer* = nullptr);
   bool ParseXML(const String&,
                 Element* context_element,
                 ExceptionState& exception_state,
-                ParserContentPolicy = kAllowScriptingContent);
+                ParserContentPolicy = kAllowScriptingContent,
+                StreamingSanitizer* = nullptr);
 
   bool CanContainRangeEndPoint() const final { return true; }
   virtual bool IsTemplateContent() const { return false; }
@@ -88,7 +91,6 @@ class CORE_EXPORT DocumentFragment : public ContainerNode {
               ExceptionState& append_exception_state) const override;
   bool ChildTypeAllowed(NodeType) const override;
 
-  Member<DocumentPartRoot> document_part_root_;
   bool holds_unnotified_children_ = false;
 };
 

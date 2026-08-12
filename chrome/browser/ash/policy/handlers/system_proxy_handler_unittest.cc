@@ -15,10 +15,12 @@
 #include "chrome/browser/ash/net/system_proxy_manager.h"
 #include "chrome/browser/ash/settings/scoped_test_device_settings_service.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
+#include "chrome/browser/ash/settings/stub_cros_settings_provider.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/system_proxy/system_proxy_client.h"
 #include "chromeos/ash/components/dbus/system_proxy/system_proxy_service.pb.h"
+#include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_handler_test_helper.h"
 #include "components/prefs/pref_service.h"
@@ -77,7 +79,7 @@ class SystemProxyHandlerTest : public testing::Test {
   void SetPolicy(bool system_proxy_enabled,
                  const std::string& system_services_username,
                  const std::string& system_services_password) {
-    auto dict = base::Value::Dict()
+    auto dict = base::DictValue()
                     .Set("system_proxy_enabled", system_proxy_enabled)
                     .Set("system_services_username", system_services_username)
                     .Set("system_services_password", system_services_password);
@@ -88,7 +90,7 @@ class SystemProxyHandlerTest : public testing::Test {
 
   void SetManagedProxy(Profile* profile) {
     // Configure a proxy via user policy.
-    auto proxy_config = base::Value::Dict()
+    auto proxy_config = base::DictValue()
                             .Set("mode", ProxyPrefs::kFixedServersProxyModeName)
                             .Set("server", kProxyAuthUrl);
     profile->GetPrefs()->SetDict(proxy_config::prefs::kProxy,

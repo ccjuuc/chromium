@@ -80,11 +80,6 @@ class TabDialogManager : public content::WebContentsObserver,
     // an additional condition that will be checked to determine widget
     // visibility.
     ShouldShowCallback should_show_callback;
-
-    // If true, the dialog will be shown without activating the window,
-    // preventing focus-stealing from another window. This is intended for
-    // passive UI like toasts and overlays.
-    bool should_show_inactive = false;
   };
 
   // Create a dialog widget from the given DialogDelegate suitable for showing
@@ -172,6 +167,9 @@ class TabDialogManager : public content::WebContentsObserver,
   void TabWillEnterBackground(TabInterface* tab_interface);
   void TabWillDetach(TabInterface* tab_interface,
                      TabInterface::DetachReason reason);
+  void OnDiscardContents(TabInterface* tab,
+                         content::WebContents* old_contents,
+                         content::WebContents* new_contents);
 
   bool GetDialogWidgetVisibility();
 

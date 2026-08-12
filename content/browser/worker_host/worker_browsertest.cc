@@ -2,11 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/byte_size.h"
 #include "base/check.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/path_service.h"
+#include "base/scoped_observation.h"
 #include "base/strings/escape.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
@@ -19,15 +21,18 @@
 #include "base/thread_annotations.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/process_lock.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/browser/worker_host/shared_worker_service_impl.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/client_certificate_delegate.h"
+#include "content/public/browser/dedicated_worker_service.h"
+#include "content/public/browser/shared_worker_service.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_paths.h"
 #include "content/public/common/content_switches.h"
@@ -46,6 +51,7 @@
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_access_result.h"
 #include "net/dns/mock_host_resolver.h"
+#include "net/http/http_response_headers.h"
 #include "net/ssl/client_cert_identity.h"
 #include "net/ssl/ssl_server_config.h"
 #include "net/test/embedded_test_server/connection_tracker.h"
@@ -55,9 +61,12 @@
 #include "net/test/embedded_test_server/install_default_websocket_handlers.h"
 #include "net/test/test_data_directory.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "services/network/public/cpp/constants.h"
 #include "services/network/public/mojom/connection_change_observer_client.mojom.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
+#include "services/network/public/mojom/parsed_headers.mojom.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "url/gurl.h"
@@ -76,6 +85,90 @@ const char kNoCookie[] = "None";
 bool SupportsSharedWorker() {
   return base::FeatureList::IsEnabled(blink::features::kSharedWorker);
 }
+
+// Writes a worker script response with the given `url_list` populated in the
+// service worker URL list of the response head.
+void WriteWorkerScriptResponseWithServiceWorkerUrlList(
+    network::mojom::URLLoaderClient* client,
+    const std::vector<GURL>& url_list) {
+  static constexpr char kBody[] = "postMessage('done');";
+  auto response = network::mojom::URLResponseHead::New();
+  response->headers = base::MakeRefCounted<net::HttpResponseHeaders>(
+      "HTTP/1.1 200 OK\nContent-Type: text/javascript\n\n");
+  response->mime_type = "text/javascript";
+  response->was_fetched_via_service_worker = true;
+  response->url_list_via_service_worker = url_list;
+  response->parsed_headers = network::mojom::ParsedHeaders::New();
+
+  mojo::ScopedDataPipeProducerHandle producer_handle;
+  mojo::ScopedDataPipeConsumerHandle consumer_handle;
+  EXPECT_EQ(mojo::CreateDataPipe(nullptr, producer_handle, consumer_handle),
+            MOJO_RESULT_OK);
+  if (producer_handle.is_valid()) {
+    EXPECT_EQ(
+        producer_handle->WriteAllData(base::byte_span_from_cstring(kBody)),
+        MOJO_RESULT_OK);
+  }
+  producer_handle.reset();
+
+  client->OnReceiveResponse(std::move(response), std::move(consumer_handle),
+                            std::nullopt);
+  network::URLLoaderCompletionStatus status;
+  status.error_code = net::OK;
+  status.decoded_body_length = base::ByteSize(sizeof(kBody) - 1);
+  client->OnComplete(status);
+}
+
+// Records final response URLs reported for newly created workers.
+class WorkerFinalResponseURLObserver : public DedicatedWorkerService::Observer,
+                                       public SharedWorkerService::Observer {
+ public:
+  explicit WorkerFinalResponseURLObserver(StoragePartition* storage_partition) {
+    dedicated_worker_observation_.Observe(
+        storage_partition->GetDedicatedWorkerService());
+    shared_worker_observation_.Observe(
+        storage_partition->GetSharedWorkerService());
+  }
+
+  const std::vector<GURL>& final_response_urls() const {
+    return final_response_urls_;
+  }
+
+  // DedicatedWorkerService::Observer:
+  void OnWorkerCreated(const blink::DedicatedWorkerToken&,
+                       ChildProcessId,
+                       const url::Origin&,
+                       DedicatedWorkerCreator) override {}
+  void OnBeforeWorkerDestroyed(const blink::DedicatedWorkerToken&,
+                               DedicatedWorkerCreator) override {}
+  void OnFinalResponseURLDetermined(const blink::DedicatedWorkerToken&,
+                                    const GURL& url) override {
+    final_response_urls_.push_back(url);
+  }
+
+  // SharedWorkerService::Observer:
+  void OnWorkerCreated(const blink::SharedWorkerToken&,
+                       ChildProcessId,
+                       const url::Origin&,
+                       const base::UnguessableToken&) override {}
+  void OnBeforeWorkerDestroyed(const blink::SharedWorkerToken&) override {}
+  void OnFinalResponseURLDetermined(const blink::SharedWorkerToken&,
+                                    const GURL& url) override {
+    final_response_urls_.push_back(url);
+  }
+  void OnClientAdded(const blink::SharedWorkerToken&,
+                     GlobalRenderFrameHostId) override {}
+  void OnClientRemoved(const blink::SharedWorkerToken&,
+                       GlobalRenderFrameHostId) override {}
+
+ private:
+  std::vector<GURL> final_response_urls_;
+  base::ScopedObservation<DedicatedWorkerService,
+                          DedicatedWorkerService::Observer>
+      dedicated_worker_observation_{this};
+  base::ScopedObservation<SharedWorkerService, SharedWorkerService::Observer>
+      shared_worker_observation_{this};
+};
 
 }  // namespace
 
@@ -163,7 +256,7 @@ class WorkerTest : public ContentBrowserTest {
     std::unique_ptr<net::CanonicalCookie> cookie =
         net::CanonicalCookie::CreateForTesting(
             cookie_url, std::string(kSameSiteCookie) + "; SameSite=Lax; Secure",
-            base::Time::Now());
+            base::Time::Now(), net::CookieSourceType::kOther);
     base::RunLoop run_loop;
     cookie_manager->SetCanonicalCookie(
         *cookie, cookie_url, options,
@@ -313,6 +406,100 @@ IN_PROC_BROWSER_TEST_F(WorkerTest, HttpPageCantCreateFileWorker) {
   RunTest(url, /*expect_failure=*/true);
 }
 
+// Tests that a dedicated worker main script response whose service worker
+// supplied URL list resolves to a URL that the worker process cannot commit
+// is rejected.
+IN_PROC_BROWSER_TEST_F(WorkerTest,
+                       DedicatedWorkerRejectsNonCommittableFinalResponseUrl) {
+  const GURL main_url = ssl_server()->GetURL("a.test", "/title1.html");
+  const GURL worker_url = ssl_server()->GetURL("a.test", "/workers/worker.js");
+  const GURL non_committable_url("file:///non_committable_path");
+
+  WorkerFinalResponseURLObserver observer(shell()
+                                              ->web_contents()
+                                              ->GetBrowserContext()
+                                              ->GetDefaultStoragePartition());
+
+  URLLoaderInterceptor interceptor(base::BindLambdaForTesting(
+      [&](URLLoaderInterceptor::RequestParams* params) {
+        if (params->url_request.url != worker_url) {
+          return false;
+        }
+        WriteWorkerScriptResponseWithServiceWorkerUrlList(
+            params->client.get(), {non_committable_url});
+        return true;
+      }));
+
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  EXPECT_FALSE(ChildProcessSecurityPolicyImpl::GetInstance()->CanCommitURL(
+      shell()
+          ->web_contents()
+          ->GetPrimaryMainFrame()
+          ->GetProcess()
+          ->GetDeprecatedID(),
+      non_committable_url));
+
+  EXPECT_EQ("error", EvalJs(shell(), R"(
+    new Promise(resolve => {
+      const worker = new Worker('/workers/worker.js');
+      worker.onerror = () => resolve('error');
+      worker.onmessage = e => resolve(e.data);
+    })
+  )"));
+
+  // The worker process is not allowed to commit `non_committable_url`, so it
+  // must not have been adopted as the worker's final response URL.
+  EXPECT_TRUE(observer.final_response_urls().empty())
+      << "unexpected final response URL: "
+      << observer.final_response_urls().front();
+}
+
+// Same as DedicatedWorkerRejectsNonCommittableFinalResponseUrl, but for shared
+// workers.
+IN_PROC_BROWSER_TEST_F(WorkerTest,
+                       SharedWorkerRejectsNonCommittableFinalResponseUrl) {
+  if (!SupportsSharedWorker()) {
+    return;
+  }
+
+  const GURL main_url = ssl_server()->GetURL("a.test", "/title1.html");
+  const GURL worker_url = ssl_server()->GetURL("a.test", "/workers/worker.js");
+  const GURL non_committable_url("file:///non_committable_path");
+
+  WorkerFinalResponseURLObserver observer(shell()
+                                              ->web_contents()
+                                              ->GetBrowserContext()
+                                              ->GetDefaultStoragePartition());
+
+  URLLoaderInterceptor interceptor(base::BindLambdaForTesting(
+      [&](URLLoaderInterceptor::RequestParams* params) {
+        if (params->url_request.url != worker_url) {
+          return false;
+        }
+        WriteWorkerScriptResponseWithServiceWorkerUrlList(
+            params->client.get(), {non_committable_url});
+        return true;
+      }));
+
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  EXPECT_EQ("error", EvalJs(shell(), R"(
+    new Promise(resolve => {
+      const worker = new SharedWorker('/workers/worker.js');
+      worker.onerror = () => resolve('error');
+      worker.port.onmessage = e => resolve(e.data);
+    })
+  )"));
+
+  // The worker process is not allowed to commit `non_committable_url`, so it
+  // must not have been adopted as the worker's final response URL.
+  EXPECT_TRUE(observer.final_response_urls().empty())
+      << "unexpected final response URL: "
+      << observer.final_response_urls().front();
+  EXPECT_FALSE(GetSharedWorkerHost(worker_url));
+}
+
 IN_PROC_BROWSER_TEST_F(WorkerTest, MultipleWorkers) {
   RunTest(GetTestURL("multi_worker.html", std::string()));
 }
@@ -322,6 +509,46 @@ IN_PROC_BROWSER_TEST_F(WorkerTest, SingleSharedWorker) {
     return;
 
   RunTest(GetTestURL("single_worker.html", "shared=true"));
+}
+
+// A WebContents created with `disallow_shared_workers` must not be able to
+// connect to a shared worker (which would otherwise bridge its process to
+// ordinary content of the same origin, since shared worker matching ignores
+// SiteInstance). An ordinary WebContents at the same URL still can.
+IN_PROC_BROWSER_TEST_F(WorkerTest, PrivilegedWebContentsCannotUseSharedWorker) {
+  if (!SupportsSharedWorker()) {
+    return;
+  }
+
+  const GURL page_url = ssl_server()->GetURL("a.test", "/title1.html");
+  const GURL worker_url =
+      ssl_server()->GetURL("a.test", "/workers/messageport_worker.js");
+  static constexpr char kConnectSharedWorker[] = R"(
+    new Promise(resolve => {
+      const worker = new SharedWorker("/workers/messageport_worker.js");
+      worker.onerror = (e) => resolve("Worker blocked.");
+      worker.port.onmessage = (e) => resolve(e.data);
+    })
+  )";
+
+  // A privileged WebContents that disallows shared workers is blocked, and no
+  // shared worker host is created for it.
+  WebContents::CreateParams privileged_params(
+      shell()->web_contents()->GetBrowserContext());
+  WebContents::PrivilegedParams marker;
+  marker.feature_id = 42;
+  marker.disallow_shared_workers = true;
+  privileged_params.privileged_params = marker;
+  std::unique_ptr<WebContents> privileged(
+      WebContents::Create(privileged_params));
+  ASSERT_TRUE(NavigateToURL(privileged.get(), page_url));
+  EXPECT_EQ("Worker blocked.", EvalJs(privileged.get(), kConnectSharedWorker));
+  EXPECT_FALSE(GetSharedWorkerHost(worker_url));
+
+  // Control: an ordinary WebContents at the same URL connects normally.
+  ASSERT_TRUE(NavigateToURL(shell(), page_url));
+  EXPECT_EQ("Worker connected.", EvalJs(shell(), kConnectSharedWorker));
+  EXPECT_TRUE(GetSharedWorkerHost(worker_url));
 }
 
 // Create a SharedWorker from a COEP:required-corp document.
@@ -904,6 +1131,8 @@ IN_PROC_BROWSER_TEST_F(WorkerFromCredentiallessIframeNikBrowserTest,
     GURL worker_url = embedded_test_server()->GetURL("/workers/worker.js");
 
     // Preconnect a socket with the NetworkAnonymizationKey of the main frame.
+    // TODO(crbug.com/447954811): pass the `network_restrictions_id` from the
+    // caller.
     shell()
         ->web_contents()
         ->GetBrowserContext()
@@ -913,6 +1142,7 @@ IN_PROC_BROWSER_TEST_F(WorkerFromCredentiallessIframeNikBrowserTest,
                             network::mojom::CredentialsMode::kInclude,
                             main_rfh->GetIsolationInfoForSubresources()
                                 .network_anonymization_key(),
+                            network::GetTestNetworkRestrictionsId(),
                             net::MutableNetworkTrafficAnnotationTag(
                                 TRAFFIC_ANNOTATION_FOR_TESTS),
                             std::nullopt, mojo::NullRemote());
@@ -1289,104 +1519,5 @@ IN_PROC_BROWSER_TEST_F(SharedWorkerExtendedLifetimeBrowserOriginTrialTest,
   run_loop.Run();
 }
 
-#if BUILDFLAG(IS_ANDROID)
-class SharedWorkerOnAndroidBrowserOriginTrialTest : public ContentBrowserTest {
- public:
-  SharedWorkerOnAndroidBrowserOriginTrialTest() {
-    // Explicitly disable the feature.
-    features_.InitWithFeatures({}, {blink::features::kSharedWorker});
-  }
-
-  void SetUpOnMainThread() override {
-    ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
-  }
-
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    // The public key for the default privatey key used by the
-    // tools/origin_trials/generate_token.py tool.
-    static constexpr char kOriginTrialTestPublicKey[] =
-        "dRCs+TocuKkocNKa0AtZ4awrt9XKH2SQCI6o4FY6BNA=";
-    command_line->AppendSwitchASCII("origin-trial-public-key",
-                                    kOriginTrialTestPublicKey);
-  }
-
- private:
-  base::test::ScopedFeatureList features_;
-};
-
-IN_PROC_BROWSER_TEST_F(SharedWorkerOnAndroidBrowserOriginTrialTest, Basic) {
-  embedded_test_server()->StartAcceptingConnections();
-
-  // The URL that was used to register the Origin Trial token.
-  static constexpr char kOriginUrl[] = "https://127.0.0.1:44444";
-  // Generated by running (in tools/origin_trials):
-  // $ tools/origin_trials/generate_token.py https://127.0.0.1:44444 \
-  // SharedWorkerOnAndroid --expire-timestamp=2000000000
-  static constexpr char kOriginTrialToken[] =
-      "A4bNLnQqvmhiQZaMyED5XebKoQlpE9hGpENgq7FUrioFplUvoEwsSD+"
-      "exc4vgyqaUc6SKYvhj40jeljpA5aLkgUAAABfeyJvcmlnaW4iOiAiaHR0cHM6Ly8xMjcuMC4"
-      "wLjE6NDQ0NDQiLCAiZmVhdHVyZSI6ICJTaGFyZWRXb3JrZXJPbkFuZHJvaWQiLCAiZXhwaXJ"
-      "5IjogMjAwMDAwMDAwMH0=";
-
-  const GURL main_url(base::StrCat({kOriginUrl, "/title1.html"}));
-  const GURL shared_worker_url(
-      base::StrCat({kOriginUrl, "/workers/messageport_worker.js"}));
-
-  std::map<GURL, int /* number_of_invocations */> expected_request_urls = {
-      {main_url, 1},
-      {shared_worker_url, 1},
-  };
-
-  base::RunLoop run_loop;
-
-  // The origin trial token is associated with an origin. We can't guarantee the
-  // EmbeddedTestServer to use a specific port. So the URLLoaderInterceptor is
-  // used instead.
-  URLLoaderInterceptor shared_worker_loader(base::BindLambdaForTesting(
-      [&](URLLoaderInterceptor::RequestParams* params) {
-        auto it = expected_request_urls.find(params->url_request.url);
-        if (it == expected_request_urls.end()) {
-          return false;
-        }
-
-        const std::string content_type =
-            base::EndsWith(params->url_request.url.path(), ".js")
-                ? "text/javascript"
-                : "text/html";
-
-        const std::string headers = base::ReplaceStringPlaceholders(
-            "HTTP/1.1 200 OK\n"
-            "Content-type: $1\n"
-            "Origin-Trial: $2\n"
-            "\n",
-            {content_type, kOriginTrialToken}, {});
-
-        URLLoaderInterceptor::WriteResponse(
-            "content/test/data" + params->url_request.url.GetPath(),
-            params->client.get(), &headers, std::optional<net::SSLInfo>(),
-            params->url_request.url);
-
-        if (--it->second == 0) {
-          expected_request_urls.erase(it);
-        }
-        if (expected_request_urls.empty()) {
-          run_loop.Quit();
-        }
-        return true;
-      }));
-
-  EXPECT_TRUE(NavigateToURL(shell(), main_url));
-  EXPECT_EQ("Worker connected.", EvalJs(shell(), R"(
-    new Promise(resolve => {
-      const worker =
-        new SharedWorker("/workers/messageport_worker.js");
-      worker.onerror = (e) => resolve("Worker blocked.");
-      worker.port.onmessage = (e) => resolve(e.data);
-    })
-  )"));
-
-  run_loop.Run();
-}
-#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace content

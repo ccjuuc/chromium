@@ -70,9 +70,7 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
   // Notifies the WebView delegate that the JS window object has been cleared,
   // giving it a chance to bind native objects to the window before script
   // parsing begins.
-  void DispatchDidClearWindowObjectInMainWorld(
-      v8::Isolate* isolate,
-      v8::MicrotaskQueue* microtask_queue) override;
+  void DispatchDidClearWindowObjectInMainWorld(LocalDOMWindow*) override;
   void DocumentElementAvailable() override;
   void RunScriptsAtDocumentElementAvailable() override;
   void RunScriptsAtDocumentReady(bool document_is_empty) override;
@@ -83,10 +81,8 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
   void WillReleaseScriptContext(v8::Local<v8::Context>,
                                 int32_t world_id) override;
 
-  // Returns true if we should allow register V8 extensions to be added.
-  bool AllowScriptExtensions() override;
-
   bool HasWebView() const override;
+  bool IsForInitialWebUI() const override;
   bool InShadowTree() const override;
   void WillBeDetached() override;
   void Detached(FrameDetachType) override;
@@ -107,7 +103,8 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
       bool is_client_redirect,
       bool is_browser_initiated,
       bool should_skip_screenshot,
-      base::UnguessableToken same_document_metrics_token) override;
+      base::UnguessableToken same_document_metrics_token,
+      bool caused_by_ad) override;
   void DidFailAsyncSameDocumentCommit() override;
   void DispatchDidOpenDocumentInputStream(const KURL& url) override;
   void DispatchDidReceiveTitle(const String&) override;
@@ -142,13 +139,17 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
       base::TimeTicks input_start_time,
       base::TimeTicks actual_navigation_start,
       const String& href_translate,
-      const std::optional<Impression>& impression,
       const LocalFrameToken* initiator_frame_token,
+      const base::UnguessableToken& initiator_state_token,
+      const DocumentToken& initiator_document_token,
       SourceLocation* source_location,
       mojo::PendingRemote<mojom::blink::NavigationStateKeepAliveHandle>
           initiator_navigation_state_keep_alive_handle,
       bool is_container_initiated,
-      bool has_rel_opener) override;
+      bool has_rel_opener,
+      mojo::PendingReceiver<
+          mojom::blink::NavigationResumeDeferredCommitListener>,
+      std::optional<base::UnguessableToken> script_tool_invocation_id) override;
   void DispatchWillSendSubmitEvent(HTMLFormElement*) override;
   void DidStartLoading() override;
   void DidStopLoading() override;
@@ -161,6 +162,7 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
   void DidChangePerformanceTiming() override;
   void DidObserveUserInteraction(base::TimeTicks max_event_start,
                                  base::TimeTicks max_event_queued_main_thread,
+                                 base::TimeTicks max_event_processing_start,
                                  base::TimeTicks max_event_commit_finish,
                                  base::TimeTicks max_event_end,
                                  uint64_t interaction_offset) override;
@@ -257,8 +259,7 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
 
   void FocusedElementChanged(Element* element) override;
 
-  void OnMainFrameIntersectionChanged(
-      const gfx::Rect& main_frame_intersection_rect) override;
+  void OnMainFrameRectangleChanged(const gfx::Rect& main_frame_rect) override;
 
   void OnMainFrameViewportRectangleChanged(
       const gfx::Rect& main_frame_viewport_rect) override;

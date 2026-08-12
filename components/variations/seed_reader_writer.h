@@ -19,6 +19,7 @@
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/version_info/channel.h"
+#include "build/build_config.h"
 #include "components/variations/metrics.h"
 #include "components/variations/proto/stored_seed_info.pb.h"
 
@@ -31,8 +32,13 @@ class EntropyProviders;
 // Trial and group names for the seed file experiment.
 const char kSeedFileTrial[] = "SeedFileTrial";
 const char kDefaultGroup[] = "Default";
-const char kControlGroup[] = "Control_V8";
-const char kSeedFilesGroup[] = "SeedFiles_V8";
+const char kControlGroup[] = "Control_V12";
+// TODO(crbug.com/530049020): Launch on Android and iOS
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+const char kSeedFilesGroup[] = "SeedFiles_V12";
+#else
+const char kSeedFilesGroup[] = "SeedFilesLaunched";
+#endif
 
 // A sentinel value that may be stored as the latest variations seed value in
 // to indicate that the latest seed is identical to the safe seed. Used to avoid
@@ -47,6 +53,7 @@ struct COMPONENT_EXPORT(VARIATIONS) SeedInfo {
            base::Time seed_date,
            base::Time client_fetch_time,
            std::string_view session_country_code,
+           std::string_view session_geo_level1,
            std::string_view permanent_country_code,
            std::string_view permanent_country_version);
   ~SeedInfo();
@@ -67,6 +74,10 @@ struct COMPONENT_EXPORT(VARIATIONS) SeedInfo {
   // Latest country code fetched from the server. Used for evaluating session
   // consistency studies.
   const std::string session_country_code;
+  // Latest administrative area code fetched from the server. Mirrors the
+  // `session_country_code` field, but is not currently used for evaluating
+  // studies.
+  const std::string session_geo_level1;
   // Country code used for evaluating permanent consistency studies.
   const std::string permanent_country_code;
   // Chrome version at the time `permanent_country_code` was updated.
@@ -83,6 +94,7 @@ struct ValidatedSeedInfo {
   const base::Time seed_date;
   const base::Time client_fetch_time;
   const std::string_view session_country_code;
+  const std::string_view session_geo_level1;
   const std::string_view permanent_country_code;
   const std::string_view permanent_country_version;
 };
@@ -94,6 +106,8 @@ struct SeedFieldsPrefs {
   const char* seed_date;
   const char* client_fetch_time;
   const char* session_country_code;
+  // `session_geo_level1` may be null.
+  const char* session_geo_level1;
   const char* permanent_country_code_version;
 };
 
@@ -321,8 +335,9 @@ class COMPONENT_EXPORT(VARIATIONS) SeedReaderWriter
   // TODO(crbug.com/417138763): Remove this once the migration is complete.
   bool ReadOldSeedFile();
 
-  // Reads the seed data from local state.
-  void ReadSeedFromLocalState();
+  // Migrates the seed data from local state to a seed file. Returns true if the
+  // migration is successful.
+  bool MigrateFromLocalStateToSeedFile();
 
   // Reads the seed data and signature from the seed file and calls
   // `done_callback` with the result.
@@ -418,6 +433,19 @@ class COMPONENT_EXPORT(VARIATIONS) SeedReaderWriter
 
   // Suffix to be used for histograms, either "Latest" or "Safe".
   const std::string histogram_suffix_;
+
+  // Whether to check for the presence of the seed file before reading it. This
+  // is done to distinguish between a missing seed file and read errors. It may
+  // affect performance due to extra IO, so it's only used in pre-stable
+  // channels.
+  // TODO(crbug.com/445615330): Remove this once we have verified that the
+  // reason for the error is that the seed file is missing.
+  bool check_missing_seed_file_ = false;
+
+  // Whether the client is migrating from local state or the old SeedFile to the
+  // new one. This is used to determine whether the old sources should be
+  // cleared.
+  bool migrating_from_old_source_ = false;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

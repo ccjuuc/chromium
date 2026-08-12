@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-var testStep = [
-  function () {
+const testStep = [
+  function() {
     chrome.syncFileSystem.requestFileSystem(testStep.shift());
   },
   function(fs) {
@@ -15,9 +15,9 @@ var testStep = [
       chrome.test.assertNe(123456, info.quotaBytes);
       chrome.test.succeed();
     });
-  }
+  },
 ];
 
 chrome.test.runTests([
-  testStep.shift()
+  testStep.shift(),
 ]);

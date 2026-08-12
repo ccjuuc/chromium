@@ -26,11 +26,43 @@
 
 namespace local_network_access {
 
+using blink::mojom::WebFeature;
+
+std::vector<WebFeature> AllAddressSpaceFeatures() {
+  return {
+      WebFeature::kAddressSpaceLocalSecureContextEmbeddedLoopbackV2,
+      WebFeature::kAddressSpaceLocalNonSecureContextEmbeddedLoopbackV2,
+      WebFeature::kAddressSpacePublicSecureContextEmbeddedLoopbackV2,
+      WebFeature::kAddressSpacePublicNonSecureContextEmbeddedLoopbackV2,
+      WebFeature::kAddressSpaceUnknownSecureContextEmbeddedLoopbackV2,
+      WebFeature::kAddressSpaceUnknownNonSecureContextEmbeddedLoopbackV2,
+      WebFeature::kAddressSpacePublicSecureContextEmbeddedLocalV2,
+      WebFeature::kAddressSpacePublicNonSecureContextEmbeddedLocalV2,
+      WebFeature::kAddressSpaceUnknownSecureContextEmbeddedLocalV2,
+      WebFeature::kAddressSpaceUnknownNonSecureContextEmbeddedLocalV2,
+      WebFeature::kAddressSpaceLocalSecureContextNavigatedToLoopbackV2,
+      WebFeature::kAddressSpaceLocalNonSecureContextNavigatedToLoopbackV2,
+      WebFeature::kAddressSpacePublicSecureContextNavigatedToLoopbackV2,
+      WebFeature::kAddressSpacePublicNonSecureContextNavigatedToLoopbackV2,
+      WebFeature::kAddressSpaceUnknownSecureContextNavigatedToLoopbackV2,
+      WebFeature::kAddressSpaceUnknownNonSecureContextNavigatedToLoopbackV2,
+      WebFeature::kAddressSpacePublicSecureContextNavigatedToLocalV2,
+      WebFeature::kAddressSpacePublicNonSecureContextNavigatedToLocalV2,
+      WebFeature::kAddressSpaceUnknownSecureContextNavigatedToLocalV2,
+      WebFeature::kAddressSpaceUnknownNonSecureContextNavigatedToLocalV2,
+      WebFeature::kPrivateNetworkAccessFetchedWorkerScript,
+      WebFeature::kPrivateNetworkAccessFetchedSubFrame,
+      WebFeature::kPrivateNetworkAccessFetchedTopFrame,
+      WebFeature::kPrivateNetworkAccessWithinWorker,
+  };
+}
+
 LocalNetworkAccessBrowserTestBase::LocalNetworkAccessBrowserTestBase(
     bool map_all_hosts_to_localhost)
     : map_all_hosts_to_localhost_(map_all_hosts_to_localhost),
       https_server_(net::EmbeddedTestServer::TYPE_HTTPS),
-      https_local_server_(net::EmbeddedTestServer::TYPE_HTTPS) {
+      https_local_server_(net::EmbeddedTestServer::TYPE_HTTPS),
+      https_public_server_(net::EmbeddedTestServer::TYPE_HTTPS) {
   // Some builders run with field_trial disabled, need to enable this
   // manually.
   base::FieldTrialParams params;
@@ -103,16 +135,21 @@ void LocalNetworkAccessBrowserTestBase::SetUpCommandLine(
   https_server_.SetSSLConfig(net::EmbeddedTestServer::CERT_OK);
   https_local_server_.AddDefaultHandlers(GetChromeTestDataDir());
   https_local_server_.SetSSLConfig(net::EmbeddedTestServer::CERT_OK);
+  https_public_server_.AddDefaultHandlers(GetChromeTestDataDir());
+  https_public_server_.SetSSLConfig(net::EmbeddedTestServer::CERT_OK);
   ASSERT_TRUE(https_server_.Start());
   ASSERT_TRUE(https_local_server_.Start());
+  ASSERT_TRUE(https_public_server_.Start());
   ASSERT_TRUE(embedded_test_server()->Start());
   // Clear default from InProcessBrowserTest as test doesn't want 127.0.0.1 in
   // the public address space, but add the https_local_server_ as the kLocal
-  // address space.
-  command_line->AppendSwitchASCII(
-      network::switches::kIpAddressSpaceOverrides,
-      network::GenerateIpAddressSpaceOverride(
-          https_local_server_, network::mojom::IPAddressSpace::kLocal));
+  // address space and the https_public_server_ as the kPublic address space.
+  network::AddIpAddressSpaceOverridesToCommandLine(
+      {network::GenerateIpAddressSpaceOverride(
+           https_local_server_, network::mojom::IPAddressSpace::kLocal),
+       network::GenerateIpAddressSpaceOverride(
+           https_public_server_, network::mojom::IPAddressSpace::kPublic)},
+      *command_line);
 }
 
 }  // namespace local_network_access

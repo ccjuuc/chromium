@@ -16,7 +16,9 @@ config("flatbuffers_config") {
   # Required to prevent static initialization of locale
   # in util.cpp
   defines = [ "FLATBUFFERS_LOCALE_INDEPENDENT=0" ]
+}
 
+config("flatbuffers_warnings") {
   if (is_clang) {
     cflags = [
       "-Wno-constant-conversion",
@@ -68,6 +70,7 @@ source_set("compiler_files") {
     "src/include/codegen/python.cc",
     "src/include/codegen/python.h",
     "src/include/flatbuffers/code_generators.h",
+    "src/include/flatbuffers/file_manager.h",
     "src/include/flatbuffers/flatc.h",
     "src/include/flatbuffers/grpc.h",
     "src/include/flatbuffers/hash.h",
@@ -87,6 +90,8 @@ source_set("compiler_files") {
     "src/src/binary_annotator.cpp",
     "src/src/binary_annotator.h",
     "src/src/code_generators.cpp",
+    "src/src/file_manager.cpp",
+    "src/src/file_name_manager.cpp",
     "src/src/flatc.cpp",
     "src/src/idl_gen_binary.cpp",
     "src/src/idl_gen_binary.h",
@@ -128,13 +133,17 @@ source_set("compiler_files") {
     "src/src/util.cpp",
   ]
   configs -= [ "//build/config/compiler:chromium_code" ]
-  configs += [ "//build/config/compiler:no_chromium_code" ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    ":flatbuffers_warnings",
+  ]
   visibility = [ ":*" ]
   deps = [ ":flatbuffers" ]
 }
 
 executable("flatc") {
   sources = [ "src/src/flatc_main.cpp" ]
+  configs += [ ":flatbuffers_warnings" ]
   deps = [
     ":compiler_files",
     ":flatbuffers",
@@ -169,6 +178,7 @@ source_set("flatbuffers_test_files") {
   sources = [
     "src/include/flatbuffers/base.h",
     "src/include/flatbuffers/code_generators.h",
+    "src/include/flatbuffers/file_manager.h",
     "src/include/flatbuffers/flatbuffers.h",
     "src/include/flatbuffers/flexbuffers.h",
     "src/include/flatbuffers/grpc.h",
@@ -181,6 +191,8 @@ source_set("flatbuffers_test_files") {
     "src/include/flatbuffers/stl_emulation.h",
     "src/include/flatbuffers/util.h",
     "src/src/code_generators.cpp",
+    "src/src/file_manager.cpp",
+    "src/src/file_name_manager.cpp",
     "src/src/idl_gen_fbs.cpp",
     "src/src/idl_gen_text.cpp",
     "src/src/idl_gen_text.h",
@@ -190,7 +202,10 @@ source_set("flatbuffers_test_files") {
   ]
 
   configs -= [ "//build/config/compiler:chromium_code" ]
-  configs += [ "//build/config/compiler:no_chromium_code" ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    ":flatbuffers_warnings",
+  ]
   deps = [ ":flatbuffers" ]
 }
 
@@ -230,6 +245,8 @@ test("flatbuffers_unittests") {
     "src/tests/test_builder.h",
     "src/tests/util_test.cpp",
     "src/tests/util_test.h",
+    "src/tests/vector_table_naked_ptr_test.cpp",
+    "src/tests/vector_table_naked_ptr_test.h",
   ]
   deps = [
     ":flatbuffers",
@@ -244,19 +261,24 @@ test("flatbuffers_unittests") {
 
   data_deps = [ "//testing:test_scripts_shared" ]
 
-  defines = [
-    "FLATBUFFERS_TRACK_VERIFIER_BUFFER_SIZE",
-
+  defines = [ "FLATBUFFERS_TRACK_VERIFIER_BUFFER_SIZE" ]
+  if (is_fuchsia) {
+    defines +=
+        [ "FLATBUFFERS_TEST_PATH_PREFIX=/pkg/third_party/flatbuffers/src/" ]
+  } else {
     # Careful, this test suite needs to be run in the actual out/<build_dir>
     # directory.
-    "FLATBUFFERS_TEST_PATH_PREFIX=" +
-        rebase_path("//third_party/flatbuffers/src/", root_build_dir),
-  ]
+    defines += [ "FLATBUFFERS_TEST_PATH_PREFIX=" +
+                 rebase_path("//third_party/flatbuffers/src/", root_build_dir) ]
+  }
   if (is_win) {
     defines += [ "DEBUG_NEW=new" ]
   }
   configs -= [ "//build/config/compiler:chromium_code" ]
-  configs += [ "//build/config/compiler:no_chromium_code" ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    ":flatbuffers_warnings",
+  ]
 }
 
 if (is_android) {

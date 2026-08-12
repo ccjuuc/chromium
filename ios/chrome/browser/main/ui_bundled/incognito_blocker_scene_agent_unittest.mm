@@ -4,6 +4,9 @@
 
 #import "ios/chrome/browser/main/ui_bundled/incognito_blocker_scene_agent.h"
 
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/incognito_state.h"
+#import "ios/chrome/test/app/uikit_test_util.h"
 #import "testing/platform_test.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
 
@@ -12,21 +15,15 @@ namespace {
 class IncognitoBlockerSceneAgentTest : public PlatformTest {
  public:
   IncognitoBlockerSceneAgentTest()
-      : scene_state_([[SceneState alloc] initWithAppState:nil]),
-        scene_state_mock_(OCMPartialMock(scene_state_)),
+      : scene_state_([[SceneState alloc] init]),
         agent_([[IncognitoBlockerSceneAgent alloc] init]) {
-    scene_session_mock_ = OCMClassMock([UISceneSession class]);
-    OCMStub([scene_session_mock_ persistentIdentifier])
-        .andReturn([[NSUUID UUID] UUIDString]);
     scene_mock_ = OCMClassMock([UIWindowScene class]);
-    OCMStub([scene_mock_ session]).andReturn(scene_session_mock_);
     scene_state_.scene = scene_mock_;
-    OCMStub([scene_state_mock_ scene]).andReturn(scene_mock_);
     agent_.sceneState = scene_state_;
   }
 
   ~IncognitoBlockerSceneAgentTest() override {
-    scene_state_.incognitoContentVisible = NO;
+    scene_state_.incognitoState.incognitoContentVisible = NO;
   }
 
  protected:
@@ -34,24 +31,21 @@ class IncognitoBlockerSceneAgentTest : public PlatformTest {
   SceneState* scene_state_;
   // Mock for scene_state_'s underlying UIWindowScene.
   id scene_mock_;
-  // Mock for scene_mock_'s underlying UISceneSession.
-  id scene_session_mock_;
-  // Partial mock for stubbing scene_state_'s methods
-  id scene_state_mock_;
   // The tested agent
   IncognitoBlockerSceneAgent* agent_;
 };
 
 TEST_F(IncognitoBlockerSceneAgentTest, ShowIncognitoBlocker) {
   // Pretend there's only one window on this scene.
-  UIWindow* window = [[UIWindow alloc] init];
+  UIWindow* window = [[UIWindow alloc]
+      initWithWindowScene:chrome_test_util::GetAnyWindowScene()];
 
   id applicationWindowMock = nil;
   OCMStub([scene_mock_ windows]).andReturn(@[ window ]);
 
   // Prepare to go to background with some incognito content.
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
-  scene_state_.incognitoContentVisible = YES;
+  scene_state_.incognitoState.incognitoContentVisible = YES;
   EXPECT_EQ(window.subviews.count, 0u);
 
   // Upon background with incognito content, the blocker should be added.
@@ -71,7 +65,7 @@ TEST_F(IncognitoBlockerSceneAgentTest, ShowIncognitoBlocker) {
   EXPECT_EQ(window.subviews.count, 0u);
 
   // No blocker should be added when no incognito content is shown.
-  scene_state_.incognitoContentVisible = NO;
+  scene_state_.incognitoState.incognitoContentVisible = NO;
   scene_state_.activationLevel = SceneActivationLevelBackground;
   EXPECT_EQ(window.subviews.count, 0u);
 
@@ -91,10 +85,12 @@ TEST_F(IncognitoBlockerSceneAgentTest, ShowIncognitoBlocker) {
 // fullscreen video playing in incognito in a scene, the overlay is added to it.
 TEST_F(IncognitoBlockerSceneAgentTest, ShowBlockerOnTopWindow) {
   // Pretend there's two windows on this scene.
-  UIWindow* bottomWindow = [[UIWindow alloc] init];
+  UIWindow* bottomWindow = [[UIWindow alloc]
+      initWithWindowScene:chrome_test_util::GetAnyWindowScene()];
   bottomWindow.windowLevel = UIWindowLevelNormal;
 
-  UIWindow* topWindow = [[UIWindow alloc] init];
+  UIWindow* topWindow = [[UIWindow alloc]
+      initWithWindowScene:chrome_test_util::GetAnyWindowScene()];
   topWindow.windowLevel = UIWindowLevelStatusBar + 1;
 
   NSArray* windows = @[ topWindow, bottomWindow ];
@@ -104,7 +100,7 @@ TEST_F(IncognitoBlockerSceneAgentTest, ShowBlockerOnTopWindow) {
 
   // Prepare to go to background with some incognito content.
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
-  scene_state_.incognitoContentVisible = YES;
+  scene_state_.incognitoState.incognitoContentVisible = YES;
   EXPECT_EQ(topWindow.subviews.count, 0u);
   EXPECT_EQ(bottomWindow.subviews.count, 0u);
 

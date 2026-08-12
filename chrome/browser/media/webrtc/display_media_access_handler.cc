@@ -8,7 +8,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -17,6 +16,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/bad_message.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+#include "chrome/browser/glic/host/guest_util.h"
 #include "chrome/browser/media/capture_access_handler_base.h"
 #include "chrome/browser/media/webrtc/capture_policy_utils.h"
 #include "chrome/browser/media/webrtc/desktop_capture_devices_util.h"
@@ -39,8 +39,8 @@
 #include "content/public/common/url_constants.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
 #include "third_party/blink/public/common/features.h"
-#include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
+#include "url/origin.h"
 
 #if defined(TOOLKIT_VIEWS)
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -59,11 +59,6 @@
 #include "chrome/browser/safe_browsing/user_interaction_observer.h"
 #endif
 
-#if BUILDFLAG(ENABLE_GLIC)
-#include "chrome/browser/glic/host/guest_util.h"
-#endif
-
-BASE_FEATURE(kDisplayMediaRejectLongDomains, base::FEATURE_DISABLED_BY_DEFAULT);
 
 namespace {
 using ::blink::mojom::MediaStreamRequestResult;
@@ -95,11 +90,7 @@ std::u16string GetApplicationTitle(WebContents* web_contents) {
 #if !BUILDFLAG(IS_ANDROID)
 
 bool IsGlicWebUI(const WebContents* web_contents) {
-#if BUILDFLAG(ENABLE_GLIC)
   return glic::IsGlicWebUI(web_contents);
-#else
-  return false;
-#endif
 }
 
 // If bypassing the media selection dialog is allowed for this request, this
@@ -195,9 +186,10 @@ void DisplayMediaAccessHandler::HandleRequest(
   RenderFrameHost* const rfh = RenderFrameHost::FromID(
       request.render_process_id, request.render_frame_id);
   if (!rfh || !rfh->IsActive()) {
-    std::move(callback).Run(blink::mojom::StreamDevicesSet(),
-                            MediaStreamRequestResult::FAILED_DUE_TO_SHUTDOWN,
-                            /*ui=*/nullptr);
+    std::move(callback).Run(
+        blink::mojom::StreamDevicesSet(),
+        MediaStreamRequestResult::FAILED_DUE_TO_SHUTDOWN_NO_RFH_IN_HANDLER,
+        /*ui=*/nullptr);
     return;
   }
 
@@ -231,7 +223,7 @@ void DisplayMediaAccessHandler::HandleRequest(
 #if BUILDFLAG(IS_MAC)
   // Do not allow picker UI to be shown on a page that isn't in the foreground
   // in Mac, because the UI implementation in Mac pops a window over any content
-  // which might be confusing for the users. See https://crbug.com/1407733 for
+  // which might be confusing for the users. See https://crbug.com/40888016 for
   // details.
   //
   // If the page isn't in the foreground, but the page has a document
@@ -377,6 +369,9 @@ bool DisplayMediaAccessHandler::IsRequestFirstInQueue(
     const content::MediaStreamRequest& request) const {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
+  if (queue.empty()) {
+    return false;
+  }
   const PendingAccessRequest& first_pending_request = *queue.front();
   // If requests are different, then this is a stale request.
   return first_pending_request.request.render_process_id ==
@@ -392,6 +387,7 @@ void DisplayMediaAccessHandler::BypassMediaSelectionDialog(
     const content::MediaStreamRequest& request,
     const DesktopMediaID& media_id,
     content::MediaResponseCallback callback) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (web_contents->GetLastCommittedURL().GetScheme() !=
       content::kChromeUIScheme) {
     std::move(callback).Run(blink::mojom::StreamDevicesSet(),
@@ -400,9 +396,6 @@ void DisplayMediaAccessHandler::BypassMediaSelectionDialog(
     return;
   }
 
-  // base::Unretained(this) is safe because DisplayMediaAccessHandler is owned
-  // by MediaCaptureDevicesDispatcher, which is a lazy singleton which is
-  // destroyed when the browser process terminates.
   GetDevicesForDesktopCapture(
       web_contents, media_id, request.video_type, request.audio_type,
       request.security_origin, media_id.audio_share, request.disable_local_echo,
@@ -412,7 +405,7 @@ void DisplayMediaAccessHandler::BypassMediaSelectionDialog(
       base::BindOnce(
           &DisplayMediaAccessHandler::
               OnDesktopCaptureDevicesObtainedAfterBypassMediaSelectionDialog,
-          base::Unretained(this), web_contents->GetWeakPtr(), request,
+          weak_factory_.GetWeakPtr(), web_contents->GetWeakPtr(), request,
           std::move(callback)));
 }
 
@@ -465,6 +458,22 @@ void DisplayMediaAccessHandler::ProcessQueuedAccessRequest(
   DCHECK(web_contents);
 
   const PendingAccessRequest& pending_request = *queue.front();
+
+  content::RenderFrameHost* const rfh = content::RenderFrameHost::FromID(
+      pending_request.request.render_process_id,
+      pending_request.request.render_frame_id);
+
+  if (!rfh || !rfh->IsActive()) {
+    RejectRequest(web_contents, blink::mojom::MediaStreamRequestResult::
+                                    FAILED_DUE_TO_SHUTDOWN_NO_RFH_IN_HANDLER);
+    return;
+  }
+  if (rfh->GetLastCommittedOrigin() != pending_request.request.url_origin) {
+    RejectRequest(web_contents,
+                  blink::mojom::MediaStreamRequestResult::INVALID_STATE);
+    return;
+  }
+
   UpdateTrusted(pending_request.request, false /* is_trusted */);
 
   const GURL& request_origin = pending_request.request.security_origin;
@@ -499,8 +508,7 @@ void DisplayMediaAccessHandler::ProcessQueuedPickerRequest(
   // Note, this check does not fully account for international characters, but
   // since the puny-encodings of international domains are limited to 255 bytes,
   // it is unlikely that valid domains are excluded by this check.
-  if (base::FeatureList::IsEnabled(kDisplayMediaRejectLongDomains) &&
-      GetApplicationTitle(web_contents).size() > 255u) {
+  if (pending_request.application_title.size() > 255u) {
     RejectRequest(
         web_contents,
         MediaStreamRequestResult::CAPTURE_NOT_ALLOWED_FOR_LONG_DOMAINS);
@@ -576,7 +584,7 @@ void DisplayMediaAccessHandler::ProcessQueuedPickerRequest(
   gfx::NativeWindow parent_window = ui_web_contents->GetTopLevelNativeWindow();
   picker_params.context = parent_window;
   picker_params.parent = parent_window;
-  picker_params.app_name = GetApplicationTitle(web_contents);
+  picker_params.app_name = pending_request.application_title;
   picker_params.target_name = picker_params.app_name;
   picker_params.request_audio =
       pending_request.request.audio_type ==
@@ -592,6 +600,10 @@ void DisplayMediaAccessHandler::ProcessQueuedPickerRequest(
       (capture_level != AllowedScreenCaptureLevel::kUnrestricted);
   picker_params.preferred_display_surface =
       pending_request.request.preferred_display_surface;
+  picker_params.audio_selection_preferred =
+      base::FeatureList::IsEnabled(
+          blink::features::kGetDisplayMediaAudioSelection) &&
+      pending_request.request.audio_selection_preferred;
 #if BUILDFLAG(IS_ANDROID)
   picker_params.capture_this_tab =
       pending_request.request.video_type ==
@@ -642,8 +654,10 @@ void DisplayMediaAccessHandler::RejectRequest(WebContents* web_contents,
     return;
   }
   PendingAccessRequest& mutable_request = *mutable_queue.front();
-  std::move(mutable_request.callback)
-      .Run(blink::mojom::StreamDevicesSet(), result, /*ui=*/nullptr);
+  if (mutable_request.callback) {
+    std::move(mutable_request.callback)
+        .Run(blink::mojom::StreamDevicesSet(), result, /*ui=*/nullptr);
+  }
   mutable_queue.pop_front();
   if (!mutable_queue.empty()) {
     ProcessQueuedAccessRequest(mutable_queue, web_contents);
@@ -717,8 +731,10 @@ void DisplayMediaAccessHandler::
     stream_devices_set.stream_devices.emplace_back(
         blink::mojom::StreamDevices::New());
     *(stream_devices_set.stream_devices[0]) = std::move(devices);
-    std::move(pending_request.callback)
-        .Run(stream_devices_set, MediaStreamRequestResult::OK, std::move(ui));
+    if (pending_request.callback) {
+      std::move(pending_request.callback)
+          .Run(stream_devices_set, MediaStreamRequestResult::OK, std::move(ui));
+    }
     queue.pop_front();
   }
 

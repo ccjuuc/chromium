@@ -117,6 +117,7 @@ TEST_F(DocumentLoadingRenderingTest,
   // TODO(https://crbug.com/441911594): Rust XML parser always issues a
   // StartDocument before any elements, also before PIs.
   EXPECT_TRUE(RuntimeEnabledFeatures::XMLParsingRustEnabled() ||
+              RuntimeEnabledFeatures::XMLRustForNonXsltEnabled() ||
               Compositor().DeferMainFrameUpdate());
 
   // Sheet finishes loading, but no documentElement yet so don't resume.
@@ -125,6 +126,7 @@ TEST_F(DocumentLoadingRenderingTest,
   // TODO(https://crbug.com/441911594): Rust XML parser always issues a
   // StartDocument before any elements, also before PIs.
   EXPECT_TRUE(RuntimeEnabledFeatures::XMLParsingRustEnabled() ||
+              RuntimeEnabledFeatures::XMLRustForNonXsltEnabled() ||
               Compositor().DeferMainFrameUpdate());
 
   // Root inserted so resume.
@@ -341,7 +343,8 @@ TEST_F(DocumentLoadingRenderingTest,
 
   // Frame while the child frame still has pending sheets.
   auto* frame1_callback = MakeGarbageCollected<CheckRafCallback>();
-  child_frame->contentDocument()->RequestAnimationFrame(frame1_callback);
+  child_frame->contentDocument()->RequestAnimationFrame(
+      frame1_callback, FrameCallbackType::kWebExposed);
   auto frame1 = Compositor().BeginFrame();
   EXPECT_FALSE(frame1_callback->WasCalled());
   EXPECT_TRUE(frame1.Contains(SimCanvas::kRect, "red"));
@@ -354,7 +357,8 @@ TEST_F(DocumentLoadingRenderingTest,
 
   // Frame with all lifecycle updates enabled.
   auto* frame2_callback = MakeGarbageCollected<CheckRafCallback>();
-  child_frame->contentDocument()->RequestAnimationFrame(frame2_callback);
+  child_frame->contentDocument()->RequestAnimationFrame(
+      frame2_callback, FrameCallbackType::kWebExposed);
   auto frame2 = Compositor().BeginFrame();
   EXPECT_TRUE(frame1_callback->WasCalled());
   EXPECT_TRUE(frame2_callback->WasCalled());

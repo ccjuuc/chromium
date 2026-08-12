@@ -17,10 +17,11 @@
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/task_environment.h"
-#include "base/test/trace_test_utils.h"
+#include "base/test/tracing/trace_test_utils.h"
 #include "base/trace_event/trace_buffer.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/trace_event_impl.h"
+#include "base/trace_event/trace_log.h"
 #include "base/values.h"
 #include "net/log/net_log.h"
 #include "net/log/net_log_event_type.h"
@@ -47,7 +48,7 @@ struct TraceEntryInfo {
   std::string source_type;
 };
 
-TraceEntryInfo GetTraceEntryInfoFromValue(const base::Value::Dict& value) {
+TraceEntryInfo GetTraceEntryInfoFromValue(const base::DictValue& value) {
   TraceEntryInfo info;
   // See perfetto::trace_processor::json::JsonExporter::ExportSlices() for where
   // these values come from.
@@ -84,15 +85,15 @@ TraceEntryInfo GetTraceEntryInfoFromValue(const base::Value::Dict& value) {
 void EnableTraceLog(std::string_view category) {
   TraceLog::GetInstance()->SetEnabled(
       base::trace_event::TraceConfig(category, ""));
-  // AsyncEnabledStateObserver will receive enabled notification one message
-  // loop iteration later.
+  // TraceNetLogObserver will receive enabled notification one message loop
+  // iteration later.
   base::RunLoop().RunUntilIdle();
 }
 
 void DisableTraceLog() {
   TraceLog::GetInstance()->SetDisabled();
-  // AsyncEnabledStateObserver will receive disabled notification one message
-  // loop iteration later.
+  // TraceNetLogObserver will receive disabled notification one message loop
+  // iteration later.
   base::RunLoop().RunUntilIdle();
 }
 
@@ -156,9 +157,9 @@ class TraceNetLogObserverTest : public TestWithTaskEnvironment {
     trace_net_log_observer_ = std::move(trace_net_log_observer);
   }
 
-  static base::Value::List FilterNetLogTraceEvents(
-      const base::Value::List& trace_events) {
-    base::Value::List filtered_trace_events;
+  static base::ListValue FilterNetLogTraceEvents(
+      const base::ListValue& trace_events) {
+    base::ListValue filtered_trace_events;
 
     for (const auto& event : trace_events) {
       if (!event.is_dict()) {
@@ -185,7 +186,7 @@ class TraceNetLogObserverTest : public TestWithTaskEnvironment {
     return filtered_trace_events;
   }
 
-  const base::Value::List& trace_events() const { return trace_events_; }
+  const base::ListValue& trace_events() const { return trace_events_; }
 
   void clear_trace_events() {
     trace_events_.clear();
@@ -202,7 +203,7 @@ class TraceNetLogObserverTest : public TestWithTaskEnvironment {
 
  private:
   base::test::TracingEnvironment tracing_environment_;
-  base::Value::List trace_events_;
+  base::ListValue trace_events_;
   base::trace_event::TraceResultBuffer trace_buffer_;
   base::trace_event::TraceResultBuffer::SimpleOutput json_output_;
   RecordingNetLogObserver net_log_observer_;
@@ -447,7 +448,7 @@ TEST_F(TraceNetLogObserverTest, EventsWithAndWithoutParameters) {
   EXPECT_NE(item1_param_source_start_time, nullptr);
 
   // Events emitted by TraceNetLogObserver always have params.
-  const base::Value::Dict* item2_args =
+  const base::DictValue* item2_args =
       item2->GetDict().FindDictByDottedPath("args");
   EXPECT_TRUE(item2_args->contains("params"));
   const std::string* item2_param_source_start_time =

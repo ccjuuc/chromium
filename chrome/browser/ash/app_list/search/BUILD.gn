@@ -3,7 +3,6 @@
 # found in the LICENSE file.
 
 import("//build/config/chrome_build.gni")
-import("//build/config/chromeos/ui_mode.gni")
 
 assert(is_chromeos)
 
@@ -88,6 +87,7 @@ static_library("search") {
     "//chrome/browser/ash/drive",
     "//chrome/browser/ash/release_notes",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/search_engines",
     "//chrome/browser/sync:factories",
     "//chrome/browser/ui/webui/ash/settings/search",
     "//chrome/browser/ui/webui/ash/settings/search/mojom",
@@ -100,7 +100,6 @@ static_library("search") {
     "//chromeos/ash/services/assistant/public/cpp",
     "//chromeos/components/libsegmentation:buildflags",
     "//chromeos/components/mahi/public/cpp",
-    "//chromeos/crosapi/mojom",
     "//chromeos/strings:strings_grit",
     "//components/drive",
     "//components/feature_engagement/public",
@@ -132,7 +131,6 @@ static_library("search") {
     "//chrome/browser/ash/app_list",
     "//chrome/browser/ash/app_list/arc",
     "//chrome/browser/ash/app_list/search/ranking",
-    "//chrome/browser/ash/app_list/search/util",
   ]
 }
 
@@ -186,6 +184,7 @@ source_set("unit_tests") {
     "//chrome/browser/extensions",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/sync:factories",
+    "//chrome/browser/trusted_vault",
     "//chrome/browser/ui",
     "//chrome/browser/ui:test_support",
     "//chrome/browser/ui/webui/ash/settings/search",
@@ -252,7 +251,6 @@ source_set("browser_tests") {
     "//base",
     "//chrome/browser",
     "//chrome/browser/apps/app_service",
-    "//chrome/browser/apps/app_service:constants",
     "//chrome/browser/ash/app_list/search/test:browser_test_support",
     "//chrome/browser/ash/app_list/search/test:test_support",
     "//chrome/browser/ash/system_web_apps",
@@ -262,6 +260,7 @@ source_set("browser_tests") {
     "//chrome/browser/web_applications:web_applications_test_support",
     "//chrome/common:constants",
     "//chromeos/strings",
+    "//components/services/app_service",
     "//components/webapps/common",
   ]
 }

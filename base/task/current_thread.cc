@@ -55,12 +55,6 @@ void CurrentThread::RemoveDestructionObserver(
   current_->RemoveDestructionObserver(destruction_observer);
 }
 
-void CurrentThread::SetTaskRunner(
-    scoped_refptr<SingleThreadTaskRunner> task_runner) {
-  DCHECK(current_->IsBoundToCurrentThread());
-  current_->SetTaskRunner(std::move(task_runner));
-}
-
 bool CurrentThread::IsBoundToCurrentThread() const {
   return current_ == GetCurrentSequenceManagerImpl();
 }
@@ -80,6 +74,11 @@ void CurrentThread::EnableMessagePumpTimeKeeperMetrics(
 IOWatcher* CurrentThread::GetIOWatcher() {
   DCHECK(current_->IsBoundToCurrentThread());
   return current_->GetMessagePump()->GetIOWatcher();
+}
+
+bool CurrentThread::IsAsyncIOSupported() const {
+  DCHECK(current_->IsBoundToCurrentThread());
+  return current_->GetMessagePump()->IsAsyncIOSupported();
 }
 
 void CurrentThread::AddTaskObserver(TaskObserver* task_observer) {
@@ -108,14 +107,14 @@ CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop::
     : sequence_manager_(GetCurrentSequenceManagerImpl()),
       previous_state_(
           sequence_manager_->IsTaskExecutionAllowedInNativeNestedLoop()) {
-  TRACE_EVENT_BEGIN0("base", "ScopedNestableTaskAllower");
+  TRACE_EVENT_BEGIN("base", "ScopedNestableTaskAllower");
   sequence_manager_->SetTaskExecutionAllowedInNativeNestedLoop(true);
 }
 
 CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop::
     ~ScopedAllowApplicationTasksInNativeNestedLoop() {
   sequence_manager_->SetTaskExecutionAllowedInNativeNestedLoop(previous_state_);
-  TRACE_EVENT_END0("base", "ScopedNestableTaskAllower");
+  TRACE_EVENT_END("base");
 }
 
 bool CurrentThread::ApplicationTasksAllowedInNativeNestedLoop() const {
@@ -181,14 +180,20 @@ void CurrentUIThread::Abort() {
 #endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_WIN)
-void CurrentUIThread::AddMessagePumpObserver(
-    MessagePumpForUI::Observer* observer) {
-  GetMessagePumpForUI()->AddObserver(observer);
+void CurrentUIThread::RegisterNativeEventObserver(
+    MessagePumpForUI::NativeEventObserver* observer) {
+  GetMessagePumpForUI()->RegisterNativeEventObserver(observer);
 }
 
-void CurrentUIThread::RemoveMessagePumpObserver(
-    MessagePumpForUI::Observer* observer) {
-  GetMessagePumpForUI()->RemoveObserver(observer);
+void CurrentUIThread::UnregisterNativeEventObserver(
+    MessagePumpForUI::NativeEventObserver* observer) {
+  GetMessagePumpForUI()->UnregisterNativeEventObserver(observer);
+}
+
+MessagePumpForUI::NativeEventObserver*
+CurrentUIThread::ResetNativeEventObserverForTesting(
+    MessagePumpForUI::NativeEventObserver* observer) {
+  return GetMessagePumpForUI()->ResetNativeEventObserverForTesting(observer);
 }
 #endif  // BUILDFLAG(IS_WIN)
 

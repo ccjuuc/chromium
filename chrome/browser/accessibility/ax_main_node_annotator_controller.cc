@@ -4,6 +4,8 @@
 
 #include "chrome/browser/accessibility/ax_main_node_annotator_controller.h"
 
+#include "base/check.h"
+#include "base/logging.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/screen_ai/screen_ai_service_router.h"
 #include "chrome/browser/screen_ai/screen_ai_service_router_factory.h"
@@ -157,6 +159,10 @@ void AXMainNodeAnnotatorController::StateChanged(
           IDS_SETTINGS_MAIN_NODE_ANNOTATIONS_DOWNLOAD_COMPLETE);
       break;
   }
+}
+
+void AXMainNodeAnnotatorController::OnScreenAIInstallStateDestroying() {
+  component_ready_observer_.Reset();
 }
 
 void AXMainNodeAnnotatorController::Activate() {

@@ -8,7 +8,6 @@
 #import "ios/chrome/browser/settings/ui_bundled/cells/inline_promo_cell.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
-#import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_styler.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "testing/gtest_mac.h"
 #import "testing/platform_test.h"
@@ -23,7 +22,7 @@ UIImage* GetCloseButtonImage() {
       configurationWithPointSize:16
                           weight:UIImageSymbolWeightSemibold
                            scale:UIImageSymbolScaleMedium];
-  return DefaultSymbolWithConfiguration(@"xmark", symbolConfiguration);
+  return SymbolWithConfiguration(SymbolXMark, symbolConfiguration);
 }
 
 // Returns the font defined in the configuration of the cell's more info button.
@@ -40,7 +39,7 @@ TEST_F(InlinePromoItemTest, ConfigureCell) {
   InlinePromoItem* item = [[InlinePromoItem alloc] initWithType:0];
 
   // Set up item.
-  UIImage* promo_image = DefaultSymbolWithPointSize(@"tortoise.fill", 16);
+  UIImage* promo_image = SymbolWithPointSize(SymbolInfoCircle, 16);
   NSString* promo_text = @"Test text";
   NSString* more_info_button_title = @"Button Title";
   item.promoImage = promo_image;
@@ -56,7 +55,7 @@ TEST_F(InlinePromoItemTest, ConfigureCell) {
       base::apple::ObjCCastStrict<InlinePromoCell>(cell);
 
   // Configure cell.
-  [item configureCell:cell withStyler:[[ChromeTableViewStyler alloc] init]];
+  [item configureCell:cell];
 
   // Verify cell configuration.
   UIButton* close_button = promo_cell.closeButton;
@@ -92,7 +91,7 @@ TEST_F(InlinePromoItemTest, ConfigureCell) {
 // `shouldShowCloseButton` property.
 TEST_F(InlinePromoItemTest, CloseButtonVisibility) {
   InlinePromoItem* item = [[InlinePromoItem alloc] initWithType:0];
-  item.promoImage = DefaultSymbolWithPointSize(@"tortoise.fill", 16);
+  item.promoImage = SymbolWithPointSize(SymbolInfoCircle, 16);
   item.promoText = @"Test text";
   item.moreInfoButtonTitle = @"Button Title";
 
@@ -100,11 +99,11 @@ TEST_F(InlinePromoItemTest, CloseButtonVisibility) {
   InlinePromoCell* promo_cell =
       base::apple::ObjCCastStrict<InlinePromoCell>(cell);
 
-  [item configureCell:cell withStyler:[[ChromeTableViewStyler alloc] init]];
+  [item configureCell:cell];
   EXPECT_FALSE(promo_cell.closeButton.hidden);
 
   item.shouldShowCloseButton = false;
-  [item configureCell:cell withStyler:[[ChromeTableViewStyler alloc] init]];
+  [item configureCell:cell];
   EXPECT_TRUE(promo_cell.closeButton.hidden);
 }
 
@@ -112,7 +111,7 @@ TEST_F(InlinePromoItemTest, CloseButtonVisibility) {
 // property.
 TEST_F(InlinePromoItemTest, BadgeVisibility) {
   InlinePromoItem* item = [[InlinePromoItem alloc] initWithType:0];
-  item.promoImage = DefaultSymbolWithPointSize(@"tortoise.fill", 16);
+  item.promoImage = SymbolWithPointSize(SymbolInfoCircle, 16);
   item.promoText = @"Test text";
   item.moreInfoButtonTitle = @"Button Title";
 
@@ -120,18 +119,18 @@ TEST_F(InlinePromoItemTest, BadgeVisibility) {
   InlinePromoCell* promo_cell =
       base::apple::ObjCCastStrict<InlinePromoCell>(cell);
 
-  [item configureCell:cell withStyler:[[ChromeTableViewStyler alloc] init]];
+  [item configureCell:cell];
   EXPECT_FALSE(promo_cell.badgeView.hidden);
 
   item.shouldDisplayBadge = NO;
-  [item configureCell:cell withStyler:[[ChromeTableViewStyler alloc] init]];
+  [item configureCell:cell];
   EXPECT_TRUE(promo_cell.badgeView.hidden);
 }
 
 // Tests that the cell is as expected when disabled.
 TEST_F(InlinePromoItemTest, DisableCell) {
   InlinePromoItem* item = [[InlinePromoItem alloc] initWithType:0];
-  item.promoImage = DefaultSymbolWithPointSize(@"tortoise.fill", 16);
+  item.promoImage = SymbolWithPointSize(SymbolInfoCircle, 16);
   item.promoText = @"Test text";
   item.moreInfoButtonTitle = @"Button Title";
   item.enabled = NO;
@@ -140,7 +139,7 @@ TEST_F(InlinePromoItemTest, DisableCell) {
   InlinePromoCell* promo_cell =
       base::apple::ObjCCastStrict<InlinePromoCell>(cell);
 
-  [item configureCell:cell withStyler:[[ChromeTableViewStyler alloc] init]];
+  [item configureCell:cell];
 
   EXPECT_FALSE(promo_cell.closeButton.enabled);
   EXPECT_TRUE([promo_cell.promoTextLabel.textColor

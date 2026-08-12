@@ -13,47 +13,34 @@ namespace blink {
 
 void CSSTokenizerInputStream::AdvanceUntilNonWhitespace() {
   // Using HTML space here rather than CSS space since we don't do preprocessing
-  if (string_.Is8Bit()) {
-    const LChar* characters = string_.Span8().data();
-    while (offset_ < string_length_ &&
-           IsHTMLSpace(UNSAFE_TODO(characters[offset_]))) {
-      ++offset_;
-    }
-  } else {
-    const UChar* characters = string_.Span16().data();
-    while (offset_ < string_length_ &&
-           IsHTMLSpace(UNSAFE_TODO(characters[offset_]))) {
-      ++offset_;
-    }
-  }
+  rest_ = StringView(rest_, SkipWhilePredicate<IsHTMLSpace>(/*offset=*/0));
 }
 
 double CSSTokenizerInputStream::GetDouble(unsigned start, unsigned end) const {
-  DCHECK(start <= end && ((offset_ + end) <= string_length_));
-  bool is_result_ok = false;
-  double result = 0.0;
+  DCHECK_LE(start, end);
+  DCHECK_LE(end, rest_.length());
+
+  std::optional<double> result;
   if (start < end) {
-    result = VisitCharacters(
-        StringView(string_, offset_ + start, end - start),
-        [&](auto chars) { return CharactersToDouble(chars, &is_result_ok); });
+    result = StringToDouble(StringView(rest_, start, end - start));
   }
   // FIXME: It looks like callers ensure we have a valid number
-  return is_result_ok ? result : 0.0;
+  return result.value_or(0);
 }
 
 double CSSTokenizerInputStream::GetNaturalNumberAsDouble(unsigned start,
                                                          unsigned end) const {
-  DCHECK(start <= end && ((offset_ + end) <= string_length_));
+  DCHECK_LE(start, end);
+  DCHECK_LE(end, rest_.length());
 
   // If this is an integer that is exactly representable in double
   // (10^14 is at most 47 bits of mantissa), we don't need all the
   // complicated rounding machinery of CharactersToDouble(),
   // and can do with a much faster variant.
   if (start < end && string_.Is8Bit() && end - start <= 14) {
-    const LChar* ptr = UNSAFE_TODO(string_.Span8().data() + offset_ + start);
-    double result = ptr[0] - '0';
-    for (unsigned i = 1; i < end - start; ++i) {
-      result = result * 10 + (UNSAFE_TODO(ptr[i]) - '0');
+    uint64_t result = 0;
+    for (LChar ch : rest_.Span8().subspan(start, end - start)) {
+      result = result * 10 + (ch - '0');
     }
     return result;
   } else {

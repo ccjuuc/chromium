@@ -7,6 +7,7 @@
 
 #include <optional>
 
+#include "base/memory_coordinator/memory_consumer.h"
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
@@ -27,7 +28,8 @@ class PerProfileWebUITracker;
 //
 // See comments in TopChromeWebUIConfig for making a WebUI preloadable.
 class WebUIContentsPreloadManager : public ProfileObserver,
-                                    public PerProfileWebUITracker::Observer {
+                                    public PerProfileWebUITracker::Observer,
+                                    public base::PassiveMemoryConsumer {
  public:
   enum class PreloadMode {
     // Preloads on calling `WarmupForBrowser()` and after every WebUI
@@ -74,12 +76,19 @@ class WebUIContentsPreloadManager : public ProfileObserver,
   // This method handles navigation to `webui_url` internally.
   // A new preloaded contents will be created, unless the system is under heavy
   // memory pressure.
+  //
+  // Note: The returned WebContents has a WebContentsModalDialogManager
+  // initialized, but its delegate is NOT set. Consumers must set the delegate
+  // (e.g. via WebUIContentsWrapper) before any web-modal dialogs can be shown.
   RequestResult Request(const GURL& webui_url,
                         content::BrowserContext* browser_context);
 
   // Returns the timeticks when the specific `web_contents` was requested.
   std::optional<base::TimeTicks> GetRequestTime(
       content::WebContents* web_contents);
+
+  // Sets the timeticks when the specific `web_contents` was requested.
+  void SetRequestTime(content::WebContents* web_contents, base::TimeTicks time);
 
   // Returns true if the given `web_contents` was preloaded.
   bool WasPreloaded(content::WebContents* web_contents) const;
@@ -91,6 +100,7 @@ class WebUIContentsPreloadManager : public ProfileObserver,
   // Disable navigations for tests that don't have //content properly
   // initialized.
   void DisableNavigationForTesting();
+  void ReenableNavigationForTesting();
 
  private:
   WebUIContentsPreloadManager();
@@ -213,6 +223,8 @@ class WebUIContentsPreloadManager : public ProfileObserver,
 
   // Observation of destroy of preload content's profile.
   base::ScopedObservation<Profile, ProfileObserver> profile_observation_{this};
+
+  base::MemoryConsumerRegistration memory_consumer_registration_;
 };
 
 #endif  // CHROME_BROWSER_UI_WEBUI_TOP_CHROME_WEBUI_CONTENTS_PRELOAD_MANAGER_H_

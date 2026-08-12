@@ -10,6 +10,7 @@
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/task/thread_pool.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace enterprise_connectors {
 
@@ -23,9 +24,16 @@ FilesScanData::PathsToScanResult GetPathsToScan(
     const base::FilePath& file = base_paths.at(i);
     base::File::Info info;
 
-    // Ignore the path if it's a symbolic link.
-    if (!base::GetFileInfo(file, &info) || info.is_symbolic_link)
+    if (!base::GetFileInfo(file, &info)) {
+      // Keep the path even if it doesn't exist, so the scanner can handle the
+      // failure.
+      paths.push_back(file);
+      expanded_paths_indexes.insert({file, i});
       continue;
+    }
+    if (info.is_symbolic_link) {
+      continue;
+    }
 
     // If the file is a directory, recursively add the files it holds to `data`.
     if (info.is_directory) {
@@ -88,14 +96,14 @@ void FilesScanData::ExpandPaths(base::OnceClosure done_closure) {
                      weak_ptr_factory_.GetWeakPtr()));
 }
 
-std::set<size_t> FilesScanData::IndexesToBlock(
+absl::flat_hash_set<size_t> FilesScanData::IndexesToBlock(
     const std::vector<bool>& allowed_paths) {
   if (allowed_paths.size() != expanded_paths_indexes_.size() ||
       expanded_paths_.size() != allowed_paths.size()) {
     return {};
   }
 
-  std::set<size_t> indexes_to_block;
+  absl::flat_hash_set<size_t> indexes_to_block;
   for (size_t i = 0; i < allowed_paths.size(); ++i) {
     if (allowed_paths[i])
       continue;

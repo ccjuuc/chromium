@@ -16,7 +16,7 @@
 #import "ios/chrome/browser/bookmarks/test/bookmark_earl_grey.h"
 #import "ios/chrome/browser/bookmarks/test/bookmark_earl_grey_ui.h"
 #import "ios/chrome/browser/metrics/model/metrics_app_interface.h"
-#import "ios/chrome/browser/settings/ui_bundled/google_services/manage_sync_settings_constants.h"
+#import "ios/chrome/browser/settings/manage_sync/public/manage_sync_settings_constants.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
@@ -24,12 +24,11 @@
 #import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
-#import "ios/chrome/test/earl_grey/web_http_server_chrome_test_case.h"
+#import "ios/chrome/test/earl_grey/chrome_test_case.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
 #import "ui/base/l10n/l10n_util.h"
 
-using chrome_test_util::SettingsAccountButton;
 using chrome_test_util::SettingsDoneButton;
 
 namespace {
@@ -131,7 +130,7 @@ void DismissBatchUploadConfirmationSnackbar(int count, NSString* email) {
 
 }  // namespace
 
-@interface BookmarksBatchUploadTestCase : WebHttpServerChromeTestCase
+@interface BookmarksBatchUploadTestCase : ChromeTestCase
 @end
 
 @implementation BookmarksBatchUploadTestCase
@@ -160,7 +159,7 @@ void DismissBatchUploadConfirmationSnackbar(int count, NSString* email) {
   // Add last syncing account.
   [ChromeEarlGrey
       setStringValue:[FakeSystemIdentity fakeIdentity1].gaiaId.ToNSString()
-         forUserPref:prefs::kGoogleServicesLastSyncingGaiaId];
+         forUserPref:prefs::kGoogleServicesSyncingGaiaIdMigratedToSignedIn];
   // Reset pref to offer upload sync left-behind bookamrks.
   [ChromeEarlGrey
       setBoolValue:false
@@ -224,8 +223,9 @@ void DismissBatchUploadConfirmationSnackbar(int count, NSString* email) {
 // account that is different than the last syncing account.
 - (void)testNoBatchUploadDialogIfSignedInWithAnotherAccount {
   // Change the default last syncing account.
-  [ChromeEarlGrey setStringValue:@"foo2ID"
-                     forUserPref:prefs::kGoogleServicesLastSyncingGaiaId];
+  [ChromeEarlGrey
+      setStringValue:@"foo2ID"
+         forUserPref:prefs::kGoogleServicesSyncingGaiaIdMigratedToSignedIn];
 
   // Add one local bookmark.
   [BookmarkEarlGrey addBookmarkWithTitle:@"example1"
@@ -277,8 +277,7 @@ void DismissBatchUploadConfirmationSnackbar(int count, NSString* email) {
 
   // Resolve the passphrase error from Account settings.
   // Open settings.
-  [ChromeEarlGreyUI openSettingsMenu];
-  [ChromeEarlGreyUI tapSettingsMenuButton:SettingsAccountButton()];
+  [SigninEarlGreyUI openSyncSettings];
   // Verify the error section is showing.
   [[EarlGrey
       selectElementWithMatcher:grey_accessibilityID(kSyncErrorButtonIdentifier)]
@@ -333,7 +332,7 @@ void DismissBatchUploadConfirmationSnackbar(int count, NSString* email) {
   DismissBatchUploadConfirmationSnackbar(1, fakeIdentity.userEmail);
   [ChromeEarlGreyUI waitForAppToIdle];
 
-  // Close the bookamrks manager.
+  // Close the bookmarks manager.
   [[EarlGrey
       selectElementWithMatcher:
           grey_accessibilityID(kBookmarksHomeNavigationBarDoneButtonIdentifier)]

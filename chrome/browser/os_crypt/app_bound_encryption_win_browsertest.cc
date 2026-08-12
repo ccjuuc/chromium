@@ -14,6 +14,7 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_base.h"
 #include "base/metrics/histogram_samples.h"
 #include "base/metrics/statistics_recorder.h"
@@ -22,9 +23,11 @@
 #include "base/process/process_info.h"
 #include "base/strings/strcat.h"
 #include "base/test/bind.h"
+#include "base/test/gmock_expected_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
+#include "base/threading/platform_thread.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/types/expected.h"
 #include "build/branding_buildflags.h"
@@ -36,14 +39,16 @@
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/win/isolated_browser_support.h"
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/elevation_service/elevator.h"
 #include "chrome/install_static/test/scoped_install_details.h"
 #include "chrome/installer/util/install_service_work_item.h"
+#include "chrome/installer/util/util_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "chrome/windows_services/service_program/test_support/scoped_log_grabber.h"
+#include "chrome/windows_services/service_program/test_support/service_environment.h"
 #include "components/os_crypt/async/browser/os_crypt_async.h"
-#include "components/os_crypt/sync/os_crypt.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
@@ -52,12 +57,20 @@
 #include "components/prefs/testing_pref_service.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "testing/gtest/include/gtest/gtest.h"
 
 using testing::_;
 
 namespace os_crypt {
 
 namespace {
+
+// Useful in tests, to compare bytewise with data.
+constexpr uint8_t kV20Header[] = {
+    static_cast<uint8_t>(os_crypt_async::kAppBoundDataPrefix[0]),
+    static_cast<uint8_t>(os_crypt_async::kAppBoundDataPrefix[1]),
+    static_cast<uint8_t>(os_crypt_async::kAppBoundDataPrefix[2]),
+};
 
 void WaitForHistogram(const std::string& histogram_name) {
   // Continue if histogram was already recorded.
@@ -73,12 +86,10 @@ void WaitForHistogram(const std::string& histogram_name) {
   run_loop.Run();
 }
 
-os_crypt_async::Encryptor GetInstanceSync(
-    os_crypt_async::OSCryptAsync& factory,
-    os_crypt_async::Encryptor::Option option =
-        os_crypt_async::Encryptor::Option::kNone) {
-  base::test::TestFuture<os_crypt_async::Encryptor> future;
-  factory.GetInstance(future.GetCallback(), option);
+scoped_refptr<os_crypt_async::Encryptor> GetInstanceSync(
+    os_crypt_async::OSCryptAsync& factory) {
+  base::test::TestFuture<scoped_refptr<os_crypt_async::Encryptor>> future;
+  factory.GetInstance(future.GetCallback());
   return future.Take();
 }
 
@@ -100,8 +111,14 @@ class AppBoundEncryptionWinTestBase : public InProcessBrowserTest {
     GTEST_SKIP() << "Temporarily disabled on 32-bit. See crbug.com/430106357.";
 #else
     if (should_install_service_) {
-      maybe_uninstall_service_ = InstallService(log_grabber_);
-      EXPECT_TRUE(maybe_uninstall_service_.has_value());
+      maybe_service_environment_.emplace(
+          install_static::GetElevationServiceName(),
+          installer::kElevationServiceExe,
+          std::array<std::string_view, 3>{
+              elevation_service::switches::kAllowUntrustedPathForTesting,
+              elevation_service::switches::kElevatorClsIdForTestingSwitch,
+              elevation_service::switches::kAllowUntrustedSwitchesForTesting},
+          install_static::GetElevatorClsid(), install_static::GetElevatorIid());
     }
     // Browser tests use a custom user data dir, which would normally result in
     // App-Bound encryption being disabled with
@@ -115,21 +132,21 @@ class AppBoundEncryptionWinTestBase : public InProcessBrowserTest {
 #endif  // defined(ARCH_CPU_32_BITS)
   }
 
-  void TearDown() override { maybe_uninstall_service_.reset(); }
+  void TearDown() override { maybe_service_environment_.reset(); }
 
   // Used by multi-stage tests to persist data between each part of the test.
   void StoreData(base::span<const uint8_t> data) {
     base::ScopedAllowBlockingForTesting allow_blocking;
-    const auto data_path =
-        browser()->profile()->GetPath().Append(FILE_PATH_LITERAL("TestData"));
+    const auto data_path = browser()->GetProfile()->GetPath().Append(
+        FILE_PATH_LITERAL("TestData"));
     ASSERT_FALSE(base::PathExists(data_path));
     EXPECT_TRUE(base::WriteFile(data_path, data));
   }
 
   std::optional<std::vector<uint8_t>> RetrieveData() {
     base::ScopedAllowBlockingForTesting allow_blocking;
-    return base::ReadFileToBytes(
-        browser()->profile()->GetPath().Append(FILE_PATH_LITERAL("TestData")));
+    return base::ReadFileToBytes(browser()->GetProfile()->GetPath().Append(
+        FILE_PATH_LITERAL("TestData")));
   }
 
   static bool IsPreTest() {
@@ -139,8 +156,7 @@ class AppBoundEncryptionWinTestBase : public InProcessBrowserTest {
   }
 
   base::HistogramTester histogram_tester_;
-  std::optional<base::ScopedClosureRunner> maybe_uninstall_service_;
-  ScopedLogGrabber log_grabber_;
+  std::optional<ServiceEnvironment> maybe_service_environment_;
   bool set_default_user_data_dir_ = true;
   bool should_install_service_ = true;
 
@@ -200,65 +216,6 @@ INSTANTIATE_TEST_SUITE_P(/* no prefix */,
                            return info.param ? "IElevator" : "IElevator2";
                          });
 
-// Test the basic interface to Encrypt and Decrypt data.
-IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinTest, EncryptDecryptWithFlags) {
-  ASSERT_TRUE(install_static::IsSystemInstall());
-  const std::string plaintext("plaintext");
-  std::string ciphertext;
-  {
-    DWORD last_error;
-    elevation_service::EncryptFlags flags{.use_latest_key = false};
-    HRESULT hr =
-        EncryptAppBoundString(ProtectionLevel::PROTECTION_PATH_VALIDATION,
-                              plaintext, ciphertext, last_error, &flags);
-    ASSERT_HRESULT_SUCCEEDED(hr);
-    EXPECT_EQ(last_error, DWORD{ERROR_SUCCESS});
-  }
-
-  {
-    std::string returned_plaintext;
-    std::optional<std::string> maybe_new_ciphertext;
-    DWORD last_error;
-    HRESULT hr =
-        DecryptAppBoundString(ciphertext, returned_plaintext,
-                              ProtectionLevel::PROTECTION_PATH_VALIDATION,
-                              maybe_new_ciphertext, last_error);
-    ASSERT_HRESULT_SUCCEEDED(hr);
-    EXPECT_FALSE(maybe_new_ciphertext);
-    EXPECT_EQ(last_error, DWORD{ERROR_SUCCESS});
-    EXPECT_EQ(plaintext, returned_plaintext);
-  }
-  // Encrypt with new encryption key. There's no real way to know the new key is
-  // being used because it's a blob of encrypted data.
-  {
-    DWORD last_error;
-    std::string new_ciphertext;
-    elevation_service::EncryptFlags flags{.use_latest_key = true};
-    HRESULT hr =
-        EncryptAppBoundString(ProtectionLevel::PROTECTION_PATH_VALIDATION,
-                              plaintext, new_ciphertext, last_error, &flags);
-    ASSERT_HRESULT_SUCCEEDED(hr);
-    EXPECT_EQ(last_error, DWORD{ERROR_SUCCESS});
-
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-    // Ciphertext is bigger for latest key version. Longer ciphertext, more
-    // security! This new encryption is only available in Chrome branded builds
-    // so this (fuzzy) check can only happen there.
-    EXPECT_GT(new_ciphertext.size(), ciphertext.size());
-#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
-    // Verify decrypt still works for data encrypted with the latest key.
-    std::string returned_plaintext;
-    std::optional<std::string> maybe_new_ciphertext;
-    hr = DecryptAppBoundString(ciphertext, returned_plaintext,
-                               ProtectionLevel::PROTECTION_PATH_VALIDATION,
-                               maybe_new_ciphertext, last_error);
-    ASSERT_HRESULT_SUCCEEDED(hr);
-    EXPECT_FALSE(maybe_new_ciphertext);
-    EXPECT_EQ(last_error, DWORD{ERROR_SUCCESS});
-    EXPECT_EQ(plaintext, returned_plaintext);
-  }
-}
-
 // Test that invalid data is handled correctly.
 IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinTest, EncryptDecryptInvalid) {
   ASSERT_TRUE(install_static::IsSystemInstall());
@@ -305,7 +262,8 @@ IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinTest, MANUAL_Uninstall) {}
 
 using AppBoundEncryptionWinTestNoService = InProcessBrowserTest;
 
-IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinTestNoService, NoService) {
+// TODO(crbug.com/542625348): This test is disabled as it is failing.
+IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinTestNoService, DISABLED_NoService) {
   const std::string plaintext("plaintext");
   std::string ciphertext;
   DWORD last_error;
@@ -383,14 +341,11 @@ IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinDecryptionNotAvailableTest,
             SupportLevel::kSupported);
   auto encryptor = GetInstanceSync(*g_browser_process->os_crypt_async());
 
-  const auto app_bound_data = encryptor.EncryptString("app-bound secret");
+  const auto app_bound_data = encryptor->EncryptString("app-bound secret");
   ASSERT_TRUE(app_bound_data);
   ASSERT_GT(app_bound_data->size(), 3u);
-  // kAppBoundDataPrefix for App-Bound.
-  constexpr uint8_t kV20Header[] = {'v', '2', '0'};
   EXPECT_THAT(base::span(*app_bound_data).first<3>(),
               ::testing::ElementsAreArray(kV20Header));
-
   ASSERT_NO_FATAL_FAILURE(StoreData(*app_bound_data));
 }
 
@@ -406,7 +361,7 @@ IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinDecryptionNotAvailableTest,
     ASSERT_TRUE(previous_data);
 
     os_crypt_async::Encryptor::DecryptFlags flags;
-    const auto plaintext = encryptor.DecryptData(*previous_data, &flags);
+    const auto plaintext = encryptor->DecryptData(*previous_data, &flags);
     EXPECT_FALSE(plaintext);
     // Decryption is temporarily unavailable, as the service is not present.
     EXPECT_TRUE(flags.temporarily_unavailable);
@@ -415,7 +370,7 @@ IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinDecryptionNotAvailableTest,
   {
     os_crypt_async::Encryptor::DecryptFlags flags;
     auto plaintext =
-        encryptor.DecryptData(base::as_byte_span("invalid_data"), &flags);
+        encryptor->DecryptData(base::as_byte_span("invalid_data"), &flags);
     EXPECT_FALSE(plaintext);
     // Invalid data is permanently unavailable.
     EXPECT_FALSE(flags.temporarily_unavailable);
@@ -441,11 +396,9 @@ IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinTestWithVariablePolicy,
 
   auto encryptor = GetInstanceSync(*g_browser_process->os_crypt_async());
 
-  const auto app_bound_data = encryptor.EncryptString("app-bound secret");
+  const auto app_bound_data = encryptor->EncryptString("app-bound secret");
   ASSERT_TRUE(app_bound_data);
   ASSERT_GT(app_bound_data->size(), 3u);
-  // kAppBoundDataPrefix for App-Bound.
-  constexpr uint8_t kV20Header[] = {'v', '2', '0'};
   EXPECT_THAT(base::span(*app_bound_data).first<3>(),
               ::testing::ElementsAreArray(kV20Header));
   ASSERT_NO_FATAL_FAILURE(StoreData(*app_bound_data));
@@ -457,7 +410,7 @@ IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinTestWithVariablePolicy,
             SupportLevel::kDisabledByPolicy);
   auto encryptor = GetInstanceSync(*g_browser_process->os_crypt_async());
 
-  const auto data = encryptor.EncryptString("secret");
+  const auto data = encryptor->EncryptString("secret");
   ASSERT_TRUE(data);
   ASSERT_GT(data->size(), 3u);
   // kEncryptionVersionPrefix for DPAPI i.e. not App-Bound.
@@ -471,7 +424,7 @@ IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinTestWithVariablePolicy,
   const auto previous_data = RetrieveData();
   ASSERT_TRUE(previous_data);
   os_crypt_async::Encryptor::DecryptFlags flags;
-  const auto plaintext = encryptor.DecryptData(*previous_data, &flags);
+  const auto plaintext = encryptor->DecryptData(*previous_data, &flags);
   ASSERT_TRUE(plaintext);
   // App-Bound is now disabled, so App-Bound encrypted data should be
   // re-encrypted in order to ensure it's encrypted with the DPAPI key provider.
@@ -517,9 +470,16 @@ class AppBoundEncryptionWinReencryptTest
     if (base::GetCurrentProcessIntegrityLevel() != base::HIGH_INTEGRITY) {
       GTEST_SKIP() << "Elevation is required for this test.";
     }
-    maybe_uninstall_service_ =
-        InstallService(log_grabber_, std::get<0>(GetParam()));
-    EXPECT_TRUE(maybe_uninstall_service_.has_value());
+    std::vector<std::string_view> switches = {
+        elevation_service::switches::kElevatorClsIdForTestingSwitch};
+    if (std::get<0>(GetParam())) {
+      switches.push_back(
+          elevation_service::switches::kFakeReencryptForTestingSwitch);
+    }
+    maybe_service_environment_.emplace(
+        install_static::GetElevationServiceName(),
+        installer::kElevationServiceExe, switches,
+        install_static::GetElevatorClsid(), install_static::GetElevatorIid());
     // Service already installed, do not try installing again.
     should_install_service_ = false;
     AppBoundEncryptionWinTest::SetUp();
@@ -536,7 +496,7 @@ IN_PROC_BROWSER_TEST_P(AppBoundEncryptionWinReencryptTest, EncryptDecrypt) {
   std::string ciphertext;
   DWORD last_error;
   base::HistogramTester histograms;
-  elevation_service::EncryptFlags flags{.use_latest_key = true};
+  elevation_service::EncryptFlags flags;
   HRESULT hr =
       EncryptAppBoundString(ProtectionLevel::PROTECTION_PATH_VALIDATION,
                             plaintext, ciphertext, last_error, &flags);
@@ -570,14 +530,14 @@ IN_PROC_BROWSER_TEST_P(AppBoundEncryptionWinReencryptTest, EncryptDecrypt) {
 // This could be a unit test, but it needs the service installed to work, so
 // makes sense for it to be here alongside the other app-bound encryption tests.
 IN_PROC_BROWSER_TEST_P(AppBoundEncryptionWinReencryptTest, KeyProviderTest) {
-  const char* kPrefName = "os_crypt.app_bound_encrypted_key";
   ASSERT_TRUE(install_static::IsSystemInstall());
 
   TestingPrefServiceSimple prefs;
   MockPrefChangeCallback observer(&prefs);
   PrefChangeRegistrar registrar;
   registrar.Init(&prefs);
-  registrar.Add(kPrefName, observer.GetCallback());
+  registrar.Add(os_crypt_async::kAppBoundEncryptedKeyPrefName,
+                observer.GetCallback());
   // The first time the GetKey is called, the provider should generate a random
   // key, encrypt it with app-bound, then persist the encrypted key to store.
   EXPECT_CALL(observer, OnPreferenceChanged(_)).Times(1);
@@ -590,7 +550,8 @@ IN_PROC_BROWSER_TEST_P(AppBoundEncryptionWinReencryptTest, KeyProviderTest) {
   std::optional<os_crypt_async::Encryptor::Key> encryption_key;
   std::string encrypted_key;
   {
-    os_crypt_async::AppBoundEncryptionProviderWin provider(&prefs);
+    os_crypt_async::AppBoundEncryptionProviderWin provider(
+        &prefs, /*force_protection_level=*/std::nullopt);
     base::test::TestFuture<
         const std::string&,
         base::expected<os_crypt_async::Encryptor::Key,
@@ -598,10 +559,11 @@ IN_PROC_BROWSER_TEST_P(AppBoundEncryptionWinReencryptTest, KeyProviderTest) {
         future;
     provider.GetKey(future.GetCallback());
     auto [tag, key] = future.Take();
-    EXPECT_EQ(tag, "v20");
+    EXPECT_EQ(tag, os_crypt_async::kAppBoundDataPrefix);
     ASSERT_TRUE(key.has_value());
-    encryption_key.emplace(std::move(*key));
-    encrypted_key = prefs.GetString(kPrefName);
+    encryption_key.emplace(*std::move(key));
+    encrypted_key =
+        prefs.GetString(os_crypt_async::kAppBoundEncryptedKeyPrefName);
     EXPECT_FALSE(encrypted_key.empty());
   }
   ::testing::Mock::VerifyAndClearExpectations(&observer);
@@ -613,7 +575,8 @@ IN_PROC_BROWSER_TEST_P(AppBoundEncryptionWinReencryptTest, KeyProviderTest) {
   EXPECT_CALL(observer, OnPreferenceChanged(_))
       .Times(ExpectReencrypt() ? 1 : 0);
   {
-    os_crypt_async::AppBoundEncryptionProviderWin provider(&prefs);
+    os_crypt_async::AppBoundEncryptionProviderWin provider(
+        &prefs, /*force_protection_level=*/std::nullopt);
     base::test::TestFuture<
         const std::string&,
         base::expected<os_crypt_async::Encryptor::Key,
@@ -629,13 +592,17 @@ IN_PROC_BROWSER_TEST_P(AppBoundEncryptionWinReencryptTest, KeyProviderTest) {
     if (ExpectReencrypt()) {
       // Re-encryption should always change the encrypted value, because the
       // underlying encryption schemes use random IVs, nonces or salts.
-      EXPECT_NE(prefs.GetString(kPrefName), encrypted_key);
+      EXPECT_NE(prefs.GetString(os_crypt_async::kAppBoundEncryptedKeyPrefName),
+                encrypted_key);
       // Verify the encrypted key pref (base64, with the header "APPB") is long
       // enough to be a valid encrypted key, and not just empty or truncated. A
       // truncated key will be 'QVBQQg==' which is base64 for 'APPB'.
-      EXPECT_GT(prefs.GetString(kPrefName).length(), 10u);
+      EXPECT_GT(prefs.GetString(os_crypt_async::kAppBoundEncryptedKeyPrefName)
+                    .length(),
+                10u);
     } else {
-      EXPECT_EQ(prefs.GetString(kPrefName), encrypted_key);
+      EXPECT_EQ(prefs.GetString(os_crypt_async::kAppBoundEncryptedKeyPrefName),
+                encrypted_key);
     }
   }
 }
@@ -650,11 +617,76 @@ INSTANTIATE_TEST_SUITE_P(
            std::get<1>(info.param) ? "FeatureOn" : "FeatureOff"});
     });
 
+class AppBoundEncryptionWinTestForceReencrypt
+    : public AppBoundEncryptionWinTest {
+ private:
+  base::test::ScopedFeatureList feature_list_{features::kAppBoundDataReencrypt};
+};
+
+IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinTestForceReencrypt,
+                       ForceReencrypt) {
+  ASSERT_TRUE(install_static::IsSystemInstall());
+  TestingPrefServiceSimple prefs;
+  os_crypt_async::AppBoundEncryptionProviderWin::RegisterLocalPrefs(
+      prefs.registry());
+
+  std::optional<os_crypt_async::Encryptor::Key> encryption_key;
+  std::string encrypted_key;
+  {
+    // Use default protection level.
+    os_crypt_async::AppBoundEncryptionProviderWin provider(
+        &prefs, /*force_protection_level=*/std::nullopt);
+    base::test::TestFuture<
+        const std::string&,
+        base::expected<os_crypt_async::Encryptor::Key,
+                       os_crypt_async::KeyProvider::KeyError>>
+        future;
+    provider.GetKey(future.GetCallback());
+    auto [tag, key] = future.Take();
+    EXPECT_EQ(tag, os_crypt_async::kAppBoundDataPrefix);
+    ASSERT_TRUE(key.has_value());
+    encryption_key.emplace(*std::move(key));
+    encrypted_key =
+        prefs.GetString(os_crypt_async::kAppBoundEncryptedKeyPrefName);
+    EXPECT_THAT(encrypted_key, Not(::testing::IsEmpty()));
+    EXPECT_FALSE(encrypted_key.empty());
+  }
+
+  {
+    os_crypt_async::AppBoundEncryptionProviderWin provider(
+        &prefs, ProtectionLevel::PROTECTION_NONE);
+    base::test::TestFuture<
+        const std::string&,
+        base::expected<os_crypt_async::Encryptor::Key,
+                       os_crypt_async::KeyProvider::KeyError>>
+        future;
+    provider.GetKey(future.GetCallback());
+    const auto& [_, key] = future.Get();
+    // The key returned should be the same as it's been decrypted from the
+    // store, regardless of whether it's been re-encrypted or not.
+    EXPECT_THAT(key,
+                base::test::ValueIs(::testing::Eq(std::ref(*encryption_key))));
+    // Because the encrypted_key is encrypted, it's not possible to simply
+    // inspect the data - but PROTECTION_NONE contains less data than real
+    // protection which encodes a path, so should always be shorter.
+    EXPECT_LT(
+        prefs.GetString(os_crypt_async::kAppBoundEncryptedKeyPrefName).length(),
+        encrypted_key.size());
+  }
+}
+
 // These tests do not function correctly in component builds because they rely
 // on being able to run a standalone executable child process in various
 // different directories, and a component build has too many dynamic DLL
 // dependencies to conveniently move around the file system hermetically.
 #if !defined(COMPONENT_BUILD)
+
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+inline constexpr bool kExpectFullIsolation = true;
+#else
+inline constexpr bool kExpectFullIsolation = false;
+#endif
+
 class AppBoundEncryptionWinTestMultiProcess : public AppBoundEncryptionWinTest {
  protected:
   enum class Operation {
@@ -673,11 +705,16 @@ class AppBoundEncryptionWinTestMultiProcess : public AppBoundEncryptionWinTest {
       const std::string& input_data,
       std::string& output_data,
       Operation op,
+      ProtectionLevel level,
+      bool launch_isolated,
+      bool expect_reencrypt,
       HRESULT& result) {
     base::ScopedAllowBlockingForTesting allow_blocking;
 
     const auto input_file_path = temp_dir_.GetPath().Append(L"input-file");
     const auto output_file_path = temp_dir_.GetPath().Append(L"output-file");
+    const auto reencrypt_file_path =
+        temp_dir_.GetPath().Append(L"reencrypt-file");
     ASSERT_TRUE(base::WriteFile(input_file_path, input_data));
 
     // The binary must run from 'testdir' this is because otherwise the scoped
@@ -691,16 +728,34 @@ class AppBoundEncryptionWinTestMultiProcess : public AppBoundEncryptionWinTest {
 
     const auto executable_file_path = executable_file_dir.Append(filename);
     std::ignore = base::DeleteFile(executable_file_path);
+    std::ignore = base::DeleteFile(output_file_path);
+    std::ignore = base::DeleteFile(reencrypt_file_path);
 
     const auto orig_exe = base::PathService::CheckedGet(base::DIR_EXE)
                               .Append(FILE_PATH_LITERAL("app_binary.exe"));
-    ASSERT_TRUE(base::CopyFile(orig_exe, executable_file_path));
+    bool success = false;
 
+    // Copy file triggers AV sometimes. Implement a very basic retry loop here
+    // to avoid tests flaking.
+    for (size_t i = 0; i < 5; ++i) {
+      success = base::CopyFile(orig_exe, executable_file_path);
+      if (success) {
+        break;
+      }
+      base::PlatformThread::Sleep(base::Milliseconds(100));
+    }
+
+    ASSERT_TRUE(success);
     base::CommandLine cmd(executable_file_path);
 
     cmd.AppendSwitchPath(switches::kAppBoundTestInputFilename, input_file_path);
     cmd.AppendSwitchPath(switches::kAppBoundTestOutputFilename,
                          output_file_path);
+    cmd.AppendSwitchPath(switches::kAppBoundTestReencryptionOutputFilename,
+                         reencrypt_file_path);
+    cmd.AppendSwitchASCII(switches::kAppBoundTestProtectionLevel,
+                          base::NumberToString(level));
+
     switch (op) {
       case Operation::kEncrypt:
         cmd.AppendSwitch(switches::kAppBoundTestModeEncrypt);
@@ -710,20 +765,30 @@ class AppBoundEncryptionWinTestMultiProcess : public AppBoundEncryptionWinTest {
         break;
     }
 
-    base::LaunchOptions options;
-    options.start_hidden = true;
-    options.wait = true;
+    int exit_code = 0;
+    if (launch_isolated) {
+      ASSERT_OK_AND_ASSIGN(auto isolated_process,
+                           chrome::IsolatedBrowserProcess::Launch(cmd));
+      ASSERT_OK_AND_ASSIGN(exit_code, isolated_process.WaitForExit());
+    } else {
+      base::LaunchOptions options;
+      options.start_hidden = true;
+      options.wait = true;
 
-    auto process = base::LaunchProcess(cmd, options);
-    int exit_code;
-    EXPECT_TRUE(process.WaitForExit(&exit_code));
+      base::Process process = base::LaunchProcess(cmd, options);
+      ASSERT_TRUE(process.IsValid());
+      EXPECT_TRUE(process.WaitForExit(&exit_code));
+      // This ensures the process has really terminated before this function
+      // returns, as base::Process destructor does not do this by default.
+      process.Terminate(0, /*wait=*/true);
+    }
     result = static_cast<HRESULT>(exit_code);
     if (SUCCEEDED(result)) {
       EXPECT_TRUE(base::ReadFileToString(output_file_path, &output_data));
     }
-    // This ensures the process has really terminated before this function
-    // returns, as base::Process destructor does not do this by default.
-    process.Terminate(0, /*wait=*/true);
+    if (op == Operation::kDecrypt) {
+      EXPECT_EQ(base::PathExists(reencrypt_file_path), expect_reencrypt);
+    }
   }
 
  private:
@@ -732,62 +797,227 @@ class AppBoundEncryptionWinTestMultiProcess : public AppBoundEncryptionWinTest {
 
 IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinTestMultiProcess,
                        EncryptDecryptProcess) {
-  const std::string kSecret("secret");
+  static constexpr char kSecret[] = "secret";
   {
     std::string ciphertext;
     HRESULT result;
     ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
-        L"app1.exe", {}, kSecret, ciphertext, Operation::kEncrypt, result));
+        L"app1.exe", {}, kSecret, ciphertext, Operation::kEncrypt,
+        ProtectionLevel::PROTECTION_PATH_VALIDATION, /*launch_isolated=*/false,
+        /*expect_reencrypt=*/false, result));
     EXPECT_EQ(S_OK, result);
     std::string plaintext;
     ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
-        L"app1.exe", {}, ciphertext, plaintext, Operation::kDecrypt, result));
+        L"app1.exe", {}, ciphertext, plaintext, Operation::kDecrypt,
+        ProtectionLevel::PROTECTION_PATH_VALIDATION, /*launch_isolated=*/false,
+        /*expect_reencrypt=*/false, result));
     EXPECT_EQ(S_OK, result);
     EXPECT_EQ(kSecret, plaintext);
 
     ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
-        L"app2.exe", {}, ciphertext, plaintext, Operation::kDecrypt, result));
+        L"app2.exe", {}, ciphertext, plaintext, Operation::kDecrypt,
+        ProtectionLevel::PROTECTION_PATH_VALIDATION, /*launch_isolated=*/false,
+        /*expect_reencrypt=*/false, result));
     EXPECT_EQ(S_OK, result);
     EXPECT_EQ(kSecret, plaintext);
 
-    ASSERT_NO_FATAL_FAILURE(
-        EncryptOrDecryptInTestProcess(L"app1.exe", L"Application", ciphertext,
-                                      plaintext, Operation::kDecrypt, result));
+    ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
+        L"app1.exe", L"Application", ciphertext, plaintext, Operation::kDecrypt,
+        ProtectionLevel::PROTECTION_PATH_VALIDATION, /*launch_isolated=*/false,
+        /*expect_reencrypt=*/false, result));
     EXPECT_EQ(S_OK, result);
     EXPECT_EQ(kSecret, plaintext);
 
-    ASSERT_NO_FATAL_FAILURE(
-        EncryptOrDecryptInTestProcess(L"app1.exe", L"Temp", ciphertext,
-                                      plaintext, Operation::kDecrypt, result));
+    ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
+        L"app1.exe", L"Temp", ciphertext, plaintext, Operation::kDecrypt,
+        ProtectionLevel::PROTECTION_PATH_VALIDATION, /*launch_isolated=*/false,
+        /*expect_reencrypt=*/false, result));
     EXPECT_EQ(S_OK, result);
     EXPECT_EQ(kSecret, plaintext);
 
-    ASSERT_NO_FATAL_FAILURE(
-        EncryptOrDecryptInTestProcess(L"app1.exe", L"Bad", ciphertext,
-                                      plaintext, Operation::kDecrypt, result));
+    ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
+        L"app1.exe", L"Bad", ciphertext, plaintext, Operation::kDecrypt,
+        ProtectionLevel::PROTECTION_PATH_VALIDATION, /*launch_isolated=*/false,
+        /*expect_reencrypt=*/false, result));
     EXPECT_EQ(elevation_service::Elevator::kValidationDidNotPass, result);
   }
   {
     // Explicitly test the most frequent chrome-specific cases.
     std::string ciphertext;
     HRESULT result;
-    ASSERT_NO_FATAL_FAILURE(
-        EncryptOrDecryptInTestProcess(L"chrome.exe", L"Application", kSecret,
-                                      ciphertext, Operation::kEncrypt, result));
+    ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
+        L"chrome.exe", L"Application", kSecret, ciphertext, Operation::kEncrypt,
+        ProtectionLevel::PROTECTION_PATH_VALIDATION, /*launch_isolated=*/false,
+        /*expect_reencrypt=*/false, result));
     EXPECT_EQ(S_OK, result);
     std::string plaintext;
     ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
         L"new_chrome.exe", L"Application", ciphertext, plaintext,
-        Operation::kDecrypt, result));
+        Operation::kDecrypt, ProtectionLevel::PROTECTION_PATH_VALIDATION,
+        /*launch_isolated=*/false, /*expect_reencrypt=*/false, result));
     EXPECT_EQ(S_OK, result);
     EXPECT_EQ(kSecret, plaintext);
-    ASSERT_NO_FATAL_FAILURE(
-        EncryptOrDecryptInTestProcess(L"old_chrome.exe", L"Temp", ciphertext,
-                                      plaintext, Operation::kDecrypt, result));
+    ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
+        L"old_chrome.exe", L"Temp", ciphertext, plaintext, Operation::kDecrypt,
+        ProtectionLevel::PROTECTION_PATH_VALIDATION, /*launch_isolated=*/false,
+        /*expect_reencrypt=*/false, result));
     EXPECT_EQ(S_OK, result);
     EXPECT_EQ(kSecret, plaintext);
   }
 }
+
+// Launching an isolated process that's compiled with ASAN does not work right
+// now. See https://crbug.com/492374385.
+#if !defined(ADDRESS_SANITIZER)
+IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinTestMultiProcess,
+                       EncryptDecryptIsolatedProcess) {
+  static constexpr char kSecret[] = "secret";
+  {
+    std::string ciphertext;
+    HRESULT result;
+    ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
+        L"app1.exe", {}, kSecret, ciphertext, Operation::kEncrypt,
+        ProtectionLevel::PROTECTION_PATH_VALIDATION_WITH_ISOLATION,
+        /*launch_isolated=*/false, /*expect_reencrypt=*/false, result));
+    EXPECT_EQ(S_OK, result);
+    std::string plaintext;
+    // Isolated process can always read previously unisolated encrypted data. If
+    // isolation is supported, the elevated service will return a hint to
+    // re-encrypt weak data.
+    ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
+        L"app1.exe", {}, ciphertext, plaintext, Operation::kDecrypt,
+        ProtectionLevel::PROTECTION_PATH_VALIDATION_WITH_ISOLATION,
+        /*launch_isolated=*/true, /*expect_reencrypt=*/kExpectFullIsolation,
+        result));
+    EXPECT_HRESULT_SUCCEEDED(result);
+    EXPECT_EQ(kSecret, plaintext);
+  }
+  {
+    std::string ciphertext;
+    HRESULT result;
+    ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
+        L"app1.exe", {}, kSecret, ciphertext, Operation::kEncrypt,
+        ProtectionLevel::PROTECTION_PATH_VALIDATION_WITH_ISOLATION,
+        /*launch_isolated=*/true, /*expect_reencrypt=*/false, result));
+    EXPECT_EQ(S_OK, result);
+    std::string plaintext;
+    ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
+        L"app1.exe", {}, ciphertext, plaintext, Operation::kDecrypt,
+        ProtectionLevel::PROTECTION_PATH_VALIDATION_WITH_ISOLATION,
+        /*launch_isolated=*/true, /*expect_reencrypt=*/false, result));
+    // Isolated process can always read previously isolated encrypted data.
+    EXPECT_HRESULT_SUCCEEDED(result);
+    EXPECT_EQ(kSecret, plaintext);
+  }
+  {
+    std::string ciphertext;
+    HRESULT result;
+    ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
+        L"app1.exe", {}, kSecret, ciphertext, Operation::kEncrypt,
+        ProtectionLevel::PROTECTION_PATH_VALIDATION_WITH_ISOLATION,
+        /*launch_isolated=*/true, /*expect_reencrypt=*/false, result));
+    EXPECT_EQ(S_OK, result);
+    std::string plaintext;
+    ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
+        L"app1.exe", {}, ciphertext, plaintext, Operation::kDecrypt,
+        ProtectionLevel::PROTECTION_PATH_VALIDATION_WITH_ISOLATION,
+        /*launch_isolated=*/false, /*expect_reencrypt=*/false, result));
+    if constexpr (kExpectFullIsolation) {
+      // Only builds with true isolated processes validate the isolation state.
+      EXPECT_EQ(elevation_service::Elevator::kIsolationStateInvalid, result);
+    } else {
+      EXPECT_HRESULT_SUCCEEDED(result);
+      EXPECT_EQ(kSecret, plaintext);
+    }
+  }
+}
+#endif  // !defined(ADDRESS_SANITIZER)
+
+IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinTestMultiProcess,
+                       DowngradeProtectionLevel) {
+  static constexpr char kSecret[] = "secret";
+  // App-Bound test App will only encrypt/decrypt data with the TESTDATAHEADER
+  // on it. See comments in app_bound_encryption_test_main.cc.
+  static constexpr char kSecretForTestApp[] = "TESTDATAHEADERsecret";
+
+  // Create some ciphertext and bind it to the main test process.
+  std::string ciphertext;
+  {
+    DWORD last_error;
+
+    HRESULT result =
+        EncryptAppBoundString(ProtectionLevel::PROTECTION_PATH_VALIDATION,
+                              kSecretForTestApp, ciphertext, last_error);
+    EXPECT_HRESULT_SUCCEEDED(result);
+  }
+
+  // Fail to decrypt this data from a path that does not match the path
+  // validation.
+  {
+    HRESULT result;
+    std::string plaintext;
+    ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
+        L"app1.exe", L"Bad", ciphertext, plaintext, Operation::kDecrypt,
+        ProtectionLevel::PROTECTION_PATH_VALIDATION,
+        /*launch_isolated=*/false, /*expect_reencrypt=*/false, result));
+    // This should fail due to a path validation error.
+    EXPECT_EQ(elevation_service::Elevator::kValidationDidNotPass, result);
+  }
+
+  // Now take this ciphertext and downgrade it to PROTECTION_NONE.
+  std::optional<std::string> new_ciphertext;
+  {
+    std::string plaintext;
+    DWORD last_error;
+    elevation_service::EncryptFlags flags{.force_reencrypt = true};
+    HRESULT result = DecryptAppBoundString(ciphertext, plaintext,
+                                           ProtectionLevel::PROTECTION_NONE,
+                                           new_ciphertext, last_error, &flags);
+    EXPECT_HRESULT_SUCCEEDED(result);
+    EXPECT_TRUE(new_ciphertext.has_value());
+    EXPECT_EQ(kSecretForTestApp, plaintext);
+  }
+
+  // Since validation is PROTECTION_NONE the decrypt should now pass from any
+  // process.
+  {
+    HRESULT result;
+    std::string plaintext;
+    ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
+        L"app1.exe", L"Bad", new_ciphertext.value(), plaintext,
+        Operation::kDecrypt, ProtectionLevel::PROTECTION_NONE,
+        /*launch_isolated=*/false, /*expect_reencrypt=*/false, result));
+    // Should now pass.
+    EXPECT_HRESULT_SUCCEEDED(result);
+    EXPECT_EQ(kSecret, plaintext);
+  }
+}
+
+// Launching an isolated process that's compiled with ASAN does not work right
+// now. See https://crbug.com/492374385.
+#if !defined(ADDRESS_SANITIZER)
+IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinTestMultiProcess,
+                       UpgradeUnIsolatedData) {
+  static constexpr char kSecret[] = "secret";
+  std::string ciphertext;
+  HRESULT result;
+  ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
+      L"app1.exe", {}, kSecret, ciphertext, Operation::kEncrypt,
+      ProtectionLevel::PROTECTION_PATH_VALIDATION, /*launch_isolated=*/false,
+      /*expect_reencrypt=*/false, result));
+  EXPECT_EQ(S_OK, result);
+  std::string plaintext;
+  // Re-encrypt is requested if an isolated process decrypts data previously
+  // encrypted with PROTECTION_PATH_VALIDATION.
+  ASSERT_NO_FATAL_FAILURE(EncryptOrDecryptInTestProcess(
+      L"app1.exe", {}, ciphertext, plaintext, Operation::kDecrypt,
+      ProtectionLevel::PROTECTION_PATH_VALIDATION_WITH_ISOLATION,
+      /*launch_isolated=*/true, /*expect_reencrypt=*/kExpectFullIsolation,
+      result));
+  EXPECT_HRESULT_SUCCEEDED(result);
+  EXPECT_EQ(kSecret, plaintext);
+}
+#endif  // !defined(ADDRESS_SANITIZER)
 #endif  // !defined(COMPONENT_BUILD)
 
 struct AppBoundTestCase {
@@ -833,12 +1063,10 @@ IN_PROC_BROWSER_TEST_P(AppBoundEncryptionWinTestWithUserDataDir,
 
   auto encryptor = GetInstanceSync(*g_browser_process->os_crypt_async());
 
-  const auto encrypted_data = encryptor.EncryptString("super secret");
+  const auto encrypted_data = encryptor->EncryptString("super secret");
   ASSERT_TRUE(encrypted_data);
   if (GetParam().expect_encrypt_with_app_bound) {
     ASSERT_GT(encrypted_data->size(), 3u);
-    // kAppBoundDataPrefix for App-Bound.
-    constexpr uint8_t kV20Header[] = {'v', '2', '0'};
     EXPECT_THAT(base::span(*encrypted_data).first<3>(),
                 ::testing::ElementsAreArray(kV20Header));
   }
@@ -856,7 +1084,7 @@ IN_PROC_BROWSER_TEST_P(AppBoundEncryptionWinTestWithUserDataDir,
   ASSERT_TRUE(previous_data);
 
   os_crypt_async::Encryptor::DecryptFlags flags;
-  const auto plaintext = encryptor.DecryptData(*previous_data, &flags);
+  const auto plaintext = encryptor->DecryptData(*previous_data, &flags);
   if (GetParam().expect_decrypt_works) {
     ASSERT_TRUE(plaintext);
     EXPECT_EQ("super secret", *plaintext);

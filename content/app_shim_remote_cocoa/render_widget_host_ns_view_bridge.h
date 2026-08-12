@@ -10,6 +10,7 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include "base/memory/advanced_memory_safety_checks.h"
 #include "base/memory/weak_ptr.h"
 #include "components/remote_cocoa/app_shim/ns_view_ids.h"
 #import "content/app_shim_remote_cocoa/popup_window_mac.h"
@@ -31,6 +32,9 @@ namespace remote_cocoa {
 // be in a different process.
 class RenderWidgetHostNSViewBridge : public mojom::RenderWidgetHostNSView,
                                      public display::DisplayObserver {
+  // TODO(https://crbug.com/496217775): Remove this macro.
+  ADVANCED_MEMORY_SAFETY_CHECKS();
+
  public:
   RenderWidgetHostNSViewBridge(mojom::RenderWidgetHostNSViewHost* client,
                                RenderWidgetHostNSViewHostHelper* client_helper,
@@ -61,7 +65,7 @@ class RenderWidgetHostNSViewBridge : public mojom::RenderWidgetHostNSView,
   void DisableDisplay() override;
   void MakeFirstResponder() override;
   void SetBounds(const gfx::Rect& rect) override;
-  void SetCALayerParams(const gfx::CALayerParams& ca_layer_params) override;
+  void SetCALayerParams(gfx::CALayerParams ca_layer_params) override;
   void SetBackgroundColor(SkColor color) override;
   void SetVisible(bool visible) override;
   void SetTooltipText(const std::u16string& display_text) override;
@@ -73,6 +77,7 @@ class RenderWidgetHostNSViewBridge : public mojom::RenderWidgetHostNSView,
   void SetCompositionRangeInfo(const gfx::Range& range) override;
   void CancelComposition() override;
   void SetShowingContextMenu(bool showing) override;
+  void SetSupportsAutoFill(bool supports) override;
   void DisplayCursor(const ui::Cursor& cursor) override;
   void SetCursorLocked(bool locked) override;
   void SetCursorLockedUnacceleratedMovement(bool unaccelerated) override;

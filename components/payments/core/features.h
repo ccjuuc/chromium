@@ -26,10 +26,6 @@ BASE_DECLARE_FEATURE(kAppStoreBilling);
 // installed from specific app stores.
 BASE_DECLARE_FEATURE(kAppStoreBillingDebug);
 
-// If enabled, CanMakePayment returns true (and HasEnrolledInstrument returns
-// false) when the `kCanMakePaymentEnabled` pref is false.
-BASE_DECLARE_FEATURE(kCanMakePaymentTrueWhenPrivate);
-
 // Used to control whether allow crawling just-in-time installable payment app.
 BASE_DECLARE_FEATURE(kWebPaymentsJustInTimePaymentApp);
 
@@ -47,12 +43,29 @@ BASE_DECLARE_FEATURE(kGPayAppDynamicUpdate);
 // credential store APIs, or if it can only rely on the user-profile database.
 BASE_DECLARE_FEATURE(kSecurePaymentConfirmationUseCredentialStoreAPIs);
 
-// Used to enable the refreshed fallback flow for Secure Payment Confirmation.
-BASE_DECLARE_FEATURE(kSecurePaymentConfirmationFallback);
 
-// Used to control whether the `kCanMakePaymentEnabled` pref being false will
-// stop the IsReadyToPay query from being sent to payment handlers.
-BASE_DECLARE_FEATURE(kRestrictIsReadyToPayQuery);
+// Used to control the usage of the renderer URL loader in the payment request.
+BASE_DECLARE_FEATURE(kPaymentRequestUseRendererUrlLoader);
+
+// Used to control whether Payment Request/Handler dialogs are rejected if the
+// browser window is too small to contain them.
+BASE_DECLARE_FEATURE(kPaymentRequestRejectTooSmallWindows);
+
+
+// Used to control whether Payment Handler dialog includes an initiator during
+// the URL load.
+BASE_DECLARE_FEATURE(kPaymentHandlerDialogUseInitiatorInUrlLoad);
+
+// Used to control whether Payment Handler dialog requires user interaction
+// before resolving a success payment response.
+BASE_DECLARE_FEATURE(kPaymentRequestMandatoryPaymentAppUi);
+
+// Used to control whether camera access is allowed in Payment Handler windows.
+BASE_DECLARE_FEATURE(kPaymentHandlerCameraAccess);
+
+// Used to control whether camera access with interactive permission prompt
+// and indicator is allowed in Payment Handler windows.
+BASE_DECLARE_FEATURE(kPaymentHandlerCameraAccessUx);
 
 }  // namespace features
 }  // namespace payments

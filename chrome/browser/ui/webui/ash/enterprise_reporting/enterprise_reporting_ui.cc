@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/webui/ash/enterprise_reporting/enterprise_reporting_ui.h"
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/webui_url_constants.h"
 #include "base/containers/span.h"
 #include "base/json/json_writer.h"
 #include "base/values.h"
@@ -15,11 +16,12 @@
 #include "chrome/browser/profiles/reporting_util.h"
 #include "chrome/browser/ui/webui/ash/enterprise_reporting/enterprise_reporting.mojom.h"
 #include "chrome/browser/ui/webui/ash/enterprise_reporting/enterprise_reporting_page_handler.h"
-#include "chrome/common/webui_url_constants.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/grit/enterprise_reporting_resources.h"
 #include "chrome/grit/enterprise_reporting_resources_map.h"
 #include "components/version_info/version_info.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
@@ -29,8 +31,8 @@
 namespace {
 // Returns the device information to be displayed on the
 // chrome://enterprise-reporting page.
-base::Value::Dict GetDeviceInfo(content::WebUI* web_ui) {
-  base::Value::Dict device_info;
+base::DictValue GetDeviceInfo(content::WebUI* web_ui) {
+  base::DictValue device_info;
   policy::BrowserPolicyConnectorAsh* connector =
       g_browser_process->platform_part()->browser_policy_connector_ash();
 
@@ -54,10 +56,11 @@ EnterpriseReportingUI::EnterpriseReportingUI(content::WebUI* web_ui)
     : ui::MojoWebUIController(web_ui) {
   DCHECK(base::FeatureList::IsEnabled(ash::features::kEnterpriseReportingUI));
   // Set up the chrome://enterprise-reporting source.
+  Profile* profile = Profile::FromWebUI(web_ui);
   content::WebUIDataSource* html_source =
       content::WebUIDataSource::CreateAndAdd(
-          web_ui->GetWebContents()->GetBrowserContext(),
-          chrome::kChromeUIEnterpriseReportingHost);
+          profile, ash::kChromeUIEnterpriseReportingHost);
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
 
   // Populate device info.
   html_source->AddString("deviceInfo",

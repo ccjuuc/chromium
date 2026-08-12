@@ -8,6 +8,7 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.os.Handler;
 import android.os.Looper;
+import android.util.ArrayMap;
 
 import androidx.annotation.VisibleForTesting;
 
@@ -19,8 +20,8 @@ import org.chromium.build.annotations.Nullable;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * UnownedUserDataHost is a type-safe and heterogeneous container that does not own the objects that
@@ -163,8 +164,9 @@ public final class UnownedUserDataHost {
     private @Nullable Handler mHandler;
 
     /** The core data structure within this host. */
-    private @Nullable HashMap<UnownedUserDataKey<?>, WeakReference<Object>> mUnownedUserDataMap =
-            new HashMap<>();
+    // ArrayMap with capacity 4 avoids heap entry allocations and fits typical 1-6 entries per host.
+    private @Nullable Map<UnownedUserDataKey<?>, WeakReference<Object>> mUnownedUserDataMap =
+            new ArrayMap<>(4);
 
     public UnownedUserDataHost() {
         this(new Handler(retrieveNonNullLooperOrThrow()));
@@ -202,7 +204,7 @@ public final class UnownedUserDataHost {
      * @param key the key to use for the object.
      * @return the stored version or {@code null} if it is not stored or has been garbage collected.
      */
-    @SuppressWarnings("Unchecked")
+    @SuppressWarnings("unchecked")
     /* package */ <T> @Nullable T get(UnownedUserDataKey<T> key) {
         if (mUnownedUserDataMap == null) {
             // After being destroyed, many things still query for their value, so just return null
@@ -227,7 +229,7 @@ public final class UnownedUserDataHost {
      *
      * @param key the key to use for the object.
      */
-    @SuppressWarnings("Unchecked")
+    @SuppressWarnings("unchecked")
     /* package */ <T> void remove(UnownedUserDataKey<T> key) {
         if (mUnownedUserDataMap == null) {
             // Ensure it is safe for detach listeners to call remove() after onDestroy().

@@ -5,8 +5,15 @@
 #include "chrome/browser/ash/login/screens/update_screen.h"
 
 #include <algorithm>
+#include <string_view>
 
+#include "ash/constants/ash_features.h"
+#include "ash/constants/ash_login_pref_names.h"
+#include "ash/constants/ash_pref_names.h"
+#include "ash/login/resources/grit/ash_login_strings.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
+#include "base/containers/fixed_flat_set.h"
 #include "base/functional/bind.h"
 #include "base/i18n/number_formatting.h"
 #include "base/logging.h"
@@ -17,16 +24,11 @@
 #include "build/branding_buildflags.h"
 #include "chrome/browser/ash/login/configuration_keys.h"
 #include "chrome/browser/ash/login/error_screens_histogram_helper.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/screens/network_error.h"
 #include "chrome/browser/ash/login/wizard_context.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ash/system/timezone_util.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/ui/webui/ash/login/update_screen_handler.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/grit/branded_strings.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/network/network_state.h"
 #include "components/prefs/pref_service.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -65,6 +67,12 @@ const double kInsufficientBatteryPercent = 50;
 constexpr char kQuickStartTestForcedUpdateSwitch[] =
     "quick-start-test-forced-update";
 
+// EU country list.
+constexpr auto kEUCountriesSet = base::MakeFixedFlatSet<std::string_view>(
+    {"at", "be", "bg", "hr", "cy", "cz", "dk", "ee", "fi",
+     "fr", "de", "gr", "hu", "ie", "it", "lv", "lt", "lu",
+     "mt", "nl", "pl", "pt", "ro", "sk", "si", "es", "se"});
+
 void RecordDownloadingTime(base::TimeDelta duration) {
   base::UmaHistogramLongTimes("OOBE.UpdateScreen.UpdateDownloadingTime",
                               duration);
@@ -100,6 +108,27 @@ void RecordUpdateCheckTimeout(bool timeout) {
   base::UmaHistogramBoolean("OOBE.UpdateScreen.CheckTimeout", timeout);
 }
 
+// Determines whether to show the opt out notice to the user.
+// Returns false if the device is outside the EU zone or the opt out is
+// explicitly skipped via the OOBE configuration (e.g. during automated flows).
+bool CheckIfOptOutIsEnabled(PrefService& local_state) {
+  if (ash::features::IsDeviceMoveConfigSaveEnabled()) {
+    const base::DictValue& configuration =
+        OobeConfiguration::Get()->configuration();
+    if (configuration.FindBool(configuration::kSkipUpdateOptOutScreen)
+            .value_or(false)) {
+      return false;
+    }
+  }
+
+  auto country = system::GetCountryCodeFromTimezoneIfAvailable(
+      local_state.GetString(ash::prefs::kSigninScreenTimezone));
+  if (!country.has_value()) {
+    return false;
+  }
+  return kEUCountriesSet.contains(country.value());
+}
+
 }  // namespace
 
 // static
@@ -120,10 +149,12 @@ std::string UpdateScreen::GetResultString(Result result) {
   // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
-UpdateScreen::UpdateScreen(base::WeakPtr<UpdateView> view,
+UpdateScreen::UpdateScreen(PrefService* local_state,
+                           base::WeakPtr<UpdateView> view,
                            ErrorScreen* error_screen,
                            const ScreenExitCallback& exit_callback)
     : BaseScreen(UpdateView::kScreenId, OobeScreenPriority::DEFAULT),
+      local_state_(CHECK_DEREF(local_state)),
       view_(std::move(view)),
       error_screen_(error_screen),
       exit_callback_(exit_callback),
@@ -159,7 +190,7 @@ bool UpdateScreen::MaybeSkip(WizardContext& context) {
 }
 
 void UpdateScreen::ShowImpl() {
-  is_opt_out_enabled_ = CheckIfOptOutIsEnabled();
+  is_opt_out_enabled_ = CheckIfOptOutIsEnabled(local_state_.get());
   // AccessibilityManager::Get() can be nullptr in unittests.
   if (AccessibilityManager::Get()) {
     AccessibilityManager* accessibility_manager = AccessibilityManager::Get();
@@ -199,7 +230,7 @@ void UpdateScreen::HideImpl() {
   is_shown_ = false;
 }
 
-void UpdateScreen::OnUserAction(const base::Value::List& args) {
+void UpdateScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   bool is_chrome_branded_build = false;
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
@@ -326,8 +357,7 @@ void UpdateScreen::UpdateInfoChanged(
     did_prepare_quick_start_for_update_ = true;
     view_->SetUpdateState(UpdateView::UIState::kUpdateInProgress);
     // Set that critical update applied in OOBE.
-    g_browser_process->local_state()->SetBoolean(
-        prefs::kOobeCriticalUpdateCompleted, true);
+    local_state_->SetBoolean(prefs::kOobeCriticalUpdateCompleted, true);
     wait_reboot_timer_.Start(FROM_HERE, wait_before_reboot_time_,
                              version_updater_.get(),
                              &VersionUpdater::RebootAfterUpdate);
@@ -411,8 +441,7 @@ void UpdateScreen::UpdateInfoChanged(
       if (view_)
         view_->SetUpdateState(UpdateView::UIState::kUpdateInProgress);
       // set that critical update applied in OOBE.
-      g_browser_process->local_state()->SetBoolean(
-          prefs::kOobeCriticalUpdateCompleted, true);
+      local_state_->SetBoolean(prefs::kOobeCriticalUpdateCompleted, true);
       SetUpdateStatusMessage(update_info.better_update_progress,
                              update_info.total_time_left);
       // Make sure that VERIFYING and FINALIZING stages are recorded correctly.
@@ -581,17 +610,6 @@ void UpdateScreen::OnAccessibilityStatusChanged(
 void UpdateScreen::OnErrorScreenHidden() {
   error_screen_->SetParentScreen(OOBE_SCREEN_UNKNOWN);
   Show(context());
-}
-
-// static
-bool UpdateScreen::CheckIfOptOutIsEnabled() {
-  auto country = system::GetCountryCodeFromTimezoneIfAvailable(
-      g_browser_process->local_state()->GetString(
-          ::prefs::kSigninScreenTimezone));
-  if (!country.has_value()) {
-    return false;
-  }
-  return base::Contains(kEUCountriesSet, country.value());
 }
 
 }  // namespace ash

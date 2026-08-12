@@ -7,14 +7,63 @@
 #include <algorithm>
 #include <iterator>
 
+#include "base/memory/raw_ptr.h"
+#include "third_party/blink/public/mojom/ai/model_streaming_responder.mojom-blink.h"
+#include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_language_model_create_core_options.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_language_model_message_content.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_language_model_message_type.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_language_model_tool_call.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_language_model_tool_call_init.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_performance_preference.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_union_language_model_message_value.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/frame/deprecation/deprecation.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/modules/ai/ai_features.h"
+#include "third_party/blink/renderer/modules/ai/language_model_tool_call.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
+bool ContainsNoneType(const base::Value& value) {
+  if (value.type() == base::Value::Type::NONE) {
+    return true;
+  }
+
+  if (value.is_dict()) {
+    for (const auto [key, val] : value.GetDict()) {
+      if (ContainsNoneType(val)) {
+        return true;
+      }
+    }
+  } else if (value.is_list()) {
+    for (const auto& item : value.GetList()) {
+      if (ContainsNoneType(item)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 namespace {
+
+mojom::blink::PerformancePreference ToMojoSummarizerPreference(
+    V8PerformancePreference preference) {
+  switch (preference.AsEnum()) {
+    case V8PerformancePreference::Enum::kAuto:
+      return mojom::blink::PerformancePreference::kAuto;
+    case V8PerformancePreference::Enum::kSpeed:
+      return mojom::blink::PerformancePreference::kSpeed;
+    case V8PerformancePreference::Enum::kCapability:
+      return mojom::blink::PerformancePreference::kCapability;
+  }
+}
 
 mojom::blink::AISummarizerType ToMojoSummarizerType(V8SummarizerType type) {
   switch (type.AsEnum()) {
@@ -122,6 +171,7 @@ mojom::blink::AISummarizerCreateOptionsPtr ToMojoSummarizerCreateOptionsImpl(
       shared_context, ToMojoSummarizerType(options->type()),
       ToMojoSummarizerFormat(options->format()),
       ToMojoSummarizerLength(options->length()),
+      ToMojoSummarizerPreference(options->preference()),
       ToMojoLanguageCodes(options->getExpectedInputLanguagesOr({})),
       ToMojoLanguageCodes(options->getExpectedContextLanguagesOr({})),
       mojom::blink::AILanguageCode::New(
@@ -182,6 +232,58 @@ mojom::blink::AILanguageModelPromptType ToMojoInputType(
 
 }  // namespace
 
+mojom::blink::AILanguageModelSamplingMode ConvertSamplingModeToMojo(
+    V8LanguageModelSamplingMode sampling_mode) {
+  switch (sampling_mode.AsEnum()) {
+    case V8LanguageModelSamplingMode::Enum::kMostPredictable:
+      return mojom::blink::AILanguageModelSamplingMode::kMostPredictable;
+    case V8LanguageModelSamplingMode::Enum::kPredictable:
+      return mojom::blink::AILanguageModelSamplingMode::kPredictable;
+    case V8LanguageModelSamplingMode::Enum::kBalanced:
+      return mojom::blink::AILanguageModelSamplingMode::kBalanced;
+    case V8LanguageModelSamplingMode::Enum::kCreative:
+      return mojom::blink::AILanguageModelSamplingMode::kCreative;
+    case V8LanguageModelSamplingMode::Enum::kMostCreative:
+      return mojom::blink::AILanguageModelSamplingMode::kMostCreative;
+    case V8LanguageModelSamplingMode::Enum::kSlightlyPredictable:
+      return mojom::blink::AILanguageModelSamplingMode::kSlightlyPredictable;
+    case V8LanguageModelSamplingMode::Enum::kSlightlyCreative:
+      return mojom::blink::AILanguageModelSamplingMode::kSlightlyCreative;
+  }
+  NOTREACHED();
+}
+
+std::optional<V8LanguageModelSamplingMode> ConvertSamplingModeToV8(
+    std::optional<mojom::blink::AILanguageModelSamplingMode> sampling_mode) {
+  if (!sampling_mode.has_value()) {
+    return std::nullopt;
+  }
+  switch (sampling_mode.value()) {
+    case mojom::blink::AILanguageModelSamplingMode::kMostPredictable:
+      return V8LanguageModelSamplingMode(
+          V8LanguageModelSamplingMode::Enum::kMostPredictable);
+    case mojom::blink::AILanguageModelSamplingMode::kPredictable:
+      return V8LanguageModelSamplingMode(
+          V8LanguageModelSamplingMode::Enum::kPredictable);
+    case mojom::blink::AILanguageModelSamplingMode::kBalanced:
+      return V8LanguageModelSamplingMode(
+          V8LanguageModelSamplingMode::Enum::kBalanced);
+    case mojom::blink::AILanguageModelSamplingMode::kCreative:
+      return V8LanguageModelSamplingMode(
+          V8LanguageModelSamplingMode::Enum::kCreative);
+    case mojom::blink::AILanguageModelSamplingMode::kMostCreative:
+      return V8LanguageModelSamplingMode(
+          V8LanguageModelSamplingMode::Enum::kMostCreative);
+    case mojom::blink::AILanguageModelSamplingMode::kSlightlyPredictable:
+      return V8LanguageModelSamplingMode(
+          V8LanguageModelSamplingMode::Enum::kSlightlyPredictable);
+    case mojom::blink::AILanguageModelSamplingMode::kSlightlyCreative:
+      return V8LanguageModelSamplingMode(
+          V8LanguageModelSamplingMode::Enum::kSlightlyCreative);
+  }
+  NOTREACHED();
+}
+
 Vector<mojom::blink::AILanguageCodePtr> ToMojoLanguageCodes(
     const Vector<String>& language_codes) {
   Vector<mojom::blink::AILanguageCodePtr> result;
@@ -213,13 +315,28 @@ Vector<mojom::blink::AILanguageModelExpectedPtr> ToMojoExpectations(
 
 base::expected<mojom::blink::AILanguageModelSamplingParamsPtr,
                SamplingParamsOptionError>
-ResolveSamplingParamsOption(const LanguageModelCreateCoreOptions* options) {
+ResolveSamplingParamsOption(const LanguageModelCreateCoreOptions* options,
+                            ExecutionContext* execution_context) {
   if (!options || (!options->hasTopK() && !options->hasTemperature())) {
     return nullptr;
   }
 
-  // The temperature and top_k are optional, but they must be provided
-  // together.
+  if (options->hasTopK()) {
+    Deprecation::CountDeprecation(
+        execution_context, mojom::blink::WebFeature::kLanguageModel_TopK);
+  }
+  if (options->hasTemperature()) {
+    Deprecation::CountDeprecation(
+        execution_context,
+        mojom::blink::WebFeature::kLanguageModel_Temperature);
+  }
+
+  if (!RuntimeEnabledFeatures::AIPromptAPILegacyParamsEnabled(
+          execution_context)) {
+    return nullptr;
+  }
+
+  // Both temperature and topK are optional, but must be provided together.
   if (options->hasTopK() != options->hasTemperature()) {
     return base::unexpected(
         SamplingParamsOptionError::kOnlyOneOfTopKAndTemperatureIsProvided);
@@ -331,6 +448,62 @@ RunOnDestruction::~RunOnDestruction() {
 
 void RunOnDestruction::Reset() {
   callback_.Reset();
+}
+
+HeapVector<Member<LanguageModelMessageContent>> ConvertMojoToolCallsToMessages(
+    ScriptState* script_state,
+    const Vector<mojom::blink::ToolCallPtr>& tool_calls,
+    ExceptionState& exception_state) {
+  HeapVector<Member<LanguageModelMessageContent>> messages;
+
+  // Must be called with active V8 context.
+  ScriptState::Scope scope(script_state);
+  v8::Isolate* isolate = script_state->GetIsolate();
+  v8::Local<v8::Context> context = script_state->GetContext();
+
+  std::unique_ptr<WebV8ValueConverter> converter =
+      Platform::Current()->CreateWebV8ValueConverter();
+
+  for (const auto& tc : tool_calls) {
+    v8::Local<v8::Value> arguments_v8 =
+        converter->ToV8Value(tc->arguments, context);
+    if (arguments_v8.IsEmpty()) {
+      exception_state.ThrowTypeError(
+          "Failed to convert tool call arguments to JavaScript value");
+      messages.clear();
+      return messages;
+    }
+
+    // Create init dictionary for the interface.
+    auto* tool_call_init = LanguageModelToolCallInit::Create();
+    tool_call_init->setCallID(tc->call_id);
+    tool_call_init->setName(tc->name);
+    ScriptObject arguments_object(isolate, arguments_v8);
+    tool_call_init->setArguments(arguments_object);
+
+    auto* tool_call =
+        LanguageModelToolCall::Create(tool_call_init, exception_state);
+    if (exception_state.HadException()) {
+      // Propagate exception to caller.
+      messages.clear();
+      return messages;
+    }
+
+    if (!tool_call) {
+      exception_state.ThrowTypeError("Failed to create tool call object");
+      messages.clear();
+      return messages;
+    }
+
+    auto* content = LanguageModelMessageContent::Create();
+    content->setType(V8LanguageModelMessageType(
+        V8LanguageModelMessageType::Enum::kToolCall));
+    content->setValue(
+        MakeGarbageCollected<V8LanguageModelMessageValue>(tool_call));
+    messages.push_back(content);
+  }
+
+  return messages;
 }
 
 }  // namespace blink

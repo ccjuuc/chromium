@@ -9,43 +9,19 @@
 #include <optional>
 #include <set>
 #include <string>
-#include <tuple>
 #include <vector>
 
-#include "base/features.h"
-#include "base/memory/scoped_refptr.h"
-#include "base/task/sequenced_task_runner.h"
+#include "base/check.h"
 #include "base/threading/sequence_bound.h"
+#include "base/time/time.h"
+#include "base/trace_event/memory_allocator_dump_guid.h"
+#include "components/services/storage/dom_storage/db_status.h"
 #include "components/services/storage/dom_storage/dom_storage_database.h"
-#include "components/services/storage/dom_storage/leveldb/dom_storage_database_leveldb.h"
-#include "components/services/storage/dom_storage/session_storage_metadata.h"
-#include "storage/common/database/db_status.h"
+#include "components/services/storage/dom_storage/dom_storage_histogram_helper.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 
 namespace storage {
 
-namespace internal {
-template <typename TDatabase, typename ResultType>
-struct DatabaseTaskTraits;
-}  // namespace internal
-
-// Describes the context in which RunBatchDatabaseTasks is called, for
-// debugging.
-// TODO(crbug.com/40245293): Remove this debug enum once the investigation is
-// complete.
-enum class RunBatchTasksContext {
-  kScavengeUnusedNamespaces,
-  kDeleteStorage,
-  kCloneNamespace,
-  kRegisterNewAreaMap,
-  kRegisterShallowClonedNamespace,
-  kDoDatabaseDelete,
-  kParseNamespaces,
-  kTest,
-};
-
-// A wrapper around DomStorageDatabase which simplifies usage by queueing
-// database operations until the database is opened.
 class AsyncDomStorageDatabase {
  public:
   using StatusCallback = base::OnceCallback<void(DbStatus)>;
@@ -55,26 +31,30 @@ class AsyncDomStorageDatabase {
 
   ~AsyncDomStorageDatabase();
 
-  // May only be called on a non-empty `directory`. This will always return the
-  // same task runner for a given `directory` and `dbname`.
-  static scoped_refptr<base::SequencedTaskRunner> GetTaskRunnerForDb(
-      const base::FilePath& directory,
-      const std::string& dbname);
+  struct OpenOutcome {
+    DbStatus open_status;
+    std::optional<DomStorageDatabaseFactory::DestroyOutcome> destroy_outcome;
+  };
+  using OpenCallback = base::OnceCallback<void(OpenOutcome)>;
 
   // Creates an `AsyncDomStorageDatabase` then asynchronously opens the
-  // database. Callers may immediately start using the returned
-  // `AsyncDomStorageDatabase`. Runs `callback` with the open database result.
-  // After failing to open, `AsyncDomStorageDatabase` must be discarded because
-  // no database tasks will run.
+  // database. Callers must wait to use `AsyncDomStorageDatabase` until
+  // `callback` completes with an OK status. After failing to open,
+  // `AsyncDomStorageDatabase` must be discarded.
   //
-  // To create an in-memory database, provide an empty `directory`.
+  // The new database is in-memory if `dir_to_open` is empty. If
+  // `dir_to_destroy` is non-empty, the pre-existing on-disk database at that
+  // location is destroyed before the new one is opened, and the destroy outcome
+  // is passed to `callback`. `dir_to_destroy` may differ from `dir_to_open`.
+  // E.g. recovery destroys the on-disk database then opens an in-memory DB by
+  // passing an empty `dir_to_open`.
   static std::unique_ptr<AsyncDomStorageDatabase> Open(
       StorageType storage_type,
-      const base::FilePath& directory,
-      const std::string& dbname,
+      const base::FilePath& dir_to_open,
       const std::optional<base::trace_event::MemoryAllocatorDumpGuid>&
           memory_dump_id,
-      StatusCallback callback);
+      const base::FilePath& dir_to_destroy,
+      OpenCallback callback);
 
   // An interface that represents a source of commits. Practically speaking,
   // this is a `StorageAreaImpl`.
@@ -85,11 +65,18 @@ class AsyncDomStorageDatabase {
     virtual base::OnceCallback<void(DbStatus)> GetCommitCompleteCallback() = 0;
   };
 
-  base::SequenceBound<DomStorageDatabase>& database() { return database_; }
+  base::SequenceBound<std::unique_ptr<DomStorageDatabase>>& database() {
+    return database_;
+  }
+  bool is_sqlite() const {
+    CHECK(is_database_opened_);
+    return is_sqlite_;
+  }
+  DatabaseMetricsType metrics_type() const { return metrics_type_; }
 
-  // The functions below use `RunDatabaseTask()` to read and write `database_`
-  // through the `DomStorageDatabase` interface. See function comments in
-  // `dom_storage_database.h` for more details.
+  // The functions below use `base::SequenceBound` to read and write
+  // `database_` through the `DomStorageDatabase` interface. See function
+  // comments in `dom_storage_database.h` for more details.
   using ReadMapKeyValuesCallback = base::OnceCallback<void(
       StatusOr<std::map<DomStorageDatabase::Key, DomStorageDatabase::Value>>)>;
   void ReadMapKeyValues(DomStorageDatabase::MapLocator map_locator,
@@ -114,79 +101,7 @@ class AsyncDomStorageDatabase {
       std::vector<DomStorageDatabase::MapLocator> maps_to_delete,
       StatusCallback callback);
   void PurgeOriginsForShutdown(std::set<url::Origin> origins);
-  void RewriteDB(StatusCallback callback);
-
-  // TODO(crbug.com/377242771): Temporarily overload `RunDatabaseTask()` to
-  // support both `DomStorageDatabase` and `DomStorageDatabaseLevelDB`. After
-  // fully migrating to `DomStorageDatabase`, the `DomStorageDatabaseLevelDB`
-  // overload can be removed.
-  template <typename TDatabase, typename ResultType>
-  using DatabaseTask = base::OnceCallback<ResultType(TDatabase&)>;
-
-  template <typename TDatabase, typename ResultType>
-  using TaskTraits = internal::DatabaseTaskTraits<TDatabase, ResultType>;
-
-  // Define for `DomStorageDatabase`.
-  template <typename ResultType>
-  void RunDatabaseTask(DatabaseTask<DomStorageDatabase, ResultType> task,
-                       typename TaskTraits<DomStorageDatabase,
-                                           ResultType>::CallbackType callback) {
-    auto wrapped_task = base::BindOnce(
-        [](DatabaseTask<DomStorageDatabase, ResultType> task,
-           typename TaskTraits<DomStorageDatabase, ResultType>::CallbackType
-               callback,
-           scoped_refptr<base::SequencedTaskRunner> callback_task_runner,
-           DomStorageDatabase* db) {
-          callback_task_runner->PostTask(
-              FROM_HERE, TaskTraits<DomStorageDatabase, ResultType>::
-                             RunTaskAndBindCallbackToResult(
-                                 *db, std::move(task), std::move(callback)));
-        },
-        std::move(task), std::move(callback),
-        base::SequencedTaskRunner::GetCurrentDefault());
-    if (database_) {
-      database_.PostTaskWithThisObject(std::move(wrapped_task));
-    } else {
-      tasks_to_run_on_open_.push_back(std::move(wrapped_task));
-    }
-  }
-
-  // TODO(crbug.com/377242771): Delete this function overload and the
-  // `TDatabase` template after fully migrating to `DomStorageDatabase`
-  // interface.
-  //
-  // Define for `DomStorageDatabaseLevelDB`.
-  template <typename ResultType>
-  void RunDatabaseTask(DatabaseTask<DomStorageDatabaseLevelDB, ResultType> task,
-                       typename TaskTraits<DomStorageDatabaseLevelDB,
-                                           ResultType>::CallbackType callback) {
-    auto wrapped_task = base::BindOnce(
-        [](DatabaseTask<DomStorageDatabaseLevelDB, ResultType> task,
-           typename TaskTraits<DomStorageDatabaseLevelDB,
-                               ResultType>::CallbackType callback,
-           scoped_refptr<base::SequencedTaskRunner> callback_task_runner,
-           DomStorageDatabase* db) {
-          callback_task_runner->PostTask(
-              FROM_HERE,
-              TaskTraits<DomStorageDatabaseLevelDB, ResultType>::
-                  RunTaskAndBindCallbackToResult(
-                      db->GetLevelDB(), std::move(task), std::move(callback)));
-        },
-        std::move(task), std::move(callback),
-        base::SequencedTaskRunner::GetCurrentDefault());
-    if (database_) {
-      database_.PostTaskWithThisObject(std::move(wrapped_task));
-    } else {
-      tasks_to_run_on_open_.push_back(std::move(wrapped_task));
-    }
-  }
-
-  using BatchDatabaseTask =
-      base::OnceCallback<void(DomStorageBatchOperationLevelDB&,
-                              const DomStorageDatabaseLevelDB&)>;
-  void RunBatchDatabaseTasks(RunBatchTasksContext context,
-                             std::vector<BatchDatabaseTask> tasks,
-                             base::OnceCallback<void(DbStatus)> callback);
+  void CleanUpStaleData(StatusCallback callback);
 
   // Registers or unregisters `source` such that its commits will be batched
   // with other registered committers.
@@ -200,63 +115,46 @@ class AsyncDomStorageDatabase {
   void InitiateCommit();
 
  private:
-  void OnDatabaseOpened(
-      StatusCallback callback,
-      StatusOr<base::SequenceBound<DomStorageDatabase>> database);
+  explicit AsyncDomStorageDatabase(StorageType storage_type);
 
-  explicit AsyncDomStorageDatabase();
+  std::string_view StorageTypeForHistograms() const;
+  std::string GetHistogram(std::string_view operation) const;
+  std::string GetDurationHistogram(std::string_view operation) const;
 
-  base::SequenceBound<DomStorageDatabase> database_;
+  // Runs `db_task` on the DB sequence, recording status and duration
+  // histograms named after `operation`. Posts `callback` back to the calling
+  // sequence.
+  void RunTaskOnDbSequenceAndRecordHistograms(
+      std::string_view operation,
+      base::OnceCallback<DbStatus(DomStorageDatabase*)> db_task,
+      StatusCallback callback);
 
-  using BoundDatabaseTask = base::OnceCallback<void(DomStorageDatabase*)>;
-  std::vector<BoundDatabaseTask> tasks_to_run_on_open_;
+  // Overload for operations returning StatusOr<T>.
+  template <typename T>
+  void RunTaskOnDbSequenceAndRecordHistograms(
+      std::string_view operation,
+      base::OnceCallback<StatusOr<T>(DomStorageDatabase*)> db_task,
+      base::OnceCallback<void(StatusOr<T>)> callback);
+
+  // Callback from DomStorageDatabaseFactory::Open(). Stores the opened
+  // database and its resolved configuration. Then, runs `callback` with the
+  // `DbStatus` from opening the database and the destroy outcome, if any.
+  void OnDatabaseOpened(OpenCallback callback,
+                        DomStorageDatabaseFactory::OpenResult result);
+
+  // `database_` and `is_sqlite_` must not be used until `is_database_opened_`
+  // is true.
+  bool is_database_opened_ = false;
+  base::SequenceBound<std::unique_ptr<DomStorageDatabase>> database_;
+  bool is_sqlite_ = false;
 
   std::set<raw_ptr<Committer>> committers_;
 
+  const StorageType storage_type_;
+  DatabaseMetricsType metrics_type_;
+
   base::WeakPtrFactory<AsyncDomStorageDatabase> weak_ptr_factory_{this};
 };
-
-namespace internal {
-
-template <typename TDatabase, typename ResultType>
-struct DatabaseTaskTraits {
-  using CallbackType = base::OnceCallback<void(ResultType)>;
-  static base::OnceClosure RunTaskAndBindCallbackToResult(
-      TDatabase& db,
-      AsyncDomStorageDatabase::DatabaseTask<TDatabase, ResultType> task,
-      CallbackType callback) {
-    return base::BindOnce(std::move(callback), std::move(task).Run(db));
-  }
-};
-
-// This specialization allows database tasks to return tuples while their
-// corresponding callback accepts the unpacked values of the tuple as separate
-// arguments.
-template <typename TDatabase, typename... Args>
-struct DatabaseTaskTraits<TDatabase, std::tuple<Args...>> {
-  using ResultType = std::tuple<Args...>;
-  using CallbackType = base::OnceCallback<void(Args...)>;
-
-  static base::OnceClosure RunTaskAndBindCallbackToResult(
-      TDatabase& db,
-      AsyncDomStorageDatabase::DatabaseTask<TDatabase, ResultType> task,
-      CallbackType callback) {
-    return BindTupleAsArgs(
-        std::move(callback), std::move(task).Run(db),
-        std::make_index_sequence<std::tuple_size<ResultType>::value>{});
-  }
-
- private:
-  template <typename Tuple, size_t... Indices>
-  static base::OnceClosure BindTupleAsArgs(CallbackType callback,
-                                           Tuple tuple,
-                                           std::index_sequence<Indices...>) {
-    return base::BindOnce(std::move(callback),
-                          std::move(std::get<Indices>(tuple))...);
-  }
-};
-
-}  // namespace internal
 
 }  // namespace storage
 

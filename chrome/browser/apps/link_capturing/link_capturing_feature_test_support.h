@@ -27,24 +27,19 @@ class AssertionResult;
 
 namespace apps::test {
 
-// The valid link capturing configurations that can be enabled. ChromeOS does
-// not support default-on.
+// The valid link capturing configurations that can be enabled. Note that
+// ChromeOS does not support default-on in production, but kV2DefaultOn is
+// available for testing.
 enum class LinkCapturingFeatureVersion {
-  // TODO(https://crbug.com/377522792): Remove v1 values on non-ChromeOS
-  kV1DefaultOff,
   kV2DefaultOff,
-  kV2DefaultOffCaptureExistingFrames,
-#if !BUILDFLAG(IS_CHROMEOS)
+  kV2DefaultOnViaClientMode,
   kV2DefaultOn,
-#endif
 };
 
 // Returns if links that target existing frames (e.g. "_self", "_top",
 // "namedFrame" where the frame exists, etc) should capture into an app.
 bool ShouldLinksWithExistingFrameTargetsCapture(
     LinkCapturingFeatureVersion version);
-bool IsV1(LinkCapturingFeatureVersion version);
-bool IsV2(LinkCapturingFeatureVersion version);
 
 std::string ToString(LinkCapturingFeatureVersion version);
 

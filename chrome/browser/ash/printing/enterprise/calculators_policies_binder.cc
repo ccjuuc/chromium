@@ -9,12 +9,12 @@
 #include <string>
 #include <vector>
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ash/printing/enterprise/bulk_printers_calculator.h"
 #include "chrome/browser/ash/printing/enterprise/bulk_printers_calculator_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "components/prefs/pref_change_registrar.h"
@@ -36,7 +36,7 @@ BulkPrintersCalculator::AccessMode ConvertToAccessMode(int mode_val) {
   return BulkPrintersCalculator::ALL_ACCESS;
 }
 
-std::vector<std::string> ConvertToVector(const base::Value::List& list) {
+std::vector<std::string> ConvertToVector(const base::ListValue& list) {
   std::vector<std::string> string_list;
 
   for (const base::Value& value : list) {
@@ -51,9 +51,9 @@ class PrefBinder : public CalculatorsPoliciesBinder {
  public:
   PrefBinder(PrefService* pref_service,
              base::WeakPtr<BulkPrintersCalculator> calculator)
-      : CalculatorsPoliciesBinder(prefs::kRecommendedPrintersAccessMode,
-                                  prefs::kRecommendedPrintersBlocklist,
-                                  prefs::kRecommendedPrintersAllowlist,
+      : CalculatorsPoliciesBinder(ash::prefs::kRecommendedPrintersAccessMode,
+                                  ash::prefs::kRecommendedPrintersBlocklist,
+                                  ash::prefs::kRecommendedPrintersAllowlist,
                                   calculator),
         prefs_(pref_service) {
     pref_change_registrar_.Init(prefs_);
@@ -121,10 +121,10 @@ class SettingsBinder : public CalculatorsPoliciesBinder {
 void CalculatorsPoliciesBinder::RegisterProfilePrefs(
     PrefRegistrySimple* registry) {
   // Default value for access mode is AllAccess.
-  registry->RegisterIntegerPref(prefs::kRecommendedPrintersAccessMode,
+  registry->RegisterIntegerPref(ash::prefs::kRecommendedPrintersAccessMode,
                                 BulkPrintersCalculator::ALL_ACCESS);
-  registry->RegisterListPref(prefs::kRecommendedPrintersBlocklist);
-  registry->RegisterListPref(prefs::kRecommendedPrintersAllowlist);
+  registry->RegisterListPref(ash::prefs::kRecommendedPrintersBlocklist);
+  registry->RegisterListPref(ash::prefs::kRecommendedPrintersAllowlist);
 }
 
 // static

@@ -25,7 +25,6 @@
 #include <memory>
 #include <utility>
 
-#include "services/network/public/mojom/attribution.mojom-blink.h"
 #include "services/network/public/mojom/web_client_hints_types.mojom-blink.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
@@ -41,7 +40,6 @@
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/dom/increment_load_event_delay_count.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
-#include "third_party/blink/renderer/core/frame/attribution_src_loader.h"
 #include "third_party/blink/renderer/core/frame/deprecation/deprecation.h"
 #include "third_party/blink/renderer/core/frame/frame_owner.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -69,6 +67,7 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
+#include "third_party/blink/renderer/platform/graphics/bitmap_image.h"
 #include "third_party/blink/renderer/platform/heap/cross_thread_handle.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
@@ -117,7 +116,7 @@ class ImageLoader::Task {
       : loader_(loader), update_behavior_(update_behavior) {
     ExecutionContext* context = loader_->GetElement()->GetExecutionContext();
     async_task_context_.Schedule(context, "Image",
-                                 probe::AsyncTaskContext::ScanForAds::kTrue);
+                                 probe::AsyncTaskContext::StackOptions::kScan);
     world_ = context->GetCurrentWorld();
   }
 
@@ -210,8 +209,7 @@ void ImageLoader::DispatchDecodeRequestsIfComplete() {
                 image->PaintImageForCurrentFrame(),
                 /*use_dark_mode=*/false,
                 SkIRect::MakeWH(image->width(), image->height()),
-                cc::PaintFlags::FilterQuality::kNone, SkM44(),
-                PaintImage::kDefaultFrameIndex);
+                cc::PaintFlags::FilterQuality::kNone, SkM44());
             // ImageLoader should be kept alive when decode is still
             // pending. JS may invoke 'decode' without capturing the Image
             // object. If GC kicks in, ImageLoader will be destroyed,
@@ -331,8 +329,7 @@ void ImageLoader::SetImageWithoutConsideringPendingLoadEvent(
     }
   }
 
-  if (LayoutImageResource* image_resource = GetLayoutImageResource())
-    image_resource->ResetAnimation();
+  ResetAnimation();
 }
 
 static void ConfigureRequest(
@@ -411,8 +408,16 @@ void ImageLoader::UpdateImageState(ImageResourceContent* new_image_content) {
     }
   } else {
     image_complete_ = false;
-    if (lazy_image_load_state_ == LazyImageLoadState::kDeferred)
-      LazyImageHelper::StartMonitoring(GetElement());
+    if (lazy_image_load_state_ == LazyImageLoadState::kDeferred) {
+      if (new_image_content->IsLoaded() &&
+          RuntimeEnabledFeatures::LazyImageConformantLoadEventTimingEnabled()) {
+        LazyImageHelper::StopMonitoring(GetElement());
+        lazy_image_load_state_ = LazyImageLoadState::kFullImage;
+        EnqueueImageLoadingMicroTask(kUpdateNormal);
+      } else {
+        LazyImageHelper::StartMonitoring(GetElement());
+      }
+    }
   }
   delay_until_image_notify_finished_ = nullptr;
 }
@@ -497,34 +502,6 @@ void ImageLoader::DoUpdateFromElement(const DOMWrapperWorld* world,
 
     DCHECK(document.GetFrame());
     auto* frame = document.GetFrame();
-
-    if (IsA<HTMLImageElement>(GetElement())) {
-      if (GetElement()->FastHasAttribute(html_names::kAttributionsrcAttr) &&
-          frame->GetAttributionSrcLoader()->CanRegister(
-              url, To<HTMLImageElement>(GetElement()))) {
-        resource_request.SetAttributionReportingEligibility(
-            network::mojom::AttributionReportingEligibility::
-                kEventSourceOrTrigger);
-      }
-      bool shared_storage_writable_opted_in =
-          GetElement()->FastHasAttribute(
-              html_names::kSharedstoragewritableAttr) &&
-          RuntimeEnabledFeatures::SharedStorageAPIEnabled(
-              GetElement()->GetExecutionContext()) &&
-          GetElement()->GetExecutionContext()->IsSecureContext() &&
-          !SecurityOrigin::Create(url)->IsOpaque();
-      resource_request.SetSharedStorageWritableOptedIn(
-          shared_storage_writable_opted_in);
-      if (GetElement()->FastHasAttribute(html_names::kBrowsingtopicsAttr) &&
-          RuntimeEnabledFeatures::TopicsAPIEnabled(
-              GetElement()->GetExecutionContext()) &&
-          GetElement()->GetExecutionContext()->IsSecureContext()) {
-        resource_request.SetBrowsingTopics(true);
-        UseCounter::Count(document, mojom::blink::WebFeature::kTopicsAPIImg);
-        Deprecation::CountDeprecation(GetElement()->GetExecutionContext(),
-                                      WebFeature::kTopicsAPIAll);
-      }
-    }
 
     bool page_is_being_dismissed =
         document.PageDismissalEventBeingDispatched() != Document::kNoDismissal;
@@ -631,8 +608,9 @@ void ImageLoader::DoUpdateFromElement(const DOMWrapperWorld* world,
     }
   }
 
-  if (LayoutImageResource* image_resource = GetLayoutImageResource())
-    image_resource->ResetAnimation();
+  ResetAnimation(update_behavior == kUpdateForcedReload
+                     ? ResetTimeline::kAll
+                     : ResetTimeline::kSharedOnly);
 }
 
 void ImageLoader::UpdateFromElement(UpdateFromElementBehavior update_behavior,
@@ -726,10 +704,17 @@ KURL ImageLoader::ImageSourceToKURL(AtomicString image_source_url) const {
   // Do not load any image if the 'src' attribute is missing or if it is
   // an empty string.
   if (!image_source_url.IsNull()) {
-    String stripped_image_source_url =
-        StripLeadingAndTrailingHTMLSpaces(image_source_url);
-    if (!stripped_image_source_url.empty())
-      url = document.CompleteURL(stripped_image_source_url);
+    StringView stripped_image_source_url =
+        StripLeadingAndTrailingHtmlSpaces(image_source_url);
+    if (!stripped_image_source_url.empty()) {
+      // Resolve the URL using the originating document, which can be different
+      // if this element was sourced from a (SVG <use>) resource document.
+      const Document& resolver_document =
+          RuntimeEnabledFeatures::SvgUseNestedResourceDocumentsEnabled()
+              ? element_->OriginatingTreeScope().GetDocument()
+              : document;
+      url = resolver_document.CompleteURL(stripped_image_source_url);
+    }
   }
   return url;
 }
@@ -768,8 +753,11 @@ void ImageLoader::ImageChanged(ImageResourceContent* content,
   if (!document.IsActive())
     return;
 
-  delay_until_image_notify_finished_ =
-      std::make_unique<IncrementLoadEventDelayCount>(document);
+  if (lazy_image_load_state_ != LazyImageLoadState::kDeferred ||
+      !RuntimeEnabledFeatures::LazyImageConformantLoadEventTimingEnabled()) {
+    delay_until_image_notify_finished_ =
+        std::make_unique<IncrementLoadEventDelayCount>(document);
+  }
 }
 
 void ImageLoader::ImageNotifyFinished(ImageResourceContent* content) {
@@ -783,9 +771,23 @@ void ImageLoader::ImageNotifyFinished(ImageResourceContent* content) {
   CHECK(!image_complete_);
 
   if (lazy_image_load_state_ == LazyImageLoadState::kDeferred) {
-    // A placeholder was requested, but the result was an error or a full image.
-    // In these cases, consider this as the final image and suppress further
-    // reloading and proceed to the image load completion process below.
+    // Some other content may have triggered the load of this image, but that
+    // shouldn't fire this <img loading="lazy">'s load event at this time,
+    // because in the spec this <img> is still in Step 25 of
+    // https://html.spec.whatwg.org/#update-the-image-data.
+    // When LazyLoadMediaObserver reports it to be intersecting (or close to)
+    // the viewport later (i.e. this <img> proceeds to Step 26 of the spec),
+    // actual load/error event will be fired, by going through the loading
+    // process again from `UpdateFromElement()`. Note that in Chromium
+    // implementation (unlike in the spec), the image content itself can be
+    // still loaded/updated even in this case, which can be observed via e.g.
+    // <img>'s width/height.
+    if (RuntimeEnabledFeatures::LazyImageConformantLoadEventTimingEnabled()) {
+      return;
+    }
+    // TODO(paint-dev): This is incorrect legacy behavior: the loading="lazy"
+    // <img> will fire its load event immediately. If the above feature flag
+    // doesn't cause breakage this should be removed.
     LazyImageHelper::StopMonitoring(GetElement());
     lazy_image_load_state_ = LazyImageLoadState::kFullImage;
   }
@@ -806,7 +808,6 @@ void ImageLoader::ImageNotifyFinished(ImageResourceContent* content) {
       svg_image->MaybeRecordSvgImageProcessingTime(GetElement()->GetDocument());
     }
   }
-
 
   DispatchDecodeRequestsIfComplete();
 
@@ -869,6 +870,31 @@ void ImageLoader::OnAttachLayoutTree() {
   image_resource->SetImageResource(image_content_);
 }
 
+void ImageLoader::ResetAnimation(ResetTimeline timeline) {
+  if (!RuntimeEnabledFeatures::SvgImageAnimationResetEnabled()) {
+    if (LayoutImageResource* image_resource = GetLayoutImageResource()) {
+      image_resource->ResetAnimation(timeline);
+    }
+    return;
+  }
+
+  if (!image_content_ || !image_content_->HasImage()) {
+    return;
+  }
+
+  if (auto* image = DynamicTo<BitmapImage>(image_content_->GetImage());
+      image && timeline == ImageLoader::ResetTimeline::kSharedOnly) {
+    image->ResetAnimationSharedTimelineOnly();
+  } else {
+    image_content_->GetImage()->ResetAnimation();
+  }
+
+  if (LayoutImageResource* image_resource = GetLayoutImageResource();
+      image_resource && image_resource->CachedImage() == image_content_) {
+    image_resource->InvalidatePaint();
+  }
+}
+
 void ImageLoader::UpdateLayoutObject() {
   LayoutImageResource* image_resource = GetLayoutImageResource();
 
@@ -884,34 +910,28 @@ void ImageLoader::UpdateLayoutObject() {
     image_resource->SetImageResource(image_content_.Get());
 }
 
-gfx::Size ImageLoader::AccessNaturalSize() const {
+gfx::Size ImageLoader::DensityCorrectedNaturalSize(
+    float inverse_density) const {
   if (!image_content_ || !image_content_->HasImage() ||
       image_content_->ErrorOccurred()) {
     return gfx::Size();
   }
   Image& image = *image_content_->GetImage();
-  gfx::Size size = image.Size(kRespectImageOrientation);
-
   if (auto* svg_image = DynamicTo<SVGImage>(image)) {
-    gfx::Size concrete_object_size;
-    if (std::optional<NaturalSizingInfo> sizing_info =
-            SVGImageForContainer::GetNaturalDimensions(*svg_image, nullptr)) {
-      concrete_object_size =
-          ToRoundedSize(PhysicalSize::FromSizeFFloor(blink::ConcreteObjectSize(
-              *sizing_info, gfx::SizeF(LayoutReplaced::kDefaultWidth,
-                                       LayoutReplaced::kDefaultHeight))));
-      size = ToRoundedSize(PhysicalSize::FromSizeFFloor(
-          blink::ConcreteObjectSize(*sizing_info, gfx::SizeF())));
+    std::optional<NaturalSizingInfo> sizing_info =
+        SVGImageForContainer::GetNaturalDimensions(*svg_image, nullptr);
+    if (!sizing_info) {
+      return gfx::Size();
     }
-    if (size != concrete_object_size) {
-      element_->GetDocument().CountUse(
-          WebFeature::kHTMLImageElementNaturalSizeDiffersForSvgImage);
-    }
-    if (!RuntimeEnabledFeatures::HTMLImageElementActualNaturalSizeEnabled()) {
-      size = concrete_object_size;
-    }
+    sizing_info->size.Scale(inverse_density);
+
+    static constexpr gfx::SizeF kDefaultObjectSize{300, 150};
+    return ToRoundedSize(PhysicalSize::FromSizeFFloor(
+        blink::ConcreteObjectSize(*sizing_info, kDefaultObjectSize)));
   }
-  return size;
+  PhysicalSize natural_size(image.Size(kRespectImageOrientation));
+  natural_size.Scale(inverse_density);
+  return {natural_size.width.ToInt(), natural_size.height.ToInt()};
 }
 
 ResourcePriority ImageLoader::ComputeResourcePriority() const {

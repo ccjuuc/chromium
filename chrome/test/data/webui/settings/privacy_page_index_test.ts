@@ -22,7 +22,7 @@ interface RouteInfo {
 suite('PrivacyPageIndex', function() {
   let index: SettingsPrivacyPageIndexElement;
 
-  async function createPrivacyPageIndex(overrides?: {[key: string]: any}) {
+  async function createPrivacyPageIndex(overrides?: Record<string, unknown>) {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
 
     loadTimeData.overrideValues(Object.assign(
@@ -40,13 +40,12 @@ suite('PrivacyPageIndex', function() {
           enableSecurityKeysSubpage: false,
           // <if expr="is_chromeos">
           enableSmartCardReadersContentSetting: false,
+          enableWebPrintingContentSetting: false,
           // </if>
           enableWebAppInstallation: false,
           enableWebBluetoothNewPermissionsBackend: false,
-          enableWebPrintingContentSetting: false,
           isGuest: false,
-          isPrivacySandboxRestricted: false,
-          isPrivacySandboxRestrictedNoticeEnabled: false,
+          isAdPrivacyAvailable: true,
         },
         overrides || {}));
     resetPageVisibilityForTesting();
@@ -129,79 +128,6 @@ suite('PrivacyPageIndex', function() {
       await waitBeforeNextRender(index);
       assertFalse(!!index.$.viewManager.querySelector('#privacy'));
       await testViewsForRoute(routes.PRIVACY, ['privacy']);
-    });
-
-    test('RoutingPrivacySandboxRestrictedFalse', async function() {
-      await createPrivacyPageIndex({
-        isPrivacySandboxRestricted: false,
-        isPrivacySandboxRestrictedNoticeEnabled: false,
-      });
-
-      // Necessary for the PRIVACY_SANDBOX_MANAGE_TOPICS route to not
-      // automatically redirect to its parent.
-      index.setPrefValue('privacy_sandbox.m1.topics_enabled', true);
-
-      const routesToVisit: RouteInfo[] = [
-        {
-          route: routes.PRIVACY_SANDBOX,
-          viewId: 'privacySandbox',
-          parentViewId: 'privacy',
-        },
-        {
-          route: routes.PRIVACY_SANDBOX_TOPICS,
-          viewId: 'privacySandboxTopics',
-          parentViewId: 'privacy',
-        },
-        {
-          route: routes.PRIVACY_SANDBOX_MANAGE_TOPICS,
-          viewId: 'privacySandboxManageTopics',
-          parentViewId: 'privacy',
-        },
-        {
-          route: routes.PRIVACY_SANDBOX_FLEDGE,
-          viewId: 'privacySandboxFledge',
-          parentViewId: 'privacy',
-        },
-        {
-          route: routes.PRIVACY_SANDBOX_AD_MEASUREMENT,
-          viewId: 'privacySandboxAdMeasurement',
-          parentViewId: 'privacy',
-        },
-      ];
-
-      for (const routeInfo of routesToVisit) {
-        await testViewsForRoute(
-            routeInfo.route, [routeInfo.viewId], routeInfo.parentViewId);
-      }
-    });
-
-    test('RoutingPrivacySandboxRestrictedNoticeEnableTrue', async function() {
-      await createPrivacyPageIndex({
-        isPrivacySandboxRestricted: true,
-        isPrivacySandboxRestrictedNoticeEnabled: true,
-      });
-
-      // Necessary for the PRIVACY_SANDBOX_MANAGE_TOPICS route to not
-      // automatically redirect to its parent.
-      index.setPrefValue('privacy_sandbox.m1.topics_enabled', true);
-
-      const routesToVisit: RouteInfo[] = [
-        {
-          route: routes.PRIVACY_SANDBOX,
-          viewId: 'privacySandbox',
-          parentViewId: 'privacy',
-        },
-        {
-          route: routes.PRIVACY_SANDBOX_AD_MEASUREMENT,
-          viewId: 'privacySandboxAdMeasurement',
-          parentViewId: 'privacy',
-        },
-      ];
-
-      for (const routeInfo of routesToVisit) {
-        await testViewsForRoute(
-            routeInfo.route, [routeInfo.viewId], routeInfo.parentViewId);
-      }
     });
 
     // TODO(crbug.com/417690232): Delete once kBundledSecuritySettings is
@@ -469,7 +395,8 @@ suite('PrivacyPageIndex', function() {
           routes.SITE_SETTINGS_BLUETOOTH_DEVICES,
           ['siteSettingsBluetoothDevices'], 'privacy');
     });
-
+    // TODO(https://crbug.com/530054694): Flaky on Linux.
+    // <if expr="not is_linux">
     test('RoutingBluetoothScanning', async function() {
       assertFalse(
           loadTimeData.getBoolean('enableExperimentalWebPlatformFeatures'));
@@ -480,6 +407,7 @@ suite('PrivacyPageIndex', function() {
           routes.SITE_SETTINGS_BLUETOOTH_SCANNING,
           ['siteSettingsBluetoothScanning'], 'privacy');
     });
+    // </if>
 
     test('RoutingCapturedSurfaceControl', async function() {
       assertFalse(loadTimeData.getBoolean('enableCapturedSurfaceControl'));
@@ -527,14 +455,24 @@ suite('PrivacyPageIndex', function() {
           'privacy');
     });
 
-    test('RoutingLocalNetworkAccess', async function() {
+    test('RoutingLocalNetwork', async function() {
       assertFalse(loadTimeData.getBoolean('enableLocalNetworkAccessSetting'));
       await createPrivacyPageIndex({enableLocalNetworkAccessSetting: true});
 
       return testViewsForRoute(
-          routes.SITE_SETTINGS_LOCAL_NETWORK_ACCESS,
-          ['siteSettingsLocalNetworkAccess'], 'privacy');
+          routes.SITE_SETTINGS_LOCAL_NETWORK, ['siteSettingsLocalNetwork'],
+          'privacy');
     });
+
+    test('RoutingLoopbackNetwork', async function() {
+      assertFalse(loadTimeData.getBoolean('enableLocalNetworkAccessSetting'));
+      await createPrivacyPageIndex({enableLocalNetworkAccessSetting: true});
+
+      return testViewsForRoute(
+          routes.SITE_SETTINGS_LOOPBACK_NETWORK,
+          ['siteSettingsLoopbackNetwork'], 'privacy');
+    });
+
 
     test('RoutingPaymentHandler', async function() {
       assertFalse(
@@ -557,6 +495,15 @@ suite('PrivacyPageIndex', function() {
           routes.SITE_SETTINGS_SMART_CARD_READERS,
           ['siteSettingsSmartCardReaders'], 'privacy');
     });
+
+    test('RoutingWebPrinting', async function() {
+      assertFalse(loadTimeData.getBoolean('enableWebPrintingContentSetting'));
+      await createPrivacyPageIndex({enableWebPrintingContentSetting: true});
+
+      return testViewsForRoute(
+          routes.SITE_SETTINGS_WEB_PRINTING, ['siteSettingsWebPrinting'],
+          'privacy');
+    });
     // </if>
 
     test('RoutingWebAppInstallation', async function() {
@@ -566,15 +513,6 @@ suite('PrivacyPageIndex', function() {
       return testViewsForRoute(
           routes.SITE_SETTINGS_WEB_APP_INSTALLATION,
           ['siteSettingsWebAppInstallation'], 'privacy');
-    });
-
-    test('RoutingWebPrinting', async function() {
-      assertFalse(loadTimeData.getBoolean('enableWebPrintingContentSetting'));
-      await createPrivacyPageIndex({enableWebPrintingContentSetting: true});
-
-      return testViewsForRoute(
-          routes.SITE_SETTINGS_WEB_PRINTING, ['siteSettingsWebPrinting'],
-          'privacy');
     });
   });
 });

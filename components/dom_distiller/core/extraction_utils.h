@@ -7,17 +7,32 @@
 
 #include <string>
 
+#include "components/dom_distiller/core/readability_options.h"
 #include "third_party/dom_distiller_js/dom_distiller.pb.h"
 
+namespace base {
+class Value;
+}
+
 namespace dom_distiller {
+
+// Counts the number of words in the text_content portion.
+int CountWords(const std::string& text_content);
+
+// Converts the JS object returned by the readability distiller into the
+// DomDistillerResult expected by the distillation infra.
+bool ReadabilityDistillerResultToDomDistillerResult(
+    const base::Value& value,
+    proto::DomDistillerResult* result);
 
 // Returns the DomDistiller JavaScript web page distillation script with
 // selected distallation `options`.
 std::string GetDistillerScriptWithOptions(
     const dom_distiller::proto::DomDistillerOptions& options);
 
-// Returns the Readability JavaScript web page distillation script.
-std::string GetReadabilityDistillerScript();
+// Returns the Readability JavaScript web page distillation script with the
+// given options.
+std::string GetReadabilityDistillerScript(const ReadabilityOptions& options);
 
 // Returns the Javascript heuristic to determine if web pages are suitable for
 // reader mode.

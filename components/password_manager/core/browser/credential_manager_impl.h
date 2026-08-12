@@ -9,8 +9,10 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "components/credential_management/credential_manager_interface.h"
+#include "components/device_reauth/device_authenticator.h"
 #include "components/password_manager/core/browser/credential_manager_password_form_manager.h"
 #include "components/password_manager/core/browser/credential_manager_pending_prevent_silent_access_task.h"
 #include "components/password_manager/core/browser/credential_manager_pending_request_task.h"
@@ -76,6 +78,11 @@ class CredentialManagerImpl
                         const PasswordForm* form) override;
   PasswordManagerClient* client() const override;
 
+  void CancelBiometricReauthIfOngoing();
+  void OnReauthCompleted(SendCredentialCallback send_callback,
+                         CredentialInfo info,
+                         bool auth_succeeded);
+
   // CredentialManagerPendingPreventSilentAccessTaskDelegate:
   PasswordStoreInterface* GetProfilePasswordStore() override;
   PasswordStoreInterface* GetAccountPasswordStore() override;
@@ -105,6 +112,10 @@ class CredentialManagerImpl
   // `Store` (if it was available) and reset in `OnProvisionalSaveComplete`.
   // Only used on desktop.
   std::optional<PasswordForm> last_submitted_form_;
+
+  std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator_;
+
+  base::WeakPtrFactory<CredentialManagerImpl> weak_ptr_factory_{this};
 };
 
 }  // namespace password_manager

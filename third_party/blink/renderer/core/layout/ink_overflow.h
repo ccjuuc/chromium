@@ -22,13 +22,13 @@ namespace blink {
 class AffineTransform;
 class AppliedTextDecoration;
 class ComputedStyle;
-class Font;
 class FragmentItem;
 class InlineCursor;
 class InlinePaintContext;
 class LayoutObject;
 class ShadowList;
 class Text;
+class UsedFont;
 struct LogicalRect;
 struct TextFragmentPaintInfo;
 
@@ -141,7 +141,6 @@ class CORE_EXPORT InkOverflow {
                              const InlineCursor& cursor,
                              const TextFragmentPaintInfo& text_info,
                              const ComputedStyle& style,
-                             const Font& scaled_font,
                              const gfx::RectF& rect,
                              float scaling_factor,
                              float length_adjust_scale,
@@ -152,7 +151,6 @@ class CORE_EXPORT InkOverflow {
       const InlineCursor& cursor,
       const TextFragmentPaintInfo& text_info,
       const ComputedStyle& style,
-      const Font& scaled_font,
       const PhysicalRect& rect_in_container,
       const InlinePaintContext* inline_context);
 
@@ -178,7 +176,7 @@ class CORE_EXPORT InkOverflow {
   static LogicalRect ComputeDecorationOverflow(
       const InlineCursor& cursor,
       const ComputedStyle& style,
-      const Font& scaled_font,
+      const UsedFont& used_font,
       const PhysicalOffset& container_offset,
       const LogicalRect& ink_overflow,
       const InlinePaintContext* inline_context,
@@ -202,12 +200,17 @@ class CORE_EXPORT InkOverflow {
 #endif
 
  private:
+  // |fragment_cursor| is used to determine where the fragment sits within its
+  // decorated run so that `text-decoration-inset` trims match painting
+  // exactly. When null, conservative bounds are computed instead (insets never
+  // shrink the bounds, and expanding insets are always applied).
   static LogicalRect ComputeAppliedDecorationOverflow(
       const ComputedStyle& style,
-      const Font& scaled_font,
+      const UsedFont& used_font,
       const PhysicalOffset& offset_in_container,
       const LogicalRect& ink_overflow,
       const InlinePaintContext* inline_context,
+      const InlineCursor* fragment_cursor,
       const AppliedTextDecoration* decoration_override = nullptr);
 
   // For all markers but custom highlights. i.e. those with only one
@@ -220,7 +223,7 @@ class CORE_EXPORT InkOverflow {
       Text* node,
       const LayoutObject&,
       const ComputedStyle& style,
-      const Font& scaled_font,
+      const UsedFont& used_font,
       const PhysicalOffset& offset_in_container,
       const LogicalRect& ink_overflow,
       const InlinePaintContext* inline_context,
@@ -233,7 +236,7 @@ class CORE_EXPORT InkOverflow {
       Text* text_node,
       const LayoutObject& layout_object,
       const ComputedStyle& style,
-      const Font& scaled_font,
+      const UsedFont& used_font,
       const PhysicalOffset& offset_in_container,
       const LogicalRect& ink_overflow,
       const InlinePaintContext* inline_context);

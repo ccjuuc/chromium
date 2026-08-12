@@ -133,9 +133,7 @@ class StreamingSearchPrefetchURLLoader
 
     // network::mojom::URLLoader implementation:
     void FollowRedirect(
-        const std::vector<std::string>& removed_headers,
-        const net::HttpRequestHeaders& modified_headers,
-        const net::HttpRequestHeaders& modified_cors_exempt_headers,
+        network::HttpRequestHeadersUpdateParams headers_update_params,
         const std::optional<GURL>& new_url) override;
     void SetPriority(net::RequestPriority priority,
                      int32_t intra_priority_value) override;
@@ -242,6 +240,9 @@ class StreamingSearchPrefetchURLLoader
   // on mojo channels closing or other errors occurring.
   void ClearOwnerPointer();
 
+  // Returns whether the resource response is available.
+  bool HasResourceResponse() const { return !!resource_response_; }
+
   void set_on_destruction_callback_for_testing(
       base::OnceClosure on_destruction_callback_for_testing) {
     on_destruction_callback_for_testing_ =
@@ -260,9 +261,7 @@ class StreamingSearchPrefetchURLLoader
 
   // network::mojom::URLLoader:
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_headers,
+      network::HttpRequestHeadersUpdateParams headers_update_params,
       const std::optional<GURL>& new_url) override;
   void SetPriority(net::RequestPriority priority,
                    int32_t intra_priority_value) override;

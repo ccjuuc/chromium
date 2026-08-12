@@ -3,9 +3,7 @@
 // found in the LICENSE file.
 package org.chromium.ui.base;
 
-import android.Manifest;
 import android.content.ClipDescription;
-import android.os.Build;
 import android.webkit.MimeTypeMap;
 
 import androidx.annotation.IntDef;
@@ -20,12 +18,6 @@ import java.lang.annotation.RetentionPolicy;
 /** Utility methods for determining and working with mime types. */
 @NullMarked
 public class MimeTypeUtils {
-    /** The MIME type for a plain text objects dragged from Chrome. */
-    public static final String CHROME_MIMETYPE_TEXT = "chrome/text";
-
-    /** The MIME type for a link objects dragged from Chrome. */
-    public static final String CHROME_MIMETYPE_LINK = "chrome/link";
-
     /** The MIME type for a tab object dragged from Chrome. */
     public static final String CHROME_MIMETYPE_TAB = "chrome/tab";
 
@@ -40,6 +32,33 @@ public class MimeTypeUtils {
 
     /** The MIME type for pdf. */
     public static final String PDF_MIME_TYPE = "application/pdf";
+
+    /** The MIME type for png. */
+    public static final String IMAGE_PNG_MIME_TYPE = "image/png";
+
+    /** The MIME type for plain text. */
+    public static final String TEXT_PLAIN_MIME_TYPE = "text/plain";
+
+    /** The MIME type prefix for any image. */
+    public static final String IMAGE_PREFIX_MIME_TYPE = "image/";
+
+    /** The MIME type for jpeg image. */
+    public static final String IMAGE_JPEG_MIME_TYPE = "image/jpeg";
+
+    /** The MIME type for jpg image. */
+    public static final String IMAGE_JPG_MIME_TYPE = "image/jpg";
+
+    /** The MIME type prefix for any text file. */
+    public static final String TEXT_PREFIX_MIME_TYPE = "text/";
+
+    /** The MIME type prefix for any audio. */
+    public static final String AUDIO_PREFIX_MIME_TYPE = "audio/";
+
+    /** The MIME type prefix for any video. */
+    public static final String VIDEO_PREFIX_MIME_TYPE = "video/";
+
+    /** The MIME type for any file type. */
+    public static final String ALL_FILE_TYPES_MIME_TYPE = "*/*";
 
     /** A set of known mime types. */
     // Note: these values must match the AndroidUtilsMimeTypes enum in enums.xml.
@@ -60,53 +79,34 @@ public class MimeTypeUtils {
     public static final int NUM_MIME_TYPE_ENTRIES = 6;
 
     /**
+     * @param mimeType A string representing the MIME type (e.g., "image/png").
+     * @return The corresponding {@link Type}.
+     */
+    public static @Type int getTypeFromMimeType(@Nullable String mimeType) {
+        if (mimeType == null) return Type.UNKNOWN;
+        if (mimeType.startsWith(TEXT_PREFIX_MIME_TYPE)) {
+            return Type.TEXT;
+        } else if (mimeType.startsWith(IMAGE_PREFIX_MIME_TYPE)) {
+            return Type.IMAGE;
+        } else if (mimeType.startsWith(AUDIO_PREFIX_MIME_TYPE)) {
+            return Type.AUDIO;
+        } else if (mimeType.startsWith(VIDEO_PREFIX_MIME_TYPE)) {
+            return Type.VIDEO;
+        } else if (mimeType.equals(PDF_MIME_TYPE)) {
+            return Type.PDF;
+        }
+        return Type.UNKNOWN;
+    }
+
+    /**
      * @param url A {@link GURL} for which to determine the mime type.
      * @return The mime type, based on the extension of the {@code url}.
      */
     public static @Type int getMimeTypeForUrl(GURL url) {
         String extension = MimeTypeMap.getFileExtensionFromUrl(url.getSpec());
-        @Type int mimeType = Type.UNKNOWN;
-        if (extension != null) {
-            String type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension);
-            if (type != null) {
-                if (type.startsWith("text")) {
-                    mimeType = Type.TEXT;
-                } else if (type.startsWith("image")) {
-                    mimeType = Type.IMAGE;
-                } else if (type.startsWith("audio")) {
-                    mimeType = Type.AUDIO;
-                } else if (type.startsWith("video")) {
-                    mimeType = Type.VIDEO;
-                } else if (type.equals("application/pdf")) {
-                    mimeType = Type.PDF;
-                }
-            }
-        }
-
-        return mimeType;
-    }
-
-    /**
-     * @param mimeType The mime type associated with an operation that needs a permission.
-     * @return The name of the Android permission to request. Returns null if no permission will
-     *     allow access to the file, for example on Android T+ where READ_EXTERNAL_STORAGE has been
-     *     replaced with a handful of READ_MEDIA_* permissions.
-     */
-    public @Nullable static String getPermissionNameForMimeType(@MimeTypeUtils.Type int mimeType) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            return Manifest.permission.READ_EXTERNAL_STORAGE;
-        }
-
-        switch (mimeType) {
-            case MimeTypeUtils.Type.AUDIO:
-                return Manifest.permission.READ_MEDIA_AUDIO;
-            case MimeTypeUtils.Type.IMAGE:
-                return Manifest.permission.READ_MEDIA_IMAGES;
-            case MimeTypeUtils.Type.VIDEO:
-                return Manifest.permission.READ_MEDIA_VIDEO;
-            default:
-                return null;
-        }
+        if (extension == null) return Type.UNKNOWN;
+        String type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension);
+        return getTypeFromMimeType(type);
     }
 
     public static boolean clipDescriptionHasBrowserContent(ClipDescription clipDescription) {

@@ -17,12 +17,11 @@ namespace signin {
 class IdentityManager;
 }  // namespace signin
 
-@protocol ApplicationCommands;
 @protocol BrowserCoordinatorCommands;
 @protocol ContentSuggestionsConsumer;
-@class ContentSuggestionsMetricsRecorder;
 @protocol NewTabPageActionsDelegate;
 class ReadingListModel;
+@protocol SceneCommands;
 @class ShortcutsConfig;
 @protocol ShortcutsMediatorDelegate;
 @protocol WhatsNewCommands;
@@ -32,10 +31,6 @@ class ReadingListModel;
 
 // The latest config for the Shortcuts module.
 @property(nonatomic, strong, readonly) ShortcutsConfig* shortcutsConfig;
-
-// Recorder for content suggestions metrics.
-@property(nonatomic, weak)
-    ContentSuggestionsMetricsRecorder* contentSuggestionsMetricsRecorder;
 
 // Consumer for this mediator.
 @property(nonatomic, weak) id<ContentSuggestionsConsumer> consumer;
@@ -48,7 +43,7 @@ class ReadingListModel;
 
 // Dispatcher.
 @property(nonatomic, weak)
-    id<ApplicationCommands, BrowserCoordinatorCommands, WhatsNewCommands>
+    id<SceneCommands, BrowserCoordinatorCommands, WhatsNewCommands>
         dispatcher;
 
 // Default initializer.

@@ -71,10 +71,9 @@ class ContextMenuNativeDelegateImpl implements ContextMenuNativeDelegate {
         if (mNativePtr == 0) return;
 
         Callback<ImageCallbackResult> imageRetrieveCallback =
-                (result) -> {
-                    ShareImageFileUtils.generateTemporaryUriFromData(
-                            result.imageData, result.extension, callback);
-                };
+                (ImageCallbackResult result) ->
+                        ShareImageFileUtils.generateTemporaryUriFromData(
+                                result.imageData, result.extension, callback);
 
         if (sHardcodedImageBytesForTesting != null) {
             imageRetrieveCallback.onResult(createImageCallbackResultForTesting());
@@ -132,6 +131,20 @@ class ContextMenuNativeDelegateImpl implements ContextMenuNativeDelegate {
 
         ContextMenuNativeDelegateImplJni.get()
                 .setPictureInPicture(mNativePtr, mRenderFrameHost, enterPip);
+    }
+
+    @Override
+    public void copyVideoFrame() {
+        if (mNativePtr == 0) return;
+
+        ContextMenuNativeDelegateImplJni.get().copyVideoFrame(mNativePtr, mRenderFrameHost);
+    }
+
+    @Override
+    public void downloadVideoFrame() {
+        if (mNativePtr == 0) return;
+
+        ContextMenuNativeDelegateImplJni.get().downloadVideoFrame(mNativePtr, mRenderFrameHost);
     }
 
     /** The class hold the |retrieveImageForShare| callback result. */
@@ -199,5 +212,13 @@ class ContextMenuNativeDelegateImpl implements ContextMenuNativeDelegate {
                 long nativeContextMenuNativeDelegateImpl,
                 @JniType("content::RenderFrameHost*") RenderFrameHost renderFrameHost,
                 boolean enterPip);
+
+        void copyVideoFrame(
+                long nativeContextMenuNativeDelegateImpl,
+                @JniType("content::RenderFrameHost*") RenderFrameHost renderFrameHost);
+
+        void downloadVideoFrame(
+                long nativeContextMenuNativeDelegateImpl,
+                @JniType("content::RenderFrameHost*") RenderFrameHost renderFrameHost);
     }
 }

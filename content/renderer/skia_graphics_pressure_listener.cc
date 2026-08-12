@@ -4,21 +4,45 @@
 
 #include "content/renderer/skia_graphics_pressure_listener.h"
 
+#include "base/memory_coordinator/traits.h"
+#include "base/memory_coordinator/utils.h"
 #include "third_party/skia/include/core/SkGraphics.h"
 
 namespace content {
 
+namespace {
+
+constexpr base::MemoryConsumerTraits kSkiaGraphicsTraits(
+    // Skia resource caches typically consume tens of MBs.
+    base::MemoryConsumerTraits::EstimatedMemoryUsage::kMedium,
+    // Purging requires traversing hash maps/queues.
+    base::MemoryConsumerTraits::ReleaseMemoryCost::kRequiresTraversal,
+    // Resources can be regenerated.
+    base::MemoryConsumerTraits::InformationRetention::kLossless,
+    // Asynchronous since AsyncMemoryConsumerRegistration is used.
+    base::MemoryConsumerTraits::ExecutionType::kAsynchronous,
+    // Binary check; either keeps or drops everything.
+    base::MemoryConsumerTraits::SupportsMemoryLimit::kNo,
+    // Regenerating the resources requires CPU-intensive computations.
+    base::MemoryConsumerTraits::RecreateMemoryCost::kExpensive,
+    // Stateless consumer. Performs one-shot evictions.
+    base::MemoryConsumerTraits::IsStateful::kNo);
+
+}  // namespace
+
 SkiaGraphicsPressureListener::SkiaGraphicsPressureListener()
-    : memory_pressure_listener_registration_(
-          FROM_HERE,
-          base::MemoryPressureListenerTag::kSkiaGraphicsPressureListener,
-          this) {}
+    : memory_consumer_registration_(
+          "SkiaGraphics",
+          kSkiaGraphicsTraits,
+          this,
+          base::AsyncMemoryConsumerRegistration::CheckUnregister::kDisabled) {}
 
 SkiaGraphicsPressureListener::~SkiaGraphicsPressureListener() = default;
 
-void SkiaGraphicsPressureListener::OnMemoryPressure(
-    base::MemoryPressureLevel level) {
-  if (level == base::MEMORY_PRESSURE_LEVEL_CRITICAL) {
+void SkiaGraphicsPressureListener::OnUpdateMemoryLimit() {}
+
+void SkiaGraphicsPressureListener::OnReleaseMemory() {
+  if (memory_limit() <= base::kCriticalMemoryPressureThreshold) {
     SkGraphics::PurgeAllCaches();
   }
 }

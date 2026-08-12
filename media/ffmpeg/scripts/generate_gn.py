@@ -81,7 +81,7 @@ _Attrs = ('ARCHITECTURE', 'TARGET', 'PLATFORM')
 Attr = collections.namedtuple('Attr', _Attrs)(*_Attrs)
 SUPPORT_MATRIX = {
     Attr.ARCHITECTURE:
-    set(['ia32', 'x64', 'arm', 'arm64', 'arm-neon', 'riscv64']),
+    set(['ia32', 'x64', 'arm64', 'arm-neon', 'riscv64']),
     Attr.TARGET: set(['Chromium', 'Chrome']),
     Attr.PLATFORM: set(['android', 'linux', 'win', 'mac'])
 }
@@ -317,7 +317,7 @@ class SourceSet(object):
             if condition.ARCHITECTURE == '*':
                 arch_condition = None
             elif condition.ARCHITECTURE == 'arm-neon':
-                arch_condition = 'current_cpu == "arm" && arm_use_neon'
+                arch_condition = 'current_cpu == "arm"'
             elif condition.ARCHITECTURE == 'ia32':
                 arch_condition = 'current_cpu == "x86"'
             elif condition.ARCHITECTURE == 'arm64':
@@ -720,6 +720,7 @@ MUST_BE_MISSING_INCLUDE_FILES = [
 # DO NOT ADD TO THIS LIST without first confirming with lawyers that the
 # licenses are okay to add.
 ALLOWED_LICENSES = [
+    'BSD (2 clause) LGPL (v2.1 or later)',
     'BSD (3 clause) LGPL (v2.1 or later)',
     'BSL (v1) LGPL (v2.1 or later)',
     'ISC GENERATED FILE',

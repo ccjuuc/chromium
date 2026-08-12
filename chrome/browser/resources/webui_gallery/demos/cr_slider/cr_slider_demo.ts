@@ -70,16 +70,22 @@ export class CrSliderDemoElement extends CrLitElement {
     return this.ticks_[this.tickedValue_]!.value;
   }
 
-  protected onBasicValueChanged_() {
+  protected onBasicCrSliderValueChanged_() {
     this.basicValue_ = this.$.basicSlider.value;
   }
 
-  protected onTickedValueChanged_() {
+  protected onTickedCrSliderValueChanged_() {
     this.tickedValue_ = this.$.tickedSlider.value;
   }
 
-  protected onShowMarkersChanged_(e: CustomEvent<{value: boolean}>) {
+  protected onShowMarkersCheckedChanged_(e: CustomEvent<{value: boolean}>) {
     this.showMarkers_ = e.detail.value;
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'cr-slider-demo': CrSliderDemoElement;
   }
 }
 

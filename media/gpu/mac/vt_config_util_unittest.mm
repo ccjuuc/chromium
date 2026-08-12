@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/gpu/mac/vt_config_util.h"
 
 #include <CoreMedia/CoreMedia.h>
@@ -14,6 +9,7 @@
 
 #include "base/apple/bridging.h"
 #include "base/apple/foundation_util.h"
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/mac/mac_util.h"
 #include "base/numerics/safe_conversions.h"
@@ -65,16 +61,18 @@ base::span<const uint8_t> GetNestedDataValue(CFDictionaryRef dict,
 }
 
 base::apple::ScopedCFTypeRef<CVImageBufferRef> CreateCVImageBuffer(
-    media::VideoColorSpace cs) {
-  base::apple::ScopedCFTypeRef<CFDictionaryRef> fmt =
-      CreateFormatExtensions(kCMVideoCodecType_H264, media::H264PROFILE_MAIN, 8,
-                             cs, gfx::HDRMetadata(), std::nullopt);
+    media::VideoColorSpace cs,
+    std::optional<OSType> pixel_format_override = std::nullopt) {
+  base::apple::ScopedCFTypeRef<CFDictionaryRef> fmt = CreateFormatExtensions(
+      kCMVideoCodecType_H264, media::H264PROFILE_MAIN, 8, cs, std::nullopt);
 
   base::apple::ScopedCFTypeRef<CVImageBufferRef> image_buffer;
-  OSStatus err =
-      CVPixelBufferCreate(kCFAllocatorDefault, 16, 16,
-                          kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
-                          nullptr, image_buffer.InitializeInto());
+  const OSType pixel_format = pixel_format_override.value_or(
+      cs.range() == gfx::ColorSpace::RangeID::FULL
+          ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+          : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
+  OSStatus err = CVPixelBufferCreate(kCFAllocatorDefault, 16, 16, pixel_format,
+                                     nullptr, image_buffer.InitializeInto());
   if (err != noErr) {
     EXPECT_EQ(err, noErr);
     return base::apple::ScopedCFTypeRef<CVImageBufferRef>();
@@ -88,7 +86,8 @@ base::apple::ScopedCFTypeRef<CVImageBufferRef> CreateCVImageBuffer(
 base::apple::ScopedCFTypeRef<CMFormatDescriptionRef> CreateFormatDescription(
     CFStringRef primaries,
     CFStringRef transfer,
-    CFStringRef matrix) {
+    CFStringRef matrix,
+    bool full_range = false) {
   NSMutableDictionary* extensions = [NSMutableDictionary dictionary];
 
   if (primaries) {
@@ -103,6 +102,10 @@ base::apple::ScopedCFTypeRef<CMFormatDescriptionRef> CreateFormatDescription(
     extensions[CFToNSPtrCast(kCMFormatDescriptionExtension_YCbCrMatrix)] =
         CFToNSPtrCast(matrix);
   }
+  if (full_range) {
+    extensions[CFToNSPtrCast(kCMFormatDescriptionExtension_FullRangeVideo)] =
+        @YES;
+  }
   base::apple::ScopedCFTypeRef<CMFormatDescriptionRef> result;
   CMFormatDescriptionCreate(nullptr, kCMMediaType_Video,
                             kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
@@ -116,33 +119,6 @@ gfx::ColorSpace ToBT709_APPLE(gfx::ColorSpace cs) {
                          cs.GetMatrixID(), cs.GetRangeID());
 }
 
-void AssertHasDefaultHDRMetadata(CFDictionaryRef fmt) {
-  // We constructed with an invalid HDRMetadata, so all values should be
-  // overridden to the default.
-  auto mdcv_expected =
-      gfx::GenerateMasteringDisplayColorVolume(gfx::HDRMetadata());
-  auto clli_expected = gfx::GenerateContentLightLevelInfo(gfx::HDRMetadata());
-
-  auto mdcv = GetDataValue(
-      fmt, kCMFormatDescriptionExtension_MasteringDisplayColorVolume);
-  ASSERT_EQ(24u, mdcv.size());
-  ASSERT_EQ(24u, CFDataGetLength(mdcv_expected.get()));
-  EXPECT_EQ(0, memcmp(mdcv.data(), CFDataGetBytePtr(mdcv_expected.get()), 24u));
-
-  auto clli =
-      GetDataValue(fmt, kCMFormatDescriptionExtension_ContentLightLevelInfo);
-  ASSERT_EQ(0u, clli.size());
-}
-
-void AssertHasNoHDRMetadata(CFDictionaryRef fmt) {
-  auto mdcv = GetDataValue(
-      fmt, kCMFormatDescriptionExtension_MasteringDisplayColorVolume);
-  auto clli =
-      GetDataValue(fmt, kCMFormatDescriptionExtension_ContentLightLevelInfo);
-  EXPECT_TRUE(mdcv.empty());
-  EXPECT_TRUE(clli.empty());
-}
-
 constexpr char kBitDepthKey[] = "BitsPerComponent";
 constexpr char kVpccKey[] = "vpcC";
 
@@ -151,9 +127,9 @@ constexpr char kVpccKey[] = "vpcC";
 namespace media {
 
 TEST(VTConfigUtil, CreateFormatExtensions_H264_BT709) {
-  base::apple::ScopedCFTypeRef<CFDictionaryRef> fmt = CreateFormatExtensions(
-      kCMVideoCodecType_H264, H264PROFILE_MAIN, 8, VideoColorSpace::REC709(),
-      gfx::HDRMetadata(), std::nullopt);
+  base::apple::ScopedCFTypeRef<CFDictionaryRef> fmt =
+      CreateFormatExtensions(kCMVideoCodecType_H264, H264PROFILE_MAIN, 8,
+                             VideoColorSpace::REC709(), std::nullopt);
 
   EXPECT_EQ("avc1",
             GetStrValue(fmt.get(), kCMFormatDescriptionExtension_FormatName));
@@ -185,7 +161,7 @@ TEST(VTConfigUtil, CreateFormatExtensions_H264_BT2020_PQ) {
                       VideoColorSpace::TransferID::SMPTEST2084,
                       VideoColorSpace::MatrixID::BT2020_NCL,
                       gfx::ColorSpace::RangeID::FULL),
-      gfx::HDRMetadata(), std::nullopt);
+      std::nullopt);
 
   EXPECT_EQ("avc1",
             GetStrValue(fmt.get(), kCMFormatDescriptionExtension_FormatName));
@@ -201,7 +177,6 @@ TEST(VTConfigUtil, CreateFormatExtensions_H264_BT2020_PQ) {
       GetCFStrValue(fmt.get(), kCMFormatDescriptionExtension_YCbCrMatrix));
   EXPECT_TRUE(
       GetBoolValue(fmt.get(), kCMFormatDescriptionExtension_FullRangeVideo));
-  AssertHasDefaultHDRMetadata(fmt.get());
 }
 
 TEST(VTConfigUtil, CreateFormatExtensions_H264_BT2020_HLG) {
@@ -211,7 +186,7 @@ TEST(VTConfigUtil, CreateFormatExtensions_H264_BT2020_HLG) {
                       VideoColorSpace::TransferID::ARIB_STD_B67,
                       VideoColorSpace::MatrixID::BT2020_NCL,
                       gfx::ColorSpace::RangeID::FULL),
-      gfx::HDRMetadata(), std::nullopt);
+      std::nullopt);
 
   EXPECT_EQ("avc1",
             GetStrValue(fmt.get(), kCMFormatDescriptionExtension_FormatName));
@@ -227,72 +202,13 @@ TEST(VTConfigUtil, CreateFormatExtensions_H264_BT2020_HLG) {
       GetCFStrValue(fmt.get(), kCMFormatDescriptionExtension_YCbCrMatrix));
   EXPECT_TRUE(
       GetBoolValue(fmt.get(), kCMFormatDescriptionExtension_FullRangeVideo));
-  AssertHasNoHDRMetadata(fmt.get());
-}
-
-TEST(VTConfigUtil, CreateFormatExtensions_HDRMetadata) {
-  // Values from real YouTube HDR content.
-  gfx::HDRMetadata hdr_meta;
-  hdr_meta.cta_861_3 = gfx::HdrMetadataCta861_3(1000, 600);
-  hdr_meta.smpte_st_2086 = gfx::HdrMetadataSmpteSt2086(
-      {0.6800f, 0.3200f, 0.2649f, 0.6900f, 0.1500f, 0.0600f, 0.3127f, 0.3290f},
-      /*luminance_max=*/1000,
-      /*luminance_min=*/0);
-  const auto& cv_metadata = hdr_meta.smpte_st_2086.value();
-
-  base::apple::ScopedCFTypeRef<CFDictionaryRef> fmt = CreateFormatExtensions(
-      kCMVideoCodecType_H264, H264PROFILE_MAIN, 8,
-      VideoColorSpace(VideoColorSpace::PrimaryID::BT2020,
-                      VideoColorSpace::TransferID::SMPTEST2084,
-                      VideoColorSpace::MatrixID::BT2020_NCL,
-                      gfx::ColorSpace::RangeID::FULL),
-      hdr_meta, std::nullopt);
-
-  {
-    auto mdcv = GetDataValue(
-        fmt.get(), kCMFormatDescriptionExtension_MasteringDisplayColorVolume);
-    ASSERT_EQ(24u, mdcv.size());
-    std::unique_ptr<mp4::BoxReader> box_reader(
-        mp4::BoxReader::ReadConcatentatedBoxes(mdcv.data(), mdcv.size(),
-                                               nullptr));
-    mp4::MasteringDisplayColorVolume mdcv_box;
-    ASSERT_TRUE(mdcv_box.Parse(box_reader.get()));
-    EXPECT_EQ(mdcv_box.display_primaries_gx, cv_metadata.primaries.fGX);
-    EXPECT_EQ(mdcv_box.display_primaries_gy, cv_metadata.primaries.fGY);
-    EXPECT_EQ(mdcv_box.display_primaries_bx, cv_metadata.primaries.fBX);
-    EXPECT_EQ(mdcv_box.display_primaries_by, cv_metadata.primaries.fBY);
-    EXPECT_EQ(mdcv_box.display_primaries_rx, cv_metadata.primaries.fRX);
-    EXPECT_EQ(mdcv_box.display_primaries_ry, cv_metadata.primaries.fRY);
-    EXPECT_EQ(mdcv_box.white_point_x, cv_metadata.primaries.fWX);
-    EXPECT_EQ(mdcv_box.white_point_y, cv_metadata.primaries.fWY);
-    EXPECT_EQ(mdcv_box.max_display_mastering_luminance,
-              cv_metadata.luminance_max);
-    EXPECT_EQ(mdcv_box.min_display_mastering_luminance,
-              cv_metadata.luminance_min);
-  }
-
-  {
-    auto clli = GetDataValue(
-        fmt.get(), kCMFormatDescriptionExtension_ContentLightLevelInfo);
-    ASSERT_EQ(4u, clli.size());
-    std::unique_ptr<mp4::BoxReader> box_reader(
-        mp4::BoxReader::ReadConcatentatedBoxes(clli.data(), clli.size(),
-                                               nullptr));
-    mp4::ContentLightLevelInformation clli_box;
-    ASSERT_TRUE(clli_box.Parse(box_reader.get()));
-    EXPECT_EQ(clli_box.max_content_light_level,
-              hdr_meta.cta_861_3->max_content_light_level);
-    EXPECT_EQ(clli_box.max_pic_average_light_level,
-              hdr_meta.cta_861_3->max_frame_average_light_level);
-  }
 }
 
 TEST(VTConfigUtil, CreateFormatExtensions_VP9Profile0) {
   constexpr VideoCodecProfile kTestProfile = VP9PROFILE_PROFILE0;
   const auto kTestColorSpace = VideoColorSpace::REC709();
-  base::apple::ScopedCFTypeRef<CFDictionaryRef> fmt =
-      CreateFormatExtensions(kCMVideoCodecType_VP9, kTestProfile, 8,
-                             kTestColorSpace, gfx::HDRMetadata(), std::nullopt);
+  base::apple::ScopedCFTypeRef<CFDictionaryRef> fmt = CreateFormatExtensions(
+      kCMVideoCodecType_VP9, kTestProfile, 8, kTestColorSpace, std::nullopt);
   EXPECT_EQ(8, GetIntValue(fmt.get(),
                            base::SysUTF8ToCFStringRef(kBitDepthKey).get()));
 
@@ -300,8 +216,7 @@ TEST(VTConfigUtil, CreateFormatExtensions_VP9Profile0) {
       fmt.get(), kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms,
       base::SysUTF8ToCFStringRef(kVpccKey).get());
   std::unique_ptr<mp4::BoxReader> box_reader(
-      mp4::BoxReader::ReadConcatentatedBoxes(vpcc.data(), vpcc.size(),
-                                             nullptr));
+      mp4::BoxReader::ReadConcatentatedBoxes(vpcc, nullptr));
   mp4::VPCodecConfigurationRecord vpcc_box;
   ASSERT_TRUE(vpcc_box.Parse(box_reader.get()));
   ASSERT_EQ(kTestProfile, vpcc_box.profile);
@@ -314,9 +229,8 @@ TEST(VTConfigUtil, CreateFormatExtensions_VP9Profile2) {
       VideoColorSpace::PrimaryID::BT2020,
       VideoColorSpace::TransferID::SMPTEST2084,
       VideoColorSpace::MatrixID::BT2020_NCL, gfx::ColorSpace::RangeID::LIMITED);
-  base::apple::ScopedCFTypeRef<CFDictionaryRef> fmt =
-      CreateFormatExtensions(kCMVideoCodecType_VP9, kTestProfile, 10,
-                             kTestColorSpace, gfx::HDRMetadata(), std::nullopt);
+  base::apple::ScopedCFTypeRef<CFDictionaryRef> fmt = CreateFormatExtensions(
+      kCMVideoCodecType_VP9, kTestProfile, 10, kTestColorSpace, std::nullopt);
   EXPECT_EQ(10, GetIntValue(fmt.get(),
                             base::SysUTF8ToCFStringRef(kBitDepthKey).get()));
 
@@ -324,14 +238,14 @@ TEST(VTConfigUtil, CreateFormatExtensions_VP9Profile2) {
       fmt.get(), kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms,
       base::SysUTF8ToCFStringRef(kVpccKey).get());
   std::unique_ptr<mp4::BoxReader> box_reader(
-      mp4::BoxReader::ReadConcatentatedBoxes(vpcc.data(), vpcc.size(),
-                                             nullptr));
+      mp4::BoxReader::ReadConcatentatedBoxes(vpcc, nullptr));
   mp4::VPCodecConfigurationRecord vpcc_box;
   ASSERT_TRUE(vpcc_box.Parse(box_reader.get()));
   ASSERT_EQ(kTestProfile, vpcc_box.profile);
   ASSERT_EQ(kTestColorSpace, vpcc_box.color_space);
 }
 
+#if BUILDFLAG(ENABLE_AV1_DECODER)
 TEST(VTConfigUtil, CreateFormatExtensions_AV1) {
   // Dumped from a main profile 10-bit AV1 stream.
   constexpr uint8_t kAvc1Box[] = {0x81, 0x04, 0x4c, 0x00, 0x0a, 0x0b,
@@ -345,8 +259,7 @@ TEST(VTConfigUtil, CreateFormatExtensions_AV1) {
       VideoColorSpace::MatrixID::BT2020_NCL, gfx::ColorSpace::RangeID::LIMITED);
   base::apple::ScopedCFTypeRef<CFDictionaryRef> fmt = CreateFormatExtensions(
       kCMVideoCodecType_AV1, kTestProfile, 10, kTestColorSpace,
-      gfx::HDRMetadata(),
-      base::span<const uint8_t>(kAvc1Box, sizeof(kAvc1Box)));
+      UNSAFE_TODO(base::span<const uint8_t>(kAvc1Box, sizeof(kAvc1Box))));
   EXPECT_EQ(10, GetIntValue(fmt.get(),
                             base::SysUTF8ToCFStringRef(kBitDepthKey).get()));
 
@@ -354,20 +267,21 @@ TEST(VTConfigUtil, CreateFormatExtensions_AV1) {
       fmt.get(), kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms,
       base::SysUTF8ToCFStringRef("av1C").get());
   std::unique_ptr<mp4::BoxReader> box_reader(
-      mp4::BoxReader::ReadConcatentatedBoxes(av1c.data(), av1c.size(),
-                                             nullptr));
+      mp4::BoxReader::ReadConcatentatedBoxes(av1c, nullptr));
   mp4::AV1CodecConfigurationRecord av1c_box;
   ASSERT_TRUE(av1c_box.Parse(box_reader.get()));
   ASSERT_EQ(kTestProfile, av1c_box.profile);
   // No other fields are parsed by mp4::AV1CodecConfigurationRecord.
 }
+#endif
 
 TEST(VTConfigUtil, GetImageBufferColorSpace_BT601) {
   auto cs = VideoColorSpace::REC601();
   auto image_buffer = CreateCVImageBuffer(cs);
   ASSERT_TRUE(image_buffer);
 
-  cs.primaries = VideoColorSpace::PrimaryID::SMPTE170M;
+  cs = VideoColorSpace(VideoColorSpace::PrimaryID::SMPTE170M, cs.transfer(),
+                       cs.matrix(), cs.range());
   auto expected_cs = ToBT709_APPLE(cs.ToGfxColorSpace());
   EXPECT_EQ(expected_cs, GetImageBufferColorSpace(image_buffer.get()));
 }
@@ -381,6 +295,41 @@ TEST(VTConfigUtil, GetImageBufferColorSpace_BT709) {
   // the same gamma level as is standardized.
   auto expected_cs = ToBT709_APPLE(cs.ToGfxColorSpace());
   EXPECT_EQ(expected_cs, GetImageBufferColorSpace(image_buffer.get()));
+}
+
+TEST(VTConfigUtil, GetImageBufferColorSpace_FullRange) {
+  auto cs = VideoColorSpace(
+      VideoColorSpace::PrimaryID::BT709, VideoColorSpace::TransferID::BT709,
+      VideoColorSpace::MatrixID::BT709, gfx::ColorSpace::RangeID::FULL);
+  auto image_buffer = CreateCVImageBuffer(cs);
+  ASSERT_TRUE(image_buffer);
+
+  EXPECT_EQ(ToBT709_APPLE(cs.ToGfxColorSpace()),
+            GetImageBufferColorSpace(image_buffer.get()));
+}
+
+TEST(VTConfigUtil, GetImageBufferColorSpace_FullRangeFormats) {
+  const auto cs = VideoColorSpace(
+      VideoColorSpace::PrimaryID::BT709, VideoColorSpace::TransferID::BT709,
+      VideoColorSpace::MatrixID::BT709, gfx::ColorSpace::RangeID::FULL);
+  constexpr OSType kFullRangePixelFormats[] = {
+      kCVPixelFormatType_420YpCbCr8PlanarFullRange,
+      kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+      kCVPixelFormatType_422YpCbCr8BiPlanarFullRange,
+      kCVPixelFormatType_444YpCbCr8BiPlanarFullRange,
+      kCVPixelFormatType_422YpCbCr8FullRange,
+      kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+      kCVPixelFormatType_422YpCbCr10BiPlanarFullRange,
+      kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
+  };
+
+  for (const OSType pixel_format : kFullRangePixelFormats) {
+    auto image_buffer = CreateCVImageBuffer(cs, pixel_format);
+    ASSERT_TRUE(image_buffer);
+    EXPECT_EQ(ToBT709_APPLE(cs.ToGfxColorSpace()),
+              GetImageBufferColorSpace(image_buffer.get()))
+        << pixel_format;
+  }
 }
 
 TEST(VTConfigUtil, GetImageBufferColorSpace_GAMMA22) {
@@ -445,6 +394,20 @@ TEST(VTConfigUtil, FormatDescriptionBT709) {
   ASSERT_TRUE(format_descriptor);
   auto cs = GetFormatDescriptionColorSpace(format_descriptor.get());
   EXPECT_EQ(ToBT709_APPLE(gfx::ColorSpace::CreateREC709()), cs);
+}
+
+TEST(VTConfigUtil, FormatDescriptionFullRange) {
+  auto format_descriptor = CreateFormatDescription(
+      kCMFormatDescriptionColorPrimaries_ITU_R_709_2,
+      kCMFormatDescriptionTransferFunction_ITU_R_709_2,
+      kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2, /*full_range=*/true);
+  ASSERT_TRUE(format_descriptor);
+
+  const gfx::ColorSpace expected(gfx::ColorSpace::PrimaryID::BT709,
+                                 gfx::ColorSpace::TransferID::BT709_APPLE,
+                                 gfx::ColorSpace::MatrixID::BT709,
+                                 gfx::ColorSpace::RangeID::FULL);
+  EXPECT_EQ(expected, GetFormatDescriptionColorSpace(format_descriptor.get()));
 }
 
 }  // namespace media

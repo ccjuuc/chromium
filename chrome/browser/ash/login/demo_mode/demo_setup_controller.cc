@@ -4,15 +4,18 @@
 
 #include "chrome/browser/ash/login/demo_mode/demo_setup_controller.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/barrier_closure.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
@@ -30,8 +33,6 @@
 #include "chrome/browser/ash/policy/enrollment/enrollment_config.h"
 #include "chrome/browser/ash/policy/enrollment/enrollment_requisition_manager.h"
 #include "chrome/browser/ash/policy/enrollment/enrollment_status.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
 #include "chromeos/ash/components/demo_mode/utils/dimensions_utils.h"
@@ -394,14 +395,16 @@ std::string DemoSetupController::DemoSetupError::GetDebugDescription() const {
 }
 
 // static
-void DemoSetupController::ClearDemoRequisition() {
-  if (policy::EnrollmentRequisitionManager::GetDeviceRequisition() ==
+void DemoSetupController::ClearDemoRequisition(PrefService& local_state) {
+  if (policy::EnrollmentRequisitionManager::GetDeviceRequisition(local_state) ==
       policy::EnrollmentRequisitionManager::kDemoRequisition) {
-    policy::EnrollmentRequisitionManager::SetDeviceRequisition(std::string());
+    policy::EnrollmentRequisitionManager::SetDeviceRequisition(local_state,
+                                                               std::string());
     // If device requisition is `kDemoRequisition`, it means the sub
     // organization was also set by the demo setup controller, so remove it as
     // well.
-    policy::EnrollmentRequisitionManager::SetSubOrganization(std::string());
+    policy::EnrollmentRequisitionManager::SetSubOrganization(local_state,
+                                                             std::string());
   }
 }
 
@@ -420,7 +423,8 @@ bool DemoSetupController::IsOobeDemoSetupFlowInProgress() {
 }
 
 // static
-std::string DemoSetupController::GetSubOrganizationEmail() {
+std::string DemoSetupController::GetSubOrganizationEmail(
+    const PrefService& local_state) {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   DCHECK(command_line);
 
@@ -434,14 +438,14 @@ std::string DemoSetupController::GetSubOrganizationEmail() {
     }
   }
 
-  const std::string country =
-      g_browser_process->local_state()->GetString(prefs::kDemoModeCountry);
+  const std::string country = local_state.GetString(prefs::kDemoModeCountry);
 
   std::string country_uppercase = base::ToUpperASCII(country);
   std::string country_lowercase = base::ToLowerASCII(country);
 
   // Exclude US as it is the default country.
-  if (base::Contains(demo_mode::kSupportedCountries, country_uppercase)) {
+  if (std::ranges::contains(demo_mode::kSupportedCountries,
+                            country_uppercase)) {
     if (chromeos::features::IsCloudGamingDeviceEnabled()) {
       return base::StringPrintf("admin-%s-blazey@%s", country_lowercase.c_str(),
                                 policy::kDemoModeDomain);
@@ -453,8 +457,8 @@ std::string DemoSetupController::GetSubOrganizationEmail() {
 }
 
 // static
-base::Value::Dict DemoSetupController::GetDemoSetupSteps() {
-  base::Value::Dict setup_steps_dict;
+base::DictValue DemoSetupController::GetDemoSetupSteps() {
+  base::DictValue setup_steps_dict;
   for (auto entry : GetDemoSetupStepsInfo()) {
     setup_steps_dict.Set(GetDemoSetupStepString(entry.step), entry.step_index);
   }
@@ -477,7 +481,18 @@ std::string DemoSetupController::GetDemoSetupStepString(
   NOTREACHED();
 }
 
-DemoSetupController::DemoSetupController() = default;
+DemoSetupController::DemoSetupController(
+    PrefService* local_state,
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+    policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
+    scoped_refptr<component_updater::ComponentManagerAsh> component_manager_ash)
+    : local_state_(CHECK_DEREF(local_state)),
+      shared_url_loader_factory_(std::move(shared_url_loader_factory)),
+      browser_policy_connector_ash_(CHECK_DEREF(browser_policy_connector_ash)),
+      component_manager_ash_(std::move(component_manager_ash)) {
+  CHECK(shared_url_loader_factory_);
+  CHECK(component_manager_ash_);
+}
 
 DemoSetupController::~DemoSetupController() = default;
 
@@ -503,9 +518,8 @@ void DemoSetupController::Enroll(
 
   SetCurrentSetupStep(DemoSetupStep::kDownloadResources);
 
-  PrefService* prefs = g_browser_process->local_state();
-  prefs->SetString(prefs::kDemoModeRetailerId, retailer_name_);
-  prefs->SetString(prefs::kDemoModeStoreId, store_number_);
+  local_state_->SetString(prefs::kDemoModeRetailerId, retailer_name_);
+  local_state_->SetString(prefs::kDemoModeStoreId, store_number_);
 
   switch (demo_config_) {
     case DemoSession::DemoModeConfig::kOnline:
@@ -523,7 +537,8 @@ void DemoSetupController::LoadDemoComponents() {
   download_start_time_ = base::TimeTicks::Now();
 
   if (!demo_components_)
-    demo_components_ = std::make_unique<DemoComponents>(demo_config_);
+    demo_components_ = std::make_unique<DemoComponents>(
+        &local_state_.get(), component_manager_ash_, demo_config_);
 
   // Simulate loading demo components completed for unit tests.
   if (DBusThreadManager::Get()->IsUsingFakes() &&
@@ -617,16 +632,21 @@ void DemoSetupController::OnDemoComponentsLoaded() {
 
   enroll_start_time_ = base::TimeTicks::Now();
 
-  DCHECK(policy::EnrollmentRequisitionManager::GetDeviceRequisition().empty());
+  DCHECK(policy::EnrollmentRequisitionManager::GetDeviceRequisition(
+             local_state_.get())
+             .empty());
   policy::EnrollmentRequisitionManager::SetDeviceRequisition(
+      local_state_.get(),
       policy::EnrollmentRequisitionManager::kDemoRequisition);
   policy::EnrollmentRequisitionManager::SetSubOrganization(
-      GetSubOrganizationEmail());
+      local_state_.get(), GetSubOrganizationEmail(local_state_.get()));
   policy::EnrollmentConfig config =
       policy::EnrollmentConfig::GetDemoModeEnrollmentConfig();
 
-  enrollment_launcher_ =
-      EnrollmentLauncher::Create(this, config, policy::kDemoModeDomain);
+  enrollment_launcher_ = EnrollmentLauncher::Create(
+      &local_state_.get(), shared_url_loader_factory_,
+      &browser_policy_connector_ash_.get(), this, config,
+      policy::kDemoModeDomain);
   enrollment_launcher_->EnrollUsingAttestation();
 }
 
@@ -655,6 +675,7 @@ void DemoSetupController::OnDeviceEnrolled() {
   UMA_HISTOGRAM_ENUMERATION(kDemoSetupErrorHistogram, ErrorCode::kSuccess);
   VLOG(1) << "Marking device registered";
   StartupUtils::MarkDeviceRegistered(
+      local_state_.get(),
       base::BindOnce(&DemoSetupController::OnDeviceRegistered,
                      weak_ptr_factory_.GetWeakPtr()));
 }
@@ -695,9 +716,9 @@ void DemoSetupController::OnDeviceRegistered() {
 
   SetCurrentSetupStep(DemoSetupStep::kComplete);
 
-  PrefService* prefs = g_browser_process->local_state();
-  prefs->SetInteger(prefs::kDemoModeConfig, static_cast<int>(demo_config_));
-  prefs->CommitPendingWrite();
+  local_state_->SetInteger(prefs::kDemoModeConfig,
+                           static_cast<int>(demo_config_));
+  local_state_->CommitPendingWrite();
   Reset();
   if (!on_setup_success_.is_null())
     std::move(on_setup_success_).Run();
@@ -722,7 +743,7 @@ void DemoSetupController::Reset() {
 
   // `demo_config_` is not reset here, because it is needed for retrying setup.
   enrollment_launcher_.reset();
-  ClearDemoRequisition();
+  ClearDemoRequisition(local_state_.get());
 }
 
 }  //  namespace ash

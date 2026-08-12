@@ -71,19 +71,25 @@ constexpr char kInvalidPrinterName[] = "invalid-test-printer";
 constexpr char16_t kInvalidPrinterName16[] = u"invalid-test-printer";
 constexpr char kAccessDeniedPrinterName[] = "access-denied-test-printer";
 
-const PrinterBasicInfoOptions kDefaultPrintInfoOptions{{"opt1", "123"},
-                                                       {"opt2", "456"}};
+PrinterBasicInfoOptions GetDefaultPrintInfoOptions() {
+  return PrinterBasicInfoOptions{{"opt1", "123"}, {"opt2", "456"}};
+}
 
-const PrinterBasicInfo kDefaultPrinterInfo(
-    /*printer_name=*/kDefaultPrinterName,
-    /*display_name=*/"default test printer",
-    /*printer_description=*/"Default printer for testing.",
-    kDefaultPrintInfoOptions);
-const PrinterBasicInfo kAnotherPrinterInfo(
-    /*printer_name=*/kAnotherPrinterName,
-    /*display_name=*/"another test printer",
-    /*printer_description=*/"Another printer for testing.",
-    /*options=*/{});
+PrinterBasicInfo GetDefaultPrinterInfo() {
+  return PrinterBasicInfo(
+      /*printer_name=*/kDefaultPrinterName,
+      /*display_name=*/"default test printer",
+      /*printer_description=*/"Default printer for testing.",
+      GetDefaultPrintInfoOptions());
+}
+
+PrinterBasicInfo GetAnotherPrinterInfo() {
+  return PrinterBasicInfo(
+      /*printer_name=*/kAnotherPrinterName,
+      /*display_name=*/"another test printer",
+      /*printer_description=*/"Another printer for testing.",
+      /*options=*/PrinterBasicInfoOptions{});
+}
 
 constexpr int32_t kCopiesMax = 123;
 constexpr int kPrintSettingsCopies = 42;
@@ -154,12 +160,12 @@ class PrintBackendBrowserTest : public InProcessBrowserTest {
     // tests.
     auto default_caps = std::make_unique<PrinterSemanticCapsAndDefaults>();
     default_caps->copies_max = kCopiesMax;
-    default_caps->default_paper = test::kPaperLetter;
-    default_caps->papers.push_back(test::kPaperLetter);
-    default_caps->papers.push_back(test::kPaperLegal);
+    default_caps->default_paper = test::GetPaperLetter();
+    default_caps->papers.push_back(test::GetPaperLetter());
+    default_caps->papers.push_back(test::GetPaperLegal());
     test_print_backend_->AddValidPrinter(
         kDefaultPrinterName, std::move(default_caps),
-        std::make_unique<PrinterBasicInfo>(kDefaultPrinterInfo));
+        std::make_unique<PrinterBasicInfo>(GetDefaultPrinterInfo()));
     test_print_backend_->SetDefaultPrinterName(kDefaultPrinterName);
   }
 
@@ -167,7 +173,7 @@ class PrintBackendBrowserTest : public InProcessBrowserTest {
   void AddAnotherPrinter() {
     test_print_backend_->AddValidPrinter(
         kAnotherPrinterName, std::make_unique<PrinterSemanticCapsAndDefaults>(),
-        std::make_unique<PrinterBasicInfo>(kAnotherPrinterInfo));
+        std::make_unique<PrinterBasicInfo>(GetAnotherPrinterInfo()));
   }
 
   void AddAccessDeniedPrinter() {
@@ -207,7 +213,7 @@ class PrintBackendBrowserTest : public InProcessBrowserTest {
   mojom::PrintBackendService::UpdatePrintSettingsResult
   UpdatePrintSettingsAndWait(uint32_t context_id,
                              const PrintSettings& print_settings) {
-    base::Value::Dict job_settings =
+    base::DictValue job_settings =
         PrintSettingsToJobSettingsDebug(print_settings);
     job_settings.Set(kSettingPrinterType,
                      static_cast<int>(mojom::PrinterType::kLocal));
@@ -272,7 +278,6 @@ class PrintBackendBrowserTest : public InProcessBrowserTest {
   }
 #endif  // BUILDFLAG(IS_WIN)
 
-// TODO(crbug.com/40100562)  Include Windows once XPS print pipeline is enabled.
 #if !BUILDFLAG(IS_WIN)
   std::optional<mojom::ResultCode> RenderDocumentAndWait() {
     // Load a sample PDF file for a single page for testing handling.
@@ -461,8 +466,8 @@ IN_PROC_BROWSER_TEST_F(PrintBackendBrowserTest, EnumeratePrinters) {
   AddDefaultPrinter();
   AddAnotherPrinter();
 
-  const PrinterList kPrinterListExpected = {kDefaultPrinterInfo,
-                                            kAnotherPrinterInfo};
+  const PrinterList kPrinterListExpected = {GetDefaultPrinterInfo(),
+                                            GetAnotherPrinterInfo()};
 
   // Safe to use base::Unretained(this) since waiting locally on the callback
   // forces a shorter lifetime than `this`.
@@ -702,10 +707,11 @@ IN_PROC_BROWSER_TEST_F(PrintBackendBrowserTest, UpdatePrintSettings) {
 #if BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_CUPS)
   const PrintSettings::AdvancedSettings& advanced_settings =
       settings.value().advanced_settings();
-  EXPECT_EQ(advanced_settings.size(), kDefaultPrintInfoOptions.size());
+  const PrinterBasicInfoOptions default_options = GetDefaultPrintInfoOptions();
+  EXPECT_EQ(advanced_settings.size(), default_options.size());
   for (const auto& advanced_setting : advanced_settings) {
-    auto option = kDefaultPrintInfoOptions.find(advanced_setting.first);
-    ASSERT_NE(option, kDefaultPrintInfoOptions.end());
+    auto option = default_options.find(advanced_setting.first);
+    ASSERT_NE(option, default_options.end());
     EXPECT_EQ(option->second, advanced_setting.second.GetString());
   }
 #endif  // BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_CUPS)
@@ -753,8 +759,6 @@ IN_PROC_BROWSER_TEST_F(PrintBackendBrowserTest, RenderPrintedPage) {
 }
 #endif  // BUILDFLAG(IS_WIN)
 
-// TODO(crbug.com/40100562)  Include Windows for this test once XPS print
-// pipeline is enabled.
 #if !BUILDFLAG(IS_WIN)
 IN_PROC_BROWSER_TEST_F(PrintBackendBrowserTest, RenderPrintedDocument) {
   AddDefaultPrinter();
@@ -789,8 +793,6 @@ IN_PROC_BROWSER_TEST_F(PrintBackendBrowserTest, DocumentDone) {
   ASSERT_EQ(StartPrintingAndWait(context_id, print_settings),
             mojom::ResultCode::kSuccess);
 
-  // TODO(crbug.com/40100562)  Include Windows coverage for RenderDocument()
-  // path once XPS print pipeline is enabled.
 #if BUILDFLAG(IS_WIN)
   std::optional<mojom::ResultCode> result = RenderPageAndWait();
 #else

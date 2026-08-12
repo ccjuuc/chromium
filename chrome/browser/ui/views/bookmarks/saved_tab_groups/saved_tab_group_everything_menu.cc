@@ -11,14 +11,12 @@
 #include "base/uuid.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
 #include "chrome/browser/ui/browser_command_controller.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_metrics.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
-#include "chrome/browser/ui/tabs/saved_tab_groups/tab_group_action_context_desktop.h"
-#include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_group_theme.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/bookmarks/saved_tab_groups/saved_tab_group_tabs_menu_model.h"
@@ -26,8 +24,8 @@
 #include "chrome/browser/ui/views/toolbar/app_menu.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
-#include "components/saved_tab_groups/public/types.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/views/controls/menu/menu_model_adapter.h"
 #include "ui/views/widget/widget.h"
@@ -95,7 +93,7 @@ class STGEverythingMenu::AppMenuSubMenuModelDelegate
     if (model_) {
       model_->SetMenuModelDelegate(nullptr);
     }
-    menu_item_->GetSubmenu()->RemoveObserver(this);
+    observed_view->RemoveObserver(this);
     menu_item_ = nullptr;
   }
 
@@ -105,12 +103,12 @@ class STGEverythingMenu::AppMenuSubMenuModelDelegate
 };
 
 STGEverythingMenu::STGEverythingMenu(views::MenuButtonController* controller,
-                                     Browser* browser,
+                                     BrowserWindowInterface* browser,
                                      MenuContext menu_context)
     : menu_button_controller_(controller),
       browser_(browser),
       widget_(views::Widget::GetWidgetForNativeWindow(
-          browser->window()->GetNativeWindow())),
+          browser->GetWindow()->GetNativeWindow())),
       menu_context_(menu_context) {}
 
 int STGEverythingMenu::GenerateTabGroupCommandID(int idx_in_sorted_tab_groups) {
@@ -120,8 +118,20 @@ int STGEverythingMenu::GenerateTabGroupCommandID(int idx_in_sorted_tab_groups) {
 }
 
 base::Uuid STGEverythingMenu::GetTabGroupIdFromCommandId(int command_id) {
-  const int idx_in_sorted_tab_group = (command_id - kMinCommandId) / kGap;
-  return sorted_non_empty_tab_groups_.at(idx_in_sorted_tab_group);
+  // Check if the command id is in the range of tab group commands and matches
+  // the expected gap.
+  if (command_id < kMinCommandId || (command_id - kMinCommandId) % kGap != 0) {
+    return base::Uuid();
+  }
+
+  const size_t idx_in_sorted_tab_group = (command_id - kMinCommandId) / kGap;
+  // Verify the index is within the bounds of the current sorted tab groups
+  // to prevent out-of-bounds access if the model has changed.
+  if (idx_in_sorted_tab_group >= sorted_non_empty_tab_groups_.size()) {
+    return base::Uuid();
+  }
+
+  return sorted_non_empty_tab_groups_[idx_in_sorted_tab_group];
 }
 
 
@@ -132,8 +142,10 @@ std::unique_ptr<ui::SimpleMenuModel> STGEverythingMenu::CreateMenuModel(
   menu_model->AddItemWithIcon(
       IDC_CREATE_NEW_TAB_GROUP,
       l10n_util::GetStringUTF16(IDS_CREATE_NEW_TAB_GROUP),
-      ui::ImageModel::FromVectorIcon(kCreateNewTabGroupIcon, ui::kColorMenuIcon,
-                                     kUIUpdateIconSize));
+      ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                         ? kLibraryAddIcon
+                                         : kCreateNewTabGroupOldIcon,
+                                     ui::kColorMenuIcon, kUIUpdateIconSize));
   menu_model->SetElementIdentifierAt(
       menu_model->GetIndexOfCommandId(IDC_CREATE_NEW_TAB_GROUP).value(),
       kCreateNewTabGroup);
@@ -146,7 +158,9 @@ std::unique_ptr<ui::SimpleMenuModel> STGEverythingMenu::CreateMenuModel(
       TabGroupMenuUtils::GetGroupsForDisplaySortedByCreationTime(
           tab_group_service);
 
-  const auto* const color_provider = browser_->window()->GetColorProvider();
+  const auto* const color_provider =
+      BrowserWindow::FromBrowser(browser_->GetBrowserForMigrationOnly())
+          ->GetColorProvider();
   for (size_t i = 0; i < sorted_non_empty_tab_groups_.size(); ++i) {
     const std::optional<SavedTabGroup> tab_group =
         tab_group_service->GetGroup(sorted_non_empty_tab_groups_[i]);
@@ -156,7 +170,9 @@ std::unique_ptr<ui::SimpleMenuModel> STGEverythingMenu::CreateMenuModel(
     }
     const auto color_id = GetTabGroupDialogColorId(tab_group->color());
     const auto group_icon = ui::ImageModel::FromVectorIcon(
-        kTabGroupIcon, color_provider->GetColor(color_id), gfx::kFaviconSize);
+        features::IsRoundedIconsEnabled() ? kCircleFilledIcon
+                                          : kTabGroupOldIcon,
+        color_provider->GetColor(color_id), gfx::kFaviconSize);
     auto title = tab_groups::TabGroupMenuUtils::GetMenuTextForGroup(*tab_group);
     // For saved tab group items, use the indice in `sorted_tab_groups_` as the
     // command ids.
@@ -177,10 +193,12 @@ std::unique_ptr<ui::SimpleMenuModel> STGEverythingMenu::CreateMenuModel(
     menu_model->SetMayHaveMnemonicsAt(index.value(), false);
 
     if (tab_group->is_shared_tab_group()) {
-      menu_model->SetMinorIcon(index.value(),
-                               ui::ImageModel::FromVectorIcon(
-                                   kPeopleGroupIcon, ui::kColorMenuIcon,
-                                   ui::SimpleMenuModel::kDefaultIconSize));
+      menu_model->SetMinorIcon(
+          index.value(),
+          ui::ImageModel::FromVectorIcon(
+              features::IsRoundedIconsEnabled() ? kGroupCustomIcon
+                                                : kPeopleGroupOldIcon,
+              ui::kColorMenuIcon, ui::SimpleMenuModel::kDefaultIconSize));
     }
 
     std::u16string shared_state =
@@ -220,6 +238,9 @@ bool STGEverythingMenu::ShouldEnableCommand(int command_id) {
 void STGEverythingMenu::PopulateTabGroupSubMenu(views::MenuItemView* parent) {
   base::Uuid group_id =
       GetTabGroupIdFromCommandId(/*command_id=*/parent->GetCommand());
+  if (!group_id.is_valid()) {
+    return;
+  }
 
   if (latest_group_id_ == group_id) {
     return;
@@ -239,7 +260,7 @@ void STGEverythingMenu::PopulateMenu(views::MenuItemView* parent) {
   if (!groups_model_) {
     TabGroupSyncService* tab_group_service =
         tab_groups::TabGroupSyncServiceFactory::GetForProfile(
-            browser_->profile());
+            browser_->GetProfile());
 
     // Only recreate the model if we have to.
     groups_model_ = CreateMenuModel(tab_group_service);
@@ -270,6 +291,14 @@ void STGEverythingMenu::PopulateMenu(views::MenuItemView* parent) {
 void STGEverythingMenu::RunMenu() {
   auto root = std::make_unique<views::MenuItemView>(this);
   PopulateMenu(root.get());
+
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(
+      browser_->GetBrowserForMigrationOnly());
+  CHECK(browser_view);
+  CHECK(browser_view->tab_strip_view());
+  expand_on_hover_lock_ = browser_view->tab_strip_view()->GetExpandOnHoverLock(
+      ExpandOnHoverLockType::kKeepCurrentState);
+
   menu_runner_ = std::make_unique<views::MenuRunner>(
       std::move(root), views::MenuRunner::HAS_MNEMONICS);
   menu_runner_->RunMenuAt(
@@ -283,20 +312,23 @@ bool STGEverythingMenu::ShouldShowSubmenu() {
     case MenuContext::kAppMenu:
       return true;
     case MenuContext::kSavedTabGroupBar:
-      return base::FeatureList::IsEnabled(
-          features::kTabGroupMenuMoreEntryPoints);
     case MenuContext::kVerticalTabStrip:
-      return base::FeatureList::IsEnabled(
-          features::kTabGroupMenuMoreEntryPoints);
+      return false;
   }
 }
 
 void STGEverythingMenu::ExecuteCommand(int command_id, int event_flags) {
-  if (latest_group_id_ &&
-      tabs_models_[latest_group_id_.value()]->HasCommandId(command_id)) {
-    tabs_models_[latest_group_id_.value()]->ExecuteCommand(command_id,
-                                                           event_flags);
-  } else if (command_id == IDC_CREATE_NEW_TAB_GROUP) {
+  // Search through all tab models to find the one that handles this command.
+  // This is more robust than relying on latest_group_id_, which may be null
+  // or out of sync.
+  for (const auto& [group_id, model] : tabs_models_) {
+    if (model->HasCommandId(command_id)) {
+      model->ExecuteCommand(command_id, event_flags);
+      return;
+    }
+  }
+
+  if (command_id == IDC_CREATE_NEW_TAB_GROUP) {
     switch (menu_context_) {
       case MenuContext::kAppMenu:
         base::RecordAction(base::UserMetricsAction(
@@ -319,31 +351,26 @@ void STGEverythingMenu::ExecuteCommand(int command_id, int event_flags) {
         break;
     }
 
-    browser_->command_controller()->ExecuteCommand(command_id);
+    chrome::BrowserCommandController::From(browser_)->ExecuteCommand(
+        command_id);
   } else {
+    const auto group_id = GetTabGroupIdFromCommandId(command_id);
+    if (!group_id.is_valid()) {
+      return;
+    }
+
     base::RecordAction(base::UserMetricsAction(
         "TabGroups_SavedTabGroups_OpenedFromEverythingMenu_2"));
-    const auto group_id = GetTabGroupIdFromCommandId(command_id);
-    TabGroupSyncService* tab_group_service =
+    TabGroupMenuAction action{TabGroupMenuAction::Type::OPEN_IN_BROWSER,
+                              group_id};
+    SavedTabGroupUtils::PerformTabGroupMenuAction(
+        action,
+        menu_context_ == MenuContext::kAppMenu
+            ? TabGroupMenuContext::APP_MENU
+            : TabGroupMenuContext::SAVED_TAB_GROUP_EVERYTHING_MENU,
+        browser_->GetBrowserForMigrationOnly(),
         tab_groups::TabGroupSyncServiceFactory::GetForProfile(
-            browser_->profile());
-
-    bool will_open_shared_group = false;
-    if (std::optional<tab_groups::SavedTabGroup> saved_group =
-            tab_group_service->GetGroup(group_id)) {
-      will_open_shared_group = !saved_group->local_group_id().has_value() &&
-                               saved_group->is_shared_tab_group();
-    }
-
-    tab_group_service->OpenTabGroup(
-        group_id, std::make_unique<TabGroupActionContextDesktop>(
-                      browser_, OpeningSource::kOpenedFromRevisitUi));
-
-    if (will_open_shared_group) {
-      saved_tab_groups::metrics::RecordSharedTabGroupRecallType(
-          saved_tab_groups::metrics::SharedTabGroupRecallTypeDesktop::
-              kOpenedFromEverythingMenu);
-    }
+            browser_->GetProfile()));
   }
 }
 
@@ -363,6 +390,9 @@ bool STGEverythingMenu::ShowContextMenu(views::MenuItemView* source,
   base::RecordAction(base::UserMetricsAction(
       "TabGroups_SavedTabGroups_ContextMenuTriggeredFromEverythingMenu"));
   const base::Uuid group_id = GetTabGroupIdFromCommandId(command_id);
+  if (!group_id.is_valid()) {
+    return false;
+  }
 
   latest_group_id_ = group_id;
 
@@ -391,10 +421,14 @@ void STGEverythingMenu::WillShowMenu(views::MenuItemView* menu) {
   // This works because the only submenus in the everything menu are
   // for the tab group items. Will need to change if we add
   // more unbounded submenus to the everything menu.
-  if (base::FeatureList::IsEnabled(features::kTabGroupMenuMoreEntryPoints) &&
+  if (menu_context_ == MenuContext::kAppMenu &&
       menu->GetCommand() >= kMinCommandId) {
     PopulateTabGroupSubMenu(menu);
   }
+}
+
+void STGEverythingMenu::OnMenuClosed(views::MenuItemView* menu) {
+  expand_on_hover_lock_.reset();
 }
 
 STGEverythingMenu::~STGEverythingMenu() = default;

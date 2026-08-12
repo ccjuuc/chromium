@@ -26,6 +26,7 @@
 
 #include <optional>
 
+#include "base/compiler_specific.h"
 #include "base/types/optional_util.h"
 #include "third_party/blink/public/common/view_source/rendering_preferences.h"
 #include "third_party/blink/public/mojom/persistent_renderer_prefs.mojom-blink.h"
@@ -55,6 +56,7 @@
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 
 namespace blink {
@@ -189,12 +191,13 @@ void HTMLViewSourceDocument::AddSource(
     case HTMLToken::kEndTag:
       ProcessTagToken(source, token, attributes_ranges, token_start);
       break;
+    case HTMLToken::kProcessingInstruction:
+      ProcessProcessingInstructionToken(source, token);
+      break;
     case HTMLToken::kComment:
       ProcessCommentToken(source, token);
       break;
     case HTMLToken::kCharacter:
-    case HTMLToken::kDOMPart:
-      // Process DOM Parts as character tokens.
       ProcessCharacterToken(source, token);
       break;
   }
@@ -286,6 +289,14 @@ void HTMLViewSourceDocument::ProcessCharacterToken(const String& source,
   AddText(source, g_empty_atom);
 }
 
+void HTMLViewSourceDocument::ProcessProcessingInstructionToken(
+    const String& source,
+    HTMLToken&) {
+  CHECK(RuntimeEnabledFeatures::HTMLProcessingInstructionEnabled());
+  AddText(source, class_processing_instruction_);
+  current_ = td_;
+}
+
 Element* HTMLViewSourceDocument::AddSpanWithClassName(
     const AtomicString& class_name) {
   if (current_ == tbody_) {
@@ -332,7 +343,7 @@ void HTMLViewSourceDocument::FinishLine() {
   current_ = tbody_;
 }
 
-void HTMLViewSourceDocument::AddText(const String& text,
+void HTMLViewSourceDocument::AddText(const StringView& text,
                                      const AtomicString& class_name,
                                      const Link* link) {
   if (text.empty())
@@ -340,32 +351,35 @@ void HTMLViewSourceDocument::AddText(const String& text,
 
   // Add in the content, splitting on linebreaks.
   // \r and \n both count as linebreaks, but \r\n only counts as one linebreak.
-  Vector<String> lines;
+  Vector<StringView> lines;
   {
     unsigned start_pos = 0;
     unsigned pos = 0;
     while (pos < text.length()) {
-      if (text[pos] == '\r') {
-        lines.push_back(text.Substring(start_pos, pos - start_pos));
+      // SAFETY: index checked in loop condition.
+      UChar ch = UNSAFE_BUFFERS(text[pos]);
+      if (ch == '\r') {
+        lines.push_back(text.substr(start_pos, pos - start_pos));
         pos++;
-        if (pos < text.length() && text[pos] == '\n') {
+        // SAFETY: index checked prior to use in &&-operation.
+        if (pos < text.length() && UNSAFE_BUFFERS(text[pos]) == '\n') {
           pos++;  // \r\n counts as a single line break.
         }
         start_pos = pos;
-      } else if (text[pos] == '\n') {
-        lines.push_back(text.Substring(start_pos, pos - start_pos));
+      } else if (ch == '\n') {
+        lines.push_back(text.substr(start_pos, pos - start_pos));
         pos++;
         start_pos = pos;
       } else {
         pos++;
       }
     }
-    lines.push_back(text.Substring(start_pos, text.length() - start_pos));
+    lines.push_back(text.substr(start_pos, text.length() - start_pos));
   }
 
   unsigned size = lines.size();
   for (unsigned i = 0; i < size; i++) {
-    String substring = lines[i];
+    const StringView& substring = lines[i];
     if (current_ == tbody_) {
       AddLine();
     }
@@ -375,24 +389,23 @@ void HTMLViewSourceDocument::AddText(const String& text,
       } else if (!class_name.empty()) {
         current_ = AddSpanWithClassName(class_name);
       }
-      current_->ParserAppendChild(Text::Create(*this, substring));
+      current_->ParserAppendChild(Text::Create(*this, substring.ToString()));
     }
     if (i < size - 1)
       FinishLine();
   }
 }
 
-int HTMLViewSourceDocument::AddRange(const String& source,
-                                     int start,
-                                     int end,
-                                     const AtomicString& class_name,
-                                     const Link* link) {
+wtf_size_t HTMLViewSourceDocument::AddRange(const String& source,
+                                            wtf_size_t start,
+                                            wtf_size_t end,
+                                            const AtomicString& class_name,
+                                            const Link* link) {
   DCHECK_LE(start, end);
   if (start == end)
     return start;
 
-  String text = source.Substring(start, end - start);
-  AddText(text, class_name, link);
+  AddText(source.subview(start, end - start), class_name, link);
   if (!class_name.empty() && current_ != tbody_)
     current_ = To<Element>(current_->parentNode());
   return end;
@@ -433,17 +446,14 @@ Element* HTMLViewSourceDocument::AddLink(const Link& link) {
 int HTMLViewSourceDocument::AddSrcset(const String& source,
                                       int start,
                                       int end) {
-  String srcset = source.Substring(start, end - start);
-  Vector<String> srclist;
-  srcset.Split(',', true, srclist);
+  StringView srcset = StringView(source).substr(start, end - start);
+  Vector<StringView> srclist = srcset.Split(',');
   unsigned size = srclist.size();
   Element* container = current_;
-  for (unsigned i = 0; i < size; i++) {
-    Vector<String> tmp;
-    srclist[i].Split(' ', tmp);
+  for (unsigned i = 0; i < size; ++i) {
+    Vector<StringView> tmp = srclist[i].SplitSkippingEmpty(' ');
     if (tmp.size() > 0) {
-      AtomicString url(tmp[0]);
-      Link link{false, url};
+      Link link{false, tmp[0].ToAtomicString()};
       AddText(srclist[i], class_attribute_value_, &link);
       current_ = container;
       if (i + 1 < size) {

@@ -57,6 +57,7 @@ class LayoutSVGContainer : public LayoutSVGModelObject {
   void Paint(const PaintInfo&) const override;
   void StyleDidChange(StyleDifference,
                       const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
                       const StyleChangeContext&) override;
   void SetNeedsTransformUpdate() override;
   bool IsObjectBoundingBoxValid() const {
@@ -66,6 +67,13 @@ class LayoutSVGContainer : public LayoutSVGModelObject {
 
   bool HasNonIsolatedBlendingDescendants() const final;
 
+  // Whether this container itself (excluding descendants) depends on the
+  // viewport dimensions. Computed during UpdateSVGLayout().
+  bool SelfHasViewportDependence() const {
+    NOT_DESTROYED();
+    return self_has_viewport_dependence_;
+  }
+
   const char* GetName() const override {
     NOT_DESTROYED();
     return "LayoutSVGContainer";
@@ -74,6 +82,11 @@ class LayoutSVGContainer : public LayoutSVGModelObject {
   gfx::RectF ObjectBoundingBox() const final {
     NOT_DESTROYED();
     return content_.ObjectBoundingBox();
+  }
+
+  gfx::RectF ComputeContentVisualOverflowRectIncludingFilters() const {
+    NOT_DESTROYED();
+    return content_.ComputeVisualOverflowRectIncludingFilters();
   }
 
  protected:
@@ -137,10 +150,18 @@ class LayoutSVGContainer : public LayoutSVGModelObject {
 
  private:
   SVGContentContainer content_;
-  bool needs_transform_update_ : 1;
-  bool transform_uses_reference_box_ : 1;
-  mutable bool has_non_isolated_blending_descendants_ : 1;
-  mutable bool has_non_isolated_blending_descendants_dirty_ : 1;
+  // True if the local transform of this object is not up-to-date.
+  bool needs_transform_update_ : 1 = true;
+  // The transform applied to the object depends on the reference box (i.e
+  // translate(50%, 50%) or similar).
+  bool transform_uses_reference_box_ : 1 = false;
+  // True if any descendants that are not isolated uses a non-default
+  // blend-mode (not source-over/"normal").
+  mutable bool has_non_isolated_blending_descendants_ : 1 = false;
+  // True if the above flag is not up-to-date.
+  mutable bool has_non_isolated_blending_descendants_dirty_ : 1 = false;
+  // True if this object depends on the size of the viewport.
+  bool self_has_viewport_dependence_ : 1 = false;
 };
 
 template <>

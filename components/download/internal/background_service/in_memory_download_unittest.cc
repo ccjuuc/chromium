@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/byte_size.h"
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
@@ -182,9 +183,7 @@ class InMemoryDownloadTest : public testing::Test {
     EXPECT_EQ(storage::BlobReader::Status::DONE, status);
     EXPECT_EQ(bytes_read, static_cast<int>(expected.size()));
     EXPECT_EQ(async_bytes_read, 0);
-    for (size_t i = 0; i < expected.size(); i++) {
-      UNSAFE_TODO(EXPECT_EQ(expected[i], buffer->data()[i]));
-    }
+    EXPECT_EQ(expected, base::as_chars(buffer->first(bytes_read)));
   }
 
   // IO thread used by network and blob IO tasks.
@@ -237,7 +236,7 @@ TEST_F(InMemoryDownloadTest, RedirectResponseHeaders) {
 
   // The size must match for download as stream from SimpleUrlLoader.
   network::URLLoaderCompletionStatus status;
-  status.decoded_body_length = std::size(kTestDownloadData) - 1;
+  status.decoded_body_length = base::ByteSize(std::size(kTestDownloadData) - 1);
 
   url_loader_factory()->AddResponse(request_params.url, response_head.Clone(),
                                     kTestDownloadData, status,

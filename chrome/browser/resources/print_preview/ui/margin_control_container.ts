@@ -137,8 +137,7 @@ export class PrintPreviewMarginControlContainerElement extends
 
   private computeAvailable_(): boolean {
     return this.previewLoaded &&
-        ((this.getSettingValue('margins') as MarginsType) ===
-         MarginsType.CUSTOM) &&
+        (this.getSettingValue('margins') === MarginsType.CUSTOM) &&
         !!this.pageSize;
   }
 
@@ -354,9 +353,7 @@ export class PrintPreviewMarginControlContainerElement extends
           position.y);
     }
 
-    this.dispatchEvent(new CustomEvent(
-        'text-focus-position',
-        {bubbles: true, composed: true, detail: position}));
+    this.fire('text-focus-position', position);
   }
 
   /**
@@ -428,7 +425,7 @@ export class PrintPreviewMarginControlContainerElement extends
   /**
    * @param e Fired when pointerdown occurs on a margin control.
    */
-  protected onPointerDown_(e: PointerEvent) {
+  protected onPointerdown_(e: PointerEvent) {
     const control = e.target as PrintPreviewMarginControlElement;
     if (!control.shouldDrag(e)) {
       return;
@@ -454,9 +451,7 @@ export class PrintPreviewMarginControlContainerElement extends
    * @param dragChanged
    */
   private fireDragChanged_(dragChanged: boolean) {
-    this.dispatchEvent(new CustomEvent(
-        'margin-drag-changed',
-        {bubbles: true, composed: true, detail: dragChanged}));
+    this.fire('margin-drag-changed', dragChanged);
   }
 
   /**

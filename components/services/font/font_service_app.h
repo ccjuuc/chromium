@@ -43,15 +43,14 @@ class FontServiceApp : public mojom::FontService {
   void FontRenderStyleForStrike(
       const std::string& family,
       uint32_t size,
-      bool italic,
-      bool bold,
+      bool is_bold,
+      bool is_italic,
       float device_scale_factor,
       FontRenderStyleForStrikeCallback callback) override;
   void MatchFontByPostscriptNameOrFullFontName(
       const std::string& family,
       MatchFontByPostscriptNameOrFullFontNameCallback callback) override;
 #if BUILDFLAG(ENABLE_PDF)
-  void ListFamilies(ListFamiliesCallback callback) override;
   void MatchFontWithFallback(const std::string& family,
                              bool is_bold,
                              bool is_italic,

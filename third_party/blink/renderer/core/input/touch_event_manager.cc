@@ -4,7 +4,6 @@
 
 #include "third_party/blink/renderer/core/input/touch_event_manager.h"
 
-#include <algorithm>
 #include <array>
 #include <memory>
 
@@ -12,6 +11,7 @@
 #include "third_party/blink/public/common/input/web_touch_event.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/flat_tree_traversal.h"
+#include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/core/events/touch_event.h"
 #include "third_party/blink/renderer/core/frame/event_handler_registry.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -601,9 +601,9 @@ void TouchEventManager::HandleTouchPoint(
     // If the active touch document has no frame or view, it's probably being
     // destroyed so we can't dispatch events.
     // Update the points so they get removed in flush when they are released.
-    if (touch_attribute_map_.Contains(event.id)) {
-      TouchPointAttributes* attributes = touch_attribute_map_.at(event.id);
-      attributes->event_ = event;
+    const auto it = touch_attribute_map_.find(event.id);
+    if (it != touch_attribute_map_.end()) {
+      it->value->event_ = event;
     }
     return;
   }
@@ -612,12 +612,14 @@ void TouchEventManager::HandleTouchPoint(
   // would have never added them to |touch_attribute_map_| or hit-tested
   // them. For those just keep them in the map with a null target. Later they
   // will be targeted at the |touch_sequence_document_|.
-  if (!touch_attribute_map_.Contains(event.id)) {
-    touch_attribute_map_.insert(
-        event.id, MakeGarbageCollected<TouchPointAttributes>(event));
+  const auto it = touch_attribute_map_.find(event.id);
+  TouchPointAttributes* attributes;
+  if (it != touch_attribute_map_.end()) {
+    attributes = it->value;
+  } else {
+    attributes = MakeGarbageCollected<TouchPointAttributes>(event);
+    touch_attribute_map_.insert(event.id, attributes);
   }
-
-  TouchPointAttributes* attributes = touch_attribute_map_.at(event.id);
   attributes->event_ = event;
   attributes->coalesced_events_ = coalesced_events;
   attributes->stale_ = false;
@@ -671,6 +673,16 @@ void TouchEventManager::AllTouchesReleasedCleanup() {
   // (https://crbug.com/345372).
   delayed_effective_touch_action_ = std::nullopt;
   should_enforce_vertical_scroll_ = false;
+}
+
+void TouchEventManager::HandlePseudoElementRemoval(PseudoElement& pseudo) {
+  Element* parent = pseudo.ParentOrShadowHostElement();
+  for (auto& entry : touch_attribute_map_) {
+    if (entry.value->target_ && entry.value->target_->IsPseudoElement() &&
+        pseudo.IsShadowIncludingInclusiveAncestorOf(*entry.value->target_)) {
+      entry.value->target_ = parent;
+    }
+  }
 }
 
 bool TouchEventManager::IsAnyTouchActive() const {

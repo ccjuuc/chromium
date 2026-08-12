@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
@@ -174,11 +173,6 @@ void ProfileAuthServersSyncBridge::OnReadAllMetadata(
   observer_->OnProfileAuthorizationServersInitialized();
 }
 
-std::unique_ptr<syncer::MetadataChangeList>
-ProfileAuthServersSyncBridge::CreateMetadataChangeList() {
-  return syncer::DataTypeStore::WriteBatch::CreateMetadataChangeList();
-}
-
 std::optional<syncer::ModelError>
 ProfileAuthServersSyncBridge::MergeFullSyncData(
     std::unique_ptr<syncer::MetadataChangeList> metadata_change_list,
@@ -188,7 +182,7 @@ ProfileAuthServersSyncBridge::MergeFullSyncData(
   std::set<std::string> unsynced_local_uris = servers_uris_;
   std::set<std::string> added_local_uris;
   std::unique_ptr<syncer::DataTypeStore::WriteBatch> batch =
-      store_->CreateWriteBatch();
+      store_->CreateWriteBatch(std::move(metadata_change_list));
 
   for (const std::unique_ptr<syncer::EntityChange>& change : entity_data) {
     const sync_pb::PrintersAuthorizationServerSpecifics& specifics =
@@ -207,11 +201,10 @@ ProfileAuthServersSyncBridge::MergeFullSyncData(
   // Send unmatched local URIs to the server.
   for (const std::string& uri : unsynced_local_uris) {
     change_processor()->Put(uri, ToEntityDataPtr(uri),
-                            metadata_change_list.get());
+                            batch->GetMetadataChangeList());
   }
 
   // Save new local URIs to the local store.
-  batch->TakeMetadataChangesFrom(std::move(metadata_change_list));
   store_->CommitWriteBatch(
       std::move(batch), base::BindOnce(&ProfileAuthServersSyncBridge::OnCommit,
                                        weak_ptr_factory_.GetWeakPtr()));
@@ -228,7 +221,7 @@ ProfileAuthServersSyncBridge::ApplyIncrementalSyncChanges(
   std::set<std::string> deleted_local_uris;
 
   std::unique_ptr<syncer::DataTypeStore::WriteBatch> batch =
-      store_->CreateWriteBatch();
+      store_->CreateWriteBatch(std::move(metadata_change_list));
   for (const std::unique_ptr<syncer::EntityChange>& change : entity_changes) {
     const std::string& uri = change->storage_key();
     if (change->type() == syncer::EntityChange::ACTION_DELETE) {
@@ -245,7 +238,6 @@ ProfileAuthServersSyncBridge::ApplyIncrementalSyncChanges(
       }
     }
   }
-  batch->TakeMetadataChangesFrom(std::move(metadata_change_list));
   store_->CommitWriteBatch(
       std::move(batch), base::BindOnce(&ProfileAuthServersSyncBridge::OnCommit,
                                        weak_ptr_factory_.GetWeakPtr()));
@@ -258,7 +250,7 @@ std::unique_ptr<syncer::DataBatch>
 ProfileAuthServersSyncBridge::GetDataForCommit(StorageKeyList storage_keys) {
   auto batch = std::make_unique<syncer::MutableDataBatch>();
   for (const std::string& key : storage_keys) {
-    if (base::Contains(servers_uris_, key)) {
+    if (servers_uris_.contains(key)) {
       batch->Put(key, ToEntityDataPtr(key));
     }
   }
@@ -283,6 +275,14 @@ std::string ProfileAuthServersSyncBridge::GetStorageKey(
     const syncer::EntityData& entity_data) const {
   DCHECK(entity_data.specifics.has_printers_authorization_server());
   return entity_data.specifics.printers_authorization_server().uri();
+}
+
+sync_pb::EntitySpecifics
+ProfileAuthServersSyncBridge::TrimAllSupportedFieldsFromRemoteSpecifics(
+    const sync_pb::EntitySpecifics& entity_specifics) const {
+  // Clears all fields by default to avoid the memory and I/O overhead of an
+  // additional copy of the data.
+  return sync_pb::EntitySpecifics();
 }
 
 bool ProfileAuthServersSyncBridge::IsEntityDataValid(

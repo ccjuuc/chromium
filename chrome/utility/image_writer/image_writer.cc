@@ -9,9 +9,11 @@
 #include <algorithm>
 #include <optional>
 
+#include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "base/containers/heap_array.h"
 #include "base/location.h"
+#include "base/logging.h"
 #include "base/memory/aligned_memory.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
@@ -142,6 +144,11 @@ void ImageWriter::WriteChunk() {
   if (*bytes_read == 0) {
     // End of file.
     device_file_.Flush();
+#if BUILDFLAG(IS_WIN)
+    for (HANDLE volume_handle : volume_handles_) {
+      ::FlushFileBuffers(volume_handle);
+    }
+#endif
     running_ = false;
     handler_->SendSucceeded();
     return;

@@ -12,6 +12,7 @@
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/gfx/color_palette.h"
 
+class BrowserWindowInterface;
 class TabContainer;
 class TabStripController;
 
@@ -27,9 +28,11 @@ class FakeTabSlotController : public TabSlotController {
     tab_container_ = tab_container;
   }
   void set_active_tab(Tab* tab) { active_tab_ = tab; }
+  void set_tab_count(int tab_count) { tab_count_ = tab_count; }
   void set_paint_throbber_to_layer(bool value) {
     paint_throbber_to_layer_ = value;
   }
+  void set_is_glass(bool value) { is_glass_ = value; }
 
   ui::ListSelectionModel GetSelectionModel() const override;
   Tab* tab_at(int index) const override;
@@ -52,12 +55,11 @@ class FakeTabSlotController : public TabSlotController {
   void ShowContextMenuForTab(Tab* tab,
                              const gfx::Point& p,
                              ui::mojom::MenuSourceType source_type) override {}
+  void TabKeyboardFocusChangedTo(const tabs::TabInterface* tab) override {}
+  int GetTabCount() const override;
   bool IsActiveTab(const TabSlotView* tab) const override;
   bool IsTabSelected(const TabSlotView* tab) const override;
-  bool IsTabPinned(const TabSlotView* tab) const override;
-  bool IsTabFirst(const TabSlotView* tab) const override;
-  bool IsFocusInTabs() const override;
-  bool ShouldCompactLeadingEdge() const override;
+  bool IsFocusInTabStrip() const override;
   void MaybeStartDrag(TabSlotView* source,
                       const ui::LocatedEvent& event,
                       ui::ListSelectionModel original_selection) override {}
@@ -69,16 +71,16 @@ class FakeTabSlotController : public TabSlotController {
   std::vector<Tab*> GetTabsInSplit(const Tab* tab) override;
   void OnMouseEventInTab(views::View* source,
                          const ui::MouseEvent& event) override {}
-  void UpdateHoverCard(Tab* tab, HoverCardUpdateType update_type) override {}
-  bool HoverCardIsShowingForTab(Tab* tab) override;
+  void OnGroupContentsChanged(const tab_groups::TabGroupId& group) override {}
+  void UpdateHoverCard(HoverCardAnchorTarget* anchor_target,
+                       HoverCardUpdateType update_type) override {}
+  bool HoverCardIsShowing(HoverCardAnchorTarget* anchor_target) override;
   void ShowHover(Tab* tab, TabStyle::ShowHoverStyle style) override {}
   void HideHover(Tab* tab, TabStyle::HideHoverStyle style) override {}
   int GetStrokeThickness() const override;
   bool CanPaintThrobberToLayer() const override;
-  bool HasVisibleBackgroundTabShapes() const override;
+  bool IsGlassFrame() const override;
   SkColor GetTabSeparatorColor() const override;
-  std::optional<int> GetCustomBackgroundId(
-      BrowserFrameActiveState active_state) const override;
   std::u16string GetAccessibleTabName(const Tab* tab) const override;
   float GetHoverOpacityForTab(float range_parameter) const override;
   float GetHoverOpacityForRadialHighlight() const override;
@@ -90,31 +92,23 @@ class FakeTabSlotController : public TabSlotController {
   tab_groups::TabGroupColorId GetGroupColorId(
       const tab_groups::TabGroupId& group) const override;
   bool IsGroupCollapsed(const tab_groups::TabGroupId& group) const override;
+  std::optional<tab_groups::TabGroupId> GetFocusedGroup() const override;
   SkColor GetPaintedGroupColor(
       const tab_groups::TabGroupColorId& color_id) const override;
   void ShiftGroupLeft(const tab_groups::TabGroupId& group) override {}
   void ShiftGroupRight(const tab_groups::TabGroupId& group) override {}
   Browser* GetBrowser() override;
-  bool IsFrameCondensed() const override;
+  BrowserWindowInterface* GetBrowserWindowInterface() override;
   TabGroup* GetTabGroup(const tab_groups::TabGroupId& group_id) const override;
-
-#if BUILDFLAG(IS_CHROMEOS)
-  bool IsLockedForOnTask() override;
-
-  // Sets OnTask locked for testing purposes. Only relevant for non-web browser
-  // scenarios.
-  void SetLockedForOnTask(bool locked) { on_task_locked_ = locked; }
-#endif
 
  private:
   raw_ptr<TabStripController> tab_strip_controller_;
   raw_ptr<TabContainer, DanglingUntriaged> tab_container_;
   ui::ListSelectionModel selection_model_;
   raw_ptr<Tab, DanglingUntriaged> active_tab_ = nullptr;
+  std::optional<int> tab_count_;
   bool paint_throbber_to_layer_ = true;
-#if BUILDFLAG(IS_CHROMEOS)
-  bool on_task_locked_ = false;
-#endif
+  bool is_glass_ = false;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TABS_FAKE_TAB_SLOT_CONTROLLER_H_

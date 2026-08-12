@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "base/containers/to_vector.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/memory/ptr_util.h"
@@ -19,12 +20,16 @@
 #include "chrome/browser/ash/input_method/input_method_configuration.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
+#include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
+#include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/ash/components/dbus/update_engine/fake_update_engine_client.h"
+#include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/prefs/pref_member.h"
 #include "components/sync/base/client_tag_hash.h"
@@ -39,6 +44,8 @@
 #include "components/user_manager/scoped_user_manager.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
+#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest-param-test.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -149,13 +156,25 @@ class PreferencesTest : public testing::Test {
   ~PreferencesTest() override = default;
 
   void SetUp() override {
+    fake_update_engine_client_ = UpdateEngineClient::InitializeFakeForTest();
+
+    TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(
+        test_url_loader_factory_.GetSafeWeakWrapper());
+
     profile_manager_ = std::make_unique<TestingProfileManager>(
         TestingBrowserProcess::GetGlobal());
     ASSERT_TRUE(profile_manager_->SetUp());
 
-    user_manager_ = new FakeChromeUserManager();
-    user_manager_enabler_ = std::make_unique<user_manager::ScopedUserManager>(
-        base::WrapUnique(user_manager_.get()));
+    user_manager_.Reset(std::make_unique<FakeChromeUserManager>());
+    user_session_manager_ = std::make_unique<ash::UserSessionManager>(
+        TestingBrowserProcess::GetGlobal()->local_state(),
+        TestingBrowserProcess::GetGlobal()
+            ->GetFeatures()
+            ->application_locale_storage(),
+        TestingBrowserProcess::GetGlobal()->shared_url_loader_factory(),
+        TestingBrowserProcess::GetGlobal()
+            ->platform_part()
+            ->browser_policy_connector_ash());
 
     const char test_user_email[] = "test_user@example.com";
     const AccountId test_account_id(AccountId::FromUserEmail(test_user_email));
@@ -163,17 +182,17 @@ class PreferencesTest : public testing::Test {
     user_manager_->LoginUser(test_account_id);
     user_manager_->SwitchActiveUser(test_account_id);
 
-    test_profile_ = profile_manager_->CreateTestingProfile(
-        chrome::kInitialProfile);
+    test_profile_ =
+        profile_manager_->CreateTestingProfile(chrome::kInitialProfile);
     pref_service_ = test_profile_->GetTestingPrefService();
 
-    previous_input_method_.Init(
-        prefs::kLanguagePreviousInputMethod, pref_service_);
+    previous_input_method_.Init(ash::prefs::kLanguagePreviousInputMethod,
+                                pref_service_);
     previous_input_method_.SetValue("KeyboardA");
-    current_input_method_.Init(
-        prefs::kLanguageCurrentInputMethod, pref_service_);
+    current_input_method_.Init(ash::prefs::kLanguageCurrentInputMethod,
+                               pref_service_);
     current_input_method_.SetValue("KeyboardB");
-    consumer_auto_update_toggle_.Init(::prefs::kConsumerAutoUpdateToggle,
+    consumer_auto_update_toggle_.Init(::ash::prefs::kConsumerAutoUpdateToggle,
                                       g_browser_process->local_state());
     consumer_auto_update_toggle_.SetValue(true);
 
@@ -181,21 +200,40 @@ class PreferencesTest : public testing::Test {
         &previous_input_method_, &current_input_method_);
     input_method::InitializeForTesting(mock_manager_);
 
-    fake_update_engine_client_ = UpdateEngineClient::InitializeFakeForTest();
-
-    prefs_ = std::make_unique<Preferences>(mock_manager_);
+    prefs_ = std::make_unique<Preferences>(
+        TestingBrowserProcess::GetGlobal()->local_state(),
+        TestingBrowserProcess::GetGlobal()
+            ->GetFeatures()
+            ->application_locale_storage(),
+        /*timezone_resolver_manager=*/nullptr, mock_manager_);
   }
 
   void TearDown() override {
     // `prefs_` accesses UpdateEngineClient in its destructor.
     prefs_.reset();
-    UpdateEngineClient::Shutdown();
 
+    user_session_manager_->Shutdown();
+
+    pref_service_ = nullptr;
+    test_profile_ = nullptr;
+    profile_manager_.reset();
+
+    mock_manager_ = nullptr;
     input_method::Shutdown();
+
     // UserSessionManager doesn't listen to profile destruction, so make sure
     // the default IME state isn't still cached in case test_profile_ is
     // given the same address in the next test.
-    UserSessionManager::GetInstance()->RemoveProfileForTesting(test_profile_);
+    user_session_manager_->RemoveProfileForTesting(test_profile_);
+
+    user_session_manager_.reset();
+    test_user_ = nullptr;
+    user_manager_.Reset();
+
+    TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(nullptr);
+
+    fake_update_engine_client_ = nullptr;
+    UpdateEngineClient::Shutdown();
   }
 
   void InitPreferences() {
@@ -204,22 +242,30 @@ class PreferencesTest : public testing::Test {
     prefs_->SetInputMethodListForTesting();
   }
 
+  // NOTE: InstallAttributes is required to construct BrowserPolicyConnectorAsh.
+  // CrosSettings is needed because otherwise TestingProfile automatically
+  // creates ScopedCrosSettingsTestHelper, which conflicts with
+  // ScopedStubInstallAttributes.
+  ScopedTestingCrosSettings scoped_testing_cros_settings_;
+  ScopedStubInstallAttributes scoped_stub_install_attributes_;
+
   content::BrowserTaskEnvironment task_environment_;
+  network::TestURLLoaderFactory test_url_loader_factory_;
+
   std::unique_ptr<TestingProfileManager> profile_manager_;
-  std::unique_ptr<user_manager::ScopedUserManager> user_manager_enabler_;
+  user_manager::TypedScopedUserManager<FakeChromeUserManager> user_manager_;
+  std::unique_ptr<ash::UserSessionManager> user_session_manager_;
   std::unique_ptr<Preferences> prefs_;
   StringPrefMember previous_input_method_;
   StringPrefMember current_input_method_;
   BooleanPrefMember consumer_auto_update_toggle_;
 
   // Not owned.
-  raw_ptr<FakeChromeUserManager> user_manager_;
-  raw_ptr<const user_manager::User> test_user_;
-  raw_ptr<TestingProfile> test_profile_;
-  raw_ptr<sync_preferences::TestingPrefServiceSyncable> pref_service_;
-  raw_ptr<input_method::MyMockInputMethodManager, DanglingUntriaged>
-      mock_manager_;
-  raw_ptr<FakeUpdateEngineClient, DanglingUntriaged> fake_update_engine_client_;
+  raw_ptr<const user_manager::User> test_user_ = nullptr;
+  raw_ptr<TestingProfile> test_profile_ = nullptr;
+  raw_ptr<sync_preferences::TestingPrefServiceSyncable> pref_service_ = nullptr;
+  raw_ptr<input_method::MyMockInputMethodManager> mock_manager_ = nullptr;
+  raw_ptr<FakeUpdateEngineClient> fake_update_engine_client_ = nullptr;
 };
 
 TEST_F(PreferencesTest, TestUpdatePrefOnBrowserScreenDetails) {
@@ -283,11 +329,11 @@ class InputMethodPreferencesTest : public PreferencesTest {
                               pref_service_);
     preferred_languages_syncable_.Init(
         language::prefs::kPreferredLanguagesSyncable, pref_service_);
-    preload_engines_.Init(prefs::kLanguagePreloadEngines, pref_service_);
-    preload_engines_syncable_.Init(prefs::kLanguagePreloadEnginesSyncable,
+    preload_engines_.Init(ash::prefs::kLanguagePreloadEngines, pref_service_);
+    preload_engines_syncable_.Init(ash::prefs::kLanguagePreloadEnginesSyncable,
                                    pref_service_);
-    enabled_imes_.Init(prefs::kLanguageEnabledImes, pref_service_);
-    enabled_imes_syncable_.Init(prefs::kLanguageEnabledImesSyncable,
+    enabled_imes_.Init(ash::prefs::kLanguageEnabledImes, pref_service_);
+    enabled_imes_syncable_.Init(ash::prefs::kLanguageEnabledImesSyncable,
                                 pref_service_);
 
     // Initialize component and 3rd-party input method extensions.
@@ -719,7 +765,7 @@ TEST_F(InputMethodPreferencesTest, MergeAfterSyncing) {
 
 TEST_F(InputMethodPreferencesTest, ConfiguredByPolicyPrefs) {
   const auto input_methods =
-      base::Value::List().Append("xkb:us::eng").Append("xkb:jp::jpn");
+      base::ListValue().Append("xkb:us::eng").Append("xkb:jp::jpn");
 
   InitPreferences();
   // No restriction on allowed input methods, one default is enabled.

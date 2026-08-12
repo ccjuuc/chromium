@@ -15,7 +15,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static org.mockito.MockitoAnnotations.openMocks;
 
 import android.content.ComponentName;
 import android.content.Context;
@@ -27,12 +26,16 @@ import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodManager;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.components.stylus_handwriting.test_support.ShadowGlobalSettings;
 import org.chromium.components.stylus_handwriting.test_support.ShadowSecureSettings;
@@ -48,6 +51,8 @@ import java.util.List;
         sdk = Build.VERSION_CODES.TIRAMISU,
         shadows = {ShadowGlobalSettings.class, ShadowSecureSettings.class})
 public class AndroidStylusWritingHandlerTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+
     @Mock private Context mContext;
     @Mock private InputMethodManager mInputMethodManager;
     @Mock private InputMethodInfo mInputMethodInfo;
@@ -56,7 +61,6 @@ public class AndroidStylusWritingHandlerTest {
 
     @Before
     public void setUp() {
-        openMocks(this);
         when(mContext.getSystemService(InputMethodManager.class)).thenReturn(mInputMethodManager);
         when(mInputMethodManager.getInputMethodList()).thenReturn(List.of(mInputMethodInfo));
         when(mInputMethodInfo.getComponent())
@@ -76,6 +80,9 @@ public class AndroidStylusWritingHandlerTest {
     public void handlerIsDisabled_withFeatureDisabled() {
         when(mInputMethodInfo.supportsStylusHandwriting()).thenReturn(true);
         ShadowGlobalSettings.setHandwritingEnabled(false);
+        StylusWritingSettingsState.getInstance().updateAndNotify();
+        RobolectricUtil.runAllBackgroundAndUi();
+
         assertFalse(AndroidStylusWritingHandler.isEnabled(mContext));
     }
 
@@ -85,6 +92,9 @@ public class AndroidStylusWritingHandlerTest {
         when(mInputMethodInfo.supportsStylusHandwriting()).thenReturn(true);
         ShadowGlobalSettings.setHandwritingEnabled(false);
         ShadowSecureSettings.setHandwritingEnabled(true);
+        StylusWritingSettingsState.getInstance().updateAndNotify();
+        RobolectricUtil.runAllBackgroundAndUi();
+
         assertTrue(AndroidStylusWritingHandler.isEnabled(mContext));
     }
 
@@ -92,6 +102,9 @@ public class AndroidStylusWritingHandlerTest {
     public void handlerIsDisabled_noKeyboard() {
         ShadowGlobalSettings.setHandwritingEnabled(true);
         when(mInputMethodManager.getInputMethodList()).thenReturn(List.of());
+        StylusWritingSettingsState.getInstance().updateAndNotify();
+        RobolectricUtil.runAllBackgroundAndUi();
+
         assertFalse(AndroidStylusWritingHandler.isEnabled(mContext));
     }
 
@@ -99,6 +112,9 @@ public class AndroidStylusWritingHandlerTest {
     public void handlerIsDisabled_noKeyboardSupport() {
         when(mInputMethodInfo.supportsStylusHandwriting()).thenReturn(false);
         ShadowGlobalSettings.setHandwritingEnabled(true);
+        StylusWritingSettingsState.getInstance().updateAndNotify();
+        RobolectricUtil.runAllBackgroundAndUi();
+
         assertFalse(AndroidStylusWritingHandler.isEnabled(mContext));
     }
 
@@ -106,6 +122,9 @@ public class AndroidStylusWritingHandlerTest {
     public void handlerIsEnabled_withFeatureEnabledAndKeyboardSupport() {
         when(mInputMethodInfo.supportsStylusHandwriting()).thenReturn(true);
         ShadowGlobalSettings.setHandwritingEnabled(true);
+        StylusWritingSettingsState.getInstance().updateAndNotify();
+        RobolectricUtil.runAllBackgroundAndUi();
+
         assertTrue(AndroidStylusWritingHandler.isEnabled(mContext));
     }
 

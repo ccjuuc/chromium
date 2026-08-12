@@ -64,7 +64,7 @@ class FakeNetworkContext : public network::TestNetworkContext {
         net::IPEndPoint(net::IPAddress::IPv4Localhost(), /*port=*/1234)};
     auto it = pending_requests_.find(net::HostPortPair::FromURL(url));
     // Make sure a request has actually been made.
-    EXPECT_TRUE(it != pending_requests_.end());
+    ASSERT_TRUE(it != pending_requests_.end());
     it->second->OnComplete(net::OK, net::AddressList(kFakeIPAddress),
                            /*alternative_endpoints=*/{});
     pending_requests_.erase(it);
@@ -77,7 +77,7 @@ class FakeNetworkContext : public network::TestNetworkContext {
   void MakeDNSResolveError(const net::HostPortPair& host, net::Error err) {
     auto it = pending_requests_.find(host);
     // Make sure a request has actually been made.
-    EXPECT_TRUE(it != pending_requests_.end());
+    ASSERT_TRUE(it != pending_requests_.end());
 
     it->second->OnComplete(err, /*resolved_addresses=*/{},
                            /*alternative_endpoints=*/{});
@@ -249,7 +249,7 @@ TEST_F(PrefetchCanaryCheckerTest, CacheHit) {
 // TODO(crbug.com/40828450): Re-enable; flaky.
 TEST_F(PrefetchCanaryCheckerTest, DISABLED_NetworkConnectionShardsCache) {
   network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
-      network::mojom::ConnectionType::CONNECTION_3G);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_3G);
   RunUntilIdle();
 
   GURL probe_url("https://probe-url.com");
@@ -265,14 +265,14 @@ TEST_F(PrefetchCanaryCheckerTest, DISABLED_NetworkConnectionShardsCache) {
 
   // Changing the network to 4G should reuse the cache.
   network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
-      network::mojom::ConnectionType::CONNECTION_4G);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_4G);
   RunUntilIdle();
   result = checker->CanaryCheckSuccessful();
   EXPECT_TRUE(result.has_value());
 
   // Changing the network to wifi should result in a cache miss and a new check.
   network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
-      network::mojom::ConnectionType::CONNECTION_WIFI);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_WIFI);
   RunUntilIdle();
   result = checker->CanaryCheckSuccessful();
   EXPECT_EQ(result, std::nullopt);

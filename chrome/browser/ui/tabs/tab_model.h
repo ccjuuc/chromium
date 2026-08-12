@@ -12,9 +12,8 @@
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "components/split_tabs/split_tab_id.h"
 #include "components/tab_groups/tab_group_id.h"
-#include "components/tabs/public/split_tab_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value_forward.h"
@@ -24,6 +23,7 @@ namespace content {
 class WebContents;
 }
 
+class Profile;
 class TabStripModel;
 namespace tabs {
 
@@ -31,7 +31,6 @@ class TabCollection;
 class TabFeatures;
 
 class TabModel final : public TabInterface,
-                       public TabStripModelObserver,
                        public content::WebContentsObserver {
  public:
   // Conceptually, tabs should always be a part of a normal window. There are
@@ -52,13 +51,13 @@ class TabModel final : public TabInterface,
   void OnRemovedFromModel();
 
   TabStripModel* owning_model() const { return owning_model_; }
-  tabs::TabInterface* opener() const { return opener_; }
+  tabs::TabInterface* opener() const;
   bool reset_opener_on_active_tab_change() const {
     return reset_opener_on_active_tab_change_;
   }
   std::optional<tab_groups::TabGroupId> group() const { return group_; }
 
-  void set_opener(tabs::TabInterface* opener) { opener_ = opener; }
+  void set_opener(tabs::TabInterface* opener);
   void set_reset_opener_on_active_tab_change(
       bool reset_opener_on_active_tab_change) {
     reset_opener_on_active_tab_change_ = reset_opener_on_active_tab_change;
@@ -67,7 +66,7 @@ class TabModel final : public TabInterface,
   void SetPinned(bool pinned);
   void SetGroup(std::optional<tab_groups::TabGroupId> group);
 
-  void set_blocked(bool blocked) { blocked_ = blocked; }
+  void SetBlocked(bool blocked);
   void set_split(std::optional<split_tabs::SplitTabId> split) {
     split_ = split;
   }
@@ -122,9 +121,18 @@ class TabModel final : public TabInterface,
   // Called by TabStripModel when a tab has been inserted into a tab strip.
   void DidInsert(base::PassKey<TabStripModel>);
 
+  // Called by TabStripModel when this tab has become the active tab
+  // (i.e. entered the foreground).
+  void DidEnterForeground(base::PassKey<TabStripModel>);
+
   // TabInterface overrides:
   base::WeakPtr<TabInterface> GetWeakPtr() override;
   content::WebContents* GetContents() const override;
+  void LoadIfNeeded() override;
+  std::u16string GetTitle() const override;
+  GURL GetURL() const override;
+  base::Time GetLastActiveTime() const override;
+  Profile* GetProfile() const override;
   base::CallbackListSubscription RegisterWillDiscardContents(
       TabInterface::WillDiscardContentsCallback callback) override;
   bool IsActivated() const override;
@@ -147,6 +155,8 @@ class TabModel final : public TabInterface,
       TabInterface::PinnedStateChangedCallback callback) override;
   base::CallbackListSubscription RegisterGroupChanged(
       TabInterface::GroupChangedCallback callback) override;
+  base::CallbackListSubscription RegisterBlockedStateChanged(
+      TabInterface::BlockedStateChangedCallback callback) override;
 
   bool CanShowModalUI() const override;
   std::unique_ptr<ScopedTabModalUI> ShowModalUI() override;
@@ -189,12 +199,6 @@ class TabModel final : public TabInterface,
   };
 
  private:
-  // Overridden from TabStripModelObserver:
-  void OnTabStripModelChanged(
-      TabStripModel* tab_strip_model,
-      const TabStripModelChange& change,
-      const TabStripSelectionChange& selection) override;
-
   // content::WebContentsObserver:
   void OnVisibilityChanged(content::Visibility visibility) override;
 
@@ -231,15 +235,16 @@ class TabModel final : public TabInterface,
   raw_ptr<TabStripModel> owning_model_ = nullptr;
   raw_ptr<TabStripModel> soon_to_be_owning_model_ = nullptr;
   bool will_be_detaching_ = false;
-  raw_ptr<tabs::TabInterface> opener_ = nullptr;
+  tabs::TabHandle opener_handle_;
   bool reset_opener_on_active_tab_change_ = false;
   bool pinned_ = false;
   bool blocked_ = false;
   bool visible_ = false;
-  // TODO(crbug.com/392951786): Remove this property, and instead determine a
-  // tab's split status based on whether it is part of a split tab collection.
-  std::optional<split_tabs::SplitTabId> split_ = std::nullopt;
-  std::optional<tab_groups::TabGroupId> group_ = std::nullopt;
+  // In the future, it might be worth removing this property, and instead
+  // determine a tab's split status based on whether it is part of a split tab
+  // collection.
+  std::optional<split_tabs::SplitTabId> split_;
+  std::optional<tab_groups::TabGroupId> group_;
   raw_ptr<TabCollection> parent_collection_ = nullptr;
 
   using WillDiscardContentsCallbackList = base::RepeatingCallbackList<
@@ -278,6 +283,10 @@ class TabModel final : public TabInterface,
   using GroupChangedCallbackList = base::RepeatingCallbackList<
       void(TabInterface*, std::optional<tab_groups::TabGroupId> new_group)>;
   GroupChangedCallbackList group_changed_callback_list_;
+
+  using BlockedStateChangedCallbackList =
+      base::RepeatingCallbackList<void(TabInterface*, bool new_blocked_state)>;
+  BlockedStateChangedCallbackList blocked_state_changed_callback_list_;
 
   using TabInterfaceCallbackList =
       base::RepeatingCallbackList<void(TabInterface*)>;

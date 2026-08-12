@@ -90,7 +90,8 @@ class LensSearchController {
   // of `invocation_source` will be recorded in the relevant metrics. Virtual
   // for testing.
   virtual void OpenLensOverlay(
-      lens::LensOverlayInvocationSource invocation_source);
+      lens::LensOverlayInvocationSource invocation_source,
+      bool should_show_csb = true);
 
   // Sets a region to search after the overlay loads, then calls ShowUI().
   // All units are in device pixels. region_bitmap contains the high definition
@@ -131,12 +132,6 @@ class LensSearchController {
       AutocompleteMatchType::Type match_type,
       bool is_zero_prefix_suggestion);
 
-  // Issues a zero state request for Lens to fulfill. Starts contextualization
-  // flow and once contextualization is complete, issues a Lens region request
-  // with the entire viewport selected as the region. Does not open the overlay
-  // UI.
-  void IssueZeroStateRequest(
-      lens::LensOverlayInvocationSource invocation_source);
 
   // If `suppress_contextualization` is true, queries will not be performed with
   // contextualization for the duration of the session. However,
@@ -158,6 +153,8 @@ class LensSearchController {
   // Step (1) is asynchronous.
   virtual void CloseLensAsync(
       lens::LensOverlayDismissalSource dismissal_source);
+  virtual void CloseLensAsync(lens::LensOverlayDismissalSource dismissal_source,
+                              bool side_panel_already_closing);
 
   // Instantly closes all Lens components currently opened.This may not look
   // nice if the overlay is visible when this is called.
@@ -175,7 +172,7 @@ class LensSearchController {
   void MaybeLaunchSurvey();
 
   // Returns true if Lens is currently active on this tab.
-  bool IsActive();
+  virtual bool IsActive();
 
   // Returns true if either the overlay or the side panel is showing.
   bool IsShowingUI();
@@ -226,6 +223,9 @@ class LensSearchController {
   // Whether the user has selected a region on the overlay.
   bool HasRegionSelection();
 
+  // Returns the profile for the tab.
+  Profile* GetProfile();
+
   // Returns the weak pointer to this class.
   base::WeakPtr<LensSearchController> GetWeakPtr();
 
@@ -237,7 +237,7 @@ class LensSearchController {
   virtual lens::LensOverlayQueryController* lens_overlay_query_controller();
 
   // Returns the LensQueryFlowRouter.
-  lens::LensQueryFlowRouter* query_router();
+  virtual lens::LensQueryFlowRouter* query_router();
 
   // Returns the LensOverlaySidePanelCoordinator.
   lens::LensOverlaySidePanelCoordinator* lens_overlay_side_panel_coordinator();
@@ -267,6 +267,12 @@ class LensSearchController {
   // Returns the current invocation source.
   virtual std::optional<lens::LensOverlayInvocationSource> invocation_source();
 
+  // Sets the current invocation source and notifies the UI.
+  void SetInvocationSource(lens::LensOverlayInvocationSource invocation_source);
+
+  // Returns whether the contextual search box should be shown on overlay open.
+  bool should_show_csb() { return should_show_csb_; }
+
   lens::LensPermissionBubbleController*
   get_lens_permission_bubble_controller_for_testing() {
     return lens_permission_bubble_controller_.get();
@@ -281,10 +287,7 @@ class LensSearchController {
   virtual std::unique_ptr<LensOverlayController> CreateLensOverlayController(
       tabs::TabInterface* tab,
       LensSearchController* lens_search_controller,
-      variations::VariationsClient* variations_client,
-      signin::IdentityManager* identity_manager,
       PrefService* pref_service,
-      syncer::SyncService* sync_service,
       ThemeService* theme_service);
 
   // Override these methods to stub out network requests for testing.
@@ -301,6 +304,9 @@ class LensSearchController {
       lens::LensOverlayInvocationSource invocation_source,
       bool use_dark_mode,
       lens::LensOverlayGen204Controller* gen204_controller);
+
+  // Override these methods to be able to track calls made to the query flow router.
+  virtual std::unique_ptr<lens::LensQueryFlowRouter> CreateLensQueryFlowRouter();
 
   // Override these methods to be able to track calls made to the side panel
   // coordinator.
@@ -397,6 +403,11 @@ class LensSearchController {
       lens::LensOverlayInvocationSource invocation_source,
       base::RepeatingClosure permission_granted_callback);
 
+  // Returns true if the session should be routed to the contextual tasks side
+  // panel.
+  bool ShouldEnableContextualTasksRouting(
+      lens::LensOverlayInvocationSource invocation_source);
+
   // Callback used by the query controller to notify the search controller of
   // the response to the initial image upload request.
   void HandleStartQueryResponse(
@@ -433,11 +444,6 @@ class LensSearchController {
   void WillDetach(tabs::TabInterface* tab,
                   tabs::TabInterface::DetachReason reason);
 
-  // Callback to run when the page context has been updated as part of a zero
-  // state request and the region search request should now be issued.
-  void OnPageContextUpdatedForZeroStateRequest(
-      lens::LensOverlayInvocationSource invocation_source,
-      base::Time query_start_time);
 
   // Whether the LensSearchController has been initialized. Meaning, all the
   // dependencies have been initialized and the controller is ready to use.
@@ -463,6 +469,9 @@ class LensSearchController {
 
   // Whether the handshake with the Lens backend is complete.
   bool is_handshake_complete_ = false;
+
+  // Whether the Contextual Search Box should be shown when the overlay opens.
+  bool should_show_csb_ = true;
 
   // The invocation source of the current Lens session.
   std::optional<lens::LensOverlayInvocationSource> invocation_source_;

@@ -31,6 +31,10 @@
 #include "gin/v8_platform_thread_isolated_allocator.h"
 #include "partition_alloc/buildflags.h"
 
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC) && PA_BUILDFLAG(HAS_64_BIT_POINTERS)
+#include "partition_alloc/partition_address_space.h"
+#endif
+
 namespace gin {
 
 namespace {
@@ -135,7 +139,8 @@ class ScopedBoostablePriorityImpl : public v8::ScopedBoostablePriority {
 
   bool BoostPriority() override {
     return scoped_boostable_priority_.BoostPriority(
-        base::PlatformThread::GetCurrentThreadType());
+        std::min(base::PlatformThread::GetCurrentThreadType(),
+                 base::ThreadType::kAudioProcessing));
   }
 
   void Reset() override { scoped_boostable_priority_.Reset(); }
@@ -228,6 +233,14 @@ void V8Platform::OnCriticalMemoryPressure() {
   partition_alloc::ReleaseReservation();
 #endif
 }
+
+size_t V8Platform::GetZeroSegmentSize() {
+#if PA_BUILDFLAG(HAS_64_BIT_POINTERS)
+  return partition_alloc::internal::PartitionAddressSpace::GetZeroSegmentSize();
+#else
+  return 0;
+#endif
+}
 #endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC)
 
 std::shared_ptr<v8::TaskRunner> V8Platform::GetForegroundTaskRunner(
@@ -259,13 +272,7 @@ int V8Platform::NumberOfWorkerThreads() {
   // V8Platform assumes the number of workers used by the scheduler for user
   // blocking tasks is an upper bound.
   const size_t num_foreground_workers =
-      base::ThreadPoolInstance::Get()
-          ->GetMaxConcurrentNonBlockedTasksWithTraitsDeprecated(
-              {base::TaskPriority::USER_BLOCKING});
-  DCHECK_GE(num_foreground_workers,
-            base::ThreadPoolInstance::Get()
-                ->GetMaxConcurrentNonBlockedTasksWithTraitsDeprecated(
-                    {base::TaskPriority::USER_VISIBLE}));
+      base::ThreadPoolInstance::Get()->GetMaxConcurrentForegroundTasks();
   return std::max(1, static_cast<int>(num_foreground_workers));
 }
 
@@ -351,12 +358,6 @@ v8::TracingController* V8Platform::GetTracingController() {
 }
 
 v8::Platform::StackTracePrinter V8Platform::GetStackTracePrinter() {
-#if BUILDFLAG(IS_WIN)
-  // Sandboxed processes in release builds cannot symbolize stacks.
-  if (!base::debug::InProcessStackDumpingEnabled()) {
-    return nullptr;
-  }
-#endif
   return PrintStackTrace;
 }
 

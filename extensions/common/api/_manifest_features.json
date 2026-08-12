@@ -90,23 +90,7 @@
     // APIs.
     "channel": "stable",
     "extension_types": ["platform_app"],
-    "platforms": ["chromeos", "win", "mac"]
-  }, {
-    "channel": "stable",
-    "extension_types": ["platform_app"],
-    "platforms": ["linux"],
-    "allowlist": [
-      "9E287A8257E58EFB13E89C86A4B75A3AC4B058D8",  // unit_tests browser_tests
-      "1C93BD3CF875F4A73C0B2A163BB8FBDA8B8B3D80",  // http://crbug.com/396117
-      "A3BC37E2148AC4E99BE4B16AF9D42DD1E592BBBE",  // http://crbug.com/396117
-      "E703483CEF33DEC18B4B6DD84B5C776FB9182BDB",  // http://crbug.com/396117
-      "307E96539209F95A1A8740C713E6998A73657D96",  // http://crbug.com/396117
-      "4F25792AF1AA7483936DE29C07806F203C7170A0",  // http://crbug.com/407693
-      "BD8781D757D830FC2E85470A1B6E8A718B7EE0D9",  // http://crbug.com/407693
-      "4AC2B6C63C6480D150DFDA13E4A5956EB1D0DDBB",  // http://crbug.com/407693
-      "81986D4F846CEDDDB962643FA501D1780DD441BB",  // http://crbug.com/407693
-      "A9A9FC0228ADF541F0334F22BEFB8F9C245B21D7"   // http://crbug.com/839189
-    ]
+    "platforms": ["chromeos"]
   }, {
     "channel": "stable",
     "extension_types": ["extension"],
@@ -115,6 +99,11 @@
       "75C7F4B720314B6CB1B5817CD86089DB95CD2461"  // http://crbug.com/899052
     ]
   }],
+  "browser_action": {
+    "channel": "stable",
+    "extension_types": ["extension"],
+    "max_manifest_version": 2
+  },
   "chrome_url_overrides": {
     "channel": "stable",
     "extension_types": ["extension", "legacy_packaged_app"]
@@ -148,6 +137,25 @@
     "channel": "canary",
     "extension_types": ["extension"]
   }],
+  "content_scripts": [
+    {
+      "channel": "stable",
+      "extension_types": ["extension", "legacy_packaged_app"]
+    },
+    {
+      // The URLs that can be matched with content scripts added by login screen
+      // extensions are restricted to the Imprivata IdP.
+      "channel": "stable",
+      "dependencies": ["behavior:imprivata_login_screen_extension"],
+      "extension_types": ["login_screen_extension"]
+    }
+  ],
+  "converted_from_user_script": {
+    "channel": "stable",
+    "extension_types": [
+      "extension", "legacy_packaged_app", "hosted_app"
+    ]
+  },
   "content_security_policy": {
     "channel": "stable",
     // Platform apps have a restricted content security policy that cannot be
@@ -189,6 +197,42 @@
     "channel": "stable",
     "extension_types": "all"
   },
+  "display_in_launcher": [
+    {
+      "channel": "stable",
+      "extension_types": ["legacy_packaged_app", "platform_app", "hosted_app"],
+      "location": "component"
+    },
+    {
+      "channel": "stable",
+      "extension_types": ["legacy_packaged_app", "platform_app"],
+      "allowlist": [
+        "64291898C201DAF15B090EC4B9EC270BEB6BE6FF",
+        "07BD6A765FFC289FF755D7CAB2893A40EC337FEC",  // http://crbug.com/41154924
+        "896B85CC7E913E11C34892C1425A093C0701D386",  // http://crbug.com/41154924
+        "11A01C82EF355E674E4F9728A801F5C3CB40D83F",  // http://crbug.com/41154924
+        "F410C88469990EE7947450311D24B8AF2ADB2595"   // http://crbug.com/41154924
+      ]
+    }
+  ],
+  "display_in_new_tab_page": [
+    {
+      "channel": "stable",
+      "extension_types": ["legacy_packaged_app", "platform_app", "hosted_app"],
+      "location": "component"
+    },
+    {
+      "channel": "stable",
+      "extension_types": ["legacy_packaged_app", "platform_app"],
+      "allowlist": [
+        "64291898C201DAF15B090EC4B9EC270BEB6BE6FF",
+        "07BD6A765FFC289FF755D7CAB2893A40EC337FEC",  // http://crbug.com/41154924
+        "896B85CC7E913E11C34892C1425A093C0701D386",  // http://crbug.com/41154924
+        "11A01C82EF355E674E4F9728A801F5C3CB40D83F",  // http://crbug.com/41154924
+        "F410C88469990EE7947450311D24B8AF2ADB2595"   // http://crbug.com/41154924
+      ]
+    }
+  ],
   "event_rules": {
     "channel": "stable",
     // "event_rules" does not grant any capabilities, it's just
@@ -343,6 +387,11 @@
       "platform_app"
     ]
   },
+  "message_serialization": {
+    "channel": "stable",
+    "extension_types": ["extension"],
+    "min_manifest_version": 3
+  },
   "manifest_version": {
     "channel": "stable",
     "extension_types": "all"
@@ -359,7 +408,7 @@
       "CBCC42ABED43A4B58FE3810E62AFFA010EB0349F"   // PDF
     ]
   },
-  "mime_types_handler": {
+  "mime_types_handler": [{
     "channel": "stable",
     "extension_types": [ "extension", "legacy_packaged_app", "platform_app" ],
     "allowlist": [
@@ -369,14 +418,14 @@
       "3727DD3E564B6055387425027AD74C58784ACC15",  // QuickOffice Editor
       "CBCC42ABED43A4B58FE3810E62AFFA010EB0349F"   // PDF
     ]
-  },
-  "nacl_modules": {
+  }, {
+    "channel": "dev",
+    "extension_types": ["extension"]
+  }, {
     "channel": "stable",
-    "extension_types": [
-      "extension", "legacy_packaged_app", "hosted_app", "platform_app"
-    ],
-    "max_manifest_version": 2
-  },
+    "extension_types": ["extension"],
+    "feature_flag": "ApiMimeHandler"
+  }],
   "name": {
     "channel": "stable",
     "extension_types": "all"
@@ -421,6 +470,16 @@
     "channel": "stable",
     "extension_types": ["extension"],
     "min_manifest_version": 3
+  },
+  "optional_permissions": {
+    "channel": "stable",
+    "extension_types": [
+      "extension",
+      "legacy_packaged_app",
+      "hosted_app",
+      "platform_app",
+      "chromeos_system_extension"
+    ]
   },
   "options_page": {
     "channel": "stable",

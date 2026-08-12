@@ -6,11 +6,10 @@
 
 #include <memory>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
-#include "base/memory/memory_pressure_monitor.h"
 #include "base/memory/weak_ptr.h"
 #include "base/power_monitor/battery_state_sampler.h"
 #include "base/power_monitor/power_monitor_buildflags.h"
@@ -34,15 +33,16 @@
 #include "chrome/browser/performance_manager/policies/transient_keep_alive_policy.h"
 #include "chrome/browser/performance_manager/policies/working_set_trimmer_policy.h"
 #include "chrome/browser/performance_manager/user_tuning/profile_discard_opt_out_list_helper.h"
+#include "chrome/browser/performance_manager/user_tuning/profile_force_foreground_priority_list_helper.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/sessions/session_restore.h"
 #include "chrome/common/chrome_features.h"
+#include "components/memory_pressure/multi_source_memory_pressure_monitor.h"
 #include "components/performance_manager/decorators/page_aggregator.h"
 #include "components/performance_manager/embedder/graph_features.h"
 #include "components/performance_manager/embedder/performance_manager_lifetime.h"
 #include "components/performance_manager/embedder/performance_manager_registry.h"
 #include "components/performance_manager/embedder/scoped_global_scenario_memory.h"
-#include "components/performance_manager/graph/policies/bfcache_policy.h"
 #include "components/performance_manager/graph/policies/process_priority_policy.h"
 #include "components/performance_manager/performance_manager_feature_observer_client.h"
 #include "components/performance_manager/public/decorators/page_live_state_decorator.h"
@@ -68,13 +68,9 @@
 #include "components/performance_manager/power/battery_level_provider_chromeos.h"
 #include "components/performance_manager/power/dbus_power_manager_sampling_event_source.h"
 
-#if defined(ARCH_CPU_X86_64)
-#include "chrome/browser/performance_manager/policies/userspace_swap_policy_chromeos.h"
-#endif  // defined(ARCH_CPU_X86_64)
-
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "chrome/browser/performance_manager/extension_watcher.h"
 #endif
 
@@ -94,11 +90,6 @@
 #include "components/performance_manager/freezing/freezing_policy.h"
 #include "components/performance_manager/public/freezing/freezing.h"
 #endif  // BUILDFLAG(IS_ANDROID)
-
-#if BUILDFLAG(IS_WIN)
-#include "base/path_service.h"
-#include "chrome/browser/performance_manager/policies/priority_boost_disabler.h"
-#endif
 
 namespace {
 
@@ -174,13 +165,6 @@ void ChromeBrowserMainExtraPartsPerformanceManager::CreatePoliciesAndDecorators(
   }
 
 #if BUILDFLAG(IS_CHROMEOS)
-#if defined(ARCH_CPU_X86_64)
-  if (performance_manager::policies::UserspaceSwapPolicy::
-          UserspaceSwapSupportedAndEnabled()) {
-    graph->PassToGraph(
-        std::make_unique<performance_manager::policies::UserspaceSwapPolicy>());
-  }
-#endif  // defined(ARCH_CPU_X86_64)
 
   graph->PassToGraph(std::make_unique<
                      performance_manager::policies::OomScorePolicyChromeOS>());
@@ -205,12 +189,6 @@ void ChromeBrowserMainExtraPartsPerformanceManager::CreatePoliciesAndDecorators(
     graph->PassToGraph(
         std::make_unique<performance_manager::TerminationTargetPolicy>());
   }
-  if (base::FeatureList::IsEnabled(features::kDisableBoostPriority) &&
-      features::kDisableBoostPriorityMode.Get() ==
-          features::DisableBoostPriorityMode::kAfterLoading) {
-    graph->PassToGraph(
-        std::make_unique<performance_manager::PriorityBoostDisabler>());
-  }
 #endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(IS_ANDROID)
@@ -230,28 +208,25 @@ void ChromeBrowserMainExtraPartsPerformanceManager::CreatePoliciesAndDecorators(
   graph->PassToGraph(FormInteractionTabHelper::CreateGraphObserver());
 
 #if URGENT_DISCARDING_FROM_PERFORMANCE_MANAGER()
-  graph->PassToGraph(
-      std::make_unique<
-          performance_manager::policies::UrgentPageDiscardingPolicy>());
-#endif  // URGENT_DISCARDING_FROM_PERFORMANCE_MANAGER()
-
-  if (base::FeatureList::IsEnabled(
-          performance_manager::features::
-              kBackgroundTabLoadingFromPerformanceManager)) {
+  if (!base::FeatureList::IsEnabled(
+          performance_manager::features::kDisableTabDiscarding)) {
     graph->PassToGraph(
         std::make_unique<
-            performance_manager::policies::BackgroundTabLoadingPolicy>(
-            base::BindRepeating([]() {
-              content::GetUIThreadTaskRunner({})->PostTask(
-                  FROM_HERE,
-                  base::BindOnce(
-                      &SessionRestore::OnTabLoaderFinishedLoadingTabs));
-            })));
+            performance_manager::policies::UrgentPageDiscardingPolicy>());
   }
+#endif  // URGENT_DISCARDING_FROM_PERFORMANCE_MANAGER()
+
+  graph->PassToGraph(std::make_unique<
+                     performance_manager::policies::BackgroundTabLoadingPolicy>(
+      base::BindRepeating([]() {
+        content::GetUIThreadTaskRunner({})->PostTask(
+            FROM_HERE,
+            base::BindOnce(&SessionRestore::OnTabLoaderFinishedLoadingTabs));
+      })));
 
   // The freezing policy isn't enabled on Android yet as it doesn't play well
   // with the freezing logic already in place in renderers. This logic should be
-  // moved to PerformanceManager, this is tracked in https://crbug.com/1156803.
+  // moved to PerformanceManager, this is tracked in https://crbug.com/40160563.
   std::unique_ptr<FreezingOptOutChecker> freezing_opt_out_checker;
   if (base::FeatureList::IsEnabled(
           performance_manager::features::kFreezingFollowsDiscardOptOut)) {
@@ -283,26 +258,15 @@ void ChromeBrowserMainExtraPartsPerformanceManager::CreatePoliciesAndDecorators(
   }
 
   if (base::FeatureList::IsEnabled(
-          performance_manager::features::kBFCachePerformanceManagerPolicy)) {
-    graph->PassToGraph(
-        std::make_unique<performance_manager::policies::BFCachePolicy>());
-  }
-
-#if !BUILDFLAG(IS_ANDROID)
-  if (base::FeatureList::IsEnabled(
           performance_manager::features::kPMProcessPriorityPolicy)) {
     graph->PassToGraph(std::make_unique<
                        performance_manager::policies::ProcessPriorityPolicy>());
   }
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_ANDROID)
-  if (base::FeatureList::IsEnabled(
-          chrome::android::kProcessRankPolicyAndroid)) {
-    graph->PassToGraph(
-        std::make_unique<
-            performance_manager::policies::ProcessRankPolicyAndroid>());
-  }
+  graph->PassToGraph(
+      std::make_unique<
+          performance_manager::policies::ProcessRankPolicyAndroid>());
 
   if (base::FeatureList::IsEnabled(
           chrome::android::kDiscardPageWithCrashedSubframePolicy)) {
@@ -346,32 +310,42 @@ ChromeBrowserMainExtraPartsPerformanceManager::GetFeatureObserverClient() {
 }
 
 void ChromeBrowserMainExtraPartsPerformanceManager::PostCreateThreads() {
+  CHECK(g_browser_process->local_state());
   performance_manager_lifetime_ =
       std::make_unique<performance_manager::PerformanceManagerLifetime>(
           performance_manager::GraphFeatures::WithDefault(),
           base::BindOnce(&ChromeBrowserMainExtraPartsPerformanceManager::
-                             CreatePoliciesAndDecorators));
+                             CreatePoliciesAndDecorators),
+          g_browser_process->local_state());
 
   // There are no existing loaded profiles.
   DCHECK(g_browser_process->profile_manager()->GetLoadedProfiles().empty());
 
   g_browser_process->profile_manager()->AddObserver(this);
 
-#if BUILDFLAG(IS_ANDROID)
-  if (base::FeatureList::IsEnabled(chrome::android::kProtectedTabsAndroid)) {
-    // performance_manager::policies::DiscardEligibilityPolicy requires
-    // performance_manager::user_tuning::ProfileDiscardOptOutListHelper.
-    profile_discard_opt_out_list_helper_ = std::make_unique<
-        performance_manager::user_tuning::ProfileDiscardOptOutListHelper>();
-  }
-#else
+  // performance_manager::policies::DiscardEligibilityPolicy requires
+  // performance_manager::user_tuning::ProfileDiscardOptOutListHelper.
   profile_discard_opt_out_list_helper_ = std::make_unique<
       performance_manager::user_tuning::ProfileDiscardOptOutListHelper>();
+
+#if !BUILDFLAG(IS_ANDROID)
+
+  // Only create the per-origin force foreground priority list helper if the
+  // policy to force foreground priority for all tabs is disabled. If that
+  // policy is enabled, the per-origin list is redundant.
+  if (!performance_manager::user_tuning::prefs::
+          IsForceForegroundPriorityForAllTabsEnabled(
+              g_browser_process->local_state())) {
+    profile_force_foreground_priority_list_helper_ =
+        std::make_unique<performance_manager::user_tuning::
+                             ProfileForceForegroundPriorityListHelper>();
+  }
+
   // Create the UserPerformanceTuningManager and BatterySaverMode here so that
   // early UI code can register observers, but only start them in
   // PreMainMessageLoopRun because they require other systems like the
   // HostFrameSinkManager to exist.
-  base::ByteCount system_memory = base::SysInfo::AmountOfPhysicalMemory();
+  base::ByteSize system_memory = base::SysInfo::AmountOfTotalPhysicalMemory();
   user_performance_tuning_manager_ = base::WrapUnique(
       new performance_manager::user_tuning::UserPerformanceTuningManager(
           g_browser_process->local_state(),
@@ -402,7 +376,7 @@ void ChromeBrowserMainExtraPartsPerformanceManager::PostCreateThreads() {
       std::make_unique<performance_manager::PageLiveStateDecoratorHelper>();
   page_load_tracker_decorator_helper_ =
       std::make_unique<performance_manager::PageLoadTrackerDecoratorHelper>();
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   extension_watcher_ =
       std::make_unique<performance_manager::ExtensionWatcher>();
 #endif
@@ -432,7 +406,7 @@ void ChromeBrowserMainExtraPartsPerformanceManager::PostCreateThreads() {
 
 void ChromeBrowserMainExtraPartsPerformanceManager::PostBrowserStart() {
   // The MemoryPressureMonitor might not be available in some tests.
-  if (base::MemoryPressureMonitor::Get()) {
+  if (memory_pressure::MultiSourceMemoryPressureMonitor::Get()) {
     if (memory::EnterpriseMemoryLimitPrefObserver::PlatformIsSupported()) {
       memory_limit_pref_observer_ =
           std::make_unique<memory::EnterpriseMemoryLimitPrefObserver>(
@@ -464,7 +438,7 @@ void ChromeBrowserMainExtraPartsPerformanceManager::PostMainMessageLoopRun() {
   g_browser_process->profile_manager()->RemoveObserver(this);
   profile_observations_.RemoveAllObservations();
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   extension_watcher_.reset();
 #endif
   page_load_tracker_decorator_helper_.reset();
@@ -478,6 +452,7 @@ void ChromeBrowserMainExtraPartsPerformanceManager::PostMainMessageLoopRun() {
   user_performance_tuning_manager_.reset();
   performance_detection_manager_.reset();
   profile_discard_opt_out_list_helper_.reset();
+  profile_force_foreground_priority_list_helper_.reset();
 
   if (battery_state_sampler_)
     battery_state_sampler_->Shutdown();
@@ -501,6 +476,9 @@ void ChromeBrowserMainExtraPartsPerformanceManager::OnProfileAdded(
 #else
   profile_discard_opt_out_list_helper_->OnProfileAdded(profile);
 #endif
+  if (profile_force_foreground_priority_list_helper_) {
+    profile_force_foreground_priority_list_helper_->OnProfileAdded(profile);
+  }
 }
 
 void ChromeBrowserMainExtraPartsPerformanceManager::
@@ -521,4 +499,8 @@ void ChromeBrowserMainExtraPartsPerformanceManager::OnProfileWillBeDestroyed(
 #else
   profile_discard_opt_out_list_helper_->OnProfileWillBeRemoved(profile);
 #endif
+  if (profile_force_foreground_priority_list_helper_) {
+    profile_force_foreground_priority_list_helper_->OnProfileWillBeRemoved(
+        profile);
+  }
 }

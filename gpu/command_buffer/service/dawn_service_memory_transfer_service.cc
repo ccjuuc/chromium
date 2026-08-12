@@ -15,122 +15,84 @@ namespace webgpu {
 
 namespace {
 
-std::pair<scoped_refptr<gpu::Buffer>, base::raw_span<uint8_t>> GetHandleInfo(
+std::pair<scoped_refptr<gpu::Buffer>, base::span<std::byte>> GetHandleInfo(
     CommonDecoder* decoder,
-    const void* deserialize_pointer,
-    size_t deserialize_size) {
-  DCHECK(deserialize_pointer);
-  // Use CHECK instead of DCHECK because the cast of the memory to
-  // MemoryTransferHandle and subsequent reads won't be safe if deserialize_size
-  // is too small.
-  CHECK_EQ(deserialize_size, sizeof(MemoryTransferHandle));
-  const volatile MemoryTransferHandle* handle =
-      reinterpret_cast<const volatile MemoryTransferHandle*>(
-          deserialize_pointer);
+    base::span<const std::byte> deserialize_data_bytes) {
+  if (deserialize_data_bytes.size() != sizeof(MemoryTransferHandle)) {
+    return {nullptr, {}};
+  }
 
-  uint32_t size = handle->size;
-  int32_t shm_id = handle->shm_id;
-  uint32_t shm_offset = handle->shm_offset;
+  MemoryTransferHandle handle;
+  base::byte_span_from_ref(handle).copy_from(
+      base::as_bytes(deserialize_data_bytes));
 
   scoped_refptr<gpu::Buffer> buffer =
-      decoder->command_buffer_service()->GetTransferBuffer(shm_id);
+      decoder->command_buffer_service()->GetTransferBuffer(handle.shm_id);
   if (buffer == nullptr) {
-    return std::make_pair(std::move(buffer), base::raw_span<uint8_t>());
+    return {nullptr, {}};
   }
 
-  void* ptr = buffer->GetDataAddress(shm_offset, size);
-  if (ptr == nullptr) {
-    return std::make_pair(std::move(buffer), base::raw_span<uint8_t>());
-  }
-
-  // SAFETY: gpu::Buffer::GetDataAddress() will return a valid pointer only when
-  // `shm_offset + size` is neither overflow nor greater than the total size of
-  // the whole transfer buffer.
-  auto buffer_data_view =
-      UNSAFE_BUFFERS(base::raw_span<uint8_t>(static_cast<uint8_t*>(ptr), size));
-  return std::make_pair(std::move(buffer), buffer_data_view);
+  std::span<std::byte> data = base::subtle::reinterpret_span<std::byte>(
+      buffer->GetSpanData(handle.shm_offset, handle.size));
+  return {std::move(buffer), data};
 }
 
-class ReadHandleImpl
-    : public dawn::wire::server::MemoryTransferService::ReadHandle {
+class MemoryHandleImpl
+    : public dawn::wire::server::MemoryTransferService::MemoryHandle {
  public:
-  ReadHandleImpl(scoped_refptr<Buffer> buffer,
-                 base::raw_span<uint8_t> buffer_data_view)
+  MemoryHandleImpl(scoped_refptr<Buffer> buffer,
+                   base::raw_span<std::byte> buffer_data_view)
       : buffer_(std::move(buffer)), buffer_data_view_(buffer_data_view) {}
 
-  ~ReadHandleImpl() override = default;
+  ~MemoryHandleImpl() override = default;
 
-  size_t SizeOfSerializeDataUpdate(size_t offset, size_t size) override {
+  std::span<std::byte> GetSource() const override { return buffer_data_view_; }
+
+  size_t GetSerializeDataUpdateSize(size_t offset, size_t size) const override {
     // Nothing is serialized because we're using shared memory.
     return 0;
   }
-
-  void SerializeDataUpdate(const void* data,
+  void SerializeDataUpdate(std::span<volatile std::byte> serialize_data,
                            size_t offset,
                            size_t size,
-                           void* serializePointer) override {
-    // TODO(crbug.com/40061304): A compromised renderer could have a shared
+                           std::span<const std::byte> data) const override {
+    DCHECK(serialize_data.size() == GetSerializeDataUpdateSize(offset, size));
+    DCHECK(data.size() == size);
+    // TODO(crbug.com/526518083): A compromised renderer could have a shared
     // memory size not large enough to fit the GPU buffer contents. Instead of
-    // DCHECK, do a CHECK here to crash the release build. The crash is fine
-    // since it is not reachable from normal behavior. WebGPU post-V1 will have
-    // a refactored API.
+    // DCHECK, do a CHECK here to crash the release build. Add to
+    // dawn::wire::server the validation that offset + size fits in the
+    // MemoryHandle.
     CHECK_LE(offset, buffer_data_view_.size());
     CHECK_LE(size, buffer_data_view_.size() - offset);
     // Copy the data into the shared memory allocation.
     // In the case of buffer mapping, this is the mapped GPU memory which we
     // copy into client-visible shared memory.
-    UNSAFE_TODO(memcpy(buffer_data_view_.data() + offset, data, size));
+    buffer_data_view_.subspan(offset, size).copy_from(data);
   }
 
- private:
-  scoped_refptr<gpu::Buffer> buffer_;
-  // Data view to client-visible shared memory owned by buffer_.
-  base::raw_span<uint8_t> buffer_data_view_;
-};
-
-class WriteHandleImpl
-    : public dawn::wire::server::MemoryTransferService::WriteHandle {
- public:
-  WriteHandleImpl(scoped_refptr<Buffer> buffer,
-                  base::raw_span<uint8_t> buffer_data_view)
-      : buffer_(std::move(buffer)), buffer_data_view_(buffer_data_view) {}
-
-  ~WriteHandleImpl() override = default;
-
-  // The offset is always absolute offset from start of buffer
-  bool DeserializeDataUpdate(const void* deserialize_pointer,
-                             size_t deserialize_size,
+  bool DeserializeDataUpdate(std::span<const std::byte> deserialize_data,
                              size_t offset,
-                             size_t size) override {
+                             size_t size,
+                             std::span<std::byte> target) override {
     // Nothing is serialized because we're using shared memory.
-    DCHECK_EQ(deserialize_size, 0u);
-    DCHECK(buffer_data_view_.data());
+    DCHECK(deserialize_data.empty());
+    DCHECK(target.size() == size);
 
-    auto targetData = GetTarget();
-    DCHECK(targetData.data());
-
-    if (offset > targetData.size() || size > targetData.size() - offset) {
-      return false;
-    }
     if (offset > buffer_data_view_.size() ||
-        size > buffer_data_view_.size() - offset) {
+        size > buffer_data_view_.size() - offset || size > target.size()) {
       return false;
     }
 
-    // Copy from shared memory into the target buffer.
-    // `GetTarget()` will always return the starting address
-    // of the backing buffer after the dawn side change.
-    UNSAFE_TODO(memcpy(static_cast<uint8_t*>(targetData.data()) + offset,
-                       buffer_data_view_.data() + offset, size));
+    base::span<std::byte> dest = target.first(size);
+    dest.copy_from(buffer_data_view_.subspan(offset, size));
     return true;
   }
 
-  uint8_t* GetSourceData() const override { return buffer_data_view_.data(); }
-
  private:
   scoped_refptr<gpu::Buffer> buffer_;
   // Data view to client-visible shared memory owned by buffer_.
-  base::raw_span<uint8_t> buffer_data_view_;
+  base::raw_span<std::byte> buffer_data_view_;
 };
 
 }  // namespace
@@ -141,38 +103,17 @@ DawnServiceMemoryTransferService::DawnServiceMemoryTransferService(
 
 DawnServiceMemoryTransferService::~DawnServiceMemoryTransferService() = default;
 
-bool DawnServiceMemoryTransferService::DeserializeReadHandle(
-    const void* deserialize_pointer,
-    size_t deserialize_size,
-    ReadHandle** read_handle) {
-  auto [buffer, buffer_data_view] =
-      GetHandleInfo(decoder_, deserialize_pointer, deserialize_size);
+std::unique_ptr<dawn::wire::server::MemoryTransferService::MemoryHandle>
+DawnServiceMemoryTransferService::DeserializeMemoryHandle(
+    std::span<const std::byte> creation_data) {
+  auto [buffer, buffer_data_view] = GetHandleInfo(decoder_, creation_data);
   if (buffer_data_view.data() == nullptr) {
-    return false;
+    return nullptr;
   }
-
   DCHECK(buffer);
-  DCHECK(read_handle);
-  *read_handle = new ReadHandleImpl(std::move(buffer), buffer_data_view);
 
-  return true;
-}
-
-bool DawnServiceMemoryTransferService::DeserializeWriteHandle(
-    const void* deserialize_pointer,
-    size_t deserialize_size,
-    WriteHandle** write_handle) {
-  auto [buffer, buffer_data_view] =
-      GetHandleInfo(decoder_, deserialize_pointer, deserialize_size);
-  if (buffer_data_view.data() == nullptr) {
-    return false;
-  }
-
-  DCHECK(buffer);
-  DCHECK(write_handle);
-  *write_handle = new WriteHandleImpl(std::move(buffer), buffer_data_view);
-
-  return true;
+  return std::make_unique<MemoryHandleImpl>(std::move(buffer),
+                                            buffer_data_view);
 }
 
 }  // namespace webgpu

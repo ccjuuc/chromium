@@ -4,7 +4,7 @@
 
 #include "third_party/blink/renderer/core/intersection_observer/intersection_observation.h"
 
-#include "third_party/blink/renderer/core/dom/element_rare_data_vector.h"
+#include "third_party/blink/renderer/core/dom/node_rare_data.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/intersection_observer/element_intersection_observer_data.h"
 #include "third_party/blink/renderer/core/intersection_observer/intersection_geometry.h"
@@ -119,7 +119,7 @@ gfx::Vector2dF IntersectionObservation::MinScrollDeltaToUpdate() const {
 
 void IntersectionObservation::TakeRecords(
     HeapVector<Member<IntersectionObserverEntry>>& entries) {
-  entries.AppendVector(entries_);
+  entries.append_range(entries_);
   entries_.clear();
 }
 

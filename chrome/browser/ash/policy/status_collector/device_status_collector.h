@@ -13,12 +13,13 @@
 #include <utility>
 #include <vector>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/callback_list.h"
 #include "base/check_deref.h"
 #include "base/containers/circular_deque.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
@@ -60,9 +61,6 @@ namespace policy {
 class EnterpriseActivityStorage;
 class DeviceStatusCollectorState;
 class ReportingUserTracker;
-
-// TODO(b/216131674): Remove this.
-enum class CrosHealthdCollectionMode { kFull, kBattery };
 
 // Sampled hardware measurement data for single time point.
 class SampledData {
@@ -148,9 +146,9 @@ class DeviceStatusCollector : public StatusCollector,
   // Constructor. Callers can inject their own *Fetcher callbacks, e.g. for unit
   // testing. A null callback can be passed for any *Fetcher parameter, to use
   // the default implementation. These callbacks are always executed on Blocking
-  // Pool. Caller is responsible for passing already initialized |pref_service|.
+  // Pool. `local_state` must be non-null and must outlive `this`.
   DeviceStatusCollector(
-      PrefService* pref_service,
+      PrefService* local_state,
       ReportingUserTracker* reporting_user_tracker,
       ash::system::StatisticsProvider* provider,
       ManagedSessionService* managed_session_service,
@@ -173,9 +171,8 @@ class DeviceStatusCollector : public StatusCollector,
       base::Clock* clock = base::DefaultClock::GetInstance());
 
   // Constructor with default callbacks. These callbacks are always executed on
-  // Blocking Pool. Caller is responsible for passing already initialized
-  // |pref_service|.
-  DeviceStatusCollector(PrefService* pref_service,
+  // Blocking Pool. `local_state` must be non-null and must outlive `this`.
+  DeviceStatusCollector(PrefService* local_state,
                         ReportingUserTracker* reporting_user_tracker,
                         ash::system::StatisticsProvider* provider,
                         ManagedSessionService* managed_session_service);
@@ -354,7 +351,7 @@ class DeviceStatusCollector : public StatusCollector,
   bool IncludeEmailsInActivityReports() const;
 
   // Pref service that is mainly used to store activity periods for reporting.
-  const raw_ptr<PrefService> pref_service_;
+  const raw_ref<PrefService> local_state_;
 
   const raw_ptr<ReportingUserTracker> reporting_user_tracker_;
 
@@ -392,7 +389,7 @@ class DeviceStatusCollector : public StatusCollector,
   struct MemoryUsage {
     // Amount of free RAM (measures raw memory used by processes, not internal
     // memory waiting to be reclaimed by GC).
-    base::ByteCount bytes_of_ram_free;
+    base::ByteSize bytes_of_ram_free;
 
     // Sampling timestamp.
     base::Time timestamp;

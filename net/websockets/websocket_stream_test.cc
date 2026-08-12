@@ -112,10 +112,6 @@ static url::Origin Origin() {
   return url::Origin::Create(GURL(kOrigin));
 }
 
-static net::SiteForCookies SiteForCookies() {
-  return net::SiteForCookies::FromOrigin(Origin());
-}
-
 static IsolationInfo CreateIsolationInfo() {
   url::Origin origin = Origin();
   return IsolationInfo::Create(IsolationInfo::RequestType::kOther, origin,
@@ -196,8 +192,7 @@ class WebSocketStreamCreateTest : public TestWithParam<HandshakeStreamType>,
               WebSocketExtraHeadersToString(extra_response_headers)) +
               additional_data_);
       CreateAndConnectStream(socket_url, sub_protocols, Origin(),
-                             SiteForCookies(), storage_access_api_status,
-                             CreateIsolationInfo(),
+                             storage_access_api_status, CreateIsolationInfo(),
                              WebSocketExtraHeadersToHttpRequestHeaders(
                                  send_additional_request_headers),
                              std::move(timer_));
@@ -322,7 +317,8 @@ class WebSocketStreamCreateTest : public TestWithParam<HandshakeStreamType>,
     TestDelegate delegate;
     std::unique_ptr<URLRequest> request = context->CreateRequest(
         GURL("https://www.example.org/"), DEFAULT_PRIORITY, &delegate,
-        TRAFFIC_ANNOTATION_FOR_TESTS, /*is_for_websockets=*/false);
+        TRAFFIC_ANNOTATION_FOR_TESTS, net::handles::kInvalidNetworkHandle,
+        /*is_for_websockets=*/false);
     // The IsolationInfo has to match for a socket to be reused.
     request->set_isolation_info(CreateIsolationInfo());
     request->Start();
@@ -331,8 +327,7 @@ class WebSocketStreamCreateTest : public TestWithParam<HandshakeStreamType>,
     EXPECT_FALSE(request->is_pending());
 
     CreateAndConnectStream(socket_url, sub_protocols, Origin(),
-                           SiteForCookies(), storage_access_api_status,
-                           CreateIsolationInfo(),
+                           storage_access_api_status, CreateIsolationInfo(),
                            WebSocketExtraHeadersToHttpRequestHeaders(
                                send_additional_request_headers),
                            std::move(timer_));
@@ -360,8 +355,7 @@ class WebSocketStreamCreateTest : public TestWithParam<HandshakeStreamType>,
                                  extra_request_headers),
         response_body);
     CreateAndConnectStream(socket_url, sub_protocols, Origin(),
-                           SiteForCookies(), storage_access_api_status,
-                           CreateIsolationInfo(),
+                           storage_access_api_status, CreateIsolationInfo(),
                            WebSocketExtraHeadersToHttpRequestHeaders(
                                send_additional_request_headers),
                            nullptr);
@@ -388,9 +382,8 @@ class WebSocketStreamCreateTest : public TestWithParam<HandshakeStreamType>,
                                  /*extra_headers=*/{}),
         WebSocketStandardResponse(extra_response_headers));
     CreateAndConnectStream(socket_url, sub_protocols, Origin(),
-                           SiteForCookies(), storage_access_api_status,
-                           CreateIsolationInfo(), HttpRequestHeaders(),
-                           nullptr);
+                           storage_access_api_status, CreateIsolationInfo(),
+                           HttpRequestHeaders(), nullptr);
   }
 
   // Like CreateAndConnectStandard(), but take raw mock data.
@@ -404,7 +397,7 @@ class WebSocketStreamCreateTest : public TestWithParam<HandshakeStreamType>,
     ASSERT_EQ(BASIC_HANDSHAKE_STREAM, stream_type_);
 
     AddRawExpectations(std::move(socket_data));
-    CreateAndConnectStream(GURL(url), sub_protocols, Origin(), SiteForCookies(),
+    CreateAndConnectStream(GURL(url), sub_protocols, Origin(),
                            storage_access_api_status, CreateIsolationInfo(),
                            additional_headers, std::move(timer_));
   }

@@ -65,11 +65,15 @@ GURL AppendFingerprintParamToDoodleURL(const GURL& logo_url,
 
 GURL AppendPreliminaryParamsToDoodleURL(bool gray_background,
                                         bool for_webui_ntp,
+                                        bool enable_animated_logo,
                                         const GURL& logo_url) {
   auto url = google_util::AppendToAsyncQueryParam(logo_url, "ntp",
                                                   for_webui_ntp ? "2" : "1");
   if (gray_background) {
     url = google_util::AppendToAsyncQueryParam(url, "graybg", "1");
+  }
+  if (enable_animated_logo) {
+    url = google_util::AppendToAsyncQueryParam(url, "anim", "1");
   }
   return url;
 }
@@ -77,7 +81,7 @@ GURL AppendPreliminaryParamsToDoodleURL(bool gray_background,
 namespace {
 const char kResponsePreamble[] = ")]}'";
 
-GURL ParseUrl(const base::Value::Dict& parent_dict,
+GURL ParseUrl(const base::DictValue& parent_dict,
               const std::string& key,
               const GURL& base_url) {
   const std::string* url_str = parent_dict.FindString(key);
@@ -122,6 +126,53 @@ ParseEncodedImageData(const std::string& encoded_image_data) {
   return result;
 }
 
+/**
+ * Helper function to parse the mural metadata information from the Google
+ * Doodle Logo response. The Mural image metadata is a non-optional field, and
+ * comes in both light and dark variations.
+ *
+ * Murals are the extended artwork images of the Google Doodles, and can serve
+ * as a replacement for the latter on larger surfaces. Unlike Doodles, Mural
+ * images are served as urls rather than base64 encoded data.
+ */
+void ParseMuralMetadata(const base::DictValue* mural,
+                        const GURL& base_url,
+                        bool is_dark,
+                        MuralMetadata& mural_metadata) {
+  // While the mural image metadata is non-optional, it is not required to
+  // render the Doodle. Users can always fallback to regular the Doodle image.
+  if (!mural) {
+    DLOG(WARNING)
+        << (is_dark ? "Dark " : "")
+        << "Mural Image metadata is missing when parsing the Logo response";
+    return;
+  }
+  mural_metadata.mural_url = ParseUrl(*mural, "url", base_url);
+  mural_metadata.is_animated_gif =
+      mural->FindBool("is_animated_gif").value_or(false);
+  mural_metadata.width_px = mural->FindInt("width").value_or(0);
+  mural_metadata.height_px = mural->FindInt("height").value_or(0);
+
+  // Similarly, the core content area is non-optional as well, but it is not
+  // required to render the Mural itself.
+  const base::DictValue* core_content_area =
+      mural->FindDict("core_content_area");
+  if (!core_content_area) {
+    DLOG(WARNING)
+        << (is_dark ? "Dark " : "")
+        << "Mural Core Content Area is missing when parsing the Logo response";
+  } else {
+    mural_metadata.core_content_area.height_px =
+        core_content_area->FindInt("height").value_or(0);
+    mural_metadata.core_content_area.left_px =
+        core_content_area->FindInt("left").value_or(0);
+    mural_metadata.core_content_area.top_px =
+        core_content_area->FindInt("top").value_or(0);
+    mural_metadata.core_content_area.width_px =
+        core_content_area->FindInt("width").value_or(0);
+  }
+}
+
 }  // namespace
 
 std::unique_ptr<EncodedLogo> ParseDoodleLogoResponse(const GURL& base_url,
@@ -148,7 +199,7 @@ std::unique_ptr<EncodedLogo> ParseDoodleLogoResponse(const GURL& base_url,
     return nullptr;
   }
 
-  const base::Value::Dict* ddljson = parsed_json->GetDict().FindDict("ddljson");
+  const base::DictValue* ddljson = parsed_json->GetDict().FindDict("ddljson");
   if (!ddljson) {
     return nullptr;
   }
@@ -161,12 +212,19 @@ std::unique_ptr<EncodedLogo> ParseDoodleLogoResponse(const GURL& base_url,
 
   auto logo = std::make_unique<EncodedLogo>();
 
+  // Doodle server team recommends to not rely on the doodle_type metadata
+  // field as they are trying to deprecate it. Instead, we should check
+  // large_image.is_animated_gif for animated doodles.
   const std::string* doodle_type = ddljson->FindString("doodle_type");
+  const bool is_animated_gif =
+      ddljson->FindBoolByDottedPath("large_image.is_animated_gif")
+          .value_or(false);
+
   logo->metadata.type = LogoType::SIMPLE;
-  if (doodle_type) {
-    if (*doodle_type == "ANIMATED") {
-      logo->metadata.type = LogoType::ANIMATED;
-    } else if (*doodle_type == "INTERACTIVE") {
+  if (is_animated_gif) {
+    logo->metadata.type = LogoType::ANIMATED;
+  } else if (doodle_type) {
+    if (*doodle_type == "INTERACTIVE") {
       logo->metadata.type = LogoType::INTERACTIVE;
     } else if (*doodle_type == "VIDEO") {
       logo->metadata.type = LogoType::INTERACTIVE;
@@ -180,7 +238,7 @@ std::unique_ptr<EncodedLogo> ParseDoodleLogoResponse(const GURL& base_url,
   // Check if the main image is animated.
   if (is_animated) {
     // If animated, get the URL for the animated image.
-    const base::Value::Dict* image = ddljson->FindDict("large_image");
+    const base::DictValue* image = ddljson->FindDict("large_image");
     if (!image) {
       return nullptr;
     }
@@ -189,14 +247,14 @@ std::unique_ptr<EncodedLogo> ParseDoodleLogoResponse(const GURL& base_url,
       return nullptr;
     }
 
-    const base::Value::Dict* dark_image = ddljson->FindDict("dark_large_image");
+    const base::DictValue* dark_image = ddljson->FindDict("dark_large_image");
     if (dark_image) {
       logo->metadata.dark_animated_url = ParseUrl(*dark_image, "url", base_url);
     }
   }
 
   if (is_simple || is_animated) {
-    const base::Value::Dict* image = ddljson->FindDict("large_image");
+    const base::DictValue* image = ddljson->FindDict("large_image");
     if (image) {
       if (std::optional<int> width_px = image->FindInt("width")) {
         logo->metadata.width_px = *width_px;
@@ -206,7 +264,7 @@ std::unique_ptr<EncodedLogo> ParseDoodleLogoResponse(const GURL& base_url,
       }
     }
 
-    const base::Value::Dict* dark_image = ddljson->FindDict("dark_large_image");
+    const base::DictValue* dark_image = ddljson->FindDict("dark_large_image");
     if (dark_image) {
       if (const std::string* background_color =
               dark_image->FindString("background_color")) {
@@ -233,6 +291,14 @@ std::unique_ptr<EncodedLogo> ParseDoodleLogoResponse(const GURL& base_url,
       short_link_str.insert(0, "https:");
       logo->metadata.short_link = GURL(std::move(short_link_str));
     }
+  }
+
+  // Extract the Doodle Mural information.
+  if (is_simple || is_animated) {
+    ParseMuralMetadata(ddljson->FindDict("mural_image"), base_url,
+                       /*is_dark=*/false, logo->metadata.mural_metadata);
+    ParseMuralMetadata(ddljson->FindDict("dark_mural_image"), base_url,
+                       /*is_dark=*/true, logo->metadata.dark_mural_metadata);
   }
 
   logo->metadata.full_page_url =

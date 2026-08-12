@@ -2,10 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/extensions/extension_allowlist.h"
+#include "extensions/browser/extension_allowlist.h"
 
 #include "base/memory/raw_ptr.h"
-#include "chrome/browser/extensions/crx_installer.h"
 #include "chrome/browser/extensions/extension_management_test_util.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_service_test_base.h"
@@ -15,6 +14,7 @@
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "extensions/browser/allowlist_state.h"
 #include "extensions/browser/blocklist_extension_prefs.h"
+#include "extensions/browser/crx_installer.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
@@ -23,6 +23,8 @@
 #include "extensions/common/extension_features.h"
 #include "extensions/common/extension_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -45,6 +47,11 @@ using ManagementPrefUpdater = ExtensionManagementPrefUpdater<
 // DisableMalwareExtensionsRemotely are enabled.
 class ExtensionAllowlistUnitTestBase : public ExtensionServiceTestBase {
  protected:
+  void TearDown() override {
+    extension_prefs_ = nullptr;
+    ExtensionServiceTestBase::TearDown();
+  }
+
   // Creates a test extension service with 3 installed extensions.
   void CreateExtensionService(bool enhanced_protection_enabled) {
     ExtensionServiceInitParams params;
@@ -71,7 +78,7 @@ class ExtensionAllowlistUnitTestBase : public ExtensionServiceTestBase {
   void PerformActionBasedOnOmahaAttributes(const ExtensionId& extension_id,
                                            bool is_malware,
                                            bool is_allowlisted) {
-    auto attributes = base::Value::Dict().Set("_esbAllowlist", is_allowlisted);
+    auto attributes = base::DictValue().Set("_esbAllowlist", is_allowlisted);
     if (is_malware) {
       attributes.Set("_malware", true);
     }
@@ -96,16 +103,14 @@ class ExtensionAllowlistUnitTestBase : public ExtensionServiceTestBase {
   ExtensionPrefs* extension_prefs() { return extension_prefs_; }
 
  private:
-  raw_ptr<ExtensionPrefs> extension_prefs_;
+  raw_ptr<ExtensionPrefs> extension_prefs_ = nullptr;
 };
 
 class ExtensionAllowlistUnitTest : public ExtensionAllowlistUnitTestBase {
  public:
   ExtensionAllowlistUnitTest() {
-    feature_list_.InitWithFeatures(
-        {extensions_features::kSafeBrowsingCrxAllowlistShowWarnings,
-         extensions_features::kSafeBrowsingCrxAllowlistAutoDisable},
-        {});
+    feature_list_.InitAndEnableFeature(
+        extensions_features::kSafeBrowsingCrxAllowlistAutoDisable);
   }
 
  private:
@@ -484,7 +489,7 @@ TEST_F(ExtensionAllowlistUnitTest, MissingAttributeAreIgnored) {
       testing::UnorderedElementsAre(disable_reason::DISABLE_NOT_ALLOWLISTED));
 
   // Simulate an update check with no custom attribute defined.
-  base::Value::Dict attributes;
+  base::DictValue attributes;
   service()->PerformActionBasedOnOmahaAttributes(kExtensionId1, attributes);
   service()->PerformActionBasedOnOmahaAttributes(kExtensionId2, attributes);
 
@@ -729,9 +734,8 @@ class ExtensionAllowlistWithFeatureDisabledUnitTest
  public:
   ExtensionAllowlistWithFeatureDisabledUnitTest() {
     // Test with warnings enabled but auto disable disabled.
-    feature_list_.InitWithFeatures(
-        {extensions_features::kSafeBrowsingCrxAllowlistShowWarnings},
-        {extensions_features::kSafeBrowsingCrxAllowlistAutoDisable});
+    feature_list_.InitAndDisableFeature(
+        extensions_features::kSafeBrowsingCrxAllowlistAutoDisable);
   }
 
  private:

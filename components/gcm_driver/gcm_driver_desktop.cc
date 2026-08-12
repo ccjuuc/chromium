@@ -12,8 +12,8 @@
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/observer_list.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
@@ -83,7 +83,7 @@ class GCMDriverDesktop::IOWorker : public GCMClient::Delegate {
           pending_loader_factory,
       network::NetworkConnectionTracker* network_connection_tracker,
       const scoped_refptr<base::SequencedTaskRunner> blocking_task_runner,
-      os_crypt_async::Encryptor encryptor);
+      scoped_refptr<os_crypt_async::Encryptor> encryptor);
   void Start(GCMClient::StartMode start_mode,
              const base::WeakPtr<GCMDriverDesktop>& service,
              base::TimeTicks time_task_posted);
@@ -159,7 +159,7 @@ void GCMDriverDesktop::IOWorker::Initialize(
         pending_loader_factory,
     network::NetworkConnectionTracker* network_connection_tracker,
     const scoped_refptr<base::SequencedTaskRunner> blocking_task_runner,
-    os_crypt_async::Encryptor encryptor) {
+    scoped_refptr<os_crypt_async::Encryptor> encryptor) {
   DCHECK(io_thread_->RunsTasksInCurrentSequence());
 
   auto gcm_client = gcm_client_factory->BuildInstance();
@@ -544,19 +544,16 @@ GCMDriverDesktop::GCMDriverDesktop(
   // Create and initialize the GCMClient. Note that this does not initiate the
   // GCM check-in.
   io_worker_ = std::make_unique<IOWorker>(ui_thread, io_thread);
-  os_crypt_async->GetInstance(
+  os_crypt_async->GetInstance(base::BindOnce(
+      &GCMDriverDesktop::OnOsCryptReady, weak_ptr_factory_.GetWeakPtr(),
       base::BindOnce(
-          &GCMDriverDesktop::OnOsCryptReady, weak_ptr_factory_.GetWeakPtr(),
-          base::BindOnce(&GCMDriverDesktop::IOWorker::Initialize,
-                         base::Unretained(io_worker_.get()),
-                         std::move(gcm_client_factory), chrome_build_info,
-                         store_path, std::move(get_socket_factory_callback),
-                         // ->Clone() permits creation of an equivalent
-                         // SharedURLLoaderFactory on IO thread.
-                         url_loader_factory_for_ui->Clone(),
-                         base::Unretained(network_connection_tracker),
-                         blocking_task_runner)),
-      os_crypt_async::Encryptor::Option::kEncryptSyncCompat);
+          &GCMDriverDesktop::IOWorker::Initialize,
+          base::Unretained(io_worker_.get()), std::move(gcm_client_factory),
+          chrome_build_info, store_path, std::move(get_socket_factory_callback),
+          // ->Clone() permits creation of an equivalent
+          // SharedURLLoaderFactory on IO thread.
+          url_loader_factory_for_ui->Clone(),
+          base::Unretained(network_connection_tracker), blocking_task_runner)));
 }
 
 GCMDriverDesktop::~GCMDriverDesktop() = default;
@@ -600,8 +597,9 @@ void GCMDriverDesktop::ValidateRegistration(
 }
 
 void GCMDriverDesktop::OnOsCryptReady(
-    base::OnceCallback<void(os_crypt_async::Encryptor)> io_callback,
-    os_crypt_async::Encryptor encryptor) {
+    base::OnceCallback<void(scoped_refptr<os_crypt_async::Encryptor>)>
+        io_callback,
+    scoped_refptr<os_crypt_async::Encryptor> encryptor) {
   io_thread_->PostTask(
       FROM_HERE, base::BindOnce(std::move(io_callback), std::move(encryptor)));
 }

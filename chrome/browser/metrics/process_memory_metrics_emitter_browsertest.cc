@@ -17,7 +17,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/test/trace_event_analyzer.h"
+#include "base/test/tracing/trace_event_analyzer.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/trace_config_memory_test_util.h"
@@ -756,7 +756,7 @@ IN_PROC_BROWSER_TEST_F(ProcessMemoryMetricsEmitterTest,
   CheckPageInfoUkmMetrics(url, true);
 }
 
-// Flaky test: https://crbug.com/731466
+// Flaky test: https://crbug.com/41324301
 IN_PROC_BROWSER_TEST_F(ProcessMemoryMetricsEmitterTest,
                        DISABLED_FetchThreeTimes) {
   ASSERT_TRUE(embedded_test_server()->Start());
@@ -787,8 +787,8 @@ IN_PROC_BROWSER_TEST_F(ProcessMemoryMetricsEmitterTest,
   CheckPageInfoUkmMetrics(url, true, count);
 }
 
-// Test is flaky on chromeos and linux. https://crbug.com/938054.
-// Test is flaky on mac and win: https://crbug.com/948674.
+// Test is flaky on chromeos and linux. https://crbug.com/41444813.
+// Test is flaky on mac and win: https://crbug.com/40621250.
 #if defined(ADDRESS_SANITIZER) || defined(MEMORY_SANITIZER) ||            \
     BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
     BUILDFLAG(IS_WIN)
@@ -904,7 +904,8 @@ IN_PROC_BROWSER_TEST_F(ProcessMemoryMetricsEmitterTest,
 
   // Hold a reference to an accessibility node so that there's one live node.
   Microsoft::WRL::ComPtr<IAccessible> root(
-      browser()->GetBrowserView().GetNativeViewAccessible());
+      BrowserView::GetBrowserViewForBrowser(browser())
+          ->GetNativeViewAccessible());
   ASSERT_TRUE(root);
 
   // Check for a live node.

@@ -63,7 +63,6 @@ COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kArcTosHostForTests[];
 COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kArcVmMountDebugFs[];
 COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kArcVmUreadaheadMode[];
 COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kArcVmUseHugePages[];
-COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kAshClearFastInkBuffer[];
 COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kAshConstrainPointerToRoot[];
 COMPONENT_EXPORT(ASH_CONSTANTS)
 extern const char kAshContextualNudgesInterval[];
@@ -163,7 +162,6 @@ COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kEnableArcVm[];
 COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kEnableArcVmDlc[];
 COMPONENT_EXPORT(ASH_CONSTANTS)
 extern const char kArcVmDlcHardwareRequirementSatisfied[];
-COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kEnableArcVmRtVcpu[];
 COMPONENT_EXPORT(ASH_CONSTANTS)
 extern const char kEnableBirchWeatherApiForTestingOverride[];
 COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kEnableCastReceiver[];
@@ -351,6 +349,7 @@ COMPONENT_EXPORT(ASH_CONSTANTS)
 extern const char kTelemetryExtensionDirectory[];
 extern const char kTemporaryAllowEmptyPasswordsInTests[];
 COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kTestEncryptionMigrationUI[];
+COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kTestName[];
 COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kTestWallpaperServer[];
 COMPONENT_EXPORT(ASH_CONSTANTS)
 extern const char kTetherHostScansIgnoreWiredConnections[];
@@ -375,6 +374,13 @@ COMPONENT_EXPORT(ASH_CONSTANTS)
 extern const char kAllowDefaultShelfPinLayoutIgnoringSync[];
 COMPONENT_EXPORT(ASH_CONSTANTS)
 extern const char kForceRefreshRateThrottle[];
+COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kAppModeAuthCode[];
+COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kAppModeOAuth2Token[];
+COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kMonitoringDestinationID[];
+COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kSystemLogUploadFrequency[];
+COMPONENT_EXPORT(ASH_CONSTANTS)
+extern const char kCustomAndroidMessagesDomain[];
+COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kNearbyShareVerboseLogging[];
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -483,7 +489,6 @@ COMPONENT_EXPORT(ASH_CONSTANTS)
 std::optional<base::TimeDelta> ContextualNudgesInterval();
 COMPONENT_EXPORT(ASH_CONSTANTS) bool ContextualNudgesResetShownCount();
 COMPONENT_EXPORT(ASH_CONSTANTS) bool IsUsingShelfAutoDim();
-COMPONENT_EXPORT(ASH_CONSTANTS) bool ShouldClearFastInkBuffer();
 
 // Returns whether the device has hps hardware.
 COMPONENT_EXPORT(ASH_CONSTANTS) bool HasHps();
@@ -510,6 +515,14 @@ bool IsScannerUpdateSecretKeyMatched();
 
 COMPONENT_EXPORT(ASH_CONSTANTS)
 base::AutoReset<bool> SetIgnoreScannerUpdateSecretKeyForTest();
+
+// Returns true if per-user timezone preferences are enabled.
+COMPONENT_EXPORT(ASH_CONSTANTS)
+bool IsPerUserTimezoneEnabled();
+
+// Returns true if fine-grained time zone detection is enabled.
+COMPONENT_EXPORT(ASH_CONSTANTS)
+bool IsFineGrainedTimeZoneDetectionEnabled();
 
 }  // namespace ash::switches
 

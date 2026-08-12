@@ -6,6 +6,7 @@
 #define COMPONENTS_COMMERCE_CORE_COMMERCE_FEATURE_LIST_H_
 
 #include <string>
+#include <string_view>
 
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
@@ -39,20 +40,17 @@ extern const base::FeatureParam<bool> kPriceInsightsShowFeedback;
 extern const char kPriceInsightsUseCacheParam[];
 extern const base::FeatureParam<bool> kPriceInsightsUseCache;
 BASE_DECLARE_FEATURE(kTabResumptionShopCard);
-BASE_DECLARE_FEATURE(kShopCardImpressionLimits);
-
-std::string ShopCardExperiment();
-
-BASE_DECLARE_FEATURE(kProductSpecifications);
-BASE_DECLARE_FEATURE(kProductSpecificationsClearMetadataOnNewlySupportedFields);
-BASE_DECLARE_FEATURE(kProductSpecificationsCache);
 
 BASE_DECLARE_FEATURE(kShoppingList);
 BASE_DECLARE_FEATURE(kPriceTrackingSubscriptionServiceLocaleKey);
-BASE_DECLARE_FEATURE(kPriceTrackingSubscriptionServiceProductVersion);
 BASE_DECLARE_FEATURE(kShoppingPageTypes);
 BASE_DECLARE_FEATURE(kShoppingPDPMetrics);
 BASE_DECLARE_FEATURE(kSubscriptionsApi);
+
+// Feature flag for detecting out of stock product, showing the user a
+// notification, and allowing the user to subscribe to in stock notifications.
+BASE_DECLARE_FEATURE(kInStockNotification);
+
 // Feature flag for showing discounts on checkout autofill.
 BASE_DECLARE_FEATURE(kDiscountAutofill);
 
@@ -156,29 +154,6 @@ constexpr base::FeatureParam<std::string> kCheckoutPatternMapping{
     // Empty JSON string.
     ""};
 
-inline constexpr base::FeatureParam<std::string> kShopCardVariation{
-    &kTabResumptionShopCard, "ShopCardVariant", ""};
-inline constexpr base::FeatureParam<std::string> kShopCardPosition{
-    &kTabResumptionShopCard, "ShopCardPosition", ""};
-
-extern const char kShopCardArm1[];
-extern const char kShopCardArm3[];
-extern const char kShopCardArm4[];
-extern const char kShopCardArm5[];
-extern const char kShopCardArm6[];
-extern const char kShopCardFrontPosition[];
-extern const char kShopCardMaxImpressions[];
-
-// Feature params for product specifications.
-extern const char kProductSpecificationsSetValidForClusteringTimeParam[];
-extern const base::FeatureParam<base::TimeDelta>
-    kProductSpecificationsSetValidForClusteringTime;
-extern const char kProductSpecificationsUseServerClusteringParam[];
-extern const base::FeatureParam<bool> kProductSpecificationsUseServerClustering;
-extern const char kProductSpecificationsEnableQualityLoggingParam[];
-extern const base::FeatureParam<bool>
-    kProductSpecificationsEnableQualityLogging;
-
 // Check if a URL belongs to a partner merchant of any type of discount.
 bool IsPartnerMerchant(const GURL& url);
 // Check if a URL belongs to a partner merchant of rule discount.
@@ -199,8 +174,8 @@ bool IsShoppingListAllowedForEnterprise(PrefService* prefs);
 // Check if commerce features are allowed to run for the specified country
 // and locale.
 bool IsEnabledForCountryAndLocale(const base::Feature& feature,
-                                  std::string country,
-                                  std::string locale);
+                                  std::string_view country,
+                                  std::string_view locale);
 
 // A feature check for the specified |feature|, which will return true if the
 // user has the feature flag enabled or (if applicable) is in an enabled

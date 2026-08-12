@@ -8,18 +8,14 @@ import androidx.test.filters.SmallTest;
 
 import org.junit.Assert;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.junit.MockitoJUnit;
-import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.profiles.ProfileProvider;
@@ -32,7 +28,6 @@ import org.chromium.ui.resources.dynamics.DynamicResourceLoader;
 @Batch(Batch.PER_CLASS)
 public class ContextualSearchTest extends ContextualSearchInstrumentationBase {
 
-    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock ContextualSearchManager.Natives mContextualSearchManagerJniMock;
 
     @Override
@@ -63,7 +58,6 @@ public class ContextualSearchTest extends ContextualSearchInstrumentationBase {
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
-    @Restriction(Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testLongpressFollowedByNonTextTap() {
         Assert.assertEquals(0, mPanelManager.getRequestPanelShowCount());
 
@@ -90,7 +84,6 @@ public class ContextualSearchTest extends ContextualSearchInstrumentationBase {
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
-    @Restriction(Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testTextTapFollowedByNonTextTap() {
         Assert.assertEquals(0, mPanelManager.getRequestPanelShowCount());
 
@@ -107,12 +100,11 @@ public class ContextualSearchTest extends ContextualSearchInstrumentationBase {
 
     /**
      * Tests that a Tap gesture processing is robust even when the selection somehow gets cleared
-     * during that process. This tests a failure-case found in crbug.com/728644.
+     * during that process. This tests a failure-case found in crbug.com/41322728.
      */
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
-    @Restriction(Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testTapProcessIsRobustWhenSelectionGetsCleared() {
         Assert.assertEquals(0, mPanelManager.getRequestPanelShowCount());
 

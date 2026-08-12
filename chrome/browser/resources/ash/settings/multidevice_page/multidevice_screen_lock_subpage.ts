@@ -85,13 +85,13 @@ export class SettingsMultideviceScreenLockSubpageElement extends
     };
   }
 
-  isPasswordDialogShowing: boolean;
-  isScreenLockEnabled: boolean;
-  showSetupPinDialog: boolean;
-  private authTokenInfo_: TokenInfo|undefined;
-  private quickUnlockDisabledByPolicy_: boolean;
-  private shouldPromptPasswordDialog_: boolean;
-  hasPin: boolean;
+  declare isPasswordDialogShowing: boolean;
+  declare isScreenLockEnabled: boolean;
+  declare showSetupPinDialog: boolean;
+  declare private authTokenInfo_: TokenInfo|undefined;
+  declare private quickUnlockDisabledByPolicy_: boolean;
+  declare private shouldPromptPasswordDialog_: boolean;
+  declare hasPin: boolean;
 
   static get observers() {
     return [
@@ -118,7 +118,8 @@ export class SettingsMultideviceScreenLockSubpageElement extends
     AuthFactorConfig.getRemote().observeFactorChanges(remote);
   }
 
-  async onFactorChanged(factor: AuthFactor): Promise<void> {
+  async onFactorChanged(factor: AuthFactor, _result: ConfigureResult):
+      Promise<void> {
     if (factor !== AuthFactor.kPrefBasedPin &&
         factor !== AuthFactor.kCryptohomePin &&
         factor !== AuthFactor.kCryptohomePinV2) {
@@ -153,7 +154,7 @@ export class SettingsMultideviceScreenLockSubpageElement extends
 
     if (pinFactor !== null) {
       this.hasPin = true;
-      this.selectedUnlockType = LockScreenUnlockType.PIN_PASSWORD;
+      this.selectedUnlockType = LockScreenUnlockType.PASSWORD_PIN;
       return;
     }
 
@@ -162,16 +163,16 @@ export class SettingsMultideviceScreenLockSubpageElement extends
     //     QuickUnlockMode.PIN to active modes.
     // (2) User selects PASSWORD, QuickUnlockMode.PIN capability is cleared
     //     from the active modes. This notifies this class via
-    //     |onFactorChanged| and prompts us to fetch the current state of the
-    //     PIN asynchronously.
+    //     |onFactorChanged| and prompts us to fetch the current state
+    //     of the PIN asynchronously.
     // (3) User selects PIN_PASSWORD, but the process from step 2 has not yet
     //     completed.
     // In this case, do not forcibly select the PASSWORD radio button even
     // though the unlock type is still PASSWORD (|hasPin| is false). If the
     // user wishes to set a pin, they will have to click the set pin button.
-    // See https://crbug.com/1054327 for details.
+    // See https://crbug.com/40119476 for details.
     if (factorChanged && !this.hasPin &&
-        this.selectedUnlockType === LockScreenUnlockType.PIN_PASSWORD) {
+        this.selectedUnlockType === LockScreenUnlockType.PASSWORD_PIN) {
       return;
     }
     this.hasPin = false;
@@ -187,7 +188,7 @@ export class SettingsMultideviceScreenLockSubpageElement extends
       bubbles: true,
       composed: true,
       detail: {
-        isPinNumberSelected: (selected === LockScreenUnlockType.PIN_PASSWORD),
+        isPinNumberSelected: (selected === LockScreenUnlockType.PASSWORD_PIN),
       },
     });
     this.dispatchEvent(pinNumberEvent);
@@ -198,7 +199,7 @@ export class SettingsMultideviceScreenLockSubpageElement extends
       // |hasPin| to false. If there is an error clearing quick unlock, revert
       // |hasPin| to true. This prevents setupPinButton UI delays, except in the
       // small chance that CrOS fails to remove the quick unlock capability. See
-      // https://crbug.com/1054327 for details.
+      // https://crbug.com/40119476 for details.
       this.hasPin = false;
       const {result} = await PinFactorEditor.getRemote().removePin(
           this.authTokenInfo_.token);
@@ -240,7 +241,7 @@ export class SettingsMultideviceScreenLockSubpageElement extends
    *     Polymer know about the dependency.
    */
   private showConfigurePinButton_(selectedUnlockType: string): boolean {
-    return selectedUnlockType === LockScreenUnlockType.PIN_PASSWORD;
+    return selectedUnlockType === LockScreenUnlockType.PASSWORD_PIN;
   }
 
   private onSetupPinDialogClose_(): void {

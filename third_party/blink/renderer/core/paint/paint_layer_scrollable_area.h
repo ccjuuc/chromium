@@ -50,6 +50,7 @@
 #include "third_party/blink/public/mojom/scroll/scroll_into_view_params.mojom-blink-forward.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/container_state.h"
+#include "third_party/blink/renderer/core/layout/geometry/axis.h"
 #include "third_party/blink/renderer/core/layout/scroll_anchor.h"
 #include "third_party/blink/renderer/core/scroll/scrollable_area.h"
 #include "third_party/blink/renderer/platform/graphics/overlay_scrollbar_clip_behavior.h"
@@ -110,6 +111,13 @@ struct CORE_EXPORT PaintLayerScrollableAreaRareData final
   // PostLayoutSnapshotClient for keeping track of snapped targets in both
   // directions used for matching snapped @container queries.
   Member<SnappedQueryScrollSnapshot> snapped_query_snapshot_;
+
+  // True if an overscroll gesture is currently in progress.
+  bool in_active_overscroll_ = false;
+  // True if we're targeting an "open" snap point state for the overscroll.
+  // Note that this is only updated at overscrollchanging timing, meaning that
+  // it (correctly) has the opposite value at overscrollstart event.
+  bool is_currently_overscrolling_ = false;
 };
 
 // PaintLayerScrollableArea represents the scrollable area of a LayoutBox.
@@ -276,6 +284,9 @@ class CORE_EXPORT PaintLayerScrollableArea final
   bool HasHorizontalScrollbar() const { return HorizontalScrollbar(); }
   bool HasVerticalScrollbar() const { return VerticalScrollbar(); }
 
+  // Returns the physical axes this area is capable of scrolling.
+  PhysicalAxes ScrollableAxes() const;
+
   Scrollbar* HorizontalScrollbar() const override {
     return scrollbar_manager_.HorizontalScrollbar();
   }
@@ -295,12 +306,6 @@ class CORE_EXPORT PaintLayerScrollableArea final
   bool IsScrollCornerVisible() const override;
   gfx::Rect ScrollCornerRect() const override;
   void SetScrollCornerNeedsPaintInvalidation() override;
-  gfx::Rect ConvertFromScrollbarToContainingEmbeddedContentView(
-      const Scrollbar&,
-      const gfx::Rect&) const override;
-  gfx::Point ConvertFromScrollbarToContainingEmbeddedContentView(
-      const Scrollbar&,
-      const gfx::Point&) const override;
   gfx::Point ConvertFromContainingEmbeddedContentViewToScrollbar(
       const Scrollbar&,
       const gfx::Point&) const override;
@@ -325,10 +330,9 @@ class CORE_EXPORT PaintLayerScrollableArea final
   gfx::Vector2d MaximumScrollOffsetInt() const override;
   PhysicalRect LayoutContentRect(
       IncludeScrollbarsInRect = kExcludeScrollbars) const;
-  gfx::Rect VisibleContentRect(
-      IncludeScrollbarsInRect = kExcludeScrollbars) const override;
+  gfx::Rect VisibleContentRect(IncludeScrollbarsInRect) const override;
   PhysicalRect VisibleScrollSnapportRect(
-      IncludeScrollbarsInRect = kExcludeScrollbars) const override;
+      IncludeScrollbarsInRect) const override;
   gfx::Size ContentsSize() const override;
 
   // Similar to |ContentsSize| but snapped considering |paint_offset| which can
@@ -359,15 +363,12 @@ class CORE_EXPORT PaintLayerScrollableArea final
   gfx::Point ScrollOrigin() const { return scroll_origin_; }
   bool ScrollOriginChanged() const { return scroll_origin_changed_; }
 
-  bool ScrollToAbsolutePosition(
-      const gfx::PointF& position,
-      mojom::blink::ScrollBehavior scroll_behavior =
-          mojom::blink::ScrollBehavior::kInstant,
-      mojom::blink::ScrollType scroll_type =
-          mojom::blink::ScrollType::kProgrammatic,
-      cc::ScrollSourceType source_type = cc::ScrollSourceType::kNone) {
+  // This is used only in tests.
+  bool ScrollToAbsolutePositionForTest(const gfx::PointF& position) {
     return SetScrollOffset(ScrollOffset(position - gfx::PointF(ScrollOrigin())),
-                           scroll_type, source_type, scroll_behavior);
+                           mojom::blink::ScrollType::kProgrammatic,
+                           cc::ScrollSourceType::kNone,
+                           mojom::blink::ScrollBehavior::kInstant);
   }
 
   // Scrolls by one page in the given direction, using PageScrollSnapStrategy
@@ -458,7 +459,8 @@ class CORE_EXPORT PaintLayerScrollableArea final
   PhysicalRect ScrollIntoView(
       const PhysicalRect&,
       const PhysicalBoxStrut& scroll_margin,
-      const mojom::blink::ScrollIntoViewParamsPtr&) override;
+      const mojom::blink::ScrollIntoViewParamsPtr&,
+      std::unique_ptr<ScrollPromiseResolver::ActiveScrollTracker>) override;
 
   // Returns true if the scrollable area is user-scrollable and it does
   // in fact overflow. This means this method will return false for
@@ -496,7 +498,7 @@ class CORE_EXPORT PaintLayerScrollableArea final
 
   gfx::QuadF LocalToVisibleContentQuad(const gfx::QuadF&,
                                        const LayoutObject*,
-                                       unsigned = 0) const final;
+                                       MapCoordinatesFlags = {}) const final;
 
   scoped_refptr<base::SingleThreadTaskRunner> GetTimerTaskRunner() const final;
 
@@ -634,7 +636,7 @@ class CORE_EXPORT PaintLayerScrollableArea final
 
   void SetTickmarksOverride(Vector<gfx::Rect> tickmarks);
 
-  bool MayCompositeScrollbar(const Scrollbar&) const;
+  bool MayCompositeScrollbar(const Scrollbar&) const override;
 
   void EstablishScrollbarRoot(bool freeze_horizontal, bool freeze_vertical);
   void ClearScrollbarRoot();
@@ -649,12 +651,15 @@ class CORE_EXPORT PaintLayerScrollableArea final
     return FreezeScrollbarsScope::ScrollbarsAreFrozen();
   }
 
+  bool IsCurrentlyOverscrolling() const {
+    return RareData() && RareData()->is_currently_overscrolling_;
+  }
+
   // Force scrollbars off for reconstruction.
   void RemoveScrollbarsForReconstruction();
 
-  void DidUpdateCullRect() {
-    last_cull_rect_update_scroll_position_ = ScrollPosition();
-  }
+  void DidUpdateCullRect();
+
   gfx::PointF LastCullRectUpdateScrollPosition() const {
     return last_cull_rect_update_scroll_position_;
   }
@@ -739,8 +744,6 @@ class CORE_EXPORT PaintLayerScrollableArea final
                           const ScrollOffset& new_offset,
                           cc::ScrollSourceType);
 
-  int VerticalScrollbarStart() const;
-  int HorizontalScrollbarStart() const;
   gfx::Vector2d ScrollbarOffset(const Scrollbar&) const;
 
   // If OverflowIndependent is specified, will only change current scrollbar
@@ -794,6 +797,7 @@ class CORE_EXPORT PaintLayerScrollableArea final
   void InvalidatePaintOfScrollbarIfNeeded(const PaintInvalidatorContext&,
                                           bool needs_paint_invalidation,
                                           Scrollbar* scrollbar,
+                                          bool force_invalidate_for_opaqueness,
                                           bool& previously_was_overlay,
                                           bool& previously_might_be_composited,
                                           gfx::Rect& visual_rect);
@@ -824,6 +828,18 @@ class CORE_EXPORT PaintLayerScrollableArea final
 
   void UpdateScrollMarkers() override;
   ScrollMarkerGroupPseudoElement* GetScrollMarkerGroup() const override;
+
+  // Overscroll events.
+  void EnqueueOverscrollStartEventIfNeeded();
+  void EnqueueOverscrollChangingEventIfNeeded();
+  void EnqueueOverscrollFinishedEventIfNeeded(bool snap_changed);
+
+  // Returns the amount this area can scroll in each physical axis. Only scroll
+  // containers have a scrollable size.
+  gfx::Vector2d ComputeScrollableSize() const;
+
+  // Zeroes any offset on axes this area does not scroll.
+  gfx::Vector2d ClampNonScrollableAxesOffsets(gfx::Vector2d offset) const;
 
   // PaintLayer is destructed before PaintLayerScrollable area, during this
   // time before PaintLayerScrollableArea has been collected layer_ will
@@ -903,6 +919,10 @@ class CORE_EXPORT PaintLayerScrollableArea final
 
   ContainerScrolled last_scrolled_horizontal_ = ContainerScrolled::kNone;
   ContainerScrolled last_scrolled_vertical_ = ContainerScrolled::kNone;
+
+  // The used pointer events value that was in effect at last paint
+  // invalidation. Used to invalidate paint!
+  EPointerEvents last_used_pointer_events_ = EPointerEvents::kAuto;
 
   class ScrollingBackgroundDisplayItemClient final
       : public GarbageCollected<ScrollingBackgroundDisplayItemClient>,

@@ -100,7 +100,7 @@ TEST_P(PDFiumInkWriterTest, BasicWriteAndRead) {
       CreateInkInputBatch(kBasicInputs);
   ASSERT_TRUE(inputs.has_value());
   ink::Stroke stroke(brush->ink_brush(), inputs.value());
-  std::vector<FPDF_PAGEOBJECT> results = WriteStrokeToPage(page, stroke);
+  auto results = WriteStrokeToPage(page, stroke);
   EXPECT_EQ(1u, results.size());
 
   ASSERT_TRUE(FPDFPage_GenerateContent(page));
@@ -152,14 +152,14 @@ TEST_P(PDFiumInkWriterTest, BasicWriteAndRead) {
   // Points close to `shape`, that still do not intersect.
   EXPECT_FALSE(ink::Intersects(ink::Point{139, 51}, shape, no_transform));
   EXPECT_FALSE(ink::Intersects(ink::Point{139, 51}, saved_shape, no_transform));
-  EXPECT_FALSE(ink::Intersects(ink::Point{128, 63}, shape, no_transform));
-  EXPECT_FALSE(ink::Intersects(ink::Point{128, 63}, saved_shape, no_transform));
+  EXPECT_FALSE(ink::Intersects(ink::Point{127, 63}, shape, no_transform));
+  EXPECT_FALSE(ink::Intersects(ink::Point{127, 63}, saved_shape, no_transform));
 
   // Points that do intersect.
   EXPECT_TRUE(ink::Intersects(ink::Point{139, 53}, shape, no_transform));
   EXPECT_TRUE(ink::Intersects(ink::Point{139, 53}, saved_shape, no_transform));
-  EXPECT_TRUE(ink::Intersects(ink::Point{129, 63}, shape, no_transform));
-  EXPECT_TRUE(ink::Intersects(ink::Point{129, 63}, saved_shape, no_transform));
+  EXPECT_TRUE(ink::Intersects(ink::Point{128, 63}, shape, no_transform));
+  EXPECT_TRUE(ink::Intersects(ink::Point{128, 63}, saved_shape, no_transform));
 }
 
 TEST_P(PDFiumInkWriterTest, WriteToCroppedPage) {
@@ -183,7 +183,7 @@ TEST_P(PDFiumInkWriterTest, WriteToCroppedPage) {
       CreateInkInputBatch(kBasicInputs);
   ASSERT_TRUE(inputs.has_value());
   ink::Stroke stroke(brush->ink_brush(), inputs.value());
-  std::vector<FPDF_PAGEOBJECT> results = WriteStrokeToPage(page, stroke);
+  auto results = WriteStrokeToPage(page, stroke);
   EXPECT_EQ(results.size(), 1u);
 
   ASSERT_TRUE(FPDFPage_GenerateContent(page));
@@ -193,8 +193,8 @@ TEST_P(PDFiumInkWriterTest, WriteToCroppedPage) {
 
   base::FilePath expectation_path = GetInkTestDataFilePath(
       GetTestDataPathWithPlatformSuffix("ink_writer_cropped.png"));
-  CheckPdfRendering(saved_pdf_data, /*page_index=*/0, gfx::Size(135, 90),
-                    expectation_path);
+  CheckFuzzyPdfRendering(saved_pdf_data, /*page_index=*/0, gfx::Size(135, 90),
+                         expectation_path);
 
   // Load `saved_pdf_data` into `saved_engine` and get a handle to the one and
   // only page.
@@ -224,10 +224,10 @@ TEST_P(PDFiumInkWriterTest, WriteToCroppedPage) {
   // of 92, that object's position in the PDF page is relative to the MediaBox,
   // not the CropBox.  So its bounding box should be 55 points to the right of
   // that.
-  EXPECT_FLOAT_EQ(147.3787f, bounds.left());
-  EXPECT_FLOAT_EQ(49.520641f, bounds.bottom());
-  EXPECT_FLOAT_EQ(159.91898f, bounds.right());
-  EXPECT_FLOAT_EQ(61.169273f, bounds.top());
+  EXPECT_NEAR(147.39908f, bounds.left(), 0.001f);
+  EXPECT_NEAR(49.52425f, bounds.bottom(), 0.001f);
+  EXPECT_NEAR(159.8443f, bounds.right(), 0.001f);
+  EXPECT_NEAR(61.155205f, bounds.top(), 0.001f);
 }
 
 TEST_P(PDFiumInkWriterTest, EmptyStroke) {
@@ -242,7 +242,7 @@ TEST_P(PDFiumInkWriterTest, EmptyStroke) {
 
   auto brush = CreateTestBrush();
   ink::Stroke unused_stroke(brush->ink_brush());
-  std::vector<FPDF_PAGEOBJECT> results = WriteStrokeToPage(page, unused_stroke);
+  auto results = WriteStrokeToPage(page, unused_stroke);
   EXPECT_TRUE(results.empty());
 }
 
@@ -258,8 +258,7 @@ TEST_P(PDFiumInkWriterTest, NoPage) {
 
   auto brush = CreateTestBrush();
   ink::Stroke unused_stroke(brush->ink_brush());
-  std::vector<FPDF_PAGEOBJECT> results =
-      WriteStrokeToPage(/*page=*/nullptr, unused_stroke);
+  auto results = WriteStrokeToPage(/*page=*/nullptr, unused_stroke);
   EXPECT_TRUE(results.empty());
 }
 

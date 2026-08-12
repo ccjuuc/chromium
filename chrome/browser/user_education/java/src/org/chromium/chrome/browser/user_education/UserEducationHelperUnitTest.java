@@ -24,21 +24,30 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.shadows.ShadowLooper;
+import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowSystemClock;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
+import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.components.browser_ui.widget.textbubble.TextBubble;
 import org.chromium.components.feature_engagement.SnoozeAction;
 import org.chromium.components.feature_engagement.Tracker;
+import org.chromium.components.user_education.FeaturePromoClosedReason;
 import org.chromium.ui.base.TestActivity;
+
+import java.util.concurrent.TimeUnit;
 
 /** Tests for {@link UserEducationHelper}. */
 @RunWith(BaseRobolectricTestRunner.class)
+@Config(shadows = {ShadowSystemClock.class})
 public class UserEducationHelperUnitTest {
     public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -66,25 +75,28 @@ public class UserEducationHelperUnitTest {
     @Test
     public void testConstructor_ProfileSupplier_DelayedInit() {
         TrackerFactory.setTrackerForTests(mTracker);
-        ObservableSupplierImpl<Profile> profileSupplier = new ObservableSupplierImpl<>();
+        SettableMonotonicObservableSupplier<Profile> profileSupplier =
+                ObservableSuppliers.createMonotonic();
         UserEducationHelper educationHelper =
                 new UserEducationHelper(new Activity(), profileSupplier, new Handler());
         educationHelper.requestShowIph(mTestIphCommand1);
 
         Mockito.verifyNoInteractions(mTracker);
         profileSupplier.set(mProfile);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Mockito.verify(mTracker).addOnInitializedCallback(Mockito.any());
     }
 
     @Test
     public void testConstructor_ProfileSupplier_EarlyInit() {
         TrackerFactory.setTrackerForTests(mTracker);
-        ObservableSupplierImpl<Profile> profileSupplier = new ObservableSupplierImpl<>();
+        SettableMonotonicObservableSupplier<Profile> profileSupplier =
+                ObservableSuppliers.createMonotonic();
         profileSupplier.set(mProfile);
         UserEducationHelper educationHelper =
                 new UserEducationHelper(new Activity(), profileSupplier, new Handler());
         educationHelper.requestShowIph(mTestIphCommand1);
+        BaseRobolectricTestRule.runAllBackgroundAndUi();
         Mockito.verify(mTracker).addOnInitializedCallback(Mockito.any());
     }
 
@@ -121,7 +133,7 @@ public class UserEducationHelperUnitTest {
         mInitCallbackCaptor.getValue().onResult(true);
         TextBubble textBubble = educationHelper.getTextBubbleForTesting();
         assertFalse(textBubble.getDismissOnTouchInteractionForTesting());
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
 
         assertTrue(textBubble.getDismissOnTouchInteractionForTesting());
     }
@@ -153,7 +165,7 @@ public class UserEducationHelperUnitTest {
         mInitCallbackCaptor.getValue().onResult(true);
         TextBubble textBubble = educationHelper.getTextBubbleForTesting();
         textBubble.onDismissForTesting(/* byInsideTouch= */ false);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
 
         Mockito.verify(mTracker).dismissedWithSnooze(featureName, SnoozeAction.SNOOZED);
 
@@ -165,8 +177,88 @@ public class UserEducationHelperUnitTest {
         mInitCallbackCaptor.getValue().onResult(true);
         textBubble = educationHelper.getTextBubbleForTesting();
         textBubble.onDismissForTesting(/* byInsideTouch= */ true);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
 
         Mockito.verify(mTracker).dismissedWithSnooze(featureName, SnoozeAction.DISMISSED);
+    }
+
+    @Test
+    public void testDismissHistogram_Dismiss() {
+        TrackerFactory.setTrackerForTests(mTracker);
+        TextBubble.setSkipShowCheckForTesting(true);
+        UserEducationHelper educationHelper =
+                new UserEducationHelper(mActivity, mProfile, new Handler());
+        doReturn(true).when(mTracker).shouldTriggerHelpUi("TEST");
+        final String featureName = "TEST";
+
+        IphCommand testIphCommand =
+                new IphCommandBuilder(
+                                ContextUtils.getApplicationContext().getResources(),
+                                featureName,
+                                "test",
+                                "test")
+                        .setShowTextBubble(true)
+                        .setAnchorView(new FrameLayout(mActivity))
+                        .build();
+
+        educationHelper.requestShowIph(testIphCommand);
+        Mockito.verify(mTracker).addOnInitializedCallback(mInitCallbackCaptor.capture());
+
+        mInitCallbackCaptor.getValue().onResult(true);
+        TextBubble textBubble = educationHelper.getTextBubbleForTesting();
+
+        HistogramWatcher watcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "UserEducation.MessageAction." + featureName,
+                                FeaturePromoClosedReason.DISMISS)
+                        .build();
+
+        textBubble.onDismissForTesting(/* byInsideTouch= */ true);
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
+
+        watcher.assertExpected();
+    }
+
+    @Test
+    public void testDismissHistogram_Timeout() {
+        TrackerFactory.setTrackerForTests(mTracker);
+        TextBubble.setSkipShowCheckForTesting(true);
+        UserEducationHelper educationHelper =
+                new UserEducationHelper(mActivity, mProfile, new Handler());
+        doReturn(true).when(mTracker).shouldTriggerHelpUi("TEST");
+        final String featureName = "TEST";
+
+        IphCommand testIphCommand =
+                new IphCommandBuilder(
+                                ContextUtils.getApplicationContext().getResources(),
+                                featureName,
+                                "test",
+                                "test")
+                        .setShowTextBubble(true)
+                        .setAnchorView(new FrameLayout(mActivity))
+                        .setAutoDismissTimeout(5000)
+                        .build();
+
+        educationHelper.requestShowIph(testIphCommand);
+        Mockito.verify(mTracker).addOnInitializedCallback(mInitCallbackCaptor.capture());
+
+        mInitCallbackCaptor.getValue().onResult(true);
+        TextBubble textBubble = educationHelper.getTextBubbleForTesting();
+
+        // Advance the system clock by more than the 5 second timeout.
+        ShadowSystemClock.advanceBy(6000, TimeUnit.MILLISECONDS);
+
+        HistogramWatcher watcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "UserEducation.MessageAction." + featureName,
+                                FeaturePromoClosedReason.TIMEOUT)
+                        .build();
+
+        textBubble.onDismissForTesting(/* byInsideTouch= */ false);
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
+
+        watcher.assertExpected();
     }
 }

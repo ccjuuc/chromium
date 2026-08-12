@@ -7,17 +7,18 @@
 
 #import "base/memory/raw_ptr.h"
 #import "components/signin/ios/browser/manage_accounts_delegate.h"
+#import "components/signin/ios/browser/signin_enabled_datasource.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_constants.h"
 #import "ios/chrome/browser/shared/model/browser/browser_user_data.h"
 #import "ios/chrome/browser/tabs/model/tabs_dependency_installer.h"
 
-@protocol ApplicationCommands;
-@protocol SettingsCommands;
 class Browser;
+@class ManageAccountsDelegateBridge;
+@protocol SceneCommands;
 @class SceneState;
+@protocol SettingsCommands;
 @class SigninCoordinator;
 @protocol SystemIdentity;
-@class ManageAccountsDelegateBridge;
 @class UIViewController;
 
 // A browser agent that tracks the addition and removal of webstates, registers
@@ -39,36 +40,52 @@ class AccountConsistencyBrowserAgent
 
   // ManageAccountsDelegate
   void OnRestoreGaiaCookies() override;
-  void OnManageAccounts(const GURL& url) override;
+  void OnManageAccounts(const GURL& url, web::WebState* web_state) override;
   void OnAddAccount(const GURL& url,
-                    const std::string& prefilled_email) override;
+                    const std::string& prefilled_email,
+                    web::WebState* web_state) override;
   void OnShowConsistencyPromo(const GURL& url,
-                              web::WebState* webState) override;
-  void OnGoIncognito(const GURL& url) override;
+                              web::WebState* web_state) override;
+  void OnGoIncognito(const GURL& url, web::WebState* web_state) override;
+  bool SigninEnabled() const override;
 
  private:
   friend class BrowserUserData<AccountConsistencyBrowserAgent>;
+
+  // Opens the account menu if the prefilled account is on the device.
+  // Otherwise, open the Add Account view.
+  void OnAddPrefilledAccount(const GURL& url,
+                             const std::string& prefilled_email);
+  // Opens the account menu if there is at least another profile. Otherwise open
+  // the Add Account View.
+  void OnAddUnkwownAccount(const GURL& url);
 
   void StopSigninCoordinator(SigninCoordinatorResult result,
                              id<SystemIdentity> identity);
 
   // `base_view_controller` is the view controller which UI will be presented
   // from.
-  AccountConsistencyBrowserAgent(Browser* browser,
-                                 UIViewController* base_view_controller);
+  AccountConsistencyBrowserAgent(
+      Browser* browser,
+      UIViewController* base_view_controller,
+      signin::SigninEnabledDataSource* signin_enabled_data_source);
 
-  // Returns whether it makes sense to show the browser's account menu instead
-  // of starting an "add account" flow or showing the "manage accounts" screen.
-  bool ShouldShowAccountMenu() const;
+  // Returns whether it is possible to show the browser's account menu.
+  bool CanShowAccountMenu() const;
 
   // Opens the account menu, offering to switch to a different account (even one
   // that's in a different profile).
   void ShowAccountMenu(const GURL& url);
 
+  // Whether `web_state` is the active one.
+  bool IsActiveWebstate(web::WebState* web_state);
+
   UIViewController* base_view_controller_;
-  id<ApplicationCommands> application_handler_;
+  id<SceneCommands> application_handler_;
   id<SettingsCommands> settings_handler_;
   SigninCoordinator* add_account_coordinator_;
+
+  raw_ptr<signin::SigninEnabledDataSource> signin_enabled_data_source_;
 
   // Bridge object to act as the delegate.
   ManageAccountsDelegateBridge* bridge_;

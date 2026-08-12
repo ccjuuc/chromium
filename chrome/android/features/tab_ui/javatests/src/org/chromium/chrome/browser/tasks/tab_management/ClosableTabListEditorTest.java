@@ -24,19 +24,21 @@ import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.util.Batch;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.layouts.LayoutType;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab_ui.RecyclerViewPosition;
+import org.chromium.chrome.browser.tab_ui.TabListMode;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tasks.tab_management.TabListEditorCoordinator.CreationMode;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.page.WebPageStation;
@@ -68,7 +70,7 @@ public class ClosableTabListEditorTest {
     private TabListEditorLayout mTabListEditorLayout;
     private TabListEditorCoordinator mTabListEditorCoordinator;
     private WeakReference<TabListEditorLayout> mRef;
-    private ObservableSupplierImpl<EdgeToEdgeController> mEdgeToEdgeSupplier;
+    private SettableMonotonicObservableSupplier<EdgeToEdgeController> mEdgeToEdgeSupplier;
 
     private ViewGroup mParentView;
     private SnackbarManager mSnackbarManager;
@@ -82,9 +84,8 @@ public class ClosableTabListEditorTest {
         mSnackbarManager = mActivityTestRule.getActivity().getSnackbarManager();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    var currentTabGroupModelFilterSupplier =
-                            mTabModelSelector.getCurrentTabGroupModelFilterSupplier();
-                    mEdgeToEdgeSupplier = new ObservableSupplierImpl<>();
+                    var currentTabModelSupplier = mTabModelSelector.getCurrentTabModelSupplier();
+                    mEdgeToEdgeSupplier = ObservableSuppliers.createMonotonic();
                     mTabListEditorCoordinator =
                             new TabListEditorCoordinator(
                                     mActivityTestRule.getActivity(),
@@ -93,23 +94,24 @@ public class ClosableTabListEditorTest {
                                             .getCompositorViewHolderForTesting(),
                                     mParentView,
                                     mActivityTestRule.getActivity().getBrowserControlsManager(),
-                                    currentTabGroupModelFilterSupplier,
+                                    currentTabModelSupplier,
                                     mActivityTestRule.getActivity().getTabContentManager(),
                                     mSetRecyclerViewPosition,
-                                    TabListCoordinator.TabListMode.GRID,
+                                    TabListMode.GRID,
                                     /* displayGroups= */ true,
                                     mSnackbarManager,
                                     /* bottomSheetController= */ null,
                                     TabProperties.TabActionState.CLOSABLE,
-                                    /* gridCardOnClickListenerProvider= */ null,
+                                    /* tabListItemOnClickListenerProvider= */ null,
                                     mModalDialogManager,
                                     /* desktopWindowStateManager= */ null,
                                     mEdgeToEdgeSupplier,
                                     CreationMode.FULL_SCREEN,
+                                    /* itemPickerSelectionHandler= */ null,
                                     /* undoBarExplicitTrigger= */ null,
-                                    /* componentName= */ null,
+                                    /* componentId= */ null,
                                     TabListEditorCoordinator.UNLIMITED_SELECTION,
-                                    false);
+                                    /* isSingleContextMode= */ false);
 
                     mTabListEditorController = mTabListEditorCoordinator.getController();
                     mTabListEditorLayout =
@@ -136,7 +138,7 @@ public class ClosableTabListEditorTest {
             if (mActivityTestRule
                     .getActivity()
                     .getLayoutManager()
-                    .isLayoutVisible(LayoutType.TAB_SWITCHER)) {
+                    .isLayoutVisible(LayoutType.HUB)) {
                 TabUiTestHelper.leaveTabSwitcher(mActivityTestRule.getActivity());
             }
         }

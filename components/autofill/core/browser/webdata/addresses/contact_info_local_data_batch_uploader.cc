@@ -4,11 +4,17 @@
 
 #include "components/autofill/core/browser/webdata/addresses/contact_info_local_data_batch_uploader.h"
 
+#include <set>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
 #include "base/check_deref.h"
 #include "base/functional/callback.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
-#include "components/autofill/core/browser/data_quality/addresses/profile_requirement_utils.h"
+#include "components/autofill/core/browser/data_quality/addresses/address_import_requirement_utils.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/service/local_data_description.h"

@@ -19,16 +19,22 @@ import android.app.Activity;
 import android.app.PictureInPictureUiState;
 import android.app.assist.AssistContent;
 import android.net.Uri;
+import android.os.Build;
 import android.util.Pair;
 import android.view.ViewGroup;
+import android.window.OnBackInvokedDispatcher;
+
+import androidx.annotation.Nullable;
 
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.json.JSONTokener;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.Mockito;
@@ -40,7 +46,7 @@ import org.robolectric.annotation.Config;
 import org.chromium.base.UserDataHost;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplier;
-import org.chromium.base.supplier.SettableObservableSupplier;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
@@ -49,25 +55,34 @@ import org.chromium.chrome.R;
 import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.app.metrics.LaunchCauseMetrics;
 import org.chromium.chrome.browser.app.tabmodel.TabModelOrchestrator;
+import org.chromium.chrome.browser.compositor.layouts.LayoutManagerImpl;
 import org.chromium.chrome.browser.dom_distiller.ReaderModeManager;
-import org.chromium.chrome.browser.enterprise.util.EnterpriseInfo;
 import org.chromium.chrome.browser.flags.ActivityType;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.layouts.LayoutType;
 import org.chromium.chrome.browser.media.FullscreenVideoPictureInPictureController;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileProvider;
 import org.chromium.chrome.browser.readaloud.ReadAloudController;
+import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabDestroyStatus;
+import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tabmodel.TabCreator;
 import org.chromium.chrome.browser.tabmodel.TabModel;
+import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.ui.BottomContainer;
 import org.chromium.chrome.browser.ui.RootUiCoordinator;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuPropertiesDelegate;
 import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+import org.chromium.components.browser_ui.settings.SettingsNavigation;
 import org.chromium.components.dom_distiller.core.DomDistillerUrlUtilsJni;
+import org.chromium.components.embedder_support.util.UrlConstants;
+import org.chromium.components.policy.EnterpriseInfo;
 import org.chromium.components.ukm.UkmRecorder;
 import org.chromium.components.ukm.UkmRecorderJni;
+import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.RenderFrameHost;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.TestActivity;
@@ -85,6 +100,9 @@ public class ChromeActivityUnitTest {
     @Mock TabModel mTabModel;
     @Mock Profile mProfile;
     @Mock Tab mActivityTab;
+    @Mock TabModelSelector mTabModelSelector;
+    @Mock TabCreator mTabCreator;
+    @Mock SettingsNavigation mSettingsNavigation;
     @Mock ReadAloudController mReadAloudController;
     @Mock ReaderModeManager mReaderModeManager;
     @Mock FullscreenVideoPictureInPictureController mFullscreenVideoPictureInPictureController;
@@ -93,9 +111,10 @@ public class ChromeActivityUnitTest {
     @Mock UkmRecorder.Natives mUkmRecorderJniMock;
     @Mock DomDistillerUrlUtilsJni mDomDistillerUrlUtilsJni;
     @Mock private TabStateThemeResourceProvider mThemeResourceProvider;
+    @Mock LayoutManagerImpl mLayoutManagerMock;
 
-    private final SettableObservableSupplier<ReadAloudController> mReadAloudControllerSupplier =
-            ObservableSuppliers.createMonotonic();
+    private final SettableMonotonicObservableSupplier<ReadAloudController>
+            mReadAloudControllerSupplier = ObservableSuppliers.createMonotonic();
 
     class TestChromeActivity extends ChromeActivity {
         public TestChromeActivity() {
@@ -111,7 +130,9 @@ public class ChromeActivityUnitTest {
         protected void createTabModels() {}
 
         @Override
-        protected void destroyTabModels() {}
+        protected @TabDestroyStatus int destroyTabModels() {
+            return TabDestroyStatus.NO_SHUTDOWN;
+        }
 
         @Override
         protected Pair<? extends TabCreator, ? extends TabCreator> createTabCreators() {
@@ -144,8 +165,11 @@ public class ChromeActivityUnitTest {
         }
 
         @Override
-        protected FullscreenVideoPictureInPictureController
+        protected @Nullable FullscreenVideoPictureInPictureController
                 ensureFullscreenVideoPictureInPictureController() {
+            if (!ChromeFeatureList.sFullscreenVideoPictureInPicture.isEnabled()) {
+                return null;
+            }
             return mFullscreenVideoPictureInPictureController;
         }
 
@@ -167,7 +191,7 @@ public class ChromeActivityUnitTest {
         String errorString = "Some error.";
         ViewGroup viewGroup = new BottomContainer(mActivity, null);
         SnackbarManager snackbarManager =
-                Mockito.spy(new SnackbarManager(mActivity, viewGroup, null));
+                Mockito.spy(new SnackbarManager(mActivity, viewGroup, null, null, null));
         ChromeActivity.createWindowErrorSnackbar(errorString, snackbarManager);
         Snackbar snackbar = snackbarManager.getCurrentSnackbarForTesting();
         Mockito.verify(snackbarManager).showSnackbar(ArgumentMatchers.any());
@@ -205,6 +229,7 @@ public class ChromeActivityUnitTest {
 
     @Test
     @Config(sdk = 31)
+    @EnableFeatures(ChromeFeatureList.FULLSCREEN_VIDEO_PICTURE_IN_PICTURE)
     public void testPictureInPictureStashing() {
         // Verify that ChromeActivity reports `isStashed` correctly to the controller.
         TestChromeActivity chromeActivity = Mockito.spy(new TestChromeActivity());
@@ -218,6 +243,19 @@ public class ChromeActivityUnitTest {
         when(mPictureInPictureUiState.isStashed()).thenReturn(true);
         chromeActivity.onPictureInPictureUiStateChanged(mPictureInPictureUiState);
         Mockito.verify(mFullscreenVideoPictureInPictureController).onStashReported(true);
+    }
+
+    @Test
+    @Config(sdk = 31)
+    @DisableFeatures(ChromeFeatureList.FULLSCREEN_VIDEO_PICTURE_IN_PICTURE)
+    public void testPictureInPictureStashing_Disabled() {
+        // Verify that ChromeActivity does not report `isStashed` when the feature is disabled.
+        TestChromeActivity chromeActivity = Mockito.spy(new TestChromeActivity());
+
+        when(mPictureInPictureUiState.isStashed()).thenReturn(true);
+        chromeActivity.onPictureInPictureUiStateChanged(mPictureInPictureUiState);
+        Mockito.verify(mFullscreenVideoPictureInPictureController, Mockito.never())
+                .onStashReported(Mockito.anyBoolean());
     }
 
     @Test
@@ -245,7 +283,7 @@ public class ChromeActivityUnitTest {
         assertNotNull(result.getStructuredData());
 
         JSONObject jsonObject =
-                (JSONObject) new org.json.JSONTokener(result.getStructuredData()).nextValue();
+                (JSONObject) new JSONTokener(result.getStructuredData()).nextValue();
         var pageMetadata = jsonObject.getJSONObject("page_metadata");
         var isWorkProfile = pageMetadata.getBoolean("is_work_profile");
         var contentUri = pageMetadata.getString("content_uri");
@@ -300,7 +338,12 @@ public class ChromeActivityUnitTest {
     @Test
     @EnableFeatures(ChromeFeatureList.ANDROID_THEME_RESOURCE_PROVIDER)
     public void testThemeResourceProvider_enabled() {
-        TestChromeActivity chromeActivity = new TestChromeActivity();
+        TestChromeActivity chromeActivity = Mockito.spy(new TestChromeActivity());
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+            doReturn(Mockito.mock(OnBackInvokedDispatcher.class))
+                    .when(chromeActivity)
+                    .getOnBackInvokedDispatcher();
+        }
         chromeActivity.onPreCreate();
         assertNotNull(
                 "ThemeResourceProvider should be created.",
@@ -310,7 +353,12 @@ public class ChromeActivityUnitTest {
     @Test
     @DisableFeatures(ChromeFeatureList.ANDROID_THEME_RESOURCE_PROVIDER)
     public void testThemeResourceProvider_disabled() {
-        TestChromeActivity chromeActivity = new TestChromeActivity();
+        TestChromeActivity chromeActivity = Mockito.spy(new TestChromeActivity());
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+            doReturn(Mockito.mock(OnBackInvokedDispatcher.class))
+                    .when(chromeActivity)
+                    .getOnBackInvokedDispatcher();
+        }
         chromeActivity.onPreCreate();
         assertNull(
                 "ThemeResourceProvider should not be created.",
@@ -321,6 +369,11 @@ public class ChromeActivityUnitTest {
     @EnableFeatures(ChromeFeatureList.ANDROID_THEME_RESOURCE_PROVIDER)
     public void testThemeResourceProvider_wrongActivityType() {
         TestChromeActivity chromeActivity = Mockito.spy(new TestChromeActivity());
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+            doReturn(Mockito.mock(OnBackInvokedDispatcher.class))
+                    .when(chromeActivity)
+                    .getOnBackInvokedDispatcher();
+        }
         doReturn(ActivityType.CUSTOM_TAB).when(chromeActivity).getActivityType();
         chromeActivity.onPreCreate();
         assertNull(
@@ -370,5 +423,62 @@ public class ChromeActivityUnitTest {
 
         chromeActivity.detachThemeObserver(observer);
         verify(mThemeResourceProvider).removeObserver(observer);
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.GLIC)
+    public void testExitOverviewModeOnActorPiPExpand() {
+        TestChromeActivity activity = new TestChromeActivity();
+        TestChromeActivity chromeActivity = Mockito.spy(activity);
+
+        ((SettableMonotonicObservableSupplier<LayoutManagerImpl>)
+                        chromeActivity.getLayoutManagerSupplier())
+                .set(mLayoutManagerMock);
+
+        doReturn(true).when(chromeActivity).isInOverviewMode();
+        chromeActivity.exitOverviewModeOnActorPiPExpand();
+        verify(mLayoutManagerMock).showLayout(eq(LayoutType.BROWSING), eq(false));
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.SETTINGS_IN_TAB)
+    @Config(qualifiers = "sw600dp")
+    public void testPreferencesMenuItem_SettingsInTabEnabled() {
+        TestChromeActivity chromeActivity = Mockito.spy(new TestChromeActivity());
+
+        doReturn(mActivityTab).when(chromeActivity).getActivityTab();
+        doReturn(mTabModel).when(chromeActivity).getCurrentTabModel();
+        doReturn(mTabCreator).when(chromeActivity).getTabCreator(eq(false));
+
+        when(mTabModel.getProfile()).thenReturn(mProfile);
+        when(mProfile.isOffTheRecord()).thenReturn(false);
+
+        assertTrue(
+                chromeActivity.onMenuOrKeyboardAction(R.id.preferences_id, /* fromMenu= */ true));
+
+        // Verify that createNewTab was called with the settings URL.
+        ArgumentCaptor<LoadUrlParams> paramsCaptor = ArgumentCaptor.forClass(LoadUrlParams.class);
+        verify(mTabCreator)
+                .createNewTab(
+                        paramsCaptor.capture(), eq(TabLaunchType.FROM_CHROME_UI), eq(mActivityTab));
+        assertEquals(UrlConstants.SETTINGS_URL, paramsCaptor.getValue().getUrl());
+    }
+
+    @Test
+    @DisableFeatures(ChromeFeatureList.SETTINGS_IN_TAB)
+    public void testPreferencesMenuItem_SettingsInTabDisabled() {
+        TestChromeActivity chromeActivity = Mockito.spy(new TestChromeActivity());
+
+        doReturn(mTabModel).when(chromeActivity).getCurrentTabModel();
+        when(mTabModel.getProfile()).thenReturn(mProfile);
+        when(mProfile.isOffTheRecord()).thenReturn(false);
+
+        SettingsNavigationFactory.setInstanceForTesting(mSettingsNavigation);
+
+        assertTrue(
+                chromeActivity.onMenuOrKeyboardAction(R.id.preferences_id, /* fromMenu= */ true));
+
+        // Verify that the standard settings activity was launched.
+        verify(mSettingsNavigation).startSettings(chromeActivity);
     }
 }

@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "base/functional/callback_forward.h"
 #include "build/build_config.h"
 #include "components/language/core/browser/accept_languages_service.h"
 #include "components/translate/core/browser/translate_prefs.h"

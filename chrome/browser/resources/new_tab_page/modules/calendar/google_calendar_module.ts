@@ -6,6 +6,7 @@ import './calendar.js';
 import '../info_dialog.js';
 import '../module_header.js';
 
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import type {CalendarEvent} from '../../calendar_data.mojom-webui.js';
@@ -21,7 +22,7 @@ import {GoogleCalendarProxyImpl} from './google_calendar_proxy.js';
 export interface GoogleCalendarModuleElement {
   $: {
     calendar: CalendarElement,
-    moduleHeaderElementV2: ModuleHeaderElement,
+    moduleHeader: ModuleHeaderElement,
   };
 }
 
@@ -43,7 +44,7 @@ export class GoogleCalendarModuleElement extends
 
   static override get properties() {
     return {
-      events_: {type: Object},
+      events_: {type: Array},
       showInfoDialog_: {type: Boolean},
     };
   }
@@ -61,23 +62,29 @@ export class GoogleCalendarModuleElement extends
 
   protected getMenuItems_(): MenuItem[] {
     return [
-        {
-          action: 'dismiss',
-          icon: 'modules:visibility_off',
-          text: this.i18nRecursive(
-              '', 'modulesDismissForHoursButtonText',
-              'calendarModuleDismissHours'),
-        },
-        {
-          action: 'disable',
-          icon: 'modules:block',
-          text: this.i18n('modulesGoogleCalendarDisableButtonText'),
-        },
-        {
-          action: 'info',
-          icon: 'modules:info',
-          text: this.i18n('moduleInfoButtonTitle'),
-        },
+      {
+        action: 'dismiss',
+        icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'modules:visibility-off' :
+            'modules:visibility_off-old',
+        text: this.i18nRecursive(
+            '', 'modulesDismissForHoursButtonText',
+            'calendarModuleDismissHours'),
+      },
+      {
+        action: 'disable',
+        icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'modules:block' :
+            'modules:block-old',
+        text: this.i18n('modulesGoogleCalendarDisableButtonText'),
+      },
+      {
+        action: 'info',
+        icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'modules:info' :
+            'modules:info-old',
+        text: this.i18n('moduleInfoButtonTitle'),
+      },
     ];
   }
 
@@ -94,14 +101,10 @@ export class GoogleCalendarModuleElement extends
 
   protected onDismissButtonClick_() {
     this.handler_.dismissModule();
-    this.dispatchEvent(new CustomEvent('dismiss-module-instance', {
-      bubbles: true,
-      composed: true,
-      detail: {
-        message: this.i18n('modulesGoogleCalendarDismissToastMessage'),
-        restoreCallback: () => this.handler_.restoreModule(),
-      },
-    }));
+    this.fire('dismiss-module-instance', {
+      message: this.i18n('modulesGoogleCalendarDismissToastMessage'),
+      restoreCallback: () => this.handler_.restoreModule(),
+    });
   }
 
   protected onInfoButtonClick_() {
@@ -110,6 +113,12 @@ export class GoogleCalendarModuleElement extends
 
   protected onInfoDialogClose_() {
     this.showInfoDialog_ = false;
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'ntp-google-calendar-module': GoogleCalendarModuleElement;
   }
 }
 

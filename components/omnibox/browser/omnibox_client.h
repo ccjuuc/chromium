@@ -6,7 +6,10 @@
 #define COMPONENTS_OMNIBOX_BROWSER_OMNIBOX_CLIENT_H_
 
 #include <memory>
+#include <optional>
+#include <string>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/lens/contextual_input.h"
@@ -22,11 +25,13 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
+#include "ui/gfx/image/image.h"
 
 class AutocompleteResult;
 class GURL;
 class SessionID;
 class SkBitmap;
+class AiModeButtonService;
 class TemplateURL;
 class TemplateURLService;
 struct AutocompleteMatch;
@@ -37,7 +42,6 @@ class BookmarkModel;
 }
 
 namespace gfx {
-class Image;
 struct VectorIcon;
 }  // namespace gfx
 
@@ -53,12 +57,36 @@ class OmniboxPopupCloser;
 // objects under the hood).
 class OmniboxClient {
  public:
+  // The result of an extension-controlled search confirmation dialog.
+  enum class ExtensionControlledDialogResult {
+    // Accept the new extension's search provider.
+    kAccept,
+
+    // Reject the new extension's search provider, and disable the extension,
+    // and search with the previous provider.
+    kReject,
+
+    // Don't search at all.
+    kCancel,
+
+    // No dialog was ever shown. Confirmation turned out to be unnecessary.
+    // The pending navigation must proceed as originally requested. This is
+    // distinct from kCancel: the user made no choice because they were never
+    // asked. Conflating the two silently drops the navigation
+    // (See https://crbug.com/540532980).
+    kNoDialogShown,
+  };
+
   OmniboxClient() = default;
   virtual ~OmniboxClient() = default;
 
   // Returns an AutocompleteProviderClient specific to the embedder context.
   virtual std::unique_ptr<AutocompleteProviderClient>
   CreateAutocompleteProviderClient() = 0;
+
+  // Returns if the client is ChromeOmniboxClient. Useful for safe downcasting
+  // without RTTI.
+  virtual bool IsChromeOmniboxClient() const;
 
   // Returns whether there is any associated current page.  For example, during
   // startup or shutdown, the omnibox may exist but have no attached page.
@@ -90,6 +118,13 @@ class OmniboxClient {
   // Returns the session ID of the current page.
   virtual SessionID GetSessionID() const = 0;
 
+  // Checks if the default search engine is extension controlled and if so,
+  // shows a confirmation dialog. Returns true if the dialog is shown.
+  // |callback| is run when the dialog is closed.
+  virtual bool ShowConfirmationDialogIfDefaultSearchExtensionControlled(
+      const GURL& url,
+      base::OnceCallback<void(ExtensionControlledDialogResult)> callback);
+
   // Called when the user changes the selected |index| in the result list via
   // mouse down or arrow key down. |match| is the suggestion corresponding to
   // that index. |navigation_predictor| represents the event indicated
@@ -109,6 +144,10 @@ class OmniboxClient {
   virtual TemplateURLService* GetTemplateURLService();
   const TemplateURLService* GetTemplateURLService() const {
     return const_cast<OmniboxClient*>(this)->GetTemplateURLService();
+  }
+  virtual AiModeButtonService* GetAiModeButtonService();
+  const AiModeButtonService* GetAiModeButtonService() const {
+    return const_cast<OmniboxClient*>(this)->GetAiModeButtonService();
   }
   virtual const AutocompleteSchemeClassifier& GetSchemeClassifier() const = 0;
   virtual AutocompleteClassifier* GetAutocompleteClassifier();
@@ -156,6 +195,13 @@ class OmniboxClient {
   // Returns the URL of the current navigation entry.
   virtual GURL GetNavigationEntryURL() const = 0;
 
+  // Returns true if the current page is a contextual tasks UI page (i.e.
+  // chrome://contextual-tasks/).
+  virtual bool IsContextualTasksPage() const;
+
+  // Returns the inner frame URL for the current contextual tasks page.
+  virtual GURL GetContextualTasksInnerFrameURL() const;
+
   // Classify the current page being viewed as, for example, the new tab
   // page or a normal web page.  Used for logging omnibox events for
   // UMA opted-in users.  Examines the user's profile to determine if the
@@ -189,6 +235,13 @@ class OmniboxClient {
   virtual std::optional<lens::ContextualInputData> GetContextualInputData()
       const;
 
+  // Returns true if there is previous submitted thread context (files, tabs,
+  // etc.) in the session. Only relevant for co-browsing / composebox sessions.
+  virtual bool HasPreviousSubmittedThreadContext() const;
+
+  // Returns true if an auto-suggested tab is present or showing.
+  virtual bool HasAutoSuggestedTab() const;
+
   // Asks the `ExtensionOmniboxEventRouter` to process `match` for it.
   // Some more processing is done to separate the keyword from the
   // text if in keyword mode. `observer` is the OmniboxNavigationObserver that
@@ -206,10 +259,6 @@ class OmniboxClient {
   // Called to notify clients that the omnibox focus state has changed.
   virtual void OnFocusChanged(OmniboxFocusState state,
                               OmniboxFocusChangeReason reason) {}
-
-  // Called to notify clients when keyword mode is entered or exited.
-  virtual void OnKeywordModeChanged(bool entered,
-                                    const std::u16string& keyword) {}
 
   // Called to show HaTS survey if the proper criteria is met.
   virtual void MaybeShowOnFocusHatsSurvey(AutocompleteProviderClient* client) {}
@@ -233,11 +282,12 @@ class OmniboxClient {
                                const BitmapFetchedCallback& on_bitmap_fetched) {
   }
 
-  // These two methods fetch favicons if the embedder supports it. Not all
-  // embedders do. These methods return the favicon synchronously if possible.
-  // Otherwise, they return an empty gfx::Image and |on_favicon_fetched| may or
-  // may not be called asynchronously later. |on_favicon_fetched| will never be
-  // run synchronously, and will never be run with an empty result.
+  // These methods fetch favicons if the embedder supports it. Not all embedders
+  // do. These methods return the favicon synchronously if possible. Otherwise,
+  // they return an empty `gfx::Image` and `on_favicon_fetched` may or may not
+  // be called asynchronously later. Unless `notify_on_empty` is
+  // true, `on_favicon_fetched` will never be run synchronously and will never
+  // be run with an empty result.
   using FaviconFetchedCallback =
       base::OnceCallback<void(const gfx::Image& favicon)>;
   virtual gfx::Image GetFaviconForPageUrl(
@@ -264,6 +314,16 @@ class OmniboxClient {
       FaviconFetchedCallback on_favicon_fetched) const {
     return const_cast<OmniboxClient*>(this)->GetFaviconForKeywordSearchProvider(
         template_url, std::move(on_favicon_fetched));
+  }
+  virtual gfx::Image GetFaviconForIconUrl(
+      const GURL& icon_url,
+      FaviconFetchedCallback on_favicon_fetched,
+      bool notify_on_empty);
+  gfx::Image GetFaviconForIconUrl(const GURL& icon_url,
+                                  FaviconFetchedCallback on_favicon_fetched,
+                                  bool notify_on_empty) const {
+    return const_cast<OmniboxClient*>(this)->GetFaviconForIconUrl(
+        icon_url, std::move(on_favicon_fetched), notify_on_empty);
   }
 
   // Called when the text may have changed in the edit.
@@ -307,6 +367,12 @@ class OmniboxClient {
       const AutocompleteMatch& match,
       const AutocompleteMatch& alternative_nav_match) = 0;
 
+  // Executes the given `action`.
+  void ExecuteAction(OmniboxAction* action,
+                     WindowOpenDisposition disposition,
+                     base::TimeTicks match_selection_timestamp,
+                     OmniboxAction::Client& action_client);
+
   // Called when the input is accepted with a thumbnail and no user text. This
   // is required because there is no verbatim match when the input is just an
   // image without text.
@@ -321,9 +387,11 @@ class OmniboxClient {
   // Called when the thumbnail image has been removed.
   virtual void OnThumbnailRemoved() {}
 
-  // Navigates to `gurl` in the current tab. Used for handling activations of
-  // the AI Mode page action icon.
-  virtual void OpenUrl(GURL gurl) {}
+  // Navigates to `gurl` with the specified `disposition`. Used for handling
+  // activations of the AI Mode page action icon.
+  virtual void OpenUrl(
+      GURL gurl,
+      WindowOpenDisposition disposition = WindowOpenDisposition::CURRENT_TAB) {}
 
   // Even though IPH suggestions aren't selectable like normal matches, they can
   // have a 'learn more' or next-steps link. `OpenIphLink()` allows opening
@@ -341,8 +409,8 @@ class OmniboxClient {
   // use it.
   virtual bool IsAimPopupEnabled() const;
 
-  // Returns the current enabled tool mode if any.
-  virtual omnibox::ChromeAimToolsAndModels AimToolMode() const;
+  // Returns the current input state if any.
+  virtual omnibox::InputState GetInputState() const;
 
   virtual base::WeakPtr<OmniboxClient> AsWeakPtr() = 0;
 };

@@ -4,7 +4,6 @@
 
 #include "ash/system/phonehub/camera_roll_thumbnail.h"
 
-#include "ash/constants/ash_features.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_id.h"
@@ -78,6 +77,7 @@ class CameraRollThumbnailTest : public views::ViewsTestBase {
     fake_camera_roll_manager_.reset();
     fake_user_action_recorder_.reset();
     generator_.reset();
+    widget_ = nullptr;
     views::ViewsTestBase::TearDown();
   }
 
@@ -180,7 +180,7 @@ class CameraRollThumbnailTest : public views::ViewsTestBase {
 
   // This is required in order for the context to find color provider
   AshColorProvider color_provider_;
-  raw_ptr<views::Widget, DanglingUntriaged> widget_ = nullptr;
+  raw_ptr<views::Widget> widget_ = nullptr;
   std::unique_ptr<CameraRollThumbnail> camera_roll_thumbnail_;
   std::unique_ptr<phonehub::FakeUserActionRecorder> fake_user_action_recorder_;
   std::unique_ptr<phonehub::FakeCameraRollManager> fake_camera_roll_manager_;
@@ -282,8 +282,9 @@ TEST_F(CameraRollThumbnailTest, LeftClickDownloadWithBackoff) {
   EXPECT_EQ(fake_camera_roll_manager()->GetDownloadRequestCount(), 1);
 
   // Wait for enough time to pass to be able to download again
-  task_environment()->FastForwardBy(
-      features::kPhoneHubCameraRollThrottleInterval.Get());
+  constexpr base::TimeDelta kPhoneHubCameraRollThrottleInterval =
+      base::Seconds(2);
+  task_environment()->FastForwardBy(kPhoneHubCameraRollThrottleInterval);
   generator()->ClickLeftButton();
 
   // Menu model of type CameraRollMenuModel is not created

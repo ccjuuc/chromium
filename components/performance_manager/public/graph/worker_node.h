@@ -5,12 +5,12 @@
 #ifndef COMPONENTS_PERFORMANCE_MANAGER_PUBLIC_GRAPH_WORKER_NODE_H_
 #define COMPONENTS_PERFORMANCE_MANAGER_PUBLIC_GRAPH_WORKER_NODE_H_
 
-#include <string>
-
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list_types.h"
 #include "base/types/token_type.h"
+#include "base/unguessable_token.h"
 #include "components/performance_manager/public/execution_context_priority/execution_context_priority.h"
 #include "components/performance_manager/public/graph/node.h"
 #include "components/performance_manager/public/graph/node_set_view.h"
@@ -55,7 +55,7 @@ using execution_context_priority::PriorityAndReason;
 // or a service worker is registered to handle their network requests.
 class WorkerNode : public TypedNode<WorkerNode> {
  public:
-  using NodeSet = base::flat_set<const Node*>;
+  using NodeSet = base::flat_set<raw_ptr<const Node>>;
   template <class ReturnType>
   using NodeSetView = NodeSetView<NodeSet, ReturnType>;
 
@@ -79,7 +79,7 @@ class WorkerNode : public TypedNode<WorkerNode> {
   virtual WorkerType GetWorkerType() const = 0;
 
   // Returns the unique ID of the browser context that this worker belongs to.
-  virtual const std::string& GetBrowserContextID() const = 0;
+  virtual const base::UnguessableToken& GetBrowserContextID() const = 0;
 
   // Returns the process node to which this worker belongs. This is a constant
   // over the lifetime of the frame, except that it will always be null during
@@ -131,12 +131,12 @@ class WorkerNode : public TypedNode<WorkerNode> {
   // Returns the most recently estimated resident set of the worker. This is an
   // estimate because RSS is computed by process, and a process can host
   // multiple workers.
-  virtual base::ByteCount GetResidentSetEstimate() const = 0;
+  virtual base::ByteSize GetResidentSetEstimate() const = 0;
 
   // Returns the most recently estimated private footprint of the worker. This
   // is an estimate because PMF is computed by process, and a process can host
   // multiple workers.
-  virtual base::ByteCount GetPrivateFootprintEstimate() const = 0;
+  virtual base::ByteSize GetPrivateFootprintEstimate() const = 0;
 };
 
 // Observer interface for worker nodes.

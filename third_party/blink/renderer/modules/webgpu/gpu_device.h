@@ -49,6 +49,8 @@ class GPURenderBundleEncoder;
 class GPURenderBundleEncoderDescriptor;
 class GPURenderPipeline;
 class GPURenderPipelineDescriptor;
+class GPUResourceTable;
+class GPUResourceTableDescriptor;
 class GPUSampler;
 class GPUSamplerDescriptor;
 class GPUShaderModule;
@@ -129,6 +131,9 @@ class GPUDevice final : public EventTarget,
       ExceptionState& exception_state);
   GPUPipelineLayout* createPipelineLayout(
       const GPUPipelineLayoutDescriptor* descriptor);
+  GPUResourceTable* createResourceTable(
+      const GPUResourceTableDescriptor* descriptor,
+      ExceptionState& exception_state);
 
   GPUShaderModule* createShaderModule(
       const GPUShaderModuleDescriptor* descriptor);
@@ -165,7 +170,7 @@ class GPUDevice final : public EventTarget,
   ExecutionContext* GetExecutionContext() const override;
 
   bool IsDestroyed() const;
-  std::string GetFormattedLabel() const;
+  String GetFormattedLabel() const;
   void InjectError(wgpu::ErrorType type, const char* message);
   void AddConsoleWarning(const String& message);
   void AddConsoleWarning(const char* message);
@@ -203,11 +208,18 @@ class GPUDevice final : public EventTarget,
   void DissociateMailboxes();
   void UnmapAllMappableBuffers(v8::Isolate* isolate);
 
-  void OnUncapturedError(const wgpu::Device& device,
-                         wgpu::ErrorType errorType,
-                         wgpu::StringView message);
-  void OnUncapturedErrorImpl(wgpu::ErrorType errorType, const String& message);
-  void OnLogging(wgpu::LoggingType loggingType, wgpu::StringView message);
+  // Both the uncaptured error callbacks and the logging callbacks run
+  // spontaneously (unlike other callbacks that run via ProcessEvents). When
+  // running on the main thread, they can run inline as usual, but when running
+  // off the main thread, i.e. on the IO thread, the StringView needs to be
+  // copied at the callsite, then proxied over to the main thread to actually
+  // run the callbacks. The complexity of the function signatures is a result of
+  // the restrictions when using blink's callbacks which implicitly wraps
+  // sequence checking. Further explanation of the callbacks are included at the
+  // implementation sites.
+  void OnUncapturedError(wgpu::ErrorType errorType, const String& message);
+  void OnLogging(wgpu::LoggingType loggingType, const String& message);
+
   void OnDeviceLost(
       std::unique_ptr<
           WGPURepeatingCallback<wgpu::UncapturedErrorCallback<void>>>,
@@ -234,9 +246,8 @@ class GPUDevice final : public EventTarget,
       wgpu::ComputePipeline compute_pipeline,
       wgpu::StringView message);
 
-  void SetLabelImpl(const String& value) override {
-    std::string utf8_label = value.Utf8();
-    GetHandle().SetLabel(utf8_label.c_str());
+  void SetLabelImpl(std::string_view value) override {
+    GetHandle().SetLabel(value);
   }
 
   Member<GPUAdapter> adapter_;

@@ -33,28 +33,22 @@ GPU_GLES2_EXPORT bool UsePassthroughCommandDecoder(
 GPU_GLES2_EXPORT GpuPreferences
 ParseGpuPreferences(const base::CommandLine* command_line);
 
-// Determine which Skia GrContext backend will be used for GPU compositing and
-// rasterization (if enabled) by checking the feature flags for Vulkan and/or
-// Graphite. If they are not enabled, default to GL.
-// If Graphite is enabled, the backend is Dawn by default or cn be specified
-// using the --skia-graphite-backend flag. On iOS, the backend is Metal by
-// default if skia_use_metal is set to true via gn args.
 GPU_GLES2_EXPORT GrContextType
-ParseGrContextType(const base::CommandLine* command_line);
+ParseDefaultGrContextType(const base::CommandLine* command_line);
 
 bool MSAAIsSlow(const GpuDriverBugWorkarounds& workarounds);
 
 }  // namespace gles2
 
-#if BUILDFLAG(IS_MAC)
-// Gets the texture target to use with MacOS native GpuMemoryBuffers based on
-// the current GL implementation.
-GPU_GLES2_EXPORT uint32_t GetTextureTargetForIOSurfaces();
-#endif  // BUILDFLAG(IS_MAC)
-
 GPU_GLES2_EXPORT size_t UpdateShaderCacheSizeOnMemoryPressure(
     size_t max_cache_size,
     base::MemoryPressureLevel memory_pressure_level);
+
+// Returns `max_cache_size` scaled according to the `memory_limit` (expressed as
+// a percentage) received from the memory coordinator. Supports values over
+// 100%, but does not support negative values.
+GPU_GLES2_EXPORT size_t
+UpdateShaderCacheSizeOnMemoryLimit(size_t max_cache_size, int memory_limit);
 
 }  // namespace gpu
 

@@ -28,13 +28,12 @@
 
 #include "third_party/blink/renderer/modules/indexeddb/idb_request.h"
 
-#include <atomic>
 #include <memory>
 #include <optional>
 #include <utility>
 
-#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/trace_event/trace_id_helper.h"
 #include "third_party/blink/public/platform/web_blob_info.h"
 #include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_binding_for_modules.h"
@@ -131,51 +130,23 @@ const char* RequestTypeToName(IDBRequest::TypeForMetrics type) {
 
 void RecordHistogram(IDBRequest::TypeForMetrics type,
                      bool success,
-                     base::TimeDelta duration,
-                     bool is_fg_client) {
+                     base::TimeDelta duration) {
   switch (type) {
     case IDBRequest::TypeForMetrics::kObjectStorePut:
       UMA_HISTOGRAM_TIMES("WebCore.IndexedDB.RequestDuration2.ObjectStorePut",
                           duration);
-      if (is_fg_client) {
-        UMA_HISTOGRAM_TIMES(
-            "WebCore.IndexedDB.RequestDuration2.ObjectStorePut.Foreground",
-            duration);
-      }
-      base::UmaHistogramBoolean(
-          "WebCore.IndexedDB.RequestDispatchOutcome.ObjectStorePut", success);
       break;
     case IDBRequest::TypeForMetrics::kObjectStoreAdd:
       UMA_HISTOGRAM_TIMES("WebCore.IndexedDB.RequestDuration2.ObjectStoreAdd",
                           duration);
-      if (is_fg_client) {
-        UMA_HISTOGRAM_TIMES(
-            "WebCore.IndexedDB.RequestDuration2.ObjectStoreAdd.Foreground",
-            duration);
-      }
-      base::UmaHistogramBoolean(
-          "WebCore.IndexedDB.RequestDispatchOutcome.ObjectStoreAdd", success);
       break;
     case IDBRequest::TypeForMetrics::kObjectStoreGet:
       UMA_HISTOGRAM_TIMES("WebCore.IndexedDB.RequestDuration2.ObjectStoreGet",
                           duration);
-      if (is_fg_client) {
-        UMA_HISTOGRAM_TIMES(
-            "WebCore.IndexedDB.RequestDuration2.ObjectStoreGet.Foreground",
-            duration);
-      }
-      base::UmaHistogramBoolean(
-          "WebCore.IndexedDB.RequestDispatchOutcome.ObjectStoreGet", success);
       break;
 
     case IDBRequest::TypeForMetrics::kFactoryOpen:
       UMA_HISTOGRAM_TIMES("WebCore.IndexedDB.RequestDuration2.Open", duration);
-      if (is_fg_client) {
-        UMA_HISTOGRAM_TIMES(
-            "WebCore.IndexedDB.RequestDuration2.Open.Foreground", duration);
-      }
-      base::UmaHistogramBoolean("WebCore.IndexedDB.RequestDispatchOutcome.Open",
-                                success);
       break;
 
     case IDBRequest::TypeForMetrics::kCursorAdvance:
@@ -210,17 +181,15 @@ void RecordHistogram(IDBRequest::TypeForMetrics type,
 
 IDBRequest::AsyncTraceState::AsyncTraceState(TypeForMetrics type)
     : type_(type), start_time_(base::TimeTicks::Now()) {
-  static std::atomic<size_t> counter(0);
-  id_ = counter.fetch_add(1, std::memory_order_relaxed);
+  id_ = base::trace_event::GetNextGlobalTraceId();
   TRACE_EVENT_BEGIN("IndexedDB",
-                    perfetto::DynamicString(RequestTypeToName(type)),
+                    perfetto::StaticString(RequestTypeToName(type)),
                     perfetto::Track(id_));
 }
 
 void IDBRequest::AsyncTraceState::WillDispatchResult(bool success) {
   if (type_) {
-    RecordHistogram(*type_, success, base::TimeTicks::Now() - start_time_,
-                    is_fg_client_);
+    RecordHistogram(*type_, success, base::TimeTicks::Now() - start_time_);
     RecordAndReset();
   }
 }
@@ -507,12 +476,13 @@ void IDBRequest::OnClear(bool success) {
 
 void IDBRequest::OnGetAll(
     mojom::blink::IDBGetAllResultType result_type,
+    Vector<mojom::blink::IDBRecordPtr> initial_records,
     mojo::PendingAssociatedReceiver<mojom::blink::IDBDatabaseGetAllResultSink>
         receiver) {
   probe::AsyncTask async_task(GetExecutionContext(), &async_task_context_,
                               "success");
   transaction_->EnqueueResult(std::make_unique<IDBRequestQueueItem>(
-      this, result_type, std::move(receiver),
+      this, result_type, std::move(initial_records), std::move(receiver),
       BindOnce(&IDBTransaction::OnResultReady,
                WrapPersistent(transaction_.Get()))));
 }
@@ -761,20 +731,6 @@ void IDBRequest::SendResult(IDBAny* result) {
 void IDBRequest::AssignNewMetrics(AsyncTraceState metrics) {
   DCHECK(metrics_.IsEmpty());
   metrics_ = std::move(metrics);
-
-  // Grab the lifecycle state for metrics. This should be temporary code.
-  // `transaction_` only keeps track of an integral `scheduling_priority`.
-  if (GetExecutionContext()) {
-    std::ignore = GetExecutionContext()->GetScheduler()->AddLifecycleObserver(
-        FrameOrWorkerScheduler::ObserverType::kWorkerScheduler,
-        BindRepeating([](scheduler::SchedulingLifecycleState lifecycle_state) {
-          base::UmaHistogramEnumeration(
-              "WebCore.IndexedDB.SchedulingLifecycleState", lifecycle_state);
-        }));
-  }
-
-  metrics_.set_is_fg_client(transaction_ &&
-                            (transaction_->db().scheduling_priority() == 0));
 }
 
 void IDBRequest::SetResult(IDBAny* result) {

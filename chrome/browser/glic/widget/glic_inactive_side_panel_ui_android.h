@@ -5,7 +5,10 @@
 #ifndef CHROME_BROWSER_GLIC_WIDGET_GLIC_INACTIVE_SIDE_PANEL_UI_ANDROID_H_
 #define CHROME_BROWSER_GLIC_WIDGET_GLIC_INACTIVE_SIDE_PANEL_UI_ANDROID_H_
 
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
+#include "chrome/browser/glic/host/glic.mojom.h"
+#include "chrome/browser/glic/public/glic_side_panel_coordinator.h"
 #include "chrome/browser/glic/service/glic_ui_embedder.h"
 
 namespace tabs {
@@ -23,22 +26,33 @@ class GlicInactiveSidePanelUi : public GlicUiEmbedder {
       base::WeakPtr<tabs::TabInterface> tab,
       GlicUiEmbedder::Delegate& delegate);
 
+  GlicInactiveSidePanelUi(base::WeakPtr<tabs::TabInterface> tab,
+                          GlicUiEmbedder::Delegate& delegate);
   ~GlicInactiveSidePanelUi() override;
 
   // GlicUiEmbedder:
   Host::EmbedderDelegate* GetHostEmbedderDelegate() override;
   void Show(const ShowOptions& options) override;
   bool IsShowing() const override;
-  void Close() override;
+  bool IsShowingOrBackgrounded() const override;
+  void Close(const CloseOptions& options) override;
   void Focus() override;
   bool HasFocus() override;
   std::unique_ptr<GlicUiEmbedder> CreateInactiveEmbedder() const override;
   mojom::PanelState GetPanelState() const override;
   gfx::Size GetPanelSize() override;
+  void InitializeAfterRegistration() override;
   std::string DescribeForTesting() override;
 
  private:
-  GlicInactiveSidePanelUi();
+  GlicSidePanelCoordinator* GetGlicSidePanelCoordinator() const;
+  void OnSidePanelStateChanged(GlicSidePanelCoordinator::State state);
+
+  base::WeakPtr<tabs::TabInterface> tab_;
+  const raw_ref<GlicUiEmbedder::Delegate> delegate_;
+  base::CallbackListSubscription state_subscription_;
+
+  base::WeakPtrFactory<GlicInactiveSidePanelUi> weak_ptr_factory_{this};
 };
 
 }  // namespace glic

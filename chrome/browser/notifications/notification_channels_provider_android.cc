@@ -9,10 +9,12 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
+#include "base/check.h"
 #include "base/check_op.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
@@ -203,10 +205,10 @@ class ChannelsRuleIterator : public content_settings::RuleIterator {
 
 static void JNI_NotificationSettingsBridge_OnGetSiteChannelsDone(
     JNIEnv* env,
-    jlong callback_id,
+    int64_t callback_id,
     const JavaRef<jobjectArray>& j_channels) {
   std::vector<NotificationChannel> channels;
-  for (auto jchannel : j_channels.ReadElements<jobject>()) {
+  for (auto jchannel : j_channels.CreateView(env)) {
     channels.emplace_back(Java_SiteChannel_getId(env, jchannel),
                           Java_SiteChannel_getOrigin(env, jchannel),
                           base::Time::FromInternalValue(
@@ -227,7 +229,7 @@ static void JNI_NotificationSettingsBridge_OnChannelStateChanged(
     JNIEnv* env,
     const JavaRef<jstring>& j_channel_id,
     const JavaRef<jstring>& j_origin,
-    jboolean blocked) {
+    bool blocked) {
   if (GetChannelStateChangedCallback().is_null()) {
     return;
   }
@@ -472,7 +474,7 @@ bool NotificationChannelsProviderAndroid::SetWebsiteSetting(
     const ContentSettingsPattern& primary_pattern,
     const ContentSettingsPattern& secondary_pattern,
     ContentSettingsType content_type,
-    base::Value&& value,
+    const base::Value& value,
     const content_settings::ContentSettingConstraints& constraints) {
   if (content_type != ContentSettingsType::NOTIFICATIONS) {
     return false;
@@ -513,7 +515,6 @@ bool NotificationChannelsProviderAndroid::SetWebsiteSetting(
   if (setting == CONTENT_SETTING_DEFAULT) {
     return false;
   }
-  value = base::Value();
   return true;
 }
 
@@ -655,7 +656,7 @@ bool NotificationChannelsProviderAndroid::UpdateLastUsedTime(
   return false;
 }
 
-bool NotificationChannelsProviderAndroid::ResetLastVisitTime(
+bool NotificationChannelsProviderAndroid::UpdateLastVisitTime(
     const ContentSettingsPattern& primary_pattern,
     const ContentSettingsPattern& secondary_pattern,
     ContentSettingsType content_type) {
@@ -663,11 +664,11 @@ bool NotificationChannelsProviderAndroid::ResetLastVisitTime(
   return false;
 }
 
-bool NotificationChannelsProviderAndroid::UpdateLastVisitTime(
+bool NotificationChannelsProviderAndroid::SetAutorevocationBypassedByUser(
     const ContentSettingsPattern& primary_pattern,
     const ContentSettingsPattern& secondary_pattern,
     ContentSettingsType content_type) {
-  // Last visited tracking is not implemented for this type.
+  // Autorevocation does not include this type.
   return false;
 }
 

@@ -12,7 +12,7 @@
 #include "base/types/optional_ref.h"
 #include "components/optimization_guide/core/inference/base_model_executor.h"
 #include "components/optimization_guide/core/inference/model_executor.h"
-#include "components/passage_embeddings/passage_embeddings_types.h"
+#include "components/passage_embeddings/core/passage_embeddings_types.h"
 #include "components/permissions/permission_request_enums.h"
 #include "components/permissions/prediction_service/permissions_ai_encoder_base.h"
 #include "components/permissions/prediction_service/permissions_aiv4_model_metadata.pb.h"
@@ -23,14 +23,13 @@
 namespace permissions {
 
 struct PermissionsAiv4ExecutorInput {
-  PermissionsAiv4ExecutorInput(
-      SkBitmap snapshot,
-      passage_embeddings::Embedding rendered_text_embedding);
+  PermissionsAiv4ExecutorInput(SkBitmap snapshot,
+                               std::vector<float> inner_text_embedding);
   ~PermissionsAiv4ExecutorInput();
   PermissionsAiv4ExecutorInput(const PermissionsAiv4ExecutorInput&);
   PermissionsAiv4ExecutorInput(PermissionsAiv4ExecutorInput&&);
   SkBitmap snapshot;
-  passage_embeddings::Embedding inner_text_embedding;
+  std::vector<float> inner_text_embedding;
   std::optional<PermissionsAiv4ModelMetadata> metadata;
 };
 

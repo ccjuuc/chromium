@@ -174,7 +174,7 @@ class SupervisedUserPendingStateNavigationTest
                                             "*.example.com"}}};
 
   void SetManualHost(const GURL& url, bool allowlist) {
-    supervised_user_test_util::SetManualFilterForHost(browser()->profile(),
+    supervised_user_test_util::SetManualFilterForHost(browser()->GetProfile(),
                                                       url.GetHost(), allowlist);
   }
 
@@ -421,7 +421,7 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserPendingStateNavigationTest,
 // Accepts a net::test_server::HttpRequest and checks if the google
 // api key is present in the headers.
 MATCHER(ContainsGoogleApiKey, "") {
-  return base::Contains(arg.headers, "X-Goog-Api-Key");
+  return arg.headers.contains("X-Goog-Api-Key");
 }
 
 // Tests that when the user doesn't have a valid access token the request is
@@ -448,8 +448,8 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserPendingStateNavigationTest,
           supervision_mixin_.GetIdentityTestEnvironment()
               ->identity_manager()
               ->GetPrimaryAccountId(signin::ConsentLevel::kSignin),
-          GoogleServiceAuthError(
-              GoogleServiceAuthError::State::INVALID_GAIA_CREDENTIALS));
+          GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+              GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN));
   kids_management_api_mock().AllowSubsequentClassifyUrl();
 
   ASSERT_TRUE(
@@ -478,8 +478,8 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserPendingStateNavigationTest,
           supervision_mixin_.GetIdentityTestEnvironment()
               ->identity_manager()
               ->GetPrimaryAccountId(signin::ConsentLevel::kSignin),
-          GoogleServiceAuthError(
-              GoogleServiceAuthError::State::INVALID_GAIA_CREDENTIALS));
+          GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+              GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN));
 
   ASSERT_TRUE(WaitForRenderFrameReady(contents()->GetPrimaryMainFrame()));
 

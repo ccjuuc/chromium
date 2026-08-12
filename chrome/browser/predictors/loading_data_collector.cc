@@ -10,7 +10,6 @@
 #include <string>
 #include <utility>
 
-#include "chrome/browser/browser_features.h"
 #include "chrome/browser/predictors/loading_stats_collector.h"
 #include "chrome/browser/predictors/predictors_features.h"
 #include "chrome/browser/predictors/resource_prefetch_predictor.h"
@@ -279,6 +278,7 @@ void LoadingDataCollector::RecordFinishNavigation(
 
 void LoadingDataCollector::RecordResourceLoadComplete(
     NavigationId navigation_id,
+    const GURL& original_url,
     const blink::mojom::ResourceLoadInfo& resource_load_info) {
   auto nav_it = inflight_navigations_.find(navigation_id);
   if (nav_it == inflight_navigations_.end())

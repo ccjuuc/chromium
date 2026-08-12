@@ -12,6 +12,7 @@
 #import "components/infobars/core/infobar.h"
 #import "components/prefs/pref_service.h"
 #import "components/signin/public/base/signin_switches.h"
+#import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/infobars/model/infobar_ios.h"
 #import "ios/chrome/browser/infobars/model/infobar_type.h"
 #import "ios/chrome/browser/infobars/ui_bundled/banners/infobar_banner_consumer.h"
@@ -22,6 +23,8 @@
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/sync_presenter_commands.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/test/web_task_environment.h"
@@ -31,9 +34,9 @@
 #import "third_party/ocmock/gtest_support.h"
 
 namespace {
-const std::u16string kTitleText = u"title_text";
-const std::u16string kMessageText = u"message_text";
-const std::u16string kButtonLabelText = u"button_label_text";
+constexpr char16_t kTitleText[] = u"title_text";
+constexpr char16_t kMessageText[] = u"message_text";
+constexpr char16_t kButtonLabelText[] = u"button_label_text";
 }  // namespace
 
 // Test fixture for SyncErrorInfobarBannerOverlayMediator.
@@ -41,6 +44,8 @@ class SyncErrorInfobarBannerOverlayMediatorTest : public PlatformTest {
  public:
   SyncErrorInfobarBannerOverlayMediatorTest() {
     TestProfileIOS::Builder builder;
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
     profile_ = std::move(builder).Build();
 
     // Create an InfoBarIOS with a MockSyncErrorInfobarDelegate.
@@ -136,8 +141,6 @@ TEST_F(SyncErrorInfobarBannerOverlayMediatorTest,
 
 TEST_F(SyncErrorInfobarBannerOverlayMediatorTest,
        BannerDismissAfterTimeoutSetsInfobarTimeoutPref) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(switches::kEnableIdentityInAuthError);
   base::Time startTime = base::Time::Now();
 
   [mediator_ dismissInfobarBannerForUserInteraction:false];

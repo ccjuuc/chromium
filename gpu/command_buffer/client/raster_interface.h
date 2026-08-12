@@ -21,6 +21,8 @@
 #include "third_party/skia/include/core/SkYUVAPixmaps.h"
 #include "third_party/skia/include/gpu/ganesh/GrTypes.h"
 
+class SkCanvas;
+
 namespace cc {
 class DisplayItemList;
 class ImageProvider;
@@ -114,7 +116,9 @@ class RasterInterface : public InterfaceBase {
       const gfx::Vector2dF& post_scale,
       bool requires_clear,
       const ScrollOffsetMap* raster_inducing_scroll_offsets,
-      size_t* max_op_size_hint) = 0;
+      size_t* max_op_size_hint,
+      base::RepeatingCallback<void(SkCanvas*, uint32_t)>
+          custom_raster_callback) = 0;
 
   // Starts an asynchronous readback of `source_mailbox` into caller-owned
   // memory represented by `out`.
@@ -152,7 +156,7 @@ class RasterInterface : public InterfaceBase {
   virtual void ReadbackYUVPixelsAsync(
       const gpu::Mailbox& source_mailbox,
       GLenum source_target,
-      const gfx::Size& source_size,
+      const gfx::Rect& source_rect,
       const gfx::Rect& output_rect,
       bool vertically_flip_texture,
       int y_plane_row_stride_bytes,
@@ -161,7 +165,6 @@ class RasterInterface : public InterfaceBase {
       base::span<uint8_t> u_plane_data,
       int v_plane_row_stride_bytes,
       base::span<uint8_t> v_plane_data,
-      const gfx::Point& paste_location,
       base::OnceCallback<void()> release_mailbox,
       base::OnceCallback<void(bool)> readback_done) = 0;
 

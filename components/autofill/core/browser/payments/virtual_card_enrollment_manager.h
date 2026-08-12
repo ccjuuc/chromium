@@ -5,20 +5,27 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_VIRTUAL_CARD_ENROLLMENT_MANAGER_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_VIRTUAL_CARD_ENROLLMENT_MANAGER_H_
 
+#include <stdint.h>
+
+#include <memory>
+#include <optional>
 #include <string>
 
+#include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
-#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
+#include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
+#include "components/autofill/core/browser/payments/legal_message_line.h"
 #include "components/autofill/core/browser/payments/multiple_request_payments_network_interface.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/payments_request_details.h"
 #include "components/autofill/core/browser/payments/virtual_card_enrollment_flow.h"
 #include "components/autofill/core/browser/strike_databases/payments/virtual_card_enrollment_strike_database.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/image/image.h"
 
 namespace content {
 class WebContents;
@@ -281,32 +288,7 @@ class VirtualCardEnrollmentManager {
       VirtualCardEnrollmentSource virtual_card_enrollment_source);
 
  private:
-  friend class VirtualCardEnrollmentManagerTest;
-  FRIEND_TEST_ALL_PREFIXES(
-      DownstreamEnrollmentEarlyPreflightCallCallbackParamTest,
-      InvokedAfterEnrollDetailsReceived);
-  FRIEND_TEST_ALL_PREFIXES(DownstreamEnrollmentEarlyPreflightCallParamTest,
-                           ShouldContinueExistingDownstreamEnrollment);
-  FRIEND_TEST_ALL_PREFIXES(VirtualCardEnrollmentManagerTest,
-                           OnDidGetDetailsForEnrollResponse);
-  FRIEND_TEST_ALL_PREFIXES(VirtualCardEnrollmentManagerTest,
-                           OnDidGetDetailsForEnrollResponse_Reset);
-  FRIEND_TEST_ALL_PREFIXES(VirtualCardEnrollmentManagerTest,
-                           OnRiskDataLoadedForVirtualCard);
-  FRIEND_TEST_ALL_PREFIXES(VirtualCardEnrollmentManagerTest,
-                           OnVirtualCardEnrollmentBubbleAccepted);
-  FRIEND_TEST_ALL_PREFIXES(VirtualCardEnrollmentManagerTest,
-                           StrikeDatabase_BubbleAccepted);
-  FRIEND_TEST_ALL_PREFIXES(VirtualCardEnrollmentManagerTest,
-                           StrikeDatabase_BubbleBlocked);
-  FRIEND_TEST_ALL_PREFIXES(VirtualCardEnrollmentManagerTest,
-                           StrikeDatabase_BubbleCanceled);
-  FRIEND_TEST_ALL_PREFIXES(VirtualCardEnrollmentManagerTest,
-                           StrikeDatabase_EnrollmentAttemptFailed);
-  FRIEND_TEST_ALL_PREFIXES(VirtualCardEnrollmentManagerTest,
-                           StrikeDatabase_SettingsPageNotBlocked);
-  FRIEND_TEST_ALL_PREFIXES(VirtualCardEnrollmentManagerTest,
-                           VirtualCardEnrollmentFields_LastShow);
+  friend class VirtualCardEnrollmentManagerTestApi;
 
   // Called once the risk data is loaded. The |risk_data| will be used with
   // |state_|'s |virtual_card_enrollment_fields|'s |credit_card|'s
@@ -362,23 +344,6 @@ class VirtualCardEnrollmentManager {
   // Logs UI-related latency metrics. This is not applicable for virtual card
   // enrollment from the settings page.
   void LogUiLatencyMetrics();
-
-  FRIEND_TEST_ALL_PREFIXES(VirtualCardEnrollmentManagerTest,
-                           Metrics_LatencySinceUpstream);
-  FRIEND_TEST_ALL_PREFIXES(VirtualCardEnrollmentManagerTest,
-                           Metrics_LatencySinceDownstream);
-  FRIEND_TEST_ALL_PREFIXES(VirtualCardEnrollmentManagerParamTest,
-                           OnDidGetDetailsForEnrollResponse);
-  FRIEND_TEST_ALL_PREFIXES(VirtualCardEnrollmentManagerTest,
-                           OnDidGetDetailsForEnrollResponse_NoAutofillClient);
-  FRIEND_TEST_ALL_PREFIXES(VirtualCardEnrollmentManagerTest,
-                           OnDidGetDetailsForEnrollResponse_Reset);
-  FRIEND_TEST_ALL_PREFIXES(VirtualCardEnrollmentManagerTest,
-                           OnRiskDataLoadedForVirtualCard);
-  FRIEND_TEST_ALL_PREFIXES(VirtualCardEnrollmentManagerTest,
-                           UpstreamAnimationSync_AnimationFirst);
-  FRIEND_TEST_ALL_PREFIXES(VirtualCardEnrollmentManagerTest,
-                           UpstreamAnimationSync_ResponseFirst);
 
   // The associated payments data manager, used to save and load payments data
   // to/from the web database.

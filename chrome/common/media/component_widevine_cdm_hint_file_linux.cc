@@ -17,6 +17,7 @@
 #include "base/path_service.h"
 #include "base/values.h"
 #include "base/version.h"
+#include "build/branding_buildflags.h"
 #include "chrome/common/chrome_paths.h"
 
 namespace {
@@ -25,9 +26,10 @@ namespace {
 const char kPath[] = "Path";
 const char kLastBundledVersion[] = "LastBundledVersion";
 
-// Returns the hint file contents as a Value::Dict. Returned result may be an
-// empty dictionary if the hint file does not exist or is formatted incorrectly.
-base::Value::Dict GetHintFileContents() {
+// Returns the hint file contents as a base::DictValue. Returned result may be
+// an empty dictionary if the hint file does not exist or is formatted
+// incorrectly.
+base::DictValue GetHintFileContents() {
   base::FilePath hint_file_path;
   CHECK(base::PathService::Get(chrome::FILE_COMPONENT_WIDEVINE_CDM_HINT,
                                &hint_file_path));
@@ -35,13 +37,13 @@ base::Value::Dict GetHintFileContents() {
   DVLOG(1) << __func__ << " checking " << hint_file_path;
   if (!base::PathExists(hint_file_path)) {
     DVLOG(1) << "CDM hint file at " << hint_file_path << " does not exist.";
-    return base::Value::Dict();
+    return base::DictValue();
   }
 
   std::string json_string;
   if (!base::ReadFileToString(hint_file_path, &json_string)) {
     DLOG(ERROR) << "Could not read the CDM hint file at " << hint_file_path;
-    return base::Value::Dict();
+    return base::DictValue();
   }
 
   std::string error_message;
@@ -52,7 +54,7 @@ base::Value::Dict GetHintFileContents() {
   if (!dict || !dict->is_dict()) {
     DLOG(ERROR) << "Could not deserialize the CDM hint file. Error: "
                 << error_message;
-    return base::Value::Dict();
+    return base::DictValue();
   }
 
   return std::move(*dict).TakeDict();
@@ -68,7 +70,19 @@ bool UpdateWidevineCdmHintFile(const base::FilePath& cdm_base_path,
   CHECK(base::PathService::Get(chrome::FILE_COMPONENT_WIDEVINE_CDM_HINT,
                                &hint_file_path));
 
-  base::Value::Dict dict;
+#if BUILDFLAG(CHROME_FOR_TESTING)
+  // Chrome for Testing may store components in a directory other than the user
+  // data directory. In this case, the WidevineCdm subdirectory will not be
+  // created in user data directory during components registration, causing the
+  // hint file write to fail.
+  if (!base::CreateDirectory(hint_file_path.DirName())) {
+    DLOG(ERROR) << "Could not create the directory for the CDM hint file: "
+                << hint_file_path.DirName();
+    return false;
+  }
+#endif
+
+  base::DictValue dict;
   dict.Set(kPath, cdm_base_path.value());
   if (bundled_version.has_value()) {
     dict.Set(kLastBundledVersion, bundled_version.value().GetString());
@@ -87,7 +101,7 @@ bool UpdateWidevineCdmHintFile(const base::FilePath& cdm_base_path,
 }
 
 base::FilePath GetHintedWidevineCdmDirectory() {
-  base::Value::Dict dict = GetHintFileContents();
+  base::DictValue dict = GetHintFileContents();
 
   auto* path_str = dict.FindString(kPath);
   if (!path_str) {
@@ -103,7 +117,7 @@ base::FilePath GetHintedWidevineCdmDirectory() {
 }
 
 std::optional<base::Version> GetBundledVersionDuringLastComponentUpdate() {
-  base::Value::Dict dict = GetHintFileContents();
+  base::DictValue dict = GetHintFileContents();
 
   auto* version_str = dict.FindString(kLastBundledVersion);
   if (!version_str) {

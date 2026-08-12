@@ -19,6 +19,7 @@
 #include "chrome/browser/devtools/devtools_file_watcher.h"
 #include "chrome/browser/platform_util.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "content/public/browser/file_system_access_permission_context.h"
 
 class GURL;
 class Profile;
@@ -173,6 +174,9 @@ class DevToolsFileHelper {
   // granted.
   bool IsFileSystemAdded(const std::string& file_system_path);
 
+  // Returns whether the given |file_path| is a part of any added file systems.
+  bool IsFileInFileSystem(const std::string& file_path);
+
   // Opens and reveals file in OS's default file manager.
   void ShowItemInFolder(const std::string& file_system_path);
 
@@ -180,7 +184,7 @@ class DevToolsFileHelper {
   void OnOpenItemComplete(const base::FilePath& path,
                           platform_util::OpenOperationResult result);
   void SaveToFileSelected(const std::string& url,
-                          const std::string& content,
+                          std::string content,
                           bool is_base64,
                           SaveCallback callback,
                           const ui::SelectedFileInfo& file_info);
@@ -191,6 +195,13 @@ class DevToolsFileHelper {
   void AddUserConfirmedFileSystem(const std::string& type,
                                   const base::FilePath& path,
                                   bool allowed);
+  void CheckBlocklistAndConnectAutomaticFileSystem(
+      const std::string& file_system_path,
+      const base::Uuid& file_system_uuid,
+      bool add_if_missing,
+      const HandlePermissionsCallback& handle_permissions_callback,
+      ConnectCallback connect_callback,
+      content::FileSystemAccessPermissionContext::SensitiveEntryResult result);
   void ConnectMissingAutomaticFileSystem(
       const std::string& file_system_path,
       const base::Uuid& file_system_uuid,

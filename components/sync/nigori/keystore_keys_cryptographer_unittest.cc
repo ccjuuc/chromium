@@ -4,8 +4,8 @@
 
 #include "components/sync/nigori/keystore_keys_cryptographer.h"
 
-#include "components/sync/engine/nigori/key_derivation_params.h"
-#include "components/sync/engine/nigori/nigori.h"
+#include "components/sync/model/crypto/key_derivation_params.h"
+#include "components/sync/model/crypto/nigori.h"
 #include "components/sync/nigori/cryptographer_impl.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -18,7 +18,8 @@ using testing::Eq;
 using testing::NotNull;
 
 std::string ComputeKeystoreKeyName(const std::string& keystore_key) {
-  return Nigori::CreateByDerivation(KeyDerivationParams::CreateForPbkdf2(),
+  return Nigori::CreateByDerivation(NigoriPassKey::ForTesting(),
+                                    KeyDerivationParams::CreateForPbkdf2(),
                                     keystore_key)
       ->GetKeyName();
 }
@@ -29,7 +30,6 @@ TEST(KeystoreKeysCryptographerTest, ShouldCreateEmpty) {
 
   EXPECT_TRUE(keystore_keys_cryptographer->IsEmpty());
   EXPECT_TRUE(keystore_keys_cryptographer->keystore_keys().empty());
-  EXPECT_TRUE(keystore_keys_cryptographer->GetLastKeystoreKeyName().empty());
 
   std::unique_ptr<CryptographerImpl> underlying_cryptographer =
       keystore_keys_cryptographer->ToCryptographerImpl();
@@ -48,8 +48,6 @@ TEST(KeystoreKeysCryptographerTest, ShouldCreateNonEmpty) {
 
   EXPECT_FALSE(keystore_keys_cryptographer->IsEmpty());
   EXPECT_THAT(keystore_keys_cryptographer->keystore_keys(), Eq(kKeystoreKeys));
-  EXPECT_THAT(keystore_keys_cryptographer->GetLastKeystoreKeyName(),
-              Eq(keystore_key_name2));
 
   std::unique_ptr<CryptographerImpl> underlying_cryptographer =
       keystore_keys_cryptographer->ToCryptographerImpl();

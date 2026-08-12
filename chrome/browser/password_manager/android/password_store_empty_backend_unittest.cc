@@ -32,7 +32,7 @@ class PasswordStoreEmptyBackendTest : public testing::Test {
  protected:
   PasswordStoreBackend* CreateAndInitBackend() {
     backend_ = std::make_unique<PasswordStoreEmptyBackend>();
-    backend_->InitBackend(nullptr, base::DoNothing(), base::DoNothing(),
+    backend_->InitBackend(base::DoNothing(), base::DoNothing(),
                           base::DoNothing());
     return backend_.get();
   }
@@ -46,7 +46,7 @@ TEST_F(PasswordStoreEmptyBackendTest, InitAndShutdownSignalBack) {
       std::make_unique<PasswordStoreEmptyBackend>();
   base::MockOnceCallback<void(bool)> mock_completion_cb;
   EXPECT_CALL(mock_completion_cb, Run(true));
-  backend->InitBackend(nullptr, base::DoNothing(), base::DoNothing(),
+  backend->InitBackend(base::DoNothing(), base::DoNothing(),
                        mock_completion_cb.Get());
 
   base::MockOnceClosure mock_shutdown_cb;
@@ -56,7 +56,7 @@ TEST_F(PasswordStoreEmptyBackendTest, InitAndShutdownSignalBack) {
 
 TEST_F(PasswordStoreEmptyBackendTest, NotAbleToSavePasswords) {
   PasswordStoreBackend* backend = CreateAndInitBackend();
-  EXPECT_FALSE(backend->IsAbleToSavePasswords());
+  EXPECT_NE(ActionableError::kNoError, backend->GetError());
 }
 
 TEST_F(PasswordStoreEmptyBackendTest, GetAllLoginsAsyncReturnsEmpty) {
@@ -81,8 +81,8 @@ TEST_F(PasswordStoreEmptyBackendTest, FillMatchingLoginsAsyncReturnsEmpty) {
   base::test::TestFuture<LoginsResultOrError> future;
   std::vector<PasswordFormDigest> forms = {PasswordFormDigest(
       PasswordForm::Scheme::kHtml, kTestUrl, GURL(kTestUrl))};
-  backend->FillMatchingLoginsAsync(future.GetCallback(), /*include_psl=*/false,
-                                   forms);
+  backend->FillMatchingLoginsAsync(future.GetCallback(),
+                                   /*include_psl=*/false, forms);
   const LoginsResultOrError& result = future.Get();
   EXPECT_TRUE(std::get<LoginsResult>(result).empty());
 }
@@ -106,7 +106,6 @@ TEST_F(PasswordStoreEmptyBackendTest,
   base::Time delete_end = base::Time::FromTimeT(2000);
   base::test::TestFuture<PasswordChangesOrError> future;
   backend->RemoveLoginsCreatedBetweenAsync(FROM_HERE, delete_begin, delete_end,
-                                           base::DoNothing(),
                                            future.GetCallback());
 
   const PasswordChangesOrError& result = future.Get();

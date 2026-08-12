@@ -19,7 +19,9 @@
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/browser/policy/dm_token_utils.h"
 #include "chrome/browser/safe_browsing/extension_telemetry/cookies_get_signal.h"
+#include "chrome/browser/safe_browsing/extension_telemetry/dom_access_signal.h"
 #include "chrome/browser/safe_browsing/extension_telemetry/extension_telemetry_uploader.h"
+#include "chrome/browser/safe_browsing/extension_telemetry/script_injection_signal.h"
 #include "chrome/browser/safe_browsing/extension_telemetry/search_hijacking_detector.h"
 #include "chrome/browser/safe_browsing/extension_telemetry/tabs_execute_script_signal.h"
 #include "chrome/browser/safe_browsing/test_extension_event_observer.h"
@@ -27,6 +29,7 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/crx_file/id_util.h"
+#include "components/enterprise/connectors/core/reporting_constants.h"
 #include "components/enterprise/connectors/core/reporting_service_settings.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_client.h"
@@ -49,6 +52,7 @@
 #include "extensions/browser/pref_names.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
+#include "extensions/common/extension_features.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/switches.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
@@ -183,6 +187,24 @@ class ExtensionTelemetryServiceTest : public ::testing::Test {
     return telemetry_service_->GetExtensionInfoForReport(extension);
   }
 
+  bool HasActivityLogIngester() {
+    return telemetry_service_->activity_log_ingester_ != nullptr;
+  }
+
+  void SetEnterpriseReportingConfig(
+      bool enabled,
+      const std::vector<std::string>& enabled_opt_in_events) {
+    base::flat_map<std::string, std::vector<std::string>> opt_in_events_map;
+    for (const auto& event : enabled_opt_in_events) {
+      opt_in_events_map[event] = {"*"};
+    }
+    enterprise_connectors::test::SetOnSecurityEventReporting(
+        /*prefs=*/prefs(),
+        /*enabled=*/enabled,
+        /*enabled_event_names=*/{},
+        /*enabled_opt_in_events=*/opt_in_events_map);
+  }
+
   // Create telemetry service instance.
   std::unique_ptr<ExtensionTelemetryService> CreateTelemetryService(
       Profile* profile) {
@@ -228,13 +250,14 @@ ExtensionTelemetryServiceTest::ExtensionTelemetryServiceTest(
   cloud_policy_client_ = std::make_unique<policy::MockCloudPolicyClient>();
   cloud_policy_client_->SetDMToken("dm-token");
   enterprise_connectors::RealtimeReportingClientFactory::GetInstance()
-      ->SetTestingFactory(&profile_,
-                          base::BindRepeating(&BuildRealtimeReportingClient));
+      ->SetTestingFactory(
+          &profile_,
+          base::BindRepeating(
+              &enterprise_connectors::test::BuildRealtimeReportingClient));
   enterprise_connectors::RealtimeReportingClientFactory::GetForProfile(
       &profile_)
       ->SetBrowserCloudPolicyClientForTesting(cloud_policy_client_.get());
-  enterprise_connectors::test::SetOnSecurityEventReporting(/*prefs=*/prefs(),
-                                                           /*enabled=*/false);
+  SetEnterpriseReportingConfig(/*enabled=*/false, {});
 
   // Create test extension service instance.
   base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
@@ -297,7 +320,7 @@ void ExtensionTelemetryServiceTest::RegisterExtensionWithExtensionService(
           .SetID(extension_id)
           .SetPath(path)
           .SetLocation(location)
-          .SetManifest(base::Value::Dict()
+          .SetManifest(base::DictValue()
                            .Set("name", extension_name)
                            .Set("version", kExtensionVersion)
                            .Set("manifest_version", 2))
@@ -378,12 +401,8 @@ TEST_F(ExtensionTelemetryServiceTest, CheckEnableConditionsForEnterprise) {
   EXPECT_FALSE(IsTelemetryServiceEnabledForEnterprise());
 
   // Enable enterprise policy. Verify that enterprise reporting is enabled.
-  enterprise_connectors::test::SetOnSecurityEventReporting(
-      /*prefs=*/prefs(),
-      /*enabled=*/true,
-      /*enabled_event_names=*/{},
-      /*enabled_opt_in_events=*/
-      {{enterprise_connectors::kExtensionTelemetryEvent, {"*"}}});
+  SetEnterpriseReportingConfig(
+      /*enabled=*/true, {enterprise_connectors::kExtensionTelemetryEvent});
   EXPECT_TRUE(IsTelemetryServiceEnabledForEnterprise());
 
   // Destruct and restart service and verify that it starts enabled.
@@ -391,12 +410,48 @@ TEST_F(ExtensionTelemetryServiceTest, CheckEnableConditionsForEnterprise) {
   EXPECT_TRUE(IsTelemetryServiceEnabledForEnterprise());
 
   // Disable enterprise policy. Verify that enterprise reporting is disabled.
-  enterprise_connectors::test::SetOnSecurityEventReporting(
-      /*prefs=*/prefs(),
-      /*enabled=*/false,
-      /*enabled_event_names=*/{},
-      /*enabled_opt_in_events=*/{});
+  SetEnterpriseReportingConfig(/*enabled=*/false, {});
   EXPECT_FALSE(IsTelemetryServiceEnabledForEnterprise());
+}
+
+TEST_F(ExtensionTelemetryServiceTest, CheckDOMActivityLoggingState) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      extensions_features::kEnterpriseExtensionDOMActivityTelemetry);
+
+  // Start with enterprise disabled.
+  EXPECT_FALSE(HasActivityLogIngester());
+
+  // Enable overall enterprise policy but without DOM activity event.
+  SetEnterpriseReportingConfig(
+      /*enabled=*/true, {enterprise_connectors::kExtensionTelemetryEvent});
+  EXPECT_TRUE(IsTelemetryServiceEnabledForEnterprise());
+
+  // Ingester shouldn't be active yet because the DOM event is not enabled.
+  EXPECT_FALSE(HasActivityLogIngester());
+
+  // Enable DOM activity event.
+  SetEnterpriseReportingConfig(
+      /*enabled=*/true, {enterprise_connectors::kExtensionTelemetryEvent,
+                         enterprise_connectors::kExtensionDOMActivityEvent});
+
+  // Now it should be created.
+  EXPECT_TRUE(HasActivityLogIngester());
+
+  // Disable the DOM activity event.
+  SetEnterpriseReportingConfig(
+      /*enabled=*/true, {enterprise_connectors::kExtensionTelemetryEvent});
+  EXPECT_FALSE(HasActivityLogIngester());
+
+  // Re-enable DOM activity event, but disable enterprise overall.
+  // Note: enterprise overall depends on kExtensionTelemetryEvent.
+  SetEnterpriseReportingConfig(
+      /*enabled=*/true, {enterprise_connectors::kExtensionDOMActivityEvent});
+  EXPECT_FALSE(HasActivityLogIngester());
+
+  // Disable both event types.
+  SetEnterpriseReportingConfig(/*enabled=*/false, {});
+  EXPECT_FALSE(HasActivityLogIngester());
 }
 
 TEST_F(ExtensionTelemetryServiceTest, ProcessesSignal) {
@@ -415,12 +470,8 @@ TEST_F(ExtensionTelemetryServiceTest, ProcessesSignal) {
 }
 
 TEST_F(ExtensionTelemetryServiceTest, ProcessesSignalForEnterprise) {
-  enterprise_connectors::test::SetOnSecurityEventReporting(
-      /*prefs=*/prefs(),
-      /*enabled=*/true,
-      /*enabled_event_names=*/{},
-      /*enabled_opt_in_events=*/
-      {{enterprise_connectors::kExtensionTelemetryEvent, {"*"}}});
+  SetEnterpriseReportingConfig(
+      /*enabled=*/true, {enterprise_connectors::kExtensionTelemetryEvent});
   PrimeTelemetryServiceWithSignal();
   // Verify that the registered extension information is saved in the
   // telemetry service's enterprise extension store.
@@ -433,6 +484,84 @@ TEST_F(ExtensionTelemetryServiceTest, ProcessesSignalForEnterprise) {
   EXPECT_EQ(info->install_timestamp_msec(),
             GetLastUpdateTime(extension_prefs_, kExtensionId[0])
                 .InMillisecondsSinceUnixEpoch());
+}
+
+TEST_F(ExtensionTelemetryServiceTest, CheckEnterpriseReportingInterval) {
+  // Enable enterprise telemetry.
+  SetEnterpriseReportingConfig(
+      /*enabled=*/true, {enterprise_connectors::kExtensionTelemetryEvent});
+
+  // Default interval should be 300 seconds.
+  {
+    telemetry_service_ = CreateTelemetryService(&profile_);
+    EXPECT_EQ(telemetry_service_->GetEnterpriseTimerDelayForTesting(),
+              base::Seconds(300));
+  }
+
+  // Short interval flag enabled should reduce interval to 30 seconds.
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndEnableFeature(
+        kExtensionTelemetryEnterpriseShortReportingInterval);
+    telemetry_service_ = CreateTelemetryService(&profile_);
+    EXPECT_EQ(telemetry_service_->GetEnterpriseTimerDelayForTesting(),
+              base::Seconds(30));
+  }
+}
+
+TEST_F(ExtensionTelemetryServiceTest, ProcessesDOMAccessSignalForEnterprise) {
+  // Enable enterprise telemetry.
+  SetEnterpriseReportingConfig(
+      /*enabled=*/true, {enterprise_connectors::kExtensionTelemetryEvent});
+
+  // Re-create telemetry service so it initializes the enterprise processors.
+  telemetry_service_ = CreateTelemetryService(&profile_);
+
+  // Add a DOM access signal.
+  auto signal = std::make_unique<DOMAccessSignal>(
+      kExtensionId[0], "Document.cookie", "http://www.example.com",
+      DOMAccessSignal::DOMAccess::READ, base::Time::Now());
+  telemetry_service_->AddSignal(std::move(signal));
+
+  // Verify that the signal is correctly recorded in the enterprise report.
+  std::unique_ptr<TelemetryReport> report = GetTelemetryReportForEnterprise();
+  ASSERT_NE(report, nullptr);
+  ASSERT_EQ(report->reports_size(), 1);
+  const auto& extension_report = report->reports(0);
+  ASSERT_EQ(extension_report.signals_size(), 1);
+  const auto& signal_info = extension_report.signals(0);
+  ASSERT_TRUE(signal_info.has_dom_access_info());
+  EXPECT_EQ(signal_info.dom_access_info().dom_accesses_size(), 1);
+  EXPECT_EQ(signal_info.dom_access_info().dom_accesses(0).api_name(),
+            "Document.cookie");
+}
+
+TEST_F(ExtensionTelemetryServiceTest,
+       ProcessesScriptInjectionSignalForEnterprise) {
+  // Enable enterprise telemetry.
+  SetEnterpriseReportingConfig(
+      /*enabled=*/true, {enterprise_connectors::kExtensionTelemetryEvent});
+
+  // Re-create telemetry service so it initializes the enterprise processors.
+  telemetry_service_ = CreateTelemetryService(&profile_);
+
+  // Add a script injection signal.
+  auto signal = std::make_unique<ScriptInjectionSignal>(
+      kExtensionId[0], "blinkSetAttribute", "http://www.example.com",
+      std::vector<std::string>{"src", "http://evil.com/js"}, base::Time::Now());
+  telemetry_service_->AddSignal(std::move(signal));
+
+  // Verify that the signal is correctly recorded in the enterprise report.
+  std::unique_ptr<TelemetryReport> report = GetTelemetryReportForEnterprise();
+  ASSERT_NE(report, nullptr);
+  ASSERT_EQ(report->reports_size(), 1);
+  const auto& extension_report = report->reports(0);
+  ASSERT_EQ(extension_report.signals_size(), 1);
+  const auto& signal_info = extension_report.signals(0);
+  ASSERT_TRUE(signal_info.has_script_injection_info());
+  EXPECT_EQ(signal_info.script_injection_info().script_injections_size(), 1);
+  EXPECT_EQ(signal_info.script_injection_info().script_injections(0).api_name(),
+            "blinkSetAttribute");
 }
 
 TEST_F(ExtensionTelemetryServiceTest, DiscardsInvalidSignal) {
@@ -492,13 +621,8 @@ TEST_F(ExtensionTelemetryServiceTest, DoesNotGenerateEmptyTelemetryReport) {
 
 TEST_F(ExtensionTelemetryServiceTest,
        DoesNotGenerateEmptyTelemetryReportForEnterprise) {
-  // Enable enterprise policy.
-  enterprise_connectors::test::SetOnSecurityEventReporting(
-      /*prefs=*/prefs(),
-      /*enabled=*/true,
-      /*enabled_event_names=*/
-      {enterprise_connectors::kExtensionTelemetryEvent},
-      /*enabled_opt_in_events=*/{});
+  // Enable enterprise policy but do not opt-in to telemetry events.
+  SetEnterpriseReportingConfig(/*enabled=*/true, {});
 
   // Check that telemetry service does not generate a telemetry report for
   // enterprise when there are no signals.
@@ -544,8 +668,7 @@ TEST_F(ExtensionTelemetryServiceTest,
        GeneratesTelemetryReportWithSignalForESBOnly) {
   // Enable ESB, disable enterprise.
   prefs()->SetBoolean(prefs::kSafeBrowsingEnhanced, true);
-  enterprise_connectors::test::SetOnSecurityEventReporting(/*prefs=*/prefs(),
-                                                           /*enabled=*/false);
+  SetEnterpriseReportingConfig(/*enabled=*/false, {});
   PrimeTelemetryServiceWithSignal();
 
   // Since enterprise is disabled and no signals is added for enterprise, verify
@@ -587,12 +710,8 @@ TEST_F(ExtensionTelemetryServiceTest,
        GeneratesTelemetryReportWithSignalForEnterpriseOnly) {
   // Disable ESB, enable enterprise.
   prefs()->SetBoolean(prefs::kSafeBrowsingEnhanced, false);
-  enterprise_connectors::test::SetOnSecurityEventReporting(
-      /*prefs=*/prefs(),
-      /*enabled=*/true,
-      /*enabled_event_names=*/{},
-      /*enabled_opt_in_events=*/
-      {{enterprise_connectors::kExtensionTelemetryEvent, {"*"}}});
+  SetEnterpriseReportingConfig(
+      /*enabled=*/true, {enterprise_connectors::kExtensionTelemetryEvent});
   PrimeTelemetryServiceWithSignal();
 
   // Since ESB is disabled, verify that extension store is empty and no ESB
@@ -630,12 +749,8 @@ TEST_F(ExtensionTelemetryServiceTest,
        GeneratesTelemetryReportWithSignalForESBAndEnterprise) {
   // Enable ESB and enterprise.
   prefs()->SetBoolean(prefs::kSafeBrowsingEnhanced, true);
-  enterprise_connectors::test::SetOnSecurityEventReporting(
-      /*prefs=*/prefs(),
-      /*enabled=*/true,
-      /*enabled_event_names=*/{},
-      /*enabled_opt_in_events=*/
-      {{enterprise_connectors::kExtensionTelemetryEvent, {"*"}}});
+  SetEnterpriseReportingConfig(
+      /*enabled=*/true, {enterprise_connectors::kExtensionTelemetryEvent});
   PrimeTelemetryServiceWithSignal();
 
   std::unique_ptr<TelemetryReport> esb_telemetry_report = GetTelemetryReport();
@@ -958,12 +1073,12 @@ TEST_F(ExtensionTelemetryServiceTest, TestExtensionInfoProtoConstruction) {
               {"normal_installed", ExtensionInfo::INSTALLATION_RECOMMENDED}};
 
       for (const auto& [mode, policy] : installation_policies) {
-        base::Value::Dict entry = base::Value::Dict()
-                                      .Set(kInstallationMode, mode)
-                                      .Set(kUpdateUrl, kTestUpdateUrl);
+        base::DictValue entry = base::DictValue()
+                                    .Set(kInstallationMode, mode)
+                                    .Set(kUpdateUrl, kTestUpdateUrl);
         profile_.GetTestingPrefService()->SetManagedPref(
             extensions::pref_names::kExtensionManagement,
-            base::Value::Dict().Set(extension->id(), std::move(entry)));
+            base::DictValue().Set(extension->id(), std::move(entry)));
 
         std::unique_ptr<ExtensionInfo> extension_pb =
             GetExtensionInfo(*extension);
@@ -1335,11 +1450,11 @@ TEST_F(ExtensionTelemetryServiceTest, FileData_ProcessesOffstoreExtensions) {
   // Test Extension 0.
   EXPECT_TRUE(file_data_dict.contains(kExtensionId[0]));
 
-  const base::Value::Dict* actual_extension_0 =
+  const base::DictValue* actual_extension_0 =
       file_data_dict.FindDict(kExtensionId[0]);
   EXPECT_TRUE(actual_extension_0->FindString(kFileDataProcessTimestampPref));
 
-  const base::Value::Dict* actual_extension_0_file_data =
+  const base::DictValue* actual_extension_0_file_data =
       actual_extension_0->FindDict(kFileDataDictPref);
   EXPECT_TRUE(actual_extension_0_file_data->contains(kJavaScriptFile));
   EXPECT_TRUE(actual_extension_0_file_data->FindString(kJavaScriptFile));
@@ -1349,11 +1464,11 @@ TEST_F(ExtensionTelemetryServiceTest, FileData_ProcessesOffstoreExtensions) {
   // Test Extension 1.
   EXPECT_TRUE(file_data_dict.contains(kExtensionId[1]));
 
-  const base::Value::Dict* actual_extension_1 =
+  const base::DictValue* actual_extension_1 =
       file_data_dict.FindDict(kExtensionId[1]);
   EXPECT_TRUE(actual_extension_1->FindString(kFileDataProcessTimestampPref));
 
-  const base::Value::Dict* actual_extension_1_file_data =
+  const base::DictValue* actual_extension_1_file_data =
       actual_extension_1->FindDict(kFileDataDictPref);
   EXPECT_TRUE(actual_extension_1_file_data->contains(kJavaScriptFile));
   EXPECT_TRUE(actual_extension_1_file_data->FindString(kJavaScriptFile));
@@ -1452,10 +1567,10 @@ TEST_F(ExtensionTelemetryServiceTest, FileData_HandlesEmptyTimestampsInPrefs) {
   // extension 0 - empty timestamp string
   // extension 1 - missing timestamp key
   auto extension_0_dict =
-      base::Value::Dict().Set(kFileDataProcessTimestampPref, "");
-  base::Value::Dict empty_timestamps_dict;
+      base::DictValue().Set(kFileDataProcessTimestampPref, "");
+  base::DictValue empty_timestamps_dict;
   empty_timestamps_dict.Set(kExtensionId[0], std::move(extension_0_dict));
-  empty_timestamps_dict.Set(kExtensionId[1], base::Value::Dict());
+  empty_timestamps_dict.Set(kExtensionId[1], base::DictValue());
   prefs()->SetDict(prefs::kExtensionTelemetryFileData,
                    std::move(empty_timestamps_dict));
 
@@ -1468,14 +1583,14 @@ TEST_F(ExtensionTelemetryServiceTest, FileData_HandlesEmptyTimestampsInPrefs) {
 
   // Test Extension 0.
   EXPECT_TRUE(file_data_dict.contains(kExtensionId[0]));
-  const base::Value::Dict* actual_extension_0 =
+  const base::DictValue* actual_extension_0 =
       file_data_dict.FindDict(kExtensionId[0]);
   EXPECT_TRUE(actual_extension_0->FindString(kFileDataProcessTimestampPref));
   EXPECT_TRUE(actual_extension_0->FindDict(kFileDataDictPref));
 
   // Test Extension 1.
   EXPECT_TRUE(file_data_dict.contains(kExtensionId[1]));
-  const base::Value::Dict* actual_extension_1 =
+  const base::DictValue* actual_extension_1 =
       file_data_dict.FindDict(kExtensionId[1]);
   EXPECT_TRUE(actual_extension_1->FindString(kFileDataProcessTimestampPref));
   EXPECT_TRUE(actual_extension_1->FindDict(kFileDataDictPref));
@@ -1491,7 +1606,7 @@ TEST_F(ExtensionTelemetryServiceTest,
   const auto& file_data_dict =
       prefs()->GetDict(prefs::kExtensionTelemetryFileData);
 
-  const base::Value::Dict* extension_0_dict =
+  const base::DictValue* extension_0_dict =
       file_data_dict.FindDict(kExtensionId[0])->FindDict(kFileDataDictPref);
   EXPECT_EQ(telemetry_report_pb->reports(0).extension().id(), kExtensionId[0]);
   EXPECT_EQ(telemetry_report_pb->reports(0).extension().manifest_json(),
@@ -1502,7 +1617,7 @@ TEST_F(ExtensionTelemetryServiceTest,
   EXPECT_EQ(telemetry_report_pb->reports(0).extension().file_infos(0).hash(),
             *(extension_0_dict->FindString(kJavaScriptFile)));
 
-  const base::Value::Dict* extension_1_dict =
+  const base::DictValue* extension_1_dict =
       file_data_dict.FindDict(kExtensionId[1])->FindDict(kFileDataDictPref);
   EXPECT_EQ(telemetry_report_pb->reports(1).extension().id(), kExtensionId[1]);
   EXPECT_EQ(telemetry_report_pb->reports(1).extension().manifest_json(),
@@ -1548,7 +1663,7 @@ TEST_F(ExtensionTelemetryServiceTest,
   const auto& file_data_dict =
       prefs()->GetDict(prefs::kExtensionTelemetryFileData);
   ASSERT_EQ(file_data_dict.size(), 1u);
-  const base::Value::Dict* cmdline_extension_file_data_dict =
+  const base::DictValue* cmdline_extension_file_data_dict =
       file_data_dict.FindDict(cmdline_extension.id())
           ->FindDict(kFileDataDictPref);
   ASSERT_TRUE(cmdline_extension_file_data_dict);
@@ -1599,11 +1714,11 @@ TEST_F(ExtensionTelemetryServiceTest, FileData_HandlesEmptyFileDataInPrefs) {
   // Set up pref dict:
   // extension 0 - empty file data dict
   // extension 1 - missing file data dict key
-  base::Value::Dict extension_0_dict;
-  extension_0_dict.Set(kFileDataDictPref, base::Value::Dict());
-  base::Value::Dict empty_file_data_dicts;
+  base::DictValue extension_0_dict;
+  extension_0_dict.Set(kFileDataDictPref, base::DictValue());
+  base::DictValue empty_file_data_dicts;
   empty_file_data_dicts.Set(kExtensionId[0], std::move(extension_0_dict));
-  empty_file_data_dicts.Set(kExtensionId[1], base::Value::Dict());
+  empty_file_data_dicts.Set(kExtensionId[1], base::DictValue());
   prefs()->SetDict(prefs::kExtensionTelemetryFileData,
                    std::move(empty_file_data_dicts));
 

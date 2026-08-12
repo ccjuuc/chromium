@@ -9,6 +9,7 @@ if (is_android) {
 
 static_library("regional_capabilities") {
   sources = [
+    "enums.h",
     "regional_capabilities_internals_data_holder.cc",
     "regional_capabilities_internals_data_holder.h",
     "regional_capabilities_metrics.cc",
@@ -33,6 +34,8 @@ static_library("regional_capabilities") {
     ":data",
     "//base/version_info",
     "//components/country_codes",
+    "//components/metrics",
+    "//components/metrics/private_metrics",
     "//components/pref_registry",
     "//components/prefs",
     "//components/search_engines:search_engine_pref_names",
@@ -52,7 +55,7 @@ source_set("country_access_reason") {
   visibility = [
     ":*",
     "//chrome/browser/search_engine_choice:impl",
-    "//chrome/browser/ui",
+    "//chrome/browser/ui/webui/profile_internals",
     "//chrome/browser/ui/webui/regional_capabilities_internals",
     "//components/metrics/private_metrics",
     "//components/search_engines",
@@ -79,6 +82,7 @@ source_set("country_id") {
 source_set("switches") {
   visibility = [
     ":*",
+    "//components/search_engines:search_engine_utils",
     "//ios/chrome/browser/metrics/model",
     "//ios/chrome/browser/metrics/model:eg2_tests",
     "//ios/chrome/browser/metrics/model:unit_tests",
@@ -139,6 +143,7 @@ source_set("unit_tests") {
     "regional_capabilities_country_id_unittest.cc",
     "regional_capabilities_metrics_unittest.cc",
     "regional_capabilities_service_unittest.cc",
+    "regional_capabilities_utils_unittest.cc",
   ]
 
   deps = [
@@ -151,6 +156,8 @@ source_set("unit_tests") {
     "//components/metrics",
     "//components/sync_preferences:test_support",
     "//testing/gtest",
+    "//third_party/search_engines_data:prepopulated_engines",
+    "//third_party/search_engines_data:regional_settings",
     "//ui/base",
   ]
 

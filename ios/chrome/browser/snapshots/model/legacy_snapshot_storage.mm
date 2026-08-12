@@ -7,7 +7,6 @@
 #import <map>
 
 #import "base/apple/foundation_util.h"
-#import "base/containers/contains.h"
 #import "base/files/file_path.h"
 #import "base/functional/bind.h"
 #import "base/ios/crb_protocol_observers.h"
@@ -61,6 +60,21 @@ LegacySnapshotLRUCache<UIImage*>* CreateDefaultSnapshotLRUCache() {
 }
 
 }  // namespace
+
+// Halves the pixel density of the image for disk storage while keeping
+// the same point dimensions, so UIKit layout stays correct when the
+// image is read back from disk.
+UIImage* DownsampledForStorage(UIImage* image) {
+  CGSize target_size = image.size;
+  UIGraphicsImageRendererFormat* format =
+      [[UIGraphicsImageRendererFormat alloc] init];
+  format.scale = image.scale / 2.0;
+  UIGraphicsImageRenderer* renderer =
+      [[UIGraphicsImageRenderer alloc] initWithSize:target_size format:format];
+  return [renderer imageWithActions:^(UIGraphicsImageRendererContext* context) {
+    [image drawInRect:CGRectMake(0, 0, target_size.width, target_size.height)];
+  }];
+}
 
 // Protocol observers subclass that explicitly implements
 // <SnapshotStorageObserver>.
@@ -154,12 +168,20 @@ LegacySnapshotLRUCache<UIImage*>* CreateDefaultSnapshotLRUCache() {
     return;
   }
 
-  [_lruCache setObject:image forKey:snapshotID];
+  // Downsample before caching so the LRU cache holds smaller images,
+  // reducing the overall memory footprint of snapshot storage.
+  UIImage* optimizedImage =
+      base::FeatureList::IsEnabled(kSnapshotDownsampleImage)
+          ? DownsampledForStorage(image)
+          : image;
+  [_lruCache setObject:optimizedImage forKey:snapshotID];
+
+  base::UmaHistogramMemoryKB("IOS.Snapshots.SnapshotImageMemoryFootprint",
+                             MemoryFootprintForImage(image));
 
   [self.observers didUpdateSnapshotStorageWithSnapshotID:snapshotIDWrapper];
 
-  // Save the image to disk.
-  [_fileManager writeImage:image withSnapshotID:snapshotID];
+  [_fileManager writeImage:optimizedImage withSnapshotID:snapshotID];
 }
 
 - (void)removeImageWithSnapshotID:(SnapshotIDWrapper*)snapshotIDWrapper {

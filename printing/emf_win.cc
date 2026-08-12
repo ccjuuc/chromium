@@ -11,9 +11,7 @@
 
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
-#include "base/files/file.h"
-#include "base/files/file_path.h"
-#include "base/notreached.h"
+#include "base/numerics/checked_math.h"
 #include "base/numerics/safe_conversions.h"
 #include "printing/mojom/print.mojom.h"
 #include "skia/ext/skia_utils_win.h"
@@ -27,34 +25,77 @@ namespace printing {
 
 namespace {
 
+// This is less than sizeof(ENHMETARECORD) because ENHMETARECORD contains a
+// DWORD field of variable length that can sometimes have a length of 0.
+constexpr uint32_t kMinEnhMetaRecordSize = 8;
+
 bool DIBFormatNativelySupported(HDC dc,
                                 uint32_t escape,
-                                const BYTE* bits,
-                                int size) {
+                                base::span<const uint8_t> bits) {
+  // ExtEscape() takes an int for its data size parameter, so reject large
+  // input sizes that do not fit in an int.
+  if (!base::IsValueInRangeForNumericType<int>(bits.size())) {
+    return false;
+  }
+
   BOOL supported = FALSE;
   if (ExtEscape(dc, QUERYESCSUPPORT, sizeof(escape),
                 reinterpret_cast<LPCSTR>(&escape), 0, 0) > 0) {
-    ExtEscape(dc, escape, size, reinterpret_cast<LPCSTR>(bits),
-              sizeof(supported), reinterpret_cast<LPSTR>(&supported));
+    ExtEscape(dc, escape, static_cast<int>(bits.size()),
+              reinterpret_cast<LPCSTR>(bits.data()), sizeof(supported),
+              reinterpret_cast<LPSTR>(&supported));
   }
   return !!supported;
 }
 
 const BITMAPINFOHEADER* GetBitmapInfoHeader(
-    const EMRSTRETCHDIBITS* sdib_record) {
-  const BYTE* record_start = reinterpret_cast<const BYTE*>(sdib_record);
+    base::span<const uint8_t> record_span) {
+  if (record_span.size() < sizeof(EMRSTRETCHDIBITS)) {
+    return nullptr;
+  }
+
+  const auto* sdib_record =
+      reinterpret_cast<const EMRSTRETCHDIBITS*>(record_span.data());
+  if (sdib_record->offBmiSrc < sizeof(EMRSTRETCHDIBITS) ||
+      sdib_record->cbBmiSrc < sizeof(BITMAPINFOHEADER)) {
+    return nullptr;
+  }
+
+  base::CheckedNumeric<uint32_t> end_bmi = sdib_record->offBmiSrc;
+  end_bmi += sdib_record->cbBmiSrc;
+  if (!end_bmi.IsValid() || end_bmi.ValueOrDie() > record_span.size()) {
+    return nullptr;
+  }
+
   return reinterpret_cast<const BITMAPINFOHEADER*>(
-      UNSAFE_TODO(record_start + sdib_record->offBmiSrc));
+      record_span.subspan(sdib_record->offBmiSrc).data());
 }
 
-const BYTE* GetBitmapBits(const EMRSTRETCHDIBITS* sdib_record) {
-  const BYTE* record_start = reinterpret_cast<const BYTE*>(sdib_record);
-  return UNSAFE_TODO(record_start + sdib_record->offBitsSrc);
+base::span<const uint8_t> GetBitmapBits(base::span<const uint8_t> record_span,
+                                        uint32_t expected_size) {
+  if (record_span.size() < sizeof(EMRSTRETCHDIBITS)) {
+    return {};
+  }
+
+  const auto* sdib_record =
+      reinterpret_cast<const EMRSTRETCHDIBITS*>(record_span.data());
+  if (sdib_record->offBitsSrc < sizeof(EMRSTRETCHDIBITS) ||
+      sdib_record->cbBitsSrc != expected_size) {
+    return {};
+  }
+
+  base::CheckedNumeric<uint32_t> end_bits = sdib_record->offBitsSrc;
+  end_bits += sdib_record->cbBitsSrc;
+  if (!end_bits.IsValid() || end_bits.ValueOrDie() > record_span.size()) {
+    return {};
+  }
+
+  return record_span.subspan(sdib_record->offBitsSrc, sdib_record->cbBitsSrc);
 }
 
 }  // namespace
 
-Emf::Emf() : emf_(nullptr), hdc_(nullptr) {}
+Emf::Emf() = default;
 
 Emf::~Emf() {
   Close();
@@ -65,21 +106,6 @@ void Emf::Close() {
   if (emf_)
     DeleteEnhMetaFile(emf_);
   emf_ = nullptr;
-}
-
-bool Emf::InitToFile(const base::FilePath& metafile_path) {
-  DCHECK(!emf_ && !hdc_);
-  hdc_ = CreateEnhMetaFile(nullptr, metafile_path.value().c_str(), nullptr,
-                           nullptr);
-  DCHECK(hdc_);
-  return !!hdc_;
-}
-
-bool Emf::InitFromFile(const base::FilePath& metafile_path) {
-  DCHECK(!emf_ && !hdc_);
-  emf_ = GetEnhMetaFile(metafile_path.value().c_str());
-  DCHECK(emf_);
-  return !!emf_;
 }
 
 bool Emf::Init() {
@@ -120,26 +146,22 @@ bool Emf::Playback(HDC hdc, const RECT* rect) const {
 bool Emf::SafePlayback(HDC context) const {
   DCHECK(emf_ && !hdc_);
   XFORM base_matrix;
-  if (!GetWorldTransform(context, &base_matrix)) {
-    NOTREACHED();
-  }
-  Emf::EnumerationContext playback_context;
+  CHECK(GetWorldTransform(context, &base_matrix));
+  Emf::EnumerationContext playback_context(GetDataSize());
   playback_context.base_matrix = &base_matrix;
   gfx::Rect bound = GetPageBounds(1);
   RECT rect = bound.ToRECT();
   return bound.IsEmpty() ||
-         EnumEnhMetaFile(context, emf_, &Emf::SafePlaybackProc,
-                         reinterpret_cast<void*>(&playback_context),
-                         &rect) != 0;
+         ::EnumEnhMetaFile(context, emf_, &Emf::SafePlaybackProc,
+                           reinterpret_cast<void*>(&playback_context),
+                           &rect) != 0;
 }
 
 gfx::Rect Emf::GetPageBounds(unsigned int page_number) const {
   DCHECK(emf_ && !hdc_);
   DCHECK_EQ(1U, page_number);
   ENHMETAHEADER header;
-  if (GetEnhMetaFileHeader(emf_, sizeof(header), &header) != sizeof(header)) {
-    NOTREACHED();
-  }
+  CHECK_EQ(GetEnhMetaFileHeader(emf_, sizeof(header), &header), sizeof(header));
   // Add 1 to right and bottom because it's inclusive rectangle.
   // See ENHMETAHEADER.
   return gfx::Rect(header.rclBounds.left, header.rclBounds.top,
@@ -185,15 +207,19 @@ int CALLBACK Emf::SafePlaybackProc(HDC hdc,
                                    const ENHMETARECORD* record,
                                    int objects_count,
                                    LPARAM param) {
-  Emf::EnumerationContext* context =
-      reinterpret_cast<Emf::EnumerationContext*>(param);
+  auto* context = reinterpret_cast<Emf::EnumerationContext*>(param);
+  // The Emf::Record::SafePlayback() call below assumes this check has happened.
+  if (record->nSize < kMinEnhMetaRecordSize ||
+      record->nSize > context->remaining_metafile_size || record->nSize % 4) {
+    return 0;
+  }
+  context->remaining_metafile_size -= record->nSize;
   context->handle_table = handle_table;
   context->objects_count = objects_count;
   context->hdc = hdc;
   Record record_instance(record);
   bool success = record_instance.SafePlayback(context);
-  DCHECK(success);
-  return 1;
+  return success ? 1 : 0;
 }
 
 PostScriptMetaFile::PostScriptMetaFile() = default;
@@ -207,23 +233,33 @@ mojom::MetafileDataType PostScriptMetaFile::GetDataType() const {
 bool PostScriptMetaFile::SafePlayback(HDC hdc) const {
   Emf::Enumerator emf_enum(*this, nullptr, nullptr);
   for (const Emf::Record& record : emf_enum) {
-    auto* emf_record = record.record();
+    const ENHMETARECORD* emf_record = record.record();
     if (emf_record->iType != EMR_GDICOMMENT) {
       continue;
     }
 
-    auto* comment = reinterpret_cast<const EMRGDICOMMENT*>(emf_record);
+    const auto* comment = reinterpret_cast<const EMRGDICOMMENT*>(emf_record);
     const char* data = reinterpret_cast<const char*>(comment->Data);
-    const uint16_t* ptr = reinterpret_cast<const uint16_t*>(data);
-    int ret = ExtEscape(hdc, PASSTHROUGH, 2 + *ptr, data, 0, nullptr);
-    DCHECK_EQ(*ptr, ret);
+    // First uint16_t element in `data` holds the size of the rest of `data`,
+    // which is the actual PostScript data. Windows requires this payload size +
+    // PS data structure.
+    const uint16_t ps_payload_size = *reinterpret_cast<const uint16_t*>(data);
+    const uint32_t data_size = 2 + ps_payload_size;
+    // Assume value used in PDFium's core/fxge/win32/cpsoutput.cpp is not going
+    // to change.
+    static constexpr uint16_t kExpectedPdfiumMax = 1024 + 2;
+    if (data_size != comment->cbData || data_size > kExpectedPdfiumMax) {
+      continue;
+    }
+
+    int ret = ExtEscape(hdc, PASSTHROUGH, data_size, data, 0, nullptr);
+    DCHECK_EQ(ps_payload_size, ret);
   }
   return true;
 }
 
-Emf::EnumerationContext::EnumerationContext() {
-  UNSAFE_TODO(memset(this, 0, sizeof(*this)));
-}
+Emf::EnumerationContext::EnumerationContext(uint32_t metafile_size)
+    : remaining_metafile_size(metafile_size) {}
 
 Emf::Record::Record(const ENHMETARECORD* record) : record_(record) {
   DCHECK(record_);
@@ -282,41 +318,59 @@ bool Emf::Record::SafePlayback(Emf::EnumerationContext* context) const {
   const XFORM* base_matrix = context->base_matrix;
   switch (record()->iType) {
     case EMR_STRETCHDIBITS: {
-      const auto* sdib_record =
-          reinterpret_cast<const EMRSTRETCHDIBITS*>(record());
-      const BITMAPINFOHEADER* bmih = GetBitmapInfoHeader(sdib_record);
-      const BYTE* bits = GetBitmapBits(sdib_record);
+      // SAFETY: Verified by this method's caller.
+      base::span<const uint8_t> record_span = UNSAFE_BUFFERS(base::span(
+          reinterpret_cast<const uint8_t*>(record()), record()->nSize));
+      if (record_span.empty()) {
+        return false;
+      }
+
+      const BITMAPINFOHEADER* bmih = GetBitmapInfoHeader(record_span);
+      if (!bmih) {
+        return false;
+      }
+
       bool play_normally = true;
       res = false;
       HDC hdc = context->hdc;
       SkBitmap bitmap;
       if (bmih->biCompression == BI_JPEG) {
-        if (!DIBFormatNativelySupported(hdc, CHECKJPEGFORMAT, bits,
-                                        bmih->biSizeImage)) {
+        base::span<const uint8_t> bits =
+            GetBitmapBits(record_span, bmih->biSizeImage);
+        if (bits.empty()) {
+          return false;
+        }
+
+        if (!DIBFormatNativelySupported(hdc, CHECKJPEGFORMAT, bits)) {
           play_normally = false;
-          // SAFETY: This interfaces with a system-generated metafile.
-          bitmap = gfx::JPEGCodec::Decode(
-              UNSAFE_BUFFERS(base::span(bits, bmih->biSizeImage)));
-          DCHECK(!bitmap.isNull());
+          bitmap = gfx::JPEGCodec::Decode(bits);
+          if (bitmap.isNull()) {
+            return false;
+          }
         }
       } else if (bmih->biCompression == BI_PNG) {
-        if (!DIBFormatNativelySupported(hdc, CHECKPNGFORMAT, bits,
-                                        bmih->biSizeImage)) {
+        base::span<const uint8_t> bits =
+            GetBitmapBits(record_span, bmih->biSizeImage);
+        if (bits.empty()) {
+          return false;
+        }
+
+        if (!DIBFormatNativelySupported(hdc, CHECKPNGFORMAT, bits)) {
           play_normally = false;
-          // SAFETY: This interfaces with a system-generated metafile.
-          bitmap = gfx::PNGCodec::Decode(
-              UNSAFE_BUFFERS(base::span(bits, bmih->biSizeImage)));
-          DCHECK(!bitmap.isNull());
+          bitmap = gfx::PNGCodec::Decode(bits);
+          if (bitmap.isNull()) {
+            return false;
+          }
         }
       }
       if (play_normally) {
         res = Play(context);
       } else {
+        const auto* sdib_record =
+            reinterpret_cast<const EMRSTRETCHDIBITS*>(record());
         const uint32_t* pixels =
             static_cast<const uint32_t*>(bitmap.getPixels());
-        if (!pixels) {
-          NOTREACHED();
-        }
+        CHECK(pixels);
         BITMAPINFOHEADER bmi = {0};
         skia::CreateBitmapHeaderForN32SkBitmap(bitmap, &bmi);
         res =
@@ -334,45 +388,45 @@ bool Emf::Record::SafePlayback(Emf::EnumerationContext* context) const {
       const XFORM* xform = reinterpret_cast<const XFORM*>(record()->dParm);
       HDC hdc = context->hdc;
       if (base_matrix) {
-        res = 0 != SetWorldTransform(hdc, base_matrix) &&
-              ModifyWorldTransform(hdc, xform, MWT_LEFTMULTIPLY);
+        res = 0 != ::SetWorldTransform(hdc, base_matrix) &&
+              ::ModifyWorldTransform(hdc, xform, MWT_LEFTMULTIPLY);
       } else {
-        res = 0 != SetWorldTransform(hdc, xform);
+        res = 0 != ::SetWorldTransform(hdc, xform);
       }
       break;
     }
     case EMR_MODIFYWORLDTRANSFORM: {
-      DCHECK_EQ(record()->nSize,
-                sizeof(DWORD) * 2 + sizeof(XFORM) + sizeof(DWORD));
-      const XFORM* xform = reinterpret_cast<const XFORM*>(record()->dParm);
-      UNSAFE_TODO({
-        const DWORD* option = reinterpret_cast<const DWORD*>(xform + 1);
-        HDC hdc = context->hdc;
-        switch (*option) {
-          case MWT_IDENTITY:
-            if (base_matrix) {
-              res = 0 != SetWorldTransform(hdc, base_matrix);
-            } else {
-              res = 0 != ModifyWorldTransform(hdc, xform, MWT_IDENTITY);
-            }
-            break;
-          case MWT_LEFTMULTIPLY:
-          case MWT_RIGHTMULTIPLY:
-            res = 0 != ModifyWorldTransform(hdc, xform, *option);
-            break;
-          case 4:  // MWT_SET
-            if (base_matrix) {
-              res = 0 != SetWorldTransform(hdc, base_matrix) &&
-                    ModifyWorldTransform(hdc, xform, MWT_LEFTMULTIPLY);
-            } else {
-              res = 0 != SetWorldTransform(hdc, xform);
-            }
-            break;
-          default:
-            res = false;
-            break;
-        }
-      });
+      CHECK_EQ(record()->nSize, sizeof(EMRMODIFYWORLDTRANSFORM));
+      const auto* modify_world_transform =
+          reinterpret_cast<const EMRMODIFYWORLDTRANSFORM*>(record());
+      HDC hdc = context->hdc;
+      switch (modify_world_transform->iMode) {
+        case MWT_IDENTITY:
+          if (base_matrix) {
+            res = 0 != ::SetWorldTransform(hdc, base_matrix);
+          } else {
+            res = 0 != ::ModifyWorldTransform(
+                           hdc, &modify_world_transform->xform, MWT_IDENTITY);
+          }
+          break;
+        case MWT_LEFTMULTIPLY:
+        case MWT_RIGHTMULTIPLY:
+          res = 0 != ::ModifyWorldTransform(hdc, &modify_world_transform->xform,
+                                            modify_world_transform->iMode);
+          break;
+        case 4:  // MWT_SET
+          if (base_matrix) {
+            res = 0 != ::SetWorldTransform(hdc, base_matrix) &&
+                  ::ModifyWorldTransform(hdc, &modify_world_transform->xform,
+                                         MWT_LEFTMULTIPLY);
+          } else {
+            res = 0 != ::SetWorldTransform(hdc, &modify_world_transform->xform);
+          }
+          break;
+        default:
+          res = false;
+          break;
+      }
       break;
     }
     case EMR_SETLAYOUT:
@@ -396,16 +450,14 @@ bool Emf::FinishPage() {
   return true;
 }
 
-Emf::Enumerator::Enumerator(const Emf& emf, HDC context, const RECT* rect) {
-  items_.clear();
-  if (!EnumEnhMetaFile(context, emf.emf(), &Emf::Enumerator::EnhMetaFileProc,
-                       reinterpret_cast<void*>(this), rect)) {
-    NOTREACHED();
-  }
+Emf::Enumerator::Enumerator(const Emf& emf, HDC context, const RECT* rect)
+    : context_(emf.GetDataSize()) {
+  CHECK(::EnumEnhMetaFile(context, emf.emf(), &Emf::Enumerator::EnhMetaFileProc,
+                          this, rect));
   DCHECK_EQ(context_.hdc, context);
 }
 
-Emf::Enumerator::~Enumerator() {}
+Emf::Enumerator::~Enumerator() = default;
 
 Emf::Enumerator::const_iterator Emf::Enumerator::begin() const {
   return items_.begin();
@@ -421,6 +473,12 @@ int CALLBACK Emf::Enumerator::EnhMetaFileProc(HDC hdc,
                                               int objects_count,
                                               LPARAM param) {
   Enumerator& emf = *reinterpret_cast<Enumerator*>(param);
+  if (record->nSize < kMinEnhMetaRecordSize ||
+      record->nSize > emf.context_.remaining_metafile_size ||
+      record->nSize % 4) {
+    return 0;
+  }
+  emf.context_.remaining_metafile_size -= record->nSize;
   if (!emf.context_.handle_table) {
     DCHECK(!emf.context_.handle_table);
     DCHECK(!emf.context_.objects_count);

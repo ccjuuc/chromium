@@ -46,7 +46,15 @@ const char kExceptionMessageSessionDestroyed[] =
     "The model execution session has been destroyed.";
 const char kExceptionMessageRequestAborted[] = "The request has been aborted.";
 const char kExceptionMessageInputTooLarge[] = "The input is too large.";
-
+const char kExceptionMessageResponseExceedsMaxTokens[] =
+    "The response exceeded output limits and was truncated.";
+const char kExceptionMessageResponseExceedsRemainingContext[] =
+    "The response size exceeded the remaining available context.";
+const char kExceptionMessageResponseParsingFailed[] =
+    "Failed to parse the response.";
+const char kExceptionMessageFailedToRunSafety[] =
+    "Failed to run the safety checks.";
+const char kExceptionMessageFailedToCountTokens[] = "Failed to count tokens.";
 const char kExceptionMessageInvalidTemperatureAndTopKFormat[] =
     "Initializing a new session must either specify both topK and temperature, "
     "or neither of them.";
@@ -54,6 +62,9 @@ const char kExceptionMessageInvalidTopK[] =
     "The topK value provided is invalid.";
 const char kExceptionMessageInvalidTemperature[] =
     "The temperature value provided is invalid.";
+const char kExceptionMessageSamplingModeAndParamsConflict[] =
+    "Cannot provide both 'samplingMode' and raw sampling parameters "
+    "('temperature' or 'topK').";
 const char kExceptionMessageUnableToCreateSession[] =
     "The device is unable to create a session to run the model. "
     "Please check the result of availability() first.";
@@ -62,18 +73,27 @@ const char kExceptionMessageUnableToCloneSession[] =
 const char kExceptionMessageUnableToCalculateUsage[] =
     "The usage cannot be calculated.";
 const char kExceptionMessagePromptWithSystemRoleIsNotTheFirst[] =
-    "The prompt with 'system' role must be placed at the first entry of "
-    "initialPrompts.";
+    "The 'system' role message must be the first message of a session.";
 const char kExceptionMessageUnsupportedLanguages[] =
     "The specified languages are not supported.";
+const char kExceptionMessageIncompatiblePreferenceOptions[] =
+    "The specified options are not supported with the 'speed' performance "
+    "preference.";
+const char kExceptionMessageInvalidRequest[] =
+    "The request is invalid - the input or options could not be processed.";
 const char kExceptionMessageInvalidResponseJsonSchema[] =
-    "Response json schema is invalid - it should be an object that can be "
-    "stringified into a JSON string.";
+    "Response constraint is not a supported json schema.";
 const char kExceptionMessagePermissionPolicy[] =
     "Access denied because the Permission Policy is not enabled.";
 const char kExceptionMessageUserActivationRequired[] =
     "Requires a user gesture when availability is \"downloading\" or "
     "\"downloadable\".";
+const char kExceptionMessageSpeculativeDecodingSamplingConflict[] =
+    "Sampling modes (samplingMode) or parameters (topK, temperature) cannot be "
+    "used with speculative decoding (MTP).";
+const char kExceptionMessageSpeculativeDecodingConstraintConflict[] =
+    "Constrained decoding (responseConstraint) cannot be used with speculative "
+    "decoding (MTP).";
 
 void ThrowInvalidContextException(ExceptionState& exception_state) {
   exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
@@ -199,7 +219,9 @@ DOMException* ConvertModelStreamingResponseErrorToDOMException(
       return CreateUnknown("kErrorUnknown");
     case ModelStreamingResponseStatus::kErrorInvalidRequest:
       base::debug::DumpWithoutCrashing();
-      return CreateUnknown("kErrorInvalidRequest");
+      return DOMException::Create(
+          kExceptionMessageInvalidRequest,
+          DOMException::GetErrorName(DOMExceptionCode::kNotSupportedError));
     case ModelStreamingResponseStatus::kErrorRequestThrottled:
       base::debug::DumpWithoutCrashing();
       return CreateUnknown("kErrorRequestThrottled");
@@ -253,6 +275,26 @@ DOMException* ConvertModelStreamingResponseErrorToDOMException(
       return DOMException::Create(
           kExceptionMessageResponseLowQuality,
           DOMException::GetErrorName(DOMExceptionCode::kNotSupportedError));
+    case ModelStreamingResponseStatus::kErrorResponseExceedsMaxTokens:
+      return DOMException::Create(
+          kExceptionMessageResponseExceedsMaxTokens,
+          DOMException::GetErrorName(DOMExceptionCode::kQuotaExceededError));
+    case ModelStreamingResponseStatus::kErrorResponseExceedsRemainingContext:
+      return DOMException::Create(
+          kExceptionMessageResponseExceedsRemainingContext,
+          DOMException::GetErrorName(DOMExceptionCode::kQuotaExceededError));
+    case ModelStreamingResponseStatus::kErrorResponseParsingFailed:
+      return DOMException::Create(
+          kExceptionMessageResponseParsingFailed,
+          DOMException::GetErrorName(DOMExceptionCode::kUnknownError));
+    case ModelStreamingResponseStatus::kErrorFailedToRunSafety:
+      return DOMException::Create(
+          kExceptionMessageFailedToRunSafety,
+          DOMException::GetErrorName(DOMExceptionCode::kUnknownError));
+    case ModelStreamingResponseStatus::kErrorFailedToCountTokens:
+      return DOMException::Create(
+          kExceptionMessageFailedToCountTokens,
+          DOMException::GetErrorName(DOMExceptionCode::kUnknownError));
     case ModelStreamingResponseStatus::kOngoing:
     case ModelStreamingResponseStatus::kComplete:
       NOTREACHED();
@@ -284,7 +326,8 @@ String ConvertModelAvailabilityCheckResultToDebugString(
       return "The GPU is blocked.";
     case mojom::blink::ModelAvailabilityCheckResult::
         kUnavailableTooManyRecentCrashes:
-      return "The model process crashed too many times for this version.";
+      return "The model process crashed too many times for this version. Check "
+             "chrome://crashes for additional information.";
     case mojom::blink::ModelAvailabilityCheckResult::
         kUnavailableSafetyModelNotAvailable:
       return "The safety model was required but not available.";
@@ -313,7 +356,11 @@ String ConvertModelAvailabilityCheckResultToDebugString(
     case mojom::blink::ModelAvailabilityCheckResult::
         kUnavailableInsufficientDiskSpace:
       return "The device does not have enough space for downloading the "
-             "on-device model";
+             "on-device model.";
+    case mojom::blink::ModelAvailabilityCheckResult::
+        kUnavailableInsufficientDiskSpaceForCaches:
+      return "The device does not have enough disk space to initialize "
+             "the on-device model.";
     case mojom::blink::ModelAvailabilityCheckResult::
         kUnavailableTranslationNotEligible:
       return "The on-device translation is not available.";
@@ -321,6 +368,13 @@ String ConvertModelAvailabilityCheckResultToDebugString(
         kUnavailableEnterprisePolicyDisabled:
       return "The on-device model is not available because the enterprise "
              "policy disables the feature.";
+
+    case mojom::blink::ModelAvailabilityCheckResult::
+        kUnavailableIncompatiblePreferenceOptions:
+      return kExceptionMessageIncompatiblePreferenceOptions;
+    case mojom::blink::ModelAvailabilityCheckResult::
+        kUnavailableIncompatibleSpeculativeDecodingOptions:
+      return kExceptionMessageSpeculativeDecodingSamplingConflict;
     case mojom::blink::ModelAvailabilityCheckResult::kAvailable:
     case mojom::blink::ModelAvailabilityCheckResult::kDownloadable:
     case mojom::blink::ModelAvailabilityCheckResult::kDownloading:

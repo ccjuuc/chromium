@@ -26,7 +26,7 @@
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/enterprise/connectors/device_trust/fake_device_trust_connector_service.h"
+#include "components/enterprise/device_trust/core/fake_device_trust_connector_service.h"
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 namespace enterprise_signals {
@@ -42,8 +42,8 @@ constexpr char kOtherUserEmail[] = "someOtherUser@example.com";
 constexpr GaiaId::Literal kOtherUserGaiaId("some-other-user-gaia");
 
 #if !BUILDFLAG(IS_ANDROID)
-base::Value::List GetUrls() {
-  base::Value::List trusted_urls;
+base::ListValue GetUrls() {
+  base::ListValue trusted_urls;
   trusted_urls.Append("https://www.example.com");
   trusted_urls.Append("example2.example.com");
   return trusted_urls;

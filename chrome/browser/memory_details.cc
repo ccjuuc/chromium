@@ -5,13 +5,12 @@
 #include "chrome/browser/memory_details.h"
 
 #include <algorithm>
+#include <ranges>
 #include <set>
 #include <vector>
 
-#include "base/containers/adapters.h"
 #include "base/file_version_info.h"
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -31,6 +30,7 @@
 #include "content/public/browser/render_widget_host_iterator.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/bindings_policy.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/common/content_constants.h"
 #include "content/public/common/zygote/zygote_buildflags.h"
 #include "extensions/buildflags/buildflags.h"
@@ -42,7 +42,7 @@
 #include "content/public/browser/zygote_host/zygote_host_linux.h"
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "chrome/browser/extensions/chrome_content_browser_client_extensions_part.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/process_manager.h"
@@ -58,16 +58,16 @@ using content::BrowserThread;
 using content::NavigationEntry;
 using content::RenderWidgetHost;
 using content::WebContents;
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 using extensions::Extension;
 #endif
 
 namespace {
 
 void UpdateProcessTypeAndTitles(
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
     const extensions::ExtensionSet* extension_set,
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
     ProcessMemoryInformation& process,
     content::RenderFrameHost* rfh) {
   // We check the title and the renderer type only of the primary main
@@ -90,7 +90,7 @@ void UpdateProcessTypeAndTitles(
     process.renderer_type = ProcessMemoryInformation::RENDERER_CHROME;
   }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   if (!is_webui && extension_set) {
     const Extension* extension = extension_set->GetByID(page_url.GetHost());
     if (extension) {
@@ -227,7 +227,7 @@ std::string MemoryDetails::ToLogString(bool include_tab_title) {
   std::sort(processes.begin(), processes.end());
   // Print from high to low.
   for (const ProcessMemoryInformation& process_info :
-       base::Reversed(processes)) {
+       std::views::reverse(processes)) {
     log += ProcessMemoryInformation::GetFullTypeNameInEnglish(
         process_info.process_type, process_info.renderer_type);
     // The title of a renderer may contain PII.
@@ -288,7 +288,7 @@ void MemoryDetails::CollectChildInfoOnUIThread() {
       render_process_host = widgets_by_pid[process.pid].front()->GetProcess();
     }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
     // Determine if this is an extension process.
     bool process_is_for_extensions = false;
     const extensions::ExtensionSet* extension_set = nullptr;
@@ -305,11 +305,11 @@ void MemoryDetails::CollectChildInfoOnUIThread() {
       extensions::ProcessMap* process_map =
           extensions::ProcessMap::Get(context);
       DCHECK(process_map);
-      int rph_id = render_process_host->GetDeprecatedID();
+      content::ChildProcessId rph_id = render_process_host->GetID();
       process_is_for_extensions = process_map->Contains(rph_id);
 
       // For our purposes, don't count processes running hosted apps as
-      // extension processes. See also: crbug.com/102533.
+      // extension processes. See also: crbug.com/40107820.
       if (const Extension* extension =
               process_map->GetEnabledExtensionByProcessID(rph_id)) {
         if (!extension->is_hosted_app()) {
@@ -327,7 +327,7 @@ void MemoryDetails::CollectChildInfoOnUIThread() {
       render_process_host->ForEachRenderFrameHost(
           [&](content::RenderFrameHost* frame) {
             UpdateProcessTypeAndTitles(
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
                 process_is_for_extensions ? extension_set : nullptr,
 #endif
                 process, frame);

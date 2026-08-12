@@ -11,10 +11,12 @@
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
-#include "base/timer/timer.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
 #include "components/prefs/pref_change_registrar.h"
+
+class PrefService;
 
 namespace ash {
 
@@ -53,7 +55,9 @@ class MarketingOptInScreen : public BaseScreen {
 
   using ScreenExitCallback = base::RepeatingCallback<void(Result result)>;
 
-  MarketingOptInScreen(base::WeakPtr<MarketingOptInScreenView> view,
+  // `local_state` must be non-null and must outlive `this`.
+  MarketingOptInScreen(PrefService* local_state,
+                       base::WeakPtr<MarketingOptInScreenView> view,
                        const ScreenExitCallback& exit_callback);
 
   MarketingOptInScreen(const MarketingOptInScreen&) = delete;
@@ -88,7 +92,7 @@ class MarketingOptInScreen : public BaseScreen {
 
  private:
   void OnA11yShelfNavigationButtonPrefChanged();
-  void OnUserAction(const base::Value::List& args) override;
+  void OnUserAction(const base::ListValue& args) override;
   // Checks whether this user is managed.
   bool IsCurrentUserManaged();
 
@@ -106,6 +110,8 @@ class MarketingOptInScreen : public BaseScreen {
   bool IsDefaultOptInCountry() {
     return default_opt_in_countries_.count(country_);
   }
+
+  const raw_ref<PrefService> local_state_;
 
   base::WeakPtr<MarketingOptInScreenView> view_;
   ScreenExitCallback exit_callback_;
@@ -141,12 +147,6 @@ class MarketingOptInScreen : public BaseScreen {
 
   // Countries that require the screen to show a footer with legal information.
   const base::flat_set<std::string_view> countries_with_legal_footer{"ca"};
-
-  // Timer to record user changed value for the accessibility setting to turn
-  // shelf navigation buttons on in tablet mode. The metric is recorded with 10
-  // second delay to avoid overreporting when the user keeps toggling the
-  // setting value in the screen UI.
-  base::OneShotTimer a11y_nav_buttons_toggle_metrics_reporter_timer_;
 
   base::WeakPtrFactory<MarketingOptInScreen> weak_factory_{this};
 };

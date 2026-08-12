@@ -7,13 +7,11 @@
 #include <array>
 
 #include "base/memory/raw_ptr.h"
-#include "base/test/scoped_feature_list.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/prefs/pref_service.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
-#include "content/public/common/content_features.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/peerconnection/webrtc_ip_handling_policy.h"
@@ -77,27 +75,25 @@ TEST_F(RendererPreferencesUtilTest, WebRTCIPHandlingPolicy) {
 }
 
 TEST_F(RendererPreferencesUtilTest, WebRTCIPHandlingURLValidEntries) {
-  base::Value::Dict valid_entry_1 =
-      base::Value::Dict()
+  base::DictValue valid_entry_1 =
+      base::DictValue()
           .Set("url", "[*.]example.com")
           .Set("handling", blink::kWebRTCIPHandlingDisableNonProxiedUdp);
-  base::Value::Dict no_url = base::Value::Dict().Set(
+  base::DictValue no_url = base::DictValue().Set(
       "handling", blink::kWebRTCIPHandlingDisableNonProxiedUdp);
-  base::Value::Dict invalid_url =
-      base::Value::Dict().Set("url", "*.example.com");
-  base::Value::Dict no_handling =
-      base::Value::Dict().Set("url", "[*.]example.com");
-  base::Value::Dict valid_entry_2 =
-      base::Value::Dict()
+  base::DictValue invalid_url = base::DictValue().Set("url", "*.example.com");
+  base::DictValue no_handling = base::DictValue().Set("url", "[*.]example.com");
+  base::DictValue valid_entry_2 =
+      base::DictValue()
           .Set("url", "*://google.com:*")
           .Set("handling", blink::kWebRTCIPHandlingDefault);
 
-  base::Value::List list = base::Value::List()
-                               .Append(std::move(valid_entry_1))
-                               .Append(std::move(no_url))
-                               .Append(std::move(invalid_url))
-                               .Append(std::move(no_handling))
-                               .Append(std::move(valid_entry_2));
+  base::ListValue list = base::ListValue()
+                             .Append(std::move(valid_entry_1))
+                             .Append(std::move(no_url))
+                             .Append(std::move(invalid_url))
+                             .Append(std::move(no_handling))
+                             .Append(std::move(valid_entry_2));
   pref_service_->SetList(prefs::kWebRTCIPHandlingUrl, std::move(list));
 
   blink::RendererPreferences renderer_preferences;
@@ -135,30 +131,13 @@ TEST_F(RendererPreferencesUtilTest, WebRTCIPHandlingURLValidEntries) {
             blink::mojom::WebRtcIpHandlingPolicy::kDefault);
 }
 
-#if BUILDFLAG(IS_ANDROID)
-TEST_F(RendererPreferencesUtilTest, CaretBrowsingAndroidKillSwitch) {
-  // Case 1: Feature Enabled, Pref Enabled -> Result: Enabled
-  {
-    base::test::ScopedFeatureList feature_list;
-    feature_list.InitAndEnableFeature(features::kAndroidCaretBrowsing);
-    pref_service_->SetBoolean(prefs::kCaretBrowsingEnabled, true);
-
-    blink::RendererPreferences renderer_preferences;
-    renderer_preferences_util::UpdateFromSystemSettings(&renderer_preferences,
-                                                        &profile_);
-    EXPECT_TRUE(renderer_preferences.caret_browsing_enabled);
-  }
-
-  // Case 2: Feature Disabled, Pref Enabled -> Result: Disabled
-  {
-    base::test::ScopedFeatureList feature_list;
-    feature_list.InitAndDisableFeature(features::kAndroidCaretBrowsing);
-    pref_service_->SetBoolean(prefs::kCaretBrowsingEnabled, true);
-
-    blink::RendererPreferences renderer_preferences;
-    renderer_preferences_util::UpdateFromSystemSettings(&renderer_preferences,
-                                                        &profile_);
-    EXPECT_FALSE(renderer_preferences.caret_browsing_enabled);
+TEST_F(RendererPreferencesUtilTest, AutofillAtMemoryTriggerString) {
+  blink::RendererPreferences renderer_preferences;
+  renderer_preferences_util::UpdateFromSystemSettings(&renderer_preferences,
+                                                      &profile_);
+  if constexpr (BUILDFLAG(IS_ANDROID)) {
+    EXPECT_TRUE(renderer_preferences.autofill_trigger_string.empty());
+  } else {
+    EXPECT_EQ(renderer_preferences.autofill_trigger_string, "@@");
   }
 }
-#endif

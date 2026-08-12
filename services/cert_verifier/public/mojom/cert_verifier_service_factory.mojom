@@ -105,11 +105,13 @@ interface CertVerifierServiceFactory {
   [EnableIf=is_ct_supported]
   DisableCtEnforcement() => ();
 
-  // Updates the ChromeRootStore used by the CertVerifierServiceFactory with a
-  // new version. The callback will be run once the update has been processed
-  // (regardless if it was updated successfully or the update was ignored.)
+  // Updates the ChromeRootStore and optional MtcConfig used by the
+  // CertVerifierServiceFactory with a new version. The callback will be run
+  // once the update has been processed (regardless if it was updated
+  // successfully or the update was ignored.)
   [EnableIf=is_chrome_root_store_supported]
-  UpdateChromeRootStore(mojo_base.mojom.ProtoWrapper new_root_store) => ();
+  UpdateChromeRootStore(mojo_base.mojom.ProtoWrapper new_root_store,
+                        mojo_base.mojom.ProtoWrapper? new_mtc_config) => ();
 
   // Updates the Merkle Tree Certificate metadata used by the
   // CertVerifierServiceFactory with a new version. The callback will be run
@@ -132,12 +134,17 @@ interface CertVerifierServiceFactory {
   [EnableIf=is_platform_root_store_info_supported]
   GetPlatformRootStoreInfo() => (PlatformRootStoreInfo root_store_info);
 
-  // Updates the time used for certificate verification. After this is called,
-  // the system time will be recorded along with a known time passed in as
-  // `current_time`. Future verification attempts will estimate the real time
-  // based on how much the system clock has advanced since the last update.
-  // This only has an effect when the built-in verifier is being used.
+  // Synchronizes the clock used for certificate verification. After this is
+  // called, the local machine's time (recorded as both wall clock system time
+  // and system ticks) will be correlated with a known current_time and an
+  // estimate of uncertainty. Future certificate verification attempts will
+  // estimate the real time based on how much the system clock has advanced
+  // since the last update. This only has an effect when the built-in verifier
+  // is being used. The CertVerifierService implementation may choose to ignore
+  // or adjust the synchronziation request if the uncertainty is too high (impl
+  // defined)
   UpdateNetworkTime(mojo_base.mojom.Time system_time,
                     mojo_base.mojom.TimeTicks system_ticks,
-                    mojo_base.mojom.Time current_time);
+                    mojo_base.mojom.Time current_time,
+                    mojo_base.mojom.TimeDelta uncertainty);
 };

@@ -12,13 +12,24 @@ suite('NewTabPageDoodleShareDialogFocusTest', () => {
 
   setup(() => {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
+    let clipboardText = '';
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        writeText: (text: string) => {
+          clipboardText = text;
+          return Promise.resolve();
+        },
+        readText: () => Promise.resolve(clipboardText),
+      },
+      configurable: true,
+    });
     doodleShareDialog = document.createElement('ntp-doodle-share-dialog');
     document.body.appendChild(doodleShareDialog);
   });
 
   test('clicking copy copies URL', async () => {
     // Arrange.
-    doodleShareDialog.url = {url: 'https://bar.com'};
+    doodleShareDialog.url = 'https://bar.com';
 
     // Act.
     doodleShareDialog.$.copyButton.click();

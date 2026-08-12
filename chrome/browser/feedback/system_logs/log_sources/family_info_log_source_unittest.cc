@@ -28,7 +28,7 @@ namespace {
 // Configures the account_info so that ListFamilyMembersService will fetch
 // family info for that account.
 AccountInfo& WithFamilyInfoFetching(AccountInfo& account_info) {
-  AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+  AccountCapabilitiesTestMutator mutator(&account_info);
   if (supervised_user::FetchListFamilyMembersWithCapability()) {
     mutator.set_can_fetch_family_member_info(true);
     mutator.set_is_subject_to_parental_controls(false);
@@ -46,7 +46,7 @@ class FamilyInfoLogSourceTest : public ::testing::Test {
     supervised_user::RegisterProfilePrefs(pref_service_.registry());
     test_list_family_members_service_ =
         std::make_unique<supervised_user::ListFamilyMembersService>(
-            identity_test_env_.identity_manager(),
+            *identity_test_env_.identity_manager(),
             base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
                 &test_url_loader_factory_),
             pref_service_);
@@ -117,8 +117,6 @@ TEST_F(FamilyInfoLogSourceTest,
 
   identity_test_env_.UpdateAccountInfoForAccount(
       WithFamilyInfoFetching(primary_account));
-
-  test_list_family_members_service_->Init();
   identity_test_env_.WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token", base::Time::Max());
   SimulateResponseForPendingRequest();

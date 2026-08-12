@@ -17,7 +17,6 @@
 #include "base/memory/stack_allocated.h"
 #include "base/message_loop/message_pump.h"
 #include "base/metrics/histogram.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/strcat.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/lock_metrics_recorder.h"
@@ -51,8 +50,12 @@ TimeTicks CapAtOneDay(TimeTicks next_run_time, LazyNow* lazy_now) {
 BASE_FEATURE(kAvoidScheduleWorkDuringNativeEventProcessing,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
+BASE_FEATURE(kCurrentTaskRunnerInheritsThreadType,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 std::atomic_bool g_run_tasks_by_batches = false;
 std::atomic_bool g_avoid_schedule_calls_during_native_event_processing = false;
+std::atomic_bool g_current_task_runner_inherits_thread_type = false;
 
 base::TimeDelta GetLeewayForWakeUp(std::optional<WakeUp> wake_up) {
   if (!wake_up || wake_up->delay_policy == subtle::DelayPolicy::kPrecise) {
@@ -70,6 +73,9 @@ void ThreadControllerWithMessagePumpImpl::InitializeFeatures() {
   g_avoid_schedule_calls_during_native_event_processing.store(
       FeatureList::IsEnabled(kAvoidScheduleWorkDuringNativeEventProcessing),
       std::memory_order_relaxed);
+  g_current_task_runner_inherits_thread_type.store(
+      FeatureList::IsEnabled(kCurrentTaskRunnerInheritsThreadType),
+      std::memory_order_relaxed);
 }
 
 // static
@@ -84,11 +90,7 @@ ThreadControllerWithMessagePumpImpl::ThreadControllerWithMessagePumpImpl(
     : ThreadController(settings.clock),
       work_deduplicator_(associated_thread_),
       can_run_tasks_by_batches_(settings.can_run_tasks_by_batches),
-      is_main_thread_(settings.is_main_thread) {
-  if (settings.should_report_lock_metrics) {
-    LockMetricsRecorder::Get()->SetTargetCurrentThread();
-  }
-}
+      is_main_thread_(settings.is_main_thread) {}
 
 ThreadControllerWithMessagePumpImpl::ThreadControllerWithMessagePumpImpl(
     std::unique_ptr<MessagePump> message_pump,
@@ -228,9 +230,11 @@ bool ThreadControllerWithMessagePumpImpl::RunsTasksInCurrentSequence() {
 }
 
 void ThreadControllerWithMessagePumpImpl::SetDefaultTaskRunner(
-    scoped_refptr<SingleThreadTaskRunner> task_runner) {
+    scoped_refptr<SingleThreadTaskRunner> task_runner,
+    ThreadType thread_type) {
   base::internal::CheckedAutoLock lock(task_runner_lock_);
   task_runner_ = task_runner;
+  main_thread_only().thread_type_ = thread_type;
   if (associated_thread_->IsBound()) {
     DCHECK(associated_thread_->IsBoundToCurrentThread());
     // Thread task runner handle will be created in BindToCurrentThread().
@@ -242,16 +246,11 @@ void ThreadControllerWithMessagePumpImpl::
     InitializeSingleThreadTaskRunnerCurrentDefaultHandle() {
   // Only one SingleThreadTaskRunner::CurrentDefaultHandle can exist at any
   // time, so reset the old one.
-  main_thread_only().thread_task_runner_handle.reset();
-  main_thread_only().thread_task_runner_handle =
-      std::make_unique<SingleThreadTaskRunner::CurrentDefaultHandle>(
-          task_runner_);
+  main_thread_only().thread_task_runner_handle.emplace(task_runner_);
 
   if (is_main_thread_) {
-    main_thread_only().main_thread_default_task_runner_handle.reset();
-    main_thread_only().main_thread_default_task_runner_handle =
-        std::make_unique<SingleThreadTaskRunner::MainThreadDefaultHandle>(
-            task_runner_);
+    main_thread_only().main_thread_default_task_runner_handle.emplace(
+        task_runner_);
   }
 
   // When the task runner is known, bind the power manager. Power notifications
@@ -263,10 +262,6 @@ scoped_refptr<SingleThreadTaskRunner>
 ThreadControllerWithMessagePumpImpl::GetDefaultTaskRunner() {
   base::internal::CheckedAutoLock lock(task_runner_lock_);
   return task_runner_;
-}
-
-void ThreadControllerWithMessagePumpImpl::RestoreDefaultTaskRunner() {
-  // There is no default task runner (as opposed to ThreadControllerImpl).
 }
 
 void ThreadControllerWithMessagePumpImpl::AddNestingObserver(
@@ -466,6 +461,17 @@ std::optional<WakeUp> ThreadControllerWithMessagePumpImpl::DoWorkImpl(
           time_source_, selected_task->task, &task_annotator_,
           lazy_now_task_selected.Now());
 
+      base::internal::CurrentTaskImportanceOverride thread_type_override(
+          selected_task->thread_type);
+      std::optional<SingleThreadTaskRunner::CurrentDefaultHandle>
+          thread_task_runner_handle;
+      if (g_current_task_runner_inherits_thread_type &&
+          selected_task->thread_type < main_thread_only().thread_type_) {
+        thread_task_runner_handle.emplace(
+            selected_task->task.task_runner,
+            SingleThreadTaskRunner::CurrentDefaultHandle::MayAlreadyExist{});
+      }
+
       // Note: all arguments after task are just passed to a TRACE_EVENT for
       // logging so lambda captures are safe as lambda is executed inline.
       SequencedTaskSource* source = main_thread_only().task_source;
@@ -573,7 +579,10 @@ void ThreadControllerWithMessagePumpImpl::DoIdleWork() {
   }
 #endif  // BUILDFLAG(IS_WIN)
 
-  LockMetricsRecorder::Get()->ReportLockAcquisitionTimes();
+  auto* recorder = base::LockMetricsRecorder::GetForCurrentThread();
+  if (recorder) {
+    recorder->ReportLockAcquisitionTimes();
+  }
 
   if (main_thread_only().task_source->OnIdle()) {
     work_id_provider_->IncrementWorkId();

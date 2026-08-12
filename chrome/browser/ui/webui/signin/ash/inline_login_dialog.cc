@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 
+#include "ash/constants/webui_url_constants.h"
 #include "ash/public/cpp/window_backdrop.h"
 #include "base/check_op.h"
 #include "base/functional/callback_helpers.h"
@@ -71,7 +72,7 @@ GURL GetInlineLoginUrl(const std::string& email) {
   if (!ProfileManager::GetActiveUserProfile()->GetPrefs()->GetBoolean(
           ::account_manager::prefs::kSecondaryGoogleAccountSigninAllowed)) {
     // Addition of secondary Google Accounts is not allowed.
-    return GURL(chrome::kChromeUIAccountManagerErrorURL);
+    return GURL(ash::kChromeUIAccountManagerErrorURL);
   }
 
   // Addition of secondary Google Accounts is allowed.
@@ -86,7 +87,7 @@ GURL GetInlineLoginUrl(const std::string& email) {
 // chrome/browser/resources/inline_login/inline_login_app.js
 base::Value AccountAdditionOptionsToValue(
     const account_manager::AccountAdditionOptions& options) {
-  base::Value::Dict args;
+  base::DictValue args;
   args.Set("isAvailableInArc", base::Value(options.is_available_in_arc));
   args.Set("showArcAvailabilityPicker",
            base::Value(options.show_arc_availability_picker));
@@ -155,6 +156,26 @@ void InlineLoginDialog::AddObserver(
 void InlineLoginDialog::RemoveObserver(
     web_modal::ModalDialogHostObserver* observer) {
   modal_dialog_host_observer_list_.RemoveObserver(observer);
+}
+
+void InlineLoginDialog::OnWidgetBoundsChanged(views::Widget* widget,
+                                              const gfx::Rect& new_bounds) {
+  for (auto& observer : modal_dialog_host_observer_list_) {
+    observer.OnPositionRequiresUpdate();
+  }
+}
+
+void InlineLoginDialog::OnWidgetDestroying(views::Widget* widget) {
+  widget_observation_.Reset();
+}
+
+void InlineLoginDialog::AttachWidgetObserver() {
+  DCHECK(!widget_observation_.IsObserving());
+  gfx::NativeWindow window = dialog_window();
+  DCHECK(window);
+  views::Widget* widget = views::Widget::GetWidgetForNativeWindow(window);
+  DCHECK(widget);
+  widget_observation_.Observe(widget);
 }
 
 InlineLoginDialog::InlineLoginDialog()
@@ -277,6 +298,7 @@ void InlineLoginDialog::ShowInternal(
   dialog = new InlineLoginDialog(GetInlineLoginUrl(email), options,
                                  std::move(close_dialog_closure));
   dialog->ShowSystemDialog();
+  dialog->AttachWidgetObserver();
 
   // TODO(crbug.com/1016828): Remove/update this after the dialog behavior on
   // Chrome OS is defined.

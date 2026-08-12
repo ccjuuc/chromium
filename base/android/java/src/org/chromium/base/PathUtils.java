@@ -5,7 +5,6 @@
 package org.chromium.base;
 
 import android.content.Context;
-import android.content.pm.ApplicationInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
@@ -25,7 +24,6 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.build.annotations.RequiresNonNull;
 
 import java.io.File;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -95,22 +93,6 @@ public abstract class PathUtils {
             Os.chmod(path, mode);
         } catch (Exception e) {
             Log.e(TAG, "Failed to set permissions for path \"" + path + "\"");
-        }
-    }
-
-    // TODO(crbug.com/41484704): Merge the Chrome and WebView implementations
-    // of isPathUnderAppDir into one.
-    public static boolean isPathUnderAppDir(String path, Context context) {
-        File file = new File(path);
-        File dataDir = context.getDataDir();
-        File externalDir = ContextUtils.getApplicationContext().getExternalFilesDir(null);
-        try {
-            Path fileRealPath = file.toPath().toRealPath();
-            return (fileRealPath.startsWith(dataDir.toPath().toRealPath())
-                    || (externalDir != null
-                            && fileRealPath.startsWith(externalDir.toPath().toRealPath())));
-        } catch (Exception e) {
-            return false;
         }
     }
 
@@ -392,21 +374,6 @@ public abstract class PathUtils {
         }
 
         return absolutePaths.toArray(new String[absolutePaths.size()]);
-    }
-
-    /**
-     * @return the path to native libraries.
-     */
-    @SuppressWarnings("unused")
-    @CalledByNative
-    private static @JniType("std::string") String getNativeLibraryDirectory() {
-        ApplicationInfo ai = ContextUtils.getApplicationContext().getApplicationInfo();
-        if ((ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
-                || (ai.flags & ApplicationInfo.FLAG_SYSTEM) == 0) {
-            return ai.nativeLibraryDir;
-        }
-
-        return "/system/lib/";
     }
 
     /**

@@ -27,9 +27,6 @@ class UnguessableToken;
 // carousel in the inputplate.
 @interface ComposeboxInputItemCollection : NSObject
 
-// Creates a new input item collection with the given attachment limit.
-- (instancetype)initWithAttachmentLimit:(size_t)attachmentLimit;
-
 // The delegate for this instance.
 @property(nonatomic, weak) id<ComposeboxInputItemCollectionDelegate> delegate;
 
@@ -46,17 +43,20 @@ class UnguessableToken;
 // Whether the collection has at least one image added.
 @property(nonatomic, readonly) BOOL hasImage;
 
+// Whether the collection has at least one file added.
+@property(nonatomic, readonly) BOOL hasFile;
+
 // Whether the collection contains a tab or a file attachment.
 @property(nonatomic, readonly) BOOL hasTabOrFile;
 
-// Whether more attachment can be added.
-@property(nonatomic, readonly) BOOL canAddMoreAttachments;
+// Number of images added.
+@property(nonatomic, readonly) size_t imagesCount;
 
-// The available slots in this collection.
-@property(nonatomic, readonly) size_t availableSlots;
+// Number of tabs added.
+@property(nonatomic, readonly) size_t tabsCount;
 
-// The number of non tab attachments.
-@property(nonatomic, readonly) size_t nonTabAttachmentCount;
+// Number of files added.
+@property(nonatomic, readonly) size_t filesCount;
 
 // The first item in this collection, or `nil` if not present.
 @property(nonatomic, readonly) ComposeboxInputItem* firstItem;
@@ -69,6 +69,10 @@ class UnguessableToken;
 
 // Removes an item from the collection.
 - (void)removeItem:(ComposeboxInputItem*)item;
+
+// Removes the given `items` from the collection in a single batch, triggering
+// delegate update only once.
+- (void)removeItems:(NSArray<ComposeboxInputItem*>*)items;
 
 // Removes all items from the collection.
 - (void)clearItems;

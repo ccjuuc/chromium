@@ -8,6 +8,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/cocoa/applescript/bookmark_folder_applescript.h"
 #import "chrome/browser/ui/cocoa/applescript/browsercrapplication+applescript.h"
 #import "chrome/browser/ui/cocoa/applescript/constants_applescript.h"
@@ -25,12 +26,17 @@ using BrowserCrApplicationAppleScriptTest = InProcessBrowserTest;
 // Create windows of different |Type|.
 IN_PROC_BROWSER_TEST_F(BrowserCrApplicationAppleScriptTest, Creation) {
   // Create additional |Browser*| objects of different type.
-  Profile* profile = browser()->profile();
-  Browser* b1 = Browser::Create(Browser::CreateParams(
-      Browser::TYPE_POPUP, profile, /*user_gesture=*/true));
-  Browser* b2 = Browser::Create(Browser::CreateParams::CreateForApp(
-      "Test", /*trusted_source=*/true, gfx::Rect(), profile,
-      /*user_gesture=*/true));
+  Profile* profile = browser()->GetProfile();
+  Browser* b1 =
+      CreateBrowserWindow(
+          BrowserWindowCreateParams(BrowserWindowInterface::TYPE_POPUP, profile,
+                                    /*from_user_gesture=*/true))
+          ->GetBrowserForMigrationOnly();
+  Browser* b2 =
+      CreateBrowserWindow(BrowserWindowCreateParams::CreateForApp(
+                              "Test", /*trusted_source=*/true, gfx::Rect(),
+                              profile, /*user_gesture=*/true))
+          ->GetBrowserForMigrationOnly();
 
   EXPECT_EQ(3U, [NSApp appleScriptWindows].count);
   for (WindowAppleScript* window in [NSApp appleScriptWindows]) {

@@ -16,6 +16,7 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/no_destructor.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -24,11 +25,6 @@
 #include "extensions/common/extension_id.h"
 #include "services/device/public/mojom/hid.mojom.h"
 #include "services/device/public/mojom/usb_device.mojom.h"
-
-namespace base {
-template <typename T>
-struct DefaultSingletonTraits;
-}
 
 namespace content {
 class BrowserContext;
@@ -50,7 +46,6 @@ class DevicePermissionEntry : public base::RefCounted<DevicePermissionEntry> {
 
   explicit DevicePermissionEntry(const device::mojom::UsbDeviceInfo& device);
 
-  explicit DevicePermissionEntry(const device::mojom::HidDeviceInfo& device);
   DevicePermissionEntry(Type type,
                         uint16_t vendor_id,
                         uint16_t product_id,
@@ -66,7 +61,7 @@ class DevicePermissionEntry : public base::RefCounted<DevicePermissionEntry> {
 
   // Convert the device to a serializable value, returns an is_none() value
   // if the entry is not persistent.
-  base::Value::Dict ToValue() const;
+  base::DictValue ToValue() const;
 
   std::u16string GetPermissionMessageString() const;
 
@@ -168,8 +163,6 @@ class DevicePermissionsManager : public KeyedService {
 
   void AllowUsbDevice(const ExtensionId& extension_id,
                       const device::mojom::UsbDeviceInfo& device_info);
-  void AllowHidDevice(const ExtensionId& extension_id,
-                      const device::mojom::HidDeviceInfo& device);
 
   // Updates the "last used" timestamp on the given device entry and writes it
   // out to ExtensionPrefs.
@@ -212,7 +205,7 @@ class DevicePermissionsManagerFactory
   static DevicePermissionsManagerFactory* GetInstance();
 
  private:
-  friend struct base::DefaultSingletonTraits<DevicePermissionsManagerFactory>;
+  friend base::NoDestructor<DevicePermissionsManagerFactory>;
 
   DevicePermissionsManagerFactory();
   ~DevicePermissionsManagerFactory() override;

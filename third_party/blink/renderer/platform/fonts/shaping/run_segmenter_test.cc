@@ -49,7 +49,7 @@ class RunSegmenterTest : public testing::Test {
     Vector<SegmenterExpectedRun> expect;
     for (auto& run : runs) {
       unsigned length_before = text.length();
-      text.Append(String::FromUTF8(run.text.c_str()));
+      text.Append(String::FromUtf8(run.text));
       expect.push_back(SegmenterExpectedRun(length_before, text.length(),
                                             run.script, run.render_orientation,
                                             run.font_fallback_priority));
@@ -69,7 +69,7 @@ class RunSegmenterTest : public testing::Test {
   void VerifyRuns(RunSegmenter* run_segmenter,
                   const Vector<SegmenterExpectedRun>& expect) {
     RunSegmenter::RunSegmenterRange segmenter_range;
-    size_t run_count = 0;
+    wtf_size_t run_count = 0;
     while (run_segmenter->Consume(&segmenter_range)) {
       ASSERT_LT(run_count, expect.size());
       ASSERT_EQ(expect[run_count].start, segmenter_range.start);

@@ -21,7 +21,6 @@
 #include "base/supports_user_data.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_commands.h"
@@ -38,7 +37,6 @@
 #include "chrome/browser/enterprise/connectors/common.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/download/public/common/download_danger_type.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
@@ -51,7 +49,6 @@
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
-#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item_utils.h"
@@ -68,6 +65,10 @@
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/browser.h"
 #include "ui/views/vector_icons.h"
+#endif
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "extensions/browser/extension_util.h"
 #endif
 
 #if BUILDFLAG(FULL_SAFE_BROWSING)
@@ -365,6 +366,7 @@ bool DownloadItemModel::IsMalicious() const {
     case download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_LOCAL_PASSWORD_SCANNING:
     case download::DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED:
     case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE:
+    case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_ONEDRIVE:
       return false;
   }
   NOTREACHED();
@@ -664,11 +666,9 @@ bool DownloadItemModel::IsCommandEnabled(
     case DownloadCommands::SHOW_IN_FOLDER:
       return download_->CanShowInFolder();
     case DownloadCommands::OPEN_WHEN_COMPLETE:
-      return download_->CanOpenDownload() &&
-             !download_crx_util::IsExtensionDownload(*download_);
+      return download_->CanOpenDownload() && !IsExtensionDownload();
     case DownloadCommands::PLATFORM_OPEN:
-      return download_->CanOpenDownload() &&
-             !download_crx_util::IsExtensionDownload(*download_);
+      return download_->CanOpenDownload() && !IsExtensionDownload();
     case DownloadCommands::ALWAYS_OPEN_TYPE:
       // For temporary downloads, the target filename might be a temporary
       // filename. Don't base an "Always open" decision based on it. Also
@@ -679,7 +679,7 @@ bool DownloadItemModel::IsCommandEnabled(
                  ->IsAllowedToOpenAutomatically(
                      download_->GetTargetFilePath()) &&
 #endif
-             !download_crx_util::IsExtensionDownload(*download_);
+             !IsExtensionDownload();
     case DownloadCommands::PAUSE:
       return !download_->IsSavePackageDownload() &&
              DownloadUIModel::IsCommandEnabled(download_commands, command);
@@ -690,7 +690,7 @@ bool DownloadItemModel::IsCommandEnabled(
           MaybeGetMediaAppAction();
 
       return media_app_command == command && download_->CanOpenDownload() &&
-             !download_crx_util::IsExtensionDownload(*download_);
+             !IsExtensionDownload();
 #else
       return false;
 #endif
@@ -721,8 +721,7 @@ bool DownloadItemModel::IsCommandChecked(
     DownloadCommands::Command command) const {
   switch (command) {
     case DownloadCommands::OPEN_WHEN_COMPLETE:
-      return download_->GetOpenWhenComplete() ||
-             download_crx_util::IsExtensionDownload(*download_);
+      return download_->GetOpenWhenComplete() || IsExtensionDownload();
     case DownloadCommands::ALWAYS_OPEN_TYPE:
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
     BUILDFLAG(IS_MAC)
@@ -964,6 +963,7 @@ DangerUiPattern DownloadItemModel::GetDangerUiPattern() const {
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_FAILED:
       return DangerUiPattern::kSuspicious;
     case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE:
+    case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_ONEDRIVE:
     case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_WARNING:
     case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK:
     case download::DOWNLOAD_DANGER_TYPE_BLOCKED_PASSWORD_PROTECTED:
@@ -1066,6 +1066,7 @@ bool DownloadItemModel::IsEphemeralWarning() const {
     case download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_LOCAL_PASSWORD_SCANNING:
       return true;
     case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE:
+    case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_ONEDRIVE:
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_OPENED_DANGEROUS:
     case download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS:
     case download::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT:
@@ -1094,7 +1095,11 @@ std::string DownloadItemModel::GetMimeType() const {
 }
 
 bool DownloadItemModel::IsExtensionDownload() const {
-  return download_crx_util::IsExtensionDownload(*download_);
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  return extensions::util::IsExtensionDownload(*download_);
+#else
+  return false;
+#endif
 }
 
 #if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)

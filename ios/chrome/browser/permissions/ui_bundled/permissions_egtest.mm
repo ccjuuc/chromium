@@ -39,6 +39,7 @@
 
 namespace {
 
+using ::base::test::ios::kWaitForPageLoadTimeout;
 using ::base::test::ios::kWaitForUIElementTimeout;
 using ::base::test::ios::WaitUntilConditionOrTimeout;
 
@@ -119,14 +120,6 @@ void TapDoneButtonOnInfobarModal() {
 @end
 
 @implementation PermissionsTestCase
-
-- (AppLaunchConfiguration)appConfigurationForTestCase {
-  AppLaunchConfiguration config = [super appConfigurationForTestCase];
-  if ([self isRunningTest:@selector(DISABLED_testPermissionsWithReaderMode)]) {
-    config.features_enabled.push_back(kEnableReaderMode);
-  }
-  return config;
-}
 
 - (void)setUp {
   [super setUp];
@@ -667,12 +660,15 @@ void TapDoneButtonOnInfobarModal() {
 
 // Tests that a supervised user account with parental controls enabled does not
 // have access to modify camera or microphone site permissions.
-- (void)testSupervisedUserPermissionsNoCameraOrMicAccess {
-  // TODO(crbug.com/40921852): Failing on iOS17.
-  if (@available(iOS 17.0, *)) {
-    XCTSkip(@"Failing on iOS17");
-  }
-
+// TODO(crbug.com/40921852): Failing on iOS17 on physical devices.
+#if TARGET_OS_SIMULATOR
+#define MAYBE_testSupervisedUserPermissionsNoCameraOrMicAccess \
+  testSupervisedUserPermissionsNoCameraOrMicAccess
+#else
+#define MAYBE_testSupervisedUserPermissionsNoCameraOrMicAccess \
+  DISABLED_testSupervisedUserPermissionsNoCameraOrMicAccess
+#endif
+- (void)MAYBE_testSupervisedUserPermissionsNoCameraOrMicAccess {
   // These settings are controlled in Family Link and would be updated through
   // Sync content settings.
   [ChromeEarlGrey setContentSetting:ContentSetting::CONTENT_SETTING_BLOCK
@@ -703,8 +699,7 @@ void TapDoneButtonOnInfobarModal() {
 
 // Tests that by enabling permissions, then triggering Reader mode, then
 // disabling Reader mode, the permission badges are still visible at the end.
-// TODO(crbug.com/470346971): Enable this test failing on ios-fieldtrial-rel.
-- (void)DISABLED_testPermissionsWithReaderMode {
+- (void)testPermissionsWithReaderMode {
   GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
   [ChromeEarlGrey
       loadURL:self.testServer->GetURL("/permissions/camera_only.html")];
@@ -725,8 +720,9 @@ void TapDoneButtonOnInfobarModal() {
     [InfobarEarlGreyUI waitUntilInfobarBannerVisibleOrTimeout:YES];
     [[EarlGrey selectElementWithMatcher:InfobarBannerCameraOnly()]
         performAction:grey_swipeFastInDirection(kGREYDirectionUp)];
-    [[EarlGrey selectElementWithMatcher:CameraBadge(/*accepted=*/YES)]
-        assertWithMatcher:grey_sufficientlyVisible()];
+    [ChromeEarlGrey
+        waitForSufficientlyVisibleElementWithMatcher:CameraBadge(
+                                                         /*accepted=*/YES)];
 
     // Inject a lot of text to make the page distillable (eligible for Reader
     // Mode).
@@ -756,6 +752,33 @@ void TapDoneButtonOnInfobarModal() {
     [ChromeEarlGrey
         waitForSufficientlyVisibleElementWithMatcher:CameraBadge(
                                                          /*accepted=*/YES)];
+  }
+}
+
+// Tests that denying microphone permissions on a webpage that recursively
+// re-requests permission upon denial does not cause a synchronous WebKit
+// re-entrancy crash (regression test for issue 529634846).
+- (void)testMicrophonePermissionRecursionCrashRegression {
+  GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
+  [ChromeEarlGrey loadURL:self.testServer->GetURL(
+                              "/permissions/microphone_recursion.html")];
+
+  {
+    ScopedSynchronizationDisabler disabler;
+    // Deny the initial microphone permission alert.
+    [self checkAndTapAlertContainingPermissions:
+              l10n_util::GetNSString(
+                  IDS_IOS_PERMISSIONS_ALERT_DIALOG_PERMISSION_MICROPHONE)
+                                    shouldAllow:NO];
+
+    // Verify that Chrome survives the recursion loop and updates the title.
+    GREYAssert(WaitUntilConditionOrTimeout(
+                   kWaitForPageLoadTimeout,
+                   ^{
+                     return [[ChromeEarlGrey currentTabTitle]
+                         isEqualToString:@"Denied And Survived"];
+                   }),
+               @"Page title was not updated after recursion loop.");
   }
 }
 

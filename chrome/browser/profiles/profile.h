@@ -56,10 +56,6 @@ class UserCloudPolicyManagerAsh;
 #endif
 }  // namespace policy
 
-namespace network {
-class SharedURLLoaderFactory;
-}
-
 namespace user_prefs {
 class PrefRegistrySyncable;
 }
@@ -88,7 +84,8 @@ class Profile : public content::BrowserContext {
     // WARNING:
     // The use of this class to create non-primary OTR profiles in Desktop
     // platforms is restricted exclusively for cases where extensions should not
-    // be applicable to run. Please see crbug.com/1098697#c3 for more details.
+    // be applicable to run. Please see crbug.com/40137149#comment4 for more
+    // details.
     static OTRProfileID CreateUnique(const std::string& profile_id_prefix);
 
     // Creates a unique OTR profile id to be used for DevTools browser contexts.
@@ -309,10 +306,6 @@ class Profile : public content::BrowserContext {
   // profile at the moment (i.e. HasOffTheRecordProfile is false).
   virtual PrefService* GetReadOnlyOffTheRecordPrefs();
 
-  // Returns the main URLLoaderFactory.
-  virtual scoped_refptr<network::SharedURLLoaderFactory>
-  GetURLLoaderFactory() = 0;
-
   // Return whether two profiles are the same or one is the OffTheRecord version
   // of the other.
   virtual bool IsSameOrParent(Profile* profile) = 0;
@@ -455,6 +448,10 @@ class Profile : public content::BrowserContext {
     return 0 == accessibility_pause_level_;
   }
 
+  // Returns the LOM profile ID for this profile, generating one if it doesn't
+  // exist yet.
+  virtual uint64_t GetLomProfileId();
+
   // Returns whether the profile is new.  A profile is new if the browser has
   // not been shut down since the profile was created.
   virtual bool IsNewProfile() const = 0;
@@ -493,12 +490,18 @@ class Profile : public content::BrowserContext {
   }
 
   // Returns a debug information in std::string.
-  std::string ToDebugString();
+  std::string ToDebugString() const;
 
 #if BUILDFLAG(IS_ANDROID)
   static Profile* FromJavaObject(const jni_zero::JavaRef<jobject>& obj);
   jni_zero::ScopedJavaLocalRef<jobject> GetJavaObject() const;
 #endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_WIN)
+  // Track user acknowledgement of the crash bubble. For more information, see
+  // the definition of `ProfileLoadTracker`.
+  virtual void AckCrashForTracking() = 0;
+#endif
  protected:
   // Creates an OffTheRecordProfile which points to this Profile.
   static std::unique_ptr<Profile> CreateOffTheRecordProfile(
@@ -507,8 +510,9 @@ class Profile : public content::BrowserContext {
 
   // Returns a newly created ExtensionPrefStore suitable for the supplied
   // Profile.
-  static PrefStore* CreateExtensionPrefStore(Profile*,
-                                             bool incognito_pref_store);
+  static scoped_refptr<PrefStore> CreateExtensionPrefStore(
+      Profile*,
+      bool incognito_pref_store);
 
   void NotifyOffTheRecordProfileCreated(Profile* off_the_record);
   void NotifyProfileInitializationComplete();
@@ -552,7 +556,7 @@ class Profile : public content::BrowserContext {
 
   base::ObserverList<ProfileObserver,
                      /*check_empty=*/true,
-                     /*allow_reentrancy=*/false>
+                     base::ObserverListReentrancyPolicy::kDisallowReentrancy>
       observers_;
 
   class ChromeVariationsClient;

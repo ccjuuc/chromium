@@ -12,6 +12,7 @@
 #include "base/containers/flat_map.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
@@ -19,6 +20,7 @@
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #include "chrome/browser/ash/login/enrollment/auto_enrollment_check_screen.h"
 #include "chrome/browser/ash/login/enrollment/enrollment_screen.h"
+#include "chrome/browser/ash/login/fjord_oobe/proto/fjord_oobe_state.pb.h"
 #include "chrome/browser/ash/login/oobe_metrics_helper.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/login/quickstart_controller.h"
@@ -39,6 +41,7 @@
 #include "chrome/browser/ash/login/screens/enable_debugging_screen.h"
 #include "chrome/browser/ash/login/screens/family_link_notice_screen.h"
 #include "chrome/browser/ash/login/screens/fingerprint_setup_screen.h"
+#include "chrome/browser/ash/login/screens/fjord_image_selection_screen.h"
 #include "chrome/browser/ash/login/screens/gaia_info_screen.h"
 #include "chrome/browser/ash/login/screens/gaia_screen.h"
 #include "chrome/browser/ash/login/screens/gemini_intro_screen.h"
@@ -64,6 +67,7 @@
 #include "chrome/browser/ash/login/screens/osauth/osauth_error_screen.h"
 #include "chrome/browser/ash/login/screens/osauth/password_selection_screen.h"
 #include "chrome/browser/ash/login/screens/osauth/recovery_eligibility_screen.h"
+#include "chrome/browser/ash/login/screens/osauth/remove_local_auth_factors_screen.h"
 #include "chrome/browser/ash/login/screens/packaged_license_screen.h"
 #include "chrome/browser/ash/login/screens/parental_handoff_screen.h"
 #include "chrome/browser/ash/login/screens/perks_discovery_screen.h"
@@ -90,11 +94,17 @@
 #include "chrome/browser/ui/webui/ash/login/user_allowlist_check_screen_handler.h"
 #include "components/account_id/account_id.h"
 
+class ApplicationLocaleStorage;
 class PrefService;
 struct AccessibilityStatusEventDetails;
 
+namespace metrics {
+class MetricsService;
+}  // namespace metrics
+
 namespace policy {
 class AutoEnrollmentController;
+class BrowserPolicyConnectorAsh;
 }  // namespace policy
 
 namespace ash {
@@ -102,6 +112,7 @@ namespace ash {
 class BaseScreen;
 class DemoSetupController;
 class ErrorScreen;
+class FjordImageDownloader;
 struct Geoposition;
 class KioskApp;
 class SystemLocationProvider;
@@ -119,7 +130,22 @@ class WizardController : public OobeUI::Observer {
     virtual void OnShutdown() = 0;
   };
 
-  explicit WizardController(WizardContext* wizard_context);
+  // `local_state` must be non-null and must be valid while the main RunLoop is
+  // running.
+  // `metrics_service` may be null in unit tests, but must outlive `this` if
+  // it's non-null.
+  // `application_locale_storage` and `browser_policy_connector_ash` must be
+  // non-null and must outlive `this`.
+  // `shared_url_loader_factory` and `component_manager_ash` must be non-null.
+  WizardController(
+      PrefService* local_state,
+      ::metrics::MetricsService* metrics_service,
+      ApplicationLocaleStorage* application_locale_storage,
+      scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+      policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
+      scoped_refptr<component_updater::ComponentManagerAsh>
+          component_manager_ash,
+      WizardContext* wizard_context);
 
   WizardController(const WizardController&) = delete;
   WizardController& operator=(const WizardController&) = delete;
@@ -251,7 +277,7 @@ class WizardController : public OobeUI::Observer {
 
   // Configure and show the signin fatal error screen.
   void ShowSignInFatalErrorScreen(SignInFatalErrorScreen::Error error,
-                                  base::Value::Dict params);
+                                  base::DictValue params);
 
   // Show Family Link notice screen.
   void ShowFamilyLinkNoticeScreen();
@@ -261,6 +287,10 @@ class WizardController : public OobeUI::Observer {
 
   // Exits Fjord touch controller screen if it's showing.
   bool ExitFjordTouchControllerScreen();
+
+  // Shows the Fjord OOBE state if the next state is valid.
+  bool ShowNextFjordOobeScreen(
+      fjord_oobe_state::proto::FjordOobeStateInfo::FjordOobeState new_state);
 
   // Set pref value for first run.
   void PrepareFirstRunPrefs();
@@ -293,6 +323,24 @@ class WizardController : public OobeUI::Observer {
   static bool IsErrorScreen(OobeScreenId);
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(EnrollmentScreenTest, TestCancel);
+  FRIEND_TEST_ALL_PREFIXES(WizardControllerFlowTest, Accelerators);
+  FRIEND_TEST_ALL_PREFIXES(WizardControllerFlowTest,
+                           ControlFlowSkipUpdateEnroll);
+  FRIEND_TEST_ALL_PREFIXES(WizardControllerDeviceStateTest,
+                           ControlFlowNoForcedReEnrollmentOnFirstBoot);
+
+  friend class AutoEnrollmentLocalPolicyServer;
+  friend class WizardControllerBrokenLocalStateTest;
+  friend class WizardControllerDeviceStateTest;
+  friend class WizardControllerFlowTest;
+  friend class WizardControllerOobeConfigurationTest;
+  friend class WizardControllerOobeResumeTest;
+  friend class WizardControllerOnboardingResumeTest;
+  friend class WizardControllerScreenPriorityTest;
+  friend class WizardControllerManagementTransitionOobeTest;
+  friend class WizardControllerRemoteActivityNotificationTest;
+
   // Create BaseScreen instances. These are owned by `screen_manager_`.
   std::vector<std::pair<OobeScreenId, std::unique_ptr<BaseScreen>>>
   CreateScreens();
@@ -337,7 +385,6 @@ class WizardController : public OobeUI::Observer {
   void ShowCryptohomeRecoverySetupScreen();
   void ShowAuthenticationSetupScreen();
   void ShowGuestTosScreen();
-  void ShowArcVmDataMigrationScreen();
   void ShowThemeSelectionScreen();
   void ShowChoobeScreen();
   void ShowTouchpadScrollScreen();
@@ -359,8 +406,12 @@ class WizardController : public OobeUI::Observer {
   void ShowSplitModifierKeyboardInfoScreen();
   void ShowAccountSelectionScreen();
   void ShowAppLaunchSplashScreen();
+  void ShowFjordImageSelectionScreen();
+  void ShowFjordImageDownloadScreen();
   void ShowFjordTouchControllerScreen();
   void ShowFjordStationSetupScreen();
+  void ShowFjordFwUpdateScreen();
+  void ShowSamlConfirmPasswordScreen();
 
   // Shows images login screen.
   void ShowLoginScreen();
@@ -481,7 +532,16 @@ class WizardController : public OobeUI::Observer {
       PersonalizedRecommendAppsScreen::Result result);
   void OnPerksDiscoveryScreenExit(PerksDiscoveryScreen::Result result);
   void OnAppLaunchSplashScreenExit();
+  void OnFjordImageSelectionScreenExit(
+      FjordImageSelectionScreen::Result result);
+  void OnFjordImageDownloadScreenExit();
+  void OnFjordImageDownloadCompleted(bool success,
+                                     const std::string& error_message);
+  void OnFjordTouchControllerScreenExit();
   void OnFjordStationSetupScreenExit();
+  void OnFjordFwUpdateScreenExit();
+  void OnRemoveLocalAuthFactorsScreenExit(
+      RemoveLocalAuthFactorsScreen::Result result);
 
   // Callback invoked once it has been determined whether the device is disabled
   // or not.
@@ -583,8 +643,23 @@ class WizardController : public OobeUI::Observer {
   void MaybeAbortQuickStartFlow(
       quick_start::QuickStartController::AbortFlowReason reason);
 
-  // Tries to enable pre-consent metrics.
-  void MaybeEnablePreConsentMetrics();
+  // Tries to enable pre-choice metrics.
+  void MaybeEnablePreChoiceMetrics();
+
+  // Notifies the FjordOobeStateManager of an OOBE state change. This is a no-op
+  // for devices that do not implement the Fjord variant of OOBE.
+  void MaybeNotifyFjordOobeStateManager(
+      fjord_oobe_state::proto::FjordOobeStateInfo::FjordOobeState state);
+
+  const raw_ref<PrefService> local_state_;
+  const raw_ptr<::metrics::MetricsService> metrics_service_;
+  const raw_ref<ApplicationLocaleStorage> application_locale_storage_;
+  // Shared factory for outgoing network requests.
+  scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory_;
+  const raw_ref<policy::BrowserPolicyConnectorAsh>
+      browser_policy_connector_ash_;
+  const scoped_refptr<component_updater::ComponentManagerAsh>
+      component_manager_ash_;
 
   std::unique_ptr<policy::AutoEnrollmentController> auto_enrollment_controller_;
   std::unique_ptr<ChoobeFlowController> choobe_flow_controller_;
@@ -615,23 +690,6 @@ class WizardController : public OobeUI::Observer {
   // Non-owning pointer to local state used for testing.
   static PrefService* local_state_for_testing_;
 
-  FRIEND_TEST_ALL_PREFIXES(EnrollmentScreenTest, TestCancel);
-  FRIEND_TEST_ALL_PREFIXES(WizardControllerFlowTest, Accelerators);
-  FRIEND_TEST_ALL_PREFIXES(WizardControllerFlowTest,
-                           ControlFlowSkipUpdateEnroll);
-  FRIEND_TEST_ALL_PREFIXES(WizardControllerDeviceStateTest,
-                           ControlFlowNoForcedReEnrollmentOnFirstBoot);
-
-  friend class AutoEnrollmentLocalPolicyServer;
-  friend class WizardControllerBrokenLocalStateTest;
-  friend class WizardControllerDeviceStateTest;
-  friend class WizardControllerFlowTest;
-  friend class WizardControllerOobeConfigurationTest;
-  friend class WizardControllerOobeResumeTest;
-  friend class WizardControllerOnboardingResumeTest;
-  friend class WizardControllerScreenPriorityTest;
-  friend class WizardControllerManagementTransitionOobeTest;
-  friend class WizardControllerRemoteActivityNotificationTest;
 
   base::CallbackListSubscription accessibility_subscription_;
 
@@ -640,6 +698,9 @@ class WizardController : public OobeUI::Observer {
   // Controller of the demo mode setup. It has the lifetime of the single demo
   // mode setup flow.
   std::unique_ptr<DemoSetupController> demo_setup_controller_;
+
+  // Runs the dissidia program for image download during Fjord OOBE.
+  std::unique_ptr<FjordImageDownloader> fjord_image_downloader_;
 
   // Tests check result of timezone resolve.
   bool timezone_resolved_ = false;
@@ -650,9 +711,6 @@ class WizardController : public OobeUI::Observer {
   base::ScopedObservation<OobeUI, OobeUI::Observer> oobe_ui_observation_{this};
 
   base::ObserverList<ScreenObserver> screen_observers_;
-
-  // Shared factory for outgoing network requests.
-  scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory_;
 
   base::WeakPtrFactory<WizardController> weak_factory_{this};
 };

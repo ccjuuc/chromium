@@ -4,29 +4,16 @@
 
 #include "ui/views/accessibility/view_ax_platform_node_delegate_win.h"
 
-#include <oleacc.h>
-
 #include <memory>
-#include <set>
-#include <vector>
 
-#include "base/memory/singleton.h"
 #include "base/notimplemented.h"
-#include "base/strings/utf_string_conversions.h"
-#include "base/win/windows_version.h"
-#include "third_party/iaccessible2/ia2_api_all.h"
 #include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_node_data.h"
-#include "ui/accessibility/ax_text_utils.h"
-#include "ui/accessibility/platform/ax_fragment_root_win.h"
-#include "ui/accessibility/platform/ax_platform_node_win.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
-#include "ui/base/win/atl_module.h"
 #include "ui/display/win/screen_win.h"
 #include "ui/views/accessibility/atomic_view_ax_tree_manager.h"
 #include "ui/views/accessibility/views_utilities_aura.h"
-#include "ui/views/controls/button/button.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/win/hwnd_util.h"
@@ -75,20 +62,8 @@ gfx::NativeViewAccessible ViewAXPlatformNodeDelegateWin::GetParent() const {
     ancestor_window = GetWindowParentIncludingTransient(ancestor_window);
   }
 
-  // If that fails, return the NativeViewAccessible for our owning HWND.
-  HWND hwnd = HWNDForView(view());
-  if (!hwnd) {
-    return nullptr;
-  }
-
-  IAccessible* parent;
-  if (SUCCEEDED(
-          ::AccessibleObjectFromWindow(hwnd, OBJID_WINDOW, IID_IAccessible,
-                                       reinterpret_cast<void**>(&parent)))) {
-    return parent;
-  }
-
-  return nullptr;
+  // Return the IAccessible for this RootView's HWND.
+  return HWNDNativeViewAccessibleForView(view());
 }
 
 gfx::AcceleratedWidget

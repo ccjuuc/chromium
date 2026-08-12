@@ -17,6 +17,7 @@
 #include "build/build_config.h"
 #include "components/policy/core/browser/configuration_policy_handler.h"
 #include "components/policy/core/browser/policy_error_map.h"
+#include "components/policy/core/browser/url_list/url_list_policy_pref_names.h"
 #include "components/policy/core/common/policy_logger.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_pref_names.h"
@@ -120,7 +121,7 @@ void URLBlocklistPolicyHandler::ApplyPolicySettings(const PolicyMap& policies,
   const base::Value* url_blocklist_policy =
       policies.GetValue(policy_name(), base::Value::Type::LIST);
 
-  std::optional<base::Value::List> merged_url_blocklist;
+  std::optional<base::ListValue> merged_url_blocklist;
 
 #if !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
   const base::Value* disabled_schemes_policy =

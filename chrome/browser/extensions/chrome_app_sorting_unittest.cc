@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/extensions/extension_prefs_unittest.h"
 #include "components/crx_file/id_util.h"
@@ -233,7 +234,7 @@ TEST_F(ChromeAppSortingInitializeWithNoApps,
 // Tests the application index to ordinal migration code for values that
 // shouldn't be converted. This should be removed when the migrate code
 // is taken out.
-// http://crbug.com/107376
+// http://crbug.com/40052100
 class ChromeAppSortingMigrateAppIndexInvalid
     : public PrefsPrepopulatedTestBase {
  public:
@@ -571,7 +572,7 @@ TEST_F(ChromeAppSortingPageOrdinalMapping,
 class ChromeAppSortingPreinstalledAppsBase : public PrefsPrepopulatedTestBase {
  public:
   ChromeAppSortingPreinstalledAppsBase() {
-    base::Value::Dict simple_dict;
+    base::DictValue simple_dict;
     simple_dict.Set(keys::kVersion, "1.0.0.0");
     simple_dict.Set(keys::kName, "unused");
     simple_dict.SetByDottedPath(keys::kLaunchLocalPath, "fake.html");
@@ -648,7 +649,7 @@ TEST_F(ChromeAppSortingGetMinOrMaxAppLaunchOrdinalsOnPage,
        ChromeAppSortingGetMinOrMaxAppLaunchOrdinalsOnPage) {}
 
 // Make sure that empty pages aren't removed from the integer to ordinal
-// mapping. See http://crbug.com/109802 for details.
+// mapping. See http://crbug.com/40136834 for details.
 class ChromeAppSortingKeepEmptyStringOrdinalPages
     : public ChromeAppSortingPreinstalledAppsBase {
  public:
@@ -701,7 +702,7 @@ class ChromeAppSortingMakesFillerOrdinals
     // Because the UI can add an unlimited number of empty pages without an app
     // on them, this test simulates dropping of an app on the 1st and 4th empty
     // pages (3rd and 6th pages by index) to ensure we don't crash and that
-    // filler ordinals are created as needed. See: http://crbug.com/122214
+    // filler ordinals are created as needed. See: http://crbug.com/40773838
     syncer::StringOrdinal page_three =
         app_sorting()->PageIntegerAsStringOrdinal(2);
     app_sorting()->SetPageOrdinal(app1_->id(), page_three);
@@ -737,7 +738,7 @@ class ChromeAppSortingDefaultOrdinalsBase : public ExtensionPrefsTest {
 
  protected:
   scoped_refptr<Extension> CreateApp(const std::string& name) {
-    base::Value::Dict simple_dict;
+    base::DictValue simple_dict;
     simple_dict.Set(keys::kVersion, "1.0.0.0");
     simple_dict.Set(keys::kName, name);
     simple_dict.SetByDottedPath(keys::kLaunchLocalPath, "fake.html");

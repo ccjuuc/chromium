@@ -34,6 +34,7 @@ class ToolbarActionViewModel {
  public:
   // The source for the action invocation. Used in UMA; do not reorder or delete
   // entries.
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.ui.toolbar
   enum class InvocationSource {
     // The action was invoked from a command (keyboard shortcut).
     kCommand = 0,
@@ -55,14 +56,18 @@ class ToolbarActionViewModel {
     kApi = 4,
 
     // The action was invoked by the user activating (via mouse or keyboard) the
-    // request access button in the toolbar
+    // request access button in the toolbar.
     kRequestAccessButton = 5,
 
-    kMaxValue = kRequestAccessButton,
+    // The action was invoked by the Chrome Devtools Protocol.
+    kCdp = 6,
+
+    kMaxValue = kCdp,
   };
 
   // State for the toolbar action view's hover card.
   struct HoverCardState {
+    // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.ui.toolbar
     enum class SiteAccess {
       // All extensions are allowed on the current site by the user.
       kAllExtensionsAllowed,
@@ -80,8 +85,10 @@ class ToolbarActionViewModel {
       kExtensionDoesNotWantAccess,
     };
 
+    // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.ui.toolbar
     enum class AdminPolicy {
       kNone,
+
       // Extension is force pinned by administrator.
       kPinnedByAdmin,
 
@@ -93,14 +100,26 @@ class ToolbarActionViewModel {
     AdminPolicy policy;
   };
 
+  // Helper struct to hold hover card strings.
+  struct HoverCardUiState {
+    HoverCardUiState();
+    HoverCardUiState(HoverCardUiState&&);
+    HoverCardUiState& operator=(HoverCardUiState&&);
+    ~HoverCardUiState();
+
+    std::optional<std::u16string> site_access_title;
+    std::optional<std::u16string> site_access_description;
+    std::optional<std::u16string> policy_text;
+  };
+
   virtual ~ToolbarActionViewModel() = default;
 
   // Returns the unique ID of this particular action. For extensions, this is
   // the extension id; for component actions, this is the name of the component.
   virtual std::string GetId() const = 0;
 
-  // Registers an update observer of the view model.
-  virtual base::CallbackListSubscription RegisterUpdateObserver(
+  // Registers an update observer of the action's icon.
+  virtual base::CallbackListSubscription RegisterIconUpdateObserver(
       base::RepeatingClosure observer) = 0;
 
   // Returns the icon to use for the given |web_contents| and |size|.
@@ -129,6 +148,11 @@ class ToolbarActionViewModel {
   virtual HoverCardState GetHoverCardState(
       content::WebContents* web_contents) const = 0;
 
+  // Returns the appropriate `HoverCardUiState` to use.
+  virtual HoverCardUiState GetHoverCardUiState(
+      const ToolbarActionViewModel::HoverCardState& state,
+      content::WebContents* web_contents) const = 0;
+
   // Returns true if the action should be enabled on the given |web_contents|.
   virtual bool IsEnabled(content::WebContents* web_contents) const = 0;
 
@@ -139,7 +163,7 @@ class ToolbarActionViewModel {
   virtual void HidePopup() = 0;
 
   // Returns the native view for the popup, if one is active.
-  virtual gfx::NativeView GetPopupNativeView() = 0;
+  virtual gfx::NativeView GetPopupNativeViewForTesting() = 0;
 
   // Returns the context menu model, or null if no context menu should be shown.
   virtual ui::MenuModel* GetContextMenu(
@@ -160,6 +184,15 @@ class ToolbarActionViewModel {
 
   // Unregisters an accelerator. Called when the view is removed from a widget.
   virtual void UnregisterCommand() {}
+
+  // Returns true if this controller can handle accelerators (i.e., keyboard
+  // commands) on the currently-active WebContents.
+  // This must only be called if the extension has an associated command.
+  virtual bool CanHandleAccelerators() const = 0;
+
+  // Tries to handle the accelerator press, and returns whether the event was
+  // handled.
+  virtual bool TryHandleAcceleratorPress() = 0;
 
   // Returns the PageInteractionStatus for the current page.
   virtual extensions::SitePermissionsHelper::SiteInteraction GetSiteInteraction(

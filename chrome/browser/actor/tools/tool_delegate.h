@@ -10,10 +10,15 @@
 
 #include "base/containers/flat_map.h"
 #include "base/functional/callback_forward.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/actor/site_policy.h"
+#include "chrome/common/actor.mojom-forward.h"
 #include "chrome/common/actor_webui.mojom.h"
-#include "components/autofill/core/browser/integrators/glic/actor_form_filling_types.h"
+#include "chrome/common/buildflags.h"
+#include "components/actor/public/mojom/actor_types.mojom-forward.h"
+#include "components/autofill/core/browser/integrators/actor/actor_form_filling_types.h"
 #include "components/password_manager/core/browser/actor_login/actor_login_types.h"
+#include "components/tabs/public/tab_interface.h"
 #include "url/gurl.h"
 
 class Profile;
@@ -24,6 +29,7 @@ class ActorLoginService;
 
 namespace autofill {
 class ActorFormFillingService;
+class ActorOneTimeTokenFillingService;
 }  // namespace autofill
 
 namespace favicon {
@@ -37,6 +43,9 @@ class Image;
 namespace actor {
 
 class AggregatedJournal;
+class AutofillSelectionDialogEventHandler;
+class EnterprisePolicyChecker;
+class ToolRequest;
 
 // Provides tools with functionality implemented by the code invoking the tool.
 class ToolDelegate {
@@ -49,15 +58,21 @@ class ToolDelegate {
   // Returns the journal so that tools may log information related to their
   // execution.
   virtual AggregatedJournal& GetJournal() = 0;
-
   // Returns the login service associated with the task.
   virtual actor_login::ActorLoginService& GetActorLoginService() = 0;
 
   // Returns the form filling service associated with the task.
   virtual autofill::ActorFormFillingService& GetActorFormFillingService() = 0;
 
+  // Returns the OTP filling service associated with the task.
+  virtual autofill::ActorOneTimeTokenFillingService&
+  GetActorOneTimeTokenFillingService() = 0;
+
   // Returns the favicon service for the profile associated with the task.
   virtual favicon::FaviconService* GetFaviconService() = 0;
+
+  // Returns the enterprise policy checker associated with the task.
+  virtual const EnterprisePolicyChecker& GetEnterprisePolicyChecker() const = 0;
 
   // Invokes the given callback according to whether the tool may navigate to
   // the given URL.
@@ -117,12 +132,46 @@ class ToolDelegate {
       webui::mojom::SelectAutofillSuggestionsDialogResponsePtr)>;
   virtual void RequestToShowAutofillSuggestions(
       std::vector<autofill::ActorFormFillingRequest> requests,
+      base::WeakPtr<AutofillSelectionDialogEventHandler> event_handler,
       AutofillSuggestionSelectedCallback callback) = 0;
+
+  using GmailOtpOptInCallback = base::OnceCallback<void(
+      webui::mojom::GmailOtpOptInResultPtr)>;
+  virtual void RequestToShowGmailOtpOptInDialog(
+      GmailOtpOptInCallback callback) = 0;
+
+  using GmailOtpConfirmationCallback =
+      base::OnceCallback<void(webui::mojom::GmailOtpConfirmationResultPtr)>;
+  virtual void RequestToShowGmailOtpConfirmationDialog(
+      const std::string& verification_code,
+      GmailOtpConfirmationCallback callback) = 0;
 
   // During tool execution, the tool becomes blocked on the user's attention.
   // The task still has control of the tab.
   virtual void InterruptFromTool() = 0;
+  virtual void InterruptFromTool(bool retain_user_control) = 0;
   virtual void UninterruptFromTool() = 0;
+
+  // Enqueues an action to be performed as a followup to the current action.
+  virtual void EnqueueFollowupAction(std::unique_ptr<ToolRequest> action) = 0;
+
+  // Adds a tab to the controlled tabs set. If `stop_task_on_detach` is true,
+  // then the `ActorTask` will be stopped when the given tab is detached.
+  virtual void AddTab(
+      tabs::TabHandle tab_handle,
+      bool stop_task_on_detach,
+      base::OnceCallback<void(mojom::ActionResultPtr)> callback) = 0;
+  // Returns true if the tab is in the controlled tabs set.
+  virtual bool HasTab(tabs::TabHandle tab_handle) = 0;
+  // Removes a tab from the controlled tabs set.
+  virtual void RemoveTab(tabs::TabHandle tab_handle) = 0;
+
+  // If there is an ongoing tool request, treat it as having failed with the
+  // given reason.
+  virtual void FailCurrentTool(mojom::ActionResultCode reason) = 0;
+
+  virtual base::WeakPtr<actor_login::ActionSequenceDelegate>
+  GetActionSequenceDelegate() = 0;
 };
 
 }  // namespace actor

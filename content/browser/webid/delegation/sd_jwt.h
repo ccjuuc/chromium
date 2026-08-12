@@ -111,9 +111,11 @@ struct CONTENT_EXPORT Jwk {
   ~Jwk();
   Jwk(const Jwk& other);
 
-  static std::optional<Jwk> From(const base::Value::Dict& json);
+  bool operator==(const Jwk& other) const;
 
-  base::Value::Dict ToDict() const;
+  static std::optional<Jwk> From(const base::DictValue& json);
+
+  base::DictValue ToDict() const;
   std::optional<std::string> Serialize() const;
 };
 
@@ -126,6 +128,7 @@ using Base64String = base::StrongAlias<class Base64StringTag, std::string>;
 struct CONTENT_EXPORT Header {
   std::string typ;
   std::string alg;
+  std::string kid;
   // The public key that corresponds to the key used to digitally
   // sign the JWS.
   // https://datatracker.ietf.org/doc/html/rfc7515#section-4.1.3
@@ -135,7 +138,7 @@ struct CONTENT_EXPORT Header {
   ~Header();
   Header(const Header& other);
 
-  static std::optional<Header> From(const base::Value::Dict& json);
+  static std::optional<Header> From(const base::DictValue& json);
 
   std::optional<JSONString> ToJson() const;
   std::optional<Base64String> Serialize() const;
@@ -187,12 +190,13 @@ struct CONTENT_EXPORT Payload {
 
   // Profile-specific parameters.
   std::string email;
+  bool email_verified = false;
 
   Payload();
   ~Payload();
   Payload(const Payload& other);
 
-  static std::optional<Payload> From(const base::Value::Dict& json);
+  static std::optional<Payload> From(const base::DictValue& json);
 
   std::optional<JSONString> ToJson() const;
   std::optional<Base64String> Serialize() const;
@@ -206,6 +210,9 @@ struct CONTENT_EXPORT Payload {
 typedef base::OnceCallback<std::optional<std::vector<uint8_t>>(
     const std::string_view&)>
     Signer;
+typedef base::OnceCallback<bool(const std::string_view&,
+                                base::span<const uint8_t>)>
+    Verifier;
 
 // https://datatracker.ietf.org/doc/html/rfc7519
 struct CONTENT_EXPORT Jwt {
@@ -218,9 +225,10 @@ struct CONTENT_EXPORT Jwt {
   Jwt(const Jwt& other);
 
   bool Sign(Signer signer);
+  bool Verify(Verifier verifier) const;
 
-  static std::optional<Jwt> From(const base::Value::List& json);
-  static std::optional<base::Value::List> Parse(const std::string_view& jwt);
+  static std::optional<Jwt> From(const base::ListValue& json);
+  static std::optional<base::ListValue> Parse(const std::string_view& jwt);
   JSONString Serialize() const;
 };
 
@@ -253,7 +261,7 @@ struct CONTENT_EXPORT Disclosure {
   ~Disclosure();
   Disclosure(const Disclosure& other);
 
-  static std::optional<Disclosure> From(const base::Value::List& list);
+  static std::optional<Disclosure> From(const base::ListValue& list);
 
   // Creates a random value with the following requirements:
   // https://www.ietf.org/archive/id/draft-ietf-oauth-selective-disclosure-jwt-13.html#name-entropy-of-the-salt
@@ -273,8 +281,8 @@ struct CONTENT_EXPORT SdJwt {
   ~SdJwt();
   SdJwt(const SdJwt& other);
 
-  static std::optional<SdJwt> From(const base::Value::List& json);
-  static std::optional<base::Value::List> Parse(const std::string_view& sdjwt);
+  static std::optional<SdJwt> From(const base::ListValue& json);
+  static std::optional<base::ListValue> Parse(const std::string_view& sdjwt);
 
   static std::optional<std::vector<JSONString>> Disclose(
       const std::vector<std::pair<std::string, JSONString>>& disclosures,

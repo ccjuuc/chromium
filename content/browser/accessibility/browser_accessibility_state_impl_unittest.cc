@@ -7,9 +7,16 @@
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "content/browser/accessibility/browser_accessibility_state_impl_win.h"
+#endif
+
 #include "content/public/browser/scoped_accessibility_mode.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/scoped_accessibility_mode_override.h"
+#include "content/public/test/test_browser_context.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/accessibility/accessibility_features.h"
@@ -36,14 +43,15 @@ class BrowserAccessibilityStateImplTest : public ::testing::Test {
 
  protected:
   void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        features::kAutoDisableAccessibility);
     // Set the initial time to something non-zero.
     task_environment_.FastForwardBy(base::Seconds(100));
     state_ = BrowserAccessibilityStateImpl::GetInstance();
   }
 
-  base::test::ScopedFeatureList scoped_feature_list_;
+  void EnableAXModeFromPlatform(ui::AXMode mode) {
+    state_->EnableAXModeFromPlatform(mode);
+  }
+
   raw_ptr<BrowserAccessibilityStateImpl> state_;
   BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
@@ -52,69 +60,7 @@ class BrowserAccessibilityStateImplTest : public ::testing::Test {
   ui::TestAXNodeIdDelegate node_id_delegate_;
 };
 
-TEST_F(BrowserAccessibilityStateImplTest,
-       AddAccessibilityModeFlagsPreventsAutoDisableAccessibility) {
-  // Initially, accessibility should be disabled.
-  EXPECT_EQ(ui::AXPlatform::GetInstance().GetMode(), ui::AXMode());
 
-  // Enable accessibility.
-  ScopedAccessibilityModeOverride scoped_mode(ui::kAXModeComplete);
-  EXPECT_EQ(ui::AXPlatform::GetInstance().GetMode(), ui::kAXModeComplete);
-
-  // Send user input, wait 31 seconds, then send another user input event -
-  // but add a new accessibility mode flag.
-  state_->OnUserInputEvent();
-  state_->OnUserInputEvent();
-  task_environment_.FastForwardBy(base::Seconds(31));
-  ScopedAccessibilityModeOverride scoped_mode_2(ui::kAXModeComplete);
-  state_->OnUserInputEvent();
-
-  // Accessibility should still be enabled.
-  EXPECT_EQ(ui::AXPlatform::GetInstance().GetMode(), ui::kAXModeComplete);
-}
-
-TEST_F(BrowserAccessibilityStateImplTest,
-       GetRolePreventsAutoDisableAccessibility) {
-  // Create a bare-minimum accessibility tree so we can call GetRole().
-  ui::AXNodeData root;
-  root.id = 1;
-  root.role = ax::mojom::Role::kRootWebArea;
-
-  ui::BrowserAccessibilityManager* manager;
-#if BUILDFLAG(IS_ANDROID)
-  manager = BrowserAccessibilityManagerAndroid::Create(
-      MakeAXTreeUpdateForTesting(root), node_id_delegate_,
-      test_browser_accessibility_delegate_.get());
-#else
-  manager = ui::BrowserAccessibilityManager::Create(
-      MakeAXTreeUpdateForTesting(root), node_id_delegate_,
-      test_browser_accessibility_delegate_.get());
-#endif
-  std::unique_ptr<ui::BrowserAccessibilityManager>
-      browser_accessibility_manager(manager);
-
-  ui::BrowserAccessibility* ax_root =
-      browser_accessibility_manager->GetBrowserAccessibilityRoot();
-  ASSERT_NE(nullptr, ax_root);
-
-  // Initially, accessibility should be disabled.
-  EXPECT_EQ(ui::AXPlatform::GetInstance().GetMode(), ui::AXMode());
-
-  // Enable accessibility.
-  ScopedAccessibilityModeOverride scoped_mode(ui::kAXModeComplete);
-  EXPECT_EQ(ui::AXPlatform::GetInstance().GetMode(), ui::kAXModeComplete);
-
-  // Send user input, wait 31 seconds, then send another user input event after
-  // checking the role, which should register accessibility API usage.
-  state_->OnUserInputEvent();
-  state_->OnUserInputEvent();
-  task_environment_.FastForwardBy(base::Seconds(31));
-  ax_root->GetRole();
-  state_->OnUserInputEvent();
-
-  // Accessibility should still be enabled due to GetRole() being called.
-  EXPECT_EQ(ui::AXPlatform::GetInstance().GetMode(), ui::kAXModeComplete);
-}
 
 namespace {
 using ::testing::_;
@@ -186,6 +132,220 @@ TEST_F(BrowserAccessibilityStateImplTest, PlatformActivationFiltering) {
   }
 }
 
+// Tests that AXMode changes are blocked when IsAXModeChangeAllowed() is false.
+TEST_F(BrowserAccessibilityStateImplTest, AXModeChangeAllowedFiltering) {
+  // Allowed by default.
+  ASSERT_TRUE(state_->IsAXModeChangeAllowed());
+  // Platform activation is disabled by default in tests, so we need to enable
+  // it first to test the lock, otherwise it would be filtered out by platform
+  // activation filtering anyway.
+  state_->SetActivationFromPlatformEnabled(true);
+
+  ASSERT_EQ(state_->GetAccessibilityMode(), ui::AXMode());
+
+  {
+    // Adding a mode from the platform works when allowed.
+    auto complete = state_->CreateScopedModeForProcess(
+        ui::kAXModeComplete | ui::AXMode::kFromPlatform);
+    EXPECT_EQ(state_->GetAccessibilityMode(), ui::kAXModeComplete);
+
+    // Locking changes should remove the platform mode.
+    state_->SetAXModeChangeAllowed(false);
+    ASSERT_FALSE(state_->IsAXModeChangeAllowed());
+    EXPECT_EQ(state_->GetAccessibilityMode(), ui::AXMode());
+
+    // Unlocking should restore it.
+    state_->SetAXModeChangeAllowed(true);
+    EXPECT_EQ(state_->GetAccessibilityMode(), ui::kAXModeComplete);
+  }
+
+  // Clear the complete mode scoper by letting it go out of scope (handled by
+  // block in test). But wait, in the test it was in a nested block, so
+  // `complete` is already destroyed here. Let's verify: yes, `complete` was in
+  // `{ ... }` block, so it is destroyed. So effective mode should be back to
+  // empty now.
+  ASSERT_EQ(state_->GetAccessibilityMode(), ui::AXMode());
+
+  {
+    // Test EnableAXModeFromPlatform behavior under lock.
+    state_->SetAXModeChangeAllowed(false);
+    EnableAXModeFromPlatform(ui::kAXModeBasic);
+    // It should be blocked (effective mode is still empty).
+    EXPECT_EQ(state_->GetAccessibilityMode(), ui::AXMode());
+
+    // Unlocking should restore the mode enabled via EnableAXModeFromPlatform.
+    state_->SetAXModeChangeAllowed(true);
+    EXPECT_EQ(state_->GetAccessibilityMode(), ui::kAXModeBasic);
+
+    // Clean up platform_ax_mode_ for subsequent tests by resetting it.
+    // EnableAXModeFromPlatform overwrites it, so we can reset it by enabling
+    // empty mode.
+    EnableAXModeFromPlatform(ui::AXMode());
+  }
+
+  // Reset state.
+  state_->SetActivationFromPlatformEnabled(false);
+}
+
+#if BUILDFLAG(IS_WIN)
+
+namespace {
+
+constexpr char kClientProcessNativeApisHistogram[] =
+    "Accessibility.WinUIA.ClientProcess.NativeAPIs";
+constexpr char kClientProcessWebContentsHistogram[] =
+    "Accessibility.WinUIA.ClientProcess.WebContents";
+constexpr char kClientDisconnectedHistogram[] =
+    "Accessibility.WinUIA.ClientDisconnected";
+
+void ExpectNoUiaClientProcessHistograms(
+    base::HistogramTester& histogram_tester) {
+  histogram_tester.ExpectTotalCount(kClientProcessNativeApisHistogram, 0);
+  histogram_tester.ExpectTotalCount(kClientProcessWebContentsHistogram, 0);
+}
+
+void ExpectNarratorAndNvdaSamples(base::HistogramTester& histogram_tester,
+                                  const char* histogram_name) {
+  histogram_tester.ExpectBucketCount(
+      histogram_name, internal::HashUiaClientProcessName("narrator.exe"), 1);
+  histogram_tester.ExpectBucketCount(
+      histogram_name, internal::HashUiaClientProcessName("nvda.exe"), 1);
+  histogram_tester.ExpectTotalCount(histogram_name, 2);
+}
+
+}  // namespace
+
+TEST(BrowserAccessibilityStateImplWinTest,
+     RecordsNativeApisClientProcessHistogramForNewNativeApisMode) {
+  base::HistogramTester histogram_tester;
+
+  internal::RecordUiaClientProcessHistogramsForModeChange(
+      ui::AXMode(), ui::AXMode(ui::AXMode::kNativeAPIs),
+      {"narrator.exe", "nvda.exe"});
+
+  ExpectNarratorAndNvdaSamples(histogram_tester,
+                               kClientProcessNativeApisHistogram);
+  histogram_tester.ExpectTotalCount(kClientProcessWebContentsHistogram, 0);
+}
+
+TEST(BrowserAccessibilityStateImplWinTest,
+     RecordsWebContentsClientProcessHistogramForNewWebContentsMode) {
+  base::HistogramTester histogram_tester;
+
+  internal::RecordUiaClientProcessHistogramsForModeChange(
+      ui::AXMode(), ui::AXMode(ui::AXMode::kWebContents),
+      {"narrator.exe", "nvda.exe"});
+
+  ExpectNarratorAndNvdaSamples(histogram_tester,
+                               kClientProcessWebContentsHistogram);
+  histogram_tester.ExpectTotalCount(kClientProcessNativeApisHistogram, 0);
+}
+
+TEST(BrowserAccessibilityStateImplWinTest,
+     RecordsBothClientProcessHistogramsForNewNativeApisAndWebContentsModes) {
+  base::HistogramTester histogram_tester;
+
+  internal::RecordUiaClientProcessHistogramsForModeChange(
+      ui::AXMode(),
+      ui::AXMode(ui::AXMode::kNativeAPIs | ui::AXMode::kWebContents),
+      {"narrator.exe", "nvda.exe"});
+
+  ExpectNarratorAndNvdaSamples(histogram_tester,
+                               kClientProcessNativeApisHistogram);
+  ExpectNarratorAndNvdaSamples(histogram_tester,
+                               kClientProcessWebContentsHistogram);
+}
+
+TEST(BrowserAccessibilityStateImplWinTest,
+     DoesNotRecordClientProcessHistogramsForNoMode) {
+  base::HistogramTester histogram_tester;
+
+  internal::RecordUiaClientProcessHistogramsForModeChange(
+      ui::AXMode(), ui::AXMode(), {"narrator.exe"});
+
+  ExpectNoUiaClientProcessHistograms(histogram_tester);
+}
+
+TEST(BrowserAccessibilityStateImplWinTest,
+     DoesNotRecordClientProcessHistogramsForUntrackedMode) {
+  base::HistogramTester histogram_tester;
+
+  internal::RecordUiaClientProcessHistogramsForModeChange(
+      ui::AXMode(), ui::AXMode(ui::AXMode::kExtendedProperties),
+      {"narrator.exe"});
+
+  ExpectNoUiaClientProcessHistograms(histogram_tester);
+}
+
+TEST(BrowserAccessibilityStateImplWinTest,
+     DoesNotRecordClientProcessHistogramsForAlreadyEnabledTrackedMode) {
+  base::HistogramTester histogram_tester;
+
+  internal::RecordUiaClientProcessHistogramsForModeChange(
+      ui::AXMode(ui::AXMode::kNativeAPIs),
+      ui::AXMode(ui::AXMode::kNativeAPIs | ui::AXMode::kExtendedProperties),
+      {"narrator.exe"});
+
+  ExpectNoUiaClientProcessHistograms(histogram_tester);
+}
+
+TEST(BrowserAccessibilityStateImplWinTest,
+     DoesNotRecordClientProcessHistogramsWithoutConnectedClients) {
+  base::HistogramTester histogram_tester;
+
+  internal::RecordUiaClientProcessHistogramsForModeChange(
+      ui::AXMode(),
+      ui::AXMode(ui::AXMode::kNativeAPIs | ui::AXMode::kWebContents), {});
+
+  ExpectNoUiaClientProcessHistograms(histogram_tester);
+}
+
+TEST(BrowserAccessibilityStateImplWinTest,
+     DeduplicatesClientProcessHistograms) {
+  base::HistogramTester histogram_tester;
+
+  internal::RecordUiaClientProcessHistogramsForModeChange(
+      ui::AXMode(), ui::AXMode(ui::AXMode::kNativeAPIs),
+      {"narrator.exe", "narrator.exe"});
+
+  histogram_tester.ExpectBucketCount(
+      kClientProcessNativeApisHistogram,
+      internal::HashUiaClientProcessName("narrator.exe"), 1);
+  histogram_tester.ExpectTotalCount(kClientProcessNativeApisHistogram, 1);
+  histogram_tester.ExpectTotalCount(kClientProcessWebContentsHistogram, 0);
+}
+
+TEST(BrowserAccessibilityStateImplWinTest, RecordsDisconnectHistogram) {
+  base::HistogramTester histogram_tester;
+
+  internal::RecordUiaClientDisconnectedHistogram("narrator.exe");
+
+  histogram_tester.ExpectUniqueSample(
+      kClientDisconnectedHistogram,
+      internal::HashUiaClientProcessName("narrator.exe"), 1);
+}
+
+TEST(BrowserAccessibilityStateImplWinTest,
+     JawsVersionNeedsTabSelectionEventForOlderVersions) {
+  // Versions older than 2026.2606.132 still rely on the synthetic event.
+  EXPECT_TRUE(internal::DoesJawsVersionNeedTabSelectionEvent(2022, 0, 0));
+  EXPECT_TRUE(internal::DoesJawsVersionNeedTabSelectionEvent(2024, 2312, 99));
+  EXPECT_TRUE(internal::DoesJawsVersionNeedTabSelectionEvent(2025, 9999, 9999));
+  EXPECT_TRUE(internal::DoesJawsVersionNeedTabSelectionEvent(2026, 2605, 9999));
+  EXPECT_TRUE(internal::DoesJawsVersionNeedTabSelectionEvent(2026, 2606, 131));
+}
+
+TEST(BrowserAccessibilityStateImplWinTest,
+     JawsVersionDoesNotNeedTabSelectionEventForFixedVersions) {
+  // 2026.2606.132 is the first version that no longer needs the event.
+  EXPECT_FALSE(internal::DoesJawsVersionNeedTabSelectionEvent(2026, 2606, 132));
+  EXPECT_FALSE(internal::DoesJawsVersionNeedTabSelectionEvent(2026, 2606, 133));
+  EXPECT_FALSE(internal::DoesJawsVersionNeedTabSelectionEvent(2026, 2607, 0));
+  EXPECT_FALSE(internal::DoesJawsVersionNeedTabSelectionEvent(2027, 0, 0));
+}
+
+#endif  // BUILDFLAG(IS_WIN)
+
 #if BUILDFLAG(IS_ANDROID)
 
 // Test Accessibility Histogram Recording.
@@ -193,34 +353,91 @@ TEST(BrowserAccessibilityStateImplAndroidTest,
      RecordAccessibilityTechHistograms) {
   base::HistogramTester histogram_tester;
 
-  std::array<std::string_view, 5> histograms{
-      "Accessibility.Android.AccessibilitySuite",
-      "Accessibility.Android.SoundAmplifier",
-      "Accessibility.Android.ActionBlocks", "Accessibility.Android.VoiceAccess",
-      "Accessibility.Android.BrailleBack"};
+  static constexpr std::array<uint32_t, 7> service_hashes = {
+      0x1630cddb,  // Switch Access
+      0x349d4b1a,  // TalkBack
+      0xa5a469fc,  // Sound Amplifier
+      0xb13e6179,  // Action Blocks
+      0xb38ef877,  // Voice Access
+      0xbc2897b4,  // BrailleBack
+      0xf2c0d757,  // Accessibility Menu
+  };
 
-  ASSERT_FALSE(RecordAssistiveTechHistogram(0));
+  static constexpr std::string_view histogram =
+      "Accessibility.Android.RunningAccessibilityTools";
 
-  // Ensure we start at zeroes.
-  for (std::string_view histogram : histograms) {
-    histogram_tester.ExpectTotalCount(histogram, 0);
-  }
+  // Try an unknown hash
+  ASSERT_FALSE(RecordAssistiveTechHistogram(0, false));
+
+  // Ensure we start at zero.
+  histogram_tester.ExpectTotalCount(histogram, 0);
 
   // Start recording.
-  ASSERT_TRUE(RecordAssistiveTechHistogram(0x349d4b1a));  // AccessibilitySuite
-  ASSERT_TRUE(RecordAssistiveTechHistogram(0xa5a469fc));  // SoundAmplifier
-  ASSERT_TRUE(RecordAssistiveTechHistogram(0xb13e6179));  // ActionBlocks
-  ASSERT_TRUE(RecordAssistiveTechHistogram(0xb38ef877));  // VoiceAccess
-  ASSERT_TRUE(RecordAssistiveTechHistogram(0xbc2897b4));  // BrailleBack
-
-  for (std::string_view histogram : histograms) {
-    histogram_tester.ExpectTotalCount(histogram, 1);
+  for (int i = 0; i < service_hashes.size(); ++i) {
+    ASSERT_TRUE(RecordAssistiveTechHistogram(service_hashes[i], false));
+    histogram_tester.ExpectTotalCount(histogram, i + 1);
   }
 
-  // One more.
-  ASSERT_TRUE(RecordAssistiveTechHistogram(0x349d4b1a));  // AccessibilitySuite
-  histogram_tester.ExpectTotalCount(histograms[0], 2);
+  // Duplicate one histogram.
+  ASSERT_TRUE(RecordAssistiveTechHistogram(service_hashes[0], false));
+  histogram_tester.ExpectTotalCount(histogram, service_hashes.size() + 1);
+
+  // Try an unknown accessibility tool.
+  ASSERT_TRUE(RecordAssistiveTechHistogram(0, true));
+  histogram_tester.ExpectTotalCount(histogram, service_hashes.size() + 2);
 }
 
 #endif  // BUILDFLAG(IS_ANDROID)
+
+TEST_F(BrowserAccessibilityStateImplTest,
+       NativeAdaptedWebContentsInvariantFiltering) {
+  TestBrowserContext browser_context;
+
+  {
+    // Mode with ONLY kNativeAdaptedWebContents should not trigger kWebContents.
+    // In fact, since kWebContents is not enabled, any higher bits (above
+    // NativeAPIs) are filtered out.
+    auto scoped_mode = state_->CreateScopedModeForProcess(
+        ui::AXMode::kNativeAdaptedWebContents);
+    EXPECT_EQ(ui::AXMode(),
+              state_->GetAccessibilityModeForBrowserContext(&browser_context));
+  }
+
+  {
+    // Mode with kNativeAdaptedWebContents and kNativeAPIs should upgrade to
+    // include kWebContents.
+    auto scoped_mode = state_->CreateScopedModeForProcess(
+        ui::AXMode::kNativeAdaptedWebContents | ui::AXMode::kNativeAPIs);
+    ui::AXMode result_mode =
+        state_->GetAccessibilityModeForBrowserContext(&browser_context);
+    EXPECT_TRUE(result_mode.has_mode(ui::AXMode::kNativeAdaptedWebContents));
+    EXPECT_TRUE(result_mode.has_mode(ui::AXMode::kNativeAPIs));
+    EXPECT_TRUE(result_mode.has_mode(ui::AXMode::kWebContents));
+  }
+}
+
+TEST_F(BrowserAccessibilityStateImplTest,
+       NativeAdaptedWebContentsMetricsAreStripped) {
+  base::HistogramTester histogram_tester;
+
+  {
+    // Applying kNativeAdaptedWebContents and kNativeAPIs should NOT record the
+    // kNativeAdaptedWebContents flag in process-wide histograms to avoid UMA
+    // pollution.
+    auto scoped_mode = state_->CreateScopedModeForProcess(
+        ui::AXMode::kNativeAdaptedWebContents | ui::AXMode::kNativeAPIs);
+
+    // We expect UMA_AX_MODE_NATIVE_APIS to be recorded, but NOT
+    // UMA_AX_MODE_NATIVE_ADAPTED_WEB_CONTENTS.
+    histogram_tester.ExpectBucketCount(
+        "Accessibility.ModeFlag",
+        ui::AXMode::ModeFlagHistogramValue::UMA_AX_MODE_NATIVE_APIS, 1);
+    histogram_tester.ExpectBucketCount(
+        "Accessibility.ModeFlag",
+        ui::AXMode::ModeFlagHistogramValue::
+            UMA_AX_MODE_NATIVE_ADAPTED_WEB_CONTENTS,
+        0);
+  }
+}
+
 }  // namespace content

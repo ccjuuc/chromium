@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -18,8 +19,10 @@
 #include "chrome/browser/policy/value_provider/policy_value_provider.h"
 #include "components/policy/core/browser/webui/policy_status_provider.h"
 #include "components/policy/core/browser/webui/policy_webui_constants.h"
+#include "components/policy/core/common/features.h"
 #include "components/policy/core/common/management/management_service.h"
 #include "components/policy/core/common/policy_logger.h"
+#include "components/policy/resources/webui/mojom/policy.mojom.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
@@ -41,21 +44,23 @@
 #include "components/prefs/pref_service.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(IS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 #include "chrome/browser/policy/status_provider/updater_status_and_value_provider.h"
-#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/browser/policy/cloud/extension_install_policy_service_factory.h"
+#include "chrome/browser/policy/value_provider/extension_install_policies_value_provider.h"
 #include "chrome/browser/policy/value_provider/extension_policies_value_provider.h"
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 #include "components/policy/core/common/cloud/profile_cloud_policy_manager.h"
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 namespace {
-void AppendPolicyIdsToList(const base::Value::Dict& policy_values,
-                           base::Value::List& policy_ids) {
+void AppendPolicyIdsToList(const base::DictValue& policy_values,
+                           base::ListValue& policy_ids) {
   for (const auto id_policy_pair : policy_values) {
     policy_ids.Append(id_policy_pair.first);
   }
@@ -63,9 +68,9 @@ void AppendPolicyIdsToList(const base::Value::Dict& policy_values,
 
 // Appends the ID of `policy_values` to `policy_ids` and merges it to
 // `out_policy_values`.
-void MergePolicyValuesAndIds(base::Value::Dict policy_values,
-                             base::Value::Dict& out_policy_values,
-                             base::Value::List& out_policy_ids) {
+void MergePolicyValuesAndIds(base::DictValue policy_values,
+                             base::DictValue& out_policy_values,
+                             base::ListValue& out_policy_ids) {
   AppendPolicyIdsToList(policy_values, out_policy_ids);
   out_policy_values.Merge(std::move(policy_values));
 }
@@ -90,14 +95,14 @@ std::unique_ptr<policy::PolicyStatusProvider> GetUserPolicyStatusProvider(
         local_account_service);
   } else if (user_cloud_policy) {
     return std::make_unique<UserCloudPolicyStatusProviderChromeOS>(
-        user_cloud_policy->core(), profile);
+        user_cloud_policy, profile);
   }
 #else   // BUILDFLAG(IS_CHROMEOS)
   policy::CloudPolicyManager* cloud_policy_manager =
       profile->GetCloudPolicyManager();
   if (cloud_policy_manager) {
-    return std::make_unique<UserCloudPolicyStatusProvider>(
-        cloud_policy_manager->core(), profile);
+    return std::make_unique<UserCloudPolicyStatusProvider>(cloud_policy_manager,
+                                                           profile);
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
   return std::make_unique<policy::PolicyStatusProvider>();
@@ -109,7 +114,8 @@ std::unique_ptr<policy::PolicyStatusProvider>
 GetChromeOSDevicePolicyStatusProvider(
     Profile* profile,
     policy::BrowserPolicyConnectorAsh* connector) {
-  return std::make_unique<DeviceCloudPolicyStatusProviderChromeOS>(connector);
+  return std::make_unique<DeviceCloudPolicyStatusProviderChromeOS>(connector,
+                                                                   profile);
 }
 #else
 // Returns policy status provider for machine policies for non-ChromeOS
@@ -120,7 +126,8 @@ std::unique_ptr<policy::PolicyStatusProvider> GetMachinePolicyStatusProvider(
       policy::BrowserDMTokenStorage::Get();
 
   return std::make_unique<policy::MachineLevelUserCloudPolicyStatusProvider>(
-      manager->core(), g_browser_process->local_state(),
+      manager->core(), manager->extension_install_core(),
+      g_browser_process->local_state(),
       new policy::MachineLevelUserCloudPolicyContext(
           {dmTokenStorage->RetrieveEnrollmentToken(),
            dmTokenStorage->RetrieveClientId(),
@@ -142,9 +149,9 @@ const char kDeviceStatusKey[] = "device";
 constexpr char kMachineStatusKey[] = "machine";
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(IS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 constexpr char kUpdaterStatusKey[] = "updater";
-#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 
 std::unique_ptr<PolicyValueAndStatusAggregator>
 PolicyValueAndStatusAggregator::CreateDefaultPolicyValueAndStatusAggregator(
@@ -155,10 +162,20 @@ PolicyValueAndStatusAggregator::CreateDefaultPolicyValueAndStatusAggregator(
   // Add PolicyValueProviders.
   aggregator->AddPolicyValueProvider(
       std::make_unique<ChromePoliciesValueProvider>(profile));
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  if (base::FeatureList::IsEnabled(
+          policy::features::kEnableExtensionInstallPolicyFetching)) {
+    if (auto* extension_install_policy_service =
+            policy::ExtensionInstallPolicyServiceFactory::GetForBrowserContext(
+                profile)) {
+      aggregator->AddPolicyValueProvider(
+          std::make_unique<ExtensionInstallPoliciesValueProvider>(
+              profile, extension_install_policy_service));
+    }
+  }
   aggregator->AddPolicyValueProvider(
       std::make_unique<ExtensionPoliciesValueProvider>(profile));
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
   // Add PolicyStatusProviders.
   // User policies.
@@ -194,11 +211,11 @@ PolicyValueAndStatusAggregator::CreateDefaultPolicyValueAndStatusAggregator(
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
   // Updater policies.
-#if BUILDFLAG(IS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   aggregator->AddPolicyStatusAndValueProvider(
       kUpdaterStatusKey,
       std::make_unique<UpdaterStatusAndValueProvider>(profile));
-#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   return aggregator;
 }
 
@@ -211,8 +228,8 @@ PolicyValueAndStatusAggregator::PolicyValueAndStatusAggregator(
 
 PolicyValueAndStatusAggregator::~PolicyValueAndStatusAggregator() = default;
 
-base::Value::Dict PolicyValueAndStatusAggregator::GetAggregatedPolicyStatus() {
-  base::Value::Dict status;
+base::DictValue PolicyValueAndStatusAggregator::GetAggregatedPolicyStatus() {
+  base::DictValue status;
   for (auto& status_provider_description_pair : status_providers_) {
     DVLOG_POLICY(3, POLICY_PROCESSING)
         << status_provider_description_pair.first
@@ -223,9 +240,25 @@ base::Value::Dict PolicyValueAndStatusAggregator::GetAggregatedPolicyStatus() {
   return status;
 }
 
-base::Value::Dict PolicyValueAndStatusAggregator::GetAggregatedPolicyValues() {
-  base::Value::Dict policy_values;
-  base::Value::List policy_ids;
+base::flat_map<std::string, policy::mojom::StatusPtr>
+PolicyValueAndStatusAggregator::GetAggregatedPolicyStatusMojo() {
+  std::vector<std::pair<std::string, policy::mojom::StatusPtr>> entries;
+  for (const auto& status_provider_description_pair : status_providers_) {
+    DVLOG_POLICY(3, POLICY_PROCESSING)
+        << status_provider_description_pair.first
+        << " status: " << status_provider_description_pair.second->GetStatus();
+
+    entries.emplace_back(
+        status_provider_description_pair.first,
+        status_provider_description_pair.second->GetStatusMojo());
+  }
+  return base::flat_map<std::string, policy::mojom::StatusPtr>(
+      std::move(entries));
+}
+
+base::DictValue PolicyValueAndStatusAggregator::GetAggregatedPolicyValues() {
+  base::DictValue policy_values;
+  base::ListValue policy_ids;
   for (auto& value_provider : value_providers_) {
     MergePolicyValuesAndIds(value_provider->GetValues(), policy_values,
                             policy_ids);
@@ -235,14 +268,14 @@ base::Value::Dict PolicyValueAndStatusAggregator::GetAggregatedPolicyValues() {
     MergePolicyValuesAndIds(value_provider->GetValues(), policy_values,
                             policy_ids);
   }
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(kPolicyValuesKey, std::move(policy_values));
   dict.Set(kPolicyIdsKey, std::move(policy_ids));
   return dict;
 }
 
-base::Value::Dict PolicyValueAndStatusAggregator::GetAggregatedPolicyNames() {
-  base::Value::Dict policy_names;
+base::DictValue PolicyValueAndStatusAggregator::GetAggregatedPolicyNames() {
+  base::DictValue policy_names;
   for (auto& value_provider : value_providers_) {
     policy_names.Merge(value_provider->GetNames());
   }
@@ -286,8 +319,9 @@ void PolicyValueAndStatusAggregator::OnProfileWillBeDestroyed(
 }
 
 void PolicyValueAndStatusAggregator::NotifyValueAndStatusChange() {
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.OnPolicyValueAndStatusChanged();
+  }
 }
 
 void PolicyValueAndStatusAggregator::AddPolicyValueProvider(

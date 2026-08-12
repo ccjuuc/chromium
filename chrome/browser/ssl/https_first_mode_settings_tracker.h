@@ -8,12 +8,11 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
-#include "base/memory/singleton.h"
 #include "base/memory/weak_ptr.h"
+#include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "base/task/task_traits.h"
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
-#include "chrome/browser/safe_browsing/advanced_protection_status_manager.h"
 #include "chrome/browser/ssl/daily_navigation_counter.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
@@ -49,17 +48,39 @@ enum class HttpsFirstModeSetting {
 //      /tools/metrics/histograms/metadata/security/enums.xml
 // )
 
+// Detailed HFM state at startup, distinguishing between different enablement
+// reasons. These values are persisted to logs. Entries should not be renumbered
+// and numeric values should never be reused. Must be kept in sync with
+// HttpsFirstModeStartupState in enums.xml.
+enum class HttpsFirstModeStartupState {
+  kDisabled = 0,
+  kEnabledFull = 1,
+  kEnabledBalancedExplicit = 2,
+  kEnabledBalancedTypicallySecure = 3,
+  kEnabledBalancedEsbPairing = 4,
+  kEnabledBalancedAutoEnable = 5,
+  kMaxValue = kEnabledBalancedAutoEnable,
+};
+
+// Events for implicit HFM setting changes (e.g. due to ESB pairing).
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// Must be kept in sync with HttpsFirstModeImplicitStateChange in enums.xml.
+enum class HttpsFirstModeImplicitStateChange {
+  kBalancedEnabledByEsb = 0,
+  kBalancedDisabledByEsb = 1,
+  kMaxValue = kBalancedDisabledByEsb,
+};
+
 // A `KeyedService` that tracks changes to the HTTPS-First Mode pref for each
 // profile. This is currently used for:
 // - Recording pref state in metrics and registering the client for a synthetic
 //   field trial based on that state.
-// - Changing the pref based on user's Advanced Protection status.
+// - Computing the user's effective HTTPS-First Mode setting (based on flags,
+//   prefs, and Advanced Protection status).
 // - Checking the Site Engagement scores of a site and enable/disable HFM based
 //   on that.
-class HttpsFirstModeService
-    : public KeyedService,
-      public safe_browsing::AdvancedProtectionStatusManager::
-          StatusChangedObserver {
+class HttpsFirstModeService : public KeyedService {
  public:
   explicit HttpsFirstModeService(Profile* profile, base::Clock* clock);
   ~HttpsFirstModeService() override;
@@ -67,12 +88,13 @@ class HttpsFirstModeService
   HttpsFirstModeService(const HttpsFirstModeService&) = delete;
   HttpsFirstModeService& operator=(const HttpsFirstModeService&) = delete;
 
-  // safe_browsing::AdvancedProtectionStatusManager::StatusChangedObserver:
-  void OnAdvancedProtectionStatusChanged(bool enabled) override;
-
   // Runs Typically Secure User and Site Engagement heuristics after the service
   // is created.
   void AfterStartup();
+
+  // Migrates existing Enhanced bundle users to Balanced HFM and schedules the
+  // upgrade Toast if they haven't manually customized HFM.
+  void MigrateEnhancedBundleUsersAndMaybeShowToast();
 
   // Returns true if the Typically Secure Heuristic enabled HTTPS-First Mode
   // in this profile. Does not update the recorded fallback events list.
@@ -112,6 +134,10 @@ class HttpsFirstModeService
 
  private:
   void OnHttpsFirstModePrefChanged();
+  void OnSafeBrowsingEnhancedPrefChanged();
+  // Triggered when the Security Settings Bundle pref changes during the
+  // session.
+  void OnSecuritySettingsBundleChanged();
   // HTTPS-Upgrade fallback events are stored in a pref. This method extracts
   // the fallback events, deletes old events, adds a new event if
   // `add_new_entry` is true. Returns true if the heuristic indicates that
@@ -140,13 +166,8 @@ class HttpsFirstModeService
   PrefChangeRegistrar pref_change_registrar_;
   raw_ptr<base::Clock> clock_;
 
-  base::Value::Dict navigation_counts_dict_;
+  base::DictValue navigation_counts_dict_;
   std::unique_ptr<DailyNavigationCounter> navigation_counter_;
-
-  base::ScopedObservation<
-      safe_browsing::AdvancedProtectionStatusManager,
-      safe_browsing::AdvancedProtectionStatusManager::StatusChangedObserver>
-      obs_{this};
 
   base::WeakPtrFactory<HttpsFirstModeService> weak_factory_{this};
 };
@@ -170,7 +191,7 @@ class HttpsFirstModeServiceFactory : public ProfileKeyedServiceFactory {
   static base::Clock* SetClockForTesting(base::Clock* clock);
 
  private:
-  friend struct base::DefaultSingletonTraits<HttpsFirstModeServiceFactory>;
+  friend base::NoDestructor<HttpsFirstModeServiceFactory>;
 
   HttpsFirstModeServiceFactory();
   ~HttpsFirstModeServiceFactory() override;

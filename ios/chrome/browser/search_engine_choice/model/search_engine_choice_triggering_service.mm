@@ -16,6 +16,8 @@
 
 namespace ios {
 
+using ::regional_capabilities::SearchEngineChoiceScreenConditions;
+
 SearchEngineChoiceTriggeringService::SearchEngineChoiceTriggeringService(
     PrefService& profile_prefs,
     const policy::PolicyService& policy_service,
@@ -29,17 +31,16 @@ SearchEngineChoiceTriggeringService::SearchEngineChoiceTriggeringService(
 SearchEngineChoiceTriggeringService::~SearchEngineChoiceTriggeringService() =
     default;
 
-search_engines::SearchEngineChoiceScreenConditions
+SearchEngineChoiceScreenConditions
 SearchEngineChoiceTriggeringService::EvaluateTriggeringConditions(
     bool is_first_run_entrypoint,
     bool app_started_via_external_intent) {
   if (!search_engine_choice_service_->IsSurfaceEligible(
           is_first_run_entrypoint)) {
-    return search_engines::SearchEngineChoiceScreenConditions::
-        kIneligibleSurface;
+    return SearchEngineChoiceScreenConditions::kIneligibleSurface;
   }
 
-  search_engines::SearchEngineChoiceScreenConditions conditions =
+  SearchEngineChoiceScreenConditions conditions =
       search_engine_choice_service_->GetStaticChoiceScreenConditions(
           policy_service_.get(), template_url_service_.get());
   if (!regional_capabilities::IsEligible(conditions)) {
@@ -47,7 +48,13 @@ SearchEngineChoiceTriggeringService::EvaluateTriggeringConditions(
   }
 
   conditions = search_engine_choice_service_->GetDynamicChoiceScreenConditions(
-      template_url_service_.get());
+      template_url_service_.get(),
+      {
+          // Unlike Desktop, the current location should be available most of
+          // the time during FRE, so location-checked programs should not allow
+          // unknown. See go/rcaps-dynamic-profile-country-v2.
+          .allow_unknown_current_location = false,
+      });
   if (!regional_capabilities::IsEligible(conditions)) {
     return conditions;
   }
@@ -62,8 +69,7 @@ SearchEngineChoiceTriggeringService::EvaluateTriggeringConditions(
       profile_prefs_->SetInteger(
           prefs::kDefaultSearchProviderChoiceScreenSkippedCount, count + 1);
 
-      return search_engines::SearchEngineChoiceScreenConditions::
-          kAppStartedByExternalIntent;
+      return SearchEngineChoiceScreenConditions::kAppStartedByExternalIntent;
     }
   }
 

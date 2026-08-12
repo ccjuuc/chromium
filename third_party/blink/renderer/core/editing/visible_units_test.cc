@@ -7,6 +7,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/core/dom/text.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
+#include "third_party/blink/renderer/core/editing/position_units.h"
 #include "third_party/blink/renderer/core/editing/position_with_affinity.h"
 #include "third_party/blink/renderer/core/editing/selection_template.h"
 #include "third_party/blink/renderer/core/editing/testing/editing_test_base.h"
@@ -17,7 +18,7 @@
 namespace blink {
 namespace visible_units_test {
 
-PositionWithAffinity PositionWithAffinityInDOMTree(
+PositionWithAffinity PositionWithAffinityInDomTree(
     Node& anchor,
     int offset,
     TextAffinity affinity = TextAffinity::kDownstream) {
@@ -25,7 +26,7 @@ PositionWithAffinity PositionWithAffinityInDOMTree(
                               affinity);
 }
 
-VisiblePosition CreateVisiblePositionInDOMTree(
+VisiblePosition CreateVisiblePositionInDomTree(
     Node& anchor,
     int offset,
     TextAffinity affinity = TextAffinity::kDownstream) {
@@ -98,12 +99,12 @@ TEST_F(VisibleUnitsTest, characterAfter) {
   Element* two = GetDocument().getElementById(AtomicString("two"));
 
   EXPECT_EQ(
-      0, CharacterAfter(CreateVisiblePositionInDOMTree(*one->firstChild(), 1)));
+      0, CharacterAfter(CreateVisiblePositionInDomTree(*one->firstChild(), 1)));
   EXPECT_EQ('5', CharacterAfter(
                      CreateVisiblePositionInFlatTree(*one->firstChild(), 1)));
 
   EXPECT_EQ('1', CharacterAfter(
-                     CreateVisiblePositionInDOMTree(*two->firstChild(), 2)));
+                     CreateVisiblePositionInDomTree(*two->firstChild(), 2)));
   EXPECT_EQ('1', CharacterAfter(
                      CreateVisiblePositionInFlatTree(*two->firstChild(), 2)));
 }
@@ -228,16 +229,16 @@ TEST_F(VisibleUnitsTest, characterBefore) {
   Node* two = GetDocument().getElementById(AtomicString("two"))->firstChild();
   Node* five = shadow_root->getElementById(AtomicString("five"))->firstChild();
 
-  EXPECT_EQ('2', CharacterBefore(CreateVisiblePositionInDOMTree(*one, 0)));
+  EXPECT_EQ('2', CharacterBefore(CreateVisiblePositionInDomTree(*one, 0)));
   EXPECT_EQ('2', CharacterBefore(CreateVisiblePositionInFlatTree(*one, 0)));
 
-  EXPECT_EQ('1', CharacterBefore(CreateVisiblePositionInDOMTree(*one, 1)));
+  EXPECT_EQ('1', CharacterBefore(CreateVisiblePositionInDomTree(*one, 1)));
   EXPECT_EQ('1', CharacterBefore(CreateVisiblePositionInFlatTree(*one, 1)));
 
-  EXPECT_EQ(0, CharacterBefore(CreateVisiblePositionInDOMTree(*two, 0)));
+  EXPECT_EQ(0, CharacterBefore(CreateVisiblePositionInDomTree(*two, 0)));
   EXPECT_EQ('4', CharacterBefore(CreateVisiblePositionInFlatTree(*two, 0)));
 
-  EXPECT_EQ(0, CharacterBefore(CreateVisiblePositionInDOMTree(*five, 0)));
+  EXPECT_EQ(0, CharacterBefore(CreateVisiblePositionInDomTree(*five, 0)));
   EXPECT_EQ('1', CharacterBefore(CreateVisiblePositionInFlatTree(*five, 0)));
 }
 
@@ -254,7 +255,7 @@ TEST_F(VisibleUnitsTest, endOfDocument) {
   Element* two = GetDocument().getElementById(AtomicString("two"));
 
   EXPECT_EQ(Position(two->firstChild(), 2),
-            EndOfDocument(CreateVisiblePositionInDOMTree(*one->firstChild(), 0))
+            EndOfDocument(CreateVisiblePositionInDomTree(*one->firstChild(), 0))
                 .DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(one->firstChild(), 1),
@@ -262,7 +263,7 @@ TEST_F(VisibleUnitsTest, endOfDocument) {
           .DeepEquivalent());
 
   EXPECT_EQ(Position(two->firstChild(), 2),
-            EndOfDocument(CreateVisiblePositionInDOMTree(*two->firstChild(), 1))
+            EndOfDocument(CreateVisiblePositionInDomTree(*two->firstChild(), 1))
                 .DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(one->firstChild(), 1),
@@ -272,7 +273,7 @@ TEST_F(VisibleUnitsTest, endOfDocument) {
 
 TEST_F(VisibleUnitsTest,
        AdjustForwardPositionToAvoidCrossingEditingBoundariesNestedEditable) {
-  const SelectionInDOMTree& selection = SetSelectionTextToBody(
+  const SelectionInDomTree& selection = SetSelectionTextToBody(
       "<div contenteditable>"
       "abc"
       "<span contenteditable=\"false\">A^BC</span>"
@@ -305,12 +306,12 @@ TEST_F(VisibleUnitsTest, isEndOfEditableOrNonEditableContent) {
   Element* two = GetDocument().getElementById(AtomicString("two"));
 
   EXPECT_FALSE(IsEndOfEditableOrNonEditableContent(
-      CreateVisiblePositionInDOMTree(*one->firstChild(), 1)));
+      CreateVisiblePositionInDomTree(*one->firstChild(), 1)));
   EXPECT_TRUE(IsEndOfEditableOrNonEditableContent(
       CreateVisiblePositionInFlatTree(*one->firstChild(), 1)));
 
   EXPECT_TRUE(IsEndOfEditableOrNonEditableContent(
-      CreateVisiblePositionInDOMTree(*two->firstChild(), 2)));
+      CreateVisiblePositionInDomTree(*two->firstChild(), 2)));
   EXPECT_FALSE(IsEndOfEditableOrNonEditableContent(
       CreateVisiblePositionInFlatTree(*two->firstChild(), 2)));
 }
@@ -325,17 +326,17 @@ TEST_F(VisibleUnitsTest, isEndOfEditableOrNonEditableContentWithInput) {
           ->firstChild();
 
   EXPECT_FALSE(IsEndOfEditableOrNonEditableContent(
-      CreateVisiblePositionInDOMTree(*text, 0)));
+      CreateVisiblePositionInDomTree(*text, 0)));
   EXPECT_FALSE(IsEndOfEditableOrNonEditableContent(
       CreateVisiblePositionInFlatTree(*text, 0)));
 
   EXPECT_FALSE(IsEndOfEditableOrNonEditableContent(
-      CreateVisiblePositionInDOMTree(*text, 1)));
+      CreateVisiblePositionInDomTree(*text, 1)));
   EXPECT_FALSE(IsEndOfEditableOrNonEditableContent(
       CreateVisiblePositionInFlatTree(*text, 1)));
 
   EXPECT_TRUE(IsEndOfEditableOrNonEditableContent(
-      CreateVisiblePositionInDOMTree(*text, 2)));
+      CreateVisiblePositionInDomTree(*text, 2)));
   EXPECT_TRUE(IsEndOfEditableOrNonEditableContent(
       CreateVisiblePositionInFlatTree(*text, 2)));
 }
@@ -1099,7 +1100,7 @@ TEST_F(VisibleUnitsTest, SnapForwardWithZeroWidthSpace) {
 TEST_F(VisibleUnitsTest, FirstRectForRangeHorizontal) {
   LoadAhem();
   InsertStyleElement("div { font:20px/20px Ahem;}");
-  const SelectionInDOMTree selection =
+  const SelectionInDomTree selection =
       SetSelectionTextToBody("<div>^abcdef|</div>");
   const gfx::Rect rect = FirstRectForRange(selection.ComputeRange());
   EXPECT_EQ(gfx::Rect(8, 8, 120, 20), rect);
@@ -1108,7 +1109,7 @@ TEST_F(VisibleUnitsTest, FirstRectForRangeHorizontal) {
 TEST_F(VisibleUnitsTest, FirstRectForRangeHorizontalWrap) {
   LoadAhem();
   InsertStyleElement("div { font:20px/20px Ahem; inline-size:60px;}");
-  const SelectionInDOMTree selection =
+  const SelectionInDomTree selection =
       SetSelectionTextToBody("<div>^abc def|</div>");
   const gfx::Rect rect = FirstRectForRange(selection.ComputeRange());
   EXPECT_EQ(gfx::Rect(8, 8, 59, 20), rect);
@@ -1117,7 +1118,7 @@ TEST_F(VisibleUnitsTest, FirstRectForRangeHorizontalWrap) {
 TEST_F(VisibleUnitsTest, FirstRectForRangeVertical) {
   LoadAhem();
   InsertStyleElement("div { writing-mode:vertical-rl; font:20px/20px Ahem;}");
-  const SelectionInDOMTree selection =
+  const SelectionInDomTree selection =
       SetSelectionTextToBody("<div>^abcdef|</div>");
   const gfx::Rect rect = FirstRectForRange(selection.ComputeRange());
   EXPECT_EQ(gfx::Rect(8, 8, 20, 119), rect);
@@ -1128,7 +1129,7 @@ TEST_F(VisibleUnitsTest, FirstRectForRangeVerticalWrap) {
   InsertStyleElement(
       "div { writing-mode:vertical-rl; font:20px/20px Ahem; "
       "inline-size:60px;}");
-  const SelectionInDOMTree selection =
+  const SelectionInDomTree selection =
       SetSelectionTextToBody("<div>^abc def|</div>");
   const gfx::Rect rect = FirstRectForRange(selection.ComputeRange());
   EXPECT_EQ(gfx::Rect(28, 8, 20, 59), rect);

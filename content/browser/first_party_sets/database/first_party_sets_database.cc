@@ -18,6 +18,7 @@
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/sequence_checker.h"
+#include "base/types/expected_macros.h"
 #include "base/version.h"
 #include "content/browser/first_party_sets/first_party_set_parser.h"
 #include "net/base/schemeful_site.h"
@@ -124,10 +125,6 @@ const char kRunCountKey[] = "run_count";
     return false;
 
   return true;
-}
-
-void RecordInitializationStatus(FirstPartySetsDatabase::InitStatus status) {
-  base::UmaHistogramEnumeration("FirstPartySets.Database.InitStatus", status);
 }
 
 }  // namespace
@@ -474,8 +471,11 @@ std::optional<net::GlobalFirstPartySets> FirstPartySetsDatabase::GetGlobalSets(
 
   // Aliases are merged with entries inside of the public sets table so it is
   // sufficient to declare the global sets object with only the entries field.
-  net::GlobalFirstPartySets global_sets(base::Version(version), sets,
-                                        /*aliases=*/{});
+  ASSIGN_OR_RETURN(net::FirstPartySetsContextConfig public_config,
+                   net::FirstPartySetsContextConfig::Create(sets, {}));
+
+  net::GlobalFirstPartySets global_sets(base::Version(version),
+                                        std::move(public_config));
 
   // Query & apply manual configuration. Safe because this config and this
   // public sets data were written during the same run of Chrome, and the config
@@ -743,9 +743,9 @@ bool FirstPartySetsDatabase::LazyInit() {
     return db_status_ == InitStatus::kSuccess;
 
   CHECK_EQ(db_.get(), nullptr);
-  db_ = std::make_unique<sql::Database>(
-      sql::DatabaseOptions().set_cache_size(32).set_preload(true),
-      sql::Database::Tag("FirstPartySets"));
+  db_ =
+      std::make_unique<sql::Database>(sql::DatabaseOptions().set_cache_size(32),
+                                      sql::Database::Tag("FirstPartySets"));
   // base::Unretained is safe here because this FirstPartySetsDatabase owns
   // the sql::Database instance that stores and uses the callback. So,
   // `this` is guaranteed to outlive the callback.
@@ -760,7 +760,6 @@ bool FirstPartySetsDatabase::LazyInit() {
     IncreaseRunCount();
   }
 
-  RecordInitializationStatus(db_status_);
   return db_status_ == InitStatus::kSuccess;
 }
 
@@ -949,12 +948,7 @@ bool FirstPartySetsDatabase::Destroy() {
 
 bool FirstPartySetsDatabase::TransactionFailed() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  bool failed =
-      !db_->HasActiveTransactions() || db_status_ != InitStatus::kSuccess;
-
-  base::UmaHistogramBoolean("FirstPartySets.Database.TransactionFailed",
-                            failed);
-  return failed;
+  return !db_->HasActiveTransactions() || db_status_ != InitStatus::kSuccess;
 }
 
 }  // namespace content

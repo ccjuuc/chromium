@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/trace_event/trace_event.h"
 #include "cc/paint/clear_for_opaque_raster.h"
@@ -60,7 +61,9 @@ PlaybackParams PaintOpBufferSerializer::MakeParams(
     const SkCanvas* canvas) const {
   // We don't use an ImageProvider here since the ops are played onto a no-draw
   // canvas for state tracking and don't need decoded images.
-  PlaybackParams params(nullptr, canvas->getLocalToDevice());
+  PlaybackCallbacks callbacks;
+  callbacks.custom_callback = options_.custom_callback;
+  PlaybackParams params(nullptr, canvas->getLocalToDevice(), callbacks);
   params.raster_inducing_scroll_offsets =
       options_.raster_inducing_scroll_offsets;
   params.is_analyzing = true;
@@ -457,14 +460,12 @@ void PaintOpBufferSerializer::RestoreToCount(SkCanvas* canvas,
 }
 
 SimpleBufferSerializer::SimpleBufferSerializer(
-    void* memory,
-    size_t size,
+    base::span<uint8_t> memory,
     const PaintOp::SerializeOptions& options)
     : PaintOpBufferSerializer(&SimpleBufferSerializer::SerializeToMemory,
                               this,
                               options),
-      memory_(memory),
-      total_(size) {}
+      memory_(memory) {}
 
 SimpleBufferSerializer::~SimpleBufferSerializer() = default;
 
@@ -474,17 +475,17 @@ size_t SimpleBufferSerializer::SerializeToMemoryImpl(
     const PaintFlags* flags_to_serialize,
     const SkM44& current_ctm,
     const SkM44& original_ctm) {
-  if (written_ == total_)
+  if (written_ == memory_.size()) {
     return 0u;
+  }
 
-  size_t bytes = op.Serialize(
-      UNSAFE_TODO(static_cast<char*>(memory_) + written_), total_ - written_,
-      options, flags_to_serialize, current_ctm, original_ctm);
+  size_t bytes = op.Serialize(memory_.subspan(written_), options,
+                              flags_to_serialize, current_ctm, original_ctm);
   if (!bytes)
     return 0u;
 
   written_ += bytes;
-  DCHECK_GE(total_, written_);
+  DCHECK_GE(memory_.size(), written_);
   return bytes;
 }
 

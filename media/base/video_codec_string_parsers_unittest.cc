@@ -29,7 +29,8 @@ TEST(ParseVP9CodecId, NewStyleVP9CodecIDs) {
     EXPECT_EQ(VideoCodec::kVP9, result->codec);
     EXPECT_EQ(VP9PROFILE_PROFILE0, result->profile);
     EXPECT_EQ(10u, result->level);
-    EXPECT_EQ(VideoColorSpace::TransferID::BT709, result->color_space.transfer);
+    EXPECT_EQ(VideoColorSpace::TransferID::BT709,
+              result->color_space.transfer());
     EXPECT_EQ(VideoChromaSampling::k420, result->subsampling);
     EXPECT_EQ(8u, result->bit_depth);
   }
@@ -72,7 +73,7 @@ TEST(ParseVP9CodecId, NewStyleVP9CodecIDs) {
       EXPECT_EQ(VP9PROFILE_PROFILE0, result->profile);
       EXPECT_EQ(i, result->level);
       EXPECT_EQ(VideoColorSpace::TransferID::BT709,
-                result->color_space.transfer);
+                result->color_space.transfer());
       num_valid_levels++;
     } else {
       EXPECT_FALSE(ParseNewStyleVp9CodecID(codec_string));
@@ -180,7 +181,7 @@ TEST(ParseVP9CodecId, NewStyleVP9CodecIDs) {
     auto result = ParseNewStyleVp9CodecID(codec_string);
     ASSERT_TRUE(result) << "eotf=" << eotf;
     EXPECT_EQ(static_cast<VideoColorSpace::TransferID>(eotf),
-              result->color_space.transfer);
+              result->color_space.transfer());
   }
 
   // Verify 0 and 3 are reserved EOTF values.
@@ -190,7 +191,7 @@ TEST(ParseVP9CodecId, NewStyleVP9CodecIDs) {
   // Verify a few matrix coefficients.
   EXPECT_TRUE(ParseNewStyleVp9CodecID("vp09.02.10.10.00.01.01.00"));
   EXPECT_TRUE(ParseNewStyleVp9CodecID("vp09.02.10.10.00.01.01.01"));
-  EXPECT_TRUE(ParseNewStyleVp9CodecID("vp09.02.10.10.00.01.01.10"));
+  EXPECT_TRUE(ParseNewStyleVp9CodecID("vp09.02.10.10.00.01.01.11"));
   // Values 12 - 255 reserved.
   EXPECT_FALSE(ParseNewStyleVp9CodecID("vp09.02.10.10.00.01.01.12"));
 
@@ -217,7 +218,8 @@ TEST(ParseAv1CodecId, VerifyRequiredValues) {
     EXPECT_EQ(VideoCodec::kAV1, result->codec);
     EXPECT_EQ(AV1PROFILE_PROFILE_MAIN, result->profile);
     EXPECT_EQ(4u, result->level);
-    EXPECT_EQ(VideoColorSpace::TransferID::BT709, result->color_space.transfer);
+    EXPECT_EQ(VideoColorSpace::TransferID::BT709,
+              result->color_space.transfer());
     EXPECT_EQ(VideoChromaSampling::k420, result->subsampling);
     EXPECT_EQ(8u, result->bit_depth);
   }
@@ -266,7 +268,7 @@ TEST(ParseAv1CodecId, VerifyRequiredValues) {
       EXPECT_EQ(AV1PROFILE_PROFILE_MAIN, result->profile);
       EXPECT_EQ(i, result->level);
       EXPECT_EQ(VideoColorSpace::TransferID::BT709,
-                result->color_space.transfer);
+                result->color_space.transfer());
     } else {
       EXPECT_FALSE(ParseAv1CodecId(codec_string));
     }
@@ -283,7 +285,7 @@ TEST(ParseAv1CodecId, VerifyRequiredValues) {
       EXPECT_EQ(AV1PROFILE_PROFILE_HIGH, result->profile);
       EXPECT_EQ(0u, result->level);
       EXPECT_EQ(VideoColorSpace::TransferID::BT709,
-                result->color_space.transfer);
+                result->color_space.transfer());
     } else {
       EXPECT_FALSE(ParseAv1CodecId(codec_string));
     }
@@ -303,7 +305,7 @@ TEST(ParseAv1CodecId, VerifyRequiredValues) {
       EXPECT_EQ(AV1PROFILE_PROFILE_MAIN, result->profile);
       EXPECT_EQ(0u, result->level);
       EXPECT_EQ(VideoColorSpace::TransferID::BT709,
-                result->color_space.transfer);
+                result->color_space.transfer());
     } else {
       EXPECT_FALSE(ParseAv1CodecId(codec_string));
     }
@@ -439,14 +441,15 @@ TEST(ParseAv1CodecId, VerifyOptionalColorProperties) {
   {
     auto result = ParseAv1CodecId("av01.0.00M.10.0.110.01");
     ASSERT_TRUE(result);
-    EXPECT_EQ(VideoColorSpace::PrimaryID::BT709, result->color_space.primaries);
+    EXPECT_EQ(VideoColorSpace::PrimaryID::BT709,
+              result->color_space.primaries());
   }
   // BT2020
   {
     auto result = ParseAv1CodecId("av01.0.00M.10.0.110.09");
     ASSERT_TRUE(result);
     EXPECT_EQ(VideoColorSpace::PrimaryID::BT2020,
-              result->color_space.primaries);
+              result->color_space.primaries());
   }
   // 0 is invalid.
   EXPECT_FALSE(ParseAv1CodecId("av01.0.00M.10.0.110.00"));
@@ -464,7 +467,7 @@ TEST(ParseAv1CodecId, VerifyOptionalColorProperties) {
     auto result = ParseAv1CodecId(codec_string);
     ASSERT_TRUE(result) << "eotf=" << eotf;
     EXPECT_EQ(static_cast<VideoColorSpace::TransferID>(eotf),
-              result->color_space.transfer);
+              result->color_space.transfer());
   }
 
   // Verify 0 and 3 are reserved EOTF values.
@@ -480,17 +483,12 @@ TEST(ParseAv1CodecId, VerifyOptionalColorProperties) {
   {
     auto result = ParseAv1CodecId("av01.0.00M.10.0.110.01.01.00");
     ASSERT_TRUE(result);
-    EXPECT_EQ(VideoColorSpace::MatrixID::RGB, result->color_space.matrix);
+    EXPECT_EQ(VideoColorSpace::MatrixID::RGB, result->color_space.matrix());
   }
   {
     auto result = ParseAv1CodecId("av01.0.00M.10.0.110.01.01.01");
     ASSERT_TRUE(result);
-    EXPECT_EQ(VideoColorSpace::MatrixID::BT709, result->color_space.matrix);
-  }
-  {
-    auto result = ParseAv1CodecId("av01.0.00M.10.0.110.01.01.10");
-    ASSERT_TRUE(result);
-    EXPECT_EQ(VideoColorSpace::MatrixID::BT2020_CL, result->color_space.matrix);
+    EXPECT_EQ(VideoColorSpace::MatrixID::BT709, result->color_space.matrix());
   }
 
   // Values 12 - 255 reserved. Though 12 at least is a valid value we should
@@ -506,12 +504,12 @@ TEST(ParseAv1CodecId, VerifyOptionalColorProperties) {
   {
     auto result = ParseAv1CodecId("av01.0.00M.10.0.110.01.01.00.0");
     ASSERT_TRUE(result);
-    EXPECT_EQ(gfx::ColorSpace::RangeID::LIMITED, result->color_space.range);
+    EXPECT_EQ(gfx::ColorSpace::RangeID::LIMITED, result->color_space.range());
   }
   {
     auto result = ParseAv1CodecId("av01.0.00M.10.0.110.01.01.00.1");
     ASSERT_TRUE(result);
-    EXPECT_EQ(gfx::ColorSpace::RangeID::FULL, result->color_space.range);
+    EXPECT_EQ(gfx::ColorSpace::RangeID::FULL, result->color_space.range());
   }
   EXPECT_FALSE(ParseAv1CodecId("av01.0.00M.10.0.110.01.01.00.2"));
 }
@@ -859,130 +857,6 @@ TEST(ParseHEVCCodecIdTest, InvalidHEVCCodecIds) {
   EXPECT_FALSE(ParseHEVCCodecId("hvc1.1.6.L0.-1"));
 }
 
-TEST(ParseVVCCodecIdTest, InvalidVVCCodecIds) {
-  // Both vvc1 and vvi1 should be supported
-  {
-    auto result = ParseVVCCodecId("vvc1.1.L51.CQA.O1+3");
-    ASSERT_TRUE(result);
-    EXPECT_EQ(VVCPROFILE_MAIN10, result->profile);
-    EXPECT_EQ(51u, result->level);
-  }
-  {
-    auto result = ParseVVCCodecId("vvi1.2.L83.CQA.S25+YA.O2+3");
-    ASSERT_TRUE(result);
-    EXPECT_EQ(VVCPROFILE_MAIN12, result->profile);
-    EXPECT_EQ(83u, result->level);
-  }
-
-  // Check that codec id string with insufficient number of dot-separated
-  // elements are rejected. There must be at least 4 elements: vvc1/vvi1 prefix,
-  // profile, level, constraints.
-  {
-    auto result = ParseVVCCodecId("vvc1.1.L51.CQA");
-    ASSERT_TRUE(result);
-    EXPECT_EQ(VVCPROFILE_MAIN10, result->profile);
-    EXPECT_EQ(51u, result->level);
-  }
-  EXPECT_FALSE(ParseVVCCodecId("vvc1"));
-  EXPECT_FALSE(ParseVVCCodecId("vvi1"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1..."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1...."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1..."));
-
-  // Check that codec ids with invalid trailing bytes are rejected.
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83.."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83..."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83...."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83....."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83......"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83......."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83.......0"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83.0."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83.0.."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83.0..0"));
-
-  // general_profile_idc (the number after the first dot) must be a 5-bit
-  // decimal-encoded number (between 1 and 99)
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L83.CQA"));
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.99.L83.CQA"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.100.L83.CQA"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.0.L83.CQA"));
-
-  // general_tier_flag is encoded as either character 'L' (general_tier_flag==0)
-  // or character 'H' (general_tier_flag==1) in the 3rd element of the string
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L83.CQA"));
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.H83.CQA"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.83.CQA"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.A83.CQA"));
-
-  // general_level_idc is 8-bit decimal-encoded number after general_tier_flag.
-  {
-    auto result = ParseVVCCodecId("vvc1.1.L0.CQA");
-    ASSERT_TRUE(result);
-    EXPECT_EQ(0u, result->level);
-  }
-  {
-    auto result = ParseVVCCodecId("vvc1.1.L1.CQA");
-    ASSERT_TRUE(result);
-    EXPECT_EQ(1u, result->level);
-  }
-  // Level 3.1 (51 == 3 * 16 + 1 * 3)
-  {
-    auto result = ParseVVCCodecId("vvc1.1.L51.CQA");
-    ASSERT_TRUE(result);
-    EXPECT_EQ(51u, result->level);
-  }
-  // Level 6.2 (102 == 6 * 16 + 2 * 3)
-  {
-    auto result = ParseVVCCodecId("vvc1.1.L102.CYA");
-    ASSERT_TRUE(result);
-    EXPECT_EQ(102u, result->level);
-  }
-  {
-    auto result = ParseVVCCodecId("vvc1.1.L255.CYA");
-    ASSERT_TRUE(result);
-    EXPECT_EQ(255u, result->level);
-  }
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L256.CYA"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L999.CQA"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L-1.CQA"));
-
-  // constraints string
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.100.L83.C."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.100.L83.2C"));
-
-  // general_sub_profile_idc placement.
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L0.CQA.SF1.O0+3"));
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L0.CQA.SF1"));
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L0.SF1"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L0.CQA.SF1."));
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L0.CQA.SF1+AB.O0+3"));
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L0.CQA.SF1+AB+2B.O0+3"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L0.SF1.CQA.O0+3"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L0.CQA.O0+3.SF1"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L0.CQA.O0+3.S"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L0.CQA.O0+3.S."));
-
-  // OlsIdx & MaxTid
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L0.CQA.O0+3"));
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L0.CQA.O1"));
-  // When MaxTid does not exist, "+" should not be present.
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L0.CQA.O1+"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L0.CQA.O"));
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L0.CQA.O+3"));
-
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83.100"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83.1FF"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83.-1"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L0.CQA.SF1.O0+3.100"));
-}
-
 TEST(ParseDolbyVisionCodecIdTest, InvalidDolbyVisionCodecIds) {
   // Codec dvav/dva1 should only contain profile 0.
   {
@@ -1005,7 +879,7 @@ TEST(ParseDolbyVisionCodecIdTest, InvalidDolbyVisionCodecIds) {
   EXPECT_FALSE(ParseDolbyVisionCodecId("dvav.07.07"));
   EXPECT_FALSE(ParseDolbyVisionCodecId("dva1.07.07"));
 
-  // Codec dvhe/dvh1 should only contain profile 5, and 7.
+  // Codec dvhe/dvh1 should only contain profile 5, 7 and 20.
   {
     auto result = ParseDolbyVisionCodecId("dvhe.05.07");
     ASSERT_TRUE(result);
@@ -1024,8 +898,24 @@ TEST(ParseDolbyVisionCodecIdTest, InvalidDolbyVisionCodecIds) {
     EXPECT_EQ(DOLBYVISION_PROFILE7, result->profile);
     EXPECT_EQ(7u, result->level);
   }
+  {
+    auto result = ParseDolbyVisionCodecId("dvh1.20.07");
+    ASSERT_TRUE(result);
+    EXPECT_EQ(DOLBYVISION_PROFILE20, result->profile);
+    EXPECT_EQ(7u, result->level);
+  }
   EXPECT_FALSE(ParseDolbyVisionCodecId("dvhe.00.07"));
   EXPECT_FALSE(ParseDolbyVisionCodecId("dvh1.00.07"));
+
+  // Codec dav1 should only contain profile 10.
+  {
+    auto result = ParseDolbyVisionCodecId("dav1.10.07");
+    ASSERT_TRUE(result);
+    EXPECT_EQ(DOLBYVISION_PROFILE10, result->profile);
+    EXPECT_EQ(7u, result->level);
+  }
+  EXPECT_FALSE(ParseDolbyVisionCodecId("dav1.05.07"));
+  EXPECT_FALSE(ParseDolbyVisionCodecId("dav1.07.07"));
 
   // Profiles 1, 2, 3, 4 and 6 are deprecated.
   EXPECT_FALSE(ParseDolbyVisionCodecId("dvav.01.07"));

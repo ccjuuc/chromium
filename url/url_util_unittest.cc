@@ -9,6 +9,7 @@
 #include <optional>
 #include <string_view>
 
+#include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest-message.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -298,25 +299,27 @@ TEST_F(URLUtilTest, DecodeURLEscapeSequences) {
 
   for (const auto& decode_case : decode_cases) {
     RawCanonOutputT<char16_t> output;
-    DecodeURLEscapeSequences(decode_case.input,
-                             DecodeURLMode::kUTF8OrIsomorphic, &output);
-    EXPECT_EQ(decode_case.output, base::UTF16ToUTF8(std::u16string(
-                                      output.data(), output.length())));
+    DecodeUrlEscapeSequences(decode_case.input,
+                             DecodeUrlMode::kUtf8OrIsomorphic, &output);
+    EXPECT_EQ(decode_case.output, base::UTF16ToUTF8(output.view()));
+    EXPECT_EQ(decode_case.output,
+              DecodeUrlEscapeSequences(decode_case.input,
+                                       DecodeUrlMode::kUtf8OrIsomorphic));
 
     RawCanonOutputT<char16_t> output_utf8;
-    DecodeURLEscapeSequences(decode_case.input, DecodeURLMode::kUTF8,
+    DecodeUrlEscapeSequences(decode_case.input, DecodeUrlMode::kUtf8,
                              &output_utf8);
-    EXPECT_EQ(decode_case.output,
-              base::UTF16ToUTF8(
-                  std::u16string(output_utf8.data(), output_utf8.length())));
+    EXPECT_EQ(decode_case.output, base::UTF16ToUTF8(output_utf8.view()));
+    EXPECT_EQ(decode_case.output, DecodeUrlEscapeSequences(
+                                      decode_case.input, DecodeUrlMode::kUtf8));
   }
 
   // Our decode should decode %00
   const char zero_input[] = "%00";
   RawCanonOutputT<char16_t> zero_output;
-  DecodeURLEscapeSequences(zero_input, DecodeURLMode::kUTF8, &zero_output);
-  EXPECT_NE("%00", base::UTF16ToUTF8(std::u16string(zero_output.data(),
-                                                    zero_output.length())));
+  DecodeUrlEscapeSequences(zero_input, DecodeUrlMode::kUtf8, &zero_output);
+  EXPECT_NE("%00", base::UTF16ToUTF8(zero_output.view()));
+  EXPECT_NE("%00", DecodeUrlEscapeSequences(zero_input, DecodeUrlMode::kUtf8));
 
   // Test the error behavior for invalid UTF-8.
   struct Utf8DecodeCase {
@@ -338,16 +341,16 @@ TEST_F(URLUtilTest, DecodeURLEscapeSequences) {
 
   for (const auto& utf8_decode_case : utf8_decode_cases) {
     RawCanonOutputT<char16_t> output_iso;
-    DecodeURLEscapeSequences(utf8_decode_case.input,
-                             DecodeURLMode::kUTF8OrIsomorphic, &output_iso);
+    DecodeUrlEscapeSequences(utf8_decode_case.input,
+                             DecodeUrlMode::kUtf8OrIsomorphic, &output_iso);
     EXPECT_EQ(std::u16string(utf8_decode_case.expected_iso.data()),
-              std::u16string(output_iso.data(), output_iso.length()));
+              output_iso.view());
 
     RawCanonOutputT<char16_t> output_utf8;
-    DecodeURLEscapeSequences(utf8_decode_case.input, DecodeURLMode::kUTF8,
+    DecodeUrlEscapeSequences(utf8_decode_case.input, DecodeUrlMode::kUtf8,
                              &output_utf8);
     EXPECT_EQ(std::u16string(utf8_decode_case.expected_utf8.data()),
-              std::u16string(output_utf8.data(), output_utf8.length()));
+              output_utf8.view());
   }
 }
 
@@ -377,9 +380,8 @@ TEST_F(URLUtilTest, TestEncodeURIComponent) {
 
   for (const auto& encode_case : encode_cases) {
     RawCanonOutputT<char> buffer;
-    EncodeURIComponent(encode_case.input, &buffer);
-    std::string output(buffer.data(), buffer.length());
-    EXPECT_EQ(encode_case.output, output);
+    EncodeUriComponent(encode_case.input, &buffer);
+    EXPECT_EQ(encode_case.output, buffer.view());
   }
 }
 
@@ -426,6 +428,62 @@ TEST_F(URLUtilTest, PotentiallyDanglingMarkup) {
     EXPECT_EQ(test.potentially_dangling_markup,
               resolved_parsed.potentially_dangling_markup);
     EXPECT_EQ(test.out, resolved);
+  }
+}
+
+TEST_F(URLUtilTest, DataURLWhitespaceHandlingIsSchemeCaseInsensitive) {
+  // Whitespace removal is skipped for data: URLs so that the body is
+  // preserved verbatim. Scheme matching is ASCII case-insensitive, so the
+  // skip must apply regardless of the case used to spell the scheme, and
+  // regardless of any tab/CR/LF preceding it.
+  struct {
+    const char* input;
+    const char* canonicalized;
+    bool potentially_dangling_markup;
+  } cases[] = {
+      {"data:text/html,a\nb", "data:text/html,a%0Ab", false},
+      {"DATA:text/html,a\nb", "data:text/html,a%0Ab", false},
+      {"Data:text/html,a\nb", "data:text/html,a%0Ab", false},
+      {"dAtA:text/html,a\nb", "data:text/html,a%0Ab", false},
+      {"data:text/html,<a\nb", "data:text/html,<a%0Ab", false},
+      {"DATA:text/html,<a\nb", "data:text/html,<a%0Ab", false},
+      {"\tdata:text/html,a\nb", "data:text/html,a%0Ab", false},
+      {"\tDATA:text/html,a\nb", "data:text/html,a%0Ab", false},
+      {"\r\n\tdata:text/html,<a\nb", "data:text/html,<a%0Ab", false},
+      // Inputs that merely contain "data:" later still have whitespace
+      // removed as usual.
+      {"dat\ta:text/html,<ab", "data:text/html,<ab", true},
+  };
+
+  for (const auto& test : cases) {
+    SCOPED_TRACE(test.input);
+
+    // Direct canonicalization.
+    {
+      Parsed parsed;
+      std::string out;
+      StdStringCanonOutput output(&out);
+      ASSERT_TRUE(Canonicalize(test.input, true, nullptr, &output, &parsed));
+      output.Complete();
+      EXPECT_EQ(test.canonicalized, out);
+      EXPECT_EQ(test.potentially_dangling_markup,
+                parsed.potentially_dangling_markup);
+    }
+
+    // Resolution against a base URL.
+    {
+      const char* base = "https://example.com/";
+      Parsed base_parsed = ParseStandardUrl(base);
+      Parsed parsed;
+      std::string out;
+      StdStringCanonOutput output(&out);
+      ASSERT_TRUE(ResolveRelative(base, base_parsed, test.input, nullptr,
+                                  &output, &parsed));
+      output.Complete();
+      EXPECT_EQ(test.canonicalized, out);
+      EXPECT_EQ(test.potentially_dangling_markup,
+                parsed.potentially_dangling_markup);
+    }
   }
 }
 
@@ -559,7 +617,7 @@ TEST_F(URLUtilTest, TestCanonicalizeIdempotencyWithLeadingControlCharacters) {
   }
 }
 
-TEST_F(URLUtilTest, TestHasInvalidURLEscapeSequences) {
+TEST_F(URLUtilTest, TestHasInvalidUrlEscapeSequences) {
   struct TestCase {
     const char* input;
     bool is_invalid;
@@ -636,7 +694,7 @@ TEST_F(URLUtilTest, TestHasInvalidURLEscapeSequences) {
 
   for (TestCase test_case : cases) {
     const char* input = test_case.input;
-    bool result = HasInvalidURLEscapeSequences(input);
+    bool result = HasInvalidUrlEscapeSequences(input);
     EXPECT_EQ(test_case.is_invalid, result)
         << "Invalid result for '" << input << "'";
   }

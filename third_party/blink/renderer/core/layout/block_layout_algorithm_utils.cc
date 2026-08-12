@@ -132,7 +132,7 @@ LayoutUnit CalculateOutOfFlowStaticInlineLevelOffset(
 
   // Find a layout opportunity, where we would have placed a zero-sized line.
   LayoutOpportunity opportunity = exclusion_space.FindLayoutOpportunity(
-      origin_bfc_offset, child_available_inline_size);
+      origin_bfc_offset, child_available_inline_size, direction);
 
   LayoutUnit child_line_offset = IsLtr(direction)
                                      ? opportunity.rect.LineStartOffset()
@@ -157,8 +157,11 @@ LayoutUnit CalculateOutOfFlowStaticInlineLevelOffset(
     inline_offset += opportunity.rect.InlineSize() - line_offset;
 
   // Adjust for the text-indent.
-  inline_offset += MinimumValueForLength(container_style.TextIndent(),
-                                         child_available_inline_size);
+  const Length& text_indent = container_style.TextIndent();
+  if (!text_indent.IsZero() && !container_style.IsTextIndentHanging()) {
+    inline_offset +=
+        MinimumValueForLength(text_indent, child_available_inline_size);
+  }
 
   return inline_offset;
 }

@@ -22,6 +22,8 @@
 #include "third_party/blink/renderer/core/layout/layout_theme.h"
 
 #include "build/build_config.h"
+#include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
+#include "third_party/blink/public/resources/grit/blink_resources.h"
 #include "third_party/blink/public/strings/grit/blink_strings.h"
 #include "third_party/blink/public/web/blink.h"
 #include "third_party/blink/renderer/core/css_value_keywords.h"
@@ -57,6 +59,7 @@
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/style/computed_style_initial_values.h"
+#include "third_party/blink/renderer/platform/data_resource_helper.h"
 #include "third_party/blink/renderer/platform/file_metadata.h"
 #include "third_party/blink/renderer/platform/fonts/font_selector.h"
 #include "third_party/blink/renderer/platform/graphics/touch_action.h"
@@ -64,7 +67,6 @@
 #include "third_party/blink/renderer/platform/text/writing_mode.h"
 #include "third_party/blink/renderer/platform/theme/web_theme_engine_helper.h"
 #include "third_party/blink/renderer/platform/web_test_support.h"
-#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/color_utils.h"
@@ -113,8 +115,11 @@ AppearanceValue AutoAppearanceFor(const Element& element) {
     if (id_value == shadow_element_names::kIdSliderThumb)
       return AppearanceValue::kSliderThumbHorizontal;
     if (id_value == shadow_element_names::kIdSearchClearButton ||
-        id_value == shadow_element_names::kIdClearButton)
+        (!RuntimeEnabledFeatures::
+             HTMLInputElementDropWebkitClearButtonEnabled() &&
+         id_value == shadow_element_names::kIdClearButton)) {
       return AppearanceValue::kSearchFieldCancelButton;
+    }
 
     // Slider container elements and -webkit-meter-inner-element don't have IDs.
     if (IsSliderContainer(element))
@@ -169,8 +174,22 @@ LayoutTheme& LayoutTheme::GetTheme() {
   return NativeTheme();
 }
 
-LayoutTheme::LayoutTheme() : has_custom_focus_ring_color_(false) {
-}
+Color LayoutTheme::active_selection_background_color_ =
+    Color::FromRGBA32(kDefaultActiveSelectionBgColor);
+Color LayoutTheme::active_selection_foreground_color_ =
+    Color::FromRGBA32(kDefaultActiveSelectionFgColor);
+Color LayoutTheme::inactive_selection_background_color_ =
+    Color::FromRGBA32(kDefaultInactiveSelectionBgColor);
+Color LayoutTheme::inactive_selection_foreground_color_ =
+    Color::FromRGBA32(kDefaultInactiveSelectionFgColor);
+Color LayoutTheme::active_list_box_selection_background_color_dark_mode_ =
+    Color::FromRGBA32(0xFF99C8FF);
+Color LayoutTheme::active_list_box_selection_foreground_color_dark_mode_ =
+    Color::FromRGBA32(0xFF3B3B3B);
+Color LayoutTheme::inactive_list_box_selection_background_color_dark_mode_ =
+    Color::FromRGBA32(0x4D3B3B3B);
+Color LayoutTheme::inactive_list_box_selection_foreground_color_dark_mode_ =
+    Color::FromRGBA32(0xFF323232);
 
 AppearanceValue LayoutTheme::AdjustAppearanceWithAuthorStyle(
     AppearanceValue appearance,
@@ -184,13 +203,9 @@ AppearanceValue LayoutTheme::AdjustAppearanceWithAuthorStyle(
 }
 
 AppearanceValue LayoutTheme::AdjustAppearanceWithElementType(
-    const ComputedStyleBuilder& builder,
-    const Element* element) {
-  AppearanceValue appearance = builder.EffectiveAppearance();
-  if (!element)
-    return AppearanceValue::kNone;
-
-  AppearanceValue auto_appearance = AutoAppearanceFor(*element);
+    AppearanceValue appearance,
+    const Element& element) {
+  AppearanceValue auto_appearance = AutoAppearanceFor(element);
   if (appearance == auto_appearance) {
     return appearance;
   }
@@ -206,8 +221,8 @@ AppearanceValue LayoutTheme::AdjustAppearanceWithElementType(
       return appearance;
     case AppearanceValue::kBaseSelect:
     case AppearanceValue::kBase:
-      return element->SupportsBaseAppearance(appearance) ? appearance
-                                                         : auto_appearance;
+      return element.SupportsBaseAppearance(appearance) ? appearance
+                                                        : auto_appearance;
 
     // Aliases of 'auto'.
     // https://drafts.csswg.org/css-ui-4/#typedef-appearance-compat-auto
@@ -252,7 +267,7 @@ AppearanceValue LayoutTheme::AdjustAppearanceWithElementType(
                  : auto_appearance;
 
     case AppearanceValue::kTextField:
-      if (const auto* input_element = DynamicTo<HTMLInputElement>(*element);
+      if (const auto* input_element = DynamicTo<HTMLInputElement>(element);
           input_element &&
           input_element->FormControlType() == FormControlType::kInputSearch) {
         return appearance;
@@ -263,11 +278,18 @@ AppearanceValue LayoutTheme::AdjustAppearanceWithElementType(
   return appearance;
 }
 
-void LayoutTheme::AdjustStyle(const Element* element,
+void LayoutTheme::AdjustStyle(const Element& element,
                               ComputedStyleBuilder& builder) {
   AppearanceValue original_appearance = builder.Appearance();
-  builder.SetEffectiveAppearance(original_appearance);
-  if (original_appearance == AppearanceValue::kNone) {
+  DCHECK_NE(original_appearance, AppearanceValue::kNone);
+  AppearanceValue appearance = AdjustAppearanceWithAuthorStyle(
+      AdjustAppearanceWithElementType(original_appearance, element), builder);
+  builder.SetEffectiveAppearance(appearance);
+  DCHECK_NE(appearance, AppearanceValue::kAuto);
+
+  if (RuntimeEnabledFeatures::FixMarkerSuppressionForAppearanceAutoEnabled() &&
+      appearance == AppearanceValue::kNone &&
+      original_appearance == AppearanceValue::kAuto) {
     return;
   }
 
@@ -282,32 +304,32 @@ void LayoutTheme::AdjustStyle(const Element* element,
       builder.Display() == EDisplay::kTableColumnGroup ||
       builder.Display() == EDisplay::kTableColumn ||
       builder.Display() == EDisplay::kTableCell ||
-      builder.Display() == EDisplay::kTableCaption)
+      builder.Display() == EDisplay::kTableCaption) {
     builder.SetDisplay(EDisplay::kInlineBlock);
-  else if (builder.Display() == EDisplay::kListItem ||
-           builder.Display() == EDisplay::kTable)
+  } else if (builder.Display() == EDisplay::kListItem ||
+             builder.Display() == EDisplay::kTable) {
     builder.SetDisplay(EDisplay::kBlock);
+  }
 
-  AppearanceValue appearance = AdjustAppearanceWithAuthorStyle(
-      AdjustAppearanceWithElementType(builder, element), builder);
-  builder.SetEffectiveAppearance(appearance);
-  DCHECK_NE(appearance, AppearanceValue::kAuto);
   if (appearance == AppearanceValue::kNone) {
     return;
   }
-  DCHECK(element);
   // After this point, a Node must be non-null Element if
   // EffectiveAppearance() != AppearanceValue::kNone.
 
-  AdjustControlPartStyle(builder);
-
-  // Call the appropriate style adjustment method based off the appearance
-  // value.
+  // Call the appropriate style adjustment method based off the appearance.
   switch (appearance) {
+    case AppearanceValue::kCheckbox:
+      return AdjustCheckboxStyle(builder);
+    case AppearanceValue::kInnerSpinButton:
+      return AdjustInnerSpinButtonStyle(builder);
     case AppearanceValue::kMenulist:
-      return AdjustMenuListStyle(builder);
     case AppearanceValue::kMenulistButton:
-      return AdjustMenuListButtonStyle(builder);
+      return AdjustMenuListStyle(builder);
+    case AppearanceValue::kPushButton:
+      return AdjustPushButtonStyle(builder);
+    case AppearanceValue::kRadio:
+      return AdjustRadioStyle(builder);
     case AppearanceValue::kSliderThumbHorizontal:
     case AppearanceValue::kSliderThumbVertical:
       return AdjustSliderThumbStyle(builder);
@@ -317,15 +339,19 @@ void LayoutTheme::AdjustStyle(const Element* element,
       break;
   }
 
-  if (IsSliderContainer(*element))
-    AdjustSliderContainerStyle(*element, builder);
+  if (IsSliderContainer(element)) {
+    builder.SetEffectiveAppearance(AppearanceValue::kNone);
+  }
 }
 
 String LayoutTheme::ExtraDefaultStyleSheet() {
-  // If you want to add something depending on a runtime flag here,
-  // please consider using `@supports blink-feature(flag-name)` in a
-  // stylesheet resource file.
-  return "@namespace 'http://www.w3.org/1999/xhtml';\n";
+  // If you want to add something depending on a runtime flag here, please
+  // consider using `@supports blink-feature(flag-name)` in a stylesheet
+  // resource file.
+  return RuntimeEnabledFeatures::InputMultipleFieldsUIEnabled()
+             ? UncompressResourceAsASCIIString(
+                   IDR_UASTYLE_THEME_INPUT_MULTIPLE_FIELDS_CSS)
+             : String();
 }
 
 String LayoutTheme::ExtraFullscreenStyleSheet() {
@@ -394,47 +420,66 @@ Color LayoutTheme::PlatformActiveSpellingMarkerHighlightColor() const {
 
 Color LayoutTheme::PlatformActiveSelectionBackgroundColor(
     mojom::blink::ColorScheme color_scheme) const {
-  // Use a blue color by default if the platform theme doesn't define anything.
-  return Color(0, 0, 255);
+  return active_selection_background_color_;
 }
 
 Color LayoutTheme::PlatformActiveSelectionForegroundColor(
     mojom::blink::ColorScheme color_scheme) const {
-  // Use a white color by default if the platform theme doesn't define anything.
-  return Color::kWhite;
+  return active_selection_foreground_color_;
 }
 
 Color LayoutTheme::PlatformInactiveSelectionBackgroundColor(
     mojom::blink::ColorScheme color_scheme) const {
-  // Use a grey color by default if the platform theme doesn't define anything.
-  // This color matches Firefox's inactive color.
-  return Color(176, 176, 176);
+  return inactive_selection_background_color_;
 }
 
 Color LayoutTheme::PlatformInactiveSelectionForegroundColor(
     mojom::blink::ColorScheme color_scheme) const {
-  // Use a black color by default.
-  return Color::kBlack;
+  return inactive_selection_foreground_color_;
 }
 
 Color LayoutTheme::PlatformActiveListBoxSelectionBackgroundColor(
     mojom::blink::ColorScheme color_scheme) const {
-  return PlatformActiveSelectionBackgroundColor(color_scheme);
+  return color_scheme == mojom::blink::ColorScheme::kDark
+             ? active_list_box_selection_background_color_dark_mode_
+             : PlatformActiveSelectionBackgroundColor(color_scheme);
 }
 
 Color LayoutTheme::PlatformActiveListBoxSelectionForegroundColor(
     mojom::blink::ColorScheme color_scheme) const {
-  return PlatformActiveSelectionForegroundColor(color_scheme);
+  return color_scheme == mojom::blink::ColorScheme::kDark
+             ? active_list_box_selection_foreground_color_dark_mode_
+             : PlatformActiveSelectionForegroundColor(color_scheme);
 }
 
 Color LayoutTheme::PlatformInactiveListBoxSelectionBackgroundColor(
     mojom::blink::ColorScheme color_scheme) const {
-  return PlatformInactiveSelectionBackgroundColor(color_scheme);
+  return color_scheme == mojom::blink::ColorScheme::kDark
+             ? inactive_list_box_selection_background_color_dark_mode_
+             : PlatformInactiveSelectionBackgroundColor(color_scheme);
 }
 
 Color LayoutTheme::PlatformInactiveListBoxSelectionForegroundColor(
     mojom::blink::ColorScheme color_scheme) const {
-  return PlatformInactiveSelectionForegroundColor(color_scheme);
+  return color_scheme == mojom::blink::ColorScheme::kDark
+             ? inactive_list_box_selection_foreground_color_dark_mode_
+             : PlatformInactiveSelectionForegroundColor(color_scheme);
+}
+
+void LayoutTheme::SetSelectionColors(Color active_background_color,
+                                     Color active_foreground_color,
+                                     Color inactive_background_color,
+                                     Color inactive_foreground_color) {
+  if (active_selection_background_color_ != active_background_color ||
+      active_selection_foreground_color_ != active_foreground_color ||
+      inactive_selection_background_color_ != inactive_background_color ||
+      inactive_selection_foreground_color_ != inactive_foreground_color) {
+    active_selection_background_color_ = active_background_color;
+    active_selection_foreground_color_ = active_foreground_color;
+    inactive_selection_background_color_ = inactive_background_color;
+    inactive_selection_foreground_color_ = inactive_foreground_color;
+    PlatformColorsDidChange();
+  }
 }
 
 bool LayoutTheme::IsControlStyled(AppearanceValue appearance,
@@ -498,50 +543,51 @@ void LayoutTheme::AdjustRadioStyle(ComputedStyleBuilder& builder) const {
   builder.SetInlineBlockBaselineEdge(EInlineBlockBaselineEdge::kBorderBox);
 }
 
-void LayoutTheme::AdjustButtonStyle(ComputedStyleBuilder&) const {}
-
-void LayoutTheme::AdjustInnerSpinButtonStyle(ComputedStyleBuilder&) const {}
-
-void LayoutTheme::AdjustMenuListStyle(ComputedStyleBuilder& builder) const {
-  // Menulists should have visible overflow
-  // https://bugs.webkit.org/show_bug.cgi?id=21287
-  builder.SetOverflowX(EOverflow::kVisible);
-  builder.SetOverflowY(EOverflow::kVisible);
+void LayoutTheme::AdjustPushButtonStyle(ComputedStyleBuilder& builder) const {
+  builder.SetLineHeight(ComputedStyleInitialValues::InitialLineHeight());
 }
 
-void LayoutTheme::AdjustMenuListButtonStyle(ComputedStyleBuilder&) const {}
-
-void LayoutTheme::AdjustSliderContainerStyle(
-    const Element& element,
+void LayoutTheme::AdjustInnerSpinButtonStyle(
     ComputedStyleBuilder& builder) const {
-  DCHECK(IsSliderContainer(element));
+  const Length size =
+      Length::Fixed(WebThemeEngineHelper::GetNativeThemeEngine()
+                        ->GetSize(WebThemeEngine::kPartInnerSpinButton)
+                        .width() *
+                    builder.EffectiveZoom());
 
-  if (!IsHorizontalWritingMode(builder.GetWritingMode())) {
-    builder.SetTouchAction(TouchAction::kPanX);
-  } else if (RuntimeEnabledFeatures::
-                 NonStandardAppearanceValueSliderVerticalEnabled() &&
-             builder.EffectiveAppearance() ==
-                 AppearanceValue::kSliderVertical) {
-    builder.SetTouchAction(TouchAction::kPanX);
-    builder.SetWritingMode(WritingMode::kVerticalRl);
-    // It's always in RTL because the slider value increases up even in LTR.
-    builder.SetDirection(TextDirection::kRtl);
+  if (IsHorizontalWritingMode(builder.GetWritingMode())) {
+    builder.SetWidth(size);
+    builder.SetMinWidth(size);
   } else {
-    builder.SetTouchAction(TouchAction::kPanY);
-    builder.SetWritingMode(WritingMode::kHorizontalTb);
-    if (To<HTMLInputElement>(element.OwnerShadowHost())->DataList()) {
-      builder.SetAlignSelf(StyleSelfAlignmentData(ItemPosition::kCenter,
-                                                  OverflowAlignment::kUnsafe));
-    }
+    builder.SetHeight(size);
+    builder.SetMinHeight(size);
   }
-  builder.SetEffectiveAppearance(AppearanceValue::kNone);
+}
+
+void LayoutTheme::AdjustMenuListStyle(ComputedStyleBuilder& builder) const {
+  // Height is locked to auto on all browsers.
+  builder.ResetLineHeight();
 }
 
 void LayoutTheme::AdjustSliderThumbStyle(ComputedStyleBuilder& builder) const {
   AdjustSliderThumbSize(builder);
 }
 
-void LayoutTheme::AdjustSliderThumbSize(ComputedStyleBuilder&) const {}
+void LayoutTheme::AdjustSliderThumbSize(ComputedStyleBuilder& builder) const {
+  const gfx::SizeF size = ScaleSize(
+      gfx::SizeF(WebThemeEngineHelper::GetNativeThemeEngine()->GetSize(
+          WebThemeEngine::kPartSliderThumb)),
+      builder.EffectiveZoom());
+
+  const AppearanceValue appearance = builder.EffectiveAppearance();
+  if (appearance == AppearanceValue::kSliderThumbHorizontal) {
+    builder.SetWidth(Length::Fixed(size.width()));
+    builder.SetHeight(Length::Fixed(size.height()));
+  } else if (appearance == AppearanceValue::kSliderThumbVertical) {
+    builder.SetWidth(Length::Fixed(size.height()));
+    builder.SetHeight(Length::Fixed(size.width()));
+  }
+}
 
 void LayoutTheme::AdjustSearchFieldCancelButtonStyle(
     ComputedStyleBuilder&) const {}
@@ -568,30 +614,31 @@ base::TimeDelta LayoutTheme::CaretBlinkInterval() const {
 Color LayoutTheme::SystemColor(CSSValueID css_value_id,
                                mojom::blink::ColorScheme color_scheme,
                                const ui::ColorProvider* color_provider,
-                               bool is_in_web_app_scope) const {
+                               bool can_expose_accent_color) const {
   if (color_provider && !WebTestSupport::IsRunningWebTest()) {
-    return SystemColorFromColorProvider(css_value_id, color_scheme,
-                                        color_provider, is_in_web_app_scope);
+    return SystemColorFromColorProvider(
+        css_value_id, color_scheme, color_provider, can_expose_accent_color);
   }
   return DefaultSystemColor(css_value_id, color_scheme, color_provider,
-                            is_in_web_app_scope);
+                            can_expose_accent_color);
 }
 
 Color LayoutTheme::DefaultSystemColor(CSSValueID css_value_id,
                                       mojom::blink::ColorScheme color_scheme,
                                       const ui::ColorProvider* color_provider,
-                                      bool is_in_web_app_scope) const {
+                                      bool can_expose_accent_color) const {
   // The source for the deprecations commented on below is
   // https://www.w3.org/TR/css-color-4/#deprecated-system-colors.
 
   switch (css_value_id) {
     case CSSValueID::kAccentcolor:
       return RuntimeEnabledFeatures::CSSAccentColorKeywordEnabled()
-                 ? GetAccentColorOrDefault(color_scheme, is_in_web_app_scope)
+                 ? GetAccentColorOrDefault(color_scheme,
+                                           can_expose_accent_color)
                  : Color();
     case CSSValueID::kAccentcolortext:
       return RuntimeEnabledFeatures::CSSAccentColorKeywordEnabled()
-                 ? GetAccentColorText(color_scheme, is_in_web_app_scope)
+                 ? GetAccentColorText(color_scheme, can_expose_accent_color)
                  : Color();
     case CSSValueID::kActivetext:
       return Color::FromRGBA32(0xFFFF0000);
@@ -621,6 +668,17 @@ Color LayoutTheme::DefaultSystemColor(CSSValueID css_value_id,
                  : Color::FromRGBA32(0xFF000000);
     case CSSValueID::kCanvas:
     // The following system colors were deprecated to default to Canvas.
+    case CSSValueID::kActivecaption:
+      if (RuntimeEnabledFeatures::CSSActiveCaptionMapsToCanvasEnabled()) {
+        return color_scheme == mojom::blink::ColorScheme::kDark
+                   ? Color::FromRGBA32(0xFF121212)
+                   : Color::FromRGBA32(0xFFFFFFFF);
+      } else {
+        // The old behavior maps to CanvasText
+        return color_scheme == mojom::blink::ColorScheme::kDark
+                   ? Color::FromRGBA32(0xFFFFFFFF)
+                   : Color::FromRGBA32(0xFF000000);
+      }
     case CSSValueID::kAppworkspace:
     case CSSValueID::kBackground:
     case CSSValueID::kInactivecaption:
@@ -633,7 +691,6 @@ Color LayoutTheme::DefaultSystemColor(CSSValueID css_value_id,
                  : Color::FromRGBA32(0xFFFFFFFF);
     case CSSValueID::kCanvastext:
     // The following system colors were deprecated to default to CanvasText.
-    case CSSValueID::kActivecaption:
     case CSSValueID::kCaptiontext:
     case CSSValueID::kInfotext:
     case CSSValueID::kMenutext:
@@ -672,8 +729,8 @@ Color LayoutTheme::DefaultSystemColor(CSSValueID css_value_id,
                  : Color::FromRGBA32(0xFF000000);
     case CSSValueID::kVisitedtext:
       return color_scheme == mojom::blink::ColorScheme::kDark
-                  ? Color::FromRGBA32(0xFFD0ADF0)
-                  : Color::FromRGBA32(0xFF551A8B);
+                 ? Color::FromRGBA32(0xFFD0ADF0)
+                 : Color::FromRGBA32(0xFF551A8B);
     case CSSValueID::kSelecteditem:
     case CSSValueID::kInternalActiveListBoxSelection:
       return ActiveListBoxSelectionBackgroundColor(color_scheme);
@@ -692,20 +749,20 @@ Color LayoutTheme::DefaultSystemColor(CSSValueID css_value_id,
       return PlatformTextSearchHighlightColor(/* active_match */ false,
                                               /* in_forced_colors */ false,
                                               color_scheme, color_provider,
-                                              is_in_web_app_scope);
+                                              can_expose_accent_color);
     case CSSValueID::kInternalSearchTextColor:
       return PlatformTextSearchColor(/* active_match */ false,
                                      /* in_forced_colors */ false, color_scheme,
-                                     color_provider, is_in_web_app_scope);
+                                     color_provider, can_expose_accent_color);
     case CSSValueID::kInternalCurrentSearchColor:
       return PlatformTextSearchHighlightColor(/* active_match */ true,
                                               /* in_forced_colors */ false,
                                               color_scheme, color_provider,
-                                              is_in_web_app_scope);
+                                              can_expose_accent_color);
     case CSSValueID::kInternalCurrentSearchTextColor:
       return PlatformTextSearchColor(/* active_match */ true,
                                      /* in_forced_colors */ false, color_scheme,
-                                     color_provider, is_in_web_app_scope);
+                                     color_provider, can_expose_accent_color);
     default:
       break;
   }
@@ -718,7 +775,7 @@ Color LayoutTheme::SystemColorFromColorProvider(
     CSSValueID css_value_id,
     mojom::blink::ColorScheme color_scheme,
     const ui::ColorProvider* color_provider,
-    bool is_in_web_app_scope) const {
+    bool can_expose_accent_color) const {
   SkColor system_theme_color;
   switch (css_value_id) {
     case CSSValueID::kActivetext:
@@ -770,6 +827,12 @@ Color LayoutTheme::SystemColorFromColorProvider(
       break;
     case CSSValueID::kCanvas:
     // Deprecated colors, see DefaultSystemColor().
+    case CSSValueID::kActivecaption:
+      system_theme_color = color_provider->GetColor(
+          RuntimeEnabledFeatures::CSSActiveCaptionMapsToCanvasEnabled()
+              ? ui::kColorCssSystemWindow
+              : ui::kColorCssSystemWindowText);
+      break;
     case CSSValueID::kAppworkspace:
     case CSSValueID::kBackground:
     case CSSValueID::kInactivecaption:
@@ -781,7 +844,6 @@ Color LayoutTheme::SystemColorFromColorProvider(
       break;
     case CSSValueID::kCanvastext:
     // Deprecated colors, see DefaultSystemColor().
-    case CSSValueID::kActivecaption:
     case CSSValueID::kCaptiontext:
     case CSSValueID::kInfotext:
     case CSSValueID::kMenutext:
@@ -791,7 +853,7 @@ Color LayoutTheme::SystemColorFromColorProvider(
       break;
     default:
       return DefaultSystemColor(css_value_id, color_scheme, color_provider,
-                                is_in_web_app_scope);
+                                can_expose_accent_color);
   }
 
   return Color::FromSkColor(system_theme_color);
@@ -810,11 +872,11 @@ Color LayoutTheme::PlatformTextSearchHighlightColor(
     bool in_forced_colors,
     mojom::blink::ColorScheme color_scheme,
     const ui::ColorProvider* color_provider,
-    bool is_in_web_app_scope) const {
+    bool can_expose_accent_color) const {
   if (active_match) {
     if (in_forced_colors) {
       return GetTheme().SystemColor(CSSValueID::kHighlight, color_scheme,
-                                    color_provider, is_in_web_app_scope);
+                                    color_provider, can_expose_accent_color);
     }
     return Color(255, 150, 50);  // Orange.
   }
@@ -826,40 +888,31 @@ Color LayoutTheme::PlatformTextSearchColor(
     bool in_forced_colors,
     mojom::blink::ColorScheme color_scheme,
     const ui::ColorProvider* color_provider,
-    bool is_in_web_app_scope) const {
+    bool can_expose_accent_color) const {
   if (in_forced_colors && active_match) {
     return GetTheme().SystemColor(CSSValueID::kHighlighttext, color_scheme,
-                                  color_provider, is_in_web_app_scope);
+                                  color_provider, can_expose_accent_color);
   }
   return Color::kBlack;
 }
 
-Color LayoutTheme::TapHighlightColor() {
-  return GetTheme().PlatformTapHighlightColor();
-}
-
 void LayoutTheme::SetCustomFocusRingColor(const Color& c) {
-  const bool changed =
-      !has_custom_focus_ring_color_ || custom_focus_ring_color_ != c;
-  custom_focus_ring_color_ = c;
-  has_custom_focus_ring_color_ = true;
-  if (changed) {
-    Page::PlatformColorsChanged();
+  if (c == custom_focus_ring_color_) {
+    return;
   }
+  custom_focus_ring_color_ = c;
+  Page::PlatformColorsChanged();
 }
 
 Color LayoutTheme::FocusRingColor(
     mojom::blink::ColorScheme color_scheme) const {
-  return has_custom_focus_ring_color_ ? custom_focus_ring_color_
-                                      : GetTheme().PlatformFocusRingColor();
-}
-
-bool LayoutTheme::DelegatesMenuListRendering() const {
-  return delegates_menu_list_rendering_;
-}
-
-void LayoutTheme::SetDelegatesMenuListRenderingForTesting(bool flag) {
-  delegates_menu_list_rendering_ = flag;
+  if (color_scheme == mojom::blink::ColorScheme::kDark &&
+      RuntimeEnabledFeatures::
+          FocusRingRespectExplicitOutlineColorInDarkModeEnabled()) {
+    return Color::FromRGB(0xEE, 0xEE, 0xEE);
+  }
+  constexpr Color default_focus_ring_color = Color::FromRGBA32(0xFFE59700);
+  return custom_focus_ring_color_.value_or(default_focus_ring_color);
 }
 
 String LayoutTheme::DisplayNameForFile(const File& file) const {
@@ -871,33 +924,6 @@ bool LayoutTheme::SupportsCalendarPicker(InputType::Type type) const {
   return type == InputType::Type::kTime || type == InputType::Type::kDate ||
          type == InputType::Type::kDateTimeLocal ||
          type == InputType::Type::kMonth || type == InputType::Type::kWeek;
-}
-
-void LayoutTheme::AdjustControlPartStyle(ComputedStyleBuilder& builder) {
-  // Call the appropriate style adjustment method based off the appearance
-  // value.
-  switch (builder.EffectiveAppearance()) {
-    case AppearanceValue::kCheckbox:
-      return AdjustCheckboxStyle(builder);
-    case AppearanceValue::kRadio:
-      return AdjustRadioStyle(builder);
-    case AppearanceValue::kPushButton:
-    case AppearanceValue::kSquareButton:
-    case AppearanceValue::kButton:
-      return AdjustButtonStyle(builder);
-    case AppearanceValue::kInnerSpinButton:
-      return AdjustInnerSpinButtonStyle(builder);
-    default:
-      break;
-  }
-}
-
-bool LayoutTheme::HasCustomFocusRingColor() const {
-  return has_custom_focus_ring_color_;
-}
-
-Color LayoutTheme::GetCustomFocusRingColor() const {
-  return custom_focus_ring_color_;
 }
 
 bool LayoutTheme::IsAccentColorCustomized(
@@ -928,24 +954,25 @@ Color LayoutTheme::GetSystemAccentColor(
 
 Color LayoutTheme::GetAccentColorOrDefault(
     mojom::blink::ColorScheme color_scheme,
-    bool is_in_web_app_scope) const {
+    bool can_expose_accent_color) const {
   // This is from the kAccent color from NativeThemeBase::GetControlColor
   const Color kDefaultAccentColor = Color(0x00, 0x75, 0xFF);
   Color accent_color = Color();
   // Currently OS-defined accent color is exposed via System AccentColor keyword
-  // ONLY for installed WebApps where fingerprinting risk is not as large of a
-  // risk.
+  // ONLY for installed WebApps running in the browser's initial ("Default")
+  // profile, where fingerprinting risk is not as large of a concern and
+  // cross-profile fingerprinting is prevented.
   if (RuntimeEnabledFeatures::CSSAccentColorKeywordEnabled() &&
-      is_in_web_app_scope) {
+      can_expose_accent_color) {
     accent_color = GetSystemAccentColor(color_scheme);
   }
   return accent_color == Color() ? kDefaultAccentColor : accent_color;
 }
 
 Color LayoutTheme::GetAccentColorText(mojom::blink::ColorScheme color_scheme,
-                                      bool is_in_web_app_scope) const {
+                                      bool can_expose_accent_color) const {
   Color accent_color =
-      GetAccentColorOrDefault(color_scheme, is_in_web_app_scope);
+      GetAccentColorOrDefault(color_scheme, can_expose_accent_color);
   // This logic matches AccentColorText in Firefox. If the accent color to draw
   // text on is dark, then use white. If it's light, then use dark.
   return color_utils::GetRelativeLuminance4f(accent_color.toSkColor4f()) <= 128

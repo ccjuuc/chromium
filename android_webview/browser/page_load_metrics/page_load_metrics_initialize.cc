@@ -5,11 +5,14 @@
 #include "android_webview/browser/page_load_metrics/page_load_metrics_initialize.h"
 
 #include "android_webview/browser/page_load_metrics/aw_gws_page_load_metrics_observer.h"
+#include "android_webview/browser/page_load_metrics/aw_load_url_metrics_observer.h"
 #include "android_webview/browser/page_load_metrics/aw_web_performance_metrics_observer.h"
 #include "android_webview/browser/page_load_metrics/service_level_page_load_metrics_observer.h"
+#include "android_webview/common/aw_features.h"
 #include "components/page_load_metrics/browser/features.h"
 #include "components/page_load_metrics/browser/metrics_web_contents_observer.h"
 #include "components/page_load_metrics/browser/observers/abandoned_page_load_metrics_observer.h"
+#include "components/page_load_metrics/browser/observers/preload_serving_metrics_page_load_metrics_observer.h"
 #include "components/page_load_metrics/browser/observers/third_party_metrics_observer.h"
 #include "components/page_load_metrics/browser/page_load_metrics_embedder_base.h"
 #include "components/page_load_metrics/browser/page_load_tracker.h"
@@ -59,8 +62,16 @@ void PageLoadMetricsEmbedder::RegisterObservers(
   tracker->AddObserver(std::make_unique<AbandonedPageLoadMetricsObserver>());
   tracker->AddObserver(std::make_unique<GWSAbandonedPageLoadMetricsObserver>());
   tracker->AddObserver(std::make_unique<AwGWSPageLoadMetricsObserver>());
+  tracker->AddObserver(std::make_unique<AwLoadUrlMetricsObserver>());
   tracker->AddObserver(std::make_unique<ServiceLevelPageLoadMetricsObserver>());
-  tracker->AddObserver(std::make_unique<AwWebPerformanceMetricsObserver>());
+  if (base::FeatureList::IsEnabled(
+          features::kWebViewWebPerformanceMetricsReporting)) {
+    tracker->AddObserver(std::make_unique<AwWebPerformanceMetricsObserver>());
+  }
+  if (base::FeatureList::IsEnabled(features::kWebViewPreloadServingMetrics)) {
+    tracker->AddObserver(
+        std::make_unique<PreloadServingMetricsPageLoadMetricsObserver>());
+  }
 }
 
 bool PageLoadMetricsEmbedder::IsNewTabPageUrl(const GURL& url) {

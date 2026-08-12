@@ -12,9 +12,11 @@
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
+#include "third_party/blink/renderer/core/loader/empty_clients.h"
 #include "third_party/blink/renderer/core/page/scoped_page_pauser.h"
 #include "third_party/blink/renderer/core/page/validation_message_client.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 
 namespace blink {
 
@@ -76,10 +78,10 @@ TEST_F(HTMLFormControlElementTest, customValidationMessageTextDirection) {
 
   auto* input = To<HTMLInputElement>(GetElementById("input"));
   input->setCustomValidity(
-      String::FromUTF8("\xD8\xB9\xD8\xB1\xD8\xA8\xD9\x89"));
+      String::FromUtf8("\xD8\xB9\xD8\xB1\xD8\xA8\xD9\x89"));
   input->setAttribute(
       html_names::kTitleAttr,
-      AtomicString::FromUTF8("\xD8\xB9\xD8\xB1\xD8\xA8\xD9\x89"));
+      AtomicString::FromUtf8("\xD8\xB9\xD8\xB1\xD8\xA8\xD9\x89"));
 
   String message = input->validationMessage().StripWhiteSpace();
   String sub_message = input->ValidationSubMessage().StripWhiteSpace();
@@ -99,7 +101,7 @@ TEST_F(HTMLFormControlElementTest, customValidationMessageTextDirection) {
   EXPECT_EQ(TextDirection::kRtl, message_dir);
   EXPECT_EQ(TextDirection::kLtr, sub_message_dir);
 
-  input->setCustomValidity(String::FromUTF8("Main message."));
+  input->setCustomValidity("Main message.");
   message = input->validationMessage().StripWhiteSpace();
   sub_message = input->ValidationSubMessage().StripWhiteSpace();
   input->FindCustomValidationMessageTextDirection(message, message_dir,
@@ -227,5 +229,67 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple("select", "", FormControlType::kSelectOne),
         std::make_tuple("select", "multiple", FormControlType::kSelectMultiple),
         std::make_tuple("textarea", "", FormControlType::kTextArea)));
+
+TEST_F(HTMLFormControlElementTest, IsReadOnly) {
+  ScopedFixHTMLFormControlElementIsReadOnlyForTest scoped_feature(
+      /*enabled=*/true);
+
+  SetHtmlInnerHTML(
+      "<body>"
+      "<button id=btn readonly>Click Me</button>"
+      "<select id=sel readonly><option>Option</option></select>"
+      "<input id=text type=text readonly>"
+      "<input id=checkbox type=checkbox readonly>"
+      "<textarea id=textarea readonly></textarea>"
+      "</body>");
+
+  auto* btn = To<HTMLFormControlElement>(GetElementById("btn"));
+  auto* sel = To<HTMLFormControlElement>(GetElementById("sel"));
+  auto* text = To<HTMLFormControlElement>(GetElementById("text"));
+  auto* checkbox = To<HTMLFormControlElement>(GetElementById("checkbox"));
+  auto* textarea = To<HTMLFormControlElement>(GetElementById("textarea"));
+
+  EXPECT_FALSE(btn->IsReadOnly());
+  EXPECT_FALSE(sel->IsReadOnly());
+  EXPECT_TRUE(text->IsReadOnly());
+  EXPECT_FALSE(checkbox->IsReadOnly());
+  EXPECT_TRUE(textarea->IsReadOnly());
+}
+
+class AutofillTestChromeClient : public EmptyChromeClient {
+ public:
+  bool IsAutofillableElement(const HTMLFormControlElement& element) override {
+    return is_autofillable_;
+  }
+  void SetIsAutofillable(bool is_autofillable) {
+    is_autofillable_ = is_autofillable;
+  }
+
+ private:
+  bool is_autofillable_ = false;
+};
+
+class HTMLFormControlElementAutofillTest : public PageTestBase {
+ protected:
+  void SetUp() override {
+    chrome_client_ = MakeGarbageCollected<AutofillTestChromeClient>();
+    SetupPageWithClients(chrome_client_);
+    GetDocument().SetMimeType(AtomicString("text/html"));
+  }
+
+  Persistent<AutofillTestChromeClient> chrome_client_;
+};
+
+TEST_F(HTMLFormControlElementAutofillTest, IsAutofillable) {
+  SetHtmlInnerHTML("<body><input id=input></body>");
+  auto* input = To<HTMLFormControlElement>(GetElementById("input"));
+  ASSERT_NE(input, nullptr);
+
+  chrome_client_->SetIsAutofillable(false);
+  EXPECT_FALSE(input->IsAutofillable());
+
+  chrome_client_->SetIsAutofillable(true);
+  EXPECT_TRUE(input->IsAutofillable());
+}
 
 }  // namespace blink

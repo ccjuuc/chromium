@@ -21,7 +21,6 @@
 #include "chrome/browser/ash/login/screens/base_screen.h"
 #include "chrome/browser/ash/login/screens/osauth/base_osauth_setup_screen.h"
 #include "chrome/browser/ash/login/wizard_context.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -66,7 +65,7 @@ void MaybeExitWhenNoOnlinePassword(bool has_online_password) {
     return;
   }
   LOG(ERROR) << "Managed users should have online password by this point";
-  chrome::AttemptUserExit();
+  session_manager::SessionManager::Get()->RequestSignOut();
 }
 
 }  // namespace
@@ -123,7 +122,7 @@ void PasswordSelectionScreen::HideImpl() {
   is_shown_ = false;
 }
 
-void PasswordSelectionScreen::OnUserAction(const base::Value::List& args) {
+void PasswordSelectionScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionBack) {
     exit_callback_.Run(Result::BACK);
@@ -169,6 +168,8 @@ void PasswordSelectionScreen::InspectContext(UserContext* user_context) {
   CHECK(user_context->HasAuthFactorsConfiguration());
   auth_factors_config_ = user_context->GetAuthFactorsConfiguration();
   has_online_password_ = user_context->GetOnlinePassword().has_value();
+  is_saml_flow_ =
+      user_context->GetAuthFlow() == UserContext::AUTH_FLOW_GAIA_WITH_SAML;
   account_id_ = user_context->GetAccountId();
 }
 
@@ -221,8 +222,24 @@ void PasswordSelectionScreen::ProcessOptions() {
         }
         return;
       }
-    case WizardContext::AuthChangeFlow::kInitialSetup:
+    case WizardContext::AuthChangeFlow::kInitialSetup: {
+      if (ash::features::IsManagedLocalPinAndPasswordEnabled()) {
+        CHECK(is_saml_flow_.has_value());
+        auto allowed_factors =
+            AuthPolicyConnector::Get()->AllowedLocalAuthFactors(account_id_);
+        bool local_factors_enabled_by_policy =
+            allowed_factors.has_value() && !allowed_factors->empty();
+        if (local_factors_enabled_by_policy && is_saml_flow_.value()) {
+          LOG(WARNING) << "Local auth factors are allowed via policy, forcing "
+                          "local password for SAML users";
+
+          context()->knowledge_factor_setup.local_password_forced = true;
+          exit_callback_.Run(Result::LOCAL_PASSWORD_FORCED);
+          return;
+        }
+      }
       break;
+    }
   }
 
   if (context()->skip_post_login_screens_for_tests) {

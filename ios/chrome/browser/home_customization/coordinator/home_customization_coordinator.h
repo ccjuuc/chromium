@@ -11,6 +11,7 @@
 #import "ios/chrome/browser/shared/coordinator/chrome_coordinator/chrome_coordinator.h"
 
 @protocol HomeCustomizationDelegate;
+@protocol PromosManagerUIHandler;
 @protocol SnackbarCommands;
 
 // The coordinator for the Home surface's customization menu.
@@ -19,6 +20,19 @@
 
 // Delegate for communicating back to the Home surface.
 @property(nonatomic, weak) id<HomeCustomizationDelegate> delegate;
+
+// Whether or not the coordinator was opened for user education. If it was, then
+// the coordinator is responsible for alerting the Feature Engagement Tracker
+// when it is dismissed.
+@property(nonatomic, assign) BOOL openedForUserEducation;
+
+// UI handler to alert upon dismissal, if the menu was presented as part of a
+// promo.
+@property(nonatomic, weak) id<PromosManagerUIHandler> promosManagerUIHandler;
+
+// Whether to display a snackbar upon dismissal informing the user that their
+// uploaded photo will not sync across devices.
+@property(nonatomic, readonly) BOOL shouldShowPhotoNotSyncedSnackbarOnDismiss;
 
 // Updates the data for all existing menu pages.
 - (void)updateMenuData;

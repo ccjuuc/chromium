@@ -4,7 +4,7 @@
 
 package org.chromium.chrome.browser.ntp_customization.theme.theme_collections;
 
-import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundImageType.THEME_COLLECTION;
+import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.THEME_COLLECTION;
 
 import android.content.Context;
 import android.graphics.Bitmap;
@@ -17,6 +17,8 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationConfigManager;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
 import org.chromium.chrome.browser.ntp_customization.theme.upload_image.BackgroundImageInfo;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataThemeCollection;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.PlatformType;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.components.image_fetcher.ImageFetcher;
 import org.chromium.url.GURL;
@@ -36,9 +38,11 @@ public class NtpThemeCollectionManager {
     private final Context mContext;
     private final NtpCustomizationConfigManager mNtpCustomizationConfigManager;
     private final Callback<Bitmap> mOnThemeImageSelectedCallback;
+    private boolean mOtherBackgroundTypeSelected;
     private final @Nullable ImageFetcher mImageFetcher;
     private boolean mIsDestroyed;
     private @Nullable Runnable mFetchNextImageRunnable;
+    private @Nullable CollectionImage mSelectingThemeCollectionImage;
 
     /**
      * Constructs a new NtpThemeCollectionManager.
@@ -84,7 +88,7 @@ public class NtpThemeCollectionManager {
     }
 
     public @Nullable String getSelectedThemeCollectionId() {
-        if (mNtpCustomizationConfigManager.getBackgroundImageType() != THEME_COLLECTION) {
+        if (mNtpCustomizationConfigManager.getBackgroundType() != THEME_COLLECTION) {
             return null;
         }
 
@@ -93,7 +97,7 @@ public class NtpThemeCollectionManager {
     }
 
     public @Nullable GURL getSelectedThemeCollectionImageUrl() {
-        if (mNtpCustomizationConfigManager.getBackgroundImageType() != THEME_COLLECTION) {
+        if (mNtpCustomizationConfigManager.getBackgroundType() != THEME_COLLECTION) {
             return null;
         }
 
@@ -102,7 +106,7 @@ public class NtpThemeCollectionManager {
     }
 
     public boolean getIsDailyRefreshEnabled() {
-        if (mNtpCustomizationConfigManager.getBackgroundImageType() != THEME_COLLECTION) {
+        if (mNtpCustomizationConfigManager.getBackgroundType() != THEME_COLLECTION) {
             return false;
         }
 
@@ -116,20 +120,23 @@ public class NtpThemeCollectionManager {
      * @param image The {@link CollectionImage} selected by the user.
      */
     public void setThemeCollectionImage(CollectionImage image) {
-        mFetchNextImageRunnable = null;
+        resetSelectionState();
+        mSelectingThemeCollectionImage = image;
         mNtpThemeCollectionBridge.setThemeCollectionImage(image);
     }
 
     /** Sets the user-uploaded background image. */
     public void selectLocalBackgroundImage() {
-        mFetchNextImageRunnable = null;
+        resetSelectionState();
         mNtpThemeCollectionBridge.selectLocalBackgroundImage();
+        mOtherBackgroundTypeSelected = true;
     }
 
     /** Resets the custom background. */
     public void resetCustomBackground() {
-        mFetchNextImageRunnable = null;
+        resetSelectionState();
         mNtpThemeCollectionBridge.resetCustomBackground();
+        mOtherBackgroundTypeSelected = true;
     }
 
     /**
@@ -156,14 +163,7 @@ public class NtpThemeCollectionManager {
                     }
 
                     BackgroundImageInfo backgroundImageInfo =
-                            NtpCustomizationUtils.calculateInitialThemeCollectionImageMatrices(
-                                    mContext, bitmap);
-
-                    if (isNextThemeCollectionImage(info)) {
-                        NtpCustomizationUtils.saveDailyRefreshBackgroundInfo(
-                                info, bitmap, backgroundImageInfo);
-                        return;
-                    }
+                            NtpCustomizationUtils.getDefaultBackgroundImageInfo(mContext, bitmap);
 
                     // We do not set the theme collection image as the background if the bottom
                     // sheet is dismissed; this is done to ensure proper theme color handling. Note
@@ -173,11 +173,25 @@ public class NtpThemeCollectionManager {
                         return;
                     }
 
-                    mNtpCustomizationConfigManager.onThemeCollectionImageSelected(
-                            bitmap, info, backgroundImageInfo);
+                    if (!shouldProcessThemeUpdate(info)) {
+                        return;
+                    }
+
+                    String fileId = null;
+                    if (NtpCustomizationUtils.isNTPCustomizationSyncEnabled()) {
+                        fileId = NtpCustomizationUtils.getFileName(info.backgroundUrl.getPath());
+                    }
+                    NtpBackgroundDataThemeCollection backgroundData =
+                            new NtpBackgroundDataThemeCollection(
+                                    PlatformType.ANDROID,
+                                    info,
+                                    backgroundImageInfo,
+                                    bitmap,
+                                    /* primaryColor= */ null,
+                                    fileId);
+                    mNtpCustomizationConfigManager.onBackgroundDataChanged(
+                            mContext, backgroundData);
                     mOnThemeImageSelectedCallback.onResult(bitmap);
-                    NtpCustomizationUtils.saveBackgroundInfo(
-                            info, bitmap, backgroundImageInfo, /* skipSavingPrimaryColor= */ true);
 
                     if (mFetchNextImageRunnable != null) {
                         mFetchNextImageRunnable.run();
@@ -192,6 +206,7 @@ public class NtpThemeCollectionManager {
      * @param themeCollectionId The id of the theme collection
      */
     public void setThemeCollectionDailyRefreshed(String themeCollectionId) {
+        resetSelectionState();
         mFetchNextImageRunnable = this::fetchNextThemeCollectionImage;
         mNtpThemeCollectionBridge.setThemeCollectionDailyRefreshed(themeCollectionId);
     }
@@ -201,26 +216,45 @@ public class NtpThemeCollectionManager {
         mNtpThemeCollectionBridge.fetchNextThemeCollectionImage();
     }
 
+    /** Clears the state related to pending theme selections. */
+    private void resetSelectionState() {
+        mFetchNextImageRunnable = null;
+        mSelectingThemeCollectionImage = null;
+        mOtherBackgroundTypeSelected = false;
+    }
+
     /**
-     * Determines if the updated background information is for the next daily refresh image.
+     * Determines whether a fetched theme update from the native side should be applied. This
+     * prevents applying a theme that the user has already navigated away from.
      *
-     * <p>This is true if the new image belongs to the same collection as the current one and daily
-     * refresh is enabled for both.
+     * <p>An asynchronous image fetch might complete after the user has already changed their
+     * selection. This method ensures that only the update corresponding to the user's most recent
+     * choice is processed.
      *
-     * @param info The incoming {@link CustomBackgroundInfo}.
+     * @param info The {@link CustomBackgroundInfo} of the theme update received from native.
+     * @return {@code true} if the theme update should be processed and applied, {@code false}
+     *     otherwise.
      */
-    private boolean isNextThemeCollectionImage(CustomBackgroundInfo info) {
-        if (mNtpCustomizationConfigManager.getBackgroundImageType() != THEME_COLLECTION) {
+    @VisibleForTesting
+    boolean shouldProcessThemeUpdate(CustomBackgroundInfo info) {
+        // Do not process the update if the user has subsequently selected a non-theme-collection
+        // background (e.g., "Upload an image", "Chrome Default" or "Chrome Colors").
+        if (mOtherBackgroundTypeSelected) {
             return false;
         }
 
-        CustomBackgroundInfo currentInfo = mNtpCustomizationConfigManager.getCustomBackgroundInfo();
-        if (currentInfo == null) {
-            return false;
+        // If the user was selecting a specific image from a theme collection, the incoming
+        // update's URL must match the selected image's URL. This ensures that if the user clicks
+        // multiple images in rapid succession, only the last one clicked is applied.
+        if (mSelectingThemeCollectionImage != null) {
+            return mSelectingThemeCollectionImage.imageUrl.equals(info.backgroundUrl);
         }
 
-        return currentInfo.isDailyRefreshEnabled
-                && info.isDailyRefreshEnabled
-                && currentInfo.collectionId.equals(info.collectionId);
+        // Otherwise, the update should only be processed if it's for the daily refresh feature.
+        return info.isDailyRefreshEnabled;
+    }
+
+    @Nullable CollectionImage getSelectingThemeCollectionImageForTesting() {
+        return mSelectingThemeCollectionImage;
     }
 }

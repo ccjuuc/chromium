@@ -6,11 +6,17 @@
 
 #include <stddef.h>
 
+#include <algorithm>
+#include <cmath>
 #include <string_view>
 #include <utility>
 
 #include "base/base64.h"
 #include "base/compiler_specific.h"
+#include "base/feature_list.h"
+#include "base/memory_coordinator/memory_coordinator_features.h"
+#include "base/memory_coordinator/traits.h"
+#include "base/memory_coordinator/utils.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_view_util.h"
@@ -37,6 +43,18 @@ PassthroughProgramCache* g_program_cache = nullptr;
 // have one EGLDisplay in practice.
 bool g_blob_cache_funcs_set = false;
 
+constexpr base::MemoryConsumerTraits kPassthroughProgramCacheTraits(
+    // Default capacity is small, under 10MB.
+    base::MemoryConsumerTraits::EstimatedMemoryUsage::kSmall,
+    // Evicting entries requires traversing the LRU cache.
+    base::MemoryConsumerTraits::ReleaseMemoryCost::kRequiresTraversal,
+    // Shaders can be re-compiled and re-linked if evicted.
+    base::MemoryConsumerTraits::InformationRetention::kLossless,
+    // Asynchronous since AsyncMemoryConsumerRegistration is used.
+    base::MemoryConsumerTraits::ExecutionType::kAsynchronous,
+    // Compiling and linking shaders is highly CPU intensive.
+    base::MemoryConsumerTraits::RecreateMemoryCost::kExpensive);
+
 }  // namespace
 
 PassthroughProgramCache::PassthroughProgramCache(
@@ -45,7 +63,13 @@ PassthroughProgramCache::PassthroughProgramCache(
     : ProgramCache(max_cache_size_bytes),
       disable_gpu_shader_disk_cache_(disable_gpu_shader_disk_cache),
       curr_size_bytes_(0),
-      store_(ProgramLRUCache::NO_AUTO_EVICT) {
+      store_(ProgramLRUCache::NO_AUTO_EVICT),
+      memory_consumer_registration_(
+          "PassthroughProgramCache",
+          kPassthroughProgramCacheTraits,
+          this,
+          base::AsyncMemoryConsumerRegistration::CheckUnregister::kDisabled),
+      current_max_size_bytes_(max_cache_size_bytes) {
   gl::GLDisplayEGL* gl_display = gl::GLSurfaceEGL::GetGLDisplayEGL();
   EGLDisplay egl_display = gl_display->GetDisplay();
 
@@ -117,12 +141,37 @@ void PassthroughProgramCache::LoadProgram(const std::string& key,
 
 size_t PassthroughProgramCache::Trim(size_t limit) {
   base::AutoLock auto_lock(lock_);
-  size_t initial_size = curr_size_bytes_;
-  while (curr_size_bytes_ > limit) {
-    DCHECK(!store_.empty());
-    store_.Erase(store_.rbegin());
+  return TrimLocked(limit);
+}
+
+void PassthroughProgramCache::OnUpdateMemoryLimit() {
+  base::AutoLock auto_lock(lock_);
+  if (!base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
+    return;
   }
-  return initial_size - curr_size_bytes_;
+  // To match previous behavior, the size must be 1/4 at 50% memory limit.
+  double ratio = std::clamp(memory_limit_ratio(), 0.0, 1.0);
+  size_t target_size = max_size_bytes() * std::pow(ratio, 2.0);
+  current_max_size_bytes_ = std::max(curr_size_bytes_, target_size);
+}
+
+void PassthroughProgramCache::OnReleaseMemory() {
+  base::AutoLock auto_lock(lock_);
+  if (base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
+    // To match previous behavior, the size must be 1/4 at 50% memory limit.
+    double ratio = std::clamp(memory_limit_ratio(), 0.0, 1.0);
+    size_t target_size = max_size_bytes() * std::pow(ratio, 2.0);
+    current_max_size_bytes_ = target_size;
+    TrimLocked(current_max_size_bytes_);
+    return;
+  }
+
+  int limit = memory_limit();
+  if (limit <= base::kCriticalMemoryPressureThreshold) {
+    TrimLocked(0);
+  } else if (limit <= base::kModerateMemoryPressureThreshold) {
+    TrimLocked(max_size_bytes() / 4);
+  }
 }
 
 bool PassthroughProgramCache::CacheEnabled() const {
@@ -132,43 +181,37 @@ bool PassthroughProgramCache::CacheEnabled() const {
 void PassthroughProgramCache::Set(Key&& key,
                                   Value&& value,
                                   CacheProgramCallback callback) {
-  {
-    base::AutoLock auto_lock(lock_);
-    // If the value is so big it will never fit in the cache, throw it away.
-    if (value.size() > max_size_bytes()) {
-      return;
-    }
-
-    // Evict any cached program with the same key in favor of the least recently
-    // accessed.
-    ProgramLRUCache::iterator existing = store_.Peek(key);
-    if (existing != store_.end()) {
-      store_.Erase(existing);
-    }
-
-    // If the cache is overflowing, remove some old entries.
-    DCHECK(max_size_bytes() >= value.size());
+  base::AutoLock auto_lock(lock_);
+  // If the value is so big it will never fit in the cache, throw it away.
+  if (value.size() > GetCurrentMaxSizeBytes()) {
+    return;
   }
 
-  Trim(max_size_bytes() - value.size());
-
-  {
-    base::AutoLock auto_lock(lock_);
-
-    // If callback is set, notify that there was a new/updated blob entry so it
-    // can be stored in disk.  Note that this is done before the Put() call as
-    // that consumes `value`.
-    CacheProgramCallback callback_with_fallback =
-        callback ? callback : cache_program_callback_;
-    if (callback_with_fallback) {
-      // Convert the key and binary to base-64 string form.
-      std::string key_string_64 = base::Base64Encode(key);
-      std::string value_string_64 = base::Base64Encode(value);
-      callback_with_fallback.Run(key_string_64, value_string_64);
-    }
-
-    store_.Put(key, ProgramCacheValue(std::move(value), this));
+  // Evict any cached program with the same key in favor of the least recently
+  // accessed.
+  ProgramLRUCache::iterator existing = store_.Peek(key);
+  if (existing != store_.end()) {
+    store_.Erase(existing);
   }
+
+  // If the cache is overflowing, remove some old entries.
+  DCHECK(GetCurrentMaxSizeBytes() >= value.size());
+
+  TrimLocked(GetCurrentMaxSizeBytes() - value.size());
+
+  // If callback is set, notify that there was a new/updated blob entry so it
+  // can be stored in disk.  Note that this is done before the Put() call as
+  // that consumes `value`.
+  CacheProgramCallback callback_with_fallback =
+      callback ? callback : cache_program_callback_;
+  if (callback_with_fallback) {
+    // Convert the key and binary to base-64 string form.
+    std::string key_string_64 = base::Base64Encode(key);
+    std::string value_string_64 = base::Base64Encode(value);
+    callback_with_fallback.Run(key_string_64, value_string_64);
+  }
+
+  store_.Put(key, ProgramCacheValue(std::move(value), this));
 }
 
 size_t PassthroughProgramCache::Get(const Key& key,
@@ -232,6 +275,22 @@ void PassthroughProgramCache::BlobCacheSetImpl(const void* key,
 
   // Pass a null callback to use the default cache_program_callback_
   Set(std::move(entry_key), std::move(entry_value), CacheProgramCallback());
+}
+
+size_t PassthroughProgramCache::TrimLocked(size_t limit) {
+  size_t initial_size = curr_size_bytes_;
+  while (curr_size_bytes_ > limit) {
+    DCHECK(!store_.empty());
+    store_.Erase(store_.rbegin());
+  }
+  return initial_size - curr_size_bytes_;
+}
+
+size_t PassthroughProgramCache::GetCurrentMaxSizeBytes() const {
+  if (base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
+    return current_max_size_bytes_;
+  }
+  return max_size_bytes();
 }
 
 void PassthroughProgramCache::BlobCacheSet(const void* key,

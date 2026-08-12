@@ -15,7 +15,6 @@
 #include <utility>
 
 #include "base/containers/adapters.h"
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/functional/bind.h"
@@ -43,6 +42,7 @@
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/declarative_net_request.h"
+#include "extensions/common/api/web_request/web_request_constants.h"
 #include "extensions/common/extension_id.h"
 #include "net/cookies/cookie_util.h"
 #include "net/cookies/parsed_cookie.h"
@@ -680,7 +680,7 @@ RequestCookieModification::~RequestCookieModification() = default;
 
 bool RequestCookieModification::operator==(
     const RequestCookieModification& other) const {
-  // This ignores |type|. Why? https://crbug.com/916248
+  // This ignores |type|. Why? https://crbug.com/40607023
   return std::tie(filter, modification) ==
          std::tie(other.filter, other.modification);
 }
@@ -706,7 +706,7 @@ ResponseCookieModification::~ResponseCookieModification() = default;
 
 bool ResponseCookieModification::operator==(
     const ResponseCookieModification& other) const {
-  // This ignores |type|. Why? https://crbug.com/916248
+  // This ignores |type|. Why? https://crbug.com/40607023
   return std::tie(filter, modification) ==
          std::tie(other.filter, other.modification);
 }
@@ -741,15 +741,15 @@ bool InDecreasingExtensionInstallationTimeOrder(const EventResponseDelta& a,
   return a.extension_install_time > b.extension_install_time;
 }
 
-base::Value::List StringToCharList(const std::string& s) {
-  base::Value::List result;
+base::ListValue StringToCharList(const std::string& s) {
+  base::ListValue result;
   for (const auto& c : s) {
     result.Append(*reinterpret_cast<const unsigned char*>(&c));
   }
   return result;
 }
 
-bool CharListToString(const base::Value::List& list, std::string* out) {
+bool CharListToString(const base::ListValue& list, std::string* out) {
   const size_t list_length = list.size();
   out->resize(list_length);
   int value = 0;
@@ -1231,14 +1231,14 @@ void MergeOnBeforeSendHeadersResponses(
         }
 
         // We must not modify anything that has been deleted before.
-        if (base::Contains(*removed_headers, key)) {
+        if (removed_headers->contains(key)) {
           extension_conflicts = true;
           break;
         }
 
         // We must not modify anything that has been set to a *different*
         // value before.
-        if (base::Contains(*set_headers, key) &&
+        if (set_headers->contains(key) &&
             request_headers->GetHeader(key) != value) {
           extension_conflicts = true;
           break;
@@ -1250,7 +1250,7 @@ void MergeOnBeforeSendHeadersResponses(
     // modified before.
     {
       for (const std::string& key : delta.deleted_request_headers) {
-        if (base::Contains(*set_headers, base::ToLowerASCII(key))) {
+        if (set_headers->contains(base::ToLowerASCII(key))) {
           extension_conflicts = true;
           break;
         }
@@ -1267,7 +1267,7 @@ void MergeOnBeforeSendHeadersResponses(
         std::string key = base::ToLowerASCII(modification.name());
         if (!request_headers->HasHeader(key)) {
           web_request_added_headers.insert(key);
-        } else if (!base::Contains(web_request_added_headers, key)) {
+        } else if (!web_request_added_headers.contains(key)) {
           // Note: |key| will only be present in |added_headers| if this is an
           // identical edit.
           web_request_overridden_headers.insert(key);
@@ -1639,8 +1639,8 @@ void MergeOnHeadersReceivedResponses(
     bool extension_conflicts = false;
     for (const ResponseHeader& header : delta.deleted_response_headers) {
       ResponseHeader lowercase_header(ToLowerCase(header));
-      if (base::Contains(removed_headers, lowercase_header) ||
-          base::Contains(dnr_header_actions, lowercase_header.first)) {
+      if (removed_headers.contains(lowercase_header) ||
+          dnr_header_actions.contains(lowercase_header.first)) {
         extension_conflicts = true;
         break;
       }
@@ -1803,9 +1803,9 @@ void ClearCacheOnNavigation() {
 
 // Converts the |name|, |value| pair of a http header to a HttpHeaders
 // dictionary.
-base::Value::Dict CreateHeaderDictionary(const std::string& name,
-                                         const std::string& value) {
-  base::Value::Dict header;
+base::DictValue CreateHeaderDictionary(const std::string& name,
+                                       const std::string& value) {
+  base::DictValue header;
   header.Set(keys::kHeaderNameKey, name);
   if (base::IsStringUTF8(value)) {
     header.Set(keys::kHeaderValueKey, value);
@@ -1818,17 +1818,15 @@ base::Value::Dict CreateHeaderDictionary(const std::string& name,
 bool ShouldHideRequestHeader(content::BrowserContext* browser_context,
                              int extra_info_spec,
                              const std::string& name) {
-  static constexpr auto kRequestHeaders =
-      base::MakeFixedFlatSet<std::string_view>({"accept-encoding",
-                                                "accept-language", "cookie",
-                                                "origin", "referer"});
   return !(extra_info_spec & ExtraInfoSpec::EXTRA_HEADERS) &&
-         base::Contains(kRequestHeaders, base::ToLowerASCII(name));
+         extensions::kExtraRequestHeaderNames.contains(
+             base::ToLowerASCII(name));
 }
 
 bool ShouldHideResponseHeader(int extra_info_spec, const std::string& name) {
   return !(extra_info_spec & ExtraInfoSpec::EXTRA_HEADERS) &&
-         base::EqualsCaseInsensitiveASCII(name, "set-cookie");
+         extensions::kExtraResponseHeaderNames.contains(
+             base::ToLowerASCII(name));
 }
 
 void RedirectRequestAfterHeadersReceived(

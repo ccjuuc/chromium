@@ -10,6 +10,7 @@
 #include "base/functional/bind.h"
 #include "base/json/values_util.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/time/default_clock.h"
@@ -18,6 +19,7 @@
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/safe_browsing/advanced_protection_status_manager.h"
 #include "chrome/browser/safe_browsing/advanced_protection_status_manager_factory.h"
 #include "chrome/browser/ssl/chrome_security_blocking_page_factory.h"
 #include "chrome/browser/ssl/https_upgrades_interceptor.h"
@@ -25,6 +27,8 @@
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
+#include "components/safe_browsing/core/common/features.h"
+#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/security_interstitials/content/https_only_mode_blocking_page.h"
 #include "components/security_interstitials/content/stateful_ssl_host_state_delegate.h"
 #include "components/site_engagement/content/site_engagement_service.h"
@@ -33,6 +37,10 @@
 #include "content/public/browser/storage_partition.h"
 #include "net/base/url_util.h"
 #include "third_party/blink/public/mojom/site_engagement/site_engagement.mojom.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/safe_browsing/security_settings_bundle_toast_helper.h"
+#endif
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/profiles/profile_helper.h"
@@ -173,7 +181,7 @@ std::unique_ptr<KeyedService> BuildService(content::BrowserContext* context) {
   return std::make_unique<HttpsFirstModeService>(profile, GetClock());
 }
 
-base::Time GetTimestamp(const base::Value::Dict& dict, const char* key) {
+base::Time GetTimestamp(const base::DictValue& dict, const char* key) {
   const auto* timestamp_string = dict.Find(key);
   if (timestamp_string) {
     const auto timestamp = base::ValueToTime(timestamp_string);
@@ -197,6 +205,48 @@ std::string GetSyntheticFieldTrialGroupName(HttpsFirstModeSetting setting) {
   }
 }
 
+HttpsFirstModeStartupState GetStartupDetailedState(Profile* profile) {
+  PrefService* prefs = profile->GetPrefs();
+
+  if (base::FeatureList::IsEnabled(
+          features::kHttpsFirstModeForAdvancedProtectionUsers)) {
+    auto* ap_manager =
+        safe_browsing::AdvancedProtectionStatusManagerFactory::GetForProfile(
+            profile);
+    if (ap_manager && ap_manager->IsUnderAdvancedProtection()) {
+      return HttpsFirstModeStartupState::kEnabledFull;
+    }
+  }
+
+  if (prefs->GetBoolean(prefs::kHttpsOnlyModeEnabled)) {
+    return HttpsFirstModeStartupState::kEnabledFull;
+  }
+
+  if (IsBalancedModeEnabled(prefs)) {
+    bool user_has_modified_settings =
+        prefs->HasPrefPath(prefs::kHttpsOnlyModeEnabled) ||
+        prefs->HasPrefPath(prefs::kHttpsFirstBalancedMode);
+    if (!user_has_modified_settings) {
+      if (base::FeatureList::IsEnabled(
+              features::kHttpsFirstModeDefaultSettingPairsWithEsb) &&
+          safe_browsing::IsEnhancedProtectionEnabled(*prefs)) {
+        return HttpsFirstModeStartupState::kEnabledBalancedEsbPairing;
+      }
+      if (base::FeatureList::IsEnabled(
+              features::kHttpsFirstBalancedModeAutoEnable)) {
+        return HttpsFirstModeStartupState::kEnabledBalancedAutoEnable;
+      }
+    } else {
+      if (prefs->GetBoolean(prefs::kHttpsOnlyModeAutoEnabled)) {
+        return HttpsFirstModeStartupState::kEnabledBalancedTypicallySecure;
+      }
+      return HttpsFirstModeStartupState::kEnabledBalancedExplicit;
+    }
+  }
+
+  return HttpsFirstModeStartupState::kDisabled;
+}
+
 }  // namespace
 
 HttpsFirstModeService::HttpsFirstModeService(Profile* profile,
@@ -213,26 +263,28 @@ HttpsFirstModeService::HttpsFirstModeService(Profile* profile,
       prefs::kHttpsFirstBalancedMode,
       base::BindRepeating(&HttpsFirstModeService::OnHttpsFirstModePrefChanged,
                           base::Unretained(this)));
+  pref_change_registrar_.Add(
+      prefs::kSafeBrowsingEnhanced,
+      base::BindRepeating(
+          &HttpsFirstModeService::OnSafeBrowsingEnhancedPrefChanged,
+          base::Unretained(this)));
 
-  // Track Advanced Protection status.
-  if (base::FeatureList::IsEnabled(
-          features::kHttpsFirstModeForAdvancedProtectionUsers)) {
-    obs_.Observe(
-        safe_browsing::AdvancedProtectionStatusManagerFactory::GetForProfile(
-            profile_));
-    // On startup, AdvancedProtectionStatusManager runs before this class so we
-    // don't get called back. Run the callback to get the AP setting.
-    OnAdvancedProtectionStatusChanged(
-        safe_browsing::AdvancedProtectionStatusManagerFactory::GetForProfile(
-            profile_)
-            ->IsUnderAdvancedProtection());
-  }
+  // Observe the settings bundle to trigger migration/toast dynamically
+  // if the bundle changes during the session.
+  pref_change_registrar_.Add(
+      prefs::kSecuritySettingsBundle,
+      base::BindRepeating(
+          &HttpsFirstModeService::OnSecuritySettingsBundleChanged,
+          base::Unretained(this)));
 
   // Make sure the pref state is logged and the synthetic field trial state is
   // created at startup (as the pref may never change over the session).
   HttpsFirstModeSetting setting = GetCurrentSetting();
   base::UmaHistogramEnumeration(
       "Security.HttpsFirstMode.SettingEnabledAtStartup2", setting);
+  base::UmaHistogramEnumeration(
+      "Security.HttpsFirstMode.SettingEnabledAtStartupDetailed",
+      GetStartupDetailedState(profile_));
   ChromeMetricsServiceAccessor::RegisterSyntheticFieldTrial(
       kHttpsFirstModeSyntheticFieldTrialName,
       GetSyntheticFieldTrialGroupName(setting));
@@ -252,8 +304,74 @@ HttpsFirstModeService::HttpsFirstModeService(Profile* profile,
 }
 
 void HttpsFirstModeService::AfterStartup() {
+  MigrateEnhancedBundleUsersAndMaybeShowToast();
   CheckUserIsTypicallySecureAndMaybeEnableHttpsFirstBalancedMode();
   MaybeEnableHttpsFirstModeForEngagedSites(base::OnceClosure());
+}
+
+void HttpsFirstModeService::MigrateEnhancedBundleUsersAndMaybeShowToast() {
+  PrefService* prefs = profile_->GetPrefs();
+
+  // If the Toast has already been shown or HFM features are not enabled, abort.
+  if (prefs->GetBoolean(prefs::kHttpsFirstModeBundleToastQueued) ||
+      !IsBalancedModeAvailable() ||
+      !base::FeatureList::IsEnabled(
+          safe_browsing::kBundledSecuritySettingsAskBeforeHttp)) {
+    return;
+  }
+
+  // Check if this is an Enhanced Protection bundle user.
+  auto bundle_setting = safe_browsing::GetSecurityBundleSetting(*prefs);
+  if (bundle_setting !=
+      safe_browsing::SecuritySettingsBundleSetting::ENHANCED) {
+    return;
+  }
+
+  // Advanced Protection Program users are opted into the Enhanced bundle by
+  // default but shouldn't have their secure connections settings modified or
+  // show the toast since HFM is managed by AP.
+  auto* advanced_protection_manager =
+      safe_browsing::AdvancedProtectionStatusManagerFactory::GetForProfile(
+          profile_);
+  if (advanced_protection_manager &&
+      advanced_protection_manager->IsUnderAdvancedProtection()) {
+    return;
+  }
+
+  // If the user has explicitly modified secure connections settings in the
+  // past, do not override their choice. Simply mark the Toast as shown and
+  // abort.
+  if (prefs->HasPrefPath(prefs::kHttpsOnlyModeEnabled) ||
+      prefs->HasPrefPath(prefs::kHttpsFirstBalancedMode)) {
+    prefs->SetBoolean(prefs::kHttpsFirstModeBundleToastQueued, true);
+    return;
+  }
+
+  // Upgrade them to HFM Balanced Mode.
+  keep_http_allowlist_on_next_pref_change_ = true;
+  prefs->SetBoolean(prefs::kHttpsFirstBalancedMode, true);
+
+  // Note: kHttpsFirstModeBundleToastQueued acts as the one-time UI migration
+  // queue. It is marked true immediately on upgrade to prevent duplicate
+  // migration evaluation on subsequent browser runs. The actual on-screen toast
+  // is managed on startup by verifying
+  // kSecuritySettingsBundleMigrationToastState is kPending.
+  prefs->SetBoolean(prefs::kHttpsFirstModeBundleToastQueued, true);
+  if (prefs->GetInteger(prefs::kSecuritySettingsBundleMigrationToastState) !=
+      static_cast<int>(
+          safe_browsing::SecuritySettingsBundleToastState::kShown)) {
+    prefs->SetInteger(
+        prefs::kSecuritySettingsBundleMigrationToastState,
+        static_cast<int>(
+            safe_browsing::SecuritySettingsBundleToastState::kPending));
+  }
+
+#if !BUILDFLAG(IS_ANDROID)
+  // Dynamically trigger the toast on the active window immediately for the
+  // current session.
+  safe_browsing::SecuritySettingsBundleToastHelper::GetForProfile(profile_)
+      ->TriggerIfNeeded();
+#endif
 }
 
 void HttpsFirstModeService::
@@ -297,8 +415,10 @@ void HttpsFirstModeService::OnHttpsFirstModePrefChanged() {
     StatefulSSLHostStateDelegate* state =
         static_cast<StatefulSSLHostStateDelegate*>(
             profile_->GetSSLHostStateDelegate());
-    state->ClearHttpsOnlyModeAllowlist();
-    state->ClearHttpsEnforcelist();
+    if (state) {
+      state->ClearHttpsOnlyModeAllowlist();
+      state->ClearHttpsEnforcelist();
+    }
   }
   keep_http_allowlist_on_next_pref_change_ = false;
 
@@ -307,15 +427,47 @@ void HttpsFirstModeService::OnHttpsFirstModePrefChanged() {
   profile_->GetPrefs()->SetBoolean(prefs::kHttpsOnlyModeAutoEnabled, false);
 }
 
-void HttpsFirstModeService::OnAdvancedProtectionStatusChanged(bool enabled) {
-  DCHECK(base::FeatureList::IsEnabled(
-      features::kHttpsFirstModeForAdvancedProtectionUsers));
-  // Override the pref if AP is enabled. We explicitly don't unset the pref if
-  // the user is no longer under Advanced Protection.
-  if (enabled &&
-      !profile_->GetPrefs()->GetBoolean(prefs::kHttpsOnlyModeEnabled)) {
-    profile_->GetPrefs()->SetBoolean(prefs::kHttpsOnlyModeEnabled, true);
+void HttpsFirstModeService::OnSafeBrowsingEnhancedPrefChanged() {
+  HttpsFirstModeSetting setting = GetCurrentSetting();
+  // Update synthetic field trial group registration.
+  ChromeMetricsServiceAccessor::RegisterSyntheticFieldTrial(
+      kHttpsFirstModeSyntheticFieldTrialName,
+      GetSyntheticFieldTrialGroupName(setting));
+
+  // Log implicit HFM state changes due to ESB pairing.
+  if (base::FeatureList::IsEnabled(
+          features::kHttpsFirstModeDefaultSettingPairsWithEsb)) {
+    PrefService* prefs = profile_->GetPrefs();
+    bool user_has_modified_settings =
+        prefs->HasPrefPath(prefs::kHttpsOnlyModeEnabled) ||
+        prefs->HasPrefPath(prefs::kHttpsFirstBalancedMode);
+    if (!user_has_modified_settings) {
+      bool esb_enabled = safe_browsing::IsEnhancedProtectionEnabled(*prefs);
+      base::UmaHistogramEnumeration(
+          "Security.HttpsFirstMode.SettingImplicitlyChanged",
+          esb_enabled
+              ? HttpsFirstModeImplicitStateChange::kBalancedEnabledByEsb
+              : HttpsFirstModeImplicitStateChange::kBalancedDisabledByEsb);
+    }
   }
+
+  // Reset the HTTP allowlist and HTTPS enforcelist when the pref changes.
+  if (!keep_http_allowlist_on_next_pref_change_) {
+    StatefulSSLHostStateDelegate* state =
+        static_cast<StatefulSSLHostStateDelegate*>(
+            profile_->GetSSLHostStateDelegate());
+    if (state) {
+      state->ClearHttpsOnlyModeAllowlist();
+      state->ClearHttpsEnforcelist();
+    }
+  }
+  keep_http_allowlist_on_next_pref_change_ = false;
+}
+
+void HttpsFirstModeService::OnSecuritySettingsBundleChanged() {
+  // Trigger bundle migration dynamically if the bundle transitioned
+  // into Enhanced during the session (e.g., via sync).
+  MigrateEnhancedBundleUsersAndMaybeShowToast();
 }
 
 bool HttpsFirstModeService::
@@ -350,16 +502,16 @@ bool HttpsFirstModeService::UpdateFallbackEntries(bool add_new_entry) {
     return false;
   }
   base::Time now = clock_->Now();
-  const base::Value::Dict& base_pref =
+  const base::DictValue& base_pref =
       profile_->GetPrefs()->GetDict(prefs::kHttpsUpgradeFallbacks);
 
-  base::Value::List new_entries;
-  const base::Value::List* fallback_events =
+  base::ListValue new_entries;
+  const base::ListValue* fallback_events =
       base_pref.FindList(kFallbackEventsKey);
   base::Time latest_fallback_timestamp;
   if (fallback_events) {
     for (const auto& event : *fallback_events) {
-      const base::Value::Dict* fallback_event = event.GetIfDict();
+      const base::DictValue* fallback_event = event.GetIfDict();
       if (!fallback_event) {
         continue;
       }
@@ -390,7 +542,7 @@ bool HttpsFirstModeService::UpdateFallbackEntries(bool add_new_entry) {
 
   // Add the new fallback entry.
   if (add_new_entry) {
-    base::Value::Dict new_event;
+    base::DictValue new_event;
     new_event.Set(kFallbackEventsPrefTimestampKey, base::TimeToValue(now));
     new_entries.Append(std::move(new_event));
   }
@@ -417,7 +569,7 @@ bool HttpsFirstModeService::UpdateFallbackEntries(bool add_new_entry) {
        kMinRecentNavigationsForTypicallySecureUser.Get());
 
   // Update the pref with the new fallback events.
-  base::Value::Dict new_base_pref;
+  base::DictValue new_base_pref;
   new_base_pref.Set(kFallbackEventsKey, std::move(new_entries));
   new_base_pref.Set(kHeuristicStartTimestampKey,
                     base::TimeToValue(heuristic_start_timestamp));
@@ -512,7 +664,7 @@ void HttpsFirstModeService::ProcessEngagedSitesList(
         detail.total_score >= kHttpsAddThreshold.Get() &&
         engagement_service->GetScore(GetHttpUrlFromHttps(origin)) <=
             kHttpAddThreshold.Get() &&
-        !base::Contains(enabled_origins, origin) &&
+        !enabled_origins.contains(origin) &&
         !net::IsHostnameNonUnique(origin.host())) {
       state->SetHttpsEnforcementForHost(origin.GetHost(), /*enforced=*/true,
                                         partition);
@@ -541,6 +693,17 @@ void HttpsFirstModeService::ProcessEngagedSitesList(
 }
 
 HttpsFirstModeSetting HttpsFirstModeService::GetCurrentSetting() const {
+  if (base::FeatureList::IsEnabled(
+          features::kHttpsFirstModeForAdvancedProtectionUsers)) {
+    auto* advanced_protection_manager =
+        safe_browsing::AdvancedProtectionStatusManagerFactory::GetForProfile(
+            profile_);
+    if (advanced_protection_manager &&
+        advanced_protection_manager->IsUnderAdvancedProtection()) {
+      return HttpsFirstModeSetting::kEnabledFull;
+    }
+  }
+
   if (profile_->GetPrefs()->GetBoolean(prefs::kHttpsOnlyModeEnabled)) {
     return HttpsFirstModeSetting::kEnabledFull;
   }
@@ -569,7 +732,7 @@ bool HttpsFirstModeService::UpdatePrefs(
   // default. If the feature flag is disabled, then the kEnabledFull and
   // kDisabled settings will only be mapped to the kHttpsOnlyModeEnabled pref.
   //
-  // Note: The Security.HttpsFirstMode.SettingChanged* histograms are logged
+  // Note: The Security.HttpsFirstMode.SettingChanged2 histogram is logged
   // here instead of in HttpsFirstModeService::OnHttpsFirstModePrefChanged()
   // because this will fire the pref observer _twice_, so logging the histogram
   // in the pref observer would cause double counting.
@@ -597,8 +760,8 @@ bool HttpsFirstModeService::UpdatePrefs(
   } else {
     // TODO(crbug.com/349860796): Remove old settings path once Balanced Mode
     // is launched.
-    base::UmaHistogramBoolean("Security.HttpsFirstMode.SettingChanged",
-                              selection == HttpsFirstModeSetting::kEnabledFull);
+    base::UmaHistogramEnumeration("Security.HttpsFirstMode.SettingChanged2",
+                                  selection);
     profile_->GetPrefs()->SetBoolean(
         prefs::kHttpsOnlyModeEnabled,
         selection == HttpsFirstModeSetting::kEnabledFull);
@@ -622,9 +785,9 @@ void HttpsFirstModeService::SetClockForTesting(base::Clock* clock) {
 }
 
 size_t HttpsFirstModeService::GetFallbackEntryCountForTesting() const {
-  const base::Value::Dict& base_pref =
+  const base::DictValue& base_pref =
       profile_->GetPrefs()->GetDict(prefs::kHttpsUpgradeFallbacks);
-  const base::Value::List* fallback_events =
+  const base::ListValue* fallback_events =
       base_pref.FindList(kFallbackEventsKey);
   return fallback_events ? fallback_events->size() : 0;
 }
@@ -638,7 +801,8 @@ HttpsFirstModeService* HttpsFirstModeServiceFactory::GetForProfile(
 
 // static
 HttpsFirstModeServiceFactory* HttpsFirstModeServiceFactory::GetInstance() {
-  return base::Singleton<HttpsFirstModeServiceFactory>::get();
+  static base::NoDestructor<HttpsFirstModeServiceFactory> instance;
+  return instance.get();
 }
 
 // static
@@ -658,6 +822,7 @@ HttpsFirstModeServiceFactory::HttpsFirstModeServiceFactory()
               // TODO(crbug.com/41488885): Check if this service is needed for
               // Ash Internals.
               .WithAshInternals(ProfileSelection::kOriginalOnly)
+              .WithGuest(ProfileSelection::kOffTheRecordOnly)
               .Build()) {
   DependsOn(
       safe_browsing::AdvancedProtectionStatusManagerFactory::GetInstance());

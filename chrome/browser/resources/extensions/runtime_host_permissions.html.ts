@@ -5,6 +5,7 @@
 import {html} from '//resources/lit/v3_0/lit.rollup.js';
 
 import type {ExtensionsRuntimeHostPermissionsElement} from './runtime_host_permissions.js';
+import type {ServiceInterface} from './service.js';
 
 export function getHtml(this: ExtensionsRuntimeHostPermissionsElement) {
   // clang-format off
@@ -20,7 +21,7 @@ ${!this.enableEnhancedSiteControls ? html`
             aria-label="$i18n{permissionsLearnMoreLabel}"
             href="$i18n{hostPermissionsLearnMoreLink}" target="_blank"
             @click="${this.onLearnMoreClick_}">
-          <cr-icon icon="cr:help-outline"></cr-icon>
+          <cr-icon icon="cr:help"></cr-icon>
         </a>
       </div>
       <div>
@@ -57,7 +58,7 @@ ${!this.enableEnhancedSiteControls ? html`
             aria-label="$i18n{permissionsLearnMoreLabel}"
             href="$i18n{hostPermissionsLearnMoreLink}" target="_blank"
             @click="${this.onLearnMoreClick_}">
-          <cr-icon icon="cr:help-outline"></cr-icon>
+          <cr-icon icon="cr:help"></cr-icon>
         </a>
       </div>
       <span id="new-section-heading-subtext">
@@ -133,7 +134,8 @@ ${this.showSpecificSites_() ? html`
   </button>
 </cr-action-menu>
 ${this.showHostDialog_ ? html`
-  <extensions-runtime-hosts-dialog .delegate="${this.delegate}"
+  <extensions-runtime-hosts-dialog
+      .delegate="${this.delegate as ServiceInterface}"
       .itemId="${this.itemId}"
       .enableEnhancedSiteControls="${this.enableEnhancedSiteControls}"
       .currentSite="${this.hostDialogModel_}"
@@ -146,11 +148,11 @@ ${this.showRemoveSiteDialog_ ? html`
     <div slot="title">$i18n{removeSitesDialogTitle}</div>
     <div slot="button-container">
       <cr-button class="cancel-button"
-          @click="${this.onRemoveSitesWarningCancel_}">
+          @click="${this.onRemoveSitesWarningCancelClick_}">
         $i18n{cancel}
       </cr-button>
       <cr-button class="action-button"
-          @click="${this.onRemoveSitesWarningConfirm_}">
+          @click="${this.onRemoveSitesWarningConfirmClick_}">
         $i18n{remove}
       </cr-button>
     </div>

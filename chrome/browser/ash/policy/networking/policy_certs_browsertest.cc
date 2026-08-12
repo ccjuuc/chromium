@@ -6,6 +6,7 @@
 #include <string>
 
 #include "ash/constants/ash_switches.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -41,9 +42,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/webui/ash/login/gaia_screen_handler.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -469,14 +469,14 @@ class PolicyProvidedCertsPublicSessionTest
   }
 };
 
-// TODO(https://crbug.com/874831): Re-enable this after the source of the
+// TODO(https://crbug.com/263306980): Re-enable this after the source of the
 // flakiness has been identified.
 IN_PROC_BROWSER_TEST_F(PolicyProvidedCertsPublicSessionTest,
                        DISABLED_AllowedInPublicSession) {
   StartLogin();
   ash::test::WaitForPrimaryUserSessionStart();
 
-  EXPECT_EQ(1U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
   ASSERT_TRUE(browser());
 
   user_policy_certs_helper_.SetRootCertONCUserPolicy(browser()->GetProfile(),
@@ -571,12 +571,12 @@ class PolicyProvidedClientCertsTest : public DevicePolicyCrosBrowserTest {
 IN_PROC_BROWSER_TEST_F(PolicyProvidedClientCertsTest, ClientCertsImported) {
   // Sanity check: we don't expect the client certificate to be present before
   // setting the user ONC policy.
-  EXPECT_FALSE(
-      IsCertInNSSDatabase(browser()->profile(), kClientCertSubjectCommonName));
+  EXPECT_FALSE(IsCertInNSSDatabase(browser()->GetProfile(),
+                                   kClientCertSubjectCommonName));
 
-  SetClientCertONCPolicy(browser()->profile());
-  EXPECT_TRUE(
-      IsCertInNSSDatabase(browser()->profile(), kClientCertSubjectCommonName));
+  SetClientCertONCPolicy(browser()->GetProfile());
+  EXPECT_TRUE(IsCertInNSSDatabase(browser()->GetProfile(),
+                                  kClientCertSubjectCommonName));
 }
 
 // TODO(crbug.com/40589684): Add a test case for a kiosk session.
@@ -609,7 +609,7 @@ class PolicyProvidedCertsForSigninExtensionTest
           test_certs_path.AppendASCII(kRootCaCert), &x509_contents));
     }
 
-    base::Value::Dict onc_dict = BuildONCForExtensionScopedCertificate(
+    base::DictValue onc_dict = BuildONCForExtensionScopedCertificate(
         x509_contents, kSigninScreenExtension1);
     ASSERT_TRUE(base::JSONWriter::Write(
         onc_dict, device_policy()
@@ -628,7 +628,8 @@ class PolicyProvidedCertsForSigninExtensionTest
   }
 
   void SetUpOnMainThread() override {
-    ash::StartupUtils::MarkOobeCompleted();  // Pretend that OOBE was complete.
+    ash::StartupUtils::MarkOobeCompleted(CHECK_DEREF(
+        g_browser_process->local_state()));  // Pretend that OOBE was complete.
 
     SigninProfileExtensionsPolicyTestBase::SetUpOnMainThread();
 
@@ -663,18 +664,17 @@ class PolicyProvidedCertsForSigninExtensionTest
  private:
   // Builds an ONC policy value that specifies exactly one certificate described
   // by |x509_contents| with Web trust to be used for |extension_id|.
-  base::Value::Dict BuildONCForExtensionScopedCertificate(
+  base::DictValue BuildONCForExtensionScopedCertificate(
       const std::string& x509_contents,
       const std::string& extension_id) {
-    auto onc_cert_scope = base::Value::Dict()
+    auto onc_cert_scope = base::DictValue()
                               .Set(onc::scope::kType, onc::scope::kExtension)
                               .Set(onc::scope::kId, extension_id);
 
-    auto onc_cert_trust_bits =
-        base::Value::List().Append(onc::certificate::kWeb);
+    auto onc_cert_trust_bits = base::ListValue().Append(onc::certificate::kWeb);
 
     auto onc_certificate =
-        base::Value::Dict()
+        base::DictValue()
             .Set(onc::certificate::kGUID, base::Value("guid"))
             .Set(onc::certificate::kType, onc::certificate::kAuthority)
             .Set(onc::certificate::kX509, x509_contents)
@@ -682,9 +682,9 @@ class PolicyProvidedCertsForSigninExtensionTest
             .Set(onc::certificate::kTrustBits, std::move(onc_cert_trust_bits));
 
     auto onc_certificates =
-        base::Value::List().Append(std::move(onc_certificate));
+        base::ListValue().Append(std::move(onc_certificate));
 
-    auto onc_dict = base::Value::Dict()
+    auto onc_dict = base::DictValue()
                         .Set(onc::toplevel_config::kCertificates,
                              std::move(onc_certificates))
                         .Set(onc::toplevel_config::kType,

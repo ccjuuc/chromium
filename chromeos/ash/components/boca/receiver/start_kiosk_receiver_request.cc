@@ -13,6 +13,7 @@
 #include "base/check.h"
 #include "base/functional/callback.h"
 #include "base/json/json_writer.h"
+#include "base/strings/escape.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "chromeos/ash/components/boca/boca_request.h"
@@ -23,18 +24,18 @@
 namespace ash::boca_receiver {
 
 namespace {
-base::Value::Dict getUserDeviceInfoDict(::boca::UserIdentity user,
-                                        std::string device_id) {
-  base::Value::Dict user_info;
+base::DictValue getUserDeviceInfoDict(::boca::UserIdentity user,
+                                      std::string device_id) {
+  base::DictValue user_info;
   user_info.Set(boca::kGaiaId, user.gaia_id());
   user_info.Set(boca::kEmail, user.email());
   user_info.Set(boca::kFullName, user.full_name());
   user_info.Set(boca::kPhotoUrl, user.photo_url());
 
-  base::Value::Dict device_info;
+  base::DictValue device_info;
   device_info.Set(boca::kDeviceId, device_id);
 
-  base::Value::Dict user_device_info;
+  base::DictValue user_device_info;
   user_device_info.Set(boca::kUser, std::move(user_info));
   user_device_info.Set(boca::kDevice, std::move(device_info));
 
@@ -63,25 +64,26 @@ StartKioskReceiverRequest::StartKioskReceiverRequest(
 StartKioskReceiverRequest::~StartKioskReceiverRequest() = default;
 
 std::string StartKioskReceiverRequest::GetRelativeUrl() {
-  return base::ReplaceStringPlaceholders(boca::kStartKioskReceiverUrlTemplate,
-                                         {receiver_id_}, nullptr);
+  return base::ReplaceStringPlaceholders(
+      boca::kStartKioskReceiverUrlTemplate,
+      {base::EscapeAllExceptUnreserved(receiver_id_)}, nullptr);
 }
 
 std::optional<std::string> StartKioskReceiverRequest::GetRequestBody() {
   std::string request_body;
-  base::Value::Dict request;
-  base::Value::Dict connection_details;
+  base::DictValue request;
+  base::DictValue connection_details;
 
   if (connection_code_) {
-    base::Value::Dict connection_code;
+    base::DictValue connection_code;
     connection_code.Set(boca::kConnectionCode, connection_code_.value());
     connection_details.Set(boca::kConnectionCode, std::move(connection_code));
   }
 
-  base::Value::Dict initiator =
+  base::DictValue initiator =
       getUserDeviceInfoDict(initiator_, initiator_device_id_);
 
-  base::Value::Dict presenter =
+  base::DictValue presenter =
       getUserDeviceInfoDict(presenter_, presenter_device_id_);
 
   connection_details.Set(boca::kInitiator, std::move(initiator));

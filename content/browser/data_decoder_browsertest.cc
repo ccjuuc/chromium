@@ -56,23 +56,6 @@ bool ReadTestFile(const base::FilePath& relative_path,
   return true;
 }
 
-// Populates `out_measurement_value` and returns true on success (i.e. if the
-// `metric_name` has a single measurement in `histograms`).  Otherwise returns
-// false.
-bool GetSingleMeasurement(const base::HistogramTester& histograms,
-                          const char* metric_name,
-                          base::TimeDelta& out_measurement_value) {
-  DCHECK(metric_name);
-
-  std::vector<base::Bucket> buckets = histograms.GetAllSamples(metric_name);
-  if (buckets.size() != 1u)
-    return false;
-
-  EXPECT_EQ(1u, buckets.size());
-  out_measurement_value = base::Milliseconds(buckets.front().min);
-  return true;
-}
-
 }  // namespace
 
 using DataDecoderBrowserTest = ContentBrowserTest;
@@ -175,32 +158,6 @@ IN_PROC_BROWSER_TEST_F(DataDecoderBrowserTest, DecodeImageIsolated) {
         std::move(callback));
     run_loop.Run();
   }
-
-  FetchHistogramsFromChildProcesses();
-  EXPECT_THAT(
-      histograms.GetTotalCountsForPrefix("Security.DataDecoder"),
-      UnorderedElementsAre(
-          Pair("Security.DataDecoder.Image.Isolated.EndToEndTime", 1),
-          Pair("Security.DataDecoder.Image.Isolated.ProcessOverhead", 1),
-          Pair("Security.DataDecoder.Image.DecodingTime", 1)));
-
-  base::TimeDelta end_to_end_duration_estimate;
-  EXPECT_TRUE(GetSingleMeasurement(
-      histograms, "Security.DataDecoder.Image.Isolated.EndToEndTime",
-      end_to_end_duration_estimate));
-
-  base::TimeDelta overhead_estimate;
-  EXPECT_TRUE(GetSingleMeasurement(
-      histograms, "Security.DataDecoder.Image.Isolated.ProcessOverhead",
-      overhead_estimate));
-
-  base::TimeDelta decoding_duration_estimate;
-  EXPECT_TRUE(GetSingleMeasurement(histograms,
-                                   "Security.DataDecoder.Image.DecodingTime",
-                                   decoding_duration_estimate));
-
-  EXPECT_LE(decoding_duration_estimate, end_to_end_duration_estimate);
-  EXPECT_LE(overhead_estimate, end_to_end_duration_estimate);
 }
 
 IN_PROC_BROWSER_TEST_F(DataDecoderBrowserTest, DecodeImage) {
@@ -229,61 +186,6 @@ IN_PROC_BROWSER_TEST_F(DataDecoderBrowserTest, DecodeImage) {
         std::move(callback));
     run_loop.Run();
   }
-
-  FetchHistogramsFromChildProcesses();
-  EXPECT_THAT(
-      histograms.GetTotalCountsForPrefix("Security.DataDecoder"),
-      UnorderedElementsAre(
-          Pair("Security.DataDecoder.Image.Reusable.EndToEndTime", 1),
-          Pair("Security.DataDecoder.Image.Reusable.ProcessOverhead", 1),
-          Pair("Security.DataDecoder.Image.DecodingTime", 1)));
-
-  base::TimeDelta end_to_end_duration_estimate;
-  EXPECT_TRUE(GetSingleMeasurement(
-      histograms, "Security.DataDecoder.Image.Reusable.EndToEndTime",
-      end_to_end_duration_estimate));
-
-  base::TimeDelta overhead_estimate;
-  EXPECT_TRUE(GetSingleMeasurement(
-      histograms, "Security.DataDecoder.Image.Reusable.ProcessOverhead",
-      overhead_estimate));
-
-  base::TimeDelta decoding_duration_estimate;
-  EXPECT_TRUE(GetSingleMeasurement(histograms,
-                                   "Security.DataDecoder.Image.DecodingTime",
-                                   decoding_duration_estimate));
-
-  EXPECT_LE(decoding_duration_estimate, end_to_end_duration_estimate);
-  EXPECT_LE(overhead_estimate, end_to_end_duration_estimate);
-}
-
-IN_PROC_BROWSER_TEST_F(DataDecoderBrowserTest,
-                       NoCallbackAfterDestruction_Json) {
-  base::RunLoop run_loop;
-
-  auto decoder = std::make_unique<data_decoder::DataDecoder>();
-  auto* raw_decoder = decoder.get();
-
-  // Android's in-process parser can complete synchronously, so queue the
-  // delete task first unlike in the other tests.
-  base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(
-      FROM_HERE, std::move(decoder));
-
-  bool got_callback = false;
-  raw_decoder->ParseJson(
-      "[1, 2, 3]",
-      base::BindOnce(
-          [](bool* got_callback, base::ScopedClosureRunner quit_closure_runner,
-             data_decoder::DataDecoder::ValueOrError result) {
-            *got_callback = true;
-          },
-          // Pass the quit closure as a ScopedClosureRunner, so that the loop
-          // is quit if the callback is destroyed un-run or after it runs.
-          &got_callback, base::ScopedClosureRunner(run_loop.QuitClosure())));
-
-  run_loop.Run();
-
-  EXPECT_FALSE(got_callback);
 }
 
 IN_PROC_BROWSER_TEST_F(DataDecoderBrowserTest, NoCallbackAfterDestruction_Xml) {

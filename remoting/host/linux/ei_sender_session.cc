@@ -66,19 +66,6 @@
 // up-to-date layout, and for other devices it theoretically shouldn't matter.
 // We can always revisit if this approach turns out not to be ideal for some
 // EIS implementation.
-//
-// A final note about mouse button and scroll events: originally, libei included
-// button presses and scroll events as part of the relative pointer and absolute
-// pointer capabilities. Before reaching 1.0, the library and EI protocol were
-// updated to separate those events into their own button and scroll
-// capabilities. The demo app still assumes that a device with a pointer
-// capability will support injecting button and scroll events. Theoretically,
-// however, the button and scroll capabilities could now be provided by
-// different devices. EiSenderSession thus treats these capabilities like any
-// other: when it needs to inject a button or scroll event, it will use whatever
-// device providing the respective capability was most recently added. That
-// should be fine, since a seat only has one logical pointer and it shouldn't
-// matter what device is used to trigger a click on it.
 
 #include "remoting/host/linux/ei_sender_session.h"
 
@@ -105,20 +92,25 @@
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/types/expected.h"
+#include "remoting/base/loggable.h"
 #include "remoting/base/logging.h"
-#include "remoting/host/base/loggable.h"
 #include "remoting/host/linux/ei_input_injector.h"
 #include "remoting/host/linux/ei_keyboard_layout_monitor.h"
 #include "remoting/host/linux/ei_keymap.h"
 #include "remoting/proto/event.pb.h"
-#include "third_party/libei/cipd/include/libei-1.0/libei.h"
+#include "third_party/libei/src/src/libei.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
 
 namespace remoting {
 
 namespace {
 
-constexpr int kPixelsPerTick = 120;
+// Some libei APIs, such as ei_device_get_name(), return a const char* but
+// do not document that the returned pointer will always be non-null. This
+// helper is useful for safely logging these strings.
+const char* NullToLiteral(const char* ptr) {
+  return ptr ? ptr : "null";
+}
 
 // This functionality is copied from fractional_input_filter.cc to maintain
 // an equivalent functionality for now.
@@ -175,6 +167,18 @@ void EiSenderSession::SetInputInjector(
   input_injector_ = input_injector;
   input_injector_->SetKeymap(
       keyboards_.empty() ? nullptr : std::get<1>(keyboards_.back())->GetWeakPtr());
+  input_injector_->SetEiSession(GetWeakPtr());
+}
+
+void EiSenderSession::TransferStateTo(EiSenderSession& replacement) {
+  if (keyboard_layout_monitor_) {
+    replacement.SetKeyboardLayoutMonitor(keyboard_layout_monitor_);
+  }
+  if (input_injector_) {
+    replacement.SetInputInjector(input_injector_);
+  }
+  keyboard_layout_monitor_.reset();
+  input_injector_.reset();
 }
 
 void EiSenderSession::InjectKeyEvent(std::uint32_t usb_keycode, bool is_press) {
@@ -203,7 +207,7 @@ void EiSenderSession::InjectAbsolutePointerMove(std::string_view region_id,
 
   auto [first_equal, first_greater] = absolute_pointers_.equal_range(region_id);
   if (first_equal == first_greater) {
-    LOG(ERROR) << "No absolute pointer for the requested region";
+    LOG(ERROR) << "No absolute pointer for the requested region: " << region_id;
     return;
   }
 
@@ -267,10 +271,13 @@ void EiSenderSession::InjectButton(protocol::MouseEvent::MouseButton button,
   }
 
   // The button capability might appear on multiple pointer devices, or on a
-  // separate device altogether. Since each seat only has one logical pointer,
-  // it should be fine to inject buttons on any device that supports them, so
-  // just use the most recent one like with other devices.
-  auto& button_device = button_devices_.back();
+  // separate device altogether. To work around a GNOME/libEI issue
+  // (b/446025937), inject using the first received pointer device. Based on
+  // observation, the later devices (with the button capability) are absolute
+  // pointer devices which get removed and added by GNOME whenever the display
+  // is resized. This may cause buttons to become stuck when the device is
+  // removed.
+  auto& button_device = button_devices_.front();
 
   ei_device_button_button(button_device.get(), button_code, is_press);
   ei_device_frame(button_device.get(), ei_now(ei_.get()));
@@ -284,45 +291,13 @@ void EiSenderSession::InjectScrollDelta(double delta_x, double delta_y) {
     return;
   }
 
-  // Don't use ei_device_scroll_delta because Chrome overscrolls by about 16x.
-  // Instead accumulate pixels until there's enough for one "tick", which is
-  // what we do on X11.
+  // Use the first device, for consistency with button-injection.
+  auto& scroll_device = button_devices_.front();
 
-  // Discard any accumulated pixels if the scroll direction changes.
-  if (delta_x != 0) {
-    if ((delta_x > 0) != (subtick_pixels_x_ > 0)) {
-      subtick_pixels_x_ = 0;
-    }
-  }
-  if (delta_y != 0) {
-    if ((delta_y > 0) != (subtick_pixels_y_ > 0)) {
-      subtick_pixels_y_ = 0;
-    }
-  }
-
-  subtick_pixels_x_ += delta_x;
-  subtick_pixels_y_ += delta_y;
-  int ticks_x = subtick_pixels_x_ / kPixelsPerTick;
-  int ticks_y = subtick_pixels_y_ / kPixelsPerTick;
-  subtick_pixels_x_ %= kPixelsPerTick;
-  subtick_pixels_y_ %= kPixelsPerTick;
-
-  if (ticks_x == 0 && ticks_y == 0) {
-    return;
-  }
-
-  // The scroll capability might appear on multiple pointer devices, or on a
-  // separate device altogether. Since each seat only has one logical pointer,
-  // it should be fine to inject scroll events on any device that supports them,
-  // so just use the most recent one like with other devices.
-  auto& scroll_device = button_devices_.back();
-
-  // This function takes values representing 120ths of a tick, so 120 would be
-  // one wheel tick, 240 would be two ticks, and 60 would be half of a tick.
-  // Additionally, positive value as scroll down or to the right (the opposite
-  // of the Chromoting protocol), so we need to flip the sign.
-  ei_device_scroll_discrete(scroll_device.get(), -ticks_x * 120,
-                            -ticks_y * 120);
+  // Mutter interprets ei_device_scroll_delta() as wheel ticks, overscrolling
+  // by 12x. See https://gitlab.gnome.org/GNOME/mutter/-/work_items/4372 for
+  // more details.
+  ei_device_scroll_delta(scroll_device.get(), -delta_x / 12.0, -delta_y / 12.0);
   ei_device_frame(scroll_device.get(), ei_now(ei_.get()));
 }
 
@@ -334,14 +309,8 @@ void EiSenderSession::InjectScrollDiscrete(float ticks_x, float ticks_y) {
     return;
   }
 
-  subtick_pixels_x_ = 0;
-  subtick_pixels_y_ = 0;
-
-  // The scroll capability might appear on multiple pointer devices, or on a
-  // separate device altogether. Since each seat only has one logical pointer,
-  // it should be fine to inject scroll events on any device that supports them,
-  // so just use the most recent one like with other devices.
-  auto& scroll_device = button_devices_.back();
+  // Use the first device, for consistency with button-injection.
+  auto& scroll_device = button_devices_.front();
 
   // This function takes values representing 120ths of a tick, so 120 would be
   // one wheel tick, 240 would be two ticks, and 60 would be half of a tick.
@@ -352,7 +321,9 @@ void EiSenderSession::InjectScrollDiscrete(float ticks_x, float ticks_y) {
   ei_device_frame(scroll_device.get(), ei_now(ei_.get()));
 }
 
-void EiSenderSession::CreateWithFd(base::ScopedFD fd, CreateCallback callback) {
+void EiSenderSession::CreateWithFd(base::ScopedFD fd,
+                                   CreateCallback callback,
+                                   base::OnceClosure disconnect_callback) {
   auto sender_session = base::WrapUnique(new EiSenderSession());
   auto* raw = sender_session.get();
   raw->InitWithFd(
@@ -368,13 +339,17 @@ void EiSenderSession::CreateWithFd(base::ScopedFD fd, CreateCallback callback) {
                       return std::move(error);
                     }));
           },
-          std::move(sender_session), std::move(callback)));
+          std::move(sender_session), std::move(callback)),
+      std::move(disconnect_callback));
 }
 
 EiSenderSession::EiSenderSession() = default;
 
-void EiSenderSession::InitWithFd(base::ScopedFD fd, InitCallback callback) {
+void EiSenderSession::InitWithFd(base::ScopedFD fd,
+                                 InitCallback callback,
+                                 base::OnceClosure disconnect_callback) {
   init_callback_ = std::move(callback);
+  disconnect_callback_ = std::move(disconnect_callback);
   ei_ = EiPtr::Take(ei_new_sender(nullptr));
   int result = ei_setup_backend_fd(ei_.get(), fd.release());
   if (result != 0) {
@@ -416,9 +391,13 @@ void EiSenderSession::OnDisconnected(bool shutting_down) {
     return;
   }
   LOG(ERROR) << "Unexpectedly disconnected from EIS";
+  if (disconnect_callback_) {
+    std::move(disconnect_callback_).Run();
+  }
 }
 
 void EiSenderSession::OnSeatAdded(EiSeatPtr seat) {
+  HOST_LOG << "EI seat added: " << NullToLiteral(ei_seat_get_name(seat.get()));
   if (default_seat_.get()) {
     HOST_LOG << "Ignoring additional seat";
     return;
@@ -448,44 +427,59 @@ void EiSenderSession::OnSeatAdded(EiSeatPtr seat) {
 }
 
 void EiSenderSession::OnSeatRemoved(EiSeatPtr seat) {
+  HOST_LOG << "EI seat removed: "
+           << NullToLiteral(ei_seat_get_name(seat.get()));
   if (seat == default_seat_) {
     default_seat_.reset();
-    LOG(WARNING) << "EIS seat removed";
+    LOG(WARNING) << "Default seat removed";
   }
 }
 
 void EiSenderSession::OnDeviceAdded(EiDevicePtr device) {
+  HOST_LOG << "EI device added: "
+           << NullToLiteral(ei_device_get_name(device.get()));
   AllocDeviceState(device);
   // The compositor might provide a device with multiple capabilities, in which
   // case it will be inserted in multiple lists.
   if (ei_device_has_capability(device.get(), EI_DEVICE_CAP_KEYBOARD)) {
-    keyboards_.push_back(
-        std::make_tuple(device, std::make_unique<EiKeymap>(device)));
+    HOST_LOG << ".. adding to keyboard devices";
+    keyboards_.emplace_back(device, std::make_unique<EiKeymap>(device));
     std::get<1>(keyboards_.back())
         ->Load(base::BindOnce(&EiSenderSession::OnKeymapLoaded, GetWeakPtr(),
                               device));
   }
   if (ei_device_has_capability(device.get(), EI_DEVICE_CAP_POINTER)) {
+    HOST_LOG << ".. adding to relative pointers";
     relative_pointers_.push_back({device});
   }
   if (ei_device_has_capability(device.get(), EI_DEVICE_CAP_BUTTON)) {
+    HOST_LOG << ".. adding to button devices";
     button_devices_.push_back({device});
   }
   if (ei_device_has_capability(device.get(), EI_DEVICE_CAP_SCROLL)) {
+    HOST_LOG << ".. adding to scroll devices";
     scroll_devices_.push_back({device});
   }
   if (ei_device_has_capability(device.get(), EI_DEVICE_CAP_POINTER_ABSOLUTE)) {
+    HOST_LOG << ".. adding to absolute pointers";
     AddDeviceRegions(absolute_pointers_, {device});
   }
   if (ei_device_has_capability(device.get(), EI_DEVICE_CAP_TOUCH)) {
+    HOST_LOG << ".. adding to touch devices";
     AddDeviceRegions(touch_devices_, {device});
   }
 }
 
 void EiSenderSession::OnDeviceRemoved(EiDevicePtr device) {
+  HOST_LOG << "EI device removed: "
+           << NullToLiteral(ei_device_get_name(device.get()));
   if (ei_device_has_capability(device.get(), EI_DEVICE_CAP_KEYBOARD)) {
+    HOST_LOG << ".. removing from keyboard devices";
     bool is_current =
         (!keyboards_.empty() && std::get<0>(keyboards_.back()) == device);
+    if (is_current) {
+      LOG(WARNING) << "The current keyboard device was removed.";
+    }
     std::erase_if(keyboards_, [&device](auto& item) {
       return std::get<0>(item) == device;
     });
@@ -495,23 +489,35 @@ void EiSenderSession::OnDeviceRemoved(EiDevicePtr device) {
     }
   }
   if (ei_device_has_capability(device.get(), EI_DEVICE_CAP_POINTER)) {
+    HOST_LOG << ".. removing from relative pointers";
+    if (!relative_pointers_.empty() && relative_pointers_.front() == device) {
+      LOG(WARNING) << "The current relative pointer was removed.";
+    }
     std::erase_if(relative_pointers_,
                   [&device](auto& item) { return item == device; });
   }
   if (ei_device_has_capability(device.get(), EI_DEVICE_CAP_BUTTON)) {
+    HOST_LOG << ".. removing from button devices";
+    if (!button_devices_.empty() && button_devices_.front() == device) {
+      LOG(WARNING) << "The first button device was removed. This may cause "
+                      "issues with button or scroll injection.";
+    }
     std::erase_if(button_devices_,
                   [&device](auto& item) { return item == device; });
   }
   if (ei_device_has_capability(device.get(), EI_DEVICE_CAP_SCROLL)) {
+    HOST_LOG << ".. removing from scroll devices";
     std::erase_if(scroll_devices_,
                   [&device](auto& item) { return item == device; });
   }
   if (ei_device_has_capability(device.get(), EI_DEVICE_CAP_POINTER_ABSOLUTE)) {
+    HOST_LOG << ".. removing from absolute pointers";
     std::erase_if(absolute_pointers_, [&device](auto& item) {
       return item.second.second == device;
     });
   }
   if (ei_device_has_capability(device.get(), EI_DEVICE_CAP_TOUCH)) {
+    HOST_LOG << ".. removing from touch devices";
     std::erase_if(touch_devices_, [&device](auto& item) {
       return item.second.second == device;
     });
@@ -520,10 +526,14 @@ void EiSenderSession::OnDeviceRemoved(EiDevicePtr device) {
 }
 
 void EiSenderSession::OnDevicePaused(EiDevicePtr device) {
+  HOST_LOG << "EI device paused: "
+           << NullToLiteral(ei_device_get_name(device.get()));
   GetDeviceState(device).resumed = false;
 }
 
 void EiSenderSession::OnDeviceResumed(EiDevicePtr device) {
+  HOST_LOG << "EI device resumed: "
+           << NullToLiteral(ei_device_get_name(device.get()));
   GetDeviceState(device).resumed = true;
   // TODO(rkjnsn): Only call this on devices we expect to use.
   // TODO(rkjnsn): In the future, we'll want the host to keep the session open
@@ -600,6 +610,8 @@ void EiSenderSession::AddDeviceRegions(
                   std::pair<EiRegionPtr, EiDevicePtr>,
                   std::less<>>& map,
     EiDevicePtr device) {
+  HOST_LOG << "Adding regions from device: "
+           << NullToLiteral(ei_device_get_name(device.get()));
   for (size_t i = 0; ei_region* region = ei_device_get_region(device.get(), i);
        ++i) {
     const char* mapping_id = ei_region_get_mapping_id(region);
@@ -607,9 +619,12 @@ void EiSenderSession::AddDeviceRegions(
     // InjectAbsolutePointerMove().
     std::string_view mapping_id_view =
         mapping_id ? mapping_id : std::string_view{};
-    if (mapping_id_view.empty()) {
-      HOST_LOG << "Region found without mapping id";
-    }
+    HOST_LOG << "  region " << i << " '" << mapping_id_view
+             << "' x=" << ei_region_get_x(region)
+             << " y=" << ei_region_get_y(region)
+             << " w=" << ei_region_get_width(region)
+             << " h=" << ei_region_get_height(region)
+             << " scale=" << ei_region_get_physical_scale(region);
     map.emplace(std::piecewise_construct, std::tuple(mapping_id_view),
                 std::forward_as_tuple(EiRegionPtr::Ref(region), device));
   }

@@ -16,6 +16,7 @@
 
 struct AccountInfo;
 class Browser;
+class BrowserWindowInterface;
 class Profile;
 struct AccountInfo;
 
@@ -70,18 +71,28 @@ using SigninChoiceWithConfirmAndRetryCallback =
                             SigninChoiceOperationDoneCallback,
                             SigninChoiceOperationRetryCallback)>;
 using SigninChoiceCallback = base::OnceCallback<void(SigninChoice)>;
-using SigninChoiceCallbackVariant =
-    std::variant<SigninChoiceCallback,
-                 signin::SigninChoiceWithConfirmAndRetryCallback>;
+enum class DeviceSignalsDisclaimerResult {
+  kAccepted,
+  kCanceled,
+  kDismissed,
+};
+using DeviceSignalsDisclaimerCallback =
+    base::OnceCallback<void(DeviceSignalsDisclaimerResult)>;
 
-struct EnterpriseProfileCreationDialogParams {
+using EnterpriseDisclaimerResultCallbackVariant =
+    std::variant<SigninChoiceCallback,
+                 SigninChoiceWithConfirmAndRetryCallback,
+                 DeviceSignalsDisclaimerCallback>;
+
+class EnterpriseProfileCreationDialogParams {
+ public:
   EnterpriseProfileCreationDialogParams(
       AccountInfo account_info,
       bool is_oidc_account,
       bool user_already_signed_in,
       bool profile_creation_required_by_policy,
       bool show_link_data_option,
-      SigninChoiceCallbackVariant process_user_choice_callback,
+      EnterpriseDisclaimerResultCallbackVariant process_user_choice_callback,
       base::OnceClosure done_callback,
       base::RepeatingClosure retry_callback = base::DoNothing());
   ~EnterpriseProfileCreationDialogParams();
@@ -90,18 +101,36 @@ struct EnterpriseProfileCreationDialogParams {
   EnterpriseProfileCreationDialogParams& operator=(
       const EnterpriseProfileCreationDialogParams&) = delete;
 
-  AccountInfo account_info;
-  bool is_oidc_account;
-  bool user_already_signed_in;
+  static std::unique_ptr<EnterpriseProfileCreationDialogParams>
+  CreateForDeviceSignalsDisclaimer(
+      AccountInfo account_info,
+      DeviceSignalsDisclaimerCallback process_user_choice_callback,
+      bool is_modal_dialog);
+
+  const AccountInfo account_info;
+  const bool is_oidc_account = false;
+  const bool user_already_signed_in = false;
   // True if the user was already signed in before
   // starting the sync flow. Used by UIs to decide whether the signin
   // proposition value should be shown, and what state should the user be in if
   // they cancel.
-  bool profile_creation_required_by_policy;
-  bool show_link_data_option;
-  SigninChoiceCallbackVariant process_user_choice_callback;
-  base::OnceClosure done_callback;
-  base::RepeatingClosure retry_callback;
+  const bool profile_creation_required_by_policy = false;
+  const bool show_link_data_option = false;
+  const bool is_device_signals_disclaimer = false;
+  // Should only be set if `is_device_signals_disclaimer` is true. Denotes
+  // whether the disclaimer is shown within the modal dialog or the profile
+  // picker window.
+  const bool is_device_signals_disclaimer_modal = false;
+  EnterpriseDisclaimerResultCallbackVariant process_user_choice_callback;
+  base::OnceClosure done_callback = base::DoNothing();
+  base::RepeatingClosure retry_callback = base::DoNothing();
+
+ private:
+  // Used only for creating the params for the device disclaimer screen.
+  EnterpriseProfileCreationDialogParams(
+      AccountInfo account_info,
+      DeviceSignalsDisclaimerCallback process_user_choice_callback,
+      bool is_modal_dialog);
 };
 
 // Gets a webview within an auth page that has the specified parent frame name
@@ -113,9 +142,9 @@ extensions::WebViewGuest* GetAuthWebViewGuest(
     content::WebContents* web_contents,
     const std::string& parent_frame_name);
 
-// Gets the browser containing the web UI; if none is found, returns the last
-// active browser for web UI's profile.
-Browser* GetDesktopBrowser(content::WebUI* web_ui);
+// Gets the browser window containing the web UI; if none is found, returns the
+// last active browser window for the web UI's profile.
+BrowserWindowInterface* GetDesktopBrowser(content::WebUI* web_ui);
 
 // After this time delta, user must see a screen. If it was impossible to get
 // the CanShowHistorySyncOptInsWithoutMinorModeRestrictions capability before
@@ -123,10 +152,10 @@ Browser* GetDesktopBrowser(content::WebUI* web_ui);
 base::TimeDelta GetMinorModeRestrictionsDeadline();
 
 // Sets the height of the WebUI modal dialog after its initialization. This is
-// needed to better accomodate different locales' text heights.
-void SetInitializedModalHeight(Browser* browser,
+// needed to better accommodate different locales' text heights.
+void SetInitializedModalHeight(BrowserWindowInterface* browser,
                                content::WebUI* web_ui,
-                               const base::Value::List& args);
+                               const base::ListValue& args);
 
 #if !BUILDFLAG(IS_CHROMEOS)
 // Helps clear Profile info, mainly for managed accounts.

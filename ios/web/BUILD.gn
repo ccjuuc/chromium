@@ -10,6 +10,12 @@ import("//ios/web/public/js_messaging/optimize_ts.gni")
 import("//testing/test.gni")
 import("//tools/grit/grit_rule.gni")
 
+declare_args() {
+  # Name of the implementation to use for the //ios/web provider API.
+  # Can be overridden by embedders.
+  ios_web_provider_target = "//ios/web/providers"
+}
+
 group("all_tests") {
   testonly = true
   deps = [
@@ -25,7 +31,6 @@ source_set("web") {
   ]
 
   deps = [
-    ":common_js",
     ":core",
     ":navigation_resources",
     ":resources",
@@ -56,6 +61,7 @@ source_set("web") {
     "//ios/web/web_state/ui:wk_web_view_configuration_provider",
     "//ios/web/webui",
     "//services/network:network_service",
+    ios_web_provider_target,
   ]
 
   if (ios_enable_javascript_flags) {
@@ -67,6 +73,7 @@ source_set("web") {
     "browser_state_utils.mm",
     "browser_url_rewriter_impl.h",
     "browser_url_rewriter_impl.mm",
+    "content_type_util.cc",
     "network_context_owner.cc",
     "web_client.mm",
   ]
@@ -143,7 +150,6 @@ source_set("run_all_unittests") {
     "//base/test:test_support",
     "//ios/web/public/test",
     "//ios/web/public/test:test_fixture",
-    "//ios/web/public/test/http_server",
     "//mojo/core/embedder",
   ]
 }
@@ -171,7 +177,6 @@ test("ios_web_unittests") {
     ":ios_web_general_unittests",
     ":ios_web_navigation_unittests",
     ":ios_web_net_unittests",
-    ":ios_web_web_state_js_unittests",
     ":ios_web_web_state_ui_unittests",
     ":ios_web_web_state_unittests",
     ":ios_web_webui_unittests",
@@ -183,6 +188,7 @@ test("ios_web_unittests") {
     "//ios/web/find_in_page:find_in_page_unittests",
     "//ios/web/js_features/clipboard:unittests",
     "//ios/web/js_features/context_menu:unittests",
+    "//ios/web/js_features/crash_keys:unittests",
     "//ios/web/js_features/fullscreen:unittests",
     "//ios/web/js_features/window_error:unittests",
     "//ios/web/js_image_transcoder:unittests",
@@ -221,6 +227,7 @@ source_set("ios_web_general_unittests") {
     "//ios/web/test:mojo_bindings",
     "//ios/web/test:test_constants",
     "//ios/web/test:test_support",
+    "//ios/web/test/fakes",
     "//ios/web/web_state/ui:wk_web_view_configuration_provider_header",
     "//net:test_support",
     "//testing/gmock",
@@ -231,16 +238,13 @@ source_set("ios_web_general_unittests") {
 
   sources = [
     "browser_state_unittest.mm",
+    "content_type_util_unittest.cc",
     "history_state_util_unittest.mm",
     "network_context_owner_unittest.cc",
     "test/web_test_unittest.mm",
     "web_client_unittest.mm",
     "web_thread_unittest.cc",
   ]
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 source_set("ios_web_navigation_unittests") {
@@ -427,38 +431,6 @@ source_set("ios_web_web_state_unittests") {
   ]
 }
 
-source_set("ios_web_web_state_js_unittests") {
-  testonly = true
-  deps = [
-    ":core",
-    ":web",
-    "//base",
-    "//base/test:test_support",
-    "//components/url_formatter",
-    "//ios/net",
-    "//ios/testing:ocmock_support",
-    "//ios/web/common:web_view_creation_util",
-    "//ios/web/js_features/context_menu",
-    "//ios/web/js_messaging",
-    "//ios/web/public",
-    "//ios/web/public/js_messaging",
-    "//ios/web/public/test",
-    "//ios/web/public/test:javascript_test",
-    "//ios/web/public/test/fakes",
-    "//ios/web/test:mojo_bindings",
-    "//ios/web/test:test_constants",
-    "//ios/web/test:test_support",
-    "//ios/web/test/fakes",
-    "//net:test_support",
-    "//testing/gmock",
-    "//testing/gtest",
-    "//third_party/ocmock",
-    "//ui/base:test_support",
-  ]
-
-  sources = [ "web_state/js/common_js_unittest.mm" ]
-}
-
 source_set("ios_web_web_state_ui_unittests") {
   testonly = true
   deps = [
@@ -521,6 +493,7 @@ source_set("ios_web_webui_unittests") {
     "//components/url_formatter",
     "//ios/net",
     "//ios/testing:ocmock_support",
+    "//ios/web/js_messaging",
     "//ios/web/public/test",
     "//ios/web/public/test:test_fixture",
     "//ios/web/public/test/fakes",
@@ -551,6 +524,7 @@ test("ios_web_inttests") {
     ":web",
     "//base/test:test_support",
     "//components/sessions:session_id",
+    "//crypto:test_support",
     "//ios/net",
     "//ios/testing:block_swizzler",
     "//ios/testing:embedded_test_server_support",
@@ -578,7 +552,6 @@ test("ios_web_inttests") {
     "//ios/web/public/test",
     "//ios/web/public/test:element_selector",
     "//ios/web/public/test:test_fixture",
-    "//ios/web/public/test/http_server",
     "//ios/web/public/webui",
     "//ios/web/security",
     "//ios/web/test:mojo_bindings",
@@ -612,10 +585,10 @@ test("ios_web_inttests") {
     "navigation/meta_tag_inttest.mm",
     "navigation/navigation_manager_impl_inttest.mm",
     "navigation/window_location_inttest.mm",
-    "public/test/http_server_inttest.mm",
     "test/run_all_unittests.cc",
     "url_loader_inttest.mm",
     "web_state/bad_ssl_response_inttest.mm",
+    "web_state/client_cert_auth_inttest.mm",
     "web_state/error_page_inttest.mm",
     "web_state/http_auth_inttest.mm",
     "web_state/keep_render_process_alive_inttest.mm",
@@ -629,13 +602,6 @@ test("ios_web_inttests") {
   assert_no_deps = ios_assert_no_deps
 }
 
-optimize_js("common_js") {
-  visibility = [ ":web" ]
-
-  primary_script = "web_state/js/resources/common.js"
-  sources = [ "web_state/js/resources/common.js" ]
-}
-
 bundle_data("navigation_resources") {
   sources = [
     "navigation/resources/error_page_injected.html",
@@ -647,6 +613,14 @@ bundle_data("navigation_resources") {
 
 grit("resources") {
   source = "ios_web_resources.grd"
+
+  inputs = [
+    "${root_gen_dir}/mojo/public/js/mojo_bindings.js",
+    "${root_gen_dir}/ui/webui/resources/tsc/mojo/url/mojom/url.mojom-webui.js",
+    "${root_gen_dir}/ui/webui/resources/tsc/mojo/url/mojom/origin.mojom-webui.js",
+    "${root_gen_dir}/ui/webui/resources/tsc/mojo/ui/base/mojom/window_open_disposition.mojom-webui.js",
+    "${root_gen_dir}/ui/webui/resources/tsc/mojo/ui/base/mojom/ui_base_types.mojom-webui.js",
+  ]
 
   outputs = [
     "grit/ios_web_resources.h",

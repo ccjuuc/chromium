@@ -25,7 +25,6 @@
 #include "third_party/blink/renderer/core/url_pattern/url_pattern_canon.h"
 #include "third_party/blink/renderer/core/url_pattern/url_pattern_dummy_url_canon.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
 #include "third_party/liburlpattern/part.h"
 #include "third_party/liburlpattern/pattern.h"
@@ -262,7 +261,7 @@ Component* Component::Compile(v8::Isolate* isolate,
   if (!parse_result.has_value()) {
     exception_state.ThrowTypeError(
         StrCat({"Invalid ", TypeToString(type), " pattern '", final_pattern,
-                "'. ", String::FromUTF8(parse_result.error().message())}));
+                "'. ", String::FromUtf8(parse_result.error().message())}));
     return nullptr;
   }
 
@@ -277,7 +276,7 @@ Component* Component::Compile(v8::Isolate* isolate,
 
     // Compile the regular expression to verify it is valid.
     auto case_sensitive =
-        options.sensitive ? kTextCaseSensitive : kTextCaseASCIIInsensitive;
+        options.sensitive ? kTextCaseSensitive : kTextCaseAsciiInsensitive;
     DCHECK(base::IsStringASCII(regexp_string));
     regexp = MakeGarbageCollected<ScriptRegexp>(
         isolate, String(regexp_string), case_sensitive,
@@ -315,7 +314,7 @@ Component* Component::Compile(v8::Isolate* isolate,
     wtf_name_list.ReserveInitialCapacity(
         static_cast<wtf_size_t>(name_list.size()));
     for (const auto& name : name_list) {
-      wtf_name_list.push_back(String::FromUTF8(name));
+      wtf_name_list.push_back(String::FromUtf8(name));
     }
   }
 
@@ -380,7 +379,12 @@ bool Component::Match(StringView input,
         regexp_->Match(input, /*start_from=*/0, /*match_length=*/nullptr,
                        group_list ? &value_list : nullptr) == 0;
     if (result && group_list) {
-      DCHECK_EQ(name_list_.size(), value_list.size());
+      // When `pattern_` has named capture group(s), the match results for them
+      // are merged into `value_list`. In such cases, the correspondence between
+      // `name_list_` and `value_list` are broken.
+      // TODO(crbug.com/494341467): discuss this behavior in the spec issue
+      // https://github.com/whatwg/urlpattern/issues/284
+      CHECK_LE(name_list_.size(), value_list.size());
       group_list->ReserveInitialCapacity(name_list_.size());
       for (wtf_size_t i = 0; i < name_list_.size(); ++i) {
         group_list->emplace_back(name_list_[i], std::move(value_list[i]));
@@ -404,24 +408,24 @@ bool Component::Match(StringView input,
       // We need to be careful converting the group value to a blink::String.
       // If the value is std::nullopt, then we want to use a null String.
       // If the value exists, but is zero length, then we want to use an empty
-      // string.  We must handle this explicitly since FromUTF8() can convert
+      // string.  We must handle this explicitly since FromUtf8() can convert
       // some zero length strings to null String.
       String value;
       if (pair.second.has_value()) {
         if (pair.second->empty()) {
           value = g_empty_string;
         } else {
-          value = String::FromUTF8(*pair.second);
+          value = String::FromUtf8(*pair.second);
         }
       }
-      group_list->emplace_back(String::FromUTF8(pair.first), std::move(value));
+      group_list->emplace_back(String::FromUtf8(pair.first), std::move(value));
     }
   }
   return result;
 }
 
 String Component::GeneratePatternString() const {
-  return String::FromUTF8(pattern_.GeneratePatternString());
+  return String::FromUtf8(pattern_.GeneratePatternString());
 }
 
 bool Component::ShouldTreatAsStandardURL() const {
@@ -462,10 +466,10 @@ std::optional<String> Component::Generate(
   base::expected<std::string, absl::Status> result =
       pattern_.Generate(groups_map, callback);
   if (!result.has_value()) {
-    exception_state.ThrowTypeError(String::FromUTF8(result.error().message()));
+    exception_state.ThrowTypeError(String::FromUtf8(result.error().message()));
     return std::nullopt;
   }
-  return String::FromUTF8(result.value());
+  return String::FromUtf8(result.value());
 }
 
 const std::vector<liburlpattern::Part>& Component::PartList() const {

@@ -143,8 +143,9 @@ public class DownloadManagerBridge {
         DownloadQueryResult result = new DownloadQueryResult(downloadId);
         DownloadManager manager =
                 (DownloadManager) getContext().getSystemService(Context.DOWNLOAD_SERVICE);
+        Cursor c = null;
         try {
-            Cursor c = manager.query(new DownloadManager.Query().setFilterById(downloadId));
+            c = manager.query(new DownloadManager.Query().setFilterById(downloadId));
             if (c == null) {
                 result.downloadStatus = DownloadStatus.CANCELLED;
                 return result;
@@ -176,7 +177,6 @@ public class DownloadManagerBridge {
             } else {
                 result.downloadStatus = DownloadStatus.CANCELLED;
             }
-            c.close();
 
             try {
                 result.contentUri = manager.getUriForDownloadedFile(downloadId);
@@ -188,6 +188,10 @@ public class DownloadManagerBridge {
         } catch (Exception e) {
             result.downloadStatus = DownloadStatus.CANCELLED;
             Log.e(TAG, "unable to query android DownloadManager", e);
+        } finally {
+            if (c != null) {
+                c.close();
+            }
         }
 
         return result;
@@ -375,12 +379,12 @@ public class DownloadManagerBridge {
                 mStartTime = System.currentTimeMillis();
                 mDownloadId = manager.enqueue(request);
             } catch (IllegalArgumentException e) {
-                // See crbug.com/143499 for more details.
+                // See crbug.com/40904533 for more details.
                 Log.e(TAG, "Download failed: " + e);
                 mFailureReason = DownloadManager.ERROR_UNKNOWN;
                 return false;
             } catch (RuntimeException e) {
-                // See crbug.com/490442 for more details.
+                // See crbug.com/40419101 for more details.
                 Log.e(TAG, "Failed to create target file on the external storage: " + e);
                 mFailureReason = DownloadManager.ERROR_FILE_ERROR;
                 return false;

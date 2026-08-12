@@ -12,6 +12,8 @@
 #include "base/strings/stringprintf.h"
 #include "base/system/sys_info.h"
 #include "build/config/chromebox_for_meetings/buildflags.h"  // PLATFORM_CFM
+#include "build/config/cuttlefish/buildflags.h"  // PLATFORM_CUTTLEFISH
+#include "build/config/squid/buildflags.h"       // PLATFORM_SQUID
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/common/chrome_paths.h"
 #include "chromeos/ash/components/attestation/attestation_features.h"
@@ -23,10 +25,10 @@
 #include "chromeos/ash/components/dbus/arc/arc_keymint_client.h"
 #include "chromeos/ash/components/dbus/arc/arc_midis_client.h"
 #include "chromeos/ash/components/dbus/arc/arc_obb_mounter_client.h"
-#include "chromeos/ash/components/dbus/arc/arcvm_data_migrator_client.h"
 #include "chromeos/ash/components/dbus/attestation/attestation_client.h"
 #include "chromeos/ash/components/dbus/audio/cras_audio_client.h"
 #include "chromeos/ash/components/dbus/audio/floss_media_client.h"
+#include "chromeos/ash/components/dbus/beam/zr_vendor_os_client.h"
 #include "chromeos/ash/components/dbus/biod/biod_client.h"
 #include "chromeos/ash/components/dbus/cdm_factory_daemon/cdm_factory_daemon_client.h"
 #include "chromeos/ash/components/dbus/cec_service/cec_service_client.h"
@@ -74,7 +76,6 @@
 #include "chromeos/ash/components/dbus/userdataauth/cryptohome_pkcs11_client.h"
 #include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
 #include "chromeos/ash/components/dbus/virtual_file_provider/virtual_file_provider_client.h"
-#include "chromeos/ash/components/dbus/vm_plugin_dispatcher/vm_plugin_dispatcher_client.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/components/language_packs/language_pack_manager.h"
 #include "chromeos/dbus/constants/dbus_paths.h"
@@ -96,6 +97,10 @@
 #if BUILDFLAG(PLATFORM_CFM)
 #include "chromeos/ash/components/chromebox_for_meetings/features.h"
 #include "chromeos/ash/components/dbus/chromebox_for_meetings/cfm_hotline_client.h"
+#endif
+
+#if BUILDFLAG(PLATFORM_CUTTLEFISH) || BUILDFLAG(PLATFORM_SQUID)
+#include "chromeos/dbus/dissidia/dissidia_client.h"
 #endif
 
 namespace ash {
@@ -151,7 +156,6 @@ void InitializeDBus() {
   InitializeDBusClient<ArcKeyMintClient>(bus);
   InitializeDBusClient<ArcMidisClient>(bus);
   InitializeDBusClient<ArcObbMounterClient>(bus);
-  InitializeDBusClient<ArcVmDataMigratorClient>(bus);
   InitializeDBusClient<AttestationClient>(bus);
   InitializeDBusClient<BiodClient>(bus);  // For device::Fingerprint.
   InitializeDBusClient<CdmFactoryDaemonClient>(bus);
@@ -203,7 +207,6 @@ void InitializeDBus() {
   InitializeDBusClient<UserDataAuthClient>(bus);
   InitializeDBusClient<UpstartClient>(bus);
   InitializeDBusClient<VirtualFileProviderClient>(bus);
-  InitializeDBusClient<VmPluginDispatcherClient>(bus);
   InitializeDBusClient<chromeos::RegmonClient>(bus);
 
   attestation::AttestationFeatures::Initialize();
@@ -252,6 +255,9 @@ void InitializeFeatureListDependentDBus() {
     InitializeDBusClient<CfmHotlineClient>(bus);
   }
 #endif
+#if BUILDFLAG(PLATFORM_CUTTLEFISH) || BUILDFLAG(PLATFORM_SQUID)
+  InitializeDBusClient<chromeos::DissidiaClient>(bus);
+#endif
   if (shimless_rma::IsShimlessRmaAllowed()) {
     InitializeDBusClient<RmadClient>(bus);
   }
@@ -260,6 +266,10 @@ void InitializeFeatureListDependentDBus() {
   if (features::IsSnoopingProtectionEnabled() ||
       features::IsQuickDimEnabled()) {
     InitializeDBusClient<HumanPresenceDBusClient>(bus);
+  }
+
+  if (features::IsHeliumArcvmKioskEnabled()) {
+    InitializeDBusClient<ZrVendorOsClient>(bus);
   }
 
   // FeaturedClient is not a feature and instead uses the FieldTrialList (which
@@ -274,10 +284,16 @@ void ShutdownDBus() {
 
   // Feature list-dependent D-Bus clients are shut down first because we try to
   // shut down in reverse order of initialization (in case of dependencies).
+  if (features::IsHeliumArcvmKioskEnabled()) {
+    ZrVendorOsClient::Shutdown();
+  }
   if (features::IsSnoopingProtectionEnabled() ||
       features::IsQuickDimEnabled()) {
     HumanPresenceDBusClient::Shutdown();
   }
+#if BUILDFLAG(PLATFORM_CUTTLEFISH) || BUILDFLAG(PLATFORM_SQUID)
+  chromeos::DissidiaClient::Shutdown();
+#endif
 #if BUILDFLAG(PLATFORM_CFM)
   if (base::FeatureList::IsEnabled(cfm::features::kMojoServices)) {
     CfmHotlineClient::Shutdown();
@@ -295,7 +311,6 @@ void ShutdownDBus() {
 
   // Other D-Bus clients are shut down, also in reverse order of initialization.
   chromeos::RegmonClient::Shutdown();
-  VmPluginDispatcherClient::Shutdown();
   VirtualFileProviderClient::Shutdown();
   UpstartClient::Shutdown();
   UserDataAuthClient::Shutdown();
@@ -352,7 +367,6 @@ void ShutdownDBus() {
   CdmFactoryDaemonClient::Shutdown();
   BiodClient::Shutdown();
   AttestationClient::Shutdown();
-  ArcVmDataMigratorClient::Shutdown();
   ArcObbMounterClient::Shutdown();
   ArcMidisClient::Shutdown();
   ArcKeyMintClient::Shutdown();

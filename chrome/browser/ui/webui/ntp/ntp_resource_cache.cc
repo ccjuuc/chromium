@@ -27,16 +27,15 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/layout_constants.h"
-#include "chrome/browser/ui/webui/webui_util_desktop.h"
+#include "chrome/browser/ui/webui/util/webui_util_desktop.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/channel_info.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/browser_resources.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
+#include "components/enterprise/isolated_mode/settings.h"
 #include "components/prefs/pref_service.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/strings/grit/privacy_sandbox_strings.h"
@@ -108,7 +107,7 @@ std::string GetNewTabBackgroundPositionCSS(
   // TODO(glen): This is a quick workaround to hide the notused.png image when
   // no image is provided - we don't have time right now to figure out why
   // this is painting as white.
-  // http://crbug.com/17593
+  // http://crbug.com/40963242
   if (!theme_provider.HasCustomImage(IDR_THEME_NTP_BACKGROUND)) {
     return "-64px";
   }
@@ -139,10 +138,14 @@ NTPResourceCache::WindowType NTPResourceCache::GetWindowType(Profile* profile) {
   if (profile->IsGuestSession()) {
     return GUEST;
   }
-  if (profile->IsIncognitoProfile()) {
-    return INCOGNITO;
-  }
-  if (profile->IsOffTheRecord()) {
+  if (profile->IsIncognitoProfile() || profile->IsOffTheRecord()) {
+    if (enterprise_isolated_mode::IsolatedModeReplacesIncognito(
+            *profile->GetPrefs(), chrome::GetChannel())) {
+      return ISOLATED;
+    }
+    if (profile->IsIncognitoProfile()) {
+      return INCOGNITO;
+    }
     return NON_PRIMARY_OTR;
   }
 
@@ -171,6 +174,12 @@ base::RefCountedMemory* NTPResourceCache::GetNewTabHTML(
       }
       return new_tab_incognito_html_.get();
 
+    case ISOLATED:
+      if (!new_tab_isolated_html_) {
+        CreateNewTabIsolatedHTML(wc_getter);
+      }
+      return new_tab_isolated_html_.get();
+
     case NON_PRIMARY_OTR:
       if (!new_tab_non_primary_otr_html_) {
         new_tab_non_primary_otr_html_ =
@@ -191,6 +200,13 @@ base::RefCountedMemory* NTPResourceCache::GetNewTabCSS(
   // Guest mode doesn't have theme-related CSS.
   if (win_type == GUEST) {
     return nullptr;
+  }
+
+  if (win_type == ISOLATED) {
+    if (!new_tab_isolated_css_) {
+      CreateNewTabIsolatedCSS(wc_getter);
+    }
+    return new_tab_isolated_css_.get();
   }
 
   // Returns the cached CSS if it exists.
@@ -225,6 +241,8 @@ void NTPResourceCache::OnNativeThemeUpdated(ui::NativeTheme* updated_theme) {
 void NTPResourceCache::Invalidate() {
   new_tab_incognito_html_ = nullptr;
   new_tab_incognito_css_ = nullptr;
+  new_tab_isolated_html_ = nullptr;
+  new_tab_isolated_css_ = nullptr;
   new_tab_css_ = nullptr;
   new_tab_guest_html_ = nullptr;
 }
@@ -232,7 +250,7 @@ void NTPResourceCache::Invalidate() {
 void NTPResourceCache::CreateNewTabIncognitoHTML(
     const content::WebContents::Getter& wc_getter) {
   ui::TemplateReplacements replacements;
-  base::Value::Dict localized_strings;
+  base::DictValue localized_strings;
 
   // Ensure passing off-the-record profile; |profile_| is not an OTR profile.
   DCHECK(!profile_->IsOffTheRecord());
@@ -283,8 +301,35 @@ void NTPResourceCache::CreateNewTabIncognitoHTML(
       ReplaceTemplateExpressions(*incognito_tab_html, replacements));
 }
 
+void NTPResourceCache::CreateNewTabIsolatedHTML(
+    const content::WebContents::Getter& wc_getter) {
+  ui::TemplateReplacements replacements;
+  base::DictValue localized_strings;
+
+  const std::string& app_locale = g_browser_process->GetApplicationLocale();
+  webui::SetLoadTimeDataDefaults(app_locale, &replacements);
+
+  static const base::NoDestructor<scoped_refptr<base::RefCountedMemory>>
+      isolated_tab_html(
+          ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytes(
+              IDR_ISOLATED_TAB_HTML));
+  CHECK(*isolated_tab_html);
+  ui::TemplateReplacementsFromDictionaryValue(localized_strings, &replacements);
+  new_tab_isolated_html_ = base::MakeRefCounted<base::RefCountedString>(
+      ReplaceTemplateExpressions(*isolated_tab_html, replacements));
+}
+
+void NTPResourceCache::CreateNewTabIsolatedCSS(
+    const content::WebContents::Getter& wc_getter) {
+  static const base::NoDestructor<scoped_refptr<base::RefCountedMemory>>
+      isolated_tab_css(
+          ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytes(
+              IDR_INCOGNITO_TAB_THEME_CSS));
+  new_tab_isolated_css_ = *isolated_tab_css;
+}
+
 void NTPResourceCache::CreateNewTabGuestHTML() {
-  base::Value::Dict localized_strings;
+  base::DictValue localized_strings;
   localized_strings.Set("title", l10n_util::GetStringUTF16(IDS_NEW_TAB_TITLE));
   const char* guest_tab_link = kLearnMoreGuestSessionUrl;
   int guest_tab_idr = IDR_GUEST_TAB_HTML;

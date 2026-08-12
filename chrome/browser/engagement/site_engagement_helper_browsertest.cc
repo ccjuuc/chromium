@@ -71,6 +71,10 @@ class SiteEngagementHelperBrowserTest : public InProcessBrowserTest {
     host_resolver()->AddRule("*", "127.0.0.1");
     ASSERT_TRUE(test_server_handle_ =
                     embedded_test_server()->StartAndReturnHandle());
+    // Initialize histogram_tester_ on main thread setup rather than member
+    // field construction so that background WebUI page navigations during
+    // browser startup do not contribute extra to histogram measurements.
+    histogram_tester_ = std::make_unique<base::HistogramTester>();
   }
 
   // Set a pause timer on the input tracker for test purposes.
@@ -99,12 +103,12 @@ class SiteEngagementHelperBrowserTest : public InProcessBrowserTest {
     return browser()->tab_strip_model()->GetActiveWebContents();
   }
 
-  base::HistogramTester* histogram_tester() { return &histogram_tester_; }
+  base::HistogramTester* histogram_tester() { return histogram_tester_.get(); }
 
  private:
   content::test::PrerenderTestHelper prerender_helper_;
   net::test_server::EmbeddedTestServerHandle test_server_handle_;
-  base::HistogramTester histogram_tester_;
+  std::unique_ptr<base::HistogramTester> histogram_tester_;
   raw_ptr<TestOneShotTimer, AcrossTasksDanglingUntriaged> input_tracker_timer_;
   raw_ptr<TestOneShotTimer, AcrossTasksDanglingUntriaged> media_tracker_timer_;
 };
@@ -129,7 +133,7 @@ IN_PROC_BROWSER_TEST_F(SiteEngagementHelperBrowserTest,
 
   // Loads a page in the prerender.
   auto prerender_url = embedded_test_server()->GetURL("/simple.html");
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_helper()->AddPrerender(prerender_url);
   content::test::PrerenderHostObserver host_observer(*web_contents(), host_id);
   // SiteEngagementMetrics::kEngagementTypeHistogram is not updated with the
@@ -201,7 +205,7 @@ class ObserverTester : public SiteEngagementObserver {
 IN_PROC_BROWSER_TEST_F(SiteEngagementHelperBrowserTest,
                        SiteEngagementHelperMediaTrackerInPrerendering) {
   site_engagement::SiteEngagementService* service =
-      site_engagement::SiteEngagementService::Get(browser()->profile());
+      site_engagement::SiteEngagementService::Get(browser()->GetProfile());
   ObserverTester tester(service);
 
   SiteEngagementService::Helper* helper =
@@ -216,7 +220,7 @@ IN_PROC_BROWSER_TEST_F(SiteEngagementHelperBrowserTest,
   // Load a page in the prerender.
   GURL prerender_url =
       embedded_test_server()->GetURL("/media/unified_autoplay.html");
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_helper()->AddPrerender(prerender_url);
   content::test::PrerenderHostObserver host_observer(*web_contents(), host_id);
   content::RenderFrameHost* prerendered_frame_host =

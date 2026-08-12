@@ -2,16 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/omnibox/browser/on_device_tail_model_executor.h"
+
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/path_service.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
-#include "components/omnibox/browser/on_device_tail_model_executor.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -64,9 +65,7 @@ class OnDeviceTailModelExecutorPublic : public OnDeviceTailModelExecutor {
 // OnDeviceTailModelExecutor::InsertBeamNodeToCandidateQueue.
 class OnDeviceTailModelExecutorTest : public ::testing::Test {
  public:
-  OnDeviceTailModelExecutorTest() {
-    InitExecutor(base::flat_set<std::string>());
-  }
+  OnDeviceTailModelExecutorTest() { InitExecutor({}); }
 
  protected:
   void TearDown() override { executor_.reset(); }
@@ -101,7 +100,7 @@ class OnDeviceTailModelExecutorTest : public ::testing::Test {
     EXPECT_NEAR(b1.log_prob, b2.log_prob, 0.01f);
   }
 
-  void InitExecutor(const base::flat_set<std::string>& denylist_filenames) {
+  void InitExecutor(const std::vector<std::string>& denylist_filenames) {
     executor_ = std::make_unique<OnDeviceTailModelExecutorPublic>();
     OnDeviceTailModelExecutor::ModelMetadata metadata;
     metadata.mutable_lstm_model_params()->set_num_layer(kNumLayer);
@@ -112,11 +111,11 @@ class OnDeviceTailModelExecutorTest : public ::testing::Test {
     metadata.mutable_lstm_model_params()->set_probability_threshold(
         kProbabilityThreshold);
 
-    base::flat_set<base::FilePath> additional_files;
-    additional_files.insert(GetTestFilePath("vocab_test.txt"));
+    std::vector<base::FilePath> additional_files = {
+        GetTestFilePath("vocab_test.txt")};
 
     for (const auto& filename : denylist_filenames) {
-      additional_files.insert(GetTestFilePath(filename));
+      additional_files.push_back(GetTestFilePath(filename));
     }
 
     EXPECT_TRUE(executor_->Init(GetTestFilePath("test_tail_model.tflite"),
@@ -398,7 +397,7 @@ TEST_F(OnDeviceTailModelExecutorTest,
 
   {
     // Make sure the test model can predict "login" for prefix "logi".
-    InitExecutor(base::flat_set<std::string>());
+    InitExecutor({});
     OnDeviceTailModelExecutor::ModelInput input("logi", "", 5);
     predictions = executor_->GenerateSuggestionsForPrefix(input);
     EXPECT_EQ(predictions.size(), 1U);
@@ -409,26 +408,26 @@ TEST_F(OnDeviceTailModelExecutorTest,
   {
     // The test badwords file contains hash for word "login", so |predictions|
     // should not contain results with word "login".
-    InitExecutor(base::flat_set<std::string>({"badword_hashes_test.txt"}));
+    InitExecutor({"badword_hashes_test.txt"});
     OnDeviceTailModelExecutor::ModelInput input("logi", "", 5);
     predictions = executor_->GenerateSuggestionsForPrefix(input);
     for (auto& prediction : predictions) {
       auto words =
           base::SplitString(prediction.suggestion, base::kWhitespaceASCII,
                             base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-      EXPECT_FALSE(base::Contains(words, "login"));
+      EXPECT_FALSE(std::ranges::contains(words, "login"));
     }
   }
 
   {
     // The denylist contains substrings "ogi" & "abc", so |prediction| should
     // not contain these strings neither.
-    InitExecutor(base::flat_set<std::string>({"denylist_test.txt"}));
+    InitExecutor({"denylist_test.txt"});
     OnDeviceTailModelExecutor::ModelInput input("logi", "", 5);
     predictions = executor_->GenerateSuggestionsForPrefix(input);
     for (auto& prediction : predictions) {
-      EXPECT_FALSE(base::Contains(prediction.suggestion, "abc"));
-      EXPECT_FALSE(base::Contains(prediction.suggestion, "ogi"));
+      EXPECT_FALSE(prediction.suggestion.contains("abc"));
+      EXPECT_FALSE(prediction.suggestion.contains("ogi"));
     }
   }
 }

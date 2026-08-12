@@ -17,7 +17,6 @@
 
 struct AccountInfo;
 struct CoreAccountInfo;
-class Browser;
 class Profile;
 class ProfileAttributesEntry;
 class ProfileAttributesStorage;
@@ -30,13 +29,21 @@ class IdentityManager;
 // services and construct messages suitable for showing in UI.
 namespace signin_ui_util {
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+// Shows a bubble containing a QR code to transfer credentials to a mobile
+// device.
+void ShowCrossDeviceSigninQrBubble(
+    BrowserWindowInterface* browser_window_interface,
+    base::OnceClosure closing_callback);
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+
 // Enables history sync for the primary account.
 // If the user is already signed in, the history datatype is enabled
 // immediately. If an account is signed in to Web, the user is also signed in to
 // Chrome. If the user needs to reauth, history sync is enabled immediately, and
 // a reauth tab is opened. If the user is not signed in to Web, a sign in tab is
 // opened, and history sync is enabled once the sign in was completed.
-void SignInAndEnableHistorySync(Browser* browser,
+void SignInAndEnableHistorySync(BrowserWindowInterface* browser,
                                 Profile* profile,
                                 signin_metrics::AccessPoint access_point);
 
@@ -59,17 +66,6 @@ void ShowReauthForPrimaryAccountWithAuthError(
 void ShowReauthForAccount(Profile* profile,
                           const std::string& email,
                           signin_metrics::AccessPoint access_point);
-
-// Delegates to an existing sign-in tab if one exists. If not, a new sign-in tab
-// is created.
-void ShowExtensionSigninPrompt(Profile* profile,
-                               bool enable_sync,
-                               const std::string& email_hint);
-
-// This function is used to sign-in the user into Chrome without offering sync.
-// This function does nothing if the user is already signed in to Chrome.
-void ShowSigninPromptFromPromo(Profile* profile,
-                               signin_metrics::AccessPoint access_point);
 
 // This function is used to sign in a given account:
 // * This function does nothing if the user is already signed in to Chrome.
@@ -141,12 +137,6 @@ content::WebContents* GetSignInTabWithAccessPoint(
 std::u16string GetShortProfileIdentityToDisplay(
     const ProfileAttributesEntry& profile_attributes_entry,
     Profile* profile);
-
-// Returns the domain of the policy value of RestrictSigninToPattern. Returns
-// an empty string if the policy is not set or can not be parsed. The parser
-// only supports the policy value that matches [^@]+@[a-zA-Z0-9\-.]+(\\E)?\$?$.
-// Also, the parser does not validate the policy value.
-std::string GetAllowedDomain(std::string signin_pattern);
 
 // Returns whether Chrome should show the identity of the user (using a brief
 // animation) on opening a new window.

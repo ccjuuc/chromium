@@ -14,12 +14,14 @@
 #import "ios/chrome/browser/contextual_panel/sample/coordinator/sample_block_modulator.h"
 #import "ios/chrome/browser/contextual_panel/ui/contextual_sheet_display_controller.h"
 #import "ios/chrome/browser/contextual_panel/ui/panel_content_view_controller.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_controller.h"
 #import "ios/chrome/browser/price_insights/coordinator/price_insights_modulator.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/contextual_sheet_commands.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/common/ui/util/ui_util.h"
 
@@ -39,9 +41,12 @@
   // The child modulators owned by this coordinator.
   NSMutableArray<PanelBlockModulator*>* _modulators;
 
-  // The contextual panel tab helper to use for this panel.
-  raw_ptr<ContextualPanelTabHelper, DanglingUntriaged>
-      _contextualPanelTabHelper;
+  // The contextual panel tab helper for the tab that opened this panel. Cached
+  // at -start time because the active WebState may change before
+  // -viewWillDisappear fires (e.g. when a tab is closed, the active tab changes
+  // before metrics are recorded), which would cause a dynamic lookup to return
+  // the wrong tab's data.
+  raw_ptr<ContextualPanelTabHelper> _contextualPanelTabHelper;
 
   // Read-write version of `self.baseViewController` as the base view
   // controller for this coordinator changes during its lifetime.
@@ -61,8 +66,10 @@
   ToolbarsSize* toolbarsSize =
       FullscreenController::FromBrowser(self.browser)->GetToolbarsSize();
 
-  _mediator = [[PanelContentMediator alloc] initWithBroadcaster:broadcaster
-                                                   toolbarsSize:toolbarsSize];
+  _mediator = [[PanelContentMediator alloc]
+         initWithBroadcaster:broadcaster
+                toolbarsSize:toolbarsSize
+      fullscreenBrowserAgent:FullscreenBrowserAgent::FromBrowser(self.browser)];
   _mediator.consumer = _viewController;
 
   _modulators = [[NSMutableArray alloc] init];
@@ -140,6 +147,9 @@
     [self removeViewControllerFromBaseViewController];
   }
   _viewController = nil;
+  _contextualPanelTabHelper = nullptr;
+  [_mediator disconnect];
+  _mediator = nil;
 }
 
 #pragma mark - Public

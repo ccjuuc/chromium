@@ -45,11 +45,10 @@ class MockTabAndroidDataProvider : public TabAndroidDataProvider {
   MOCK_METHOD(std::unique_ptr<WebContentsStateByteBuffer>,
               GetWebContentsByteBuffer,
               (),
-              (override));
+              (const override));
 };
 
 const int kVersion = 2;
-const url::Origin kInitiatorOrigin;
 
 class SyncedTabDelegateAndroidTest : public testing::Test {
  protected:
@@ -72,15 +71,21 @@ class SyncedTabDelegateAndroidTest : public testing::Test {
     TabModelList::RemoveTabModel(test_tab_model_.get());
   }
 
-  void MockBufferFromPickle(const base::Pickle& pickle) {
-    base::raw_span<const uint8_t> UNSAFE_TODO(
-        nav_span{pickle.data(), pickle.size()});
+  void MockBufferFromPickle(base::Pickle& pickle) {
+    JNIEnv* env = base::android::AttachCurrentThread();
+
+    auto jbuffer = jni_zero::AdoptRef(
+        env, env->NewDirectByteBuffer(
+                 reinterpret_cast<void*>(pickle.AsWritableBytes().data()),
+                 pickle.size()));
+
     std::unique_ptr<WebContentsStateByteBuffer> buffer =
-        std::make_unique<WebContentsStateByteBuffer>(nav_span, kVersion);
+        std::make_unique<WebContentsStateByteBuffer>(jbuffer, kVersion);
     EXPECT_CALL(mock_tab_android_data_provider_, GetWebContentsByteBuffer())
         .WillOnce(Return(std::move(buffer)));
   }
 
+  const url::Origin kInitiatorOrigin;
   const std::u16string kTitle = u"";
   const GURL kInterestingUrl = GURL("fake://interesting");
   const GURL kBoringUrl = GURL("fake://boring");

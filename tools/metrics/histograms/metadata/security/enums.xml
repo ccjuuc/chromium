@@ -68,6 +68,27 @@ chromium-metrics-reviews@google.com.
   <int value="17" label="kMissingMoreAbout">MoreAbout URL is missing.</int>
 </enum>
 
+<enum name="EncryptionPrefixVersion">
+  <int value="0" label="No prefix found"/>
+  <int value="1" label="Version v10"/>
+  <int value="2" label="Version v11"/>
+</enum>
+
+<enum name="FreedesktopSecretKeyProviderErrorDetail">
+  <summary>
+    Fine-grained error details for FreedesktopSecretKeyProvider.
+  </summary>
+  <int value="0" label="None"/>
+  <int value="1" label="DestructedBeforeComplete"/>
+  <int value="2" label="EmptyObjectPaths"/>
+  <int value="3" label="InvalidReplyFormat"/>
+  <int value="4" label="InvalidSignalFormat"/>
+  <int value="5" label="InvalidVariantFormat"/>
+  <int value="6" label="NoResponse"/>
+  <int value="7" label="PromptDismissed"/>
+  <int value="8" label="PromptFailedSignalConnection"/>
+</enum>
+
 <enum name="GwpAsanCrashAnalysisResult">
   <int value="0" label="The crash is not caused by GWP-ASan"/>
   <int value="1" label="The crash is caused by GWP-ASan"/>
@@ -118,6 +139,23 @@ chromium-metrics-reviews@google.com.
              Ask-Before-HTTP prevented the navigation."/>
 </enum>
 
+<!-- LINT.IfChange -->
+
+<enum name="HttpsFirstModeFallbackReason">
+  <int value="0" label="kNone">No fallback</int>
+  <int value="1" label="kTimerFired">Fast-fallback timer fired</int>
+  <int value="2" label="kCertError">Misconfigured HTTPS certificate</int>
+  <int value="3" label="kRedirectLoop">Redirect loop (downgrade)</int>
+  <int value="4" label="kNetError">Other network error</int>
+</enum>
+
+<!-- LINT.ThenChange(/components/security_interstitials/core/https_only_mode_metrics.h) -->
+
+<enum name="HttpsFirstModeImplicitStateChange">
+  <int value="0" label="Balanced Mode implicitly enabled by ESB"/>
+  <int value="1" label="Balanced Mode implicitly disabled by ESB"/>
+</enum>
+
 <enum name="HttpsFirstModeInterstitialReason">
   <int value="0" label="kUnknown">Unknown reason</int>
   <int value="1" label="kPref">
@@ -140,6 +178,9 @@ chromium-metrics-reviews@google.com.
   <int value="6" label="kBalanced">
     The interstitial was shown because the user was in balanced mode.
   </int>
+  <int value="7" label="kEsbPairing">
+    The interstitial was shown because HFM was enabled via ESB pairing.
+  </int>
 </enum>
 
 <enum name="HttpsFirstModeNavigationEvent">
@@ -160,6 +201,15 @@ chromium-metrics-reviews@google.com.
   <int value="8" label="kUpgradeRedirectLoop">
     Upgrade failed due to a redirect loop
   </int>
+  <int value="9" label="kTypedSchemelessUpgradeAttempted">
+    Typed schemeless upgrade attempted
+  </int>
+  <int value="10" label="kTypedSchemelessUpgradeSucceeded">
+    Typed schemeless upgrade succeeded
+  </int>
+  <int value="11" label="kTypedSchemelessUpgradeTimedOut">
+    Typed schemeless upgrade timed out (no-fallback)
+  </int>
 </enum>
 
 <!-- LINT.IfChange -->
@@ -173,6 +223,21 @@ chromium-metrics-reviews@google.com.
 
 <!-- LINT.ThenChange(/chrome/browser/ssl/https_first_mode_settings_tracker.h) -->
 
+<enum name="HttpsFirstModeStartupState">
+  <int value="0" label="Disabled"/>
+  <int value="1" label="Enabled (Full)"/>
+  <int value="2" label="Enabled (Balanced) - Explicitly by user"/>
+  <int value="3" label="Enabled (Balanced) - Typically Secure heuristic"/>
+  <int value="4" label="Enabled (Balanced) - Paired with ESB"/>
+  <int value="5" label="Enabled (Balanced) - Auto-enable feature"/>
+</enum>
+
+<enum name="IOSKeychainMigrationResult">
+  <int value="0" label="Not needed"/>
+  <int value="1" label="Success"/>
+  <int value="2" label="Failure"/>
+</enum>
+
 <enum name="LandlockState">
   <int value="0" label="Enabled"/>
   <int value="1" label="Disabled"/>
@@ -180,16 +245,43 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="Unknown"/>
 </enum>
 
+<!-- LINT.IfChange(LocalNetworkAccessCheckResult) -->
+
+<enum name="LocalNetworkAccessCheckResult">
+  <int value="0" label="AllowedMissingClientSecurityState"/>
+  <int value="1" label="AllowedNoLessPublic"/>
+  <int value="2" label="AllowedByPolicyAllow"/>
+  <int value="3" label="AllowedByPolicyWarn"/>
+  <int value="4" label="BlockedByLoadOption"/>
+  <int value="5" label="BlockedByPolicyBlock"/>
+  <int value="6" label="(Deprecated) AllowedByTargetIpAddressSpace"/>
+  <int value="7" label="(Deprecated) BlockedByTargetIpAddressSpace"/>
+  <int value="8" label="(Deprecated) BlockedByPolicyPreflightWarn"/>
+  <int value="9" label="(Deprecated) BlockedByPolicyPreflightBlock"/>
+  <int value="10" label="(Deprecated) AllowedByPolicyPreflightWarn"/>
+  <int value="11" label="BlockedByInconsistentIpAddressSpace"/>
+  <int value="12" label="AllowedPotentiallyTrustworthySameOrigin"/>
+  <int value="13" label="LNAPermissionRequired"/>
+  <int value="14" label="LNAAllowedByPolicyWarn"/>
+  <int value="15" label="BlockedByRequiredIpAddressSpaceMismatch"/>
+</enum>
+
+<!-- LINT.ThenChange(/services/network/public/cpp/local_network_access_check_result.h:LocalNetworkAccessCheckResult) -->
+
 <!-- LINT.IfChange(MainFrameProcessReuseBlockReason) -->
 
 <enum name="MainFrameProcessReuseBlockReason">
-  <int value="0" label="Not blocked"/>
+  <int value="0" label="(Obsolete) Not blocked. Removed in 2026/04"/>
   <int value="1" label="Process reuse is disabled"/>
   <int value="2" label="DevTools was ever attached"/>
   <int value="3" label="Does not require dedicated process"/>
   <int value="4" label="Localhost or IP address based host"/>
   <int value="5" label="Scheme is not http(s)"/>
-  <int value="6" label="Embedder disallowed reuse for URL"/>
+  <int value="6" label="Embedder disallowed process-per-site reuse for URL"/>
+  <int value="7" label="Embedder disallowed any process-per-site reuse"/>
+  <int value="8" label="Allowed by process-per-site threshold"/>
+  <int value="9" label="Allowed by prerender process reuse"/>
+  <int value="10" label="No main frame process reuse feature is enabled"/>
 </enum>
 
 <!-- LINT.ThenChange(//content/browser/renderer_host/render_frame_host_manager.cc:MainFrameProcessReuseBlockReason) -->
@@ -213,7 +305,8 @@ chromium-metrics-reviews@google.com.
     The merchant trust side panel was closed.
   </int>
   <int value="5" label="kBubbleOpenedFromLocationBarChip">
-    The merchant trust bubble was opened from the location bar chip.
+    (Deprecated) The merchant trust bubble was opened from the location bar
+    chip.
   </int>
   <int value="6" label="kSidePanelOpenedOnSameTabNavigation">
     The merchant trust side panel remained open from a same tab navigation.
@@ -271,11 +364,27 @@ chromium-metrics-reviews@google.com.
              HFM+SE heuristic. Recorded regardless of whether there was a
              fallback navigation or an interstitial. Not recorded if the
              hostname is allowlisted."/>
+  <int value="14"
+      label="HTTP request upgraded to HTTPS, and is a typed schemeless
+             navigation (eligible for no-fallback on timeout)"/>
 </enum>
 
-<enum name="NewAcceptedDeviceType">
-  <int value="0" label="Device which has valid name and id"/>
-  <int value="1" label="Ephemeral device stored base on IP address"/>
+<enum name="OSCryptAppBoundKeyRetrievalStatus">
+  <int value="0" label="Success"/>
+  <int value="1" label="Key Not Found"/>
+  <int value="2" label="Key Decode Failure"/>
+  <int value="3" label="Invalid Key Header"/>
+  <int value="4" label="Key Too Short"/>
+</enum>
+
+<enum name="OSCryptDPAPIKeyStatus">
+  <int value="0" label="Success"/>
+  <int value="1" label="Key Not Found"/>
+  <int value="2" label="Key Decode Failure"/>
+  <int value="3" label="Key Too Short"/>
+  <int value="4" label="Invalid Key Header"/>
+  <int value="5" label="DPAPI Decryption Failure"/>
+  <int value="6" label="Invalid Key Length"/>
 </enum>
 
 <enum name="PageEndReason">
@@ -313,36 +422,14 @@ chromium-metrics-reviews@google.com.
   </int>
 </enum>
 
-<!-- LINT.IfChange(PrivateNetworkAccessCheckResult) -->
-
-<enum name="PrivateNetworkAccessCheckResult">
-  <int value="0" label="AllowedMissingClientSecurityState"/>
-  <int value="1" label="AllowedNoLessPublic"/>
-  <int value="2" label="AllowedByPolicyAllow"/>
-  <int value="3" label="AllowedByPolicyWarn"/>
-  <int value="4" label="BlockedByLoadOption"/>
-  <int value="5" label="BlockedByPolicyBlock"/>
-  <int value="6" label="(Deprecated) AllowedByTargetIpAddressSpace"/>
-  <int value="7" label="(Deprecated) BlockedByTargetIpAddressSpace"/>
-  <int value="8" label="(Deprecated) BlockedByPolicyPreflightWarn"/>
-  <int value="9" label="(Deprecated) BlockedByPolicyPreflightBlock"/>
-  <int value="10" label="(Deprecated) AllowedByPolicyPreflightWarn"/>
-  <int value="11" label="BlockedByInconsistentIpAddressSpace"/>
-  <int value="12" label="AllowedPotentiallyTrustworthySameOrigin"/>
-  <int value="13" label="LNAPermissionRequired"/>
-  <int value="14" label="LNAAllowedByPolicyWarn"/>
-  <int value="15" label="BlockedByRequiredIpAddressSpaceMismatch"/>
-</enum>
-
-<!-- LINT.ThenChange(/services/network/public/cpp/private_network_access_check_result.h:PrivateNetworkAccessCheckResult) -->
-
-<enum name="PrivateNetworkDeviceValidity">
-  <int value="0" label="Device exists"/>
-  <int value="1" label="New valid device"/>
-  <int value="2" label="Device ID missing"/>
-  <int value="3" label="[Deprecated] Device ID invalid"/>
-  <int value="4" label="Device name missing"/>
-  <int value="5" label="Device name invalid"/>
+<enum name="PopupBypassType">
+  <int value="0"
+      label="The process has previously run an injected extension content
+             script"/>
+  <int value="1" label="The process is an authorized extension process"/>
+  <int value="2"
+      label="The process is a privileged web page (e.g., a hosted app) in an
+             outermost main frame"/>
 </enum>
 
 <enum name="ReusePendingOrCommittedSiteEnum">
@@ -397,6 +484,22 @@ chromium-metrics-reviews@google.com.
   <int value="5" label="Log not yet ingested"/>
   <int value="6" label="SCT suffix found"/>
   <int value="7" label="SCT suffix not found"/>
+</enum>
+
+<enum name="SecretPortalKeyProviderInitStatus">
+  <int value="0" label="Success"/>
+  <int value="1" label="NoService"/>
+  <int value="2" label="PipeFailed"/>
+  <int value="3" label="InvalidResponseFormat"/>
+  <int value="4" label="ResponsePathMismatch"/>
+  <int value="5" label="PipeReadFailed"/>
+  <int value="6" label="EmptySecret"/>
+  <int value="7" label="NoResponse"/>
+  <int value="8" label="SignalReadFailed"/>
+  <int value="9" label="UserCancelledUnlock"/>
+  <int value="10" label="(Obsolete) DestructedBeforeComplete"/>
+  <int value="11" label="SignalConnectFailed"/>
+  <int value="12" label="SignalParseFailed"/>
 </enum>
 
 <enum name="SecurityLevel">

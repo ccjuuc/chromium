@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/test/gmock_callback_support.h"
 #include "build/build_config.h"
 #include "net/base/proxy_chain.h"
 #include "net/base/proxy_server.h"
@@ -42,15 +43,6 @@ using ::testing::DoAll;
 using ::testing::Optional;
 using ::testing::SaveArg;
 
-// testing::InvokeArgument<N> does not work with base::OnceCallback. Use this
-// gmock action template to invoke base::OnceCallback. `k` is the k-th argument
-// and `T` is the callback's type.
-ACTION_TEMPLATE(InvokeCallbackArgument,
-                HAS_2_TEMPLATE_PARAMS(int, k, typename, T),
-                AND_1_VALUE_PARAMS(net_err)) {
-  std::move(const_cast<T&>(std::get<k>(args))).Run(net_err);
-}
-
 class MockVisitor : public WebTransportClientVisitor {
  public:
   MOCK_METHOD(void,
@@ -60,7 +52,9 @@ class MockVisitor : public WebTransportClientVisitor {
   MOCK_METHOD(void, OnConnectionFailed, (const WebTransportError&), (override));
   MOCK_METHOD(void,
               OnLocalNetworkAccessCheck,
-              (const IPEndPoint&, CompletionOnceCallback callback),
+              (const IPEndPoint&,
+               const NetLogWithSource&,
+               CompletionOnceCallback callback),
               (override));
   MOCK_METHOD(void, OnBeforeConnect, (const IPEndPoint&), (override));
   MOCK_METHOD(void,
@@ -68,6 +62,7 @@ class MockVisitor : public WebTransportClientVisitor {
               (const std::optional<WebTransportCloseInfo>&),
               (override));
   MOCK_METHOD(void, OnError, (const WebTransportError&), (override));
+  MOCK_METHOD(void, OnDraining, (), (override));
 
   MOCK_METHOD0(OnIncomingBidirectionalStreamAvailable, void());
   MOCK_METHOD0(OnIncomingUnidirectionalStreamAvailable, void());
@@ -142,8 +137,8 @@ class DedicatedWebTransportHttp3Test : public TestWithTaskEnvironment {
             run_loop_->Quit();
           }
         });
-    ON_CALL(visitor_, OnLocalNetworkAccessCheck(_, _))
-        .WillByDefault(InvokeCallbackArgument<1, CompletionOnceCallback>(OK));
+    ON_CALL(visitor_, OnLocalNetworkAccessCheck(_, _, _))
+        .WillByDefault(base::test::RunOnceCallback<2>(OK));
   }
 
   // Use a URLRequestContextBuilder to set `context_`.
@@ -224,8 +219,8 @@ class DedicatedWebTransportHttp3Test : public TestWithTaskEnvironment {
 TEST_F(DedicatedWebTransportHttp3Test, Connect) {
   StartServer();
   client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
-      GetURL("/echo"), origin_, &visitor_, anonymization_key_, context_.get(),
-      WebTransportParameters());
+      GetURL("/echo"), origin_, &visitor_, anonymization_key_,
+      handles::kInvalidNetworkHandle, context_.get(), WebTransportParameters());
 
   EXPECT_CALL(visitor_, OnBeforeConnect);
   EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());
@@ -243,11 +238,11 @@ TEST_F(DedicatedWebTransportHttp3Test, Connect) {
 TEST_F(DedicatedWebTransportHttp3Test, ConnectLocalNetworkAccessCheckFail) {
   StartServer();
   client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
-      GetURL("/echo"), origin_, &visitor_, anonymization_key_, context_.get(),
-      WebTransportParameters());
+      GetURL("/echo"), origin_, &visitor_, anonymization_key_,
+      handles::kInvalidNetworkHandle, context_.get(), WebTransportParameters());
 
   EXPECT_CALL(visitor_, OnLocalNetworkAccessCheck)
-      .WillOnce(InvokeCallbackArgument<1, CompletionOnceCallback>(
+      .WillOnce(base::test::RunOnceCallback<2>(
           ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS));
 
   WebTransportError error;
@@ -270,8 +265,8 @@ TEST_F(DedicatedWebTransportHttp3Test, ConnectViaProxy) {
           TRAFFIC_ANNOTATION_FOR_TESTS));
   StartServer();
   client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
-      GetURL("/echo"), origin_, &visitor_, anonymization_key_, context_.get(),
-      WebTransportParameters());
+      GetURL("/echo"), origin_, &visitor_, anonymization_key_,
+      handles::kInvalidNetworkHandle, context_.get(), WebTransportParameters());
 
   client_->Connect();
 }
@@ -285,8 +280,8 @@ TEST_F(DedicatedWebTransportHttp3Test, ConnectViaProxy) {
 TEST_F(DedicatedWebTransportHttp3Test, MAYBE_CloseTimeout) {
   StartServer();
   client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
-      GetURL("/echo"), origin_, &visitor_, anonymization_key_, context_.get(),
-      WebTransportParameters());
+      GetURL("/echo"), origin_, &visitor_, anonymization_key_,
+      handles::kInvalidNetworkHandle, context_.get(), WebTransportParameters());
 
   EXPECT_CALL(visitor_, OnBeforeConnect);
   EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());
@@ -313,7 +308,7 @@ TEST_F(DedicatedWebTransportHttp3Test, CloseReason) {
   StartServer();
   client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
       GetURL("/session-close"), origin_, &visitor_, anonymization_key_,
-      context_.get(), WebTransportParameters());
+      handles::kInvalidNetworkHandle, context_.get(), WebTransportParameters());
 
   EXPECT_CALL(visitor_, OnBeforeConnect);
   EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());
@@ -335,6 +330,48 @@ TEST_F(DedicatedWebTransportHttp3Test, CloseReason) {
   EXPECT_THAT(received_close_info, Optional(close_info));
 }
 
+TEST_F(DedicatedWebTransportHttp3Test, SessionDraining) {
+  StartServer();
+  client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
+      GetURL("/session-close"), origin_, &visitor_, anonymization_key_,
+      handles::kInvalidNetworkHandle, context_.get(), WebTransportParameters());
+
+  EXPECT_CALL(visitor_, OnBeforeConnect);
+  EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());
+  EXPECT_CALL(visitor_, OnClosed(_)).Times(0);
+  EXPECT_CALL(visitor_, OnDraining()).WillOnce(StopRunning());
+  client_->Connect();
+  Run();
+  ASSERT_TRUE(client_->session() != nullptr);
+
+  // The "/session-close" endpoint sends a DRAIN_WEBTRANSPORT_SESSION capsule
+  // when it receives the string "DRAIN" on a stream.
+  quic::WebTransportStream* stream =
+      client_->session()->OpenOutgoingUnidirectionalStream();
+  ASSERT_TRUE(stream != nullptr);
+  EXPECT_TRUE(stream->Write("DRAIN"));
+  EXPECT_TRUE(stream->SendFin());
+
+  Run();
+}
+
+TEST_F(DedicatedWebTransportHttp3Test,
+       DrainingAfterConnectionFailureIsIgnored) {
+  StartServer();
+  client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
+      GetURL("/not-found"), origin_, &visitor_, anonymization_key_,
+      handles::kInvalidNetworkHandle, context_.get(), WebTransportParameters());
+
+  EXPECT_CALL(visitor_, OnBeforeConnect);
+  EXPECT_CALL(visitor_, OnConnectionFailed).WillOnce(StopRunning());
+  EXPECT_CALL(visitor_, OnDraining()).Times(0);
+  client_->Connect();
+  Run();
+  ASSERT_EQ(client_->state(), WebTransportState::FAILED);
+
+  client_->OnSessionDraining();
+}
+
 // Test negotiation of the application protocol via
 // https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-12.html#name-application-protocol-negoti
 TEST_F(DedicatedWebTransportHttp3Test, SubprotocolHeader) {
@@ -345,7 +382,7 @@ TEST_F(DedicatedWebTransportHttp3Test, SubprotocolHeader) {
   // protocols by default, and echoes it on a unidirectional stream.
   client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
       GetURL("/selected-subprotocol"), origin_, &visitor_, anonymization_key_,
-      context_.get(), parameters);
+      handles::kInvalidNetworkHandle, context_.get(), parameters);
 
   bool stream_received = false;
   EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());
@@ -370,6 +407,87 @@ TEST_F(DedicatedWebTransportHttp3Test, SubprotocolHeader) {
   webtransport::Stream::ReadResult read_result = stream->Read(&read_buffer);
   ASSERT_TRUE(read_result.fin);
   EXPECT_EQ(read_buffer, "first");
+}
+
+// Test backend that captures request headers for inspection.
+class HeaderCapturingBackend : public quic::test::QuicTestBackend {
+ public:
+  quic::QuicSimpleServerBackend::WebTransportResponse
+  ProcessWebTransportRequest(const quiche::HttpHeaderBlock& request_headers,
+                             quic::WebTransportSession* session) override {
+    for (const auto& [name, value] : request_headers) {
+      captured_headers_.emplace_back(std::string(name), std::string(value));
+    }
+    return QuicTestBackend::ProcessWebTransportRequest(request_headers,
+                                                       session);
+  }
+
+  const std::vector<std::pair<std::string, std::string>>& captured_headers()
+      const {
+    return captured_headers_;
+  }
+
+ private:
+  std::vector<std::pair<std::string, std::string>> captured_headers_;
+};
+
+class DedicatedWebTransportHttp3HeadersTest
+    : public DedicatedWebTransportHttp3Test {
+ public:
+  ~DedicatedWebTransportHttp3HeadersTest() override {
+    if (server_ != nullptr) {
+      server_->Shutdown();
+      server_.reset();
+    }
+  }
+
+  void StartServerWithCapture() {
+    capturing_backend_.set_enable_webtransport(true);
+    server_ = std::make_unique<QuicSimpleServer>(
+        quic::test::crypto_test_utils::ProofSourceForTesting(),
+        quic::QuicConfig(), quic::QuicCryptoServerConfig::ConfigOptions(),
+        AllSupportedQuicVersions(), &capturing_backend_);
+    ASSERT_TRUE(server_->CreateUDPSocketAndListen(
+        quic::QuicSocketAddress(quiche::QuicheIpAddress::Any6(), /*port=*/0)));
+    port_ = server_->server_address().port();
+  }
+
+ protected:
+  HeaderCapturingBackend capturing_backend_;
+};
+
+// Verify that additional_headers with mixed casing are lowercased and that
+// duplicate names (differing only in case) have their values combined.
+TEST_F(DedicatedWebTransportHttp3HeadersTest,
+       AdditionalHeadersCasingAndDuplicates) {
+  StartServerWithCapture();
+  WebTransportParameters parameters;
+  parameters.additional_headers = {
+      {"X-Custom", "first"},
+      {"x-custom", "second"},
+  };
+  client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
+      GetURL("/echo"), origin_, &visitor_, anonymization_key_,
+      handles::kInvalidNetworkHandle, context_.get(), parameters);
+
+  EXPECT_CALL(visitor_, OnBeforeConnect);
+  EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());
+  client_->Connect();
+  Run();
+  ASSERT_TRUE(client_->session() != nullptr);
+
+  // Find x-custom in the captured headers. With AppendValueOrAddHeader, both
+  // values are combined with a null separator (quiche's internal format).
+  // With operator[], only "second" would be present.
+  std::string custom_value;
+  for (const auto& [name, value] : capturing_backend_.captured_headers()) {
+    if (name == "x-custom") {
+      custom_value = value;
+      break;
+    }
+  }
+  EXPECT_THAT(custom_value, ::testing::HasSubstr("first"));
+  EXPECT_THAT(custom_value, ::testing::HasSubstr("second"));
 }
 
 }  // namespace

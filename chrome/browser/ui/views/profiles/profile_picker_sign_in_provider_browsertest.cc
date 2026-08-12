@@ -19,7 +19,6 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/profile_deletion_observer.h"
 #include "components/signin/public/base/signin_metrics.h"
-#include "components/signin/public/base/signin_switches.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/test/browser_test.h"
@@ -34,6 +33,15 @@ namespace {
 
 const char kExpectedSigninBaseUrl[] =
     "https://accounts.google.com/signin/chrome/sync";
+
+class MockProfilePickerSignInProviderDelegate
+    : public ProfilePickerSignInProviderDelegate {
+ public:
+  MOCK_METHOD(void,
+              ShowSigninError,
+              (Profile*, const SigninUIError&),
+              (override));
+};
 
 Profile* GetContentsProfile(content::WebContents* contents) {
   return Profile::FromBrowserContext(contents->GetBrowserContext());
@@ -57,22 +65,28 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerSignInProviderBrowserTest,
   ProfileDeletionObserver observer;
   base::FilePath provider_profile_path;
   base::RunLoop switch_finished_loop;
-  base::MockCallback<ProfilePickerSignInProvider::SignedInCallback>
-      signin_finished_callback;
+  base::MockCallback<SignInStepFinishedCallback> signin_finished_callback;
 
   // Sign-in is exited, the callback should never run.
   EXPECT_CALL(signin_finished_callback, Run(_, _, _, _)).Times(0);
 
+  testing::NiceMock<MockProfilePickerSignInProviderDelegate> delegate;
   {
     ProfilePickerSignInProvider provider{
-        host(), signin_metrics::AccessPoint::kUnknown, std::string()};
+        host(),
+        &delegate,
+        signin_metrics::AccessPoint::kStartPage,
+        std::string(),
+        signin_finished_callback.Get(),
+        base::FilePath(),
+    };
 
     EXPECT_CALL(*host(), ShowScreen(_, _, _))
         .WillOnce([&](content::WebContents* contents, const GURL& url,
                       base::OnceClosure callback) {
           provider_profile_path = GetContentsProfile(contents)->GetPath();
           EXPECT_FALSE(provider_profile_path.empty());
-          EXPECT_NE(browser()->profile()->GetPath(), provider_profile_path);
+          EXPECT_NE(browser()->GetProfile()->GetPath(), provider_profile_path);
 
           EXPECT_TRUE(url.spec().starts_with(kExpectedSigninBaseUrl));
           EXPECT_THAT(url.GetQuery(), HasSubstr("flow=promo"));
@@ -80,9 +94,8 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerSignInProviderBrowserTest,
           std::move(callback).Run();
         });
 
-    provider.SwitchToSignIn(StepSwitchFinishedCallback(base::IgnoreArgs<bool>(
-                                switch_finished_loop.QuitClosure())),
-                            signin_finished_callback.Get());
+    provider.SwitchToSignIn(StepSwitchFinishedCallback(
+        base::IgnoreArgs<bool>(switch_finished_loop.QuitClosure())));
 
     switch_finished_loop.Run();
   }
@@ -101,23 +114,27 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerSignInProviderBrowserTest,
                        SwitchToSignInThenExit_ForFirstRun) {
   base::FilePath provider_profile_path;
   base::RunLoop switch_finished_loop;
-  base::MockCallback<ProfilePickerSignInProvider::SignedInCallback>
-      signin_finished_callback;
+  base::MockCallback<SignInStepFinishedCallback> signin_finished_callback;
 
   // Sign-in is exited, the callback should never run.
   EXPECT_CALL(signin_finished_callback, Run(_, _, _, _)).Times(0);
 
+  testing::NiceMock<MockProfilePickerSignInProviderDelegate> delegate;
   {
     ProfilePickerSignInProvider provider{
-        host(), signin_metrics::AccessPoint::kForYouFre, std::string(),
-        browser()->profile()->GetPath()};
+        host(),
+        &delegate,
+        signin_metrics::AccessPoint::kForYouFre,
+        std::string(),
+        signin_finished_callback.Get(),
+        browser()->GetProfile()->GetPath()};
 
     EXPECT_CALL(*host(), ShowScreen(_, _, _))
         .WillOnce([&](content::WebContents* contents, const GURL& url,
                       base::OnceClosure callback) {
           provider_profile_path = GetContentsProfile(contents)->GetPath();
           EXPECT_FALSE(provider_profile_path.empty());
-          EXPECT_EQ(browser()->profile()->GetPath(), provider_profile_path);
+          EXPECT_EQ(browser()->GetProfile()->GetPath(), provider_profile_path);
 
           EXPECT_TRUE(url.spec().starts_with(kExpectedSigninBaseUrl));
           EXPECT_THAT(url.GetQuery(), HasSubstr("flow=promo"));
@@ -125,9 +142,8 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerSignInProviderBrowserTest,
           std::move(callback).Run();
         });
 
-    provider.SwitchToSignIn(StepSwitchFinishedCallback(base::IgnoreArgs<bool>(
-                                switch_finished_loop.QuitClosure())),
-                            signin_finished_callback.Get());
+    provider.SwitchToSignIn(StepSwitchFinishedCallback(
+        base::IgnoreArgs<bool>(switch_finished_loop.QuitClosure())));
 
     switch_finished_loop.Run();
   }

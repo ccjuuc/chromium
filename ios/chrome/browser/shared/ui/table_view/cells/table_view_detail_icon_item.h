@@ -31,8 +31,18 @@ enum class BadgeType {
 // The main text string.
 @property(nonatomic, copy) NSString* text;
 
+// The main text font.
+@property(nonatomic, copy) UIFont* textFont;
+
+// The main text color.
+@property(nonatomic, copy) UIColor* textColor;
+
 // The detail text string.
 @property(nonatomic, copy) NSString* detailText;
+
+// The trailing detail text string. Used when `textLayoutConstraintAxis` is
+// `UILayoutConstraintAxisVertical`.
+@property(nonatomic, copy) NSString* trailingDetailText;
 
 // The layout constraint axis at which `text` and `detailText` should be
 // aligned. In the case of a vertical layout, the text will adapt its font

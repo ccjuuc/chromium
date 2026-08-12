@@ -7,6 +7,8 @@
 
 #include "base/functional/callback_forward.h"
 
+namespace metrics {
+
 using OnMetricsReportingCallbackType = base::OnceCallback<void(bool)>;
 
 // Specifies from where a change to the metrics reporting state was made. When
@@ -34,8 +36,8 @@ enum class ChangeMetricsReportingStateCalledFrom {
   // Called on ChromeOS from Lacros on initialization to initialize state.
   kCrosMetricsInitializedFromAsh,
 
-  // Called on ChromeOS pre-consent metrics. This happens once per powerwash.
-  kCrosMetricsPreConsent,
+  // Called on ChromeOS pre-choice metrics. This happens once per powerwash.
+  kCrosMetricsPreChoice,
 };
 
 // Changes metrics reporting state without caring about the success of the
@@ -61,6 +63,7 @@ void ChangeMetricsReportingStateWithReply(
     bool enabled,
     OnMetricsReportingCallbackType callback_fn,
     ChangeMetricsReportingStateCalledFrom called_from);
+
 
 // Update metrics prefs on a permission (opt-in/out) change. When opting out,
 // this clears various client ids. When opting in, this resets saving crash
@@ -91,5 +94,7 @@ bool IsMetricsReportingPolicyManaged();
 // included in the next log. Note that histogram data is not discarded. Rather,
 // they are just marked as being already reported.
 void ClearPreviouslyCollectedMetricsData();
+
+}  // namespace metrics
 
 #endif  // CHROME_BROWSER_METRICS_METRICS_REPORTING_STATE_H_

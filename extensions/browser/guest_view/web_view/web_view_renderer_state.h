@@ -14,14 +14,15 @@
 #define EXTENSIONS_BROWSER_GUEST_VIEW_WEB_VIEW_WEB_VIEW_RENDERER_STATE_H_
 
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
 
 #include "base/memory/singleton.h"
 #include "base/synchronization/lock.h"
-#include "content/public/browser/child_process_id.h"
 #include "content/public/browser/global_routing_id.h"
+#include "content/public/common/child_process_id.h"
 
 namespace extensions {
 
@@ -66,6 +67,10 @@ class WebViewRendererState {
   // found, otherwise returns false.
   bool GetPartitionID(int guest_process_id, std::string* partition_id) const;
 
+  // Returns the content script IDs for the given guest process.
+  std::optional<std::set<std::string>> GetContentScriptIDsForProcess(
+      content::ChildProcessId guest_process_id) const;
+
   // Returns true if the renderer with process ID `render_process_id` is a
   // WebView guest process.
   bool IsGuest(int render_process_id) const;
@@ -79,6 +84,15 @@ class WebViewRendererState {
 
   // Returns the number of WebView guest instances tracked by this object.
   size_t guest_count_for_testing() { return web_view_info_map_.size(); }
+
+  void AddGuestForTesting(int guest_process_id,
+                          int guest_routing_id,
+                          const WebViewInfo& web_view_info) {
+    AddGuest(guest_process_id, guest_routing_id, web_view_info);
+  }
+  void RemoveGuestForTesting(int guest_process_id, int guest_routing_id) {
+    RemoveGuest(guest_process_id, guest_routing_id);
+  }
 
  private:
   friend class WebViewGuest;

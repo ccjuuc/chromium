@@ -11,16 +11,18 @@ import org.junit.runners.model.Statement;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
+import org.chromium.chrome.browser.compositor.layouts.LayoutManagerChrome;
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
+import org.chromium.chrome.browser.layouts.LayoutType;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tabmodel.IncognitoTabHostUtils;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 
+import java.lang.ref.WeakReference;
 import java.util.Collections;
 
 /**
@@ -31,7 +33,7 @@ import java.util.Collections;
  * within the same {@link Batch}.
  */
 public class BlankCTATabInitialStateRule implements TestRule {
-    private static ChromeTabbedActivity sActivity;
+    private static WeakReference<ChromeTabbedActivity> sActivity;
 
     private final ChromeTabbedActivityTestRule mActivityTestRule;
     private final boolean mClearAllTabState;
@@ -54,7 +56,16 @@ public class BlankCTATabInitialStateRule implements TestRule {
         return new Statement() {
             @Override
             public void evaluate() throws Throwable {
+                // Reset sActivity if the activity was garbage collected or is finishing/destroyed.
+                if (sActivity != null) {
+                    ChromeTabbedActivity cta = sActivity.get();
+                    if (cta == null || cta.isActivityFinishingOrDestroyed()) {
+                        sActivity = null;
+                    }
+                }
+
                 if (sActivity == null) {
+                    // Launch a fresh activity if no active instance is cached.
                     ThreadUtils.runOnUiThreadBlocking(
                             () -> {
                                 FirstRunStatus.setFirstRunFlowComplete(true);
@@ -62,12 +73,19 @@ public class BlankCTATabInitialStateRule implements TestRule {
                     if (mActivityTestRule.getActivity() == null) {
                         mActivityTestRule.startMainActivityOnBlankPage();
                     }
-                    sActivity = mActivityTestRule.getActivity();
+                    sActivity = new WeakReference<>(mActivityTestRule.getActivity());
 
                     // Previous tests may have left tabs open and finished the Activity.
                     if (regularTabCount() > 1) resetTabStateFast();
                 } else {
-                    mActivityTestRule.setActivity(sActivity);
+                    // Reuse the existing activity instance and reset tab state.
+                    ChromeTabbedActivity cta = sActivity.get();
+                    if (cta == null) {
+                        throw new IllegalStateException(
+                                "sActivity was unexpectedly garbage collected after being"
+                                        + " validated.");
+                    }
+                    mActivityTestRule.setActivity(cta);
                     if (shouldPerformFastReset()) {
                         resetTabStateFast();
                     } else {
@@ -79,9 +97,11 @@ public class BlankCTATabInitialStateRule implements TestRule {
                 } finally {
                     // If the activity was relaunched during the test, update the reference to use
                     // the most up to date Activity.
-                    sActivity = mActivityTestRule.getActivity();
-                    if (sActivity.isActivityFinishingOrDestroyed()) {
+                    ChromeTabbedActivity activity = mActivityTestRule.getActivity();
+                    if (activity == null || activity.isActivityFinishingOrDestroyed()) {
                         sActivity = null;
+                    } else {
+                        sActivity = new WeakReference<>(activity);
                     }
                 }
             }
@@ -91,8 +111,12 @@ public class BlankCTATabInitialStateRule implements TestRule {
     private int regularTabCount() {
         return ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    return sActivity.getTabModelSelector().getModel(false).getCount();
+                    return getActivity().getTabModelSelector().getModel(false).getCount();
                 });
+    }
+
+    private static ChromeTabbedActivity getActivity() {
+        return sActivity.get();
     }
 
     private boolean shouldPerformFastReset() {
@@ -121,16 +145,14 @@ public class BlankCTATabInitialStateRule implements TestRule {
                     // Close all but the first regular tab as these tests expect to start with a
                     // single tab.
                     TabModel regularTabModel =
-                            sActivity.getTabModelSelector().getModel(/* incognito= */ false);
+                            getActivity().getTabModelSelector().getModel(/* incognito= */ false);
                     closeAllButOneTab(regularTabModel);
 
-                    TabGroupModelFilter filter =
-                            sActivity
-                                    .getTabModelSelector()
-                                    .getTabGroupModelFilter(/* isIncognito= */ false);
-                    Tab activityTab = sActivity.getActivityTab();
-                    if (filter.isTabInTabGroup(activityTab)) {
-                        filter.getTabUngrouper()
+                    TabModel tabModel =
+                            getActivity().getTabModelSelector().getModel(/* incognito= */ false);
+                    Tab activityTab = getActivity().getActivityTab();
+                    if (tabModel.isTabInTabGroup(activityTab)) {
+                        tabModel.getTabUngrouper()
                                 .ungroupTabs(
                                         Collections.singletonList(activityTab),
                                         /* trailing= */ false,
@@ -142,11 +164,15 @@ public class BlankCTATabInitialStateRule implements TestRule {
                     if (activityTab.getIsPinned()) {
                         regularTabModel.unpinTab(activityTab.getId());
                     }
+                    LayoutManagerChrome layoutManager = getActivity().getLayoutManager();
+                    if (layoutManager.isLayoutVisible(LayoutType.HUB)) {
+                        layoutManager.showLayout(LayoutType.BROWSING, /* animate= */ false);
+                    }
                 });
         mActivityTestRule.loadUrl("about:blank");
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    sActivity.getCurrentWebContents().getNavigationController().clearHistory();
+                    getActivity().getCurrentWebContents().getNavigationController().clearHistory();
                 });
     }
 
@@ -159,13 +185,13 @@ public class BlankCTATabInitialStateRule implements TestRule {
                             // We have to avoid closing all tabs and triggering CTA's self-finish
                             // logic when all tabs are closed.
                             Tab newTab =
-                                    sActivity
+                                    getActivity()
                                             .getTabCreator(false)
                                             .launchUrl("about:blank", TabLaunchType.FROM_CHROME_UI);
                             IncognitoTabHostUtils.closeAllIncognitoTabs();
 
                             TabModel regularTabModel =
-                                    sActivity
+                                    getActivity()
                                             .getTabModelSelector()
                                             .getModel(/* incognito= */ false);
                             for (int i = regularTabModel.getCount() - 1; i >= 0; i--) {

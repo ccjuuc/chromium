@@ -8,7 +8,7 @@
 #include "content/browser/webid/idp_network_request_manager.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/common/webid/login_status_options.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 
 namespace url {
 class Origin;
@@ -29,11 +29,10 @@ class MockIdpNetworkRequestManager : public webid::IdpNetworkRequestManager {
               FetchWellKnown,
               (const GURL&, FetchWellKnownCallback),
               (override));
-  MOCK_METHOD(
-      void,
-      FetchConfig,
-      (const GURL&, blink::mojom::RpMode, int, int, FetchConfigCallback),
-      (override));
+  MOCK_METHOD(void,
+              FetchConfig,
+              (const GURL&, int, int, FetchConfigCallback),
+              (override));
   MOCK_METHOD(
       void,
       FetchClientMetadata,
@@ -43,7 +42,6 @@ class MockIdpNetworkRequestManager : public webid::IdpNetworkRequestManager {
               SendAccountsRequest,
               (const url::Origin& idp_origin,
                const GURL&,
-               const std::string&,
                AccountsRequestCallback),
               (override));
   MOCK_METHOD(void,
@@ -54,6 +52,7 @@ class MockIdpNetworkRequestManager : public webid::IdpNetworkRequestManager {
                bool,
                TokenRequestCallback,
                ContinueOnCallback,
+               RedirectToCallback,
                RecordErrorMetricsCallback),
               (override));
   MOCK_METHOD(void,
@@ -67,10 +66,6 @@ class MockIdpNetworkRequestManager : public webid::IdpNetworkRequestManager {
   MOCK_METHOD(void,
               SendFailedTokenRequestMetrics,
               (const GURL&, bool, webid::MetricsEndpointErrorCode),
-              (override));
-  MOCK_METHOD(void,
-              SendLogout,
-              (const GURL& logout_url, LogoutCallback),
               (override));
   MOCK_METHOD(void,
               DownloadAndDecodeImage,

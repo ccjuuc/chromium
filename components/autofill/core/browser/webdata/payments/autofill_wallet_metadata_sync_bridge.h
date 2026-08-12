@@ -5,11 +5,13 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_WEBDATA_PAYMENTS_AUTOFILL_WALLET_METADATA_SYNC_BRIDGE_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_WEBDATA_PAYMENTS_AUTOFILL_WALLET_METADATA_SYNC_BRIDGE_H_
 
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
-#include <unordered_set>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
 #include "base/supports_user_data.h"
@@ -19,8 +21,11 @@
 #include "components/autofill/core/browser/webdata/autofill_webdata_service_observer.h"
 #include "components/sync/model/data_type_local_change_processor.h"
 #include "components/sync/model/data_type_sync_bridge.h"
+#include "components/sync/model/entity_change.h"
 #include "components/sync/model/metadata_change_list.h"
 #include "components/sync/model/model_error.h"
+#include "components/sync/protocol/autofill_specifics.pb.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace syncer {
 struct EntityData;
@@ -81,6 +86,8 @@ class AutofillWalletMetadataSyncBridge
       const syncer::EntityData& entity_data) const override;
   std::string GetStorageKey(
       const syncer::EntityData& entity_data) const override;
+  sync_pb::EntitySpecifics TrimAllSupportedFieldsFromRemoteSpecifics(
+      const sync_pb::EntitySpecifics& entity_specifics) const override;
   void ApplyDisableSyncChanges(std::unique_ptr<syncer::MetadataChangeList>
                                    delete_metadata_change_list) override;
   bool IsEntityDataValid(const syncer::EntityData& entity_data) const override;
@@ -114,7 +121,7 @@ class AutofillWalletMetadataSyncBridge
   // |storage_keys_set| is not set, it returns all data entries. Otherwise, it
   // returns only entries with storage key in |storage_keys_set|.
   std::unique_ptr<syncer::DataBatch> GetDataImpl(
-      std::optional<std::unordered_set<std::string>> storage_keys_set);
+      std::optional<absl::flat_hash_set<std::string>> storage_keys_set);
 
   // Uploads local data that is not part of |entity_data| sent from the server
   // during initial MergeFullSyncData().

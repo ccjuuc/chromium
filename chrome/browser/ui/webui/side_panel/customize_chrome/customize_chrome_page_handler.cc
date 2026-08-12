@@ -4,10 +4,10 @@
 
 #include "chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome_page_handler.h"
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
@@ -21,24 +21,24 @@
 #include "chrome/browser/extensions/settings_api_helpers.h"
 #include "chrome/browser/new_tab_page/modules/modules_constants.h"
 #include "chrome/browser/new_tab_page/new_tab_page_util.h"
+#include "chrome/browser/new_tab_page/prefs/ntp_pref_names.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/background/ntp_background_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
-#include "chrome/browser/ui/chrome_select_file_policy.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/search/ntp_user_data_types.h"
+#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/new_tab_footer/footer_controller.h"
 #include "chrome/browser/ui/views/side_panel/customize_chrome/customize_chrome_utils.h"
 #include "chrome/browser/ui/webui/new_tab_footer/new_tab_footer_helper.h"
 #include "chrome/browser/ui/webui/new_tab_page/new_tab_page_ui.h"
-#include "chrome/browser/ui/webui/new_tab_page/ntp_pref_names.h"
 #include "chrome/browser/ui/webui/new_tab_page_third_party/new_tab_page_third_party_ui.h"
 #include "chrome/browser/ui/webui/ntp/new_tab_ui.h"
 #include "chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome_section.h"
@@ -481,26 +481,22 @@ void CustomizeChromePageHandler::SetMostVisitedSettings(
 
   // Disable shortcuts auto-removal upon user interaction.
   DisableShortcutsAutoRemoval(profile_);
-  if ((base::Contains(current_tile_types, ntp_tiles::TileType::kCustomLinks) !=
-           base::Contains(types_set, ntp_tiles::TileType::kCustomLinks) ||
-       (base::Contains(current_tile_types, ntp_tiles::TileType::kTopSites) !=
-        base::Contains(types_set, ntp_tiles::TileType::kTopSites)))) {
-    UpdatePrefAndLogEvent(
-        ntp_prefs::kNtpCustomLinksVisible,
-        base::Contains(types_set, ntp_tiles::TileType::kCustomLinks),
-        NTP_CUSTOMIZE_SHORTCUT_TOGGLE_TYPE);
+  if ((current_tile_types.contains(ntp_tiles::TileType::kCustomLinks) !=
+           types_set.contains(ntp_tiles::TileType::kCustomLinks) ||
+       (current_tile_types.contains(ntp_tiles::TileType::kTopSites) !=
+        types_set.contains(ntp_tiles::TileType::kTopSites)))) {
+    UpdatePrefAndLogEvent(ntp_prefs::kNtpCustomLinksVisible,
+                          types_set.contains(ntp_tiles::TileType::kCustomLinks),
+                          NTP_CUSTOMIZE_SHORTCUT_TOGGLE_TYPE);
   }
 
-  if (base::Contains(current_tile_types,
-                     ntp_tiles::TileType::kEnterpriseShortcuts) !=
-      base::Contains(types_set, ntp_tiles::TileType::kEnterpriseShortcuts)) {
-    // If enterprise shortcuts are disabled or the policy is not set, skip this
-    // update.
-    if (base::FeatureList::IsEnabled(ntp_tiles::kNtpEnterpriseShortcuts) &&
-        !IsEnterpriseShortcutsEmpty()) {
+  if (current_tile_types.contains(ntp_tiles::TileType::kEnterpriseShortcuts) !=
+      types_set.contains(ntp_tiles::TileType::kEnterpriseShortcuts)) {
+    // If the policy is not set, skip this update.
+    if (!IsEnterpriseShortcutsEmpty()) {
       UpdatePrefAndLogEvent(
           ntp_prefs::kNtpEnterpriseShortcutsVisible,
-          base::Contains(types_set, ntp_tiles::TileType::kEnterpriseShortcuts),
+          types_set.contains(ntp_tiles::TileType::kEnterpriseShortcuts),
           NTP_CUSTOMIZE_ENTERPRISE_SHORTCUT_TOGGLE_VISIBILITY);
     }
   }
@@ -519,11 +515,9 @@ void CustomizeChromePageHandler::SetMostVisitedSettings(
 
 void CustomizeChromePageHandler::UpdateMostVisitedSettings() {
   std::vector<ntp_tiles::TileType> disabled_shortcuts;
-  // If feature is not enabled or no enterprise shortcuts are set by policy,
-  // hide the enterprise shortcuts option, but leave
-  // the preference as is.
-  if (!base::FeatureList::IsEnabled(ntp_tiles::kNtpEnterpriseShortcuts) ||
-      IsEnterpriseShortcutsEmpty()) {
+  // If no enterprise shortcuts are set by policy, hide the enterprise shortcuts
+  // option, but leave the preference as is.
+  if (IsEnterpriseShortcutsEmpty()) {
     disabled_shortcuts.push_back(ntp_tiles::TileType::kEnterpriseShortcuts);
   }
   auto tile_types = GetTileTypes();
@@ -608,14 +602,13 @@ void CustomizeChromePageHandler::SetModuleDisabled(const std::string& module_id,
                                                    bool disabled) {
   DisableModuleAutoRemoval(profile_, module_id);
   ScopedListPrefUpdate update(profile_->GetPrefs(), prefs::kNtpDisabledModules);
-  base::Value::List& list = update.Get();
-  base::Value module_id_value(module_id);
+  base::ListValue& list = update.Get();
   if (disabled) {
-    if (!base::Contains(list, module_id_value)) {
-      list.Append(std::move(module_id_value));
+    if (!list.contains(module_id)) {
+      list.Append(module_id);
     }
   } else {
-    list.EraseValue(module_id_value);
+    list.EraseValue(base::Value(module_id));
   }
 }
 
@@ -644,9 +637,9 @@ void CustomizeChromePageHandler::UpdateModulesSettings() {
           l10n_util::GetStringUTF8(description_message_id.value());
     }
     module_settings->enabled =
-        !base::Contains(disabled_module_ids, module_settings->id);
+        !std::ranges::contains(disabled_module_ids, module_settings->id);
     module_settings->visible =
-        !base::Contains(hidden_module_ids, module_settings->id);
+        !std::ranges::contains(hidden_module_ids, module_settings->id);
     modules_settings.push_back(std::move(module_settings));
   }
   page_->SetModulesSettings(
@@ -731,12 +724,6 @@ std::set<ntp_tiles::TileType> CustomizeChromePageHandler::GetTileTypes() const {
   std::set<ntp_tiles::TileType> tile_types;
   if (IsEnterpriseShortcutsVisible()) {
     tile_types.insert(ntp_tiles::TileType::kEnterpriseShortcuts);
-    // Skip adding personal shortcuts if enterprise shortcuts mixing is not
-    // allowed.
-    if (base::FeatureList::IsEnabled(ntp_tiles::kNtpEnterpriseShortcuts) &&
-        !ntp_tiles::kNtpEnterpriseShortcutsAllowMixingParam.Get()) {
-      return tile_types;
-    }
   }
   if (IsPersonalShortcutsVisible()) {
     tile_types.insert(
@@ -752,12 +739,8 @@ bool CustomizeChromePageHandler::IsShortcutsVisible() const {
 }
 
 bool CustomizeChromePageHandler::IsPersonalShortcutsVisible() const {
-  // Always return true if enterprise shortcuts feature is disabled,
-  // enterprise shortcuts mixing is disabled, or no enterprise shortcuts are set
-  // by policy.
-  if (!base::FeatureList::IsEnabled(ntp_tiles::kNtpEnterpriseShortcuts) ||
-      !ntp_tiles::kNtpEnterpriseShortcutsAllowMixingParam.Get() ||
-      IsEnterpriseShortcutsEmpty()) {
+  // Always return true if no enterprise shortcuts are set by policy.
+  if (IsEnterpriseShortcutsEmpty()) {
     return true;
   }
   return profile_->GetPrefs()->GetBoolean(

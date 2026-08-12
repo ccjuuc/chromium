@@ -6,37 +6,200 @@
 
 #include <vector>
 
-#include "base/functional/callback.h"
+#include "base/containers/span.h"
 #include "base/test/bind.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
-#include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
+#include "base/test/scoped_feature_list.h"
+#include "chrome/browser/send_tab_to_self/send_tab_to_self_client_service.h"
+#include "chrome/browser/send_tab_to_self/send_tab_to_self_client_service_factory.h"
+#include "chrome/browser/sync/send_tab_to_self_sync_service_factory.h"
 #include "chrome/browser/ui/views/frame/test_with_browser_view.h"
-#include "chrome/browser/ui/views/send_tab_to_self/send_tab_to_self_device_picker_bubble_view.h"
-#include "chrome/test/views/chrome_views_test_base.h"
+#include "components/send_tab_to_self/fake_send_tab_to_self_model.h"
+#include "components/send_tab_to_self/features.h"
+#include "components/send_tab_to_self/metrics_util.h"
+#include "components/send_tab_to_self/page_context.h"
 #include "components/send_tab_to_self/send_tab_to_self_entry.h"
+#include "components/send_tab_to_self/send_tab_to_self_sync_service.h"
+#include "components/send_tab_to_self/stub_send_tab_to_self_sync_service.h"
+#include "content/public/test/browser_test_utils.h"
+#include "content/public/test/navigation_simulator.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/test/widget_test.h"
 
 namespace send_tab_to_self {
 
-class SendTabToSelfToolbarBubbleViewTest : public ChromeViewsTestBase {};
+namespace {
+
+class StubReceivingUiHandler : public ReceivingUiHandler {
+ public:
+  StubReceivingUiHandler() = default;
+  ~StubReceivingUiHandler() override = default;
+
+  void DisplayNewEntries(
+      base::span<const SendTabToSelfEntry* const> new_entries) override {}
+  void DismissEntries(base::span<const std::string> guids) override {}
+};
+
+}  // namespace
+
+class SendTabToSelfToolbarBubbleViewTestBase : public TestWithBrowserView {
+ public:
+  SendTabToSelfToolbarBubbleViewTestBase(
+      const std::vector<base::test::FeatureRef>& enabled_features = {},
+      const std::vector<base::test::FeatureRef>& disabled_features = {}) {
+    feature_list_.InitWithFeatures(enabled_features, disabled_features);
+  }
+  ~SendTabToSelfToolbarBubbleViewTestBase() override = default;
+
+  void SetUp() override {
+    TestWithBrowserView::SetUp();
+
+    anchor_widget_ = std::make_unique<views::Widget>();
+    views::Widget::InitParams params(
+        views::Widget::InitParams::CLIENT_OWNS_WIDGET,
+        views::Widget::InitParams::TYPE_WINDOW);
+    params.context = GetContext();
+    anchor_widget_->Init(std::move(params));
+  }
+
+  void TearDown() override {
+    anchor_widget_.reset();
+    TestWithBrowserView::TearDown();
+  }
+
+  TestingProfile::TestingFactories GetTestingFactories() override {
+    TestingProfile::TestingFactories factories =
+        TestWithBrowserView::GetTestingFactories();
+    factories.emplace_back(
+        SendTabToSelfSyncServiceFactory::GetInstance(),
+        base::BindRepeating([](content::BrowserContext* context)
+                                -> std::unique_ptr<KeyedService> {
+          return std::make_unique<StubSendTabToSelfSyncService>();
+        }));
+    factories.emplace_back(
+        SendTabToSelfClientServiceFactory::GetInstance(),
+        base::BindLambdaForTesting([&](content::BrowserContext* context)
+                                       -> std::unique_ptr<KeyedService> {
+          Profile* profile = Profile::FromBrowserContext(context);
+          auto* sync_service = static_cast<StubSendTabToSelfSyncService*>(
+              SendTabToSelfSyncServiceFactory::GetForProfile(profile));
+          return std::make_unique<SendTabToSelfClientService>(
+              std::make_unique<StubReceivingUiHandler>(),
+              sync_service->GetFakeSendTabToSelfModel());
+        }));
+    return factories;
+  }
+
+  views::Widget* anchor_widget() { return anchor_widget_.get(); }
+  FakeSendTabToSelfModel* test_model() {
+    return static_cast<StubSendTabToSelfSyncService*>(
+               SendTabToSelfSyncServiceFactory::GetForProfile(profile()))
+        ->GetFakeSendTabToSelfModel();
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+  std::unique_ptr<views::Widget> anchor_widget_;
+};
+
+class SendTabToSelfToolbarBubbleViewTest
+    : public SendTabToSelfToolbarBubbleViewTestBase {
+ public:
+  SendTabToSelfToolbarBubbleViewTest()
+      : SendTabToSelfToolbarBubbleViewTestBase(
+            {kSendTabToSelfPropagateScrollPosition}) {}
+};
+
+class SendTabToSelfToolbarBubbleViewScrollPositionDisabledTest
+    : public SendTabToSelfToolbarBubbleViewTestBase {
+ public:
+  SendTabToSelfToolbarBubbleViewScrollPositionDisabledTest()
+      : SendTabToSelfToolbarBubbleViewTestBase(
+            {},
+            {kSendTabToSelfPropagateScrollPosition}) {}
+};
 
 TEST_F(SendTabToSelfToolbarBubbleViewTest, ButtonNavigatesToPage) {
   GURL url("https://www.example.com");
   SendTabToSelfEntry entry("guid", url, "Example", base::Time::Now(),
-                           "Example Device", "sync_guid");
-  std::unique_ptr<MockBrowserWindowInterface> browser =
-      std::make_unique<MockBrowserWindowInterface>();
-  SendTabToSelfToolbarBubbleView bubble(
-      *browser.get(), nullptr, entry,
-      base::BindLambdaForTesting([&](NavigateParams* params) {
-        EXPECT_EQ("https://www.example.com", params->url.spec());
-        EXPECT_EQ(WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                  params->disposition);
-        EXPECT_EQ(NavigateParams::WindowAction::kShowWindow,
-                  params->window_action);
-      }));
+                           "Example Device", "sync_guid", PageContext(),
+                           NavigationHistory());
+
+  SendTabToSelfToolbarBubbleView* bubble =
+      SendTabToSelfToolbarBubbleView::CreateBubble(
+          *browser(), views::BubbleAnchor(anchor_widget()->GetContentsView()),
+          entry);
+  views::test::WidgetDestroyedWaiter waiter(bubble->GetWidget());
+  bubble->OpenInNewTab();
+  waiter.Wait();
+
+  TabStripModel* tab_strip = browser()->tab_strip_model();
+  ASSERT_EQ(1, tab_strip->count());
+  EXPECT_EQ(url, tab_strip->GetActiveWebContents()->GetVisibleURL());
+
+  // Verify that the model was called with the correct GUID and entry point.
+  EXPECT_EQ(test_model()->last_activated_guid(), "guid");
+  EXPECT_EQ(test_model()->last_activated_entry_point(),
+            ShareActivatedEntryPoint::kDesktopToolbarBubble);
+  EXPECT_EQ(test_model()->activated_call_count(), 1);
+}
+
+TEST_F(SendTabToSelfToolbarBubbleViewTest, ButtonNavigatesWithScrollPosition) {
+  GURL url("https://www.example.com");
+  PageContext page_context;
+  page_context.scroll_position.text_fragment.text_start = "target text";
+  SendTabToSelfEntry entry("guid", url, "Example", base::Time::Now(),
+                           "Example Device", "sync_guid", page_context,
+                           NavigationHistory());
+
+  SendTabToSelfToolbarBubbleView* bubble =
+      SendTabToSelfToolbarBubbleView::CreateBubble(
+          *browser(), views::BubbleAnchor(anchor_widget()->GetContentsView()),
+          entry);
+  views::test::WidgetDestroyedWaiter waiter(bubble->GetWidget());
+  bubble->OpenInNewTab();
+  waiter.Wait();
+
+  TabStripModel* tab_strip = browser()->tab_strip_model();
+  ASSERT_EQ(1, tab_strip->count());
+  content::WebContents* web_contents = tab_strip->GetWebContentsAt(0);
+  EXPECT_EQ(url, web_contents->GetVisibleURL());
+
+  auto simulator = content::NavigationSimulator::CreateFromPending(
+      web_contents->GetController());
+  // Text fragment for scroll position syncing gets converted according to URL
+  // Fragment Text Directive spec
+  // (https://wicg.github.io/scroll-to-text-fragment/).
+  EXPECT_EQ("target%20text",
+            content::GetInternalScrollToTextFragmentForNavigation(
+                simulator->GetNavigationHandle()));
+}
+
+TEST_F(SendTabToSelfToolbarBubbleViewScrollPositionDisabledTest,
+       ButtonNavigatesWithoutScrollPositionIfFeatureDisabled) {
+  GURL url("https://www.example.com");
+  PageContext page_context;
+  page_context.scroll_position.text_fragment.text_start = "target text";
+  SendTabToSelfEntry entry("guid", url, "Example", base::Time::Now(),
+                           "Example Device", "sync_guid", page_context,
+                           NavigationHistory());
+
+  SendTabToSelfToolbarBubbleView* bubble =
+      SendTabToSelfToolbarBubbleView::CreateBubble(
+          *browser(), views::BubbleAnchor(anchor_widget()->GetContentsView()),
+          entry);
+  views::test::WidgetDestroyedWaiter waiter(bubble->GetWidget());
+  bubble->OpenInNewTab();
+  waiter.Wait();
+
+  TabStripModel* tab_strip = browser()->tab_strip_model();
+  ASSERT_EQ(1, tab_strip->count());
+  content::WebContents* web_contents = tab_strip->GetWebContentsAt(0);
+  EXPECT_EQ(url, web_contents->GetVisibleURL());
+
+  auto simulator = content::NavigationSimulator::CreateFromPending(
+      web_contents->GetController());
+  EXPECT_FALSE(content::GetInternalScrollToTextFragmentForNavigation(
+      simulator->GetNavigationHandle()));
 }
 
 }  // namespace send_tab_to_self

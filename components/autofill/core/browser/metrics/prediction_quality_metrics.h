@@ -115,10 +115,8 @@ enum QualityMetricPredictionSource {
   // Crowd-sourced server field type prediction.
   PREDICTION_SOURCE_SERVER = 2,
   // Overall field-type prediction seen by user.
-  PREDICTION_SOURCE_OVERALL = 3,
-  // ML based field-type predictions. Only reported separately if the ML model
-  // is evaluated in shadow mode (i.e. it is not the active heuristic).
-  PREDICTION_SOURCE_ML_PREDICTIONS = 4,
+  PREDICTION_SOURCE_OVERALL = 3
+  // PREDICTION_SOURCE_ML_PREDICTIONS = 4 (deprecated)
 };
 
 // These values are persisted to logs. Entries should not be renumbered and
@@ -198,14 +196,6 @@ void LogHeuristicPredictionQualityMetrics(
 void LogHeuristicPredictionQualityPerLabelSourceMetric(
     const AutofillField& field);
 
-void LogMlPredictionQualityMetrics(
-    FormInteractionsUkmLogger& form_interactions_ukm_logger,
-    ukm::SourceId source_id,
-    const FormStructure& form,
-    const AutofillField& field,
-    QualityMetricType metric_type,
-    base::TimeTicks now);
-
 void LogServerPredictionQualityMetrics(
     FormInteractionsUkmLogger& form_interactions_ukm_logger,
     ukm::SourceId source_id,
@@ -229,6 +219,18 @@ void LogLocalHeuristicMatchedAttribute(
     DenseSet<MatchAttribute> match_attributes);
 
 void LogFieldPredictionOverlapMetrics(const AutofillField& field);
+
+// Records the html, server, heuristic, overall and possible type of a field.
+// Also records the prediction source for the overall type of the field.
+void LogFieldTypeAtSubmissionMetrics(const AutofillField& field);
+
+// Logs metric conditionally to evaluate
+// `AutofillBetterLocalHeuristicPlaceholderSupport` feature.
+// TODO(crbug.com/430258039): Clean up along with the corresponding histograms
+// after feature is launched.
+void LogHeuristicPredictionQualityForLowQualityLabels(
+    const AutofillField& field,
+    bool was_prediction_correct);
 
 }  // namespace autofill::autofill_metrics
 

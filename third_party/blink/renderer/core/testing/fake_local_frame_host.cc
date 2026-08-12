@@ -7,6 +7,7 @@
 #include "net/storage_access_api/status.h"
 #include "skia/public/mojom/skcolor.mojom-blink.h"
 #include "third_party/blink/public/mojom/choosers/popup_menu.mojom-blink.h"
+#include "third_party/blink/public/mojom/dom/dom_node_id.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/frame_owner_properties.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/frame_replication_state.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/fullscreen.mojom-blink.h"
@@ -57,13 +58,6 @@ void FakeLocalFrameHost::SetVirtualKeyboardMode(
 void FakeLocalFrameHost::VisibilityChanged(
     mojom::blink::FrameVisibility visibility) {}
 
-void FakeLocalFrameHost::DidChangeThemeColor(
-    std::optional<::SkColor> theme_color) {}
-
-void FakeLocalFrameHost::DidChangeBackgroundColor(
-    const SkColor4f& background_color,
-    bool color_adjust) {}
-
 void FakeLocalFrameHost::DidFailLoadWithError(const ::blink::KURL& url,
                                               int32_t error_code) {}
 
@@ -108,9 +102,7 @@ void FakeLocalFrameHost::GoToEntryAtOffset(
     base::TimeTicks actual_navigation_start,
     std::optional<blink::scheduler::TaskAttributionId>) {}
 
-void FakeLocalFrameHost::UpdateTitle(
-    const String& title,
-    base::i18n::TextDirection title_direction) {}
+void FakeLocalFrameHost::UpdateTitle(const String& title) {}
 
 void FakeLocalFrameHost::UpdateApplicationTitle(
     const String& application_title) {}
@@ -160,16 +152,20 @@ void FakeLocalFrameHost::RunBeforeUnloadConfirm(
 }
 
 void FakeLocalFrameHost::UpdateFaviconURL(
-    Vector<blink::mojom::blink::FaviconURLPtr> favicon_urls) {}
+    Vector<blink::mojom::blink::FaviconURLPtr> favicon_urls,
+    blink::mojom::blink::FaviconUpdateReason reason) {}
 
 void FakeLocalFrameHost::DownloadURL(
     mojom::blink::DownloadURLParamsPtr params) {}
+
+void FakeLocalFrameHost::ShowCaptionSettings() {}
 
 void FakeLocalFrameHost::FocusedElementChanged(
     bool is_editable_element,
     bool is_richly_editable_element,
     const gfx::Rect& bounds_in_frame_widget,
-    blink::mojom::FocusType focus_type) {}
+    blink::mojom::FocusType focus_type,
+    mojom::blink::DOMNodeIdPtr dom_node_id) {}
 
 void FakeLocalFrameHost::TextSelectionChanged(const String& text,
                                               uint32_t offset,
@@ -270,23 +266,9 @@ void FakeLocalFrameHost::SetFencedFrameAutomaticBeaconReportEventData(
     bool once,
     bool cross_origin_exposed) {}
 
-void FakeLocalFrameHost::DisableUntrustedNetworkInFencedFrame(
-    DisableUntrustedNetworkInFencedFrameCallback callback) {
-  std::move(callback).Run();
-}
-
-void FakeLocalFrameHost::ExemptUrlFromNetworkRevocationForTesting(
-    const blink::KURL& exempted_url,
-    ExemptUrlFromNetworkRevocationForTestingCallback callback) {
-  std::move(callback).Run();
-}
-
 void FakeLocalFrameHost::SendLegacyTechEvent(
     const String& type,
     mojom::blink::LegacyTechEventCodeLocationPtr code_location) {}
-
-void FakeLocalFrameHost::SendPrivateAggregationRequestsForFencedFrameEvent(
-    const String& event_type) {}
 
 void FakeLocalFrameHost::CreateFencedFrame(
     mojo::PendingAssociatedReceiver<mojom::blink::FencedFrameOwnerHost>,
@@ -295,12 +277,6 @@ void FakeLocalFrameHost::CreateFencedFrame(
     const base::UnguessableToken& devtools_frame_token) {
   NOTREACHED() << "At the moment, FencedFrame is not used in any unit tests, "
                   "so this path should not be hit";
-}
-
-void FakeLocalFrameHost::ForwardFencedFrameEventAndUserActivationToEmbedder(
-    const String& event_type) {
-  NOTREACHED() << "ForwardFencedFrameEventToEmbedder is tested above the unit "
-                  "test layer";
 }
 
 void FakeLocalFrameHost::StartDragging(
@@ -323,22 +299,10 @@ void FakeLocalFrameHost::RecordWindowProxyUsageMetrics(
     const blink::FrameToken& target_frame_token,
     blink::mojom::WindowProxyAccessType access_type) {}
 
-void FakeLocalFrameHost::InitializeCrashReportStorage(
+void FakeLocalFrameHost::InitializeCrashReportContext(
     uint64_t length,
-    InitializeCrashReportStorageCallback callback) {}
-
-void FakeLocalFrameHost::SetCrashReportStorageKey(
-    const String& key,
-    const String& value,
-    SetCrashReportStorageKeyCallback callback) {}
-
-void FakeLocalFrameHost::RemoveCrashReportStorageKey(
-    const String& key,
-    RemoveCrashReportStorageKeyCallback callback) {}
+    InitializeCrashReportContextCallback callback) {}
 
 void FakeLocalFrameHost::NotifyDocumentInteractive() {}
-
-void FakeLocalFrameHost::SetStorageAccessApiStatus(
-    net::StorageAccessApiStatus status) {}
 
 }  // namespace blink

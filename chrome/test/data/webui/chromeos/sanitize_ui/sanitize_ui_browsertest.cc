@@ -7,7 +7,8 @@
 #include <string>
 
 #include "ash/constants/ash_features.h"
-#include "ash/webui/sanitize_ui/url_constants.h"
+#include "ash/constants/ash_pref_names.h"
+#include "ash/constants/webui_url_constants.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
@@ -75,15 +76,15 @@ class SanitizeUIBrowserTest : public WebUIMochaBrowserTest {
 };
 
 IN_PROC_BROWSER_TEST_F(SanitizeUIBrowserTest, PRE_SanitizeCheckPreferences) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   PrefService* prefs = profile->GetPrefs();
 
   // Ensure user preferences are set to proper test values before safety reset.
 
   // Homepage settings.
-  prefs->SetBoolean(prefs::kHomePageIsNewTabPage, false);
-  prefs->SetString(prefs::kHomePage, foo_url);
-  prefs->SetBoolean(prefs::kShowHomeButton, true);
+  prefs->SetBoolean(::prefs::kHomePageIsNewTabPage, false);
+  prefs->SetString(::prefs::kHomePage, foo_url);
+  prefs->SetBoolean(::prefs::kShowHomeButton, true);
 
   // Startup page settings.
   const GURL urls[] = {GURL(foo_url), GURL(bar_url)};
@@ -110,16 +111,16 @@ IN_PROC_BROWSER_TEST_F(SanitizeUIBrowserTest, PRE_SanitizeCheckPreferences) {
   prefs->SetBoolean(proxy_config::prefs::kUseSharedProxies, true);
 
   // Keyboard settings.
-  prefs->SetString(prefs::kLanguagePreloadEngines, "xkb:ru::rus");
-  EXPECT_NE("en-US", prefs->GetValue(prefs::kLanguagePreloadEngines));
+  prefs->SetString(ash::prefs::kLanguagePreloadEngines, "xkb:ru::rus");
+  EXPECT_NE("en-US", prefs->GetValue(ash::prefs::kLanguagePreloadEngines));
 
-  base::Value::List malicous_values;
+  base::ListValue malicous_values;
   malicous_values.Append("fr");
   malicous_values.Append("es");
   malicous_values.Append("ru");
   prefs->SetList(spellcheck::prefs::kSpellCheckDictionaries,
                  std::move(malicous_values));
-  const base::Value::List& spellcheck_dictionaries =
+  const base::ListValue& spellcheck_dictionaries =
       prefs->GetList(spellcheck::prefs::kSpellCheckDictionaries);
   size_t expected_size = 3;
   EXPECT_EQ(spellcheck_dictionaries.size(), expected_size);
@@ -135,14 +136,14 @@ IN_PROC_BROWSER_TEST_F(SanitizeUIBrowserTest, PRE_SanitizeCheckPreferences) {
 }
 
 IN_PROC_BROWSER_TEST_F(SanitizeUIBrowserTest, SanitizeCheckPreferences) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   PrefService* prefs = profile->GetPrefs();
 
   // Check for expected changes in user preferences.
   // Check homepage resets to expected defaults
-  EXPECT_TRUE(prefs->GetBoolean(prefs::kHomePageIsNewTabPage));
-  EXPECT_EQ(foo_url, prefs->GetString(prefs::kHomePage));
-  EXPECT_FALSE(prefs->GetBoolean(prefs::kShowHomeButton));
+  EXPECT_TRUE(prefs->GetBoolean(::prefs::kHomePageIsNewTabPage));
+  EXPECT_EQ(foo_url, prefs->GetString(::prefs::kHomePage));
+  EXPECT_FALSE(prefs->GetBoolean(::prefs::kShowHomeButton));
 
   // Check startup page preferences to expected defaults.
   const GURL urls[] = {GURL(foo_url), GURL(bar_url)};
@@ -171,11 +172,11 @@ IN_PROC_BROWSER_TEST_F(SanitizeUIBrowserTest, SanitizeCheckPreferences) {
       locale, ash::input_method::kAllInputMethods, &input_method_ids);
   ASSERT_FALSE(input_method_ids.empty());
   EXPECT_EQ(input_method_ids[0],
-            prefs->GetValue(prefs::kLanguagePreloadEngines));
+            prefs->GetValue(ash::prefs::kLanguagePreloadEngines));
 
   std::string expected_language =
       prefs->GetString(language::prefs::kPreferredLanguages);
-  const base::Value::List& spellcheck_dictionaries =
+  const base::ListValue& spellcheck_dictionaries =
       prefs->GetList(spellcheck::prefs::kSpellCheckDictionaries);
   size_t expected_size = 1;
   EXPECT_EQ(spellcheck_dictionaries.size(), expected_size);

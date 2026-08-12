@@ -19,7 +19,6 @@
 #include "chrome/browser/apps/app_service/intent_util.h"
 #include "chrome/browser/apps/app_service/launch_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_package.h"
 #include "chromeos/ash/experiences/arc/metrics/arc_metrics_constants.h"
 #include "components/renderer_context_menu/render_view_context_menu_proxy.h"
@@ -59,6 +58,9 @@ apps::IntentPtr CreateIntent(
 
 // The maximum number of smart actions to show.
 constexpr size_t kMaxMainMenuCommands = 5;
+constexpr int IDC_CONTENT_CONTEXT_START_SMART_SELECTION_ACTION_LAST =
+    IDC_CONTENT_CONTEXT_START_SMART_SELECTION_ACTION1 + kMaxMainMenuCommands -
+    1;
 
 StartSmartSelectionActionMenu::StartSmartSelectionActionMenu(
     content::BrowserContext* context,

@@ -9,21 +9,24 @@
 #include "chrome/browser/actor/actor_keyed_service.h"
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/actor/task_id.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
+#include "components/actor/core/task_id.h"
 
 // TODO(chrstne): Move interactive tests to a new tests/ folder
 class ActorUiInteractiveBrowserTest : public InteractiveBrowserTest {
  public:
-  void SetUpCommandLine(base::CommandLine* command_line) override;
-  void SetUpOnMainThread() override;
+  ActorUiInteractiveBrowserTest();
+  ~ActorUiInteractiveBrowserTest() override;
 
-  void StartActingOnTab();
+  void SetUpCommandLine(base::CommandLine* command_line) override;
+
+  void StartActingOnTab(actor::webui::mojom::TaskDuration duration =
+                            actor::webui::mojom::TaskDuration::kDefault);
   void PauseTask();
   void CompleteTask();
 
   actor::ActorKeyedService* actor_keyed_service() {
-    return actor::ActorKeyedService::Get(browser()->profile());
+    return actor::ActorKeyedService::Get(browser()->GetProfile());
   }
 
   actor::TaskId task_id() const { return task_id_; }

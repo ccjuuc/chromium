@@ -5,7 +5,6 @@ Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <dimen name="tab_list_selected_inset">7dp</dimen>
     <dimen name="tab_list_selected_margin">7dp</dimen>
     <dimen name="tab_grid_price_card_radius">4dp</dimen>
     <dimen name="tab_list_mini_card_radius">4dp</dimen>
@@ -56,12 +55,21 @@ found in the LICENSE file.
     <dimen name="tab_grid_card_margin_wrapper">3dp</dimen>
     <!-- The tab card highlight size is equal to tab_grid_card_margin - tab_grid_card_margin_wrapper -->
     <dimen name="tab_grid_card_margin">8dp</dimen>
-    <dimen name="tab_grid_card_between_card_padding">4dp</dimen>
+    <dimen name="tab_grid_focus_ring_inset">4dp</dimen>
     <dimen name="tab_grid_card_title_fading_length">20dp</dimen>
     <dimen name="tab_grid_card_title_end_margin">44dp</dimen>
+    <dimen name="tab_grid_card_media_indicator_margin_end">1dp</dimen>
+    <!--
+      tab_grid_card_title_end_margin + tab_grid_close_button_size +
+      tab_grid_card_media_indicator_margin_end + GapBetweenTitleAndIndicator(8)
+      44 + 18 + 1 + 8 = 71.
+    -->
+    <dimen name="tab_grid_card_title_end_margin_media_indicator">71dp</dimen>
     <dimen name="tab_grid_card_thumbnail_corner_radius_top">12dp</dimen>
     <dimen name="tab_grid_card_thumbnail_corner_radius_bottom">20dp</dimen>
     <dimen name="tab_grid_card_thumbnail_margin">4dp</dimen>
+    <dimen name="tab_grid_thumbnail_fetch_spinner_size">32dp</dimen>
+    <dimen name="tab_grid_thumbnail_fetch_spinner_thickness">2.5dp</dimen>
     <dimen name="tab_list_card_action_button_size">48dp</dimen>
     <dimen name="tab_list_card_action_button_margin">4dp</dimen>
     <dimen name="tab_list_card_action_button_padding">15dp</dimen>
@@ -79,28 +87,28 @@ found in the LICENSE file.
     <dimen name="tab_list_editor_share_sheet_preview_thumbnail_padding">10dp</dimen>
 
     <!-- Large form factor device strip tab hover card dimensions -->
-    <dimen name="tab_hover_card_width">264dp</dimen>
+    <dimen name="tab_hover_card_width">288dp</dimen>
     <dimen name="tab_hover_card_window_horizontal_margin">8dp</dimen>
     <dimen name="tab_hover_card_thumbnail_height">135dp</dimen>
-    <dimen name="tab_hover_card_text_content_margin">16dp</dimen>
+    <dimen name="tab_hover_card_text_content_margin">12dp</dimen>
+    <dimen name="tab_hover_card_footer_row_spacing">8dp</dimen>
+    <dimen name="tab_hover_card_footer_text_end_padding">24dp</dimen>
     <dimen name="tab_hover_card_url_top_margin">4dp</dimen>
     <dimen name="tab_hover_card_corner_radius">8dp</dimen>
     <dimen name="tab_hover_card_elevation">6dp</dimen>
     <dimen name="inactive_tab_hover_card_x_offset">16dp</dimen>
 
     <!-- Dimens for TabGroupParity features -->
-    <dimen name="color_picker_color_item_size">24dp</dimen>
-    <dimen name="color_picker_color_item_horizontal_padding">8dp</dimen>
-    <dimen name="color_picker_color_item_vertical_padding">12dp</dimen>
-    <dimen name="color_picker_inner_layer_inset">5dp</dimen>
-    <dimen name="color_picker_selection_layer_inset">2dp</dimen>
     <dimen name="tab_group_color_icon_stroke">2dp</dimen>
     <dimen name="tab_group_color_icon_item_size">18dp</dimen>
+    <dimen name="tab_group_nested_menu_color_icon_size">12dp</dimen>
+    <dimen name="tab_group_row_color_icon_top_margin">1dp</dimen>
     <dimen name="tab_group_color_icon_item_radius">9dp</dimen>
     <dimen name="tab_group_color_picker_popup_padding">10dp</dimen>
     <dimen name="tab_group_visual_data_dialog_margin_padding">3dp</dimen>
     <dimen name="color_picker_button_stroke_width">2dp</dimen>
     <dimen name="color_picker_button_stroke_outer_width">1dp</dimen>
+    <dimen name="color_picker_button_focus_ring_offset">2dp</dimen>
 
     <!-- Dimens for tab card label -->
     <dimen name="tab_card_label_icon_size">16dp</dimen>
@@ -189,4 +197,56 @@ found in the LICENSE file.
     <dimen name="pinned_tabs_strip_row_coverage_height">85dp</dimen>
     <!-- Height of the pinned tab strip 40dp item height + 2 * 16dp margin. -->
     <dimen name="pinned_tab_strip_height">72dp</dimen>
+    <dimen name="pinned_tab_strip_gap">4dp</dimen>
+
+    <!-- Dimens for vertical tabs -->
+    <dimen name="vertical_tabs_rail_horizontal_margin">12dp</dimen>
+    <dimen name="vertical_tabs_scrollbar_margin_end">-9dp</dimen>
+    <dimen name="vertical_tabs_scrollbar_padding_end">9dp</dimen>
+    <dimen name="vertical_tabs_scrollbar_width">3dp</dimen>
+    <dimen name="vertical_tabs_scrollbar_radius">100dp</dimen>
+    <dimen name="vertical_tab_item_icon_size">16dp</dimen>
+    <dimen name="vertical_tab_item_loading_spinner_thickness">2dp</dimen>
+    <dimen name="vertical_tab_item_height">32dp</dimen>
+    <dimen name="vertical_tab_item_padding_horizontal">8dp</dimen>
+    <dimen name="vertical_tab_item_padding_vertical">0dp</dimen>
+    <dimen name="vertical_tab_item_touch_target_inset">0dp</dimen>
+    <dimen name="vertical_tab_item_title_margin_end">4dp</dimen>
+    <dimen name="vertical_tab_item_favicon_margin_end">8dp</dimen>
+    <dimen name="vertical_tab_item_media_indicator_margin_end">12dp</dimen>
+    <dimen name="vertical_tab_item_ai_indicator_width">2dp</dimen>
+    <dimen name="vertical_tab_item_actuation_icon_size">20dp</dimen>
+    <dimen name="vertical_tab_item_corner_radius">8dp</dimen>
+    <dimen name="vertical_tab_item_margin_bottom">4dp</dimen>
+    <dimen name="vertical_tab_item_collapsed_size">32dp</dimen>
+    <dimen name="vertical_tab_action_button_touch_target_height">40dp</dimen>
+    <dimen name="vertical_tab_child_nesting_margin">8dp</dimen>
+    <dimen name="vertical_tab_spine_width">2dp</dimen>
+    <dimen name="vertical_tab_spine_radius">4dp</dimen>
+
+    <!-- Dimens for vertical pinned tabs -->
+    <!-- TODO(crbug.com/509226293): A11y requires touch target to be a minimum of 48dp. -->
+    <dimen name="vertical_tab_pinned_item_width">42dp</dimen>
+    <dimen name="vertical_tab_pinned_item_min_width">32dp</dimen>
+    <dimen name="vertical_tab_pinned_item_height">32dp</dimen>
+    <dimen name="vertical_tab_pinned_item_gap">4dp</dimen>
+    <dimen name="vertical_tab_pinned_item_ai_indicator_margin_start">2dp</dimen>
+    <dimen name="vertical_tab_pinned_item_margin_bottom">4dp</dimen>
+
+    <!-- New Tab button dimens.-->
+    <dimen name="vertical_tabs_new_tab_button_height">32dp</dimen>
+    <dimen name="vertical_tabs_new_tab_button_margin_top">8dp</dimen>
+    <dimen name="vertical_tabs_new_tab_button_margin_bottom">12dp</dimen>
+    <dimen name="vertical_tabs_new_tab_button_corner_radius">8dp</dimen>
+
+    <!-- Vertical Tabs Header dimens. -->
+    <dimen name="vertical_tabs_button_corner_radius_small">2dp</dimen>
+    <dimen name="vertical_tabs_header_margin_vertical">4dp</dimen>
+    <dimen name="vertical_tabs_header_padding_vertical">8dp</dimen>
+    <dimen name="vertical_tabs_header_button_size">32dp</dimen>
+    <dimen name="vertical_tabs_header_button_padding">4dp</dimen>
+    <dimen name="vertical_tabs_header_button_gap">2dp</dimen>
+
+    <!-- Dimens for tab search -->
+    <dimen name="tab_search_overlay_width">264dp</dimen>
 </resources>

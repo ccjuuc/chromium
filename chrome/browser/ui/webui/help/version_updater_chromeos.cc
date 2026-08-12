@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
@@ -195,7 +196,8 @@ void VersionUpdaterCros::CheckForUpdate(StatusCallback callback,
 
   // Make sure that libcros is loaded and OOBE is complete.
   if (!ash::WizardController::default_controller() ||
-      ash::StartupUtils::IsDeviceRegistered()) {
+      ash::StartupUtils::IsDeviceRegistered(
+          CHECK_DEREF(g_browser_process->local_state()))) {
     update_engine_client->RequestUpdateCheck(base::BindOnce(
         &VersionUpdaterCros::OnUpdateCheck, weak_ptr_factory_.GetWeakPtr()));
   }
@@ -325,7 +327,7 @@ void VersionUpdaterCros::UpdateStatusChanged(
 
   // If the updater is currently idle, just show the last operation (unless it
   // was previously checking for an update -- in that case, the system is
-  // up to date now).  See http://crbug.com/120063 for details.
+  // up to date now).  See http://crbug.com/40178339 for details.
   update_engine::Operation operation_to_show = status.current_operation();
   if (status.current_operation() == update_engine::Operation::IDLE &&
       last_operation_ != update_engine::Operation::CHECKING_FOR_UPDATE) {

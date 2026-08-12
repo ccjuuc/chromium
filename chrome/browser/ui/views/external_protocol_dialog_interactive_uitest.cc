@@ -15,10 +15,10 @@
 #include "content/public/test/browser_test.h"
 
 // Tests that keyboard focus works when the dialog is shown. Regression test for
-// https://crbug.com/1025343.
+// https://crbug.com/40659150.
 IN_PROC_BROWSER_TEST_F(ExternalProtocolDialogBrowserTest, TestFocus) {
   ShowUi(std::string("https://example.test"));
-  gfx::NativeWindow window = browser()->window()->GetNativeWindow();
+  gfx::NativeWindow window = browser()->GetWindow()->GetNativeWindow();
   views::Widget* widget = views::Widget::GetWidgetForNativeWindow(window);
   views::FocusManager* focus_manager = widget->GetFocusManager();
 #if BUILDFLAG(IS_MAC)

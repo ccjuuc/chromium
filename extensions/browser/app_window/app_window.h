@@ -31,7 +31,7 @@ class GURL;
 class SkRegion;
 
 namespace base {
-class Value;
+class DictValue;
 }  // namespace base
 
 namespace gfx {
@@ -370,7 +370,7 @@ class AppWindow : public content::WebContentsDelegate,
 
   // Retrieve the current state of the app window as a dictionary, to pass to
   // the renderer.
-  void GetSerializedState(base::Value::Dict* properties) const;
+  void GetSerializedState(base::DictValue* properties) const;
 
   // Whether the app window wants to be alpha enabled.
   bool requested_alpha_enabled() const { return requested_alpha_enabled_; }
@@ -438,6 +438,8 @@ class AppWindow : public content::WebContentsDelegate,
       const content::OpenURLParams& params,
       base::OnceCallback<void(content::NavigationHandle&)>
           navigation_handle_callback) override;
+  bool ShouldAllowRendererInitiatedCrossProcessNavigation(
+      bool is_outermost_main_frame_navigation) override;
   content::WebContents* AddNewContents(
       content::WebContents* source,
       std::unique_ptr<content::WebContents> new_contents,
@@ -454,8 +456,6 @@ class AppWindow : public content::WebContentsDelegate,
   void RequestPointerLock(content::WebContents* web_contents,
                           bool user_gesture,
                           bool last_unlocked_by_target) override;
-  bool PreHandleGestureEvent(content::WebContents* source,
-                             const blink::WebGestureEvent& event) override;
   content::PictureInPictureResult EnterPictureInPicture(
       content::WebContents* web_contents) override;
   void ExitPictureInPicture() override;
@@ -487,7 +487,7 @@ class AppWindow : public content::WebContentsDelegate,
   void SaveWindowPosition();
 
   // Helper method to adjust the cached bounds so that we can make sure it can
-  // be visible on the screen. See http://crbug.com/145752.
+  // be visible on the screen. See http://crbug.com/40273646.
   void AdjustBoundsToBeVisibleOnScreen(const gfx::Rect& cached_bounds,
                                        const gfx::Rect& cached_screen_bounds,
                                        const gfx::Rect& current_screen_bounds,
@@ -603,6 +603,7 @@ class AppWindow : public content::WebContentsDelegate,
   base::OnceClosure on_update_draggable_regions_callback_for_testing_;
 
   base::WeakPtrFactory<AppWindow> image_loader_ptr_factory_{this};
+  base::WeakPtrFactory<AppWindow> weak_ptr_factory_{this};
 };
 
 }  // namespace extensions

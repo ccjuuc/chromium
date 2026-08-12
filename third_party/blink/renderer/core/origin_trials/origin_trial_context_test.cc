@@ -78,9 +78,10 @@ class MockTokenValidator : public TrialTokenValidator {
                      const OriginInfo& origin_info,
                      base::span<const OriginInfo> scripts,
                      base::Time time)
-        : token(token_param), origin(origin_info), current_time(time) {
-      third_party_origin_info.AppendRange(scripts.begin(), scripts.end());
-    }
+        : token(token_param),
+          origin(origin_info),
+          third_party_origin_info(scripts),
+          current_time(time) {}
   };
 
   MockTokenValidator() = default;
@@ -428,7 +429,7 @@ TEST_F(OriginTrialContextTest, PermissionsPolicy) {
   PolicyParserMessageBuffer logger;
   network::ParsedPermissionsPolicy result;
   result = PermissionsPolicyParser::ParsePermissionsPolicyForTest(
-      "frobulate=*", security_origin, nullptr, logger, feature_map, window);
+      "frobulate=*", *security_origin, nullptr, logger, feature_map, window);
   EXPECT_TRUE(logger.GetMessages().empty());
   ASSERT_EQ(1u, result.size());
   EXPECT_EQ(network::mojom::PermissionsPolicyFeature::kFrobulate,
@@ -544,29 +545,6 @@ TEST_F(OriginTrialContextTest, ImpliedFeatureExpiryTimesAreUpdated) {
           mojom::blink::OriginTrialFeature::kOriginTrialsSampleAPIImplied));
 }
 
-TEST_F(OriginTrialContextTest, SettingFeatureUpdatesDocumentSettings) {
-  // Create a page holder window/document with an OriginTrialContext.
-  auto page_holder = std::make_unique<DummyPageHolder>();
-  LocalDOMWindow* window = page_holder->GetFrame().DomWindow();
-  OriginTrialContext* context = window->GetOriginTrialContext();
-
-  // Force-disabled the AutoDarkMode feature in the page holder's settings.
-  ASSERT_TRUE(page_holder->GetDocument().GetSettings());
-  page_holder->GetDocument().GetSettings()->SetForceDarkModeEnabled(false);
-
-  // Enable a settings-based origin trial API ("AutoDarkMode").
-  context->AddFeature(mojom::blink::OriginTrialFeature::kAutoDarkMode);
-  EXPECT_TRUE(context->IsFeatureEnabled(
-      mojom::blink::OriginTrialFeature::kAutoDarkMode));
-
-  // Expect the AutoDarkMode setting to have been enabled.
-  EXPECT_TRUE(
-      page_holder->GetDocument().GetSettings()->GetForceDarkModeEnabled());
-
-  // TODO(crbug.com/1260410): Switch this test away from using the AutoDarkMode
-  // feature towards an OriginTrialsSampleAPI* feature.
-}
-
 // This test ensures that the feature and token data are correctly mapped. The
 // assertions mirror the code that is used to send origin trial overrides to the
 // browser process via RuntimeFeatureStateOverrideContext's IPC.
@@ -638,9 +616,9 @@ TEST_F(OriginTrialContextDevtoolsTest, DependentFeatureNotEnabled) {
   // will disable the origin trial. If you delete the following trial or
   // `base::Feature`, update these to another case that appears inside
   // `OriginTrialContext::CanEnableTrialFromName()`.
-  static constexpr char kTrialName[] = "SoftNavigationHeuristics";
-  const base::Feature& feature = blink::features::kSoftNavigationDetection;
-  auto ot_feature = mojom::blink::OriginTrialFeature::kSoftNavigationHeuristics;
+  static constexpr char kTrialName[] = "UserMediaElement";
+  const base::Feature& feature = blink::features::kUserMediaElement;
+  auto ot_feature = mojom::blink::OriginTrialFeature::kUserMediaElementLegacy;
 
   UpdateSecurityOrigin(kFrobulateEnabledOrigin);
 

@@ -5,8 +5,11 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_XR_XR_WEBGL_BINDING_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_XR_XR_WEBGL_BINDING_H_
 
+#include "third_party/blink/renderer/bindings/modules/v8/v8_xr_layer_layout.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_xr_texture_type.h"
 #include "third_party/blink/renderer/modules/webgl/webgl2_rendering_context.h"
 #include "third_party/blink/renderer/modules/webgl/webgl_rendering_context.h"
+#include "third_party/blink/renderer/modules/xr/xr_camera_update_helper.h"
 #include "third_party/blink/renderer/modules/xr/xr_graphics_binding.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/xr_webgl_frame_transport_delegate.h"
@@ -86,6 +89,8 @@ class XRWebGLBinding final : public ScriptWrappable, public XRGraphicsBinding {
   gfx::Rect GetViewportForView(XRProjectionLayer* layer,
                                XRViewData* view) override;
 
+  gpu::SyncToken OnFrameEnd() override;
+
   WebGLRenderingContextBase* context() const { return webgl_context_.Get(); }
 
   XRFrameTransportDelegate* GetTransportDelegate() override;
@@ -101,19 +106,28 @@ class XRWebGLBinding final : public ScriptWrappable, public XRGraphicsBinding {
   bool CanCreateShapedLayer(const XRLayerInit*, ExceptionState&);
   bool ValidateShapedLayerTextureType(const V8XRTextureType, ExceptionState&);
   bool ValidateShapedLayerData(const XRLayerInit*, ExceptionState&);
+  bool ValidateTextureSize(const XRLayerInit*,
+                           V8XRLayerLayout::Enum layout,
+                           ExceptionState&);
   GLenum FormatForLayerFormat(GLenum format);
   GLenum InternalFormatForLayerFormat(GLenum format);
   GLenum TypeForLayerFormat(GLenum format);
 
-  gfx::Size GetTextureSizeForLayer(const XRLayerInit*) const;
+  gfx::Size GetTextureSizeForLayer(const XRLayerInit*,
+                                   V8XRLayerLayout::Enum final_layout) const;
   gfx::Rect GetViewportForLayer(const XRCompositionLayer&, V8XREye) const;
 
   XRWebGLSwapChain* CreateColorSwapchain(GLenum layer_format,
-                                         gfx::Size layer_size);
+                                         gfx::Size layer_size,
+                                         V8XRTextureType texture_type,
+                                         V8XRLayerLayout::Enum final_layout,
+                                         bool clear_on_access);
   XRWebGLSwapChain* GetSwapchainForLayer(XRCompositionLayer* layer);
 
   Member<WebGLRenderingContextBase> webgl_context_;
   bool webgl2_;
+
+  Member<XRCameraUpdateHelper> camera_helper_;
 
   Member<XRWebGLFrameTransportDelegate> transport_delegate_;
 };

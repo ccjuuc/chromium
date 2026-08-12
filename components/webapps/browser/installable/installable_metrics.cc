@@ -10,7 +10,6 @@
 #include "base/check.h"
 #include "base/metrics/histogram_base.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "components/webapps/browser/webapps_client.h"
 
@@ -94,6 +93,8 @@ std::ostream& operator<<(std::ostream& os, WebappInstallSource source) {
       return os << "web install";
     case WebappInstallSource::CHROMEOS_HELP_APP:
       return os << "chromeos help app";
+    case WebappInstallSource::MIGRATION:
+      return os << "migration";
   }
 }
 
@@ -111,8 +112,8 @@ std::ostream& operator<<(std::ostream& os, WebappUninstallSource source) {
       return os << "Sync";
     case webapps::WebappUninstallSource::kAppManagement:
       return os << "App Management";
-    case webapps::WebappUninstallSource::kMigration:
-      return os << "Migration";
+    case webapps::WebappUninstallSource::kUninstallAndReplaceMigration:
+      return os << "Uninstall and Replace migration";
     case webapps::WebappUninstallSource::kAppList:
       return os << "App List";
     case webapps::WebappUninstallSource::kShelf:
@@ -147,13 +148,19 @@ std::ostream& operator<<(std::ostream& os, WebappUninstallSource source) {
       return os << "Isolated Web Apps Enterprise Policy";
     case webapps::WebappUninstallSource::kDevtools:
       return os << "Devtools";
+    case webapps::WebappUninstallSource::kIwaBlocklisted:
+      return os << "Isolated Web App Blocklisted";
+    case webapps::WebappUninstallSource::kAppMigration:
+      return os << "AppMigration";
+    case webapps::WebappUninstallSource::kToolbarPostInstall:
+      return os << "ToolbarPostFirstInstall";
   }
 }
 
 bool IsUserUninstall(WebappUninstallSource source) {
   switch (source) {
     case webapps::WebappUninstallSource::kSync:
-    case webapps::WebappUninstallSource::kMigration:
+    case webapps::WebappUninstallSource::kUninstallAndReplaceMigration:
     case webapps::WebappUninstallSource::kInternalPreinstalled:
     case webapps::WebappUninstallSource::kExternalPreinstalled:
     case webapps::WebappUninstallSource::kExternalPolicy:
@@ -167,6 +174,7 @@ bool IsUserUninstall(WebappUninstallSource source) {
     case webapps::WebappUninstallSource::kInstallUrlDeduping:
     case webapps::WebappUninstallSource::kHealthcareUserInstallCleanup:
     case webapps::WebappUninstallSource::kIwaEnterprisePolicy:
+    case webapps::WebappUninstallSource::kIwaBlocklisted:
       return false;
     case webapps::WebappUninstallSource::kUnknown:
     case webapps::WebappUninstallSource::kAppMenu:
@@ -177,6 +185,8 @@ bool IsUserUninstall(WebappUninstallSource source) {
     case webapps::WebappUninstallSource::kShelf:
     case webapps::WebappUninstallSource::kExternalLockScreen:
     case webapps::WebappUninstallSource::kDevtools:
+    case webapps::WebappUninstallSource::kAppMigration:
+    case webapps::WebappUninstallSource::kToolbarPostInstall:
       return true;
   }
 }
@@ -227,7 +237,56 @@ bool InstallableMetrics::IsReportableInstallSource(WebappInstallSource source) {
     case WebappInstallSource::IWA_EXTERNAL_POLICY:
     case WebappInstallSource::IWA_SHIMLESS_RMA:
     case WebappInstallSource::MANAGEMENT_API:
+    case WebappInstallSource::MIGRATION:
     case WebappInstallSource::SUB_APP:
+    case WebappInstallSource::SYNC:
+      return false;
+  }
+}
+
+// static
+bool InstallableMetrics::IsInstallSurfaceConsideredTrusted(
+    WebappInstallSource source) {
+  switch (source) {
+    case WebappInstallSource::SYSTEM_DEFAULT:
+    case WebappInstallSource::EXTERNAL_DEFAULT:
+    case WebappInstallSource::INTERNAL_DEFAULT:
+    case WebappInstallSource::EXTERNAL_POLICY:
+    case WebappInstallSource::SUB_APP:
+    case WebappInstallSource::MICROSOFT_365_SETUP:
+      return true;
+    case WebappInstallSource::AMBIENT_BADGE_BROWSER_TAB:
+    case WebappInstallSource::AMBIENT_BADGE_CUSTOM_TAB:
+    case WebappInstallSource::API_BROWSER_TAB:
+    case WebappInstallSource::API_CUSTOM_TAB:
+    case WebappInstallSource::ARC:
+    case WebappInstallSource::AUTOMATIC_PROMPT_BROWSER_TAB:
+    case WebappInstallSource::AUTOMATIC_PROMPT_CUSTOM_TAB:
+    case WebappInstallSource::CHROME_SERVICE:
+    case WebappInstallSource::DEVTOOLS:
+    case WebappInstallSource::EXTERNAL_LOCK_SCREEN:
+    case WebappInstallSource::KIOSK:
+    case WebappInstallSource::MENU_BROWSER_TAB:
+    case WebappInstallSource::MENU_CREATE_SHORTCUT:
+    case WebappInstallSource::MENU_CUSTOM_TAB:
+    case WebappInstallSource::ML_PROMOTION:
+    case WebappInstallSource::OMNIBOX_INSTALL_ICON:
+    case WebappInstallSource::PRELOADED_OEM:
+    case WebappInstallSource::PROFILE_MENU:
+    case WebappInstallSource::RICH_INSTALL_UI_WEBLAYER:
+    case WebappInstallSource::PRELOADED_DEFAULT:
+    case WebappInstallSource::ALMANAC_INSTALL_APP_URI:
+    case WebappInstallSource::WEBAPK_RESTORE:
+    case WebappInstallSource::OOBE_APP_RECOMMENDATIONS:
+    case WebappInstallSource::WEB_INSTALL:
+    case WebappInstallSource::CHROMEOS_HELP_APP:
+    case WebappInstallSource::IWA_GRAPHICAL_INSTALLER:
+    case WebappInstallSource::IWA_DEV_UI:
+    case WebappInstallSource::IWA_DEV_COMMAND_LINE:
+    case WebappInstallSource::IWA_EXTERNAL_POLICY:
+    case WebappInstallSource::IWA_SHIMLESS_RMA:
+    case WebappInstallSource::MANAGEMENT_API:
+    case WebappInstallSource::MIGRATION:
     case WebappInstallSource::SYNC:
       return false;
   }

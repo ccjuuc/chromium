@@ -39,7 +39,7 @@ class UnifiedConsentBrowserTest : public SyncTest {
   }
 
   UnifiedConsentService* consent_service() {
-    return UnifiedConsentServiceFactory::GetForProfile(browser()->profile());
+    return UnifiedConsentServiceFactory::GetForProfile(browser()->GetProfile());
   }
 
  protected:
@@ -105,8 +105,7 @@ IN_PROC_BROWSER_TEST_F(UnifiedConsentBrowserTest,
       base::BindLambdaForTesting([=](syncer::SyncUserSettings* settings) {
         ASSERT_FALSE(settings->IsInitialSyncFeatureSetupComplete());
         pref_service1->SetBoolean(pref_B, true);
-        settings->SetInitialSyncFeatureSetupComplete(
-            syncer::SyncFirstSetupCompleteSource::ADVANCED_FLOW_CONFIRM);
+        settings->SetInitialSyncFeatureSetupComplete();
       })));
 
   // Sync both clients, so the synced state of both prefs (i.e. off) will arrive

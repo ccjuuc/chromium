@@ -12,6 +12,7 @@
 #import "base/metrics/histogram_functions.h"
 #import "base/task/sequenced_task_runner.h"
 #import "base/timer/elapsed_timer.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_switches.h"
 #import "components/signin/public/identity_manager/account_info.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
@@ -29,8 +30,7 @@ const Tribool kCanShowUnrestrictedOptInsFallbackValue = Tribool::kUnknown;
 
 }  // namespace
 
-@interface HistorySyncCapabilitiesFetcher () <
-    IdentityManagerObserverBridgeDelegate>
+@interface HistorySyncCapabilitiesFetcher () <IdentityManagerObserving>
 @end
 
 @implementation HistorySyncCapabilitiesFetcher {
@@ -104,15 +104,15 @@ const Tribool kCanShowUnrestrictedOptInsFallbackValue = Tribool::kUnknown;
       _identityManager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin);
   AccountInfo accountInfo =
       _identityManager->FindExtendedAccountInfo(primaryAccount);
-  return accountInfo.capabilities
+  return accountInfo.GetAccountCapabilities()
       .can_show_history_sync_opt_ins_without_minor_mode_restrictions();
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onExtendedAccountInfoUpdated:(const AccountInfo&)accountInfo {
+- (void)extendedAccountInfoDidUpdate:(const AccountInfo&)accountInfo {
   signin::Tribool capability =
-      accountInfo.capabilities
+      accountInfo.GetAccountCapabilities()
           .can_show_history_sync_opt_ins_without_minor_mode_restrictions();
   // Only process known capability values.
   if (capability != Tribool::kUnknown) {

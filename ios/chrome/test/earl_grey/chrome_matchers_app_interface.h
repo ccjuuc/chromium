@@ -7,6 +7,8 @@
 
 #import <UIKit/UIKit.h>
 
+#import "ios/chrome/browser/shared/ui/symbols/symbols.h"
+
 @protocol GREYMatcher;
 
 // Helper class to return matchers for EG tests.  These helpers are compiled
@@ -91,6 +93,10 @@
 + (id<GREYMatcher>)imageViewWithCustomSymbolNamed:(NSString*)symbolName
                                         pointSize:(CGFloat)pointSize;
 
+// Matcher for element with a symbol defined by `symbol` and `pointSize`.
++ (id<GREYMatcher>)imageViewWithSymbol:(Symbol)symbol
+                             pointSize:(CGFloat)pointSize;
+
 // Matcher for element with an image corresponding to `imageID` and
 // accessibility trait UIAccessibilityTraitButton.
 + (id<GREYMatcher>)buttonWithImage:(int)imageID;
@@ -124,6 +130,9 @@
 
 // Returns matcher for the primary toolbar.
 + (id<GREYMatcher>)primaryToolbar;
+
+// Returns matcher for the secondary toolbar.
++ (id<GREYMatcher>)secondaryToolbar;
 
 // Returns matcher for a cancel button.
 + (id<GREYMatcher>)cancelButton;
@@ -200,6 +209,10 @@
 // Matcher for Tools menu button.
 + (id<GREYMatcher>)toolsMenuButton;
 
+// Matcher for Tools menu button on NTP, only active when ChromeNextIA is
+// enabled.
++ (id<GREYMatcher>)toolsMenuNTPButton;
+
 // Matcher for the New Tab button, which can be long-pressed for a menu.
 // (This method can't be named +newTabButton, because starting a class method
 // with 'new' implicitly treats it as a constructor).
@@ -213,6 +226,9 @@
 
 // Matcher for the tab Share button (either in the omnibox or the toolbar).
 + (id<GREYMatcher>)tabShareButton;
+
+// Matcher for the Share button in the overflow menu.
++ (id<GREYMatcher>)overflowMenuShareButton;
 
 // Matcher for show tabs button.
 + (id<GREYMatcher>)showTabsButton;
@@ -321,6 +337,10 @@
 // Returns a matcher for a popup row containing `string` as accessibility label.
 + (id<GREYMatcher>)omniboxPopupRowWithString:(NSString*)string;
 
+// Returns a matcher for a visible popup row containing `string` as
+// accessibility label.
++ (id<GREYMatcher>)omniboxPopupRowVisibleWithString:(NSString*)string;
+
 // Returns matcher for the omnibox popup list view.
 + (id<GREYMatcher>)omniboxPopupList;
 
@@ -426,8 +446,8 @@
 // Returns the matcher for the quick delete browsing data button.
 + (id<GREYMatcher>)browsingDataButtonMatcher;
 
-// Returns the matcher for the quick delete browsing data button.
-+ (id<GREYMatcher>)browsingDataConfirmButtonMatcher;
+// Returns the matcher for the quick delete browsing data done button.
++ (id<GREYMatcher>)browsingDataDoneButtonMatcher;
 
 // Returns matcher for the clear browsing history cell on the clear browsing
 // data panel.
@@ -439,12 +459,7 @@
 // Returns matcher for the clear cache cell on the clear browsing data panel.
 + (id<GREYMatcher>)clearCacheButton;
 
-// Returns matcher for the clear saved passwords cell on the clear browsing data
-// panel.
-+ (id<GREYMatcher>)clearSavedPasswordsButton;
-
-// Returns matcher for the clear saved passwords cell on the clear browsing data
-// panel.
+// Returns matcher for the clear autofill cell on the clear browsing data panel.
 + (id<GREYMatcher>)clearAutofillButton;
 
 // Returns matcher for the collection view of content suggestion.
@@ -585,12 +600,6 @@
 // Returns the GREYMatcher for the button that closes the tab grid.
 + (id<GREYMatcher>)tabGridDoneButton;
 
-// Returns the GREYMatcher for the button to open the overflow menu.
-+ (id<GREYMatcher>)tabGridOverflowMenuButton;
-
-// Returns the GREYMatcher for the button that reverts the close all tabs action
-// in the tab grid.
-+ (id<GREYMatcher>)tabGridUndoCloseAllButton;
 
 // Returns the GREYMatcher for the cell that opens History in Recent Tabs.
 + (id<GREYMatcher>)tabGridSelectShowHistoryCell;
@@ -677,6 +686,10 @@
 
 // Returns a matcher for the address bar button in the main settings view.
 + (id<GREYMatcher>)settingsAddressBarButton;
+
+// Returns a matcher for the 'Gemini in Chrome' button in the main settings
+// view.
++ (id<GREYMatcher>)settingsGeminiInChromeButton;
 
 // Returns a matcher for an autofill suggestion view.
 + (id<GREYMatcher>)autofillSuggestionViewMatcher;
@@ -785,17 +798,17 @@
 // Returns a matcher for the button to accept the generated password.
 + (id<GREYMatcher>)useSuggestedPasswordMatcher;
 
-#pragma mark - Tab Grid Edit Mode
+#pragma mark - Tab Grid Overflow Menu
 
-// Returns a matcher for the button to open the context menu for edit actions.
-+ (id<GREYMatcher>)tabGridEditButton;
+// Returns the GREYMatcher for the button to open the overflow menu.
++ (id<GREYMatcher>)tabGridOverflowMenuButton;
 
-// Returns a matcher for the context menu button to close all tabs.
-+ (id<GREYMatcher>)tabGridEditMenuCloseAllButton;
+// Returns a matcher for the overflow menu button to close all tabs.
++ (id<GREYMatcher>)tabGridOverflowMenuCloseAllButton;
 
-// Returns a matcher for the context menu button to enter the tab grid tab
+// Returns a matcher for the overflow menu button to enter the tab grid tab
 // selection mode.
-+ (id<GREYMatcher>)tabGridSelectTabsMenuButton;
++ (id<GREYMatcher>)tabGridOverflowMenuSelectTabsButton;
 
 // Returns a matcher for the button to act on the selected tabs.
 + (id<GREYMatcher>)tabGridEditAddToButton;

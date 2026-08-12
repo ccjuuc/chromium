@@ -14,19 +14,18 @@
 #import <set>
 #import <vector>
 
-#import "base/containers/contains.h"
 #import "base/feature_list.h"
 #import "base/json/values_util.h"
 #import "base/metrics/histogram_functions.h"
 #import "base/strings/strcat.h"
 #import "base/time/time.h"
+#import "base/types/to_address.h"
 #import "base/values.h"
 #import "components/feature_engagement/public/tracker.h"
 #import "components/prefs/pref_service.h"
 #import "components/prefs/scoped_user_pref_update.h"
 #import "ios/chrome/browser/promos_manager/model/constants.h"
-#import "ios/chrome/browser/promos_manager/model/features.h"
-#import "ios/chrome/browser/promos_manager/model/impression_limit.h"
+#import "ios/chrome/browser/promos_manager/model/promo_display_context.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 
 using promos_manager::Promo;
@@ -96,8 +95,8 @@ void PromosManagerImpl::DeregisterAfterDisplay(promos_manager::Promo promo) {
   // Edge case: Possible to remove two instances of promo in
   // `single_display_active_promos_` and `single_display_pending_promos_` that
   // match the same type.
-  if (base::Contains(single_display_active_promos_, promo) ||
-      base::Contains(single_display_pending_promos_, promo)) {
+  if (single_display_active_promos_.contains(promo) ||
+      single_display_pending_promos_.contains(promo)) {
     DeregisterPromoInternal(promo);
     // Record promo deregistration after the promo was displayed.
     RecordRegistrationStateChanges(promo,
@@ -110,7 +109,7 @@ void PromosManagerImpl::RegisterPromoForContinuousDisplay(
     promos_manager::Promo promo) {
   // Log promo registration only if the promo does not already exist in the
   // queue.
-  if (!base::Contains(active_promos_, promo)) {
+  if (!active_promos_.contains(promo)) {
     // Record promo registration.
     RecordRegistrationStateChanges(
         promo, promos_manager::PromoRegistrationState::kRegistration);
@@ -127,7 +126,7 @@ void PromosManagerImpl::RegisterPromoForSingleDisplay(
     promos_manager::Promo promo) {
   // Log promo registration only if the promo does not already exist in the
   // queue.
-  if (!base::Contains(single_display_active_promos_, promo)) {
+  if (!single_display_active_promos_.contains(promo)) {
     // Record promo registration.
     RecordRegistrationStateChanges(
         promo, promos_manager::PromoRegistrationState::kRegistration);
@@ -147,7 +146,7 @@ void PromosManagerImpl::RegisterPromoForSingleDisplay(
 
   // Log promo registration only if the promo does not already exist in the
   // queue.
-  if (!base::Contains(single_display_pending_promos_, promo)) {
+  if (!single_display_pending_promos_.contains(promo)) {
     // Record promo registration.
     RecordRegistrationStateChanges(
         promo, promos_manager::PromoRegistrationState::kRegistration);
@@ -169,9 +168,9 @@ void PromosManagerImpl::RegisterPromoForSingleDisplay(
 void PromosManagerImpl::DeregisterPromo(promos_manager::Promo promo) {
   // If the promo is still registered in any active or pending list, record its
   // deregistration due to an eligibility change.
-  if (base::Contains(single_display_active_promos_, promo) ||
-      base::Contains(single_display_pending_promos_, promo) ||
-      base::Contains(active_promos_, promo)) {
+  if (single_display_active_promos_.contains(promo) ||
+      single_display_pending_promos_.contains(promo) ||
+      active_promos_.contains(promo)) {
     RecordRegistrationStateChanges(promo,
                                    promos_manager::PromoRegistrationState::
                                        kDeregistrationBeforePromoDisplay);
@@ -213,11 +212,12 @@ void PromosManagerImpl::InitializePromoConfigs(PromoConfigsSet promo_configs) {
 // Candidates are from active promos and the pending promos that can become
 // active at the time this function is called. Coordinate with other internal
 // functions to rank and validate the candidates.
-std::optional<promos_manager::Promo> PromosManagerImpl::NextPromoForDisplay() {
+std::optional<promos_manager::Promo> PromosManagerImpl::NextPromoForDisplay(
+    const PromoDisplayContext& display_context) {
   // Construct a map with the promo from (1) single-display and
-  // (2) continuous-display promo campaigns. (3) single-display pending promos
-  // that has become active, as keys. The value is the context that will be used
-  // for ranking purpose.
+  // (2) continuous-display promo campaigns, and (3) single-display pending
+  // promos that have become active, as keys. The value is the context that will
+  // be used for ranking purpose.
   std::map<promos_manager::Promo, PromoContext> active_promos_with_context;
   for (const auto& promo : active_promos_) {
     active_promos_with_context[promo] = PromoContext{
@@ -242,6 +242,25 @@ std::optional<promos_manager::Promo> PromosManagerImpl::NextPromoForDisplay() {
       active_promos_with_context[promo] = PromoContext{
           .was_pending = true,
       };
+    }
+  }
+
+  // Filter the combined map based on the display context.
+  for (auto it = active_promos_with_context.begin();
+       it != active_promos_with_context.end();) {
+    const auto& promo = it->first;
+    const auto config_it = promo_configs_.find(promo);
+    bool can_display = true;
+    if (config_it != promo_configs_.end() && config_it->display_time) {
+      switch (config_it->display_time.value()) {
+        case PromoDisplayTime::kFreshNtp:
+          can_display = display_context.is_on_fresh_ntp;
+      }
+    }
+    if (!can_display) {
+      it = active_promos_with_context.erase(it);
+    } else {
+      ++it;
     }
   }
 
@@ -272,11 +291,21 @@ std::optional<promos_manager::Promo> PromosManagerImpl::NextPromoForDisplay() {
                                 valid_promo_count,
                                 static_cast<int>(Promo::kMaxValue) + 1);
 
+  if (first_promo_opt.value() != Promo::WelcomeBack) {
+    bool welcome_back_in_queue =
+        std::ranges::contains(sorted_promos, Promo::WelcomeBack);
+    if (welcome_back_in_queue &&
+        CanShowPromoWithoutTrigger(Promo::WelcomeBack)) {
+      base::UmaHistogramEnumeration("IOS.WelcomeBack.SuppressedInFavorOfPromo",
+                                    first_promo_opt.value());
+    }
+  }
+
   return first_promo_opt;
 }
 
 std::set<promos_manager::Promo> PromosManagerImpl::ActivePromos(
-    const base::Value::List& stored_active_promos) const {
+    const base::ListValue& stored_active_promos) const {
   std::set<promos_manager::Promo> active_promos;
 
   for (size_t i = 0; i < stored_active_promos.size(); ++i) {
@@ -300,7 +329,7 @@ void PromosManagerImpl::InitializePendingPromos() {
 
   single_display_pending_promos_.clear();
 
-  const base::Value::Dict& stored_pending_promos = pref_service_->GetDict(
+  const base::DictValue& stored_pending_promos = pref_service_->GetDict(
       prefs::kIosPromosManagerSingleDisplayPendingPromos);
 
   for (const auto [name, value] : stored_pending_promos) {
@@ -343,7 +372,7 @@ const base::Feature* PromosManagerImpl::FeatureForPromo(
     return nil;
   }
 
-  return it->feature_engagement_feature;
+  return base::to_address(it->feature_engagement_feature);
 }
 
 // Sort the promos in the order that they will be displayed.

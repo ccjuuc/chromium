@@ -11,6 +11,7 @@
 #include "base/check_op.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/metrics_hashes.h"
+#include "components/metrics/metrics_reporting_choice_service.h"
 #include "services/metrics/public/cpp/delegating_ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_source.h"
@@ -38,7 +39,6 @@ void MergeEntry(const mojom::UkmEntry* in, mojom::UkmEntry* out) {
 
 TestUkmRecorder::TestUkmRecorder() {
   UpdateRecording(UkmConsentState::All());
-  InitDecodeMap();
   SetSamplingForTesting(1);  // 1-in-1 == unsampled
 }
 
@@ -227,6 +227,11 @@ TestUkmRecorder::HumanReadableUkmEntry::~HumanReadableUkmEntry() = default;
 bool TestUkmRecorder::HumanReadableUkmEntry::operator==(
     const HumanReadableUkmEntry& other) const {
   return source_id == other.source_id && metrics == other.metrics;
+}
+
+bool TestUkmRecorder::ShouldUseMetricsConsentRestructure() const {
+  return metrics::MetricsReportingChoiceService::
+      ShouldUseMetricsConsentRestructure();
 }
 
 void PrintTo(const TestUkmRecorder::HumanReadableUkmEntry& entry,

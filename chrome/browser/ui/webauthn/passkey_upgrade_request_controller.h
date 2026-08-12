@@ -13,6 +13,7 @@
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/webauthn/gpm_enclave_controller.h"
 #include "components/password_manager/core/browser/password_store/password_store_consumer.h"
+#include "components/trusted_vault/trusted_vault_connection.h"
 
 namespace content {
 class RenderFrameHost;
@@ -23,6 +24,7 @@ struct CredentialRequest;
 enum class PINValidationResult;
 }  // namespace device::enclave
 
+class CmtgKeyFetcher;
 class EnclaveManager;
 class GPMEnclaveTransaction;
 class Profile;
@@ -40,9 +42,10 @@ enum class PasskeyUpgradeResult {
   kNoMatchingPassword = 5,
   kNoRecentlyUsedPassword = 6,
   kEnclaveError = 7,
-  kMaxValue = kEnclaveError,
+  kSecurityDomainStateStale = 8,
+  kMaxValue = kSecurityDomainStateStale,
 };
-// LINT.ThenChange(//tools/metrics/histograms/metadata/webauthn/enums.xml:PasskeyUpgradeResult)
+// LINT.ThenChange(//tools/metrics/histograms/metadata/webauthn/enums.xml:PasskeyUpgradeResultEnum)
 
 // Record a UMA histogram for the outcome of a passkey upgrade request.
 void RecordPasskeyUpgradeResultHistogram(PasskeyUpgradeResult);
@@ -54,7 +57,6 @@ class PasskeyUpgradeRequestController
     : public password_manager::PasswordStoreConsumer,
       public GPMEnclaveTransaction::Delegate {
  public:
-  using Callback = base::OnceCallback<void(bool success)>;
   using EnclaveRequestCallback = base::RepeatingCallback<void(
       std::unique_ptr<device::enclave::CredentialRequest>)>;
 
@@ -66,9 +68,10 @@ class PasskeyUpgradeRequestController
     virtual void PasskeyUpgradeFailed() = 0;
   };
 
-  explicit PasskeyUpgradeRequestController(
+  PasskeyUpgradeRequestController(
       content::RenderFrameHost* rfh,
-      EnclaveRequestCallback enclave_request_callback);
+      EnclaveRequestCallback enclave_request_callback,
+      bool cmtg_key_requested);
 
   ~PasskeyUpgradeRequestController() override;
 
@@ -81,6 +84,7 @@ class PasskeyUpgradeRequestController
  private:
   enum class EnclaveState {
     kUnknown,
+    kLoading,
     kReady,
     kError,
   };
@@ -89,6 +93,8 @@ class PasskeyUpgradeRequestController
   void OnGetPasswordStoreResultsOrErrorFrom(
       password_manager::PasswordStoreInterface* store,
       password_manager::LoginsResultOrError results_or_error) override;
+
+  void StartEnclaveTransaction();
 
   // GPMEnclaveTransaction::Delegate:
   void HandleEnclaveTransactionError() override;
@@ -99,18 +105,28 @@ class PasskeyUpgradeRequestController
       const sync_pb::WebauthnCredentialSpecifics& passkey) override;
   EnclaveUserVerificationMethod GetUvMethod() override;
 
-  content::RenderFrameHost& render_frame_host() const;
-  Profile* profile() const;
+  // Returns the render frame host associated with this request. May return
+  // nullptr if the initiating frame or tab has been destroyed or detached.
+  content::RenderFrameHost* MaybeGetRenderFrameHost() const;
+  Profile* profile() const { return profile_; }
 
   void OnEnclaveLoaded();
+  void OnAccountStateDownloaded(
+      std::unique_ptr<trusted_vault::TrustedVaultConnection> unused,
+      trusted_vault::DownloadAuthenticationFactorsRegistrationStateResult
+          result);
   void ContinuePendingUpgradeRequest();
   void FinishRequest(PasskeyUpgradeResult error);
 
   const content::GlobalRenderFrameHostId frame_host_id_;
+  const raw_ptr<Profile> profile_;
 
   const raw_ptr<EnclaveManager> enclave_manager_;
   EnclaveState enclave_state_ = EnclaveState::kUnknown;
   bool pending_request_ = false;
+
+  std::unique_ptr<trusted_vault::TrustedVaultConnection::Request>
+      download_account_state_request_;
 
   std::string rp_id_;
   std::u16string username_;
@@ -119,6 +135,7 @@ class PasskeyUpgradeRequestController
   EnclaveRequestCallback enclave_request_callback_;
 
   std::unique_ptr<GPMEnclaveTransaction> enclave_transaction_;
+  std::unique_ptr<CmtgKeyFetcher> cmtg_key_fetcher_;
 
   base::WeakPtrFactory<PasskeyUpgradeRequestController> weak_factory_{this};
 };

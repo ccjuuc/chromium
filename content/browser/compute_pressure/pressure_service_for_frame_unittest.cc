@@ -182,8 +182,7 @@ TEST_F(PressureServiceForFrameTest, AddClient) {
             device::mojom::PressureManagerAddClientResult::kOk);
 
   const base::TimeTicks time = base::TimeTicks::Now();
-  auto data = PressureData::New(/*cpu_utilization=*/0.4,
-                                /*own_contribution_estimate=*/0.20);
+  auto data = PressureData::New(/*cpu_utilization=*/0.4);
   PressureUpdate update(PressureSource::kCpu, std::move(data), time);
   pressure_manager_overrider_->UpdateClients(update);
   client.WaitForUpdate();
@@ -191,7 +190,6 @@ TEST_F(PressureServiceForFrameTest, AddClient) {
   ASSERT_EQ(client.updates().size(), 1u);
   EXPECT_EQ(client.updates()[0].source, update.source);
   EXPECT_EQ(client.updates()[0].state, device::mojom::PressureState::kNominal);
-  EXPECT_EQ(client.updates()[0].own_contribution_estimate, 0.20);
   EXPECT_EQ(client.updates()[0].timestamp, update.timestamp);
 }
 
@@ -423,6 +421,19 @@ TEST_F(PressureServiceForFrameFencedFrameTest, AccessFromFencedFrame) {
   EXPECT_EQ(1, static_cast<TestRenderFrameHost*>(fenced_frame_rfh)
                    ->GetProcess()
                    ->bad_msg_count());
+}
+
+TEST_F(PressureServiceForFrameTest, HasImplicitFocus_PipNoOrigin) {
+  // Create a second WebContents and simulate PiP video without a session.
+  // This simulates a state where WebContents::HasPictureInPictureVideo() is
+  // true but the PiP controller's GetOrigin() returns nullopt.
+  std::unique_ptr<TestWebContents> pip_wc(
+      TestWebContents::Create(browser_context(), nullptr));
+  pip_wc->SetHasPictureInPictureVideo(true);
+
+  // This should not crash.
+  EXPECT_TRUE(
+      PressureServiceBase::HasImplicitFocus(contents()->GetPrimaryMainFrame()));
 }
 
 }  // namespace content

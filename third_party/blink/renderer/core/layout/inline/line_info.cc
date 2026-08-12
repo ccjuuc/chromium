@@ -70,6 +70,7 @@ void LineInfo::Reset() {
   end_item_index_ = 0;
   end_offset_for_justify_ = 0;
 
+  text_fit_scale_ = 1.0f;
   text_align_ = ETextAlign::kLeft;
   base_direction_ = TextDirection::kLtr;
 
@@ -87,6 +88,7 @@ void LineInfo::Reset() {
   may_have_text_combine_or_ruby_item_ = false;
   may_have_ruby_overhang_ = false;
   allow_hang_for_alignment_ = false;
+  is_start_of_paragraph_ = false;
 }
 
 void LineInfo::SetLineStyle(const InlineNode& node,
@@ -95,7 +97,7 @@ void LineInfo::SetLineStyle(const InlineNode& node,
   use_first_line_style_ = use_first_line_style;
   items_data_ = &items_data;
   const LayoutBox* box = node.GetLayoutBox();
-  line_style_ = box->Style(use_first_line_style_);
+  line_style_ = box->StyleRef(use_first_line_style_);
   needs_accurate_end_position_ = ComputeNeedsAccurateEndPosition();
 
   // Reset block start offset related members.
@@ -259,6 +261,13 @@ bool LineInfo::IsHyphenated() const {
     if (item_result.Length()) {
       return item_result.is_hyphenated;
     }
+  }
+  return false;
+}
+
+bool LineInfo::HasUnsuccessfulBlockInInline() const {
+  if (const LayoutResult* result = BlockInInlineLayoutResult()) {
+    return result->Status() != LayoutResult::kSuccess;
   }
   return false;
 }

@@ -9,11 +9,11 @@
 #include <windows.storage.streams.h>
 #include <wrl/event.h>
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -26,6 +26,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -766,12 +767,24 @@ BluetoothAdapterWinrt::GetAgileReferencesForStatics(
                            std::move(radio_statics_agileref));
 }
 
+// static
+void BluetoothAdapterWinrt::DestroyAgileStaticsOnMTA(
+    StaticsInterfaces /* agile_statics */) {
+  base::win::AssertComApartmentType(base::win::ComApartmentType::MTA);
+}
+
 void BluetoothAdapterWinrt::CompleteInitAgile(base::OnceClosure init_callback,
                                               StaticsInterfaces agile_statics) {
   if (!agile_statics.adapter_statics ||
       !agile_statics.device_information_statics ||
       !agile_statics.radio_statics) {
     CompleteInit(std::move(init_callback), nullptr, nullptr, nullptr);
+    base::ThreadPool::PostTask(
+        FROM_HERE,
+        {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+         base::ThreadPolicy::MUST_USE_FOREGROUND},
+        base::BindOnce(&BluetoothAdapterWinrt::DestroyAgileStaticsOnMTA,
+                       std::move(agile_statics)));
     return;
   }
   ComPtr<IBluetoothAdapterStatics> bluetooth_adapter_statics;
@@ -788,6 +801,12 @@ void BluetoothAdapterWinrt::CompleteInitAgile(base::OnceClosure init_callback,
 
   CompleteInit(std::move(init_callback), std::move(bluetooth_adapter_statics),
                std::move(device_information_statics), std::move(radio_statics));
+  base::ThreadPool::PostTask(
+      FROM_HERE,
+      {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+       base::ThreadPolicy::MUST_USE_FOREGROUND},
+      base::BindOnce(&BluetoothAdapterWinrt::DestroyAgileStaticsOnMTA,
+                     std::move(agile_statics)));
 }
 
 void BluetoothAdapterWinrt::CompleteInit(
@@ -800,12 +819,20 @@ void BluetoothAdapterWinrt::CompleteInit(
   // run no matter how the function exits. Furthermore, we set |is_initialized_|
   // to true if adapter is still active when the callback gets run.
   base::ScopedClosureRunner on_init(base::BindOnce(
-      [](base::WeakPtr<BluetoothAdapterWinrt> adapter,
+      [](scoped_refptr<base::SequencedTaskRunner> expected_runner,
+         base::WeakPtr<BluetoothAdapterWinrt> adapter,
          base::OnceClosure init_callback) {
+        // This callback can be destroyed on a different sequence during
+        // shutdown if the target task runner has already shut down. In that
+        // case, we must not access the WeakPtr or run the callback.
+        if (!expected_runner->RunsTasksInCurrentSequence()) {
+          return;
+        }
         if (adapter)
           adapter->is_initialized_ = true;
         std::move(init_callback).Run();
       },
+      base::SequencedTaskRunner::GetCurrentDefault(),
       weak_ptr_factory_.GetWeakPtr(), std::move(init_callback)));
 
   bluetooth_adapter_statics_ = bluetooth_adapter_statics;
@@ -1365,7 +1392,7 @@ void BluetoothAdapterWinrt::OnAdvertisementWatcherStopped(
 void BluetoothAdapterWinrt::OnRegisterAdvertisement(
     BluetoothAdvertisement* advertisement,
     CreateAdvertisementCallback callback) {
-  DCHECK(base::Contains(pending_advertisements_, advertisement));
+  DCHECK(std::ranges::contains(pending_advertisements_, advertisement));
   auto wrapped_advertisement = base::WrapRefCounted(advertisement);
   std::erase(pending_advertisements_, advertisement);
   std::move(callback).Run(std::move(wrapped_advertisement));

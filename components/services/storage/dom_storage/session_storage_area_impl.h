@@ -27,7 +27,7 @@ class SessionStorageDataMap;
 // namespace-StorageKey area.
 //
 // This class delegates calls to SessionStorageDataMap objects, and can share
-// them with other SessionStorageLevelDBImpl instances to support shallow
+// them with other SessionStorageAreaImpl instances to support shallow
 // cloning (copy-on-write). This should be done through the |Clone()| method and
 // not manually.
 //
@@ -80,17 +80,16 @@ class SessionStorageAreaImpl : public blink::mojom::StorageArea {
   void Put(const std::vector<uint8_t>& key,
            const std::vector<uint8_t>& value,
            const std::optional<std::vector<uint8_t>>& client_old_value,
-           const std::string& source,
+           blink::mojom::StorageAreaSourcePtr source,
            PutCallback callback) override;
   void Delete(const std::vector<uint8_t>& key,
               const std::optional<std::vector<uint8_t>>& client_old_value,
-              const std::string& source,
+              blink::mojom::StorageAreaSourcePtr source,
               DeleteCallback callback) override;
   void DeleteAll(
-      const std::string& source,
+      blink::mojom::StorageAreaSourcePtr source,
       mojo::PendingRemote<blink::mojom::StorageAreaObserver> new_observer,
       DeleteAllCallback callback) override;
-  void Get(const std::vector<uint8_t>& key, GetCallback callback) override;
   void GetAll(
       mojo::PendingRemote<blink::mojom::StorageAreaObserver> new_observer,
       GetAllCallback callback) override;
@@ -105,13 +104,11 @@ class SessionStorageAreaImpl : public blink::mojom::StorageArea {
       std::vector<blink::mojom::KeyValuePtr> entries);
   void OnDeleteAllResult(
       mojo::PendingRemote<blink::mojom::StorageAreaObserver> new_observer,
-      DeleteAllCallback callback,
-      bool success);
+      DeleteAllCallback callback);
 
   enum class NewMapType { FORKED, EMPTY_FROM_DELETE_ALL };
 
-  void CreateNewMap(NewMapType map_type,
-                    const std::optional<std::string>& delete_all_source);
+  void CreateNewMap(NewMapType map_type);
 
   std::string namespace_id_;
   blink::StorageKey storage_key_;

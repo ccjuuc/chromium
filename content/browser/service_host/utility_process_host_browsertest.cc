@@ -182,6 +182,20 @@ class UtilityProcessHostBrowserTest : public BrowserChildProcessObserver,
   }
 #endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
 
+  void RunPseudonymizationSaltInitializedTest() {
+    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    service_->IsPseudonymizationSaltInitialized(base::BindOnce(
+        &UtilityProcessHostBrowserTest::OnPseudonymizationSaltChecked,
+        base::Unretained(this)));
+  }
+
+  void RunSkiaInitializedTest() {
+    CHECK_CURRENTLY_ON(BrowserThread::UI);
+    service_->IsSkiaInitialized(
+        base::BindOnce(&UtilityProcessHostBrowserTest::OnSkiaInitializedChecked,
+                       base::Unretained(this)));
+  }
+
  protected:
   void DoneRunning(base::OnceClosure quit_closure) {
     DCHECK_CURRENTLY_ON(BrowserThread::UI);
@@ -212,6 +226,22 @@ class UtilityProcessHostBrowserTest : public BrowserChildProcessObserver,
     EXPECT_EQ(kTestMessage,
               std::string_view(static_cast<const char*>(mapping.memory()),
                                kTestMessage.size()));
+    ResetService();
+    GetUIThreadTaskRunner({})->PostTask(FROM_HERE, std::move(done_closure_));
+  }
+
+  void OnPseudonymizationSaltChecked(bool is_initialized) {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    EXPECT_TRUE(is_initialized)
+        << "Pseudonymization salt should be initialized in the child process";
+    ResetService();
+    GetUIThreadTaskRunner({})->PostTask(FROM_HERE, std::move(done_closure_));
+  }
+
+  void OnSkiaInitializedChecked(bool is_initialized) {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    EXPECT_TRUE(is_initialized)
+        << "Skia should be initialized in the child process";
     ResetService();
     GetUIThreadTaskRunner({})->PostTask(FROM_HERE, std::move(done_closure_));
   }
@@ -251,11 +281,13 @@ class UtilityProcessHostBrowserTest : public BrowserChildProcessObserver,
     EXPECT_EQ(EXCEPTION_BREAKPOINT, static_cast<DWORD>(info.exit_code));
 #elif BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     EXPECT_TRUE(WIFSIGNALED(info.exit_code));
-#if defined(OFFICIAL_BUILD)
+#if defined(OFFICIAL_BUILD) || (defined(ARCH_CPU_ARM64) && BUILDFLAG(IS_LINUX))
     EXPECT_EQ(SIGTRAP, WTERMSIG(info.exit_code));
-#else   // defined(OFFICIAL_BUILD)
+#else   // defined(OFFICIAL_BUILD) || (defined(ARCH_CPU_ARM64) &&
+        // BUILDFLAG(IS_LINUX)
     EXPECT_EQ(SIGABRT, WTERMSIG(info.exit_code));
-#endif  // defined(OFFICIAL_BUILD)
+#endif  // defined(OFFICIAL_BUILD) || (defined(ARCH_CPU_ARM64) &&
+        // BUILDFLAG(IS_LINUX)
 #endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     EXPECT_EQ(kTestProcessName, data.metrics_name);
     EXPECT_EQ(false, has_crashed_);
@@ -290,6 +322,15 @@ IN_PROC_BROWSER_TEST_F(UtilityProcessHostBrowserTest, LaunchProcess) {
   RunUtilityProcess(
       DefaultOptions(),
       base::BindOnce(&UtilityProcessHostBrowserTest::RunBasicPingPongTest,
+                     base::Unretained(this)));
+}
+
+// Tests that Skia is initialized in utility processes so that image decoding
+// services pick up the same codec configuration as other process types.
+IN_PROC_BROWSER_TEST_F(UtilityProcessHostBrowserTest, SkiaInitialized) {
+  RunUtilityProcess(
+      DefaultOptions(),
+      base::BindOnce(&UtilityProcessHostBrowserTest::RunSkiaInitializedTest,
                      base::Unretained(this)));
 }
 
@@ -355,6 +396,27 @@ IN_PROC_BROWSER_TEST_F(UtilityProcessHostBrowserTest,
           .Pass(),
       base::BindOnce(&UtilityProcessHostBrowserTest::RunFileDescriptorStoreTest,
                      base::Unretained(this), std::move(read_fd)));
+}
+
+// Tests that the pseudonymization salt is properly initialized in a utility
+// process launched with the generic zygote.
+IN_PROC_BROWSER_TEST_F(UtilityProcessHostBrowserTest,
+                       PseudonymizationSaltInitializedWithGenericZygote) {
+  RunUtilityProcess(
+      DefaultOptions().WithZygoteForTesting(GetGenericZygote()).Pass(),
+      base::BindOnce(&UtilityProcessHostBrowserTest::
+                         RunPseudonymizationSaltInitializedTest,
+                     base::Unretained(this)));
+}
+
+// Tests that the pseudonymization salt is properly initialized in a utility
+// process launched without zygote.
+IN_PROC_BROWSER_TEST_F(UtilityProcessHostBrowserTest,
+                       PseudonymizationSaltInitializedWithoutZygote) {
+  RunUtilityProcess(DefaultOptions().WithZygoteForTesting(nullptr).Pass(),
+                    base::BindOnce(&UtilityProcessHostBrowserTest::
+                                       RunPseudonymizationSaltInitializedTest,
+                                   base::Unretained(this)));
 }
 #endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) &&
         // BUILDFLAG(USE_ZYGOTE)
@@ -480,6 +542,16 @@ IN_PROC_BROWSER_TEST_F(NetworkServiceProcessIdentityTest, LaunchService) {
           .Pass(),
       base::BindOnce(&UtilityProcessHostBrowserTest::RunBasicPingPongTest,
                      base::Unretained(this)));
+}
+#endif
+
+#if !BUILDFLAG(USE_ZYGOTE)
+IN_PROC_BROWSER_TEST_F(UtilityProcessHostBrowserTest,
+                       PseudonymizationSaltInitialized) {
+  RunUtilityProcess(DefaultOptions().Pass(),
+                    base::BindOnce(&UtilityProcessHostBrowserTest::
+                                       RunPseudonymizationSaltInitializedTest,
+                                   base::Unretained(this)));
 }
 #endif
 

@@ -41,14 +41,14 @@ IN_PROC_BROWSER_TEST_F(NewTabPagePageLoadMetricsBrowserTest,
 
   // Navigate to New Tab Page.
   ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(),
-                                     GURL(chrome::kChromeUINewTabPageURL)));
+                                     chrome::ChromeUINewTabPageURLAsGURL()));
   metrics_waiter.Wait();
 
   // LCP is only collected at the end of page lifecycle. Navigate to flush.
   ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(),
                                      GURL(url::kAboutBlankURL)));
 
-  histogram_tester.ExpectTotalCount("NewTabPage.LoadTime.FirstContentfulPaint",
+  histogram_tester.ExpectTotalCount("NewTabPage.LoadTime.FirstContentfulPaint2",
                                     1);
   histogram_tester.ExpectTotalCount(
       "NewTabPage.LoadTime.LargestContentfulPaint", 1);

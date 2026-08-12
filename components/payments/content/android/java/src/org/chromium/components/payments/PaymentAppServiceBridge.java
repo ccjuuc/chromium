@@ -49,7 +49,8 @@ public class PaymentAppServiceBridge implements PaymentAppFactoryInterface {
                                 delegate.getParams().getRenderFrameHost().getLastCommittedURL(),
                                 SchemeDisplay.SHOW));
 
-        CSPCheckerBridge cspCheckerBridge = new CSPCheckerBridge(delegate.getCSPChecker());
+        CSPCheckerBridge cspCheckerBridge =
+                new CSPCheckerBridge(delegate.getParams().getCSPChecker());
 
         PaymentAppServiceCallback callback =
                 new PaymentAppServiceCallback(delegate, cspCheckerBridge);
@@ -77,13 +78,13 @@ public class PaymentAppServiceBridge implements PaymentAppFactoryInterface {
             mCSPCheckerBridge = cspCheckerBridge;
         }
 
-        @CalledByNative("PaymentAppServiceCallback")
+        @CalledByNative
         private void onCanMakePaymentCalculated(boolean canMakePayment) {
             ThreadUtils.assertOnUiThread();
             mDelegate.onCanMakePaymentCalculated(canMakePayment || sCanMakePaymentForTesting);
         }
 
-        @CalledByNative("PaymentAppServiceCallback")
+        @CalledByNative
         private void onPaymentAppCreated(PaymentApp paymentApp) {
             ThreadUtils.assertOnUiThread();
             mDelegate.onPaymentAppCreated(paymentApp);
@@ -94,7 +95,7 @@ public class PaymentAppServiceBridge implements PaymentAppFactoryInterface {
          * @param errorMessage Developer facing error message.
          * @param errorReason Internal reason for the error.
          */
-        @CalledByNative("PaymentAppServiceCallback")
+        @CalledByNative
         private void onPaymentAppCreationError(
                 String errorMessage, @AppCreationFailureReason int errorReason) {
             ThreadUtils.assertOnUiThread();
@@ -105,7 +106,7 @@ public class PaymentAppServiceBridge implements PaymentAppFactoryInterface {
          * Called when the factory is finished creating payment apps. Expects to be called exactly
          * once and after all onPaymentAppCreated() calls.
          */
-        @CalledByNative("PaymentAppServiceCallback")
+        @CalledByNative
         private void onDoneCreatingPaymentApps() {
             ThreadUtils.assertOnUiThread();
             mCSPCheckerBridge.destroy();
@@ -116,7 +117,7 @@ public class PaymentAppServiceBridge implements PaymentAppFactoryInterface {
          * Forces canMakePayment() and hasEnrolledInstrument() to return true even when no payment
          * app is created.
          */
-        @CalledByNative("PaymentAppServiceCallback")
+        @CalledByNative
         private void setCanMakePaymentEvenWithoutApps() {
             ThreadUtils.assertOnUiThread();
             mDelegate.setCanMakePaymentEvenWithoutApps();
@@ -126,7 +127,7 @@ public class PaymentAppServiceBridge implements PaymentAppFactoryInterface {
          * Records that an Opt Out experience will be offered to the user in the
          * current UI flow.
          */
-        @CalledByNative("PaymentAppServiceCallback")
+        @CalledByNative
         private void setOptOutOffered() {
             ThreadUtils.assertOnUiThread();
             mDelegate.setOptOutOffered();

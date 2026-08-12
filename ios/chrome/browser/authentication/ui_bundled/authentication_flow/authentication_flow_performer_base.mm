@@ -41,7 +41,6 @@
 #import "ios/chrome/browser/policy/model/management_state.h"
 #import "ios/chrome/browser/policy/ui_bundled/management_util.h"
 #import "ios/chrome/browser/shared/coordinator/alert/action_sheet_coordinator.h"
-#import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider.h"
@@ -50,6 +49,7 @@
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/show_signin_command.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -97,7 +97,7 @@ void HandleSignoutForSnackbar(
     return;
   }
   // The regular browser should be used to execute the signout.
-  CHECK_EQ(browser->type(), Browser::Type::kRegular, base::NotFatalUntil::M145);
+  CHECK_EQ(browser->type(), Browser::Type::kRegular);
 
   base::RecordAction(
       base::UserMetricsAction("Mobile.Signin.SnackbarUndoTapped"));
@@ -105,7 +105,7 @@ void HandleSignoutForSnackbar(
   ProfileIOS* profile = browser->GetProfile()->GetOriginalProfile();
   AuthenticationService* auth_service =
       AuthenticationServiceFactory::GetForProfile(profile);
-  if (!auth_service->HasPrimaryIdentity(signin::ConsentLevel::kSignin)) {
+  if (!auth_service->HasPrimaryIdentity()) {
     return;
   }
 
@@ -161,8 +161,9 @@ void MaybeShowHistorySyncScreenAfterProfileSwitch(
     view_controller = view_controller.presentedViewController;
   }
 
-  [browser->GetSceneState().controller showSignin:command
-                               baseViewController:view_controller];
+  id<SceneCommands> sceneHandler =
+      HandlerForProtocol(browser->GetCommandDispatcher(), SceneCommands);
+  [sceneHandler showSignin:command baseViewController:view_controller];
 }
 
 void CompletePostSignInActionsContinuationImpl(
@@ -192,9 +193,9 @@ void CompletePostSignInActions(PostSignInActionSet post_signin_actions,
                                id<SystemIdentity> identity,
                                Browser* browser,
                                signin_metrics::AccessPoint access_point) {
-  CHECK(browser, base::NotFatalUntil::M145);
+  CHECK(browser);
   // Sign-in related work should be done on regular browser.
-  CHECK_EQ(browser->type(), Browser::Type::kRegular, base::NotFatalUntil::M145);
+  CHECK_EQ(browser->type(), Browser::Type::kRegular);
   ProfileIOS* profile = browser->GetProfile()->GetOriginalProfile();
   syncer::SyncService* sync_service =
       SyncServiceFactory::GetForProfile(profile);
@@ -289,10 +290,13 @@ void CompletePostSignInActions(PostSignInActionSet post_signin_actions,
                                             accessPoint);
   ChangeProfileContinuation authenticationFlowContinuation =
       [self authenticationFlowContinuation];
+  ChangeProfileContinuation secondContinuation =
+      requestHelperContinuation ? ChainChangeProfileContinuations(
+                                      std::move(requestHelperContinuation),
+                                      std::move(postSignInContinuation))
+                                : std::move(postSignInContinuation);
   ChangeProfileContinuation fullContinuation = ChainChangeProfileContinuations(
-      std::move(authenticationFlowContinuation),
-      ChainChangeProfileContinuations(std::move(requestHelperContinuation),
-                                      std::move(postSignInContinuation)));
+      std::move(authenticationFlowContinuation), std::move(secondContinuation));
   [_changeProfileHandler changeProfile:profileName
                               forScene:sceneState
                                 reason:reason
@@ -305,7 +309,7 @@ void CompletePostSignInActions(PostSignInActionSet post_signin_actions,
                         browser:(Browser*)browser {
   CHECK(browser, base::NotFatalUntil::M150);
   // Sign-in related work should be done on regular browser.
-  CHECK_EQ(browser->type(), Browser::Type::kRegular, base::NotFatalUntil::M145);
+  CHECK_EQ(browser->type(), Browser::Type::kRegular);
   [self checkNoDialog];
 
   base::RecordAction(base::UserMetricsAction(

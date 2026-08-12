@@ -21,7 +21,7 @@ namespace extensions {
 TEST(ManifestTest, ValidateWarnsOnDiffFingerprintKeyUnpacked) {
   std::vector<InstallWarning> warnings;
   Manifest(ManifestLocation::kUnpacked,
-           base::Value::Dict().Set(manifest_keys::kDifferentialFingerprint, ""),
+           base::DictValue().Set(manifest_keys::kDifferentialFingerprint, ""),
            crx_file::id_util::GenerateId("extid"))
       .ValidateManifest(&warnings);
   EXPECT_EQ(1uL, warnings.size());
@@ -31,7 +31,7 @@ TEST(ManifestTest, ValidateWarnsOnDiffFingerprintKeyUnpacked) {
 TEST(ManifestTest, ValidateWarnsOnDiffFingerprintKeyCommandLine) {
   std::vector<InstallWarning> warnings;
   Manifest(ManifestLocation::kCommandLine,
-           base::Value::Dict().Set(manifest_keys::kDifferentialFingerprint, ""),
+           base::DictValue().Set(manifest_keys::kDifferentialFingerprint, ""),
            crx_file::id_util::GenerateId("extid"))
       .ValidateManifest(&warnings);
   EXPECT_EQ(1uL, warnings.size());
@@ -41,7 +41,7 @@ TEST(ManifestTest, ValidateWarnsOnDiffFingerprintKeyCommandLine) {
 TEST(ManifestTest, ValidateSilentOnDiffFingerprintKeyInternal) {
   std::vector<InstallWarning> warnings;
   Manifest(ManifestLocation::kInternal,
-           base::Value::Dict().Set(manifest_keys::kDifferentialFingerprint, ""),
+           base::DictValue().Set(manifest_keys::kDifferentialFingerprint, ""),
            crx_file::id_util::GenerateId("extid"))
       .ValidateManifest(&warnings);
   EXPECT_EQ(0uL, warnings.size());
@@ -49,7 +49,7 @@ TEST(ManifestTest, ValidateSilentOnDiffFingerprintKeyInternal) {
 
 TEST(ManifestTest, ValidateSilentOnNoDiffFingerprintKeyUnpacked) {
   std::vector<InstallWarning> warnings;
-  Manifest(ManifestLocation::kUnpacked, base::Value::Dict(),
+  Manifest(ManifestLocation::kUnpacked, base::DictValue(),
            crx_file::id_util::GenerateId("extid"))
       .ValidateManifest(&warnings);
   EXPECT_EQ(0uL, warnings.size());
@@ -57,7 +57,7 @@ TEST(ManifestTest, ValidateSilentOnNoDiffFingerprintKeyUnpacked) {
 
 TEST(ManifestTest, ValidateSilentOnNoDiffFingerprintKeyInternal) {
   std::vector<InstallWarning> warnings;
-  Manifest(ManifestLocation::kInternal, base::Value::Dict(),
+  Manifest(ManifestLocation::kInternal, base::DictValue(),
            crx_file::id_util::GenerateId("extid"))
       .ValidateManifest(&warnings);
   EXPECT_EQ(0uL, warnings.size());
@@ -74,7 +74,7 @@ TEST(ManifestTest, AvailableValues) {
   {
     // In manifest version 2, "host_permissions" key is not available.
     // Additionally "background.service_worker" key is not available to hosted
-    // apps.
+    // apps. On all manifest versions "nacl_modules" key is not recognized.
     {R"(
       {
         "name": "Test Extension",
@@ -100,7 +100,6 @@ TEST(ManifestTest, AvailableValues) {
         "nacl_modules": ""
       }
     )"},
-    // In manifest version 3, "nacl_modules" key is not available.
     {R"(
       {
         "name": "Test Extension",
@@ -113,7 +112,8 @@ TEST(ManifestTest, AvailableValues) {
       {
         "name": "Test Extension",
         "manifest_version": 3,
-        "host_permissions": []
+        "host_permissions": [],
+        "nacl_modules": ""
       }
     )"}
   };

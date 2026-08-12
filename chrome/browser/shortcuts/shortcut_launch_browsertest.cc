@@ -10,8 +10,9 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -39,7 +40,7 @@ IN_PROC_BROWSER_TEST_F(ShortcutLaunchTestNotFoundProfile, DefaultProfileUsed) {
   EXPECT_TRUE(content::WaitForLoadStop(web_contents));
   EXPECT_EQ(web_contents->GetLastCommittedURL(),
             embedded_test_server()->GetURL("/title1.html"));
-  EXPECT_EQ(browser()->profile()->GetBaseName().value(),
+  EXPECT_EQ(browser()->GetProfile()->GetBaseName().value(),
             FILE_PATH_LITERAL("Default"));
 }
 
@@ -67,11 +68,13 @@ IN_PROC_BROWSER_TEST_F(ShortcutLaunchTestFoundProfile, SpecifiedProfileUsed) {
       GetStartupProfilePath(
           /*cur_dir=*/{}, command_line, /*ignore_profile_picker=*/false));
 
-  Browser* browser = chrome::FindBrowserWithProfile(&other_profile);
+  BrowserWindowInterface* browser =
+      ProfileBrowserCollection::GetForProfile(&other_profile)
+          ->GetLastActiveBrowser();
   ASSERT_TRUE(browser);
 
   content::WebContents* web_contents =
-      browser->tab_strip_model()->GetActiveWebContents();
+      browser->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(content::WaitForLoadStop(web_contents));
   EXPECT_EQ(web_contents->GetLastCommittedURL(),
             embedded_test_server()->GetURL("/title1.html"));

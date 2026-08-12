@@ -136,7 +136,7 @@ class PersonalizationAppTimeOfDayBrowserTest
   void SetUpOnMainThread() override {
     SystemWebAppBrowserTestBase::SetUpOnMainThread();
 
-    browser()->window()->Minimize();
+    browser()->GetWindow()->Minimize();
 
     WallpaperControllerClientImpl::Get()->SetWallpaperFetcherDelegateForTesting(
         std::make_unique<wallpaper_handlers::TestWallpaperFetcherDelegate>());
@@ -145,7 +145,7 @@ class PersonalizationAppTimeOfDayBrowserTest
         std::make_unique<WallpaperControllerTestApi>(
             ::ash::Shell::Get()->wallpaper_controller());
     wallpaper_controller_test_api->SetDefaultWallpaper(
-        GetAccountId(browser()->profile()));
+        GetAccountId(browser()->GetProfile()));
 
     test_chrome_webui_controller_factory_.AddFactoryOverride(
         kChromeUIPersonalizationAppHost, &test_webui_provider_);

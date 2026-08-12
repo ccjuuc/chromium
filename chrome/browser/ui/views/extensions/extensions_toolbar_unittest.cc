@@ -4,12 +4,10 @@
 
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_unittest.h"
 
-#include <algorithm>
 
 #include "base/command_line.h"
 #include "base/containers/to_vector.h"
 #include "base/run_loop.h"
-#include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/test_extension_system.h"
@@ -18,6 +16,7 @@
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_registrar.h"
+#include "extensions/browser/host_access_request_helper.h"
 #include "extensions/browser/permissions/scripting_permissions_modifier.h"
 #include "extensions/browser/permissions/site_permissions_helper.h"
 #include "extensions/common/extension.h"
@@ -49,6 +48,9 @@ ExtensionsToolbarUnitTest::ExtensionsToolbarUnitTest(
 ExtensionsToolbarUnitTest::~ExtensionsToolbarUnitTest() = default;
 
 void ExtensionsToolbarUnitTest::SetUp() {
+  cooldown_reset_.emplace(
+      extensions::HostAccessRequestsHelper::SetCooldownForTesting(
+          base::TimeDelta()));
   TestWithBrowserView::SetUp();
 
   extensions::TestExtensionSystem* extension_system =
@@ -65,6 +67,7 @@ void ExtensionsToolbarUnitTest::SetUp() {
 }
 
 void ExtensionsToolbarUnitTest::TearDown() {
+  cooldown_reset_.reset();
   // Avoid dangling pointer to profile.
   permissions_helper_.reset(nullptr);
 
@@ -132,7 +135,7 @@ void ExtensionsToolbarUnitTest::UninstallExtension(
   //
   // This is also a known bug for Ephemeral Profiles. NukeProfileFromDisk() can
   // race with a bunch of things, and extension uninstall is just one of them.
-  // See crbug.com/1191455.
+  // See crbug.com/40756611.
   base::RunLoop run_loop;
   extension_registrar()->UninstallExtension(
       extension_id, extensions::UninstallReason::UNINSTALL_REASON_FOR_TESTING,
@@ -175,8 +178,10 @@ void ExtensionsToolbarUnitTest::UpdateUserSiteAccess(
     content::WebContents* web_contents,
     PermissionsManager::UserSiteAccess site_access) {
   extensions::PermissionsManagerWaiter waiter(
-      PermissionsManager::Get(browser()->profile()));
-  permissions_helper_->UpdateSiteAccess(extension, web_contents, site_access);
+      PermissionsManager::Get(browser()->GetProfile()));
+  permissions_helper_->UpdateSiteAccess(
+      extension, web_contents, site_access,
+      web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   waiter.WaitForExtensionPermissionsUpdate();
 }
 

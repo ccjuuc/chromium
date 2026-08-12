@@ -10,7 +10,6 @@
 #include <vector>
 
 #include "base/functional/bind.h"
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/views/autofill/payments/bnpl_issuer_linked_pill.h"
@@ -19,16 +18,14 @@
 #include "chrome/browser/ui/views/controls/hover_button.h"
 #include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
 #include "components/autofill/core/browser/payments/bnpl_util.h"
-#include "components/autofill/core/browser/payments/constants.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/models/image_model_utils.h"
-#include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_variant.h"
 #include "ui/compositor/layer.h"
 #include "ui/events/event.h"
-#include "ui/events/types/event_type.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
@@ -38,7 +35,6 @@
 #include "ui/views/border.h"
 #include "ui/views/cascading_property.h"
 #include "ui/views/controls/button/button.h"
-#include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/theme_tracking_image_view.h"
@@ -52,8 +48,6 @@
 #include "ui/views/view_utils.h"
 
 namespace autofill::payments {
-
-using IssuerId = autofill::BnplIssuer::IssuerId;
 
 BnplIssuerView::BnplIssuerView(
     base::WeakPtr<SelectBnplIssuerDialogController> controller,
@@ -90,8 +84,7 @@ void BnplIssuerView::PopulateIssuers() {
                            kTemporarilyEligibleCheckoutAmountNotYetKnown;
     const bool issuer_linked = issuer.payment_instrument().has_value();
     const std::pair<BnplIssuer::LightModeImageId, BnplIssuer::DarkModeImageId>
-        image_ids =
-            autofill::GetBnplIssuerIconIds(issuer.issuer_id(), issuer_linked);
+        image_ids = GetBnplIssuerIconIds(issuer.issuer_id(), issuer_linked);
     auto image_view = std::make_unique<views::ThemeTrackingImageView>(
         ui::ImageModel::FromResourceId(image_ids.first.value()),
         ui::ImageModel::FromResourceId(image_ids.second.value()),
@@ -106,16 +99,21 @@ void BnplIssuerView::PopulateIssuers() {
         views::Button::PressedCallback(base::BindRepeating(
             &BnplIssuerView::IssuerSelected, base::Unretained(this), issuer)),
         std::move(image_view), std::u16string(issuer.GetDisplayName()),
-        controller_->GetSelectionOptionText(issuer.issuer_id()), nullptr, true,
-        std::u16string(),
+        GetBnplIssuerSelectionOptionText(
+            issuer.issuer_id(), controller_->GetAppLocale(), issuer_contexts),
+        /*secondary_view=*/nullptr,
+        /*add_vertical_label_spacing=*/true,
+        /*footer=*/std::u16string(),
+        /*icon_label_spacing=*/
         layout_provider->GetDistanceMetric(
             views::DISTANCE_RELATED_LABEL_HORIZONTAL),
-        true);
+        /*multiline_subtitle=*/true);
     issuer_button->SetBorder(views::CreateEmptyBorder(
         gfx::Insets::VH(layout_provider->GetDistanceMetric(
                             views::DISTANCE_UNRELATED_CONTROL_VERTICAL),
                         layout_provider->GetDistanceMetric(
                             views::DISTANCE_RELATED_LABEL_HORIZONTAL))));
+    issuer_button->GetViewAccessibility().SetName(issuer.GetDisplayName());
     issuer_button->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
     // Make the highlight with rounded corners per the mocks.
     if (auto* ink_drop = views::InkDrop::Get(issuer_button.get())) {
@@ -152,7 +150,9 @@ void BnplIssuerView::PopulateIssuers() {
     issuer_button->AddChildView(
         views::Builder<views::ImageView>()
             .SetImage(ui::ImageModel::FromVectorIcon(
-                kChevronRightChromeRefreshIcon,
+                ::features::IsRoundedIconsEnabled()
+                    ? kChevronRightIcon
+                    : kChevronRightChromeRefreshOldIcon,
                 issuer_eligible ? kColorBnplIssuerLabelForeground
                                 : kColorBnplIssuerLabelForegroundDisabled))
             .SetProperty(views::kMarginsKey,

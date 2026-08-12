@@ -6,7 +6,6 @@
 
 #include "base/at_exit.h"
 #include "base/base64.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
@@ -17,6 +16,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
 #include "components/device_event_log/device_event_log.h"
+#include "services/device/hid/hid_connection.h"
 
 #if (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) && defined(USE_UDEV)
 #include "services/device/hid/hid_service_linux.h"
@@ -160,7 +160,7 @@ void HidService::RemoveDevice(const HidPlatformDeviceId& platform_device_id) {
   if (found_guid) {
     HID_LOG(USER) << "HID device removed: deviceId='" << platform_device_id
                   << "'";
-    DCHECK(base::Contains(devices_, *found_guid));
+    DCHECK(devices_.contains(*found_guid));
 
     scoped_refptr<HidDeviceInfo> device_info = devices_[*found_guid];
     if (enumeration_ready_) {

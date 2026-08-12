@@ -26,6 +26,7 @@
 #include "ui/display/display_observer.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/views/widget/unique_widget_ptr.h"
 
 class PrefChangeRegistrar;
 class PrefRegistrySimple;
@@ -58,6 +59,7 @@ class AccessibilityControllerClient;
 class AccessibilityEventRewriter;
 class AccessibilityFeatureDisableDialog;
 class AccessibilityHighlightController;
+class AccessibilityPrefsCustomAssociator;
 class AccessibilityObserver;
 enum class AccessibilityPanelState;
 enum class DictationToggleSource;
@@ -428,6 +430,14 @@ class ASH_EXPORT AccessibilityController
   // Toggle dictation.
   void ToggleDictation();
 
+  // Called when we first detect two fingers are held down, which can be used to
+  // toggle spoken feedback on some touch-only devices.
+  void OnTwoFingerTouchStart();
+
+  // Called when the user is no longer holding down two fingers (including
+  // releasing one, holding down three, or moving them).
+  void OnTwoFingerTouchStop();
+
   // Whether or not to enable toggling spoken feedback via holding down two
   // fingers on the screen.
   bool ShouldToggleSpokenFeedbackViaTouch() const;
@@ -664,6 +674,7 @@ class ASH_EXPORT AccessibilityController
   void OnSigninScreenPrefServiceInitialized(PrefService* prefs) override;
   void OnActiveUserPrefServiceChanged(PrefService* prefs) override;
   void OnSessionStateChanged(session_manager::SessionState state) override;
+  void OnFirstSessionReady() override;
 
   // InputDeviceSettingsController::Observer:
   void OnMouseConnected(const mojom::Mouse& mouse) override;
@@ -770,6 +781,10 @@ class ASH_EXPORT AccessibilityController
 
   PrefService* GetActiveUserPrefs() { return active_user_prefs_; }
 
+  AccessibilityPrefsCustomAssociator* prefs_custom_associator() const {
+    return prefs_custom_associator_.get();
+  }
+
  private:
   // Populate |features_| with the feature of the correct type.
   void CreateAccessibilityFeatures();
@@ -786,6 +801,9 @@ class ASH_EXPORT AccessibilityController
 
   // Updates the actual feature status based on the prefs value.
   void UpdateFeatureFromPref(A11yFeatureType feature);
+
+  // Copy the signin preferences to the newly created user profile if needed.
+  void CopySigninPrefsIfNeeded(PrefService* current_pref_service);
 
   void UpdateAutoclickDelayFromPref();
   void UpdateAutoclickEventTypeFromPref();
@@ -848,6 +866,8 @@ class ASH_EXPORT AccessibilityController
   // Callback that is run when the user interacts with the disable FaceGaze
   // dialog.
   void OnRequestDisableFaceGazeAction(bool dialog_accepted);
+
+  void OnPrefsConflictResolutionDialogClosed();
 
   void RecordSelectToSpeakSpeechDuration(SelectToSpeakState old_state,
                                          SelectToSpeakState new_state);
@@ -938,12 +958,18 @@ class ASH_EXPORT AccessibilityController
   // user logs in. Can be null in ash_unittests.
   raw_ptr<PrefService> active_user_prefs_ = nullptr;
 
+  // Associator class to handle preference conflicts at first user signin.
+  std::unique_ptr<AccessibilityPrefsCustomAssociator> prefs_custom_associator_;
+
   // This has to be the first one to be destroyed so we don't get updates about
   // any prefs during destruction.
   std::unique_ptr<PrefChangeRegistrar> pref_change_registrar_;
 
   // The current AccessibilityConfirmationDialog, if one exists.
   base::WeakPtr<AccessibilityConfirmationDialog> confirmation_dialog_;
+
+  // The dialog to resolve OOBE / login screen and Sync preferences conflict.
+  views::UniqueWidgetPtr prefs_conflict_resolution_dialog_;
 
   base::RepeatingCallback<void()>
       show_confirmation_dialog_callback_for_testing_;

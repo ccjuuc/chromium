@@ -24,7 +24,6 @@ import android.os.Bundle;
 import android.provider.Browser;
 import android.view.MotionEvent;
 import android.view.View;
-import android.view.ViewGroup;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -39,13 +38,14 @@ import org.chromium.base.ResettersForTesting;
 import org.chromium.base.TimeUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.LaunchIntentDispatcher;
 import org.chromium.chrome.browser.app.metrics.LaunchCauseMetrics;
-import org.chromium.chrome.browser.app.tab_activity_glue.PopupCreator;
+import org.chromium.chrome.browser.app.tab_activity_glue.PopupCreatorImpl;
 import org.chromium.chrome.browser.auxiliary_search.AuxiliarySearchController;
 import org.chromium.chrome.browser.auxiliary_search.AuxiliarySearchControllerFactory;
 import org.chromium.chrome.browser.auxiliary_search.AuxiliarySearchMetrics;
@@ -53,22 +53,21 @@ import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntent
 import org.chromium.chrome.browser.browserservices.intents.SessionHolder;
 import org.chromium.chrome.browser.customtabs.content.CustomTabActivityNavigationController.FinishReason;
 import org.chromium.chrome.browser.customtabs.content.CustomTabActivityTabProvider;
-import org.chromium.chrome.browser.customtabs.features.CustomTabNavigationBarController;
 import org.chromium.chrome.browser.customtabs.features.toolbar.CustomTabHistoryIphController;
 import org.chromium.chrome.browser.customtabs.features.toolbar.CustomTabToolbar;
-import org.chromium.chrome.browser.firstrun.FirstRunSignInProcessor;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.history.HistoryManager;
 import org.chromium.chrome.browser.history.HistoryManagerUtils;
 import org.chromium.chrome.browser.history.HistoryTabHelper;
-import org.chromium.chrome.browser.infobar.InfoBarContainer;
+import org.chromium.chrome.browser.merchant_viewer.PageInfoStoreInfoController.StoreInfoActionHandler;
 import org.chromium.chrome.browser.night_mode.NightModeStateProvider;
 import org.chromium.chrome.browser.page_info.ChromePageInfo;
 import org.chromium.chrome.browser.page_info.ChromePageInfoHighlight;
+import org.chromium.chrome.browser.page_load_metrics.PageLoadMetrics;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TrustedCdn;
 import org.chromium.chrome.browser.ui.google_bottom_bar.GoogleBottomBarCoordinator;
-import org.chromium.chrome.browser.ui.web_app_header.WebAppHeaderUtils;
+import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.browser_ui.util.motion.MotionEventInfo;
 import org.chromium.components.page_info.PageInfoController.OpenedFromSource;
 import org.chromium.content_public.browser.LoadUrlParams;
@@ -85,7 +84,7 @@ public class CustomTabActivity extends BaseCustomTabActivity {
     private final CustomTabsConnection mConnection = CustomTabsConnection.getInstance();
     private int mNumOmniboxNavigationEventsPerSession;
 
-    /** Prevents Tapjacking on T-. See crbug.com/1430867 */
+    /** Prevents Tapjacking on T-. See crbug.com/40063907 */
     private static final boolean sPreventTouches =
             Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU;
 
@@ -172,16 +171,7 @@ public class CustomTabActivity extends BaseCustomTabActivity {
 
         mSession = getIntentDataProvider().getSession();
 
-        boolean drawEdgeToEdge =
-                mEdgeToEdgeControllerSupplier.get() != null
-                        && mEdgeToEdgeControllerSupplier.get().isDrawingToEdge()
-                        && mEdgeToEdgeControllerSupplier.get().isPageOptedIntoEdgeToEdge();
-        var systemBarColorHelper =
-                getEdgeToEdgeManager() != null
-                        ? getEdgeToEdgeManager().getEdgeToEdgeSystemBarColorHelper()
-                        : null;
-        CustomTabNavigationBarController.update(
-                getWindow(), getIntentDataProvider(), this, drawEdgeToEdge, systemBarColorHelper);
+        updateNavigationBarColor();
 
         mTimeoutHandler.restoreInstanceState(savedInstanceState);
     }
@@ -191,15 +181,6 @@ public class CustomTabActivity extends BaseCustomTabActivity {
         super.performPostInflationStartup();
 
         mRootUiCoordinator.getStatusBarColorController().updateStatusBarColor();
-
-        // Properly attach tab's InfoBarContainer to the view hierarchy if the tab is already
-        // attached to a ChromeActivity, as the main tab might have been initialized prior to
-        // inflation.
-        if (getCustomTabActivityTabProvider().getTab() != null) {
-            ViewGroup bottomContainer = findViewById(R.id.bottom_container);
-            InfoBarContainer.get(getCustomTabActivityTabProvider().getTab())
-                    .setParentView(bottomContainer);
-        }
 
         int toolbarColor = getIntentDataProvider().getColorProvider().getToolbarColor();
         // Not setting the task title and icon or setting them to null (pre-Android T) will preserve
@@ -228,14 +209,40 @@ public class CustomTabActivity extends BaseCustomTabActivity {
         }
 
         getCustomTabBottomBarDelegate().showBottomBarIfNecessary();
+        // Only enter the transparency-while-loading path when the intent actually carries
+        // EXTRA_TRANSLUCENT_BACKGROUND. Subclasses of BrowserServicesIntentDataProvider that
+        // do not override getTranslucentBackgroundColor() inherit the base implementation
+        // that always returns 0, which would otherwise spuriously trigger the !=defBg
+        // branch and leave the compositor view hidden indefinitely for navigations that
+        // never emit FCP.
+        int bg = getIntentDataProvider().getTranslucentBackgroundColor(this);
+        if (CustomTabIntentDataProvider.hasTranslucentBackgroundColor(getIntent())
+                && bg != SemanticColorUtils.getDefaultBgColor(this)) {
+            setContentVisibility(false);
+            getWindow().setBackgroundDrawable(new ColorDrawable(bg));
+            PageLoadMetrics.addObserver(
+                    new PageLoadMetrics.Observer() {
+                        @Override
+                        public void onFirstContentfulPaint(
+                                WebContents webContents,
+                                long navigationId,
+                                long navigationStartMicros,
+                                long firstContentfulPaintMs) {
+                            setContentVisibility(true);
+                            PageLoadMetrics.removeObserver(this);
+                        }
+                    },
+                    true);
+        }
+    }
+
+    private void setContentVisibility(boolean visible) {
+        findViewById(R.id.compositor_view_holder)
+                .setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
     }
 
     @Override
     public void finishNativeInitialization() {
-        if (!getIntentDataProvider().isInfoPage()) {
-            FirstRunSignInProcessor.openSyncSettingsIfScheduled(this);
-        }
-
         mConnection.showSignInToastIfNecessary(mSession, getIntent(), getProfileProviderSupplier());
 
         new CustomTabTrustedCdnPublisherUrlVisibility(
@@ -261,10 +268,8 @@ public class CustomTabActivity extends BaseCustomTabActivity {
         // features requested in the Intent as they should apply only for the initial launch of the
         // Activity.
         if (getIntentDataProvider().getUiType() == CustomTabsUiType.POPUP
-                && getSavedInstanceState() == null
-                && ChromeFeatureList.isEnabled(
-                        ChromeFeatureList.ANDROID_WINDOW_POPUP_RESIZE_AFTER_SPAWN)) {
-            PopupCreator.adjustWindowBoundsToRequested(
+                && getSavedInstanceState() == null) {
+            PopupCreatorImpl.adjustWindowBoundsToRequested(
                     this, getIntentDataProvider().getRequestedWindowFeatures());
         }
     }
@@ -301,8 +306,14 @@ public class CustomTabActivity extends BaseCustomTabActivity {
     }
 
     @Override
+    public void onStart() {
+        super.onStart();
+        if (mTimeoutHandler != null) mTimeoutHandler.onStart();
+    }
+
+    @Override
     public void onResume() {
-        if (mTimeoutHandler != null) mTimeoutHandler.onResume();
+        if (mTimeoutHandler != null) mTimeoutHandler.onResume(this);
         super.onResume();
     }
 
@@ -325,8 +336,19 @@ public class CustomTabActivity extends BaseCustomTabActivity {
     }
 
     @Override
+    public void onStop() {
+        super.onStop();
+        if (mTimeoutHandler != null) mTimeoutHandler.onStop(this);
+    }
+
+    @Override
+    protected void onDestroyInternal() {
+        if (mTimeoutHandler != null) mTimeoutHandler.onDestroy();
+        super.onDestroyInternal();
+    }
+
+    @Override
     protected void onUserLeaveHint() {
-        if (mTimeoutHandler != null) mTimeoutHandler.onUserLeaveHint();
         if (mOpenTimeRecorder != null) mOpenTimeRecorder.onUserLeaveHint();
         super.onUserLeaveHint();
     }
@@ -369,7 +391,10 @@ public class CustomTabActivity extends BaseCustomTabActivity {
 
     @Override
     public boolean onMenuOrKeyboardAction(
-            int id, boolean fromMenu, @Nullable MotionEventInfo triggeringMotion) {
+            int id,
+            boolean fromMenu,
+            @Nullable Bundle menuItemData,
+            @Nullable MotionEventInfo triggeringMotion) {
         if (id == R.id.bookmark_this_page_id) {
             mTabBookmarkerSupplier.get().addOrEditBookmark(getActivityTab());
             RecordUserAction.record("MobileMenuAddToBookmarks");
@@ -394,17 +419,13 @@ public class CustomTabActivity extends BaseCustomTabActivity {
                             getModalDialogManagerSupplier(),
                             publisher,
                             OpenedFromSource.MENU,
-                            mRootUiCoordinator.getMerchantTrustSignalsCoordinatorSupplier()::get,
+                            SupplierUtils.upcast(
+                                    mRootUiCoordinator.getMerchantTrustSignalsCoordinatorSupplier(),
+                                    StoreInfoActionHandler.class),
                             mRootUiCoordinator.getEphemeralTabCoordinatorSupplier(),
                             getTabCreator(getCurrentTabModel().isIncognito()));
-            boolean isMinimalUiVisible =
-                    WebAppHeaderUtils.isMinimalUiVisible(
-                            getIntentDataProvider(),
-                            getBaseCustomTabRootUiCoordinator().getDesktopWindowStateManager());
             boolean isTWA = getIntentDataProvider().isTrustedWebActivity();
-            if (ChromeFeatureList.sAndroidWebAppMenuButton.isEnabled()
-                    && isTWA
-                    && isMinimalUiVisible) {
+            if (isTWA) {
                 String packageName = getIntentDataProvider().getClientPackageName();
                 pageInfo.show(tab, ChromePageInfoHighlight.noHighlight(), packageName);
                 return true;
@@ -436,7 +457,7 @@ public class CustomTabActivity extends BaseCustomTabActivity {
             }
             return true;
         }
-        return super.onMenuOrKeyboardAction(id, fromMenu, triggeringMotion);
+        return super.onMenuOrKeyboardAction(id, fromMenu, menuItemData, triggeringMotion);
     }
 
     @Override
@@ -576,9 +597,16 @@ public class CustomTabActivity extends BaseCustomTabActivity {
         mIsEnterAnimationCompleted = true;
     }
 
-    @VisibleForTesting
     public static void setOnFinishCallbackForTesting(Runnable callback) {
         sOnFinishCallbackForTesting = callback;
         ResettersForTesting.register(() -> sOnFinishCallbackForTesting = null);
+    }
+
+    /**
+     * Called by InterceptNavigationDelegateImpl when a navigation is intercepted to launch an
+     * external intent.
+     */
+    public void setIntentLaunchedByNavigation() {
+        if (mTimeoutHandler != null) mTimeoutHandler.setLaunchingExternalActivity(true);
     }
 }

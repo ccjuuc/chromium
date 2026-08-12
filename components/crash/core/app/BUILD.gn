@@ -26,27 +26,29 @@ source_set("lib") {
   ]
 }
 
-source_set("crashpad_handler_main") {
-  sources = [ "crashpad_handler_main.cc" ]
+if (!is_ios) {
+  source_set("crashpad_handler_main") {
+    sources = [ "crashpad_handler_main.cc" ]
 
-  deps = [
-    "//base:debugging_buildflags",
-    "//components/gwp_asan/buildflags",
-    "//third_party/crashpad/crashpad/handler",
-  ]
+    deps = [
+      "//base:debugging_buildflags",
+      "//components/gwp_asan/buildflags",
+      "//third_party/crashpad/crashpad/handler",
+    ]
 
-  if (is_linux || is_chromeos || is_mac) {
-    deps += [ "//components/stability_report" ]
-  }
+    if (is_linux || is_chromeos || is_mac) {
+      deps += [ "//components/stability_report" ]
+    }
 
-  if (enable_gwp_asan) {
-    deps += [ "//components/gwp_asan/crash_handler" ]
-  }
+    if (enable_gwp_asan) {
+      deps += [ "//components/gwp_asan/crash_handler" ]
+    }
 
-  if (build_allocation_stack_trace_recorder) {
-    # The allocation stack trace report will be included only if the
-    # recorder was enabled.
-    deps += [ "//components/allocation_recorder/crash_handler" ]
+    if (build_allocation_stack_trace_recorder) {
+      # The allocation stack trace report will be included only if the
+      # recorder was enabled.
+      deps += [ "//components/allocation_recorder/crash_handler" ]
+    }
   }
 }
 
@@ -59,6 +61,10 @@ static_library("app") {
     "crash_switches.h",
     "crashpad.cc",
     "crashpad.h",
+    "shared_memory_user_stream_reader.cc",
+    "shared_memory_user_stream_reader.h",
+    "shared_memory_user_stream_writer.cc",
+    "shared_memory_user_stream_writer.h",
   ]
 
   if (is_castos) {
@@ -78,6 +84,7 @@ static_library("app") {
     "//build:branding_buildflags",
     "//build:chromeos_buildflags",
     "//components/crash/core/common:crash_key",
+    "//components/crash/core/common:shared_memory_user_stream",
     "//content/public/common:content_descriptors",
     "//third_party/crashpad/crashpad/client",
     "//third_party/crashpad/crashpad/util",
@@ -249,11 +256,11 @@ if (is_mac || is_android || is_linux || is_chromeos) {
 
     if (is_mac && (is_component_build || is_asan || is_ubsan_any)) {
       ldflags = [
-        # The handler is in
-        # Chromium.app/Contents/Frameworks/Chromium Framework.framework/Versions/A/Helpers/
-        # or
-        # Content Shell.app/Contents/Frameworks/Content Shell Framework.framework/Versions/C/Helpers/
-        # so set rpath up to the base. This is the only case needed for is_asan.
+        # The handler is in Chromium.app/Contents/Frameworks/Chromium
+        # Framework.framework/Versions/A/Helpers/ or Content
+        # Shell.app/Contents/Frameworks/Content Shell
+        # Framework.framework/Versions/C/Helpers/ so set rpath up to the base.
+        # This is the only case needed for is_asan.
         "-Wl,-rpath,@loader_path/../../../../../../..",
 
         # The handler can also be executed in an unbundled framework at
@@ -287,8 +294,8 @@ if (is_android) {
   }
 }
 
-# This source set provides the functionality required for tests, which on Windows
-# link the export thunks directly into the test binary.
+# This source set provides the functionality required for tests, which on
+# Windows link the export thunks directly into the test binary.
 source_set("test_support") {
   testonly = true
 
@@ -301,11 +308,16 @@ source_set("test_support") {
 
 source_set("unit_tests") {
   testonly = true
-  sources = []
+  sources = [
+    "shared_memory_user_stream_reader_unittest.cc",
+    "shared_memory_user_stream_writer_unittest.cc",
+  ]
   deps = [
+    ":app",
     ":lib",
     "//base",
     "//base/test:test_support",
+    "//components/crash/core/common",
     "//testing/gmock",
     "//testing/gtest",
   ]

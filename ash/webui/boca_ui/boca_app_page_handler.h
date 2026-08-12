@@ -8,15 +8,14 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
-#include "ash/webui/boca_ui/mojom/boca.mojom-forward.h"
 #include "ash/webui/boca_ui/mojom/boca.mojom-shared.h"
 #include "ash/webui/boca_ui/mojom/boca.mojom.h"
 #include "ash/webui/boca_ui/provider/classroom_page_handler_impl.h"
 #include "ash/webui/boca_ui/provider/content_settings_handler.h"
 #include "ash/webui/boca_ui/provider/network_info_provider.h"
 #include "ash/webui/boca_ui/provider/tab_info_collector.h"
-#include "ash/webui/boca_ui/webview_auth_handler.h"
 #include "base/containers/queue.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
@@ -32,7 +31,6 @@
 #include "chromeos/ash/components/boca/spotlight/spotlight_constants.h"
 #include "chromeos/ash/components/boca/spotlight/spotlight_service.h"
 #include "components/account_id/account_id.h"
-#include "components/sessions/core/session_id.h"
 #include "content/public/browser/web_ui.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -46,6 +44,7 @@ namespace ash::boca {
 
 class StudentScreenPresenter;
 class TeacherScreenPresenter;
+class GeminiStatusFetcher;
 
 // TODO(crbug.com/399923859): Remove `mojom::Page` implementation.
 class BocaAppHandler : public mojom::PageHandler,
@@ -56,11 +55,12 @@ class BocaAppHandler : public mojom::PageHandler,
       mojo::PendingReceiver<mojom::PageHandler> receiver,
       mojo::PendingRemote<mojom::Page> remote,
       content::WebUI* webui,
-      std::unique_ptr<WebviewAuthHandler> auth_handler,
       std::unique_ptr<ClassroomPageHandlerImpl> classroom_client_impl,
       std::unique_ptr<ContentSettingsHandler> content_settings_handler,
+      std::unique_ptr<TabInfoCollector> tab_info_collector,
       OnTaskSystemWebAppManager* system_web_app_manager,
       SessionClientImpl* session_client_impl,
+      std::unique_ptr<GeminiStatusFetcher> gemini_status_fetcher,
       bool is_producer);
 
   BocaAppHandler(const BocaAppHandler&) = delete;
@@ -72,8 +72,10 @@ class BocaAppHandler : public mojom::PageHandler,
                                              aura::Window* window,
                                              SetFloatModeCallback callback);
 
+  using GetWindowsTabsListCallback =
+      mojom::PageHandler::GetWindowsTabsListCallback;
+
   // mojom::PageHandler:
-  void AuthenticateWebview(AuthenticateWebviewCallback callback) override;
   void GetWindowsTabsList(GetWindowsTabsListCallback callback) override;
   void ListCourses(ListCoursesCallback callback) override;
   void ListStudents(const std::string& course_id,
@@ -117,8 +119,6 @@ class BocaAppHandler : public mojom::PageHandler,
                          mojom::Permission permission,
                          mojom::PermissionSetting setting,
                          SetSitePermissionCallback callback) override;
-  void CloseTab(const SessionID::id_type tab_id,
-                CloseTabCallback callback) override;
   void OpenFeedbackDialog(OpenFeedbackDialogCallback callback) override;
   void RefreshWorkbook(RefreshWorkbookCallback callback) override;
   void GetSpeechRecognitionInstallationStatus(
@@ -134,6 +134,7 @@ class BocaAppHandler : public mojom::PageHandler,
                         PresentOwnScreenCallback callback) override;
   void StopPresentingOwnScreen(
       StopPresentingOwnScreenCallback callback) override;
+  void GetGeminiStatus(GetGeminiStatusCallback callback) override;
 
   // mojom::Page:
   void OnStudentActivityUpdated(
@@ -185,12 +186,12 @@ class BocaAppHandler : public mojom::PageHandler,
 
   // For testing.
   void SetSpotlightServiceForTesting(std::unique_ptr<SpotlightService> service);
-  WebviewAuthHandler* GetWebviewAuthHandlerForTesting() {
-    return auth_handler_.get();
-  }
   void SetPrefForTesting(PrefService* pref_service) {
     pref_service_ = pref_service;
   }
+
+ protected:
+  virtual std::vector<mojom::WindowPtr> GetWindowTabInfoSync();
 
  private:
   using UpdateSessionCallback =
@@ -232,7 +233,7 @@ class BocaAppHandler : public mojom::PageHandler,
   void OnCreateSessionResponse(
       CreateSessionCallback callback,
       base::expected<std::unique_ptr<::boca::Session>,
-                     google_apis::ApiErrorCode> result);
+                     std::pair<google_apis::ApiErrorCode, std::string>> result);
 
   void OnEndSessionResponse(EndSessionCallback callback,
                             base::expected<std::unique_ptr<::boca::Session>,
@@ -293,11 +294,12 @@ class BocaAppHandler : public mojom::PageHandler,
   TeacherScreenPresenter* teacher_screen_presenter();
   StudentScreenPresenter* student_screen_presenter();
 
+  std::optional<mojom::UrlType> GetTabUrlType(int32_t tab_id);
+
   SEQUENCE_CHECKER(sequence_checker_);
   const bool is_producer_;
   std::string base_url_;
-  TabInfoCollector tab_info_collector_;
-  std::unique_ptr<WebviewAuthHandler> auth_handler_;
+  const std::unique_ptr<TabInfoCollector> tab_info_collector_;
   std::unique_ptr<ClassroomPageHandlerImpl> class_room_page_handler_;
   const std::unique_ptr<ContentSettingsHandler> content_settings_handler_;
   // Update session requests should run in sequence to avoid race conditions
@@ -317,6 +319,7 @@ class BocaAppHandler : public mojom::PageHandler,
   raw_ptr<PrefService> pref_service_;
   mojom::CaptionConfigPtr producer_current_session_caption_config_;
   raw_ptr<BocaSessionManager> session_manager_;
+  std::unique_ptr<GeminiStatusFetcher> gemini_status_fetcher_;
   base::WeakPtrFactory<BocaAppHandler> weak_ptr_factory_{this};
 };
 

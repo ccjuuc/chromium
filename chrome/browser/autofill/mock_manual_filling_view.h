@@ -31,13 +31,14 @@ class MockManualFillingView : public ManualFillingViewInterface {
   MOCK_METHOD((void), SwapSheetWithKeyboard, (), (override));
   MOCK_METHOD((void),
               Show,
-              (WaitForKeyboard, IsCredentialFieldOrHasAutofillSuggestions),
+              (WaitForKeyboard, ShouldShowOnLargeFormFactor),
               (override));
   MOCK_METHOD((void), Hide, (), (override));
   MOCK_METHOD((void),
               ShowAccessorySheetTab,
               (const autofill::AccessoryTabType&),
               (override));
+  MOCK_METHOD(bool, IsLargeFormFactor, (), (const, override));
 };
 
 #endif  // CHROME_BROWSER_AUTOFILL_MOCK_MANUAL_FILLING_VIEW_H_

@@ -62,12 +62,12 @@ async function testGetTitleByFrameId() {
 // Checks if manifest v2 doesn't support `documentId`.
 async function testGetTitleByDocumentId() {
   await setup();
+  // Verify `executeScript` throws when using `documentId` in manifest v2.
   chrome.test.assertThrows(
-      chrome.tabs.executeScript,
-      [
-        tabId, {documentId: prerenderingDocumentId, code: 'document.title;'},
-        results => chrome.test.fail('should not succeed.')
-      ],
+      chrome.tabs.executeScript.bind(
+          null, tabId,
+          {documentId: prerenderingDocumentId, code: 'document.title;'},
+          results => chrome.test.fail('should not succeed.')),
       'Error in invocation of tabs.executeScript(optional integer tabId, ' +
           'extensionTypes.InjectDetails details, optional function ' +
           'callback): Error at parameter \'details\': Unexpected property: \'' +
@@ -86,7 +86,7 @@ async function testActivateOnExecution() {
           frameId: prerenderingFrameId,
           code: `document.addEventListener('prerenderingchange', () => {
                document.title = 'activated';
-             });`
+             });`,
         },
         result => {
           // No results, but just checks if it doesn't crash.
@@ -119,13 +119,12 @@ async function testExecuteAfterActivation() {
       // could not know it, but it should just work as 0 is just an alternative
       // and internal FrameTreeNodeId should also work like a frameId.
       chrome.tabs.executeScript(
-        tabId, { frameId: 1, code: 'document.title' },
-        results => {
-          chrome.tabs.onUpdated.removeListener(cb);
-          chrome.test.assertEq(1, results.length);
-          chrome.test.assertEq('prerendering', results[0]);
-          chrome.test.succeed();
-        });
+          tabId, {frameId: 1, code: 'document.title'}, results => {
+            chrome.tabs.onUpdated.removeListener(cb);
+            chrome.test.assertEq(1, results.length);
+            chrome.test.assertEq('prerendering', results[0]);
+            chrome.test.succeed();
+          });
     }
   });
 

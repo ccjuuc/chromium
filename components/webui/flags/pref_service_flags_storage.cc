@@ -21,7 +21,7 @@ PrefServiceFlagsStorage::PrefServiceFlagsStorage(PrefService* prefs)
 PrefServiceFlagsStorage::~PrefServiceFlagsStorage() = default;
 
 std::set<std::string> PrefServiceFlagsStorage::GetFlags() const {
-  const base::Value::List& enabled_experiments =
+  const base::ListValue& enabled_experiments =
       prefs_->GetList(prefs::kAboutFlagsEntries);
   std::set<std::string> flags;
   for (const auto& entry : enabled_experiments) {
@@ -35,7 +35,7 @@ std::set<std::string> PrefServiceFlagsStorage::GetFlags() const {
 }
 
 bool PrefServiceFlagsStorage::SetFlags(const std::set<std::string>& flags) {
-  base::Value::List experiments_list;
+  base::ListValue experiments_list;
   for (const auto& flag : flags) {
     experiments_list.Append(flag);
   }
@@ -46,7 +46,7 @@ bool PrefServiceFlagsStorage::SetFlags(const std::set<std::string>& flags) {
 
 std::string PrefServiceFlagsStorage::GetOriginListFlag(
     const std::string& internal_entry_name) const {
-  const base::Value::Dict& origin_lists =
+  const base::DictValue& origin_lists =
       prefs_->GetDict(prefs::kAboutFlagsOriginLists);
   if (const std::string* s = origin_lists.FindString(internal_entry_name)) {
     return *s;
@@ -70,6 +70,15 @@ void PrefServiceFlagsStorage::SetStringFlag(
     const std::string& internal_entry_name,
     const std::string& string_value) {
   SetOriginListFlag(internal_entry_name, string_value);
+}
+
+base::DictValue PrefServiceFlagsStorage::GetCustomizedFlags() const {
+  return prefs_->GetDict(prefs::kAboutFlagsOriginLists).Clone();
+}
+
+void PrefServiceFlagsStorage::SetCustomizedFlags(
+    const base::DictValue& customized_flags) {
+  prefs_->SetDict(prefs::kAboutFlagsOriginLists, customized_flags.Clone());
 }
 
 void PrefServiceFlagsStorage::CommitPendingWrites() {

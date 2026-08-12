@@ -5,9 +5,13 @@
 #include "chrome/browser/ui/views/frame/find_bar_owner_views.h"
 
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/find_bar/find_bar_controller.h"
+#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/translate/translate_bubble_controller.h"
+#include "chrome/browser/ui/window_metadata/window_metadata_controller.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/views/widget/widget.h"
@@ -30,7 +34,7 @@ gfx::Rect FindBarOwnerViews::GetFindBarClippingBox() {
 }
 
 bool FindBarOwnerViews::IsOffTheRecord() const {
-  return browser_view_->browser()->profile()->IsOffTheRecord();
+  return browser_view_->browser()->GetProfile()->IsOffTheRecord();
 }
 
 views::Widget* FindBarOwnerViews::GetWidgetForAnchoring() {
@@ -40,7 +44,8 @@ views::Widget* FindBarOwnerViews::GetWidgetForAnchoring() {
 std::u16string FindBarOwnerViews::GetFindBarAccessibleWindowTitle() {
   return l10n_util::GetStringFUTF16(
       IDS_FIND_IN_PAGE_ACCESSIBLE_TITLE,
-      browser_view_->browser()->GetWindowTitleForCurrentTab(false));
+      WindowMetadataController::From(browser_view_->browser())
+          ->GetWindowTitleForCurrentTab(false));
 }
 
 void FindBarOwnerViews::OnFindBarVisibilityChanged(gfx::Rect visible_bounds) {
@@ -49,7 +54,10 @@ void FindBarOwnerViews::OnFindBarVisibilityChanged(gfx::Rect visible_bounds) {
   // revealed when the mouse is hovered over the find bar.
   ImmersiveModeController::From(browser_view_->browser())
       ->OnFindBarVisibleBoundsChanged(visible_bounds);
-  browser_view_->browser()->OnFindBarVisibilityChanged();
+  browser_view_->browser()
+      ->GetFeatures()
+      .GetFindBarController()
+      ->OnFindBarVisibilityChanged();
 }
 
 void FindBarOwnerViews::CloseOverlappingBubbles() {

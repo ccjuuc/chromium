@@ -35,12 +35,12 @@ struct FormFieldDataPredictions {
   std::string attribute_types;
   std::string format_string;
   std::string parseable_name;
-  std::string parseable_label;
   std::string section;
   size_t rank = 0;
   size_t rank_in_signature_group = 0;
   size_t rank_in_host_form = 0;
   size_t rank_in_host_form_signature_group = 0;
+  bool did_trigger_javascript_autofill = false;
 };
 
 }  // namespace autofill

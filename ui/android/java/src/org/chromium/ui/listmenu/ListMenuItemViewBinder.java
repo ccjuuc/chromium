@@ -4,6 +4,7 @@
 
 package org.chromium.ui.listmenu;
 
+import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
@@ -22,15 +23,13 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.ui.R;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
-import org.chromium.ui.modelutil.PropertyModel.ReadableIntPropertyKey;
 
 /**
  * Class responsible for binding the model of the ListMenuItem and the view. Each item is expected
  * to have at the bare minimum a title (TITLE_ID, or TITLE) or an icon (START_ICON_ID,
  * START_ICON_DRAWABLE). All other properties while recommended, are optional.
  *
- * <p>As for when a list item contains an icon, it is expected that it either has a start icon OR an
- * end icon, not both.
+ * <p>A list item can contain both a start icon and an end icon.
  */
 @NullMarked
 public class ListMenuItemViewBinder {
@@ -42,6 +41,24 @@ public class ListMenuItemViewBinder {
         boolean keepIconSpacing =
                 model.containsKey(ListMenuItemProperties.KEEP_START_ICON_SPACING_WHEN_HIDDEN)
                         && model.get(ListMenuItemProperties.KEEP_START_ICON_SPACING_WHEN_HIDDEN);
+        boolean hasStartIcon =
+                // Start icon id
+                (PropertyModel.getFromModelOrDefault(
+                                        model,
+                                        ListMenuItemProperties.START_ICON_ID,
+                                        Resources.ID_NULL)
+                                != Resources.ID_NULL)
+                        ||
+                        // Start icon drawable
+                        (PropertyModel.getFromModelOrDefault(
+                                        model, ListMenuItemProperties.START_ICON_DRAWABLE, null)
+                                != null)
+                        ||
+                        // Start icon bitmap
+                        (PropertyModel.getFromModelOrDefault(
+                                        model, ListMenuItemProperties.START_ICON_BITMAP, null)
+                                != null);
+
         if (propertyKey == ListMenuItemProperties.TITLE_ID) {
             @StringRes int titleId = model.get(ListMenuItemProperties.TITLE_ID);
             if (titleId != 0) {
@@ -70,26 +87,59 @@ public class ListMenuItemViewBinder {
             textView.setContentDescription(model.get(ListMenuItemProperties.CONTENT_DESCRIPTION));
         } else if (propertyKey == ListMenuItemProperties.TOOLTIP) {
             view.setTooltipText(model.get(ListMenuItemProperties.TOOLTIP));
-        } else if (propertyKey == ListMenuItemProperties.START_ICON_ID
-                || propertyKey == ListMenuItemProperties.END_ICON_ID) {
-            int id = model.get((ReadableIntPropertyKey) propertyKey);
+        } else if (propertyKey == ListMenuItemProperties.START_ICON_ID) {
+            int id = model.get(ListMenuItemProperties.START_ICON_ID);
             Drawable drawable =
                     id == 0 ? null : AppCompatResources.getDrawable(view.getContext(), id);
-            if (propertyKey == ListMenuItemProperties.START_ICON_ID) {
-                setStartIcon(startIcon, endIcon, drawable, keepIconSpacing);
-            } else {
-                setEndIcon(startIcon, endIcon, drawable, keepIconSpacing);
+            // The START_ICON_ID propertyKey contributes the start icon iff drawable != null
+            // If we have a start icon (from any source) and drawable != null, we set the
+            // start icon here.
+            // If we don't have a start icon (from any source) and drawable == null, clear
+            // the start icon here.
+            // In other cases, don't touch the start icon.
+            if (hasStartIcon == (drawable != null)) {
+                setStartIcon(startIcon, drawable, keepIconSpacing);
             }
+        } else if (propertyKey == ListMenuItemProperties.END_ICON_ID) {
+            int id = model.get(ListMenuItemProperties.END_ICON_ID);
+            Drawable drawable =
+                    id == 0 ? null : AppCompatResources.getDrawable(view.getContext(), id);
+            setEndIcon(endIcon, drawable);
         } else if (propertyKey == ListMenuItemProperties.START_ICON_DRAWABLE) {
             Drawable drawable = model.get(ListMenuItemProperties.START_ICON_DRAWABLE);
-            setStartIcon(startIcon, endIcon, drawable, keepIconSpacing);
+            if (hasStartIcon == (drawable != null)) {
+                setStartIcon(startIcon, drawable, keepIconSpacing);
+            }
         } else if (propertyKey == ListMenuItemProperties.START_ICON_BITMAP) {
             Bitmap bitmap = model.get(ListMenuItemProperties.START_ICON_BITMAP);
             if (bitmap == null) {
-                hideStartIcon(startIcon, keepIconSpacing);
-            } else {
+                // We specifically need to check whether bitmap == null. If we do not, creating a
+                // BitmapDrawable from null does not fail; it instead creates an empty drawable and
+                // makes it visible. To achieve the correct behavior of hiding the start icon, we
+                // therefore need to perform a separate check for the bitmap being null.
+                // If hasStartIcon is true, that means a different start icon property was set, so
+                // we need to maintain the start icon. If no other start icon property is set and
+                // the bitmap is null, we should clear (hide) the start icon.
+                if (!hasStartIcon) {
+                    hideStartIcon(startIcon, keepIconSpacing);
+                }
+            } else if (hasStartIcon) {
                 Drawable drawable = new BitmapDrawable(view.getResources(), bitmap);
-                setStartIcon(startIcon, endIcon, drawable, keepIconSpacing);
+                setStartIcon(startIcon, drawable, keepIconSpacing);
+            }
+        } else if (propertyKey == ListMenuItemProperties.START_ICON_WIDTH) {
+            if (startIcon != null) {
+                int width = model.get(ListMenuItemProperties.START_ICON_WIDTH);
+                var layoutParams = startIcon.getLayoutParams();
+                layoutParams.width = width;
+                startIcon.setLayoutParams(layoutParams);
+            }
+        } else if (propertyKey == ListMenuItemProperties.END_ICON_WIDTH) {
+            if (endIcon != null) {
+                int width = model.get(ListMenuItemProperties.END_ICON_WIDTH);
+                var layoutParams = endIcon.getLayoutParams();
+                layoutParams.width = width;
+                endIcon.setLayoutParams(layoutParams);
             }
         } else if (propertyKey == ListMenuItemProperties.GROUP_ID) {
             // Not tracked intentionally because it's mainly for clients to know which group a
@@ -126,21 +176,23 @@ public class ListMenuItemViewBinder {
         } else if (propertyKey == ListMenuItemProperties.ICON_TINT_COLOR_STATE_LIST_ID) {
             @ColorRes
             int tintColorId = model.get(ListMenuItemProperties.ICON_TINT_COLOR_STATE_LIST_ID);
-            if (tintColorId != 0) {
-                ImageViewCompat.setImageTintList(
-                        startIcon,
-                        AppCompatResources.getColorStateList(
-                                view.getContext(),
-                                model.get(ListMenuItemProperties.ICON_TINT_COLOR_STATE_LIST_ID)));
-                ImageViewCompat.setImageTintList(
-                        endIcon,
-                        AppCompatResources.getColorStateList(
-                                view.getContext(),
-                                model.get(ListMenuItemProperties.ICON_TINT_COLOR_STATE_LIST_ID)));
-            } else {
-                // No tint.
-                ImageViewCompat.setImageTintList(startIcon, null);
-                ImageViewCompat.setImageTintList(endIcon, null);
+            ListMenuUtils.applyTintToAllIcons(view, tintColorId);
+            Boolean shouldTintEndIcon = model.get(ListMenuItemProperties.SHOULD_TINT_END_ICON);
+            if (shouldTintEndIcon != null && !shouldTintEndIcon) {
+                if (endIcon != null) {
+                    ImageViewCompat.setImageTintList(endIcon, null);
+                }
+            }
+        } else if (propertyKey == ListMenuItemProperties.SHOULD_TINT_END_ICON) {
+            Boolean shouldTintEndIcon = model.get(ListMenuItemProperties.SHOULD_TINT_END_ICON);
+            if (endIcon != null) {
+                if (shouldTintEndIcon != null && !shouldTintEndIcon) {
+                    ImageViewCompat.setImageTintList(endIcon, null);
+                } else {
+                    int tintColorId =
+                            model.get(ListMenuItemProperties.ICON_TINT_COLOR_STATE_LIST_ID);
+                    ListMenuUtils.applyTintToAllIcons(view, tintColorId);
+                }
             }
         } else if (propertyKey == ListMenuItemProperties.TEXT_APPEARANCE_ID) {
             textView.setTextAppearance(model.get(ListMenuItemProperties.TEXT_APPEARANCE_ID));
@@ -155,6 +207,11 @@ public class ListMenuItemViewBinder {
             view.setOnKeyListener(model.get(ListMenuItemProperties.KEY_LISTENER));
         } else if (propertyKey == ListMenuItemProperties.TOUCH_LISTENER) {
             view.setOnTouchListener(model.get(ListMenuItemProperties.TOUCH_LISTENER));
+        } else if (propertyKey == ListMenuItemProperties.GENERIC_MOTION_LISTENER) {
+            view.setOnGenericMotionListener(
+                    model.get(ListMenuItemProperties.GENERIC_MOTION_LISTENER));
+        } else if (propertyKey == ListMenuItemProperties.LONG_CLICK_LISTENER) {
+            view.setOnLongClickListener(model.get(ListMenuItemProperties.LONG_CLICK_LISTENER));
         } else if (propertyKey == ListMenuItemProperties.ORDER) {
             // Not tracked intentionally because it's used by clients to keep track of items. The
             // order field is used to recreate a SelectionMenuItem when an item is clicked.
@@ -164,29 +221,25 @@ public class ListMenuItemViewBinder {
     }
 
     private static void setStartIcon(
-            ImageView startIcon,
-            @Nullable ImageView endIcon,
+            @Nullable ImageView startIcon,
             @Nullable Drawable drawable,
             boolean keepStartIconSpacing) {
+        // The start icon view is optional and may not be present in all layouts. If it is null, we
+        // skip setting the icon.
+        if (startIcon == null) return;
         if (drawable != null) {
             startIcon.setImageDrawable(drawable);
             startIcon.setVisibility(View.VISIBLE);
-            hideEndIcon(endIcon);
         } else {
             hideStartIcon(startIcon, keepStartIconSpacing);
         }
     }
 
-    private static void setEndIcon(
-            @Nullable ImageView startIcon,
-            ImageView endIcon,
-            @Nullable Drawable drawable,
-            boolean keepStartIconSpacing) {
+    private static void setEndIcon(@Nullable ImageView endIcon, @Nullable Drawable drawable) {
+        if (endIcon == null) return;
         if (drawable != null) {
-            // Move to the end.
             endIcon.setImageDrawable(drawable);
             endIcon.setVisibility(View.VISIBLE);
-            hideStartIcon(startIcon, keepStartIconSpacing);
         } else {
             hideEndIcon(endIcon);
         }

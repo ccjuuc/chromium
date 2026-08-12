@@ -4,8 +4,8 @@
 
 #include "third_party/blink/renderer/core/animation/css_border_shape_interpolation_type.h"
 
-#include "third_party/blink/renderer/core/animation/basic_shape_interpolation_functions.h"
 #include "third_party/blink/renderer/core/animation/list_interpolation_functions.h"
+#include "third_party/blink/renderer/core/animation/shape_interpolation_functions.h"
 #include "third_party/blink/renderer/core/animation/underlying_value_owner.h"
 #include "third_party/blink/renderer/core/css/css_identifier_value_mappings.h"
 #include "third_party/blink/renderer/core/css/css_value_list.h"
@@ -25,31 +25,18 @@ InterpolationValue ConvertBorderShape(const StyleBorderShape* border_shape,
     return ListInterpolationFunctions::CreateEmptyList();
   }
 
-  return ListInterpolationFunctions::CreateList(
-      2, [border_shape, &property, zoom](wtf_size_t index) {
-        const BasicShape& shape = index == 0 ? border_shape->OuterShape()
-                                             : border_shape->InnerShape();
-        GeometryBox box =
-            index == 0 ? border_shape->OuterBox() : border_shape->InnerBox();
-        return basic_shape_interpolation_functions::MaybeConvertBasicShape(
-            &shape, property, zoom, box, CoordBox::kBorderBox);
-      });
+  return ListInterpolationFunctions::CreateList(2, [border_shape, &property,
+                                                    zoom](wtf_size_t index) {
+    BasicShapeInfo info = {
+        index == 0 ? &border_shape->OuterShape() : &border_shape->InnerShape(),
+        index == 0 ? border_shape->OuterBox() : border_shape->InnerBox()};
+    return shape_interpolation_functions::MaybeConvertBasicShape(info, property,
+                                                                 zoom);
+  });
 }
 
-struct CSSBorderShapeEntry {
-  STACK_ALLOCATED();
-
- public:
-  CSSBorderShapeEntry() = default;
-  CSSBorderShapeEntry(const CSSValue* shape_value, GeometryBox box)
-      : shape_value(shape_value), box(box) {}
-
-  const CSSValue* shape_value = nullptr;
-  GeometryBox box = GeometryBox::kBorderBox;
-};
-
-template <GeometryBox default_box>
-CSSBorderShapeEntry CreateEntryFromCSSValue(const CSSValue& value) {
+BasicShapeCssInfo CreateEntryFromCSSValue(const CSSValue& value,
+                                          GeometryBox default_box) {
   const CSSValue* shape_value = &value;
   GeometryBox box = default_box;
   if (const auto* pair = DynamicTo<CSSValuePair>(value)) {
@@ -57,7 +44,7 @@ CSSBorderShapeEntry CreateEntryFromCSSValue(const CSSValue& value) {
     const auto& ident = To<CSSIdentifierValue>(pair->Second());
     box = ident.ConvertTo<GeometryBox>();
   }
-  return CSSBorderShapeEntry(shape_value, box);
+  return {shape_value, box};
 }
 
 class BorderShapeUnderlyingCompatibilityChecker
@@ -83,8 +70,7 @@ class BorderShapeUnderlyingCompatibilityChecker
           if (!a || !b) {
             return false;
           }
-          return basic_shape_interpolation_functions::ShapesAreCompatible(*a,
-                                                                          *b);
+          return shape_interpolation_functions::ShapesAreCompatible(*a, *b);
         };
 
     return ListInterpolationFunctions::EqualValues(
@@ -117,16 +103,6 @@ class InheritedBorderShapeChecker
   Member<const StyleBorderShape> inherited_;
 };
 
-template <GeometryBox default_box>
-GeometryBox GeometryBoxForNonInterpolableValue(
-    const NonInterpolableValue* non_interpolable) {
-  if (!non_interpolable) {
-    return GeometryBox::kHalfBorderBox;
-  }
-  return basic_shape_interpolation_functions::GetGeometryBox(*non_interpolable,
-                                                             default_box);
-}
-
 }  // namespace
 
 InterpolationValue CSSBorderShapeInterpolationType::MaybeConvertNeutral(
@@ -150,9 +126,8 @@ InterpolationValue CSSBorderShapeInterpolationType::MaybeConvertNeutral(
     const NonInterpolableValue* non_interpolable =
         non_interpolable_list->Get(i);
     CHECK(non_interpolable);
-    neutral_list->Set(i,
-                      basic_shape_interpolation_functions::CreateNeutralValue(
-                          *non_interpolable));
+    neutral_list->Set(i, shape_interpolation_functions::CreateNeutralValue(
+                             *non_interpolable));
   }
 
   conversion_checkers.push_back(
@@ -195,25 +170,22 @@ InterpolationValue CSSBorderShapeInterpolationType::MaybeConvertValue(
     return ListInterpolationFunctions::CreateEmptyList();
   }
 
-  std::array<CSSBorderShapeEntry, 2> entries;
+  std::array<BasicShapeCssInfo, 2> entries;
   if (const auto* list = DynamicTo<CSSValueList>(value)) {
     DCHECK_EQ(list->length(), 2u);
-    auto entry =
-        CreateEntryFromCSSValue<GeometryBox::kBorderBox>(list->First());
-    entries[0] = std::move(entry);
-    entry = CreateEntryFromCSSValue<GeometryBox::kPaddingBox>(list->Last());
-    entries[1] = std::move(entry);
+    entries[0] =
+        CreateEntryFromCSSValue(list->First(), GeometryBox::kBorderBox);
+    entries[1] =
+        CreateEntryFromCSSValue(list->Last(), GeometryBox::kPaddingBox);
   } else {
-    auto entry = CreateEntryFromCSSValue<GeometryBox::kHalfBorderBox>(value);
-    entries[0] = entry;
-    entries[1] = entry;
+    entries[0] = CreateEntryFromCSSValue(value, GeometryBox::kHalfBorderBox);
+    entries[1] = entries[0];
   }
 
   return ListInterpolationFunctions::CreateList(
       entries.size(), [this, &entries](wtf_size_t index) {
-        return basic_shape_interpolation_functions::MaybeConvertCSSValue(
-            *entries[index].shape_value, CssProperty(), entries[index].box,
-            CoordBox::kBorderBox);
+        return shape_interpolation_functions::MaybeConvertCSSValue(
+            entries[index], CssProperty());
       });
 }
 
@@ -236,8 +208,8 @@ PairwiseInterpolationValue CSSBorderShapeInterpolationType::MaybeMergeSingles(
         if (!start_non || !end_non) {
           return PairwiseInterpolationValue(nullptr);
         }
-        if (!basic_shape_interpolation_functions::ShapesAreCompatible(
-                *start_non, *end_non)) {
+        if (!shape_interpolation_functions::ShapesAreCompatible(*start_non,
+                                                                *end_non)) {
           return PairwiseInterpolationValue(nullptr);
         }
         return PairwiseInterpolationValue(
@@ -276,7 +248,7 @@ void CSSBorderShapeInterpolationType::Composite(
         if (!a || !b) {
           return false;
         }
-        return basic_shape_interpolation_functions::ShapesAreCompatible(*a, *b);
+        return shape_interpolation_functions::ShapesAreCompatible(*a, *b);
       };
 
   ListInterpolationFunctions::Composite(
@@ -303,34 +275,25 @@ void CSSBorderShapeInterpolationType::ApplyStandardPropertyValue(
     return;
   }
 
-  const auto* non_interpolable_list =
-      DynamicTo<NonInterpolableList>(non_interpolable_value);
-  CHECK(non_interpolable_list);
-  CHECK_EQ(non_interpolable_list->length(), length);
+  CHECK(non_interpolable_value);
+  const auto& non_interpolable_list =
+      To<NonInterpolableList>(*non_interpolable_value);
+  CHECK_EQ(non_interpolable_list.length(), length);
 
-  BasicShape* outer_shape =
-      basic_shape_interpolation_functions::CreateBasicShape(
-          *interpolable_list.Get(0), *non_interpolable_list->Get(0),
-          state.CssToLengthConversionData());
-  BasicShape* inner_shape =
-      basic_shape_interpolation_functions::CreateBasicShape(
-          *interpolable_list.Get(1), *non_interpolable_list->Get(1),
-          state.CssToLengthConversionData());
+  BasicShapeInfo outer_info = shape_interpolation_functions::CreateBasicShape(
+      *interpolable_list.Get(0), *non_interpolable_list.Get(0),
+      state.CssToLengthConversionData());
+  CHECK(outer_info.shape);
 
-  if (!outer_shape || !inner_shape) {
-    state.StyleBuilder().SetBorderShape(nullptr);
-    return;
-  }
-
-  GeometryBox outer_box =
-      GeometryBoxForNonInterpolableValue<GeometryBox::kBorderBox>(
-          non_interpolable_list->Get(0));
-  GeometryBox inner_box =
-      GeometryBoxForNonInterpolableValue<GeometryBox::kPaddingBox>(
-          non_interpolable_list->Get(1));
+  BasicShapeInfo inner_info = shape_interpolation_functions::CreateBasicShape(
+      *interpolable_list.Get(1), *non_interpolable_list.Get(1),
+      state.CssToLengthConversionData());
+  CHECK(inner_info.shape);
 
   state.StyleBuilder().SetBorderShape(MakeGarbageCollected<StyleBorderShape>(
-      *outer_shape, inner_shape, outer_box, inner_box));
+      *outer_info.shape, inner_info.shape,
+      std::get<GeometryBox>(outer_info.box),
+      std::get<GeometryBox>(inner_info.box)));
 }
 
 }  // namespace blink

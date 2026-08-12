@@ -201,6 +201,19 @@ cetera:
 git cl upload -r foo@example.com,bar@example.com -b 123456
 ```
 
+Documented in [Issue 461824120][issue-461824120],
+sometimes `git cl upload` fails for users with a message similar to
+```
+error: RPC failed; HTTP 401 curl 22 The requested URL returned error: 401
+send-pack: unexpected disconnect while reading sideband packet
+fatal: the remote end hung up unexpectedly
+```
+One solution is to wait some time, pull the latest branch and run `gclient sync`.
+Alternatively, you may use `git config` to resolve the problem immediately:
+```
+git config --global http.postBuffer 524288000
+```
+
 See `git cl help upload` for a full list of flags.
 
 ### Uploading dependent changes
@@ -442,16 +455,18 @@ commit][direct-commit] a change, bypassing the commit queue and all safety nets.
 
 Occasionally changes that pass the [commit queue][commit-queue] and get
 submitted into Chromium will later be reverted. If this happens to your change,
-don't be discouraged! This can be a common part of the Chromium development
+**don't be discouraged**! This can be a common part of the Chromium development
 cycle and happens for a variety of reasons, including a conflict with an
 unanticipated change or tests not covered on the commit queue.
 
 If this happens to your change, you're encouraged to pursue a reland. When doing
 so, following these basic steps can streamline the re-review process:
-- **Create the reland**: Click the `CREATE RELAND` button on the original change
+- **Create the reland**: Click the `Create Reland` button on the original change
   in Gerrit. This will create a new change whose diff is identical to the
   original, but has a small paper-trail in the commit message that leads back to
-  the original. This can be useful for sheriffs when debugging regressions.
+  the original. This can be useful for gardeners when debugging regressions. If
+  you encounter an error with that button, try the `Revert` button on the revert
+  CL instead; functionally they should be identical.
 - **Append the fix**: If the reland requires file modifications not present in
   the original change, simply upload these fixes in a subsequent patchset to the
   reland change. By comparing the first patchset with the latest, this gives
@@ -662,6 +677,7 @@ formats.
 [github-tutorial]: https://try.github.io
 [good-git-commit-message]: https://chris.beams.io/posts/git-commit/
 [individual-cla]: https://cla.developers.google.com/about/google-individual?csw=1
+[issue-461824120]: https://issues.chromium.org/issues/461824120
 [life-of-a-chromium-developer]: https://docs.google.com/presentation/d/1abnqM9j6zFodPHA38JG1061rG2iGj_GABxEDgZsdbJg/edit
 [noms-tutorial]: https://meowni.ca/posts/chromium-101
 [review-lag]: https://dev.chromium.org/developers/contributing-code/minimizing-review-lag-across-time-zones

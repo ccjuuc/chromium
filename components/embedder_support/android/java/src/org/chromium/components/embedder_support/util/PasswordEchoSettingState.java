@@ -4,16 +4,9 @@
 
 package org.chromium.components.embedder_support.util;
 
-import android.content.ContentResolver;
-import android.database.ContentObserver;
-import android.net.Uri;
-import android.os.Handler;
-import android.provider.Settings;
-
-import androidx.annotation.VisibleForTesting;
-
-import org.chromium.base.ContextUtils;
+import org.chromium.base.AconfigFlaggedApiDelegate;
 import org.chromium.base.ObserverList;
+import org.chromium.base.PasswordEchoSettingDelegate;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.TimeUtils;
@@ -48,19 +41,11 @@ import org.chromium.build.annotations.Nullable;
  */
 @NullMarked
 public class PasswordEchoSettingState {
-    // TODO(b/463981764): Add link to developer documentation for the settings.
-    private static final String KEY_TEXT_SHOW_PASSWORD_LEGACY = "show_password";
-    private static final String KEY_TEXT_SHOW_PASSWORD_PHYSICAL = "show_password_physical";
-    private static final String KEY_TEXT_SHOW_PASSWORD_TOUCH = "show_password_touch";
-
-    private boolean mPasswordEchoEnabledLegacy;
     private boolean mPasswordEchoEnabledPhysical;
     private boolean mPasswordEchoEnabledTouch;
 
-    private final SettingObserver mSettingObserver;
-
-    private final boolean mSettingSplitEnabled;
-    private static @Nullable Boolean sSplitEnabledForTesting;
+    private final PasswordEchoSettingDelegate mPasswordEchoSettingDelegate;
+    private static @Nullable PasswordEchoSettingDelegate sPasswordEchoSettingDelegateForTesting;
 
     private final ObserverList<PasswordEchoSettingObserver> mObservers = new ObserverList<>();
 
@@ -68,55 +53,39 @@ public class PasswordEchoSettingState {
         static final PasswordEchoSettingState INSTANCE = new PasswordEchoSettingState();
     }
 
-    private boolean isSplitShowPasswordsToTouchAndPhysicalEnabled() {
-        if (sSplitEnabledForTesting != null) {
-            return sSplitEnabledForTesting;
-        }
-
-        // TODO(crbug.com/466343369): Implement the logic to check if the split setting feature is
-        // enabled on the platform side.
-        return false;
-    }
-
     private static @Nullable PasswordEchoSettingState sInstanceForTests;
 
-    public static void setInstanceForTests(boolean splitEnabled) {
-        sSplitEnabledForTesting = splitEnabled;
+    public static void setInstanceForTests(PasswordEchoSettingDelegate delegate) {
+        sPasswordEchoSettingDelegateForTesting = delegate;
         sInstanceForTests = new PasswordEchoSettingState();
         ResettersForTesting.register(
                 () -> {
-                    sSplitEnabledForTesting = null;
+                    sPasswordEchoSettingDelegateForTesting = null;
                     sInstanceForTests = null;
                 });
+    }
+
+    private PasswordEchoSettingDelegate getPasswordEchoSettingDelegate() {
+        if (sPasswordEchoSettingDelegateForTesting != null) {
+            return sPasswordEchoSettingDelegateForTesting;
+        }
+
+        AconfigFlaggedApiDelegate aconfigDelegate = AconfigFlaggedApiDelegate.getInstance();
+        PasswordEchoSettingDelegate delegate =
+                aconfigDelegate != null ? aconfigDelegate.getPasswordEchoSettingDelegate() : null;
+        return delegate != null ? delegate : new LegacyPasswordEchoSettingDelegateImpl();
     }
 
     private PasswordEchoSettingState() {
         try (TraceEvent e = TraceEvent.scoped("PasswordEchoSettingState.constructor")) {
             final TimeUtils.ElapsedRealtimeNanosTimer timer =
                     new TimeUtils.ElapsedRealtimeNanosTimer();
-            mSettingSplitEnabled = isSplitShowPasswordsToTouchAndPhysicalEnabled();
 
-            ContentResolver contentResolver =
-                    ContextUtils.getApplicationContext().getContentResolver();
-            mSettingObserver = new SettingObserver();
+            mPasswordEchoSettingDelegate = getPasswordEchoSettingDelegate();
 
-            if (mSettingSplitEnabled) {
-                contentResolver.registerContentObserver(
-                        Settings.Secure.getUriFor(KEY_TEXT_SHOW_PASSWORD_PHYSICAL),
-                        false,
-                        mSettingObserver);
-                contentResolver.registerContentObserver(
-                        Settings.Secure.getUriFor(KEY_TEXT_SHOW_PASSWORD_TOUCH),
-                        false,
-                        mSettingObserver);
-            } else {
-                contentResolver.registerContentObserver(
-                        Settings.System.getUriFor(KEY_TEXT_SHOW_PASSWORD_LEGACY),
-                        false,
-                        mSettingObserver);
-            }
+            mPasswordEchoSettingDelegate.registerCallback(this::updateCacheAndNotifyObservers);
+            updateCachedSettings();
 
-            updateAllSettingState();
             RecordHistogram.recordMicroTimesHistogram(
                     "Android.PasswordEcho.SettingStateInitializationTime",
                     timer.getElapsedMicros());
@@ -127,75 +96,23 @@ public class PasswordEchoSettingState {
         return sInstanceForTests == null ? LazyHolder.INSTANCE : sInstanceForTests;
     }
 
-    private void updateAllSettingState() {
+    private void updateCachedSettings() {
         final TimeUtils.ElapsedRealtimeNanosTimer timer = new TimeUtils.ElapsedRealtimeNanosTimer();
-        if (mSettingSplitEnabled) {
-            updatePhysicalSettingState();
-            updateTouchSettingState();
-            RecordHistogram.recordMicroTimesHistogram(
-                    "Android.PasswordEcho.SettingReadTime.Split", timer.getElapsedMicros());
-        } else {
-            updateLegacySettingState();
-            RecordHistogram.recordMicroTimesHistogram(
-                    "Android.PasswordEcho.SettingReadTime.Legacy", timer.getElapsedMicros());
-        }
+
+        mPasswordEchoEnabledPhysical = mPasswordEchoSettingDelegate.isPhysicalSettingEnabled();
+        mPasswordEchoEnabledTouch = mPasswordEchoSettingDelegate.isTouchSettingEnabled();
+
+        String suffix =
+                mPasswordEchoSettingDelegate instanceof LegacyPasswordEchoSettingDelegateImpl
+                        ? "Legacy"
+                        : "Split";
+        RecordHistogram.recordMicroTimesHistogram(
+                "Android.PasswordEcho.SettingReadTime." + suffix, timer.getElapsedMicros());
     }
 
-    private void updateLegacySettingState() {
-        mPasswordEchoEnabledLegacy =
-                Settings.System.getInt(
-                                ContextUtils.getApplicationContext().getContentResolver(),
-                                KEY_TEXT_SHOW_PASSWORD_LEGACY,
-                                0)
-                        == 1;
-    }
-
-    private void updatePhysicalSettingState() {
-        mPasswordEchoEnabledPhysical =
-                Settings.Secure.getInt(
-                                ContextUtils.getApplicationContext().getContentResolver(),
-                                KEY_TEXT_SHOW_PASSWORD_PHYSICAL,
-                                0)
-                        == 1;
-    }
-
-    private void updateTouchSettingState() {
-        mPasswordEchoEnabledTouch =
-                Settings.Secure.getInt(
-                                ContextUtils.getApplicationContext().getContentResolver(),
-                                KEY_TEXT_SHOW_PASSWORD_TOUCH,
-                                0)
-                        == 1;
-    }
-
-    private class SettingObserver extends ContentObserver {
-        public SettingObserver() {
-            super(new Handler());
-        }
-
-        @Override
-        public void onChange(boolean selfChange) {
-            onChange(selfChange, null);
-        }
-
-        @Override
-        public void onChange(boolean selfChange, @Nullable Uri uri) {
-            if (uri == null) {
-                return;
-            }
-
-            if (uri.equals(Settings.System.getUriFor(KEY_TEXT_SHOW_PASSWORD_LEGACY))) {
-                updateLegacySettingState();
-            } else if (uri.equals(Settings.Secure.getUriFor(KEY_TEXT_SHOW_PASSWORD_PHYSICAL))) {
-                updatePhysicalSettingState();
-            } else if (uri.equals(Settings.Secure.getUriFor(KEY_TEXT_SHOW_PASSWORD_TOUCH))) {
-                updateTouchSettingState();
-            } else {
-                return;
-            }
-
-            notifyObservers();
-        }
+    public void updateCacheAndNotifyObservers() {
+        updateCachedSettings();
+        notifyObservers();
     }
 
     private void notifyObservers() {
@@ -205,13 +122,11 @@ public class PasswordEchoSettingState {
     }
 
     public boolean getPasswordEchoEnabledPhysical() {
-        // When the split setting feature flag is disabled, return the legacy setting value.
-        return mSettingSplitEnabled ? mPasswordEchoEnabledPhysical : mPasswordEchoEnabledLegacy;
+        return mPasswordEchoEnabledPhysical;
     }
 
     public boolean getPasswordEchoEnabledTouch() {
-        // When the split setting feature flag is disabled, return the legacy setting value.
-        return mSettingSplitEnabled ? mPasswordEchoEnabledTouch : mPasswordEchoEnabledLegacy;
+        return mPasswordEchoEnabledTouch;
     }
 
     public boolean registerObserver(PasswordEchoSettingObserver observer) {
@@ -222,10 +137,5 @@ public class PasswordEchoSettingState {
     public boolean unregisterObserver(PasswordEchoSettingObserver observer) {
         ThreadUtils.assertOnUiThread();
         return mObservers.removeObserver(observer);
-    }
-
-    @VisibleForTesting
-    public ContentObserver getSettingObserver() {
-        return mSettingObserver;
     }
 }

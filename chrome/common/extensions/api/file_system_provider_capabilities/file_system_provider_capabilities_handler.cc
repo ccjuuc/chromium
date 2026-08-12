@@ -16,6 +16,10 @@
 
 namespace extensions {
 
+// static
+const char* FileSystemProviderCapabilities::kManifestDataKey =
+    manifest_keys::kFileSystemProviderCapabilities;
+
 FileSystemProviderCapabilities::FileSystemProviderCapabilities()
     : configurable_(false),
       watchable_(false),
@@ -45,16 +49,14 @@ FileSystemProviderCapabilitiesHandler::
 // static
 const FileSystemProviderCapabilities* FileSystemProviderCapabilities::Get(
     const Extension* extension) {
-  return static_cast<FileSystemProviderCapabilities*>(
-      extension->GetManifestData(
-          manifest_keys::kFileSystemProviderCapabilities));
+  return extension->GetManifestData<FileSystemProviderCapabilities>();
 }
 
 bool FileSystemProviderCapabilitiesHandler::Parse(Extension* extension,
                                                   std::u16string* error) {
   const bool has_permission = extensions::PermissionsParser::HasAPIPermission(
       extension, mojom::APIPermissionID::kFileSystemProvider);
-  const base::Value::Dict* section = extension->manifest()->FindDictPath(
+  const base::DictValue* section = extension->manifest()->FindDictPath(
       manifest_keys::kFileSystemProviderCapabilities);
 
   if (has_permission && !section) {
@@ -105,8 +107,7 @@ bool FileSystemProviderCapabilitiesHandler::Parse(Extension* extension,
               false) /* false by default */,
           source));
 
-  extension->SetManifestData(manifest_keys::kFileSystemProviderCapabilities,
-                             std::move(capabilities));
+  extension->SetManifestData(std::move(capabilities));
   return true;
 }
 

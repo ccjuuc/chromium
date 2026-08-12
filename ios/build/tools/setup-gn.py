@@ -143,6 +143,9 @@ class GnGenerator(object):
     if os.environ.get('FORCE_MAC_TOOLCHAIN', '0') == '1':
       args.append(('use_system_xcode', False))
 
+    if os.environ.get('ENABLE_SWIFT_CXX_INTEROP', '0') == '1':
+      args.append(('enable_swift_cxx_interop', True))
+
     target_cpu = self.TARGET_CPU_VALUES[self._target];
     if (self._target == 'iphoneos' and
         self._settings.getboolean('build', 'use_arm64e')):
@@ -245,6 +248,7 @@ class GnGenerator(object):
       gn_command.append('--ide=xcode')
       gn_command.append('--ninja-executable=autoninja')
       gn_command.append('--xcode-build-system=new')
+      gn_command.append('--enumerate-files-with-git')
       gn_command.append('--xcode-project=%s' % xcode_project_name)
       gn_command.append('--xcode-additional-files-patterns=' +
                         ';'.join(ADDITIONAL_FILES_PATTERNS))

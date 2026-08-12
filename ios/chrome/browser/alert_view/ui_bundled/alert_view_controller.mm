@@ -80,7 +80,8 @@ constexpr CGFloat kButtonHorizontalInnerInset = 12;
 constexpr CGFloat kButtonVerticalInnerInset = 15.5;
 constexpr CGFloat kButtonHorizontalInset = 16;
 constexpr CGFloat kButtonCornerRadius = 24;
-constexpr CGFloat kButtonStackViewSpacing = 6;
+constexpr CGFloat kVerticalStackViewSpacing = 6;
+constexpr CGFloat kButtonStackViewSpacing = 8;
 
 constexpr CGFloat kTextfieldStackInsetTop = 12;
 constexpr CGFloat kTextfieldStackInsetLeading = 12;
@@ -102,8 +103,12 @@ NSString* const kNotificationCenter = @"notification_center";
 NSString* const kBanners = @"banners";
 
 // Returns the width and height of a single pixel in point.
-CGFloat GetPixelLength() {
-  return 1.0 / [UIScreen mainScreen].scale;
+CGFloat GetPixelLength(UITraitCollection* traitCollection) {
+  CGFloat scale = traitCollection.displayScale;
+  if (scale == 0) {
+    scale = 2.0;
+  }
+  return 1.0 / scale;
 }
 
 // Returns the width of the alert.
@@ -157,13 +162,15 @@ void AddSeparatorToStackView(UIStackView* stackView) {
   separator.translatesAutoresizingMaskIntoConstraints = NO;
   [stackView addArrangedSubview:separator];
   if (stackView.axis == UILayoutConstraintAxisHorizontal) {
-    [separator.widthAnchor constraintEqualToConstant:GetPixelLength()].active =
-        YES;
+    [separator.widthAnchor
+        constraintEqualToConstant:GetPixelLength(stackView.traitCollection)]
+        .active = YES;
     AddSameConstraintsToSides(stackView, separator,
                               LayoutSides::kTop | LayoutSides::kBottom);
   } else {
-    [separator.heightAnchor constraintEqualToConstant:GetPixelLength()].active =
-        YES;
+    [separator.heightAnchor
+        constraintEqualToConstant:GetPixelLength(stackView.traitCollection)]
+        .active = YES;
     AddSameConstraintsToSides(stackView, separator,
                               LayoutSides::kTrailing | LayoutSides::kLeading);
   }
@@ -319,8 +326,8 @@ UIButton* GetButtonForAction(AlertAction* action) {
 
 }  // namespace
 
-@interface AlertViewController () <UITextFieldDelegate,
-                                   UIGestureRecognizerDelegate>
+@interface AlertViewController () <UIGestureRecognizerDelegate,
+                                   UITextFieldDelegate>
 
 // The actions for to this alert. `copy` for safety against mutable objects.
 @property(nonatomic, copy) NSArray<NSArray<AlertAction*>*>* actions;
@@ -388,6 +395,10 @@ UIButton* GetButtonForAction(AlertAction* action) {
   UIImageView* _checkmark;
 
   UIView* _progressIndicatorContainerView;
+
+  // Width constraint for the content view. Updated when the preferred content
+  // size category changes.
+  NSLayoutConstraint* _contentViewWidthConstraint;
 }
 
 #pragma mark - Public
@@ -412,18 +423,14 @@ UIButton* GetButtonForAction(AlertAction* action) {
   self.swipeRecognizer.enabled = NO;
   [self.contentView addGestureRecognizer:self.swipeRecognizer];
 
-  NSLayoutConstraint* widthConstraint =
+  _contentViewWidthConstraint =
       [self.contentView.widthAnchor constraintEqualToConstant:GetAlertWidth()];
-  widthConstraint.priority = UILayoutPriorityRequired - 1;
+  _contentViewWidthConstraint.priority = UILayoutPriorityRequired - 1;
 
-  [[NSNotificationCenter defaultCenter]
-      addObserverForName:UIContentSizeCategoryDidChangeNotification
-                  object:nil
-                   queue:[NSOperationQueue mainQueue]
-              usingBlock:^(NSNotification* _Nonnull note) {
-                widthConstraint.constant = GetAlertWidth();
-              }];
-  widthConstraint.active = YES;
+  [self
+      registerForTraitChanges:@[ UITraitPreferredContentSizeCategory.class ]
+                   withAction:@selector(preferredContentSizeCategoryDidChange)];
+  _contentViewWidthConstraint.active = YES;
   PositionContentViewInParentView(self.contentView, self.view);
 
   UIScrollView* scrollView = [[UIScrollView alloc] init];
@@ -505,8 +512,8 @@ UIButton* GetButtonForAction(AlertAction* action) {
     _spinner.translatesAutoresizingMaskIntoConstraints = NO;
 
     _checkmark = [[UIImageView alloc] init];
-    _checkmark.image = DefaultSymbolWithPointSize(kCheckmarkCircleFillSymbol,
-                                                  kConfirmationSymbolPointSize);
+    _checkmark.image = SymbolWithPointSize(SymbolCheckmarkCircleFill,
+                                           kConfirmationSymbolPointSize);
     _checkmark.tintColor = [UIColor systemGreenColor];
     _checkmark.translatesAutoresizingMaskIntoConstraints = NO;
 
@@ -656,8 +663,7 @@ UIButton* GetButtonForAction(AlertAction* action) {
   };
   [self registerForTraitChanges:traits withHandler:handler];
 
-  traits = TraitCollectionSetForTraits(@[ UITraitUserInterfaceStyle.class ]);
-  [self registerForTraitChanges:traits
+  [self registerForTraitChanges:@[ UITraitUserInterfaceStyle.class ]
                      withAction:@selector(selectImageForCurrentStyle)];
 }
 
@@ -714,7 +720,8 @@ UIButton* GetButtonForAction(AlertAction* action) {
       _textFieldStackHolder.layer.borderColor =
           [UIColor colorNamed:kSeparatorColor].CGColor;
     }];
-    _textFieldStackHolder.layer.borderWidth = GetPixelLength();
+    _textFieldStackHolder.layer.borderWidth =
+        GetPixelLength(self.traitCollection);
     _textFieldStackHolder.clipsToBounds = YES;
     _textFieldStackHolder.backgroundColor =
         [UIColor colorNamed:kSecondaryBackgroundColor];
@@ -879,6 +886,11 @@ UIButton* GetButtonForAction(AlertAction* action) {
 
 #pragma mark - Private
 
+// Called when the preferred content size category changes.
+- (void)preferredContentSizeCategoryDidChange {
+  _contentViewWidthConstraint.constant = GetAlertWidth();
+}
+
 // Configures the image.
 - (void)configureAnimationViewWrapper {
   self.animationViewWrapper = [self createAnimation:self.imageLottieName];
@@ -977,21 +989,21 @@ UIButton* GetButtonForAction(AlertAction* action) {
 
 // Returns a stack of formatted buttons to be added to the bottom of the alert.
 - (UIStackView*)createButtonStackView {
-  UIStackView* buttons = [[UIStackView alloc] init];
-  buttons.axis = UILayoutConstraintAxisVertical;
-  buttons.translatesAutoresizingMaskIntoConstraints = NO;
-  buttons.alignment = UIStackViewAlignmentCenter;
+  UIStackView* verticalStackView = [[UIStackView alloc] init];
+  verticalStackView.axis = UILayoutConstraintAxisVertical;
+  verticalStackView.translatesAutoresizingMaskIntoConstraints = NO;
+  verticalStackView.alignment = UIStackViewAlignmentCenter;
 
   if (@available(iOS 26, *)) {
-    buttons.spacing = kButtonStackViewSpacing;
+    verticalStackView.spacing = kVerticalStackViewSpacing;
   }
 
   for (NSArray<AlertAction*>* rowOfActions in self.actions) {
     DCHECK_GT([rowOfActions count], 0U);
-    AddSeparatorToStackView(buttons);
+    AddSeparatorToStackView(verticalStackView);
     // Calculate the axis for the sub-stackview.
     CGFloat maxWidth = 0;
-    NSMutableArray<UIButton*>* rowOfButtons = [[NSMutableArray alloc] init];
+    NSMutableArray<UIButton*>* rowButtons = [[NSMutableArray alloc] init];
     for (AlertAction* action in rowOfActions) {
       UIButton* button = GetButtonForAction(action);
       if (self.actionButtonsAreInitiallyDisabled) {
@@ -1005,7 +1017,7 @@ UIButton* GetButtonForAction(AlertAction* action) {
       [button addTarget:self
                     action:@selector(didSelectActionForButton:)
           forControlEvents:UIControlEventTouchUpInside];
-      [rowOfButtons addObject:button];
+      [rowButtons addObject:button];
       maxWidth = MAX(maxWidth, button.intrinsicContentSize.width);
     }
     UILayoutConstraintAxis axis =
@@ -1014,32 +1026,35 @@ UIButton* GetButtonForAction(AlertAction* action) {
             : UILayoutConstraintAxisHorizontal;
     // Actually creates and adds the stack view to the view, and position the
     // buttons.
-    UIStackView* rowOfButtonStackView = [[UIStackView alloc] init];
-    rowOfButtonStackView.axis = axis;
-    rowOfButtonStackView.alignment = UIStackViewAlignmentCenter;
-    UIButton* firstButton = [rowOfButtons firstObject];
-    UIButton* lastButton = [rowOfButtons lastObject];
-    for (UIButton* button in rowOfButtons) {
-      [rowOfButtonStackView addArrangedSubview:button];
+    UIStackView* buttonsStackView = [[UIStackView alloc] init];
+    buttonsStackView.axis = axis;
+    buttonsStackView.alignment = UIStackViewAlignmentCenter;
+    if (@available(iOS 26, *)) {
+      buttonsStackView.spacing = kButtonStackViewSpacing;
+    }
+    UIButton* firstButton = [rowButtons firstObject];
+    UIButton* lastButton = [rowButtons lastObject];
+    for (UIButton* button in rowButtons) {
+      [buttonsStackView addArrangedSubview:button];
       if (button != lastButton) {
-        AddSeparatorToStackView(rowOfButtonStackView);
+        AddSeparatorToStackView(buttonsStackView);
       }
       if (axis == UILayoutConstraintAxisHorizontal) {
         [button.widthAnchor constraintEqualToAnchor:firstButton.widthAnchor]
             .active = YES;
-        AddSameConstraintsToSides(button, rowOfButtonStackView,
+        AddSameConstraintsToSides(button, buttonsStackView,
                                   (LayoutSides::kTop | LayoutSides::kBottom));
       } else {
         AddSameConstraintsToSides(
-            button, rowOfButtonStackView,
+            button, buttonsStackView,
             (LayoutSides::kTrailing | LayoutSides::kLeading));
       }
     }
-    [buttons addArrangedSubview:rowOfButtonStackView];
-    AddSameConstraintsToSides(rowOfButtonStackView, buttons,
+    [verticalStackView addArrangedSubview:buttonsStackView];
+    AddSameConstraintsToSides(buttonsStackView, verticalStackView,
                               (LayoutSides::kTrailing | LayoutSides::kLeading));
   }
-  return buttons;
+  return verticalStackView;
 }
 
 // React to user taps on `button`.

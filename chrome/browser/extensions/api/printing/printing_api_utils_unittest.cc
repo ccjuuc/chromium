@@ -6,15 +6,11 @@
 
 #include "base/strings/stringprintf.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/values_test_util.h"
-#include "chromeos/crosapi/mojom/local_printer.mojom.h"
 #include "chromeos/printing/printer_configuration.h"
 #include "printing/backend/print_backend.h"
-#include "printing/backend/print_backend_test_constants.h"
 #include "printing/mojom/print.mojom.h"
 #include "printing/print_settings.h"
-#include "printing/printing_features.h"
 #include "printing/units.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -42,7 +38,6 @@ constexpr int kCustomMediaSizeMin = 2540;
 constexpr char kMediaSizeVendorId[] = "iso_a4_210x297mm";
 constexpr char kVendorItemId[] = "finishings";
 constexpr char kVendorItemValue[] = "trim";
-const printing::PaperMargins kPaperMarginsUm = {2960, 3150, 4130, 2830};
 
 constexpr char kCjt[] = R"(
     {
@@ -317,26 +312,32 @@ printing::PrinterSemanticCapsAndDefaults ConstructPrinterCapabilities() {
   return capabilities;
 }
 
-printing::PrinterSemanticCapsAndDefaults
-ConstructPrinterCapabilitiesWithCustomSize() {
-  printing::PrinterSemanticCapsAndDefaults capabilities =
-      ConstructPrinterCapabilities();
-  // Reset our papers and create a new paper with a custom size range.
-  capabilities.papers.clear();
-  printing::PrinterSemanticCapsAndDefaults::Paper paper(
-      /*display_name=*/"", kMediaSizeVendorId,
-      gfx::Size(kMediaSizeWidth, kCustomMediaSizeMin),
-      /*printable_area_um=*/gfx::Rect(), kMediaSizeHeight,
-      /*has_borderless_variant=*/false,
-      /*supported_margins_um=*/kPaperMarginsUm);
-  capabilities.papers.push_back(paper);
+class PrintingApiUtilsTest : public testing::Test {
+ protected:
+  // This constant is a member variable because placing it at file scope
+  // creates an exit-time destructor.
+  const printing::PaperMargins kPaperMarginsUm = {2960, 3150, 4130, 2830};
 
-  return capabilities;
-}
+  // This is a member function because it uses the above constant.
+  printing::PrinterSemanticCapsAndDefaults
+  ConstructPrinterCapabilitiesWithCustomSize() {
+    printing::PrinterSemanticCapsAndDefaults capabilities =
+        ConstructPrinterCapabilities();
+    // Reset our papers and create a new paper with a custom size range.
+    capabilities.papers.clear();
+    printing::PrinterSemanticCapsAndDefaults::Paper paper(
+        /*display_name=*/"", kMediaSizeVendorId,
+        gfx::Size(kMediaSizeWidth, kCustomMediaSizeMin),
+        /*printable_area_um=*/gfx::Rect(), kMediaSizeHeight,
+        /*has_borderless_variant=*/false,
+        /*supported_margins_um=*/kPaperMarginsUm);
+    capabilities.papers.push_back(paper);
 
-}  // namespace
+    return capabilities;
+  }
+};
 
-TEST(PrintingApiUtilsTest, GetDefaultPrinterRules) {
+TEST_F(PrintingApiUtilsTest, GetDefaultPrinterRules) {
   std::string default_printer_rules_str =
       R"({"kind": "local", "idPattern": "id.*", "namePattern": "name.*"})";
   std::optional<DefaultPrinterRules> default_printer_rules =
@@ -347,14 +348,14 @@ TEST(PrintingApiUtilsTest, GetDefaultPrinterRules) {
   EXPECT_EQ("name.*", default_printer_rules->name_pattern);
 }
 
-TEST(PrintingApiUtilsTest, GetDefaultPrinterRules_EmptyPref) {
+TEST_F(PrintingApiUtilsTest, GetDefaultPrinterRules_EmptyPref) {
   std::string default_printer_rules_str;
   std::optional<DefaultPrinterRules> default_printer_rules =
       GetDefaultPrinterRules(default_printer_rules_str);
   EXPECT_FALSE(default_printer_rules.has_value());
 }
 
-TEST(PrintingApiUtilsTest, PrinterToIdl) {
+TEST_F(PrintingApiUtilsTest, PrinterToIdl) {
   chromeos::Printer printer = PrinterFrom(kId, kName, kDescription, true, kUri);
 
   std::optional<DefaultPrinterRules> default_printer_rules =
@@ -376,12 +377,9 @@ TEST(PrintingApiUtilsTest, PrinterToIdl) {
   EXPECT_EQ(kRank, *idl_printer.recently_used_rank);
 }
 
-TEST(PrintingApiUtilsTest, ParsePrintTicket) {
+TEST_F(PrintingApiUtilsTest, ParsePrintTicket) {
   {
-    base::test::ScopedFeatureList feature_list;
-    feature_list.InitAndDisableFeature(
-        printing::features::kApiPrintingMarginsAndScale);
-    base::Value::Dict cjt_ticket = base::test::ParseJsonDict(kCjt);
+    base::DictValue cjt_ticket = base::test::ParseJsonDict(kCjt);
     std::unique_ptr<printing::PrintSettings> settings =
         ParsePrintTicket(std::move(cjt_ticket));
 
@@ -397,24 +395,6 @@ TEST(PrintingApiUtilsTest, ParsePrintTicket) {
     EXPECT_FALSE(settings->collate());
     EXPECT_THAT(settings->advanced_settings(),
                 Contains(Pair(kVendorItemId, kVendorItemValue)));
-    // Since the feature is disabled, no print-scaling should be applied and the
-    // margin type should be the default.
-    EXPECT_EQ(printing::mojom::PrintScalingType::kUnknownPrintScalingType,
-              settings->print_scaling());
-    EXPECT_EQ(settings->margin_type(),
-              printing::mojom::MarginType::kDefaultMargins);
-    EXPECT_EQ(settings->requested_custom_margins_in_microns(),
-              printing::PageMargins());
-  }
-
-  // Once the feature is enabled, print-scaling should be applied and the margin
-  // type should be custom.
-  {
-    base::test::ScopedFeatureList feature_list(
-        printing::features::kApiPrintingMarginsAndScale);
-    std::unique_ptr<printing::PrintSettings> settings =
-        ParsePrintTicket(base::test::ParseJsonDict(kCjt));
-    ASSERT_TRUE(settings);
     EXPECT_EQ(printing::mojom::PrintScalingType::kFit,
               settings->print_scaling());
 
@@ -434,10 +414,7 @@ TEST(PrintingApiUtilsTest, ParsePrintTicket) {
 
 // Test that parsing CJT with FitToPage values either succeeds or fails
 // if the value is unknown.
-TEST(PrintingApiUtilsTest, ParsePrintTicketFitToPage) {
-  base::test::ScopedFeatureList feature_list(
-      printing::features::kApiPrintingMarginsAndScale);
-
+TEST_F(PrintingApiUtilsTest, ParsePrintTicketFitToPage) {
   struct test_case {
     std::string_view fit_to_page_type;
     printing::mojom::PrintScalingType expected_print_scaling;
@@ -454,7 +431,7 @@ TEST(PrintingApiUtilsTest, ParsePrintTicketFitToPage) {
   for (const auto& test_case : kTestCases) {
     const std::string cjt_json =
         absl::StrFormat(kCjtWithFitToPageTemplate, test_case.fit_to_page_type);
-    base::Value::Dict cjt_ticket = base::test::ParseJsonDict(cjt_json);
+    base::DictValue cjt_ticket = base::test::ParseJsonDict(cjt_json);
     std::unique_ptr<printing::PrintSettings> settings =
         ParsePrintTicket(std::move(cjt_ticket));
     ASSERT_TRUE(settings);
@@ -462,11 +439,8 @@ TEST(PrintingApiUtilsTest, ParsePrintTicketFitToPage) {
   }
 }
 
-TEST(PrintingApiUtilsTest, ParsePrintTicketNoFitToPageAndNoMargins) {
-  base::test::ScopedFeatureList feature_list(
-      printing::features::kApiPrintingMarginsAndScale);
-
-  base::Value::Dict cjt_ticket =
+TEST_F(PrintingApiUtilsTest, ParsePrintTicketNoFitToPageAndNoMargins) {
+  base::DictValue cjt_ticket =
       base::test::ParseJsonDict(kCjtNoFitToPageAndMargins);
   std::unique_ptr<printing::PrintSettings> settings =
       ParsePrintTicket(std::move(cjt_ticket));
@@ -482,33 +456,24 @@ TEST(PrintingApiUtilsTest, ParsePrintTicketNoFitToPageAndNoMargins) {
   EXPECT_FALSE(settings->borderless());
 }
 
-TEST(PrintingApiUtilsTest, ParsePrintTicketInvalidVendorItem) {
+TEST_F(PrintingApiUtilsTest, ParsePrintTicketInvalidVendorItem) {
   // Even though this CJT has an invalid vendor item, it should parse correctly.
   // It will fail when the CJT is checked vs the printer capabilities.
   EXPECT_TRUE(
       ParsePrintTicket(base::test::ParseJsonDict(kInvalidVendorItemCjt)));
 }
 
-TEST(PrintingApiUtilsTest, ParsePrintTicketInvalidMarginsItem) {
+TEST_F(PrintingApiUtilsTest, ParsePrintTicketInvalidMarginsItem) {
   const std::string kInvalidMarginsCjt =
       base::StringPrintf(kTemplateMargingsItemCjt, -40, 20, -30, 40);
-  EXPECT_TRUE(ParsePrintTicket(base::test::ParseJsonDict(kInvalidMarginsCjt)));
-
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
-      printing::features::kApiPrintingMarginsAndScale);
   EXPECT_FALSE(ParsePrintTicket(base::test::ParseJsonDict(kInvalidMarginsCjt)));
 }
 
-TEST(PrintingApiUtilsTest, ParsePrintTicket_IncompleteCjt) {
+TEST_F(PrintingApiUtilsTest, ParsePrintTicket_IncompleteCjt) {
   EXPECT_FALSE(ParsePrintTicket(base::test::ParseJsonDict(kIncompleteCjt)));
 }
 
-TEST(PrintingApiUtilsTest, ParsePrintTicket_BorderlessMargins) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
-      printing::features::kApiPrintingMarginsAndScale);
-
+TEST_F(PrintingApiUtilsTest, ParsePrintTicket_BorderlessMargins) {
   const std::string kBorderlessCjt =
       base::StringPrintf(kTemplateMargingsItemCjt, 0, 0, 0, 0);
   std::unique_ptr<printing::PrintSettings> settings =
@@ -528,11 +493,7 @@ TEST(PrintingApiUtilsTest, ParsePrintTicket_BorderlessMargins) {
             kExpectedPageMargins);
 }
 
-TEST(PrintingApiUtilsTest, ParsePrintTicket_MixedMargins) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
-      printing::features::kApiPrintingMarginsAndScale);
-
+TEST_F(PrintingApiUtilsTest, ParsePrintTicket_MixedMargins) {
   const std::string kMixedMarginsCjt =
       base::StringPrintf(kTemplateMargingsItemCjt, 0, 3150, 0, 2830);
   std::unique_ptr<printing::PrintSettings> settings =
@@ -555,7 +516,7 @@ TEST(PrintingApiUtilsTest, ParsePrintTicket_MixedMargins) {
             kExpectedPageMargins);
 }
 
-TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility) {
+TEST_F(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility) {
   std::unique_ptr<printing::PrintSettings> settings = ConstructPrintSettings();
   printing::PrinterSemanticCapsAndDefaults capabilities =
       ConstructPrinterCapabilities();
@@ -563,7 +524,7 @@ TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility) {
       CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
 }
 
-TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Color) {
+TEST_F(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Color) {
   std::unique_ptr<printing::PrintSettings> settings = ConstructPrintSettings();
   printing::PrinterSemanticCapsAndDefaults capabilities =
       ConstructPrinterCapabilities();
@@ -572,7 +533,7 @@ TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Color) {
       CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
 }
 
-TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Duplex) {
+TEST_F(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Duplex) {
   std::unique_ptr<printing::PrintSettings> settings = ConstructPrintSettings();
   printing::PrinterSemanticCapsAndDefaults capabilities =
       ConstructPrinterCapabilities();
@@ -581,7 +542,7 @@ TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Duplex) {
       CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
 }
 
-TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Copies) {
+TEST_F(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Copies) {
   std::unique_ptr<printing::PrintSettings> settings = ConstructPrintSettings();
   printing::PrinterSemanticCapsAndDefaults capabilities =
       ConstructPrinterCapabilities();
@@ -590,7 +551,7 @@ TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Copies) {
       CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
 }
 
-TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Dpi) {
+TEST_F(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Dpi) {
   std::unique_ptr<printing::PrintSettings> settings = ConstructPrintSettings();
   printing::PrinterSemanticCapsAndDefaults capabilities =
       ConstructPrinterCapabilities();
@@ -599,8 +560,8 @@ TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Dpi) {
       CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
 }
 
-TEST(PrintingApiUtilsTest,
-     CheckSettingsAndCapabilitiesCompatibility_MediaSize) {
+TEST_F(PrintingApiUtilsTest,
+       CheckSettingsAndCapabilitiesCompatibility_MediaSize) {
   std::unique_ptr<printing::PrintSettings> settings = ConstructPrintSettings();
   printing::PrinterSemanticCapsAndDefaults capabilities =
       ConstructPrinterCapabilities();
@@ -609,8 +570,8 @@ TEST(PrintingApiUtilsTest,
       CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
 }
 
-TEST(PrintingApiUtilsTest,
-     CheckSettingsAndCapabilitiesCompatibilityCustomMediaSize) {
+TEST_F(PrintingApiUtilsTest,
+       CheckSettingsAndCapabilitiesCompatibilityCustomMediaSize) {
   std::unique_ptr<printing::PrintSettings> settings = ConstructPrintSettings();
   printing::PrinterSemanticCapsAndDefaults capabilities =
       ConstructPrinterCapabilitiesWithCustomSize();
@@ -618,8 +579,8 @@ TEST(PrintingApiUtilsTest,
       CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
 }
 
-TEST(PrintingApiUtilsTest,
-     CheckSettingsAndCapabilitiesCompatibilityCustomMediaSizeLongWidth) {
+TEST_F(PrintingApiUtilsTest,
+       CheckSettingsAndCapabilitiesCompatibilityCustomMediaSizeLongWidth) {
   std::unique_ptr<printing::PrintSettings> settings = ConstructPrintSettings();
   // Update the requested media so the width is wider than our custom size.
   printing::PrintSettings::RequestedMedia media = settings->requested_media();
@@ -631,8 +592,8 @@ TEST(PrintingApiUtilsTest,
       CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
 }
 
-TEST(PrintingApiUtilsTest,
-     CheckSettingsAndCapabilitiesCompatibilityCustomMediaSizeShortHeight) {
+TEST_F(PrintingApiUtilsTest,
+       CheckSettingsAndCapabilitiesCompatibilityCustomMediaSizeShortHeight) {
   std::unique_ptr<printing::PrintSettings> settings = ConstructPrintSettings();
   // Update the requested media so the length is shorter than our custom size.
   printing::PrintSettings::RequestedMedia media = settings->requested_media();
@@ -644,7 +605,8 @@ TEST(PrintingApiUtilsTest,
       CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
 }
 
-TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Collate) {
+TEST_F(PrintingApiUtilsTest,
+       CheckSettingsAndCapabilitiesCompatibility_Collate) {
   std::unique_ptr<printing::PrintSettings> settings = ConstructPrintSettings();
   printing::PrinterSemanticCapsAndDefaults capabilities =
       ConstructPrinterCapabilities();
@@ -653,7 +615,8 @@ TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Collate) {
       CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
 }
 
-TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Advanced) {
+TEST_F(PrintingApiUtilsTest,
+       CheckSettingsAndCapabilitiesCompatibility_Advanced) {
   std::unique_ptr<printing::PrintSettings> settings = ConstructPrintSettings();
   printing::PrinterSemanticCapsAndDefaults capabilities =
       ConstructPrinterCapabilities();
@@ -663,8 +626,8 @@ TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Advanced) {
       CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
 }
 
-TEST(PrintingApiUtilsTest,
-     CheckSettingsAndCapabilitiesCompatibility_AdvancedBadAttribute) {
+TEST_F(PrintingApiUtilsTest,
+       CheckSettingsAndCapabilitiesCompatibility_AdvancedBadAttribute) {
   std::unique_ptr<printing::PrintSettings> settings = ConstructPrintSettings();
   printing::PrinterSemanticCapsAndDefaults capabilities =
       ConstructPrinterCapabilities();
@@ -673,8 +636,8 @@ TEST(PrintingApiUtilsTest,
       CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
 }
 
-TEST(PrintingApiUtilsTest,
-     CheckSettingsAndCapabilitiesCompatibility_AdvancedBadValue) {
+TEST_F(PrintingApiUtilsTest,
+       CheckSettingsAndCapabilitiesCompatibility_AdvancedBadValue) {
   std::unique_ptr<printing::PrintSettings> settings = ConstructPrintSettings();
   printing::PrinterSemanticCapsAndDefaults capabilities =
       ConstructPrinterCapabilities();
@@ -683,8 +646,8 @@ TEST(PrintingApiUtilsTest,
       CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
 }
 
-TEST(PrintingApiUtilsTest,
-     CheckSettingsAndCapabilitiesCompatibility_AdvancedInvalidValue) {
+TEST_F(PrintingApiUtilsTest,
+       CheckSettingsAndCapabilitiesCompatibility_AdvancedInvalidValue) {
   std::unique_ptr<printing::PrintSettings> settings = ConstructPrintSettings();
   printing::PrinterSemanticCapsAndDefaults capabilities =
       ConstructPrinterCapabilities();
@@ -693,8 +656,8 @@ TEST(PrintingApiUtilsTest,
       CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
 }
 
-TEST(PrintingApiUtilsTest,
-     CheckSettingsAndCapabilitiesCompatibility_PrintScaling) {
+TEST_F(PrintingApiUtilsTest,
+       CheckSettingsAndCapabilitiesCompatibility_PrintScaling) {
   std::unique_ptr<printing::PrintSettings> settings = ConstructPrintSettings();
   printing::PrinterSemanticCapsAndDefaults capabilities =
       ConstructPrinterCapabilities();
@@ -709,18 +672,6 @@ TEST(PrintingApiUtilsTest,
       printing::mojom::PrintScalingType::kNone,
   };
 
-  // Test with feature disabled - all types should pass as check is skipped.
-  for (const auto& scaling_type : kScalingTypes) {
-    settings->set_print_scaling(scaling_type);
-    EXPECT_TRUE(
-        CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
-  }
-
-  // Re-enable feature for further tests.
-  base::test::ScopedFeatureList feature_list(
-      printing::features::kApiPrintingMarginsAndScale);
-
-  capabilities.print_scaling_types.clear();
   // Capabilities have no print scaling types, so all types except unknown
   // should fail.
   for (const auto& scaling_type : kScalingTypes) {
@@ -767,7 +718,8 @@ TEST(PrintingApiUtilsTest,
   }
 }
 
-TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Margins) {
+TEST_F(PrintingApiUtilsTest,
+       CheckSettingsAndCapabilitiesCompatibility_Margins) {
   std::unique_ptr<printing::PrintSettings> settings = ConstructPrintSettings();
   printing::PrinterSemanticCapsAndDefaults capabilities =
       ConstructPrinterCapabilities();
@@ -785,19 +737,10 @@ TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Margins) {
     ASSERT_FALSE(paper.supported_margins_um().has_value());
   }
 
-  {
-    // Test with feature disabled - despite margins not being supported and
-    // provided, the check should pass as the feature is disabled.
-    base::test::ScopedFeatureList feature_list;
-    feature_list.InitAndDisableFeature(
-        printing::features::kApiPrintingMarginsAndScale);
-    EXPECT_TRUE(
-        CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
-  }
-
-  // Re-enable feature for further tests.
-  base::test::ScopedFeatureList feature_list(
-      printing::features::kApiPrintingMarginsAndScale);
+  // Since the settings contain custom margins but the capabilities do not
+  // support any, the compatibility check should fail.
+  EXPECT_FALSE(
+      CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
 
   // Add a paper with supported margins.
   const printing::PaperMargins kSupportedMargins(1500, 500, 3241, 3451);
@@ -864,38 +807,14 @@ TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilitiesCompatibility_Margins) {
   }
 }
 
-TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilities_PrintScalingHistogram) {
+TEST_F(PrintingApiUtilsTest,
+       CheckSettingsAndCapabilities_PrintScalingHistogram) {
   std::unique_ptr<printing::PrintSettings> settings = ConstructPrintSettings();
   printing::PrinterSemanticCapsAndDefaults capabilities =
       ConstructPrinterCapabilities();
   // Set supported print scaling types.
   capabilities.print_scaling_types = {printing::mojom::PrintScalingType::kFit,
                                       printing::mojom::PrintScalingType::kAuto};
-
-  // Try with the feature disabled first - no matter if the print scaling is
-  // correct or not, the histogram should not be recorded.
-  {
-    base::HistogramTester histogram_tester;
-    base::test::ScopedFeatureList feature_list;
-    feature_list.InitAndDisableFeature(
-        printing::features::kApiPrintingMarginsAndScale);
-
-    // Unsupported print scaling.
-    settings->set_print_scaling(printing::mojom::PrintScalingType::kFill);
-    ASSERT_TRUE(
-        CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
-
-    // Supported print scaling.
-    settings->set_print_scaling(printing::mojom::PrintScalingType::kFit);
-    ASSERT_TRUE(
-        CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
-    histogram_tester.ExpectTotalCount(
-        "Extensions.Printing.UsesSupportedPrintScaling", 0);
-  }
-
-  // Enable the feature now.
-  base::test::ScopedFeatureList feature_list(
-      printing::features::kApiPrintingMarginsAndScale);
 
   // Verify that the UMA histogram is recorded with false when unsupported
   // print scaling is passed.
@@ -931,7 +850,7 @@ TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilities_PrintScalingHistogram) {
   }
 }
 
-TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilities_MarginHistogram) {
+TEST_F(PrintingApiUtilsTest, CheckSettingsAndCapabilities_MarginHistogram) {
   std::unique_ptr<printing::PrintSettings> settings = ConstructPrintSettings();
 
   const printing::PaperMargins kSupportedMargins(1500, 500, 3241, 3451);
@@ -944,41 +863,6 @@ TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilities_MarginHistogram) {
       /*bottom=*/kSupportedMargins.bottom_margin_um};
   settings->SetCustomMarginsForBackend(kMargins);
 
-  // Try with the feature disabled first - no matter if the margins are correct
-  // or not, the histogram should not be recorded.
-  {
-    base::HistogramTester histogram_tester;
-    base::test::ScopedFeatureList feature_list;
-    feature_list.InitAndDisableFeature(
-        printing::features::kApiPrintingMarginsAndScale);
-
-    printing::PrinterSemanticCapsAndDefaults capabilities =
-        ConstructPrinterCapabilities();
-    // There must be no supported margins first.
-    for (const auto& paper : capabilities.papers) {
-      ASSERT_FALSE(paper.supported_margins_um().has_value());
-    }
-
-    ASSERT_TRUE(
-        CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
-
-    // Add a paper with supported margins.
-    capabilities.papers.emplace_back(
-        /*display_name=*/"", /*vendor_id=*/"",
-        /*size_um=*/gfx::Size(kMediaSizeWidth, kMediaSizeHeight),
-        /*printable_area_um=*/gfx::Rect(kMediaSizeWidth, kMediaSizeHeight),
-        /*max_height_um=*/0, /*has_borderless_variant=*/false,
-        /*supported_margins_um=*/kSupportedMargins);
-
-    ASSERT_TRUE(
-        CheckSettingsAndCapabilitiesCompatibility(*settings, capabilities));
-    histogram_tester.ExpectTotalCount(
-        "Extensions.Printing.UsesSupportedMargins", 0);
-  }
-
-  // Enable the feature now. The histogram should be recorded.
-  base::test::ScopedFeatureList feature_list(
-      printing::features::kApiPrintingMarginsAndScale);
   // Test with margins that are not supported.
   {
     base::HistogramTester histogram_tester;
@@ -1026,4 +910,5 @@ TEST(PrintingApiUtilsTest, CheckSettingsAndCapabilities_MarginHistogram) {
   }
 }
 
+}  // namespace
 }  // namespace extensions

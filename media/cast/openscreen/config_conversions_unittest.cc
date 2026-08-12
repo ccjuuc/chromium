@@ -4,7 +4,8 @@
 
 #include "media/cast/openscreen/config_conversions.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "media/base/media_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -61,7 +62,7 @@ void ValidateVideoConfig(const openscreen::cast::VideoCaptureConfig& config,
   EXPECT_EQ(config.target_playout_delay, expected.target_playout_delay);
   ASSERT_EQ(config.resolutions.size(), expected.resolutions.size());
   for (const auto& resolution : config.resolutions) {
-    EXPECT_TRUE(base::Contains(expected.resolutions, resolution));
+    EXPECT_TRUE(std::ranges::contains(expected.resolutions, resolution));
   }
 }
 
@@ -75,10 +76,10 @@ openscreen::cast::AudioCaptureConfig CreateAudioCaptureConfig() {
 
 media::AudioDecoderConfig CreateAudioDecoderConfig(
     media::AudioCodec codec,
-    media::ChannelLayout channel_layout,
+    media::ChannelLayoutConfig channel_layout_config,
     int samples_per_second) {
   return media::AudioDecoderConfig(codec, media::SampleFormat::kSampleFormatF32,
-                                   channel_layout, samples_per_second,
+                                   channel_layout_config, samples_per_second,
                                    media::EmptyExtraData(),
                                    media::EncryptionScheme::kUnencrypted);
 }
@@ -109,14 +110,13 @@ media::VideoDecoderConfig CreateVideoDecoderConfig(
 TEST(ConfigConversionsTest, AudioConfigCodecConversion) {
   auto capture_config = CreateAudioCaptureConfig();
   auto decoder_config = CreateAudioDecoderConfig(
-      media::AudioCodec::kAAC, media::ChannelLayout::CHANNEL_LAYOUT_STEREO, 42);
+      media::AudioCodec::kAAC, media::ChannelLayoutConfig::Stereo(), 42);
   ValidateAudioConfig(ToAudioDecoderConfig(capture_config), decoder_config);
   ValidateAudioConfig(ToAudioCaptureConfig(decoder_config), capture_config);
 
   capture_config.codec = openscreen::cast::AudioCodec::kOpus;
-  decoder_config =
-      CreateAudioDecoderConfig(media::AudioCodec::kOpus,
-                               media::ChannelLayout::CHANNEL_LAYOUT_STEREO, 42);
+  decoder_config = CreateAudioDecoderConfig(
+      media::AudioCodec::kOpus, media::ChannelLayoutConfig::Stereo(), 42);
   ValidateAudioConfig(ToAudioDecoderConfig(capture_config), decoder_config);
   ValidateAudioConfig(ToAudioCaptureConfig(decoder_config), capture_config);
 }
@@ -124,13 +124,13 @@ TEST(ConfigConversionsTest, AudioConfigCodecConversion) {
 TEST(ConfigConversionsTest, AudioConfigChannelsConversion) {
   auto capture_config = CreateAudioCaptureConfig();
   auto decoder_config = CreateAudioDecoderConfig(
-      media::AudioCodec::kAAC, media::ChannelLayout::CHANNEL_LAYOUT_STEREO, 42);
+      media::AudioCodec::kAAC, media::ChannelLayoutConfig::Stereo(), 42);
   ValidateAudioConfig(ToAudioDecoderConfig(capture_config), decoder_config);
   ValidateAudioConfig(ToAudioCaptureConfig(decoder_config), capture_config);
 
   capture_config.channels = 1;
   decoder_config = CreateAudioDecoderConfig(
-      media::AudioCodec::kAAC, media::ChannelLayout::CHANNEL_LAYOUT_MONO, 42);
+      media::AudioCodec::kAAC, media::ChannelLayoutConfig::Mono(), 42);
   ValidateAudioConfig(ToAudioDecoderConfig(capture_config), decoder_config);
   ValidateAudioConfig(ToAudioCaptureConfig(decoder_config), capture_config);
 
@@ -140,26 +140,25 @@ TEST(ConfigConversionsTest, AudioConfigChannelsConversion) {
 TEST(ConfigConversionsTest, AudioConfigSampleRateConversion) {
   auto capture_config = CreateAudioCaptureConfig();
   auto decoder_config = CreateAudioDecoderConfig(
-      media::AudioCodec::kAAC, media::ChannelLayout::CHANNEL_LAYOUT_STEREO, 42);
+      media::AudioCodec::kAAC, media::ChannelLayoutConfig::Stereo(), 42);
   ValidateAudioConfig(ToAudioDecoderConfig(capture_config), decoder_config);
   ValidateAudioConfig(ToAudioCaptureConfig(decoder_config), capture_config);
 
   capture_config.sample_rate = 1234;
   decoder_config = CreateAudioDecoderConfig(
-      media::AudioCodec::kAAC, media::ChannelLayout::CHANNEL_LAYOUT_STEREO,
-      1234);
+      media::AudioCodec::kAAC, media::ChannelLayoutConfig::Stereo(), 1234);
   ValidateAudioConfig(ToAudioDecoderConfig(capture_config), decoder_config);
   ValidateAudioConfig(ToAudioCaptureConfig(decoder_config), capture_config);
 
   capture_config.sample_rate = -1;
   decoder_config = CreateAudioDecoderConfig(
-      media::AudioCodec::kAAC, media::ChannelLayout::CHANNEL_LAYOUT_STEREO, -1);
+      media::AudioCodec::kAAC, media::ChannelLayoutConfig::Stereo(), -1);
   ValidateAudioConfig(ToAudioDecoderConfig(capture_config), decoder_config);
   ValidateAudioConfig(ToAudioCaptureConfig(decoder_config), capture_config);
 
   capture_config.sample_rate = 0;
   decoder_config = CreateAudioDecoderConfig(
-      media::AudioCodec::kAAC, media::ChannelLayout::CHANNEL_LAYOUT_STEREO, 0);
+      media::AudioCodec::kAAC, media::ChannelLayoutConfig::Stereo(), 0);
   ValidateAudioConfig(ToAudioDecoderConfig(capture_config), decoder_config);
   ValidateAudioConfig(ToAudioCaptureConfig(decoder_config), capture_config);
 }

@@ -8,6 +8,7 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.database.ContentObserver;
+import android.media.AudioAttributes;
 import android.media.AudioDeviceInfo;
 import android.media.AudioFormat;
 import android.media.AudioManager;
@@ -27,6 +28,7 @@ import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.Log;
 import org.chromium.base.ThreadUtils.ThreadChecker;
 import org.chromium.base.metrics.RecordHistogram;
@@ -87,22 +89,22 @@ class AudioManagerAndroid {
             mSampleRates = sampleRates;
         }
 
-        @CalledByNative("AudioDevice")
+        @CalledByNative
         private int id() {
             return mId;
         }
 
-        @CalledByNative("AudioDevice")
+        @CalledByNative
         private @JniType("std::optional<std::string>") @Nullable String name() {
             return mName;
         }
 
-        @CalledByNative("AudioDevice")
+        @CalledByNative
         private int type() {
             return mType;
         }
 
-        @CalledByNative("AudioDevice")
+        @CalledByNative
         private @JniType("std::vector<int>") int[] sampleRates() {
             return mSampleRates;
         }
@@ -179,6 +181,14 @@ class AudioManagerAndroid {
                 hasPermission(android.Manifest.permission.MODIFY_AUDIO_SETTINGS);
         if (DEBUG && !mHasModifyAudioSettingsPermission) {
             logd("MODIFY_AUDIO_SETTINGS permission is missing");
+        }
+
+        // Set the audio capture policy based on the device class.
+        // For non-desktop devices, restrict capture to the system apps, unless the
+        // feature is enabled to allow capture for all apps on all form factors.
+        if (!DeviceInfo.isDesktop()
+                && !AudioManagerAndroidJni.get().isAudioPlaybackCaptureAllowedFeatureEnabled()) {
+            mAudioManager.setAllowedCapturePolicy(AudioAttributes.ALLOW_CAPTURE_BY_SYSTEM);
         }
 
         mCommunicationDeviceSelector.init();
@@ -490,7 +500,7 @@ class AudioManagerAndroid {
     private static @Nullable Optional<Method> sGetOutputLatency;
 
     // Reflect |methodName(int)|, and return it.
-    private static final @Nullable Method reflectMethod(String methodName) {
+    private static @Nullable Method reflectMethod(String methodName) {
         try {
             return AudioManager.class.getMethod(methodName, int.class);
         } catch (NoSuchMethodException e) {
@@ -783,5 +793,7 @@ class AudioManagerAndroid {
         void setMute(long nativeAudioManagerAndroid, boolean muted);
 
         void onScoStateChanged(long nativeAudioManagerAndroid, boolean state);
+
+        boolean isAudioPlaybackCaptureAllowedFeatureEnabled();
     }
 }

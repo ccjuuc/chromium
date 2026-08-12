@@ -57,6 +57,9 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // Wait until `matcher` is accessible (not nil) on the device.
 - (void)waitForMatcher:(id<GREYMatcher>)matcher;
 
+// Returns YES if `matcher` is sufficiently_visible;
+- (BOOL)isMatcherSufficientlyVisible:(id<GREYMatcher>)matcher;
+
 #pragma mark - Device Utilities
 
 // Returns YES if running on an iPad.
@@ -84,6 +87,9 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // vertical and regular horizontal size class.
 - (BOOL)isRegularXRegularSizeClass;
 
+// Returns YES if the application window is in windowed mode (multitasking).
+- (BOOL)isWindowedMode;
+
 // Stops primes performance metrics logging by calling into the
 // internal framework (should only be used by performance tests)
 - (void)primesStopLogging;
@@ -98,11 +104,11 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // Returns whether the current layout is showing the bottom omnibox.
 - (BOOL)isCurrentLayoutBottomOmnibox;
 
-// Returns whether the Ask Gemini Chip feature is enabled.
-- (BOOL)isAskGeminiChipEnabled;
-
 // Returns whether the ComposeboxIOS feature is enabled.
 - (BOOL)isComposeboxIOSEnabled;
+
+// Returns whether the Proactive Suggestions Framework feature is enabled.
+- (BOOL)isProactiveSuggestionsFrameworkEnabled;
 
 // Returns the interface orientation of the scene.
 - (UIInterfaceOrientation)interfaceOrientation;
@@ -118,6 +124,9 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // profile (as opposed to managed profiles), as per
 // `ProfileAttributesStorageIOS::GetPersonalProfileName()`.
 - (NSString*)personalProfileName;
+
+// Waits for the current profile name to match `profileName`.
+- (void)waitForCurrentProfileName:(NSString*)profileName;
 
 #pragma mark - History Utilities (EG2)
 
@@ -150,18 +159,34 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // options.
 - (void)sceneOpenURL:(const GURL&)URL;
 
+// Continues `userActivity` using some connected scene with a specific URL.
+- (void)sceneContinueUserActivityWithType:(NSString*)activityType
+                                      url:(NSString*)urlString;
+
+// Loads `URL` in the current WebState with transition type
+// ui::PAGE_TRANSITION_TYPED, and waits for the loading to complete within a
+// specified `timeout`. This timeout is used for both webView appearance and
+// page load; time taken is approximately `timeout` for page load but total time
+// could take up to double the `timeout`.
+- (void)loadURL:(const GURL&)URL withTimeout:(base::TimeDelta)timeout;
+
+// Loads `URL` in the current WebState with transition type
+// ui::PAGE_TRANSITION_TYPED, and waits for the loading to complete within a
+// specified `timeout`. This timeout is used for both webView appearance and
+// page load; time taken is approximately `timeout` for page load but total time
+// could take up to double the `timeout`. Returns nil on success, or else an
+// NSError indicating why the operation failed.
+- (NSError*)loadURL:(const GURL&)URL
+    timeoutWithError:(base::TimeDelta)timeout [[nodiscard]];
+
 // Loads `URL` in the current WebState with transition type
 // ui::PAGE_TRANSITION_TYPED, and if waitForCompletion is YES
 // waits for the loading to complete within a timeout.
-// Returns nil on success, or else an NSError indicating why the operation
-// failed.
 - (void)loadURL:(const GURL&)URL waitForCompletion:(BOOL)wait;
 
 // Loads `URL` in the current WebState with transition type
 // ui::PAGE_TRANSITION_TYPED, and waits for the loading to complete within a
 // timeout.
-// If the condition is not met within a timeout returns an NSError indicating
-// why the operation failed, otherwise nil.
 - (void)loadURL:(const GURL&)URL;
 
 // Returns YES if the current WebState is loading.
@@ -179,6 +204,10 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // within a timeout, or a GREYAssert is induced.
 - (void)goBack;
 
+// Starts navigating forward to the next page without waiting for the loading to
+// complete.
+- (void)startGoingForward;
+
 // Navigates forward to the next page and waits for the loading to complete
 // within a timeout, or a GREYAssert is induced.
 - (void)goForward;
@@ -186,6 +215,14 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // Waits for the page to finish loading within a timeout, or a GREYAssert is
 // induced.
 - (void)waitForPageToFinishLoading;
+
+// Waits for all WebStates across foreground tabs to finish loading within a
+// timeout, or a GREYAssert is induced.
+- (void)waitForAllWebStatesToFinishLoading;
+
+// Waits for the page to finish loading within the given `timeout`. Returns nil
+// on success, or else an NSError indicating why the operation failed.
+- (NSError*)waitForPageToFinishLoadingWithTimeout:(base::TimeDelta)timeout;
 
 // Waits for the matcher to return an element that is sufficiently visible.
 - (void)waitForSufficientlyVisibleElementWithMatcher:(id<GREYMatcher>)matcher;
@@ -231,9 +268,6 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // Waits for there to be `count` number of incognito tabs within a timeout, or a
 // GREYAssert is induced.
 - (void)waitForIncognitoTabCount:(NSUInteger)count;
-
-// Loads `URL` as if it was opened from an external application.
-- (void)openURLFromExternalApp:(const GURL&)URL;
 
 // Programmatically dismisses settings screen.
 - (void)dismissSettings;
@@ -321,6 +355,51 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // Injects device info to sync FakeServer.
 - (void)addFakeSyncServerDeviceInfo:(NSString*)deviceName
                lastUpdatedTimestamp:(base::Time)lastUpdatedTimestamp;
+
+// Injects a send tab to self entry to sync FakeServer.
+- (void)addFakeSyncServerSendTabToSelfEntryWithURL:(NSString*)URL
+                                             title:(NSString*)title
+                                        deviceName:(NSString*)deviceName
+                                  targetDeviceGUID:(NSString*)targetDeviceGUID;
+
+// Adds a fake Send Tab To Self entry to the local model and returns its GUID.
+// `formFieldData` is a dictionary where keys are form control names and
+// values are the values to fill.
+- (NSString*)addFakeSendTabToSelfEntryWithURL:(NSString*)url
+                                        title:(NSString*)title
+                                formFieldData:
+                                    (NSDictionary<NSString*, NSString*>*)
+                                        formFieldData;
+
+// Adds a fake Send Tab To Self entry with the given text fragment to the local
+// model and returns its GUID.
+- (NSString*)addFakeSendTabToSelfEntryWithURL:(NSString*)url
+                                        title:(NSString*)title
+                                 textFragment:(NSString*)textFragment;
+
+// Waits for the local Send Tab To Self model to contain an entry with the
+// given GUID.
+- (void)waitForSendTabToSelfEntryWithGUID:(NSString*)guid;
+
+// Returns the generated text fragment for the given URL, or nil if no entry
+// exists or no fragment is set.
+- (NSString*)textFragmentForSendTabToSelfEntryWithURL:(NSString*)URL;
+
+// Opens a new tab with the given URL and attaches the text fragment to its
+// internal NavigationItem to trigger scroll restoration upon page load.
+- (void)openNewTabWithURL:(NSString*)url textFragment:(NSString*)textFragment;
+
+// Opens a new tab with the given URL, text fragment, and marks it as
+// originating from Send Tab To Self with the given entry GUID.
+- (void)openSendTabToSelfNewTabWithURL:(NSString*)url
+                          textFragment:(NSString*)textFragment
+                             entryGUID:(NSString*)guid;
+
+// Opens a new background tab with the given URL, text fragment, and marks it
+// as originating from Send Tab To Self with the given entry GUID.
+- (void)openSendTabToSelfNewBackgroundTabWithURL:(NSString*)url
+                                    textFragment:(NSString*)textFragment
+                                       entryGUID:(NSString*)guid;
 
 // Triggers a sync cycle for a `type`.
 - (void)triggerSyncCycleForType:(syncer::DataType)type;
@@ -426,6 +505,9 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // Returns the index of active tab in normal (non-incognito) mode.
 - (NSUInteger)indexOfActiveNormalTab;
 
+// Returns YES if the current active WebState is showing a new tab page.
+- (BOOL)isCurrentTabNTP [[nodiscard]];
+
 // Simulates a backgrounding and raises an EarlGrey exception if simulation not
 // succeeded.
 - (void)simulateTabsBackgrounding;
@@ -464,6 +546,9 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // Shows the tab switcher by tapping the switcher button.  Works on both phone
 // and tablet.
 - (void)showTabSwitcher;
+
+// Hides the tab switcher.
+- (void)hideTabSwitcher;
 
 #pragma mark - Window utilities (EG2)
 
@@ -624,6 +709,11 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // is not met within a timeout a GREYAssert is induced.
 - (void)waitForWebStateFrameContainingText:(const std::string&)UTF8Text;
 
+// Waits for the main frame or an iframe to contain `UTF8Text`. If the condition
+// is not met within the given `timeout` a GREYAssert is induced.
+- (void)waitForWebStateFrameContainingText:(const std::string&)UTF8Text
+                                   timeout:(base::TimeDelta)timeout;
+
 // Waits for the current web state to contain `UTF8Text`. If the condition is
 // not met within the given `timeout` a GREYAssert is induced.
 - (void)waitForWebStateContainingText:(const std::string&)UTF8Text
@@ -749,6 +839,12 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // Returns YES if kTestFeature is enabled.
 - (BOOL)isTestFeatureEnabled;
 
+// Returns YES if kOverflowMenuHomeCustomizationEntrypoint is enabled.
+- (BOOL)isOverflowMenuHomeCustomizationEntrypointEnabled;
+
+// Returns YES if Fullscreen smooth scrolling is supported.
+- (BOOL)isFullscreenSmoothScrollingSupported;
+
 // Returns YES if DemographicMetricsReporting feature is enabled.
 - (BOOL)isDemographicMetricsReportingEnabled [[nodiscard]];
 
@@ -767,14 +863,31 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // can, open multiple windows.
 - (BOOL)areMultipleWindowsSupported;
 
-// Returns whether the NewOverflowMenu feature is enabled.
-- (BOOL)isNewOverflowMenuEnabled;
-
 // Returns whether the UseLensToSearchForImage feature is enabled;
 - (BOOL)isUseLensToSearchForImageEnabled;
 
+// Returns whether the YourSavedInfoSettingsPageIos feature is enabled.
+- (BOOL)isYourSavedInfoSettingsPageIosEnabled;
+
 // Returns whether the unfocused omnibox is at the bottom.
 - (BOOL)isUnfocusedOmniboxAtBottom;
+
+// Returns whether Chrome Next is enabled.
+- (BOOL)isChromeNextEnabled;
+
+// Returns whether overflow menu refactoring on the NTP is enabled.
+- (BOOL)isOverflowMenuNTPRefactorEnabled;
+
+// Returns whether the Chrome Next Share Icon is visible.
+- (BOOL)isChromeNextShareIconVisible;
+
+// Returns YES if the view with `accessibilityID` or any of its ancestors is
+// animating.
+- (BOOL)isViewAnimatingWithAccessibilityID:(NSString*)accessibilityID;
+
+// Waits for the view with `accessibilityID` to stop animating within `timeout`.
+- (void)waitForViewToStopAnimatingWithAccessibilityID:(NSString*)accessibilityID
+                                              timeout:(base::TimeDelta)timeout;
 
 #pragma mark - ContentSettings
 
@@ -827,6 +940,10 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // Creates a `AppGroupCommand` based on the provided text and writes it the
 // shared NSUserDefaults.
 - (void)setAppGroupCommandToSearchText:(NSString*)text;
+
+// Creates an incognito `AppGroupCommand` based on the provided text and writes
+// it the shared NSUserDefaults.
+- (void)setAppGroupCommandToIncognitoSearchText:(NSString*)text;
 
 #pragma mark - Pref Utilities (EG2)
 
@@ -995,8 +1112,8 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // is induced on failure.
 - (void)tapButtonInActivitySheetWithID:(NSString*)buttonText;
 
-// Taps the `more` button in the activity sheet that allows users to expand the
-// sheet to see all available actions on iOS 26+. Example:
+// Taps the `more` or `view more` button in the activity sheet that allows users
+// to expand the sheet to see all available actions on iOS 26+. Example:
 // https://screenshot.googleplex.com/8QGvXx4q2LNYoVJ
 - (void)tapMoreOptionButtonInActivitySheet;
 

@@ -237,21 +237,6 @@ int GetArcAndroidSdkVersionAsInt() {
   return arc_version;
 }
 
-bool IsArcVmRtVcpuEnabled(uint32_t cpus) {
-  // TODO(kansho): remove switch after tast test use Finch instead.
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          ash::switches::kEnableArcVmRtVcpu)) {
-    return true;
-  }
-  if (cpus == 2 && base::FeatureList::IsEnabled(kRtVcpuDualCore)) {
-    return true;
-  }
-  if (cpus > 2 && base::FeatureList::IsEnabled(kRtVcpuQuadCore)) {
-    return true;
-  }
-  return false;
-}
-
 bool IsArcVmUseHugePages() {
   return base::CommandLine::ForCurrentProcess()->HasSwitch(
       ash::switches::kArcVmUseHugePages);
@@ -620,8 +605,6 @@ int GetDaysUntilArcVmDataMigrationDeadline(PrefService* prefs) {
       ArcVmDataMigrationStatus::kStarted) {
     // If ARCVM /data migration is in progress. Treat it in the same way as
     // cases where the deadline is passed.
-    // TODO(b/258278176): Do not call this function when the migration is in
-    // progress, or return a different value (0) to provide a dedicated UI.
     return 1;
   }
   const base::Time notification_first_shown_time =

@@ -4,12 +4,14 @@
 
 package org.chromium.chrome.browser.tabmodel;
 
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.NullableObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabDestroyStatus;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.components.tabs.TabStripCollection;
 import org.chromium.content_public.browser.LoadUrlParams;
@@ -50,7 +52,7 @@ public interface TabModelSelector {
      * @return A supplier for the current tab model. This may hold a null value before the {@link
      *     TabModelSelector} is initialized.
      */
-    ObservableSupplier<TabModel> getCurrentTabModelSupplier();
+    MonotonicObservableSupplier<TabModel> getCurrentTabModelSupplier();
 
     /**
      * Convenience function to get the current tab on the current model
@@ -120,7 +122,7 @@ public interface TabModelSelector {
      * @param incognito Whether to open the new tab in incognito mode.
      * @return The newly opened tab.
      */
-    Tab openNewTab(
+    @Nullable Tab openNewTab(
             LoadUrlParams loadUrlParams,
             @TabLaunchType int type,
             @Nullable Tab parent,
@@ -215,43 +217,31 @@ public interface TabModelSelector {
     @Nullable TabModel getTabModelForTabStripCollection(TabStripCollection tabStripCollection);
 
     /**
-     * This method returns a specific {@link TabGroupModelFilter}.
-     *
-     * @param isIncognito Use to indicate which {@link TabGroupModelFilter} to return.
-     * @return A {@link TabGroupModelFilter}. This returns null, if this called before native
-     *     library is initialized.
-     */
-    @Nullable TabGroupModelFilter getTabGroupModelFilter(boolean isIncognito);
-
-    /**
-     * This method adds {@link TabModelObserver} to both {@link TabGroupModelFilter}s. Caches the
-     * observer until {@link TabGroupModelFilter}s are created.
+     * This method adds {@link TabModelObserver} to both {@link TabModel}s. Caches the observer
+     * until {@link TabModel}s are created.
      *
      * @param observer {@link TabModelObserver} to add.
      */
-    void addTabGroupModelFilterObserver(TabModelObserver observer);
+    void addObserverToAllModels(TabModelObserver observer);
 
     /**
-     * This method removes {@link TabModelObserver} from both {@link TabGroupModelFilter}s.
+     * This method removes {@link TabModelObserver} from both {@link TabModel}s.
      *
      * @param observer {@link TabModelObserver} to remove.
      */
-    void removeTabGroupModelFilterObserver(TabModelObserver observer);
+    void removeObserverFromAllModels(TabModelObserver observer);
 
-    /**
-     * This method returns the current {@link TabGroupModelFilter}.
-     *
-     * @return The current {@link TabGroupModelFilter}. This returns null, if this called before
-     *     native library is initialized.
-     */
-    @Nullable TabGroupModelFilter getCurrentTabGroupModelFilter();
-
-    /** Returns an observable supplier for the current tab model filter. */
-    ObservableSupplier<@Nullable TabGroupModelFilter> getCurrentTabGroupModelFilterSupplier();
-
-    /** Reset the internal filter list to allow initialization again. */
-    public void resetTabGroupModelFilterListForTesting();
+    /** Reset the internal tab model list to allow initialization again. */
+    void resetTabModelListForTesting(); // IN-TEST
 
     /** Destroy all owned {@link TabModel}s and {@link Tab}s referenced by this selector. */
-    void destroy();
+    @TabDestroyStatus
+    int destroy();
+
+    /**
+     * Returns the profile for the selector.
+     *
+     * @param offTheRecord Whether to return the off the record profile.
+     */
+    @Nullable Profile getProfile(boolean offTheRecord);
 }

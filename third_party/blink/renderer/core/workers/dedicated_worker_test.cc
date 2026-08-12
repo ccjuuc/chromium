@@ -14,6 +14,7 @@
 #include "base/test/bind.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/mojom/security_context/insecure_request_policy.mojom-blink.h"
 #include "third_party/blink/public/mojom/v8_cache_options.mojom-blink.h"
 #include "third_party/blink/public/mojom/worker/dedicated_worker_host.mojom-blink.h"
 #include "third_party/blink/public/platform/task_type.h"
@@ -32,6 +33,9 @@
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/inspector/thread_debugger_common_impl.h"
+#include "third_party/blink/renderer/core/loader/empty_clients.h"
+#include "third_party/blink/renderer/core/loader/worker_fetch_context.h"
+#include "third_party/blink/renderer/core/loader/worker_resource_timing_notifier_impl.h"
 #include "third_party/blink/renderer/core/messaging/blink_transferable_message.h"
 #include "third_party/blink/renderer/core/messaging/message_channel.h"
 #include "third_party/blink/renderer/core/messaging/message_port.h"
@@ -52,7 +56,11 @@
 #include "third_party/blink/renderer/core/workers/worker_thread_test_helper.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/visitor.h"
+#include "third_party/blink/renderer/platform/loader/fetch/fetch_client_settings_object_snapshot.h"
+#include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
+#include "third_party/blink/renderer/platform/loader/testing/test_resource_fetcher_properties.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
@@ -115,7 +123,7 @@ CustomEventFactoryCallback(base::RepeatingClosure quit_closure,
       [quit_closure = std::move(quit_closure), out_event](
           ScriptState*, CustomEventMessage data) -> Event* {
         CustomEventWithData* result = MakeGarbageCollected<CustomEventWithData>(
-            AtomicString::FromUTF8(kCustomEventName), std::move(data.message));
+            AtomicString::FromUtf8(kCustomEventName), std::move(data.message));
         if (out_event) {
           *out_event = result;
         }
@@ -130,7 +138,7 @@ CrossThreadFunction<Event*(ScriptState*)> CustomEventFactoryErrorCallback(
   return CrossThreadBindRepeating(base::BindLambdaForTesting(
       [quit_closure = std::move(quit_closure), out_event](ScriptState*) {
         Event* result = MakeGarbageCollected<CustomEventWithData>(
-            AtomicString::FromUTF8(kCustomErrorEventName));
+            AtomicString::FromUtf8(kCustomErrorEventName));
         if (out_event) {
           *out_event = result;
         }
@@ -148,7 +156,7 @@ CustomEventWithPortsFactoryCallback(base::RepeatingClosure quit_closure,
         GCedMessagePortArray* ports = MessagePort::EntanglePorts(
             *ExecutionContext::From(script_state), std::move(message.ports));
         CustomEventWithData* result = MakeGarbageCollected<CustomEventWithData>(
-            AtomicString::FromUTF8(kCustomEventName),
+            AtomicString::FromUtf8(kCustomEventName),
             std::move(message.message), ports);
         if (out_event) {
           *out_event = result;
@@ -228,6 +236,7 @@ class DedicatedWorkerThreadForTest final : public DedicatedWorkerThread {
     To<DedicatedWorkerGlobalScope>(GlobalScope())
         ->Initialize(script_url, network::mojom::ReferrerPolicy::kDefault,
                      Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
+                     DocumentPolicy::DocumentPolicyBundle{},
                      nullptr /* response_origin_trial_tokens */);
   }
 };
@@ -286,26 +295,15 @@ class DedicatedWorkerMessagingProxyForTest
       std::unique_ptr<GlobalScopeCreationParams> params = nullptr) {
     scoped_refptr<const SecurityOrigin> security_origin =
         SecurityOrigin::Create(script_url_);
-    auto worker_settings = std::make_unique<WorkerSettings>(
-        To<LocalDOMWindow>(GetExecutionContext())->GetFrame()->GetSettings());
     if (!params) {
-      params = std::make_unique<GlobalScopeCreationParams>(
-          script_url_, mojom::blink::ScriptType::kClassic,
-          "fake global scope name", "fake user agent", UserAgentMetadata(),
-          nullptr /* web_worker_fetch_context */,
-          Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
-          Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
-          network::mojom::ReferrerPolicy::kDefault, security_origin.get(),
-          false /* starter_secure_context */,
-          CalculateHttpsState(security_origin.get()),
-          nullptr /* worker_clients */, nullptr /* content_settings_client */,
-          nullptr /* inherited_trial_features */,
-          base::UnguessableToken::Create(), std::move(worker_settings),
-          mojom::blink::V8CacheOptions::kDefault,
-          nullptr /* worklet_module_responses_map */);
+      params = GlobalScopeCreationParams::CreateForWorkerForTesting(
+          security_origin.get(), script_url_,
+          GetExecutionContext()->GetExecutionContextToken(),
+          std::make_unique<WorkerSettings>(
+              To<LocalDOMWindow>(GetExecutionContext())
+                  ->GetFrame()
+                  ->GetSettings()));
     }
-    params->parent_context_token =
-        GetExecutionContext()->GetExecutionContextToken();
     InitializeWorkerThread(
         std::move(params),
         WorkerBackingThreadStartupData(
@@ -671,7 +669,8 @@ TEST_F(DedicatedWorkerTest, TopLevelFrameSecurityOrigin) {
   StartWorker(WorkerObject()->CreateGlobalScopeCreationParams(
       script_url, network::mojom::ReferrerPolicy::kDefault,
       Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
-      mojo::NullReceiver(), mojo::NullReceiver()));
+      DocumentPolicy::DocumentPolicyBundle{}, mojo::NullReceiver(),
+      mojo::NullReceiver()));
   base::RunLoop run_loop;
 
   PostCrossThreadTask(
@@ -699,6 +698,7 @@ TEST_F(DedicatedWorkerTest, TopLevelFrameSecurityOrigin) {
                   nested_worker_object->CreateGlobalScopeCreationParams(
                       script_url, network::mojom::ReferrerPolicy::kDefault,
                       Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
+                      DocumentPolicy::DocumentPolicyBundle{},
                       mojo::NullReceiver(), mojo::NullReceiver());
               ASSERT_TRUE(
                   nested_worker_params->top_level_frame_security_origin);
@@ -956,6 +956,133 @@ TEST_F(DedicatedWorkerTest, PostCustomEventNoMessage) {
   EXPECT_EQ(event->type(), kCustomEventName);
   EXPECT_EQ(event->DataAsSerializedScriptValue(), nullptr);
   EXPECT_EQ(event->ports(), nullptr);
+}
+
+TEST_F(DedicatedWorkerTest, SubresourceWithEmbeddedCredentials) {
+  StartWorker();
+  WaitUntilWorkerIsRunning();
+
+  base::RunLoop run_loop;
+  PostCrossThreadTask(
+      *GetWorkerThread()->GetTaskRunner(TaskType::kInternalTest), FROM_HERE,
+      CrossThreadBindOnce(
+          [](DedicatedWorkerThreadForTest* worker_thread,
+             CrossThreadOnceClosure quit_closure) {
+            auto* global_scope =
+                To<WorkerGlobalScope>(worker_thread->GlobalScope());
+
+            // Set up a WorkerFetchContext whose worker URL carries embedded
+            // credentials.
+            const KURL worker_url("http://user:pass@a.test/worker.js");
+            scoped_refptr<const SecurityOrigin> origin =
+                SecurityOrigin::Create(worker_url);
+            auto* settings_object =
+                MakeGarbageCollected<FetchClientSettingsObjectSnapshot>(
+                    worker_url, worker_url, origin,
+                    mojom::blink::PolicyContainerPolicies::New(), String(),
+                    HttpsState::kNone, AllowedByNosniff::MimeTypeCheck::kStrict,
+                    mojom::blink::InsecureRequestPolicy::
+                        kLeaveInsecureRequestsAlone,
+                    FetchClientSettingsObject::InsecureNavigationsSet());
+            auto& properties =
+                MakeGarbageCollected<TestResourceFetcherProperties>(
+                    *settings_object)
+                    ->MakeDetachable();
+            auto* fetch_context = MakeGarbageCollected<WorkerFetchContext>(
+                properties, *global_scope,
+                base::MakeRefCounted<EmptyWebWorkerFetchContext>(),
+                /*subresource_filter=*/nullptr,
+                *global_scope->GetContentSecurityPolicy(),
+                *MakeGarbageCollected<NullWorkerResourceTimingNotifier>());
+
+            ResourceRequest script_request;
+            script_request.SetRequestContext(
+                mojom::blink::RequestContextType::SCRIPT);
+
+            // A same-origin URL with credentials matching the worker's URL
+            // should be allowed.
+            EXPECT_FALSE(
+                fetch_context->ShouldBlockFetchAsCredentialedSubresource(
+                    script_request, KURL("http://user:pass@a.test/script.js")));
+
+            // A same-origin URL with non-matching embedded credentials must be
+            // blocked.
+            EXPECT_TRUE(
+                fetch_context->ShouldBlockFetchAsCredentialedSubresource(
+                    script_request,
+                    KURL("http://wrong:pass@a.test/script.js")));
+
+            // A cross-origin URL must be blocked even when its credentials
+            // match the worker's URL.
+            EXPECT_TRUE(
+                fetch_context->ShouldBlockFetchAsCredentialedSubresource(
+                    script_request, KURL("http://user:pass@b.test/script.js")));
+
+            // A subresource request without embedded credentials should be
+            // allowed.
+            EXPECT_FALSE(
+                fetch_context->ShouldBlockFetchAsCredentialedSubresource(
+                    script_request, KURL("http://b.test/script.js")));
+
+            // An XMLHTTPRequest with embedded credentials should be allowed.
+            ResourceRequest xhr_request;
+            xhr_request.SetRequestContext(
+                mojom::blink::RequestContextType::XML_HTTP_REQUEST);
+            EXPECT_FALSE(
+                fetch_context->ShouldBlockFetchAsCredentialedSubresource(
+                    xhr_request, KURL("http://user:pass@b.test/script.js")));
+
+            std::move(quit_closure).Run();
+          },
+          CrossThreadUnretained(GetWorkerThread()),
+          CrossThreadOnceClosure(run_loop.QuitClosure())));
+  run_loop.Run();
+}
+
+class DedicatedWorkerDocumentPolicyTest
+    : public DedicatedWorkerTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  bool IsFeatureEnabled() const { return GetParam(); }
+};
+
+INSTANTIATE_TEST_SUITE_P(DocumentPolicyFeature,
+                         DedicatedWorkerDocumentPolicyTest,
+                         testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& info) {
+                           return info.param ? "FeatureEnabled"
+                                             : "FeatureDisabled";
+                         });
+
+// Test that Document-Policy is set in DedicatedWorker.
+TEST_P(DedicatedWorkerDocumentPolicyTest, DocumentPolicyInDedicatedWorker) {
+  ScopedDocumentPolicyInDedicatedWorkerForTest scoped_feature(
+      IsFeatureEnabled());
+
+  StartWorker();
+  WaitUntilWorkerIsRunning();
+
+  base::RunLoop run_loop;
+  bool has_document_policy = false;
+
+  PostCrossThreadTask(
+      *GetWorkerThread()->GetTaskRunner(TaskType::kInternalTest), FROM_HERE,
+      CrossThreadBindOnce(
+          [](base::RepeatingClosure quit_closure, bool* out_has_policy,
+             DedicatedWorkerThreadForTest* worker_thread) {
+            DedicatedWorkerGlobalScope* global_scope =
+                To<DedicatedWorkerGlobalScope>(worker_thread->GlobalScope());
+            EXPECT_NE(global_scope, nullptr);
+            *out_has_policy =
+                (global_scope->GetSecurityContext().GetDocumentPolicy() !=
+                 nullptr);
+            quit_closure.Run();
+          },
+          run_loop.QuitClosure(), CrossThreadUnretained(&has_document_policy),
+          CrossThreadUnretained(GetWorkerThread())));
+
+  run_loop.Run();
+  EXPECT_EQ(has_document_policy, IsFeatureEnabled());
 }
 
 }  // namespace blink

@@ -5,9 +5,8 @@
 #include "chrome/browser/glic/test_support/interactive_test_util.h"
 
 #include "base/scoped_observation_traits.h"
-#include "chrome/browser/glic/fre/glic_fre_controller.h"
+#include "chrome/browser/glic/public/service/glic_instance_coordinator.h"
 #include "chrome/browser/glic/widget/glic_widget.h"
-#include "chrome/browser/glic/widget/glic_window_controller.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/polling_state_observer.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -16,48 +15,25 @@ namespace glic::test {
 
 namespace internal {
 
-GlicFreShowingDialogObserver::GlicFreShowingDialogObserver(
-    const GlicFreController& controller)
-    : PollingStateObserver(
-          [&controller]() { return controller.IsShowingDialog(); }) {}
-GlicFreShowingDialogObserver::~GlicFreShowingDialogObserver() = default;
 
-DEFINE_STATE_IDENTIFIER_VALUE(GlicFreShowingDialogObserver,
-                              kGlicFreShowingDialogState);
-
-GlicWindowControllerStateObserver::GlicWindowControllerStateObserver(
-    const GlicWindowController& controller,
+GlicInstanceCoordinatorStateObserver::GlicInstanceCoordinatorStateObserver(
+    const GlicInstanceCoordinator& controller,
     tabs::TabInterface* tab)
     : PollingStateObserver([&controller, tab]() {
-        if (!tab) {
-          return controller.state();
-        }
-
+        CHECK(tab);
         auto* instance = controller.GetInstanceForTab(tab);
         if (instance && instance->IsShowing()) {
-          return GlicWindowController::State::kOpen;
+          return GlicPanelState::kOpen;
         } else {
-          return GlicWindowController::State::kClosed;
+          return GlicPanelState::kClosed;
         }
       }) {}
-GlicWindowControllerStateObserver::~GlicWindowControllerStateObserver() =
+
+GlicInstanceCoordinatorStateObserver::~GlicInstanceCoordinatorStateObserver() =
     default;
 
-DEFINE_STATE_IDENTIFIER_VALUE(GlicWindowControllerStateObserver,
-                              kGlicWindowControllerState);
-
-GlicWindowContorllerResizeObserver::GlicWindowContorllerResizeObserver(
-    GlicWindowController& controller)
-    : PollingStateObserver([&controller]() {
-        return controller.GetGlicWidget()
-                   ? controller.GetGlicWidget()->widget_delegate()->CanResize()
-                   : false;
-      }) {}
-GlicWindowContorllerResizeObserver::~GlicWindowContorllerResizeObserver() =
-    default;
-
-DEFINE_STATE_IDENTIFIER_VALUE(GlicWindowContorllerResizeObserver,
-                              kGlicWindowControllerResizeState);
+DEFINE_STATE_IDENTIFIER_VALUE(GlicInstanceCoordinatorStateObserver,
+                              kGlicInstanceCoordinatorState);
 
 GlicAppStateObserver::GlicAppStateObserver(Host* host)
     : ObservationStateObserver(host) {
@@ -95,10 +71,5 @@ void WebUiStateObserver::WebUiStateChanged(mojom::WebUiState state) {
 }
 
 }  // namespace internal
-
-DEFINE_ELEMENT_IDENTIFIER_VALUE(kGlicHostElementId);
-DEFINE_ELEMENT_IDENTIFIER_VALUE(kGlicContentsElementId);
-DEFINE_ELEMENT_IDENTIFIER_VALUE(kGlicFreHostElementId);
-DEFINE_ELEMENT_IDENTIFIER_VALUE(kGlicFreContentsElementId);
 
 }  // namespace glic::test

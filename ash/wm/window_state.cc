@@ -7,6 +7,7 @@
 #include <absl/cleanup/cleanup.h>
 
 #include <optional>
+#include <ranges>
 #include <utility>
 
 #include "ash/accessibility/accessibility_controller.h"
@@ -40,7 +41,7 @@
 #include "ash/wm/wm_event.h"
 #include "ash/wm/wm_metrics.h"
 #include "base/check_is_test.h"
-#include "base/containers/adapters.h"
+#include "base/check_op.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/debug/crash_logging.h"
 #include "base/metrics/histogram_functions.h"
@@ -265,7 +266,7 @@ void MoveAllTransientChildrenToNewRoot(aura::Window* window) {
     if (!transient_child->parent())
       continue;
     const int container_id = transient_child->parent()->GetId();
-    DCHECK_GE(container_id, 0);
+    CHECK_GE(container_id, 0);
     aura::Window* container = dst_root->GetChildById(container_id);
     if (container->Contains(transient_child))
       continue;
@@ -573,6 +574,7 @@ bool WindowState::IsRestoring(WindowStateType previous_state) const {
 void WindowState::DisableZOrdering(aura::Window* window_on_top) {
   ui::ZOrderLevel z_order = GetZOrdering();
   if (z_order != ui::ZOrderLevel::kNormal && !IsPip()) {
+    aura::Window::ScopedDeleteBlocker blocker(window_);
     // |window_| is hidden first to avoid canceling fullscreen mode when it is
     // no longer always on top and gets added to default container. This avoids
     // sending redundant OnFullscreenStateChanged to the layout manager. The
@@ -1017,7 +1019,8 @@ void WindowState::UpdateWindowPropertiesFromStateType() {
                          should_round_window);
   }
 
-  if (window_->GetProperty(ash::kWindowManagerManagesOpacityKey)) {
+  if (!window_->is_destroying() &&
+      window_->GetProperty(ash::kWindowManagerManagesOpacityKey)) {
     const gfx::Size& size = window_->bounds().size();
     if (ShouldSetExplicitOpaqueRegionsForOcclusion(this)) {
       window_->SetTransparent(true);
@@ -1031,8 +1034,14 @@ void WindowState::UpdateWindowPropertiesFromStateType() {
 
 void WindowState::NotifyPreStateTypeChange(
     WindowStateType old_window_state_type) {
-  for (auto& observer : observer_list_)
-    observer.OnPreWindowStateTypeChange(this, old_window_state_type);
+  // Allow reentrancy here. If there are any ongoing drag events when tablet
+  // mode is exited (which triggers the first state change), the drag events are
+  // forced to complete. This could potentially trigger a second state change,
+  // such as window snapping or maximizing.
+  observer_list_.NotifyAllowReentrancy(
+      &WindowStateObserver::OnPreWindowStateTypeChange, this,
+      old_window_state_type);
+
   OnPrePipStateChange(old_window_state_type);
 }
 
@@ -1291,7 +1300,7 @@ void WindowState::RestoreHistoryStack::Clear() {
 
 void WindowState::RestoreHistoryStack::PopIncompatible(
     WindowStateType current_state_type) {
-  for (auto state_type : base::Reversed(window_states_)) {
+  for (auto state_type : std::views::reverse(window_states_)) {
     if (CanRestoreState(current_state_type, IgnoreGrouping(state_type))) {
       break;
     }
@@ -1505,7 +1514,7 @@ void WindowState::OnWindowBoundsChanged(aura::Window* window,
                                         const gfx::Rect& new_bounds,
                                         ui::PropertyChangeReason reason) {
   CHECK_EQ(window_, window);
-  if (window_->GetTransparent() &&
+  if (!window->is_destroying() && window_->GetTransparent() &&
       ShouldSetExplicitOpaqueRegionsForOcclusion(this)) {
     window_->SetOpaqueRegionsForOcclusion({gfx::Rect(new_bounds.size())});
   }

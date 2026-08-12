@@ -20,10 +20,10 @@ specific_include_rules = {
   '.*browsertest.cc': [
     "+content",
   ],
-  '.*test.cc': [
+  '.*test.*': [
     "+content/browser/indexed_db/instance",
   ],
-  '.*internals_ui\..*': [
+  '.*internals_ui\\..*': [
     "+content",
   ],
   'indexed_db_context_impl.*': [

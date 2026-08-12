@@ -18,11 +18,10 @@
 #include "chrome/browser/ui/webui/ntp/ntp_resource_cache.h"
 #include "chrome/browser/ui/webui/page_not_available_for_guest/page_not_available_for_guest_ui.h"
 #include "chrome/browser/ui/webui/theme_source.h"
-#include "chrome/browser/ui/webui/webui_util_desktop.h"
+#include "chrome/browser/ui/webui/util/webui_util_desktop.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/webui_url_constants.h"
-#include "chrome/grit/browser_resources.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/new_tab_page_third_party_resources.h"
 #include "chrome/grit/new_tab_page_third_party_resources_map.h"
@@ -164,7 +163,8 @@ NewTabPageThirdPartyUI::NewTabPageThirdPartyUI(content::WebUI* web_ui)
       most_visited_page_factory_receiver_(this),
       profile_(Profile::FromWebUI(web_ui)),
       web_contents_(web_ui->GetWebContents()),
-      navigation_start_time_(base::Time::Now()) {
+      navigation_start_time_(base::Time::Now()),
+      navigation_start_time_ticks_(base::TimeTicks::Now()) {
   CreateAndAddNewTabPageThirdPartyUiHtmlSource(profile_, web_contents_);
   content::URLDataSource::Add(
       profile_, std::make_unique<FaviconSource>(
@@ -224,7 +224,7 @@ void NewTabPageThirdPartyUI::CreatePageHandler(
   most_visited_page_handler_ = std::make_unique<MostVisitedHandler>(
       std::move(pending_page_handler), std::move(pending_page), profile_,
       web_contents_, GURL(chrome::kChromeUINewTabPageThirdPartyURL),
-      navigation_start_time_);
+      navigation_start_time_, navigation_start_time_ticks_);
   most_visited_page_handler_->EnableTileTypes(
       ntp_tiles::MostVisitedSites::EnableTileTypesOptions().with_top_sites(
           true));

@@ -53,6 +53,15 @@ class ExtensionTelemetryEventRouter : public KeyedService {
   static const char kKeyCurrentUrl[];
   static const char kKeyFileInfo[];
   static const char kKeyHash[];
+  static const char kKeyDOMAccessInfo[];
+  static const char kKeyDOMAccesses[];
+  static const char kKeyScriptInjectionInfo[];
+  static const char kKeyScriptInjections[];
+  static const char kKeyApiName[];
+  static const char kKeyAccessType[];
+  static const char kKeyArgsList[];
+  static const char kKeyArgUrl[];
+  static const char kKeyTimestampMs[];
 
   // Convenience method to get the service for a profile.
   static ExtensionTelemetryEventRouter* Get(Profile* profile);
@@ -68,6 +77,7 @@ class ExtensionTelemetryEventRouter : public KeyedService {
   ~ExtensionTelemetryEventRouter() override;
 
   bool IsPolicyEnabled();
+  bool IsDOMActivityTelemetryEnabled();
   // Uploads the `ExtensionTelemetryReportRequest` as a telemetry event to the
   // reporting server.
   void UploadTelemetryReport(
@@ -75,6 +85,7 @@ class ExtensionTelemetryEventRouter : public KeyedService {
           telemetry_report_request);
 
  private:
+  bool IsReportingEnabledForEvent(const char* event_name);
   raw_ptr<content::BrowserContext> context_;
 };
 

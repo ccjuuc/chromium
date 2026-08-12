@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <optional>
 #include <string>
 
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/escape.h"
@@ -18,6 +18,7 @@
 #include "base/test/test_timeouts.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "content/browser/accessibility/accessibility_test_helpers.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/test/accessibility_notification_waiter.h"
 #include "content/public/test/browser_test.h"
@@ -52,7 +53,10 @@ class AccessibilityActionBrowserTest : public ContentBrowserTest {
   ~AccessibilityActionBrowserTest() override {}
 
   void SetUp() override {
-    feature_list_.InitWithFeatures({blink::features::kPermissionElement}, {});
+    feature_list_.InitWithFeatures({blink::features::kGeolocationElement,
+                                    blink::features::kUserMediaElement,
+                                    blink::features::kUserMediaElementLegacy},
+                                   {});
     ContentBrowserTest::SetUp();
   }
 
@@ -68,7 +72,15 @@ class AccessibilityActionBrowserTest : public ContentBrowserTest {
     ui::BrowserAccessibility* root =
         GetManager()->GetBrowserAccessibilityRoot();
     CHECK(root);
-    return FindNodeInSubtree(*root, role, name_or_value);
+    return FindFirstAccessibilityNodeWithRoleAndNameOrValue(*root, role,
+                                                            name_or_value);
+  }
+
+  ui::BrowserAccessibility* FindNodeWithRole(ax::mojom::Role role) {
+    ui::BrowserAccessibility* root =
+        GetManager()->GetBrowserAccessibilityRoot();
+    CHECK(root);
+    return FindFirstAccessibilityNodeWithRole(*root, role);
   }
 
   ui::BrowserAccessibilityManager* GetManager() {
@@ -143,35 +155,6 @@ class AccessibilityActionBrowserTest : public ContentBrowserTest {
   }
 
  private:
-  ui::BrowserAccessibility* FindNodeInSubtree(
-      ui::BrowserAccessibility& node,
-      ax::mojom::Role role,
-      const std::string& name_or_value) {
-    const std::string& name =
-        node.GetStringAttribute(ax::mojom::StringAttribute::kName);
-    // Note that in the case of a text field,
-    // "BrowserAccessibility::GetValueForControl" has the added functionality
-    // of computing the value of an ARIA text box from its inner text.
-    //
-    // <div contenteditable="true" role="textbox">Hello world.</div>
-    // Will expose no HTML value attribute, but some screen readers, such as
-    // Jaws, VoiceOver and Talkback, require one to be computed.
-    const std::string value = base::UTF16ToUTF8(node.GetValueForControl());
-    if (node.GetRole() == role &&
-        (name == name_or_value || value == name_or_value)) {
-      return &node;
-    }
-
-    for (unsigned int i = 0; i < node.PlatformChildCount(); ++i) {
-      ui::BrowserAccessibility* result =
-          FindNodeInSubtree(*node.PlatformGetChild(i), role, name_or_value);
-      if (result) {
-        return result;
-      }
-    }
-    return nullptr;
-  }
-
   base::test::ScopedFeatureList feature_list_;
   std::optional<ScopedAccessibilityModeOverride> accessibility_mode_;
 };
@@ -331,8 +314,10 @@ IN_PROC_BROWSER_TEST_F(AccessibilityActionBrowserTest,
   EXPECT_EQ(8.0, target->GetFloatAttribute(
                      ax::mojom::FloatAttribute::kValueForRange));
   // Numerical ranges (see ui::IsRangeValueSupported) shouldn't have
-  // ax::mojom::StringAttribute::kValue set unless they use aria-valuetext.
-  EXPECT_FALSE(target->HasStringAttribute(ax::mojom::StringAttribute::kValue));
+  // ax::mojom::StringAttribute::kAriaValueText set unless they use
+  // aria-valuetext.
+  EXPECT_FALSE(
+      target->HasStringAttribute(ax::mojom::StringAttribute::kAriaValueText));
 
   // Increment, should result in value changing from 8 to 10.
   {
@@ -960,8 +945,8 @@ IN_PROC_BROWSER_TEST_F(AccessibilityActionBrowserTest,
       target->GetIntListAttribute(ax::mojom::IntListAttribute::kControlsIds);
   EXPECT_EQ(2u, control_list.size());
 
-  EXPECT_TRUE(base::Contains(control_list, radio1->GetId()));
-  EXPECT_TRUE(base::Contains(control_list, radio2->GetId()));
+  EXPECT_TRUE(std::ranges::contains(control_list, radio1->GetId()));
+  EXPECT_TRUE(std::ranges::contains(control_list, radio2->GetId()));
 }
 
 IN_PROC_BROWSER_TEST_F(AccessibilityActionBrowserTest, FocusLostOnDeletedNode) {
@@ -1456,8 +1441,8 @@ IN_PROC_BROWSER_TEST_F(AccessibilityActionBrowserTest, OpenSelectPopup) {
 IN_PROC_BROWSER_TEST_F(AccessibilityActionBrowserTest, FocusPermissionElement) {
   LoadInitialAccessibilityTreeFromHtml(R"HTML(
       <body>
-        <permission type="invalid" aria-label="invalid-pepc"></permission>
-        <permission type="camera" aria-label="valid-pepc"></permission>
+        <usermedia type="invalid" aria-label="invalid-pepc"></usermedia>
+        <usermedia type="camera" aria-label="valid-pepc"></usermedia>
       </body>
       )HTML");
 
@@ -1484,5 +1469,133 @@ IN_PROC_BROWSER_TEST_F(AccessibilityActionBrowserTest, FocusPermissionElement) {
   ASSERT_EQ(waiter.event_target_id(), valid_pepc->GetId());
   ASSERT_TRUE(valid_pepc->IsFocused());
 }
+
+IN_PROC_BROWSER_TEST_F(AccessibilityActionBrowserTest,
+                       AriaExpandCollapseTreeItem) {
+  // Because AXObject::RequestExpandAction (in Blink) maps kExpand to ArrowRight
+  // and kCollapse to ArrowLeft for ARIA treeitems, we use an onkeydown listener
+  // to mock the response.
+  LoadInitialAccessibilityTreeFromHtml(R"HTML(
+      <ul role='tree'>
+        <li role='none'>
+          <a id='node' role='treeitem' aria-expanded='false' href='#placeholder'
+          onkeydown='expandLogic(event)'>Expandable Link</a>
+        </li>
+      </ul>
+      <script>
+        function expandLogic(e) {
+          if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            e.target.setAttribute('aria-expanded', 'true');
+          } else if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            e.target.setAttribute('aria-expanded', 'false');
+          }
+        }
+      </script>
+      )HTML");
+
+  ui::BrowserAccessibility* target =
+      FindNode(ax::mojom::Role::kTreeItem, "Expandable Link");
+  ASSERT_NE(nullptr, target);
+  EXPECT_TRUE(target->HasState(ax::mojom::State::kCollapsed));
+  EXPECT_FALSE(target->HasState(ax::mojom::State::kExpanded));
+
+  AccessibilityNotificationWaiter expand_waiter(
+      shell()->web_contents(), ui::AXEventGenerator::Event::EXPANDED);
+  GetManager()->Expand(*target);
+  ASSERT_TRUE(expand_waiter.WaitForNotification());
+
+  EXPECT_TRUE(target->HasState(ax::mojom::State::kExpanded));
+  EXPECT_FALSE(target->HasState(ax::mojom::State::kCollapsed));
+
+  AccessibilityNotificationWaiter collapse_waiter(
+      shell()->web_contents(), ui::AXEventGenerator::Event::COLLAPSED);
+  GetManager()->Collapse(*target);
+  ASSERT_TRUE(collapse_waiter.WaitForNotification());
+
+  EXPECT_TRUE(target->HasState(ax::mojom::State::kCollapsed));
+  EXPECT_FALSE(target->HasState(ax::mojom::State::kExpanded));
+}
+
+#if BUILDFLAG(IS_ANDROID)
+// Test that the leaf cache is updated when changing a node's role updates the
+// node's BrowserAccessibilityAndroid::IsLeaf() status.
+IN_PROC_BROWSER_TEST_F(AccessibilityActionBrowserTest,
+                       DynamicRoleChangeStaleLeafCache) {
+  LoadInitialAccessibilityTreeFromHtml(R"HTML(
+      <blockquote id="target">
+        <strong>child1</strong>
+        <em>child2</em>
+      </blockquote>
+      )HTML");
+
+  ui::BrowserAccessibility* target =
+      FindNodeWithRole(ax::mojom::Role::kBlockquote);
+  EXPECT_FALSE(target->IsLeaf());
+
+  AccessibilityNotificationWaiter waiter(
+      shell()->web_contents(), ui::AXEventGenerator::Event::ROLE_CHANGED);
+  EXPECT_TRUE(ExecJs(
+      shell(),
+      "document.getElementById('target').setAttribute('role', 'button');"));
+  ASSERT_TRUE(waiter.WaitForNotification());
+
+  target = FindNodeWithRole(ax::mojom::Role::kButton);
+  EXPECT_TRUE(target->IsLeaf());
+}
+
+// Test that the leaf cache is updated when changing a node's aria-label updates
+// the node's BrowserAccessibilityAndroid::IsLeaf() status.
+IN_PROC_BROWSER_TEST_F(AccessibilityActionBrowserTest,
+                       DynamicLabelChangeStaleLeafCache) {
+  LoadInitialAccessibilityTreeFromHtml(R"HTML(
+      <h1 id="target" tabindex=0>
+        <strong>child1</strong>
+        <em>child2</em>
+      </h1>
+      )HTML");
+
+  ui::BrowserAccessibility* target =
+      FindNodeWithRole(ax::mojom::Role::kHeading);
+  EXPECT_TRUE(target->IsLeaf());
+
+  AccessibilityNotificationWaiter waiter(
+      shell()->web_contents(), ui::AXEventGenerator::Event::NAME_CHANGED);
+  EXPECT_TRUE(ExecJs(shell(),
+                     "document.getElementById('target').setAttribute('aria-"
+                     "label', 'label1');"));
+  ASSERT_TRUE(waiter.WaitForNotification());
+
+  target = FindNodeWithRole(ax::mojom::Role::kHeading);
+  EXPECT_FALSE(target->IsLeaf());
+}
+
+// Test that the leaf cache is updated when changing a node's tabindex updates
+// the node's BrowserAccessibilityAndroid::IsLeaf() status.
+IN_PROC_BROWSER_TEST_F(AccessibilityActionBrowserTest,
+                       DynamicTabIndexChangeStaleLeafCache) {
+  LoadInitialAccessibilityTreeFromHtml(R"HTML(
+      <div role="tooltip" id="target" title="label1">
+        <strong>child1</strong>
+        <em>child2</em>
+      </div>
+      )HTML");
+
+  ui::BrowserAccessibility* target =
+      FindNodeWithRole(ax::mojom::Role::kTooltip);
+  EXPECT_FALSE(target->IsLeaf());
+
+  AccessibilityNotificationWaiter waiter(
+      shell()->web_contents(), ui::AXEventGenerator::Event::STATE_CHANGED);
+  EXPECT_TRUE(ExecJs(
+      shell(),
+      "document.getElementById('target').setAttribute('tabindex', '0');"));
+  ASSERT_TRUE(waiter.WaitForNotification());
+
+  target = FindNodeWithRole(ax::mojom::Role::kTooltip);
+  EXPECT_TRUE(target->IsLeaf());
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace content

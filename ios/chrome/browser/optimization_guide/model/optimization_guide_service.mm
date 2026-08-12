@@ -10,10 +10,12 @@
 #import "base/functional/callback_helpers.h"
 #import "base/metrics/histogram_functions.h"
 #import "base/path_service.h"
+#import "base/strings/strcat.h"
 #import "base/system/sys_info.h"
 #import "base/task/thread_pool.h"
 #import "base/time/default_clock.h"
 #import "components/component_updater/pref_names.h"
+#import "components/download/public/background_service/download_params.h"
 #import "components/optimization_guide/core/delivery/prediction_manager.h"
 #import "components/optimization_guide/core/hints/command_line_top_host_provider.h"
 #import "components/optimization_guide/core/hints/hints_processing_util.h"
@@ -38,7 +40,7 @@
 #import "ios/chrome/browser/optimization_guide/model/ios_model_quality_logs_uploader_service.h"
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_service_factory.h"
 #import "ios/chrome/browser/optimization_guide/model/tab_url_provider_impl.h"
-#import "ios/chrome/browser/policy/model/management_service_ios_factory.h"
+#import "ios/chrome/browser/policy/model/browser_management_service_factory.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/paths/paths.h"
 #import "ios/web/public/navigation/navigation_context.h"
@@ -61,7 +63,9 @@ OptimizationGuideService::OptimizationGuideService(
     PrefService* pref_service,
     BrowserList* browser_list,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-    signin::IdentityManager* identity_manager)
+    signin::IdentityManager* identity_manager,
+    std::unique_ptr<optimization_guide::ModelExecutionManager::Delegate>
+        delegate)
     : pref_service_(pref_service), off_the_record_(off_the_record) {
   DCHECK(optimization_guide::features::IsOptimizationHintsEnabled());
 
@@ -104,9 +108,10 @@ OptimizationGuideService::OptimizationGuideService(
     model_execution_features_controller_ =
         std::make_unique<optimization_guide::ModelExecutionFeaturesController>(
             pref_service, identity_manager,
-            GetApplicationContext()->GetLocalState(),
-            policy::ManagementServiceIOSFactory::GetForPlatform(),
-            dogfood_status, version_info::IsOfficialBuild());
+            policy::BrowserManagementServiceFactory::GetForPlatform(),
+            dogfood_status, version_info::IsOfficialBuild(),
+            optimization_guide::ModelExecutionFeaturesController::
+                HistorySearchNotSupported());
 
     if (optimization_guide::features::IsModelQualityLoggingEnabled()) {
       model_quality_logs_uploader_service_ =
@@ -114,9 +119,10 @@ OptimizationGuideService::OptimizationGuideService(
               url_loader_factory, GetApplicationContext()->GetLocalState(),
               model_execution_features_controller_->GetWeakPtr());
     }
+
     model_execution_manager_ =
         std::make_unique<optimization_guide::ModelExecutionManager>(
-            url_loader_factory, identity_manager, /*delegate=*/nullptr,
+            url_loader_factory, identity_manager, std::move(delegate),
             optimization_guide_logger_.get(),
             model_quality_logs_uploader_service_
                 ? model_quality_logs_uploader_service_->GetWeakPtr()
@@ -220,9 +226,9 @@ OptimizationGuideService::CanApplyOptimization(
       hints_manager_->CanApplyOptimization(url, optimization_type,
                                            optimization_metadata);
   base::UmaHistogramEnumeration(
-      "OptimizationGuide.ApplyDecision." +
-          optimization_guide::GetStringNameForOptimizationType(
-              optimization_type),
+      base::StrCat({"OptimizationGuide.ApplyDecision.",
+                    optimization_guide::GetStringNameForOptimizationType(
+                        optimization_type)}),
       optimization_type_decision);
   return optimization_guide::HintsManager::
       GetOptimizationGuideDecisionFromOptimizationTypeDecision(
@@ -306,6 +312,15 @@ void OptimizationGuideService::RemoveObserverForOptimizationTargetModel(
   if (optimization_guide::features::IsOptimizationTargetPredictionEnabled()) {
     GetPredictionManager()->RemoveObserverForOptimizationTargetModel(
         optimization_target, observer);
+  }
+}
+
+void OptimizationGuideService::SetModelDownloadSchedulingParams(
+    optimization_guide::proto::OptimizationTarget optimization_target,
+    const download::SchedulingParams& params) {
+  if (optimization_guide::features::IsOptimizationTargetPredictionEnabled()) {
+    GetPredictionManager()->SetModelDownloadSchedulingParams(
+        optimization_target, params);
   }
 }
 

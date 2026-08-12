@@ -44,7 +44,6 @@
 <translation id="1155154308031262006">Inserisci un prompt</translation>
 <translation id="115705039208660697">ananas</translation>
 <translation id="1164939766849482256">Salvaschermo Dall'alba al tramonto</translation>
-<translation id="1167755866710282443">Apri il menu per personalizzare i tasti. Trascina il menu per spostarlo.</translation>
 <translation id="1171349345463658120">laguna sabbiosa</translation>
 <translation id="1174073918202301297">Scorciatoia aggiunta</translation>
 <translation id="11743817593307477">Usa i tasti freccia per spostare il controllo sull'azione di gioco che vuoi. Usa il tasto Invio per posizionare il controllo. Usa il tasto Esc per annullare.</translation>
@@ -167,6 +166,7 @@
 <translation id="1621067168122174824">Esegui test ricarica</translation>
 <translation id="1622402072367425417">bolle luminose</translation>
 <translation id="1626590945318984973">Scorciatoia non disponibile. Premi una nuova scorciatoia senza utilizzare i tasti funzione e <ph name="META_KEY" />.</translation>
+<translation id="163774412591892664">L'amministratore ha disattivato il tuo dispositivo e può accedere alla sua posizione.</translation>
 <translation id="1639239467298939599">Caricamento</translation>
 <translation id="1641857168437328880">Alimentatore di documenti (solo fronte)</translation>
 <translation id="1642396894598555413">biciclette</translation>
@@ -272,7 +272,6 @@
 <translation id="200669432486043882">Sostituisci file</translation>
 <translation id="2006864819935886708">Connettività</translation>
 <translation id="2008685064673031089">Prime search</translation>
-<translation id="2011174342667534258">Versione SDK:</translation>
 <translation id="2016697457005847575">Prova i passaggi per la risoluzione dei problemi</translation>
 <translation id="202500043506723828">EID</translation>
 <translation id="2045814230297767491">posate</translation>
@@ -404,6 +403,7 @@
 <translation id="2618015542787108131">una duna di sabbia</translation>
 <translation id="2619761439309613843">Aggiornam. quotidiano</translation>
 <translation id="2620436844016719705">Sistema</translation>
+<translation id="2626848494898563581">Impossibile raggiungere i servizi Google</translation>
 <translation id="2637303424821734920">OFF - Per visualizzare il meteo locale, <ph name="BEGIN_LINK" />attiva l'accesso alla posizione del sistema<ph name="END_LINK" /></translation>
 <translation id="2638662041295312666">Immagine accesso</translation>
 <translation id="2640549051766135490">Album <ph name="TITLE" /> <ph name="DESC" /> selezionato</translation>
@@ -507,7 +507,6 @@
 <translation id="3211671540163313381">Mappatura tasti per il D-pad</translation>
 <translation id="3217462202230355157">Assicurati che il microfono sia collegato o prova a riavviare <ph name="DEVICE_TYPE" /></translation>
 <translation id="3226405216343213872">Ricerca di scanner in corso…</translation>
-<translation id="3226657629376379887">Menu azioni del layout</translation>
 <translation id="3227186760713762082">Dividi il valore <ph name="CATEGORY_TEXT" /> per <ph name="CONVERSION_RATE" /></translation>
 <translation id="3242622575335502454">arte digitale</translation>
 <translation id="3246869037381808805">I processi di stampa risalenti a oltre 1 giorno fa verranno rimossi</translation>
@@ -522,7 +521,6 @@
 <translation id="3291996639387199448">Direzione chiave</translation>
 <translation id="3294437725009624529">Ospite</translation>
 <translation id="3303855915957856445">Nessun risultato di ricerca trovato</translation>
-<translation id="3305294846493618482">altro</translation>
 <translation id="3310640316857623290">la latenza DNS è sostanzialmente al di sopra della soglia consentita</translation>
 <translation id="3316495615885967552">Download del modello di riepilogo e creazione del titolo completato</translation>
 <translation id="3321030238473337787">Velocità di riproduzione</translation>
@@ -581,6 +579,7 @@
 <translation id="3577473026931028326">Si è verificato un errore. Riprova.</translation>
 <translation id="357889014807611375">Wi-Fi a consumo</translation>
 <translation id="3583278742022654445">Intensità segnale debole. Prova ad avvicinarti alla fonte del segnale Wi-Fi.</translation>
+<translation id="3586931643579894722">Nascondi dettagli</translation>
 <translation id="3588034708467091142">Assicurati di avere una connessione a internet attiva e riprova.</translation>
 <translation id="3594280220611906414"><ph name="USER_FRIENDLY_APN_NAME" /> è il nome facile da usare per <ph name="APN_NAME" />.</translation>
 <translation id="3595596368722241419">Batteria carica</translation>
@@ -701,7 +700,6 @@
 <translation id="4126551873361000548">Indietro di 10 secondi</translation>
 <translation id="4128271910628504223">Inserisci un prompt come "disegna una foresta nebbiosa"</translation>
 <translation id="4130035430755296270">Continua a passare il mouse sopra per altre opzioni di layout</translation>
-<translation id="4130750466177569591">Accetto</translation>
 <translation id="4131410914670010031">In bianco e nero</translation>
 <translation id="4137700675046373159">sabato</translation>
 <translation id="4139326893730851150">Aggiornamenti del firmware</translation>
@@ -727,6 +725,7 @@
 <translation id="4212169537710712814">Download del modello di trascrizione <ph name="LANGUAGE_NAME" /> completato</translation>
 <translation id="42126664696688958">Esporta</translation>
 <translation id="4213104098953699324">Tastiera USB</translation>
+<translation id="4217571870635786043">Dettatura</translation>
 <translation id="4227825898293920515">La password scade tra <ph name="TIME" /></translation>
 <translation id="4238516577297848345">Nessun processo di stampa in corso</translation>
 <translation id="4239069858505860023">GPRS</translation>
@@ -1049,7 +1048,6 @@
 <translation id="5606865426897221650">Tab</translation>
 <translation id="5612205513582918357">Strumenti del corso sta condividendo il tuo schermo con <ph name="RECEIVER_NAME" /></translation>
 <translation id="5613201299517339763">Account disconnesso</translation>
-<translation id="5620281292257375798">Solo per uso interno</translation>
 <translation id="5628106863521633649">Lingue disponibili</translation>
 <translation id="5630438231335788050">Bauhaus</translation>
 <translation id="5631759159893697722">abstract</translation>
@@ -1146,7 +1144,7 @@
 <translation id="6074608334942655098">Interrompi traduzione</translation>
 <translation id="6074752328838739425">Nascondi riepilogo</translation>
 <translation id="6075872808778243331">(Android) Latenza HTTP</translation>
-<translation id="6078323886959318429">Aggiungi scorciatoia</translation>
+<translation id="6078323886959318429">Scorciatoia</translation>
 <translation id="6079693086494835199">Reimposta per assicurarti che la home page predefinita non sia un sito di phishing. Utilizza solo siti web che ritieni affidabili.</translation>
 <translation id="6090672065638047175">Una foto di un albero radioso fatto di stelle con un bellissimo cielo notturno e una galassia sullo sfondo.</translation>
 <translation id="6091080061796993741">giallo</translation>
@@ -1165,6 +1163,7 @@
 <translation id="6136285399872347291">backspace</translation>
 <translation id="6137614725462089991">cyberpunk</translation>
 <translation id="6137767437444130246">Certificato utente</translation>
+<translation id="6140948187512243695">Mostra dettagli</translation>
 <translation id="6146993107019042706">Per terminare, inserisci la nuova password</translation>
 <translation id="6147514244879357420">PNG</translation>
 <translation id="6149015141270619212">Impossibile connettersi a Internet</translation>
@@ -1185,6 +1184,7 @@
 <translation id="6234024205316847054">Mostra contorni</translation>
 <translation id="6243280677745499710">Attualmente impostato</translation>
 <translation id="6250316632541035980">uova e pancetta</translation>
+<translation id="6262413940100821797">un destinatario sconosciuto</translation>
 <translation id="6265268291107409527">Il tasto selezionato è <ph name="KEYS" />. <ph name="ASSIGN_INSTRUCTION" /></translation>
 <translation id="6275224645089671689">Freccia destra</translation>
 <translation id="6278428485366576908">Tema</translation>
@@ -1410,11 +1410,8 @@
 <translation id="7177485034254901881">Questo dispositivo <ph name="DEVICE_TYPE" /> è gestito da <ph name="MANAGER" />. Gli amministratori possono configurarlo da remoto.</translation>
 <translation id="7180611975245234373">Aggiorna</translation>
 <translation id="7180865173735832675">Personalizza</translation>
-<translation id="7182063559013288142">Hotspot istantaneo</translation>
-<translation id="7184043045742675738">Fai clic su un tasto qualsiasi per personalizzare il pulsante. Riposiziona il tasto con il mouse o i tasti Freccia.</translation>
 <translation id="7187669805838282391">mercoledì</translation>
 <translation id="7205318498545665455">Scegli il microfono</translation>
-<translation id="7206979415662233817">Termini di servizio</translation>
 <translation id="7210635925306941239">ciano</translation>
 <translation id="7212547870105584639">Gestisci le impostazioni APN di rete. Gli APN stabiliscono una connessione tra una rete mobile e internet. <ph name="BEGIN_LINK_LEARN_MORE" />Scopri di più<ph name="END_LINK_LEARN_MORE" /></translation>
 <translation id="7212734716605298123">Aggiornamenti del firmware per dispositivi esterni</translation>
@@ -1445,11 +1442,6 @@
 <translation id="7319430975418800333">A3</translation>
 <translation id="7321055305895875150">verde e verde acqua</translation>
 <translation id="7328475450575141167">strelitzia nicolai</translation>
-<translation id="7331297744262591636">Devi avere almeno 18 anni e accettare che l'utilizzo degli sfondi IA è soggetto ai <ph name="GOOGLE_TERMS_OF_SERVICE_LINK" />Termini di servizio di Google<ph name="END_LINK_GOOGLE_TERMS_OF_SERVICE" /> e ai <ph name="BEGIN_LINK_GEN_AI_TERMS_OF_SERVICE" />Termini di servizio aggiuntivi per l'IA generativa<ph name="END_LINK_GEN_AI_TERMS_OF_SERVICE" />.
-          <ph name="LINE_BREAK" />
-          <ph name="LINE_BREAK" />
-          Puoi creare sfondi con l'IA solo per uso personale e non commerciale. Quando ricevi assistenza relativa agli sfondi, ai server dell'IA di Google viene inviato il testo per generare suggerimenti di sfondi, soggetti alle <ph name="BEGIN_LINK_GOOGLE_PRIVACY_POLICY" />Norme sulla privacy di Google<ph name="END_LINK_GOOGLE_PRIVACY_POLICY" />. <ph name="BEGIN_LINK_LEARN_MORE" />Scopri di più<ph name="END_LINK_LEARN_MORE" /></translation>
-<translation id="7343581795491695942"><ph name="QUERY_TEXT" />; <ph name="RESULT_TEXT" />; premi Tasto per la ricerca e Barra spaziatrice per vedere il risultato nella Ricerca Google.</translation>
 <translation id="7343649194310845056">Dispositivi di rete</translation>
 <translation id="7344788170842919262">naturale</translation>
 <translation id="7346768383111016081">Definisci il controllo per un'azione di gioco per giocare con la tastiera</translation>
@@ -1506,7 +1498,6 @@ Scarica il modello di trascrizione (fino a 100 MB) per ottenere queste trascrizi
 <translation id="7590883480672980941">Impostazioni di immissione</translation>
 <translation id="7595982850646262331">Tempo rimanente: <ph name="TIME_VALUE" /></translation>
 <translation id="7600430297804876776">L'amministratore di <ph name="MANAGER" /> ha impostato il periodo di utilizzo di <ph name="DEVICE_TYPE" />.</translation>
-<translation id="7613724632293948900">Riposiziona con il mouse o i tasti Freccia.</translation>
 <translation id="7618216277886673749">Seleziona <ph name="LANGUAGE_NAME" /></translation>
 <translation id="7618774594543487847">Neutra</translation>
 <translation id="7620771111601174153">Scopri di più nel Centro assistenza</translation>
@@ -1640,6 +1631,7 @@ Scarica il modello di trascrizione (fino a 100 MB) per ottenere queste trascrizi
 <translation id="819278132617411009">Usa Google AI per aumentare la produttività</translation>
 <translation id="8200772114523450471">Riprendi</translation>
 <translation id="8206859287963243715">Cellulare</translation>
+<translation id="8208043093301544621">Home</translation>
 <translation id="8208861521865154048">Vantaggi</translation>
 <translation id="8226628635270268143">Scegli le tue foto e i tuoi album preferiti</translation>
 <translation id="8227119283605456246">Allega file</translation>
@@ -1686,6 +1678,7 @@ Scarica il modello di trascrizione (fino a 100 MB) per ottenere queste trascrizi
 <translation id="8420955526972171689">Esegui test e risolvi problemi relativi all'hardware</translation>
 <translation id="8422748173858722634">IMEI</translation>
 <translation id="8424039430705546751">giù</translation>
+<translation id="8427213022735114808">La dettatura invia i tuoi dati audio a Google per consentire la digitazione vocale in tutti i campi di testo.</translation>
 <translation id="8428213095426709021">Impostazioni</translation>
 <translation id="8431300646573772016">Novità di ChromeOS</translation>
 <translation id="8433186206711564395">Impostazioni di rete</translation>
@@ -1724,6 +1717,7 @@ Scarica il modello di trascrizione (fino a 100 MB) per ottenere queste trascrizi
 <translation id="8584654835905316966">Per completare l'installazione del firmware per <ph name="DEVICE_NAME" /> alla versione <ph name="VERSION" /> è necessario eseguire il riavvio. Potrebbe sembrare che il computer si riavvii più volte. Si tratta di un comportamento normale.</translation>
 <translation id="8593058461203131755">metti in pausa i contenuti multimediali</translation>
 <translation id="8620617069779373398">Stato roaming</translation>
+<translation id="8624524972189162859">L'amministratore di <ph name="DOMAIN_NAME" /> ha disattivato il tuo dispositivo e può accedere alla sua posizione.</translation>
 <translation id="8626489604350149811">Altre azioni per <ph name="APN_NAME" /></translation>
 <translation id="86356131183441916">Viola chiaro</translation>
 <translation id="8647595191512746911">Trascrizione audio</translation>
@@ -1835,10 +1829,8 @@ Scarica il modello di trascrizione (fino a 100 MB) per ottenere queste trascrizi
 <translation id="9073281213608662541">PAP</translation>
 <translation id="9074739597929991885">Bluetooth</translation>
 <translation id="9082718469794970195">Utilizza questo video</translation>
-<translation id="9087578468327036362">Segnala questa query</translation>
 <translation id="9088306295921699330">Spazio utilizzato</translation>
 <translation id="9088994563996376283">Semplifica</translation>
-<translation id="9095775724867566971">PluginVm</translation>
 <translation id="909856219855259344">Scopri di più sulla data di reimpostazione</translation>
 <translation id="9100765901046053179">Impostazioni avanzate</translation>
 <translation id="910415269708673980">Aggiorna la richiesta per <ph name="PRINCIPAL_NAME" /></translation>
@@ -1868,7 +1860,6 @@ Scarica il modello di trascrizione (fino a 100 MB) per ottenere queste trascrizi
 <translation id="921080052717160800">Immagine impostata come sfondo della fotocamera</translation>
 <translation id="9211490828691860325">Tutte le scrivanie</translation>
 <translation id="9218016617214286986">Mostra APN noti</translation>
-<translation id="932327136139879170">Home page</translation>
 <translation id="939519157834106403">SSID</translation>
 <translation id="945522503751344254">Invia feedback</translation>
 <translation id="950520315903467048">Tasto mancante per <ph name="DIRECTION" />. <ph name="ASSIGN_INSTRUCTION" /></translation>

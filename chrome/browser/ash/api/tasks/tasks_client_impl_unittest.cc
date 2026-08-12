@@ -32,6 +32,7 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/ash/components/policy/policy_blocklist_service/ash_policy_blocklist_service_factory.h"
+#include "components/policy/core/browser/url_list/url_list_policy_pref_names.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/services/app_service/public/cpp/app.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
@@ -194,7 +195,8 @@ class TasksClientImplIsDisabledByAdminTest : public testing::Test {
   TasksClientImpl CreateClientForProfile(Profile* profile) const {
     return TasksClientImpl(
         profile->GetPrefs(),
-        apps::AppServiceProxyFactory::GetForProfile(profile),
+        &apps::AppServiceProxyFactory::GetForProfile(profile)
+             ->AppRegistryCache(),
         AshPolicyBlocklistServiceFactory::GetForBrowserContext(profile),
         base::BindLambdaForTesting(
             [&](signin::OAuthConsumerId oauth_consumer_id,
@@ -227,7 +229,7 @@ TEST_F(TasksClientImplIsDisabledByAdminTest, Default) {
 TEST_F(TasksClientImplIsDisabledByAdminTest,
        NoTasksInContextualGoogleIntegrationsPref) {
   auto prefs = GetDefaultPrefs();
-  base::Value::List enabled_integrations;
+  base::ListValue enabled_integrations;
   enabled_integrations.Append(prefs::kGoogleCalendarIntegrationName);
   enabled_integrations.Append(prefs::kGoogleClassroomIntegrationName);
   prefs->SetList(prefs::kContextualGoogleIntegrationsConfiguration,
@@ -263,7 +265,7 @@ TEST_F(TasksClientImplIsDisabledByAdminTest, DisabledCalendarApp) {
 
 TEST_F(TasksClientImplIsDisabledByAdminTest, BlockedTasksUrl) {
   auto prefs = GetDefaultPrefs();
-  base::Value::List blocklist;
+  base::ListValue blocklist;
   blocklist.Append("tasks.google.com");
   prefs->SetManagedPref(policy::policy_prefs::kUrlBlocklist,
                         std::move(blocklist));
@@ -298,7 +300,8 @@ class TasksClientImplTest : public testing::Test {
         /*testing_factories=*/{}, url_loader_factory_);
     client_ = std::make_unique<TasksClientImpl>(
         profile->GetPrefs(),
-        apps::AppServiceProxyFactory::GetForProfile(profile),
+        &apps::AppServiceProxyFactory::GetForProfile(profile)
+             ->AppRegistryCache(),
         AshPolicyBlocklistServiceFactory::GetForBrowserContext(profile),
         create_request_sender_callback, TRAFFIC_ANNOTATION_FOR_TESTS);
 
@@ -308,8 +311,7 @@ class TasksClientImplTest : public testing::Test {
     ASSERT_TRUE(test_server_.Start());
 
     gaia_urls_overrider_ = std::make_unique<GaiaUrlsOverriderForTesting>(
-        base::CommandLine::ForCurrentProcess(), "tasks_api_origin_url",
-        test_server_.base_url().spec());
+        "tasks_api_origin_url", test_server_.base_url().spec());
     ASSERT_EQ(GaiaUrls::GetInstance()->tasks_api_origin_url(),
               test_server_.base_url().spec());
   }

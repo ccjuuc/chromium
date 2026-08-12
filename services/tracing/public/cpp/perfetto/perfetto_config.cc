@@ -9,6 +9,7 @@
 
 #include "base/byte_size.h"
 #include "base/command_line.h"
+#include "base/logging.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -19,7 +20,7 @@
 #include "build/build_config.h"
 #include "build/chromecast_buildflags.h"
 #include "components/tracing/common/tracing_switches.h"
-#include "services/tracing/public/mojom/perfetto_service.mojom.h"
+#include "services/tracing/public/cpp/perfetto/perfetto_data_source_names.h"
 #include "third_party/perfetto/protos/perfetto/config/chrome/histogram_samples.gen.h"
 #include "third_party/perfetto/protos/perfetto/config/track_event/track_event_config.gen.h"
 
@@ -74,28 +75,28 @@ void AddDataSourceConfigs(
 
   if (stripped_config.IsCategoryGroupEnabled(
           base::trace_event::MemoryDumpManager::kTraceCategory)) {
-    AddDataSourceConfig(
-        perfetto_config, tracing::mojom::kMemoryInstrumentationDataSourceName,
-        chrome_config_string, privacy_filtering_enabled, convert_to_legacy_json,
-        json_agent_label_filter, enable_package_name_filter);
-    AddDataSourceConfig(
-        perfetto_config, tracing::mojom::kNativeHeapProfilerSourceName,
-        chrome_config_string, privacy_filtering_enabled, convert_to_legacy_json,
-        json_agent_label_filter, enable_package_name_filter);
+    AddDataSourceConfig(perfetto_config, kMemoryInstrumentationDataSourceName,
+                        chrome_config_string, privacy_filtering_enabled,
+                        convert_to_legacy_json, json_agent_label_filter,
+                        enable_package_name_filter);
+    AddDataSourceConfig(perfetto_config, kNativeHeapProfilerSourceName,
+                        chrome_config_string, privacy_filtering_enabled,
+                        convert_to_legacy_json, json_agent_label_filter,
+                        enable_package_name_filter);
   }
 
-  auto* trace_event_data_source = AddDataSourceConfig(
-      perfetto_config, tracing::mojom::kTraceEventDataSourceName,
-      /*chrome_config_string=*/"", privacy_filtering_enabled,
-      convert_to_legacy_json, json_agent_label_filter,
-      enable_package_name_filter);
+  auto* trace_event_data_source =
+      AddDataSourceConfig(perfetto_config, kTraceEventDataSourceName,
+                          /*chrome_config_string=*/"",
+                          privacy_filtering_enabled, convert_to_legacy_json,
+                          json_agent_label_filter, enable_package_name_filter);
   auto* trace_event_source_config = trace_event_data_source->mutable_config();
   trace_event_source_config->set_name("track_event");
   trace_event_source_config->set_track_event_config_raw(
       stripped_config.ToPerfettoTrackEventConfigRaw(privacy_filtering_enabled));
   for (auto& enabled_pid : process_filters.included_process_ids()) {
     *trace_event_data_source->add_producer_name_filter() = base::StrCat(
-        {mojom::kPerfettoProducerNamePrefix,
+        {kPerfettoProducerNamePrefix,
          base::NumberToString(static_cast<uint32_t>(enabled_pid))});
   }
 
@@ -103,23 +104,23 @@ void AddDataSourceConfigs(
   // only emit events if system tracing is enabled in |chrome_config|.
   if (!privacy_filtering_enabled && systrace_enabled) {
 #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_CASTOS)
-    AddDataSourceConfig(
-        perfetto_config, tracing::mojom::kSystemTraceDataSourceName,
-        chrome_config_string, privacy_filtering_enabled, convert_to_legacy_json,
-        json_agent_label_filter, enable_package_name_filter);
+    AddDataSourceConfig(perfetto_config, kSystemTraceDataSourceName,
+                        chrome_config_string, privacy_filtering_enabled,
+                        convert_to_legacy_json, json_agent_label_filter,
+                        enable_package_name_filter);
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
-    AddDataSourceConfig(
-        perfetto_config, tracing::mojom::kArcTraceDataSourceName,
-        chrome_config_string, privacy_filtering_enabled, convert_to_legacy_json,
-        json_agent_label_filter, enable_package_name_filter);
+    AddDataSourceConfig(perfetto_config, kArcTraceDataSourceName,
+                        chrome_config_string, privacy_filtering_enabled,
+                        convert_to_legacy_json, json_agent_label_filter,
+                        enable_package_name_filter);
 #endif
   }
 
   // Also capture global metadata.
   auto* metadata_data_source =
-      AddDataSourceConfig(perfetto_config, tracing::mojom::kMetaData2SourceName,
+      AddDataSourceConfig(perfetto_config, kMetaData2SourceName,
                           /*chrome_config_string=*/"",
                           privacy_filtering_enabled, convert_to_legacy_json,
                           json_agent_label_filter, enable_package_name_filter);
@@ -128,7 +129,7 @@ void AddDataSourceConfigs(
   if (stripped_config.IsCategoryGroupEnabled(
           TRACE_DISABLED_BY_DEFAULT("histogram_samples"))) {
     auto* data_source = AddDataSourceConfig(
-        perfetto_config, tracing::mojom::kHistogramSampleSourceName,
+        perfetto_config, kHistogramSampleSourceName,
         /*chrome_config_string=*/"", privacy_filtering_enabled,
         convert_to_legacy_json, json_agent_label_filter,
         enable_package_name_filter);
@@ -147,8 +148,7 @@ void AddDataSourceConfigs(
 
   if (stripped_config.IsCategoryGroupEnabled(
           TRACE_DISABLED_BY_DEFAULT("cpu_profiler"))) {
-    AddDataSourceConfig(perfetto_config,
-                        tracing::mojom::kSamplerProfilerSourceName,
+    AddDataSourceConfig(perfetto_config, kSamplerProfilerSourceName,
                         /*chrome_config_string=*/"", privacy_filtering_enabled,
                         convert_to_legacy_json, json_agent_label_filter,
                         enable_package_name_filter);
@@ -156,19 +156,10 @@ void AddDataSourceConfigs(
 
   if (stripped_config.IsCategoryGroupEnabled(
           TRACE_DISABLED_BY_DEFAULT("system_metrics"))) {
-    AddDataSourceConfig(perfetto_config,
-                        tracing::mojom::kSystemMetricsSourceName,
+    AddDataSourceConfig(perfetto_config, kSystemMetricsSourceName,
                         /*chrome_config_string=*/"", privacy_filtering_enabled,
                         convert_to_legacy_json, json_agent_label_filter,
                         enable_package_name_filter);
-  }
-
-  if (stripped_config.IsCategoryGroupEnabled(
-          TRACE_DISABLED_BY_DEFAULT("java-heap-profiler"))) {
-    AddDataSourceConfig(
-        perfetto_config, tracing::mojom::kJavaHeapProfilerSourceName,
-        chrome_config_string, privacy_filtering_enabled, convert_to_legacy_json,
-        json_agent_label_filter, enable_package_name_filter);
   }
 }
 
@@ -233,7 +224,7 @@ void AdaptDataSourceConfig(
         enable_package_name_filter);
   }
 
-  if (config->name() == tracing::mojom::kHistogramSampleSourceName) {
+  if (config->name() == kHistogramSampleSourceName) {
     perfetto::protos::gen::ChromiumHistogramSamplesConfig histogram_config;
     if (!config->chromium_histogram_samples_raw().empty() &&
         !histogram_config.ParseFromString(
@@ -257,19 +248,19 @@ void AdaptDataSourceConfig(
 
 }  // namespace
 
-base::ByteCount GetDefaultTraceBufferSize() {
+base::ByteSize GetDefaultTraceBufferSize() {
   auto* command_line = base::CommandLine::ForCurrentProcess();
   std::string switch_value = command_line->GetSwitchValueASCII(
       switches::kDefaultTraceBufferSizeLimitInKb);
   size_t switch_kilobytes;
   if (!switch_value.empty() &&
       base::StringToSizeT(switch_value, &switch_kilobytes)) {
-    return base::KiB(switch_kilobytes);
+    return base::KiBU(switch_kilobytes);
   } else {
     // TODO(eseckler): Reduce the default buffer size after benchmarks set
     // what they require. Should also invest some time to reduce the overhead
     // of begin/end pairs further.
-    return base::MiB(200);
+    return base::MiBU(200);
   }
 }
 
@@ -283,8 +274,7 @@ perfetto::TraceConfig GetDefaultPerfettoConfig(
   base::ByteSize size_limit = chrome_config.GetTraceBufferSizeInBytes();
   if (size_limit.is_zero()) {
     // If trace config did not provide trace buffer size, we will use default
-    size_limit =
-        base::ByteSize::FromDeprecatedByteCount(GetDefaultTraceBufferSize());
+    size_limit = GetDefaultTraceBufferSize();
   }
   auto* buffer_config = perfetto_config.add_buffers();
   buffer_config->set_size_kb(size_limit.InKiB());

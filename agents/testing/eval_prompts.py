@@ -82,6 +82,13 @@ def _discover_testcase_files(
     all_tests = list(extensions_path.glob(f'*/tests/**/*{TESTCASE_EXTENSION}'))
     prompts_path = constants.CHROMIUM_SRC / 'agents' / 'prompts' / 'eval'
     all_tests.extend(list(prompts_path.glob(f'**/*{TESTCASE_EXTENSION}')))
+
+    internal_prompts_path = (constants.CHROMIUM_SRC / 'internal' / 'agents' /
+                             'prompts' / 'eval')
+    if internal_prompts_path.exists():
+        all_tests.extend(
+            list(internal_prompts_path.glob(f'**/*{TESTCASE_EXTENSION}')))
+
     if extra_tests_paths:
         for extra_tests_path in extra_tests_paths:
             fullPath = constants.CHROMIUM_SRC / extra_tests_path
@@ -221,17 +228,26 @@ def _perform_chromium_setup(force: bool, build: bool,
     if is_btrfs and not force:
         subprocess.run(['sudo', '-v'], check=True)
 
+    # Setting this causes siso to use virtual paths instead of absolute ones.
+    # This is necessary when using btrfs, as otherwise the snapshot will
+    # contain an output directory which contains siso files using absolute
+    # paths. These absolute paths cause compilation within that snapshot to
+    # erroneously no-op. This environment variable is left intentionally set
+    # so that any compilations during tests also use virtual paths.
+    if is_btrfs:
+        os.environ['SISO_USE_VIRTUAL_BUILD_PATH'] = '1'
+
     src_path = root_path / 'src'
     _check_uncommitted_changes(src_path)
     if build:
         _build_chromium(src_path, configs)
 
 
-def _fetch_sandbox_image() -> bool:
+def _fetch_sandbox_image(gemini_cli_cmd: list[str]) -> bool:
     """Pre-fetches the sandbox image.
 
     Args:
-        gemini_cli_bin: An optional path to the gemini-cli binary to use.
+        gemini_cli_cmd: The Gemini CLI cmd to use.
 
     Returns:
         True on success, False on failure.
@@ -239,7 +255,8 @@ def _fetch_sandbox_image() -> bool:
     logging.info('Pre-fetching sandbox image. This may take a minute...')
     image = ''
     try:
-        version = gemini_helpers.get_gemini_version()
+        version = gemini_helpers.get_gemini_version(
+            gemini_cli_cmd=tuple(gemini_cli_cmd))
         if not version:
             logging.error('Failed to get gemini version.')
             return False
@@ -328,15 +345,22 @@ def _run_prompt_eval_tests(args: argparse.Namespace) -> int:
         promptfoo = promptfoo_installation.FromCipdPromptfooInstallation(
             args.verbose)
 
-    if args.sandbox and not _fetch_sandbox_image():
-        return 1
-
     gemini_cli_bin = args.gemini_cli_bin
     node_bin = args.node_bin
     if args.use_pinned_binaries:
         (gemini_cli_bin,
          node_bin) = gemini_cli_installation.fetch_cipd_gemini_cli(
              args.verbose)
+
+    gemini_cli_cmd = []
+    if node_bin:
+        gemini_cli_cmd.append(str(node_bin))
+    if gemini_cli_bin:
+        gemini_cli_cmd.append(str(gemini_cli_bin))
+
+    if args.sandbox and not _fetch_sandbox_image(
+            gemini_cli_cmd=gemini_cli_cmd):
+        return 1
 
     worker_options = workers.WorkerOptions(clean=not args.no_clean,
                                            verbose=args.verbose,
@@ -539,6 +563,10 @@ def _parse_args() -> argparse.Namespace:
               f'{_TOTAL_SHARDS_ENV_VAR}.'))
 
     group = parser.add_argument_group('Promptfoo Arguments')
+    group.add_argument('--list-tests',
+                       action='store_true',
+                       help='List all discovered test file paths and '
+                       'descriptions, then exit.')
     promptfoo_install_group = group.add_mutually_exclusive_group()
     promptfoo_install_group.add_argument(
         '--promptfoo-bin',
@@ -560,8 +588,10 @@ def _parse_args() -> argparse.Namespace:
                        type=pathlib.Path,
                        help='Path to a custom nodejs binary to use.')
     group.add_argument(
-        '--use-pinned-binaries',
-        action='store_true',
+        '--no-use-pinned-binaries',
+        dest='use_pinned_binaries',
+        default='true',
+        action='store_false',
         help=('Use the pinned cipd version. This is to control what is under '
               'test i.e. separating the changes in gemini-cli from the '
               'changing prompt/codebase.'))
@@ -606,6 +636,14 @@ def main() -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format='%(message)s',
     )
+    if args.list_tests:
+        configs = _get_tests_to_run(args.shard_index, args.total_shards,
+                                    args.filter, args.tag_filter,
+                                    args.extra_tests_paths)
+        for config in configs:
+            print(f'{config.src_relative_test_file}: {config.description}')
+        return 0
+
     return _run_prompt_eval_tests(args)
 
 

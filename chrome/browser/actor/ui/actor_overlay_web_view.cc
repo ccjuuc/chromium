@@ -32,6 +32,7 @@ ActorOverlayWebView::~ActorOverlayWebView() {
 
 void ActorOverlayWebView::ShowUI(tabs::TabInterface* tab,
                                  base::OnceClosure callback) {
+  CHECK(base::FeatureList::IsEnabled(features::kGlicActorUi));
   CHECK(features::kGlicActorUiOverlay.Get());
   if (!web_contents()) {
     // Creates a new web contents if one doesn't exist.
@@ -39,12 +40,13 @@ void ActorOverlayWebView::ShowUI(tabs::TabInterface* tab,
   }
   // Disable mouse, keyboard, and a11y input events to underlying tab
   // contents.
-  scoped_ignore_input_events_ = tab->GetContents()->IgnoreInputEvents(
-      std::nullopt, /*should_ignore_a11y_input=*/true);
+  scoped_ignore_input_events_ =
+      tab->GetContents()->IgnoreInputEvents(std::nullopt);
   // Set the tab interface
   webui::SetTabInterface(web_contents(), tab);
 
   // Make the view background transparent so it can act as an overlay.
+  web_contents()->SetPageBaseBackgroundColor(SK_ColorTRANSPARENT);
   content::RenderWidgetHostView* rwhv =
       web_contents()->GetRenderWidgetHostView();
   if (rwhv) {
@@ -95,11 +97,23 @@ void ActorOverlayWebView::MoveCursorTo(const gfx::Point& point,
   // Ensure the callback runs on any early return. We Release() ownership only
   // when passing the callback to an asynchronous operation.
   base::ScopedClosureRunner runner(std::move(callback));
-  if (!base::FeatureList::IsEnabled(features::kGlicActorUiOverlayMagicCursor)) {
+  if (!base::FeatureList::IsEnabled(features::kGlicActorUiMagicCursor)) {
     return;
   }
   if (actor::ui::ActorOverlayUI* web_ui = GetWebUi()) {
     web_ui->MoveCursorTo(point, runner.Release());
+  }
+}
+
+void ActorOverlayWebView::TriggerClickAnimation(base::OnceClosure callback) {
+  // Ensure the callback runs on any early return. We Release() ownership only
+  // when passing the callback to an asynchronous operation.
+  base::ScopedClosureRunner runner(std::move(callback));
+  if (!base::FeatureList::IsEnabled(features::kGlicActorUiMagicCursor)) {
+    return;
+  }
+  if (actor::ui::ActorOverlayUI* web_ui = GetWebUi()) {
+    web_ui->TriggerClickAnimation(runner.Release());
   }
 }
 
@@ -115,6 +129,12 @@ actor::ui::ActorOverlayUI* ActorOverlayWebView::GetWebUi() {
 }
 
 void ActorOverlayWebView::PrimaryPageChanged(content::Page& page) {
+  content::RenderWidgetHostView* rwhv =
+      web_contents()->GetRenderWidgetHostView();
+  if (rwhv) {
+    rwhv->SetBackgroundColor(SK_ColorTRANSPARENT);
+  }
+
   if (pending_webui_init_callbacks_.empty()) {
     return;
   }

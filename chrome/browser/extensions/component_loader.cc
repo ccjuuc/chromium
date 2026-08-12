@@ -9,13 +9,13 @@
 #include <string_view>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/path_service.h"
 #include "base/time/time.h"
@@ -27,16 +27,22 @@
 #include "chrome/browser/extensions/component_extensions_allowlist/allowlist.h"
 #include "chrome/browser/extensions/component_loader_factory.h"
 #include "chrome/browser/extensions/data_deleter.h"
+#include "chrome/browser/extensions/glic_util.h"
 #include "chrome/browser/extensions/profile_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/channel_info.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension_constants.h"
+#include "chrome/grit/aim_eligibility_extension_resources.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/browser_resources.h"
+#include "chrome/grit/component_extension_resources.h"
+#include "chrome/grit/contextual_tasks_extension_resources.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/crx_file/id_util.h"
+#include "components/omnibox/common/omnibox_features.h"
 #include "components/version_info/version_info.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/content_switches.h"
@@ -60,6 +66,7 @@
 #include "ui/base/resource/resource_bundle.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_extension_constants.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
@@ -102,7 +109,7 @@ bool g_enable_background_extensions_during_testing = false;
 bool g_enable_help_app = true;
 #endif
 
-ExtensionId GenerateId(const base::Value::Dict& manifest,
+ExtensionId GenerateId(const base::DictValue& manifest,
                        const base::FilePath& path) {
   std::string id_input;
   const std::string* raw_key = manifest.FindString(manifest_keys::kPublicKey);
@@ -113,13 +120,13 @@ ExtensionId GenerateId(const base::Value::Dict& manifest,
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
-std::optional<base::Value::Dict> LoadManifestOnFileThread(
+std::optional<base::DictValue> LoadManifestOnFileThread(
     const base::FilePath& root_directory,
     const base::FilePath::CharType* manifest_filename,
     bool localize_manifest) {
   DCHECK(GetExtensionFileTaskRunner()->RunsTasksInCurrentSequence());
   std::string error;
-  std::optional<base::Value::Dict> manifest(
+  std::optional<base::DictValue> manifest(
       file_util::LoadManifest(root_directory, manifest_filename, &error));
   if (!manifest) {
     LOG(ERROR) << "Can't load "
@@ -155,7 +162,7 @@ bool IsNormalSession() {
 }  // namespace
 
 ComponentLoader::ComponentExtensionInfo::ComponentExtensionInfo(
-    base::Value::Dict manifest_param,
+    base::DictValue manifest_param,
     const base::FilePath& directory)
     : manifest(std::move(manifest_param)), root_directory(directory) {
   if (!root_directory.IsAbsolute()) {
@@ -222,9 +229,9 @@ void ComponentLoader::LoadAll() {
   }
 }
 
-std::optional<base::Value::Dict> ComponentLoader::ParseManifest(
+std::optional<base::DictValue> ComponentLoader::ParseManifest(
     std::string_view manifest_contents) const {
-  std::optional<base::Value::Dict> manifest = base::JSONReader::ReadDict(
+  std::optional<base::DictValue> manifest = base::JSONReader::ReadDict(
       manifest_contents, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!manifest) {
     LOG(ERROR) << "Failed to parse extension manifest.";
@@ -246,7 +253,7 @@ ExtensionId ComponentLoader::Add(int manifest_resource_id,
   return Add(manifest_contents, root_directory, true);
 }
 
-ExtensionId ComponentLoader::Add(base::Value::Dict manifest,
+ExtensionId ComponentLoader::Add(base::DictValue manifest,
                                  const base::FilePath& root_directory) {
   return Add(std::move(manifest), root_directory, false);
 }
@@ -261,14 +268,14 @@ ExtensionId ComponentLoader::Add(std::string_view manifest_contents,
                                  bool skip_allowlist) {
   // The Value is kept for the lifetime of the ComponentLoader. This is
   // required in case LoadAll() is called again.
-  std::optional<base::Value::Dict> manifest = ParseManifest(manifest_contents);
+  std::optional<base::DictValue> manifest = ParseManifest(manifest_contents);
   if (manifest) {
     return Add(std::move(*manifest), root_directory, skip_allowlist);
   }
   return std::string();
 }
 
-ExtensionId ComponentLoader::Add(base::Value::Dict parsed_manifest,
+ExtensionId ComponentLoader::Add(base::DictValue parsed_manifest,
                                  const base::FilePath& root_directory,
                                  bool skip_allowlist) {
   ComponentExtensionInfo info(std::move(parsed_manifest), root_directory);
@@ -288,7 +295,7 @@ ExtensionId ComponentLoader::Add(base::Value::Dict parsed_manifest,
 ExtensionId ComponentLoader::AddOrReplace(const base::FilePath& path) {
   base::FilePath absolute_path = base::MakeAbsoluteFilePath(path);
   std::string error;
-  std::optional<base::Value::Dict> manifest(
+  std::optional<base::DictValue> manifest(
       file_util::LoadManifest(absolute_path, &error));
   if (!manifest) {
     LOG(ERROR) << "Could not load extension from '" << absolute_path.value()
@@ -392,6 +399,29 @@ void ComponentLoader::AddNetworkSpeechSynthesisExtension() {
   }
 }
 
+void ComponentLoader::AddAimEligibilityExtension() {
+  if (base::FeatureList::IsEnabled(
+          omnibox::kAimEligibilityComponentExtension)) {
+    Add(IDR_AIM_ELIGIBILITY_EXTENSION_MANIFEST_JSON,
+        base::FilePath(FILE_PATH_LITERAL("aim_eligibility_extension")));
+  }
+}
+
+void ComponentLoader::AddGlicExtension() {
+  if (IsApiGlicPrivateEnabled()) {
+    Add(IDR_GLIC_EXTENSION_MANIFEST,
+        base::FilePath(FILE_PATH_LITERAL("glic_extension")));
+  }
+}
+
+void ComponentLoader::AddContextualTasksExtension() {
+  if (base::FeatureList::IsEnabled(
+          extensions_features::kApiContextualTasksPrivate)) {
+    Add(IDR_CONTEXTUAL_TASKS_EXTENSION_MANIFEST_JSON,
+        base::FilePath(FILE_PATH_LITERAL("contextual_tasks_extension")));
+  }
+}
+
 void ComponentLoader::AddWithNameAndDescription(
     int manifest_resource_id,
     const base::FilePath& root_directory,
@@ -408,7 +438,7 @@ void ComponentLoader::AddWithNameAndDescription(
 
   // The Value is kept for the lifetime of the ComponentLoader. This is
   // required in case LoadAll() is called again.
-  std::optional<base::Value::Dict> manifest = ParseManifest(manifest_contents);
+  std::optional<base::DictValue> manifest = ParseManifest(manifest_contents);
 
   if (manifest) {
     manifest->Set(manifest_keys::kName, name_string);
@@ -424,10 +454,12 @@ void ComponentLoader::AddWebStoreApp() {
   }
 #endif
 
-  AddWithNameAndDescription(
-      IDR_WEBSTORE_MANIFEST, base::FilePath(FILE_PATH_LITERAL("web_store")),
-      l10n_util::GetStringUTF8(IDS_WEBSTORE_NAME_STORE),
-      l10n_util::GetStringUTF8(IDS_WEBSTORE_APP_DESCRIPTION));
+  if (base::FeatureList::IsEnabled(extensions_features::kWebstoreHostedApp)) {
+    AddWithNameAndDescription(
+        IDR_WEBSTORE_MANIFEST, base::FilePath(FILE_PATH_LITERAL("web_store")),
+        l10n_util::GetStringUTF8(IDS_WEBSTORE_NAME_STORE),
+        l10n_util::GetStringUTF8(IDS_WEBSTORE_APP_DESCRIPTION));
+  }
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -604,7 +636,11 @@ void ComponentLoader::AddDefaultComponentExtensionsWithBackgroundPages(
 #endif  // BUILDFLAG(IS_CHROMEOS)
   }
 
-// http://crbug.com/314799
+  AddAimEligibilityExtension();
+  AddGlicExtension();
+  AddContextualTasksExtension();
+
+// http://crbug.com/41070702
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
   AddNetworkSpeechSynthesisExtension();
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
@@ -638,7 +674,7 @@ void ComponentLoader::UnloadComponent(ComponentExtensionInfo* component) {
 
 #if BUILDFLAG(IS_CHROMEOS)
 bool ComponentLoader::IsPendingAdd(const ExtensionId& extension_id) const {
-  return base::Contains(pending_extension_ids_, extension_id);
+  return pending_extension_ids_.contains(extension_id);
 }
 
 bool ComponentLoader::ExistsOrPendingAdd(
@@ -678,7 +714,7 @@ void ComponentLoader::FinishAddComponentFromDir(
     const std::optional<std::string>& description_string,
     base::OnceClosure done_cb,
     base::OnceClosure error_cb,
-    std::optional<base::Value::Dict> manifest) {
+    std::optional<base::DictValue> manifest) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   // Extension is removed during loading. Skip adding in this case.

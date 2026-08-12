@@ -65,7 +65,6 @@ class OffTheRecordProfileImpl : public Profile {
   policy::ProfileCloudPolicyManager* GetProfileCloudPolicyManager() override;
 #endif  // BUILDFLAG(IS_CHROMEOS)
   policy::CloudPolicyManager* GetCloudPolicyManager() override;
-  scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory() override;
   bool IsSameOrParent(Profile* profile) override;
   base::Time GetStartTime() const override;
   ProfileKey* GetProfileKey() const override;
@@ -123,7 +122,10 @@ class OffTheRecordProfileImpl : public Profile {
   GetFederatedIdentityApiPermissionContext() override;
   content::FederatedIdentityAutoReauthnPermissionContextDelegate*
   GetFederatedIdentityAutoReauthnPermissionContext() override;
-  content::KAnonymityServiceDelegate* GetKAnonymityServiceDelegate() override;
+
+#if BUILDFLAG(IS_WIN)
+  void AckCrashForTracking() override;
+#endif
 
  protected:
   // Profile implementation.

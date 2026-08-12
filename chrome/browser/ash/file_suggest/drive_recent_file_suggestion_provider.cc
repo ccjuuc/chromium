@@ -13,7 +13,6 @@
 #include "base/barrier_closure.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
-#include "base/i18n/time_formatting.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
@@ -22,10 +21,7 @@
 #include "chrome/browser/ash/drive/drive_integration_service_factory.h"
 #include "chrome/browser/ash/file_suggest/file_suggest_util.h"
 #include "chromeos/ash/components/drivefs/drivefs_host.h"
-#include "chromeos/ash/components/drivefs/drivefs_util.h"
 #include "components/drive/file_errors.h"
-#include "components/prefs/pref_service.h"
-#include "mojo/public/cpp/bindings/callback_helpers.h"
 
 namespace ash {
 namespace {
@@ -188,8 +184,10 @@ DriveRecentFileSuggestionProvider::DriveRecentFileSuggestionProvider(
   auto* drive_integration_service =
       drive::DriveIntegrationServiceFactory::GetForProfile(profile);
   if (drive_integration_service) {
-    drive::DriveIntegrationService::Observer::Observe(
-        drive_integration_service);
+    if (drive_integration_service != drive_observation_.GetSource()) {
+      drive_observation_.Reset();
+      drive_observation_.Observe(drive_integration_service);
+    }
     auto* drive_fs_host = drive_integration_service->GetDriveFsHost();
     if (drive_fs_host) {
       drivefs::DriveFsHost::Observer::Observe(drive_fs_host);
@@ -275,7 +273,7 @@ std::string DriveRecentFileSuggestionProvider::GetHistogramSuffix(
 }
 
 void DriveRecentFileSuggestionProvider::OnDriveIntegrationServiceDestroyed() {
-  drive::DriveIntegrationService::Observer::Reset();
+  drive_observation_.Reset();
   drivefs::DriveFsHost::Observer::Reset();
 
   can_use_cache_ = false;
@@ -286,8 +284,7 @@ void DriveRecentFileSuggestionProvider::OnDriveIntegrationServiceDestroyed() {
 
 void DriveRecentFileSuggestionProvider::OnFileSystemMounted() {
   if (!drivefs::DriveFsHost::Observer::GetHost()) {
-    auto* drive_fs_host = drive::DriveIntegrationService::Observer::GetService()
-                              ->GetDriveFsHost();
+    auto* drive_fs_host = drive_observation_.GetSource()->GetDriveFsHost();
     if (drive_fs_host) {
       drivefs::DriveFsHost::Observer::Observe(drive_fs_host);
     }
@@ -330,9 +327,6 @@ void DriveRecentFileSuggestionProvider::PerformSearch(
           &DriveRecentFileSuggestionProvider::OnSearchRequestComplete,
           weak_factory_.GetWeakPtr(), search_type, std::move(callback)));
 }
-
-void DriveRecentFileSuggestionProvider::MaybeUpdateItemSuggestCache(
-    base::PassKey<FileSuggestKeyedService>) {}
 
 void DriveRecentFileSuggestionProvider::OnSearchRequestComplete(
     SearchType search_type,

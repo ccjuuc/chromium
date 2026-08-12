@@ -23,16 +23,13 @@
 #include "third_party/blink/renderer/core/dom/document_fragment.h"
 
 #include "third_party/blink/renderer/core/dom/document.h"
-#include "third_party/blink/renderer/core/dom/document_part_root.h"
 #include "third_party/blink/renderer/core/dom/node_cloning_data.h"
-#include "third_party/blink/renderer/core/dom/part_root.h"
 #include "third_party/blink/renderer/core/dom/tree_scope.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
 #include "third_party/blink/renderer/core/html/parser/html_document_parser.h"
 #include "third_party/blink/renderer/core/xml/parser/xml_document_parser.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/runtime_call_stats.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -70,37 +67,30 @@ Node* DocumentFragment::Clone(Document& factory,
   DCHECK_EQ(append_to, nullptr)
       << "DocumentFragment::Clone() doesn't support append_to";
   DocumentFragment* clone = Create(factory);
-  DocumentPartRoot* part_root = nullptr;
-  DCHECK(!data.Has(CloneOption::kPreserveDOMPartsMinimalAPI) || !HasNodePart());
-  if (data.Has(CloneOption::kPreserveDOMParts)) {
-    DCHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled());
-    DCHECK(!RuntimeEnabledFeatures::DOMPartsAPIMinimalEnabled());
-    part_root = &clone->getPartRoot();
-    data.PushPartRoot(*part_root);
-    PartRoot::CloneParts(*this, *clone, data);
-  }
   if (data.Has(CloneOption::kIncludeDescendants)) {
     clone->CloneChildNodesFrom(*this, data, fallback_registry);
   }
-  DCHECK(!part_root || &data.CurrentPartRoot() == part_root);
   return clone;
 }
 
 void DocumentFragment::ParseHTML(const String& source,
                                  Element* context_element,
                                  CustomElementRegistry* registry,
-                                 ParserContentPolicy parser_content_policy) {
+                                 ParserContentPolicy parser_content_policy,
+                                 StreamingSanitizer* sanitizer) {
   RUNTIME_CALL_TIMER_SCOPE(
       GetDocument().GetAgent().isolate(),
       RuntimeCallStats::CounterId::kDocumentFragmentParseHTML);
   HTMLDocumentParser::ParseDocumentFragment(source, this, context_element,
-                                            registry, parser_content_policy);
+                                            registry, parser_content_policy,
+                                            sanitizer);
 }
 
 bool DocumentFragment::ParseXML(const String& source,
                                 Element* context_element,
                                 ExceptionState& exception_state,
-                                ParserContentPolicy parser_content_policy) {
+                                ParserContentPolicy parser_content_policy,
+                                StreamingSanitizer* sanitizer) {
   return XMLDocumentParser::ParseDocumentFragment(
       source, this, context_element, parser_content_policy, exception_state);
 }
@@ -126,19 +116,7 @@ void DocumentFragment::ForgetChildren() {
 }
 
 void DocumentFragment::Trace(Visitor* visitor) const {
-  visitor->Trace(document_part_root_);
   ContainerNode::Trace(visitor);
-}
-
-DocumentPartRoot& DocumentFragment::getPartRoot() {
-  CHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled());
-  if (!document_part_root_) {
-    document_part_root_ = MakeGarbageCollected<DocumentPartRoot>(*this);
-    // We use the existence of the Document's part root to signal the existence
-    // of Parts. So retrieve it here.
-    GetDocument().getPartRoot();
-  }
-  return *document_part_root_;
 }
 
 }  // namespace blink

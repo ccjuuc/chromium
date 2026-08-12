@@ -145,6 +145,9 @@ class ControllerImpl : public Controller,
   // internal state initialization.
   void AttemptToFinalizeSetup();
 
+  // Posts a task to execute AttemptToFinalizeSetup().
+  void PostAttemptToFinalizeSetup();
+
   // Called when setup and recovery failed.  Shuts down the service and notifies
   // the Clients.
   void HandleUnrecoverableSetup();
@@ -219,9 +222,8 @@ class ControllerImpl : public Controller,
 
   void HandleExternalDownload(const std::string& guid, bool active);
   void PrepareToStartDownload(Entry* entry);
-  void OnDownloadReadyToStart(
-      const std::string& guid,
-      scoped_refptr<network::ResourceRequestBody> post_body);
+  void OnDownloadReadyToStart(const std::string& guid,
+                              DownloadRequestParameters params);
 
   // Postable methods meant to just be pass throughs to Client APIs.  This is
   // meant to help prevent reentrancy.
@@ -279,6 +281,7 @@ class ControllerImpl : public Controller,
   StartupStatus startup_status_;
   std::set<std::string> externally_active_downloads_;
   std::set<std::string> pending_uploads_;
+  std::set<std::string> guids_with_custom_request_params_;
   std::map<std::string, DownloadParams::StartCallback> start_callbacks_;
   std::map<DownloadTaskType, TaskFinishedCallback> task_finished_callbacks_;
   base::CancelableOnceClosure cancel_downloads_callback_;

@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ui/views/autofill/payments/payments_view_util.h"
 
-#include <algorithm>
 #include <memory>
 #include <optional>
 
@@ -16,16 +15,14 @@
 #include "chrome/browser/ui/views/autofill/payments/dialog_view_ids.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
+#include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/grit/components_scaled_resources.h"
-#include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
-#include "ui/base/l10n/l10n_util.h"
-#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
-#include "ui/gfx/color_palette.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image_skia.h"
@@ -37,7 +34,6 @@
 #include "ui/views/border.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
-#include "ui/views/controls/separator.h"
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/controls/theme_tracking_image_view.h"
@@ -108,16 +104,63 @@ std::unique_ptr<views::ImageView> CreateIconView(
           *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
               IDR_AUTOFILL_GOOGLE_PAY_KLARNA_DARK));
       break;
+    case TitleWithIconAfterLabelView::Icon::GOOGLE_WALLET:
+      model = ui::ImageModel::FromImageSkia(
+          *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
+              base::FeatureList::IsEnabled(
+                  features::kAutofillEnableGradientGoogleLogos)
+                  ? IDR_AUTOFILL_GOOGLE_WALLET_ICON_WITH_GRADIENT
+                  : IDR_AUTOFILL_GOOGLE_WALLET_ICON));
+      break;
+    case TitleWithIconAfterLabelView::Icon::AFFIRM:
+      model = ui::ImageModel::FromImageSkia(
+          *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
+              IDR_AUTOFILL_AFFIRM));
+      model_dark = ui::ImageModel::FromImageSkia(
+          *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
+              IDR_AUTOFILL_AFFIRM_DARK));
+      break;
+    case TitleWithIconAfterLabelView::Icon::AFTERPAY:
+      model = ui::ImageModel::FromImageSkia(
+          *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
+              IDR_AUTOFILL_AFTERPAY));
+      model_dark = ui::ImageModel::FromImageSkia(
+          *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
+              IDR_AUTOFILL_AFTERPAY_DARK));
+      break;
+    case TitleWithIconAfterLabelView::Icon::KLARNA:
+      model = ui::ImageModel::FromImageSkia(
+          *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
+              IDR_AUTOFILL_KLARNA));
+      model_dark = ui::ImageModel::FromImageSkia(
+          *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
+              IDR_AUTOFILL_KLARNA_DARK));
+      break;
+    case TitleWithIconAfterLabelView::Icon::ZIP:
+      model = ui::ImageModel::FromImageSkia(
+          *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
+              IDR_AUTOFILL_ZIP));
+      model_dark = ui::ImageModel::FromImageSkia(
+          *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
+              IDR_AUTOFILL_ZIP_DARK));
+      break;
     case TitleWithIconAfterLabelView::Icon::GOOGLE_G: {
       const gfx::VectorIcon& icon = vector_icons::kGoogleGLogoIcon;
 #else
     case TitleWithIconAfterLabelView::Icon::GOOGLE_PAY:
+    case TitleWithIconAfterLabelView::Icon::GOOGLE_WALLET:
     case TitleWithIconAfterLabelView::Icon::GOOGLE_G:
     case TitleWithIconAfterLabelView::Icon::GOOGLE_PAY_AND_AFFIRM:
     case TitleWithIconAfterLabelView::Icon::GOOGLE_PAY_AND_AFTERPAY:
     case TitleWithIconAfterLabelView::Icon::GOOGLE_PAY_AND_ZIP:
-    case TitleWithIconAfterLabelView::Icon::GOOGLE_PAY_AND_KLARNA: {
-      const gfx::VectorIcon& icon = kCreditCardIcon;
+    case TitleWithIconAfterLabelView::Icon::GOOGLE_PAY_AND_KLARNA:
+    case TitleWithIconAfterLabelView::Icon::AFFIRM:
+    case TitleWithIconAfterLabelView::Icon::AFTERPAY:
+    case TitleWithIconAfterLabelView::Icon::KLARNA:
+    case TitleWithIconAfterLabelView::Icon::ZIP: {
+      const gfx::VectorIcon& icon = ::features::IsRoundedIconsEnabled()
+                                        ? kCreditCardIcon
+                                        : kCreditCardOldIcon;
 #endif
       model = ui::ImageModel::FromVectorIcon(icon, ui::kColorIcon, kIconHeight);
       break;
@@ -188,6 +231,22 @@ ui::ImageModel GetProfileAvatar(const AccountInfo& account_info) {
       account_avatar, avatar_size, avatar_size, profiles::SHAPE_CIRCLE));
 }
 
+std::unique_ptr<views::BoxLayoutView> CreateUserAvatarAndEmailView(
+    const std::u16string& user_email,
+    const ui::ImageModel& user_avatar) {
+  return views::Builder<views::BoxLayoutView>()
+      .SetOrientation(views::BoxLayout::Orientation::kHorizontal)
+      .SetBetweenChildSpacing(ChromeLayoutProvider::Get()->GetDistanceMetric(
+          DISTANCE_RELATED_CONTROL_HORIZONTAL_SMALL))
+      .SetID(DialogViewId::USER_INFORMATION_VIEW)
+      .AddChildren(views::Builder<views::ImageView>().SetImage(user_avatar),
+                   views::Builder<views::Label>()
+                       .SetText(user_email)
+                       .SetTextContext(CONTEXT_DIALOG_BODY_TEXT_SMALL)
+                       .SetTextStyle(views::style::STYLE_SECONDARY))
+      .Build();
+}
+
 TitleWithIconAfterLabelView::TitleWithIconAfterLabelView(
     const std::u16string& window_title,
     TitleWithIconAfterLabelView::Icon icon_to_show) {
@@ -209,6 +268,7 @@ TitleWithIconAfterLabelView::TitleWithIconAfterLabelView(
                 view->GetColorProvider()->GetColor(ui::kColorDialogBackground));
           },
           base::Unretained(this))));
+  icon_view->SetID(DialogViewId::BUBBLE_TITLE_ICON);
 
   // Center the icon against the first line of the title label. This needs to be
   // done after we create the title label, so that we can use its preferred
@@ -297,19 +357,7 @@ std::unique_ptr<views::View> CreateLegalMessageView(
 
   // Extra child view for user identity information including the avatar and
   // the email.
-  result->AddChildView(
-      views::Builder<views::BoxLayoutView>()
-          .SetOrientation(views::BoxLayout::Orientation::kHorizontal)
-          .SetBetweenChildSpacing(
-              ChromeLayoutProvider::Get()->GetDistanceMetric(
-                  DISTANCE_RELATED_CONTROL_HORIZONTAL_SMALL))
-          .SetID(DialogViewId::USER_INFORMATION_VIEW)
-          .AddChildren(views::Builder<views::ImageView>().SetImage(user_avatar),
-                       views::Builder<views::Label>()
-                           .SetText(user_email)
-                           .SetTextContext(CONTEXT_DIALOG_BODY_TEXT_SMALL)
-                           .SetTextStyle(views::style::STYLE_SECONDARY))
-          .Build());
+  result->AddChildView(CreateUserAvatarAndEmailView(user_email, user_avatar));
   return result;
 }
 

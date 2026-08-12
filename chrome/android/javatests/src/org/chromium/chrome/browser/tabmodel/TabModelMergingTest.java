@@ -7,7 +7,6 @@ package org.chromium.chrome.browser.tabmodel;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
-import static org.chromium.base.test.util.Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE;
 import static org.chromium.chrome.test.util.ChromeTabUtils.getTabCountOnUiThread;
 
 import android.app.Activity;
@@ -64,7 +63,7 @@ import java.util.concurrent.TimeoutException;
 /** Tests merging tab models for Android N+ multi-instance. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
-@DisableIf.Build(sdk_is_greater_than = VERSION_CODES.R) // https://crbug.com/1297370
+@DisableIf.Build(sdk_is_greater_than = VERSION_CODES.R) // https://crbug.com/40215137
 public class TabModelMergingTest {
     @Rule
     public FreshCtaTransitTestRule mActivityTestRule =
@@ -366,7 +365,7 @@ public class TabModelMergingTest {
     @Test
     @LargeTest
     @Feature({"TabPersistentStore", "MultiWindow"})
-    @DisabledTest(message = "https://crbug.com/1275082")
+    @DisabledTest(message = "https://crbug.com/40808075")
     public void testMergeIntoChromeTabbedActivity1() {
         mergeTabsAndAssert(mActivity1, mMergeIntoActivity1ExpectedTabs);
         mActivity1.finishAndRemoveTask();
@@ -375,7 +374,7 @@ public class TabModelMergingTest {
     @Test
     @LargeTest
     @Feature({"TabPersistentStore", "MultiWindow"})
-    @DisabledTest(message = "https://crbug.com/1275082")
+    @DisabledTest(message = "https://crbug.com/40808075")
     public void testMergeIntoChromeTabbedActivity2() {
         mergeTabsAndAssert(mActivity2, mMergeIntoActivity2ExpectedTabs);
         mActivity2.finishAndRemoveTask();
@@ -384,7 +383,7 @@ public class TabModelMergingTest {
     @Test
     @LargeTest
     @Feature({"TabPersistentStore", "MultiWindow"})
-    @DisabledTest(message = "https://crbug.com/1275082")
+    @DisabledTest(message = "https://crbug.com/40808075")
     public void testMergeOnColdStart() {
         String expectedSelectedUrl =
                 ChromeTabUtils.getUrlStringOnUiThread(
@@ -431,7 +430,7 @@ public class TabModelMergingTest {
     @Test
     @LargeTest
     @Feature({"TabPersistentStore", "MultiWindow"})
-    @DisabledTest(message = "https://crbug.com/1275082")
+    @DisabledTest(message = "https://crbug.com/40808075")
     public void testMergeOnColdStartFromChromeTabbedActivity2() throws Exception {
         String expectedSelectedUrl =
                 ChromeTabUtils.getUrlStringOnUiThread(
@@ -483,10 +482,10 @@ public class TabModelMergingTest {
     @Test
     @LargeTest
     @Feature({"TabPersistentStore", "MultiWindow"})
-    @DisabledTest(message = "https://crbug.com/1417018")
+    @DisabledTest(message = "https://crbug.com/40893813")
     public void testMergeOnColdStartIntoChromeTabbedActivity2() throws TimeoutException {
-        String CTA2ClassName = mActivity2.getClass().getName();
-        String CTA2PackageName = mActivity2.getPackageName();
+        String cta2ClassName = mActivity2.getClass().getName();
+        String cta2PackageName = mActivity2.getPackageName();
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -511,10 +510,10 @@ public class TabModelMergingTest {
                 });
 
         // Send a main intent to restart ChromeTabbedActivity2.
-        Intent CTA2MainIntent = new Intent(Intent.ACTION_MAIN);
-        CTA2MainIntent.setClassName(CTA2PackageName, CTA2ClassName);
-        CTA2MainIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        InstrumentationRegistry.getInstrumentation().startActivitySync(CTA2MainIntent);
+        Intent cta2MainIntent = new Intent(Intent.ACTION_MAIN);
+        cta2MainIntent.setClassName(cta2PackageName, cta2ClassName);
+        cta2MainIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        InstrumentationRegistry.getInstrumentation().startActivitySync(cta2MainIntent);
 
         mNewCTA2CallbackHelper.waitForCallback(0);
 
@@ -544,11 +543,11 @@ public class TabModelMergingTest {
     @Test
     @LargeTest
     @Feature({"TabPersistentStore", "MultiWindow"})
-    @Restriction({DeviceFormFactor.PHONE, RESTRICTION_TYPE_NON_LOW_END_DEVICE})
-    @DisabledTest(message = "https://crbug.com/1275082")
+    @Restriction(DeviceFormFactor.PHONE)
+    @DisabledTest(message = "https://crbug.com/40808075")
     public void testMergeWhileInTabSwitcher() {
         LayoutTestUtils.startShowingAndWaitForLayout(
-                mActivity1.getLayoutManager(), LayoutType.TAB_SWITCHER, false);
+                mActivity1.getLayoutManager(), LayoutType.HUB, false);
 
         mergeTabsAndAssert(mActivity1, mMergeIntoActivity1ExpectedTabs);
         assertTrue("Overview mode should still be showing", mActivity1.isInOverviewMode());
@@ -558,12 +557,12 @@ public class TabModelMergingTest {
     @Test
     @LargeTest
     @Feature({"TabPersistentStore", "MultiWindow"})
-    @DisabledTest(message = "https://crbug.com/1275082")
+    @DisabledTest(message = "https://crbug.com/40808075")
     public void testMergeWithNoTabs() {
         // Enter the tab switcher before closing all tabs with grid tab switcher enabled, otherwise
         // the activity is killed and the test fails.
         LayoutTestUtils.startShowingAndWaitForLayout(
-                mActivity1.getLayoutManager(), LayoutType.TAB_SWITCHER, false);
+                mActivity1.getLayoutManager(), LayoutType.HUB, false);
 
         // Close all tabs and wait for the callback.
         ChromeTabUtils.closeAllTabs(InstrumentationRegistry.getInstrumentation(), mActivity1);
@@ -581,7 +580,7 @@ public class TabModelMergingTest {
     @Test
     @LargeTest
     @Feature({"TabPersistentStore", "MultiWindow"})
-    @DisabledTest(message = "https://crbug.com/1190012")
+    @DisabledTest(message = "https://crbug.com/40755755")
     public void testMergingIncognitoTabs() {
         // Incognito tabs must be fully loaded so that their tab states are written out.
         ChromeTabUtils.fullyLoadUrlInNewTab(

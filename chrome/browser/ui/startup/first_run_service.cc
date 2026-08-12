@@ -84,7 +84,7 @@ PolicyEffect ComputeDevicePolicyEffect(Profile& profile) {
   if (signin_util::IsForceSigninEnabled()) {
     // Corresponding policy: BrowserSignin=2
     // Debugging note: On Linux this policy is not supported and does not get
-    // translated to the prefs (see crbug.com/956998), but we still respond to
+    // translated to the prefs (see crbug.com/41455343), but we still respond to
     // `prefs::kForceBrowserSignin` being set (e.g. if manually edited).
     return PolicyEffect::kDisabled;
   }
@@ -137,6 +137,16 @@ void FirstRunService::TryMarkFirstRunAlreadyFinished(
 
   // The method has multiple exit points, this ensures `callback` gets called.
   base::ScopedClosureRunner scoped_closure_runner(std::move(callback));
+
+  // If `IsPreFirstRunDesktopRefreshEnabled` holds, we should NOT skip the First
+  // Run. It contains a Welcome screen (e.g. with metrics enabling opt-in) that
+  // should always be presented to users.
+  //
+  // Policy evaluation (to whether the rest of the flow should be skipped) will
+  // be evaluated in `FirstRunFlowController`.
+  if (switches::IsPreFirstRunDesktopRefreshEnabled()) {
+    return;
+  }
 
   // If the FRE is already open, it is obviously not finished and we also don't
   // want to preemptively mark it completed. Skip all the below, the profile

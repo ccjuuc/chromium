@@ -7,6 +7,7 @@
 
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
+#include "build/build_config.h"
 #include "ui/events/events_base_export.h"
 
 namespace ui {
@@ -31,6 +32,17 @@ extern const base::FeatureParam<bool>
 // issues. See tracking bug https://crbug.com/411681432 for more info.
 EVENTS_BASE_EXPORT
 BASE_DECLARE_FEATURE(kLegacyKeyRepeatSynthesis);
+
+// TODO(https://crbug.com/479387350): Cleanup kill-switch once it's confirmed
+// the fix works well in field.
+EVENTS_BASE_EXPORT
+BASE_DECLARE_FEATURE(kFixDoubleClickNotWorking);
+
+#if BUILDFLAG(IS_ANDROID)
+// If enabled, MOUSE events with UNKNOWN tool are considered as touchpads on
+// Android.
+EVENTS_BASE_EXPORT BASE_DECLARE_FEATURE(kAndroidTouchpadDetection);
+#endif
 
 }  // namespace ui
 

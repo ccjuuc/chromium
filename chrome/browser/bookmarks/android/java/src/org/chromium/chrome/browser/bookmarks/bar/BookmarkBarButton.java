@@ -8,18 +8,22 @@ import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.content.res.Resources;
+import android.graphics.Point;
 import android.graphics.drawable.Drawable;
 import android.util.AttributeSet;
+import android.view.InputDevice;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.View;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.annotation.ColorRes;
 import androidx.annotation.StyleRes;
-import androidx.appcompat.content.res.AppCompatResources;
 import androidx.core.widget.ImageViewCompat;
 
+import org.chromium.base.Callback;
 import org.chromium.base.CallbackController;
 import org.chromium.base.supplier.LazyOneshotSupplier;
 import org.chromium.build.annotations.NullMarked;
@@ -35,9 +39,14 @@ class BookmarkBarButton extends LinearLayout {
 
     private ImageView mIcon;
     private int mLastEventMetaState;
+    private int mLastEventButtonState;
+    private float mLastEventX;
+    private float mLastEventY;
     private TextView mTitle;
 
+    private @Nullable ClickWithMetaStateCallback mClickCallback;
     private @Nullable CallbackController mIconCallbackController;
+    private @Nullable Callback<Point> mPointCallback;
 
     /**
      * Constructor that is called when inflating a bookmark bar button from XML.
@@ -59,20 +68,131 @@ class BookmarkBarButton extends LinearLayout {
     @Override
     @SuppressLint("ClickableViewAccessibility")
     public boolean onTouchEvent(MotionEvent event) {
-        // NOTE: Update `mLastEventMetaState` in anticipation of a potential click.
+        // NOTE: Update `mLastEventMetaState` and `mLastEventButtonState` in anticipation of a
+        // potential click.
         mLastEventMetaState = event.getMetaState();
+        mLastEventX = event.getX();
+        mLastEventY = event.getY();
+
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_BUTTON_PRESS) {
+            mLastEventButtonState = event.getButtonState();
+        }
+
+        // Consume middle/right-click touch events to prevent accidental primary triggers.
+        // Execution of these actions is safely deferred to onGenericMotionEvent.
+        int targetButtons = MotionEvent.BUTTON_TERTIARY | MotionEvent.BUTTON_SECONDARY;
+        boolean isMiddleOrRightClick = (mLastEventButtonState & targetButtons) != 0;
+
+        if (isMiddleOrRightClick) {
+            boolean isEndOfGesture =
+                    action == MotionEvent.ACTION_UP
+                            || action == MotionEvent.ACTION_BUTTON_RELEASE
+                            || action == MotionEvent.ACTION_CANCEL;
+            if (isEndOfGesture) {
+                mLastEventButtonState = 0;
+            }
+            return true;
+        }
+
         return super.onTouchEvent(event);
+    }
+
+    @Override
+    public boolean onKeyUp(int keyCode, KeyEvent event) {
+        mLastEventMetaState = event.getMetaState();
+        // Keyboard events do not have a mouse button state. Reset this to 0 to
+        // ensure that if this key event triggers a click, it does not use a
+        // stale button state from a previous mouse event.
+        mLastEventButtonState = 0;
+        return super.onKeyUp(keyCode, event);
+    }
+
+    @Override
+    public boolean onGenericMotionEvent(MotionEvent event) {
+        mLastEventMetaState = event.getMetaState();
+        mLastEventX = event.getX();
+        mLastEventY = event.getY();
+
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_BUTTON_PRESS) {
+            mLastEventButtonState = event.getButtonState();
+        }
+
+        if ((event.getSource() & InputDevice.SOURCE_CLASS_POINTER) != 0) {
+            // Handle middle-click and right-click on release to match standard click behavior.
+            // getActionButton() identifies the button that changed state.
+            if (action == MotionEvent.ACTION_BUTTON_RELEASE
+                    && (event.getActionButton() == MotionEvent.BUTTON_TERTIARY
+                            || event.getActionButton() == MotionEvent.BUTTON_SECONDARY)) {
+                // Manually set the button state to tertiary or secondary for the click callback, as
+                // ACTION_BUTTON_RELEASE excludes the button being released from getButtonState().
+                mLastEventButtonState = event.getActionButton();
+                onClick(this);
+                return true;
+            }
+        }
+        return super.onGenericMotionEvent(event);
+    }
+
+    /**
+     * Sets the callback to notify of the last touch coordinate before a click event is fired.
+     *
+     * @param callback the callback to notify.
+     */
+    public void setPointCallback(@Nullable Callback<Point> callback) {
+        mPointCallback = callback;
+    }
+
+    /**
+     * Returns the coordinates of the most recent touch or pointer event on this button.
+     *
+     * @return A {@link Point} containing the X and Y coordinates of the last click or motion event.
+     */
+    public Point getLastClickPoint() {
+        return new Point((int) mLastEventX, (int) mLastEventY);
     }
 
     /**
      * Sets the callback to notify of bookmark bar button click events (mouse clicks and finger
-     * taps). The callback is provided the meta state of the most recent key/touch event.
+     * taps). The callback is provided the meta state and button state of the most recent key/touch
+     * event.
      *
      * @param callback the callback to notify.
      */
     public void setClickCallback(@Nullable ClickWithMetaStateCallback callback) {
-        setOnClickListener(
-                callback != null ? (v) -> callback.onClickWithMeta(mLastEventMetaState) : null);
+        mClickCallback = callback;
+        if (callback == null) {
+            setOnClickListener(null);
+            return;
+        }
+
+        setOnClickListener(this::onClick);
+    }
+
+    @Override
+    public void setOnLongClickListener(@Nullable OnLongClickListener listener) {
+        if (listener == null) {
+            super.setOnLongClickListener(null);
+            return;
+        }
+
+        super.setOnLongClickListener(
+                view -> {
+                    if (mPointCallback != null) {
+                        mPointCallback.onResult(new Point((int) mLastEventX, (int) mLastEventY));
+                    }
+                    return listener.onLongClick(view);
+                });
+    }
+
+    private void onClick(View view) {
+        if (mPointCallback != null) {
+            mPointCallback.onResult(new Point((int) mLastEventX, (int) mLastEventY));
+        }
+        if (mClickCallback != null) {
+            mClickCallback.onClickWithMeta(mLastEventMetaState, mLastEventButtonState);
+        }
     }
 
     /**
@@ -103,9 +223,7 @@ class BookmarkBarButton extends LinearLayout {
      */
     public void setIconTintList(@ColorRes int id) {
         final ColorStateList tintList =
-                id != Resources.ID_NULL
-                        ? AppCompatResources.getColorStateList(getContext(), id)
-                        : null;
+                id != Resources.ID_NULL ? getContext().getColorStateList(id) : null;
 
         if (ImageViewCompat.getImageTintList(mIcon) != tintList) {
             ImageViewCompat.setImageTintList(mIcon, tintList);

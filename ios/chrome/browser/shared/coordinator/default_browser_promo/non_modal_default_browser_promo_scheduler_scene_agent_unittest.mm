@@ -21,6 +21,7 @@
 #import "ios/chrome/browser/default_browser/model/utils_test_support.h"
 #import "ios/chrome/browser/default_browser/promo/non_modal/public/default_browser_promo_non_modal_commands.h"
 #import "ios/chrome/browser/default_browser/promo/non_modal/public/default_browser_promo_non_modal_metrics_util.h"
+#import "ios/chrome/browser/default_browser/promo/public/features.h"
 #import "ios/chrome/browser/feature_engagement/model/event_exporter.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/infobars/model/infobar_ios.h"
@@ -39,8 +40,9 @@
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_opener.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/picture_in_picture_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/test/fakes/fake_navigation_manager.h"
@@ -73,12 +75,7 @@ class NonModalDefaultBrowserPromoSchedulerSceneAgentTest : public PlatformTest {
     mock_tracker_ = static_cast<feature_engagement::test::MockTracker*>(
         feature_engagement::TrackerFactory::GetForProfile(profile_.get()));
 
-    FakeStartupInformation* startup_information =
-        [[FakeStartupInformation alloc] init];
-    app_state_ =
-        [[AppState alloc] initWithStartupInformation:startup_information];
-    scene_state_ = [[FakeSceneState alloc] initWithAppState:app_state_
-                                                    profile:profile_.get()];
+    scene_state_ = [[FakeSceneState alloc] initWithProfile:profile_.get()];
     scene_state_.scene = static_cast<UIWindowScene*>(
         [[[UIApplication sharedApplication] connectedScenes] anyObject]);
 
@@ -107,6 +104,12 @@ class NonModalDefaultBrowserPromoSchedulerSceneAgentTest : public PlatformTest {
                      forProtocol:@protocol(
                                      DefaultBrowserPromoNonModalCommands)];
 
+    pip_commands_handler_ =
+        OCMStrictProtocolMock(@protocol(PictureInPictureCommands));
+    [browser_->GetCommandDispatcher()
+        startDispatchingToTarget:pip_commands_handler_
+                     forProtocol:@protocol(PictureInPictureCommands)];
+
     scheduler_ = [[NonModalDefaultBrowserPromoSchedulerSceneAgent alloc] init];
     scheduler_.sceneState = scene_state_;
 
@@ -122,6 +125,7 @@ class NonModalDefaultBrowserPromoSchedulerSceneAgentTest : public PlatformTest {
     [scene_state_ shutdown];
     scene_state_ = nil;
     EXPECT_OCMOCK_VERIFY(promo_commands_handler_);
+    EXPECT_OCMOCK_VERIFY(pip_commands_handler_);
     EXPECT_OCMOCK_VERIFY(application_);
   }
 
@@ -145,10 +149,10 @@ class NonModalDefaultBrowserPromoSchedulerSceneAgentTest : public PlatformTest {
   raw_ptr<feature_engagement::test::MockTracker> mock_tracker_;
   FakeOverlayPresentationContext overlay_presentation_context_;
   id promo_commands_handler_;
+  id pip_commands_handler_;
   NonModalDefaultBrowserPromoSchedulerSceneAgent* scheduler_;
   id application_ = nil;
   base::RunLoop run_loop_;
-  AppState* app_state_;
   FakeSceneState* scene_state_;
 };
 
@@ -328,18 +332,27 @@ TEST_F(NonModalDefaultBrowserPromoSchedulerSceneAgentTest,
 
   [promo_commands_handler_ verify];
 
-  NSURL* url = [NSURL URLWithString:UIApplicationOpenSettingsURLString];
-  if (@available(iOS 18.3, *)) {
-    if (IsDefaultAppsDestinationAvailable() &&
-        IsUseDefaultAppsDestinationForPromosEnabled()) {
-      url = [NSURL
-          URLWithString:UIApplicationOpenDefaultApplicationsSettingsURLString];
+  if (IsDefaultBrowserPictureInPictureEnabled()) {
+    [[pip_commands_handler_ expect]
+        showPictureInPictureWithConfig:[OCMArg any]];
+  } else {
+    NSURL* url = [NSURL URLWithString:UIApplicationOpenSettingsURLString];
+    if (@available(iOS 18.3, *)) {
+      if (IsDefaultAppsDestinationAvailable() &&
+          IsUseDefaultAppsDestinationForPromosEnabled()) {
+        url = [NSURL URLWithString:
+                         UIApplicationOpenDefaultApplicationsSettingsURLString];
+      }
     }
+    [[application_ expect] openURL:url options:{} completionHandler:nil];
   }
-  [[application_ expect] openURL:url options:{} completionHandler:nil];
   [scheduler_ logUserPerformedPromoAction];
 
-  [application_ verify];
+  if (IsDefaultBrowserPictureInPictureEnabled()) {
+    [pip_commands_handler_ verify];
+  } else {
+    [application_ verify];
+  }
 
   // Check that NSUserDefaults has been updated.
   EXPECT_EQ(UserInteractionWithNonModalPromoCount(), 1);
@@ -395,6 +408,11 @@ TEST_F(NonModalDefaultBrowserPromoSchedulerSceneAgentTest,
   task_env_.FastForwardBy(base::Seconds(3));
 
   [promo_commands_handler_ verify];
+
+  if (IsDefaultBrowserPictureInPictureEnabled()) {
+    OCMStub(
+        [pip_commands_handler_ showPictureInPictureWithConfig:[OCMArg any]]);
+  }
 
   // Attempt to log the action 3 times.
   [scheduler_ logUserPerformedPromoAction];

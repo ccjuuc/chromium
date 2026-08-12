@@ -73,9 +73,9 @@ class BrowserXRRuntimeImpl : public content::BrowserXRRuntime,
       device::mojom::XRRuntimeSessionOptionsPtr options,
       device::mojom::XRRuntime::RequestSessionCallback callback);
 
-  void EnsureInstalled(int render_process_id,
-                       int render_frame_id,
-                       base::OnceCallback<void(bool)> install_callback);
+  void EnsureInstalled(
+      const content::GlobalRenderFrameHostId& frame_id,
+      base::OnceCallback<void(XrInstallResult)> install_callback);
   VRServiceImpl* GetServiceWithActiveImmersiveSession() {
     return presenting_service_;
   }
@@ -113,7 +113,7 @@ class BrowserXRRuntimeImpl : public content::BrowserXRRuntime,
       RequestSessionCallback callback,
       device::mojom::XRRuntimeSessionResultPtr session_result);
   void OnImmersiveSessionError();
-  void OnInstallFinished(bool succeeded);
+  void OnInstallFinished(XrInstallResult result);
   void ShutdownRuntime();
 
   device::mojom::XRDeviceId id_;
@@ -134,7 +134,7 @@ class BrowserXRRuntimeImpl : public content::BrowserXRRuntime,
   std::unique_ptr<XrInstallHelper> install_helper_;
   std::unique_ptr<BrowserXRRuntime::Observer> runtime_observer_;
   std::unique_ptr<VrUiHost> vr_ui_host_;
-  base::OnceCallback<void(bool)> install_finished_callback_;
+  base::OnceCallback<void(XrInstallResult)> install_finished_callback_;
   bool has_pending_immersive_session_request_ = false;
 
   base::WeakPtrFactory<BrowserXRRuntimeImpl> weak_ptr_factory_{this};

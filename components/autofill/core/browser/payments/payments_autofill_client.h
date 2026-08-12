@@ -5,20 +5,26 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_PAYMENTS_AUTOFILL_CLIENT_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_PAYMENTS_AUTOFILL_CLIENT_H_
 
+#include <stdint.h>
+
+#include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/span.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
+#include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/payments/legal_message_line.h"
 #include "components/autofill/core/browser/payments/risk_data_loader.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
-#include "components/signin/public/identity_manager/account_info.h"
+#include "components/autofill/core/browser/ui/autofill_suggestion_delegate.h"
+#include "url/origin.h"
 
 #if !BUILDFLAG(IS_IOS)
 namespace webauthn {
@@ -32,13 +38,13 @@ class AutofillDriver;
 struct AutofillErrorDialogContext;
 class AutofillOfferData;
 class AutofillOfferManager;
-enum class AutofillProgressDialogType;
+class AutofillProgressDialogController;
+enum class AutofillProgressUiType;
 class AutofillSaveCardBottomSheetBridge;
 class AutofillSaveIbanBottomSheetBridge;
 class BnplIssuer;
 struct CardUnmaskChallengeOption;
 class CardUnmaskDelegate;
-class AutofillProgressDialogController;
 class CardUnmaskOtpInputDialogController;
 class CardUnmaskPromptController;
 struct CardUnmaskPromptOptions;
@@ -46,20 +52,30 @@ class CreditCard;
 class CreditCardCvcAuthenticator;
 class CreditCardOtpAuthenticator;
 class CreditCardRiskBasedAuthenticator;
+struct FilledCardInformationBubbleOptions;
 class Iban;
 class IbanAccessManager;
 class IbanManager;
 class LoyaltyCard;
 class MerchantPromoCodeManager;
 struct OfferNotificationOptions;
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+class OmniboxAutofillDelegate;
+#endif
 class OtpUnmaskDelegate;
-class PaymentsDataManager;
 enum class OtpUnmaskResult;
-class TouchToFillDelegate;
+class PaymentsDataManager;
+enum class SuggestionHidingReason;
+class TouchToFillPaymentMethodDelegate;
 struct VirtualCardEnrollmentFields;
 class VirtualCardEnrollmentManager;
-struct FilledCardInformationBubbleOptions;
 enum class WebauthnDialogCallbackType;
+
+namespace autofill_metrics {
+enum class SaveCardPromptOffer;
+}
+
+using SaveCardPromptOffer = autofill_metrics::SaveCardPromptOffer;
 
 namespace payments {
 
@@ -72,6 +88,8 @@ class MultipleRequestPaymentsNetworkInterface;
 class PaymentsNetworkInterface;
 class PaymentsWindowManager;
 class SaveAndFillManager;
+class WalletReminderNoticeManager;
+class WalletReminderNoticeUiDelegate;
 
 // A payments-specific client interface that handles dependency injection, and
 // its implementations serve as the integration for platform-specific code. One
@@ -157,7 +175,14 @@ class PaymentsAutofillClient : public RiskDataLoader {
     kCvcSaveOnly = 2,
   };
 
-  // Used for options of upload prompt.
+  enum class SourceFeature {
+    // Default behavior for standard upload or local save.
+    kOfferSaveAfterFormSubmit,
+    // Triggered from the "Scan Card" flow.
+    kScanCardSaveAndFill,
+  };
+
+  // Used for options of card and CVC save prompts.
   struct SaveCreditCardOptions {
     SaveCreditCardOptions& with_should_request_name_from_user(bool b) {
       should_request_name_from_user = b;
@@ -180,6 +205,11 @@ class PaymentsAutofillClient : public RiskDataLoader {
       return *this;
     }
 
+    SaveCreditCardOptions& with_legal_lines_mention_personalization(bool b) {
+      legal_lines_mention_personalization = b;
+      return *this;
+    }
+
     SaveCreditCardOptions&
     with_same_last_four_as_server_card_but_different_expiration_date(bool b) {
       has_same_last_four_as_server_card_but_different_expiration_date = b;
@@ -196,14 +226,28 @@ class PaymentsAutofillClient : public RiskDataLoader {
       return *this;
     }
 
+    SaveCreditCardOptions& with_source_feature(SourceFeature feature) {
+      source_feature = feature;
+      return *this;
+    }
+
+    SaveCreditCardOptions& with_save_card_prompt_offer_decision(
+        SaveCardPromptOffer decision) {
+      save_card_prompt_offer_decision = decision;
+      return *this;
+    }
+
     bool should_request_name_from_user = false;
     bool should_request_expiration_date_from_user = false;
     bool show_prompt = false;
     bool has_multiple_legal_lines = false;
+    bool legal_lines_mention_personalization = false;
     bool has_same_last_four_as_server_card_but_different_expiration_date =
         false;
     std::optional<int> num_strikes;
     CardSaveType card_save_type = CardSaveType::kCardSaveOnly;
+    SourceFeature source_feature = SourceFeature::kOfferSaveAfterFormSubmit;
+    std::optional<SaveCardPromptOffer> save_card_prompt_offer_decision;
   };
 
   enum class SaveCardOfferUserDecision {
@@ -239,11 +283,17 @@ class PaymentsAutofillClient : public RiskDataLoader {
 
     // The user explicitly declined credit card Save and Fill dialog.
     kDeclined,
+
+    // Handles cases where the iOS 'Save and Fill' dialog was ignored.
+    // Because the dialog is modal, this typically indicates the user either
+    // closed the tab/browser or tapped outside the dialog, triggering an
+    // implicit dismissal.
+    kIgnored,
   };
 
   // Used to hold the data entered by the user in the Save and Fill dialog,
   // including card number, expiration date, name on card, and an optional
-  // security code.
+  // security code and nickname if it's on iOS platform.
   struct UserProvidedCardSaveAndFillDetails : public UserProvidedCardDetails {
     UserProvidedCardSaveAndFillDetails();
     UserProvidedCardSaveAndFillDetails(
@@ -254,6 +304,9 @@ class PaymentsAutofillClient : public RiskDataLoader {
 
     std::u16string card_number;
     std::optional<std::u16string> security_code;
+#if BUILDFLAG(IS_IOS)
+    std::optional<std::u16string> nickname;
+#endif
   };
 
   // Callback to run after the local/upload card Save and Fill dialog is shown.
@@ -424,8 +477,11 @@ class PaymentsAutofillClient : public RiskDataLoader {
 
   // Called when the card has been fetched successfully. Uses the necessary
   // information in `options` to show the FilledCardInformationBubble.
+  // `origin` is the origin of the frame on which fetching was originally
+  // triggered.
   virtual void OnCardDataAvailable(
-      const FilledCardInformationBubbleOptions& options) = 0;
+      const FilledCardInformationBubbleOptions& options,
+      const url::Origin& origin) = 0;
 
   // Runs `callback` once the user makes a decision with respect to the
   // offer-to-save prompt. On desktop, shows the offer-to-save bubble if
@@ -451,7 +507,7 @@ class PaymentsAutofillClient : public RiskDataLoader {
   // Show/dismiss the progress dialog which contains a throbber and a text
   // message indicating that something is in progress.
   virtual void ShowAutofillProgressDialog(
-      AutofillProgressDialogType autofill_progress_dialog_type,
+      AutofillProgressUiType autofill_progress_dialog_type,
       base::OnceClosure cancel_callback) = 0;
   virtual void CloseAutofillProgressDialog(
       bool show_confirmation_before_closing,
@@ -546,19 +602,9 @@ class PaymentsAutofillClient : public RiskDataLoader {
   // return a nullptr on iOS WebView.
   virtual CreditCardRiskBasedAuthenticator* GetRiskBasedAuthenticator() = 0;
 
-  // Returns true if Hagrid (risk based authentication) is supported on this
-  // platform. Override in subclasses, return true in supported platform,
-  // defaults to false.
-  virtual bool IsRiskBasedAuthEffectivelyAvailable() const = 0;
-
   // Returns true if Mandatory Reauth is supported on this platform and enabled
   // by the user, if applicable.
   virtual bool IsMandatoryReauthEnabled() = 0;
-
-#if BUILDFLAG(IS_IOS)
-  // Returns true if the feature to use custom card icons is enabled.
-  virtual bool IsUsingCustomCardIconEnabled() const = 0;
-#endif
 
   // Prompt the user to enable mandatory reauthentication for payment method
   // autofill. When enabled, the user will be asked to authenticate using
@@ -620,27 +666,36 @@ class PaymentsAutofillClient : public RiskDataLoader {
   // possible, and returns `true` on success. `delegate` will be notified of
   // events. `suggestions` are generated using the `cards_to_suggest` data and
   // include fields such as `main_text`, `minor_text`, and
-  // `HasDeactivatedStyle` member function. Should be called only if the feature
+  // `IsSelectable` member function. Should be called only if the feature
   // is supported by the platform. This function is implemented on all
   // platforms so this should be a pure virtual function to enforce the override
   // implementation.
   virtual bool ShowTouchToFillCreditCard(
-      base::WeakPtr<TouchToFillDelegate> delegate,
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
       base::span<const Suggestion> suggestions) = 0;
 
   // Shows the Touch To Fill surface for filling IBAN information, if
   // possible, returning `true` on success. `delegate` will be notified of
   // events. This function is not implemented on iOS and iOS WebView, and
   // should not be used on those platforms.
-  virtual bool ShowTouchToFillIban(base::WeakPtr<TouchToFillDelegate> delegate,
-                                   base::span<const Iban> ibans_to_suggest) = 0;
+  virtual bool ShowTouchToFillIban(
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
+      base::span<const Iban> ibans_to_suggest) = 0;
+
+  // Shows the Touch To Fill surface for filling Wallet affiliated loyalty card
+  // information, if possible, returning `true` on success. `delegate` will be
+  // notified of events. This function is not implemented on iOS and iOS
+  // WebView, and should not be used on those platforms.
+  virtual bool ShowTouchToFillAffiliatedLoyaltyCard(
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
+      std::vector<LoyaltyCard> loyalty_cards_to_suggest) = 0;
 
   // Shows the Touch To Fill surface for filling Wallet loyalty card
   // information, if possible, returning `true` on success. `delegate` will be
   // notified of events. This function is not implemented on iOS and iOS
   // WebView, and should not be used on those platforms.
-  virtual bool ShowTouchToFillLoyaltyCard(
-      base::WeakPtr<TouchToFillDelegate> delegate,
+  virtual bool ShowTouchToFillForAllLoyaltyCards(
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
       std::vector<LoyaltyCard> loyalty_cards_to_suggest) = 0;
 
   // Updates the BNPL UI, returning true on success. This either:
@@ -756,7 +811,7 @@ class PaymentsAutofillClient : public RiskDataLoader {
   virtual void HideCreditCardSaveAndFillDialog() = 0;
 
   // Checks if the browser popup is a tab modal popup.
-  virtual bool IsTabModalPopupDeprecated() const = 0;
+  virtual bool IsTabModalPopup() const = 0;
 
   // Gets the `BnplStrategy` instance associated with the client. Helps
   // determines the next step in the BNPL flow depending on the platform.
@@ -765,6 +820,48 @@ class PaymentsAutofillClient : public RiskDataLoader {
   // Gets the `BnplUiDelegate` instance associated with the client. Handles the
   // UI in the BNPL flow depending on the platform.
   virtual BnplUiDelegate* GetBnplUiDelegate() = 0;
+
+  // Gets the `WalletReminderNoticeUiDelegate` instance associated with the
+  // client. Handles the UI for the Wallet Reminder Notice.
+  virtual WalletReminderNoticeUiDelegate* GetWalletReminderNoticeUiDelegate();
+
+  // Gets the `WalletReminderNoticeManager` instance associated with the
+  // client.
+  virtual WalletReminderNoticeManager* GetWalletReminderNoticeManager();
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  // Gets the `OmniboxAutofillDelegate` instance associated with the client, or
+  // nullptr on unsupported platforms. Handles the Autofill flow where the
+  // Omnibox is the trigger point.
+  virtual OmniboxAutofillDelegate* GetOmniboxAutofillDelegate() = 0;
+
+  // Shows the expanded omnibox chip and initializes the bubble controller with
+  // the given suggestions and callbacks.
+  virtual void ShowExpandedOmniboxAutofillChip(
+      std::vector<Suggestion> suggestions,
+      base::OnceClosure on_chip_shown,
+      base::RepeatingCallback<void(base::span<const Suggestion>)>
+          on_suggestions_shown,
+      base::RepeatingCallback<void(SuggestionHidingReason)>
+          on_suggestions_hidden,
+      base::RepeatingCallback<void(const Suggestion&)> did_select_suggestion,
+      base::RepeatingClosure did_deselect_suggestion,
+      base::RepeatingCallback<
+          void(const Suggestion&,
+               const AutofillSuggestionDelegate::SuggestionMetadata&)>
+          did_accept_suggestion) = 0;
+
+  // Hides the entire omnibox chip.
+  virtual void HideOmniboxAutofillChip() = 0;
+#endif
+
+  // Shows the Payments Churned Users UI. This UI is responsible for providing
+  // users that have turned off autofill with a value prop to turn autofill back
+  // on.
+  // TODO(crbug.com/524740910): Rename to MaybeShowPaymentsChurnedUsersUi().
+  virtual void ShowPaymentsChurnedUsersUI(base::OnceClosure accept_callback,
+                                          base::OnceClosure cancel_callback,
+                                          base::OnceClosure closed_callback) {}
 };
 
 }  // namespace payments

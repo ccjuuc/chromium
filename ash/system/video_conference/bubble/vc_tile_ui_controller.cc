@@ -100,7 +100,7 @@ std::unique_ptr<FeatureTile> VcTileUiController::CreateTile() {
 
 void VcTileUiController::OnDlcStateChanged(
     const dlcservice::DlcState& dlc_state) {
-  if (!base::Contains(dlc_ids_, dlc_state.id())) {
+  if (!dlc_ids_.contains(dlc_state.id())) {
     return;
   }
 
@@ -287,11 +287,11 @@ void VcTileUiController::UpdateTooltip() {
     return;
   }
   tile_->SetTooltipText(l10n_util::GetStringFUTF16(
-      VIDEO_CONFERENCE_TOGGLE_BUTTON_TOOLTIP,
+      IDS_VIDEO_CONFERENCE_TOGGLE_BUTTON_TOOLTIP,
       l10n_util::GetStringUTF16(effect_state_->accessible_name_id()),
       l10n_util::GetStringUTF16(
-          tile_->IsToggled() ? VIDEO_CONFERENCE_TOGGLE_BUTTON_STATE_ON
-                             : VIDEO_CONFERENCE_TOGGLE_BUTTON_STATE_OFF)));
+          tile_->IsToggled() ? IDS_VIDEO_CONFERENCE_TOGGLE_BUTTON_STATE_ON
+                             : IDS_VIDEO_CONFERENCE_TOGGLE_BUTTON_STATE_OFF)));
 }
 
 }  // namespace ash::video_conference

@@ -124,11 +124,9 @@ class PLATFORM_EXPORT Length {
     kFitContent,
     kCalculated,
     kFlex,
-    kExtendToZoom,
-    kDeviceWidth,
-    kDeviceHeight,
     kNone,    // only valid for max-width, max-height, or contain-intrinsic-size
-    kContent  // only valid for flex-basis
+    kContent,      // only valid for flex-basis
+    kOverlapJoin,  // only valid for gap decoration inset properties
   };
 
   Length() : value_(0), type_(kAuto) {}
@@ -202,10 +200,6 @@ class PLATFORM_EXPORT Length {
   static Length Fixed() { return Length(kFixed); }
   static Length None() { return Length(kNone); }
 
-  static Length ExtendToZoom() { return Length(kExtendToZoom); }
-  static Length DeviceWidth() { return Length(kDeviceWidth); }
-  static Length DeviceHeight() { return Length(kDeviceHeight); }
-
   template <typename NUMBER_TYPE>
   static Length Fixed(NUMBER_TYPE number) {
     return Length(number, kFixed);
@@ -215,14 +209,6 @@ class PLATFORM_EXPORT Length {
     return Length(number, kPercent);
   }
   static Length Flex(float value) { return Length(value, kFlex); }
-
-  int IntValue() const {
-    if (IsCalculated()) {
-      NOTREACHED();
-    }
-    DCHECK(!IsNone());
-    return static_cast<int>(value_);
-  }
 
   float Pixels() const {
     DCHECK_EQ(GetType(), kFixed);
@@ -325,6 +311,7 @@ class PLATFORM_EXPORT Length {
   bool IsStretch() const { return GetType() == kStretch; }
   bool IsFitContent() const { return GetType() == kFitContent; }
   bool IsPercent() const { return GetType() == kPercent; }
+  bool IsOverlapJoin() const { return GetType() == kOverlapJoin; }
   // MayHavePercentDependence should be used to decide whether to optimize
   // away computing the value on which percentages depend or optimize away
   // recomputation that results from changes to that value.  It is intended to
@@ -347,9 +334,6 @@ class PLATFORM_EXPORT Length {
     return GetType() == kPercent || GetType() == kCalculated;
   }
   bool IsFlex() const { return GetType() == kFlex; }
-  bool IsExtendToZoom() const { return GetType() == kExtendToZoom; }
-  bool IsDeviceWidth() const { return GetType() == kDeviceWidth; }
-  bool IsDeviceHeight() const { return GetType() == kDeviceHeight; }
 
   Length Blend(const Length& from, double progress, ValueRange range) const {
     DCHECK(CanConvertToCalculation());
@@ -404,7 +388,7 @@ class PLATFORM_EXPORT Length {
 
   Length BlendSameTypes(const Length& from, double progress, ValueRange) const;
 
-  int CalculationHandle() const {
+  unsigned CalculationHandle() const {
     DCHECK(IsCalculated());
     return calculation_handle_;
   }
@@ -413,7 +397,7 @@ class PLATFORM_EXPORT Length {
 
   union {
     // If kType == kCalculated.
-    int calculation_handle_;
+    unsigned calculation_handle_;
 
     // Otherwise. Must be zero if not in use (e.g., for kAuto or kNone).
     float value_;

@@ -67,16 +67,18 @@ enum RequestDestination {
   // https://fedidcg.github.io/FedCM/
   kWebIdentity = 23,
   // Requests for compression dictionary
-  kDictionary = 24,
+  kCompressionDictionary = 24,
   // Requests for speculation rules.
   // https://wicg.github.io/nav-speculation/speculation-rules.html
   kSpeculationRules = 25,
   // Requests for JSON modules
   kJson = 26,
-  // Requests for shared storage worklet.
-  kSharedStorageWorklet = 27,
+  // Deprecated. Requests for shared storage worklet.
+  // kSharedStorageWorklet = 27,
   // Requests for email verification.
   kEmailVerification = 28,
+  // Requests for text modules.
+  kText = 29,
 };
 
 // Corresponds to Fetch request's "redirect mode":

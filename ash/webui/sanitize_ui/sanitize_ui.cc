@@ -5,6 +5,7 @@
 #include "ash/webui/sanitize_ui/sanitize_ui.h"
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/webui_url_constants.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/webui/common/trusted_types_util.h"
@@ -12,7 +13,6 @@
 #include "ash/webui/grit/ash_sanitize_app_resources_map.h"
 #include "ash/webui/sanitize_ui/sanitize_ui_delegate.h"
 #include "ash/webui/sanitize_ui/sanitize_ui_uma.h"
-#include "ash/webui/sanitize_ui/url_constants.h"
 #include "base/metrics/histogram_functions.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
@@ -102,7 +102,7 @@ SanitizeDialogUI::SanitizeDialogUI(
   html_source->EnableReplaceI18nInJS();
 
   html_source->AddResourcePaths(kAshSanitizeAppResources);
-  html_source->AddResourcePath("", IDR_ASH_SANITIZE_APP_INDEX_HTML);
+  html_source->SetDefaultResource(IDR_ASH_SANITIZE_APP_INDEX_HTML);
   html_source->AddResourcePath("test_loader.html", IDR_WEBUI_TEST_LOADER_HTML);
   html_source->AddResourcePath("test_loader.js", IDR_WEBUI_JS_TEST_LOADER_JS);
   html_source->AddResourcePath("test_loader_util.js",

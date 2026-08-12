@@ -18,10 +18,10 @@
 #include "ash/constants/ash_pref_names.h"
 #include "ash/webui/camera_app_ui/url_constants.h"
 #include "base/check.h"
+#include "base/check_deref.h"
 #include "base/check_is_test.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/dcheck_is_on.h"
 #include "base/debug/crash_logging.h"
@@ -56,7 +56,6 @@
 #include "chrome/browser/ash/system_web_apps/apps/os_settings_web_app_info.h"
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/personalization_system_app_delegate.h"
 #include "chrome/browser/ash/system_web_apps/apps/print_management_web_app_info.h"
-#include "chrome/browser/ash/system_web_apps/apps/print_preview_cros_system_web_app_info.h"
 #include "chrome/browser/ash/system_web_apps/apps/projector_system_web_app_info.h"
 #include "chrome/browser/ash/system_web_apps/apps/recorder_app/recorder_system_web_app_info.h"
 #include "chrome/browser/ash/system_web_apps/apps/sanitize_system_web_app_info.h"
@@ -69,11 +68,9 @@
 #include "chrome/browser/ash/system_web_apps/system_web_app_background_task.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_icon_checker.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager_factory.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/web_applications/external_install_options.h"
-#include "chrome/browser/web_applications/manifest_update_manager.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/policy/web_app_policy_manager.h"
 #include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
@@ -86,6 +83,7 @@
 #include "chrome/common/chrome_features.h"
 #include "chromeos/ash/experiences/system_web_apps/types/system_web_app_background_task_info.h"
 #include "chromeos/ash/experiences/system_web_apps/types/system_web_app_delegate.h"
+#include "components/application_locale_storage/application_locale_storage.h"
 #include "components/prefs/pref_service.h"
 #include "components/version_info/version_info.h"
 #include "components/webapps/browser/install_result_code.h"
@@ -135,7 +133,6 @@ SystemWebAppDelegateMap CreateSystemWebApps(Profile* profile) {
   info_vec.push_back(
       std::make_unique<vc_background_ui::VcBackgroundUISystemAppDelegate>(
           profile));
-  info_vec.push_back(std::make_unique<PrintPreviewCrosDelegate>(profile));
   info_vec.push_back(std::make_unique<RecorderSystemAppDelegate>(profile));
   info_vec.push_back(std::make_unique<BocaSystemAppDelegate>(profile));
   info_vec.push_back(std::make_unique<MallSystemAppDelegate>(profile));
@@ -213,15 +210,18 @@ web_app::ExternalInstallOptions CreateInstallOptionsForSystemApp(
 
 }  // namespace
 
-SystemWebAppManager::SystemWebAppManager(Profile* profile)
-    : profile_(profile),
+SystemWebAppManager::SystemWebAppManager(
+    const ApplicationLocaleStorage* application_locale_storage,
+    Profile* profile)
+    : application_locale_storage_(CHECK_DEREF(application_locale_storage)),
+      profile_(profile),
       provider_(web_app::WebAppProvider::GetForLocalAppsUnchecked(profile_)),
       on_apps_synchronized_(new base::OneShotEvent()),
       on_tasks_started_(new base::OneShotEvent()),
       on_icon_check_completed_(new base::OneShotEvent()),
       install_result_per_profile_histogram_name_(
-          std::string(kInstallResultHistogramName) + ".Profiles." +
-          web_app::GetProfileCategoryForLogging(profile)),
+          base::StrCat({kInstallResultHistogramName, ".Profiles.",
+                        web_app::GetProfileCategoryForLogging(profile)})),
       pref_service_(profile_->GetPrefs()),
       icon_checker_(SystemWebAppIconChecker::Create(profile_)) {
   DCHECK(provider_);
@@ -369,7 +369,7 @@ void SystemWebAppManager::Start() {
       provider_->policy_manager().GetDisabledSystemWebApps();
 
   for (const auto& app : system_app_delegates_) {
-    bool is_disabled = base::Contains(disabled_system_apps, app.first);
+    bool is_disabled = disabled_system_apps.contains(app.first);
     install_options_list.push_back(CreateInstallOptionsForSystemApp(
         app.first, *app.second, should_force_install_apps, is_disabled));
   }
@@ -622,10 +622,6 @@ const base::Version& SystemWebAppManager::CurrentVersion() const {
   return version_info::GetVersion();
 }
 
-const std::string& SystemWebAppManager::CurrentLocale() const {
-  return g_browser_process->GetApplicationLocale();
-}
-
 bool SystemWebAppManager::PreviousSessionHadBrokenIcons() const {
   return previous_session_had_broken_icons_;
 }
@@ -705,7 +701,7 @@ void SystemWebAppManager::OnAppsSynchronized(
   pref_service_->SetString(prefs::kSystemWebAppLastUpdateVersion,
                            CurrentVersion().GetString());
   pref_service_->SetString(prefs::kSystemWebAppLastInstalledLocale,
-                           CurrentLocale());
+                           application_locale_storage_->Get());
 
   // Report install duration only if the install pipeline actually installs
   // all the apps (e.g. on version upgrade).
@@ -729,8 +725,8 @@ void SystemWebAppManager::OnAppsSynchronized(
     on_apps_synchronized_->Signal();
     DCHECK(provider_->is_registry_ready());
     provider_->policy_manager().OnDisableListPolicyChanged();
-    // TODO(http://crbug/1173187): Don't create SWA background tasks that are
-    // associated with a disabled SWA.
+    // TODO(http://crbug.com/40167016): Don't create SWA background tasks that
+    // are associated with a disabled SWA.
   }
 
   if (!shutting_down_) {
@@ -764,7 +760,7 @@ void SystemWebAppManager::OnIconCheckResult(
     case SystemWebAppIconChecker::IconState::kNoAppInstalled:
       break;
     case SystemWebAppIconChecker::IconState::kBroken:
-      base::UmaHistogramBoolean(kIconsAreHealthyInSessionHistorgramName, false);
+      base::UmaHistogramBoolean(kIconsAreHealthyInSessionHistogramName, false);
       if (PreviousSessionHadBrokenIcons()) {
         base::UmaHistogramBoolean(kIconsFixedOnReinstallHistogramName, false);
       }
@@ -772,7 +768,7 @@ void SystemWebAppManager::OnIconCheckResult(
                                 true);
       break;
     case SystemWebAppIconChecker::IconState::kOk:
-      base::UmaHistogramBoolean(kIconsAreHealthyInSessionHistorgramName, true);
+      base::UmaHistogramBoolean(kIconsAreHealthyInSessionHistogramName, true);
       if (PreviousSessionHadBrokenIcons()) {
         base::UmaHistogramBoolean(kIconsFixedOnReinstallHistogramName, true);
       }
@@ -813,7 +809,8 @@ bool SystemWebAppManager::ShouldForceInstallApps() const {
 
   // If system language changes, ensure System Web Apps launcher localization
   // are in sync with current language.
-  const bool localeIsDifferent = current_installed_locale != CurrentLocale();
+  const bool localeIsDifferent =
+      current_installed_locale != application_locale_storage_->Get();
 
   return versionIsDifferent || localeIsDifferent;
 }
@@ -825,9 +822,10 @@ void SystemWebAppManager::UpdateLastAttemptedInfo() {
   const std::string& last_attempted_locale(
       pref_service_->GetString(prefs::kSystemWebAppLastAttemptedLocale));
 
-  const bool is_retry = last_attempted_version.IsValid() &&
-                        last_attempted_version == CurrentVersion() &&
-                        last_attempted_locale == CurrentLocale();
+  const bool is_retry =
+      last_attempted_version.IsValid() &&
+      last_attempted_version == CurrentVersion() &&
+      last_attempted_locale == application_locale_storage_->Get();
 
   if (!is_retry) {
     pref_service_->SetInteger(prefs::kSystemWebAppInstallFailureCount, 0);
@@ -836,7 +834,7 @@ void SystemWebAppManager::UpdateLastAttemptedInfo() {
   pref_service_->SetString(prefs::kSystemWebAppLastAttemptedVersion,
                            CurrentVersion().GetString());
   pref_service_->SetString(prefs::kSystemWebAppLastAttemptedLocale,
-                           CurrentLocale());
+                           application_locale_storage_->Get());
   pref_service_->CommitPendingWrite();
 }
 
@@ -857,8 +855,6 @@ bool SystemWebAppManager::CheckAndIncrementRetryAttempts() {
 void SystemWebAppManager::ConnectProviderToSystemWebAppDelegateMap(
     const SystemWebAppDelegateMap* system_web_apps_delegate_map) const {
   // TODO(crbug.com/40243506): Consider DCHECKing that provider_ is ready.
-  provider_->manifest_update_manager().SetSystemWebAppDelegateMap(
-      system_web_apps_delegate_map);
   provider_->policy_manager().SetSystemWebAppDelegateMap(
       system_web_apps_delegate_map);
 }

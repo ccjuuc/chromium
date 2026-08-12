@@ -11,15 +11,17 @@ namespace feature_engagement {
 class Tracker;
 }
 class PromosManager;
-@protocol UIBlockerTarget;
+class PrefService;
+@class SceneState;
 
 /// A mediator for the safari data import screen entry point.
 @interface SafariDataImportEntryPointMediator : NSObject
 
 /// Initializer.
-- (instancetype)initWithUIBlockerTarget:(id<UIBlockerTarget>)target
-                          promosManager:(PromosManager*)promosManager
-               featureEngagementTracker:(feature_engagement::Tracker*)tracker
+- (instancetype)initWithSceneState:(SceneState*)sceneState
+                     promosManager:(PromosManager*)promosManager
+          featureEngagementTracker:(feature_engagement::Tracker*)tracker
+                       prefService:(PrefService*)prefService
     NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
 
@@ -28,6 +30,9 @@ class PromosManager;
 
 /// Mark Safari data import workflow as used or dismissed by the user.
 - (void)notifyUsedOrDismissed;
+
+// Marks the Safari Data Import item in the setup list as completed.
+- (void)markSetUpListItemAsComplete;
 
 /// Disconnects mediator dependencies; should be called when stopping the
 /// coordinator.

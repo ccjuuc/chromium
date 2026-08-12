@@ -88,7 +88,7 @@ class KioskArcvmAppManagerTest : public InProcessBrowserTest {
     // TODO(crbug.com/418900186): Setup policy properly for this test.
     settings_helper_.ReplaceDeviceSettingsProviderWithStub();
     owner_settings_service_ =
-        settings_helper_.CreateOwnerSettingsService(browser()->profile());
+        settings_helper_.CreateOwnerSettingsService(browser()->GetProfile());
   }
 
   void TearDownOnMainThread() override {
@@ -98,10 +98,10 @@ class KioskArcvmAppManagerTest : public InProcessBrowserTest {
 
   void SetApps(const std::vector<policy::ArcvmKioskAppBasicInfo>& apps,
                const std::string& auto_login_account) {
-    base::Value::List device_local_accounts;
+    base::ListValue device_local_accounts;
     for (const policy::ArcvmKioskAppBasicInfo& app : apps) {
       device_local_accounts.Append(
-          base::Value::Dict()
+          base::DictValue()
               .Set(kAccountsPrefDeviceLocalAccountsKeyId,
                    GenerateAccountId(app.package_name()))
               .Set(kAccountsPrefDeviceLocalAccountsKeyType,

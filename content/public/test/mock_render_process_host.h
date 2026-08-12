@@ -34,7 +34,6 @@
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/child_process_binding_types.h"
 #include "content/public/browser/android/child_process_importance.h"
-#include "services/network/public/mojom/attribution.mojom-forward.h"
 #endif
 
 namespace blink {
@@ -92,14 +91,16 @@ class MockRenderProcessHost : public RenderProcessHost {
   int VisibleClientCount() override;
   unsigned int GetFrameDepth() override;
   bool GetIntersectsViewport() override;
-#if !BUILDFLAG(IS_ANDROID)
-  bool IsForInitialWebUI() const override;
-#endif  // !BUILDFLAG(IS_ANDROID)
+  bool IsForTopChromeWebUI() const override;
+  bool ShouldSendGpuChannelEarly() const override;
   bool IsForGuestsOnly() override;
+  bool IsPrivileged() override;
   bool IsJitDisabled() override;
   bool AreV8OptimizationsDisabled() override;
+  void SetAreV8OptimizationsDisabled(bool disabled);
   bool DisallowV8FeatureFlagOverrides() override;
   bool IsPdf() override;
+  void SetIsPdf(bool is_pdf);
   void OnMediaStreamAdded() override;
   void OnMediaStreamRemoved() override;
   void OnForegroundServiceWorkerAdded() override;
@@ -108,6 +109,7 @@ class MockRenderProcessHost : public RenderProcessHost {
   void OnBoostForLoadingRemoved() override;
   void OnImmersiveXrSessionStarted() override;
   void OnImmersiveXrSessionStopped() override;
+  bool HasImmersiveXrSessionForTesting() const override;
   StoragePartition* GetStoragePartition() override;
   virtual void AddWord(const std::u16string& word);
   bool Shutdown(int exit_code) override;
@@ -115,7 +117,9 @@ class MockRenderProcessHost : public RenderProcessHost {
   bool FastShutdownIfPossible(size_t page_count,
                               bool skip_unload_handlers,
                               bool ignore_workers,
-                              bool ignore_keep_alive) override;
+                              bool ignore_keep_alive,
+                              bool ignore_pending_reuse,
+                              bool use_outermost_main_frame_check) override;
   bool FastShutdownStarted() override;
   const base::Process& GetProcess() override;
   bool IsReady() override;
@@ -135,11 +139,9 @@ class MockRenderProcessHost : public RenderProcessHost {
       RenderProcessHostPriorityClient* priority_client) override;
   void RemovePriorityClient(
       RenderProcessHostPriorityClient* priority_client) override;
-#if !BUILDFLAG(IS_ANDROID)
   void SetPriorityOverride(base::Process::Priority priority) override;
   bool HasPriorityOverride() override;
   void ClearPriorityOverride() override;
-#endif
 #if BUILDFLAG(IS_ANDROID)
   void GraduateSpareToNormalRendererPriority() override;
   bool ShouldThrottleNavigationForSpareRendererGraduation() override;
@@ -163,6 +165,7 @@ class MockRenderProcessHost : public RenderProcessHost {
   std::unique_ptr<base::PersistentMemoryAllocator> TakeMetricsAllocator()
       override;
   const base::TimeTicks& GetLastInitTime() override;
+  base::TimeTicks GetProcessLaunchedTime() const override;
   base::Process::Priority GetPriority() const override;
   size_t GetWorkerRefCount() const;
   std::string GetKeepAliveDurations() const override;
@@ -290,13 +293,26 @@ class MockRenderProcessHost : public RenderProcessHost {
   void ResumeSocketManagerForRenderFrameHost(
       const GlobalRenderFrameHostId& render_frame_host_id) override {}
 
+  bool IsOnlyHostingPrerenderedFramesOrEmpty() override;
+
   // IPC::Listener via RenderProcessHost.
   void OnChannelConnected(int32_t peer_pid) override;
 
   void set_priority(base::Process::Priority priority) { priority_ = priority; }
 
-  void SetProcess(base::Process&& new_process) {
-    process = std::move(new_process);
+  void SetIsForTopChromeWebUI(bool is_for_top_chrome_web_ui) {
+    is_for_top_chrome_web_ui_ = is_for_top_chrome_web_ui;
+  }
+
+  // Makes GetProcess() report an invalid Process, as RenderProcessHostImpl
+  // does between Init() and OnProcessLaunched(). Lets tests cover the window
+  // in which a host is initialized but its renderer has not launched yet.
+  void SimulateProcessStillLaunchingForTesting(bool still_launching) {
+    process_still_launching_ = still_launching;
+  }
+
+  void SetProcessLaunchedTime(base::TimeTicks time) {
+    process_launched_time_ = time;
   }
 
   void OverrideBinderForTesting(const std::string& interface_name,
@@ -333,10 +349,15 @@ class MockRenderProcessHost : public RenderProcessHost {
   bool delayed_cleanup_ = false;
   bool deletion_callback_called_;
   bool is_for_guests_only_;
+  bool is_pdf_ = false;
   base::Process::Priority priority_;
   bool is_unused_;
+  bool are_v8_optimizations_disabled_ = false;
+  bool is_for_top_chrome_web_ui_ = false;
+  bool has_immersive_xr_session_ = false;
   bool is_ready_ = false;
-  base::Process process;
+  bool process_still_launching_ = false;
+  base::TimeTicks process_launched_time_;
   int pending_view_count_;
   int worker_ref_count_;
   int pending_reuse_ref_count_;

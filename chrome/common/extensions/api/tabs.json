@@ -144,7 +144,7 @@
       {
         "id": "WindowType",
         "type": "string",
-        "enum": ["normal", "popup", "panel", "app", "devtools"],
+        "enum": ["normal", "popup", "panel", "app", "devtools", {"name": "custom-tab", "nodoc": true}],
         "description": "The type of window."
       }
     ],
@@ -270,7 +270,7 @@
         "name": "sendMessage",
         "nocompile": true,
         "type": "function",
-        "description": "Sends a single message to the content script(s) in the specified tab, with an optional callback to run when a response is sent back.  The $(ref:runtime.onMessage) event is fired in each content script running in the specified tab for the current extension.",
+        "description": "Sends a single message to the content script(s) in the specified tab. The $(ref:runtime.onMessage) event is fired in each content script running in the specified tab for the current extension.",
         "parameters": [
           {
             "type": "integer",
@@ -304,11 +304,12 @@
         "returns_async": {
           "name": "callback",
           "optional": true,
+          "description": "Promise that resolves with the response from the content script. If an error occurs while connecting to the specified tab, the promise will be rejected.",
           "parameters": [
             {
               "name": "response",
               "type": "any",
-              "description": "The JSON response object sent by the handler of the message. If an error occurs while connecting to the specified tab, the promise will be rejected."
+              "description": "The JSON response object sent by the handler of the message."
             }
           ]
         }
@@ -402,6 +403,13 @@
                 "minimum": 0,
                 "optional": true,
                 "description": "The ID of the tab that opened this tab. If specified, the opener tab must be in the same window as the newly created tab."
+              },
+              "splitWithTabId": {
+                "type": "integer",
+                "minimum": 0,
+                "optional": true,
+                "nodoc": true,
+                "description": "The ID of an existing tab to create a split view with. If specified, the split-with tab must meet the following conditions: <ul><li>It must not be an already split tab.</li><li>It must be in the same window as the newly created tab.</li><li>If <var>windowId</var> is specified, it must be the same as the split-with tab's window ID.</li><li>If <var>index</var> is specified, it must be an index adjacent to the split-with tab and will affect the relative positioning of the newly created tab.</li></ul>"
               }
             }
           }

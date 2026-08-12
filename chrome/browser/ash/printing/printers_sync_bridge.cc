@@ -7,7 +7,6 @@
 #include <set>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
@@ -62,8 +61,9 @@ bool MigrateMakeAndModel(sync_pb::PrinterSpecifics* specifics) {
 bool ResolveInvalidPpdReference(sync_pb::PrinterSpecifics* specifics) {
   auto* ppd_ref = specifics->mutable_ppd_reference();
 
-  if (!ppd_ref->autoconf())
+  if (!ppd_ref->autoconf()) {
     return false;
+  }
 
   if (!ppd_ref->has_user_supplied_ppd_url() &&
       !ppd_ref->has_effective_make_and_model()) {
@@ -90,10 +90,11 @@ class PrintersSyncBridge::StoreProxy {
   // Returns true if the store has been initialized.
   bool Ready() { return store_.get() != nullptr; }
 
-  // Returns a new WriteBatch.
-  std::unique_ptr<DataTypeStore::WriteBatch> CreateWriteBatch() {
-    DCHECK(store_);
-    return store_->CreateWriteBatch();
+  // Returns a new WriteBatch with metadata changes.
+  std::unique_ptr<DataTypeStore::WriteBatch> CreateWriteBatch(
+      std::unique_ptr<MetadataChangeList> metadata_change_list) {
+    CHECK(store_);
+    return store_->CreateWriteBatch(std::move(metadata_change_list));
   }
 
   // Commits writes to the database and updates metadata.
@@ -193,10 +194,6 @@ PrintersSyncBridge::PrintersSyncBridge(
 
 PrintersSyncBridge::~PrintersSyncBridge() = default;
 
-std::unique_ptr<MetadataChangeList>
-PrintersSyncBridge::CreateMetadataChangeList() {
-  return DataTypeStore::WriteBatch::CreateMetadataChangeList();
-}
 
 std::optional<syncer::ModelError> PrintersSyncBridge::MergeFullSyncData(
     std::unique_ptr<MetadataChangeList> metadata_change_list,
@@ -204,7 +201,7 @@ std::optional<syncer::ModelError> PrintersSyncBridge::MergeFullSyncData(
   DCHECK(change_processor()->IsTrackingMetadata());
 
   std::unique_ptr<DataTypeStore::WriteBatch> batch =
-      store_delegate_->CreateWriteBatch();
+      store_delegate_->CreateWriteBatch(std::move(metadata_change_list));
   std::set<std::string> sync_entity_ids;
   {
     base::AutoLock lock(data_lock_);
@@ -226,25 +223,23 @@ std::optional<syncer::ModelError> PrintersSyncBridge::MergeFullSyncData(
     for (const auto& entry : all_data_) {
       const std::string& local_entity_id = entry.first;
 
-      // Migrate old schema to new combined one (crbug.com/737809).
+      // Migrate old schema to new combined one (crbug.com/172216087).
       bool migrated = MigrateMakeAndModel(entry.second.get());
 
-      // Clean up invalid ppd references (crbug.com/987869).
+      // Clean up invalid ppd references (crbug.com/172225630).
       bool resolved = ResolveInvalidPpdReference(entry.second.get());
 
-      if (migrated || resolved ||
-          !base::Contains(sync_entity_ids, local_entity_id)) {
+      if (migrated || resolved || !sync_entity_ids.contains(local_entity_id)) {
         // Only local objects which were not updated are uploaded.  Objects for
         // which there was a remote copy are overwritten.
         change_processor()->Put(local_entity_id,
                                 CopyToEntityData(*entry.second),
-                                metadata_change_list.get());
+                                batch->GetMetadataChangeList());
       }
     }
   }
 
   NotifyPrintersUpdated();
-  batch->TakeMetadataChangesFrom(std::move(metadata_change_list));
   store_delegate_->Commit(std::move(batch));
   return {};
 }
@@ -254,7 +249,7 @@ PrintersSyncBridge::ApplyIncrementalSyncChanges(
     std::unique_ptr<MetadataChangeList> metadata_change_list,
     EntityChangeList entity_changes) {
   std::unique_ptr<DataTypeStore::WriteBatch> batch =
-      store_delegate_->CreateWriteBatch();
+      store_delegate_->CreateWriteBatch(std::move(metadata_change_list));
   {
     base::AutoLock lock(data_lock_);
     // For all the entities from the server, apply changes.
@@ -278,9 +273,6 @@ PrintersSyncBridge::ApplyIncrementalSyncChanges(
   }
 
   NotifyPrintersUpdated();
-  // Update the local database with metadata for the incoming changes.
-  batch->TakeMetadataChangesFrom(std::move(metadata_change_list));
-
   store_delegate_->Commit(std::move(batch));
   return {};
 }
@@ -321,6 +313,14 @@ std::string PrintersSyncBridge::GetStorageKey(
     const EntityData& entity_data) const {
   DCHECK(entity_data.specifics.has_printer());
   return entity_data.specifics.printer().id();
+}
+
+sync_pb::EntitySpecifics
+PrintersSyncBridge::TrimAllSupportedFieldsFromRemoteSpecifics(
+    const sync_pb::EntitySpecifics& entity_specifics) const {
+  // Clears all fields by default to avoid the memory and I/O overhead of an
+  // additional copy of the data.
+  return sync_pb::EntitySpecifics();
 }
 
 bool PrintersSyncBridge::IsEntityDataValid(
@@ -397,7 +397,7 @@ bool PrintersSyncBridge::RemovePrinter(const std::string& id) {
   DCHECK(store_delegate_->Ready());
 
   std::unique_ptr<DataTypeStore::WriteBatch> batch =
-      store_delegate_->CreateWriteBatch();
+      store_delegate_->CreateWriteBatch(/*metadata_change_list=*/nullptr);
   {
     base::AutoLock lock(data_lock_);
     if (!DeleteSpecifics(id, batch.get())) {
@@ -445,7 +445,7 @@ bool PrintersSyncBridge::HasPrinter(const std::string& id) const {
 void PrintersSyncBridge::CommitPrinterPut(
     const sync_pb::PrinterSpecifics& printer) {
   std::unique_ptr<DataTypeStore::WriteBatch> batch =
-      store_delegate_->CreateWriteBatch();
+      store_delegate_->CreateWriteBatch(/*metadata_change_list=*/nullptr);
   if (change_processor()->IsTrackingMetadata()) {
     change_processor()->Put(printer.id(), CopyToEntityData(printer),
                             batch->GetMetadataChangeList());

@@ -11,7 +11,6 @@
 
 #include "base/base_paths.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback_helpers.h"
@@ -106,6 +105,12 @@ class CdmRegistryImplTest : public testing::Test {
 
   void SetUp() final {
     DVLOG(1) << __func__;
+
+    if constexpr (BUILDFLAG(IS_CHROMEOS)) {
+      // On ChromeOS, only HARDWARE_GL is available, so we cannot disable the
+      // ACCELERATED_GL feature without leaving no usable GPU mode.
+      GTEST_SKIP();
+    }
 
     auto* gpu_data_manager = GpuDataManagerImpl::GetInstance();
 
@@ -236,8 +241,7 @@ class CdmRegistryImplTest : public testing::Test {
 
   void SelectHardwareSecureDecryption(bool enabled) {
     const std::vector<base::test::FeatureRef> kHardwareSecureFeatures = {
-        media::kHardwareSecureDecryption,
-        media::kHardwareSecureDecryptionExperiment};
+        media::kHardwareSecureDecryption};
     const std::vector<base::test::FeatureRef> kNoFeatures = {};
 
     auto enabled_features = enabled ? kHardwareSecureFeatures : kNoFeatures;
@@ -351,12 +355,10 @@ TEST_F(CdmRegistryImplTest, Profiles) {
       kTestKeySystem, CdmInfo::Robustness::kSoftwareSecure);
   CdmInfo& cdm = *cdm_info;
   EXPECT_VIDEO_CODECS(VideoCodec::kVP9);
-  EXPECT_TRUE(base::Contains(
-      cdm.capability->video_codecs[VideoCodec::kVP9].supported_profiles,
-      media::VP9PROFILE_PROFILE0));
-  EXPECT_TRUE(base::Contains(
-      cdm.capability->video_codecs[VideoCodec::kVP9].supported_profiles,
-      media::VP9PROFILE_PROFILE2));
+  EXPECT_TRUE(cdm.capability->video_codecs[VideoCodec::kVP9]
+                  .supported_profiles.contains(media::VP9PROFILE_PROFILE0));
+  EXPECT_TRUE(cdm.capability->video_codecs[VideoCodec::kVP9]
+                  .supported_profiles.contains(media::VP9PROFILE_PROFILE2));
   EXPECT_TRUE(
       cdm.capability->video_codecs[VideoCodec::kVP9].supports_clear_lead);
 }

@@ -10,7 +10,6 @@ import static org.mockito.Mockito.doAnswer;
 
 import static org.chromium.chrome.browser.ui.desktop_windowing.AppHeaderCoordinator.INSTANCE_STATE_KEY_IS_APP_IN_UNFOCUSED_DW;
 
-import android.content.Intent;
 import android.content.res.Resources;
 import android.graphics.Rect;
 import android.os.Build;
@@ -22,7 +21,6 @@ import androidx.annotation.RequiresApi;
 import androidx.core.graphics.Insets;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.test.filters.MediumTest;
-import androidx.test.runner.lifecycle.Stage;
 
 import org.hamcrest.Matchers;
 import org.junit.Assert;
@@ -34,17 +32,18 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
-import org.chromium.base.ContextUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.ApplicationTestUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.compositor.layouts.LayoutManagerChromeTablet;
 import org.chromium.chrome.browser.compositor.layouts.eventfilter.AreaMotionEventFilter;
@@ -52,10 +51,7 @@ import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutHelperMa
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.hub.HubLayout;
-import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.NewWindowAppSource;
-import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
-import org.chromium.chrome.browser.omnibox.OmniboxFocusReason;
-import org.chromium.chrome.browser.tabwindow.TabWindowManager;
+import org.chromium.chrome.browser.multiwindow.MultiWindowTestHelper;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper;
 import org.chromium.chrome.browser.theme.ThemeUtils;
 import org.chromium.chrome.browser.toolbar.top.ToolbarTablet;
@@ -64,7 +60,6 @@ import org.chromium.chrome.browser.ui.desktop_windowing.AppHeaderCoordinator;
 import org.chromium.chrome.browser.ui.desktop_windowing.AppHeaderUtils;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
@@ -74,6 +69,8 @@ import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerProvi
 import org.chromium.components.browser_ui.bottomsheet.ManagedBottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.TestBottomSheetContent;
 import org.chromium.components.browser_ui.desktop_windowing.AppHeaderState;
+import org.chromium.components.omnibox.AutocompleteInput;
+import org.chromium.components.omnibox.OmniboxFocusReason;
 import org.chromium.content_public.browser.test.util.DOMUtils;
 import org.chromium.content_public.browser.test.util.JavaScriptUtils;
 import org.chromium.ui.base.DeviceFormFactor;
@@ -139,6 +136,7 @@ public class AppHeaderCoordinatorBrowserTest {
 
     @Test
     @MediumTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287385
     public void testTabStripHeightChangeInDesktopWindow() {
         ChromeTabbedActivity activity = mActivityTestRule.getActivity();
         triggerDesktopWindowingModeChange(activity, true);
@@ -164,6 +162,7 @@ public class AppHeaderCoordinatorBrowserTest {
 
     @Test
     @MediumTest
+    @DisabledTest(message = "crbug.com/540949052")
     public void testToggleTabStripVisibilityInDesktopWindow() {
         ChromeTabbedActivity activity = mActivityTestRule.getActivity();
         triggerDesktopWindowingModeChange(activity, true);
@@ -322,19 +321,9 @@ public class AppHeaderCoordinatorBrowserTest {
 
         // Create a new (desktop) window, that should gain focus and cause the first activity to
         // lose focus.
-        Intent intent =
-                MultiWindowUtils.createNewWindowIntent(
-                        firstActivity.getApplicationContext(),
-                        TabWindowManager.INVALID_WINDOW_ID,
-                        true,
-                        false,
-                        true,
-                        NewWindowAppSource.OTHER);
         ChromeTabbedActivity secondActivity =
-                ApplicationTestUtils.waitForActivityWithClass(
-                        ChromeTabbedActivity.class,
-                        Stage.RESUMED,
-                        () -> ContextUtils.getApplicationContext().startActivity(intent));
+                MultiWindowTestHelper.createNewChromeTabbedActivity(
+                        firstActivity.getApplicationContext());
         triggerDesktopWindowingModeChange(secondActivity, true);
 
         // Trigger activity recreation in desktop windowing mode (an app theme change for eg. would
@@ -392,7 +381,7 @@ public class AppHeaderCoordinatorBrowserTest {
                     boolean isKeyboardShowing =
                             mActivityTestRule
                                     .getKeyboardDelegate()
-                                    .isKeyboardShowing(activity.getTabsView());
+                                    .isKeyboardShowing(activity.getTabsViewForTesting());
                     Criteria.checkThat(isKeyboardShowing, Matchers.is(true));
                 },
                 KEYBOARD_TIMEOUT,
@@ -463,7 +452,7 @@ public class AppHeaderCoordinatorBrowserTest {
                     boolean isKeyboardShowing =
                             mActivityTestRule
                                     .getKeyboardDelegate()
-                                    .isKeyboardShowing(activity.getTabsView());
+                                    .isKeyboardShowing(activity.getTabsViewForTesting());
                     Criteria.checkThat(isKeyboardShowing, Matchers.is(true));
                 },
                 KEYBOARD_TIMEOUT,
@@ -507,6 +496,7 @@ public class AppHeaderCoordinatorBrowserTest {
 
     @Test
     @MediumTest
+    @Restriction(DeviceFormFactor.ONLY_TABLET)
     public void testKeyboardInDesktopWindow_RootViewNotPaddedOnOmniboxFocus() {
         ChromeTabbedActivity activity = mActivityTestRule.getActivity();
         triggerDesktopWindowingModeChange(activity, true);
@@ -515,14 +505,15 @@ public class AppHeaderCoordinatorBrowserTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     activity.getToolbarManager()
-                            .setUrlBarFocus(true, OmniboxFocusReason.OMNIBOX_TAP);
+                            .beginFuseboxInput(
+                                    new AutocompleteInput(OmniboxFocusReason.OMNIBOX_TAP));
                 });
         CriteriaHelper.pollUiThread(
                 () -> {
                     boolean isKeyboardShowing =
                             mActivityTestRule
                                     .getKeyboardDelegate()
-                                    .isKeyboardShowing(activity.getTabsView());
+                                    .isKeyboardShowing(activity.getTabsViewForTesting());
                     Criteria.checkThat(isKeyboardShowing, Matchers.is(true));
                 },
                 KEYBOARD_TIMEOUT,
@@ -534,10 +525,7 @@ public class AppHeaderCoordinatorBrowserTest {
                 () -> Criteria.checkThat(rootView.getPaddingBottom(), Matchers.is(0)));
 
         // Remove omnibox focus and restore state.
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    activity.getToolbarManager().setUrlBarFocus(false, OmniboxFocusReason.UNFOCUS);
-                });
+        ThreadUtils.runOnUiThreadBlocking(activity.getToolbarManager()::endFuseboxInput);
     }
 
     @Test

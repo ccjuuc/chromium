@@ -16,7 +16,7 @@
 #include "base/sequence_checker.h"
 #include "base/supports_user_data.h"
 #include "components/autofill/core/browser/webdata/addresses/address_autofill_table.h"
-#include "components/autofill/core/browser/webdata/addresses/contact_info_sync_util.h"
+#include "components/autofill/core/browser/webdata/autofill_change.h"
 #include "components/autofill/core/browser/webdata/autofill_sync_metadata_table.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_backend.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service_observer.h"
@@ -27,7 +27,12 @@
 #include "components/sync/model/metadata_change_list.h"
 #include "components/sync/model/model_error.h"
 #include "components/sync/model/mutable_data_batch.h"
+#include "components/sync/protocol/contact_info_specifics.pb.h"
 #include "components/sync/protocol/entity_data.h"
+
+namespace syncer {
+class SyncMetadataStoreChangeList;
+}  // namespace syncer
 
 namespace autofill {
 
@@ -53,8 +58,6 @@ class ContactInfoSyncBridge : public AutofillWebDataServiceObserverOnDBSequence,
       AutofillWebDataService* web_data_service);
 
   // syncer::DataTypeSyncBridge implementation.
-  std::unique_ptr<syncer::MetadataChangeList> CreateMetadataChangeList()
-      override;
   std::optional<syncer::ModelError> MergeFullSyncData(
       std::unique_ptr<syncer::MetadataChangeList> metadata_change_list,
       syncer::EntityChangeList entity_data) override;
@@ -87,8 +90,9 @@ class ContactInfoSyncBridge : public AutofillWebDataServiceObserverOnDBSequence,
   // `InMemoryMetadataChangeList`. This function transfers the changes from the
   // `metadata_change_list` to `GetSyncMetadataStore()`. It assumes that
   // `metadata_change_list` was created using the bridge's
-  // `CreateMetadataChangeList()`.
-  std::optional<syncer::ModelError> ApplyMetadataChanges(
+  // `CreateMetadataChangeList()`. Returns a store change list that can be used
+  // to commit further metadata changes to the store.
+  std::unique_ptr<syncer::SyncMetadataStoreChangeList> ApplyMetadataChanges(
       std::unique_ptr<syncer::MetadataChangeList> metadata_change_list);
 
   bool SyncMetadataCacheContainsSupportedFields(

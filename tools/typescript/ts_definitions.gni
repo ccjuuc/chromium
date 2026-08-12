@@ -2,8 +2,12 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
 import("//third_party/node/node.gni")
+import("//ui/webui/webui_features.gni")
+
+if (use_typescript_go) {
+  import("//third_party/typescript/tsgo.gni")
+}
 
 assert(is_chromeos)
 
@@ -19,7 +23,13 @@ template("ts_definitions") {
                              "visibility",
                            ])
 
-    inputs = [ "//tools/typescript/tsconfig_definitions_base.json" ]
+    inputs = [
+      "//package.json",
+      "//tools/typescript/tsconfig_definitions_base.json",
+    ]
+    if (use_typescript_go) {
+      inputs += tsgo_inputs
+    }
     outputs = [ "$target_gen_dir/tsconfig_definitions.json" ]
 
     root_dir = "."
@@ -48,6 +58,10 @@ template("ts_definitions") {
              rebase_path(out_dir, root_build_dir),
              "--js_files",
            ] + js_files
+
+    if (use_typescript_go) {
+      args += [ "--use_typescript_go" ]
+    }
 
     if (defined(deps)) {
       args += [ "--deps" ]

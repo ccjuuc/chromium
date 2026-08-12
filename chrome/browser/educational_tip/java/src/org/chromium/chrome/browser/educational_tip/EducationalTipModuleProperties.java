@@ -8,6 +8,7 @@ import android.view.View.OnClickListener;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.modelutil.PropertyKey;
+import org.chromium.ui.modelutil.PropertyModel.WritableBooleanPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableIntPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
 
@@ -22,6 +23,9 @@ interface EducationalTipModuleProperties {
     WritableObjectPropertyKey<OnClickListener> MODULE_BUTTON_ON_CLICK_LISTENER =
             new WritableObjectPropertyKey<>();
     WritableIntPropertyKey MODULE_CONTENT_IMAGE = new WritableIntPropertyKey();
+    WritableIntPropertyKey MODULE_CONTENT_COMPLETED_IMAGE = new WritableIntPropertyKey();
+    WritableObjectPropertyKey<Boolean> MARK_COMPLETED = new WritableObjectPropertyKey<>();
+    WritableBooleanPropertyKey USE_TRANSPARENT_ICON_BACKGROUND = new WritableBooleanPropertyKey();
 
     PropertyKey[] ALL_KEYS =
             new PropertyKey[] {
@@ -29,6 +33,9 @@ interface EducationalTipModuleProperties {
                 MODULE_CONTENT_DESCRIPTION_STRING,
                 MODULE_BUTTON_STRING,
                 MODULE_BUTTON_ON_CLICK_LISTENER,
-                MODULE_CONTENT_IMAGE
+                MODULE_CONTENT_IMAGE,
+                MODULE_CONTENT_COMPLETED_IMAGE,
+                MARK_COMPLETED,
+                USE_TRANSPARENT_ICON_BACKGROUND
             };
 }

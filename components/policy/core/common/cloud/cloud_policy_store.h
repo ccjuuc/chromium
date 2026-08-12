@@ -67,7 +67,7 @@ class POLICY_EXPORT CloudPolicyStore {
     virtual void OnStoreDestruction(CloudPolicyStore* store);
   };
 
-  CloudPolicyStore();
+  explicit CloudPolicyStore(const std::string& policy_type);
   CloudPolicyStore(const CloudPolicyStore&) = delete;
   CloudPolicyStore& operator=(const CloudPolicyStore&) = delete;
   virtual ~CloudPolicyStore();
@@ -104,6 +104,10 @@ class POLICY_EXPORT CloudPolicyStore {
   bool first_policies_loaded() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     return first_policies_loaded_;
+  }
+  const std::string& policy_type() const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return policy_type_;
   }
   CloudPolicyValidatorBase::Status validation_status() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -210,6 +214,9 @@ class POLICY_EXPORT CloudPolicyStore {
   // policy.
   std::string policy_signature_public_key_;
 
+  // The type of the policy expected to be stored in the store.
+  const std::string policy_type_;
+
  private:
   // Whether the store has completed asynchronous initialization, which is
   // triggered by calling Load().
@@ -217,7 +224,13 @@ class POLICY_EXPORT CloudPolicyStore {
 
   std::unique_ptr<enterprise_management::PolicyData> policy_;
 
-  base::ObserverList<Observer> observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/false,
+      /*allow_reentrancy=*/
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers_;
 };
 
 }  // namespace policy

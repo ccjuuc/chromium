@@ -297,7 +297,7 @@ bool Sequence::HasImmediateTasks() const {
 
 TaskSourceSortKey Sequence::GetSortKey() const {
   return TaskSourceSortKey(
-      priority_racy(),
+      thread_type_racy(),
       TS_UNCHECKED_READ(latest_ready_time_).load(std::memory_order_relaxed));
 }
 
@@ -313,9 +313,11 @@ std::optional<Task> Sequence::Clear(TaskSource::Transaction* transaction) {
   if (!IsEmpty() && !has_worker_) {
     ReleaseTaskRunner();
   }
+  Location posted_from =
+      !queue_.empty() ? queue_.front().posted_from : FROM_HERE;
 
   return Task(
-      FROM_HERE,
+      posted_from,
       base::BindOnce(
           [](base::queue<Task> queue,
              base::IntrusiveHeap<Task, DelayedTaskGreater> delayed_queue) {
@@ -343,8 +345,14 @@ void Sequence::ReleaseTaskRunner() {
 
 Sequence::Sequence(const TaskTraits& traits,
                    SequencedTaskRunner* task_runner,
-                   TaskSourceExecutionMode execution_mode)
-    : TaskSource(traits, execution_mode), task_runner_(task_runner) {}
+                   TaskSourceExecutionMode execution_mode,
+                   ThreadType originating_thread_type,
+                   bool inherit_by_default)
+    : TaskSource(traits,
+                 execution_mode,
+                 originating_thread_type,
+                 inherit_by_default),
+      task_runner_(task_runner) {}
 
 Sequence::~Sequence() = default;
 

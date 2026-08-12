@@ -4,9 +4,13 @@
 
 package org.chromium.chrome.browser.omnibox.styles;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
+import android.content.ComponentCallbacks2;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
+import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
@@ -18,59 +22,701 @@ import android.util.TypedValue;
 
 import androidx.annotation.ColorInt;
 import androidx.annotation.ColorRes;
+import androidx.annotation.DimenRes;
 import androidx.annotation.DrawableRes;
+import androidx.annotation.IntDef;
 import androidx.annotation.Px;
 import androidx.annotation.StringRes;
 import androidx.annotation.StyleRes;
-import androidx.annotation.VisibleForTesting;
-import androidx.appcompat.content.res.AppCompatResources;
 import androidx.core.content.ContextCompat;
 
 import com.google.android.material.color.MaterialColors;
 
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.ThreadUtils;
+import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.night_mode.NightModeUtils;
 import org.chromium.chrome.browser.omnibox.R;
+import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxLayoutMode;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.theme.ThemeUtils;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.components.browser_ui.styles.IncognitoColors;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+import org.chromium.components.browser_ui.util.DrawableUtils;
+import org.chromium.components.omnibox.OmniboxCapabilities;
+import org.chromium.components.omnibox.OmniboxFeatures;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.util.ColorUtils;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.function.Function;
 
-/** Provides resources specific to Omnibox. */
+/**
+ * Provides resources specific to Omnibox.
+ *
+ * <p>This class is currently being migrated to an instance-based calls to remove the requirement
+ * that each of its clients caches a lot of state information, possibly leading to an inconsistent
+ * UI and overabundance of caching.
+ *
+ * <p>Where possible please use an Instance. Static methods are set to be retired.
+ */
 @NullMarked
-public class OmniboxResourceProvider {
+public class OmniboxResourceProvider implements ComponentCallbacks2 {
+    /** Identifies the current layout constraints of the screen/window. */
+    @IntDef({
+        LayoutSize.UNKNOWN,
+        LayoutSize.PHONE,
+        LayoutSize.TABLET_NARROW,
+        LayoutSize.TABLET_WIDE,
+        LayoutSize.DESKTOP
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    private @interface LayoutSize {
+        int UNKNOWN = 0;
+        int PHONE = 1; // Physical phone layout.
+        int TABLET_NARROW = 2; // Tablet screen, but in narrow split-screen window (< 600dp).
+        int TABLET_WIDE = 3; // Tablet screen, in wide window (>= 600dp).
+        int DESKTOP = 4; // Desktop platform.
+    }
+
     private static final String TAG = "OmniboxResourceProvider";
 
-    private static SparseArray<ConstantState> sDrawableCache = new SparseArray<>();
     private static SparseArray<String> sStringCache = new SparseArray<>();
     private static @Nullable Function<Tab, @Nullable Bitmap> sTabFaviconFactory;
     private static @ColorInt @Nullable Integer sUrlBarPrimaryTextColorForTesting;
     private static @ColorInt @Nullable Integer sUrlBarHintTextColorForTesting;
 
+    // Tracking states for cache invalidation.
+    private @LayoutSize int mLayoutSizeState = LayoutSize.UNKNOWN;
+    private @Nullable String mLocaleState;
+    private boolean mDarkModeState;
+
+    private final Context mContext;
+    private ResourceCache mCache;
+
+    private @BrandedColorScheme int mBrandedColorScheme = BrandedColorScheme.APP_DEFAULT;
+
+    public OmniboxResourceProvider(Context context, @BrandedColorScheme int brandedColorScheme) {
+        mContext = context;
+        mBrandedColorScheme = brandedColorScheme;
+        mContext.registerComponentCallbacks(this);
+        updateStateAndCache(context.getResources().getConfiguration());
+    }
+
+    /** Unregisters context callbacks. */
+    public void destroy() {
+        mContext.unregisterComponentCallbacks(this);
+    }
+
     /**
-     * As {@link androidx.appcompat.content.res.AppCompatResources#getDrawable(Context, int)} but
-     * potentially augmented with caching. If caching is enabled, there is a single, unbounded cache
-     * of ConstantState shared by all contexts.
+     * Constructor that resolves the branded color scheme from incognito state and background color.
      */
-    public static Drawable getDrawable(Context context, @DrawableRes int res) {
-        ThreadUtils.assertOnUiThread();
-        ConstantState constantState = sDrawableCache.get(res, null);
-        if (constantState != null) {
-            return constantState.newDrawable(context.getResources());
+    public OmniboxResourceProvider(
+            Context context, boolean isIncognitoBranded, @ColorInt int primaryBackgroundColor) {
+        this(context, getBrandedColorScheme(context, isIncognitoBranded, primaryBackgroundColor));
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        updateStateAndCache(newConfig);
+    }
+
+    @Override
+    public void onLowMemory() {}
+
+    @Override
+    public void onTrimMemory(int level) {}
+
+    /**
+     * Set branded color scheme.
+     *
+     * @see #setBrandedColorScheme(Context, ...)
+     */
+    public void setBrandedColorScheme(@BrandedColorScheme int brandedColorScheme) {
+        if (mBrandedColorScheme != brandedColorScheme) {
+            mBrandedColorScheme = brandedColorScheme;
+            updateStateAndCache(mContext.getResources().getConfiguration());
+        }
+    }
+
+    public @BrandedColorScheme int getBrandedColorScheme() {
+        return mBrandedColorScheme;
+    }
+
+    /**
+     * @return Whether the current color scheme is incognito.
+     */
+    public boolean isIncognito() {
+        return mBrandedColorScheme == BrandedColorScheme.INCOGNITO;
+    }
+
+    // NullAway cannot recognize mLayoutSizeState == UNKONWN as factor impacting the outcome.
+    // We're intentionally starting with values that are not valid to trigger creation of the
+    // correct target context. One way around the problem would be to always instantiate mCache
+    // in the constructor and let it be recreated below, but this is slightly less wasteful.
+    @SuppressWarnings("NullAway")
+    @Initializer
+    private void updateStateAndCache(Configuration config) {
+        @LayoutSize int newLayoutSize = computeLayoutSize(config);
+        String newLocale = config.getLocales().toLanguageTags();
+        boolean darkModeState =
+                (config.uiMode & Configuration.UI_MODE_NIGHT_MASK)
+                        == Configuration.UI_MODE_NIGHT_YES;
+
+        if (newLayoutSize == mLayoutSizeState
+                && newLocale.equals(mLocaleState)
+                && darkModeState == mDarkModeState) {
+            return;
         }
 
-        Drawable drawable = AppCompatResources.getDrawable(context, res);
-        sDrawableCache.put(res, drawable.getConstantState());
-        return drawable;
+        mLayoutSizeState = newLayoutSize;
+        mLocaleState = newLocale;
+        mDarkModeState = darkModeState;
+
+        mCache = new ResourceCache(mContext);
+    }
+
+    private @LayoutSize int computeLayoutSize(Configuration config) {
+        if (OmniboxCapabilities.isDesktopPlatform()) {
+            return LayoutSize.DESKTOP;
+        }
+        if (DeviceFormFactor.isNonMultiDisplayContextOnTablet(mContext)) {
+            return config.screenWidthDp < DeviceFormFactor.MINIMUM_TABLET_WIDTH_DP
+                    ? LayoutSize.TABLET_NARROW
+                    : LayoutSize.TABLET_WIDE;
+        }
+        return LayoutSize.PHONE;
+    }
+
+    /**
+     * Resolves a drawable resource using the instance context and cache, automatically casting the
+     * result to the target {@link Drawable} subtype.
+     *
+     * @param <T> Target {@link Drawable} subtype to cast to.
+     * @param res Drawable resource ID to retrieve.
+     * @return Resolved {@link Drawable} cast to the target type {@code T}.
+     */
+    @SuppressWarnings("unchecked")
+    public <T extends Drawable> T getDrawable(@DrawableRes int res) {
+        return (T) mCache.getDrawable(res);
+    }
+
+    /**
+     * As {@link #getString(Context, int, CharSequence...)} but uses the instance context and cache.
+     */
+    public String getString(@StringRes int res, CharSequence... args) {
+        String string = mCache.getString(res);
+        return args.length == 0
+                ? string
+                : String.format(
+                        mContext.getResources().getConfiguration().getLocales().get(0),
+                        string,
+                        (Object[]) args);
+    }
+
+    /** Resolves a dimension size and caches the result. */
+    public @Px int getDimen(@DimenRes int resId) {
+        return mCache.getDimen(resId);
+    }
+
+    /** Resolves a color resource and caches the result. */
+    public @ColorInt int getColor(@ColorRes int resId) {
+        return mCache.getColor(resId);
+    }
+
+    /** Resolves a string resource and caches the result. */
+    public String getString(@StringRes int resId) {
+        return mCache.getString(resId);
+    }
+
+    /**
+     * Resolve attribute to drawable.
+     *
+     * @see #resolveAttributeToDrawable(Context, ...)
+     */
+    public Drawable resolveAttributeToDrawable(int attributeResId) {
+        return resolveAttributeToDrawable(mContext, getBrandedColorScheme(), attributeResId);
+    }
+
+    /**
+     * Get url bar primary text color.
+     *
+     * @see #getUrlBarPrimaryTextColor(Context, ...)
+     */
+    public @ColorInt int getUrlBarPrimaryTextColor() {
+        return getUrlBarPrimaryTextColor(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get url bar secondary text color.
+     *
+     * @see #getUrlBarSecondaryTextColor(Context, ...)
+     */
+    public @ColorInt int getUrlBarSecondaryTextColor() {
+        return getUrlBarSecondaryTextColor(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get url bar hint text color.
+     *
+     * @see #getUrlBarHintTextColor(Context, ...)
+     */
+    public @ColorInt int getUrlBarHintTextColor() {
+        return getUrlBarHintTextColor(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get url bar danger color.
+     *
+     * @see #getUrlBarDangerColor(Context, ...)
+     */
+    public @ColorInt int getUrlBarDangerColor() {
+        return getUrlBarDangerColor(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get url bar secure color.
+     *
+     * @see #getUrlBarSecureColor(Context, ...)
+     */
+    public @ColorInt int getUrlBarSecureColor() {
+        return getUrlBarSecureColor(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get suggestion primary text color.
+     *
+     * @see #getSuggestionPrimaryTextColor(Context, ...)
+     */
+    public @ColorInt int getSuggestionPrimaryTextColor() {
+        return getSuggestionPrimaryTextColor(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get suggestion secondary text color.
+     *
+     * @see #getSuggestionSecondaryTextColor(Context, ...)
+     */
+    public @ColorInt int getSuggestionSecondaryTextColor() {
+        return getSuggestionSecondaryTextColor(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get suggestion url text color.
+     *
+     * @see #getSuggestionUrlTextColor(Context, ...)
+     */
+    public @ColorInt int getSuggestionUrlTextColor() {
+        return getSuggestionUrlTextColor(mContext, getBrandedColorScheme());
+    }
+
+    /** Get status separator color. */
+    public @ColorInt int getStatusSeparatorColor() {
+        @ColorRes
+        int res =
+                switch (mBrandedColorScheme) {
+                    case BrandedColorScheme.LIGHT_BRANDED_THEME ->
+                            R.color.locationbar_status_separator_color_dark;
+                    case BrandedColorScheme.DARK_BRANDED_THEME ->
+                            R.color.locationbar_status_separator_color_light;
+                    case BrandedColorScheme.INCOGNITO ->
+                            R.color.locationbar_status_separator_color_incognito;
+                    default -> 0;
+                };
+        return res != 0 ? mCache.getColor(res) : mCache.getColorAttr(R.attr.colorOutline);
+    }
+
+    /** Get status preview text color. */
+    public @ColorInt int getStatusPreviewTextColor() {
+        @ColorRes
+        int res =
+                switch (mBrandedColorScheme) {
+                    case BrandedColorScheme.LIGHT_BRANDED_THEME ->
+                            R.color.locationbar_status_preview_color_dark;
+                    case BrandedColorScheme.DARK_BRANDED_THEME ->
+                            R.color.locationbar_status_preview_color_light;
+                    case BrandedColorScheme.INCOGNITO ->
+                            R.color.locationbar_status_preview_color_incognito;
+                    default -> 0;
+                };
+        return res != 0 ? mCache.getColor(res) : mCache.getColorAttr(R.attr.colorPrimary);
+    }
+
+    /** Get status offline text color. */
+    public @ColorInt int getStatusOfflineTextColor() {
+        @ColorRes
+        int res =
+                switch (mBrandedColorScheme) {
+                    case BrandedColorScheme.LIGHT_BRANDED_THEME ->
+                            R.color.locationbar_status_offline_color_dark;
+                    case BrandedColorScheme.DARK_BRANDED_THEME ->
+                            R.color.locationbar_status_offline_color_light;
+                    case BrandedColorScheme.INCOGNITO ->
+                            R.color.locationbar_status_offline_color_incognito;
+                    default -> R.color.default_text_color_secondary_list;
+                };
+        return mCache.getColor(res);
+    }
+
+    /**
+     * Get standard suggestion background color.
+     *
+     * @see #getStandardSuggestionBackgroundColor(Context, ...)
+     */
+    public @ColorInt int getStandardSuggestionBackgroundColor() {
+        return getStandardSuggestionBackgroundColor(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get stateful suggestion background.
+     *
+     * @see #getStatefulSuggestionBackground(Context, ...)
+     */
+    public Drawable getStatefulSuggestionBackground(@ColorInt int defaultColor) {
+        return getStatefulSuggestionBackground(mContext, defaultColor, getBrandedColorScheme());
+    }
+
+    /**
+     * Get suggestions dropdown background color.
+     *
+     * @see #getSuggestionsDropdownBackgroundColor(Context, ...)
+     */
+    public @ColorInt int getSuggestionsDropdownBackgroundColor() {
+        return getSuggestionsDropdownBackgroundColor(mContext, getBrandedColorScheme());
+    }
+
+    /** Get suggestion background color for the instance context and color scheme. */
+    public @ColorInt int getSuggestionBackgroundColor(
+            @FuseboxLayoutMode int layoutMode, boolean isDropdownContainer) {
+        if (layoutMode == FuseboxLayoutMode.SUGGESTIONS_POPOVER) {
+            return getPopoverSuggestionBackgroundColor(mContext, getBrandedColorScheme());
+        }
+        return isDropdownContainer
+                ? getSuggestionsDropdownBackgroundColor(mContext, getBrandedColorScheme())
+                : getStandardSuggestionBackgroundColor(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get tablet toolbar text box background color.
+     *
+     * @see #getTabletToolbarTextBoxBackgroundColor(Context, ...)
+     */
+    public @ColorInt int getTabletToolbarTextBoxBackgroundColor() {
+        return getTabletToolbarTextBoxBackgroundColor(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get tablet toolbar text box standby background color.
+     *
+     * @see #getTabletToolbarTextBoxStandbyBackgroundColor(Context, ...)
+     */
+    public @ColorInt int getTabletToolbarTextBoxStandbyBackgroundColor() {
+        return getTabletToolbarTextBoxStandbyBackgroundColor(mContext, getBrandedColorScheme());
+    }
+
+    /** Gets the margin, in pixels, on either side of an omnibox suggestion list. */
+    public @Px int getDropdownSideSpacing() {
+        return getSideSpacing() + mCache.getDimen(R.dimen.omnibox_suggestion_dropdown_side_spacing);
+    }
+
+    /** Returns the top padding for the Omnibox suggestions dropdown list. */
+    public @Px int getDropdownTopPadding() {
+        return mCache.getDimen(R.dimen.omnibox_suggestion_list_padding_top);
+    }
+
+    /** Returns the bottom padding for the Omnibox suggestions dropdown list. */
+    public @Px int getDropdownBottomPadding() {
+        return mCache.getDimen(R.dimen.omnibox_suggestion_list_padding_bottom);
+    }
+
+    /** Gets the margin, in pixels, on either side of an omnibox suggestion. */
+    public @Px int getSideSpacing() {
+        return mCache.getDimen(R.dimen.omnibox_suggestion_side_spacing_smallest);
+    }
+
+    /**
+     * Get most visited carousel top padding.
+     *
+     * @see #getMostVisitedCarouselTopPadding(Context, ...)
+     */
+    public @Px int getMostVisitedCarouselTopPadding() {
+        return getMostVisitedCarouselTopPadding(mContext);
+    }
+
+    /**
+     * Get most visited carousel bottom padding.
+     *
+     * @see #getMostVisitedCarouselBottomPadding(Context, ...)
+     */
+    public @Px int getMostVisitedCarouselBottomPadding() {
+        return getMostVisitedCarouselBottomPadding(mContext);
+    }
+
+    /**
+     * Get header start padding.
+     *
+     * @see #getHeaderStartPadding(Context, ...)
+     */
+    public @Px int getHeaderStartPadding() {
+        return getHeaderStartPadding(mContext);
+    }
+
+    /**
+     * Get location bar background on focus height increase.
+     *
+     * @see #getLocationBarBackgroundOnFocusHeightIncrease(Context, ...)
+     */
+    public @Px int getLocationBarBackgroundOnFocusHeightIncrease() {
+        return getLocationBarBackgroundOnFocusHeightIncrease(mContext);
+    }
+
+    /**
+     * Get toolbar side padding.
+     *
+     * @see #getToolbarSidePadding(Context, ...)
+     */
+    public @Px int getToolbarSidePadding() {
+        return getToolbarSidePadding(mContext);
+    }
+
+    /**
+     * Get toolbar side padding for ntp.
+     *
+     * @see #getToolbarSidePaddingForNtp(Context, ...)
+     */
+    public @Px int getToolbarSidePaddingForNtp() {
+        return getToolbarSidePaddingForNtp(mContext);
+    }
+
+    /**
+     * Get suggestion decoration icon size width.
+     *
+     * @see #getSuggestionDecorationIconSizeWidth(Context, ...)
+     */
+    public @Px int getSuggestionDecorationIconSizeWidth() {
+        return getSuggestionDecorationIconSizeWidth(mContext);
+    }
+
+    /**
+     * Get suggestion content height.
+     *
+     * @see #getSuggestionContentHeight(Context, ...)
+     */
+    public @Px int getSuggestionContentHeight() {
+        return getSuggestionContentHeight(mContext);
+    }
+
+    /**
+     * Get suggestion compact content height.
+     *
+     * @see #getSuggestionCompactContentHeight(Context, ...)
+     */
+    public @Px int getSuggestionCompactContentHeight() {
+        return getSuggestionCompactContentHeight(mContext);
+    }
+
+    /**
+     * Get suggestion min height.
+     *
+     * @see #getSuggestionMinHeight(Context, ...)
+     */
+    public int getSuggestionMinHeight(int lineCount) {
+        return getSuggestionMinHeight(mContext.getResources(), lineCount);
+    }
+
+    /**
+     * Get suggestion content vertical padding.
+     *
+     * @see #getSuggestionContentVerticalPadding(Context, ...)
+     */
+    public int getSuggestionContentVerticalPadding() {
+        return getSuggestionContentVerticalPadding(mContext);
+    }
+
+    /**
+     * Get additional text color.
+     *
+     * @see #getAdditionalTextColor(Context, ...)
+     */
+    public @ColorInt int getAdditionalTextColor() {
+        return getAdditionalTextColor(mContext);
+    }
+
+    /**
+     * Get request type button color.
+     *
+     * @see #getRequestTypeButtonColor(Context, ...)
+     */
+    public @ColorInt int getRequestTypeButtonColor() {
+        return getRequestTypeButtonColor(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get color surface.
+     *
+     * @see #getColorSurface(Context, ...)
+     */
+    public @ColorInt int getColorSurface() {
+        return getColorSurface(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get color on surface.
+     *
+     * @see #getColorOnSurface(Context, ...)
+     */
+    public @ColorInt int getColorOnSurface() {
+        return getColorOnSurface(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get color surface container high.
+     *
+     * @see #getColorSurfaceContainerHigh(Context, ...)
+     */
+    public @ColorInt int getColorSurfaceContainerHigh() {
+        return getColorSurfaceContainerHigh(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get color surface container highest.
+     *
+     * @see #getColorSurfaceContainerHighest(Context, ...)
+     */
+    public @ColorInt int getColorSurfaceContainerHighest() {
+        return getColorSurfaceContainerHighest(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get color primary.
+     *
+     * @see #getColorPrimary(Context, ...)
+     */
+    public @ColorInt int getColorPrimary() {
+        return getColorPrimary(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get default icon color.
+     *
+     * @see #getDefaultIconColor(Context, ...)
+     */
+    public @ColorInt int getDefaultIconColor() {
+        return getDefaultIconColor(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get primary icon tint list.
+     *
+     * @see #getPrimaryIconTintList(Context, ...)
+     */
+    public ColorStateList getPrimaryIconTintList() {
+        return getPrimaryIconTintList(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get primary icon background tint list.
+     *
+     * @see #getPrimaryIconBackgroundTintList(Context, ...)
+     */
+    public ColorStateList getPrimaryIconBackgroundTintList() {
+        return getPrimaryIconBackgroundTintList(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get popup divider line color.
+     *
+     * @see #getPopupDividerLineColor(Context, ...)
+     */
+    public @ColorInt int getPopupDividerLineColor() {
+        return getPopupDividerLineColor(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get send icon contrast color.
+     *
+     * @see #getSendIconContrastColor(Context, ...)
+     */
+    public @ColorInt int getSendIconContrastColor() {
+        return getSendIconContrastColor(mContext, getBrandedColorScheme());
+    }
+
+    /**
+     * Get request type button text res.
+     *
+     * @see #getRequestTypeButtonTextRes(Context, ...)
+     */
+    public @StyleRes int getRequestTypeButtonTextRes() {
+        return getRequestTypeButtonTextRes(getBrandedColorScheme());
+    }
+
+    /**
+     * Get popup button text res.
+     *
+     * @see #getPopupButtonTextRes(Context, ...)
+     */
+    public @StyleRes int getPopupButtonTextRes() {
+        return getPopupButtonTextRes(getBrandedColorScheme());
+    }
+
+    /**
+     * Get attachment button text res.
+     *
+     * @see #getAttachmentButtonTextRes(Context, ...)
+     */
+    public @StyleRes int getAttachmentButtonTextRes() {
+        return getAttachmentButtonTextRes(getBrandedColorScheme());
+    }
+
+    /**
+     * Get popup header visibility text res.
+     *
+     * @see #getPopupHeaderVisibilityTextRes(Context, ...)
+     */
+    public @StyleRes int getPopupHeaderVisibilityTextRes() {
+        return getPopupHeaderVisibilityTextRes(getBrandedColorScheme());
+    }
+
+    /**
+     * Get search box icon background.
+     *
+     * @see #getSearchBoxIconBackground(Context, ...)
+     */
+    public Drawable getSearchBoxIconBackground() {
+        return getSearchBoxIconBackground(mContext, getBrandedColorScheme());
+    }
+
+    /** Get popover plus button background. */
+    public Drawable getPopoverPlusButtonBackground() {
+        boolean isIncognito =
+                convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(getBrandedColorScheme());
+        @DrawableRes
+        int resId =
+                isIncognito
+                        ? R.drawable.fusebox_popover_plus_button_background_incognito
+                        : R.drawable.fusebox_popover_plus_button_background;
+        return getDrawable(resId);
+    }
+
+    /** Get popup background drawable. */
+    public Drawable getPopupBackgroundDrawable() {
+        boolean isIncognito =
+                convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(getBrandedColorScheme());
+        @DrawableRes
+        int resId =
+                OmniboxFeatures.shouldShowBottomSheetPopup()
+                        ? isIncognito
+                                ? R.drawable.fusebox_popup_bg_tinted_on_dark_bg
+                                : R.drawable.fusebox_popup_bg_tinted
+                        : isIncognito
+                                ? R.drawable.menu_bg_tinted_on_dark_bg
+                                : R.drawable.menu_bg_tinted;
+        return getDrawable(resId);
     }
 
     /**
@@ -109,30 +755,7 @@ public class OmniboxResourceProvider {
                         (Object[]) args);
     }
 
-    /**
-     * Clears the drawable cache to avoid, e.g. caching a now incorrectly colored drawable resource.
-     */
-    public static void invalidateDrawableCache() {
-        sDrawableCache.clear();
-    }
-
-    public static SparseArray<ConstantState> getDrawableCacheForTesting() {
-        return sDrawableCache;
-    }
-
     public static void disableCachesForTesting() {
-        sDrawableCache =
-                new SparseArray<>() {
-                    @Override
-                    public @Nullable ConstantState get(int key) {
-                        return null;
-                    }
-
-                    @Override
-                    public ConstantState get(int key, ConstantState valueIfKeyNotFound) {
-                        return valueIfKeyNotFound;
-                    }
-                };
         sStringCache =
                 new SparseArray<>() {
                     @Override
@@ -148,7 +771,6 @@ public class OmniboxResourceProvider {
     }
 
     public static void reenableCachesForTesting() {
-        sDrawableCache = new SparseArray<>();
         sStringCache = new SparseArray<>();
     }
 
@@ -169,7 +791,7 @@ public class OmniboxResourceProvider {
         Context wrappedContext =
                 maybeWrapContextForIncognitoColorScheme(context, brandedColorScheme);
         @DrawableRes int resourceId = resolveAttributeToDrawableRes(wrappedContext, attributeResId);
-        return getDrawable(wrappedContext, resourceId);
+        return assumeNonNull(wrappedContext.getDrawable(resourceId));
     }
 
     /**
@@ -360,92 +982,37 @@ public class OmniboxResourceProvider {
         return color;
     }
 
-    /**
-     * Returns the separator line color for the status view.
-     *
-     * @param context The context to retrieve the resources from.
-     * @param brandedColorScheme The {@link BrandedColorScheme}.
-     * @return Status view separator color.
-     */
-    public static @ColorInt int getStatusSeparatorColor(
-            Context context, @BrandedColorScheme int brandedColorScheme) {
-        if (brandedColorScheme == BrandedColorScheme.LIGHT_BRANDED_THEME) {
-            return context.getColor(R.color.locationbar_status_separator_color_dark);
-        }
-        if (brandedColorScheme == BrandedColorScheme.DARK_BRANDED_THEME) {
-            return context.getColor(R.color.locationbar_status_separator_color_light);
-        }
-        if (brandedColorScheme == BrandedColorScheme.INCOGNITO) {
-            return context.getColor(R.color.locationbar_status_separator_color_incognito);
-        }
-        return MaterialColors.getColor(context, R.attr.colorOutline, TAG);
-    }
-
-    /**
-     * Returns the preview text color for the status view.
-     *
-     * @param context The context to retrieve the resources from.
-     * @param brandedColorScheme The {@link BrandedColorScheme}.
-     * @return Status view preview text color.
-     */
-    public static @ColorInt int getStatusPreviewTextColor(
-            Context context, @BrandedColorScheme int brandedColorScheme) {
-        if (brandedColorScheme == BrandedColorScheme.LIGHT_BRANDED_THEME) {
-            return context.getColor(R.color.locationbar_status_preview_color_dark);
-        }
-        if (brandedColorScheme == BrandedColorScheme.DARK_BRANDED_THEME) {
-            return context.getColor(R.color.locationbar_status_preview_color_light);
-        }
-        if (brandedColorScheme == BrandedColorScheme.INCOGNITO) {
-            return context.getColor(R.color.locationbar_status_preview_color_incognito);
-        }
-        return MaterialColors.getColor(context, R.attr.colorPrimary, TAG);
-    }
-
-    /**
-     * Returns the offline text color for the status view.
-     *
-     * @param context The context to retrieve the resources from.
-     * @param brandedColorScheme The {@link BrandedColorScheme}.
-     * @return Status view offline text color.
-     */
-    public static @ColorInt int getStatusOfflineTextColor(
-            Context context, @BrandedColorScheme int brandedColorScheme) {
-        if (brandedColorScheme == BrandedColorScheme.LIGHT_BRANDED_THEME) {
-            return context.getColor(R.color.locationbar_status_offline_color_dark);
-        }
-        if (brandedColorScheme == BrandedColorScheme.DARK_BRANDED_THEME) {
-            return context.getColor(R.color.locationbar_status_offline_color_light);
-        }
-        if (brandedColorScheme == BrandedColorScheme.INCOGNITO) {
-            return context.getColor(R.color.locationbar_status_offline_color_incognito);
-        }
-        return context.getColor(R.color.default_text_color_secondary_list);
-    }
-
-    /**
-     * Returns the background color for suggestions in a "standard" (non-incognito) TabModel with
-     * the given context.
-     */
+    /** Returns the background color for suggestions in the given color scheme and context. */
     public static @ColorInt int getStandardSuggestionBackgroundColor(
             Context context, @BrandedColorScheme int colorScheme) {
-        return colorScheme == BrandedColorScheme.INCOGNITO
+        return convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(colorScheme)
                 ? context.getColor(R.color.search_suggestion_bg_color_incognito)
                 : ContextCompat.getColor(context, R.color.search_suggestion_bg_color);
+    }
+
+    /**
+     * Returns the background color for popover suggestions for the given {@link BrandedColorScheme}
+     * with the given context.
+     */
+    public static @ColorInt int getPopoverSuggestionBackgroundColor(
+            Context context, @BrandedColorScheme int colorScheme) {
+        return convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(colorScheme)
+                ? context.getColor(R.color.gm3_baseline_surface_container_dark)
+                : ContextCompat.getColor(context, R.color.omnibox_popover_suggestion_bg_color);
     }
 
     /** Returns the background hover color for suggestions in a model with the given context. */
     private static @ColorInt int getHoverSuggestionBackgroundColor(
             Context context, @BrandedColorScheme int colorScheme) {
 
-        if (colorScheme == BrandedColorScheme.INCOGNITO) {
-            return context.getColor(R.color.search_suggestion_bg_color_hover_incognito);
-        }
-
-        // search_suggestion_bg_color + 8% colorOnSurface
+        @ColorInt int baseColor = getStandardSuggestionBackgroundColor(context, colorScheme);
         @ColorInt
-        int baseColor = ContextCompat.getColor(context, R.color.search_suggestion_bg_color);
-        @ColorInt int hoverColor = MaterialColors.getColor(context, R.attr.colorOnSurface, TAG);
+        int hoverColor =
+                switch (colorScheme) {
+                    case BrandedColorScheme.INCOGNITO ->
+                            context.getColor(R.color.baseline_neutral_90);
+                    default -> MaterialColors.getColor(context, R.attr.colorOnSurface, TAG);
+                };
         float fraction =
                 context.getResources()
                         .getFraction(R.fraction.omnibox_suggestion_bg_hover_overlay_fraction, 1, 1);
@@ -485,6 +1052,25 @@ public class OmniboxResourceProvider {
     }
 
     /**
+     * Returns the background color for the toolbar pill for tablets. Because tablets always ignore
+     * any branded theme, can collapse to if incog or not.
+     */
+    public static @ColorInt int getTabletToolbarTextBoxBackgroundColor(
+            Context context, @BrandedColorScheme int brandedColorScheme) {
+        return brandedColorScheme == BrandedColorScheme.INCOGNITO
+                ? context.getColor(R.color.toolbar_text_box_background_incognito)
+                : context.getColor(R.color.toolbar_text_box_bg_color);
+    }
+
+    /** Returns the background color for the toolbar pill when the omnibox is in standby. */
+    public static @ColorInt int getTabletToolbarTextBoxStandbyBackgroundColor(
+            Context context, @BrandedColorScheme int brandedColorScheme) {
+        Context wrappedContext =
+                maybeWrapContextForIncognitoColorScheme(context, brandedColorScheme);
+        return SemanticColorUtils.getColorSurface(wrappedContext);
+    }
+
+    /**
      * Resolves the attribute based on the current theme.
      *
      * @param context The {@link Context} used to retrieve resources.
@@ -498,55 +1084,32 @@ public class OmniboxResourceProvider {
         return themeRes.resourceId;
     }
 
-    /** Gets the margin, in pixels, on either side of an omnibox suggestion list. */
-    public static @Px int getDropdownSideSpacing(Context context) {
-        context = maybeReplaceContextForSmallTabletWindow(context);
-        return getSideSpacing(context)
-                + context.getResources()
-                        .getDimensionPixelSize(R.dimen.omnibox_suggestion_dropdown_side_spacing);
-    }
-
-    /** Gets the margin, in pixels, on either side of an omnibox suggestion. */
-    public static @Px int getSideSpacing(Context context) {
-        context = maybeReplaceContextForSmallTabletWindow(context);
+    /** Returns the top padding for the Omnibox suggestions dropdown list. */
+    public static @Px int getDropdownTopPadding(Context context) {
         return context.getResources()
-                .getDimensionPixelSize(R.dimen.omnibox_suggestion_side_spacing_smallest);
+                .getDimensionPixelOffset(R.dimen.omnibox_suggestion_list_padding_top);
     }
 
     /** Get the top padding for the MV carousel. */
     public static @Px int getMostVisitedCarouselTopPadding(Context context) {
-        context = maybeReplaceContextForSmallTabletWindow(context);
         return context.getResources()
                 .getDimensionPixelSize(R.dimen.omnibox_carousel_suggestion_padding_smaller);
     }
 
     /** Get the bottom padding for the MV carousel. */
     public static @Px int getMostVisitedCarouselBottomPadding(Context context) {
-        context = maybeReplaceContextForSmallTabletWindow(context);
         return context.getResources()
                 .getDimensionPixelSize(R.dimen.omnibox_carousel_suggestion_padding);
     }
 
-    /** Get the top margin for first suggestion in the omnibox with "active color" enabled. */
-    public static @Px int getActiveOmniboxTopSmallMargin(Context context) {
-        return context.getResources()
-                .getDimensionPixelSize(R.dimen.omnibox_suggestion_list_active_top_small_margin);
-    }
-
     /** Gets the start padding for a header suggestion. */
     public static @Px int getHeaderStartPadding(Context context) {
-        context = maybeReplaceContextForSmallTabletWindow(context);
+        if (OmniboxCapabilities.isDesktopPlatform()) {
+            return context.getResources()
+                    .getDimensionPixelSize(R.dimen.omnibox_suggestion_header_padding_start_desktop);
+        }
         return context.getResources()
                 .getDimensionPixelSize(R.dimen.omnibox_suggestion_header_padding_start);
-    }
-
-    /**
-     * Returns the size of the spacer on the left side of the status view when the omnibox is
-     * focused.
-     */
-    public static @Px int getFocusedStatusViewLeftSpacing(Context context) {
-        return context.getResources()
-                .getDimensionPixelSize(R.dimen.location_bar_status_view_left_space_width_bigger);
     }
 
     /**
@@ -571,17 +1134,54 @@ public class OmniboxResourceProvider {
         return context.getResources().getDimensionPixelSize(R.dimen.toolbar_edge_padding_ntp);
     }
 
-    /** Return the width of the Omnibox Suggestion decoration icon. */
+    /** Returns the width of the Omnibox Suggestion decoration icon. */
     public static @Px int getSuggestionDecorationIconSizeWidth(Context context) {
-        Context wrappedContext = maybeReplaceContextForSmallTabletWindow(context);
-        if (DeviceFormFactor.isNonMultiDisplayContextOnTablet(context)
-                && wrappedContext == context) {
-            return context.getResources()
-                    .getDimensionPixelSize(R.dimen.omnibox_suggestion_icon_area_size_modern);
-        }
-
         return context.getResources()
                 .getDimensionPixelSize(R.dimen.omnibox_suggestion_icon_area_size);
+    }
+
+    /** Returns the height of the content of an Omnibox Suggestion. */
+    public static @Px int getSuggestionContentHeight(Context context) {
+        Resources resources = context.getResources();
+        if (OmniboxCapabilities.isDesktopPlatform()) {
+            return resources.getDimensionPixelSize(
+                    R.dimen.omnibox_suggestion_content_height_desktop);
+        } else {
+            return resources.getDimensionPixelSize(R.dimen.omnibox_suggestion_content_height);
+        }
+    }
+
+    /** Returns the height of a single line Omnibox Suggestion. */
+    public static @Px int getSuggestionCompactContentHeight(Context context) {
+        Resources resources = context.getResources();
+        if (OmniboxCapabilities.isDesktopPlatform()) {
+            return resources.getDimensionPixelSize(
+                    R.dimen.omnibox_suggestion_content_height_desktop);
+        }
+        return resources.getDimensionPixelSize(R.dimen.omnibox_suggestion_compact_content_height);
+    }
+
+    /** Returns the min height of an Omnibox Suggestion view. */
+    public static int getSuggestionMinHeight(Resources resources, int lineCount) {
+        if (OmniboxCapabilities.isDesktopPlatform()) {
+            return resources.getDimensionPixelSize(
+                    lineCount > 1
+                            ? R.dimen.omnibox_suggestion_content_height_desktop_multiline
+                            : R.dimen.omnibox_suggestion_content_height_desktop);
+        }
+        return resources.getDimensionPixelSize(
+                lineCount > 1
+                        ? R.dimen.omnibox_suggestion_minimum_content_height_multiline
+                        : R.dimen.omnibox_suggestion_minimum_content_height);
+    }
+
+    /** Returns the vertical padding for a suggestion. */
+    public static int getSuggestionContentVerticalPadding(Context context) {
+        if (OmniboxCapabilities.isDesktopPlatform()) {
+            return 0;
+        }
+        return context.getResources()
+                .getDimensionPixelSize(R.dimen.omnibox_suggestion_content_padding);
     }
 
     /**
@@ -603,37 +1203,10 @@ public class OmniboxResourceProvider {
     }
 
     /**
-     * Replace the given context with a new one where smallestScreenWidthDp is set to the current
-     * screen width, if: 1. The tablet revamp is enabled and the current device is a tablet 2. The
-     * current window width is narrower than 600dp. The returned context can be used to retrieve
-     * resources appropriate for a smaller minimum screen size. If 1 and 2 aren't true, the original
-     * context is returned.
-     *
-     * @param context The context to replace.
-     */
-    @VisibleForTesting
-    static Context maybeReplaceContextForSmallTabletWindow(Context context) {
-        if (!DeviceFormFactor.isNonMultiDisplayContextOnTablet(context)) {
-            return context;
-        }
-
-        Configuration existingConfig = context.getResources().getConfiguration();
-        if (existingConfig.screenWidthDp >= DeviceFormFactor.MINIMUM_TABLET_WIDTH_DP) {
-            return context;
-        }
-
-        Configuration newConfig = new Configuration(existingConfig);
-        newConfig.smallestScreenWidthDp = existingConfig.screenWidthDp;
-
-        return context.createConfigurationContext(newConfig);
-    }
-
-    /**
      * @param context The context to retrieve the resources from.
      * @return the color for the additional text.
      */
-    @ColorInt
-    public static int getAdditionalTextColor(Context context) {
+    public static @ColorInt int getAdditionalTextColor(Context context) {
         return SemanticColorUtils.getDefaultTextColorSecondary(context);
     }
 
@@ -656,28 +1229,12 @@ public class OmniboxResourceProvider {
         return brandedColorScheme == BrandedColorScheme.INCOGNITO;
     }
 
-    /** Resolves the background color of the chip showing the AI Mode tool active. */
-    public static @ColorInt int getAiModeButtonColor(
+    /** Resolves the background color of the chip showing the active tool. */
+    public static @ColorInt int getRequestTypeButtonColor(
             Context context, @BrandedColorScheme int brandedColorScheme) {
         boolean isIncognito =
                 convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(brandedColorScheme);
-        return IncognitoColors.getColorSurfaceContainerHigh(context, isIncognito);
-    }
-
-    /** Resolves the background color of the chip showing image gen the tool active. */
-    public static @ColorInt int getImageGenButtonColor(
-            Context context, @BrandedColorScheme int brandedColorScheme) {
-        boolean isIncognito =
-                convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(brandedColorScheme);
-        return IncognitoColors.getColorSurfaceContainerLow(context, isIncognito);
-    }
-
-    /** Resolves the border color of the active tool chip. */
-    public static @ColorInt int getRequestTypeButtonBorderColor(
-            Context context, @BrandedColorScheme int brandedColorScheme) {
-        boolean isIncognito =
-                convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(brandedColorScheme);
-        return IncognitoColors.getColorPrimaryContainer(context, isIncognito);
+        return IncognitoColors.getInteractableChipBgColor(context, isIncognito);
     }
 
     /**
@@ -703,6 +1260,28 @@ public class OmniboxResourceProvider {
     }
 
     /**
+     * A color scheme version of {@link IncognitoColors#getColorSurfaceContainerHigh(Context,
+     * boolean)}. Used for the activation chip.
+     */
+    public static @ColorInt int getColorSurfaceContainerHigh(
+            Context context, @BrandedColorScheme int brandedColorScheme) {
+        boolean isIncognito =
+                convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(brandedColorScheme);
+        return IncognitoColors.getColorSurfaceContainerHigh(context, isIncognito);
+    }
+
+    /**
+     * A color scheme version of {@link IncognitoColors#getColorSurfaceContainerHighest(Context,
+     * boolean)}. Used for the activation chip.
+     */
+    public static @ColorInt int getColorSurfaceContainerHighest(
+            Context context, @BrandedColorScheme int brandedColorScheme) {
+        boolean isIncognito =
+                convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(brandedColorScheme);
+        return IncognitoColors.getColorSurfaceContainerHighest(context, isIncognito);
+    }
+
+    /**
      * Resolves the vivid color used for the border of the tool chip when used as a hint to enter AI
      * Mode, as well as the background of the send button.
      */
@@ -721,28 +1300,26 @@ public class OmniboxResourceProvider {
         return IncognitoColors.getDefaultIconColor(context, isIncognito);
     }
 
-    /** Resolves the icon tint to be used for all the ai mode icons. This is a vivid color. */
-    public static @ColorInt int getAiModeHintIconTintColor(
-            Context context, @BrandedColorScheme int brandedColorScheme) {
-        boolean isIncognito =
-                convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(brandedColorScheme);
-        return IncognitoColors.getDefaultIconColorSecondary(context, isIncognito);
-    }
-
-    /** Resolves the icon tint to be used for all the ai mode icons. */
-    public static @ColorInt int getAiModeHintBorderColor(
-            Context context, @BrandedColorScheme int brandedColorScheme) {
-        boolean isIncognito =
-                convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(brandedColorScheme);
-        return IncognitoColors.getColorOnSurfaceWithAlpha16(context, isIncognito);
-    }
-
     /** Resolves the icon tint color for the icons that should be vivid, such as the + button. */
     public static ColorStateList getPrimaryIconTintList(
             Context context, @BrandedColorScheme int brandedColorScheme) {
         boolean isIncognito =
                 convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(brandedColorScheme);
         return ChromeColors.getPrimaryIconTint(context, isIncognito);
+    }
+
+    /**
+     * Resolves the background color for primary icons.
+     *
+     * @param context The context to retrieve the resources from.
+     * @param brandedColorScheme The {@link BrandedColorScheme}.
+     * @return The primary icon background color.
+     */
+    public static ColorStateList getPrimaryIconBackgroundTintList(
+            Context context, @BrandedColorScheme int brandedColorScheme) {
+        boolean isIncognito =
+                convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(brandedColorScheme);
+        return IncognitoColors.getColorSurfaceContainerTintList(context, isIncognito);
     }
 
     /** Resolves the icon tint color for the icons that should be vivid, such as the + button. */
@@ -761,26 +1338,12 @@ public class OmniboxResourceProvider {
         return IncognitoColors.getColorOnPrimary(context, isIncognito);
     }
 
-    /** Resolves the text appearance for the image gen chip. */
-    public static @StyleRes int getImageGenButtonTextRes(
+    /** Resolves the text appearance for the active tool button. */
+    public static @StyleRes int getRequestTypeButtonTextRes(
             @BrandedColorScheme int brandedColorScheme) {
         boolean isIncognito =
                 convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(brandedColorScheme);
         return IncognitoColors.getTextMediumThickPrimary(isIncognito);
-    }
-
-    /** Resolves the text appearance for the AI Mode chip. This includes a vivid color. */
-    public static @StyleRes int getAiModeButtonTextRes(@BrandedColorScheme int brandedColorScheme) {
-        boolean isIncognito =
-                convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(brandedColorScheme);
-        return IncognitoColors.getTextMediumThickAccent1(isIncognito);
-    }
-
-    /** Resolves the text appearance for the hint chip, somewhat faded out. */
-    public static @StyleRes int getAiModeHintTextRes(@BrandedColorScheme int brandedColorScheme) {
-        boolean isIncognito =
-                convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(brandedColorScheme);
-        return IncognitoColors.getTextMediumThickSecondary(isIncognito);
     }
 
     /** Resolves the text appearance for menu items in the popup. */
@@ -790,30 +1353,41 @@ public class OmniboxResourceProvider {
         return IncognitoColors.getTextMediumPrimary(isIncognito);
     }
 
-    /** Returns the drawable that is to go behind the + button in the search box. */
-    public static Drawable getSearchBoxIconBackground(
-            Context context, @BrandedColorScheme int brandedColorScheme) {
+    /** Resolves the text appearance for attachment buttons in the popup. */
+    public static @StyleRes int getAttachmentButtonTextRes(
+            @BrandedColorScheme int brandedColorScheme) {
         boolean isIncognito =
                 convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(brandedColorScheme);
-        @DrawableRes
-        int resId =
-                isIncognito
-                        ? R.drawable.search_box_icon_background_opaque_incognito
-                        : R.drawable.search_box_icon_background_opaque;
-        return getDrawable(context, resId);
+        return IncognitoColors.getTextSmallSecondary(isIncognito);
     }
 
-    /** Returns the drawable for the popup menu that shows menu items for context and tools. */
-    public static Drawable getPopupBackgroundDrawable(
-            Context context, @BrandedColorScheme int brandedColorScheme) {
+    /** Resolves the text appearance for header visibility text in the popup. */
+    public static @StyleRes int getPopupHeaderVisibilityTextRes(
+            @BrandedColorScheme int brandedColorScheme) {
         boolean isIncognito =
                 convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(brandedColorScheme);
-        @DrawableRes
-        int resId = isIncognito ? R.drawable.menu_bg_tinted_on_dark_bg : R.drawable.menu_bg_tinted;
-        return getDrawable(context, resId);
+        return IncognitoColors.getTextSmallSecondary(isIncognito);
+    }
+
+    /** Returns the drawable that normally goes behind the plus button. */
+    public static Drawable getSearchBoxIconBackground(
+            Context context, @BrandedColorScheme int brandedColorScheme) {
+        Resources res = context.getResources();
+        boolean isIncognito =
+                convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(brandedColorScheme);
+        @Px int size = res.getDimensionPixelSize(R.dimen.small_icon_background_size);
+        return DrawableUtils.getIconBackground(context, isIncognito, size, size);
     }
 
     public static void setTabFaviconFactory(Function<Tab, @Nullable Bitmap> tabFaviconFactory) {
         sTabFaviconFactory = tabFaviconFactory;
+    }
+
+    ResourceCache getCacheForTesting() {
+        return mCache;
+    }
+
+    SparseArray<ConstantState> getDrawableCacheForTesting() {
+        return mCache.getDrawableCacheForTesting();
     }
 }

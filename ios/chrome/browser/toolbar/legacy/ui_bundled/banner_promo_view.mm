@@ -4,8 +4,8 @@
 
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/banner_promo_view.h"
 
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
-#import "ios/chrome/browser/shared/ui/util/dynamic_type_util.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_utils.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
@@ -56,7 +56,7 @@ UIImage* CloseButtonImage(BOOL highlighted) {
   }
 
   return SymbolWithPalette(
-      DefaultSymbolWithPointSize(kXMarkCircleFillSymbol, kCloseButtonIconSize),
+      SymbolWithPointSize(SymbolXMarkCircleFill, kCloseButtonIconSize),
       palette);
 }
 
@@ -135,10 +135,9 @@ UIButton* CloseButton(void (^handler)(UIAction*)) {
 
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
     UIImage* logo = MakeSymbolMulticolor(
-        CustomSymbolWithPointSize(kMulticolorChromeballSymbol, kLogoPointSize));
+        SymbolWithPointSize(SymbolMulticolorChromeball, kLogoPointSize));
 #else
-    UIImage* logo =
-        CustomSymbolWithPointSize(kChromeProductSymbol, kLogoPointSize);
+    UIImage* logo = SymbolWithPointSize(SymbolChromeProduct, kLogoPointSize);
 #endif  // BUILDFLAG(IOS_USE_BRANDED_ASSETS)
     UIImageView* logoImageView = [[UIImageView alloc] initWithImage:logo];
     logoImageView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -197,6 +196,9 @@ UIButton* CloseButton(void (^handler)(UIAction*)) {
 #pragma mark - UIView
 
 - (CGSize)intrinsicContentSize {
+  if (IsChromeNextIaEnabled()) {
+    return [super intrinsicContentSize];
+  }
   // Promo should be the same height as the toolbar.
   CGFloat height =
       ToolbarExpandedHeight(self.traitCollection.preferredContentSizeCategory);
@@ -218,7 +220,7 @@ UIButton* CloseButton(void (^handler)(UIAction*)) {
 - (UIFont*)textFont {
   UIContentSizeCategory category = ContentSizeCategoryWithMaxCategory(
       self.traitCollection.preferredContentSizeCategory,
-      LocationBarSteadyViewMaxSizeCategory());
+      UIContentSizeCategoryAccessibilityExtraLarge);
   UITraitCollection* traitCollection = [UITraitCollection
       traitCollectionWithPreferredContentSizeCategory:category];
 

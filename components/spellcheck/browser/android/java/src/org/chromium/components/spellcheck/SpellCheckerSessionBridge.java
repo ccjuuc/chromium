@@ -10,7 +10,6 @@ import android.content.Context;
 import android.text.SpannableString;
 import android.text.Spanned;
 import android.text.style.SuggestionSpan;
-import android.util.Range;
 import android.view.textservice.SentenceSuggestionsInfo;
 import android.view.textservice.SpellCheckerSession;
 import android.view.textservice.SpellCheckerSession.SpellCheckerSessionListener;
@@ -18,10 +17,14 @@ import android.view.textservice.SuggestionsInfo;
 import android.view.textservice.TextInfo;
 import android.view.textservice.TextServicesManager;
 
+import androidx.annotation.VisibleForTesting;
+
 import org.jni_zero.CalledByNative;
+import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 
@@ -30,14 +33,18 @@ import java.util.ArrayList;
 /** JNI interface for native SpellCheckerSessionBridge to use Android's spellchecker. */
 @NullMarked
 public class SpellCheckerSessionBridge implements SpellCheckerSessionListener {
-    // LINT.IfChange(SpellCheckDecoration)
-    /** Values from spellcheck::Decoration on the C++ side * */
-    private static class SpellCheckDecoration {
-        public static final int SPELLING = 0;
-        public static final int GRAMMAR = 1;
-    }
+    /* package */ static final String HISTOGRAM_COUNT_SPELLING =
+            "SpellCheck.Android.Count.Spelling";
+    /* package */ static final String HISTOGRAM_COUNT_GRAMMAR = "SpellCheck.Android.Count.Grammar";
+    /* package */ static final String HISTOGRAM_REQUEST = "SpellCheck.Android.Request";
+    /* package */ static final String HISTOGRAM_UNDERLINE_LENGTH_SPELLING =
+            "SpellCheck.Android.UnderlineLength.Spelling";
+    /* package */ static final String HISTOGRAM_UNDERLINE_LENGTH_GRAMMAR =
+            "SpellCheck.Android.UnderlineLength.Grammar";
 
-    // LINT.ThenChange(/components/spellcheck/common/spellcheck_decoration.h:DecorationEnum)
+    private static final int UNDERLINE_LENGTH_MIN_BUCKET = 1;
+    private static final int UNDERLINE_LENGTH_MAX_BUCKET = 1000;
+    private static final int UNDERLINE_LENGTH_BUCKET_COUNT = 50;
 
     private long mNativeSpellCheckerSessionBridge;
     private final boolean mAllowGrammarChecks;
@@ -84,7 +91,8 @@ public class SpellCheckerSessionBridge implements SpellCheckerSessionListener {
      *     processed.
      */
     @CalledByNative
-    private static @Nullable SpellCheckerSessionBridge create(
+    @VisibleForTesting
+    protected static @Nullable SpellCheckerSessionBridge create(
             long nativeSpellCheckerSessionBridge,
             boolean allowGrammarChecks,
             boolean allowHideSuggestionMenuAttribute) {
@@ -115,24 +123,37 @@ public class SpellCheckerSessionBridge implements SpellCheckerSessionListener {
      * @param spellingMarkers the existing spelling markers present in the given text.
      */
     @CalledByNative
-    private void requestTextCheck(String text, Range<Integer>[] spellingMarkers) {
+    @VisibleForTesting
+    protected void requestTextCheck(
+            String text,
+            @JniType("std::vector<spellcheck::SpellingMarker>") SpellingMarker[] spellingMarkers) {
         // SpellCheckerSession thinks that any word ending with a period is a typo.
         // We trim the period off before sending the text for spellchecking in order to avoid
         // unnecessary red underlines when the user ends a sentence with a period.
         // Filed as an Android bug here: https://code.google.com/p/android/issues/detail?id=183294
+        if (text == null) {
+            return;
+        }
         if (text.endsWith(".")) {
             text = text.substring(0, text.length() - 1);
         }
-
+        if (text.length() == 0) {
+            return;
+        }
         SpannableString spannable = new SpannableString(text);
-        for (Range<Integer> range : spellingMarkers) {
+        for (SpellingMarker marker : spellingMarkers) {
+            if (marker.start() > text.length() - 1 || marker.end() > text.length()) {
+                continue;
+            }
             spannable.setSpan(
                     new SuggestionSpan(
                             ContextUtils.getApplicationContext(),
                             new String[] {},
-                            SuggestionSpan.FLAG_MISSPELLED),
-                    range.getLower(),
-                    Math.min(range.getUpper(), text.length() - 1),
+                            marker.type() == SpellingMarker.Decoration.GRAMMAR
+                                    ? SuggestionSpan.FLAG_GRAMMAR_ERROR
+                                    : SuggestionSpan.FLAG_MISSPELLED),
+                    marker.start(),
+                    marker.end(),
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
 
@@ -140,6 +161,7 @@ public class SpellCheckerSessionBridge implements SpellCheckerSessionListener {
                 .getSentenceSuggestions(
                         new TextInfo[] {new TextInfo(spannable, 0, spannable.length(), 0, 0)},
                         SuggestionSpan.SUGGESTIONS_MAX_SIZE);
+        RecordHistogram.recordBooleanHistogram(HISTOGRAM_REQUEST, true);
     }
 
     /**
@@ -183,15 +205,37 @@ public class SpellCheckerSessionBridge implements SpellCheckerSessionListener {
                 // If a word looks like a typo or grammar error, record its offset and length.
                 if ((attributes & (SuggestionsInfo.RESULT_ATTR_LOOKS_LIKE_TYPO | grammarBitMask))
                         != 0) {
+                    final int length = result.getLengthAt(i);
                     offsets.add(result.getOffsetAt(i));
-                    lengths.add(result.getLengthAt(i));
+                    lengths.add(length);
                     // TODO(crbug.com/434080921): Verify which should take precedence if both are
                     // set.
-                    final int decoration =
+                    final @SpellingMarker.Decoration int decoration =
                             (attributes & grammarBitMask) != 0
-                                    ? SpellCheckDecoration.GRAMMAR
-                                    : SpellCheckDecoration.SPELLING;
+                                    ? SpellingMarker.Decoration.GRAMMAR
+                                    : SpellingMarker.Decoration.SPELLING;
                     spellCheckDecorations.add(decoration);
+
+                    if (decoration == SpellingMarker.Decoration.SPELLING) {
+                        RecordHistogram.recordBooleanHistogram(HISTOGRAM_COUNT_SPELLING, true);
+                        RecordHistogram.recordCustomCountHistogram(
+                                HISTOGRAM_UNDERLINE_LENGTH_SPELLING,
+                                length,
+                                UNDERLINE_LENGTH_MIN_BUCKET,
+                                UNDERLINE_LENGTH_MAX_BUCKET,
+                                UNDERLINE_LENGTH_BUCKET_COUNT);
+                    }
+
+                    if (decoration == SpellingMarker.Decoration.GRAMMAR) {
+                        RecordHistogram.recordBooleanHistogram(HISTOGRAM_COUNT_GRAMMAR, true);
+                        RecordHistogram.recordCustomCountHistogram(
+                                HISTOGRAM_UNDERLINE_LENGTH_GRAMMAR,
+                                length,
+                                UNDERLINE_LENGTH_MIN_BUCKET,
+                                UNDERLINE_LENGTH_MAX_BUCKET,
+                                UNDERLINE_LENGTH_BUCKET_COUNT);
+                    }
+
                     ArrayList<String> suggestionsForWord = new ArrayList<String>();
                     for (int j = 0; j < info.getSuggestionsCount(); ++j) {
                         String suggestion = info.getSuggestionAt(j);
@@ -207,6 +251,7 @@ public class SpellCheckerSessionBridge implements SpellCheckerSessionListener {
                 }
             }
         }
+
         SpellCheckerSessionBridgeJni.get()
                 .processSpellCheckResults(
                         mNativeSpellCheckerSessionBridge,
@@ -246,8 +291,13 @@ public class SpellCheckerSessionBridge implements SpellCheckerSessionListener {
     }
 
     @CalledByNative
-    private static Range<Integer> createRange(int start, int end) {
-        return new Range<Integer>(start, end);
+    private static @Nullable SpellingMarker createSpellingMarker(
+            int start, int end, @SpellingMarker.Decoration int type) {
+        try {
+            return new SpellingMarker(start, end, type);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     @Override

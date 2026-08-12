@@ -26,7 +26,6 @@ import type {CrIconButtonElement} from 'chrome://resources/ash/common/cr_element
 import type {CrLazyRenderElement} from 'chrome://resources/ash/common/cr_elements/cr_lazy_render/cr_lazy_render.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
-import {loadTimeData} from 'chrome://resources/ash/common/load_time_data.m.js';
 import {getSimSlotCount} from 'chrome://resources/ash/common/network/cellular_utils.js';
 import {MojoInterfaceProviderImpl} from 'chrome://resources/ash/common/network/mojo_interface_provider.js';
 import {NetworkList} from 'chrome://resources/ash/common/network/network_list_types.js';
@@ -210,17 +209,6 @@ export class CellularNetworksListElement extends
             'cellularDeviceState.inhibitReason)',
       },
       /**
-       * Return true if instant hotspot rebrand feature flag is enabled
-       */
-      isInstantHotspotRebrandEnabled_: {
-        type: Boolean,
-        value() {
-          return loadTimeData.valueExists('isInstantHotspotRebrandEnabled') &&
-              loadTimeData.getBoolean('isInstantHotspotRebrandEnabled');
-        },
-      },
-
-      /**
        * Return true if multi device page is available to user.
        */
       isMultiDevicePageAvailable_: {
@@ -232,29 +220,28 @@ export class CellularNetworksListElement extends
     };
   }
 
-  canShowSpinner: boolean;
-  cellularDeviceState: OncMojo.DeviceStateProperties|undefined;
-  globalPolicy: GlobalPolicy|undefined;
-  isConnectedToNonCellularNetwork: boolean;
-  networks: OncMojo.NetworkStateProperties[];
-  showTechnologyBadge: boolean;
-  tetherDeviceState: OncMojo.DeviceStateProperties|undefined;
+  declare canShowSpinner: boolean;
+  declare cellularDeviceState: OncMojo.DeviceStateProperties|undefined;
+  declare globalPolicy: GlobalPolicy|undefined;
+  declare isConnectedToNonCellularNetwork: boolean;
+  declare networks: OncMojo.NetworkStateProperties[];
+  declare showTechnologyBadge: boolean;
+  declare tetherDeviceState: OncMojo.DeviceStateProperties|undefined;
 
-  private eSimPendingProfileItems_: NetworkList.CustomItemState[];
-  private eSimProfileInstallError_: ProfileInstallResult|null;
-  private eSimNetworks_: OncMojo.NetworkStateProperties[];
-  private euicc_: EuiccRemote|null;
-  private installingESimProfile_: ESimProfileRemote|null;
-  private isDeviceInhibited_: boolean;
-  private isInstantHotspotRebrandEnabled_: boolean;
-  private multiDevicePageContentData_: MultiDevicePageContentData|null;
+  declare private eSimPendingProfileItems_: NetworkList.CustomItemState[];
+  declare private eSimProfileInstallError_: ProfileInstallResult|null;
+  declare private eSimNetworks_: OncMojo.NetworkStateProperties[];
+  declare private euicc_: EuiccRemote|null;
+  declare private installingESimProfile_: ESimProfileRemote|null;
+  declare private isDeviceInhibited_: boolean;
+  declare private multiDevicePageContentData_: MultiDevicePageContentData|null;
   private networkConfig_: CrosNetworkConfigInterface;
-  private profilesMap_: Map<string, ESimProfileRemote>;
-  private pSimNetworks_: OncMojo.NetworkStateProperties[];
-  private shouldShowEidDialog_: boolean;
-  private shouldShowInstallErrorDialog_: boolean;
-  private tetherNetworks_: OncMojo.NetworkStateProperties[];
-  private isMultiDevicePageAvailable_: boolean;
+  declare private profilesMap_: Map<string, ESimProfileRemote>;
+  declare private pSimNetworks_: OncMojo.NetworkStateProperties[];
+  declare private shouldShowEidDialog_: boolean;
+  declare private shouldShowInstallErrorDialog_: boolean;
+  declare private tetherNetworks_: OncMojo.NetworkStateProperties[];
+  declare private isMultiDevicePageAvailable_: boolean;
 
   constructor() {
     super();
@@ -393,9 +380,6 @@ export class CellularNetworksListElement extends
   private shouldShowTetherSection_(pageContentData: MultiDevicePageContentData|
                                    null): boolean {
     if (!pageContentData) {
-      return false;
-    }
-    if (this.isInstantHotspotRebrandEnabled_) {
       return false;
     }
     return pageContentData.instantTetheringState ===

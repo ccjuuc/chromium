@@ -171,7 +171,7 @@ public class FindToolbarTablet extends FindToolbar {
         ObjectAnimator nextAnimator = null;
 
         if (show && getVisibility() != View.VISIBLE && mCurrentAnimation != mAnimationEnter) {
-            View anchorView = getRootView().findViewById(R.id.toolbar);
+            View anchorView = getRootView().findViewById(R.id.control_container);
             var lp = (MarginLayoutParams) getLayoutParams();
             lp.topMargin = anchorView.getBottom() - mYInsetPx;
             setLayoutParams(lp);

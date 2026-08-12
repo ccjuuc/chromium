@@ -10,26 +10,12 @@
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/skia/include/core/SkFont.h"
 #include "third_party/skia/include/core/SkPath.h"
+#include "third_party/skia/include/core/SkStrikeRef.h"
 
 namespace blink {
 
-namespace {
-
-template <class T>
-T* advance_by_byte_size(T* p, unsigned byte_size) {
-  return reinterpret_cast<T*>(
-      UNSAFE_TODO(reinterpret_cast<uint8_t*>(p) + byte_size));
-}
-
-template <class T>
-const T* advance_by_byte_size(const T* p, unsigned byte_size) {
-  return reinterpret_cast<const T*>(
-      UNSAFE_TODO(reinterpret_cast<const uint8_t*>(p) + byte_size));
-}
-
-}  // namespace
-
-void SkFontGetGlyphWidthForHarfBuzz(const SkFont& font,
+void SkFontGetGlyphWidthForHarfBuzz(const SkStrikeRef& strike_ref,
+                                    bool subpixel,
                                     hb_codepoint_t codepoint,
                                     hb_position_t* width) {
   // We don't want to compute glyph extents for kUnmatchedVSGlyphId
@@ -41,43 +27,48 @@ void SkFontGetGlyphWidthForHarfBuzz(const SkFont& font,
   DCHECK_LE(codepoint, 0xFFFFu);
   CHECK(width);
 
-  uint16_t glyph = codepoint;
-  SkScalar sk_width = font.getWidth(glyph);
+  SkScalar sk_width = strike_ref.getWidth(static_cast<SkGlyphID>(codepoint));
 
-  if (!font.isSubpixel())
+  if (!subpixel) {
     sk_width = SkScalarRoundToInt(sk_width);
+  }
   *width = SkiaScalarToHarfBuzzPosition(sk_width);
 }
 
-void SkFontGetGlyphWidthForHarfBuzz(const SkFont& font,
+void SkFontGetGlyphWidthForHarfBuzz(const SkStrikeRef& strike_ref,
+                                    bool subpixel,
                                     unsigned count,
                                     const hb_codepoint_t* glyphs,
-                                    const unsigned glyph_stride,
+                                    unsigned glyph_stride_32,
                                     hb_position_t* advances,
-                                    unsigned advance_stride) {
-  // Batch the call to getWidths because its function entry cost is not
-  // cheap. getWidths accepts multiple glyphd ID, but not from a sparse
-  // array that copy them to a regular array.
-  Vector<Glyph, 256> glyph_array;
-  glyph_array.ReserveInitialCapacity(count);
-  for (unsigned i = 0; i < count;
-       i++, glyphs = advance_by_byte_size(glyphs, glyph_stride)) {
-    glyph_array.push_back(*glyphs);
+                                    unsigned advance_stride_32) {
+  if (count == 0) {
+    return;
   }
-  Vector<SkScalar, 256> sk_width_array(count);
-  font.getWidths(glyph_array, sk_width_array);
+  CHECK(glyphs);
+  CHECK(advances);
 
-  if (font.isSubpixel()) {
-    for (unsigned i = 0; i < count;
-         i++, advances = advance_by_byte_size(advances, advance_stride)) {
-      *advances = SkiaScalarToHarfBuzzPosition(sk_width_array[i]);
-    }
-  } else {
-    for (unsigned i = 0; i < count;
-         i++, advances = advance_by_byte_size(advances, advance_stride)) {
-      *advances =
-          SkiaScalarToHarfBuzzPosition(SkScalarRoundToInt(sk_width_array[i]));
-    }
+  static_assert(sizeof(SkScalar) == sizeof(hb_position_t),
+                "SkScalar and hb_position_t must have the same size");
+  SkScalar* advance = reinterpret_cast<float*>(advances);
+  strike_ref.getWidthsStrided(count, glyphs, glyph_stride_32, advance,
+                              advance_stride_32);
+
+  SkScalar (*round_if_subpixel)(SkScalar) =
+      subpixel ? [](SkScalar f) { return f; }
+               : [](SkScalar f) { return SkScalarRoundToScalar(f); };
+
+  // Perform in-place rounding and fixed-point conversion.
+  // SAFETY: See HarfBuzzGetGlyphHorizontalAdvances in harfbuzz_face.cc:
+  // We are interfacing with HarfBuzz and optimize this hot function in
+  // text shaping. HarfBuzz provides the allocated output buffer and
+  // stride information. The incoming count argument is provided by
+  // HarfBuzz and ensure that enough output write buffer space is available
+  // for the given stride.
+  for (unsigned i = 0; i < count;
+       i++, UNSAFE_BUFFERS(advance += advance_stride_32)) {
+    *reinterpret_cast<hb_position_t*>(advance) =
+        SkiaScalarToHarfBuzzPosition(round_if_subpixel(*advance));
   }
 }
 
@@ -127,24 +118,59 @@ void SkFontGetGlyphExtentsForHarfBuzz(const SkFont& font,
   extents->height = SkiaScalarToHarfBuzzPosition(-sk_bounds.height());
 }
 
-void SkFontGetBoundsForGlyph(const SkFont& font, Glyph glyph, SkRect* bounds) {
+// Returns path-based bounds for float precision, falling back to
+// font.getBounds() for bitmap-only glyphs (e.g. color emoji) that have no
+// paths.
 #if BUILDFLAG(IS_APPLE)
-  // TODO(drott): Remove this once we have better metrics bounds
-  // on Mac, https://bugs.chromium.org/p/skia/issues/detail?id=5328
+static void GetPathBoundsForGlyph(const SkFont& font,
+                                  Glyph glyph,
+                                  SkRect* bounds) {
   if (const auto path = font.getPath(glyph)) {
     *bounds = path->getBounds();
   } else {
-    // Fonts like Apple Color Emoji have no paths, fall back to bounds here.
     *bounds = font.getBounds(glyph, nullptr);
   }
-#else
-  *bounds = font.getBounds(glyph, nullptr);
-#endif
 
   if (!font.isSubpixel()) {
     SkIRect ir;
     bounds->roundOut(&ir);
     bounds->set(ir);
+  }
+}
+#endif
+
+void SkFontGetBoundsForGlyph(const SkFont& font, Glyph glyph, SkRect* bounds) {
+#if BUILDFLAG(IS_APPLE)
+  // TODO(drott): Remove this once we have better metrics bounds
+  // on Mac, https://bugs.chromium.org/p/skia/issues/detail?id=5328
+  GetPathBoundsForGlyph(font, glyph, bounds);
+#else
+  *bounds = font.getBounds(glyph, nullptr);
+
+  if (!font.isSubpixel()) {
+    SkIRect ir;
+    bounds->roundOut(&ir);
+    bounds->set(ir);
+  }
+#endif
+}
+
+void SkFontGetPreciseBoundsForGlyph(const SkFont& font,
+                                    Glyph glyph,
+                                    SkRect* bounds) {
+  // Use path-based bounds for float precision. SkGlyph stores bounds as
+  // integers (int16_t/uint16_t) which causes large relative errors for small
+  // font sizes (e.g. 1.5px). Path bounds give exact floating-point values
+  // from the glyph outlines.
+  //
+  // Unlike GetPathBoundsForGlyph / SkFontGetBoundsForGlyph, we intentionally
+  // do NOT round to integers for non-subpixel fonts, because the caller
+  // (canvas TextMetrics) needs float-precision results.
+  if (const auto path = font.getPath(glyph)) {
+    *bounds = path->getBounds();
+  } else {
+    // Bitmap-only glyphs (e.g. color emoji) have no outlines.
+    *bounds = font.getBounds(glyph, nullptr);
   }
 }
 

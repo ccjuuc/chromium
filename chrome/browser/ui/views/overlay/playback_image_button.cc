@@ -4,21 +4,18 @@
 
 #include "chrome/browser/ui/views/overlay/playback_image_button.h"
 
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/views/overlay/constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/vector_icons/vector_icons.h"
-#include "media/base/media_switches.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
-#include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/background.h"
-#include "ui/views/vector_icons.h"
 
 namespace {
 
@@ -35,14 +32,18 @@ PlaybackImageButton::PlaybackImageButton(PressedCallback callback)
   views::InkDrop::Get(this)->SetLayerRegion(views::LayerRegion::kAbove);
 
   play_image_ = ui::ImageModel::FromVectorIcon(
-      vector_icons::kPlayArrowIcon, ui::kColorSysOnSecondaryContainer,
-      kPlaybackButtonIconSize);
-  pause_image_ = ui::ImageModel::FromVectorIcon(vector_icons::kPauseIcon,
-                                                kColorPipWindowForeground,
-                                                kPlaybackButtonIconSize);
-  replay_image_ = ui::ImageModel::FromVectorIcon(vector_icons::kReplayIcon,
-                                                 kColorPipWindowForeground,
-                                                 kPlaybackButtonIconSize);
+      features::IsRoundedIconsEnabled()
+          ? vector_icons::kPlayArrowFilledFlippableIcon
+          : vector_icons::kPlayArrowOldIcon,
+      ui::kColorSysOnSecondaryContainer, kPlaybackButtonIconSize);
+  pause_image_ = ui::ImageModel::FromVectorIcon(
+      features::IsRoundedIconsEnabled() ? vector_icons::kPauseFilledIcon
+                                        : vector_icons::kPauseOldIcon,
+      kColorPipWindowForeground, kPlaybackButtonIconSize);
+  replay_image_ = ui::ImageModel::FromVectorIcon(
+      features::IsRoundedIconsEnabled() ? vector_icons::kReplayIcon
+                                        : vector_icons::kReplayOldIcon,
+      kColorPipWindowForeground, kPlaybackButtonIconSize);
 
   UpdateImageAndText();
 

@@ -30,7 +30,7 @@ const char kResponseField[] = "response";
 
 const size_t kPatternsSizeWarningLevel = 500;
 
-bool UrlMatchesPattern(const GURL& url, const base::Value::List& patterns) {
+bool UrlMatchesPattern(const GURL& url, const base::ListValue& patterns) {
   if (!url.SchemeIs(url::kHttpsScheme)) {
     return false;
   }
@@ -76,7 +76,8 @@ SamlChallengeKeyHandler::~SamlChallengeKeyHandler() = default;
 
 void SamlChallengeKeyHandler::Run(Profile* profile,
                                   CallbackType callback,
-                                  const GURL& url,
+                                  const GURL& source_url,
+                                  const GURL& destination_url,
                                   const std::string& challenge) {
   DCHECK(!callback_);
   callback_ = std::move(callback);
@@ -96,7 +97,7 @@ void SamlChallengeKeyHandler::Run(Profile* profile,
     return;
   }
 
-  BuildResponseForAllowlistedUrl(url);
+  BuildResponseForAllowlistedUrl(source_url, destination_url);
 }
 
 void SamlChallengeKeyHandler::SetTpmResponseTimeoutForTesting(
@@ -104,13 +105,15 @@ void SamlChallengeKeyHandler::SetTpmResponseTimeoutForTesting(
   tpm_response_timeout_for_testing_ = timeout;
 }
 
-void SamlChallengeKeyHandler::BuildResponseForAllowlistedUrl(const GURL& url) {
+void SamlChallengeKeyHandler::BuildResponseForAllowlistedUrl(
+    const GURL& source_url,
+    const GURL& destination_url) {
   CrosSettings* settings = CrosSettings::Get();
   CrosSettingsProvider::TrustedStatus status = settings->PrepareTrustedValues(
       base::BindOnce(&SamlChallengeKeyHandler::BuildResponseForAllowlistedUrl,
-                     weak_factory_.GetWeakPtr(), url));
+                     weak_factory_.GetWeakPtr(), source_url, destination_url));
 
-  const base::Value::List* patterns = nullptr;
+  const base::ListValue* patterns = nullptr;
   switch (status) {
     case CrosSettingsProvider::TRUSTED:
       if (!settings->GetList(kDeviceWebBasedAttestationAllowedUrls,
@@ -127,7 +130,8 @@ void SamlChallengeKeyHandler::BuildResponseForAllowlistedUrl(const GURL& url) {
       break;
   }
 
-  if (!patterns || !UrlMatchesPattern(url, *patterns)) {
+  if (!patterns || !UrlMatchesPattern(source_url, *patterns) ||
+      !UrlMatchesPattern(destination_url, *patterns)) {
     ReturnResult(attestation::TpmChallengeKeyResult::MakeError(
         attestation::TpmChallengeKeyResultCode::
             kDeviceWebBasedAttestationUrlError));
@@ -137,7 +141,7 @@ void SamlChallengeKeyHandler::BuildResponseForAllowlistedUrl(const GURL& url) {
   // Prioritize Context Aware Signals over VerifiedAccess if both are defined
   // for the same endpoint, since they are both reacting to the same VA
   // Challenge
-  if (AreContextAwareAccessSignalsEnabledForUrl(url, profile_)) {
+  if (AreContextAwareAccessSignalsEnabledForUrl(destination_url, profile_)) {
     LogVerifiedAccessForSAMLDeviceTrustMatchesEndpoints(true);
     ReturnResult(attestation::TpmChallengeKeyResult::MakeError(
         attestation::TpmChallengeKeyResultCode::kDeviceTrustURLConflictError));
@@ -170,7 +174,7 @@ base::TimeDelta SamlChallengeKeyHandler::GetTpmResponseTimeout() const {
 
 void SamlChallengeKeyHandler::ReturnResult(
     const attestation::TpmChallengeKeyResult& result) {
-  base::Value::Dict js_result;
+  base::DictValue js_result;
   if (!result.IsSuccess()) {
     LOG(WARNING) << "Device attestation error: " << result.GetErrorMessage();
   }

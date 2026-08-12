@@ -19,6 +19,8 @@ class AutofillManagerTestApi {
   explicit AutofillManagerTestApi(AutofillManager* manager)
       : manager_(*manager) {}
 
+  static AutofillManager::RendererEventPassKey pass_key() { return {}; }
+
   // Returns the cached FormStructures.
   const std::vector<const FormStructure*> form_structures() const {
     return base::ToVector(
@@ -36,20 +38,31 @@ class AutofillManagerTestApi {
 
   void OnLoadedServerPredictions(
       std::string response,
-      const std::vector<FormSignature>& queried_form_signatures) {
-    OnLoadedServerPredictions(AutofillCrowdsourcingManager::QueryResponse{
-        response, queried_form_signatures});
+      const std::vector<FormSignature>& queried_form_signatures,
+      const std::vector<FormData>& forms) {
+    OnLoadedServerPredictions(
+        AutofillCrowdsourcingManager::QueryResponse{response,
+                                                    queried_form_signatures},
+        forms);
   }
 
   void OnLoadedServerPredictions(
-      AutofillCrowdsourcingManager::QueryResponse response) {
+      AutofillCrowdsourcingManager::QueryResponse response,
+      const std::vector<FormData>& forms) {
+    std::vector<FormGlobalId> form_ids =
+        base::ToVector(forms, &FormData::global_id);
     manager_->NotifyObservers(
-        &AutofillManager::Observer::OnBeforeLoadedServerPredictions);
-    manager_->OnLoadedServerPredictions(std::move(response));
+        &AutofillManager::Observer::OnBeforeLoadedServerPredictions, form_ids);
+    manager_->OnLoadedServerPredictions(forms, base::TimeTicks(),
+                                        std::move(response));
   }
 
   void OnFormsParsed(const std::vector<FormData>& forms) {
-    manager_->OnFormsParsed(forms);
+    manager_->OnFormsParsed(forms, base::TimeTicks());
+  }
+
+  void QueryServerPredictions(const std::vector<FormData>& forms) {
+    manager_->QueryServerPredictions(forms, base::TimeTicks());
   }
 
   FormStructure* AddSeenFormStructure(
@@ -60,6 +73,8 @@ class AutofillManagerTestApi {
   }
 
   void ClearFormStructures() { manager_->form_structures_.clear(); }
+
+  void Reset() { manager_->Reset(); }
 
  private:
   raw_ref<AutofillManager> manager_;

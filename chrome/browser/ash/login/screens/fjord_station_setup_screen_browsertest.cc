@@ -16,7 +16,6 @@
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ui/webui/ash/login/fjord_station_setup_screen_handler.h"
-#include "chrome/grit/generated_resources.h"
 #include "content/public/test/browser_test.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -93,9 +92,10 @@ IN_PROC_BROWSER_TEST_F(FjordStationSetupScreenTest,
 
   // Verify after clicking Next the button text and webview frame URL are
   // updated.
-  EXPECT_EQ(
-      test::OobeJS().GetAttributeString(kSrcAttribute, kStationSetupFramePath),
-      kExpectedFinishSetupUrl);
+  std::string finish_setup_url_attribute =
+      test::GetOobeElementPath(kStationSetupFramePath) + ".src === '" +
+      kExpectedFinishSetupUrl + "'";
+  test::OobeJS().CreateWaiter(finish_setup_url_attribute)->Wait();
   EXPECT_EQ(
       test::OobeJS().GetAttributeString(kTextKeyAttribute, kActionButtonPath),
       kExpectedDoneButtonTextKey);

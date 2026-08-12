@@ -159,6 +159,20 @@ class AuthenticatorNoPasskeysErrorModel : public AuthenticatorSheetModelBase {
   std::u16string GetStepDescription() const override;
 };
 
+class AuthenticatorGpmDisabledErrorModel : public AuthenticatorSheetModelBase {
+ public:
+  explicit AuthenticatorGpmDisabledErrorModel(
+      AuthenticatorRequestDialogModel* dialog_model);
+
+ private:
+  // AuthenticatorSheetModelBase:
+  std::u16string GetCancelButtonLabel() const override;
+  std::u16string GetStepTitle() const override;
+  std::u16string GetStepDescription() const override;
+  bool IsGpmSettingsButtonVisible() const override;
+  void OnOpenGpmSettingsButtonPressed() override;
+};
+
 class AuthenticatorNotRegisteredErrorModel
     : public AuthenticatorSheetModelBase {
  public:
@@ -312,18 +326,7 @@ class AuthenticatorOffTheRecordInterstitialSheetModel
   void OnAccept() override;
 };
 
-class AuthenticatorPaaskSheetModel : public AuthenticatorSheetModelBase {
- public:
-  explicit AuthenticatorPaaskSheetModel(
-      AuthenticatorRequestDialogModel* dialog_model);
-  ~AuthenticatorPaaskSheetModel() override;
 
- private:
-  // AuthenticatorSheetModelBase:
-  bool IsActivityIndicatorVisible() const override;
-  std::u16string GetStepTitle() const override;
-  std::u16string GetStepDescription() const override;
-};
 
 class AuthenticatorClientPinEntrySheetModel
     : public AuthenticatorSheetModelBase {
@@ -556,15 +559,15 @@ class AuthenticatorCableErrorSheetModel : public AuthenticatorSheetModelBase {
   std::u16string GetCancelButtonLabel() const override;
 };
 
-class AuthenticatorCreatePasskeySheetModel
+class AuthenticatorChromeProfileCreatePasskeySheetModel
     : public AuthenticatorSheetModelBase {
  public:
-  explicit AuthenticatorCreatePasskeySheetModel(
+  explicit AuthenticatorChromeProfileCreatePasskeySheetModel(
       AuthenticatorRequestDialogModel* dialog_model);
-  ~AuthenticatorCreatePasskeySheetModel() override;
+  ~AuthenticatorChromeProfileCreatePasskeySheetModel() override;
 
-  // An additional label that `AuthenticatorCreatePasskeySheetView` includes in
-  // the `BuildStepSpecificContent()` view.
+  // An additional label that `AuthenticatorChromeProfileCreatePasskeySheetView`
+  // includes in the `BuildStepSpecificContent()` view.
   std::u16string passkey_storage_description() const;
 
  private:
@@ -798,26 +801,6 @@ class AuthenticatorCreateGpmPasskeySheetModel
   void OnCancel() override;
 };
 
-// The sheet shown for warning a user about creating a Google Password Manager
-// passkey in incognito mode.
-class AuthenticatorGpmIncognitoCreateSheetModel
-    : public AuthenticatorSheetModelBase {
- public:
-  explicit AuthenticatorGpmIncognitoCreateSheetModel(
-      AuthenticatorRequestDialogModel* dialog_model);
-
-  ~AuthenticatorGpmIncognitoCreateSheetModel() override;
-
- private:
-  // AuthenticatorSheetModelBase:
-  std::u16string GetStepTitle() const override;
-  std::u16string GetStepDescription() const override;
-  bool IsCancelButtonVisible() const override;
-  std::u16string GetCancelButtonLabel() const override;
-  AcceptButtonState GetAcceptButtonState() const override;
-  std::u16string GetAcceptButtonLabel() const override;
-  void OnAccept() override;
-};
 
 // The sheet shown for bootstrapping Google Password Manager passkeys during
 // passkey creation.
@@ -870,7 +853,6 @@ class CombinedSelectorSheetModel : public AuthenticatorSheetModelBase {
       AuthenticatorRequestDialogModel* dialog_model);
 
   SelectionStatus GetSelectionStatus(size_t index) const;
-  size_t GetSelectionIndex() const;
   void SetSelectionIndex(size_t index);
 
  private:

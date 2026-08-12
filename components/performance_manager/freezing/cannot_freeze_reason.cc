@@ -54,6 +54,8 @@ const char* CannotFreezeReasonToString(CannotFreezeReason reason) {
       return "opted out";
     case CannotFreezeReason::kMostRecentlyUsed:
       return "most recently used";
+    case CannotFreezeReason::kWebUI:
+      return "WebUI";
   }
   NOTREACHED();
 }

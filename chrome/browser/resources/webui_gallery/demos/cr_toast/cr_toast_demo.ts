@@ -67,16 +67,23 @@ export class CrToastDemoElement extends CrLitElement {
     this.$.toast.show();
   }
 
-  protected onMessageChanged_(e: CustomEvent<{value: string}>) {
+  protected onMessageValueChanged_(e: CustomEvent<{value: string}>) {
     this.message_ = e.detail.value;
   }
 
-  protected onShowDismissButtonChanged_(e: CustomEvent<{value: boolean}>) {
+  protected onShowDismissButtonCheckedChanged_(
+      e: CustomEvent<{value: boolean}>) {
     this.showDismissButton_ = e.detail.value;
   }
 
-  protected onDurationChanged_(e: CustomEvent<{value: number}>) {
+  protected onDurationValueChanged_(e: CustomEvent<{value: number}>) {
     this.duration_ = e.detail.value;
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'cr-toast-demo': CrToastDemoElement;
   }
 }
 

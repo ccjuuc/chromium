@@ -6,12 +6,12 @@
 
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/origin_agent_cluster_isolation_state.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/site_info.h"
 #include "content/browser/site_instance_group.h"
 #include "content/browser/site_instance_impl.h"
+#include "content/common/features.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/site_isolation_policy.h"
@@ -50,7 +50,7 @@ BrowsingInstance::BrowsingInstance(
 }
 
 bool BrowsingInstance::HasSiteInstance(const SiteInfo& site_info) {
-  return base::Contains(site_instance_map_, site_info);
+  return site_instance_map_.contains(site_info);
 }
 
 scoped_refptr<SiteInstanceImpl> BrowsingInstance::GetSiteInstanceForURL(
@@ -64,8 +64,9 @@ scoped_refptr<SiteInstanceImpl> BrowsingInstance::GetSiteInstanceForURL(
     const UrlInfo& url_info,
     SiteInstanceGroup* creation_group,
     bool allow_default_instance) {
+  const SiteInfo site_info = ComputeSiteInfoForURL(url_info);
   scoped_refptr<SiteInstanceImpl> site_instance =
-      GetSiteInstanceForURLHelper(url_info, allow_default_instance);
+      GetSiteInstanceForURLHelper(url_info, site_info, allow_default_instance);
 
   if (site_instance) {
     return site_instance;
@@ -80,7 +81,11 @@ scoped_refptr<SiteInstanceImpl> BrowsingInstance::GetSiteInstanceForURL(
   // carries guest information contained within SiteInfo.
   if (SiteInstanceImpl::ShouldAssignSiteForUrlInfo(url_info) ||
       isolation_context_.is_guest()) {
-    instance->SetSite(url_info);
+    if (base::FeatureList::IsEnabled(features::kPrecomputeSiteInfo)) {
+      instance->SetSiteInfoAndOriginalUrl(site_info, url_info.url);
+    } else {
+      instance->SetSite(url_info);
+    }
   }
 
   // Add the new SiteInstance to `group`, if it exists.
@@ -94,14 +99,15 @@ scoped_refptr<SiteInstanceImpl> BrowsingInstance::GetSiteInstanceForURL(
 
 SiteInfo BrowsingInstance::GetSiteInfoForURL(const UrlInfo& url_info,
                                              bool allow_default_instance) {
+  const SiteInfo site_info = ComputeSiteInfoForURL(url_info);
   scoped_refptr<SiteInstanceImpl> site_instance =
-      GetSiteInstanceForURLHelper(url_info, allow_default_instance);
+      GetSiteInstanceForURLHelper(url_info, site_info, allow_default_instance);
 
   if (site_instance) {
     return site_instance->GetSiteInfo();
   }
 
-  return ComputeSiteInfoForURL(url_info);
+  return site_info;
 }
 
 scoped_refptr<SiteInstanceImpl> BrowsingInstance::GetSiteInstanceForSiteInfo(
@@ -112,7 +118,7 @@ scoped_refptr<SiteInstanceImpl> BrowsingInstance::GetSiteInstanceForSiteInfo(
   }
 
   scoped_refptr<SiteInstanceImpl> instance = new SiteInstanceImpl(this);
-  instance->SetSite(site_info);
+  instance->SetSiteInfo(site_info);
   return instance;
 }
 
@@ -128,8 +134,8 @@ BrowsingInstance::GetMaybeGroupRelatedSiteInstanceForURL(
 
 scoped_refptr<SiteInstanceImpl> BrowsingInstance::GetSiteInstanceForURLHelper(
     const UrlInfo& url_info,
+    const SiteInfo& site_info,
     bool allow_default_instance) {
-  const SiteInfo site_info = ComputeSiteInfoForURL(url_info);
   auto i = site_instance_map_.find(site_info);
   if (i != site_instance_map_.end()) {
     return i->second.get();
@@ -147,7 +153,8 @@ scoped_refptr<SiteInstanceImpl> BrowsingInstance::GetSiteInstanceForURLHelper(
 
       // Note: |default_site_instance_| will get set inside this call
       // via RegisterSiteInstance().
-      site_instance->SetSiteInfoToDefault(site_info.storage_partition_config());
+      site_instance->SetSiteInfoToDefault(
+          site_info.GetStoragePartitionConfig());
       DCHECK_EQ(default_site_instance_, site_instance.get());
     }
 
@@ -167,14 +174,15 @@ void BrowsingInstance::RegisterSiteInstance(SiteInstanceImpl* site_instance) {
   // Verify that the SiteInstance's StoragePartitionConfig matches this
   // BrowsingInstance's StoragePartitionConfig if it already has one.
   const StoragePartitionConfig& storage_partition_config =
-      site_instance->GetSiteInfo().storage_partition_config();
+      site_instance->GetSecurityPrincipal().GetStoragePartitionConfig();
   if (storage_partition_config_.has_value()) {
     // We should only use a single StoragePartition within a BrowsingInstance.
     // If we're attempting to use multiple, something has gone wrong with the
     // logic at upper layers.  Similarly, whether this StoragePartition is for
     // a guest should remain constant over a BrowsingInstance's lifetime.
     CHECK_EQ(storage_partition_config_.value(), storage_partition_config);
-    CHECK_EQ(isolation_context_.is_guest(), site_instance->IsGuest());
+    CHECK_EQ(isolation_context_.is_guest(),
+             site_instance->GetSecurityPrincipal().IsGuest());
   } else {
     storage_partition_config_ = storage_partition_config;
   }

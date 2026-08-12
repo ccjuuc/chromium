@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/extensions/shared_module_service.h"
+#include "extensions/browser/shared_module_service.h"
 
 #include <memory>
 #include <string>
@@ -12,6 +12,7 @@
 #include "base/values.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_service_test_base.h"
+#include "chrome/browser/extensions/shared_module_service_factory.h"
 #include "components/crx_file/id_util.h"
 #include "components/sync/model/string_ordinal.h"
 #include "components/version_info/version_info.h"
@@ -35,14 +36,14 @@ scoped_refptr<const Extension> CreateExtensionImportingModules(
     const std::vector<std::string>& import_ids,
     const std::string& id,
     const std::string& version) {
-  auto builder = base::Value::Dict()
+  auto builder = base::DictValue()
                      .Set("name", "Has Dependent Modules")
                      .Set("version", version)
                      .Set("manifest_version", 2);
   if (!import_ids.empty()) {
-    base::Value::List import_list;
+    base::ListValue import_list;
     for (const std::string& import_id : import_ids)
-      import_list.Append(base::Value::Dict().Set("id", import_id));
+      import_list.Append(base::DictValue().Set("id", import_id));
     builder.Set("import", std::move(import_list));
   }
   return ExtensionBuilder()
@@ -54,14 +55,13 @@ scoped_refptr<const Extension> CreateExtensionImportingModules(
 
 scoped_refptr<const Extension> CreateSharedModule(
     const std::string& module_id) {
-  base::Value::Dict manifest =
-      base::Value::Dict()
+  base::DictValue manifest =
+      base::DictValue()
           .Set("name", "Shared Module")
           .Set("version", "1.0")
           .Set("manifest_version", 2)
-          .Set("export",
-               base::Value::Dict().Set("resources",
-                                       base::Value::List().Append("foo.js")));
+          .Set("export", base::DictValue().Set(
+                             "resources", base::ListValue().Append("foo.js")));
 
   return ExtensionBuilder()
       .SetManifest(std::move(manifest))
@@ -138,7 +138,8 @@ TEST_F(SharedModuleServiceUnitTest, AddDependentSharedModules) {
 
   // Try to satisfy imports for the extension. This should queue the imported
   // module's installation.
-  SharedModuleService::Get(profile())->SatisfyImports(extension.get());
+  SharedModuleServiceFactory::GetForBrowserContext(profile())->SatisfyImports(
+      extension.get());
   EXPECT_TRUE(pending_extension_manager->IsIdPending(import_id));
 }
 
@@ -176,14 +177,13 @@ TEST_F(SharedModuleServiceUnitTest, PruneSharedModulesOnUpdate) {
       CreateSharedModule("shared_module_1");
   EXPECT_TRUE(InstallExtension(shared_module_1.get(), false));
 
-  base::Value::Dict manifest_2 =
-      base::Value::Dict()
+  base::DictValue manifest_2 =
+      base::DictValue()
           .Set("name", "Shared Module 2")
           .Set("version", "1.0")
           .Set("manifest_version", 2)
-          .Set("export",
-               base::Value::Dict().Set("resources",
-                                       base::Value::List().Append("foo.js")));
+          .Set("export", base::DictValue().Set(
+                             "resources", base::ListValue().Append("foo.js")));
   scoped_refptr<const Extension> shared_module_2 =
       CreateSharedModule("shared_module_2");
   EXPECT_TRUE(InstallExtension(shared_module_2.get(), false));
@@ -233,15 +233,15 @@ TEST_F(SharedModuleServiceUnitTest, AllowlistedImports) {
   std::string nonallowlisted_id =
       crx_file::id_util::GenerateId("nonallowlisted");
   // Create a module which exports to a restricted allowlist.
-  base::Value::Dict manifest =
-      base::Value::Dict()
+  base::DictValue manifest =
+      base::DictValue()
           .Set("name", "Shared Module")
           .Set("version", "1.0")
           .Set("manifest_version", 2)
           .Set("export",
-               base::Value::Dict()
-                   .Set("allowlist", base::Value::List().Append(allowlisted_id))
-                   .Set("resources", base::Value::List().Append("*")));
+               base::DictValue()
+                   .Set("allowlist", base::ListValue().Append(allowlisted_id))
+                   .Set("resources", base::ListValue().Append("*")));
   scoped_refptr<const Extension> shared_module =
       ExtensionBuilder()
           .SetManifest(std::move(manifest))

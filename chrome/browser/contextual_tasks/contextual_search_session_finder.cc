@@ -4,10 +4,15 @@
 
 #include "chrome/browser/contextual_tasks/contextual_search_session_finder.h"
 
+#include "chrome/browser/contextual_tasks/active_task_context_provider.h"
 #include "chrome/browser/contextual_search/contextual_search_web_contents_helper.h"
-#include "chrome/browser/contextual_tasks/contextual_tasks_side_panel_coordinator.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_panel_controller.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_utils.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/webui/new_tab_page/composebox/variations/composebox_fieldtrial.h"
+#include "components/contextual_search/contextual_search_service.h"
 #include "components/contextual_tasks/public/contextual_tasks_service.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/tabs/public/tab_interface.h"
@@ -19,14 +24,14 @@ contextual_search::ContextualSearchSessionHandle* FindSessionForTask(
     const base::Uuid& task_id,
     ContextualTasksService* contextual_tasks_service,
     BrowserWindowInterface* browser_window,
-    ContextualTasksSidePanelCoordinator* side_panel_coordinator) {
+    ContextualTasksPanelController* panel_controller) {
   if (!contextual_tasks_service) {
     return nullptr;
   }
 
-  if (side_panel_coordinator) {
+  if (panel_controller) {
     for (content::WebContents* web_contents :
-         side_panel_coordinator->GetSidePanelWebContentsList()) {
+         panel_controller->GetPanelWebContentsList()) {
       if (auto* helper = ContextualSearchWebContentsHelper::FromWebContents(
               web_contents)) {
         auto* existing_session = helper->GetSessionForTask(task_id);
@@ -37,12 +42,12 @@ contextual_search::ContextualSearchSessionHandle* FindSessionForTask(
     }
   }
 
-  TabStripModel* tab_strip_model = browser_window->GetTabStripModel();
-  if (tab_strip_model) {
+  TabListInterface* tab_list = TabListInterface::From(browser_window);
+  if (tab_list) {
     for (auto tab_id :
          contextual_tasks_service->GetTabsAssociatedWithTask(task_id)) {
-      for (int i = 0; i < tab_strip_model->count(); ++i) {
-        tabs::TabInterface* tab = tab_strip_model->GetTabAtIndex(i);
+      for (int i = 0; i < tab_list->GetTabCount(); ++i) {
+        tabs::TabInterface* tab = tab_list->GetTab(i);
         if (sessions::SessionTabHelper::IdForTab(tab->GetContents()) ==
             tab_id) {
           if (auto* helper = ContextualSearchWebContentsHelper::FromWebContents(
@@ -57,6 +62,72 @@ contextual_search::ContextualSearchSessionHandle* FindSessionForTask(
     }
   }
   return nullptr;
+}
+
+void UpdateContextualSearchWebContentsHelperForTask(
+    contextual_search::ContextualSearchService* contextual_search_service,
+    BrowserWindowInterface* browser_window,
+    ContextualTasksService* contextual_tasks_service,
+    ContextualTasksPanelController* panel_controller,
+    content::WebContents* web_contents,
+    const base::Uuid& task_id) {
+  if (!contextual_search_service || !browser_window || !web_contents) {
+    return;
+  }
+
+  auto* helper = ContextualSearchWebContentsHelper::GetOrCreateForWebContents(
+      web_contents);
+
+  // Since the task has just changed, find if the task has an existing session,
+  // i.e. if the task is already open anywhere in the browser.
+  // If not found, create a new session for the task.
+  // Either way, update the ContextualSearchWebContentsHelper with the task ID
+  // and session handle.
+  contextual_search::ContextualSearchSessionHandle* existing_session =
+      FindSessionForTask(task_id, contextual_tasks_service, browser_window,
+                         panel_controller);
+
+  if (!existing_session) {
+    existing_session = helper->GetSessionForTask(task_id);
+  }
+  if (!existing_session) {
+    existing_session = helper->session_handle();
+  }
+
+  std::unique_ptr<contextual_search::ContextualSearchSessionHandle>
+      session_handle;
+  if (existing_session) {
+    session_handle = contextual_search_service->GetSession(
+        existing_session->session_id(), existing_session->invocation_source());
+    session_handle->set_smart_tab_sharing_active(
+        existing_session->smart_tab_sharing_active());
+    session_handle->set_smart_tab_sharing_toggled_since_last_turn(
+        existing_session->smart_tab_sharing_toggled_since_last_turn());
+    session_handle->set_sts_toggled_removed_contexts(
+        existing_session->sts_toggled_removed_contexts());
+    session_handle->set_submitted_context_tokens(
+        existing_session->GetSubmittedContextTokens());
+    session_handle->set_persisted_tabs(existing_session->persisted_tabs());
+    session_handle->set_deselected_tabs_urls(
+        existing_session->deselected_tabs_urls());
+  } else {
+    session_handle = contextual_search_service->CreateSession(
+        CreateQueryControllerConfigParams(),
+        contextual_search::ContextualSearchSource::kContextualTasks,
+        lens::LensOverlayInvocationSource::kContextualTasksComposebox);
+    session_handle->NotifySessionStarted();
+  }
+
+  // Update the session handle with the new task ID.
+  if (session_handle) {
+    session_handle->CheckSearchContentSharingSettings(
+        browser_window->GetProfile()->GetPrefs());
+    helper->SetTaskSession(task_id, std::move(session_handle),
+                           /*input_state_model=*/nullptr);
+    if (auto* provider = ActiveTaskContextProvider::From(browser_window)) {
+      provider->RefreshContext();
+    }
+  }
 }
 
 }  // namespace contextual_tasks

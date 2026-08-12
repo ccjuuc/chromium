@@ -8,13 +8,14 @@
 #import <WebKit/WebKit.h>
 
 #import "base/apple/foundation_util.h"
+#import "base/check_deref.h"
 #import "base/feature_list.h"
 #import "base/files/file_util.h"
 #import "base/memory/raw_ptr.h"
 #import "base/metrics/histogram_functions.h"
 #import "base/task/thread_pool.h"
+#import "base/time/time.h"
 #import "ios/chrome/browser/shared/public/commands/file_upload_panel_commands.h"
-#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/web/model/choose_file/choose_file_controller_impl.h"
 #import "ios/chrome/browser/web/model/choose_file/choose_file_event.h"
 #import "ios/chrome/browser/web/model/choose_file/choose_file_file_utils.h"
@@ -23,11 +24,14 @@
 #import "ios/web/public/web_state.h"
 
 ChooseFileTabHelper::ChooseFileTabHelper(web::WebState* web_state)
-    : file_urls_ready_for_selection_([NSMutableDictionary dictionary]) {
+    : file_urls_ready_for_selection_([NSMutableDictionary dictionary]),
+      web_state_(CHECK_DEREF(web_state)) {
   observation_.Observe(web_state);
 }
 
-ChooseFileTabHelper::~ChooseFileTabHelper() = default;
+ChooseFileTabHelper::~ChooseFileTabHelper() {
+  web_state_->SetCustomOpenPanelSupported(false);
+}
 
 void ChooseFileTabHelper::StartChoosingFiles(
     std::unique_ptr<ChooseFileController> controller) {
@@ -63,6 +67,10 @@ void ChooseFileTabHelper::StopChoosingFiles(NSArray<NSURL*>* file_urls,
                                             NSString* display_string,
                                             UIImage* icon_image) {
   CHECK(controller_);
+  if (!file_urls.count) {
+    controller_.reset();
+    return;
+  }
   CHECK([[NSSet setWithArray:file_urls]
       isSubsetOfSet:[NSSet setWithArray:[file_urls_ready_for_selection_
                                             allKeys]]]);
@@ -79,12 +87,12 @@ void ChooseFileTabHelper::RunOpenPanel(
     WKFrameInfo* frame,
     base::OnceCallback<void(NSArray<NSURL*>*)> completion)
     API_AVAILABLE(ios(18.4)) {
-  CHECK(base::FeatureList::IsEnabled(kIOSCustomFileUploadMenu));
-
   web::WebState* web_state = observation_.GetSource();
-  if (!web_state || web_state->IsBeingDestroyed() || !web_state->IsVisible()) {
+  if (!web_state || web_state->IsBeingDestroyed() || !web_state->IsVisible() ||
+      is_pending_navigation_) {
     // If there is no WebState anymore, or it is being destroyed or not shown,
-    // then call the completion with no selection and return.
+    // or a navigation is pending, then call the completion with no selection
+    // and return.
     std::move(completion).Run(nil);
     return;
   }
@@ -93,11 +101,21 @@ void ChooseFileTabHelper::RunOpenPanel(
       ResetLastChooseFileEvent();
   base::UmaHistogramBoolean("IOS.Web.FileInput.EventMatched",
                             last_choose_file_event.has_value());
+
+  LastTapLocationTabHelper* last_tap_helper =
+      LastTapLocationTabHelper::FromWebState(web_state);
+  CHECK(last_tap_helper);
+  const CGPoint last_tap_point = last_tap_helper->GetLastTapPoint();
+  const BOOL last_tap_is_recent =
+      (base::TimeTicks::Now() - last_tap_helper->GetLastTapTime() <
+       base::Seconds(1));
+  const BOOL voiceover_is_active = UIAccessibilityIsVoiceOverRunning();
+
   if (last_choose_file_event.has_value()) {
-    if (CGPointEqualToPoint(last_choose_file_event->screen_location,
+    if ((last_tap_is_recent && !voiceover_is_active) ||
+        CGPointEqualToPoint(last_choose_file_event->screen_location,
                             CGPointZero)) {
-      last_choose_file_event->screen_location =
-          LastTapLocationTabHelper::FromWebState(web_state)->GetLastTapPoint();
+      last_choose_file_event->screen_location = last_tap_point;
     }
     if (!!last_choose_file_event->allow_multiple_files !=
         !!parameters.allowsMultipleSelection) {
@@ -138,6 +156,9 @@ void ChooseFileTabHelper::RunOpenPanel(
 }
 
 void ChooseFileTabHelper::SetLastChooseFileEvent(ChooseFileEvent event) {
+  if (is_pending_navigation_) {
+    return;
+  }
   last_choose_file_event_ = std::move(event);
 }
 
@@ -200,22 +221,41 @@ void ChooseFileTabHelper::DidSubmitSelection(ChooseFileController* controller,
                                              NSArray<NSURL*>* file_urls,
                                              NSString* display_string,
                                              UIImage* icon_image) {
-  CHECK_EQ(controller, controller_.get());
-  controller_.reset();
+  if (controller_ && controller_.get() == controller) {
+    controller_.reset();
+  }
 }
 
 #pragma mark - web::WebStateObserver
 
-void ChooseFileTabHelper::DidFinishNavigation(
+void ChooseFileTabHelper::DidStartNavigation(
     web::WebState* web_state,
     web::NavigationContext* navigation_context) {
   if (!navigation_context->IsSameDocument()) {
+    is_pending_navigation_ = true;
     AbortSelection();
+    ResetLastChooseFileEvent();
+  }
+}
+
+void ChooseFileTabHelper::DidFinishNavigation(
+    web::WebState* web_state,
+    web::NavigationContext* navigation_context) {
+  if (navigation_context->IsSameDocument()) {
+    return;
+  }
+  is_pending_navigation_ = false;
+  if (navigation_context->HasCommitted()) {
+    // The outgoing document can keep running script after `DidStartNavigation`
+    // and may set a new event before this navigation commits. Reset the event
+    // again so it is not associated with the newly committed document.
+    ResetLastChooseFileEvent();
   }
 }
 
 void ChooseFileTabHelper::WasHidden(web::WebState* web_state) {
   AbortSelection();
+  ResetLastChooseFileEvent();
 }
 
 void ChooseFileTabHelper::WebStateDestroyed(web::WebState* web_state) {

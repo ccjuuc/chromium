@@ -35,13 +35,13 @@ base::android::ScopedJavaLocalRef<jobjectArray> ToImeTextSpanJniArray(
 
     base::android::ScopedJavaLocalRef<jobject> j_info = Java_ImeTextSpan_create(
         env, span_ptr.start_offset, span_ptr.end_offset, j_suggestions,
-        static_cast<jint>(span_ptr.type), span_ptr.should_hide_suggestion_menu);
+        static_cast<int32_t>(span_ptr.type),
+        span_ptr.should_hide_suggestion_menu);
 
     env->SetObjectArrayElement(ime_text_span_array, i++, j_info.obj());
   }
 
-  return base::android::ScopedJavaLocalRef<jobjectArray>::Adopt(
-      env, ime_text_span_array);
+  return jni_zero::AdoptRef(env, ime_text_span_array);
 }
 }  // namespace content
 

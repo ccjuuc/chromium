@@ -11,9 +11,11 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
@@ -28,6 +30,7 @@ import android.view.MotionEvent.PointerCoords;
 import android.view.Surface;
 import android.view.View;
 
+import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -39,8 +42,11 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.ui.util.MotionEventUtils;
+
+import java.io.IOException;
 
 /** Tests logic in the {@link EventForwarder} class. */
 @RunWith(BaseRobolectricTestRunner.class)
@@ -71,6 +77,7 @@ public class EventForwarderTest {
         MotionEvent rightClickEvent = MotionEventTestUtils.getTrackRightClickEvent();
         eventForwarder.onTouchEvent(rightClickEvent);
         verifyNativeMouseEventSent(NATIVE_EVENT_FORWARDER_ID, rightClickEvent, eventForwarder, 1);
+        eventForwarder.destroy();
     }
 
     @Test
@@ -93,6 +100,7 @@ public class EventForwarderTest {
         eventForwarder.onTouchEvent(rightClickReleaseEvent);
         verifyNativeMouseEventSent(
                 NATIVE_EVENT_FORWARDER_ID, rightClickReleaseEvent, eventForwarder, 1);
+        eventForwarder.destroy();
     }
 
     @Test
@@ -104,6 +112,7 @@ public class EventForwarderTest {
                         MotionEvent.ACTION_MOVE, MotionEvent.BUTTON_PRIMARY);
         eventForwarder.onTouchEvent(clickAndDragEvent);
         verifyNativeMouseEventSent(NATIVE_EVENT_FORWARDER_ID, clickAndDragEvent, eventForwarder, 1);
+        eventForwarder.destroy();
     }
 
     @Test
@@ -114,6 +123,7 @@ public class EventForwarderTest {
                 MotionEventTestUtils.getTrackpadEvent(MotionEvent.ACTION_HOVER_MOVE, 0);
         eventForwarder.onHoverEvent(hoverEvent);
         verifyNativeMouseEventSent(NATIVE_EVENT_FORWARDER_ID, hoverEvent, eventForwarder, 1);
+        eventForwarder.destroy();
     }
 
     @Test
@@ -154,6 +164,7 @@ public class EventForwarderTest {
                         /* gestureClassification= */ 0,
                         /* isTouchHandleEvent= */ false,
                         /* isLatestEventTimeResampled= */ false);
+        eventForwarder.destroy();
     }
 
     @Test
@@ -196,6 +207,7 @@ public class EventForwarderTest {
                         /* gestureClassification= */ 0,
                         /* isTouchHandleEvent= */ false,
                         /* isLatestEventTimeResampled= */ true);
+        eventForwarder.destroy();
     }
 
     @Test
@@ -222,6 +234,7 @@ public class EventForwarderTest {
         verify(mNativeMock, never())
                 .onMouseEvent(
                         anyLong(), any(MotionEvent.class), anyLong(), anyInt(), anyInt(), anyInt());
+        eventForwarder.destroy();
     }
 
     @Test
@@ -233,48 +246,61 @@ public class EventForwarderTest {
         verify(mNativeMock, never())
                 .onMouseEvent(
                         anyLong(), any(MotionEvent.class), anyLong(), anyInt(), anyInt(), anyInt());
+        eventForwarder.destroy();
     }
 
     @Test
-    public void testDragDropEvent() {
+    @EnableFeatures(UiAndroidFeatures.CLIPBOARD_CONFUSED_DEPUTY_DEFENSE_FILES)
+    public void testDragDropEvent() throws IOException {
         // Text.
         validateDragDropEvent(
                 new String[] {"text/plain"},
                 new ClipData.Item[] {new ClipData.Item("text content")},
-                new String[][] {}, // expectedFilenames
-                "text content", // expectedText
-                null, // expectedHtml
-                null); // expectedUrl
+                /* expectedFilenames= */ new String[][] {},
+                /* expectedText= */ "text content",
+                /* expectedHtml= */ null,
+                /* expectedUrl= */ null);
 
         // Html.
         validateDragDropEvent(
                 new String[] {"text/html"},
                 new ClipData.Item[] {new ClipData.Item("text content", "html content")},
-                new String[][] {}, // expectedFilenames
-                "text content", // expectedText
-                "html content", // expectedHtml
-                null); // expectedUrl
+                /* expectedFilenames= */ new String[][] {},
+                /* expectedText= */ "text content",
+                /* expectedHtml= */ "html content",
+                /* expectedUrl= */ null);
 
         // Url.
         validateDragDropEvent(
                 new String[] {"text/x-moz-url"},
                 new ClipData.Item[] {new ClipData.Item("url content")},
-                new String[][] {}, // expectedFilenames
-                "url content", // expectedText
-                null, // expectedHtml
-                "url content"); // expectedUrl
+                /* expectedFilenames= */ new String[][] {},
+                /* expectedText= */ "url content",
+                /* expectedHtml= */ null,
+                /* expectedUrl= */ "url content");
 
         // Files.
         validateDragDropEvent(
                 new String[] {"image/jpeg", "text/plain"},
                 new ClipData.Item[] {
-                    new ClipData.Item(Uri.parse("image.jpg")),
-                    new ClipData.Item(Uri.parse("hello.txt"))
+                    new ClipData.Item(Uri.parse("content://com.pkg/foo/image.jpg")),
+                    new ClipData.Item(Uri.parse("content://com.pkg/foo/hello.txt"))
                 },
-                new String[][] {{"image.jpg", ""}, {"hello.txt", ""}}, // expectedFilenames
-                null, // expectedText
-                null, // expectedHtml
-                null); // expectedUrl
+                /* expectedFilenames= */ new String[][] {
+                    {"content://com.pkg/foo/image.jpg", ""}, {"content://com.pkg/foo/hello.txt", ""}
+                },
+                /* expectedText= */ null,
+                /* expectedHtml= */ null,
+                /* expectedUrl= */ null);
+
+        // Non content-URIs disallowed.
+        validateDragDropEvent(
+                new String[] {"text/plain"},
+                new ClipData.Item[] {new ClipData.Item(Uri.parse("/foo/image.jpg"))},
+                /* expectedFilenames= */ new String[][] {},
+                /* expectedText= */ null,
+                /* expectedHtml= */ null,
+                /* expectedUrl= */ null);
     }
 
     @Test
@@ -288,6 +314,7 @@ public class EventForwarderTest {
         verify(mNativeMock, never())
                 .onMouseEvent(
                         anyLong(), any(MotionEvent.class), anyLong(), anyInt(), anyInt(), anyInt());
+        eventForwarder.destroy();
     }
 
     @Test
@@ -342,6 +369,7 @@ public class EventForwarderTest {
                         eq(EventForwarder.getMouseEventActionButton(expectedEvent)),
                         eq(MotionEvent.TOOL_TYPE_MOUSE));
         MotionEventTestUtils.assertEquals(captor.getValue(), expectedEvent);
+        eventForwarder.destroy();
     }
 
     @Test
@@ -414,6 +442,7 @@ public class EventForwarderTest {
                         eq(MotionEvent.TOOL_TYPE_MOUSE));
 
         MotionEventTestUtils.assertEquals(captor.getValue(), transformed);
+        eventForwarder.destroy();
     }
 
     @Test
@@ -468,6 +497,7 @@ public class EventForwarderTest {
                         eq(moveEvent.getToolType(0)));
         MotionEventTestUtils.assertEquals(captor.getAllValues().get(0), expectedEvent1);
         MotionEventTestUtils.assertEquals(captor.getAllValues().get(1), expectedEvent2);
+        eventForwarder.destroy();
     }
 
     @Test
@@ -490,6 +520,134 @@ public class EventForwarderTest {
         eventForwarder.onCapturedPointerEvent(scrollEvent, Surface.ROTATION_0);
         verify(mNativeMock, times(1))
                 .onGenericMotionEvent(anyLong(), any(MotionEvent.class), anyLong(), anyLong());
+        eventForwarder.destroy();
+    }
+
+    @Test
+    @Config(sdk = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    public void testTrackpadScrollDirection() {
+        EventForwarder eventForwarder =
+                new EventForwarder(NATIVE_EVENT_FORWARDER_ID, true, true, false);
+
+        // Swipe RIGHT: X increases.
+        long downTime = 100;
+        long eventTime1 = 200;
+        MotionEvent downEvent =
+                spy(
+                        MotionEvent.obtain(
+                                downTime,
+                                eventTime1,
+                                MotionEvent.ACTION_DOWN,
+                                /* x= */ 10,
+                                /* y= */ 20,
+                                /* metaState= */ 0));
+        downEvent.setSource(InputDevice.SOURCE_MOUSE);
+        doReturn(MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE).when(downEvent).getClassification();
+        eventForwarder.onTouchEvent(downEvent);
+
+        long eventTime2 = 300;
+        MotionEvent moveEvent =
+                spy(
+                        MotionEvent.obtain(
+                                downTime,
+                                eventTime2,
+                                MotionEvent.ACTION_MOVE,
+                                /* x= */ 15, // DeltaX = +5
+                                /* y= */ 25, // DeltaY = +5
+                                /* metaState= */ 0));
+        moveEvent.setSource(InputDevice.SOURCE_MOUSE);
+        doReturn(MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE).when(moveEvent).getClassification();
+        eventForwarder.onTouchEvent(moveEvent);
+
+        // Verify onMouseWheelEvent is called with POSITIVE deltaX (5.0f) and POSITIVE deltaY
+        // (5.0f).
+        // Before the fix, it would have been -5.0f for deltaX.
+        verify(mNativeMock)
+                .onMouseWheelEvent(
+                        eq(NATIVE_EVENT_FORWARDER_ID),
+                        eq(moveEvent),
+                        eq(eventTime2 * 1_000_000L),
+                        eq(MotionEvent.ACTION_MOVE),
+                        eq(10.0f), // startX
+                        eq(20.0f), // startY
+                        eq(10.0f), // startRawX
+                        eq(20.0f), // startRawY
+                        eq(5.0f), // deltaX (NOT negated anymore)
+                        eq(5.0f)); // deltaY
+
+        eventForwarder.destroy();
+    }
+
+    @Test
+    @Config(sdk = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    public void testTrackpadFlingDirection() {
+        EventForwarder eventForwarder =
+                new EventForwarder(NATIVE_EVENT_FORWARDER_ID, true, true, false);
+
+        long downTime = 100;
+        long eventTime1 = 200;
+        MotionEvent downEvent =
+                spy(
+                        MotionEvent.obtain(
+                                downTime,
+                                eventTime1,
+                                MotionEvent.ACTION_DOWN,
+                                /* x= */ 10,
+                                /* y= */ 20,
+                                /* metaState= */ 0));
+        downEvent.setSource(InputDevice.SOURCE_MOUSE);
+        doReturn(MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE).when(downEvent).getClassification();
+        eventForwarder.onTouchEvent(downEvent);
+
+        long eventTime2 = 300;
+        MotionEvent moveEvent =
+                spy(
+                        MotionEvent.obtain(
+                                downTime,
+                                eventTime2,
+                                MotionEvent.ACTION_MOVE,
+                                /* x= */ 20,
+                                /* y= */ 20,
+                                /* metaState= */ 0));
+        moveEvent.setSource(InputDevice.SOURCE_MOUSE);
+        doReturn(MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE).when(moveEvent).getClassification();
+        eventForwarder.onTouchEvent(moveEvent);
+
+        long eventTime3 = 400;
+        MotionEvent upEvent =
+                spy(
+                        MotionEvent.obtain(
+                                downTime,
+                                eventTime3,
+                                MotionEvent.ACTION_UP,
+                                /* x= */ 30,
+                                /* y= */ 20,
+                                /* metaState= */ 0));
+        upEvent.setSource(InputDevice.SOURCE_MOUSE);
+        doReturn(MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE).when(upEvent).getClassification();
+        eventForwarder.onTouchEvent(upEvent);
+
+        // Fling Right (+X) -> velocityX is positive.
+        // We verify that startFling is called with positive velocityX.
+        ArgumentCaptor<Float> velocityXCaptor = ArgumentCaptor.forClass(Float.class);
+        verify(mNativeMock)
+                .startFling(
+                        eq(NATIVE_EVENT_FORWARDER_ID),
+                        eq(eventTime3),
+                        eq(10f),
+                        eq(20f),
+                        eq(10f),
+                        eq(20f),
+                        velocityXCaptor.capture(),
+                        anyFloat(),
+                        eq(false),
+                        eq(false),
+                        eq(true),
+                        eq(false));
+        Assert.assertTrue(
+                "VelocityX should be positive for swipe right", velocityXCaptor.getValue() > 0);
+
+        eventForwarder.destroy();
     }
 
     private void verifyNativeMouseEventSent(
@@ -543,7 +701,7 @@ public class EventForwarderTest {
                         eq(mimeTypes),
                         eq(""), // content
                         argThat(
-                                filenames -> {
+                                (String[][] filenames) -> {
                                     if (filenames.length != expectedFilenames.length) {
                                         return false;
                                     }
@@ -559,7 +717,10 @@ public class EventForwarderTest {
                                 }),
                         eq(expectedText),
                         eq(expectedHtml),
-                        eq(expectedUrl));
+                        eq(expectedUrl),
+                        isNull(),
+                        isNull());
         histograms.assertExpected();
+        eventForwarder.destroy();
     }
 }

@@ -12,6 +12,7 @@
 #include <string>
 #include <utility>
 
+#include "base/byte_size.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -39,6 +40,7 @@
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/storage_partition.h"
@@ -61,6 +63,7 @@
 #include "third_party/blink/public/common/service_worker/service_worker_type_converters.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+#include "third_party/blink/public/mojom/frame/policy_container.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration_options.mojom.h"
 #include "url/origin.h"
 
@@ -96,6 +99,7 @@ struct FetchResult {
   blink::ServiceWorkerStatusCode status;
   ServiceWorkerFetchDispatcher::FetchEventResult result;
   blink::mojom::FetchAPIResponsePtr response;
+  blink::mojom::ServiceWorkerFetchHandlerErrorsPtr errors;
 };
 
 void RunWithDelay(base::OnceClosure closure, base::TimeDelta delay) {
@@ -403,15 +407,17 @@ class ServiceWorkerVersionBrowserTest : public ContentBrowserTest {
   void FetchOnRegisteredWorker(
       const std::string& path,
       ServiceWorkerFetchDispatcher::FetchEventResult* result,
-      blink::mojom::FetchAPIResponsePtr* response) {
-    FetchOnRegisteredWorker(path, "", result, response);
+      blink::mojom::FetchAPIResponsePtr* response,
+      blink::mojom::ServiceWorkerFetchHandlerErrorsPtr* errors = nullptr) {
+    FetchOnRegisteredWorker(path, "", result, response, errors);
   }
 
   void FetchOnRegisteredWorker(
       const std::string& path,
       const std::string& range_header,
       ServiceWorkerFetchDispatcher::FetchEventResult* result,
-      blink::mojom::FetchAPIResponsePtr* response) {
+      blink::mojom::FetchAPIResponsePtr* response,
+      blink::mojom::ServiceWorkerFetchHandlerErrorsPtr* errors = nullptr) {
     bool prepare_result = false;
     FetchResult fetch_result;
     fetch_result.status = blink::ServiceWorkerStatusCode::kErrorFailed;
@@ -422,6 +428,9 @@ class ServiceWorkerVersionBrowserTest : public ContentBrowserTest {
     ASSERT_TRUE(prepare_result);
     *result = fetch_result.result;
     *response = std::move(fetch_result.response);
+    if (errors) {
+      *errors = std::move(fetch_result.errors);
+    }
     ASSERT_EQ(blink::ServiceWorkerStatusCode::kOk, fetch_result.status);
   }
 
@@ -531,10 +540,14 @@ class ServiceWorkerVersionBrowserTest : public ContentBrowserTest {
     scoped_refptr<ServiceWorkerRegistration> registration =
         wrapper()->context()->GetLiveRegistration(registration_id);
     ASSERT_TRUE(registration);
+    auto fetch_client_settings_object =
+        blink::mojom::FetchClientSettingsObject::New();
+    fetch_client_settings_object->policy_container_policies =
+        blink::mojom::PolicyContainerPolicies::New();
     wrapper()->context()->UpdateServiceWorker(
         registration.get(), false /* force_bypass_cache */,
         false /* skip_script_comparison */,
-        blink::mojom::FetchClientSettingsObject::New(),
+        std::move(fetch_client_settings_object),
         base::BindLambdaForTesting([&](blink::ServiceWorkerStatusCode status,
                                        const std::string& message,
                                        int64_t registration_id) {
@@ -686,6 +699,7 @@ class ServiceWorkerVersionBrowserTest : public ContentBrowserTest {
       blink::mojom::FetchAPIResponsePtr actual_response,
       blink::mojom::ServiceWorkerStreamHandlePtr /* stream */,
       blink::mojom::ServiceWorkerFetchEventTimingPtr /* timing */,
+      blink::mojom::ServiceWorkerFetchHandlerErrorsPtr actual_errors,
       scoped_refptr<ServiceWorkerVersion> worker) {
     ASSERT_TRUE(BrowserThread::CurrentlyOn(BrowserThread::UI));
     ASSERT_TRUE(fetch_dispatcher_);
@@ -693,6 +707,7 @@ class ServiceWorkerVersionBrowserTest : public ContentBrowserTest {
     out_result->status = actual_status;
     out_result->result = actual_result;
     out_result->response = std::move(actual_response);
+    out_result->errors = std::move(actual_errors);
     if (quit)
       std::move(quit).Run();
   }
@@ -859,7 +874,7 @@ IN_PROC_BROWSER_TEST_F(ServiceWorkerVersionBrowserTest, ReadResourceFailure) {
   auto records = std::make_unique<
       std::vector<storage::mojom::ServiceWorkerResourceRecordPtr>>();
   records->push_back(storage::mojom::ServiceWorkerResourceRecord::New(
-      30, version_->script_url(), 100, /*sha256_checksum=*/""));
+      30, version_->script_url(), base::ByteSize(100), /*sha256_checksum=*/""));
   SetResources(version_.get(), std::move(records));
 
   // Store the registration.
@@ -892,7 +907,7 @@ IN_PROC_BROWSER_TEST_F(ServiceWorkerVersionBrowserTest,
   auto records1 = std::make_unique<
       std::vector<storage::mojom::ServiceWorkerResourceRecordPtr>>();
   records1->push_back(storage::mojom::ServiceWorkerResourceRecord::New(
-      30, version_->script_url(), 100, /*sha256_checksum=*/""));
+      30, version_->script_url(), base::ByteSize(100), /*sha256_checksum=*/""));
   SetResources(version_.get(), std::move(records1));
 
   // Make a waiting version and store it.
@@ -900,7 +915,7 @@ IN_PROC_BROWSER_TEST_F(ServiceWorkerVersionBrowserTest,
   auto records2 = std::make_unique<
       std::vector<storage::mojom::ServiceWorkerResourceRecordPtr>>();
   records2->push_back(storage::mojom::ServiceWorkerResourceRecord::New(
-      31, version_->script_url(), 100, /*sha256_checksum=*/""));
+      31, version_->script_url(), base::ByteSize(100), /*sha256_checksum=*/""));
   SetResources(registration_->waiting_version(), std::move(records2));
   StoreRegistration(registration_->waiting_version()->version_id(),
                     blink::ServiceWorkerStatusCode::kOk);
@@ -1279,7 +1294,9 @@ IN_PROC_BROWSER_TEST_F(ServiceWorkerVersionBrowserTest,
   ConsoleListener console_listener;
   version_->embedded_worker()->AddObserver(&console_listener);
 
-  FetchOnRegisteredWorker("/service_worker/empty.html", &result, &response);
+  blink::mojom::ServiceWorkerFetchHandlerErrorsPtr errors;
+  FetchOnRegisteredWorker("/service_worker/empty.html", &result, &response,
+                          &errors);
   const std::u16string expected1 =
       u"resulted in a network error response: the promise was rejected.";
   const std::u16string expected2 =
@@ -1293,8 +1310,31 @@ IN_PROC_BROWSER_TEST_F(ServiceWorkerVersionBrowserTest,
   ASSERT_EQ(ServiceWorkerFetchDispatcher::FetchEventResult::kGotResponse,
             result);
   EXPECT_EQ(0, response->status_code);
+  EXPECT_TRUE(!errors || (!errors->race_fetch_error_code.has_value() &&
+                          !errors->regular_fetch_error_code.has_value()));
 
   EXPECT_FALSE(response->blob);
+}
+
+IN_PROC_BROWSER_TEST_F(ServiceWorkerVersionBrowserTest,
+                       FetchEvent_respondWithFetchError) {
+  StartServerAndNavigateToSetup();
+  ServiceWorkerFetchDispatcher::FetchEventResult result;
+  blink::mojom::FetchAPIResponsePtr response;
+  ASSERT_EQ(Install("/service_worker/fetch_event_respond_with_fetch.js"),
+            blink::ServiceWorkerStatusCode::kOk);
+  EXPECT_EQ(Activate(), blink::ServiceWorkerStatusCode::kOk);
+
+  blink::mojom::ServiceWorkerFetchHandlerErrorsPtr errors;
+  FetchOnRegisteredWorker("/close-socket", &result, &response, &errors);
+
+  ASSERT_EQ(ServiceWorkerFetchDispatcher::FetchEventResult::kGotResponse,
+            result);
+  EXPECT_EQ(0, response->status_code);
+  ASSERT_TRUE(errors);
+  EXPECT_FALSE(errors->race_fetch_error_code.has_value());
+  ASSERT_TRUE(errors->regular_fetch_error_code.has_value());
+  EXPECT_NE(0, *errors->regular_fetch_error_code);
 }
 
 // Tests that the browser cache is bypassed on update checks after 24 hours
@@ -1329,6 +1369,7 @@ IN_PROC_BROWSER_TEST_F(ServiceWorkerVersionBrowserTest,
   observer->Init();
   public_context()->RegisterServiceWorker(
       embedded_test_server()->GetURL(kWorkerUrl), key, options,
+      GlobalRenderFrameHostId(),
       base::BindOnce(&ExpectRegisterResultAndRun,
                      blink::ServiceWorkerStatusCode::kOk, base::DoNothing()));
   observer->Wait();
@@ -1402,6 +1443,7 @@ IN_PROC_BROWSER_TEST_F(ServiceWorkerVersionBrowserTest,
   observer->Init();
   public_context()->RegisterServiceWorker(
       embedded_test_server()->GetURL(kWorkerUrl), key, options,
+      GlobalRenderFrameHostId(),
       base::BindOnce(&ExpectRegisterResultAndRun,
                      blink::ServiceWorkerStatusCode::kOk, base::DoNothing()));
   observer->Wait();
@@ -1552,6 +1594,10 @@ IN_PROC_BROWSER_TEST_F(ServiceWorkerVersionBrowserTest,
   }
 }
 
+// In Fuchsia size-optimized builds, the V8 code cache is explicitly disabled
+// to save storage space. Therefore, tests verifying full code cache storage
+// behavior for service workers are skipped on these builds.
+#if !BUILDFLAG(IS_FUCHSIA) || !defined(__OPTIMIZE_SIZE__)
 class ServiceWorkerVersionBrowserV8FullCodeCacheTest
     : public ServiceWorkerVersionBrowserTest,
       public ServiceWorkerVersion::Observer {
@@ -1611,6 +1657,7 @@ IN_PROC_BROWSER_TEST_F(ServiceWorkerVersionBrowserV8FullCodeCacheTest,
   // Stop the worker.
   StopWorker();
 }
+#endif  // !BUILDFLAG(IS_FUCHSIA) || !defined(__OPTIMIZE_SIZE__)
 
 class CacheStorageEagerReadingTest : public ServiceWorkerVersionBrowserTest {
  public:

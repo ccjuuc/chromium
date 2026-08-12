@@ -117,34 +117,42 @@ FakeCrosHealthd* FakeCrosHealthd::Get() {
   return g_instance;
 }
 
+void FakeCrosHealthd::AddObserver(Observer* observer) {
+  observers_.AddObserver(observer);
+}
+
+void FakeCrosHealthd::RemoveObserver(Observer* observer) {
+  observers_.RemoveObserver(observer);
+}
+
 void FakeCrosHealthd::SetAvailableRoutinesForTesting(
-    const std::vector<mojom::DiagnosticRoutineEnum>& available_routines) {
-  available_routines_ = available_routines;
+    std::vector<mojom::DiagnosticRoutineEnum> available_routines) {
+  available_routines_ = std::move(available_routines);
 }
 
 void FakeCrosHealthd::SetRunRoutineResponseForTesting(
-    mojom::RunRoutineResponsePtr& response) {
-  run_routine_response_.Swap(&response);
+    mojom::RunRoutineResponsePtr response) {
+  run_routine_response_ = std::move(response);
 }
 
 void FakeCrosHealthd::SetGetRoutineUpdateResponseForTesting(
-    mojom::RoutineUpdatePtr& response) {
-  routine_update_response_.Swap(&response);
+    mojom::RoutineUpdatePtr response) {
+  routine_update_response_ = std::move(response);
 }
 
 void FakeCrosHealthd::SetProbeTelemetryInfoResponseForTesting(
-    mojom::TelemetryInfoPtr& response_info) {
-  telemetry_response_info_.Swap(&response_info);
+    mojom::TelemetryInfoPtr response_info) {
+  telemetry_response_info_ = std::move(response_info);
 }
 
 void FakeCrosHealthd::SetIsEventSupportedResponseForTesting(
-    mojom::SupportStatusPtr& result) {
-  is_event_supported_response_.Swap(&result);
+    mojom::SupportStatusPtr result) {
+  is_event_supported_response_ = std::move(result);
 }
 
 void FakeCrosHealthd::SetIsRoutineArgumentSupportedResponseForTesting(
-    mojom::SupportStatusPtr& result) {
-  is_routine_argument_supported_response_.Swap(&result);
+    mojom::SupportStatusPtr result) {
+  is_routine_argument_supported_response_ = std::move(result);
 }
 
 void FakeCrosHealthd::FlushRoutineServiceForTesting() {
@@ -162,17 +170,17 @@ FakeRoutineControl* FakeCrosHealthd::GetRoutineControlForArgumentTag(
 }
 
 void FakeCrosHealthd::SetProbeProcessInfoResponseForTesting(
-    mojom::ProcessResultPtr& result) {
-  process_response_.Swap(&result);
+    mojom::ProcessResultPtr result) {
+  process_response_ = std::move(result);
 }
 
 void FakeCrosHealthd::SetProbeMultipleProcessInfoResponseForTesting(
-    mojom::MultipleProcessResultPtr& result) {
-  multiple_process_response_.Swap(&result);
+    mojom::MultipleProcessResultPtr result) {
+  multiple_process_response_ = std::move(result);
 }
 
 void FakeCrosHealthd::SetExpectedLastPassedDiagnosticsParametersForTesting(
-    base::Value::Dict expected_parameters) {
+    base::DictValue expected_parameters) {
   expected_passed_parameters_ = std::move(expected_parameters);
 }
 
@@ -785,6 +793,7 @@ void FakeCrosHealthd::AddEventObserver(
   }
 
   it->second.Add(std::move(observer));
+  observers_.Notify(&Observer::OnEventObserverAdded);
 }
 
 void FakeCrosHealthd::IsEventSupported(
@@ -826,6 +835,7 @@ void FakeCrosHealthd::CreateRoutine(
   routine_controllers_.emplace(
       std::piecewise_construct, std::forward_as_tuple(argument->which()),
       std::forward_as_tuple(std::move(pending_receiver), std::move(observer)));
+  observers_.Notify(&Observer::OnRoutineCreated);
 }
 
 void FakeCrosHealthd::IsRoutineArgumentSupported(

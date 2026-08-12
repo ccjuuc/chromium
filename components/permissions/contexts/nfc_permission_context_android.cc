@@ -4,10 +4,15 @@
 
 #include "components/permissions/contexts/nfc_permission_context_android.h"
 
+#include <memory>
+#include <variant>
+
 #include "base/android/jni_android.h"
 #include "base/functional/bind.h"
 #include "components/permissions/android/nfc/nfc_system_level_setting_impl.h"
 #include "components/permissions/permission_decision.h"
+#include "components/permissions/permission_prompt_decision.h"
+#include "components/permissions/permission_request_data.h"
 #include "components/permissions/permission_request_id.h"
 #include "content/public/browser/permission_descriptor_util.h"
 #include "content/public/browser/permission_request_description.h"
@@ -29,16 +34,16 @@ void NfcPermissionContextAndroid::NotifyPermissionSet(
     const PermissionRequestData& request_data,
     BrowserPermissionCallback callback,
     bool persist,
-    PermissionDecision decision,
-    bool is_final_decision) {
-  DCHECK(is_final_decision);
+    const content::PermissionResult* permission_result,
+    const permissions::PermissionPromptDecision& decision) {
+  CHECK(decision.is_final);
 
-  if (decision != PermissionDecision::kAllow ||
+  if (decision.overall_decision != PermissionDecision::kAllow ||
       !nfc_system_level_setting_->IsNfcAccessPossible() ||
       nfc_system_level_setting_->IsNfcSystemLevelSettingEnabled()) {
     NfcPermissionContext::NotifyPermissionSet(request_data, std::move(callback),
-                                              persist, decision,
-                                              is_final_decision);
+                                              persist, permission_result,
+                                              decision);
     return;
   }
 
@@ -56,8 +61,13 @@ void NfcPermissionContextAndroid::NotifyPermissionSet(
   // in tab-switching mode).
   if (!delegate_->IsInteractable(web_contents)) {
     ContentSettingPermissionContextBase::NotifyPermissionSet(
-        request_data, std::move(callback), false /* persist */,
-        PermissionDecision::kDeny, is_final_decision);
+        request_data, std::move(callback), /*persist=*/false,
+        // Force computing a new PermissionResult since we are denying the
+        // permission request.
+        nullptr,
+        permissions::PermissionPromptDecision{PermissionDecision::kDeny,
+                                              decision.prompt_options,
+                                              decision.is_final});
     return;
   }
 
@@ -65,26 +75,23 @@ void NfcPermissionContextAndroid::NotifyPermissionSet(
       web_contents,
       base::BindOnce(
           &NfcPermissionContextAndroid::OnNfcSystemLevelSettingPromptClosed,
-          weak_factory_.GetWeakPtr(), request_data.id,
-          request_data.requesting_origin, request_data.embedding_origin,
-          std::move(callback), persist, decision));
+          weak_factory_.GetWeakPtr(), request_data.Clone(), std::move(callback),
+          persist,
+          permission_result
+              ? std::make_unique<content::PermissionResult>(*permission_result)
+              : nullptr,
+          decision));
 }
 
 void NfcPermissionContextAndroid::OnNfcSystemLevelSettingPromptClosed(
-    const PermissionRequestID& id,
-    const GURL& requesting_origin,
-    const GURL& embedding_origin,
+    const PermissionRequestData& request_data,
     BrowserPermissionCallback callback,
     bool persist,
-    PermissionDecision decision) {
-  NfcPermissionContext::NotifyPermissionSet(
-      PermissionRequestData(this, id,
-                            content::PermissionRequestDescription(
-                                content::PermissionDescriptorUtil::
-                                    CreatePermissionDescriptorForPermissionType(
-                                        blink::PermissionType::NFC)),
-                            requesting_origin, embedding_origin),
-      std::move(callback), persist, decision, /*is_final_decision=*/true);
+    std::unique_ptr<content::PermissionResult> permission_result,
+    const permissions::PermissionPromptDecision& decision) {
+  NfcPermissionContext::NotifyPermissionSet(request_data, std::move(callback),
+                                            persist, permission_result.get(),
+                                            decision);
 }
 
 }  // namespace permissions

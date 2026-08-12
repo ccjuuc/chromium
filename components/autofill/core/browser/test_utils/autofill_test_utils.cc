@@ -4,8 +4,9 @@
 
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
 
+#include <stdint.h>
+
 #include <algorithm>
-#include <cstdint>
 #include <iterator>
 #include <string>
 #include <string_view>
@@ -27,13 +28,12 @@
 #include "base/uuid.h"
 #include "build/build_config.h"
 #include "components/autofill/core/browser/crowdsourcing/randomized_encoder.h"
+#include "components/autofill/core/browser/data_manager/addresses/account_name_email_store.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #include "components/autofill/core/browser/data_manager/test_personal_data_manager.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile_test_api.h"
-#include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
-#include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
-#include "components/autofill/core/browser/data_model/autofill_ai/entity_type_names.h"
 #include "components/autofill/core/browser/data_model/payments/bank_account.h"
 #include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
@@ -48,6 +48,7 @@
 #include "components/autofill/core/browser/proto/server.pb.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/browser/suggestions/suggestion_type.h"
+#include "components/autofill/core/browser/test_utils/autofill_form_test_utils.h"
 #include "components/autofill/core/browser/ui/autofill_external_delegate.h"
 #include "components/autofill/core/browser/webdata/payments/payments_autofill_table.h"
 #include "components/autofill/core/common/autofill_clock.h"
@@ -61,13 +62,16 @@
 #include "components/autofill/core/common/form_data_test_api.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "components/autofill/core/common/form_field_data_predictions.h"
+#include "components/autofill/core/common/signatures.h"
 #include "components/autofill/core/common/unique_ids.h"
+#include "components/personal_context/core/personal_context_prefs.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/pref_service_factory.h"
 #include "components/prefs/testing_pref_store.h"
 #include "components/security_interstitials/core/pref_names.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/subscription_eligibility/subscription_eligibility_prefs.h"
 #include "components/sync/protocol/autofill_specifics.pb.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
@@ -85,7 +89,10 @@ bool operator==(const FormFieldDataPredictions& a,
 bool operator==(const FormDataPredictions& a, const FormDataPredictions& b) {
   return test::WithoutUnserializedData(test::WithoutValues(a.data)) ==
              test::WithoutUnserializedData(test::WithoutValues(b.data)) &&
-         a.signature == b.signature && a.fields == b.fields;
+         a.signature == b.signature &&
+         a.alternative_signature == b.alternative_signature &&
+         a.structural_form_signature == b.structural_form_signature &&
+         a.fields == b.fields;
 }
 
 namespace test {
@@ -97,7 +104,7 @@ std::string GetRandomCardNumber() {
   std::string value;
   value.reserve(length);
   for (size_t i = 0; i < length; ++i) {
-    value.push_back(static_cast<char>(base::RandInt('0', '9')));
+    value.push_back(static_cast<char>(base::RandIntInclusive('0', '9')));
   }
   return value;
 }
@@ -145,6 +152,8 @@ std::unique_ptr<AutofillTestingPrefService> PrefServiceForTesting() {
   auto pref_service = std::make_unique<AutofillTestingPrefService>();
   user_prefs::PrefRegistrySyncable* registry = pref_service->registry();
   signin::IdentityManager::RegisterProfilePrefs(registry);
+  subscription_eligibility::prefs::RegisterProfilePrefs(registry);
+  personal_context::prefs::RegisterProfilePrefs(registry);
   registry->RegisterBooleanPref(
       RandomizedEncoder::kUrlKeyedAnonymizedDataCollectionEnabled, false);
   registry->RegisterBooleanPref(::prefs::kMixedFormsWarningsEnabled, true);
@@ -161,91 +170,80 @@ std::unique_ptr<PrefService> PrefServiceForTesting(
   return factory.Create(registry);
 }
 
-[[nodiscard]] FormData CreateTestAddressFormData(const char* unique_id) {
-  FormData form;
-  form.set_host_frame(MakeLocalFrameToken());
-  form.set_renderer_id(MakeFormRendererId());
-  form.set_name(u"MyForm" + ASCIIToUTF16(unique_id ? unique_id : ""));
-  form.set_button_titles({std::make_pair(
-      u"Submit", mojom::ButtonTitleType::BUTTON_ELEMENT_SUBMIT_TYPE)});
-  form.set_url(GURL("https://myform.com/form.html"));
-  form.set_action(GURL("https://myform.com/submit.html"));
+[[nodiscard]] FormData CreateTestAddressFormData(std::string_view unique_id) {
+  FormData form = test::GetFormData(test::FormDescription{
+      .fields = {{.label = u"First Name", .name = u"firstname"},
+                 {.label = u"Middle Name", .name = u"middlename"},
+                 {.label = u"Last Name", .name = u"lastname"},
+                 {.label = u"Address Line 1", .name = u"addr1"},
+                 {.label = u"Address Line 2", .name = u"addr2"},
+                 {.label = u"City", .name = u"city"},
+                 {.label = u"State", .name = u"state"},
+                 {.label = u"Postal Code", .name = u"zipcode"},
+                 {.label = u"Country", .name = u"country"},
+                 {.label = u"Phone Number",
+                  .name = u"phonenumber",
+                  .form_control_type = FormControlType::kInputTelephone},
+                 {.label = u"Email",
+                  .name = u"email",
+                  .form_control_type = FormControlType::kInputEmail}},
+      .name = u"MyForm" + ASCIIToUTF16(unique_id),
+      .url = "https://myform.com/form.html",
+      .action = "https://myform.com/submit.html",
+      .main_frame_origin =
+          url::Origin::Create(GURL("https://myform_root.com/form.html")),
+      .button_titles = {{u"Submit",
+                         mojom::ButtonTitleType::BUTTON_ELEMENT_SUBMIT_TYPE}},
+  });
   form.set_is_action_empty(true);
-  form.set_main_frame_origin(
-      url::Origin::Create(GURL("https://myform_root.com/form.html")));
   form.set_submission_event(
       mojom::SubmissionIndicatorEvent::SAME_DOCUMENT_NAVIGATION);
-
-  form.set_fields(
-      {CreateTestFormField("First Name", "firstname", "",
-                           FormControlType::kInputText),
-       CreateTestFormField("Middle Name", "middlename", "",
-                           FormControlType::kInputText),
-       CreateTestFormField("Last Name", "lastname", "",
-                           FormControlType::kInputText),
-       CreateTestFormField("Address Line 1", "addr1", "",
-                           FormControlType::kInputText),
-       CreateTestFormField("Address Line 2", "addr2", "",
-                           FormControlType::kInputText),
-       CreateTestFormField("City", "city", "", FormControlType::kInputText),
-       CreateTestFormField("State", "state", "", FormControlType::kInputText),
-       CreateTestFormField("Postal Code", "zipcode", "",
-                           FormControlType::kInputText),
-       CreateTestFormField("Country", "country", "",
-                           FormControlType::kInputText),
-       CreateTestFormField("Phone Number", "phonenumber", "",
-                           FormControlType::kInputTelephone),
-       CreateTestFormField("Email", "email", "",
-                           FormControlType::kInputEmail)});
   return form;
 }
 
 [[nodiscard]] FormData CreateTestOtpFormData(const char* unique_id) {
-  FormData form;
-  form.set_host_frame(MakeLocalFrameToken());
-  form.set_renderer_id(MakeFormRendererId());
-  form.set_name(u"MyForm" + ASCIIToUTF16(unique_id ? unique_id : ""));
-  form.set_button_titles({std::make_pair(
-      u"Submit", mojom::ButtonTitleType::BUTTON_ELEMENT_SUBMIT_TYPE)});
-  form.set_url(GURL("https://myform.com/form.html"));
-  form.set_action(GURL("https://myform.com/submit.html"));
+  FormData form = test::GetFormData(test::FormDescription{
+      .fields = {{.label = u"One time password", .name = u"otp"}},
+      .name = u"MyForm" + ASCIIToUTF16(unique_id ? unique_id : ""),
+      .url = "https://myform.com/form.html",
+      .action = "https://myform.com/submit.html",
+      .main_frame_origin =
+          url::Origin::Create(GURL("https://myform_root.com/form.html")),
+      .button_titles = {{u"Submit",
+                         mojom::ButtonTitleType::BUTTON_ELEMENT_SUBMIT_TYPE}},
+  });
   form.set_is_action_empty(true);
-  form.set_main_frame_origin(
-      url::Origin::Create(GURL("https://myform_root.com/form.html")));
   form.set_submission_event(
       mojom::SubmissionIndicatorEvent::SAME_DOCUMENT_NAVIGATION);
-
-  form.set_fields({CreateTestFormField("One time password", "otp", "",
-                                       FormControlType::kInputText)});
   return form;
 }
 
 [[nodiscard]] FormData CreateTestHybridSignUpFormData(const char* unique_id) {
-  FormData form;
-  form.set_host_frame(MakeLocalFrameToken());
-  form.set_renderer_id(MakeFormRendererId());
-  form.set_name(u"MyForm" + ASCIIToUTF16(unique_id ? unique_id : ""));
-  form.set_button_titles({std::make_pair(
-      u"Submit", mojom::ButtonTitleType::BUTTON_ELEMENT_SUBMIT_TYPE)});
-  form.set_url(GURL("https://myform.com/form.html"));
-  form.set_action(GURL("https://myform.com/submit.html"));
+  FormData form = test::GetFormData(test::FormDescription{
+      .fields = {{.label = u"Email",
+                  .name = u"email",
+                  .autocomplete_attribute = "webauthn",
+                  .form_control_type = FormControlType::kInputEmail}},
+      .name = u"MyForm" + ASCIIToUTF16(unique_id ? unique_id : ""),
+      .url = "https://myform.com/form.html",
+      .action = "https://myform.com/submit.html",
+      .main_frame_origin =
+          url::Origin::Create(GURL("https://myform_root.com/form.html")),
+      .button_titles = {{u"Submit",
+                         mojom::ButtonTitleType::BUTTON_ELEMENT_SUBMIT_TYPE}},
+  });
   form.set_is_action_empty(true);
-  form.set_main_frame_origin(
-      url::Origin::Create(GURL("https://myform_root.com/form.html")));
   form.set_submission_event(
       mojom::SubmissionIndicatorEvent::SAME_DOCUMENT_NAVIGATION);
-
-  form.set_fields({CreateTestFormField(
-      "Email", "email", "", FormControlType::kInputEmail, "webauthn")});
   return form;
 }
 
 inline void check_and_set(
     FormGroup* profile,
     FieldType type,
-    const char* value,
+    std::string_view value,
     VerificationStatus status = VerificationStatus::kObserved) {
-  if (value) {
+  if (!value.empty()) {
     profile->SetRawInfoWithVerificationStatus(type, base::UTF8ToUTF16(value),
                                               status);
   }
@@ -253,48 +251,101 @@ inline void check_and_set(
 
 AutofillProfile GetFullValidProfileForCanada() {
   AutofillProfile profile(AddressCountryCode("CA"));
-  SetProfileInfo(&profile, "Alice", "", "Wonderland", "alice@wonderland.ca",
-                 "Fiction", "666 Notre-Dame Ouest", "Apt 8", "Montreal", "QC",
-                 "H3B 2T9", "CA", "15141112233");
+  SetProfileInfo(&profile, SetProfileInfoOptionsBuilder()
+                               .with_first_name("Alice")
+                               .with_last_name("Wonderland")
+                               .with_email("alice@wonderland.ca")
+                               .with_company("Fiction")
+                               .with_address1("666 Notre-Dame Ouest")
+                               .with_address2("Apt 8")
+                               .with_city("Montreal")
+                               .with_state("QC")
+                               .with_zipcode("H3B 2T9")
+                               .with_country("CA")
+                               .with_phone("15141112233")
+                               .Build());
   return profile;
 }
 
 AutofillProfile GetFullProfile(AddressCountryCode country_code) {
   AutofillProfile profile(country_code);
-  SetProfileInfo(&profile, "John", "H.", "Doe", "johndoe@hades.com",
-                 "Underworld", "666 Erebus St.", "Apt 8", "Elysium", "CA",
-                 "91111", country_code->c_str(), "16502111111");
+  SetProfileInfo(&profile, SetProfileInfoOptionsBuilder()
+                               .with_first_name("John")
+                               .with_middle_name("H.")
+                               .with_last_name("Doe")
+                               .with_email("johndoe@hades.com")
+                               .with_company("Underworld")
+                               .with_address1("666 Erebus St.")
+                               .with_address2("Apt 8")
+                               .with_city("Elysium")
+                               .with_state("CA")
+                               .with_zipcode("91111")
+                               .with_country(country_code->c_str())
+                               .with_phone("16502111111")
+                               .Build());
   return profile;
 }
 
 AutofillProfile GetFullProfile2(AddressCountryCode country_code) {
   AutofillProfile profile(country_code);
-  SetProfileInfo(&profile, "Jane", "A.", "Smith", "jsmith@example.com", "ACME",
-                 "123 Main Street", "Unit 1", "Greensdale", "MI", "48838",
-                 country_code->c_str(), "13105557889");
+  SetProfileInfo(&profile, SetProfileInfoOptionsBuilder()
+                               .with_first_name("Jane")
+                               .with_middle_name("A.")
+                               .with_last_name("Smith")
+                               .with_email("jsmith@example.com")
+                               .with_company("ACME")
+                               .with_address1("123 Main Street")
+                               .with_address2("Unit 1")
+                               .with_city("Greensdale")
+                               .with_state("MI")
+                               .with_zipcode("48838")
+                               .with_country(country_code->c_str())
+                               .with_phone("13105557889")
+                               .Build());
   return profile;
 }
 
 AutofillProfile GetFullCanadianProfile() {
   AutofillProfile profile(AddressCountryCode("CA"));
-  SetProfileInfo(&profile, "Wayne", "", "Gretzky", "wayne@hockey.com", "NHL",
-                 "123 Hockey rd.", "Apt 8", "Moncton", "New Brunswick",
-                 "E1A 0A6", "CA", "15068531212");
+  SetProfileInfo(&profile, SetProfileInfoOptionsBuilder()
+                               .with_first_name("Wayne")
+                               .with_last_name("Gretzky")
+                               .with_email("wayne@hockey.com")
+                               .with_company("NHL")
+                               .with_address1("123 Hockey rd.")
+                               .with_address2("Apt 8")
+                               .with_city("Moncton")
+                               .with_state("New Brunswick")
+                               .with_zipcode("E1A 0A6")
+                               .with_country("CA")
+                               .with_phone("15068531212")
+                               .Build());
   return profile;
 }
 
 AutofillProfile GetIncompleteProfile1() {
   AutofillProfile profile(AddressCountryCode("US"));
-  SetProfileInfo(&profile, "John", "H.", "Doe", "jsmith@example.com", "ACME",
-                 "123 Main Street", "Unit 1", "Greensdale", "MI", "48838", "US",
-                 "");
+  SetProfileInfo(&profile, SetProfileInfoOptionsBuilder()
+                               .with_first_name("John")
+                               .with_middle_name("H.")
+                               .with_last_name("Doe")
+                               .with_email("jsmith@example.com")
+                               .with_company("ACME")
+                               .with_address1("123 Main Street")
+                               .with_address2("Unit 1")
+                               .with_city("Greensdale")
+                               .with_state("MI")
+                               .with_zipcode("48838")
+                               .with_country("US")
+                               .Build());
   return profile;
 }
 
 AutofillProfile GetIncompleteProfile2() {
   AutofillProfile profile(i18n_model_definition::kLegacyHierarchyCountryCode);
-  SetProfileInfo(&profile, "", "", "", "jsmith@example.com", "", "", "", "", "",
-                 "", "", "");
+  SetProfileInfo(
+      &profile,
+      SetProfileInfoOptionsBuilder().with_email("jsmith@example.com").Build());
   return profile;
 }
 
@@ -310,14 +361,14 @@ void SetProfileCategory(
     case autofill_metrics::AutofillProfileRecordTypeCategory::
         kAccountNonChrome: {
       test_api(profile).set_record_type(AutofillProfile::RecordType::kAccount);
-      // Any value that is not kInitialCreatorOrModifierChrome works.
-      const int kInitialCreatorOrModifierNonChrome =
-          AutofillProfile::kInitialCreatorOrModifierChrome + 1;
+      // Any value that is not kInitialCreatorChrome works.
+      const int kInitialCreatorNonChrome =
+          AutofillProfile::kInitialCreatorChrome + 1;
       profile.set_initial_creator_id(
           category == autofill_metrics::AutofillProfileRecordTypeCategory::
                           kAccountChrome
-              ? AutofillProfile::kInitialCreatorOrModifierChrome
-              : kInitialCreatorOrModifierNonChrome);
+              ? AutofillProfile::kInitialCreatorChrome
+              : kInitialCreatorNonChrome);
       break;
     }
     case autofill_metrics::AutofillProfileRecordTypeCategory::kAccountHome:
@@ -381,46 +432,30 @@ Iban GetServerIban3() {
 }
 
 CreditCard GetCreditCard() {
-  CreditCard credit_card(base::Uuid::GenerateRandomV4().AsLowercaseString(),
-                         kEmptyOrigin);
+  CreditCard credit_card(base::Uuid::GenerateRandomV4().AsLowercaseString());
   SetCreditCardInfo(&credit_card, "Test User", "4111111111111111" /* Visa */,
                     NextMonth().c_str(), NextYear().c_str(), "1");
   return credit_card;
 }
 
 CreditCard GetCreditCard2() {
-  CreditCard credit_card(base::Uuid::GenerateRandomV4().AsLowercaseString(),
-                         kEmptyOrigin);
+  CreditCard credit_card(base::Uuid::GenerateRandomV4().AsLowercaseString());
   SetCreditCardInfo(&credit_card, "Someone Else", "378282246310005" /* AmEx */,
                     NextMonth().c_str(), TenYearsFromNow().c_str(), "1");
   return credit_card;
 }
 
 CreditCard GetExpiredCreditCard() {
-  CreditCard credit_card(base::Uuid::GenerateRandomV4().AsLowercaseString(),
-                         kEmptyOrigin);
+  CreditCard credit_card(base::Uuid::GenerateRandomV4().AsLowercaseString());
   SetCreditCardInfo(&credit_card, "Test User", "4111111111111111" /* Visa */,
                     NextMonth().c_str(), LastYear().c_str(), "1");
   return credit_card;
 }
 
 CreditCard GetIncompleteCreditCard() {
-  CreditCard credit_card(base::Uuid::GenerateRandomV4().AsLowercaseString(),
-                         kEmptyOrigin);
+  CreditCard credit_card(base::Uuid::GenerateRandomV4().AsLowercaseString());
   SetCreditCardInfo(&credit_card, "", "4111111111111111" /* Visa */,
                     NextMonth().c_str(), NextYear().c_str(), "1");
-  return credit_card;
-}
-
-CreditCard GetVerifiedCreditCard() {
-  CreditCard credit_card(GetCreditCard());
-  credit_card.set_origin(kSettingsOrigin);
-  return credit_card;
-}
-
-CreditCard GetVerifiedCreditCard2() {
-  CreditCard credit_card(GetCreditCard2());
-  credit_card.set_origin(kSettingsOrigin);
   return credit_card;
 }
 
@@ -539,18 +574,17 @@ CreditCard GetRandomCreditCard(CreditCard::RecordType record_type) {
 
   CreditCard credit_card =
       (record_type == CreditCard::RecordType::kLocalCard)
-          ? CreditCard(base::Uuid::GenerateRandomV4().AsLowercaseString(),
-                       kEmptyOrigin)
+          ? CreditCard(base::Uuid::GenerateRandomV4().AsLowercaseString())
           : CreditCard(
                 record_type,
                 base::Uuid::GenerateRandomV4().AsLowercaseString().substr(24));
   test::SetCreditCardInfo(
       &credit_card, "Justin Thyme", GetRandomCardNumber().c_str(),
-      base::StringPrintf("%d", base::RandInt(1, 12)).c_str(),
-      base::StringPrintf("%d", now.year + base::RandInt(1, 4)).c_str(), "1");
+      base::StringPrintf("%d", base::RandIntInclusive(1, 12)).c_str(),
+      base::StringPrintf("%d", now.year + base::RandIntInclusive(1, 4)).c_str(),
+      "1");
   if (record_type == CreditCard::RecordType::kMaskedServerCard) {
-    credit_card.SetNetworkForMaskedCard(
-        kNetworks[base::RandInt(0, kNetworks.size() - 1)]);
+    credit_card.SetNetworkForMaskedCard(base::RandomChoice(kNetworks));
   }
 
   return credit_card;
@@ -759,17 +793,18 @@ base::flat_set<url::Origin> GetOriginsForMerchantBenefit() {
           url::Origin::Create(GURL("http://www.example3.com"))};
 }
 
-void HideAccountNameEmailProfile(PrefService* pref_service, AccountInfo info) {
+void HideAccountNameEmailProfile(PrefService* pref_service,
+                                 const AccountInfo& info) {
   // Sets the `kAutofillNameAndEmailProfileNotSelectedCounter` and
   // `kAutofillNameAndEmailProfileSignature` prefs in `pref_service`, such that
   // the kAccountNameEmail profile that matches `info` will be removed.
   pref_service->SetInteger(
       prefs::kAutofillNameAndEmailProfileNotSelectedCounter,
-      features::kAutofillNameAndEmailProfileNotSelectedThreshold.Get() + 1);
+      AccountNameEmailStore::kNotSelectedThreshold + 1);
   pref_service->SetString(
       prefs::kAutofillNameAndEmailProfileSignature,
-      base::NumberToString(base::PersistentHash(
-          base::StrCat({info.full_name, "|", info.email}))));
+      base::NumberToString(base::PersistentHash(base::StrCat(
+          {info.GetFullName().value_or(""), "|", info.GetEmail()}))));
 }
 
 void SetUpCreditCardAndBenefitData(
@@ -806,115 +841,137 @@ void SetUpCreditCardAndBenefitData(
   personal_data.test_payments_data_manager().AddServerCreditCard(card);
 }
 
-void SetProfileInfo(AutofillProfile* profile,
-                    const char* first_name,
-                    const char* middle_name,
-                    const char* last_name,
-                    const char* email,
-                    const char* company,
-                    const char* address1,
-                    const char* address2,
-                    const char* dependent_locality,
-                    const char* city,
-                    const char* state,
-                    const char* zipcode,
-                    const char* country,
-                    const char* phone,
-                    bool finalize,
-                    VerificationStatus status) {
-  check_and_set(profile, NAME_FIRST, first_name, status);
-  check_and_set(profile, NAME_MIDDLE, middle_name, status);
-  check_and_set(profile, NAME_LAST, last_name, status);
-  check_and_set(profile, EMAIL_ADDRESS, email, status);
-  check_and_set(profile, COMPANY_NAME, company, status);
-  check_and_set(profile, ADDRESS_HOME_LINE1, address1, status);
-  check_and_set(profile, ADDRESS_HOME_LINE2, address2, status);
-  check_and_set(profile, ADDRESS_HOME_DEPENDENT_LOCALITY, dependent_locality,
-                status);
-  check_and_set(profile, ADDRESS_HOME_CITY, city, status);
-  check_and_set(profile, ADDRESS_HOME_STATE, state, status);
-  check_and_set(profile, ADDRESS_HOME_ZIP, zipcode, status);
-  check_and_set(profile, ADDRESS_HOME_COUNTRY, country, status);
-  check_and_set(profile, PHONE_HOME_WHOLE_NUMBER, phone, status);
-  if (finalize) {
-    profile->FinalizeAfterImport();
-  }
+SetProfileInfoOptions::SetProfileInfoOptions() = default;
+SetProfileInfoOptions::SetProfileInfoOptions(const SetProfileInfoOptions&) =
+    default;
+SetProfileInfoOptions::SetProfileInfoOptions(SetProfileInfoOptions&&) = default;
+SetProfileInfoOptions& SetProfileInfoOptions::operator=(
+    const SetProfileInfoOptions&) = default;
+SetProfileInfoOptions& SetProfileInfoOptions::operator=(
+    SetProfileInfoOptions&&) = default;
+SetProfileInfoOptions::~SetProfileInfoOptions() = default;
+
+SetProfileInfoOptionsBuilder::SetProfileInfoOptionsBuilder() = default;
+SetProfileInfoOptionsBuilder::SetProfileInfoOptionsBuilder(
+    const SetProfileInfoOptionsBuilder&) = default;
+SetProfileInfoOptionsBuilder& SetProfileInfoOptionsBuilder::operator=(
+    const SetProfileInfoOptionsBuilder&) = default;
+SetProfileInfoOptionsBuilder::~SetProfileInfoOptionsBuilder() = default;
+
+SetProfileInfoOptionsBuilder& SetProfileInfoOptionsBuilder::with_guid(
+    std::string_view guid) {
+  options_.guid = guid;
+  return *this;
+}
+SetProfileInfoOptionsBuilder& SetProfileInfoOptionsBuilder::with_first_name(
+    std::string_view first_name) {
+  options_.first_name = first_name;
+  return *this;
+}
+SetProfileInfoOptionsBuilder& SetProfileInfoOptionsBuilder::with_middle_name(
+    std::string_view middle_name) {
+  options_.middle_name = middle_name;
+  return *this;
+}
+SetProfileInfoOptionsBuilder& SetProfileInfoOptionsBuilder::with_last_name(
+    std::string_view last_name) {
+  options_.last_name = last_name;
+  return *this;
+}
+SetProfileInfoOptionsBuilder& SetProfileInfoOptionsBuilder::with_full_name(
+    std::string_view full_name) {
+  options_.full_name = full_name;
+  return *this;
+}
+SetProfileInfoOptionsBuilder& SetProfileInfoOptionsBuilder::with_email(
+    std::string_view email) {
+  options_.email = email;
+  return *this;
+}
+SetProfileInfoOptionsBuilder& SetProfileInfoOptionsBuilder::with_company(
+    std::string_view company) {
+  options_.company = company;
+  return *this;
+}
+SetProfileInfoOptionsBuilder& SetProfileInfoOptionsBuilder::with_address1(
+    std::string_view address1) {
+  options_.address1 = address1;
+  return *this;
+}
+SetProfileInfoOptionsBuilder& SetProfileInfoOptionsBuilder::with_address2(
+    std::string_view address2) {
+  options_.address2 = address2;
+  return *this;
+}
+SetProfileInfoOptionsBuilder&
+SetProfileInfoOptionsBuilder::with_dependent_locality(
+    std::string_view dependent_locality) {
+  options_.dependent_locality = dependent_locality;
+  return *this;
+}
+SetProfileInfoOptionsBuilder& SetProfileInfoOptionsBuilder::with_city(
+    std::string_view city) {
+  options_.city = city;
+  return *this;
+}
+SetProfileInfoOptionsBuilder& SetProfileInfoOptionsBuilder::with_state(
+    std::string_view state) {
+  options_.state = state;
+  return *this;
+}
+SetProfileInfoOptionsBuilder& SetProfileInfoOptionsBuilder::with_zipcode(
+    std::string_view zipcode) {
+  options_.zipcode = zipcode;
+  return *this;
+}
+SetProfileInfoOptionsBuilder& SetProfileInfoOptionsBuilder::with_country(
+    std::string_view country) {
+  options_.country = country;
+  return *this;
+}
+SetProfileInfoOptionsBuilder& SetProfileInfoOptionsBuilder::with_phone(
+    std::string_view phone) {
+  options_.phone = phone;
+  return *this;
+}
+SetProfileInfoOptionsBuilder& SetProfileInfoOptionsBuilder::with_status(
+    VerificationStatus status) {
+  options_.status = status;
+  return *this;
+}
+
+SetProfileInfoOptions SetProfileInfoOptionsBuilder::Build() {
+  return std::move(options_);
 }
 
 void SetProfileInfo(AutofillProfile* profile,
-                    const char* first_name,
-                    const char* middle_name,
-                    const char* last_name,
-                    const char* email,
-                    const char* company,
-                    const char* address1,
-                    const char* address2,
-                    const char* city,
-                    const char* state,
-                    const char* zipcode,
-                    const char* country,
-                    const char* phone,
-                    bool finalize,
-                    VerificationStatus status) {
+                    SetProfileInfoOptions options,
+                    bool finalize) {
+  if (!options.guid.empty()) {
+    profile->set_guid(options.guid);
+  }
   // Set the country first to ensure that the proper address model is used.
-  check_and_set(profile, ADDRESS_HOME_COUNTRY, country, status);
+  check_and_set(profile, ADDRESS_HOME_COUNTRY, options.country, options.status);
 
-  check_and_set(profile, NAME_FIRST, first_name, status);
-  check_and_set(profile, NAME_MIDDLE, middle_name, status);
-  check_and_set(profile, NAME_LAST, last_name, status);
-  check_and_set(profile, EMAIL_ADDRESS, email, status);
-  check_and_set(profile, COMPANY_NAME, company, status);
-  check_and_set(profile, ADDRESS_HOME_LINE1, address1, status);
-  check_and_set(profile, ADDRESS_HOME_LINE2, address2, status);
-  check_and_set(profile, ADDRESS_HOME_CITY, city, status);
-  check_and_set(profile, ADDRESS_HOME_STATE, state, status);
-  check_and_set(profile, ADDRESS_HOME_ZIP, zipcode, status);
-  check_and_set(profile, PHONE_HOME_WHOLE_NUMBER, phone, status);
-  if (finalize) {
-    profile->FinalizeAfterImport();
-  }
-}
-
-void SetProfileInfo(AutofillProfile* profile,
-                    const char* first_name,
-                    const char* middle_name,
-                    const char* last_name,
-                    const char* country,
-                    bool finalize,
-                    VerificationStatus status) {
-  // Set the country first to ensure that the proper address model is used.
-  check_and_set(profile, ADDRESS_HOME_COUNTRY, country, status);
-  check_and_set(profile, NAME_FIRST, first_name, status);
-  check_and_set(profile, NAME_MIDDLE, middle_name, status);
-  check_and_set(profile, NAME_LAST, last_name, status);
+  check_and_set(profile, NAME_FIRST, options.first_name, options.status);
+  check_and_set(profile, NAME_MIDDLE, options.middle_name, options.status);
+  check_and_set(profile, NAME_LAST, options.last_name, options.status);
+  check_and_set(profile, NAME_FULL, options.full_name, options.status);
+  check_and_set(profile, EMAIL_ADDRESS, options.email, options.status);
+  check_and_set(profile, COMPANY_NAME, options.company, options.status);
+  check_and_set(profile, ADDRESS_HOME_LINE1, options.address1, options.status);
+  check_and_set(profile, ADDRESS_HOME_LINE2, options.address2, options.status);
+  check_and_set(profile, ADDRESS_HOME_DEPENDENT_LOCALITY,
+                options.dependent_locality, options.status);
+  check_and_set(profile, ADDRESS_HOME_CITY, options.city, options.status);
+  check_and_set(profile, ADDRESS_HOME_STATE, options.state, options.status);
+  check_and_set(profile, ADDRESS_HOME_ZIP, options.zipcode, options.status);
+  check_and_set(profile, PHONE_HOME_WHOLE_NUMBER, options.phone,
+                options.status);
 
   if (finalize) {
     profile->FinalizeAfterImport();
   }
-}
-
-void SetProfileInfoWithGuid(AutofillProfile* profile,
-                            const char* guid,
-                            const char* first_name,
-                            const char* middle_name,
-                            const char* last_name,
-                            const char* email,
-                            const char* company,
-                            const char* address1,
-                            const char* address2,
-                            const char* city,
-                            const char* state,
-                            const char* zipcode,
-                            const char* country,
-                            const char* phone,
-                            bool finalize,
-                            VerificationStatus status) {
-  if (guid) {
-    profile->set_guid(guid);
-  }
-  SetProfileInfo(profile, first_name, middle_name, last_name, email, company,
-                 address1, address2, city, state, zipcode, country, phone,
-                 finalize, status);
 }
 
 void SetCreditCardInfo(CreditCard* credit_card,
@@ -924,10 +981,14 @@ void SetCreditCardInfo(CreditCard* credit_card,
                        const char* expiration_year,
                        const std::string& billing_address_id,
                        const std::u16string& cvc) {
-  check_and_set(credit_card, CREDIT_CARD_NAME_FULL, name_on_card);
-  check_and_set(credit_card, CREDIT_CARD_NUMBER, card_number);
-  check_and_set(credit_card, CREDIT_CARD_EXP_MONTH, expiration_month);
-  check_and_set(credit_card, CREDIT_CARD_EXP_4_DIGIT_YEAR, expiration_year);
+  check_and_set(credit_card, CREDIT_CARD_NAME_FULL,
+                name_on_card ? name_on_card : "");
+  check_and_set(credit_card, CREDIT_CARD_NUMBER,
+                card_number ? card_number : "");
+  check_and_set(credit_card, CREDIT_CARD_EXP_MONTH,
+                expiration_month ? expiration_month : "");
+  check_and_set(credit_card, CREDIT_CARD_EXP_4_DIGIT_YEAR,
+                expiration_year ? expiration_year : "");
   credit_card->set_cvc(cvc);
   credit_card->set_billing_address_id(billing_address_id);
 }
@@ -952,343 +1013,6 @@ void SetServerCreditCards(PaymentsAutofillTable* table,
                          /*last_updated_timestamp=*/AutofillClock::Now()});
   }
   table->SetServerCreditCards(cards);
-}
-
-EntityInstance GetPassportEntityInstance(PassportEntityOptions options) {
-  using enum AttributeTypeName;
-  std::vector<AttributeInstance> attributes;
-  if (options.number) {
-    attributes.emplace_back(AttributeType(kPassportNumber));
-    attributes.back().SetInfo(
-        PASSPORT_NUMBER, options.number, std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-  }
-  if (options.name) {
-    attributes.emplace_back(AttributeType(kPassportName));
-    attributes.back().SetInfo(
-        NAME_FULL, options.name, std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-    attributes.back().FinalizeInfo();
-  }
-  if (options.country) {
-    attributes.emplace_back(AttributeType(kPassportCountry));
-    attributes.back().SetInfo(PASSPORT_ISSUING_COUNTRY, options.country,
-                              std::string(options.app_locale),
-                              /*format_string=*/std::nullopt,
-                              VerificationStatus::kNoStatus);
-  }
-  if (options.expiry_date) {
-    attributes.emplace_back(AttributeType(kPassportExpirationDate));
-    attributes.back().SetInfo(
-        PASSPORT_EXPIRATION_DATE, options.expiry_date,
-        std::string(options.app_locale),
-        AutofillFormatString(u"YYYY-MM-DD", FormatString_Type_DATE),
-        VerificationStatus::kNoStatus);
-  }
-  if (options.issue_date) {
-    attributes.emplace_back(AttributeType(kPassportIssueDate));
-    attributes.back().SetInfo(
-        PASSPORT_ISSUE_DATE, options.issue_date,
-        std::string(options.app_locale),
-        AutofillFormatString(u"YYYY-MM-DD", FormatString_Type_DATE),
-        VerificationStatus::kNoStatus);
-  }
-  return EntityInstance(
-      EntityType(EntityTypeName::kPassport), std::move(attributes),
-      EntityInstance::EntityId(base::Uuid::ParseLowercase(options.guid)),
-      std::string(options.nickname),
-      base::Time::FromTimeT(options.date_modified.ToTimeT()), options.use_count,
-      base::Time::FromTimeT(options.use_date.ToTimeT()), options.record_type,
-      options.are_attributes_read_only, /*frecency_override=*/"");
-}
-
-EntityInstance GetPassportEntityInstanceWithRandomGuid(
-    PassportEntityOptions options) {
-  base::Uuid guid = base::Uuid::GenerateRandomV4();
-  options.guid = guid.AsLowercaseString();
-  return GetPassportEntityInstance(options);
-}
-
-EntityInstance GetDriversLicenseEntityInstance(DriversLicenseOptions options) {
-  using enum AttributeTypeName;
-  std::vector<AttributeInstance> attributes;
-  if (options.name) {
-    attributes.emplace_back(AttributeType(kDriversLicenseName));
-    attributes.back().SetInfo(
-        NAME_FULL, options.name, std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-    attributes.back().FinalizeInfo();
-  }
-  if (options.region) {
-    attributes.emplace_back(AttributeType(kDriversLicenseState));
-    attributes.back().SetInfo(
-        DRIVERS_LICENSE_REGION, options.region, std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-  }
-  if (options.number) {
-    attributes.emplace_back(AttributeType(kDriversLicenseNumber));
-    attributes.back().SetInfo(
-        DRIVERS_LICENSE_NUMBER, options.number, std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-  }
-  if (options.expiration_date) {
-    attributes.emplace_back(AttributeType(kDriversLicenseExpirationDate));
-    attributes.back().SetInfo(
-        DRIVERS_LICENSE_EXPIRATION_DATE, options.expiration_date,
-        std::string(options.app_locale),
-        AutofillFormatString(u"YYYY-MM-DD", FormatString_Type_DATE),
-        VerificationStatus::kNoStatus);
-  }
-  if (options.issue_date) {
-    attributes.emplace_back(AttributeType(kDriversLicenseIssueDate));
-    attributes.back().SetInfo(
-        DRIVERS_LICENSE_ISSUE_DATE, options.issue_date,
-        std::string(options.app_locale),
-        AutofillFormatString(u"YYYY-MM-DD", FormatString_Type_DATE),
-        VerificationStatus::kNoStatus);
-  }
-  return EntityInstance(
-      EntityType(EntityTypeName::kDriversLicense), std::move(attributes),
-      EntityInstance::EntityId(base::Uuid::ParseLowercase(options.guid)),
-      std::string(options.nickname),
-      base::Time::FromTimeT(options.date_modified.ToTimeT()), options.use_count,
-      base::Time::FromTimeT(options.use_date.ToTimeT()), options.record_type,
-      options.are_attributes_read_only, /*frecency_override=*/"");
-}
-
-EntityInstance GetDriversLicenseEntityInstanceWithRandomGuid(
-    DriversLicenseOptions options) {
-  base::Uuid guid = base::Uuid::GenerateRandomV4();
-  options.guid = guid.AsLowercaseString();
-  return GetDriversLicenseEntityInstance(options);
-}
-
-EntityInstance GetKnownTravelerNumberInstance(
-    KnownTravelerNumberOptions options) {
-  using enum AttributeTypeName;
-  std::vector<AttributeInstance> attributes;
-  if (options.number) {
-    attributes.emplace_back(AttributeType(kKnownTravelerNumberNumber));
-    attributes.back().SetInfo(
-        KNOWN_TRAVELER_NUMBER, options.number, std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-  }
-  if (options.expiration_date) {
-    attributes.emplace_back(AttributeType(kKnownTravelerNumberNumber));
-    attributes.back().SetInfo(
-        DRIVERS_LICENSE_EXPIRATION_DATE, options.expiration_date,
-        std::string(options.app_locale),
-        AutofillFormatString(u"YYYY-MM-DD", FormatString_Type_DATE),
-        VerificationStatus::kNoStatus);
-  }
-  return EntityInstance(
-      EntityType(EntityTypeName::kKnownTravelerNumber), std::move(attributes),
-      EntityInstance::EntityId(base::Uuid::ParseLowercase(options.guid)),
-      std::string(options.nickname), base::Time::FromTimeT(kJune2017.ToTimeT()),
-      options.use_count, base::Time::FromTimeT(options.use_date.ToTimeT()),
-      options.record_type, options.are_attributes_read_only,
-      /*frecency_override=*/"");
-}
-
-EntityInstance GetRedressNumberEntityInstance(RedressNumberOptions options) {
-  using enum AttributeTypeName;
-  std::vector<AttributeInstance> attributes;
-  if (options.number) {
-    attributes.emplace_back(AttributeType(kRedressNumberNumber));
-    attributes.back().SetInfo(
-        REDRESS_NUMBER, options.number, std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-  }
-
-  return EntityInstance(
-      EntityType(EntityTypeName::kRedressNumber), std::move(attributes),
-      EntityInstance::EntityId(base::Uuid::ParseLowercase(options.guid)),
-      std::string(options.nickname), base::Time::FromTimeT(kJune2017.ToTimeT()),
-      options.use_count, base::Time::FromTimeT(options.use_date.ToTimeT()),
-      options.record_type, options.are_attributes_read_only,
-      /*frecency_override=*/"");
-}
-
-EntityInstance GetVehicleEntityInstance(VehicleOptions options) {
-  using enum AttributeTypeName;
-  std::vector<AttributeInstance> attributes;
-  if (options.name) {
-    attributes.emplace_back(AttributeType(kVehicleOwner));
-    attributes.back().SetInfo(
-        NAME_FULL, options.name, std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-    attributes.back().FinalizeInfo();
-  }
-  if (options.plate) {
-    attributes.emplace_back(AttributeType(kVehiclePlateNumber));
-    attributes.back().SetInfo(
-        VEHICLE_LICENSE_PLATE, options.plate, std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-  }
-  if (options.number) {
-    attributes.emplace_back(AttributeType(kVehicleVin));
-    attributes.back().SetInfo(
-        VEHICLE_VIN, options.number, std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-  }
-  if (options.make) {
-    attributes.emplace_back(AttributeType(kVehicleMake));
-    attributes.back().SetInfo(
-        VEHICLE_MAKE, options.make, std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-  }
-  if (options.model) {
-    attributes.emplace_back(AttributeType(kVehicleModel));
-    attributes.back().SetInfo(
-        VEHICLE_MODEL, options.model, std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-  }
-  if (options.year) {
-    attributes.emplace_back(AttributeType(kVehicleYear));
-    attributes.back().SetInfo(
-        VEHICLE_YEAR, options.year, std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-  }
-  if (options.state) {
-    attributes.emplace_back(AttributeType(kVehiclePlateState));
-    attributes.back().SetInfo(
-        VEHICLE_PLATE_STATE, options.state, std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-  }
-  return EntityInstance(
-      EntityType(EntityTypeName::kVehicle), std::move(attributes),
-      EntityInstance::EntityId(base::Uuid::ParseLowercase(options.guid)),
-      std::string(options.nickname),
-      base::Time::FromTimeT(options.date_modified.ToTimeT()), options.use_count,
-      base::Time::FromTimeT(options.use_date.ToTimeT()), options.record_type,
-      options.are_attributes_read_only, /*frecency_override=*/"");
-}
-
-EntityInstance GetVehicleEntityInstanceWithRandomGuid(VehicleOptions options) {
-  base::Uuid guid = base::Uuid::GenerateRandomV4();
-  options.guid = guid.AsLowercaseString();
-  return GetVehicleEntityInstance(options);
-}
-
-EntityInstance GetNationalIdCardEntityInstance(NationalIdCardOptions options) {
-  using enum AttributeTypeName;
-  std::vector<AttributeInstance> attributes;
-  if (options.number) {
-    attributes.emplace_back(AttributeType(kNationalIdCardNumber));
-    attributes.back().SetInfo(NATIONAL_ID_CARD_NUMBER, options.number,
-                              std::string(options.app_locale),
-                              /*format_string=*/std::nullopt,
-                              VerificationStatus::kNoStatus);
-  }
-  if (options.country) {
-    attributes.emplace_back(AttributeType(kNationalIdCardCountry));
-    attributes.back().SetInfo(NATIONAL_ID_CARD_ISSUING_COUNTRY, options.country,
-                              std::string(options.app_locale),
-                              /*format_string=*/std::nullopt,
-                              VerificationStatus::kNoStatus);
-  }
-  if (options.issue_date) {
-    attributes.emplace_back(AttributeType(kNationalIdCardIssueDate));
-    attributes.back().SetInfo(NATIONAL_ID_CARD_ISSUE_DATE, options.issue_date,
-                              std::string(options.app_locale),
-                              /*format_string=*/std::nullopt,
-                              VerificationStatus::kNoStatus);
-  }
-  if (options.expiry_date) {
-    attributes.emplace_back(AttributeType(kNationalIdCardExpirationDate));
-    attributes.back().SetInfo(
-        NATIONAL_ID_CARD_EXPIRATION_DATE, options.expiry_date,
-        std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-  }
-  return EntityInstance(
-      EntityType(EntityTypeName::kNationalIdCard), std::move(attributes),
-      EntityInstance::EntityId(base::Uuid::ParseLowercase(options.guid)),
-      std::string(options.nickname), base::Time::FromTimeT(kJune2017.ToTimeT()),
-      options.use_count, base::Time::FromTimeT(options.use_date.ToTimeT()),
-      options.record_type, options.are_attributes_read_only,
-      /*frecency_override=*/"");
-}
-
-EntityInstance GetFlightReservationEntityInstance(
-    FlightReservationOptions options) {
-  using enum AttributeTypeName;
-  std::vector<AttributeInstance> attributes;
-  if (options.name) {
-    attributes.emplace_back(AttributeType(kFlightReservationPassengerName));
-    attributes.back().SetInfo(
-        NAME_FULL, options.name, std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-    attributes.back().FinalizeInfo();
-  }
-  if (options.flight_number) {
-    attributes.emplace_back(AttributeType(kFlightReservationFlightNumber));
-    attributes.back().SetInfo(
-        FLIGHT_RESERVATION_FLIGHT_NUMBER, options.flight_number,
-        std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-  }
-  if (options.ticket_number) {
-    attributes.emplace_back(AttributeType(kFlightReservationTicketNumber));
-    attributes.back().SetInfo(
-        FLIGHT_RESERVATION_TICKET_NUMBER, options.ticket_number,
-        std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-  }
-  if (options.confirmation_code) {
-    attributes.emplace_back(AttributeType(kFlightReservationConfirmationCode));
-    attributes.back().SetInfo(
-        FLIGHT_RESERVATION_CONFIRMATION_CODE, options.confirmation_code,
-        std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-  }
-  if (options.departure_airport) {
-    attributes.emplace_back(AttributeType(kFlightReservationDepartureAirport));
-    attributes.back().SetInfo(
-        FLIGHT_RESERVATION_DEPARTURE_AIRPORT, options.departure_airport,
-        std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-  }
-  if (options.arrival_airport) {
-    attributes.emplace_back(AttributeType(kFlightReservationArrivalAirport));
-    attributes.back().SetInfo(
-        FLIGHT_RESERVATION_ARRIVAL_AIRPORT, options.arrival_airport,
-        std::string(options.app_locale),
-        /*format_string=*/std::nullopt, VerificationStatus::kNoStatus);
-  }
-
-  std::string frecency_override;
-  if (options.departure_time) {
-    frecency_override = base::TimeFormatAsIso8601(*options.departure_time);
-
-    attributes.emplace_back(AttributeType(kFlightReservationDepartureDate));
-    // The departure date must be stored in the departure airport's time zone.
-    std::string offsetted_departure_time = base::TimeFormatAsIso8601(
-        *options.departure_time + options.departure_time_zone_offset);
-    std::string date = offsetted_departure_time.substr(
-        0, offsetted_departure_time.find_first_of('T'));
-    attributes.back().SetInfo(
-        FLIGHT_RESERVATION_DEPARTURE_DATE, base::UTF8ToUTF16(date),
-        std::string(options.app_locale),
-        /*format_string=*/
-        AutofillFormatString(u"YYYY-MM-DD", FormatString_Type_DATE),
-        VerificationStatus::kNoStatus);
-  }
-
-  return EntityInstance(
-      EntityType(EntityTypeName::kFlightReservation), std::move(attributes),
-      EntityInstance::EntityId(base::Uuid::ParseLowercase(options.guid)),
-      std::string(options.nickname),
-      base::Time::FromTimeT(options.date_modified.ToTimeT()), options.use_count,
-      base::Time::FromTimeT(options.use_date.ToTimeT()), options.record_type,
-      options.are_attributes_read_only, frecency_override);
-}
-
-EntityInstance GetFlightReservationEntityInstanceWithRandomGuid(
-    FlightReservationOptions options) {
-  base::Uuid guid = base::Uuid::GenerateRandomV4();
-  options.guid = guid.AsLowercaseString();
-  return GetFlightReservationEntityInstance(options);
 }
 
 void InitializePossibleTypes(std::vector<FieldTypeSet>& possible_field_types,
@@ -1329,14 +1053,12 @@ void GenerateTestAutofillPopup(
   field.set_bounds(gfx::RectF(100.f, 100.f));
   autofill_external_delegate->OnQuery(
       form, field, /*caret_bounds=*/gfx::Rect(),
-      AutofillSuggestionTriggerSource::kFormControlElementClicked,
-      /*update_datalist=*/false);
+      AutofillSuggestionTriggerSource::kFormControlElementClicked);
 
   std::vector<Suggestion> suggestions;
   suggestions.emplace_back(u"Test suggestion",
                            SuggestionType::kAutocompleteEntry);
-  autofill_external_delegate->OnSuggestionsReturned(field.global_id(),
-                                                    suggestions);
+  autofill_external_delegate->OnSuggestionsReturned(field, suggestions);
 }
 
 std::string ObfuscatedCardDigitsAsUTF8(const std::string& str,
@@ -1378,6 +1100,12 @@ std::vector<FormSignature> GetEncodedSignatures(
       forms, [](const auto& form) { return form->form_signature(); });
 }
 
+std::vector<FormSignature> GetEncodedSignatures(
+    base::span<const FormData> forms) {
+  return base::ToVector(
+      forms, [](const auto& form) { return CalculateFormSignature(form); });
+}
+
 std::vector<FormSignature> GetEncodedAlternativeSignatures(
     const FormStructure& form) {
   return std::vector<FormSignature>{form.alternative_form_signature()};
@@ -1410,7 +1138,7 @@ FieldPrediction CreateFieldPrediction(FieldType type, bool is_override) {
     return CreateFieldPrediction(type, FieldPrediction::SOURCE_UNSPECIFIED);
   }
   return CreateFieldPrediction(
-      type, ToSafeFieldType(type, NO_SERVER_DATA) == type &&
+      type, ToSafeFieldType(type).has_value() &&
                     GroupTypeOfFieldType(type) == FieldTypeGroup::kPasswordField
                 ? FieldPrediction::SOURCE_PASSWORDS_DEFAULT
                 : FieldPrediction::SOURCE_AUTOFILL_DEFAULT);
@@ -1469,8 +1197,8 @@ Suggestion CreateAutofillSuggestion(SuggestionType type,
   suggestion.minor_texts.emplace_back(minor_text_value);
   suggestion.acceptability =
       has_deactivated_style
-          ? Suggestion::Acceptability::kUnacceptableWithDeactivatedStyle
-          : Suggestion::Acceptability::kAcceptable;
+          ? Suggestion::Acceptability::kUnselectableAndUnacceptable
+          : Suggestion::Acceptability::kSelectableAndAcceptable;
   return suggestion;
 }
 
@@ -1559,7 +1287,7 @@ sync_pb::PaymentInstrument CreatePaymentInstrumentWithLinkedBnplIssuer(
 }
 
 BnplIssuer GetTestLinkedBnplIssuer(
-    autofill::BnplIssuer::IssuerId issuer_id,
+    BnplIssuer::IssuerId issuer_id,
     DenseSet<PaymentInstrument::ActionRequired> actions_required) {
   std::vector<BnplIssuer::EligiblePriceRange> eligible_price_ranges;
   // Currency: USD, price lower bound: $50, price upper bound: $200.
@@ -1577,7 +1305,7 @@ BnplIssuer GetTestUnlinkedBnplIssuer() {
   eligible_price_ranges.emplace_back(/*currency=*/"USD",
                                      /*price_lower_bound=*/35'000'000,
                                      /*price_upper_bound=*/100'000'000);
-  return BnplIssuer(std::nullopt, autofill::BnplIssuer::IssuerId::kBnplZip,
+  return BnplIssuer(std::nullopt, BnplIssuer::IssuerId::kBnplZip,
                     std::move(eligible_price_ranges));
 }
 
@@ -1599,6 +1327,20 @@ CreatePaymentInstrumentCreationOptionWithBnplIssuer(const std::string& id) {
   return payment_instrument_creation_option;
 }
 
+sync_pb::PaymentInstrumentCreationOption
+CreatePaymentInstrumentCreationOptionWithEwallet(const std::string& id) {
+  sync_pb::PaymentInstrumentCreationOption payment_instrument_creation_option;
+  payment_instrument_creation_option.set_id(id);
+
+  sync_pb::EwalletCreationOption* ewallet_option =
+      payment_instrument_creation_option.mutable_ewallet_creation_option();
+  ewallet_option->set_issuer_id("dana");
+  ewallet_option->set_issuer_display_name("DANA");
+  ewallet_option->add_supported_payment_link_uris("payment_link_uri");
+
+  return payment_instrument_creation_option;
+}
+
 namespace {
 
 // Verifies that the histogram `histogram_name` has a single sample with the
@@ -1616,6 +1358,10 @@ void VerifySingleBooleanSampleOrEmpty(
 }
 
 }  // namespace
+
+std::string MakeGuid(size_t last_digit) {
+  return base::StringPrintf("00000000-4000-8000-0000-%012zu", last_digit);
+}
 
 void VerifySingleSubmissionKeyMetricExpectations(
     const base::HistogramTester& histogram_tester,

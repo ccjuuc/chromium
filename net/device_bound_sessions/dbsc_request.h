@@ -18,6 +18,7 @@
 #include "net/device_bound_sessions/session_access.h"
 #include "net/device_bound_sessions/session_key.h"
 #include "net/device_bound_sessions/session_usage.h"
+#include "net/url_request/device_bound_session_mode.h"
 #include "url/gurl.h"
 
 namespace net {
@@ -45,8 +46,11 @@ class NET_EXPORT DbscRequest {
   ~DbscRequest();
 
   // Accessors that do not do WebSocket normalization.
-  SessionUsage device_bound_session_usage() const;
+  const base::flat_map<device_bound_sessions::SessionKey,
+                       device_bound_sessions::SessionUsage>&
+  device_bound_session_usage() const;
   void set_device_bound_session_usage(
+      const device_bound_sessions::SessionKey& key,
       device_bound_sessions::SessionUsage usage);
   const base::flat_map<SessionKey, RefreshResult>&
   device_bound_session_deferrals() const;
@@ -56,7 +60,7 @@ class NET_EXPORT DbscRequest {
   const NetLogWithSource& net_log() const;
   const std::optional<url::Origin>& initiator() const;
   const URLRequestContext* context() const;
-  bool force_ignore_site_for_cookies() const;
+  bool ShouldForceIgnoreSiteForCookies() const;
   const SiteForCookies& site_for_cookies() const;
   const IsolationInfo& isolation_info() const;
   bool force_main_frame_for_same_site_cookies() const;
@@ -64,7 +68,7 @@ class NET_EXPORT DbscRequest {
   bool ignore_unsafe_method_for_same_site_lax() const;
   const CookieAccessResultList& maybe_sent_cookies() const;
   NetworkDelegate* network_delegate() const;
-  bool allows_device_bound_session_registration() const;
+  net::DeviceBoundSessionMode device_bound_session_mode() const;
   int load_flags() const;
 
   // Methods that need to do WebSocket normalization:

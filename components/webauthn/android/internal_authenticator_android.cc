@@ -77,7 +77,7 @@ void InternalAuthenticatorAndroid::SetPaymentOptions(
 
   std::vector<uint8_t> byte_vector =
       blink::mojom::PaymentOptions::Serialize(&payment);
-  auto byte_buffer = ScopedJavaLocalRef<jobject>::Adopt(
+  auto byte_buffer = jni_zero::AdoptRef(
       env, env->NewDirectByteBuffer(byte_vector.data(), byte_vector.size()));
   base::android::CheckException(env);
 
@@ -95,7 +95,7 @@ void InternalAuthenticatorAndroid::MakeCredential(
 
   std::vector<uint8_t> byte_vector =
       blink::mojom::PublicKeyCredentialCreationOptions::Serialize(&options);
-  auto byte_buffer = ScopedJavaLocalRef<jobject>::Adopt(
+  auto byte_buffer = jni_zero::AdoptRef(
       env, env->NewDirectByteBuffer(byte_vector.data(), byte_vector.size()));
   base::android::CheckException(env);
 
@@ -113,7 +113,7 @@ void InternalAuthenticatorAndroid::GetAssertion(
 
   std::vector<uint8_t> byte_vector =
       blink::mojom::PublicKeyCredentialRequestOptions::Serialize(&options);
-  auto byte_buffer = ScopedJavaLocalRef<jobject>::Adopt(
+  auto byte_buffer = jni_zero::AdoptRef(
       env, env->NewDirectByteBuffer(byte_vector.data(), byte_vector.size()));
   base::android::CheckException(env);
 
@@ -172,7 +172,7 @@ content::RenderFrameHost* InternalAuthenticatorAndroid::GetRenderFrameHost() {
 
 void InternalAuthenticatorAndroid::InvokeMakeCredentialResponse(
     JNIEnv* env,
-    jint status,
+    int32_t status,
     const base::android::JavaRef<jobject>& byte_buffer) {
   blink::mojom::MakeCredentialAuthenticatorResponsePtr response;
 
@@ -194,7 +194,7 @@ void InternalAuthenticatorAndroid::InvokeMakeCredentialResponse(
 
 void InternalAuthenticatorAndroid::InvokeGetAssertionResponse(
     JNIEnv* env,
-    jint status,
+    int32_t status,
     const base::android::JavaRef<jobject>& byte_buffer) {
   blink::mojom::GetAssertionAuthenticatorResponsePtr response;
 
@@ -215,10 +215,9 @@ void InternalAuthenticatorAndroid::InvokeGetAssertionResponse(
 }
 
 void InternalAuthenticatorAndroid::
-    InvokeIsUserVerifyingPlatformAuthenticatorAvailableResponse(
-        JNIEnv* env,
-        jboolean is_uvpaa) {
-  std::move(is_uvpaa_callback_).Run(static_cast<bool>(is_uvpaa));
+    InvokeIsUserVerifyingPlatformAuthenticatorAvailableResponse(JNIEnv* env,
+                                                                bool is_uvpaa) {
+  std::move(is_uvpaa_callback_).Run(is_uvpaa);
 }
 
 void InternalAuthenticatorAndroid::InvokeGetMatchingCredentialIdsResponse(

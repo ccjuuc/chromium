@@ -2,7 +2,6 @@ include_rules = [
   "+components/autofill/android/java",
   "+components/autofill/android/provider",
   "+components/background_task_scheduler/android/java",
-  "+components/component_updater/android/java",
   "+components/minidump_uploader/android/java",
   "+components/minidump_uploader/android/javatests",
   "+components/payments/content/android",
@@ -10,10 +9,10 @@ include_rules = [
   "+components/policy/android/javatests",
   "+components/safe_browsing/android/java",
   "+components/variations/android/java",
+  "+components/webauthn/android/java/src/org/chromium/components/webauthn",
 
   "-content/public/android/java",
   "+content/public/android/java/src/org/chromium/content_public",
-  "+content/public/android/java/src/org/chromium/content/browser/AttributionOsLevelManager.java",
 
   "-content/public/android/javatests",
   "+content/public/test/android/javatests",

@@ -18,9 +18,10 @@
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #import "ios/chrome/browser/policy/model/policy_earl_grey_utils.h"
 #import "ios/chrome/browser/popup_menu/public/popup_menu_constants.h"
-#import "ios/chrome/browser/settings/ui_bundled/google_services/manage_sync_settings_constants.h"
+#import "ios/chrome/browser/settings/manage_sync/public/manage_sync_settings_constants.h"
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/signin/model/constants.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/test_constants.h"
 #import "ios/chrome/grit/ios_strings.h"
@@ -90,43 +91,6 @@ enum class QuickActionsVisibility {
   kNotVisible = 2,
 };
 
-// Verifies whether the quick action row respects the expected visibility.
-void VerifyQuickActionVisibility(QuickActionsVisibility expected_visibility) {
-  auto incognitoElement = [EarlGrey
-      selectElementWithMatcher:grey_accessibilityID(
-                                   kNTPIncognitoQuickActionIdentifier)];
-  auto lensElement =
-      [EarlGrey selectElementWithMatcher:grey_accessibilityID(
-                                             kNTPLensQuickActionIdentifier)];
-  auto voiceSearchElement = [EarlGrey
-      selectElementWithMatcher:grey_accessibilityID(
-                                   kNTPVoiceSearchQuickActionIdentifier)];
-
-  switch (expected_visibility) {
-    case QuickActionsVisibility::kVisible:
-      [incognitoElement assertWithMatcher:grey_sufficientlyVisible()];
-      [lensElement assertWithMatcher:grey_sufficientlyVisible()];
-      [voiceSearchElement assertWithMatcher:grey_sufficientlyVisible()];
-      break;
-    case QuickActionsVisibility::kVisibleWithoutIncognito:
-      [incognitoElement assertWithMatcher:grey_notVisible()];
-      [lensElement assertWithMatcher:grey_sufficientlyVisible()];
-      [voiceSearchElement assertWithMatcher:grey_sufficientlyVisible()];
-      break;
-    case QuickActionsVisibility::kNotVisible:
-      [incognitoElement assertWithMatcher:grey_notVisible()];
-      [lensElement assertWithMatcher:grey_notVisible()];
-      [voiceSearchElement assertWithMatcher:grey_notVisible()];
-      break;
-  }
-}
-
-void VerifyMIAButtonVisible(bool mia_button_visible) {
-  [[EarlGrey selectElementWithMatcher:grey_accessibilityID(kNTPMIAIdentifier)]
-      assertWithMatcher:mia_button_visible ? grey_sufficientlyVisible()
-                                           : grey_notVisible()];
-}
-
 }  // namespace
 
 @interface NewTabPageTestCase : ChromeTestCase
@@ -134,44 +98,6 @@ void VerifyMIAButtonVisible(bool mia_button_visible) {
 @end
 
 @implementation NewTabPageTestCase
-
-- (AppLaunchConfiguration)appConfigurationForTestCase {
-  AppLaunchConfiguration config = [super appConfigurationForTestCase];
-
-  if ([self isRunningTest:@selector(testNewTabShowsMIAEntryPointInline)]) {
-    config.features_enabled_and_params.push_back(
-        {kNTPMIAEntrypoint,
-         {{{kNTPMIAEntrypointParam,
-            kNTPMIAEntrypointParamOmniboxContainedInline}}}});
-    config.features_disabled.push_back(omnibox::kAimServerEligibilityEnabled);
-  }
-
-  if ([self isRunningTest:@selector(testNewTabShowsMIAEntryPointInOmnibox)]) {
-    config.features_enabled_and_params.push_back(
-        {kNTPMIAEntrypoint,
-         {{{kNTPMIAEntrypointParam,
-            kNTPMIAEntrypointParamOmniboxContainedSingleButton}}}});
-    config.features_disabled.push_back(omnibox::kAimServerEligibilityEnabled);
-  }
-  if ([self isRunningTest:@selector
-            (testNewTabShowsMIAEntryPointInEnlargedFakebox)]) {
-    config.features_enabled_and_params.push_back(
-        {kNTPMIAEntrypoint,
-         {{{kNTPMIAEntrypointParam,
-            kNTPMIAEntrypointParamOmniboxContainedEnlargedFakebox}}}});
-    config.features_disabled.push_back(omnibox::kAimServerEligibilityEnabled);
-  }
-  if ([self
-          isRunningTest:@selector(testIncognitoButtonNotShownInQuickActions)]) {
-    config.features_enabled_and_params.push_back(
-        {kNTPMIAEntrypoint,
-         {{{kNTPMIAEntrypointParam,
-            kNTPMIAEntrypointParamEnlargedFakeboxNoIncognito}}}});
-    config.features_disabled.push_back(omnibox::kAimServerEligibilityEnabled);
-  }
-
-  return config;
-}
 
 - (void)tearDownHelper {
   [self releaseHistogramTester];
@@ -245,6 +171,9 @@ void VerifyMIAButtonVisible(bool mia_button_visible) {
   error = [MetricsAppInterface expectTotalCount:1
                                    forHistogram:@"IOS.NTP.Impression"];
   chrome_test_util::GREYAssertErrorNil(error);
+  error = [MetricsAppInterface expectTotalCount:1
+                                   forHistogram:@"IOS.Home.Impression"];
+  chrome_test_util::GREYAssertErrorNil(error);
   [self releaseHistogramTester];
 
   // Open an incognito NTP and close it.
@@ -257,9 +186,12 @@ void VerifyMIAButtonVisible(bool mia_button_visible) {
   [ChromeEarlGrey closeAllTabs];
   error = [MetricsAppInterface expectTotalCount:0
                                    forHistogram:@"NewTabPage.TimeSpent"];
+  chrome_test_util::GREYAssertErrorNil(error);
   error = [MetricsAppInterface expectTotalCount:0
                                    forHistogram:@"IOS.NTP.Impression"];
   chrome_test_util::GREYAssertErrorNil(error);
+  error = [MetricsAppInterface expectTotalCount:0
+                                   forHistogram:@"IOS.Home.Impression"];
   chrome_test_util::GREYAssertErrorNil(error);
   [self releaseHistogramTester];
 
@@ -274,9 +206,12 @@ void VerifyMIAButtonVisible(bool mia_button_visible) {
 
   error = [MetricsAppInterface expectTotalCount:1
                                    forHistogram:@"NewTabPage.TimeSpent"];
+  chrome_test_util::GREYAssertErrorNil(error);
   error = [MetricsAppInterface expectTotalCount:1
                                    forHistogram:@"IOS.NTP.Impression"];
   chrome_test_util::GREYAssertErrorNil(error);
+  error = [MetricsAppInterface expectTotalCount:1
+                                   forHistogram:@"IOS.Home.Impression"];
   chrome_test_util::GREYAssertErrorNil(error);
   [self releaseHistogramTester];
 
@@ -293,9 +228,15 @@ void VerifyMIAButtonVisible(bool mia_button_visible) {
   error = [MetricsAppInterface expectTotalCount:0
                                    forHistogram:@"IOS.NTP.Impression"];
   chrome_test_util::GREYAssertErrorNil(error);
+  error = [MetricsAppInterface expectTotalCount:0
+                                   forHistogram:@"IOS.Home.Impression"];
+  chrome_test_util::GREYAssertErrorNil(error);
   [ChromeEarlGrey openNewTab];
   error = [MetricsAppInterface expectTotalCount:1
                                    forHistogram:@"IOS.NTP.Impression"];
+  chrome_test_util::GREYAssertErrorNil(error);
+  error = [MetricsAppInterface expectTotalCount:1
+                                   forHistogram:@"IOS.Home.Impression"];
   chrome_test_util::GREYAssertErrorNil(error);
   [ChromeEarlGrey selectTabAtIndex:0];
   error = [MetricsAppInterface expectTotalCount:1
@@ -321,6 +262,9 @@ void VerifyMIAButtonVisible(bool mia_button_visible) {
   error = [MetricsAppInterface expectTotalCount:0
                                    forHistogram:@"IOS.NTP.Impression"];
   chrome_test_util::GREYAssertErrorNil(error);
+  error = [MetricsAppInterface expectTotalCount:0
+                                   forHistogram:@"IOS.Home.Impression"];
+  chrome_test_util::GREYAssertErrorNil(error);
   [ChromeEarlGrey openNewTab];
   [ChromeEarlGrey openNewTab];
   error = [MetricsAppInterface expectTotalCount:1
@@ -329,12 +273,19 @@ void VerifyMIAButtonVisible(bool mia_button_visible) {
   error = [MetricsAppInterface expectTotalCount:2
                                    forHistogram:@"IOS.NTP.Impression"];
   chrome_test_util::GREYAssertErrorNil(error);
+  error = [MetricsAppInterface expectTotalCount:2
+                                   forHistogram:@"IOS.Home.Impression"];
+  chrome_test_util::GREYAssertErrorNil(error);
   [ChromeEarlGrey closeAllTabs];
   error = [MetricsAppInterface expectTotalCount:2
                                    forHistogram:@"NewTabPage.TimeSpent"];
   chrome_test_util::GREYAssertErrorNil(error);
   error = [MetricsAppInterface expectTotalCount:2
                                    forHistogram:@"IOS.NTP.Impression"];
+  chrome_test_util::GREYAssertErrorNil(error);
+  error = [MetricsAppInterface expectTotalCount:2
+                                   forHistogram:@"IOS.Home.Impression"];
+  chrome_test_util::GREYAssertErrorNil(error);
   [self releaseHistogramTester];
 }
 
@@ -343,6 +294,16 @@ void VerifyMIAButtonVisible(bool mia_button_visible) {
   [ChromeEarlGrey openNewIncognitoTab];
   GREYAssert(WaitForHistoryToDisappear(), @"History did not disappear.");
   [ChromeEarlGrey verifyAccessibilityForCurrentScreen];
+  [ChromeEarlGrey closeAllIncognitoTabs];
+}
+
+// Tests that the Incognito NTP title has the 'Heading' trait for VoiceOver.
+- (void)testIncognitoNTPHeadingTrait {
+  [ChromeEarlGrey openNewIncognitoTab];
+  [[EarlGrey
+      selectElementWithMatcher:chrome_test_util::HeaderWithAccessibilityLabelId(
+                                   IDS_NEW_TAB_OTR_TITLE)]
+      assertWithMatcher:grey_sufficientlyVisible()];
   [ChromeEarlGrey closeAllIncognitoTabs];
 }
 
@@ -413,11 +374,21 @@ void VerifyMIAButtonVisible(bool mia_button_visible) {
   [[AppLaunchManager sharedManager] ensureAppLaunchedWithConfiguration:config];
 
   [self validateNTPURL:expectedURL];
+
+  [ChromeEarlGrey removeUserDefaultsObjectForKey:@"NTPLocation"];
 }
 
 // Verifies opening a new tab from the New Tab button on the toolbar with the
 // correct policy's New Tab Page Location URL.
-- (void)testNewTabByNewTabButtonTapWithNTPLocation {
+// TODO(crbug.com/518881258): Flaky on simulator.
+#if TARGET_IPHONE_SIMULATOR
+#define MAYBE_testNewTabByNewTabButtonTapWithNTPLocation \
+  FLAKY_testNewTabByNewTabButtonTapWithNTPLocation
+#else
+#define MAYBE_testNewTabByNewTabButtonTapWithNTPLocation \
+  testNewTabByNewTabButtonTapWithNTPLocation
+#endif
+- (void)MAYBE_testNewTabByNewTabButtonTapWithNTPLocation {
   GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
   const GURL expectedURL = self.testServer->GetURL(kPageURL);
 
@@ -453,11 +424,18 @@ void VerifyMIAButtonVisible(bool mia_button_visible) {
 // Verifies opening a new tab by long pressing the tab grid view and selecting
 // "New Tab" with the correct policy's New Tab Page Location URL.
 - (void)testNewTabByLongPressTabGridViewWithNTPLocation {
+  if ([ChromeEarlGrey isChromeNextEnabled] && [ChromeEarlGrey isIPadIdiom]) {
+    EARL_GREY_TEST_DISABLED(@"The button doesn't exist with Next.");
+  }
   GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
   const GURL expectedURL = self.testServer->GetURL(kPageURL);
 
   // Set the policy's NTP Location value at runtime.
   [self setNTPPolicyValue:expectedURL.spec()];
+
+  // Open a new incognito tab to expose the "New Tab" item in the long press
+  // menu.
+  [ChromeEarlGrey openNewIncognitoTab];
 
   // Open tab via the UI.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::ShowTabsButton()]
@@ -472,11 +450,21 @@ void VerifyMIAButtonVisible(bool mia_button_visible) {
       performAction:grey_tap()];
 
   [self validateNTPURL:expectedURL];
+
+  [ChromeEarlGrey closeAllIncognitoTabs];
 }
 
 // Verifies opening a new tab from the tab grid view by tapping on the New Tab
 // button with the correct policy's New Tab Page Location URL.
-- (void)testNewTabFromTabGridViewWithNTPLocation {
+// TODO(crbug.com/518881258): Flaky on simulator.
+#if TARGET_IPHONE_SIMULATOR
+#define MAYBE_testNewTabFromTabGridViewWithNTPLocation \
+  FLAKY_testNewTabFromTabGridViewWithNTPLocation
+#else
+#define MAYBE_testNewTabFromTabGridViewWithNTPLocation \
+  testNewTabFromTabGridViewWithNTPLocation
+#endif
+- (void)MAYBE_testNewTabFromTabGridViewWithNTPLocation {
   GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
   const GURL expectedURL = self.testServer->GetURL(kPageURL);
 
@@ -547,61 +535,116 @@ void VerifyMIAButtonVisible(bool mia_button_visible) {
       assertWithMatcher:grey_notVisible()];
 }
 
-#pragma mark - MIA Variations
-
-// Verifies the MIA entry point visiblity for the inline variation.
-- (void)testNewTabShowsMIAEntryPointInline {
-  if ([ChromeEarlGrey isIPadIdiom]) {
-    EARL_GREY_TEST_SKIPPED(@"Skipped for iPad.");
+- (AppLaunchConfiguration)appConfigurationForTestCase {
+  AppLaunchConfiguration config = [super appConfigurationForTestCase];
+  if ([self.name containsString:@"testPremiumAvatarRingWithAiTier"]) {
+    config.features_enabled.push_back(kAiSubscriptionAvatarRingIOS);
+    config.additional_args.push_back("--force-ai-subscription-tier=1");
+  } else if ([self.name containsString:@"testPremiumAvatarRingWithoutAiTier"]) {
+    config.features_enabled.push_back(kAiSubscriptionAvatarRingIOS);
+    config.additional_args.push_back("--force-ai-subscription-tier=0");
+  } else if ([self.name containsString:@"testPremiumAvatarRingWithError"]) {
+    config.features_enabled.push_back(kAiSubscriptionAvatarRingIOS);
+    config.additional_args.push_back("--force-ai-subscription-tier=1");
+  } else if ([self.name containsString:
+                            @"testPremiumAvatarRingWithDynamicTierChange"]) {
+    config.features_enabled.push_back(kAiSubscriptionAvatarRingIOS);
   }
-  // Open a new tab page.
-  [ChromeEarlGrey openNewTab];
-  // Verify the MIA button is shown.
-  VerifyMIAButtonVisible(true);
-  // Quick actions should not be visible when MIA is displayed inline.
-  VerifyQuickActionVisibility(QuickActionsVisibility::kNotVisible);
+  return config;
 }
 
-// Verifies the MIA entry point visiblity for the omnibox contained variation.
-- (void)testNewTabShowsMIAEntryPointInOmnibox {
-  if ([ChromeEarlGrey isIPadIdiom]) {
-    EARL_GREY_TEST_SKIPPED(@"Skipped for iPad.");
-  }
-  // Open a new tab page.
+// Tests that the premium avatar ring is displayed on the NTP when the user
+// has an AI tier.
+- (void)testPremiumAvatarRingWithAiTier {
   [ChromeEarlGrey openNewTab];
-  // Verify the MIA button is shown.
-  VerifyMIAButtonVisible(true);
-  // Quick actions should not be visible.
-  VerifyQuickActionVisibility(QuickActionsVisibility::kVisible);
+  // Sign in.
+  [SigninEarlGrey signinWithFakeIdentity:kPrimaryIdentity];
+
+  // Verify that the premium ring is visible.
+  [[EarlGrey
+      selectElementWithMatcher:grey_accessibilityID(
+                                   kPremiumAvatarRingAccessibilityIdentifier)]
+      assertWithMatcher:grey_sufficientlyVisible()];
 }
 
-// Verifies the MIA entry point visiblity for the enlarged fakebox variation.
-- (void)testNewTabShowsMIAEntryPointInEnlargedFakebox {
-  if ([ChromeEarlGrey isIPadIdiom]) {
-    EARL_GREY_TEST_SKIPPED(@"Skipped for iPad.");
-  }
-
-  // Open a new tab page.
+// Tests that the premium avatar ring is NOT displayed on the NTP when the user
+// does not have an AI tier.
+- (void)testPremiumAvatarRingWithoutAiTier {
   [ChromeEarlGrey openNewTab];
-  // Verify the MIA button is shown.
-  VerifyMIAButtonVisible(true);
-  // Quick actions should be visible.
-  VerifyQuickActionVisibility(QuickActionsVisibility::kVisible);
+  // Sign in.
+  [SigninEarlGrey signinWithFakeIdentity:kPrimaryIdentity];
+
+  // Verify that the premium ring is not visible.
+  [[EarlGrey
+      selectElementWithMatcher:grey_accessibilityID(
+                                   kPremiumAvatarRingAccessibilityIdentifier)]
+      assertWithMatcher:grey_notVisible()];
 }
 
-// Verifies that the quick actions menu doesn't show incognito for one specific
-// MIA entry point variation.
-- (void)testIncognitoButtonNotShownInQuickActions {
-  if ([ChromeEarlGrey isIPadIdiom]) {
-    EARL_GREY_TEST_SKIPPED(@"Skipped for iPad.");
-  }
-
-  // Open a new tab page.
+// Tests that the premium avatar ring is NOT displayed and the error badge is
+// displayed when the user has an AI tier but also has an account error.
+- (void)testPremiumAvatarRingWithError {
   [ChromeEarlGrey openNewTab];
-  // Verify the MIA button is shown.
-  VerifyMIAButtonVisible(true);
-  // QUick actions should not be visible.
-  VerifyQuickActionVisibility(QuickActionsVisibility::kVisibleWithoutIncognito);
+  // Sign in.
+  [SigninEarlGrey signinWithFakeIdentity:kPrimaryIdentity];
+
+  // Verify that the premium ring is visible initially.
+  [[EarlGrey
+      selectElementWithMatcher:grey_accessibilityID(
+                                   kPremiumAvatarRingAccessibilityIdentifier)]
+      assertWithMatcher:grey_sufficientlyVisible()];
+
+  // Trigger a persistent auth error.
+  [SigninEarlGrey
+      setPersistentAuthErrorForAccount:CoreAccountId::FromGaiaId(
+                                           kPrimaryIdentity.gaiaId)];
+  [ChromeEarlGreyUI waitForAppToIdle];
+
+  // Verify that the error badge is visible.
+  [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
+                                          kNTPFeedHeaderIdentityDiscBadge)]
+      assertWithMatcher:grey_sufficientlyVisible()];
+
+  // Verify that the premium ring is no longer visible.
+  [[EarlGrey
+      selectElementWithMatcher:grey_accessibilityID(
+                                   kPremiumAvatarRingAccessibilityIdentifier)]
+      assertWithMatcher:grey_notVisible()];
+}
+
+// Tests that the premium avatar ring appears and disappears dynamically when
+// the AI subscription tier pref changes.
+- (void)testPremiumAvatarRingWithDynamicTierChange {
+  [ChromeEarlGrey openNewTab];
+  // Ensure the pref is 0 initially.
+  [ChromeEarlGrey setIntegerValue:0 forUserPref:"sync.ai_subscription_tier"];
+
+  // Sign in.
+  [SigninEarlGrey signinWithFakeIdentity:kPrimaryIdentity];
+
+  // Verify that the premium ring is NOT visible initially.
+  [[EarlGrey
+      selectElementWithMatcher:grey_accessibilityID(
+                                   kPremiumAvatarRingAccessibilityIdentifier)]
+      assertWithMatcher:grey_notVisible()];
+
+  // Change the pref to 1 (AI tier active).
+  [ChromeEarlGrey setIntegerValue:1 forUserPref:"sync.ai_subscription_tier"];
+
+  // Verify that the premium ring becomes visible.
+  [[EarlGrey
+      selectElementWithMatcher:grey_accessibilityID(
+                                   kPremiumAvatarRingAccessibilityIdentifier)]
+      assertWithMatcher:grey_sufficientlyVisible()];
+
+  // Change the pref back to 0.
+  [ChromeEarlGrey setIntegerValue:0 forUserPref:"sync.ai_subscription_tier"];
+
+  // Verify that the premium ring is no longer visible.
+  [[EarlGrey
+      selectElementWithMatcher:grey_accessibilityID(
+                                   kPremiumAvatarRingAccessibilityIdentifier)]
+      assertWithMatcher:grey_notVisible()];
 }
 
 @end

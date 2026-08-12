@@ -101,7 +101,8 @@
         "module_scheme": "webtest",
         "name": "webgpu_blink_web_tests",
         "resultdb": {
-          "enable": true
+          "enable": true,
+          "has_native_resultdb_integration": true
         },
         "swarming": {
           "dimensions": {
@@ -133,7 +134,8 @@
         "module_scheme": "webtest",
         "name": "webgpu_blink_web_tests_with_backend_validation",
         "resultdb": {
-          "enable": true
+          "enable": true,
+          "has_native_resultdb_integration": true
         },
         "swarming": {
           "dimensions": {
@@ -223,7 +225,7 @@
           "idempotent": false,
           "io_timeout": 1800,
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 8
+          "shards": 16
         },
         "test": "telemetry_gpu_integration_test",
         "test_id_prefix": "ninja://chrome/test:telemetry_gpu_integration_test/"
@@ -340,7 +342,7 @@
           "idempotent": false,
           "io_timeout": 1800,
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 8
+          "shards": 16
         },
         "test": "telemetry_gpu_integration_test",
         "test_id_prefix": "ninja://chrome/test:telemetry_gpu_integration_test/"
@@ -360,7 +362,8 @@
         "module_scheme": "webtest",
         "name": "webgpu_swiftshader_blink_web_tests",
         "resultdb": {
-          "enable": true
+          "enable": true,
+          "has_native_resultdb_integration": true
         },
         "swarming": {
           "dimensions": {
@@ -392,7 +395,8 @@
         "module_scheme": "webtest",
         "name": "webgpu_swiftshader_blink_web_tests_with_backend_validation",
         "resultdb": {
-          "enable": true
+          "enable": true,
+          "has_native_resultdb_integration": true
         },
         "swarming": {
           "dimensions": {

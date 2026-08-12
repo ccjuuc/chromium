@@ -7,9 +7,16 @@ import("../build_webui_tests.gni")
 assert(!is_android)
 
 build_webui_tests("build") {
+  cc_test_files = [
+    "password_manager_browsertest.cc",
+    "password_manager_focus_test.cc",
+  ]
+
   files = [
     "add_password_dialog_test.ts",
+    "backup_password_details_card_test.ts",
     "checkup_details_section_test.ts",
+    "checkup_list_item_test.ts",
     "checkup_section_test.ts",
     "credential_field_test.ts",
     "credential_note_test.ts",
@@ -17,9 +24,10 @@ build_webui_tests("build") {
     "edit_passkey_dialog_test.ts",
     "edit_password_dialog_test.ts",
     "full_data_reset_test.ts",
+    "move_passwords_dialog_test.ts",
     "passkey_details_card_test.ts",
+    "password_change_details_test.ts",
     "password_details_card_test.ts",
-    "backup_password_details_card_test.ts",
     "password_details_section_test.ts",
     "password_manager_app_test.ts",
     "password_manager_focus_test.ts",
@@ -28,8 +36,9 @@ build_webui_tests("build") {
     "passwords_exporter_test.ts",
     "passwords_importer_test.ts",
     "passwords_section_test.ts",
-    "promo_cards_test.ts",
+    "notification_cards_test.ts",
     "remove_actor_login_permission_dialog_test.ts",
+    "trusted_vault_error_dialog_test.ts",
     "settings_section_test.ts",
     "share_password_confirmation_dialog_test.ts",
     "share_password_family_picker_dialog_test.ts",
@@ -40,9 +49,10 @@ build_webui_tests("build") {
     "share_password_recipient_test.ts",
     "site_favicon_test.ts",
     "test_password_manager_proxy.ts",
-    "test_promo_cards_browser_proxy.ts",
+    "test_notification_cards_browser_proxy.ts",
     "test_sync_browser_proxy.ts",
     "test_util.ts",
+    "user_utils_mixin_test.ts",
   ]
 
   if (is_win || is_mac) {
@@ -58,6 +68,7 @@ build_webui_tests("build") {
   ts_deps = [
     "//chrome/browser/resources/password_manager:build_ts",
     "//third_party/polymer/v3_0:library",
+    "//ui/webui/resources/cr_components/color_change_listener:build_ts",
     "//ui/webui/resources/js:build_ts",
   ]
   mojo_files_deps = [

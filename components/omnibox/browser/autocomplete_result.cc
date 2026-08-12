@@ -9,6 +9,7 @@
 #include <iterator>
 #include <optional>
 #include <ostream>
+#include <set>
 #include <sstream>
 #include <string>
 #include <unordered_set>
@@ -19,20 +20,22 @@
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/containers/adapters.h"
-#include "base/containers/contains.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/not_fatal_until.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/trace_event/memory_usage_estimator.h"
 #include "base/trace_event/typed_macros.h"
+#include "build/android_buildflags.h"
 #include "build/build_config.h"
 #include "components/lens/lens_features.h"
 #include "components/omnibox/browser/actions/contextual_search_action.h"
 #include "components/omnibox/browser/actions/omnibox_action_concepts.h"
 #include "components/omnibox/browser/actions/omnibox_action_in_suggest.h"
+#include "components/omnibox/browser/actions/omnibox_action_site_search.h"
 #include "components/omnibox/browser/actions/omnibox_pedal.h"
 #include "components/omnibox/browser/actions/omnibox_pedal_provider.h"
 #include "components/omnibox/browser/actions/tab_switch_action.h"
@@ -69,14 +72,17 @@
 #endif
 
 using metrics::OmniboxEventProto;
+using TemplateAction = omnibox::SuggestTemplateInfo::TemplateAction;
 
 typedef AutocompleteMatchType ACMatchType;
 
 namespace {
 
-constexpr bool is_android = !!BUILDFLAG(IS_ANDROID);
+constexpr bool is_android_any = !!BUILDFLAG(IS_ANDROID);
+constexpr bool is_android_desktop = !!BUILDFLAG(IS_DESKTOP_ANDROID);
+constexpr bool is_android_mobile = is_android_any && !is_android_desktop;
 constexpr bool is_ios = !!BUILDFLAG(IS_IOS);
-constexpr bool is_desktop = !(is_android || is_ios);
+constexpr bool is_desktop = !(is_android_mobile || is_ios);
 
 // Rotates |it| to be in the front of |matches|.
 // |it| must be a valid iterator of |matches| or equal to |matches->end()|.
@@ -96,16 +102,31 @@ constexpr size_t kMaxPedalCount =
 constexpr size_t kMaxPedalMatchIndex =
     is_ios ? 3 : std::numeric_limits<size_t>::max();
 
-#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
-// The entrypoint id associated with aim being invoked from the AIM shortcut of
-// typed state. Used for logging purposes.
-// Do not change without changing the IDs in chrome_aim_entry_point.proto
-omnibox::ChromeAimEntryPoint GetAimActionEntrypointID() {
-  return is_android
-             ? omnibox::ANDROID_CHROME_AIM_SHORTCUT_TYPED_STATE_ENTRY_POINT
-             : omnibox::IOS_CHROME_OMNIBOX_SEARCH_ENTRY_POINT;
+// Index cutoffs for actions in the suggestion list.
+constexpr size_t kActionsInSuggestCutoffThreshold = 1;
+constexpr size_t kPedalsCutoffThreshold = 3;
+
+// Returns the maximum index (inclusive) at which this action type is allowed.
+constexpr size_t GetActionInSuggestCutoff(TemplateAction::ActionType type) {
+  switch (type) {
+    case TemplateAction::CALL:
+    case TemplateAction::DIRECTIONS:
+    case TemplateAction::REVIEWS:
+      return kActionsInSuggestCutoffThreshold;
+    default:
+      return std::numeric_limits<size_t>::max();
+  }
 }
-#endif
+
+// Returns if the ACTION_IN_SUGGEST exceeds its allowed position.
+bool ShouldRemoveActionInSuggest(const scoped_refptr<OmniboxAction>& action,
+                                 const size_t match_index) {
+  auto* action_in_suggest = OmniboxActionInSuggest::FromAction(action.get());
+  if (!action_in_suggest) {
+    return false;
+  }
+  return match_index > GetActionInSuggestCutoff(action_in_suggest->Type());
+}
 
 }  // namespace
 
@@ -114,9 +135,9 @@ size_t AutocompleteResult::GetMaxMatches(
     bool is_zero_suggest,
     AutocompleteInput::FeaturedKeywordMode featured_keyword_mode) {
   constexpr size_t kDefaultMaxAutocompleteMatches =
-      is_android ? 10 : (is_ios ? 10 : 8);
+      is_android_mobile ? 10 : (is_ios ? 10 : 8);
   constexpr size_t kDefaultMaxZeroSuggestMatches =
-      is_android ? 15 : (is_ios ? 20 : 8);
+      is_android_mobile ? 15 : (is_ios ? 20 : 8);
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   constexpr size_t kMaxFeaturedKeywordAutocompleteMatches = 9;
 #endif
@@ -144,15 +165,9 @@ size_t AutocompleteResult::GetMaxMatches(
     return kMaxFeaturedKeywordAutocompleteMatches;
 #endif
 
-  // If we're interested in the zero suggest match limit, and one has been
-  // specified, return it.
+  // If we're interested in the zero suggest match limit, return it.
   if (is_zero_suggest) {
-    size_t field_trial_value = base::GetFieldTrialParamByFeatureAsInt(
-        omnibox::kMaxZeroSuggestMatches,
-        OmniboxFieldTrial::kMaxZeroSuggestMatchesParam,
-        kDefaultMaxZeroSuggestMatches);
-    DCHECK(kMaxAutocompletePositionValue > field_trial_value);
-    return field_trial_value;
+    return kDefaultMaxZeroSuggestMatches;
   }
 
   // Otherwise, i.e. if no zero suggest specific limit has been specified or the
@@ -167,7 +182,7 @@ size_t AutocompleteResult::GetMaxMatches(
 
 // static
 size_t AutocompleteResult::GetDynamicMaxMatches() {
-  constexpr const int kDynamicMaxMatchesLimit = is_android ? 15 : 10;
+  constexpr const int kDynamicMaxMatchesLimit = is_android_mobile ? 15 : 10;
   if (!base::FeatureList::IsEnabled(omnibox::kDynamicMaxAutocomplete))
     return AutocompleteResult::GetMaxMatches();
   return base::GetFieldTrialParamByFeatureAsInt(
@@ -177,8 +192,16 @@ size_t AutocompleteResult::GetDynamicMaxMatches() {
 }
 
 AutocompleteResult::AutocompleteResult()
-    : max_url_matches_(is_android || is_ios ? 5 : 7) {
+    : max_url_matches_(is_android_mobile || is_ios ? 5 : 7) {
   matches_.reserve(kMaxAutocompletePositionValue);
+
+  static uint32_t next_sequence_id = 1;
+  sequence_id_ = next_sequence_id;
+  next_sequence_id++;
+}
+
+void AutocompleteResult::RefreshReadyState() {
+  result_ready_time_ = base::TimeTicks::Now();
 }
 
 AutocompleteResult::~AutocompleteResult() {
@@ -290,8 +313,13 @@ void AutocompleteResult::AppendMatches(const ACMatches& matches) {
         match.provider ? match.provider->GetName() : "None";
     debug_stream << ", Provider: " << provider_name;
 
-    DCHECK_EQ(AutocompleteMatch::SanitizeString(match.contents), match.contents)
-        << debug_stream.str();
+    // IPH matches intentionally append trailing whitespace to their `contents`
+    // in order to visually space it from their `iph_link_text`.
+    if (match.iph_type == IphType::kNone) {
+      DCHECK_EQ(AutocompleteMatch::SanitizeString(match.contents),
+                match.contents)
+          << debug_stream.str();
+    }
     DCHECK_EQ(AutocompleteMatch::SanitizeString(match.description),
               match.description)
         << debug_stream.str();
@@ -325,8 +353,9 @@ void AutocompleteResult::Sort(
 
   // Because tail suggestions are a "last resort", we cull the tail suggestions
   // if there are any non-default, non-tail suggestions.
-  if (!is_android && !is_ios)
+  if (!is_android_mobile && !is_ios) {
     MaybeCullTailSuggestions(&matches_, comparing_object);
+  }
 
   DeduplicateMatches(input, template_url_service);
 
@@ -363,9 +392,19 @@ void AutocompleteResult::Sort(
   // `stripped_destination_url` to detect result changes. If
   // `stripped_destination_url` is already set, i.e. it was not a pre-deduped
   // search suggestion, `ComputeStrippedDestinationURL()` will early exit.
-  if (UndedupTopSearchEntityMatch(&matches_)) {
+  if (UndedupeTopSearchEntityMatch(&matches_)) {
     matches_[0].ComputeStrippedDestinationURL(input, template_url_service);
   }
+
+  // Users can opt into sharing geo location headers with DSE search
+  // suggestions. If they don't opt in to automatically include the header, they
+  // may see a duplicate search suggestion of their 1st
+  // `SUBTYPE_LOCATION_SUGGEST_TRIGGER` search suggestion: one without the
+  // header; and one with the header. These with/without geo location header
+  // search duplicates should be ranked adjacent; the without-header search
+  // above the with-header search. They aren't deduped by `DeduplicateMatches()`
+  // above because of `AutocompleteMatchDedupeType::kInlineLocationSignaling`.
+  ArrangeInlineLocationSignalingMatch();
 }
 
 void AutocompleteResult::SortAndCull(
@@ -429,33 +468,43 @@ void AutocompleteResult::SortAndCull(
   // current input & platform are supported, delegate to the framework.
   if (is_zero_suggest) {
     PSections sections;
-    if constexpr (is_android) {
+    if (is_android_any &&
+        page_classification == metrics::OmniboxEventProto::ANDROID_HUB) {
+      sections.push_back(
+          std::make_unique<AndroidHubZPSSection>(suggestion_groups_map_));
+    } else if (is_android_any &&
+               page_classification ==
+                   metrics::OmniboxEventProto::ANDROID_TAB_SEARCH_OVERLAY) {
+      sections.push_back(
+          std::make_unique<AndroidTabSearchZPSSection>(suggestion_groups_map_));
+    } else if (is_android_any &&
+               omnibox::IsAndroidWidget(page_classification)) {
+      sections.push_back(
+          std::make_unique<AndroidWebZpsSection>(suggestion_groups_map_));
+    } else if (is_android_any && omnibox::IsComposebox(page_classification)) {
+      auto composebox_suggestion_limit_config =
+          omnibox_feature_configs::ComposeboxSuggestionLimit::Get();
+      size_t composebox_max_suggestions = 15u;
+      size_t max_aim_suggestions = 15u;
+      size_t max_contextual_suggestions = 15u;
+      if (composebox_suggestion_limit_config.enabled) {
+        composebox_max_suggestions =
+            composebox_suggestion_limit_config.max_suggestions;
+        max_aim_suggestions =
+            composebox_suggestion_limit_config.max_aim_suggestions;
+        max_contextual_suggestions =
+            composebox_suggestion_limit_config.max_contextual_suggestions;
+      }
+      sections.push_back(std::make_unique<AndroidComposeboxZpsSection>(
+          suggestion_groups_map_, composebox_max_suggestions,
+          max_aim_suggestions, max_contextual_suggestions));
+    } else if constexpr (is_android_mobile) {
       if (omnibox::IsNTPPage(page_classification)) {
         sections.push_back(std::make_unique<AndroidNTPZpsSection>(
             suggestion_groups_map_, mia_enabled));
       } else if (omnibox::IsSearchResultsPage(page_classification)) {
         sections.push_back(
             std::make_unique<AndroidSRPZpsSection>(suggestion_groups_map_));
-      } else if (omnibox::IsAndroidHub(page_classification)) {
-        sections.push_back(
-            std::make_unique<AndroidHubZPSSection>(suggestion_groups_map_));
-      } else if (omnibox::IsComposebox(page_classification)) {
-        auto composebox_suggestion_limit_config =
-            omnibox_feature_configs::ComposeboxSuggestionLimit::Get();
-        size_t composebox_max_suggestions = 15u;
-        size_t max_aim_suggestions = 15u;
-        size_t max_contextual_suggestions = 15u;
-        if (composebox_suggestion_limit_config.enabled) {
-          composebox_max_suggestions =
-              composebox_suggestion_limit_config.max_suggestions;
-          max_aim_suggestions =
-              composebox_suggestion_limit_config.max_aim_suggestions;
-          max_contextual_suggestions =
-              composebox_suggestion_limit_config.max_contextual_suggestions;
-        }
-        sections.push_back(std::make_unique<AndroidComposeboxZpsSection>(
-            suggestion_groups_map_, composebox_max_suggestions,
-            max_aim_suggestions, max_contextual_suggestions));
       } else {
         sections.push_back(
             std::make_unique<AndroidWebZpsSection>(suggestion_groups_map_));
@@ -635,8 +684,7 @@ void AutocompleteResult::SortAndCull(
                 suggestion_groups_map_));
             break;
           default:
-            // kLensOverlayNotFatalUntil update after launch.
-            NOTREACHED(base::NotFatalUntil::M200);
+            NOTREACHED();
         }
       } else if (omnibox::IsNTPPage(page_classification)) {
         sections.push_back(std::make_unique<IOSNTPZpsSection>(
@@ -669,22 +717,27 @@ void AutocompleteResult::SortAndCull(
     matches_ = Section::GroupMatches(std::move(sections), matches_);
   } else if (use_grouping_for_non_zps) {
     PSections sections;
-    if constexpr (is_android) {
-      if (omnibox::IsAndroidHub(page_classification)) {
-        sections.push_back(
-            std::make_unique<AndroidHubNonZPSSection>(suggestion_groups_map_));
-      } else if (omnibox::IsComposebox(page_classification) &&
-                 (input.lens_overlay_suggest_inputs() ||
-                  input.aim_tool_mode() ==
-                      omnibox::ChromeAimToolsAndModels::TOOL_MODE_IMAGE_GEN)) {
-        sections.push_back(std::make_unique<AndroidComposeboxNonZPSSection>(
-            suggestion_groups_map_));
-      } else {
-        bool show_only_search_suggestions =
-            omnibox::IsCustomTab(page_classification);
-        sections.push_back(std::make_unique<AndroidNonZPSSection>(
-            show_only_search_suggestions, suggestion_groups_map_));
-      }
+    if (is_android_any &&
+        page_classification == metrics::OmniboxEventProto::ANDROID_HUB) {
+      sections.push_back(
+          std::make_unique<AndroidHubNonZPSSection>(suggestion_groups_map_));
+    } else if (is_android_any &&
+               page_classification ==
+                   metrics::OmniboxEventProto::ANDROID_TAB_SEARCH_OVERLAY) {
+      sections.push_back(std::make_unique<AndroidTabSearchNonZPSSection>(
+          suggestion_groups_map_));
+    } else if (is_android_any && omnibox::IsComposebox(page_classification)) {
+      sections.push_back(std::make_unique<AndroidComposeboxNonZPSSection>(
+          suggestion_groups_map_));
+    } else if (is_android_any &&
+               omnibox::IsAndroidWidget(page_classification)) {
+      sections.push_back(std::make_unique<AndroidNonZPSSection>(
+          /* show_only_search_suggestions= */ false, suggestion_groups_map_));
+    } else if (is_android_mobile) {
+      bool show_only_search_suggestions =
+          omnibox::IsCustomTab(page_classification);
+      sections.push_back(std::make_unique<AndroidNonZPSSection>(
+          show_only_search_suggestions, suggestion_groups_map_));
     } else {
       sections.push_back(
           std::make_unique<DesktopNonZpsSection>(suggestion_groups_map_));
@@ -712,12 +765,12 @@ void AutocompleteResult::SortAndCull(
     // Limit URL matches.
     if (input.GetFeaturedKeywordMode() !=
         AutocompleteInput::FeaturedKeywordMode::kExact) {
-      LimitNumberOfURLsShown(GetMaxMatches(is_zero_suggest), comparing_object);
+      LimitNumberOfUrlsShown(GetMaxMatches(is_zero_suggest), comparing_object);
     }
 
     // Limit total matches accounting for suggestions score <= 0, sub matches,
-    // and feature configs such as OmniboxUIExperimentMaxAutocompleteMatches,
-    // OmniboxMaxZeroSuggestMatches, and OmniboxDynamicMaxAutocomplete.
+    // and feature configs such as `OmniboxUIExperimentMaxAutocompleteMatches`
+    // and `OmniboxDynamicMaxAutocomplete`.
     const size_t num_matches =
         CalculateNumMatches(is_zero_suggest, input.GetFeaturedKeywordMode(),
                             matches_, comparing_object);
@@ -775,29 +828,37 @@ void AutocompleteResult::TrimOmniboxActions(bool is_zero_suggest) {
   //   (Android only)
   // - TAB_SWITCH actions are not considered because they're never attached.
   //   On Android, the tab switch match is attached as ACTION_IN_SUGGEST.
-  if constexpr (is_android || is_ios) {
-    static constexpr size_t ACTIONS_IN_SUGGEST_CUTOFF_THRESHOLD = 1;
-    static constexpr size_t PEDALS_CUTOFF_THRESHOLD = 3;
-    std::vector<OmniboxActionId> include_all{OmniboxActionId::ACTION_IN_SUGGEST,
-                                             OmniboxActionId::PEDAL};
-    std::vector<OmniboxActionId> include_pedals_and_others;
-    std::vector<OmniboxActionId> exclude_pedals;
-    if constexpr (is_android) {
-      include_pedals_and_others.push_back(OmniboxActionId::ACTION_IN_SUGGEST);
-      exclude_pedals.push_back(OmniboxActionId::ACTION_IN_SUGGEST);
-    }
-    include_pedals_and_others.push_back(OmniboxActionId::PEDAL);
+  if constexpr (is_desktop) {
+    return;
+  }
 
-    for (size_t index = 0u; index < matches_.size(); ++index) {
-      matches_[index].FilterOmniboxActions(
-          (!is_zero_suggest && index < ACTIONS_IN_SUGGEST_CUTOFF_THRESHOLD)
-              ? include_all
-          : index < PEDALS_CUTOFF_THRESHOLD ? include_pedals_and_others
-                                            : exclude_pedals);
-      if (index < ACTIONS_IN_SUGGEST_CUTOFF_THRESHOLD) {
-        matches_[index].FilterAndSortActionsInSuggest();
-      }
+  std::vector<OmniboxActionId> include_all{OmniboxActionId::ACTION_IN_SUGGEST,
+                                           OmniboxActionId::PEDAL};
+  std::vector<OmniboxActionId> include_pedals_and_others;
+  std::vector<OmniboxActionId> exclude_pedals;
+  if constexpr (is_android_any) {
+    include_pedals_and_others.push_back(OmniboxActionId::ACTION_IN_SUGGEST);
+    exclude_pedals.push_back(OmniboxActionId::ACTION_IN_SUGGEST);
+  }
+  include_pedals_and_others.push_back(OmniboxActionId::PEDAL);
+
+  for (size_t index = 0u; index < matches_.size(); ++index) {
+    matches_[index].FilterOmniboxActions(
+        (!is_zero_suggest && index < kActionsInSuggestCutoffThreshold)
+            ? include_all
+        : index < kPedalsCutoffThreshold ? include_pedals_and_others
+                                         : exclude_pedals);
+    if (index < kActionsInSuggestCutoffThreshold) {
+      matches_[index].FilterAndSortActionsInSuggest();
     }
+
+    if constexpr (!is_android_any) {
+      continue;
+    }
+    // Android-specific fine-grained filtering of ACTION_IN_SUGGEST.
+    std::erase_if(matches_[index].actions, [index](const auto& action) {
+      return ShouldRemoveActionInSuggest(action, index);
+    });
   }
 }
 
@@ -813,8 +874,8 @@ void AutocompleteResult::SplitActionsToSuggestions() {
     }
     for (size_t j = 0; j < matches_[i].actions.size(); j++) {
       if (matches_[i].actions[j]->ActionId() == OmniboxActionId::PEDAL) {
-        *matches_.insert(matches_.begin() + i + 1,
-                         matches_[i].CreateActionMatch(j));
+        matches_.insert(matches_.begin() + i + 1,
+                        matches_[i].CreateActionMatch(j));
         // Remove this action from the primary match and repeat checking at this
         // same index, which will hence be the next action.
         matches_[i].actions.erase(matches_[i].actions.begin() + j);
@@ -839,7 +900,7 @@ void AutocompleteResult::GroupAndDemoteMatchesInGroups() {
     }
 
     const omnibox::GroupId group_id = match.suggestion_group_id.value();
-    if (!base::Contains(suggestion_groups_map(), group_id)) {
+    if (!suggestion_groups_map().contains(group_id)) {
       // Strip group IDs from the matches for which there is no suggestion
       // group information. These matches should instead be treated as
       // ordinary matches with no group IDs.
@@ -967,41 +1028,11 @@ void AutocompleteResult::AttachPedalsToMatches(
   }
 }
 
-#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
-void AutocompleteResult::AttachAimAction(
-    TemplateURLService* template_url_service,
-    AutocompleteProviderClient* client) {
-  if (!OmniboxFieldTrial::IsDeterministicAimActionInTypedStateEnabled(client)) {
-    return;
-  }
-
-  for (AutocompleteMatch& match : matches_) {
-    if (!match.actions.empty()) {
-      continue;
-    }
-    if (match.allowed_to_be_default_match &&
-        AutocompleteMatch::IsSearchType(match.type) &&
-        match.contents.length() >=
-            static_cast<size_t>(
-                OmniboxFieldTrial::kMinimumTypedCharactersToInvokeAimShortcut
-                    .Get())) {
-      omnibox::SuggestTemplateInfo::TemplateAction template_action;
-      template_action.set_action_type(
-          omnibox::SuggestTemplateInfo_TemplateAction_ActionType_CHROME_AIM);
-      template_action.set_action_uri(
-          GetUrlForAim(template_url_service, GetAimActionEntrypointID(),
-                       /*query_start_time=*/base::Time::Now(), match.contents)
-              .spec());
-      match.actions.emplace_back(base::MakeRefCounted<OmniboxActionInSuggest>(
-          std::move(template_action), std::nullopt));
-      // Only attach to the first eligible match.
-      return;
-    }
-  }
-}
-#endif
-
 void AutocompleteResult::AttachContextualSearchFulfillmentActionToMatches() {
+#if !BUILDFLAG(IS_ANDROID)
+  // ContextualSearchFulfillmentAction is a Desktop-specific legacy action that
+  // lacks an Android JNI counterpart. Skip since Android currently only has
+  // minimal contextual search supports (e.g., Lens Overlay entry point).
   for (AutocompleteMatch& match : matches_) {
     if (match.IsContextualSearchSuggestion() && !match.HasLensSearchAction()) {
       match.takeover_action =
@@ -1010,6 +1041,7 @@ void AutocompleteResult::AttachContextualSearchFulfillmentActionToMatches() {
               match.subtypes.contains(omnibox::SUBTYPE_ZERO_PREFIX));
     }
   }
+#endif
 }
 
 void AutocompleteResult::AttachContextualSearchOpenLensActionToMatches() {
@@ -1018,6 +1050,28 @@ void AutocompleteResult::AttachContextualSearchOpenLensActionToMatches() {
       match.takeover_action =
           base::MakeRefCounted<ContextualSearchOpenLensAction>();
     }
+  }
+}
+
+void AutocompleteResult::AttachSiteSearchActionToMatches(
+    const TemplateURLService* service) {
+  std::set<std::u16string> seen;
+  for (AutocompleteMatch& match : matches_) {
+    if (match.associated_keyword.empty()) {
+      continue;
+    }
+    if (seen.contains(match.associated_keyword)) {
+      continue;
+    }
+    seen.insert(match.associated_keyword);
+
+    const TemplateURL* template_url =
+        service->GetTemplateURLForKeyword(match.associated_keyword);
+    if (!template_url) {
+      continue;
+    }
+    match.actions.push_back(
+        base::MakeRefCounted<OmniboxActionSiteSearch>(template_url));
   }
 }
 
@@ -1060,30 +1114,37 @@ void AutocompleteResult::ConvertOpenTabMatches(
       match.has_tab_match = tab_info->second.has_matching_tab;
       // Do not attach the action for iOS since they have separate UI treatment
       // for tab matches (no button row as on desktop and realbox).
-      if (!is_ios && match.has_tab_match.value()) {
-        // The default action for suggestions from the open tab provider in
-        // keyword mode is to switch to the open tab so no button is necessary.
-        if (!match.from_keyword ||
-            match.provider->type() != AutocompleteProvider::TYPE_OPEN_TAB) {
-          if constexpr (is_android) {
-            // On Android, attach the action as ActionInSuggest that will be
-            // interpreted as either action button or chip per the form factor.
-            omnibox::SuggestTemplateInfo::TemplateAction template_action;
-            template_action.set_action_type(
-                omnibox::
-                    SuggestTemplateInfo_TemplateAction_ActionType_CHROME_TAB_SWITCH);
-            template_action.set_action_uri(match.destination_url.spec());
-            auto action_in_suggest =
-                base::MakeRefCounted<OmniboxActionInSuggest>(
-                    std::move(template_action), std::nullopt);
+      if (is_ios || !match.has_tab_match.value()) {
+        continue;
+      }
 #if BUILDFLAG(IS_ANDROID)
-            action_in_suggest->tab_id = tab_info->second.android_tab_id;
+      match.android_tab_id = tab_info->second.android_tab_id;
 #endif
-            match.actions.push_back(action_in_suggest);
-          } else {
-            match.actions.push_back(
-                base::MakeRefCounted<TabSwitchAction>(match.destination_url));
-          }
+      if ((!match.from_keyword ||
+           match.type != AutocompleteMatchType::OPEN_TAB) &&
+          !(client->IsWebUiNtpEnabledForDesktopAndroid() && input &&
+            input->current_page_classification() ==
+                OmniboxEventProto::NTP_REALBOX)) {
+        if constexpr (is_android_any) {
+#if BUILDFLAG(IS_ANDROID)
+          // On Android, we attach the action to allow switching to tab.
+          // This ensures the "Switch to Tab" button/chip is always available.
+          // Attach the action as ActionInSuggest that will be
+          // interpreted as either action button or chip per the form factor.
+          TemplateAction template_action;
+          template_action.set_action_type(TemplateAction::CHROME_TAB_SWITCH);
+          template_action.set_action_uri(match.destination_url.spec());
+          auto action_in_suggest = base::MakeRefCounted<OmniboxActionInSuggest>(
+              std::move(template_action), std::nullopt);
+          action_in_suggest->tab_id = tab_info->second.android_tab_id;
+          match.actions.push_back(action_in_suggest);
+#endif
+        } else {
+          // The default action for suggestions from the open tab provider in
+          // keyword mode is to switch to the open tab so no button is
+          // necessary.
+          match.actions.push_back(
+              base::MakeRefCounted<TabSwitchAction>(match.destination_url));
         }
       }
     }
@@ -1185,95 +1246,6 @@ ACMatches::iterator AutocompleteResult::FindTopMatch(
 }
 
 // static
-bool AutocompleteResult::UndedupTopSearchEntityMatch(ACMatches* matches) {
-  if (matches->empty())
-    return false;
-
-  auto top_match = matches->begin();
-  if (top_match->type != ACMatchType::SEARCH_SUGGEST_ENTITY)
-    return false;
-
-  // We define an iterator to capture the non-entity duplicate match (if any)
-  // so that we can later use it with duplicate_matches.erase().
-  auto non_entity_it = top_match->duplicate_matches.end();
-
-  // Search the duplicates for an equivalent non-entity search suggestion.
-  for (auto it = top_match->duplicate_matches.begin();
-       it != top_match->duplicate_matches.end(); ++it) {
-    // Reject any ineligible duplicates.
-    if (it->type == ACMatchType::SEARCH_SUGGEST_ENTITY ||
-        !AutocompleteMatch::IsSearchType(it->type) ||
-        !it->allowed_to_be_default_match) {
-      continue;
-    }
-
-    // Capture the first eligible non-entity duplicate we find, but continue the
-    // search for a potential server-provided duplicate, which is considered to
-    // be an even better candidate for the reasons outlined below.
-    if (non_entity_it == top_match->duplicate_matches.end()) {
-      non_entity_it = it;
-    }
-
-    // When an entity suggestion (SEARCH_SUGGEST_ENTITY) is received from
-    // google.com, we also receive a non-entity version of the same suggestion
-    // which (a) gets placed in the |duplicate_matches| list of the entity
-    // suggestion (as part of the deduplication process) and (b) has the same
-    // |deletion_url| as the entity suggestion.
-    // When the user attempts to remove the SEARCH_SUGGEST_ENTITY suggestion
-    // from the omnibox, the suggestion removal code will fire off network
-    // requests to the suggestion's own |deletion_url| as well as to any
-    // deletion_url's present on matches in the associated |duplicate_matches|
-    // list, which in this case would result in redundant network calls to the
-    // same URL.
-    // By prioritizing the "undeduping" (i.e. moving a duplicate match out of
-    // the |duplicate_matches| list) and promotion of the non-entity
-    // SEARCH_SUGGEST (or any other "specialized search") duplicate as the
-    // top match, we are deliberately separating the two matches that have the
-    // same |deletion_url|, thereby eliminating any redundant network calls
-    // upon suggestion removal.
-    if (it->type == ACMatchType::SEARCH_SUGGEST ||
-        AutocompleteMatch::IsSpecializedSearchType(it->type)) {
-      non_entity_it = it;
-      break;
-    }
-  }
-
-  if (non_entity_it != top_match->duplicate_matches.end()) {
-    // Move out the non-entity match, then erase it from the list of duplicates.
-    // We do this first, because the insertion operation invalidates all
-    // iterators, including |top_match|.
-    AutocompleteMatch non_entity_match_copy{std::move(*non_entity_it)};
-    top_match->duplicate_matches.erase(non_entity_it);
-
-    // When we spawn our non-entity match copy, we still want to preserve any
-    // entity ID that was provided by the server for logging purposes, even if
-    // we don't display it.
-    if (non_entity_match_copy.entity_id.empty()) {
-      non_entity_match_copy.entity_id = top_match->entity_id;
-    }
-
-    // Unless the entity match has Actions in Suggest, promote the non-entity
-    // match to the top. Otherwise keep the entity match at the top followed by
-    // the non-entity match.
-    bool top_match_has_actions =
-        !!top_match->GetActionWhere([](const auto& action) {
-          return action->ActionId() == OmniboxActionId::ACTION_IN_SUGGEST;
-        });
-
-    if (top_match_has_actions) {
-      matches->insert(std::next(matches->begin()),
-                      std::move(non_entity_match_copy));
-    } else {
-      matches->insert(matches->begin(), std::move(non_entity_match_copy));
-    }
-    // Immediately return as all our iterators are invalid after the insertion.
-    return true;
-  }
-
-  return false;
-}
-
-// static
 size_t AutocompleteResult::CalculateNumMatches(
     bool is_zero_suggest,
     AutocompleteInput::FeaturedKeywordMode featured_keyword_mode,
@@ -1342,6 +1314,25 @@ void AutocompleteResult::Reset() {
   ClearMatches();
 }
 
+const std::vector<omnibox::metrics::ChromeSearchboxStats::ExperimentStatsV2>&
+AutocompleteResult::experiment_stats_v2s_in_session() const {
+  return session_.experiment_stats_v2s;
+}
+
+void AutocompleteResult::add_experiment_stat_v2_in_session(
+    const omnibox::metrics::ChromeSearchboxStats::ExperimentStatsV2& stat) {
+  auto it = std::find_if(
+      session_.experiment_stats_v2s.begin(),
+      session_.experiment_stats_v2s.end(),
+      [&stat](const omnibox::metrics::ChromeSearchboxStats::ExperimentStatsV2&
+                  existing) { return existing.type_int() == stat.type_int(); });
+  if (it == session_.experiment_stats_v2s.end()) {
+    session_.experiment_stats_v2s.push_back(stat);
+  } else {
+    *it = stat;
+  }
+}
+
 void AutocompleteResult::ClearMatches() {
   matches_.clear();
   suggestion_groups_map_.clear();
@@ -1356,7 +1347,9 @@ void AutocompleteResult::SwapMatchesWith(AutocompleteResult* other) {
   matches_.swap(other->matches_);
   suggestion_groups_map_.swap(other->suggestion_groups_map_);
   smart_compose_inline_hint_.swap(other->smart_compose_inline_hint_);
-  has_contextual_chips_ = other->has_contextual_chips();
+  std::swap(has_contextual_chips_, other->has_contextual_chips_);
+  std::swap(sequence_id_, other->sequence_id_);
+  std::swap(result_ready_time_, other->result_ready_time_);
 
 #if BUILDFLAG(IS_ANDROID)
   DestroyJavaObject();
@@ -1372,6 +1365,7 @@ void AutocompleteResult::CopyMatchesFrom(const AutocompleteResult& other) {
   suggestion_groups_map_ = other.suggestion_groups_map_;
   smart_compose_inline_hint_ = other.smart_compose_inline_hint_;
   has_contextual_chips_ = other.has_contextual_chips();
+  result_ready_time_ = other.result_ready_time_;
 
 #if BUILDFLAG(IS_ANDROID)
   DestroyJavaObject();
@@ -1637,6 +1631,134 @@ void AutocompleteResult::MaybeCullTailSuggestions(
   }
 }
 
+// static
+bool AutocompleteResult::UndedupeTopSearchEntityMatch(ACMatches* matches) {
+  if (matches->empty())
+    return false;
+
+  auto top_match = matches->begin();
+  if (top_match->type != ACMatchType::SEARCH_SUGGEST_ENTITY)
+    return false;
+
+  // We define an iterator to capture the non-entity duplicate match (if any)
+  // so that we can later use it with duplicate_matches.erase().
+  auto non_entity_it = top_match->duplicate_matches.end();
+
+  // Search the duplicates for an equivalent non-entity search suggestion.
+  for (auto it = top_match->duplicate_matches.begin();
+       it != top_match->duplicate_matches.end(); ++it) {
+    // Reject any ineligible duplicates.
+    if (it->type == ACMatchType::SEARCH_SUGGEST_ENTITY ||
+        !AutocompleteMatch::IsSearchType(it->type) ||
+        !it->allowed_to_be_default_match) {
+      continue;
+    }
+
+    // Capture the first eligible non-entity duplicate we find, but continue the
+    // search for a potential server-provided duplicate, which is considered to
+    // be an even better candidate for the reasons outlined below.
+    if (non_entity_it == top_match->duplicate_matches.end()) {
+      non_entity_it = it;
+    }
+
+    // When an entity suggestion (SEARCH_SUGGEST_ENTITY) is received from
+    // google.com, we also receive a non-entity version of the same suggestion
+    // which (a) gets placed in the |duplicate_matches| list of the entity
+    // suggestion (as part of the deduplication process) and (b) has the same
+    // |deletion_url| as the entity suggestion.
+    // When the user attempts to remove the SEARCH_SUGGEST_ENTITY suggestion
+    // from the omnibox, the suggestion removal code will fire off network
+    // requests to the suggestion's own |deletion_url| as well as to any
+    // deletion_url's present on matches in the associated |duplicate_matches|
+    // list, which in this case would result in redundant network calls to the
+    // same URL.
+    // By prioritizing the "undeduping" (i.e. moving a duplicate match out of
+    // the |duplicate_matches| list) and promotion of the non-entity
+    // SEARCH_SUGGEST (or any other "specialized search") duplicate as the
+    // top match, we are deliberately separating the two matches that have the
+    // same |deletion_url|, thereby eliminating any redundant network calls
+    // upon suggestion removal.
+    if (it->type == ACMatchType::SEARCH_SUGGEST ||
+        AutocompleteMatch::IsSpecializedSearchType(it->type)) {
+      non_entity_it = it;
+      break;
+    }
+  }
+
+  if (non_entity_it != top_match->duplicate_matches.end()) {
+    // Move out the non-entity match, then erase it from the list of duplicates.
+    // We do this first, because the insertion operation invalidates all
+    // iterators, including |top_match|.
+    AutocompleteMatch non_entity_match_copy{std::move(*non_entity_it)};
+    top_match->duplicate_matches.erase(non_entity_it);
+
+    // When we spawn our non-entity match copy, we still want to preserve any
+    // entity ID that was provided by the server for logging purposes, even if
+    // we don't display it.
+    if (non_entity_match_copy.entity_id.empty()) {
+      non_entity_match_copy.entity_id = top_match->entity_id;
+    }
+
+    // Unless the entity match has Actions in Suggest, promote the non-entity
+    // match to the top. Otherwise keep the entity match at the top followed by
+    // the non-entity match.
+    bool top_match_has_actions =
+        !!top_match->GetActionWhere([](const auto& action) {
+          return action->ActionId() == OmniboxActionId::ACTION_IN_SUGGEST;
+        });
+
+    if (top_match_has_actions) {
+      matches->insert(std::next(matches->begin()),
+                      std::move(non_entity_match_copy));
+    } else {
+      matches->insert(matches->begin(), std::move(non_entity_match_copy));
+    }
+    // Immediately return as all our iterators are invalid after the insertion.
+    return true;
+  }
+
+  return false;
+}
+
+void AutocompleteResult::ArrangeInlineLocationSignalingMatch() {
+  if (!base::FeatureList::IsEnabled(omnibox::kInlineLocationSignaling)) {
+    return;
+  }
+
+  // Find the inline location signaling match. There's usually at most 1. Result
+  // transferring can lead to multiple signaling matches, but we don't handle
+  // that case since the effect of a temporarily incorrectly positioned location
+  // match doesn't seem significant.
+  auto location_it = std::ranges::find_if(matches_, [](const auto& m) {
+    return m.extra_headers.contains(kXGeoHeader);
+  });
+  if (location_it == matches_.end()) {
+    return;
+  }
+
+  // Find its parent match.
+  auto parent_it = std::ranges::find_if(matches_, [&](const auto& m) {
+    return m.destination_url == location_it->destination_url &&
+           !m.extra_headers.contains(kXGeoHeader);
+  });
+  if (parent_it == matches_.end()) {
+    return;
+  }
+  // Compute the parent index before `erase()` below invalidates the iterator.
+  size_t parent_index = std::distance(matches_.begin(), parent_it);
+
+  // Move the location match 1 above or below its parent.
+  AutocompleteMatch geo_match = std::move(*location_it);
+  matches_.erase(location_it);
+  const auto order = omnibox::kInlineLocationSignalingDisplayOrder.Get();
+  bool insert_above =
+      order == omnibox::InlineLocationSignalingDisplayOrder::kDisplayAbove &&
+      // Don't displace the parent if it's the default match.
+      parent_index > 0;
+  size_t insert_idx = insert_above ? parent_index : parent_index + 1;
+  matches_.insert(matches_.begin() + insert_idx, std::move(geo_match));
+}
+
 void AutocompleteResult::BuildProviderToMatchesCopy(
     ProviderToMatches* provider_to_matches) const {
   for (const auto& match : *this)
@@ -1703,6 +1825,9 @@ AutocompleteResult::GetMatchComparisonFields(const AutocompleteMatch& match) {
              omnibox_feature_configs::AiMode::Get()
                  .do_not_dedupe_aim_suggestions) {
     type = AutocompleteMatchDedupeType::kAiMode;
+  } else if (base::FeatureList::IsEnabled(omnibox::kInlineLocationSignaling) &&
+             match.extra_headers.contains(kXGeoHeader)) {
+    type = AutocompleteMatchDedupeType::kInlineLocationSignaling;
   } else {
     type = AutocompleteMatchDedupeType::kNormal;
   }
@@ -1710,7 +1835,7 @@ AutocompleteResult::GetMatchComparisonFields(const AutocompleteMatch& match) {
   return std::make_tuple(match.stripped_destination_url.spec(), type);
 }
 
-void AutocompleteResult::LimitNumberOfURLsShown(
+void AutocompleteResult::LimitNumberOfUrlsShown(
     size_t max_matches,
     const CompareWithDemoteByType<AutocompleteMatch>& comparing_object) {
   size_t search_count =

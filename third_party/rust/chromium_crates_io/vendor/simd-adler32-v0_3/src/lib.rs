@@ -77,9 +77,14 @@
 //!
 //! Feature detection tries to use the fastest supported feature first.
 #![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(target_arch = "arm", feature(stdarch_arm_neon_intrinsics))]
 #![cfg_attr(
   all(feature = "nightly", any(target_arch = "x86", target_arch = "x86_64")),
   feature(stdarch_x86_avx512, avx512_target_feature)
+)]
+#![cfg_attr(
+  all(feature = "nightly", target_arch = "arm"),
+  feature(stdarch_arm_neon_intrinsics)
 )]
 #![cfg_attr(
   all(
@@ -308,7 +313,7 @@ mod tests {
     let sum = 0xdeadbeaf;
 
     let mut simd = super::Adler32::from_checksum(sum);
-    let mut adler = adler::Adler32::from_checksum(sum);
+    let mut adler = adler2::Adler32::from_checksum(sum);
 
     simd.write(buf);
     adler.write_slice(buf);

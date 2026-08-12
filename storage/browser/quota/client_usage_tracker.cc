@@ -8,7 +8,6 @@
 #include <iterator>
 
 #include "base/barrier_closure.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
@@ -27,7 +26,7 @@ ClientUsageTracker::ClientUsageTracker(
     scoped_refptr<SpecialStoragePolicy> special_storage_policy)
     : client_(client),
       special_storage_policy_(std::move(special_storage_policy)) {
-  DCHECK(client_);
+  CHECK(client_, base::NotFatalUntil::M148);
   if (special_storage_policy_.get())
     special_storage_policy_->AddObserver(this);
 }
@@ -41,7 +40,7 @@ ClientUsageTracker::~ClientUsageTracker() {
 void ClientUsageTracker::GetBucketsUsage(const std::set<BucketLocator>& buckets,
                                          UsageCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_GT(buckets.size(), 0u);
+  CHECK_GT(buckets.size(), 0u, base::NotFatalUntil::M148);
 
   auto info = std::make_unique<AccumulateInfo>();
   auto* info_ptr = info.get();
@@ -148,8 +147,8 @@ void ClientUsageTracker::SetUsageCacheEnabled(
 bool ClientUsageTracker::IsUsageCacheEnabledForStorageKey(
     const blink::StorageKey& storage_key) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return !base::Contains(non_cached_limited_storage_keys_, storage_key) &&
-         !base::Contains(non_cached_unlimited_storage_keys_, storage_key);
+  return !non_cached_limited_storage_keys_.contains(storage_key) &&
+         !non_cached_unlimited_storage_keys_.contains(storage_key);
 }
 
 void ClientUsageTracker::AccumulateBucketsUsage(
@@ -178,8 +177,8 @@ void ClientUsageTracker::FinallySendBucketsUsage(
     UsageCallback callback,
     std::unique_ptr<AccumulateInfo> info) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_GE(info->limited_usage, 0);
-  DCHECK_GE(info->unlimited_usage, 0);
+  CHECK_GE(info->limited_usage, 0, base::NotFatalUntil::M148);
+  CHECK_GE(info->unlimited_usage, 0, base::NotFatalUntil::M148);
 
   std::move(callback).Run(info->limited_usage + info->unlimited_usage,
                           info->unlimited_usage);

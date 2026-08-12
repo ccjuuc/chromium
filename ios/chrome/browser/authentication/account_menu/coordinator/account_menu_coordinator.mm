@@ -7,6 +7,8 @@
 #import "base/apple/foundation_util.h"
 #import "base/check.h"
 #import "base/feature_list.h"
+#import "base/functional/bind.h"
+#import "base/functional/callback.h"
 #import "base/functional/callback_helpers.h"
 #import "base/memory/raw_ptr.h"
 #import "base/metrics/user_metrics.h"
@@ -16,6 +18,7 @@
 #import "components/signin/public/base/signin_metrics.h"
 #import "components/signin/public/base/signin_switches.h"
 #import "components/signin/public/identity_manager/account_info.h"
+#import "components/subscription_eligibility/subscription_eligibility_service.h"
 #import "components/sync/service/sync_service.h"
 #import "components/sync/service/sync_service_utils.h"
 #import "components/sync/service/sync_user_settings.h"
@@ -28,19 +31,19 @@
 #import "ios/chrome/browser/authentication/account_menu/coordinator/account_menu_mediator_delegate.h"
 #import "ios/chrome/browser/authentication/account_menu/public/account_menu_constants.h"
 #import "ios/chrome/browser/authentication/account_menu/ui/account_menu_view_controller.h"
+#import "ios/chrome/browser/authentication/signin/reauth/coordinator/signin_reauth_coordinator.h"
 #import "ios/chrome/browser/authentication/trusted_vault_reauthentication/coordinator/trusted_vault_reauthentication_coordinator.h"
 #import "ios/chrome/browser/authentication/trusted_vault_reauthentication/coordinator/trusted_vault_reauthentication_coordinator_delegate.h"
 #import "ios/chrome/browser/authentication/ui_bundled/authentication_flow/authentication_flow.h"
 #import "ios/chrome/browser/authentication/ui_bundled/continuation.h"
-#import "ios/chrome/browser/authentication/ui_bundled/signin/reauth/signin_reauth_coordinator.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_coordinator.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_in_progress.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signout_action_sheet/signout_action_sheet_coordinator.h"
 #import "ios/chrome/browser/push_notification/model/push_notification_service.h"
-#import "ios/chrome/browser/settings/ui_bundled/google_services/manage_accounts/manage_accounts_coordinator.h"
-#import "ios/chrome/browser/settings/ui_bundled/google_services/manage_accounts/manage_accounts_coordinator_delegate.h"
-#import "ios/chrome/browser/settings/ui_bundled/google_services/sync_error_settings_command_handler.h"
+#import "ios/chrome/browser/settings/manage_accounts/coordinator/manage_accounts_coordinator.h"
+#import "ios/chrome/browser/settings/manage_accounts/coordinator/manage_accounts_coordinator_delegate.h"
+#import "ios/chrome/browser/settings/manage_sync/public/sync_error_settings_command_handler.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_controller_protocol.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_navigation_controller.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_root_view_controlling.h"
@@ -53,11 +56,13 @@
 #import "ios/chrome/browser/shared/model/browser/browser_provider.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
+#import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
 #import "ios/chrome/browser/shared/public/commands/browser_commands.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/help_commands.h"
+#import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/commands/show_signin_command.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
@@ -65,9 +70,11 @@
 #import "ios/chrome/browser/shared/ui/table_view/table_view_utils.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
+#import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service_factory.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/browser/signin/model/system_identity_manager.h"
+#import "ios/chrome/browser/subscription_eligibility/model/subscription_eligibility_service_factory.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util.h"
@@ -92,8 +99,8 @@ void maybeShowSettingsIPH(Browser* browser) {
     AccountMenuMediatorDelegate,
     SettingsNavigationControllerDelegate,
     SigninReauthCoordinatorDelegate,
-    SyncErrorSettingsCommandHandler,
     SyncEncryptionPassphraseTableViewControllerPresentationDelegate,
+    SyncErrorSettingsCommandHandler,
     TrustedVaultReauthenticationCoordinatorDelegate,
     UIAdaptivePresentationControllerDelegate>
 
@@ -103,6 +110,16 @@ void maybeShowSettingsIPH(Browser* browser) {
 @property(nonatomic, strong) AccountMenuMediator* mediator;
 
 @end
+
+// Enum defining the possible actions to execute after a successful
+// reauthentication.
+typedef NS_ENUM(NSUInteger, AccountMenuReauthAction) {
+  // No action needs to be taken after reauthentication.
+  AccountMenuReauthActionNone,
+  // Continue opening the "Manage your Google Account" view after
+  // reauthentication.
+  AccountMenuReauthActionManageYourGoogleAccount,
+};
 
 @implementation AccountMenuCoordinator {
   UINavigationController* _navigationController;
@@ -140,6 +157,9 @@ void maybeShowSettingsIPH(Browser* browser) {
   // While this value is set, the scene state considers the sign-in to be in
   // progress.
   std::unique_ptr<SigninInProgress> _signinInProgress;
+  // The action to execute upon successful completion of the reauthentication
+  // flow.
+  AccountMenuReauthAction _reauthAction;
 }
 
 - (instancetype)initWithBaseViewController:(UIViewController*)viewController
@@ -151,8 +171,7 @@ void maybeShowSettingsIPH(Browser* browser) {
   if (self) {
     // All authentication related work must be done in the regular profile, even
     // if started from incognito browser.
-    CHECK_EQ(browser->type(), Browser::Type::kRegular,
-             base::NotFatalUntil::M145);
+    CHECK_EQ(browser->type(), Browser::Type::kRegular);
     _accessPoint = accessPoint;
     _anchorView = anchorView;
     _accessPoint = accessPoint;
@@ -220,15 +239,23 @@ void maybeShowSettingsIPH(Browser* browser) {
     [browserCoordinatorCommandsHandler closeCurrentTab];
   };
 
-  _mediator =
-      [[AccountMenuMediator alloc] initWithSyncService:_syncService
-                                 accountManagerService:_accountManagerService
-                                           authService:_authenticationService
-                                       identityManager:_identityManager
-                                                 prefs:prefs
-                                           accessPoint:_accessPoint
-                                                   URL:_url
-                                  prepareChangeProfile:prepareChangeProfile];
+  signin::AvatarProvider* avatarProvider =
+      GetApplicationContext()->GetIdentityAvatarProvider();
+
+  subscription_eligibility::SubscriptionEligibilityService*
+      subscriptionEligibilityService =
+          SubscriptionEligibilityServiceFactory::GetForProfile(profile);
+  _mediator = [[AccountMenuMediator alloc]
+                 initWithSyncService:_syncService
+               accountManagerService:_accountManagerService
+                         authService:_authenticationService
+                     identityManager:_identityManager
+                               prefs:prefs
+      subscriptionEligibilityService:subscriptionEligibilityService
+                         accessPoint:_accessPoint
+                                 URL:_url
+                prepareChangeProfile:prepareChangeProfile
+                      avatarProvider:avatarProvider];
   _mediator.delegate = self;
   _mediator.syncErrorSettingsCommandHandler = self;
   _mediator.consumer = _viewController;
@@ -284,15 +311,19 @@ void maybeShowSettingsIPH(Browser* browser) {
 #pragma mark - AccountMenuMediatorDelegate
 
 - (void)didTapManageYourGoogleAccount {
+  id<SystemIdentity> identity = _authenticationService->GetPrimaryIdentity();
+  if (!identity.hasValidAuth) {
+    [self openReauthCoordinatorWithAction:
+              AccountMenuReauthActionManageYourGoogleAccount];
+    return;
+  }
   [self stopAddAccountCoordinator];
   __weak __typeof(self) weakSelf = self;
   _accountDetailsControllerDismissCallback =
       GetApplicationContext()
           ->GetSystemIdentityManager()
           ->PresentAccountDetailsController(
-              _authenticationService->GetPrimaryIdentity(
-                  signin::ConsentLevel::kSignin),
-              _viewController,
+              _authenticationService->GetPrimaryIdentity(), _viewController,
               /*animated=*/YES,
               base::BindOnce(
                   [](__typeof(self) strongSelf) {
@@ -318,8 +349,7 @@ void maybeShowSettingsIPH(Browser* browser) {
 
 - (void)signOutFromTargetRect:(CGRect)targetRect
                    completion:(signin_ui::SignoutCompletionCallback)completion {
-  if (!_authenticationService->HasPrimaryIdentity(
-          signin::ConsentLevel::kSignin)) {
+  if (!_authenticationService->HasPrimaryIdentity()) {
     // This could happen in very rare cases, if the account somehow got removed
     // after the accounts menu was created.
     return;
@@ -334,6 +364,7 @@ void maybeShowSettingsIPH(Browser* browser) {
                             rect:targetRect
                             view:_viewController.view
         forceSnackbarOverToolbar:YES
+                  showUndoButton:IsIdentityAwarenessEnabled()
                       withSource:metricSignOut
                       completion:^(BOOL success, SceneState* scene_state) {
                         [weakSelf stopSignoutActionSheetCoordinator];
@@ -404,7 +435,7 @@ void maybeShowSettingsIPH(Browser* browser) {
 }
 
 - (void)signinFinished {
-  CHECK(_signinInProgress, base::NotFatalUntil::M147);
+  CHECK(_signinInProgress);
   _signinInProgress.reset();
 }
 
@@ -457,7 +488,7 @@ void maybeShowSettingsIPH(Browser* browser) {
       trusted_vault::TrustedVaultUserActionTriggerForUMA::kAccountMenu;
   SigninTrustedVaultDialogIntent intent =
       SigninTrustedVaultDialogIntentFetchKeys;
-  CHECK(!_trustedVaultReauthenticationCoordinator, base::NotFatalUntil::M145);
+  CHECK(!_trustedVaultReauthenticationCoordinator);
   _trustedVaultReauthenticationCoordinator =
       [[TrustedVaultReauthenticationCoordinator alloc]
           initWithBaseViewController:_navigationController
@@ -482,7 +513,7 @@ void maybeShowSettingsIPH(Browser* browser) {
       trusted_vault::TrustedVaultUserActionTriggerForUMA::kAccountMenu;
   SigninTrustedVaultDialogIntent intent =
       SigninTrustedVaultDialogIntentDegradedRecoverability;
-  CHECK(!_trustedVaultReauthenticationCoordinator, base::NotFatalUntil::M145);
+  CHECK(!_trustedVaultReauthenticationCoordinator);
   _trustedVaultReauthenticationCoordinator =
       [[TrustedVaultReauthenticationCoordinator alloc]
           initWithBaseViewController:_navigationController
@@ -499,21 +530,33 @@ void maybeShowSettingsIPH(Browser* browser) {
   _authenticationService->ShowMDMErrorDialogForIdentity(identity);
 }
 
-- (void)openPrimaryAccountReauthDialog {
-  [self stopChildrenCoordinators];
-  if (base::FeatureList::IsEnabled(switches::kEnableIdentityInAuthError)) {
-    [self openReauthCoordinator];
-  } else {
-    [self openAddAccountReauthCoordinator];
+- (void)openBookmarksLimitExceededHelp {
+  if (_syncService) {
+    _syncService->AcknowledgeBookmarksLimitExceededError(
+        syncer::SyncService::BookmarksLimitExceededHelpClickedSource::
+            kAccountMenu);
   }
+  GURL helpUrl(kBookmarksLimitExceededHelpCenter);
+  OpenNewTabCommand* command =
+      [OpenNewTabCommand commandWithURLFromChrome:helpUrl];
+  command.appendTo = OpenPosition::kCurrentTab;
+  id<SceneCommands> handler =
+      HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
+  [handler closePresentedViewsAndOpenURL:command];
 }
 
-- (void)openReauthCoordinator {
+- (void)openPrimaryAccountReauthDialog {
+  [self stopChildrenCoordinators];
+  [self openReauthCoordinatorWithAction:AccountMenuReauthActionNone];
+}
+
+- (void)openReauthCoordinatorWithAction:(AccountMenuReauthAction)action {
   if (_reauthCoordinator.viewWillPersist) {
     return;
   }
   [self stopChildrenCoordinators];
   [_reauthCoordinator stop];
+  _reauthAction = action;
 
   CoreAccountInfo account =
       _identityManager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin);
@@ -529,34 +572,6 @@ void maybeShowSettingsIPH(Browser* browser) {
                                      kAccountMenu];
   _reauthCoordinator.delegate = self;
   [_reauthCoordinator start];
-}
-
-- (void)openAddAccountReauthCoordinator {
-  if (_addAccountSigninCoordinator.viewWillPersist) {
-    return;
-  }
-  [self stopChildrenCoordinators];
-  signin_metrics::AccessPoint accessPoint =
-      signin_metrics::AccessPoint::kAccountMenuSwitchAccount;
-  signin_metrics::PromoAction promoAction =
-      signin_metrics::PromoAction::PROMO_ACTION_NO_SIGNIN_PROMO;
-  SigninContextStyle style = SigninContextStyle::kDefault;
-  _addAccountSigninCoordinator = [SigninCoordinator
-      primaryAccountReauthCoordinatorWithBaseViewController:
-          _navigationController
-                                                    browser:self.browser
-                                               contextStyle:style
-                                                accessPoint:accessPoint
-                                                promoAction:promoAction
-                                       continuationProvider:
-                                           DoNothingContinuationProvider()];
-  __weak __typeof(self) weakSelf = self;
-  _addAccountSigninCoordinator.signinCompletion =
-      ^(SigninCoordinator* coordinator, SigninCoordinatorResult signinResult,
-        id<SystemIdentity> signinCompletionIdentity) {
-        [weakSelf signinCoordinatorCompletionWithCoordinator:coordinator];
-      };
-  [_addAccountSigninCoordinator start];
 }
 
 #pragma mark - SettingsNavigationControllerDelegate
@@ -615,8 +630,7 @@ void maybeShowSettingsIPH(Browser* browser) {
 - (void)configureHandlersForRootViewController:
     (id<SettingsRootViewControlling>)controller {
   CommandDispatcher* dispatcher = self.browser->GetCommandDispatcher();
-  controller.applicationHandler =
-      HandlerForProtocol(dispatcher, ApplicationCommands);
+  controller.sceneHandler = HandlerForProtocol(dispatcher, SceneCommands);
   controller.browserHandler = HandlerForProtocol(dispatcher, BrowserCommands);
   controller.settingsHandler = HandlerForProtocol(dispatcher, SettingsCommands);
   controller.snackbarHandler = HandlerForProtocol(dispatcher, SnackbarCommands);
@@ -675,17 +689,21 @@ void maybeShowSettingsIPH(Browser* browser) {
 
 - (void)reauthFinishedWithResult:(ReauthResult)result
                           gaiaID:(const GaiaId*)gaiaID {
-  // We expect the user reauthentified in the current account, so there is
-  // nothing to do in this callback.
   [self stopReauthCoordinator];
+
+  if (result == ReauthResult::kSuccess &&
+      _reauthAction == AccountMenuReauthActionManageYourGoogleAccount) {
+    [self didTapManageYourGoogleAccount];
+    return;
+  }
+  [_mediator accountMenuIsUsable];
 }
 
 #pragma mark - SyncEncryptionPassphraseTableViewControllerPresentationDelegate
 
 - (void)syncEncryptionPassphraseTableViewControllerDidDisappear:
     (SyncEncryptionPassphraseTableViewController*)viewController {
-  CHECK_EQ(_syncEncryptionPassphraseTableViewController, viewController,
-           base::NotFatalUntil::M142);
+  CHECK_EQ(_syncEncryptionPassphraseTableViewController, viewController);
   _syncEncryptionPassphraseTableViewController.presentationDelegate = nil;
   [_syncEncryptionPassphraseTableViewController settingsWillBeDismissed];
   _syncEncryptionPassphraseTableViewController = nil;
@@ -696,8 +714,7 @@ void maybeShowSettingsIPH(Browser* browser) {
 
 - (void)trustedVaultReauthenticationCoordinatorWantsToBeStopped:
     (TrustedVaultReauthenticationCoordinator*)coordinator {
-  CHECK_EQ(coordinator, _trustedVaultReauthenticationCoordinator,
-           base::NotFatalUntil::M145);
+  CHECK_EQ(coordinator, _trustedVaultReauthenticationCoordinator);
   [self stopTrustedVaultReauthenticationCoordinator];
 }
 

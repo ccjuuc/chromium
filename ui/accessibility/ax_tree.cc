@@ -17,7 +17,6 @@
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/containers/adapters.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/map_util.h"
 #include "base/debug/crash_logging.h"
@@ -37,7 +36,6 @@
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_event.h"
-#include "ui/accessibility/ax_language_detection.h"
 #include "ui/accessibility/ax_node.h"
 #include "ui/accessibility/ax_node_id_forward.h"
 #include "ui/accessibility/ax_node_position.h"
@@ -371,7 +369,7 @@ struct AXTreeUpdateState {
 
   // Returns whether this update creates a node marked by |node_id|.
   bool IsCreatedNode(AXNodeID node_id) const {
-    return base::Contains(new_node_ids, node_id);
+    return new_node_ids.contains(node_id);
   }
 
   // Returns whether this update creates |node|.
@@ -613,7 +611,7 @@ struct AXTreeUpdateState {
   // Returns whether this update must invalidate the unignored cached
   // values for |node_id|.
   bool InvalidatesUnignoredCachedValues(AXNodeID node_id) const {
-    return base::Contains(invalidate_unignored_cached_values_ids, node_id);
+    return invalidate_unignored_cached_values_ids.contains(node_id);
   }
 
   // Adds the parent of |node_id| to the list of nodes to invalidate unignored
@@ -804,6 +802,18 @@ void AXTree::SetFocusedNodeShouldNeverBeIgnored() {
 }
 
 // static
+bool AXTree::MightBeIgnoredChildTreeHost(const AXNodeData& node_data) {
+  // `ComputeNodeIsIgnored` reads the focus as well, but the focus can only
+  // make a node unignored. This test is thus never false for a node that
+  // `AXNode::IsIgnored` reports as ignored.
+  return node_data.HasStringAttribute(
+             ax::mojom::StringAttribute::kChildTreeId) &&
+         (node_data.HasState(ax::mojom::State::kIgnored) ||
+          node_data.role == ax::mojom::Role::kNone ||
+          node_data.role == ax::mojom::Role::kRowGroup);
+}
+
+// static
 bool AXTree::ComputeNodeIsIgnored(const AXTreeData* optional_tree_data,
                                   const AXNodeData& node_data) {
   // A node with an ARIA presentational role (role="none") should also be
@@ -890,30 +900,14 @@ std::unique_ptr<AXNode> ExtraAnnouncementNodes::CreateNode(
 }
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 
-AXTree::AXTree() {
-  // TODO(chrishall): should language_detection_manager be a member or pointer?
-  // TODO(chrishall): do we want to initialize all the time, on demand, or only
-  //                  when feature flag is set?
-  DCHECK(!language_detection_manager);
-  language_detection_manager =
-      std::make_unique<AXLanguageDetectionManager>(this);
-}
+AXTree::AXTree() = default;
 
 AXTree::AXTree(const AXTreeUpdate& initial_state) {
   CHECK(Unserialize(initial_state)) << error();
-  DCHECK(!language_detection_manager);
-  language_detection_manager =
-      std::make_unique<AXLanguageDetectionManager>(this);
 }
 
 AXTree::~AXTree() {
   Destroy();
-
-  // Language detection manager will detach from AXTree observer list in its
-  // destructor. But because of variable order, when destroying AXTree, the
-  // observer list will already be destroyed. To avoid that problem, free
-  // language detection manager before.
-  language_detection_manager.reset();
 
   CHECK(observers_.empty());
 }
@@ -1196,8 +1190,9 @@ std::set<AXNodeID> AXTree::GetNodeIdsForChildTreeId(
 
 const std::set<AXTreeID> AXTree::GetAllChildTreeIds() const {
   std::set<AXTreeID> result;
-  for (auto entry : child_tree_id_reverse_map_)
-    result.insert(entry.first);
+  for (const auto& [child_tree_id, _] : child_tree_id_reverse_map_) {
+    result.insert(child_tree_id);
+  }
   return result;
 }
 
@@ -1328,8 +1323,8 @@ bool AXTree::Unserialize(const AXTreeUpdate& update) {
       // the same ignored state.
       bool is_root_of_ignored_change =
           !node->parent() ||
-          !base::Contains(update_state.ignored_state_changed_ids,
-                          node->parent()->id()) ||
+          !update_state.ignored_state_changed_ids.contains(
+              node->parent()->id()) ||
           node->IsIgnored() != node->parent()->IsIgnored();
       observers_.Notify(&AXTreeObserver::OnIgnoredWillChange, this, node,
                         will_be_ignored, is_root_of_ignored_change);
@@ -1707,7 +1702,7 @@ AXNode* AXTree::CreateNode(AXNode* parent,
   [[maybe_unused]] bool inserted =
       id_map_.try_emplace(id, std::move(node)).second;
   // There should not have been a node already in the map with the same id.
-  DCHECK(inserted);
+  CHECK(inserted);
   return node_raw;
 }
 
@@ -1770,8 +1765,10 @@ bool AXTree::ComputePendingChanges(const AXTreeUpdate& update,
   // on the tree during the update.
   int number_of_inline_textboxes = 0;
   for (const AXNodeData& new_data : update_state->pending_tree_update->nodes) {
-    if (new_data.id == kInvalidAXNodeID)
-      continue;
+    if (new_data.id == kInvalidAXNodeID) {
+      RecordError(*update_state, "Node ID is invalid.");
+      return false;
+    }
     bool is_new_root =
         update_state->root_will_be_created && new_data.id == update.root_id;
     if (!ComputePendingChangesToNode(new_data, is_new_root, update_state)) {
@@ -1805,6 +1802,10 @@ bool AXTree::ComputePendingChangesToNode(const AXNodeData& new_data,
   // unignored index in parent.
   size_t j = 0;
   for (auto child_id : new_data.child_ids) {
+    if (child_id == kInvalidAXNodeID) {
+      RecordError(*update_state, "Child ID is invalid.");
+      return false;
+    }
     if (const AXNode* node = GetFromId(child_id);
         node && node->GetIndexInParent() != j) {
       update_state->InvalidateParentNodeUnignoredCacheValues(node->id());
@@ -1963,7 +1964,7 @@ bool AXTree::ComputePendingChangesToNode(const AXNodeData& new_data,
   }
 
   for (AXNodeID child_id : create_or_destroy_ids) {
-    if (base::Contains(new_child_id_set, child_id)) {
+    if (new_child_id_set.contains(child_id)) {
       // This is a serious error - nodes should never be reparented without
       // first being removed from the tree. If a node exists in the tree already
       // then adding it to a new parent would mean stealing the node from its
@@ -2040,6 +2041,18 @@ bool AXTree::UpdateNode(const AXNodeData& src,
     node->SetData(src);
   }
 
+  // The browser must not trust the renderer to correctly supply the
+  // kClipsChildren attribute for rootWebArea nodes. A compromised renderer
+  // could omit it to supply out-of-bounds coordinates that bypass clipping,
+  // allowing spoofed accessibility focus rings and synthesized taps at
+  // arbitrary screen locations. Enforce the attribute unconditionally.
+  if (src.role == ax::mojom::Role::kRootWebArea) {
+    AXNodeData enforced_data = node->data();
+    enforced_data.AddBoolAttribute(ax::mojom::BoolAttribute::kClipsChildren,
+                                   true);
+    node->SetData(enforced_data);
+  }
+
   // If we come across a page breaking object, mark the tree as a paginated root
   if (src.GetBoolAttribute(ax::mojom::BoolAttribute::kIsPageBreakingObject))
     has_pagination_support_ = true;
@@ -2084,8 +2097,7 @@ void AXTree::NotifySubtreeWillBeReparentedOrDeleted(
   // Don't fire redundant remove notification in the case where the parent
   // will become ignored at the same time.
   if (notify_removed && node->parent() &&
-      base::Contains(update_state->ignored_state_changed_ids,
-                     node->parent()->id()) &&
+      update_state->ignored_state_changed_ids.contains(node->parent()->id()) &&
       !node->parent()->IsIgnored()) {
     notify_removed = false;
   }
@@ -2277,7 +2289,7 @@ void AXTree::NotifyNodeAttributesHaveBeenChanged(
   observers_.Notify(&AXTreeObserver::OnNodeDataChanged, this, old_data,
                     new_data);
 
-  if (base::Contains(update_state.ignored_state_changed_ids, new_data.id)) {
+  if (update_state.ignored_state_changed_ids.contains(new_data.id)) {
     observers_.Notify(&AXTreeObserver::OnIgnoredChanged, this, node,
                       node->IsIgnored());
   }
@@ -2421,6 +2433,16 @@ void AXTree::UpdateReverseRelations(AXNode* node,
         map[new_relation_target_id].insert(id);
       }
     }
+  }
+
+  // Update the set of nodes that could be ignored and host a child tree. The
+  // ignored state and the child tree ID can each change on their own, thus
+  // both need a check here. A node that goes away arrives here with empty
+  // data, which takes it out of the set.
+  if (MightBeIgnoredChildTreeHost(new_data)) {
+    ignored_child_tree_host_ids_.insert(id);
+  } else if (!is_new_node && MightBeIgnoredChildTreeHost(old_data)) {
+    ignored_child_tree_host_ids_.erase(id);
   }
 
   // Update child tree id reverse map.
@@ -2577,7 +2599,7 @@ void AXTree::DeleteOldChildren(AXNode* node,
 
   // Delete the old children.
   for (AXNode* child : node->children()) {
-    if (!base::Contains(new_child_id_set, child->id()))
+    if (!new_child_id_set.contains(child->id()))
       DestroySubtree(child, update_state);
   }
 }
@@ -2874,8 +2896,8 @@ void AXTree::ComputeSetSizePosInSetAndCache(const AXNode& node,
   // Iterate over all items from OrderedSetItemsMap to compute and cache each
   // ordered set item's PosInSet and SetSize and corresponding ordered set
   // container's SetSize.
-  for (auto& element : items_map_to_be_populated.items_map_) {
-    for (const OrderedSetContent& ordered_set_content : element.second) {
+  for (const auto& [_, sets_list] : items_map_to_be_populated.items_map_) {
+    for (const OrderedSetContent& ordered_set_content : sets_list) {
       ComputeSetSizePosInSetAndCacheHelper(ordered_set_content);
     }
   }
@@ -3069,6 +3091,20 @@ std::optional<int> AXTree::GetSetSize(const AXNode& node) {
       node_set_size_pos_in_set_info_map_[node.id()].set_size =
           controlled_item_set_size;
       return controlled_item_set_size;
+    }
+
+    // We want screen readers to announce buttons that pop up a menulist as
+    // pop up buttons. That means exposing their role to kPopUpButton. But
+    // for elements with the kPopUpButton role that aren't linked
+    // to their popups (via aria-controls), the set size calculation returns 0.
+    // <menulist>s aren't linked to their invoker buttons, and we don't want the
+    // invoker buttons to have a setsize anyway, so just return null here,
+    // making the <menulist>-invoking buttons have a setsize property at all.
+    // Unlinked explicit popup buttons get caught here too, but exposing no
+    // setsize for <button aria-haspopup="menu">button</button> seems fine.
+    if (node.GetRole() == ax::mojom::Role::kPopUpButton) {
+      node_set_size_pos_in_set_info_map_[node.id()].set_size = std::nullopt;
+      return std::nullopt;
     }
   }
 

@@ -5,9 +5,11 @@
 import {loadTimeData} from '//resources/js/load_time_data.js';
 
 import {NodeStore} from '../content/node_store.js';
-import {SelectionController} from '../content/selection_controller.js';
+import type {ContentPosition} from '../content/read_anything_types.js';
+import {ContentPositionSource} from '../content/read_anything_types.js';
 import {getWordCount, playFromSelectionTimeout} from '../shared/common.js';
-import {ReadAnythingLogger} from '../shared/read_anything_logger.js';
+import {ReadAnythingLogger, SpeechControls} from '../shared/read_anything_logger.js';
+import {getNextValidNodeFromPosition} from '../shared/tree_traversal.js';
 
 import {ReadAloudHighlighter} from './highlighter.js';
 import {getReadAloudModel} from './read_aloud_model_browser_proxy.js';
@@ -26,12 +28,24 @@ import {WordBoundaries} from './word_boundaries.js';
 // due to a TTS engine bug with voices timing out on too-long text.
 export const MAX_SPEECH_LENGTH: number = 175;
 
+// The timeout threshold is 10 seconds. If no speech has occurred approximately
+// 10 seconds after pressing play, there's likely an engine error.
+// After 10 seconds, an engine stall is logged. After 15 seconds, a recovery
+// failure and attempt to reload the extension failure is logged. Reading mode
+// doesn't reload at 10 seconds to avoid race conditions with recovery attempts
+// inside the extension.
+// <if expr="not is_chromeos">
+const ENGINE_TIMEOUT_THRESHOLD_MS: number = 10 * 1000;
+const ENGINE_RECOVERY_TIMEOUT_THRESHOLD_MS: number = 15 * 1000;
+// </if>
+
 export interface SpeechListener {
   onIsSpeechActiveChange(): void;
   onIsAudioCurrentlyPlayingChange(): void;
   onEngineStateChange(): void;
   onPreviewVoicePlaying(): void;
   onPlayingFromSelection(): void;
+  onWordBoundary(segments: Segment[]): void;
 }
 
 export class SpeechController {
@@ -44,10 +58,10 @@ export class SpeechController {
   private wordBoundaries_: WordBoundaries = WordBoundaries.getInstance();
   private highlighter_: ReadAloudHighlighter =
       ReadAloudHighlighter.getInstance();
-  private selectionController_: SelectionController =
-      SelectionController.getInstance();
   private listeners_: SpeechListener[] = [];
   private readAloudModel_: ReadAloudModelBrowserProxy = getReadAloudModel();
+  private engineTimeoutId_: number|null = null;
+  private engineRecoveryTimeoutId_: number|null = null;
 
   constructor() {
     // Send over the initial state.
@@ -56,7 +70,7 @@ export class SpeechController {
   }
 
   resetForNewContent() {
-    if (chrome.readingMode.isTsTextSegmentationEnabled) {
+    if (!chrome.readingMode.isPhraseHighlightingEnabled) {
       // Reset the read aloud model because there's new content.
       this.readAloudModel_.resetModel?.();
     }
@@ -165,7 +179,31 @@ export class SpeechController {
     this.readAloudModel_.init(contextNode);
   }
 
-  onSelectionChange() {
+  onLineFocusChange(position: CaretPosition|null) {
+    if (!chrome.readingMode.isLineFocusEnabled) {
+      return;
+    }
+
+    let contentPosition: ContentPosition|null = null;
+    if (position) {
+      let node: Node = position.offsetNode;
+      let offset: number = position.offset;
+      if (node && this.nodeStore_.getAncestor(node)) {
+        const ancestor = this.nodeStore_.getAncestor(node)!;
+        node = ancestor.node;
+        offset += ancestor.offset;
+      }
+      contentPosition = {
+        node,
+        offset,
+        source: ContentPositionSource.LINE_FOCUS,
+      };
+    }
+    this.model_.setCurrentContentPosition(contentPosition);
+  }
+
+  onSelectionChange(position: ContentPosition|null) {
+    this.model_.setCurrentContentPosition(position);
     this.highlighter_.clearHighlightFormatting();
   }
 
@@ -180,10 +218,10 @@ export class SpeechController {
   // stop speaking.
   onReadingModeWillClose() {
     // TODO: crbug.com/466967616 - Ensure Read Aloud resume honors word
-    // boundaries after ReadingModeWillClose is called
-    if (this.isSpeechActive()) {
-      this.stopSpeech_(PauseActionSource.DEFAULT);
-    }
+    // boundaries after ReadingModeWillClose is called.
+    // TODO: crbug.com/466967616 - Log when this is called when isSpeechActive
+    // is false, as this is likely indicative of a bug.
+    this.stopSpeech_(PauseActionSource.DEFAULT);
   }
 
   onTabMuteStateChange(muted: boolean) {
@@ -193,6 +231,7 @@ export class SpeechController {
 
   onVoiceSelected(selectedVoice: SpeechSynthesisVoice) {
     const currentVoice = this.voiceLanguageController_.getCurrentVoice();
+    this.logger_.logVoiceLanguageChange(currentVoice, selectedVoice);
     this.voiceLanguageController_.setUserPreferredVoice(selectedVoice);
 
     // If the locales are identical, the voices are likely from the same
@@ -220,7 +259,8 @@ export class SpeechController {
 
   onHighlightGranularityChange(newGranularity: number) {
     // Rehighlight the new granularity.
-    if (newGranularity !== chrome.readingMode.noHighlighting) {
+    if (this.hasSpeechBeenTriggered() &&
+        newGranularity !== chrome.readingMode.noHighlighting) {
       this.highlightCurrentGranularity_(
           this.readAloudModel_.getCurrentTextSegments());
     }
@@ -291,13 +331,10 @@ export class SpeechController {
   }
 
   private resumeSpeech_() {
-    let playedFromSelection = false;
-    if (this.selectionController_.hasSelection()) {
+    const playedFromPosition = this.playFromContentPosition_();
+    if (playedFromPosition) {
       this.wordBoundaries_.resetToDefaultState();
-      playedFromSelection = this.playFromSelection_();
-    }
-
-    if (!playedFromSelection) {
+    } else {
       if (this.isPausedFromButton() && !this.wordBoundaries_.hasBoundaries()) {
         // If word boundaries aren't supported for the given voice, we should
         // still continue to use synth.resume, as this is preferable to
@@ -324,7 +361,7 @@ export class SpeechController {
     // If the current read highlight has been cleared from a call to
     // updateContent, such as via a preference change, rehighlight the nodes
     // after a pause.
-    if (!playedFromSelection) {
+    if (!playedFromPosition) {
       this.highlightCurrentGranularity_(
           this.readAloudModel_.getCurrentTextSegments());
     }
@@ -344,19 +381,18 @@ export class SpeechController {
     this.setHasSpeechBeenTriggered(true);
     this.model_.setIsSpeechBeingRepositioned(false);
 
-    // When the TS segmentation flag is enabled, playFromSelection_ needs to
-    // called after initializeSpeechTree. While this change is probably okay
-    // to introduce for the non-TS segmentation flag case, the original
+    // When the TS segmentation flag is enabled, playFromContentPosition_ needs
+    // to be called after initializeSpeechTree. While this change is probably
+    // okay to introduce for the non-TS segmentation flag case, the original
     // order is maintained when the flag is disabled to reduce the risk of
     // introducing unexpected bugs to the V8 segmentation method.
-    if (!chrome.readingMode.isTsTextSegmentationEnabled) {
-      const playedFromSelection = this.playFromSelection_();
-      if (playedFromSelection) {
+    if (chrome.readingMode.isPhraseHighlightingEnabled) {
+      if (this.playFromContentPosition_()) {
         return;
       }
     }
 
-    if (chrome.readingMode.isTsTextSegmentationEnabled) {
+    if (!chrome.readingMode.isPhraseHighlightingEnabled) {
       // TODO: crbug.com/440400392- The speech tree should also be initialized
       // before the play button is pressed.
       this.initializeSpeechTree(context);
@@ -364,9 +400,8 @@ export class SpeechController {
       this.initializeSpeechTree();
     }
 
-    if (chrome.readingMode.isTsTextSegmentationEnabled) {
-      const playedFromSelection = this.playFromSelection_();
-      if (playedFromSelection) {
+    if (!chrome.readingMode.isPhraseHighlightingEnabled) {
+      if (this.playFromContentPosition_()) {
         return;
       }
     }
@@ -376,15 +411,13 @@ export class SpeechController {
     }
   }
 
-  private playFromSelection_(): boolean {
-    if (!this.isSpeechTreeInitialized() ||
-        !this.selectionController_.hasSelection()) {
+  private playFromContentPosition_(): boolean {
+    if (!this.isSpeechTreeInitialized()) {
       return false;
     }
 
-    const selectionStart = this.selectionController_.getCurrentSelectionStart();
-    const startingNodeId = selectionStart.nodeId;
-    if (!startingNodeId) {
+    const position = this.model_.getCurrentContentPosition();
+    if (!position) {
       return false;
     }
 
@@ -396,21 +429,36 @@ export class SpeechController {
     this.highlighter_.reset();
     // Iterate through the nodes asynchronously so that we can show the spinner
     // in the toolbar while we move up to the selection.
+    const speechControl = position.source === ContentPositionSource.SELECTION ?
+        SpeechControls.PLAY_FROM_SELECTION :
+        SpeechControls.PLAY_FROM_LINE_FOCUS;
     setTimeout(() => {
-      const domNode = this.nodeStore_.getDomNode(startingNodeId);
-      if (!domNode) {
-        return;
+      let startNode = position.node;
+      let startOffset = position.offset;
+
+      // If the content position was set to an invalid position (e.g. an image),
+      // update it to be the next valid read aloud node.
+      const validNode = this.getFirstValidReadAloudNode_(startNode);
+      if (validNode && validNode !== startNode) {
+        startNode = validNode;
+        startOffset = 0;
       }
-      const readAloudNode = ReadAloudNode.create(domNode);
+
+      const readAloudNode = ReadAloudNode.create(startNode);
       if (!readAloudNode) {
         return;
       }
-      this.movePlaybackToNode_(readAloudNode, selectionStart.offset);
+      this.movePlaybackToNode_(readAloudNode, startOffset);
       // Play the next granularity, which includes the selection.
-      if (!this.highlightAndPlayMessage_()) {
+      if (this.highlightAndPlayMessage_()) {
+        this.logger_.logSpeechControlClick(speechControl);
+      } else {
         this.onSpeechFinished_();
       }
     }, playFromSelectionTimeout);
+    // Reset the current content position to avoid playing from a stale position
+    // once speech has already been started.
+    this.model_.setCurrentContentPosition(null);
     return true;
   }
 
@@ -420,7 +468,7 @@ export class SpeechController {
 
   // Play text of these axNodeIds. When finished, read and highlight to read the
   // following text.
-  // TODO: crbug.com/1474951 - Investigate using AXRange.GetText to get text
+  // TODO: crbug.com/40927698 - Investigate using AXRange.GetText to get text
   // between start node / end nodes and their offsets.
   private highlightAndPlayMessage_(
       isInterrupted: boolean = false,
@@ -455,8 +503,9 @@ export class SpeechController {
     // boundaries (if available) to resume at the beginning of the current
     // word.
     if (isInterrupted && this.wordBoundaries_.hasBoundaries()) {
+      const resumeBoundary = this.wordBoundaries_.getResumeBoundary();
       const utteranceTextForWordBoundary =
-          utteranceText.substring(this.wordBoundaries_.getResumeBoundary());
+          utteranceText.substring(resumeBoundary);
       // If we paused right at the end of the sentence, no need to speak the
       // ending punctuation.
       if (isInvalidHighlightForWordHighlighting(
@@ -477,9 +526,11 @@ export class SpeechController {
         return skippedPosition;
 
       } else {
+        this.notifyWordBoundary_(resumeBoundary);
         this.playText_(utteranceTextForWordBoundary);
       }
     } else {
+      this.notifyWordBoundary_(0);
       this.playText_(utteranceText);
     }
 
@@ -499,7 +550,7 @@ export class SpeechController {
 
   private playText_(utteranceText: string) {
     // This check is needed due limits of TTS audio for remote voices. See
-    // crbug.com/1176078 for more details.
+    // crbug.com/40747712 for more details.
     // Since the TTS bug only impacts remote voices, no need to check for
     // maximum text length if we're using a local voice. If we do somehow
     // attempt to speak text that's too long, this will be able to be handled
@@ -528,6 +579,10 @@ export class SpeechController {
         // of the current utterance until the utterance is complete. The
         // entire utterance is highlighted, so there's no need to update
         // highlighting until the utterance substring is an acceptable size.
+        if (!this.isSpeechActive()) {
+          this.model_.setPauseSource(PauseActionSource.DEFAULT);
+          return;
+        }
         const remainingText = utteranceText.substring(textToPlay.length);
         this.playText_(remainingText);
         return;
@@ -539,6 +594,16 @@ export class SpeechController {
       // boundary index whenever we move the granularity position.
       this.wordBoundaries_.resetToDefaultState();
       this.moveToNextGranularity_();
+
+      // If speech was paused (e.g. via the play/pause button calling pause()
+      // instead of cancel()), do not speak the next block of text. Clear the
+      // pause source so that resuming speech correctly calls speak() on the
+      // new granularity instead of resume() on the finished utterance.
+      if (!this.isSpeechActive()) {
+        this.model_.setPauseSource(PauseActionSource.DEFAULT);
+        return;
+      }
+
       // Continue speaking with the next block of text.
       if (!this.highlightAndPlayMessage_()) {
         this.onSpeechFinished_();
@@ -560,6 +625,11 @@ export class SpeechController {
 
   private handleSpeechSynthesisError_(
       error: SpeechSynthesisErrorEvent, utteranceText: string) {
+    // Clear the engine timeout timer if a valid speech synthesis error has been received.
+    // This allows engine stall timeouts to only be logged in situations where there's no
+    // clear reason for a timeout. If playback has been halted for some other reason, that
+    // will be tracked with separate logs.
+    this.clearEngineTimeout_();
     // We can't be sure that the engine has loaded at this point, but
     // if there's an error, we want to ensure we keep the play buttons
     // to prevent trapping users in a state where they can no longer play
@@ -568,7 +638,7 @@ export class SpeechController {
     this.setEngineState_(SpeechEngineState.LOADED);
 
     if (error.error === 'interrupted') {
-      this.onSpeechInterrupted_();
+      this.onSpeechInterrupted_(error.utterance);
       return;
     }
 
@@ -616,6 +686,8 @@ export class SpeechController {
   }
 
   private stopSpeech_(pauseSource: PauseActionSource) {
+    this.model_.setActiveUtterance(null);
+    this.clearEngineTimeout_();
     // Pause source needs to be set before updating isSpeechActive so that
     // listeners get the correct source when listening for isSpeechActive
     // changes. Only update the pause source to the one that actually stopped
@@ -650,6 +722,7 @@ export class SpeechController {
   private setOnSpeechSynthesisUtteranceStart_(
       message: SpeechSynthesisUtterance) {
     message.onstart = () => {
+      this.clearEngineTimeout_();
       // We've gotten the signal that the speech engine has started, therefore
       // we can enable the Read Aloud buttons.
       this.setEngineState_(SpeechEngineState.LOADED);
@@ -683,6 +756,13 @@ export class SpeechController {
 
         this.wordBoundaries_.updateBoundary(event.charIndex, event.charLength);
 
+        const {
+          speechUtteranceStartIndex,
+          previouslySpokenIndex,
+        } = this.wordBoundaries_.state;
+        const index = speechUtteranceStartIndex + previouslySpokenIndex;
+        this.notifyWordBoundary_(index);
+
         // No need to update the highlight on word boundary events if
         // highlighting is off or if sentence highlighting is used.
         // Therefore, we don't need to pass in axIds because these are
@@ -692,6 +772,13 @@ export class SpeechController {
             /*shouldUpdateSentenceHighlight= */ false);
       }
     };
+  }
+
+  private notifyWordBoundary_(index: number) {
+    const highlightSegments =
+        this.readAloudModel_.getHighlightForCurrentSegmentIndex(
+            index, /* highlightPhrases= */ false);
+    this.listeners_.forEach(l => l.onWordBoundary(highlightSegments));
   }
 
   private speakMessage_(message: SpeechSynthesisUtterance) {
@@ -706,10 +793,6 @@ export class SpeechController {
     // type checking of method signatures.
     if (voice instanceof SpeechSynthesisVoice) {
       message.voice = voice;
-    }
-
-    if (this.model_.getEngineState() === SpeechEngineState.NONE) {
-      this.setEngineState_(SpeechEngineState.LOADING);
     }
 
     this.speakWithDefaults_(message);
@@ -734,6 +817,8 @@ export class SpeechController {
     }
 
     utterance.onstart = () => {
+      this.clearEngineTimeout_();
+      this.setEngineState_(SpeechEngineState.LOADED);
       this.setPreviewVoicePlaying_(previewVoice);
     };
 
@@ -765,7 +850,15 @@ export class SpeechController {
     }
   }
 
-  private onSpeechInterrupted_() {
+  private onSpeechInterrupted_(utterance: SpeechSynthesisUtterance) {
+    // It's possible for there to be a race condition where onSpeechInterrupted
+    // is triggered on an old utterance, which can lead to an indeterminate
+    // state. When this happens, return early.
+    const activeUtterance = this.model_.getActiveUtterance();
+    if (activeUtterance && utterance !== activeUtterance) {
+      return;
+    }
+
     // SpeechSynthesis.cancel() was called, which could have originated
     // either within or outside of reading mode. If it originated from
     // within reading mode, we should do nothing. If it came from outside
@@ -806,9 +899,11 @@ export class SpeechController {
   }
 
   clearReadAloudState() {
+    this.clearEngineTimeout_();
     this.speech_.cancel();
     this.highlighter_.reset();
     this.wordBoundaries_.resetToDefaultState();
+    this.model_.setActiveUtterance(null);
 
     const speechPlayingState = {
       isSpeechActive: false,
@@ -822,6 +917,7 @@ export class SpeechController {
     this.model_.setContextNode(null);
     this.model_.setResumeSpeechOnVoiceMenuClose(false);
     this.model_.setWordsHeard(0);
+    this.model_.setCurrentContentPosition(null);
   }
 
   saveReadAloudState() {
@@ -865,7 +961,23 @@ export class SpeechController {
     // offset to determine if the selected text is in this granularity or if
     // we have to move to the next one.
     let foundSegment = this.findSegment_(currentSegments, node, offset);
+    let previousNode: ReadAloudNode|undefined;
+    let previousStart: number|undefined;
+
     while (hasCurrentText && !foundSegment) {
+      const firstSegment = currentSegments[0];
+      if (firstSegment) {
+        // Prevent infinite loops if the node that's being searched for
+        // doesn't exist or can't be found.
+        if (previousNode && previousStart !== undefined &&
+            firstSegment.node.equals(previousNode) &&
+            firstSegment.start === previousStart) {
+          break;
+        }
+        previousNode = firstSegment.node;
+        previousStart = firstSegment.start;
+      }
+
       this.highlightCurrentGranularity_(
           currentSegments, /*scrollIntoView=*/ false,
           /*shouldUpdateSentenceHighlight=*/ true,
@@ -878,14 +990,31 @@ export class SpeechController {
     }
   }
 
+  // Gets the first valid node for read aloud from the given node. If the
+  // given node is a text node with text content, it will be returned.
+  // Otherwise, the next valid text node will be used. This allows playing
+  // from a specific position (e.g. through selection or line focus) to work
+  // even if the current position is an image.
+  private getFirstValidReadAloudNode_(node: Node): Node|null {
+    if (node.nodeType === Node.TEXT_NODE && node.textContent?.trim().length) {
+      return node;
+    }
+
+    // If the current playback node is not a valid text node, traverse
+    // the entire tree starting from the current node to find the next
+    // valid text node.
+    const root = node.getRootNode();
+    return getNextValidNodeFromPosition(root, node);
+  }
+
   private findSegment_(
       segments: Segment[], node: ReadAloudNode, offset: number): Segment
       |undefined {
-    // When the TsTextSegmentation flag is enabled, findSegment_ should count a
+    // When the PhraseHighlighting flag is disabled, findSegment_ should count a
     // match if the selection node contains the read aloud node (i.e. the read
     // aloud node is a child of the selection node) - otherwise there
     // won't be a match on the first run of playFromSelection()
-    if (!chrome.readingMode.isTsTextSegmentationEnabled) {
+    if (chrome.readingMode.isPhraseHighlightingEnabled) {
       return segments.find(
           segment => segment.node.equals(node) &&
               (segment.start + segment.length > offset));
@@ -905,11 +1034,22 @@ export class SpeechController {
         return (segment.start + segment.length > offset);
       }
 
+      // If the segment node contains the selected node, then the selection is
+      // inside this segment. This is the case if the node was wrapped in a
+      // highlight span.
+      if (segmentDomNode.contains(selectedDomNode)) {
+        // Verify that the offset falls within the segment in case the
+        // original node contained multiple segments.
+        return (segment.start + segment.length > offset);
+      }
+
       if (selectedDomNode.contains(segmentDomNode)) {
         return true;
       }
 
-      return false;
+      // Ensure findSegment_ terminates if no match is found.
+      const position = selectedDomNode.compareDocumentPosition(segmentDomNode);
+      return !!(position & Node.DOCUMENT_POSITION_FOLLOWING);
     });
   }
 
@@ -975,12 +1115,61 @@ export class SpeechController {
   }
 
   private speakWithDefaults_(message: SpeechSynthesisUtterance) {
+    if (this.model_.getEngineState() === SpeechEngineState.NONE) {
+      this.setEngineState_(SpeechEngineState.LOADING);
+    }
+
     message.volume = this.model_.getVolume();
     message.lang = chrome.readingMode.baseLanguageForSpeech;
     message.rate = getCurrentSpeechRate();
+    this.model_.setActiveUtterance(message);
+
     // Cancel any pending utterances that may be happening in other tabs.
     this.speech_.cancel();
+
+    this.clearEngineTimeout_();
+    // If it has been more than 10 seconds between attempting to speak a message
+    // and onStart being received, it is likely that the TTS engine extension
+    // has stalled. This metric should not be logged on ChromeOS because
+    // voices ChromeOS are not downloaded via the TTS extension.
+    // <if expr="not is_chromeos">
+    this.engineTimeoutId_ = setTimeout(() => {
+      if (this.model_.getEngineState() === SpeechEngineState.LOADING) {
+        this.logger_.logSpeechError('timeout-engine-stalled');
+        // This triggers a non-fatal C++ DUMP_WILL_BE_CHECK in
+        // ReadAnythingAppController.
+        chrome.readingMode.onSpeechEngineFirstStall();
+      }
+    }, ENGINE_TIMEOUT_THRESHOLD_MS);
+
+    // After 10 seconds, the TTS engine attempts recovery. If speech_controller
+    // has received no error or speech playback after 5 more seconds (for 15
+    // seconds of a stalled engine total), it is likely that the recovery from
+    // within the engine was unsuccessful. Log this and attempt to reload
+    // the extension.
+    this.engineRecoveryTimeoutId_ = setTimeout(() => {
+      if (this.model_.getEngineState() === SpeechEngineState.LOADING) {
+        this.logger_.logSpeechError('timeout-stalled-after-recovery');
+        // This triggers a non-fatal C++ DUMP_WILL_BE_CHECK in
+        // ReadAnythingAppController.
+        chrome.readingMode.onSpeechEngineStalled();
+        this.voiceLanguageController_.onVoicesChanged();
+      }
+    }, ENGINE_RECOVERY_TIMEOUT_THRESHOLD_MS);
+    // </if>
+
     this.speech_.speak(message);
+  }
+
+  private clearEngineTimeout_() {
+    if (this.engineTimeoutId_ !== null) {
+      clearTimeout(this.engineTimeoutId_);
+      this.engineTimeoutId_ = null;
+    }
+    if (this.engineRecoveryTimeoutId_ !== null) {
+      clearTimeout(this.engineRecoveryTimeoutId_);
+      this.engineRecoveryTimeoutId_ = null;
+    }
   }
 
   private logSpeechPlaySession_() {

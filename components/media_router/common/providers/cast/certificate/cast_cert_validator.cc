@@ -13,7 +13,6 @@
 #include <utility>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/path_service.h"
@@ -166,7 +165,7 @@ void DetermineDeviceCertificatePolicy(
   for (const auto& cert : result_path->certs) {
     if (cert->has_policy_oids()) {
       const std::vector<bssl::der::Input>& policies = cert->policy_oids();
-      if (base::Contains(policies, AudioOnlyPolicyOid())) {
+      if (std::ranges::contains(policies, AudioOnlyPolicyOid())) {
         audio_only = true;
         break;
       }
@@ -412,17 +411,20 @@ CastCertError VerifyDeviceCertUsingCustomTrustStore(
     return CastCertError::ERR_CERTS_RESTRICTIONS;
   }
 
-  if (!crl && (crl_policy == CRLPolicy::CRL_REQUIRED_WITH_FALLBACK ||
-               crl_policy == CRLPolicy::CRL_OPTIONAL_WITH_FALLBACK)) {
-    if (!fallback_crl) {
+  if (crl_policy == CRLPolicy::CRL_REQUIRED_WITH_FALLBACK ||
+      crl_policy == CRLPolicy::CRL_OPTIONAL_WITH_FALLBACK) {
+    if (fallback_crl) {
+      if (!fallback_crl->CheckRevocation(result.GetBestValidPath()->certs,
+                                         time)) {
+        return CastCertError::ERR_CERTS_REVOKED_BY_FALLBACK_CRL;
+      }
+    } else if (!crl) {
       return CastCertError::ERR_FALLBACK_CRL_INVALID;
     }
 
-    if (!fallback_crl->CheckRevocation(result.GetBestValidPath()->certs,
-                                       time)) {
-      return CastCertError::ERR_CERTS_REVOKED_BY_FALLBACK_CRL;
+    if (!crl) {
+      return CastCertError::OK_FALLBACK_CRL;
     }
-    return CastCertError::OK_FALLBACK_CRL;
   }
 
   // Check for revocation.

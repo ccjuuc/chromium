@@ -30,14 +30,13 @@
 #include "base/dcheck_is_on.h"
 #include "base/types/pass_key.h"
 #include "net/cookies/site_for_cookies.h"
-#include "services/network/public/mojom/attribution.mojom-shared.h"
 #include "third_party/blink/public/common/fenced_frame/redacted_fenced_frame_config.h"
 #include "third_party/blink/public/common/fingerprinting_protection/noise_token.h"
 #include "third_party/blink/public/common/metrics/document_update_reason.h"
 #include "third_party/blink/public/common/page/color_provider_color_maps.h"
+#include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/frame/color_scheme.mojom-blink-forward.h"
-#include "third_party/blink/public/mojom/frame/text_autosizer_page_info.mojom-blink.h"
 #include "third_party/blink/public/mojom/page/page.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/page/page_visibility_state.mojom-blink.h"
 #include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
@@ -86,7 +85,6 @@ class FocusController;
 class Frame;
 class LinkHighlight;
 class LocalFrame;
-class LocalFrameView;
 class MediaFeatureOverrides;
 class PageAnimator;
 struct PageScaleConstraints;
@@ -103,6 +101,11 @@ class SVGDocumentResourceTracker;
 class TopDocumentRootScrollerController;
 class ValidationMessageClient;
 class VisualViewport;
+class TextFragmentAnchorTestBase;
+class TextFragmentAnchorTest;
+class TextFragmentAnchorMetricsTest;
+class TextFragmentHandlerTest;
+class TextFragmentGenerationNavigationTest;
 
 typedef uint64_t LinkHash;
 
@@ -187,6 +190,7 @@ class CORE_EXPORT Page final : public GarbageCollected<Page>,
   }
 
   void InitialStyleChanged();
+  void UAStyleChanged();
   void UpdateAcceleratedCompositingSettings();
 
   ViewportDescription GetViewportDescription() const;
@@ -198,9 +202,6 @@ class CORE_EXPORT Page final : public GarbageCollected<Page>,
   // PluginsChangedObservers.
   static void ResetPluginData();
 
-  // When this method is called, page_scheduler_->SetIsMainFrameLocal should
-  // also be called to update accordingly.
-  // TODO(npm): update the |page_scheduler_| directly in this method.
   void SetMainFrame(Frame*);
   Frame* MainFrame() const { return main_frame_.Get(); }
 
@@ -365,6 +366,13 @@ class CORE_EXPORT Page final : public GarbageCollected<Page>,
   // as well. The input |insets| is unscaled and in the size of dips.
   void SetMaxSafeAreaInsets(LocalFrame* setter, gfx::Insets insets);
 
+  const RendererPreferences& GetRendererPreferences() const {
+    return renderer_preferences_;
+  }
+  void SetRendererPreferences(const RendererPreferences& prefs) {
+    renderer_preferences_ = prefs;
+  }
+
   void SetDefaultPageScaleLimits(float min_scale, float max_scale);
   void SetUserAgentPageScaleConstraints(
       const PageScaleConstraints& new_constraints);
@@ -375,8 +383,6 @@ class CORE_EXPORT Page final : public GarbageCollected<Page>,
 #endif
 
   void DidCommitLoad(LocalFrame*);
-
-  void AcceptLanguagesChanged();
 
   void Trace(Visitor*) const override;
 
@@ -436,13 +442,9 @@ class CORE_EXPORT Page final : public GarbageCollected<Page>,
     return should_pause_javascript_execution_on_prerender_;
   }
 
-  void SetTextAutosizerPageInfo(
-      const mojom::blink::TextAutosizerPageInfo& page_info) {
-    web_text_autosizer_page_info_ = page_info;
-  }
-  const mojom::blink::TextAutosizerPageInfo& TextAutosizerPageInfo() const {
-    return web_text_autosizer_page_info_;
-  }
+  // Upgrades a prerender-until-script page to a full prerender by resuming
+  // JavaScript execution. The page remains in prerendering state.
+  void UpgradePrerenderUntilScriptToFullPrerender();
 
   void SetMediaFeatureOverride(const AtomicString& media_feature,
                                const String& value);
@@ -521,29 +523,37 @@ class CORE_EXPORT Page final : public GarbageCollected<Page>,
   // place.
   void UpdateBrowsingContextGroup(const base::UnguessableToken&);
 
-  // Attribution Reporting API ------------------------------------
-  // Sets whether web or OS-level Attribution Reporting is supported
-  void SetAttributionSupport(
-      network::mojom::AttributionSupport attribution_support);
-
-  // Returns whether web or OS-level Attribution Reporting is supported. See
-  // https://github.com/WICG/attribution-reporting-api/blob/main/app_to_web.md.
-  network::mojom::AttributionSupport GetAttributionSupport() {
-    return attribution_support_;
-  }
-
   // Called on a new Page, passing an old Page as the parameter, when doing a
   // LocalFrame <-> LocalFrame swap when committing a navigation, to ensure that
   // e.g. the close task will still be processed after the swap, the list of
   // related pages will include the new page instead of the old page, etc.
   void TakePropertiesForLocalMainFrameSwap(Page* old_page);
 
+  void NotifyRelatedPagesFinalized(bool has_other_related_pages) {
+    related_pages_mutation_from_previous_page_finalized_ = true;
+    has_other_related_pages_during_commit_ = has_other_related_pages;
+  }
+
+  bool RelatedPagesMutationFromPreviousPageFinalized() const {
+    return related_pages_mutation_from_previous_page_finalized_;
+  }
+  bool HasOtherRelatedPagesDuringCommit() const {
+    return has_other_related_pages_during_commit_;
+  }
+
  private:
+  friend class TextFragmentAnchorTestBase;
+  friend class TextFragmentAnchorTest;
+  friend class TextFragmentAnchorMetricsTest;
+  friend class TextFragmentHandlerTest;
+  friend class TextFragmentGenerationNavigationTest;
   friend class ScopedPagePauser;
   class CloseTaskHandler;
 
   // SettingsDelegate overrides.
   void SettingsChanged(SettingsDelegate::ChangeType) override;
+
+  void AcceptLanguagesChanged();
 
   void InvalidateColorScheme();
 
@@ -669,6 +679,18 @@ class CORE_EXPORT Page final : public GarbageCollected<Page>,
   Member<Page> next_related_page_;
   Member<Page> prev_related_page_;
 
+  // Indicates whether the related pages set can change due to previous page's
+  // mutations. Set when this (new page) is being committed. Once finalized, we
+  // would not expect the previous page to change the related pages set
+  // (although it can still change on this page).
+  bool related_pages_mutation_from_previous_page_finalized_ = false;
+  // Note that `has_other_related_pages_during_commit_` may not be in sync with
+  // RelatedPages() list and that's a bug. This is only used for text fragment
+  // checks to see if we're allowed to do a scroll or not. Ideally we don't need
+  // this and should just check the RelatedPages() set if the bug is fixed. See
+  // crbug.com/457771782 for details.
+  bool has_other_related_pages_during_commit_ = false;
+
   // The Page that opened this Page.
   WeakMember<Page> opener_;
 
@@ -712,8 +734,6 @@ class CORE_EXPORT Page final : public GarbageCollected<Page>,
   blink::FencedFrame::DeprecatedFencedFrameMode fenced_frame_mode_ =
       blink::FencedFrame::DeprecatedFencedFrameMode::kDefault;
 
-  mojom::blink::TextAutosizerPageInfo web_text_autosizer_page_info_;
-
   WebScopedVirtualTimePauser history_navigation_virtual_time_pauser_;
 
   Member<v8_compile_hints::V8CrowdsourcedCompileHintsProducer>
@@ -725,8 +745,7 @@ class CORE_EXPORT Page final : public GarbageCollected<Page>,
   // The information determining the browsing context group this page lives in.
   base::UnguessableToken browsing_context_group_token_;
 
-  network::mojom::AttributionSupport attribution_support_ =
-      network::mojom::AttributionSupport::kUnset;
+  RendererPreferences renderer_preferences_;
 
   Member<CloseTaskHandler> close_task_handler_;
 };

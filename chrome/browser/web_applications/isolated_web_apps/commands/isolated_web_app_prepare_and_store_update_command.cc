@@ -13,6 +13,7 @@
 #include <string_view>
 #include <utility>
 
+#include "base/base64.h"
 #include "base/check.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
@@ -28,12 +29,15 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/callback_utils.h"
 #include "chrome/browser/web_applications/commands/web_app_command.h"
-#include "chrome/browser/web_applications/isolated_web_apps/commands/isolated_web_app_install_command_helper.h"
-#include "chrome/browser/web_applications/isolated_web_apps/install/pending_install_info.h"
+#include "chrome/browser/web_applications/isolated_web_apps/install/non_installed_bundle_inspection_context.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_features.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolation_data.h"
 #include "chrome/browser/web_applications/isolated_web_apps/jobs/prepare_install_info_job.h"
+#include "chrome/browser/web_applications/isolated_web_apps/key_rotation_util.h"
+#include "chrome/browser/web_applications/isolated_web_apps/storage_util.h"
+#include "chrome/browser/web_applications/isolated_web_apps/trust_and_signature_verifier.h"
+#include "chrome/browser/web_applications/isolated_web_apps/update/version_change_validator.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
+#include "chrome/browser/web_applications/model/isolation_data.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_install_utils.h"
@@ -43,6 +47,7 @@
 #include "chrome/browser/web_applications/web_contents/web_contents_manager.h"
 #include "components/webapps/browser/web_contents/web_app_url_loader.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 
 namespace web_app {
@@ -80,29 +85,26 @@ IsolatedWebAppUpdatePrepareAndStoreCommand::
     IsolatedWebAppUpdatePrepareAndStoreCommand(
         UpdateInfo update_info,
         IsolatedWebAppUrlInfo url_info,
-        std::unique_ptr<content::WebContents> web_contents,
+        Profile& profile,
         std::unique_ptr<ScopedKeepAlive> optional_keep_alive,
         std::unique_ptr<ScopedProfileKeepAlive> optional_profile_keep_alive,
         base::OnceCallback<
-            void(IsolatedWebAppUpdatePrepareAndStoreCommandResult)> callback,
-        std::unique_ptr<IsolatedWebAppInstallCommandHelper> command_helper)
+            void(IsolatedWebAppUpdatePrepareAndStoreCommandResult)> callback)
     : WebAppCommand<AppLock, IsolatedWebAppUpdatePrepareAndStoreCommandResult>(
           "IsolatedWebAppUpdatePrepareAndStoreCommand",
           AppLockDescription(url_info.app_id()),
           std::move(callback), /*args_for_shutdown=*/
           base::unexpected(IsolatedWebAppUpdatePrepareAndStoreCommandError{
               .message = "System is shutting down."})),
-      command_helper_(std::move(command_helper)),
       url_info_(std::move(url_info)),
       expected_version_(update_info.expected_version()),
       allow_downgrades_(update_info.allow_downgrades()),
       update_source_(update_info.source()),
-      web_contents_(std::move(web_contents)),
+      profile_(profile),
       optional_keep_alive_(std::move(optional_keep_alive)),
       optional_profile_keep_alive_(std::move(optional_profile_keep_alive)) {
-  CHECK(web_contents_ != nullptr);
   CHECK(optional_profile_keep_alive_ == nullptr ||
-        &profile() == optional_profile_keep_alive_->profile());
+        &profile_.get() == optional_profile_keep_alive_->profile());
 
   GetMutableDebugValue().Set("app_id", url_info_.app_id());
   GetMutableDebugValue().Set("origin", url_info_.origin().Serialize());
@@ -170,32 +172,26 @@ void IsolatedWebAppUpdatePrepareAndStoreCommand::ReportVersionValidationFailure(
 
 void IsolatedWebAppUpdatePrepareAndStoreCommand::CheckIfUpdateIsStillApplicable(
     base::OnceClosure next_step_callback) {
-  ASSIGN_OR_RETURN(
-      const WebApp& iwa,
-      GetIsolatedWebAppById(lock_->registrar(), url_info_.app_id()),
-      [&](const std::string& error) { ReportFailure(error); });
+  const WebApp* iwa = lock_->registrar().GetAppById(
+      url_info_.app_id(), WebAppFilter::IsIsolatedApp());
+  if (!iwa) {
+    ReportFailure("App is not installed.");
+    return;
+  }
 
-  const auto& isolation_data = *iwa.isolation_data();
+  const auto& isolation_data = *iwa->isolation_data();
   installed_version_ = isolation_data.version();
 
   GetMutableDebugValue().Set("installed_version",
                              installed_version_.value().GetString());
 
-  switch (LookupRotatedKey(url_info_.web_bundle_id(), GetMutableDebugValue())) {
-    case KeyRotationLookupResult::kNoKeyRotation:
-      break;
-    case KeyRotationLookupResult::kKeyFound: {
-      KeyRotationData data =
-          GetKeyRotationData(url_info_.web_bundle_id(), isolation_data);
-      if (!data.current_installation_has_rk) {
-        same_version_update_allowed_by_key_rotation_ = true;
-      }
-    } break;
-    case KeyRotationLookupResult::kKeyBlocked:
-      ReportFailure(
-          "The web bundle id for this app's bundle has been blocked by the key "
-          "distribution component.");
-      return;
+  if (auto kr_data =
+          GetKeyRotationData(url_info_.web_bundle_id(), isolation_data)) {
+    GetMutableDebugValue().Set("rotated_key",
+                               base::Base64Encode(kr_data->rotated_key));
+    if (!kr_data->current_installation_has_rk) {
+      same_version_update_allowed_by_key_rotation_ = true;
+    }
   }
 
   if (expected_version_) {
@@ -253,8 +249,9 @@ void IsolatedWebAppUpdatePrepareAndStoreCommand::OnCopiedToProfileDirectory(
 
 void IsolatedWebAppUpdatePrepareAndStoreCommand::CheckTrustAndSignatures(
     base::OnceClosure next_step_callback) {
-  command_helper_->CheckTrustAndSignatures(
-      *destination_location_, &profile(),
+  web_app::CheckTrustAndSignatures(
+      url_info_.web_bundle_id(), *destination_location_, IwaUpdateOperation{},
+      &profile(),
       base::BindOnce(&IsolatedWebAppUpdatePrepareAndStoreCommand::
                          OnTrustAndSignaturesChecked,
                      weak_factory_.GetWeakPtr(),
@@ -273,14 +270,15 @@ void IsolatedWebAppUpdatePrepareAndStoreCommand::OnTrustAndSignaturesChecked(
     // safely assume that `integrity_block_data_` contains the rotated key if
     // there is one for this `url_info_.web_bundle_id()`.
     integrity_block_data_ =
-        IsolatedWebAppIntegrityBlockData::FromIntegrityBlock(*integrity_block);
+        IntegrityBlockData::FromIntegrityBlock(*integrity_block);
   }
   std::move(next_step_callback).Run();
 }
 
 void IsolatedWebAppUpdatePrepareAndStoreCommand::CreateStoragePartition(
     base::OnceClosure next_step_callback) {
-  command_helper_->CreateStoragePartitionIfNotPresent(profile());
+  profile().GetStoragePartition(url_info_.storage_partition_config(&profile()),
+                                /*can_create=*/true);
   std::move(next_step_callback).Run();
 }
 
@@ -288,8 +286,10 @@ void IsolatedWebAppUpdatePrepareAndStoreCommand::PrepareInstallInfo(
     base::OnceCallback<void(PrepareInstallInfoJob::InstallInfoOrFailure)>
         next_step_callback) {
   prepare_install_info_job_ = PrepareInstallInfoJob::CreateAndStart(
-      profile(), *destination_location_, expected_version_, *web_contents_,
-      *command_helper_, lock_->web_contents_manager().CreateUrlLoader(),
+      profile(), *destination_location_, IwaUpdateOperation{},
+      expected_version_, url_info_,
+      lock_->web_contents_manager().CreateDataRetriever(),
+      lock_->web_contents_manager().CreateUrlLoader(),
       std::move(next_step_callback));
 }
 
@@ -363,9 +363,7 @@ void IsolatedWebAppUpdatePrepareAndStoreCommand::ReportSuccess(
 }
 
 Profile& IsolatedWebAppUpdatePrepareAndStoreCommand::profile() {
-  CHECK(web_contents_);
-  CHECK(web_contents_->GetBrowserContext());
-  return *Profile::FromBrowserContext(web_contents_->GetBrowserContext());
+  return *profile_;
 }
 
 IsolatedWebAppUpdatePrepareAndStoreCommandUpdateInfo::
@@ -391,7 +389,7 @@ IsolatedWebAppUpdatePrepareAndStoreCommandUpdateInfo::operator=(
 base::Value IsolatedWebAppUpdatePrepareAndStoreCommandUpdateInfo::AsDebugValue()
     const {
   return base::Value(
-      base::Value::Dict()
+      base::DictValue()
           .Set("source", source_.ToDebugValue())
           .Set("expected_version", expected_version_.has_value()
                                        ? expected_version_->GetString()

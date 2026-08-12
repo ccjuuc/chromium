@@ -9,19 +9,17 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/compiler_specific.h"
 #include "base/component_export.h"
-#include "base/containers/contains.h"
-#include "base/containers/variant_map.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ptr_exclusion.h"
 #include "base/task/sequenced_task_runner.h"
-#include "base/types/pass_key.h"
 #include "mojo/public/cpp/bindings/connection_error_callback.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -29,6 +27,7 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/runtime_features.h"
 #include "mojo/public/cpp/bindings/unique_ptr_impl_ref_traits.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace mojo {
 
@@ -67,8 +66,6 @@ struct ReceiverSetContextTraits<void> {
 // Shared base class owning specific type-agnostic ReceiverSet state and logic.
 class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) ReceiverSetState {
  public:
-  using PassKey = base::PassKey<ReceiverSetState>;
-
   class ReceiverState {
    public:
     virtual ~ReceiverState() = default;
@@ -79,7 +76,7 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) ReceiverSetState {
         RepeatingConnectionErrorWithReasonCallback disconnect_handler) = 0;
     virtual void FlushForTesting() = 0;
     virtual void ResetWithReason(uint32_t custom_reason_code,
-                                 const std::string& description) = 0;
+                                 std::string_view description) = 0;
   };
 
   class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) Entry {
@@ -106,7 +103,7 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) ReceiverSetState {
     const std::unique_ptr<ReceiverState> receiver_;
   };
 
-  using EntryMap = base::VariantMap<ReceiverId, std::unique_ptr<Entry>>;
+  using EntryMap = absl::flat_hash_map<ReceiverId, std::unique_ptr<Entry>>;
 
   ReceiverSetState();
   ReceiverSetState(const ReceiverSetState&) = delete;
@@ -141,7 +138,7 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) ReceiverSetState {
   bool Remove(ReceiverId id);
   bool RemoveWithReason(ReceiverId id,
                         uint32_t custom_reason_code,
-                        const std::string& description);
+                        std::string_view description);
   void FlushForTesting();
   void SetDispatchContext(void* context, ReceiverId receiver_id);
   void OnDisconnect(ReceiverId id,
@@ -196,8 +193,6 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) ReceiverSetState {
 template <typename ReceiverType, typename ContextType>
 class ReceiverSetBase {
  public:
-  using PassKey = ::base::PassKey<ReceiverSetBase<ReceiverType, ContextType>>;
-
   using Traits = ReceiverSetTraits<ReceiverType>;
   using Interface = typename Traits::InterfaceType;
   using PendingType = typename Traits::PendingType;
@@ -329,13 +324,13 @@ class ReceiverSetBase {
   // Similar to the method above, but also specifies a disconnect reason.
   bool RemoveWithReason(ReceiverId id,
                         uint32_t custom_reason_code,
-                        const std::string& description) {
+                        std::string_view description) {
     return state_.RemoveWithReason(id, custom_reason_code, description);
   }
 
   // Unbinds and takes all receivers in this set.
   std::vector<PendingType> TakeReceivers() {
-    ReceiverSetState::EntryMap entries(PassKey{});
+    ReceiverSetState::EntryMap entries;
     std::swap(state_.entries(), entries);
     std::vector<PendingType> pending_receivers;
     for (auto& entry : entries) {
@@ -351,7 +346,7 @@ class ReceiverSetBase {
     static_assert(ContextTraits::SupportsContext(),
                   "TakeReceiversWithContext() requires non-void context type.");
 
-    ReceiverSetState::EntryMap entries(PassKey{});
+    ReceiverSetState::EntryMap entries;
     std::swap(state_.entries(), entries);
     std::vector<std::pair<PendingType, Context>> pending_receivers;
     for (auto& entry : entries) {
@@ -370,7 +365,7 @@ class ReceiverSetBase {
   void Clear() { state_.entries().clear(); }
   // Similar to the method above, but also specifies a disconnect reason.
   void ClearWithReason(uint32_t custom_reason_code,
-                       const std::string& description) {
+                       std::string_view description) {
     for (auto& entry : state_.entries()) {
       entry.second->receiver().ResetWithReason(custom_reason_code, description);
     }
@@ -382,7 +377,7 @@ class ReceiverSetBase {
   //
   // Returns |true| if the receiver is in the set and |false| if not.
   bool HasReceiver(ReceiverId id) const {
-    return base::Contains(state_.entries(), id);
+    return state_.entries().contains(id);
   }
 
   // Returns a pointer to the context associated with a receiver.
@@ -455,7 +450,7 @@ class ReceiverSetBase {
   // asynchronous work before you can determine the legitimacy of a message, use
   // GetBadMessageCallback() and retain its result until you're ready to invoke
   // or discard it.
-  NOT_TAIL_CALLED void ReportBadMessage(const std::string& error) {
+  NOT_TAIL_CALLED void ReportBadMessage(std::string_view error) {
     GetBadMessageCallback().Run(error);
   }
 
@@ -526,7 +521,7 @@ class ReceiverSetBase {
     void FlushForTesting() override { receiver_.FlushForTesting(); }
 
     void ResetWithReason(uint32_t custom_reason_code,
-                         const std::string& description) override {
+                         std::string_view description) override {
       receiver_.ResetWithReason(custom_reason_code, description);
     }
 

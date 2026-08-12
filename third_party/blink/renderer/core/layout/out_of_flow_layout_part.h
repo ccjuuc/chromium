@@ -16,6 +16,7 @@
 #include "third_party/blink/renderer/core/layout/geometry/static_position.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_containing_block_utils.h"
 #include "third_party/blink/renderer/core/layout/non_overflowing_scroll_range.h"
+#include "third_party/blink/renderer/core/layout/oof_positioned_node.h"
 #include "third_party/blink/renderer/core/style/computed_style_base_constants.h"
 #include "third_party/blink/renderer/platform/geometry/physical_offset.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
@@ -30,12 +31,7 @@ class BlockBreakToken;
 class LayoutBox;
 class LayoutObject;
 class LayoutResult;
-template <typename OffsetType>
-class OofContainingBlock;
 class SimplifiedOofLayoutAlgorithm;
-struct LogicalOofPositionedNode;
-template <typename OffsetType>
-struct MulticolWithPendingOofs;
 
 // Helper class for positioning of out-of-flow blocks.
 // It should be used together with BoxFragmentBuilder.
@@ -152,12 +148,15 @@ class CORE_EXPORT OutOfFlowLayoutPart {
     LogicalRect rect;
     // https://drafts.csswg.org/css-position-4/#scrollable-containing-block
     std::optional<LogicalRect> scroll_rect;
+    // Used for allowing a fixed-pos to overflow its containing-block up to
+    // this limit (if applicable).
+    std::optional<LogicalRect> scroll_limit_rect;
+    // Used to determine the scroll direction for:
+    // https://drafts.csswg.org/css-align-3/#auto-safety-position
+    LogicalBoxSides scroll_direction = LogicalBoxSides(false);
     // The relative positioned offset to be applied after fragmentation is
     // completed.
     LogicalOffset relative_offset;
-    // The offset of the container to its border box, including the block
-    // contribution from previous fragmentainers.
-    LogicalOffset offset_to_border_box;
   };
 
   // This stores the information needed to update a multicol child inside an
@@ -233,10 +232,11 @@ class CORE_EXPORT OutOfFlowLayoutPart {
     // re-used or replaced in the final layout pass.
     Member<const LayoutResult> initial_layout_result;
 
-    // The `block_estimate` and `container_content_size` is wrt. the
-    // candidate's writing mode.
-    std::optional<LayoutUnit> block_estimate;
+    // The following fields are in the writing-direction of the candidate, and
+    // are used for creating the constraint space for layout.
     LogicalSize container_content_size;
+    LayoutUnit imcb_block_size;
+    AutoSizeBehavior block_auto_size_behavior;
 
     LogicalOofDimensions node_dimensions;
 
@@ -342,12 +342,6 @@ class CORE_EXPORT OutOfFlowLayoutPart {
       const BlockNode& candidate,
       bool is_inside_fragmentation_context) const;
 
-  LogicalRect ApplyPositionAreaOffsets(
-      const LogicalRect& base_rect,
-      const PositionAreaOffsets& offsets,
-      PhysicalOffset default_anchor_scroll_shift,
-      const ContainingBlockInfo& container_info) const;
-
   NodeInfo SetupNodeInfo(const LogicalOofPositionedNode& oof_node);
 
   const LayoutResult* LayoutOOFNode(
@@ -368,7 +362,6 @@ class CORE_EXPORT OutOfFlowLayoutPart {
       AnchorEvaluatorImpl&,
       std::optional<wtf_size_t> option_index,
       bool try_fit_available_space,
-      PhysicalOffset default_anchor_scroll_shift,
       NonOverflowingScrollRange* out_scroll_range);
 
   const LayoutResult* Layout(

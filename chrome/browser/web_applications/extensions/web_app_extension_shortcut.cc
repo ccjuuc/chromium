@@ -34,6 +34,7 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/image_loader.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/manifest_handlers/description_info.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
 #include "ui/base/resource/resource_scale_factor.h"
 #include "ui/gfx/image/image_skia.h"
@@ -138,11 +139,8 @@ void CreateShortcutsWithInfo(ShortcutCreationReason reason,
     bool is_app_installed = false;
     auto* app_provider = WebAppProvider::GetForWebApps(profile);
     if (app_provider &&
-        app_provider->registrar_unsafe().IsInstallState(
-            shortcut_info->app_id,
-            {proto::InstallState::SUGGESTED_FROM_ANOTHER_DEVICE,
-             proto::InstallState::INSTALLED_WITHOUT_OS_INTEGRATION,
-             proto::InstallState::INSTALLED_WITH_OS_INTEGRATION})) {
+        app_provider->registrar_unsafe().AppMatches(
+            shortcut_info->app_id, WebAppFilter::IsAppSurfaceableToUser())) {
       is_app_installed = true;
     }
 
@@ -216,7 +214,8 @@ std::unique_ptr<ShortcutInfo> ShortcutInfoForExtensionAndProfile(
   shortcut_info->app_id = app->id();
   shortcut_info->url = extensions::AppLaunchInfo::GetLaunchWebURL(app);
   shortcut_info->title = base::UTF8ToUTF16(app->name());
-  shortcut_info->description = base::UTF8ToUTF16(app->description());
+  shortcut_info->description =
+      base::UTF8ToUTF16(extensions::DescriptionInfo::GetDescription(*app));
   shortcut_info->profile_path = profile->GetPath();
   shortcut_info->profile_name =
       profile->GetPrefs()->GetString(prefs::kProfileName);

@@ -35,8 +35,7 @@ struct CC_EXPORT ScrollNode {
   // The node index of the parent node in the scroll tree node vector.
   int parent_id = kInvalidPropertyNodeId;
 
-  uint32_t main_thread_repaint_reasons =
-      MainThreadScrollingReason::kNotScrollingOnMain;
+  MainThreadRepaintReasons main_thread_repaint_reasons;
 
   // Size of the container area that the contents scrolls in, not including
   // non-overlay scrollbars. Overlay scrollbars do not affect these bounds.
@@ -55,6 +54,7 @@ struct CC_EXPORT ScrollNode {
   bool user_scrollable_horizontal : 1 = false;
   bool user_scrollable_vertical : 1 = false;
   bool is_composited : 1 = false;
+  bool prevent_scroll_axis_locking : 1 = false;
 
   ElementId element_id;
 

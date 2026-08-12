@@ -5,12 +5,17 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_AUTOFILL_AI_ENTITY_INSTANCE_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_AUTOFILL_AI_ENTITY_INSTANCE_H_
 
+#include <stdint.h>
+
+#include <optional>
 #include <ostream>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
+#include <vector>
 
+#include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
@@ -19,14 +24,24 @@
 #include "base/types/pass_key.h"
 #include "base/types/strong_alias.h"
 #include "base/uuid.h"
+#include "components/autofill/core/browser/autofill_format_string.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
 #include "components/autofill/core/browser/data_model/addresses/contact_info.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/country_info.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/date_info.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_type_names.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/common/dense_set.h"
 #include "components/autofill/core/common/is_required.h"
+
+namespace sync_pb {
+class AutofillValuableSpecifics;
+}
+
+namespace personal_context::proto {
+class Entity;
+class TypedValue;
+}  // namespace personal_context::proto
 
 namespace autofill {
 
@@ -36,19 +51,24 @@ namespace autofill {
 // "name", "country", "issue date", "expiry date", etc.
 //
 // A specific passport is an entity instance, which has attribute instances with
-// values such "John Doe", "USA", "05/2019", "04/2029", etc.
+// values such as "John Doe", "USA", "05/2019", "04/2029", etc.
 //
-// Entity instances are loaded from a webdata table and exposed through
-// EntityDataManager.
+// Entity instances are loaded and exposed by EntityDataManager.
 class AttributeInstance;
 struct AutofillFormatString;
 class EntityInstance;
 class EntityInstanceTestApi;
 class EntityTable;
+class WalletPassAccessManagerImpl;
 
 // An attribute instance is a typed string value with additional metadata.
-// It is associated with an EntityInstance. Attributes are used in order to fill
-// fields with information of certain types.
+//
+// That string may be decomposed into finer grained pieces of information. For
+// example, a name like "John Doe" may consist of the given name "John" and the
+// family name "Doe". See GetInfo().
+//
+// Every AttributeInstance is associated with an EntityInstance. Attributes are
+// used to fill fields with information of certain types.
 class AttributeInstance final {
  public:
   // Transparent less-than relation based on the AttributeType.
@@ -75,28 +95,34 @@ class AttributeInstance final {
   //
   // For more control over the return value, see GetInfo().
   std::u16string GetCompleteInfo(std::string_view app_locale) const {
-    return GetInfo(type_.field_type(), app_locale, std::nullopt);
+    return GetInfo(std::nullopt, app_locale, std::nullopt);
   }
 
   // Returns a string that contains the raw information stored in this attribute
   // instance.
   //
   // For more control over the return value, see GetRawInfo().
-  std::u16string GetCompleteRawInfo() const {
-    return GetRawInfo(type_.field_type());
-  }
+  std::u16string GetCompleteRawInfo() const { return GetRawInfo(std::nullopt); }
 
-  // Returns the value stored in this attribute instance.
+  // Returns the value or a part of it stored in this attribute instance.
   //
-  // The `field_type` may be any of `type().field_subtypes()`; otherwise we fall
-  // back to `type().field_type()`. That is, the `field_type` only matters for
-  // name attributes.
+  // The `field_type`, `app_locale`, and `format_string` determine which part of
+  // the value is returned and its format.
   //
-  // Currently, the `format_string` only matters for dates. If it is empty, it
-  // defaults to u"YYYY-MM-DD". See AutofillField::format_string() for the
-  // grammar of format strings.
+  // If `field_type` is std::nullopt, the full value of the AttributeInstance is
+  // returned. Pass any value from `type().field_subtypes()` to query subtypes
+  // for AttributeInstances. Values outside of `type().field_subtypes()` are
+  // gracefully treated like std::nullopt.
+  //
+  // The grammar of `format_string` is documented in `AutofillFormatString`.
+  //
+  // To get the complete value in default formatting, pass std::nullopt for both
+  // `field_type` and `format_string`.
+  // To get the value for an AutofillField `f`, the typical arguments are:
+  // - `f.Type().GetAutofillAiType(type().entity_type())` for `field_type`.
+  // - `f.format_string()` for `format_string`.
   std::u16string GetInfo(
-      FieldType field_type,
+      std::optional<FieldType> field_type,
       std::string_view app_locale,
       base::optional_ref<const AutofillFormatString> format_string) const;
 
@@ -104,13 +130,23 @@ class AttributeInstance final {
   // whatsoever.
   //
   // See GetInfo() for the meaning of `field_type`.
-  std::u16string GetRawInfo(FieldType field_type) const;
+  std::u16string GetRawInfo(std::optional<FieldType> field_type) const;
 
   // Returns the verification status of a value stored in this attribute
   // instance for a specific `type`.
   //
   // See GetInfo() for the meaning of `field_type`.
-  VerificationStatus GetVerificationStatus(FieldType field_type) const;
+  VerificationStatus GetVerificationStatus(
+      std::optional<FieldType> field_type) const;
+
+  // Returns a TypedValue representation of the attribute if available (e.g.,
+  // country code for CountryInfo or calendar date for DateInfo).
+  // If the attribute has no typed representation or is empty/unset, returns a
+  // default-constructed TypedValue whose oneof value is not set. We return a
+  // TypedValue by value (instead of std::optional<TypedValue>) so that
+  // TypedValue can be forward-declared in this header without including the
+  // protobuf header.
+  personal_context::proto::TypedValue GetTypedValue() const;
 
   // Populates the attribute with a value for a specific `type`, according to a
   // given `app_locale`.
@@ -127,7 +163,7 @@ class AttributeInstance final {
   //           AutofillFormatString::FromDateFormat(u"DD"), ...);
   // the function is a no-op.
   // See AutofillField::format_string() for the grammar of format strings.
-  void SetInfo(FieldType field_type,
+  void SetInfo(std::optional<FieldType> field_type,
                const std::u16string& value,
                std::string_view app_locale,
                base::optional_ref<const AutofillFormatString> format_string,
@@ -137,7 +173,7 @@ class AttributeInstance final {
   // country names and does not format names. This function should only be used
   // by database logic and settings page logic.
   // TODO(crbug.com/389625753): Investigate merging SetInfo* and SetRawInfo*.
-  void SetRawInfo(FieldType field_type,
+  void SetRawInfo(std::optional<FieldType> field_type,
                   const std::u16string& value,
                   VerificationStatus status);
 
@@ -148,18 +184,47 @@ class AttributeInstance final {
   // candidate).
   void FinalizeInfo();
 
+  // Returns whether the stored value is a mask of the full value, e.g., it
+  // contains the last four digits of the full value.
+  bool masked() const { return masked_; }
+
+  // Marks the attribute as masked.
+  //
+  // Since this does not perform any validation on the attribute value itself,
+  // it must only be called by code that is certain that the attribute value
+  // is indeed masked. The reason for not having a validation step is that
+  // masking happens purely on the server and the masking algorithm is not
+  // exposed to the client.
+  class MarkAsMaskedPasskey {
+   private:
+    MarkAsMaskedPasskey() = default;
+    friend class EntityTable;
+    friend class WalletPassAccessManagerImpl;
+    friend class FakeWalletPassAccessManager;
+    friend std::optional<EntityInstance> CreateEntityInstanceFromSpecifics(
+        const sync_pb::AutofillValuableSpecifics&);
+    friend std::optional<EntityInstance> PersonalContextEntityToEntityInstance(
+        const personal_context::proto::Entity&,
+        bool);
+  };
+  void mark_as_masked(MarkAsMaskedPasskey) { masked_ = true; }
+
   friend bool operator==(const AttributeInstance& lhs,
                          const AttributeInstance& rhs) = default;
 
  private:
+  friend class AttributeInstanceTestApi;
+
   using StateInfo = base::StrongAlias<class StateInfoTag, std::u16string>;
   using InfoStructure =
       std::variant<CountryInfo, DateInfo, NameInfo, StateInfo, std::u16string>;
 
-  FieldType GetNormalizedFieldType(FieldType field_type) const;
+  FieldType GetNormalizedFieldType(
+      std::optional<FieldType> unnormalized_field_type) const;
 
   AttributeType type_;
   InfoStructure info_;
+  bool masked_ = false;
 };
 
 struct AttributeInstance::CompareByType {
@@ -205,7 +270,7 @@ class EntityInstance final {
   struct EntityMetadata {
     EntityInstance::EntityId guid;
     base::Time date_modified;
-    size_t use_count;
+    int64_t use_count = 0;
     base::Time use_date;
 
     friend bool operator==(const EntityMetadata&,
@@ -228,7 +293,69 @@ class EntityInstance final {
     // copy. Changes happening locally or on the Wallet server are synced among
     // all local storages sharing this entity.
     kServerWallet = 1,
-    kMaxValue = kServerWallet,
+    // The entity provided by Personal Context.
+    kPersonalContext = 2,
+    kMaxValue = kPersonalContext,
+  };
+
+  // Defines record-type-specific payloads stored within `RecordTypeData`.
+  // Specializations associate additional metadata with specific `RecordType`
+  // values (e.g., extraction sources for `kPersonalContext`), while types with
+  // no extra metadata remain empty.
+  struct LocalRecordTypePayload {
+    friend bool operator==(const LocalRecordTypePayload&,
+                           const LocalRecordTypePayload&) = default;
+  };
+  struct WalletRecordTypePayload {
+    friend bool operator==(const WalletRecordTypePayload&,
+                           const WalletRecordTypePayload&) = default;
+  };
+  struct PersonalContextRecordTypePayload {
+    // Captures the provenance of an entity (e.g., its product source and URL).
+    struct Source {
+      enum class Type {
+        kUnspecified = 0,
+        kGmail = 1,
+        kPhotos = 2,
+      };
+
+      Type type = Type::kUnspecified;
+      std::string url;
+
+      friend bool operator==(const Source&, const Source&) = default;
+    };
+
+    std::vector<Source> sources = internal::IsRequired();
+
+    friend bool operator==(const PersonalContextRecordTypePayload&,
+                           const PersonalContextRecordTypePayload&) = default;
+  };
+  using RecordTypeData = std::variant<LocalRecordTypePayload,
+                                      WalletRecordTypePayload,
+                                      PersonalContextRecordTypePayload>;
+
+  // Categorizes different types of Google Wallet passes.
+  enum class WalletPassType {
+    // The entity is not supported as a Wallet pass (e.g., local entities, or
+    // server types that are not supported by the Wallet integration).
+    kUnsupported,
+    // A private pass containing sensitive information (e.g. passport).
+    kPrivate,
+    // A public pass without sensitive information (e.g. flight reservation).
+    kPublic,
+  };
+
+  // Categorizes different types of personal context entities.
+  enum class PersonalContextSpiiType {
+    // The entity is not supported as a personal context type (e.g., local
+    // entities, or record types other than kPersonalContext).
+    kUnsupported,
+    // A personal context entity which might contain sensitive information
+    // (e.g. passport, drivers license, national ID).
+    kSpii,
+    // A personal context entity which cannot contain sensitive information
+    // (e.g. flight reservation, vehicle, order, shipment).
+    kNoSpii,
   };
 
   // `attributes` must be non-empty and their type must be identical to `type`.
@@ -238,9 +365,9 @@ class EntityInstance final {
                  EntityId guid,
                  std::string nickname,
                  base::Time date_modified,
-                 size_t use_count,
+                 int64_t use_count,
                  base::Time use_date,
-                 RecordType record_type,
+                 RecordTypeData record_type_data,
                  AreAttributesReadOnly are_attributes_read_only,
                  std::string frecency_override);
 
@@ -295,31 +422,31 @@ class EntityInstance final {
   }
 
   // Globally unique identifier of this entity.
-  const EntityId& guid() const LIFETIME_BOUND { return guid_; }
+  const EntityId& guid() const LIFETIME_BOUND { return metadata_.guid; }
 
   // The nickname assigned to this instance by the user.
   const std::string& nickname() const LIFETIME_BOUND { return nickname_; }
 
   // The latest time the instance, including any of its attributes, was edited.
-  base::Time date_modified() const { return entity_metadata_.date_modified; }
+  base::Time date_modified() const { return metadata_.date_modified; }
 
   // Updates the last time an entity was used to fill a form and
   // increases the entity use count.
   void RecordEntityUsed(base::Time date);
 
   // Returns the last time an entity was used to fill a form.
-  base::Time use_date() const { return entity_metadata_.use_date; }
+  base::Time use_date() const { return metadata_.use_date; }
 
   // Returns how many times an entity was used to fill a form.
-  size_t use_count() const { return entity_metadata_.use_count; }
+  int64_t use_count() const { return metadata_.use_count; }
 
   // Returns the metadata for this instance.
-  const EntityMetadata& metadata() const { return entity_metadata_; }
+  const EntityMetadata& metadata() const { return metadata_; }
 
   // Sets the metadata for this instance.
   void set_metadata(EntityMetadata metadata) {
-    CHECK_EQ(guid_, metadata.guid);
-    entity_metadata_ = std::move(metadata);
+    CHECK_EQ(guid(), metadata.guid);
+    metadata_ = std::move(metadata);
   }
 
   // Returns true if the attributes of this entity instance cannot be edited by
@@ -329,7 +456,10 @@ class EntityInstance final {
   }
 
   // Returns the type of storage used for the specific entity.
-  RecordType record_type() const { return record_type_; }
+  RecordType record_type() const;
+
+  // Returns the record type payload data for the specific entity.
+  const RecordTypeData& record_type_data() const { return record_type_data_; }
 
   // Returns the ordering override for the specific entity.
   const std::string& frecency_override(
@@ -374,10 +504,42 @@ class EntityInstance final {
   // dates.
   EntityMergeability GetEntityMergeability(const EntityInstance& newer) const;
 
+  // Returns true if `this` and `other` represent the same entity
+  // based on their merge constraints.
+  bool MatchesMergeConstraintsOf(const EntityInstance& other) const;
+
   // Returns true if all attributes of `this` are present in `other` with the
   // same values or if `this` is a proper subset of `other`.
+  // When a masked attribute is compared to an unmasked one, only their suffixes
+  // are compared.
   bool IsSubsetOf(const EntityInstance& other) const;
 
+  // Returns whether any of the attributes is masked.
+  //
+  // Note that there can be entities for which
+  // `IsMaskedEntity() == IsUnmaskedEntity() == false`.
+  // These entities do not contain obfuscated attributes and can be safely
+  // persisted to disk. Examples include: vehicle information, flight
+  // reservation entities, passport entities without a saved number, etc.
+  bool IsMaskedEntity() const;
+
+  // Returns true if `this` has a maskable record type and contains at least
+  // one unmasked obfuscated attribute. Unmasked entities are transient and
+  // must never be persisted to disk.
+  bool IsUnmaskedEntity() const;
+
+  // Returns a copy of `this` with a new `id`.
+  EntityInstance CopyWithNewEntityId(EntityId id) const;
+
+  // Returns a copy of `this` with the given `record_type`.
+  EntityInstance CopyWithNewRecordType(RecordType record_type) const;
+
+  // Returns a copy of `this` where the attribute for `attribute.type()` is
+  // replaced by `attribute`.
+  EntityInstance CopyWithUpdatedAttribute(AttributeInstance attribute) const;
+
+  // Note that since operator== is defaulted, contrary to `IsSubsetOf()`,
+  // masked and unmasked attributes are considered distinct.
   friend bool operator==(const EntityInstance&,
                          const EntityInstance&) = default;
 
@@ -387,15 +549,23 @@ class EntityInstance final {
   EntityType type_;
   base::flat_set<AttributeInstance, AttributeInstance::CompareByType>
       attributes_;
-  EntityId guid_;
   std::string nickname_;
-  EntityMetadata entity_metadata_;
-  RecordType record_type_;
+  EntityMetadata metadata_;
+  RecordTypeData record_type_data_;
   AreAttributesReadOnly are_attributes_read_only_;
   std::string frecency_override_;
 };
 
+std::ostream& operator<<(std::ostream& os,
+                         const EntityInstance::EntityMetadata& m);
 std::ostream& operator<<(std::ostream& os, const AttributeInstance& a);
+std::ostream& operator<<(
+    std::ostream& os,
+    const EntityInstance::PersonalContextRecordTypePayload::Source::Type& t);
+std::ostream& operator<<(
+    std::ostream& os,
+    const EntityInstance::PersonalContextRecordTypePayload::Source& s);
+std::ostream& operator<<(std::ostream& os, const EntityInstance::RecordType& t);
 std::ostream& operator<<(std::ostream& os, const EntityInstance& e);
 
 struct EntityInstance::CompareByGuid {
@@ -413,6 +583,59 @@ struct EntityInstance::CompareByGuid {
     return lhs.guid() < rhs.guid();
   }
 };
+
+// Returns the EntityInstance::WalletPassType of an entity with the given
+// (`type`, `record_type`) combination.
+constexpr EntityInstance::WalletPassType GetWalletPassType(
+    EntityType type,
+    EntityInstance::RecordType record_type) {
+  if (record_type != EntityInstance::RecordType::kServerWallet) {
+    return EntityInstance::WalletPassType::kUnsupported;
+  }
+
+  switch (type.name()) {
+    case EntityTypeName::kDriversLicense:
+    case EntityTypeName::kKnownTravelerNumber:
+    case EntityTypeName::kNationalIdCard:
+    case EntityTypeName::kPassport:
+    case EntityTypeName::kRedressNumber:
+      return EntityInstance::WalletPassType::kPrivate;
+    case EntityTypeName::kFlightReservation:
+    case EntityTypeName::kVehicle:
+    case EntityTypeName::kOrder:
+    case EntityTypeName::kShipment:
+      return EntityInstance::WalletPassType::kPublic;
+  }
+
+  return EntityInstance::WalletPassType::kUnsupported;
+}
+
+// Returns the EntityInstance::PersonalContextSpiiType of an entity with the
+// given (`type`, `record_type`) combination.
+constexpr EntityInstance::PersonalContextSpiiType GetPersonalContextSpiiType(
+    EntityType type,
+    EntityInstance::RecordType record_type) {
+  if (record_type != EntityInstance::RecordType::kPersonalContext) {
+    return EntityInstance::PersonalContextSpiiType::kUnsupported;
+  }
+
+  switch (type.name()) {
+    case EntityTypeName::kDriversLicense:
+    case EntityTypeName::kNationalIdCard:
+    case EntityTypeName::kPassport:
+      return EntityInstance::PersonalContextSpiiType::kSpii;
+    case EntityTypeName::kFlightReservation:
+    case EntityTypeName::kVehicle:
+    case EntityTypeName::kOrder:
+    case EntityTypeName::kShipment:
+      return EntityInstance::PersonalContextSpiiType::kNoSpii;
+    case EntityTypeName::kKnownTravelerNumber:
+    case EntityTypeName::kRedressNumber:
+      return EntityInstance::PersonalContextSpiiType::kUnsupported;
+  }
+
+  return EntityInstance::PersonalContextSpiiType::kUnsupported;
+}
 
 }  // namespace autofill
 

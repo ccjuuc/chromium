@@ -12,11 +12,12 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/toolbar/chrome_labs/chrome_labs_utils.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/toolbar/chrome_labs/chrome_labs_bubble_view.h"
 #include "chrome/browser/ui/views/toolbar/chrome_labs/chrome_labs_view_controller.h"
-#include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_controller.h"
+#include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "components/webui/flags/pref_service_flags_storage.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
@@ -29,13 +30,23 @@
 #include "chrome/browser/ash/settings/about_flags.h"
 #endif
 
+DEFINE_USER_DATA(ChromeLabsCoordinator);
+
+// static
+ChromeLabsCoordinator* ChromeLabsCoordinator::From(
+    BrowserWindowInterface* browser) {
+  return browser ? ChromeLabsCoordinator::Get(browser->GetUnownedUserDataHost())
+                 : nullptr;
+}
+
 ChromeLabsCoordinator::ChromeLabsCoordinator(Browser* browser)
-    : browser_(browser) {
+    : browser_(browser),
+      scoped_unowned_user_data_(browser->GetUnownedUserDataHost(), *this) {
   pinned_actions_observation_.Observe(
-      PinnedToolbarActionsModel::Get(browser->profile()));
+      PinnedToolbarActionsModel::Get(browser->GetProfile()));
 
   chrome_labs_action_item_ = actions::ActionManager::Get().FindAction(
-      kActionShowChromeLabs, browser->browser_actions()->root_action_item());
+      kActionShowChromeLabs, BrowserActions::From(browser)->root_action_item());
   CHECK(chrome_labs_action_item_);
 
   MaybeInstallDotIndicator();
@@ -62,7 +73,7 @@ bool ChromeLabsCoordinator::BubbleExists() {
 void ChromeLabsCoordinator::Show(ShowUserType user_type) {
 #if BUILDFLAG(IS_CHROMEOS)
   // Bypass possible incognito profile same as chrome://flags does.
-  Profile* original_profile = browser_->profile()->GetOriginalProfile();
+  Profile* original_profile = browser_->GetProfile()->GetOriginalProfile();
   if (user_type == ShowUserType::kChromeOsOwnerUserType) {
     ash::OwnerSettingsServiceAsh* service =
         ash::OwnerSettingsServiceAshFactory::GetForBrowserContext(
@@ -81,7 +92,7 @@ void ChromeLabsCoordinator::Show(ShowUserType user_type) {
   flags_state_ = about_flags::GetCurrentFlagsState();
 
   browser_->GetFeatures()
-      .pinned_toolbar_actions_controller()
+      .pinned_toolbar_actions()
       ->ShowActionEphemerallyInToolbar(kActionShowChromeLabs, true);
 
   auto chrome_labs_bubble_view =
@@ -134,7 +145,7 @@ void ChromeLabsCoordinator::ShowOrHide() {
   // bubble only after we have this information.
 #if BUILDFLAG(IS_CHROMEOS)
   // Bypass possible incognito profile same as chrome://flags does.
-  Profile* original_profile = browser_->profile()->GetOriginalProfile();
+  Profile* original_profile = browser_->GetProfile()->GetOriginalProfile();
   if ((base::SysInfo::IsRunningOnChromeOS() ||
        should_circumvent_device_check_for_testing_) &&
       ash::OwnerSettingsServiceAshFactory::GetForBrowserContext(
@@ -164,12 +175,10 @@ void ChromeLabsCoordinator::ShowOrHide() {
 }
 
 PinnedActionToolbarButton* ChromeLabsCoordinator::GetChromeLabsButton() {
-  PinnedToolbarActionsController* pinned_toolbar_actions_controller =
-      browser_->GetFeatures().pinned_toolbar_actions_controller();
-  return pinned_toolbar_actions_controller
-             ? pinned_toolbar_actions_controller->GetButtonFor(
-                   kActionShowChromeLabs)
-             : nullptr;
+  PinnedToolbarActions* pinned_toolbar_actions =
+      browser_->GetFeatures().pinned_toolbar_actions();
+  return pinned_toolbar_actions ? pinned_toolbar_actions->GetChromeLabsButton()
+                                : nullptr;
 }
 
 ChromeLabsBubbleView* ChromeLabsCoordinator::GetChromeLabsBubbleView() {
@@ -182,7 +191,7 @@ void ChromeLabsCoordinator::OnChromeLabsBubbleClosing() {
   chrome_labs_action_item_->SetIsShowingBubble(false);
 
   browser_->GetFeatures()
-      .pinned_toolbar_actions_controller()
+      .pinned_toolbar_actions()
       ->ShowActionEphemerallyInToolbar(kActionShowChromeLabs, false);
 }
 
@@ -198,7 +207,7 @@ void ChromeLabsCoordinator::MaybeInstallDotIndicator() {
   }
   views::DotIndicator* dot_indicator = views::DotIndicator::Install(anchor);
   dot_indicator->SetVisible(
-      AreNewChromeLabsExperimentsAvailable(browser_->profile()));
+      AreNewChromeLabsExperimentsAvailable(browser_->GetProfile()));
 
   gfx::Rect dot_rect(8, 8);
   dot_rect.set_origin(gfx::Point(anchor->GetPreferredSize().width(),

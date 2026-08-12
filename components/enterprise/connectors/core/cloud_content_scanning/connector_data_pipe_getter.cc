@@ -8,17 +8,26 @@
 
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/memory/shared_memory_mapping.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/strcat.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
+#include "components/enterprise/connectors/core/features.h"
 #include "net/base/net_errors.h"
+#include "services/network/public/cpp/resource_request_body.h"
 
 #if BUILDFLAG(IS_POSIX)
 #include <sys/mman.h>
 
 #include "base/threading/scoped_blocking_call.h"
 #endif
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "components/enterprise/connectors/core/cloud_content_scanning/chunked_file_data_pipe_producer.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace enterprise_connectors {
 
@@ -28,9 +37,61 @@ const char kDataContentType[] = "Content-Type: application/octet-stream";
 // Write the data from |file_| by chunks of 32 kbs.
 constexpr size_t kMaxSize = 32 * 1024;
 
+#if BUILDFLAG(IS_CHROMEOS)
+std::unique_ptr<ChunkedFileDataPipeProducer> CreateChunkedProducer(
+    base::File file,
+    bool is_obfuscated) {
+  if (!file.IsValid()) {
+    return nullptr;
+  }
+
+  std::optional<enterprise_obfuscation::ObfuscatedFileReader> obfuscated_reader;
+  int64_t file_size = 0;
+
+  if (is_obfuscated) {
+    auto parsed_header =
+        enterprise_obfuscation::ObfuscatedFileReader::ReadHeaderData(file);
+    if (!parsed_header.has_value()) {
+      return nullptr;
+    }
+
+    base::File file_clone = file.Duplicate();
+    if (!file_clone.IsValid()) {
+      return nullptr;
+    }
+    auto reader = enterprise_obfuscation::ObfuscatedFileReader::Create(
+        parsed_header.value(), std::move(file_clone));
+    if (!reader.has_value()) {
+      return nullptr;
+    }
+    file_size = reader->GetSize();
+    obfuscated_reader = std::move(reader.value());
+  } else {
+    file_size = file.GetLength();
+    if (file_size < 0) {
+      return nullptr;
+    }
+  }
+
+  return std::make_unique<ChunkedFileDataPipeProducer>(
+      std::move(file), file_size, std::move(obfuscated_reader));
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 }  // namespace
 
 #if BUILDFLAG(IS_POSIX)
+namespace {
+void CloseFileAndMap(base::File file, uint8_t* data, size_t length) {
+  base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
+                                                base::BlockingType::MAY_BLOCK);
+  if (data) {
+    munmap(data, length);
+  }
+  file.Close();
+}
+}  // namespace
+
 bool ConnectorDataPipeGetter::InternalMemoryMappedFile::Initialize(
     base::File file) {
   if (IsValid()) {
@@ -85,15 +146,31 @@ bool ConnectorDataPipeGetter::InternalMemoryMappedFile::DoInitialize() {
 }
 
 void ConnectorDataPipeGetter::InternalMemoryMappedFile::CloseHandles() {
-  base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
-                                                base::BlockingType::MAY_BLOCK);
-
-  if (data_) {
-    munmap(data_, length_);
-  }
+  CloseFileAndMap(std::move(file_), data_, length_);
   data_ = nullptr;
   length_ = 0;
-  file_.Close();
+}
+
+void ConnectorDataPipeGetter::InternalMemoryMappedFile::CloseHandlesAsync() {
+  // Bounce the blocking CloseHandles() call to a background thread
+  // so it never blocks the UI thread if destroyed unexpectedly.
+  base::ThreadPool::PostTask(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+      base::BindOnce(&CloseFileAndMap, std::move(file_), data_, length_));
+
+  // Prevent CloseHandles() from running again synchronously
+  data_ = nullptr;
+  length_ = 0;
+}
+
+ConnectorDataPipeGetter::InternalMemoryMappedFile::~InternalMemoryMappedFile() {
+  if (!base::FeatureList::IsEnabled(
+          enterprise_connectors::kEnableCancelUploadOnContentAnalysis) ||
+      !IsValid()) {
+    return;
+  }
+
+  CloseHandlesAsync();
 }
 
 #endif  // BUILDFLAG(IS_POSIX)
@@ -154,6 +231,34 @@ ConnectorDataPipeGetter::CreateResumablePipeGetter(base::File file,
       /*metadata*/ std::string(), std::move(mm_file), is_obfuscated);
 }
 
+#if BUILDFLAG(IS_CHROMEOS)
+// static
+std::unique_ptr<ConnectorDataPipeGetter>
+ConnectorDataPipeGetter::CreateFuseboxResumablePipeGetter(base::File file,
+                                                          bool is_obfuscated) {
+  auto producer = CreateChunkedProducer(std::move(file), is_obfuscated);
+  if (!producer) {
+    return nullptr;
+  }
+  return std::make_unique<ConnectorDataPipeGetter>(std::move(producer));
+}
+
+// static
+std::unique_ptr<ConnectorDataPipeGetter>
+ConnectorDataPipeGetter::CreateFuseboxMultipartPipeGetter(
+    const std::string& boundary,
+    const std::string& metadata,
+    base::File file,
+    bool is_obfuscated) {
+  auto producer = CreateChunkedProducer(std::move(file), is_obfuscated);
+  if (!producer) {
+    return nullptr;
+  }
+  return std::make_unique<ConnectorDataPipeGetter>(boundary, metadata,
+                                                   std::move(producer));
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 // static
 std::unique_ptr<ConnectorDataPipeGetter>
 ConnectorDataPipeGetter::CreateResumablePipeGetter(
@@ -172,6 +277,33 @@ ConnectorDataPipeGetter::CreateResumablePipeGetter(
                                                    std::move(mapping));
 }
 
+// static
+std::unique_ptr<ConnectorDataPipeGetter>
+ConnectorDataPipeGetter::CreateResumablePipeGetter(
+    scoped_refptr<network::ResourceRequestBody> request_body) {
+  if (!request_body) {
+    return nullptr;
+  }
+
+  return std::make_unique<ConnectorDataPipeGetter>(/*boundary*/ std::string(),
+                                                   /*metadata*/ std::string(),
+                                                   std::move(request_body));
+}
+
+#if BUILDFLAG(IS_CHROMEOS)
+ConnectorDataPipeGetter::ConnectorDataPipeGetter(
+    std::unique_ptr<ChunkedFileDataPipeProducer> chunked_file_producer)
+    : chunked_file_producer_(std::move(chunked_file_producer)) {}
+
+ConnectorDataPipeGetter::ConnectorDataPipeGetter(
+    const std::string& boundary,
+    const std::string& metadata,
+    std::unique_ptr<ChunkedFileDataPipeProducer> chunked_file_producer)
+    : chunked_file_producer_(std::move(chunked_file_producer)) {
+  PrepareMultipartRequestFormat(boundary, metadata);
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 ConnectorDataPipeGetter::ConnectorDataPipeGetter(
     const std::string& boundary,
     const std::string& metadata,
@@ -180,8 +312,8 @@ ConnectorDataPipeGetter::ConnectorDataPipeGetter(
     : ConnectorDataPipeGetter(boundary,
                               metadata,
                               std::move(file),
-                              base::ReadOnlySharedMemoryMapping()) {
-  file_data_pipe_ = true;
+                              /*page=*/base::ReadOnlySharedMemoryMapping(),
+                              /*request_body=*/nullptr) {
   CHECK(file_->IsValid());
 
   if (is_obfuscated) {
@@ -194,17 +326,35 @@ ConnectorDataPipeGetter::ConnectorDataPipeGetter(
     const std::string& boundary,
     const std::string& metadata,
     base::ReadOnlySharedMemoryMapping page)
-    : ConnectorDataPipeGetter(boundary, metadata, nullptr, std::move(page)) {
-  file_data_pipe_ = false;
+    : ConnectorDataPipeGetter(boundary,
+                              metadata,
+                              /*file=*/nullptr,
+                              std::move(page),
+                              /*request_body=*/nullptr) {
   CHECK(page_.IsValid());
 }
 
 ConnectorDataPipeGetter::ConnectorDataPipeGetter(
     const std::string& boundary,
     const std::string& metadata,
+    scoped_refptr<network::ResourceRequestBody> request_body)
+    : ConnectorDataPipeGetter(boundary,
+                              metadata,
+                              /*file=*/nullptr,
+                              /*page=*/base::ReadOnlySharedMemoryMapping(),
+                              std::move(request_body)) {
+  CHECK(request_body_);
+}
+
+ConnectorDataPipeGetter::ConnectorDataPipeGetter(
+    const std::string& boundary,
+    const std::string& metadata,
     std::unique_ptr<InternalMemoryMappedFile> file,
-    base::ReadOnlySharedMemoryMapping page)
-    : file_(std::move(file)), page_(std::move(page)) {
+    base::ReadOnlySharedMemoryMapping page,
+    scoped_refptr<network::ResourceRequestBody> request_body)
+    : file_(std::move(file)),
+      page_(std::move(page)),
+      request_body_(std::move(request_body)) {
   if (!boundary.empty() && !metadata.empty()) {
     PrepareMultipartRequestFormat(boundary, metadata);
   }
@@ -216,11 +366,12 @@ void ConnectorDataPipeGetter::Read(mojo::ScopedDataPipeProducerHandle pipe,
                                    ReadCallback callback) {
   Reset();
 
-  if (deobfuscator_ && file_data_pipe_) {
+  if (deobfuscator_ && is_mmap_file_data_pipe()) {
     CHECK(file_->IsValid());
     auto overhead =
         deobfuscator_->CalculateDeobfuscationOverhead(file_->bytes());
-    if (!overhead.value()) {
+    if (!overhead.has_value()) {
+      std::move(callback).Run(net::ERR_FAILED, 0);
       return;
     }
     // Pass the size of the deobfuscated data to the data pipe producer.
@@ -249,6 +400,13 @@ void ConnectorDataPipeGetter::Reset() {
   watcher_.reset();
   pipe_.reset();
   write_position_ = 0;
+#if BUILDFLAG(IS_CHROMEOS)
+  chunked_buffer_.clear();
+  if (chunked_file_producer_) {
+    chunked_file_producer_->Reset();
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
+  weak_factory_.InvalidateWeakPtrs();
 }
 
 std::unique_ptr<ConnectorDataPipeGetter::InternalMemoryMappedFile>
@@ -271,20 +429,29 @@ void ConnectorDataPipeGetter::Write() {
   }
 
   int64_t data_end = metadata_end;
-  if (is_file_data_pipe()) {
+  if (is_mmap_file_data_pipe()) {
     data_end += file_->length();
+#if BUILDFLAG(IS_CHROMEOS)
+  } else if (is_chunked_file_data_pipe()) {
+    data_end += chunked_file_producer_->file_size();
+#endif  // BUILDFLAG(IS_CHROMEOS)
   } else {
     DCHECK(is_page_data_pipe());
     data_end += page_.size();
   }
 
   if (IsWritePositionInRange(metadata_end, data_end)) {
-    if (is_file_data_pipe() && !WriteFileData()) {
+    if (is_mmap_file_data_pipe() && !WriteMmapFileData()) {
       return;
     }
     if (is_page_data_pipe() && !WritePageData()) {
       return;
     }
+#if BUILDFLAG(IS_CHROMEOS)
+    if (is_chunked_file_data_pipe() && !WriteChunkedFileData()) {
+      return;
+    }
+#endif  // BUILDFLAG(IS_CHROMEOS)
   }
 
   int64_t last_boundary_end = data_end + last_boundary_.size();
@@ -300,6 +467,56 @@ void ConnectorDataPipeGetter::Write() {
     Reset();
   }
 }
+
+#if BUILDFLAG(IS_CHROMEOS)
+bool ConnectorDataPipeGetter::WriteChunkedFileData() {
+  DCHECK(is_chunked_file_data_pipe());
+
+  int64_t file_start = metadata_.size();
+  int64_t file_offset = write_position_ - file_start;
+  int64_t chunk_offset = file_offset % ChunkedFileDataPipeProducer::kChunkSize;
+
+  if (!chunked_buffer_.empty() &&
+      chunk_offset < static_cast<int64_t>(chunked_buffer_.size())) {
+    base::span<const uint8_t> bytes = base::span(chunked_buffer_);
+    bytes = bytes.subspan(base::checked_cast<size_t>(chunk_offset));
+
+    if (!Write(bytes)) {
+      return false;
+    }
+
+    chunked_buffer_.clear();
+    file_offset = write_position_ - file_start;
+  }
+
+  if (chunked_file_producer_->file_fully_read()) {
+    return true;
+  }
+
+  if (!chunked_file_producer_->is_reading()) {
+    chunked_buffer_.clear();
+    chunked_file_producer_->ReadNextChunk(
+        file_offset, base::BindOnce(&ConnectorDataPipeGetter::OnChunkRead,
+                                    weak_factory_.GetWeakPtr()));
+  }
+
+  return false;
+}
+
+void ConnectorDataPipeGetter::OnChunkRead(std::vector<uint8_t> chunk,
+                                          MojoResult result) {
+  if (result != MOJO_RESULT_OK) {
+    Reset();
+    return;
+  }
+
+  if (!chunk.empty()) {
+    chunked_buffer_ = std::move(chunk);
+  }
+
+  Write();
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 inline void ConnectorDataPipeGetter::PrepareMultipartRequestFormat(
     const std::string& boundary,
@@ -322,7 +539,7 @@ bool ConnectorDataPipeGetter::WriteMultipartRequestFormat(
   return Write(bytes);
 }
 
-bool ConnectorDataPipeGetter::WriteFileData() {
+bool ConnectorDataPipeGetter::WriteMmapFileData() {
   int64_t file_offset = write_position_ - metadata_.size();
   CHECK(file_->IsValid());
   CHECK_GE(file_offset, 0);
@@ -404,7 +621,12 @@ bool ConnectorDataPipeGetter::IsWritePositionInRange(int64_t range_start,
 
 int64_t ConnectorDataPipeGetter::FullSize() {
   int64_t size = metadata_.size() + last_boundary_.size();
-  if (is_file_data_pipe()) {
+#if BUILDFLAG(IS_CHROMEOS)
+  if (is_chunked_file_data_pipe()) {
+    return size + chunked_file_producer_->file_size();
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
+  if (is_mmap_file_data_pipe()) {
     return size + file_->length();
   } else {
     DCHECK(is_page_data_pipe());
@@ -412,12 +634,22 @@ int64_t ConnectorDataPipeGetter::FullSize() {
   }
 }
 
-bool ConnectorDataPipeGetter::is_file_data_pipe() const {
-  return file_data_pipe_;
+bool ConnectorDataPipeGetter::is_mmap_file_data_pipe() const {
+  return file_.get() != nullptr;
 }
 
+#if BUILDFLAG(IS_CHROMEOS)
+bool ConnectorDataPipeGetter::is_chunked_file_data_pipe() const {
+  return chunked_file_producer_.get() != nullptr;
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 bool ConnectorDataPipeGetter::is_page_data_pipe() const {
-  return !file_data_pipe_;
+  return page_.data();
+}
+
+bool ConnectorDataPipeGetter::is_network_request_data_pipe() const {
+  return request_body_.get();
 }
 
 }  // namespace enterprise_connectors

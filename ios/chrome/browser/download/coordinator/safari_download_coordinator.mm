@@ -52,9 +52,9 @@ const char kUmaDownloadMobileConfigFileUI[] =
 const char kUmaDownloadAppleWalletOrderFileUI[] =
     "Download.IOSDownloadAppleWalletOrderFileUI";
 
-@interface SafariDownloadCoordinator () <TabsDependencyInstalling,
-                                         SafariDownloadTabHelperDelegate,
-                                         SFSafariViewControllerDelegate>
+@interface SafariDownloadCoordinator () <SafariDownloadTabHelperDelegate,
+                                         SFSafariViewControllerDelegate,
+                                         TabsDependencyInstalling>
 
 // SFSafariViewController used to download files.
 @property(nonatomic, strong) SFSafariViewController* safariViewController;
@@ -73,8 +73,7 @@ const char kUmaDownloadAppleWalletOrderFileUI[] =
                                    browser:(Browser*)browser {
   if ((self = [super initWithBaseViewController:baseViewController
                                         browser:browser])) {
-    _dependencyInstallerBridge.StartObserving(
-        self, browser, TabsDependencyInstaller::Policy::kOnlyRealized);
+    _dependencyInstallerBridge.StartObserving(self, browser);
   }
   return self;
 }

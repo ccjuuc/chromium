@@ -12,7 +12,7 @@
 #include <utility>
 
 #include "base/apple/foundation_util.h"
-#include "base/containers/contains.h"
+#include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
@@ -35,7 +35,6 @@
 #include "device/fido/discoverable_credential_metadata.h"
 #include "device/fido/fido_authenticator.h"
 #include "device/fido/fido_discovery_base.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/large_blob.h"
 #include "device/fido/mac/icloud_keychain_sys.h"
 #include "device/fido/public/features.h"
@@ -493,7 +492,7 @@ class API_AVAILABLE(macos(13.3)) Authenticator : public FidoAuthenticator {
       // please have macOS show its own error dialog.
       GetAssertionStatus response;
       if (error.code == 1001 &&
-          base::Contains(description, "No credentials available for login")) {
+          description.contains("No credentials available for login")) {
         response = GetAssertionStatus::kICloudKeychainNoCredentials;
       } else {
         // All other errors are currently mapped to
@@ -532,13 +531,12 @@ class API_AVAILABLE(macos(13.3)) Authenticator : public FidoAuthenticator {
 
     AuthenticatorGetAssertionResponse response(
         std::move(*authenticator_data),
-        fido_parsing_utils::Materialize(NSDataToSpan(result.signature)),
-        transport_used);
+        base::ToVector(NSDataToSpan(result.signature)), transport_used);
     response.user_entity = PublicKeyCredentialUserEntity(
-        fido_parsing_utils::Materialize(NSDataToSpan(result.userID)));
+        base::ToVector(NSDataToSpan(result.userID)));
     response.credential = PublicKeyCredentialDescriptor(
         CredentialType::kPublicKey,
-        fido_parsing_utils::Materialize(NSDataToSpan(result.credentialID)));
+        base::ToVector(NSDataToSpan(result.credentialID)));
     response.user_selected = true;
     if (@available(macOS 15.0, *)) {
       if ([result
@@ -560,8 +558,8 @@ class API_AVAILABLE(macos(13.3)) Authenticator : public FidoAuthenticator {
         if (platform_result.largeBlob != nil) {
           auto* large_blob_out = platform_result.largeBlob;
           if (large_blob_out.readData != nil) {
-            response.large_blob = fido_parsing_utils::Materialize(
-                NSDataToSpan(large_blob_out.readData));
+            response.large_blob =
+                base::ToVector(NSDataToSpan(large_blob_out.readData));
           }
           response.large_blob_written = large_blob_out.didWrite;
         }

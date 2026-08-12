@@ -5,7 +5,7 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_METRICS_PAYMENTS_VIRTUAL_CARD_ENROLLMENT_METRICS_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_METRICS_PAYMENTS_VIRTUAL_CARD_ENROLLMENT_METRICS_H_
 
-#include <string>
+#include <string_view>
 
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/virtual_card_enrollment_flow.h"
@@ -155,29 +155,24 @@ void LogVirtualCardEnrollmentNotOfferedDueToRequiredDelay(
 
 // Logs whether the loading or confirmation views are shown.
 void LogVirtualCardEnrollmentLoadingViewShown(bool is_shown);
-void LogVirtualCardEnrollmentConfirmationViewShown(bool is_shown,
-                                                   bool is_card_enrolled);
 
 // Logs the loading or confirmation views results when the view is closed.
 void LogVirtualCardEnrollmentLoadingViewResult(
     VirtualCardEnrollmentBubbleResult result);
-void LogVirtualCardEnrollmentConfirmationViewResult(
-    VirtualCardEnrollmentBubbleResult result,
-    bool is_card_enrolled);
 
 // Helper function used to convert VirtualCardEnrollmentBubbleSource enum to
 // name suffix.
-std::string VirtualCardEnrollmentBubbleSourceToMetricSuffix(
+std::string_view VirtualCardEnrollmentBubbleSourceToMetricSuffix(
     VirtualCardEnrollmentBubbleSource source);
 
 // Helper function used to convert VirtualCardEnrollmentSource enum to
 // name suffix.
-const std::string VirtualCardEnrollmentSourceToMetricSuffix(
+std::string_view VirtualCardEnrollmentSourceToMetricSuffix(
     VirtualCardEnrollmentSource source);
 
 // Helper function used to convert VirtualCardEnrollmentLinkType enum to
 // name suffix.
-const std::string VirtualCardEnrollmentLinkTypeToMetricSuffix(
+std::string_view VirtualCardEnrollmentLinkTypeToMetricSuffix(
     VirtualCardEnrollmentLinkType link_type);
 
 }  // namespace autofill

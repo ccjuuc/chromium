@@ -47,6 +47,8 @@
 
 #if BUILDFLAG(IS_WIN)
 #include "services/viz/privileged/mojom/gl/info_collection_gpu_service.mojom.h"
+#include "services/webnn/public/mojom/ep_package_info.mojom.h"
+#include "services/webnn/public/mojom/webnn_context_provider.mojom.h"
 #include "ui/gfx/mojom/dxgi_info.mojom.h"
 #endif
 
@@ -58,6 +60,13 @@ namespace gpu {
 class GpuDiskCacheFactory;
 class GpuDiskCache;
 }  // namespace gpu
+
+#if BUILDFLAG(IS_WIN)
+namespace webnn {
+struct ContextProperties;
+struct EpDeviceInfo;
+}  // namespace webnn
+#endif
 
 namespace viz {
 
@@ -109,6 +118,18 @@ class VIZ_HOST_EXPORT GpuHostImpl : public mojom::GpuHost,
 #if BUILDFLAG(IS_OZONE)
     virtual void TerminateGpuProcess(const std::string& message) = 0;
 #endif
+#if BUILDFLAG(IS_WIN)
+    // Requests the Browser to create a CompilerContext in the Compiler
+    // process, launching it first if needed.
+    virtual void RequestWebNNCompilerContext(
+        webnn::mojom::CreateContextOptionsPtr context_options,
+        const webnn::ContextProperties& context_properties,
+        const webnn::EpDeviceInfo& target_device,
+        mojo::PendingReceiver<webnn::mojom::WebNNCompilerContext>
+            compiler_context_receiver,
+        mojo::PendingRemote<webnn::mojom::WebNNModelLoader>
+            model_loader_remote);
+#endif
 
    protected:
     virtual ~Delegate() = default;
@@ -151,8 +172,7 @@ class VIZ_HOST_EXPORT GpuHostImpl : public mojom::GpuHost,
     kSuccess,
   };
   using EstablishChannelCallback =
-      base::OnceCallback<void(mojo::ScopedMessagePipeHandle,
-                              const gpu::GPUInfo&,
+      base::OnceCallback<void(const gpu::GPUInfo&,
                               const gpu::GpuFeatureInfo&,
                               const gpu::SharedImageCapabilities&,
                               EstablishChannelStatus)>;
@@ -194,17 +214,19 @@ class VIZ_HOST_EXPORT GpuHostImpl : public mojom::GpuHost,
                            bool is_gpu_host,
                            bool enable_extra_handles_validation,
                            bool sync,
+                           mojo::ScopedMessagePipeHandle handle,
                            EstablishChannelCallback callback);
   void SetChannelClientPid(int client_id, base::ProcessId client_pid);
   void SetChannelDiskCacheHandle(int client_id,
                                  const gpu::GpuDiskCacheHandle& handle);
   void RemoveChannelDiskCacheHandles(int client_id);
   void CloseChannel(int client_id);
+  void CancelEstablishGpuChannel(int client_id);
 
 #if BUILDFLAG(USE_VIZ_DEBUGGER)
   // Command as a Json string that the visual debugging instance interprets as
   // stream filtering.
-  void FilterVisualDebugStream(base::Value::Dict filter_data);
+  void FilterVisualDebugStream(base::DictValue filter_data);
 
   // Establishes the connection between the visual debugging instance and the
   // output stream.
@@ -254,7 +276,7 @@ class VIZ_HOST_EXPORT GpuHostImpl : public mojom::GpuHost,
   void OnChannelEstablished(
       int client_id,
       bool sync,
-      mojo::ScopedMessagePipeHandle channel_handle,
+      bool success,
       const gpu::GPUInfo& gpu_info,
       const gpu::GpuFeatureInfo& gpu_feature_info,
       const gpu::SharedImageCapabilities& shared_image_capabilities);
@@ -292,6 +314,14 @@ class VIZ_HOST_EXPORT GpuHostImpl : public mojom::GpuHost,
 #if BUILDFLAG(IS_WIN)
   void EnsureWebNNExecutionProvidersReady(
       EnsureWebNNExecutionProvidersReadyCallback cb) override;
+  void RequestWebNNCompilerContext(
+      webnn::mojom::CreateContextOptionsPtr context_options,
+      const webnn::ContextProperties& context_properties,
+      const webnn::EpDeviceInfo& target_device,
+      mojo::PendingReceiver<webnn::mojom::WebNNCompilerContext>
+          compiler_context_receiver,
+      mojo::PendingRemote<webnn::mojom::WebNNModelLoader> model_loader_remote)
+      override;
 #endif
   void CreateWebNNWeightsFile(CreateWebNNWeightsFileCallback cb) override;
 
@@ -349,6 +379,11 @@ class VIZ_HOST_EXPORT GpuHostImpl : public mojom::GpuHost,
   // service, but haven't heard back about yet.
   base::flat_map<int, EstablishChannelCallback> channel_requests_;
 
+  // Track the client IDs of requests that were cancelled. The value is the
+  // number of cancelled requests for that client ID. Their replies will be
+  // ignored.
+  base::flat_map<int, int> cancelled_channel_requests_;
+
   base::OneShotTimer shutdown_timeout_;
 
   // Opened persistent cache files which have not been forwarded to the GPU
@@ -359,6 +394,9 @@ class VIZ_HOST_EXPORT GpuHostImpl : public mojom::GpuHost,
   // Signal that the GPU process is ready to accept persistent cache files. They
   // should be forwarded as soon as they are loaded.
   bool send_persistent_cache_files_to_service_ = false;
+
+  // This is only set in GpuHostImpl::DidInitialize().
+  std::optional<bool> gpu_uses_graphite_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

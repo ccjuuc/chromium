@@ -35,7 +35,9 @@ class CORE_EXPORT CookieJar : public GarbageCollected<CookieJar> {
   virtual ~CookieJar();
   void Trace(Visitor* visitor) const;
 
-  void SetCookie(const String& value);
+  // Sets a cookie in the cookie jar. Returns true if the cookie was set
+  // successfully, false otherwise.
+  bool SetCookie(const String& value);
   String Cookies();
   bool CookiesEnabled();
   void SetCookieManager(
@@ -68,11 +70,6 @@ class CORE_EXPORT CookieJar : public GarbageCollected<CookieJar> {
     // it was reused.
     kConnectedOldPipe = 2,
   };
-  using CookiesResponsePtr = network::mojom::blink::CookiesResponsePtr;
-
-  void OnSetCookieResponse(const KURL& cookie_url,
-                           const bool apply_devtools_overrides,
-                           CookiesResponsePtr response);
 
   RequestCookieManagerPipeState RequestRestrictedCookieManagerIfNeeded();
   void OnBackendDisconnect();

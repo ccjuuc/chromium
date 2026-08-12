@@ -8,30 +8,37 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 
+#include "base/check.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
+#include "base/logging.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
+#include "base/uuid.h"
+#include "base/values.h"
 #include "components/autofill/core/browser/payments/payments_access_token_fetcher.h"
-#include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 #include "components/autofill/core/browser/payments/payments_service_url.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/variations/net/variations_http_headers.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "net/base/load_flags.h"
+#include "net/base/net_errors.h"
+#include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 
 namespace autofill::payments {
@@ -371,7 +378,7 @@ RequestId MultipleRequestPaymentsNetworkInterfaceBase::IssueRequest(
   auto operation =
       std::make_unique<RequestOperation>(std::move(request), *this);
   RequestId id = operation->StartOperation();
-  operations_[id] = std::move(operation);
+  operations_.insert_or_assign(id, std::move(operation));
   return id;
 }
 
@@ -381,8 +388,8 @@ void MultipleRequestPaymentsNetworkInterfaceBase::CancelRequestWithId(
   // as invalidated so it does not report any result. The lifecycle of the
   // operation should only be managed by the PaymentsNetworkInterface (i.e. by
   // OnRequestFinished) internally to avoid accidental use-after-free.
-  if (operations_.contains(id)) {
-    operations_[id]->InvalidateOperation();
+  if (auto it = operations_.find(id); it != operations_.end()) {
+    it->second->InvalidateOperation();
   }
 }
 

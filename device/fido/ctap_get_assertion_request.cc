@@ -8,10 +8,10 @@
 #include <limits>
 #include <utility>
 
+#include "base/containers/to_array.h"
 #include "base/feature_list.h"
 #include "crypto/hash.h"
 #include "device/fido/device_response_converter.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/pin.h"
 #include "device/fido/public/features.h"
 #include "device/fido/public/fido_constants.h"
@@ -56,21 +56,6 @@ bool operator<(const PRFInput& a, const PRFInput& b) {
   return a.credential_id.value() < b.credential_id.value();
 }
 
-CtapGetAssertionRequest::HMACSecret::HMACSecret(
-    base::span<const uint8_t, kP256X962Length> in_public_key_x962,
-    base::span<const uint8_t> in_encrypted_salts,
-    base::span<const uint8_t> in_salts_auth,
-    std::optional<PINUVAuthProtocol> in_pin_protocol)
-    : public_key_x962(fido_parsing_utils::Materialize(in_public_key_x962)),
-      encrypted_salts(fido_parsing_utils::Materialize(in_encrypted_salts)),
-      salts_auth(fido_parsing_utils::Materialize(in_salts_auth)),
-      pin_protocol(in_pin_protocol) {}
-
-CtapGetAssertionRequest::HMACSecret::HMACSecret(const HMACSecret&) = default;
-CtapGetAssertionRequest::HMACSecret::~HMACSecret() = default;
-CtapGetAssertionRequest::HMACSecret&
-CtapGetAssertionRequest::HMACSecret::operator=(const HMACSecret&) = default;
-
 // static
 std::optional<CtapGetAssertionRequest> CtapGetAssertionRequest::Parse(
     const cbor::Value::MapValue& request_map,
@@ -95,7 +80,7 @@ std::optional<CtapGetAssertionRequest> CtapGetAssertionRequest::Parse(
 
   CtapGetAssertionRequest request(rp_id_it->second.GetString(),
                                   /*client_data_json=*/std::string());
-  request.client_data_hash = fido_parsing_utils::Materialize(client_data_hash);
+  request.client_data_hash = base::ToArray(client_data_hash);
 
   const auto allow_list_it = request_map.find(cbor::Value(3));
   if (allow_list_it != request_map.end()) {
@@ -140,51 +125,10 @@ std::optional<CtapGetAssertionRequest> CtapGetAssertionRequest::Parse(
         if (!extension.second.is_map()) {
           return std::nullopt;
         }
-        const auto& hmac_extension = extension.second.GetMap();
-
-        auto hmac_it = hmac_extension.find(cbor::Value(1));
-        if (hmac_it == hmac_extension.end() || !hmac_it->second.is_map()) {
+        request.hmac_secret = HMACSecret::Parse(extension.second.GetMap());
+        if (!request.hmac_secret) {
           return std::nullopt;
         }
-        const std::optional<pin::KeyAgreementResponse> key(
-            pin::KeyAgreementResponse::ParseFromCOSE(hmac_it->second.GetMap()));
-        if (!key) {
-          return std::nullopt;
-        }
-
-        hmac_it = hmac_extension.find(cbor::Value(2));
-        if (hmac_it == hmac_extension.end() ||
-            !hmac_it->second.is_bytestring()) {
-          return std::nullopt;
-        }
-        const std::vector<uint8_t>& encrypted_salts =
-            hmac_it->second.GetBytestring();
-
-        hmac_it = hmac_extension.find(cbor::Value(3));
-        if (hmac_it == hmac_extension.end() ||
-            !hmac_it->second.is_bytestring()) {
-          return std::nullopt;
-        }
-        const std::vector<uint8_t>& salts_auth =
-            hmac_it->second.GetBytestring();
-
-        std::optional<PINUVAuthProtocol> pin_protocol;
-        const auto pin_protocol_it = hmac_extension.find(cbor::Value(4));
-        if (pin_protocol_it != hmac_extension.end()) {
-          if (!pin_protocol_it->second.is_unsigned() ||
-              pin_protocol_it->second.GetUnsigned() >
-                  std::numeric_limits<uint8_t>::max()) {
-            return std::nullopt;
-          }
-          pin_protocol =
-              ToPINUVAuthProtocol(pin_protocol_it->second.GetUnsigned());
-          if (!pin_protocol) {
-            return std::nullopt;
-          }
-        }
-
-        request.hmac_secret.emplace(key->X962(), encrypted_salts, salts_auth,
-                                    pin_protocol);
       } else if (extension_id == kExtensionLargeBlobKey) {
         if (!extension.second.is_bool() || !extension.second.GetBool()) {
           return std::nullopt;
@@ -195,6 +139,11 @@ std::optional<CtapGetAssertionRequest> CtapGetAssertionRequest::Parse(
           return std::nullopt;
         }
         request.get_cred_blob = true;
+      } else if (extension_id == kExtensionCmtgKey) {
+        if (!extension.second.is_bool() || !extension.second.GetBool()) {
+          return std::nullopt;
+        }
+        request.cmtg_key = true;
       } else if (extension_id == kExtensionPRF) {
         if (!extension.second.is_map()) {
           return std::nullopt;
@@ -262,6 +211,11 @@ std::optional<CtapGetAssertionRequest> CtapGetAssertionRequest::Parse(
           // No other combinations of keys are acceptable.
           return std::nullopt;
         }
+      } else if (extension_id == kExtensionCrossDeviceFallbackUrl) {
+        if (!extension.second.is_string()) {
+          return std::nullopt;
+        }
+        request.cross_device_fallback_url = extension.second.GetString();
       }
     }
   }
@@ -340,12 +294,6 @@ CtapGetAssertionRequest& CtapGetAssertionRequest::operator=(
 
 CtapGetAssertionRequest::~CtapGetAssertionRequest() = default;
 
-void CtapGetAssertionRequest::SetClientDataJson(
-    std::string in_client_data_json) {
-  client_data_hash = crypto::hash::Sha256(in_client_data_json);
-  client_data_json = std::move(in_client_data_json);
-}
-
 std::pair<CtapRequestCommand, std::optional<cbor::Value>>
 AsCTAPRequestValuePair(const CtapGetAssertionRequest& request) {
   cbor::Value::MapValue cbor_map;
@@ -386,24 +334,18 @@ AsCTAPRequestValuePair(const CtapGetAssertionRequest& request) {
   }
 
   if (request.hmac_secret) {
-    const auto& hmac_secret = *request.hmac_secret;
-    cbor::Value::MapValue hmac_extension;
-    hmac_extension.emplace(
-        1, pin::EncodeCOSEPublicKey(hmac_secret.public_key_x962));
-    hmac_extension.emplace(2, hmac_secret.encrypted_salts);
-    hmac_extension.emplace(3, hmac_secret.salts_auth);
-    if (request.pin_protocol &&
-        static_cast<unsigned>(*request.pin_protocol) >= 2) {
-      // If the request is using a PIN protocol other than v1, it must be
-      // specified here too:
-      // https://fidoalliance.org/specs/fido-v2.2-rd-20230321/fido-client-to-authenticator-protocol-v2.2-rd-20230321.html#sctn-hmac-secret-extension:~:text=pinuvauthprotocol(0x04)%3A%20(optional)%20as%20selected%20when%20getting%20the%20shared%20secret.%20ctap2.1%20platforms%20must%20include%20this%20parameter%20if%20the%20value%20of%20pinuvauthprotocol%20is%20not%201
-      hmac_extension.emplace(4, static_cast<int64_t>(*request.pin_protocol));
-    }
-    extensions.emplace(kExtensionHmacSecret, std::move(hmac_extension));
+    extensions.emplace(
+        kExtensionHmacSecret,
+        request.hmac_secret->AsCBORMapValue(request.pin_protocol));
   }
 
   if (request.get_cred_blob) {
     extensions.emplace(kExtensionCredBlob, true);
+  }
+
+  if (request.cross_device_fallback_url) {
+    extensions.emplace(kExtensionCrossDeviceFallbackUrl,
+                       cbor::Value(*request.cross_device_fallback_url));
   }
 
   if (!request.prf_inputs.empty()) {
@@ -420,6 +362,10 @@ AsCTAPRequestValuePair(const CtapGetAssertionRequest& request) {
       prf.emplace(kExtensionPRFEvalByCredential, std::move(by_cred));
     }
     extensions.emplace(kExtensionPRF, std::move(prf));
+  }
+
+  if (request.cmtg_key) {
+    extensions.emplace(kExtensionCmtgKey, true);
   }
 
   if (!extensions.empty()) {

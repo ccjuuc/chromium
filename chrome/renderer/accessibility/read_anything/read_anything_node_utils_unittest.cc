@@ -7,10 +7,12 @@
 #include <cinttypes>
 #include <string>
 
+#include "base/test/scoped_feature_list.h"
 #include "read_anything_node_utils.h"
 #include "read_anything_test_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_node.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/ax_node_position.h"
@@ -98,6 +100,60 @@ TEST_F(ReadAnythingNodeUtilsTest,
   EXPECT_NE(text.find('\r'), std::string::npos);
 }
 
+TEST_F(ReadAnythingNodeUtilsTest, GetTextContent_PDF_FiltersControlCharacters) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      features::kPdfAccessibilityHeuristicEnhancements);
+
+  const std::u16string sentence =
+      u"in\u0002formation and anti-gravity and accessi\u0002bility";
+  const std::u16string expected =
+      u"information and anti-gravity and accessibility";
+  static constexpr ui::AXNodeID kId = 2;
+  ui::AXNodeData data = test::TextNode(kId, sentence);
+  ui::AXTree tree;
+  ui::AXNode node(&tree, nullptr, kId, 0);
+  node.SetData(std::move(data));
+
+  std::u16string text =
+      a11y::GetTextContent(&node, /*is_pdf=*/true, /*is_docs=*/false);
+  EXPECT_EQ(text, expected);
+}
+
+TEST_F(ReadAnythingNodeUtilsTest,
+       GetTextContent_PDF_DoesNotFilterControlCharactersIfFlagDisabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      features::kPdfAccessibilityHeuristicEnhancements);
+
+  const std::u16string sentence =
+      u"in\u0002formation and anti-gravity and accessi\u0002bility";
+  static constexpr ui::AXNodeID kId = 2;
+  ui::AXNodeData data = test::TextNode(kId, sentence);
+  ui::AXTree tree;
+  ui::AXNode node(&tree, nullptr, kId, 0);
+  node.SetData(std::move(data));
+
+  std::u16string text =
+      a11y::GetTextContent(&node, /*is_pdf=*/true, /*is_docs=*/false);
+  EXPECT_EQ(text, sentence);
+}
+
+TEST_F(ReadAnythingNodeUtilsTest,
+       GetTextContent_PDF_ReplacesWhitespaceControlCharacters) {
+  const std::u16string sentence = u"Hello\tworld\vthis\fis a test.";
+  const std::u16string expected = u"Hello world this is a test.";
+  static constexpr ui::AXNodeID kId = 2;
+  ui::AXNodeData data = test::TextNode(kId, sentence);
+  ui::AXTree tree;
+  ui::AXNode node(&tree, nullptr, kId, 0);
+  node.SetData(std::move(data));
+
+  std::u16string text =
+      a11y::GetTextContent(&node, /*is_pdf=*/true, /*is_docs=*/false);
+  EXPECT_EQ(text, expected);
+}
+
 TEST_F(ReadAnythingNodeUtilsTest, GetPrefixText_ReturnsPreviousText) {
   std::u16string sentence1 =
       u"Hes the fruit and I'm the peel. He's Achilles I'm the heel";
@@ -132,8 +188,6 @@ TEST_F(ReadAnythingNodeUtilsTest, GetPrefixText_ReturnsPreviousText) {
   root_data.child_ids = {kId1, kId2, childId};
 
   ui::AXTree tree;
-  ui::AXNode root(&tree, nullptr, 1, 0);
-  root.SetData(std::move(root_data));
   ui::AXTreeUpdate update;
   update.root_id = root_data.id;
   update.nodes = {root_data, static_text1, static_text2, child_data,
@@ -188,8 +242,6 @@ TEST_F(ReadAnythingNodeUtilsTest, GetPrefixText_SkipsDuplicateText) {
   root_data.child_ids = {kId1, kId2, childId};
 
   ui::AXTree tree;
-  ui::AXNode root(&tree, nullptr, 1, 0);
-  root.SetData(std::move(root_data));
   ui::AXTreeUpdate update;
   update.root_id = root_data.id;
   update.nodes = {root_data, static_text1, static_text2, child_data,
@@ -243,8 +295,6 @@ TEST_F(ReadAnythingNodeUtilsTest, GetPrefixText_SkipsShortText) {
   root_data.child_ids = {kId1, kId2, childId};
 
   ui::AXTree tree;
-  ui::AXNode root(&tree, nullptr, 1, 0);
-  root.SetData(std::move(root_data));
   ui::AXTreeUpdate update;
   update.root_id = root_data.id;
   update.nodes = {root_data, static_text1, static_text2, child_data,
@@ -471,6 +521,16 @@ TEST_F(ReadAnythingNodeUtilsTest, GetHtmlTagForPdf_SpanTagReturned) {
   EXPECT_EQ(a11y::GetHtmlTagForPDF(&node, "p"), "span");
 }
 
+TEST_F(ReadAnythingNodeUtilsTest, GetHtmlTagForPdf_ReturnsDivForTextField) {
+  ui::AXNodeData data;
+  data.id = 2;
+  data.role = ax::mojom::Role::kTextField;
+  ui::AXTree tree;
+  ui::AXNode node(&tree, nullptr, 2, 0);
+  node.SetData(std::move(data));
+  EXPECT_EQ(a11y::GetHtmlTagForPDF(&node, ""), "div");
+}
+
 TEST_F(ReadAnythingNodeUtilsTest, GetHtmlTagForPdf_LinkTagReturned) {
   ui::AXNodeData data = test::TextNode(2);
   data.role = ax::mojom::Role::kLink;
@@ -608,8 +668,6 @@ TEST_F(ReadAnythingNodeUtilsTest, GetNameAttributeText_GetsChildText) {
   root_data.child_ids = {kId1, kId2, childId};
 
   ui::AXTree tree;
-  ui::AXNode root(&tree, nullptr, 1, 0);
-  root.SetData(std::move(root_data));
   ui::AXTreeUpdate update;
   update.root_id = root_data.id;
   update.nodes = {root_data, static_text1, static_text2, child_data,
@@ -617,4 +675,21 @@ TEST_F(ReadAnythingNodeUtilsTest, GetNameAttributeText_GetsChildText) {
   tree.Unserialize(update);
   EXPECT_EQ(a11y::GetNameAttributeText(tree.root()),
             u"Not like you- You lost your nerve You lost the game");
+}
+
+TEST_F(ReadAnythingNodeUtilsTest,
+       GetPrefixText_NoPreviousNode_ReturnsEmptyString) {
+  std::u16string sentence1 = u"Some text";
+  static constexpr ui::AXNodeID rootId = 1;
+  ui::AXNodeData root_data = test::TextNode(rootId, sentence1);
+
+  ui::AXTree tree;
+  ui::AXTreeUpdate update;
+  update.root_id = root_data.id;
+  update.nodes = {root_data};
+  tree.Unserialize(update);
+
+  EXPECT_EQ(a11y::GetPrefixText(tree.root(), /*is_pdf=*/false,
+                                /*is_docs=*/false),
+            u"");
 }

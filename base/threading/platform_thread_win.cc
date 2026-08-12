@@ -16,7 +16,6 @@
 #include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/process/memory.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -86,7 +85,7 @@ DWORD __stdcall ThreadFunc(void* params) {
   }
 
   if (thread_params->thread_type != ThreadType::kDefault) {
-    PlatformThread::SetCurrentThreadType(thread_params->thread_type);
+    PlatformThread::SetDefaultThreadType(thread_params->thread_type);
   }
 
   // Retrieve a copy of the thread handle to use as the key in the
@@ -125,7 +124,7 @@ DWORD __stdcall ThreadFunc(void* params) {
   // performing TLS destruction which causes hangs if performed at background
   // priority (priority inversion) (see: http://crbug.com/1096203).
   if (::GetThreadPriority(::GetCurrentThread()) < THREAD_PRIORITY_NORMAL) {
-    PlatformThread::SetCurrentThreadType(ThreadType::kDefault);
+    PlatformThread::SetDefaultThreadType(ThreadType::kDefault);
   }
 
   return 0;
@@ -384,10 +383,10 @@ void SetThreadPriority(PlatformThreadHandle thread_handle,
     case ThreadType::kDefault:
       desired_priority = THREAD_PRIORITY_NORMAL;
       break;
-    case ThreadType::kDisplayCritical:
+    case ThreadType::kPresentation:
       desired_priority = THREAD_PRIORITY_ABOVE_NORMAL;
       break;
-    case ThreadType::kInteractive:
+    case ThreadType::kAudioProcessing:
       desired_priority = THREAD_PRIORITY_HIGHEST;
       break;
     case ThreadType::kRealtimeAudio:
@@ -433,8 +432,8 @@ void SetThreadQualityOfService(PlatformThreadHandle thread_handle,
       desire_ecoqos = true;
       break;
     case ThreadType::kDefault:
-    case ThreadType::kDisplayCritical:
-    case ThreadType::kInteractive:
+    case ThreadType::kPresentation:
+    case ThreadType::kAudioProcessing:
     case ThreadType::kRealtimeAudio:
       desire_ecoqos = false;
       break;
@@ -460,8 +459,7 @@ void SetThreadQualityOfService(PlatformThreadHandle thread_handle,
 namespace internal {
 
 void SetCurrentThreadTypeImpl(ThreadType thread_type,
-                              MessagePumpType pump_type_hint,
-                              bool may_change_affinity) {
+                              MessagePumpType pump_type_hint) {
   PlatformThreadHandle thread_handle = PlatformThread::CurrentHandle();
   SetThreadPriority(thread_handle, thread_type);
   SetThreadQualityOfService(thread_handle, thread_type);
@@ -533,9 +531,9 @@ ThreadType PlatformThread::GetCurrentEffectiveThreadTypeForTest() {
       [[fallthrough]];
     case kWinDisplayPriority2:
     case THREAD_PRIORITY_ABOVE_NORMAL:
-      return ThreadType::kDisplayCritical;
+      return ThreadType::kPresentation;
     case THREAD_PRIORITY_HIGHEST:
-      return ThreadType::kInteractive;
+      return ThreadType::kAudioProcessing;
     case THREAD_PRIORITY_TIME_CRITICAL:
       return ThreadType::kRealtimeAudio;
     case THREAD_PRIORITY_ERROR_RETURN:

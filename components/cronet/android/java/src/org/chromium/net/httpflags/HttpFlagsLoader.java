@@ -10,11 +10,11 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.os.Build;
-import android.util.Log;
 
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
+import org.chromium.base.Log;
 import org.chromium.base.metrics.ScopedSysTraceEvent;
 import org.chromium.net.impl.CronetManifest;
 
@@ -33,16 +33,20 @@ import java.io.IOException;
  * enables A/B experiments, progressive configuration rollouts, etc.
  *
  * <p>Currently, the interface with the host system is defined as follows:
+ *
  * <ol>
- * <li>The Android system image must provide an Android app that exposes a service matching the
- *     {@link #FLAGS_FILE_PROVIDER_INTENT_ACTION} action.
- * <li>That Android app must expose a directory named after {@link #FLAGS_FILE_DIR_NAME} under the
- *     app's {@link ApplicationInfo#deviceProtectedDataDir}.
- * <li>That directory must contain a file named after {@link #FLAGS_FILE_NAME} that must be readable
- *     by the process running {@link #load}.
- * <li>The flag values are obtained from the contents of that file. The format is a binary proto
- *     that can be read through {@link Flags#parseDelimitedFrom} - see `flags.proto` for details.
+ *   <li>The Android system image must provide an Android app that exposes a service matching the
+ *       {@link #FLAGS_FILE_PROVIDER_INTENT_ACTION} action.
+ *   <li>That Android app must expose a directory named after {@link #FLAGS_FILE_DIR_NAME} under the
+ *       app's {@link ApplicationInfo#deviceProtectedDataDir}.
+ *   <li>That directory must contain a file named after {@link #FLAGS_FILE_NAME} that must be
+ *       readable by the process running {@link #load}.
+ *   <li>The flag values are obtained from the contents of that file. The format is a binary proto
+ *       that can be read through {@link Flags#parseDelimitedFrom} - see `flags.proto` for details.
  * </ol>
+ *
+ * <p>Note: Android versions prior to N (API 24) do not support the necessary APIs for the host
+ * system to expose a flags file provider. This class will return empty flags on those versions.
  *
  * @see HttpFlagsInterceptor
  */
@@ -78,19 +82,18 @@ public final class HttpFlagsLoader {
             if (providerApplicationInfo == null) return null;
             Log.d(
                     TAG,
-                    String.format(
-                            "Found application exporting HTTP flags: %s",
-                            providerApplicationInfo.packageName));
+                    "Found application exporting HTTP flags: %s",
+                    providerApplicationInfo.packageName);
 
             File flagsFile = getFlagsFileFromProvider(providerApplicationInfo);
-            Log.d(TAG, String.format("HTTP flags file path: %s", flagsFile.getAbsolutePath()));
+            Log.d(TAG, "HTTP flags file path: %s", flagsFile.getAbsolutePath());
 
             Flags flags = loadFlagsFile(flagsFile);
             if (flags == null) return null;
             if (Log.isLoggable(TAG, Log.DEBUG)) {
                 // Gated behind isLoggable() because this can be surprisingly expensive to log,
                 // especially if we have many flags.
-                Log.d(TAG, String.format("Successfully loaded HTTP flags: %s", flags));
+                Log.d(TAG, "Successfully loaded HTTP flags: %s", flags);
             }
 
             return flags;
@@ -156,6 +159,16 @@ public final class HttpFlagsLoader {
     private static ApplicationInfo getProviderApplicationInfo(Context context) {
         try (var traceEvent =
                 ScopedSysTraceEvent.scoped("HttpFlagsLoader#getProviderApplicationInfo")) {
+            // Android prior to N (API 24) will silently ignore MATCH_SYSTEM_ONLY, so we shouldn't
+            // try to resolve the service on these versions. See https://crbug.com/502024633.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+                Log.d(
+                        TAG,
+                        "Not resolving HTTP flags file provider package because Android version is"
+                                + " too old");
+                return null;
+            }
+
             ResolveInfo resolveInfo =
                     context.getPackageManager()
                             .resolveService(

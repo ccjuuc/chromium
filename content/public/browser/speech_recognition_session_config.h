@@ -36,11 +36,14 @@ struct CONTENT_EXPORT SpeechRecognitionSessionConfig {
   bool filter_profanities = false;
   bool continuous = false;
   bool interim_results = false;
+  bool unspoken_punctuation = false;
   uint32_t max_hypotheses = 1;
   bool on_device = false;  // Whether on-device speech recognition must be used.
   bool on_device_available = false;  // Whether on-device speech recognition is
                                      // installed and available.
   bool allow_cloud_fallback = false;
+  media::mojom::SpeechRecognitionQuality quality =
+      media::mojom::SpeechRecognitionQuality::kCommand;
   std::string auth_token;
   std::string auth_scope;
   scoped_refptr<SpeechRecognitionSessionPreamble> preamble;

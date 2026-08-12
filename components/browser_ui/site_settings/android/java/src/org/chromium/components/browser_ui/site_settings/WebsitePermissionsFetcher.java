@@ -10,6 +10,8 @@ import static org.chromium.components.browser_ui.site_settings.WebsitePreference
 
 import android.util.Pair;
 
+import androidx.annotation.IntDef;
+
 import org.chromium.base.Callback;
 import org.chromium.base.CommandLine;
 import org.chromium.build.annotations.NullMarked;
@@ -17,7 +19,6 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browsing_data.content.BrowsingDataInfo;
 import org.chromium.components.content_settings.ContentSetting;
 import org.chromium.components.content_settings.ContentSettingsType;
-import org.chromium.components.content_settings.SessionModel;
 import org.chromium.components.permissions.PermissionsAndroidFeatureList;
 import org.chromium.components.permissions.PermissionsAndroidFeatureMap;
 import org.chromium.content_public.browser.BrowserContextHandle;
@@ -27,6 +28,8 @@ import org.chromium.content_public.browser.HostZoomMap;
 import org.chromium.content_public.common.ContentSwitches;
 import org.chromium.url.Origin;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -44,11 +47,20 @@ import java.util.Set;
 @NullMarked
 public class WebsitePermissionsFetcher {
     /** An enum describing the types of permissions that exist in website settings. */
-    public enum WebsitePermissionsType {
-        CONTENT_SETTING_EXCEPTION,
-        PERMISSION_INFO,
-        EMBEDDED_PERMISSION,
-        CHOSEN_OBJECT_INFO
+    @IntDef({
+        WebsitePermissionsType.INVALID,
+        WebsitePermissionsType.CONTENT_SETTING_EXCEPTION,
+        WebsitePermissionsType.PERMISSION_INFO,
+        WebsitePermissionsType.EMBEDDED_PERMISSION,
+        WebsitePermissionsType.CHOSEN_OBJECT_INFO
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface WebsitePermissionsType {
+        int INVALID = -1;
+        int CONTENT_SETTING_EXCEPTION = 0;
+        int PERMISSION_INFO = 1;
+        int EMBEDDED_PERMISSION = 2;
+        int CHOSEN_OBJECT_INFO = 3;
     }
 
     private final SiteSettingsDelegate mSiteSettingsDelegate;
@@ -75,7 +87,7 @@ public class WebsitePermissionsFetcher {
      *
      * @param contentSettingsType The ContentSettingsType int of the permission.
      */
-    public static @Nullable WebsitePermissionsType getPermissionsType(
+    public static @WebsitePermissionsType int getPermissionsType(
             @ContentSettingsType.EnumType int contentSettingsType) {
         switch (contentSettingsType) {
             case ContentSettingsType.ADS:
@@ -107,7 +119,6 @@ public class WebsitePermissionsFetcher {
             case ContentSettingsType.PROTECTED_MEDIA_IDENTIFIER:
             case ContentSettingsType.SENSORS:
             case ContentSettingsType.VR:
-            case ContentSettingsType.LOCAL_NETWORK_ACCESS:
             case ContentSettingsType.LOCAL_NETWORK:
             case ContentSettingsType.LOOPBACK_NETWORK:
             case ContentSettingsType.WINDOW_MANAGEMENT:
@@ -131,9 +142,9 @@ public class WebsitePermissionsFetcher {
                 }
                 break;
             default:
-                return null;
+                return WebsitePermissionsType.INVALID;
         }
-        return null;
+        return WebsitePermissionsType.INVALID;
     }
 
     /**
@@ -283,7 +294,8 @@ public class WebsitePermissionsFetcher {
             } else if (mSiteSettingsCategory.getType() == SiteSettingsCategory.Type.USE_STORAGE) {
                 addFetcherForStorage(queue);
             } else {
-                assert getPermissionsType(mSiteSettingsCategory.getContentSettingsType()) != null;
+                assert getPermissionsType(mSiteSettingsCategory.getContentSettingsType())
+                        != WebsitePermissionsType.INVALID;
                 addFetcherForContentSettingsType(
                         queue, mSiteSettingsCategory.getContentSettingsType());
             }
@@ -325,8 +337,9 @@ public class WebsitePermissionsFetcher {
 
         private void addFetcherForContentSettingsType(
                 TaskQueue queue, @ContentSettingsType.EnumType int contentSettingsType) {
-            WebsitePermissionsType websitePermissionsType = getPermissionsType(contentSettingsType);
-            if (websitePermissionsType == null) {
+            @WebsitePermissionsType
+            int websitePermissionsType = getPermissionsType(contentSettingsType);
+            if (websitePermissionsType == WebsitePermissionsType.INVALID) {
                 return;
             }
 
@@ -356,16 +369,16 @@ public class WebsitePermissionsFetcher {
             }
 
             switch (websitePermissionsType) {
-                case CONTENT_SETTING_EXCEPTION:
+                case WebsitePermissionsType.CONTENT_SETTING_EXCEPTION:
                     queue.add(new ExceptionInfoFetcher(contentSettingsType));
                     return;
-                case PERMISSION_INFO:
+                case WebsitePermissionsType.PERMISSION_INFO:
                     queue.add(new PermissionInfoFetcher(contentSettingsType));
                     return;
-                case EMBEDDED_PERMISSION:
+                case WebsitePermissionsType.EMBEDDED_PERMISSION:
                     queue.add(new ExceptionInfoFetcher(contentSettingsType));
                     return;
-                case CHOSEN_OBJECT_INFO:
+                case WebsitePermissionsType.CHOSEN_OBJECT_INFO:
                     queue.add(new ChooserExceptionInfoFetcher(contentSettingsType));
                     return;
             }
@@ -598,8 +611,7 @@ public class WebsitePermissionsFetcher {
                                     ContentSettingsType.FILE_SYSTEM_WRITE_GUARD,
                                     origin,
                                     null,
-                                    /* isEmbargoed= */ false,
-                                    SessionModel.USER_SESSION));
+                                    /* isEmbargoed= */ false));
                     site.setFileEditingInfo(new FileEditingInfo(mSiteSettingsDelegate, origin));
                 }
             }

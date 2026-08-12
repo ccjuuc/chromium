@@ -12,6 +12,7 @@
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_occlusion_observer.h"
 #include "chrome/browser/picture_in_picture/scoped_picture_in_picture_occlusion_observation.h"
+#include "chrome/browser/ui/page_action/page_action_observer.h"
 #include "chrome/browser/ui/tabs/public/tab_dialog_manager.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/views/webid/account_selection_bubble_view.h"
@@ -42,8 +43,8 @@ class AccountSelectionViewBase;
 //  * tabs::TabInterface, which represents the tab in which the UI is shown.
 // If either goes away, then this class should be destroyed. This class is owned
 // as a unique_ptr by IdentityDialogController which ensures that the lifetime
-// is scoped to that of RequestService. However, the lifetime must be
-// manually scoped to the tabs::TabInterface. This is done by:
+// is scoped to that of content::webid::Request. However, the lifetime
+// must be manually scoped to the tabs::TabInterface. This is done by:
 //  * Registering callbacks on tabs::TabInterface for relevant changes.
 //  * If the tab goes away, Close() is called.
 //  * All methods to show UI early exit if the tab no longer exists.
@@ -67,7 +68,8 @@ class AccountSelectionViewBase;
 class FedCmAccountSelectionView : public AccountSelectionView,
                                   public FedCmModalDialogView::Observer,
                                   public content::WebContentsObserver,
-                                  public PictureInPictureOcclusionObserver {
+                                  public PictureInPictureOcclusionObserver,
+                                  public page_actions::PageActionObserver {
  public:
   enum class DialogType {
     // FedCM dialog inherits a bubble dialog, which is typically shown on the
@@ -79,11 +81,20 @@ class FedCmAccountSelectionView : public AccountSelectionView,
     // middle of the browser overlapping the line of death. The user can switch
     // tabs but cannot interact with web contents.
     MODAL,
+
+    // FedCM is shown as a page action (omnibox chip) and does not have an
+    // associated widget.
+    AMBIENT,
   };
 
   FedCmAccountSelectionView(AccountSelectionView::Delegate* delegate,
                             tabs::TabInterface* tab);
   ~FedCmAccountSelectionView() override;
+
+  // Triggered when the user clicks on the page action while it is in the
+  // passive state.
+
+  void OnPageActionClicked() override;
 
   // AccountSelectionView:
   bool Show(
@@ -114,6 +125,8 @@ class FedCmAccountSelectionView : public AccountSelectionView,
                            Account::SignInMode sign_in_mode,
                            blink::mojom::RpMode rp_mode) override;
 
+  void SetCanShowUi(bool can_show_ui) override;
+
   void ShowUrl(LinkType link_type, const GURL& url) override;
   std::string GetTitle() const override;
   std::optional<std::string> GetSubtitle() const override;
@@ -140,8 +153,11 @@ class FedCmAccountSelectionView : public AccountSelectionView,
       std::unique_ptr<views::InputEventActivationProtector>);
 
   // AccountSelectionBubbleView::Observer:
-  content::WebContents* ShowModalDialog(const GURL& url,
-                                        blink::mojom::RpMode rp_mode) override;
+  content::WebContents* ShowModalDialog(
+      const GURL& url,
+      blink::mojom::RpMode rp_mode,
+      content::IdentityRequestDialogController::ShownModalAsyncCallback
+          on_shown_async) override;
   void CloseModalDialog() override;
   void PrimaryMainFrameWasResized(bool width_changed) override;
 
@@ -349,20 +365,6 @@ class FedCmAccountSelectionView : public AccountSelectionView,
     LOADING,
   };
 
-  // This enum describes the outcome of the mismatch dialog and is used for
-  // histograms. Do not remove or modify existing values, but you may add new
-  // values at the end.
-  // LINT.IfChange(MismatchDialogResult)
-
-  enum class MismatchDialogResult {
-    kContinued = 0,
-    kDismissedByCloseIcon = 1,
-    kDismissedForOtherReasons = 2,
-    kMaxValue = kDismissedForOtherReasons
-  };
-
-  // LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:FedCmMismatchDialogResult)
-
   // This enum describes the outcome of the pop-up window and is used for
   // histograms. Do not remove or modify existing values, but you may add new
   // values at the end.
@@ -386,6 +388,10 @@ class FedCmAccountSelectionView : public AccountSelectionView,
   // Called when the tab's modalUI is shown or hidden.
   void ModalUIChanged(tabs::TabInterface* tab);
 
+  // Called when the tab associated with an actor task, that was originally in
+  // the background, becomes foregrounded.
+  void BackgroundTaskTabForegrounded(tabs::TabInterface* tab);
+
   // Returns false if `this` got deleted. In that case, the caller must early
   // return.
   bool NotifyDelegateOfAccountSelection(
@@ -406,6 +412,13 @@ class FedCmAccountSelectionView : public AccountSelectionView,
 
   // Hides the dialog widget and notifies the input protector.
   void HideDialogWidget();
+
+  // Shows the page action (omnibox chip) for Ambient UI.
+  bool ShowPageAction(const std::vector<IdentityProviderDataPtr>& idp_list,
+                      const std::vector<IdentityRequestAccountPtr>& accounts);
+
+  // Returns whether the ambient UI is enabled.
+  bool IsAmbientEnabled() const;
 
   // Shows the multi account picker and updates the internal state.
   void ShowMultiAccountPicker(
@@ -466,6 +479,24 @@ class FedCmAccountSelectionView : public AccountSelectionView,
   // initial value to false.
   void ShouldShowDialog(bool& should_show);
 
+  // Actually show the popup window, which may have been deferred in
+  // ShowModalDialog.
+  content::WebContents* ShowPopupWindow(const GURL& url);
+
+  // PageActionObserver
+  void RecordPageActionImpression(
+      const page_actions::PageActionState& page_action,
+      AmbientImpression signin,
+      AmbientImpression signup);
+  void OnPageActionIconShown(
+      const page_actions::PageActionState& page_action) override;
+  void OnPageActionChipShown(
+      const page_actions::PageActionState& page_action) override;
+  void OnPageActionChipHidden(
+      const page_actions::PageActionState& page_action) override;
+  void OnPageActionAnchoredMessageShown(
+      const page_actions::PageActionState& page_action) override;
+
   std::vector<IdentityProviderDataPtr> idp_list_;
 
   std::vector<IdentityRequestAccountPtr> accounts_;
@@ -476,8 +507,10 @@ class FedCmAccountSelectionView : public AccountSelectionView,
   // are multiple accounts, but it is size 0 when there are no new accounts.
   std::vector<IdentityRequestAccountPtr> new_accounts_;
 
-  // The RP icon to be displayed in the UI when needed.
-  gfx::Image rp_icon_;
+  // The RP data for the current request. Set when any of the Show*() methods
+  // are called. This is used to re-show the dialog if the user clicks on the
+  // page action.
+  std::optional<content::RelyingPartyData> rp_data_;
 
   State state_{State::MULTI_ACCOUNT_PICKER};
 
@@ -506,6 +539,21 @@ class FedCmAccountSelectionView : public AccountSelectionView,
   // closes the popup, but Show() will never be called. This is currently not
   // handled by the fedcm control-flow. For now we keep hiding the dialog.
   bool hide_dialog_widget_after_idp_login_popup_{false};
+
+  // If an actor task is in the background when it would trigger a popup window,
+  // we prevent the popup from showing until the user returns to the tab
+  // associated with the task.
+  struct WithheldPopupState {
+    WithheldPopupState();
+    WithheldPopupState(
+        const GURL& url,
+        base::OnceCallback<void(content::WebContents*)> on_shown);
+    ~WithheldPopupState();
+
+    GURL url;
+    base::OnceCallback<void(content::WebContents*)> on_shown;
+  };
+  std::optional<WithheldPopupState> withheld_popup_state_;
 
   // If Show() is called, the intention is to show the accounts dialog. This
   // callback is invoked when the widget is actually shown for the first time.
@@ -543,6 +591,9 @@ class FedCmAccountSelectionView : public AccountSelectionView,
   // inputs).
   bool is_occluded_by_pip_{false};
 
+  // Whether the UI can be shown.
+  bool can_show_ui_{true};
+
   // Observer for widget occlusion.
   std::unique_ptr<ScopedPictureInPictureOcclusionObservation>
       pip_occlusion_observation_;
@@ -551,6 +602,17 @@ class FedCmAccountSelectionView : public AccountSelectionView,
   // This class is owned by IdentityDialogController and thus can outlive the
   // associated UI. Any uses of tab_ must be preceded by a nullptr check.
   raw_ptr<tabs::TabInterface> tab_;
+
+  // Tracks whether impressions have been recorded for the current request flow
+  // to prevent duplicate logging on tab activation/deactivation.
+  bool chip_impression_recorded_{false};
+  bool icon_impression_recorded_{false};
+
+  // Tracks whether the current request flow requested a suggestion chip to be
+  // shown. This allows `OnPageActionIconShown` to ignore the premature icon
+  // shown notification that occurs during initial page action display before
+  // the suggestion chip expands.
+  bool chip_requested_for_flow_{false};
 
   // Holds subscriptions for TabInterface callbacks.
   std::vector<base::CallbackListSubscription> tab_subscriptions_;
@@ -577,6 +639,27 @@ class FedCmAccountSelectionView : public AccountSelectionView,
   // together and destroyed together. `dialog_widget_` owns
   // `account_selection_view_` as a View attached to the root of the Widget.
   raw_ptr<AccountSelectionViewBase> account_selection_view_ = nullptr;
+
+  // The ScopedUnownedUserData is used to make the FedCmAccountSelectionView
+  // accessible to the PageAction framework without requiring the framework to
+  // take ownership of the view. This allows the omnibox chip to "reach back"
+  // into this class when it is clicked. The pointer is automatically nulled out
+  // in the tab when this object is destroyed.
+  // Being std::optional decouples the FedCM request's lifetime from its UI
+  // presence in the tab to allow us to explicitly unregister the view from the
+  // TabInterface's PageAction framework (via reset()) during Close().
+  // For example:
+  // 1. Immediately hide the omnibox chip and anchored messages (which have
+  //    explicit close icons) upon user dismissal, even if this object persists
+  //    to handle remaining mojom request cleanup or notification logic.
+  // 2. Prevent the chip from incorrectly persisting in the background when the
+  //    tab is "parked" or when the user switches between tabs, ensuring a
+  //    clean hand-off to other page actions.
+  // 3. Ensure the PageAction framework cannot "reach back" into this view
+  //    once the UI flow is logically finished, providing a strict boundary
+  //    between the UI state and the request lifecycle.
+  std::optional<ui::ScopedUnownedUserData<AccountSelectionView>>
+      scoped_user_data_;
 
   base::WeakPtrFactory<FedCmAccountSelectionView> weak_ptr_factory_{this};
 };

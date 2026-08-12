@@ -76,14 +76,14 @@ void PasteAndVerifySanitization(const char* html_to_paste,
   body->Focus();
   frame.GetDocument()->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
   frame.Selection().SetSelection(
-      SelectionInDOMTree::Builder().SelectAllChildren(*body).Build(),
+      SelectionInDomTree::Builder().SelectAllChildren(*body).Build(),
       SetSelectionOptions());
-  EXPECT_TRUE(frame.Selection().ComputeVisibleSelectionInDOMTree().IsCaret());
+  EXPECT_TRUE(frame.Selection().ComputeVisibleSelectionInDomTree().IsCaret());
   EXPECT_TRUE(
-      frame.Selection().ComputeVisibleSelectionInDOMTree().IsContentEditable())
+      frame.Selection().ComputeVisibleSelectionInDomTree().IsContentEditable())
       << "We should be pasting into something editable.";
 
-  frame.GetSystemClipboard()->WriteHTML(html_to_paste, BlankURL(),
+  frame.GetSystemClipboard()->WriteHTML(html_to_paste, BlankUrl(),
                                         SystemClipboard::kCannotSmartReplace);
   frame.GetSystemClipboard()->CommitWrite();
   // Run all tasks in a message loop to allow asynchronous clipboard writing
@@ -94,10 +94,10 @@ void PasteAndVerifySanitization(const char* html_to_paste,
   // Verify that sanitization during pasting strips JavaScript, but keeps at
   // least |expected_partial_contents|.
   String sanitized_content = body->GetInnerHTMLString();
-  EXPECT_TRUE(sanitized_content.Contains(expected_partial_contents))
+  EXPECT_TRUE(sanitized_content.contains(expected_partial_contents))
       << "We should have pasted *something*; the document is: "
       << sanitized_content.Utf8();
-  EXPECT_FALSE(sanitized_content.Contains(":alert()"))
+  EXPECT_FALSE(sanitized_content.contains(":alert()"))
       << "The JavaScript URL is unsafe and should have been stripped; "
          "instead: "
       << sanitized_content.Utf8();

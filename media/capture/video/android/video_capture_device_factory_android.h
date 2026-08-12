@@ -9,6 +9,7 @@
 
 #include "base/android/scoped_java_ref.h"
 #include "base/containers/flat_map.h"
+#include "gpu/config/gpu_driver_bug_workarounds.h"
 #include "media/capture/video/android/camera_availability_observer.h"
 #include "media/capture/video/video_capture_device.h"
 #include "media/capture/video/video_capture_device_factory.h"
@@ -21,10 +22,11 @@ class CAPTURE_EXPORT VideoCaptureDeviceFactoryAndroid
     : public VideoCaptureDeviceFactory {
  public:
   static base::android::ScopedJavaLocalRef<jobject> createVideoCaptureAndroid(
-      int id,
-      jlong nativeVideoCaptureDeviceAndroid);
+      const std::string& id,
+      int64_t nativeVideoCaptureDeviceAndroid);
 
-  VideoCaptureDeviceFactoryAndroid();
+  explicit VideoCaptureDeviceFactoryAndroid(
+      const gpu::GpuDriverBugWorkarounds& gpu_workarounds);
 
   VideoCaptureDeviceFactoryAndroid(const VideoCaptureDeviceFactoryAndroid&) =
       delete;
@@ -37,15 +39,9 @@ class CAPTURE_EXPORT VideoCaptureDeviceFactoryAndroid
       const VideoCaptureDeviceDescriptor& device_descriptor) override;
   void GetDevicesInfo(GetDevicesInfoCallback callback) override;
 
-  // Configures all subsequent CreateDevice()s in test mode.
-  void ConfigureForTesting() { test_mode_ = true; }
-
  private:
   VideoCaptureFormats GetSupportedFormats(int device_index,
                                           const std::string& display_name);
-
-  // Switch to indicate that all created Java capturers will be in test mode.
-  bool test_mode_ = false;
 
   // VideoCaptureFormats and zooms are cached, so GetSupportedFormats() and
   // Java_VideoCaptureFactory_isZoomSupported() respectively don't need to be
@@ -54,6 +50,8 @@ class CAPTURE_EXPORT VideoCaptureDeviceFactoryAndroid
   // an actively used camera is opened again (see https://crbug.com/1138608).
   base::flat_map<std::string, VideoCaptureFormats> supported_formats_cache_;
   base::flat_map<std::string, bool> zooms_cache_;
+
+  const gpu::GpuDriverBugWorkarounds gpu_workarounds_;
 
   CameraAvailabilityObserver camera_availability_observer_;
 };

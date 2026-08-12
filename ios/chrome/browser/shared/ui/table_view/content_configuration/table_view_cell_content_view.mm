@@ -18,7 +18,7 @@ namespace {
 constexpr CGFloat kTitleSubtitleToTrailingWidthRatio = 3;
 
 // Spacing between the different labels, vertically.
-constexpr CGFloat kLabelVerticalSpacing = 4;
+constexpr CGFloat kLabelVerticalSpacing = 2;
 
 // Spacing between the different labels, horizontally.
 constexpr CGFloat kLabelHorizontalSpacing = 8;
@@ -26,6 +26,9 @@ constexpr CGFloat kLabelHorizontalSpacing = 8;
 // The margin for the trailing edge of the content view, when there is an
 // accessory view in the cell.
 constexpr CGFloat kTrailingMarginWithAccessory = 8;
+
+// Minimum font scale factor allowed when shrinking label fonts to fit width.
+constexpr CGFloat kLabelMinimumScaleFactor = 0.8;
 
 }  // namespace
 
@@ -122,6 +125,9 @@ constexpr CGFloat kTrailingMarginWithAccessory = 8;
 
   // The constraint for the trailing edge of the main stack.
   NSLayoutConstraint* _mainStackTrailingConstraint;
+
+  // The horizontal constraint ensuring the 75/25 ratio.
+  NSLayoutConstraint* _horizontalTextWidthConstraint;
 }
 
 - (instancetype)initWithConfiguration:
@@ -296,6 +302,8 @@ constexpr CGFloat kTrailingMarginWithAccessory = 8;
     _mainStack.alignment = UIStackViewAlignmentLeading;
 
     _trailingLabel.textAlignment = NSTextAlignmentNatural;
+    [NSLayoutConstraint
+        deactivateConstraints:@[ _horizontalTextWidthConstraint ]];
     [NSLayoutConstraint activateConstraints:_accessibilityTextConstraints];
   } else {
     _allTextStack.axis = UILayoutConstraintAxisHorizontal;
@@ -309,6 +317,8 @@ constexpr CGFloat kTrailingMarginWithAccessory = 8;
             ? NSTextAlignmentRight
             : NSTextAlignmentLeft;
     [NSLayoutConstraint deactivateConstraints:_accessibilityTextConstraints];
+    [NSLayoutConstraint
+        activateConstraints:@[ _horizontalTextWidthConstraint ]];
   }
 
   [self updateNumberOfLines];
@@ -361,11 +371,10 @@ constexpr CGFloat kTrailingMarginWithAccessory = 8;
 
   // The constraint ensuring the 75/25 ratio. It is higher priority than the
   // compression resistance but lower than the content hugging.
-  NSLayoutConstraint* trailingTextWidthConstraint =
-      [_titleSubtitleContainer.widthAnchor
-          constraintEqualToAnchor:_trailingLabel.widthAnchor
-                       multiplier:kTitleSubtitleToTrailingWidthRatio];
-  trailingTextWidthConstraint.priority = UILayoutPriorityDefaultHigh;
+  _horizontalTextWidthConstraint = [_titleSubtitleContainer.widthAnchor
+      constraintEqualToAnchor:_trailingLabel.widthAnchor
+                   multiplier:kTitleSubtitleToTrailingWidthRatio];
+  _horizontalTextWidthConstraint.priority = UILayoutPriorityDefaultHigh;
 
   [_titleSubtitleContainer
       setContentCompressionResistancePriority:UILayoutPriorityDefaultLow
@@ -399,7 +408,6 @@ constexpr CGFloat kTrailingMarginWithAccessory = 8;
     [self.heightAnchor
         constraintGreaterThanOrEqualToConstant:kChromeTableViewCellHeight],
     height,
-    trailingTextWidthConstraint,
   ]];
 }
 
@@ -411,6 +419,8 @@ constexpr CGFloat kTrailingMarginWithAccessory = 8;
   label.lineBreakMode = NSLineBreakByWordWrapping;
   label.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
   label.adjustsFontForContentSizeCategory = YES;
+  label.adjustsFontSizeToFitWidth = YES;
+  label.minimumScaleFactor = kLabelMinimumScaleFactor;
   return label;
 }
 
@@ -422,6 +432,8 @@ constexpr CGFloat kTrailingMarginWithAccessory = 8;
   label.lineBreakMode = NSLineBreakByWordWrapping;
   label.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
   label.adjustsFontForContentSizeCategory = YES;
+  label.adjustsFontSizeToFitWidth = YES;
+  label.minimumScaleFactor = kLabelMinimumScaleFactor;
   return label;
 }
 
@@ -431,6 +443,8 @@ constexpr CGFloat kTrailingMarginWithAccessory = 8;
   label.translatesAutoresizingMaskIntoConstraints = NO;
   label.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
   label.adjustsFontForContentSizeCategory = YES;
+  label.adjustsFontSizeToFitWidth = YES;
+  label.minimumScaleFactor = kLabelMinimumScaleFactor;
   return label;
 }
 

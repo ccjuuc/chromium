@@ -50,10 +50,9 @@ TEST_F(EncodedFormDataTest, DeepCopy) {
   original->AppendBlob(BlobDataHandle::Create("uuid", /*type=*/"", /*size=*/0,
                                               std::move(remote)));
 
-  Vector<char> boundary_vector;
-  boundary_vector.AppendSpan(base::span_from_cstring("----boundaryForTest"));
+  String boundary_string("----boundaryForTest");
   original->SetIdentifier(45678);
-  original->SetBoundary(boundary_vector);
+  original->SetBoundary(boundary_string);
   original->SetContainsPasswordData(true);
 
   scoped_refptr<EncodedFormData> copy = original->DeepCopy();
@@ -62,7 +61,7 @@ TEST_F(EncodedFormDataTest, DeepCopy) {
   ASSERT_EQ(3ul, copy_elements.size());
 
   Vector<char> foo_vector;
-  foo_vector.AppendSpan(base::span_from_cstring("Foo"));
+  foo_vector.append_range(base::span_from_cstring("Foo"));
 
   EXPECT_EQ(FormDataElement::kData, copy_elements[0].type_);
   EXPECT_EQ(foo_vector, copy_elements[0].data_);
@@ -78,7 +77,7 @@ TEST_F(EncodedFormDataTest, DeepCopy) {
   EXPECT_EQ(FormDataElement::kEncodedBlob, copy_elements[2].type_);
 
   EXPECT_EQ(45678, copy->Identifier());
-  EXPECT_EQ(boundary_vector, copy->Boundary());
+  EXPECT_EQ(boundary_string, copy->Boundary());
   EXPECT_EQ(true, copy->ContainsPasswordData());
 
   // Check that contents are copied (compare the copy with the original).

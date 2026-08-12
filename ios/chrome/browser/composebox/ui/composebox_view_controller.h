@@ -8,7 +8,6 @@
 #import <UIKit/UIKit.h>
 
 #import "ios/chrome/browser/composebox/public/composebox_theme.h"
-#import "ios/chrome/browser/composebox/ui/composebox_navigation_consumer.h"
 #import "ios/chrome/browser/omnibox/ui/popup/omnibox_popup_presenter.h"
 
 @class ComposeboxInputPlateViewController;
@@ -18,12 +17,14 @@
 @protocol ComposeboxViewControllerDelegate
 - (void)composeboxViewControllerDidTapCloseButton:
     (ComposeboxViewController*)viewController;
+// Indicates to the delegate to handle a change in horizontal size class.
+- (void)composeboxHorizontalSizeClassDidChange;
 @end
 
 // View Controller that contains the composebox, presenting it modally.
 @interface ComposeboxViewController
-    : UIViewController <ComposeboxNavigationConsumer,
-                        OmniboxPopupPresenterDelegate>
+    : UIViewController <OmniboxPopupPresenterDelegate,
+                        UIAdaptivePresentationControllerDelegate>
 
 // Creates an instance with the theme of the input plate.
 - (instancetype)initWithTheme:(ComposeboxTheme*)theme;
@@ -34,9 +35,6 @@
 // The delegate to proxy OmniboxPopupPresenterDelegate calls to.
 @property(nonatomic, weak) id<OmniboxPopupPresenterDelegate>
     proxiedPresenterDelegate;
-
-// Whether the close button should be hidden.
-@property(nonatomic, assign) BOOL hidesCloseButton;
 
 // The close button.
 @property(nonatomic, readonly) UIButton* closeButton;
@@ -52,7 +50,7 @@
     (ComposeboxInputPlateViewController*)inputViewController;
 
 // Requests the input plate to expand beyond to full width when dismissing.
-- (void)expandInputPlateForDismissal;
+- (void)expandInputPlateForDismissalToFrame:(CGRect)targetFrame;
 
 // Whether the system anticipates a clipboard suggestion causing the incognito
 // view to remain hidden.

@@ -10,7 +10,6 @@ import android.app.job.JobInfo;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.os.PersistableBundle;
-import android.os.Process;
 
 import androidx.annotation.StringDef;
 import androidx.annotation.VisibleForTesting;
@@ -18,25 +17,16 @@ import androidx.annotation.VisibleForTesting;
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JniType;
 
-import org.chromium.base.ApplicationState;
 import org.chromium.base.ApplicationStatus;
-import org.chromium.base.ApplicationStatus.ApplicationStateListener;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
 import org.chromium.base.StreamUtil;
-import org.chromium.base.ThreadUtils;
 import org.chromium.base.metrics.RecordHistogram;
-import org.chromium.base.shared_preferences.SharedPreferencesManager;
-import org.chromium.base.task.PostTask;
-import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.base.SplitCompatIntentService;
-import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
-import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.privacy.settings.PrivacyPreferencesManagerImpl;
 import org.chromium.components.background_task_scheduler.TaskIds;
-import org.chromium.components.crash.browser.ProcessExitReasonFromSystem;
 import org.chromium.components.minidump_uploader.CrashFileManager;
 import org.chromium.components.minidump_uploader.MinidumpUploadCallable;
 import org.chromium.components.minidump_uploader.MinidumpUploadCallable.MinidumpUploadStatus;
@@ -118,49 +108,9 @@ public class MinidumpUploadServiceImpl extends SplitCompatIntentService.Impl {
         MinidumpUploadJobService.scheduleUpload(builder);
     }
 
-    private static ApplicationStateListener createApplicationStateListener() {
-        return newState -> {
-            ChromeSharedPreferences.getInstance()
-                    .writeInt(ChromePreferenceKeys.LAST_SESSION_APPLICATION_STATE, newState);
-        };
-    }
-
     /** Stores the successes and failures from uploading crash to UMA, */
     public static void storeBreakpadUploadStatsInUma(CrashUploadCountStore pref) {
         sBrowserCrashMetricsInitialized.set(true);
-
-        SharedPreferencesManager sharedPrefs = ChromeSharedPreferences.getInstance();
-        int previousPid = sharedPrefs.readInt(ChromePreferenceKeys.LAST_SESSION_BROWSER_PID);
-        @ApplicationState
-        int applicationExitState =
-                sharedPrefs.readInt(ChromePreferenceKeys.LAST_SESSION_APPLICATION_STATE);
-        String umaSuffix;
-        if (applicationExitState == ApplicationState.HAS_RUNNING_ACTIVITIES) {
-            umaSuffix = "Foreground2";
-        } else {
-            umaSuffix = "Background2";
-        }
-        sharedPrefs.writeInt(ChromePreferenceKeys.LAST_SESSION_BROWSER_PID, Process.myPid());
-        ApplicationStateListener appStateListener = createApplicationStateListener();
-        appStateListener.onApplicationStateChange(ApplicationStatus.getStateForApplication());
-
-        if (ThreadUtils.runningOnUiThread()) {
-            ApplicationStatus.registerApplicationStateListener(appStateListener);
-        } else {
-            PostTask.postTask(
-                    TaskTraits.UI_BEST_EFFORT,
-                    () -> {
-                        ApplicationStatus.registerApplicationStateListener(appStateListener);
-                    });
-        }
-
-        if (previousPid != 0) {
-            int reason = ProcessExitReasonFromSystem.getExitReason(previousPid);
-            ProcessExitReasonFromSystem.recordAsEnumHistogram(
-                    "Stability.Android.SystemExitReason.Browser", reason);
-            ProcessExitReasonFromSystem.recordAsEnumHistogram(
-                    "Stability.Android.SystemExitReason.Browser." + umaSuffix, reason);
-        }
 
         for (String type : TYPES) {
             for (int success = pref.getCrashSuccessUploadCount(type); success > 0; success--) {
@@ -265,11 +215,9 @@ public class MinidumpUploadServiceImpl extends SplitCompatIntentService.Impl {
                 } else {
                     Log.d(
                             TAG,
-                            "Giving up on trying to upload "
-                                    + minidumpFileName
-                                    + "after "
-                                    + tries
-                                    + " number of tries.");
+                            "Giving up on trying to upload %s after %d number of tries.",
+                            minidumpFileName,
+                            tries);
                 }
             } else {
                 Log.w(TAG, "Failed to rename minidump " + minidumpFileName);
@@ -319,17 +267,19 @@ public class MinidumpUploadServiceImpl extends SplitCompatIntentService.Impl {
      * crashes by looking into the file contents. Because this code can execute in a context when
      * the main Chrome activity is no longer running, the counts are stored in shared preferences;
      * they are later read and recorded as metrics by the main Chrome activity.
-     * NOTE: This method should be called *after* renaming the file, since renaming occurs as a
+     *
+     * <p>NOTE: This method should be called *after* renaming the file, since renaming occurs as a
      * side-effect of a successful upload.
+     *
      * @param originalFilename The name of the successfully uploaded minidump, *prior* to uploading.
      */
     public static void incrementCrashSuccessUploadCount(String originalFilename) {
-        final @ProcessType String process_type =
+        final @ProcessType String processType =
                 getCrashType(getNewNameAfterSuccessfulUpload(originalFilename));
-        if (ProcessType.BROWSER.equals(process_type)) {
+        if (ProcessType.BROWSER.equals(processType)) {
             sDidBrowserCrashRecently.set(true);
         }
-        CrashUploadCountStore.getInstance().incrementCrashSuccessUploadCount(process_type);
+        CrashUploadCountStore.getInstance().incrementCrashSuccessUploadCount(processType);
     }
 
     /**
@@ -337,15 +287,17 @@ public class MinidumpUploadServiceImpl extends SplitCompatIntentService.Impl {
      * by looking into the file contents. Because this code can execute in a context when the main
      * Chrome activity is no longer running, the counts are stored in shared preferences; they are
      * later read and recorded as metrics by the main Chrome activity.
-     * NOTE: This method should be called *prior* to renaming the file.
+     *
+     * <p>NOTE: This method should be called *prior* to renaming the file.
+     *
      * @param originalFilename The name of the successfully uploaded minidump, *prior* to uploading.
      */
     public static void incrementCrashFailureUploadCount(String originalFilename) {
-        final @ProcessType String process_type = getCrashType(originalFilename);
-        if (ProcessType.BROWSER.equals(process_type)) {
+        final @ProcessType String processType = getCrashType(originalFilename);
+        if (ProcessType.BROWSER.equals(processType)) {
             sDidBrowserCrashRecently.set(true);
         }
-        CrashUploadCountStore.getInstance().incrementCrashFailureUploadCount(process_type);
+        CrashUploadCountStore.getInstance().incrementCrashFailureUploadCount(processType);
     }
 
     /**
@@ -373,7 +325,7 @@ public class MinidumpUploadServiceImpl extends SplitCompatIntentService.Impl {
     static void tryUploadCrashDumpNow(File minidumpFile) {
         if (!(ApplicationStatus.isInitialized() && ApplicationStatus.hasVisibleActivities())) {
             // Android does not allow us to start services from the background. If we are in the
-            // background, then go through the JobScheduler path instead. See crbug.com/1433529
+            // background, then go through the JobScheduler path instead. See crbug.com/40903537
             // and crbug.com/407575680 for crashes caused by not doing this.
             scheduleUploadJob();
             return;

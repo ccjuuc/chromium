@@ -8,7 +8,6 @@ import android.app.Activity;
 
 import androidx.annotation.VisibleForTesting;
 
-import org.chromium.base.CollectionUtil;
 import org.chromium.base.Log;
 import org.chromium.base.Promise;
 import org.chromium.base.ServiceLoaderUtil;
@@ -17,13 +16,14 @@ import org.chromium.base.lifetime.Destroyable;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.ActivityTabProvider;
+import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
+import org.chromium.chrome.browser.lifecycle.DestroyObserver;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileKeyedMap;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.components.user_prefs.UserPrefs;
 
-import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
@@ -45,13 +45,12 @@ public class UsageStatsService implements Destroyable {
     private final SuspensionTracker mSuspensionTracker;
     private final TokenTracker mTokenTracker;
     private final UsageStatsBridge mBridge;
-    // PageViewObservers are scoped to a given ChromeTabbedActivity, but UsageStatsService isn't. To
-    // allow for GC of the observer to happen when the activity goes away, we only hold weak
-    // references here.
-    private final List<WeakReference<PageViewObserver>> mPageViewObservers;
+    // PageViewObservers are scoped to a given ChromeTabbedActivity, but UsageStatsService isn't.
+    // We hold strong references here and destroy each observer when its owning Activity is
+    // destroyed (see createPageViewObserver()).
+    private final List<PageViewObserver> mPageViewObservers;
 
     private final DigitalWellbeingClient mClient;
-    private boolean mOptInState;
 
     /** Return the {@link UsageStatsService} for the given {@link Profile}. */
     public static UsageStatsService getForProfile(Profile profile) {
@@ -62,17 +61,24 @@ public class UsageStatsService implements Destroyable {
      * Creates a UsageStatsService for the given Activity.
      *
      * @param activity The activity in which page view events are occurring.
+     * @param lifecycleDispatcher The lifecycle dispatcher for {@code activity}, used to destroy the
+     *     created {@link PageViewObserver} when the activity is destroyed.
      * @param profile The {@link Profile} associated with the activity.
      * @param activityTabProvider The provider of the active tab for the activity.
      * @param tabContentManagerSupplier Supplier of the current {@link TabContentManager}.
      */
     public static void createPageViewObserverIfEnabled(
             Activity activity,
+            ActivityLifecycleDispatcher lifecycleDispatcher,
             Profile profile,
             ActivityTabProvider activityTabProvider,
             Supplier<TabContentManager> tabContentManagerSupplier) {
         getForProfile(profile)
-                .createPageViewObserver(activity, activityTabProvider, tabContentManagerSupplier);
+                .createPageViewObserver(
+                        activity,
+                        lifecycleDispatcher,
+                        activityTabProvider,
+                        tabContentManagerSupplier);
     }
 
     @VisibleForTesting
@@ -96,8 +102,6 @@ public class UsageStatsService implements Destroyable {
                         (suspendedSites) -> {
                             notifyObserversOfSuspensions(suspendedSites, true);
                         });
-
-        mOptInState = getOptInState();
     }
 
     @Override
@@ -111,12 +115,15 @@ public class UsageStatsService implements Destroyable {
 
     /**
      * Create a {@link PageViewObserver} for the given tab model selector and activity.
+     *
      * @param activity The activity in which page view events are occurring.
+     * @param lifecycleDispatcher The lifecycle dispatcher for {@code activity}.
      * @param activityTabProvider The provider of the active tab for the activity.
      * @param tabContentManagerSupplier Supplier of the current {@link TabContentManager}.
      */
     private PageViewObserver createPageViewObserver(
             Activity activity,
+            ActivityLifecycleDispatcher lifecycleDispatcher,
             ActivityTabProvider activityTabProvider,
             Supplier<TabContentManager> tabContentManagerSupplier) {
         ThreadUtils.assertOnUiThread();
@@ -128,7 +135,17 @@ public class UsageStatsService implements Destroyable {
                         mTokenTracker,
                         mSuspensionTracker,
                         tabContentManagerSupplier);
-        mPageViewObservers.add(new WeakReference<>(observer));
+        mPageViewObservers.add(observer);
+        // Tie the observer's lifetime to the Activity: when the Activity is destroyed, drop our
+        // strong reference and destroy the observer so it releases its references to the Activity.
+        lifecycleDispatcher.register(
+                new DestroyObserver() {
+                    @Override
+                    public void onDestroy() {
+                        mPageViewObservers.remove(observer);
+                        observer.destroy();
+                    }
+                });
         return observer;
     }
 
@@ -141,11 +158,12 @@ public class UsageStatsService implements Destroyable {
     /** Sets the user's opt in state. */
     void setOptInState(boolean state) {
         ThreadUtils.assertOnUiThread();
+        boolean oldState = getOptInState();
+        if (oldState == state) return;
+
         UserPrefs.get(mProfile).setBoolean(Pref.USAGE_STATS_ENABLED, state);
 
-        if (mOptInState == state) return;
-        mOptInState = state;
-        mClient.notifyOptInStateChange(mOptInState);
+        mClient.notifyOptInStateChange(state);
 
         if (!state) {
             getAllSuspendedWebsitesAsync()
@@ -213,7 +231,9 @@ public class UsageStatsService implements Destroyable {
     public void onAllHistoryDeleted() {
         ThreadUtils.assertOnUiThread();
         UsageStatsMetricsReporter.reportMetricsEvent(UsageStatsMetricsEvent.CLEAR_ALL_HISTORY);
-        mClient.notifyAllHistoryCleared();
+        if (getOptInState()) {
+            mClient.notifyAllHistoryCleared();
+        }
         mEventTracker
                 .clearAll()
                 .except(
@@ -239,7 +259,9 @@ public class UsageStatsService implements Destroyable {
         // Timestamp proto. It doesn't make any sense to delete into the future, so we can
         // reasonably cap endTimeMs at now.
         long effectiveEndTimeMs = Math.min(endTimeMs, System.currentTimeMillis());
-        mClient.notifyHistoryDeletion(startTimeMs, effectiveEndTimeMs);
+        if (getOptInState()) {
+            mClient.notifyHistoryDeletion(startTimeMs, effectiveEndTimeMs);
+        }
         mEventTracker
                 .clearRange(startTimeMs, effectiveEndTimeMs)
                 .except(
@@ -261,7 +283,9 @@ public class UsageStatsService implements Destroyable {
     public void onHistoryDeletedForDomains(List<String> fqdns) {
         ThreadUtils.assertOnUiThread();
         UsageStatsMetricsReporter.reportMetricsEvent(UsageStatsMetricsEvent.CLEAR_HISTORY_DOMAIN);
-        mClient.notifyHistoryDeletion(fqdns);
+        if (getOptInState()) {
+            mClient.notifyHistoryDeletion(fqdns);
+        }
         mEventTracker
                 .clearDomains(fqdns)
                 .except(
@@ -304,7 +328,7 @@ public class UsageStatsService implements Destroyable {
     }
 
     private void notifyObserversOfSuspensions(List<String> fqdns, boolean suspended) {
-        for (PageViewObserver observer : CollectionUtil.strengthen(mPageViewObservers)) {
+        for (PageViewObserver observer : mPageViewObservers) {
             for (String fqdn : fqdns) {
                 observer.notifySiteSuspensionChanged(fqdn, suspended);
             }

@@ -49,12 +49,21 @@ void SaveCardBottomSheetModel::OnCanceled() {
 
 void SaveCardBottomSheetModel::CreditCardUploadCompleted(
     bool card_saved,
-    autofill::payments::PaymentsAutofillClient::OnConfirmationClosedCallback
+    payments::PaymentsAutofillClient::OnConfirmationClosedCallback
         on_confirmation_closed_callback) {
   save_card_state_ =
       card_saved ? SaveCardState::kSaved : SaveCardState::kFailed;
   on_confirmation_closed_callback_ = std::move(on_confirmation_closed_callback);
   observer_list_.Notify(&Observer::OnCreditCardUploadCompleted, card_saved);
+}
+
+void SaveCardBottomSheetModel::OnUpdatedAndAcceptedForSaveAndFill(
+    payments::PaymentsAutofillClient::UserProvidedCardSaveAndFillDetails
+        details) {
+  if (save_card_delegate()) {
+    save_card_delegate()->OnUiUpdatedAndAcceptedForSaveAndFill(
+        std::move(details));
+  }
 }
 
 }  // namespace autofill

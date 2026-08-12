@@ -5,7 +5,6 @@
 #ifndef CHROME_BROWSER_WEB_APPLICATIONS_JOBS_UNINSTALL_REMOVE_INSTALL_SOURCE_JOB_H_
 #define CHROME_BROWSER_WEB_APPLICATIONS_JOBS_UNINSTALL_REMOVE_INSTALL_SOURCE_JOB_H_
 
-#include "base/containers/enum_set.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
@@ -28,7 +27,7 @@ class RemoveInstallSourceJob : public UninstallJob {
  public:
   RemoveInstallSourceJob(webapps::WebappUninstallSource uninstall_source,
                          Profile& profile,
-                         base::Value::Dict& debug_value,
+                         base::DictValue& debug_value,
                          webapps::AppId app_id,
                          WebAppManagementTypes install_managements_to_remove);
   ~RemoveInstallSourceJob() override;
@@ -46,7 +45,7 @@ class RemoveInstallSourceJob : public UninstallJob {
   const webapps::WebappUninstallSource uninstall_source_;
   // `this` must be owned by `profile_`.
   const raw_ref<Profile> profile_;
-  const raw_ref<base::Value::Dict> debug_value_;
+  const raw_ref<base::DictValue> debug_value_;
   const webapps::AppId app_id_;
   const WebAppManagementTypes install_managements_to_remove_;
 

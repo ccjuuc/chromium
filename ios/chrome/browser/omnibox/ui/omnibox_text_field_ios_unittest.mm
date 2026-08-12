@@ -9,8 +9,10 @@
 #import "base/files/file_util.h"
 #import "base/path_service.h"
 #import "base/strings/string_split.h"
+#import "base/test/allow_check_is_test_for_testing.h"
 #import "base/test/task_environment.h"
 #import "ios/chrome/browser/omnibox/public/omnibox_presentation_context.h"
+#import "ios/chrome/browser/omnibox/ui/omnibox_text_field_paste_delegate.h"
 #import "ios/chrome/browser/omnibox/ui/omnibox_text_input_delegate.h"
 #import "ios/chrome/browser/shared/model/paths/paths.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
@@ -28,6 +30,7 @@ namespace {
 class OmniboxTextFieldIOSTest : public PlatformTest {
  protected:
   void SetUp() override {
+    base::test::AllowCheckIsTestForTesting();
     PlatformTest::SetUp();
     // This rect is fairly arbitrary. The text field just needs a non-zero width
     // so that the pre-edit label's text alignment can be tested.
@@ -182,4 +185,106 @@ TEST_F(OmniboxTextFieldIOSTest, CutInPreedit) {
   EXPECT_OCMOCK_VERIFY(delegateMock);
 }
 
+// Tests that the accessibility value is the placeholder text when the text
+// field is empty.
+TEST_F(OmniboxTextFieldIOSTest, AccessibilityValueWhenEmpty) {
+  textfield_.text = @"";
+  textfield_.placeholder = @"Placeholder Text";
+  EXPECT_NSEQ(@"Placeholder Text", textfield_.accessibilityValue);
+}
+
+// Tests that the accessibility value is the text content when the text field is
+// not empty.
+TEST_F(OmniboxTextFieldIOSTest, AccessibilityValueWhenNotEmpty) {
+  textfield_.text = @"User Text";
+  textfield_.placeholder = @"Placeholder Text";
+  EXPECT_NSEQ(@"User Text", textfield_.accessibilityValue);
+}
+
+// Tests that the testing value is correct when the text field is empty.
+TEST_F(OmniboxTextFieldIOSTest, TextValueForTestingWhenEmpty) {
+  textfield_.text = @"";
+  EXPECT_NSEQ(@"||||||||", textfield_.textValueForTesting);
+}
+
+// Tests that the testing value is correct when the text field is not empty.
+TEST_F(OmniboxTextFieldIOSTest, TextValueForTestingWhenNotEmpty) {
+  textfield_.text = @"User Text";
+  EXPECT_NSEQ(@"User Text||||||||", textfield_.textValueForTesting);
+}
+
+// Tests that the testing value is correct with autocomplete text.
+TEST_F(OmniboxTextFieldIOSTest, TextValueForTestingWithAutocomplete) {
+  NSAttributedString* text =
+      [[NSAttributedString alloc] initWithString:@"User TextAutocomplete"];
+  [textfield_ setText:text userTextLength:9];
+  EXPECT_NSEQ(@"User Text||||Autocomplete||||", textfield_.textValueForTesting);
+}
+
+// Tests that the testing value is correct with additional text.
+TEST_F(OmniboxTextFieldIOSTest, TextValueForTestingWithAdditionalText) {
+  textfield_.text = @"User Text";
+  [textfield_ setAdditionalText:@"Additional"];
+  EXPECT_NSEQ(@"User Text||||||||Additional", textfield_.textValueForTesting);
+}
+
+// Tests that the testing value is correct with autocomplete and additional
+// text.
+TEST_F(OmniboxTextFieldIOSTest, TextValueForTestingWithBoth) {
+  NSAttributedString* text =
+      [[NSAttributedString alloc] initWithString:@"User TextAutocomplete"];
+  [textfield_ setText:text userTextLength:9];
+  [textfield_ setAdditionalText:@"Additional"];
+  EXPECT_NSEQ(@"User Text||||Autocomplete||||Additional",
+              textfield_.textValueForTesting);
+}
+
 }  // namespace
+
+@interface OmniboxTextFieldPasteDelegate (Testing)
+@property(nonatomic, strong) NSURL* URL;
+@end
+
+TEST_F(OmniboxTextFieldIOSTest, PasteDelegateSanitizesDragAndDrop) {
+  OmniboxTextFieldPasteDelegate* delegate =
+      [[OmniboxTextFieldPasteDelegate alloc] init];
+  delegate.textInput = textfield_;
+
+  UITextRange* range = OCMClassMock([UITextRange class]);
+
+  // 1. Test standard string drop (without javascript scheme)
+  NSAttributedString* item1 =
+      [[NSAttributedString alloc] initWithString:@"https://example.com"];
+  NSAttributedString* result1 =
+      [delegate textPasteConfigurationSupporting:textfield_
+                    combineItemAttributedStrings:@[ item1 ]
+                                        forRange:range];
+  EXPECT_NSEQ(@"https://example.com", result1.string);
+
+  // 2. Test malicious javascript scheme drop
+  NSAttributedString* item2 =
+      [[NSAttributedString alloc] initWithString:@"javascript:alert(1)"];
+  NSAttributedString* result2 =
+      [delegate textPasteConfigurationSupporting:textfield_
+                    combineItemAttributedStrings:@[ item2 ]
+                                        forRange:range];
+  EXPECT_NSEQ(@"alert(1)", result2.string);
+
+  // 3. Test nested/broken javascript scheme drops
+  NSAttributedString* item3 = [[NSAttributedString alloc]
+      initWithString:@"java\x0d\x0ascript:alert(0)"];
+  NSAttributedString* result3 =
+      [delegate textPasteConfigurationSupporting:textfield_
+                    combineItemAttributedStrings:@[ item3 ]
+                                        forRange:range];
+  EXPECT_NSEQ(@"alert(0)", result3.string);
+
+  // 4. Test cached URL sanitization
+  delegate.URL = [NSURL URLWithString:@"javascript:alert(2)"];
+  NSAttributedString* result4 =
+      [delegate textPasteConfigurationSupporting:textfield_
+                    combineItemAttributedStrings:@[]
+                                        forRange:range];
+  EXPECT_NSEQ(@"alert(2)", result4.string);
+  EXPECT_EQ(nil, delegate.URL);
+}

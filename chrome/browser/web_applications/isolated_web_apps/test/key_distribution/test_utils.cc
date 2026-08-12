@@ -5,26 +5,25 @@
 #include "chrome/browser/web_applications/isolated_web_apps/test/key_distribution/test_utils.h"
 
 #include <optional>
+#include <utility>
 
 #include "base/base64.h"
 #include "base/callback_list.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/callback.h"
-#include "base/functional/callback_forward.h"
 #include "base/json/json_writer.h"
-#include "base/notimplemented.h"
 #include "base/path_service.h"
-#include "base/scoped_observation.h"
 #include "base/test/test_future.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/types/expected_macros.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/component_updater/iwa_key_distribution_component_installer.h"
-#include "chrome/browser/web_applications/isolated_web_apps/key_distribution/iwa_key_distribution_histograms.h"
-#include "chrome/browser/web_applications/isolated_web_apps/key_distribution/iwa_key_distribution_info_provider.h"
 #include "components/component_updater/component_updater_paths.h"
+#include "components/component_updater/installer_policies/iwa_key_distribution_component_installer_policy.h"
+#include "components/webapps/isolated_web_apps/key_distribution/iwa_key_distribution_info_provider.h"
 
 namespace web_app::test {
 
@@ -35,51 +34,35 @@ using ComponentMetadataOrError =
 
 using ComponentUpdateFuture = base::test::TestFuture<ComponentMetadataOrError>;
 
-base::CallbackListSubscription SetOnComponentUpdatedForTesting(
-    base::RepeatingCallback<void(ComponentMetadataOrError)> callback) {
-  return IwaKeyDistributionInfoProvider::GetInstanceForTesting()
-      .OnComponentUpdatedForTesting(
-          base::BindRepeating([](base::expected<void, IwaComponentUpdateError>
-                                     result) {
-            return result.transform([]() -> IwaComponentMetadata {
-              auto& instance =
-                  IwaKeyDistributionInfoProvider::GetInstanceForTesting();
-              return {.version = *instance.GetVersion(),
-                      .is_preloaded = *instance.IsPreloadedForTesting()};
-            });
-          }).Then(callback));
-}
-
 }  // namespace
 
-base::expected<void, IwaComponentUpdateError> KeyDistributionComponent::
-    KeyDistributionComponent::UploadFromComponentFolder() {
+base::expected<void, IwaComponentUpdateError>
+KeyDistributionComponent::UploadFromComponentFolder() {
   base::ScopedAllowBlockingForTesting allow_blocking;
-  return UpdateKeyDistributionInfo(version, component_data);
+  return UpdateKeyDistributionInfo(metadata.version, component_data);
 }
 
-void KeyDistributionComponent::KeyDistributionComponent::
-    InjectComponentDataDirectly() {
+void KeyDistributionComponent::InjectComponentDataDirectly() {
   IwaKeyDistributionInfoProvider::GetInstanceForTesting()
-      .SetComponentDataForTesting(version, is_preloaded, component_data);
+      .SetComponentDataForTesting(metadata.version, metadata.is_preloaded,
+                                  component_data);
 }
 
 KeyDistributionComponentBuilder::KeyDistributionComponentBuilder(
-    const base::Version& component_version)
-    : component_(/*version=*/component_version,
-                 /*is_preloaded=*/false,
-                 /*data=*/IwaKeyDistribution{}) {}
+    const base::Version& component_version,
+    bool is_preloaded)
+    : component_(
+          /*metadata=*/IwaComponentMetadata{component_version, is_preloaded},
+          /*component_data=*/IwaKeyDistribution{}) {}
 
 KeyDistributionComponentBuilder::~KeyDistributionComponentBuilder() = default;
 
 KeyDistributionComponentBuilder&
 KeyDistributionComponentBuilder::AddToKeyRotations(
     const web_package::SignedWebBundleId& web_bundle_id,
-    std::optional<base::span<const uint8_t>> expected_key) & {
+    base::span<const uint8_t> expected_key) & {
   IwaKeyRotations::KeyRotationInfo kr_info_proto;
-  if (expected_key.has_value()) {
-    kr_info_proto.set_expected_key(base::Base64Encode(*expected_key));
-  }
+  kr_info_proto.set_expected_key(base::Base64Encode(expected_key));
   (*component_.component_data.mutable_key_rotation_data()
         ->mutable_key_rotations())[web_bundle_id.id()] =
       std::move(kr_info_proto);
@@ -89,7 +72,7 @@ KeyDistributionComponentBuilder::AddToKeyRotations(
 KeyDistributionComponentBuilder&&
 KeyDistributionComponentBuilder::AddToKeyRotations(
     const web_package::SignedWebBundleId& web_bundle_id,
-    std::optional<base::span<const uint8_t>> expected_key) && {
+    base::span<const uint8_t> expected_key) && {
   return std::move(AddToKeyRotations(web_bundle_id, std::move(expected_key)));
 }
 
@@ -98,10 +81,14 @@ KeyDistributionComponentBuilder::AddToSpecialAppPermissions(
     const web_package::SignedWebBundleId& web_bundle_id,
     SpecialAppPermissions special_app_permissions) & {
   IwaSpecialAppPermissions_SpecialAppPermissions special_app_permissions_proto;
-  special_app_permissions_proto.mutable_multi_screen_capture()
-      ->set_skip_capture_started_notification(
-          special_app_permissions.skip_capture_started_notification);
-
+  if (special_app_permissions.skip_capture_started_notification) {
+    special_app_permissions_proto.mutable_multi_screen_capture()
+        ->set_skip_capture_started_notification(true);
+  }
+  if (special_app_permissions.allow_set_shape) {
+    special_app_permissions_proto.mutable_chrome_os_permissions()
+        ->set_allow_set_shape(true);
+  }
   (*component_.component_data.mutable_special_app_permissions_data()
         ->mutable_special_app_permissions())[web_bundle_id.id()] =
       std::move(special_app_permissions_proto);
@@ -119,8 +106,7 @@ KeyDistributionComponentBuilder::AddToSpecialAppPermissions(
 KeyDistributionComponentBuilder& KeyDistributionComponentBuilder::WithBlocklist(
     const std::vector<web_package::SignedWebBundleId>& bundle_ids) & {
   for (const auto& bundle_id : bundle_ids) {
-    (*component_.component_data.mutable_iwa_access_control()
-          ->mutable_blocklist())[bundle_id.id()] = {};
+    AddToBlocklist(bundle_id);
   }
   return *this;
 }
@@ -133,24 +119,24 @@ KeyDistributionComponentBuilder::WithBlocklist(
 
 KeyDistributionComponentBuilder&
 KeyDistributionComponentBuilder::AddToBlocklist(
-    const web_package::SignedWebBundleId& bundle_id) & {
-  (*component_.component_data.mutable_iwa_access_control()
-        ->mutable_blocklist())[bundle_id.id()] = {};
+    const web_package::SignedWebBundleId& web_bundle_id) & {
+  component_.component_data.mutable_iwa_access_control()
+      ->mutable_blocklist()
+      ->emplace(web_bundle_id.id(), IwaAccessControl_BlocklistItemData{});
   return *this;
 }
 
 KeyDistributionComponentBuilder&&
 KeyDistributionComponentBuilder::AddToBlocklist(
-    const web_package::SignedWebBundleId& bundle_id) && {
-  return std::move(AddToBlocklist(bundle_id));
+    const web_package::SignedWebBundleId& web_bundle_id) && {
+  return std::move(AddToBlocklist(web_bundle_id));
 }
 
 KeyDistributionComponentBuilder&
 KeyDistributionComponentBuilder::WithManagedAllowlist(
     const std::vector<web_package::SignedWebBundleId>& bundle_ids) & {
   for (const auto& bundle_id : bundle_ids) {
-    (*component_.component_data.mutable_iwa_access_control()
-          ->mutable_managed_allowlist())[bundle_id.id()] = {};
+    AddToManagedAllowlist(bundle_id);
   }
   return *this;
 }
@@ -164,8 +150,10 @@ KeyDistributionComponentBuilder::WithManagedAllowlist(
 KeyDistributionComponentBuilder&
 KeyDistributionComponentBuilder::AddToManagedAllowlist(
     const web_package::SignedWebBundleId& web_bundle_id) & {
-  (*component_.component_data.mutable_iwa_access_control()
-        ->mutable_managed_allowlist())[web_bundle_id.id()] = {};
+  component_.component_data.mutable_iwa_access_control()
+      ->mutable_managed_allowlist()
+      ->emplace(web_bundle_id.id(),
+                IwaAccessControl_ManagedAllowlistItemData{});
   return *this;
 }
 
@@ -199,6 +187,21 @@ base::expected<void, IwaComponentUpdateError> UpdateKeyDistributionInfo(
   auto path = component_install_dir.GetPath().AppendASCII("krc");
   CHECK(base::WriteFile(path, kd_proto.SerializeAsString()));
   return UpdateKeyDistributionInfo(version, path);
+}
+
+base::CallbackListSubscription SetOnComponentUpdatedForTesting(
+    base::RepeatingCallback<void(ComponentMetadataOrError)> callback) {
+  return IwaKeyDistributionInfoProvider::GetInstanceForTesting()
+      .OnComponentUpdatedForTesting(
+          base::BindRepeating([](base::expected<void, IwaComponentUpdateError>
+                                     result) {
+            return result.transform([]() -> IwaComponentMetadata {
+              auto& instance =
+                  IwaKeyDistributionInfoProvider::GetInstanceForTesting();
+              return {.version = *instance.GetVersion(),
+                      .is_preloaded = *instance.IsPreloadedForTesting()};
+            });
+          }).Then(callback));
 }
 
 base::expected<void, IwaComponentUpdateError>
@@ -236,7 +239,7 @@ InstallIwaKeyDistributionComponent(const base::Version& version,
   // existing component on disk.
   CHECK(base::WriteFile(
       install_dir.Append(FILE_PATH_LITERAL("manifest.json")),
-      *base::WriteJson(base::Value::Dict()
+      *base::WriteJson(base::DictValue()
                            .Set("manifest_version", 1)
                            .Set("name", Installer::kManifestName)
                            .Set("version", version.GetString()))));
@@ -273,6 +276,18 @@ InstallIwaKeyDistributionComponent(
   *key_distribution.mutable_key_rotation_data() = std::move(key_rotations);
 
   return InstallIwaKeyDistributionComponent(version, key_distribution);
+}
+
+base::expected<void, IwaComponentUpdateError> ConfigureSetShapeAllowlist(
+    const web_package::SignedWebBundleId& web_bundle_id,
+    const base::Version& version) {
+  return KeyDistributionComponentBuilder(version)
+      .AddToSpecialAppPermissions(
+          web_bundle_id,
+          KeyDistributionComponentBuilder::SpecialAppPermissions{
+              .allow_set_shape = true})
+      .Build()
+      .UploadFromComponentFolder();
 }
 
 base::expected<IwaComponentMetadata, IwaComponentUpdateError>

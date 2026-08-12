@@ -6,25 +6,27 @@
 
 #include <utility>
 
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/public/cpp/child_accounts/parent_access_controller.h"
 #include "ash/public/cpp/login/login_utils.h"
 #include "ash/public/cpp/login_screen.h"
 #include "ash/public/cpp/login_screen_model.h"
 #include "ash/webui/settings/public/constants/routes.mojom.h"
 #include "ash/webui/settings/public/constants/setting.mojom-shared.h"
+#include "base/check_deref.h"
 #include "base/check_is_test.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/ash/child_accounts/parent_access_code/parent_access_service.h"
 #include "chrome/browser/ash/login/existing_user_controller.h"
 #include "chrome/browser/ash/login/help_app_launcher.h"
 #include "chrome/browser/ash/login/lock/screen_locker.h"
 #include "chrome/browser/ash/login/login_auth_recorder.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/reauth_stats.h"
 #include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -33,14 +35,15 @@
 #include "chrome/browser/ui/ash/login/login_display_host_webui.h"
 #include "chrome/browser/ui/ash/login/user_adding_screen.h"
 #include "chrome/browser/ui/ash/wallpaper/wallpaper_controller_client_impl.h"
-#include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/browser/ui/webui/ash/lock_screen_reauth/lock_screen_reauth_dialogs.h"
 #include "chrome/browser/ui/webui/ash/login/l10n_util.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_provider.h"
+#include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
+#include "components/session_manager/core/session.h"
 #include "components/session_manager/core/session_manager.h"
+#include "components/user_manager/user_manager.h"
 #include "components/user_manager/user_names.h"
 #include "ui/base/ime/ash/input_method_manager.h"
 
@@ -53,10 +56,9 @@ LoginScreenClientImpl* g_login_screen_client_instance = nullptr;
 LoginScreenClientImpl::Delegate::Delegate() = default;
 LoginScreenClientImpl::Delegate::~Delegate() = default;
 
-LoginScreenClientImpl::ParentAccessDelegate::~ParentAccessDelegate() = default;
-
-LoginScreenClientImpl::LoginScreenClientImpl()
-    : auth_recorder_(std::make_unique<ash::LoginAuthRecorder>()) {
+LoginScreenClientImpl::LoginScreenClientImpl(PrefService* local_state)
+    : local_state_(CHECK_DEREF(local_state)),
+      auth_recorder_(std::make_unique<ash::LoginAuthRecorder>()) {
   // Register this object as the client interface implementation.
   ash::LoginScreen::Get()->SetClient(this);
 
@@ -308,12 +310,21 @@ void LoginScreenClientImpl::ShowParentAccessHelpApp() {
 }
 
 void LoginScreenClientImpl::ShowLockScreenNotificationSettings() {
-  chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
-      ProfileManager::GetActiveUserProfile(),
-      std::string(chromeos::settings::mojom::kSecurityAndSignInSubpagePathV2) +
-          "?settingId=" +
-          base::NumberToString(static_cast<int>(
-              chromeos::settings::mojom::Setting::kLockScreenNotification)));
+  // TODO(crbug.com/447287122): Revisit here to pass the appropriate user
+  // context here.
+  auto* session = session_manager::SessionManager::Get()->GetActiveSession();
+  if (!session) {
+    return;
+  }
+  ash::SettingsAppManager::Get()->Open(
+      CHECK_DEREF(
+          user_manager::UserManager::Get()->FindUser(session->account_id())),
+      {.sub_page = base::StrCat(
+           {chromeos::settings::mojom::kSecurityAndSignInSubpagePathV2,
+            "?settingId=",
+            base::NumberToString(
+                std::to_underlying(chromeos::settings::mojom::Setting::
+                                       kLockScreenNotification))})});
 }
 
 void LoginScreenClientImpl::OnFocusLeavingSystemTray(bool reverse) {
@@ -362,20 +373,21 @@ void LoginScreenClientImpl::ShowGuestTosScreen() {
 
 void LoginScreenClientImpl::OnMaxIncorrectPasswordAttempted(
     const AccountId& account_id) {
-  RecordReauthReason(account_id, ash::ReauthReason::kIncorrectPasswordEntered);
+  RecordReauthReason(local_state_.get(), account_id,
+                     ash::ReauthReason::kIncorrectPasswordEntered);
 }
 
 void LoginScreenClientImpl::SetPublicSessionKeyboardLayout(
     const AccountId& account_id,
     const std::string& locale,
-    base::Value::List keyboard_layouts) {
+    base::ListValue keyboard_layouts) {
   std::vector<ash::InputMethodItem> result;
 
   for (const auto& i : keyboard_layouts) {
     if (!i.is_dict()) {
       continue;
     }
-    const base::Value::Dict& dict = i.GetDict();
+    const base::DictValue& dict = i.GetDict();
 
     ash::InputMethodItem input_method_item;
     const std::string* ime_id = dict.FindString("value");
@@ -430,8 +442,8 @@ void LoginScreenClientImpl::ShowGaiaSigninInternal(
     // to remove the DumpWithoutCrashing if the number of reports will be low.
     base::debug::DumpWithoutCrashing();
     LOG(WARNING) << __func__ << ": ignoring the call, session state: "
-                 << static_cast<int>(session_manager::SessionManager::Get()
-                                         ->session_state());
+                 << std::to_underlying(session_manager::SessionManager::Get()
+                                           ->session_state());
   }
 }
 

@@ -9,6 +9,7 @@
 #import "base/task/thread_pool/thread_pool_instance.h"
 #import "components/commerce/core/commerce_feature_list.h"
 #import "components/data_sharing/public/features.h"
+#import "components/skills/features.h"
 #import "components/sync/base/command_line_switches.h"
 #import "components/sync/base/data_type.h"
 #import "components/sync/base/features.h"
@@ -18,6 +19,7 @@
 #import "ios/chrome/browser/history/model/history_service_factory.h"
 #import "ios/chrome/browser/saved_tab_groups/model/tab_group_sync_service_factory.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/webdata_services/model/web_data_service_factory.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/test/web_task_environment.h"
@@ -29,6 +31,8 @@ class SyncServiceFactoryTest : public PlatformTest {
  public:
   SyncServiceFactoryTest() {
     TestProfileIOS::Builder profile_builder;
+    profile_builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                                      SyncServiceFactory::GetDefaultFactory());
     // BOOKMARKS requires the FaviconService, which requires the HistoryService.
     profile_builder.AddTestingFactory(
         ios::FaviconServiceFactory::GetInstance(),
@@ -53,7 +57,7 @@ class SyncServiceFactoryTest : public PlatformTest {
  protected:
   // Returns the collection of default datatypes.
   syncer::DataTypeSet DefaultDatatypes() {
-    static_assert(59 == syncer::GetNumDataTypes(),
+    static_assert(67 == syncer::GetNumDataTypes(),
                   "When adding a new type, you probably want to add it here as "
                   "well (assuming it is already enabled).");
 
@@ -66,10 +70,7 @@ class SyncServiceFactoryTest : public PlatformTest {
     // types.
     datatypes.Put(syncer::AUTOFILL);
     datatypes.Put(syncer::AUTOFILL_PROFILE);
-    if (base::FeatureList::IsEnabled(
-            syncer::kSyncAutofillWalletCredentialData)) {
-      datatypes.Put(syncer::AUTOFILL_WALLET_CREDENTIAL);
-    }
+    datatypes.Put(syncer::AUTOFILL_WALLET_CREDENTIAL);
     datatypes.Put(syncer::AUTOFILL_WALLET_DATA);
     datatypes.Put(syncer::AUTOFILL_WALLET_METADATA);
     datatypes.Put(syncer::AUTOFILL_WALLET_OFFER);
@@ -107,6 +108,35 @@ class SyncServiceFactoryTest : public PlatformTest {
     }
     if (base::FeatureList::IsEnabled(syncer::kSyncContextualTask)) {
       datatypes.Put(syncer::CONTEXTUAL_TASK);
+    }
+    if (base::FeatureList::IsEnabled(features::kSkillsEnabled)) {
+      datatypes.Put(syncer::SKILL);
+    }
+    if (base::FeatureList::IsEnabled(syncer::kSyncGeminiThread)) {
+      datatypes.Put(syncer::GEMINI_THREAD);
+    }
+    if (base::FeatureList::IsEnabled(
+            syncer::kSyncEncryptedTabContextContainer)) {
+      datatypes.Put(syncer::ENCRYPTED_TAB_CONTEXT_CONTAINER);
+      datatypes.Put(syncer::ENCRYPTED_TAB_CONTEXT_ITEM);
+    }
+    if (base::FeatureList::IsEnabled(syncer::kSyncThemesIos)) {
+      datatypes.Put(syncer::THEMES_IOS);
+    }
+    if (base::FeatureList::IsEnabled(syncer::kSyncAccountSettings)) {
+      datatypes.Put(syncer::ACCOUNT_SETTING);
+    }
+    if (base::FeatureList::IsEnabled(syncer::kSyncAutofillValuable)) {
+      datatypes.Put(syncer::AUTOFILL_VALUABLE);
+    }
+    if (base::FeatureList::IsEnabled(syncer::kSyncAutofillValuableMetadata)) {
+      datatypes.Put(syncer::AUTOFILL_VALUABLE_METADATA);
+    }
+    if (base::FeatureList::IsEnabled(syncer::kSyncNotebook)) {
+      datatypes.Put(syncer::NOTEBOOK);
+    }
+    if (base::FeatureList::IsEnabled(syncer::kSyncJourney)) {
+      datatypes.Put(syncer::JOURNEY);
     }
     return datatypes;
   }

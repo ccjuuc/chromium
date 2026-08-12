@@ -6,6 +6,7 @@
 
 #import <set>
 
+#import "base/feature_list.h"
 #import "base/no_destructor.h"
 #import "base/strings/string_util.h"
 #import "base/strings/utf_string_conversions.h"
@@ -64,7 +65,8 @@ ContentWebFramesManager::ContentWebFramesManager(
   auto message_host_factory =
       std::make_unique<IOSWebMessageHostFactory>(web_message_callback);
   js_communication_host_->AddWebMessageHostFactory(
-      std::move(message_host_factory), u"webkitMessageHandler", {"*"});
+      std::move(message_host_factory), u"webkitMessageHandler", {"*"},
+      /* world_identifier= */ 0);
 
   std::vector<JavaScriptFeature*> java_script_features;
   java_script_features.push_back(GetSendWebKitMessageJavaScriptFeature());
@@ -81,6 +83,15 @@ ContentWebFramesManager::ContentWebFramesManager(
   js_feature_manager_ = std::make_unique<ContentJavaScriptFeatureManager>(
       std::move(java_script_features));
   js_feature_manager_->AddDocumentStartScripts(js_communication_host_.get());
+
+  // Handle frames that may already exist if WebContents was created before
+  // this observer was attached (e.g., when created with an opener).
+  content_web_state->GetWebContents()->ForEachRenderFrameHost(
+      [this](content::RenderFrameHost* render_frame_host) {
+        if (render_frame_host->IsRenderFrameLive()) {
+          RenderFrameCreated(render_frame_host);
+        }
+      });
 }
 
 ContentWebFramesManager::~ContentWebFramesManager() = default;
@@ -121,6 +132,12 @@ WebFrame* ContentWebFramesManager::GetFrameWithId(const std::string& frame_id) {
 
 void ContentWebFramesManager::RenderFrameCreated(
     content::RenderFrameHost* render_frame_host) {
+  // Guard against duplicate registration (e.g., if ForEachRenderFrameHost in
+  // constructor already registered this frame).
+  if (content_to_web_id_map_.contains(render_frame_host->GetGlobalId())) {
+    return;
+  }
+
   std::string web_frame_id = base::UnguessableToken::Create().ToString();
   auto web_frame = std::make_unique<ContentWebFrame>(
       web_frame_id, render_frame_host, content_web_state_);
@@ -160,15 +177,17 @@ void ContentWebFramesManager::DOMContentLoaded(
       render_frame_host->GetGlobalId();
   WebFrame* web_frame = WebFrameForContentId(content_id);
 
-  // Inject JavaScript to override `getFrameId` to return the WebFrame id chosen
-  // in `RenderFrameCreated`. This must happen even if the frame has already
-  // been added to `available_frame_hosts_`, since navigation to a new document
-  // will result in a fresh JavaScript execution context.
-  std::u16string format_string = u"__gCrWeb.frameId = '$1';";
-  std::u16string script_to_inject = base::ReplaceStringPlaceholders(
-      format_string, base::UTF8ToUTF16(web_frame->GetFrameId()),
-      /*offset=*/nullptr);
-  web_frame->ExecuteJavaScript(script_to_inject);
+  if (base::FeatureList::IsEnabled(kContentEnableInjectedFeatureScripts)) {
+    // Inject JavaScript to override `getFrameId` to return the WebFrame id
+    // chosen in `RenderFrameCreated`. This must happen even if the frame has
+    // already been added to `available_frame_hosts_`, since navigation to a new
+    // document will result in a fresh JavaScript execution context.
+    std::u16string format_string = u"__gCrWeb.frameId = '$1';";
+    std::u16string script_to_inject = base::ReplaceStringPlaceholders(
+        format_string, base::UTF8ToUTF16(web_frame->GetFrameId()),
+        /*offset=*/nullptr);
+    web_frame->ExecuteJavaScript(script_to_inject);
+  }
 
   js_feature_manager_->InjectDocumentEndScripts(render_frame_host);
 
@@ -208,7 +227,7 @@ void ContentWebFramesManager::ScriptMessageReceived(
   // `script_message`, a new ScriptMessage is constructed with only the actual
   // message intended for the handler.
 
-  base::Value::Dict* dict = script_message.body()->GetIfDict();
+  base::DictValue* dict = script_message.legacy_body()->GetIfDict();
   if (!dict) {
     return;
   }
@@ -222,7 +241,7 @@ void ContentWebFramesManager::ScriptMessageReceived(
   ScriptMessage message_for_handler(
       std::make_unique<base::Value>(std::move(*message_content)),
       script_message.is_user_interacting(), script_message.is_main_frame(),
-      script_message.request_url());
+      script_message.request_url(), script_message.security_origin());
 
   js_feature_manager_->ScriptMessageReceived(message_for_handler, *handler_name,
                                              content_web_state_);

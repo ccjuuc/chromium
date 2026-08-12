@@ -43,11 +43,12 @@ AXWebArea
 ++++++++AXStaticText AXValue='Cell at level 1'
 ++++++AXCell
 ++++++++AXStaticText AXValue='Cell at level 2'
+++++AXGroup AXSubrole=AXEmptyGroup
+++AXList AXSubrole=AXContentList
 ++++AXGroup
-++AXGroup
-++++AXStaticText AXValue='List item at level 1'
-++AXGroup
-++++AXStaticText AXValue='List item at level 3'
+++++++AXStaticText AXValue='List item at level 1'
+++++AXGroup
+++++++AXStaticText AXValue='List item at level 3'
 ++AXList AXSubrole=AXContentList
 ++++AXGroup
 ++++++AXStaticText AXValue='List item at level 2'

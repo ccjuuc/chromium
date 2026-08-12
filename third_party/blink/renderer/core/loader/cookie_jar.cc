@@ -11,6 +11,7 @@
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/rand_util.h"
 #include "base/strings/strcat.h"
 #include "base/time/time.h"
@@ -75,46 +76,24 @@ void CookieJar::Trace(Visitor* visitor) const {
   visitor->Trace(document_);
 }
 
-void CookieJar::SetCookie(const String& value) {
+bool CookieJar::SetCookie(const String& value) {
   TRACE_EVENT("blink", "CookieJar::SetCookie");
   KURL cookie_url = document_->CookieURL();
-  if (cookie_url.IsEmpty())
-    return;
+  if (cookie_url.IsEmpty()) {
+    return false;
+  }
 
   base::ElapsedTimer timer;
   RequestRestrictedCookieManagerIfNeeded();
   bool is_ad_tagged =
       document_->GetFrame() && document_->GetFrame()->IsAdFrame();
 
-  CookiesResponsePtr response;
-  const bool get_version_shared_memory =
-      !shared_memory_version_client_.has_value();
   const bool apply_devtools_overrides = ShouldApplyDevtoolsOverrides();
-  if (RuntimeEnabledFeatures::AsyncSetCookieEnabled()) {
-    required_committed_writes_++;
-    backend_->SetCookieFromString(
-        cookie_url, document_->SiteForCookies(), document_->TopFrameOrigin(),
-        document_->GetExecutionContext()->GetStorageAccessApiStatus(),
-        get_version_shared_memory, is_ad_tagged, apply_devtools_overrides,
-        value,
-        BindOnce(&CookieJar::OnSetCookieResponse, WrapWeakPersistent(this),
-                 cookie_url, apply_devtools_overrides));
-  } else {
-    if (!backend_->SetCookieFromString(
-            cookie_url, document_->SiteForCookies(),
-            document_->TopFrameOrigin(),
-            document_->GetExecutionContext()->GetStorageAccessApiStatus(),
-            get_version_shared_memory, is_ad_tagged, apply_devtools_overrides,
-            value, &response)) {
-      // On IPC failure invalidate cached values and return empty string since
-      // there is no guarantee the client can still validly access cookies in
-      // the current context. See crbug.com/1468909.
-      InvalidateCache();
-      return;
-    }
-    OnSetCookieResponse(cookie_url, apply_devtools_overrides,
-                        std::move(response));
-  }
+  required_committed_writes_++;
+  backend_->SetCookieFromString(
+      cookie_url, document_->SiteForCookies(), document_->TopFrameOrigin(),
+      document_->GetExecutionContext()->GetStorageAccessApiStatus(),
+      is_ad_tagged, apply_devtools_overrides, value);
   last_operation_was_set_ = true;
 
   base::TimeDelta elapsed = timer.Elapsed();
@@ -132,27 +111,7 @@ void CookieJar::SetCookie(const String& value) {
   if (is_first_operation_) {
     LogFirstCookieRequest(FirstCookieRequest::kFirstOperationWasSet);
   }
-}
-
-void CookieJar::OnSetCookieResponse(const KURL& cookie_url,
-                                    bool apply_devtools_overrides,
-                                    CookiesResponsePtr response) {
-  if (response) {
-    if (response->version_buffer.IsValid()) {
-      shared_memory_version_client_.emplace(
-          std::move(response->version_buffer));
-    }
-
-    // When features GetCookiesOnSet is disabled, an invalid version is
-    // returned, then don't update the cache.
-    if (response->version != mojo::shared_memory_version::kInvalidVersion &&
-        response->version > last_version_) {
-      last_devtools_overrides_were_applied = apply_devtools_overrides;
-      last_cookies_ = response->cookies;
-      UpdateCacheAfterGetRequest(cookie_url, response->cookies,
-                                 response->version);
-    }
-  }
+  return true;
 }
 
 void CookieJar::OnBackendDisconnect() {
@@ -214,9 +173,10 @@ String CookieJar::Cookies() {
   constexpr int kMinTimeMicros = 10;
   constexpr int kMaxTimeMicros = 1 * 1000 * 1000;  // 1 second
   if (ipc_needed) {
-    base::UmaHistogramCustomCounts("Blink.CookiesTime.IpcNeeded2",
-                                   elapsed.InMicroseconds(), kMinTimeMicros,
-                                   kMaxTimeMicros, 50);
+    base::UmaHistogramCustomCounts(
+        "Blink.CookiesTime.IpcNeeded2",
+        base::saturated_cast<int>(elapsed.InMicroseconds()), kMinTimeMicros,
+        kMaxTimeMicros, 50);
 
     // Temporary histograms to investigate https://crbug.com/414748254.
     switch (pipe_state) {
@@ -232,9 +192,10 @@ String CookieJar::Cookies() {
         break;
     }
   } else {
-    base::UmaHistogramCustomCounts("Blink.CookiesTime.IpcNotNeeded2",
-                                   elapsed.InMicroseconds(), kMinTimeMicros,
-                                   kMaxTimeMicros, 50);
+    base::UmaHistogramCustomCounts(
+        "Blink.CookiesTime.IpcNotNeeded2",
+        base::saturated_cast<int>(elapsed.InMicroseconds()), kMinTimeMicros,
+        kMaxTimeMicros, 50);
   }
 
   // We should run the ablation study only for scenarios with ipc.

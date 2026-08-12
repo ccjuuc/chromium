@@ -12,6 +12,26 @@ import("//testing/test.gni")
 import("//third_party/blink/public/public_features.gni")
 import("//third_party/blink/renderer/config.gni")
 
+declare_args() {
+  # Enable active iterator counting in blink::HeapVector to detect
+  # use-after-free.
+  enable_heap_vector_active_iterator_checks = false
+
+  # Enable active iterator counting in non-garbage-collected blink::Vector
+  # (i.e. PartitionAllocator-backed) to detect use-after-free.
+  enable_vector_active_iterator_checks = false
+}
+
+buildflag_header("wtf_buildflags") {
+  header = "wtf_buildflags.h"
+  header_dir = "third_party/blink/renderer/platform/wtf"
+
+  flags = [
+    "ENABLE_HEAP_VECTOR_ACTIVE_ITERATOR_CHECKS=$enable_heap_vector_active_iterator_checks",
+    "ENABLE_VECTOR_ACTIVE_ITERATOR_CHECKS=$enable_vector_active_iterator_checks",
+  ]
+}
+
 visibility = [
   ":*",
   "//:gn_all",
@@ -131,6 +151,8 @@ component("wtf") {
     "text/copy_lchars_from_uchar_source.h",
     "text/encoding_tables.cc",
     "text/encoding_tables.h",
+    "text/format.cc",
+    "text/format.h",
     "text/ignoring_ascii_case_hash.h",
     "text/integer_to_string_conversion.h",
     "text/line_ending.cc",
@@ -152,6 +174,7 @@ component("wtf") {
     "text/string_hasher.h",
     "text/string_impl.cc",
     "text/string_impl.h",
+    "text/string_internal.h",
     "text/string_operators.h",
     "text/string_operators_atomic.h",
     "text/string_statics.cc",
@@ -205,6 +228,7 @@ component("wtf") {
     "type_traits.h",
     "uuid.cc",
     "uuid.h",
+    "vector.cc",
     "vector.h",
     "vector_backed_linked_list.h",
     "vector_traits.h",
@@ -218,6 +242,7 @@ component("wtf") {
     "//third_party/blink/renderer:config",
     "//third_party/blink/renderer:non_test_config",
     "//third_party/blink/renderer:blink_pch",
+    "//third_party/blink/renderer:inside_blink",
   ]
 
   defines = [ "WTF_IMPLEMENTATION=1" ]
@@ -232,15 +257,18 @@ component("wtf") {
     "//third_party/blink/public/common",
     "//third_party/modp_b64",
     "//third_party/rapidhash",
+    "//third_party/simdutf",
 
     # TODO(tkent): WTF should not depend on it.
     "//third_party/blink/public/common:headers",
   ]
 
   public_deps = [
+    ":wtf_buildflags",
     "//base",
     "//base/third_party/double_conversion",
     "//components/crash/core/common:crash_key",
+    "//third_party/highway:libhwy",
     "//third_party/icu",
   ]
 
@@ -291,6 +319,31 @@ component("wtf") {
 
 test("wtf_unittests") {
   deps = [ ":wtf_unittests_sources" ]
+  fuzztests = [
+    "TextCodecUtf8FuzzTest.DecodeFastPathMatchesLegacy",
+    "TextCodecUtf8FuzzTest.DecodeStreamingFastPathMatchesLegacy",
+  ]
+}
+
+test("wtf_perf_tests") {
+  sources = [
+    "testing/run_all_tests.cc",
+    "text/string_simd_perf_test.cc",
+    "text/utf8_perf_test.cc",
+  ]
+
+  configs += [
+    "//third_party/blink/renderer:config",
+    "//third_party/blink/renderer:blink_pch",
+  ]
+
+  deps = [
+    ":wtf",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gmock",
+    "//testing/gtest",
+  ]
 }
 
 source_set("wtf_unittests_sources") {
@@ -318,7 +371,6 @@ source_set("wtf_unittests_sources") {
     "linked_hash_set_test.cc",
     "math_extras_test.cc",
     "pod_arena_test.cc",
-    "pod_arena_test_helpers.h",
     "pod_free_list_arena_test.cc",
     "pod_interval_tree_test.cc",
     "pod_red_black_tree_test.cc",
@@ -335,12 +387,14 @@ source_set("wtf_unittests_sources") {
     "text/case_map_test.cc",
     "text/code_point_iterator_test.cc",
     "text/encoding_tables_test.cc",
+    "text/format_test.cc",
     "text/ignoring_ascii_case_hash_test.cc",
     "text/integer_to_string_conversion_test.cc",
     "text/line_ending_test.cc",
     "text/math_transform_test.cc",
     "text/strcat_test.cc",
     "text/string_buffer_test.cc",
+    "text/string_builder_stream_test.cc",
     "text/string_builder_test.cc",
     "text/string_hasher_test.cc",
     "text/string_impl_test.cc",
@@ -352,6 +406,7 @@ source_set("wtf_unittests_sources") {
     "text/text_codec_replacement_test.cc",
     "text/text_codec_test.cc",
     "text/text_codec_utf8_test.cc",
+    "text/text_encoding_registry_test.cc",
     "text/text_encoding_test.cc",
     "text/text_offset_map_test.cc",
     "text/utf16_test.cc",
@@ -373,6 +428,7 @@ source_set("wtf_unittests_sources") {
   configs += [
     "//third_party/blink/renderer:config",
     "//third_party/blink/renderer:blink_pch",
+    "//third_party/blink/renderer:inside_blink",
   ]
 
   deps = [
@@ -381,6 +437,7 @@ source_set("wtf_unittests_sources") {
     "//base/test:test_support",
     "//testing/gmock",
     "//testing/gtest",
+    "//third_party/fuzztest",
   ]
 
   # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and

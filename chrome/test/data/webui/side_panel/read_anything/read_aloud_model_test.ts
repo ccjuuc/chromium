@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 import {getReadAloudModel, ReadAloudNode, setInstance} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import type {DomReadAloudNode} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
-import {assertEquals} from 'chrome-untrusted://webui-test/chai_assert.js';
+import {assertEquals, assertFalse, assertTrue} from 'chrome-untrusted://webui-test/chai_assert.js';
 import {microtasksFinished} from 'chrome-untrusted://webui-test/test_util.js';
 
 
@@ -123,6 +123,33 @@ suite('ReadAloudModel', () => {
     getReadAloudModel().init(ReadAloudNode.create(document.body)!);
 
     assertEquals('film a', getReadAloudModel().getCurrentTextContent().trim());
+
+    getReadAloudModel().moveSpeechForward();
+    assertTextEmpty();
+  });
+
+  test('getCurrentText separates table cells', async () => {
+    const table = document.createElement('table');
+    const row = document.createElement('tr');
+    const cell1 = document.createElement('td');
+    cell1.textContent = 'Siblings';
+    const cell2 = document.createElement('td');
+    cell2.textContent = 'Hestia';
+
+    row.appendChild(cell1);
+    row.appendChild(cell2);
+    table.appendChild(row);
+    document.body.appendChild(table);
+
+    await microtasksFinished();
+
+    getReadAloudModel().init(ReadAloudNode.create(document.body)!);
+
+    assertEquals(
+        'Siblings', getReadAloudModel().getCurrentTextContent().trim());
+
+    getReadAloudModel().moveSpeechForward();
+    assertEquals('Hestia', getReadAloudModel().getCurrentTextContent().trim());
 
     getReadAloudModel().moveSpeechForward();
     assertTextEmpty();
@@ -1378,6 +1405,40 @@ suite('ReadAloudModel', () => {
         assertTextEmpty();
       });
 
+  test('getCurrentTextSegments superscript with only whitespace', async () => {
+    // Create HTML:
+    // <p>Backed the losing side.</p>
+    // <p><sup>1</sup><sup> </sup>Florence Vassy.</p>
+    const p1 = document.createElement('p');
+    p1.textContent = 'Backed the losing side.';
+
+    const p2 = document.createElement('p');
+    const sup1 = document.createElement('sup');
+    sup1.textContent = '1';
+    p2.appendChild(sup1);
+
+    const sup2 = document.createElement('sup');
+    sup2.textContent = ' ';
+    p2.appendChild(sup2);
+
+    p2.appendChild(document.createTextNode('Florence Vassy.'));
+
+    document.body.appendChild(p1);
+    document.body.appendChild(p2);
+
+    await microtasksFinished();
+    getReadAloudModel().init(ReadAloudNode.create(document.body)!);
+    assertEquals(
+        'Backed the losing side.\n1',
+        getReadAloudModel().getCurrentTextContent().trim());
+    getReadAloudModel().moveSpeechForward();
+    assertEquals(
+        'Florence Vassy.', getReadAloudModel().getCurrentTextContent().trim());
+
+    getReadAloudModel().moveSpeechForward();
+    assertTextEmpty();
+  });
+
   test(
       'getCurrentTextSegments superscript combined with preceding sentence instead of succeeding sentence',
       async () => {
@@ -2055,4 +2116,76 @@ suite('ReadAloudModel', () => {
         expectHighlightAtIndexMatchesEmpty((segment4 + node2Text).length - 1);
         expectHighlightAtIndexMatchesEmpty((segment4 + node2Text).length);
       });
+
+  test(
+      'getCurrentText does not return hidden text from image captions',
+      async () => {
+        const visibleTextBefore = document.createElement('p');
+        visibleTextBefore.textContent = 'Look at this photograph';
+
+        // This structure mimics a hidden image with a caption.
+        const hiddenFigure = document.createElement('figure');
+        hiddenFigure.style.display = 'none';
+        const img = document.createElement('img');
+        img.src = 'image.png';
+        const figcaption = document.createElement('figcaption');
+        figcaption.textContent =
+            'Every time I do, every time I do it makes me laugh.';
+        hiddenFigure.appendChild(img);
+        hiddenFigure.appendChild(figcaption);
+
+        const visibleTextAfter = document.createElement('p');
+        visibleTextAfter.textContent =
+            'Every memory of looking out the back door.';
+
+        document.body.appendChild(visibleTextBefore);
+        document.body.appendChild(hiddenFigure);
+        document.body.appendChild(visibleTextAfter);
+
+        await microtasksFinished();
+
+        getReadAloudModel().init(ReadAloudNode.create(document.body)!);
+
+        assertEquals(
+            visibleTextBefore.textContent,
+            getReadAloudModel().getCurrentTextContent().trim());
+
+        getReadAloudModel().moveSpeechForward();
+        assertEquals(
+            visibleTextAfter.textContent,
+            getReadAloudModel().getCurrentTextContent().trim());
+
+        getReadAloudModel().moveSpeechForward();
+        assertTextEmpty();
+      });
+
+  test('resetModel resets initialized and current text content', async () => {
+    const paragraph = document.createElement('p');
+    paragraph.textContent = 'Hello world.';
+    document.body.appendChild(paragraph);
+    await microtasksFinished();
+
+    getReadAloudModel().init(ReadAloudNode.create(document.body)!);
+    assertTrue(getReadAloudModel().isInitialized());
+    assertEquals(
+        'Hello world.', getReadAloudModel().getCurrentTextContent().trim());
+
+    getReadAloudModel().resetModel?.();
+
+    assertFalse(getReadAloudModel().isInitialized());
+    assertEquals('', getReadAloudModel().getCurrentTextContent());
+  });
+
+
+  test('init does not initialize on empty DocumentFragment', () => {
+    const fragment = document.createDocumentFragment();
+    getReadAloudModel().init(ReadAloudNode.create(fragment)!);
+    assertFalse(getReadAloudModel().isInitialized());
+  });
+
+  test('init initializes on empty regular element', () => {
+    const div = document.createElement('div');
+    getReadAloudModel().init(ReadAloudNode.create(div)!);
+    assertTrue(getReadAloudModel().isInitialized());
+  });
 });

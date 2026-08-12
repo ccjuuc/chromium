@@ -25,6 +25,11 @@ public class HubColorBlendAnimatorSetHelper {
         mColorBlendList = new ArrayList<>();
     }
 
+    /** Unregisters a {@link HubViewColorBlend} to cease receiving color scheme updates. */
+    public void unregisterBlend(HubViewColorBlend colorBlend) {
+        mColorBlendList.remove(colorBlend);
+    }
+
     /**
      * Set the list of {@link HubViewColorBlend} objects which will be used to create the Animators
      * in the AnimatorSet. The primary use of this method is for dependency injection during
@@ -45,13 +50,13 @@ public class HubColorBlendAnimatorSetHelper {
         return this;
     }
 
-    /** Set the previous color scheme of the Hub which will be used in animations. */
+    /** Set the new color scheme of the Hub which will be used in animations. */
     public HubColorBlendAnimatorSetHelper setNewColorScheme(@HubColorScheme int colorScheme) {
         mNewColorScheme = colorScheme;
         return this;
     }
 
-    /** Set the new color scheme of the Hub which will be used in animations. */
+    /** Set the previous color scheme of the Hub which will be used in animations. */
     public HubColorBlendAnimatorSetHelper setPreviousColorScheme(@HubColorScheme int colorScheme) {
         mPrevColorScheme = colorScheme;
         return this;
@@ -77,5 +82,13 @@ public class HubColorBlendAnimatorSetHelper {
         AnimatorSet animatorSet = new AnimatorSet();
         animatorSet.playTogether(animatorsList);
         return animatorSet;
+    }
+
+    /** Updates real-time color blend progress across all registered blends. */
+    public void updateColorBlendProgress(
+            @HubColorScheme int startScheme, @HubColorScheme int endScheme, float fraction) {
+        for (HubViewColorBlend colorBlend : mColorBlendList) {
+            colorBlend.updateProgress(startScheme, endScheme, fraction);
+        }
     }
 }

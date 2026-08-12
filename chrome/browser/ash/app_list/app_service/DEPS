@@ -22,7 +22,6 @@ include_rules = [
   "+chrome/browser/ash/crostini",
   "+chrome/browser/ash/guest_os",
   "+chrome/browser/ash/login/demo_mode",
-  "+chrome/browser/ash/plugin_vm",
   "+chrome/browser/ash/remote_apps",
   "+chrome/browser/ash/system_web_apps",
   "+chrome/browser/extensions/chrome_app_icon.h",
@@ -33,9 +32,7 @@ include_rules = [
   "+chrome/browser/ui/ash/shelf",
   "+chrome/browser/ui/browser_commands.h",
   "+chrome/browser/ui/browser.h",
-  "+chrome/browser/ui/chrome_pages.h",
   "+chrome/browser/ui/web_applications",
-  "+chrome/browser/ui/webui/ash/settings/app_management",
   "+chrome/browser/web_applications/mojom",
   "+chrome/browser/web_applications/test",
   "+chrome/browser/web_applications/web_app_command_manager.h",
@@ -43,10 +40,14 @@ include_rules = [
   "+chrome/browser/web_applications/web_app_install_info.h",
   "+chrome/browser/web_applications/web_app_provider.h",
   "+chrome/common/chrome_constants.h",
-  "+chrome/common/chrome_features.h",
   "+chrome/common/chrome_switches.h",
   "+chrome/common/extensions",
-  "+chrome/common/pref_names.h",
-  "+chrome/grit",
   "+chrome/test/base",
 ]
+
+specific_include_rules = {
+  "app_service_app_model_builder_unittest\\.cc": [
+    "+chrome/browser/ash/settings/scoped_cros_settings_test_helper.h",
+    "+chrome/grit",
+  ],
+}

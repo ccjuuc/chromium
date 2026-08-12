@@ -66,9 +66,9 @@ class VIZ_SERVICE_EXPORT BufferQueue {
 
   // Called by the user of this object to indicate that the buffer currently
   // marked for drawing should be moved to the list of in-flight buffers.
-  // |damage| represents the rectangle containing the damaged area since the
-  // last SwapBuffers.
-  void SwapBuffers(const gfx::Rect& damage);
+  // `UpdateBufferDamage()` should have been called with the damage for this
+  // frame before calling this method.
+  void SwapBuffers();
 
   // Called by the user of this object to indicate that a previous request to
   // swap buffers has completed. This allows us to correctly keep track of the
@@ -77,12 +77,6 @@ class VIZ_SERVICE_EXPORT BufferQueue {
   // marked as in-flight will now be marked as displayed. Otherwise, next
   // in-flight will be marked as available and displayed will be unchanged.
   void SwapBuffersComplete(bool did_present);
-
-  // Called when SwapBuffers is skipped this frame. Damages allocated buffers,
-  // but does not advance |in_flight_buffers_| or |current_buffer_|. We don't
-  // clear the damage on |current_buffer_| because it hasn't been displayed yet.
-  // SwapBuffersComplete() must not be called for skipped swap.
-  void SwapBuffersSkipped(const gfx::Rect& damage);
 
   // If |size| or |color_space| correspond to a change of state, frees all
   // the buffers and reallocatess |number_of_buffers_| buffers. Otherwise, it's
@@ -96,6 +90,9 @@ class VIZ_SERVICE_EXPORT BufferQueue {
   // |supports_dynamic_frame_buffer_allocation| is true, and allocates those
   // buffers if necessary. If |n| <= |number_of_buffers_| this is a no-op.
   void EnsureMinNumberOfBuffers(size_t n);
+
+  // Returns the number of currently allocated buffers.
+  int GetCurrentAllocatedBuffers() const;
 
   // Free all buffers and allocate |number_of_buffers_| new ones.
   // Note: SwapBuffersComplete() calls are still expected for all current
@@ -120,6 +117,10 @@ class VIZ_SERVICE_EXPORT BufferQueue {
   // when delegating to system compositor, and if the platform support purgeable
   // shared images.
   void SetBuffersPurgeable();
+
+  // Unions `damage` to all allocated buffers except `current_buffer_` which
+  // hasn't been displayed yet.
+  void UpdateBufferDamage(const gfx::Rect& damage);
 
  private:
   friend class BufferQueueTest;
@@ -147,10 +148,6 @@ class VIZ_SERVICE_EXPORT BufferQueue {
   // Sets `buffer`s shared image as `purgeable` and returns true if the value
   // changed.
   bool SetBufferPurgeable(AllocatedBuffer& buffer, bool purgeable);
-
-  // Unions |damage| to all allocated buffers except |current_buffer_| which
-  // hasn't been displayed yet.
-  void UpdateBufferDamage(const gfx::Rect& damage);
 
   // Allocates |n| buffers and pushes them into |available_buffers_|.
   void AllocateBuffers(size_t n);

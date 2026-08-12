@@ -9,6 +9,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -40,21 +41,26 @@ import android.os.Build;
 import android.provider.Settings;
 import android.view.ActionMode;
 import android.view.Menu;
+import android.view.View;
 import android.view.ViewGroup;
 import android.view.textclassifier.TextClassification;
 
+import androidx.test.filters.SmallTest;
+
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
+import org.mockito.Spy;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 import org.robolectric.fakes.RoboMenu;
-import org.robolectric.shadows.ShadowLog;
 import org.robolectric.util.ReflectionHelpers;
 
 import org.chromium.base.ContextUtils;
@@ -62,6 +68,8 @@ import org.chromium.base.IntentUtils;
 import org.chromium.base.SelectionActionMenuClientWrapper.MenuType;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features;
+import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.content.browser.GestureListenerManagerImpl;
 import org.chromium.content.browser.PopupController;
@@ -80,14 +88,17 @@ import org.chromium.content_public.browser.SelectionPopupController;
 import org.chromium.content_public.browser.selection.SelectionActionMenuDelegate;
 import org.chromium.content_public.browser.selection.SelectionDropdownMenuDelegate;
 import org.chromium.content_public.browser.test.util.TestSelectionDropdownMenuDelegate;
+import org.chromium.content_public.common.ContentFeatures;
 import org.chromium.ui.base.ViewAndroidDelegate;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.listmenu.ListItemType;
 import org.chromium.ui.listmenu.ListMenuItemProperties;
 import org.chromium.ui.listmenu.ListMenuSubmenuItemProperties;
 import org.chromium.ui.listmenu.MenuModelBridge;
 import org.chromium.ui.modelutil.MVCListAdapter;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
+import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.mojom.MenuSourceType;
 import org.chromium.ui.touch_selection.SelectionEventType;
@@ -101,7 +112,9 @@ import java.util.List;
 /** Unit tests for {@link SelectionPopupController}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
+@Features.EnableFeatures({ContentFeatures.NO_SELECTION_MENU_CACHING})
 public class SelectionPopupControllerTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     private MenuModelBridge mMenuModelBridge;
     private SelectionPopupControllerImpl mController;
     private Context mContext;
@@ -121,6 +134,7 @@ public class SelectionPopupControllerTest {
     private GestureListenerManagerImpl mGestureStateListenerManager;
     private RenderFrameHost mRenderFrameHost;
     private ActionModeCallback mActionModeCallback;
+    private @Spy TestSelectionClient mTestSelectionClient = new TestSelectionClient();
 
     private static final String MOUNTAIN_FULL = "585 Franklin Street, Mountain View, CA 94041";
     private static final String MOUNTAIN = "Mountain";
@@ -178,8 +192,6 @@ public class SelectionPopupControllerTest {
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
-        ShadowLog.stream = System.out;
 
         mContext = Mockito.mock(Context.class);
         mWeakContext = new WeakReference<Context>(mContext);
@@ -212,6 +224,7 @@ public class SelectionPopupControllerTest {
         when(mContext.obtainStyledAttributes(Mockito.any(int[].class))).thenReturn(mTypedArray);
         when(mWebContents.getRenderWidgetHostView()).thenReturn(mRenderWidgetHostViewImpl);
         when(mWebContents.getRenderCoordinates()).thenReturn(mRenderCoordinates);
+        when(mView.isAttachedToWindow()).thenReturn(true);
         when(mRenderCoordinates.getDeviceScaleFactor()).thenReturn(1.f);
         when(mWebContents.getViewAndroidDelegate()).thenReturn(mViewAndroidDelegate);
         when(mWebContents.getContext()).thenReturn(mContext);
@@ -221,6 +234,7 @@ public class SelectionPopupControllerTest {
         when(mMenuModelBridge.getListItems()).thenReturn(List.of());
 
         mController = SelectionPopupControllerImpl.createForTesting(mWebContents, mPopupController);
+        mTestSelectionClient.setResultCallback(mController.getResultCallback());
         GestureListenerManagerImpl.setInstanceForTesting(mGestureStateListenerManager);
     }
 
@@ -552,6 +566,25 @@ public class SelectionPopupControllerTest {
     }
 
     @Test
+    @Feature({"TextInput", "Magnifier"})
+    public void testSetUseWindowReadbackView() {
+        View windowReadbackView = Mockito.mock(View.class);
+        when(mWindowAndroid.getReadbackView()).thenReturn(windowReadbackView);
+        SelectionPopupControllerImpl.setShouldGetReadbackViewFromWindowAndroid();
+
+        // Default: sShouldGetReadbackViewFromWindowAndroid is true, so returns windowReadbackView.
+        assertEquals(windowReadbackView, mController.getReadbackViewCallback().getReadbackView());
+
+        // When useWindowReadbackView is explicitly set to false, it overrides to mView.
+        mController.setUseWindowReadbackView(false);
+        assertEquals(mView, mController.getReadbackViewCallback().getReadbackView());
+
+        // When useWindowReadbackView is explicitly set to true, it returns windowReadbackView.
+        mController.setUseWindowReadbackView(true);
+        assertEquals(windowReadbackView, mController.getReadbackViewCallback().getReadbackView());
+    }
+
+    @Test
     @Feature({"TextInput", "HandleHapticFeedback"})
     public void testInsertionHandleHapticFeedback() {
         SelectionPopupControllerImpl spyController = Mockito.spy(mController);
@@ -683,7 +716,7 @@ public class SelectionPopupControllerTest {
         SelectionPopupControllerImpl spyController = Mockito.spy(mController);
 
         // test activityInfo exported=false
-        List<ResolveInfo> list1 = new ArrayList();
+        List<ResolveInfo> list1 = new ArrayList<>();
         ResolveInfo resolveInfo1 = createResolveInfoWithActivityInfo("ProcessTextActivity1", false);
         list1.add(resolveInfo1);
         when(mPackageManager.queryIntentActivities(any(Intent.class), anyInt())).thenReturn(list1);
@@ -694,7 +727,7 @@ public class SelectionPopupControllerTest {
         assertEquals(0, menu1.size());
 
         // test activityInfo exported=true
-        List<ResolveInfo> list2 = new ArrayList();
+        List<ResolveInfo> list2 = new ArrayList<>();
         ResolveInfo resolveInfo2 = createResolveInfoWithActivityInfo("ProcessTextActivity2", true);
         list2.add(resolveInfo2);
         when(mPackageManager.queryIntentActivities(any(Intent.class), anyInt())).thenReturn(list2);
@@ -705,7 +738,7 @@ public class SelectionPopupControllerTest {
         assertEquals(1, menu2.size());
 
         // test null activityInfo
-        List<ResolveInfo> list3 = new ArrayList();
+        List<ResolveInfo> list3 = new ArrayList<>();
         ResolveInfo resolveInfo3 = new ResolveInfo();
         resolveInfo3.activityInfo = null;
         list3.add(resolveInfo3);
@@ -831,6 +864,7 @@ public class SelectionPopupControllerTest {
     }
 
     @Test
+    @Features.DisableFeatures({ContentFeatures.NO_SELECTION_MENU_CACHING})
     public void testMenuIsCachedForSameSelectionStateIfDelegateIsNull() {
         Assert.assertNull(mController.getSelectionMenuCachedResultForTesting());
 
@@ -853,6 +887,143 @@ public class SelectionPopupControllerTest {
     }
 
     @Test
+    @Features.DisableFeatures({ContentFeatures.NO_SELECTION_MENU_CACHING})
+    public void testCacheHitBypassesClassificationRequest() {
+        Assert.assertNull(mController.getSelectionMenuCachedResultForTesting());
+
+        when(mView.startActionMode(any(), anyInt())).thenReturn(mActionMode);
+
+        SelectionClient.Result result = resultForNoChange();
+        mTestSelectionClient.setResult(result);
+        mController.setSelectionClient(mTestSelectionClient);
+
+        // First show: Cache miss, should call requestSelectionPopupUpdates
+        showSelectionMenu(
+                mController,
+                AMPHITHEATRE_FULL,
+                /* selectionStartOffset= */ 0,
+                MenuSourceType.MOUSE);
+        mController.getPendingSelectionMenu(MenuType.FLOATING);
+
+        Mockito.verify(mTestSelectionClient, times(1)).requestSelectionPopupUpdates(anyBoolean());
+        Assert.assertNotNull(mController.getSelectionMenuCachedResultForTesting());
+
+        // Second show (same selection): Cache hit, should NOT call requestSelectionPopupUpdates
+        showSelectionMenu(
+                mController,
+                AMPHITHEATRE_FULL,
+                /* selectionStartOffset= */ 0,
+                MenuSourceType.MOUSE);
+
+        // Verify it was still only called once (from the first show)
+        Mockito.verify(mTestSelectionClient, times(1)).requestSelectionPopupUpdates(anyBoolean());
+    }
+
+    @Test
+    @Features.DisableFeatures({ContentFeatures.NO_SELECTION_MENU_CACHING})
+    public void testSelectionHandlesCleared_clearsClassificationResult() {
+        when(mView.startActionMode(any(), anyInt())).thenReturn(mActionMode);
+        mTestSelectionClient.setResult(resultForNoChange());
+        mController.setSelectionClient(mTestSelectionClient);
+
+        // Populate cache and mClassificationResult
+        showSelectionMenu(mController, AMPHITHEATRE_FULL, 0, MenuSourceType.MOUSE);
+        mController.getPendingSelectionMenu(MenuType.FLOATING);
+        Assert.assertNotNull(mController.getClassificationResult());
+
+        // Trigger SELECTION_HANDLES_CLEARED
+        mController.onSelectionEvent(SelectionEventType.SELECTION_HANDLES_CLEARED, 0, 0, 0, 0);
+
+        // Verify mClassificationResult is cleared
+        Assert.assertNull(mController.getClassificationResult());
+
+        // Next show should be a cache hit (restored from cache)
+        showSelectionMenu(mController, AMPHITHEATRE_FULL, 0, MenuSourceType.MOUSE);
+        Assert.assertNotNull(mController.getClassificationResult());
+        Mockito.verify(mTestSelectionClient, times(1)).requestSelectionPopupUpdates(anyBoolean());
+    }
+
+    @Test
+    @Features.DisableFeatures({ContentFeatures.NO_SELECTION_MENU_CACHING})
+    public void testSelectionChangedToEmpty_clearsClassificationResult() {
+        when(mView.startActionMode(any(), anyInt())).thenReturn(mActionMode);
+        mTestSelectionClient.setResult(resultForNoChange());
+        mController.setSelectionClient(mTestSelectionClient);
+
+        // Populate cache and mClassificationResult
+        showSelectionMenu(mController, AMPHITHEATRE_FULL, 0, MenuSourceType.MOUSE);
+        mController.getPendingSelectionMenu(MenuType.FLOATING);
+        Assert.assertNotNull(mController.getClassificationResult());
+
+        // Trigger onSelectionChanged("") (unselect)
+        mController.onSelectionChanged("");
+
+        // Verify mClassificationResult is cleared
+        Assert.assertNull(mController.getClassificationResult());
+
+        // Next show should be a cache hit
+        showSelectionMenu(mController, AMPHITHEATRE_FULL, 0, MenuSourceType.MOUSE);
+        Assert.assertNotNull(mController.getClassificationResult());
+        Mockito.verify(mTestSelectionClient, times(1)).requestSelectionPopupUpdates(anyBoolean());
+    }
+
+    @Test
+    @Features.DisableFeatures({ContentFeatures.NO_SELECTION_MENU_CACHING})
+    public void testSelectionHandlesMovedDuringDrag_clearsClassificationResult() {
+        when(mView.startActionMode(any(), anyInt())).thenReturn(mActionMode);
+        mTestSelectionClient.setResult(resultForNoChange());
+        mController.setSelectionClient(mTestSelectionClient);
+
+        // Populate cache and mClassificationResult
+        showSelectionMenu(mController, AMPHITHEATRE_FULL, 0, MenuSourceType.MOUSE);
+        mController.getPendingSelectionMenu(MenuType.FLOATING);
+        Assert.assertNotNull(mController.getClassificationResult());
+
+        // Start drag
+        mController.onSelectionEvent(SelectionEventType.SELECTION_HANDLE_DRAG_STARTED, 0, 0, 0, 0);
+
+        // Move handles during drag
+        mController.onSelectionEvent(SelectionEventType.SELECTION_HANDLES_MOVED, 0, 0, 0, 0);
+
+        // Verify mClassificationResult is cleared
+        Assert.assertNull(mController.getClassificationResult());
+
+        // Drag stopped, reshow menu
+        mController.onSelectionEvent(SelectionEventType.SELECTION_HANDLE_DRAG_STOPPED, 0, 0, 0, 0);
+
+        // Simulate reshowing the menu
+        showSelectionMenu(mController, AMPHITHEATRE_FULL, 0, MenuSourceType.MOUSE);
+
+        // Next show should be a cache hit (restored from cache)
+        Assert.assertNotNull(mController.getClassificationResult());
+        Mockito.verify(mTestSelectionClient, times(1)).requestSelectionPopupUpdates(anyBoolean());
+    }
+
+    @Test
+    @Features.DisableFeatures({ContentFeatures.NO_SELECTION_MENU_CACHING})
+    public void testSelectionHandlesMovedNotDuringDrag_doesNotClearClassificationResult() {
+        when(mView.startActionMode(any(), anyInt())).thenReturn(mActionMode);
+        mTestSelectionClient.setResult(resultForNoChange());
+        mController.setSelectionClient(mTestSelectionClient);
+
+        // Populate cache and mClassificationResult
+        showSelectionMenu(mController, AMPHITHEATRE_FULL, 0, MenuSourceType.MOUSE);
+        mController.getPendingSelectionMenu(MenuType.FLOATING);
+        Assert.assertNotNull(mController.getClassificationResult());
+
+        // Move handles NOT during drag (mIsInHandleDragging is false)
+        mController.onSelectionEvent(SelectionEventType.SELECTION_HANDLES_MOVED, 0, 0, 0, 0);
+
+        // Verify mClassificationResult is NOT cleared
+        Assert.assertNotNull(mController.getClassificationResult());
+
+        // Next show should be a cache hit (total 1 requestSelectionPopupUpdates)
+        showSelectionMenu(mController, AMPHITHEATRE_FULL, 0, MenuSourceType.MOUSE);
+        Mockito.verify(mTestSelectionClient, times(1)).requestSelectionPopupUpdates(anyBoolean());
+    }
+
+    @Test
+    @Features.DisableFeatures({ContentFeatures.NO_SELECTION_MENU_CACHING})
     public void testMenuIsProcessedForSameSelectionStateIfCachingNotEnabledByDelegate() {
         Assert.assertNull(mController.getSelectionMenuCachedResultForTesting());
         SelectionActionMenuDelegate delegate = Mockito.mock(SelectionActionMenuDelegate.class);
@@ -880,6 +1051,7 @@ public class SelectionPopupControllerTest {
     }
 
     @Test
+    @Features.DisableFeatures({ContentFeatures.NO_SELECTION_MENU_CACHING})
     public void testMenuIsCachedForSameSelectionStateIfCachingEnabledByDelegate() {
         Assert.assertNull(mController.getSelectionMenuCachedResultForTesting());
         SelectionActionMenuDelegate delegate = Mockito.mock(SelectionActionMenuDelegate.class);
@@ -908,6 +1080,7 @@ public class SelectionPopupControllerTest {
 
     @Test
     @SuppressWarnings("AssertSameIncompatible")
+    @Features.DisableFeatures({ContentFeatures.NO_SELECTION_MENU_CACHING})
     public void testNewMenuIsProcessedForDifferentSelectionState() {
         Assert.assertNull(mController.getSelectionMenuCachedResultForTesting());
 
@@ -1083,7 +1256,7 @@ public class SelectionPopupControllerTest {
         PropertyModel mainMenuItem =
                 new PropertyModel.Builder(ListMenuSubmenuItemProperties.ALL_KEYS)
                         .with(ListMenuItemProperties.TITLE, "Main Menu Item with Submenu")
-                        .with(ListMenuSubmenuItemProperties.SUBMENU_ITEMS, submenuItems)
+                        .with(ListMenuSubmenuItemProperties.SUBMENU_PROVIDER, () -> submenuItems)
                         .build();
         ListItem mainListItem = new ListItem(MENU_ITEM, mainMenuItem);
 
@@ -1172,6 +1345,37 @@ public class SelectionPopupControllerTest {
         return resolveInfo;
     }
 
+    @Test
+    @Feature({"TextInput"})
+    public void testShowSelectionMenuLatencyMetric() {
+        try (HistogramWatcher ignored =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Android.SelectionMenu.TimeToShowMenu.ActionMode")) {
+            showSelectionMenu(
+                    mController,
+                    AMPHITHEATRE_FULL,
+                    /* selectionStartOffset= */ 0,
+                    MenuSourceType.LONG_PRESS);
+        }
+    }
+
+    @Test
+    @Feature({"TextInput"})
+    public void testShowSelectionMenuLatencyMetricTablet() {
+        setDropdownMenuFeatureEnabled(true);
+        mController.setDropdownMenuDelegate(new TestSelectionDropdownMenuDelegate());
+        try (HistogramWatcher ignored =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Android.SelectionMenu.TimeToShowMenu.Dropdown")) {
+            // MOUSE source type triggers dropdown which uses tablet path if enabled
+            showSelectionMenu(
+                    mController,
+                    AMPHITHEATRE_FULL,
+                    /* selectionStartOffset= */ 0,
+                    MenuSourceType.MOUSE);
+        }
+    }
+
     // Result generated by long press "Amphitheatre" in "1600 Amphitheatre Parkway".
     private SelectionClient.Result resultForAmphitheatre() {
         SelectionClient.Result result = new SelectionClient.Result();
@@ -1208,5 +1412,149 @@ public class SelectionPopupControllerTest {
                         IntentUtils.getPendingIntentMutabilityFlag(false));
         RemoteAction action = new RemoteAction(actionIcon, title, "This is a menu item", intent);
         return new TextClassification.Builder().addAction(action).build();
+    }
+
+    @Test
+    @SmallTest
+    @Feature("ExtensionContextMenuItems")
+    public void testIntersperseMenuItems() {
+        ModelList items = new ModelList();
+
+        // Add standard item (order = 16, e.g. Search Google)
+        PropertyModel searchModel =
+                new PropertyModel.Builder(ListMenuItemProperties.ALL_KEYS)
+                        .with(ListMenuItemProperties.ORDER, 16)
+                        .with(TITLE, "Search Google")
+                        .build();
+        items.add(new ListItem(ListItemType.MENU_ITEM, searchModel));
+
+        // Add divider (no ORDER property)
+        PropertyModel dividerModel = new PropertyModel(new PropertyKey[] {});
+        items.add(new ListItem(ListItemType.DIVIDER, dividerModel));
+
+        // Add text processing item (order = 30)
+        PropertyModel textProcModel =
+                new PropertyModel.Builder(ListMenuItemProperties.ALL_KEYS)
+                        .with(ListMenuItemProperties.ORDER, 30)
+                        .with(TITLE, "Translate")
+                        .build();
+        items.add(new ListItem(ListItemType.MENU_ITEM, textProcModel));
+
+        // Add Print item (order = 100)
+        PropertyModel printModel =
+                new PropertyModel.Builder(ListMenuItemProperties.ALL_KEYS)
+                        .with(ListMenuItemProperties.ORDER, 100)
+                        .with(TITLE, "Print")
+                        .build();
+        SelectionPopupControllerImpl.intersperseMenuItems(
+                items, List.of(new ListItem(ListItemType.MENU_ITEM, printModel)));
+
+        // No existing item has order > 100, so Print is appended at the end.
+        assertEquals(4, items.size());
+        assertEquals("Print", items.get(3).model.get(TITLE));
+    }
+
+    @Test
+    @SmallTest
+    @Feature("ExtensionContextMenuItems")
+    public void testIntersperseMenuItems_insertsBeforeDividerOfNextGroup() {
+        ModelList items = new ModelList();
+        items.add(
+                new ListItem(
+                        ListItemType.MENU_ITEM,
+                        new PropertyModel.Builder(ListMenuItemProperties.ALL_KEYS)
+                                .with(ListMenuItemProperties.ORDER, 16)
+                                .with(TITLE, "Search Google")
+                                .build()));
+        items.add(new ListItem(ListItemType.DIVIDER, new PropertyModel(new PropertyKey[] {})));
+        items.add(
+                new ListItem(
+                        ListItemType.MENU_ITEM,
+                        new PropertyModel.Builder(ListMenuItemProperties.ALL_KEYS)
+                                .with(ListMenuItemProperties.ORDER, 262144) // CATEGORY_ALTERNATIVE
+                                .with(TITLE, "Alternative item")
+                                .build()));
+
+        PropertyModel printModel =
+                new PropertyModel.Builder(ListMenuItemProperties.ALL_KEYS)
+                        .with(ListMenuItemProperties.ORDER, 100)
+                        .with(TITLE, "Print")
+                        .build();
+        SelectionPopupControllerImpl.intersperseMenuItems(
+                items, List.of(new ListItem(ListItemType.MENU_ITEM, printModel)));
+
+        // Print (100) joins the group preceding the divider that heads the 262144 group.
+        assertEquals(4, items.size());
+        assertEquals("Print", items.get(1).model.get(TITLE));
+        assertEquals(ListItemType.DIVIDER, items.get(2).type);
+    }
+
+    @Test
+    @SmallTest
+    @Feature("ExtensionContextMenuItems")
+    public void testIntersperseMenuItems_orderZeroAndNegative() {
+        ModelList items = new ModelList();
+        items.add(
+                new ListItem(
+                        ListItemType.MENU_ITEM,
+                        new PropertyModel.Builder(ListMenuItemProperties.ALL_KEYS)
+                                .with(ListMenuItemProperties.ORDER, 16)
+                                .with(TITLE, "Search Google")
+                                .build()));
+
+        PropertyModel topModel =
+                new PropertyModel.Builder(ListMenuItemProperties.ALL_KEYS)
+                        .with(ListMenuItemProperties.ORDER, 0)
+                        .with(TITLE, "Top Item")
+                        .build();
+        PropertyModel defaultModel =
+                new PropertyModel.Builder(ListMenuItemProperties.ALL_KEYS)
+                        .with(ListMenuItemProperties.ORDER, -1)
+                        .with(TITLE, "Default Item")
+                        .build();
+        SelectionPopupControllerImpl.intersperseMenuItems(
+                items,
+                List.of(
+                        new ListItem(ListItemType.MENU_ITEM, topModel),
+                        new ListItem(ListItemType.MENU_ITEM, defaultModel)));
+
+        assertEquals(3, items.size());
+        assertEquals("Top Item", items.get(0).model.get(TITLE));
+        assertEquals("Search Google", items.get(1).model.get(TITLE));
+        assertEquals("Default Item", items.get(2).model.get(TITLE));
+    }
+
+    @Test
+    @SmallTest
+    @Feature("ExtensionContextMenuItems")
+    public void testIntersperseMenuItems_extensionAndInspectOrder() {
+        ModelList items = new ModelList();
+        items.add(
+                new ListItem(
+                        ListItemType.MENU_ITEM,
+                        new PropertyModel.Builder(ListMenuItemProperties.ALL_KEYS)
+                                .with(ListMenuItemProperties.ORDER, 262144)
+                                .with(TITLE, "Ask Gemini")
+                                .build()));
+        items.add(
+                new ListItem(
+                        ListItemType.MENU_ITEM,
+                        new PropertyModel.Builder(ListMenuItemProperties.ALL_KEYS)
+                                .with(ListMenuItemProperties.ORDER, 1000000)
+                                .with(TITLE, "Inspect")
+                                .build()));
+
+        PropertyModel extModel =
+                new PropertyModel.Builder(ListMenuItemProperties.ALL_KEYS)
+                        .with(ListMenuItemProperties.ORDER, 300000)
+                        .with(TITLE, "Extension")
+                        .build();
+        SelectionPopupControllerImpl.intersperseMenuItems(
+                items, List.of(new ListItem(ListItemType.MENU_ITEM, extModel)));
+
+        assertEquals(3, items.size());
+        assertEquals("Ask Gemini", items.get(0).model.get(TITLE));
+        assertEquals("Extension", items.get(1).model.get(TITLE));
+        assertEquals("Inspect", items.get(2).model.get(TITLE));
     }
 }

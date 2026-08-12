@@ -42,7 +42,7 @@ android_library("java") {
     "java/src/org/chromium/chrome/browser/language/settings/NeverTranslateListFragment.java",
     "java/src/org/chromium/chrome/browser/language/settings/SelectLanguageFragment.java",
 
-    # Todo(https://crbug.com/1176981): Remove cyclical dependancy with Translate bridge.
+    # Todo(https://crbug.com/40168592): Remove cyclical dependancy with Translate bridge.
     "java/src/org/chromium/chrome/browser/translate/TranslateBridge.java",
     "java/src/org/chromium/chrome/browser/translate/TranslationObserver.java",
   ]
@@ -50,6 +50,7 @@ android_library("java") {
     ":base_module_java",
     ":java_resources",
     "//base:base_java",
+    "//base:ui_java",
     "//build/android:build_java",
     "//chrome/android:chrome_app_java_resources",
     "//chrome/browser/flags:java",
@@ -68,6 +69,7 @@ android_library("java") {
     "//components/user_prefs/android:java",
     "//content/public/android:content_java",
     "//net/android:net_java",
+    "//third_party/androidx:androidx_activity_activity_java",
     "//third_party/androidx:androidx_annotation_annotation_java",
     "//third_party/androidx:androidx_appcompat_appcompat_java",
     "//third_party/androidx:androidx_core_core_java",
@@ -200,5 +202,19 @@ robolectric_library("junit") {
     "//third_party/junit",
     "//third_party/mockito:mockito_java",
     "//ui/android:ui_no_recycler_view_java",
+  ]
+}
+
+source_set("bridge") {
+  sources = [
+    "language_bridge.cc",
+    "language_bridge.h",
+  ]
+  deps = [
+    ":jni_headers",
+    "//base",
+    "//chrome/browser/language",
+    "//chrome/browser/profiles:profile",
+    "//components/language/core/browser",
   ]
 }

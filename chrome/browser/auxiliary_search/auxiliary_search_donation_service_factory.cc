@@ -4,12 +4,19 @@
 
 #include "chrome/browser/auxiliary_search/auxiliary_search_donation_service_factory.h"
 
+#include <memory>
+
 #include "base/feature_list.h"
+#include "base/functional/callback_helpers.h"
 #include "base/no_destructor.h"
 #include "chrome/browser/auxiliary_search/auxiliary_search_donation_service.h"
+#include "chrome/browser/auxiliary_search/auxiliary_search_donation_service_bridge.h"
 #include "chrome/browser/flags/android/chrome_feature_list.h"
 #include "chrome/browser/page_content_annotations/page_content_annotations_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_keyed_service_factory.h"
+#include "chrome/browser/profiles/profile_selections.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/visited_url_ranking/visited_url_ranking_service_factory.h"
 #include "components/keyed_service/core/keyed_service.h"
 
@@ -37,6 +44,7 @@ AuxiliarySearchDonationServiceFactory::AuxiliarySearchDonationServiceFactory()
   DependsOn(PageContentAnnotationsServiceFactory::GetInstance());
   DependsOn(
       visited_url_ranking::VisitedURLRankingServiceFactory::GetInstance());
+  DependsOn(IdentityManagerFactory::GetInstance());
 }
 
 AuxiliarySearchDonationServiceFactory::
@@ -54,12 +62,17 @@ AuxiliarySearchDonationServiceFactory::BuildServiceInstanceForBrowserContext(
   return std::make_unique<AuxiliarySearchDonationService>(
       PageContentAnnotationsServiceFactory::GetForProfile(profile),
       visited_url_ranking::VisitedURLRankingServiceFactory::GetForProfile(
-          profile));
+          profile),
+      IdentityManagerFactory::GetForProfile(profile), profile->GetPrefs(),
+      AuxiliarySearchDonationServiceBridge::CreateDonationCallback());
 }
 
 bool AuxiliarySearchDonationServiceFactory::ServiceIsCreatedWithBrowserContext()
     const {
-  return true;
+  // Don't attempt to eagerly create the service (and its dependents) if we know
+  // the feature is disabled.
+  return base::FeatureList::IsEnabled(
+      chrome::android::kAuxiliarySearchHistoryDonation);
 }
 
 bool AuxiliarySearchDonationServiceFactory::ServiceIsNULLWhileTesting() const {

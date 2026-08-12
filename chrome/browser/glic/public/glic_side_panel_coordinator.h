@@ -6,16 +6,23 @@
 #define CHROME_BROWSER_GLIC_PUBLIC_GLIC_SIDE_PANEL_COORDINATOR_H_
 
 #include <memory>
+#include <ostream>
 
 #include "base/callback_list.h"
 #include "base/functional/callback.h"
 #include "base/supports_user_data.h"
 #include "build/build_config.h"
+#include "chrome/browser/glic/public/glic_close_options.h"
+#include "chrome/browser/ui/side_panel/side_panel_enums.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
 namespace tabs {
 class TabInterface;
 }  // namespace tabs
+
+namespace content {
+class WebContents;
+}  // namespace content
 
 #if !BUILDFLAG(IS_ANDROID)
 namespace views {
@@ -37,12 +44,21 @@ class GlicSidePanelCoordinator {
   // is currently visible if `tab` is already foregrounded.
   static bool IsGlicSidePanelActive(tabs::TabInterface* tab);
 
+  // Returns true if the Glic side panel is currently showing for `tab`.
+  static bool IsShowing(tabs::TabInterface* tab);
+
+  // Returns true if the Glic side panel is visible or backgrounded for `tab`.
+  static bool IsShowingOrBackgrounded(tabs::TabInterface* tab);
+
   static GlicSidePanelCoordinator* GetForTab(tabs::TabInterface* tab);
 
   // The current state of the Glic side panel.
   enum class State {
-    // The side panel is showing in the foreground.
+    // The side panel is showing in the foreground and expanded.
     kShown,
+    // The side panel is showing in the foreground but peeked (minimized). No
+    // WebContents are allocated.
+    kPeek,
     // The side panel is in the background, but it will show if its tab becomes
     // active.
     kBackgrounded,
@@ -51,16 +67,27 @@ class GlicSidePanelCoordinator {
   };
 
   // Show the Glic side panel.
-  virtual void Show(bool suppress_animations) = 0;
-  void Show() { Show(false); }
+  struct ShowOptions {
+    bool suppress_animations = false;
+    enum class InitialState { kExpanded, kPeeked };
+    InitialState initial_state = InitialState::kExpanded;
+    SidePanelOpenTrigger open_trigger = SidePanelOpenTrigger::kGlicOpened;
+  };
+  virtual void Show(const ShowOptions& options) = 0;
+  void Show() { Show({}); }
 
   // Close the Glic side panel.
-  virtual void Close() = 0;
+  virtual void Close(const CloseOptions& options) = 0;
+  void Close() { Close({}); }
 
   // Returns true if the Glic side panel is currently the active entry.
   virtual bool IsShowing() const = 0;
 
   virtual State state() = 0;
+
+  // Returns true if this coordinator supports the kPeek state (e.g., on Android
+  // bottom sheets).
+  virtual bool SupportsPeek() const = 0;
 
   // Registers `callback` to be called when panel visibility is updated.
   virtual base::CallbackListSubscription AddStateCallback(
@@ -69,6 +96,9 @@ class GlicSidePanelCoordinator {
 #if !BUILDFLAG(IS_ANDROID)
   // Sets the content view for the Glic side panel.
   virtual void SetContentsView(std::unique_ptr<views::View> contents_view) = 0;
+#else
+  // Sets the web contents for the Glic side panel.
+  virtual void SetWebContents(content::WebContents* web_contents) = 0;
 #endif
 
   // Returns preferred side panel width. Not guaranteed to be used if user
@@ -85,6 +115,20 @@ class GlicSidePanelCoordinator {
  private:
   ui::ScopedUnownedUserData<GlicSidePanelCoordinator> scoped_user_data_;
 };
+
+inline std::ostream& operator<<(std::ostream& os,
+                                GlicSidePanelCoordinator::State state) {
+  switch (state) {
+    case GlicSidePanelCoordinator::State::kShown:
+      return os << "kShown";
+    case GlicSidePanelCoordinator::State::kPeek:
+      return os << "kPeek";
+    case GlicSidePanelCoordinator::State::kBackgrounded:
+      return os << "kBackgrounded";
+    case GlicSidePanelCoordinator::State::kClosed:
+      return os << "kClosed";
+  }
+}
 
 }  // namespace glic
 

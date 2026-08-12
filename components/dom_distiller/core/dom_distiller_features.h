@@ -5,8 +5,11 @@
 #ifndef COMPONENTS_DOM_DISTILLER_CORE_DOM_DISTILLER_FEATURES_H_
 #define COMPONENTS_DOM_DISTILLER_CORE_DOM_DISTILLER_FEATURES_H_
 
+#include <optional>
+
 #include "base/component_export.h"
 #include "base/feature_list.h"
+#include "build/build_config.h"
 
 namespace dom_distiller {
 
@@ -17,15 +20,13 @@ COMPONENT_EXPORT(DOM_DISTILLER_FEATURES) bool IsDomDistillerEnabled();
 COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
 bool ShouldStartDistillabilityService();
 
-COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
-BASE_DECLARE_FEATURE(kReaderModeUseReadability);
-COMPONENT_EXPORT(DOM_DISTILLER_FEATURES) bool ShouldUseReadabilityDistiller();
-COMPONENT_EXPORT(DOM_DISTILLER_FEATURES) bool ShouldUseReadabilityHeuristic();
-COMPONENT_EXPORT(DOM_DISTILLER_FEATURES) int GetReadabilityHeuristicMinScore();
-COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
-int GetReadabilityHeuristicMinContentLength();
-COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
-int GetMinimumAllowableDistilledContentLength();
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+inline constexpr int kReadabilityHeuristicMinScore = 50;
+inline constexpr int kReadabilityHeuristicMinContentLength = 160;
+#else
+inline constexpr int kReadabilityHeuristicMinScore = 100;
+inline constexpr int kReadabilityHeuristicMinContentLength = 200;
+#endif
 
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
 COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
@@ -35,19 +36,16 @@ BASE_DECLARE_FEATURE(kReaderModeSupportNewFonts);
 #if BUILDFLAG(IS_ANDROID)
 // Feature declarations below -- alphabetical order.
 COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
+BASE_DECLARE_FEATURE(kReaderModeBlurTransitionAnimation);
+COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
+BASE_DECLARE_FEATURE(kReaderModeDelayBottomSheetPeek);
+COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
 BASE_DECLARE_FEATURE(kReaderModeDistillInApp);
 COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
-BASE_DECLARE_FEATURE(kReaderModeDistillInAppFastFollows);
+BASE_DECLARE_FEATURE(kReaderModeDelayBottomSheetPeek);
 COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
-BASE_DECLARE_FEATURE(kReaderModeImprovements);
+BASE_DECLARE_FEATURE(kReaderModeToggleLinks);
 #endif
-
-
-#if BUILDFLAG(IS_IOS)
-// Feature to enable the new CSS for Reader mode.
-COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
-BASE_DECLARE_FEATURE(kEnableReaderModeNewCss);
-#endif  // BUILDFLAG(IS_IOS)
 
 }  // namespace dom_distiller
 

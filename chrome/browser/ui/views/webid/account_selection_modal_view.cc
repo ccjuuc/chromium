@@ -16,7 +16,6 @@
 #include "chrome/browser/image_fetcher/image_decoder_impl.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/ui/views/controls/hover_button.h"
-#include "chrome/browser/ui/views/extensions/security_dialog_tracker.h"
 #include "chrome/browser/ui/views/webid/account_selection_view_base.h"
 #include "chrome/browser/ui/views/webid/fedcm_account_selection_view_desktop.h"
 #include "chrome/browser/ui/views/webid/webid_utils.h"
@@ -444,7 +443,8 @@ void AccountSelectionModalView::ShowAccounts(
     }
   } else {
     idp_brand_icon_->SetImage(ui::ImageModel::FromVectorIcon(
-        kWebidGlobeIcon, ui::kColorIconSecondary, kModalIdpIconSize));
+        features::IsRoundedIconsEnabled() ? kGlobeIcon : kWebidGlobeOldIcon,
+        ui::kColorIconSecondary, kModalIdpIconSize));
   }
   idp_brand_icon_->SetVisible(/*visible=*/true);
 
@@ -668,7 +668,8 @@ void AccountSelectionModalView::ShowRequestPermissionDialog(
       }
     } else {
       idp_brand_icon_->SetImage(ui::ImageModel::FromVectorIcon(
-          kWebidGlobeIcon, ui::kColorIconSecondary, kModalIdpIconSize));
+          features::IsRoundedIconsEnabled() ? kGlobeIcon : kWebidGlobeOldIcon,
+          ui::kColorIconSecondary, kModalIdpIconSize));
     }
     idp_brand_icon_->SetVisible(/*visible=*/true);
   }
@@ -727,12 +728,13 @@ void AccountSelectionModalView::OnContinueButtonClicked(
     return;
   }
 
-  owner_->OnAccountSelected(account, event);
   has_spinner_ = true;
 
   ReplaceButtonWithSpinner(continue_button_,
                            ui::kColorButtonForegroundProminent,
                            ui::kColorButtonBackgroundProminent);
+
+  owner_->OnAccountSelected(account, event);
 }
 
 void AccountSelectionModalView::OnUseOtherAccountButtonClicked(
@@ -824,7 +826,8 @@ AccountSelectionModalView::CreateCombinedIconsView() {
   std::unique_ptr<views::ImageView> arrow_icon_image_view =
       std::make_unique<views::ImageView>();
   arrow_icon_image_view->SetImage(ui::ImageModel::FromVectorIcon(
-      kWebidArrowIcon, ui::kColorIconSecondary, kModalCombinedIconSize));
+      features::IsRoundedIconsEnabled() ? kArrowRangeIcon : kWebidArrowOldIcon,
+      ui::kColorIconSecondary, kModalCombinedIconSize));
 
   // Create RP brand icon image view.
   auto rp_brand_icon_image_view =

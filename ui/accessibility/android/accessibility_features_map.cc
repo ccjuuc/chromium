@@ -15,7 +15,10 @@ namespace {
 
 // Array of features exposed through the Java AccessibilityFeaturesMap API.
 const base::Feature* const kFeaturesExposedToJava[] = {
-    &features::kAccessibilityTextFormatting,
+  &features::kAccessibilityAndroidMath,
+  &features::kAccessibilityHandleOccludingViews,
+  &features::kAccessibilityTextFormatting,
+  &features::kReadAloudNative,
 };
 
 // static
@@ -27,8 +30,8 @@ base::android::FeatureMap* GetFeatureMap() {
 
 }  // namespace
 
-static jlong JNI_AccessibilityFeaturesMap_GetNativeMap(JNIEnv* env) {
-  return reinterpret_cast<jlong>(GetFeatureMap());
+static int64_t JNI_AccessibilityFeaturesMap_GetNativeMap(JNIEnv* env) {
+  return reinterpret_cast<int64_t>(GetFeatureMap());
 }
 
 }  // namespace ui

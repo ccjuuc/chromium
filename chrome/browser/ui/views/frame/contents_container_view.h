@@ -12,16 +12,19 @@
 #include "base/scoped_observation.h"
 #include "chrome/browser/devtools/devtools_contents_resizing_strategy.h"
 #include "chrome/browser/ui/views/frame/tab_modal_dialog_host.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/focus/external_focus_tracker.h"
 #include "ui/views/layout/delegating_layout_manager.h"
 #include "ui/views/view.h"
 
 class BrowserView;
+class ContentsCaptureBorderView;
 class ContentsContainerOutline;
 class ContentsWebView;
 class MultiContentsViewMiniToolbar;
 class ScrimView;
 class ActorOverlayWebView;
+class ReadAnythingImmersiveOverlayView;
 
 namespace gfx {
 class Rect;
@@ -37,12 +40,11 @@ class NewTabFooterWebView;
 
 namespace views {
 class WebView;
-class Widget;
 }  // namespace views
 
-namespace enterprise_watermark {
-class WatermarkView;
-}  // namespace enterprise_watermark
+namespace enterprise_data_protection {
+class DataProtectionOverlayView;
+}  // namespace enterprise_data_protection
 
 // ContentsContainerView holds the ContentsWebView and the outlines and
 // minitoolbar when in split view.
@@ -81,25 +83,29 @@ class ContentsContainerView : public views::View,
   ActorOverlayWebView* actor_overlay_web_view() {
     return actor_overlay_web_view_;
   }
-  views::View* read_anything_immersive_overlay_view() {
+  ReadAnythingImmersiveOverlayView* read_anything_immersive_overlay_view() {
     return read_anything_immersive_overlay_view_;
   }
   glic::ContextSharingBorderView* glic_border_view() { return glic_border_; }
   new_tab_footer::NewTabFooterWebView* new_tab_footer_view() {
     return new_tab_footer_view_;
   }
-  views::Widget* capture_contents_border_widget() {
-    return capture_contents_border_widget_.get();
+  ContentsCaptureBorderView* capture_contents_border_view() {
+    return capture_contents_border_view_;
   }
-  enterprise_watermark::WatermarkView* watermark_view() {
-    return watermark_view_;
+  enterprise_data_protection::DataProtectionOverlayView*
+  data_protection_overlay_view() {
+    return data_protection_overlay_view_;
   }
+  views::WebView* ai_overlay_dialog_view() { return ai_overlay_dialog_view_; }
   const ContentsContainerOutline* contents_outline_view() const {
     return container_outline_;
   }
   TabModalDialogHost* web_contents_modal_dialog_host() {
     return &web_contents_modal_dialog_host_;
   }
+
+  views::View* indigo_overlay_view() { return indigo_overlay_view_; }
 
   // Sets the contents resizing strategy.
   void SetContentsResizingStrategy(
@@ -125,9 +131,20 @@ class ContentsContainerView : public views::View,
   // Returns the contents_view bounds including ntp footer.
   gfx::Rect GetContentsViewBounds() const;
 
+  // When set to a non-null value, overrides the target size and position for
+  // this view to `target_bounds` (in local coordinates), to prevent reflow
+  // during browser animation on some platforms. When this is set, the contents
+  // will be resized as if the view were the modified size, then clipped down to
+  // the actual size in the layout.
+  void SetTargetContentBounds(
+      std::optional<gfx::Outsets> target_contents_bounds);
+
+  void SetRoundedCorners(const gfx::RoundedCornersF& corner_radii);
+
+  views::View* GetToastAnchorView() { return toast_anchor_view_; }
+
  private:
-  void CreateCaptureContentsBorder();
-  void UpdateCaptureContentsBorderLocation();
+  void UpdateContentsClip();
 
   // Updates the DevTools docked placement. It infers the docked placement from
   // the bounds of contents_webview relative to the local bounds of the
@@ -135,11 +152,12 @@ class ContentsContainerView : public views::View,
   void UpdateDevToolsDockedPlacement();
 
   void UpdateBorderRoundedCorners();
-  void ClearBorderRoundedCorners();
+  void SetBorderRoundedCornersFrom(const gfx::RoundedCornersF& corner_radii);
 
   // views::View:
   void ChildVisibilityChanged(View* child) override;
   void Layout(PassKey) override;
+  views::View::Views GetChildrenInZOrder() override;
 
   // views::ViewObserver:
   void OnViewBoundsChanged(View* observed_view) override;
@@ -151,6 +169,11 @@ class ContentsContainerView : public views::View,
   bool is_in_split_ = false;
 
   raw_ptr<BrowserView> browser_view_ = nullptr;
+
+  // An invisible view used to anchor tab toasts to the top of the contents
+  // view, while being before the contents view in the focus order.
+  raw_ptr<views::View> toast_anchor_view_ = nullptr;
+
   raw_ptr<ContentsWebView> contents_view_ = nullptr;
 
   TabModalDialogHost web_contents_modal_dialog_host_;
@@ -165,7 +188,8 @@ class ContentsContainerView : public views::View,
 
   // The view that contains the Immersive Reading Mode. This view is an overlay
   // on top of the ContentsWebView.
-  raw_ptr<views::View> read_anything_immersive_overlay_view_ = nullptr;
+  raw_ptr<ReadAnythingImmersiveOverlayView>
+      read_anything_immersive_overlay_view_ = nullptr;
 
   // The view that shows a footer at the bottom of the contents
   // container on new tab pages.
@@ -173,8 +197,12 @@ class ContentsContainerView : public views::View,
   // Separator between the web contents and the Footer.
   raw_ptr<views::View> new_tab_footer_view_separator_ = nullptr;
 
-  // The view that overlays a watermark on the contents container.
-  raw_ptr<enterprise_watermark::WatermarkView> watermark_view_ = nullptr;
+  // The view that overlays the contents container.
+  raw_ptr<enterprise_data_protection::DataProtectionOverlayView>
+      data_protection_overlay_view_ = nullptr;
+
+  // The overlay dialog view that is displayed on top of the web contents.
+  raw_ptr<views::WebView> ai_overlay_dialog_view_ = nullptr;
 
   // The scrim view that covers the content area when a tab-modal dialog is
   // open.
@@ -184,6 +212,10 @@ class ContentsContainerView : public views::View,
   // overlay that is shown on top of the web contents.
   raw_ptr<ActorOverlayWebView> actor_overlay_web_view_ = nullptr;
 
+  // Contains glic selection overlay. The overlay renders a static screenshot
+  // of the WebContents and is drawn on top of the WebContents.
+  raw_ptr<views::View> glic_selection_overlay_view_ = nullptr;
+
   // The glic browser view that renders around the web contents area.
   raw_ptr<glic::ContextSharingBorderView> glic_border_ = nullptr;
 
@@ -191,8 +223,22 @@ class ContentsContainerView : public views::View,
 
   raw_ptr<ContentsContainerOutline> container_outline_ = nullptr;
 
-  std::unique_ptr<views::Widget> capture_contents_border_widget_;
-  std::optional<gfx::Rect> dynamic_capture_content_border_bounds_;
+  raw_ptr<ContentsCaptureBorderView> capture_contents_border_view_ = nullptr;
+
+  // Toolbar for chrome/browser/indigo/, which determines where in the content
+  // area it wants to float.
+  raw_ptr<views::View> indigo_overlay_view_ = nullptr;
+
+  // See `SetTargetContentSize()`.
+  std::optional<gfx::Outsets> target_content_bounds_;
+
+  // This is updated during layout calculation and then applied during layout.
+  // It is non-empty when the contents are larger than the visible region during
+  // browser animations (see `SetTargetContentWidth()`).
+  mutable gfx::Rect contents_clip_rect_;
+
+  // This is rounded corner radii that will be used.
+  gfx::RoundedCornersF rounded_corner_radii_;
 
   DevToolsContentsResizingStrategy strategy_;
   base::ScopedObservation<View, ViewObserver> view_bounds_observer_{this};

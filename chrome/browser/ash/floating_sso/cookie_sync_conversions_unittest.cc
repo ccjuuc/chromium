@@ -35,13 +35,13 @@ TEST(CookieSyncConversionsTest, CookieToProtoAndBack) {
         {kNamesForTests[0], "=", kValueForTests, " Path=", kPathForTests,
          "; Secure", is_partitioned ? "; Partitioned;" : ""});
     base::Time creation_time = base::Time::Now();
-    std::optional<base::Time> server_time = std::nullopt;
+    std::optional<base::Time> server_time;
     auto partition_key = net::CookiePartitionKey::FromURLForTesting(
         GURL(kTopLevelSiteForTesting));
     std::unique_ptr<net::CanonicalCookie> cookie =
-        net::CanonicalCookie::CreateForTesting(GURL(kUrlForTesting),
-                                               cookie_line, creation_time,
-                                               server_time, partition_key);
+        net::CanonicalCookie::CreateForTesting(
+            GURL(kUrlForTesting), cookie_line, creation_time,
+            net::CookieSourceType::kOther, server_time, partition_key);
 
     ASSERT_TRUE(cookie);
     ASSERT_EQ(cookie->IsPartitioned(), is_partitioned);
@@ -84,7 +84,7 @@ TEST(CookieSyncConversionsTest, PartitionKeyShouldBeSerializable) {
                             kValueForTests + "; Partitioned;" +
                             " Path=" + kPathForTests + "; Secure";
   base::Time creation_time = base::Time::Now();
-  std::optional<base::Time> server_time = std::nullopt;
+  std::optional<base::Time> server_time;
   // Partition key with a nonce can't be serialized.
   auto partition_key_with_nonce =
       std::make_optional(net::CookiePartitionKey::FromURLForTesting(

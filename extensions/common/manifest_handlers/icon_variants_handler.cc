@@ -30,6 +30,9 @@ static base::LazyInstance<ExtensionIconSet>::DestructorAtExit g_empty_icon_set =
 
 namespace keys = manifest_keys;
 
+// static
+const char* IconVariantsInfo::kManifestDataKey = keys::kIconVariants;
+
 IconVariantsInfo::IconVariantsInfo() = default;
 IconVariantsInfo::~IconVariantsInfo() = default;
 IconVariantsHandler::IconVariantsHandler() = default;
@@ -62,7 +65,7 @@ ExtensionIconVariants GetIconVariants(Extension& extension) {
   // Convert the input key into a list containing everything. Auto-generated
   // `ManifestKeys` are intentionally not being used here so that arbitrary size
   // keys can be specified that are not explicitly defined in the IDL schema.
-  const base::Value::List* icon_variants_list =
+  const base::ListValue* icon_variants_list =
       extension.manifest()->available_values().FindList(keys::kIconVariants);
   if (!icon_variants_list) {
     icon_variants.AddDiagnostic(Feature::kIconVariants,
@@ -98,8 +101,7 @@ const IconVariantsInfo* IconVariantsInfo::GetIconVariants(
   if (!IconVariantsInfo::SupportsIconVariants(extension)) {
     return nullptr;
   }
-  return static_cast<IconVariantsInfo*>(
-      extension.GetManifestData(keys::kIconVariants));
+  return extension.GetManifestData<IconVariantsInfo>();
 }
 
 // static
@@ -193,8 +195,7 @@ bool IconVariantsHandler::Parse(Extension* extension, std::u16string* error) {
   icon_variants_info->icon_variants = std::move(icon_variants);
   icon_variants_info->InitializeIconSets();
 
-  extension->SetManifestData(keys::kIconVariants,
-                             std::move(icon_variants_info));
+  extension->SetManifestData(std::move(icon_variants_info));
   return true;
 }
 

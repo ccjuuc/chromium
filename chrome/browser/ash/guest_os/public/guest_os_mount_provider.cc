@@ -6,6 +6,8 @@
 
 #include <memory>
 
+#include "ash/constants/ash_features.h"
+#include "base/check_deref.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -20,7 +22,6 @@
 #include "chrome/browser/ash/guest_os/public/types.h"
 #include "chrome/browser/ash/policy/skyvault/policy_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_features.h"
 #include "chromeos/ash/components/disks/disk_mount_manager.h"
 #include "storage/browser/file_system/external_mount_points.h"
 
@@ -173,12 +174,12 @@ class GuestOsMountProviderInner : public CachedCallback<ScopedVolume, bool> {
 
 void GuestOsMountProvider::Mount(base::OnceCallback<void(bool)> callback) {
   const bool local_files_allowed =
-      policy::local_user_files::LocalUserFilesAllowed();
+      policy::local_user_files::LocalUserFilesAllowed(local_state_.get());
 
   // If SkyVaultV2 is enabled (GA version), block all VMs regardless of the
   // type.
   if (!local_files_allowed &&
-      base::FeatureList::IsEnabled(features::kSkyVaultV2)) {
+      base::FeatureList::IsEnabled(ash::features::kSkyVaultV2)) {
     LOG(ERROR) << "Error mounting Guest OS container with guest id="
                << this->GuestId() << ": local user files are disabled";
     std::move(callback).Run(false);
@@ -211,6 +212,8 @@ void GuestOsMountProvider::Unmount() {
   callback_->Invalidate();
 }
 
-GuestOsMountProvider::GuestOsMountProvider() = default;
+GuestOsMountProvider::GuestOsMountProvider(PrefService* local_state)
+    : local_state_(CHECK_DEREF(local_state)) {}
+
 GuestOsMountProvider::~GuestOsMountProvider() = default;
 }  // namespace guest_os

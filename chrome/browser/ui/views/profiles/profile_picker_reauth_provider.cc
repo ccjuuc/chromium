@@ -5,7 +5,6 @@
 #include "chrome/browser/ui/views/profiles/profile_picker_reauth_provider.h"
 
 #include "base/functional/bind.h"
-#include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
@@ -17,12 +16,14 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_promo.h"
 #include "chrome/browser/ui/views/profiles/profile_management_types.h"
+#include "chrome/browser/ui/views/profiles/profile_picker_sign_in_provider.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_view.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_web_contents_host.h"
 #include "chrome/browser/ui/webui/signin/signin_ui_error.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/signin/public/identity_manager/accounts_mutator.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "google_apis/gaia/gaia_id.h"
@@ -88,6 +89,7 @@ void ProfilePickerReauthProvider::SwitchToReauth(
 
   contents_ = content::WebContents::Create(
       content::WebContents::CreateParams(&*profile_));
+  AddCommonSigninWebContentUserData(contents_.get(), this);
   host_->ShowScreen(contents_.get(), GetLoadingScreenURL(),
                     /*navigation_finished_closure=*/base::OnceClosure());
   timer_.Start(
@@ -158,15 +160,18 @@ void ProfilePickerReauthProvider::ShowReauth() {
        .continue_url = GaiaUrls::GetInstance()->blank_page_url()});
   host_->ShowScreen(
       contents_.get(), reauth_url,
-      base::BindOnce(&ProfilePickerWebContentsHost::SetNativeToolbarVisible,
-                     // Unretained is enough as the callback is called by the
-                     // host itself.
-                     base::Unretained(host_), /*visible=*/true)
+      base::BindOnce(
+          &ProfilePickerWebContentsHost::SetNativeToolbarSigninButtonsVisible,
+          // Unretained is enough as the callback is called by the
+          // host itself.
+          base::Unretained(host_), /*visible=*/true)
           .Then(
               base::BindOnce(std::move(step_switch_callback_.value()), true)));
   // Listen to the changes of the web contents to know if we got to the
   // `continue_url`.
   content::WebContentsObserver::Observe(contents());
+
+  AddCommonSigninWebContentUserData(contents(), this);
 
   // Creating the DiceTabHelper to detect the new sign in events.
   // This will be used to make sure that the expected account is signed in, and
@@ -211,7 +216,7 @@ void ProfilePickerReauthProvider::DidFinishNavigation(
   if (navigation_handle->GetURL().ReplaceComponents(replacements) ==
       GaiaUrls::GetInstance()->blank_page_url()) {
     content::WebContentsObserver::Observe(nullptr);
-    host_->SetNativeToolbarVisible(false);
+    host_->SetNativeToolbarSigninButtonsVisible(false);
 
     // If no sign in event was received but we reached the continue URL, then
     // the user used an already signed in account to reauth. The reauth did not
@@ -229,6 +234,12 @@ void ProfilePickerReauthProvider::DidFinishNavigation(
     host_->ShowScreen(contents_.get(), GetLoadingScreenURL(),
                       /*navigation_finished_closure=*/base::OnceClosure());
   }
+}
+
+web_modal::WebContentsModalDialogHost*
+ProfilePickerReauthProvider::GetWebContentsModalDialogHost(
+    content::WebContents* web_contents) {
+  return host_->GetWebContentsModalDialogHost();
 }
 
 void ProfilePickerReauthProvider::OnRefreshTokenUpdatedForAccount(
@@ -271,9 +282,14 @@ void ProfilePickerReauthProvider::Finish(bool success,
                                          ProfilePickerReauthResult result) {
   RecordReauthResult(result);
   scoped_identity_manager_observation_.Reset();
+  if (contents_) {
+    web_modal::WebContentsModalDialogManager::FromWebContents(contents_.get())
+        ->SetDelegate(nullptr);
+  }
   content::WebContentsObserver::Observe(nullptr);
-  // Hide the toolbar in case it was visible after showing the reauth page.
-  host_->SetNativeToolbarVisible(false);
+  // Hide the toolbar sign-in button(s) in case they were visible after showing
+  // the reauth page.
+  host_->SetNativeToolbarSigninButtonsVisible(false);
 
   ForceSigninUIError error = ComputeReauthUIError(result, email_to_reauth_);
   std::move(on_reauth_completed_).Run(success, error);

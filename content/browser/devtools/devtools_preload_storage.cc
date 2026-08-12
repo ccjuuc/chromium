@@ -11,6 +11,8 @@
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/public/browser/preloading.h"
 #include "content/public/browser/render_frame_host.h"
+#include "net/http/http_request_headers.h"
+#include "services/network/public/cpp/headers_matcher.h"
 #include "third_party/blink/public/mojom/speculation_rules/speculation_rules.mojom.h"
 
 namespace content {
@@ -42,13 +44,17 @@ void DevToolsPreloadStorage::UpdatePrefetchStatus(
 void DevToolsPreloadStorage::UpdatePrerenderStatus(
     blink::mojom::SpeculationAction action,
     const GURL& prerender_url,
+    bool form_submission,
     std::optional<blink::mojom::SpeculationTargetHint> target_hint,
     const base::UnguessableToken& preload_pipeline_id,
     PreloadingTriggeringOutcome outcome,
     std::optional<PrerenderFinalStatus> status,
     const std::optional<std::string>& disallowed_mojo_interface,
-    const std::vector<PrerenderMismatchedHeaders>* mismatched_headers) {
-  PrerenderKey key = std::make_pair(prerender_url, target_hint);
+    const std::vector<network::MismatchedHttpRequestHeader>*
+        mismatched_headers) {
+  PrerenderKey key = {.prerender_url = prerender_url,
+                      .form_submission = form_submission,
+                      .target_hint = target_hint};
   PrerenderData data;
   data.preload_pipeline_id = preload_pipeline_id;
   data.outcome = outcome;
@@ -83,13 +89,15 @@ void DevToolsPreloadStorage::SpeculationCandidatesUpdated(
         break;
       case blink::mojom::SpeculationAction::kPrerender:
         prerender_keys_from_candidates.insert(
-            std::make_pair(candidate_ptr->url,
-                           candidate_ptr->target_browsing_context_name_hint));
+            {.prerender_url = candidate_ptr->url,
+             .form_submission = candidate_ptr->form_submission,
+             .target_hint = candidate_ptr->target_browsing_context_name_hint});
         break;
       case blink::mojom::SpeculationAction::kPrerenderUntilScript:
         prerender_until_script_keys_from_candidates.insert(
-            std::make_pair(candidate_ptr->url,
-                           candidate_ptr->target_browsing_context_name_hint));
+            {.prerender_url = candidate_ptr->url,
+             .form_submission = candidate_ptr->form_submission,
+             .target_hint = candidate_ptr->target_browsing_context_name_hint});
         break;
     };
   }

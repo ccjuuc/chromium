@@ -72,14 +72,13 @@ class NearbyShareDialogUI : public ui::MojoWebUIController,
   bool HandleKeyboardEvent(content::WebContents* source,
                            const input::NativeWebKeyboardEvent& event) override;
   void WebContentsCreated(content::WebContents* source_contents,
-                          int opener_render_process_id,
-                          int opener_render_frame_id,
+                          const content::GlobalRenderFrameHostId& opener_id,
                           const std::string& frame_name,
                           const GURL& target_url,
                           content::WebContents* new_contents) override;
 
  private:
-  void HandleClose(const base::Value::List& args);
+  void HandleClose(const base::ListValue& args);
 
   // Search for a query parameter such as file, text, address, phone, or url,
   // then use it to populate an attachment, if found; otherwise, do nothing.

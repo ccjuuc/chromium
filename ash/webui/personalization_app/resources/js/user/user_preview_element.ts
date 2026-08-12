@@ -67,11 +67,11 @@ export class UserPreviewElement extends WithPersonalizationStore {
     };
   }
 
-  private path: string;
-  private info_: UserInfo|null;
-  private image_: UserImage|null;
-  private imageUrl_: Url|null;
-  private imageIsEnterpriseManaged_: boolean|null;
+  declare private path: string;
+  declare private info_: UserInfo|null;
+  declare private image_: UserImage|null;
+  declare private imageUrl_: Url|null;
+  declare private imageIsEnterpriseManaged_: boolean|null;
 
   override ready() {
     super.ready();
@@ -173,7 +173,7 @@ export class UserPreviewElement extends WithPersonalizationStore {
   private shouldShowDeprecatedImageSourceInfo_(image: UserImage|null): boolean {
     return !!image && !!image.defaultImage && !!image.defaultImage.sourceInfo &&
         isNonEmptyString(image.defaultImage.sourceInfo.author) &&
-        isNonEmptyString(image.defaultImage.sourceInfo.website.url);
+        isNonEmptyString(image.defaultImage.sourceInfo.website);
   }
 
   private getDeprecatedAuthor_(image: UserImage): string {
@@ -187,7 +187,7 @@ export class UserPreviewElement extends WithPersonalizationStore {
     assert(
         image && image.defaultImage && image.defaultImage.sourceInfo,
         'only called for deprecated default images with sourceInfo');
-    return image.defaultImage.sourceInfo.website.url;
+    return image.defaultImage.sourceInfo.website;
   }
 }
 

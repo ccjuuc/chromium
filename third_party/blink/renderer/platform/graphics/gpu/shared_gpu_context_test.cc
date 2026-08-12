@@ -13,7 +13,8 @@
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_resource_provider.h"
+#include "third_party/blink/renderer/platform/graphics/canvas_non_2d_resource_provider.h"
+#include "third_party/blink/renderer/platform/graphics/gpu/canvas_utils.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
 #include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
 #include "third_party/blink/renderer/platform/graphics/test/fake_gles2_interface.h"
@@ -101,9 +102,9 @@ class SharedGpuContextTest : public Test {
             task_runner_);
     test_context_provider_ = viz::TestContextProvider::CreateRaster();
 
-    InitializeSharedGpuContextRaster(test_context_provider_.get(),
-                                     /*cache = */ nullptr,
-                                     SetIsContextLost::kSetToFalse);
+    InitializeSharedGpuContext(test_context_provider_.get(),
+                               /*cache = */ nullptr,
+                               SetIsContextLost::kSetToFalse);
   }
 
   void TearDown() override {
@@ -142,18 +143,18 @@ TEST_F(BadSharedGpuContextTest, IsValidWithoutRestoring) {
 }
 
 TEST_F(BadSharedGpuContextTest, AllowSoftwareToAcceleratedCanvasUpgrade) {
-  EXPECT_FALSE(SharedGpuContext::AllowSoftwareToAcceleratedCanvasUpgrade());
+  EXPECT_FALSE(AllowSoftwareToAcceleratedCanvasUpgrade(
+      SharedGpuContext::ContextProviderWrapper().get()));
 }
 
 TEST_F(BadSharedGpuContextTest, AccelerateImageBufferSurfaceCreationFails) {
   // With a bad shared context, AccelerateImageBufferSurface should fail and
   // return a nullptr provider
-  std::unique_ptr<CanvasResourceProvider> resource_provider =
-      CanvasResourceProvider::CreateSharedImageProvider(
+  std::unique_ptr<CanvasNon2DResourceProvider> resource_provider =
+      CanvasNon2DResourceProvider::Create(
           gfx::Size(10, 10), GetN32FormatForCanvas(), kPremul_SkAlphaType,
-          gfx::ColorSpace::CreateSRGB(),
-          CanvasResourceProvider::ShouldInitialize::kNo,
-          SharedGpuContext::ContextProviderWrapper(), RasterMode::kGPU,
+          gfx::ColorSpace::CreateSRGB(), gfx::HDRMetadata(),
+          SharedGpuContext::ContextProviderWrapper(),
           gpu::SharedImageUsageSet());
   EXPECT_FALSE(resource_provider);
 }
@@ -175,15 +176,14 @@ TEST_F(SharedGpuContextTest, AccelerateImageBufferSurfaceAutoRecovery) {
   // AcceleratedImageBufferSurface will restore the context and succeed
   test_context_provider_->GetTestRasterInterface()->set_context_lost(true);
   EXPECT_FALSE(SharedGpuContext::IsValidWithoutRestoringForTesting());
-  std::unique_ptr<CanvasResourceProvider> resource_provider =
-      CanvasResourceProvider::CreateSharedImageProvider(
+  std::unique_ptr<CanvasNon2DResourceProvider> resource_provider =
+      CanvasNon2DResourceProvider::Create(
           gfx::Size(10, 10), GetN32FormatForCanvas(), kPremul_SkAlphaType,
-          gfx::ColorSpace::CreateSRGB(),
-          CanvasResourceProvider::ShouldInitialize::kNo,
-          SharedGpuContext::ContextProviderWrapper(), RasterMode::kGPU,
+          gfx::ColorSpace::CreateSRGB(), gfx::HDRMetadata(),
+          SharedGpuContext::ContextProviderWrapper(),
           gpu::SharedImageUsageSet());
   EXPECT_TRUE(resource_provider && resource_provider->IsValid());
-  EXPECT_TRUE(resource_provider->IsAccelerated());
+  EXPECT_FALSE(resource_provider->IsSoftware());
   EXPECT_TRUE(SharedGpuContext::IsValidWithoutRestoringForTesting());
 }
 

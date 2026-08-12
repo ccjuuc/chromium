@@ -45,7 +45,7 @@
   text-align: center;
 }
 
-#picker-logo {
+#pickerLogo {
   height: var(--picker-logo-height);
 }
 
@@ -130,7 +130,7 @@
   left: 0;
 }
 
-cr-icon[icon='profiles:add'] {
+cr-icon[icon='profiles:add-custom'] {
   --iron-icon-height: var(--profile-card-avatar-icon-size);
   --iron-icon-width: var(--profile-card-avatar-icon-size);
   --iron-icon-fill-color: var(--google-grey-100);
@@ -138,6 +138,7 @@ cr-icon[icon='profiles:add'] {
 }
 
 #browseAsGuestButton {
+  margin-inline-start: var(--footer-spacing);
   padding: 8px 16px;
 }
 
@@ -145,27 +146,6 @@ cr-icon[icon='profiles:add'] {
   margin-inline-end: 0;
   --iron-icon-height: 20px;
   --iron-icon-width: 20px;
-}
-
-.footer-buttons-container {
-  display: flex;
-  margin-inline-start: var(--footer-spacing);
-  column-gap: 8px;
-}
-
-:host([is-open-all-profiles-button-experiment-enabled_]) .footer {
-  flex-direction: row-reverse;
-}
-
-:host([is-open-all-profiles-button-experiment-enabled_])
-  .footer-buttons-container {
-  margin-inline-start: 0;
-  margin-inline-end: var(--footer-spacing);
-}
-
-:host([is-open-all-profiles-button-experiment-enabled_]) #askOnStartup {
-  margin-inline-end: auto;
-  margin-inline-start: var(--footer-spacing);
 }
 
 cr-checkbox {
@@ -178,8 +158,13 @@ cr-checkbox {
   padding-inline-start: 5px;
 }
 
-#button-sign-in {
-  margin-left: 10px;
+#ask-on-startup-container {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: flex-end;
+  margin-inline-end: var(--footer-spacing);
+  margin-inline-start: auto;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -187,12 +172,16 @@ cr-checkbox {
     --profile-item-background: var(--google-grey-900);
   }
 
+  :host([is-refreshed-ui_]) {
+    --profile-item-background: var(--cr-fallback-color-surface5);
+  }
+
   .profile-item,
   #addProfile.profile-item {
     border-color: var(--google-grey-700);
   }
 
-  cr-icon[icon='profiles:add'] {
+  cr-icon[icon='profiles:add-custom'] {
     --iron-icon-fill-color: var(--google-grey-500);
     --iron-icon-stroke-color: rgb(48, 48, 50);
   }

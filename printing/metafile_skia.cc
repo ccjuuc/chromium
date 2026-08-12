@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/functional/bind.h"
@@ -210,11 +209,6 @@ bool MetafileSkia::FinishDocument() {
       doc = MakePdfDocument(printing::GetAgent(), title_, accessibility_tree_,
                             generate_document_outline_, &stream);
       break;
-#if BUILDFLAG(IS_WIN)
-    case mojom::SkiaDocumentType::kXPS:
-      doc = MakeXpsDocument(&stream);
-      break;
-#endif
     case mojom::SkiaDocumentType::kMSKP:
       SkSerialProcs procs = SerializationProcs(&data_->subframe_content_info,
                                                data_->typeface_content_info,
@@ -428,7 +422,7 @@ uint32_t MetafileSkia::CreateContentForRemoteFrame(
   // Store the map between content id and the proxy id and store the picture
   // content.
   const uint32_t content_id = pic->uniqueID();
-  DCHECK(!base::Contains(data_->subframe_content_info, content_id));
+  DCHECK(!data_->subframe_content_info.contains(content_id));
   AppendSubframeInfo(content_id, render_proxy_token, std::move(pic));
   return content_id;
 }
@@ -459,7 +453,7 @@ SkStreamAsset* MetafileSkia::GetPdfData() const {
 void MetafileSkia::CustomDataToSkPictureCallback(SkCanvas* canvas,
                                                  uint32_t content_id) {
   // Check whether this is the one we need to handle.
-  if (!base::Contains(data_->subframe_content_info, content_id))
+  if (!data_->subframe_content_info.contains(content_id))
     return;
 
   auto it = data_->subframe_pics.find(content_id);

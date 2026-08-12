@@ -5,18 +5,27 @@
 #ifndef CHROME_BROWSER_UI_LENS_LENS_PRESELECTION_BUBBLE_H_
 #define CHROME_BROWSER_UI_LENS_LENS_PRESELECTION_BUBBLE_H_
 
+#include <optional>
+
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "chrome/browser/ui/lens/overlay_base_controller.h"
+#include "components/tabs/public/tab_interface.h"
+#include "ui/base/interaction/element_identifier.h"
+#include "ui/color/color_id.h"
+#include "ui/gfx/geometry/insets.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/menu/menu_runner.h"
+
+namespace gfx {
+struct VectorIcon;
+}  // namespace gfx
 
 namespace views {
 class ImageButton;
 class MenuRunner;
 }  // namespace views
-
-class LensOverlayController;
 
 namespace lens {
 
@@ -27,11 +36,18 @@ class LensPreselectionBubble : public views::BubbleDialogDelegateView,
   METADATA_HEADER(LensPreselectionBubble, views::BubbleDialogDelegateView)
 
  public:
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kExitButtonElementId);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kCancelButtonElementId);
+
   using ExitClickedCallback = views::Button::PressedCallback;
   explicit LensPreselectionBubble(
-      base::WeakPtr<LensOverlayController> lens_overlay_controller,
+      tabs::TabHandle tab_handle,
       views::View* anchor_view,
       bool offline,
+      ui::ColorId bubble_background_color,
+      const gfx::VectorIcon* icon,
+      std::optional<OverlayBaseController::CancelButtonConfig>
+          cancel_button_config,
       ExitClickedCallback exit_clicked_callback,
       base::OnceClosure on_cancel_callback);
   ~LensPreselectionBubble() override;
@@ -43,6 +59,9 @@ class LensPreselectionBubble : public views::BubbleDialogDelegateView,
   // Also makes sure the bubble resizes and the accessible title is also
   // changed.
   void SetLabelText(int string_id);
+
+  // Set the icon on the preselection bubble to the new `icon`.
+  void SetIcon(const gfx::VectorIcon& icon);
 
   enum CommandID {
     COMMAND_MY_ACTIVITY,
@@ -62,19 +81,24 @@ class LensPreselectionBubble : public views::BubbleDialogDelegateView,
   // Opens the more info menu.
   void OpenMoreInfoMenu();
 
-  // Weak pointer to the overlay controller for routing more info menu options.
-  // The overlay controller manages the lifetime of the bubble's owner and
-  // should always outlive it.
-  const base::WeakPtr<LensOverlayController> lens_overlay_controller_;
-
+  tabs::TabHandle tab_handle_;
   raw_ptr<views::Label> label_ = nullptr;
   raw_ptr<views::ImageView> icon_view_ = nullptr;
   // More info button. Only shown when search bubble enabled.
   raw_ptr<views::ImageButton> more_info_button_ = nullptr;
   // Button shown in bubble to close lens overlay. Only shown in offline state.
   raw_ptr<views::MdTextButton> exit_button_ = nullptr;
+  // Button shown in bubble to cancel selection.
+  raw_ptr<views::MdTextButton> cancel_button_ = nullptr;
   // Whether user is offline.
   bool offline_ = false;
+  // Background color of the bubble.
+  const ui::ColorId bubble_background_color_;
+  // The icon to display. Must be non-null.
+  const raw_ptr<const gfx::VectorIcon> icon_;
+  // Configuration for the cancel button.
+  const std::optional<OverlayBaseController::CancelButtonConfig>
+      cancel_button_config_;
   // Callback for exit button which closes the lens overlay.
   ExitClickedCallback exit_clicked_callback_;
   // Model for the more info menu.

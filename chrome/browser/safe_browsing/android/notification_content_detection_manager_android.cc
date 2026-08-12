@@ -12,7 +12,6 @@
 #include "chrome/browser/notifications/notification_display_service_impl.h"
 #include "chrome/browser/notifications/notification_handler.h"
 #include "chrome/browser/safe_browsing/notification_content_detection/notification_content_detection_util.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/content_settings/core/common/content_settings_types.h"
@@ -35,16 +34,16 @@ void UpdateSuspiciousNotificationIds(HostContentSettingsMap* hcsm,
   // Get the current value of the setting to append the notification id.
   base::Value cur_value(hcsm->GetWebsiteSetting(
       origin, origin, ContentSettingsType::SUSPICIOUS_NOTIFICATION_IDS));
-  base::Value::Dict dict = cur_value.is_dict() ? std::move(cur_value.GetDict())
-                                               : base::Value::Dict();
-  base::Value::List notification_id_list =
+  base::DictValue dict =
+      cur_value.is_dict() ? std::move(cur_value.GetDict()) : base::DictValue();
+  base::ListValue notification_id_list =
       dict.FindList(kSuspiciousNotificationIdsKey)
           ? std::move(*dict.FindList(kSuspiciousNotificationIdsKey))
-          : base::Value::List();
+          : base::ListValue();
   notification_id_list.Append(notification_id);
   // Set the updated value in the host content settings map.
   dict.Set(kSuspiciousNotificationIdsKey,
-           base::Value::List(std::move(notification_id_list)));
+           base::ListValue(std::move(notification_id_list)));
   hcsm->SetWebsiteSettingCustomScope(
       ContentSettingsPattern::FromURLNoWildcard(origin),
       ContentSettingsPattern::Wildcard(),
@@ -61,12 +60,12 @@ void MaybeLogSuspiciousNotificationUnsubscribeUkm(HostContentSettingsMap* hcsm,
   // If suspicious, then log UKM.
   base::Value cur_value(hcsm->GetWebsiteSetting(
       origin, origin, ContentSettingsType::SUSPICIOUS_NOTIFICATION_IDS));
-  base::Value::Dict dict = cur_value.is_dict() ? std::move(cur_value.GetDict())
-                                               : base::Value::Dict();
-  base::Value::List notification_id_list =
+  base::DictValue dict =
+      cur_value.is_dict() ? std::move(cur_value.GetDict()) : base::DictValue();
+  base::ListValue notification_id_list =
       dict.FindList(kSuspiciousNotificationIdsKey)
           ? std::move(*dict.FindList(kSuspiciousNotificationIdsKey))
-          : base::Value::List();
+          : base::ListValue();
 
   if (notification_id_list.contains(notification_id)) {
     NotificationContentDetectionUkmUtil::

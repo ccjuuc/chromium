@@ -69,8 +69,8 @@ class ImageTransportSurfaceOverlayMacEGL : public gl::Presenter {
   void SetMaxPendingSwaps(int max_pending_swaps) override;
 
 #if BUILDFLAG(IS_MAC)
-  // GLSurface override
-  void SetVSyncDisplayID(int64_t display_id) override;
+  // gl::Presenter
+  void SetVSyncDisplayID(int64_t display_id, bool force_update) override;
 
   void OnVSyncPresentation(ui::VSyncParamsMac params);
 #endif
@@ -81,9 +81,6 @@ class ImageTransportSurfaceOverlayMacEGL : public gl::Presenter {
   gfx::SwapResult SwapBuffersInternal(
       gl::GLSurface::SwapCompletionCallback completion_callback,
       gl::GLSurface::PresentationCallback presentation_callback);
-
-  void BufferPresented(gl::GLSurface::PresentationCallback callback,
-                       const gfx::PresentationFeedback& feedback);
 
   void CommitPresentedFrameToCA();
 

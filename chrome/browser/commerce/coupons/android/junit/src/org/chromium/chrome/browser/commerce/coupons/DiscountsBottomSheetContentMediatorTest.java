@@ -34,7 +34,6 @@ import org.robolectric.Robolectric;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.commerce.ShoppingServiceFactory;
@@ -52,7 +51,6 @@ import java.util.Arrays;
 import java.util.List;
 
 /** Unit Tests for {@link DiscountsBottomSheetContentMediator}. */
-@Batch(Batch.UNIT_TESTS)
 @RunWith(BaseRobolectricTestRunner.class)
 public class DiscountsBottomSheetContentMediatorTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -111,7 +109,7 @@ public class DiscountsBottomSheetContentMediatorTest {
                     mModelList.get(i).model.get(DESCRIPTION_DETAIL),
                     infoList.get(i).descriptionDetail);
             assertEquals("Valid until 09/20/2024", mModelList.get(i).model.get(EXPIRY_TIME));
-            assertEquals("Copy", mModelList.get(i).model.get(COPY_BUTTON_TEXT));
+            assertEquals("Copy code", mModelList.get(i).model.get(COPY_BUTTON_TEXT));
         }
     }
 
@@ -142,7 +140,7 @@ public class DiscountsBottomSheetContentMediatorTest {
             assertEquals("Copied", model.get(COPY_BUTTON_TEXT));
             for (int j = 0; j < mModelList.size(); j++) {
                 if (j != i) {
-                    assertEquals("Copy", mModelList.get(j).model.get(COPY_BUTTON_TEXT));
+                    assertEquals("Copy code", mModelList.get(j).model.get(COPY_BUTTON_TEXT));
                 }
             }
         }

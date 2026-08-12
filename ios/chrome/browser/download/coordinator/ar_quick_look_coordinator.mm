@@ -126,8 +126,8 @@ PresentQLPreviewController GetHistogramEnum(
 
 @end
 
-@interface ARQuickLookCoordinator () <TabsDependencyInstalling,
-                                      ARQuickLookTabHelperDelegate>
+@interface ARQuickLookCoordinator () <ARQuickLookTabHelperDelegate,
+                                      TabsDependencyInstalling>
 @end
 
 @implementation ARQuickLookCoordinator {
@@ -144,8 +144,7 @@ PresentQLPreviewController GetHistogramEnum(
                                    browser:(Browser*)browser {
   if ((self = [super initWithBaseViewController:baseViewController
                                         browser:browser])) {
-    _dependencyInstallerBridge.StartObserving(
-        self, browser, TabsDependencyInstaller::Policy::kOnlyRealized);
+    _dependencyInstallerBridge.StartObserving(self, browser);
   }
   return self;
 }
@@ -159,11 +158,11 @@ PresentQLPreviewController GetHistogramEnum(
 #pragma mark - TabsDependencyInstalling methods
 
 - (void)webStateInserted:(web::WebState*)webState {
-  ARQuickLookTabHelper::GetOrCreateForWebState(webState)->set_delegate(self);
+  ARQuickLookTabHelper::FromWebState(webState)->set_delegate(self);
 }
 
 - (void)webStateRemoved:(web::WebState*)webState {
-  ARQuickLookTabHelper::GetOrCreateForWebState(webState)->set_delegate(nil);
+  ARQuickLookTabHelper::FromWebState(webState)->set_delegate(nil);
 }
 
 - (void)webStateDeleted:(web::WebState*)webState {

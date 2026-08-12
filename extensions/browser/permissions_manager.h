@@ -17,7 +17,6 @@
 #include "extensions/common/extension_id.h"
 #include "url/origin.h"
 
-class ExtensionsMenuViewController;
 class BrowserContextKeyedServiceFactory;
 
 namespace content {
@@ -99,6 +98,9 @@ class PermissionsManager : public KeyedService {
     kCustomizeByExtension,
   };
 
+  using AddRequestResult = HostAccessRequestsHelper::AddRequestResult;
+  using RemoveRequestResult = HostAccessRequestsHelper::RemoveRequestResult;
+
   enum class UpdateReason {
     // Permissions were added to the extension.
     kAdded,
@@ -108,7 +110,7 @@ class PermissionsManager : public KeyedService {
     kPolicy,
   };
 
-  class Observer {
+  class Observer : public base::CheckedObserver {
    public:
     // Called when `user_permissions_` have been updated for an extension.
     virtual void OnUserPermissionsSettingsChanged(
@@ -148,10 +150,17 @@ class PermissionsManager : public KeyedService {
     virtual void OnHostAccessRequestDismissedByUser(
         const ExtensionId& extension_id,
         const url::Origin& origin) {}
+
+    // Called when PermissionsManager is shutting down.
+    virtual void OnPermissionsManagerShutdown() {}
+
+   protected:
+    ~Observer() override = default;
   };
 
   explicit PermissionsManager(content::BrowserContext* browser_context);
   ~PermissionsManager() override;
+  void Shutdown() override;
   PermissionsManager(const PermissionsManager&) = delete;
   const PermissionsManager& operator=(const PermissionsManager&) = delete;
 
@@ -260,7 +269,7 @@ class PermissionsManager : public KeyedService {
   // valid schemes for URLPatterns, which results in the chrome:-scheme being
   // included for <all_urls> when retrieving it directly from the prefs; this
   // then causes CHECKs to fail when validating that permissions being revoked
-  // are present (see https://crbug.com/930062). Returns null if there are no
+  // are present (see https://crbug.com/41440164). Returns null if there are no
   // stored runtime-granted/desired-active permissions.
   // TODO(crbug.com/41441259): ExtensionPrefs should return
   // properly-bounded permissions.
@@ -295,8 +304,8 @@ class PermissionsManager : public KeyedService {
 
   // Adds site access request with an optional `filter` for `extension` in
   // `web_contents` with `tab_id`. Extension must have site access withheld for
-  // request to be added.
-  void AddHostAccessRequest(
+  // request to be added. Returns the result of the addition.
+  AddRequestResult AddHostAccessRequest(
       content::WebContents* web_contents,
       int tab_id,
       const Extension& extension,
@@ -304,10 +313,11 @@ class PermissionsManager : public KeyedService {
 
   // Removes site access request for `extension` in `tab_id` with an optional
   // `filter`, if existent. Returns whether the request was removed.
-  bool RemoveHostAccessRequest(
+  RemoveRequestResult RemoveHostAccessRequest(
       int tab_id,
       const ExtensionId& extension_id,
-      const std::optional<URLPattern>& filter = std::nullopt);
+      const std::optional<URLPattern>& filter = std::nullopt,
+      bool bypass_cooldown = false);
 
   // Dismisses site access request for `extension` in `tab_id`. Request must be
   // existent for user to be able to dismiss it.
@@ -401,7 +411,7 @@ class PermissionsManager : public KeyedService {
   // Notifies `observers_` that site access requests were cleared on `tab_id`.
   void NotifyHostAccessRequestsCleared(int tab_id);
 
-  base::ObserverList<Observer>::Unchecked observers_;
+  base::ObserverList<Observer> observers_;
 
   // The associated browser context.
   const raw_ptr<content::BrowserContext> browser_context_;
@@ -418,8 +428,7 @@ class PermissionsManager : public KeyedService {
 
   // Stores extensions whose site access was updated using the extensions
   // menu and previously had broad site access. This is done to preserve the
-  // previous site access state when toggling on the extension's site access
-  // using ExtensionsMenuViewController.
+  // previous site access state when toggling on the extension's site access.
   // The set only reflects site access changes made in the extensions menu. An
   // extension's site access could be changed elsewhere (e.g
   // chrome://extensions) but wouldn't be added/removed to/from this set. This

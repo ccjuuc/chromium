@@ -7,30 +7,29 @@
 #include <memory>
 #include <variant>
 
-#include "base/barrier_callback.h"
-#include "base/functional/callback_helpers.h"
+#include "base/check.h"
+#include "base/feature_list.h"
 #include "base/functional/concurrent_callbacks.h"
 #include "base/functional/concurrent_closures.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_refptr.h"
-#include "chrome/browser/browsing_topics/browsing_topics_service_factory.h"
 #include "chrome/browser/media/webrtc/media_device_salt_service_factory.h"
+#include "chrome/browser/private_verification_tokens/private_verification_tokens_service.h"
+#include "chrome/browser/private_verification_tokens/private_verification_tokens_service_factory.h"
 #include "chrome/browser/webid/federated_identity_permission_context.h"
 #include "chrome/browser/webid/federated_identity_permission_context_factory.h"
-#include "components/browsing_topics/browsing_topics_service.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/media_device_salt/media_device_salt_service.h"
 #include "components/permissions/permissions_client.h"
 #include "components/supervised_user/core/common/features.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/storage_partition_config.h"
+#include "net/base/features.h"
 #include "url/origin.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/browsing_data/chrome_browsing_data_remover_constants.h"
+#include "chrome/browser/web_applications/isolated_web_apps/get_isolated_web_app_browsing_data.h"
 #include "chrome/browser/web_applications/isolated_web_apps/remove_isolated_web_app_data.h"
-#include "chrome/browser/web_applications/web_app_command_scheduler.h"
-#include "chrome/browser/web_applications/web_app_provider.h"
 #endif
 
 namespace {
@@ -50,6 +49,20 @@ IsolatedWebAppBrowsingDataToDelegateEntries(
   return entries;
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+std::vector<ChromeBrowsingDataModelDelegate::DelegateEntry>
+PrivateVerificationTokenBrowsingDataToDelegateEntries(
+    std::vector<url::Origin> issuers) {
+  std::vector<ChromeBrowsingDataModelDelegate::DelegateEntry> entries;
+  for (const auto& issuer : issuers) {
+    entries.emplace_back(issuer,
+                         static_cast<BrowsingDataModel::StorageType>(
+                             ChromeBrowsingDataModelDelegate::StorageType::
+                                 kPrivateVerificationTokens),
+                         /*storage_size=*/0);
+  }
+  return entries;
+}
 
 std::vector<ChromeBrowsingDataModelDelegate::DelegateEntry>
 FlattenDelegateEntries(
@@ -105,15 +118,24 @@ void ChromeBrowsingDataModelDelegate::GetAllDataKeys(
   GetAllFederatedIdentityDataKeys(concurrent.CreateCallback(), {});
 
 #if !BUILDFLAG(IS_ANDROID)
-  auto* web_app_provider = web_app::WebAppProvider::GetForWebApps(profile_);
-  if (web_app_provider && storage_partition_->GetConfig().is_default()) {
-    web_app_provider->scheduler().GetIsolatedWebAppBrowsingData(
-        base::BindOnce(&IsolatedWebAppBrowsingDataToDelegateEntries)
-            .Then(concurrent.CreateCallback()));
+  if (storage_partition_->GetConfig().is_default()) {
+    web_app::GetIsolatedWebAppBrowsingData(
+        profile_, base::BindOnce(&IsolatedWebAppBrowsingDataToDelegateEntries)
+                      .Then(concurrent.CreateCallback()));
   }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
   GetAllMediaDeviceSaltDataKeys(concurrent.CreateCallback(), {});
+
+  if (base::FeatureList::IsEnabled(
+          net::features::kEnablePrivateVerificationTokens)) {
+    if (auto* pvt_service =
+            PrivateVerificationTokensServiceFactory::GetForProfile(profile_)) {
+      pvt_service->GetTokenIssuers(
+          base::BindOnce(&PrivateVerificationTokenBrowsingDataToDelegateEntries)
+              .Then(concurrent.CreateCallback()));
+    }
+  }
 
   // TODO(crbug.com/40205603): Implement data retrieval for remaining data
   // types.
@@ -127,16 +149,6 @@ void ChromeBrowsingDataModelDelegate::RemoveDataKey(
     BrowsingDataModel::StorageTypeSet storage_types,
     base::OnceClosure callback) {
   base::ConcurrentClosures concurrent;
-
-  if (storage_types.Has(
-          static_cast<BrowsingDataModel::StorageType>(StorageType::kTopics))) {
-    // Topics can be deleted but not queried from disk as the creating origins
-    // are hashed before being saved.
-    const url::Origin* origin = std::get_if<url::Origin>(&data_key);
-    auto* browsing_topics_service =
-        browsing_topics::BrowsingTopicsServiceFactory::GetForProfile(profile_);
-    browsing_topics_service->ClearTopicsDataForOrigin(*origin);
-  }
 
   if (storage_types.Has(static_cast<BrowsingDataModel::StorageType>(
           StorageType::kMediaDeviceSalt))) {
@@ -167,6 +179,21 @@ void ChromeBrowsingDataModelDelegate::RemoveDataKey(
                                               concurrent.CreateClosure());
   }
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+  if (base::FeatureList::IsEnabled(
+          net::features::kEnablePrivateVerificationTokens) &&
+      storage_types.Has(static_cast<BrowsingDataModel::StorageType>(
+          StorageType::kPrivateVerificationTokens))) {
+    if (const url::Origin* origin = std::get_if<url::Origin>(&data_key)) {
+      if (auto* pvt_service =
+              PrivateVerificationTokensServiceFactory::GetForProfile(
+                  profile_)) {
+        pvt_service->DeleteTokens(base::Time(), base::Time::Max(),
+                                  concurrent.CreateClosure(),
+                                  std::vector<url::Origin>{*origin});
+      }
+    }
+  }
 
   std::move(concurrent).Done(std::move(callback));
 }
@@ -199,6 +226,11 @@ ChromeBrowsingDataModelDelegate::GetDataOwner(
           .relying_party_embedder()
           .host();
 
+    case StorageType::kPrivateVerificationTokens:
+      CHECK(std::holds_alternative<url::Origin>(data_key))
+          << "Unsupported PVT DataKey type: " << data_key.index();
+      return std::get<url::Origin>(data_key).host();
+
     default:
       return std::nullopt;
   }
@@ -216,10 +248,11 @@ std::optional<bool> ChromeBrowsingDataModelDelegate::IsStorageTypeCookieLike(
     case StorageType::kTopics:
     case StorageType::kIsolatedWebApp:
     case StorageType::kMediaDeviceSalt:
+    case StorageType::kFederatedIdentity:
+    case StorageType::kPrivateVerificationTokens:
       return false;
-    default:
-      NOTREACHED();
   }
+  NOTREACHED();
 }
 
 std::optional<bool>
@@ -234,11 +267,8 @@ ChromeBrowsingDataModelDelegate::IsBlockedByThirdPartyCookieBlocking(
 bool ChromeBrowsingDataModelDelegate::IsCookieDeletionDisabled(
     const GURL& url) {
   CHECK(profile_);
-  if (profile_->IsChild()) {
-    auto* client = permissions::PermissionsClient::Get();
-    return client->IsCookieDeletionDisabled(profile_, url);
-  }
-  return false;
+  auto* client = permissions::PermissionsClient::Get();
+  return client->IsCookieDeletionDisabled(profile_, url);
 }
 
 base::WeakPtr<BrowsingDataModel::Delegate>

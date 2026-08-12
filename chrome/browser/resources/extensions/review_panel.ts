@@ -21,7 +21,8 @@ import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import type {ItemDelegate} from './item.js';
-import {convertSafetyCheckReason, SAFETY_HUB_EXTENSION_KEPT_HISTOGRAM_NAME, SAFETY_HUB_EXTENSION_REMOVED_HISTOGRAM_NAME, SAFETY_HUB_EXTENSION_SHOWN_HISTOGRAM_NAME, SAFETY_HUB_WARNING_REASON_MAX_SIZE} from './item_util.js';
+import {convertSafetyCheckReason} from './item_util.js';
+import {SAFETY_HUB_EXTENSION_KEPT_HISTOGRAM_NAME, SAFETY_HUB_EXTENSION_REMOVED_HISTOGRAM_NAME, SAFETY_HUB_EXTENSION_SHOWN_HISTOGRAM_NAME, SAFETY_HUB_WARNING_REASON_MAX_SIZE} from './metrics_util.js';
 import {navigation, Page} from './navigation_helper.js';
 import {getCss} from './review_panel.css.js';
 import {getHtml} from './review_panel.html.js';
@@ -98,6 +99,7 @@ export class ExtensionsReviewPanelElement extends
        * Indicates if the list of unsafe extensions is expanded or collapsed.
        */
       unsafeExtensionsReviewListExpanded_: {type: Boolean},
+      webuiRoundedIconsEnabled_: {type: Boolean},
     };
   }
 
@@ -109,6 +111,8 @@ export class ExtensionsReviewPanelElement extends
   protected accessor completionMessage_: string = '';
   protected accessor shouldShowCompletionInfo_: boolean = false;
   protected accessor shouldShowUnsafeExtensions_: boolean = false;
+  protected accessor webuiRoundedIconsEnabled_: boolean =
+      loadTimeData.getBoolean('webuiRoundedIconsEnabled');
 
   /**
    * Tracks if the last action that led to the number of extensions

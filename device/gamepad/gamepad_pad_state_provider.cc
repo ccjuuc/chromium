@@ -10,8 +10,10 @@
 
 #include "base/compiler_specific.h"
 #include "base/containers/heap_array.h"
+#include "base/feature_list.h"
 #include "device/gamepad/gamepad_data_fetcher.h"
 #include "device/gamepad/gamepad_provider.h"
+#include "device/gamepad/public/cpp/gamepad_features.h"
 #include "device/gamepad/public/cpp/gamepads.h"
 
 namespace device {
@@ -22,9 +24,6 @@ const float kMinAxisResetValue = 0.1f;
 
 }  // namespace
 
-PadState::PadState() = default;
-PadState::~PadState() = default;
-
 GamepadPadStateProvider::GamepadPadStateProvider() {
   pad_states_ = base::HeapArray<PadState>::WithSize(Gamepads::kItemsLengthCap);
 
@@ -34,9 +33,22 @@ GamepadPadStateProvider::GamepadPadStateProvider() {
 
 GamepadPadStateProvider::~GamepadPadStateProvider() = default;
 
-PadState* GamepadPadStateProvider::GetPadState(GamepadSource source,
-                                               int source_id,
-                                               bool new_gamepad_recognized) {
+PadState* GamepadPadStateProvider::GetPadState(
+    GamepadSource source,
+    int source_id,
+    bool new_gamepad_recognized,
+    std::optional<std::string_view> product_identifier) {
+  if (product_identifier.has_value() &&
+      base::FeatureList::IsEnabled(
+          features::kClaimDuplicateGamepadsProductIdentifier)) {
+    auto find_it =
+        claimed_product_identifiers_.find(product_identifier.value());
+    if (find_it != claimed_product_identifiers_.end() &&
+        find_it->second != source) {
+      return nullptr;
+    }
+  }
+
   // Check to see if the device already has a reserved slot
   std::optional<size_t> empty_slot_index;
   std::optional<size_t> unrecognized_slot_index;
@@ -84,8 +96,15 @@ PadState* GamepadPadStateProvider::GetConnectedPadState(uint32_t pad_index) {
   return &pad_state;
 }
 
+void GamepadPadStateProvider::ClaimProductIdentifierForSource(
+    GamepadSource source,
+    std::string_view product_identifier) {
+  claimed_product_identifiers_.try_emplace(std::string(product_identifier),
+                                           source);
+}
+
 void GamepadPadStateProvider::ClearPadState(PadState& state) {
-  UNSAFE_TODO(memset(&state, 0, sizeof(PadState)));
+  state = PadState();
 }
 
 void GamepadPadStateProvider::InitializeDataFetcher(
@@ -100,7 +119,7 @@ void GamepadPadStateProvider::MapAndSanitizeGamepadData(PadState* pad_state,
   DCHECK(pad);
 
   if (!pad_state->data.connected) {
-    UNSAFE_TODO(memset(pad, 0, sizeof(Gamepad)));
+    *pad = Gamepad();
     return;
   }
 
@@ -110,6 +129,8 @@ void GamepadPadStateProvider::MapAndSanitizeGamepadData(PadState* pad_state,
     pad_state->mapper(pad_state->data, pad);
   else
     *pad = pad_state->data;
+
+  SetStandardGamepadButtonTypes(pad);
 
   pad->connected = true;
 
@@ -131,10 +152,10 @@ void GamepadPadStateProvider::MapAndSanitizeGamepadData(PadState* pad_state,
   if (pad_state->axis_mask != full_axis_mask) {
     for (size_t axis = 0; axis < pad->axes_length; ++axis) {
       if (!(pad_state->axis_mask & 1 << axis)) {
-        if (fabs(UNSAFE_TODO(pad->axes[axis])) < kMinAxisResetValue) {
+        if (fabs(pad->axes[axis]) < kMinAxisResetValue) {
           pad_state->axis_mask |= 1 << axis;
         } else {
-          UNSAFE_TODO(pad->axes[axis]) = 0.0f;
+          pad->axes[axis] = 0.0f;
         }
       }
     }
@@ -145,11 +166,11 @@ void GamepadPadStateProvider::MapAndSanitizeGamepadData(PadState* pad_state,
   if (pad_state->button_mask != full_button_mask) {
     for (size_t button = 0; button < pad->buttons_length; ++button) {
       if (!(pad_state->button_mask & 1 << button)) {
-        if (!UNSAFE_TODO(pad->buttons[button]).pressed) {
+        if (!pad->buttons[button].pressed) {
           pad_state->button_mask |= 1 << button;
         } else {
-          UNSAFE_TODO(pad->buttons[button]).pressed = false;
-          UNSAFE_TODO(pad->buttons[button]).value = 0.0f;
+          pad->buttons[button].pressed = false;
+          pad->buttons[button].value = 0.0f;
         }
       }
     }

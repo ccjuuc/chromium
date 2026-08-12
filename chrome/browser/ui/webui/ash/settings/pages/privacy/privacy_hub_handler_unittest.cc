@@ -5,9 +5,9 @@
 #include "chrome/browser/ui/webui/ash/settings/pages/privacy/privacy_hub_handler.h"
 
 #include <algorithm>
+#include <ranges>
 
 #include "ash/constants/ash_features.h"
-#include "base/containers/adapters.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/ash/privacy_hub/privacy_hub_util.h"
@@ -74,7 +74,7 @@ class PrivacyHubHandlerTest : public ChromeAshTestBase {
   [[nodiscard]] base::Value GetLastWebUIData(
       const std::string& function_name,
       const std::string& callback_name) const {
-    for (const auto& data : base::Reversed(web_ui_.call_data())) {
+    for (const auto& data : std::views::reverse(web_ui_.call_data())) {
       const std::string* name = data->arg1()->GetIfString();
 
       if (data->function_name() != function_name || !name ||
@@ -83,7 +83,7 @@ class PrivacyHubHandlerTest : public ChromeAshTestBase {
       }
 
       // Assume that the data is stored in the last valid arg.
-      for (const auto& arg : base::Reversed(data->args())) {
+      for (const auto& arg : std::views::reverse(data->args())) {
         if (&arg != data->arg1()) {
           return arg.Clone();
         }
@@ -158,7 +158,7 @@ TEST_P(PrivacyHubHandlerMicrophoneTest, HandleInitialMicrophoneSwitchState) {
   SetParamValueMicrophoneMute();
 
   privacy_hub_handler_->HandleInitialMicrophoneSwitchState(
-      base::Value::List().Append(this_test_name_));
+      base::ListValue().Append(this_test_name_));
 
   const base::Value data = GetLastWebUIResponse(this_test_name_);
 
@@ -187,7 +187,7 @@ INSTANTIATE_TEST_SUITE_P(HardwareSwitchStates,
 
 TEST_P(PrivacyHubHandlerCameraLedFallbackTest,
        HandleInitialCameraLedCallbackState) {
-  base::Value::List args;
+  base::ListValue args;
   args.Append(this_test_name_);
 
   privacy_hub_handler_->HandleInitialCameraLedFallbackState(args);
@@ -221,14 +221,14 @@ using PrivacyHubHandlerDeathTest = PrivacyHubHandlerTest;
 
 TEST_F(PrivacyHubHandlerDeathTest,
        HandleInitialMicrophoneSwitchStateNoCallbackId) {
-  base::Value::List args;
+  base::ListValue args;
 
   EXPECT_DEATH(privacy_hub_handler_->HandleInitialMicrophoneSwitchState(args),
                ".*");
 }
 
 TEST_F(PrivacyHubHandlerDeathTest, HandleInitialMicrophoneSwitchStateWithArgs) {
-  base::Value::List args;
+  base::ListValue args;
   args.Append(this_test_name_);
   args.Append(base::Value());
 

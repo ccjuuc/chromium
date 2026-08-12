@@ -12,8 +12,8 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
-#include "base/strings/stringprintf.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/history/history_test_utils.h"
@@ -27,7 +27,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -39,7 +41,6 @@
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view_base.h"
 #include "chrome/browser/ui/views/page_info/page_info_view_factory.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -47,32 +48,23 @@
 #include "components/lookalikes/core/safety_tip_test_utils.h"
 #include "components/lookalikes/core/safety_tips.pb.h"
 #include "components/lookalikes/core/safety_tips_config.h"
-#include "components/page_info/core/features.h"
-#include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
 #include "components/security_interstitials/core/common_string_util.h"
 #include "components/security_state/core/security_state.h"
-#include "components/site_engagement/content/site_engagement_score.h"
 #include "components/site_engagement/content/site_engagement_service.h"
 #include "components/strings/grit/components_branded_strings.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/referrer.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_navigation_observer.h"
-#include "content/public/test/url_loader_interceptor.h"
 #include "net/dns/mock_host_resolver.h"
-#include "net/test/embedded_test_server/http_request.h"
-#include "net/test/embedded_test_server/http_response.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
-#include "third_party/blink/public/common/features.h"
 #include "ui/accessibility/ax_action_data.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/events/test/test_event.h"
-#include "ui/gfx/range/range.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
@@ -182,7 +174,7 @@ void CloseWarningIgnore(views::Widget::ClosedReason reason) {
 
 // Sets the absolute Site Engagement |score| for the testing origin.
 void SetEngagementScore(Browser* browser, const GURL& url, double score) {
-  site_engagement::SiteEngagementService::Get(browser->profile())
+  site_engagement::SiteEngagementService::Get(browser->GetProfile())
       ->ResetBaseScoreForURL(url, score);
 }
 
@@ -190,7 +182,7 @@ void SetEngagementScore(Browser* browser, const GURL& url, double score) {
 void OpenPageInfoBubble(Browser* browser) {
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
   LocationIconView* location_icon_view =
-      browser_view->toolbar()->location_bar()->location_icon_view();
+      browser_view->toolbar()->location_bar_view()->location_icon_view();
   ASSERT_TRUE(location_icon_view);
   ui::test::TestEvent event;
   location_icon_view->ShowBubble(event);
@@ -202,7 +194,7 @@ void OpenPageInfoBubble(Browser* browser) {
 
 // Switches the tab at |tab_index| to the foreground, and waits for the
 // OnVisibilityChanged safety tip check to complete.
-void SwitchToTabAndWait(const Browser* browser, int tab_index) {
+void SwitchToTabAndWait(Browser* browser, int tab_index) {
   base::RunLoop loop;
   auto* tab_strip = browser->tab_strip_model();
   auto* bg_tab = tab_strip->GetWebContentsAt(tab_index);
@@ -249,6 +241,16 @@ void ConfigureAllowlistWithScopes() {
 }  // namespace
 
 class SafetyTipPageInfoBubbleViewBrowserTest : public InProcessBrowserTest {
+ public:
+  SafetyTipPageInfoBubbleViewBrowserTest() {
+    // TODO(crbug.com/452061489): Remove this and fix the test failures while
+    // WebUI Omnibox is enabled.
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/{omnibox::internal::kWebUIOmniboxPopup,
+                               omnibox::internal::kWebUIOmniboxAimPopup});
+  }
+
  protected:
   void SetUp() override {
     lookalikes::InitializeSafetyTipConfig();
@@ -273,7 +275,7 @@ class SafetyTipPageInfoBubbleViewBrowserTest : public InProcessBrowserTest {
   void TearDownOnMainThread() override {
     InProcessBrowserTest::TearDownOnMainThread();
     LookalikeTestHelper::TearDownLookalikeTestParams();
-    LookalikeUrlServiceFactory::GetForProfile(browser()->profile())
+    LookalikeUrlServiceFactory::GetForProfile(browser()->GetProfile())
         ->ResetWarningDismissedETLDPlusOnesForTesting();
   }
 
@@ -409,6 +411,7 @@ class SafetyTipPageInfoBubbleViewBrowserTest : public InProcessBrowserTest {
       test::ScopedPrewarmFeatureList::PrewarmState::kDisabled};
   std::unique_ptr<ukm::TestAutoSetUkmRecorder> test_ukm_recorder_;
   std::unique_ptr<LookalikeTestHelper> test_helper_;
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 // Ensure normal sites with low engagement are not blocked.
@@ -426,9 +429,12 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
 // Ensure normal sites with low engagement are not blocked in incognito.
 IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
                        NoShowOnLowEngagementIncognito) {
-  Browser* incognito_browser = Browser::Create(Browser::CreateParams(
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
-      true));
+  Browser* incognito_browser =
+      CreateBrowserWindow(BrowserWindowCreateParams(
+                              browser()->GetProfile()->GetPrimaryOTRProfile(
+                                  /*create_if_needed=*/true),
+                              /*from_user_gesture=*/true))
+          ->GetBrowserForMigrationOnly();
   auto kNavigatedUrl = GetURL("site1.com");
   SetEngagementScore(incognito_browser, kNavigatedUrl, kLowEngagement);
   NavigateToURL(incognito_browser, kNavigatedUrl,
@@ -456,9 +462,12 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
 // Ensure blocked sites with high engagement are not blocked in incognito.
 IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
                        NoShowOnHighEngagementIncognito) {
-  Browser* incognito_browser = Browser::Create(Browser::CreateParams(
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
-      true));
+  Browser* incognito_browser =
+      CreateBrowserWindow(BrowserWindowCreateParams(
+                              browser()->GetProfile()->GetPrimaryOTRProfile(
+                                  /*create_if_needed=*/true),
+                              /*from_user_gesture=*/true))
+          ->GetBrowserForMigrationOnly();
   const GURL kNavigatedUrl = GetURL("accounts-google.com");
   SetEngagementScore(incognito_browser, kNavigatedUrl, kHighEngagement);
   NavigateToURL(incognito_browser, kNavigatedUrl,
@@ -507,9 +516,12 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
                        DISABLED_ShowOnBlockIncognito) {
   auto kNavigatedUrl = GetURL("accounts-google.com");
   SetEngagementScore(browser(), kNavigatedUrl, kLowEngagement);
-  Browser* incognito_browser = Browser::Create(Browser::CreateParams(
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
-      true));
+  Browser* incognito_browser =
+      CreateBrowserWindow(BrowserWindowCreateParams(
+                              browser()->GetProfile()->GetPrimaryOTRProfile(
+                                  /*create_if_needed=*/true),
+                              /*from_user_gesture=*/true))
+          ->GetBrowserForMigrationOnly();
   NavigateToURL(incognito_browser, kNavigatedUrl,
                 WindowOpenDisposition::CURRENT_TAB);
   EXPECT_TRUE(IsUIShowing());
@@ -526,7 +538,7 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
 }
 
 // Ensure same-document navigations don't close the Safety Tip.
-// Regression test for crbug.com/1137661
+// Regression test for crbug.com/40724906
 IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
                        StillShowAfterSameDocNav) {
   auto kNavigatedUrl = GetURL("accounts-google.com");
@@ -560,7 +572,7 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
       "g0ogle.com"};
 
   lookalikes::SetEnterpriseAllowlistForTesting(
-      browser()->profile()->GetPrefs(),
+      browser()->GetProfile()->GetPrefs(),
       {"accounts1-google.com", "bla.accounts2-google.com", "g0ogle.com"});
 
   for (auto* const url : kUrls) {
@@ -616,8 +628,8 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
 
 // If the user clicks 'leave site', the warning should re-appear when the user
 // re-visits the page.
-// Flaky on Mac: https://crbug.com/1139955
-// Flaky in general, test depends on subtle timing, https://crbug.com/1142769
+// Flaky on Mac: https://crbug.com/40726304
+// Flaky in general, test depends on subtle timing, https://crbug.com/40727927
 IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
                        DISABLED_LeaveSiteStillWarnsAfter) {
   const GURL kNavigatedUrl = GetURL("accounts-google.com");
@@ -709,7 +721,7 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
 
 // Background tabs shouldn't open a bubble initially, but should when they
 // become visible.
-// Fails on Mac for one parameter. https://crbug.com/1285242
+// Fails on Mac for one parameter. https://crbug.com/40814875
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_BubbleWaitsForVisible DISABLED_BubbleWaitsForVisible
 #else
@@ -732,7 +744,7 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
 }
 
 // Background tabs that are errors shouldn't open a tip initially, and shouldn't
-// open when they become visible, either.  Test for crbug.com/1019228.
+// open when they become visible, either.  Test for crbug.com/40655830.
 IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
                        NoBubbleOnErrorEvenAfterVisible) {
   const GURL kNavigatedUrl =
@@ -1018,7 +1030,7 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
 }
 
 // Tests that the SafetyTipShown histogram triggers correctly.
-// Flaky on all platforms: https://crbug.com/1139955
+// Flaky on all platforms: https://crbug.com/40726304
 IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
                        DISABLED_SafetyTipShownHistogram) {
   base::HistogramTester histograms;
@@ -1041,24 +1053,6 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
   CloseWarningLeaveSite(browser());
 
   test_helper()->CheckSafetyTipUkmCount(1);
-  test_helper()->CheckInterstitialUkmCount(0);
-}
-
-// Tests that the SafetyTipIgnoredPageLoad histogram triggers correctly.
-IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
-                       SafetyTipIgnoredPageLoadHistogram) {
-  base::HistogramTester histograms;
-  auto kNavigatedUrl = GetURL("accounts-google.com");
-  SetEngagementScore(browser(), kNavigatedUrl, kLowEngagement);
-  NavigateToURL(browser(), kNavigatedUrl, WindowOpenDisposition::CURRENT_TAB);
-
-  CloseWarningIgnore(views::Widget::ClosedReason::kCloseButtonClicked);
-  NavigateToURL(browser(), kNavigatedUrl, WindowOpenDisposition::CURRENT_TAB);
-  histograms.ExpectBucketCount(
-      "Security.SafetyTips.SafetyTipIgnoredPageLoad",
-      security_state::SafetyTipStatus::kLookalikeIgnored, 1);
-  // UKM recorded twice because we revisited the same page.
-  test_helper()->CheckSafetyTipUkmCount(2);
   test_helper()->CheckInterstitialUkmCount(0);
 }
 
@@ -1228,7 +1222,7 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
 }
 
 // Ensure that a metrics-only heuristic doesn't show up in PageInfo. Also
-// a regression test for crbug/1061244.
+// a regression test for crbug.com/40122365.
 IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
                        MetricsOnlyHeuristicDoesntShowInPageInfo) {
   // This URL will trigger Combo Squatting. Combo Squatting UI is disabled by
@@ -1336,7 +1330,7 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
 
 // Tests that UKM data is only recorded after the safety tip warning is
 // dismissed or accepted, for the blocklist heuristic.
-// Flaky on all platforms: https://crbug.com/1139955
+// Flaky on all platforms: https://crbug.com/40726304
 IN_PROC_BROWSER_TEST_F(
     SafetyTipPageInfoBubbleViewBrowserTest,
     DISABLED_WarningDismissalCausesUkmRecordingForBlocklist) {
@@ -1687,7 +1681,7 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewPrerenderBrowserTest,
   ASSERT_TRUE(safety_tip_observer->safety_tip_check_pending_for_testing());
   auto prerender_url = embedded_test_server()->GetURL("/simple.html");
   // Loads |prerender_url| in the prerenderer.
-  content::FrameTreeNodeId prerender_id =
+  content::PrerenderHostId prerender_id =
       prerender_helper()->AddPrerender(prerender_url);
   ASSERT_TRUE(prerender_id);
   content::test::PrerenderHostObserver host_observer(*web_contents(),
@@ -1790,7 +1784,7 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
 
   // The highlight should show around the contents container for the 0th tab
   // but not for the other tabs in the split.
-  std::vector<ContentsContainerView*> contents_container_views =
+  const auto& contents_container_views =
       BrowserView::GetBrowserViewForBrowser(browser())
           ->multi_contents_view()
           ->contents_container_views();

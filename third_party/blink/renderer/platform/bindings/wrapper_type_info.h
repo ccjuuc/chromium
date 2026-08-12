@@ -36,10 +36,12 @@
 #include "base/check_op.h"
 #include "base/memory/raw_ptr_exclusion.h"
 #include "gin/public/wrapper_info.h"
+#include "third_party/blink/renderer/platform/bindings/cpp_heap_external_tag.h"
 #include "third_party/blink/renderer/platform/bindings/v8_interface_bridge_base.h"
 #include "third_party/blink/renderer/platform/heap/visitor.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include "v8/include/v8-sandbox.h"
 #include "v8/include/v8.h"
 
 namespace blink {
@@ -52,8 +54,13 @@ constexpr std::underlying_type_t<v8::CppHeapPointerTag>
     kScriptWrappableStartTag = 256;
 // LINT.ThenChange(third_party/blink/renderer/bindings/scripts/web_idl/idl_compiler.py:ScriptWrappableStartTag)
 
+// The upper bound of all `ScriptWrappable` tags that we currently generate. If
+// you add a new `ScriptWrappable` in the codebase and hit a `static_assert`
+// that this is too small, increase this value.
+// LINT.IfChange(LastGeneratedScriptWrappableTag)
 static constexpr std::underlying_type_t<v8::CppHeapPointerTag>
-    kLastGeneratedScriptWrappableTag = 1500;
+    kLastGeneratedScriptWrappableTag = 2000;
+// LINT.ThenChange(gin/public/wrappable_pointer_tags.h)
 
 enum class ScriptWrappableArrayTag : std::underlying_type_t<
     v8::CppHeapPointerTag> {
@@ -99,23 +106,22 @@ static_assert(static_cast<uint16_t>(kLastScriptWrappableTag) <
               "disjoint. If they overlap, then the gin:Wrappable range should "
               "be moved backwards");
 
-constexpr v8::CppHeapPointerTagRange kScriptWrappableTagRange(
-    static_cast<v8::CppHeapPointerTag>(kScriptWrappableStartTag),
-    v8::CppHeapPointerTag::kLastTag);
-
-constexpr v8::CppHeapPointerTagRange kScriptWrappableOrGinWrappableTagRange(
-    static_cast<v8::CppHeapPointerTag>(kScriptWrappableStartTag),
-    static_cast<v8::CppHeapPointerTag>(gin::kLastPointerTag));
-
-enum class CppHeapExternalTag : std::underlying_type_t<v8::CppHeapPointerTag> {
-  kFirst = 1,
-  kTaskAttributionTaskStateTag = kFirst,
-
-  kLastTag = kTaskAttributionTaskStateTag
-};
+static_assert(
+    static_cast<uint16_t>(gin::kLastPointerTag) <
+        static_cast<uint16_t>(v8::CppHeapPointerTag::kFirstV8InternalTag),
+    "The tag range of gin::Wrappable and v8-internal tags should be "
+    "disjoint.");
 
 static_assert(static_cast<std::underlying_type_t<v8::CppHeapPointerTag>>(
                   CppHeapExternalTag::kLastTag) < kScriptWrappableStartTag);
+
+constexpr v8::CppHeapPointerTagRange kScriptWrappableTagRange(
+    static_cast<v8::CppHeapPointerTag>(kScriptWrappableStartTag),
+    kLastScriptWrappableTag);
+
+static_assert(
+    v8::kObjectWrappableTagRange.Contains(kScriptWrappableTagRange),
+    "ScriptWrappable tag range must be within kObjectWrappableTagRange");
 
 // This struct provides a way to store a bunch of information that is helpful
 // when unwrapping v8 objects. Each v8 bindings class has exactly one static
@@ -188,15 +194,6 @@ struct PLATFORM_EXPORT WrapperTypeInfo final
         interface_template, bindings::V8InterfaceBridgeBase::FeatureSelector());
   }
 
-  static bool HasLegacyInternalFieldsSet(v8::Local<v8::Object> object) {
-    for (int i = 0, n = object->InternalFieldCount(); i < n; ++i) {
-      if (object->GetAlignedPointerFromInternalField(i, gin::kDeprecatedData)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   bindings::V8InterfaceBridgeBase::InstallInterfaceTemplateFuncType
       install_interface_template_func;
   bindings::V8InterfaceBridgeBase::InstallContextDependentPropertiesFuncType
@@ -240,7 +237,7 @@ inline ScriptWrappable* ToAnyScriptWrappable(
 inline v8::Object::Wrappable* ToAnyWrappable(v8::Isolate* isolate,
                                              v8::Local<v8::Object> wrapper) {
   return v8::Object::Unwrap<v8::Object::Wrappable>(
-      isolate, wrapper, kScriptWrappableOrGinWrappableTagRange);
+      isolate, wrapper, v8::kObjectWrappableTagRange);
 }
 
 inline ScriptWrappable* ToAnyScriptWrappable(v8::Isolate* isolate,

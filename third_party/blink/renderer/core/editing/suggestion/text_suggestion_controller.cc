@@ -77,7 +77,7 @@ bool ShouldDeleteNextCharacter(const Node& marker_text_node,
 
 EphemeralRangeInFlatTree ComputeRangeSurroundingCaret(
     const PositionInFlatTree& caret_position) {
-  const unsigned position_offset_in_node =
+  const wtf_size_t position_offset_in_node =
       caret_position.ComputeOffsetInContainerNode();
   auto* text_node = DynamicTo<Text>(caret_position.ComputeContainerNode());
   // If we're in the interior of a text node, we can avoid calling
@@ -107,6 +107,7 @@ struct SuggestionInfosWithNodeAndHighlightColor {
   Persistent<const Text> text_node;
   Color highlight_color;
   Vector<TextSuggestionInfo> suggestion_infos;
+  bool should_hide_suggestion_menu = true;
 };
 
 SuggestionInfosWithNodeAndHighlightColor ComputeSuggestionInfos(
@@ -151,7 +152,7 @@ SuggestionInfosWithNodeAndHighlightColor ComputeSuggestionInfos(
   suggestion_infos_with_node_and_highlight_color.highlight_color =
       (first_suggestion_marker->SuggestionHighlightColor() ==
        Color::kTransparent)
-          ? LayoutTheme::TapHighlightColor()
+          ? LayoutTheme::GetTheme().TapHighlightColor()
           : first_suggestion_marker->SuggestionHighlightColor();
 
   Vector<TextSuggestionInfo>& suggestion_infos =
@@ -167,6 +168,13 @@ SuggestionInfosWithNodeAndHighlightColor ComputeSuggestionInfos(
 
     const auto* marker = To<SuggestionMarker>(node_marker_pair.second.Get());
     const Vector<String>& marker_suggestions = marker->Suggestions();
+
+    // Only hide the suggestion menu if every marker hides it.
+    suggestion_infos_with_node_and_highlight_color.should_hide_suggestion_menu =
+        suggestion_infos_with_node_and_highlight_color
+            .should_hide_suggestion_menu &&
+        marker->ShouldHideSuggestionMenu();
+
     for (wtf_size_t suggestion_index = 0;
          suggestion_index < marker_suggestions.size(); ++suggestion_index) {
       const String& suggestion = marker_suggestions[suggestion_index];
@@ -198,9 +206,7 @@ SuggestionInfosWithNodeAndHighlightColor ComputeSuggestionInfos(
 }  // namespace
 
 TextSuggestionController::TextSuggestionController(LocalDOMWindow& window)
-    : is_suggestion_menu_open_(false),
-      window_(&window),
-      text_suggestion_host_(&window) {}
+    : window_(&window), text_suggestion_host_(&window) {}
 
 bool TextSuggestionController::IsMenuOpen() const {
   return is_suggestion_menu_open_;
@@ -416,6 +422,7 @@ void TextSuggestionController::ShowSpellCheckMenu(
   if (marker->ShouldHideSuggestionMenu()) {
     return;
   }
+
   const EphemeralRange active_suggestion_range =
       EphemeralRange(Position(marker_text_node, marker->StartOffset()),
                      Position(marker_text_node, marker->EndOffset()));
@@ -430,8 +437,7 @@ void TextSuggestionController::ShowSpellCheckMenu(
       ui::mojom::ImeTextSpanUnderlineStyle::kSolid, Color::kTransparent,
       LayoutTheme::GetTheme().PlatformActiveSpellingMarkerHighlightColor());
 
-  Vector<String> suggestions;
-  description.Split('\n', suggestions);
+  Vector<String> suggestions = description.SplitSkippingEmpty('\n');
 
   Vector<mojom::blink::SpellCheckSuggestionPtr> suggestion_ptrs;
   for (const String& suggestion : suggestions) {
@@ -465,6 +471,10 @@ void TextSuggestionController::ShowSuggestionMenu(
   SuggestionInfosWithNodeAndHighlightColor
       suggestion_infos_with_node_and_highlight_color = ComputeSuggestionInfos(
           node_suggestion_marker_pairs, max_number_of_suggestions);
+  if (suggestion_infos_with_node_and_highlight_color
+          .should_hide_suggestion_menu) {
+    return;
+  }
 
   Vector<TextSuggestionInfo>& suggestion_infos =
       suggestion_infos_with_node_and_highlight_color.suggestion_infos;
@@ -557,11 +567,11 @@ TextSuggestionController::FirstMarkerIntersectingRange(
     DocumentMarker::MarkerTypes types) const {
   const Node* const range_start_container =
       range.StartPosition().ComputeContainerNode();
-  const unsigned range_start_offset =
+  const wtf_size_t range_start_offset =
       range.StartPosition().ComputeOffsetInContainerNode();
   const Node* const range_end_container =
       range.EndPosition().ComputeContainerNode();
-  const unsigned range_end_offset =
+  const wtf_size_t range_end_offset =
       range.EndPosition().ComputeOffsetInContainerNode();
 
   for (const Node& node : range.Nodes()) {
@@ -569,9 +579,9 @@ TextSuggestionController::FirstMarkerIntersectingRange(
     if (!text_node)
       continue;
 
-    const unsigned start_offset =
+    const wtf_size_t start_offset =
         node == range_start_container ? range_start_offset : 0;
-    const unsigned end_offset =
+    const wtf_size_t end_offset =
         node == range_end_container ? range_end_offset : text_node->length();
 
     const DocumentMarker* const found_marker =
@@ -622,7 +632,7 @@ void TextSuggestionController::AttemptToDeleteActiveSuggestionRange() {
 void TextSuggestionController::ReplaceRangeWithText(const EphemeralRange& range,
                                                     const String& replacement) {
   GetFrame().Selection().SetSelectionAndEndTyping(
-      SelectionInDOMTree::Builder().SetBaseAndExtent(range).Build());
+      SelectionInDomTree::Builder().SetBaseAndExtent(range).Build());
 
   InsertTextAndSendInputEventsOfTypeInsertReplacementText(GetFrame(),
                                                           replacement);

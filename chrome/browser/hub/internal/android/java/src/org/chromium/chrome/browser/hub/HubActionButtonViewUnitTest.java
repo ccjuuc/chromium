@@ -10,7 +10,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 
 import static org.chromium.chrome.browser.hub.HubActionButtonProperties.ACTION_BUTTON_DATA;
 import static org.chromium.chrome.browser.hub.HubActionButtonProperties.ACTION_BUTTON_VISIBLE;
@@ -28,7 +27,6 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.ParameterizedRobolectricTestRunner;
@@ -36,10 +34,16 @@ import org.robolectric.ParameterizedRobolectricTestRunner.Parameter;
 import org.robolectric.ParameterizedRobolectricTestRunner.Parameters;
 
 import org.chromium.base.DeviceInfo;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRule;
+import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.Features;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.ui.actions.button.DelegateButtonData;
+import org.chromium.chrome.browser.ui.actions.button.DisplayButtonData;
+import org.chromium.chrome.browser.ui.actions.button.FullButtonData;
+import org.chromium.chrome.browser.ui.actions.button.ResourceButtonData;
 import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
@@ -52,7 +56,6 @@ import java.util.Collection;
 @Features.DisableFeatures({
     ChromeFeatureList.ANDROID_SURFACE_COLOR_UPDATE,
     ChromeFeatureList.GRID_TAB_SWITCHER_SURFACE_COLOR_UPDATE,
-    ChromeFeatureList.GRID_TAB_SWITCHER_UPDATE
 })
 public class HubActionButtonViewUnitTest {
     // All the tests in this file will run twice, once for isXrDevice=true and once for
@@ -73,14 +76,14 @@ public class HubActionButtonViewUnitTest {
 
     @Rule public BaseRobolectricTestRule mBaseRule = new BaseRobolectricTestRule();
 
-    @Mock Runnable mOnButton;
+    private final CallbackHelper mOnButtonHelper = new CallbackHelper();
 
     private Activity mActivity;
     private FrameLayout mActionButtonContainer;
     private Button mActionButton;
     private PropertyModel mPropertyModel;
     private HubColorMixer mColorMixer;
-    private ObservableSupplierImpl<Pane> mFocusedPaneSupplier;
+    private MonotonicObservableSupplier<Pane> mFocusedPaneSupplier;
 
     @Before
     public void setUp() throws Exception {
@@ -98,13 +101,14 @@ public class HubActionButtonViewUnitTest {
         FrameLayout toolbarContainer = (FrameLayout) inflater.inflate(layoutId, null, false);
         mActionButton = toolbarContainer.findViewById(R.id.toolbar_action_button);
 
-        mFocusedPaneSupplier = new ObservableSupplierImpl<>();
+        mFocusedPaneSupplier = ObservableSuppliers.alwaysNull();
         mColorMixer =
                 spy(
                         new HubColorMixerImpl(
                                 mActivity,
-                                new ObservableSupplierImpl<>(true),
-                                mFocusedPaneSupplier));
+                                ObservableSuppliers.alwaysTrue(),
+                                mFocusedPaneSupplier,
+                                ObservableSuppliers.alwaysNull()));
         mPropertyModel =
                 new PropertyModel.Builder(HubActionButtonProperties.ALL_ACTION_BUTTON_KEYS)
                         .with(ACTION_BUTTON_VISIBLE, true)
@@ -118,7 +122,9 @@ public class HubActionButtonViewUnitTest {
         DisplayButtonData displayButtonData =
                 new ResourceButtonData(
                         R.string.button_new_tab, R.string.button_new_tab, R.drawable.ic_add_24dp);
-        return new DelegateButtonData(displayButtonData, mOnButton);
+        return new DelegateButtonData.Builder(displayButtonData)
+                .setOnPress(view -> mOnButtonHelper.notifyCalled())
+                .build();
     }
 
     @Test
@@ -144,17 +150,17 @@ public class HubActionButtonViewUnitTest {
     public void testActionButtonCallback() {
         // Initially no button data is set, clicking should have no effect
         mActionButton.callOnClick();
-        verifyNoInteractions(mOnButton);
+        assertEquals(0, mOnButtonHelper.getCallCount());
 
         // Set button data, clicking should trigger the callback
         FullButtonData fullButtonData = makeTestButtonData();
         mPropertyModel.set(ACTION_BUTTON_DATA, fullButtonData);
         mActionButton.callOnClick();
-        verify(mOnButton, times(1)).run();
+        assertEquals(1, mOnButtonHelper.getCallCount());
 
         // Click again should trigger the callback again
         mActionButton.callOnClick();
-        verify(mOnButton, times(2)).run();
+        assertEquals(2, mOnButtonHelper.getCallCount());
     }
 
     @Test
@@ -181,8 +187,13 @@ public class HubActionButtonViewUnitTest {
 
     @Test
     public void testColorMixer() {
-        // Verify that color mixer was set on the button
         mPropertyModel.set(COLOR_MIXER, mColorMixer);
-        verify(mColorMixer).registerBlend(any());
+
+        if (HubUtils.isGtsUpdateEnabled()) {
+            verify(mColorMixer, times(2)).registerBlend(any());
+        } else {
+            // Behaves differently on XR devices.
+            verify(mColorMixer).registerBlend(any());
+        }
     }
 }

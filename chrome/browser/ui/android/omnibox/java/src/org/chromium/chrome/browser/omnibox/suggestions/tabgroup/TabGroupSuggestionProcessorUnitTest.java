@@ -4,15 +4,16 @@
 
 package org.chromium.chrome.browser.omnibox.suggestions.tabgroup;
 
+import static org.junit.Assert.assertEquals;
+import static org.robolectric.Shadows.shadowOf;
+
 import android.content.Context;
 import android.graphics.drawable.ShapeDrawable;
 import android.text.style.ImageSpan;
 
-import androidx.core.content.ContextCompat;
 import androidx.test.filters.SmallTest;
 
 import org.junit.After;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -23,8 +24,9 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.ContextUtils;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
 import org.chromium.chrome.browser.omnibox.UrlBarEditingTextStateProvider;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxImageSupplier;
@@ -43,8 +45,10 @@ import org.chromium.components.omnibox.AutocompleteInput;
 import org.chromium.components.omnibox.AutocompleteMatch;
 import org.chromium.components.omnibox.AutocompleteMatchBuilder;
 import org.chromium.components.omnibox.OmniboxSuggestionType;
+import org.chromium.components.omnibox.action.OmniboxActionDelegate;
 import org.chromium.components.tab_groups.TabGroupColorId;
 import org.chromium.components.tab_groups.TabGroupColorPickerUtils;
+import org.chromium.components.tab_groups.TabGroupsFeatureMap;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.url.JUnitTestGURLs;
 
@@ -53,20 +57,22 @@ import java.util.function.Supplier;
 /** Tests for {@link TabGroupSuggestionProcessor}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
+@DisableFeatures({TabGroupsFeatureMap.UPDATE_TAB_GROUP_COLORS})
 public class TabGroupSuggestionProcessorUnitTest {
     private static final String SYNC_ID = "sync_id";
     private static final String COLOR_ID = "2";
     private static final String TITLE = "My Group";
     private static final String DESCRIPTION = JUnitTestGURLs.URL_1.getSpec();
 
-    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    private @Mock SuggestionHost mSuggestionHost;
-    private @Mock OmniboxImageSupplier mImageSupplier;
-    private @Mock UrlBarEditingTextStateProvider mTextProvider;
-    private @Mock Supplier<Tab> mTabSupplier;
-    private @Mock Supplier<ShareDelegate> mShareDelegateSupplier;
-    private @Mock BookmarkState mBookmarkState;
+    @Mock private SuggestionHost mSuggestionHost;
+    @Mock private OmniboxImageSupplier mImageSupplier;
+    @Mock private UrlBarEditingTextStateProvider mTextProvider;
+    @Mock private Supplier<Tab> mTabSupplier;
+    @Mock private Supplier<ShareDelegate> mShareDelegateSupplier;
+    @Mock private BookmarkState mBookmarkState;
+    @Mock private OmniboxActionDelegate mActionDelegate;
 
     private Context mContext;
     private TabGroupSuggestionProcessor mProcessor;
@@ -88,7 +94,8 @@ public class TabGroupSuggestionProcessorUnitTest {
                         mBookmarkState,
                         mTabSupplier,
                         mShareDelegateSupplier,
-                        new ObservableSupplierImpl<>(ControlsPosition.TOP));
+                        ObservableSuppliers.createNonNull(ControlsPosition.TOP),
+                        mActionDelegate);
         mProcessor = new TabGroupSuggestionProcessor(uiContext);
         mInput = new AutocompleteInput();
         OmniboxResourceProvider.disableCachesForTesting();
@@ -119,28 +126,21 @@ public class TabGroupSuggestionProcessorUnitTest {
         mInput.setPageClassification(PageClassification.ANDROID_HUB_VALUE);
 
         createTabGroupSuggestion(OmniboxSuggestionType.TAB_GROUP);
-        PropertyModel model = mProcessor.createModel();
-
-        mProcessor.populateModel(mInput, mSuggestion, model, 0);
-        Assert.assertTrue(
-                ContextCompat.getDrawable(mContext, R.drawable.ic_features_24dp)
-                        .getConstantState()
-                        .equals(
-                                mModel.get(BaseSuggestionViewProperties.ICON)
-                                        .drawable
-                                        .getConstantState()));
+        assertEquals(
+                R.drawable.ic_grid_view_24dp,
+                shadowOf(mModel.get(BaseSuggestionViewProperties.ICON).drawable)
+                        .getCreatedFromResId());
 
         SuggestionSpannable suggestion = mModel.get(SuggestionViewProperties.TEXT_LINE_1_TEXT);
         ImageSpan[] imageSpans = suggestion.getSpans(0, suggestion.length(), ImageSpan.class);
-        Assert.assertEquals(1, imageSpans.length);
-        Assert.assertEquals(
+        assertEquals(1, imageSpans.length);
+        assertEquals(
                 TabGroupColorPickerUtils.getTabGroupColorPickerItemColor(
                         mContext, TabGroupColorId.RED, /* isIncognito= */ false),
                 ((ShapeDrawable) imageSpans[0].getDrawable()).getPaint().getColor());
 
-        Assert.assertEquals(
-                DESCRIPTION, mModel.get(SuggestionViewProperties.TEXT_LINE_2_TEXT).toString());
-        Assert.assertEquals(
+        assertEquals(DESCRIPTION, mModel.get(SuggestionViewProperties.TEXT_LINE_2_TEXT).toString());
+        assertEquals(
                 TITLE,
                 mModel.get(SuggestionViewProperties.TEXT_LINE_1_TEXT)
                         .subSequence(
@@ -153,6 +153,6 @@ public class TabGroupSuggestionProcessorUnitTest {
                         TITLE,
                         "Red",
                         DESCRIPTION);
-        Assert.assertEquals(targetString, mModel.get(SuggestionViewProperties.CONTENT_DESCRIPTION));
+        assertEquals(targetString, mModel.get(SuggestionViewProperties.CONTENT_DESCRIPTION));
     }
 }

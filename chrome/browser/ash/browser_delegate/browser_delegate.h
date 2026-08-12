@@ -8,10 +8,12 @@
 #include "chrome/browser/ash/browser_delegate/browser_type.h"
 #include "components/account_id/account_id.h"
 #include "components/sessions/core/session_id.h"
+#include "components/tabs/public/tab_collection.h"
+#include "components/webapps/browser/launch_queue/launch_params.h"
 #include "components/webapps/common/web_app_id.h"
 #include "ui/gfx/geometry/rect.h"
 
-class Browser;
+class BrowserWindowInterface;
 class GURL;
 
 namespace aura {
@@ -32,6 +34,8 @@ class BaseWindow;
 
 namespace ash {
 
+class SystemWebAppDelegate;
+
 // Abstraction of the `Browser` class from chrome/browser/ui/browser.h for use
 // by ChromeOS feature code. See README.md.
 class BrowserDelegate {
@@ -40,7 +44,7 @@ class BrowserDelegate {
   // NOTE: This function is here only temporarily to facilitate transitioning
   // code from Browser to BrowserDelegate incrementally. See also
   // BrowserController::GetDelegate.
-  virtual Browser& GetBrowser() const = 0;
+  virtual BrowserWindowInterface& GetBrowser() const = 0;
 
   // Returns the browser's type.
   virtual BrowserType GetType() const = 0;
@@ -56,6 +60,15 @@ class BrowserDelegate {
   // session.
   virtual bool IsOffTheRecord() const = 0;
 
+  // Returns whether the browser was created by StartupBrowserCreator. Mutually
+  // exclusive with `IsCreatedBySessionRestoreForStartupUrls`.
+  virtual bool IsCreatedByStartupCreator() const = 0;
+
+  // Returns whether the browser was created by SessionRestore to open
+  // startup URLs for the LAST_AND_URLS preference. Mutually exclusive with
+  // `IsCreatedByStartupCreator`.
+  virtual bool IsCreatedBySessionRestoreForStartupUrls() const = 0;
+
   // Returns the browser window's current bounds.
   virtual gfx::Rect GetBounds() const = 0;
 
@@ -69,6 +82,9 @@ class BrowserDelegate {
   // Returns the contents for the given index, or nullptr if out of bounds. Can
   // be nullptr even if index is in bounds, just like GetActiveWebContents().
   virtual content::WebContents* GetWebContentsAt(size_t index) const = 0;
+
+  // Returns a range wrapper to iterate over all tabs in the browser.
+  virtual tabs::TabIteratorRange GetTabIterator() const = 0;
 
   // Returns the inspected web contents if this is a kDevTools type browser.
   // Returns nullptr otherwise.
@@ -86,8 +102,16 @@ class BrowserDelegate {
   // Returns the non-empty browser application id, if applicable.
   virtual std::optional<webapps::AppId> GetAppId() const = 0;
 
+  // Returns the user-defined window title if one is set. If a title is
+  // returned, the string is never empty.
+  virtual std::optional<std::string> GetUserDefinedWindowTitle() const = 0;
+
   // Returns whether the browser is a web app window/pop-up.
   virtual bool IsWebApp() const = 0;
+
+  // Returns the SystemWebAppDelegate if this browser is hosting a system web
+  // app, or nullptr otherwise.
+  virtual const SystemWebAppDelegate* GetSWADelegate() const = 0;
 
   // Returns true during the initial phase of the browser being closed, when
   // `beforeunload` handlers are running (async). It may be aborted.
@@ -138,14 +162,18 @@ class BrowserDelegate {
   enum class UserGesture { kYes, kNo };
   virtual void CloseWebContentsAt(size_t index, UserGesture user_gesture) = 0;
 
-  // Navigates the browser to the given URL.
+  // Navigates the browser to the given URL, and enqueues the launch params
+  // passed as an input if they are available once the navigation commits
+  // to the LaunchQueue.
   // The browser must be of `kApp` or `kAppPopup` type.
   // In the case of a tabbed web app (e.g. ChromeOS Terminal), performs tab
   // pinning as requested and ensures that home tab URL navigation happens in
   // the home tab.
   enum class TabPinning { kYes, kNo };
-  virtual content::WebContents* NavigateWebApp(const GURL& url,
-                                               TabPinning pin_tab) = 0;
+  virtual content::WebContents* NavigateWebApp(
+      const GURL& url,
+      TabPinning pin_tab,
+      std::optional<webapps::LaunchParams> launch_params = std::nullopt) = 0;
 
   // Creates the specified tab group.
   virtual void CreateTabGroup(const tab_groups::TabGroupInfo& tab_group) = 0;
@@ -162,6 +190,29 @@ class BrowserDelegate {
 
   // Resets the location bar so that its permanent text is shown.
   virtual void ResetLocationBar() = 0;
+
+  // Enters locked fullscreen mode.
+  // Pins the window, updates browser commands, and optionally focuses the
+  // toolbar.
+  virtual void EnterLockedFullscreen(bool focus_toolbar) = 0;
+
+  // Leaves locked fullscreen mode.
+  // Unpins the window and updates browser commands.
+  virtual void LeaveLockedFullscreen() = 0;
+
+  // Sets whether command shortcuts related to DevTools are enabled.
+  virtual void SetDevToolsCommandsEnabled(bool enabled) = 0;
+
+  // Sets whether command shortcuts related to tab switching are enabled.
+  virtual void SetTabSwitchCommandsEnabled(bool enabled) = 0;
+
+  // Activates the web contents at the specified tab strip index.
+  virtual void ActivateWebContentsAt(size_t index) = 0;
+
+  //// The following functions are added purely for convenience. ////
+
+  // Returns whether the browser window is in locked fullscreen mode.
+  virtual bool IsLockedFullscreen() const = 0;
 
  protected:
   ~BrowserDelegate() = default;

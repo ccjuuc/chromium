@@ -53,10 +53,9 @@
       "builder"
     ],
     "enable_cloud_monitoring": true,
-    "enable_cloud_profiler": true,
     "enable_cloud_trace": true,
     "experiments": [],
-    "metrics_project": "chromium-reclient-metrics",
+    "profile_mode": "cloud",
     "project": "rbe-chromium-trusted",
     "remote_jobs": 250
   },
@@ -67,6 +66,7 @@
       "v.test_suite"
     ]
   },
+  "archive_path": "linux-release-asan/centipede-linux-release",
   "archive_prefix": "centipede",
   "builder_group": "chromium.fuzz",
   "gardener_rotations": [

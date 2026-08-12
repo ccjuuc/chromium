@@ -5,17 +5,38 @@
 #include <memory>
 
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/bind_post_task.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/test/test_future.h"
 #include "chrome/browser/speech/chrome_speech_recognition_manager_delegate.h"
+#include "chrome/browser/speech/fake_speech_recognition_service.h"
+#include "chrome/browser/speech/speech_recognition_service_factory.h"
 #include "chrome/browser/ui/browser.h"
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_features.h"
+#include "chrome/browser/speech/cros_speech_recognition_service_factory.h"
+#endif
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/fake_speech_recognition_manager.h"
+#include "media/mojo/mojom/speech_recognition.mojom.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+#include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/profiles/profile.h"
+#include "extensions/browser/process_map.h"
+#endif
 
 using content::FakeSpeechRecognitionManager;
 using content::WebContents;
@@ -24,13 +45,25 @@ namespace speech {
 
 class ChromeSpeechRecognitionTest : public InProcessBrowserTest {
  public:
-  ChromeSpeechRecognitionTest() = default;
+  ChromeSpeechRecognitionTest() {
+#if BUILDFLAG(IS_CHROMEOS)
+    scoped_feature_list_.InitAndEnableFeature(
+        ash::features::kOnDeviceSpeechRecognition);
+#endif
+  }
 
   ChromeSpeechRecognitionTest(const ChromeSpeechRecognitionTest&) = delete;
   ChromeSpeechRecognitionTest& operator=(const ChromeSpeechRecognitionTest&) =
       delete;
 
   ~ChromeSpeechRecognitionTest() override = default;
+
+  static void CheckRenderFrameType(
+      base::OnceCallback<void(bool ask_user, bool is_allowed)> callback,
+      content::GlobalRenderFrameHostId global_id) {
+    ChromeSpeechRecognitionManagerDelegate::CheckRenderFrameType(
+        std::move(callback), global_id);
+  }
 
   void SetUp() override {
     // SpeechRecognition test specific SetUp.
@@ -52,6 +85,10 @@ class ChromeSpeechRecognitionTest : public InProcessBrowserTest {
  protected:
   ChromeSpeechRecognitionManagerDelegate delegate_;
   content::FakeSpeechRecognitionManager fake_speech_recognition_manager_;
+
+#if BUILDFLAG(IS_CHROMEOS)
+  base::test::ScopedFeatureList scoped_feature_list_;
+#endif
 };
 
 class SpeechWebContentsObserver : public content::WebContentsObserver {
@@ -139,5 +176,117 @@ IN_PROC_BROWSER_TEST_F(ChromeSpeechRecognitionTest, BasicTearDown) {
   chrome::CloseTab(browser());
   EXPECT_TRUE(speech_contents_observer.web_contents_destroyed());
 }
+
+// Tests the TOCTOU race condition where an iframe is detached between
+// StartRequestOnUI and CheckRenderFrameType, causing the RFH to be null.
+// The safe fallback logic should securely deny permission.
+IN_PROC_BROWSER_TEST_F(ChromeSpeechRecognitionTest, TOCTOUPermissionBypass) {
+  base::test::TestFuture<bool /* ask_user */, bool /* is_allowed */> future;
+
+  content::ChildProcessId process_id = browser()
+                                           ->tab_strip_model()
+                                           ->GetActiveWebContents()
+                                           ->GetPrimaryMainFrame()
+                                           ->GetProcess()
+                                           ->GetID();
+
+  // Call CheckRenderFrameType directly on the UI thread with an invalid RFH ID
+  // but a valid renderer process ID to simulate a detached iframe.
+  CheckRenderFrameType(
+      base::BindPostTask(content::GetUIThreadTaskRunner({}),
+                         future.GetCallback()),
+      content::GlobalRenderFrameHostId(process_id, IPC::mojom::kRoutingIdNone));
+
+  // Wait for the callback and validate the safe logic.
+  // Get<0>() is ask_user, Get<1>() is is_allowed.
+  EXPECT_FALSE(future.Get<0>());
+  EXPECT_FALSE(future.Get<1>());
+}
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+// Verifies that extension background pages/service workers are successfully
+// granted permission despite having a null RenderFrameHost.
+IN_PROC_BROWSER_TEST_F(ChromeSpeechRecognitionTest,
+                       ExtensionBackgroundPageAllowed) {
+  base::test::TestFuture<bool /* ask_user */, bool /* is_allowed */> future;
+
+  content::ChildProcessId process_id = browser()
+                                           ->tab_strip_model()
+                                           ->GetActiveWebContents()
+                                           ->GetPrimaryMainFrame()
+                                           ->GetProcess()
+                                           ->GetID();
+
+  extensions::ProcessMap::Get(browser()->GetProfile())
+      ->Insert("fake_extension_id", process_id);
+
+  // Call CheckRenderFrameType with a missing frame, which is typical for
+  // extension background pages or service workers.
+  CheckRenderFrameType(
+      base::BindPostTask(content::GetUIThreadTaskRunner({}),
+                         future.GetCallback()),
+      content::GlobalRenderFrameHostId(process_id, IPC::mojom::kRoutingIdNone));
+
+  // For extensions, check_permission (ask_user) must be true so that
+  // MakeMediaAccessRequest is called to enforce manifest permissions and UI
+  // indicators, while is_allowed should be true.
+  EXPECT_TRUE(future.Get<0>());
+  EXPECT_TRUE(future.Get<1>());
+}
+#endif
+
+#if !BUILDFLAG(IS_ANDROID)
+IN_PROC_BROWSER_TEST_F(ChromeSpeechRecognitionTest,
+                       IncognitoRoutesToIncognitoService) {
+  Browser* incognito_browser = CreateIncognitoBrowser();
+  ASSERT_TRUE(incognito_browser);
+
+  struct TestContext {
+    base::OnceClosure quit_closure;
+    bool created = false;
+  };
+  auto context = std::make_unique<TestContext>();
+  base::RunLoop run_loop;
+  context->quit_closure = run_loop.QuitClosure();
+  TestContext* context_ptr = context.get();
+
+  auto testing_factory = base::BindRepeating(
+      [](TestContext* ctx,
+         content::BrowserContext* context) -> std::unique_ptr<KeyedService> {
+        ctx->created = true;
+        if (ctx->quit_closure) {
+          std::move(ctx->quit_closure).Run();
+        }
+        return std::make_unique<FakeSpeechRecognitionService>();
+      },
+      base::Unretained(context_ptr));
+
+#if BUILDFLAG(IS_CHROMEOS)
+  CrosSpeechRecognitionServiceFactory::GetInstanceForTest()->SetTestingFactory(
+      incognito_browser->GetProfile(), std::move(testing_factory));
+#else
+  SpeechRecognitionServiceFactory::GetInstanceForTest()->SetTestingFactory(
+      incognito_browser->GetProfile(), std::move(testing_factory));
+#endif
+
+  WebContents* web_contents =
+      incognito_browser->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(web_contents);
+  content::RenderFrameHost* rfh = web_contents->GetPrimaryMainFrame();
+  content::GlobalRenderFrameHostId rfh_id = rfh->GetGlobalId();
+
+  mojo::Remote<media::mojom::SpeechRecognitionContext> remote;
+  content::GetIOThreadTaskRunner({})->PostTask(
+      FROM_HERE,
+      base::BindOnce(&content::SpeechRecognitionManagerDelegate::
+                         BindSpeechRecognitionContext,
+                     base::Unretained(&delegate_),
+                     remote.BindNewPipeAndPassReceiver(), "en-US", rfh_id));
+
+  run_loop.Run();
+
+  EXPECT_TRUE(context_ptr->created);
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 }  // namespace speech

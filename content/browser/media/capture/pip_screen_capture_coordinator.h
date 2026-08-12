@@ -7,7 +7,10 @@
 
 #include <memory>
 
+#include "base/observer_list_types.h"
+#include "base/unguessable_token.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/desktop_capture_pip_utils.h"
 #include "content/public/browser/desktop_media_id.h"
 #include "content/public/browser/global_routing_id.h"
 
@@ -17,7 +20,7 @@ class PipScreenCaptureCoordinatorProxy;
 class WebContents;
 
 // Manages information about the visibility and identity of
-// Picture-in-Picture (PiP) windows associated with a
+// document picture-in-picture (PiP) windows associated with a
 // WebContents. This is used for excluding the PiP window from screen
 // captures of the originating tab.
 class CONTENT_EXPORT PipScreenCaptureCoordinator {
@@ -47,6 +50,17 @@ class CONTENT_EXPORT PipScreenCaptureCoordinator {
   GetPipWindowToExcludeFromScreenCapture(DesktopMediaID::Id desktop_id) = 0;
 
   virtual std::unique_ptr<PipScreenCaptureCoordinatorProxy> CreateProxy() = 0;
+
+  virtual void AddExclusionObserver(
+      desktop_capture::PipScreenCaptureExclusionObserver* observer) = 0;
+  virtual void RemoveExclusionObserver(
+      desktop_capture::PipScreenCaptureExclusionObserver* observer) = 0;
+  virtual bool IsExcludedFromScreenCapture() const = 0;
+
+  virtual base::UnguessableToken RegisterMediaPickerAsCapture(
+      const GlobalRenderFrameHostId& render_frame_host_id) = 0;
+  virtual void UnregisterMediaPickerAsCapture(
+      const base::UnguessableToken& session_id) = 0;
 
  protected:
   PipScreenCaptureCoordinator() = default;

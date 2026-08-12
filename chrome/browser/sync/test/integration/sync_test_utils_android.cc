@@ -57,7 +57,7 @@ AccountInfo GetFakeAccountInfo(
   }
   bool managed = hosted_domain.has_value() && !hosted_domain->empty() &&
                  hosted_domain != signin::constants::kNoHostedDomainFound;
-  AccountCapabilitiesTestMutator(&account_info.capabilities)
+  AccountCapabilitiesTestMutator(&account_info)
       .set_is_subject_to_enterprise_features(managed);
   return account_info;
 }
@@ -74,7 +74,7 @@ void SetUpFakeAccountAndSignInForTesting(
         Java_SyncTestSigninUtils_setUpAccountAndSignInForTesting(
             base::android::AttachCurrentThread(),
             GetFakeAccountInfo(username, hosted_domain),
-            static_cast<int>(consent_level));
+            /*withSyncConsent=*/consent_level == signin::ConsentLevel::kSync);
         run_loop.Quit();
       }));
   run_loop.Run();
@@ -115,7 +115,8 @@ void SetUpLiveAccountAndSignInForTesting(const std::string& username,
       FROM_HERE, {base::MayBlock()}, base::BindLambdaForTesting([&]() {
         JNIEnv* env = base::android::AttachCurrentThread();
         Java_SyncTestSigninUtils_setUpLiveAccountAndSignInForTesting(
-            env, username, password, static_cast<int>(consent_level));
+            env, username, password, /*withSyncConsent=*/
+            consent_level == signin::ConsentLevel::kSync);
         run_loop.Quit();
       }));
   run_loop.Run();
@@ -160,13 +161,13 @@ void UpdateTabGroupVisualData(TabAndroid* tab,
   CHECK(tab);
   JNIEnv* env = base::android::AttachCurrentThread();
   auto j_title = base::android::ConvertUTF8ToJavaString(env, title);
-  jint j_color = static_cast<jint>(color);
+  int32_t j_color = static_cast<int32_t>(color);
   Java_SyncTestTabGroupHelpers_updateGroupVisualData(env, tab->GetJavaObject(),
                                                      j_title, j_color);
 }
 
 static void JNI_SyncTestSigninUtils_OnShutdownComplete(JNIEnv* env,
-                                                       jlong callbackPtr) {
+                                                       int64_t callbackPtr) {
   std::unique_ptr<base::OnceClosure> heap_callback(
       reinterpret_cast<base::OnceClosure*>(callbackPtr));
   std::move(*heap_callback).Run();

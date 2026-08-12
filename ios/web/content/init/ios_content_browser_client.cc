@@ -11,11 +11,26 @@
 #import "content/public/browser/devtools_manager_delegate.h"
 #import "content/public/browser/web_contents_view_delegate.h"
 #import "content/public/common/url_constants.h"
+#import "ios/web/content/common/constants.h"
 #import "ios/web/content/init/ios_browser_main_parts.h"
 #import "ios/web/content/ui/web_contents_view_delegate_impl.h"
+#import "services/network/public/mojom/network_context.mojom.h"
 #include "third_party/blink/public/common/switches.h"
 
 namespace web {
+
+namespace {
+
+base::FilePath GetPartitionPath(content::BrowserContext* context,
+                                const base::FilePath& relative_partition_path) {
+  base::FilePath path = context->GetPath();
+  if (!relative_partition_path.empty()) {
+    path = path.Append(relative_partition_path);
+  }
+  return path;
+}
+
+}  // namespace
 
 bool IOSContentBrowserClient::IsHandledURL(const GURL& url) {
   if (!url.is_valid()) {
@@ -61,22 +76,7 @@ std::string IOSContentBrowserClient::GetUserAgent() {
 }
 
 blink::UserAgentMetadata IOSContentBrowserClient::GetUserAgentMetadata() {
-  blink::UserAgentMetadata metadata;
-
-  metadata.brand_version_list.emplace_back(
-      std::string(version_info::GetProductName()), "113");
-  metadata.brand_full_version_list.emplace_back(
-      std::string(version_info::GetProductName()),
-      std::string(version_info::GetVersionNumber()));
-  metadata.full_version = std::string(version_info::GetVersionNumber());
-  metadata.platform = "Unknown";
-  metadata.architecture = embedder_support::GetCpuArchitecture();
-  metadata.model = embedder_support::BuildModelInfo();
-
-  metadata.bitness = embedder_support::GetCpuBitness();
-  metadata.wow64 = embedder_support::IsWoW64();
-
-  return metadata;
+  return embedder_support::GetUserAgentMetadata();
 }
 
 std::unique_ptr<content::WebContentsViewDelegate>
@@ -87,25 +87,6 @@ IOSContentBrowserClient::GetWebContentsViewDelegate(
     registry->MaybeCreatePageNodeForWebContents(web_contents);
   }
   return CreateWebContentsViewDelegate(web_contents);
-}
-
-bool IOSContentBrowserClient::IsSharedStorageAllowed(
-    content::BrowserContext* browser_context,
-    content::RenderFrameHost* rfh,
-    const url::Origin& top_frame_origin,
-    const url::Origin& accessing_origin,
-    std::string* out_debug_message,
-    bool* out_block_is_site_setting_specific) {
-  return true;
-}
-
-bool IOSContentBrowserClient::IsSharedStorageSelectURLAllowed(
-    content::BrowserContext* browser_context,
-    const url::Origin& top_frame_origin,
-    const url::Origin& accessing_origin,
-    std::string* out_debug_message,
-    bool* out_block_is_site_setting_specific) {
-  return true;
 }
 
 content::GeneratedCodeCacheSettings
@@ -120,6 +101,27 @@ IOSContentBrowserClient::GetGeneratedCodeCacheSettings(
 std::unique_ptr<content::DevToolsManagerDelegate>
 IOSContentBrowserClient::CreateDevToolsManagerDelegate() {
   return std::make_unique<content::DevToolsManagerDelegate>();
+}
+
+void IOSContentBrowserClient::ConfigureNetworkContextParams(
+    content::BrowserContext* context,
+    bool in_memory,
+    const base::FilePath& relative_partition_path,
+    network::mojom::NetworkContextParams* network_context_params,
+    cert_verifier::mojom::CertVerifierCreationParams*
+        cert_verifier_creation_params) {
+  if (!in_memory) {
+    network_context_params->file_paths =
+        network::mojom::NetworkContextFilePaths::New();
+    network_context_params->file_paths->data_directory =
+        GetPartitionPath(context, relative_partition_path)
+            .Append(kNetworkDataDirname);
+    network_context_params->file_paths->cookie_database_name =
+        base::FilePath(kCookieFilename);
+
+    network_context_params->restore_old_session_cookies = true;
+    network_context_params->persist_session_cookies = true;
+  }
 }
 
 }  // namespace web

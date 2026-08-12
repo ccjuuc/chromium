@@ -9,7 +9,10 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "ash/constants/chrome_webui_url_constants.h"
+#include "ash/constants/url_constants.h"
 #include "ash/edusumer/graduation_utils.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/check.h"
 #include "base/check_deref.h"
 #include "base/check_op.h"
@@ -27,8 +30,6 @@
 #include "chrome/browser/ash/account_manager/account_manager_util.h"
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_utils.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ui_features.h"
@@ -41,15 +42,12 @@
 #include "chrome/browser/ui/webui/settings/people_handler.h"
 #include "chrome/browser/ui/webui/settings/profile_info_handler.h"
 #include "chrome/browser/ui/webui/settings/shared_settings_localized_strings_provider.h"
-#include "chrome/common/url_constants.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/browser_resources.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/account_manager/account_manager_factory.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
-#include "components/account_manager_core/account_manager_facade.h"
 #include "components/account_manager_core/pref_names.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/prefs/pref_service.h"
@@ -192,13 +190,13 @@ void AddAccountManagerPageStrings(content::WebUIDataSource* html_source,
           base::UTF8ToUTF16(user->GetDisplayEmail())));
 
   html_source->AddString("accountManagerLearnMoreUrl",
-                         chrome::kAccountManagerLearnMoreURL);
+                         ash::external_urls::kAccountManagerLearnMoreURL);
   html_source->AddLocalizedString(
       "accountManagerManagementDescription",
       profile->IsChild() ? IDS_SETTINGS_ACCOUNT_MANAGER_MANAGEMENT_STATUS_CHILD
                          : IDS_SETTINGS_ACCOUNT_MANAGER_MANAGEMENT_STATUS);
   html_source->AddString("accountManagerChromeUIManagementURL",
-                         chrome::kChromeUIManagementURL16);
+                         ash::chrome_urls::kChromeUIManagementURL16);
   html_source->AddString(
       "accountManagerDescription",
       l10n_util::GetStringFUTF16(IDS_SETTINGS_ACCOUNT_MANAGER_DESCRIPTION_V2,
@@ -217,6 +215,14 @@ void AddLockScreenPageStrings(content::WebUIDataSource* html_source,
        IDS_ASH_SETTINGS_LOCK_SCREEN_NOTIFICATION_SHOW},
       {"lockScreenPinOrPassword",
        IDS_SETTINGS_PEOPLE_LOCK_SCREEN_PIN_OR_PASSWORD},
+      {"lockScreenPinOnly", IDS_SETTINGS_PEOPLE_LOCK_SCREEN_PIN_ONLY},
+      {"lockScreenPasswordOrFingerprint",
+       IDS_SETTINGS_PEOPLE_LOCK_SCREEN_PASSWORD_OR_FINGERPRINT},
+      {"lockScreenPinOrFingerprint",
+       IDS_SETTINGS_PEOPLE_LOCK_SCREEN_PIN_OR_FINGERPRINT},
+      {"lockScreenPasswordOrPinOrFingerprint",
+       IDS_SETTINGS_PEOPLE_LOCK_SCREEN_PASSWORD_OR_PIN_OR_FINGERPRINT},
+      {"lockScreenNoAuthFactor", IDS_SETTINGS_PEOPLE_LOCK_SCREEN_NO_AUTH},
       {"lockScreenPinMoreButtonAriaLabel",
        IDS_SETTINGS_PEOPLE_LOCK_SCREEN_PIN_MORE_BUTTON_ARIA_LABEL},
       {"lockScreenPinAutoSubmit",
@@ -288,6 +294,24 @@ void AddLockScreenPageStrings(content::WebUIDataSource* html_source,
        IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_CONFIRM_PLACEHOLDER},
       {"setLocalPasswordMinCharsHint",
        IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_MIN_CHARS_HINT},
+      {"setLocalPasswordErrorTooShort",
+       IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_ERROR_TOO_SHORT},
+      {"setLocalPasswordErrorContainsTrivialSequence",
+       IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_ERROR_CONTAINS_TRIVIAL_SEQUENCE},
+      {"setLocalPasswordReqLetterOrSymbol",
+       IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_REQ_LETTER_OR_SYMBOL},
+      {"setLocalPasswordReqTwoClasses",
+       IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_REQ_TWO_CLASSES},
+      {"setLocalPasswordReqFourClasses",
+       IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_REQ_FOUR_CLASSES},
+      {"setLocalPasswordComplexityErrorNone",
+       IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_COMPLEXITY_ERROR_NONE},
+      {"setLocalPasswordComplexityErrorLow",
+       IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_COMPLEXITY_ERROR_LOW},
+      {"setLocalPasswordComplexityErrorMedium",
+       IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_COMPLEXITY_ERROR_MEDIUM},
+      {"setLocalPasswordComplexityErrorHigh",
+       IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_COMPLEXITY_ERROR_HIGH},
       {"setLocalPasswordNoMatchError",
        IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_NO_MATCH_ERROR},
   };
@@ -298,11 +322,6 @@ void AddLockScreenPageStrings(content::WebUIDataSource* html_source,
       "quickUnlockDisabledByPolicy",
       quick_unlock::IsPinDisabledByPolicy(profile->GetPrefs(),
                                           quick_unlock::Purpose::kAny));
-  html_source->AddBoolean("lockScreenNotificationsEnabled",
-                          ash::features::IsLockScreenNotificationsEnabled());
-  html_source->AddBoolean(
-      "lockScreenHideSensitiveNotificationsSupported",
-      ash::features::IsLockScreenHideSensitiveNotificationsSupported());
   html_source->AddString(
       "lockScreenSwitchLocalPasswordDescription",
       l10n_util::GetStringFUTF16(
@@ -318,8 +337,11 @@ void AddLockScreenPageStrings(content::WebUIDataSource* html_source,
                              IDS_SETTINGS_PEOPLE_LOCK_SCREEN_FINGERPRINT_NOTICE,
                              ui::GetChromeOSDeviceName()));
   html_source->AddString("fingerprintLearnMoreLink",
-                         chrome::kFingerprintLearnMoreURL);
-  html_source->AddString("recoveryLearnMoreUrl", chrome::kRecoveryLearnMoreURL);
+                         ash::external_urls::kFingerprintLearnMoreURL);
+  html_source->AddString("recoveryLearnMoreUrl",
+                         ash::external_urls::kRecoveryLearnMoreURL);
+  html_source->AddBoolean("managedLocalPinAndPasswordEnabled",
+                          ash::features::IsManagedLocalPinAndPasswordEnabled());
 }
 
 void AddFingerprintListStrings(content::WebUIDataSource* html_source) {
@@ -377,13 +399,26 @@ void AddSetupPinDialogStrings(content::WebUIDataSource* html_source) {
        IDS_SETTINGS_PEOPLE_CONFIGURE_PIN_CHOOSE_PIN_TITLE},
       {"configurePinConfirmPinTitle",
        IDS_SETTINGS_PEOPLE_CONFIGURE_PIN_CONFIRM_PIN_TITLE},
-      {"invalidPin", IDS_SETTINGS_PEOPLE_PIN_PROMPT_INVALID_PIN},
       {"configurePinMismatched", IDS_SETTINGS_PEOPLE_CONFIGURE_PIN_MISMATCHED},
       {"configurePinTooShort", IDS_SETTINGS_PEOPLE_CONFIGURE_PIN_TOO_SHORT},
       {"configurePinTooLong", IDS_SETTINGS_PEOPLE_CONFIGURE_PIN_TOO_LONG},
       {"configurePinWeakPin", IDS_SETTINGS_PEOPLE_CONFIGURE_PIN_WEAK_PIN},
       {"configurePinNondigit", IDS_SETTINGS_PEOPLE_CONFIGURE_PIN_NONDIGIT},
       {"internalError", IDS_SETTINGS_PEOPLE_CONFIGURE_PIN_INTERNAL_ERROR},
+      {"configurePinComplexityErrorNone",
+       IDS_SETTINGS_PEOPLE_CONFIGURE_PIN_COMPLEXITY_ERROR_NONE},
+      {"configurePinComplexityErrorLow",
+       IDS_SETTINGS_PEOPLE_CONFIGURE_PIN_COMPLEXITY_ERROR_LOW},
+      {"configurePinComplexityErrorMedium",
+       IDS_SETTINGS_PEOPLE_CONFIGURE_PIN_COMPLEXITY_ERROR_MEDIUM},
+      {"configurePinComplexityErrorHigh",
+       IDS_SETTINGS_PEOPLE_CONFIGURE_PIN_COMPLEXITY_ERROR_HIGH},
+      {"configurePinComplexityRepeating",
+       IDS_SETTINGS_PEOPLE_CONFIGURE_PIN_REPEATING_DIGITS},
+      {"configurePinComplexityOrdered",
+       IDS_SETTINGS_PEOPLE_CONFIGURE_PIN_ORDERED_SEQUENCE},
+      {"configurePinComplexityTooShort",
+       IDS_SETTINGS_PEOPLE_CONFIGURE_PIN_COMPLEXITY_TOO_SHORT},
       {"pinKeyboardPlaceholderPin", IDS_PIN_KEYBOARD_HINT_TEXT_PIN},
       {"pinKeyboardPlaceholderPinPassword",
        IDS_PIN_KEYBOARD_HINT_TEXT_PIN_PASSWORD},
@@ -491,15 +526,14 @@ PeopleSection::PeopleSection(Profile* profile,
   // OS and browser settings.
   if (IsAccountManagerAvailable(profile)) {
     // Some Account Manager search tags are added/removed dynamically.
-    auto* factory =
-        g_browser_process->platform_part()->GetAccountManagerFactory();
-    account_manager_ = factory->GetAccountManager(profile->GetPath().value());
+    account_manager_ = AccountManagerFactory::Get()->GetAccountManager(
+        profile->GetPath().value());
     DCHECK(account_manager_);
     account_manager_facade_ =
         AccountManagerFactory::Get()->GetAccountManagerFacade(
             profile->GetPath().value());
     DCHECK(account_manager_facade_);
-    account_manager_facade_observation_.Observe(account_manager_facade_.get());
+    account_manager_observation_.Observe(account_manager_.get());
     account_apps_availability_ =
         AccountAppsAvailabilityFactory::GetForProfile(profile);
     FetchAccounts();
@@ -545,7 +579,7 @@ void PeopleSection::AddLoadTimeData(content::WebUIDataSource* html_source) {
 
   // Toggles the ChromeOS Account Manager submenu in the People section.
   html_source->AddBoolean("isAccountManagerEnabled",
-                          account_manager_facade_ != nullptr);
+                          account_manager_ != nullptr);
   html_source->AddBoolean("isDeviceAccountManaged",
                           profile()->GetProfilePolicyConnector()->IsManaged());
 
@@ -637,25 +671,19 @@ void PeopleSection::RegisterHierarchy(HierarchyGenerator* generator) const {
 }
 
 void PeopleSection::FetchAccounts() {
-  account_manager_facade_->GetAccounts(
+  CHECK(account_manager_);
+  account_manager_->GetAccounts(
       base::BindOnce(&PeopleSection::UpdateAccountManagerSearchTags,
                      weak_factory_.GetWeakPtr()));
 }
 
-void PeopleSection::OnAccountUpserted(
-    const ::account_manager::Account& account) {
+void PeopleSection::OnTokenUpserted(const ::account_manager::Account& account) {
   FetchAccounts();
 }
 
 void PeopleSection::OnAccountRemoved(
     const ::account_manager::Account& account) {
   FetchAccounts();
-}
-
-void PeopleSection::OnAuthErrorChanged(
-    const account_manager::AccountKey& account,
-    const GoogleServiceAuthError& error) {
-  // Nothing to do.
 }
 
 void PeopleSection::UpdateAccountManagerSearchTags(

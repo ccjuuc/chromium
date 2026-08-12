@@ -7,9 +7,11 @@
 
 #include <d3d11.h>
 #include <wrl.h>
+
 #include <memory>
 #include <vector>
 
+#include "components/viz/common/resources/shared_image_format.h"
 #include "media/gpu/media_gpu_export.h"
 #include "media/gpu/windows/d3d11_picture_buffer.h"
 #include "media/gpu/windows/d3d11_video_processor_proxy.h"
@@ -26,8 +28,8 @@ class FormatSupportChecker;
 class MEDIA_GPU_EXPORT TextureSelector {
  public:
   TextureSelector(VideoPixelFormat pixfmt,
-                  DXGI_FORMAT output_dxgifmt,
-                  ComD3D11VideoDevice video_device,
+                  viz::SharedImageFormat output_si_format,
+                  ComD3D11VideoDevice1 video_device,
                   ComD3D11DeviceContext d3d11_device_context,
                   bool use_shared_handle);
   virtual ~TextureSelector();
@@ -37,7 +39,7 @@ class MEDIA_GPU_EXPORT TextureSelector {
       const gpu::GpuDriverBugWorkarounds& workarounds,
       DXGI_FORMAT decoder_output_format,
       const FormatSupportChecker* format_checker,
-      ComD3D11VideoDevice video_device,
+      ComD3D11VideoDevice1 video_device,
       ComD3D11DeviceContext device_context,
       MediaLog* media_log,
       gfx::ColorSpace input_color_space,
@@ -51,7 +53,9 @@ class MEDIA_GPU_EXPORT TextureSelector {
   virtual bool DoesDecoderOutputUseSharedHandle() const;
 
   VideoPixelFormat PixelFormat() const { return pixel_format_; }
-  DXGI_FORMAT OutputDXGIFormat() const { return output_dxgifmt_; }
+  viz::SharedImageFormat OutputSharedImageFormat() const {
+    return output_si_format_;
+  }
   bool DoesSharedImageUseSharedHandle() const {
     return shared_image_use_shared_handle_;
   }
@@ -59,7 +63,7 @@ class MEDIA_GPU_EXPORT TextureSelector {
   virtual bool WillCopyForTesting() const;
 
  protected:
-  const ComD3D11VideoDevice& video_device() const { return video_device_; }
+  const ComD3D11VideoDevice1& video_device() const { return video_device_; }
 
   const ComD3D11DeviceContext& device_context() const {
     return device_context_;
@@ -69,9 +73,9 @@ class MEDIA_GPU_EXPORT TextureSelector {
   friend class CopyTextureSelector;
 
   const VideoPixelFormat pixel_format_;
-  const DXGI_FORMAT output_dxgifmt_;
+  const viz::SharedImageFormat output_si_format_;
 
-  ComD3D11VideoDevice video_device_;
+  ComD3D11VideoDevice1 video_device_;
   ComD3D11DeviceContext device_context_;
 
   bool shared_image_use_shared_handle_;
@@ -80,8 +84,8 @@ class MEDIA_GPU_EXPORT TextureSelector {
 class MEDIA_GPU_EXPORT CopyTextureSelector : public TextureSelector {
  public:
   CopyTextureSelector(VideoPixelFormat pixfmt,
-                      DXGI_FORMAT output_dxgifmt,
-                      ComD3D11VideoDevice video_device,
+                      viz::SharedImageFormat output_si_format,
+                      ComD3D11VideoDevice1 video_device,
                       ComD3D11DeviceContext d3d11_device_context,
                       bool use_shared_handle);
   ~CopyTextureSelector() override;

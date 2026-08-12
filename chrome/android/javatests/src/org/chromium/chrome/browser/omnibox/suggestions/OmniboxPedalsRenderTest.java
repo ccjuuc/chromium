@@ -19,6 +19,7 @@ import org.chromium.base.test.params.ParameterAnnotations;
 import org.chromium.base.test.params.ParameterSet;
 import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.night_mode.ChromeNightModeTestUtils;
@@ -35,9 +36,10 @@ import org.chromium.chrome.test.util.OmniboxTestUtils.SuggestionInfo;
 import org.chromium.components.omnibox.AutocompleteMatch;
 import org.chromium.components.omnibox.AutocompleteMatchBuilder;
 import org.chromium.components.omnibox.AutocompleteResult;
-import org.chromium.components.omnibox.OmniboxFeatures;
+import org.chromium.components.omnibox.OmniboxCapabilities;
 import org.chromium.components.omnibox.OmniboxSuggestionType;
 import org.chromium.components.omnibox.action.OmniboxPedalId;
+import org.chromium.ui.base.DeviceFormFactor;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -51,7 +53,8 @@ public class OmniboxPedalsRenderTest {
     // 1: Initial version.
     // 2: Updated refine button assets with vector drawables.
     // 3: Default to bottom-anchored focused omnibox
-    private static final int RENDER_TEST_REVISION = 3;
+    // 4: Removed bottom toolbar functionality
+    private static final int RENDER_TEST_REVISION = 4;
 
     @ParameterAnnotations.ClassParameter
     private static final List<ParameterSet> sClassParams =
@@ -74,7 +77,7 @@ public class OmniboxPedalsRenderTest {
     private OmniboxTestUtils mOmniboxUtils;
 
     public OmniboxPedalsRenderTest(boolean nightMode) {
-        OmniboxFeatures.setShouldRetainOmniboxOnFocusForTesting(false);
+        OmniboxCapabilities.setHasDesktopExperienceForTesting(false);
         ChromeNightModeTestUtils.setUpNightModeForChromeActivity(nightMode);
         mRenderTestRule.setNightModeEnabled(nightMode);
         mRenderTestRule.setVariantPrefix("RegularTab");
@@ -123,6 +126,7 @@ public class OmniboxPedalsRenderTest {
     @Test
     @MediumTest
     @Feature("RenderTest")
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/479724464
     public void testRunChromeSafetyCheckPedal() throws IOException, InterruptedException {
         List<AutocompleteMatch> suggestionsList = new ArrayList<>();
         suggestionsList.add(
@@ -137,6 +141,7 @@ public class OmniboxPedalsRenderTest {
     @Test
     @MediumTest
     @Feature("RenderTest")
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/479724464
     public void testPlayChromeDinoGamePedal() throws IOException, InterruptedException {
         List<AutocompleteMatch> suggestionsList = new ArrayList<>();
         suggestionsList.add(

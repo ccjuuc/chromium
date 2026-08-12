@@ -162,4 +162,14 @@ bool ClassicDnsServerIterator::AttemptAvailable() {
   return false;
 }
 
+size_t PlatformDnsServerIterator::GetNextAttemptIndex() {
+  DCHECK(AttemptAvailable());
+  times_returned_[0]++;
+  return 0;
+}
+
+bool PlatformDnsServerIterator::AttemptAvailable() {
+  return times_returned_[0] < max_times_returned_;
+}
+
 }  // namespace net

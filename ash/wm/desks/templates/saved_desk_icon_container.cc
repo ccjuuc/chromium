@@ -15,7 +15,6 @@
 #include "ash/wm/desks/templates/saved_desk_constants.h"
 #include "ash/wm/window_restore/window_restore_util.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "components/app_restore/app_restore_utils.h"
 #include "ui/accessibility/ax_enums.mojom-shared.h"
@@ -66,7 +65,7 @@ void InsertIconIdentifierToIconInfo(
         out_icon_identifier_to_icon_info) {
   // A single app/site can have multiple windows so count their occurrences and
   // use the smallest activation index for sorting purposes.
-  if (!base::Contains(out_icon_identifier_to_icon_info, identifier)) {
+  if (!out_icon_identifier_to_icon_info.contains(identifier)) {
     out_icon_identifier_to_icon_info[identifier] = {
         app_id, base::UTF16ToUTF8(app_title), activation_index,
         /*count=*/1};
@@ -115,7 +114,7 @@ void InsertIconIdentifierToIconInfoFromLaunchList(
         // entries with the same domain. If this is the first URL for a domain,
         // then `it` will point to the newly inserted entry, otherwise it will
         // point to an already existing entry.
-        auto [it, found] =
+        auto [it, _] =
             domain_to_url_index.emplace(urls[i].GetWithEmptyPath(), i);
         const GURL& url = urls[it->second];
 

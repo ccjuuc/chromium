@@ -65,6 +65,11 @@ RenderWidgetHostImpl* MockRenderWidgetHostDelegate::GetFocusedRenderWidgetHost(
   return !!focused_widget_ ? focused_widget_.get() : widget_host;
 }
 
+RenderWidgetHostImpl*
+MockRenderWidgetHostDelegate::GetRenderWidgetHostWithPageFocus() {
+  return focused_widget_;
+}
+
 void MockRenderWidgetHostDelegate::SendScreenRects() {
   if (rwh_)
     rwh_->SendScreenRects();
@@ -102,13 +107,13 @@ MockRenderWidgetHostDelegate::GetDelegatedInkRenderer(
   return delegated_ink_point_renderer_.get();
 }
 
-void MockRenderWidgetHostDelegate::OnInputIgnored(
-    const blink::WebInputEvent& event) {}
-
 input::TouchEmulator* MockRenderWidgetHostDelegate::GetTouchEmulator(
     bool create_if_necessary) {
   NOTIMPLEMENTED();
   return nullptr;
 }
+
+void MockRenderWidgetHostDelegate::CancelAutoscroll(
+    input::RenderWidgetHostViewInput* view) {}
 
 }  // namespace content

@@ -13,7 +13,6 @@
 #include "base/check.h"
 #include "base/check_is_test.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
@@ -49,7 +48,6 @@
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "components/keep_alive_registry/keep_alive_registry.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
@@ -178,7 +176,7 @@ class StartupWebAppCreator
       if (!protocol_url_.is_empty()) {
         protocol = protocol_url_;
       }
-      provider_->scheduler().LaunchApp(
+      provider_->scheduler().LaunchAppFromCommandLine(
           app_id_, command_line_, cur_dir_, protocol,
           /*file_launch_url=*/std::nullopt, /*launch_files=*/{},
           base::BindOnce(&StartupWebAppCreator::OnAppLaunched,
@@ -187,7 +185,7 @@ class StartupWebAppCreator
     }
 
     for (const auto& [url, paths] : file_launch_infos_) {
-      provider_->scheduler().LaunchApp(
+      provider_->scheduler().LaunchAppFromCommandLine(
           app_id_, command_line_, cur_dir_,
           /*protocol_handler_launch_url=*/std::nullopt,
           /*file_launch_url=*/url, /*launch_files=*/paths,
@@ -320,7 +318,7 @@ class StartupWebAppCreator
     }
   }
 
-  void OnAppLaunched(base::WeakPtr<Browser> browser,
+  void OnAppLaunched(base::WeakPtr<BrowserWindowInterface> browser,
                      base::WeakPtr<content::WebContents> web_contents,
                      apps::LaunchContainer container) {
     // The finalization step should only occur for the first app launch.

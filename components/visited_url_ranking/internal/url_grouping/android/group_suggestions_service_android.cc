@@ -8,8 +8,8 @@
 
 #include <memory>
 
+#include "base/android/callback_android.h"
 #include "base/android/jni_array.h"
-#include "base/android/jni_callback.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
 #include "components/visited_url_ranking/public/url_grouping/group_suggestions.h"
@@ -130,8 +130,8 @@ GroupSuggestionsServiceAndroid::FromNativeUserResponse(
     JNIEnv* env,
     const UserResponseMetadata& metadata) {
   return Java_UserResponseMetadata_create(
-      env, static_cast<jint>(metadata.suggestion_id.GetUnsafeValue()),
-      static_cast<jint>(metadata.user_response));
+      env, static_cast<int32_t>(metadata.suggestion_id.GetUnsafeValue()),
+      static_cast<int32_t>(metadata.user_response));
 }
 
 // Native counterpart of Java DelegateBridge. Observes the native service and
@@ -269,7 +269,7 @@ void GroupSuggestionsServiceAndroid::DidEnterTabSwitcher(JNIEnv* env) {
 
 base::android::ScopedJavaLocalRef<jobject>
 GroupSuggestionsServiceAndroid::GetCachedSuggestions(JNIEnv* env,
-                                                     jint window_id) {
+                                                     int32_t window_id) {
   // TODO(ssid): Correctly map window_id to Scope.
   GroupSuggestionsService::Scope scope;
   std::optional<CachedSuggestions> cpp_cached_suggestions =

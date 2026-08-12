@@ -7,10 +7,12 @@
 
 #include <stddef.h>
 
+#include <optional>
 #include <string>
 #include <string_view>
 
 #include "base/memory/raw_ptr.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
 #include "components/autofill/core/browser/data_model/form_group.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/geo/phone_number_i18n.h"
@@ -78,19 +80,29 @@ class PhoneNumber : public FormGroup {
   // The class used to combine home phone parts into a whole number.
   class PhoneCombineHelper {
    public:
+    static PhoneCombineHelper FromObservedValues(
+        const base::flat_map<FieldType, std::u16string>& observed_values);
+
     PhoneCombineHelper();
+    PhoneCombineHelper(const PhoneCombineHelper&);
+    PhoneCombineHelper(PhoneCombineHelper&&);
+    PhoneCombineHelper& operator=(const PhoneCombineHelper&);
+    PhoneCombineHelper& operator=(PhoneCombineHelper&&);
     ~PhoneCombineHelper();
 
     // Processes the `value` accordingly given a phone number `field_type`.
     void SetInfo(FieldType field_type, std::u16string_view value);
 
-    // Parses the number built up from pieces stored via SetInfo() according to
-    // the specified `profile`'s country code, falling back to the given
-    // `app_locale` if the `profile` has no associated country code.  Returns
-    // true if parsing was successful, false otherwise.
-    bool ParseNumber(const AutofillProfile& profile,
-                     std::string_view app_locale,
-                     std::u16string* value) const;
+    // Parses the number built up from pieces stored via `SetInfo()` according
+    // to the given two-letter region code and returns it as a string in
+    // international format if it is a valid phone number. The region code
+    // should be one of the values returned by `autofill::GetCountryCodes()`.
+    std::optional<std::u16string> ParseNumber(const std::string& region) const;
+
+    // Parses the combined phone number and returns the region to which it
+    // belongs. The region code is the two-letter string according to ISO-3166
+    // that represents the country of the phone number.
+    std::optional<std::u16string> GetRegionCode() const;
 
     // Returns true if both `phone_` and `whole_number_` are empty.
     bool IsEmpty() const;

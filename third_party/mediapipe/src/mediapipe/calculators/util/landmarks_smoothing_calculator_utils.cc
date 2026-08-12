@@ -14,12 +14,21 @@
 
 #include "mediapipe/calculators/util/landmarks_smoothing_calculator_utils.h"
 
-#include <iostream>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <utility>
+#include <vector>
 
+#include "absl/algorithm/container.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/time/time.h"
 #include "mediapipe/calculators/util/landmarks_smoothing_calculator.pb.h"
 #include "mediapipe/framework/formats/landmark.pb.h"
 #include "mediapipe/framework/formats/rect.pb.h"
 #include "mediapipe/framework/port/ret_check.h"
+#include "mediapipe/framework/port/status_macros.h"
 #include "mediapipe/util/filtering/one_euro_filter.h"
 #include "mediapipe/util/filtering/relative_velocity_filter.h"
 
@@ -63,7 +72,7 @@ class NoFilter : public LandmarksFilter {
  public:
   absl::Status Apply(const LandmarkList& in_landmarks,
                      const absl::Duration& timestamp,
-                     const absl::optional<float> object_scale_opt,
+                     const std::optional<float> object_scale_opt,
                      LandmarkList& out_landmarks) override {
     out_landmarks = in_landmarks;
     return absl::OkStatus();
@@ -74,11 +83,14 @@ class NoFilter : public LandmarksFilter {
 class VelocityFilter : public LandmarksFilter {
  public:
   VelocityFilter(int window_size, float velocity_scale,
-                 float min_allowed_object_scale, bool disable_value_scaling)
+                 float min_allowed_object_scale, bool disable_value_scaling,
+                 LandmarksSmoothingCalculatorOptions::EmptyLandmarksPolicy
+                     empty_landmarks_policy)
       : window_size_(window_size),
         velocity_scale_(velocity_scale),
         min_allowed_object_scale_(min_allowed_object_scale),
-        disable_value_scaling_(disable_value_scaling) {}
+        disable_value_scaling_(disable_value_scaling),
+        empty_landmarks_policy_(empty_landmarks_policy) {}
 
   absl::Status Reset() override {
     x_filters_.clear();
@@ -89,8 +101,20 @@ class VelocityFilter : public LandmarksFilter {
 
   absl::Status Apply(const LandmarkList& in_landmarks,
                      const absl::Duration& timestamp,
-                     const absl::optional<float> object_scale_opt,
+                     const std::optional<float> object_scale_opt,
                      LandmarkList& out_landmarks) override {
+    if (in_landmarks.landmark_size() == 0) {
+      out_landmarks.Clear();
+      switch (empty_landmarks_policy_) {
+        case LandmarksSmoothingCalculatorOptions::EMPTY_LANDMARKS_POLICY_RESET:
+          return Reset();
+        case LandmarksSmoothingCalculatorOptions::EMPTY_LANDMARKS_POLICY_FAIL:
+        case LandmarksSmoothingCalculatorOptions::
+            EMPTY_LANDMARKS_POLICY_UNSPECIFIED:
+          return absl::InvalidArgumentError("Landmarks are empty.");
+      }
+    }
+
     // Get value scale as inverse value of the object scale.
     // If value is too small smoothing will be disabled and landmarks will be
     // returned as is.
@@ -114,12 +138,12 @@ class VelocityFilter : public LandmarksFilter {
 
       auto* out_landmark = out_landmarks.add_landmark();
       *out_landmark = in_landmark;
-      out_landmark->set_x(
-          x_filters_[i].Apply(timestamp, value_scale, in_landmark.x()));
-      out_landmark->set_y(
-          y_filters_[i].Apply(timestamp, value_scale, in_landmark.y()));
-      out_landmark->set_z(
-          z_filters_[i].Apply(timestamp, value_scale, in_landmark.z()));
+      out_landmark->set_x(x_filters_[i].Apply(
+          timestamp, /*value=*/in_landmark.x(), value_scale));
+      out_landmark->set_y(y_filters_[i].Apply(
+          timestamp, /*value=*/in_landmark.y(), value_scale));
+      out_landmark->set_z(z_filters_[i].Apply(
+          timestamp, /*value=*/in_landmark.z(), value_scale));
     }
 
     return absl::OkStatus();
@@ -150,6 +174,8 @@ class VelocityFilter : public LandmarksFilter {
   float velocity_scale_;
   float min_allowed_object_scale_;
   bool disable_value_scaling_;
+  LandmarksSmoothingCalculatorOptions::EmptyLandmarksPolicy
+      empty_landmarks_policy_;
 
   std::vector<RelativeVelocityFilter> x_filters_;
   std::vector<RelativeVelocityFilter> y_filters_;
@@ -161,13 +187,16 @@ class OneEuroFilterImpl : public LandmarksFilter {
  public:
   OneEuroFilterImpl(double frequency, double min_cutoff, double beta,
                     double derivate_cutoff, float min_allowed_object_scale,
-                    bool disable_value_scaling)
+                    bool disable_value_scaling,
+                    LandmarksSmoothingCalculatorOptions::EmptyLandmarksPolicy
+                        empty_landmarks_policy)
       : frequency_(frequency),
         min_cutoff_(min_cutoff),
         beta_(beta),
         derivate_cutoff_(derivate_cutoff),
         min_allowed_object_scale_(min_allowed_object_scale),
-        disable_value_scaling_(disable_value_scaling) {}
+        disable_value_scaling_(disable_value_scaling),
+        empty_landmarks_policy_(empty_landmarks_policy) {}
 
   absl::Status Reset() override {
     x_filters_.clear();
@@ -178,8 +207,20 @@ class OneEuroFilterImpl : public LandmarksFilter {
 
   absl::Status Apply(const LandmarkList& in_landmarks,
                      const absl::Duration& timestamp,
-                     const absl::optional<float> object_scale_opt,
+                     const std::optional<float> object_scale_opt,
                      LandmarkList& out_landmarks) override {
+    if (in_landmarks.landmark_size() == 0) {
+      out_landmarks.Clear();
+      switch (empty_landmarks_policy_) {
+        case LandmarksSmoothingCalculatorOptions::EMPTY_LANDMARKS_POLICY_RESET:
+          return Reset();
+        case LandmarksSmoothingCalculatorOptions::EMPTY_LANDMARKS_POLICY_FAIL:
+        case LandmarksSmoothingCalculatorOptions::
+            EMPTY_LANDMARKS_POLICY_UNSPECIFIED:
+          return absl::InvalidArgumentError("Landmarks are empty.");
+      }
+    }
+
     // Initialize filters once.
     MP_RETURN_IF_ERROR(InitializeFiltersIfEmpty(in_landmarks.landmark_size()));
 
@@ -203,12 +244,15 @@ class OneEuroFilterImpl : public LandmarksFilter {
 
       auto* out_landmark = out_landmarks.add_landmark();
       *out_landmark = in_landmark;
-      out_landmark->set_x(
-          x_filters_[i].Apply(timestamp, value_scale, in_landmark.x()));
-      out_landmark->set_y(
-          y_filters_[i].Apply(timestamp, value_scale, in_landmark.y()));
-      out_landmark->set_z(
-          z_filters_[i].Apply(timestamp, value_scale, in_landmark.z()));
+      out_landmark->set_x(x_filters_[i].Apply(timestamp,
+                                              /*value=*/in_landmark.x(),
+                                              value_scale, /*beta_scale*/ 1.0));
+      out_landmark->set_y(y_filters_[i].Apply(timestamp,
+                                              /*value=*/in_landmark.y(),
+                                              value_scale, /*beta_scale=*/1.0));
+      out_landmark->set_z(z_filters_[i].Apply(timestamp,
+                                              /*value=*/in_landmark.z(),
+                                              value_scale, /*beta_scale=*/1.0));
     }
 
     return absl::OkStatus();
@@ -226,12 +270,18 @@ class OneEuroFilterImpl : public LandmarksFilter {
     }
 
     for (int i = 0; i < n_landmarks; ++i) {
-      x_filters_.push_back(
-          OneEuroFilter(frequency_, min_cutoff_, beta_, derivate_cutoff_));
-      y_filters_.push_back(
-          OneEuroFilter(frequency_, min_cutoff_, beta_, derivate_cutoff_));
-      z_filters_.push_back(
-          OneEuroFilter(frequency_, min_cutoff_, beta_, derivate_cutoff_));
+      MP_ASSIGN_OR_RETURN(auto filter,
+                          OneEuroFilter::Create(frequency_, min_cutoff_, beta_,
+                                                derivate_cutoff_));
+      x_filters_.push_back(std::move(filter));
+      MP_ASSIGN_OR_RETURN(filter,
+                          OneEuroFilter::Create(frequency_, min_cutoff_, beta_,
+                                                derivate_cutoff_));
+      y_filters_.push_back(std::move(filter));
+      MP_ASSIGN_OR_RETURN(filter,
+                          OneEuroFilter::Create(frequency_, min_cutoff_, beta_,
+                                                derivate_cutoff_));
+      z_filters_.push_back(std::move(filter));
     }
 
     return absl::OkStatus();
@@ -243,6 +293,8 @@ class OneEuroFilterImpl : public LandmarksFilter {
   double derivate_cutoff_;
   double min_allowed_object_scale_;
   bool disable_value_scaling_;
+  LandmarksSmoothingCalculatorOptions::EmptyLandmarksPolicy
+      empty_landmarks_policy_;
 
   std::vector<OneEuroFilter> x_filters_;
   std::vector<OneEuroFilter> y_filters_;
@@ -318,22 +370,30 @@ float GetObjectScale(const Rect& roi) {
 
 absl::StatusOr<std::unique_ptr<LandmarksFilter>> InitializeLandmarksFilter(
     const LandmarksSmoothingCalculatorOptions& options) {
+  LandmarksSmoothingCalculatorOptions::EmptyLandmarksPolicy empty_policy =
+      options.empty_landmarks_policy();
+  if (empty_policy ==
+      LandmarksSmoothingCalculatorOptions::EMPTY_LANDMARKS_POLICY_UNSPECIFIED) {
+    empty_policy =
+        LandmarksSmoothingCalculatorOptions::EMPTY_LANDMARKS_POLICY_FAIL;
+  }
+
   if (options.has_no_filter()) {
-    return absl::make_unique<NoFilter>();
+    return std::make_unique<NoFilter>();
   } else if (options.has_velocity_filter()) {
-    return absl::make_unique<VelocityFilter>(
+    return std::make_unique<VelocityFilter>(
         options.velocity_filter().window_size(),
         options.velocity_filter().velocity_scale(),
         options.velocity_filter().min_allowed_object_scale(),
-        options.velocity_filter().disable_value_scaling());
+        options.velocity_filter().disable_value_scaling(), empty_policy);
   } else if (options.has_one_euro_filter()) {
-    return absl::make_unique<OneEuroFilterImpl>(
+    return std::make_unique<OneEuroFilterImpl>(
         options.one_euro_filter().frequency(),
         options.one_euro_filter().min_cutoff(),
         options.one_euro_filter().beta(),
         options.one_euro_filter().derivate_cutoff(),
         options.one_euro_filter().min_allowed_object_scale(),
-        options.one_euro_filter().disable_value_scaling());
+        options.one_euro_filter().disable_value_scaling(), empty_policy);
   } else {
     RET_CHECK_FAIL()
         << "Landmarks filter is either not specified or not supported";

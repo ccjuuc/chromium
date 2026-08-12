@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/capture/video/fake_video_capture_device.h"
 
 #include <stddef.h>
@@ -14,9 +9,11 @@
 #include <algorithm>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/containers/heap_array.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/stringprintf.h"
@@ -394,18 +391,23 @@ void PacmanFramePainter::DrawGradientSquares(base::TimeDelta elapsed_time,
         size_t offset = (y * stride) + x;
         switch (pixel_format_) {
           case Format::Y16:
-            target_buffer[offset * sizeof(uint16_t)] = value & 0xFF;
-            target_buffer[offset * sizeof(uint16_t) + 1] = value >> 8;
+            UNSAFE_TODO(target_buffer[offset * sizeof(uint16_t)]) =
+                value & 0xFF;
+            UNSAFE_TODO(target_buffer[offset * sizeof(uint16_t) + 1]) =
+                value >> 8;
             break;
           case Format::SK_N32:
-            target_buffer[offset * sizeof(uint32_t) + 1] = value >> 8;
-            target_buffer[offset * sizeof(uint32_t) + 2] = value >> 8;
-            target_buffer[offset * sizeof(uint32_t) + 3] = value >> 8;
+            UNSAFE_TODO(target_buffer[offset * sizeof(uint32_t) + 1]) =
+                value >> 8;
+            UNSAFE_TODO(target_buffer[offset * sizeof(uint32_t) + 2]) =
+                value >> 8;
+            UNSAFE_TODO(target_buffer[offset * sizeof(uint32_t) + 3]) =
+                value >> 8;
             break;
           case Format::I420:
           case Format::NV12:
             // I420 and NV12 has the same Y plane dimension.
-            target_buffer[offset] = value >> 8;
+            UNSAFE_TODO(target_buffer[offset]) = value >> 8;
             break;
         }
       }
@@ -419,7 +421,8 @@ void PacmanFramePainter::DrawPacman(base::TimeDelta elapsed_time,
   const int width = fake_device_state_->format.frame_size.width();
   const int height = fake_device_state_->format.frame_size.height();
 
-  SkColorType colorspace = kAlpha_8_SkColorType;
+  SkColorType colorspace = kUnknown_SkColorType;
+  SkColor4f draw_color = SkColors::kTransparent;
   switch (pixel_format_) {
     case Format::I420:
     case Format::NV12:
@@ -432,19 +435,25 @@ void PacmanFramePainter::DrawPacman(base::TimeDelta elapsed_time,
       //
       // NV12 has the same Y plane dimension as I420 and we don't touch UV
       // plane.
-      colorspace = kAlpha_8_SkColorType;
+      colorspace = kR8_unorm_SkColorType;
+      draw_color = SkColors::kRed;
       break;
     case Format::SK_N32:
       // SkColorType is RGBA on some platforms and BGRA on others.
       colorspace = kN32_SkColorType;
+      draw_color = SkColors::kGreen;
       break;
     case Format::Y16:
       // Skia doesn't support painting in Y16. Instead, paint an 8bpp monochrome
       // image to the beginning of |target_buffer|. Later, move the 8bit pixel
       // values to a position corresponding to the high byte values of 16bit
       // pixel values (assuming the byte order is little-endian).
-      colorspace = kAlpha_8_SkColorType;
+      colorspace = kR16_unorm_SkColorType;
+      // Draw 1.0 to the red channel.
+      draw_color = SkColors::kRed;
       break;
+    default:
+      NOTREACHED();
   }
 
   const SkImageInfo info =
@@ -454,6 +463,7 @@ void PacmanFramePainter::DrawPacman(base::TimeDelta elapsed_time,
   bitmap.setPixels(target_buffer);
   SkPaint paint;
   paint.setStyle(SkPaint::kFill_Style);
+  paint.setColor(draw_color);
   SkFont font = skia::DefaultFont();
   font.setEdging(SkFont::Edging::kAlias);
   SkCanvas canvas(bitmap, skia::LegacyDisplayGlobals::GetSkSurfaceProps());
@@ -475,7 +485,6 @@ void PacmanFramePainter::DrawPacman(base::TimeDelta elapsed_time,
     const SkRect full_frame = SkRect::MakeWH(width, height);
     paint.setARGB(255, 0, 127, 0);
     canvas.drawRect(full_frame, paint);
-    paint.setColor(SkColors::kGreen);
   }
 
   // Draw a sweeping circle to show an animation.
@@ -512,7 +521,7 @@ void PacmanFramePainter::DrawPacman(base::TimeDelta elapsed_time,
     // Use 8 bit bitmap rendered to first half of the buffer as high byte values
     // for the whole buffer. Low byte values are not important.
     for (int i = (width * height) - 1; i >= 0; --i)
-      target_buffer[i * 2 + 1] = target_buffer[i];
+      UNSAFE_TODO(target_buffer[i * 2 + 1]) = UNSAFE_TODO(target_buffer[i]);
   }
 }
 
@@ -824,7 +833,7 @@ void OwnBufferFrameDeliverer::PaintAndDeliverNextFrame(
   const auto& frame_format = device_state()->format;
   const size_t frame_size = VideoFrame::AllocationSize(
       frame_format.pixel_format, frame_format.frame_size);
-  memset(buffer_.data(), 0, frame_size);
+  UNSAFE_TODO(memset(buffer_.data(), 0, frame_size));
   frame_painter()->PaintFrame(timestamp_to_paint, buffer_.data());
   base::TimeTicks now = base::TimeTicks::Now();
 
@@ -833,7 +842,7 @@ void OwnBufferFrameDeliverer::PaintAndDeliverNextFrame(
                                    frame_format.frame_size.height());
   metadata.device_scale_factor = 1.0f;
   client()->OnIncomingCapturedData(
-      buffer_.data(), frame_size, device_state()->format,
+      buffer_, device_state()->format,
       GetDefaultColorSpace(device_state()->format.pixel_format),
       0 /* rotation */, false /* flip_y */, now,
       CalculateTimeSinceFirstInvocation(now),
@@ -867,7 +876,7 @@ void ClientBufferFrameDeliverer::PaintAndDeliverNextFrame(
   DCHECK(!buffer_access->data().empty()) << "Buffer has NO backing memory";
 
   uint8_t* data_ptr = buffer_access->data().data();
-  memset(data_ptr, 0, buffer_access->mapped_size());
+  UNSAFE_TODO(memset(data_ptr, 0, buffer_access->mapped_size()));
   frame_painter()->PaintFrame(timestamp_to_paint, data_ptr);
   buffer_access.reset();  // Can't outlive `capture_buffer.handle_provider'.
 
@@ -892,7 +901,7 @@ void JpegEncodingFrameDeliverer::PaintAndDeliverNextFrame(
   auto required_sk_n32_buffer_size = VideoFrame::AllocationSize(
       PIXEL_FORMAT_ARGB, device_state()->format.frame_size);
   sk_n32_buffer_.resize(required_sk_n32_buffer_size);
-  memset(&sk_n32_buffer_[0], 0, required_sk_n32_buffer_size);
+  UNSAFE_TODO(memset(&sk_n32_buffer_[0], 0, required_sk_n32_buffer_size));
 
   frame_painter()->PaintFrame(timestamp_to_paint, &sk_n32_buffer_[0]);
 
@@ -911,14 +920,13 @@ void JpegEncodingFrameDeliverer::PaintAndDeliverNextFrame(
   }
 
   jpeg_buffer_ = std::move(jpeg_buffer.value());
-  const size_t frame_size = jpeg_buffer_.size();
   base::TimeTicks now = base::TimeTicks::Now();
-  client()->OnIncomingCapturedData(
-      &jpeg_buffer_[0], frame_size, device_state()->format,
-      gfx::ColorSpace::CreateJpeg(), 0 /* rotation */, false /* flip_y */, now,
-      CalculateTimeSinceFirstInvocation(now),
-      /*capture_begin_timestamp=*/std::nullopt,
-      /*metadata=*/std::nullopt);
+  client()->OnIncomingCapturedData(jpeg_buffer_, device_state()->format,
+                                   gfx::ColorSpace::CreateJpeg(),
+                                   0 /* rotation */, false /* flip_y */, now,
+                                   CalculateTimeSinceFirstInvocation(now),
+                                   /*capture_begin_timestamp=*/std::nullopt,
+                                   /*metadata=*/std::nullopt);
 }
 
 GpuMemoryBufferFrameDeliverer::GpuMemoryBufferFrameDeliverer(
@@ -949,7 +957,7 @@ void GpuMemoryBufferFrameDeliverer::PaintAndDeliverNextFrame(
   auto buffer_access =
       capture_buffer.handle_provider->GetHandleForInProcessAccess();
   uint8_t* data_ptr = buffer_access->data().data();
-  memset(data_ptr, 0, buffer_access->mapped_size());
+  UNSAFE_TODO(memset(data_ptr, 0, buffer_access->mapped_size()));
   frame_painter()->PaintFrame(timestamp_to_paint, data_ptr,
                               buffer_size.width());
   // Need to destroy `handle` so that the changes are committed to the GMB.
@@ -960,10 +968,10 @@ void GpuMemoryBufferFrameDeliverer::PaintAndDeliverNextFrame(
   }
 #else
   auto scoped_mapping = shared_image->Map();
-  memset(scoped_mapping->GetMemoryForPlane(0).data(), 0,
-         scoped_mapping->Stride(0) * buffer_size.height());
-  memset(scoped_mapping->GetMemoryForPlane(1).data(), 0,
-         scoped_mapping->Stride(1) * (buffer_size.height() / 2));
+  UNSAFE_TODO(memset(scoped_mapping->GetMemoryForPlane(0).data(), 0,
+                     scoped_mapping->Stride(0) * buffer_size.height()));
+  UNSAFE_TODO(memset(scoped_mapping->GetMemoryForPlane(1).data(), 0,
+                     scoped_mapping->Stride(1) * (buffer_size.height() / 2)));
   frame_painter()->PaintFrame(timestamp_to_paint,
                               scoped_mapping->GetMemoryForPlane(0).data(),
                               scoped_mapping->Stride(0));

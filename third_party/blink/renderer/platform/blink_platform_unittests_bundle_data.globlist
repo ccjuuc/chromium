@@ -18,11 +18,14 @@
 ../../web_tests/external/wpt/fonts/**/*.woff
 ../../web_tests/external/wpt/fonts/**/*.woff2
 -../../web_tests/external/wpt/fonts/CSSTest/**
+../../web_tests/external/wpt/jpegxl/resources/*.jxl
 ../../web_tests/images/resources/**
 ../../web_tests/images/bmp-suite/**/*.bmp
 ../../web_tests/images/bmp-suite/**/*.png
+../../web_tests/images/jpeg-suite/**/*.jpg
 ../../web_tests/third_party/**/*.ttf
 ../../web_tests/third_party/**/*.otf
+../../web_tests/resources/EbdtMono/*.ttf
 # pop(ignore-relative)
 
 image-decoders/testing/**

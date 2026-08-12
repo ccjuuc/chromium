@@ -9,13 +9,13 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "components/sync/base/client_tag_hash.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/deletion_origin.h"
 #include "components/sync/model/conflict_resolution.h"
 #include "components/sync/model/data_type_store.h"
-#include "components/sync/model/in_memory_metadata_change_list.h"
 #include "components/sync/model/metadata_batch.h"
 #include "components/sync/model/mutable_data_batch.h"
 #include "components/sync/protocol/data_type_state.pb.h"
@@ -64,6 +64,7 @@ class TestMetadataChangeList : public MetadataChangeList {
   }
 
   void TransferChangesTo(MetadataChangeList* other) override { NOTREACHED(); }
+  void DropAllChanges() override { NOTREACHED(); }
 
  private:
   const raw_ptr<FakeDataTypeSyncBridge::Store> db_;
@@ -186,16 +187,13 @@ void FakeDataTypeSyncBridge::MimicBugToLooseItemWithoutNotifyingProcessor(
   db_->RemoveData(key);
 }
 
-std::unique_ptr<MetadataChangeList>
-FakeDataTypeSyncBridge::CreateMetadataChangeList() {
-  return std::make_unique<InMemoryMetadataChangeList>();
-}
 
 std::optional<ModelError> FakeDataTypeSyncBridge::MergeFullSyncData(
     std::unique_ptr<MetadataChangeList> metadata_change_list,
     EntityChangeList entity_data) {
   if (error_next_) {
     error_next_ = false;
+    metadata_change_list->DropAllChanges();
     return ModelError(FROM_HERE, syncer::ModelError::Type::kGenericTestError);
   }
 
@@ -241,6 +239,7 @@ std::optional<ModelError> FakeDataTypeSyncBridge::ApplyIncrementalSyncChanges(
     EntityChangeList entity_changes) {
   if (error_next_) {
     error_next_ = false;
+    metadata_changes->DropAllChanges();
     return ModelError(FROM_HERE, syncer::ModelError::Type::kGenericTestError);
   }
 

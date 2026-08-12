@@ -18,46 +18,58 @@ class FakeUnexportableKeyService : public UnexportableKeyService {
       base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
           acceptable_algorithms,
       BackgroundTaskPriority priority,
-      base::OnceCallback<void(ServiceErrorOr<UnexportableKeyId>)> callback)
-      override;
+      base::OnceCallback<void(ServiceErrorOr<UnexportableSigningKeyId>)>
+          callback) override;
   void FromWrappedSigningKeySlowlyAsync(
       base::span<const uint8_t> wrapped_key,
       BackgroundTaskPriority priority,
-      base::OnceCallback<void(ServiceErrorOr<UnexportableKeyId>)> callback)
-      override;
-  void GetAllSigningKeysForGarbageCollectionSlowlyAsync(
-      BackgroundTaskPriority priority,
-      base::OnceCallback<void(ServiceErrorOr<std::vector<UnexportableKeyId>>)>
+      base::OnceCallback<void(ServiceErrorOr<UnexportableSigningKeyId>)>
           callback) override;
-  void CopyKeyFromOtherService(
-      const UnexportableKeyService& other_service,
-      UnexportableKeyId key_id_from_other_service,
+  void GenerateAttestationKeySlowlyAsync(
+      base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
+          acceptable_algorithms,
       BackgroundTaskPriority priority,
-      base::OnceCallback<void(ServiceErrorOr<UnexportableKeyId>)> callback)
+      base::OnceCallback<void(ServiceErrorOr<UnexportableAttestationKeyId>)>
+          callback) override;
+  void FromWrappedAttestationKeySlowlyAsync(
+      base::span<const uint8_t> wrapped_key,
+      BackgroundTaskPriority priority,
+      base::OnceCallback<void(ServiceErrorOr<UnexportableAttestationKeyId>)>
+          callback) override;
+  void GetAllKeysForGarbageCollectionSlowlyAsync(
+      BackgroundTaskPriority priority,
+      base::OnceCallback<
+          void(ServiceErrorOr<std::vector<UnexportableSigningKeyId>>)> callback)
       override;
   void SignSlowlyAsync(
-      UnexportableKeyId key_id,
+      UnexportableSigningKeyId key_id,
       base::span<const uint8_t> data,
       BackgroundTaskPriority priority,
       base::OnceCallback<void(ServiceErrorOr<std::vector<uint8_t>>)> callback)
       override;
-  void DeleteKeySlowlyAsync(
-      UnexportableKeyId key_id,
+  void CertifySlowlyAsync(
+      UnexportableAttestationKeyId attestation_key_id,
+      UnexportableSigningKeyId signing_key_id,
+      base::span<const uint8_t> challenge,
       BackgroundTaskPriority priority,
-      base::OnceCallback<void(ServiceErrorOr<void>)> callback) override;
-  void DeleteAllKeysSlowlyAsync(
+      base::OnceCallback<void(ServiceErrorOr<crypto::AttestationStatement>)>
+          callback) override;
+  void DeleteKeysSlowlyAsync(
+      base::span<const UnexportableSigningKeyId> key_ids,
       BackgroundTaskPriority priority,
       base::OnceCallback<void(ServiceErrorOr<size_t>)> callback) override;
+  void DeleteAllKeysSlowlyAsync(
+      base::OnceCallback<void(ServiceErrorOr<size_t>)> callback) override;
   ServiceErrorOr<std::vector<uint8_t>> GetSubjectPublicKeyInfo(
-      UnexportableKeyId key_id) const override;
+      UnexportableSigningKeyId key_id) const override;
   ServiceErrorOr<std::vector<uint8_t>> GetWrappedKey(
-      UnexportableKeyId key_id) const override;
+      UnexportableSigningKeyId key_id) const override;
   ServiceErrorOr<crypto::SignatureVerifier::SignatureAlgorithm> GetAlgorithm(
-      UnexportableKeyId key_id) const override;
+      UnexportableSigningKeyId key_id) const override;
   ServiceErrorOr<std::string> GetKeyTag(
-      UnexportableKeyId key_id) const override;
+      UnexportableSigningKeyId key_id) const override;
   ServiceErrorOr<base::Time> GetCreationTime(
-      UnexportableKeyId key_id) const override;
+      UnexportableSigningKeyId key_id) const override;
 };
 
 }  // namespace unexportable_keys

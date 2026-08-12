@@ -15,6 +15,7 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_gpu_query_set_descriptor.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_gpu_queue_descriptor.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_gpu_render_pipeline_descriptor.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_gpu_resource_table_descriptor.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_gpu_uncaptured_error_event_init.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
@@ -38,6 +39,7 @@
 #include "third_party/blink/renderer/modules/webgpu/gpu_queue.h"
 #include "third_party/blink/renderer/modules/webgpu/gpu_render_bundle_encoder.h"
 #include "third_party/blink/renderer/modules/webgpu/gpu_render_pipeline.h"
+#include "third_party/blink/renderer/modules/webgpu/gpu_resource_table.h"
 #include "third_party/blink/renderer/modules/webgpu/gpu_sampler.h"
 #include "third_party/blink/renderer/modules/webgpu/gpu_shader_module.h"
 #include "third_party/blink/renderer/modules/webgpu/gpu_supported_features.h"
@@ -47,6 +49,8 @@
 #include "third_party/blink/renderer/modules/webgpu/gpu_validation_error.h"
 #include "third_party/blink/renderer/modules/webgpu/string_utils.h"
 #include "third_party/blink/renderer/platform/heap/thread_state.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace blink {
@@ -152,9 +156,23 @@ GPUDevice::GPUDevice(ExecutionContext* execution_context,
     : ExecutionContextClient(execution_context),
       DawnObject(dawn_control_client, label),
       adapter_(adapter),
-      lost_property_(MakeGarbageCollected<LostProperty>(execution_context)),
-      logging_callback_(BindWGPURepeatingCallback(&GPUDevice::OnLogging,
-                                                  WrapWeakPersistent(this))) {}
+      lost_property_(MakeGarbageCollected<LostProperty>(execution_context)) {
+  // Always post the logging callback to the WebGPU task runner to prevent
+  // synchronous re-entrancy deadlocks (e.g. if logging triggers GC and
+  // object destruction while holding command buffer proxy locks).
+  logging_callback_.reset(MakeWGPURepeatingCallback(
+      ConvertToBaseRepeatingCallback(CrossThreadBindRepeating(
+          [](scoped_refptr<base::SingleThreadTaskRunner> main_runner,
+             base::RepeatingCallback<void(wgpu::LoggingType, const String&)> cb,
+             wgpu::LoggingType loggingType, wgpu::StringView message) {
+            String messageStr = StringFromASCIIAndUTF8(message);
+            main_runner->PostTask(FROM_HERE,
+                                  ConvertToBaseOnceCallback(CrossThreadBindOnce(
+                                      cb, loggingType, std::move(messageStr))));
+          },
+          execution_context->GetTaskRunner(TaskType::kWebGPU),
+          BindRepeating(&GPUDevice::OnLogging, WrapWeakPersistent(this))))));
+}
 
 void GPUDevice::Initialize(wgpu::Device handle,
                            const GPUDeviceDescriptor* descriptor,
@@ -200,11 +218,10 @@ bool GPUDevice::IsDestroyed() const {
   return destroyed_;
 }
 
-std::string GPUDevice::GetFormattedLabel() const {
-  std::string deviceLabel =
-      label().empty() ? "[Device]" : "[Device \"" + label().Utf8() + "\"]";
-
-  return deviceLabel;
+String GPUDevice::GetFormattedLabel() const {
+  String device_label =
+      label().empty() ? "[Device]" : StrCat({"[Device \"", label(), "\"]"});
+  return device_label;
 }
 
 void GPUDevice::InjectError(wgpu::ErrorType type, const char* message) {
@@ -279,25 +296,25 @@ void GPUDevice::AddSingletonWarning(GPUSingletonWarning type) {
 // browsers that haven't yet implemented the feature.
 bool GPUDevice::ValidateTextureFormatUsage(V8GPUTextureFormat format,
                                            ExceptionState& exception_state) {
-  auto requiredFeatureOptional =
+  auto required_feature_optional =
       RequiredFeatureForTextureFormat(format.AsEnum());
-
-  if (!requiredFeatureOptional) {
+  if (!required_feature_optional) {
     return true;
   }
 
-  V8GPUFeatureName::Enum requiredFeatureEnum = requiredFeatureOptional.value();
-
-  if (features_->Has(requiredFeatureEnum)) {
+  V8GPUFeatureName::Enum required_feature_enum =
+      required_feature_optional.value();
+  if (features_->Has(required_feature_enum)) {
     return true;
   }
 
-  V8GPUFeatureName requiredFeature = V8GPUFeatureName(requiredFeatureEnum);
-
-  exception_state.ThrowTypeError(String::Format(
-      "Use of the '%s' texture format requires the '%s' feature "
-      "to be enabled on %s.",
-      format.AsCStr(), requiredFeature.AsCStr(), GetFormattedLabel().c_str()));
+  V8GPUFeatureName required_feature = V8GPUFeatureName(required_feature_enum);
+  exception_state.ThrowTypeError(StrCat({"Use of the '", format.AsStringView(),
+                                         "' texture format requires the '",
+                                         required_feature.AsStringView(),
+                                         "' feature "
+                                         "to be enabled on ",
+                                         GetFormattedLabel(), "."}));
   return false;
 }
 
@@ -306,37 +323,28 @@ bool GPUDevice::ValidateTextureFormatUsage(V8GPUTextureFormat format,
 // browsers that haven't yet implemented the feature.
 bool GPUDevice::ValidateBlendFactor(V8GPUBlendFactor blend_factor,
                                     ExceptionState& exception_state) {
-  auto requiredFeatureOptional =
+  auto required_feature_optional =
       RequiredFeatureForBlendFactor(blend_factor.AsEnum());
-
-  if (!requiredFeatureOptional) {
+  if (!required_feature_optional) {
     return true;
   }
 
-  V8GPUFeatureName::Enum requiredFeatureEnum = requiredFeatureOptional.value();
-
-  if (features_->Has(requiredFeatureEnum)) {
+  V8GPUFeatureName::Enum required_feature_enum =
+      required_feature_optional.value();
+  if (features_->Has(required_feature_enum)) {
     return true;
   }
 
-  V8GPUFeatureName requiredFeature = V8GPUFeatureName(requiredFeatureEnum);
-
+  V8GPUFeatureName required_feature = V8GPUFeatureName(required_feature_enum);
   exception_state.ThrowTypeError(
-      String::Format("Use of the '%s' blend factor requires the '%s' feature "
-                     "to be enabled on %s.",
-                     blend_factor.AsCStr(), requiredFeature.AsCStr(),
-                     GetFormattedLabel().c_str()));
+      StrCat({"Use of the '", blend_factor.AsStringView(),
+              "' blend factor requires the '", required_feature.AsStringView(),
+              "' feature to be enabled on ", GetFormattedLabel(), "."}));
   return false;
 }
 
-void GPUDevice::OnUncapturedError(const wgpu::Device&,
-                                  wgpu::ErrorType errorType,
-                                  wgpu::StringView message) {
-  OnUncapturedErrorImpl(errorType, StringFromASCIIAndUTF8(message));
-}
-
-void GPUDevice::OnUncapturedErrorImpl(wgpu::ErrorType errorType,
-                                      const String& message) {
+void GPUDevice::OnUncapturedError(wgpu::ErrorType errorType,
+                                  const String& message) {
   // Suppress errors once the device is lost.
   if (lost_property_->GetState() == LostProperty::kResolved) {
     return;
@@ -365,8 +373,7 @@ void GPUDevice::OnUncapturedErrorImpl(wgpu::ErrorType errorType,
 }
 
 void GPUDevice::OnLogging(wgpu::LoggingType loggingType,
-                          wgpu::StringView message) {
-  std::string_view messageView = {message.data, message.length};
+                              const String& message) {
   // Callback function for WebGPU logging return command
   mojom::blink::ConsoleMessageLevel level;
   switch (loggingType) {
@@ -394,8 +401,7 @@ void GPUDevice::OnLogging(wgpu::LoggingType loggingType,
   ExecutionContext* execution_context = GetExecutionContext();
   if (execution_context) {
     auto* console_message = MakeGarbageCollected<ConsoleMessage>(
-        mojom::blink::ConsoleMessageSource::kRendering, level,
-        StringFromASCIIAndUTF8(messageView));
+        mojom::blink::ConsoleMessageSource::kRendering, level, message);
     execution_context->AddConsoleMessage(console_message);
   }
 }
@@ -553,6 +559,19 @@ GPUPipelineLayout* GPUDevice::createPipelineLayout(
   return GPUPipelineLayout::Create(this, descriptor);
 }
 
+GPUResourceTable* GPUDevice::createResourceTable(
+    const GPUResourceTableDescriptor* descriptor,
+    ExceptionState& exception_state) {
+  static constexpr uint32_t kMaxResourceTableSizeInSpec = 65536;
+  if (descriptor->size() > kMaxResourceTableSizeInSpec) {
+    exception_state.ThrowRangeError(
+        "GPUResourceTableDescriptor.size is too large.");
+    return nullptr;
+  }
+
+  return GPUResourceTable::Create(this, descriptor);
+}
+
 GPUShaderModule* GPUDevice::createShaderModule(
     const GPUShaderModuleDescriptor* descriptor) {
   return GPUShaderModule::Create(this, descriptor);
@@ -636,19 +655,17 @@ GPURenderBundleEncoder* GPUDevice::createRenderBundleEncoder(
 
 GPUQuerySet* GPUDevice::createQuerySet(const GPUQuerySetDescriptor* descriptor,
                                        ExceptionState& exception_state) {
-  const V8GPUFeatureName::Enum kTimestampQuery =
-      V8GPUFeatureName::Enum::kTimestampQuery;
-  const V8GPUFeatureName::Enum kTimestampQueryInsidePasses =
+  constexpr auto kTimestampQuery = V8GPUFeatureName::Enum::kTimestampQuery;
+  constexpr auto kTimestampQueryInsidePasses =
       V8GPUFeatureName::Enum::kChromiumExperimentalTimestampQueryInsidePasses;
   if (descriptor->type() == V8GPUQueryType::Enum::kTimestamp &&
       !features_->Has(kTimestampQuery) &&
       !features_->Has(kTimestampQueryInsidePasses)) {
     exception_state.ThrowTypeError(
-        String::Format("Use of timestamp queries requires the '%s' or '%s' "
-                       "feature to be enabled on %s.",
-                       V8GPUFeatureName(kTimestampQuery).AsCStr(),
-                       V8GPUFeatureName(kTimestampQueryInsidePasses).AsCStr(),
-                       GetFormattedLabel().c_str()));
+        StrCat({"Use of timestamp queries requires the '",
+                V8GPUFeatureName(kTimestampQuery).AsStringView(), "' or '",
+                V8GPUFeatureName(kTimestampQueryInsidePasses).AsStringView(),
+                "' feature to be enabled on ", GetFormattedLabel(), "."}));
     return nullptr;
   }
   return GPUQuerySet::Create(this, descriptor);
@@ -796,24 +813,30 @@ void GPUDevice::UntrackBufferWithMailbox(GPUBuffer* buffer) {
 
 void GPUDevice::SetDescriptorCallbacks(wgpu::DeviceDescriptor& dawn_desc) {
   ExecutionContext* execution_context = GetExecutionContext();
+  if (!execution_context) {
+    return;
+  }
 
   // Set the uncaptured error callback first because its ownership will be
-  // passed to the device lost callback immediately after. The uncaptured error
-  // callback happens spontaneously which means it may happen on the IO thread
-  // in some cases (i.e. potentially on workers). To handle this, we check
-  // whether we are being handled off the main thread, if so, we proxy to the
-  // main thread.
+  // passed to the device lost callback immediately after.
   std::unique_ptr<WGPURepeatingCallback<wgpu::UncapturedErrorCallback<void>>>
       error_callback;
-  if (IsWebGPUMultithreadedWorker(execution_context)) {
-    error_callback.reset(MakeWGPURepeatingCallback(
-        base::BindPostTask(execution_context->GetTaskRunner(TaskType::kWebGPU),
-                           BindRepeating(&GPUDevice::OnUncapturedError,
-                                         WrapWeakPersistent(this)))));
-  } else {
-    error_callback.reset(MakeWGPURepeatingCallback(BindRepeating(
-        &GPUDevice::OnUncapturedError, WrapWeakPersistent(this))));
-  }
+  // Always post the uncaptured error callback to the WebGPU task runner to
+  // prevent synchronous re-entrancy deadlocks.
+  error_callback.reset(MakeWGPURepeatingCallback(
+      ConvertToBaseRepeatingCallback(CrossThreadBindRepeating(
+          [](scoped_refptr<base::SingleThreadTaskRunner> main_runner,
+             base::RepeatingCallback<void(wgpu::ErrorType, const String&)> cb,
+             const wgpu::Device& device, wgpu::ErrorType errorType,
+             wgpu::StringView message) {
+            String messageStr = StringFromASCIIAndUTF8(message);
+            main_runner->PostTask(FROM_HERE,
+                                  ConvertToBaseOnceCallback(CrossThreadBindOnce(
+                                      cb, errorType, std::move(messageStr))));
+          },
+          execution_context->GetTaskRunner(TaskType::kWebGPU),
+          BindRepeating(&GPUDevice::OnUncapturedError,
+                        WrapWeakPersistent(this))))));
   dawn_desc.SetUncapturedErrorCallback(error_callback->UnboundCallback(),
                                        error_callback->AsUserdata());
 

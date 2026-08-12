@@ -114,6 +114,16 @@ bool IsLastResortFont(CTFontRef font) {
                                       0) == kCFCompareEqualTo;
 }
 
+bool IsAppleColorEmojiFont(CTFontRef font) {
+  ScopedCFTypeRef<CFStringRef> family_name(
+      CTFontCopyName(font, kCTFontFamilyNameKey));
+  return family_name &&
+         (CFStringCompare(family_name.get(), CFSTR("Apple Color Emoji"),
+                          kCFCompareCaseInsensitive) == kCFCompareEqualTo ||
+          CFStringCompare(family_name.get(), CFSTR(".Apple Color Emoji UI"),
+                          kCFCompareCaseInsensitive) == kCFCompareEqualTo);
+}
+
 ScopedCFTypeRef<CTFontRef> GetSubstituteFont(CTFontRef ct_font,
                                              UChar32 character,
                                              float size) {
@@ -143,18 +153,14 @@ ScopedCFTypeRef<CTFontRef> GetSubstituteFont(CTFontRef ct_font,
     return ScopedCFTypeRef<CTFontRef>(nullptr);
   }
 
-  ScopedCFTypeRef<CFStringRef> substitute_font_name(
-      CTFontCopyName(substitute_font.get(), kCTFontFamilyNameKey));
   // System API might return colored "Apple Color Emoji" font for some emoji
-  // code points. But if emoji code point was requested and fallback_priority is
-  // not emoji presentation, it means that we need a monochromatic (text)
-  // presentation of emoji. To do that we will replace colored emoji font with
-  // the "Apple Symbols" monochromatic emoji font with "Apple Color Emoji"
+  // code points. It might also return ".Apple Color Emoji UI" when starting
+  // from system-ui. But if an emoji code point was requested and fallback
+  // priority is not emoji presentation, it means that we need a monochromatic
+  // (text) presentation of emoji. To do that we will replace colored emoji font
+  // with the "Apple Symbols" monochromatic emoji font with the color emoji
   // cascade list since it has better glyph coverage.
-  if (RuntimeEnabledFeatures::SystemFallbackEmojiVSSupportEnabled() &&
-      substitute_font_name &&
-      CFStringCompare(substitute_font_name.get(), CFSTR("Apple Color Emoji"),
-                      kCFCompareCaseInsensitive) == kCFCompareEqualTo &&
+  if (IsAppleColorEmojiFont(substitute_font.get()) &&
       Character::IsEmoji(character)) {
     NSArray* lang_list = @[ @"en" ];
     NSArray* cascade_list =
@@ -276,17 +282,6 @@ bool IsSystemFontName(const AtomicString& font_name) {
   return !font_name.empty() && font_name[0] == '.';
 }
 
-void FontCacheRegisteredFontsChangedNotificationCallback(
-    CFNotificationCenterRef,
-    void* observer,
-    CFStringRef name,
-    const void*,
-    CFDictionaryRef) {
-  DCHECK_EQ(observer, &FontCache::Get());
-  DCHECK(CFEqual(name, kCTFontManagerRegisteredFontsChangedNotification));
-  FontCache::InvalidateFromAnyThread();
-}
-
 }  // namespace
 
 const char kColorEmojiFontMac[] = "Apple Color Emoji";
@@ -307,12 +302,12 @@ void FontCache::InvalidateFromAnyThread() {
   FontCache::Get().Invalidate();
 }
 
-void FontCache::PlatformInit() {
-  CFNotificationCenterAddObserver(
-      CFNotificationCenterGetLocalCenter(), this,
-      FontCacheRegisteredFontsChangedNotificationCallback,
-      kCTFontManagerRegisteredFontsChangedNotification, /*object=*/nullptr,
-      CFNotificationSuspensionBehaviorDeliverImmediately);
+bool FontCache::IsFontFamilyUnavailable(const AtomicString& family_name) const {
+  return unavailable_font_families_.Contains(family_name);
+}
+
+void FontCache::MarkFontFamilyAsUnavailable(const AtomicString& family_name) {
+  unavailable_font_families_.insert(family_name);
 }
 
 const SimpleFontData* FontCache::PlatformFallbackFontForCharacter(
@@ -408,8 +403,7 @@ const FontPlatformData* FontCache::CreateFontPlatformData(
   }
 
   ScopedCFTypeRef<CTFontRef> matched_font;
-  if (alternate_name == AlternateFontName::kLocalUniqueFace &&
-      RuntimeEnabledFeatures::FontSrcLocalMatchingEnabled()) {
+  if (alternate_name == AlternateFontName::kLocalUniqueFace) {
     matched_font = MatchUniqueFont(creation_params.Family(), size);
   } else if (creation_params.Family() == font_family_names::kSystemUi) {
     matched_font =

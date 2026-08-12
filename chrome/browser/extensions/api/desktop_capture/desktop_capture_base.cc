@@ -9,8 +9,8 @@
 #include <utility>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
+#include "base/memory/singleton.h"
 #include "base/notimplemented.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -93,13 +93,15 @@ DesktopCaptureChooseDesktopMediaFunctionBase::Execute(
     const std::u16string& target_name) {
   DCHECK(!picker_controller_);
 
-  if (!render_frame_host->IsActive())
+  if (!render_frame_host->IsActive()) {
     return RespondNow(Error(kTargetNotActiveError));
+  }
 
   content::WebContents* web_contents =
       content::WebContents::FromRenderFrameHost(render_frame_host);
-  if (!web_contents)
+  if (!web_contents) {
     return RespondNow(Error(kTargetNotFoundError));
+  }
 
   gfx::NativeWindow parent_window = web_contents->GetTopLevelNativeWindow();
   // In case of coming from background extension page, |parent_window| will

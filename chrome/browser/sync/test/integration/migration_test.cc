@@ -3,30 +3,72 @@
 // found in the LICENSE file.
 
 #include <memory>
+#include <optional>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #include "base/containers/circular_deque.h"
+#include "base/memory/raw_ptr.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/test/integration/bookmarks_helper.h"
-#include "chrome/browser/sync/test/integration/migration_waiter.h"
-#include "chrome/browser/sync/test/integration/migration_watcher.h"
 #include "chrome/browser/sync/test/integration/preferences_helper.h"
+#include "chrome/browser/sync/test/integration/single_client_status_change_checker.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/common/pref_names.h"
 #include "components/bookmarks/browser/bookmark_model.h"
+#include "components/prefs/pref_service.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/features.h"
+#include "components/sync/protocol/data_type_progress_marker.pb.h"
 #include "components/sync/service/sync_service_impl.h"
 #include "content/public/test/browser_test.h"
 
 using bookmarks_helper::AddURL;
+using bookmarks_helper::GetBookmarkModel;
+using bookmarks_helper::GetUniqueNodeByURL;
 using bookmarks_helper::IndexedURL;
 using bookmarks_helper::IndexedURLTitle;
+using bookmarks_helper::Remove;
+using bookmarks_helper::ServerBookmarksEqualityChecker;
+using bookmarks_helper::SetTitle;
+using bookmarks_helper::StoreType;
 
 using preferences_helper::BooleanPrefMatches;
 using preferences_helper::ChangeBooleanPref;
+using preferences_helper::GetPrefs;
 
 namespace {
+
+std::optional<sync_pb::SyncEntity> FindBookmarkEntityByURL(
+    fake_server::FakeServer* fake_server,
+    const GURL& url) {
+  const std::vector<sync_pb::SyncEntity> entities =
+      fake_server->GetSyncEntitiesByDataType(syncer::BOOKMARKS);
+  for (const auto& entity : entities) {
+    if (entity.specifics().bookmark().url() == url.spec()) {
+      return entity;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<sync_pb::SyncEntity> FindPreferenceEntityByPrefName(
+    fake_server::FakeServer* fake_server,
+    const std::string& pref_name) {
+  const std::vector<sync_pb::SyncEntity> entities =
+      fake_server->GetSyncEntitiesByDataType(syncer::PREFERENCES);
+  for (const auto& entity : entities) {
+    if (entity.specifics().preference().name() == pref_name) {
+      return entity;
+    }
+  }
+  return std::nullopt;
+}
 
 // Utility functions to make a data type set out of a small number of
 // data types.
@@ -68,15 +110,91 @@ MigrationList MakeList(syncer::DataType type1, syncer::DataType type2) {
   return MakeList(MakeSet(type1), MakeSet(type2));
 }
 
-class MigrationTest
-    : public SyncTest,
-      public testing::WithParamInterface<SyncTest::SetupSyncMode> {
+class MigrationCompletionChecker : public SingleClientStatusChangeChecker {
+ public:
+  MigrationCompletionChecker(syncer::SyncServiceImpl* service,
+                             fake_server::FakeServer* fake_server,
+                             syncer::DataTypeSet expected_types)
+      : SingleClientStatusChangeChecker(service),
+        fake_server_(fake_server),
+        expected_types_(expected_types) {}
+
+  ~MigrationCompletionChecker() override = default;
+
+  // StatusChangeChecker implementation.
+  bool IsExitConditionSatisfied(std::ostream* os) override {
+    *os << "Waiting for migration of "
+        << syncer::DataTypeSetToDebugString(expected_types_) << ". ";
+
+    if (service()->GetTransportState() !=
+        syncer::SyncService::TransportState::ACTIVE) {
+      *os << "Transport state is "
+          << static_cast<int>(service()->GetTransportState())
+          << " (waiting for ACTIVE).";
+      return false;
+    }
+
+    for (syncer::DataType type : expected_types_) {
+      if (!service()->GetActiveDataTypes().Has(type)) {
+        *os << syncer::DataTypeToDebugString(type) << " is not active.";
+        return false;
+      }
+
+      std::optional<int> client_version =
+          GetMigrationVersionFromProgressMarker(type);
+      if (!client_version) {
+        *os << "No valid progress marker for "
+            << syncer::DataTypeToDebugString(type) << ".";
+        return false;
+      }
+
+      const int server_version = fake_server_->GetMigrationVersion(type);
+
+      if (*client_version != server_version) {
+        *os << syncer::DataTypeToDebugString(type)
+            << " has client migration version " << *client_version
+            << " but server expects " << server_version << ".";
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+ private:
+  std::optional<int> GetMigrationVersionFromProgressMarker(
+      const syncer::DataType type) {
+    const syncer::SyncCycleSnapshot& snap =
+        service()->GetLastCycleSnapshotForDebugging();
+    const syncer::ProgressMarkerMap& markers = snap.download_progress_markers();
+    const auto it = markers.find(type);
+    if (it == markers.end()) {
+      return std::nullopt;
+    }
+    sync_pb::DataTypeProgressMarker marker_proto;
+    if (!marker_proto.ParseFromString(it->second)) {
+      return std::nullopt;
+    }
+    return fake_server::FakeServer::GetProgressMarkerMigrationVersion(
+        marker_proto);
+  }
+
+  const raw_ptr<fake_server::FakeServer> fake_server_;
+  const syncer::DataTypeSet expected_types_;
+};
+
+class MigrationTest : public SyncTest,
+                      public testing::WithParamInterface<
+                          std::tuple<SyncTest::SetupSyncMode, bool>> {
  public:
   explicit MigrationTest(TestType test_type) : SyncTest(test_type) {
     if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
       scoped_feature_list_.InitWithFeatures(
           {syncer::kReplaceSyncPromosWithSignInPromos,
-           syncer::kSpellcheckSeparateLocalAndAccountDictionaries},
+           syncer::kSpellcheckSeparateLocalAndAccountDictionaries,
+           switches::kSyncEnableBookmarksInTransportMode,
+           syncer::kSeparateLocalAndAccountSearchEngines,
+           syncer::kSeparateLocalAndAccountThemes},
           {});
     }
   }
@@ -87,22 +205,14 @@ class MigrationTest
   ~MigrationTest() override = default;
 
   SyncTest::SetupSyncMode GetSetupSyncMode() const override {
-    return GetParam();
+    return std::get<0>(GetParam());
   }
+
+  bool UseGcDirective() const { return std::get<1>(GetParam()); }
 
   enum TriggerMethod { MODIFY_PREF, MODIFY_BOOKMARK, TRIGGER_REFRESH };
 
-  // Initialize all MigrationWatchers. This helps ensure that all migration
-  // events are captured, even if they were to occur before a test calls
-  // AwaitMigration for a specific profile.
-  void Initialize() {
-    for (int i = 0; i < num_clients(); ++i) {
-      migration_watchers_.push_back(
-          std::make_unique<MigrationWatcher>(GetClient(i)));
-    }
-  }
-
-  syncer::DataTypeSet GetPreferredDataTypes() {
+  syncer::DataTypeSet GetPreferredDataTypesEligibleForMigration() {
     // SyncServiceImpl must already have been created before we can call
     // GetPreferredDataTypes().
     DCHECK(GetSyncService(0));
@@ -136,28 +246,30 @@ class MigrationTest
     // Doesn't make sense to migrate commit only types.
     preferred_data_types.RemoveAll(syncer::CommitOnlyTypes());
 
+    if (!UseGcDirective()) {
+      // NIGORI migration is disallowed for MIGRATION_DONE response.
+      preferred_data_types.Remove(syncer::NIGORI);
+    }
+
     return preferred_data_types;
   }
 
   // Returns a MigrationList with every enabled data type in its own
   // set.
-  MigrationList GetPreferredDataTypesList() {
+  MigrationList GetEligibleDataTypeMigrationList() {
     MigrationList migration_list;
-    const syncer::DataTypeSet preferred_data_types = GetPreferredDataTypes();
-    for (syncer::DataType type : preferred_data_types) {
+    const syncer::DataTypeSet types =
+        GetPreferredDataTypesEligibleForMigration();
+    for (syncer::DataType type : types) {
       migration_list.push_back(MakeSet(type));
     }
     return migration_list;
   }
 
-  const bookmarks::BookmarkNode* GetParent() {
-    bookmarks::BookmarkModel* model = bookmarks_helper::GetBookmarkModel(0);
-    switch (GetSetupSyncMode()) {
-      case SetupSyncMode::kSyncTransportOnly:
-        return model->account_bookmark_bar_node();
-      case SetupSyncMode::kSyncTheFeature:
-        return model->bookmark_bar_node();
-    }
+  StoreType GetStoreType() {
+    return GetSetupSyncMode() == SyncTest::SetupSyncMode::kSyncTransportOnly
+               ? StoreType::kAccountStore
+               : StoreType::kLocalOrSyncableStore;
   }
 
   // Trigger a migration for the given types with the given method.
@@ -174,7 +286,7 @@ class MigrationTest
         break;
       case MODIFY_BOOKMARK:
         ASSERT_TRUE(
-            AddURL(0, GetParent(), 0, IndexedURLTitle(0), GURL(IndexedURL(0))));
+            AddURL(0, IndexedURLTitle(0), GURL(IndexedURL(0)), GetStoreType()));
         break;
       case TRIGGER_REFRESH:
         TriggerSyncForDataTypes(/*index=*/0, data_types);
@@ -188,8 +300,16 @@ class MigrationTest
   // types.
   void AwaitMigration(syncer::DataTypeSet migrate_types) {
     for (int i = 0; i < num_clients(); ++i) {
-      ASSERT_TRUE(
-          MigrationWaiter(migrate_types, migration_watchers_[i].get()).Wait());
+      ASSERT_TRUE(MigrationCompletionChecker(GetSyncService(i), GetFakeServer(),
+                                             migrate_types)
+                      .Wait());
+    }
+  }
+
+  void SetUpOnMainThread() override {
+    SyncTest::SetUpOnMainThread();
+    if (UseGcDirective()) {
+      GetFakeServer()->EnableGcDirectiveForMigration();
     }
   }
 
@@ -197,11 +317,6 @@ class MigrationTest
   // trigger method.
   void RunMigrationTest(const MigrationList& migration_list,
                         TriggerMethod trigger_method) {
-    // Make sure migration hasn't been triggered prematurely.
-    for (int i = 0; i < num_clients(); ++i) {
-      ASSERT_TRUE(migration_watchers_[i]->GetMigratedTypes().empty());
-    }
-
     // Phase 1: Trigger the migrations on the server.
     for (const syncer::DataTypeSet& data_types : migration_list) {
       TriggerMigrationDoneError(data_types);
@@ -222,9 +337,6 @@ class MigrationTest
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
-
-  // Used to keep track of the migration progress for each sync client.
-  std::vector<std::unique_ptr<MigrationWatcher>> migration_watchers_;
 };
 
 class MigrationSingleClientTest : public MigrationTest {
@@ -240,15 +352,30 @@ class MigrationSingleClientTest : public MigrationTest {
   void RunSingleClientMigrationTest(const MigrationList& migration_list,
                                     TriggerMethod trigger_method) {
     ASSERT_TRUE(SetupSync());
-    Initialize();
     RunMigrationTest(migration_list, trigger_method);
   }
 };
 
+namespace {
+
+std::string ParamNameGenerator(
+    const testing::TestParamInfo<std::tuple<SyncTest::SetupSyncMode, bool>>&
+        info) {
+  std::string name = SetupSyncModeAsString(std::get<0>(info.param));
+  if (std::get<1>(info.param)) {
+    name += "_GcDirective";
+  } else {
+    name += "_MigrationDone";
+  }
+  return name;
+}
+
+}  // namespace
+
 INSTANTIATE_TEST_SUITE_P(,
                          MigrationSingleClientTest,
-                         GetSyncTestModes(),
-                         testing::PrintToStringParamName());
+                         testing::Combine(GetSyncTestModes(), testing::Bool()),
+                         ParamNameGenerator);
 
 // The simplest possible migration tests -- a single data type.
 
@@ -286,11 +413,17 @@ IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest, BookmarksPrefsBoth) {
 // Two data types with one being nigori.
 
 IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest, PrefsNigoriIndividiaully) {
+  if (!UseGcDirective()) {
+    GTEST_SKIP() << "NIGORI migration is disallowed for MIGRATION_DONE.";
+  }
   RunSingleClientMigrationTest(MakeList(syncer::PREFERENCES, syncer::NIGORI),
                                TRIGGER_REFRESH);
 }
 
 IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest, PrefsNigoriBoth) {
+  if (!UseGcDirective()) {
+    GTEST_SKIP() << "NIGORI migration is disallowed for MIGRATION_DONE.";
+  }
   RunSingleClientMigrationTest(
       MakeList(MakeSet(syncer::PREFERENCES, syncer::NIGORI)), MODIFY_PREF);
 }
@@ -298,42 +431,352 @@ IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest, PrefsNigoriBoth) {
 // The whole shebang -- all data types.
 IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest, AllTypesIndividually) {
   ASSERT_TRUE(SetupClients());
-  RunSingleClientMigrationTest(GetPreferredDataTypesList(), MODIFY_BOOKMARK);
+  RunSingleClientMigrationTest(GetEligibleDataTypeMigrationList(),
+                               MODIFY_BOOKMARK);
 }
 
 IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest,
                        AllTypesIndividuallyTriggerRefresh) {
   ASSERT_TRUE(SetupClients());
-  RunSingleClientMigrationTest(GetPreferredDataTypesList(), TRIGGER_REFRESH);
+  RunSingleClientMigrationTest(GetEligibleDataTypeMigrationList(),
+                               TRIGGER_REFRESH);
 }
 
 IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest, AllTypesAtOnce) {
   ASSERT_TRUE(SetupClients());
-  RunSingleClientMigrationTest(MakeList(GetPreferredDataTypes()), MODIFY_PREF);
+  RunSingleClientMigrationTest(
+      MakeList(GetPreferredDataTypesEligibleForMigration()), MODIFY_PREF);
 }
 
 IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest,
                        AllTypesAtOnceTriggerRefresh) {
   ASSERT_TRUE(SetupClients());
-  RunSingleClientMigrationTest(MakeList(GetPreferredDataTypes()),
-                               TRIGGER_REFRESH);
+  RunSingleClientMigrationTest(
+      MakeList(GetPreferredDataTypesEligibleForMigration()), TRIGGER_REFRESH);
 }
 
 // All data types plus nigori.
 
 IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest,
                        AllTypesWithNigoriIndividually) {
+  if (!UseGcDirective()) {
+    GTEST_SKIP() << "NIGORI migration is disallowed for MIGRATION_DONE.";
+  }
   ASSERT_TRUE(SetupClients());
-  MigrationList migration_list = GetPreferredDataTypesList();
+  MigrationList migration_list = GetEligibleDataTypeMigrationList();
   migration_list.push_front(MakeSet(syncer::NIGORI));
   RunSingleClientMigrationTest(migration_list, MODIFY_BOOKMARK);
 }
 
 IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest, AllTypesWithNigoriAtOnce) {
+  if (!UseGcDirective()) {
+    GTEST_SKIP() << "NIGORI migration is disallowed for MIGRATION_DONE.";
+  }
   ASSERT_TRUE(SetupClients());
-  syncer::DataTypeSet all_types = GetPreferredDataTypes();
+  syncer::DataTypeSet all_types = GetPreferredDataTypesEligibleForMigration();
   all_types.Put(syncer::NIGORI);
   RunSingleClientMigrationTest(MakeList(all_types), MODIFY_PREF);
+}
+
+IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest,
+                       PrefsMigrationDiscardMetadata) {
+  ASSERT_TRUE(SetupSync());
+
+  // 1. Create a pref before migration (toggles to true).
+  preferences_helper::ChangeBooleanPref(0, prefs::kShowHomeButton);
+  ASSERT_TRUE(FakeServerPrefMatchesValueChecker(syncer::PREFERENCES,
+                                                prefs::kShowHomeButton, "true")
+                  .Wait());
+
+  // Locate our user preference entity before migration.
+  const std::optional<sync_pb::SyncEntity> pref_before =
+      FindPreferenceEntityByPrefName(GetFakeServer(), prefs::kShowHomeButton);
+  ASSERT_TRUE(pref_before.has_value());
+  const std::string id_before = pref_before->id_string();
+
+  // 2. Trigger migration for Preferences on the server.
+  TriggerMigrationDoneError({syncer::PREFERENCES});
+
+  // 3. Trigger migration on the client and wait for it.
+  TriggerSyncForDataTypes(0, {syncer::PREFERENCES});
+  AwaitMigration({syncer::PREFERENCES});
+
+  // Locate the migrated user preference entity after migration.
+  const std::optional<sync_pb::SyncEntity> pref_after =
+      FindPreferenceEntityByPrefName(GetFakeServer(), prefs::kShowHomeButton);
+  ASSERT_TRUE(pref_after.has_value());
+  const std::string id_after = pref_after->id_string();
+
+  // Verify that the ID changed (migration happened) but data was preserved.
+  EXPECT_NE(id_before, id_after)
+      << "Preference entity ID did not change after migration!";
+  ASSERT_EQ(pref_after->specifics().preference().value(), "true");
+
+  // 4. Modify the pref again after migration (toggles to false).
+  preferences_helper::ChangeBooleanPref(0, prefs::kShowHomeButton);
+  ASSERT_TRUE(FakeServerPrefMatchesValueChecker(syncer::PREFERENCES,
+                                                prefs::kShowHomeButton, "false")
+                  .Wait());
+
+  // 5. Verify the final committed update uses the migrated ID and mutates data.
+  const std::optional<sync_pb::SyncEntity> pref_final =
+      FindPreferenceEntityByPrefName(GetFakeServer(), prefs::kShowHomeButton);
+  ASSERT_TRUE(pref_final.has_value());
+  EXPECT_EQ(pref_final->id_string(), id_after);
+  EXPECT_EQ(pref_final->specifics().preference().value(), "false")
+      << "Client preference mutation was not committed successfully "
+         "post-migration!";
+}
+
+IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest,
+                       BookmarksMigrationDiscardMetadata) {
+  ASSERT_TRUE(SetupSync());
+
+  // 1. Create a bookmark node before migration.
+  const bookmarks::BookmarkNode* const node =
+      AddURL(0, IndexedURLTitle(0), GURL(IndexedURL(0)), GetStoreType());
+  ASSERT_TRUE(node);
+
+  // Wait until it gets uploaded to the server.
+  ASSERT_TRUE(ServerBookmarksEqualityChecker(
+                  {{IndexedURLTitle(0), GURL(IndexedURL(0))}}, nullptr)
+                  .Wait());
+
+  // Locate our user bookmark entity before migration.
+  const std::optional<sync_pb::SyncEntity> bookmark_before =
+      FindBookmarkEntityByURL(GetFakeServer(), GURL(IndexedURL(0)));
+  ASSERT_TRUE(bookmark_before.has_value());
+  const std::string id_before = bookmark_before->id_string();
+
+  // Verify initial data.
+  ASSERT_EQ(bookmark_before->name(), base::UTF16ToUTF8(IndexedURLTitle(0)));
+
+  // 2. Trigger migration for Bookmarks on the server.
+  TriggerMigrationDoneError({syncer::BOOKMARKS});
+
+  // 3. Trigger migration on the client and wait for it.
+  TriggerSyncForDataTypes(0, {syncer::BOOKMARKS});
+  AwaitMigration({syncer::BOOKMARKS});
+
+  // Locate the migrated user bookmark entity after migration.
+  const std::optional<sync_pb::SyncEntity> bookmark_after =
+      FindBookmarkEntityByURL(GetFakeServer(), GURL(IndexedURL(0)));
+  ASSERT_TRUE(bookmark_after.has_value());
+  const std::string id_after = bookmark_after->id_string();
+
+  // Verify that the ID changed (migration happened) but data was preserved.
+  EXPECT_NE(id_before, id_after)
+      << "Bookmark entity ID did not change after migration!";
+  ASSERT_EQ(bookmark_after->name(), base::UTF16ToUTF8(IndexedURLTitle(0)));
+
+  // 4. Modify the bookmark again after migration.
+  const bookmarks::BookmarkNode* const migrated_node =
+      GetUniqueNodeByURL(0, GURL(IndexedURL(0)));
+  ASSERT_TRUE(migrated_node);
+  SetTitle(0, migrated_node, u"New Title");
+
+  // Wait until the modification gets uploaded to the server.
+  ASSERT_TRUE(ServerBookmarksEqualityChecker(
+                  {{u"New Title", GURL(IndexedURL(0))}}, nullptr)
+                  .Wait());
+
+  // 5. Verify the final committed update uses the migrated ID and mutates data.
+  const std::optional<sync_pb::SyncEntity> bookmark_final =
+      FindBookmarkEntityByURL(GetFakeServer(), GURL(IndexedURL(0)));
+  ASSERT_TRUE(bookmark_final.has_value());
+  EXPECT_EQ(bookmark_final->id_string(), id_after);
+  EXPECT_EQ(bookmark_final->name(), "New Title")
+      << "Client bookmark mutation was not committed successfully "
+         "post-migration!";
+}
+
+IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest,
+                       BookmarksMigrationPreservesLocalChanges) {
+  ASSERT_TRUE(SetupSync());
+
+  // 1. Create bookmark nodes before migration.
+  const bookmarks::BookmarkNode* const node_to_modify =
+      AddURL(0, u"Original Title", GURL("http://modify.com"), GetStoreType());
+  const bookmarks::BookmarkNode* const node_to_delete =
+      AddURL(0, u"To Delete", GURL("http://delete.com"), GetStoreType());
+  const bookmarks::BookmarkNode* const node_to_keep =
+      AddURL(0, u"To Keep", GURL("http://keep.com"), GetStoreType());
+  ASSERT_TRUE(node_to_modify);
+  ASSERT_TRUE(node_to_delete);
+  ASSERT_TRUE(node_to_keep);
+
+  // Wait until they get uploaded to the server.
+  ASSERT_TRUE(ServerBookmarksEqualityChecker(
+                  {{u"Original Title", GURL("http://modify.com")},
+                   {u"To Delete", GURL("http://delete.com")},
+                   {u"To Keep", GURL("http://keep.com")}},
+                  nullptr)
+                  .Wait());
+
+  // 2. Trigger migration for Bookmarks on the server.
+  TriggerMigrationDoneError({syncer::BOOKMARKS});
+
+  // 3. Make local changes (pending commit).
+  // - Add a new bookmark
+  const bookmarks::BookmarkNode* const node_added =
+      AddURL(0, u"Added Locally", GURL("http://added.com"), GetStoreType());
+  ASSERT_TRUE(node_added);
+  // - Modify the existing bookmark
+  SetTitle(0, node_to_modify, u"Modified Locally");
+  // - Delete the other bookmark
+  const bookmarks::BookmarkNode* parent = node_to_delete->parent();
+  size_t index = parent->GetIndexOf(node_to_delete).value();
+  Remove(0, parent, index);
+
+  // 4. Trigger migration on the client and wait for it.
+  TriggerSyncForDataTypes(0, {syncer::BOOKMARKS});
+  AwaitMigration({syncer::BOOKMARKS});
+
+  // 5. Verify the state of the local model and server.
+  const bool is_gc = UseGcDirective();
+  const bool is_transport =
+      GetSetupSyncMode() == SyncTest::SetupSyncMode::kSyncTransportOnly;
+
+  // 1. Verify local model state.
+  if (is_gc) {
+    // Preserved.
+    EXPECT_TRUE(
+        GetBookmarkModel(0)->GetNodesByURL(GURL("http://delete.com")).empty());
+    const bookmarks::BookmarkNode* modified_node =
+        GetUniqueNodeByURL(0, GURL("http://modify.com"));
+    ASSERT_TRUE(modified_node);
+    EXPECT_EQ(modified_node->GetTitle(), u"Modified Locally");
+    EXPECT_FALSE(
+        GetBookmarkModel(0)->GetNodesByURL(GURL("http://added.com")).empty());
+    EXPECT_FALSE(
+        GetBookmarkModel(0)->GetNodesByURL(GURL("http://keep.com")).empty());
+  } else {
+    // Legacy MigrationDone.
+    // Deletion and modification are lost.
+    EXPECT_FALSE(
+        GetBookmarkModel(0)->GetNodesByURL(GURL("http://delete.com")).empty());
+    const bookmarks::BookmarkNode* modified_node =
+        GetUniqueNodeByURL(0, GURL("http://modify.com"));
+    ASSERT_TRUE(modified_node);
+    EXPECT_EQ(modified_node->GetTitle(), u"Original Title");
+    EXPECT_FALSE(
+        GetBookmarkModel(0)->GetNodesByURL(GURL("http://keep.com")).empty());
+
+    // Addition is lost only in transport-only mode.
+    if (is_transport) {
+      EXPECT_TRUE(
+          GetBookmarkModel(0)->GetNodesByURL(GURL("http://added.com")).empty());
+    } else {
+      EXPECT_FALSE(
+          GetBookmarkModel(0)->GetNodesByURL(GURL("http://added.com")).empty());
+    }
+  }
+
+  // 2. Verify server state.
+  std::vector<ServerBookmarksEqualityChecker::ExpectedBookmark>
+      expected_server_bookmarks;
+  if (is_gc) {
+    expected_server_bookmarks = {
+        {u"Modified Locally", GURL("http://modify.com")},
+        {u"Added Locally", GURL("http://added.com")},
+        {u"To Keep", GURL("http://keep.com")}};
+  } else {
+    if (is_transport) {
+      expected_server_bookmarks = {
+          {u"To Delete", GURL("http://delete.com")},
+          {u"Original Title", GURL("http://modify.com")},
+          {u"To Keep", GURL("http://keep.com")}};
+    } else {
+      expected_server_bookmarks = {
+          {u"To Delete", GURL("http://delete.com")},
+          {u"Original Title", GURL("http://modify.com")},
+          {u"Added Locally", GURL("http://added.com")},
+          {u"To Keep", GURL("http://keep.com")}};
+    }
+  }
+
+  ASSERT_TRUE(ServerBookmarksEqualityChecker(expected_server_bookmarks, nullptr)
+                  .Wait());
+}
+
+IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest,
+                       PrefsMigrationPreservesLocalChanges) {
+  ASSERT_TRUE(SetupSync());
+
+  const char* pref_name = prefs::kShowHomeButton;
+  const char* pref_to_keep = prefs::kHomePageIsNewTabPage;
+  PrefService* prefs = GetPrefs(0);
+
+  // Ensure we start with a known state (false).
+  if (prefs->GetBoolean(pref_name)) {
+    ChangeBooleanPref(0, pref_name);
+  }
+  if (prefs->GetBoolean(pref_to_keep)) {
+    ChangeBooleanPref(0, pref_to_keep);
+  }
+  ASSERT_TRUE(PrefValueChecker(prefs, pref_name, base::Value(false)).Wait());
+  ASSERT_TRUE(PrefValueChecker(prefs, pref_to_keep, base::Value(false)).Wait());
+
+  // 1. Change both prefs to true and sync them.
+  ChangeBooleanPref(0, pref_name);
+  ChangeBooleanPref(0, pref_to_keep);
+  ASSERT_TRUE(prefs->GetBoolean(pref_name));
+  ASSERT_TRUE(prefs->GetBoolean(pref_to_keep));
+  ASSERT_TRUE(PrefValueChecker(prefs, pref_name, base::Value(true)).Wait());
+  ASSERT_TRUE(PrefValueChecker(prefs, pref_to_keep, base::Value(true)).Wait());
+  ASSERT_TRUE(FakeServerPrefMatchesValueChecker(
+                  syncer::PREFERENCES, pref_name,
+                  preferences_helper::ConvertPrefValueToValueInSpecifics(
+                      base::Value(true)))
+                  .Wait());
+  ASSERT_TRUE(FakeServerPrefMatchesValueChecker(
+                  syncer::PREFERENCES, pref_to_keep,
+                  preferences_helper::ConvertPrefValueToValueInSpecifics(
+                      base::Value(true)))
+                  .Wait());
+
+  // 2. Change pref_name back to false locally (pending change).
+  // Keep pref_to_keep as true (no pending change).
+  ChangeBooleanPref(0, pref_name);
+  ASSERT_FALSE(prefs->GetBoolean(pref_name));
+  ASSERT_TRUE(prefs->GetBoolean(pref_to_keep));
+
+  // 3. Trigger migration for Preferences on the server.
+  TriggerMigrationDoneError({syncer::PREFERENCES});
+
+  // 4. Trigger migration on the client and wait for it.
+  TriggerSyncForDataTypes(0, {syncer::PREFERENCES});
+  AwaitMigration({syncer::PREFERENCES});
+
+  // 5. Verify the state of the local pref and server.
+  const bool is_gc = UseGcDirective();
+
+  // In all cases, pref_to_keep should remain true.
+  EXPECT_TRUE(prefs->GetBoolean(pref_to_keep));
+  EXPECT_TRUE(FakeServerPrefMatchesValueChecker(
+                  syncer::PREFERENCES, pref_to_keep,
+                  preferences_helper::ConvertPrefValueToValueInSpecifics(
+                      base::Value(true)))
+                  .Wait());
+
+  if (is_gc) {
+    // Preserved. Local should be false, and server should eventually be false.
+    EXPECT_FALSE(prefs->GetBoolean(pref_name));
+    EXPECT_TRUE(FakeServerPrefMatchesValueChecker(
+                    syncer::PREFERENCES, pref_name,
+                    preferences_helper::ConvertPrefValueToValueInSpecifics(
+                        base::Value(false)))
+                    .Wait());
+  } else {
+    // Lost. Local should revert to true (server value), and server remains
+    // true.
+    EXPECT_TRUE(prefs->GetBoolean(pref_name));
+    EXPECT_TRUE(FakeServerPrefMatchesValueChecker(
+                    syncer::PREFERENCES, pref_name,
+                    preferences_helper::ConvertPrefValueToValueInSpecifics(
+                        base::Value(true)))
+                    .Wait());
+  }
 }
 
 class MigrationTwoClientTest : public MigrationTest {
@@ -355,7 +798,6 @@ class MigrationTwoClientTest : public MigrationTest {
   void RunTwoClientMigrationTest(const MigrationList& migration_list,
                                  TriggerMethod trigger_method) {
     ASSERT_TRUE(SetupSync());
-    Initialize();
 
     // Make sure pref sync works before running the migration test.
     VerifyPrefSync();
@@ -368,10 +810,17 @@ class MigrationTwoClientTest : public MigrationTest {
   }
 };
 
+#if defined(ADDRESS_SANITIZER) || defined(THREAD_SANITIZER) || \
+    defined(MEMORY_SANITIZER)
+// MigrationTwoClientTest is too slow to run under sanitizers (takes ~90s and
+// causes timeouts).
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(MigrationTwoClientTest);
+#else
 INSTANTIATE_TEST_SUITE_P(,
                          MigrationTwoClientTest,
-                         GetSyncTestModes(),
-                         testing::PrintToStringParamName());
+                         testing::Combine(GetSyncTestModes(), testing::Bool()),
+                         ParamNameGenerator);
+#endif
 
 // Easiest possible test of migration errors: triggers a server
 // migration on one datatype, then modifies some other datatype.
@@ -391,17 +840,19 @@ IN_PROC_BROWSER_TEST_P(MigrationTwoClientTest,
 // will only tell the client about the migrations one at a time.
 IN_PROC_BROWSER_TEST_P(MigrationTwoClientTest, MigrationHellWithoutNigori) {
   ASSERT_TRUE(SetupClients());
-  MigrationList migration_list = GetPreferredDataTypesList();
+  MigrationList migration_list = GetEligibleDataTypeMigrationList();
   // Let the first nudge be a datatype that's neither prefs nor bookmarks.
   migration_list.push_front(MakeSet(syncer::THEMES));
-  ASSERT_EQ(MakeSet(syncer::NIGORI), migration_list.back());
-  migration_list.pop_back();
+  base::Erase(migration_list, MakeSet(syncer::NIGORI));
   RunTwoClientMigrationTest(migration_list, MODIFY_BOOKMARK);
 }
 
 IN_PROC_BROWSER_TEST_P(MigrationTwoClientTest, MigrationHellWithNigori) {
+  if (!UseGcDirective()) {
+    GTEST_SKIP() << "NIGORI migration is disallowed for MIGRATION_DONE.";
+  }
   ASSERT_TRUE(SetupClients());
-  MigrationList migration_list = GetPreferredDataTypesList();
+  MigrationList migration_list = GetEligibleDataTypeMigrationList();
   // Let the first nudge be a datatype that's neither prefs nor bookmarks.
   migration_list.push_front(MakeSet(syncer::THEMES));
   ASSERT_EQ(MakeSet(syncer::NIGORI), migration_list.back());

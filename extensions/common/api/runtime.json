@@ -104,6 +104,7 @@
       },
       {
         "id": "PlatformNaclArch",
+        "deprecated": "This enum is deprecated following complete removal of Native Client.",
         "description": "The native client architecture. This may be different from arch on some platforms.",
         "type": "string",
         "enum": [
@@ -129,6 +130,7 @@
           },
           "nacl_arch" : {
             "optional": true,
+            "deprecated": "This attribute is deprecated following complete removal of Native Client.",
             "description": "The native client architecture. This may be different from arch on some platforms.",
             "$ref": "PlatformNaclArch"
           }
@@ -383,7 +385,7 @@
         "returns_async": {
           "name": "callback",
           "optional": true,
-          "description": "Called when the uninstall URL is set. If the given URL is invalid, $(ref:runtime.lastError) will be set.",
+          "description": "Promise that resolves when the uninstall URL is set. If the given URL is invalid, the promise will be rejected.",
           "parameters": []
         }
       },
@@ -439,7 +441,7 @@
         ],
         "returns_async": {
           "name": "callback",
-          "description": "A callback to be invoked when a restart request was successfully rescheduled.",
+          "description": "Promise that resolves when a restart request was successfully rescheduled.",
           "parameters": [],
           "optional": true
         }
@@ -555,7 +557,7 @@
         "parameters": [],
         "returns_async": {
           "name": "callback",
-          "description": "Called with results",
+          "description": "Promise that resolves with information about the current platform.",
           "parameters": [
             {
               "name": "platformInfo",
@@ -594,7 +596,7 @@
         ],
         "returns_async": {
           "name": "callback",
-          "description": "Invoked with the matching contexts, if any.",
+          "description": "Promise that resolves with the matching contexts, if any.",
           "parameters": [
             {
               "name": "contexts",
@@ -724,7 +726,7 @@
         "options": {
           "unmanaged": true
         },
-        "description": "Fired when a message is sent from either an extension process (by $(ref:runtime.sendMessage)) or a content script (by $(ref:tabs.sendMessage)).",
+        "description": "Fired when a message is sent from either $(ref:runtime.sendMessage) or $(ref:tabs.sendMessage).",
         "parameters": [
           {"name": "message", "type": "any", "optional": true, "description": "The message sent by the calling script."},
           {"name": "sender", "$ref": "MessageSender" },
@@ -743,7 +745,7 @@
             {"type": "object", "isInstanceOf": "Promise"}
           ],
           "optional": true,
-          "description": "Return true from the event listener if you wish to call <code>sendResponse</code> after the event listener returns."
+          "description": "Return true (or a Promise) from the event listener if you wish to call <code>sendResponse</code> after the event listener returns."
         }
       },
       {
@@ -765,9 +767,12 @@
           }
         ],
         "returns": {
-          "type": "boolean",
+          "choices": [
+            {"type": "boolean"},
+            {"type": "object", "isInstanceOf": "Promise"}
+          ],
           "optional": true,
-          "description": "Return true from the event listener if you wish to call <code>sendResponse</code> after the event listener returns."
+          "description": "Return true (or a Promise) from the event listener if you wish to call <code>sendResponse</code> after the event listener returns."
         }
       },
       {

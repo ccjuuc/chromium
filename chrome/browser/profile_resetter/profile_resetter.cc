@@ -21,6 +21,8 @@
 #include "chrome/browser/browsing_data/chrome_browsing_data_remover_constants.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/file_system_access/chrome_file_system_access_permission_context.h"
+#include "chrome/browser/file_system_access/file_system_access_permission_context_factory.h"
 #include "chrome/browser/google/google_brand.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profile_resetter/brandcode_config_fetcher.h"
@@ -29,7 +31,6 @@
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -57,6 +58,7 @@
 #include "extensions/common/manifest.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_pref_names.h"
 #include "chrome/browser/ash/input_method/input_method_manager_impl.h"
 #include "chromeos/ash/components/network/managed_network_configuration_handler.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
@@ -251,7 +253,7 @@ void ProfileResetter::ResetDefaultSearchEngine() {
     DCHECK(prefs);
     TemplateURLPrepopulateData::ClearPrepopulatedEnginesInPrefs(
         profile_->GetPrefs());
-    std::optional<base::Value::List> search_engines(
+    std::optional<base::ListValue> search_engines(
         master_settings_->GetSearchProviderOverrides());
     if (search_engines.has_value()) {
       // This Chrome distribution channel provides a custom search engine. We
@@ -262,6 +264,7 @@ void ProfileResetter::ResetDefaultSearchEngine() {
 
     template_url_service_->RepairPrepopulatedSearchEngines();
     template_url_service_->RepairStarterPackEngines();
+    template_url_service_->RemoveUserAddedTemplateURLs();
 
     MarkAsDone(DEFAULT_SEARCH_ENGINE);
   } else {
@@ -313,6 +316,15 @@ void ProfileResetter::ResetContentSettings() {
     map->SetDefaultContentSetting(info->website_settings_info()->type(),
                                   CONTENT_SETTING_DEFAULT);
   }
+
+  // Active File System Access grants are kept in memory by the permission
+  // context rather than in HostContentSettingsMap, so they need to be revoked
+  // explicitly.
+  if (auto* permission_context =
+          FileSystemAccessPermissionContextFactory::GetForProfile(profile_)) {
+    permission_context->RevokeAllActiveGrants();
+  }
+
   MarkAsDone(CONTENT_SETTINGS);
 }
 
@@ -370,7 +382,7 @@ void ProfileResetter::ResetStartupPages() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   PrefService* prefs = profile_->GetPrefs();
   DCHECK(prefs);
-  std::optional<base::Value::List> url_list(
+  std::optional<base::ListValue> url_list(
       master_settings_->GetUrlsToRestoreOnStartup());
   if (url_list.has_value()) {
     prefs->SetList(prefs::kURLsToRestoreOnStartup, std::move(url_list).value());
@@ -548,15 +560,15 @@ void ProfileResetter::ResetKeyboardInputSettings() {
     manager->GetInputMethodUtil()->GetInputMethodIdsFromLanguageCode(
         locale, ash::input_method::kAllInputMethods, &input_method_ids);
     // Save the input method in the user's preference kLanguagePreloadEngines.
-    prefs->SetString(prefs::kLanguagePreloadEngines, input_method_ids.empty()
-                                                         ? std::string()
-                                                         : input_method_ids[0]);
+    prefs->SetString(
+        ash::prefs::kLanguagePreloadEngines,
+        input_method_ids.empty() ? std::string() : input_method_ids[0]);
   }
 
   // 2. Call to reset spell check languages, matching the default language and
   // clearing the other options.
   prefs->SetList(spellcheck::prefs::kSpellCheckDictionaries,
-                 base::Value::List().Append(
+                 base::ListValue().Append(
                      prefs->GetString(language::prefs::kPreferredLanguages)));
 
   MarkAsDone(KEYBOARD_SETTINGS);

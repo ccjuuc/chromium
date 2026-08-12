@@ -40,14 +40,10 @@
           forControlEvents:UIControlEventTouchUpInside];
     [self addSubview:_editButton];
 
-    if (IsNTPBackgroundCustomizationEnabled()) {
-      [self registerForTraitChanges:
-                @[ NewTabPageTrait.class, NewTabPageImageBackgroundTrait.class ]
-                         withAction:@selector(applyBackgroundTheme)];
-      [self applyBackgroundTheme];
-    } else {
-      _editButton.configuration = [self buttonConfiguration];
-    }
+    [self registerForTraitChanges:
+              @[ NewTabPageTrait.class, NewTabPageImageBackgroundTrait.class ]
+                       withAction:@selector(applyBackgroundTheme)];
+    [self applyBackgroundTheme];
 
     [NSLayoutConstraint activateConstraints:@[
       [_editButton.leadingAnchor
@@ -81,16 +77,8 @@
 
   buttonConfiguration.background.cornerRadius = kMagicStackEditButtonWidth / 2;
 
-  buttonConfiguration.image = DefaultSymbolTemplateWithPointSize(
-      kSliderHorizontalSymbol, kMagicStackEditButtonIconPointSize);
-
-  if (!IsNTPBackgroundCustomizationEnabled()) {
-    buttonConfiguration.baseForegroundColor =
-        [UIColor colorNamed:kTextSecondaryColor];
-    buttonConfiguration.background.backgroundColor =
-        [UIColor colorNamed:@"magic_stack_edit_button_background_color"];
-    return buttonConfiguration;
-  }
+  buttonConfiguration.image = SymbolTemplateWithPointSize(
+      SymbolSliderHorizontal, kMagicStackEditButtonIconPointSize);
 
   if ([self.traitCollection boolForNewTabPageImageBackgroundTrait]) {
     UIVisualEffect* blurEffect =

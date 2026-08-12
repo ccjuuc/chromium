@@ -50,43 +50,18 @@ class CORE_EXPORT CustomElement {
       return false;
 
     // name's 0th code point is an ASCII lower alpha
-    if (!IsASCIILower(name[0]))
+    if (!IsAsciiLower(name[0])) {
       return false;
+    }
 
-    if (RuntimeEnabledFeatures::RelaxDOMValidNamesEnabled()) {
-      // https://github.com/whatwg/html/pull/7991
-      // name is a valid element local name
-      if (!Document::IsValidElementLocalNameNewSpec(name)) {
-        return false;
-      }
-      // name does not contain any ASCII upper alphas
-      if (!VisitCharacters(name.GetString(), [](auto characters) {
-            for (size_t i = 0; i < characters.size(); i++) {
-              if (IsASCIIUpper(characters[i])) {
-                return false;
-              }
-            }
-            return true;
-          })) {
-        return false;
-      }
-    } else {
-      if (name.Is8Bit()) {
-        auto characters = name.Span8();
-        for (size_t i = 1; i < characters.size(); ++i) {
-          if (!Character::IsPotentialCustomElementName8BitChar(characters[i])) {
-            return false;
-          }
-        }
-      } else {
-        auto characters = name.Span16();
-        for (size_t i = 1; i < characters.size();) {
-          UChar32 ch = CodePointAtAndNext(characters, i);
-          if (!Character::IsPotentialCustomElementNameChar(ch)) {
-            return false;
-          }
-        }
-      }
+    // https://github.com/whatwg/html/pull/7991
+    // name is a valid element local name
+    if (!Document::IsValidElementLocalName(name)) {
+      return false;
+    }
+    // name does not contain any ASCII upper alphas
+    if (!name.ContainsNoAsciiUpper()) {
+      return false;
     }
 
     return !IsHyphenatedSpecElementName(name);
@@ -113,8 +88,7 @@ class CORE_EXPORT CustomElement {
       const QualifiedName&,
       const CreateElementFlags,
       const AtomicString& is_value,
-      CustomElementRegistry* registry,
-      const bool wait_for_registry);
+      CustomElementRegistryAssignment registry_assignment);
   static HTMLElement* CreateFailedElement(Document&,
                                           const QualifiedName&,
                                           CustomElementRegistry*);
@@ -137,6 +111,7 @@ class CORE_EXPORT CustomElement {
   static void EnqueueFormStateRestoreCallback(Element& element,
                                               const V8ControlValue* value,
                                               const String& mode);
+  static void EnqueueToolFillCallback(Element& element, const String& value);
 
   static void TryToUpgrade(Element&);
 
@@ -158,17 +133,12 @@ class CORE_EXPORT CustomElement {
     kQNameIsValid,
   };
   template <CreateUUCheckLevel>
-  // When a null registry is passed in, we can use wait_for_registry flag to
-  // control if the created element is "explicit null" and wait for a registry
-  // to be set later or "implicit null" and pick up the registry from the tree
-  // scope.
   static Element* CreateUncustomizedOrUndefinedElementTemplate(
       Document&,
       const QualifiedName&,
       const CreateElementFlags,
       const AtomicString& is_value,
-      CustomElementRegistry* registry,
-      const bool wait_for_registry);
+      CustomElementRegistryAssignment registry_assignment);
 };
 
 }  // namespace blink

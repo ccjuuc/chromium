@@ -37,7 +37,6 @@
 #include "third_party/blink/renderer/core/html/parser/html_token.h"
 #include "third_party/blink/renderer/core/html/parser/input_stream_preprocessor.h"
 #include "third_party/blink/renderer/core/html_names.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/segmented_string.h"
 
 namespace blink {
@@ -61,8 +60,6 @@ class CORE_EXPORT HTMLTokenizer {
     kRCDATAState,
     kCharacterReferenceInRCDATAState,
     kRAWTEXTState,
-    kChildNodePartStartState,
-    kChildNodePartEndState,
     kScriptDataState,
     kPLAINTEXTState,
     kTagOpenState,
@@ -101,6 +98,11 @@ class CORE_EXPORT HTMLTokenizer {
     kCharacterReferenceInAttributeValueState,
     kAfterAttributeValueQuotedState,
     kSelfClosingStartTagState,
+    kProcessingInstructionOpenState,
+    kProcessingInstructionTargetState,
+    kAfterProcessingInstructionTargetState,
+    kProcessingInstructionDataState,
+    kProcessingInstructionQuestionableState,
     kBogusCommentState,
     // The ContinueBogusCommentState is not in the HTML5 spec, but we use
     // it internally to keep track of whether we've started the bogus
@@ -184,16 +186,6 @@ class CORE_EXPORT HTMLTokenizer {
   bool ShouldAllowCDATA() const { return should_allow_cdata_; }
   void SetShouldAllowCDATA(bool value) { should_allow_cdata_ = value; }
 
-  bool ShouldAllowDOMParts() const {
-    DCHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled() ||
-           !should_allow_dom_parts_);
-    return should_allow_dom_parts_;
-  }
-  void SetShouldAllowDOMParts(bool value) {
-    DCHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled());
-    should_allow_dom_parts_ = value;
-  }
-
   ALWAYS_INLINE State GetState() const { return state_; }
   void SetState(State state) { state_ = state; }
 
@@ -225,9 +217,9 @@ class CORE_EXPORT HTMLTokenizer {
   // Additionally, if attributes are tracked HTMLAttributesRanges::Clear()
   // must be called after every token.
   HTMLAttributesRanges& attributes_ranges() {
-    // If `track_attributes_ranges_` is is false, `attributes_ranges_` is not
-    // updated.
-    DCHECK(track_attributes_ranges_);
+    // If `options_.track_attributes_ranges` is is false, `attributes_ranges_`
+    // is not updated.
+    DCHECK(options_.track_attributes_ranges);
     return attributes_ranges_;
   }
 
@@ -250,6 +242,13 @@ class CORE_EXPORT HTMLTokenizer {
 
   inline bool EmitAndResumeInDataState(SegmentedString& source) {
     SaveEndTagNameIfNeeded();
+    state_ = kDataState;
+    source.AdvancePastNonNewline();
+    return true;
+  }
+
+  inline bool EmitProcessingInstruction(SegmentedString& source) {
+    temporary_buffer_.clear();
     state_ = kDataState;
     source.AdvancePastNonNewline();
     return true;
@@ -299,15 +298,19 @@ class CORE_EXPORT HTMLTokenizer {
     return token_.GetType() == HTMLToken::kCharacter;
   }
 
-  HTMLToken token_;
+  // A closed stream never gets more input, so stop waiting on a look-ahead
+  // that returned kNotEnoughCharacters and emit a bogus comment instead.
+  // crbug.com/40727112
+  inline bool ShouldWaitForMoreInput(const SegmentedString& source) const {
+    return !truncated_markup_declaration_enabled_ || !source.IsClosed();
+  }
 
   State state_;
   bool force_null_character_replacement_;
   bool should_allow_cdata_;
+  const bool truncated_markup_declaration_enabled_;
   bool should_allow_dom_parts_{false};
-  // This value is also stored in `options_`, but it's kept as a member as doing
-  // so gives a slight performance boost.
-  const bool track_attributes_ranges_;
+  const HTMLParserOptions options_;
 
   // http://www.whatwg.org/specs/web-apps/current-work/#additional-allowed-character
   UChar additional_allowed_character_;
@@ -325,10 +328,12 @@ class CORE_EXPORT HTMLTokenizer {
   // token here so we remember it next time we re-enter the tokenizer.
   LCharLiteralBuffer<32> buffered_end_tag_name_;
 
-  const HTMLParserOptions options_;
-
-  // This is only updated if `track_attributes_ranges_` is true.
+  // This is only updated if `options_.track_attributes_ranges` is true.
   HTMLAttributesRanges attributes_ranges_;
+
+  // HTMLToken is large; put this after all the small elements, so that they can
+  // enjoy small offsets.
+  HTMLToken token_;
 
 #if DCHECK_IS_ON()
   bool token_should_be_in_uninitialized_state_ = true;

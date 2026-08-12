@@ -122,6 +122,14 @@ SVGFilterBuilder::SVGFilterBuilder(FilterEffect* source_graphic,
                             MakeGarbageCollected<PaintFilterEffect>(
                                 source_graphic->GetFilter(), *stroke_flags));
   }
+  // If SourceGraphic is tainted, we assume that all other built-in effects are
+  // tainted as well. This is obviously true for SourceAlpha, and works out for
+  // all current users that pass values for {Fill,Stroke}Paint (i.e <canvas>).
+  if (source_graphic->OriginTainted()) {
+    for (auto& entry : builtin_effects_) {
+      entry.value->SetOriginTainted();
+    }
+  }
   AddBuiltinEffects();
 }
 
@@ -161,9 +169,11 @@ InterpolationSpace SVGFilterBuilder::ResolveInterpolationSpace(
              : kInterpolationSpaceSRGB;
 }
 
-void SVGFilterBuilder::BuildGraph(Filter* filter,
-                                  SVGFilterElement& filter_element,
-                                  const gfx::RectF& reference_box) {
+void SVGFilterBuilder::BuildGraph(
+    Filter* filter,
+    SVGFilterElement& filter_element,
+    const gfx::RectF& reference_box,
+    const std::optional<gfx::SizeF>& override_viewport) {
   EColorInterpolation filter_color_interpolation =
       ColorInterpolationForElement(filter_element, EColorInterpolation::kAuto);
   SVGUnitTypes::SVGUnitType primitive_units =
@@ -182,8 +192,8 @@ void SVGFilterBuilder::BuildGraph(Filter* filter,
     if (node_map_)
       node_map_->AddPrimitive(effect_element, effect);
 
-    effect_element.SetStandardAttributes(effect, primitive_units,
-                                         reference_box);
+    effect_element.SetStandardAttributes(effect, primitive_units, reference_box,
+                                         override_viewport);
     EColorInterpolation color_interpolation = ColorInterpolationForElement(
         effect_element, filter_color_interpolation);
     effect->SetOperatingInterpolationSpace(

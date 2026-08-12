@@ -17,34 +17,31 @@ import static org.mockito.Mockito.verify;
 
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.cc.input.BrowserControlsState;
 import org.chromium.chrome.browser.browser_controls.TopControlsStacker.ScrollBehavior;
 import org.chromium.chrome.browser.browser_controls.TopControlsStacker.TopControlType;
 import org.chromium.chrome.browser.browser_controls.TopControlsStacker.TopControlVisibility;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.components.browser_ui.util.BrowserControlsVisibilityDelegate;
 
 /** Unit tests for {@link TopControlsStacker}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
-@EnableFeatures({
-    ChromeFeatureList.TOP_CONTROLS_REFACTOR,
-    ChromeFeatureList.TOP_CONTROLS_REFACTOR_V2
-})
 public class TopControlsStackerUnitTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     private static final int OFFSET_NOT_OBSERVED = -1024;
 
     /** Mock implementation of TestLayer for testing purposes. */
@@ -55,6 +52,7 @@ public class TopControlsStackerUnitTest {
         private static final int LAYER_HEIGHT_BOOKMARK_BAR = 120;
         private static final int LAYER_HEIGHT_HAIRLINE = 1;
         private static final int LAYER_HEIGHT_PROGRESS_BAR = 5;
+        private static final int LAYER_HEIGHT_TAB_SHARING_TOOLBAR = 48;
 
         private final String mName;
         private final @TopControlType int mType;
@@ -218,18 +216,37 @@ public class TopControlsStackerUnitTest {
                     /* contributesToTotalHeight= */ false,
                     LAYER_HEIGHT_PROGRESS_BAR);
         }
+
+        /**
+         * Returns a mock layer for {@link TopControlType#TAB_SHARING_TOOLBAR}.
+         *
+         * <p>Note: Because the tab sharing toolbar sits beneath scrollable controls like {@link
+         * TopControlType#TOOLBAR} in {@code STACK_ORDER}, it MUST be configured as {@link
+         * ScrollBehavior#DEFAULT_SCROLLABLE}. Placing a non-scrollable (fixed minHeight) banner
+         * beneath a scrollable toolbar violates {@link TopControlsStacker} geometrical rules, as
+         * scrolling would cause upper toolbars to collapse into or telescope over the lower fixed
+         * banner.
+         */
+        static TestLayer tabSharingToolbarLayer() {
+            return new TestLayer(
+                    "TAB_SHARING_TOOLBAR",
+                    TopControlType.TAB_SHARING_TOOLBAR,
+                    TopControlVisibility.VISIBLE,
+                    ScrollBehavior.DEFAULT_SCROLLABLE,
+                    /* contributesToTotalHeight= */ true,
+                    LAYER_HEIGHT_TAB_SHARING_TOOLBAR);
+        }
     }
 
     @Mock private BrowserControlsSizer mBrowserControlsSizer;
-    @Mock private BrowserControlsVisibilityDelegate mVisibilityDelegate;
     @Captor private ArgumentCaptor<Callback<Integer>> mVisibilityCallbackCaptor;
 
+    private BrowserControlsVisibilityDelegate mVisibilityDelegate;
     private TopControlsStacker mTopControlsStacker;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.openMocks(this);
-        doReturn(BrowserControlsState.BOTH).when(mVisibilityDelegate).get();
+        mVisibilityDelegate = new BrowserControlsVisibilityDelegate(BrowserControlsState.BOTH);
         doReturn(true).when(mBrowserControlsSizer).offsetOverridden();
         mTopControlsStacker = new TopControlsStacker(mBrowserControlsSizer, mVisibilityDelegate);
     }
@@ -352,8 +369,7 @@ public class TopControlsStackerUnitTest {
         // Simulate a browser controls state change without offset tag update.
         reset(mBrowserControlsSizer);
 
-        verify(mVisibilityDelegate).addObserver(mVisibilityCallbackCaptor.capture());
-        mVisibilityCallbackCaptor.getValue().onResult(BrowserControlsState.SHOWN);
+        mVisibilityDelegate.set(BrowserControlsState.SHOWN);
         assertControlsHeight(100, 100);
         toolbar.assertHasNoOffsetTags();
     }
@@ -857,6 +873,41 @@ public class TopControlsStackerUnitTest {
     }
 
     @Test
+    public void repositionLayer_ChangeHeight_AddBottomLayer_ScrollDisabled() {
+        TestLayer tabStrip = TestLayer.tabStripLayer();
+        TestLayer toolbar = TestLayer.toolbarLayer();
+        TestLayer bookmark = TestLayer.bookmarkLayer();
+
+        mTopControlsStacker.setScrollingDisabled(true);
+        mTopControlsStacker.addControl(tabStrip);
+        mTopControlsStacker.addControl(toolbar);
+        mTopControlsStacker.requestLayerUpdateSync(false);
+
+        // All layers should be at resting.
+        assertControlsHeight(150, 150);
+        tabStrip.assertOffset(0).assertAtResting(true);
+        toolbar.assertOffset(50).assertAtResting(true);
+
+        var simulator = new TestBrowserControlsOffsetHelper(0, 150);
+        simulator.commitCurrentOffset();
+        tabStrip.assertOffset(0).assertAtResting(true);
+        toolbar.assertOffset(50).assertAtResting(true);
+
+        mTopControlsStacker.addControl(bookmark);
+        mTopControlsStacker.requestLayerUpdateSync(false);
+
+        assertControlsHeight(270, 270);
+        tabStrip.assertOffset(0).assertAtResting(true);
+        toolbar.assertOffset(50).assertAtResting(true);
+        bookmark.assertOffset(150).assertAtResting(true);
+
+        simulator.driveMinHeightOffsetBy(120);
+        tabStrip.assertOffset(0).assertAtResting(true);
+        toolbar.assertOffset(50).assertAtResting(true);
+        bookmark.assertOffset(150).assertAtResting(true);
+    }
+
+    @Test
     public void testPrepForAnimation() {
         doReturn(false).when(mBrowserControlsSizer).offsetOverridden();
 
@@ -1328,7 +1379,7 @@ public class TopControlsStackerUnitTest {
         verify(mTopControlsStacker, never()).updateLayersInternally(anyBoolean(), anyBoolean());
 
         // Execute the posted runnable.
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         // Verify that requestLayerUpdateSync is called only once with animate=true.
         verify(mTopControlsStacker, times(1)).updateLayersInternally(true, true);
@@ -1369,7 +1420,6 @@ public class TopControlsStackerUnitTest {
         }
 
         public void driveMinHeightOffsetBy(int delta) {
-            mCurrentTopOffset += delta;
             mCurrentTopControlsMinHeightOffset += delta;
             commitCurrentOffset();
         }
@@ -1405,7 +1455,7 @@ public class TopControlsStackerUnitTest {
             doReturn(mCurrentTopOffset).when(mBrowserControlsSizer).getTopControlOffset();
             doReturn(mCurrentTopControlsMinHeightOffset)
                     .when(mBrowserControlsSizer)
-                    .getTopControlOffset();
+                    .getTopControlsMinHeightOffset();
             mTopControlsStacker.onControlsOffsetChanged(
                     mCurrentTopOffset,
                     mCurrentTopControlsMinHeightOffset,
@@ -1416,5 +1466,51 @@ public class TopControlsStackerUnitTest {
                     /* requestNewFrame= */ mRequestNewFrame,
                     /* isVisibilityForced= */ false);
         }
+    }
+
+    /**
+     * Verifies that when {@link TopControlType#TAB_SHARING_TOOLBAR} is added to the stacker, it
+     * properly contributes its height to the browser's total top controls height (shifting web
+     * content downwards without clipping) and settles at its proper vertical offset beneath the
+     * primary URL toolbar according to {@code STACK_ORDER}.
+     */
+    @Test
+    public void testTabSharingToolbar_StackingAndGeometry() {
+        TestLayer tabStrip = TestLayer.tabStripLayer();
+        TestLayer toolbar = TestLayer.toolbarLayer();
+        TestLayer tabSharingToolbar = TestLayer.tabSharingToolbarLayer();
+        TestLayer progressBar = TestLayer.progressBarLayer();
+
+        mTopControlsStacker.addControl(tabStrip);
+        mTopControlsStacker.addControl(toolbar);
+        mTopControlsStacker.addControl(tabSharingToolbar);
+        mTopControlsStacker.addControl(progressBar);
+
+        mTopControlsStacker.requestLayerUpdateSync(false);
+
+        // TabStrip (50) + Toolbar (100) + TabSharingToolbar (48) = 198 total height.
+        assertControlsHeight(198, 0);
+
+        assertEquals(0, mTopControlsStacker.getHeightFromLayerToTop(TopControlType.TABSTRIP));
+        // Toolbar sits directly beneath TabStrip (height 50).
+        assertEquals(50, mTopControlsStacker.getHeightFromLayerToTop(TopControlType.TOOLBAR));
+        // TabSharingToolbar sits beneath both TabStrip (50) and Toolbar (100) = 150 total offset.
+        assertEquals(
+                150,
+                mTopControlsStacker.getHeightFromLayerToTop(TopControlType.TAB_SHARING_TOOLBAR));
+    }
+
+    @Test
+    public void testIsLayerAtTop() {
+        Assert.assertFalse(mTopControlsStacker.isLayerAtTop(TopControlType.TAB_SHARING_TOOLBAR));
+        mTopControlsStacker.addControl(TestLayer.toolbarLayer());
+        Assert.assertTrue(mTopControlsStacker.isLayerAtTop(TopControlType.TOOLBAR));
+    }
+
+    @Test
+    public void testLifecycleAndOffsetTagsInfo() {
+        mTopControlsStacker.addControl(TestLayer.toolbarLayer());
+        mTopControlsStacker.onTopControlsHeightChanged(100, 50);
+        mTopControlsStacker.destroy();
     }
 }

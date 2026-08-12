@@ -13,7 +13,6 @@
 #include "chrome/browser/lens/core/mojom/geometry.mojom.h"
 #include "chrome/browser/lens/core/mojom/overlay_object.mojom.h"
 #include "chrome/browser/lens/core/mojom/polygon.mojom.h"
-#include "chrome/browser/lens/core/mojom/text.mojom-forward.h"
 #include "chrome/browser/lens/core/mojom/text.mojom.h"
 #include "third_party/icu/source/common/unicode/unistr.h"
 #include "third_party/lens_server_proto/lens_overlay_deep_gleam_data.pb.h"
@@ -320,7 +319,7 @@ lens::mojom::TranslatedParagraphPtr CreateTranslatedParagraphMojomFromProto(
        line_index++) {
     auto proto_line = proto_paragraph.lines()[line_index];
     auto translated_line = translation_data.line()[line_index];
-    std::optional<TranslationData_Line> next_translated_line = std::nullopt;
+    std::optional<TranslationData_Line> next_translated_line;
     if (line_index + 1 < translation_data.line().size()) {
       next_translated_line = translation_data.line()[line_index + 1];
     }

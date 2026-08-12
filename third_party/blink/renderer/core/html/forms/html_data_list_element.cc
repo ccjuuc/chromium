@@ -35,9 +35,11 @@
 #include "third_party/blink/renderer/core/dom/focus_params.h"
 #include "third_party/blink/renderer/core/dom/id_target_observer_registry.h"
 #include "third_party/blink/renderer/core/dom/node_lists_node_data.h"
+#include "third_party/blink/renderer/core/dom/popover_data.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/forms/html_data_list_options_collection.h"
+#include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
@@ -48,6 +50,9 @@ HTMLDataListElement::HTMLDataListElement(Document& document)
     : HTMLElement(html_names::kDatalistTag, document) {
   UseCounter::Count(document, WebFeature::kDataListElement);
   document.IncrementDataListCount();
+  if (RuntimeEnabledFeatures::CustomizableComboboxEnabled()) {
+    EnsurePopoverData().setType(PopoverValueType::kAuto);
+  }
 }
 
 HTMLDataListOptionsCollection* HTMLDataListElement::options() {
@@ -77,6 +82,14 @@ void HTMLDataListElement::OptionElementChildrenChanged() {
   }
 }
 
+bool HTMLDataListElement::SupportsBaseAppearanceInternal(
+    BaseAppearanceValue value) const {
+  if (!RuntimeEnabledFeatures::CustomizableComboboxEnabled()) {
+    return false;
+  }
+  return value == BaseAppearanceValue::kBase;
+}
+
 void HTMLDataListElement::DidMoveToNewDocument(Document& old_doc) {
   HTMLElement::DidMoveToNewDocument(old_doc);
   old_doc.DecrementDataListCount();
@@ -85,6 +98,109 @@ void HTMLDataListElement::DidMoveToNewDocument(Document& old_doc) {
 
 void HTMLDataListElement::Prefinalize() {
   GetDocument().DecrementDataListCount();
+}
+
+PopoverHideResult HTMLDataListElement::HidePopoverInternal(
+    Element* invoker,
+    HidePopoverFocusBehavior focus_behavior,
+    HidePopoverTransitionBehavior event_firing,
+    ExceptionState* exception_state) {
+  PopoverHideResult result = HTMLElement::HidePopoverInternal(
+      invoker, focus_behavior, event_firing, exception_state);
+
+  if (RuntimeEnabledFeatures::CustomizableComboboxEnabled() &&
+      result != PopoverHideResult::kForcedOpenByInspector && active_option_) {
+    active_option_->PseudoStateChanged(CSSSelector::kPseudoActiveOption);
+    active_option_ = nullptr;
+  }
+
+  return result;
+}
+
+void HTMLDataListElement::Trace(Visitor* visitor) const {
+  HTMLElement::Trace(visitor);
+  visitor->Trace(active_option_);
+}
+
+void HTMLDataListElement::MoveActiveOption(Direction direction) {
+  CHECK(RuntimeEnabledFeatures::CustomizableComboboxEnabled());
+  CHECK(IsAppearanceBase());
+
+  auto* option_list = options();
+  const unsigned length = option_list->length();
+  if (length == 0) {
+    return;
+  }
+
+  auto update_active_option = [&](HTMLOptionElement* new_active_option) {
+    HTMLOptionElement* old_active_option = active_option_;
+    active_option_ = new_active_option;
+    if (old_active_option) {
+      old_active_option->PseudoStateChanged(CSSSelector::kPseudoActiveOption);
+    }
+    new_active_option->PseudoStateChanged(CSSSelector::kPseudoActiveOption);
+    new_active_option->scrollIntoViewIfNeeded(/*center_if_needed=*/false);
+  };
+
+  unsigned active_option_index = length;
+  if (active_option_) {
+    for (unsigned i = 0; i < length; ++i) {
+      if (option_list->Item(i) == active_option_) {
+        active_option_index = i;
+        break;
+      }
+    }
+  }
+
+  // If there is no active_option_ or active_option_ is no longer in
+  // option_list, then just make the first one in the list become the active
+  // option.
+  if (active_option_index == length) {
+    for (unsigned i = 0; i < length; ++i) {
+      auto* option = To<HTMLOptionElement>(option_list->Item(i));
+      if (option && option->SupportsActiveOptionPseudo()) {
+        update_active_option(option);
+        return;
+      }
+    }
+    return;
+  }
+
+  unsigned index = active_option_index;
+  for (unsigned count = 0; count < length; ++count) {
+    if (direction == Direction::kForwards) {
+      index = (index + 1) % length;
+    } else {
+      index = (index == 0) ? length - 1 : index - 1;
+    }
+
+    if (index == active_option_index) {
+      return;
+    }
+
+    auto* next_option = To<HTMLOptionElement>(option_list->Item(index));
+    if (next_option && next_option->SupportsActiveOptionPseudo()) {
+      update_active_option(next_option);
+      return;
+    }
+  }
+}
+
+HTMLInputElement* HTMLDataListElement::ComboboxInput() {
+  if (!RuntimeEnabledFeatures::CustomizableComboboxEnabled()) {
+    return nullptr;
+  }
+
+  if (PopoverData* popover_data = GetPopoverData()) {
+    if (auto* input = DynamicTo<HTMLInputElement>(popover_data->invoker())) {
+      if (input->DataList() == this && IsAppearanceBase() &&
+          input->IsAppearanceBase()) {
+        return input;
+      }
+    }
+  }
+
+  return nullptr;
 }
 
 }  // namespace blink

@@ -41,24 +41,27 @@ SVGParsingError SVGPointList::Parse(base::span<const CharType> span) {
     return SVGParseStatus::kNoError;
   }
 
-  for (;;) {
-    float x = 0;
-    float y = 0;
-    if (!ParseNumber(span, x) || !ParseNumber(span, y, kDisallowWhitespace)) {
+  size_t number_count = 0;
+  std::array<float, 2> number_pair;
+  bool seen_comma = false;
+  while (!span.empty()) {
+    float& current_number = number_pair[number_count % 2];
+    if (!ParseNumber(span, current_number, kDisallowWhitespace)) {
       return SVGParsingError(SVGParseStatus::kExpectedNumber,
                              list_start_size - span.size());
     }
+    ++number_count;
 
-    Append(MakeGarbageCollected<SVGPoint>(gfx::PointF(x, y)));
-
-    if (!SkipOptionalSVGSpaces(span)) {
-      break;
+    // Emit a point for every complete pair of numbers.
+    if (number_count % 2 == 0) {
+      Append(MakeGarbageCollected<SVGPoint>(
+          gfx::PointF(number_pair[0], number_pair[1])));
     }
 
-    if (SkipExactly<CharType>(span, ',')) {
+    SkipOptionalSVGSpaces(span);
+    seen_comma = SkipExactly<CharType>(span, ',');
+    if (seen_comma) {
       SkipOptionalSVGSpaces(span);
-      // ',' requires the list to be continued
-      continue;
     }
   }
   return SVGParseStatus::kNoError;
@@ -67,23 +70,29 @@ SVGParsingError SVGPointList::Parse(base::span<const CharType> span) {
 SVGParsingError SVGPointList::SetValueAsString(const String& value) {
   Clear();
 
-  if (value.empty())
+  if (value.empty()) {
     return SVGParseStatus::kNoError;
-
-  return VisitCharacters(value, [&](auto chars) { return Parse(chars); });
+  }
+  SVGParsingError status =
+      VisitCharacters(value, [&](auto chars) { return Parse(chars); });
+  if (status != SVGParseStatus::kNoError) {
+    Clear();
+  }
+  return status;
 }
 
-void SVGPointList::Add(const SVGPropertyBase* other,
+bool SVGPointList::Add(const SVGPropertyBase* other,
                        const SVGElement* context_element) {
   auto* other_list = To<SVGPointList>(other);
 
   if (length() != other_list->length())
-    return;
+    return true;
 
   for (uint32_t i = 0; i < length(); ++i) {
     at(i)->SetValue(at(i)->Value() +
                     other_list->at(i)->Value().OffsetFromOrigin());
   }
+  return true;
 }
 
 void SVGPointList::CalculateAnimatedValue(

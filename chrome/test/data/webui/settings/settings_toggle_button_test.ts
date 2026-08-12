@@ -7,9 +7,12 @@ import 'chrome://settings/settings.js';
 
 import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import type {SettingsToggleButtonElement} from 'chrome://settings/settings.js';
-import {DEFAULT_CHECKED_VALUE, DEFAULT_UNCHECKED_VALUE, loadTimeData} from 'chrome://settings/settings.js';
+import {DEFAULT_CHECKED_VALUE, DEFAULT_UNCHECKED_VALUE, loadTimeData, PrefService, PrefsBrowserProxy} from 'chrome://settings/settings.js';
+
+import {TestPrefsBrowserProxy} from './test_prefs_browser_proxy.js';
+
 import {assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
-import {eventToPromise} from 'chrome://webui-test/test_util.js';
+import {eventToPromise, microtasksFinished} from 'chrome://webui-test/test_util.js';
 // clang-format on
 
 /** @fileoverview Suite of tests for settings-toggle-button. */
@@ -66,12 +69,14 @@ suite('SettingsToggleButton', () => {
 
   test('fires a change event', async () => {
     assertTrue(testElement.checked);
-    let changeEventPromise = eventToPromise('change', testElement);
+    let changeEventPromise =
+        eventToPromise<CustomEvent<boolean>>('change', testElement);
     testElement.click();
     let changeEvent = await changeEventPromise;
     assertFalse(changeEvent.detail);
 
-    changeEventPromise = eventToPromise('change', testElement);
+    changeEventPromise =
+        eventToPromise<CustomEvent<boolean>>('change', testElement);
     testElement.click();
     changeEvent = await changeEventPromise;
     assertTrue(changeEvent.detail);
@@ -157,7 +162,8 @@ suite('SettingsToggleButton', () => {
     const noToggleTestElement = createNoToggleOnClickElement();
     assertTrue(noToggleTestElement.checked);
     assertTrue(noToggleTestElement.pref!.value);
-    let changeEventPromise = eventToPromise('change', noToggleTestElement);
+    let changeEventPromise =
+        eventToPromise<CustomEvent<boolean>>('change', noToggleTestElement);
     // Click specifically on the internal cr-toggle control
     noToggleTestElement.$.control.click();
     // Wait for the change event
@@ -167,7 +173,8 @@ suite('SettingsToggleButton', () => {
     assertFalse(noToggleTestElement.checked);
     assertFalse(noToggleTestElement.pref!.value);
     // Click again to toggle back
-    changeEventPromise = eventToPromise('change', noToggleTestElement);
+    changeEventPromise =
+        eventToPromise<CustomEvent<boolean>>('change', noToggleTestElement);
     noToggleTestElement.$.control.click();
     changeEvent = await changeEventPromise;
     assertTrue(changeEvent.detail);
@@ -470,4 +477,58 @@ suite('SettingsToggleButton', () => {
     assertFalse(testElement.checked);
   });
   // </if>
+});
+
+suite('SettingsToggleButtonPrefKey', () => {
+  let testElement: SettingsToggleButtonElement;
+  let prefsBrowserProxy: TestPrefsBrowserProxy;
+
+  const initialPrefs = [
+    {
+      key: 'test_boolean',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: true,
+    },
+  ];
+
+  setup(async () => {
+    prefsBrowserProxy = new TestPrefsBrowserProxy(initialPrefs);
+    PrefsBrowserProxy.setInstance(prefsBrowserProxy);
+
+    PrefService.resetInstanceForTesting();
+    await PrefService.getInstance().whenInitialized();
+
+    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+    testElement = document.createElement('settings-toggle-button');
+    testElement.prefKey = 'test_boolean';
+    document.body.appendChild(testElement);
+  });
+
+  test('valueChangesOnClick', () => {
+    assertTrue(testElement.checked);
+    assertTrue(
+        PrefService.getInstance().getPref<boolean>('test_boolean').value);
+
+    testElement.click();
+    assertFalse(testElement.checked);
+    assertFalse(
+        PrefService.getInstance().getPref<boolean>('test_boolean').value);
+
+    testElement.click();
+    assertTrue(testElement.checked);
+    assertTrue(
+        PrefService.getInstance().getPref<boolean>('test_boolean').value);
+  });
+
+  test('prefChangeUpdatesValue', async () => {
+    assertTrue(testElement.checked);
+
+    PrefService.getInstance().setPrefValue('test_boolean', false);
+    await microtasksFinished();
+    assertFalse(testElement.checked);
+
+    PrefService.getInstance().setPrefValue('test_boolean', true);
+    await microtasksFinished();
+    assertTrue(testElement.checked);
+  });
 });

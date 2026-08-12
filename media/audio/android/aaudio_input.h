@@ -17,10 +17,13 @@
 #include "media/audio/audio_io.h"
 #include "media/base/amplitude_peak_detector.h"
 #include "media/base/audio_parameters.h"
+#include "media/base/audio_push_fifo.h"
+#include "media/base/audio_timestamp_helper.h"
 
 namespace media {
 
 class AudioManagerAndroid;
+class AAudioInputDiscontinuityReporter;
 
 // Class which uses the AAudio library to record input.
 class AAudioInputStream : public AudioInputStream,
@@ -49,10 +52,12 @@ class AAudioInputStream : public AudioInputStream,
   void SetOutputDeviceForAec(const std::string& output_device_id) override;
 
   // AAudioStreamWrapper::DataCallback implementation.
-  bool OnAudioDataRequested(void* audio_data, int32_t num_frames) override;
+  bool OnAudioDataRequested(base::span<float> audio_data) override;
   void OnError() override;
   void OnDeviceChange() override;
 
+  // Returns if `device_` explicitly requests Bluetooth SCO type.
+  bool IsExplicitlyRequestingBluetoothSco();
   // Returns the ID of the "actual" device the stream was opened with.
   std::optional<android::AudioDeviceId> GetActualDeviceId();
 
@@ -61,6 +66,8 @@ class AAudioInputStream : public AudioInputStream,
 
   void CreateStreamWrapper();
   void HandleDeviceChange();
+  void OnFifoFilled(const AudioBus& output_bus, int frame_delay);
+  void DeliverAudio(const AudioBus& audio_bus, base::TimeTicks capture_time);
 
   const raw_ptr<AudioManagerAndroid> audio_manager_;
   const AudioParameters params_;
@@ -71,6 +78,21 @@ class AAudioInputStream : public AudioInputStream,
   std::unique_ptr<AAudioStreamWrapper> stream_wrapper_;
 
   std::unique_ptr<AudioBus> audio_bus_;
+
+  // Used for handling variable-sized callbacks.
+  std::unique_ptr<AudioPushFifo> push_fifo_;
+  // A wrapper over `audio_bus_` to pass partial data to `push_fifo_`.
+  std::unique_ptr<AudioBus> wrapper_bus_;
+
+  // Used to calculate delay when audio data received spans multiple
+  // `OnFifoFilled` calls.
+  AudioTimestampHelper timestamp_helper_;
+
+  std::unique_ptr<AAudioInputDiscontinuityReporter> discontinuity_reporter_;
+
+  // The number of frames requested during the current call to
+  // `OnAudioDataRequested()`, used to adjust underlying capture timestamps.
+  int32_t current_callback_num_frames_ = 0;
 
   base::RepeatingClosure handle_device_change_on_main_sequence_;
 

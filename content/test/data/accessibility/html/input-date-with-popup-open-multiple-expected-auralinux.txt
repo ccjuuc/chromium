@@ -26,14 +26,15 @@
 ++++++++++[spin button] name='Day Third date picker' current=1.000000 minimum=1.000000 maximum=31.000000
 ++++++++++[static] name='/'
 ++++++++++[spin button] name='Year Third date picker' current=2008.000000 minimum=1.000000 maximum=275760.000000
-++++++[push button] name='Show date picker'
-++++++[panel] controlled-by=[date editor] popup-for=[date editor]
+++++++[push button] name='Show date picker Third date picker'
+++++++[panel] controlled-by=[dateeditor] popup-for=[dateeditor]
 ++++++++[section]
 ++++++++++[section]
 ++++++++++++[section]
 ++++++++++++++[section]
-++++++++++++++++[push button] name='Show month selection panel'
-++++++++++++++++++[static] name='September 2008'
+++++++++++++++++[push button] name='September 2008' description='Show month selection panel' description:Show month selection panel description-from:aria-description
+++++++++++++++++++[section]
+++++++++++++++++++++[static] name='September 2008' member-of=[section]
 ++++++++++++++++++[image]
 ++++++++++++++[push button] name='Show previous month' description='Show previous month' description-from:tooltip
 ++++++++++++++++[image]

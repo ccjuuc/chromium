@@ -6,24 +6,23 @@
 
 #include <memory>
 
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/constants/ash_switches.h"
+#include "ash/constants/webui_url_constants.h"
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "ash/webui/common/trusted_types_util.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/saml/password_expiry_notification.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/ash/in_session_password_change/password_change_dialogs.h"
 #include "chrome/browser/ui/webui/ash/in_session_password_change/password_change_handler.h"
 #include "chrome/browser/ui/webui/ash/in_session_password_change/urgent_password_expiry_notification_handler.h"
-#include "chrome/common/webui_url_constants.h"
-#include "chrome/grit/browser_resources.h"
 #include "chrome/grit/gaia_auth_host_resources_map.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/grit/password_change_resources.h"
 #include "chrome/grit/password_change_resources_map.h"
 #include "chromeos/ash/components/login/auth/public/saml_password_attributes.h"
@@ -95,7 +94,7 @@ PasswordChangeUI::PasswordChangeUI(content::WebUI* web_ui)
   CHECK(profile->GetPrefs()->GetBoolean(
       prefs::kSamlInSessionPasswordChangeEnabled));
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
-      profile, chrome::kChromeUIPasswordChangeHost);
+      profile, ash::kChromeUIPasswordChangeHost);
   ash::EnableTrustedTypesCSP(source);
 
   const std::string password_change_url = GetPasswordChangeUrl(profile);
@@ -105,11 +104,11 @@ PasswordChangeUI::PasswordChangeUI(content::WebUI* web_ui)
   source->AddString("hostedHeader", GetHostedHeaderText(password_change_url));
   source->UseStringsJs();
 
-  source->AddResourcePaths(base::span(kPasswordChangeResources));
+  source->AddResourcePaths(kPasswordChangeResources);
   source->SetDefaultResource(IDR_PASSWORD_CHANGE_PASSWORD_CHANGE_APP_HTML);
 
   // Add Gaia Authenticator resources
-  source->AddResourcePaths(base::span(kGaiaAuthHostResources));
+  source->AddResourcePaths(kGaiaAuthHostResources);
 }
 
 PasswordChangeUI::~PasswordChangeUI() = default;
@@ -127,7 +126,7 @@ ConfirmPasswordChangeUI::ConfirmPasswordChangeUI(content::WebUI* web_ui)
   CHECK(profile->GetPrefs()->GetBoolean(
       prefs::kSamlInSessionPasswordChangeEnabled));
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
-      profile, chrome::kChromeUIConfirmPasswordChangeHost);
+      profile, ash::kChromeUIConfirmPasswordChangeHost);
   ash::EnableTrustedTypesCSP(source);
 
   static constexpr webui::LocalizedString kLocalizedStrings[] = {
@@ -154,7 +153,7 @@ ConfirmPasswordChangeUI::ConfirmPasswordChangeUI(content::WebUI* web_ui)
 
   source->UseStringsJs();
 
-  source->AddResourcePaths(base::span(kPasswordChangeResources));
+  source->AddResourcePaths(kPasswordChangeResources);
   source->SetDefaultResource(
       IDR_PASSWORD_CHANGE_CONFIRM_PASSWORD_CHANGE_APP_HTML);
 
@@ -179,7 +178,7 @@ UrgentPasswordExpiryNotificationUI::UrgentPasswordExpiryNotificationUI(
   CHECK(prefs->GetBoolean(prefs::kSamlInSessionPasswordChangeEnabled));
 
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
-      profile, chrome::kChromeUIUrgentPasswordExpiryNotificationHost);
+      profile, ash::kChromeUIUrgentPasswordExpiryNotificationHost);
   ash::EnableTrustedTypesCSP(source);
 
   SamlPasswordAttributes attrs = SamlPasswordAttributes::LoadFromPrefs(prefs);
@@ -199,7 +198,7 @@ UrgentPasswordExpiryNotificationUI::UrgentPasswordExpiryNotificationUI(
 
   source->UseStringsJs();
 
-  source->AddResourcePaths(base::span(kPasswordChangeResources));
+  source->AddResourcePaths(kPasswordChangeResources);
   source->SetDefaultResource(
       IDR_PASSWORD_CHANGE_URGENT_PASSWORD_EXPIRY_NOTIFICATION_HTML);
 

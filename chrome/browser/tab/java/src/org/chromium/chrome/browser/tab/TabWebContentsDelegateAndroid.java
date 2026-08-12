@@ -65,6 +65,14 @@ public abstract class TabWebContentsDelegateAndroid extends WebContentsDelegateA
     }
 
     /**
+     * @return true if the OS currently prevents the creation of a Document Picture-in-Picture
+     *     window.
+     */
+    protected boolean isDocumentPictureInPictureBlockedBySystem() {
+        return false;
+    }
+
+    /**
      * @return web preferences for enabling Picture-in-Picture.
      */
     protected boolean isPictureInPictureEnabled() {
@@ -72,22 +80,15 @@ public abstract class TabWebContentsDelegateAndroid extends WebContentsDelegateA
     }
 
     /**
-     * @return Night mode enabled/disabled for this Tab. To be used to propagate
-     *         the preferred color scheme to the renderer.
+     * @return whether immersive Picture-in-Picture playback is enabled.
      */
-    protected boolean isNightModeEnabled() {
-        return false;
-    }
-
-    /**
-     * @return True if auto-darkening may be applied to web contents per Chrome browser settings.
-     */
-    protected boolean isForceDarkWebContentEnabled() {
+    protected boolean isImmersivePlaybackEnabled() {
         return false;
     }
 
     /**
      * Return true if app banners are to be permitted in this tab. May need to be overridden.
+     *
      * @return true if app banners are permitted, and false otherwise.
      */
     protected boolean canShowAppBanners() {
@@ -146,10 +147,6 @@ public abstract class TabWebContentsDelegateAndroid extends WebContentsDelegateA
 
     /** Return if dynamically change safe area insets as browser controls scroll. */
     protected boolean isDynamicSafeAreaInsetsEnabled() {
-        return false;
-    }
-
-    protected boolean openInAppOrChromeFromCct(GURL gurl) {
         return false;
     }
 

@@ -59,6 +59,9 @@ class TabStripViewController: UIViewController, TabStripConsumer, TabStripNewTab
   /// `true` if a drop animation is in progress.
   private var dropAnimationInProgress: Bool = false
 
+  /// Counter for the number of items currently being closed.
+  private var closingItemCount: Int = 0
+
   /// `true` if the user is in incognito.
   public var isIncognito: Bool = false
 
@@ -88,13 +91,6 @@ class TabStripViewController: UIViewController, TabStripConsumer, TabStripNewTab
 
   // Leading constraint for the collectionView,
   public var collectionViewLeadingConstraint: NSLayoutConstraint?
-
-  /// The LayoutGuideCenter.
-  @objc public var layoutGuideCenter: LayoutGuideCenter? {
-    didSet {
-      layoutGuideCenter?.reference(view: newTabButton.layoutGuideView, under: kNewTabButtonGuide)
-    }
-  }
 
   init() {
     layout = TabStripLayout()
@@ -127,6 +123,14 @@ class TabStripViewController: UIViewController, TabStripConsumer, TabStripNewTab
     collectionView.translatesAutoresizingMaskIntoConstraints = false
     collectionView.backgroundColor = .clear
     view.addSubview(collectionView)
+
+    // TODO(crbug.com/507248945): This is a temporary fix for an iPadOS 26 bug where
+    // tapping on the tab strip triggers the status bar "scroll to top" gesture on the underlying web view.
+    // Adding a passive gesture to the tab strip claims touches on empty space, preventing the iPadOS 26
+    // status bar gesture from intercepting them.
+    let recognizer = UITapGestureRecognizer(target: self, action: #selector(tabStripTapped))
+    recognizer.cancelsTouchesInView = false
+    collectionView.addGestureRecognizer(recognizer)
 
     let trailingPlaceholder = UIView()
     trailingPlaceholder.translatesAutoresizingMaskIntoConstraints = false
@@ -395,10 +399,30 @@ class TabStripViewController: UIViewController, TabStripConsumer, TabStripNewTab
     var snapshot = dataSource.snapshot(for: .tabs)
     snapshot.delete(items)
     itemData.removeObjects(forKeys: items)
+
+    // Clip the collection view to bounds during the animation to avoid the
+    // deleted cell to be visible above the toolbar.
+    closingItemCount += 1
+    collectionView.clipsToBounds = true
+
+    // Use a CATransaction to handle the completion of the animation.
+    // The `applySnapshot` completion block is called before the visual
+    // animation is fully finished, leading to premature unclipping.
+    CATransaction.begin()
+    CATransaction.setCompletionBlock { [weak self] in
+      guard let self = self else { return }
+      self.closingItemCount = max(0, self.closingItemCount - 1)
+      if self.closingItemCount == 0 {
+        self.collectionView.clipsToBounds = false
+      }
+    }
+
     applySnapshot(
       dataSource: dataSource, snapshot: snapshot,
       animatingDifferences: !UIAccessibility.isReduceMotionEnabled,
       numberOfVisibleItemsChanged: true)
+
+    CATransaction.commit()
   }
 
   func replaceItem(_ oldItem: TabSwitcherItem?, withItem newItem: TabSwitcherItem?) {
@@ -484,6 +508,13 @@ class TabStripViewController: UIViewController, TabStripConsumer, TabStripNewTab
   }
 
   // MARK: - Private
+
+  /// Action for the passive gesture recognizer to claim touches on empty space.
+  @objc private func tabStripTapped() {
+    // This method is intentionally empty. Its purpose is to claim touches
+    // for the app's gesture system and prevent the system status bar gesture
+    // from intercepting them on empty space.
+  }
 
   /// Collapses or expands the group at `indexPath`.
   func collapseOrExpandGroup(at indexPath: IndexPath) {
@@ -616,7 +647,7 @@ class TabStripViewController: UIViewController, TabStripConsumer, TabStripNewTab
       guard let item = itemIdentifier.tabGroupItem else { return }
       let itemData = self.itemData[itemIdentifier] as? TabStripItemData
       cell.title = item.title
-      cell.contentContainerBackgroundColor = item.groupColor
+      cell.contentContainerBackgroundColor = item.tabStripColor
       cell.titleTextColor = item.foregroundColor
       cell.collapsed = item.collapsed
       cell.facePileProvider = self.tabGroupCellDataSource?.facePileProvider(forItem: itemIdentifier)

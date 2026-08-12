@@ -8,6 +8,7 @@
 #include "third_party/blink/renderer/platform/graphics/paint/effect_paint_property_node.h"
 #include "third_party/blink/renderer/platform/graphics/paint/property_tree_state.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -18,7 +19,9 @@ PaintPropertyChangeType ClipPaintPropertyNode::State::ComputeChange(
       layout_clip_rect_excluding_overlay_scrollbars !=
           other.layout_clip_rect_excluding_overlay_scrollbars ||
       !ClipPathEquals(other.clip_path) ||
-      pixel_moving_filter != other.pixel_moving_filter) {
+      pixel_moving_filter != other.pixel_moving_filter ||
+      expanded_layout_clip_rect_ != other.expanded_layout_clip_rect_ ||
+      precise_layout_clip_rect_ != other.precise_layout_clip_rect_) {
     return PaintPropertyChangeType::kChangedOnlyValues;
   }
   return PaintPropertyChangeType::kUnchanged;
@@ -82,7 +85,7 @@ std::unique_ptr<JSONObject> ClipPaintPropertyNode::ToJSON() const {
   if (NodeChanged() != PaintPropertyChangeType::kUnchanged)
     json->SetString("changed", PaintPropertyChangeTypeToString(NodeChanged()));
   json->SetString("localTransformSpace",
-                  String::Format("%p", state_.local_transform_space.Get()));
+                  Format("{}", state_.local_transform_space.Get()));
   json->SetString("rect", String(state_.paint_clip_rect_.Rect().ToString()));
   if (state_.layout_clip_rect_excluding_overlay_scrollbars &&
       *state_.layout_clip_rect_excluding_overlay_scrollbars !=
@@ -95,9 +98,17 @@ std::unique_ptr<JSONObject> ClipPaintPropertyNode::ToJSON() const {
   if (state_.clip_path) {
     json->SetBoolean("hasClipPath", true);
   }
+  if (IsForCompositeClipPathAnimation()) {
+    json->SetBoolean("isForCompositeClipPathAnimation", true);
+    json->SetString(
+        "expandedLayoutClipRect",
+        String(state_.expanded_layout_clip_rect_.Rect().ToString()));
+    json->SetString("preciseLayoutClipRect",
+                    String(state_.precise_layout_clip_rect_.Rect().ToString()));
+  }
   if (state_.pixel_moving_filter) {
     json->SetString("pixelMovingFilter",
-                    String::Format("%p", state_.pixel_moving_filter.Get()));
+                    Format("{}", state_.pixel_moving_filter.Get()));
   }
   return json;
 }

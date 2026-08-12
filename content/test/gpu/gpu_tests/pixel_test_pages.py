@@ -920,6 +920,11 @@ class PixelTestPages():
     ]
 
     return [
+        PixelTestPage('pixel_paintWorklet_transform.html',
+                      base_name + '_PaintWorkletTransform',
+                      crop_action=ca.NonWhiteContentCropAction(
+                          initial_crop=ca.FixedRectCropAction(0, 0, 200, 200)),
+                      browser_args=browser_args),
         PixelTestPage('pixel_background.html',
                       base_name + '_GpuRasterization_BlueBox',
                       crop_action=ca.FixedRectCropAction(0, 0, 220, 220),
@@ -945,22 +950,6 @@ class PixelTestPages():
             # Small Fuchsia screens result in an incomplete capture
             # without this.
             should_capture_full_screenshot_func=CaptureFullScreenshotOnFuchsia),
-    ]
-
-  # Pages that should be run with off-thread paint worklet flags.
-  @staticmethod
-  def PaintWorkletPages(base_name: str) -> list[PixelTestPage]:
-    browser_args = [
-        '--enable-blink-features=OffMainThreadCSSPaint',
-        '--enable-gpu-rasterization'
-    ]
-
-    return [
-        PixelTestPage('pixel_paintWorklet_transform.html',
-                      base_name + '_PaintWorkletTransform',
-                      crop_action=ca.NonWhiteContentCropAction(
-                          initial_crop=ca.FixedRectCropAction(0, 0, 200, 200)),
-                      browser_args=browser_args),
     ]
 
   # Pages that should be run with experimental canvas features.
@@ -1228,7 +1217,9 @@ class PixelTestPages():
   def MacSpecificPages(base_name: str) -> list[PixelTestPage]:
     unaccelerated_2d_canvas_args = [cba.DISABLE_ACCELERATED_2D_CANVAS]
 
-    non_chromium_image_args = ['--disable-webgl-image-chromium']
+    webgl_not_in_overlays_args = [
+        '--disable-gpu-memory-buffer-compositor-resources'
+    ]
 
     # This disables the Core Animation compositor, falling back to the
     # old GLRenderer path, but continuing to allocate IOSurfaces for
@@ -1257,27 +1248,24 @@ class PixelTestPages():
                       base_name + '_IOSurface2DCanvasWebGL',
                       crop_action=standard_crop),
 
-        # On macOS, test WebGL non-Chromium Image compositing path.
+        # On macOS, test path where WebGL content is not placed in overlays.
         PixelTestPage('pixel_webgl_aa_alpha.html',
-                      base_name +
-                      '_WebGLGreenTriangle_NonChromiumImage_AA_Alpha',
+                      base_name + '_WebGLGreenTriangle_NotInOverlay_AA_Alpha',
                       crop_action=standard_crop,
-                      browser_args=non_chromium_image_args),
+                      browser_args=webgl_not_in_overlays_args),
         PixelTestPage('pixel_webgl_noaa_alpha.html',
-                      base_name +
-                      '_WebGLGreenTriangle_NonChromiumImage_NoAA_Alpha',
+                      base_name + '_WebGLGreenTriangle_NotInOverlay_NoAA_Alpha',
                       crop_action=standard_crop,
-                      browser_args=non_chromium_image_args),
+                      browser_args=webgl_not_in_overlays_args),
         PixelTestPage('pixel_webgl_aa_noalpha.html',
-                      base_name +
-                      '_WebGLGreenTriangle_NonChromiumImage_AA_NoAlpha',
+                      base_name + '_WebGLGreenTriangle_NotInOverlay_AA_NoAlpha',
                       crop_action=standard_crop,
-                      browser_args=non_chromium_image_args),
+                      browser_args=webgl_not_in_overlays_args),
         PixelTestPage('pixel_webgl_noaa_noalpha.html',
                       base_name +
-                      '_WebGLGreenTriangle_NonChromiumImage_NoAA_NoAlpha',
+                      '_WebGLGreenTriangle_NotInOverlay_NoAA_NoAlpha',
                       crop_action=standard_crop,
-                      browser_args=non_chromium_image_args),
+                      browser_args=webgl_not_in_overlays_args),
 
         # On macOS, test CSS filter effects with and without the CA compositor.
         PixelTestPage('filter_effects.html',
@@ -1774,7 +1762,7 @@ class PixelTestPages():
             '_VideoStreamFrom2DAlphaCanvas_DisableReadbackFromTexture',
             crop_action=standard_crop,
             browser_args=[
-                '--disable-features=GpuMemoryBufferReadbackFromTexture'
+                '--gmb-readback-from-texture-disabled-for-debugging',
             ],
             matching_algorithm=match_algo,
             timeout=timeout),
@@ -1830,7 +1818,7 @@ class PixelTestPages():
 
   @staticmethod
   def MeetEffectsPages(base_name: str) -> list[PixelTestPage]:
-    test_cases_path = os.path.join(gpu_path_util.MEET_EFFECTS_VIDEO_DIR,
+    test_cases_path = os.path.join(gpu_path_util.MEET_EFFECTS_ASSETS_DIR,
                                    'test_cases.json')
     video_path = os.path.join(gpu_path_util.MEET_EFFECTS_VIDEO_DIR,
                               'effects-normal-light.y4m')

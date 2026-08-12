@@ -11,7 +11,6 @@
 
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
@@ -106,8 +105,9 @@ InMemoryURLIndex::~InMemoryURLIndex() {
 }
 
 void InMemoryURLIndex::Init() {
-  TRACE_EVENT_BEGIN("omnibox", "InMemoryURLIndex::Init",
-                    perfetto::Track::FromPointer(this));
+  TRACE_EVENT_BEGIN(
+      "omnibox", "InMemoryURLIndex::Init",
+      perfetto::NamedTrack::FromPointer("InMemoryURLIndex", this));
 
   if (!history_service_)
     return;
@@ -227,9 +227,8 @@ void InMemoryURLIndex::Shutdown() {
 void InMemoryURLIndex::DoneRebuildingPrivateDataFromHistoryDB(
     bool succeeded,
     scoped_refptr<URLIndexPrivateData> private_data) {
-  TRACE_EVENT_END(
-      "omnibox",
-      /* InMemoryURLIndex::Init */ perfetto::Track::FromPointer(this));
+  TRACE_EVENT_END("omnibox", /* InMemoryURLIndex::Init */
+                  perfetto::NamedTrack::FromPointer("InMemoryURLIndex", this));
   DCHECK(thread_checker_.CalledOnValidThread());
   if (succeeded) {
     private_data_tracker_.TryCancelAll();

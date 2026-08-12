@@ -15,6 +15,7 @@ import androidx.annotation.RequiresApi;
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
 
+import org.chromium.base.AconfigFlaggedApiDelegate;
 import org.chromium.base.Log;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -60,6 +61,7 @@ class VideoAcceleratorUtil {
             Set.of(
                     "c2.qti.avc.encoder",
                     "c2.exynos.h264.encoder",
+                    "c2.cros-codecs.vaapi.av1.encoder",
                     "c2.cros-codecs.vaapi.avc.encoder",
                     "c2.cros-codecs.vaapi.vp9.encoder");
 
@@ -112,87 +114,87 @@ class VideoAcceleratorUtil {
         public boolean requiresSecurePlayback;
         public int maxNumberOfTemporalLayers;
 
-        @CalledByNative("SupportedProfileAdapter")
+        @CalledByNative
         public int getProfile() {
             return this.profile;
         }
 
-        @CalledByNative("SupportedProfileAdapter")
+        @CalledByNative
         public int getLevel() {
             return this.level;
         }
 
-        @CalledByNative("SupportedProfileAdapter")
+        @CalledByNative
         public int getMaxWidth() {
             return this.maxWidth;
         }
 
-        @CalledByNative("SupportedProfileAdapter")
+        @CalledByNative
         public int getMaxHeight() {
             return this.maxHeight;
         }
 
-        @CalledByNative("SupportedProfileAdapter")
+        @CalledByNative
         public int getMinWidth() {
             return this.minWidth;
         }
 
-        @CalledByNative("SupportedProfileAdapter")
+        @CalledByNative
         public int getMinHeight() {
             return this.minHeight;
         }
 
-        @CalledByNative("SupportedProfileAdapter")
+        @CalledByNative
         public int getMaxFramerateNumerator() {
             return this.maxFramerateNumerator;
         }
 
-        @CalledByNative("SupportedProfileAdapter")
+        @CalledByNative
         public int getMaxFramerateDenominator() {
             return this.maxFramerateDenominator;
         }
 
-        @CalledByNative("SupportedProfileAdapter")
+        @CalledByNative
         public boolean supportsCbr() {
             return this.supportsCbr;
         }
 
-        @CalledByNative("SupportedProfileAdapter")
+        @CalledByNative
         public boolean supportsVbr() {
             return this.supportsVbr;
         }
 
-        @CalledByNative("SupportedProfileAdapter")
+        @CalledByNative
         public @Nullable String getName() {
             return this.name;
         }
 
-        @CalledByNative("SupportedProfileAdapter")
+        @CalledByNative
         public boolean isSoftwareCodec() {
             return this.isSoftwareCodec;
         }
 
-        @CalledByNative("SupportedProfileAdapter")
+        @CalledByNative
         public boolean supportsLowLatency() {
             return this.supportsLowLatency;
         }
 
-        @CalledByNative("SupportedProfileAdapter")
+        @CalledByNative
         public boolean requiresLowLatency() {
             return this.requiresLowLatency;
         }
 
-        @CalledByNative("SupportedProfileAdapter")
+        @CalledByNative
         public boolean supportsSecurePlayback() {
             return this.supportsSecurePlayback;
         }
 
-        @CalledByNative("SupportedProfileAdapter")
+        @CalledByNative
         public boolean requiresSecurePlayback() {
             return this.requiresSecurePlayback;
         }
 
-        @CalledByNative("SupportedProfileAdapter")
+        @CalledByNative
         public int getMaxNumberOfTemporalLayers() {
             return this.maxNumberOfTemporalLayers;
         }
@@ -562,9 +564,9 @@ class VideoAcceleratorUtil {
                 if (supportedProfileLevels.isEmpty()) {
                     Log.d(
                             TAG,
-                            "CodecCapabilities.profileLevels is missing for codec "
-                                    + type
-                                    + ". Assuming default support.");
+                            "CodecCapabilities.profileLevels is missing for codec %s. Assuming"
+                                + " default support.",
+                            type);
                     switch (codec) {
                         case VideoCodec.VP8:
                             supportedProfileLevels.put(
@@ -622,30 +624,21 @@ class VideoAcceleratorUtil {
 
                     Log.d(
                             TAG,
-                            "Support: name="
-                                    + info.getName()
-                                    + ", profile="
-                                    + profile.profile
-                                    + ", level="
-                                    + profile.level
-                                    + ", min="
-                                    + profile.minWidth
-                                    + "x"
-                                    + profile.minHeight
-                                    + ", max="
-                                    + profile.maxWidth
-                                    + "x"
-                                    + profile.maxHeight
-                                    + ", is_sw="
-                                    + profile.isSoftwareCodec
-                                    + ", supports_low_latency="
-                                    + profile.supportsLowLatency
-                                    + ", requires_low_latency="
-                                    + profile.requiresLowLatency
-                                    + ", supports_secure="
-                                    + profile.supportsSecurePlayback
-                                    + ", requires_secure="
-                                    + profile.requiresSecurePlayback);
+                            "Support: name=%s, profile=%d, level=%d, min=%dx%d, max=%dx%d,"
+                                + " is_sw=%b, supports_low_latency=%b, requires_low_latency=%b,"
+                                + " supports_secure=%b, requires_secure=%b",
+                            info.getName(),
+                            profile.profile,
+                            profile.level,
+                            profile.minWidth,
+                            profile.minHeight,
+                            profile.maxWidth,
+                            profile.maxHeight,
+                            profile.isSoftwareCodec,
+                            profile.supportsLowLatency,
+                            profile.requiresLowLatency,
+                            profile.supportsSecurePlayback,
+                            profile.requiresSecurePlayback);
 
                     // Invert min/max height/width for a portrait mode entry if needed.
                     if (needsPortraitEntry) {
@@ -672,5 +665,11 @@ class VideoAcceleratorUtil {
         SupportedProfileAdapter[] profileArray = new SupportedProfileAdapter[profiles.size()];
         profiles.toArray(profileArray);
         return profileArray;
+    }
+
+    @CalledByNative
+    private static boolean isTemporalLayerEncodingEnabled() {
+        AconfigFlaggedApiDelegate delegate = AconfigFlaggedApiDelegate.getInstance();
+        return delegate == null || delegate.isTemporalLayerEncodingEnabled();
     }
 }

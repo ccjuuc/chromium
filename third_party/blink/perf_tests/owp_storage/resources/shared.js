@@ -1,17 +1,34 @@
-function deleteThenOpen(dbName, upgradeFunc, bodyFunc) {
+function deleteThenRunTest(dbName, upgradeFunc, test) {
   const deleteRequest = indexedDB.deleteDatabase(dbName);
   deleteRequest.onerror = PerfTestRunner.logFatalError.bind('deleteDatabase should not fail');
   deleteRequest.onsuccess = (e) => {
     const openRequest = indexedDB.open(dbName);
     openRequest.onupgradeneeded = () => {
-      upgradeFunc(openRequest.result, openRequest);
-    }
+      upgradeFunc(openRequest.result);
+    };
     openRequest.onsuccess = () => {
-      bodyFunc(openRequest.result, openRequest);
-    }
+      const db = openRequest.result;
+      if (test.databaseWarmOpen) {
+        // Keep a connection to `dbName` alive across iterations so that
+        // each open by the test is warm (i.e., does not perform disk I/O).
+        const storeConnection = (db) => {
+          window.dbConnection = db;
+          db.onversionchange = () => {
+            db.close();
+            const reopenRequest = indexedDB.open(dbName);
+            reopenRequest.onsuccess = () =>
+                storeConnection(reopenRequest.result);
+          };
+        };
+        storeConnection(db);
+      } else {
+        db.close();
+      }
+      PerfTestRunner.measurePageLoadTimeAfterDoneMessage(test);
+    };
     openRequest.onerror = (e) => {
       window.PerfTestRunner.logFatalError("Error setting up database " + dbName + ". Error: " + e.type);
-    }
+    };
   }
 }
 
@@ -244,6 +261,11 @@ if (window.PerfTestRunner) {
           window.removeEventListener("message", eventHandler);
         }
         window.addEventListener("message", eventHandler, false);
+
+        // Clean up all database connections from the just-finished iteration so
+        // that the backing store gets shut down (if the test has not set
+        // `databaseWarmOpen`).
+        window.gc();
 
         PerfTestRunner.addRunTestStartMarker();
         startTime = PerfTestRunner.now();

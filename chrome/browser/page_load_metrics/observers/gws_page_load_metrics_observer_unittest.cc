@@ -6,6 +6,7 @@
 
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/strings/strcat.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/after_startup_task_utils.h"
@@ -19,7 +20,10 @@
 #include "components/page_load_metrics/google/browser/gws_abandoned_page_load_metrics_observer.h"
 #include "components/page_load_metrics/google/browser/histogram_suffixes.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/test/mock_navigation_handle.h"
+#include "net/dns/public/resolution_details.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 
 namespace {
@@ -135,6 +139,14 @@ TEST_F(GWSPageLoadMetricsObserverTest, Search) {
   tester()->histogram_tester().ExpectBucketCount(
       internal::kHistogramGWSNavigationStartToFirstResponseStart, 1, 1);
   tester()->histogram_tester().ExpectTotalCount(
+      internal::kHistogramGWSFirstRequestStartToFirstResponseStart, 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      internal::kHistogramGWSFirstRequestStartToFirstResponseStart, 0, 1);
+  tester()->histogram_tester().ExpectTotalCount(
+      internal::kHistogramGWSFirstRequestStartToFinalResponseStart, 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      internal::kHistogramGWSFirstRequestStartToFinalResponseStart, 0, 1);
+  tester()->histogram_tester().ExpectTotalCount(
       internal::kHistogramGWSNavigationStartToFirstLoaderCallback, 1);
   tester()->histogram_tester().ExpectBucketCount(
       internal::kHistogramGWSNavigationStartToFirstLoaderCallback, 1, 1);
@@ -146,6 +158,10 @@ TEST_F(GWSPageLoadMetricsObserverTest, Search) {
       internal::kHistogramGWSNavigationStartToFinalResponseStart, 1);
   tester()->histogram_tester().ExpectBucketCount(
       internal::kHistogramGWSNavigationStartToFinalResponseStart, 1, 1);
+  tester()->histogram_tester().ExpectTotalCount(
+      internal::kHistogramGWSFinalRequestStartToFinalResponseStart, 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      internal::kHistogramGWSFinalRequestStartToFinalResponseStart, 0, 1);
   tester()->histogram_tester().ExpectTotalCount(
       internal::kHistogramGWSNavigationStartToFinalLoaderCallback, 1);
   tester()->histogram_tester().ExpectBucketCount(
@@ -176,6 +192,189 @@ TEST_F(GWSPageLoadMetricsObserverTest, Search) {
       internal::kHistogramGWSLargestContentfulPaint, 1);
   tester()->histogram_tester().ExpectBucketCount(
       internal::kHistogramGWSLargestContentfulPaint, 100, 1);
+  tester()->histogram_tester().ExpectTotalCount(
+      "PageLoad.Clients.GoogleSearch.SiteInstanceProcessAssignment2."
+      "BrowserInitiated",
+      1);
+  tester()->histogram_tester().ExpectTotalCount(
+      "PageLoad.Clients.GoogleSearch.SiteInstanceProcessAssignment2."
+      "BrowserInitiated.NonPrerender",
+      1);
+  tester()->histogram_tester().ExpectTotalCount(
+      "PageLoad.Clients.GoogleSearch.HadPriorPrewarmCommitStatus2."
+      "BrowserInitiated",
+      1);
+  tester()->histogram_tester().ExpectTotalCount(
+      "PageLoad.Clients.GoogleSearch.HadPriorPrewarmCommitStatus2."
+      "BrowserInitiated.NonPrerender",
+      1);
+}
+
+TEST_F(GWSPageLoadMetricsObserverTest, ConnectionEvents) {
+  content::NavigationHandleTiming timing;
+  timing.connected_callback_delay = base::Milliseconds(1);
+  timing.accept_ch_frame_received = true;
+
+  content::MockNavigationHandle handle(GURL(kGoogleSearchResultsUrl),
+                                       main_rfh());
+  EXPECT_CALL(handle, GetNavigationHandleTiming())
+      .WillRepeatedly(testing::ReturnRef(timing));
+  // Explicitly ensure the mock represents a non-cached response.
+  handle.set_was_response_cached(false);
+
+  tester()->StartNavigation(GURL(kGoogleSearchResultsUrl));
+  observer_->OnCommit(&handle);
+
+  tester()->histogram_tester().ExpectBucketCount(
+      internal::kHistogramGWSOnConnectedCalled, true, 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      internal::kHistogramGWSAcceptCHFrameReceived, true, 1);
+}
+
+TEST_F(GWSPageLoadMetricsObserverTest, DNSResolutionSegmentation) {
+  content::NavigationHandleTiming timing;
+  timing.session_details = {
+      .session_source = net::SessionSource::kNew,
+      .resolution_details =
+          net::ResolutionDetails{
+              .source = net::ResolutionSource::kSecure,
+              .task_completion_delay = base::Milliseconds(5),
+              .doh_details =
+                  net::DohResolutionDetails{
+                      .session_source = net::SessionSource::kNew,
+                      .connection_info = net::HttpConnectionInfoCoarse::kHTTP2,
+                  },
+          },
+  };
+  timing.first_request_domain_lookup_delay = base::Milliseconds(10);
+
+  base::TimeTicks now = base::TimeTicks::Now();
+  timing.first_request_start_time = now;
+  timing.first_response_start_time = now + base::Milliseconds(10);
+  timing.first_loader_callback_time = now + base::Milliseconds(20);
+  timing.final_request_start_time = now + base::Milliseconds(30);
+  timing.final_response_start_time = now + base::Milliseconds(40);
+  timing.final_loader_callback_time = now + base::Milliseconds(50);
+  timing.navigation_commit_sent_time = now + base::Milliseconds(60);
+
+  content::MockNavigationHandle handle(GURL(kGoogleSearchResultsUrl),
+                                       main_rfh());
+  EXPECT_CALL(handle, GetNavigationHandleTiming())
+      .WillRepeatedly(testing::ReturnRef(timing));
+  handle.set_was_response_cached(false);
+
+  NavigateAndCommit(GURL(kGoogleSearchResultsUrl));
+
+  page_load_metrics::mojom::PageLoadTiming page_load_timing;
+  page_load_metrics::InitPageLoadTimingForTest(&page_load_timing);
+  page_load_timing.navigation_start = base::Time::FromSecondsSinceUnixEpoch(1);
+  page_load_timing.parse_timing->parse_start = base::Milliseconds(1);
+  page_load_timing.paint_timing->first_contentful_paint =
+      base::Milliseconds(10);
+  page_load_timing.paint_timing->largest_contentful_paint->largest_text_paint =
+      base::Milliseconds(100);
+  page_load_timing.paint_timing->largest_contentful_paint
+      ->largest_text_paint_size = 20u;
+  PopulateRequiredTimingFields(&page_load_timing);
+
+  tester()->SimulateTimingUpdate(page_load_timing);
+
+  observer_->OnCommit(&handle);
+
+  tester()->NavigateToUntrackedUrl();
+  tester()->histogram_tester().ExpectTotalCount(
+      "PageLoad.Clients.GoogleSearch.WarmUpType", 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      internal::kHistogramGWSConnectTimingFirstRequestDomainLookupDelay, 10, 1);
+
+  tester()->histogram_tester().ExpectBucketCount(
+      internal::
+          kHistogramGWSConnectTimingFirstRequestDomainLookupDelaySecureDns,
+      10, 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      base::StrCat(
+          {internal::
+               kHistogramGWSConnectTimingFirstRequestResolutionDetailsTaskCompletionDelay,
+           ".SecureDns"}),
+      5, 1);
+  tester()->histogram_tester().ExpectTotalCount(
+      internal::
+          kHistogramGWSConnectTimingFirstRequestDomainLookupDelayInsecureDns,
+      0);
+  tester()->histogram_tester().ExpectBucketCount(
+      internal::kHistogramGWSConnectTimingFirstRequestDohDetailsSessionSource,
+      static_cast<int>(net::SessionSource::kNew), 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      internal::kHistogramGWSConnectTimingFirstRequestDohDetailsConnectionInfo,
+      static_cast<int>(net::HttpConnectionInfoCoarse::kHTTP2), 1);
+}
+
+TEST_F(GWSPageLoadMetricsObserverTest, DNSResolutionSegmentationFallback) {
+  content::NavigationHandleTiming timing;
+  timing.session_details = {
+      .session_source = net::SessionSource::kNew,
+      .resolution_details =
+          net::ResolutionDetails{
+              .source = net::ResolutionSource::kInsecure,
+              .task_completion_delay = base::Milliseconds(8),
+              .secure_dns_attempted = true,
+          },
+  };
+  timing.first_request_domain_lookup_delay = base::Milliseconds(15);
+
+  base::TimeTicks now = base::TimeTicks::Now();
+  timing.first_request_start_time = now;
+  timing.first_response_start_time = now + base::Milliseconds(10);
+  timing.first_loader_callback_time = now + base::Milliseconds(20);
+  timing.final_request_start_time = now + base::Milliseconds(30);
+  timing.final_response_start_time = now + base::Milliseconds(40);
+  timing.final_loader_callback_time = now + base::Milliseconds(50);
+  timing.navigation_commit_sent_time = now + base::Milliseconds(60);
+
+  content::MockNavigationHandle handle(GURL(kGoogleSearchResultsUrl),
+                                       main_rfh());
+  EXPECT_CALL(handle, GetNavigationHandleTiming())
+      .WillRepeatedly(testing::ReturnRef(timing));
+  handle.set_was_response_cached(false);
+
+  NavigateAndCommit(GURL(kGoogleSearchResultsUrl));
+
+  page_load_metrics::mojom::PageLoadTiming page_load_timing;
+  page_load_metrics::InitPageLoadTimingForTest(&page_load_timing);
+  page_load_timing.navigation_start = base::Time::FromSecondsSinceUnixEpoch(1);
+  page_load_timing.parse_timing->parse_start = base::Milliseconds(1);
+  page_load_timing.paint_timing->first_contentful_paint =
+      base::Milliseconds(10);
+  page_load_timing.paint_timing->largest_contentful_paint->largest_text_paint =
+      base::Milliseconds(100);
+  page_load_timing.paint_timing->largest_contentful_paint
+      ->largest_text_paint_size = 20u;
+  PopulateRequiredTimingFields(&page_load_timing);
+
+  tester()->SimulateTimingUpdate(page_load_timing);
+
+  observer_->OnCommit(&handle);
+
+  tester()->NavigateToUntrackedUrl();
+  tester()->histogram_tester().ExpectTotalCount(
+      "PageLoad.Clients.GoogleSearch.WarmUpType", 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      internal::kHistogramGWSConnectTimingFirstRequestDomainLookupDelay, 15, 1);
+
+  tester()->histogram_tester().ExpectTotalCount(
+      internal::
+          kHistogramGWSConnectTimingFirstRequestDomainLookupDelaySecureDns,
+      0);
+  tester()->histogram_tester().ExpectBucketCount(
+      internal::
+          kHistogramGWSConnectTimingFirstRequestDomainLookupDelayInsecureDns,
+      15, 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      base::StrCat(
+          {internal::
+               kHistogramGWSConnectTimingFirstRequestResolutionDetailsTaskCompletionDelay,
+           ".InsecureDns"}),
+      8, 1);
 }
 
 TEST_F(GWSPageLoadMetricsObserverTest, NonSearch) {
@@ -315,6 +514,14 @@ TEST_F(GWSPageLoadMetricsObserverTest, SearchBackgroundLater) {
   tester()->histogram_tester().ExpectBucketCount(
       internal::kHistogramGWSNavigationStartToFirstResponseStart, 0, 1);
   tester()->histogram_tester().ExpectTotalCount(
+      internal::kHistogramGWSFirstRequestStartToFirstResponseStart, 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      internal::kHistogramGWSFirstRequestStartToFirstResponseStart, 0, 1);
+  tester()->histogram_tester().ExpectTotalCount(
+      internal::kHistogramGWSFirstRequestStartToFinalResponseStart, 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      internal::kHistogramGWSFirstRequestStartToFinalResponseStart, 0, 1);
+  tester()->histogram_tester().ExpectTotalCount(
       internal::kHistogramGWSNavigationStartToFirstLoaderCallback, 1);
   tester()->histogram_tester().ExpectBucketCount(
       internal::kHistogramGWSNavigationStartToFirstLoaderCallback, 0, 1);
@@ -326,6 +533,10 @@ TEST_F(GWSPageLoadMetricsObserverTest, SearchBackgroundLater) {
       internal::kHistogramGWSNavigationStartToFinalResponseStart, 1);
   tester()->histogram_tester().ExpectBucketCount(
       internal::kHistogramGWSNavigationStartToFinalResponseStart, 0, 1);
+  tester()->histogram_tester().ExpectTotalCount(
+      internal::kHistogramGWSFinalRequestStartToFinalResponseStart, 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      internal::kHistogramGWSFinalRequestStartToFinalResponseStart, 0, 1);
   tester()->histogram_tester().ExpectTotalCount(
       internal::kHistogramGWSNavigationStartToFinalLoaderCallback, 1);
   tester()->histogram_tester().ExpectBucketCount(
@@ -496,3 +707,234 @@ TEST_F(GWSPageLoadMetricsObserverTest, NoServiceWorker) {
   tester()->histogram_tester().ExpectTotalCount(
       internal::kHistogramServiceWorkerLoadSearch, 0);
 }
+
+TEST_F(GWSPageLoadMetricsObserverTest, FontLoadingMetrics) {
+  constexpr base::TimeDelta kFallbackDuration = base::Milliseconds(150);
+  constexpr uint32_t kFallbackCount = 14;
+  constexpr base::TimeDelta kFallbackInitialDuration = base::Milliseconds(42);
+  constexpr uint32_t kShapeCacheHitCount = 80;
+  constexpr uint32_t kShapeCacheMissCount = 20;
+  constexpr uint32_t kShapeCacheHitRate = 80;
+  constexpr uint32_t kLatinFallbackCount = 3;
+  constexpr uint32_t kHanFallbackCount = 2;
+  constexpr uint32_t kEmojiFallbackCount = 4;
+  constexpr uint32_t kCommonFallbackCount = 5;
+
+  page_load_metrics::mojom::PageLoadTiming timing;
+  InitializeTestPageLoadTiming(&timing);
+
+  auto font_loading_metrics =
+      page_load_metrics::mojom::FontLoadingMetrics::New();
+  font_loading_metrics->fallback_duration = kFallbackDuration;
+  font_loading_metrics->fallback_count = kFallbackCount;
+  font_loading_metrics->fallback_initial_duration = kFallbackInitialDuration;
+  font_loading_metrics->shape_cache_hit_count = kShapeCacheHitCount;
+  font_loading_metrics->shape_cache_miss_count = kShapeCacheMissCount;
+
+  auto latin_script_metrics =
+      page_load_metrics::mojom::ScriptFallbackInfo::New();
+  latin_script_metrics->script_type =
+      page_load_metrics::mojom::ScriptType::kLatin;
+  latin_script_metrics->fallback_count = kLatinFallbackCount;
+  font_loading_metrics->script_fallback_metrics.push_back(
+      std::move(latin_script_metrics));
+
+  auto han_script_metrics = page_load_metrics::mojom::ScriptFallbackInfo::New();
+  han_script_metrics->script_type = page_load_metrics::mojom::ScriptType::kHan;
+  han_script_metrics->fallback_count = kHanFallbackCount;
+  font_loading_metrics->script_fallback_metrics.push_back(
+      std::move(han_script_metrics));
+
+  auto emoji_script_metrics =
+      page_load_metrics::mojom::ScriptFallbackInfo::New();
+  emoji_script_metrics->script_type =
+      page_load_metrics::mojom::ScriptType::kEmoji;
+  emoji_script_metrics->fallback_count = kEmojiFallbackCount;
+  font_loading_metrics->script_fallback_metrics.push_back(
+      std::move(emoji_script_metrics));
+
+  auto common_script_metrics =
+      page_load_metrics::mojom::ScriptFallbackInfo::New();
+  common_script_metrics->script_type =
+      page_load_metrics::mojom::ScriptType::kCommon;
+  common_script_metrics->fallback_count = kCommonFallbackCount;
+  font_loading_metrics->script_fallback_metrics.push_back(
+      std::move(common_script_metrics));
+
+  // Wait until the browser init is complete.
+  AfterStartupTaskUtils::SetBrowserStartupIsCompleteForTesting();
+
+  NavigateAndCommit(GURL(kGoogleSearchResultsUrl));
+  tester()->SimulateTimingAndFontLoadingMetricsUpdate(
+      timing, std::move(font_loading_metrics));
+
+  // Verify FCP metrics are logged
+  tester()->histogram_tester().ExpectTotalCount(
+      "PageLoad.Clients.GoogleSearch.FontLoading.FallbackDuration2.FCP", 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      "PageLoad.Clients.GoogleSearch.FontLoading.FallbackDuration2.FCP",
+      kFallbackDuration.InMilliseconds(), 1);
+
+  tester()->histogram_tester().ExpectTotalCount(
+      "PageLoad.Clients.GoogleSearch.FontLoading.FallbackCount.FCP", 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      "PageLoad.Clients.GoogleSearch.FontLoading.FallbackCount.FCP",
+      kFallbackCount, 1);
+
+  tester()->histogram_tester().ExpectTotalCount(
+      "PageLoad.Clients.GoogleSearch.FontLoading.ShapeCacheHitRate.FCP", 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      "PageLoad.Clients.GoogleSearch.FontLoading.ShapeCacheHitRate.FCP",
+      kShapeCacheHitRate, 1);
+
+  auto expect_script_count = [&](const char* script, const char* milestone,
+                                 int bucket_value) {
+    std::string histogram = base::StrCat(
+        {"PageLoad.Clients.GoogleSearch.FontLoading.FallbackCount.", script,
+         ".", milestone});
+    tester()->histogram_tester().ExpectTotalCount(histogram, 1);
+    tester()->histogram_tester().ExpectBucketCount(histogram, bucket_value, 1);
+  };
+
+  // Verify FCP script-specific metrics
+  expect_script_count("Latn", "FCP", kLatinFallbackCount);
+  expect_script_count("Hani", "FCP", kHanFallbackCount);
+  expect_script_count("Emoji", "FCP", kEmojiFallbackCount);
+  expect_script_count("Zyyy", "FCP", kCommonFallbackCount);
+
+  // Simulate AFTEnd mark.
+  page_load_metrics::mojom::CustomUserTimingMark timing_mark;
+  timing_mark.mark_name = internal::kGwsAFTEndMarkName;
+  timing_mark.start_time = base::Milliseconds(500);
+  tester()->SimulateCustomUserTimingUpdate(timing_mark.Clone());
+
+  // Verify AFTEnd metrics are logged.
+  tester()->histogram_tester().ExpectTotalCount(
+      "PageLoad.Clients.GoogleSearch.FontLoading.FallbackDuration2.AFTEnd", 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      "PageLoad.Clients.GoogleSearch.FontLoading.FallbackDuration2.AFTEnd",
+      kFallbackDuration.InMilliseconds(), 1);
+
+  tester()->histogram_tester().ExpectTotalCount(
+      "PageLoad.Clients.GoogleSearch.FontLoading.FallbackCount.AFTEnd", 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      "PageLoad.Clients.GoogleSearch.FontLoading.FallbackCount.AFTEnd",
+      kFallbackCount, 1);
+
+  // Verify AFTEnd script-specific metrics
+  expect_script_count("Latn", "AFTEnd", kLatinFallbackCount);
+  expect_script_count("Hani", "AFTEnd", kHanFallbackCount);
+  expect_script_count("Emoji", "AFTEnd", kEmojiFallbackCount);
+  expect_script_count("Zyyy", "AFTEnd", kCommonFallbackCount);
+
+  // Navigate again to force Complete logging.
+  tester()->NavigateToUntrackedUrl();
+
+  tester()->histogram_tester().ExpectTotalCount(
+      "PageLoad.Clients.GoogleSearch.FontLoading.FallbackCount.Complete", 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      "PageLoad.Clients.GoogleSearch.FontLoading.FallbackCount.Complete",
+      kFallbackCount, 1);
+
+  tester()->histogram_tester().ExpectTotalCount(
+      "PageLoad.Clients.GoogleSearch.FontLoading.FallbackDuration2.Complete",
+      1);
+  tester()->histogram_tester().ExpectBucketCount(
+      "PageLoad.Clients.GoogleSearch.FontLoading.FallbackDuration2.Complete",
+      kFallbackDuration.InMilliseconds(), 1);
+
+  tester()->histogram_tester().ExpectTotalCount(
+      "PageLoad.Clients.GoogleSearch.FontLoading.InitialFallbackDuration2."
+      "Complete",
+      1);
+  tester()->histogram_tester().ExpectBucketCount(
+      "PageLoad.Clients.GoogleSearch.FontLoading.InitialFallbackDuration2."
+      "Complete",
+      kFallbackInitialDuration.InMilliseconds(), 1);
+
+  // Verify Complete script-specific metrics
+  expect_script_count("Latn", "Complete", kLatinFallbackCount);
+  expect_script_count("Hani", "Complete", kHanFallbackCount);
+  expect_script_count("Emoji", "Complete", kEmojiFallbackCount);
+  expect_script_count("Zyyy", "Complete", kCommonFallbackCount);
+}
+
+TEST_F(GWSPageLoadMetricsObserverTest, InteractionToAFTEnd) {
+  // Wait until the browser init is complete.
+  AfterStartupTaskUtils::SetBrowserStartupIsCompleteForTesting();
+
+  // Set up navigation timing with user interaction.
+  content::NavigationHandleTiming timing;
+  base::TimeTicks now = base::TimeTicks::Now();
+  timing.user_interaction = now - base::Milliseconds(100);
+  timing.actual_navigation_start = now - base::Milliseconds(50);
+  timing.before_unload_dialog_duration = base::Milliseconds(10);
+
+  content::MockNavigationHandle handle(GURL(kGoogleSearchResultsUrl),
+                                       main_rfh());
+  EXPECT_CALL(handle, GetNavigationHandleTiming())
+      .WillRepeatedly(testing::ReturnRef(timing));
+  handle.set_was_response_cached(false);
+
+  NavigateAndCommit(GURL(kGoogleSearchResultsUrl));
+  observer_->OnCommit(&handle);
+
+  // Set up page load timing with FCP and LCP so LogMetricsOnComplete doesn't
+  // return early.
+  page_load_metrics::mojom::PageLoadTiming timing_update;
+  InitializeTestPageLoadTiming(&timing_update);
+  tester()->SimulateTimingUpdate(timing_update);
+
+  // Simulate AFT End mark.
+  page_load_metrics::mojom::CustomUserTimingMark timing_mark;
+  timing_mark.mark_name = internal::kGwsAFTEndMarkName;
+  timing_mark.start_time = base::Milliseconds(500);
+  tester()->SimulateCustomUserTimingUpdate(timing_mark.Clone());
+
+  // Navigate away to force logging.
+  tester()->NavigateToUntrackedUrl();
+
+  // NavigationStart is 'now'.
+  // Duration = NavigationStart - user_interaction -
+  // before_unload_dialog_duration
+  //          = now - (now - 100ms) - 10ms = 90ms.
+  // AFTEnd time = 500ms.
+  // Expected value = 90ms + 500ms = 590ms.
+  tester()->histogram_tester().ExpectTotalCount(
+      internal::kHistogramGWSInteractionToAFTEnd, 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      internal::kHistogramGWSInteractionToAFTEnd, 590, 1);
+}
+
+TEST_F(GWSPageLoadMetricsObserverTest, FastFetchOpportunityTime) {
+  // Wait until the browser init is complete.
+  AfterStartupTaskUtils::SetBrowserStartupIsCompleteForTesting();
+
+  content::NavigationHandleTiming timing;
+  base::TimeTicks now = base::TimeTicks::Now();
+  timing.fast_fetch_eligibility_check_time = now;
+  timing.is_fast_fetch_eligible = true;
+  timing.loader_start_time = now + base::Milliseconds(10);
+  timing.first_fetch_start_time = now + base::Milliseconds(20);
+
+  content::MockNavigationHandle handle(GURL(kGoogleSearchResultsUrl),
+                                       main_rfh());
+  EXPECT_CALL(handle, GetNavigationHandleTiming())
+      .WillRepeatedly(testing::ReturnRef(timing));
+  handle.set_was_response_cached(false);
+
+  tester()->StartNavigation(GURL(kGoogleSearchResultsUrl));
+  observer_->OnCommit(&handle);
+
+  tester()->histogram_tester().ExpectTotalCount(
+      internal::kHistogramGWSFastFetchOpportunityTimeLoaderStart, 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      internal::kHistogramGWSFastFetchOpportunityTimeLoaderStart, 10, 1);
+
+  tester()->histogram_tester().ExpectTotalCount(
+      internal::kHistogramGWSFastFetchOpportunityTimeFetchStart, 1);
+  tester()->histogram_tester().ExpectBucketCount(
+      internal::kHistogramGWSFastFetchOpportunityTimeFetchStart, 20, 1);
+}
+
+// trivial comment to force rebuild

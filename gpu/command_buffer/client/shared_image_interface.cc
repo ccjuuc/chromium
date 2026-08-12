@@ -7,6 +7,7 @@
 #include <GLES2/gl2.h>
 
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/process/memory.h"
@@ -25,20 +26,17 @@ void SharedImageInterface::CreateSharedMemoryRegionFromSIInfo(
     const SharedImageInfo& si_info,
     base::WritableSharedMemoryMapping& mapping,
     gfx::GpuMemoryBufferHandle& handle) {
-  DCHECK(gpu::IsValidClientUsage(si_info.meta.usage))
-      << uint32_t(si_info.meta.usage);
-  DCHECK_EQ(si_info.meta.usage,
+  DCHECK(gpu::IsValidClientUsage(si_info.usage))
+      << static_cast<uint32_t>(si_info.usage);
+  DCHECK_EQ(si_info.usage,
             gpu::SharedImageUsageSet(gpu::SHARED_IMAGE_USAGE_CPU_WRITE_ONLY));
-  DCHECK(viz::HasEquivalentBufferFormat(si_info.meta.format))
-      << si_info.meta.format.ToString();
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
-  CHECK(!si_info.meta.format.PrefersExternalSampler())
-      << si_info.meta.format.ToString();
+  CHECK(!si_info.format.PrefersExternalSampler()) << si_info.format.ToString();
 #endif
 
-  const size_t buffer_size = viz::SharedMemorySizeForSharedImageFormat(
-                                 si_info.meta.format, si_info.meta.size)
-                                 .value();
+  const size_t buffer_size =
+      viz::SharedMemorySizeForSharedImageFormat(si_info.format, si_info.size)
+          .value();
   auto shared_memory_region =
       base::UnsafeSharedMemoryRegion::Create(buffer_size);
 
@@ -59,7 +57,7 @@ void SharedImageInterface::CreateSharedMemoryRegionFromSIInfo(
   handle.offset = 0;
   handle.stride = static_cast<int32_t>(
       viz::SharedMemoryRowSizeForSharedImageFormat(
-          si_info.meta.format, /*plane=*/0, si_info.meta.size.width())
+          si_info.format, /*plane_index=*/0, si_info.size.width())
           .value());
 }
 

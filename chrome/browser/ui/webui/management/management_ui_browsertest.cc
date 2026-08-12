@@ -53,7 +53,7 @@ class ManagementUITest : public InProcessBrowserTest {
   void VerifyTexts(
       base::Value* actual_values,
       const std::map<std::string, std::u16string>& expected_values) {
-    base::Value::Dict& values_as_dict = actual_values->GetDict();
+    base::DictValue& values_as_dict = actual_values->GetDict();
     for (const auto& val : expected_values) {
       const std::string* actual_value = values_as_dict.FindString(val.first);
       ASSERT_TRUE(actual_value);
@@ -63,11 +63,14 @@ class ManagementUITest : public InProcessBrowserTest {
   policy::MockConfigurationPolicyProvider* provider() { return &provider_; }
 
   policy::ProfilePolicyConnector* profile_policy_connector() {
-    return browser()->profile()->GetProfilePolicyConnector();
+    return browser()->GetProfile()->GetProfilePolicyConnector();
   }
 
   policy::PolicyService* policy_service() {
-    return browser()->profile()->GetProfilePolicyConnector()->policy_service();
+    return browser()
+        ->GetProfile()
+        ->GetProfilePolicyConnector()
+        ->policy_service();
   }
 
  private:

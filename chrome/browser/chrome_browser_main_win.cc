@@ -21,6 +21,7 @@
 
 #include "base/base_switches.h"
 #include "base/check.h"
+#include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/dcheck_is_on.h"
 #include "base/enterprise_util.h"
@@ -31,6 +32,8 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
+#include "base/logging.h"
+#include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
@@ -55,7 +58,6 @@
 #include "chrome/browser/active_use_util.h"
 #include "chrome/browser/browser_features.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/enterprise/platform_auth/platform_auth_policy_observer.h"
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/first_run/upgrade_util.h"
 #include "chrome/browser/first_run/upgrade_util_win.h"
@@ -69,7 +71,6 @@
 #include "chrome/browser/ui/simple_message_box.h"
 #include "chrome/browser/ui/uninstall_browser_prompt.h"
 #include "chrome/browser/web_applications/chrome_pwa_launcher/last_browser_file_util.h"
-#include "chrome/browser/web_applications/chrome_pwa_launcher/launcher_log_reporter.h"
 #include "chrome/browser/web_applications/chrome_pwa_launcher/launcher_update.h"
 #include "chrome/browser/web_applications/os_integration/web_app_handler_registration_utils_win.h"
 #include "chrome/browser/web_applications/os_integration/web_app_shortcut.h"
@@ -81,10 +82,12 @@
 #include "chrome/browser/win/conflicts/enumerate_shell_extensions.h"
 #include "chrome/browser/win/conflicts/module_database.h"
 #include "chrome/browser/win/conflicts/module_event_sink_impl.h"
+#include "chrome/browser/win/isolated_browser_support.h"
 #include "chrome/browser/win/remove_app_compat_entries.h"
 #include "chrome/browser/win/util_win_service.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_result_codes.h"
 #include "chrome/common/chrome_switches.h"
@@ -104,7 +107,7 @@
 #include "components/crash/core/app/crash_export_thunks.h"
 #include "components/crash/core/app/dump_hung_process_with_ptype.h"
 #include "components/crash/core/common/crash_key.h"
-#include "components/os_crypt/sync/os_crypt.h"
+#include "components/os_crypt/async/browser/os_crypt_win.h"
 #include "components/prefs/pref_service.h"
 #include "components/variations/hashing.h"
 #include "components/version_info/channel.h"
@@ -118,10 +121,8 @@
 #include "sandbox/policy/switches.h"
 #include "sandbox/win/src/sandbox.h"
 #include "sandbox/win/src/sandbox_factory.h"
-#include "services/device/public/cpp/device_features.h"
 #include "services/device/public/cpp/geolocation/geolocation_system_permission_manager.h"
 #include "services/device/public/cpp/geolocation/system_geolocation_source_win.h"
-#include "ui/accessibility/platform/ax_platform.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_win.h"
 #include "ui/base/ui_base_switches.h"
@@ -148,7 +149,7 @@ void InitializeWindowProcExceptions() {
   DCHECK(!exception_filter);
 }
 
-// TODO(siggi): Remove once https://crbug.com/806661 is resolved.
+// TODO(siggi): Remove once https://crbug.com/41367502 is resolved.
 void DumpHungRendererProcessImpl(const base::Process& renderer) {
   // Use a distinguishing process type for these reports.
   crash_reporter::DumpHungProcessWithPtype(renderer, "hung-renderer");
@@ -239,9 +240,8 @@ void InitializeModuleDatabase() {
 
 // Gets the TimeDateStamp from the file on disk and, if successful, sends the
 // load event to the ModuleDatabase.
-void HandleModuleLoadEventWithoutTimeDateStamp(
-    const base::FilePath& module_path,
-    size_t module_size) {
+void HandleModuleLoadEventWithoutTimeDateStamp(base::FilePath module_path,
+                                               size_t module_size) {
   uint32_t size_of_image = 0;
   uint32_t time_date_stamp = 0;
   bool got_time_date_stamp = GetModuleImageSizeAndTimeDateStamp(
@@ -254,8 +254,9 @@ void HandleModuleLoadEventWithoutTimeDateStamp(
   if (!got_time_date_stamp)
     return;
 
-  ModuleDatabase::HandleModuleLoadEvent(
-      content::PROCESS_TYPE_BROWSER, module_path, module_size, time_date_stamp);
+  ModuleDatabase::HandleModuleLoadEvent(content::PROCESS_TYPE_BROWSER,
+                                        std::move(module_path), module_size,
+                                        time_date_stamp);
 }
 
 // Helper function for getting the module size associated with a module in this
@@ -379,7 +380,7 @@ void MigratePinnedTaskBarShortcutsIfNeeded() {
   //
   // Note: If shortcut updates need to be done once after a future OS upgrade,
   // that should be done by re-versioning Active Setup (see //chrome/installer
-  // and https://crbug.com/577697 for details).
+  // and https://crbug.com/41234315 for details).
   const base::Version kLastVersionNeedingMigration({86, 0, 4231, 0});
 
   PrefService* local_state = g_browser_process->local_state();
@@ -473,7 +474,7 @@ void ReportParentProcessName() {
 // localization data files.
 const char kMissingLocaleDataTitle[] = "Missing File Error";
 
-// TODO(http://crbug.com/338969): This should be used on Linux Aura as well.
+// TODO(http://crbug.com/41086785): This should be used on Linux Aura as well.
 const char kMissingLocaleDataMessage[] =
     "Unable to find locale data files. Please reinstall.";
 
@@ -562,7 +563,7 @@ void ChromeBrowserMainPartsWin::PreCreateMainMessageLoop() {
   DCHECK(local_state);
 
   // Initialize the OSCrypt.
-  bool os_crypt_init = OSCrypt::Init(local_state);
+  bool os_crypt_init = os_crypt_async::Init(local_state);
   DCHECK(os_crypt_init);
 
   base::SetExtraNoExecuteAllowedPath(chrome::DIR_USER_DATA);
@@ -576,7 +577,7 @@ void ChromeBrowserMainPartsWin::PreCreateMainMessageLoop() {
 
 int ChromeBrowserMainPartsWin::PreCreateThreads() {
   // Set crash keys containing the registry values used to determine Chrome's
-  // update channel at process startup; see https://crbug.com/579504.
+  // update channel at process startup; see https://crbug.com/41235563.
   const auto& details = install_static::InstallDetails::Get();
 
   static crash_reporter::CrashKeyString<50> ap_value("ap");
@@ -590,19 +591,6 @@ int ChromeBrowserMainPartsWin::PreCreateThreads() {
         &DumpHungRendererProcessImpl);
   }
 
-  // Pass the value of the UiAutomationProviderEnabled enterprise policy, if
-  // set, down to the accessibility platform after the platform is initialized
-  // in BrowserMainLoop::PostCreateMainMessageLoop() but before any UI is
-  // created.
-  if (auto* local_state = g_browser_process->local_state(); local_state) {
-    if (auto* pref =
-            local_state->FindPreference(prefs::kUiAutomationProviderEnabled);
-        pref && pref->IsManaged()) {
-      ui::AXPlatform::GetInstance().SetUiaProviderEnabled(
-          pref->GetValue()->GetBool());
-    }
-  }
-
   return ChromeBrowserMainParts::PreCreateThreads();
 }
 
@@ -614,10 +602,6 @@ void ChromeBrowserMainPartsWin::PostCreateThreads() {
 
 void ChromeBrowserMainPartsWin::PostMainMessageLoopRun() {
   base::ImportantFileWriterCleaner::GetInstance().Stop();
-
-  // The `ProfileManager` has been destroyed, so no new platform authentication
-  // requests will be created.
-  platform_auth_policy_observer_.reset();
 
   ChromeBrowserMainParts::PostMainMessageLoopRun();
 }
@@ -642,14 +626,7 @@ void ChromeBrowserMainPartsWin::PreProfileInit() {
   // `ModuleDatabase` is an endpoint for IPC from child processes.
   SetupModuleDatabase(&module_watcher_);
 
-  // Start up the platform auth SSO policy observer.
-  PrefService* const local_state = g_browser_process->local_state();
-  if (local_state)
-    platform_auth_policy_observer_ =
-        std::make_unique<PlatformAuthPolicyObserver>(local_state);
-
-  if (base::FeatureList::IsEnabled(features::kWinSystemLocationPermission) &&
-      !device::GeolocationSystemPermissionManager::GetInstance()) {
+  if (!device::GeolocationSystemPermissionManager::GetInstance()) {
     device::GeolocationSystemPermissionManager::SetInstance(
         device::SystemGeolocationSourceWin::
             CreateGeolocationSystemPermissionManager());
@@ -706,11 +683,6 @@ void ChromeBrowserMainPartsWin::PostBrowserStart() {
       base::BindOnce(&web_app::WriteChromePathToLastBrowserFile,
                      user_data_dir()));
 
-  // Record the result of the latest Progressive Web App launcher launch.
-  base::ThreadPool::PostTask(
-      FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
-      base::BindOnce(&web_app::RecordPwaLauncherResult));
-
   // Possibly migrate pinned taskbar shortcuts.
   content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT})
       ->PostTask(FROM_HERE,
@@ -724,7 +696,7 @@ void ChromeBrowserMainPartsWin::PostBrowserStart() {
   }
 
   // Some users are getting stuck in compatibility mode. Try to help them
-  // escape; see http://crbug.com/581499.
+  // escape; see http://crbug.com/41236791.
   base::ThreadPool::PostTask(
       FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
       base::BindOnce([]() {
@@ -759,6 +731,40 @@ void ChromeBrowserMainPartsWin::PostBrowserStart() {
   base::ThreadPool::PostTask(
       FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
       base::BindOnce(&ReportParentProcessName));
+
+  content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT})
+      ->PostTask(FROM_HERE, base::BindOnce([]() {
+                   std::string group_name;
+                   base::FieldTrial* trial = base::FeatureList::GetFieldTrial(
+                       features::kIsolatedProcess);
+                   if (trial) {
+                     group_name = trial->group_name();
+                   }
+
+                   const std::string old_group_name =
+                       g_browser_process->local_state()->GetString(
+                           prefs::kPreviousIsolationState);
+
+                   if (group_name == old_group_name) {
+                     return;
+                   }
+
+                   // If an enterprise administrator has set a Mandatory policy,
+                   // do not allow a field trial to override it.
+                   if (g_browser_process->local_state()->IsManagedPreference(
+                           prefs::kProcessIsolationEnabled)) {
+                     return;
+                   }
+
+                   g_browser_process->local_state()->SetString(
+                       prefs::kPreviousIsolationState, group_name);
+
+                   chrome::SetIsolationState(
+                       base::FeatureList::IsEnabled(features::kIsolatedProcess)
+                           ? chrome::IsolationState::kProcessIsolation
+                           : chrome::IsolationState::kIsolationDisabled,
+                       g_browser_process->local_state(), base::DoNothing());
+                 }));
 
   base::ImportantFileWriterCleaner::GetInstance().Start();
 }
@@ -841,7 +847,7 @@ bool ChromeBrowserMainPartsWin::CheckMachineLevelInstall() {
         // Setup is triggered on system-level Chrome's first run.
         // TODO(gab): Instead of having callers of Active Setup think about
         // other callers, have Active Setup itself register when it ran and
-        // no-op otherwise (http://crbug.com/346843).
+        // no-op otherwise (http://crbug.com/40353153).
         if (!first_run::IsChromeFirstRun())
           uninstall_cmd.AppendSwitch(installer::switches::kTriggerActiveSetup);
 

@@ -43,6 +43,7 @@ export class PrintPreviewHeaderElement extends PrintPreviewHeaderElementBase {
       managed: {type: Boolean},
       sheetCount_: {type: Number},
       summary_: {type: String},
+      webuiRoundedIconsEnabled_: {type: Boolean},
     };
   }
 
@@ -52,6 +53,8 @@ export class PrintPreviewHeaderElement extends PrintPreviewHeaderElementBase {
   accessor managed: boolean = false;
   private accessor sheetCount_: number = 0;
   protected accessor summary_: string|null = null;
+  protected accessor webuiRoundedIconsEnabled_: boolean =
+      loadTimeData.getBoolean('webuiRoundedIconsEnabled');
 
   override connectedCallback() {
     super.connectedCallback();
@@ -76,11 +79,11 @@ export class PrintPreviewHeaderElement extends PrintPreviewHeaderElementBase {
   }
 
   private updateSheetCount_() {
-    let sheets = (this.getSettingValue('pages') as number[]).length;
+    let sheets = this.getSettingValue('pages').length;
     if (this.getSettingValue('duplex')) {
       sheets = Math.ceil(sheets / 2);
     }
-    this.sheetCount_ = sheets * (this.getSettingValue('copies') as number);
+    this.sheetCount_ = sheets * this.getSettingValue('copies');
   }
 
   private isPdf_(): boolean {

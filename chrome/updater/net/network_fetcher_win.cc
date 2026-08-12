@@ -14,7 +14,9 @@
 #include <string>
 #include <utility>
 
+#include "base/check.h"
 #include "base/containers/flat_map.h"
+#include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -23,16 +25,17 @@
 #include "base/sequence_checker.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
+#include "base/win/access_token.h"
 #include "chrome/updater/event_logger.h"
+#include "chrome/updater/get_updater_scope.h"
 #include "chrome/updater/net/network.h"
 #include "chrome/updater/policy/service.h"
 #include "chrome/updater/protos/omaha_usage_stats_event.pb.h"
-#include "chrome/updater/updater_scope.h"
 #include "chrome/updater/util/util.h"
 #include "chrome/updater/util/win_util.h"
-#include "chrome/updater/win/scoped_handle.h"
 #include "chrome/updater/win/scoped_impersonation.h"
 #include "chrome/updater/win/user_info.h"
 #include "components/update_client/network.h"
@@ -71,7 +74,7 @@ std::optional<int> GetNetworkConnectivityCostHint() {
     VLOG(1) << "GetNetworkConnectivityHint failed with status " << status;
     return std::nullopt;
   }
-  return static_cast<int>(connectivity_hint.ConnectivityCost);
+  return std::to_underlying(connectivity_hint.ConnectivityCost);
 }
 
 // Factory method for the proxy configuration strategy.
@@ -292,12 +295,11 @@ class NetworkFetcherFactory::Impl {
     ScopedImpersonation impersonate;
     if (IsSystemInstall()) {
       user_state_ = proto::NetworkEvent_UserState_NOT_LOGGED_IN;
-      HResultOr<ScopedKernelHANDLE> token = GetLoggedOnUserToken();
+      std::optional<base::win::AccessToken> token = GetLoggedOnUserToken();
       VLOG_IF(2, !token.has_value())
-          << __func__ << ": GetLoggedOnUserToken failed: " << std::hex
-          << token.error();
+          << __func__ << ": GetLoggedOnUserToken failed";
       if (token.has_value()) {
-        const HRESULT hr = impersonate.Impersonate(token.value().get());
+        const HRESULT hr = impersonate.Impersonate(token->get());
         VLOG(2)
             << __func__
             << ": Successfully got logged on user token. Impersonate result: "

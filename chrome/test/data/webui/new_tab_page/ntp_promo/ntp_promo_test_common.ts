@@ -6,8 +6,8 @@ import 'chrome://new-tab-page/lazy_load.js';
 
 import {NtpPromoProxyImpl} from 'chrome://new-tab-page/lazy_load.js';
 import type {NtpPromoProxy} from 'chrome://new-tab-page/lazy_load.js';
-import {NtpPromoClientCallbackRouter} from 'chrome://new-tab-page/ntp_promo.mojom-webui.js';
-import type {NtpPromoClientRemote, NtpPromoHandlerInterface} from 'chrome://new-tab-page/ntp_promo.mojom-webui.js';
+import {NtpPromoClientCallbackRouter} from 'chrome://new-tab-page/new_tab_page.js';
+import type {NtpPromoClientRemote, NtpPromoHandlerInterface} from 'chrome://new-tab-page/new_tab_page.js';
 import {TestBrowserProxy} from 'chrome://webui-test/test_browser_proxy.js';
 
 export class TestNtpPromoHandler extends TestBrowserProxy implements
@@ -15,12 +15,9 @@ export class TestNtpPromoHandler extends TestBrowserProxy implements
   constructor() {
     super([
       'requestPromos',
-      'onPromosShown',
+      'onPromoShown',
       'onPromoClicked',
-      'snoozeSetupList',
-      'unsnoozeSetupList',
-      'disableSetupList',
-      'undisableSetupList',
+      'onPromoDismissed',
     ]);
   }
 
@@ -28,28 +25,16 @@ export class TestNtpPromoHandler extends TestBrowserProxy implements
     this.methodCalled('requestPromos');
   }
 
-  onPromosShown(eligible: string[], completed: string[]) {
-    this.methodCalled('onPromosShown', eligible, completed);
+  onPromoShown(eligible: string) {
+    this.methodCalled('onPromoShown', eligible);
   }
 
   onPromoClicked(promoId: string) {
     this.methodCalled('onPromoClicked', promoId);
   }
 
-  snoozeSetupList() {
-    this.methodCalled('snoozeSetupList');
-  }
-
-  unsnoozeSetupList() {
-    this.methodCalled('unsnoozeSetupList');
-  }
-
-  disableSetupList() {
-    this.methodCalled('disableSetupList');
-  }
-
-  undisableSetupList() {
-    this.methodCalled('undisableSetupList');
+  onPromoDismissed(promoId: string) {
+    this.methodCalled('onPromoDismissed', promoId);
   }
 }
 

@@ -41,7 +41,7 @@ class FakeSSLBlockingPage
     : public security_interstitials::SecurityInterstitialPage {
  public:
   FakeSSLBlockingPage(content::WebContents* web_contents,
-                      int cert_error,
+                      net::Error cert_error,
                       const net::SSLInfo& ssl_info,
                       const GURL& request_url)
       : security_interstitials::SecurityInterstitialPage(
@@ -67,7 +67,7 @@ class FakeSSLBlockingPage
 
   // SecurityInterstitialPage:
   void OnInterstitialClosing() override {}
-  void PopulateInterstitialStrings(base::Value::Dict& load_time_data) override {
+  void PopulateInterstitialStrings(base::DictValue& load_time_data) override {
     ssl_error_ui_.PopulateStringsForHTML(load_time_data);
   }
 
@@ -81,7 +81,7 @@ class FakeSSLBlockingPage
 void MockHandleSSLError(
     bool async,
     content::WebContents* web_contents,
-    int cert_error,
+    net::Error cert_error,
     const net::SSLInfo& ssl_info,
     const GURL& request_url,
     base::OnceCallback<

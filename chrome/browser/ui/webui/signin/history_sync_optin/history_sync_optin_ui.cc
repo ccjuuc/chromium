@@ -4,22 +4,27 @@
 
 #include "chrome/browser/ui/webui/signin/history_sync_optin/history_sync_optin_ui.h"
 
+#include "base/check_deref.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
+#include "chrome/browser/regional_capabilities/regional_capabilities_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/webui/signin/history_sync_optin/history_sync_optin.mojom.h"
 #include "chrome/browser/ui/webui/signin/history_sync_optin/history_sync_optin_handler.h"
 #include "chrome/browser/ui/webui/signin/signin_url_utils.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/signin_history_sync_optin_resources.h"
 #include "chrome/grit/signin_history_sync_optin_resources_map.h"
 #include "chrome/grit/signin_resources.h"
+#include "components/regional_capabilities/regional_capabilities_service.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/sync/base/features.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
@@ -59,8 +64,7 @@ history_sync_optin::mojom::LaunchContext HistorySyncOptinLaunchContextToMojom(
 
 bool HistorySyncOptinUIConfig::IsWebUIEnabled(
     content::BrowserContext* browser_context) {
-  return base::FeatureList::IsEnabled(
-      syncer::kReplaceSyncPromosWithSignInPromos);
+  return syncer::IsReplaceSyncPromosWithSignInPromosEnabled();
 }
 
 // static
@@ -79,11 +83,23 @@ HistorySyncOptinUI::HistorySyncOptinUI(content::WebUI* web_ui)
   // Set up the chrome://history-sync-optin source.
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       profile_, chrome::kChromeUIHistorySyncOptinHost);
+  content::URLDataSource::Add(profile_,
+                              std::make_unique<ThemeSource>(profile_));
+
+  const bool is_in_search_engine_choice_region =
+      CHECK_DEREF(regional_capabilities::RegionalCapabilitiesServiceFactory::
+                      GetForProfile(profile_))
+          .IsInSearchEngineChoiceScreenRegion();
+  const bool is_first_run_desktop_refresh_enabled =
+      switches::IsFirstRunDesktopRefreshEnabled(
+          is_in_search_engine_choice_region);
 
   // Add required resources.
   webui::SetupWebUIDataSource(
-      source, base::span(kSigninHistorySyncOptinResources),
-      IDR_SIGNIN_HISTORY_SYNC_OPTIN_HISTORY_SYNC_OPTIN_HTML);
+      source, kSigninHistorySyncOptinResources,
+      is_first_run_desktop_refresh_enabled
+          ? IDR_SIGNIN_HISTORY_SYNC_OPTIN_HISTORY_SYNC_OPTIN_REFRESH_HTML
+          : IDR_SIGNIN_HISTORY_SYNC_OPTIN_HISTORY_SYNC_OPTIN_HTML);
 
   static constexpr webui::LocalizedString kLocalizedStrings[] = {
       {"historySyncOptInTitle", IDS_HISTORY_SYNC_OPT_IN_TITLE},
@@ -95,14 +111,17 @@ HistorySyncOptinUI::HistorySyncOptinUI(content::WebUI* web_ui)
       {"historySyncOptInDescription", IDS_HISTORY_SYNC_OPT_IN_DESCRIPTION},
   };
 
-  source->AddResourcePath("images/window_left_illustration.svg",
-                          IDR_SIGNIN_IMAGES_SHARED_LEFT_BANNER_SVG);
-  source->AddResourcePath("images/window_left_illustration_dark.svg",
-                          IDR_SIGNIN_IMAGES_SHARED_LEFT_BANNER_DARK_SVG);
-  source->AddResourcePath("images/window_right_illustration.svg",
-                          IDR_SIGNIN_IMAGES_SHARED_RIGHT_BANNER_SVG);
-  source->AddResourcePath("images/window_right_illustration_dark.svg",
-                          IDR_SIGNIN_IMAGES_SHARED_RIGHT_BANNER_DARK_SVG);
+  // Refreshed UI doesn't need the background illustrations.
+  if (!is_first_run_desktop_refresh_enabled) {
+    source->AddResourcePath("images/window_left_illustration.svg",
+                            IDR_SIGNIN_IMAGES_SHARED_LEFT_BANNER_SVG);
+    source->AddResourcePath("images/window_left_illustration_dark.svg",
+                            IDR_SIGNIN_IMAGES_SHARED_LEFT_BANNER_DARK_SVG);
+    source->AddResourcePath("images/window_right_illustration.svg",
+                            IDR_SIGNIN_IMAGES_SHARED_RIGHT_BANNER_SVG);
+    source->AddResourcePath("images/window_right_illustration_dark.svg",
+                            IDR_SIGNIN_IMAGES_SHARED_RIGHT_BANNER_DARK_SVG);
+  }
 
   source->AddLocalizedStrings(kLocalizedStrings);
   // Add avatar fallback value.

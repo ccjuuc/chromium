@@ -56,7 +56,7 @@ typedef struct {
 
 - (void)autofillController:(CWVAutofillController*)autofillController
     didFocusOnFieldWithIdentifier:(NSString*)fieldIdentifier
-                        fieldType:(NSString*)fieldType
+                        fieldType:(NSInteger)fieldType
                          formName:(NSString*)formName
                           frameID:(NSString*)frameID
                             value:(NSString*)value
@@ -104,7 +104,7 @@ typedef struct {
 
 - (void)autofillController:(CWVAutofillController*)autofillController
     didInputInFieldWithIdentifier:(NSString*)fieldIdentifier
-                        fieldType:(NSString*)fieldType
+                        fieldType:(NSInteger)fieldType
                          formName:(NSString*)formName
                           frameID:(NSString*)frameID
                             value:(NSString*)value
@@ -125,7 +125,7 @@ typedef struct {
 
 - (void)autofillController:(CWVAutofillController*)autofillController
     didBlurOnFieldWithIdentifier:(NSString*)fieldIdentifier
-                       fieldType:(NSString*)fieldType
+                       fieldType:(NSInteger)fieldType
                         formName:(NSString*)formName
                          frameID:(NSString*)frameID
                            value:(NSString*)value
@@ -137,6 +137,13 @@ typedef struct {
      didSubmitFormWithName:(NSString*)formName
                    frameID:(NSString*)frameID
              userInitiated:(BOOL)userInitiated
+            perfectFilling:(BOOL)perfectFilling {
+  // Not implemented.
+}
+
+- (void)autofillController:(CWVAutofillController*)autofillController
+     didSubmitFormWithName:(NSString*)formName
+                   frameID:(NSString*)frameID
             perfectFilling:(BOOL)perfectFilling {
   // Not implemented.
 }

@@ -7,7 +7,9 @@
 #include <optional>
 #include <utility>
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/base64.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
@@ -30,9 +32,7 @@
 #include "chrome/browser/ash/policy/enrollment/enrollment_status.h"
 #include "chrome/browser/ash/policy/enrollment/tpm_enrollment_key_signing_service.h"
 #include "chrome/browser/ash/policy/server_backed_state/server_backed_state_keys_broker.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/attestation/attestation_features.h"
 #include "chromeos/ash/components/attestation/attestation_flow.h"
 #include "chromeos/ash/components/dbus/constants/attestation_constants.h"
@@ -130,14 +130,14 @@ em::DeviceRegisterRequest::Flavor EnrollmentModeToRegistrationFlavor(
   }
 }
 
-// Returns the PSM protocol execution result if prefs::kEnrollmentPsmResult is
-// set, and its value is within the
+// Returns the PSM protocol execution result if ash::prefs::kEnrollmentPsmResult
+// is set, and its value is within the
 // em::DeviceRegisterRequest::PsmExecutionResult enum range. Otherwise,
 // std::nullopt.
 std::optional<PsmExecutionResult> GetPsmExecutionResult(
     const PrefService& local_state) {
   const PrefService::Preference* has_psm_execution_result_pref =
-      local_state.FindPreference(prefs::kEnrollmentPsmResult);
+      local_state.FindPreference(ash::prefs::kEnrollmentPsmResult);
 
   if (!has_psm_execution_result_pref ||
       has_psm_execution_result_pref->IsDefaultValue() ||
@@ -160,11 +160,11 @@ std::optional<PsmExecutionResult> GetPsmExecutionResult(
 }
 
 // Returns the PSM determination timestamp in ms if
-// prefs::kEnrollmentPsmDeterminationTime is set. Otherwise, std::nullopt.
+// ash::prefs::kEnrollmentPsmDeterminationTime is set. Otherwise, std::nullopt.
 std::optional<int64_t> GetPsmDeterminationTimestamp(
     const PrefService& local_state) {
   const PrefService::Preference* has_psm_determination_timestamp_pref =
-      local_state.FindPreference(prefs::kEnrollmentPsmDeterminationTime);
+      local_state.FindPreference(ash::prefs::kEnrollmentPsmDeterminationTime);
 
   if (!has_psm_determination_timestamp_pref ||
       has_psm_determination_timestamp_pref->IsDefaultValue()) {
@@ -172,7 +172,7 @@ std::optional<int64_t> GetPsmDeterminationTimestamp(
   }
 
   const base::Time psm_determination_timestamp =
-      local_state.GetTime(prefs::kEnrollmentPsmDeterminationTime);
+      local_state.GetTime(ash::prefs::kEnrollmentPsmDeterminationTime);
 
   // The PSM determination timestamp should exist at this stage. Because
   // we already checked the existence of the pref with non-default value.
@@ -184,6 +184,8 @@ std::optional<int64_t> GetPsmDeterminationTimestamp(
 }  // namespace
 
 EnrollmentHandler::EnrollmentHandler(
+    PrefService* local_state,
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
     DeviceCloudPolicyStoreAsh* store,
     ash::InstallAttributes* install_attributes,
     ServerBackedStateKeysBroker* state_keys_broker,
@@ -196,7 +198,9 @@ EnrollmentHandler::EnrollmentHandler(
     const std::string& requisition,
     const std::string& sub_organization,
     EnrollmentCallback completion_callback)
-    : store_(store),
+    : local_state_(CHECK_DEREF(local_state)),
+      shared_url_loader_factory_(std::move(shared_url_loader_factory)),
+      store_(store),
       install_attributes_(install_attributes),
       state_keys_broker_(state_keys_broker),
       attestation_flow_(attestation_flow),
@@ -209,19 +213,21 @@ EnrollmentHandler::EnrollmentHandler(
       sub_organization_(sub_organization),
       completion_callback_(std::move(completion_callback)),
       enrollment_step_(STEP_PENDING) {
+  CHECK(shared_url_loader_factory_);
   dm_auth_ = std::move(dm_auth);
   CHECK(!client_->is_registered());
   CHECK_EQ(DM_STATUS_SUCCESS, client_->last_dm_status());
   CHECK_EQ(dm_auth_.empty(), enrollment_config_.is_mode_attestation());
   CHECK(enrollment_config_.is_mode_attestation() || attestation_flow_);
+
   register_params_ =
       std::make_unique<CloudPolicyClient::RegistrationParameters>(
           em::DeviceRegisterRequest::DEVICE,
           EnrollmentModeToRegistrationFlavor(enrollment_config.mode));
   register_params_->psm_execution_result =
-      GetPsmExecutionResult(*g_browser_process->local_state());
+      GetPsmExecutionResult(local_state_.get());
   register_params_->psm_determination_timestamp =
-      GetPsmDeterminationTimestamp(*g_browser_process->local_state());
+      GetPsmDeterminationTimestamp(local_state_.get());
   // License type is set only if terminal license is used. Unset field is
   // treated as enterprise license.
   if (enrollment_config_.license_type == LicenseType::kTerminal) {
@@ -233,7 +239,7 @@ EnrollmentHandler::EnrollmentHandler(
 
   if (requisition == EnrollmentRequisitionManager::kDemoRequisition) {
     register_params_->demo_mode_dimensions =
-        ash::demo_mode::GetDemoModeDimensions();
+        ash::demo_mode::GetDemoModeDimensions(local_state_.get());
   }
 
   store_->AddObserver(this);
@@ -325,7 +331,7 @@ void EnrollmentHandler::OnPolicyFetched(CloudPolicyClient* client) {
     validator->ValidateDomain(domain);
   validator->ValidateDMToken(client->dm_token(),
                              CloudPolicyValidatorBase::DM_TOKEN_REQUIRED);
-  DeviceCloudPolicyValidator::StartValidation(
+  CloudPolicyValidatorBase::StartValidation(
       std::move(validator),
       base::BindOnce(&EnrollmentHandler::HandlePolicyValidationResult,
                      weak_ptr_factory_.GetWeakPtr()));
@@ -538,13 +544,13 @@ std::unique_ptr<DeviceCloudPolicyValidator> EnrollmentHandler::CreateValidator(
   // domain from the username field in the policy itself to do key validation.
   // TODO(mnissler): Plumb the enrolling user's username into this object so we
   // can validate the username on the resulting policy, and use the domain from
-  // that username to validate the key below (http://crbug.com/343074).
+  // that username to validate the key below (http://crbug.com/41089303).
   validator->ValidateInitialKey(domain);
   return validator;
 }
 
 void EnrollmentHandler::HandlePolicyValidationResult(
-    DeviceCloudPolicyValidator* validator) {
+    CloudPolicyValidatorBase* validator) {
   DCHECK_EQ(STEP_VALIDATION, enrollment_step_);
   if (!validator->success()) {
     ReportResult(EnrollmentStatus::ForValidationError(validator->status()));
@@ -563,8 +569,8 @@ void EnrollmentHandler::HandlePolicyValidationResult(
 
   domain_ = gaia::ExtractDomainName(gaia::CanonicalizeEmail(username));
   SetStep(STEP_ROBOT_AUTH_FETCH);
-  device_account_initializer_ =
-      std::make_unique<DeviceAccountInitializer>(client_.get(), this);
+  device_account_initializer_ = std::make_unique<DeviceAccountInitializer>(
+      shared_url_loader_factory_, client_.get(), this);
   device_account_initializer_->FetchToken();
 }
 
@@ -604,11 +610,6 @@ EnrollmentHandler::GetRobotAuthCodeDeviceType() {
 
 std::set<std::string> EnrollmentHandler::GetRobotOAuthScopes() {
   return {GaiaConstants::kAnyApiOAuth2Scope};
-}
-
-scoped_refptr<network::SharedURLLoaderFactory>
-EnrollmentHandler::GetURLLoaderFactory() {
-  return g_browser_process->shared_url_loader_factory();
 }
 
 void EnrollmentHandler::SetFirmwareManagementParametersData() {
@@ -713,12 +714,11 @@ void EnrollmentHandler::StartStoreRobotAuth() {
 
 void EnrollmentHandler::StoreVersion() {
   DCHECK_EQ(STEP_STORE_VERSION, enrollment_step_);
-  PrefService* prefs = g_browser_process->local_state();
-  prefs->SetString(prefs::kEnrollmentVersionOS,
-                   base::SysInfo::OperatingSystemVersion());
-  prefs->SetString(prefs::kEnrollmentVersionBrowser,
-                   version_info::GetVersionNumber());
-  prefs->CommitPendingWrite();
+  local_state_->SetString(ash::prefs::kEnrollmentVersionOS,
+                          base::SysInfo::OperatingSystemVersion());
+  local_state_->SetString(ash::prefs::kEnrollmentVersionBrowser,
+                          version_info::GetVersionNumber());
+  local_state_->CommitPendingWrite();
 
   SetStep(STEP_STORE_POLICY);
   StartStoreDevicePolicy();

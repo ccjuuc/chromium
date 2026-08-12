@@ -8,29 +8,27 @@
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/ash/file_suggest/file_suggest_keyed_service.h"
 #include "chrome/browser/ash/file_suggest/file_suggest_util.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 
 namespace ash {
 
 std::unique_ptr<KeyedService>
 MockFileSuggestKeyedService::BuildMockFileSuggestKeyedService(
-    const ApplicationLocaleStorage* application_locale_storage,
     const base::FilePath& proto_path,
     content::BrowserContext* context) {
   PersistentProto<app_list::RemovedResultsProto> proto(proto_path,
                                                        base::TimeDelta());
   return std::make_unique<MockFileSuggestKeyedService>(
-      application_locale_storage, Profile::FromBrowserContext(context),
+      g_browser_process->local_state(), Profile::FromBrowserContext(context),
       std::move(proto));
 }
 
 MockFileSuggestKeyedService::MockFileSuggestKeyedService(
-    const ApplicationLocaleStorage* application_locale_storage,
+    PrefService* local_state,
     Profile* profile,
     PersistentProto<app_list::RemovedResultsProto> proto)
-    : FileSuggestKeyedService(application_locale_storage,
-                              profile,
-                              std::move(proto)) {
+    : FileSuggestKeyedService(local_state, profile, std::move(proto)) {
   ON_CALL(*this, GetSuggestFileData)
       .WillByDefault(
           [this](FileSuggestionType type, GetSuggestFileDataCallback callback) {

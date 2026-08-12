@@ -8,7 +8,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <vector>
 
 #include "base/check.h"
 #include "base/functional/bind.h"
@@ -16,12 +15,10 @@
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
 #include "chrome/browser/ui/bookmarks/bookmark_utils_desktop.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/layout_constants.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/tab_group_menu_utils.h"
-#include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_group_theme.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
 #include "chrome/browser/ui/view_ids.h"
@@ -29,28 +26,20 @@
 #include "chrome/browser/ui/views/bookmarks/saved_tab_groups/saved_tab_group_drag_data.h"
 #include "chrome/browser/ui/views/bookmarks/saved_tab_groups/saved_tab_group_tabs_menu_model.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/location_bar/location_bar_util.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_ink_drop_util.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/saved_tab_groups/public/saved_tab_group.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
-#include "components/tab_groups/tab_group_id.h"
-#include "ui/accessibility/ax_enums.mojom-shared.h"
 #include "ui/accessibility/ax_enums.mojom.h"
-#include "ui/accessibility/ax_node_data.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
-#include "ui/base/theme_provider.h"
 #include "ui/base/ui_base_features.h"
-#include "ui/color/color_id.h"
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/gfx/canvas.h"
-#include "ui/gfx/color_palette.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/gfx/geometry/insets.h"
-#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
@@ -87,7 +76,7 @@ constexpr float kSharedEmptyChipInsets = 2.0f;
 
 SavedTabGroupButton::SavedTabGroupButton(const SavedTabGroup& group,
                                          PressedCallback callback,
-                                         Browser* browser,
+                                         BrowserWindowInterface* browser,
                                          bool animations_enabled)
     : MenuButton(std::move(callback), group.title()),
       browser_(browser),
@@ -114,7 +103,7 @@ SavedTabGroupButton::SavedTabGroupButton(const SavedTabGroup& group,
     show_animation_->Show();
   }
 
-  ConfigureInkDropForToolbar(this);
+  ConfigureInkDrop(this);
   SetImageLabelSpacing(
       ChromeLayoutProvider::Get()->GetDistanceMetric(
           ChromeDistanceMetric::DISTANCE_RELATED_LABEL_HORIZONTAL_LIST) /
@@ -266,7 +255,8 @@ void SavedTabGroupButton::UpdateButtonLayout() {
   if (is_shared_) {
     SetImageModel(ButtonState::STATE_NORMAL,
                   ui::ImageModel::FromVectorIcon(
-                      kPeopleGroupIcon,
+                      features::IsRoundedIconsEnabled() ? kGroupCustomIcon
+                                                        : kPeopleGroupOldIcon,
                       GetSavedTabGroupForegroundColorId(tab_group_color_id_),
                       gfx::kFaviconSize));
   }
@@ -328,7 +318,7 @@ void SavedTabGroupButton::ShowContextMenuForViewImpl(
     ui::mojom::MenuSourceType source_type) {
   TabGroupSyncService* tab_group_service =
       tab_groups::TabGroupSyncServiceFactory::GetForProfile(
-          browser_->profile());
+          browser_->GetProfile());
 
   const std::optional<SavedTabGroup> saved_group =
       tab_group_service->GetGroup(guid_);

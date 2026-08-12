@@ -6,16 +6,23 @@
 #define COMPONENTS_LIVE_CAPTION_VIEWS_CAPTION_BUBBLE_CONTROLLER_VIEWS_H_
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
 
+#include "base/containers/flat_map.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/live_caption/caption_bubble_controller.h"
 #include "components/live_caption/views/caption_bubble.h"
+#include "components/on_device_translation/buildflags/buildflags.h"
 #include "components/soda/soda_installer.h"
 #include "media/mojo/mojom/speech_recognition.mojom.h"
+
+#if BUILDFLAG(ENABLE_ON_DEVICE_TRANSLATION)
+#include "components/on_device_translation/installer.h"
+#endif
 
 namespace views {
 class Widget;
@@ -34,8 +41,14 @@ class TranslationViewWrapperBase;
 //
 //  The implementation of the caption bubble controller for Views.
 //
-class CaptionBubbleControllerViews : public CaptionBubbleController,
-                                     public speech::SodaInstaller::Observer {
+class CaptionBubbleControllerViews
+    : public CaptionBubbleController,
+      public speech::SodaInstaller::Observer
+#if BUILDFLAG(ENABLE_ON_DEVICE_TRANSLATION)
+    ,
+      public on_device_translation::OnDeviceTranslationInstaller::Observer
+#endif
+{
  public:
   CaptionBubbleControllerViews(
       CaptionBubbleSettings* caption_bubble_settings,
@@ -90,6 +103,18 @@ class CaptionBubbleControllerViews : public CaptionBubbleController,
   void OnSodaProgress(speech::LanguageCode language_code,
                       int progress) override;
 
+#if BUILDFLAG(ENABLE_ON_DEVICE_TRANSLATION)
+  // OnDeviceTranslationInstaller::Observer overrides:
+  void OnLanguagePackInstalled(
+      const on_device_translation::LanguagePackKey lang_pack) override;
+  void OnLanguagePackInstallationChanged(
+      const on_device_translation::LanguagePackKey lang_pack) override;
+  void OnInstallationChanged() override {}
+  void OnLanguagePackProgress(
+      const on_device_translation::LanguagePackKey lang_pack,
+      int progress) override;
+#endif
+
   // A callback passed to the CaptionBubble which is called when the
   // CaptionBubble is destroyed.
   void OnCaptionBubbleDestroyed();
@@ -108,14 +133,16 @@ class CaptionBubbleControllerViews : public CaptionBubbleController,
   raw_ptr<CaptionBubble, DanglingUntriaged> caption_bubble_;
   raw_ptr<views::Widget, DanglingUntriaged> caption_widget_;
 
-  // A pointer to the currently active CaptionBubbleModel.
-  raw_ptr<CaptionBubbleModel, DanglingUntriaged> active_model_ = nullptr;
-
   // A map of media player ids and their corresponding CaptionBubbleModel. New
   // entries are added to this map when a previously unseen media player id is
   // received.
   std::unordered_map<CaptionBubbleContext*, std::unique_ptr<CaptionBubbleModel>>
       caption_bubble_models_;
+
+  // A pointer to the currently active CaptionBubbleModel, owned by
+  // `caption_bubble_models_`. Declared after the map so it is destroyed first
+  // and never dangles during teardown.
+  raw_ptr<CaptionBubbleModel> active_model_ = nullptr;
 
   // A collection of closed session identifiers that should not display
   // captions. Identifiers are removed from this collection when a user
@@ -128,6 +155,15 @@ class CaptionBubbleControllerViews : public CaptionBubbleController,
       caption_bubble_session_observers_;
 
   std::string application_locale_;
+
+  std::optional<int> soda_progress_;
+  speech::LanguageCode soda_language_code_ = speech::LanguageCode::kNone;
+#if BUILDFLAG(ENABLE_ON_DEVICE_TRANSLATION)
+  base::flat_map<on_device_translation::LanguagePackKey, int>
+      translation_progress_;
+#endif
+
+  void UpdateCombinedProgressText();
 
   base::WeakPtrFactory<CaptionBubbleControllerViews> weak_factory_{this};
 };

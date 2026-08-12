@@ -29,11 +29,10 @@ export function getHtml(this: HistoryAppElement) {
         .searchTerm="${this.queryState_.searchTerm}"
         ?spinner-active="${this.shouldShowSpinner_()}"
         .selectedPage="${this.selectedPage_}"
-        @search-term-native-before-input="${this.onToolbarSearchInputNativeBeforeInput_}"
-        @search-term-native-input="${this.onToolbarSearchInputNativeInput_}"
-        @search-term-cleared="${this.onToolbarSearchCleared_}">
+        @search-term-native-before-input="${this.onToolbarSearchTermNativeBeforeInput_}"
+        @search-term-native-input="${this.onToolbarSearchTermNativeInput_}"
+        @search-term-cleared="${this.onToolbarSearchTermCleared_}">
     </history-toolbar>
-    <div id="drop-shadow" class="cr-container-shadow"></div>
     <div id="main-container">
       <history-side-bar id="contentSideBar"
           .selectedPage="${this.selectedPage_}"
@@ -48,7 +47,7 @@ export function getHtml(this: HistoryAppElement) {
       </history-side-bar>
       <cr-page-selector id="content" attr-for-selected="path"
           selected="${this.contentPage_}"
-          @iron-select="${this.updateScrollTarget_}">
+          @iron-select="${this.onContentIronSelect_}">
         <div id="tabsContainer" path="history">
           <div id="historyEmbeddingsDisclaimer" class="history-cards"
               ?hidden="${!this.enableHistoryEmbeddings_}"
@@ -59,7 +58,7 @@ export function getHtml(this: HistoryAppElement) {
                   href="$i18n{historyEmbeddingsSettingsUrl}" target="_blank"
                   aria-describedby="historyEmbeddingsDisclaimer"
                   @click="${this.onHistoryEmbeddingsDisclaimerLinkClick_}"
-                  @auxclick="${this.onHistoryEmbeddingsDisclaimerLinkClick_}">
+                  @auxclick="${this.onHistoryEmbeddingsDisclaimerLinkAuxclick_}">
                 $i18n{learnMore}
               </a>
             </div>
@@ -69,9 +68,17 @@ export function getHtml(this: HistoryAppElement) {
               <cr-tabs .tabNames="${this.tabsNames_}"
                   .tabIcons="${this.tabsIcons_}"
                   selected="${this.selectedTab_}"
-                  @selected-changed="${this.onSelectedTabChanged_}">
+                  @selected-changed="${this.onTabsSelectedChanged_}">
               </cr-tabs>
             </div>` : ''}
+          ${this.showFilterChips_() ? html`
+            <history-filter-chips
+                id="historyFilterChips"
+                .userVisits="${this.includeUserVisits_}"
+                .actorVisits="${this.includeActorVisits_}"
+                @filter-changed="${this.onFilterChanged_}">
+            </history-filter-chips>
+          ` : ''}
           <div id="tabsScrollContainer" class="cr-scrollable">
             <div class="cr-scrollable-top-shadow" ?hidden="${this.showTabs_}"></div>
             <if expr="not is_chromeos">
@@ -79,6 +86,11 @@ export function getHtml(this: HistoryAppElement) {
                 <div class="history-cards">
                   <history-sync-promo></history-sync-promo>
                 </div>` : ''}
+              <div class="history-cards" ?hidden="${!this.shouldShowHistoryCrossDeviceSigninPromo_}">
+                <history-cross-device-signin-promo id="historyCrossDeviceSigninPromo"
+                    @should-show-history-cross-device-signin-promo="${this.onShouldShowHistoryCrossDeviceSigninPromo_}">
+                </history-cross-device-signin-promo>
+              </div>
             </if>
             ${this.enableHistoryEmbeddings_ ? html`
               <div id="historyEmbeddingsContainer" class="history-cards">
@@ -96,7 +108,7 @@ export function getHtml(this: HistoryAppElement) {
                       .timeRangeStart="${this.queryStateAfterDate_}"
                       .numCharsForQuery="${this.numCharsTypedInSearch_}"
                       @more-from-site-click="${this.onHistoryEmbeddingsItemMoreFromSiteClick_}"
-                      @remove-item-click="${this.onHistoryEmbeddingsItemRemoveClick_}"
+                      @remove-item-click="${this.onHistoryEmbeddingsItemRemoveItemClick_}"
                       @is-empty-changed="${this.onHistoryEmbeddingsIsEmptyChanged_}"
                       ?force-suppress-logging="${this.historyEmbeddingsDisclaimerLinkClicked_}"
                       ?show-more-from-site-menu-option="${!this.getShowResultsByGroup_()}"
@@ -106,13 +118,12 @@ export function getHtml(this: HistoryAppElement) {
               </div>` : ''}
             <cr-page-selector id="tabsContent" attr-for-selected="path"
                 selected="${this.tabsContentPage_}"
-                @iron-select="${this.updateScrollTarget_}">
+                @iron-select="${this.onTabsContentIronSelect_}">
               <history-list id="history" .queryState="${this.queryState_}"
                   ?is-active="${this.getShowHistoryList_()}"
                   searched-term="${this.queryResult_.info?.term}"
                   ?pending-delete="${this.pendingDelete_}"
                   @pending-delete-changed="${this.onListPendingDeleteChanged_}"
-                  .queryResult="${this.queryResult_}"
                   path="history"
                   .scrollTarget="${this.scrollTarget_}"
                   .scrollOffset="${this.tabContentScrollOffset_}">

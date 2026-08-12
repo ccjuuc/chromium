@@ -9,6 +9,7 @@
 
 #include "base/check_op.h"
 #include "base/dcheck_is_on.h"
+#include "base/functional/function_ref.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/layout/block_break_token.h"
 #include "third_party/blink/renderer/core/layout/break_token.h"
@@ -35,6 +36,7 @@
 
 namespace blink {
 
+class ColumnSpannerPath;
 class PhysicalFragment;
 
 class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
@@ -173,8 +175,9 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   }
   LayoutUnit FragmentsTotalBlockSize() const {
 #if DCHECK_IS_ON()
-    if (has_block_fragmentation_)
+    if (space_.HasBlockFragmentation()) {
       DCHECK(block_size_is_for_all_fragments_);
+    }
     DCHECK(size_.block_size != kIndefiniteSize);
 #endif
     return size_.block_size;
@@ -193,8 +196,9 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
 
   LayoutUnit FragmentBlockSize() const {
 #if DCHECK_IS_ON()
-    DCHECK(!block_size_is_for_all_fragments_ || !has_block_fragmentation_ ||
-           IsInitialColumnBalancingPass());
+    DCHECK(!block_size_is_for_all_fragments_ ||
+           !space_.HasBlockFragmentation() ||
+           space_.IsInitialColumnBalancingPass());
     DCHECK(size_.block_size != kIndefiniteSize);
 #endif
     return size_.block_size;
@@ -438,16 +442,6 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
     monolithic_overflow_ = std::max(monolithic_overflow_, monolithic_overflow);
   }
 
-  // Set how much of the column block-size we've used so far. This will be used
-  // to determine the block-size of any new columns added by descendant
-  // out-of-flow positioned elements.
-  void SetBlockOffsetForAdditionalColumns(LayoutUnit size) {
-    block_offset_for_additional_columns_ = size;
-  }
-  LayoutUnit BlockOffsetForAdditionalColumns() const {
-    return block_offset_for_additional_columns_;
-  }
-
   void SetSequenceNumber(unsigned sequence_number) {
     sequence_number_ = sequence_number;
   }
@@ -586,6 +580,40 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
     return *early_break_;
   }
 
+  // There may be cases where a column spanner was previously found but is no
+  // longer accessible. For example, in simplified OOF layout, we may want to
+  // recreate a spanner break for an existing fragment being relaid out, but
+  // the spanner node is no longer available. In such cases,
+  // `has_column_spanner_` may be true while `column_spanner_path_` is not set.
+  void SetHasColumnSpanner() {
+    has_column_spanner_ = true;
+
+    // Adding a spanner automatically counts as an in-flow child break (no
+    // content that's defined after it should appear in columns preceding it),
+    // even if the container might be in a parallel flow.
+    has_inflow_child_break_inside_ = true;
+  }
+  void SetColumnSpannerPath(const ColumnSpannerPath& spanner_path) {
+    column_spanner_path_ = &spanner_path;
+    SetHasColumnSpanner();
+  }
+  bool FoundColumnSpanner() const {
+    DCHECK(has_column_spanner_ || !column_spanner_path_);
+    return has_column_spanner_;
+  }
+  void SetIsEmptySpannerParent(bool is_empty_spanner_parent) {
+    DCHECK(FoundColumnSpanner());
+    is_empty_spanner_parent_ = is_empty_spanner_parent;
+  }
+  bool IsEmptySpannerParent() const { return is_empty_spanner_parent_; }
+
+  void SetShouldForceSameFragmentationFlow() {
+    should_force_same_fragmentation_flow_ = true;
+  }
+  bool ShouldForceSameFragmentationFlow() const {
+    return should_force_same_fragmentation_flow_;
+  }
+
   // Creates the fragment. Can only be called once.
   const LayoutResult* ToBoxFragment() {
     DCHECK_NE(GetBoxType(), PhysicalFragment::kInlineBox);
@@ -648,9 +676,7 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
     use_last_baseline_for_inline_baseline_ = true;
   }
 
-  void SetGapGeometry(const GapGeometry* gap_geometry) {
-    gap_geometry_ = gap_geometry;
-  }
+  void SetGapGeometry(const GapGeometry* gap_geometry);
 
   const GapGeometry* GetGapGeometry() const { return gap_geometry_; }
 
@@ -688,13 +714,11 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
     table_section_row_offsets_ = std::move(row_offsets);
   }
 
-  void TransferGridLayoutData(
-      std::unique_ptr<GridLayoutData> grid_layout_data) {
-    grid_layout_data_ = std::move(grid_layout_data);
+  void SetGridLayoutData(const GridLayoutData* grid_layout_data) {
+    grid_layout_data_ = grid_layout_data;
   }
-  void TransferFlexLayoutData(
-      std::unique_ptr<DevtoolsFlexInfo> flex_layout_data) {
-    flex_layout_data_ = std::move(flex_layout_data);
+  void SetFlexLayoutData(const DevtoolsFlexInfo* flex_layout_data) {
+    flex_layout_data_ = flex_layout_data;
   }
   void TransferFrameSetLayoutData(std::unique_ptr<FrameSetLayoutData> data) {
     frame_set_layout_data_ = std::move(data);
@@ -703,10 +727,7 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
     reading_flow_nodes_ = std::move(nodes);
   }
 
-  const GridLayoutData& GetGridLayoutData() const {
-    DCHECK(grid_layout_data_);
-    return *grid_layout_data_.get();
-  }
+  const GridLayoutData* GetGridLayoutData() const { return grid_layout_data_; }
 
   BreakTokenAlgorithmData* GetBreakTokenData() { return break_token_data_; }
 
@@ -720,10 +741,17 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   void CheckNoBlockFragmentation() const;
 #endif
 
+  using AdditionalOffsetAdjustment =
+      base::RepeatingCallback<void(LogicalFragmentLink&)>;
+
   // Moves all the children by `offset` in the block or inline direction.
   // (Ensure that any baselines, OOFs, etc, are also moved by the appropriate
-  // amount).
-  void MoveChildrenInDirection(LayoutUnit offset, bool is_block_direction);
+  // amount). If `additional_offset_adjustment` is provided, apply it to each
+  // child before the shared `offset`.
+  void MoveChildrenInDirection(LayoutUnit offset,
+                               bool is_block_direction,
+                               std::optional<AdditionalOffsetAdjustment>
+                                   additional_offset_adjustment = std::nullopt);
 
   void SetMathItalicCorrection(LayoutUnit italic_correction) {
     math_italic_correction_ = italic_correction;
@@ -799,6 +827,9 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   bool has_forced_break_ = false;
   bool has_seen_all_children_ = false;
   bool has_subsequent_children_ = false;
+  bool has_column_spanner_ = false;
+  bool is_empty_spanner_parent_ = false;
+  bool should_force_same_fragmentation_flow_ = false;
   bool is_math_fraction_ = false;
   bool is_math_operator_ = false;
   bool is_at_block_end_ = false;
@@ -815,8 +846,6 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   // fragmentainer.
   bool should_text_box_trim_fragmentainer_start_ = false;
   bool should_text_box_trim_fragmentainer_end_ = false;
-
-  LayoutUnit block_offset_for_additional_columns_;
 
   LayoutUnit block_size_for_fragmentation_;
   LayoutUnit consumed_block_size_;
@@ -851,12 +880,12 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   wtf_size_t table_section_start_row_index_;
   Vector<LayoutUnit> table_section_row_offsets_;
 
+  const ColumnSpannerPath* column_spanner_path_ = nullptr;
+
   BreakTokenAlgorithmData* break_token_data_ = nullptr;
+  const GridLayoutData* grid_layout_data_ = nullptr;
 
-  // Grid specific types.
-  std::unique_ptr<GridLayoutData> grid_layout_data_;
-
-  std::unique_ptr<DevtoolsFlexInfo> flex_layout_data_;
+  const DevtoolsFlexInfo* flex_layout_data_ = nullptr;
   std::unique_ptr<FrameSetLayoutData> frame_set_layout_data_;
 
   HeapVector<Member<blink::Node>> reading_flow_nodes_;

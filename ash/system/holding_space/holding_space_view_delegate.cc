@@ -4,6 +4,7 @@
 
 #include "ash/system/holding_space/holding_space_view_delegate.h"
 
+#include <algorithm>
 #include <vector>
 
 #include "ash/constants/ash_features.h"
@@ -23,7 +24,6 @@
 #include "ash/system/holding_space/holding_space_tray.h"
 #include "ash/system/holding_space/holding_space_tray_bubble.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/sequenced_task_runner.h"
@@ -37,6 +37,7 @@
 #include "ui/base/dragdrop/os_exchange_data_provider.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/display/screen.h"
 #include "ui/display/tablet_state.h"
@@ -520,7 +521,7 @@ void HoldingSpaceViewDelegate::ExecuteCommand(int command, int event_flags) {
           [](const std::vector<const HoldingSpaceItem*>& items,
              std::vector<base::FilePath>& suggested_file_paths,
              const HoldingSpaceItem* item) {
-            const bool remove = base::Contains(items, item);
+            const bool remove = std::ranges::contains(items, item);
             if (remove) {
               if (HoldingSpaceItem::IsSuggestionType(item->type())) {
                 suggested_file_paths.push_back(item->file().file_path);
@@ -683,12 +684,16 @@ ui::SimpleMenuModel* HoldingSpaceViewDelegate::BuildMenuModel() {
       menu_sections.back().emplace_back(
           MenuItemModel{.command_id = HoldingSpaceCommandId::kPinItem,
                         .label_id = IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_PIN,
-                        .icon = raw_ref(views::kPinIcon)});
+                        .icon = raw_ref(::features::IsRoundedIconsEnabled()
+                                            ? views::kKeepIcon
+                                            : views::kPinOldIcon)});
     } else {
       menu_sections.back().emplace_back(
           MenuItemModel{.command_id = HoldingSpaceCommandId::kUnpinItem,
                         .label_id = IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_UNPIN,
-                        .icon = raw_ref(views::kUnpinIcon)});
+                        .icon = raw_ref(::features::IsRoundedIconsEnabled()
+                                            ? views::kKeepFilledIcon
+                                            : views::kUnpinOldIcon)});
     }
   }
 
@@ -752,7 +757,7 @@ void HoldingSpaceViewDelegate::SetSelection(
 
   if (bubble_) {  // May be `nullptr` in testing.
     for (HoldingSpaceItemView* view : bubble_->GetHoldingSpaceItemViews()) {
-      view->SetSelected(base::Contains(item_ids, view->item_id()));
+      view->SetSelected(std::ranges::contains(item_ids, view->item_id()));
       if (view->selected())
         selection.push_back(view);
     }

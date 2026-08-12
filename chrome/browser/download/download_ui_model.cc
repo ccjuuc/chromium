@@ -13,7 +13,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/download_commands.h"
 #include "chrome/browser/download/download_item_warning_data.h"
@@ -36,7 +35,6 @@
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/safe_browsing/core/common/safebrowsing_referral_methods.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/vector_icons/vector_icons.h"
 #include "net/base/mime_util.h"
 #include "third_party/blink/public/common/mime_util/mime_util.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -85,6 +83,9 @@ std::u16string FailStateDescription(FailState fail_state) {
       break;
     case FailState::FILE_BLOCKED:
       string_id = IDS_DOWNLOAD_INTERRUPTED_DESCRIPTION_BLOCKED;
+      break;
+    case FailState::LOCAL_DOWNLOAD_BLOCKED:
+      string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS_LOCAL_DOWNLOAD_BLOCKED;
       break;
     case FailState::FILE_SECURITY_CHECK_FAILED:
       string_id = IDS_DOWNLOAD_INTERRUPTED_DESCRIPTION_SECURITY_CHECK_FAILED;
@@ -326,8 +327,9 @@ std::u16string DownloadUIModel::GetWarningText(const std::u16string& filename,
       return l10n_util::GetStringUTF16(
           IDS_PROMPT_DOWNLOAD_SENSITIVE_CONTENT_WARNING);
     case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE:
+    case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_ONEDRIVE:
       return l10n_util::GetStringUTF16(
-          IDS_PROMPT_DOWNLOAD_FORCED_SAVE_TO_GDRIVE);
+          IDS_PROMPT_DOWNLOAD_FORCED_SAVE_TO_CLOUD);
     case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK:
       return l10n_util::GetStringUTF16(
           IDS_PROMPT_DOWNLOAD_SENSITIVE_CONTENT_BLOCKED);
@@ -924,9 +926,9 @@ DownloadUIModel::BubbleStatusTextBuilder::GetBubbleWarningStatusText() const {
       // "Sensitive content"
       return l10n_util::GetStringUTF16(
           IDS_DOWNLOAD_BUBBLE_STATUS_SENSITIVE_CONTENT);
+    case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_ONEDRIVE:
     case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE:
-      // "Local download blocked"
-      return l10n_util::GetStringUTF16(IDS_POLICY_ACTION_FORCED_SAVE_TO_GDRIVE);
+      return l10n_util::GetStringUTF16(IDS_POLICY_ACTION_FORCED_SAVE_TO_CLOUD);
     case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK:
       // "Blocked by your organization"
       return l10n_util::GetStringUTF16(
@@ -1080,6 +1082,14 @@ DownloadUIModel::BubbleStatusTextBuilder::GetInProgressStatusText() const {
     return get_size_ratio_string(
         l10n_util::GetStringUTF16(IDS_DOWNLOAD_BUBBLE_STATUS_RESUMING));
   } else {
+    if (model_->GetDangerType() ==
+        download::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT) {
+      return StatusTextBuilderUtils::GetBubbleStatusMessageWithBytes(
+          ui::FormatBytes(
+              base::ByteSize(base::checked_cast<uint64_t>(total_bytes))),
+          l10n_util::GetStringUTF16(
+              IDS_DOWNLOAD_BUBBLE_STATUS_ASYNC_CHECKING_SAFETY));
+    }
     // "120 MB • Done"
     return StatusTextBuilderUtils::GetCompletedTotalSizeString(total_bytes);
   }
@@ -1213,6 +1223,9 @@ DownloadUIModel::BubbleStatusTextBuilder::GetInterruptedStatusText(
       break;
     case FailState::FILE_BLOCKED:
       string_id = IDS_POLICY_ACTION_BLOCKED_BY_ORGANIZATION;
+      break;
+    case FailState::LOCAL_DOWNLOAD_BLOCKED:
+      string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS_LOCAL_DOWNLOAD_BLOCKED;
       break;
     case FailState::FILE_SECURITY_CHECK_FAILED:
       string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS_SECURITY_CHECK_FAILED;

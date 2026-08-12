@@ -58,7 +58,7 @@ static Element* EnclosingBlockFlowElement(
 
 FormatBlockCommand::FormatBlockCommand(Document& document,
                                        const QualifiedName& tag_name)
-    : ApplyBlockElementCommand(document, tag_name), did_apply_(false) {}
+    : ApplyBlockElementCommand(document, tag_name) {}
 
 void FormatBlockCommand::FormatSelection(
     const VisiblePosition& start_of_selection,
@@ -204,8 +204,9 @@ Node* EnclosingBlockToSplitTreeTo(Node* start_node) {
       return &runner;
     if (IsEnclosingBlock(&runner))
       last_block = &runner;
-    if (IsHTMLListElement(&runner))
+    if (IsHtmlListElement(&runner)) {
       return IsEditable(*runner.parentNode()) ? runner.parentNode() : &runner;
+    }
   }
   return last_block;
 }

@@ -22,11 +22,11 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/platform/ax_platform_for_test.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
+#include "ui/base/clipboard/test/clipboard_test_util.h"
 #include "ui/base/clipboard/test/test_clipboard.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
@@ -37,6 +37,7 @@
 #include "ui/base/ime/input_method_base.h"
 #include "ui/base/ime/text_edit_commands.h"
 #include "ui/base/ime/text_input_client.h"
+#include "ui/base/ime/text_input_flags.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -131,28 +132,55 @@ class TextfieldDestroyerController : public TextfieldController {
   std::unique_ptr<Textfield> target_;
 };
 
-// Controller that intercepts paste and optionally supplies text for insertion.
-// Used to verify TextfieldController::OnBeforePaste() and OnAfterPaste().
-class TextfieldPasteInterceptController : public TextfieldController {
+// Base class used to test clipboard functionality of TextfieldController.
+class TextfieldClipboardControllerBase : public TextfieldController {
  public:
-  explicit TextfieldPasteInterceptController(std::u16string text_to_inject)
+  explicit TextfieldClipboardControllerBase(std::u16string text_to_inject)
       : text_to_inject_(std::move(text_to_inject)) {}
 
   bool on_before_called() const { return on_before_called_; }
   bool on_after_called() const { return on_after_called_; }
 
-  bool OnBeforePaste(Textfield* sender, std::u16string* text) override {
+ protected:
+  std::u16string text_to_inject_;
+  bool on_before_called_ = false;
+  bool on_after_called_ = false;
+};
+
+// Controller that intercepts paste and optionally supplies text for insertion.
+// Used to verify TextfieldController::OnBeforePaste() and OnAfterPaste().
+class TextfieldPasteInterceptController
+    : public TextfieldClipboardControllerBase {
+ public:
+  using TextfieldClipboardControllerBase::TextfieldClipboardControllerBase;
+
+  void OnBeforePaste(Textfield* sender,
+                     base::OnceCallback<void(std::optional<std::u16string>)>
+                         callback) override {
+    on_before_called_ = true;
+    std::move(callback).Run(text_to_inject_);
+  }
+
+  void OnAfterPaste() override { on_after_called_ = true; }
+};
+
+// Controller that intercepts copying/cutting and optionally supplies text for
+// writing to the clipboard. Used to verify
+// TextfieldController::OnBeforeCutOrCopy() and OnAfterCutOrCopy().
+class TextfieldCutOrCopyInterceptController
+    : public TextfieldClipboardControllerBase {
+ public:
+  using TextfieldClipboardControllerBase::TextfieldClipboardControllerBase;
+
+  bool OnBeforeCutOrCopy(Textfield* sender, std::u16string* text) override {
     on_before_called_ = true;
     *text = text_to_inject_;
     return true;
   }
 
-  void OnAfterPaste() override { on_after_called_ = true; }
-
- private:
-  std::u16string text_to_inject_;
-  bool on_before_called_ = false;
-  bool on_after_called_ = false;
+  void OnAfterCutOrCopy(ui::ClipboardBuffer clipboard_type) override {
+    on_after_called_ = true;
+  }
 };
 
 // Class that focuses a textfield when it sees a KeyDown event.
@@ -505,10 +533,9 @@ ui::ClipboardBuffer TextfieldTest::GetAndResetCopiedToClipboard() {
 
 std::u16string TextfieldTest::GetClipboardText(
     ui::ClipboardBuffer clipboard_buffer) {
-  std::u16string text;
-  ui::Clipboard::GetForCurrentThread()->ReadText(
-      clipboard_buffer, /* data_dst = */ nullptr, &text);
-  return text;
+  return ui::clipboard_test_util::ReadText(ui::Clipboard::GetForCurrentThread(),
+                                           clipboard_buffer,
+                                           /* data_dst = */ nullptr);
 }
 
 void TextfieldTest::SetClipboardText(ui::ClipboardBuffer clipboard_buffer,
@@ -833,8 +860,7 @@ void TextfieldTest::VerifyTextfieldContextMenuContents(
   EXPECT_EQ(textfield_has_selection, menu->IsEnabledAt(menu_index++ /* CUT */));
   EXPECT_EQ(textfield_has_selection,
             menu->IsEnabledAt(menu_index++ /* COPY */));
-  EXPECT_NE(GetClipboardText(ui::ClipboardBuffer::kCopyPaste).empty(),
-            menu->IsEnabledAt(menu_index++ /* PASTE */));
+  EXPECT_TRUE(menu->IsEnabledAt(menu_index++ /* PASTE */));
   EXPECT_EQ(textfield_has_selection,
             menu->IsEnabledAt(menu_index++ /* DELETE */));
   EXPECT_TRUE(menu->IsEnabledAt(menu_index++ /* Separator */));
@@ -1359,7 +1385,11 @@ TEST_F(TextfieldTest, LineSelection) {
   // Select line towards right.
   SendEndEvent(true);
 #if BUILDFLAG(IS_MAC)
-  EXPECT_EQ(textfield_->GetText(), textfield_->GetSelectedText());
+  // Mac: Cmd+Shift+Right when whole line is selected (11->0) -> Should collapse
+  // to end (11->11). This matches the behavior fixed in
+  // https://issues.chromium.org/issues/396057270, where returning to the
+  // selection start position should collapse the selection.
+  EXPECT_EQ(u"", textfield_->GetSelectedText());
 #else
   EXPECT_EQ(u"67 89", textfield_->GetSelectedText());
 #endif
@@ -1668,11 +1698,15 @@ TEST_F(TextfieldTest, PasswordTest) {
   SetClipboardText(ui::ClipboardBuffer::kCopyPaste, u"foo");
 
   // Cut and copy should be disabled.
-  EXPECT_FALSE(textfield_->IsCommandIdEnabled(Textfield::kCut));
-  textfield_->ExecuteCommand(Textfield::kCut, 0);
+  EXPECT_FALSE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCut)));
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCut), 0);
   SendKeyEvent(ui::VKEY_X, false, true);
-  EXPECT_FALSE(textfield_->IsCommandIdEnabled(Textfield::kCopy));
-  textfield_->ExecuteCommand(Textfield::kCopy, 0);
+  EXPECT_FALSE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCopy)));
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCopy), 0);
   SendKeyEvent(ui::VKEY_C, false, true);
   SendAlternateCopy();
   EXPECT_EQ(u"foo", GetClipboardText(ui::ClipboardBuffer::kCopyPaste));
@@ -1682,8 +1716,10 @@ TEST_F(TextfieldTest, PasswordTest) {
   SendKeyEvent(ui::VKEY_DELETE, true, false);
 
   // Paste should work normally.
-  EXPECT_TRUE(textfield_->IsCommandIdEnabled(Textfield::kPaste));
-  textfield_->ExecuteCommand(Textfield::kPaste, 0);
+  EXPECT_TRUE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kPaste)));
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kPaste), 0);
   SendKeyEvent(ui::VKEY_V, false, true);
   SendAlternatePaste();
   EXPECT_EQ(u"foo", GetClipboardText(ui::ClipboardBuffer::kCopyPaste));
@@ -1697,8 +1733,10 @@ TEST_F(TextfieldTest, PasswordSelectWordTest) {
 
   // Select word command should be disabled.
   textfield_->SetEditableSelectionRange(gfx::Range(2));
-  EXPECT_FALSE(textfield_->IsCommandIdEnabled(Textfield::kSelectWord));
-  textfield_->ExecuteCommand(Textfield::kPaste, 0);
+  EXPECT_FALSE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectWord)));
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kPaste), 0);
   EXPECT_EQ(u"", textfield_->GetSelectedText());
 
   // Select word should select whole text instead of the nearest word.
@@ -2164,6 +2202,15 @@ TEST_F(TextfieldTest, SelectionOnRightClick) {
           ? u"hello world"
           : expected_right_click_word;
   EXPECT_EQ(expected_right_click_unfocused, textfield_->GetSelectedText());
+
+  // Verify right clicking when all text is selected does not reduce the
+  // selection to a single word. This covers the case where a user does
+  // right-click > "Select All", then right-clicks again to "Copy".
+  textfield_->SelectAll(false);
+  EXPECT_EQ(u"hello world", textfield_->GetSelectedText());
+  MoveMouseTo(gfx::Point(GetCursorPositionX(0), cursor_y));
+  ClickRightMouseButton();
+  EXPECT_EQ(u"hello world", textfield_->GetSelectedText());
 }
 
 TEST_F(TextfieldTest, DragToSelect) {
@@ -2276,7 +2323,8 @@ TEST_F(TextfieldTest, DragAndDrop_AcceptDrop) {
   bad_data.SetFilename(base::FilePath(FILE_PATH_LITERAL("x")));
   ui::ClipboardFormatType fmt = ui::ClipboardFormatType::BitmapType();
   bad_data.SetPickledData(fmt, base::Pickle());
-  bad_data.SetFileContents(base::FilePath(L"x"), "x");
+  bad_data.SetFileContents(base::FilePath(L"x"),
+                           base::byte_span_from_cstring("x"));
   bad_data.SetHtml(std::u16string(u"x"), GURL("x.org"));
   ui::DownloadFileInfo download(base::FilePath(), nullptr);
   bad_data.provider().SetDownloadFileInfo(&download);
@@ -2525,24 +2573,30 @@ TEST_F(TextfieldTest, ReadOnlyTest) {
 
   // Cut should be disabled.
   SetClipboardText(ui::ClipboardBuffer::kCopyPaste, u"Test");
-  EXPECT_FALSE(textfield_->IsCommandIdEnabled(Textfield::kCut));
-  textfield_->ExecuteCommand(Textfield::kCut, 0);
+  EXPECT_FALSE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCut)));
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCut), 0);
   SendKeyEvent(ui::VKEY_X, false, true);
   SendAlternateCut();
   EXPECT_EQ(u"Test", GetClipboardText(ui::ClipboardBuffer::kCopyPaste));
   EXPECT_EQ(u"read only", textfield_->GetText());
 
   // Paste should be disabled.
-  EXPECT_FALSE(textfield_->IsCommandIdEnabled(Textfield::kPaste));
-  textfield_->ExecuteCommand(Textfield::kPaste, 0);
+  EXPECT_FALSE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kPaste)));
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kPaste), 0);
   SendKeyEvent(ui::VKEY_V, false, true);
   SendAlternatePaste();
   EXPECT_EQ(u"read only", textfield_->GetText());
 
   // Copy should work normally.
   SetClipboardText(ui::ClipboardBuffer::kCopyPaste, u"Test");
-  EXPECT_TRUE(textfield_->IsCommandIdEnabled(Textfield::kCopy));
-  textfield_->ExecuteCommand(Textfield::kCopy, 0);
+  EXPECT_TRUE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCopy)));
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCopy), 0);
   EXPECT_EQ(u"read only", GetClipboardText(ui::ClipboardBuffer::kCopyPaste));
   SetClipboardText(ui::ClipboardBuffer::kCopyPaste, u"Test");
   SendKeyEvent(ui::VKEY_C, false, true);
@@ -2863,8 +2917,10 @@ TEST_F(TextfieldTest, CutCopyPaste) {
   // Ensure kCut cuts.
   textfield_->SetText(u"123");
   textfield_->SelectAll(false);
-  EXPECT_TRUE(textfield_->IsCommandIdEnabled(Textfield::kCut));
-  textfield_->ExecuteCommand(Textfield::kCut, 0);
+  EXPECT_TRUE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCut)));
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCut), 0);
   EXPECT_EQ(u"123", GetClipboardText(ui::ClipboardBuffer::kCopyPaste));
   EXPECT_EQ(u"", textfield_->GetText());
   EXPECT_EQ(ui::ClipboardBuffer::kCopyPaste, GetAndResetCopiedToClipboard());
@@ -2903,8 +2959,10 @@ TEST_F(TextfieldTest, CutCopyPaste) {
   // Ensure kCopy copies.
   textfield_->SetText(u"789");
   textfield_->SelectAll(false);
-  EXPECT_TRUE(textfield_->IsCommandIdEnabled(Textfield::kCopy));
-  textfield_->ExecuteCommand(Textfield::kCopy, 0);
+  EXPECT_TRUE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCopy)));
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCopy), 0);
   EXPECT_EQ(u"789", GetClipboardText(ui::ClipboardBuffer::kCopyPaste));
   EXPECT_EQ(ui::ClipboardBuffer::kCopyPaste, GetAndResetCopiedToClipboard());
 
@@ -2930,8 +2988,10 @@ TEST_F(TextfieldTest, CutCopyPaste) {
   // also ensure that [Ctrl]+[Alt]+[V] does nothing.
   SetClipboardText(ui::ClipboardBuffer::kCopyPaste, u"abc");
   textfield_->SetText(std::u16string());
-  EXPECT_TRUE(textfield_->IsCommandIdEnabled(Textfield::kPaste));
-  textfield_->ExecuteCommand(Textfield::kPaste, 0);
+  EXPECT_TRUE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kPaste)));
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kPaste), 0);
   EXPECT_EQ(u"abc", textfield_->GetText());
   SendKeyEvent(ui::VKEY_V, false, true);
   EXPECT_EQ(u"abcabc", textfield_->GetText());
@@ -3067,26 +3127,34 @@ TEST_F(TextfieldTest, SelectCommands) {
   // Select all and select word commands should both be enabled when there is no
   // selection.
   textfield_->SetEditableSelectionRange(gfx::Range(8));
-  EXPECT_TRUE(textfield_->IsCommandIdEnabled(Textfield::kSelectAll));
-  EXPECT_TRUE(textfield_->IsCommandIdEnabled(Textfield::kSelectWord));
+  EXPECT_TRUE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll)));
+  EXPECT_TRUE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectWord)));
   EXPECT_FALSE(GetTextfieldTestApi().touch_selection_controller());
 
   // Select word at current position. Select word command should now be disabled
   // since there is already a selection.
-  textfield_->ExecuteCommand(Textfield::kSelectWord, 0);
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectWord), 0);
   EXPECT_EQ(u"string", textfield_->GetSelectedText());
   EXPECT_EQ(gfx::Range(6, 12), textfield_->GetSelectedRange());
-  EXPECT_TRUE(textfield_->IsCommandIdEnabled(Textfield::kSelectAll));
-  EXPECT_FALSE(textfield_->IsCommandIdEnabled(Textfield::kSelectWord));
+  EXPECT_TRUE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll)));
+  EXPECT_FALSE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectWord)));
   EXPECT_FALSE(GetTextfieldTestApi().touch_selection_controller());
 
   // Select all text. Select all and select word commands should now both be
   // disabled.
-  textfield_->ExecuteCommand(Textfield::kSelectAll, 0);
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll), 0);
   EXPECT_EQ(u"hello string world", textfield_->GetSelectedText());
   EXPECT_EQ(gfx::Range(0, 18), textfield_->GetSelectedRange());
-  EXPECT_FALSE(textfield_->IsCommandIdEnabled(Textfield::kSelectAll));
-  EXPECT_FALSE(textfield_->IsCommandIdEnabled(Textfield::kSelectWord));
+  EXPECT_FALSE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll)));
+  EXPECT_FALSE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectWord)));
   EXPECT_FALSE(GetTextfieldTestApi().touch_selection_controller());
 }
 
@@ -3104,26 +3172,36 @@ TEST_F(TextfieldTest, SelectCommandsFromTouchEvent) {
   // Select all and select word commands should both be enabled when there is no
   // selection.
   textfield_->SetEditableSelectionRange(gfx::Range(8));
-  EXPECT_TRUE(textfield_->IsCommandIdEnabled(Textfield::kSelectAll));
-  EXPECT_TRUE(textfield_->IsCommandIdEnabled(Textfield::kSelectWord));
+  EXPECT_TRUE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll)));
+  EXPECT_TRUE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectWord)));
   EXPECT_FALSE(GetTextfieldTestApi().touch_selection_controller());
 
   // Select word at current position. Select word command should now be disabled
   // since there is already a selection.
-  textfield_->ExecuteCommand(Textfield::kSelectWord, ui::EF_FROM_TOUCH);
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectWord),
+      ui::EF_FROM_TOUCH);
   EXPECT_EQ(u"string", textfield_->GetSelectedText());
   EXPECT_EQ(gfx::Range(6, 12), textfield_->GetSelectedRange());
-  EXPECT_TRUE(textfield_->IsCommandIdEnabled(Textfield::kSelectAll));
-  EXPECT_FALSE(textfield_->IsCommandIdEnabled(Textfield::kSelectWord));
+  EXPECT_TRUE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll)));
+  EXPECT_FALSE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectWord)));
   EXPECT_TRUE(GetTextfieldTestApi().touch_selection_controller());
 
   // Select all text. Select all and select word commands should now both be
   // disabled.
-  textfield_->ExecuteCommand(Textfield::kSelectAll, ui::EF_FROM_TOUCH);
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll),
+      ui::EF_FROM_TOUCH);
   EXPECT_EQ(u"hello string world", textfield_->GetSelectedText());
   EXPECT_EQ(gfx::Range(0, 18), textfield_->GetSelectedRange());
-  EXPECT_FALSE(textfield_->IsCommandIdEnabled(Textfield::kSelectAll));
-  EXPECT_FALSE(textfield_->IsCommandIdEnabled(Textfield::kSelectWord));
+  EXPECT_FALSE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll)));
+  EXPECT_FALSE(textfield_->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectWord)));
   EXPECT_TRUE(GetTextfieldTestApi().touch_selection_controller());
 }
 #endif
@@ -4373,6 +4451,10 @@ TEST_F(TextfieldTest, SetAccessibleNameNotifiesAccessibilityEvent) {
   EXPECT_EQ(data.GetNameFrom(), ax::mojom::NameFrom::kAttribute);
 }
 
+// TODO(crbug.com/40672441): Remove this once ViewsAX is enabled on Windows.
+// kTextChanged from SetValue() is only fired on Windows so that UIA fires
+// UIA_Text_TextChangedEventId.
+#if BUILDFLAG(IS_WIN)
 // Changing the value of the textfield should trigger a kTextChanged event.
 TEST_F(TextfieldTest, SetValueAccessibilityEvents) {
   InitTextfield();
@@ -4383,11 +4465,10 @@ TEST_F(TextfieldTest, SetValueAccessibilityEvents) {
   EXPECT_EQ(1, counter.GetCount(ax::mojom::Event::kTextChanged));
   EXPECT_EQ(value, textfield_->GetViewAccessibility().GetValue());
 }
+#endif
 
 #if BUILDFLAG(IS_WIN)
 TEST_F(TextfieldTest, AccessibilityAttributes) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(::features::kUiaProvider);
   InitTextfield();
 
   ViewAXPlatformNodeDelegate* delegate =
@@ -5178,6 +5259,7 @@ TEST_F(TextfieldTest, EmojiItem_FieldWithText) {
 }
 
 #if BUILDFLAG(IS_MAC)
+
 // Tests to see if the BiDi submenu items are updated correctly when the
 // textfield's text direction is changed.
 TEST_F(TextfieldTest, TextServicesContextMenuTextDirectionTest) {
@@ -5244,6 +5326,45 @@ TEST_F(TextfieldTest, SecurePasswordInput) {
   textfield_->OnBlur();
   EXPECT_FALSE(ui::ScopedPasswordInputEnabler::IsPasswordInputEnabled());
 }
+
+TEST_F(TextfieldTest, SecureHasBeenAPasswordInput) {
+  InitTextfield();
+  ASSERT_FALSE(ui::ScopedPasswordInputEnabler::IsPasswordInputEnabled());
+
+  // Shouldn't enable secure input if it's not a password textfield.
+  textfield_->OnFocus();
+  EXPECT_FALSE(ui::ScopedPasswordInputEnabler::IsPasswordInputEnabled());
+
+  textfield_->SetTextInputFlags(textfield_->GetTextInputFlags() |
+                                ui::TEXT_INPUT_FLAG_HAS_BEEN_PASSWORD);
+
+  // Single matched calls immediately update IsPasswordInputEnabled().
+  textfield_->OnFocus();
+  EXPECT_TRUE(ui::ScopedPasswordInputEnabler::IsPasswordInputEnabled());
+
+  textfield_->OnBlur();
+  EXPECT_FALSE(ui::ScopedPasswordInputEnabler::IsPasswordInputEnabled());
+}
+
+TEST_F(TextfieldTest, SecureHasBeenACustomPasswordInput) {
+  InitTextfield();
+  ASSERT_FALSE(ui::ScopedPasswordInputEnabler::IsPasswordInputEnabled());
+
+  // Shouldn't enable secure input if it's not a password textfield.
+  textfield_->OnFocus();
+  EXPECT_FALSE(ui::ScopedPasswordInputEnabler::IsPasswordInputEnabled());
+
+  textfield_->SetTextInputFlags(textfield_->GetTextInputFlags() |
+                                ui::TEXT_INPUT_FLAG_HAS_BEEN_CUSTOM_PASSWORD);
+
+  // Single matched calls immediately update IsPasswordInputEnabled().
+  textfield_->OnFocus();
+  EXPECT_TRUE(ui::ScopedPasswordInputEnabler::IsPasswordInputEnabled());
+
+  textfield_->OnBlur();
+  EXPECT_FALSE(ui::ScopedPasswordInputEnabler::IsPasswordInputEnabled());
+}
+
 #endif  // BUILDFLAG(IS_MAC)
 
 TEST_F(TextfieldTest, AccessibilitySelectionEvents) {
@@ -5562,8 +5683,6 @@ TEST_F(TextfieldTest, AccessibleDefaultActionVerb) {
 
 #if BUILDFLAG(SUPPORTS_AX_TEXT_OFFSETS)
 TEST_F(TextfieldTest, WordOffsets) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(::features::kUiaProvider);
   InitTextfield();
   const ::ui::ScopedAXModeSetter ax_mode_setter(ui::AXMode::kNativeAPIs);
   MockAXModeAdded();
@@ -5583,8 +5702,6 @@ TEST_F(TextfieldTest, WordOffsets) {
 }
 
 TEST_F(TextfieldTest, WordOffsetsAXNotOn) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(::features::kUiaProvider);
   InitTextfield();
   const ::ui::ScopedAXModeSetter ax_mode_setter(ui::AXMode::kNativeAPIs);
   ASSERT_FALSE(textfield_->GetViewAccessibility().is_initialized());
@@ -5632,9 +5749,6 @@ TEST_F(TextfieldTest, AccessibleGraphemeOffsets) {
       {u"ab\U0001D11Ecd", {0, 10, 20, 30, 40, 50}},
   });
 
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(::features::kUiaProvider);
-
   InitTextfield();
   const ::ui::ScopedAXModeSetter ax_mode_setter(ui::AXMode::kNativeAPIs);
   MockAXModeAdded();
@@ -5661,8 +5775,6 @@ TEST_F(TextfieldTest, AccessibleGraphemeOffsets) {
 }
 
 TEST_F(TextfieldTest, AccessibleGraphemeOffsetsObscured) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(::features::kUiaProvider);
   InitTextfield();
   const ::ui::ScopedAXModeSetter ax_mode_setter(ui::AXMode::kNativeAPIs);
   MockAXModeAdded();
@@ -5684,8 +5796,6 @@ TEST_F(TextfieldTest, AccessibleGraphemeOffsetsObscured) {
 }
 
 TEST_F(TextfieldTest, AccessibleGraphemeOffsetsElidedTail) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(::features::kUiaProvider);
   InitTextfield();
   const ::ui::ScopedAXModeSetter ax_mode_setter(ui::AXMode::kNativeAPIs);
   MockAXModeAdded();
@@ -5710,8 +5820,6 @@ TEST_F(TextfieldTest, AccessibleGraphemeOffsetsElidedTail) {
 }
 
 TEST_F(TextfieldTest, AccessibleGraphemeOffsetsIndependentOfDisplayOffset) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(::features::kUiaProvider);
   InitTextfield();
   const ::ui::ScopedAXModeSetter ax_mode_setter(ui::AXMode::kNativeAPIs);
   MockAXModeAdded();
@@ -5788,7 +5896,8 @@ TEST_F(TextfieldTest, OnBeforePasteIntercepts) {
   TextfieldPasteInterceptController controller(u" hello world ");
   textfield_->set_controller(&controller);
   SetClipboardText(ui::ClipboardBuffer::kCopyPaste, u"a");
-  textfield_->ExecuteCommand(Textfield::kPaste, 0);
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kPaste), 0);
   EXPECT_TRUE(controller.on_before_called());
   EXPECT_TRUE(controller.on_after_called());
   EXPECT_EQ(textfield_->GetText(), u"hello world");
@@ -5798,7 +5907,8 @@ TEST_F(TextfieldTest, OnBeforePasteIntercepts) {
   TextfieldPasteInterceptController controller_space(u"  \t  ");
   textfield_->set_controller(&controller_space);
   SetClipboardText(ui::ClipboardBuffer::kCopyPaste, u"  hello world ");
-  textfield_->ExecuteCommand(Textfield::kPaste, 0);
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kPaste), 0);
   EXPECT_TRUE(controller_space.on_before_called());
   EXPECT_TRUE(controller_space.on_after_called());
   EXPECT_EQ(textfield_->GetText(), u" ");
@@ -5810,9 +5920,196 @@ TEST_F(TextfieldTest, OnBeforePasteFallbackToClipboard) {
 
   textfield_->SetText(u"");
   SetClipboardText(ui::ClipboardBuffer::kCopyPaste, u" hello world ");
-  textfield_->ExecuteCommand(Textfield::kPaste, 0);
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kPaste), 0);
 
   EXPECT_EQ(textfield_->GetText(), u"hello world");
 }
+
+// Intercept copy via controller, supplying text; calls both OnBeforeCutOrCopy()
+// and OnAfterCutOrCopy().
+TEST_F(TextfieldTest, OnBeforeCopyIntercepts) {
+  InitTextfield();
+
+  TextfieldCutOrCopyInterceptController controller(u"hello world");
+  textfield_->set_controller(&controller);
+  textfield_->SetText(u"foo");
+  textfield_->SelectWord();
+  SetClipboardText(ui::ClipboardBuffer::kCopyPaste, u"");
+
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCopy), 0);
+  EXPECT_TRUE(controller.on_before_called());
+  EXPECT_TRUE(controller.on_after_called());
+  EXPECT_EQ(GetClipboardText(ui::ClipboardBuffer::kCopyPaste), u"hello world");
+  EXPECT_EQ(textfield_->GetText(), u"foo");
+}
+
+// When controller does not intercept, Textfield falls back to its regular
+// implementation of putting selected text in the clipboard.
+TEST_F(TextfieldTest, OnBeforeCopyFallbackToSelection) {
+  InitTextfield();
+
+  textfield_->SetText(u"foo");
+  textfield_->SelectWord();
+  EXPECT_EQ(textfield_->GetSelectedText(), u"foo");
+  SetClipboardText(ui::ClipboardBuffer::kCopyPaste, u"bar");
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCopy), 0);
+
+  EXPECT_EQ(textfield_->GetText(), u"foo");
+  EXPECT_EQ(GetClipboardText(ui::ClipboardBuffer::kCopyPaste), u"foo");
+}
+
+// Intercept cut via controller, supplying text; calls both OnBeforeCutOrCopy()
+// and OnAfterCutOrCopy().
+TEST_F(TextfieldTest, OnBeforeCutIntercepts) {
+  InitTextfield();
+
+  TextfieldCutOrCopyInterceptController controller(u"hello world");
+  textfield_->set_controller(&controller);
+  textfield_->SetText(u"foo bar");
+  textfield_->SetEditableSelectionRange(gfx::Range(0));
+  textfield_->SelectWord();
+  SetClipboardText(ui::ClipboardBuffer::kCopyPaste, u"");
+
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCut), 0);
+  EXPECT_TRUE(controller.on_before_called());
+  EXPECT_TRUE(controller.on_after_called());
+  EXPECT_EQ(GetClipboardText(ui::ClipboardBuffer::kCopyPaste), u"hello world");
+  EXPECT_EQ(textfield_->GetText(), u" bar");
+}
+
+// When controller does not intercept, Textfield falls back to its regular
+// implementation of putting selected text in the clipboard and deleting the
+// selection.
+TEST_F(TextfieldTest, OnBeforeCutFallbackToClipboard) {
+  InitTextfield();
+
+  textfield_->SetText(u"foo bar");
+  textfield_->SetEditableSelectionRange(gfx::Range(0));
+  textfield_->SelectWord();
+  SetClipboardText(ui::ClipboardBuffer::kCopyPaste, u"baz");
+  textfield_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCut), 0);
+
+  EXPECT_EQ(textfield_->GetText(), u" bar");
+  EXPECT_EQ(GetClipboardText(ui::ClipboardBuffer::kCopyPaste), u"foo");
+}
+
+#if BUILDFLAG(IS_MAC)
+TEST_F(TextfieldTest, SelectionExtensionTest) {
+  auto widget = CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET);
+  auto* textfield = widget->SetContentsView(std::make_unique<Textfield>());
+  textfield->SetText(u"0123456789");  // Length 10
+  textfield->SetBounds(0, 0, 100, 30);
+  textfield->RequestFocus();
+
+  // Scenario 1: Middle -> Right -> Left -> Expect Whole Line
+  // Start at 5.
+  textfield->SetSelectedRange(gfx::Range(5, 5));
+
+  // Cmd+Shift+Right (Move to End and Modify Selection)
+  TextfieldTestApi(textfield).ExecuteTextEditCommand(
+      ui::TextEditCommand::MOVE_TO_END_OF_LINE_AND_MODIFY_SELECTION);
+  // Expect Selection 5-10.
+  EXPECT_EQ(gfx::Range(5, 10), textfield->GetSelectedRange());
+
+  // Cmd+Shift+Left (Move to Start and Modify Selection)
+  TextfieldTestApi(textfield).ExecuteTextEditCommand(
+      ui::TextEditCommand::MOVE_TO_BEGINNING_OF_LINE_AND_MODIFY_SELECTION);
+  // Expect Selection 0-10 (Whole line).
+  // Selection start should be 10, Caret 0. (Range(10, 0) normalized to (0, 10))
+  EXPECT_EQ(gfx::Range(10, 0), textfield->GetSelectedRange());
+
+  // Cmd+Shift+Right -> Expect Collapsed at End
+
+  // Cmd+Shift+Right
+  TextfieldTestApi(textfield).ExecuteTextEditCommand(
+      ui::TextEditCommand::MOVE_TO_END_OF_LINE_AND_MODIFY_SELECTION);
+  // Expect Selection 10-10 (Collapsed).
+  // The selection should collapse to the selection start (10) because we are
+  // returning to it.
+  EXPECT_EQ(gfx::Range(10, 10), textfield->GetSelectedRange());
+}
+
+// TODO(crbug.com/396057270): Add test cases for checking a word in the middle
+// of a line and behaviors when the selection range bounds are not at the end of
+// the word. These tests are currently omitted due to issues with
+// Option+Shift+Left/Right handling and will be added after the fix.
+TEST_F(TextfieldTest, SelectionExtensionTestByWord) {
+  auto widget = CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET);
+  auto* textfield = widget->SetContentsView(std::make_unique<Textfield>());
+  textfield->SetBounds(0, 0, 100, 30);
+  textfield->RequestFocus();
+
+  textfield->SetText(u"12345");
+
+  // Case 1: |12345 => OSR => [12345> => OSL => |12345
+  // Initial: Caret at 0
+  textfield->SetSelectedRange(gfx::Range(0, 0));
+
+  // OSR (Option+Shift+Right) -> Select whole word
+  TextfieldTestApi(textfield).ExecuteTextEditCommand(
+      ui::TextEditCommand::MOVE_WORD_RIGHT_AND_MODIFY_SELECTION);
+  // Expect [12345> (0, 5)
+  EXPECT_EQ(gfx::Range(0, 5), textfield->GetSelectedRange());
+
+  // OSL (Option+Shift+Left) -> Collapse to start
+  TextfieldTestApi(textfield).ExecuteTextEditCommand(
+      ui::TextEditCommand::MOVE_WORD_LEFT_AND_MODIFY_SELECTION);
+  // Expect |12345 (0, 0)
+  EXPECT_EQ(gfx::Range(0, 0), textfield->GetSelectedRange());
+
+  // Case 2: 12345| => OSL => <12345] => OSR => 12345|
+  // Initial: Caret at 5
+  textfield->SetSelectedRange(gfx::Range(5, 5));
+
+  // OSL -> Select whole word backwards
+  TextfieldTestApi(textfield).ExecuteTextEditCommand(
+      ui::TextEditCommand::MOVE_WORD_LEFT_AND_MODIFY_SELECTION);
+  // Expect <12345] (5, 0)
+  EXPECT_EQ(gfx::Range(5, 0), textfield->GetSelectedRange());
+
+  // OSR -> Collapse to end
+  TextfieldTestApi(textfield).ExecuteTextEditCommand(
+      ui::TextEditCommand::MOVE_WORD_RIGHT_AND_MODIFY_SELECTION);
+  // Expect 12345| (5, 5)
+  EXPECT_EQ(gfx::Range(5, 5), textfield->GetSelectedRange());
+
+  // Case 3: |12345 => OSD => [12345> => OSU => |12345
+  // Initial: Caret at 0
+  textfield->SetSelectedRange(gfx::Range(0, 0));
+
+  // OSD (Option+Shift+Down) -> Select whole line
+  TextfieldTestApi(textfield).ExecuteTextEditCommand(
+      ui::TextEditCommand::MOVE_TO_END_OF_LINE_AND_MODIFY_SELECTION);
+  // Expect [12345> (0, 5)
+  EXPECT_EQ(gfx::Range(0, 5), textfield->GetSelectedRange());
+
+  // OSU -> Collapse to start
+  TextfieldTestApi(textfield).ExecuteTextEditCommand(
+      ui::TextEditCommand::MOVE_TO_BEGINNING_OF_LINE_AND_MODIFY_SELECTION);
+  // Expect |12345 (0, 0)
+  EXPECT_EQ(gfx::Range(0, 0), textfield->GetSelectedRange());
+
+  // Case 4: 12345| => OSU => <12345] => OSD => 12345|
+  // Initial: Caret at 5
+  textfield->SetSelectedRange(gfx::Range(5, 5));
+
+  // OSU (Option+Shift+Up) -> Select whole line backwards
+  TextfieldTestApi(textfield).ExecuteTextEditCommand(
+      ui::TextEditCommand::MOVE_TO_BEGINNING_OF_LINE_AND_MODIFY_SELECTION);
+  // Expect <12345] (5, 0)
+  EXPECT_EQ(gfx::Range(5, 0), textfield->GetSelectedRange());
+
+  // OSD -> Collapse to end
+  TextfieldTestApi(textfield).ExecuteTextEditCommand(
+      ui::TextEditCommand::MOVE_TO_END_OF_LINE_AND_MODIFY_SELECTION);
+  // Expect 12345| (5, 5)
+  EXPECT_EQ(gfx::Range(5, 5), textfield->GetSelectedRange());
+}
+#endif  // BUILDFLAG(IS_MAC)
 
 }  // namespace views::test

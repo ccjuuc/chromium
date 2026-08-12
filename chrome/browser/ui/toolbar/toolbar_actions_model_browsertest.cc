@@ -8,10 +8,12 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/extension_set.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -27,8 +29,14 @@ constexpr char kExtension3Name[] = "bar";
 
 class ToolbarActionsModelBrowserTest : public extensions::ExtensionBrowserTest {
  public:
-  ToolbarActionsModelBrowserTest() = default;
+  ToolbarActionsModelBrowserTest() {
+    scoped_feature_list_.InitAndDisableFeature(
+        features::kExtensionsPinnedByDefault);
+  }
   ~ToolbarActionsModelBrowserTest() override = default;
+
+ protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
 
   void SetUpOnMainThread() override {
     extensions::ExtensionBrowserTest::SetUpOnMainThread();
@@ -147,4 +155,15 @@ IN_PROC_BROWSER_TEST_F(ToolbarActionsModelBrowserTest, PinnedStatePersistence) {
                   extension1->id(), extension2->id(), extension3->id()));
   EXPECT_THAT(toolbar_model()->pinned_action_ids(),
               ::testing::ElementsAre(extension3->id(), extension2->id()));
+}
+
+// Test that a site is NOT restricted or policy-blocked when there are no
+// extensions installed.
+IN_PROC_BROWSER_TEST_F(ToolbarActionsModelBrowserTest,
+                       ActionsModelRestrictedUrlsWithNoExtensions) {
+  EXPECT_TRUE(toolbar_model()->action_ids().empty());
+
+  GURL example_url("http://www.example.com");
+  EXPECT_FALSE(toolbar_model()->IsRestrictedUrl(example_url));
+  EXPECT_FALSE(toolbar_model()->IsPolicyBlockedHost(example_url));
 }

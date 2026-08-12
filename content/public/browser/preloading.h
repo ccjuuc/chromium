@@ -52,17 +52,11 @@ enum class PreloadingType {
   // resources with the no-store cache-control header.
   kNoStatePrefetch = 5,
 
-  // Link-Preview loads a page with prerendering infrastructures in a dedicated
-  // mini tab so that users can take a look at the content before visiting it.
-  // TODO(b:291867362): This is not used by the current implementation,
-  // but might be reused in the future.
-  kLinkPreview = 6,
-
   // Like prerendering, it fetches resources in advance; but unlike prerendering
   // it does not execute JavaScript. It is designed to replace kNoStatePrefetch.
   kPrerenderUntilScript = 7,
 };
-// LINT.ThenChange()
+// LINT.ThenChange(//tools/metrics/histograms/metadata/preloading/histograms.xml:PreloadingType)
 
 // Defines various triggering mechanisms which triggers different preloading
 // operations mentioned in preloading.h. The integer portion is used for UKM
@@ -159,7 +153,7 @@ inline constexpr PreloadingPredictor kEagerViewportHeuristic(
     7,
     "EagerViewportHeuristic");
 }  // namespace preloading_predictor
-// LINT.ThenChange()
+// LINT.ThenChange(//tools/metrics/histograms/metadata/preloading/histograms.xml:PreloadingPredictor)
 
 // Defines if a preloading operation is eligible for a given preloading
 // trigger.
@@ -266,13 +260,15 @@ enum class PreloadingEligibility {
   kRedirectToServiceWorker = 23,
 
   // The url was not eligible to be prefetched because there was a registered
-  // service worker with no fetch handler (when
-  // `kPrefetchServiceWorkerNoFetchHandlerFix` is enabled,
-  // https://crbug.com/379076354).
+  // service worker with no fetch handler.
   // This case was previously counted as `kUserHasServiceWorker`.
   // Even after the initial ServiceWorker support (https://crbug.com/40947546),
   // this will be still used for ServiceWorker-ineligible prefetches.
   kUserHasServiceWorkerNoFetchHandler = 24,
+
+  // The URL is not allowed by connection allowlist.
+  // See https://github.com/WICG/connection-allowlists.
+  kBlockedByConnectionAllowlist = 25,
 
   // ##########################################################################
   // The range 50-99 is reserved for corresponding values in `PrefetchStatus`.

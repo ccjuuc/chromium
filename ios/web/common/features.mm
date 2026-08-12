@@ -49,7 +49,14 @@ BASE_FEATURE(kSmoothScrollingDefault,
 #endif
 );
 
-BASE_FEATURE(kFullscreenScrollThreshold, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kSmoothScrollingUseDelegate, base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool ShouldUseBroadcasterForSmoothScrolling() {
+  return base::FeatureList::IsEnabled(kSmoothScrollingDefault) &&
+         !base::FeatureList::IsEnabled(kSmoothScrollingUseDelegate);
+}
+
+BASE_FEATURE(kFullscreenScrollThreshold, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // This feature will always be disabled and will only be enabled by tests.
 BASE_FEATURE(kForceSynthesizedRestoreSession,
@@ -62,8 +69,6 @@ BASE_FEATURE(kDisableRaccoon, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kUserAgentBugFixVersion, base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kLogJavaScriptErrors, base::FEATURE_DISABLED_BY_DEFAULT);
-
 BASE_FEATURE(kWebKitHandlesMarketplaceKitLinks,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -73,9 +78,6 @@ BASE_FEATURE(kRestoreWKWebViewEditMenuHandler,
 BASE_FEATURE(kLogCrWebJavaScriptErrors, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kAssertOnJavaScriptErrors, base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kCreateTabHelperOnlyForRealizedWebStates,
-             base::FEATURE_DISABLED_BY_DEFAULT);
 
 bool IsFullscreenScrollThresholdEnabled() {
   return !base::FeatureList::IsEnabled(kSmoothScrollingDefault) &&
@@ -89,11 +91,38 @@ bool IsWebInspectorSupportEnabled() {
   return false;
 }
 
-bool CreateTabHelperOnlyForRealizedWebStates() {
-  return base::FeatureList::IsEnabled(kCreateTabHelperOnlyForRealizedWebStates);
-}
-
 BASE_FEATURE(kUpdateSSLStatusOnNavigationItemLazyCreation,
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kEnableBEContextMenuConfiguration,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kIOSDownloadSanitizeFilename, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kNetErrorFromErrorChainKillSwitch,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kIOSCobalt, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kIOSCobaltDeveloperMode, base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool IsCobaltEnabled() {
+  return base::FeatureList::IsEnabled(kIOSCobalt);
+}
+bool IsCobaltDeveloperModeEnabled() {
+  return base::FeatureList::IsEnabled(kIOSCobaltDeveloperMode);
+}
+
+BASE_FEATURE(kCertVerificationWorkaroundKillSwitch,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kIOSScriptMessageConversionDurationLogging,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool IsScriptMessageConversionDurationLoggingEnabled() {
+  return base::FeatureList::IsEnabled(
+      kIOSScriptMessageConversionDurationLogging);
+}
+
+BASE_FEATURE(kWebFrameTree, base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace web::features

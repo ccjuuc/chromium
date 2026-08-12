@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/platform/audio/audio_destination_uma_reporter.h"
 
 #include "base/metrics/histogram_functions.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 
@@ -48,6 +49,13 @@ AudioDestinationUmaReporter::AudioDestinationUmaReporter(
       base::StrCat({fifo_underrun_histogram_name_, ".",
                     WebAudioLatencyHint::AsString(latency_hint_)});
 
+  unexpected_fifo_underrun_histogram_name_ = GetExpectedHistogramName(
+      kUnexpectedFifoUnderrunHistogramNameBase, use_audio_worklet_,
+      /*duration=*/"Intervals");
+  unexpected_fifo_underrun_histogram_name_with_latency_tag_ =
+      base::StrCat({unexpected_fifo_underrun_histogram_name_, ".",
+                    WebAudioLatencyHint::AsString(latency_hint_)});
+
   total_playout_delay_histogram_name_ = GetExpectedHistogramName(
       kTotalPlayoutDelayHistogramNameBase, use_audio_worklet_,
       /*duration=*/std::nullopt);
@@ -89,6 +97,20 @@ AudioDestinationUmaReporter::~AudioDestinationUmaReporter() {
     base::UmaHistogramCustomCounts(
         fifo_underrun_histogram_name_with_latency_tag_, fifo_underrun_count_, 1,
         1000, 50);
+
+    unexpected_fifo_underrun_histogram_name_ = GetExpectedHistogramName(
+        kUnexpectedFifoUnderrunHistogramNameBase, use_audio_worklet_,
+        /*duration=*/"Short");
+    unexpected_fifo_underrun_histogram_name_with_latency_tag_ =
+        base::StrCat({unexpected_fifo_underrun_histogram_name_, ".",
+                      WebAudioLatencyHint::AsString(latency_hint_)});
+
+    base::UmaHistogramCustomCounts(unexpected_fifo_underrun_histogram_name_,
+                                   unexpected_fifo_underrun_count_, 1, 1000,
+                                   50);
+    base::UmaHistogramCustomCounts(
+        unexpected_fifo_underrun_histogram_name_with_latency_tag_,
+        unexpected_fifo_underrun_count_, 1, 1000, 50);
   }
 }
 
@@ -105,23 +127,33 @@ void AudioDestinationUmaReporter::IncreaseFifoUnderrunCount() {
   fifo_underrun_count_++;
 }
 
+void AudioDestinationUmaReporter::IncreaseUnexpectedFifoUnderrunCount() {
+  unexpected_fifo_underrun_count_++;
+}
+
 void AudioDestinationUmaReporter::Report() {
   if (++callback_count_ >= kMetricsReportCycle) {
     base::UmaHistogramCustomCounts(
         fifo_delay_histogram_name_,
-        fifo_delay_sum_.InMilliseconds() / kMetricsReportCycle, 1, 1000, 50);
+        base::saturated_cast<int>(fifo_delay_sum_.InMilliseconds() /
+                                  kMetricsReportCycle),
+        1, 1000, 50);
     base::UmaHistogramCustomCounts(
         fifo_delay_histogram_name_with_latency_tag_,
-        fifo_delay_sum_.InMilliseconds() / kMetricsReportCycle, 1, 1000, 50);
+        base::saturated_cast<int>(fifo_delay_sum_.InMilliseconds() /
+                                  kMetricsReportCycle),
+        1, 1000, 50);
 
     base::UmaHistogramCustomCounts(
         total_playout_delay_histogram_name_,
-        total_playout_delay_sum_.InMilliseconds() / kMetricsReportCycle, 1,
-        1000, 50);
+        base::saturated_cast<int>(total_playout_delay_sum_.InMilliseconds() /
+                                  kMetricsReportCycle),
+        1, 1000, 50);
     base::UmaHistogramCustomCounts(
         total_playout_delay_histogram_name_with_latency_tag_,
-        total_playout_delay_sum_.InMilliseconds() / kMetricsReportCycle, 1,
-        1000, 50);
+        base::saturated_cast<int>(total_playout_delay_sum_.InMilliseconds() /
+                                  kMetricsReportCycle),
+        1, 1000, 50);
 
     fifo_delay_sum_ = base::TimeDelta();
     total_playout_delay_sum_ = base::TimeDelta();
@@ -131,6 +163,13 @@ void AudioDestinationUmaReporter::Report() {
     base::UmaHistogramCustomCounts(
         fifo_underrun_histogram_name_with_latency_tag_, fifo_underrun_count_, 1,
         1000, 50);
+
+    base::UmaHistogramCustomCounts(unexpected_fifo_underrun_histogram_name_,
+                                   unexpected_fifo_underrun_count_, 1, 1000,
+                                   50);
+    base::UmaHistogramCustomCounts(
+        unexpected_fifo_underrun_histogram_name_with_latency_tag_,
+        unexpected_fifo_underrun_count_, 1, 1000, 50);
 
     int render_time_percentage =
         PercentOfCallbackInterval(render_total_duration_);
@@ -157,6 +196,7 @@ void AudioDestinationUmaReporter::Report() {
 
     callback_count_ = 0;
     fifo_underrun_count_ = 0;
+    unexpected_fifo_underrun_count_ = 0;
     render_total_duration_ = base::TimeDelta();
     request_render_total_duration_ = base::TimeDelta();
     request_render_gap_total_duration_ = base::TimeDelta();
@@ -178,6 +218,13 @@ void AudioDestinationUmaReporter::UpdateMetricNameForDualThreadMode() {
       /*duration=*/"Intervals");
   fifo_underrun_histogram_name_with_latency_tag_ =
       base::StrCat({fifo_underrun_histogram_name_, ".",
+                    WebAudioLatencyHint::AsString(latency_hint_)});
+
+  unexpected_fifo_underrun_histogram_name_ = GetExpectedHistogramName(
+      kUnexpectedFifoUnderrunHistogramNameBase, use_audio_worklet_,
+      /*duration=*/"Intervals");
+  unexpected_fifo_underrun_histogram_name_with_latency_tag_ =
+      base::StrCat({unexpected_fifo_underrun_histogram_name_, ".",
                     WebAudioLatencyHint::AsString(latency_hint_)});
 
   total_playout_delay_histogram_name_ = GetExpectedHistogramName(

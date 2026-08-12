@@ -5,9 +5,14 @@
 #include "components/optimization_guide/core/model_execution/model_execution_manager.h"
 
 #include <memory>
+#include <optional>
+#include <string>
 
-#include "base/files/file_path.h"
-#include "base/functional/callback_helpers.h"
+#include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/strings/strcat.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/protobuf_matchers.h"
@@ -15,29 +20,26 @@
 #include "base/test/task_environment.h"
 #include "base/test/test.pb.h"
 #include "base/test/test_future.h"
-#include "components/optimization_guide/core/delivery/test_model_info_builder.h"
-#include "components/optimization_guide/core/delivery/test_optimization_guide_model_provider.h"
+#include "base/time/time.h"
 #include "components/optimization_guide/core/model_execution/model_execution_fetcher.h"
-#include "components/optimization_guide/core/model_execution/on_device_model_access_controller.h"
-#include "components/optimization_guide/core/model_execution/on_device_model_service_controller.h"
 #include "components/optimization_guide/core/model_execution/remote_model_executor.h"
-#include "components/optimization_guide/core/model_execution/test/fake_model_broker.h"
 #include "components/optimization_guide/core/model_execution/test/request_builder.h"
-#include "components/optimization_guide/core/model_execution/test/response_holder.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
+#include "components/optimization_guide/core/model_quality/model_quality_log_entry.h"
 #include "components/optimization_guide/core/optimization_guide_logger.h"
+#include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/optimization_guide/core/optimization_guide_util.h"
 #include "components/optimization_guide/proto/features/forms_classifications.pb.h"
-#include "components/prefs/pref_service.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
-#include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/variations/scoped_variations_ids_provider.h"
+#include "net/http/http_status_code.h"
+#include "services/network/public/cpp/data_element.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 namespace optimization_guide {
 
@@ -62,9 +64,47 @@ class MockModelExecutionFetcher : public ModelExecutionFetcher {
 class MockDelegate : public ModelExecutionManager::Delegate {
  public:
   MOCK_METHOD(std::unique_ptr<ModelExecutionFetcher>,
-              CreateLegionFetcher,
+              CreatePrivateAiFetcher,
               (),
               (override));
+};
+
+class RemoteResponseHolder {
+ public:
+  RemoteResponseHolder() = default;
+  ~RemoteResponseHolder() = default;
+
+  OptimizationGuideModelExecutionResultCallback GetCallback() {
+    CHECK(!weak_ptr_factory_.HasWeakPtrs());  // Shouldn't be reused.
+    return base::BindRepeating(&RemoteResponseHolder::OnResponse,
+                               weak_ptr_factory_.GetWeakPtr());
+  }
+
+  bool GetFinalStatus() { return future_.Get(); }
+
+  template <typename T>
+  T GetOutput() const {
+    return *ParsedAnyMetadata<T>(result_->response.value());
+  }
+
+  OptimizationGuideModelExecutionError::ModelExecutionError error() const {
+    return result_->response.error().error();
+  }
+
+  ModelQualityLogEntry* log_entry() { return log_entry_.get(); }
+
+ private:
+  void OnResponse(OptimizationGuideModelExecutionResult result,
+                  std::unique_ptr<ModelQualityLogEntry> log_entry) {
+    log_entry_ = std::move(log_entry);
+    result_.emplace(std::move(result));
+    future_.SetValue(result_->response.has_value());
+  }
+
+  base::test::TestFuture<bool> future_;
+  std::optional<OptimizationGuideModelExecutionResult> result_;
+  std::unique_ptr<ModelQualityLogEntry> log_entry_;
+  base::WeakPtrFactory<RemoteResponseHolder> weak_ptr_factory_{this};
 };
 
 proto::ExecuteResponse BuildComposeResponse(const std::string& output) {
@@ -98,7 +138,7 @@ class ModelExecutionManagerTest : public testing::Test {
   bool SimulateResponse(const std::string& content,
                         net::HttpStatusCode http_status) {
     return test_url_loader_factory_.SimulateResponseForPendingRequest(
-        kOptimizationGuideServiceModelExecutionDefaultURL, content, http_status,
+        switches::GetModelExecutionServiceURL().spec(), content, http_status,
         network::TestURLLoaderFactory::kUrlMatchPrefix);
   }
 
@@ -190,6 +230,8 @@ TEST_F(ModelExecutionManagerTest, ExecuteModelWithUserSignIn) {
             "test_id");
   histogram_tester.ExpectUniqueSample(
       "OptimizationGuide.ModelExecution.Result.Compose", true, 1);
+  histogram_tester.ExpectTotalCount(
+      "OptimizationGuide.ModelExecution.FetchLatency2.Compose", 1);
 }
 
 // Tests that when a new request is issued and the total number of active
@@ -215,7 +257,7 @@ TEST_F(ModelExecutionManagerTest, MultipleParallelRequestsLimit) {
       response_holder2.GetCallback());
 
   test_url_loader_factory()->EraseResponse(
-      GURL(kOptimizationGuideServiceModelExecutionDefaultURL));
+      switches::GetModelExecutionServiceURL());
   EXPECT_TRUE(SimulateSuccessfulResponse());
 
   EXPECT_TRUE(response_holder2.GetFinalStatus());
@@ -238,11 +280,14 @@ TEST_F(ModelExecutionManagerTest, MultipleParallelRequestsLimit) {
       "OptimizationGuide.ModelExecution.Result.Compose", true, 1);
   histogram_tester.ExpectBucketCount(
       "OptimizationGuide.ModelExecution.Result.Compose", false, 1);
+  histogram_tester.ExpectTotalCount(
+      "OptimizationGuide.ModelExecution.FetchLatency2.Compose", 2);
 }
 
 // Tests that multiple parallel model executions are possible for features that
 // support it (like kFormsClassification).
 TEST_F(ModelExecutionManagerTest, MultipleParallelRequests) {
+  base::HistogramTester histogram_tester;
   RemoteResponseHolder response_holder1, response_holder2;
   SetAutomaticIssueOfAccessTokens();
 
@@ -277,6 +322,8 @@ TEST_F(ModelExecutionManagerTest, MultipleParallelRequests) {
   ASSERT_TRUE(response_holder2.GetFinalStatus());
   EXPECT_THAT(response_holder2.GetOutput<proto::AutofillAiTypeResponse>(),
               EqualsProto(response));
+  histogram_tester.ExpectTotalCount(
+      "OptimizationGuide.ModelExecution.FetchLatency2.FormsClassifications", 2);
 }
 
 class ModelExecutionManagerDelegateTest : public ModelExecutionManagerTest {
@@ -301,26 +348,44 @@ TEST_F(ModelExecutionManagerDelegateTest, UsesDelegateToCreateFetcher) {
   SetAutomaticIssueOfAccessTokens();
   auto fetcher = std::make_unique<MockModelExecutionFetcher>();
   EXPECT_CALL(*fetcher, ExecuteModel);
-  EXPECT_CALL(*delegate(), CreateLegionFetcher)
+  EXPECT_CALL(*delegate(), CreatePrivateAiFetcher)
       .WillOnce(testing::Return(testing::ByMove(std::move(fetcher))));
 
   model_execution_manager()->ExecuteModel(
       ModelBasedCapabilityKey::kZeroStateSuggestions, TestMessage(),
       /*timeout=*/std::nullopt,
-      /*log_ai_data_request=*/nullptr, ModelExecutionServiceType::kLegion,
+      /*log_ai_data_request=*/nullptr, ModelExecutionServiceType::kPrivateAi,
       response_holder.GetCallback());
 }
 
 TEST_F(ModelExecutionManagerDelegateTest, CreatesDefaultFetcher) {
   RemoteResponseHolder response_holder;
   SetAutomaticIssueOfAccessTokens();
-  EXPECT_CALL(*delegate(), CreateLegionFetcher).Times(0);
+  EXPECT_CALL(*delegate(), CreatePrivateAiFetcher).Times(0);
 
   model_execution_manager()->ExecuteModel(
       ModelBasedCapabilityKey::kCompose, TestMessage(),
       /*timeout=*/std::nullopt,
       /*log_ai_data_request=*/nullptr, ModelExecutionServiceType::kDefault,
       response_holder.GetCallback());
+}
+
+TEST_F(ModelExecutionManagerDelegateTest, HandlesNullFetcher) {
+  RemoteResponseHolder response_holder;
+  SetAutomaticIssueOfAccessTokens();
+  EXPECT_CALL(*delegate(), CreatePrivateAiFetcher)
+      .WillOnce(testing::Return(testing::ByMove(nullptr)));
+
+  model_execution_manager()->ExecuteModel(
+      ModelBasedCapabilityKey::kZeroStateSuggestions, TestMessage(),
+      /*timeout=*/std::nullopt,
+      /*log_ai_data_request=*/nullptr, ModelExecutionServiceType::kPrivateAi,
+      response_holder.GetCallback());
+
+  EXPECT_FALSE(response_holder.GetFinalStatus());
+  EXPECT_EQ(OptimizationGuideModelExecutionError::ModelExecutionError::
+                kGenericFailure,
+            response_holder.error());
 }
 
 }  // namespace

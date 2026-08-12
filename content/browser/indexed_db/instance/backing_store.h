@@ -12,6 +12,7 @@
 #include <string_view>
 #include <vector>
 
+#include "base/trace_event/trace_event.h"
 #include "base/types/expected.h"
 #include "components/services/storage/indexed_db/locks/partitioned_lock.h"
 #include "content/browser/indexed_db/indexed_db_external_object_storage.h"
@@ -21,7 +22,10 @@
 
 namespace base {
 class WaitableEvent;
-}
+namespace trace_event {
+class ProcessMemoryDump;
+}  // namespace trace_event
+}  // namespace base
 
 namespace content::indexed_db {
 
@@ -264,14 +268,24 @@ class BackingStore {
   // very little memory to be reclaimed by deleting the SQLite BackingStore.
   virtual bool CanOpportunisticallyClose() const = 0;
 
-  virtual void TearDown(base::WaitableEvent* signal_on_destruction) = 0;
-  virtual void InvalidateBlobReferences() = 0;
+  // Called when `BucketContext` begins force-closing.
+  virtual void OnForceClosing() = 0;
+  // Called just before `this` is destroyed to enable callers to wait for
+  // background work (running on other threads/sequences) before proceeding.
+  virtual void SignalWhenDestructionComplete(
+      base::WaitableEvent* signal_on_destruction) && = 0;
   // Get tasks to be run after a BackingStore no longer has any connections.
   virtual void StartPreCloseTasks(base::OnceClosure on_done) = 0;
   virtual void StopPreCloseTasks() = 0;
-  // Gets the total size of blobs and the database for in-memory backing
-  // stores.
-  virtual int64_t GetInMemorySize() const = 0;
+
+  // Called when the bucket has been idle for some time so that the backing
+  // store can perform maintenance without adversely impacting client requests.
+  virtual void RunIdleTasks(bool long_idle) = 0;
+
+  // Estimate the total size of all databases (including blobs) in this store.
+  // `write_in_progress` is true iff the last readwrite transaction did not
+  // flush changes to disk (i.e., had relaxed durability).
+  virtual uint64_t EstimateSize(bool write_in_progress) const = 0;
   // Returns true iff a database with the given name exists, whether or not it's
   // currently open.
   [[nodiscard]] virtual StatusOr<bool> DatabaseExists(
@@ -289,6 +303,10 @@ class BackingStore {
   CreateOrOpenDatabase(const std::u16string& name) = 0;
 
   virtual uintptr_t GetIdentifierForMemoryDump() = 0;
+
+  //  Adds a memory dump for `this` under `dump_name`.
+  virtual void ReportMemoryUsage(base::trace_event::ProcessMemoryDump* pmd,
+                                 const std::string& dump_name) = 0;
 
   // Writes backing store files to disk in their long-term format, e.g. converts
   // a log to actual DB files.

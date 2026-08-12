@@ -27,7 +27,6 @@
 
 #include "base/feature_list.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/trace_event/trace_event.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/platform/task_type.h"
@@ -215,7 +214,7 @@ KURL StorageArea::GetPageUrl() const {
 bool StorageArea::EnqueueStorageEvent(const String& key,
                                       const String& old_value,
                                       const String& new_value,
-                                      const String& url) {
+                                      const KURL& url) {
   if (!should_enqueue_events_)
     return true;
   if (!DomWindow())

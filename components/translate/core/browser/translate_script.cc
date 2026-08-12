@@ -5,17 +5,22 @@
 #include "components/translate/core/browser/translate_script.h"
 
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/notreached.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "components/grit/components_resources.h"
+#include "components/prefs/pref_service.h"
+#include "components/translate/core/browser/translate_pref_names.h"
 #include "components/translate/core/browser/translate_url_fetcher.h"
 #include "components/translate/core/browser/translate_url_util.h"
+#include "components/translate/core/common/translate_features.h"
 #include "components/translate/core/common/translate_switches.h"
 #include "components/translate/core/common/translate_util.h"
 #include "components/variations/variations_associated_data.h"
@@ -30,6 +35,21 @@ namespace {
 
 const int kExpirationDelayDays = 1;
 
+DataRegion GetDataRegionFromPref(PrefService* prefs) {
+  if (prefs && prefs->HasPrefPath(prefs::kTranslateDataRegionSetting)) {
+    switch (prefs->GetInteger(prefs::kTranslateDataRegionSetting)) {
+      case 0:
+        return DataRegion::kNoPreference;
+      case 1:
+        return DataRegion::kUnitedStates;
+      case 2:
+        return DataRegion::kEurope;
+    }
+    NOTREACHED();
+  }
+  return DataRegion::kNoPreference;
+}
+
 }  // namespace
 
 const char TranslateScript::kScriptURL[] =
@@ -38,8 +58,8 @@ const char TranslateScript::kScriptURL[] =
 const char TranslateScript::kRequestHeaderName[] =
     "Google-Translate-Element-Mode";
 const char TranslateScript::kRequestHeaderValue[] = "library";
-const char TranslateScript::kAlwaysUseSslQueryName[] = "aus";
-const char TranslateScript::kAlwaysUseSslQueryValue[] = "true";
+const char TranslateScript::kExperimentFilterQueryName[] = "ef";
+const char TranslateScript::kExperimentFilterQueryValue[] = "ehcm";
 const char TranslateScript::kCallbackQueryName[] = "cb";
 const char TranslateScript::kCallbackQueryValue[] =
     "cr.googleTranslate.onTranslateElementLoad";
@@ -55,7 +75,19 @@ TranslateScript::TranslateScript()
 
 TranslateScript::~TranslateScript() = default;
 
-void TranslateScript::Request(RequestCallback callback, bool is_incognito) {
+void TranslateScript::ClearIfDataRegionChanged(PrefService* prefs) {
+  if (!base::FeatureList::IsEnabled(kTranslateElementRegionalization)) {
+    return;
+  }
+
+  if (GetDataRegionFromPref(prefs) != fetched_data_region_) {
+    Clear();
+  }
+}
+
+void TranslateScript::Request(RequestCallback callback,
+                              bool is_incognito,
+                              PrefService* prefs) {
   script_fetch_start_time_ = base::Time::Now().InMillisecondsFSinceUnixEpoch();
 
   DCHECK(data_.empty()) << "Do not fetch the script if it is already fetched";
@@ -69,17 +101,52 @@ void TranslateScript::Request(RequestCallback callback, bool is_incognito) {
 
   GURL translate_script_url = GetTranslateScriptURL();
 
-  fetcher_ = std::make_unique<TranslateURLFetcher>();
+  if (base::FeatureList::IsEnabled(kTranslateElementRegionalization)) {
+    DataRegion data_region = GetDataRegionFromPref(prefs);
+
+    fetched_data_region_ = data_region;
+
+    switch (data_region) {
+      case DataRegion::kUnitedStates:
+        translate_script_url =
+            net::AppendQueryParameter(translate_script_url, "region", "us");
+        break;
+      case DataRegion::kEurope:
+        translate_script_url =
+            net::AppendQueryParameter(translate_script_url, "region", "eu");
+        break;
+      case DataRegion::kNoPreference:
+        // Do nothing, no region parameter needed.
+        break;
+    }
+  }
 
   net::HttpRequestHeaders headers;
   headers.SetHeader(TranslateScript::kRequestHeaderName,
                     TranslateScript::kRequestHeaderValue);
+  fetcher_ = std::make_unique<TranslateURLFetcherImpl>(headers);
 
-  fetcher_->set_extra_request_header(headers);
   fetcher_->Request(translate_script_url,
                     base::BindOnce(&TranslateScript::OnScriptFetchComplete,
                                    base::Unretained(this)),
                     is_incognito);
+}
+
+// static
+std::string TranslateScript::GetActiveElementFeatures() {
+  std::vector<std::string> active_element_features;
+  if (base::FeatureList::IsEnabled(translate::kTranslateSimplifiedHindi)) {
+    active_element_features.push_back(kExperimentFilterQueryValue);
+  }
+  if (base::FeatureList::IsEnabled(
+          translate::kTranslateElementExperimentFeatures)) {
+    std::string ef_param =
+        translate::kTranslateElementExperimentFeaturesParam.Get();
+    if (!ef_param.empty()) {
+      active_element_features.emplace_back(std::move(ef_param));
+    }
+  }
+  return base::JoinString(active_element_features, ",");
 }
 
 // static
@@ -109,8 +176,12 @@ GURL TranslateScript::GetTranslateScriptURL() {
 
   translate_script_url = net::AppendQueryParameter(
       translate_script_url, kCallbackQueryName, kCallbackQueryValue);
-  translate_script_url = net::AppendQueryParameter(
-      translate_script_url, kAlwaysUseSslQueryName, kAlwaysUseSslQueryValue);
+
+  std::string ef_value = GetActiveElementFeatures();
+  if (!ef_value.empty()) {
+    translate_script_url = net::AppendQueryParameter(
+        translate_script_url, kExperimentFilterQueryName, ef_value);
+  }
   translate_script_url = net::AppendQueryParameter(
       translate_script_url, kCssLoaderCallbackQueryName,
       kCssLoaderCallbackQueryValue);
@@ -119,14 +190,13 @@ GURL TranslateScript::GetTranslateScriptURL() {
       kJavascriptLoaderCallbackQueryValue);
 
   translate_script_url = AddHostLocaleToUrl(translate_script_url);
-  translate_script_url = AddApiKeyToUrl(translate_script_url);
 
   return translate_script_url;
 }
 
 void TranslateScript::OnScriptFetchComplete(bool success,
                                             const std::string& data) {
-  std::unique_ptr<const TranslateURLFetcher> delete_ptr(std::move(fetcher_));
+  std::unique_ptr<const TranslateUrlFetcher> delete_ptr(std::move(fetcher_));
 
   if (success) {
     DCHECK(data_.empty());

@@ -4,6 +4,8 @@
 
 #include "ash/wm/window_util.h"
 
+#include <algorithm>
+
 #include "ash/public/cpp/presentation_time_recorder.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
@@ -13,8 +15,8 @@
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_state_delegate.h"
 #include "ash/wm/wm_event.h"
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
+#include "chromeos/ui/wm/window_util.h"
 #include "ui/aura/test/test_windows.h"
 #include "ui/aura/window.h"
 #include "ui/compositor/layer.h"
@@ -134,7 +136,8 @@ TEST_F(WindowUtilTest, MoveWindowToDisplay) {
 // window moved by MoveWindowToDisplay.
 TEST_F(WindowUtilTest, MoveWindowToDisplayAndLockScreen) {
   UpdateDisplay("500x400, 600x400");
-  auto window = CreateTestWindow(gfx::Rect(12, 20, 100, 100));
+  auto window =
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, {12, 20, 100, 100});
   display::Screen* screen = display::Screen::Get();
   ASSERT_EQ(2, screen->GetNumDisplays());
   const int64_t primary_display_id = screen->GetAllDisplays()[0].id();
@@ -165,8 +168,8 @@ TEST_F(WindowUtilTest, MoveWindowToDisplayAndLockScreen) {
 TEST_F(WindowUtilTest, EnsureTransientRoots) {
   // Create two windows which have no transient children or parents. Test that
   // neither of them get removed when running EnsureTransientRoots.
-  auto window1 = CreateTestWindow();
-  auto window2 = CreateTestWindow();
+  auto window1 = CreateWindowWithAppType();
+  auto window2 = CreateWindowWithAppType();
   std::vector<raw_ptr<aura::Window, VectorExperimental>> window_list = {
       window1.get(), window2.get()};
   EnsureTransientRoots(&window_list);
@@ -175,50 +178,50 @@ TEST_F(WindowUtilTest, EnsureTransientRoots) {
   // Create two windows whose transient roots are |window1|. One is a direct
   // transient child and one is a transient descendant. Test that both get
   // removed when calling EnsureTransientRoots.
-  auto descendant1 = CreateTestWindow();
-  auto descendant2 = CreateTestWindow();
+  auto descendant1 = CreateWindowWithAppType();
+  auto descendant2 = CreateWindowWithAppType();
   ::wm::AddTransientChild(descendant1.get(), descendant2.get());
   ::wm::AddTransientChild(window1.get(), descendant1.get());
   window_list.push_back(descendant1.get());
   window_list.push_back(descendant2.get());
   EnsureTransientRoots(&window_list);
   ASSERT_EQ(2u, window_list.size());
-  ASSERT_TRUE(base::Contains(window_list, window1.get()));
-  ASSERT_TRUE(base::Contains(window_list, window2.get()));
+  ASSERT_TRUE(std::ranges::contains(window_list, window1.get()));
+  ASSERT_TRUE(std::ranges::contains(window_list, window2.get()));
 
   // Create a window which has a transient parent that is not in |window_list|.
   // Test that the window is replaced with its transient root when calling
   // EnsureTransientRoots.
-  auto window3 = CreateTestWindow();
-  auto descendant3 = CreateTestWindow();
+  auto window3 = CreateWindowWithAppType();
+  auto descendant3 = CreateWindowWithAppType();
   ::wm::AddTransientChild(window3.get(), descendant3.get());
   window_list.push_back(descendant3.get());
   EnsureTransientRoots(&window_list);
   EXPECT_EQ(3u, window_list.size());
-  EXPECT_TRUE(base::Contains(window_list, window3.get()));
-  EXPECT_FALSE(base::Contains(window_list, descendant3.get()));
+  EXPECT_TRUE(std::ranges::contains(window_list, window3.get()));
+  EXPECT_FALSE(std::ranges::contains(window_list, descendant3.get()));
 
   // Create two windows which have the same transient parent that is not in
   // |window_list|. Test that one of the windows is replaced with its transient
   // root and the other is removed from |window_list| when calling
   // EnsureTransientRoots.
-  auto window4 = CreateTestWindow();
-  auto descendant4 = CreateTestWindow();
-  auto descendant5 = CreateTestWindow();
+  auto window4 = CreateWindowWithAppType();
+  auto descendant4 = CreateWindowWithAppType();
+  auto descendant5 = CreateWindowWithAppType();
   ::wm::AddTransientChild(window4.get(), descendant4.get());
   ::wm::AddTransientChild(window4.get(), descendant5.get());
   window_list.push_back(descendant4.get());
   window_list.push_back(descendant5.get());
   EnsureTransientRoots(&window_list);
   EXPECT_EQ(4u, window_list.size());
-  EXPECT_TRUE(base::Contains(window_list, window4.get()));
-  EXPECT_FALSE(base::Contains(window_list, descendant4.get()));
-  EXPECT_FALSE(base::Contains(window_list, descendant5.get()));
+  EXPECT_TRUE(std::ranges::contains(window_list, window4.get()));
+  EXPECT_FALSE(std::ranges::contains(window_list, descendant4.get()));
+  EXPECT_FALSE(std::ranges::contains(window_list, descendant5.get()));
 }
 
 TEST_F(WindowUtilTest,
        MinimizeAndHideWithoutAnimationMinimizesArcWindowsBeforeHiding) {
-  auto window = CreateTestWindow();
+  auto window = CreateWindowWithAppType();
   auto* state = new FakeWindowState(chromeos::WindowStateType::kNormal);
   WindowState::Get(window.get())
       ->SetStateObject(std::unique_ptr<WindowState::State>(state));
@@ -232,9 +235,9 @@ TEST_F(WindowUtilTest,
 }
 
 TEST_F(WindowUtilTest, SortWindowsBottomToTop) {
-  auto window1 = CreateTestWindow();
-  auto window2 = CreateTestWindow();
-  auto window3 = CreateTestWindow();
+  auto window1 = CreateWindowWithAppType();
+  auto window2 = CreateWindowWithAppType();
+  auto window3 = CreateWindowWithAppType();
 
   EXPECT_EQ(
       (std::vector<aura::Window*>{window1.get(), window2.get(), window3.get()}),
@@ -268,11 +271,11 @@ TEST_F(WindowUtilTest, SortWindowsBottomToTop) {
 }
 
 TEST_F(WindowUtilTest, InteriorTargeter) {
-  auto window = CreateTestWindow();
+  auto window = CreateWindowWithAppType();
   window->SetBounds(gfx::Rect(0, 0, 100, 100));
 
   WindowState::Get(window.get())->Maximize();
-  InstallResizeHandleWindowTargeterForWindow(window.get());
+  chromeos::wm::InstallResizeHandleWindowTargeterForWindow(window.get());
 
   auto* child =
       aura::test::CreateTestWindow(
@@ -305,11 +308,11 @@ TEST_F(WindowUtilTest, InteriorTargeter) {
 }
 
 TEST_F(WindowUtilTest, InteriorTargeterWithCustomInsets) {
-  auto window = CreateTestWindow();
+  auto window = CreateWindowWithAppType();
   window->SetBounds({0, 0, 100, 100});
 
   WindowState::Get(window.get())->Maximize();
-  InstallResizeHandleWindowTargeterForWindow(
+  chromeos::wm::InstallResizeHandleWindowTargeterForWindow(
       window.get(), chromeos::ResizeBorderInsets{.for_mouse = gfx::Insets(5),
                                                  .for_touch = gfx::Insets(10)});
 
@@ -355,7 +358,7 @@ TEST_F(WindowUtilTest, PinWindow) {
   auto* window_state_delegate_ptr = window_state_delegate.get();
   EXPECT_EQ(window_state_delegate_ptr->toggle_locked_fullscreen_count(), 0);
 
-  auto window = CreateTestWindow();
+  auto window = CreateWindowWithAppType();
   WindowState* window_state = WindowState::Get(window.get());
   window_state->SetDelegate(std::move(window_state_delegate));
   window_util::PinWindow(window.get(), /* trusted */ false);
@@ -382,7 +385,7 @@ TEST_F(WindowUtilTest, PinWindow_TabletMode) {
   auto* window_state_delegate_ptr = window_state_delegate.get();
   EXPECT_EQ(window_state_delegate_ptr->toggle_locked_fullscreen_count(), 0);
 
-  auto window = CreateTestWindow();
+  auto window = CreateWindowWithAppType();
   WindowState* window_state = WindowState::Get(window.get());
   window_state->SetDelegate(std::move(window_state_delegate));
   window_util::PinWindow(window.get(), /* trusted */ false);

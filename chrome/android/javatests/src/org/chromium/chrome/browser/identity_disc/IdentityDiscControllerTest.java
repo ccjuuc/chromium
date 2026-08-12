@@ -15,13 +15,20 @@ import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static org.hamcrest.Matchers.allOf;
 import static org.hamcrest.Matchers.anyOf;
 import static org.hamcrest.Matchers.not;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
+import static org.chromium.base.test.transit.ViewFinder.waitForNoView;
+
 import android.app.Activity;
 
 import androidx.annotation.StringRes;
+import androidx.test.annotation.UiThreadTest;
 import androidx.test.espresso.matcher.ViewMatchers;
 import androidx.test.filters.MediumTest;
 import androidx.test.filters.SmallTest;
@@ -29,7 +36,6 @@ import androidx.test.platform.app.InstrumentationRegistry;
 
 import org.junit.After;
 import org.junit.AfterClass;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Rule;
@@ -42,18 +48,24 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.mockito.quality.Strictness;
 
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.params.ParameterAnnotations.UseMethodParameter;
 import org.chromium.base.test.params.ParameterAnnotations.UseMethodParameterBefore;
 import org.chromium.base.test.params.ParameterAnnotations.UseRunnerDelegate;
 import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.ApplicationTestUtils;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisableIf;
+import org.chromium.base.test.util.DisableLeakChecks;
+import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
@@ -69,8 +81,8 @@ import org.chromium.chrome.browser.sync.FakeSyncServiceImpl;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.toolbar.optional_button.ButtonDataProvider;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ntp.RegularNewTabPageStation;
@@ -79,16 +91,24 @@ import org.chromium.chrome.test.util.ChromeRenderTestRule;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.NewTabPageTestUtils;
 import org.chromium.chrome.test.util.browser.signin.SigninTestRule;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.components.browser_ui.device_lock.DeviceLockActivityLauncher;
 import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.components.prefs.PrefService;
+import org.chromium.components.signin.SigninFeatures;
 import org.chromium.components.signin.base.AccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.identitymanager.PrimaryAccountChangeEvent;
 import org.chromium.components.signin.test.util.TestAccounts;
 import org.chromium.components.sync.UserActionableError;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.content_public.common.ContentUrlConstants;
+import org.chromium.ui.base.ActivityResultTracker;
+import org.chromium.ui.base.ActivityWindowAndroid;
+import org.chromium.ui.base.DeviceFormFactor;
+import org.chromium.ui.base.IntentRequestTracker;
+import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.test.util.GmsCoreVersionRestriction;
 import org.chromium.ui.test.util.NightModeTestUtils;
 import org.chromium.ui.test.util.ViewUtils;
@@ -96,13 +116,17 @@ import org.chromium.ui.test.util.ViewUtils;
 import java.io.IOException;
 
 /** Instrumentation test for Identity Disc. */
+@DoNotBatch(reason = "This test relies on native initialization")
 @RunWith(ParameterizedRunner.class)
 @UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@DisableFeatures({
+    SigninFeatures.SIGNIN_LEVEL_UP_BUTTON,
+    ChromeFeatureList.ANDROID_BOTTOM_BAR,
+    ChromeFeatureList.SETTINGS_IN_TAB // crbug.com/521895796
+})
+@DisableLeakChecks("crbug.com/527131198")
 public class IdentityDiscControllerTest {
-    private static final String EMAIL = "email@gmail.com";
-    private static final String NAME = "Email Emailson";
-    private static final String FULL_NAME = NAME + ".full";
 
     private final FreshCtaTransitTestRule mActivityTestRule =
             ChromeTransitTestRules.freshChromeTabbedActivityRule();
@@ -126,13 +150,21 @@ public class IdentityDiscControllerTest {
 
     private RegularNewTabPageStation mPage;
     private Tab mTab;
+    private SettableMonotonicObservableSupplier<Profile> mProfileSupplier;
+    private String mFallbackAccountName;
+    private WindowAndroid mWindowAndroid;
 
     @Mock private IdentityServicesProvider mIdentityServicesProviderMock;
     @Mock private SigninManager mSigninManagerMock;
     @Mock private IdentityManager mIdentityManagerMock;
-    @Mock private ObservableSupplier<Profile> mProfileSupplier;
     @Mock private ButtonDataProvider.ButtonDataObserver mButtonDataObserver;
     @Mock private Tracker mTracker;
+    @Mock private ActivityResultTracker mActivityResultTracker;
+    @Mock private DeviceLockActivityLauncher mDeviceLockActivityLauncher;
+    @Mock private BottomSheetController mBottomSheetController;
+    @Mock private ModalDialogManager mModalDialogManager;
+    @Mock private SnackbarManager mSnackbarManager;
+    @Mock private Runnable mOnSigninTapped;
 
     @BeforeClass
     public static void setUpBeforeActivityLaunched() {
@@ -152,15 +184,34 @@ public class IdentityDiscControllerTest {
 
     @Before
     public void setUp() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> mProfileSupplier = ObservableSuppliers.createMonotonic());
         mPage = mActivityTestRule.startOnNtp();
         mTab = mPage.getTab();
         NewTabPageTestUtils.waitForNtpLoaded(mTab);
+        Activity activity = mActivityTestRule.getActivity();
+        assertNotNull(activity);
+        mFallbackAccountName = activity.getString(R.string.default_google_account_username);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mWindowAndroid =
+                            new ActivityWindowAndroid(
+                                    activity,
+                                    /* listenToActivityState= */ true,
+                                    IntentRequestTracker.createFromActivity(activity),
+                                    /* insetObserver= */ null,
+                                    /* occlusionTrackingAllowed= */ true);
+                });
     }
 
     @After
     public void tearDown() {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
+                    if (mWindowAndroid != null) {
+                        mWindowAndroid.destroy();
+                        mWindowAndroid = null;
+                    }
                     PrefService prefService =
                             UserPrefs.get(ProfileManager.getLastUsedRegularProfile());
                     prefService.clearPref(Pref.SIGNIN_ALLOWED);
@@ -169,10 +220,15 @@ public class IdentityDiscControllerTest {
 
     @Test
     @MediumTest
+    // Specifies the test to run only with the GMS Core version greater than or equal to 24w15 which
+    // is the min version that supports split stores UPM backend, to avoid
+    // UserActionableError.NEEDS_UPM_BACKEND_UPGRADE.
+    @Restriction(GmsCoreVersionRestriction.RESTRICTION_TYPE_VERSION_GE_24W15)
     public void testIdentityDiscWithNavigation() {
         // User is signed in.
         mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
-        ViewUtils.waitForVisibleView(allOf(withId(R.id.optional_toolbar_button), isDisplayed()));
+        String contentDescription = getContentDescriptionWithNameAndEmail(TestAccounts.ACCOUNT1);
+        waitForVisibleIdentityDisc(contentDescription);
 
         // Identity Disc should be hidden on navigation away from NTP.
         leaveNtp();
@@ -181,15 +237,16 @@ public class IdentityDiscControllerTest {
                         matches(
                                 anyOf(
                                         withEffectiveVisibility(ViewMatchers.Visibility.GONE),
-                                        not(
-                                                withContentDescription(
-                                                        R.string
-                                                                .accessibility_toolbar_btn_identity_disc)))));
+                                        not(withContentDescription(contentDescription)))));
     }
 
     @Test
     @MediumTest
-    public void testIdentityDiscSignedOut() throws Exception {
+    @DisableFeatures({
+        SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
+        SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT
+    })
+    public void testIdentityDiscSignedOut_noAccount_legacy() throws Exception {
         // When user is signed out, a signed-out avatar should be visible on the NTP.
         @StringRes int descriptionId = R.string.accessibility_toolbar_btn_signed_out_identity_disc;
         ViewUtils.waitForVisibleView(
@@ -211,7 +268,30 @@ public class IdentityDiscControllerTest {
 
     @Test
     @MediumTest
-    public void testIdentityDiscSignedOut_signinDisabled() {
+    @EnableFeatures({
+        SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
+        SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT
+    })
+    public void testIdentityDiscSignedOut_noAccount() {
+        // When user is signed out, a signed-out avatar should be visible on the NTP.
+        @StringRes int descriptionId = R.string.accessibility_toolbar_btn_signed_out_identity_disc;
+        ViewUtils.waitForVisibleView(
+                allOf(
+                        withId(R.id.optional_toolbar_button),
+                        isDisplayed(),
+                        withContentDescription(descriptionId)));
+
+        // Clicking the signed-out avatar should lead to the correct sign-in screen.
+        onView(withId(R.id.optional_toolbar_button)).perform(click());
+
+        // The no account picker bottom sheet should be shown.
+        ViewUtils.waitForVisibleView(
+                allOf(withId(R.id.account_picker_state_no_account), isDisplayed()));
+    }
+
+    @Test
+    @MediumTest
+    public void testIdentityDiscSignedOut_signinDisabled_leadsToSettingsScreen() {
         IdentityServicesProvider.setInstanceForTests(mIdentityServicesProviderMock);
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -235,10 +315,12 @@ public class IdentityDiscControllerTest {
                                 R.string.accessibility_toolbar_btn_signed_out_identity_disc)));
 
         // Clicking the signed-out avatar should lead to the settings screen.
-        ActivityTestUtils.waitForActivity(
-                InstrumentationRegistry.getInstrumentation(),
-                SettingsActivity.class,
-                () -> onView(withId(R.id.optional_toolbar_button)).perform(click()));
+        Activity settingsActivity =
+                ActivityTestUtils.waitForActivity(
+                        InstrumentationRegistry.getInstrumentation(),
+                        SettingsActivity.class,
+                        () -> onView(withId(R.id.optional_toolbar_button)).perform(click()));
+        ApplicationTestUtils.finishActivity(settingsActivity);
     }
 
     @Test
@@ -250,14 +332,34 @@ public class IdentityDiscControllerTest {
     public void testIdentityDiscSignedIn() {
         // Identity Disc should be shown on sign-in state change with a NTP refresh.
         mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
+        waitForVisibleIdentityDisc(getContentDescriptionWithNameAndEmail(TestAccounts.ACCOUNT1));
+
+        mSigninTestRule.signOut();
+        ViewUtils.waitForVisibleView(
+                allOf(
+                        withId(R.id.optional_toolbar_button),
+                        isDisplayed(),
+                        withContentDescription(
+                                R.string.accessibility_toolbar_btn_signed_out_identity_disc)));
+    }
+
+    @Test
+    @MediumTest
+    // Specifies the test to run only with the GMS Core version greater than or equal to 24w15 which
+    // is the min version that supports split stores UPM backend, to avoid
+    // UserActionableError.NEEDS_UPM_BACKEND_UPGRADE.
+    @Restriction(GmsCoreVersionRestriction.RESTRICTION_TYPE_VERSION_GE_24W15)
+    public void testIdentityDiscSignedIn_noName() {
+        // Identity Disc should be shown on sign-in state change with a NTP refresh.
+        mSigninTestRule.addAccountThenSignin(TestAccounts.TEST_ACCOUNT_NO_NAME);
         String expectedContentDescription =
                 mActivityTestRule
                         .getActivity()
                         .getString(
                                 R.string
                                         .accessibility_toolbar_btn_identity_disc_with_name_and_email,
-                                TestAccounts.ACCOUNT1.getFullName(),
-                                TestAccounts.ACCOUNT1.getEmail());
+                                mFallbackAccountName,
+                                TestAccounts.TEST_ACCOUNT_NO_NAME.getEmail());
         ViewUtils.waitForVisibleView(
                 allOf(
                         withId(R.id.optional_toolbar_button),
@@ -305,7 +407,38 @@ public class IdentityDiscControllerTest {
 
     @Test
     @MediumTest
-    @EnableFeatures(ChromeFeatureList.UNO_PHASE_2_FOLLOW_UP)
+    // Specifies the test to run only with the GMS Core version greater than or equal to 24w15 which
+    // is the min version that supports split stores UPM backend, to avoid
+    // UserActionableError.NEEDS_UPM_BACKEND_UPGRADE.
+    @Restriction(GmsCoreVersionRestriction.RESTRICTION_TYPE_VERSION_GE_24W15)
+    public void testIdentityDiscSignedIn_nonDisplayableEmail_noName() {
+        // Identity Disc should be shown on sign-in state change with a NTP refresh.
+        mSigninTestRule.addAccount(TestAccounts.CHILD_ACCOUNT_NON_DISPLAYABLE_EMAIL_AND_NO_NAME);
+        mSigninTestRule.waitForSignin(TestAccounts.CHILD_ACCOUNT_NON_DISPLAYABLE_EMAIL_AND_NO_NAME);
+
+        String expectedContentDescription =
+                mActivityTestRule
+                        .getActivity()
+                        .getString(
+                                R.string.accessibility_toolbar_btn_identity_disc_with_name,
+                                mFallbackAccountName);
+        ViewUtils.waitForVisibleView(
+                allOf(
+                        withId(R.id.optional_toolbar_button),
+                        isDisplayed(),
+                        withContentDescription(expectedContentDescription)));
+
+        mSigninTestRule.forceSignOut();
+        ViewUtils.waitForVisibleView(
+                allOf(
+                        withId(R.id.optional_toolbar_button),
+                        isDisplayed(),
+                        withContentDescription(
+                                R.string.accessibility_toolbar_btn_signed_out_identity_disc)));
+    }
+
+    @Test
+    @MediumTest
     public void testIdentityDiscWithErrorBadgeSignedIn() {
         // Fake an identity error.
         ThreadUtils.runOnUiThreadBlocking(
@@ -342,7 +475,6 @@ public class IdentityDiscControllerTest {
 
     @Test
     @MediumTest
-    @EnableFeatures(ChromeFeatureList.UNO_PHASE_2_FOLLOW_UP)
     public void testIdentityDiscWithErrorBadgeSignedIn_nonDisplayableEmail() {
         // Fake an identity error.
         ThreadUtils.runOnUiThreadBlocking(
@@ -378,6 +510,7 @@ public class IdentityDiscControllerTest {
     @Test
     @MediumTest
     @SuppressWarnings("CheckReturnValue")
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/544662841
     public void testIdentityDiscWithSwitchToIncognito() {
         mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
         ViewUtils.waitForVisibleView(withId(R.id.optional_toolbar_button));
@@ -388,17 +521,17 @@ public class IdentityDiscControllerTest {
         var chromeTabbedActivity = incognitoNewTabPageStation.getActivity();
         if (chromeTabbedActivity.isIncognitoWindow()) {
             // For an incognito window, Identity Disc shouldn't be inflated.
-            Assert.assertNull(chromeTabbedActivity.findViewById(R.id.optional_toolbar_button));
+            assertNull(chromeTabbedActivity.findViewById(R.id.optional_toolbar_button));
         } else {
             // For an incognito tab, Identity Disc is inflated, but shouldn't be visible.
-            ViewUtils.waitForViewCheckingState(
-                    withId(R.id.optional_toolbar_button), ViewUtils.VIEW_GONE);
+            waitForNoView(withId(R.id.optional_toolbar_button));
         }
     }
 
     @Test
     @SmallTest
-    public void onPrimaryAccountChanged_accountSet() {
+    @UiThreadTest
+    public void testOnPrimaryAccountChanged_accountSet() {
         IdentityDiscController identityDiscController =
                 buildControllerWithObserver(mButtonDataObserver);
         PrimaryAccountChangeEvent accountSetEvent =
@@ -411,37 +544,29 @@ public class IdentityDiscControllerTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.UNO_PHASE_2_FOLLOW_UP)
-    public void preExistingErrorAtCreation() {
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    // Fake an identity error.
-                    FakeSyncServiceImpl fakeSyncService = new FakeSyncServiceImpl();
-                    SyncServiceFactory.setInstanceForTesting(fakeSyncService);
-                    fakeSyncService.setRequiresClientUpgrade(true);
+    @UiThreadTest
+    public void testPreExistingErrorAtCreation() {
+        // Fake an identity error.
+        FakeSyncServiceImpl fakeSyncService = new FakeSyncServiceImpl();
+        SyncServiceFactory.setInstanceForTesting(fakeSyncService);
+        fakeSyncService.setRequiresClientUpgrade(true);
 
-                    mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
+        mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
+        IdentityDiscController identityDiscController = buildController();
 
-                    ObservableSupplierImpl<Profile> profileSupplier =
-                            new ObservableSupplierImpl<>();
-                    IdentityDiscController identityDiscController =
-                            new IdentityDiscController(
-                                    mActivityTestRule.getActivity(), profileSupplier);
+        assertEquals(UserActionableError.NONE, identityDiscController.getIdentityError());
 
-                    Assert.assertEquals(
-                            UserActionableError.NONE, identityDiscController.getIdentityError());
+        mProfileSupplier.set(ProfileManager.getLastUsedRegularProfile());
 
-                    profileSupplier.set(ProfileManager.getLastUsedRegularProfile());
-
-                    Assert.assertEquals(
-                            UserActionableError.NEEDS_CLIENT_UPGRADE,
-                            identityDiscController.getIdentityError());
-                });
+        assertEquals(
+                UserActionableError.NEEDS_CLIENT_UPGRADE,
+                identityDiscController.getIdentityError());
     }
 
     @Test
     @SmallTest
-    public void onPrimaryAccountChanged_accountCleared() {
+    @UiThreadTest
+    public void testOnPrimaryAccountChanged_accountCleared() {
         IdentityDiscController identityDiscController =
                 buildControllerWithObserver(mButtonDataObserver);
         PrimaryAccountChangeEvent accountClearedEvent =
@@ -449,19 +574,31 @@ public class IdentityDiscControllerTest {
         identityDiscController.onPrimaryAccountChanged(accountClearedEvent);
 
         verify(mButtonDataObserver).buttonDataChanged(false);
-        Assert.assertTrue(identityDiscController.isProfileDataCacheEmpty());
+        assertTrue(identityDiscController.isProfileDataCacheEmpty());
     }
 
     @Test
     @MediumTest
-    public void onClick_profileNotYetInitialized_doesNothing() {
+    @UiThreadTest
+    public void testOnClick_profileNotYetInitialized_doesNothing() {
         TrackerFactory.setTrackerForTests(mTracker);
-        IdentityDiscController identityDiscController =
-                new IdentityDiscController(mActivityTestRule.getActivity(), mProfileSupplier);
+        IdentityDiscController identityDiscController = buildController();
 
         // If the button is tapped before the profile is set, the click shouldn't be recorded.
         identityDiscController.onClick();
         verifyNoMoreInteractions(mTracker);
+    }
+
+    @Test
+    @MediumTest
+    @UiThreadTest
+    @EnableFeatures(SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT)
+    public void testOnClick_profileInitialized_callsOnSigninTapped() {
+        IdentityDiscController identityDiscController = buildController();
+        mProfileSupplier.set(ProfileManager.getLastUsedRegularProfile());
+
+        identityDiscController.onClick();
+        verify(mOnSigninTapped).run();
     }
 
     @Test
@@ -477,6 +614,18 @@ public class IdentityDiscControllerTest {
     @Test
     @MediumTest
     @Feature("RenderTest")
+    @EnableFeatures(SigninFeatures.ENABLE_AI_SUBSCRIPTION_AVATAR_RING)
+    @UseMethodParameter(NightModeTestUtils.NightModeParams.class)
+    public void testIdentityDisc_signedOut_aiTierRingEnabled(boolean nightModeEnabled)
+            throws IOException {
+        mRenderTestRule.render(
+                mActivityTestRule.getActivity().findViewById(R.id.optional_toolbar_button),
+                "identity_disc_signed_out_ai_tier_ring_enabled");
+    }
+
+    @Test
+    @MediumTest
+    @Feature("RenderTest")
     @UseMethodParameter(NightModeTestUtils.NightModeParams.class)
     // Specifies the test to run only with the GMS Core version greater than or equal to 24w15 which
     // is the min version that supports split stores UPM backend, to avoid
@@ -485,19 +634,7 @@ public class IdentityDiscControllerTest {
     public void testIdentityDisc_signedIn(boolean nightModeEnabled) throws IOException {
         // Sign-in and wait for the user profile image to appear.
         mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
-        String expectedContentDescription =
-                mActivityTestRule
-                        .getActivity()
-                        .getString(
-                                R.string
-                                        .accessibility_toolbar_btn_identity_disc_with_name_and_email,
-                                TestAccounts.ACCOUNT1.getFullName(),
-                                TestAccounts.ACCOUNT1.getEmail());
-        ViewUtils.waitForVisibleView(
-                allOf(
-                        withId(R.id.optional_toolbar_button),
-                        isDisplayed(),
-                        withContentDescription(expectedContentDescription)));
+        waitForVisibleIdentityDisc(getContentDescriptionWithNameAndEmail(TestAccounts.ACCOUNT1));
 
         // Test the profile image shown in signed-in state to ensure the image is not tinted
         // accidentally.
@@ -510,28 +647,15 @@ public class IdentityDiscControllerTest {
     @MediumTest
     @Feature("RenderTest")
     @UseMethodParameter(NightModeTestUtils.NightModeParams.class)
-    @EnableFeatures(ChromeFeatureList.UNO_PHASE_2_FOLLOW_UP)
     // Specifies the test to run only with the GMS Core version greater than or equal to 24w15 which
     // is the min version that supports split stores UPM backend, to avoid
     // UserActionableError.NEEDS_UPM_BACKEND_UPGRADE.
     @Restriction(GmsCoreVersionRestriction.RESTRICTION_TYPE_VERSION_GE_24W15)
-    public void testIdentityDisc_signedIn_unoPhase2FollowUpEnabled_noIdentityError(
-            boolean nightModeEnabled) throws IOException {
+    public void testIdentityDisc_signedIn_noIdentityError(boolean nightModeEnabled)
+            throws IOException {
         // Sign-in and wait for the user profile image to appear.
         mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
-        String expectedContentDescription =
-                mActivityTestRule
-                        .getActivity()
-                        .getString(
-                                R.string
-                                        .accessibility_toolbar_btn_identity_disc_with_name_and_email,
-                                TestAccounts.ACCOUNT1.getFullName(),
-                                TestAccounts.ACCOUNT1.getEmail());
-        ViewUtils.waitForVisibleView(
-                allOf(
-                        withId(R.id.optional_toolbar_button),
-                        isDisplayed(),
-                        withContentDescription(expectedContentDescription)));
+        waitForVisibleIdentityDisc(getContentDescriptionWithNameAndEmail(TestAccounts.ACCOUNT1));
 
         // Test the profile image shown in signed-in state to ensure the image is not tinted
         // accidentally.
@@ -543,10 +667,35 @@ public class IdentityDiscControllerTest {
     @Test
     @MediumTest
     @Feature("RenderTest")
+    @EnableFeatures(SigninFeatures.ENABLE_AI_SUBSCRIPTION_AVATAR_RING)
     @UseMethodParameter(NightModeTestUtils.NightModeParams.class)
-    @EnableFeatures(ChromeFeatureList.UNO_PHASE_2_FOLLOW_UP)
-    public void testIdentityDisc_signedIn_unoPhase2FollowUpEnabled_identityErrorExist(
-            boolean nightModeEnabled) throws IOException {
+    @Restriction(GmsCoreVersionRestriction.RESTRICTION_TYPE_VERSION_GE_24W15)
+    public void testIdentityDisc_signedIn_aiTierRingEnabled(boolean nightModeEnabled)
+            throws IOException {
+        // Sign-in and wait for the user profile image to appear.
+        mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
+        waitForVisibleIdentityDisc(getContentDescriptionWithNameAndEmail(TestAccounts.ACCOUNT1));
+
+        // Set the pref natively to trigger the AI tier ring.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    PrefService prefService =
+                            UserPrefs.get(ProfileManager.getLastUsedRegularProfile());
+                    prefService.setInteger("sync.ai_subscription_tier", 1);
+                });
+
+        // Test the profile image shown in signed-in state with the ring.
+        mRenderTestRule.render(
+                mActivityTestRule.getActivity().findViewById(R.id.optional_toolbar_button),
+                "identity_disc_signed_in_with_ai_tier_ring");
+    }
+
+    @Test
+    @MediumTest
+    @Feature("RenderTest")
+    @UseMethodParameter(NightModeTestUtils.NightModeParams.class)
+    public void testIdentityDisc_signedIn_identityErrorExist(boolean nightModeEnabled)
+            throws IOException {
         // Fake an identity error.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -578,6 +727,102 @@ public class IdentityDiscControllerTest {
                 "identity_disc_signed_in_identity_error_exist");
     }
 
+    @Test
+    @MediumTest
+    @Feature("RenderTest")
+    @EnableFeatures(SigninFeatures.ENABLE_AI_SUBSCRIPTION_AVATAR_RING)
+    @UseMethodParameter(NightModeTestUtils.NightModeParams.class)
+    @Restriction(GmsCoreVersionRestriction.RESTRICTION_TYPE_VERSION_GE_24W15)
+    public void testIdentityDisc_signedIn_aiTierRingEnabled_identityErrorExist(
+            boolean nightModeEnabled) throws IOException {
+        // Fake an identity error.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    FakeSyncServiceImpl fakeSyncServiceImpl = new FakeSyncServiceImpl();
+                    SyncServiceFactory.setInstanceForTesting(fakeSyncServiceImpl);
+                    fakeSyncServiceImpl.setRequiresClientUpgrade(true);
+                });
+
+        // Sign-in and wait for the user profile image to appear.
+        mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
+
+        // Set the pref natively to trigger the AI tier ring.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    PrefService prefService =
+                            UserPrefs.get(ProfileManager.getLastUsedRegularProfile());
+                    prefService.setInteger("sync.ai_subscription_tier", 1);
+                });
+
+        String expectedContentDescription =
+                mActivityTestRule
+                        .getActivity()
+                        .getString(
+                                R.string
+                                        .accessibility_toolbar_btn_identity_disc_error_with_name_and_email,
+                                TestAccounts.ACCOUNT1.getFullName(),
+                                TestAccounts.ACCOUNT1.getEmail());
+        ViewUtils.waitForVisibleView(
+                allOf(
+                        withId(R.id.optional_toolbar_button),
+                        isDisplayed(),
+                        withContentDescription(expectedContentDescription)));
+
+        // Test the profile image shown with an error badge in signed-in state when an identity
+        // error exist and AI tier ring is enabled.
+        mRenderTestRule.render(
+                mActivityTestRule.getActivity().findViewById(R.id.optional_toolbar_button),
+                "identity_disc_signed_in_ai_tier_ring_enabled_identity_error_exist");
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures({
+        SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
+        SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT
+    })
+    public void testSetProfile_IncognitoProfile_DoesNotCreateSigninCoordinator() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    IdentityDiscController identityDiscController = buildController();
+
+                    Profile otrProfile =
+                            ProfileManager.getLastUsedRegularProfile()
+                                    .getPrimaryOtrProfile(/* createIfNeeded= */ true);
+                    mProfileSupplier.set(otrProfile);
+
+                    assertNull(
+                            "Signin coordinator should not be instantiated for ingognito profile",
+                            identityDiscController.getSigninCoordinatorForTesting());
+                });
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures({
+        SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
+        SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT
+    })
+    public void testSetProfile_SwitchToIncognito_DestroysSigninCoordinator() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    IdentityDiscController identityDiscController = buildController();
+
+                    Profile regularProfile = ProfileManager.getLastUsedRegularProfile();
+                    mProfileSupplier.set(regularProfile);
+                    assertNotNull(identityDiscController.getSigninCoordinatorForTesting());
+
+                    Profile otrProfile =
+                            ProfileManager.getLastUsedRegularProfile()
+                                    .getPrimaryOtrProfile(/* createIfNeeded= */ true);
+                    mProfileSupplier.set(otrProfile);
+
+                    assertNull(
+                            "Signin coordinator should be destroyed when switched to incognito",
+                            identityDiscController.getSigninCoordinatorForTesting());
+                });
+    }
+
     private void leaveNtp() {
         mActivityTestRule.loadUrl(ContentUrlConstants.ABOUT_BLANK_DISPLAY_URL);
         ChromeTabUtils.waitForTabPageLoaded(mTab, ContentUrlConstants.ABOUT_BLANK_DISPLAY_URL);
@@ -591,14 +836,45 @@ public class IdentityDiscControllerTest {
 
     private IdentityDiscController buildControllerWithObserver(
             ButtonDataProvider.ButtonDataObserver observer) {
-        IdentityDiscController controller =
-                new IdentityDiscController(mActivityTestRule.getActivity(), mProfileSupplier);
+        IdentityDiscController controller = buildController();
         controller.addObserver(observer);
+        return controller;
+    }
 
+    private IdentityDiscController buildController() {
+        IdentityDiscController controller =
+                new IdentityDiscController(
+                        mActivityTestRule.getActivity(),
+                        mWindowAndroid,
+                        mActivityResultTracker,
+                        mDeviceLockActivityLauncher,
+                        mProfileSupplier,
+                        mBottomSheetController,
+                        mModalDialogManager,
+                        mSnackbarManager,
+                        mOnSigninTapped);
+        ResettersForTesting.register(() -> ThreadUtils.runOnUiThreadBlocking(controller::destroy));
         return controller;
     }
 
     private PrimaryAccountChangeEvent newSigninEvent(int eventType) {
-        return new PrimaryAccountChangeEvent(eventType, ConsentLevel.SIGNIN);
+        return new PrimaryAccountChangeEvent(eventType);
+    }
+
+    private String getContentDescriptionWithNameAndEmail(AccountInfo accountInfo) {
+        return mActivityTestRule
+                .getActivity()
+                .getString(
+                        R.string.accessibility_toolbar_btn_identity_disc_with_name_and_email,
+                        accountInfo.getFullName(),
+                        accountInfo.getEmail());
+    }
+
+    private void waitForVisibleIdentityDisc(String contentDescription) {
+        ViewUtils.waitForVisibleView(
+                allOf(
+                        withId(R.id.optional_toolbar_button),
+                        isDisplayed(),
+                        withContentDescription(contentDescription)));
     }
 }

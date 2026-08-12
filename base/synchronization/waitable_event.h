@@ -11,6 +11,8 @@
 #include "base/compiler_specific.h"
 #include "base/containers/circular_deque.h"
 #include "base/containers/span.h"
+#include "base/functional/callback.h"
+#include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "build/blink_buildflags.h"
 #include "build/build_config.h"
@@ -20,10 +22,10 @@
 #elif BUILDFLAG(IS_APPLE)
 #include <mach/mach.h>
 
+#include <atomic>
 #include <memory>
 
 #include "base/apple/scoped_mach_port.h"
-#include "base/functional/callback_forward.h"
 #include "base/memory/ref_counted.h"
 #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
 #include <utility>
@@ -98,7 +100,7 @@ class BASE_EXPORT WaitableEvent {
   //   SendToOtherThread(e);
   //   e->Wait();
   //   delete e;
-  NOT_TAIL_CALLED void Wait();
+  NOT_TAIL_CALLED void Wait(const Location& location = Location::Current());
 
   // Wait up until wait_delta has passed for the event to be signaled
   // (real-time; ignores time overrides).  Returns true if the event was
@@ -106,7 +108,9 @@ class BASE_EXPORT WaitableEvent {
   // have elapsed if this returns false.
   //
   // TimedWait can synchronise its own destruction like |Wait|.
-  NOT_TAIL_CALLED bool TimedWait(TimeDelta wait_delta);
+  NOT_TAIL_CALLED bool TimedWait(
+      TimeDelta wait_delta,
+      const Location& location = Location::Current());
 
 #if BUILDFLAG(IS_WIN)
   HANDLE handle() const { return handle_.get(); }
@@ -135,6 +139,10 @@ class BASE_EXPORT WaitableEvent {
   // If more than one WaitableEvent is signaled to unblock WaitMany, the lowest
   // index among them is returned.
   NOT_TAIL_CALLED static size_t WaitMany(base::span<WaitableEvent*> waitables);
+
+  // Convenience method which returns a callback which calls Wait() on this
+  // object. The callback must *not* outlive this object.
+  OnceClosure GetWaitCallbackForTesting();
 
   // For asynchronous waiting, see WaitableEventWatcher
 
@@ -171,6 +179,11 @@ class BASE_EXPORT WaitableEvent {
  private:
   friend class WaitableEventWatcher;
 
+  // Returns a faster estimate of IsSignaled(); true if confirmed to be signaled
+  // (which may call IsSignaled()), false if likely not signaled. If this is not
+  // a manual reset event, then this test will cause a reset.
+  bool IsDefinitelySignaled() const;
+
   // The platform specific portions of Signal, TimedWait, and WaitMany (which do
   // the actual signaling and waiting).
   void SignalImpl();
@@ -187,7 +200,11 @@ class BASE_EXPORT WaitableEvent {
   // is present and false if not. If |dequeue| is true, the messsage will be
   // drained from the queue. If |dequeue| is false, the queue will only be
   // peeked. |port| must be a receive right.
-  static bool PeekPort(mach_port_t port, bool dequeue);
+  static bool PeekPortImpl(mach_port_t port, bool dequeue);
+
+  // Member helper that calls PeekPortImpl and updates the
+  // `signal_estimate_` cache.
+  bool PeekPort(bool dequeue) const;
 
   // The Mach receive right is waited on by both WaitableEvent and
   // WaitableEventWatcher. It is valid to signal and then delete an event, and
@@ -220,6 +237,8 @@ class BASE_EXPORT WaitableEvent {
   // the event, unlike the receive right, since a deleted event cannot be
   // signaled.
   apple::ScopedMachSendRight send_right_;
+
+  mutable std::atomic<bool> signal_estimate_{false};
 #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
   // On Windows, you must not close a HANDLE which is currently being waited on.
   // The MSDN documentation says that the resulting behaviour is 'undefined'.

@@ -5,22 +5,30 @@
 #include <memory>
 
 #include "base/command_line.h"
+#include "base/run_loop.h"
+#include "base/test/test_future.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/test_extension_service.h"
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/browser/signin/account_consistency_mode_manager.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/signin/signin_ui_util.h"
+#include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/signin/promos/bubble_signin_promo_delegate.h"
 #include "chrome/browser/ui/singleton_tabs.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chrome/test/base/ui_test_utils.h"
 #include "components/signin/public/base/account_consistency_method.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/identity_manager/account_info.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/sync/service/local_data_description.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
@@ -35,7 +43,11 @@ class BubbleSignInPromoDelegateTest : public InProcessBrowserTest {
   BubbleSignInPromoDelegateTest& operator=(
       const BubbleSignInPromoDelegateTest&) = delete;
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
+
+  signin::IdentityManager* identity_manager() {
+    return IdentityManagerFactory::GetForProfile(profile());
+  }
 
   void ReplaceBlank(Browser* browser);
 
@@ -52,10 +64,11 @@ void BubbleSignInPromoDelegateTest::ReplaceBlank(Browser* browser) {
 }
 
 void BubbleSignInPromoDelegateTest::SignInBrowser(Browser* browser) {
-  auto delegate = std::make_unique<BubbleSignInPromoDelegate>(
-      *browser->tab_strip_model()->GetActiveWebContents(),
-      signin_metrics::AccessPoint::kBookmarkBubble,
-      syncer::LocalDataItemModel::DataId());
+  auto delegate =
+      std::make_unique<BubbleSignInPromoForSyncableDataTypeDelegate>(
+          *browser->tab_strip_model()->GetActiveWebContents(),
+          signin_metrics::AccessPoint::kBookmarkBubble,
+          syncer::LocalDataItemModel::DataId());
   delegate->OnSignIn(AccountInfo());
 }
 
@@ -104,11 +117,12 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoDelegateTest,
   SignInBrowser(incognito_browser);
 
   // Signing in fom incognito should create a new non-incognito browser.
-  Browser* new_regular_browser = chrome::FindTabbedBrowser(
-      incognito_browser->profile()->GetOriginalProfile(), false);
+  BrowserWindowInterface* new_regular_browser =
+      ProfileBrowserCollection::GetForProfile(incognito_browser->GetProfile())
+          ->FindTabbedBrowser(/*match_original_profiles=*/true);
 
   // The full-tab sign-in page should be shown in the newly created browser.
-  EXPECT_EQ(1, new_regular_browser->tab_strip_model()->count());
+  EXPECT_EQ(1, new_regular_browser->GetTabStripModel()->count());
 
   // No effect is expected on the incognito browser.
   int tab_count_incognito = incognito_browser->tab_strip_model()->count();
@@ -125,12 +139,12 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoDelegateTest, BrowserRemoved) {
   int starting_tab_count = extra_browser->tab_strip_model()->count();
 
   std::unique_ptr<BubbleSignInPromoDelegate> delegate =
-      std::make_unique<BubbleSignInPromoDelegate>(
+      std::make_unique<BubbleSignInPromoForSyncableDataTypeDelegate>(
           *extra_browser->tab_strip_model()->GetActiveWebContents(),
           signin_metrics::AccessPoint::kBookmarkBubble,
           syncer::LocalDataItemModel::DataId());
 
-  BrowserList::SetLastActive(extra_browser);
+  ui_test_utils::DeprecatedFakeActivateBrowser(extra_browser);
 
   // Close all tabs in the original browser.  Run all pending messages
   // to make sure the browser window closes before continuing.
@@ -143,4 +157,135 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoDelegateTest, BrowserRemoved) {
   // A new tab should have been opened in the extra browser, which should be
   // visible.
   EXPECT_EQ(starting_tab_count + 1, tab_count);
+}
+
+IN_PROC_BROWSER_TEST_F(BubbleSignInPromoDelegateTest,
+                       CallbackDelegateAlreadySignedIn) {
+  // Simulate synchronous sign-in state by already having the primary account
+  // set.
+  AccountInfo info = signin::MakePrimaryAccountAvailable(
+      identity_manager(), "test@email.com", signin::ConsentLevel::kSignin);
+
+  base::test::TestFuture<void> future;
+
+  DefaultBubbleSignInPromoDelegate delegate(
+      *browser()->tab_strip_model()->GetActiveWebContents(),
+      signin_metrics::AccessPoint::kSendTabToSelfPromo, future.GetCallback());
+
+  delegate.OnSignIn(info);
+
+  EXPECT_TRUE(future.Wait());
+}
+
+IN_PROC_BROWSER_TEST_F(BubbleSignInPromoDelegateTest,
+                       CallbackDelegateAsyncSignIn) {
+  ReplaceBlank(browser());
+
+  base::test::TestFuture<void> future;
+
+  DefaultBubbleSignInPromoDelegate delegate(
+      *browser()->tab_strip_model()->GetActiveWebContents(),
+      signin_metrics::AccessPoint::kSendTabToSelfPromo, future.GetCallback());
+
+  delegate.OnSignIn(AccountInfo());
+
+  // The delegate should open a sign-in tab and register the callback on its
+  // helper.
+  content::WebContents* sign_in_tab =
+      signin_ui_util::GetSignInTabWithAccessPoint(
+          browser(), signin_metrics::AccessPoint::kSendTabToSelfPromo);
+  ASSERT_TRUE(sign_in_tab);
+
+  EXPECT_FALSE(future.IsReady());
+
+  // Now simulate successful sign-in in that tab to fire the callback.
+  signin::MakeAccountAvailable(
+      identity_manager(),
+      signin::AccountAvailabilityOptionsBuilder()
+          .AsPrimary(signin::ConsentLevel::kSignin)
+          .WithAccessPoint(signin_metrics::AccessPoint::kSendTabToSelfPromo)
+          .Build("test@gmail.com"));
+
+  EXPECT_TRUE(future.Wait());
+}
+
+IN_PROC_BROWSER_TEST_F(BubbleSignInPromoDelegateTest,
+                       CallbackDelegateReauthSignIn) {
+  ReplaceBlank(browser());
+
+  // 1. Simulate sign-in pending state (has primary account but with error).
+  AccountInfo info = signin::MakePrimaryAccountAvailable(
+      identity_manager(), "test@email.com", signin::ConsentLevel::kSignin);
+  signin::UpdatePersistentErrorOfRefreshTokenForAccount(
+      identity_manager(), info.account_id,
+      GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+          GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN));
+  ASSERT_TRUE(signin_util::IsSigninPending(identity_manager()));
+
+  base::test::TestFuture<void> future;
+
+  DefaultBubbleSignInPromoDelegate delegate(
+      *browser()->tab_strip_model()->GetActiveWebContents(),
+      signin_metrics::AccessPoint::kSendTabToSelfPromo, future.GetCallback());
+
+  // 2. Trigger OnSignIn. This should open the reauth tab.
+  delegate.OnSignIn(info);
+
+  // Verify the callback hasn't fired yet because the user hasn't
+  // reauthenticated.
+  EXPECT_FALSE(future.IsReady());
+
+  // 3. Now successfully reauthenticate.
+  // We need to simulate the reauth event with the correct access point.
+  AccountInfo extended_info = identity_manager()->FindExtendedAccountInfo(info);
+  extended_info.access_point = signin_metrics::AccessPoint::kSendTabToSelfPromo;
+  signin::UpdateAccountInfoForAccount(identity_manager(), extended_info);
+
+  signin::UpdatePersistentErrorOfRefreshTokenForAccount(
+      identity_manager(), info.account_id,
+      GoogleServiceAuthError::AuthErrorNone());
+
+  EXPECT_TRUE(future.Wait());
+}
+
+IN_PROC_BROWSER_TEST_F(BubbleSignInPromoDelegateTest,
+                       CallbackDelegateTabClosedBeforeSignIn) {
+  ReplaceBlank(browser());
+
+  base::test::TestFuture<void> future;
+
+  DefaultBubbleSignInPromoDelegate delegate(
+      *browser()->tab_strip_model()->GetActiveWebContents(),
+      signin_metrics::AccessPoint::kSendTabToSelfPromo, future.GetCallback());
+
+  delegate.OnSignIn(AccountInfo());
+
+  // Find and close the newly opened sign-in tab.
+  content::WebContents* sign_in_tab =
+      signin_ui_util::GetSignInTabWithAccessPoint(
+          browser(), signin_metrics::AccessPoint::kSendTabToSelfPromo);
+  ASSERT_TRUE(sign_in_tab);
+
+  int tab_index =
+      browser()->tab_strip_model()->GetIndexOfWebContents(sign_in_tab);
+  content::WebContentsDestroyedWatcher watcher(sign_in_tab);
+  browser()->tab_strip_model()->CloseWebContentsAt(
+      tab_index, TabCloseTypes::CLOSE_USER_GESTURE);
+  watcher.Wait();
+
+  // The future should NOT be ready since the tab was closed without sign-in.
+  EXPECT_FALSE(future.IsReady());
+
+  // Use the matching access point to verify the observer is fully detached,
+  // rather than relying on the helper's internal access point filtering to
+  // ignore the event.
+  signin::MakeAccountAvailable(
+      identity_manager(),
+      signin::AccountAvailabilityOptionsBuilder()
+          .AsPrimary(signin::ConsentLevel::kSignin)
+          .WithAccessPoint(signin_metrics::AccessPoint::kSendTabToSelfPromo)
+          .Build("another@gmail.com"));
+
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(future.IsReady());
 }

@@ -6,7 +6,6 @@
 
 #include "chrome/browser/ash/browser_delegate/browser_controller.h"
 #include "chrome/browser/ash/browser_delegate/browser_delegate.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "content/public/browser/web_ui.h"
@@ -41,7 +40,7 @@ void SendSearchFeedbackHandler::OpenFeedbackDialogWrapper(
 }
 
 void SendSearchFeedbackHandler::HandleOpenFeedbackDialog(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK_EQ(args.size(), 1U);
   OpenFeedbackDialogWrapper(args.front().GetString());
 }

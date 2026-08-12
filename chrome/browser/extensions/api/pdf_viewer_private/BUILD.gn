@@ -18,14 +18,21 @@ source_set("pdf_viewer_private") {
 
   deps = [
     "//base",
+    "//chrome/browser/extensions",
+    "//chrome/browser/glic",
     "//chrome/browser/pdf",
     "//chrome/browser/pdf:pdf_pref_names",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/user_education",
     "//chrome/common:constants",
     "//chrome/common/extensions/api",
     "//components/pdf/common:constants",
     "//components/prefs",
+    "//components/tabs:public",
     "//extensions/browser",
+    "//extensions/browser/mime_handler",
+    "//extensions/browser/mime_handler:stream_container",
+    "//pdf:features",
     "//url",
   ]
   if (enable_pdf_save_to_drive) {
@@ -35,4 +42,18 @@ source_set("pdf_viewer_private") {
       "//chrome/browser/ui/save_to_drive",
     ]
   }
+}
+
+source_set("browser_tests") {
+  testonly = true
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+
+  sources = [ "pdf_viewer_private_browsertest.cc" ]
+  deps = [
+    ":pdf_viewer_private",
+    "//chrome/browser/glic",
+    "//chrome/browser/glic/test_support",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+  ]
 }

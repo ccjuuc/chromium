@@ -8,67 +8,9 @@
 //    clang-format -i -style=chromium filename
 // DO NOT EDIT!
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 // It is included by gles2_cmd_decoder_unittest_2.cc
 #ifndef GPU_COMMAND_BUFFER_SERVICE_GLES2_CMD_DECODER_UNITTEST_2_AUTOGEN_H_
 #define GPU_COMMAND_BUFFER_SERVICE_GLES2_CMD_DECODER_UNITTEST_2_AUTOGEN_H_
-
-TEST_P(GLES2DecoderTest2, GetProgramivValidArgs) {
-  SpecializedSetup<cmds::GetProgramiv, 0>(true);
-  typedef cmds::GetProgramiv::Result Result;
-  Result* result = static_cast<Result*>(shared_memory_address_);
-  result->size = 0;
-  cmds::GetProgramiv cmd;
-  cmd.Init(client_program_id_, GL_DELETE_STATUS, shared_memory_id_,
-           shared_memory_offset_);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(decoder_->GetGLES2Util()->GLGetNumValuesReturned(GL_DELETE_STATUS),
-            result->GetNumResults());
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-}
-
-TEST_P(GLES2DecoderTest2, GetProgramivInvalidArgs1_0) {
-  EXPECT_CALL(*gl_, GetProgramiv(_, _, _)).Times(0);
-  SpecializedSetup<cmds::GetProgramiv, 0>(false);
-  cmds::GetProgramiv::Result* result =
-      static_cast<cmds::GetProgramiv::Result*>(shared_memory_address_);
-  result->size = 0;
-  cmds::GetProgramiv cmd;
-  cmd.Init(client_program_id_, GL_PROGRAM_BINARY_RETRIEVABLE_HINT,
-           shared_memory_id_, shared_memory_offset_);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(0u, result->size);
-  EXPECT_EQ(GL_INVALID_ENUM, GetGLError());
-}
-
-TEST_P(GLES2DecoderTest2, GetProgramivInvalidArgs2_0) {
-  EXPECT_CALL(*gl_, GetProgramiv(_, _, _)).Times(0);
-  SpecializedSetup<cmds::GetProgramiv, 0>(false);
-  cmds::GetProgramiv::Result* result =
-      static_cast<cmds::GetProgramiv::Result*>(shared_memory_address_);
-  result->size = 0;
-  cmds::GetProgramiv cmd;
-  cmd.Init(client_program_id_, GL_DELETE_STATUS, kInvalidSharedMemoryId, 0);
-  EXPECT_EQ(error::kOutOfBounds, ExecuteCmd(cmd));
-  EXPECT_EQ(0u, result->size);
-}
-
-TEST_P(GLES2DecoderTest2, GetProgramivInvalidArgs2_1) {
-  EXPECT_CALL(*gl_, GetProgramiv(_, _, _)).Times(0);
-  SpecializedSetup<cmds::GetProgramiv, 0>(false);
-  cmds::GetProgramiv::Result* result =
-      static_cast<cmds::GetProgramiv::Result*>(shared_memory_address_);
-  result->size = 0;
-  cmds::GetProgramiv cmd;
-  cmd.Init(client_program_id_, GL_DELETE_STATUS, shared_memory_id_,
-           kInvalidSharedMemoryOffset);
-  EXPECT_EQ(error::kOutOfBounds, ExecuteCmd(cmd));
-  EXPECT_EQ(0u, result->size);
-}
 
 TEST_P(GLES2DecoderTest2, GetProgramInfoLogValidArgs) {
   const char* kInfo = "hello";
@@ -81,8 +23,8 @@ TEST_P(GLES2DecoderTest2, GetProgramInfoLogValidArgs) {
   CommonDecoder::Bucket* bucket = decoder_->GetBucket(kBucketId);
   ASSERT_TRUE(bucket != nullptr);
   EXPECT_EQ(strlen(kInfo) + 1, bucket->size());
-  EXPECT_EQ(0,
-            memcmp(bucket->GetData(0, bucket->size()), kInfo, bucket->size()));
+  EXPECT_EQ(0, UNSAFE_TODO(memcmp(bucket->GetData(0, bucket->size()), kInfo,
+                                  bucket->size())));
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 
@@ -763,7 +705,8 @@ TEST_P(GLES2DecoderTest2, ShaderSourceBucketInvalidHeader) {
       -1,
   };
   for (size_t ii = 0; ii < std::size(kTests); ++ii) {
-    SetBucketAsCStrings(kBucketId, 1, kSource, kTests[ii], kValidStrEnd);
+    SetBucketAsCStrings(kBucketId, 1, kSource, UNSAFE_TODO(kTests[ii]),
+                        kValidStrEnd);
     cmds::ShaderSourceBucket cmd;
     cmd.Init(client_shader_id_, kBucketId);
     EXPECT_EQ(error::kInvalidArguments, ExecuteCmd(cmd));
@@ -969,7 +912,8 @@ TEST_P(GLES3DecoderTest2, TransformFeedbackVaryingsBucketInvalidHeader) {
       -1,
   };
   for (size_t ii = 0; ii < std::size(kTests); ++ii) {
-    SetBucketAsCStrings(kBucketId, 1, kSource, kTests[ii], kValidStrEnd);
+    SetBucketAsCStrings(kBucketId, 1, kSource, UNSAFE_TODO(kTests[ii]),
+                        kValidStrEnd);
     cmds::TransformFeedbackVaryingsBucket cmd;
     cmd.Init(client_program_id_, kBucketId, GL_INTERLEAVED_ATTRIBS);
     EXPECT_EQ(error::kInvalidArguments, ExecuteCmd(cmd));
@@ -1079,6 +1023,15 @@ TEST_P(GLES2DecoderTest2, Uniform3ivImmediateValidArgs) {
   EXPECT_CALL(*gl_, Uniform3iv(1, 2, PointsToArray(temp, 3)));
   cmd.Init(1, 2, &temp[0]);
   EXPECT_EQ(error::kNoError, ExecuteImmediateCmd(cmd, sizeof(temp)));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+}
+
+TEST_P(GLES2DecoderTest2, Uniform4fValidArgs) {
+  EXPECT_CALL(*gl_, Uniform4fv(1, 1, _));
+  SpecializedSetup<cmds::Uniform4f, 0>(true);
+  cmds::Uniform4f cmd;
+  cmd.Init(1, 2, 3, 4, 5);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 #endif  // GPU_COMMAND_BUFFER_SERVICE_GLES2_CMD_DECODER_UNITTEST_2_AUTOGEN_H_

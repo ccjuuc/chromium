@@ -9,8 +9,6 @@
 #include "chrome/browser/extensions/api/permissions/permissions_api.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_tabstrip.h"
 #include "components/embedder_support/switches.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/browser_thread.h"
@@ -23,6 +21,7 @@
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/process_manager.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
 #include "extensions/test/test_extension_dir.h"
@@ -30,6 +29,8 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/common/switches.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 namespace {
@@ -144,9 +145,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest,
 }
 
 // Tests that we don't override events when bindings are re-injected.
-// Regression test for http://crbug.com/269149.
-// Regression test for http://crbug.com/436593.
-// Flaky http://crbug.com/733064.
+// Regression test for http://crbug.com/40327962.
+// Regression test for http://crbug.com/40395582.
+// Flaky http://crbug.com/41325266.
 IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest, DISABLED_EventOverriding) {
   ASSERT_TRUE(RunExtensionTest("bindings/event_overriding")) << message_;
   // The extension test removes a window and, during window removal, sends the
@@ -155,7 +156,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest, DISABLED_EventOverriding) {
 }
 
 // Tests the effectiveness of the 'nocompile' feature file property.
-// Regression test for http://crbug.com/356133.
+// Regression test for http://crbug.com/41097076.
 IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest, Nocompile) {
   ASSERT_TRUE(
       RunExtensionTest("bindings/nocompile", {.extension_url = "page.html"}))
@@ -166,7 +167,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest, ApiEnums) {
   ASSERT_TRUE(RunExtensionTest("bindings/api_enums")) << message_;
 }
 
-// Regression test for http://crbug.com/504011 - proper access checks on
+// Regression test for http://crbug.com/40082354 - proper access checks on
 // getModuleSystem().
 IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest, ModuleSystem) {
   ASSERT_TRUE(RunExtensionTest("bindings/module_system")) << message_;
@@ -322,7 +323,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest, TestEventFilterParsing) {
   ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
-// crbug.com/733337
+// crbug.com/40525791
 IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest, ValidationInterception) {
   // We need to create runtime bindings in the web page. An extension that's
   // externally connectable will do that for us.
@@ -347,7 +348,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest, UncaughtExceptionLogging) {
 
 // Verify that when a web frame embeds an extension subframe, and that subframe
 // is the only active portion of the extension, the subframe gets proper JS
-// bindings. See https://crbug.com/760341.
+// bindings. See https://crbug.com/40537642.
 IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest,
                        ExtensionSubframeGetsBindings) {
   // Load an extension that does not have a background page or popup, so it
@@ -423,7 +424,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest, UseAPIsAfterContextRemoval) {
 
 // Tests that we don't crash if the extension invalidates the context in a
 // callback with a runtime.lastError present. Regression test for
-// https://crbug.com/944014.
+// https://crbug.com/41448033.
 IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest,
                        InvalidateContextInCallbackWithLastError) {
   TestExtensionDir dir;
@@ -483,7 +484,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest, UseAppAPIAfterFrameRemoval) {
 
 // Tests attaching two listeners from the same extension but different pages,
 // then removing one, and ensuring the second is still notified.
-// Regression test for https://crbug.com/868763.
+// Regression test for https://crbug.com/40587085.
 IN_PROC_BROWSER_TEST_F(
     ExtensionBindingsApiTest,
     MultipleEventListenersFromDifferentContextsAndTheSameExtension) {
@@ -531,9 +532,8 @@ IN_PROC_BROWSER_TEST_F(
                                                       "tabs.onCreated"));
 
   // Close one of the extension pages.
-  constexpr bool add_to_history = false;
   content::WebContentsDestroyedWatcher watcher(second_tab);
-  chrome::CloseWebContents(browser(), second_tab, add_to_history);
+  CloseTabForWebContents(second_tab);
   watcher.Wait();
   // Hacky round trip to the renderer to flush IPCs.
   ASSERT_TRUE(content::ExecJs(first_tab, ""));
@@ -661,7 +661,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest,
 
 // Tests that a web page can consume a user gesture after an extension sends and
 // receives a reply during the same user gesture.
-// Regression test for https://crbug.com/921141.
+// Regression test for https://crbug.com/41435171.
 IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest,
                        WebUserGestureAfterMessagingCallback) {
   TestExtensionDir test_dir;
@@ -725,7 +725,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest,
 
 // Tests that a web page can consume a user gesture after an extension calls a
 // method and receives the response in the callback.
-// Regression test for https://crbug.com/921141.
+// Regression test for https://crbug.com/41435171.
 IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest,
                        WebUserGestureAfterApiCallback) {
   TestExtensionDir test_dir;
@@ -774,6 +774,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest,
                             content::EXECUTE_SCRIPT_NO_USER_GESTURE));
 }
 
+// Desktop Android does not support side panel yet. https://crbug.com/405218955
+#if BUILDFLAG(ENABLE_EXTENSIONS)
 // Tests that, if a document has an active user gesture, a new message coming in
 // that *also* has a user gesture won't override the active one. Regression test
 // for https://crbug.com/355266358.
@@ -874,16 +876,17 @@ IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest,
   // The test succeeds if the side panel opens.
   ASSERT_TRUE(result_catcher.GetNextResult()) << result_catcher.message();
 }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // Tests that bindings are properly instantiated for a window navigated to an
 // extension URL after being opened with an undefined URL.
-// Regression test for https://crbug.com/925118.
+// Regression test for https://crbug.com/40611007.
 IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest,
                        TestBindingsAvailableWithNavigatedBlankWindow) {
   constexpr char kManifest[] =
       R"({
            "name": "chrome.runtime bug checker",
-           "description": "test case for crbug.com/925118",
+           "description": "test case for crbug.com/40611007",
            "version": "0",
            "manifest_version": 2
          })";
@@ -970,7 +973,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionBindingsApiTest,
              // Modify the chrome.runtime object, which is the source for the
              // chrome.extension API, to throw an error when sendMessage is
              // accessed. Nothing should blow up.
-             // Regression test for https://crbug.com/949170.
+             // Regression test for https://crbug.com/41450968.
              Object.defineProperty(
                  chrome.runtime,
                  'sendMessage',

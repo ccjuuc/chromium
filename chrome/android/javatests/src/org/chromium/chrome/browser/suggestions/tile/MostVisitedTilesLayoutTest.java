@@ -23,6 +23,7 @@ import android.widget.FrameLayout;
 
 import androidx.test.filters.MediumTest;
 
+import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Rule;
@@ -35,14 +36,16 @@ import org.mockito.junit.MockitoRule;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.params.ParameterAnnotations;
 import org.chromium.base.test.params.ParameterizedRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
+import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
@@ -56,7 +59,6 @@ import org.chromium.chrome.browser.suggestions.SuggestionsUiDelegate;
 import org.chromium.chrome.browser.suggestions.SuggestionsUiDelegateImpl;
 import org.chromium.chrome.browser.ui.native_page.TouchEnabledDelegate;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ntp.MvtsFacility;
@@ -66,6 +68,7 @@ import org.chromium.chrome.test.util.browser.offlinepages.FakeOfflinePageBridge;
 import org.chromium.chrome.test.util.browser.suggestions.SuggestionsDependenciesRule;
 import org.chromium.chrome.test.util.browser.suggestions.mostvisited.FakeMostVisitedSites;
 import org.chromium.net.test.EmbeddedTestServerRule;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.test.util.NightModeTestUtils;
 import org.chromium.url.GURL;
 
@@ -79,7 +82,7 @@ import java.util.concurrent.TimeoutException;
 @RunWith(ParameterizedRunner.class)
 @ParameterAnnotations.UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
 @CommandLineFlags.Add(ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE)
-@Batch(Batch.PER_CLASS)
+@DoNotBatch(reason = "AI automated batching was unsuccessful.")
 public class MostVisitedTilesLayoutTest {
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -119,6 +122,7 @@ public class MostVisitedTilesLayoutTest {
             new String[] {"ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE"};
 
     private final CallbackHelper mLoadCompleteHelper = new CallbackHelper();
+    private MostVisitedTilesCoordinator mCoordinator;
 
     @BeforeClass
     public static void setUpBeforeActivityLaunched() {
@@ -136,14 +140,26 @@ public class MostVisitedTilesLayoutTest {
         ChromeNightModeTestUtils.tearDownNightModeAfterChromeActivityDestroyed();
     }
 
+    @After
+    public void tearDown() {
+        if (mCoordinator != null) {
+            ThreadUtils.runOnUiThreadBlocking(() -> mCoordinator.destroy());
+            mCoordinator = null;
+        }
+        // Since renderTiles() calls setContentView() on the Activity, the clean up causes an
+        // exception.
+        mActivityTestRule.skipWindowAndTabStateCleanup();
+    }
+
     @Test
     @MediumTest
     @Feature({"NewTabPage", "RenderTest"})
     @ParameterAnnotations.UseMethodParameter(NightModeTestUtils.NightModeParams.class)
     @DisableFeatures({ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION})
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511288662
     public void testTilesLayoutAppearance_DisableMvtCustomization(boolean nightModeEnabled)
             throws Exception {
-        doTilesLayoutAppearanceTest(nightModeEnabled, "");
+        doTilesLayoutAppearanceTest(nightModeEnabled, "_v1");
     }
 
     @Test
@@ -151,9 +167,10 @@ public class MostVisitedTilesLayoutTest {
     @Feature({"NewTabPage", "RenderTest"})
     @ParameterAnnotations.UseMethodParameter(NightModeTestUtils.NightModeParams.class)
     @EnableFeatures({ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION})
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511288662
     public void testTilesLayoutAppearance_EnableMvtCustomization(boolean nightModeEnabled)
             throws Exception {
-        doTilesLayoutAppearanceTest(nightModeEnabled, "_with_add_new_button");
+        doTilesLayoutAppearanceTest(nightModeEnabled, "_with_add_new_button_v1");
     }
 
     private void doTilesLayoutAppearanceTest(boolean nightModeEnabled, String suffix)
@@ -169,18 +186,20 @@ public class MostVisitedTilesLayoutTest {
     @MediumTest
     @Feature({"NewTabPage", "RenderTest"})
     @DisableFeatures({ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION})
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511288662
     public void testModernTilesLayoutAppearance_Full_DisableMvtCustomization()
             throws IOException, InterruptedException {
-        doModernTilesLayoutAppearanceTest_Full("");
+        doModernTilesLayoutAppearanceTest_Full("_v1");
     }
 
     @Test
     @MediumTest
     @Feature({"NewTabPage", "RenderTest"})
     @EnableFeatures({ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION})
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511288662
     public void testModernTilesLayoutAppearance_Full_EnableMvtCustomization()
             throws IOException, InterruptedException {
-        doModernTilesLayoutAppearanceTest_Full("_with_add_new_button");
+        doModernTilesLayoutAppearanceTest_Full("_with_add_new_button_v1");
     }
 
     private void doModernTilesLayoutAppearanceTest_Full(String suffix)
@@ -214,6 +233,7 @@ public class MostVisitedTilesLayoutTest {
     @Test
     @MediumTest
     @Feature({"NewTabPage", "RenderTest"})
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511288662
     public void testModernTilesLayoutAppearance_Two() throws IOException, InterruptedException {
         ThreadUtils.runOnUiThreadBlocking(
                 () ->
@@ -231,7 +251,7 @@ public class MostVisitedTilesLayoutTest {
                             activity.getResources().getConfiguration().orientation,
                             is(ORIENTATION_PORTRAIT));
                 });
-        mRenderTestRule.render(tilesLayout, "modern_tiles_layout_two_tiles_portrait");
+        mRenderTestRule.render(tilesLayout, "modern_tiles_layout_two_tiles_portrait_v1");
 
         activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
         CriteriaHelper.pollUiThread(
@@ -240,7 +260,7 @@ public class MostVisitedTilesLayoutTest {
                             activity.getResources().getConfiguration().orientation,
                             is(ORIENTATION_LANDSCAPE));
                 });
-        mRenderTestRule.render(tilesLayout, "modern_tiles_layout_two_tiles_landscape");
+        mRenderTestRule.render(tilesLayout, "modern_tiles_layout_two_tiles_landscape_v1");
 
         // Reset device orientation.
         ActivityTestUtils.clearActivityOrientation(activity);
@@ -258,16 +278,16 @@ public class MostVisitedTilesLayoutTest {
 
         mLoadCompleteHelper.waitForCallback(0);
 
-        mRenderTestRule.render(tiles.getChildAt(0), "tile_modern_offline");
-        mRenderTestRule.render(tiles.getChildAt(1), "tile_modern");
+        mRenderTestRule.render(tiles.getChildAt(0), "tile_modern_offline_v1");
+        mRenderTestRule.render(tiles.getChildAt(1), "tile_modern_v1");
     }
 
     private List<SiteSuggestion> makeAndSetUpFakeSuggestions(int count) {
         List<SiteSuggestion> siteSuggestions = makeFakeSuggestions(count);
 
-        FakeMostVisitedSites mMostVisitedSites = new FakeMostVisitedSites();
-        mMostVisitedSites.setTileSuggestions(siteSuggestions);
-        mSuggestionsDeps.getFactory().mostVisitedSites = mMostVisitedSites;
+        FakeMostVisitedSites mostVisitedSites = new FakeMostVisitedSites();
+        mostVisitedSites.setTileSuggestions(siteSuggestions);
+        mSuggestionsDeps.getFactory().mostVisitedSites = mostVisitedSites;
 
         return siteSuggestions;
     }
@@ -337,7 +357,7 @@ public class MostVisitedTilesLayoutTest {
 
         ChromeActivity activity = mActivityTestRule.getActivity();
 
-        // TODO (https://crbug.com/1063807):  Add incognito mode tests.
+        // TODO (https://crbug.com/40680929):  Add incognito mode tests.
         Profile profile = ProfileManager.getLastUsedRegularProfile();
         SuggestionsUiDelegate uiDelegate =
                 new SuggestionsUiDelegateImpl(null, profile, null, activity.getSnackbarManager());
@@ -351,9 +371,9 @@ public class MostVisitedTilesLayoutTest {
                     }
                 };
 
-        MostVisitedTilesCoordinator coordinator =
+        mCoordinator =
                 new MostVisitedTilesCoordinator(
                         activity, mActivityLifecycleDispatcher, containerLayout, null, null);
-        coordinator.initWithNative(profile, uiDelegate, delegate, mTouchEnabledDelegate);
+        mCoordinator.initWithNative(profile, uiDelegate, delegate, mTouchEnabledDelegate);
     }
 }

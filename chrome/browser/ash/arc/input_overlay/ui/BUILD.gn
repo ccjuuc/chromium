@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-
 assert(is_chromeos)
 
 static_library("ui") {
@@ -61,7 +59,6 @@ static_library("ui") {
     "//chrome/app/vector_icons",
     "//chrome/browser/ash/arc/input_overlay/actions",
     "//chrome/browser/ash/arc/input_overlay/db/proto",
-    "//chrome/browser/nearby_sharing/common",
     "//chrome/browser/resources:component_extension_resources",
     "//chromeos/ash/experiences/arc",
     "//chromeos/strings:strings_grit",

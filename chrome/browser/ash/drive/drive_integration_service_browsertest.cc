@@ -15,6 +15,7 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/run_loop.h"
+#include "base/scoped_observation.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/mock_callback.h"
@@ -64,13 +65,13 @@ using DriveIntegrationServiceBrowserTest =
 // Verify DriveIntegrationService is created during login.
 IN_PROC_BROWSER_TEST_F(DriveIntegrationServiceBrowserTest, CreatedDuringLogin) {
   EXPECT_TRUE(
-      DriveIntegrationServiceFactory::FindForProfile(browser()->profile()));
+      DriveIntegrationServiceFactory::FindForProfile(browser()->GetProfile()));
 }
 
 IN_PROC_BROWSER_TEST_F(DriveIntegrationServiceBrowserTest,
                        ClearCacheAndRemountFileSystem) {
   auto* drive_service =
-      DriveIntegrationServiceFactory::FindForProfile(browser()->profile());
+      DriveIntegrationServiceFactory::FindForProfile(browser()->GetProfile());
   base::FilePath cache_path = drive_service->GetDriveFsHost()->GetDataPath();
   base::FilePath log_folder_path = drive_service->GetDriveFsLogPath().DirName();
   base::FilePath cache_file;
@@ -102,21 +103,21 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationServiceBrowserTest,
                        DisableDrivePolicyTest) {
   // First make sure the pref is set to its default value which should permit
   // drive.
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kDisableDrive, false);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kDisableDrive, false);
 
   drive::DriveIntegrationService* integration_service =
       drive::DriveIntegrationServiceFactory::FindForProfile(
-          browser()->profile());
+          browser()->GetProfile());
 
   EXPECT_TRUE(integration_service);
   EXPECT_TRUE(integration_service->is_enabled());
 
   // ...next try to disable drive.
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kDisableDrive, true);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kDisableDrive, true);
 
   EXPECT_EQ(integration_service,
             drive::DriveIntegrationServiceFactory::FindForProfile(
-                browser()->profile()));
+                browser()->GetProfile()));
   EXPECT_FALSE(integration_service->is_enabled());
 }
 
@@ -125,7 +126,7 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationServiceBrowserTest,
   base::ScopedAllowBlockingForTesting allow_blocking;
   drive::DriveIntegrationService* drive_service =
       drive::DriveIntegrationServiceFactory::FindForProfile(
-          browser()->profile());
+          browser()->GetProfile());
 
   base::FilePath mount_path = drive_service->GetMountPointPath();
   ASSERT_TRUE(base::WriteFile(mount_path.Append("bar"), ""));
@@ -168,7 +169,7 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationServiceBrowserTest,
   base::ScopedAllowBlockingForTesting allow_blocking;
   drive::DriveIntegrationService* drive_service =
       drive::DriveIntegrationServiceFactory::FindForProfile(
-          browser()->profile());
+          browser()->GetProfile());
 
   base::FilePath mount_path = drive_service->GetMountPointPath();
   ASSERT_TRUE(base::WriteFile(mount_path.Append("bar"), ""));
@@ -213,7 +214,7 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationServiceBrowserTest, GetThumbnailTest) {
   base::ScopedAllowBlockingForTesting allow_blocking;
   drive::DriveIntegrationService* drive_service =
       drive::DriveIntegrationServiceFactory::FindForProfile(
-          browser()->profile());
+          browser()->GetProfile());
 
   base::FilePath mount_path = drive_service->GetMountPointPath();
   ASSERT_TRUE(base::WriteFile(mount_path.Append("bar"), ""));
@@ -241,11 +242,11 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationServiceWithGaiaDisabledBrowserTest,
                        DriveDisabled) {
   // First make sure the pref is set to its default value which would normally
   // permit drive.
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kDisableDrive, false);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kDisableDrive, false);
 
   drive::DriveIntegrationService* integration_service =
       drive::DriveIntegrationServiceFactory::FindForProfile(
-          browser()->profile());
+          browser()->GetProfile());
 
   ASSERT_TRUE(integration_service);
   EXPECT_FALSE(integration_service->is_enabled());
@@ -254,7 +255,7 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationServiceWithGaiaDisabledBrowserTest,
 IN_PROC_BROWSER_TEST_F(DriveIntegrationServiceBrowserTest, GetMetadata) {
   base::ScopedAllowBlockingForTesting allow_blocking;
   auto* drive_service =
-      DriveIntegrationServiceFactory::FindForProfile(browser()->profile());
+      DriveIntegrationServiceFactory::FindForProfile(browser()->GetProfile());
 
   base::FilePath mount_path = drive_service->GetMountPointPath();
   base::FilePath file_path;
@@ -289,7 +290,7 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationServiceBrowserTest, GetMetadata) {
 
 IN_PROC_BROWSER_TEST_F(DriveIntegrationServiceBrowserTest,
                        LocateFilesByItemIds) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   InitTestFileMountRoot(profile);
   AddDriveFileWithRelativePath(profile, /*drive_file_id=*/"abc123",
                                /*directory_path=*/base::FilePath(""),
@@ -331,7 +332,7 @@ class DriveIntegrationServiceWithPrefDisabledBrowserTest
 
 IN_PROC_BROWSER_TEST_F(DriveIntegrationServiceWithPrefDisabledBrowserTest,
                        RenableAndDisableDrive) {
-  auto* profile = browser()->profile();
+  auto* profile = browser()->GetProfile();
   auto* drive_service = DriveIntegrationServiceFactory::FindForProfile(profile);
   EXPECT_FALSE(drive_service->is_enabled());
 
@@ -345,7 +346,7 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationServiceWithPrefDisabledBrowserTest,
 IN_PROC_BROWSER_TEST_F(DriveIntegrationServiceBrowserTest,
                        EnableMirrorSync_FeatureDisabled) {
   auto* drive_service =
-      DriveIntegrationServiceFactory::FindForProfile(browser()->profile());
+      DriveIntegrationServiceFactory::FindForProfile(browser()->GetProfile());
 
   {
     base::RunLoop run_loop;
@@ -378,8 +379,10 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationServiceBrowserTest,
 
 class DriveMirrorSyncStatusObserver : public DriveIntegrationService::Observer {
  public:
-  explicit DriveMirrorSyncStatusObserver(bool expected_status)
+  explicit DriveMirrorSyncStatusObserver(DriveIntegrationService* service,
+                                         bool expected_status)
       : expected_status_(expected_status) {
+    observation_.Observe(service);
     quit_closure_ = run_loop_.QuitClosure();
   }
 
@@ -399,6 +402,9 @@ class DriveMirrorSyncStatusObserver : public DriveIntegrationService::Observer {
   base::RunLoop run_loop_;
   base::RepeatingClosure quit_closure_;
   bool expected_status_ = false;
+  base::ScopedObservation<DriveIntegrationService,
+                          DriveIntegrationService::Observer>
+      observation_{this};
 };
 
 class DriveIntegrationBrowserTestWithMirrorSyncEnabled
@@ -419,9 +425,10 @@ class DriveIntegrationBrowserTestWithMirrorSyncEnabled
   void SetUpOnMainThread() override { MockGetSyncingPaths(); }
 
   void ToggleMirrorSync(bool status, bool expect_fail = false) {
-    DriveMirrorSyncStatusObserver observer(expect_fail ? !status : status);
-    Profile* const profile = browser()->profile();
-    observer.Observe(DriveIntegrationServiceFactory::FindForProfile(profile));
+    Profile* const profile = browser()->GetProfile();
+    DriveMirrorSyncStatusObserver observer(
+        DriveIntegrationServiceFactory::FindForProfile(profile),
+        expect_fail ? !status : status);
     PrefService* const prefs = profile->GetPrefs();
     prefs->SetBoolean(prefs::kDriveFsEnableMirrorSync, status);
     observer.WaitForStatusChange();
@@ -431,7 +438,7 @@ class DriveIntegrationBrowserTestWithMirrorSyncEnabled
 
   void MockGetSyncingPaths() {
     drivefs::FakeDriveFs* fake_drivefs =
-        GetFakeDriveFsForProfile(browser()->profile());
+        GetFakeDriveFsForProfile(browser()->GetProfile());
     ON_CALL(*fake_drivefs, GetSyncingPaths(_))
         .WillByDefault(testing::Invoke(
             fake_drivefs, &drivefs::FakeDriveFs::GetSyncingPathsForTesting));
@@ -456,10 +463,10 @@ class DriveIntegrationBrowserTestWithBulkPinningEnabled
 IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
                        EnableMirrorSync) {
   auto* drive_service =
-      DriveIntegrationServiceFactory::FindForProfile(browser()->profile());
+      DriveIntegrationServiceFactory::FindForProfile(browser()->GetProfile());
 
   // Ensure the mirror syncing service is disabled.
-  EXPECT_FALSE(browser()->profile()->GetPrefs()->GetBoolean(
+  EXPECT_FALSE(browser()->GetProfile()->GetPrefs()->GetBoolean(
       prefs::kDriveFsEnableMirrorSync));
   EXPECT_FALSE(drive_service->IsMirroringEnabled());
 
@@ -470,7 +477,7 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
   // Check MyFiles is being added as sync path.
   TestFuture<drive::FileError, const std::vector<base::FilePath>&> future;
   const base::FilePath my_files_path =
-      file_manager::util::GetMyFilesFolderForProfile(browser()->profile());
+      file_manager::util::GetMyFilesFolderForProfile(browser()->GetProfile());
 
   drive_service->GetSyncingPaths(future.GetCallback());
 
@@ -480,7 +487,7 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
 
 IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
                        EnableMirrorSyncWithNonExistMyFiles) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   auto* drive_service = DriveIntegrationServiceFactory::FindForProfile(profile);
 
   // Replace MyFiles mount point to something not exist.
@@ -509,10 +516,10 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
 IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
                        DisableMirrorSync) {
   auto* drive_service =
-      DriveIntegrationServiceFactory::FindForProfile(browser()->profile());
+      DriveIntegrationServiceFactory::FindForProfile(browser()->GetProfile());
 
   // Ensure the mirror syncing service is disabled.
-  EXPECT_FALSE(browser()->profile()->GetPrefs()->GetBoolean(
+  EXPECT_FALSE(browser()->GetProfile()->GetPrefs()->GetBoolean(
       prefs::kDriveFsEnableMirrorSync));
   EXPECT_FALSE(drive_service->IsMirroringEnabled());
 
@@ -522,7 +529,7 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
   EXPECT_TRUE(drive_service->IsMirroringEnabled());
   drive_service->GetSyncingPaths(future.GetCallback());
   const base::FilePath my_files_path =
-      file_manager::util::GetMyFilesFolderForProfile(browser()->profile());
+      file_manager::util::GetMyFilesFolderForProfile(browser()->GetProfile());
   EXPECT_THAT(future.Get<1>(), testing::ElementsAre(my_files_path));
 
   // Disable mirroring and ensure the integration service has it disabled.
@@ -533,7 +540,7 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
 IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
                        ToggleSyncForPath_MirroringDisabled) {
   auto* drive_service =
-      DriveIntegrationServiceFactory::FindForProfile(browser()->profile());
+      DriveIntegrationServiceFactory::FindForProfile(browser()->GetProfile());
 
   {
     base::RunLoop run_loop;
@@ -551,7 +558,7 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
 IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
                        ToggleSyncForPath_MirroringEnabledFileNotFound) {
   auto* drive_service =
-      DriveIntegrationServiceFactory::FindForProfile(browser()->profile());
+      DriveIntegrationServiceFactory::FindForProfile(browser()->GetProfile());
 
   // Enable mirror sync.
   ToggleMirrorSync(true);
@@ -572,7 +579,7 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
 IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
                        ToggleSyncForPath_MirroringEnabled) {
   auto* drive_service =
-      DriveIntegrationServiceFactory::FindForProfile(browser()->profile());
+      DriveIntegrationServiceFactory::FindForProfile(browser()->GetProfile());
 
   // Enable mirror sync.
   ToggleMirrorSync(true);
@@ -605,7 +612,7 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
 IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
                        ToggleSyncForPath_MirroringEnabledAddSamePath) {
   auto* drive_service =
-      DriveIntegrationServiceFactory::FindForProfile(browser()->profile());
+      DriveIntegrationServiceFactory::FindForProfile(browser()->GetProfile());
 
   // Enable mirror sync.
   ToggleMirrorSync(true);
@@ -657,7 +664,7 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
 IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
                        GetSyncingPaths_MirroringDisabled) {
   auto* drive_service =
-      DriveIntegrationServiceFactory::FindForProfile(browser()->profile());
+      DriveIntegrationServiceFactory::FindForProfile(browser()->GetProfile());
 
   {
     base::RunLoop run_loop;
@@ -676,7 +683,7 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
 IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
                        GetSyncingPaths_MirroringEnabled) {
   auto* drive_service =
-      DriveIntegrationServiceFactory::FindForProfile(browser()->profile());
+      DriveIntegrationServiceFactory::FindForProfile(browser()->GetProfile());
 
   // Enable mirror sync and add |sync_path| that we expect to return from
   // |GetSyncingPaths|.
@@ -700,7 +707,7 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
         get_syncing_paths_future;
     drive_service->GetSyncingPaths(get_syncing_paths_future.GetCallback());
     const base::FilePath my_files_path =
-        file_manager::util::GetMyFilesFolderForProfile(browser()->profile());
+        file_manager::util::GetMyFilesFolderForProfile(browser()->GetProfile());
     EXPECT_EQ(get_syncing_paths_future.Get<0>(), drive::FILE_ERROR_OK);
     EXPECT_THAT(get_syncing_paths_future.Get<1>(),
                 testing::ElementsAre(my_files_path, sync_path));
@@ -717,15 +724,16 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
   ToggleMirrorSync(true);
 
   // Ensure the initial machine root ID is unset.
-  EXPECT_EQ(browser()->profile()->GetPrefs()->GetString(
+  EXPECT_EQ(browser()->GetProfile()->GetPrefs()->GetString(
                 prefs::kDriveFsMirrorSyncMachineRootId),
             "");
 
   // Invoke the delegate method to persist the machine root ID and wait for the
   // prefs key to change to the expected value.
-  drivefs::FakeDriveFs* fake = GetFakeDriveFsForProfile(browser()->profile());
+  drivefs::FakeDriveFs* fake =
+      GetFakeDriveFsForProfile(browser()->GetProfile());
   fake->delegate()->PersistMachineRootID("test-machine-id");
-  WaitForPrefValue(browser()->profile()->GetPrefs(),
+  WaitForPrefValue(browser()->GetProfile()->GetPrefs(),
                    prefs::kDriveFsMirrorSyncMachineRootId,
                    base::Value("test-machine-id"));
 
@@ -745,8 +753,8 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithMirrorSyncEnabled,
 IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithBulkPinningEnabled,
                        GetTotalPinnedSizeWithErrorIgnoresReturnedSize) {
   auto* drive_integration_service =
-      DriveIntegrationServiceFactory::FindForProfile(browser()->profile());
-  auto* fake_drivefs = GetFakeDriveFsForProfile(browser()->profile());
+      DriveIntegrationServiceFactory::FindForProfile(browser()->GetProfile());
+  auto* fake_drivefs = GetFakeDriveFsForProfile(browser()->GetProfile());
 
   EXPECT_CALL(*fake_drivefs, GetOfflineFilesSpaceUsage(_))
       .WillOnce(RunOnceCallback<0>(drive::FILE_ERROR_FAILED, 1000));
@@ -763,8 +771,8 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithBulkPinningEnabled,
 IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithBulkPinningEnabled,
                        GetTotalPinnedSizeReturnsCorrectSize) {
   auto* drive_integration_service =
-      DriveIntegrationServiceFactory::FindForProfile(browser()->profile());
-  auto* fake_drivefs = GetFakeDriveFsForProfile(browser()->profile());
+      DriveIntegrationServiceFactory::FindForProfile(browser()->GetProfile());
+  auto* fake_drivefs = GetFakeDriveFsForProfile(browser()->GetProfile());
 
   EXPECT_CALL(*fake_drivefs, GetOfflineFilesSpaceUsage(_))
       .WillOnce(RunOnceCallback<0>(drive::FILE_ERROR_OK, 1024));
@@ -781,8 +789,8 @@ IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithBulkPinningEnabled,
 IN_PROC_BROWSER_TEST_F(DriveIntegrationBrowserTestWithBulkPinningEnabled,
                        GetTotalPinnedSizeReturnsCachedSizeOnNextRequest) {
   auto* drive_integration_service =
-      DriveIntegrationServiceFactory::FindForProfile(browser()->profile());
-  auto* fake_drivefs = GetFakeDriveFsForProfile(browser()->profile());
+      DriveIntegrationServiceFactory::FindForProfile(browser()->GetProfile());
+  auto* fake_drivefs = GetFakeDriveFsForProfile(browser()->GetProfile());
 
   EXPECT_CALL(*fake_drivefs, GetOfflineFilesSpaceUsage(_))
       .WillOnce(RunOnceCallback<0>(drive::FILE_ERROR_OK, 1024));

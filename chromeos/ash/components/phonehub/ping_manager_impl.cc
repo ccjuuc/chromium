@@ -6,6 +6,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/no_destructor.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
 #include "chromeos/ash/components/phonehub/message_receiver_impl.h"
 #include "chromeos/ash/components/phonehub/message_sender.h"
@@ -16,7 +17,14 @@
 
 namespace ash::phonehub {
 
-const proto::PingRequest kDefaultPingRequest;
+namespace {
+
+const proto::PingRequest& GetDefaultPingRequest() {
+  static const base::NoDestructor<proto::PingRequest> request;
+  return *request;
+}
+
+}  // namespace
 
 PingManagerImpl::PingManagerImpl(
     secure_channel::ConnectionManager* connection_manager,
@@ -25,21 +33,17 @@ PingManagerImpl::PingManagerImpl(
     MessageSender* message_sender)
     : connection_manager_(connection_manager),
       feature_status_provider_(feature_status_provider),
-      message_receiver_(message_receiver),
       message_sender_(message_sender) {
   DCHECK(connection_manager);
   DCHECK(feature_status_provider);
   DCHECK(message_receiver);
   DCHECK(message_sender);
 
-  feature_status_provider_->AddObserver(this);
-  message_receiver_->AddObserver(this);
+  feature_status_provider_observation_.Observe(feature_status_provider);
+  message_receiver_observation_.Observe(message_receiver);
 }
 
-PingManagerImpl::~PingManagerImpl() {
-  feature_status_provider_->RemoveObserver(this);
-  message_receiver_->RemoveObserver(this);
-}
+PingManagerImpl::~PingManagerImpl() = default;
 
 void PingManagerImpl::OnPhoneStatusSnapshotReceived(
     proto::PhoneStatusSnapshot phone_status_snapshot) {
@@ -81,10 +85,12 @@ void PingManagerImpl::SendPingRequest() {
   }
 
   PA_LOG(INFO) << "Sending Ping Request";
-  message_sender_->SendPingRequest(kDefaultPingRequest);
+  message_sender_->SendPingRequest(GetDefaultPingRequest());
 
   ping_sent_timestamp_ = base::TimeTicks::Now();
-  ping_timeout_timer_.Start(FROM_HERE, features::kPhoneHubPingTimeout.Get(),
+  // Maximum number of seconds to wait for ping response before disconnecting
+  const base::TimeDelta kPhoneHubPingTimeout = base::Seconds(5);
+  ping_timeout_timer_.Start(FROM_HERE, kPhoneHubPingTimeout,
                             base::BindOnce(&PingManagerImpl::OnPingTimerFired,
                                            base::Unretained(this)));
   is_waiting_for_response_ = true;

@@ -8,7 +8,12 @@ import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.location.Location;
+import android.os.SystemClock;
 
+import androidx.annotation.IntDef;
+
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.GoogleApiAvailability;
 import com.google.android.gms.location.FusedLocationProviderClient;
 import com.google.android.gms.location.Granularity;
 import com.google.android.gms.location.LocationCallback;
@@ -26,6 +31,9 @@ import org.chromium.components.permissions.PermissionsAndroidFeatureMap;
 import org.chromium.device.DeviceFeatureList;
 import org.chromium.gms.ChromiumPlayServicesAvailability;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
 /**
  * This is a LocationProvider using Google Play Services.
  *
@@ -39,12 +47,47 @@ public class LocationProviderGmsCore implements LocationProvider {
     private static final long UPDATE_INTERVAL_MS = 1000;
     private static final long UPDATE_INTERVAL_FAST_MS = 500;
 
+    // Minimum GMS Core version that guaranteed supports and enforces LocationRequest Granularity
+    // (Year 2022, Week 44).
+    private static final int MIN_GMS_CORE_VERSION_WITH_GRANULARITY = 224400000;
+
+    // Threshold below which a location accuracy (in meters) is considered "precise" for the
+    // purpose of leak detection on approximate location requests.
+    static final float PRECISE_LOCATION_ACCURACY_THRESHOLD_METERS = 2000f;
+
+    @IntDef({
+        GmsCoreGranularitySupportState.GRANULARITY_UNSUPPORTED,
+        GmsCoreGranularitySupportState.GRANULARITY_SUPPORTED
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface GmsCoreGranularitySupportState {
+        int GRANULARITY_UNSUPPORTED = 0;
+        int GRANULARITY_SUPPORTED = 1;
+        int NUM_ENTRIES = 2;
+    }
+
     private final Context mContext;
     private final FusedLocationProviderClient mClient;
     private boolean mEffectiveHighAccuracy;
-    private boolean mRequestedHighAccuracy;
+
+    private long mStartTime;
+    private boolean mFirstPositionReceived;
 
     private @Nullable LocationCallback mLocationCallback;
+
+    private boolean isGranularitySupportedByGmsCore() {
+        try {
+            if (mContext.getPackageManager() == null) {
+                return false;
+            }
+            return GoogleApiAvailability.getInstance()
+                            .isGooglePlayServicesAvailable(
+                                    mContext, MIN_GMS_CORE_VERSION_WITH_GRANULARITY)
+                    == ConnectionResult.SUCCESS;
+        } catch (Exception e) {
+            return false;
+        }
+    }
 
     public static boolean isGooglePlayServicesAvailable(Context context) {
         return ChromiumPlayServicesAvailability.isGooglePlayServicesAvailable(context);
@@ -66,8 +109,9 @@ public class LocationProviderGmsCore implements LocationProvider {
     @Override
     public void start(boolean enableHighAccuracy) {
         ThreadUtils.assertOnUiThread();
-        mRequestedHighAccuracy = enableHighAccuracy;
-        mEffectiveHighAccuracy = mRequestedHighAccuracy;
+        mEffectiveHighAccuracy = enableHighAccuracy;
+        mStartTime = SystemClock.elapsedRealtime();
+        mFirstPositionReceived = false;
         if (mContext.checkCallingOrSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
                 != PackageManager.PERMISSION_GRANTED) {
             // Workaround for a bug in Google Play Services where, if an app only has
@@ -113,16 +157,31 @@ public class LocationProviderGmsCore implements LocationProvider {
                             .build();
         }
 
+        final boolean requestedHighAccuracy = enableHighAccuracy;
         stop();
         mLocationCallback =
                 new LocationCallback() {
                     @Override
                     public void onLocationResult(LocationResult locationResult) {
-                        if (locationResult == null) {
+                        if (mLocationCallback != this || locationResult == null) {
                             return;
                         }
                         Location location = locationResult.getLastLocation();
                         if (location != null) {
+                            if (!mFirstPositionReceived) {
+                                long durationMs = SystemClock.elapsedRealtime() - mStartTime;
+                                String suffix =
+                                        mEffectiveHighAccuracy ? ".Precise" : ".Approximate";
+                                RecordHistogram.recordCustomTimesHistogram(
+                                        "Geolocation.GMSCoreLocationProvider"
+                                                + ".TimeToFirstPosition"
+                                                + suffix,
+                                        durationMs,
+                                        1,
+                                        10000,
+                                        50);
+                                mFirstPositionReceived = true;
+                            }
                             if (location.hasAccuracy()) {
                                 final String histogramName =
                                         "Geolocation.GMSCoreLocationProvider"
@@ -133,11 +192,50 @@ public class LocationProviderGmsCore implements LocationProvider {
                                 RecordHistogram.recordCount100000Histogram(
                                         histogramName, (int) location.getAccuracy());
                             }
-                            // Using `mRequestedHighAccuracy` for location update cause
+
+                            // When approximate location is requested but Chrome holds the
+                            // app-level precise location permission in the OS, we rely on
+                            // GMS Core's `setGranularity(COARSE)` API to coarsen the location.
+                            // However, if we detect a precise location leak (accuracy < 2000m)
+                            // despite requesting coarse location, report a position error and
+                            // fail closed for ALL GMS Core versions. We distinguish them in UMA
+                            // to monitor for service-side leaks.
+                            if (PermissionsAndroidFeatureMap.isEnabled(
+                                            PermissionsAndroidFeatureList
+                                                    .APPROXIMATE_GEOLOCATION_PERMISSION)
+                                    && !mEffectiveHighAccuracy
+                                    && mContext.checkCallingOrSelfPermission(
+                                                    Manifest.permission.ACCESS_FINE_LOCATION)
+                                            == PackageManager.PERMISSION_GRANTED) {
+                                if (location.hasAccuracy()
+                                        && location.getAccuracy()
+                                                < PRECISE_LOCATION_ACCURACY_THRESHOLD_METERS) {
+                                    int leakCase =
+                                            isGranularitySupportedByGmsCore()
+                                                    ? GmsCoreGranularitySupportState
+                                                            .GRANULARITY_SUPPORTED
+                                                    : GmsCoreGranularitySupportState
+                                                            .GRANULARITY_UNSUPPORTED;
+                                    RecordHistogram.recordEnumeratedHistogram(
+                                            "Geolocation.GMSCoreLocationProvider"
+                                                    + ".CoarseRequest.PreciseLocationReceived",
+                                            leakCase,
+                                            GmsCoreGranularitySupportState.NUM_ENTRIES);
+                                    if (DeviceFeatureList.sGmsCoreFailClosedOnPreciseLeak
+                                            .isEnabled()) {
+                                        stop();
+                                        LocationProviderAdapter.newErrorAvailable(
+                                                "Cannot generate approximate location.");
+                                        return;
+                                    }
+                                }
+                            }
+
+                            // Using `requestedHighAccuracy` for location update cause
                             // `mEffectiveHighAccuracy` can be override by app-level permission
                             // check.
                             LocationProviderAdapter.onNewLocationAvailable(
-                                    location, mRequestedHighAccuracy);
+                                    location, requestedHighAccuracy);
                         }
                     }
                 };
@@ -171,6 +269,7 @@ public class LocationProviderGmsCore implements LocationProvider {
     @Override
     public void stop() {
         ThreadUtils.assertOnUiThread();
+        mFirstPositionReceived = false;
 
         if (mLocationCallback != null) {
             mClient.removeLocationUpdates(mLocationCallback);

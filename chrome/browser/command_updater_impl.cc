@@ -36,17 +36,21 @@ bool CommandUpdaterImpl::IsCommandEnabled(int id) const {
   return *command->second->enabled;
 }
 
-bool CommandUpdaterImpl::ExecuteCommand(int id, base::TimeTicks time_stamp) {
-  return ExecuteCommandWithDisposition(id, WindowOpenDisposition::CURRENT_TAB,
-                                       time_stamp);
+bool CommandUpdaterImpl::ExecuteCommandImpl(
+    int id,
+    base::TimeTicks time_stamp,
+    std::optional<actions::ActionInvocationContext> context) {
+  return ExecuteCommandWithDispositionImpl(
+      id, WindowOpenDisposition::CURRENT_TAB, time_stamp, std::move(context));
 }
 
-bool CommandUpdaterImpl::ExecuteCommandWithDisposition(
+bool CommandUpdaterImpl::ExecuteCommandWithDispositionImpl(
     int id,
     WindowOpenDisposition disposition,
-    base::TimeTicks time_stamp) {
+    base::TimeTicks time_stamp,
+    std::optional<actions::ActionInvocationContext> context) {
   if (SupportsCommand(id) && IsCommandEnabled(id)) {
-    delegate_->ExecuteCommandWithDisposition(id, disposition);
+    delegate_->HandleCommandWithDisposition(id, disposition, time_stamp);
     return true;
   }
   return false;
@@ -84,7 +88,7 @@ void CommandUpdaterImpl::DisableAllCommands() {
     UpdateCommandEnabled(command_pair.first, false);
 }
 
-std::vector<int> CommandUpdaterImpl::GetAllIds() {
+std::vector<int> CommandUpdaterImpl::GetAllIds() const {
   std::vector<int> result;
   for (const auto& command_pair : commands_)
     result.push_back(command_pair.first);

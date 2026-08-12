@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.webapps;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Context;
@@ -45,12 +47,10 @@ import java.lang.ref.WeakReference;
  */
 @NullMarked
 public class WebappActionsNotificationManager implements PauseResumeWithNativeObserver {
-    private static final String ACTION_SHARE =
-            "org.chromium.chrome.browser.webapps.NOTIFICATION_ACTION_SHARE";
-    private static final String ACTION_OPEN_IN_CHROME =
-            "org.chromium.chrome.browser.webapps.NOTIFICATION_ACTION_OPEN_IN_CHROME";
-    private static final String ACTION_FOCUS =
-            "org.chromium.chrome.browser.webapps.NOTIFICATION_ACTION_FOCUS";
+    static final String ACTION_PREFIX = "org.chromium.chrome.browser.webapps.NOTIFICATION_ACTION_";
+    private static final String ACTION_SHARE = ACTION_PREFIX + "SHARE";
+    private static final String ACTION_OPEN_IN_CHROME = ACTION_PREFIX + "OPEN_IN_CHROME";
+    private static final String ACTION_FOCUS = ACTION_PREFIX + "FOCUS";
 
     private final CustomTabActivityTabProvider mTabProvider;
     private final BrowserServicesIntentDataProvider mIntentDataProvider;
@@ -169,9 +169,7 @@ public class WebappActionsNotificationManager implements PauseResumeWithNativeOb
         if (ACTION_SHARE.equals(intent.getAction())) {
             // Not routing through onMenuOrKeyboardAction to control UMA String.
             Tab tab = customTabActivity.getActivityTab();
-            customTabActivity
-                    .getShareDelegateSupplier()
-                    .get()
+            assumeNonNull(customTabActivity.getShareDelegateSupplier().get())
                     .share(tab, false, ShareOrigin.WEBAPP_NOTIFICATION);
             RecordUserAction.record("Webapp.NotificationShare");
             return true;

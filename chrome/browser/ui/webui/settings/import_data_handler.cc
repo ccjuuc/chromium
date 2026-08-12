@@ -9,8 +9,11 @@
 #include <string>
 #include <utility>
 
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -21,9 +24,10 @@
 #include "chrome/browser/importer/importer_list.h"
 #include "chrome/browser/importer/importer_uma.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/chrome_select_file_policy.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_ui.h"
@@ -78,7 +82,7 @@ void ImportDataHandler::OnJavascriptDisallowed() {
   // When the WebUI is unloading, we ignore all further updates from the host.
   // Because we're no longer listening to the `ImportEnded` callback, we must
   // also clear our pointer, as otherwise this can lead to a use-after-free
-  // in the destructor. https://crbug.com/1302813.
+  // in the destructor. https://crbug.com/40058962.
   if (importer_host_) {
     importer_host_->set_observer(nullptr);
     importer_host_ = nullptr;
@@ -113,7 +117,7 @@ void ImportDataHandler::StartImport(
                                     source_profile.importer_type);
 }
 
-void ImportDataHandler::HandleImportData(const base::Value::List& args) {
+void ImportDataHandler::HandleImportData(const base::ListValue& args) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   const auto& list = args;
   CHECK_GE(list.size(), 2u);
@@ -129,7 +133,7 @@ void ImportDataHandler::HandleImportData(const base::Value::List& args) {
     return;
   }
 
-  const base::Value::Dict& type_dict = types.GetDict();
+  const base::DictValue& type_dict = types.GetDict();
   uint16_t selected_items = user_data_importer::NONE;
   if (*type_dict.FindBool(prefs::kImportDialogAutofillFormData)) {
     selected_items |= user_data_importer::AUTOFILL_FORM_DATA;
@@ -161,7 +165,7 @@ void ImportDataHandler::HandleImportData(const base::Value::List& args) {
 }
 
 void ImportDataHandler::HandleInitializeImportDialog(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
 
   CHECK_EQ(1U, args.size());
@@ -176,7 +180,7 @@ void ImportDataHandler::HandleInitializeImportDialog(
 }
 
 void ImportDataHandler::HandleImportFromBookmarksFile(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   if (select_file_dialog_) {
@@ -192,25 +196,27 @@ void ImportDataHandler::HandleImportFromBookmarksFile(
   file_type_info.extensions.resize(1);
   file_type_info.extensions[0].push_back(FILE_PATH_LITERAL("html"));
 
-  Browser* browser = chrome::FindBrowserWithTab(web_ui()->GetWebContents());
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_ui()->GetWebContents());
 
   select_file_dialog_->SelectFile(
       ui::SelectFileDialog::SELECT_OPEN_FILE, std::u16string(),
       base::FilePath(), &file_type_info, 0, base::FilePath::StringType(),
-      browser->window()->GetNativeWindow(), nullptr);
+      browser->GetWindow()->GetNativeWindow(), nullptr);
 }
 
 void ImportDataHandler::SendBrowserProfileData(const std::string& callback_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   importer_list_loaded_ = true;
 
-  base::Value::List browser_profiles;
+  base::ListValue browser_profiles;
   for (size_t i = 0; i < importer_list_->count(); ++i) {
     const user_data_importer::SourceProfile& source_profile =
         importer_list_->GetSourceProfileAt(i);
     uint16_t browser_services = source_profile.services_supported;
 
-    base::Value::Dict browser_profile;
+    base::DictValue browser_profile;
     browser_profile.Set("name", source_profile.importer_name);
     browser_profile.Set("index", static_cast<int>(i));
     browser_profile.Set("profileName", source_profile.profile);

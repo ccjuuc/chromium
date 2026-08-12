@@ -27,7 +27,10 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_FRAME_SELECTION_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_FRAME_SELECTION_H_
 
+#include <unicode/ubidi.h>
+
 #include <memory>
+#include <optional>
 
 #include "base/check_op.h"
 #include "base/dcheck_is_on.h"
@@ -89,8 +92,8 @@ struct LayoutSelectionStatus {
   DISALLOW_NEW();
 
  public:
-  LayoutSelectionStatus(unsigned passed_start,
-                        unsigned passed_end,
+  LayoutSelectionStatus(wtf_size_t passed_start,
+                        wtf_size_t passed_end,
                         SelectSoftLineBreak passed_line_break)
       : start(passed_start), end(passed_end), line_break(passed_line_break) {
     DCHECK_LE(start, end);
@@ -103,8 +106,8 @@ struct LayoutSelectionStatus {
            line_break == other.line_break;
   }
 
-  unsigned start;
-  unsigned end;
+  wtf_size_t start;
+  wtf_size_t end;
   SelectSoftLineBreak line_break;
 };
 
@@ -114,8 +117,8 @@ struct LayoutTextSelectionStatus {
   STACK_ALLOCATED();
 
  public:
-  LayoutTextSelectionStatus(unsigned passed_start,
-                            unsigned passed_end,
+  LayoutTextSelectionStatus(wtf_size_t passed_start,
+                            wtf_size_t passed_end,
                             SelectionIncludeEnd passed_include_end)
       : start(passed_start), end(passed_end), include_end(passed_include_end) {
     DCHECK_LE(start, end);
@@ -126,8 +129,8 @@ struct LayoutTextSelectionStatus {
   }
   bool IsEmpty() const { return start == 0 && end == 0; }
 
-  unsigned start;
-  unsigned end;
+  wtf_size_t start;
+  wtf_size_t end;
   SelectionIncludeEnd include_end;
 };
 
@@ -151,17 +154,17 @@ class CORE_EXPORT FrameSelection final
   // An implementation of |WebFrame::moveCaretSelection()|
   void MoveCaretSelection(const gfx::Point&);
 
-  VisibleSelection ComputeVisibleSelectionInDOMTree() const;
+  VisibleSelection ComputeVisibleSelectionInDomTree() const;
   VisibleSelectionInFlatTree ComputeVisibleSelectionInFlatTree() const;
 
   // TODO(editing-dev): We should replace
-  // |computeVisibleSelectionInDOMTreeDeprecated()| with update layout and
-  // |computeVisibleSelectionInDOMTree()| to increase places hoisting update
+  // |ComputeVisibleSelectionInDomTreeDeprecated()| with update layout and
+  // |ComputeVisibleSelectionInDomTree()| to increase places hoisting update
   // layout.
-  VisibleSelection ComputeVisibleSelectionInDOMTreeDeprecated() const;
+  VisibleSelection ComputeVisibleSelectionInDomTreeDeprecated() const;
 
-  void SetSelection(const SelectionInDOMTree&, const SetSelectionOptions&);
-  void SetSelectionAndEndTyping(const SelectionInDOMTree&);
+  void SetSelection(const SelectionInDomTree&, const SetSelectionOptions&);
+  void SetSelectionAndEndTyping(const SelectionInDomTree&);
   void SelectAll(SetSelectionBy, bool canonicalize_selection = false);
   void SelectAll();
   void SelectSubString(const Element&, int offset, int count);
@@ -173,11 +176,11 @@ class CORE_EXPORT FrameSelection final
   // functions.
   // setSelectionDeprecated() returns true if didSetSelectionDeprecated() should
   // be called.
-  bool SetSelectionDeprecated(const SelectionInDOMTree&,
+  bool SetSelectionDeprecated(const SelectionInDomTree&,
                               const SetSelectionOptions&);
-  void DidSetSelectionDeprecated(const SelectionInDOMTree&,
+  void DidSetSelectionDeprecated(const SelectionInDomTree&,
                                  const SetSelectionOptions&);
-  void SetSelectionForAccessibility(const SelectionInDOMTree&,
+  void SetSelectionForAccessibility(const SelectionInDomTree&,
                                     const SetSelectionOptions&);
 
   // Call this after doing user-triggered selections to make it easy to delete
@@ -224,7 +227,12 @@ class CORE_EXPORT FrameSelection final
 
   void DidChangeFocus();
 
-  const SelectionInDOMTree& GetSelectionInDOMTree() const;
+  // Restores |element|'s text-overflow ellipsis as it loses or
+  // gains focus while the selection focus stays inside it. The caller guards on
+  // the feature flag (see SelectionEditor::SetContainsSelectionFocusFlag()).
+  void UpdateTextOverflowOfSelectionFocus(const Element& element, bool focused);
+
+  const SelectionInDomTree& GetSelectionInDomTree() const;
   bool IsDirectional() const;
 
   void DidAttachDocument(Document*);
@@ -242,6 +250,7 @@ class CORE_EXPORT FrameSelection final
   void EnsureInvalidationOfPreviousLayoutBlock();
 
   void PaintCaret(GraphicsContext&, const PhysicalOffset&);
+  const LayoutBlock* GetCaretLayoutBlock() const;
 
   // Used to suspend caret blinking while the mouse is down.
   void SetCaretBlinkingSuspended(bool);
@@ -255,6 +264,10 @@ class CORE_EXPORT FrameSelection final
   void PageActivationChanged();
 
   bool IsHandleVisible() const { return is_handle_visible_; }
+
+  // Bidi embedding level of the caret's current fragment. Used by FrameCaret
+  // for correct caret rendering at bidi boundaries.
+  std::optional<UBiDiLevel> CaretBidiLevel() const { return caret_bidi_level_; }
   void SetHandleVisibleForTesting() { is_handle_visible_ = true; }
   bool ShouldShrinkNextTap() const { return should_shrink_next_tap_; }
 
@@ -287,7 +300,7 @@ class CORE_EXPORT FrameSelection final
   void SetFocusedNodeIfNeeded();
   void NotifyTextControlOfSelectionChange(SetSelectionBy);
 
-  String SelectedHTMLForClipboard() const;
+  String SelectedHtmlForClipboard() const;
   String SelectedText(const TextIteratorBehavior&) const;
   String SelectedText() const;
   String SelectedTextForClipboard() const;
@@ -327,17 +340,23 @@ class CORE_EXPORT FrameSelection final
   SelectionState ComputePaintingSelectionStateForCursor(
       const InlineCursorPosition& position) const;
 
+  // Returns the fragment-local character offset of the character covered by
+  // the block caret within |cursor|'s current text fragment, or std::nullopt
+  // if the block caret does not overlap this fragment.
+  std::optional<wtf_size_t> ComputeBlockCaretCharacterOffset(
+      const InlineCursor& cursor) const;
+
   // Notifications from the Document.
   void ContextDestroyed();
   void DidChangeChildren(const ContainerNode::ChildrenChange& change);
   void DidMergeTextNodes(const Text& merged_node,
                          const NodeWithIndex& node_to_be_removed_with_index,
-                         unsigned old_length);
+                         wtf_size_t old_length);
   void DidSplitTextNode(const Text&);
   void DidUpdateCharacterData(CharacterData*,
-                              unsigned offset,
-                              unsigned old_length,
-                              unsigned new_length);
+                              wtf_size_t offset,
+                              wtf_size_t old_length,
+                              wtf_size_t new_length);
   void NodeChildrenWillBeRemoved(ContainerNode&);
   void NodeWillBeRemoved(Node&);
 
@@ -354,14 +373,15 @@ class CORE_EXPORT FrameSelection final
   void NotifyEventHandlerForSelectionChange();
   void NotifyDisplayLockForSelectionChange(
       Document& document,
-      const SelectionInDOMTree& old_selection,
-      const SelectionInDOMTree& new_selection);
+      const SelectionInDomTree& old_selection,
+      const SelectionInDomTree& new_selection);
 
   void FocusedOrActiveStateChanged();
+  void MaybeNotifyEventHandlerForSelectionChange(const SetSelectionOptions&);
 
   GranularityStrategy* GetGranularityStrategy();
 
-  void MoveRangeSelectionInternal(const SelectionInDOMTree&, TextGranularity);
+  void MoveRangeSelectionInternal(const SelectionInDomTree&, TextGranularity);
 
   // Returns the range corresponding to a |text_granularity| selection around
   // the caret. Returns a null range if the selection failed, either because
@@ -379,8 +399,20 @@ class CORE_EXPORT FrameSelection final
   const Member<LayoutSelection> layout_selection_;
   const Member<SelectionEditor> selection_editor_;
 
-  TextGranularity granularity_;
+  TextGranularity granularity_ = TextGranularity::kCharacter;
   LayoutUnit x_pos_for_vertical_arrow_navigation_;
+
+  // Bidi embedding level of the caret's current fragment. Persisted across
+  // consecutive keyboard-driven caret movements to disambiguate which side
+  // of a bidi boundary the caret belongs to. Reset to nullopt on mouse
+  // clicks and programmatic selection changes.
+  std::optional<UBiDiLevel> caret_bidi_level_;
+
+  // Whether the previous visual caret movement placed the caret at a bidi
+  // boundary entry point. When true, the next boundary crossing is an EXIT
+  // and should skip the shared-x entry point to produce visible movement.
+  // Persisted alongside caret_bidi_level_ across keystrokes.
+  bool entered_bidi_run_ = false;
 
   bool focused_ : 1;
 

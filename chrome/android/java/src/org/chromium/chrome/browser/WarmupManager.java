@@ -11,7 +11,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.content.res.Resources.Theme;
-import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Build.VERSION_CODES;
@@ -20,7 +19,6 @@ import android.util.ArraySet;
 import android.util.DisplayMetrics;
 import android.view.ContextThemeWrapper;
 import android.view.InflateException;
-import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewStub;
@@ -28,7 +26,6 @@ import android.widget.FrameLayout;
 
 import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
-import androidx.asynclayoutinflater.appcompat.AsyncAppCompatFactory;
 import androidx.core.content.res.ResourcesCompat;
 
 import org.jni_zero.JniType;
@@ -46,7 +43,7 @@ import org.chromium.base.task.AsyncTask;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.app.tab_activity_glue.ReparentingTask;
+import org.chromium.chrome.browser.app.MainLayoutSwitcher;
 import org.chromium.chrome.browser.crash.ChromePureJavaExceptionReporter;
 import org.chromium.chrome.browser.customtabs.CustomTabDelegateFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -56,13 +53,11 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabBuilder;
 import org.chromium.chrome.browser.tab.TabDelegateFactory;
 import org.chromium.chrome.browser.tab.TabLaunchType;
-import org.chromium.chrome.browser.tab.TabLoadIfNeededCaller;
 import org.chromium.chrome.browser.tab.TabSelectionType;
-import org.chromium.chrome.browser.tab.TabUtils;
 import org.chromium.chrome.browser.toolbar.ControlContainer;
 import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.content_public.browser.WebContents;
-import org.chromium.ui.LayoutInflaterUtils;
+import org.chromium.ui.AsyncLayoutInflater;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.display.DisplayUtil;
 import org.chromium.url.GURL;
@@ -251,7 +246,11 @@ public class WarmupManager {
             if (mSpareTab != null) return;
 
             // Build a spare detached tab.
-            Tab spareTab = buildDetachedSpareTab(profile, webContents);
+            Context context = ContextUtils.getApplicationContext();
+            TabDelegateFactory delegateFactory = CustomTabDelegateFactory.createEmpty();
+            Tab spareTab =
+                    TabBuilder.createDetachedSpareTab(
+                            context, delegateFactory, profile, webContents);
 
             mSpareTab = spareTab;
             assert mSpareTab != null : "Building a spare detached tab shouldn't return null.";
@@ -264,48 +263,6 @@ public class WarmupManager {
             assumeNonNull(window);
             mSpareTab.addObserver(new HiddenTabObserver(window));
         }
-    }
-
-    /**
-     * Creates an instance of a {@link Tab} that is fully detached from any activity.
-     *
-     * <p>Also performs general tab initialization as well as detached specifics.
-     *
-     * @param webContents The {@link WebContents} to use in the tab. If null the default is used.
-     * @return The newly created and initialized spare tab.
-     *     <p>TODO(crbug.com/40255340): Adapt this method to create other tabs.
-     */
-    private Tab buildDetachedSpareTab(Profile profile, @Nullable WebContents webContents) {
-        Context context = ContextUtils.getApplicationContext();
-
-        // These are effectively unused as they will be set when finishing reparenting.
-        TabDelegateFactory delegateFactory = CustomTabDelegateFactory.createEmpty();
-        WindowAndroid window = new WindowAndroid(context, /* trackOcclusion= */ false);
-
-        // TODO(crbug.com/40174356): Set isIncognito flag here if spare tabs are allowed for
-        // incognito mode.
-        // Creates a tab with renderer initialized for spareTab. See https://crbug.com/1412572.
-        Tab tab =
-                TabBuilder.createLiveTab(profile, true)
-                        .setWindow(window)
-                        .setLaunchType(TabLaunchType.UNSET)
-                        .setDelegateFactory(delegateFactory)
-                        .setInitiallyHidden(true)
-                        .setInitializeRenderer(true)
-                        .setWebContents(webContents)
-                        .build();
-
-        // Resize the webContents to avoid expensive post load resize when attaching the tab.
-        Rect bounds = TabUtils.estimateContentSize(context);
-        int width = bounds.right - bounds.left;
-        int height = bounds.bottom - bounds.top;
-        webContents = tab.getWebContents();
-        assumeNonNull(webContents);
-        webContents.setSize(width, height);
-
-        // Reparent the tab to detach it from the current activity.
-        ReparentingTask.from(tab).detach();
-        return tab;
     }
 
     /**
@@ -330,9 +287,7 @@ public class WarmupManager {
             mSpareTabFinalStatus = SpareTabFinalStatus.TAB_USED;
 
             if (!initiallyHidden) {
-                spareTab.show(
-                        TabSelectionType.FROM_NEW,
-                        TabLoadIfNeededCaller.REQUEST_TO_SHOW_TAB_THEN_SHOW);
+                spareTab.show(TabSelectionType.FROM_NEW);
             }
 
             // Record the SpareTabFinalStatus once its used.
@@ -456,12 +411,13 @@ public class WarmupManager {
             CctContextWrapper context, int toolbarContainerId, int toolbarId) {
         try (TraceEvent e = TraceEvent.scoped("WarmupManager.inflateViewHierarchy")) {
             FrameLayout contentHolder = new FrameLayout(context);
-            var layoutInflater = LayoutInflater.from(context);
-            layoutInflater.setFactory2(new AsyncAppCompatFactory());
             ViewGroup mainView =
                     (ViewGroup)
-                            LayoutInflaterUtils.inflate(
-                                    layoutInflater, R.layout.main, contentHolder);
+                            new AsyncLayoutInflater(context)
+                                    .inflateSync(
+                                            MainLayoutSwitcher.getMainLayoutRes(context),
+                                            contentHolder,
+                                            /* attachToRoot= */ true);
             if (toolbarContainerId != ActivityUtils.NO_RESOURCE_ID) {
                 ViewStub stub = mainView.findViewById(R.id.control_container_stub);
                 stub.setLayoutResource(toolbarContainerId);
@@ -479,13 +435,13 @@ public class WarmupManager {
         } catch (InflateException e) {
             // Warmup manager is only a performance improvement. If inflation failed, it will be
             // redone when the CCT is actually launched using an activity context. So, swallow
-            // exceptions here to improve resilience. See https://crbug.com/606715.
+            // exceptions here to improve resilience. See https://crbug.com/41250941.
             Log.e(TAG, "Inflation exception.", e);
             // An exception caught here may indicate a real bug in production code. We report the
             // exceptions to monitor any spikes or stacks that point to Chrome code.
             Throwable throwable =
                     new Throwable(
-                            "This is not a crash. See https://crbug.com/1259276 for details.", e);
+                            "This is not a crash. See https://crbug.com/40797555 for details.", e);
             ChromePureJavaExceptionReporter.reportJavaException(throwable);
             return null;
         }

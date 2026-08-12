@@ -4,19 +4,21 @@
 
 #include <memory>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
+#include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/browser/back_forward_cache_test_util.h"
-#include "content/browser/browsing_data/shared_storage_clear_site_data_tester.h"
+#include "content/browser/gpu/gpu_disk_cache_factory.h"
 #include "content/browser/preloading/prefetch/prefetch_document_manager.h"
 #include "content/browser/preloading/prefetch/prefetch_features.h"
 #include "content/browser/preloading/prefetch/prefetch_status.h"
@@ -42,6 +44,7 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "content/shell/browser/shell.h"
 #include "content/shell/browser/shell_content_browser_client.h"
+#include "gpu/ipc/common/gpu_disk_cache_type.h"
 #include "net/base/features.h"
 #include "net/base/net_errors.h"
 #include "net/cookies/cookie_base.h"
@@ -93,7 +96,7 @@ std::unique_ptr<net::test_server::HttpResponse> HandleHttpAuthRequest(
   }
 
   auto http_response = std::make_unique<net::test_server::BasicHttpResponse>();
-  if (base::Contains(request.headers, "Authorization")) {
+  if (request.headers.contains("Authorization")) {
     http_response->set_code(net::HTTP_OK);
     http_response->set_content("Success!");
   } else {
@@ -510,8 +513,8 @@ class CookiesBrowsingDataRemoverImplBrowserTest
       const std::string& cookie_line,
       const std::optional<net::CookiePartitionKey>& cookie_partition_key) {
     auto cookie_obj = net::CanonicalCookie::CreateForTesting(
-        url, cookie_line, base::Time::Now(), /*server_time=*/std::nullopt,
-        cookie_partition_key);
+        url, cookie_line, base::Time::Now(), net::CookieSourceType::kOther,
+        /*server_time=*/std::nullopt, cookie_partition_key);
 
     base::test::TestFuture<net::CookieAccessResult> future;
     cookie_manager_->SetCanonicalCookie(*cookie_obj, url,
@@ -889,120 +892,6 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataRemoverImplTrustTokenTest,
   EXPECT_FALSE(tester.HasOrigin(another_origin));
 }
 
-class BrowsingDataRemoverImplSharedStorageBrowserTest
-    : public BrowsingDataRemoverImplBrowserTest {
- public:
-  BrowsingDataRemoverImplSharedStorageBrowserTest() {
-    feature_list_.InitAndEnableFeature(network::features::kSharedStorageAPI);
-  }
-
-  StoragePartition* storage_partition() {
-    return shell()
-        ->web_contents()
-        ->GetBrowserContext()
-        ->GetDefaultStoragePartition();
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(BrowsingDataRemoverImplSharedStorageBrowserTest,
-                       Remove) {
-  SharedStorageClearSiteDataTester tester(storage_partition());
-
-  auto origin = url::Origin::Create(GURL("https://topframe.example"));
-
-  tester.AddConsecutiveSharedStorageEntries(origin, u"key", u"value", 10);
-  EXPECT_THAT(tester.GetSharedStorageOrigins(),
-              testing::UnorderedElementsAre(origin));
-
-  // Note that u"key" concatenated with a single digit has 4 char16_t's and
-  // hence 8 bytes. Similarly, u"value" concatenated with one digit has
-  // 6 char16_t's and hence 12 bytes. A pair of these together thus has
-  // 20 bytes.
-  const int kNumBytesPerEntry = 20;
-  EXPECT_EQ(10 * kNumBytesPerEntry, tester.GetSharedStorageTotalBytes());
-
-  RemoveAndWait(BrowsingDataRemover::DATA_TYPE_SHARED_STORAGE);
-
-  EXPECT_TRUE(tester.GetSharedStorageOrigins().empty());
-  EXPECT_EQ(0, tester.GetSharedStorageTotalBytes());
-}
-
-IN_PROC_BROWSER_TEST_F(BrowsingDataRemoverImplSharedStorageBrowserTest,
-                       RemoveByDomain) {
-  SharedStorageClearSiteDataTester tester(storage_partition());
-
-  auto origin = url::Origin::Create(GURL("https://topframe.example"));
-  auto sub_origin = url::Origin::Create(GURL("https://sub.topframe.example"));
-  auto another_origin =
-      url::Origin::Create(GURL("https://another-topframe.example"));
-
-  tester.AddConsecutiveSharedStorageEntries(origin, u"key", u"value", 5);
-  tester.AddConsecutiveSharedStorageEntries(sub_origin, u"key", u"value", 10);
-  tester.AddConsecutiveSharedStorageEntries(another_origin, u"key", u"value",
-                                            1);
-  EXPECT_THAT(
-      tester.GetSharedStorageOrigins(),
-      testing::UnorderedElementsAre(origin, sub_origin, another_origin));
-
-  // Note that u"key" concatenated with a single digit has 4 char16_t's and
-  // hence 8 bytes. Similarly, u"value" concatenated with one digit has
-  // 6 char16_t's and hence 12 bytes. A pair of these together thus has
-  // 20 bytes.
-  const int kNumBytesPerEntry = 20;
-  EXPECT_EQ(16 * kNumBytesPerEntry, tester.GetSharedStorageTotalBytes());
-
-  std::unique_ptr<BrowsingDataFilterBuilder> builder(
-      BrowsingDataFilterBuilder::Create(
-          BrowsingDataFilterBuilder::Mode::kDelete));
-  builder->AddRegisterableDomain("topframe.example");
-  RemoveWithFilterAndWait(BrowsingDataRemover::DATA_TYPE_SHARED_STORAGE,
-                          std::move(builder));
-
-  EXPECT_THAT(tester.GetSharedStorageOrigins(),
-              testing::UnorderedElementsAre(another_origin));
-
-  EXPECT_EQ(1 * kNumBytesPerEntry, tester.GetSharedStorageTotalBytes());
-}
-
-IN_PROC_BROWSER_TEST_F(BrowsingDataRemoverImplSharedStorageBrowserTest,
-                       PreserveByDomain) {
-  SharedStorageClearSiteDataTester tester(storage_partition());
-
-  auto origin = url::Origin::Create(GURL("https://topframe.example"));
-  auto sub_origin = url::Origin::Create(GURL("https://sub.topframe.example"));
-  auto another_origin =
-      url::Origin::Create(GURL("https://another-topframe.example"));
-
-  tester.AddConsecutiveSharedStorageEntries(origin, u"key", u"value", 5);
-  tester.AddConsecutiveSharedStorageEntries(sub_origin, u"key", u"value", 10);
-  tester.AddConsecutiveSharedStorageEntries(another_origin, u"key", u"value",
-                                            1);
-  EXPECT_THAT(
-      tester.GetSharedStorageOrigins(),
-      testing::UnorderedElementsAre(origin, sub_origin, another_origin));
-
-  // Note that u"key" concatenated with a single digit has 4 char16_t's and
-  // hence 8 bytes. Similarly, u"value" concatenated with one digit has
-  // 6 char16_t's and hence 12 bytes. A pair of these together thus has
-  // 20 bytes.
-  const int kNumBytesPerEntry = 20;
-  EXPECT_EQ(16 * kNumBytesPerEntry, tester.GetSharedStorageTotalBytes());
-
-  // Delete all data *except* that specified by the filter.
-  std::unique_ptr<BrowsingDataFilterBuilder> builder(
-      BrowsingDataFilterBuilder::Create(
-          BrowsingDataFilterBuilder::Mode::kPreserve));
-  builder->AddRegisterableDomain("topframe.example");
-  RemoveWithFilterAndWait(BrowsingDataRemover::DATA_TYPE_SHARED_STORAGE,
-                          std::move(builder));
-
-  EXPECT_THAT(tester.GetSharedStorageOrigins(),
-              testing::UnorderedElementsAre(origin, sub_origin));
-  EXPECT_EQ(15 * kNumBytesPerEntry, tester.GetSharedStorageTotalBytes());
-}
 
 class BrowsingDataRemoverImplPrerenderingBrowserTest
     : public BrowsingDataRemoverImplBrowserTest {
@@ -1032,7 +921,7 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataRemoverImplPrerenderingBrowserTest,
   ASSERT_TRUE(NavigateToURL(shell(), initial_url));
 
   // 2) Add and wait for prerendering of the prerendering url to complete.
-  FrameTreeNodeId host_id = prerender_helper().AddPrerender(prerendering_url);
+  PrerenderHostId host_id = prerender_helper().AddPrerender(prerendering_url);
   content::test::PrerenderHostObserver host_observer(*web_contents(), host_id);
 
   // 3) Remove the browsing data with DATA_TYPE_CACHE.
@@ -1201,5 +1090,64 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataRemoverImplPrefetchHoldbackBrowserTest,
   histogram_tester().ExpectUniqueSample(
       "Preloading.Prefetch.PrefetchStatus",
       PrefetchStatus::kPrefetchEvictedAfterBrowsingDataRemoved, 1);
+}
+
+// Verifies that GPU disk cache clearing completes even when cache backend
+// creation fails.
+class BrowsingDataRemoverGpuCacheHangTest : public ContentBrowserTest {};
+
+IN_PROC_BROWSER_TEST_F(BrowsingDataRemoverGpuCacheHangTest,
+                       ClearCacheCompletesWhenCacheCreationFails) {
+  gpu::GpuDiskCacheFactory* factory =
+      content::GetGpuDiskCacheFactorySingleton();
+  ASSERT_TRUE(factory);
+
+  // Get the storage partition path. This is what ClearDataImpl will use
+  // when it calls ClearByPath for each GPU cache subtype.
+  base::FilePath partition_path = shell()
+                                      ->web_contents()
+                                      ->GetBrowserContext()
+                                      ->GetDefaultStoragePartition()
+                                      ->GetPath();
+
+  // Build the exact path that ClearDataImpl will look up for kGlShaders.
+  base::FilePath cache_subdir = partition_path.Append(
+      gpu::GetGpuDiskCacheSubdir(gpu::GpuDiskCacheType::kGlShaders));
+
+  // Create a file at the cache subdir path so that directory creation
+  // inside CreateCacheBackend fails. Use kNeverReset so the backend
+  // won't attempt recovery (delete + recreate).
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    ASSERT_TRUE(base::CreateDirectory(cache_subdir.DirName()));
+    ASSERT_TRUE(base::WriteFile(cache_subdir, "x"));
+  }
+
+  gpu::GpuDiskCacheHandle handle =
+      factory->GetCacheHandle(gpu::GpuDiskCacheType::kGlShaders, cache_subdir);
+  scoped_refptr<gpu::GpuDiskCache> cache =
+      factory->Create(handle, base::DoNothing(), base::DoNothing(),
+                      disk_cache::ResetHandling::kNeverReset);
+  ASSERT_TRUE(cache);
+
+  // Start BrowsingDataRemover clear through the real code path:
+  //   RemoveAndReply(DATA_TYPE_CACHE) -> StoragePartition::ClearData
+  //     (REMOVE_DATA_MASK_SHADER_CACHE) -> ClearByPath(cache_subdir)
+  //     -> ClearByCache -> DoClearGpuCache -> SetAvailableCallback.
+  // The async backend creation will fail, triggering the pending
+  // available_callback_ and completing the clear.
+  content::BrowsingDataRemover* remover =
+      shell()->web_contents()->GetBrowserContext()->GetBrowsingDataRemover();
+  content::BrowsingDataRemoverCompletionObserver completion_observer(remover);
+
+  remover->RemoveAndReply(
+      base::Time(), base::Time::Max(),
+      content::BrowsingDataRemover::DATA_TYPE_CACHE,
+      content::BrowsingDataRemover::ORIGIN_TYPE_UNPROTECTED_WEB,
+      &completion_observer);
+
+  completion_observer.BlockUntilCompletion();
+
+  EXPECT_TRUE(completion_observer.browsing_data_remover_done());
 }
 }  // namespace content

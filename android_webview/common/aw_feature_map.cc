@@ -31,44 +31,56 @@ namespace {
 const base::Feature* const kFeaturesExposedToJava[] = {
     // Ordered alphabetically on feature name.
     // keep-sorted start allow_yaml_lists=yes by_regex=['\w+,']
-    &features::kAndroidMetricsAsyncMetricLogging,
     &::features::kEnablePerfettoSystemTracing,
-    &blink::features::kForceOffTextAutosizing,
     &safe_browsing::kHashPrefixRealTimeLookups,
+    &features::kPostChromiumStartupInWebViewConstructor,
     &base::features::kPostGetMyMemoryStateToBackground,
     &sensitive_content::features::kSensitiveContent,
+    &base::features::kShutdownPreNativeThreadPoolAfterStartup,
+    &features::kStartupNonBlockingWebViewConstructor,
     &features::kWebViewAddQuicHints,
+    &features::kWebViewAwClassPreloader,
     &features::kWebViewBackForwardCache,
+    &features::kWebViewBackgroundClassPreloading,
+    &features::kWebViewBackgroundTracingInit,
     &features::kWebViewBypassProvisionalCookieManager,
-    &features::kWebViewCacheBoundaryInterfaceMethods,
     &features::kWebViewCacheSizeLimitDerivedFromAppCacheQuota,
-    &features::kWebViewConnectToComponentProviderInBackground,
-    &features::kWebViewEarlyPerfettoInit,
+    &features::kWebViewContentRestrictionSupport,
+    &features::kWebViewCppMetricsFiltering,
     &features::kWebViewEarlyStartupTracing,
+    &features::kWebViewEarlyTracingInit,
+    &features::kWebViewEnableApiCallUserActions,
     &features::kWebViewEnableCrash,
-    &features::kWebViewFetchOriginTrialsComponent,
+    &features::kWebViewEnableDnsPlatform,
+    &features::kWebViewFasterGetDefaultUserAgent,
     &features::kWebViewFileSystemAccess,
+    &features::kWebViewForceWebAuthn,
+    &features::kWebViewGateTextSizeAdjustOnTextAutosizing,
     &features::kWebViewHyperlinkContextMenu,
     &features::kWebViewInvokeZoomPickerOnGSU,
-    &features::kWebViewLazyFetchHandWritingIcon,
     &features::kWebViewMixedContentAutoupgrades,
     &features::kWebViewMoveWorkToProviderInit,
+    &features::kWebViewMoveWorkToProviderInitThreadPool,
+    &features::kWebViewMultiProfileSkipDefaultProfile,
+    &features::kWebViewNavigate,
     &features::kWebViewOptInToGmsBindServiceOptimization,
+    &features::kWebViewPersistHttpServerProperties,
     &features::kWebViewPrefetchNativeLibrary,
+    &features::kWebViewPrefetchOffTheMainThread,
+    &features::kWebViewProfileStoreNotTriggerStartup,
     &features::kWebViewRecordAppCacheHistograms,
     &features::kWebViewReduceUAAndroidVersionDeviceModel,
     &features::kWebViewReducedSeedExpiration,
     &features::kWebViewReducedSeedRequestPeriod,
+    &features::kWebViewRemoveInstantAppSupport,
+    &features::kWebViewRendererKeepAlive,
+    &features::kWebViewSetDownloadFaviconsEnabled,
     &features::kWebViewSkipInterceptsForPrefetch,
-    &features::kWebViewStartupTasksYieldToNative,
-    &features::kWebViewStopBrowserStartupInIsMultiProcessEnabled,
+    &features::kWebViewStaticMethodsNotTriggerStartup,
     &features::kWebViewTestFeature,
-    &features::kWebViewUseInitialNetworkStateAtStartup,
     &features::kWebViewUseMetricsUploadServiceOnlySdkRuntime,
-    &features::kWebViewUseRenderingHeuristic,
-    &features::kWebViewUseStartupTasksLogic,
-    &features::kWebViewUseStartupTasksLogicP2,
-    &features::kWebViewWebauthn,
+    &features::kWebViewUseWVLESForLayeredStudy,
+    &features::kWebViewWarmupNetworkService,
     // keep-sorted end
 };
 
@@ -81,8 +93,8 @@ base::android::FeatureMap* GetFeatureMap() {
   return kFeatureMap.get();
 }
 
-static jlong JNI_AwFeatureMap_GetNativeMap(JNIEnv* env) {
-  return reinterpret_cast<jlong>(GetFeatureMap());
+static int64_t JNI_AwFeatureMap_GetNativeMap(JNIEnv* env) {
+  return reinterpret_cast<int64_t>(GetFeatureMap());
 }
 
 }  // namespace android_webview

@@ -6,6 +6,9 @@
 
 #include <sstream>
 
+#include "base/check.h"
+#include "base/dcheck_is_on.h"
+#include "base/logging.h"
 #include "base/run_loop.h"
 #include "base/strings/to_string.h"
 #include "base/task/sequenced_task_runner.h"
@@ -89,6 +92,11 @@ void WebAppInstallManagerObserverAdapter::SetWebAppSourceRemovedDelegate(
   app_source_removed_delegate_ = std::move(delegate);
 }
 
+void WebAppInstallManagerObserverAdapter::SetWebAppMigratedDelegate(
+    WebAppMigratedDelegate delegate) {
+  app_migrated_delegate_ = std::move(delegate);
+}
+
 void WebAppInstallManagerObserverAdapter::OnWebAppInstalled(
     const webapps::AppId& app_id) {
   if (app_installed_delegate_)
@@ -128,6 +136,14 @@ void WebAppInstallManagerObserverAdapter::OnWebAppSourceRemoved(
     const webapps::AppId& app_id) {
   if (app_source_removed_delegate_) {
     app_source_removed_delegate_.Run(app_id);
+  }
+}
+
+void WebAppInstallManagerObserverAdapter::OnWebAppMigrated(
+    const webapps::AppId& source_app_id,
+    const webapps::AppId& target_app_id) {
+  if (app_migrated_delegate_) {
+    app_migrated_delegate_.Run(source_app_id, target_app_id);
   }
 }
 
@@ -192,7 +208,7 @@ void WebAppTestRegistryObserverAdapter::OnWebAppEffectiveScopeChanged(
 }
 
 void WebAppTestRegistryObserverAdapter::OnWebAppsWillBeUpdatedFromSync(
-    const std::vector<const WebApp*>& new_apps_state) {
+    base::span<const WebApp* const> new_apps_state) {
   if (app_will_be_updated_from_sync_delegate_)
     app_will_be_updated_from_sync_delegate_.Run(new_apps_state);
 }

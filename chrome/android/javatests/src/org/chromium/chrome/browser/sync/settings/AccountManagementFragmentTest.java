@@ -28,38 +28,48 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.RuleChain;
+import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
+import org.junit.runners.model.Statement;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
+import org.chromium.base.FeatureOverrides;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.params.ParameterAnnotations.ClassParameter;
+import org.chromium.base.test.params.ParameterAnnotations.UseRunnerDelegate;
+import org.chromium.base.test.params.ParameterSet;
+import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
 import org.chromium.chrome.browser.sync.FakeSyncServiceImpl;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.chrome.browser.sync.SyncTestRule;
-import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
+import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
 import org.chromium.chrome.test.util.browser.signin.SigninTestRule;
+import org.chromium.components.signin.SigninFeatures;
 import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.base.CoreAccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.test.util.AccountCapabilitiesBuilder;
 import org.chromium.components.signin.test.util.TestAccounts;
 import org.chromium.components.sync.DataType;
 
+import java.util.Arrays;
+import java.util.List;
 import java.util.Set;
 
 /** Tests {@link AccountManagementFragment}. */
-@RunWith(ChromeJUnit4ClassRunner.class)
+@RunWith(ParameterizedRunner.class)
+@UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
 @DoNotBatch(reason = "TODO(crbug.com/40743432): SyncTestRule doesn't support batching.")
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 // TODO(https://crbug.com/464015738): these tests could be flaky because of AnimatedProgressBar.
@@ -68,8 +78,20 @@ import java.util.Set;
     ChromeFeatureList.ANDROID_ANIMATED_PROGRESS_BAR_IN_BROWSER
 })
 public class AccountManagementFragmentTest {
+    @ClassParameter
+    private static final List<ParameterSet> sClassParameters =
+            Arrays.asList(
+                    new ParameterSet().value(false).name("withAccountManagerFacadeSource"),
+                    new ParameterSet().value(true).name("withIdentityManagerSource"));
+
     private final SyncTestRule mSyncTestRule = new SyncTestRule();
-    private static final int RENDER_TEST_REVISION = 2;
+    private static final int RENDER_TEST_REVISION = 3;
+
+    private final boolean mIsIdentityManagerSourceOfAccounts;
+
+    public AccountManagementFragmentTest(boolean isIdentityManagerSourceOfAccounts) {
+        mIsIdentityManagerSourceOfAccounts = isIdentityManagerSourceOfAccounts;
+    }
 
     private final SettingsActivityTestRule<AccountManagementFragment> mSettingsActivityTestRule =
             new SettingsActivityTestRule<>(AccountManagementFragment.class);
@@ -78,9 +100,23 @@ public class AccountManagementFragmentTest {
     // CTA won't work (SyncTestRule extends CTARule).
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
+    public final TestRule mFeatureOverridesRule =
+            (base, description) ->
+                    new Statement() {
+                        @Override
+                        public void evaluate() throws Throwable {
+                            FeatureOverrides.overrideFlag(
+                                    SigninFeatures.MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS_PART2,
+                                    mIsIdentityManagerSourceOfAccounts);
+                            base.evaluate();
+                        }
+                    };
+
     @Rule
     public final RuleChain mRuleChain =
-            RuleChain.outerRule(mSyncTestRule).around(mSettingsActivityTestRule);
+            RuleChain.outerRule(mFeatureOverridesRule)
+                    .around(mSyncTestRule)
+                    .around(mSettingsActivityTestRule);
 
     @Rule
     public final ChromeRenderTestRule mRenderTestRule =
@@ -137,7 +173,7 @@ public class AccountManagementFragmentTest {
                     return !mSettingsActivityTestRule
                             .getFragment()
                             .getProfileDataCacheForTesting()
-                            .getProfileDataOrDefault(accountInfo.getEmail())
+                            .getById(accountInfo.getId())
                             .hasDisplayableEmailAddress();
                 });
         ThreadUtils.runOnUiThreadBlocking(mSettingsActivityTestRule.getFragment()::update);
@@ -157,7 +193,7 @@ public class AccountManagementFragmentTest {
             testAccountManagementViewForChildAccountWithNonDisplayableAccountEmailWithEmptyDisplayName()
                     throws Exception {
         final SigninTestRule signinTestRule = mSyncTestRule.getSigninTestRule();
-        AccountInfo accountInfo = TestAccounts.TEST_ACCOUNT_NON_DISPLAYABLE_EMAIL_AND_NO_NAME;
+        AccountInfo accountInfo = TestAccounts.CHILD_ACCOUNT_NON_DISPLAYABLE_EMAIL_AND_NO_NAME;
         signinTestRule.addAccount(accountInfo);
         // Child accounts are signed-in automatically in the background.
         signinTestRule.waitForSignin(accountInfo);
@@ -167,7 +203,7 @@ public class AccountManagementFragmentTest {
                     return !mSettingsActivityTestRule
                             .getFragment()
                             .getProfileDataCacheForTesting()
-                            .getProfileDataOrDefault(accountInfo.getEmail())
+                            .getById(accountInfo.getId())
                             .hasDisplayableEmailAddress();
                 });
         ThreadUtils.runOnUiThreadBlocking(mSettingsActivityTestRule.getFragment()::update);
@@ -195,7 +231,7 @@ public class AccountManagementFragmentTest {
                     return mSettingsActivityTestRule
                             .getFragment()
                             .getProfileDataCacheForTesting()
-                            .hasProfileDataForTesting(primarySupervisedAccount.getEmail());
+                            .hasProfileDataForTesting(primarySupervisedAccount.getId());
                 });
         View view = mSettingsActivityTestRule.getFragment().getView();
         onViewWaiting(allOf(is(view), isDisplayed()));
@@ -222,7 +258,7 @@ public class AccountManagementFragmentTest {
                     return mSettingsActivityTestRule
                             .getFragment()
                             .getProfileDataCacheForTesting()
-                            .hasProfileDataForTesting(primarySupervisedAccount.getEmail());
+                            .hasProfileDataForTesting(primarySupervisedAccount.getId());
                 });
         View view = mSettingsActivityTestRule.getFragment().getView();
         onViewWaiting(allOf(is(view), isDisplayed()));
@@ -256,9 +292,7 @@ public class AccountManagementFragmentTest {
         onView(withText(R.string.sign_out)).perform(click());
 
         CriteriaHelper.pollUiThread(
-                () ->
-                        mSyncTestRule.getSigninTestRule().getPrimaryAccount(ConsentLevel.SIGNIN)
-                                == null);
+                () -> mSyncTestRule.getSigninTestRule().getPrimaryAccount() == null);
     }
 
     @Test

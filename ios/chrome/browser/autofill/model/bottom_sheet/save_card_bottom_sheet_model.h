@@ -60,11 +60,18 @@ class SaveCardBottomSheetModel {
   // Calls `AutofillSaveCardDelegate` to handle the dismiss event.
   virtual void OnCanceled();
 
+  // Called when the user confirms the "Scan and Save" flow with edited details.
+  // Forwards the user-provided details to the underlying
+  // AutofillSaveCardDelegate.
+  virtual void OnUpdatedAndAcceptedForSaveAndFill(
+      payments::PaymentsAutofillClient::UserProvidedCardSaveAndFillDetails
+          details);
+
   // Updates observer with save card result and sets the callback to be run
   // after bottomsheet is closed upon showing the success confirmation.
   virtual void CreditCardUploadCompleted(
       bool card_saved,
-      autofill::payments::PaymentsAutofillClient::OnConfirmationClosedCallback
+      payments::PaymentsAutofillClient::OnConfirmationClosedCallback
           on_confirmation_closed_callback);
 
   void AddObserver(Observer* observer) { observer_list_.AddObserver(observer); }
@@ -131,6 +138,9 @@ class SaveCardBottomSheetModel {
   }
 
   inline SaveCardState save_card_state() const { return save_card_state_; }
+
+  // Returns whether the card save is an upload save.
+  inline bool is_for_upload() const { return ui_info_.is_for_upload; }
 
   base::WeakPtr<SaveCardBottomSheetModel> GetWeakPtr() {
     return weak_ptr_factory_.GetWeakPtr();

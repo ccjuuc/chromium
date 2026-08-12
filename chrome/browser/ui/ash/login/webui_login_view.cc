@@ -2,13 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-
 #include "chrome/browser/ui/ash/login/webui_login_view.h"
 
 #include <memory>
 #include <utility>
 
 #include "ash/focus/scoped_arrow_key_traversal_controller.h"
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "ash/public/cpp/login_accelerators.h"
 #include "ash/public/cpp/login_screen.h"
 #include "base/functional/bind.h"
@@ -21,7 +21,6 @@
 #include "chrome/browser/ash/app_mode/kiosk_chrome_app_manager.h"
 #include "chrome/browser/ash/browser_delegate/browser_controller.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
 #include "chrome/browser/renderer_preferences_util.h"
@@ -30,7 +29,6 @@
 #include "chrome/browser/ui/ash/login/login_screen_client_impl.h"
 #include "chrome/browser/ui/ash/system/system_tray_client_impl.h"
 #include "chrome/browser/ui/webui/ash/login/oobe_ui.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/components/network/network_state.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
@@ -45,7 +43,6 @@
 #include "content/public/browser/web_ui.h"
 #include "extensions/browser/view_type_utils.h"
 #include "extensions/common/mojom/view_type.mojom.h"
-#include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -71,7 +68,6 @@ using ::web_modal::WebContentsModalDialogManager;
 
 void InitializeWebView(views::WebView* web_view) {
   WebContents* web_contents = web_view->GetWebContents();
-
   views::WebContentsSetBackgroundColor::CreateForWebContentsWithColor(
       web_contents, SK_ColorTRANSPARENT);
 
@@ -84,6 +80,9 @@ void InitializeWebView(views::WebView* web_view) {
   BrowserController::GetInstance()->CreateAutofillClientForWebContents(
       web_contents);
   ChromePasswordManagerClient::CreateForWebContents(web_contents);
+
+  // Disable pinch zooming.
+  web_contents->SetIgnoreZoomGestures(true);
 
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
   // Create the password reuse detection manager.
@@ -106,11 +105,9 @@ void InitializeWebView(views::WebView* web_view) {
 
 WebUILoginView::WebUILoginView(base::WeakPtr<LoginDisplayHostWebUI> controller)
     : controller_(controller) {
-  on_app_terminating_subscription_ =
-      browser_shutdown::AddAppTerminatingCallback(base::BindOnce(
-          &WebUILoginView::OnAppTerminating, base::Unretained(this)));
-
   session_observation_.Observe(session_manager::SessionManager::Get());
+  session_termination_observation_.Observe(
+      ash::SessionTerminationManager::Get());
 
   for (size_t i = 0; i < kLoginAcceleratorDataLength; ++i) {
     ui::Accelerator accelerator(kLoginAcceleratorData[i].keycode,
@@ -347,13 +344,6 @@ bool WebUILoginView::CheckMediaAccessPermission(
     blink::mojom::MediaStreamType type) {
   return MediaCaptureDevicesDispatcher::GetInstance()
       ->CheckMediaAccessPermission(render_frame_host, security_origin, type);
-}
-
-bool WebUILoginView::PreHandleGestureEvent(
-    content::WebContents* source,
-    const blink::WebGestureEvent& event) {
-  // Disable pinch zooming.
-  return blink::WebInputEvent::IsPinchGestureEventType(event.GetType());
 }
 
 void WebUILoginView::OnFocusLeavingSystemTray(bool reverse) {

@@ -9,13 +9,13 @@
 #include <set>
 #include <string>
 
+#include "ash/constants/ash_policy_pref_names.h"
 #include "base/json/values_util.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "chrome/browser/ash/policy/core/policy_pref_names.h"
 #include "chrome/browser/ash/policy/reporting/event_based_logs/event_based_log_uploader.h"
 #include "chrome/browser/ash/policy/reporting/event_based_logs/event_based_log_utils.h"
 #include "chrome/browser/policy/messaging_layer/proto/synced/log_upload_event.pb.h"
@@ -48,7 +48,8 @@ class FakeLogUploader : public policy::EventBasedLogUploader {
 // A fake implementation of `EventObserverBase` for testing.
 class TestEventObserver : public policy::EventObserverBase {
  public:
-  TestEventObserver() {
+  explicit TestEventObserver(PrefService* local_state)
+      : EventObserverBase(local_state) {
     SetLogUploaderForTesting(std::make_unique<FakeLogUploader>());
   }
 
@@ -70,9 +71,8 @@ class EventObserverBaseTest : public testing::Test {
   void SetLastUploadTime(const std::string event_name,
                          base::Time last_upload_time) {
     TestingBrowserProcess::GetGlobal()->local_state()->SetDict(
-        policy::prefs::kEventBasedLogLastUploadTimes,
-        base::Value::Dict().Set(event_name,
-                                base::TimeToValue(last_upload_time)));
+        ash::prefs::kEventBasedLogLastUploadTimes,
+        base::DictValue().Set(event_name, base::TimeToValue(last_upload_time)));
   }
 
  protected:
@@ -86,7 +86,8 @@ class EventObserverBaseTest : public testing::Test {
 }  // namespace
 
 TEST_F(EventObserverBaseTest, SuccessfulFirstUpload) {
-  TestEventObserver event_observer;
+  TestEventObserver event_observer(
+      TestingBrowserProcess::GetGlobal()->local_state());
   base::test::TestFuture<policy::EventBasedUploadStatus> test_future;
   event_observer.TriggerLogUpload(policy::GenerateEventBasedLogUploadId(),
                                   test_future.GetCallback());
@@ -100,7 +101,8 @@ TEST_F(EventObserverBaseTest, SuccessfulFirstUpload) {
 }
 
 TEST_F(EventObserverBaseTest, SuccessfulUploadAfterTimeLimit) {
-  TestEventObserver event_observer;
+  TestEventObserver event_observer(
+      TestingBrowserProcess::GetGlobal()->local_state());
 
   // Set last upload time as more than the default time limit (24 hours).
   SetLastUploadTime(event_observer.GetEventName(),
@@ -119,7 +121,8 @@ TEST_F(EventObserverBaseTest, SuccessfulUploadAfterTimeLimit) {
 }
 
 TEST_F(EventObserverBaseTest, DeclinedUploadBeforeTimeLimit) {
-  TestEventObserver event_observer;
+  TestEventObserver event_observer(
+      TestingBrowserProcess::GetGlobal()->local_state());
 
   // Set last upload time as less than the default time limit (24 hours).
   SetLastUploadTime(event_observer.GetEventName(),
@@ -138,7 +141,8 @@ TEST_F(EventObserverBaseTest, DeclinedUploadBeforeTimeLimit) {
 }
 
 TEST_F(EventObserverBaseTest, DeclinedUploadForDifferentEventType) {
-  TestEventObserver event_observer;
+  TestEventObserver event_observer(
+      TestingBrowserProcess::GetGlobal()->local_state());
 
   // Set last upload time for a different event type as less than the default
   // time limit (24 hours).

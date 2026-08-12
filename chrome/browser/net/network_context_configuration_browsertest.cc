@@ -5,7 +5,6 @@
 #include <atomic>
 #include <optional>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 #include "base/command_line.h"
@@ -58,6 +57,7 @@
 #include "content/public/browser/network_service_util.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/storage_partition_config.h"
+#include "content/public/common/child_process_id_util.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_test.h"
@@ -66,6 +66,7 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/data_pipe_utils.h"
 #include "net/base/address_list.h"
+#include "net/base/features.h"
 #include "net/base/filename_util.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/load_flags.h"
@@ -84,9 +85,11 @@
 #include "net/test/embedded_test_server/embedded_test_server_connection_listener.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
+#include "net/test/embedded_test_server/install_default_websocket_handlers.h"
 #include "net/test/gtest_util.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "net/url_request/referrer_policy.h"
+#include "services/network/public/cpp/constants.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/network_connection_tracker.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -96,9 +99,11 @@
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
+#include "services/network/public/mojom/websocket.mojom.h"
 #include "services/network/test/test_dns_util.h"
 #include "services/network/test/test_url_loader_client.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_MAC)
@@ -168,8 +173,9 @@ class ConnectionTypeWaiter
     tracker_->RemoveNetworkConnectionObserver(this);
   }
 
-  void Wait(network::mojom::ConnectionType expected_type) {
-    auto current_type = network::mojom::ConnectionType::CONNECTION_UNKNOWN;
+  void Wait(net::NetworkChangeNotifier::ConnectionType expected_type) {
+    auto current_type =
+        net::NetworkChangeNotifier::ConnectionType::CONNECTION_UNKNOWN;
     for (;;) {
       network::NetworkConnectionTracker::ConnectionTypeCallback callback =
           base::BindOnce(&ConnectionTypeWaiter::OnConnectionChanged,
@@ -185,7 +191,8 @@ class ConnectionTypeWaiter
 
  private:
   // network::NetworkConnectionTracker::NetworkConnectionObserver:
-  void OnConnectionChanged(network::mojom::ConnectionType type) override {
+  void OnConnectionChanged(
+      net::NetworkChangeNotifier::ConnectionType type) override {
     if (run_loop_)
       run_loop_->Quit();
   }
@@ -252,13 +259,6 @@ class NetworkContextConfigurationBrowserTest
 
   ~NetworkContextConfigurationBrowserTest() override = default;
 
-  void SetUpInProcessBrowserTestFixture() override {
-    provider_.SetDefaultReturns(
-        /*is_initialization_complete_return=*/true,
-        /*is_first_policy_load_complete_return=*/true);
-    policy::BrowserPolicyConnector::SetPolicyProviderForTesting(&provider_);
-  }
-
   void SetUpOnMainThread() override {
     // Used in a bunch of proxy tests. Should not resolve.
     host_resolver()->AddSimulatedFailure("does.not.resolve.test");
@@ -285,7 +285,7 @@ class NetworkContextConfigurationBrowserTest
     // the connection type to be available to avoid getting notified of the
     // connection change halfway through the test.
     ConnectionTypeWaiter().Wait(
-        network::mojom::ConnectionType::CONNECTION_ETHERNET);
+        net::NetworkChangeNotifier::ConnectionType::CONNECTION_ETHERNET);
 #endif
   }
 
@@ -325,35 +325,36 @@ class NetworkContextConfigurationBrowserTest
   content::StoragePartition* GetStoragePartitionForContextType(
       NetworkContextType network_context_type) {
     const auto kOnDiskConfig = content::StoragePartitionConfig::Create(
-        browser()->profile(), "foo", /*partition_name=*/"",
+        browser()->GetProfile(), "foo", /*partition_name=*/"",
         /*in_memory=*/false);
     const auto kInMemoryConfig = content::StoragePartitionConfig::Create(
-        browser()->profile(), "foo", /*partition_name=*/"", /*in_memory=*/true);
+        browser()->GetProfile(), "foo", /*partition_name=*/"",
+        /*in_memory=*/true);
 
     switch (network_context_type) {
       case NetworkContextType::kSystem:
       case NetworkContextType::kSafeBrowsing:
         NOTREACHED() << "Network context has no storage partition";
       case NetworkContextType::kProfile:
-        return browser()->profile()->GetDefaultStoragePartition();
+        return browser()->GetProfile()->GetDefaultStoragePartition();
       case NetworkContextType::kIncognitoProfile:
         DCHECK(incognito_);
-        return incognito_->profile()->GetDefaultStoragePartition();
+        return incognito_->GetProfile()->GetDefaultStoragePartition();
       case NetworkContextType::kOnDiskApp:
-        return browser()->profile()->GetStoragePartition(kOnDiskConfig);
+        return browser()->GetProfile()->GetStoragePartition(kOnDiskConfig);
       case NetworkContextType::kInMemoryApp:
-        return browser()->profile()->GetStoragePartition(kInMemoryConfig);
+        return browser()->GetProfile()->GetStoragePartition(kInMemoryConfig);
       case NetworkContextType::kOnDiskAppWithIncognitoProfile: {
         DCHECK(incognito_);
         // Note: Even though we are requesting an on-disk config, the function
         // will return an in-memory config because incognito profiles are not
         // supposed to to use on-disk storage.
         const auto kIncognitoConfig = content::StoragePartitionConfig::Create(
-            incognito_->profile(), "foo", /*partition_name=*/"",
+            incognito_->GetProfile(), "foo", /*partition_name=*/"",
             /*in_memory=*/false);
         DCHECK(kIncognitoConfig.in_memory());
 
-        return incognito_->profile()->GetStoragePartition(kIncognitoConfig);
+        return incognito_->GetProfile()->GetStoragePartition(kIncognitoConfig);
       }
     }
     NOTREACHED();
@@ -371,7 +372,7 @@ class NetworkContextConfigurationBrowserTest
             ->GetURLLoaderFactory();
       case NetworkContextType::kSafeBrowsing:
         return g_browser_process->safe_browsing_service()
-            ->GetURLLoaderFactory(browser()->profile())
+            ->GetURLLoaderFactory(browser()->GetProfile())
             .get();
       case NetworkContextType::kProfile:
       case NetworkContextType::kIncognitoProfile:
@@ -397,7 +398,7 @@ class NetworkContextConfigurationBrowserTest
             ->GetContext();
       case NetworkContextType::kSafeBrowsing:
         return g_browser_process->safe_browsing_service()->GetNetworkContext(
-            browser()->profile());
+            browser()->GetProfile());
       case NetworkContextType::kProfile:
       case NetworkContextType::kIncognitoProfile:
       case NetworkContextType::kOnDiskApp:
@@ -450,13 +451,13 @@ class NetworkContextConfigurationBrowserTest
       case NetworkContextType::kProfile:
       case NetworkContextType::kInMemoryApp:
       case NetworkContextType::kOnDiskApp:
-        return browser()->profile()->GetPrefs();
+        return browser()->GetProfile()->GetPrefs();
       case NetworkContextType::kIncognitoProfile:
       case NetworkContextType::kOnDiskAppWithIncognitoProfile:
         // Incognito actually uses the non-incognito prefs, so this should end
         // up being the same pref store as in the KProfile case.
         return browser()
-            ->profile()
+            ->GetProfile()
             ->GetPrimaryOTRProfile(/*create_if_needed=*/true)
             ->GetPrefs();
     }
@@ -481,13 +482,14 @@ class NetworkContextConfigurationBrowserTest
       case NetworkContextType::kProfile:
       case NetworkContextType::kInMemoryApp:
       case NetworkContextType::kOnDiskApp:
-        ProfileNetworkContextServiceFactory::GetForContext(browser()->profile())
+        ProfileNetworkContextServiceFactory::GetForContext(
+            browser()->GetProfile())
             ->FlushProxyConfigMonitorForTesting();
         break;
       case NetworkContextType::kIncognitoProfile:
       case NetworkContextType::kOnDiskAppWithIncognitoProfile:
         ProfileNetworkContextServiceFactory::GetForContext(
-            browser()->profile()->GetPrimaryOTRProfile(
+            browser()->GetProfile()->GetPrimaryOTRProfile(
                 /*create_if_needed=*/true))
             ->FlushProxyConfigMonitorForTesting();
         break;
@@ -636,11 +638,11 @@ class NetworkContextConfigurationBrowserTest
       case NetworkContextType::kProfile:
       case NetworkContextType::kInMemoryApp:
       case NetworkContextType::kOnDiskApp:
-        return browser()->profile();
+        return browser()->GetProfile();
       case NetworkContextType::kIncognitoProfile:
       case NetworkContextType::kOnDiskAppWithIncognitoProfile:
         DCHECK(incognito_);
-        return incognito_->profile();
+        return incognito_->GetProfile();
     }
   }
 
@@ -699,10 +701,6 @@ class NetworkContextConfigurationBrowserTest
            content::IsInProcessNetworkService();
   }
 
-  void UpdateChromePolicy(const policy::PolicyMap& policy_map) {
-    provider_.UpdateChromePolicy(policy_map);
-  }
-
  private:
   void SimulateNetworkServiceCrashIfNecessary() {
     if (GetParam().network_service_state != NetworkServiceState::kRestarted ||
@@ -712,7 +710,7 @@ class NetworkContextConfigurationBrowserTest
 
     // Make sure |network_context()| is working as expected. Use '/echoheader'
     // instead of '/echo' to avoid a disk_cache bug.
-    // See https://crbug.com/792255.
+    // See https://crbug.com/40553335.
     auto request = std::make_unique<network::ResourceRequest>();
     request->url = embedded_test_server()->GetURL("/echoheader");
     request->load_flags = net::LOAD_BYPASS_PROXY;
@@ -743,7 +741,6 @@ class NetworkContextConfigurationBrowserTest
   std::unique_ptr<net::test_server::ControllableHttpResponse>
       controllable_http_response_;
 
-  testing::NiceMock<policy::MockConfigurationPolicyProvider> provider_;
   // Used in tests that need a live request during browser shutdown.
   std::unique_ptr<network::SimpleURLLoader> live_during_shutdown_simple_loader_;
   base::test::ScopedFeatureList scoped_feature_list_;
@@ -813,8 +810,9 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
   // TODO(https://crbug.com/40804030): Remove this when updated to use MV3.
   extensions::ScopedTestMV2Enabler mv2_enabler;
 
-  if (IsRestartStateWithInProcessNetworkService())
+  if (IsRestartStateWithInProcessNetworkService()) {
     return;
+  }
 
   // Loading an extension only makes sense for profile contexts.
   if (GetParam().network_context_type != NetworkContextType::kProfile &&
@@ -1018,7 +1016,7 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest, PRE_DiskCache) {
   GURL test_url = embedded_test_server()->GetURL(kCacheRandomPath);
   url::Origin test_origin = url::Origin::Create(test_url);
   base::ScopedAllowBlockingForTesting allow_blocking;
-  base::FilePath save_url_file_path = browser()->profile()->GetPath().Append(
+  base::FilePath save_url_file_path = browser()->GetProfile()->GetPath().Append(
       FILE_PATH_LITERAL("url_for_test.txt"));
 
   // Make a request whose response should be cached.
@@ -1072,7 +1070,7 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
 
   // Load URL from the above test body to disk.
   base::ScopedAllowBlockingForTesting allow_blocking;
-  base::FilePath save_url_file_path = browser()->profile()->GetPath().Append(
+  base::FilePath save_url_file_path = browser()->GetProfile()->GetPath().Append(
       FILE_PATH_LITERAL("url_for_test.txt"));
   std::string file_data;
   ASSERT_TRUE(ReadFileToString(save_url_file_path, &file_data));
@@ -1231,7 +1229,7 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest, PRE_Hsts) {
   // Write the URL with HSTS information to a file, so it can be loaded in the
   // next test. Have to use a file for this, since the server's port is random.
   base::ScopedAllowBlockingForTesting allow_blocking;
-  base::FilePath save_url_file_path = browser()->profile()->GetPath().Append(
+  base::FilePath save_url_file_path = browser()->GetProfile()->GetPath().Append(
       FILE_PATH_LITERAL("url_for_test.txt"));
   std::string file_data = start_url.spec();
   ASSERT_TRUE(base::WriteFile(save_url_file_path, file_data));
@@ -1244,12 +1242,12 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest, Hsts) {
     return;
   // The network service must be cleanly shut down to guarantee HSTS information
   // is flushed to disk, but that currently generally doesn't happen. See
-  // https://crbug.com/820996.
+  // https://crbug.com/40566707.
   if (GetHttpCacheType() == StorageType::kDisk) {
     return;
   }
   base::ScopedAllowBlockingForTesting allow_blocking;
-  base::FilePath save_url_file_path = browser()->profile()->GetPath().Append(
+  base::FilePath save_url_file_path = browser()->GetProfile()->GetPath().Append(
       FILE_PATH_LITERAL("url_for_test.txt"));
   std::string file_data;
   ASSERT_TRUE(ReadFileToString(save_url_file_path, &file_data));
@@ -1317,7 +1315,7 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
   MakeLongLivedRequestThatHangsUntilShutdown();
 }
 
-// Disabled due to flakiness. See crbug.com/1189031.
+// Disabled due to flakiness. See crbug.com/40755205.
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
 #define MAYBE_UserAgentAndLanguagePrefs DISABLED_UserAgentAndLanguagePrefs
 #else
@@ -1345,8 +1343,8 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
 
   // Change AcceptLanguages preferences, and check that headers are updated.
   // First, A single language.
-  browser()->profile()->GetPrefs()->SetString(language::prefs::kAcceptLanguages,
-                                              "zu");
+  browser()->GetProfile()->GetPrefs()->SetString(
+      language::prefs::kAcceptLanguages, "zu");
   FlushNetworkInterface();
   std::string accept_language2, user_agent2;
   ASSERT_TRUE(FetchHeaderEcho("accept-language", &accept_language2));
@@ -1355,8 +1353,8 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
   EXPECT_EQ(embedder_support::GetUserAgent(), user_agent2);
 
   // Second, a single language with locale.
-  browser()->profile()->GetPrefs()->SetString(language::prefs::kAcceptLanguages,
-                                              "zu-ZA");
+  browser()->GetProfile()->GetPrefs()->SetString(
+      language::prefs::kAcceptLanguages, "zu-ZA");
   FlushNetworkInterface();
   std::string accept_language3, user_agent3;
   ASSERT_TRUE(FetchHeaderEcho("accept-language", &accept_language3));
@@ -1365,15 +1363,16 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
   EXPECT_EQ(embedder_support::GetUserAgent(), user_agent3);
 
   // Third, a list with multiple languages. Incognito mode should return only
-  // the first.
-  browser()->profile()->GetPrefs()->SetString(language::prefs::kAcceptLanguages,
-                                              "ar,am,en-GB,ru,zu");
+  // the first language's default set of languages.
+  browser()->GetProfile()->GetPrefs()->SetString(
+      language::prefs::kAcceptLanguages, "ar,am,en-GB,ru,zu");
   FlushNetworkInterface();
   std::string accept_language4;
   std::string user_agent4;
   ASSERT_TRUE(FetchHeaderEcho("accept-language", &accept_language4));
   if (GetProfile()->IsOffTheRecord()) {
-    EXPECT_EQ(system ? kNoAcceptLanguage : "ar", accept_language4);
+    EXPECT_EQ(system ? kNoAcceptLanguage : "ar,en-US;q=0.9,en;q=0.8",
+              accept_language4);
   } else {
     EXPECT_EQ(system ? kNoAcceptLanguage
                      : "ar,am;q=0.9,en-GB;q=0.8,en;q=0.7,ru;q=0.6,zu;q=0.5",
@@ -1497,7 +1496,7 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
   EXPECT_FALSE(GetCookies(embedded_test_server()->base_url()).empty());
 }
 
-// Disabled due to flakiness. See https://crbug.com/1273903.
+// Disabled due to flakiness. See https://crbug.com/40807215.
 IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
                        DISABLED_CookiesEnabled) {
   if (IsRestartStateWithInProcessNetworkService())
@@ -1524,7 +1523,7 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
       }));
 }
 
-// Disabled due to flakiness. See https://crbug.com/1126755.
+// Disabled due to flakiness. See https://crbug.com/40718681.
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_PRE_ThirdPartyCookiesBlocked DISABLED_PRE_ThirdPartyCookiesBlocked
 #define MAYBE_ThirdPartyCookiesBlocked DISABLED_ThirdPartyCookiesBlocked
@@ -1553,7 +1552,7 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
   EXPECT_TRUE(GetCookies(https_server()->base_url()).empty());
 }
 
-// Disabled due to flakiness. See https://crbug.com/1126755.
+// Disabled due to flakiness. See https://crbug.com/40718681.
 IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
                        MAYBE_ThirdPartyCookiesBlocked) {
   if (IsRestartStateWithInProcessNetworkService())
@@ -1576,7 +1575,7 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
   EXPECT_TRUE(GetCookies(https_server()->base_url()).empty());
 
   // Add exception, third party cookies should be allowed now.
-  CookieSettingsFactory::GetForProfile(browser()->profile())
+  CookieSettingsFactory::GetForProfile(browser()->GetProfile())
       ->SetCookieSetting(https_server()->base_url(), CONTENT_SETTING_ALLOW);
   // Set a third-party cookie. It should actually get set this time.
   SetCookie(CookieType::kThirdParty, CookiePersistenceType::kSession,
@@ -1597,7 +1596,7 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
   if (system)
     return;
 
-  CookieSettingsFactory::GetForProfile(browser()->profile())
+  CookieSettingsFactory::GetForProfile(browser()->GetProfile())
       ->SetDefaultCookieSetting(CONTENT_SETTING_BLOCK);
   FlushNetworkInterface();
   SetCookie(CookieType::kFirstParty, CookiePersistenceType::kSession,
@@ -1624,7 +1623,7 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest, CookieSettings) {
   EXPECT_TRUE(GetCookies(embedded_test_server()->base_url()).empty());
 
   // Set default setting to allow, cookies should be set now.
-  CookieSettingsFactory::GetForProfile(browser()->profile())
+  CookieSettingsFactory::GetForProfile(browser()->GetProfile())
       ->SetDefaultCookieSetting(CONTENT_SETTING_ALLOW);
   FlushNetworkInterface();
   SetCookie(CookieType::kFirstParty, CookiePersistenceType::kSession,
@@ -1779,6 +1778,8 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationHttpPacBrowserTest, HttpPac) {
   TestProxyConfigured(/*expect_success=*/true);
 }
 
+// TODO(crbug.com/494643383): Fails on some desktop Android bots.
+#if !BUILDFLAG(IS_ANDROID)
 // Make sure the system URLRequestContext can handle fetching PAC scripts from
 // file URLs.
 class NetworkContextConfigurationFilePacBrowserTest
@@ -1816,6 +1817,7 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationFilePacBrowserTest, FilePac) {
     return;
   TestProxyConfigured(false);
 }
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 // Make sure the system URLRequestContext can handle fetching PAC scripts from
 // data URLs.
@@ -1845,12 +1847,47 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationDataPacBrowserTest, DataPac) {
   TestProxyConfigured(/*expect_success=*/true);
 }
 
+class WaitingHandshakeClient : public network::mojom::WebSocketHandshakeClient {
+ public:
+  WaitingHandshakeClient() = default;
+  WaitingHandshakeClient(const WaitingHandshakeClient&) = delete;
+  WaitingHandshakeClient& operator=(const WaitingHandshakeClient&) = delete;
+
+  mojo::PendingRemote<network::mojom::WebSocketHandshakeClient> Bind() {
+    return receiver_.BindNewPipeAndPassRemote();
+  }
+
+  // Implementation of WebSocketHandshakeClient
+  void OnOpeningHandshakeStarted(
+      network::mojom::WebSocketHandshakeRequestPtr) override {}
+
+  void OnFailure(const std::string& message,
+                 int net_error,
+                 int response_code) override {}
+
+  void OnConnectionEstablished(
+      mojo::PendingRemote<network::mojom::WebSocket> websocket,
+      mojo::PendingReceiver<network::mojom::WebSocketClient> client_receiver,
+      network::mojom::WebSocketHandshakeResponsePtr,
+      mojo::ScopedDataPipeConsumerHandle readable,
+      mojo::ScopedDataPipeProducerHandle writable) override {}
+
+ private:
+  mojo::Receiver<network::mojom::WebSocketHandshakeClient> receiver_{this};
+};
+
 class NetworkContextConfigurationProxySettingsBrowserTest
     : public NetworkContextConfigurationHttpPacBrowserTest {
  public:
-  const size_t kDefaultMaxConnectionsPerProxy = 32;
+  // Using the full 128 was causing flakes, so we're using the minimum for now.
+  const size_t kTestMaxConnectionsPerProxy = 7;
 
-  NetworkContextConfigurationProxySettingsBrowserTest() = default;
+  NetworkContextConfigurationProxySettingsBrowserTest() {
+    // Disable `kPermitTcpSocketPoolConnectBackupJobs`, as backup jobs
+    // cause extra connections without opening new WebSockets, breaking tests.
+    scoped_feature_list_.InitAndDisableFeature(
+        net::features::kPermitTcpSocketPoolConnectBackupJobs);
+  }
 
   NetworkContextConfigurationProxySettingsBrowserTest(
       const NetworkContextConfigurationProxySettingsBrowserTest&) = delete;
@@ -1869,27 +1906,32 @@ class NetworkContextConfigurationProxySettingsBrowserTest
     NetworkContextConfigurationHttpPacBrowserTest::SetUpOnMainThread();
   }
 
-  virtual size_t GetExpectedMaxConnectionsPerProxy() const {
-    return kDefaultMaxConnectionsPerProxy;
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    local_state->SetInteger(prefs::kMaxConnectionsPerProxy,
+                            static_cast<int>(kTestMaxConnectionsPerProxy));
+    local_state->SetInteger(prefs::kMaxConnectionsPerProxyForWebSocket,
+                            static_cast<int>(kTestMaxConnectionsPerProxy));
+    local_state->SetBoolean(prefs::kAllowSocketPoolSizeRandomizationForProxies,
+                            false);
   }
 
   std::unique_ptr<net::test_server::HttpResponse> TrackConnections(
       const net::test_server::HttpRequest& request) {
-    if (!base::StartsWith(request.relative_url, "/hung",
-                          base::CompareCase::INSENSITIVE_ASCII))
+    if (!base::StartsWith(request.relative_url,
+                          is_websocket_test_ ? "foo" : "/hung_",
+                          base::CompareCase::INSENSITIVE_ASCII)) {
       return nullptr;
+    }
 
     // Record the number of connections we're seeing.
-    CHECK(observed_request_urls_.find(request.GetURL().spec()) ==
-          observed_request_urls_.end());
-    observed_request_urls_.emplace(request.GetURL().spec());
-    CHECK_GE(GetExpectedMaxConnectionsPerProxy(),
-             observed_request_urls_.size());
+    CHECK(!observed_request_urls_.contains(request.relative_url));
+    observed_request_urls_.emplace(request.relative_url);
+    CHECK_GE(kTestMaxConnectionsPerProxy, observed_request_urls_.size());
 
     // Once we've seen at least as many connections as we expect, we can quit
     // the loop on the main test thread. The test may choose to wait for
     // longer to see if there are any additional unexpected connections.
-    if (GetExpectedMaxConnectionsPerProxy() == observed_request_urls_.size() &&
+    if (kTestMaxConnectionsPerProxy == observed_request_urls_.size() &&
         expected_connections_loop_ptr_.load() != nullptr) {
       expected_connections_loop_ptr_.load()->Quit();
     }
@@ -1911,9 +1953,8 @@ class NetworkContextConfigurationProxySettingsBrowserTest
     base::RunLoop expected_connections_run_loop;
     expected_connections_loop_ptr_.store(&expected_connections_run_loop);
 
-    std::vector<std::unique_ptr<network::SimpleURLLoader>> loaders(
-        GetExpectedMaxConnectionsPerProxy());
-    for (unsigned int i = 0; i < GetExpectedMaxConnectionsPerProxy() + 1; ++i) {
+    std::vector<std::unique_ptr<network::SimpleURLLoader>> loaders;
+    for (unsigned int i = 0; i < kTestMaxConnectionsPerProxy + 1; ++i) {
       std::unique_ptr<network::ResourceRequest> request =
           std::make_unique<network::ResourceRequest>();
       request->url =
@@ -1933,10 +1974,68 @@ class NetworkContextConfigurationProxySettingsBrowserTest
     expected_connections_run_loop.Run();
 
     // Then wait for any remaining connections that we should NOT get.
-    base::RunLoop ugly_100ms_wait;
+    base::RunLoop ugly_10ms_wait;
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE, ugly_100ms_wait.QuitClosure(), base::Milliseconds(100));
-    ugly_100ms_wait.Run();
+        FROM_HERE, ugly_10ms_wait.QuitClosure(), base::Milliseconds(10));
+    ugly_10ms_wait.Run();
+
+    // Stop the server.
+    ASSERT_TRUE(embedded_test_server()->ShutdownAndWaitUntilComplete());
+  }
+
+  void RunMaxConnectionsPerProxyForWebSocketTest() {
+    // See the comment at the top of `RunMaxConnectionsPerProxyTest`, this is
+    // the same except that we have `TrackConnections` look for WebSockets
+    // requests.
+    is_websocket_test_ = true;
+
+    // First of all, we're going to want to wait for at least as many
+    // connections as we expect.
+    base::RunLoop expected_connections_run_loop;
+    expected_connections_loop_ptr_.store(&expected_connections_run_loop);
+
+    std::vector<std::unique_ptr<WaitingHandshakeClient>> waiters;
+    for (unsigned int i = 0; i < kTestMaxConnectionsPerProxy + 1; ++i) {
+      const GURL url = net::test_server::GetWebSocketURL(
+          *embedded_test_server(), base::StringPrintf("foo%u.test", i),
+          base::StringPrintf("/hung_%u", i));
+
+      auto client = std::make_unique<WaitingHandshakeClient>();
+      content::RenderFrameHost* const frame = browser()
+                                                  ->tab_strip_model()
+                                                  ->GetActiveWebContents()
+                                                  ->GetPrimaryMainFrame();
+      content::RenderProcessHost* const process = frame->GetProcess();
+      const std::vector<std::string> requested_protocols;
+      std::vector<network::mojom::HttpHeaderPtr> additional_headers;
+      const url::Origin origin = url::Origin::Create(url);
+
+      process->GetStoragePartition()->GetNetworkContext()->CreateWebSocket(
+          url, requested_protocols, net::StorageAccessApiStatus::kNone,
+          net::IsolationInfo::CreateForInternalRequest(origin),
+          std::move(additional_headers),
+          ToOriginatingProcessId(process->GetID()), origin,
+          network::mojom::ClientSecurityState::New(),
+          network::mojom::kWebSocketOptionNone,
+          net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS),
+          client->Bind(),
+          process->GetStoragePartition()
+              ->CreateURLLoaderNetworkObserverForFrame(
+                  content::GlobalRenderFrameHostId(process->GetID(),
+                                                   frame->GetRoutingID())),
+          mojo::NullRemote(), mojo::NullRemote(),
+          /*throttling_profile_id=*/std::nullopt,
+          /*network_restrictions_id=*/
+          network::GetTestNetworkRestrictionsId());
+      waiters.emplace_back(std::move(client));
+    }
+    expected_connections_run_loop.Run();
+
+    // Then wait for any remaining connections that we should NOT get.
+    base::RunLoop ugly_10ms_wait;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, ugly_10ms_wait.QuitClosure(), base::Milliseconds(10));
+    ugly_10ms_wait.Run();
 
     // Stop the server.
     ASSERT_TRUE(embedded_test_server()->ShutdownAndWaitUntilComplete());
@@ -1945,30 +2044,29 @@ class NetworkContextConfigurationProxySettingsBrowserTest
  private:
   std::atomic<base::RunLoop*> expected_connections_loop_ptr_{nullptr};
 
-  // In RunMaxConnectionsPerProxyTest(), we'll make several network requests
-  // that hang. These hung requests are assumed to last for the duration of the
-  // test. This member, which is only accessed from the server's IO thread,
-  // records each observed request to ensure we see only as many connections as
-  // we expect.
-  std::unordered_set<std::string> observed_request_urls_;
+  // In RunMaxConnectionsPerProxy(WebSocket)Test(), we'll make several network
+  // requests that hang. These hung requests are assumed to last for the
+  // duration of the test. This member, which is only accessed from the server's
+  // IO thread, records each observed request to ensure we see only as many
+  // connections as we expect.
+  absl::flat_hash_set<std::string> observed_request_urls_;
+  bool is_websocket_test_ = false;
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-// Test failure on macOS: crbug.com/1287934
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_MaxConnectionsPerProxy DISABLED_MaxConnectionsPerProxy
-#else
-#define MAYBE_MaxConnectionsPerProxy MaxConnectionsPerProxy
-#endif
 IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationProxySettingsBrowserTest,
-                       MAYBE_MaxConnectionsPerProxy) {
+                       MaxConnectionsPerProxy) {
   RunMaxConnectionsPerProxyTest();
+}
+
+IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationProxySettingsBrowserTest,
+                       MaxConnectionsPerProxyForWebSocket) {
+  RunMaxConnectionsPerProxyForWebSocketTest();
 }
 
 class NetworkContextConfigurationManagedProxySettingsBrowserTest
     : public NetworkContextConfigurationProxySettingsBrowserTest {
  public:
-  const size_t kTestMaxConnectionsPerProxy = 37;
-
   NetworkContextConfigurationManagedProxySettingsBrowserTest() = default;
 
   NetworkContextConfigurationManagedProxySettingsBrowserTest(
@@ -1982,32 +2080,49 @@ class NetworkContextConfigurationManagedProxySettingsBrowserTest
       default;
 
   void SetUpInProcessBrowserTestFixture() override {
-    NetworkContextConfigurationProxySettingsBrowserTest::
-        SetUpInProcessBrowserTestFixture();
+    provider_.SetDefaultReturns(
+        /*is_initialization_complete_return=*/true,
+        /*is_first_policy_load_complete_return=*/true);
+    policy::BrowserPolicyConnector::SetPolicyProviderForTesting(&provider_);
     policy::PolicyMap policies;
     policies.Set(policy::key::kMaxConnectionsPerProxy,
                  policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_MACHINE,
                  policy::POLICY_SOURCE_CLOUD,
                  base::Value(static_cast<int>(kTestMaxConnectionsPerProxy)),
                  /*external_data_fetcher=*/nullptr);
-    UpdateChromePolicy(policies);
+    policies.Set(policy::key::kMaxConnectionsPerProxyForWebSocket,
+                 policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_MACHINE,
+                 policy::POLICY_SOURCE_CLOUD,
+                 base::Value(static_cast<int>(kTestMaxConnectionsPerProxy)),
+                 /*external_data_fetcher=*/nullptr);
+    policies.Set(policy::key::kAllowSocketPoolSizeRandomizationForProxies,
+                 policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_MACHINE,
+                 policy::POLICY_SOURCE_CLOUD, base::Value(false),
+                 /*external_data_fetcher=*/nullptr);
+    provider_.UpdateChromePolicy(policies);
+    NetworkContextConfigurationProxySettingsBrowserTest::
+        SetUpInProcessBrowserTestFixture();
   }
 
-  size_t GetExpectedMaxConnectionsPerProxy() const override {
-    return kTestMaxConnectionsPerProxy;
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    // We use the policy to test the behavior, so we don't set the prefs.
   }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+  testing::NiceMock<policy::MockConfigurationPolicyProvider> provider_;
 };
 
-// crbug.com/1288780: flaky on Mac.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_MaxConnectionsPerProxy DISABLED_MaxConnectionsPerProxy
-#else
-#define MAYBE_MaxConnectionsPerProxy MaxConnectionsPerProxy
-#endif
 IN_PROC_BROWSER_TEST_P(
     NetworkContextConfigurationManagedProxySettingsBrowserTest,
-    MAYBE_MaxConnectionsPerProxy) {
+    MaxConnectionsPerManagedProxy) {
   RunMaxConnectionsPerProxyTest();
+}
+
+IN_PROC_BROWSER_TEST_P(
+    NetworkContextConfigurationManagedProxySettingsBrowserTest,
+    MaxConnectionsPerManagedProxyForWebSocket) {
+  RunMaxConnectionsPerProxyForWebSocketTest();
 }
 
 #if BUILDFLAG(ENABLE_REPORTING)
@@ -2265,8 +2380,10 @@ INSTANTIATE_TEST_CASES_FOR_TEST_FIXTURE(
     NetworkContextConfigurationProxyOnStartBrowserTest);
 INSTANTIATE_TEST_CASES_FOR_TEST_FIXTURE(
     NetworkContextConfigurationHttpPacBrowserTest);
+#if !BUILDFLAG(IS_ANDROID)
 INSTANTIATE_TEST_CASES_FOR_TEST_FIXTURE(
     NetworkContextConfigurationFilePacBrowserTest);
+#endif
 INSTANTIATE_TEST_CASES_FOR_TEST_FIXTURE(
     NetworkContextConfigurationDataPacBrowserTest);
 INSTANTIATE_TEST_CASES_FOR_TEST_FIXTURE(

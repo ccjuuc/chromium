@@ -29,6 +29,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_readable_stream_read_result.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_web_transport_bidirectional_stream.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_web_transport_options.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_web_transport_send_stream_options.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/streams/readable_stream.h"
 #include "third_party/blink/renderer/core/streams/readable_stream_default_reader.h"
@@ -118,6 +119,7 @@ class StubWebTransport : public network::mojom::blink::WebTransport {
   void CreateStream(
       mojo::ScopedDataPipeConsumerHandle output_consumer,
       mojo::ScopedDataPipeProducerHandle input_producer,
+      network::mojom::blink::WebTransportStreamPriorityPtr priority,
       base::OnceCallback<void(bool, uint32_t)> callback) override {
     EXPECT_TRUE(output_consumer.is_valid());
     EXPECT_FALSE(output_consumer_.is_valid());
@@ -161,6 +163,10 @@ class StubWebTransport : public network::mojom::blink::WebTransport {
   void StopSending(uint32_t stream_id, uint8_t code) override {
     // TODO(ricea): Record that this was called when a test needs it.
   }
+
+  void SetStreamPriority(
+      uint32_t stream_id,
+      network::mojom::blink::WebTransportStreamPriorityPtr priority) override {}
 
   void SetOutgoingDatagramExpirationDuration(base::TimeDelta) override {}
 
@@ -206,8 +212,9 @@ class ScopedWebTransport {
   BidirectionalStream* CreateBidirectionalStream(const V8TestingScope& scope) {
     auto* script_state = scope.GetScriptState();
     auto bidirectional_stream_promise =
-        GetWebTransport()->createBidirectionalStream(script_state,
-                                                     ASSERT_NO_EXCEPTION);
+        GetWebTransport()->createBidirectionalStream(
+            script_state, MakeGarbageCollected<WebTransportSendStreamOptions>(),
+            ASSERT_NO_EXCEPTION);
     ScriptPromiseTester tester(script_state, bidirectional_stream_promise);
 
     tester.WaitUntilSettled();

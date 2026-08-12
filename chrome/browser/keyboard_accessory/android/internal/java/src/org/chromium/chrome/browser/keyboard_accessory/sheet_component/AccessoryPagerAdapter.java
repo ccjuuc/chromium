@@ -8,7 +8,6 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 
-import androidx.annotation.NonNull;
 import androidx.viewpager.widget.PagerAdapter;
 import androidx.viewpager.widget.ViewPager;
 
@@ -41,9 +40,8 @@ class AccessoryPagerAdapter extends PagerAdapter
         mViews = new HashMap<>(mTabList.size());
     }
 
-    @NonNull
     @Override
-    public Object instantiateItem(@NonNull ViewGroup container, int position) {
+    public Object instantiateItem(ViewGroup container, int position) {
         Tab tab = mTabList.get(position);
         ViewGroup layout = mViews.get(tab);
         if (layout == null) {
@@ -61,7 +59,7 @@ class AccessoryPagerAdapter extends PagerAdapter
     }
 
     @Override
-    public void destroyItem(@NonNull ViewGroup container, int position, @Nullable Object object) {
+    public void destroyItem(ViewGroup container, int position, @Nullable Object object) {
         if (object == null) return; // Nothing to do here.
         ViewGroup viewToBeDeleted = (ViewGroup) object;
         if (container.indexOfChild(viewToBeDeleted) != -1) container.removeView(viewToBeDeleted);
@@ -79,12 +77,12 @@ class AccessoryPagerAdapter extends PagerAdapter
     }
 
     @Override
-    public boolean isViewFromObject(@NonNull View view, @NonNull Object o) {
+    public boolean isViewFromObject(View view, Object o) {
         return view == o;
     }
 
     @Override
-    public int getItemPosition(@NonNull Object object) {
+    public int getItemPosition(Object object) {
         ViewGroup viewToBeFound = (ViewGroup) object;
         for (int i = 0; i < mTabList.size(); i++) {
             if (viewToBeFound.equals(mViews.get(mTabList.get(i)))) {
@@ -108,5 +106,10 @@ class AccessoryPagerAdapter extends PagerAdapter
     public void onItemsChanged(
             ListModel<Tab> model, ViewPager view, int index, int count, @Nullable Void payload) {
         notifyDataSetChanged();
+    }
+
+    @Nullable View getView(int position) {
+        if (position < 0 || position >= mTabList.size()) return null;
+        return mViews.get(mTabList.get(position));
     }
 }

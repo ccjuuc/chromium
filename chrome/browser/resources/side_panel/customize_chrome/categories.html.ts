@@ -10,7 +10,7 @@ export function getHtml(this: CategoriesElement) {
   // clang-format off
   return html`<!--_html_template_start_-->
 <div class="sp-card">
-  <sp-heading id="heading" @back-button-click="${this.onBackClick_}"
+  <sp-heading id="heading" @back-button-click="${this.onBackButtonClick_}"
       back-button-aria-label="$i18n{backButton}"
       back-button-title="$i18n{backButton}">
     <h2 slot="heading">$i18n{categoriesHeader}</h2>
@@ -62,7 +62,7 @@ export function getHtml(this: CategoriesElement) {
             ?checked="${this.isCollectionSelected_(item.id)}">
           <div class="image-container">
             <img is="cr-auto-img" data-index="${index}"
-                auto-src="${item.previewImageUrl.url}"
+                auto-src="${item.previewImageUrl}"
                 draggable="false"
                 @load="${this.onPreviewImageLoad_}"
                 @error="${this.onPreviewImageError_}">

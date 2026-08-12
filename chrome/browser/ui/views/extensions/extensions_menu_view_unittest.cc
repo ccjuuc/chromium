@@ -5,38 +5,30 @@
 #include "chrome/browser/ui/views/extensions/extensions_menu_view.h"
 
 #include <algorithm>
-#include <memory>
 #include <string>
 #include <vector>
 
-#include "base/command_line.h"
 #include "base/containers/to_vector.h"
-#include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/user_action_tester.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
-#include "chrome/browser/extensions/extension_action_test_util.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_button.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_item_view.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_button.h"
-#include "chrome/browser/ui/views/extensions/extensions_toolbar_container.h"
+#include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_unittest.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-#include "content/public/test/test_utils.h"
-#include "extensions/browser/load_error_reporter.h"
 #include "extensions/browser/test_extension_registry_observer.h"
 #include "extensions/common/extension.h"
 #include "extensions/test/test_extension_dir.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "ui/events/event.h"
-#include "ui/views/controls/button/image_button.h"
 #include "ui/views/layout/animating_layout_manager_test_util.h"
 #include "ui/views/test/ax_event_counter.h"
 #include "ui/views/view_utils.h"
@@ -89,8 +81,9 @@ class ExtensionsMenuViewUnitTest : public ExtensionsToolbarUnitTest {
 void ExtensionsMenuViewUnitTest::SetUp() {
   ExtensionsToolbarUnitTest::SetUp();
 
-  ExtensionsMenuView::ShowBubble(extensions_container()->GetExtensionsButton(),
-                                 browser(), extensions_container());
+  ExtensionsMenuView::ShowBubble(
+      extensions_container()->GetExtensionsButton(), browser(),
+      extensions_container()->GetToolbarViewModel(), extensions_container());
 }
 
 scoped_refptr<const extensions::Extension>
@@ -238,14 +231,14 @@ TEST_F(ExtensionsMenuViewUnitTest, PinnedExtensionAppearsInAnotherWindow) {
   const std::string& extension_id =
       InstallExtensionAndLayout("Test Name")->id();
   const auto is_action_visible_on_toolbar = [&extension_id](Browser* browser) {
-    return browser->GetBrowserView()
-        .toolbar()
+    return BrowserView::GetBrowserViewForBrowser(browser)
+        ->toolbar()
         ->extensions_container()
         ->IsActionVisibleOnToolbar(extension_id);
   };
 
-  Browser* browser2 =
-      CreateBrowserWithBrowserView(browser()->profile(), browser()->type());
+  Browser* browser2 = CreateBrowserWithBrowserView(browser()->GetProfile(),
+                                                   browser()->GetType());
 
   ExtensionMenuItemView* menu_item = GetOnlyMenuItem();
   ASSERT_TRUE(menu_item);
@@ -254,8 +247,8 @@ TEST_F(ExtensionsMenuViewUnitTest, PinnedExtensionAppearsInAnotherWindow) {
   // Window that was already open gets the pinned extension.
   EXPECT_TRUE(is_action_visible_on_toolbar(browser2));
 
-  Browser* browser3 =
-      CreateBrowserWithBrowserView(browser()->profile(), browser()->type());
+  Browser* browser3 = CreateBrowserWithBrowserView(browser()->GetProfile(),
+                                                   browser()->GetType());
 
   // Brand-new window also gets the pinned extension.
   EXPECT_TRUE(is_action_visible_on_toolbar(browser3));
@@ -419,7 +412,7 @@ TEST_F(ExtensionsMenuViewUnitTest, WindowTitle) {
 }
 
 // TODO(crbug.com/40636292): When supported, add a test to verify the
-// ExtensionsToolbarContainer shrinks when the window is too small to show all
+// ExtensionsToolbarDesktop shrinks when the window is too small to show all
 // pinned extensions.
 // TODO(crbug.com/40636292): When supported, add a test to verify an extension
 // is shown when a bubble pops up and needs to draw attention to it.

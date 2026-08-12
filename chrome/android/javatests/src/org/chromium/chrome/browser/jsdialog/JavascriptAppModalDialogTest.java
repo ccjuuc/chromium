@@ -11,6 +11,7 @@ import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
+import static org.chromium.base.test.transit.ViewFinder.waitForView;
 import static org.chromium.ui.test.util.ViewUtils.onViewWaiting;
 
 import androidx.test.filters.MediumTest;
@@ -23,6 +24,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags.Add;
 import org.chromium.base.test.util.Criteria;
@@ -30,12 +32,12 @@ import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.UrlUtils;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.page.WebPageStation;
@@ -51,8 +53,8 @@ import java.util.concurrent.TimeoutException;
 
 /** Test suite for displaying and functioning of app modal JavaScript onbeforeunload dialogs. */
 @RunWith(ChromeJUnit4ClassRunner.class)
-// TODO(crbug.com/344665752): Failing when batched, batch this again.
 @Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@Batch(Batch.PER_CLASS)
 public class JavascriptAppModalDialogTest {
     public static final String JAVASCRIPT_DIALOG_BATCH_NAME = "javascript_dialog";
 
@@ -89,7 +91,7 @@ public class JavascriptAppModalDialogTest {
         // Click cancel and verify that the url is the same.
         JavascriptAppModalDialog jsDialog = getCurrentDialog();
         Assert.assertNotNull("No dialog showing.", jsDialog);
-        onViewWaiting(withText(R.string.cancel), /* checkRootDialog= */ true).perform(click());
+        onViewWaiting(withText(R.string.cancel)).perform(click());
 
         Assert.assertEquals(
                 BEFORE_UNLOAD_URL,
@@ -103,7 +105,7 @@ public class JavascriptAppModalDialogTest {
         final TestCallbackHelperContainer.OnPageFinishedHelper onPageLoaded =
                 getActiveTabTestCallbackHelperContainer().getOnPageFinishedHelper();
         int callCount = onPageLoaded.getCallCount();
-        onViewWaiting(withText(R.string.leave), /* checkRootDialog= */ true).perform(click());
+        onViewWaiting(withText(R.string.leave)).perform(click());
         onPageLoaded.waitForCallback(callCount);
         Assert.assertEquals(
                 EMPTY_PAGE, mActivityTestRule.getWebContents().getLastCommittedUrl().getSpec());
@@ -113,11 +115,11 @@ public class JavascriptAppModalDialogTest {
      * Verifies behavior when the tab that has an onBeforeUnload handler has no history stack
      * (pressing back should still show the dialog).
      *
-     * <p>Regression test for https://crbug.com/1055540
+     * <p>Regression test for https://crbug.com/40119980
      */
     @Test
     @MediumTest
-    @DisabledTest(message = "https://crbug.com/1237639")
+    @DisabledTest(message = "https://crbug.com/40783574")
     @Feature({"Browser", "Main"})
     public void testBeforeUnloadDialogWithNoHistory() throws TimeoutException, ExecutionException {
         ChromeTabbedActivity activity = mActivityTestRule.getActivity();
@@ -155,9 +157,8 @@ public class JavascriptAppModalDialogTest {
         JavascriptAppModalDialog jsDialog = getCurrentDialog();
         Assert.assertNotNull("No dialog showing.", jsDialog);
 
-        onViewWaiting(withText(R.string.cancel), /* checkRootDialog= */ true)
-                .check(matches(isDisplayed()));
-        onViewWaiting(withText(R.string.reload), true).check(matches(isDisplayed()));
+        waitForView(withText(R.string.cancel));
+        waitForView(withText(R.string.reload));
     }
 
     /**
@@ -167,7 +168,7 @@ public class JavascriptAppModalDialogTest {
     @Test
     @MediumTest
     @Feature({"Browser", "Main"})
-    @DisabledTest(message = "https://crbug.com/1299944")
+    @DisabledTest(message = "https://crbug.com/40823908")
     public void testDisableRepeatedDialogs() throws TimeoutException, ExecutionException {
         mActivityTestRule.loadUrl(BEFORE_UNLOAD_URL);
         // JavaScript onbeforeunload dialogs require a user gesture.

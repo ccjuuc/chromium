@@ -8,15 +8,17 @@
 
 #include <memory>
 
-#include "base/compiler_specific.h"
-#include "base/containers/contains.h"
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "device/gamepad/gamepad_standard_mappings.h"
 #include "device/gamepad/gamepad_uma.h"
 #include "device/gamepad/nintendo_controller.h"
+#include "device/gamepad/public/cpp/gamepad_features.h"
 
 namespace device {
 
@@ -47,10 +49,11 @@ base::HeapArray<RAWINPUTDEVICE> RawInputDataFetcher::GetRawInputDevices(
     DWORD flags) {
   size_t usage_count = std::size(DeviceUsages);
   auto devices = base::HeapArray<RAWINPUTDEVICE>::Uninit(usage_count);
+  const auto device_usages_span = base::span(DeviceUsages);
   for (size_t i = 0; i < usage_count; ++i) {
     devices[i].dwFlags = flags;
     devices[i].usUsagePage = 1;
-    devices[i].usUsage = UNSAFE_TODO(DeviceUsages[i]);
+    devices[i].usUsage = device_usages_span[i];
     devices[i].hwndTarget = (flags & RIDEV_REMOVE) ? 0 : window_->hwnd();
   }
   return devices;
@@ -199,9 +202,17 @@ void RawInputDataFetcher::EnumerateDevices() {
         // path handle it.
         // http://msdn.microsoft.com/en-us/library/windows/desktop/ee417014.aspx
         const std::wstring device_name = new_device->GetDeviceName();
-        if (filter_xinput_ && base::Contains(device_name, L"IG_")) {
+        if (filter_xinput_ && device_name.contains(L"IG_")) {
           new_device->Shutdown();
           continue;
+        }
+
+        if (base::FeatureList::IsEnabled(
+                features::kClaimDuplicateGamepadsProductIdentifier)) {
+          // Claim HID gamepads enumerated by this data fetcher to avoid
+          // double-enumeration in WgiDataFetcherWin.
+          ClaimProductIdentifier(
+              GamepadIdList::GetProductIdentifier(vendor_int, product_int));
         }
 
         PadState* state = GetPadState(source_id, is_recognized);
@@ -223,7 +234,7 @@ void RawInputDataFetcher::EnumerateDevices() {
         state->mapper = GetGamepadStandardMappingFunction(
             product_string, vendor_int, product_int,
             /*hid_specification_version=*/0, version_number,
-            GAMEPAD_BUS_UNKNOWN);
+            GAMEPAD_BUS_UNKNOWN, kGamepadDriverUnknown);
         state->axis_mask = 0;
         state->button_mask = 0;
 

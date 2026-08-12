@@ -10,24 +10,29 @@ BASE_FEATURE(kLensFiltersAblationModeEnabled, base::FEATURE_ENABLED_BY_DEFAULT);
 
 const char kLensFiltersAblationMode[] = "LensFilterAblationMode";
 
+BASE_FEATURE_PARAM(int,
+                   kLensFiltersAblationModeFeature,
+                   &kLensFiltersAblationModeEnabled,
+                   kLensFiltersAblationMode,
+                   1);
+
 int LensFiltersAblationMode() {
-  return base::GetFieldTrialParamByFeatureAsInt(kLensFiltersAblationModeEnabled,
-                                                kLensFiltersAblationMode,
-                                                /*default_value=*/1);
+  return kLensFiltersAblationModeFeature.Get();
 }
 
 BASE_FEATURE(kLensTranslateToggleModeEnabled, base::FEATURE_ENABLED_BY_DEFAULT);
 
 const char kLensTranslateToggleMode[] = "LensTranslateToggleMode";
 
-int LensTranslateToggleMode() {
-  return base::GetFieldTrialParamByFeatureAsInt(kLensTranslateToggleModeEnabled,
-                                                kLensTranslateToggleMode,
-                                                /*default_value=*/1);
-}
+BASE_FEATURE_PARAM(int,
+                   kLensTranslateToggleModeFeature,
+                   &kLensTranslateToggleModeEnabled,
+                   kLensTranslateToggleMode,
+                   1);
 
-BASE_FEATURE(kLensWebPageLoadOptimizationEnabled,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+int LensTranslateToggleMode() {
+  return kLensTranslateToggleModeFeature.Get();
+}
 
 BASE_FEATURE(kLensUnaryApisWithHttpTransportEnabled,
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -73,4 +78,9 @@ BASE_FEATURE(kLensStrokesAPIEnabled, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kLensOmnientShaderV2Enabled, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kLensStreamServiceWebChannelTransportEnabled,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kLensFilterToggleEnabled, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kLensFollowupsFullHeightEnabled,
              base::FEATURE_DISABLED_BY_DEFAULT);

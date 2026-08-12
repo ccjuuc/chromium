@@ -20,23 +20,25 @@
 #import "ios/chrome/browser/settings/ui_bundled/settings_navigation_controller.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/browser_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
 #import "ios/chrome/browser/shared/public/commands/quick_delete_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/signin/model/authentication_service.h"
+#import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/common/ui/reauthentication/reauthentication_module.h"
 #import "ui/base/device_form_factor.h"
 
 @interface PrivacyCoordinator () <
     IncognitoLockCoordinatorDelegate,
+    LockdownModeCoordinatorDelegate,
     PrivacyNavigationCommands,
     PrivacySafeBrowsingCoordinatorDelegate,
-    PrivacyTableViewControllerPresentationDelegate,
-    LockdownModeCoordinatorDelegate> {
+    PrivacyTableViewControllerPresentationDelegate> {
 }
 
 @property(nonatomic, strong) PrivacyTableViewController* viewController;
@@ -80,8 +82,7 @@
   self.viewController = viewController;
 
   CommandDispatcher* dispatcher = self.browser->GetCommandDispatcher();
-  viewController.applicationHandler =
-      HandlerForProtocol(dispatcher, ApplicationCommands);
+  viewController.sceneHandler = HandlerForProtocol(dispatcher, SceneCommands);
   viewController.browserHandler =
       HandlerForProtocol(dispatcher, BrowserCommands);
   viewController.settingsHandler =
@@ -117,8 +118,21 @@
 
 - (void)privacyTableViewControllerWasRemoved:
     (PrivacyTableViewController*)controller {
-  DCHECK_EQ(self.viewController, controller);
+  CHECK_EQ(self.viewController, controller, base::NotFatalUntil::M155);
   [self.delegate privacyCoordinatorViewControllerWasRemoved:self];
+}
+
+- (void)showSyncSettingsWithViewController:
+    (PrivacyTableViewController*)controller {
+  CHECK_EQ(self.viewController, controller, base::NotFatalUntil::M155);
+  AuthenticationService* authService =
+      AuthenticationServiceFactory::GetForProfile(self.profile);
+  if (!authService->HasPrimaryIdentity() || !authService->SigninEnabled()) {
+    // The user is signed-out, so there is not reason to display sync settings.
+    return;
+  }
+  [HandlerForProtocol(self.browser->GetCommandDispatcher(), SettingsCommands)
+      showSyncSettingsFromViewController:controller];
 }
 
 #pragma mark - PrivacyNavigationCommands

@@ -17,7 +17,7 @@
 #import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
-#import "ios/chrome/test/earl_grey/web_http_server_chrome_test_case.h"
+#import "ios/chrome/test/earl_grey/chrome_test_case.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
 
 using chrome_test_util::BookmarksHomeDoneButton;
@@ -28,7 +28,7 @@ using chrome_test_util::ContextBarLeadingButtonWithLabel;
 using chrome_test_util::ContextBarTrailingButtonWithLabel;
 using chrome_test_util::TappableBookmarkNodeWithLabel;
 
-@interface BookmarksTestCase : WebHttpServerChromeTestCase
+@interface BookmarksTestCase : ChromeTestCase
 
 @end
 
@@ -58,6 +58,8 @@ using chrome_test_util::TappableBookmarkNodeWithLabel;
   [ChromeCoordinatorAppInterface stopCoordinator];
   [ChromeEarlGreyUI waitForAppToIdle];
   [ChromeCoordinatorAppInterface startBookmarksCoordinator];
+  [ChromeEarlGrey waitForUIElementToAppearWithMatcher:
+                      grey_accessibilityID(kBookmarksHomeTableViewIdentifier)];
 }
 
 // Test deleting grand parent is reflected in the bookmarks list UI. Regression
@@ -955,6 +957,34 @@ using chrome_test_util::TappableBookmarkNodeWithLabel;
   [[EarlGrey
       selectElementWithMatcher:grey_allOf(BookmarksNavigationBarBackButton(),
                                           grey_sufficientlyVisible(), nil)]
+      performAction:grey_tap()];
+}
+
+// Tests that sharing a bookmark from the context menu twice in a row does not
+// cause a crash. This verifies that when a new SharingCoordinator is created,
+// the old one is stopped properly to prevent dangling WebStateList observers.
+- (void)testContextMenuRepeatedShare {
+  [BookmarkEarlGrey
+      setupStandardBookmarksInStorage:BookmarkStorageType::kLocalOrSyncable];
+  [ChromeCoordinatorAppInterface startBookmarksCoordinator];
+  [BookmarkEarlGreyUI openMobileBookmarks];
+
+  const GURL expectedURL = GURL("http://www.url1.com");
+
+  // First sharing attempt.
+  [[EarlGrey
+      selectElementWithMatcher:TappableBookmarkNodeWithLabel(@"First URL")]
+      performAction:grey_longPress()];
+  [ChromeEarlGrey verifyShareActionWithURL:expectedURL pageTitle:@"First URL"];
+
+  // Second sharing attempt.
+  [[EarlGrey
+      selectElementWithMatcher:TappableBookmarkNodeWithLabel(@"First URL")]
+      performAction:grey_longPress()];
+  [ChromeEarlGrey verifyShareActionWithURL:expectedURL pageTitle:@"First URL"];
+
+  // Close Bookmarks by tapping the Done/Exit button.
+  [[EarlGrey selectElementWithMatcher:BookmarksHomeDoneButton()]
       performAction:grey_tap()];
 }
 

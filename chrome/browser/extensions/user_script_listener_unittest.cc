@@ -19,7 +19,6 @@
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/extensions/scoped_test_mv2_enabler.h"
 #include "chrome/browser/extensions/test_extension_system.h"
-#include "chrome/browser/extensions/unpacked_installer.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -38,6 +37,8 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/scripting_utils.h"
 #include "extensions/browser/test_extension_registry_observer.h"
+#include "extensions/browser/unpacked_installer.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_features.h"
 #include "extensions/common/url_pattern_set.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -47,20 +48,22 @@
 #include "components/user_manager/scoped_user_manager.h"
 #endif
 
-using content::NavigationThrottle;
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
 namespace {
 
+using ::content::NavigationThrottle;
+
 const char kMatchingUrl[] = "http://google.com/";
 const char kMatchingPrefsUrl[] = "http://prefs.com/";
 const char kNotMatchingUrl[] = "http://example.com/";
-const ExtensionId kTestExtensionId = "behllobkkfkfnphdnhnkndlbkcpglgmj";
+const char kTestExtensionId[] = "behllobkkfkfnphdnhnkndlbkcpglgmj";
 
 // Yoinked from manifest_unittest.cc.
-std::optional<base::Value::Dict> LoadManifestFile(const base::FilePath path,
-                                                  std::string* error) {
+std::optional<base::DictValue> LoadManifestFile(const base::FilePath path,
+                                                std::string* error) {
   EXPECT_TRUE(base::PathExists(path));
   JSONFileValueDeserializer deserializer(path);
   std::unique_ptr<base::Value> manifest =
@@ -71,44 +74,38 @@ std::optional<base::Value::Dict> LoadManifestFile(const base::FilePath path,
   return std::move(*manifest).TakeDict();
 }
 
-// TODO(crbug.com/41317803): Continue removing std::string error and
-// replacing with std::u16string.
 scoped_refptr<Extension> LoadExtension(const std::string& filename,
-                                       std::string* error) {
+                                       std::u16string* error) {
   base::FilePath path;
   base::PathService::Get(chrome::DIR_TEST_DATA, &path);
   path = path.AppendASCII("extensions")
              .AppendASCII("manifest_tests")
              .AppendASCII(filename.c_str());
-  std::optional<base::Value::Dict> manifest = LoadManifestFile(path, error);
+  std::string utf8_error;
+  std::optional<base::DictValue> manifest = LoadManifestFile(path, &utf8_error);
   if (!manifest) {
+    *error = base::UTF8ToUTF16(utf8_error);
     return nullptr;
   }
-  std::u16string utf16_error;
-  scoped_refptr<Extension> extension =
-      Extension::Create(path.DirName(), mojom::ManifestLocation::kUnpacked,
-                        *manifest, Extension::NO_FLAGS, &utf16_error);
-  *error = base::UTF16ToUTF8(utf16_error);
-  return extension;
+  return Extension::Create(path.DirName(), mojom::ManifestLocation::kUnpacked,
+                           *manifest, Extension::NO_FLAGS, error);
 }
-
-}  // namespace
 
 class UserScriptListenerTest : public testing::Test {
  public:
   UserScriptListenerTest()
       : task_environment_(content::BrowserTaskEnvironment::IO_MAINLOOP),
-        profile_manager_(
-            new TestingProfileManager(TestingBrowserProcess::GetGlobal())) {
+        profile_manager_(std::make_unique<TestingProfileManager>(
+            TestingBrowserProcess::GetGlobal())) {
     // Allow unpacked extensions without developer mode for testing.
     scoped_feature_list_.InitAndDisableFeature(
         extensions_features::kExtensionDisableUnsupportedDeveloper);
   }
 
-  ~UserScriptListenerTest() override = default;
-
   UserScriptListenerTest(const UserScriptListenerTest&) = delete;
   UserScriptListenerTest& operator=(const UserScriptListenerTest&) = delete;
+
+  ~UserScriptListenerTest() override = default;
 
   void SetUp() override {
 #if BUILDFLAG(IS_CHROMEOS)
@@ -198,8 +195,6 @@ class UserScriptListenerTest : public testing::Test {
   // extensions.
   ScopedTestMV2Enabler mv2_enabler_;
 };
-
-namespace {
 
 TEST_F(UserScriptListenerTest, DelayAndUpdate) {
   LoadTestExtension();
@@ -291,7 +286,7 @@ TEST_F(UserScriptListenerTest, MultiProfile) {
   TestingProfile* profile2 =
       profile_manager_->CreateTestingProfile("test-profile2");
   ASSERT_TRUE(profile2);
-  std::string error;
+  std::u16string error;
   scoped_refptr<Extension> extension =
       LoadExtension("content_script_yahoo.json", &error);
   ASSERT_TRUE(extension.get());

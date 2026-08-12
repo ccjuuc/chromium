@@ -5,32 +5,42 @@
 #import "ios/chrome/browser/default_browser/promo/public/features.h"
 
 #import "base/metrics/field_trial_params.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 
-const char kDefaultBrowserPromoRefreshParam[] =
-    "DefaultBrowserPromoRefreshParam";
-const char kDefaultBrowserPromoRefreshParamNoInstructions[] = "NoInstructions";
-const char kDefaultBrowserPromoRefreshParamSystemAlertInstructions[] =
-    "SystemAlertInstructions";
-const char kDefaultBrowserPromoRefreshParamPictureInPictureInstructions[] =
-    "PictureInPictureInstructions";
-const char kDefaultBrowserPromoRefreshParamCarouselInstructions[] =
-    "CarouselInstructions";
+const char kDefaultBrowserPictureInPictureParam[] =
+    "DefaultBrowserPictureInPictureParam";
+const char kDefaultBrowserPictureInPictureParamEnabled[] = "Enabled";
+const char kDefaultBrowserPictureInPictureParamDisabledDefaultApps[] =
+    "DisabledDefaultApps";
+const char kDefaultBrowserPictureInPictureParamEnabledDefaultApps[] =
+    "EnabledDefaultApps";
 
 BASE_FEATURE(kDefaultBrowserPromoIpadInstructions,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kDefaultBrowserPromoRefresh, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kDefaultBrowserPictureInPicture, base::FEATURE_ENABLED_BY_DEFAULT);
 
 bool IsDefaultBrowserPromoIpadInstructions() {
   return base::FeatureList::IsEnabled(kDefaultBrowserPromoIpadInstructions);
 }
 
-bool IsDefaultBrowserPromoRefreshEnabled() {
-  return base::FeatureList::IsEnabled(kDefaultBrowserPromoRefresh);
+bool IsDefaultBrowserPictureInPictureEnabled() {
+  return IsDefaultAppsDestinationAvailable() &&
+         base::FeatureList::IsEnabled(kDefaultBrowserPictureInPicture);
 }
 
-std::string DefaultBrowserPromoRefreshParam() {
+std::string DefaultBrowserPictureInPictureParam() {
   return base::GetFieldTrialParamByFeatureAsString(
-      kDefaultBrowserPromoRefresh, kDefaultBrowserPromoRefreshParam,
-      kDefaultBrowserPromoRefreshParamNoInstructions);
+      kDefaultBrowserPictureInPicture, kDefaultBrowserPictureInPictureParam,
+      kDefaultBrowserPictureInPictureParamEnabledDefaultApps);
+}
+
+bool IsDefaultAppsPictureInPictureVariant() {
+  if (!IsDefaultAppsDestinationAvailable()) {
+    return false;
+  }
+
+  const std::string pipParam = DefaultBrowserPictureInPictureParam();
+  return pipParam == kDefaultBrowserPictureInPictureParamEnabledDefaultApps ||
+         pipParam == kDefaultBrowserPictureInPictureParamDisabledDefaultApps;
 }

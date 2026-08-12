@@ -8,7 +8,6 @@
 #include <sstream>
 
 #include "ash/constants/ash_features.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
@@ -87,7 +86,7 @@ HostBackendDelegateImpl::HostBackendDelegateImpl(
       pref_service_(pref_service),
       device_sync_client_(device_sync_client),
       timer_(std::move(timer)) {
-  device_sync_client_->AddObserver(this);
+  device_sync_client_observation_.Observe(device_sync_client);
 
   host_from_last_sync_ = GetHostFromDeviceSync();
 
@@ -95,9 +94,7 @@ HostBackendDelegateImpl::HostBackendDelegateImpl(
     AttemptNetworkRequest(false /* is_retry */);
 }
 
-HostBackendDelegateImpl::~HostBackendDelegateImpl() {
-  device_sync_client_->RemoveObserver(this);
-}
+HostBackendDelegateImpl::~HostBackendDelegateImpl() = default;
 
 void HostBackendDelegateImpl::AttemptToSetMultiDeviceHostOnBackend(
     const std::optional<multidevice::RemoteDeviceRef>& host_device) {
@@ -199,7 +196,7 @@ HostBackendDelegateImpl::GetMultiDeviceHostFromBackend() const {
 
 bool HostBackendDelegateImpl::IsHostEligible(
     const multidevice::RemoteDeviceRef& provided_host) {
-  return base::Contains(
+  return std::ranges::contains(
       eligible_host_devices_provider_->GetEligibleHostDevices(), provided_host);
 }
 

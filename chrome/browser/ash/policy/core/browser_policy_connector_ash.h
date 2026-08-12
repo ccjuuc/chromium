@@ -24,6 +24,7 @@ class PrefRegistrySimple;
 class PrefService;
 
 namespace ash {
+class DeviceWeeklyScheduledSuspendController;
 class InstallAttributes;
 
 namespace cert_provisioning {
@@ -201,6 +202,11 @@ class BrowserPolicyConnectorAsh : public ChromeBrowserPolicyConnector,
     return adb_sideloading_allowance_mode_policy_handler_.get();
   }
 
+  ash::DeviceWeeklyScheduledSuspendController*
+  GetDeviceWeeklyScheduledSuspendControllerForTesting() const {
+    return device_weekly_scheduled_suspend_controller_.get();
+  }
+
   // Return a pointer to the device-wide client certificate provisioning
   // scheduler. The callers do not take ownership of that pointer.
   ash::cert_provisioning::CertProvisioningScheduler*
@@ -264,10 +270,15 @@ class BrowserPolicyConnectorAsh : public ChromeBrowserPolicyConnector,
 
   // Restarts the device cloud policy initializer, because the device's
   // registration status changed from registered to unregistered.
-  void RestartDeviceCloudPolicyInitializer();
+  void RestartDeviceCloudPolicyInitializer(
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
 
   // Returns the device policy data or nullptr if it does not exist.
   const enterprise_management::PolicyData* GetDevicePolicy() const;
+
+  // The ConfigurationPolicyProviders created in the constructor are initially
+  // added here, and then pushed to the super class in CreatePolicyProviders().
+  std::vector<std::unique_ptr<ConfigurationPolicyProvider>> providers_for_init_;
 
   // Components of the device cloud policy implementation.
   std::unique_ptr<ServerBackedStateKeysBroker> state_keys_broker_;
@@ -307,6 +318,8 @@ class BrowserPolicyConnectorAsh : public ChromeBrowserPolicyConnector,
   std::unique_ptr<RebootNotificationsScheduler> reboot_notifications_scheduler_;
   std::unique_ptr<DeviceScheduledRebootHandler>
       device_scheduled_reboot_handler_;
+  std::unique_ptr<ash::DeviceWeeklyScheduledSuspendController>
+      device_weekly_scheduled_suspend_controller_;
   std::unique_ptr<DeviceDlcPredownloadListPolicyHandler>
       device_dlc_predownload_list_policy_handler_;
 
@@ -319,15 +332,10 @@ class BrowserPolicyConnectorAsh : public ChromeBrowserPolicyConnector,
   // after login.
   // The provider is owned by the base class; this field is just a typed weak
   // pointer to get to the ProxyPolicyProvider at SetUserPolicyDelegate().
-  raw_ptr<ProxyPolicyProvider, DanglingUntriaged>
-      global_user_cloud_policy_provider_ = nullptr;
+  raw_ptr<ProxyPolicyProvider> global_user_cloud_policy_provider_ = nullptr;
 
   std::unique_ptr<DeviceNetworkConfigurationUpdaterAsh>
       device_network_configuration_updater_;
-
-  // The ConfigurationPolicyProviders created in the constructor are initially
-  // added here, and then pushed to the super class in CreatePolicyProviders().
-  std::vector<std::unique_ptr<ConfigurationPolicyProvider>> providers_for_init_;
 
   // Manages provisioning of certificates from
   // RequiredClientCertificateForDevice device policy.

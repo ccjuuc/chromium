@@ -9,6 +9,7 @@
 
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/power_monitor/power_monitor.h"
 #include "base/power_monitor/power_monitor_source.h"
@@ -43,7 +44,7 @@ std::unique_ptr<base::Thread> CreateAndStartIOThread() {
   base::Thread::Options thread_options(base::MessagePumpType::IO, 0);
   // TODO(reveman): Remove this in favor of setting it explicitly for each
   // type of process.
-  thread_options.thread_type = base::ThreadType::kDisplayCritical;
+  thread_options.thread_type = base::ThreadType::kPresentation;
   auto io_thread = std::make_unique<base::Thread>("GpuIOThread");
   CHECK(io_thread->StartWithOptions(std::move(thread_options)));
 
@@ -227,6 +228,13 @@ void VizMainImpl::CreateGpuService(
       dependencies_.shutdown_event);
 #endif
 
+  CompositorGpuThread* compositor_gpu_thread =
+      gpu_service_->compositor_gpu_thread();
+  if (delegate_ && compositor_gpu_thread) {
+    delegate_->PostDisplayCompositorGpuThreadCreated(
+        compositor_gpu_thread->task_runner().get());
+  }
+
   gpu_service_->Bind(std::move(pending_receiver));
 
   {
@@ -241,9 +249,6 @@ void VizMainImpl::CreateGpuService(
 #if BUILDFLAG(IS_ANDROID)
     viz_compositor_thread_runner_->SetGpuMainThreadId(main_thread_id);
 #endif
-
-    CompositorGpuThread* compositor_gpu_thread =
-        gpu_service_->compositor_gpu_thread();
 
     if (compositor_gpu_thread) {
       gpu_process_thread_ids.insert(compositor_gpu_thread->GetThreadId());
@@ -352,7 +357,7 @@ void VizMainImpl::RequestBeginFrameForGpuService(bool toggle) {
 }
 
 #if BUILDFLAG(USE_VIZ_DEBUGGER)
-void VizMainImpl::FilterDebugStream(base::Value::Dict filter_data) {
+void VizMainImpl::FilterDebugStream(base::DictValue filter_data) {
   VizDebugger::GetInstance()->FilterDebugStream(std::move(filter_data));
 }
 

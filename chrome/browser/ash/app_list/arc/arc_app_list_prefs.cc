@@ -13,8 +13,8 @@
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/shell.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -45,8 +45,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
 #include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
 #include "chromeos/ash/experiences/arc/arc_features.h"
@@ -65,6 +63,7 @@
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "skia/ext/image_operations.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/icu/source/common/unicode/localebuilder.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_scale_factor.h"
@@ -167,7 +166,7 @@ class NotificationsEnabledDeferred {
   }
 
   bool Get(const std::string& app_id) {
-    const base::Value::Dict& dict =
+    const base::DictValue& dict =
         prefs_->GetDict(arc::prefs::kArcSetNotificationsEnabledDeferred);
     return dict.FindBool(app_id).value_or(false);
   }
@@ -263,7 +262,7 @@ bool IsArcAndroidEnabledForProfile(const Profile* profile) {
          arc::IsArcPlayStoreEnabledForProfile(profile);
 }
 
-bool GetInt64FromPref(const base::Value::Dict* dict,
+bool GetInt64FromPref(const base::DictValue* dict,
                       const std::string& key,
                       int64_t* value) {
   DCHECK(dict);
@@ -285,7 +284,7 @@ bool GetInt64FromPref(const base::Value::Dict* dict,
 
 // Converts |rect| to base::Value, e.g. { 0, 100, 200, 300 }.
 base::Value RectToValueDict(const gfx::Rect& rect) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("x", rect.x());
   dict.Set("y", rect.y());
   dict.Set("width", rect.width());
@@ -312,7 +311,7 @@ std::optional<gfx::Rect> RectFromDictValue(const base::Value* rect_dict) {
 
 base::Value WindowLayoutToDict(
     const ArcAppListPrefs::WindowLayout& window_layout) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(kWindowSizeType, static_cast<int32_t>(window_layout.type));
   dict.Set(kWindowResizability, window_layout.resizable);
   if (window_layout.bounds.has_value())
@@ -322,7 +321,7 @@ base::Value WindowLayoutToDict(
 }
 
 ArcAppListPrefs::WindowLayout WindowLayoutFromDict(
-    const base::Value::Dict* dict) {
+    const base::DictValue* dict) {
   if (!dict)
     return ArcAppListPrefs::WindowLayout();
 
@@ -382,6 +381,7 @@ bool ignore_compare_app_info_install_time = false;
 
 // Reason for installation enumeration; Used for UMA counter for reason for
 // install.
+// LINT.IfChange(InstallationCounterReasonEnum)
 enum class InstallationCounterReasonEnum {
   USER = 0,     // Application installed by user.
   DEFAULT = 1,  // Application part of the default set.
@@ -390,12 +390,15 @@ enum class InstallationCounterReasonEnum {
   UNKNOWN = 4,
   kMaxValue = UNKNOWN,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/arc/enums.xml:InstallationCounterReasonEnum)
 
 // Reasons for uninstalls. Only one, USER, for now.
+// LINT.IfChange(UninstallCounterReasonEnum)
 enum class UninstallCounterReasonEnum {
   USER = 0,  // Uninstall triggered by user.
   kMaxValue = USER
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/arc/enums.xml:UninstallCounterReasonEnum)
 
 // Remove deprecated package prefs. Otherwise deprecated fields will stay on
 // disks.
@@ -415,14 +418,14 @@ bool IsLocaleTagValid(const std::string& locale_tag) {
 // page. Hence, there might be synchronization issue between ARC and ChromeOS
 // and we should eventually re-sync them.
 bool IsSelectedLocaleResyncRequired(
-    const base::Value::Dict& saved_package_dict,
+    const base::DictValue& saved_package_dict,
     const arc::mojom::PackageLocaleInfo& arc_locale_info,
     const UpdatePackagePrefsReason& update_reason) {
   // Only checks for ARC-boot package refresh.
   if (update_reason != UpdatePackagePrefsReason::kOnPackageListRefreshed) {
     return false;
   }
-  const base::Value::Dict* locale_info_dict =
+  const base::DictValue* locale_info_dict =
       saved_package_dict.FindDict(kLocaleInfo);
   if (!locale_info_dict) {
     return false;
@@ -538,7 +541,7 @@ void ArcAppListPrefs::UprevCurrentIconsVersionForTesting() {
 
 std::string ArcAppListPrefs::GetAppIdByPackageName(
     const std::string& package_name) const {
-  const base::Value::Dict& apps = prefs_->GetDict(arc::prefs::kArcApps);
+  const base::DictValue& apps = prefs_->GetDict(arc::prefs::kArcApps);
 
   for (const auto it : apps) {
     const base::Value& value = it.second;
@@ -604,10 +607,8 @@ ArcAppListPrefs::ArcAppListPrefs(
     net_host->SetArcAppMetadataProvider(this);
   }
 
-  if (base::FeatureList::IsEnabled(arc::kSyncInstallPriority)) {
-    install_priority_handler_ =
-        std::make_unique<arc::ArcPackageInstallPriorityHandler>(profile);
-  }
+  install_priority_handler_ =
+      std::make_unique<arc::ArcPackageInstallPriorityHandler>(profile);
 }
 
 ArcAppListPrefs::~ArcAppListPrefs() {
@@ -876,9 +877,9 @@ std::unique_ptr<ArcAppListPrefs::PackageInfo> ArcAppListPrefs::GetPackage(
   if (!IsArcAlive() || !IsArcAndroidEnabledForProfile(profile_))
     return nullptr;
 
-  const base::Value::Dict& packages = prefs_->GetDict(arc::prefs::kArcPackages);
+  const base::DictValue& packages = prefs_->GetDict(arc::prefs::kArcPackages);
 
-  const base::Value::Dict* package = packages.FindDict(package_name);
+  const base::DictValue* package = packages.FindDict(package_name);
   if (!package)
     return nullptr;
 
@@ -894,7 +895,7 @@ std::unique_ptr<ArcAppListPrefs::PackageInfo> ArcAppListPrefs::GetPackage(
   GetInt64FromPref(package, kLastBackupTime, &last_backup_time);
   const base::Value* permission_val = package->Find(kPermissionStates);
   if (permission_val) {
-    const base::Value::Dict* permission_dict = permission_val->GetIfDict();
+    const base::DictValue* permission_dict = permission_val->GetIfDict();
     DCHECK(permission_dict);
 
     for (const auto iter : *permission_dict) {
@@ -904,7 +905,7 @@ std::unique_ptr<ArcAppListPrefs::PackageInfo> ArcAppListPrefs::GetPackage(
 
       const base::Value& permission_state = iter.second;
 
-      const base::Value::Dict* permission_state_dict =
+      const base::DictValue* permission_state_dict =
           permission_state.GetIfDict();
       if (permission_state_dict) {
         bool granted = permission_state_dict->FindBool(kPermissionStateGranted)
@@ -935,7 +936,7 @@ std::unique_ptr<ArcAppListPrefs::PackageInfo> ArcAppListPrefs::GetPackage(
 
   arc::mojom::WebAppInfoPtr web_app_info;
   if (const base::Value* web_app_info_value = package->Find(kWebAppInfo)) {
-    const base::Value::Dict& web_app_info_dict = web_app_info_value->GetDict();
+    const base::DictValue& web_app_info_dict = web_app_info_value->GetDict();
     web_app_info = arc::mojom::WebAppInfo::New();
     web_app_info->title = *web_app_info_dict.FindString(kTitle);
     web_app_info->start_url = *web_app_info_dict.FindString(kStartUrl);
@@ -951,8 +952,8 @@ std::unique_ptr<ArcAppListPrefs::PackageInfo> ArcAppListPrefs::GetPackage(
   }
   arc::mojom::PackageLocaleInfoPtr locale_info;
   if (const base::Value* locale_info_value = package->Find(kLocaleInfo)) {
-    const base::Value::Dict& locale_info_dict = locale_info_value->GetDict();
-    if (const base::Value::List* supported_locales =
+    const base::DictValue& locale_info_dict = locale_info_value->GetDict();
+    if (const base::ListValue* supported_locales =
             locale_info_dict.FindList(kSupportedLocales)) {
       locale_info = arc::mojom::PackageLocaleInfo::New();
 
@@ -1004,7 +1005,7 @@ std::vector<std::string> ArcAppListPrefs::GetAppIds() const {
 
 std::vector<std::string> ArcAppListPrefs::GetAppIdsNoArcEnabledCheck() const {
   std::vector<std::string> ids;
-  const base::Value::Dict& apps = prefs_->GetDict(arc::prefs::kArcApps);
+  const base::DictValue& apps = prefs_->GetDict(arc::prefs::kArcApps);
 
   // crx_file::id_util is de-facto utility for id generation.
   for (const auto app : apps) {
@@ -1030,8 +1031,8 @@ std::unique_ptr<ArcAppListPrefs::AppInfo> ArcAppListPrefs::GetApp(
 
 std::unique_ptr<ArcAppListPrefs::AppInfo> ArcAppListPrefs::GetAppFromPrefs(
     const std::string& app_id) const {
-  const base::Value::Dict& apps = prefs_->GetDict(arc::prefs::kArcApps);
-  const base::Value::Dict* app_dict = apps.FindDict(app_id);
+  const base::DictValue& apps = prefs_->GetDict(arc::prefs::kArcApps);
+  const base::DictValue* app_dict = apps.FindDict(app_id);
   if (!app_dict)
     return nullptr;
 
@@ -1061,7 +1062,7 @@ std::unique_ptr<ArcAppListPrefs::AppInfo> ArcAppListPrefs::GetAppFromPrefs(
   std::string icon_resource_id =
       maybe_icon_resource_id ? *maybe_icon_resource_id : std::string();
 
-  std::optional<std::string> version_name = std::nullopt;
+  std::optional<std::string> version_name;
   if (maybe_version_name && *maybe_version_name != std::string())
     version_name = *maybe_version_name;
 
@@ -1120,7 +1121,7 @@ bool ArcAppListPrefs::IsRegistered(const std::string& app_id) const {
       !default_apps_->HasApp(app_id))
     return false;
 
-  const base::Value::Dict& apps = prefs_->GetDict(arc::prefs::kArcApps);
+  const base::DictValue& apps = prefs_->GetDict(arc::prefs::kArcApps);
   return apps.FindDict(app_id);
 }
 
@@ -1179,7 +1180,7 @@ void ArcAppListPrefs::SetLastLaunchTimeInternal(const std::string& app_id) {
 
   const base::Time time = base::Time::Now();
   arc::ArcAppScopedPrefUpdate update(prefs_, app_id, arc::prefs::kArcApps);
-  base::Value::Dict& app_dict = update.Get();
+  base::DictValue& app_dict = update.Get();
   const std::string string_value = base::NumberToString(time.ToInternalValue());
   app_dict.Set(kLastLaunchTime, string_value);
 
@@ -1206,14 +1207,14 @@ void ArcAppListPrefs::SetLastLaunchTimeInternal(const std::string& app_id) {
 void ArcAppListPrefs::SetLastLaunchTimeForTesting(const std::string& app_id,
                                                   base::Time timestamp) {
   arc::ArcAppScopedPrefUpdate update(prefs_, app_id, arc::prefs::kArcApps);
-  base::Value::Dict& app_dict = update.Get();
+  base::DictValue& app_dict = update.Get();
   const std::string string_value =
       base::NumberToString(timestamp.ToInternalValue());
   app_dict.Set(kLastLaunchTime, string_value);
 }
 
 void ArcAppListPrefs::DisableAllApps() {
-  std::unordered_set<std::string> old_ready_apps;
+  absl::flat_hash_set<std::string> old_ready_apps;
   old_ready_apps.swap(ready_apps_);
   for (auto& app_id : old_ready_apps)
     NotifyAppStatesChanged(app_id);
@@ -1462,7 +1463,7 @@ void ArcAppListPrefs::SetAppLocale(const std::string& package_name,
                                    const std::string& selected_locale) {
   arc::ArcAppScopedPrefUpdate update(prefs_, package_name,
                                      arc::prefs::kArcPackages);
-  base::Value::Dict& package_dict = update.Get();
+  base::DictValue& package_dict = update.Get();
   package_dict.EnsureDict(kLocaleInfo)->Set(kSelectedLocale, selected_locale);
 
   const std::string& app_id = GetAppIdByPackageName(package_name);
@@ -1498,11 +1499,11 @@ void ArcAppListPrefs::SetResizeLockState(const std::string& app_id,
   instance->SetResizeLockState(app_info->package_name, state);
 
   arc::ArcAppScopedPrefUpdate update(prefs_, app_id, arc::prefs::kArcApps);
-  base::Value::Dict& app_dict = update.Get();
+  base::DictValue& app_dict = update.Get();
   app_dict.Set(kResizeLockState, static_cast<int32_t>(state));
 
   // If the app is not "ready", we shouldn't fire the AppStatesChanged
-  // callbacks. Otherwise, it would cause a crash (See crbug.com/1276603). When
+  // callbacks. Otherwise, it would cause a crash (See crbug.com/40808991). When
   // the app is changed to "ready", ArcAppListPrefs sends the notifications
   // afterwards so it's fine not to fire it here.
   if (app_info->ready)
@@ -1529,7 +1530,7 @@ void ArcAppListPrefs::SetResizeLockNeedsConfirmation(const std::string& app_id,
   }
 
   arc::ArcAppScopedPrefUpdate update(prefs_, app_id, arc::prefs::kArcApps);
-  base::Value::Dict& app_dict = update.Get();
+  base::DictValue& app_dict = update.Get();
   app_dict.Set(kResizeLockNeedsConfirmation, is_needed);
 }
 
@@ -1562,10 +1563,7 @@ void ArcAppListPrefs::Shutdown() {
   if (policy_bridge)
     policy_bridge->RemoveObserver(this);
 
-  // TODO(lgcheng) remove the check once the feature is enabled.
-  if (install_priority_handler_) {
-    install_priority_handler_->Shutdown();
-  }
+  install_priority_handler_->Shutdown();
 
   arc::ArcSessionManager* arc_session_manager = arc::ArcSessionManager::Get();
   if (arc_session_manager) {
@@ -1676,10 +1674,7 @@ void ArcAppListPrefs::OnConnectionClosed() {
   package_list_initial_refreshed_ = false;
   app_list_refreshed_callback_.Reset();
 
-  // TODO(lgcheng) remove the check once the feature is enabled.
-  if (install_priority_handler_) {
-    install_priority_handler_->Clear();
-  }
+  install_priority_handler_->Clear();
 
   for (auto& observer : observer_list_)
     observer.OnAppConnectionClosed();
@@ -1748,7 +1743,7 @@ void ArcAppListPrefs::AddAppAndShortcut(
   }
 
   std::string updated_name = name;
-  // Add "(beta)" string to Play Store. See crbug.com/644576 for details.
+  // Add "(beta)" string to Play Store. See crbug.com/40483829 for details.
   if (app_id == arc::kPlayStoreAppId)
     updated_name = l10n_util::GetStringUTF8(IDS_ARC_PLAYSTORE_ICON_TITLE_BETA);
 
@@ -1773,7 +1768,7 @@ void ArcAppListPrefs::AddAppAndShortcut(
       GetResizeLockNeedsConfirmation(app_id);
 
   arc::ArcAppScopedPrefUpdate update(prefs_, app_id, arc::prefs::kArcApps);
-  base::Value::Dict& app_dict = update.Get();
+  base::DictValue& app_dict = update.Get();
   app_dict.Set(kName, updated_name);
   app_dict.Set(kPackageName, package_name);
   app_dict.Set(kActivity, activity);
@@ -1941,7 +1936,7 @@ void ArcAppListPrefs::AddOrUpdatePackagePrefs(
 
   arc::ArcAppScopedPrefUpdate update(prefs_, package_name,
                                      arc::prefs::kArcPackages);
-  base::Value::Dict& package_dict = update.Get();
+  base::DictValue& package_dict = update.Get();
   const std::string id_str =
       base::NumberToString(package.last_backup_android_id);
   const std::string time_str = base::NumberToString(package.last_backup_time);
@@ -1960,11 +1955,11 @@ void ArcAppListPrefs::AddOrUpdatePackagePrefs(
   else
     package_dict.Set(kVersionName, std::string());
 
-  base::Value::Dict permissions_dict;
+  base::DictValue permissions_dict;
   if (package.permission_states.has_value()) {
     for (const auto& [permission_type, permission_state] :
          package.permission_states.value()) {
-      base::Value::Dict permission_state_dict;
+      base::DictValue permission_state_dict;
       permission_state_dict.Set(kPermissionStateGranted,
                                 permission_state->granted);
       permission_state_dict.Set(kPermissionStateManaged,
@@ -1989,7 +1984,7 @@ void ArcAppListPrefs::AddOrUpdatePackagePrefs(
 
   if (package.web_app_info) {
     const arc::mojom::WebAppInfo& web_app_info = *package.web_app_info;
-    base::Value::Dict web_app_info_dict;
+    base::DictValue web_app_info_dict;
     web_app_info_dict.Set(kTitle, web_app_info.title);
     web_app_info_dict.Set(kStartUrl, web_app_info.start_url);
     web_app_info_dict.Set(kScopeUrl, web_app_info.scope_url);
@@ -2010,7 +2005,7 @@ void ArcAppListPrefs::AddOrUpdatePackagePrefs(
                                        update_reason)) {
       // Rejects ARC prefs and sends the correct locale back to Android to
       // ensure eventual correctness.
-      const base::Value::Dict* locale_info_dict =
+      const base::DictValue* locale_info_dict =
           package_dict.EnsureDict(kLocaleInfo);
       const std::string* saved_selected_locale =
           locale_info_dict->FindString(kSelectedLocale);
@@ -2025,7 +2020,7 @@ void ArcAppListPrefs::AddOrUpdatePackagePrefs(
       }
     } else {
       // Accepts ARC prefs and save to dict.
-      base::Value::List supported_locales;
+      base::ListValue supported_locales;
       const arc::mojom::PackageLocaleInfo& package_locale_info =
           *package.locale_info;
       for (const std::string& supported_locale :
@@ -2037,7 +2032,7 @@ void ArcAppListPrefs::AddOrUpdatePackagePrefs(
       const auto& selected_locale = package_locale_info.selected_locale;
       package_dict.Set(
           kLocaleInfo,
-          base::Value::Dict()
+          base::DictValue()
               .Set(kSupportedLocales, std::move(supported_locales))
               .Set(kSelectedLocale,
                    IsLocaleTagValid(selected_locale) ? selected_locale : ""));
@@ -2231,7 +2226,7 @@ void ArcAppListPrefs::OnPackageAppListRefreshed(
     return;
   }
 
-  std::unordered_set<std::string> apps_to_remove =
+  absl::flat_hash_set<std::string> apps_to_remove =
       GetAppsAndShortcutsForPackage(package_name,
                                     true, /* include_only_launchable_apps */
                                     false /* include_shortcuts */);
@@ -2245,7 +2240,7 @@ void ArcAppListPrefs::OnPackageAppListRefreshed(
 
   arc::ArcAppScopedPrefUpdate update(prefs_, package_name,
                                      arc::prefs::kArcPackages);
-  base::Value::Dict& package_dict = update.Get();
+  base::DictValue& package_dict = update.Get();
   if (!apps_to_remove.empty()) {
     auto* shelf_controller = ChromeShelfController::instance();
     if (shelf_controller) {
@@ -2279,7 +2274,7 @@ void ArcAppListPrefs::OnInstallShortcut(arc::mojom::ShortcutInfoPtr shortcut) {
 void ArcAppListPrefs::OnUninstallShortcut(const std::string& package_name,
                                           const std::string& intent_uri) {
   std::vector<std::string> shortcuts_to_remove;
-  const base::Value::Dict& apps = prefs_->GetDict(arc::prefs::kArcApps);
+  const base::DictValue& apps = prefs_->GetDict(arc::prefs::kArcApps);
   for (const auto app : apps) {
     if (!app.second.is_dict()) {
       VLOG(2) << "Failed to extract information for " << app.first << ".";
@@ -2308,19 +2303,19 @@ void ArcAppListPrefs::OnUninstallShortcut(const std::string& package_name,
     RemoveApp(shortcut_id);
 }
 
-std::unordered_set<std::string> ArcAppListPrefs::GetAppsForPackage(
+absl::flat_hash_set<std::string> ArcAppListPrefs::GetAppsForPackage(
     const std::string& package_name) const {
   return GetAppsAndShortcutsForPackage(package_name,
                                        false, /* include_only_launchable_apps */
                                        false /* include_shortcuts */);
 }
 
-std::unordered_set<std::string> ArcAppListPrefs::GetAppsAndShortcutsForPackage(
+absl::flat_hash_set<std::string> ArcAppListPrefs::GetAppsAndShortcutsForPackage(
     const std::string& package_name,
     bool include_only_launchable_apps,
     bool include_shortcuts) const {
-  std::unordered_set<std::string> app_set;
-  const base::Value::Dict& apps = prefs_->GetDict(arc::prefs::kArcApps);
+  absl::flat_hash_set<std::string> app_set;
+  const base::DictValue& apps = prefs_->GetDict(arc::prefs::kArcApps);
   for (const auto app : apps) {
     if (!crx_file::id_util::IdIsValid(app.first))
       continue;
@@ -2358,7 +2353,7 @@ std::unordered_set<std::string> ArcAppListPrefs::GetAppsAndShortcutsForPackage(
 
 void ArcAppListPrefs::HandlePackageRemoved(const std::string& package_name) {
   DCHECK(IsArcAndroidEnabledForProfile(profile_));
-  const std::unordered_set<std::string> apps_to_remove =
+  const absl::flat_hash_set<std::string> apps_to_remove =
       GetAppsAndShortcutsForPackage(package_name,
                                     false /* include_only_launchable_apps */,
                                     true /* include_shortcuts */);
@@ -2450,7 +2445,7 @@ void ArcAppListPrefs::OnTaskSetActive(int32_t task_id) {
 void ArcAppListPrefs::OnNotificationsEnabledChanged(
     const std::string& package_name,
     bool enabled) {
-  const base::Value::Dict& apps = prefs_->GetDict(arc::prefs::kArcApps);
+  const base::DictValue& apps = prefs_->GetDict(arc::prefs::kArcApps);
   for (const auto app : apps) {
     if (!app.second.is_dict()) {
       NOTREACHED();
@@ -2465,7 +2460,7 @@ void ArcAppListPrefs::OnNotificationsEnabledChanged(
       continue;
     }
     arc::ArcAppScopedPrefUpdate update(prefs_, app.first, arc::prefs::kArcApps);
-    base::Value::Dict& updating_app_dict = update.Get();
+    base::DictValue& updating_app_dict = update.Get();
     updating_app_dict.Set(kNotificationsEnabled, enabled);
   }
   for (auto& observer : observer_list_)
@@ -2488,10 +2483,7 @@ void ArcAppListPrefs::OnPackageAdded(
   packages_to_be_added_.erase(package_info->package_name);
   UpdateArcPackagesIsUpToDatePref();
 
-  // TODO(lgcheng) remove the check once the feature is enabled.
-  if (install_priority_handler_) {
-    install_priority_handler_->ClearPackage(package_info->package_name);
-  }
+  install_priority_handler_->ClearPackage(package_info->package_name);
 
   for (auto& observer : observer_list_)
     observer.OnPackageInstalled(*package_info);
@@ -2516,7 +2508,7 @@ void ArcAppListPrefs::OnPackageListRefreshed(
   for (const auto& package : packages) {
     AddOrUpdatePackagePrefs(*package,
                             UpdatePackagePrefsReason::kOnPackageListRefreshed);
-    if (!base::Contains(old_packages, package->package_name)) {
+    if (!old_packages.contains(package->package_name)) {
       for (auto& observer : observer_list_)
         observer.OnPackageInstalled(*package);
     } else {
@@ -2527,7 +2519,7 @@ void ArcAppListPrefs::OnPackageListRefreshed(
   }
 
   for (const auto& package_name : old_packages) {
-    if (!base::Contains(current_packages, package_name)) {
+    if (!current_packages.contains(package_name)) {
       RemovePackageFromPrefs(package_name);
       for (auto& observer : observer_list_)
         observer.OnPackageRemoved(package_name, false);
@@ -2554,7 +2546,7 @@ std::vector<std::string> ArcAppListPrefs::GetPackagesFromPrefs(
     return packages;
   }
 
-  const base::Value::Dict& package_prefs =
+  const base::DictValue& package_prefs =
       prefs_->GetDict(arc::prefs::kArcPackages);
   for (const auto package : package_prefs) {
     if (!package.second.is_dict()) {
@@ -2573,9 +2565,9 @@ std::vector<std::string> ArcAppListPrefs::GetPackagesFromPrefs(
 }
 
 base::Time ArcAppListPrefs::GetInstallTime(const std::string& app_id) const {
-  const base::Value::Dict& apps = prefs_->GetDict(arc::prefs::kArcApps);
+  const base::DictValue& apps = prefs_->GetDict(arc::prefs::kArcApps);
 
-  const base::Value::Dict* app = apps.FindDict(app_id);
+  const base::DictValue* app = apps.FindDict(app_id);
   if (!app)
     return base::Time();
 

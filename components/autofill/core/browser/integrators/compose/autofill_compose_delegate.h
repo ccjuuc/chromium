@@ -5,7 +5,6 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_INTEGRATORS_COMPOSE_AUTOFILL_COMPOSE_DELEGATE_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_INTEGRATORS_COMPOSE_AUTOFILL_COMPOSE_DELEGATE_H_
 
-#include <optional>
 
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/common/aliases.h"
@@ -60,13 +59,13 @@ class AutofillComposeDelegate {
   virtual Suggestion GetSuggestion(
       const FormData& form,
       const FormFieldData& field,
-      AutofillSuggestionTriggerSource trigger_source) = 0;
+      AutofillSuggestionTriggerSource trigger_source) const = 0;
 
   // Checks if the popup (aka nudge) should be presented for `field` in `form`.
   virtual bool ShouldTriggerComposePopup(
       const FormData& form,
       const FormFieldData& trigger_field,
-      autofill::AutofillSuggestionTriggerSource trigger_source) const = 0;
+      AutofillSuggestionTriggerSource trigger_source) const = 0;
 
   // Whether the Autofill nudge should be anchored on the caret or on the
   // triggering field.

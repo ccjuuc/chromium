@@ -42,7 +42,8 @@ source_set("wrapper_functions") {
   public_deps = [ ":common" ]
 }
 
-# Glue bits that need to be shared between the Rust implementation/bindings and the C++ entry points.
+# Glue bits that need to be shared between the Rust implementation/bindings and
+# the C++ entry points.
 source_set("common") {
   visibility = [ ":*" ]
 
@@ -76,7 +77,10 @@ source_set("ble_scan_parser") {
 
 fuzzer_test("ble_scan_parser_fuzzer") {
   sources = [ "ble_scan_parser_fuzzer.cc" ]
-  deps = [ ":ble_scan_parser" ]
+  deps = [
+    ":ble_scan_parser",
+    "//testing/libfuzzer:libfuzzer_base_wrappers",
+  ]
 
   seed_corpus = "//device/bluetooth/bluez/ble_scan_parser/data"
 }

@@ -13,7 +13,6 @@
 #import "base/threading/scoped_blocking_call.h"
 #import "components/favicon/core/fallback_url_util.h"
 #import "components/ntp_tiles/ntp_tile.h"
-#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_pref_names.h"
 #import "crypto/obsolete/md5.h"
 #import "google_apis/gaia/gaia_id.h"
@@ -123,8 +122,11 @@ NSDictionary* DecodeData(NSData* data) {
     return [[NSMutableDictionary alloc] init];
   }
 
-  unarchiver.requiresSecureCoding = NO;
-  return [unarchiver decodeObjectForKey:NSKeyedArchiveRootObjectKey];
+  unarchiver.requiresSecureCoding = YES;
+  NSSet* classes = [NSSet
+      setWithObjects:[NSDictionary class], [NSURL class], [NTPTile class], nil];
+  return [unarchiver decodeObjectOfClasses:classes
+                                    forKey:NSKeyedArchiveRootObjectKey];
 }
 
 void GetFaviconsAndSave(
@@ -149,7 +151,6 @@ void ClearOutdatedIcons(const ntp_tiles::NTPTilesVector& most_visited_data,
                         NSURL* favicons_directory) {
   NSMutableSet<NSString*>* allowed_files_name = [[NSMutableSet alloc] init];
 
-#if BUILDFLAG(ENABLE_WIDGETS_FOR_MIM)
   // Add in `allowed_files_name` information about all profiles.
   NSUserDefaults* shared_defaults = app_group::GetGroupUserDefaults();
   NSDictionary* suggested_items =
@@ -162,13 +163,6 @@ void ClearOutdatedIcons(const ntp_tiles::NTPTilesVector& most_visited_data,
       [allowed_files_name addObject:tile.faviconFileName];
     }
   }
-#else
-  for (size_t i = 0; i < most_visited_data.size(); i++) {
-    const ntp_tiles::NTPTile& ntp_tile = most_visited_data[i];
-    NSString* favicon_file_name = GetFaviconFileName(ntp_tile.url);
-    [allowed_files_name addObject:favicon_file_name];
-  }
-#endif
 
   [[NSFileManager defaultManager] createDirectoryAtURL:favicons_directory
                            withIntermediateDirectories:YES
@@ -231,7 +225,7 @@ void WriteSavedMostVisited(
   NSDate* last_modification_date = NSDate.date;
   NSError* error = nil;
   NSData* data = [NSKeyedArchiver archivedDataWithRootObject:most_visited_data
-                                       requiringSecureCoding:NO
+                                       requiringSecureCoding:YES
                                                        error:&error];
   if (!data || error) {
     DLOG(WARNING) << "Error serializing most visited: "

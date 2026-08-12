@@ -4,8 +4,10 @@
 
 #include "ash/app_list/app_list_controller_impl.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -71,8 +73,6 @@
 #include "base/callback_list.h"
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/containers/adapters.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
@@ -192,9 +192,9 @@ bool MinimizeAllWindows(const aura::Window::Windows& windows,
   aura::Window* container = Shell::Get()->GetPrimaryRootWindow()->GetChildById(
       kShellWindowId_HomeScreenContainer);
   aura::Window::Windows windows_to_minimize;
-  for (aura::Window* window : base::Reversed(windows)) {
+  for (aura::Window* window : std::views::reverse(windows)) {
     if (!container->Contains(window) &&
-        !base::Contains(windows_to_ignore, window) &&
+        !std::ranges::contains(windows_to_ignore, window) &&
         !WindowState::Get(window)->IsMinimized()) {
       windows_to_minimize.push_back(window);
     }
@@ -493,10 +493,6 @@ void AppListControllerImpl::OnSessionStateChanged(
     if (in_clamshell)
       DismissAppList();
     return;
-  }
-
-  if (base::FeatureList::IsEnabled(features::kQuickAppAccessTestUI)) {
-    SetHomeButtonQuickApp(kOsSettingsAppId);
   }
 
   if (in_clamshell)
@@ -1057,7 +1053,7 @@ void AppListControllerImpl::SetKeyboardTraversalMode(bool engaged) {
   } else if (AppListToastView::IsToastButton(focused_view)) {
     // Toast button can become focused after app list sorting, so make sure the
     // focus ring appears correctly when updating `keyboard_traversal_engaged_`.
-    focused_view->SchedulePaint();
+    views::FocusRing::Get(focused_view)->Refresh();
   } else {
     // Ensure that when an app list item's focus ring is triggered by key
     // events, the item is selected.
@@ -1066,6 +1062,7 @@ void AppListControllerImpl::SetKeyboardTraversalMode(bool engaged) {
     // the item's selection status.
     if (focused_view->GetClassName() == AppListItemView::kViewClassName) {
       static_cast<AppListItemView*>(focused_view)->EnsureSelected();
+      views::FocusRing::Get(focused_view)->Refresh();
     }
 
     focused_view->SchedulePaint();
@@ -1653,9 +1650,7 @@ void AppListControllerImpl::UpdateSearchBoxUiVisibilities() {
 
 int64_t AppListControllerImpl::GetDisplayIdToShowAppListOn() {
   if (IsInTabletMode() && !Shell::Get()->display_manager()->IsInUnifiedMode()) {
-    return display::HasInternalDisplay()
-               ? display::Display::InternalDisplayId()
-               : display::Screen::Get()->GetPrimaryDisplay().id();
+    return display::Screen::Get()->GetPrimaryDisplay().id();
   }
 
   return display::Screen::Get()

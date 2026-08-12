@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <iterator>
 
+#include "base/check_deref.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
@@ -54,9 +55,12 @@ std::set<std::string> GetRequestedPackagesFromPolicy(const PolicyMap& policy) {
 
 }  // namespace
 
-ArcAppInstallEventLogger::ArcAppInstallEventLogger(Delegate* delegate,
+ArcAppInstallEventLogger::ArcAppInstallEventLogger(PrefService* local_state,
+                                                   Delegate* delegate,
                                                    Profile* profile)
-    : InstallEventLoggerBase(profile), delegate_(delegate) {
+    : InstallEventLoggerBase(profile),
+      local_state_(CHECK_DEREF(local_state)),
+      delegate_(delegate) {
   if (!arc::IsArcAllowedForProfile(profile_)) {
     AddForSetOfApps(GetPackagesFromPref(arc::prefs::kArcPushInstallAppsPending),
                     CreateEvent(em::AppInstallReportLogEvent::CANCELED));
@@ -134,7 +138,7 @@ void ArcAppInstallEventLogger::OnPolicySent(const std::string& policy) {
 
 void ArcAppInstallEventLogger::OnComplianceReportReceived(
     const base::Value* compliance_report) {
-  const base::Value::List* const details =
+  const base::ListValue* const details =
       compliance_report->GetDict().FindList("nonComplianceDetails");
   if (!details) {
     return;
@@ -147,7 +151,7 @@ void ArcAppInstallEventLogger::OnComplianceReportReceived(
 
   std::set<std::string> noncompliant_apps_in_report;
   for (const auto& detail : *details) {
-    const base::Value::Dict& details_dict = detail.GetDict();
+    const base::DictValue& details_dict = detail.GetDict();
     const std::optional<int> reason =
         details_dict.FindInt("nonComplianceReason");
     if (!reason || *reason != kNonComplianceReasonAppNotInstalled) {
@@ -198,7 +202,7 @@ std::set<std::string> ArcAppInstallEventLogger::GetPackagesFromPref(
 
 void ArcAppInstallEventLogger::SetPref(const std::string& pref_name,
                                        const std::set<std::string>& packages) {
-  base::Value::List value;
+  base::ListValue value;
   for (const std::string& package : packages) {
     value.Append(package);
   }
@@ -209,7 +213,7 @@ void ArcAppInstallEventLogger::UpdateCollector(
     const std::set<std::string>& pending) {
   if (!log_collector_) {
     log_collector_ = std::make_unique<ArcAppInstallEventLogCollector>(
-        this, profile_, pending);
+        &local_state_.get(), this, profile_, pending);
   } else {
     log_collector_->OnPendingPackagesChanged(pending);
   }

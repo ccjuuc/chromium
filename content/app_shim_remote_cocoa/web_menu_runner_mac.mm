@@ -50,7 +50,12 @@ static const char kMenuWasRunCallbackKey = 0;
   if ((self = [super init])) {
     _menu = [[NSMenu alloc] initWithTitle:@""];
     _menu.autoenablesItems = NO;
-    _fontSize = fontSize;
+    // LINT.IfChange(fontSize)
+    // Blink caps font sizes to 10,000 but browser process code can't rely on
+    // the renderer to behave correctly.
+    // https://crbug.com/508452241
+    _fontSize = std::min(fontSize, 10'000.0);
+    // LINT.ThenChange(//third_party/blink/renderer/core/style/computed_style_constants.h:kMaximumAllowedFontSize)
     _rightAligned = rightAligned;
     for (const auto& item : items) {
       [self addItem:item];
@@ -76,14 +81,17 @@ static const char kMenuWasRunCallbackKey = 0;
     title = base::SysUTF8ToNSString(base::Base64Encode(label));
   }
 
-  // TODO(https://crbug.com/389084419): Figure out how to handle
-  // blink::mojom::MenuItem::Type::kGroup items. This should use the macOS 14+
-  // support for section headers, but popup menus have to resize themselves to
-  // match the scale of the page, and there's no good way (currently) to get the
-  // font used for section header items in order to scale it and set it.
-  NSMenuItem* menuItem = [_menu addItemWithTitle:title
+  NSMenuItem* menuItem;
+  if (@available(macOS 14, *)) {
+    if (item->type == blink::mojom::MenuItem::Type::kGroup) {
+      menuItem = [NSMenuItem sectionHeaderWithTitle:title];
+    }
+  }
+  if (!menuItem) {
+    menuItem = [[NSMenuItem alloc] initWithTitle:title
                                           action:@selector(menuItemSelected:)
                                    keyEquivalent:@""];
+  }
 
   if (item->tool_tip.has_value()) {
     menuItem.toolTip = base::SysUTF8ToNSString(item->tool_tip.value());
@@ -111,8 +119,6 @@ static const char kMenuWasRunCallbackKey = 0;
         @[ @(long{writingDirection} | NSWritingDirectionOverride) ];
   }
 
-  attrs[NSFontAttributeName] = [NSFont menuFontOfSize:_fontSize];
-
   NSAttributedString* attrTitle =
       [[NSAttributedString alloc] initWithString:title attributes:attrs];
   menuItem.attributedTitle = attrTitle;
@@ -126,7 +132,9 @@ static const char kMenuWasRunCallbackKey = 0;
   NSCharacterSet* whitespaceSet = NSCharacterSet.whitespaceCharacterSet;
   menuItem.title = [title stringByTrimmingCharactersInSet:whitespaceSet];
 
-  menuItem.tag = _menu.numberOfItems - 1;
+  menuItem.tag = _menu.numberOfItems;
+
+  [_menu addItem:menuItem];
 }
 
 - (std::optional<int>)selectedMenuItemIndex {
@@ -173,7 +181,19 @@ static const char kMenuWasRunCallbackKey = 0;
   cell.menu = _menu;
   // Use -selectItemWithTag: so if the index is out-of-bounds nothing bad
   // happens.
-  [cell selectItemWithTag:index];
+  if (index > -1) {
+    [cell selectItemWithTag:index];
+  } else {
+    // If the select element doesn't have any options selected, then index will
+    // be -1. In this case, selectItemWithTag would make the first option look
+    // checked, but selectItemAtIndex lets us open the picker with no options
+    // checked. Not calling anything here would also leave the first item
+    // checked, we have to explicitly uncheck them by calling selectItemAtIndex
+    // with -1. https://crbug.com/391648151
+    [cell selectItemAtIndex:-1];
+  }
+
+  cell.font = [NSFont menuFontOfSize:_fontSize];
 
   if (_rightAligned) {
     cell.userInterfaceLayoutDirection =

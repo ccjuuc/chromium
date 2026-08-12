@@ -16,11 +16,20 @@ namespace translate::prefs {
 inline constexpr char kOfferTranslateEnabled[] = "translate.enabled";
 inline constexpr char kPrefAlwaysTranslateList[] = "translate_allowlists";
 inline constexpr char kPrefTranslateRecentTarget[] = "translate_recent_target";
+inline constexpr char kPrefTranslateRecentTargets[] =
+    "translate_recent_targets";
 // Languages that the user marked as "do not translate".
 inline constexpr char kBlockedLanguages[] = "translate_blocked_languages";
 // Sites that never prompt to translate.
 inline constexpr char kPrefNeverPromptSitesWithTime[] =
     "translate_site_blocklist_with_time";
+
+// LINT.IfChange(DataRegion)
+// The data region setting. 0: Unset, 1: US, 2: EU.
+// Same value as chrome::prefs::kChromeDataRegionSetting.
+inline constexpr char kTranslateDataRegionSetting[] =
+    "chrome_data_region_setting";
+// LINT.ThenChange(//components/translate/core/browser/translate_prefs.h:DataRegion)
 
 }  // namespace translate::prefs
 

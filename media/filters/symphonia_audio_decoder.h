@@ -95,19 +95,19 @@ class MEDIA_EXPORT SymphoniaAudioDecoder : public AudioDecoder {
   void DecodeBuffer(scoped_refptr<DecoderBuffer> buffer,
                     DecodeCB decode_cb_bound);
 
-  // Passes the encoded buffer to the Symphonia decoder instance. Returns true
-  // on success, false otherwise. May result in zero or more calls to
-  // output_cb_.
-  bool SymphoniaDecode(const DecoderBuffer& buffer);
+  // Passes the encoded buffer to the Symphonia decoder instance. Returns
+  // DecoderStatus::Codes::kOk on success, or an error code otherwise.
+  // May result in zero or more calls to output_cb_.
+  DecoderStatus SymphoniaDecode(const DecoderBuffer& buffer);
 
   // Creates a media::AudioBuffer from the decoded SymphoniaAudioBuffer.
   scoped_refptr<AudioBuffer> ToMediaAudioBuffer(
-      const SymphoniaAudioBuffer& symphonia_buffer,
+      rust::Box<SymphoniaAudioBuffer> symphonia_buffer,
       base::TimeDelta timestamp);
 
   // Handles (re-)initializing the decoder with a (new) config.
-  // Returns true if initialization was successful.
-  bool ConfigureDecoder(const AudioDecoderConfig& config);
+  // Returns DecoderStatus::Codes::kOk if initialization was successful.
+  DecoderStatus ConfigureDecoder(const AudioDecoderConfig& config);
 
   // Releases resources associated with |symphonia_decoder_|.
   void ReleaseSymphoniaResources();
@@ -128,7 +128,7 @@ class MEDIA_EXPORT SymphoniaAudioDecoder : public AudioDecoder {
   SEQUENCE_CHECKER(sequence_checker_);
 
   // MediaLog for reporting messages and properties.
-  const raw_ptr<MediaLog> media_log_ = nullptr;
+  const std::unique_ptr<MediaLog> media_log_;
 
   // The threading mode that this decoder should operate in.
   const ExecutionMode mode_ = ExecutionMode::kAsynchronous;
@@ -156,6 +156,10 @@ class MEDIA_EXPORT SymphoniaAudioDecoder : public AudioDecoder {
   // microseconds with the first frame starting at zero.
   std::optional<base::TimeDelta> first_frame_timestamp_;
 };
+
+MEDIA_EXPORT SymphoniaPacket
+ToSymphoniaPacket(const DecoderBuffer& buffer,
+                  std::optional<base::TimeDelta> first_frame_timestamp);
 
 }  // namespace media
 

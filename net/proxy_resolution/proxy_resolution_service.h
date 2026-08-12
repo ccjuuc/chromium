@@ -13,6 +13,7 @@
 #include "net/base/completion_once_callback.h"
 #include "net/base/net_export.h"
 #include "net/base/network_anonymization_key.h"
+#include "net/base/network_handle.h"
 #include "net/base/proxy_server.h"
 #include "net/base/request_priority.h"
 #include "net/log/net_log_with_source.h"
@@ -55,6 +56,7 @@ class NET_EXPORT ProxyResolutionService {
       const GURL& url,
       const std::string& method,
       const NetworkAnonymizationKey& network_anonymization_key,
+      handles::NetworkHandle target_network,
       ProxyInfo* results,
       CompletionOnceCallback callback,
       std::unique_ptr<ProxyResolutionRequest>* request,
@@ -86,7 +88,7 @@ class NET_EXPORT ProxyResolutionService {
 
   // Returns proxy related debug information to be included in the NetLog. The
   // data should be appropriate for any capture mode (sensitivity level).
-  virtual base::Value::Dict GetProxyNetLogValues() = 0;
+  virtual base::DictValue GetProxyNetLogValues() = 0;
 
   // Returns true if |this| is an instance of ConfiguredProxyResolutionService
   // and assigns |this| to the out parameter. Otherwise returns false and sets
@@ -112,7 +114,7 @@ class NET_EXPORT ProxyResolutionService {
                                     ProxyDelegate* proxy_delegate);
 
   // Returns a list for bad proxies from the proxy retry info map.
-  static base::Value::List BuildBadProxiesList(
+  static base::ListValue BuildBadProxiesList(
       const ProxyRetryInfoMap& proxy_retry_info);
 
   // Helper method to deprioritize bad proxy chains and log the action.

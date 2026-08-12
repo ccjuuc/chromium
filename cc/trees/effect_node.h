@@ -57,6 +57,7 @@ enum class RenderSurfaceReason : uint8_t {
   kViewTransitionParticipant,
   kGradientMask,
   k2DScaleTransformWithCompositedDescendants,
+  kUnboundedElement,
   // This must be the last value because it's used in tracing code to know the
   // number of reasons.
   kTest,
@@ -163,8 +164,6 @@ struct CC_EXPORT EffectNode {
   // case of a backdrop zoom filter we need to take into consideration the
   // content offscreen to make sure the backdrop zoom filter is applied with the
   // correct center.
-  // This property is computed in EffectTree::UpdateOnlyDrawsVisibleContent and
-  // is not synced from clients for TreesInViz.
   bool only_draws_visible_content : 1 = true;
 
   // TODO(crbug.com/40461368): Delete this after implementation of

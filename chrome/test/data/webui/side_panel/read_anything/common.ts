@@ -3,16 +3,27 @@
 // found in the LICENSE file.
 import type {CrActionMenuElement} from '//resources/cr_elements/cr_action_menu/cr_action_menu.js';
 import type {CrLazyRenderLitElement} from '//resources/cr_elements/cr_lazy_render/cr_lazy_render_lit.js';
-import type {AppElement, SimpleActionMenuElement} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
-import {MetricsBrowserProxyImpl, NodeStore, playFromSelectionTimeout, ReadAloudNode, ReadAnythingLogger, ToolbarEvent, VoiceLanguageController} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
+import type {AppElement, SettingsPrefs} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
+import {DEFAULT_SETTINGS, MetricsBrowserProxyImpl, NodeStore, playFromSelectionTimeout, ReadAloudNode, ReadAnythingLogger, ToolbarEvent, VoiceLanguageController} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import type {Segment} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
-import {assertEquals} from 'chrome-untrusted://webui-test/chai_assert.js';
+import {assertEquals, assertNotDeepEquals} from 'chrome-untrusted://webui-test/chai_assert.js';
 import {MockTimer} from 'chrome-untrusted://webui-test/mock_timer.js';
 import {microtasksFinished} from 'chrome-untrusted://webui-test/test_util.js';
 
 import {TestMetricsBrowserProxy} from './test_metrics_browser_proxy.js';
 import type {TestReadAloudModelBrowserProxy} from './test_read_aloud_browser_proxy.js';
 import type {TestSpeechBrowserProxy} from './test_speech_browser_proxy.js';
+
+export const TEST_RANDOM_VALUE_SETTINGS: SettingsPrefs = {
+  letterSpacing: 101,
+  lineSpacing: 102,
+  theme: 103,
+  speechRate: 104,
+  font: 'font',
+  highlightGranularity: 105,
+  linksEnabled: true,
+  imagesEnabled: false,
+};
 
 export async function createApp(): Promise<AppElement> {
   const app = document.createElement('read-anything-app');
@@ -28,7 +39,8 @@ export function mockMetrics(): TestMetricsBrowserProxy {
   return metrics;
 }
 
-export function emitEvent(app: AppElement, name: string, options?: any): void {
+export function emitEvent(
+    app: AppElement, name: string, options?: CustomEventInit): void {
   app.$.toolbar.dispatchEvent(new CustomEvent(name, options));
 }
 
@@ -76,13 +88,6 @@ export function assertCheckMarksForDropdown(dropdown: HTMLElement): void {
     button.click();
     assertCheckMarkVisible(checkMarks, index);
   });
-}
-
-export function assertHeadersForDropdown(
-    dropdown: SimpleActionMenuElement, shouldHaveHeaders: boolean): void {
-  const headers =
-      dropdown.$.lazyMenu.get().querySelector<HTMLElement>('.has-header-true');
-  assertEquals(shouldHaveHeaders, !!headers);
 }
 
 export function createSpeechErrorEvent(
@@ -148,4 +153,25 @@ export function setContent(
     model.setCurrentTextContent(text);
   }
   return node;
+}
+
+export function assertTestSettingsAreNotDefaultSettings() {
+  assertNotDeepEquals(DEFAULT_SETTINGS, TEST_RANDOM_VALUE_SETTINGS);
+}
+
+export function setWindowSize(height: number, width: number) {
+  if (Object.getOwnPropertyDescriptor(window, 'innerHeight')?.configurable !==
+      false) {
+    Object.defineProperty(window, 'innerHeight', {
+      value: height,
+      configurable: true,
+    });
+  }
+  if (Object.getOwnPropertyDescriptor(window, 'innerWidth')?.configurable !==
+      false) {
+    Object.defineProperty(window, 'innerWidth', {
+      value: width,
+      configurable: true,
+    });
+  }
 }

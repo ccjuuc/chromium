@@ -125,7 +125,7 @@ class HistorySyncOptinHandlerTest : public testing::TestWithParam<bool> {
 TEST_P(HistorySyncOptinHandlerTest,
        RequestAccountInfoWithImmediatelyAvailableCapabilities) {
   AccountInfo account_info = SignInAndSetUpSyncService();
-  AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+  AccountCapabilitiesTestMutator mutator(&account_info);
   mutator.set_can_show_history_sync_opt_ins_without_minor_mode_restrictions(
       IsUnrestricted());
   identity_test_env()->UpdateAccountInfoForAccount(account_info);
@@ -136,7 +136,8 @@ TEST_P(HistorySyncOptinHandlerTest,
   handler_->RequestAccountInfo();
 
   // Simulate an AccountInfo update.
-  account_info.full_name = "new_fullname";
+  account_info =
+      AccountInfo::Builder(account_info).SetFullName("new_fullname").Build();
   identity_test_env()->UpdateAccountInfoForAccount(account_info);
 
   // Attempt to request the AccountInfo, which the handler will ignore.
@@ -172,18 +173,20 @@ TEST_P(HistorySyncOptinHandlerTest, RequestAccountInfoWithCapabilitiesUpdate) {
   EXPECT_CALL(page_, SendScreenMode(ExpectedScreenMode())).Times(1);
 
   // Simulate an AccountInfo update without ScreenMode information.
-  account_info.full_name = "new_fullname";
+  account_info =
+      AccountInfo::Builder(account_info).SetFullName("new_fullname").Build();
   identity_test_env()->UpdateAccountInfoForAccount(account_info);
 
   // Simulate an AccountInfo update with capabilities. The handler will send
   // a ScreenMode update, but not a second AccountInfo update.
-  AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+  AccountCapabilitiesTestMutator mutator(&account_info);
   mutator.set_can_show_history_sync_opt_ins_without_minor_mode_restrictions(
       IsUnrestricted());
   identity_test_env()->UpdateAccountInfoForAccount(account_info);
 
   // Simulate another AccountInfo update, which the handler will not receive.
-  account_info.given_name = "new_givenname";
+  account_info =
+      AccountInfo::Builder(account_info).SetGivenName("new_givenname").Build();
   identity_test_env()->UpdateAccountInfoForAccount(account_info);
 
   task_environment_.RunUntilIdle();
@@ -209,7 +212,7 @@ TEST_P(HistorySyncOptinHandlerTest, OnScreenModeAccepted) {
   EXPECT_FALSE(test_sync_service()->GetUserSettings()->GetSelectedTypes().Has(
       syncer::UserSelectableType::kHistory));
 
-  AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+  AccountCapabilitiesTestMutator mutator(&account_info);
   mutator.set_can_show_history_sync_opt_ins_without_minor_mode_restrictions(
       IsUnrestricted());
   identity_test_env()->UpdateAccountInfoForAccount(account_info);
@@ -227,7 +230,7 @@ TEST_P(HistorySyncOptinHandlerTest, OnScreenModeRejected) {
   EXPECT_FALSE(test_sync_service()->GetUserSettings()->GetSelectedTypes().Has(
       syncer::UserSelectableType::kHistory));
 
-  AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+  AccountCapabilitiesTestMutator mutator(&account_info);
   mutator.set_can_show_history_sync_opt_ins_without_minor_mode_restrictions(
       IsUnrestricted());
   identity_test_env()->UpdateAccountInfoForAccount(account_info);

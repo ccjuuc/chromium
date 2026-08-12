@@ -6,6 +6,8 @@
 
 #import <string>
 
+#import "url/gurl.h"
+
 namespace {
 // Script to check whether PageContext should be detached from the request.
 constexpr const char16_t* kShouldDetachPageContextScript = u"return false;";
@@ -13,7 +15,11 @@ constexpr const char16_t* kShouldDetachPageContextScript = u"return false;";
 
 namespace ios::provider {
 
-const std::u16string GetPageContextShouldDetachScriptV2() {
+bool IsProtectedUrlV2(const GURL& url) {
+  return false;
+}
+
+std::u16string GetPageContextShouldDetachScriptV2() {
   return kShouldDetachPageContextScript;
 }
 

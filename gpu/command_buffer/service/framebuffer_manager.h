@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "base/containers/heap_array.h"
 #include "base/containers/small_map.h"
 #include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
@@ -44,6 +45,7 @@ class GPU_GLES2_EXPORT Framebuffer : public base::RefCounted<Framebuffer> {
     virtual GLsizei samples() const = 0;
     virtual GLuint object_name() const = 0;
     virtual GLint level() const = 0;
+    virtual GLenum target() const = 0;
     virtual bool cleared() const = 0;
     virtual void SetCleared(
         RenderbufferManager* renderbuffer_manager,
@@ -56,6 +58,7 @@ class GPU_GLES2_EXPORT Framebuffer : public base::RefCounted<Framebuffer> {
     virtual bool IsRenderbuffer(Renderbuffer* renderbuffer) const = 0;
     virtual bool IsSameAttachment(const Attachment* attachment) const = 0;
     virtual bool Is3D() const = 0;
+    virtual GLint layer() const;
 
     // If it's a 3D texture attachment, return true if
     // FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER is smaller than the number of
@@ -94,7 +97,7 @@ class GPU_GLES2_EXPORT Framebuffer : public base::RefCounted<Framebuffer> {
   bool HasSRGBAttachments() const;
   bool HasDepthStencilFormatAttachment() const;
 
-  void ClearUnclearedIntOr3DTexturesOrPartiallyClearedTextures(
+  bool ClearUnclearedIntOr3DTexturesOrPartiallyClearedTextures(
       GLES2Decoder* decoder,
       TextureManager* texture_manager);
 
@@ -113,6 +116,16 @@ class GPU_GLES2_EXPORT Framebuffer : public base::RefCounted<Framebuffer> {
   // 'unbind_attachments_on_bound_render_fbo_delete'.  The Framebuffer must be
   // bound when calling this.
   void DoUnbindGLAttachmentsForWorkaround(GLenum target);
+
+  // Re-attaches all current attachments for recreateFbo workaround.
+  void ReattachAttachments(GLenum framebuffer_target);
+
+  // Binds |attachment| at |attachment_point| on the framebuffer currently
+  // bound at |target|, or detaches whatever is at |attachment_point| if
+  // |attachment| is null. Only modifies driver-side state.
+  static void BindAttachmentToPoint(GLenum target,
+                                    GLenum attachment_point,
+                                    const Attachment* attachment);
 
   // Attaches a renderbuffer to a particlar attachment.
   // Pass null to detach.
@@ -170,6 +183,7 @@ class GPU_GLES2_EXPORT Framebuffer : public base::RefCounted<Framebuffer> {
   // returns 0.
   GLenum GetReadBufferTextureType() const;
   bool GetReadBufferIsMultisampledTexture() const;
+  bool GetReadBufferIsMultisampledRenderbuffer() const;
 
   // Verify all the rules in OpenGL ES 2.0.25 4.4.5 are followed.
   // Returns GL_FRAMEBUFFER_COMPLETE if there are no reasons we know we can't
@@ -243,6 +257,7 @@ class GPU_GLES2_EXPORT Framebuffer : public base::RefCounted<Framebuffer> {
 
  private:
   friend class FramebufferManager;
+  void set_service_id(GLuint id) { service_id_ = id; }
   friend class base::RefCounted<Framebuffer>;
 
   ~Framebuffer();
@@ -259,12 +274,12 @@ class GPU_GLES2_EXPORT Framebuffer : public base::RefCounted<Framebuffer> {
     TextureManager* texture_manager,
     bool cleared);
 
-  void MarkAsComplete(unsigned state_id) {
+  void MarkAsComplete(uint64_t state_id) {
     UpdateDrawBufferMasks();
     framebuffer_complete_state_count_id_ = state_id;
   }
 
-  unsigned framebuffer_complete_state_count_id() const {
+  uint64_t framebuffer_complete_state_count_id() const {
     return framebuffer_complete_state_count_id_;
   }
 
@@ -288,7 +303,7 @@ class GPU_GLES2_EXPORT Framebuffer : public base::RefCounted<Framebuffer> {
   bool has_been_bound_;
 
   // state count when this framebuffer was last checked for completeness.
-  unsigned framebuffer_complete_state_count_id_;
+  uint64_t framebuffer_complete_state_count_id_;
 
   // A map of attachments.
   using AttachmentMap =
@@ -296,13 +311,13 @@ class GPU_GLES2_EXPORT Framebuffer : public base::RefCounted<Framebuffer> {
   AttachmentMap attachments_;
 
   // User's draw buffers setting through DrawBuffers() call.
-  std::unique_ptr<GLenum[]> draw_buffers_;
+  base::HeapArray<GLenum> draw_buffers_;
 
   // If a draw buffer does not have an image, or it has no corresponding
   // fragment shader output variable, it might be filtered out as NONE.
   // Note that the actually draw buffers setting sent to the driver is always
   // consistent with |adjusted_draw_buffers_|, not |draw_buffers_|.
-  std::unique_ptr<GLenum[]> adjusted_draw_buffers_;
+  base::HeapArray<GLenum> adjusted_draw_buffers_;
 
   // Draw buffer base types: FLOAT, INT, or UINT.
   // We have up to 16 draw buffers, each is encoded into 2 bits, total 32 bits:
@@ -364,6 +379,9 @@ class GPU_GLES2_EXPORT FramebufferManager {
   // Gets a client id for a given service id.
   bool GetClientId(GLuint service_id, GLuint* client_id) const;
 
+  // Recreates the service ID for a framebuffer (allocates new, deletes old).
+  void RecreateFramebufferServiceId(Framebuffer* framebuffer);
+
   void MarkAttachmentsAsCleared(
     Framebuffer* framebuffer,
     RenderbufferManager* renderbuffer_manager,
@@ -373,10 +391,17 @@ class GPU_GLES2_EXPORT FramebufferManager {
 
   bool IsComplete(const Framebuffer* framebuffer);
 
+  std::vector<std::pair<scoped_refptr<Framebuffer>, GLenum>>
+  GetBindingFramebuffersForTexture(TextureRef* texture_ref,
+                                   bool include_color_attachments = false);
+
+  std::vector<std::pair<scoped_refptr<Framebuffer>, GLenum>>
+  GetBindingFramebuffersForRenderbuffer(Renderbuffer* renderbuffer);
+
   void IncFramebufferStateChangeCount() {
     // make sure this is never 0.
     framebuffer_state_change_count_ =
-        (framebuffer_state_change_count_ + 1) | 0x80000000U;
+        (framebuffer_state_change_count_ + 1) | (uint64_t{1} << 63);
   }
 
  private:
@@ -395,7 +420,7 @@ class GPU_GLES2_EXPORT FramebufferManager {
 
   // Incremented anytime anything changes that might effect framebuffer
   // state.
-  unsigned framebuffer_state_change_count_;
+  uint64_t framebuffer_state_change_count_;
 
   // Counts the number of Framebuffer allocated with 'this' as its manager.
   // Allows to check no Framebuffer will outlive this.

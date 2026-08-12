@@ -17,6 +17,7 @@ import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.feedback.ConnectivityTask.FeedbackData;
@@ -33,6 +34,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /** Tests for {@link ConnectivityTask}. */
 @RunWith(BaseJUnit4ClassRunner.class)
+@Batch(Batch.PER_CLASS)
 public class ConnectivityTaskTest {
     @Rule
     public ConnectivityCheckerTestRule mConnectivityCheckerTestRule =
@@ -56,7 +58,7 @@ public class ConnectivityTaskTest {
                                 ConnectivityChecker.overrideUrlsForTest(
                                         mConnectivityCheckerTestRule.getGenerated204Url(),
                                         mConnectivityCheckerTestRule.getGenerated404Url());
-                                // TODO (https://crbug.com/1063807):  Add incognito mode tests.
+                                // TODO (https://crbug.com/40680929):  Add incognito mode tests.
                                 return ConnectivityTask.create(
                                         ProfileManager.getLastUsedRegularProfile(),
                                         TIMEOUT_MS,
@@ -125,7 +127,7 @@ public class ConnectivityTaskTest {
                     ConnectivityChecker.overrideUrlsForTest(
                             mConnectivityCheckerTestRule.getGenerated204Url(),
                             mConnectivityCheckerTestRule.getGenerated404Url());
-                    // TODO (https://crbug.com/1063807):  Add incognito mode tests.
+                    // TODO (https://crbug.com/40680929):  Add incognito mode tests.
                     ConnectivityTask.create(
                             ProfileManager.getLastUsedRegularProfile(), TIMEOUT_MS, callback);
                 });
@@ -158,7 +160,7 @@ public class ConnectivityTaskTest {
                     ConnectivityChecker.overrideUrlsForTest(
                             mConnectivityCheckerTestRule.getGenerated204Url(),
                             mConnectivityCheckerTestRule.getGeneratedSlowUrl());
-                    // TODO (https://crbug.com/1063807):  Add incognito mode tests.
+                    // TODO (https://crbug.com/40680929):  Add incognito mode tests.
                     ConnectivityTask.create(
                             ProfileManager.getLastUsedRegularProfile(), checkTimeoutMs, callback);
                 });
@@ -186,7 +188,7 @@ public class ConnectivityTaskTest {
                                 ConnectivityChecker.overrideUrlsForTest(
                                         mConnectivityCheckerTestRule.getGenerated204Url(),
                                         mConnectivityCheckerTestRule.getGeneratedSlowUrl());
-                                // TODO (https://crbug.com/1063807):  Add incognito mode tests.
+                                // TODO (https://crbug.com/40680929):  Add incognito mode tests.
                                 return ConnectivityTask.create(
                                         ProfileManager.getLastUsedRegularProfile(),
                                         TIMEOUT_MS,

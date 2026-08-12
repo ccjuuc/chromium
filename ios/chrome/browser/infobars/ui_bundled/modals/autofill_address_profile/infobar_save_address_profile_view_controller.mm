@@ -24,7 +24,6 @@
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_text_item.h"
 #import "ios/chrome/browser/shared/ui/table_view/content_configuration/colorful_symbol_content_configuration.h"
 #import "ios/chrome/browser/shared/ui/table_view/content_configuration/table_view_cell_content_configuration.h"
-#import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_styler.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/table_view/table_view_cells_constants.h"
@@ -242,8 +241,6 @@ const CGFloat kButtonHorizontalInset = 16;
 }
 
 - (void)loadUpdateAddressModal {
-  CHECK_GT([self.profileDataDiff count], 0ul);
-
   [_contentStack addArrangedSubview:[self updateModalDescriptionView]];
 
   BOOL showOld = [self shouldShowOldSection];
@@ -300,28 +297,26 @@ const CGFloat kButtonHorizontalInset = 16;
 
 - (void)loadSaveAddressModal {
   UIView* address = [self detailViewWithTitle:self.address
-                                       symbol:CustomSymbolTemplateWithPointSize(
-                                                  kLocationSymbol, kSymbolSize)
+                                       symbol:SymbolTemplateWithPointSize(
+                                                  SymbolLocation, kSymbolSize)
                          imageTintColorIsGrey:YES];
   [_contentStack addArrangedSubview:address];
   [_contentStack addArrangedSubview:[self separatorView]];
 
   if ([self.emailAddress length]) {
-    UIView* email =
-        [self detailViewWithTitle:self.emailAddress
-                           symbol:DefaultSymbolTemplateWithPointSize(
-                                      kMailFillSymbol, kSymbolSize)
-             imageTintColorIsGrey:YES];
+    UIView* email = [self detailViewWithTitle:self.emailAddress
+                                       symbol:SymbolTemplateWithPointSize(
+                                                  SymbolMailFill, kSymbolSize)
+                         imageTintColorIsGrey:YES];
     [_contentStack addArrangedSubview:email];
     [_contentStack addArrangedSubview:[self separatorView]];
   }
 
   if ([self.phoneNumber length]) {
-    UIView* phone =
-        [self detailViewWithTitle:self.phoneNumber
-                           symbol:DefaultSymbolTemplateWithPointSize(
-                                      kPhoneFillSymbol, kSymbolSize)
-             imageTintColorIsGrey:YES];
+    UIView* phone = [self detailViewWithTitle:self.phoneNumber
+                                       symbol:SymbolTemplateWithPointSize(
+                                                  SymbolPhoneFill, kSymbolSize)
+                         imageTintColorIsGrey:YES];
     [_contentStack addArrangedSubview:phone];
     [_contentStack addArrangedSubview:[self separatorView]];
   }
@@ -339,8 +334,8 @@ const CGFloat kButtonHorizontalInset = 16;
   [_contentStack
       addArrangedSubview:
           [self detailViewWithTitle:self.profileDescriptionForMigrationPrompt
-                             symbol:CustomSymbolTemplateWithPointSize(
-                                        kLocationSymbol, kSymbolSize)
+                             symbol:SymbolTemplateWithPointSize(SymbolLocation,
+                                                                kSymbolSize)
                imageTintColorIsGrey:YES]];
   [_contentStack addArrangedSubview:[self separatorView]];
 
@@ -362,14 +357,11 @@ const CGFloat kButtonHorizontalInset = 16;
         IDS_AUTOFILL_ADDRESS_MIGRATION_TO_ACCOUNT_PROMPT_OK_BUTTON_LABEL);
   } else if (self.isUpdateModal) {
     int buttonTextId = IDS_AUTOFILL_UPDATE_ADDRESS_PROMPT_OK_BUTTON_LABEL;
-    if (base::FeatureList::IsEnabled(
-            autofill::features::kAutofillEnableSupportForHomeAndWork)) {
-      if (self.homeProfile || self.workProfile) {
-        buttonTextId = IDS_AUTOFILL_SAVE_ADDRESS_PROMPT_OK_BUTTON_LABEL;
-      } else if (![self shouldShowOldSection]) {
-        buttonTextId =
-            IDS_AUTOFILL_UPDATE_ADDRESS_ADD_NEW_INFO_PROMPT_OK_BUTTON_LABEL;
-      }
+    if (self.homeProfile || self.workProfile) {
+      buttonTextId = IDS_AUTOFILL_SAVE_ADDRESS_PROMPT_OK_BUTTON_LABEL;
+    } else if (![self shouldShowOldSection]) {
+      buttonTextId =
+          IDS_AUTOFILL_UPDATE_ADDRESS_ADD_NEW_INFO_PROMPT_OK_BUTTON_LABEL;
     }
     title = l10n_util::GetNSString(buttonTextId);
   } else {
@@ -444,13 +436,13 @@ const CGFloat kButtonHorizontalInset = 16;
     case autofill::AddressUIComponentIconType::kNoIcon:
       return nil;
     case autofill::AddressUIComponentIconType::kName:
-      return DefaultSymbolTemplateWithPointSize(kPersonFillSymbol, kSymbolSize);
+      return SymbolTemplateWithPointSize(SymbolPersonFill, kSymbolSize);
     case autofill::AddressUIComponentIconType::kAddress:
-      return CustomSymbolTemplateWithPointSize(kLocationSymbol, kSymbolSize);
+      return SymbolTemplateWithPointSize(SymbolLocation, kSymbolSize);
     case autofill::AddressUIComponentIconType::kEmail:
-      return DefaultSymbolTemplateWithPointSize(kMailFillSymbol, kSymbolSize);
+      return SymbolTemplateWithPointSize(SymbolMailFill, kSymbolSize);
     case autofill::AddressUIComponentIconType::kPhone:
-      return DefaultSymbolTemplateWithPointSize(kPhoneFillSymbol, kSymbolSize);
+      return SymbolTemplateWithPointSize(SymbolPhoneFill, kSymbolSize);
   }
 }
 
@@ -475,11 +467,6 @@ const CGFloat kButtonHorizontalInset = 16;
 
   if (!self.isUpdateModal) {
     return l10n_util::GetNSString(IDS_IOS_AUTOFILL_SAVE_ADDRESS_PROMPT_TITLE);
-  }
-
-  if (!base::FeatureList::IsEnabled(
-          autofill::features::kAutofillEnableSupportForHomeAndWork)) {
-    return l10n_util::GetNSString(IDS_IOS_AUTOFILL_UPDATE_ADDRESS_PROMPT_TITLE);
   }
 
   if (self.homeProfile || self.workProfile) {
@@ -527,7 +514,7 @@ const CGFloat kButtonHorizontalInset = 16;
     ColorfulSymbolContentConfiguration* symbolConfiguration =
         [[ColorfulSymbolContentConfiguration alloc] init];
     symbolConfiguration.symbolImage =
-        CustomSymbolTemplateWithPointSize(kLocationSymbol, kSymbolSize);
+        SymbolTemplateWithPointSize(SymbolLocation, kSymbolSize);
     symbolConfiguration.symbolTintColor =
         imageTintColorIsGrey ? [UIColor colorNamed:kGrey400Color]
                              : [UIColor colorNamed:kBlueColor];

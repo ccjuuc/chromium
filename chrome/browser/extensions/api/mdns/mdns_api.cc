@@ -7,7 +7,9 @@
 #include <utility>
 #include <vector>
 
+#include "base/check.h"
 #include "base/lazy_instance.h"
+#include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
@@ -200,7 +202,7 @@ void MDnsAPI::GetValidOnServiceListListeners(
     std::set<ExtensionId>* extension_ids,
     ServiceTypeCounts* service_type_counts) {
   for (const auto& listener : GetEventListeners()) {
-    const base::Value::Dict* filter = listener->filter();
+    const base::DictValue* filter = listener->filter();
 
     const std::string* service_type =
         filter->FindString(kEventFilterServiceTypeKey);

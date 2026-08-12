@@ -6,7 +6,7 @@
 
 #include <string_view>
 
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/numerics/byte_conversions.h"
@@ -15,6 +15,7 @@
 #include "base/strings/string_split.h"
 #include "base/trace_event/named_trigger.h"
 #include "base/trace_event/typed_macros.h"
+#include "crypto/hash.h"
 #include "crypto/obsolete/md5.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/scheme_registry.h"
@@ -35,30 +36,30 @@ uint32_t MD5Hash32ForBackgroundTracingHelper(std::string_view string) {
   return base::U32FromBigEndian(base::span(digest).first<4u>());
 }
 
+uint64_t SHA256Hash64ForBackgroundTracingHelper(std::string_view string) {
+  auto digest = crypto::hash::Sha256(string);
+  return base::U64FromBigEndian(base::span(digest).first<8u>());
+}
+
 namespace {
 
-// Converts `chars` to a 1-8 character hash. If successful the parsed hash is
+// Converts `chars` to a 1-16 character hash. If successful the parsed hash is
 // returned.
-std::optional<uint32_t> ConvertToHashInteger(std::string_view chars) {
+std::optional<uint64_t> ConvertToHashInteger(std::string_view chars) {
   // Fail if the hash string is too long or empty.
-  if (chars.size() == 0 || chars.size() > 8) {
+  if (chars.size() == 0 || chars.size() > 16) {
     return std::nullopt;
   }
   for (auto c : chars) {
-    if (!IsASCIIHexDigit(c)) {
+    if (!IsAsciiHexDigit(c)) {
       return std::nullopt;
     }
   }
-  return HexCharactersToUInt(base::as_byte_span(chars), NumberParsingOptions(),
-                             nullptr);
+  return HexCharactersToUInt64(base::as_byte_span(chars),
+                               NumberParsingOptions());
 }
 
 static constexpr char kTriggerPrefix[] = "trigger:";
-
-bool MarkNameIsTrigger(StringView mark_name) {
-  return StringView(mark_name, 0, std::size(kTriggerPrefix) - 1) ==
-         kTriggerPrefix;
-}
 
 std::string GenerateFullTrigger(std::string_view site,
                                 std::string_view mark_name) {
@@ -104,14 +105,16 @@ BackgroundTracingHelper::BackgroundTracingHelper(ExecutionContext* context) {
   // Get the hash of the domain in an encoded format (friendly for converting to
   // ASCII, and matching the format in which URLs will be encoded prior to
   // hashing in the Finch list).
-  String this_site = EncodeWithURLEscapeSequences(origin->Domain());
+  String this_site = EncodeWithUrlEscapeSequences(origin->Domain());
   std::string this_site_ascii = this_site.Ascii();
-  uint32_t this_site_hash = MD5Hash32(this_site_ascii);
+  uint32_t this_site_hash_32 = MD5Hash32(this_site_ascii);
+  uint64_t this_site_hash_64 = SHA256Hash64(this_site_ascii);
 
   // We only need the site information if it's allowed by the allow list.
-  if (base::Contains(GetSiteHashSet(), this_site_hash)) {
+  if (GetSiteHashSet().Contains(this_site_hash_64) ||
+      GetSiteHashSet().Contains(this_site_hash_32)) {
     site_ = this_site_ascii;
-    site_hash_ = this_site_hash;
+    site_hash_ = this_site_hash_32;
   }
 
   // Extract a unique ID for the ExecutionContext, using the UnguessableToken
@@ -183,13 +186,15 @@ BackgroundTracingHelper::GetSiteHashSet() {
 }
 
 // static
-size_t BackgroundTracingHelper::GetIdSuffixPos(StringView string) {
+wtf_size_t BackgroundTracingHelper::GetIdSuffixPos(StringView string) {
   // Extract any trailing integers.
-  size_t cursor = string.length();
+  wtf_size_t cursor = string.length();
   while (cursor > 0) {
-    char c = string[cursor - 1];
-    if (c < '0' || c > '9')
+    // SAFETY: non-zero cursor <= length implies cursor - 1 is valid.
+    char c = UNSAFE_BUFFERS(string[cursor - 1]);
+    if (!IsAsciiDigit(c)) {
       break;
+    }
     --cursor;
   }
 
@@ -204,11 +209,18 @@ size_t BackgroundTracingHelper::GetIdSuffixPos(StringView string) {
     return 0;
 
   // A valid suffix must be preceded by an underscore.
-  if (string[cursor - 1] != '_')
+  // SAFETY: cursor is 2 or more and not EOS per checks above.
+  if (UNSAFE_BUFFERS(string[cursor - 1]) != '_') {
     return 0;
+  }
 
   // Return the location of the underscore.
   return cursor - 1;
+}
+
+bool BackgroundTracingHelper::MarkNameIsTrigger(StringView mark_name) {
+  return mark_name.starts_with(kTriggerPrefix) &&
+         mark_name.length() >= std::size(kTriggerPrefix);
 }
 
 std::pair<StringView, std::optional<uint32_t>>
@@ -216,23 +228,23 @@ BackgroundTracingHelper::SplitMarkNameAndId(StringView mark_name) {
   DCHECK(MarkNameIsTrigger(mark_name));
   // Extract a sequence number suffix, if it exists.
   mark_name = StringView(mark_name, std::size(kTriggerPrefix) - 1);
-  size_t sequence_number_pos = GetIdSuffixPos(mark_name);
+  wtf_size_t sequence_number_pos = GetIdSuffixPos(mark_name);
   if (sequence_number_pos == 0) {
     return std::make_pair(mark_name, std::nullopt);
   }
   auto suffix = StringView(mark_name, sequence_number_pos + 1);
   mark_name = StringView(mark_name, 0, sequence_number_pos);
-  bool result = false;
-  int seq_num = CharactersToInt(suffix, NumberParsingOptions(), &result);
-  if (!result) {
-    return std::make_pair(mark_name, std::nullopt);
-  }
-  return std::make_pair(mark_name, seq_num);
+  return std::make_pair(mark_name, StringToUint(suffix, {}));
 }
 
 // static
 uint32_t BackgroundTracingHelper::MD5Hash32(std::string_view string) {
   return MD5Hash32ForBackgroundTracingHelper(string);
+}
+
+// static
+uint64_t BackgroundTracingHelper::SHA256Hash64(std::string_view string) {
+  return SHA256Hash64ForBackgroundTracingHelper(string);
 }
 
 // static

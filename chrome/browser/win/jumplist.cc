@@ -256,7 +256,7 @@ JumpList::JumpList(Profile* profile)
 
   // Register as TopSitesObserver so that we can update ourselves when the
   // TopSites changes. TopSites updates itself after a delay. This is especially
-  // noticable when your profile is empty.
+  // noticeable when your profile is empty.
   scoped_refptr<history::TopSites> top_sites =
       TopSitesFactory::GetForProfile(profile_);
   if (top_sites)
@@ -439,6 +439,10 @@ void JumpList::ProcessTabRestoreServiceNotification() {
         AddGroup(static_cast<const sessions::tab_restore::Group&>(*entry),
                  profile_dir, kRecentlyClosedItems);
         break;
+      case sessions::tab_restore::Type::SPLIT:
+        AddSplit(static_cast<const sessions::tab_restore::Split&>(*entry),
+                 profile_dir, kRecentlyClosedItems);
+        break;
     }
   }
 
@@ -528,6 +532,19 @@ void JumpList::AddGroup(const sessions::tab_restore::Group& group,
   for (const auto& tab : group.tabs) {
     if (!AddTab(*tab, cmd_line_profile_dir, max_items))
       return;
+  }
+}
+
+void JumpList::AddSplit(const sessions::tab_restore::Split& split,
+                        const base::FilePath& cmd_line_profile_dir,
+                        size_t max_items) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK(!split.tabs.empty());
+
+  for (const auto& tab : split.tabs) {
+    if (!AddTab(*tab, cmd_line_profile_dir, max_items)) {
+      return;
+    }
   }
 }
 

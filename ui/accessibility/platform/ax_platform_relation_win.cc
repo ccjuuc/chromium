@@ -10,20 +10,19 @@
 
 #include "base/compiler_specific.h"
 #include "base/no_destructor.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "third_party/iaccessible2/ia2_api_all.h"
 #include "ui/accessibility/platform/ax_platform_node_base.h"
 #include "ui/accessibility/platform/ax_platform_node_delegate.h"
-#include "ui/base/win/atl_module.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 
 namespace ui {
 
-AXPlatformRelationWin::AXPlatformRelationWin() {
-  win::CreateATLModuleIfNeeded();
-}
+AXPlatformRelationWin::AXPlatformRelationWin(std::wstring type)
+    : type_(std::move(type)) {}
 
-AXPlatformRelationWin::~AXPlatformRelationWin() {}
+AXPlatformRelationWin::~AXPlatformRelationWin() = default;
 
 std::wstring GetIA2RelationFromIntAttr(ax::mojom::IntAttribute attribute) {
   switch (attribute) {
@@ -219,10 +218,6 @@ int AXPlatformRelationWin::EnumerateRelationships(
   return total_count;
 }
 
-void AXPlatformRelationWin::Initialize(const std::wstring& type) {
-  type_ = type;
-}
-
 void AXPlatformRelationWin::Invalidate() {
   targets_.clear();
 }
@@ -276,8 +271,11 @@ IFACEMETHODIMP AXPlatformRelationWin::get_targets(LONG max_targets,
   if (count == 0)
     return S_FALSE;
 
+  // SAFETY: trust that `targets` has size >= `max_targets`.
+  auto target_span =
+      UNSAFE_BUFFERS(base::span(targets, base::checked_cast<size_t>(count)));
   for (LONG i = 0; i < count; ++i) {
-    HRESULT result = get_target(i, &UNSAFE_TODO(targets[i]));
+    HRESULT result = get_target(i, &target_span[i]);
     if (result != S_OK)
       return result;
   }

@@ -13,7 +13,7 @@
 #include "third_party/blink/public/common/webid/login_status_account.h"
 #include "third_party/blink/public/common/webid/login_status_options.h"
 #include "third_party/blink/public/mojom/webauthn/authenticator.mojom-blink.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom-blink.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_arraybuffer_arraybufferview.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_authentication_extensions_client_inputs.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_authentication_extensions_client_outputs.h"
@@ -25,9 +25,6 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_authentication_extensions_prf_inputs.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_authentication_extensions_prf_outputs.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_authentication_extensions_prf_values.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_authentication_extensions_supplemental_pub_keys_inputs.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_authentication_extensions_supplemental_pub_keys_outputs.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_cable_authentication_data.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_identity_credential_request_options_context.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_identity_provider_account.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_identity_provider_request_options.h"
@@ -59,10 +56,16 @@ const int32_t kCoseAlgorithmEs256 =
 const int32_t kCoseAlgorithmRs256 =
     base::strict_cast<int32_t>(device::CoseAlgorithmIdentifier::kRs256);
 
-static blink::V8UnionArrayBufferOrArrayBufferView* arrayBufferOrView(
-    const uint8_t* data,
-    size_t size);
-static Vector<uint8_t> vectorOf(const uint8_t* data, size_t size);
+static blink::V8UnionArrayBufferOrArrayBufferView* ArrayBufferOrView(
+    base::span<const uint8_t> data) {
+  return blink::MakeGarbageCollected<
+      blink::V8UnionArrayBufferOrArrayBufferView>(
+      blink::DOMArrayBuffer::Create(data));
+}
+
+static Vector<uint8_t> VectorOf(base::span<const uint8_t> data) {
+  return Vector<uint8_t>(data);
+}
 
 TEST(CredentialManagerTypeConvertersTest, RpContextTest) {
   blink::test::TaskEnvironment task_environment;
@@ -133,9 +136,7 @@ MATCHER_P(DOMArrayBufferEqualTo, vector, "") {
   if (arg->ByteLength() != std::size(vector)) {
     return false;
   }
-  uint8_t* data = (uint8_t*)arg->Data();
-  return std::equal(data, UNSAFE_TODO(data + arg->ByteLength()),
-                    std::begin(vector));
+  return arg->ByteSpan() == vector;
 }
 
 MATCHER_P(UnionDOMArrayBufferOrViewEqualTo, vector, "") {
@@ -145,9 +146,7 @@ MATCHER_P(UnionDOMArrayBufferOrViewEqualTo, vector, "") {
   if (buffer->ByteLength() != std::size(vector)) {
     return false;
   }
-  uint8_t* data = (uint8_t*)buffer->Data();
-  return std::equal(data, UNSAFE_TODO(data + buffer->ByteLength()),
-                    std::begin(vector));
+  return buffer->ByteSpan() == vector;
 }
 
 TEST(CredentialManagerTypeConvertersTest,
@@ -206,25 +205,6 @@ TEST(CredentialManagerTypeConvertersTest,
   EXPECT_TRUE(blink_type->hasGetCredBlob());
   EXPECT_THAT(blink_type->getCredBlob(),
               DOMArrayBufferEqualTo(Vector<uint8_t>{1, 2, 3}));
-}
-
-TEST(CredentialManagerTypeConvertersTest,
-     AuthenticationExtensionsClientOutputs_supplementalPubKeys) {
-  auto mojo_type =
-      blink::mojom::blink::AuthenticationExtensionsClientOutputs::New();
-  mojo_type->supplemental_pub_keys =
-      blink::mojom::blink::SupplementalPubKeysResponse::New(
-          /*signatures=*/Vector<Vector<uint8_t>>{{1, 2, 3}, {4, 5, 6}});
-
-  auto* blink_type =
-      ConvertTo<blink::AuthenticationExtensionsClientOutputs*>(mojo_type);
-
-  EXPECT_TRUE(blink_type->hasSupplementalPubKeys());
-  ASSERT_EQ(blink_type->supplementalPubKeys()->signatures().size(), 2u);
-  EXPECT_THAT(blink_type->supplementalPubKeys()->signatures()[0],
-              DOMArrayBufferEqualTo(Vector<uint8_t>{1, 2, 3}));
-  EXPECT_THAT(blink_type->supplementalPubKeys()->signatures()[1],
-              DOMArrayBufferEqualTo(Vector<uint8_t>{4, 5, 6}));
 }
 
 TEST(CredentialManagerTypeConvertersTest,
@@ -296,13 +276,13 @@ TEST(CredentialManagerTypeConvertersTest,
   blink_type->setExtensions(
       blink::AuthenticationExtensionsClientInputs::Create());
   blink_type->extensions()->setAppid("app-id");
-  blink_type->setChallenge(arrayBufferOrView(kSample, std::size(kSample)));
+  blink_type->setChallenge(ArrayBufferOrView(kSample));
 
   blink::mojom::blink::PublicKeyCredentialRequestOptionsPtr mojo_type =
       ConvertTo<blink::mojom::blink::PublicKeyCredentialRequestOptionsPtr>(
           *blink_type);
 
-  auto sample_vector = vectorOf(kSample, std::size(kSample));
+  auto sample_vector = VectorOf(kSample);
   ASSERT_EQ(mojo_type->extensions->appid, "app-id");
   ASSERT_EQ(mojo_type->challenge, sample_vector);
 }
@@ -341,14 +321,14 @@ TEST(CredentialManagerTypeConvertersTest,
       blink::AuthenticationExtensionsClientInputs::Create();
   blink::AuthenticationExtensionsLargeBlobInputs* large_blob =
       blink::AuthenticationExtensionsLargeBlobInputs::Create();
-  large_blob->setWrite(arrayBufferOrView(kSample, std::size(kSample)));
+  large_blob->setWrite(ArrayBufferOrView(kSample));
   blink_type->setLargeBlob(large_blob);
 
   blink::mojom::blink::AuthenticationExtensionsClientInputsPtr mojo_type =
       ConvertTo<blink::mojom::blink::AuthenticationExtensionsClientInputsPtr>(
           *blink_type);
 
-  auto sample_vector = vectorOf(kSample, std::size(kSample));
+  auto sample_vector = VectorOf(kSample);
   ASSERT_EQ(mojo_type->large_blob_write, sample_vector);
 }
 
@@ -417,35 +397,6 @@ TEST(CredentialManagerTypeConvertersTest,
           &*expected->origin));
 }
 
-TEST(CredentialManagerTypeConvertersTest,
-     AuthenticationExtensionsClientInputsTest_supplementalPubKeys) {
-  blink::AuthenticationExtensionsClientInputs* blink_type =
-      blink::AuthenticationExtensionsClientInputs::Create();
-  blink::AuthenticationExtensionsSupplementalPubKeysInputs*
-      supplemental_pub_keys =
-          blink::AuthenticationExtensionsSupplementalPubKeysInputs::Create();
-
-  const char attestation_format[] = "format";
-  supplemental_pub_keys->setAttestation("indirect");
-  supplemental_pub_keys->setAttestationFormats(
-      Vector({blink::String::FromUTF8(attestation_format)}));
-  supplemental_pub_keys->setScopes(
-      Vector({blink::String::FromUTF8("device"),
-              blink::String::FromUTF8("provider")}));
-  blink_type->setSupplementalPubKeys(supplemental_pub_keys);
-
-  blink::mojom::blink::AuthenticationExtensionsClientInputsPtr mojo_type =
-      ConvertTo<blink::mojom::blink::AuthenticationExtensionsClientInputsPtr>(
-          *blink_type);
-
-  auto expected = blink::mojom::blink::SupplementalPubKeysRequest::New(
-      /*device_scope_requested=*/true,
-      /*provider_scope_requested=*/true,
-      blink::mojom::blink::AttestationConveyancePreference::INDIRECT,
-      Vector<blink::String>({blink::String::FromUTF8(attestation_format)}));
-  ASSERT_EQ(*(mojo_type->supplemental_pub_keys), *expected);
-}
-
 static ::testing::Matcher<const mojo::InlinedStructPtr<
     blink::mojom::blink::PublicKeyCredentialParameters>>
 EqPublicKeyCredentialParameters(blink::mojom::PublicKeyCredentialType type,
@@ -497,10 +448,9 @@ TEST(CredentialManagerTypeConvertersTest,
   blink_creation_options->setRp(blink_rp_entity);
   blink::PublicKeyCredentialUserEntity* blink_user =
       blink::PublicKeyCredentialUserEntity::Create();
-  blink_user->setId(arrayBufferOrView(kSample, std::size(kSample)));
+  blink_user->setId(ArrayBufferOrView(kSample));
   blink_creation_options->setUser(blink_user);
-  blink_creation_options->setChallenge(
-      arrayBufferOrView(kSample, std::size(kSample)));
+  blink_creation_options->setChallenge(ArrayBufferOrView(kSample));
 
   blink::AuthenticationExtensionsClientInputs* blink_extensions =
       blink::AuthenticationExtensionsClientInputs::Create();
@@ -588,7 +538,7 @@ TEST(CredentialManagerTypeConvertersTest,
       blink::AuthenticationExtensionsPRFInputs::Create();
   blink::AuthenticationExtensionsPRFValues* prf_values =
       blink::AuthenticationExtensionsPRFValues::Create();
-  prf_values->setFirst(arrayBufferOrView(kSample, std::size(kSample)));
+  prf_values->setFirst(ArrayBufferOrView(kSample));
   prf_inputs->setEval(prf_values);
   blink_type->setPrf(prf_inputs);
 
@@ -596,26 +546,12 @@ TEST(CredentialManagerTypeConvertersTest,
       ConvertTo<blink::mojom::blink::AuthenticationExtensionsClientInputsPtr>(
           *blink_type);
 
-  auto sample_vector = vectorOf(kSample, std::size(kSample));
+  auto sample_vector = VectorOf(kSample);
   Vector<blink::mojom::blink::PRFValuesPtr> expected_prf_values;
   expected_prf_values.emplace_back(blink::mojom::blink::PRFValues::New(
       std::optional<Vector<uint8_t>>(), sample_vector,
       std::optional<Vector<uint8_t>>()));
   ASSERT_EQ(mojo_type->prf_inputs[0]->first, expected_prf_values[0]->first);
-}
-
-static blink::V8UnionArrayBufferOrArrayBufferView* arrayBufferOrView(
-    const uint8_t* data,
-    size_t size) {
-  return blink::MakeGarbageCollected<
-      blink::V8UnionArrayBufferOrArrayBufferView>(
-      blink::DOMArrayBuffer::Create(UNSAFE_TODO(base::span(data, size))));
-}
-
-static Vector<uint8_t> vectorOf(const uint8_t* data, size_t size) {
-  Vector<uint8_t> vector;
-  std::copy(data, UNSAFE_TODO(data + size), std::back_insert_iterator(vector));
-  return vector;
 }
 
 // Crash test for crbug.com/347715555.

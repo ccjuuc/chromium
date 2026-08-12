@@ -240,16 +240,6 @@ export class SettingsInternetPageElement extends
         },
       },
 
-      /**
-       * Return true if instant hotspot rebrand feature flag is enabled
-       */
-      isInstantHotspotRebrandEnabled_: {
-        type: Boolean,
-        value() {
-          return loadTimeData.valueExists('isInstantHotspotRebrandEnabled') &&
-              loadTimeData.getBoolean('isInstantHotspotRebrandEnabled');
-        },
-      },
 
 
       /**
@@ -371,10 +361,10 @@ export class SettingsInternetPageElement extends
     };
   }
 
-  defaultNetwork: OncMojo.NetworkStateProperties|null|undefined;
-  deviceStates: Record<string, OncMojo.DeviceStateProperties>|undefined;
-  hotspotInfo: HotspotInfo|undefined;
-  managedNetworkAvailable: boolean;
+  declare defaultNetwork: OncMojo.NetworkStateProperties|null|undefined;
+  declare deviceStates: Record<string, OncMojo.DeviceStateProperties>|undefined;
+  declare hotspotInfo: HotspotInfo|undefined;
+  declare managedNetworkAvailable: boolean;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -383,40 +373,39 @@ export class SettingsInternetPageElement extends
     Setting.kCellularAddApn,
   ]);
 
-  private addConnectionExpanded_: boolean;
+  declare private addConnectionExpanded_: boolean;
   private browserProxy_: InternetPageBrowserProxy;
-  private cellularSetupDialogPageName_: CellularSetupPageName|null;
+  declare private cellularSetupDialogPageName_: CellularSetupPageName|null;
   private detailType_: NetworkType|null;
-  private errorToastMessage_: string;
-  private eSimNetworkState_: NetworkStateProperties;
-  private globalPolicy_: GlobalPolicy|undefined;
-  private hasActiveCellularNetwork_: boolean;
-  private readonly isApnRevampEnabled_: boolean;
-  private isConnectedToNonCellularNetwork_: boolean;
-  private isNumCustomApnsLimitReached_: boolean;
-  private isInstantHotspotRebrandEnabled_: boolean;
-  private isApnRevampAndAllowApnModificationPolicyEnabled_: boolean;
-  private isBuiltInVpnManagementBlocked_: boolean;
-  private knownNetworksType_: NetworkType;
+  declare private errorToastMessage_: string;
+  declare private eSimNetworkState_: NetworkStateProperties;
+  declare private globalPolicy_: GlobalPolicy|undefined;
+  declare private hasActiveCellularNetwork_: boolean;
+  declare private readonly isApnRevampEnabled_: boolean;
+  declare private isConnectedToNonCellularNetwork_: boolean;
+  declare private isNumCustomApnsLimitReached_: boolean;
+  declare private isApnRevampAndAllowApnModificationPolicyEnabled_: boolean;
+  declare private isBuiltInVpnManagementBlocked_: boolean;
+  declare private knownNetworksType_: NetworkType;
   private networkConfig_: CrosNetworkConfigInterface;
-  private passpointSubscription_: PasspointSubscription|undefined;
-  private pendingShowCellularSetupDialogAttemptPageName_: CellularSetupPageName|
-      null;
-  private pendingShowSimLockDialog_: boolean;
-  private section_: Section;
-  private showCellularSetupDialog_: boolean;
-  private showESimProfileRenameDialog_: boolean;
-  private showESimRemoveProfileDialog_: boolean;
-  private showHotspotConfigDialog_: boolean;
-  private showInternetConfig_: boolean;
-  private showSimLockDialog_: boolean;
-  private isProviderLocked_: boolean;
-  private isDeviceUpdating_: boolean;
-  private showSpinner_: boolean;
-  private subpageType_: NetworkType;
-  private vpnIsProhibited_: boolean;
-  private vpnProviders_: VpnProvider[];
-  private apnMenuTooltipsPosition_: string;
+  declare private passpointSubscription_: PasspointSubscription|undefined;
+  declare private pendingShowCellularSetupDialogAttemptPageName_:
+      CellularSetupPageName|null;
+  declare private pendingShowSimLockDialog_: boolean;
+  declare private section_: Section;
+  declare private showCellularSetupDialog_: boolean;
+  declare private showESimProfileRenameDialog_: boolean;
+  declare private showESimRemoveProfileDialog_: boolean;
+  declare private showHotspotConfigDialog_: boolean;
+  declare private showInternetConfig_: boolean;
+  declare private showSimLockDialog_: boolean;
+  declare private isProviderLocked_: boolean;
+  declare private isDeviceUpdating_: boolean;
+  declare private showSpinner_: boolean;
+  declare private subpageType_: NetworkType;
+  declare private vpnIsProhibited_: boolean;
+  declare private vpnProviders_: VpnProvider[];
+  declare private apnMenuTooltipsPosition_: string;
 
   constructor() {
     super();
@@ -779,8 +768,7 @@ export class SettingsInternetPageElement extends
     // TODO(khorimoto): Remove once Cellular/Tether are split into their own
     // sections.
     if (this.subpageType_ === NetworkType.kCellular ||
-        (this.subpageType_ === NetworkType.kTether &&
-         !this.isInstantHotspotRebrandEnabled_)) {
+        (this.subpageType_ === NetworkType.kTether)) {
       return this.i18n('OncTypeMobile');
     }
     return this.i18n(
@@ -822,8 +810,7 @@ export class SettingsInternetPageElement extends
     // If both Tether and Cellular are enabled, use the Cellular device state
     // when directly navigating to the Tether page.
     if (subpageType === NetworkType.kTether &&
-        this.deviceStates![NetworkType.kCellular] &&
-        !this.isInstantHotspotRebrandEnabled_) {
+        this.deviceStates![NetworkType.kCellular]) {
       subpageType = NetworkType.kCellular;
     }
     return deviceStates![subpageType];
@@ -973,12 +960,9 @@ export class SettingsInternetPageElement extends
       return false;
     }
 
-    const isVpnConfigProhibited =
-        this.prefs.vpn_config_allowed && !this.prefs.vpn_config_allowed.value;
-    const hasAlwaysOnVpnActivated = this.prefs.arc && this.prefs.arc.vpn &&
-        this.prefs.arc.vpn.always_on &&
-        this.prefs.arc.vpn.always_on.vpn_package &&
-        !!this.prefs.arc.vpn.always_on.vpn_package.value;
+    const isVpnConfigProhibited = !this.getPref('vpn_config_allowed').value;
+    const hasAlwaysOnVpnActivated =
+        !!this.getPref('arc.vpn.always_on.vpn_package').value;
     return isVpnConfigProhibited && hasAlwaysOnVpnActivated;
   }
 

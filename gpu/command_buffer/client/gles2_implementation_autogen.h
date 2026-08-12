@@ -316,8 +316,6 @@ GLint GetAttribLocation(GLuint program, const char* name) override;
 
 void GetBooleanv(GLenum pname, GLboolean* params) override;
 
-void GetBooleani_v(GLenum pname, GLuint index, GLboolean* data) override;
-
 void GetBufferParameteri64v(GLenum target,
                             GLenum pname,
                             GLint64* params) override;
@@ -895,65 +893,10 @@ void BindVertexArrayOES(GLuint array) override;
 
 void FramebufferParameteri(GLenum target, GLenum pname, GLint param) override;
 
-void BindImageTexture(GLuint unit,
-                      GLuint texture,
-                      GLint level,
-                      GLboolean layered,
-                      GLint layer,
-                      GLenum access,
-                      GLenum format) override;
-
-void DispatchCompute(GLuint num_groups_x,
-                     GLuint num_groups_y,
-                     GLuint num_groups_z) override;
-
-void DispatchComputeIndirect(GLintptr offset) override;
-
-void DrawArraysIndirect(GLenum mode, const void* offset) override;
-
-void DrawElementsIndirect(GLenum mode,
-                          GLenum type,
-                          const void* offset) override;
-
-void GetProgramInterfaceiv(GLuint program,
-                           GLenum program_interface,
-                           GLenum pname,
-                           GLint* params) override;
-
-GLuint GetProgramResourceIndex(GLuint program,
-                               GLenum program_interface,
-                               const char* name) override;
-
-void GetProgramResourceName(GLuint program,
-                            GLenum program_interface,
-                            GLuint index,
-                            GLsizei bufsize,
-                            GLsizei* length,
-                            char* name) override;
-
-void GetProgramResourceiv(GLuint program,
-                          GLenum program_interface,
-                          GLuint index,
-                          GLsizei prop_count,
-                          const GLenum* props,
-                          GLsizei bufsize,
-                          GLsizei* length,
-                          GLint* params) override;
-
-GLint GetProgramResourceLocation(GLuint program,
-                                 GLenum program_interface,
-                                 const char* name) override;
-
-void MemoryBarrierEXT(GLbitfield barriers) override;
-
-void MemoryBarrierByRegion(GLbitfield barriers) override;
-
 GLuint GetMaxValueInBufferCHROMIUM(GLuint buffer_id,
                                    GLsizei count,
                                    GLenum type,
                                    GLuint offset) override;
-
-GLboolean EnableFeatureCHROMIUM(const char* feature) override;
 
 void* MapBufferCHROMIUM(GLuint target, GLenum access) override;
 
@@ -965,17 +908,6 @@ void* MapBufferSubDataCHROMIUM(GLuint target,
                                GLenum access) override;
 
 void UnmapBufferSubDataCHROMIUM(const void* mem) override;
-
-void* MapBufferRange(GLenum target,
-                     GLintptr offset,
-                     GLsizeiptr size,
-                     GLbitfield access) override;
-
-GLboolean UnmapBuffer(GLenum target) override;
-
-void FlushMappedBufferRange(GLenum target,
-                            GLintptr offset,
-                            GLsizeiptr size) override;
 
 void* MapTexSubImage2DCHROMIUM(GLenum target,
                                GLint level,
@@ -1096,6 +1028,11 @@ void FlushDriverCachesCHROMIUM() override;
 GLuint GetLastFlushIdCHROMIUM() override;
 
 void SetActiveURLCHROMIUM(const char* url) override;
+
+void GetBufferSubDataCHROMIUM(GLenum target,
+                              GLintptr offset,
+                              GLsizeiptr size,
+                              void* data) override;
 
 void ContextVisibilityHintCHROMIUM(GLboolean visibility) override;
 
@@ -1221,14 +1158,15 @@ GLboolean IsEnablediOES(GLenum target, GLuint index) override;
 
 void ProvokingVertexANGLE(GLenum provokeMode) override;
 
-void FramebufferMemorylessPixelLocalStorageANGLE(
-    GLint plane,
-    GLenum internalformat) override;
+void FramebufferMemorylessPixelLocalStorageANGLE(GLint plane,
+                                                 GLenum internalformat,
+                                                 GLbitfield usage) override;
 
 void FramebufferTexturePixelLocalStorageANGLE(GLint plane,
                                               GLuint backingtexture,
                                               GLint level,
-                                              GLint layer) override;
+                                              GLint layer,
+                                              GLbitfield usage) override;
 
 void FramebufferPixelLocalClearValuefvANGLE(GLint plane,
                                             const GLfloat* value) override;
@@ -1243,6 +1181,8 @@ void BeginPixelLocalStorageANGLE(GLsizei count, const GLenum* loadops) override;
 
 void EndPixelLocalStorageANGLE(GLsizei count, const GLenum* storeops) override;
 
+void EndPixelLocalStorageImplicitANGLE() override;
+
 void PixelLocalStorageBarrierANGLE() override;
 
 void FramebufferPixelLocalStorageInterruptANGLE() override;
@@ -1256,6 +1196,10 @@ void GetFramebufferPixelLocalStorageParameterfvANGLE(GLint plane,
 void GetFramebufferPixelLocalStorageParameterivANGLE(GLint plane,
                                                      GLenum pname,
                                                      GLint* params) override;
+
+void GetFramebufferPixelLocalStorageParameteruivANGLE(GLint plane,
+                                                      GLenum pname,
+                                                      GLuint* params) override;
 
 void ClipControlEXT(GLenum origin, GLenum depth) override;
 

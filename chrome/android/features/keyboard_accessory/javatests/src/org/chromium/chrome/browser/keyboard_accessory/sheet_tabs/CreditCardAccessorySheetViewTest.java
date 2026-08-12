@@ -41,6 +41,7 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
@@ -72,6 +73,7 @@ import java.util.concurrent.atomic.AtomicReference;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @SuppressWarnings("DoNotMock") // Mocks GURL
+@Batch(Batch.PER_CLASS)
 public class CreditCardAccessorySheetViewTest {
     private static final String CUSTOM_ICON_URL = "https://www.example.com/image.png";
     private static final Bitmap TEST_CARD_ART_IMAGE =
@@ -106,7 +108,7 @@ public class CreditCardAccessorySheetViewTest {
                             new KeyboardAccessoryData.Tab[] {
                                 new KeyboardAccessoryData.Tab(
                                         "Credit Cards",
-                                        null,
+                                        0,
                                         null,
                                         R.layout.credit_card_accessory_sheet,
                                         AccessoryTabType.CREDIT_CARDS,
@@ -199,7 +201,7 @@ public class CreditCardAccessorySheetViewTest {
         assertThat(getChipText(R.id.exp_year), is("2034"));
         assertThat(getChipText(R.id.cardholder), is("Kirby Puckett"));
         // Verify that the icon is correctly set.
-        ImageView iconImageView = (ImageView) mView.get().getChildAt(0).findViewById(R.id.icon);
+        ImageView iconImageView = mView.get().getChildAt(0).findViewById(R.id.icon);
         Drawable expectedIcon =
                 mActivityTestRule.getActivity().getDrawable(R.drawable.visa_metadata_card);
         assertTrue(getBitmap(expectedIcon).sameAs(getBitmap(iconImageView.getDrawable())));
@@ -250,7 +252,7 @@ public class CreditCardAccessorySheetViewTest {
         assertThat(getChipText(R.id.cardholder), is("Kirby Puckett"));
         // Verify that the icon is set to the cached image returned by
         // AutofillImageFetcher.getImageIfAvailable.
-        ImageView iconImageView = (ImageView) mView.get().getChildAt(0).findViewById(R.id.icon);
+        ImageView iconImageView = mView.get().getChildAt(0).findViewById(R.id.icon);
         assertTrue(
                 ((BitmapDrawable) iconImageView.getDrawable())
                         .getBitmap()
@@ -296,7 +298,7 @@ public class CreditCardAccessorySheetViewTest {
         assertThat(getChipText(R.id.exp_year), is("2034"));
         assertThat(getChipText(R.id.cardholder), is("Kirby Puckett"));
         // Verify that the icon is set to the drawable corresponding to `visaCC`.
-        ImageView iconImageView = (ImageView) mView.get().getChildAt(0).findViewById(R.id.icon);
+        ImageView iconImageView = mView.get().getChildAt(0).findViewById(R.id.icon);
         Drawable expectedIcon =
                 mActivityTestRule.getActivity().getDrawable(R.drawable.visa_metadata_card);
         assertTrue(getBitmap(expectedIcon).sameAs(getBitmap(iconImageView.getDrawable())));
@@ -468,7 +470,7 @@ public class CreditCardAccessorySheetViewTest {
         assertThat(detailsText.getText(), is(kDetailsText));
 
         // Verify that the icon is correctly set.
-        ImageView iconImageView = (ImageView) mView.get().getChildAt(0).findViewById(R.id.icon);
+        ImageView iconImageView = mView.get().getChildAt(0).findViewById(R.id.icon);
         Drawable expectedIcon =
                 mActivityTestRule
                         .getActivity()

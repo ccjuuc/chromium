@@ -142,7 +142,7 @@ std::string GenerateConfigurationLogForController(
   DCHECK(!controllers_params.empty());
 
   base::flat_map<uint64_t, std::string> base_connectors_to_keys;
-  base::Value::Dict drm_device;
+  base::DictValue drm_device;
   std::string base_connector_key;
   for (const auto& param : controllers_params) {
     const int64_t next_base_connector = param.base_connector_id;
@@ -150,7 +150,7 @@ std::string GenerateConfigurationLogForController(
     if (it == base_connectors_to_keys.end()) {
       base_connector_key = base::StrCat(
           {"base_connector=", base::NumberToString(next_base_connector)});
-      drm_device.Set(base_connector_key, base::Value::List());
+      drm_device.Set(base_connector_key, base::ListValue());
 
       base_connectors_to_keys.insert(
           std::make_pair(next_base_connector, base_connector_key));
@@ -178,7 +178,7 @@ std::string GenerateConfigurationLogForController(
   }
   const std::string device_name =
       controllers_params.back().drm->device_path().BaseName().value();
-  base::Value::Dict drm_config;
+  base::DictValue drm_config;
   drm_config.Set(device_name, std::move(drm_device));
   std::string drm_config_log;
   const int json_writer_options = IsPrettyPrintDrmModesetConfigLogsEnabled()
@@ -344,7 +344,7 @@ void ScreenManager::RemoveDisplayControllers(
 bool ScreenManager::ConfigureDisplayControllers(
     const std::vector<ControllerConfigParams>& controllers_params,
     display::ModesetFlags modeset_flags) {
-  TRACE_EVENT_BEGIN2(
+  TRACE_EVENT_BEGIN(
       "drm", "ScreenManager::ConfigureDisplayControllers", "params",
       ([modeset_flags,
         &controllers_params](perfetto::TracedValue context) -> void {
@@ -412,8 +412,7 @@ bool ScreenManager::ConfigureDisplayControllers(
   if (commit_modeset && config_success)
     UpdateControllerToWindowMapping();
 
-  TRACE_EVENT_END2("drm", "ScreenManager::ConfigureDisplayControllers", "after",
-                   this, "success", config_success);
+  TRACE_EVENT_END("drm", "after", this, "success", config_success);
   return config_success;
 }
 

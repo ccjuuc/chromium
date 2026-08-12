@@ -13,6 +13,7 @@
 #include "third_party/blink/renderer/platform/fonts/font_baseline.h"
 #include "third_party/blink/renderer/platform/fonts/shaping/harfbuzz_shaper.h"
 #include "third_party/blink/renderer/platform/fonts/shaping/shape_result_view.h"
+#include "third_party/blink/renderer/platform/text/bidi_paragraph.h"
 
 namespace blink {
 
@@ -28,6 +29,51 @@ bool IsRightMostOffset(const ShapeResult& shape_result, unsigned offset) {
   if (shape_result.IsRtl())
     return offset == 0;
   return offset == shape_result.NumCharacters();
+}
+
+// Forced line breaks per CSS Text 3: a preserved segment break (line feed) or
+// any character in the UAX#14 BK/NL line-breaking class.
+// https://drafts.csswg.org/css-text-3/#forced-line-break
+bool IsForcedLineBreak(UChar c) {
+  return c == uchar::kLineFeed || c == uchar::kLineTabulation ||
+         c == uchar::kFormFeed || c == uchar::kNextLine ||
+         c == uchar::kLineSeparator || c == uchar::kParagraphSeparator;
+}
+
+String SuppressLineBreaks(const String& text) {
+  const wtf_size_t first_break = text.Find(IsForcedLineBreak);
+  if (first_break == kNotFound) {
+    return text;
+  }
+
+  StringBuilder builder;
+  builder.ReserveCapacity(text.length());
+  if (first_break > 0) {
+    builder.Append(StringView(text, 0, first_break));
+  }
+  wtf_size_t i = first_break;
+  while (i < text.length()) {
+    UChar c = text[i++];
+    if (!IsForcedLineBreak(c)) {
+      builder.Append(c);
+      continue;
+    }
+    // Collapse forced line breaks.
+    for (; i < text.length(); ++i) {
+      if (!IsForcedLineBreak(text[i])) {
+        break;
+      }
+    }
+    // TODO(crbug.com/487634228): Implement the segment break transformation for
+    // east asian width until CSSWG resolves the spec, which is deferred the
+    // behavior of Discarding Line Breaks Adjacent to Ambiguous Characters to
+    // Level 4 of css-text.
+    // https://github.com/w3c/csswg-drafts/issues/5017
+    // https://drafts.csswg.org/css-text-3/#line-break-transform
+    builder.Append(uchar::kSpace);
+  }
+
+  return builder.ToString();
 }
 
 }  // namespace
@@ -51,7 +97,7 @@ String LineTruncator::ComputeEllipsisText() const {
   const ComputedStyle& style = EllipsisStyle();
   const TextOverflowData& text_overflow = style.TextOverflow();
   if (text_overflow.IsString() && !is_ellipsis_caused_by_line_clamp_) {
-    return text_overflow.StringValue();
+    return SuppressLineBreaks(text_overflow.StringValue());
   }
   return ellipsis_font_data_ && ellipsis_font_data_->GlyphForCharacter(
                                     uchar::kHorizontalEllipsis)
@@ -63,11 +109,35 @@ void LineTruncator::SetupEllipsis() {
   const Font* font = EllipsisStyle().GetFont();
   ellipsis_font_data_ = font->PrimaryFont();
   DCHECK(ellipsis_font_data_);
-  ellipsis_text_ = ComputeEllipsisText();
-  HarfBuzzShaper shaper(ellipsis_text_);
-  ellipsis_shape_result_ =
-      ShapeResultView::Create(shaper.Shape(font, line_direction_));
-  ellipsis_width_ = ellipsis_shape_result_->SnappedWidth();
+  String ellipsis_text = ComputeEllipsisText();
+  if (BidiParagraph bidi;
+      RuntimeEnabledFeatures::TextOverflowStringEnabled() &&
+      Character::MaybeBidiRtl(ellipsis_text) &&
+      bidi.SetParagraph(ellipsis_text, line_direction_) &&
+      (!bidi.IsUnidirectional() || IsRtl(bidi.BaseDirection()))) {
+    BidiParagraph::Runs bidi_runs;
+    bidi.GetVisualRuns(ellipsis_text, &bidi_runs);
+    for (const BidiParagraph::Run& bidi_run : bidi_runs) {
+      String run_text = ellipsis_text.substr(bidi_run.start, bidi_run.Length());
+      HarfBuzzShaper shaper(run_text);
+      TextDirection run_direction = DirectionFromLevel(bidi_run.level);
+      const ShapeResultView* run_shape_result =
+          ShapeResultView::Create(shaper.Shape(font, run_direction));
+      ellipsis_shape_results_.push_back(
+          MakeGarbageCollected<const EllipsisShapeResult>(
+              *run_shape_result, run_text, bidi_run.level));
+      ellipsis_width_ += run_shape_result->SnappedWidth();
+    }
+  } else {
+    HarfBuzzShaper shaper(ellipsis_text);
+    const ShapeResultView* shape_result =
+        ShapeResultView::Create(shaper.Shape(font, line_direction_));
+    ellipsis_shape_results_.push_back(
+        MakeGarbageCollected<const EllipsisShapeResult>(*shape_result,
+                                                        ellipsis_text,
+                                                        /*bidi_level=*/0));
+    ellipsis_width_ = shape_result->SnappedWidth();
+  }
 }
 
 LayoutUnit LineTruncator::PlaceEllipsisNextTo(
@@ -80,7 +150,7 @@ LayoutUnit LineTruncator::PlaceEllipsisNextTo(
   DCHECK(ellipsized_layout_object);
   DCHECK(ellipsized_layout_object->IsInline());
   DCHECK(ellipsized_layout_object->IsText() ||
-         ellipsized_layout_object->IsAtomicInlineLevel());
+         ellipsized_layout_object->IsAtomicInline());
 
   // Now the offset of the ellpisis is determined. Place the ellpisis into the
   // line box.
@@ -95,16 +165,22 @@ LayoutUnit LineTruncator::PlaceEllipsisNextTo(
         line_style_->GetFontBaseline());
   }
 
-  DCHECK(ellipsis_text_);
-  DCHECK(ellipsis_shape_result_);
-  line_box->AddChild(
-      *ellipsized_layout_object,
-      use_first_line_style_ ? StyleVariant::kFirstLineEllipsis
-                            : StyleVariant::kStandardEllipsis,
-      ellipsis_shape_result_, ellipsis_text_,
-      LogicalRect(ellipsis_inline_offset, -ellipsis_metrics.ascent,
-                  ellipsis_width_, ellipsis_metrics.LineHeight()),
-      /* bidi_level */ 0);
+  DCHECK(ellipsis_shape_results_.size());
+  const StyleVariant style_variant = use_first_line_style_
+                                         ? StyleVariant::kFirstLineEllipsis
+                                         : StyleVariant::kStandardEllipsis;
+  LayoutUnit current_offset = ellipsis_inline_offset;
+  for (const auto& ellipsis_shape_result : ellipsis_shape_results_) {
+    LayoutUnit inline_size =
+        ellipsis_shape_result->shape_result->SnappedWidth();
+    line_box->AddChild(*ellipsized_layout_object, style_variant,
+                       ellipsis_shape_result->shape_result,
+                       ellipsis_shape_result->text,
+                       LogicalRect(current_offset, -ellipsis_metrics.ascent,
+                                   inline_size, ellipsis_metrics.LineHeight()),
+                       ellipsis_shape_result->bidi_level);
+    current_offset += inline_size;
+  }
   return ellipsis_inline_offset;
 }
 
@@ -430,7 +506,7 @@ void LineTruncator::HideChild(LogicalLineItem* child) {
     DCHECK(fragment.IsMonolithic());
     LayoutObject* layout_object = fragment.GetMutableLayoutObject();
     DCHECK(layout_object);
-    DCHECK(layout_object->IsAtomicInlineLevel());
+    DCHECK(layout_object->IsAtomicInline());
     layout_object->SetIsTruncated(true);
     return;
   }

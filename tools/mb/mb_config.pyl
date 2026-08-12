@@ -26,16 +26,6 @@
   # (where each config name is a key in the 'configs' dict, below). MB uses
   # this dict to look up which config to use for a given bot.
   'builder_groups': {
-    'chrome': {
-      # Don't include unwind tables for linux-/mac-/win-/win64-chrome builders.
-      # They monitor binary size growth, which may be affected by the tables.
-      'linux-chrome': 'official_remoteexec',
-      'mac-chrome': 'official_remoteexec_mac_x64',
-      'win-branded-rel': 'chrome_branded_remoteexec_minimal_symbols',
-      'win-chrome': 'official_remoteexec_x86',
-      'win64-chrome': 'official_remoteexec_x64',
-    },
-
     'chrome.gpu.fyi': {
       'ChromeOS FYI Release Skylab (jacuzzi)': 'gpu_tests_chromeos_jacuzzi_release_trybot_dcheck_off_no_symbols_remoteexec_skylab',
     },
@@ -53,6 +43,7 @@
       'linux-pgo': 'official_linux_pgo',
       'mac-arm-pgo': 'official_mac_arm_pgo_with_symbols',
       'mac-pgo': 'official_mac_pgo_with_symbols',
+      'webview-arm64-pgo': 'official_webview_arm64_pgo',
       'win-arm64-pgo': 'official_win_arm64_pgo',
       'win32-pgo': 'official_x86_pgo',
       'win64-pgo': 'official_x64_pgo',
@@ -90,7 +81,7 @@
       'android_arm64_high_end-builder-perf-pgo': 'official_remoteexec_minimal_symbols_android_arm64_high_end_pgo',
       'chromecast-linux-builder-perf': 'cast_binary_size_remoteexec',
       'linux-builder-perf': 'official_linux_perf',
-      'linux-builder-perf-pgo': 'official_remoteexec_linux_perf_pgo',
+      'linux-builder-perf-pgo': 'official_remoteexec_perf_pgo',
       'linux-builder-perf-rel': 'official_linux_perf',
       'mac-arm-builder-perf': 'official_remoteexec_mac_arm_perf',
       'mac-arm-builder-perf-pgo': 'official_remoteexec_mac_arm_perf_pgo',
@@ -107,7 +98,7 @@
       'android_arm64-cfi-builder-perf-fyi': 'official_remoteexec_minimal_symbols_android_thin_lto_opt_arm64',
       'chromeos-kevin-builder-perf-fyi': 'chromeos_kevin_include_unwind_tables_official_remoteexec',
       'fuchsia-builder-perf-arm64': 'official_remoteexec_fuchsia_arm64_perf',
-      'fuchsia-builder-perf-arm64-pgo': 'official_remoteexec_fuchsia_arm64_perf_pgo',
+      'fuchsia-builder-perf-arm64-pgo': 'official_remoteexec_fuchsia_arm64_perf',
       'linux-chromium-builder-perf': 'chromium_remoteexec_linux',
     },
 
@@ -124,7 +115,7 @@
       'android_arm64_high_end-builder-perf-pgo': 'official_remoteexec_minimal_symbols_android_arm64_high_end_pgo',
       'chromecast-linux-builder-perf': 'cast_binary_size_remoteexec',
       'linux-builder-perf': 'official_linux_perf',
-      'linux-builder-perf-pgo': 'official_remoteexec_linux_perf_pgo',
+      'linux-builder-perf-pgo': 'official_remoteexec_perf_pgo',
       'linux-builder-perf-rel': 'official_linux_perf',
       'mac-arm-builder-perf': 'official_remoteexec_mac_arm_perf',
       'mac-arm-builder-perf-pgo': 'official_remoteexec_mac_arm_perf_pgo',
@@ -156,6 +147,7 @@
       'Linux Debug Builder': 'debug_bot_blink',
       'Linux V8 FYI Release (NVIDIA)': 'gpu_tests_release_trybot_minimal_symbols_remoteexec',
       'Linux V8 FYI Release - pointer compression (NVIDIA)': 'gpu_tests_release_trybot_ptr_comp_remoteexec',
+      'Mac V8 FYI Release (Apple M2)': 'gpu_tests_release_trybot_minimal_symbols_arm64_remoteexec',
       'Mac V8 FYI Release (Intel)': 'gpu_tests_release_trybot_minimal_symbols_remoteexec',
       'V8 Blink Linux': 'release_bot_blink',
       'V8 Blink Linux Debug': 'release_bot_blink_v8_debug_remoteexec',
@@ -212,15 +204,10 @@
     },
 
     'tryserver.chrome': {
-      'linux-chrome': 'official_remoteexec',
       'linux-finch-smoke-chrome': 'official_remoteexec',
       'mac-arm64-finch-smoke-chrome': 'official_remoteexec_mac_arm',
-      'mac-chrome': 'official_remoteexec_mac_x64',
-      'win-branded-compile-rel': 'chrome_branded_remoteexec_minimal_symbols',
       'win-celab-try-rel': 'official_celab_release_bot',
-      'win-chrome': 'official_remoteexec_x86',
       'win-finch-smoke-chrome': 'official_remoteexec',
-      'win64-chrome': 'official_remoteexec_x64',
     },
 
     'tryserver.chrome.gpu': {
@@ -240,6 +227,7 @@
       'linux-pgo': 'official_linux_pgo_with_symbols',
       'mac-arm-pgo': 'official_mac_arm_pgo_with_symbols',
       'mac-pgo': 'official_mac_pgo_with_symbols',
+      'webview-arm64-pgo': 'official_webview_arm64_pgo',
       'win-arm64-pgo': 'official_win_arm64_pgo_with_symbols',
       'win32-pgo': 'official_x86_pgo_with_symbols',
       'win64-pgo': 'official_x64_pgo_with_symbols',
@@ -336,10 +324,6 @@
       'cast_receiver', 'cast_os', 'minimal_symbols', 'release_bot_remoteexec',
     ],
 
-    'chrome_branded_remoteexec_minimal_symbols': [
-      'chrome_branded', 'minimal_symbols', 'release_bot_remoteexec',
-    ],
-
     'chromeos_kevin_include_unwind_tables_official_remoteexec': [
       'chromeos_kevin_remoteexec', 'include_unwind_tables', 'official',
     ],
@@ -429,6 +413,10 @@
       'gpu_tests', 'release_trybot_minimal_symbols_remoteexec', 'x86', 'resource_allowlisting', 'use_siso',
     ],
 
+    'gpu_tests_release_trybot_minimal_symbols_arm64_remoteexec': [
+      'gpu_tests', 'release_trybot_minimal_symbols_remoteexec', 'arm64', 'use_siso',
+    ],
+
     'gpu_tests_release_trybot_minimal_symbols_remoteexec': [
       'gpu_tests', 'release_trybot_minimal_symbols_remoteexec', 'use_siso',
     ],
@@ -478,7 +466,7 @@
     ],
 
     'official_linux_perf': [
-      'official', 'remoteexec', 'no_gnome_keyring', 'minimal_symbols', 'pgo_phase_0',
+      'official', 'remoteexec', 'minimal_symbols', 'pgo_phase_0',
     ],
 
     'official_linux_pgo': [
@@ -490,11 +478,11 @@
     ],
 
     'official_mac_arm_pgo_with_symbols': [
-      'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'arm64', 'disable_widevine_signing', 'minimal_symbols', 'pgo_phase_1', 'release', 'disable_stripping'
+      'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'arm64', 'minimal_symbols', 'pgo_phase_1', 'release', 'disable_stripping'
     ],
 
     'official_mac_pgo_with_symbols': [
-      'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'x64', 'disable_widevine_signing', 'minimal_symbols', 'pgo_phase_1', 'release', 'disable_stripping'
+      'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'x64', 'minimal_symbols', 'pgo_phase_1', 'release', 'disable_stripping'
     ],
 
     'official_minimal_symbols_android_arm64': [
@@ -506,43 +494,32 @@
     ],
 
     'official_remoteexec_fuchsia_arm64_perf': [
-      'cast_receiver_size_optimized_internal', 'official', 'remoteexec', 'minimal_symbols', 'fuchsia', 'fuchsia_include_sd_images', 'arm64', 'ffmpeg_branding_chrome', 'proprietary_codecs', 'release', 'test_isolate_no_emulator',
-    ],
-
-    'official_remoteexec_fuchsia_arm64_perf_pgo': [
       'cast_receiver_perf_optimized_internal', 'official', 'remoteexec', 'minimal_symbols', 'fuchsia', 'fuchsia_include_sd_images', 'arm64', 'ffmpeg_branding_chrome', 'proprietary_codecs', 'release', 'test_isolate_no_emulator',
     ],
 
-    'official_remoteexec_linux_perf_pgo': [
-      'official', 'remoteexec', 'no_gnome_keyring', 'minimal_symbols',
-    ],
 
     'official_remoteexec_mac_arm': [
       'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'arm64',
     ],
 
     'official_remoteexec_mac_arm_no_brp_perf': [
-      'official', 'remoteexec', 'no_keystone_registration_framework', 'no_widevine_cdm_host_verification', 'minimal_symbols', 'arm64', 'pgo_phase_0', 'no_brp',
+      'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'minimal_symbols', 'arm64', 'pgo_phase_0', 'no_brp',
     ],
 
     'official_remoteexec_mac_arm_perf': [
-      'official', 'remoteexec', 'no_keystone_registration_framework', 'no_widevine_cdm_host_verification', 'minimal_symbols', 'arm64', 'pgo_phase_0',
+      'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'minimal_symbols', 'arm64', 'pgo_phase_0',
     ],
 
     'official_remoteexec_mac_arm_perf_pgo': [
-      'official', 'remoteexec', 'no_keystone_registration_framework', 'no_widevine_cdm_host_verification', 'minimal_symbols', 'arm64',
+      'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'minimal_symbols', 'arm64',
     ],
 
     'official_remoteexec_mac_perf': [
-      'official', 'remoteexec', 'no_keystone_registration_framework', 'no_widevine_cdm_host_verification', 'minimal_symbols', 'pgo_phase_0',
+      'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'minimal_symbols', 'pgo_phase_0',
     ],
 
     'official_remoteexec_mac_perf_pgo': [
-      'official', 'remoteexec', 'no_keystone_registration_framework', 'no_widevine_cdm_host_verification', 'minimal_symbols',
-    ],
-
-    'official_remoteexec_mac_x64': [
-      'official', 'remoteexec', 'x64', 'no_widevine_cdm_host_verification',
+      'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'minimal_symbols',
     ],
 
     'official_remoteexec_min_symbol_webview_android_desktop_arm64': [
@@ -593,20 +570,16 @@
       'official', 'remoteexec_win_cross', 'arm64', 'minimal_symbols', 'pgo_phase_0',
     ],
 
-    'official_remoteexec_x64': [
-      'official', 'remoteexec', 'x64', 'minimal_symbols',
-    ],
-
-    'official_remoteexec_x86': [
-      'official', 'remoteexec', 'x86', 'minimal_symbols',
-    ],
-
     'official_webview_arm32_orderfile': [
       'official', 'remoteexec', 'android', 'arm', 'minimal_symbols', 'orderfile_common',
     ],
 
     'official_webview_arm64_orderfile': [
       'official', 'remoteexec', 'android', 'arm64', 'minimal_symbols', 'orderfile_common',
+    ],
+
+    'official_webview_arm64_pgo': [
+      'official', 'remoteexec', 'android', 'arm64', 'minimal_symbols', 'no_default_afdo', 'pgo_phase_1', 'stable_version_code',
     ],
 
     'official_win_arm64_pgo': [
@@ -768,10 +741,6 @@
       'args_file': '//build/config/fuchsia/perf_optimized_cast_receiver_args_internal.gn',
     },
 
-    'cast_receiver_size_optimized_internal': {
-      'args_file': '//build/config/fuchsia/size_optimized_cast_receiver_args_internal.gn',
-    },
-
     'chrome_branded': {
       'gn_args': 'is_chrome_branded=true'
     },
@@ -809,27 +778,27 @@
     # Same as regulary codesearch without blink_enable_generated_code_formatting
     'codesearch_cronet_remoteexec': {
       'gn_args': 'clang_use_chrome_plugins=false enable_kythe_annotations=true',
-      'mixins': ['remoteexec', 'clang', 'shared', 'debug', 'minimal_symbols'],
+      'mixins': ['remoteexec', 'clang', 'shared', 'debug', 'minimal_symbols', 'use_system_headers'],
     },
 
     # Same as regular codesearch except ios does not allow component builds
     'codesearch_ios_remoteexec': {
       'gn_args': 'clang_use_chrome_plugins=false enable_kythe_annotations=true',
       'mixins': ['remoteexec', 'clang', 'debug', 'minimal_symbols',
-                 'blink_enable_generated_code_formatting'],
+                 'blink_enable_generated_code_formatting', 'use_system_headers'],
     },
 
     'codesearch_release_remoteexec': {
       'gn_args': 'clang_use_chrome_plugins=false enable_kythe_annotations=true',
       'mixins': ['release', 'static', 'remoteexec',
-                 'blink_enable_generated_code_formatting'],
+                 'blink_enable_generated_code_formatting', 'use_system_headers'],
     },
 
     # Settings used by the codesearch builders to generate cross-references.
     'codesearch_remoteexec': {
       'gn_args': 'clang_use_chrome_plugins=false enable_kythe_annotations=true',
       'mixins': ['remoteexec', 'clang', 'shared', 'debug', 'minimal_symbols',
-                 'blink_enable_generated_code_formatting'],
+                 'blink_enable_generated_code_formatting', 'use_system_headers'],
     },
 
     'codesigning_identity': {
@@ -887,10 +856,6 @@
 
     'disable_stripping': {
       'gn_args': 'enable_stripping=false',
-    },
-
-    'disable_widevine_signing': {
-      'gn_args': 'enable_widevine_cdm_host_verification = false'
     },
 
     'ffmpeg_branding_chrome': {
@@ -982,14 +947,6 @@
       'gn_args': 'clang_use_default_sample_profile=false',
     },
 
-    'no_gnome_keyring': {
-      'gn_args': 'use_gnome_keyring=false',
-    },
-
-    'no_keystone_registration_framework': {
-      'gn_args': 'enable_keystone_registration_framework=false',
-    },
-
     'no_proguard_obfuscation': {
       'gn_args': 'enable_proguard_obfuscation=false',
     },
@@ -1032,7 +989,6 @@
     },
 
     'pgo_phase_1': {
-      'mixins': ['v8_release_branch'],
       'gn_args': 'chrome_pgo_phase=1'
     },
 
@@ -1132,6 +1088,10 @@
       'gn_args': 'use_siso=true',
     },
 
+    'use_system_headers': {
+      'gn_args': 'system_headers_in_deps=true',
+    },
+
     'v8_enable_debugging_features': {
       'gn_args': 'v8_enable_debugging_features=true',
     },
@@ -1140,11 +1100,6 @@
       # TODO(machenbach): Temporarily toggle pointer-compression off while it
       # is on by default.
       'gn_args': 'v8_enable_pointer_compression=false',
-    },
-
-    'v8_release_branch': {
-      # V8 flag that disables v8_enable_runtime_call_stats on release branches.
-      'gn_args': 'v8_is_on_release_branch=true',
     },
 
     'webview': {

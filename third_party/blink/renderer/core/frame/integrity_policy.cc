@@ -4,7 +4,8 @@
 
 #include "third_party/blink/renderer/core/frame/integrity_policy.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "services/network/public/cpp/integrity_policy.h"
 #include "services/network/public/cpp/request_destination.h"
 #include "services/network/public/mojom/integrity_algorithm.mojom-blink.h"
@@ -26,7 +27,7 @@ namespace {
 Vector<String> ConvertToBlink(const std::vector<std::string>& in) {
   Vector<String> out;
   for (const std::string& str : in) {
-    out.push_back(String::FromUTF8(str));
+    out.push_back(String::FromUtf8(str));
   }
   return out;
 }
@@ -52,10 +53,10 @@ void SendReport(ExecutionContext* context,
 }
 
 bool ShouldBlockOrReport(const network::IntegrityPolicy& integrity_policy) {
-  return (base::Contains(
+  return (std::ranges::contains(
               integrity_policy.blocked_destinations,
               ::network::mojom::blink::IntegrityPolicy::Destination::kScript) &&
-          base::Contains(
+          std::ranges::contains(
               integrity_policy.sources,
               ::network::mojom::blink::IntegrityPolicy::Source::kInline));
 }

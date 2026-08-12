@@ -56,8 +56,6 @@ constexpr char kPresentationId[] = "thePresentationId";
 // Metrics constants.
 constexpr char kHistogramSessionLength[] =
     "MediaRouter.CastStreaming.Session.Length";
-constexpr char kHistogramSessionLengthAccessCode[] =
-    "MediaRouter.CastStreaming.Session.Length.AccessCode";
 constexpr char kHistogramSessionLengthDesktop[] =
     "MediaRouter.CastStreaming.Session.Length.Screen";
 constexpr char kHistogramSessionLengthOffscreenTab[] =
@@ -230,7 +228,6 @@ TEST_F(MirroringActivityTest, MirrorDesktop) {
   uma_recorder.ExpectTotalCount(kHistogramSessionLengthDesktop, 1);
   uma_recorder.ExpectTotalCount(kHistogramSessionLengthTab, 0);
   uma_recorder.ExpectTotalCount(kHistogramSessionLengthOffscreenTab, 0);
-  uma_recorder.ExpectTotalCount(kHistogramSessionLengthAccessCode, 0);
 }
 
 TEST_F(MirroringActivityTest, MirrorTab) {
@@ -247,7 +244,6 @@ TEST_F(MirroringActivityTest, MirrorTab) {
   uma_recorder.ExpectTotalCount(kHistogramSessionLengthDesktop, 0);
   uma_recorder.ExpectTotalCount(kHistogramSessionLengthTab, 1);
   uma_recorder.ExpectTotalCount(kHistogramSessionLengthOffscreenTab, 0);
-  uma_recorder.ExpectTotalCount(kHistogramSessionLengthAccessCode, 0);
 }
 
 TEST_F(MirroringActivityTest, CreateMojoBindingsForTabWithCastAppUrl) {
@@ -266,7 +262,6 @@ TEST_F(MirroringActivityTest, CreateMojoBindingsForTabWithCastAppUrl) {
   uma_recorder.ExpectTotalCount(kHistogramSessionLengthDesktop, 0);
   uma_recorder.ExpectTotalCount(kHistogramSessionLengthTab, 1);
   uma_recorder.ExpectTotalCount(kHistogramSessionLengthOffscreenTab, 0);
-  uma_recorder.ExpectTotalCount(kHistogramSessionLengthAccessCode, 0);
 }
 
 TEST_F(MirroringActivityTest, MirrorOffscreenTab) {
@@ -286,7 +281,6 @@ TEST_F(MirroringActivityTest, MirrorOffscreenTab) {
   uma_recorder.ExpectTotalCount(kHistogramSessionLengthDesktop, 0);
   uma_recorder.ExpectTotalCount(kHistogramSessionLengthTab, 0);
   uma_recorder.ExpectTotalCount(kHistogramSessionLengthOffscreenTab, 1);
-  uma_recorder.ExpectTotalCount(kHistogramSessionLengthAccessCode, 0);
 }
 
 TEST_F(MirroringActivityTest, MirrorAccessCode) {
@@ -304,7 +298,6 @@ TEST_F(MirroringActivityTest, MirrorAccessCode) {
   uma_recorder.ExpectTotalCount(kHistogramSessionLengthDesktop, 0);
   uma_recorder.ExpectTotalCount(kHistogramSessionLengthTab, 1);
   uma_recorder.ExpectTotalCount(kHistogramSessionLengthOffscreenTab, 0);
-  uma_recorder.ExpectTotalCount(kHistogramSessionLengthAccessCode, 1);
 }
 
 TEST_F(MirroringActivityTest, OnError) {
@@ -426,7 +419,7 @@ TEST_F(MirroringActivityTest, OnInternalMessageNonlocal) {
   ASSERT_FALSE(channel_to_service_);
   activity_->OnInternalMessage(cast_channel::InternalMessage(
       cast_channel::CastMessageType::kPing, kMessageSourceId,
-      kMessageDestinationId, kNamespace, base::Value::Dict()));
+      kMessageDestinationId, kNamespace, base::DictValue()));
 }
 
 TEST_F(MirroringActivityTest, OnInternalMessage) {
@@ -467,12 +460,12 @@ TEST_F(MirroringActivityTest, GetScrubbedLogMessage) {
       "offer": {
         "supportedStreams": [
           {
-            "aesIvMask": "AES_IV_MASK",
-            "aesKey": "AES_KEY"
+            "aesIvMask": "[REDACTED]",
+            "aesKey": "[REDACTED]"
           },
           {
-            "aesIvMask": "AES_IV_MASK",
-            "aesKey": "AES_KEY"
+            "aesIvMask": "[REDACTED]",
+            "aesKey": "[REDACTED]"
           }
         ]
       },
@@ -490,7 +483,7 @@ TEST_F(MirroringActivityTest, GetScrubbedLogMessage) {
 
 // Site-initiated mirroring activities must be able to send messages to the
 // client, which may be expecting to receive Cast protocol messages.
-// See crbug.com/1078481 for context.
+// See crbug.com/40689354 for context.
 TEST_F(MirroringActivityTest, SendMessageToClient) {
   MakeActivity();
 

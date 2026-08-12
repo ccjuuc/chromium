@@ -33,12 +33,15 @@
 #include "third_party/lens_server_proto/aim_communication.pb.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/webui/resources/cr_components/composebox/composebox.mojom.h"
+#include "ui/webui/tracked_element/tracked_element_handler_document_singleton.h"
 #include "ui/webui/webui_util.h"
 
 namespace lens {
 
 LensSidePanelUntrustedUI::LensSidePanelUntrustedUI(content::WebUI* web_ui)
-    : UntrustedTopChromeWebUIController(web_ui) {
+    : UntrustedTopChromeWebUIController(web_ui,
+                                        /*enable_chrome_send=*/false,
+                                        /*enable_chrome_histograms=*/true) {
   // Set up the chrome-untrusted://lens/ source.
   content::WebUIDataSource* html_source =
       content::WebUIDataSource::CreateAndAdd(
@@ -170,6 +173,8 @@ LensSidePanelUntrustedUI::LensSidePanelUntrustedUI(content::WebUI* web_ui)
 
   // Support no file types.
   html_source->AddString("composeboxImageFileTypes", "");
+  html_source->AddBoolean("lensSendRawFileMediaTypesEnabled",
+                     lens::features::IsLensSendRawFileMediaTypesEnabled());
   html_source->AddString("composeboxAttachmentFileTypes", "");
   html_source->AddInteger("composeboxFileMaxSize", 0);
   html_source->AddInteger("composeboxFileMaxCount", 0);
@@ -177,7 +182,6 @@ LensSidePanelUntrustedUI::LensSidePanelUntrustedUI(content::WebUI* web_ui)
   html_source->AddBoolean(
       "composeboxShowTypedSuggest",
       lens::features::IsLensAimTypeAheadSuggestionsEnabled());
-  html_source->AddBoolean("composeboxShowTypedSuggestWithContext", true);
   // Enable ZPS if suggestions are enabled.
   html_source->AddBoolean("composeboxShowZps",
                           lens::features::GetAimSuggestionsEnabled());
@@ -186,21 +190,16 @@ LensSidePanelUntrustedUI::LensSidePanelUntrustedUI(content::WebUI* web_ui)
   // Disable context menu and related features.
   html_source->AddBoolean("composeboxShowContextMenu", false);
   html_source->AddBoolean("composeboxShowContextMenuDescription", true);
-  // Send event when escape is pressed.
-  html_source->AddBoolean("composeboxCloseByEscape", true);
-  html_source->AddBoolean("composeboxShowLensSearchChip", false);
-  html_source->AddBoolean("composeboxShowRecentTabChip", false);
-  // Enable submit button.
-  html_source->AddBoolean("composeboxShowSubmit", true);
-  // Enables a fix that causes no flickering when transitioning between ZPS and
-  // typed suggestions.
-  html_source->AddBoolean("composeboxNoFlickerSuggestionsFix", true);
   // Specify metrics source.
   html_source->AddString(
       "composeboxSource",
       contextual_search::ContextualSearchMetricsRecorder::
           ContextualSearchSourceToString(
               contextual_search::ContextualSearchSource::kLens));
+
+  // Disabled tab favicon chips because the old side panel composebox lacks a
+  // context menu.
+  html_source->AddBoolean("tabFaviconChipsToCoinsEnabled", false);
 
   // Add strings for post message communication with the remote UI.
   lens::ClientToAimMessage handshake_ping;
@@ -216,8 +215,8 @@ LensSidePanelUntrustedUI::LensSidePanelUntrustedUI(content::WebUI* web_ui)
   html_source->AddResourcePaths(kLensSharedResources);
 
   // Add required resources for the searchbox.
-  SearchboxHandler::SetupWebUIDataSource(html_source,
-                                         Profile::FromWebUI(web_ui));
+  html_source->AddLocalizedStrings(SearchboxHandler::GetWebUIDataSourceDict(
+      Profile::FromWebUI(web_ui), {.is_lens = true}));
   html_source->AddString(
       "searchboxDefaultIcon",
       lens::features::GetVisualSelectionUpdatesEnableGradientSuperG()
@@ -249,14 +248,7 @@ LensSidePanelUntrustedUI::LensSidePanelUntrustedUI(content::WebUI* web_ui)
   html_source->AddString(
       "searchboxComposePlaceholder",
       l10n_util::GetStringUTF8(IDS_LENS_COMPOSEBOX_HINT_TEXT));
-  html_source->AddBoolean("composeboxShowPdfUpload", false);
   html_source->AddBoolean("composeboxSmartComposeEnabled", false);
-  html_source->AddBoolean("composeboxShowDeepSearchButton", false);
-  html_source->AddBoolean("composeboxShowCreateImageButton", false);
-  html_source->AddBoolean("composeboxContextDragAndDropEnabled", false);
-  html_source->AddBoolean("steadyComposeboxShowVoiceSearch", false);
-  html_source->AddBoolean("expandedComposeboxShowVoiceSearch", false);
-  html_source->AddBoolean("expandedSearchboxShowVoiceSearch", false);
 
   // If the ThemeSource isn't added here, since this WebUI is
   // chrome-untrusted, it will be unable to load stylesheets until a new tab
@@ -265,6 +257,10 @@ LensSidePanelUntrustedUI::LensSidePanelUntrustedUI(content::WebUI* web_ui)
       Profile::FromWebUI(web_ui),
       std::make_unique<ThemeSource>(Profile::FromWebUI(web_ui),
                                     /*serve_untrusted=*/true));
+
+  ui::TrackedElementHandlerDocumentSingleton::Register(
+      this,
+      std::vector<ui::ElementIdentifier>{kLensSidePanelSearchBoxElementId});
 }
 
 void LensSidePanelUntrustedUI::BindInterface(
@@ -282,14 +278,9 @@ void LensSidePanelUntrustedUI::BindInterface(
 }
 
 void LensSidePanelUntrustedUI::BindInterface(
-    mojo::PendingReceiver<searchbox::mojom::PageHandler> receiver) {
-  LensSearchboxController* controller =
-      GetLensSearchController().lens_searchbox_controller();
-
-  auto handler = std::make_unique<LensSearchboxHandler>(
-      std::move(receiver), Profile::FromWebUI(web_ui()),
-      web_ui()->GetWebContents(), /*lens_searchbox_client=*/controller);
-  controller->SetSidePanelSearchboxHandler(std::move(handler));
+    mojo::PendingReceiver<searchbox::mojom::PageHandlerFactory> receiver) {
+  searchbox_page_factory_receiver_.reset();
+  searchbox_page_factory_receiver_.Bind(std::move(receiver));
 }
 
 void LensSidePanelUntrustedUI::BindInterface(
@@ -308,16 +299,26 @@ void LensSidePanelUntrustedUI::BindInterface(
 }
 
 void LensSidePanelUntrustedUI::CreatePageHandler(
-    mojo::PendingRemote<composebox::mojom::Page> pending_page,
+    mojo::PendingRemote<searchbox::mojom::Page> page,
+    mojo::PendingReceiver<searchbox::mojom::PageHandler> receiver) {
+  LensSearchboxController* controller =
+      GetLensSearchController().lens_searchbox_controller();
+
+  auto handler = std::make_unique<LensSearchboxHandler>(
+      std::move(receiver), std::move(page), Profile::FromWebUI(web_ui()),
+      web_ui()->GetWebContents(), /*lens_searchbox_client=*/controller);
+  controller->SetSidePanelSearchboxHandler(std::move(handler));
+}
+
+void LensSidePanelUntrustedUI::CreatePageHandler(
     mojo::PendingReceiver<composebox::mojom::PageHandler> pending_page_handler,
     mojo::PendingRemote<searchbox::mojom::Page> pending_searchbox_page,
     mojo::PendingReceiver<searchbox::mojom::PageHandler>
         pending_searchbox_handler) {
-  DCHECK(pending_page.is_valid());
   auto* controller = GetLensSearchController().lens_composebox_controller();
-  controller->BindComposebox(
-      std::move(pending_page_handler), std::move(pending_page),
-      std::move(pending_searchbox_page), std::move(pending_searchbox_handler));
+  controller->BindComposebox(std::move(pending_page_handler),
+                             std::move(pending_searchbox_page),
+                             std::move(pending_searchbox_handler));
 }
 
 LensSearchController& LensSidePanelUntrustedUI::GetLensSearchController() {
@@ -353,8 +354,9 @@ void LensSidePanelUntrustedUI::CreateHelpBubbleHandler(
     mojo::PendingRemote<help_bubble::mojom::HelpBubbleClient> client,
     mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandler> handler) {
   help_bubble_handler_ = std::make_unique<user_education::HelpBubbleHandler>(
-      std::move(handler), std::move(client), this,
-      std::vector<ui::ElementIdentifier>{kLensSidePanelSearchBoxElementId});
+      std::move(handler), std::move(client),
+      ui::TrackedElementHandlerDocumentSingleton::GetOrCreate(
+          web_ui()->GetRenderFrameHost()));
 }
 
 LensSidePanelUntrustedUI::~LensSidePanelUntrustedUI() = default;

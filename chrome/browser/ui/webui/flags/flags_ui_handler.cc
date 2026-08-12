@@ -8,6 +8,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/about_flags.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/channel_info.h"
 #include "components/version_info/channel.h"
 #include "components/webui/flags/flags_storage.h"
@@ -20,7 +21,7 @@
 #endif
 
 namespace {
-bool ExtractKeyValue(const base::Value::List& args,
+bool ExtractKeyValue(const base::ListValue& args,
                      std::string& key,
                      std::string& value) {
   if (args.size() != 2) {
@@ -73,6 +74,12 @@ void FlagsUIHandler::RegisterMessages() {
       flags_ui::kResetAllFlags,
       base::BindRepeating(&FlagsUIHandler::HandleResetAllFlags,
                           base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "exportFlags", base::BindRepeating(&FlagsUIHandler::HandleExportFlags,
+                                         base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "importFlags", base::BindRepeating(&FlagsUIHandler::HandleImportFlags,
+                                         base::Unretained(this)));
 }
 
 void FlagsUIHandler::Init(std::unique_ptr<flags_ui::FlagsStorage> flags_storage,
@@ -90,7 +97,7 @@ void FlagsUIHandler::Init(std::unique_ptr<flags_ui::FlagsStorage> flags_storage,
 }
 
 void FlagsUIHandler::HandleRequestDeprecatedFeatures(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   const base::Value& callback_id = args[0];
 
@@ -105,7 +112,7 @@ void FlagsUIHandler::HandleRequestDeprecatedFeatures(
 }
 
 void FlagsUIHandler::HandleRequestExperimentalFeatures(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   const base::Value& callback_id = args[0];
 
@@ -120,10 +127,10 @@ void FlagsUIHandler::HandleRequestExperimentalFeatures(
 }
 
 void FlagsUIHandler::SendExperimentalFeatures(bool deprecated_features_only) {
-  base::Value::Dict results;
+  base::DictValue results;
 
-  base::Value::List supported_features;
-  base::Value::List unsupported_features;
+  base::ListValue supported_features;
+  base::ListValue unsupported_features;
 
   if (deprecated_features_only) {
     about_flags::GetFlagFeatureEntriesForDeprecatedPage(
@@ -141,6 +148,8 @@ void FlagsUIHandler::SendExperimentalFeatures(bool deprecated_features_only) {
               about_flags::IsRestartNeededToCommitChanges());
   results.Set(flags_ui::kShowOwnerWarning,
               access_ == flags_ui::kGeneralAccessFlagsOnly);
+  results.Set("importExportEnabled",
+              base::FeatureList::IsEnabled(features::kImportExportFlags));
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
   version_info::Channel channel = chrome::GetChannel();
@@ -166,7 +175,7 @@ void FlagsUIHandler::SendExperimentalFeatures(bool deprecated_features_only) {
 }
 
 void FlagsUIHandler::HandleEnableExperimentalFeatureMessage(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK(flags_storage_);
   DCHECK_EQ(2u, args.size());
   if (args.size() != 2) {
@@ -187,7 +196,7 @@ void FlagsUIHandler::HandleEnableExperimentalFeatureMessage(
 }
 
 void FlagsUIHandler::HandleSetOriginListFlagMessage(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK(flags_storage_);
   std::string entry_internal_name, value_str;
   if (!ExtractKeyValue(args, entry_internal_name, value_str)) {
@@ -198,7 +207,7 @@ void FlagsUIHandler::HandleSetOriginListFlagMessage(
                                  flags_storage_.get());
 }
 
-void FlagsUIHandler::HandleSetStringFlagMessage(const base::Value::List& args) {
+void FlagsUIHandler::HandleSetStringFlagMessage(const base::ListValue& args) {
   DCHECK(flags_storage_);
   std::string entry_internal_name, value_str;
   if (!ExtractKeyValue(args, entry_internal_name, value_str)) {
@@ -209,7 +218,7 @@ void FlagsUIHandler::HandleSetStringFlagMessage(const base::Value::List& args) {
                              flags_storage_.get());
 }
 
-void FlagsUIHandler::HandleRestartBrowser(const base::Value::List& args) {
+void FlagsUIHandler::HandleRestartBrowser(const base::ListValue& args) {
   DCHECK(flags_storage_);
 #if BUILDFLAG(IS_CHROMEOS)
   // On Chrome OS be less intrusive and restart inside the user session after
@@ -222,7 +231,57 @@ void FlagsUIHandler::HandleRestartBrowser(const base::Value::List& args) {
   chrome::AttemptRestart();
 }
 
-void FlagsUIHandler::HandleResetAllFlags(const base::Value::List& args) {
+void FlagsUIHandler::HandleResetAllFlags(const base::ListValue& args) {
   DCHECK(flags_storage_);
   about_flags::ResetAllFlags(flags_storage_.get());
+}
+
+void FlagsUIHandler::HandleExportFlags(const base::ListValue& args) {
+  DCHECK(flags_storage_);
+  CHECK(base::FeatureList::IsEnabled(features::kImportExportFlags));
+  AllowJavascript();
+  const base::Value& callback_id = args[0];
+
+  base::DictValue results;
+  base::ListValue enabled_flags;
+  for (const std::string& flag : flags_storage_->GetFlags()) {
+    enabled_flags.Append(flag);
+  }
+  results.Set("enabled_flags", std::move(enabled_flags));
+  results.Set("customized_flags", flags_storage_->GetCustomizedFlags());
+
+  ResolveJavascriptCallback(callback_id, results);
+}
+
+void FlagsUIHandler::HandleImportFlags(const base::ListValue& args) {
+  DCHECK(flags_storage_);
+  CHECK(base::FeatureList::IsEnabled(features::kImportExportFlags));
+  AllowJavascript();
+  CHECK_EQ(2u, args.size());
+  const base::Value& callback_id = args[0];
+  const base::DictValue& data = args[1].GetDict();
+
+  // Apply imported data.
+  if (const base::ListValue* enabled_flags_list =
+          data.FindList("enabled_flags")) {
+    std::set<std::string> enabled_flags = flags_storage_->GetFlags();
+    for (const auto& flag : *enabled_flags_list) {
+      if (flag.is_string()) {
+        enabled_flags.insert(flag.GetString());
+      }
+    }
+    flags_storage_->SetFlags(enabled_flags);
+  }
+
+  if (const base::DictValue* customized_flags =
+          data.FindDict("customized_flags")) {
+    base::DictValue merged_customized_flags =
+        flags_storage_->GetCustomizedFlags();
+    merged_customized_flags.Merge(customized_flags->Clone());
+    flags_storage_->SetCustomizedFlags(merged_customized_flags);
+  }
+
+  flags_storage_->CommitPendingWrites();
+
+  ResolveJavascriptCallback(callback_id, base::Value(true));
 }

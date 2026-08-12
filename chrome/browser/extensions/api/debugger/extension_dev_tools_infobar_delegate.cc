@@ -23,6 +23,9 @@
 #include "ui/gfx/text_constants.h"
 #include "ui/strings/grit/ui_strings.h"
 
+// Android uses messages instead of infobars.
+static_assert(!BUILDFLAG(IS_ANDROID));
+
 namespace extensions {
 
 namespace {
@@ -94,7 +97,7 @@ gfx::ElideBehavior ExtensionDevToolsInfoBarDelegate::GetMessageElideBehavior()
     const {
   // The important part of the message text above is at the end:
   // "... is debugging the browser". If the extension name is very long,
-  // we'd rather truncate it instead. See https://crbug.com/823194.
+  // we'd rather truncate it instead. See https://crbug.com/40090846.
   // See also the comment above for the kMaxExtensionNameLength
   return gfx::ELIDE_HEAD;
 }

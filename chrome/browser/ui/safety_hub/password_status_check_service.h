@@ -67,10 +67,10 @@ class PasswordStatusCheckService
   void UpdateInsecureCredentialCountAsync();
 
   // Helper function for displaying the status in UI given the sign-in state.
-  base::Value::Dict GetPasswordCardData(bool signed_in);
+  base::DictValue GetPasswordCardData(bool signed_in);
 
   // Helper function for displaying the current status in the UI.
-  base::Value::Dict GetPasswordCardData();
+  base::DictValue GetPasswordCardData();
 
   // Returns the latest PasswordStatusCheckResult that is available in memory.
   // TODO(crbug.com/40267370): This will be a SafetyHubResult implementation.
@@ -155,7 +155,7 @@ class PasswordStatusCheckService
       password_manager::PasswordStoreInterface* store,
       const password_manager::PasswordStoreChangeList& changes) override;
   void OnLoginsRetained(password_manager::PasswordStoreInterface* store,
-                        const std::vector<password_manager::PasswordForm>&
+                        const std::vector<password_manager::StoredCredential>&
                             retained_passwords) override;
 
   // InsecureCredentialsManager::Observer implementation.

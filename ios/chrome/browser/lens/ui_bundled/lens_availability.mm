@@ -7,7 +7,7 @@
 #import "base/metrics/histogram_functions.h"
 #import "base/notreached.h"
 #import "components/prefs/pref_service.h"
-#import "ios/chrome/browser/lens_overlay/coordinator/lens_overlay_availability.h"
+#import "ios/chrome/browser/lens_overlay/public/lens_overlay_availability.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -78,7 +78,8 @@ void LogLensSupportStatusForLensEntryPoint(
       break;
     case LensEntrypoint::HomeScreenWidget:
     case LensEntrypoint::AppIconLongPress:
-      // App icon long press cannot log availailability.
+    case LensEntrypoint::AppBar:
+      // App icon long press and AppBar cannot log availability.
       return;
     default:
       NOTREACHED() << "Unsupported Lens Entry Point.";

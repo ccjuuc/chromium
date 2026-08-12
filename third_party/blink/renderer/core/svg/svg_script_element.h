@@ -41,6 +41,9 @@ class SVGScriptElement final : public SVGElement,
 
  public:
   SVGScriptElement(Document&, const CreateElementFlags);
+  ElementType GetElementType() const final {
+    return ElementType::kSVGScriptElement;
+  }
 
   ScriptLoader* Loader() const final { return loader_.Get(); }
 
@@ -88,10 +91,10 @@ class SVGScriptElement final : public SVGElement,
   bool AsyncAttributeValue() const override;
   String SourceAttributeValue() const override;
   String TypeAttributeValue() const override;
+  String CacheHintAttributeValue() const override { return String(); }
   String ChildTextContent() override;
   String ScriptTextInternalSlot() const override;
   bool HasSourceAttribute() const override;
-  bool HasAttributionsrcAttribute() const override { return false; }
   bool IsConnected() const override;
   bool HasChildren() const override;
   const AtomicString& GetNonceForElement() const override;

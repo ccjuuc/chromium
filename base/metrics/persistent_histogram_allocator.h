@@ -17,6 +17,7 @@
 #include "base/compiler_specific.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_base.h"
+#include "base/metrics/histogram_samples.h"
 #include "base/metrics/persistent_memory_allocator.h"
 #include "base/metrics/ranges_manager.h"
 #include "base/process/process_handle.h"
@@ -179,6 +180,9 @@ class BASE_EXPORT PersistentHistogramAllocator {
   // a Reference matching the class it is for and not mix the two.
   using Reference = PersistentMemoryAllocator::Reference;
 
+  // The structure used to hold histogram data in persistent memory.
+  struct PersistentHistogramData;
+
   // Iterator used for fetching persistent histograms from an allocator.
   // It is lock-free and thread-safe.
   // See PersistentMemoryAllocator::Iterator for more information.
@@ -266,23 +270,34 @@ class BASE_EXPORT PersistentHistogramAllocator {
   // True, forgetting it otherwise.
   void FinalizeHistogram(Reference ref, bool registered);
 
+  // Results of the merging.
+  enum class MergeResult {
+    kSuccess,
+    kTypeMismatch,
+    kRangesMismatch,
+    kAddFailed,
+    kCouldNotCreate,
+  };
+
   // Merges the data in a persistent histogram with one held globally by the
   // StatisticsRecorder, updating the "logged" samples within the passed
   // object so that repeated merges are allowed. Don't call this on a "global"
   // allocator because histograms created there will already be in the SR.
-  // Returns whether the merge was successful; if false, the histogram did not
-  // have the same shape (different types or buckets), or we couldn't get a
-  // target histogram from the statistic recorder.
-  bool MergeHistogramDeltaToStatisticsRecorder(HistogramBase* histogram);
+  // `name_override` can be used to override the name of the destination
+  // histogram. If empty, it uses the original name from `histogram`.
+  MergeResult MergeHistogramDeltaToStatisticsRecorder(
+      HistogramBase* histogram,
+      std::string_view name_override);
 
   // As above but merge the "final" delta. No update of "logged" samples is
   // done which means it can operate on read-only objects. It's essential,
   // however, not to call this more than once or those final samples will
-  // get recorded again. Returns whether the merge was successful; if false, the
-  // histogram did not have the same shape (different types or buckets), or we
-  // couldn't get a target histogram from the statistic recorder.
-  bool MergeHistogramFinalDeltaToStatisticsRecorder(
-      const HistogramBase* histogram);
+  // get recorded again.
+  // `name_override` can be used to override the name of the destination
+  // histogram. If empty, it uses the original name from `histogram`.
+  MergeResult MergeHistogramFinalDeltaToStatisticsRecorder(
+      const HistogramBase* histogram,
+      std::string_view name_override);
 
   // Returns an object that manages persistent-sample-map records for a given
   // `id`. The returned object queries `sparse_histogram_data_manager_` for
@@ -318,10 +333,6 @@ class BASE_EXPORT PersistentHistogramAllocator {
   void ClearLastCreatedReferenceForTesting();
 
  protected:
-  // The structure used to hold histogram data in persistent memory. It is
-  // defined and used entirely within the .cc file.
-  struct PersistentHistogramData;
-
   // Gets the reference of the last histogram created, used to avoid
   // trying to import what was just created.
   Reference last_created() {
@@ -347,8 +358,11 @@ class BASE_EXPORT PersistentHistogramAllocator {
   // Gets or creates an object in the global StatisticsRecorder matching
   // the `histogram` passed. Null is returned if one was not found and
   // one could not be created.
+  // `name_override` can be used to override the name of the destination
+  // histogram. If empty, it uses the original name from `histogram`.
   HistogramBase* GetOrCreateStatisticsRecorderHistogram(
-      const HistogramBase* histogram);
+      const HistogramBase* histogram,
+      std::string_view name_override);
 
   // The memory allocator that provides the actual histogram storage.
   std::unique_ptr<PersistentMemoryAllocator> memory_allocator_;
@@ -536,6 +550,33 @@ class BASE_EXPORT GlobalHistogramAllocator
 
   // The location to which the data should be persisted.
   FilePath persistent_location_;
+};
+
+// This data will be held in persistent memory in order for processes to
+// locate and use histograms created elsewhere.
+struct PersistentHistogramAllocator::PersistentHistogramData {
+  // SHA1(Histogram): Increment this if structure changes!
+  static constexpr uint32_t kPersistentTypeId = 0xF1645910 + 3;
+
+  // Expected size for 32/64-bit check.
+  static constexpr size_t kExpectedInstanceSize =
+      40 + 2 * HistogramSamples::Metadata::kExpectedInstanceSize;
+
+  int32_t histogram_type;
+  int32_t flags;
+  int32_t minimum;
+  int32_t maximum;
+  uint32_t bucket_count;
+  PersistentMemoryAllocator::Reference ranges_ref;
+  uint32_t ranges_checksum;
+  std::atomic<PersistentMemoryAllocator::Reference> counts_ref;
+  HistogramSamples::Metadata samples_metadata;
+  HistogramSamples::Metadata logged_metadata;
+
+  // Space for the histogram name will be added during the actual allocation
+  // request. This must be the last field of the structure. A zero-size array
+  // or a "flexible" array would be preferred but is not (yet) valid C++.
+  char name[sizeof(uint64_t)];  // Force 64-bit alignment on 32-bit builds.
 };
 
 }  // namespace base

@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 
+#include "base/containers/span.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "content/public/browser/devtools_manager_delegate.h"
@@ -41,9 +42,13 @@ class HeadlessDevToolsManagerDelegate
   void ClientDetached(
       content::DevToolsAgentHostClientChannel* channel) override;
 
-  std::vector<content::BrowserContext*> GetBrowserContexts() override;
+  std::vector<base::WeakPtr<content::BrowserContext>> GetBrowserContexts()
+      override;
   content::BrowserContext* GetDefaultBrowserContext() override;
+  content::BrowserContext* GetBrowserContext(
+      const std::string& context_id) override;
   content::BrowserContext* CreateBrowserContext() override;
+
   void DisposeBrowserContext(content::BrowserContext* context,
                              DisposeCallback callback) override;
 

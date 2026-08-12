@@ -4,19 +4,22 @@
 
 #include "chrome/browser/ui/toolbar/bookmark_sub_menu_model.h"
 
+#include "base/feature_list.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/commerce/product_specifications/product_specifications_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/bookmarks/bookmark_utils.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/commerce/compare_sub_menu_model.h"
+#include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/toolbar/reading_list_sub_menu_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/bookmarks/common/bookmark_pref_names.h"
 #include "components/commerce/core/commerce_feature_list.h"
 #include "components/commerce/core/feature_utils.h"
 #include "components/prefs/pref_service.h"
+#include "components/search/ntp_features.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/ui_base_features.h"
 
@@ -26,7 +29,6 @@ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(BookmarkSubMenuModel,
                                       kShowBookmarkSidePanelItem);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(BookmarkSubMenuModel,
                                       kReadingListMenuItem);
-DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(BookmarkSubMenuModel, kCompareMenuItem);
 
 // For views and cocoa, we have complex delegate systems to handle
 // injecting the bookmarks to the bookmark submenu. This is done to support
@@ -48,13 +50,37 @@ void BookmarkSubMenuModel::Build(Browser* browser) {
     AddItemWithStringId(IDC_BOOKMARK_ALL_TABS, IDS_BOOKMARK_ALL_TABS);
     AddSeparator(ui::NORMAL_SEPARATOR);
   }
-  AddItemWithStringId(IDC_SHOW_BOOKMARK_BAR,
-                      browser->profile()->GetPrefs()->GetBoolean(
-                          bookmarks::prefs::kShowBookmarkBar)
-                          ? IDS_HIDE_BOOKMARK_BAR
-                          : IDS_SHOW_BOOKMARK_BAR);
-  SetElementIdentifierAt(GetIndexOfCommandId(IDC_SHOW_BOOKMARK_BAR).value(),
-                         kShowBookmarkBarMenuItem);
+  if (base::FeatureList::IsEnabled(
+          ntp_features::kNtpSimplificationBookmarkBar)) {
+    bookmark_bar_sub_menu_model_ =
+        std::make_unique<ui::SimpleMenuModel>(delegate());
+    bookmark_bar_sub_menu_model_->AddCheckItemWithStringId(
+        IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_HIDE,
+        IDS_BOOKMARK_BAR_SUBMENU_ALWAYS_HIDE);
+    bookmark_bar_sub_menu_model_->AddCheckItemWithStringId(
+        IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_SHOW,
+        IDS_BOOKMARK_BAR_SUBMENU_ALWAYS_SHOW);
+    bookmark_bar_sub_menu_model_->AddCheckItemWithStringId(
+        IDC_BOOKMARK_BAR_SUBMENU_ONLY_ON_NTP,
+        IDS_BOOKMARK_BAR_SUBMENU_ONLY_ON_NTP);
+    AddSubMenuWithStringIdAndIcon(
+        IDC_BOOKMARK_BAR_SUBMENU, IDS_BOOKMARK_BAR_SUBMENU_LABEL,
+        bookmark_bar_sub_menu_model_.get(),
+        ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                           ? kToolbarIcon
+                                           : kToolbarChromeRefreshOldIcon));
+    SetElementIdentifierAt(
+        GetIndexOfCommandId(IDC_BOOKMARK_BAR_SUBMENU).value(),
+        kShowBookmarkBarMenuItem);
+  } else {
+    AddItemWithStringId(IDC_SHOW_BOOKMARK_BAR,
+                        browser->GetProfile()->GetPrefs()->GetBoolean(
+                            bookmarks::prefs::kShowBookmarkBar)
+                            ? IDS_HIDE_BOOKMARK_BAR
+                            : IDS_SHOW_BOOKMARK_BAR);
+    SetElementIdentifierAt(GetIndexOfCommandId(IDC_SHOW_BOOKMARK_BAR).value(),
+                           kShowBookmarkBarMenuItem);
+  }
 
   AddItemWithStringId(IDC_SHOW_BOOKMARK_SIDE_PANEL,
                       IDS_SHOW_BOOKMARK_SIDE_PANEL);
@@ -62,7 +88,11 @@ void BookmarkSubMenuModel::Build(Browser* browser) {
       GetIndexOfCommandId(IDC_SHOW_BOOKMARK_SIDE_PANEL).value(),
       kShowBookmarkSidePanelItem);
 
-  AddItemWithStringId(IDC_SHOW_BOOKMARK_MANAGER, IDS_BOOKMARK_MANAGER);
+  if (features::IsMenuSimplificationEnabled()) {
+    AddItemWithStringId(IDC_SHOW_BOOKMARK_MANAGER, IDS_BOOKMARK_MANAGER_V2);
+  } else {
+    AddItemWithStringId(IDC_SHOW_BOOKMARK_MANAGER, IDS_BOOKMARK_MANAGER);
+  }
 
 #if !BUILDFLAG(IS_CHROMEOS)
   AddItemWithStringId(IDC_IMPORT_SETTINGS, IDS_IMPORT_SETTINGS_MENU_LABEL);
@@ -73,27 +103,14 @@ void BookmarkSubMenuModel::Build(Browser* browser) {
   reading_list_sub_menu_model_ =
       std::make_unique<ReadingListSubMenuModel>(delegate());
   AddSubMenuWithStringIdAndIcon(
-      IDC_READING_LIST_MENU, IDS_READING_LIST_MENU,
+      AppMenuModel::kReadingListMenuPlaceholder, IDS_READING_LIST_MENU,
       reading_list_sub_menu_model_.get(),
-      ui::ImageModel::FromVectorIcon(kReadingListIcon));
-  SetElementIdentifierAt(GetIndexOfCommandId(IDC_READING_LIST_MENU).value(),
-                         kReadingListMenuItem);
-
-  // Will be null if the product specifications service is unavailable.
-  auto* product_specs_service =
-      commerce::ProductSpecificationsServiceFactory::GetForBrowserContext(
-          browser->profile());
-  if (product_specs_service &&
-      base::FeatureList::IsEnabled(commerce::kProductSpecifications)) {
-    AddSeparator(ui::NORMAL_SEPARATOR);
-    compare_sub_menu_model_ = std::make_unique<commerce::CompareSubMenuModel>(
-        delegate(), browser, product_specs_service);
-    AddSubMenuWithStringIdAndIcon(
-        IDC_COMPARE_MENU, IDS_COMPARE_MENU_LABEL, compare_sub_menu_model_.get(),
-        ui::ImageModel::FromVectorIcon(kCompareIcon, ui::kColorMenuIcon, 16));
-    SetElementIdentifierAt(GetIndexOfCommandId(IDC_COMPARE_MENU).value(),
-                           kCompareMenuItem);
-  }
+      ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                         ? kListAltIcon
+                                         : kReadingListOldIcon));
+  SetElementIdentifierAt(
+      GetIndexOfCommandId(AppMenuModel::kReadingListMenuPlaceholder).value(),
+      kReadingListMenuItem);
 
   auto set_icon = [this](int command_id, const gfx::VectorIcon& vector_icon) {
     auto index = GetIndexOfCommandId(command_id);
@@ -103,10 +120,28 @@ void BookmarkSubMenuModel::Build(Browser* browser) {
     }
   };
 
-  set_icon(IDC_BOOKMARK_THIS_TAB, kBookmarksListsMenuIcon);
-  set_icon(IDC_BOOKMARK_ALL_TABS, kBookmarkAllTabsChromeRefreshIcon);
-  set_icon(IDC_SHOW_BOOKMARK_BAR, kToolbarChromeRefreshIcon);
-  set_icon(IDC_SHOW_BOOKMARK_MANAGER, kBookmarksManagerIcon);
-  set_icon(IDC_SHOW_BOOKMARK_SIDE_PANEL, kBookmarksSidePanelRefreshIcon);
-  set_icon(IDC_IMPORT_SETTINGS, kMenuBookChromeRefreshIcon);
+  set_icon(IDC_BOOKMARK_THIS_TAB, features::IsRoundedIconsEnabled()
+                                      ? kStarIcon
+                                      : kBookmarksListsMenuOldIcon);
+  set_icon(IDC_BOOKMARK_ALL_TABS, features::IsRoundedIconsEnabled()
+                                      ? kHotelClassIcon
+                                      : kBookmarkAllTabsChromeRefreshOldIcon);
+
+  if (!base::FeatureList::IsEnabled(
+          ntp_features::kNtpSimplificationBookmarkBar)) {
+    set_icon(IDC_SHOW_BOOKMARK_BAR, features::IsRoundedIconsEnabled()
+                                        ? kToolbarIcon
+                                        : kToolbarChromeRefreshOldIcon);
+  }
+
+  set_icon(IDC_SHOW_BOOKMARK_MANAGER, features::IsRoundedIconsEnabled()
+                                          ? kBookmarkManagerIcon
+                                          : kBookmarksManagerOldIcon);
+  set_icon(IDC_SHOW_BOOKMARK_SIDE_PANEL,
+           features::IsRoundedIconsEnabled()
+               ? kHotelClassIcon
+               : kBookmarksSidePanelRefreshOldIcon);
+  set_icon(IDC_IMPORT_SETTINGS, features::IsRoundedIconsEnabled()
+                                    ? kMenuBookIcon
+                                    : kMenuBookChromeRefreshOldIcon);
 }

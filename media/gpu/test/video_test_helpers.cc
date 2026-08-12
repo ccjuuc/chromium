@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/gpu/test/video_test_helpers.h"
 
 #include <array>
@@ -138,18 +133,18 @@ bool IvfWriter::WriteFileHeader(VideoCodec codec,
   return output_file_.WriteAtCurrentPosAndCheck(base::as_byte_span(ivf_header));
 }
 
-bool IvfWriter::WriteFrame(uint32_t data_size,
-                           uint64_t timestamp,
-                           const uint8_t* data) {
-  std::array<char, kIvfFrameHeaderSize> ivf_frame_header = {};
-  memcpy(&ivf_frame_header[0], &data_size, sizeof(data_size));
-  memcpy(&ivf_frame_header[4], &timestamp, sizeof(timestamp));
-  if (!output_file_.WriteAtCurrentPosAndCheck(
-          base::as_byte_span(ivf_frame_header))) {
+bool IvfWriter::WriteFrame(uint64_t timestamp,
+                           base::span<const uint8_t> data) {
+  std::array<uint8_t, kIvfFrameHeaderSize> ivf_frame_header = {};
+  auto writer = base::SpanWriter(base::span(ivf_frame_header));
+  writer.WriteU32LittleEndian(base::checked_cast<uint32_t>(data.size()));
+  writer.WriteU64LittleEndian(timestamp);
+  CHECK_EQ(writer.remaining(), 0u);
+
+  if (!output_file_.WriteAtCurrentPosAndCheck(ivf_frame_header)) {
     return false;
   }
-  auto data_span = UNSAFE_TODO(base::span(data, data_size));
-  return output_file_.WriteAtCurrentPosAndCheck(data_span);
+  return output_file_.WriteAtCurrentPosAndCheck(data);
 }
 
 // static
@@ -329,14 +324,16 @@ scoped_refptr<DecoderBuffer> EncodedDataHelperH265::GetNextBuffer() {
       }
       CHECK_EQ(result, H265Parser::kOk);
     }
-    CHECK_LE(nalu.data.data(),
-             reinterpret_cast<uint8_t*>(data_.data()) + data_.size());
-    CHECK_LE(nalu.data.data() + nalu.data.size(),
-             reinterpret_cast<uint8_t*>(data_.data()) + data_.size());
+    UNSAFE_TODO(
+        CHECK_LE(nalu.data.data(),
+                 reinterpret_cast<uint8_t*>(data_.data()) + data_.size()));
+    UNSAFE_TODO(
+        CHECK_LE(nalu.data.data() + nalu.data.size(),
+                 reinterpret_cast<uint8_t*>(data_.data()) + data_.size()));
 
     struct NALUMetadata nalu_metadata;
-    nalu_metadata.start_pointer =
-        reinterpret_cast<uint8_t*>(data_.data()) + next_pos_to_parse_;
+    nalu_metadata.start_pointer = UNSAFE_TODO(
+        reinterpret_cast<uint8_t*>(data_.data()) + next_pos_to_parse_);
     nalu_metadata.start_index = next_pos_to_parse_;
     nalu_metadata.header_size = nalu.data.data() - nalu_metadata.start_pointer;
     nalu_metadata.size_with_header =
@@ -473,9 +470,9 @@ scoped_refptr<DecoderBuffer> EncodedDataHelperIVF::GetNextBuffer() {
       LOG(ERROR) << "data is too small";
       return nullptr;
     }
-    auto ivf_header = GetIvfFileHeader(base::span<const uint8_t>(
-        reinterpret_cast<const uint8_t*>(&data_[0]), kIvfFileHeaderSize));
-    if (strncmp(ivf_header.signature, "DKIF", kNALUHeaderSize) != 0) {
+    auto ivf_header = GetIvfFileHeader(
+        base::as_byte_span(data_).first<kIvfFileHeaderSize>());
+    if (std::string_view(ivf_header.signature, kNALUHeaderSize) != "DKIF") {
       LOG(ERROR) << "Unexpected data encountered while parsing IVF header";
       return nullptr;
     }
@@ -520,9 +517,11 @@ scoped_refptr<DecoderBuffer> EncodedDataHelperIVF::GetNextBuffer() {
   // Standard stream case.
   if (ivf_frames.size() == 1) {
     return DecoderBuffer::CopyFrom(
+        // SAFETY: IvfFrame currently uses raw_ptr and size. We safely create a
+        // span from it.
         // TODO(crbug.com/40284755): spanify `IvfFrame`.
-        UNSAFE_TODO(base::span(ivf_frames[0].data.get(),
-                               ivf_frames[0].header.frame_size)));
+        UNSAFE_BUFFERS(base::span(ivf_frames[0].data.get(),
+                                  ivf_frames[0].header.frame_size)));
   }
 
   if (ivf_frames.size() > 3) {
@@ -553,8 +552,8 @@ std::optional<IvfFrameHeader> EncodedDataHelperIVF::GetNextIvfFrameHeader()
     LOG(ERROR) << "Unexpected data encountered while parsing IVF frame header";
     return std::nullopt;
   }
-  return GetIvfFrameHeader(base::span<const uint8_t>(
-      reinterpret_cast<const uint8_t*>(&data_[pos]), kIvfFrameHeaderSize));
+  return GetIvfFrameHeader(
+      base::as_byte_span(data_).subspan(pos, kIvfFrameHeaderSize));
 }
 
 std::optional<IvfFrame> EncodedDataHelperIVF::ReadNextIvfFrame() {
@@ -713,10 +712,13 @@ scoped_refptr<VideoFrame> AlignedDataHelper::CreateVideoFrameFromVideoFrameData(
       return nullptr;
     }
 
+    const auto color_space = si_format->is_multi_plane()
+                                 ? gfx::ColorSpace::CreateREC709()
+                                 : gfx::ColorSpace::CreateSRGB();
     const auto si_usage = gpu::SHARED_IMAGE_USAGE_CPU_WRITE_ONLY |
                           gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
     auto shared_image = test_sii_->CreateSharedImage(
-        {*si_format, layout_->coded_size(), gfx::ColorSpace(),
+        {*si_format, layout_->coded_size(), color_space,
          gpu::SharedImageUsageSet(si_usage), "AlignedDataHelper"},
         gpu::kNullSurfaceHandle,
         gfx::BufferUsage::VEA_READ_CAMERA_AND_CPU_READ_WRITE,
@@ -725,9 +727,13 @@ scoped_refptr<VideoFrame> AlignedDataHelper::CreateVideoFrameFromVideoFrameData(
       LOG(ERROR) << "Failed to create a mappable shared image.";
       return nullptr;
     }
-    return media::VideoFrame::WrapMappableSharedImage(
+    auto video_frame = media::VideoFrame::WrapMappableSharedImage(
         std::move(shared_image), test_sii_->GenVerifiedSyncToken(),
         base::NullCallback(), visible_rect_, natural_size_, frame_timestamp);
+    if (video_frame) {
+      video_frame->set_color_space(color_space);
+    }
+    return video_frame;
   } else {
     const auto& shmem_region = video_frame_data.shmem_region;
     auto dup_region = shmem_region.Duplicate();
@@ -738,10 +744,13 @@ scoped_refptr<VideoFrame> AlignedDataHelper::CreateVideoFrameFromVideoFrameData(
     base::ReadOnlySharedMemoryMapping mapping = shmem_region.Map();
     uint8_t* buf = const_cast<uint8_t*>(mapping.GetMemoryAs<uint8_t>());
     std::array<base::span<uint8_t>, VideoFrame::kMaxPlanes> data = {};
+    // SAFETY: buf points to the start of the shared memory mapping of size
+    // mapping.size(). We create a safe span covering the whole mapping first.
+    auto buf_span = UNSAFE_BUFFERS(base::span(buf, mapping.size()));
     for (size_t i = 0; i < layout_->planes().size(); i++) {
       // TODO(crbug.com/40285824): spanify this usage.
-      data[i] = UNSAFE_TODO(base::span(buf + layout_->planes()[i].offset,
-                                       layout_->planes()[i].size));
+      data[i] = buf_span.subspan(layout_->planes()[i].offset,
+                                 layout_->planes()[i].size);
     }
     auto frame = media::VideoFrame::WrapExternalYuvDataWithLayout(
         *layout_, visible_rect_, natural_size_, data[0], data[1], data[2],
@@ -785,7 +794,7 @@ AlignedDataHelper::VideoFrameData AlignedDataHelper::CreateVideoFrameData(
         CloneVideoFrame(memory_frame.get(), dst_layout, test_sii,
                         VideoFrame::STORAGE_MAPPABLE_SHARED_IMAGE,
                         gfx::BufferUsage::VEA_READ_CAMERA_AND_CPU_READ_WRITE);
-    LOG_ASSERT(!!frame) << "Failed creating GpuMemoryBuffer VideoFrame";
+    LOG_ASSERT(!!frame) << "Failed creating MappableSharedImage VideoFrame";
 
     auto gmb_handle = CreateGpuMemoryBufferHandle(frame.get());
     LOG_ASSERT(!gmb_handle.is_null())
@@ -805,7 +814,7 @@ AlignedDataHelper::VideoFrameData AlignedDataHelper::CreateVideoFrameData(
     uint8_t* buffer = mapping.GetMemoryAs<uint8_t>();
     for (size_t i = 0; i < src_layout.planes().size(); i++) {
       auto dst_plane_layout = dst_layout.planes()[i];
-      uint8_t* dst_ptr = &buffer[dst_plane_layout.offset];
+      uint8_t* dst_ptr = UNSAFE_TODO(&buffer[dst_plane_layout.offset]);
       libyuv::CopyPlane(
           src_frame.plane_addrs[i], src_frame.strides[i], dst_ptr,
           dst_plane_layout.stride,

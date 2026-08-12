@@ -12,6 +12,7 @@
 #include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/session/session_controller.h"
 #include "ash/public/cpp/session/session_types.h"
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
@@ -35,9 +36,8 @@
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #include "chrome/browser/ui/ash/login/user_adding_screen.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
-#include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/managed_ui.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
 #include "chromeos/ash/components/login/session/session_termination_manager.h"
@@ -146,9 +146,11 @@ void OnAcceptMultiprofilesIntroDialog(bool accept, bool never_show_again) {
 
 SessionControllerClientImpl::SessionControllerClientImpl(
     PrefService& local_state) {
-  SessionManager::Get()->AddObserver(this);
-  UserManager::Get()->AddSessionStateObserver(this);
-  UserManager::Get()->AddObserver(this);
+  session_observation_.Observe(SessionManager::Get());
+  user_manager_observation_.Observe(UserManager::Get());
+  user_session_state_observation_.Observe(UserManager::Get());
+  device_off_hours_controller_observation_.Observe(
+      ash::DeviceSettingsService::Get()->device_off_hours_controller());
 
   subscription_ = browser_shutdown::AddAppTerminatingCallback(base::BindOnce(
       &SessionControllerClientImpl::OnAppTerminating, base::Unretained(this)));
@@ -156,15 +158,13 @@ SessionControllerClientImpl::SessionControllerClientImpl(
   local_state_registrar_ = std::make_unique<PrefChangeRegistrar>();
   local_state_registrar_->Init(&local_state);
   local_state_registrar_->Add(
-      prefs::kSessionStartTime,
+      ash::prefs::kSessionStartTime,
       base::BindRepeating(&SessionControllerClientImpl::SendSessionLengthLimit,
                           base::Unretained(this)));
   local_state_registrar_->Add(
-      prefs::kSessionLengthLimit,
+      ash::prefs::kSessionLengthLimit,
       base::BindRepeating(&SessionControllerClientImpl::SendSessionLengthLimit,
                           base::Unretained(this)));
-  ash::DeviceSettingsService::Get()->device_off_hours_controller()->AddObserver(
-      this);
   DCHECK(!g_session_controller_client_instance);
   g_session_controller_client_instance = this;
 }
@@ -176,18 +176,6 @@ SessionControllerClientImpl::~SessionControllerClientImpl() {
       session_controller_ == ash::SessionController::Get()) {
     session_controller_->SetClient(nullptr);
   }
-
-  if (supervised_user_profile_) {
-    SupervisedUserServiceFactory::GetForProfile(supervised_user_profile_)
-        ->RemoveObserver(this);
-  }
-
-  SessionManager::Get()->RemoveObserver(this);
-  UserManager::Get()->RemoveObserver(this);
-  UserManager::Get()->RemoveSessionStateObserver(this);
-  ash::DeviceSettingsService::Get()
-      ->device_off_hours_controller()
-      ->RemoveObserver(this);
 }
 
 void SessionControllerClientImpl::Init() {
@@ -309,16 +297,6 @@ void SessionControllerClientImpl::ShowMultiProfileLogin() {
   }
 }
 
-void SessionControllerClientImpl::EmitAshInitialized() {
-  // Emit the ash-initialized upstart signal to start Chrome OS tasks that
-  // expect that Ash is listening to D-Bus signals they emit. For example,
-  // hammerd, which handles detachable base state, communicates the base state
-  // purely by emitting D-Bus signals, and thus has to be run whenever Ash is
-  // started so Ash (DetachableBaseHandler in particular) gets the proper view
-  // of the current detachable base state.
-  ash::SessionManagerClient::Get()->EmitAshInitialized();
-}
-
 PrefService* SessionControllerClientImpl::GetSigninScreenPrefService() {
   auto* profile = ash::ProfileHelper::Get()->GetSigninProfile();
   if (!profile) {
@@ -399,11 +377,6 @@ void SessionControllerClientImpl::ActiveUserChanged(User* active_user) {
   }
 
   SendUserSessionOrder();
-}
-
-void SessionControllerClientImpl::UserAddedToSession(const User* added_user) {
-  SendSessionInfoIfChanged();
-  SendUserSession(*added_user);
 }
 
 void SessionControllerClientImpl::LocalStateChanged(
@@ -547,6 +520,13 @@ void SessionControllerClientImpl::DoCycleActiveUser(
   DoSwitchActiveUser(account_id);
 }
 
+void SessionControllerClientImpl::OnSessionCreated(
+    const AccountId& account_id) {
+  UserManager* const user_manager = UserManager::Get();
+  SendSessionInfoIfChanged();
+  SendUserSession(CHECK_DEREF(user_manager->FindUser(account_id)));
+}
+
 void SessionControllerClientImpl::OnSessionStateChanged() {
   TRACE_EVENT0("ui", "SessionControllerClientImpl::OnSessionStateChanged");
   if (SessionManager::Get()->session_state() == SessionState::ACTIVE) {
@@ -592,8 +572,8 @@ void SessionControllerClientImpl::OnLoginUserProfilePrepared(Profile* profile) {
     supervised_user_profile_ = profile;
 
     // Watch for changes to supervised user manager/custodians.
-    SupervisedUserServiceFactory::GetForProfile(supervised_user_profile_)
-        ->AddObserver(this);
+    supervised_user_service_observation_.Observe(
+        supervised_user::SupervisedUserServiceFactory::GetForProfile(supervised_user_profile_));
   }
 
   base::RepeatingClosure session_info_changed_closure = base::BindRepeating(
@@ -680,15 +660,15 @@ void SessionControllerClientImpl::SendUserSessionOrder() {
 void SessionControllerClientImpl::SendSessionLengthLimit() {
   const PrefService* local_state = local_state_registrar_->prefs();
   base::TimeDelta session_length_limit;
-  if (local_state->HasPrefPath(prefs::kSessionLengthLimit)) {
+  if (local_state->HasPrefPath(ash::prefs::kSessionLengthLimit)) {
     session_length_limit = base::Milliseconds(
-        std::clamp(local_state->GetInteger(prefs::kSessionLengthLimit),
+        std::clamp(local_state->GetInteger(ash::prefs::kSessionLengthLimit),
                    kSessionLengthLimitMinMs, kSessionLengthLimitMaxMs));
   }
   base::Time session_start_time;
-  if (local_state->HasPrefPath(prefs::kSessionStartTime)) {
+  if (local_state->HasPrefPath(ash::prefs::kSessionStartTime)) {
     session_start_time = base::Time::FromInternalValue(
-        local_state->GetInt64(prefs::kSessionStartTime));
+        local_state->GetInt64(ash::prefs::kSessionStartTime));
   }
 
   policy::off_hours::DeviceOffHoursController* off_hours_controller =

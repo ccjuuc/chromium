@@ -14,6 +14,7 @@
 
 #include <utility>
 
+#include "base/byte_size.h"
 #include "base/check.h"
 #include "base/cpu.h"
 #include "base/functional/bind.h"
@@ -78,7 +79,7 @@ std::string GetOperatingSystemVersion() {
 }
 
 // Adds the list of |fonts| to the |machine|.
-void AddFontsToFingerprint(const base::Value::List& fonts,
+void AddFontsToFingerprint(const base::ListValue& fonts,
                            Fingerprint::MachineCharacteristics* machine) {
   for (const auto& it : fonts) {
     // Each item in the list is a two-element list such that the first element
@@ -180,7 +181,7 @@ class FingerprintDataLoader : public content::GpuDataManagerObserver {
   void OnGpuInfoUpdate() override;
 
   // Callbacks for asynchronously loaded data.
-  void OnGotFonts(base::Value::List fonts);
+  void OnGotFonts(base::ListValue fonts);
 
   // If all of the asynchronous data has been loaded, calls |callback_| with
   // the fingerprint data.
@@ -213,7 +214,7 @@ class FingerprintDataLoader : public content::GpuDataManagerObserver {
   const base::Time install_time_;
 
   // Data that will be loaded asynchronously.
-  std::unique_ptr<base::Value::List> fonts_;
+  std::unique_ptr<base::ListValue> fonts_;
 
   // Timer to enforce a maximum timeout before the |callback_| is called, even
   // if not all asynchronous data has been loaded.
@@ -280,9 +281,9 @@ void FingerprintDataLoader::OnGpuInfoUpdate() {
   MaybeFillFingerprint();
 }
 
-void FingerprintDataLoader::OnGotFonts(base::Value::List fonts) {
+void FingerprintDataLoader::OnGotFonts(base::ListValue fonts) {
   DCHECK(!fonts_);
-  fonts_ = std::make_unique<base::Value::List>(std::move(fonts));
+  fonts_ = std::make_unique<base::ListValue>(std::move(fonts));
   MaybeFillFingerprint();
 }
 
@@ -311,7 +312,7 @@ void FingerprintDataLoader::FillFingerprint() {
   machine->set_browser_language(app_locale_);
   machine->set_charset(charset_);
   machine->set_user_agent(user_agent_);
-  machine->set_ram(base::SysInfo::AmountOfPhysicalMemory().InBytes());
+  machine->set_ram(base::SysInfo::AmountOfTotalPhysicalMemory().InBytes());
   machine->set_browser_build(version_);
   machine->set_browser_feature(
       Fingerprint::MachineCharacteristics::FEATURE_REQUEST_AUTOCOMPLETE);

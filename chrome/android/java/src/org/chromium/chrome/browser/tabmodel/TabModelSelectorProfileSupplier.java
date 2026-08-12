@@ -8,43 +8,36 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 
 import org.chromium.base.Callback;
 import org.chromium.base.lifetime.Destroyable;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.NonNullObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
-import org.chromium.base.supplier.SettableObservableSupplier;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
 
 /**
- * {@link ObservableSupplier} for {@link Profile} that updates each time the profile of the current
+ * {@link MonotonicObservableSupplier} for {@link Profile} that updates each time the profile of the current
  * tab model changes, e.g. if the current tab model switches to/from incognito. Like {@link
- * org.chromium.base.supplier.ObservableSupplier}, this class must only be accessed from a single
+ * MonotonicObservableSupplier}, this class must only be accessed from a single
  * thread.
  */
 @NullMarked
-public class TabModelSelectorProfileSupplier implements ObservableSupplier<Profile>, Destroyable {
+public class TabModelSelectorProfileSupplier
+        implements MonotonicObservableSupplier<Profile>, Destroyable {
     private final TabModelSelectorObserver mSelectorObserver;
-    private final ObservableSupplier<TabModelSelector> mSelectorSupplier;
+    private final MonotonicObservableSupplier<TabModelSelector> mSelectorSupplier;
     private final Callback<TabModelSelector> mSelectorSupplierCallback;
     private final Callback<TabModel> mCurrentTabModelObserver;
-    private final SettableObservableSupplier<Profile> mSupplier =
+    private final SettableMonotonicObservableSupplier<Profile> mSupplier =
             ObservableSuppliers.createMonotonic();
 
     private @Nullable TabModelSelector mSelector;
 
-    public TabModelSelectorProfileSupplier(ObservableSupplier<TabModelSelector> selectorSupplier) {
+    public TabModelSelectorProfileSupplier(
+            MonotonicObservableSupplier<TabModelSelector> selectorSupplier) {
         mSelectorObserver =
                 new TabModelSelectorObserver() {
-                    @Override
-                    public void onChange() {
-                        assumeNonNull(mSelector);
-                        if (mSelector.getCurrentModel() == null) return;
-                        Profile profile = mSelector.getCurrentModel().getProfile();
-                        if (profile == null) return;
-                        set(profile);
-                    }
-
                     @Override
                     public void onTabStateInitialized() {
                         assumeNonNull(mSelector);
@@ -63,7 +56,7 @@ public class TabModelSelectorProfileSupplier implements ObservableSupplier<Profi
 
         mSelectorSupplier = selectorSupplier;
         mSelectorSupplierCallback = this::setSelector;
-        mSelectorSupplier.addObserver(mSelectorSupplierCallback);
+        mSelectorSupplier.addSyncObserverAndPostIfNonNull(mSelectorSupplierCallback);
 
         var selector = mSelectorSupplier.get();
         if (selector != null) {
@@ -80,7 +73,9 @@ public class TabModelSelectorProfileSupplier implements ObservableSupplier<Profi
 
         mSelector = selector;
         mSelector.addObserver(mSelectorObserver);
-        mSelector.getCurrentTabModelSupplier().addObserver(mCurrentTabModelObserver);
+        mSelector
+                .getCurrentTabModelSupplier()
+                .addSyncObserverAndPostIfNonNull(mCurrentTabModelObserver);
 
         if (selector.getCurrentModel() != null) {
             mCurrentTabModelObserver.onResult(selector.getCurrentModel());
@@ -105,7 +100,7 @@ public class TabModelSelectorProfileSupplier implements ObservableSupplier<Profi
     }
 
     @Override
-    public Profile get() {
+    public @Nullable Profile get() {
         Profile profile = mSupplier.get();
         // TODO(365814339): Convert to checked exception once all callsites are fixed.
         assert profile == null || !profile.shutdownStarted()

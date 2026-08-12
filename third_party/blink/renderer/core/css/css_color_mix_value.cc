@@ -59,23 +59,10 @@ bool CSSColorMixValue::NormalizePercentages(
   return true;
 }
 
-Color CSSColorMixValue::Mix(const Color& color1,
-                            const Color& color2,
-                            const CSSLengthResolver& length_resolver) const {
-  double alpha_multiplier;
-  double mix_amount;
-  if (!NormalizePercentages(mix_amount, alpha_multiplier, length_resolver)) {
-    return Color();
-  }
-  return Color::FromColorMix(ColorInterpolationSpace(),
-                             HueInterpolationMethod(), color1, color2,
-                             mix_amount, alpha_multiplier);
-}
-
 bool CSSColorMixValue::Equals(const CSSColorMixValue& other) const {
-  return color1_ == other.color1_ && color2_ == other.color2_ &&
-         percentage1_ == other.percentage1_ &&
-         percentage2_ == other.percentage2_ &&
+  return *color1_ == *other.color1_ && *color2_ == *other.color2_ &&
+         base::ValuesEquivalent(percentage1_, other.percentage1_) &&
+         base::ValuesEquivalent(percentage2_, other.percentage2_) &&
          color_interpolation_space_ == other.color_interpolation_space_ &&
          hue_interpolation_method_ == other.hue_interpolation_method_;
 }
@@ -84,38 +71,29 @@ std::pair<const CSSPrimitiveValue*, const CSSPrimitiveValue*>
 CSSColorMixValue::PercentageValuesForSerialization(
     const CSSPrimitiveValue* p1,
     const CSSPrimitiveValue* p2) {
-  if (p1) {
-    if (auto* p1_literal = DynamicTo<CSSNumericLiteralValue>(*p1)) {
-      const double p1_literal_percent = p1_literal->ComputePercentage();
-      if (p2) {
-        if (auto* p2_literal = DynamicTo<CSSNumericLiteralValue>(*p2)) {
-          const double p2_literal_percent = p2_literal->ComputePercentage();
-          if (p1_literal_percent == 50.0 && p2_literal_percent == 50.0) {
-            return {nullptr, nullptr};
-          }
-          if (p1_literal_percent + p2_literal_percent == 100.0) {
-            return {p1, nullptr};
-          }
-        }
-      } else {
-        if (p1_literal_percent == 50.0) {
-          return {nullptr, nullptr};
-        }
-      }
-    }
-    return {p1, p2};
-  }
-  if (p2) {
-    if (auto* p2_literal = DynamicTo<CSSNumericLiteralValue>(*p2)) {
-      if (p2_literal->ComputePercentage() == 50.0) {
+  const auto* p1_literal = DynamicTo<CSSNumericLiteralValue>(p1);
+  const auto* p2_literal = DynamicTo<CSSNumericLiteralValue>(p2);
+
+  if (p1_literal) {
+    const double p1_percent = p1_literal->ComputePercentage();
+    if (p1_percent == 50.0) {
+      if (!p2 || (p2_literal && p2_literal->ComputePercentage() == 50.0)) {
         return {nullptr, nullptr};
       }
-      return {p2->SubtractFrom(100.0, CSSPrimitiveValue::UnitType::kPercentage),
-              nullptr};
+    } else if (!p2) {
+      return {p1, p1->SubtractFrom(100.0,
+                                   CSSPrimitiveValue::UnitType::kPercentage)};
     }
-    return {nullptr, p2};
+  } else if (!p1 && p2_literal) {
+    const double p2_percent = p2_literal->ComputePercentage();
+    if (p2_percent == 50.0) {
+      return {nullptr, nullptr};
+    }
+    return {p2->SubtractFrom(100.0, CSSPrimitiveValue::UnitType::kPercentage),
+            p2};
   }
-  return {nullptr, nullptr};
+
+  return {p1, p2};
 }
 
 String CSSColorMixValue::CustomCSSText() const {
@@ -154,39 +132,11 @@ String CSSColorMixValue::CustomCSSText() const {
   return result.ReleaseString();
 }
 
-const CSSValue*
-CSSColorMixValue::CopyRandomValueWithPropertyNameAndValueIndexIfNeeded(
-    const CSSPropertyName& property_name,
-    wtf_size_t property_value_index) const {
-  const CSSValue* color1 =
-      color1_ ? color1_->CopyRandomValueWithPropertyNameAndValueIndexIfNeeded(
-                    property_name, property_value_index)
-              : nullptr;
-  const CSSValue* color2 =
-      color2_ ? color2_->CopyRandomValueWithPropertyNameAndValueIndexIfNeeded(
-                    property_name, property_value_index + 1)
-              : nullptr;
-  const CSSPrimitiveValue* percentage1 =
-      percentage1_
-          ? To<CSSPrimitiveValue>(
-                percentage1_
-                    ->CopyRandomValueWithPropertyNameAndValueIndexIfNeeded(
-                        property_name, property_value_index + 2))
-          : nullptr;
-  const CSSPrimitiveValue* percentage2 =
-      percentage2_
-          ? To<CSSPrimitiveValue>(
-                percentage2_
-                    ->CopyRandomValueWithPropertyNameAndValueIndexIfNeeded(
-                        property_name, property_value_index + 3))
-          : nullptr;
-  if (color1 != color1_ || color2 != color2_ || percentage1 != percentage1_ ||
-      percentage2 != percentage2_) {
-    return MakeGarbageCollected<CSSColorMixValue>(
-        color1, color2, percentage1, percentage2, color_interpolation_space_,
-        hue_interpolation_method_);
-  }
-  return this;
+bool CSSColorMixValue::HasRandomFunctions() const {
+  return (color1_ && color1_->HasRandomFunctions()) ||
+         (color2_ && color2_->HasRandomFunctions()) ||
+         (percentage1_ && percentage1_->HasRandomFunctions()) ||
+         (percentage2_ && percentage2_->HasRandomFunctions());
 }
 
 void CSSColorMixValue::TraceAfterDispatch(blink::Visitor* visitor) const {

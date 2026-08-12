@@ -227,6 +227,12 @@ public class TabGroupSyncServiceAndroidUnitTest {
     }
 
     @CalledByNative
+    public void testGetArchivedGroupCount() {
+        int count = mService.getArchivedGroupCount();
+        Assert.assertEquals(1, count);
+    }
+
+    @CalledByNative
     public void testGetDeletedGroupIds() {
         List<LocalTabGroupId> groupIds = mService.getDeletedGroupIds();
         Assert.assertEquals(1, groupIds.size());
@@ -278,6 +284,7 @@ public class TabGroupSyncServiceAndroidUnitTest {
     }
 
     @CalledByNative
+    @SuppressWarnings("unchecked") // mock(Callback.class) returns raw Callback.
     public void testShouldShowMessageUiAsync() {
         mCallback = mock(Callback.class);
         mService.getVersioningMessageController()

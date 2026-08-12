@@ -24,6 +24,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_RULE_SET_H_
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/stack_allocated.h"
 #include "base/substring_set_matcher/substring_set_matcher.h"
@@ -37,7 +38,6 @@
 #include "third_party/blink/renderer/core/css/rule_feature_set.h"
 #include "third_party/blink/renderer/core/css/valid_property_filter.h"
 #include "third_party/blink/renderer/core/dom/element.h"
-#include "third_party/blink/renderer/core/route_matching/route_match_state.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_linked_stack.h"
@@ -48,6 +48,7 @@
 
 namespace blink {
 
+class NavigationState;
 class RuleSet;
 class StyleRuleCounterStyle;
 class StyleRuleFontFeatureValues;
@@ -64,7 +65,6 @@ enum AddRuleFlag {
   kRuleIsVisitedDependent = 1 << 0,
   kRuleIsStartingStyle = 1 << 1,
 };
-
 
 class CSSSelector;
 class MediaQueryEvaluator;
@@ -120,7 +120,8 @@ class CORE_EXPORT RuleData {
   // Member functions related to the descendant Bloom filter.
   const base::span<const uint16_t> DescendantSelectorIdentifierHashes(
       const Vector<uint16_t>& backing) const {
-    return UNSAFE_TODO({backing.data() + bloom_hash_pos_, bloom_hash_size_});
+    return UNSAFE_BUFFERS(
+        {base::unchecked, backing.data() + bloom_hash_pos_, bloom_hash_size_});
   }
   void ComputeBloomFilterHashes(const StyleScope* style_scope,
                                 Vector<uint16_t>& backing);
@@ -232,7 +233,7 @@ class RuleMap {
 
  public:
   // Returns false on failure (which should be very rare).
-  bool Add(const AtomicString& key, const RuleData& rule_data);
+  [[nodiscard]] bool Add(const AtomicString& key, const RuleData& rule_data);
   void AddFilteredRulesFromOtherSet(
       const RuleMap& other,
       const HeapHashSet<Member<StyleRule>>& only_include,
@@ -249,8 +250,9 @@ class RuleMap {
     if (bucket == nullptr) {
       return {};
     } else {
-      return UNSAFE_TODO(
-          {backing.begin() + bucket->value.start_index, bucket->value.length});
+      return UNSAFE_BUFFERS({base::unchecked,
+                             backing.begin() + bucket->value.start_index,
+                             bucket->value.length});
     }
   }
   bool IsEmpty() const { return backing.empty(); }
@@ -285,18 +287,23 @@ class RuleMap {
 
  private:
   base::span<RuleData> GetRulesFromExtent(Extent extent) {
-    return UNSAFE_TODO({backing.begin() + extent.start_index, extent.length});
+    return UNSAFE_BUFFERS(
+        {base::unchecked, backing.begin() + extent.start_index, extent.length});
   }
   base::span<const RuleData> GetRulesFromExtent(Extent extent) const {
-    return UNSAFE_TODO({backing.begin() + extent.start_index, extent.length});
+    return UNSAFE_BUFFERS(
+
+        {base::unchecked, backing.begin() + extent.start_index, extent.length});
   }
   base::span<unsigned> GetBucketNumberFromExtent(Extent extent) {
-    return UNSAFE_TODO(
-        {bucket_number_.begin() + extent.start_index, extent.length});
+    return UNSAFE_BUFFERS({base::unchecked,
+                           bucket_number_.begin() + extent.start_index,
+                           extent.length});
   }
   base::span<const unsigned> GetBucketNumberFromExtent(Extent extent) const {
-    return UNSAFE_TODO(
-        {bucket_number_.begin() + extent.start_index, extent.length});
+    return UNSAFE_BUFFERS({base::unchecked,
+                           bucket_number_.begin() + extent.start_index,
+                           extent.length});
   }
 
   RobinHoodMap<AtomicString, Extent> buckets;
@@ -369,7 +376,7 @@ class CORE_EXPORT RuleSet final : public GarbageCollected<RuleSet> {
                   const MediaQueryEvaluator& medium,
                   const MixinMap& mixins,
                   AddRuleFlags add_rule_flags,
-                  const ContainerQuery* container_query,
+                  const ContainerQuerySet* container_queries,
                   CascadeLayer* cascade_layer,
                   const StyleScope* style_scope,
                   ApplyMixinsStack& apply_mixins_stack);
@@ -384,7 +391,7 @@ class CORE_EXPORT RuleSet final : public GarbageCollected<RuleSet> {
                     const MixinMap& mixins,
                     AddRuleFlags add_rule_flags,
                     ApplyMixinsStack& apply_mixins_stack,
-                    const ContainerQuery* container_query = nullptr,
+                    const ContainerQuerySet* container_queries = nullptr,
                     CascadeLayer* cascade_layer = nullptr,
                     const StyleScope* style_scope = nullptr);
 
@@ -466,15 +473,10 @@ class CORE_EXPORT RuleSet final : public GarbageCollected<RuleSet> {
   base::span<const RuleData> PartPseudoRules() const {
     return part_pseudo_rules_;
   }
-  base::span<const RuleData> SelectorFragmentAnchorRules() const {
-    return selector_fragment_anchor_rules_;
-  }
   base::span<const RuleData> ActiveViewTransitionRules() const {
     return active_view_transition_rules_;
   }
-  base::span<const RuleData> OverscrollTargetRules() const {
-    return overscroll_target_rules_;
-  }
+
   const HeapVector<CascadeLayered<StyleRulePage>>& PageRules() const {
     return page_rules_;
   }
@@ -580,7 +582,7 @@ class CORE_EXPORT RuleSet final : public GarbageCollected<RuleSet> {
   // start_position (exclusive) share some property:
   //
   //   - If T = CascadeLayer, belong to the given layer.
-  //   - If T = ContainerQuery, are predicated on the given container query.
+  //   - If T = ContainerQuerySet, are predicated on the given container query.
   //   - If T = StyleScope, are declared in the given @style scope.
   //
   // We do this instead of putting the data directly onto the RuleData,
@@ -604,7 +606,8 @@ class CORE_EXPORT RuleSet final : public GarbageCollected<RuleSet> {
   const HeapVector<Interval<CascadeLayer>>& LayerIntervals() const {
     return layer_intervals_;
   }
-  const HeapVector<Interval<ContainerQuery>>& ContainerQueryIntervals() const {
+  const HeapVector<Interval<ContainerQuerySet>>& ContainerQueryIntervals()
+      const {
     return container_query_intervals_;
   }
   const HeapVector<Interval<StyleScope>>& ScopeIntervals() const {
@@ -652,10 +655,17 @@ class CORE_EXPORT RuleSet final : public GarbageCollected<RuleSet> {
                      const MediaQueryEvaluator& medium,
                      const MixinMap& mixins,
                      AddRuleFlags,
-                     const ContainerQuery*,
+                     const ContainerQuerySet*,
                      CascadeLayer*,
                      const StyleScope*,
                      ApplyMixinsStack& apply_mixins_stack);
+  void FlattenMixinLocals(
+      base::span<const Member<StyleRuleBase>> rules,
+      const MediaQueryEvaluator& medium,
+      const ContainerQuerySet* container_queries,
+      HeapHashMap<String, Member<CSSVariableData>>& locals,
+      HeapHashMap<String, HeapVector<MixinParameterBindings::CQDependentValue>>&
+          cq_dependent_locals);
 
   // Determines whether or not CSSSelector::is_covered_by_bucketing_ should
   // be computed during calls to FindBestBucketAndAdd.
@@ -670,7 +680,7 @@ class CORE_EXPORT RuleSet final : public GarbageCollected<RuleSet> {
   void AddRule(StyleRule*,
                unsigned selector_index,
                AddRuleFlags,
-               const ContainerQuery*,
+               const ContainerQuerySet*,
                const CascadeLayer*,
                const StyleScope*);
 
@@ -755,11 +765,9 @@ class CORE_EXPORT RuleSet final : public GarbageCollected<RuleSet> {
   HeapVector<RuleData> shadow_host_rules_;
   HeapVector<RuleData> part_pseudo_rules_;
   HeapVector<RuleData> slotted_pseudo_element_rules_;
-  HeapVector<RuleData> selector_fragment_anchor_rules_;
   // Separate bucket for :active-view-transition rules, to support a default
   // view-transition-name in user-agent style.
   HeapVector<RuleData> active_view_transition_rules_;
-  HeapVector<RuleData> overscroll_target_rules_;
   HeapVector<RuleData> root_element_rules_;
   RuleFeatureSet features_;
   HeapVector<CascadeLayered<StyleRulePage>> page_rules_;
@@ -775,8 +783,9 @@ class CORE_EXPORT RuleSet final : public GarbageCollected<RuleSet> {
   HeapVector<CascadeLayered<StyleRuleFunction>> function_rules_;
   HeapVector<MediaQuerySetResult> media_query_set_results_;
 
-  // State of route matching when this RuleSet was built.
-  Member<RouteMatchState> route_match_state_;
+  // Navigation state (and thus route matching state) when this RuleSet was
+  // built.
+  Member<NavigationState> navigation_state_;
 
   // Whether there is a ruleset bucket for rules with a selector on
   // the style attribute (which is rare, but allowed). If so, the caller
@@ -810,7 +819,7 @@ class CORE_EXPORT RuleSet final : public GarbageCollected<RuleSet> {
   // Empty vector if the stylesheet doesn't explicitly declare any layer.
   HeapVector<Interval<CascadeLayer>> layer_intervals_;
   // Empty vector if the stylesheet doesn't use any container queries.
-  HeapVector<Interval<ContainerQuery>> container_query_intervals_;
+  HeapVector<Interval<ContainerQuerySet>> container_query_intervals_;
   // Empty vector if the stylesheet doesn't use any @scopes.
   HeapVector<Interval<StyleScope>> scope_intervals_;
 
@@ -841,7 +850,7 @@ class CORE_EXPORT RuleSet final : public GarbageCollected<RuleSet> {
 WTF_ALLOW_CLEAR_UNUSED_SLOTS_WITH_MEM_FUNCTIONS(
     blink::RuleSet::Interval<blink::CascadeLayer>)
 WTF_ALLOW_CLEAR_UNUSED_SLOTS_WITH_MEM_FUNCTIONS(
-    blink::RuleSet::Interval<blink::ContainerQuery>)
+    blink::RuleSet::Interval<blink::ContainerQuerySet>)
 WTF_ALLOW_CLEAR_UNUSED_SLOTS_WITH_MEM_FUNCTIONS(
     blink::RuleSet::Interval<blink::StyleScope>)
 WTF_ALLOW_CLEAR_UNUSED_SLOTS_WITH_MEM_FUNCTIONS(blink::RuleSet::ApplyingMixin)

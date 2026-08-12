@@ -61,10 +61,10 @@ import './screens/osauth/enter_old_password.js';
 import './screens/osauth/osauth_error.js';
 import './screens/osauth/password_selection.js';
 import './screens/osauth/pin_setup.js';
+import './screens/osauth/remove_local_auth_factors.js';
 // AUTHENTICATION SCREENS USED DURING THE LOGIN FLOW
 import './screens/osauth/cryptohome_recovery.js';
 // SCREENS USED DURING THE LOGIN FLOW
-import './screens/login/arc_vm_data_migration.js';
 import './screens/login/encryption_migration.js';
 import './screens/login/management_transition.js';
 import './screens/login/offline_login.js';
@@ -77,6 +77,9 @@ import './screens/oobe/demo_preferences.js';
 import './screens/oobe/demo_setup.js';
 import './screens/oobe/enable_debugging.js';
 import './screens/oobe/enterprise_enrollment.js';
+import './screens/oobe/fjord_fw_update.js';
+import './screens/oobe/fjord_image_download.js';
+import './screens/oobe/fjord_image_selection.js';
 import './screens/oobe/fjord_station_setup.js';
 import './screens/oobe/fjord_touch_controller.js';
 import './screens/oobe/hid_detection.js';
@@ -212,17 +215,13 @@ export const commonScreensList: OobeTypes.ScreensList = [
     id: 'user-allowlist-check-screen',
   },
   {tag: 'wrong-hwid-element', id: 'wrong-hwid'},
+  {tag: 'remove-local-auth-factors-element', id: 'remove-local-auth-factors'}
 ];
 
 /**
  * List of screens that are used during the `login` flow only.
  */
 export const loginScreensList: OobeTypes.ScreensList = [
-  {
-    tag: 'arc-vm-data-migration-element',
-    id: 'arc-vm-data-migration',
-    condition: 'isArcVmDataMigrationEnabled',
-  },
   {tag: 'cryptohome-recovery-element', id: 'cryptohome-recovery'},
   {tag: 'encryption-migration-element', id: 'encryption-migration'},
   {
@@ -253,6 +252,21 @@ export const oobeScreensList: OobeTypes.ScreensList = [
   {tag: 'demo-setup-element', id: 'demo-setup'},
   {tag: 'enable-debugging-element', id: 'debugging'},
   {tag: 'enterprise-enrollment-element', id: 'enterprise-enrollment'},
+  {
+    tag: 'fjord-fw-update-element',
+    id: 'fjord-fw-update',
+    condition: 'isFjordOobeEnabled',
+  },
+  {
+    tag: 'fjord-image-selection-element',
+    id: 'fjord-image-selection',
+    condition: 'isFjordOobeImageSwitchEnabled',
+  },
+  {
+    tag: 'fjord-image-download-element',
+    id: 'fjord-image-download',
+    condition: 'isFjordOobeImageSwitchEnabled',
+  },
   {
     tag: 'fjord-station-setup-element',
     id: 'fjord-station-setup',

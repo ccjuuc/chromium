@@ -12,30 +12,22 @@ import androidx.annotation.MainThread;
 
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.profiles.ProfileProvider;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncConfig;
 import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncCoordinator;
 import org.chromium.chrome.browser.ui.signin.FullscreenSigninAndHistorySyncConfig;
-import org.chromium.chrome.browser.ui.signin.R;
 import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncActivityLauncher;
 import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncCoordinator;
-import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncConfig;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.device_lock.DeviceLockActivityLauncher;
-import org.chromium.components.browser_ui.settings.ManagedPreferencesUtils;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
-import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.ui.base.ActivityResultTracker;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modaldialog.ModalDialogManager;
-import org.chromium.ui.widget.Toast;
 
 import java.util.function.Supplier;
 
@@ -73,40 +65,17 @@ public final class SigninAndHistorySyncActivityLauncherImpl
             BottomSheetSigninAndHistorySyncConfig config,
             @AccessPoint int accessPoint) {
 
-        if (canStartSigninAndHistorySyncOrShowError(
-                context, profile, config.historyOptInMode, accessPoint)) {
+        if (SigninAndHistorySyncCoordinator.canStartSigninAndHistorySyncOrShowError(
+                context,
+                profile,
+                config.historyOptInMode,
+                accessPoint,
+                null,
+                SigninAndHistorySyncCoordinator.SigninFlow.DEFAULT_SIGNIN)) {
             return SigninAndHistorySyncActivity.createIntent(context, config, accessPoint);
         }
 
         return null;
-    }
-
-    private boolean canStartSigninAndHistorySyncOrShowError(
-            Context context,
-            Profile profile,
-            @HistorySyncConfig.OptInMode int historyOptInMode,
-            @SigninAccessPoint int accessPoint) {
-        if (SigninAndHistorySyncCoordinator.willShowSigninUi(profile)
-                || SigninAndHistorySyncCoordinator.willShowHistorySyncUi(
-                        profile, historyOptInMode)) {
-            return true;
-        }
-        // TODO(crbug.com/354912290): Update the UI related to sign-in errors.
-        if (UserPrefs.get(profile).isManagedPreference(Pref.SIGNIN_ALLOWED)) {
-            RecordHistogram.recordEnumeratedHistogram(
-                    "Signin.SigninDisabledNotificationShown",
-                    accessPoint,
-                    SigninAccessPoint.MAX_VALUE);
-            ManagedPreferencesUtils.showManagedByAdministratorToast(context);
-        } else {
-            Toast.makeText(
-                            context,
-                            context.getString(
-                                    R.string.signin_account_picker_bottom_sheet_error_title),
-                            Toast.LENGTH_LONG)
-                    .show();
-        }
-        return false;
     }
 
     @MainThread
@@ -118,10 +87,10 @@ public final class SigninAndHistorySyncActivityLauncherImpl
                     ActivityResultTracker activityResultTracker,
                     BottomSheetSigninAndHistorySyncCoordinator.Delegate delegate,
                     DeviceLockActivityLauncher deviceLockActivityLauncher,
-                    OneshotSupplier<ProfileProvider> profileSupplier,
-                    BottomSheetController bottomSheetController,
-                    Supplier<@Nullable ModalDialogManager> modalDialogManagerSupplier,
-                    SnackbarManager snackbarManager,
+                    OneshotSupplier<Profile> profileSupplier,
+                    Supplier<BottomSheetController> bottomSheetController,
+                    ModalDialogManager modalDialogManager,
+                    @Nullable SnackbarManager snackbarManager,
                     @SigninAccessPoint int signinAccessPoint) {
         return BottomSheetSigninAndHistorySyncCoordinator.createAndObserveAddAccountResult(
                 windowAndroid,
@@ -131,7 +100,7 @@ public final class SigninAndHistorySyncActivityLauncherImpl
                 deviceLockActivityLauncher,
                 profileSupplier,
                 bottomSheetController,
-                modalDialogManagerSupplier,
+                modalDialogManager,
                 snackbarManager,
                 signinAccessPoint);
     }
@@ -142,9 +111,15 @@ public final class SigninAndHistorySyncActivityLauncherImpl
             Profile profile,
             FullscreenSigninAndHistorySyncConfig config,
             @SigninAccessPoint int signinAccessPoint) {
-        if (SigninAndHistorySyncCoordinator.willShowSigninUi(profile)
+        if (SigninAndHistorySyncCoordinator.willShowSigninUi(
+                        profile,
+                        config.signinConfig.signinFlow,
+                        config.signinConfig.selectedAccountEmail)
                 || SigninAndHistorySyncCoordinator.willShowHistorySyncUi(
-                        profile, config.historyOptInMode)) {
+                        profile,
+                        config.historyOptInMode,
+                        config.signinConfig.signinFlow,
+                        config.signinConfig.selectedAccountEmail)) {
             return SigninAndHistorySyncActivity.createIntentForFullscreenSignin(
                     context, config, signinAccessPoint);
         }
@@ -157,8 +132,13 @@ public final class SigninAndHistorySyncActivityLauncherImpl
             Profile profile,
             FullscreenSigninAndHistorySyncConfig config,
             @SigninAccessPoint int signinAccessPoint) {
-        if (canStartSigninAndHistorySyncOrShowError(
-                context, profile, config.historyOptInMode, signinAccessPoint)) {
+        if (SigninAndHistorySyncCoordinator.canStartSigninAndHistorySyncOrShowError(
+                context,
+                profile,
+                config.historyOptInMode,
+                signinAccessPoint,
+                config.signinConfig.selectedAccountEmail,
+                config.signinConfig.signinFlow)) {
             return SigninAndHistorySyncActivity.createIntentForFullscreenSignin(
                     context, config, signinAccessPoint);
         }

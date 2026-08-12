@@ -91,11 +91,11 @@ enum PushMessagingOption {
 // |background_permission| is true.
 static scoped_refptr<Extension> CreateExtension(const std::string& name,
                                                 bool background_permission) {
-  base::Value::Dict manifest;
+  base::DictValue manifest;
   manifest.Set(extensions::manifest_keys::kVersion, "1.0.0.0");
   manifest.Set(extensions::manifest_keys::kManifestVersion, 3);
   manifest.Set(extensions::manifest_keys::kName, name);
-  base::Value::List permissions;
+  base::ListValue permissions;
   if (background_permission) {
     permissions.Append("background");
   }
@@ -148,8 +148,8 @@ void RemoveBackgroundPermission(extensions::ExtensionService* service,
 }  // namespace
 
 // Crashes on Mac trybots.
-// http://crbug.com/165458
-// Also crashes on Windows under Dr. Memory (https://crbug.com/606779),
+// http://crbug.com/40957323
+// Also crashes on Windows under Dr. Memory (https://crbug.com/40466773),
 // presumably broken on all platforms.
 // With minimal test logic, verifies behavior over an explicit set of
 // extensions, of which some are Background Apps and others are not.

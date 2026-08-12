@@ -14,11 +14,12 @@ import androidx.annotation.ColorInt;
 
 import org.chromium.base.Callback;
 import org.chromium.base.Token;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.NullableObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.tab_ui.R;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.browser_ui.widget.async_image.AsyncImageView;
 import org.chromium.components.collaboration.messaging.CollaborationEvent;
@@ -41,14 +42,14 @@ import java.util.Objects;
 public class TabLabeller extends TabObjectLabeller {
     private final Context mContext;
     private final DataSharingUIDelegate mDataSharingUiDelegate;
-    private final ObservableSupplier<@Nullable Token> mTabGroupIdSupplier;
+    private final NullableObservableSupplier<Token> mTabGroupIdSupplier;
 
     public TabLabeller(
             Profile profile,
             Context context,
             DataSharingUIDelegate dataSharingUiDelegate,
             TabListNotificationHandler tabListNotificationHandler,
-            ObservableSupplier<@Nullable Token> tabGroupIdSupplier) {
+            NullableObservableSupplier<Token> tabGroupIdSupplier) {
         super(profile, tabListNotificationHandler);
         mContext = context;
         mDataSharingUiDelegate = dataSharingUiDelegate;
@@ -69,9 +70,9 @@ public class TabLabeller extends TabObjectLabeller {
     @Override
     protected int getTextRes(PersistentMessage message) {
         if (message.collaborationEvent == CollaborationEvent.TAB_ADDED) {
-            return org.chromium.chrome.tab_ui.R.string.tab_added_label;
+            return R.string.tab_added_label;
         } else if (message.collaborationEvent == CollaborationEvent.TAB_UPDATED) {
-            return org.chromium.chrome.tab_ui.R.string.tab_changed_label;
+            return R.string.tab_changed_label;
         } else {
             return Resources.ID_NULL;
         }

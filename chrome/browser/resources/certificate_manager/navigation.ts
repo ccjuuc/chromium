@@ -7,8 +7,7 @@
  */
 
 import {assert, assertNotReached, assertNotReachedCase} from '//resources/js/assert.js';
-import type {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-import {dedupingMixin} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import type {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 
 /**
  * The different pages that can be shown.
@@ -102,8 +101,6 @@ export class Router {
       return;
     }
 
-    this.recordMetrics(page);
-
     const oldRoute = this.currentRoute_;
     this.currentRoute_ = newRoute;
     const path = this.currentRoute_.path();
@@ -137,57 +134,19 @@ export class Router {
       return;
     }
 
-    this.recordMetrics(page);
-
     const oldRoute = this.currentRoute_;
     this.currentRoute_ = new Route(oldRoute.page);
     this.currentRoute_.page = page;
     this.notifyObservers_(oldRoute);
   }
-
-  // LINT.IfChange(PageHistogramEnum)
-
-  private pageToMetricInt(page: Page): number {
-    // These values are persisted to logs. Entries should not be renumbered and
-    // numeric values should never be reused.
-    switch (page) {
-      case Page.LOCAL_CERTS:
-        return 0;
-      case Page.CLIENT_CERTS:
-        return 1;
-      case Page.CRS_CERTS:
-        return 2;
-      case Page.ADMIN_CERTS:
-        return 3;
-      case Page.PLATFORM_CLIENT_CERTS:
-        return 4;
-      // <if expr="not is_chromeos">
-      case Page.PLATFORM_CERTS:
-        return 5;
-      // </if>
-      case Page.USER_CERTS:
-        return 6;
-      default:
-        assertNotReachedCase(page);
-    }
-  }
-
-  private recordMetrics(page: Page) {
-    const histogramMaxValue = 6;
-    const metricName = 'Net.CertificateManager.PageVisits';
-    chrome.metricsPrivate.recordEnumerationValue(
-        metricName, this.pageToMetricInt(page), histogramMaxValue + 1);
-  }
-
-  // LINT.ThenChange(/tools/metrics/histograms/metadata/net/enums.xml:CertManagerPageEnum)
 }
 
 let routerInstance: Router|null = null;
 
 type Constructor<T> = new (...args: any[]) => T;
 
-export const RouteObserverMixin = dedupingMixin(
-    <T extends Constructor<PolymerElement>>(superClass: T): T&
+export const RouteObserverMixin =
+    <T extends Constructor<CrLitElement>>(superClass: T): T&
     Constructor<RouteObserverMixinInterface> => {
       class RouteObserverMixin extends superClass {
         override connectedCallback() {
@@ -212,7 +171,7 @@ export const RouteObserverMixin = dedupingMixin(
       }
 
       return RouteObserverMixin;
-    });
+    };
 
 export interface RouteObserverMixinInterface {
   currentRouteChanged(newRoute: Route, oldRoute?: Route): void;

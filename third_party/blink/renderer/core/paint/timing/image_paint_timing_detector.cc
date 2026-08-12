@@ -1,264 +1,205 @@
 // Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 #include "third_party/blink/renderer/core/paint/timing/image_paint_timing_detector.h"
 
 #include <cstddef>
 
+#include "base/check_deref.h"
 #include "base/feature_list.h"
-#include "services/metrics/public/cpp/ukm_builders.h"
-#include "services/metrics/public/cpp/ukm_recorder.h"
+#include "cc/layers/heads_up_display_layer.h"
+#include "cc/layers/layer.h"
+#include "cc/trees/layer_tree_host.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/core/dom/dom_node_ids.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/visual_viewport.h"
-#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/layout/layout_image_resource.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_image.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
+#include "third_party/blink/renderer/core/paint/timing/effective_visual_size_result.h"
 #include "third_party/blink/renderer/core/paint/timing/image_element_timing.h"
 #include "third_party/blink/renderer/core/paint/timing/largest_contentful_paint_calculator.h"
+#include "third_party/blink/renderer/core/paint/timing/largest_contentful_paint_manager.h"
 #include "third_party/blink/renderer/core/paint/timing/paint_timing.h"
 #include "third_party/blink/renderer/core/paint/timing/paint_timing_detector.h"
+#include "third_party/blink/renderer/core/paint/timing/paint_timing_utils.h"
 #include "third_party/blink/renderer/core/style/style_fetched_image.h"
 #include "third_party/blink/renderer/core/timing/dom_window_performance.h"
 #include "third_party/blink/renderer/core/timing/performance_entry.h"
 #include "third_party/blink/renderer/core/timing/soft_navigation_context.h"
 #include "third_party/blink/renderer/core/timing/soft_navigation_heuristics.h"
 #include "third_party/blink/renderer/platform/heap/thread_state.h"
-#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/loader/fetch/media_timing.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/widget/frame_widget.h"
+#include "ui/gfx/geometry/rect_conversions.h"
 
 namespace blink {
 
 namespace {
 
-// In order for |rect_size| to align with the importance of the image, we
-// use this heuristics to alleviate the effect of scaling. For example,
-// an image has intrinsic size being 1x1 and scaled to 100x100, but only 50x100
-// is visible in the viewport. In this case, |intrinsic_image_size| is 1x1;
-// |displayed_image_size| is 100x100. |intrinsic_image_size| is 50x100.
-// As the image do not have a lot of content, we down scale |visual_size| by the
-// ratio of |intrinsic_image_size|/|displayed_image_size| = 1/10000.
-//
-// * |visual_size| refers to the size of the |displayed_image_size| after
-// clipping and transforming. The size is in the main-frame's coordinate.
-// * |intrinsic_image_size| refers to the the image object's original size
-// before scaling. The size is in the image object's coordinate.
-// * |displayed_image_size| refers to the paint size in the image object's
-// coordinate.
-uint64_t DownScaleIfIntrinsicSizeIsSmaller(
-    uint64_t visual_size,
-    const uint64_t& intrinsic_image_size,
-    const uint64_t& displayed_image_size) {
-  // This is an optimized equivalence to:
-  // |visual_size| * min(|displayed_image_size|, |intrinsic_image_size|) /
-  // |displayed_image_size|
-  if (intrinsic_image_size < displayed_image_size) {
-    DCHECK_GT(displayed_image_size, 0u);
-    return static_cast<double>(visual_size) * intrinsic_image_size /
-           displayed_image_size;
-  }
-  return visual_size;
-}
-
-// Returns whether or not the `media_timing` should be ignored when computing
-// minimum required entropy. See crbug.com/434659232.
-bool ShouldIgnoreMediaEntropy(const MediaTiming& media_timing,
-                              bool is_recording_lcp) {
-  // Always check entropy for images.
-  if (media_timing.GetFirstVideoFrameTime().is_null()) {
-    return false;
-  }
-  // Ignore the entropy check for soft navs. Since hard LCP stops on the first
-  // interaction and soft navs requires an interaction, we use
-  // `is_recording_lcp` as a signal for whether this is for a soft nav. This
-  // isn't quite perfect since pressing browser navigation buttons (back,
-  // forward) aren't considered navigations, but it should be good enough for
-  // soft navs, with the goal of eventually aligning hard and soft LCP.
-  if (!is_recording_lcp) {
+bool IsSufficientlyLoadedForReporting(const MediaTiming& media_timing) {
+  if (media_timing.IsSufficientContentLoadedForPaint()) {
     return true;
   }
-  // Otherwise, use the flag for hard LCP.
-  return RuntimeEnabledFeatures::EntropyIgnoredForFirstVideoFrameLCPEnabled();
+  if (RuntimeEnabledFeatures::ReportFirstFrameTimeAsRenderTimeEnabled() &&
+      media_timing.IsPaintedFirstFrame()) {
+    return true;
+  }
+  return false;
 }
 
 }  // namespace
 
-ImagePaintTimingDetector::ImagePaintTimingDetector(LocalFrameView* frame_view)
-    : uses_page_viewport_(
-          base::FeatureList::IsEnabled(features::kUsePageViewportInLCP)),
-      records_manager_(frame_view),
-      frame_view_(frame_view) {}
+ImagePaintTimingDetector::ImagePaintTimingDetector(
+    PaintTimingDetector* detector)
+    : paint_timing_detector_(detector) {}
 
-ImageRecord* ImageRecordsManager::LargestImage() const {
-  if (!largest_painted_image_ ||
-      (largest_pending_image_ && (largest_painted_image_->RecordedSize() <
-                                  largest_pending_image_->RecordedSize()))) {
-    return largest_pending_image_.Get();
-  }
-  return largest_painted_image_.Get();
-}
+void ImagePaintTimingDetector::SendRectsToHud() {
+  LocalFrameView* frame_view =
+      paint_timing_detector_->GetPaintTiming().GetDocument()->View();
+  CHECK(frame_view);
+  auto* hud_layer =
+      paint_timing::GetHUDLayerIfContentfulPaintRectsEnabled(frame_view);
 
-std::pair<ImageRecord*, bool>
-ImagePaintTimingDetector::UpdateMetricsCandidate() {
-  ImageRecord* largest_image_record = records_manager_.LargestImage();
-  if (!largest_image_record) {
-    return {nullptr, false};
+  if (!hud_layer) {
+    return;
   }
 
-  PaintTimingDetector& detector = frame_view_->GetPaintTimingDetector();
-  // Calling NotifyMetricsIfLargestImagePaintChanged only has an impact on
-  // PageLoadMetrics, and not on the web exposed metrics.
-  //
-  // Two different candidates are rare to have the same time and size.
-  // So when they are unchanged, the candidate is considered unchanged.
-  bool changed =
-      detector.GetLargestContentfulPaintCalculator()
-          ->NotifyMetricsIfLargestImagePaintChanged(*largest_image_record);
-  return {largest_image_record, changed};
+  LocalFrame& main_frame = frame_view->GetFrame().LocalFrameRoot();
+  FrameWidget* widget = main_frame.GetWidgetForLocalRoot();
+  if (!widget) {
+    return;
+  }
+
+  bool is_recording_lcp = !!GetLargestContentfulPaintManager();
+
+  for (const auto& info : images_queued_for_paint_time_) {
+    if (info->frame_index == frame_index_) {
+      ImageRecord* record = info->image_record;
+      cc::WebVitalMetricType type;
+
+      if (record->GetSoftNavigationContext()) {
+        type = cc::WebVitalMetricType::kInteractionContentfulPaint;
+      } else if (is_recording_lcp) {
+        type = cc::WebVitalMetricType::kNavigationContentfulPaint;
+      } else {
+        continue;
+      }
+
+      hud_layer->AddWebVitalsDebugRect(
+          {type, gfx::ToEnclosedRect(
+                     widget->DIPsToBlinkSpace(record->RootVisualRect()))});
+    }
+  }
 }
 
-OptionalPaintTimingCallback
+OptionalPaintTimingDetectorCallback<ImageRecord>
 ImagePaintTimingDetector::TakePaintTimingCallback() {
   viewport_size_ = std::nullopt;
   if (!added_entry_in_latest_frame_)
     return std::nullopt;
 
+  // Do this before incrementing frame_index_;
+  SendRectsToHud();
+
   added_entry_in_latest_frame_ = false;
-  auto callback = BindOnce(
+  return BindOnce(
       [](ImagePaintTimingDetector* self, uint32_t frame_index,
-         bool is_recording_lcp, const base::TimeTicks& presentation_timestamp,
-         const DOMPaintTimingInfo& paint_timing_info) {
+         const base::TimeTicks& presentation_timestamp,
+         const DOMPaintTimingInfo& paint_timing_info,
+         HeapVector<Member<ImageRecord>>& settled_records) {
         if (self) {
-          self->records_manager_.AssignPaintTimeToRegisteredQueuedRecords(
-              presentation_timestamp, paint_timing_info, frame_index,
-              is_recording_lcp);
+          self->AssignPaintTimeToRegisteredQueuedRecords(
+              frame_index, presentation_timestamp, paint_timing_info,
+              settled_records);
         }
       },
-      WrapWeakPersistent(this), frame_index_++, IsRecordingLargestImagePaint());
-
-  // This is for unit-testing purposes only. Some of these tests check for UKMs
-  // and things that are not covered by WPT.
-  // TODO(crbug.com/382396711) convert tests to WPT and remove this.
-  if (callback_manager_) {
-    callback_manager_->RegisterCallback(std::move(callback));
-    return std::nullopt;
-  }
-  return std::move(callback);
+      WrapWeakPersistent(this), frame_index_++);
 }
 
 void ImagePaintTimingDetector::NotifyImageRemoved(
     const LayoutObject& object,
     const MediaTiming* media_timing) {
-  records_manager_.RemoveRecord(
-      MediaRecordId::GenerateHash(&object, media_timing));
-  if (const ImageRecord* record = records_manager_.LargestIgnoredImage();
-      record && record->GetMediaTiming() == media_timing) {
-    records_manager_.TakeLargestIgnoredImage();
+  ImageRecord* record =
+      RemoveRecord(MediaRecordId::GenerateHash(&object, media_timing));
+  if (auto* manager = GetLargestContentfulPaintManager()) {
+    // Notify `manager` even if record is null so it can update the largest
+    // ignored image, if needed.
+    //
+    // TODO(crbug.com/449779010): When soft navs supports largest pending image,
+    // this will need to be updated to notify the relevant soft nav context.
+    manager->OnImageRemoved(record, object, media_timing);
   }
 }
 
 void ImagePaintTimingDetector::StopRecordEntries() {
   // Clear the records queued for presentation callback to ensure no new updates
   // occur.
-  records_manager_.ClearImagesQueuedForPaintTime();
-  if (frame_view_->GetFrame().IsOutermostMainFrame()) {
-    auto* document = frame_view_->GetFrame().GetDocument();
-    ukm::builders::Blink_PaintTiming(document->UkmSourceID())
-        .SetLCPDebugging_HasViewportImage(contains_full_viewport_image_)
-        .Record(document->UkmRecorder());
-  }
+  images_queued_for_paint_time_.clear();
 }
 
-void ImageRecordsManager::AssignPaintTimeToRegisteredQueuedRecords(
+void ImagePaintTimingDetector::AssignPaintTimeToRegisteredQueuedRecords(
+    uint32_t last_queued_frame_index,
     const base::TimeTicks& presentation_timestamp,
     const DOMPaintTimingInfo& paint_timing_info,
-    uint32_t last_queued_frame_index,
-    bool is_recording_lcp) {
-  ImageRecord* largest_removed_image = nullptr;
+    HeapVector<Member<ImageRecord>>& settled_records) {
   while (!images_queued_for_paint_time_.empty()) {
-    ImageRecord* record = images_queued_for_paint_time_.front();
+    QueuedImageRecordInfo* info = images_queued_for_paint_time_.front();
     // Not ready for this frame yet - we're done with the queue for now.
-    if (record->FrameIndex() > last_queued_frame_index) {
+    if (info->frame_index > last_queued_frame_index) {
       break;
     }
 
+    ImageRecord* record = info->image_record;
     images_queued_for_paint_time_.pop_front();
 
-    if (record->IsFirstAnimatedFramePaintTimingQueued()) {
-      record->SetFirstAnimatedFrameTime(presentation_timestamp);
-      record->SetIsFirstAnimatedFramePaintTimingQueued(false);
-    }
+    switch (info->presentation_reason) {
+      case PresentationReason::kFirstAnimatedFrame:
+        // `record` may have been queued multiple times for different frames,
+        // depending on timing between paint and presentation time.
+        if (!record->HasFirstAnimatedFrameTime()) {
+          record->SetFirstAnimatedFrameTime(presentation_timestamp);
+        }
+        break;
+      case PresentationReason::kSufficientlyLoaded: {
+        // `record` will be removed from `pending_images_` if the image was
+        // removed between painting it and running this callback, in which case
+        // we still want to set its paint time.
+        auto it = pending_images_.find(record->Hash());
+        if (it == pending_images_.end() && !record->WasNodeRemoved()) {
+          break;
+        }
 
-    // TODO(crbug.com/364860066): When cleaning up the flag, remove this whole
-    // block. This re-enables the old behavior where animated images were not
-    // reported until fully loaded.
-    if (!record->IsLoaded() &&
-        !RuntimeEnabledFeatures::ReportFirstFrameTimeAsRenderTimeEnabled()) {
-      continue;
-    }
+        CHECK(record->IsSufficientlyLoadedForReporting());
 
-    // A record may be in `images_queued_for_paint_time_` twice if it's already
-    // loaded by the time of its first contentful paint. It will also be removed
-    // from that collection if the image was removed between painting it and
-    // running this callback, in which case we still want to set its paint time.
-    auto it = pending_images_.find(record->Hash());
-    if (it == pending_images_.end()) {
-      if (!RuntimeEnabledFeatures::
-              PaintTimingRecordTimingForDetachedPaintedElementsEnabled() ||
-          !record->WasImageOrTextRemovedWhilePending()) {
-        continue;
+        // Set paint time if it hasn't been set. Note for first video frame with
+        // ReportFirstFrameTimeAsRenderTime enabled, this will already be set.
+        if (!record->HasPaintTime()) {
+          record->SetPaintTime(presentation_timestamp, paint_timing_info);
+        }
+        settled_records.push_back(record);
+        if (it != pending_images_.end()) {
+          pending_images_.erase(it);
+        }
+        break;
       }
     }
-
-    // Set paint time if it hasn't been set. Note for first video frame with
-    // ReportFirstFrameTimeAsRenderTime enabled, this will already be set.
-    if (!record->HasPaintTime()) {
-      record->SetPaintTime(presentation_timestamp, paint_timing_info);
-    }
-
-    // While we want to record the paint time for detached images since this is
-    // used downstream by soft navigation heuristics, we don't want these to
-    // affect hard LCP in order to match the long-standing behavior.
-    //
-    // TODO(crbug.com/454082773): we should consider allowing these to be LCP
-    // candidates since they would have been shown to the user, and since it
-    // better matches the LCP spec.
-    if (it == pending_images_.end()) {
-      if (is_recording_lcp &&
-          (!largest_removed_image ||
-           largest_removed_image->RecordedSize() < record->RecordedSize())) {
-        largest_removed_image = record;
-      }
-      continue;
-    }
-
-    // Update largest if necessary.
-    if (is_recording_lcp &&
-        (!largest_painted_image_ ||
-         largest_painted_image_->RecordedSize() < record->RecordedSize())) {
-      largest_painted_image_ = it->value;
-    }
-    // Remove from pending.
-    pending_images_.erase(it);
   }
+}
 
-  if (largest_removed_image) {
-    // Use `LargestImage()` instead of `largest_painted_image_` since it's
-    // what's used to determine the largest image candidate. This might not end
-    // up affecting metrics, but it could, and it could be emitted to
-    // performance timeline (depending on the largest text).
-    ImageRecord* largest_image = LargestImage();
-    if (!largest_image ||
-        largest_image->RecordedSize() < largest_removed_image->RecordedSize()) {
-      UseCounter::Count(frame_view_->GetFrame().DomWindow(),
-                        WebFeature::kLcpCandidateRemovedWhilePaintTimePending);
-    }
-  }
+void ImagePaintTimingDetector::QueueToMeasurePaintTime(
+    ImageRecord* record,
+    PresentationReason reason) {
+  images_queued_for_paint_time_.push_back(
+      MakeGarbageCollected<QueuedImageRecordInfo>(record, frame_index_,
+                                                  reason));
+  added_entry_in_latest_frame_ = true;
 }
 
 void ImagePaintTimingDetector::NotifyInteractionTriggeredVideoSrcChange(
@@ -270,8 +211,8 @@ void ImagePaintTimingDetector::NotifyInteractionTriggeredVideoSrcChange(
   // attributed to the relevant interaction. See also crbug.com/330202431.
   MediaRecordId record_id(&object, /*media=*/nullptr);
   MediaRecordIdHash record_id_hash = record_id.GetHash();
-  if (records_manager_.IsRecordedImage(record_id_hash)) {
-    records_manager_.RemoveRecord(record_id_hash);
+  if (recorded_images_.Contains(record_id_hash)) {
+    RemoveRecord(record_id_hash);
   }
 }
 
@@ -283,370 +224,304 @@ bool ImagePaintTimingDetector::RecordImage(
     const StyleImage* style_image,
     const gfx::Rect& image_border) {
   Node* node = object.GetNode();
-
-  if (!node)
+  if (!node) {
     return false;
+  }
 
   // Before the image resource starts loading, <img> has no size info. We wait
   // until the size is known.
-  if (image_border.IsEmpty())
+  if (image_border.IsEmpty()) {
     return false;
+  }
 
   if (media_timing.IsBroken()) {
     return false;
   }
 
-  MediaRecordId record_id(&object, &media_timing);
-  MediaRecordIdHash record_id_hash = record_id.GetHash();
-  ImageRecord* record = nullptr;
+  gfx::RectF mapped_visual_rect = paint_timing_detector_->CalculateVisualRect(
+      image_border, current_paint_chunk_properties);
 
-  gfx::RectF mapped_visual_rect =
-      frame_view_->GetPaintTimingDetector().CalculateVisualRect(
-          image_border, current_paint_chunk_properties);
-  uint64_t visual_size = ComputeImageRectSize(
-      image_border, mapped_visual_rect, intrinsic_size,
-      current_paint_chunk_properties, object, media_timing);
-  // Don't process the image yet if it is invisible, as it may later become
-  // visible, and potentially eligible to be an LCP candidate.
-  if (visual_size == 0u) {
-    return false;
-  }
-
-  // Check the entropy before creating an `ImageRecord`, to ensure the invariant
-  // that all `ImageRecord`s have sufficient entropy.
-  // TODO(crbug.com/434659232): Consider moving the `kMinimumEntropyForLCP`
-  // check and `ShouldIgnoreMediaEntropy()` into a single helper. See
-  // comments in crrev.com/c/6981829 for context and discussion.
-  double entropy_for_lcp =
-      media_timing.ContentSizeForEntropy() * 8.0 / visual_size;
-  if (entropy_for_lcp < kMinimumEntropyForLCP &&
-      !ShouldIgnoreMediaEntropy(media_timing, IsRecordingLargestImagePaint())) {
-    records_manager_.RecordImage(record_id_hash);
-    return false;
-  }
-
-  if (int depth = IgnorePaintTimingScope::IgnoreDepth()) {
-    // Record the largest loaded image that is hidden due to documentElement
-    // being invisible but by no other reason (i.e. IgnoreDepth() needs to be
-    // 1).
-    if (depth == 1 && IgnorePaintTimingScope::IsDocumentElementInvisible() &&
-        media_timing.IsSufficientContentLoadedForPaint()) {
-      records_manager_.MaybeUpdateLargestIgnoredImage(
-          record_id, visual_size, image_border, mapped_visual_rect,
-          entropy_for_lcp, IsRecordingLargestImagePaint());
-    }
-    return false;
-  }
-
-  SoftNavigationContext* context = nullptr;
-  if (LocalDOMWindow* window = frame_view_->GetFrame().DomWindow()) {
-    if (SoftNavigationHeuristics* heuristics =
-            window->GetSoftNavigationHeuristics()) {
-      context = heuristics->MaybeGetSoftNavigationContextForTiming(node);
-    }
-  }
-
-  // RecordImage is called whenever an image is painted, which may happen many
-  // times for the same record.  The very first paint for this record, we have
-  // to create and initialize things, and all subsequent paints we just do a
-  // lookup.
-  // Note: Mentions of "Image" should all be "Media" since it can include
-  // <video> content.
-  if (records_manager_.IsRecordedImage(record_id_hash)) {
-    record = records_manager_.GetPendingImage(record_id_hash);
-  } else {
-    record = records_manager_.RecordFirstPaintAndMaybeCreateImageRecord(
-        IsRecordingLargestImagePaint(), record_id, visual_size, image_border,
-        mapped_visual_rect, entropy_for_lcp, context);
-  }
-
-  // Note: Even if IsRecordedImage() returns `true`, or if we are calling a new
-  // `RecordFirstPaintAndMaybeCreateImageRecord`, we might still not have an
-  // `ImageRecord*` for the media.  This is because we "record" all new media on
-  // first paint, but we only do Record-keeping for some Nodes (i.e. those which
-  // actually need timing for some reason).
-  if (!record) {
-    return false;
-  }
-
-  // Check if context changed from the last time we painted this media.
-  if (record->GetSoftNavigationContext() != context) {
-    record->SetSoftNavigationContext(context);
-    // TODO(crbug.com/424437484): Find a mechanism to re-report this media, if
-    // it has already been loaded, because it won't report again otherwise.
-    // record->loaded = false;
-  }
-
-  // If this frame is the first painted frame for animated content, mark it and
-  // call `QueueToMeasurePaintTime` (eventually) to measure it.
-  // This mechanism works a bit differently for images and video.
-  // The stored value may or may not be exposed as the `renderTime` depending on
-  // flags.
-  if (media_timing.IsPaintedFirstFrame()) {
-    added_entry_in_latest_frame_ |=
-        records_manager_.OnFirstAnimatedFramePainted(record_id_hash,
-                                                     frame_index_);
-  }
-
-  // TODO(crbug.com/372929290): This next check will pass when <video> content
-  // has loaded just the first frame of video.  This is likely unexpected, and
-  // should likely have been handled in the if block for `IsPaintedFirstFrame`,
-  // above.
-  if (!record->IsLoaded() && media_timing.IsSufficientContentLoadedForPaint()) {
-    records_manager_.OnImageLoaded(record_id_hash, frame_index_, style_image);
-    added_entry_in_latest_frame_ = true;
-
-    if (std::optional<PaintTimingVisualizer>& visualizer =
-            frame_view_->GetPaintTimingDetector().Visualizer()) {
-      visualizer->DumpImageDebuggingRect(
-          object, mapped_visual_rect,
-          media_timing.IsSufficientContentLoadedForPaint(), media_timing.Url());
-    }
-    CHECK_EQ(context, record->GetSoftNavigationContext());
-    if (context) {
-      context->AddPaintedArea(record);
-    }
-    return true;
-  }
-  return false;
-}
-
-uint64_t ImagePaintTimingDetector::ComputeImageRectSize(
-    const gfx::Rect& image_border,
-    const gfx::RectF& mapped_visual_rect,
-    const gfx::Size& intrinsic_size,
-    const PropertyTreeStateOrAlias& current_paint_chunk_properties,
-    const LayoutObject& object,
-    const MediaTiming& media_timing) {
-  if (std::optional<PaintTimingVisualizer>& visualizer =
-          frame_view_->GetPaintTimingDetector().Visualizer()) {
+  if (PaintTimingVisualizer* visualizer =
+          paint_timing_detector_->Visualizer()) {
     visualizer->DumpImageDebuggingRect(
         object, mapped_visual_rect,
         media_timing.IsSufficientContentLoadedForPaint(), media_timing.Url());
   }
-  uint64_t rect_size = mapped_visual_rect.size().GetArea();
-  // Transform visual rect to window before calling downscale.
-  gfx::RectF float_visual_rect =
-      frame_view_->GetPaintTimingDetector().BlinkSpaceToDIPs(
-          gfx::RectF(image_border));
-  if (!viewport_size_.has_value()) {
-    // If the flag to use page viewport is enabled, we use the page viewport
-    // (aka the main frame viewport) for all frames, including iframes. This
-    // prevents us from discarding images with size equal to the size of its
-    // embedding iframe.
-    gfx::Rect viewport_int_rect =
-        uses_page_viewport_
-            ? frame_view_->GetPage()->GetVisualViewport().VisibleContentRect()
-            : frame_view_->GetScrollableArea()->VisibleContentRect();
-    gfx::RectF viewport =
-        frame_view_->GetPaintTimingDetector().BlinkSpaceToDIPs(
-            gfx::RectF(viewport_int_rect));
-    viewport_size_ = viewport.size().GetArea();
-  }
-  // An SVG image size is computed with respect to the virtual viewport of the
-  // SVG, so |rect_size| can be larger than |*viewport_size| in edge cases. If
-  // the rect occupies the whole viewport, disregard this candidate by saying
-  // the size is 0.
-  if (rect_size >= *viewport_size_) {
-    contains_full_viewport_image_ = true;
-    return 0;
+
+  MediaRecordId record_id(&object, &media_timing);
+  MediaRecordIdHash record_id_hash = record_id.GetHash();
+
+  // `record` will be non-null if the first paint for the image was recorded but
+  // the image hasn't been "finalized" yet, i.e. the image wasn't sufficiently
+  // loaded the last time it was painted or the presentation time callback for
+  // the first paint after being sufficiently loaded is still pending.
+  ImageRecord* record = GetPendingImage(record_id_hash);
+
+  // Skip measuring content that was already fully measured.
+  //  - `record` is null: we aren't actively measuring this content, but we
+  //    need to check the historical `recorded_images_` set to see if this is
+  //    new or old content.
+  //  - `record` is non-null: we are still actively measuring this content, but
+  //    if the record was (recently) marked as sufficiently loaded, then we're
+  //    just waiting for presentation time.
+  if ((!record && recorded_images_.Contains(record_id_hash)) ||
+      (record && record->IsSufficientlyLoadedForReporting())) {
+    return false;
   }
 
-  rect_size = DownScaleIfIntrinsicSizeIsSmaller(
-      rect_size, intrinsic_size.Area64(), float_visual_rect.size().GetArea());
-  return rect_size;
+  // The first frame of an autoplaying <video> races with its poster image if it
+  // has one, and since we only use `LayoutObject` for the `record_id` for
+  // videos (to avoid counting both the poster and first frame), we can end up
+  // with a mismatch between the `record`'s `MediaTiming` and `media_timing`
+  // while the poster image is pending. Switch to tracking the first video frame
+  // in that case.
+  if (record && record->GetMediaTiming() != &media_timing &&
+      media_timing.IsVideo()) {
+    NotifyImageRemoved(object, &media_timing);
+    record = nullptr;
+  }
+
+  int ignore_paint_depth = IgnorePaintTimingScope::IgnoreDepth();
+
+  // Create a new new `ImageRecord` and initialize paint tracking if:
+  //   1. the image was not yet recorded (`record` is null). Note: this includes
+  //   the cases where the `MediaTiming` changed (different image) or the layout
+  //   object changed, e.g. toggling display:none. The first case is specced in
+  //   Paint Timing, but the second is a spec violation --- but ICP also depends
+  //   on this behavior (see crbub.com/507049713).
+  //
+  //   2. there is a pending image `record` and paints are being ignored
+  //   (`ignore_paint_depth` > 0). This is rare, but can happen if the opacity
+  //   changed after initially painting the image and the image hasn't finished
+  //   loading. If the pending `record` was painted and we're only waiting for
+  //   presentation feedback, that can proceed and the largest ignored image
+  //   will end up being ignored.
+  if (!record || ignore_paint_depth > 0) {
+    // Compute the effective visual size for LCP and ICP.
+    EffectiveVisualSizeResult effective_visual_size_result =
+        LargestContentfulPaintCalculator::ComputeEffectiveVisualSize(
+            object, media_timing, image_border, mapped_visual_rect,
+            intrinsic_size, ViewportSize(), *paint_timing_detector_);
+
+    // Don't process the image yet if it is invisible, as it may later become
+    // visible, potentially making it eligible to be an LCP candidate.
+    //
+    // TODO(crbug.com/503691215): This is incompatible with how ElementTiming is
+    // currently implemented. It also appears to violate the PaintTiming spec
+    // since "mark paint timing" does not check viewport intersection.
+    if (effective_visual_size_result.size == 0u) {
+      return false;
+    }
+
+    record = MakeGarbageCollected<ImageRecord>(
+        node, &media_timing, image_border, mapped_visual_rect,
+        record_id.GetHash(), effective_visual_size_result);
+
+    if (ignore_paint_depth > 0) {
+      if (auto* manager = GetLargestContentfulPaintManager()) {
+        manager->MaybeUpdateLargestIgnoredImage(record);
+      }
+      return false;
+    }
+
+    if (auto* manager = GetLargestContentfulPaintManager()) {
+      manager->InitializePaintTracking(record);
+    }
+
+    LocalDOMWindow* window = object.GetDocument().domWindow();
+    CHECK(window);
+    if (SoftNavigationHeuristics* heuristics =
+            window->GetSoftNavigationHeuristics()) {
+      heuristics->InitializePaintTracking(record);
+    }
+
+    // Mark the image as recorded regardless of if this is needed for any
+    // PaintTiming clients so the image isn't reconsidered as a candidate.
+    recorded_images_.insert(record_id_hash);
+
+    if (!record->IsNeededForInteractionContentfulPaint() &&
+        !record->IsNeededForLargestContentfulPaint()) {
+      return false;
+    }
+    // Finally, we have at least one client that wants to track paints for this
+    // image, so set up future tracking.
+    pending_images_.insert(record->Hash(), record);
+  }
+
+  CHECK(record);
+  CHECK(!record->IsSufficientlyLoadedForReporting());
+
+  bool is_video = !media_timing.GetFirstVideoFrameTime().is_null();
+
+  // If this is the first frame of an animated image, we need the paint and
+  // presentation time of this paint, in addition to when it becomes
+  // sufficiently loaded, which could be this frame or a later one.
+  //
+  // TODO(crbug.com/449779010): Enable ReportFirstFrameTimeAsRenderTime and
+  // track a single paint time for animated images/videos.
+  if (!is_video && media_timing.IsPaintedFirstFrame() &&
+      !record->HasFirstAnimatedFrameTime()) {
+    // Note that if `record` is already queued for first animated frame time,
+    // this will get ignored in `AssignPaintTimeToRegisteredQueuedRecords()`.
+    QueueToMeasurePaintTime(record, PresentationReason::kFirstAnimatedFrame);
+  }
+
+  // Check if the image is ready to be reported to clients. For most media, we
+  // use `MediaTiming`'s "sufficiently loaded" signal to determine this, but for
+  // animated images, we might only need to wait for the first frame (depending
+  // on flags).
+  if (!IsSufficientlyLoadedForReporting(media_timing)) {
+    // The first video frame should always be considered sufficiently loaded.
+    CHECK(!is_video);
+    return false;
+  }
+
+  record->SetIsSufficientlyLoadedForReporting();
+  if (is_video) {
+    SetVideoFirstAnimatedFrameTime(record);
+  } else {
+    SetLoadTime(record, style_image);
+  }
+
+  if (SoftNavigationContext* context = record->GetSoftNavigationContext()) {
+    context->AddPaintedArea(record);
+  }
+
+  QueueToMeasurePaintTime(record, PresentationReason::kSufficientlyLoaded);
+  return true;
 }
 
 void ImagePaintTimingDetector::NotifyImageFinished(
     const LayoutObject& object,
     const MediaTiming* media_timing) {
-  records_manager_.NotifyImageFinished(
-      MediaRecordId::GenerateHash(&object, media_timing));
+  auto hash(MediaRecordId::GenerateHash(&object, media_timing));
+  // TODO(npm): Ideally NotifyImageFinished() would only be called when the
+  // record has not yet been inserted in |image_finished_times_| but that's not
+  // currently the case. If we plumb some information from MediaTiming we may be
+  // able to ensure that this call does not require the Contains() check, which
+  // would save time.
+  if (!image_finished_times_.Contains(hash)) {
+    image_finished_times_.insert(hash, base::TimeTicks::Now());
+  }
 }
 
 void ImagePaintTimingDetector::ReportLargestIgnoredImage() {
-  added_entry_in_latest_frame_ |= records_manager_.ReportLargestIgnoredImage(
-      frame_index_, IsRecordingLargestImagePaint());
-}
-
-ImageRecordsManager::ImageRecordsManager(LocalFrameView* frame_view)
-    : frame_view_(frame_view) {}
-
-bool ImageRecordsManager::OnFirstAnimatedFramePainted(
-    MediaRecordIdHash record_id_hash,
-    uint32_t current_frame_index) {
-  ImageRecord* record = GetPendingImage(record_id_hash);
-  DCHECK(record);
-  if (record->GetMediaTiming() &&
-      !record->GetMediaTiming()->GetFirstVideoFrameTime().is_null()) {
-    // If this is a video record, then we can get the first frame time from the
-    // MediaTiming object, and can use that to set the first frame time in the
-    // ImageRecord object.
-    record->SetFirstAnimatedFrameTime(
-        record->GetMediaTiming()->GetFirstVideoFrameTime());
-    if (RuntimeEnabledFeatures::ReportFirstFrameTimeAsRenderTimeEnabled()) {
-      base::TimeTicks paint_time = record->FirstAnimatedFrameTime();
-      // TODO(crbug.com/383568320): this timestamp it not specified, and it's
-      // not clear how it should be coarsened.
-      DOMHighResTimeStamp dom_timestamp =
-          DOMWindowPerformance::performance(
-              *frame_view_->GetFrame().GetDocument()->domWindow())
-              ->MonotonicTimeToDOMHighResTimeStamp(paint_time);
-      record->SetPaintTime(paint_time,
-                           DOMPaintTimingInfo{dom_timestamp, dom_timestamp});
-    }
-  } else if (!record->HasFirstAnimatedFrameTime()) {
-    // Otherwise, this is an animated image, and so we should wait for the
-    // presentation callback to fire to set the first frame presentation time.
-    record->SetIsFirstAnimatedFramePaintTimingQueued(true);
-    QueueToMeasurePaintTime(record, current_frame_index);
-    return true;
+  auto* lcp_manager = GetLargestContentfulPaintManager();
+  if (!lcp_manager) {
+    return;
   }
-  return false;
-}
-
-void ImageRecordsManager::OnImageLoaded(MediaRecordIdHash record_id_hash,
-                                        uint32_t current_frame_index,
-                                        const StyleImage* style_image) {
-  ImageRecord* record = GetPendingImage(record_id_hash);
-  DCHECK(record);
-  if (!style_image) {
-    auto it = image_finished_times_.find(record_id_hash);
-    if (it != image_finished_times_.end()) {
-      record->SetLoadTime(it->value);
-      DCHECK(record->HasLoadTime());
-    }
-  } else {
-    Document* document = frame_view_->GetFrame().GetDocument();
-    if (document && document->domWindow()) {
-      record->SetLoadTime(ImageElementTiming::From(*document->domWindow())
-                              .GetBackgroundImageLoadTime(style_image));
-    }
-  }
-  OnImageLoadedInternal(record, current_frame_index);
-}
-
-bool ImageRecordsManager::ReportLargestIgnoredImage(
-    uint32_t current_frame_index,
-    bool is_recording_lcp) {
-  if (!largest_ignored_image_) {
-    return false;
-  }
-  ImageRecord* record = TakeLargestIgnoredImage();
-  Node* node = record->GetNode();
-  if (!node || !node->GetLayoutObject() || !record->GetMediaTiming()) {
-    // The image has been removed, so we have no content to report.
-    return false;
+  ImageRecord* record = lcp_manager->TakeLargestIgnoredImage();
+  if (!record) {
+    return;
   }
 
   // Trigger FCP if it's not already set.
-  Document* document = frame_view_->GetFrame().GetDocument();
-  DCHECK(document);
-  PaintTiming::From(*document).MarkFirstImagePaint();
-
-  // Ignore this image altogether if LCP is no longer being recorded.
-  //
-  // TODO(crbug.com/460180365): This is probably imperfect since this prevents
-  // the image from being marked as recorded for soft navs. Changing this,
-  // however, would break test expectations, and it would only affect this image
-  // record, rather than all images painted while document opacity was 0.
-  if (!is_recording_lcp) {
-    return false;
-  }
+  paint_timing_detector_->GetPaintTiming().MarkFirstImagePaint();
 
   recorded_images_.insert(record->Hash());
-  AddPendingImage(record, is_recording_lcp);
-  OnImageLoadedInternal(record, current_frame_index);
-  return true;
-}
-
-void ImageRecordsManager::OnImageLoadedInternal(ImageRecord* record,
-                                                uint32_t current_frame_index) {
-  CHECK(record);
-  record->MarkLoaded();
-  QueueToMeasurePaintTime(record, current_frame_index);
-}
-
-void ImageRecordsManager::MaybeUpdateLargestIgnoredImage(
-    const MediaRecordId& record_id,
-    uint64_t visual_size,
-    const gfx::Rect& frame_visual_rect,
-    const gfx::RectF& root_visual_rect,
-    double entropy_for_lcp,
-    bool is_recording_lcp) {
-  CHECK(visual_size);
-  if (is_recording_lcp &&
-      (!largest_ignored_image_ ||
-       visual_size > largest_ignored_image_->RecordedSize())) {
-    largest_ignored_image_ = MakeGarbageCollected<ImageRecord>(
-        record_id.GetLayoutObject()->GetNode(), record_id.GetMediaTiming(),
-        visual_size, frame_visual_rect, root_visual_rect, record_id.GetHash(),
-        entropy_for_lcp,
-        /*soft_navigation_context=*/nullptr);
-    largest_ignored_image_->SetLoadTime(base::TimeTicks::Now());
-  }
-}
-
-ImageRecord* ImageRecordsManager::RecordFirstPaintAndMaybeCreateImageRecord(
-    bool is_recording_lcp,
-    const MediaRecordId& record_id,
-    const uint64_t& visual_size,
-    const gfx::Rect& frame_visual_rect,
-    const gfx::RectF& root_visual_rect,
-    double entropy_for_lcp,
-    SoftNavigationContext* soft_navigation_context) {
-  CHECK(visual_size);
-  recorded_images_.insert(record_id.GetHash());
-
-  // If we are recording LCP, take the timing unless the correct LCP is already
-  // larger.
-  bool timing_needed_for_lcp =
-      is_recording_lcp &&
-      !(largest_painted_image_ &&
-        largest_painted_image_->RecordedSize() > visual_size);
-  // If we have a context involved in this node creation, we need to do record
-  // keeping.
-  // Node: Once the soft nav entry is emitted, we might be able to switch to
-  // largest-area-only recording.
-  bool timing_needed_for_soft_nav = soft_navigation_context != nullptr;
-
-  if (!timing_needed_for_lcp && !timing_needed_for_soft_nav) {
-    return nullptr;
-  }
-
-  ImageRecord* record = MakeGarbageCollected<ImageRecord>(
-      record_id.GetLayoutObject()->GetNode(), record_id.GetMediaTiming(),
-      visual_size, frame_visual_rect, root_visual_rect, record_id.GetHash(),
-      entropy_for_lcp, soft_navigation_context);
-  AddPendingImage(record, is_recording_lcp);
-  return record;
-}
-void ImageRecordsManager::AddPendingImage(ImageRecord* record,
-                                          bool is_recording_lcp) {
-  if (is_recording_lcp &&
-      (!largest_pending_image_ ||
-       (largest_pending_image_->RecordedSize() < record->RecordedSize()))) {
-    largest_pending_image_ = record;
-  }
   pending_images_.insert(record->Hash(), record);
+
+  CHECK(record->IsSufficientlyLoadedForReporting());
+  QueueToMeasurePaintTime(record, PresentationReason::kSufficientlyLoaded);
 }
 
-void ImageRecordsManager::ClearImagesQueuedForPaintTime() {
-  images_queued_for_paint_time_.clear();
+void ImagePaintTimingDetector::SetVideoFirstAnimatedFrameTime(
+    ImageRecord* record) {
+  CHECK(record->GetMediaTiming());
+  CHECK(!record->GetMediaTiming()->GetFirstVideoFrameTime().is_null(),
+        base::NotFatalUntil::M156);
+  record->SetFirstAnimatedFrameTime(
+      record->GetMediaTiming()->GetFirstVideoFrameTime());
+
+  // Without this feature, the paint time will be set based on the next frame.
+  if (!RuntimeEnabledFeatures::ReportFirstFrameTimeAsRenderTimeEnabled()) {
+    return;
+  }
+  base::TimeTicks paint_time = record->FirstAnimatedFrameTime();
+  // TODO(crbug.com/383568320): this timestamp it not specified, and it's
+  // not clear how it should be coarsened.
+  LocalDOMWindow* window =
+      paint_timing_detector_->GetPaintTiming().GetDocument()->domWindow();
+  DOMHighResTimeStamp dom_timestamp =
+      DOMWindowPerformance::performance(CHECK_DEREF(window))
+          ->MonotonicTimeToDOMHighResTimeStamp(paint_time);
+  record->SetPaintTime(paint_time,
+                       DOMPaintTimingInfo{dom_timestamp, dom_timestamp});
 }
 
-void ImageRecordsManager::Trace(Visitor* visitor) const {
-  visitor->Trace(frame_view_);
-  visitor->Trace(largest_painted_image_);
-  visitor->Trace(largest_pending_image_);
-  visitor->Trace(pending_images_);
-  visitor->Trace(images_queued_for_paint_time_);
-  visitor->Trace(largest_ignored_image_);
+void ImagePaintTimingDetector::SetLoadTime(ImageRecord* record,
+                                           const StyleImage* style_image) {
+  if (!style_image) {
+    auto it = image_finished_times_.find(record->Hash());
+    if (it != image_finished_times_.end()) {
+      record->SetLoadTime(it->value);
+    }
+  } else {
+    LocalDOMWindow* window =
+        paint_timing_detector_->GetPaintTiming().GetDocument()->domWindow();
+    record->SetLoadTime(ImageElementTiming::From(CHECK_DEREF(window))
+                            .GetBackgroundImageLoadTime(style_image));
+  }
+}
+
+ImageRecord* ImagePaintTimingDetector::RemoveRecord(
+    MediaRecordIdHash record_id_hash) {
+  recorded_images_.erase(record_id_hash);
+  image_finished_times_.erase(record_id_hash);
+  auto it = pending_images_.find(record_id_hash);
+  if (it != pending_images_.end()) {
+    ImageRecord* record = it->value;
+    pending_images_.erase(it);
+    // Leave out `images_queued_for_paint_time_` intentionally because the null
+    // record can be removed in `AssignPaintTimeToRegisteredQueuedRecords`.
+    return record;
+  }
+  return nullptr;
 }
 
 void ImagePaintTimingDetector::Trace(Visitor* visitor) const {
-  visitor->Trace(records_manager_);
-  visitor->Trace(frame_view_);
-  visitor->Trace(callback_manager_);
+  visitor->Trace(paint_timing_detector_);
+  visitor->Trace(pending_images_);
+  visitor->Trace(images_queued_for_paint_time_);
 }
+
+LargestContentfulPaintManager*
+ImagePaintTimingDetector::GetLargestContentfulPaintManager() const {
+  return paint_timing_detector_->GetPaintTiming()
+      .GetLargestContentfulPaintManager();
+}
+
+uint64_t ImagePaintTimingDetector::ViewportSize() {
+  if (viewport_size_.has_value()) {
+    return *viewport_size_;
+  }
+  // Use the page viewport (aka the main frame viewport) for all frames,
+  // including iframes. This prevents us from discarding images with size equal
+  // to the size of its embedding iframe.
+  Page* page =
+      paint_timing_detector_->GetPaintTiming().GetDocument()->GetPage();
+  gfx::Rect viewport_int_rect =
+      page->GetVisualViewport().VisibleContentRect(kExcludeScrollbars);
+  gfx::RectF viewport =
+      paint_timing_detector_->BlinkSpaceToDIPs(gfx::RectF(viewport_int_rect));
+  viewport_size_ = viewport.size().GetArea();
+  return *viewport_size_;
+}
+
+ImagePaintTimingDetector::QueuedImageRecordInfo::QueuedImageRecordInfo(
+    ImageRecord* record,
+    uint32_t frame_index,
+    PresentationReason reason)
+    : image_record(record),
+      frame_index(frame_index),
+      presentation_reason(reason) {
+  CHECK(image_record);
+  CHECK_GT(frame_index, 0u);
+}
+
+void ImagePaintTimingDetector::QueuedImageRecordInfo::Trace(
+    Visitor* visitor) const {
+  visitor->Trace(image_record);
+}
+
 }  // namespace blink

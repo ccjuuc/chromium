@@ -9,6 +9,8 @@
 
 #import <vector>
 
+#import "base/memory/raw_ptr.h"
+
 namespace bookmarks {
 class BookmarkNode;
 struct QueryFields;
@@ -27,18 +29,19 @@ struct QueryFields;
 
 // "Mobile Bookmarks" folder node that always exists by default.
 - (const bookmarks::BookmarkNode*)mobileFolderNode;
-// The list of visible folders to show.
-- (std::vector<const bookmarks::BookmarkNode*>)visibleFolderNodes;
-// The list of visible folders to show, if they are matching `query`.
-- (std::vector<const bookmarks::BookmarkNode*>)visibleFolderNodesForQuery:
+// The list of ids of visible folders to show.
+- (std::vector<int64_t>)visibleFolderNodeIds;
+// The list of ids of visible folders to show, if they are matching `query`.
+- (std::vector<int64_t>)visibleFolderNodeIdsForQuery:
     (const bookmarks::QueryFields&)query;
+// Retrieve the BookmarkNode with `nodeId` from this sub-data source.
+- (const bookmarks::BookmarkNode*)bookmarkNodeForId:(int64_t)nodeId;
 
 @end
 
-// TODO(crbug.com/40252439): Refactor all the methods in this protocol after the
-// view controller has been refactored. View controller should not know about
-// BookmarkNode.
-// Data source protocol to get data on demand.
+// TODO(crbug.com/498389665): Refactor all the methods in this protocol after
+// the view controller has been refactored. View controller should not know
+// about BookmarkNode. Data source protocol to get data on demand.
 @protocol BookmarksFolderChooserDataSource <NSObject>
 
 // Data source from account bookmark model. Clients should call

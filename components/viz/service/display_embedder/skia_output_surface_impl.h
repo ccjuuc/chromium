@@ -104,7 +104,7 @@ class VIZ_SERVICE_EXPORT SkiaOutputSurfaceImpl : public SkiaOutputSurface {
   void Reshape(const ReshapeParams& params) override;
   void SetUpdateVSyncParametersCallback(
       UpdateVSyncParametersCallback callback) override;
-  void SetVSyncDisplayID(int64_t display_id) override;
+  void SetVSyncDisplayID(int64_t display_id, bool force_update) override;
   void SetDisplayTransformHint(gfx::OverlayTransform transform) override;
   gfx::OverlayTransform GetDisplayTransform() override;
   void SwapBuffers(OutputSurfaceFrame frame) override;
@@ -219,8 +219,12 @@ class VIZ_SERVICE_EXPORT SkiaOutputSurfaceImpl : public SkiaOutputSurface {
  private:
   friend class SkiaOutputSurfaceSharedImageInterface;
 
+  struct InitializeOnGpuThreadResult;
   bool Initialize();
-  void InitializeOnGpuThread(bool* result);
+  // Sets `out_result` to null on failure.
+  void InitializeOnGpuThread(
+      std::optional<InitializeOnGpuThreadResult>* out_result);
+
   GrSurfaceCharacterization CreateGrSurfaceCharacterizationRenderPass(
       const gfx::Size& surface_size,
       SkColorType color_type,
@@ -415,6 +419,8 @@ class VIZ_SERVICE_EXPORT SkiaOutputSurfaceImpl : public SkiaOutputSurface {
   gpu::GrContextType gr_context_type_ = gpu::GrContextType::kGL;
   sk_sp<GrContextThreadSafeProxy> gr_context_thread_safe_;
   raw_ptr<skgpu::graphite::Recorder> graphite_recorder_ = nullptr;
+  raw_ptr<base::WeakPtr<gpu::raster::GraphiteCacheController>>
+      graphite_cache_controller_weak_ptr_;
   scoped_refptr<gpu::raster::GraphiteCacheController>
       graphite_cache_controller_;
   skgpu::graphite::Volatile graphite_use_volatile_promise_images_ =

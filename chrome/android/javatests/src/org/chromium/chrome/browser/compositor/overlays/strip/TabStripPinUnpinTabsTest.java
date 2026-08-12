@@ -33,16 +33,15 @@ import org.junit.runner.RunWith;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.page.CtaPageStation;
+import org.chromium.chrome.test.util.TabStripUtils;
 import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.HashSet;
@@ -51,10 +50,6 @@ import java.util.Set;
 /** Instrumentation tests for pinning and unpinning tabs on LFF tab strip */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
-@EnableFeatures({
-    ChromeFeatureList.ANDROID_PINNED_TABS_TABLET_TAB_STRIP,
-    ChromeFeatureList.ANDROID_PINNED_TABS
-})
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @Restriction(DeviceFormFactor.TABLET_OR_DESKTOP)
 public class TabStripPinUnpinTabsTest {
@@ -67,17 +62,21 @@ public class TabStripPinUnpinTabsTest {
     private static final float PINNED_TAB_WIDTH_WITHOUT_OVERLAP =
             PINNED_TAB_WIDTH_WITH_OVERLAP - TAB_OVERLAP_WIDTH;
 
+    private CtaPageStation mPage;
     private StripLayoutHelper mStripLayoutHelper;
     private TabModel mTabModel;
     private String mPinTabMenuLabel;
     private String mUnpinTabMenuLabel;
     private String mPinMultipleTabsMenuLabel;
     private String mUnpinMultipleTabsMenuLabel;
+    private float mStartOffset;
 
     @Before
     public void setUp() throws Exception {
+        mPage = mActivityTestRule.startOnBlankPage();
         mStripLayoutHelper =
                 TabStripTestUtils.getActiveStripLayoutHelper(mActivityTestRule.getActivity());
+        TabStripUtils.settleDownCompositor(mStripLayoutHelper);
         mTabModel = mActivityTestRule.getActivity().getCurrentTabModel();
         mPinTabMenuLabel =
                 mActivityTestRule
@@ -99,6 +98,7 @@ public class TabStripPinUnpinTabsTest {
                         .getActivity()
                         .getResources()
                         .getQuantityString(R.plurals.unpin_tabs_menu_item, 2);
+        mStartOffset = mStripLayoutHelper.getStripLayoutTabsForTesting()[0].getDrawX();
     }
 
     @After
@@ -110,12 +110,11 @@ public class TabStripPinUnpinTabsTest {
     @Test
     @SmallTest
     public void testPinAndUnpin_OneByOne() {
-        TabStripTestUtils.createTabs(
-                mActivityTestRule.getActivity(), /* isIncognito= */ false, /* numOfTabs= */ 5);
+        createTabs(5);
 
         StripLayoutTab[] tabs = mStripLayoutHelper.getStripLayoutTabsForTesting();
         int lastPinnedIndex = 0;
-        float expectedDrawX = 0f;
+        float expectedDrawX = mStartOffset;
 
         // Pin all tabs one by one via tab context menu.
         while (lastPinnedIndex < tabs.length) {
@@ -151,12 +150,11 @@ public class TabStripPinUnpinTabsTest {
     @Test
     @SmallTest
     public void testCloseAndRestorePinnedTab() {
-        TabStripTestUtils.createTabs(
-                mActivityTestRule.getActivity(), /* isIncognito= */ false, /* numOfTabs= */ 5);
+        createTabs(5);
 
         StripLayoutTab[] tabs = mStripLayoutHelper.getStripLayoutTabsForTesting();
         int lastPinnedIndex = 0;
-        float expectedDrawX = 0f;
+        float expectedDrawX = mStartOffset;
 
         // Pin all tabs one by one via tab context menu.
         while (lastPinnedIndex < tabs.length) {
@@ -205,8 +203,7 @@ public class TabStripPinUnpinTabsTest {
     @Test
     @SmallTest
     public void testPinGroupedTab() {
-        TabStripTestUtils.createTabs(
-                mActivityTestRule.getActivity(), /* isIncognito= */ false, /* numOfTabs= */ 5);
+        createTabs(5);
 
         // Group the last two tabs.
         int firstGroupedIndex = 3;
@@ -222,13 +219,13 @@ public class TabStripPinUnpinTabsTest {
                 TabStripTestUtils.getActiveStripLayoutHelper(mActivityTestRule.getActivity());
         StripLayoutTab[] tabs = mStripLayoutHelper.getStripLayoutTabsForTesting();
         StripLayoutTab tabToPin = tabs[firstGroupedIndex];
-        TabGroupModelFilter groupModelFilter =
-                TabStripTestUtils.getTabGroupModelFilter(
+        TabModel regularTabModel =
+                TabStripTestUtils.getTabModel(
                         mActivityTestRule.getActivity(), /* isIncognito= */ false);
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     var tab = mTabModel.getTabById(tabToPin.getTabId());
-                    assertEquals(firstGroupedIndex, groupModelFilter.getTabModel().indexOf(tab));
+                    assertEquals(firstGroupedIndex, regularTabModel.indexOf(tab));
                     assertFalse(tabToPin.getIsPinned());
                     assertNotNull(tab.getTabGroupId());
                 });
@@ -244,10 +241,9 @@ public class TabStripPinUnpinTabsTest {
                 () -> {
                     assertFalse(
                             "Tab should be ungrouped.",
-                            groupModelFilter.isTabInTabGroup(
-                                    mTabModel.getTabAt(firstGroupedIndex)));
+                            regularTabModel.isTabInTabGroup(mTabModel.getTabAt(firstGroupedIndex)));
                     var tab = mTabModel.getTabById(tabToPin.getTabId());
-                    assertEquals(0, groupModelFilter.getTabModel().indexOf(tab));
+                    assertEquals(0, regularTabModel.indexOf(tab));
                     assertTrue(tabToPin.getIsPinned());
                 });
 
@@ -255,20 +251,18 @@ public class TabStripPinUnpinTabsTest {
         verifyTabIsPinned(
                 mStripLayoutHelper.getStripLayoutTabsForTesting(),
                 tabToPin,
-                /* expectedDrawX= */ 0f,
+                /* expectedDrawX= */ mStartOffset,
                 /* expectedIndex= */ 0);
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_TAB_HIGHLIGHTING)
     public void testPinAndUnpin_AllTabs() {
-        TabStripTestUtils.createTabs(
-                mActivityTestRule.getActivity(), /* isIncognito= */ false, /* numOfTabs= */ 5);
+        createTabs(5);
 
         // Multi-select all tabs.
         final StripLayoutTab[] tabs = mStripLayoutHelper.getStripLayoutTabsForTesting();
-        final Set<Integer> tabIds = new HashSet();
+        final Set<Integer> tabIds = new HashSet<>();
         for (int i = 0; i < tabs.length; i++) {
             tabIds.add(tabs[i].getTabId());
         }
@@ -281,7 +275,7 @@ public class TabStripPinUnpinTabsTest {
         onView(withText(mPinMultipleTabsMenuLabel)).perform(click());
 
         // Verify the multi-selected tabs are pinned and has correct position and width.
-        float expectedDrawX = 0f;
+        float expectedDrawX = mStartOffset;
         for (int i = 0; i < tabs.length; i++) {
             verifyTabIsPinned(tabs, tabs[i], expectedDrawX, i);
             expectedDrawX += PINNED_TAB_WIDTH_WITHOUT_OVERLAP;
@@ -293,7 +287,7 @@ public class TabStripPinUnpinTabsTest {
         onView(withText(mUnpinMultipleTabsMenuLabel)).perform(click());
 
         // Verify the multi-selected tabs are unpinned and has correct position and width.
-        expectedDrawX = 0f;
+        expectedDrawX = mStartOffset;
         for (int i = 0; i < tabs.length; i++) {
             verifyTabIsUnpinned(tabs, tabs[i], expectedDrawX, i);
             expectedDrawX += tabs[i].getWidth() - TAB_OVERLAP_WIDTH;
@@ -302,14 +296,12 @@ public class TabStripPinUnpinTabsTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_TAB_HIGHLIGHTING)
     public void testPinAndUnpin_MultipleTabs() {
-        TabStripTestUtils.createTabs(
-                mActivityTestRule.getActivity(), /* isIncognito= */ false, /* numOfTabs= */ 5);
+        createTabs(5);
 
         // Multi-select last two tabs.
         final StripLayoutTab[] tabs = mStripLayoutHelper.getStripLayoutTabsForTesting();
-        final Set<Integer> tabIds = new HashSet();
+        final Set<Integer> tabIds = new HashSet<>();
         StripLayoutTab firstTabToPin = tabs[tabs.length - 2];
         StripLayoutTab secondTabToPin = tabs[tabs.length - 1];
         tabIds.add(firstTabToPin.getTabId());
@@ -323,7 +315,7 @@ public class TabStripPinUnpinTabsTest {
         onView(withText(mPinMultipleTabsMenuLabel)).perform(click());
 
         // Verify the multi-selected tabs are pinned and has correct position and width.
-        float expectedDrawX = 0f;
+        float expectedDrawX = mStartOffset;
         for (int i = 0; i < tabs.length; i++) {
             if (i < 2) {
                 verifyTabIsPinned(tabs, tabs[i], expectedDrawX, i);
@@ -340,7 +332,7 @@ public class TabStripPinUnpinTabsTest {
         onView(withText(mUnpinMultipleTabsMenuLabel)).perform(click());
 
         // Verify the multi-selected tabs are unpinned and has correct position and width.
-        expectedDrawX = 0f;
+        expectedDrawX = mStartOffset;
         for (int i = 0; i < tabs.length; i++) {
             verifyTabIsUnpinned(tabs, tabs[i], expectedDrawX, i);
             expectedDrawX += tabs[i].getWidth() - TAB_OVERLAP_WIDTH;
@@ -349,20 +341,18 @@ public class TabStripPinUnpinTabsTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_TAB_HIGHLIGHTING)
     public void testPinAndUnpin_MultipleTabs_MixedPinnedUnPinned_PinTabs() {
-        TabStripTestUtils.createTabs(
-                mActivityTestRule.getActivity(), /* isIncognito= */ false, /* numOfTabs= */ 5);
+        createTabs(5);
         final StripLayoutTab[] tabs = mStripLayoutHelper.getStripLayoutTabsForTesting();
 
         // Pin first tab.
         showMenu(/* tabIndex= */ 0);
         onView(withText(mPinTabMenuLabel)).check(matches(isDisplayed()));
         onView(withText(mPinTabMenuLabel)).perform(click());
-        verifyTabIsPinned(tabs, tabs[0], /* expectedDrawX= */ 0, /* expectedIndex= */ 0);
+        verifyTabIsPinned(tabs, tabs[0], mStartOffset, /* expectedIndex= */ 0);
 
         // Multi-select the first pinned tab and last two unpinned tabs.
-        final Set<Integer> tabIds = new HashSet();
+        final Set<Integer> tabIds = new HashSet<>();
         StripLayoutTab tabPinned = tabs[0];
         StripLayoutTab firstTabToPin = tabs[tabs.length - 2];
         StripLayoutTab secondTabToPin = tabs[tabs.length - 1];
@@ -378,7 +368,7 @@ public class TabStripPinUnpinTabsTest {
         onView(withText(mPinMultipleTabsMenuLabel)).perform(click());
 
         // Verify the multi-selected tabs are pinned and has correct position and width.
-        float expectedDrawX = 0f;
+        float expectedDrawX = mStartOffset;
         for (int i = 0; i < tabs.length; i++) {
             if (i < 3) {
                 verifyTabIsPinned(tabs, tabs[i], expectedDrawX, i);
@@ -395,7 +385,7 @@ public class TabStripPinUnpinTabsTest {
         onView(withText(mUnpinMultipleTabsMenuLabel)).perform(click());
 
         // Verify the multi-selected tabs are unpinned and has correct position and width.
-        expectedDrawX = 0f;
+        expectedDrawX = mStartOffset;
         for (int i = 0; i < tabs.length; i++) {
             verifyTabIsUnpinned(tabs, tabs[i], expectedDrawX, i);
             expectedDrawX += tabs[i].getWidth() - TAB_OVERLAP_WIDTH;
@@ -419,6 +409,14 @@ public class TabStripPinUnpinTabsTest {
                             }
                         });
         onViewWaiting(allOf(withId(R.id.tab_group_action_menu_list), isDisplayed()));
+    }
+
+    private void createTabs(int numTabs) {
+        // One tab is already created by startOnBlankPage().
+        for (int i = 0; i < numTabs - 1; i++) {
+            mPage = mPage.openNewTabFast().loadAboutBlank();
+        }
+        TabStripUtils.settleDownCompositor(mStripLayoutHelper);
     }
 
     private void verifyTabIsPinned(

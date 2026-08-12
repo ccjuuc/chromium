@@ -4,7 +4,12 @@
 
 package org.chromium.chrome.browser.omnibox.suggestions.tail;
 
-import org.junit.Assert;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -15,7 +20,7 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
 import org.chromium.chrome.browser.omnibox.UrlBarEditingTextStateProvider;
@@ -29,6 +34,7 @@ import org.chromium.components.omnibox.AutocompleteInput;
 import org.chromium.components.omnibox.AutocompleteMatch;
 import org.chromium.components.omnibox.AutocompleteMatchBuilder;
 import org.chromium.components.omnibox.OmniboxSuggestionType;
+import org.chromium.components.omnibox.action.OmniboxActionDelegate;
 import org.chromium.components.omnibox.suggestions.OmniboxSuggestionUiType;
 import org.chromium.ui.modelutil.PropertyModel;
 
@@ -37,15 +43,16 @@ import java.util.function.Supplier;
 /** Tests for {@link TailSuggestionProcessor}. */
 @RunWith(BaseRobolectricTestRunner.class)
 public class TailSuggestionProcessorUnitTest {
-    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    private @Mock SuggestionHost mSuggestionHost;
-    private @Mock AutocompleteInput mInput;
-    private @Mock UrlBarEditingTextStateProvider mTextProvider;
-    private @Mock OmniboxImageSupplier mImageSupplier;
-    private @Mock Supplier<Tab> mTabSupplier;
-    private @Mock Supplier<ShareDelegate> mShareDelegateSupplier;
-    private @Mock BookmarkState mBookmarkState;
+    @Mock private SuggestionHost mSuggestionHost;
+    @Mock private AutocompleteInput mInput;
+    @Mock private UrlBarEditingTextStateProvider mTextProvider;
+    @Mock private OmniboxImageSupplier mImageSupplier;
+    @Mock private Supplier<Tab> mTabSupplier;
+    @Mock private Supplier<ShareDelegate> mShareDelegateSupplier;
+    @Mock private BookmarkState mBookmarkState;
+    @Mock private OmniboxActionDelegate mActionDelegate;
 
     private TailSuggestionProcessor mProcessor;
     private AutocompleteMatch mSuggestion;
@@ -62,7 +69,8 @@ public class TailSuggestionProcessorUnitTest {
                         mBookmarkState,
                         mTabSupplier,
                         mShareDelegateSupplier,
-                        new ObservableSupplierImpl<>(ControlsPosition.TOP));
+                        ObservableSuppliers.createNonNull(ControlsPosition.TOP),
+                        mActionDelegate);
         mProcessor = new TailSuggestionProcessor(uiContext);
     }
 
@@ -83,11 +91,11 @@ public class TailSuggestionProcessorUnitTest {
         mProcessor.onSuggestionsReceived();
         createSearchSuggestion(OmniboxSuggestionType.SEARCH_SUGGEST_TAIL, "tail");
 
-        Assert.assertTrue(mProcessor.doesProcessSuggestion(mSuggestion, 1));
+        assertTrue(mProcessor.doesProcessSuggestion(mSuggestion, 1));
         // Alignment is suppressed on phones.
-        Assert.assertNull(mModel.get(TailSuggestionViewProperties.ALIGNMENT_MANAGER));
-        Assert.assertEquals("… tail", mModel.get(TailSuggestionViewProperties.TEXT).toString());
-        Assert.assertEquals(
+        assertNull(mModel.get(TailSuggestionViewProperties.ALIGNMENT_MANAGER));
+        assertEquals("… tail", mModel.get(TailSuggestionViewProperties.TEXT).toString());
+        assertEquals(
                 "fill into edit: tail", mModel.get(TailSuggestionViewProperties.FILL_INTO_EDIT));
     }
 
@@ -97,10 +105,10 @@ public class TailSuggestionProcessorUnitTest {
         mProcessor.onSuggestionsReceived();
         createSearchSuggestion(OmniboxSuggestionType.SEARCH_SUGGEST_TAIL, "tail");
 
-        Assert.assertTrue(mProcessor.doesProcessSuggestion(mSuggestion, 1));
-        Assert.assertNotNull(mModel.get(TailSuggestionViewProperties.ALIGNMENT_MANAGER));
-        Assert.assertEquals("… tail", mModel.get(TailSuggestionViewProperties.TEXT).toString());
-        Assert.assertEquals(
+        assertTrue(mProcessor.doesProcessSuggestion(mSuggestion, 1));
+        assertNotNull(mModel.get(TailSuggestionViewProperties.ALIGNMENT_MANAGER));
+        assertEquals("… tail", mModel.get(TailSuggestionViewProperties.TEXT).toString());
+        assertEquals(
                 "fill into edit: tail", mModel.get(TailSuggestionViewProperties.FILL_INTO_EDIT));
     }
 
@@ -108,11 +116,11 @@ public class TailSuggestionProcessorUnitTest {
     public void doesProcessSuggestion_nonTailSuggestion() {
         mProcessor.onSuggestionsReceived();
         createSearchSuggestion(OmniboxSuggestionType.SEARCH_SUGGEST, "search");
-        Assert.assertFalse(mProcessor.doesProcessSuggestion(mSuggestion, 1));
+        assertFalse(mProcessor.doesProcessSuggestion(mSuggestion, 1));
     }
 
     @Test
     public void getViewTypeId_forFullTestCoverage() {
-        Assert.assertEquals(OmniboxSuggestionUiType.TAIL_SUGGESTION, mProcessor.getViewTypeId());
+        assertEquals(OmniboxSuggestionUiType.TAIL_SUGGESTION, mProcessor.getViewTypeId());
     }
 }

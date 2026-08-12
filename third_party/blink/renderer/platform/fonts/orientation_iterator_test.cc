@@ -32,7 +32,7 @@ class OrientationIteratorTest : public testing::Test {
     text.Ensure16Bit();
     Vector<OrientationExpectedRun> expect;
     for (auto& run : runs) {
-      text.Append(String::FromUTF8(run.text));
+      text.Append(String::FromUtf8(run.text));
       expect.push_back(OrientationExpectedRun(text.length(), run.code));
     }
     OrientationIterator orientation_iterator(text.Span16(),
@@ -44,7 +44,7 @@ class OrientationIteratorTest : public testing::Test {
                   const Vector<OrientationExpectedRun>& expect) {
     unsigned limit;
     OrientationIterator::RenderOrientation render_orientation;
-    size_t run_count = 0;
+    wtf_size_t run_count = 0;
     while (orientation_iterator->Consume(&limit, &render_orientation)) {
       ASSERT_LT(run_count, expect.size());
       ASSERT_EQ(expect[run_count].limit, limit);

@@ -26,6 +26,7 @@ struct Facet;
 
 namespace password_manager {
 class PasswordManagerInterface;
+struct StoredCredential;
 }  // namespace password_manager
 
 namespace actor_login {
@@ -43,9 +44,11 @@ class ActorLoginCredentialFiller {
       bool should_store_permission,
       password_manager::PasswordManagerClient* client,
       base::WeakPtr<ActorLoginQualityLoggerInterface> mqls_logger,
+      base::TimeTicks attempt_login_start_time,
       IsTaskInFocus is_task_in_focus,
+      FrameFillingStartedCallback frame_filling_started_cb,
       LoginStatusResultOrErrorReply callback);
-  ~ActorLoginCredentialFiller();
+  virtual ~ActorLoginCredentialFiller();
 
   ActorLoginCredentialFiller(const ActorLoginCredentialFiller&) = delete;
   ActorLoginCredentialFiller& operator=(const ActorLoginCredentialFiller&) =
@@ -56,9 +59,27 @@ class ActorLoginCredentialFiller {
   void AttemptLogin(
       password_manager::PasswordManagerInterface* password_manager);
 
- private:
+  bool should_store_permission() const { return should_store_permission_; }
+
+  // Called when the primary page changed, so that the filler can
+  // properly populate the actor login MQLS logs.
+  void OnPrimaryPageChanged();
+
+ protected:
   enum class FieldType { kUsername, kPassword };
 
+  // Retrieves the full data of a saved credential for the form managed
+  // by `reference_form_manager` corresponding to `credential_`.
+  virtual const password_manager::StoredCredential* GetMatchingStoredCredential(
+      const password_manager::PasswordFormManager& reference_form_manager);
+
+  virtual bool DoesStoredCredentialBelongToManager(
+      const password_manager::PasswordFormManager* manager,
+      const password_manager::StoredCredential& stored_credential);
+
+  virtual bool IsReauthBeforeFillingRequired();
+
+ private:
   // Called when the affiliations for `credential_.request_origin` have been
   // retrieved. `results` contains facets affiliated with the
   // `credential_.request_origin`.
@@ -74,6 +95,15 @@ class ActorLoginCredentialFiller {
   void ProcessRetrievedForms(
       std::vector<password_manager::PasswordFormManager*> eligible_managers);
 
+  // If there are multiple forms on the page, one will be chosen as
+  // reference based on whether it's in the primary main frame, or whether
+  // the provided credential is a strong match for the form.
+  std::pair<password_manager::PasswordFormManager*,
+            const password_manager::StoredCredential*>
+  FindReferenceFormAndCredential(
+      const std::vector<password_manager::PasswordFormManager*>&
+          eligible_managers);
+
   // Checks if device reauthentication is required before filling.
   // If required, triggers reauthentication and, upon success, re-fetches
   // eligible forms to ensure freshness before filling all of them.
@@ -81,18 +111,14 @@ class ActorLoginCredentialFiller {
   // `eligible_managers`.
   void MaybeReauthAndFillAllEligibleFields(
       std::vector<password_manager::PasswordFormManager*> eligible_managers,
-      const password_manager::PasswordForm& stored_credential);
+      password_manager::StoredCredential stored_credential,
+      bool is_primary_main_frame);
 
   // Triggers the device reauthentication flow.
   // `on_reauth_cb` is executed only if reauthentication is successful.
   // If reauthentication fails, the filling process is aborted and an error
   // is reported via `callback_`.
   void AttemptReauth(base::OnceClosure on_reauth_cb);
-
-  // Retrieves the full data of a saved credential for the form managed
-  // by `signin_form_manager` corresponding to `credential_`.
-  const password_manager::PasswordForm* GetMatchingStoredCredential(
-      const password_manager::PasswordFormManager& signin_form_manager);
 
   // Reauthenticates the user before filling.
   void ReauthenticateAndFill(base::OnceClosure fill_form_cb);
@@ -105,7 +131,7 @@ class ActorLoginCredentialFiller {
   // Fills all eligible fields with `stored_credential.password_value` and
   // `stored_credential.username_value`.
   void FillAllEligibleFields(
-      const password_manager::PasswordForm& stored_credential,
+      password_manager::StoredCredential stored_credential,
       bool should_skip_iframes,
       std::vector<password_manager::PasswordFormManager*> eligible_managers);
 
@@ -170,6 +196,10 @@ class ActorLoginCredentialFiller {
   // Used to compute the request duration. Excludes reauth duration.
   base::TimeTicks start_time_;
 
+  // Used to compute the time it took from the tool creation
+  // until different actions in the filler.
+  const base::TimeTicks attempt_login_start_time_;
+
   // Used to compute the reauth duration if it was initiated. The duration is
   // subtracted from the request duration.
   std::optional<base::TimeTicks> reauth_start_time_;
@@ -179,6 +209,14 @@ class ActorLoginCredentialFiller {
 
   // Checks whether the UI relevant to the actor login task is in focus.
   IsTaskInFocus is_task_in_focus_;
+
+  // Callback invoked once credential filling into target frames starts.
+  // When executed, it notifies `ActorOneTimeTokenFillingService` to observe
+  // navigations across the specified `global_frame_ids`.
+  // This navigation state is subsequently used by `AttemptOtpFillingTool`
+  // to verify whether an OTP field observed later belongs to this same login
+  // flow.
+  FrameFillingStartedCallback on_frame_filling_started_cb_;
 
   // The callback to call with the result of the login attempt.
   LoginStatusResultOrErrorReply callback_;

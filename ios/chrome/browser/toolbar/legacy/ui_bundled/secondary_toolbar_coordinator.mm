@@ -9,14 +9,15 @@
 #import "ios/chrome/browser/shared/coordinator/layout_guide/layout_guide_util.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
+#import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/fullscreen_commands.h"
 #import "ios/chrome/browser/shared/public/commands/guided_tour_commands.h"
-#import "ios/chrome/browser/shared/public/commands/omnibox_commands.h"
 #import "ios/chrome/browser/shared/public/commands/popup_menu_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/adaptive_toolbar_coordinator+subclassing.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_button_factory.h"
+#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/legacy_toolbar_button_factory.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_configuration.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/secondary_toolbar_mediator.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/secondary_toolbar_view_controller.h"
@@ -48,10 +49,14 @@
   self.viewController = [[SecondaryToolbarViewController alloc] init];
   self.viewController.buttonFactory =
       [self buttonFactoryWithType:ToolbarType::kSecondary];
-  self.viewController.omniboxCommandsHandler =
-      HandlerForProtocol(browser->GetCommandDispatcher(), OmniboxCommands);
+  self.viewController.browserCoordinatorHandler = HandlerForProtocol(
+      browser->GetCommandDispatcher(), BrowserCoordinatorCommands);
   self.viewController.popupMenuCommandsHandler =
       HandlerForProtocol(browser->GetCommandDispatcher(), PopupMenuCommands);
+  if (IsFullscreenRefactoringEnabled()) {
+    self.viewController.fullscreenCommands =
+        HandlerForProtocol(browser->GetCommandDispatcher(), FullscreenCommands);
+  }
   self.viewController.layoutGuideCenter = LayoutGuideCenterForBrowser(browser);
   self.viewController.keyboardStateProvider = _secondaryToolbarMediator;
   FullscreenController* controller = FullscreenController::FromBrowser(browser);
@@ -90,10 +95,6 @@
 }
 
 #pragma mark - ToolbarCommands
-
-- (void)triggerToolbarSlideInAnimation {
-  [self.viewController triggerToolbarSlideInAnimationFromBelow:YES];
-}
 
 - (void)indicateLensOverlayVisible:(BOOL)lensOverlayVisible {
   // NO-OP

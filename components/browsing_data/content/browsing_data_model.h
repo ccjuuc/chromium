@@ -11,15 +11,13 @@
 
 #include "base/containers/enum_set.h"
 #include "base/functional/callback_forward.h"
+#include "base/memory/advanced_memory_safety_checks.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "components/browsing_data/content/browsing_data_quota_helper.h"
 #include "components/browsing_data/content/shared_worker_info.h"
 #include "components/webid/federated_identity_data_model.h"
-#include "content/public/browser/attribution_data_model.h"
 #include "content/public/browser/cdm_storage_data_model.h"
-#include "content/public/browser/interest_group_manager.h"
-#include "content/public/browser/private_aggregation_data_model.h"
 #include "content/public/browser/session_storage_usage_info.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/device_bound_sessions/session_key.h"
@@ -37,6 +35,9 @@ class StoragePartition;
 // "data owners", which denote which entity the data should be closely
 // associated with in UI surfaces.
 class BrowsingDataModel {
+  // TODO(crbug.com/467904023): Remove this macro once the bug gets fixed.
+  ADVANCED_MEMORY_SAFETY_CHECKS();
+
  public:
   // The entity that logically owns a set of data. All browsing data will be
   // grouped by its owner.
@@ -51,9 +52,6 @@ class BrowsingDataModel {
     kSharedStorage = 2,
     kLocalStorage,
     kSessionStorage,
-    kInterestGroup,
-    kAttributionReporting,
-    kPrivateAggregation,
     kQuotaStorage,
     kSharedDictionary,
     kSharedWorker,
@@ -76,9 +74,6 @@ class BrowsingDataModel {
   // using this information.
   typedef std::variant<url::Origin,        // Single origin, e.g. Trust Tokens
                        blink::StorageKey,  // Partitioned JS storage
-                       content::InterestGroupManager::InterestGroupDataKey,
-                       content::AttributionDataModel::DataKey,
-                       content::PrivateAggregationDataModel::DataKey,
                        content::SessionStorageUsageInfo,
                        net::SharedDictionaryIsolationKey,
                        browsing_data::SharedWorkerInfo,

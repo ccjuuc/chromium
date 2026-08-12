@@ -11,7 +11,7 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_worklet_node_options.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_param_map.h"
-#include "third_party/blink/renderer/modules/webaudio/audio_worklet_processor_error_state.h"
+#include "third_party/blink/renderer/modules/webaudio/audio_worklet_processor_error_details.h"
 #include "third_party/blink/renderer/platform/heap/cross_thread_persistent.h"
 #include "third_party/blink/renderer/platform/wtf/threading.h"
 
@@ -61,13 +61,13 @@ class AudioWorkletHandler final : public AudioHandler {
   // management from the renderer.
   bool RequiresTailProcessing() const override { return true; }
 
-  // Used to avoid code duplication when using scoped objects that affect
-  // `Process`.
-  void ProcessInternal(uint32_t frames_to_process);
-
-  void NotifyProcessorError(AudioWorkletProcessorErrorState);
+  void NotifyProcessorError(
+      const AudioWorkletProcessorErrorDetails& error_details);
 
   void MarkProcessorInactiveOnMainThread();
+
+  bool HasActiveInputs();
+  void FinishProcessorOnRenderThread();
 
   const String name_;
 
@@ -98,8 +98,15 @@ class AudioWorkletHandler final : public AudioHandler {
   // when a processor stops invoking the user-defined `process()` callback.
   bool is_processor_active_ = true;
 
-  // Cached feature flag value
-  const bool allow_denormal_in_processing_;
+  // The active source flag of the AudioWorkletProcessor, which is updated by
+  // the return value of the user-defined `process()` callback.
+  bool is_active_source_ = true;
+
+  // Pre-bound WeakPtr to this handler. Storing it on the main thread avoids
+  // calling GetWeakPtr() on the WeakPtrFactory from the audio thread (which is
+  // not thread-safe). The audio thread can then safely copy this pre-bound
+  // WeakPtr to post tasks back to the main thread.
+  base::WeakPtr<AudioWorkletHandler> weak_this_;
 
   base::WeakPtrFactory<AudioWorkletHandler> weak_ptr_factory_{this};
 };

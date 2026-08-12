@@ -42,10 +42,10 @@ used, but rather `base::RunLoop` should be used instead.
 ## Restrictions
 
 Both the instrumentation tests and browser tests have hardware/software
-restrictions - in the case of browser tests, XR is only supported on Windows 8
-and later (or Windows 7 with a non-standard patch applied) with a GPU that
-supports DirectX 11.1 or on Android, although, several tests exist that don't
-actually use XR functionality, and thus don't have these requirements.
+restrictions - in the case of browser tests, XR is only supported on Windows 10
+and later with a GPU that supports DirectX 11.1, or on Android. However,
+several tests exist that don't actually use XR functionality, and thus don't
+have these requirements.
 
 Runtime restrictions in browser tests are handled via the macros in
 `conditional_skipping.h`. To add a runtime requirement to a test class, simply
@@ -101,8 +101,9 @@ not set up on your machine.
 ### Android
 
 On Android, the tests are built and run via the `android_browsertests` target.
-Note that due to the deployment of a mock OpenXR runtime and writing a JSON file
-to: `'/product/etc/openxr/1/active_runtime.json'`, tests must be run on a rooted
+Note that due to the deployment of the OpenXR mock trampoline shared library
+(`libopenxr_mock.so`) and writing a JSON file to:
+`'/product/etc/openxr/1/active_runtime.json'`, tests must be run on a rooted
 device. Because this is a large target, it is recommended to append
 `--gtest_filter=*WebXr*` when running the tests.
 
@@ -160,7 +161,7 @@ For example, `WebXrVrOpenXrBrowserTest` is meant for testing the WebXR for VR
 feature using the OpenXR runtime with standard flags enabled, i.e. the flags
 required for using WebXR and the OpenXR runtime with other runtimes disabled.
 `WebXrVrRuntimelessBrowserTestSensorless` on the other hand would be for
-testing WebVR for VR without any runtimes and with the orientation sensor
+testing WebXR for VR without any runtimes and with the orientation sensor
 device explicitly disabled.
 
 In general, classes ending in "Base" should not be used directly.

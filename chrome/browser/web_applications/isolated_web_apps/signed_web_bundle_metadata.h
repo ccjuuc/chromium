@@ -9,7 +9,7 @@
 
 #include "base/types/expected.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
-#include "chrome/browser/web_applications/web_app_install_info.h"
+#include "chrome/browser/web_applications/model/dialog_image_info.h"
 #include "components/webapps/isolated_web_apps/types/iwa_version.h"
 #include "components/webapps/isolated_web_apps/types/source.h"
 
@@ -43,7 +43,8 @@ class SignedWebBundleMetadata {
       const std::u16string& app_name,
       const IwaVersion& version,
       DialogImageInfo image_info,
-      const std::optional<std::string>& enterprise_name);
+      const std::optional<std::string>& enterprise_name,
+      const std::optional<GURL>& update_manifest_url = std::nullopt);
 
   ~SignedWebBundleMetadata();
   SignedWebBundleMetadata(const SignedWebBundleMetadata&);
@@ -63,6 +64,10 @@ class SignedWebBundleMetadata {
     return enterprise_name_;
   }
 
+  const std::optional<GURL>& update_manifest_url() const {
+    return update_manifest_url_;
+  }
+
   bool operator==(const SignedWebBundleMetadata& other) const;
 
  private:
@@ -71,13 +76,15 @@ class SignedWebBundleMetadata {
                           const std::u16string& app_name,
                           const IwaVersion& version,
                           DialogImageInfo image_info,
-                          const std::optional<std::string>& enterprise_name);
+                          const std::optional<std::string>& enterprise_name,
+                          const std::optional<GURL>& update_manifest_url);
 
   IsolatedWebAppUrlInfo url_info_;
   std::u16string app_name_;
   IwaVersion version_;
   DialogImageInfo image_info_;
   std::optional<std::string> enterprise_name_;
+  std::optional<GURL> update_manifest_url_;
 };
 
 }  // namespace web_app

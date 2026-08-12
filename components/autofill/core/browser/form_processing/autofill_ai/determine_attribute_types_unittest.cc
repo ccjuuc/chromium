@@ -13,6 +13,7 @@
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type_names.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/form_structure_sectioning_util.h"
 #include "components/autofill/core/browser/test_utils/autofill_form_test_utils.h"
@@ -37,6 +38,7 @@ using ::testing::Pair;
 using ::testing::Pointee;
 using ::testing::Truly;
 using ::testing::UnorderedElementsAre;
+using ::testing::ValuesIn;
 
 constexpr auto kVehicle = EntityType(EntityTypeName::kVehicle);
 constexpr auto kDriversLicense = EntityType(EntityTypeName::kDriversLicense);
@@ -80,7 +82,7 @@ class DetermineAttributeTypesTest : public testing::Test {
   static constexpr DetermineAttributeTypesPassKey kPassKey = {};
 
  private:
-  autofill::test::AutofillUnitTestEnvironment autofill_environment_;
+  test::AutofillUnitTestEnvironment autofill_environment_;
   base::test::ScopedFeatureList feature_list_{
       features::kAutofillAiWithDataSchema};
 };
@@ -204,6 +206,18 @@ TEST_F(DetermineAttributeTypesTest, AssignsDynamicTypesToTheVicinity) {
           Pair(section, UnorderedElementsAre(
                             Pair(kVehicle, vehicle_matcher),
                             Pair(kDriversLicense, drivers_license_matcher)))));
+}
+
+TEST_F(DetermineAttributeTypesTest, AssignsDynamicTypesToOrderAccount) {
+  std::vector<std::unique_ptr<AutofillField>> fields =
+      CreateFields({{ORDER_ID}, {EMAIL_ADDRESS}});
+  EXPECT_THAT(
+      DetermineAttributeTypes(fields, fields.front()->section(),
+                              EntityType(EntityTypeName::kOrder), kPassKey),
+      ElementsAre(
+          FieldAndType(fields[0], AttributeType(AttributeTypeName::kOrderId)),
+          FieldAndType(fields[1],
+                       AttributeType(AttributeTypeName::kOrderAccount))));
 }
 
 // Tests that DetermineAttributeTypes() propagates dynamic types forward.
@@ -409,7 +423,7 @@ TEST_F(DetermineAttributeTypesTest, AtMostOneAttributePerFieldPerEntity) {
 
   std::vector<std::unique_ptr<AutofillField>> fields = CreateFields(
       {// AutofillType::MakeAutofillType() truncates this to NAME_FULL because
-       // both NAME_FULL and PASSPORT_ISSUING_COUNTRY are belong to `kPassport`.
+       // both NAME_FULL and PASSPORT_ISSUING_COUNTRY belong to `kPassport`.
        {NAME_FULL, PASSPORT_ISSUING_COUNTRY},
        // AutofillType::MakeAutofillType() keeps both because they belong to
        // destinct EntityTypes.
@@ -505,6 +519,30 @@ TEST_F(DetermineAttributeTypesTest, OverloadEquivalence) {
                   Pair(section1, ElementsAre(Pair(kVehicle, vehicle_matcher))),
                   Pair(section2, ElementsAre(Pair(kDriversLicense,
                                                   drivers_license_matcher)))));
+}
+
+class DetermineAttributeTypesTest_FieldTypeUniqueness
+    : public testing::TestWithParam<EntityType> {};
+
+INSTANTIATE_TEST_SUITE_P(,
+                         DetermineAttributeTypesTest_FieldTypeUniqueness,
+                         ValuesIn(DenseSet<EntityType>::all()));
+
+// Tests that no two attributes of an entity share the same FieldTypes.
+// This is necessary for GetAttributeType(), an internal function of
+// determine_attribute_types.cc, to work as expected.
+TEST_P(DetermineAttributeTypesTest_FieldTypeUniqueness, FieldSubtypes) {
+  EntityType et = GetParam();
+  for (AttributeType at1 : et.attributes()) {
+    for (AttributeType at2 : et.attributes()) {
+      SCOPED_TRACE(testing::Message() << at1 << " and " << at2 << " of " << et);
+      if (at1 == at2) {
+        continue;
+      }
+      EXPECT_THAT(Intersection(at1.field_subtypes(), at2.field_subtypes()),
+                  IsEmpty());
+    }
+  }
 }
 
 }  // namespace autofill

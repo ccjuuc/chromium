@@ -11,6 +11,7 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
@@ -21,6 +22,8 @@
 #include "chrome/browser/ash/login/version_updater/version_updater.h"
 #include "chrome/browser/ui/webui/ash/login/mojom/screens_oobe.mojom.h"
 #include "chromeos/dbus/power/power_manager_client.h"
+
+class PrefService;
 
 namespace ash {
 
@@ -64,7 +67,9 @@ class ConsumerUpdateScreen
 
   using ScreenExitCallback = base::RepeatingCallback<void(Result result)>;
 
-  ConsumerUpdateScreen(base::WeakPtr<ConsumerUpdateScreenView> view,
+  // `local_state` must be non-null and must outlive `this`.
+  ConsumerUpdateScreen(PrefService* local_state,
+                       base::WeakPtr<ConsumerUpdateScreenView> view,
                        ErrorScreen* error_screen,
                        const ScreenExitCallback& exit_callback);
 
@@ -172,6 +177,8 @@ class ConsumerUpdateScreen
   void RecordOobeConsumerUpdateScreenSkippedReasonHistogram(
       OobeConsumerUpdateScreenSkippedReason reason);
 
+  const raw_ref<PrefService> local_state_;
+
   bool update_available = false;
 
   std::optional<bool> is_mandatory_update_;
@@ -241,11 +248,5 @@ class ConsumerUpdateScreen
 };
 
 }  // namespace ash
-
-// TODO(crbug.com/40163357): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace chromeos {
-using ::ash ::ConsumerUpdateScreen;
-}
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_SCREENS_CONSUMER_UPDATE_SCREEN_H_

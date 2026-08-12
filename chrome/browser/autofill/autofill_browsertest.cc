@@ -5,6 +5,7 @@
 #include <stddef.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -27,8 +28,8 @@
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "chrome/test/base/chrome_test_utils.h"
@@ -115,7 +116,7 @@ class AutofillTest : public InProcessBrowserTest {
     InProcessBrowserTest::SetUpOnMainThread();
     // Wait for Personal Data Manager to be fully loaded to prevent that
     // spurious notifications deceive the tests.
-    WaitForPersonalDataManagerToBeLoaded(browser()->profile());
+    WaitForPersonalDataManagerToBeLoaded(browser()->GetProfile());
 
     ASSERT_TRUE(embedded_test_server()->Start());
   }
@@ -131,7 +132,8 @@ class AutofillTest : public InProcessBrowserTest {
         web_contents()->GetPrimaryMainFrame())
         ->GetAutofillManager()
         .client()
-        .HideAutofillSuggestions(SuggestionHidingReason::kTabGone);
+        .HideSuggestions(SuggestionHidingReason::kTabGone,
+                         /*product=*/std::nullopt);
     InProcessBrowserTest::TearDownOnMainThread();
   }
 
@@ -143,7 +145,7 @@ class AutofillTest : public InProcessBrowserTest {
 
   PersonalDataManager* personal_data_manager() {
     return PersonalDataManagerFactory::GetForBrowserContext(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   typedef std::map<std::string, std::string> FormMap;
@@ -195,7 +197,7 @@ class AutofillTest : public InProcessBrowserTest {
     // available through the PDM after it has asynchronously updated the
     // database. Wait for all pending DB tasks to complete.
     WaitForPendingDBTasks(*WebDataServiceFactory::GetAutofillWebDataForProfile(
-        browser()->profile(), ServiceAccessType::EXPLICIT_ACCESS));
+        browser()->GetProfile(), ServiceAccessType::EXPLICIT_ACCESS));
   }
 
   // Aggregate profiles from forms into Autofill preferences. Returns the number
@@ -581,7 +583,7 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, ProfileWithEmailInOtherFieldNotSaved) {
 // 'Address Line 1' and 'City' data match. When two profiles are merged, any
 // remaining address fields are expected to be overwritten. Any non-address
 // fields should accumulate multi-valued data.
-// DISABLED: http://crbug.com/281541
+// DISABLED: http://crbug.com/41043304
 IN_PROC_BROWSER_TEST_F(AutofillTest,
                        DISABLED_MergeAggregatedProfilesWithSameAddress) {
   AggregateProfilesIntoAutofillPrefs("dataset_same_address.txt");
@@ -612,7 +614,7 @@ IN_PROC_BROWSER_TEST_F(AutofillTest,
 
 // Test Autofill ability to merge duplicate profiles and throw away junk.
 // TODO(isherman): this looks redundant, consider removing.
-// DISABLED: http://crbug.com/281541
+// DISABLED: http://crbug.com/41043304
 // This tests opens and submits over 240 forms which does not finish within the
 // allocated time of browser_tests. This should be converted into a unittest.
 IN_PROC_BROWSER_TEST_F(AutofillTest,
@@ -655,7 +657,7 @@ class AutofillAccessibilityTest : public AutofillTest {
 };
 
 // Test that autofill available state is correctly set on accessibility node.
-// Test is flaky: https://crbug.com/1239099
+// Test is flaky: https://crbug.com/40784571
 IN_PROC_BROWSER_TEST_F(AutofillAccessibilityTest,
                        DISABLED_TestAutofillSuggestionAvailability) {
   content::ScopedAccessibilityModeOverride mode_override(ui::kAXModeComplete);
@@ -728,7 +730,7 @@ IN_PROC_BROWSER_TEST_F(AutofillAccessibilityTest,
 // Test that autocomplete available string attribute is correctly set on
 // accessibility node. Test autocomplete in this file since it uses the same
 // infrastructure as autofill.
-// Test is flaky: http://crbug.com/1239099
+// Test is flaky: http://crbug.com/40784571
 IN_PROC_BROWSER_TEST_F(AutofillAccessibilityTest,
                        DISABLED_TestAutocompleteState) {
   content::ScopedAccessibilityModeOverride mode_override(ui::kAXModeComplete);
@@ -812,8 +814,9 @@ class AutofillTestPrerendering : public InProcessBrowserTest {
     }
     MOCK_METHOD(void,
                 OnFormsSeen,
-                (const std::vector<FormData>&,
-                 const std::vector<FormGlobalId>&),
+                (std::vector<FormData>,
+                 std::vector<FormGlobalId>,
+                 RendererEventPassKey),
                 (override));
     MOCK_METHOD(void,
                 OnFocusOnFormFieldImpl,
@@ -870,7 +873,7 @@ IN_PROC_BROWSER_TEST_F(AutofillTestPrerendering, DeferWhilePrerendering) {
   GURL initial_url = embedded_test_server()->GetURL("/empty.html");
   prerender_helper().NavigatePrimaryPage(initial_url);
 
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_helper().AddPrerender(prerender_url);
   auto* rfh = prerender_helper().GetPrerenderedMainFrameHost(host_id);
   MockAutofillManager* mock = autofill_manager(rfh);

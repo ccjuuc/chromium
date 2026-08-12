@@ -11,7 +11,6 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "base/containers/adapters.h"
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "cc/slim/layer.h"
 #include "components/viz/common/frame_sinks/copy_output_request.h"
@@ -36,6 +35,7 @@
 
 namespace ui {
 
+using base::android::AttachCurrentThread;
 using base::android::ConvertUTF8ToJavaString;
 using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
@@ -43,8 +43,15 @@ using base::android::ScopedJavaLocalRef;
 ViewAndroid::ScopedAnchorView::ScopedAnchorView(
     JNIEnv* env,
     const JavaRef<jobject>& jview,
-    const JavaRef<jobject>& jdelegate)
-    : view_(env, jview), delegate_(env, jdelegate) {
+    const JavaRef<jobject>& jdelegate) {
+  // TODO(jinsukkim): Following weak refs can be cast to strong refs which
+  //     cannot be garbage-collected and leak memory. Rewrite not to use them.
+  //     see comments in crrev.com/2103243002.
+  Java_ViewAndroidDelegate_onNativeSetDelegate(
+      env, reinterpret_cast<intptr_t>(this), jdelegate);
+  Java_ViewAndroidDelegate_onNativeSetView(
+      env, reinterpret_cast<intptr_t>(this), jview);
+
   // If there's a view, then we need a delegate to remove it.
   DCHECK(!jdelegate.is_null() || jview.is_null());
 }
@@ -52,19 +59,13 @@ ViewAndroid::ScopedAnchorView::ScopedAnchorView(
 ViewAndroid::ScopedAnchorView::ScopedAnchorView() { }
 
 ViewAndroid::ScopedAnchorView::ScopedAnchorView(ScopedAnchorView&& other) {
-  view_ = other.view_;
-  other.view_.reset();
-  delegate_ = other.delegate_;
-  other.delegate_.reset();
+  TransferViewAndDelegateFrom(other);
 }
 
 ViewAndroid::ScopedAnchorView&
 ViewAndroid::ScopedAnchorView::operator=(ScopedAnchorView&& other) {
   if (this != &other) {
-    view_ = other.view_;
-    other.view_.reset();
-    delegate_ = other.delegate_;
-    other.delegate_.reset();
+    TransferViewAndDelegateFrom(other);
   }
   return *this;
 }
@@ -74,20 +75,42 @@ ViewAndroid::ScopedAnchorView::~ScopedAnchorView() {
 }
 
 void ViewAndroid::ScopedAnchorView::Reset() {
-  JNIEnv* env = base::android::AttachCurrentThread();
-  const ScopedJavaLocalRef<jobject> view = view_.get(env);
-  const ScopedJavaLocalRef<jobject> delegate = delegate_.get(env);
+  JNIEnv* env = AttachCurrentThread();
+  const ScopedJavaLocalRef<jobject> view =
+      Java_ViewAndroidDelegate_getView(env, reinterpret_cast<intptr_t>(this));
+  const ScopedJavaLocalRef<jobject> delegate =
+      Java_ViewAndroidDelegate_getDelegate(env,
+                                           reinterpret_cast<intptr_t>(this));
   if (!view.is_null() && !delegate.is_null()) {
     Java_ViewAndroidDelegate_removeView(env, delegate, view);
   }
-  view_.reset();
-  delegate_.reset();
+  Java_ViewAndroidDelegate_onNativeReset(env, reinterpret_cast<intptr_t>(this));
 }
 
 const base::android::ScopedJavaLocalRef<jobject>
 ViewAndroid::ScopedAnchorView::view() const {
-  JNIEnv* env = base::android::AttachCurrentThread();
-  return view_.get(env);
+  JNIEnv* env = AttachCurrentThread();
+  return Java_ViewAndroidDelegate_getView(env,
+                                          reinterpret_cast<intptr_t>(this));
+}
+
+void ViewAndroid::ScopedAnchorView::TransferViewAndDelegateFrom(
+    ScopedAnchorView& other) {
+  JNIEnv* env = AttachCurrentThread();
+
+  ScopedJavaLocalRef<jobject> other_delegate =
+      Java_ViewAndroidDelegate_getDelegate(env,
+                                           reinterpret_cast<intptr_t>(&other));
+  ScopedJavaLocalRef<jobject> other_view =
+      Java_ViewAndroidDelegate_getView(env, reinterpret_cast<intptr_t>(&other));
+
+  Java_ViewAndroidDelegate_onNativeSetDelegate(
+      env, reinterpret_cast<intptr_t>(this), other_delegate);
+  Java_ViewAndroidDelegate_onNativeSetView(
+      env, reinterpret_cast<intptr_t>(this), other_view);
+
+  Java_ViewAndroidDelegate_onNativeReset(env,
+                                         reinterpret_cast<intptr_t>(&other));
 }
 
 ViewAndroid::ViewAndroid(LayoutType layout_type)
@@ -100,13 +123,16 @@ ViewAndroid::~ViewAndroid() {
   observer_list_.Notify(&ViewAndroidObserver::OnViewAndroidDestroyed);
   observer_list_.Clear();
   RemoveFromParent();
+  Java_ViewAndroidDelegate_onNativeReset(AttachCurrentThread(),
+                                         reinterpret_cast<intptr_t>(this));
 }
 
 void ViewAndroid::SetDelegate(const JavaRef<jobject>& delegate) {
   // A ViewAndroid may have its own delegate or otherwise will use the next
   // available parent's delegate.
-  JNIEnv* env = base::android::AttachCurrentThread();
-  delegate_ = JavaObjectWeakGlobalRef(env, delegate);
+  JNIEnv* env = AttachCurrentThread();
+  Java_ViewAndroidDelegate_onNativeSetDelegate(
+      env, reinterpret_cast<intptr_t>(this), delegate);
   observer_list_.Notify(&ViewAndroidObserver::OnDelegateSet);
 }
 
@@ -126,12 +152,12 @@ ScopedJavaLocalRef<jobject> ViewAndroid::GetEventForwarder() {
         << "The view tree path already has an event forwarder.";
     event_forwarder_.reset(new EventForwarder(this));
   }
-  return event_forwarder_->GetJavaObject();
+  return event_forwarder_->GetOrCreateJavaObject(AttachCurrentThread());
 }
 
 void ViewAndroid::AddChild(ViewAndroid* child) {
   DCHECK(child);
-  DCHECK(!base::Contains(children_, child));
+  DCHECK(!std::ranges::contains(children_, child));
   DCHECK(!RootPathHasEventForwarder(this) || !SubtreeHasEventForwarder(child))
       << "Some view tree path will have more than one event forwarder "
          "if the child is added.";
@@ -210,50 +236,50 @@ void ViewAndroid::RemoveFromParent() {
 }
 
 ViewAndroid::ScopedAnchorView ViewAndroid::AcquireAnchorView() {
-  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate());
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
   if (delegate.is_null())
     return ViewAndroid::ScopedAnchorView();
 
-  JNIEnv* env = base::android::AttachCurrentThread();
   return ViewAndroid::ScopedAnchorView(
       env, Java_ViewAndroidDelegate_acquireView(env, delegate), delegate);
 }
 
 void ViewAndroid::SetAnchorRect(const JavaRef<jobject>& anchor,
                                 const gfx::RectF& bounds_dip) {
-  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate());
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
   if (delegate.is_null())
     return;
 
   float dip_scale = GetDipScale();
-  int left_margin = std::round(bounds_dip.x() * dip_scale);
+  int left_margin = std::round(content_offset_x() + bounds_dip.x() * dip_scale);
   // Note that content_offset() is in CSS scale and bounds_dip is in DIP scale
   // (i.e., CSS pixels * page scale factor), but the height of browser control
   // is not affected by page scale factor. Thus, content_offset() in CSS scale
   // is also in DIP scale.
   int top_margin = std::round((content_offset() + bounds_dip.y()) * dip_scale);
   const gfx::RectF bounds_px = gfx::ScaleRect(bounds_dip, dip_scale);
-  JNIEnv* env = base::android::AttachCurrentThread();
   Java_ViewAndroidDelegate_setViewPosition(
       env, delegate, anchor, bounds_px.x(), bounds_px.y(), bounds_px.width(),
       bounds_px.height(), left_margin, top_margin);
 }
 
 ScopedJavaLocalRef<jobject> ViewAndroid::GetContainerView() {
-  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate());
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
   if (delegate.is_null())
     return nullptr;
 
-  JNIEnv* env = base::android::AttachCurrentThread();
   return Java_ViewAndroidDelegate_getContainerView(env, delegate);
 }
 
 gfx::Point ViewAndroid::GetLocationOfContainerViewInWindow() {
-  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate());
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
   if (delegate.is_null())
     return gfx::Point();
 
-  JNIEnv* env = base::android::AttachCurrentThread();
   gfx::Point result(
       Java_ViewAndroidDelegate_getXLocationOfContainerViewInWindow(env,
                                                                    delegate),
@@ -264,11 +290,11 @@ gfx::Point ViewAndroid::GetLocationOfContainerViewInWindow() {
 }
 
 gfx::PointF ViewAndroid::GetLocationOnScreen(float x, float y) {
-  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate());
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
   if (delegate.is_null())
     return gfx::PointF();
 
-  JNIEnv* env = base::android::AttachCurrentThread();
   float loc_x = Java_ViewAndroidDelegate_getXLocationOnScreen(env, delegate);
   float loc_y = Java_ViewAndroidDelegate_getYLocationOnScreen(env, delegate);
   return gfx::PointF(x + loc_x, y + loc_y);
@@ -307,29 +333,50 @@ void ViewAndroid::RemoveObserver(ViewAndroidObserver* observer) {
 }
 
 void ViewAndroid::RequestDisallowInterceptTouchEvent() {
-  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate());
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
   if (delegate.is_null())
     return;
-  JNIEnv* env = base::android::AttachCurrentThread();
   Java_ViewAndroidDelegate_requestDisallowInterceptTouchEvent(env, delegate);
 }
 
 void ViewAndroid::RequestUnbufferedDispatch(const MotionEventAndroid& event) {
-  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate());
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
   if (delegate.is_null())
     return;
-  JNIEnv* env = base::android::AttachCurrentThread();
   Java_ViewAndroidDelegate_requestUnbufferedDispatch(env, delegate,
                                                      event.GetJavaObject());
 }
 
 void ViewAndroid::SetTooltip(const std::u16string& text) {
-  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate());
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
   if (delegate.is_null()) {
     return;
   }
-  JNIEnv* env = base::android::AttachCurrentThread();
   Java_ViewAndroidDelegate_setTooltipText(env, delegate, text);
+}
+
+void ViewAndroid::SetTooltipFromKeyboard(const std::u16string& text,
+                                         const gfx::Rect& bounds) {
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
+  if (delegate.is_null()) {
+    return;
+  }
+  Java_ViewAndroidDelegate_setTooltipFromKeyboard(
+      env, delegate, text, bounds.x(), bounds.y(), bounds.width(),
+      bounds.height());
+}
+
+void ViewAndroid::ClearTooltipFromKeyboard() {
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
+  if (delegate.is_null()) {
+    return;
+  }
+  Java_ViewAndroidDelegate_clearTooltipFromKeyboard(env, delegate);
 }
 
 void ViewAndroid::SetCopyOutputCallback(CopyViewCallback callback) {
@@ -367,14 +414,15 @@ WindowAndroid* ViewAndroid::GetWindowAndroid() const {
   return parent_ ? parent_->GetWindowAndroid() : nullptr;
 }
 
-const ScopedJavaLocalRef<jobject> ViewAndroid::GetViewAndroidDelegate()
-    const {
-  JNIEnv* env = base::android::AttachCurrentThread();
-  const ScopedJavaLocalRef<jobject> delegate = delegate_.get(env);
+const ScopedJavaLocalRef<jobject> ViewAndroid::GetViewAndroidDelegate(
+    JNIEnv* env) const {
+  const ScopedJavaLocalRef<jobject> delegate =
+      Java_ViewAndroidDelegate_getDelegate(env,
+                                           reinterpret_cast<intptr_t>(this));
   if (!delegate.is_null())
     return delegate;
 
-  return parent_ ? parent_->GetViewAndroidDelegate() : delegate;
+  return parent_ ? parent_->GetViewAndroidDelegate(env) : delegate;
 }
 
 cc::slim::Layer* ViewAndroid::GetLayer() const {
@@ -386,32 +434,32 @@ void ViewAndroid::SetLayer(scoped_refptr<cc::slim::Layer> layer) {
 }
 
 bool ViewAndroid::HasFocus() {
-  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate());
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
   if (delegate.is_null())
     return false;
-  JNIEnv* env = base::android::AttachCurrentThread();
   return Java_ViewAndroidDelegate_hasFocus(env, delegate);
 }
 
 void ViewAndroid::RequestFocus() {
-  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate());
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
   if (delegate.is_null())
     return;
-  JNIEnv* env = base::android::AttachCurrentThread();
   Java_ViewAndroidDelegate_requestFocus(env, delegate);
 }
 
 bool ViewAndroid::StartDragAndDrop(const JavaRef<jobject>& jshadow_image,
                                    const JavaRef<jobject>& jdrop_data,
-                                   jint cursor_offset_x,
-                                   jint cursor_offset_y,
-                                   jint drag_obj_rect_width,
-                                   jint drag_obj_rect_height) {
-  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate());
+                                   int32_t cursor_offset_x,
+                                   int32_t cursor_offset_y,
+                                   int32_t drag_obj_rect_width,
+                                   int32_t drag_obj_rect_height) {
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
   if (delegate.is_null())
     return false;
   WindowAndroid* window_android = GetWindowAndroid();
-  JNIEnv* env = base::android::AttachCurrentThread();
   return Java_ViewAndroidDelegate_startDragAndDrop(
       env, delegate, jshadow_image, jdrop_data,
       window_android ? window_android->GetJavaObject() : nullptr,
@@ -420,10 +468,10 @@ bool ViewAndroid::StartDragAndDrop(const JavaRef<jobject>& jshadow_image,
 }
 
 void ViewAndroid::OnCursorChanged(const Cursor& cursor) {
-  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate());
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
   if (delegate.is_null())
     return;
-  JNIEnv* env = base::android::AttachCurrentThread();
   if (cursor.type() == mojom::CursorType::kCustom) {
     const SkBitmap& bitmap = cursor.custom_bitmap();
     const gfx::Point& hotspot = cursor.custom_hotspot();
@@ -442,19 +490,19 @@ void ViewAndroid::OnCursorChanged(const Cursor& cursor) {
 }
 
 void ViewAndroid::NotifyHoverActionStylusWritable(bool stylus_writable) {
-  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate());
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
   if (delegate.is_null())
     return;
-  JNIEnv* env = base::android::AttachCurrentThread();
   Java_ViewAndroidDelegate_notifyHoverActionStylusWritable(env, delegate,
                                                            stylus_writable);
 }
 
 void ViewAndroid::OnBackgroundColorChanged(unsigned int color) {
-  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate());
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
   if (delegate.is_null())
     return;
-  JNIEnv* env = base::android::AttachCurrentThread();
   Java_ViewAndroidDelegate_onBackgroundColorChanged(env, delegate, color);
 }
 
@@ -463,10 +511,10 @@ void ViewAndroid::OnControlsChanged(float top_controls_offset,
                                     float top_controls_min_height_offset,
                                     float bottom_controls_offset,
                                     float bottom_controls_min_height_offset) {
-  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate());
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
   if (delegate.is_null())
     return;
-  JNIEnv* env = base::android::AttachCurrentThread();
   Java_ViewAndroidDelegate_onControlsChanged(
       env, delegate, std::round(top_controls_offset),
       std::round(top_content_offset),
@@ -476,10 +524,10 @@ void ViewAndroid::OnControlsChanged(float top_controls_offset,
 }
 
 int ViewAndroid::GetViewportInsetBottom() {
-  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate());
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
   if (delegate.is_null())
     return 0;
-  JNIEnv* env = base::android::AttachCurrentThread();
   return Java_ViewAndroidDelegate_getViewportInsetBottom(env, delegate);
 }
 
@@ -494,10 +542,10 @@ void ViewAndroid::OnBrowserControlsHeightChanged() {
 
 void ViewAndroid::OnVerticalScrollDirectionChanged(bool direction_up,
                                                    float current_scroll_ratio) {
-  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate());
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
   if (delegate.is_null())
     return;
-  JNIEnv* env = base::android::AttachCurrentThread();
   Java_ViewAndroidDelegate_onVerticalScrollDirectionChanged(
       env, delegate, direction_up, current_scroll_ratio);
 }

@@ -6,6 +6,7 @@
 
 #include <bitset>
 #include <memory>
+#include <tuple>
 #include <utility>
 
 #include "base/command_line.h"
@@ -17,6 +18,7 @@
 #include "base/numerics/safe_math.h"
 #include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
+#include "media/base/agtm.h"
 #include "media/base/media_switches.h"
 #include "media/base/media_util.h"
 #include "media/base/video_types.h"
@@ -26,6 +28,7 @@
 #include "media/formats/mp4/es_descriptor.h"
 #include "media/formats/mp4/rcheck.h"
 #include "media/media_buildflags.h"
+#include "ui/gfx/hdr_metadata.h"
 
 #if BUILDFLAG(USE_PROPRIETARY_CODECS)
 #include <optional>
@@ -50,7 +53,7 @@ const size_t kFlacMetadataBlockStreaminfoSize = 34;
 #if BUILDFLAG(USE_PROPRIETARY_CODECS)
 // Try to parse dvcC or dvvC box if exists, return `video_info` and an optional
 // `dv_info` based on the configuration.
-std::tuple<CodecProfileLevel, std::optional<CodecProfileLevel>> MaybeParseDOVI(
+std::tuple<CodecProfileLevel, std::optional<DolbyVisionInfo>> MaybeParseDOVI(
     BoxReader* reader,
     CodecProfileLevel video_info) {
   std::optional<DOVIDecoderConfigurationRecord> dovi_config;
@@ -77,19 +80,24 @@ std::tuple<CodecProfileLevel, std::optional<CodecProfileLevel>> MaybeParseDOVI(
     return {video_info, std::nullopt};
   }
 
-  constexpr int kHDR10CompatibilityId = 1;
-  constexpr int kSDRCompatibilityId = 2;
-  constexpr int kHLGCompatibilityId = 4;
-  CodecProfileLevel dv_info = {VideoCodec::kDolbyVision,
-                               dovi_config->codec_profile,
-                               dovi_config->dv_level};
-  if (dovi_config->dv_bl_signal_compatibility_id == kHDR10CompatibilityId ||
-      dovi_config->dv_bl_signal_compatibility_id == kSDRCompatibilityId ||
-      dovi_config->dv_bl_signal_compatibility_id == kHLGCompatibilityId) {
+  CodecProfileLevel dv_codec_info = {VideoCodec::kDolbyVision,
+                                     dovi_config->codec_profile,
+                                     dovi_config->dv_level};
+  DolbyVisionInfo dv_info;
+  dv_info.codec_info = dv_codec_info;
+  dv_info.color_space = mp4::ParseDolbyVisionColorSpace(
+      dovi_config->codec_profile, dovi_config->dv_bl_signal_compatibility_id);
+
+  if (dovi_config->dv_bl_signal_compatibility_id ==
+          mp4::kDolbyVisionCompatibilityIdHDR10 ||
+      dovi_config->dv_bl_signal_compatibility_id ==
+          mp4::kDolbyVisionCompatibilityIdSDR ||
+      dovi_config->dv_bl_signal_compatibility_id ==
+          mp4::kDolbyVisionCompatibilityIdHLG) {
     return {video_info, dv_info};
   }
   // If the buffer is not backward compatible, always treat it as Dolby Vision.
-  return {dv_info, std::nullopt};
+  return {dv_info.codec_info, dv_info};
 }
 #endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
 
@@ -135,22 +143,43 @@ bool ReadFixedPoint32(float fixed_point_divisor,
   return true;
 }
 
-gfx::HdrMetadataSmpteSt2086 ConvertMdcvToColorVolumeMetadata(
+skhdr::MasteringDisplayColorVolume ConvertMdcvToColorVolumeMetadata(
     const MasteringDisplayColorVolume& mdcv) {
-  gfx::HdrMetadataSmpteSt2086 smpte_st_2086;
-  smpte_st_2086.primaries = {
-      mdcv.display_primaries_rx, mdcv.display_primaries_ry,
-      mdcv.display_primaries_gx, mdcv.display_primaries_gy,
-      mdcv.display_primaries_bx, mdcv.display_primaries_by,
-      mdcv.white_point_x,        mdcv.white_point_y,
+  return {
+      .fDisplayPrimaries =
+          {
+              mdcv.display_primaries_rx,
+              mdcv.display_primaries_ry,
+              mdcv.display_primaries_gx,
+              mdcv.display_primaries_gy,
+              mdcv.display_primaries_bx,
+              mdcv.display_primaries_by,
+              mdcv.white_point_x,
+              mdcv.white_point_y,
+          },
+      .fMaximumDisplayMasteringLuminance = mdcv.max_display_mastering_luminance,
+      .fMinimumDisplayMasteringLuminance = mdcv.min_display_mastering_luminance,
   };
-  smpte_st_2086.luminance_max = mdcv.max_display_mastering_luminance;
-  smpte_st_2086.luminance_min = mdcv.min_display_mastering_luminance;
-
-  return smpte_st_2086;
 }
 
 }  // namespace
+
+const char* TrackTypeName(TrackType track_type) {
+  switch (track_type) {
+    case kInvalid:
+      return "invalid";
+    case kVideo:
+      return "video";
+    case kAudio:
+      return "audio";
+    case kMetadata:
+      return "metadata";
+    case kText:
+      return "text";
+    case kHint:
+      return "hint";
+  }
+}
 
 FileType::FileType() = default;
 FileType::FileType(const FileType& other) = default;
@@ -551,12 +580,35 @@ SampleDescription::SampleDescription(const SampleDescription& other) = default;
 SampleDescription::~SampleDescription() = default;
 FourCC SampleDescription::BoxType() const { return FOURCC_STSD; }
 
+MetadataIT35SampleEntry::MetadataIT35SampleEntry() = default;
+MetadataIT35SampleEntry::MetadataIT35SampleEntry(
+    const MetadataIT35SampleEntry& other) = default;
+MetadataIT35SampleEntry::~MetadataIT35SampleEntry() = default;
+FourCC MetadataIT35SampleEntry::BoxType() const {
+  return FOURCC_IT35;
+}
+
+bool MetadataIT35SampleEntry::Parse(BoxReader* reader) {
+  RCHECK(reader->SkipBytes(6) && reader->Read2(&data_reference_index));
+
+  uint8_t it35_identifier_length = 0;
+  RCHECK(reader->Read1(&it35_identifier_length));
+  std::vector<uint8_t> it35_prefix;
+  RCHECK(reader->ReadVec(&it35_prefix, it35_identifier_length));
+
+  if (gfx::HdrMetadataAgtm::IsEnabled() && MatchesAgtmT35(it35_prefix)) {
+    it35_prefix_type = IT35PrefixType::kSmpteSt2094App5;
+  }
+  return true;
+}
+
 bool SampleDescription::Parse(BoxReader* reader) {
   uint32_t count;
   RCHECK(reader->SkipBytes(4) &&
          reader->Read4(&count));
   video_entries.clear();
   audio_entries.clear();
+  metadata_t35_entries.clear();
 
   // Note: this value is preset before scanning begins. See comments in the
   // Parse(Media*) function.
@@ -564,6 +616,11 @@ bool SampleDescription::Parse(BoxReader* reader) {
     RCHECK(reader->ReadAllChildren(&video_entries));
   } else if (type == kAudio) {
     RCHECK(reader->ReadAllChildren(&audio_entries));
+  } else if (type == kMetadata) {
+    // Gracefully ignore metadata sample entries that are not supported.
+    if (!reader->ReadAllChildren(&metadata_t35_entries)) {
+      metadata_t35_entries.clear();
+    }
   }
   return true;
 }
@@ -668,8 +725,14 @@ bool HandlerReference::Parse(BoxReader* reader) {
     type = kVideo;
   } else if (hdlr_type == FOURCC_SOUN) {
     type = kAudio;
-  } else if (hdlr_type == FOURCC_META || hdlr_type == FOURCC_SUBT ||
-             hdlr_type == FOURCC_TEXT || hdlr_type == FOURCC_SBTL) {
+  } else if (hdlr_type == FOURCC_META) {
+    if (base::FeatureList::IsEnabled(kMP4TimedMetadataTrack)) {
+      type = kMetadata;
+    } else {
+      type = kText;
+    }
+  } else if (hdlr_type == FOURCC_SUBT || hdlr_type == FOURCC_TEXT ||
+             hdlr_type == FOURCC_SBTL) {
     // For purposes of detection, we include 'sbtl' handler here. Note, though
     // that ISO-14496-12 and its 2012 Amendment 2, and the spec for sourcing
     // inband tracks all reference only 'text' or 'subt', and 14496-30
@@ -698,7 +761,7 @@ bool AVCDecoderConfigurationRecord::Parse(BoxReader* reader) {
 }
 
 bool AVCDecoderConfigurationRecord::Parse(base::span<const uint8_t> data) {
-  BufferReader reader(data.data(), data.size());
+  BufferReader reader(data);
   NullMediaLog media_log;
   return ParseInternal(&reader, &media_log);
 }
@@ -725,7 +788,7 @@ bool AVCDecoderConfigurationRecord::ParseInternal(BufferReader* reader,
     uint16_t sps_length;
     RCHECK(reader->Read2(&sps_length) &&
            reader->ReadVec(&sps_list[i], sps_length));
-    RCHECK(sps_list[i].size() > 4);
+    RCHECK(!sps_list[i].empty());
   }
 
   uint8_t num_pps;
@@ -979,8 +1042,8 @@ bool AV1CodecConfigurationRecord::Parse(BoxReader* reader) {
   return ParseInternal(reader, reader->media_log());
 }
 
-bool AV1CodecConfigurationRecord::Parse(const uint8_t* data, int data_size) {
-  BufferReader reader(data, data_size);
+bool AV1CodecConfigurationRecord::Parse(base::span<const uint8_t> data) {
+  BufferReader reader(data);
   NullMediaLog media_log;
   return ParseInternal(&reader, &media_log);
 }
@@ -1312,30 +1375,38 @@ bool VideoSampleEntry::Parse(BoxReader* reader) {
       SMPTE2086MasteringDisplayMetadataBox color_volume;
       if (reader->HasChild(&color_volume)) {
         RCHECK(reader->ReadChild(&color_volume));
-        hdr_static_metadata.smpte_st_2086 =
-            ConvertMdcvToColorVolumeMetadata(color_volume);
+        hdr_static_metadata.SetMDCV(
+            ConvertMdcvToColorVolumeMetadata(color_volume));
       }
 
       ContentLightLevel level_information;
       if (reader->HasChild(&level_information)) {
         RCHECK(reader->ReadChild(&level_information));
-        hdr_static_metadata.cta_861_3 = gfx::HdrMetadataCta861_3(
-            level_information.max_content_light_level,
-            level_information.max_pic_average_light_level);
+        hdr_static_metadata.SetCLLI(
+            skhdr::ContentLightLevelInformation::MakeUint16(
+                /*maxCLL=*/level_information.max_content_light_level,
+                /*maxFALL=*/level_information.max_pic_average_light_level));
       }
       break;
     }
 #if BUILDFLAG(ENABLE_AV1_DECODER)
-    case FOURCC_AV01: {
+    case FOURCC_AV01:
+#if BUILDFLAG(USE_PROPRIETARY_CODECS)
+    case FOURCC_DAV1:
+#endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
+    {
       DVLOG(2) << __func__ << " reading AV1CodecConfigurationRecord (av1C)";
       AV1CodecConfigurationRecord av1_config;
       RCHECK(reader->ReadChild(&av1_config));
       video_info.codec = VideoCodec::kAV1;
       video_info.profile = av1_config.profile;
+#if BUILDFLAG(USE_PROPRIETARY_CODECS)
+      std::tie(video_info, dv_info) = MaybeParseDOVI(reader, video_info);
+#endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
       frame_bitstream_converter = nullptr;
       break;
     }
-#endif
+#endif  // BUILDFLAG(ENABLE_AV1_DECODER)
     default:
       // Unknown/unsupported format
       MEDIA_LOG(ERROR, reader->media_log())
@@ -1356,20 +1427,31 @@ bool VideoSampleEntry::Parse(BoxReader* reader) {
   MasteringDisplayColorVolume color_volume;
   if (reader->HasChild(&color_volume)) {
     RCHECK(reader->ReadChild(&color_volume));
-    hdr_static_metadata.smpte_st_2086 =
-        ConvertMdcvToColorVolumeMetadata(color_volume);
+    hdr_static_metadata.SetMDCV(ConvertMdcvToColorVolumeMetadata(color_volume));
   }
 
   ContentLightLevelInformation level_information;
   if (reader->HasChild(&level_information)) {
     RCHECK(reader->ReadChild(&level_information));
-    hdr_static_metadata.cta_861_3 =
-        gfx::HdrMetadataCta861_3(level_information.max_content_light_level,
-                                 level_information.max_pic_average_light_level);
+    hdr_static_metadata.SetCLLI(skhdr::ContentLightLevelInformation::MakeUint16(
+        /*maxCLL=*/level_information.max_content_light_level,
+        /*maxFALL=*/level_information.max_pic_average_light_level));
   }
 
   if (hdr_static_metadata.IsValid()) {
     hdr_metadata = hdr_static_metadata;
+  }
+
+  Stereoscopic3DVideo st3d;
+  if (reader->HasChild(&st3d)) {
+    RCHECK(reader->ReadChild(&st3d));
+    video_spatial_format.stereo_mode = st3d.mode;
+  }
+
+  SphericalVideo sv3d;
+  if (reader->HasChild(&sv3d)) {
+    RCHECK(reader->ReadChild(&sv3d));
+    video_spatial_format.projection_type = sv3d.projection.type;
   }
 
   if (video_info.profile == VIDEO_CODEC_PROFILE_UNKNOWN) {
@@ -1400,8 +1482,11 @@ bool VideoSampleEntry::IsFormatValid() const {
       return true;
 #if BUILDFLAG(ENABLE_AV1_DECODER)
     case FOURCC_AV01:
+#if BUILDFLAG(USE_PROPRIETARY_CODECS)
+    case FOURCC_DAV1:
+#endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
       return true;
-#endif
+#endif  // BUILDFLAG(ENABLE_AV1_DECODER)
     default:
       return false;
   }
@@ -1668,7 +1753,7 @@ bool AC4SpecificBox::Parse(BoxReader* reader) {
 }
 #endif  // BUILDFLAG(ENABLE_PLATFORM_AC4_AUDIO)
 
-#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO) || BUILDFLAG(ENABLE_IAMF_TOOLS)
 enum IamfConfigObuType {
   // The following enum values are mapped to their respective Config OBU
   // values in the IAMF specification.
@@ -1697,13 +1782,9 @@ bool IamfSpecificBox::Parse(BoxReader* reader) {
   uint32_t config_obus_size;
   RCHECK(ReadLeb128Value(reader, &config_obus_size));
 
-  base::span<const uint8_t> buffer =
-      reader->buffer().subspan(reader->pos(), config_obus_size);
-  ia_descriptors.assign(buffer.begin(), buffer.end());
+  RCHECK(reader->ReadVec(&ia_descriptors, config_obus_size));
 
-  RCHECK(reader->SkipBytes(config_obus_size));
-
-  BufferReader config_reader(ia_descriptors.data(), ia_descriptors.size());
+  BufferReader config_reader(ia_descriptors);
 
   while (config_reader.pos() < config_reader.buffer().size()) {
     RCHECK(ReadOBU(&config_reader));
@@ -1788,7 +1869,7 @@ bool IamfSpecificBox::ReadLeb128Value(BufferReader* reader,
 
   return !error;
 }
-#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO) || ...
 
 AudioSampleEntry::AudioSampleEntry()
     : format(FOURCC_NULL),
@@ -1892,13 +1973,13 @@ bool AudioSampleEntry::Parse(BoxReader* reader) {
   }
 #endif  // BUILDFLAG(ENABLE_PLATFORM_AC4_AUDIO)
 
-#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO) || BUILDFLAG(ENABLE_IAMF_TOOLS)
   if (format == FOURCC_IAMF ||
       (format == FOURCC_ENCA && sinf.format.format == FOURCC_IAMF)) {
     RCHECK_MEDIA_LOGGED(reader->ReadChild(&iacb), reader->media_log(),
                         "Failure parsing IamfSpecificBox (iacb)");
   }
-#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO) || ...
 
   // Read the FLACSpecificBox, even if CENC is signalled.
   if (format == FOURCC_FLAC ||
@@ -2024,6 +2105,36 @@ bool Media::Parse(BoxReader* reader) {
   return true;
 }
 
+TrackReferenceType::TrackReferenceType() = default;
+TrackReferenceType::TrackReferenceType(const TrackReferenceType& other) =
+    default;
+TrackReferenceType::~TrackReferenceType() = default;
+FourCC TrackReferenceType::BoxType() const {
+  // Any fourcc is valid here.
+  return FOURCC_NULL;
+}
+
+bool TrackReferenceType::Parse(BoxReader* reader) {
+  reference_type = reader->type();
+  size_t remaining_size = reader->box_size() - reader->pos();
+  RCHECK(remaining_size % sizeof(uint32_t) == 0);
+  track_ids.resize(remaining_size / sizeof(uint32_t));
+  for (auto& track_id : track_ids) {
+    RCHECK(reader->Read4(&track_id));
+  }
+  return true;
+}
+
+TrackReference::TrackReference() = default;
+TrackReference::TrackReference(const TrackReference& other) = default;
+TrackReference::~TrackReference() = default;
+FourCC TrackReference::BoxType() const {
+  return FOURCC_TREF;
+}
+bool TrackReference::Parse(BoxReader* reader) {
+  return reader->ReadAllChildren(&types);
+}
+
 Track::Track() = default;
 Track::Track(const Track& other) = default;
 Track::~Track() = default;
@@ -2034,6 +2145,10 @@ bool Track::Parse(BoxReader* reader) {
          reader->ReadChild(&header) &&
          reader->ReadChild(&media) &&
          reader->MaybeReadChild(&edit));
+  if (media.handler.type == kMetadata) {
+    // Gracefully ignore metadata references that fail to parse.
+    std::ignore = reader->MaybeReadChild(&references);
+  }
   return true;
 }
 
@@ -2470,6 +2585,88 @@ SampleDependsOn IndependentAndDisposableSamples::sample_depends_on(
     return kSampleDependsOnUnknown;
 
   return sample_depends_on_[i];
+}
+
+Stereoscopic3DVideo::Stereoscopic3DVideo() = default;
+Stereoscopic3DVideo::Stereoscopic3DVideo(const Stereoscopic3DVideo& other) =
+    default;
+Stereoscopic3DVideo::~Stereoscopic3DVideo() = default;
+FourCC Stereoscopic3DVideo::BoxType() const {
+  return FOURCC_ST3D;
+}
+
+bool Stereoscopic3DVideo::Parse(BoxReader* reader) {
+  RCHECK(reader->ReadFullBoxHeader());
+  uint8_t raw_stereo_mode = 0;
+  RCHECK(reader->Read1(&raw_stereo_mode));
+  if (raw_stereo_mode == 1 /* kTopBottom */) {
+    mode = VideoStereoMode::kTopBottomLeftFirst;
+  } else if (raw_stereo_mode == 2 /* kLeftRight */) {
+    mode = VideoStereoMode::kSideBySideLeftFirst;
+  }
+  return true;
+}
+
+SphericalVideo::SphericalVideo() = default;
+SphericalVideo::SphericalVideo(const SphericalVideo& other) = default;
+SphericalVideo::~SphericalVideo() = default;
+FourCC SphericalVideo::BoxType() const {
+  return FOURCC_SV3D;
+}
+
+bool SphericalVideo::Parse(BoxReader* reader) {
+  RCHECK(reader->ScanChildren());
+
+  if (reader->HasChild(&projection)) {
+    RCHECK(reader->ReadChild(&projection));
+  }
+
+  return true;
+}
+
+Equirectangular::Equirectangular() = default;
+Equirectangular::Equirectangular(const Equirectangular& other) = default;
+Equirectangular::~Equirectangular() = default;
+FourCC Equirectangular::BoxType() const {
+  return FOURCC_EQUI;
+}
+
+bool Equirectangular::Parse(BoxReader* reader) {
+  RCHECK(reader->ReadFullBoxHeader());
+  RCHECK(reader->Read4(&bounds_top));
+  RCHECK(reader->Read4(&bounds_bottom));
+  RCHECK(reader->Read4(&bounds_left));
+  RCHECK(reader->Read4(&bounds_right));
+  return true;
+}
+
+Projection::Projection() = default;
+Projection::Projection(const Projection& other) = default;
+Projection::~Projection() = default;
+FourCC Projection::BoxType() const {
+  return FOURCC_PROJ;
+}
+
+bool Projection::Parse(BoxReader* reader) {
+  RCHECK(reader->ScanChildren());
+
+  Equirectangular equi;
+  if (reader->HasChild(&equi)) {
+    RCHECK(reader->ReadChild(&equi));
+    // Equirectangular projection bounds are 0.32 fixed-point values.
+    // A 180-degree video has approx 25% (0x40000000) cropped from both
+    // the left and right. We use a 18.75% (0x30000000) threshold to
+    // distinguish 180-degree from slightly cropped 360-degree video.
+    const uint32_t kEquirect180Threshold = 0x30000000;
+    if (equi.bounds_left >= kEquirect180Threshold &&
+        equi.bounds_right >= kEquirect180Threshold) {
+      type = VideoProjectionType::kEquirect180;
+    } else {
+      type = VideoProjectionType::kEquirect360;
+    }
+  }
+
+  return true;
 }
 
 }  // namespace mp4

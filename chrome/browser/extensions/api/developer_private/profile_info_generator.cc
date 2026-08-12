@@ -6,13 +6,13 @@
 
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_management.h"
-#include "chrome/browser/extensions/manifest_v2_experiment_manager.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/supervised_user/supervised_user_browser_utils.h"
 #include "chrome/common/pref_names.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
+#include "extensions/browser/manifest_v2_handler.h"
 #include "extensions/buildflags/buildflags.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
@@ -39,8 +39,9 @@ developer::ProfileInfo CreateProfileInfo(Profile* profile) {
       ExtensionManagementFactory::GetForBrowserContext(profile)
           ->HasAllowlistedExtension();
   info.is_mv2_deprecation_notice_dismissed =
-      ManifestV2ExperimentManager::Get(profile)
-          ->DidUserAcknowledgeNoticeGlobally();
+      ManifestV2Handler::Get(profile)->DidUserAcknowledgeNoticeGlobally();
+  info.extensions_pinned_by_default =
+      prefs->GetBoolean(prefs::kExtensionsPinnedByDefault);
 
   return info;
 }

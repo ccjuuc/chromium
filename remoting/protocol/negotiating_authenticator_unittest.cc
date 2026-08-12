@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <tuple>
 
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
@@ -14,8 +15,6 @@
 #include "remoting/protocol/auth_util.h"
 #include "remoting/protocol/authenticator.h"
 #include "remoting/protocol/authenticator_test_base.h"
-#include "remoting/protocol/channel_authenticator.h"
-#include "remoting/protocol/connection_tester.h"
 #include "remoting/protocol/credentials_type.h"
 #include "remoting/protocol/host_authentication_config.h"
 #include "remoting/protocol/negotiating_authenticator_base.h"
@@ -25,7 +24,6 @@
 #include "remoting/protocol/protocol_mock_objects.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/libjingle_xmpp/xmllite/xmlelement.h"
 
 using testing::_;
 using testing::DeleteArg;
@@ -36,14 +34,11 @@ namespace remoting::protocol {
 
 namespace {
 
-const int kMessageSize = 100;
-const int kMessages = 1;
-
 const char kNoClientId[] = "";
 const char kNoPairedSecret[] = "";
 const char kTestClientName[] = "client-name";
-const char kTestClientId[] = "client-id";
-const char kTestHostId[] = "12345678910123456";
+const char kTestClientId[] = "a1b2c3d4-e5f6-7890-1234-567890abcdef";
+const char kTestHostId[] = "fedcba09-8765-4321-abcd-ef0987654321";
 
 const char kClientJid[] = "alice@gmail.com/abc";
 const char kHostJid[] = "alice@gmail.com/123";
@@ -52,6 +47,62 @@ const char kTestPairedSecret[] = "1111-2222-3333";
 const char kTestPairedSecretBad[] = "4444-5555-6666";
 const char kTestPin[] = "123456";
 const char kTestPinBad[] = "654321";
+
+class TestNegotiatingHostAuthenticator : public NegotiatingHostAuthenticator {
+ public:
+  using Authenticator::ChainStateChangeAfterAcceptedWithUnderlying;
+  using NegotiatingAuthenticatorBase::current_authenticator_;
+  using NegotiatingAuthenticatorBase::current_method_;
+  using NegotiatingAuthenticatorBase::NotifyStateChangeAfterAccepted;
+  using NegotiatingAuthenticatorBase::state_;
+  using NegotiatingHostAuthenticator::NegotiatingHostAuthenticator;
+
+  base::WeakPtr<NegotiatingAuthenticatorBase> GetWeakPtr() {
+    return weak_factory_.GetWeakPtr();
+  }
+
+  void NotifyStateChangeAfterAcceptedForTesting() {
+    NotifyStateChangeAfterAccepted();
+  }
+};
+
+class ProxyAuthenticator : public Authenticator {
+ public:
+  explicit ProxyAuthenticator(Authenticator* authenticator)
+      : authenticator_(authenticator) {}
+  ~ProxyAuthenticator() override = default;
+
+  CredentialsType credentials_type() const override {
+    return authenticator_->credentials_type();
+  }
+  const Authenticator& implementing_authenticator() const override {
+    return authenticator_->implementing_authenticator();
+  }
+  State state() const override { return authenticator_->state(); }
+  bool started() const override { return authenticator_->started(); }
+  RejectionReason rejection_reason() const override {
+    return authenticator_->rejection_reason();
+  }
+  RejectionDetails rejection_details() const override {
+    return authenticator_->rejection_details();
+  }
+  void ProcessMessage(const JingleAuthentication& message,
+                      base::OnceClosure resume_callback) override {
+    authenticator_->ProcessMessage(message, std::move(resume_callback));
+  }
+  JingleAuthentication GetNextMessage() override {
+    return authenticator_->GetNextMessage();
+  }
+  const std::string& GetAuthKey() const override {
+    return authenticator_->GetAuthKey();
+  }
+  const SessionPolicies* GetSessionPolicies() const override {
+    return authenticator_->GetSessionPolicies();
+  }
+
+ private:
+  raw_ptr<Authenticator> authenticator_;
+};
 
 }  // namespace
 
@@ -150,23 +201,8 @@ class NegotiatingAuthenticatorTest : public AuthenticatorTestBase {
   virtual void VerifyAccepted() {
     ASSERT_NO_FATAL_FAILURE(RunAuthExchange());
 
-    ASSERT_EQ(Authenticator::ACCEPTED, host_->state());
-    ASSERT_EQ(Authenticator::ACCEPTED, client_->state());
-
-    client_auth_ = client_->CreateChannelAuthenticator();
-    host_auth_ = host_->CreateChannelAuthenticator();
-    RunChannelAuth(false);
-
-    EXPECT_TRUE(client_socket_.get() != nullptr);
-    EXPECT_TRUE(host_socket_.get() != nullptr);
-
-    StreamConnectionTester tester(host_socket_.get(), client_socket_.get(),
-                                  kMessageSize, kMessages);
-
-    base::RunLoop run_loop;
-    tester.Start(run_loop.QuitClosure());
-    run_loop.Run();
-    tester.CheckResults();
+    ASSERT_EQ(host_->state(), Authenticator::ACCEPTED);
+    ASSERT_EQ(client_->state(), Authenticator::ACCEPTED);
   }
 
   AuthenticationMethod current_method() {
@@ -176,6 +212,19 @@ class NegotiatingAuthenticatorTest : public AuthenticatorTestBase {
   // Use a bare pointer because the storage is managed by the base class.
   raw_ptr<NegotiatingHostAuthenticator> host_as_negotiating_authenticator_;
   raw_ptr<NegotiatingClientAuthenticator> client_as_negotiating_authenticator_;
+
+ protected:
+  void SetHostState(Authenticator::State state) {
+    host_as_negotiating_authenticator_->state_ = state;
+  }
+
+  void SetHostCurrentMethod(AuthenticationMethod method) {
+    host_as_negotiating_authenticator_->current_method_ = method;
+  }
+
+  void NotifyHostStateChangeAfterAccepted() {
+    host_as_negotiating_authenticator_->NotifyStateChangeAfterAccepted();
+  }
 
  private:
   scoped_refptr<PairingRegistry> pairing_registry_;
@@ -194,8 +243,8 @@ TEST_F(NegotiatingAuthenticatorTest, SuccessfulAuthSharedSecret) {
   ASSERT_NO_FATAL_FAILURE(
       InitAuthenticators(kNoClientId, kNoPairedSecret, kTestPin, kTestPin));
   VerifyAccepted();
-  EXPECT_EQ(AuthenticationMethod::SHARED_SECRET_SPAKE2_CURVE25519,
-            current_method());
+  EXPECT_EQ(current_method(),
+            AuthenticationMethod::SHARED_SECRET_SPAKE2_CURVE25519);
 }
 
 TEST_F(NegotiatingAuthenticatorTest, InvalidSharedSecret) {
@@ -222,8 +271,8 @@ TEST_F(NegotiatingAuthenticatorTest, PairingNotSupported) {
       InitAuthenticators(kTestClientId, kTestPairedSecret, kTestPin, kTestPin));
   ASSERT_NO_FATAL_FAILURE(RunAuthExchange());
   VerifyAccepted();
-  EXPECT_EQ(AuthenticationMethod::SHARED_SECRET_SPAKE2_CURVE25519,
-            current_method());
+  EXPECT_EQ(current_method(),
+            AuthenticationMethod::SHARED_SECRET_SPAKE2_CURVE25519);
 }
 
 TEST_F(NegotiatingPairingAuthenticatorTest, PairingSupportedButNotPaired) {
@@ -332,6 +381,90 @@ TEST_F(NegotiatingAuthenticatorTest,
   VerifyAccepted();
   ASSERT_EQ(host_->credentials_type(), CredentialsType::SHARED_SECRET);
   ASSERT_NE(&host_->implementing_authenticator(), host_.get());
+}
+
+TEST_F(NegotiatingAuthenticatorTest, GetNextMessage_SynchronousTeardown) {
+  auto auth_config =
+      std::make_unique<HostAuthenticationConfig>(host_cert_, key_pair_);
+  auth_config->AddSharedSecretAuth("hash");
+  auto host = std::make_unique<TestNegotiatingHostAuthenticator>(
+      kHostJid, kClientJid, std::move(auth_config));
+  TestNegotiatingHostAuthenticator* host_ptr = host.get();
+
+  // Setup mock underlying authenticator.
+  auto mock_host_authenticator =
+      std::make_unique<testing::NiceMock<MockAuthenticator>>();
+
+  // Use a ProxyAuthenticator so the mock outlives the host.
+  host_ptr->current_authenticator_ =
+      std::make_unique<ProxyAuthenticator>(mock_host_authenticator.get());
+  host_ptr->ChainStateChangeAfterAcceptedWithUnderlying(
+      *host_ptr->current_authenticator_);
+
+  // Set host state to MESSAGE_READY.
+  host_ptr->state_ = Authenticator::MESSAGE_READY;
+  host_ptr->current_method_ =
+      AuthenticationMethod::SHARED_SECRET_SPAKE2_CURVE25519;
+
+  base::WeakPtr<NegotiatingAuthenticatorBase> host_weak = host->GetWeakPtr();
+
+  EXPECT_CALL(*mock_host_authenticator, state())
+      .WillRepeatedly(Return(Authenticator::MESSAGE_READY));
+
+  // When GetNextMessage() is called on mock_host_authenticator, we transition
+  // its state to REJECTED and notify teardown.
+  EXPECT_CALL(*mock_host_authenticator, GetNextMessage()).WillOnce([&]() {
+    EXPECT_CALL(*mock_host_authenticator, state())
+        .WillRepeatedly(Return(Authenticator::REJECTED));
+    if (host_weak) {
+      static_cast<TestNegotiatingHostAuthenticator*>(host_weak.get())
+          ->NotifyStateChangeAfterAcceptedForTesting();
+    }
+    return JingleAuthentication();
+  });
+
+  // Set the state change callback to destroy host.
+  host_ptr->set_state_change_after_accepted_callback(base::BindRepeating(
+      [](std::unique_ptr<TestNegotiatingHostAuthenticator>* host) {
+        host->reset();
+      },
+      &host));
+
+  // This should NOT trigger UAF because of the WeakPtr check.
+  std::ignore = host_ptr->GetNextMessage();
+
+  ASSERT_EQ(host, nullptr);
+}
+
+TEST_F(NegotiatingAuthenticatorTest,
+       CreateAuthenticatorForCurrentMethod_SynchronousRejectionTeardown) {
+  protocol::ClientAuthenticationConfig client_auth_config;
+  client_auth_config.host_id = kTestHostId;
+
+  std::unique_ptr<NegotiatingClientAuthenticator> client;
+
+  client_auth_config.fetch_secret_callback = base::BindRepeating(
+      [](std::unique_ptr<NegotiatingClientAuthenticator>* client_ptr,
+         bool pairing_supported,
+         const protocol::SecretFetchedCallback& secret_fetched_callback) {
+        secret_fetched_callback.Run(kTestPin);
+        client_ptr->reset();
+      },
+      &client);
+
+  client = std::make_unique<NegotiatingClientAuthenticator>(
+      kClientJid, kHostJid, client_auth_config);
+
+  // Transition state to WAITING_MESSAGE.
+  std::ignore = client->GetNextMessage();
+
+  JingleAuthentication host_message;
+  host_message.method = AuthenticationMethod::SHARED_SECRET_SPAKE2_CURVE25519;
+
+  // This should not crash.
+  client->ProcessMessage(host_message, base::DoNothing());
+
+  EXPECT_EQ(client, nullptr);
 }
 
 }  // namespace remoting::protocol

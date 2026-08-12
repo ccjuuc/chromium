@@ -6,12 +6,14 @@
 
 #include <string_view>
 
+#include "base/byte_size.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/process/current_process.h"
 #include "base/strings/strcat.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/timer/elapsed_timer.h"
 #include "base/types/pass_key.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -115,7 +117,7 @@ class Interceptor : public network::mojom::URLLoaderClient,
   // Struct to hold the result of the decoding operation.
   struct DecodeResult {
     int net_err;
-    int64_t transferred_bytes;
+    base::ByteSize transferred_bytes;
   };
 
   // Starts the interception and decoding process.
@@ -194,9 +196,7 @@ class Interceptor : public network::mojom::URLLoaderClient,
 
   // network::mojom::URLLoader implementation
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_headers,
+      network::HttpRequestHeadersUpdateParams headers_update_params,
       const std::optional<GURL>& new_url) override {
     // Redirects should be handled before interception.
     NOTREACHED();
@@ -278,6 +278,7 @@ ContentDecodingInterceptor::CreateDataPipePair(ClientType client_type) {
       .capacity_num_bytes = GetRendererSideContentDecodingPipeSize()};
   mojo::ScopedDataPipeProducerHandle pipe_producer_handle;
   mojo::ScopedDataPipeConsumerHandle pipe_consumer_handle;
+  base::ElapsedTimer timer;
   const auto mojo_result = mojo::CreateDataPipe(&options, pipe_producer_handle,
                                                 pipe_consumer_handle);
   const bool success = mojo_result == MOJO_RESULT_OK;
@@ -288,6 +289,11 @@ ContentDecodingInterceptor::CreateDataPipePair(ClientType client_type) {
                     kClientTypeToMetricsSuffix.at(client_type)}),
       success);
   if (success) {
+    base::UmaHistogramMicrosecondsTimes(
+        base::StrCat(
+            {"Network.ContentDecodingInterceptor.CreateDataPipeSuccessTime.",
+             kClientTypeToMetricsSuffix.at(client_type)}),
+        timer.Elapsed());
     return std::make_pair(std::move(pipe_producer_handle),
                           std::move(pipe_consumer_handle));
   }

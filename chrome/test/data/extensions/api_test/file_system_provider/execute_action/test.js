@@ -10,24 +10,24 @@ let testUtil;
  * @type {Object}
  * @const
  */
-var TESTING_ACTIONS_DIR = Object.freeze({
+const TESTING_ACTIONS_DIR = Object.freeze({
   isDirectory: true,
   name: 'actions',
   size: 0,
-  modificationTime: new Date(2014, 3, 27, 9, 38, 14)
+  modificationTime: new Date(2014, 3, 27, 9, 38, 14),
 });
 
 /**
  * @type {string}
  * @const
  */
-var TESTING_ACTION_ID = "testing-action";
+const TESTING_ACTION_ID = 'testing-action';
 
 /**
  * @type {string}
  * @const
  */
-var TESTING_UNKNOWN_ACTION_ID = "testing-unknown-action";
+const TESTING_UNKNOWN_ACTION_ID = 'testing-unknown-action';
 
 /**
  * Sets up the tests. Called once per all test cases. In case of a failure,
@@ -39,7 +39,7 @@ function setUp(callback) {
   chrome.fileSystemProvider.onGetMetadataRequested.addListener(
       testUtil.onGetMetadataRequestedDefault);
 
-  testUtil.defaultMetadata['/' + TESTING_ACTIONS_DIR.name] =
+  testUtil.defaultMetadata[`/${TESTING_ACTIONS_DIR.name}`] =
       TESTING_ACTIONS_DIR;
 
   testUtil.mountFileSystem(callback);
@@ -52,13 +52,12 @@ function runTests() {
   chrome.test.runTests([
     // Executes an existing action.
     function executeActionSuccess() {
-      var onExecuteActionRequested = chrome.test.callbackPass(
-          function(options, onSuccess, onError) {
-            chrome.test.assertEq(testUtil.FILE_SYSTEM_ID,
-                options.fileSystemId);
+      const onExecuteActionRequested =
+          chrome.test.callbackPass(function(options, onSuccess, onError) {
+            chrome.test.assertEq(testUtil.FILE_SYSTEM_ID, options.fileSystemId);
             chrome.test.assertEq(1, options.entryPaths.length);
-            chrome.test.assertEq('/' + TESTING_ACTIONS_DIR.name,
-                options.entryPaths[0]);
+            chrome.test.assertEq(
+                `/${TESTING_ACTIONS_DIR.name}`, options.entryPaths[0]);
             chrome.test.assertEq(TESTING_ACTION_ID, options.actionId);
             chrome.fileSystemProvider.onExecuteActionRequested.removeListener(
                 onExecuteActionRequested);
@@ -67,12 +66,10 @@ function runTests() {
       chrome.fileSystemProvider.onExecuteActionRequested.addListener(
           onExecuteActionRequested);
       testUtil.fileSystem.root.getDirectory(
-          TESTING_ACTIONS_DIR.name,
-          {create: false},
+          TESTING_ACTIONS_DIR.name, {create: false},
           chrome.test.callbackPass(function(dirEntry) {
             chrome.fileManagerPrivate.executeCustomAction(
-                [dirEntry],
-                TESTING_ACTION_ID,
+                [dirEntry], TESTING_ACTION_ID,
                 chrome.test.callbackPass(function() {}));
           }),
           function(error) {
@@ -82,13 +79,12 @@ function runTests() {
 
     // Tries to execute a non-existing action.
     function executeNonExistingActionFailure() {
-      var onExecuteActionRequested = chrome.test.callbackPass(
-          function(options, onSuccess, onError) {
-            chrome.test.assertEq(testUtil.FILE_SYSTEM_ID,
-                options.fileSystemId);
+      const onExecuteActionRequested =
+          chrome.test.callbackPass(function(options, onSuccess, onError) {
+            chrome.test.assertEq(testUtil.FILE_SYSTEM_ID, options.fileSystemId);
             chrome.test.assertEq(1, options.entryPaths.length);
-            chrome.test.assertEq('/' + TESTING_ACTIONS_DIR.name,
-                options.entryPaths[0]);
+            chrome.test.assertEq(
+                `/${TESTING_ACTIONS_DIR.name}`, options.entryPaths[0]);
             chrome.test.assertEq(TESTING_UNKNOWN_ACTION_ID, options.actionId);
             chrome.fileSystemProvider.onExecuteActionRequested.removeListener(
                 onExecuteActionRequested);
@@ -97,19 +93,17 @@ function runTests() {
       chrome.fileSystemProvider.onExecuteActionRequested.addListener(
           onExecuteActionRequested);
       testUtil.fileSystem.root.getDirectory(
-          TESTING_ACTIONS_DIR.name,
-          {create: false},
+          TESTING_ACTIONS_DIR.name, {create: false},
           chrome.test.callbackPass(function(dirEntry) {
             chrome.fileManagerPrivate.executeCustomAction(
-                [dirEntry],
-                TESTING_UNKNOWN_ACTION_ID,
-                chrome.test.callbackFail('Failed to execute the action.',
-                    function() {}));
+                [dirEntry], TESTING_UNKNOWN_ACTION_ID,
+                chrome.test.callbackFail(
+                    'Failed to execute the action.', function() {}));
           }),
           function(error) {
             chrome.test.fail(error.name);
           });
-    }
+    },
   ]);
 }
 
@@ -117,7 +111,7 @@ function runTests() {
 // considered modules.
 (async () => {
   testUtil = await import(
-    '/_test_resources/api_test/file_system_provider/test_util.js');
+      '/_test_resources/api_test/file_system_provider/test_util.js');
 
   // Setup and run all of the test cases.
   setUp(runTests);

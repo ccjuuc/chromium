@@ -8,7 +8,7 @@
 #include <utility>
 
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
+#include "base/containers/span.h"
 
 namespace cc {
 
@@ -16,8 +16,9 @@ FakePaintImageGenerator::FakePaintImageGenerator(
     const SkImageInfo& info,
     std::vector<FrameMetadata> frames,
     bool allocate_discardable_memory,
-    std::vector<SkISize> supported_sizes)
-    : PaintImageGenerator(info, std::move(frames)),
+    std::vector<SkISize> supported_sizes,
+    const gfx::HDRMetadata& hdr_metadata)
+    : PaintImageGenerator(info, hdr_metadata, std::move(frames)),
       image_backing_memory_(
           allocate_discardable_memory ? info.computeMinByteSize() : 0,
           0),
@@ -29,8 +30,9 @@ FakePaintImageGenerator::FakePaintImageGenerator(
     const SkYUVAPixmapInfo& yuva_pixmap_info,
     std::vector<FrameMetadata> frames,
     bool allocate_discardable_memory,
-    std::vector<SkISize> supported_sizes)
-    : PaintImageGenerator(info, std::move(frames)),
+    std::vector<SkISize> supported_sizes,
+    const gfx::HDRMetadata& hdr_metadata)
+    : PaintImageGenerator(info, hdr_metadata, std::move(frames)),
       image_backing_memory_(allocate_discardable_memory
                                 ? yuva_pixmap_info.computeTotalBytes()
                                 : 0,
@@ -65,7 +67,7 @@ bool FakePaintImageGenerator::GetPixels(SkPixmap dst_pixmap,
     image_pixmap_ = SkPixmap(dst_info, image_backing_memory_.data(),
                              dst_info.minRowBytes());
   }
-  if (!base::Contains(frames_decoded_count_, frame_index)) {
+  if (!frames_decoded_count_.contains(frame_index)) {
     frames_decoded_count_[frame_index] = 1;
   } else {
     frames_decoded_count_[frame_index]++;
@@ -105,14 +107,21 @@ bool FakePaintImageGenerator::GetYUVAPlanes(
   }
   std::array<size_t, SkYUVAInfo::kMaxPlanes> plane_sizes;
   yuva_pixmap_info_.computeTotalBytes(plane_sizes.data());
-  uint8_t* src_plane_memory = image_backing_memory_.data();
+  base::span<const uint8_t> src_planes_span(image_backing_memory_);
   int num_planes = pixmaps.numPlanes();
   for (int i = 0; i < num_planes; ++i) {
-    UNSAFE_TODO(memcpy(pixmaps.plane(i).writable_addr(), src_plane_memory,
-                       plane_sizes[i]));
-    UNSAFE_TODO(src_plane_memory += plane_sizes[i]);
+    const SkPixmap& dst_pixmap = pixmaps.plane(i);
+    const SkImageInfo& info = yuva_pixmap_info_.planeInfo(i);
+    size_t row_bytes = dst_pixmap.rowBytes();
+
+    CHECK_GE(info.computeByteSize(row_bytes), plane_sizes[i]);
+
+    SkPixmap src_pixmap(info, src_planes_span.data(), row_bytes);
+    src_pixmap.readPixels(dst_pixmap, 0, 0);
+
+    src_planes_span = src_planes_span.subspan(plane_sizes[i]);
   }
-  if (!base::Contains(frames_decoded_count_, frame_index)) {
+  if (!frames_decoded_count_.contains(frame_index)) {
     frames_decoded_count_[frame_index] = 1;
   } else {
     frames_decoded_count_[frame_index]++;
@@ -133,7 +142,7 @@ SkISize FakePaintImageGenerator::GetSupportedDecodeSize(
 
 const ImageHeaderMetadata*
 FakePaintImageGenerator::GetMetadataForDecodeAcceleration() const {
-  return &image_metadata_;
+  return nullptr;
 }
 
 }  // namespace cc

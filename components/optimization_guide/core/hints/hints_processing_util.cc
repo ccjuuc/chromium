@@ -18,7 +18,7 @@
 
 namespace optimization_guide {
 
-std::string GetStringNameForOptimizationType(
+std::string_view GetStringNameForOptimizationType(
     proto::OptimizationType optimization_type) {
   switch (optimization_type) {
     case proto::OptimizationType::TYPE_UNSPECIFIED:
@@ -148,11 +148,17 @@ std::string GetStringNameForOptimizationType(
     case proto::OptimizationType::BUY_NOW_PAY_LATER_ALLOWLIST_KLARNA_ANDROID:
       return "BuyNowPayLaterAllowlistKlarnaAndroid";
     case proto::OptimizationType::BUY_NOW_PAY_LATER_BLOCKLIST_AFFIRM:
-      return "BuyNowPayLaterBlocklistAffirm";
+      return "BuyNowPayLaterBlocklistAffirmDesktop";
     case proto::OptimizationType::BUY_NOW_PAY_LATER_BLOCKLIST_ZIP:
-      return "BuyNowPayLaterBlocklistZip";
+      return "BuyNowPayLaterBlocklistZipDesktop";
     case proto::OptimizationType::BUY_NOW_PAY_LATER_BLOCKLIST_KLARNA:
-      return "BuyNowPayLaterBlocklistKlarna";
+      return "BuyNowPayLaterBlocklistKlarnaDesktop";
+    case proto::OptimizationType::BUY_NOW_PAY_LATER_BLOCKLIST_AFFIRM_ANDROID:
+      return "BuyNowPayLaterBlocklistAffirmAndroid";
+    case proto::OptimizationType::BUY_NOW_PAY_LATER_BLOCKLIST_ZIP_ANDROID:
+      return "BuyNowPayLaterBlocklistZipAndroid";
+    case proto::OptimizationType::BUY_NOW_PAY_LATER_BLOCKLIST_KLARNA_ANDROID:
+      return "BuyNowPayLaterBlocklistKlarnaAndroid";
     case proto::OptimizationType::SAVED_TAB_GROUP:
       return "SavedTabGroup";
     case proto::OptimizationType::TEXT_CLASSIFIER_ENTITY_DETECTION:
@@ -225,6 +231,30 @@ std::string GetStringNameForOptimizationType(
       return "ReaderModeEligible";
     case proto::OptimizationType::AUTOFILL_ACTOR_IFRAME_ORIGIN_ALLOWLIST:
       return "AutofillActorIframeOriginAllowlist";
+    case proto::OptimizationType::SKILLS:
+      return "Skills";
+    case proto::OptimizationType::PIX_PSP_ALLOWLIST:
+      return "PixPspAllowlist";
+    case proto::OptimizationType::INDIGO:
+      return "Indigo";
+    case proto::OptimizationType::FINDS_PAGE_THEME:
+      return "FindsPageTheme";
+    case proto::OptimizationType::OMNIBOX_AUTOFILL_IFRAME_ALLOWLIST:
+      return "OmniboxAutofillIframeAllowlist";
+    case proto::OptimizationType::CURINOS_CREDIT_CARD_FLIGHT_BENEFITS:
+      return "CurinosCreditCardFlightBenefits";
+    case proto::OptimizationType::CURINOS_CREDIT_CARD_HOTEL_BENEFITS:
+      return "CurinosCreditCardHotelBenefits";
+    case proto::OptimizationType::CURINOS_CREDIT_CARD_CAR_RENTAL_BENEFITS:
+      return "CurinosCreditCardCarRentalBenefits";
+    case proto::OptimizationType::FILTER_TASKS_SUPPORTED:
+      return "FilterTasksSupported";
+    case proto::OptimizationType::FILTER_EXTRACT_ATTRIBUTES:
+      return "FilterExtractAttributes";
+    case proto::OptimizationType::AUTOFILL_AT_MEMORY_BLOCKED:
+      return "AutofillAtMemoryBlocked";
+    case proto::OptimizationType::FILTER_EXECUTION_STRATEGY:
+      return "FilterExecutionStrategy";
   }
 
   // The returned string is used to record histograms for the optimization type.

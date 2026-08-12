@@ -12,6 +12,8 @@
 #include "base/component_export.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/task/task_traits.h"
+#include "build/build_config.h"
 
 namespace history {
 
@@ -62,28 +64,33 @@ extern const base::FeatureParam<int> kMvtScoringParamDailyVisitCountCap;
 COMPONENT_EXPORT(HISTORY_FEATURES)
 BASE_DECLARE_FEATURE(kRazeOldHistoryDatabase);
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+#if !BUILDFLAG(IS_IOS)
 COMPONENT_EXPORT(HISTORY_FEATURES)
-BASE_DECLARE_FEATURE(kBrowsingHistoryActorIntegrationM1);
+bool IsBrowsingHistoryActorIntegrationM3Enabled();
 
+#if !BUILDFLAG(IS_ANDROID)
 COMPONENT_EXPORT(HISTORY_FEATURES)
-BASE_DECLARE_FEATURE(kBrowsingHistoryActorIntegrationM2);
+BASE_DECLARE_FEATURE(kBrowsingHistorySimilarVisitsGrouping);
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 COMPONENT_EXPORT(HISTORY_FEATURES)
 BASE_DECLARE_FEATURE(kBrowsingHistoryActorIntegrationM3);
+#endif  // !BUILDFLAG(IS_IOS)
+
 
 COMPONENT_EXPORT(HISTORY_FEATURES)
-bool IsBrowsingHistoryActorIntegrationM1Enabled();
+BASE_DECLARE_FEATURE(kWebHistoryUseNewApi);
 
 COMPONENT_EXPORT(HISTORY_FEATURES)
-bool IsBrowsingHistoryActorIntegrationM2Enabled();
+BASE_DECLARE_FEATURE(kHistoryDatabaseWriteAheadLogging);
+
+// Allows tuning the task priority of the History backend task runner during
+// startup.
+COMPONENT_EXPORT(HISTORY_FEATURES)
+BASE_DECLARE_FEATURE(kHistoryInitPrioritySettings);
 
 COMPONENT_EXPORT(HISTORY_FEATURES)
-bool IsBrowsingHistoryActorIntegrationM3Enabled();
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-
-COMPONENT_EXPORT(HISTORY_FEATURES)
-BASE_DECLARE_FEATURE(kHistoryQueryOnlyLocalFirst);
+extern const base::FeatureParam<base::TaskPriority> kHistoryInitPriority;
 
 }  // namespace history
 

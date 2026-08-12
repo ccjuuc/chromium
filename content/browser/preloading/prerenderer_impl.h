@@ -47,8 +47,8 @@ class CONTENT_EXPORT PrerendererImpl : public Prerenderer,
       PrerenderCancellationCallback callback) override;
 
   // PrerenderHostRegistry::Observer implementations:
-  void OnCancel(FrameTreeNodeId host_frame_tree_node_id,
-                const PrerenderCancellationReason& reason) override;
+  void OnRetriggerable(PrerenderHostId host_id,
+                       const PrerenderCancellationReason& reason) override;
   void OnRegistryDestroyed() override;
 
   void CancelStartedPrerendersForTesting();
@@ -57,6 +57,11 @@ class CONTENT_EXPORT PrerendererImpl : public Prerenderer,
   struct PrerenderInfo;
 
   void CancelStartedPrerenders();
+
+  // Upgrades a prerender-until-script host to a full prerender. Updates the
+  // PrerenderInfo action and logs a console message. Returns true if the
+  // upgrade was performed.
+  bool TryUpgradePrerenderUntilScriptToFull(PrerenderInfo& prerender_info);
 
   // Used only for metric that counts received prerenders per
   // primary page changed.
@@ -79,8 +84,8 @@ class CONTENT_EXPORT PrerendererImpl : public Prerenderer,
       received_prerenders_by_eagerness_;
 
   // Used to notify cancellation from PrerendererImpl to PreloadingDecider.
-  // This is invoked in OnCancel, which is called when receiving a cancellation
-  // notification from PrerenderHostRegistry.
+  // This is invoked in OnRetriggerable, which is called when receiving a
+  // retriggerable notification from PrerenderHostRegistry.
   PrerenderCancellationCallback prerender_cancellation_callback_ =
       base::DoNothing();
 

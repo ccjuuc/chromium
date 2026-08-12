@@ -8,11 +8,9 @@
 
 #include "base/containers/flat_map.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
 #include "base/strings/string_util.h"
-#include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
@@ -24,17 +22,13 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/bookmarks/bookmark_stats.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/chrome_select_file_policy.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/search/omnibox_utils.h"
 #include "chrome/browser/ui/search/search_ipc_router_policy_impl.h"
-#include "chrome/browser/ui/tab_contents/core_tab_helper.h"
 #include "chrome/browser/ui/tab_modal_confirm_dialog.h"
 #include "chrome/browser/ui/tab_modal_confirm_dialog_delegate.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/google/core/common/google_util.h"
 #include "components/navigation_metrics/navigation_metrics.h"
@@ -48,7 +42,6 @@
 #include "components/sync/base/user_selectable_type.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_user_settings.h"
-#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
@@ -89,25 +82,10 @@ bool InInstantProcess(const InstantService* instant_service,
       contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID());
 }
 
-// Called when an NTP finishes loading. If the load start time was noted,
-// calculates and logs the total load time.
-void RecordNewTabLoadTime(content::WebContents* contents) {
-  CoreTabHelper* core_tab_helper = CoreTabHelper::FromWebContents(contents);
-  // CoreTabHelper can be null in unittests.
-  if (!core_tab_helper) {
-    return;
-  }
-  if (core_tab_helper->new_tab_start_time().is_null()) {
-    return;
-  }
-
-  core_tab_helper->set_new_tab_start_time(base::TimeTicks());
-}
-
 void RecordConcreteNtp(content::NavigationHandle* navigation_handle) {
   NewTabPageConcretePage concrete_page = NewTabPageConcretePage::kOther;
   if (navigation_handle->GetURL().DeprecatedGetOriginAsURL() ==
-      GURL(chrome::kChromeUINewTabPageURL).DeprecatedGetOriginAsURL()) {
+      chrome::ChromeUINewTabPageURLAsGURL().DeprecatedGetOriginAsURL()) {
     concrete_page = NewTabPageConcretePage::k1PWebUiNtp;
   } else if (navigation_handle->GetURL().DeprecatedGetOriginAsURL() ==
              GURL(chrome::kChromeUINewTabPageThirdPartyURL)
@@ -122,7 +100,7 @@ void RecordConcreteNtp(content::NavigationHandle* navigation_handle) {
                  navigation_handle->GetWebContents()->GetBrowserContext())
                  ->IsOffTheRecord() &&
              navigation_handle->GetURL().DeprecatedGetOriginAsURL() ==
-                 GURL(chrome::kChromeUINewTabURL).DeprecatedGetOriginAsURL()) {
+                 chrome::ChromeUINewTabURLAsGURL().DeprecatedGetOriginAsURL()) {
     concrete_page = NewTabPageConcretePage::kOffTheRecordNtp;
   }
   base::UmaHistogramEnumeration("NewTabPage.ConcretePage", concrete_page);
@@ -195,7 +173,7 @@ void SearchTabHelper::DidStartNavigation(
   }
 
   if (web_contents()->GetVisibleURL().DeprecatedGetOriginAsURL() ==
-      GURL(chrome::kChromeUINewTabURL).DeprecatedGetOriginAsURL()) {
+      chrome::ChromeUINewTabURLAsGURL().DeprecatedGetOriginAsURL()) {
     RecordConcreteNtp(navigation_handle);
   }
 
@@ -231,14 +209,6 @@ void SearchTabHelper::TitleWasSet(content::NavigationEntry* entry) {
     web_contents()->UpdateTitleForEntry(
         entry, l10n_util::GetStringUTF16(IDS_NEW_TAB_TITLE));
     is_setting_title_ = false;
-  }
-}
-
-void SearchTabHelper::DidFinishLoad(content::RenderFrameHost* render_frame_host,
-                                    const GURL& /* validated_url */) {
-  if (render_frame_host->IsInPrimaryMainFrame() &&
-      search::IsInstantNTP(web_contents())) {
-    RecordNewTabLoadTime(web_contents());
   }
 }
 

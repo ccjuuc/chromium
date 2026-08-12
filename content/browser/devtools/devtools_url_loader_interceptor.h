@@ -13,6 +13,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/unguessable_token.h"
+#include "content/browser/devtools/protocol/fetch.h"
 #include "content/browser/devtools/protocol/network.h"
 #include "content/public/browser/global_request_id.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -65,9 +66,9 @@ class DevToolsURLLoaderInterceptor {
   using RequestInterceptedCallback =
       base::RepeatingCallback<void(std::unique_ptr<InterceptedRequestInfo>)>;
   using ContinueInterceptedRequestCallback =
-      protocol::Network::Backend::ContinueInterceptedRequestCallback;
+      protocol::Fetch::Backend::ContinueRequestCallback;
   using GetResponseBodyForInterceptionCallback =
-      protocol::Network::Backend::GetResponseBodyForInterceptionCallback;
+      protocol::Fetch::Backend::GetResponseBodyCallback;
   using TakeResponseBodyPipeCallback =
       base::OnceCallback<void(protocol::Response,
                               mojo::ScopedDataPipeConsumerHandle,
@@ -178,12 +179,16 @@ class DevToolsURLLoaderInterceptor {
   using HandleAuthRequestCallback =
       base::OnceCallback<void(bool use_fallback,
                               const std::optional<net::AuthCredentials>&)>;
+  using CheckCookieAccessCallback =
+      base::RepeatingCallback<bool(const net::CanonicalCookie&)>;
   // Can only be called on the IO thread.
   static void HandleAuthRequest(GlobalRequestID req_id,
                                 const net::AuthChallengeInfo& auth_info,
                                 HandleAuthRequestCallback callback);
 
-  explicit DevToolsURLLoaderInterceptor(RequestInterceptedCallback callback);
+  explicit DevToolsURLLoaderInterceptor(
+      RequestInterceptedCallback callback,
+      CheckCookieAccessCallback cookie_access_callback = {});
 
   DevToolsURLLoaderInterceptor(const DevToolsURLLoaderInterceptor&) = delete;
   DevToolsURLLoaderInterceptor& operator=(const DevToolsURLLoaderInterceptor&) =
@@ -217,9 +222,7 @@ class DevToolsURLLoaderInterceptor {
   friend class InterceptionJob;
   friend class DevToolsURLLoaderFactoryProxy;
 
-  using InterceptionStages = base::EnumSet<InterceptionStage,
-                                           InterceptionStage::kMinValue,
-                                           InterceptionStage::kMaxValue>;
+  using InterceptionStages = base::EnumSet<InterceptionStage>;
 
   void CreateJob(
       const base::UnguessableToken& frame_token,
@@ -268,6 +271,7 @@ class DevToolsURLLoaderInterceptor {
   }
 
   const RequestInterceptedCallback request_intercepted_callback_;
+  const CheckCookieAccessCallback cookie_access_callback_;
 
   std::vector<Pattern> patterns_;
   bool handle_auth_ = false;

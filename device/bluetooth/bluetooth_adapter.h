@@ -835,7 +835,8 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapter
   using DevicesMap =
       std::unordered_map<std::string, std::unique_ptr<BluetoothDevice>>;
   using PairingDelegatePair =
-      std::pair<BluetoothDevice::PairingDelegate*, PairingDelegatePriority>;
+      std::pair<raw_ptr<BluetoothDevice::PairingDelegate>,
+                PairingDelegatePriority>;
 
   using CallbackQueue =
       base::queue<std::unique_ptr<StartOrStopDiscoveryCallback>>;
@@ -943,7 +944,11 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapter
   scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner_;
 
   // Observers of BluetoothAdapter, notified from implementation subclasses.
-  base::ObserverList<device::BluetoothAdapter::Observer>::
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      device::BluetoothAdapter::Observer,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>::
       UncheckedAndDanglingUntriaged observers_;
 
   // Devices paired with, connected to, discovered by, or visible to the

@@ -51,8 +51,9 @@ using OnPasskeySelectedCallback =
     password_manager::WebAuthnCredentialsDelegate::OnPasskeySelectedCallback;
 
 ChromeWebAuthnCredentialsDelegate::ChromeWebAuthnCredentialsDelegate(
-    content::WebContents* web_contents)
-    : web_contents_(web_contents) {}
+    content::RenderFrameHost* frame_host)
+    : frame_host_(frame_host),
+      web_contents_(content::WebContents::FromRenderFrameHost(frame_host)) {}
 
 ChromeWebAuthnCredentialsDelegate::~ChromeWebAuthnCredentialsDelegate() =
     default;
@@ -68,7 +69,7 @@ void ChromeWebAuthnCredentialsDelegate::LaunchSecurityKeyOrHybridFlow() {
       ->TransitionToModalWebAuthnRequest();
 #else
   if (WebAuthnRequestDelegateAndroid* delegate =
-          WebAuthnRequestDelegateAndroid::GetRequestDelegate(web_contents_)) {
+          WebAuthnRequestDelegateAndroid::GetRequestDelegate(frame_host_)) {
     delegate->OnHybridSignInSelected();
   }
 #endif  // !BUILDFLAG(IS_ANDROID)
@@ -86,7 +87,7 @@ void ChromeWebAuthnCredentialsDelegate::SelectPasskey(
 #if BUILDFLAG(IS_ANDROID)
   std::move(callback).Run();
   auto* request_delegate =
-      WebAuthnRequestDelegateAndroid::GetRequestDelegate(web_contents_);
+      WebAuthnRequestDelegateAndroid::GetRequestDelegate(frame_host_);
   if (!request_delegate) {
     return;
   }
@@ -115,6 +116,23 @@ void ChromeWebAuthnCredentialsDelegate::SelectPasskey(
     std::move(passkey_selected_callback_).Run();
   }
 #endif  // BUILDFLAG(IS_ANDROID)
+}
+
+std::optional<std::string> ChromeWebAuthnCredentialsDelegate::GetCableQrString()
+    const {
+#if !BUILDFLAG(IS_ANDROID)
+  ChromeAuthenticatorRequestDelegate* authenticator_delegate =
+      AuthenticatorRequestScheduler::GetRequestDelegate(web_contents_);
+  if (!authenticator_delegate || !authenticator_delegate->dialog_model()) {
+    return std::nullopt;
+  }
+  if (!authenticator_delegate->dialog_model()->ble_adapter_is_powered) {
+    return std::nullopt;
+  }
+  return authenticator_delegate->dialog_model()->cable_qr_string;
+#else
+  return std::nullopt;
+#endif
 }
 
 base::expected<const std::vector<PasskeyCredential>*,

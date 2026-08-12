@@ -7,6 +7,7 @@
 #import <set>
 #import <string>
 
+#import "base/base64.h"
 #import "base/check.h"
 #import "base/files/file_path.h"
 #import "base/functional/bind.h"
@@ -28,11 +29,16 @@
 #import "components/saved_tab_groups/internal/shared_tab_group_data_sync_bridge.h"
 #import "components/saved_tab_groups/public/saved_tab_group.h"
 #import "components/saved_tab_groups/public/saved_tab_group_tab.h"
+#import "components/send_tab_to_self/page_context.h"
+#import "components/send_tab_to_self/proto_conversions.h"
+#import "components/shared_highlighting/core/common/text_fragment.h"
 #import "components/sync/base/data_type.h"
 #import "components/sync/base/pref_names.h"
 #import "components/sync/base/time.h"
 #import "components/sync/engine/loopback_server/loopback_server_entity.h"
+#import "components/sync/nigori/cryptographer_impl.h"
 #import "components/sync/protocol/device_info_specifics.pb.h"
+#import "components/sync/protocol/send_tab_to_self_specifics.pb.h"
 #import "components/sync/protocol/session_specifics.pb.h"
 #import "components/sync/protocol/sync_entity.pb.h"
 #import "components/sync/protocol/sync_enums.pb.h"
@@ -93,7 +99,7 @@ std::unique_ptr<syncer::LoopbackServerEntity> CreateBookmarkServerEntity(
 // Returns CollaborationGroupSpecifics for the given `group_id`
 sync_pb::CollaborationGroupSpecifics MakeCollaborationGroupSpecifics(
     const data_sharing::GroupId& group_id,
-    const base::Time& changed_at = base::Time::Now()) {
+    base::Time changed_at = base::Time::Now()) {
   sync_pb::CollaborationGroupSpecifics result;
   result.set_collaboration_id(group_id.value());
   result.set_changed_at_timestamp_millis_since_unix_epoch(
@@ -205,10 +211,9 @@ void TriggerSyncCycle(syncer::DataType type) {
 }
 
 int GetNumberOfSyncEntities(syncer::DataType type) {
-  base::Value::Dict entities = gSyncFakeServer->GetEntitiesAsDictForTesting();
+  base::DictValue entities = gSyncFakeServer->GetEntitiesAsDictForTesting();
 
-  base::Value::List* entity_list =
-      entities.FindList(DataTypeToDebugString(type));
+  base::ListValue* entity_list = entities.FindList(DataTypeToDebugString(type));
   DCHECK(entity_list);
   return static_cast<int>(entity_list->size());
 }
@@ -359,21 +364,13 @@ void DeleteAutofillProfileFromFakeSyncServer(std::string guid) {
 
   std::vector<sync_pb::SyncEntity> autofill_profiles =
       gSyncFakeServer->GetSyncEntitiesByDataType(syncer::AUTOFILL_PROFILE);
-  std::string entity_id;
-  std::string client_tag_hash;
   for (const sync_pb::SyncEntity& autofill_profile : autofill_profiles) {
     if (autofill_profile.specifics().autofill_profile().guid() == guid) {
-      entity_id = autofill_profile.id_string();
-      client_tag_hash = autofill_profile.client_tag_hash();
+      gSyncFakeServer->InjectEntity(
+          syncer::PersistentTombstoneEntity::CreateFromEntity(
+              autofill_profile));
       break;
     }
-  }
-  // Delete the entity if it exists.
-  if (!entity_id.empty()) {
-    std::unique_ptr<syncer::LoopbackServerEntity> entity;
-    entity = syncer::PersistentTombstoneEntity::CreateNew(entity_id,
-                                                          client_tag_hash);
-    gSyncFakeServer->InjectEntity(std::move(entity));
   }
 }
 
@@ -497,6 +494,92 @@ void AddDeviceInfoToFakeSyncServer(const std::string& device_name,
           "non_unique_name",
           syncer::DeviceInfoUtil::SpecificsToTag(device_info), specifics,
           /*creation_time=*/mtime, mtime));
+}
+
+std::string AddSendTabToSelfEntryToFakeSyncServer(
+    const GURL& url,
+    const std::string& title,
+    const std::string& device_name,
+    const std::string& target_device_cache_guid,
+    const std::map<std::string, std::string>& form_fields,
+    const std::string& text_fragment) {
+  DCHECK(IsFakeSyncServerSetUp());
+
+  sync_pb::EntitySpecifics specifics;
+  sync_pb::SendTabToSelfSpecifics* stts_specifics =
+      specifics.mutable_send_tab_to_self();
+  stts_specifics->set_url(url.spec());
+  stts_specifics->set_title(title);
+
+  std::string guid = base::Uuid::GenerateRandomV4().AsLowercaseString();
+  stts_specifics->set_guid(guid);
+
+  std::string target_guid = target_device_cache_guid;
+  if (target_guid.empty()) {
+    syncer::DeviceInfoSyncService* device_info_service =
+        DeviceInfoSyncServiceFactory::GetForProfile(
+            chrome_test_util::GetOriginalProfile());
+    target_guid = device_info_service->GetLocalDeviceInfoProvider()
+                      ->GetLocalDeviceInfo()
+                      ->guid();
+  }
+
+  int64_t now_usec =
+      base::Time::Now().ToDeltaSinceWindowsEpoch().InMicroseconds();
+  stts_specifics->set_shared_time_usec(now_usec);
+  stts_specifics->set_device_name(device_name);
+  stts_specifics->set_target_device_sync_cache_guid(target_guid);
+  stts_specifics->set_opened(false);
+  stts_specifics->set_notification_dismissed(false);
+
+  if (!form_fields.empty() || !text_fragment.empty()) {
+    send_tab_to_self::PageContext context;
+
+    if (!form_fields.empty()) {
+      for (const auto& [name, value] : form_fields) {
+        send_tab_to_self::PageContext::FormField form_field;
+        form_field.id_attribute = base::UTF8ToUTF16(name);
+        form_field.name_attribute = base::UTF8ToUTF16(name);
+        form_field.value = base::UTF8ToUTF16(value);
+        form_field.form_control_type = autofill::FormControlType::kInputText;
+        context.form_field_info.fields.push_back(form_field);
+      }
+    }
+
+    if (!text_fragment.empty()) {
+      std::optional<shared_highlighting::TextFragment> parsed_fragment =
+          shared_highlighting::TextFragment::FromEscapedString(text_fragment);
+      if (parsed_fragment) {
+        context.scroll_position.text_fragment =
+            send_tab_to_self::TextFragmentData(*parsed_fragment);
+      }
+    }
+
+    *stts_specifics->mutable_page_context() =
+        send_tab_to_self::PageContextToProto(context);
+
+    std::vector<std::vector<uint8_t>> keystore_keys =
+        gSyncFakeServer->GetKeystoreKeys();
+    if (!keystore_keys.empty()) {
+      std::string key_base64 = base::Base64Encode(keystore_keys.back());
+      std::unique_ptr<syncer::CryptographerImpl> cryptographer =
+          syncer::CryptographerImpl::FromSingleKeyForTesting(
+              key_base64, syncer::KeyDerivationParams::CreateForPbkdf2());
+      if (cryptographer &&
+          cryptographer->Encrypt(
+              stts_specifics->page_context(),
+              stts_specifics->mutable_encrypted_page_context())) {
+        stts_specifics->clear_page_context();
+      }
+    }
+  }
+
+  gSyncFakeServer->InjectEntity(
+      syncer::PersistentUniqueClientEntity::CreateFromSpecificsForTesting(
+          /*non_unique_name=*/title, /*client_tag=*/guid, specifics,
+          /*creation_time=*/now_usec, /*last_modified_time=*/now_usec));
+
+  return guid;
 }
 
 BOOL IsUrlPresentOnClient(const GURL& url,

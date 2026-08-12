@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/auto_reset.h"
@@ -18,12 +19,14 @@
 #include "base/memory/weak_ptr.h"
 #include "base/one_shot_event.h"
 #include "build/build_config.h"
+#include "chrome/browser/web_applications/jobs/uninstall/remove_web_app_job.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/web_app_database.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "components/sync/model/data_type_sync_bridge.h"
 #include "components/sync/model/entity_change.h"
 #include "components/webapps/common/web_app_id.h"
+#include "url/gurl.h"
 
 namespace base {
 class Time;
@@ -91,12 +94,25 @@ enum class ManifestIdParseResult {
 // While WebAppRegistrar is a read-only model, WebAppSyncBridge is a
 // controller for that model. WebAppSyncBridge is responsible for:
 // - Registry initialization (reading model from a persistent storage like
-// LevelDb or prefs).
+//   LevelDb or prefs).
 // - Writing all the registry updates to a persistent store and sync.
 //
-// WebAppSyncBridge is the key class to support integration with Unified Sync
-// and Storage (USS) system. The sync bridge exclusively owns
+// WebAppSyncBridge is the key class to support integration with the Unified
+// Sync and Storage (USS) system. The sync bridge exclusively owns
 // DataTypeLocalChangeProcessor and WebAppDatabase (the storage).
+//
+// This is "bridge" between the WebAppProvider system's in-memory representation
+// of web apps and the Unified Sync and Storage (USS) system's database
+// representation. See syncer::DataTypeSyncBridge for more information about
+// this integration. It installs new apps, uninstalls apps the user uninstalled
+// elsewhere, and updates metadata. It also tells the sync system if there are
+// local changes.
+//
+// Note: This only stores per-web-app data, and that data will be deleted if the
+// web app is uninstalled. To store data that persists after uninstall, or
+// applies to a more general scope than a single web app, then the
+// `proto::DatabaseMetadata` object can be used (preferred), or the
+// `PrefService` on the `Profile` object or on the browser process.
 class WebAppSyncBridge : public syncer::DataTypeSyncBridge {
  public:
   // Disable the logic that resumes pending sync installs, and fixes cases where
@@ -139,7 +155,10 @@ class WebAppSyncBridge : public syncer::DataTypeSyncBridge {
   [[nodiscard]] ScopedRegistryUpdate BeginUpdate(
       CommitCallback callback = base::DoNothing());
 
-  void Init(base::OnceClosure callback);
+  using InitCallback = base::OnceCallback<void(
+      WebAppDatabaseOpenResult result,
+      std::vector<std::pair<webapps::AppId, GURL>> salvaged_apps)>;
+  void Init(InitCallback callback);
 
   // Non testing code should use SetUserDisplayModeCommand instead.
   void SetAppUserDisplayModeForTesting(
@@ -160,7 +179,7 @@ class WebAppSyncBridge : public syncer::DataTypeSyncBridge {
 
   // TODO(crbug.com/41490924): Remove this and use a command instead.
   void SetAppLastLaunchTime(const webapps::AppId& app_id,
-                            const base::Time& time);
+                            const std::optional<base::Time>& time);
 
   // TODO(crbug.com/41490924): Remove this and use a command instead.
   void SetAppFirstInstallTime(const webapps::AppId& app_id,
@@ -198,8 +217,6 @@ class WebAppSyncBridge : public syncer::DataTypeSyncBridge {
   const WebAppRegistrar& registrar() const { return *registrar_; }
 
   // syncer::DataTypeSyncBridge:
-  std::unique_ptr<syncer::MetadataChangeList> CreateMetadataChangeList()
-      override;
   std::optional<syncer::ModelError> MergeFullSyncData(
       std::unique_ptr<syncer::MetadataChangeList> metadata_change_list,
       syncer::EntityChangeList entity_data) override;
@@ -215,6 +232,8 @@ class WebAppSyncBridge : public syncer::DataTypeSyncBridge {
       const syncer::EntityData& entity_data) const override;
   std::string GetStorageKey(
       const syncer::EntityData& entity_data) const override;
+  sync_pb::EntitySpecifics TrimAllSupportedFieldsFromRemoteSpecifics(
+      const sync_pb::EntitySpecifics& entity_specifics) const override;
   bool IsEntityDataValid(const syncer::EntityData& entity_data) const override;
 
   // Signals that the sync system has received data from the server at some
@@ -254,9 +273,12 @@ class WebAppSyncBridge : public syncer::DataTypeSyncBridge {
   void UpdateSync(const RegistryUpdateData& update_data,
                   syncer::MetadataChangeList* metadata_change_list);
 
-  void OnDatabaseOpened(base::OnceClosure callback,
-                        Registry registry,
-                        std::unique_ptr<syncer::MetadataBatch> metadata_batch);
+  void OnDatabaseOpened(
+      InitCallback callback,
+      Registry registry,
+      std::unique_ptr<syncer::MetadataBatch> metadata_batch,
+      WebAppDatabaseOpenResult result,
+      std::vector<std::pair<webapps::AppId, GURL>> salvaged_apps);
 
   void EnsureShortcutAppToDiyAppMigration();
 

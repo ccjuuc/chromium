@@ -28,7 +28,7 @@ void MessagePort::RevalidatePort() {}
 void MessagePort::DispatchOnConnect(
     mojom::ChannelType channel_type,
     const std::string& channel_name,
-    std::optional<base::Value::Dict> source_tab,
+    std::optional<base::DictValue> source_tab,
     const ExtensionApiFrameIdMap::FrameData& source_frame,
     int guest_process_id,
     int guest_render_frame_routing_id,
@@ -67,7 +67,7 @@ void MessagePort::PostMessage(Message message) {
   if (!weak_channel_delegate_) {
     return;
   }
-  weak_channel_delegate_->PostMessage(port_id_, message);
+  weak_channel_delegate_->PostMessage(port_id_, std::move(message));
 }
 
 void MessagePort::ResponsePending() {

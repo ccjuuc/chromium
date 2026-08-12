@@ -66,7 +66,6 @@ class WebGraphicsContext3DProviderForTests
   const WebglPreferences& GetWebglPreferences() const override {
     return webgl_preferences_;
   }
-  gpu::GLHelper* GetGLHelper() override { return nullptr; }
   void SetLostContextCallback(base::RepeatingClosure) override {}
   void SetErrorMessageCallback(
       base::RepeatingCallback<void(const char*, int32_t id)>) override {}
@@ -242,6 +241,11 @@ class GLES2InterfaceForTests : public gpu::gles2::GLES2InterfaceStub,
     return texture_id;
   }
 
+  GLenum GetGraphicsResetStatusKHR() override {
+    return context_lost_ ? GL_GUILTY_CONTEXT_RESET_ARB : GL_NO_ERROR;
+  }
+  void SetContextLost(bool lost) { context_lost_ = lost; }
+
   MOCK_METHOD1(WaitSyncTokenCHROMIUMMock, void(const GLbyte* sync_token));
   void WaitSyncTokenCHROMIUM(const GLbyte* sync_token) override {
     UNSAFE_TODO(memcpy(&most_recently_waited_sync_token_, sync_token,
@@ -256,6 +260,7 @@ class GLES2InterfaceForTests : public gpu::gles2::GLES2InterfaceStub,
   void DrawingBufferClientRestoreScissorTest() override {
     state_.scissor_enabled = saved_state_.scissor_enabled;
   }
+  void DrawingBufferClientRestoreRasterizerDiscard() override {}
   void DrawingBufferClientRestoreMaskAndClearValues() override {
     UNSAFE_TODO(memcpy(state_.color_mask, saved_state_.color_mask,
                        sizeof(state_.color_mask)));
@@ -402,6 +407,7 @@ class GLES2InterfaceForTests : public gpu::gles2::GLES2InterfaceStub,
   HashMap<GLuint, gfx::Size> image_sizes_;
   HashMap<GLuint, GLuint> image_to_texture_map_;
   gpu::Mailbox last_imported_shared_image_;
+  bool context_lost_ = false;
 };
 
 class DrawingBufferForTests : public DrawingBuffer {
@@ -440,23 +446,21 @@ class DrawingBufferForTests : public DrawingBuffer {
       DrawingBuffer::Client* client,
       PreserveDrawingBuffer preserve,
       bool desynchronized)
-      : DrawingBuffer(
-            std::move(context_provider),
-            context_info,
-            desynchronized,
-            std::move(extensions_util),
-            client,
-            false /* discardFramebufferSupported */,
-            false /* textureStorageEnabled */,
-            true /* wantAlphaChannel */,
-            true /* premultipliedAlpha */,
-            preserve,
-            Platform::kWebGL1ContextType,
-            false /* wantDepth */,
-            false /* wantStencil */,
-            DrawingBuffer::kAllowChromiumImage /* ChromiumImageUsage */,
-            PredefinedColorSpace::kSRGB,
-            gl::GpuPreference::kHighPerformance),
+      : DrawingBuffer(std::move(context_provider),
+                      context_info,
+                      desynchronized,
+                      std::move(extensions_util),
+                      client,
+                      false /* discardFramebufferSupported */,
+                      false /* textureStorageEnabled */,
+                      true /* wantAlphaChannel */,
+                      true /* premultipliedAlpha */,
+                      preserve,
+                      Platform::kWebGL1ContextType,
+                      false /* wantDepth */,
+                      false /* wantStencil */,
+                      PredefinedColorSpace::kSRGB,
+                      gl::GpuPreference::kHighPerformance),
         live_(nullptr) {}
 
   ~DrawingBufferForTests() override {
@@ -477,6 +481,10 @@ class DrawingBufferForTests : public DrawingBuffer {
 
   int RecycledSoftwareResourceCount() {
     return recycled_software_resources_.size();
+  }
+
+  bool HasBackColorBufferForTesting() const {
+    return DrawingBuffer::HasBackColorBufferForTesting();
   }
 };
 

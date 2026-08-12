@@ -7,16 +7,19 @@
 #import "base/memory/raw_ptr.h"
 #import "components/feature_engagement/public/tracker.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_controller.h"
-#import "ios/chrome/browser/lens_overlay/coordinator/lens_overlay_availability.h"
 #import "ios/chrome/browser/lens_overlay/model/lens_overlay_tab_helper.h"
+#import "ios/chrome/browser/lens_overlay/public/lens_overlay_availability.h"
 #import "ios/chrome/browser/shared/coordinator/layout_guide/layout_guide_util.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/fullscreen_commands.h"
 #import "ios/chrome/browser/shared/public/commands/help_commands.h"
 #import "ios/chrome/browser/shared/public/commands/page_side_swipe_commands.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/rtl_geometry.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/side_swipe/ui_bundled/card_swipe_view_delegate.h"
@@ -51,9 +54,14 @@
 
   _sideSwipeUIController = [[SideSwipeUIController alloc]
       initWithFullscreenController:_fullscreenController
+            fullscreenBrowserAgent:FullscreenBrowserAgent::FromBrowser(browser)
                       webStateList:webStateList
               snapshotBrowserAgent:SnapshotBrowserAgent::FromBrowser(browser)];
 
+  if (IsFullscreenRefactoringEnabled()) {
+    _sideSwipeUIController.fullscreenHandler =
+        HandlerForProtocol(browser->GetCommandDispatcher(), FullscreenCommands);
+  }
   _sideSwipeUIController.layoutGuideCenter =
       LayoutGuideCenterForBrowser(self.browser);
   _sideSwipeUIController.toolbarInteractionHandler =

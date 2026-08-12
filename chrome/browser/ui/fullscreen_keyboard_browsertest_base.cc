@@ -13,10 +13,9 @@
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -93,7 +92,7 @@ int FullscreenKeyboardBrowserTestBase::GetTabCount() const {
 }
 
 size_t FullscreenKeyboardBrowserTestBase::GetBrowserCount() const {
-  return chrome::GetTotalBrowserCount();
+  return GlobalBrowserCollection::GetInstance()->GetSize();
 }
 
 BrowserWindowInterface* FullscreenKeyboardBrowserTestBase::GetActiveBrowser()
@@ -104,10 +103,10 @@ BrowserWindowInterface* FullscreenKeyboardBrowserTestBase::GetActiveBrowser()
 BrowserWindowInterface*
 FullscreenKeyboardBrowserTestBase::CreateNewBrowserInstance() {
   BrowserWindowInterface* const first_instance = GetActiveBrowser();
-  const size_t initial_browser_count = GetBrowserCount();
+  ui_test_utils::BrowserCreatedObserver creation_observer;
   EXPECT_NO_FATAL_FAILURE(SendShortcut(ui::VKEY_N));
-  WaitForBrowserCount(initial_browser_count + 1);
-  BrowserWindowInterface* const second_instance = GetActiveBrowser();
+  BrowserWindowInterface* const second_instance = creation_observer.Wait();
+  ui_test_utils::WaitForBrowserSetLastActive(second_instance);
   EXPECT_NE(first_instance, second_instance);
 
   return second_instance;
@@ -418,9 +417,11 @@ void FullscreenKeyboardBrowserTestBase::VerifyShortcutsAreNotPrevented() {
   WaitForTabCount(initial_tab_count);
   ASSERT_EQ(initial_active_index, GetActiveTabIndex());
 
+  ui_test_utils::BrowserCreatedObserver creation_observer;
   // A new window should be created and focused.
   ASSERT_NO_FATAL_FAILURE(SendShortcut(ui::VKEY_N));
-  WaitForBrowserCount(initial_browser_count + 1);
+  Browser* new_browser = creation_observer.Wait();
+  ui_test_utils::WaitForBrowserSetLastActive(new_browser);
   ASSERT_EQ(initial_browser_count + 1, GetBrowserCount());
 
   // The newly created window should be closed.

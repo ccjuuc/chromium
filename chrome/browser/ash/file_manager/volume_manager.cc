@@ -175,13 +175,6 @@ std::string FuseBoxSubdirFSP(
   return base::StrCat({util::kFuseBoxSubdirPrefixFSP, b64});
 }
 
-std::string FuseBoxSubdirLOC(const base::FilePath& path) {
-  std::string hash = crypto::SHA256HashString(path.value());
-  std::string b64;
-  base::Base64UrlEncode(hash, base::Base64UrlEncodePolicy::OMIT_PADDING, &b64);
-  return base::StrCat({util::kFuseBoxSubdirPrefixLOC, b64});
-}
-
 std::string FuseBoxSubdirMTP(const std::string& device_id) {
   // Derive the subdir name from the MTP device ID (which is stable even after
   // unplugging and replugging a phone). It's a hash of the ID, not the ID
@@ -235,54 +228,12 @@ void RecordDownloadsDiskUsageStats(base::FilePath downloads_path) {
   }
 }
 
-std::unique_ptr<Volume> CreateForFuseBoxDownloads(
-    Profile* profile,
-    file_manager::FuseBoxDaemon* fusebox_daemon,
-    const char* fusebox_volume_label) {
-  if (!profile || !fusebox_daemon) {
-    return nullptr;
-  }
-
-  // Get the FileSystemURL for the underlying Downloads folder.
-  GURL gurl;
-  base::FilePath downloads_path = util::GetDownloadsFolderForProfile(profile);
-  if (!util::ConvertAbsoluteFilePathToFileSystemUrl(
-          profile, downloads_path, util::GetFileManagerURL(), &gurl)) {
-    LOG(ERROR) << "could not convert Downloads to FileSystemURL";
-    return nullptr;
-  }
-
-  // Attach the Downloads directory to the fusebox daemon.
-  std::string subdir = FuseBoxSubdirLOC(downloads_path);
-  static constexpr bool read_only = false;
-  fusebox_daemon->AttachStorage(subdir, gurl.spec(), read_only);
-
-  // Create a Volume for the fusebox edition of Downloads.
-  std::unique_ptr<Volume> fusebox_volume = Volume::CreateForDownloads(
-      {}, base::FilePath(util::kFuseBoxMediaPath).Append(subdir),
-      fusebox_volume_label);
-
-  // Register the fusebox file system with chrome::storage.
-  const std::string fusebox_fsid =
-      base::StrCat({util::kFuseBoxMountNamePrefix, subdir});
-  if (!FindExternalMountPoint(fusebox_fsid)) {
-    auto* mount_points = storage::ExternalMountPoints::GetSystemInstance();
-    bool result = mount_points->RegisterFileSystem(
-        fusebox_fsid, storage::kFileSystemTypeFuseBox,
-        storage::FileSystemMountOption(), fusebox_volume->mount_path());
-    LOG_IF(ERROR, !result) << "invalid FuseBox Downloads mount path";
-    DCHECK(result);
-  }
-
-  return fusebox_volume;
-}
-
 bool IsArcEnabled(Profile* profile) {
   return arc::IsArcAllowedForProfile(profile);
 }
 
 bool IsSkyVaultV2Enabled() {
-  return base::FeatureList::IsEnabled(features::kSkyVaultV2);
+  return base::FeatureList::IsEnabled(ash::features::kSkyVaultV2);
 }
 
 }  // namespace
@@ -290,13 +241,15 @@ bool IsSkyVaultV2Enabled() {
 int VolumeManager::counter_ = 0;
 
 VolumeManager::VolumeManager(
+    PrefService* local_state,
     Profile* profile,
     drive::DriveIntegrationService* drive_integration_service,
     chromeos::PowerManagerClient* power_manager_client,
     ash::disks::DiskMountManager* disk_mount_manager,
     ash::file_system_provider::Service* file_system_provider_service,
     GetMtpStorageInfoCallback get_mtp_storage_info_callback)
-    : profile_(profile),
+    : LocalUserFilesPolicyObserver(local_state),
+      profile_(profile),
       drive_integration_service_(drive_integration_service),
       disk_mount_manager_(disk_mount_manager),
       file_system_provider_service_(file_system_provider_service),
@@ -307,8 +260,11 @@ VolumeManager::VolumeManager(
               profile_,
               arc::ArcFileSystemOperationRunner::GetForBrowserContext(
                   profile_))) {
-  DCHECK(profile_);
-  DCHECK(disk_mount_manager_);
+  CHECK(profile_);
+  if (!drive_integration_service_) {
+    CHECK_IS_TEST();
+  }
+  CHECK(disk_mount_manager_);
   VLOG(1) << *this << "::Constructor with Profile: " << profile->GetDebugName();
 }
 
@@ -334,7 +290,8 @@ void VolumeManager::Initialize() {
     fusebox_daemon_ = file_manager::FuseBoxDaemon::GetInstance();
   }
 
-  local_user_files_allowed_ = policy::local_user_files::LocalUserFilesAllowed();
+  local_user_files_allowed_ =
+      policy::local_user_files::LocalUserFilesAllowed(local_state_.get());
   if (local_user_files_allowed_) {
     // Add local folders - MyFiles and ARC if enabled.
     OnLocalUserFilesEnabled();
@@ -352,7 +309,7 @@ void VolumeManager::Initialize() {
   }
 
   // Subscribe to DriveIntegrationService.
-  Observe(drive_integration_service_);
+  drive_observation_.Observe(drive_integration_service_);
   if (drive_integration_service_->IsMounted()) {
     DoMountEvent(Volume::CreateForDrive(GetDriveMountPointPath()));
   }
@@ -410,7 +367,8 @@ void VolumeManager::Initialize() {
 
   // Start Trash autocleanup.
   if (!base::FeatureList::IsEnabled(ash::features::kFilesTrashAutoCleanup)) {
-    trash_auto_cleanup_ = trash::TrashAutoCleanup::Create(profile_);
+    trash_auto_cleanup_ =
+        trash::TrashAutoCleanup::Create(&local_state_.get(), profile_);
   }
 }
 
@@ -435,7 +393,7 @@ void VolumeManager::Shutdown() {
     p->RemoveObserver(this);
   }
 
-  drive::DriveIntegrationService::Observer::Reset();
+  drive_observation_.Reset();
 
   if (file_system_provider_service_) {
     file_system_provider_service_->RemoveObserver(this);
@@ -689,6 +647,10 @@ void VolumeManager::OnFileSystemMounted() {
 void VolumeManager::OnFileSystemBeingUnmounted() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DoUnmountEvent(*Volume::CreateForDrive(GetDriveMountPointPath()));
+}
+
+void VolumeManager::OnDriveIntegrationServiceDestroyed() {
+  drive_observation_.Reset();
 }
 
 void VolumeManager::OnAutoMountableDiskEvent(
@@ -1034,7 +996,8 @@ void VolumeManager::OnLocalUserFilesPolicyChanged() {
     return;
   }
 
-  bool allowed = policy::local_user_files::LocalUserFilesAllowed();
+  bool allowed =
+      policy::local_user_files::LocalUserFilesAllowed(local_state_.get());
   if (allowed == local_user_files_allowed_) {
     return;
   }
@@ -1091,7 +1054,7 @@ void VolumeManager::OnExternalStorageDisabledChangedUnmountCallback(
   while (!remaining_mount_paths.empty()) {
     std::string mount_path = remaining_mount_paths.back();
     remaining_mount_paths.pop_back();
-    if (!base::Contains(disk_mount_manager_->mount_points(), mount_path)) {
+    if (!disk_mount_manager_->mount_points().contains(mount_path)) {
       // The mount point could have already been removed for another reason
       // (i.e. the disk was removed by the user).
       continue;
@@ -1459,8 +1422,8 @@ void VolumeManager::OnClipboardDataChanged() {
     return;
   }
 
-  base::Pickle pickle =
-      base::Pickle::WithUnownedBuffer(base::as_byte_span(web_custom_data));
+  const base::Pickle pickle =
+      base::Pickle::WithData(base::as_byte_span(web_custom_data));
   std::vector<ui::FileInfo> file_info =
       file_manager::util::ParseFileSystemSources(
           base::OptionalToPtr(data->source()), pickle);
@@ -1723,12 +1686,6 @@ void VolumeManager::MountDownloadsVolume(bool read_only) {
   const bool success = RegisterDownloadsMountPoint(profile_, localVolume);
   DCHECK(success);
   DoMountEvent(Volume::CreateForDownloads(localVolume, {}, nullptr, read_only));
-  if (ash::features::IsFileManagerFuseBoxDebugEnabled()) {
-    if (auto volume = CreateForFuseBoxDownloads(profile_, fusebox_daemon_.get(),
-                                                "fusebox Downloads")) {
-      DoMountEvent(std::move(volume));
-    }
-  }
 
   // Asynchronously record the disk usage for the downloads path.
   base::ThreadPool::PostTask(
@@ -1743,12 +1700,6 @@ void VolumeManager::UnmountDownloadsVolume() {
       file_manager::util::GetMyFilesFolderForProfile(profile_);
   RevokeDownloadsMountPoint(profile_, localVolume);
   DoUnmountEvent(*Volume::CreateForDownloads(localVolume));
-  if (ash::features::IsFileManagerFuseBoxDebugEnabled()) {
-    if (auto volume = CreateForFuseBoxDownloads(profile_, fusebox_daemon_.get(),
-                                                "fusebox Downloads")) {
-      DoUnmountEvent(*volume);
-    }
-  }
 }
 
 void VolumeManager::MountArcRoots() {
@@ -1822,13 +1773,13 @@ void VolumeManager::UnsubscribeAndUnmountArc() {
 }
 
 void VolumeManager::OnLocalUserFilesEnabled() {
-  CHECK(policy::local_user_files::LocalUserFilesAllowed());
+  CHECK(policy::local_user_files::LocalUserFilesAllowed(local_state_.get()));
   MountDownloadsVolume();
   SubscribeAndMountArc();
 }
 
 void VolumeManager::OnLocalUserFilesDisabled() {
-  CHECK(!policy::local_user_files::LocalUserFilesAllowed());
+  CHECK(!policy::local_user_files::LocalUserFilesAllowed(local_state_.get()));
   UnsubscribeAndUnmountArc();
   UnmountDownloadsVolume();
   if (IsSkyVaultV2Enabled() && read_only_local_folders_) {
@@ -1838,7 +1789,7 @@ void VolumeManager::OnLocalUserFilesDisabled() {
 }
 
 void VolumeManager::OnMigrationSucceeded() {
-  if (policy::local_user_files::LocalUserFilesAllowed()) {
+  if (policy::local_user_files::LocalUserFilesAllowed(local_state_.get())) {
     LOG(ERROR)
         << "OnMigrationSucceeded() called but local files allowed, ignoring.";
     return;

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/web_app_id_constants.h"
 #include "ash/webui/file_manager/url_constants.h"
 #include "base/feature_list.h"
@@ -25,7 +26,6 @@
 #include "chrome/browser/apps/app_service/app_icon_source.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
-#include "chrome/browser/apps/app_service/launch_result_type.h"
 #include "chrome/browser/apps/app_service/launch_utils.h"
 #include "chrome/browser/apps/app_service/policy_util.h"
 #include "chrome/browser/ash/crostini/crostini_features.h"
@@ -39,17 +39,14 @@
 #include "chrome/browser/chromeos/upload_office_to_cloud/upload_office_to_cloud.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/hats_office_trigger.h"
-#include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
-#include "chrome/browser/web_applications/web_app_provider.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/extensions/api/file_manager_private.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/file_manager/app_id.h"
 #include "components/prefs/pref_service.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/intent.h"
 #include "components/services/app_service/public/cpp/intent_util.h"
+#include "components/services/app_service/public/cpp/launch_result.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/entry_info.h"
 #include "extensions/browser/extension_registry.h"
@@ -61,22 +58,20 @@
 namespace file_manager::file_tasks {
 
 extensions::api::file_manager_private::TaskResult
-ConvertLaunchResultToTaskResult(const apps::LaunchResult& result,
-                                TaskType task_type) {
+ConvertLaunchResultToTaskResult(apps::LaunchResult result, TaskType task_type) {
   // TODO(benwells): return the correct code here, depending
   // on how the app will be opened in multiprofile.
   namespace fmp = extensions::api::file_manager_private;
-  switch (result.state) {
-    case apps::State::kSuccess:
+  switch (result) {
+    case apps::LaunchResult::kSuccess:
       if (task_type == TASK_TYPE_WEB_APP) {
         return fmp::TaskResult::kOpened;
       } else {
         return fmp::TaskResult::kMessageSent;
       }
-    case apps::State::kFailedDirectoryNotShared:
-      DCHECK(task_type == TASK_TYPE_PLUGIN_VM_APP);
-      return fmp::TaskResult::kFailedPluginVmDirectoryNotShared;
-    case apps::State::kFailed:
+    case apps::LaunchResult::kFailedDirectoryNotShared:
+      return fmp::TaskResult::kFailed;
+    case apps::LaunchResult::kFailed:
       return fmp::TaskResult::kFailed;
   }
 }
@@ -101,11 +96,10 @@ TaskType GetTaskType(apps::AppType app_type) {
       return TASK_TYPE_BRUSCHETTA_APP;
     case apps::AppType::kCrostini:
       return TASK_TYPE_CROSTINI_APP;
-    case apps::AppType::kPluginVm:
-      return TASK_TYPE_PLUGIN_VM_APP;
     case apps::AppType::kUnknown:
     case apps::AppType::kRemote:
     case apps::AppType::kBorealis:
+    case apps::AppType::kPluginVm:
       return TASK_TYPE_UNKNOWN;
   }
 }
@@ -221,7 +215,7 @@ void FindAppServiceTasks(Profile* profile,
 
   // App Service doesn't exist in Incognito mode but we still want to find
   // handlers to open a download from its notification from Incognito mode. Use
-  // the base profile in these cases (see crbug.com/1111695).
+  // the base profile in these cases (see crbug.com/40709322).
   Profile* profile_with_app_service = GetProfileWithAppService(profile);
   if (!profile_with_app_service) {
     LOG(WARNING) << "Unexpected profile type";
@@ -247,33 +241,15 @@ void FindAppServiceTasks(Profile* profile,
       proxy->GetAppsForFiles(std::move(intent_files));
 
   std::vector<apps::AppType> supported_app_types = {
-      apps::AppType::kArc,
-      apps::AppType::kWeb,
-      apps::AppType::kSystemWeb,
-      apps::AppType::kChromeApp,
-      apps::AppType::kExtension,
-      apps::AppType::kBruschetta,
+      apps::AppType::kArc,       apps::AppType::kWeb,
+      apps::AppType::kSystemWeb, apps::AppType::kChromeApp,
+      apps::AppType::kExtension, apps::AppType::kBruschetta,
       apps::AppType::kCrostini,
-      apps::AppType::kPluginVm,
   };
   for (auto& launch_entry : intent_launch_info) {
     auto app_type = proxy->AppRegistryCache().GetAppType(launch_entry.app_id);
-    if (!base::Contains(supported_app_types, app_type)) {
+    if (!std::ranges::contains(supported_app_types, app_type)) {
       continue;
-    }
-
-    if (app_type == apps::AppType::kWeb ||
-        app_type == apps::AppType::kSystemWeb) {
-      // Check the origin trial and feature flag for file handling in web apps.
-      // TODO(crbug.com/255838199): Remove when this feature is fully launched.
-      web_app::WebAppProvider* provider =
-          web_app::WebAppProvider::GetDeprecated(profile_with_app_service);
-      web_app::OsIntegrationManager& os_integration_manager =
-          provider->os_integration_manager();
-      if (!os_integration_manager.IsFileHandlingAPIAvailable(
-              launch_entry.app_id)) {
-        continue;
-      }
     }
 
     if (app_type == apps::AppType::kChromeApp ||
@@ -285,8 +261,7 @@ void FindAppServiceTasks(Profile* profile,
     }
 
     if ((app_type == apps::AppType::kBruschetta ||
-         app_type == apps::AppType::kCrostini ||
-         app_type == apps::AppType::kPluginVm) &&
+         app_type == apps::AppType::kCrostini) &&
         !files_shareable_to_vm) {
       continue;
     }
@@ -324,7 +299,7 @@ void ExecuteAppServiceTask(
   // App Service doesn't exist in Incognito mode but apps can be
   // launched (ie. default handler to open a download from its
   // notification) from Incognito mode. Use the base profile in these
-  // cases (see crbug.com/1111695).
+  // cases (see crbug.com/40709322).
   Profile* profile_with_app_service = GetProfileWithAppService(profile);
   if (!profile_with_app_service) {
     std::move(done).Run(
@@ -340,7 +315,7 @@ void ExecuteAppServiceTask(
   // In general, WebApps only have full support for files backed by inodes, so
   // substitute Fusebox files for any "non-real" file paths. However, the Media
   // app and other SWAs can handle "non-real" files, as can special tasks which
-  // only access the file via URL. See https://crbug.com/1079065
+  // only access the file via URL. See https://crbug.com/40129780
   bool use_fusebox_for_non_real_file_paths = false;
   if (app_type == apps::AppType::kWeb ||
       app_type == apps::AppType::kSystemWeb) {
@@ -367,14 +342,13 @@ void ExecuteAppServiceTask(
          task.task_type == TASK_TYPE_FILE_HANDLER ||
          task.task_type == TASK_TYPE_BRUSCHETTA_APP ||
          task.task_type == TASK_TYPE_CROSTINI_APP ||
-         task.task_type == TASK_TYPE_PLUGIN_VM_APP ||
          task.task_type == TASK_TYPE_ARC_APP);
 
   apps::IntentPtr intent = std::make_unique<apps::Intent>(
       apps_util::kIntentActionView, std::move(intent_files));
   intent->activity_name = task.action_id;
 
-  if (base::FeatureList::IsEnabled(::features::kHappinessTrackingOffice) &&
+  if (base::FeatureList::IsEnabled(ash::features::kHappinessTrackingOffice) &&
       task.app_id == extension_misc::kQuickOfficeComponentExtensionId &&
       task.action_id == kActionIdQuickOffice) {
     auto survey_launching_app =
@@ -393,7 +367,7 @@ void ExecuteAppServiceTask(
       /*window_info=*/nullptr,
       base::BindOnce(
           [](FileTaskFinishedCallback done, TaskType task_type,
-             apps::LaunchResult&& result) {
+             apps::LaunchResult result) {
             std::move(done).Run(
                 ConvertLaunchResultToTaskResult(result, task_type), "");
           },
@@ -404,8 +378,8 @@ bool ChooseAndSetDefaultTaskFromPolicyPrefs(
     Profile* profile,
     const std::vector<extensions::EntryInfo>& entries,
     ResultingTasks* resulting_tasks) {
-  const auto& policy_default_handlers =
-      profile->GetPrefs()->GetDict(prefs::kDefaultHandlersForFileExtensions);
+  const auto& policy_default_handlers = profile->GetPrefs()->GetDict(
+      ash::prefs::kDefaultHandlersForFileExtensions);
 
   // Check that there are no conflicting assignments for the given set of
   // entries.
@@ -448,7 +422,7 @@ bool ChooseAndSetDefaultTaskFromPolicyPrefs(
         apps_util::GetAppIdsFromPolicyId(profile, policy_id);
     for (auto& task : resulting_tasks->tasks) {
       const auto& td = task.task_descriptor;
-      if (base::Contains(app_ids, td.app_id)) {
+      if (std::ranges::contains(app_ids, td.app_id)) {
         filtered_tasks.push_back(&task);
       }
     }

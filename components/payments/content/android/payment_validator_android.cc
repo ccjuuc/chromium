@@ -12,17 +12,19 @@
 #include "base/android/jni_android.h"
 #include "components/payments/content/android/byte_buffer_helper.h"
 #include "components/payments/content/payment_request_converter.h"
+#include "components/payments/content/secure_payment_confirmation_validation.h"
 #include "components/payments/core/payment_details.h"
 #include "components/payments/core/payment_details_validation.h"
 #include "components/payments/core/payments_validators.h"
 #include "third_party/blink/public/mojom/payments/payment_request.mojom.h"
+#include "url/origin.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "components/payments/content/android/jni_headers/PaymentValidator_jni.h"
 
 namespace payments {
 
-static jboolean JNI_PaymentValidator_ValidatePaymentDetailsAndroid(
+static bool JNI_PaymentValidator_ValidatePaymentDetailsAndroid(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& buffer) {
   mojom::PaymentDetailsPtr details;
@@ -35,7 +37,7 @@ static jboolean JNI_PaymentValidator_ValidatePaymentDetailsAndroid(
                                 &unused_error_message);
 }
 
-static jboolean JNI_PaymentValidator_ValidatePaymentValidationErrorsAndroid(
+static bool JNI_PaymentValidator_ValidatePaymentValidationErrorsAndroid(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& buffer) {
   mojom::PaymentValidationErrorsPtr errors;
@@ -47,6 +49,22 @@ static jboolean JNI_PaymentValidator_ValidatePaymentValidationErrorsAndroid(
   std::string unused_error_message;
   return PaymentsValidators::IsValidPaymentValidationErrorsFormat(
       errors, &unused_error_message);
+}
+
+static jint
+JNI_PaymentValidator_ValidateSecurePaymentConfirmationRequestAndroid(
+    JNIEnv* env,
+    const base::android::JavaRef<jobject>& buffer,
+    const url::Origin& initiator_origin) {
+  mojom::SecurePaymentConfirmationRequestPtr request;
+  auto span = base::android::JavaByteBufferToSpan(env, buffer);
+  if (!mojom::SecurePaymentConfirmationRequest::Deserialize(
+          span.data(), span.size(), &request)) {
+    return static_cast<jint>(
+        SecurePaymentConfirmationRequestValidationError::kInternalError);
+  }
+  return static_cast<jint>(
+      IsValidSecurePaymentConfirmationRequest(request, initiator_origin));
 }
 
 }  // namespace payments

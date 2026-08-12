@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/autofill/payments/save_payment_method_and_virtual_card_enroll_confirmation_bubble_views.h"
+
 #include <optional>
 
 #include "base/strings/strcat.h"
@@ -12,18 +14,19 @@
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/autofill/payments/dialog_view_ids.h"
 #include "chrome/browser/ui/views/autofill/payments/save_card_bubble_views.h"
-#include "chrome/browser/ui/views/autofill/payments/save_payment_icon_view.h"
-#include "chrome/browser/ui/views/autofill/payments/save_payment_method_and_virtual_card_enroll_confirmation_bubble_views.h"
-#include "chrome/browser/ui/views/autofill/payments/virtual_card_enroll_icon_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
+#include "chrome/browser/ui/views/location_bar/icon_label_bubble_view.h"
+#include "chrome/browser/ui/views/page_action/test_support/page_action_test_support.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/test/browser_test.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/controls/styled_label.h"
 #include "ui/views/test/ax_event_counter.h"
 #include "ui/views/test/widget_test.h"
 
@@ -31,27 +34,25 @@ namespace autofill {
 
 class SaveCardConfirmationBubbleViewsInteractiveUiTest
     : public InProcessBrowserTest,
-      public ::testing::WithParamInterface<bool> {
+      public ::testing::WithParamInterface<std::tuple<bool, bool>> {
  public:
   SaveCardConfirmationBubbleViewsInteractiveUiTest() {
-    const bool is_page_action_migration_enabled = GetParam();
     std::vector<base::test::FeatureRefAndParams> enabled_features = {};
     std::vector<base::test::FeatureRef> disabled_features = {};
-
-    if (is_page_action_migration_enabled) {
-      enabled_features.push_back(
-          {::features::kPageActionsMigration,
-           {
-               {::features::kPageActionsMigrationSavePayments.name, "true"},
-           }});
+    if (IsWalletBrandingEnabled()) {
+      enabled_features.push_back({features::kAutofillEnableWalletBranding, {}});
     } else {
-      disabled_features.emplace_back(::features::kPageActionsMigration);
+      disabled_features.emplace_back(features::kAutofillEnableWalletBranding);
+    }
+    if (IsWalletBrandingV2Enabled()) {
+      enabled_features.push_back(
+          {features::kAutofillEnableWalletBrandingV2, {}});
+    } else {
+      disabled_features.emplace_back(features::kAutofillEnableWalletBrandingV2);
     }
 
     feature_list_.InitWithFeaturesAndParameters(enabled_features,
                                                 disabled_features);
-
-    CHECK_EQ(IsPageActionMigrationEnabled(), is_page_action_migration_enabled);
   }
   ~SaveCardConfirmationBubbleViewsInteractiveUiTest() override = default;
   SaveCardConfirmationBubbleViewsInteractiveUiTest(
@@ -87,21 +88,17 @@ class SaveCardConfirmationBubbleViewsInteractiveUiTest
   IconLabelBubbleView* IconView() {
     BrowserView* browser_view =
         BrowserView::GetBrowserViewForBrowser(browser());
-    IconLabelBubbleView* icon;
-    if (IsPageActionMigrationEnabled()) {
-      icon = browser_view->toolbar_button_provider()->GetPageActionView(
-          kActionShowPaymentsBubbleOrPage);
-    } else {
-      icon = browser_view->toolbar_button_provider()->GetPageActionIconView(
-          PageActionIconType::kSaveCard);
-    }
+    auto* provider = browser_view->toolbar_button_provider();
+    IconLabelBubbleView* icon = page_actions::GetIconLabelBubbleViewForTesting(
+        provider->GetPageActionViewInterface(kActionShowPaymentsBubbleOrPage),
+        kActionShowPaymentsBubbleOrPage);
     CHECK(icon);
     return icon;
   }
 
-  void ShowBubble(bool card_saved) {
+  void ShowBubble(bool card_saved, bool is_for_save_and_fill) {
     GetController()->ShowConfirmationBubbleView(
-        card_saved,
+        card_saved, is_for_save_and_fill,
         /*on_confirmation_closed_callback=*/std::nullopt);
   }
 
@@ -112,9 +109,8 @@ class SaveCardConfirmationBubbleViewsInteractiveUiTest
     destroyed_waiter.Wait();
   }
 
-  bool IsPageActionMigrationEnabled() {
-    return IsPageActionMigrated(PageActionIconType::kSaveCard);
-  }
+  bool IsWalletBrandingEnabled() { return std::get<0>(GetParam()); }
+  bool IsWalletBrandingV2Enabled() { return std::get<1>(GetParam()); }
 
  private:
   test::AutofillBrowserTestEnvironment autofill_test_environment_;
@@ -126,7 +122,7 @@ IN_PROC_BROWSER_TEST_P(SaveCardConfirmationBubbleViewsInteractiveUiTest,
   views::test::AXEventCounter counter(views::AXUpdateNotifier::Get());
   EXPECT_EQ(0, counter.GetCount(ax::mojom::Event::kAlert));
 
-  ShowBubble(/*card_saved=*/true);
+  ShowBubble(/*card_saved=*/true, /*is_for_save_and_fill=*/false);
 
   EXPECT_NE(BubbleView(), nullptr);
   // Checks the count of accessibility event registered by AXUpdateNotifier when
@@ -138,23 +134,44 @@ IN_PROC_BROWSER_TEST_P(SaveCardConfirmationBubbleViewsInteractiveUiTest,
                   ->GetBubbleFrameView()
                   ->GetHeaderViewForTesting()
                   ->GetVisible());
-  EXPECT_NE(BubbleView()->GetBubbleFrameView()->title(), nullptr);
   EXPECT_EQ(BubbleView()->GetWindowTitle(),
             l10n_util::GetStringUTF16(
                 IDS_AUTOFILL_SAVE_CARD_CONFIRMATION_SUCCESS_TITLE_TEXT));
   EXPECT_TRUE(
       BubbleView()->GetViewByID(DialogViewId::DESCRIPTION_LABEL)->GetVisible());
-  EXPECT_EQ(static_cast<views::Label*>(
-                BubbleView()->GetViewByID(DialogViewId::DESCRIPTION_LABEL))
-                ->GetText(),
-            l10n_util::GetStringUTF16(
-                IDS_AUTOFILL_SAVE_CARD_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT));
-  EXPECT_EQ(static_cast<views::Label*>(
-                BubbleView()->GetViewByID(DialogViewId::DESCRIPTION_LABEL))
-                ->GetViewAccessibility()
-                .GetCachedName(),
-            l10n_util::GetStringUTF16(
-                IDS_AUTOFILL_SAVE_CARD_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT));
+  if (IsWalletBrandingEnabled()) {
+    EXPECT_EQ(
+        static_cast<views::StyledLabel*>(
+            BubbleView()->GetViewByID(DialogViewId::DESCRIPTION_LABEL))
+            ->GetText(),
+        l10n_util::GetStringUTF16(
+            IsWalletBrandingV2Enabled()
+                ? IDS_AUTOFILL_SAVE_CARD_TO_WALLET_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT_V2
+                : IDS_AUTOFILL_SAVE_CARD_TO_WALLET_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT));
+    EXPECT_EQ(
+        static_cast<views::StyledLabel*>(
+            BubbleView()->GetViewByID(DialogViewId::DESCRIPTION_LABEL))
+            ->GetViewAccessibility()
+            .GetCachedName(),
+        l10n_util::GetStringUTF16(
+            IsWalletBrandingV2Enabled()
+                ? IDS_AUTOFILL_SAVE_CARD_TO_WALLET_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT_V2
+                : IDS_AUTOFILL_SAVE_CARD_TO_WALLET_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT));
+  } else {
+    EXPECT_EQ(
+        static_cast<views::StyledLabel*>(
+            BubbleView()->GetViewByID(DialogViewId::DESCRIPTION_LABEL))
+            ->GetText(),
+        l10n_util::GetStringUTF16(
+            IDS_AUTOFILL_SAVE_CARD_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT));
+    EXPECT_EQ(
+        static_cast<views::StyledLabel*>(
+            BubbleView()->GetViewByID(DialogViewId::DESCRIPTION_LABEL))
+            ->GetViewAccessibility()
+            .GetCachedName(),
+        l10n_util::GetStringUTF16(
+            IDS_AUTOFILL_SAVE_CARD_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT));
+  }
   EXPECT_EQ(BubbleView()->buttons(),
             static_cast<int>(ui::mojom::DialogButton::kNone));
   EXPECT_TRUE(IconView()->GetVisible());
@@ -165,10 +182,37 @@ IN_PROC_BROWSER_TEST_P(SaveCardConfirmationBubbleViewsInteractiveUiTest,
 }
 
 IN_PROC_BROWSER_TEST_P(SaveCardConfirmationBubbleViewsInteractiveUiTest,
+                       ShowSuccessBubbleView_TitleIcon) {
+  ShowBubble(/*card_saved=*/true, /*is_for_save_and_fill=*/false);
+
+  EXPECT_NE(BubbleView(), nullptr);
+  EXPECT_NE(BubbleView()->GetBubbleFrameView()->title()->GetViewByID(
+                DialogViewId::BUBBLE_TITLE_ICON),
+            nullptr);
+}
+
+IN_PROC_BROWSER_TEST_P(SaveCardConfirmationBubbleViewsInteractiveUiTest,
+                       ShowSuccessBubbleView_TitleIcon_SaveAndFill) {
+  ShowBubble(/*card_saved=*/true, /*is_for_save_and_fill=*/true);
+
+  EXPECT_NE(BubbleView(), nullptr);
+
+  if (IsWalletBrandingEnabled()) {
+    EXPECT_EQ(BubbleView()->GetBubbleFrameView()->title()->GetViewByID(
+                  DialogViewId::BUBBLE_TITLE_ICON),
+              nullptr);
+  } else {
+    EXPECT_NE(BubbleView()->GetBubbleFrameView()->title()->GetViewByID(
+                  DialogViewId::BUBBLE_TITLE_ICON),
+              nullptr);
+  }
+}
+
+IN_PROC_BROWSER_TEST_P(SaveCardConfirmationBubbleViewsInteractiveUiTest,
                        ShowFailureBubbleViewThenHideBubbleView) {
   views::test::AXEventCounter counter(views::AXUpdateNotifier::Get());
   EXPECT_EQ(0, counter.GetCount(ax::mojom::Event::kAlert));
-  ShowBubble(/*card_saved=*/false);
+  ShowBubble(/*card_saved=*/false, /*is_for_save_and_fill=*/false);
 
   EXPECT_NE(BubbleView(), nullptr);
   // Checks the count of accessibility event registered by AXUpdateNotifier when
@@ -178,23 +222,28 @@ IN_PROC_BROWSER_TEST_P(SaveCardConfirmationBubbleViewsInteractiveUiTest,
   EXPECT_FALSE(BubbleView()->ShouldShowCloseButton());
   EXPECT_EQ(BubbleView()->GetBubbleFrameView()->GetHeaderViewForTesting(),
             nullptr);
-  EXPECT_NE(BubbleView()->GetBubbleFrameView()->title(), nullptr);
   EXPECT_EQ(BubbleView()->GetWindowTitle(),
             l10n_util::GetStringUTF16(
                 IDS_AUTOFILL_SAVE_CARD_CONFIRMATION_FAILURE_TITLE_TEXT));
   EXPECT_TRUE(
       BubbleView()->GetViewByID(DialogViewId::DESCRIPTION_LABEL)->GetVisible());
-  EXPECT_EQ(static_cast<views::Label*>(
-                BubbleView()->GetViewByID(DialogViewId::DESCRIPTION_LABEL))
-                ->GetText(),
-            l10n_util::GetStringUTF16(
-                IDS_AUTOFILL_SAVE_CARD_CONFIRMATION_FAILURE_DESCRIPTION_TEXT));
-  EXPECT_EQ(static_cast<views::Label*>(
-                BubbleView()->GetViewByID(DialogViewId::DESCRIPTION_LABEL))
-                ->GetViewAccessibility()
-                .GetCachedName(),
-            l10n_util::GetStringUTF16(
-                IDS_AUTOFILL_SAVE_CARD_CONFIRMATION_FAILURE_DESCRIPTION_TEXT));
+  EXPECT_EQ(
+      static_cast<views::StyledLabel*>(
+          BubbleView()->GetViewByID(DialogViewId::DESCRIPTION_LABEL))
+          ->GetText(),
+      l10n_util::GetStringUTF16(
+          IsWalletBrandingEnabled()
+              ? IDS_AUTOFILL_SAVE_CARD_TO_WALLET_CONFIRMATION_FAILURE_DESCRIPTION_TEXT
+              : IDS_AUTOFILL_SAVE_CARD_CONFIRMATION_FAILURE_DESCRIPTION_TEXT));
+  EXPECT_EQ(
+      static_cast<views::StyledLabel*>(
+          BubbleView()->GetViewByID(DialogViewId::DESCRIPTION_LABEL))
+          ->GetViewAccessibility()
+          .GetCachedName(),
+      l10n_util::GetStringUTF16(
+          IsWalletBrandingEnabled()
+              ? IDS_AUTOFILL_SAVE_CARD_TO_WALLET_CONFIRMATION_FAILURE_DESCRIPTION_TEXT
+              : IDS_AUTOFILL_SAVE_CARD_CONFIRMATION_FAILURE_DESCRIPTION_TEXT));
   EXPECT_EQ(BubbleView()->buttons(),
             static_cast<int>(ui::mojom::DialogButton::kOk));
   EXPECT_EQ(
@@ -204,7 +253,7 @@ IN_PROC_BROWSER_TEST_P(SaveCardConfirmationBubbleViewsInteractiveUiTest,
   EXPECT_EQ(
       BubbleView()->GetOkButton()->GetViewAccessibility().GetCachedName(),
       l10n_util::GetStringUTF16(
-          IDS_AUTOFILL_SAVE_CARD_CONFIRMATION_FAILURE_OK_BUTTON_ACCESSIBLE_NAME));
+          IDS_AUTOFILL_SAVE_CARD_AND_VIRTUAL_CARD_ENROLL_CONFIRMATION_BUTTON_TEXT));
   EXPECT_TRUE(IconView()->GetVisible());
 
   HideBubble(views::Widget::ClosedReason::kLostFocus);
@@ -212,14 +261,53 @@ IN_PROC_BROWSER_TEST_P(SaveCardConfirmationBubbleViewsInteractiveUiTest,
   EXPECT_FALSE(IconView()->GetVisible());
 }
 
+IN_PROC_BROWSER_TEST_P(SaveCardConfirmationBubbleViewsInteractiveUiTest,
+                       ShowFailureBubbleView_TitleIcon) {
+  ShowBubble(/*card_saved=*/false, /*is_for_save_and_fill=*/false);
+
+  EXPECT_NE(BubbleView(), nullptr);
+  EXPECT_EQ(BubbleView()->GetBubbleFrameView()->GetHeaderViewForTesting(),
+            nullptr);
+
+  if (IsWalletBrandingEnabled()) {
+    EXPECT_EQ(BubbleView()->GetBubbleFrameView()->title()->GetViewByID(
+                  DialogViewId::BUBBLE_TITLE_ICON),
+              nullptr);
+  } else {
+    EXPECT_NE(BubbleView()->GetBubbleFrameView()->title()->GetViewByID(
+                  DialogViewId::BUBBLE_TITLE_ICON),
+              nullptr);
+  }
+}
+
+IN_PROC_BROWSER_TEST_P(SaveCardConfirmationBubbleViewsInteractiveUiTest,
+                       ShowFailureBubbleView_TitleIcon_SaveAndFill) {
+  ShowBubble(/*card_saved=*/false, /*is_for_save_and_fill=*/true);
+
+  EXPECT_NE(BubbleView(), nullptr);
+  EXPECT_EQ(BubbleView()->GetBubbleFrameView()->GetHeaderViewForTesting(),
+            nullptr);
+
+  if (IsWalletBrandingEnabled()) {
+    EXPECT_EQ(BubbleView()->GetBubbleFrameView()->title()->GetViewByID(
+                  DialogViewId::BUBBLE_TITLE_ICON),
+              nullptr);
+  } else {
+    EXPECT_NE(BubbleView()->GetBubbleFrameView()->title()->GetViewByID(
+                  DialogViewId::BUBBLE_TITLE_ICON),
+              nullptr);
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     ,
     SaveCardConfirmationBubbleViewsInteractiveUiTest,
-    ::testing::Bool(),
+    testing::Combine(testing::Bool(), testing::Bool()),
     [](const ::testing::TestParamInfo<
         SaveCardConfirmationBubbleViewsInteractiveUiTest::ParamType>& info) {
       return base::StrCat({
-          info.param ? "NewPageAction" : "OldPageAction",
+          std::get<0>(info.param) ? "BrandingFlagOn" : "BrandingFlagOff",
+          std::get<1>(info.param) ? "BrandingV2FlagOn" : "BrandingV2FlagOff",
       });
     });
 
@@ -228,17 +316,13 @@ class VirtualCardEnrollConfirmationBubbleViewsInteractiveUiTest
       public ::testing::WithParamInterface<bool> {
  public:
   VirtualCardEnrollConfirmationBubbleViewsInteractiveUiTest() {
+    const bool is_wallet_branding_enabled = IsWalletBrandingEnabled();
     std::vector<base::test::FeatureRefAndParams> enabled_features = {};
     std::vector<base::test::FeatureRef> disabled_features = {};
-
-    if (GetParam()) {
-      enabled_features.push_back(
-          {::features::kPageActionsMigration,
-           {
-               {::features::kPageActionsMigrationVirtualCard.name, "true"},
-           }});
+    if (is_wallet_branding_enabled) {
+      enabled_features.push_back({features::kAutofillEnableWalletBranding, {}});
     } else {
-      disabled_features.emplace_back(::features::kPageActionsMigration);
+      disabled_features.emplace_back(features::kAutofillEnableWalletBranding);
     }
 
     feature_list_.InitWithFeaturesAndParameters(enabled_features,
@@ -282,9 +366,10 @@ class VirtualCardEnrollConfirmationBubbleViewsInteractiveUiTest
   IconLabelBubbleView* IconView() {
     BrowserView* browser_view =
         BrowserView::GetBrowserViewForBrowser(browser());
-    IconLabelBubbleView* icon =
-        browser_view->toolbar_button_provider()->GetPageActionView(
-            kActionVirtualCardEnroll);
+    auto* provider = browser_view->toolbar_button_provider();
+    IconLabelBubbleView* icon = page_actions::GetIconLabelBubbleViewForTesting(
+        provider->GetPageActionViewInterface(kActionVirtualCardEnroll),
+        kActionVirtualCardEnroll);
     CHECK(icon);
     return icon;
   }
@@ -296,6 +381,8 @@ class VirtualCardEnrollConfirmationBubbleViewsInteractiveUiTest
             : payments::PaymentsAutofillClient::PaymentsRpcResult::
                   kPermanentFailure);
   }
+
+  bool IsWalletBrandingEnabled() { return GetParam(); }
 
  private:
   test::AutofillBrowserTestEnvironment autofill_test_environment_;
@@ -327,13 +414,13 @@ IN_PROC_BROWSER_TEST_P(
   EXPECT_TRUE(
       BubbleView()->GetViewByID(DialogViewId::DESCRIPTION_LABEL)->GetVisible());
   EXPECT_EQ(
-      static_cast<views::Label*>(
+      static_cast<views::StyledLabel*>(
           BubbleView()->GetViewByID(DialogViewId::DESCRIPTION_LABEL))
           ->GetText(),
       l10n_util::GetStringUTF16(
           IDS_AUTOFILL_VIRTUAL_CARD_ENROLL_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT));
   EXPECT_EQ(
-      static_cast<views::Label*>(
+      static_cast<views::StyledLabel*>(
           BubbleView()->GetViewByID(DialogViewId::DESCRIPTION_LABEL))
           ->GetViewAccessibility()
           .GetCachedName(),
@@ -346,6 +433,25 @@ IN_PROC_BROWSER_TEST_P(
   GetController()->HideIconAndBubble();
   EXPECT_EQ(BubbleView(), nullptr);
   EXPECT_FALSE(IconView()->GetVisible());
+}
+
+IN_PROC_BROWSER_TEST_P(
+    VirtualCardEnrollConfirmationBubbleViewsInteractiveUiTest,
+    ShowSuccessBubbleView_TitleIcon) {
+  ShowBubble(/*is_vcn_enrolled=*/true);
+
+  EXPECT_NE(BubbleView(), nullptr);
+  EXPECT_NE(BubbleView()->GetBubbleFrameView()->title(), nullptr);
+
+  if (IsWalletBrandingEnabled()) {
+    EXPECT_EQ(BubbleView()->GetBubbleFrameView()->title()->GetViewByID(
+                  DialogViewId::BUBBLE_TITLE_ICON),
+              nullptr);
+  } else {
+    EXPECT_NE(BubbleView()->GetBubbleFrameView()->title()->GetViewByID(
+                  DialogViewId::BUBBLE_TITLE_ICON),
+              nullptr);
+  }
 }
 
 IN_PROC_BROWSER_TEST_P(
@@ -378,14 +484,14 @@ IN_PROC_BROWSER_TEST_P(
   EXPECT_TRUE(
       BubbleView()->GetViewByID(DialogViewId::DESCRIPTION_LABEL)->GetVisible());
   EXPECT_EQ(
-      static_cast<views::Label*>(
+      static_cast<views::StyledLabel*>(
           BubbleView()->GetViewByID(DialogViewId::DESCRIPTION_LABEL))
           ->GetText(),
       l10n_util::GetStringFUTF16(
           IDS_AUTOFILL_VIRTUAL_CARD_ENROLL_CONFIRMATION_FAILURE_DESCRIPTION_TEXT,
           card.NetworkAndLastFourDigits()));
   EXPECT_EQ(
-      static_cast<views::Label*>(
+      static_cast<views::StyledLabel*>(
           BubbleView()->GetViewByID(DialogViewId::DESCRIPTION_LABEL))
           ->GetViewAccessibility()
           .GetCachedName(),
@@ -401,7 +507,7 @@ IN_PROC_BROWSER_TEST_P(
   EXPECT_EQ(
       BubbleView()->GetOkButton()->GetViewAccessibility().GetCachedName(),
       l10n_util::GetStringUTF16(
-          IDS_AUTOFILL_VIRTUAL_CARD_ENROLL_CONFIRMATION_FAILURE_OK_BUTTON_ACCESSIBLE_NAME));
+          IDS_AUTOFILL_SAVE_CARD_AND_VIRTUAL_CARD_ENROLL_CONFIRMATION_BUTTON_TEXT));
   EXPECT_TRUE(IconView()->GetVisible());
 
   GetController()->HideIconAndBubble();
@@ -412,11 +518,9 @@ IN_PROC_BROWSER_TEST_P(
 INSTANTIATE_TEST_SUITE_P(
     ,
     VirtualCardEnrollConfirmationBubbleViewsInteractiveUiTest,
-    ::testing::Bool(),
+    testing::Bool(),
     [](const ::testing::TestParamInfo<
         VirtualCardEnrollConfirmationBubbleViewsInteractiveUiTest::ParamType>&
-           info) {
-      return base::StrCat({info.param ? "NewPageAction" : "OldPageAction"});
-    });
+           info) { return info.param ? "BrandingFlagOn" : "BrandingFlagOff"; });
 
 }  // namespace autofill

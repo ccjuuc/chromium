@@ -147,7 +147,46 @@ enum VendorIdSource {
   "usb"
 };
 ```
-Each enum value should be put on a new line. Descriptive comments above the whole enum should be moved along with them.
+Descriptive comments above the whole enum should be moved along with them.
+
+### Typedefs for Referencing External Types or Local Aliasing
+WebIDL does not allow Type names to contain periods, so any references to Types defined in other schema files (e.g. `extensionTypes.FrameType` or `tabs.Tab`) must be updated. We handle this by creating a local `Typedef object` at the top level of the file with a name combining the capitalized namespace and Type name, and giving it an `ExternalExtensionType=]` extended attribute with the original string.
+
+Typedefs can also be used to create local aliases for types when you want to apply specific extended attributes to them, such as `[instanceOf=...]`, which is useful when they need to be used in places where extended attributes are not normally allowed by the IDL parser (e.g. on the Type of a `Promise<Type>`).
+
+If a Typedef has an `ExternalExtensionType` extended attribute it is treated as an external type reference; otherwise it is treated as a local alias and the underlying type of the Typedef is used, along with any extended attributes on it.
+
+**Example of External Type:**
+```
+// Old .idl file
+dictionary contentScripts {
+  extensionTypes.RunAt? run_at;
+}
+```
+Would become:
+```
+// New .webidl file
+[ExternalExtensionType="extensionTypes.RunAt"]
+typedef object ExtensionTypesRunAt;
+
+dictionary contentScripts {
+  ExtensionTypesRunAt run_at;
+}
+```
+
+**Example of Local Alias with instanceOf:**
+```
+// Old .idl file
+callback BlobCallback = void([instanceOf=Blob] object blob);
+```
+Would become:
+```
+// New .webidl file
+[instanceOf=Blob]
+typedef object Blob;
+
+static Promise<Blob> getBlob();
+```
 
 ### Functions and Callbacks to Promises
 All functions that used a trailing callback must be converted to return a `Promise`.
@@ -160,8 +199,27 @@ All functions that used a trailing callback must be converted to return a `Promi
   * A callback with no arguments `void()` becomes `Promise<undefined>`.
   * A nullable argument `void(optional Type arg)` becomes a nullable promise type `Promise<Type?>`.
   * An array argument `void(Type[] arg)` becomes a sequence `Promise<sequence<Type>>`.
-* Callback Optionality: If the original callback was not marked as `optional`, the new definition must have a `[requiredCallback]` extended attribute added before the `static Promise` return type. e.g. `[requiredCallback] Promise<boolean> checkFoo();`
 * void Keyword: The `void` keyword should be replaced with `undefined`.
+
+### Functions that Do Not Support Promises
+Functions annotated with the `[doesNotSupportPromises]` extended attribute (often due to multi-parameter callbacks or complex custom bindings) must not be converted to return a `Promise<T>`. Instead they must retain the trailing callback parameter and the `[doesNotSupportPromises]` extended attribute should be removed.
+
+**Before (`.idl`):**
+```
+// Description of the function.
+// |name|: The name of the alarm.
+// |callback|: Called when done.
+[doesNotSupportPromises="Multi-parameter callback crbug.com/123456"]
+static void foo(DOMString name, FooCallback callback);
+```
+
+**After (`.webidl`):**
+```
+// Description of the function.
+// |name|: The name of the alarm.
+// |callback|: Called when done.
+static undefined foo(DOMString name, FooCallback callback);
+```
 
 ### Promise Function Documentation
 
@@ -204,7 +262,7 @@ callback AlarmCallback = void(optional Alarm alarm);
 // |name|: The name of the alarm to get. Defaults to the empty string.
 // |Returns|: Called with the resulting alarm, if any.
 // |PromiseValue|: alarm: The alarm that was found.
-[requiredCallback] static Promise<Alarm?> get(optional DOMString name);
+static Promise<Alarm?> get(optional DOMString name);
 ```
 
 ### Synchronous Custom Type Function Returns
@@ -255,7 +313,7 @@ interface OnFooEvent : ExtensionEvent {
 };
 ```
 
-3. **Add Event Attribute.** In the main API interface (e.g., `Alarms`), add a `static attribute` for the event. The general descriptive comment for the event (e.g., "Fired when...") should be moved above this new attribute.
+3. **Add Event Attribute.** In the main API interface (e.g., `Alarms`), add a `static attribute` for the event. The general descriptive comment for the event (e.g., "Fired when...") and any extended attributes which were on the original event definition (e.g. `[maxListeners=1]`) should be moved to this new attribute definition.
 ```
 // Fired when something interesting happens.
 static attribute OnFooEvent onFoo;

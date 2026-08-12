@@ -21,8 +21,7 @@ using base::android::JavaRef;
 
 namespace picture_in_picture {
 
-jboolean
-JNI_AutoPictureInPicturePermissionController_IsAutoPictureInPictureInUse(
+bool JNI_AutoPictureInPicturePermissionController_IsAutoPictureInPictureInUse(
     JNIEnv* env,
     content::WebContents* web_contents) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -40,7 +39,7 @@ JNI_AutoPictureInPicturePermissionController_IsAutoPictureInPictureInUse(
          tab_helper->IsInAutoPictureInPicture();
 }
 
-jint JNI_AutoPictureInPicturePermissionController_GetPermissionStatus(
+int32_t JNI_AutoPictureInPicturePermissionController_GetPermissionStatus(
     JNIEnv* env,
     content::WebContents* web_contents) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -61,7 +60,7 @@ jint JNI_AutoPictureInPicturePermissionController_GetPermissionStatus(
 void JNI_AutoPictureInPicturePermissionController_SetPermissionStatus(
     JNIEnv* env,
     content::WebContents* web_contents,
-    jint status) {
+    int32_t status) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (!web_contents) {
     // If the WebContents is gone, we cannot get the Profile to save the
@@ -79,6 +78,21 @@ void JNI_AutoPictureInPicturePermissionController_SetPermissionStatus(
       web_contents->GetLastCommittedURL(), web_contents->GetLastCommittedURL(),
       ContentSettingsType::AUTO_PICTURE_IN_PICTURE,
       static_cast<ContentSetting>(status));
+}
+
+void JNI_AutoPictureInPicturePermissionController_OnPictureInPictureDismissed(
+    JNIEnv* env,
+    content::WebContents* web_contents) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!web_contents) {
+    return;
+  }
+
+  auto* tab_helper =
+      AutoPictureInPictureTabHelper::FromWebContents(web_contents);
+  if (tab_helper) {
+    tab_helper->OnPictureInPictureDismissed();
+  }
 }
 
 }  // namespace picture_in_picture

@@ -5,7 +5,12 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_ML_MODEL_FIELD_CLASSIFICATION_MODEL_HANDLER_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_ML_MODEL_FIELD_CLASSIFICATION_MODEL_HANDLER_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "base/callback_list.h"
@@ -14,6 +19,8 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/types/optional_ref.h"
+#include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/ml_model/field_classification_model_encoder.h"
@@ -21,9 +28,11 @@
 #include "components/autofill/core/browser/ml_model/logging/ml_log_router.h"
 #include "components/autofill/core/browser/ml_model/model_predictions.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
 #include "components/optimization_guide/core/delivery/optimization_guide_model_provider.h"
 #include "components/optimization_guide/core/inference/model_handler.h"
 #include "components/optimization_guide/proto/autofill_field_classification_model_metadata.pb.h"
+#include "components/optimization_guide/proto/models.pb.h"
 
 namespace autofill {
 
@@ -51,7 +60,7 @@ class FieldClassificationModelHandler
   FieldClassificationModelHandler(
       optimization_guide::OptimizationGuideModelProvider* model_provider,
       optimization_guide::proto::OptimizationTarget optimization_target,
-      autofill::MlLogRouter* log_router = nullptr);
+      MlLogRouter* log_router = nullptr);
   ~FieldClassificationModelHandler() override;
 
   // This function asynchronously queries predictions for the `form_structure`
@@ -60,6 +69,10 @@ class FieldClassificationModelHandler
   // sequence and returns the `form_structure`. If `form_structure` has more
   // than `maximum_number_of_fields` (see model metadata) fields, it sets
   // predictions for the first `maximum_number_of_fields` fields in the form.
+  // If `ignore_small_forms` is true, the address predictions will be cleared
+  // from fields in forms that are smaller than
+  // `kMinRequiredFieldsForHeuristics`, otherwise the address predictions will
+  // stay as predicted, no matter the form size.
   //
   // NO_SERVER_DATA means the model couldn't determine the field type
   // (execution failure/low confidence). UNKNOWN_TYPE means the model is sure
@@ -67,6 +80,7 @@ class FieldClassificationModelHandler
   void GetModelPredictionsForForm(
       FormData form,
       const GeoIpCountryCode& client_country,
+      bool ignore_small_forms,
       base::OnceCallback<void(ModelPredictions)> callback);
 
   // Same as `GetModelPredictionsForForm()` but executes the model on multiple
@@ -75,6 +89,7 @@ class FieldClassificationModelHandler
   virtual void GetModelPredictionsForForms(
       std::vector<FormData> forms,
       const GeoIpCountryCode& client_country,
+      bool ignore_small_forms,
       base::OnceCallback<void(std::vector<ModelPredictions>)> callback);
 
   // optimization_guide::ModelHandler:
@@ -119,7 +134,8 @@ class FieldClassificationModelHandler
   // predictions for more accurate comparison.
   void ApplySmallFormRules(const FormData& form,
                            const GeoIpCountryCode& client_country,
-                           std::vector<FieldType>& predicted_types) const;
+                           std::vector<FieldType>& predicted_types,
+                           bool ignore_small_forms) const;
 
   // Builds the predictions for the given `form`.
   ModelPredictions BuildModelPredictions(
@@ -163,7 +179,7 @@ class FieldClassificationModelHandler
 
   ModelChangeCallbackList model_change_callback_list_;
 
-  raw_ptr<autofill::MlLogRouter> log_router_ = nullptr;
+  raw_ptr<MlLogRouter> log_router_ = nullptr;
 
   base::WeakPtrFactory<FieldClassificationModelHandler> weak_ptr_factory_{this};
 };

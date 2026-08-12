@@ -3,11 +3,11 @@
 // found in the LICENSE file.
 
 // clang-format off
-import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import type {DefaultBrowserBrowserProxy, DefaultBrowserInfo, SettingsDefaultBrowserPageElement} from 'chrome://settings/settings.js';
-import {DefaultBrowserBrowserProxyImpl, loadTimeData} from 'chrome://settings/settings.js';
+import {DefaultBrowserBrowserProxyImpl, loadTimeData, Router, routes} from 'chrome://settings/settings.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {TestBrowserProxy} from 'chrome://webui-test/test_browser_proxy.js';
+import {microtasksFinished} from 'chrome://webui-test/test_util.js';
 // clang-format on
 
 /**
@@ -89,8 +89,21 @@ suite('DefaultBrowserPageTest', function() {
     page = document.createElement('settings-default-browser-page');
     document.body.appendChild(page);
     await browserProxy.whenCalled('requestDefaultBrowserState');
+    await microtasksFinished();
   }
 
+  /**
+   * Simulates navigation to the Default Browser page and waits
+   * for the experiment activation call.
+   */
+  function navigateToDefaultBrowserPage() {
+    browserProxy.resetResolver('requestUserValueStringsFeatureState');
+    Router.getInstance().navigateTo(routes.DEFAULT_BROWSER);
+    return browserProxy.whenCalled('requestUserValueStringsFeatureState');
+  }
+
+  // TODO(crbug.com/459593729): Delete this test once the experiment is launched
+  // and the old behavior is no longer supported.
   test('default-browser-test-can-be-default-featureOff', async function() {
     browserProxy.setUserValueStringsFeatureState(false);
 
@@ -103,22 +116,25 @@ suite('DefaultBrowserPageTest', function() {
     });
 
     await initPage();
-    flush();
+    await navigateToDefaultBrowserPage();
+    await microtasksFinished();
     assertTrue(
-        !!page.shadowRoot!.querySelector<HTMLElement>('#canBeDefaultBrowser'));
-    assertTrue(!page.shadowRoot!.querySelector<HTMLElement>('#isDefault'));
+        !!page.shadowRoot.querySelector<HTMLElement>('#canBeDefaultBrowser'));
+    assertTrue(!page.shadowRoot.querySelector<HTMLElement>('#isDefault'));
     assertTrue(
-        !page.shadowRoot!.querySelector<HTMLElement>('#isSecondaryInstall'));
-    assertTrue(!page.shadowRoot!.querySelector<HTMLElement>('#isUnknownError'));
+        !page.shadowRoot.querySelector<HTMLElement>('#isSecondaryInstall'));
+    assertTrue(!page.shadowRoot.querySelector<HTMLElement>('#isUnknownError'));
     // Verify that settings page doesn't offer to pin Chrome.
     const makeDefault =
-        page.shadowRoot!.querySelector<HTMLElement>('#makeDefaultLabel');
+        page.shadowRoot.querySelector<HTMLElement>('#makeDefaultLabel');
     assertTrue(!!makeDefault);
     assertEquals(
         makeDefault.textContent.trim(),
         loadTimeData.getString('defaultBrowserMakeDefault'));
   });
 
+  // TODO(crbug.com/459593729): Drop the featureOn suffix and remove
+  // the feature enablement once the experiment is launched.
   test('default-browser-test-can-be-default-featureOn', async function() {
     browserProxy.setUserValueStringsFeatureState(true);
 
@@ -131,49 +147,94 @@ suite('DefaultBrowserPageTest', function() {
     });
 
     await initPage();
-    flush();
+    await navigateToDefaultBrowserPage();  // Triggers currentRouteChanged
+    await microtasksFinished();
     assertTrue(
-        !!page.shadowRoot!.querySelector<HTMLElement>('#canBeDefaultBrowser'));
-    assertTrue(!page.shadowRoot!.querySelector<HTMLElement>('#isDefault'));
+        !!page.shadowRoot.querySelector<HTMLElement>('#canBeDefaultBrowser'));
+    assertTrue(!page.shadowRoot.querySelector<HTMLElement>('#isDefault'));
     assertTrue(
-        !page.shadowRoot!.querySelector<HTMLElement>('#isSecondaryInstall'));
-    assertTrue(!page.shadowRoot!.querySelector<HTMLElement>('#isUnknownError'));
+        !page.shadowRoot.querySelector<HTMLElement>('#isSecondaryInstall'));
+    assertTrue(!page.shadowRoot.querySelector<HTMLElement>('#isUnknownError'));
     // Verify that settings page doesn't offer to pin Chrome.
     const makeDefault =
-        page.shadowRoot!.querySelector<HTMLElement>('#makeDefaultLabel');
+        page.shadowRoot.querySelector<HTMLElement>('#makeDefaultLabel');
     assertTrue(!!makeDefault);
     assertEquals(
         makeDefault.textContent.trim(),
         loadTimeData.getString('defaultBrowserMakeDefaultUserValue'));
   });
 
-  test('default-browser-test-can-be-default-and-pin', async function() {
-    browserProxy.setDefaultBrowserInfo({
-      canBeDefault: true,
-      canPin: true,
-      isDefault: false,
-      isDisabledByPolicy: false,
-      isUnknownError: false,
-    });
+  // TODO(crbug.com/459593729): Delete this test once the experiment is launched
+  // and the old behavior is no longer supported.
+  test(
+      'default-browser-test-can-be-default-and-pin-featureOff',
+      async function() {
+        browserProxy.setUserValueStringsFeatureState(false);
 
-    await initPage();
-    flush();
-    assertTrue(
-        !!page.shadowRoot!.querySelector<HTMLElement>('#canBeDefaultBrowser'));
-    assertFalse(!!page.shadowRoot!.querySelector<HTMLElement>('#isDefault'));
-    assertFalse(
-        !!page.shadowRoot!.querySelector<HTMLElement>('#isSecondaryInstall'));
-    // Verify that settings page offers to pin Chrome.
-    const makeDefault =
-        page.shadowRoot!.querySelector<HTMLElement>('#makeDefaultLabel');
-    assertTrue(!!makeDefault);
-    assertEquals(
-        makeDefault.textContent.trim(),
-        loadTimeData.getString('defaultBrowserMakeDefaultAndPin'));
-    assertFalse(
-        !!page.shadowRoot!.querySelector<HTMLElement>('#isUnknownError'));
-  });
+        browserProxy.setDefaultBrowserInfo({
+          canBeDefault: true,
+          canPin: true,
+          isDefault: false,
+          isDisabledByPolicy: false,
+          isUnknownError: false,
+        });
 
+        await initPage();
+        await navigateToDefaultBrowserPage();
+        await microtasksFinished();
+        assertTrue(!!page.shadowRoot.querySelector<HTMLElement>(
+            '#canBeDefaultBrowser'));
+        assertFalse(!!page.shadowRoot.querySelector<HTMLElement>('#isDefault'));
+        assertFalse(!!page.shadowRoot.querySelector<HTMLElement>(
+            '#isSecondaryInstall'));
+        // Verify that settings page offers to pin Chrome.
+        const makeDefault =
+            page.shadowRoot.querySelector<HTMLElement>('#makeDefaultLabel');
+        assertTrue(!!makeDefault);
+        assertEquals(
+            makeDefault.textContent.trim(),
+            loadTimeData.getString('defaultBrowserMakeDefaultAndPin'));
+        assertFalse(
+            !!page.shadowRoot.querySelector<HTMLElement>('#isUnknownError'));
+      });
+
+  // TODO(crbug.com/459593729): Drop the featureOn suffix and remove
+  // the feature enablement once the experiment is launched.
+  test(
+      'default-browser-test-can-be-default-and-pin-featureOn',
+      async function() {
+        browserProxy.setUserValueStringsFeatureState(true);
+
+        browserProxy.setDefaultBrowserInfo({
+          canBeDefault: true,
+          canPin: true,
+          isDefault: false,
+          isDisabledByPolicy: false,
+          isUnknownError: false,
+        });
+
+        await initPage();
+        await navigateToDefaultBrowserPage();
+        await microtasksFinished();
+        assertTrue(!!page.shadowRoot.querySelector<HTMLElement>(
+            '#canBeDefaultBrowser'));
+        assertFalse(!!page.shadowRoot.querySelector<HTMLElement>('#isDefault'));
+        assertFalse(!!page.shadowRoot.querySelector<HTMLElement>(
+            '#isSecondaryInstall'));
+        // Verify that settings page offers to pin Chrome with user value
+        // string.
+        const makeDefault =
+            page.shadowRoot.querySelector<HTMLElement>('#makeDefaultLabel');
+        assertTrue(!!makeDefault);
+        assertEquals(
+            makeDefault.textContent.trim(),
+            loadTimeData.getString('defaultBrowserMakeDefaultAndPinUserValue'));
+        assertFalse(
+            !!page.shadowRoot.querySelector<HTMLElement>('#isUnknownError'));
+      });
+
+  // TODO(crbug.com/459593729): Delete this test once the experiment is launched
+  // and the old behavior is no longer supported.
   test('default-browser-test-is-default-featureOff', async function() {
     assertTrue(!!page);
 
@@ -188,29 +249,32 @@ suite('DefaultBrowserPageTest', function() {
     });
 
     await initPage();
-    flush();
+    await navigateToDefaultBrowserPage();
+    await microtasksFinished();
     assertFalse(
-        !!page.shadowRoot!.querySelector<HTMLElement>('#canBeDefaultBrowser'));
+        !!page.shadowRoot.querySelector<HTMLElement>('#canBeDefaultBrowser'));
     assertFalse(
-        page.shadowRoot!.querySelector<HTMLElement>('#isDefault')!.hidden);
+        page.shadowRoot.querySelector<HTMLElement>('#isDefault')!.hidden);
 
     assertTrue(
-        page.shadowRoot!.querySelector<HTMLElement>(
-                            '#defaultStringThankYou')!.hidden);
+        page.shadowRoot.querySelector<HTMLElement>(
+                           '#defaultStringThankYou')!.hidden);
     const defaultString =
-        page.shadowRoot!.querySelector<HTMLElement>('#defaultString');
+        page.shadowRoot.querySelector<HTMLElement>('#defaultString');
     assertFalse(defaultString!.hidden);
     assertEquals(
         defaultString!.textContent.trim(),
         loadTimeData.getString('defaultBrowserDefault'));
 
     assertTrue(
-        page.shadowRoot!.querySelector<HTMLElement>(
-                            '#isSecondaryInstall')!.hidden);
+        page.shadowRoot.querySelector<HTMLElement>(
+                           '#isSecondaryInstall')!.hidden);
     assertTrue(
-        page.shadowRoot!.querySelector<HTMLElement>('#isUnknownError')!.hidden);
+        page.shadowRoot.querySelector<HTMLElement>('#isUnknownError')!.hidden);
   });
 
+  // TODO(crbug.com/459593729): Drop the featureOn suffix and remove
+  // the feature enablement once the experiment is launched.
   test('default-browser-test-is-default-featureOn', async function() {
     assertTrue(!!page);
 
@@ -225,26 +289,27 @@ suite('DefaultBrowserPageTest', function() {
     });
 
     await initPage();
-    flush();
+    await navigateToDefaultBrowserPage();
+    await microtasksFinished();
     assertFalse(
-        !!page.shadowRoot!.querySelector<HTMLElement>('#canBeDefaultBrowser'));
+        !!page.shadowRoot.querySelector<HTMLElement>('#canBeDefaultBrowser'));
     assertFalse(
-        page.shadowRoot!.querySelector<HTMLElement>('#isDefault')!.hidden);
+        page.shadowRoot.querySelector<HTMLElement>('#isDefault')!.hidden);
 
     assertTrue(
-        page.shadowRoot!.querySelector<HTMLElement>('#defaultString')!.hidden);
+        page.shadowRoot.querySelector<HTMLElement>('#defaultString')!.hidden);
     const defaultStringThankYou =
-        page.shadowRoot!.querySelector<HTMLElement>('#defaultStringThankYou');
+        page.shadowRoot.querySelector<HTMLElement>('#defaultStringThankYou');
     assertFalse(defaultStringThankYou!.hidden);
     assertEquals(
         defaultStringThankYou!.textContent.trim(),
         loadTimeData.getString('defaultBrowserDefaultThankYou'));
 
     assertTrue(
-        page.shadowRoot!.querySelector<HTMLElement>(
-                            '#isSecondaryInstall')!.hidden);
+        page.shadowRoot.querySelector<HTMLElement>(
+                           '#isSecondaryInstall')!.hidden);
     assertTrue(
-        page.shadowRoot!.querySelector<HTMLElement>('#isUnknownError')!.hidden);
+        page.shadowRoot.querySelector<HTMLElement>('#isUnknownError')!.hidden);
   });
 
   test('default-browser-test-is-secondary-install', async function() {
@@ -257,16 +322,16 @@ suite('DefaultBrowserPageTest', function() {
     });
 
     await initPage();
-    flush();
+    await microtasksFinished();
     assertFalse(
-        !!page.shadowRoot!.querySelector<HTMLElement>('#canBeDefaultBrowser'));
+        !!page.shadowRoot.querySelector<HTMLElement>('#canBeDefaultBrowser'));
     assertTrue(
-        page.shadowRoot!.querySelector<HTMLElement>('#isDefault')!.hidden);
+        page.shadowRoot.querySelector<HTMLElement>('#isDefault')!.hidden);
     assertFalse(
-        page.shadowRoot!.querySelector<HTMLElement>(
-                            '#isSecondaryInstall')!.hidden);
+        page.shadowRoot.querySelector<HTMLElement>(
+                           '#isSecondaryInstall')!.hidden);
     assertTrue(
-        page.shadowRoot!.querySelector<HTMLElement>('#isUnknownError')!.hidden);
+        page.shadowRoot.querySelector<HTMLElement>('#isUnknownError')!.hidden);
   });
 
   test('default-browser-test-is-disabled-by-policy', async function() {
@@ -279,16 +344,16 @@ suite('DefaultBrowserPageTest', function() {
     });
 
     await initPage();
-    flush();
+    await microtasksFinished();
     assertFalse(
-        !!page.shadowRoot!.querySelector<HTMLElement>('#canBeDefaultBrowser'));
+        !!page.shadowRoot.querySelector<HTMLElement>('#canBeDefaultBrowser'));
     assertTrue(
-        page.shadowRoot!.querySelector<HTMLElement>('#isDefault')!.hidden);
+        page.shadowRoot.querySelector<HTMLElement>('#isDefault')!.hidden);
     assertTrue(
-        page.shadowRoot!.querySelector<HTMLElement>(
-                            '#isSecondaryInstall')!.hidden);
+        page.shadowRoot.querySelector<HTMLElement>(
+                           '#isSecondaryInstall')!.hidden);
     assertFalse(
-        page.shadowRoot!.querySelector<HTMLElement>('#isUnknownError')!.hidden);
+        page.shadowRoot.querySelector<HTMLElement>('#isUnknownError')!.hidden);
   });
 
   test('default-browser-test-is-unknown-error', async function() {
@@ -301,16 +366,16 @@ suite('DefaultBrowserPageTest', function() {
     });
 
     await initPage();
-    flush();
+    await microtasksFinished();
     assertFalse(
-        !!page.shadowRoot!.querySelector<HTMLElement>('#canBeDefaultBrowser'));
+        !!page.shadowRoot.querySelector<HTMLElement>('#canBeDefaultBrowser'));
     assertTrue(
-        page.shadowRoot!.querySelector<HTMLElement>('#isDefault')!.hidden);
+        page.shadowRoot.querySelector<HTMLElement>('#isDefault')!.hidden);
     assertTrue(
-        page.shadowRoot!.querySelector<HTMLElement>(
-                            '#isSecondaryInstall')!.hidden);
+        page.shadowRoot.querySelector<HTMLElement>(
+                           '#isSecondaryInstall')!.hidden);
     assertFalse(
-        page.shadowRoot!.querySelector<HTMLElement>('#isUnknownError')!.hidden);
+        page.shadowRoot.querySelector<HTMLElement>('#isUnknownError')!.hidden);
   });
 
   test('searchContents', async function() {

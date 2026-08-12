@@ -8,7 +8,7 @@
 #include <optional>
 
 #include "base/component_export.h"
-#include "services/media_session/public/mojom/media_controller.mojom.h"
+#include "base/time/time.h"
 #include "services/media_session/public/mojom/media_session.mojom.h"
 
 namespace base {
@@ -19,16 +19,18 @@ namespace media_message_center {
 
 // The source of the media item. This is used in metrics so new values must only
 // be added to the end.
+// LINT.IfChange(Source)
 enum class Source {
   kUnknown,
   kWeb,
-  kAssistant,
+  kAssistant,  // Obsolete.
   kArc,
   kLocalCastSession,
   kNonLocalCastSession,
   kCastDevicePicker,
   kMaxValue = kCastDevicePicker,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/media/enums.xml:MediaNotificationSource)
 
 // The source type of the media item.
 enum class SourceType {
@@ -65,7 +67,7 @@ class COMPONENT_EXPORT(MEDIA_MESSAGE_CENTER) MediaNotificationItem {
   virtual void OnMediaSessionActionButtonPressed(
       media_session::mojom::MediaSessionAction action) = 0;
 
-  // Called by MediaNotificationViewImpl when progress bar is clicked to seek.
+  // Called by MediaNotificationView when progress bar is clicked to seek.
   virtual void SeekTo(base::TimeDelta time) = 0;
 
   // Hides the media notification.

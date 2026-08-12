@@ -4,7 +4,7 @@
 
 #include "chrome/browser/task_manager/task_manager_interface.h"
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/functional/bind.h"
 #include "base/observer_list.h"
 #include "build/build_config.h"
@@ -18,7 +18,7 @@
 #include "content/public/browser/child_process_host.h"
 
 #if BUILDFLAG(IS_MAC)
-#include "chrome/browser/ui/browser_dialogs.h"  // nogncheck
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"  // nogncheck
 #endif  // BUILDFLAG(IS_MAC)
 
 namespace task_manager {

@@ -7,7 +7,7 @@ import {assert} from 'chrome://resources/js/assert.js';
 import type {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import {dedupingMixin} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-import {PasswordManagerImpl} from './password_manager_proxy.js';
+import {PasswordManagerActionableError, PasswordManagerImpl, toMojoActionableError} from './password_manager_proxy.js';
 import type {AccountInfo, SyncInfo} from './sync_browser_proxy.js';
 import {SyncBrowserProxyImpl} from './sync_browser_proxy.js';
 
@@ -39,6 +39,11 @@ export const UserUtilMixin = dedupingMixin(
               computed: 'computeIsSyncingPasswords_(syncInfo_)',
             },
 
+            actionableError: {
+              type: Number,
+              value: PasswordManagerActionableError.kNoError,
+            },
+
             /* Email of the primary account. */
             accountEmail: {
               type: String,
@@ -46,42 +51,58 @@ export const UserUtilMixin = dedupingMixin(
               computed: 'computeAccountEmail_(accountInfo_)',
             },
 
-            /* Email of the primary account. */
+            /* Avatar image of the primary account. */
             avatarImage: {
               type: String,
               value: '',
               computed: 'computeAvatarImage_(accountInfo_)',
             },
 
-            syncInfo_: Object,
-            accountInfo_: Object,
+            syncInfo_: {
+              type: Object,
+              value: null,
+            },
+
+            accountInfo_: {
+              type: Object,
+              value: null,
+            },
           };
         }
 
         declare isAccountStoreUser: boolean;
         declare isSyncingPasswords: boolean;
+        declare actionableError: PasswordManagerActionableError;
         declare accountEmail: string;
         declare avatarImage: string;
-        declare private syncInfo_: SyncInfo;
-        declare private accountInfo_: AccountInfo;
+        declare private syncInfo_: SyncInfo|null;
+        declare private accountInfo_: AccountInfo|null;
 
-        private setIsAccountStorageEnabledListener_:
-            ((enabled: boolean) => void)|null = null;
+        private setIsAccountStorageActiveListener_: ((active: boolean) => void)|
+            null = null;
+        private setPasswordManagerActionableErrorListener_:
+            ((error: chrome.passwordsPrivate.PasswordManagerActionableError) =>
+                 void)|null = null;
 
         override connectedCallback() {
           super.connectedCallback();
 
           // Create listener functions.
-          this.setIsAccountStorageEnabledListener_ = (enabled) =>
-              this.isAccountStoreUser = enabled;
+          this.setIsAccountStorageActiveListener_ = (active) =>
+              this.isAccountStoreUser = active;
           const syncInfoChanged = (syncInfo: SyncInfo) => this.syncInfo_ =
               syncInfo;
+          this.setPasswordManagerActionableErrorListener_ = (error) =>
+              this.actionableError = toMojoActionableError(error);
           const accountInfoChanged = (accountInfo: AccountInfo) =>
               this.accountInfo_ = accountInfo;
 
           // Request initial data.
-          PasswordManagerImpl.getInstance().isAccountStorageEnabled().then(
-              this.setIsAccountStorageEnabledListener_);
+          PasswordManagerImpl.getInstance().isAccountStorageActive().then(
+              this.setIsAccountStorageActiveListener_);
+          PasswordManagerImpl.getInstance()
+              .getPasswordManagerActionableError()
+              .then(error => this.actionableError = error);
           SyncBrowserProxyImpl.getInstance().getSyncInfo().then(
               syncInfoChanged);
           SyncBrowserProxyImpl.getInstance().getAccountInfo().then(
@@ -90,7 +111,10 @@ export const UserUtilMixin = dedupingMixin(
           // Listen for changes.
           PasswordManagerImpl.getInstance()
               .addAccountStorageEnabledStateListener(
-                  this.setIsAccountStorageEnabledListener_);
+                  this.setIsAccountStorageActiveListener_);
+          PasswordManagerImpl.getInstance()
+              .addPasswordManagerActionableErrorChangedListener(
+                  this.setPasswordManagerActionableErrorListener_);
           this.addWebUiListener('sync-info-changed', syncInfoChanged);
           this.addWebUiListener('stored-accounts-changed', accountInfoChanged);
         }
@@ -98,11 +122,17 @@ export const UserUtilMixin = dedupingMixin(
         override disconnectedCallback() {
           super.disconnectedCallback();
 
-          assert(this.setIsAccountStorageEnabledListener_);
+          assert(this.setIsAccountStorageActiveListener_);
           PasswordManagerImpl.getInstance()
               .removeAccountStorageEnabledStateListener(
-                  this.setIsAccountStorageEnabledListener_);
-          this.setIsAccountStorageEnabledListener_ = null;
+                  this.setIsAccountStorageActiveListener_);
+          this.setIsAccountStorageActiveListener_ = null;
+
+          assert(this.setPasswordManagerActionableErrorListener_);
+          PasswordManagerImpl.getInstance()
+              .removePasswordManagerActionableErrorChangedListener(
+                  this.setPasswordManagerActionableErrorListener_);
+          this.setPasswordManagerActionableErrorListener_ = null;
         }
 
         enableAccountStorage() {
@@ -133,6 +163,7 @@ export const UserUtilMixin = dedupingMixin(
 export interface UserUtilMixinInterface {
   isAccountStoreUser: boolean;
   isSyncingPasswords: boolean;
+  actionableError: PasswordManagerActionableError;
   accountEmail: string;
   avatarImage: string;
   enableAccountStorage(): void;

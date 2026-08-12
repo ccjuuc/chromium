@@ -8,10 +8,14 @@
 #include <memory>
 #include <optional>
 
+#include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
 #include "base/test/mock_callback.h"
 #include "base/test/test_future.h"
+#include "base/test/with_feature_override.h"
 #include "base/types/optional_ref.h"
+#include "components/content_settings/core/common/content_settings_utils.h"
+#include "components/content_settings/core/common/features.h"
 #include "content/public/browser/permission_controller.h"
 #include "content/public/browser/permission_controller_delegate.h"
 #include "content/public/browser/permission_descriptor_util.h"
@@ -58,14 +62,6 @@ class MockManagerWithRequests : public MockPermissionManager {
        const base::OnceCallback<void(const std::vector<PermissionResult>&)>
            callback),
       (override));
-  MOCK_METHOD(
-      void,
-      RequestPermissions,
-      (RenderFrameHost * render_frame_host,
-       const PermissionRequestDescription& request_description,
-       const base::OnceCallback<void(const std::vector<PermissionResult>&)>
-           callback),
-      (override));
   MOCK_METHOD(bool,
               IsPermissionOverridable,
               (PermissionType,
@@ -107,82 +103,6 @@ class TestPermissionManager : public MockPermissionManager {
   std::map<GURL, PermissionStatus> override_status_;
 };
 
-// Results are defined based on assumption that same types are queried for
-// each test case.
-const struct {
-  std::map<PermissionType, PermissionStatus> overrides;
-
-  std::vector<PermissionType> delegated_permissions;
-  std::vector<PermissionResult> delegated_results;
-
-  std::vector<PermissionResult> expected_results;
-  bool expect_death;
-} kTestPermissionRequestCases[] = {
-    // No overrides present - all delegated.
-    {{},
-     {PermissionType::GEOLOCATION, PermissionType::BACKGROUND_SYNC,
-      PermissionType::MIDI_SYSEX},
-     {PermissionResult(PermissionStatus::DENIED),
-      PermissionResult(PermissionStatus::GRANTED),
-      PermissionResult(PermissionStatus::GRANTED)},
-     {PermissionResult(PermissionStatus::DENIED),
-      PermissionResult(PermissionStatus::GRANTED),
-      PermissionResult(PermissionStatus::GRANTED)},
-     /*expect_death=*/false},
-
-    // No delegates needed - all overridden.
-    {{{PermissionType::GEOLOCATION, PermissionStatus::GRANTED},
-      {PermissionType::BACKGROUND_SYNC, PermissionStatus::GRANTED},
-      {PermissionType::MIDI_SYSEX, PermissionStatus::ASK}},
-     {},
-     {},
-     {PermissionResult(PermissionStatus::GRANTED),
-      PermissionResult(PermissionStatus::GRANTED),
-      PermissionResult(PermissionStatus::ASK)},
-     /*expect_death=*/false},
-
-    // Some overridden, some delegated.
-    {{{PermissionType::BACKGROUND_SYNC, PermissionStatus::DENIED}},
-     {PermissionType::GEOLOCATION, PermissionType::MIDI_SYSEX},
-     {
-         PermissionResult(PermissionStatus::GRANTED),
-         PermissionResult(PermissionStatus::ASK),
-     },
-     {PermissionResult(PermissionStatus::GRANTED),
-      PermissionResult(PermissionStatus::DENIED),
-      PermissionResult(PermissionStatus::ASK)},
-     /*expect_death=*/false},
-
-    // Some overridden, some delegated.
-    {{{PermissionType::GEOLOCATION, PermissionStatus::GRANTED},
-      {PermissionType::BACKGROUND_SYNC, PermissionStatus::DENIED}},
-     {PermissionType::MIDI_SYSEX},
-     {PermissionResult(PermissionStatus::ASK)},
-     {PermissionResult(PermissionStatus::GRANTED),
-      PermissionResult(PermissionStatus::DENIED),
-      PermissionResult(PermissionStatus::ASK)},
-     /*expect_death=*/false},
-
-    // Too many delegates (causes death).
-    {{{PermissionType::GEOLOCATION, PermissionStatus::GRANTED},
-      {PermissionType::MIDI_SYSEX, PermissionStatus::ASK}},
-     {PermissionType::BACKGROUND_SYNC},
-     {PermissionResult(PermissionStatus::DENIED),
-      PermissionResult(PermissionStatus::GRANTED)},
-     // Results don't matter because will die.
-     {},
-     /*expect_death=*/true},
-
-    // Too few delegates (causes death).
-    {{},
-     {PermissionType::GEOLOCATION, PermissionType::BACKGROUND_SYNC,
-      PermissionType::MIDI_SYSEX},
-     {PermissionResult(PermissionStatus::GRANTED),
-      PermissionResult(PermissionStatus::GRANTED)},
-     // Results don't matter because will die.
-     {},
-     /*expect_death=*/true}};
-
 }  // namespace
 
 class PermissionControllerImplTest : public ::testing::Test {
@@ -219,13 +139,6 @@ class PermissionControllerImplTest : public ::testing::Test {
         render_frame_host, std::move(request_description), std::move(callback));
   }
 
-  void PermissionControllerRequestPermissions(
-      RenderFrameHost* render_frame_host,
-      PermissionRequestDescription request_description,
-      base::OnceCallback<void(const std::vector<PermissionResult>&)> callback) {
-    permission_controller()->RequestPermissions(
-        render_frame_host, std::move(request_description), std::move(callback));
-  }
 
   PermissionStatus GetPermissionStatusForWorker(
       PermissionType permission,
@@ -287,7 +200,19 @@ class PermissionControllerImplTest : public ::testing::Test {
   std::unique_ptr<PermissionControllerImpl> permission_controller_;
 };
 
-TEST_F(PermissionControllerImplTest,
+class PermissionControllerImplTestWithApproxLocation
+    : public base::test::WithFeatureOverride,
+      public PermissionControllerImplTest {
+ public:
+  PermissionControllerImplTestWithApproxLocation()
+      : base::test::WithFeatureOverride(
+            content_settings::features::kApproximateGeolocationPermission) {}
+};
+
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(
+    PermissionControllerImplTestWithApproxLocation);
+
+TEST_P(PermissionControllerImplTestWithApproxLocation,
        RequestPermissionsFromCurrentDocumentDelegatesIffMissingOverrides) {
   url::Origin kTestOrigin = url::Origin::Create(GURL(kTestUrl));
   RenderViewHostTestEnabler enabler;
@@ -305,6 +230,98 @@ TEST_F(PermissionControllerImplTest,
   web_contents_tester->NavigateAndCommit(GURL(kTestUrl));
 
   RenderFrameHost* rfh = web_contents->GetPrimaryMainFrame();
+  PermissionResult granted_geolocation = PermissionResult(
+      PermissionStatus::GRANTED, PermissionStatusSource::UNSPECIFIED,
+      base::FeatureList::IsEnabled(
+          content_settings::features::kApproximateGeolocationPermission)
+          ? std::make_optional(
+                GeolocationSetting{.approximate = PermissionOption::kAllowed,
+                                   .precise = PermissionOption::kAllowed})
+          : std::nullopt);
+  PermissionResult ask_geolocation = PermissionResult(
+      PermissionStatus::ASK, PermissionStatusSource::UNSPECIFIED,
+      base::FeatureList::IsEnabled(
+          content_settings::features::kApproximateGeolocationPermission)
+          ? std::make_optional<GeolocationSetting>()
+          : std::nullopt);
+  PermissionResult denied_geolocation = PermissionResult(
+      PermissionStatus::DENIED, PermissionStatusSource::UNSPECIFIED,
+      base::FeatureList::IsEnabled(
+          content_settings::features::kApproximateGeolocationPermission)
+          ? std::make_optional(
+                GeolocationSetting{.approximate = PermissionOption::kDenied,
+                                   .precise = PermissionOption::kDenied})
+          : std::nullopt);
+  // Results are defined based on assumption that same types are queried for
+  // each test case.
+  const struct {
+    std::map<PermissionType, PermissionStatus> overrides;
+
+    std::vector<PermissionType> delegated_permissions;
+    std::vector<PermissionResult> delegated_results;
+
+    std::vector<PermissionResult> expected_results;
+    bool expect_death;
+  } kTestPermissionRequestCases[] = {
+      // No overrides present - all delegated.
+      {{},
+       {PermissionType::GEOLOCATION, PermissionType::BACKGROUND_SYNC,
+        PermissionType::MIDI_SYSEX},
+       {denied_geolocation, PermissionResult(PermissionStatus::GRANTED),
+        PermissionResult(PermissionStatus::GRANTED)},
+       {denied_geolocation, PermissionResult(PermissionStatus::GRANTED),
+        PermissionResult(PermissionStatus::GRANTED)},
+       /*expect_death=*/false},
+
+      // No delegates needed - all overridden.
+      {{{PermissionType::GEOLOCATION, PermissionStatus::GRANTED},
+        {PermissionType::BACKGROUND_SYNC, PermissionStatus::GRANTED},
+        {PermissionType::MIDI_SYSEX, PermissionStatus::ASK}},
+       {},
+       {},
+       {granted_geolocation, PermissionResult(PermissionStatus::GRANTED),
+        PermissionResult(PermissionStatus::ASK)},
+       /*expect_death=*/false},
+
+      // Some overridden, some delegated.
+      {{{PermissionType::BACKGROUND_SYNC, PermissionStatus::DENIED}},
+       {PermissionType::GEOLOCATION, PermissionType::MIDI_SYSEX},
+       {
+           granted_geolocation,
+           PermissionResult(PermissionStatus::ASK),
+       },
+       {granted_geolocation, PermissionResult(PermissionStatus::DENIED),
+        PermissionResult(PermissionStatus::ASK)},
+       /*expect_death=*/false},
+
+      // Some overridden, some delegated.
+      {{{PermissionType::GEOLOCATION, PermissionStatus::GRANTED},
+        {PermissionType::BACKGROUND_SYNC, PermissionStatus::DENIED}},
+       {PermissionType::MIDI_SYSEX},
+       {PermissionResult(PermissionStatus::ASK)},
+       {granted_geolocation, PermissionResult(PermissionStatus::DENIED),
+        PermissionResult(PermissionStatus::ASK)},
+       /*expect_death=*/false},
+
+      // Too many delegates (causes death).
+      {{{PermissionType::GEOLOCATION, PermissionStatus::GRANTED},
+        {PermissionType::MIDI_SYSEX, PermissionStatus::ASK}},
+       {PermissionType::BACKGROUND_SYNC},
+       {PermissionResult(PermissionStatus::DENIED),
+        PermissionResult(PermissionStatus::GRANTED)},
+       // Results don't matter because will die.
+       {},
+       /*expect_death=*/true},
+
+      // Too few delegates (causes death).
+      {{},
+       {PermissionType::GEOLOCATION, PermissionType::BACKGROUND_SYNC,
+        PermissionType::MIDI_SYSEX},
+       {granted_geolocation, PermissionResult(PermissionStatus::GRANTED)},
+       // Results don't matter because will die.
+       {},
+       /*expect_death=*/true}};
+
   for (const auto& test_case : kTestPermissionRequestCases) {
     // Need to reset overrides for each case to ensure delegation is as
     // expected.
@@ -385,105 +402,7 @@ TEST_F(PermissionControllerImplTest,
   }
 }
 
-TEST_F(PermissionControllerImplTest,
-       RequestPermissionsDelegatesIffMissingOverrides) {
-  url::Origin kTestOrigin = url::Origin::Create(GURL(kTestUrl));
-  RenderViewHostTestEnabler enabler;
-
-  const std::vector<PermissionType> kTypesToQuery = {
-      PermissionType::GEOLOCATION, PermissionType::BACKGROUND_SYNC,
-      PermissionType::MIDI_SYSEX};
-
-  std::unique_ptr<WebContents> web_contents(
-      WebContentsTester::CreateTestWebContents(
-          WebContents::CreateParams(browser_context())));
-
-  WebContentsTester* web_contents_tester =
-      WebContentsTester::For(web_contents.get());
-  url::Origin testing_origin = url::Origin::Create(GURL(kTestUrl));
-  web_contents_tester->NavigateAndCommit(testing_origin.GetURL());
-
-  RenderFrameHost* rfh = web_contents->GetPrimaryMainFrame();
-  for (const auto& test_case : kTestPermissionRequestCases) {
-    // Need to reset overrides for each case to ensure delegation is as
-    // expected.
-    ResetPermissionOverridesAndWait();
-    for (const auto& permission_status_pair : test_case.overrides) {
-      SetPermissionOverrideAndWait(kTestOrigin, kTestOrigin,
-                                   permission_status_pair.first,
-                                   permission_status_pair.second);
-    }
-
-    // Expect request permission call if override are missing.
-    if (!test_case.delegated_permissions.empty()) {
-      auto forward_callbacks = testing::WithArg<2>(
-          [&test_case](
-              base::OnceCallback<void(const std::vector<PermissionResult>&)>
-                  callback) {
-            std::move(callback).Run(test_case.delegated_results);
-            return 0;
-          });
-      // Regular tests can set expectations.
-      if (test_case.expect_death) {
-        // Death tests cannot track these expectations but arguments should be
-        // forwarded to ensure death occurs.
-        ON_CALL(*mock_manager(),
-                RequestPermissions(
-                    rfh,
-                    PermissionRequestDescription(
-                        content::PermissionDescriptorUtil::
-                            CreatePermissionDescriptorForPermissionTypes(
-                                test_case.delegated_permissions),
-                        /*user_gesture*/ true, GURL(kTestUrl)),
-                    testing::_))
-            .WillByDefault(forward_callbacks);
-      } else {
-        EXPECT_CALL(*mock_manager(),
-                    RequestPermissions(
-                        rfh,
-                        PermissionRequestDescription(
-                            content::PermissionDescriptorUtil::
-                                CreatePermissionDescriptorForPermissionTypes(
-                                    test_case.delegated_permissions),
-                            /*user_gesture*/ true, GURL(kTestUrl)),
-                        testing::_))
-            .WillOnce(forward_callbacks);
-      }
-    } else {
-      // There should be no call to delegate if all overrides are defined.
-      EXPECT_CALL(*mock_manager(), RequestPermissionsFromCurrentDocument)
-          .Times(0);
-    }
-
-    if (test_case.expect_death) {
-      GTEST_FLAG_SET(death_test_style, "threadsafe");
-      base::MockCallback<RequestsCallback> callback;
-      EXPECT_DEATH_IF_SUPPORTED(
-          PermissionControllerRequestPermissions(
-              rfh,
-              PermissionRequestDescription(
-                  content::PermissionDescriptorUtil::
-                      CreatePermissionDescriptorForPermissionTypes(
-                          kTypesToQuery),
-                  /*user_gesture*/ true, GURL(kTestUrl)),
-              callback.Get()),
-          "");
-    } else {
-      base::MockCallback<RequestsCallback> callback;
-      EXPECT_CALL(callback,
-                  Run(testing::ElementsAreArray(test_case.expected_results)));
-      PermissionControllerRequestPermissions(
-          rfh,
-          PermissionRequestDescription(
-              content::PermissionDescriptorUtil::
-                  CreatePermissionDescriptorForPermissionTypes(kTypesToQuery),
-              /*user_gesture*/ true, GURL(kTestUrl)),
-          callback.Get());
-    }
-  }
-}
-
-TEST_F(PermissionControllerImplTest,
+TEST_P(PermissionControllerImplTestWithApproxLocation,
        NotifyChangedSubscriptionsCallsOnChangeOnly) {
   using PermissionResultCallback =
       base::RepeatingCallback<void(PermissionResult)>;
@@ -513,7 +432,14 @@ TEST_F(PermissionControllerImplTest,
       /*should_include_device_status=*/false, sync_callback.Get());
 
   // Geolocation should change status, so subscriber is updated.
-  EXPECT_CALL(geo_callback, Run(PermissionResult(PermissionStatus::ASK)));
+  EXPECT_CALL(
+      geo_callback,
+      Run(PermissionResult(
+          PermissionStatus::ASK, PermissionStatusSource::UNSPECIFIED,
+          base::FeatureList::IsEnabled(
+              content_settings::features::kApproximateGeolocationPermission)
+              ? std::make_optional<GeolocationSetting>()
+              : std::nullopt)));
   EXPECT_CALL(sync_callback, Run).Times(0);
   SetPermissionOverrideAndWait(kTestOrigin, kTestOrigin,
                                PermissionType::GEOLOCATION,
@@ -834,5 +760,109 @@ TEST_F(PermissionControllerImplWithDelegateTest, PermissionPolicyTest) {
                 geolocation_permission_descriptor, child_without_policy));
 }
 #endif
+
+TEST_P(PermissionControllerImplTestWithApproxLocation,
+       SubscribeToContentSettingsTypeChangeProgression) {
+  using PermissionSettingCallback =
+      base::RepeatingCallback<void(const PermissionSetting&)>;
+  GURL kUrl = GURL(kTestUrl);
+
+  content::PermissionController::SubscriptionId subscription_id(123);
+  base::RepeatingCallback<void(const PermissionSetting&)> subscription_callback;
+
+  ON_CALL(*mock_manager(), SubscribeToContentSettingsTypeChange)
+      .WillByDefault([&subscription_id, &subscription_callback](
+                         ContentSettingsType content_settings_type,
+                         const GURL& requesting_origin,
+                         const GURL& embedding_origin,
+                         base::RepeatingCallback<void(const PermissionSetting&)>
+                             callback) {
+        subscription_callback = std::move(callback);
+        return subscription_id;
+      });
+
+  base::MockCallback<PermissionSettingCallback> callback;
+  auto id = permission_controller()->SubscribeToContentSettingsTypeChange(
+      content_settings::GeolocationContentSettingsType(), nullptr, nullptr,
+      kUrl,
+      /*should_include_device_status=*/false, callback.Get());
+
+  EXPECT_EQ(subscription_id, id);
+  ASSERT_TRUE(subscription_callback);
+
+  // 2. Switch to precise granted.
+  EXPECT_CALL(callback, Run(testing::An<const PermissionSetting&>()))
+      .WillOnce([](const PermissionSetting& setting) {
+        if (base::FeatureList::IsEnabled(
+                content_settings::features::
+                    kApproximateGeolocationPermission)) {
+          EXPECT_EQ(setting, PermissionSetting(GeolocationSetting{
+                                 .approximate = PermissionOption::kAllowed,
+                                 .precise = PermissionOption::kAllowed}));
+        } else {
+          EXPECT_EQ(CONTENT_SETTING_ALLOW, std::get<ContentSetting>(setting));
+        }
+      });
+
+  if (base::FeatureList::IsEnabled(
+          content_settings::features::kApproximateGeolocationPermission)) {
+    subscription_callback.Run(
+        GeolocationSetting{.approximate = PermissionOption::kAllowed,
+                           .precise = PermissionOption::kAllowed});
+  } else {
+    subscription_callback.Run(CONTENT_SETTING_ALLOW);
+  }
+
+  // 3. Switch to approximate only.
+  if (base::FeatureList::IsEnabled(
+          content_settings::features::kApproximateGeolocationPermission)) {
+    EXPECT_CALL(callback, Run(testing::An<const PermissionSetting&>()))
+        .WillOnce([](const PermissionSetting& setting) {
+          EXPECT_EQ(setting, PermissionSetting(GeolocationSetting{
+                                 .approximate = PermissionOption::kAllowed,
+                                 .precise = PermissionOption::kDenied}));
+        });
+    subscription_callback.Run(
+        GeolocationSetting{.approximate = PermissionOption::kAllowed,
+                           .precise = PermissionOption::kDenied});
+  } else {
+    // When the feature is disabled, approximate only is not supported, so we
+    // transition back to ASK (CONTENT_SETTING_ASK).
+    EXPECT_CALL(callback, Run(testing::An<const PermissionSetting&>()))
+        .WillOnce([](const PermissionSetting& setting) {
+          EXPECT_EQ(CONTENT_SETTING_ASK, std::get<ContentSetting>(setting));
+        });
+    subscription_callback.Run(CONTENT_SETTING_ASK);
+  }
+
+  // 4. Switch back to denied for both.
+  EXPECT_CALL(callback, Run(testing::An<const PermissionSetting&>()))
+      .WillOnce([](const PermissionSetting& setting) {
+        if (base::FeatureList::IsEnabled(
+                content_settings::features::
+                    kApproximateGeolocationPermission)) {
+          EXPECT_EQ(setting, PermissionSetting(GeolocationSetting{
+                                 .approximate = PermissionOption::kDenied,
+                                 .precise = PermissionOption::kDenied}));
+        } else {
+          EXPECT_EQ(CONTENT_SETTING_BLOCK, std::get<ContentSetting>(setting));
+        }
+      });
+
+  if (base::FeatureList::IsEnabled(
+          content_settings::features::kApproximateGeolocationPermission)) {
+    subscription_callback.Run(
+        GeolocationSetting{.approximate = PermissionOption::kDenied,
+                           .precise = PermissionOption::kDenied});
+  } else {
+    subscription_callback.Run(CONTENT_SETTING_BLOCK);
+  }
+
+  // Unsubscribe should clean up successfully.
+  EXPECT_CALL(*mock_manager(),
+              UnsubscribeFromContentSettingsTypeChange(subscription_id))
+      .Times(1);
+  permission_controller()->UnsubscribeFromContentSettingsTypeChange(id);
+}
 
 }  // namespace content

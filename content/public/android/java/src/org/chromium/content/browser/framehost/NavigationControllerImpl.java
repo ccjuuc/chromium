@@ -6,6 +6,7 @@ package org.chromium.content.browser.framehost;
 
 import android.graphics.Bitmap;
 import android.os.SystemClock;
+import android.util.LongSparseArray;
 
 import androidx.annotation.VisibleForTesting;
 
@@ -13,7 +14,6 @@ import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
 import org.jni_zero.NativeMethods;
 
-import org.chromium.base.Log;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -36,12 +36,18 @@ import org.chromium.url.Origin;
 //                package whose visibility will be enforced via DEPS.
 @NullMarked
 /* package */ class NavigationControllerImpl implements NavigationController {
-    private static final String TAG = "NavigationController";
+    // Using ScopedJavaGlobalRef in the owning C++ object to keep the Java object alive consumes an
+    // entry per instance in the finite global ref table. This scales poorly with a large number of
+    // WebContents. As a workaround, the C++ owner uses a JavaObjectWeakGlobalRef and an entry is
+    // kept in the a static map of the native pointer to Java objects to prevent garbage collection.
+    private static final LongSparseArray<NavigationControllerImpl> sNavigationControllerImpls =
+            new LongSparseArray<>();
 
     private long mNativeNavigationControllerAndroid;
 
     private NavigationControllerImpl(long nativeNavigationControllerAndroid) {
         mNativeNavigationControllerAndroid = nativeNavigationControllerAndroid;
+        sNavigationControllerImpls.put(nativeNavigationControllerAndroid, this);
     }
 
     @CalledByNative
@@ -51,6 +57,10 @@ import org.chromium.url.Origin;
 
     @CalledByNative
     private void destroy() {
+        assert mNativeNavigationControllerAndroid != 0;
+        var removedValue = sNavigationControllerImpls.get(mNativeNavigationControllerAndroid);
+        sNavigationControllerImpls.remove(mNativeNavigationControllerAndroid);
+        assert removedValue != null;
         mNativeNavigationControllerAndroid = 0;
     }
 
@@ -175,9 +185,26 @@ import org.chromium.url.Origin;
                     params.getInputStartTimestamp() == 0
                             ? params.getIntentReceivedTimestamp()
                             : params.getInputStartTimestamp();
-            RecordHistogram.recordTimesHistogram(
-                    "Android.Omnibox.InputToNavigationControllerStart",
-                    SystemClock.uptimeMillis() - inputStart);
+            // This UMA metric tracks the time between the user input that triggered an Omnibox
+            // navigation and the start of the navigation in the native code. We filter out
+            // cases where inputStart is 0. This happens for some browser-initiated navigations
+            // (e.g. opening URL in a new tab via WebContentsDelegateAndroid::OpenURLFromTab)
+            // where the timestamp is not propagated to Java.
+            long currentTimestamp = SystemClock.uptimeMillis();
+            if (inputStart > 0) {
+                RecordHistogram.recordTimesHistogram(
+                        "Android.Omnibox.InputToNavigationControllerStart2",
+                        currentTimestamp - inputStart);
+                if (params.getInputStartTimestamp() != 0) {
+                    RecordHistogram.recordTimesHistogram(
+                            "Android.Omnibox.InputToNavigationControllerStart.UserInput",
+                            currentTimestamp - params.getInputStartTimestamp());
+                } else if (params.getIntentReceivedTimestamp() != 0) {
+                    RecordHistogram.recordTimesHistogram(
+                            "Android.Omnibox.InputToNavigationControllerStart.Intent",
+                            currentTimestamp - params.getIntentReceivedTimestamp());
+                }
+            }
             navigationHandle =
                     NavigationControllerImplJni.get()
                             .loadUrl(
@@ -207,8 +234,10 @@ import org.chromium.url.Origin;
                                     inputStart,
                                     params.getNavigationUIDataSupplier() == null
                                             ? 0
-                                            : params.getNavigationUIDataSupplier().get(),
-                                    params.getIsPdf());
+                                            : params.getNavigationUIDataSupplier().getAsLong(),
+                                    params.getIsPdf(),
+                                    params.getRemoveExtraHeadersOnCrossOriginRedirect(),
+                                    params.getInternalScrollToTextFragment());
             // Use the navigation handle object to store user data passed in.
             if (navigationHandle != null) {
                 navigationHandle.setUserDataHost(params.takeNavigationHandleUserData());
@@ -266,14 +295,6 @@ import org.chromium.url.Origin;
     public void setUseDesktopUserAgent(
             boolean override, boolean reloadOnChange, boolean skipOnInitialNavigation) {
         if (mNativeNavigationControllerAndroid != 0) {
-            Log.i(
-                    TAG,
-                    "Thread dump for debugging, override: "
-                            + override
-                            + " reloadOnChange: "
-                            + reloadOnChange);
-            Thread.dumpStack();
-
             NavigationControllerImplJni.get()
                     .setUseDesktopUserAgent(
                             mNativeNavigationControllerAndroid,
@@ -454,7 +475,9 @@ import org.chromium.url.Origin;
                 @Nullable AdditionalNavigationParams additionalNavigationParams,
                 long inputStart,
                 long navigationUIDataPtr,
-                boolean isPdf);
+                boolean isPdf,
+                boolean removeExtraHeadersOnCrossOriginRedirect,
+                @Nullable String internalScrollToTextFragment);
 
         void clearHistory(long nativeNavigationControllerAndroid);
 

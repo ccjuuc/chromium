@@ -9,6 +9,7 @@
 
 #import <set>
 
+#import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_collection_consumer.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/grid_theme.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_grid_paging.h"
@@ -19,7 +20,7 @@
 @class GridItemIdentifier;
 @protocol GridViewControllerMutator;
 @class LayoutGuideCenter;
-@class LegacyGridTransitionLayout;
+
 @class TabGridTransitionLayout;
 @protocol PriceCardDataSource;
 @protocol SuggestedActionsDelegate;
@@ -107,11 +108,13 @@ class WebStateID;
 @end
 
 // A view controller that contains a grid of items.
-@interface BaseGridViewController : UIViewController <TabCollectionConsumer>
-// Whether the grid is scrolled to the top.
-@property(nonatomic, readonly, getter=isScrolledToTop) BOOL scrolledToTop;
-// Whether the grid is scrolled to the bottom.
-@property(nonatomic, readonly, getter=isScrolledToBottom) BOOL scrolledToBottom;
+@interface BaseGridViewController
+    : UIViewController <ContextMenuTransitionStateProviding,
+                        TabCollectionConsumer>
+// The remaining distance to scroll to the top, in point.
+@property(nonatomic, readonly) CGFloat remainingScrollDistanceTop;
+// The remaining distance to scroll to the bottom, in point.
+@property(nonatomic, readonly) CGFloat remainingScrollDistanceBottom;
 // The view that is shown when there are no items.
 @property(nonatomic, strong) UIView<GridEmptyView>* emptyStateView;
 // Returns YES if the grid has no items.
@@ -167,9 +170,9 @@ class WebStateID;
 // Handles snapshots and favicons fetches.
 @property(nonatomic, weak) id<TabSwitcherItemSnapShotAndFaviconDataSource>
     snapshotAndfaviconDataSource;
-
-// Returns the legacy layout of the grid for use in an animated transition.
-- (LegacyGridTransitionLayout*)legacyTransitionLayout;
+// The active context menu interaction animator.
+@property(nonatomic, strong) id<UIContextMenuInteractionAnimating>
+    activeContextMenuAnimator;
 
 // Returns the layout of the grid for use in an animated transition.
 - (TabGridTransitionLayout*)transitionLayout;

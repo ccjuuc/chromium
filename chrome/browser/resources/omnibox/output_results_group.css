@@ -168,6 +168,7 @@ tbody.head th {
   vertical-align: middle;
   margin: 0 2px;
 }
+
 .cell-contents-and-description .pair-container,
 .cell-destination-url .pair-container,
 .cell-fill-and-inline .pair-container {
@@ -257,7 +258,7 @@ td:not(:hover) a.icon {
 }
 
 .icon.edit-icon {
-  background-image: url(chrome://resources/images/icon_edit.svg);
+  background-image: url(chrome://resources/images/icon_edit_old.svg);
 }
 
 .icon.download-icon {
@@ -290,4 +291,8 @@ img:not([src]),
 
 .body tr.filtered-highlighted:not(:hover) td.filtered-highlighted-nested {
   background-color: rgb(208, 255, 208);
+}
+
+:host-context([webui-rounded-icons]) .icon.edit-icon {
+  background-image: url(chrome://resources/images/icon_edit.svg);
 }

@@ -34,6 +34,7 @@
 #include "third_party/blink/renderer/core/css/css_numeric_literal_value.h"
 #include "third_party/blink/renderer/core/css/css_primitive_value.h"
 #include "third_party/blink/renderer/core/css/css_unparsed_declaration_value.h"
+#include "third_party/blink/renderer/core/css/media_feature_names.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_context.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_impl.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_token.h"
@@ -46,6 +47,7 @@
 #include "third_party/blink/renderer/platform/wtf/decimal.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
 
@@ -57,8 +59,7 @@ static inline bool FeatureWithValidIdent(const String& media_feature,
                                          CSSValueID ident,
                                          const CSSParserContext& context) {
   if (media_feature == media_feature_names::kDisplayModeMediaFeature) {
-    return ident == CSSValueID::kFullscreen ||
-           ident == CSSValueID::kBorderless ||
+    return ident == CSSValueID::kFullscreen || ident == CSSValueID::kUnframed ||
            ident == CSSValueID::kStandalone ||
            ident == CSSValueID::kMinimalUi ||
            ident == CSSValueID::kWindowControlsOverlay ||
@@ -66,13 +67,15 @@ static inline bool FeatureWithValidIdent(const String& media_feature,
            ident == CSSValueID::kPictureInPicture;
   }
 
-  if (RuntimeEnabledFeatures::DesktopPWAsAdditionalWindowingControlsEnabled() &&
+  if (RuntimeEnabledFeatures::DesktopPWAsAdditionalWindowingControlsEnabled(
+          context.GetExecutionContext()) &&
       media_feature == media_feature_names::kDisplayStateMediaFeature) {
     return ident == CSSValueID::kFullscreen || ident == CSSValueID::kNormal ||
            ident == CSSValueID::kMinimized || ident == CSSValueID::kMaximized;
   }
 
-  if (RuntimeEnabledFeatures::DesktopPWAsAdditionalWindowingControlsEnabled() &&
+  if (RuntimeEnabledFeatures::DesktopPWAsAdditionalWindowingControlsEnabled(
+          context.GetExecutionContext()) &&
       media_feature == media_feature_names::kResizableMediaFeature) {
     return ident == CSSValueID::kTrue || ident == CSSValueID::kFalse;
   }
@@ -252,8 +255,7 @@ static inline bool FeatureWithValidIdent(const String& media_feature,
     }
   }
 
-  if (RuntimeEnabledFeatures::CSSFallbackContainerQueriesEnabled() &&
-      media_feature == media_feature_names::kFallbackMediaFeature) {
+  if (media_feature == media_feature_names::kFallbackMediaFeature) {
     return ident == CSSValueID::kNone;
   }
 
@@ -511,30 +513,35 @@ std::optional<MediaQueryExpValue> MediaQueryExpValue::Consume(
     return std::nullopt;
   }
 
-  DCHECK_EQ(media_feature, media_feature.LowerASCII())
+  DCHECK_EQ(media_feature, media_feature.ToAsciiLower())
       << "Under the assumption that custom properties in style() container "
          "queries are currently the only case sensitive features";
 
+  // TODO(crbug.com/475808971): We don't have property name for random in media
+  // query, this should probably be specified.
+  CSSParserLocalContext local_context =
+      CSSParserLocalContext::CreateWithoutPropertyForAtRules();
   if (media_feature == media_feature_names::kFallbackMediaFeature) {
     if (CSSValue* fallback_value =
-            css_parsing_utils::ConsumeAnchoredFallbackQueryValue(stream,
-                                                                 context)) {
+            css_parsing_utils::ConsumeAnchoredFallbackQueryValue(
+                stream, context, local_context)) {
       return MediaQueryExpValue(*fallback_value);
     }
   }
-
   CSSPrimitiveValue* value = css_parsing_utils::ConsumeInteger(
-      stream, context, -std::numeric_limits<double>::max() /* minimum_value */);
+      stream, context, local_context,
+      -std::numeric_limits<double>::max() /* minimum_value */);
   if (!value && !FeatureExpectingInteger(media_feature, context)) {
     value = css_parsing_utils::ConsumeNumber(
-        stream, context, CSSPrimitiveValue::ValueRange::kAll);
+        stream, context, local_context, CSSPrimitiveValue::ValueRange::kAll);
   }
   if (!value) {
     value = css_parsing_utils::ConsumeLength(
-        stream, context, CSSPrimitiveValue::ValueRange::kAll);
+        stream, context, local_context, CSSPrimitiveValue::ValueRange::kAll);
   }
   if (!value) {
-    value = css_parsing_utils::ConsumeResolution(stream, context);
+    value =
+        css_parsing_utils::ConsumeResolution(stream, context, local_context);
   }
 
   if (!value) {
@@ -548,7 +555,10 @@ std::optional<MediaQueryExpValue> MediaQueryExpValue::Consume(
     return std::nullopt;
   }
 
-  if (!supports_element_dependent && value->IsElementDependent()) {
+  // TODO(crbug.com/475808971): We don't support random() outside element
+  // context except container style queries for now.
+  if (value->HasRandomFunctions() ||
+      (!supports_element_dependent && value->IsElementDependent())) {
     return std::nullopt;
   }
 
@@ -565,7 +575,8 @@ std::optional<MediaQueryExpValue> MediaQueryExpValue::Consume(
                                     1, CSSPrimitiveValue::UnitType::kNumber));
     }
     CSSPrimitiveValue* denominator = css_parsing_utils::ConsumeNumber(
-        stream, context, CSSPrimitiveValue::ValueRange::kNonNegative);
+        stream, context, local_context,
+        CSSPrimitiveValue::ValueRange::kNonNegative);
     if (!denominator) {
       return std::nullopt;
     }
@@ -650,7 +661,7 @@ String MediaQueryExp::Serialize() const {
   // <mf-plain>  e.g. (width: 100px)
   if (!bounds_.IsRange()) {
     if (HasMediaFeature() || IsCustomMedia()) {
-      result.Append(media_feature_);
+      SerializeIdentifier(media_feature_, result);
     } else {
       result.Append(reference_value_->CssText());
     }
@@ -668,7 +679,7 @@ String MediaQueryExp::Serialize() const {
       result.Append(" ");
     }
     if (HasMediaFeature()) {
-      result.Append(media_feature_);
+      SerializeIdentifier(media_feature_, result);
     } else {
       result.Append(reference_value_->CssText());
     }
@@ -734,9 +745,12 @@ unsigned MediaQueryExpValue::GetUnitFlags() const {
       length_type_flags.test(CSSPrimitiveValue::kUnitTypeZeroCharacterWidth) ||
       length_type_flags.test(CSSPrimitiveValue::kUnitTypeFontCapitalHeight) ||
       length_type_flags.test(
-          CSSPrimitiveValue::kUnitTypeIdeographicFullWidth) ||
-      length_type_flags.test(CSSPrimitiveValue::kUnitTypeLineHeight)) {
+          CSSPrimitiveValue::kUnitTypeIdeographicFullWidth)) {
     unit_flags |= UnitFlags::kFontRelative;
+  }
+
+  if (length_type_flags.test(CSSPrimitiveValue::kUnitTypeLineHeight)) {
+    unit_flags |= UnitFlags::kLineHeightRelative;
   }
 
   if (length_type_flags.test(CSSPrimitiveValue::kUnitTypeRootFontSize) ||
@@ -748,7 +762,7 @@ unsigned MediaQueryExpValue::GetUnitFlags() const {
       length_type_flags.test(
           CSSPrimitiveValue::kUnitTypeRootFontIdeographicFullWidth) ||
       length_type_flags.test(CSSPrimitiveValue::kUnitTypeRootLineHeight)) {
-    unit_flags |= UnitFlags::kRootFontRelative;
+    unit_flags |= UnitFlags::kRootRelative;
   }
 
   if (CSSPrimitiveValue::HasDynamicViewportUnits(length_type_flags)) {

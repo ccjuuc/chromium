@@ -8,6 +8,7 @@
 #include "components/autofill/core/browser/data_manager/valuables/valuables_data_manager_test_api.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics_test_base.h"
+#include "components/autofill/core/browser/metrics/loyalty_cards_metrics.h"
 #include "components/autofill/core/browser/metrics/ukm_metrics_test_utils.h"
 #include "components/autofill/core/browser/test_utils/valuables_data_test_utils.h"
 #include "components/autofill/core/common/autofill_test_utils.h"
@@ -171,8 +172,6 @@ TEST_P(LoyaltyCardFormEventLoggerFunnelTest, LogKeyMetrics) {
     SubmitForm(form);
   }
 
-  FormInteractionsFlowId flow_id =
-      test_api(autofill_manager()).loyalty_card_form_interactions_flow_id();
   DeleteDriverToCommitMetrics();
 
   // Phase 2: Validate KeyMetrics expectations.
@@ -180,11 +179,19 @@ TEST_P(LoyaltyCardFormEventLoggerFunnelTest, LogKeyMetrics) {
     histogram_tester.ExpectBucketCount(
         "Autofill.KeyMetrics.FillingReadiness.LoyaltyCard", 1, 1);
     histogram_tester.ExpectBucketCount(
+        "Autofill.KeyMetrics.FillingReadiness.LoyaltyCard.Profile1", 1, 1);
+    histogram_tester.ExpectBucketCount(
         "Autofill.KeyMetrics.FillingAcceptance.LoyaltyCard", 1, 1);
+    histogram_tester.ExpectBucketCount(
+        "Autofill.KeyMetrics.FillingAcceptance.LoyaltyCard.Profile1", 1, 1);
     histogram_tester.ExpectBucketCount(
         "Autofill.KeyMetrics.FillingCorrectness.LoyaltyCard", 1, 1);
     histogram_tester.ExpectBucketCount(
+        "Autofill.KeyMetrics.FillingCorrectness.LoyaltyCard.Profile1", 1, 1);
+    histogram_tester.ExpectBucketCount(
         "Autofill.KeyMetrics.FillingAssistance.LoyaltyCard", 1, 1);
+    histogram_tester.ExpectBucketCount(
+        "Autofill.KeyMetrics.FillingAssistance.LoyaltyCard.Profile1", 1, 1);
     histogram_tester.ExpectBucketCount(
         "Autofill.Autocomplete.NotOff.FillingAcceptance.LoyaltyCard", 1, 1);
     histogram_tester.ExpectTotalCount(
@@ -204,7 +211,6 @@ TEST_P(LoyaltyCardFormEventLoggerFunnelTest, LogKeyMetrics) {
                        {Ukm::kFillingAssistanceName, 1},
                        {Ukm::kAutofillFillsName, 1},
                        {Ukm::kFormElementUserModificationsName, 0},
-                       {Ukm::kFlowIdName, flow_id.value()},
                        {Ukm::kFormTypesName,
                         AutofillMetrics::FormTypesToBitVector(
                             {FormTypeNameForLogging::kLoyaltyCardForm})}}}));
@@ -214,11 +220,19 @@ TEST_P(LoyaltyCardFormEventLoggerFunnelTest, LogKeyMetrics) {
     histogram_tester.ExpectTotalCount(
         "Autofill.KeyMetrics.FillingReadiness.LoyaltyCard", 0);
     histogram_tester.ExpectTotalCount(
+        "Autofill.KeyMetrics.FillingReadiness.LoyaltyCard.Profile1", 0);
+    histogram_tester.ExpectTotalCount(
         "Autofill.KeyMetrics.FillingAcceptance.LoyaltyCard", 0);
+    histogram_tester.ExpectTotalCount(
+        "Autofill.KeyMetrics.FillingAcceptance.LoyaltyCard.Profile1", 0);
     histogram_tester.ExpectTotalCount(
         "Autofill.KeyMetrics.FillingCorrectness.LoyaltyCard", 0);
     histogram_tester.ExpectTotalCount(
+        "Autofill.KeyMetrics.FillingCorrectness.LoyaltyCard.Profile1", 0);
+    histogram_tester.ExpectTotalCount(
         "Autofill.KeyMetrics.FillingAssistance.LoyaltyCard", 0);
+    histogram_tester.ExpectTotalCount(
+        "Autofill.KeyMetrics.FillingAssistance.LoyaltyCard.Profile1", 0);
     histogram_tester.ExpectTotalCount(
         "Autofill.Autocomplete.NotOff.FillingAcceptance.LoyaltyCard", 0);
     histogram_tester.ExpectTotalCount(
@@ -292,18 +306,24 @@ TEST_F(LoyaltyCardFormEventLoggerBaseKeyMetricsTest, LogEmptyForm) {
                                               form_.fields()[0].global_id());
   SubmitForm(form_);
 
-  FormInteractionsFlowId flow_id =
-      test_api(autofill_manager()).loyalty_card_form_interactions_flow_id();
   DeleteDriverToCommitMetrics();
 
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingReadiness.LoyaltyCard", 1, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingReadiness.LoyaltyCard.Profile1", 1, 1);
   histogram_tester.ExpectTotalCount(
       "Autofill.KeyMetrics.FillingAcceptance.LoyaltyCard", 0);
   histogram_tester.ExpectTotalCount(
+      "Autofill.KeyMetrics.FillingAcceptance.LoyaltyCard.Profile1", 0);
+  histogram_tester.ExpectTotalCount(
       "Autofill.KeyMetrics.FillingCorrectness.LoyaltyCard", 0);
+  histogram_tester.ExpectTotalCount(
+      "Autofill.KeyMetrics.FillingCorrectness.LoyaltyCard.Profile1", 0);
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingAssistance.LoyaltyCard", 0, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingAssistance.LoyaltyCard.Profile1", 0, 1);
   histogram_tester.ExpectTotalCount(
       "Autofill.KeyMetrics.FormSubmission.NotAutofilled.LoyaltyCard", 0);
   histogram_tester.ExpectTotalCount(
@@ -317,7 +337,6 @@ TEST_F(LoyaltyCardFormEventLoggerBaseKeyMetricsTest, LogEmptyForm) {
                        {Ukm::kFillingAssistanceName, 0},
                        {Ukm::kAutofillFillsName, 0},
                        {Ukm::kFormElementUserModificationsName, 0},
-                       {Ukm::kFlowIdName, flow_id.value()},
                        {Ukm::kFormTypesName,
                         AutofillMetrics::FormTypesToBitVector(
                             {FormTypeNameForLogging::kLoyaltyCardForm})}}}));
@@ -347,18 +366,24 @@ TEST_F(LoyaltyCardFormEventLoggerBaseKeyMetricsTest,
   SimulateUserChangedField(form_, form_.fields()[1]);
   SubmitForm(form_);
 
-  FormInteractionsFlowId flow_id =
-      test_api(autofill_manager()).loyalty_card_form_interactions_flow_id();
   DeleteDriverToCommitMetrics();
 
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingReadiness.LoyaltyCard", 1, 1);
   histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingReadiness.LoyaltyCard.Profile1", 1, 1);
+  histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingAcceptance.LoyaltyCard", 0, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingAcceptance.LoyaltyCard.Profile1", 0, 1);
   histogram_tester.ExpectTotalCount(
       "Autofill.KeyMetrics.FillingCorrectness.LoyaltyCard", 0);
+  histogram_tester.ExpectTotalCount(
+      "Autofill.KeyMetrics.FillingCorrectness.LoyaltyCard.Profile1", 0);
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingAssistance.LoyaltyCard", 0, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingAssistance.LoyaltyCard.Profile1", 0, 1);
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FormSubmission.NotAutofilled.LoyaltyCard", 1, 1);
   histogram_tester.ExpectUniqueSample(
@@ -376,7 +401,6 @@ TEST_F(LoyaltyCardFormEventLoggerBaseKeyMetricsTest,
                        {Ukm::kFillingAssistanceName, 0},
                        {Ukm::kAutofillFillsName, 0},
                        {Ukm::kFormElementUserModificationsName, 2},
-                       {Ukm::kFlowIdName, flow_id.value()},
                        {Ukm::kFormTypesName,
                         AutofillMetrics::FormTypesToBitVector(
                             {FormTypeNameForLogging::kLoyaltyCardForm})}}}));
@@ -405,18 +429,24 @@ TEST_F(LoyaltyCardFormEventLoggerBaseKeyMetricsTest, UserAcceptsSuggestion) {
 
   SubmitForm(form_);
 
-  FormInteractionsFlowId flow_id =
-      test_api(autofill_manager()).loyalty_card_form_interactions_flow_id();
   DeleteDriverToCommitMetrics();
 
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingReadiness.LoyaltyCard", 1, 1);
   histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingReadiness.LoyaltyCard.Profile1", 1, 1);
+  histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingAcceptance.LoyaltyCard", 1, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingAcceptance.LoyaltyCard.Profile1", 1, 1);
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingCorrectness.LoyaltyCard", 1, 1);
   histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingCorrectness.LoyaltyCard.Profile1", 1, 1);
+  histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingAssistance.LoyaltyCard", 1, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingAssistance.LoyaltyCard.Profile1", 1, 1);
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FormSubmission.Autofilled.LoyaltyCard", 1, 1);
   histogram_tester.ExpectUniqueSample(
@@ -435,7 +465,6 @@ TEST_F(LoyaltyCardFormEventLoggerBaseKeyMetricsTest, UserAcceptsSuggestion) {
                        {Ukm::kFillingAssistanceName, 1},
                        {Ukm::kAutofillFillsName, 1},
                        {Ukm::kFormElementUserModificationsName, 0},
-                       {Ukm::kFlowIdName, flow_id.value()},
                        {Ukm::kFormTypesName,
                         AutofillMetrics::FormTypesToBitVector(
                             {FormTypeNameForLogging::kLoyaltyCardForm})}}}));
@@ -509,18 +538,24 @@ TEST_F(LoyaltyCardFormEventLoggerBaseKeyMetricsTest, LogUserFixesFilledData) {
   SimulateUserChangedField(form_, form_.fields()[1]);
   SubmitForm(form_);
 
-  FormInteractionsFlowId flow_id =
-      test_api(autofill_manager()).loyalty_card_form_interactions_flow_id();
   DeleteDriverToCommitMetrics();
 
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingReadiness.LoyaltyCard", 1, 1);
   histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingReadiness.LoyaltyCard.Profile1", 1, 1);
+  histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingAcceptance.LoyaltyCard", 1, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingAcceptance.LoyaltyCard.Profile1", 1, 1);
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingCorrectness.LoyaltyCard", 0, 1);
   histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingCorrectness.LoyaltyCard.Profile1", 0, 1);
+  histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingAssistance.LoyaltyCard", 1, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingAssistance.LoyaltyCard.Profile1", 1, 1);
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FormSubmission.Autofilled.LoyaltyCard", 1, 1);
   histogram_tester.ExpectUniqueSample(
@@ -539,7 +574,6 @@ TEST_F(LoyaltyCardFormEventLoggerBaseKeyMetricsTest, LogUserFixesFilledData) {
                        {Ukm::kFillingAssistanceName, 1},
                        {Ukm::kAutofillFillsName, 1},
                        {Ukm::kFormElementUserModificationsName, 1},
-                       {Ukm::kFlowIdName, flow_id.value()},
                        {Ukm::kFormTypesName,
                         AutofillMetrics::FormTypesToBitVector(
                             {FormTypeNameForLogging::kLoyaltyCardForm})}}}));
@@ -589,11 +623,19 @@ TEST_F(LoyaltyCardFormEventLoggerBaseKeyMetricsTest,
   histogram_tester.ExpectTotalCount(
       "Autofill.KeyMetrics.FillingReadiness.LoyaltyCard", 0);
   histogram_tester.ExpectTotalCount(
+      "Autofill.KeyMetrics.FillingReadiness.LoyaltyCard.Profile1", 0);
+  histogram_tester.ExpectTotalCount(
       "Autofill.KeyMetrics.FillingAcceptance.LoyaltyCard", 0);
+  histogram_tester.ExpectTotalCount(
+      "Autofill.KeyMetrics.FillingAcceptance.LoyaltyCard.Profile1", 0);
   histogram_tester.ExpectTotalCount(
       "Autofill.KeyMetrics.FillingCorrectness.LoyaltyCard", 0);
   histogram_tester.ExpectTotalCount(
+      "Autofill.KeyMetrics.FillingCorrectness.LoyaltyCard.Profile1", 0);
+  histogram_tester.ExpectTotalCount(
       "Autofill.KeyMetrics.FillingAssistance.LoyaltyCard", 0);
+  histogram_tester.ExpectTotalCount(
+      "Autofill.KeyMetrics.FillingAssistance.LoyaltyCard.Profile1", 0);
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FormSubmission.Autofilled.LoyaltyCard", 0, 1);
   histogram_tester.ExpectTotalCount(
@@ -621,6 +663,63 @@ TEST_F(LoyaltyCardFormEventLoggerBaseKeyMetricsTest,
 
   VerifyInteractedWithFormUkmMetric();
 }
+
+#if !BUILDFLAG(IS_IOS)
+// Tests that acceptance metric for EMAIL_OR_LOYALTY_MEMBERSHIP_ID field is
+// reported when an email suggestion is selected.
+TEST_F(LoyaltyCardFormEventLoggerBaseKeyMetricsTest,
+       EmailAndLoyaltyCardsMetric_EmailSuggestionSelected) {
+  test_api(valuables_data_manager())
+      .SetLoyaltyCards({test::CreateLoyaltyCard()});
+  autofill_client().set_last_committed_primary_main_frame_url(
+      GURL("https://www.domain.example/"));
+
+  FormData form_data =
+      test::GetFormData({.fields = {{.role = EMAIL_OR_LOYALTY_MEMBERSHIP_ID},
+                                    {.role = PASSWORD}}});
+  SeeForm(form_data);
+  autofill_manager().OnAskForValuesToFillTest(
+      form_data, form_data.fields()[0].global_id());
+
+  ASSERT_FALSE(external_delegate().suggestions().empty());
+  EXPECT_EQ(external_delegate().suggestions().front().type,
+            SuggestionType::kAddressEntry);
+
+  base::HistogramTester histogram_tester;
+
+  external_delegate().DidAcceptSuggestion(
+      external_delegate().suggestions().front(), {.multi_index = {0}});
+
+  histogram_tester.ExpectUniqueSample(
+      "Autofill.LoyaltyCard.EmailOrLoyaltyCardAcceptance",
+      AutofillEmailOrLoyaltyCardAcceptanceMetricValue::kEmailSelected, 1);
+}
+
+// Tests that acceptance metric for EMAIL_OR_LOYALTY_MEMBERSHIP_ID field is
+// reported when a loyalty card suggestion is selected.
+TEST_F(LoyaltyCardFormEventLoggerBaseKeyMetricsTest,
+       EmailAndLoyaltyCardsMetric_LoyaltyCardSuggestionSelected) {
+  test_api(valuables_data_manager())
+      .SetLoyaltyCards({test::CreateLoyaltyCard()});
+
+  FormData form_data =
+      test::GetFormData({.fields = {{.role = EMAIL_OR_LOYALTY_MEMBERSHIP_ID},
+                                    {.role = PASSWORD}}});
+  SeeForm(form_data);
+  autofill_manager().OnAskForValuesToFillTest(
+      form_data, form_data.fields()[0].global_id());
+  base::HistogramTester histogram_tester;
+
+  external_delegate().DidAcceptSuggestion(
+      Suggestion(u"1234", u"Deutsche Bahn", Suggestion::Icon::kNoIcon,
+                 SuggestionType::kLoyaltyCardEntry),
+      {.multi_index = {0}});
+
+  histogram_tester.ExpectUniqueSample(
+      "Autofill.LoyaltyCard.EmailOrLoyaltyCardAcceptance",
+      AutofillEmailOrLoyaltyCardAcceptanceMetricValue::kLoyaltyCardSelected, 1);
+}
+#endif  // !BUILDFLAG(IS_IOS)
 
 // Parameterized AffiliationTypeKeyMetricsEditTest that edits a field depending
 // on the parameter. This is used to test the correctness metric, which depends
@@ -667,7 +766,8 @@ TEST_P(AffiliationTypeKeyMetricsEditTest, Affiliated) {
       /*program_name=*/"CVS Extra",
       /*program_logo=*/GURL(""),
       /*loyalty_card_number=*/"987654321987654321",
-      {GURL("https://affiliated.com")});
+      /*merchant_domains=*/{GURL("https://affiliated.com")},
+      /*use_date=*/{}, /*use_count=*/0);
   test_api(valuables_data_manager()).SetLoyaltyCards({card1});
 
   FillAndSubmitForm(/*selected_suggestion=*/0);
@@ -703,7 +803,8 @@ TEST_P(AffiliationTypeKeyMetricsEditTest, NonAffiliated) {
       /*program_name=*/"CVS Extra",
       /*program_logo=*/GURL(""),
       /*loyalty_card_number=*/"987654321987654321",
-      {GURL("https://affiliated.com")});
+      /*merchant_domains=*/{GURL("https://affiliated.com")},
+      /*use_date=*/{}, /*use_count=*/0);
   test_api(valuables_data_manager()).SetLoyaltyCards({card1});
 
   FillAndSubmitForm(/*selected_suggestion=*/0);
@@ -738,13 +839,17 @@ TEST_P(AffiliationTypeKeyMetricsEditTest, MixedAvailabilityAffiliatedSelected) {
       /*merchant_name=*/"CVS Pharmacy",
       /*program_name=*/"CVS Extra",
       /*program_logo=*/GURL(""),
-      /*loyalty_card_number=*/"98765432198", {GURL("https://affiliated.com")});
+      /*loyalty_card_number=*/"98765432198",
+      /*merchant_domains=*/{GURL("https://affiliated.com")},
+      /*use_date=*/{}, /*use_count=*/0);
   const LoyaltyCard card2 = LoyaltyCard(
       /*loyalty_card_id=*/ValuableId("2"),
       /*merchant_name=*/"Walgreens",
       /*program_name=*/"CustomerCard",
       /*program_logo=*/GURL(""),
-      /*loyalty_card_number=*/"998766823", {GURL("https://example.com")});
+      /*loyalty_card_number=*/"998766823",
+      /*merchant_domains=*/{GURL("https://example.com")},
+      /*use_date=*/{}, /*use_count=*/0);
   test_api(valuables_data_manager()).SetLoyaltyCards({card1, card2});
 
   // Selects the affiliated card.
@@ -783,13 +888,16 @@ TEST_P(AffiliationTypeKeyMetricsEditTest,
       /*program_name=*/"CVS Extra",
       /*program_logo=*/GURL(""),
       /*loyalty_card_number=*/"987654321987654321",
-      {GURL("https://affiliated.com")});
+      /*merchant_domains=*/{GURL("https://affiliated.com")},
+      /*use_date=*/{}, /*use_count=*/0);
   const LoyaltyCard card2 = LoyaltyCard(
       /*loyalty_card_id=*/ValuableId("2"),
       /*merchant_name=*/"Walgreens",
       /*program_name=*/"CustomerCard",
       /*program_logo=*/GURL(""),
-      /*loyalty_card_number=*/"998766823", {GURL("https://example.com")});
+      /*loyalty_card_number=*/"998766823",
+      /*merchant_domains=*/{GURL("https://example.com")},
+      /*use_date=*/{}, /*use_count=*/0);
   test_api(valuables_data_manager()).SetLoyaltyCards({card1, card2});
 
   // Selects the non-affiliated card.

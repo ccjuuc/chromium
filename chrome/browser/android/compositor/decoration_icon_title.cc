@@ -119,7 +119,7 @@ void DecorationIconTitle::setBounds(const gfx::Size& bounds) {
   } else if (icon_resource_id_ != ui::Resource::kInvalidResourceId) {
     int icon_x = icon_start_padding_;
     if (sys_rtl) {
-      icon_x = bounds.width() - icon_size_.width() - icon_start_padding_;
+      icon_x = bounds.width() - icon_size_.width() - icon_x;
     }
     layer_icon_->SetIsDrawable(true);
     layer_icon_->SetBounds(icon_size_);

@@ -4,9 +4,9 @@
 
 #include "chrome/updater/util/progress_sampler.h"
 
-#include <algorithm>
 #include <optional>
 #include <queue>
+#include <utility>
 
 #include "base/check.h"
 #include "base/time/time.h"

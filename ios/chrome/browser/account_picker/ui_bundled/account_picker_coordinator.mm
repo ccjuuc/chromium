@@ -17,18 +17,21 @@
 #import "ios/chrome/browser/account_picker/ui_bundled/account_picker_coordinator_delegate.h"
 #import "ios/chrome/browser/account_picker/ui_bundled/account_picker_layout_delegate.h"
 #import "ios/chrome/browser/account_picker/ui_bundled/account_picker_logger.h"
+#import "ios/chrome/browser/account_picker/ui_bundled/account_picker_mediator.h"
+#import "ios/chrome/browser/account_picker/ui_bundled/account_picker_mediator_delegate.h"
 #import "ios/chrome/browser/account_picker/ui_bundled/account_picker_screen/account_picker_screen_navigation_controller.h"
 #import "ios/chrome/browser/account_picker/ui_bundled/account_picker_screen/account_picker_screen_presentation_controller.h"
 #import "ios/chrome/browser/account_picker/ui_bundled/account_picker_screen/account_picker_screen_slide_transition_animator.h"
 #import "ios/chrome/browser/account_picker/ui_bundled/account_picker_selection/account_picker_selection_screen_coordinator.h"
+#import "ios/chrome/browser/authentication/signin/reauth/coordinator/signin_reauth_coordinator.h"
 #import "ios/chrome/browser/authentication/ui_bundled/continuation.h"
-#import "ios/chrome/browser/authentication/ui_bundled/signin/reauth/signin_reauth_coordinator.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_coordinator.h"
 #import "ios/chrome/browser/shared/coordinator/alert/alert_coordinator.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service_factory.h"
 #import "ios/chrome/browser/signin/model/constants.h"
@@ -41,8 +44,9 @@
 @interface AccountPickerCoordinator () <
     AccountPickerConfirmationScreenCoordinatorDelegate,
     AccountPickerLayoutDelegate,
-    AccountPickerSelectionScreenCoordinatorDelegate,
+    AccountPickerMediatorDelegate,
     AccountPickerScreenPresentationControllerDelegate,
+    AccountPickerSelectionScreenCoordinatorDelegate,
     SigninReauthCoordinatorDelegate,
     UINavigationControllerDelegate,
     UIViewControllerTransitioningDelegate>
@@ -71,6 +75,9 @@
   // The configuration for the account picker.
   AccountPickerConfiguration* _configuration;
 
+  // The mediator of this coordinator.
+  AccountPickerMediator* _mediator;
+
   // Whether the identity button has been hidden.
   BOOL _identityButtonHidden;
 }
@@ -84,12 +91,19 @@
                    accessPoint:(signin_metrics::AccessPoint)accessPoint {
   self = [super initWithBaseViewController:baseViewController browser:browser];
   if (self) {
-    CHECK_EQ(browser->type(), Browser::Type::kRegular,
-             base::NotFatalUntil::M145);
+    CHECK_EQ(browser->type(), Browser::Type::kRegular);
     _accessPoint = accessPoint;
     _configuration = configuration;
+    _mediator = [[AccountPickerMediator alloc]
+        initWithAuthenticationService:AuthenticationServiceFactory::
+                                          GetForProfile(self.profile)];
+    _mediator.delegate = self;
   }
   return self;
+}
+
+- (void)dealloc {
+  CHECK(!_mediator, base::NotFatalUntil::M152);
 }
 
 - (void)stopAnimated:(BOOL)animated {
@@ -103,6 +117,9 @@
   _navigationController.delegate = nil;
   _navigationController.transitioningDelegate = nil;
   _navigationController = nil;
+  [_mediator disconnect];
+  _mediator = nil;
+  _mediator.delegate = nil;
   [self stopChildrenCoordinators];
   [super stop];
 }
@@ -215,36 +232,9 @@
   [self.logger logAccountPickerAddAccountCompleted];
 }
 
-// Opens an AddAccountSigninCoordinator to add an account to the device.
-- (void)openAddAccountCoordinator {
-  // Up to iOS 18, due to crbug.com/395959814, the add account view may
-  // disappear without the signinCompletion being called.
-  [self stopChildrenCoordinators];
-  self.openAddAccountOperationInProgress = YES;
-  __weak __typeof(self) weakSelf = self;
-  SigninContextStyle contextStyle = SigninContextStyle::kDefault;
-  _addAccountSigninCoordinator = [SigninCoordinator
-      addAccountCoordinatorWithBaseViewController:self.baseViewController
-                                          browser:self.browser
-                                     contextStyle:contextStyle
-                                      accessPoint:_accessPoint
-                                   prefilledEmail:nil
-                             continuationProvider:
-                                 DoNothingContinuationProvider()];
-  _addAccountSigninCoordinator.signinCompletion =
-      ^(SigninCoordinator* coordinator, SigninCoordinatorResult result,
-        id<SystemIdentity> identity) {
-        [weakSelf addAccountCompletionWithCoordinator:coordinator
-                                             identity:identity];
-      };
-  [_addAccountSigninCoordinator start];
-  [self.logger logAccountPickerAddAccountScreenOpened];
-}
-
 // Starts the validation flow.
 - (void)startValidation {
-  if (base::FeatureList::IsEnabled(switches::kEnableIdentityInAuthError) &&
-      self.selectedIdentity && !self.selectedIdentity.hasValidAuth) {
+  if (self.selectedIdentity && !self.selectedIdentity.hasValidAuth) {
     [self startReauthFlowWithIdentity:self.selectedIdentity];
     return;
   }
@@ -264,7 +254,7 @@
     // In case of double tap, let the first reauth proceed.
     return;
   }
-  [self stopChildrenCoordinators];
+  [self stopReauthCoordinator];
   _reauthCoordinator = [[SigninReauthCoordinator alloc]
       initWithBaseViewController:_navigationController
                          browser:self.browser
@@ -289,7 +279,7 @@
     ChromeAccountManagerService* accountManagerService =
         ChromeAccountManagerServiceFactory::GetForProfile(self.profile);
     BOOL identityValid =
-        accountManagerService->IsValidIdentity(self.selectedIdentity);
+        accountManagerService->IsValidIdentity(self.selectedIdentity.gaiaId);
     BOOL identityEqual = self.selectedIdentity.gaiaId == *gaiaID;
     if (identityValid && identityEqual) {
       [self.delegate
@@ -298,6 +288,8 @@
                       askEveryTime:_accountPickerConfirmationScreenCoordinator
                                        .askEveryTime];
     }
+  } else {
+    [self stopValidationSpinner];
   }
 }
 
@@ -340,12 +332,15 @@
 - (void)navigationController:(UINavigationController*)navigationController
        didShowViewController:(UIViewController*)viewController
                     animated:(BOOL)animated {
-  DCHECK(navigationController == _navigationController)
+  CHECK_EQ(navigationController, _navigationController,
+           base::NotFatalUntil::M155)
       << base::SysNSStringToUTF8([self description]);
-  DCHECK(navigationController.viewControllers.count > 0)
+  CHECK_GT(navigationController.viewControllers.count, 0U,
+           base::NotFatalUntil::M155)
       << base::SysNSStringToUTF8([self description]);
-  DCHECK(navigationController.viewControllers[0] ==
-         _accountPickerConfirmationScreenCoordinator.viewController)
+  CHECK_EQ(navigationController.viewControllers[0],
+           _accountPickerConfirmationScreenCoordinator.viewController,
+           base::NotFatalUntil::M155)
       << base::SysNSStringToUTF8([self description]);
   if (_navigationController.viewControllers.count == 1 &&
       _accountPickerSelectionScreenCoordinator) {
@@ -369,16 +364,20 @@
   [_navigationController popViewControllerAnimated:YES];
 }
 
-- (void)accountPickerSelectionScreenCoordinatorOpenAddAccount:
+- (void)accountPickerSelectionScreenCoordinatorWantsToBeStopped:
     (AccountPickerSelectionScreenCoordinator*)coordinator {
-  [self openAddAccountCoordinator];
+  CHECK_EQ(coordinator, _accountPickerSelectionScreenCoordinator,
+           base::NotFatalUntil::M151);
+  [self.delegate accountPickerCoordinatorWantsToBeStopped:self];
 }
 
 #pragma mark - AccountPickerConfirmationScreenCoordinatorDelegate
 
-- (void)accountPickerConfirmationScreenCoordinatorCancel:
+- (void)accountPickerConfirmationScreenCoordinatorWantsToBeStopped:
     (AccountPickerConfirmationScreenCoordinator*)coordinator {
-  [self.delegate accountPickerCoordinatorCancel:self];
+  CHECK_EQ(coordinator, _accountPickerConfirmationScreenCoordinator,
+           base::NotFatalUntil::M151);
+  [self.delegate accountPickerCoordinatorWantsToBeStopped:self];
 }
 
 - (void)
@@ -395,12 +394,13 @@
   _accountPickerSelectionScreenCoordinator =
       [[AccountPickerSelectionScreenCoordinator alloc]
           initWithBaseViewController:_navigationController
-                             browser:self.browser];
+                             browser:self.browser
+                    selectedIdentity:_accountPickerConfirmationScreenCoordinator
+                                         .selectedIdentity
+                         accessPoint:_accessPoint];
   _accountPickerSelectionScreenCoordinator.delegate = self;
   _accountPickerSelectionScreenCoordinator.layoutDelegate = self;
-  [_accountPickerSelectionScreenCoordinator
-      startWithSelectedIdentity:_accountPickerConfirmationScreenCoordinator
-                                    .selectedIdentity];
+  [_accountPickerSelectionScreenCoordinator start];
   [_navigationController
       pushViewController:_accountPickerSelectionScreenCoordinator.viewController
                 animated:YES];
@@ -420,7 +420,8 @@
                             presentingViewController:
                                 (UIViewController*)presentingViewController
                                 sourceViewController:(UIViewController*)source {
-  DCHECK_EQ(_navigationController, presentedViewController)
+  CHECK_EQ(_navigationController, presentedViewController,
+           base::NotFatalUntil::M155)
       << base::SysNSStringToUTF8([self description]);
   AccountPickerScreenPresentationController* controller =
       [[AccountPickerScreenPresentationController alloc]
@@ -436,8 +437,15 @@
 - (void)accountPickerScreenPresentationControllerBackgroundTapped:
     (AccountPickerScreenPresentationController*)controller {
   if (_configuration.dismissOnBackgroundTap) {
-    [self.delegate accountPickerCoordinatorCancel:self];
+    [self.delegate accountPickerCoordinatorWantsToBeStopped:self];
   }
+}
+
+#pragma mark - AccountPickerMediatorDelegate
+
+- (void)accountPickerMediatorWantsToBeStopped:(AccountPickerMediator*)mediator {
+  CHECK_EQ(mediator, _mediator, base::NotFatalUntil::M152);
+  [self.delegate accountPickerCoordinatorWantsToBeStopped:self];
 }
 
 #pragma mark - NSObject

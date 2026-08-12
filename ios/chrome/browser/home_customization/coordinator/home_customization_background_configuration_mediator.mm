@@ -86,15 +86,12 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 @interface HomeCustomizationBackgroundConfigurationMediator () <
     HomeBackgroundCustomizationServiceObserving> {
   // The image fetcher used to download individual background preset images.
-  raw_ptr<image_fetcher::ImageFetcher, DanglingUntriaged> _imageFetcher;
+  raw_ptr<image_fetcher::ImageFetcher> _imageFetcher;
   // The service that provides the background images.
-  raw_ptr<HomeBackgroundImageService, DanglingUntriaged>
-      _homeBackgroundImageService;
+  raw_ptr<HomeBackgroundImageService> _homeBackgroundImageService;
   // Used to get and observe the background state.
-  raw_ptr<HomeBackgroundCustomizationService, DanglingUntriaged>
-      _backgroundCustomizationService;
-  raw_ptr<UserUploadedImageManager, DanglingUntriaged>
-      _userUploadedImageManager;
+  raw_ptr<HomeBackgroundCustomizationService> _backgroundCustomizationService;
+  raw_ptr<UserUploadedImageManager> _userUploadedImageManager;
 
   // Observer for the customization service.
   std::unique_ptr<HomeBackgroundCustomizationServiceObserverBridge>
@@ -302,6 +299,14 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
       BackgroundSelectionOutcome::kCanceledAfterSelected;
 }
 
+- (void)disconnect {
+  _backgroundCustomizationServiceObserverBridge.reset();
+  _backgroundCustomizationService = nullptr;
+  _imageFetcher = nullptr;
+  _homeBackgroundImageService = nullptr;
+  _userUploadedImageManager = nullptr;
+}
+
 #pragma mark - HomeCustomizationBackgroundConfigurationMutator
 
 - (void)fetchBackgroundCustomizationThumbnailURLImage:(GURL)thumbnailURL
@@ -311,11 +316,11 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
   CHECK(!thumbnailURL.is_empty());
   CHECK(thumbnailURL.is_valid());
 
-  _imageFetcher->FetchImage(
+  _imageFetcher->FetchImageData(
       thumbnailURL,
-      base::BindOnce(^(const gfx::Image& image,
+      base::BindOnce(^(const std::string& image_data,
                        const image_fetcher::RequestMetadata& metadata) {
-        if (image.IsEmpty()) {
+        if (image_data.empty()) {
           // Image fetch failed or returned empty.
           NSDictionary<NSErrorUserInfoKey, id>* userInfo = @{
             NSURLErrorFailingURLErrorKey : net::NSURLWithGURL(thumbnailURL)
@@ -332,10 +337,13 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
           completion(nil, fetchError);
           return;
         }
-        UIImage* uiImage = image.ToUIImage();
-        base::UmaHistogramBoolean(
-            "IOS.HomeCustomization.Background.Gallery.ImageDownloadSuccessful",
-            true);
+
+        UIImage* uiImage =
+            [UIImage imageWithData:[NSData dataWithBytes:image_data.data()
+                                                  length:image_data.length()]];
+        base::UmaHistogramBoolean("IOS.HomeCustomization.Background.Gallery."
+                                  "ImageDownloadSuccessful",
+                                  true);
         if (completion) {
           completion(uiImage, nil);
         }
@@ -345,6 +353,7 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 }
 
 - (void)fetchBackgroundCustomizationUserUploadedImage:(NSString*)imagePath
+                                           targetSize:(CGSize)targetSize
                                            completion:
                                                (UserUploadImageCompletion)
                                                    completion {
@@ -353,7 +362,7 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 
   base::FilePath path = base::FilePath(base::SysNSStringToUTF8(imagePath));
 
-  _userUploadedImageManager->LoadUserUploadedImage(path,
+  _userUploadedImageManager->LoadUserUploadedImage(path, targetSize,
                                                    base::BindOnce(completion));
 }
 
@@ -420,15 +429,17 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 
 #pragma mark - HomeBackgroundCustomizationServiceObserving
 
-- (void)onBackgroundChanged {
+- (void)homeBackgroundCustomizationServiceDidChangeBackground:
+    (HomeBackgroundCustomizationService*)service {
   self.themeHasChanged = YES;
 
   id<BackgroundCustomizationConfiguration> currentConfiguration;
 
   std::optional<HomeCustomBackground> customBackground =
-      _backgroundCustomizationService->GetCurrentCustomBackground();
+      service->GetCurrentCustomBackground();
   std::optional<sync_pb::UserColorTheme> colorTheme =
-      _backgroundCustomizationService->GetCurrentColorTheme();
+      service->GetCurrentColorTheme();
+
   if (customBackground) {
     currentConfiguration = [self
         generateConfigurationItemForRecentBackground:customBackground.value()];

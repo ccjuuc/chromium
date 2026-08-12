@@ -79,10 +79,10 @@ class OfflinePageEvaluationBridge : public OfflinePageModel::Observer,
       const base::android::JavaRef<jobject>& j_callback_obj);
 
   void SavePageLater(JNIEnv* env,
-                     std::string& url,
-                     std::string& name_space,
-                     std::string& client_id,
-                     jboolean user_requested);
+                     const std::string& url,
+                     const std::string& name_space,
+                     const std::string& client_id,
+                     bool user_requested);
 
  private:
   void NotifyIfDoneLoading() const;

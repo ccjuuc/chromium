@@ -19,7 +19,6 @@
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/notreached.h"
 #include "base/numerics/byte_conversions.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/strcat.h"
@@ -32,14 +31,15 @@
 #include "net/base/io_buffer.h"
 #include "net/base/ip_address.h"
 #include "net/base/ip_endpoint.h"
+#include "net/base/load_timing_internal_info.h"
 #include "net/base/net_errors.h"
 #include "net/dns/address_sorter.h"
 #include "net/dns/dns_hosts.h"
 #include "net/dns/dns_names_util.h"
 #include "net/dns/dns_query.h"
 #include "net/dns/dns_session.h"
+#include "net/dns/filtering_details_url_generator.h"
 #include "net/dns/mock_host_resolver.h"
-#include "net/dns/opt_record_rdata.h"
 #include "net/dns/public/dns_over_https_server_config.h"
 #include "net/dns/resolve_context.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
@@ -47,6 +47,9 @@
 #include "url/scheme_host_port.h"
 
 namespace net {
+
+class NetworkAnonymizationKey;
+
 namespace {
 
 constexpr auto kMalformedResponseHeader = std::to_array<uint8_t>({
@@ -86,7 +89,11 @@ class MockAddressSorter : public AddressSorter {
  public:
   ~MockAddressSorter() override = default;
   void Sort(const std::vector<IPEndPoint>& endpoints,
+            const NetworkAnonymizationKey& anonymization_key,
+            handles::NetworkHandle target_network,
             CallbackType callback) const override {
+    // This is used only for testing in scenarios that do not involve multiple
+    // networks. With that in mind, it's safe to ignore `target_network`.
     // Do nothing.
     std::move(callback).Run(true, endpoints);
   }
@@ -103,6 +110,23 @@ DnsConfig CreateValidDnsConfig() {
   config.secure_dns_mode = SecureDnsMode::kOff;
   EXPECT_TRUE(config.IsValid());
   return config;
+}
+
+ScopedSetFilteringDetailsUrlGeneratorForTesting::
+    ScopedSetFilteringDetailsUrlGeneratorForTesting()
+    : generator_(FilteringDetailsUrlGenerator::CreateForTesting(
+          FilteringDetailsUrlGenerator::FilteringDetailsRegistry{
+              {"example",
+               FilteringDetailsUrlGenerator::RegistryEntry{
+                   .url_template =
+                       "https://resolver.example.com/filtering-incidents/{id}",
+                   .feature = nullptr}}})) {
+  FilteringDetailsUrlGenerator::SetInstanceForTesting(&generator_);
+}
+
+ScopedSetFilteringDetailsUrlGeneratorForTesting::
+    ~ScopedSetFilteringDetailsUrlGeneratorForTesting() {
+  FilteringDetailsUrlGenerator::SetInstanceForTesting(nullptr);
 }
 
 DnsResourceRecord BuildTestDnsRecord(std::string name,
@@ -287,6 +311,22 @@ DnsResourceRecord BuildTestHttpsServiceRecord(
                             ttl);
 }
 
+DnsResourceRecord BuildTestOptRecord(uint16_t udp_payload_size,
+                                     uint32_t extended_rcode_and_flags,
+                                     base::span<const uint8_t> rdata) {
+  DnsResourceRecord record;
+  record.name = "";  // Root domain
+  record.type = dns_protocol::kTypeOPT;
+  record.klass = udp_payload_size;
+  record.ttl = extended_rcode_and_flags;
+
+  if (!rdata.empty()) {
+    record.SetOwnedRdata(rdata);
+  }
+
+  return record;
+}
+
 DnsResponse BuildTestDnsResponse(
     std::string name,
     uint16_t type,
@@ -417,10 +457,15 @@ DnsResponse BuildTestDnsServiceResponse(
   return BuildTestDnsResponse(std::move(name), dns_protocol::kTypeSRV, answers);
 }
 
-MockDnsClientRule::Result::Result(ResultType type,
-                                  std::optional<DnsResponse> response,
-                                  std::optional<int> net_error)
-    : type(type), response(std::move(response)), net_error(net_error) {}
+MockDnsClientRule::Result::Result(
+    ResultType type,
+    std::optional<DnsResponse> response,
+    std::optional<int> net_error,
+    std::optional<DohResolutionDetails> doh_details)
+    : type(type),
+      response(std::move(response)),
+      net_error(net_error),
+      doh_details(std::move(doh_details)) {}
 
 MockDnsClientRule::Result::Result(DnsResponse response)
     : type(ResultType::kOk),
@@ -455,12 +500,25 @@ class MockDnsTransactionFactory::MockTransaction final : public DnsTransaction {
   MockTransaction(const MockDnsClientRuleList& rules,
                   std::string hostname,
                   uint16_t qtype,
-                  bool secure,
+                  AttemptMode attempt_mode,
                   bool force_doh_server_available,
                   SecureDnsMode secure_dns_mode,
                   ResolveContext* resolve_context,
                   bool fast_timeout)
       : hostname_(std::move(hostname)), qtype_(qtype) {
+    bool secure = false;
+    switch (attempt_mode) {
+      case AttemptMode::kClassic:
+        secure = false;
+        break;
+      case AttemptMode::kHttp:
+        secure = true;
+        break;
+      case AttemptMode::kPlatform:
+        // Currently we do not expect AttemptMode::kPlatform to be used in
+        // tests that mock DnsTransaction.
+        NOTREACHED();
+    }
     // Do not allow matching any rules if transaction is secure and no DoH
     // servers are available.
     if (!secure || force_doh_server_available ||
@@ -479,6 +537,7 @@ class MockDnsTransactionFactory::MockTransaction final : public DnsTransaction {
           const MockDnsClientRule::Result* result = &rule.result;
           result_ = MockDnsClientRule::Result(result->type);
           result_.net_error = result->net_error;
+          result_.doh_details = result->doh_details;
           delayed_ = rule.delay;
 
           // Generate a DnsResponse when not provided with the rule.
@@ -544,6 +603,10 @@ class MockDnsTransactionFactory::MockTransaction final : public DnsTransaction {
   const std::string& GetHostname() const override { return hostname_; }
 
   uint16_t GetType() const override { return qtype_; }
+
+  std::optional<DohResolutionDetails> GetDohResolutionDetails() const override {
+    return result_.doh_details;
+  }
 
   void Start(ResponseCallback callback) override {
     CHECK(!callback.is_null());
@@ -678,13 +741,14 @@ std::unique_ptr<DnsTransaction> MockDnsTransactionFactory::CreateTransaction(
     std::string hostname,
     uint16_t qtype,
     const NetLogWithSource&,
-    bool secure,
+    AttemptMode attempt_mode,
     SecureDnsMode secure_dns_mode,
+    handles::NetworkHandle target_network,
     ResolveContext* resolve_context,
     bool fast_timeout) {
   std::unique_ptr<MockTransaction> transaction =
       std::make_unique<MockTransaction>(rules_, std::move(hostname), qtype,
-                                        secure, force_doh_server_available_,
+                                        attempt_mode, force_doh_server_available_,
                                         secure_dns_mode, resolve_context,
                                         fast_timeout);
   if (transaction->delayed())
@@ -694,14 +758,10 @@ std::unique_ptr<DnsTransaction> MockDnsTransactionFactory::CreateTransaction(
 
 std::unique_ptr<DnsProbeRunner> MockDnsTransactionFactory::CreateDohProbeRunner(
     ResolveContext* resolve_context) {
+  if (next_probe_runner_) {
+    return std::move(next_probe_runner_);
+  }
   return std::make_unique<MockDohProbeRunner>(weak_ptr_factory_.GetWeakPtr());
-}
-
-void MockDnsTransactionFactory::AddEDNSOption(
-    std::unique_ptr<OptRecordRdata::Opt> opt) {}
-
-OptRecordRdata* MockDnsTransactionFactory::GetOptRdataForTest() {
-  return nullptr;
 }
 
 SecureDnsMode MockDnsTransactionFactory::GetSecureDnsModeForTest() {
@@ -746,7 +806,8 @@ bool MockDnsClient::CanUseSecureDnsTransactions() const {
 
 bool MockDnsClient::CanUseInsecureDnsTransactions() const {
   const DnsConfig* config = GetEffectiveConfig();
-  return config && config->IsValid() && insecure_enabled_ &&
+  return config && config->IsValid() &&
+         insecure_dns_mode_ != InsecureDnsMode::kDisabled &&
          !config->dns_over_tls_active;
 }
 
@@ -755,10 +816,14 @@ bool MockDnsClient::CanQueryAdditionalTypesViaInsecureDns() const {
   return additional_types_enabled_;
 }
 
-void MockDnsClient::SetInsecureEnabled(bool enabled,
+void MockDnsClient::SetInsecureEnabled(InsecureDnsMode mode,
                                        bool additional_types_enabled) {
-  insecure_enabled_ = enabled;
+  insecure_dns_mode_ = mode;
   additional_types_enabled_ = additional_types_enabled;
+}
+
+InsecureDnsMode MockDnsClient::GetInsecureDnsMode() const {
+  return insecure_dns_mode_;
 }
 
 bool MockDnsClient::FallbackFromSecureTransactionPreferred(
@@ -806,9 +871,9 @@ const DnsConfig* MockDnsClient::GetEffectiveConfig() const {
   return effective_config_.has_value() ? &effective_config_.value() : nullptr;
 }
 
-base::Value::Dict MockDnsClient::GetDnsConfigAsValueForNetLog() const {
+base::DictValue MockDnsClient::GetDnsConfigAsValueForNetLog() const {
   // This is just a stub implementation that never produces a meaningful value.
-  return base::Value::Dict();
+  return base::DictValue();
 }
 
 const DnsHosts* MockDnsClient::GetHosts() const {
@@ -999,6 +1064,19 @@ int MockHostResolverProc::Resolve(const std::string& hostname,
   return OK;
 }
 
+int MockHostResolverProc::Resolve(const std::string& hostname,
+                                  AddressFamily address_family,
+                                  HostResolverFlags host_resolver_flags,
+                                  AddressList* addrlist,
+                                  int* os_error,
+                                  handles::NetworkHandle network) {
+  // TODO(crbug.com/517817412): Stop ignoring `network` once
+  // MockHostResolverProc supports it. It is currently okay to ignore because
+  // no test requires specific behavior based on the target network yet.
+  return Resolve(hostname, address_family, host_resolver_flags, addrlist,
+                 os_error);
+}
+
 MockHostResolverProc::CaptureList MockHostResolverProc::GetCaptureList() const {
   CaptureList copy;
   {
@@ -1017,5 +1095,106 @@ bool MockHostResolverProc::HasBlockedRequests() const {
   base::AutoLock lock(lock_);
   return num_requests_waiting_ > num_slots_available_;
 }
+
+#if BUILDFLAG(IS_WIN)
+// CreateAdapterAddresses provides test data in a format that matches the output
+// from GetAdaptersAddresses. Specifically, it returns a pointer to an
+// IP_ADAPTER_ADDRESSES struct, which is a linked list containing pointers to
+// additional data. All elements of the linked list and data it points to is
+// stored in a single buffer passed to GetAdaptersAddresses, so to match the
+// semantics of that function, this function creates the necessary
+// IP_ADAPTER_ADDRESSES, IP_ADAPTER_DNS_SERVER_ADDRESS, and
+// sockaddr_storage structs in a single buffer.
+std::unique_ptr<IP_ADAPTER_ADDRESSES, base::FreeDeleter> CreateAdapterAddresses(
+    const std::vector<AdapterInfo>& infos) {
+  size_t num_adapters = 0;
+  size_t num_addresses = 0;
+  for (const auto& info : infos) {
+    ++num_adapters;
+    for (const auto& address : info.dns_server_addresses) {
+      if (address.empty()) {
+        break;
+      }
+      ++num_addresses;
+    }
+  }
+  // This is test-only code, so no need to check for overflow in `heap_size`
+  // computation.
+  size_t heap_size = num_adapters * sizeof(IP_ADAPTER_ADDRESSES) +
+                     num_addresses * (sizeof(IP_ADAPTER_DNS_SERVER_ADDRESS) +
+                                      sizeof(struct sockaddr_storage));
+  // `heap` layout:
+  // array of `num_adaptors` IP_ADAPTER_ADDRESSES's
+  // array of `num_addresses` IP_ADAPTER_DNS_SERVER_ADDRESS's
+  // array of `num_addresses` sockaddr_storage's.
+  std::unique_ptr<IP_ADAPTER_ADDRESSES, base::FreeDeleter> heap(
+      static_cast<IP_ADAPTER_ADDRESSES*>(malloc(heap_size)));
+
+  // SAFETY: `heap_size` bytes were allocated to heap.
+  auto buffer_span = UNSAFE_BUFFERS(
+      base::span(reinterpret_cast<uint8_t*>(heap.get()), heap_size));
+  std::ranges::fill(buffer_span, 0u);
+
+  const size_t adapters_bytes = num_adapters * sizeof(IP_ADAPTER_ADDRESSES);
+  const size_t addresses_bytes =
+      num_addresses * sizeof(IP_ADAPTER_DNS_SERVER_ADDRESS);
+  auto [adapter_bytes_span, rest1] = buffer_span.split_at(adapters_bytes);
+  auto [address_bytes_span, storage_bytes_span] =
+      rest1.split_at(addresses_bytes);
+  // SAFETY: `heap` starts with room for `num_addresses`
+  // IP_ADAPTER_DNS_SERVER_ADDRESS's.
+  auto adapters_span = UNSAFE_BUFFERS(base::span(
+      reinterpret_cast<IP_ADAPTER_ADDRESSES*>(adapter_bytes_span.data()),
+      num_adapters));
+  // SAFETY: In the middle is room for `num_addresses`
+  // IP_ADAPTER_DNS_SERVER_ADDRESS's.
+  auto addresses_span = UNSAFE_BUFFERS(
+      base::span(reinterpret_cast<IP_ADAPTER_DNS_SERVER_ADDRESS*>(
+                     address_bytes_span.data()),
+                 num_addresses));
+  // SAFETY: `heap` ends with room for `num_addresses` `sockaddr_storage`'s.
+  auto sockaddr_storage_span = UNSAFE_BUFFERS(base::span(
+      reinterpret_cast<struct sockaddr_storage*>(storage_bytes_span.data()),
+      num_addresses));
+  // This will get decremented before it is used each time an address is found.
+  size_t address_index = num_addresses;
+  for (size_t i = 0; i < num_adapters; ++i) {
+    const AdapterInfo& info = infos[i];
+    auto ports_span = base::span(info.ports);
+    auto server_address_span = base::span(info.dns_server_addresses);
+    IP_ADAPTER_ADDRESSES* adapter = &adapters_span[i];
+    if (i + 1 < num_adapters) {
+      adapter->Next = &adapters_span[i + 1];
+    }
+    adapter->IfType = info.if_type;
+    adapter->OperStatus = info.oper_status;
+    adapter->DnsSuffix = const_cast<PWCHAR>(info.dns_suffix);
+    IP_ADAPTER_DNS_SERVER_ADDRESS* address = nullptr;
+    for (size_t j = 0;
+         !server_address_span[j].empty() && j < server_address_span.size();
+         ++j) {
+      --address_index;
+      if (j == 0) {
+        address = adapter->FirstDnsServerAddress =
+            &addresses_span[address_index];
+      } else {
+        // Note that |address| is moving backwards.
+        address = address->Next = &addresses_span[address_index];
+      }
+      IPAddress ip;
+      CHECK(ip.AssignFromIPLiteral(server_address_span[j]));
+      IPEndPoint ipe = IPEndPoint(ip, ports_span[j]);
+      address->Address.lpSockaddr =
+          reinterpret_cast<LPSOCKADDR>(&sockaddr_storage_span[address_index]);
+      socklen_t length = sizeof(struct sockaddr_storage);
+      CHECK(ipe.ToSockAddr(address->Address.lpSockaddr, &length));
+      address->Address.iSockaddrLength = static_cast<int>(length);
+    }
+  }
+
+  return heap;
+}
+
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace net

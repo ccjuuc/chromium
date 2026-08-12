@@ -6,16 +6,22 @@
 
 #include <windows.foundation.h>
 #include <windows.system.h>
+#include <wrl/client.h>
+#include <wrl/event.h>
+#include <wrl/implements.h>
 
 #include <optional>
 #include <string_view>
 
 #include "base/memory/raw_ref.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/threading/scoped_thread_priority.h"
 #include "base/win/core_winrt_util.h"
 #include "base/win/post_async_results.h"
 #include "services/device/public/cpp/device_features.h"
@@ -25,8 +31,15 @@ namespace device {
 namespace {
 
 using ::ABI::Windows::Devices::Geolocation::GeolocationAccessStatus;
+using ::ABI::Windows::Foundation::ITypedEventHandler;
+using ::ABI::Windows::Security::Authorization::AppCapabilityAccess::
+    AppCapability;
+using ::ABI::Windows::Security::Authorization::AppCapabilityAccess::
+    AppCapabilityAccessChangedEventArgs;
 using ::ABI::Windows::Security::Authorization::AppCapabilityAccess::
     IAppCapability;
+using ::ABI::Windows::Security::Authorization::AppCapabilityAccess::
+    IAppCapabilityAccessChangedEventArgs;
 using ::Microsoft::WRL::ComPtr;
 
 void RecordUmaInitialPermissionStatus(LocationSystemPermissionStatus status) {
@@ -56,6 +69,11 @@ void RecordUmaCheckAccessError(HRESULT error) {
       "Geolocation.SystemGeolocationSourceWin.CheckAccessError", error);
 }
 
+void RecordUmaAddAccessChangedError(HRESULT error) {
+  base::UmaHistogramSparse(
+      "Geolocation.SystemGeolocationSourceWin.AddAccessChangedError", error);
+}
+
 void RecordUmaCreateAppCapabilityError(HRESULT error) {
   base::UmaHistogramSparse(
       "Geolocation.SystemGeolocationSourceWin.CreateAppCapabilityError", error);
@@ -71,8 +89,21 @@ void RecordUmaRequestAccessResult(HRESULT result) {
       "Geolocation.SystemGeolocationSourceWin.RequestAccessResult", result);
 }
 
+SystemGeolocationSourceWin::AppCapabilityFactory& GetFactoryStorage() {
+  static base::NoDestructor<SystemGeolocationSourceWin::AppCapabilityFactory>
+      factory;
+  return *factory;
+}
+
 // Create an AppCapability object for the capability named `name`.
 ComPtr<IAppCapability> CreateAppCapability(std::string_view name) {
+  if (GetFactoryStorage()) {
+    return GetFactoryStorage().Run(name);
+  }
+
+  // COM calls can load DLLs, use background priority to avoid I/O inversion.
+  SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY();
+
   using ::ABI::Windows::Security::Authorization::AppCapabilityAccess::
       IAppCapabilityStatics;
   ComPtr<IAppCapabilityStatics> app_capability_statics;
@@ -98,13 +129,43 @@ ComPtr<IAppCapability> CreateAppCapability(std::string_view name) {
   return app_capability;
 }
 
+class AccessChangedHandler
+    : public Microsoft::WRL::RuntimeClass<
+          Microsoft::WRL::RuntimeClassFlags<
+              Microsoft::WRL::ClassicCom |
+              Microsoft::WRL::InhibitRoOriginateError>,
+          ITypedEventHandler<AppCapability*,
+                             AppCapabilityAccessChangedEventArgs*>,
+          Microsoft::WRL::FtmBase> {
+ public:
+  explicit AccessChangedHandler(base::RepeatingClosure on_changed_callback)
+      : on_changed_callback_(
+            base::BindPostTask(base::SequencedTaskRunner::GetCurrentDefault(),
+                               std::move(on_changed_callback))) {}
+  AccessChangedHandler(const AccessChangedHandler&) = delete;
+  AccessChangedHandler& operator=(const AccessChangedHandler&) = delete;
+  ~AccessChangedHandler() override = default;
+
+  IFACEMETHODIMP Invoke(IAppCapability* sender,
+                        IAppCapabilityAccessChangedEventArgs* args) override {
+    on_changed_callback_.Run();
+    return S_OK;
+  }
+
+ private:
+  base::RepeatingClosure on_changed_callback_;
+};
+
 }  // namespace
 
-class SystemGeolocationSourceWin::AccessCheckHelper {
+class SystemGeolocationSourceWin::AccessListenerHelper {
  public:
-  AccessCheckHelper(
+  AccessListenerHelper(
       base::WeakPtr<SystemGeolocationSourceWin> source,
       scoped_refptr<base::SequencedTaskRunner> source_task_runner);
+  AccessListenerHelper(const AccessListenerHelper&) = delete;
+  AccessListenerHelper& operator=(const AccessListenerHelper&) = delete;
+  ~AccessListenerHelper();
 
   // This function periodically checks and informs `source_` about the system's
   // geolocation permission status. It handles potential access failures and
@@ -113,46 +174,29 @@ class SystemGeolocationSourceWin::AccessCheckHelper {
   void PollPermissionStatus();
 
  private:
-  // Minimum and maximum polling intervals (in milliseconds). Any value fetched
-  // from Finch config (features::kWinSystemLocationPermissionPollingParam) will
-  // be clamped within this range to ensure reasonable polling frequency
-  static constexpr int kMinPollingIntervalMs = 500;
-  static constexpr int kMaxPollingIntervalMs = 3000;
+  void OnAccessChanged();
   // The interval (in milliseconds) at which to poll for permission changes.
+  static constexpr int kDefaultPollingIntervalMs = 500;
   const int polling_interval_;
   // COM interface to check the app's capability to access location.
   ComPtr<IAppCapability> location_capability_;
+  std::optional<EventRegistrationToken> location_token_;
   base::WeakPtr<SystemGeolocationSourceWin> source_;
   scoped_refptr<base::SequencedTaskRunner> source_task_runner_;
-  base::WeakPtrFactory<SystemGeolocationSourceWin::AccessCheckHelper>
+  base::WeakPtrFactory<SystemGeolocationSourceWin::AccessListenerHelper>
       weak_ptr_factory_{this};
 };
 
-SystemGeolocationSourceWin::AccessCheckHelper::AccessCheckHelper(
+SystemGeolocationSourceWin::AccessListenerHelper::AccessListenerHelper(
     base::WeakPtr<SystemGeolocationSourceWin> source,
     scoped_refptr<base::SequencedTaskRunner> source_task_runner)
-    : polling_interval_(
-          std::clamp(features::kWinSystemLocationPermissionPollingParam.Get(),
-                     kMinPollingIntervalMs,
-                     kMaxPollingIntervalMs)),
+    : polling_interval_(kDefaultPollingIntervalMs),
       location_capability_(CreateAppCapability("location")),
       source_(source),
       source_task_runner_(source_task_runner) {
-  PollPermissionStatus();
-}
-
-void SystemGeolocationSourceWin::AccessCheckHelper::PollPermissionStatus() {
-  using ::ABI::Windows::Security::Authorization::AppCapabilityAccess::
-      AppCapabilityAccessStatus;
-  using ::ABI::Windows::Security::Authorization::AppCapabilityAccess::
-      AppCapabilityAccessStatus_Allowed;
-  using ::ABI::Windows::Security::Authorization::AppCapabilityAccess::
-      AppCapabilityAccessStatus_UserPromptRequired;
-
   // If the location capability object is not available (potentially due
   // to initialization failure or other issues), post a task to notify the
-  // SystemGeolocationSourceWin that the permission status is 'kNotDetermined'
-  // and exit the function early without scheduling next poll.
+  // SystemGeolocationSourceWin that the permission status is 'kNotDetermined'.
   if (!location_capability_) {
     source_task_runner_->PostTask(
         FROM_HERE,
@@ -161,6 +205,43 @@ void SystemGeolocationSourceWin::AccessCheckHelper::PollPermissionStatus() {
                        LocationSystemPermissionStatus::kNotDetermined));
     return;
   }
+
+  if (base::FeatureList::IsEnabled(
+          features::kWinSystemLocationPermissionEventBased)) {
+    HRESULT hr = location_capability_->add_AccessChanged(
+        Microsoft::WRL::Make<AccessChangedHandler>(
+            base::BindRepeating(&AccessListenerHelper::OnAccessChanged,
+                                weak_ptr_factory_.GetWeakPtr()))
+            .Get(),
+        &location_token_.emplace());
+    if (FAILED(hr)) {
+      LOG(ERROR) << "Failed to add access change listener: "
+                 << logging::SystemErrorCodeToString(hr);
+      RecordUmaAddAccessChangedError(hr);
+      location_token_.reset();
+    }
+  }
+
+  PollPermissionStatus();
+}
+
+SystemGeolocationSourceWin::AccessListenerHelper::~AccessListenerHelper() {
+  if (location_capability_ && location_token_) {
+    location_capability_->remove_AccessChanged(*location_token_);
+  }
+}
+
+void SystemGeolocationSourceWin::AccessListenerHelper::OnAccessChanged() {
+  PollPermissionStatus();
+}
+
+void SystemGeolocationSourceWin::AccessListenerHelper::PollPermissionStatus() {
+  using ::ABI::Windows::Security::Authorization::AppCapabilityAccess::
+      AppCapabilityAccessStatus;
+  using ::ABI::Windows::Security::Authorization::AppCapabilityAccess::
+      AppCapabilityAccessStatus_Allowed;
+  using ::ABI::Windows::Security::Authorization::AppCapabilityAccess::
+      AppCapabilityAccessStatus_UserPromptRequired;
 
   LocationSystemPermissionStatus status =
       LocationSystemPermissionStatus::kDenied;
@@ -182,19 +263,24 @@ void SystemGeolocationSourceWin::AccessCheckHelper::PollPermissionStatus() {
       base::BindOnce(&SystemGeolocationSourceWin::OnPermissionStatusUpdated,
                      source_, status));
 
+  // If we have a token, we are using events and don't need to poll.
+  if (location_token_) {
+    return;
+  }
+
   // Schedule next poll.
   base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
-      base::BindOnce(
-          &SystemGeolocationSourceWin::AccessCheckHelper::PollPermissionStatus,
-          weak_ptr_factory_.GetWeakPtr()),
+      base::BindOnce(&SystemGeolocationSourceWin::AccessListenerHelper::
+                         PollPermissionStatus,
+                     weak_ptr_factory_.GetWeakPtr()),
       base::Milliseconds(polling_interval_));
 }
 
 SystemGeolocationSourceWin::SystemGeolocationSourceWin() {
-  access_check_helper_ = base::SequenceBound<AccessCheckHelper>(
+  access_listener_helper_ = base::SequenceBound<AccessListenerHelper>(
       base::ThreadPool::CreateCOMSTATaskRunner(
-          {base::MayBlock(), base::TaskPriority::USER_VISIBLE}),
+          {base::MayBlock(), base::TaskPriority::BEST_EFFORT}),
       weak_factory_.GetWeakPtr(),
       base::SequencedTaskRunner::GetCurrentDefault());
 }
@@ -204,8 +290,17 @@ SystemGeolocationSourceWin::~SystemGeolocationSourceWin() = default;
 // static
 std::unique_ptr<GeolocationSystemPermissionManager>
 SystemGeolocationSourceWin::CreateGeolocationSystemPermissionManager() {
+  if (!features::IsOsLevelGeolocationPermissionSupportEnabled()) {
+    return nullptr;
+  }
   return std::make_unique<GeolocationSystemPermissionManager>(
       std::make_unique<SystemGeolocationSourceWin>());
+}
+
+// static
+void SystemGeolocationSourceWin::SetAppCapabilityFactoryForTesting(
+    AppCapabilityFactory factory) {
+  GetFactoryStorage() = std::move(factory);
 }
 
 void SystemGeolocationSourceWin::RegisterPermissionUpdateCallback(

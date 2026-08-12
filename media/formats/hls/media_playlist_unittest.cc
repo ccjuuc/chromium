@@ -36,7 +36,9 @@ scoped_refptr<MultivariantPlaylist> CreateMultivariantPlaylist(
 
   // Parse the given source. Failure here isn't supposed to be part of the test,
   // so use a CHECK.
-  auto result = MultivariantPlaylist::Parse(source, std::move(uri), version);
+  auto origin = url::Origin::Create(uri);
+  auto result =
+      MultivariantPlaylist::Parse(source, std::move(uri), origin, version);
   CHECK(result.has_value());
   return std::move(result).value();
 }
@@ -1558,6 +1560,134 @@ TEST(HlsMediaPlaylistTest, XKeyTagAppliesToSegments) {
                       XKeyTagMethod::kSampleAESCTR, XKeyTagKeyFormat::kIdentity,
                       std::make_tuple(0, 6)));
   builder.ExpectOk();
+
+  builder.AppendLine(
+      "#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI=\"https://example.com/"
+      "key\",KEYFORMAT="
+      "\"identity\"");
+  builder.AppendLine("#EXTINF:1.60000,");
+  builder.AppendLine("data06.ts");
+  builder.ExpectAdditionalSegment();
+  builder.ExpectSegment(HasUri, GURL("http://localhost/data06.ts"));
+  builder.ExpectSegment(HasMediaSequenceNumber, 7);
+  builder.ExpectSegment(
+      HasEncryptionData,
+      std::make_tuple(GURL("https://example.com/key"),
+                      XKeyTagMethod::kSampleAESCTR, XKeyTagKeyFormat::kIdentity,
+                      std::make_tuple(0, 7)));
+  builder.ExpectOk();
+
+  builder.AppendLine(
+      "#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI=\"data:text/"
+      "plain;base64,SGVsbG8sIFdvcmxkIQ==\",KEYFORMAT="
+      "\"identity\"");
+  builder.AppendLine("#EXTINF:1.60000,");
+  builder.AppendLine("data06.ts");
+  builder.ExpectAdditionalSegment();
+  builder.ExpectSegment(HasUri, GURL("http://localhost/data06.ts"));
+  builder.ExpectSegment(HasMediaSequenceNumber, 8);
+  builder.ExpectSegment(
+      HasEncryptionData,
+      std::make_tuple(GURL("data:text/plain;base64,SGVsbG8sIFdvcmxkIQ=="),
+                      XKeyTagMethod::kSampleAESCTR, XKeyTagKeyFormat::kIdentity,
+                      std::make_tuple(0, 8)));
+  builder.ExpectOk();
+
+  builder.AppendLine(
+      "#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI=\"//keyhost/key\","
+      "KEYFORMAT=\"identity\"");
+  builder.AppendLine("#EXTINF:1.60000,");
+  builder.AppendLine("data07.ts");
+  builder.ExpectAdditionalSegment();
+  builder.ExpectSegment(HasUri, GURL("http://localhost/data07.ts"));
+  builder.ExpectSegment(HasMediaSequenceNumber, 9);
+  builder.ExpectSegment(
+      HasEncryptionData,
+      std::make_tuple(GURL("http://keyhost/key"), XKeyTagMethod::kSampleAESCTR,
+                      XKeyTagKeyFormat::kIdentity, std::make_tuple(0, 9)));
+  builder.ExpectOk();
+
+  builder.AppendLine(
+      "#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI=\"/keypath/key\","
+      "KEYFORMAT=\"identity\"");
+  builder.AppendLine("#EXTINF:1.60000,");
+  builder.AppendLine("data08.ts");
+  builder.ExpectAdditionalSegment();
+  builder.ExpectSegment(HasUri, GURL("http://localhost/data08.ts"));
+  builder.ExpectSegment(HasMediaSequenceNumber, 10);
+  builder.ExpectSegment(
+      HasEncryptionData,
+      std::make_tuple(GURL("http://localhost/keypath/key"),
+                      XKeyTagMethod::kSampleAESCTR, XKeyTagKeyFormat::kIdentity,
+                      std::make_tuple(0, 10)));
+  builder.ExpectOk();
+
+  // Test backslash bypass (should be classified as UnsafeOrigin because it
+  // resolves to cross-origin)
+  builder.AppendLine(
+      "#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI=\"/\\\\victim.com/key\","
+      "KEYFORMAT=\"identity\"");
+  builder.AppendLine("#EXTINF:1.60000,");
+  builder.AppendLine("data09.ts");
+  builder.ExpectAdditionalSegment();
+  builder.ExpectSegment(HasUri, GURL("http://localhost/data09.ts"));
+  builder.ExpectSegment(HasMediaSequenceNumber, 11);
+  builder.ExpectSegment(
+      HasEncryptionData,
+      std::make_tuple(GURL("http://victim.com/key"),
+                      XKeyTagMethod::kSampleAESCTR, XKeyTagKeyFormat::kIdentity,
+                      std::make_tuple(0, 11)));
+  builder.ExpectOk();
+
+  // Test leading whitespace bypass (should be classified as UnsafeOrigin
+  // because it resolves to cross-origin)
+  builder.AppendLine(
+      "#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI=\"  //victim.com/key\","
+      "KEYFORMAT=\"identity\"");
+  builder.AppendLine("#EXTINF:1.60000,");
+  builder.AppendLine("data10.ts");
+  builder.ExpectAdditionalSegment();
+  builder.ExpectSegment(HasUri, GURL("http://localhost/data10.ts"));
+  builder.ExpectSegment(HasMediaSequenceNumber, 12);
+  builder.ExpectSegment(
+      HasEncryptionData,
+      std::make_tuple(GURL("http://victim.com/key"),
+                      XKeyTagMethod::kSampleAESCTR, XKeyTagKeyFormat::kIdentity,
+                      std::make_tuple(0, 12)));
+  builder.ExpectOk();
+}
+
+TEST(HlsMediaPlaylistTest, DataUriManifest) {
+  // A data URI manifest without a parent playlist should fail to parse.
+  {
+    MediaPlaylistTestBuilder builder;
+    builder.SetUri(GURL("data:text/mpegurl;base64,YWJjZA=="));
+    builder.AppendLine("#EXTM3U");
+    builder.AppendLine("#EXT-X-TARGETDURATION:10");
+    builder.AppendLine("#EXTINF:9.2,");
+    builder.AppendLine("video.ts");
+    builder.ExpectError(ParseStatusCode::kInvalidUri);
+  }
+
+  // A data URI manifest with a parent playlist should succeed to parse.
+  // The resource URIs (video.ts) should be resolved against the parent
+  // playlist's URI.
+  {
+    auto parent = CreateMultivariantPlaylist(
+        {"#EXTM3U"}, GURL("http://localhost/multi_playlist.m3u8"));
+
+    MediaPlaylistTestBuilder builder;
+    builder.SetParent(parent.get());
+    builder.SetUri(GURL("data:text/mpegurl;base64,YWJjZA=="));
+    builder.AppendLine("#EXTM3U");
+    builder.AppendLine("#EXT-X-TARGETDURATION:10");
+    builder.AppendLine("#EXTINF:9.2,");
+    builder.AppendLine("video.ts");
+    builder.ExpectPlaylist(HasTargetDuration, base::Seconds(10));
+    builder.ExpectAdditionalSegment();
+    builder.ExpectSegment(HasUri, GURL("http://localhost/video.ts"));
+    builder.ExpectOk();
+  }
 }
 
 }  // namespace media::hls

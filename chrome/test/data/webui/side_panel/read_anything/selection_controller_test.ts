@@ -127,109 +127,72 @@ suite('SelectionController', () => {
       assertFalse(selectionController.hasSelection());
     });
 
-    test('current selection start with only anchor node', () => {
-      const expectedAnchorOffset = 2;
-      const expectedFocusOffset = 10;
-      const node = getNodeAt(1);
-      chrome.readingMode.startNodeId = node.id;
-      chrome.readingMode.startOffset = expectedAnchorOffset;
-      chrome.readingMode.endNodeId = 0;
-      chrome.readingMode.endOffset = expectedFocusOffset;
-      nodeStore.setDomNode(node.node, node.id);
-
-      selectNodes(node, expectedAnchorOffset, node, expectedFocusOffset);
-      const selectionStart = selectionController.getCurrentSelectionStart();
-
-      assertEquals(node.id, selectionStart.nodeId);
-      assertEquals(expectedAnchorOffset, selectionStart.offset);
-    });
-
-    test('current selection start with only focus node', () => {
-      const expectedAnchorOffset = 2;
-      const expectedFocusOffset = 10;
-      const node = getNodeAt(1);
-      chrome.readingMode.endNodeId = node.id;
-      chrome.readingMode.endOffset = expectedFocusOffset;
-      chrome.readingMode.startNodeId = 0;
-      chrome.readingMode.startOffset = expectedAnchorOffset;
-      nodeStore.setDomNode(node.node, node.id);
-
-      selectNodes(node, expectedAnchorOffset, node, expectedFocusOffset);
-      const selectionStart = selectionController.getCurrentSelectionStart();
-
-      assertEquals(node.id, selectionStart.nodeId);
-      assertEquals(expectedFocusOffset, selectionStart.offset);
+    test('current selection start with no selection returns null', () => {
+      chrome.readingMode.isImmersiveEnabled = true;
+      assertFalse(!!selectionController.getCurrentSelectionStart());
     });
 
     test('current selection start with forward selection in one node', () => {
+      chrome.readingMode.isImmersiveEnabled = true;
       const expectedAnchorOffset = 2;
       const expectedFocusOffset = 10;
       const node = getNodeAt(1);
-      chrome.readingMode.startNodeId = node.id;
-      chrome.readingMode.startOffset = expectedAnchorOffset;
-      chrome.readingMode.endNodeId = node.id;
-      chrome.readingMode.endOffset = expectedFocusOffset;
       nodeStore.setDomNode(node.node, node.id);
 
       selectNodes(node, expectedAnchorOffset, node, expectedFocusOffset);
       const selectionStart = selectionController.getCurrentSelectionStart();
 
-      assertEquals(node.id, selectionStart.nodeId);
+      assertTrue(!!selectionStart);
+      assertEquals(node.node, selectionStart.node);
       assertEquals(expectedAnchorOffset, selectionStart.offset);
     });
 
     test('current selection start with backward selection in one node', () => {
+      chrome.readingMode.isImmersiveEnabled = true;
       const expectedAnchorOffset = 10;
       const expectedFocusOffset = 2;
       const node = getNodeAt(1);
-      chrome.readingMode.startNodeId = node.id;
-      chrome.readingMode.startOffset = expectedAnchorOffset;
-      chrome.readingMode.endNodeId = node.id;
-      chrome.readingMode.endOffset = expectedFocusOffset;
       nodeStore.setDomNode(node.node, node.id);
 
       selectNodes(node, expectedAnchorOffset, node, expectedFocusOffset);
       const selectionStart = selectionController.getCurrentSelectionStart();
 
-      assertEquals(node.id, selectionStart.nodeId);
+      assertTrue(!!selectionStart);
+      assertEquals(node.node, selectionStart.node);
       assertEquals(expectedFocusOffset, selectionStart.offset);
     });
 
     test('current selection start with forward selection across nodes', () => {
+      chrome.readingMode.isImmersiveEnabled = true;
       const expectedAnchorOffset = 10;
       const expectedFocusOffset = 2;
       const node1 = getNodeAt(0);
       const node2 = getNodeAt(1);
-      chrome.readingMode.startNodeId = node1.id;
-      chrome.readingMode.startOffset = expectedAnchorOffset;
-      chrome.readingMode.endNodeId = node2.id;
-      chrome.readingMode.endOffset = expectedFocusOffset;
       nodeStore.setDomNode(node1.node, node1.id);
       nodeStore.setDomNode(node2.node, node2.id);
 
       selectNodes(node1, expectedAnchorOffset, node2, expectedFocusOffset);
       const selectionStart = selectionController.getCurrentSelectionStart();
 
-      assertEquals(node1.id, selectionStart.nodeId);
+      assertTrue(!!selectionStart);
+      assertEquals(node1.node, selectionStart.node);
       assertEquals(expectedAnchorOffset, selectionStart.offset);
     });
 
     test('current selection start with backward selection across nodes', () => {
+      chrome.readingMode.isImmersiveEnabled = true;
       const expectedAnchorOffset = 10;
       const expectedFocusOffset = 2;
       const node1 = getNodeAt(0);
       const node2 = getNodeAt(1);
-      chrome.readingMode.startNodeId = node2.id;
-      chrome.readingMode.startOffset = expectedFocusOffset;
-      chrome.readingMode.endNodeId = node1.id;
-      chrome.readingMode.endOffset = expectedAnchorOffset;
       nodeStore.setDomNode(node1.node, node1.id);
       nodeStore.setDomNode(node2.node, node2.id);
 
       selectNodes(node2, expectedFocusOffset, node1, expectedAnchorOffset);
       const selectionStart = selectionController.getCurrentSelectionStart();
 
-      assertEquals(node1.id, selectionStart.nodeId);
+      assertTrue(!!selectionStart);
+      assertEquals(node1.node, selectionStart.node);
       assertEquals(expectedAnchorOffset, selectionStart.offset);
     });
 
@@ -405,6 +368,195 @@ suite('SelectionController', () => {
       assertEquals(highlightStart + anchorOffset, actualAnchorOffset);
       assertEquals(highlightStart + focusOffset, actualFocusOffset);
     });
+
+    test('selection with element container maps to text nodes', () => {
+      const node0 = getNodeAt(0);
+      const node1 = getNodeAt(1);
+      nodeStore.setDomNode(node0.node, node0.id);
+      nodeStore.setDomNode(node1.node, node1.id);
+      const parent = node0.node.parentElement!;
+      nodeStore.setDomNode(parent, parentIds[0]!);
+
+      // Anchor is parent at index 0 (before node0), focus is parent at index 1
+      // (after node0).
+      selection.setBaseAndExtent(parent, 0, parent, 1);
+      selectionController.onSelectionChange(selection);
+
+      // It should map to text node 0 fully!
+      assertEquals(node0.id, actualAnchorId);
+      assertEquals(node0.id, actualFocusId);
+      assertEquals(0, actualAnchorOffset);
+      assertEquals(node0.text.length, actualFocusOffset);
+    });
+
+    test(
+        'triple click like selection with element container maps to text nodes',
+        () => {
+          // Register all text nodes in nodeStore
+          for (let i = 0; i < textNodes.length; i++) {
+            const node = getNodeAt(i);
+            nodeStore.setDomNode(node.node, node.id);
+          }
+          const parent = textNodes[0]!.parentElement!;
+          nodeStore.setDomNode(parent, parentIds[0]!);
+
+          // Set selection visually on the parent element, around the entire
+          // paragraph (children index 0 to 4).
+          selection.setBaseAndExtent(parent, 0, parent, 4);
+          selectionController.onSelectionChange(selection);
+
+          // It should be normalized to the first text node at start and last
+          // text node at end!
+          const nodeStart = getNodeAt(0);
+          const nodeEnd = getNodeAt(3);
+          assertEquals(nodeStart.id, actualAnchorId);
+          assertEquals(nodeEnd.id, actualFocusId);
+          assertEquals(0, actualAnchorOffset);
+          assertEquals(nodeEnd.text.length, actualFocusOffset);
+        });
+
+    test('collapsed selection is not shifted and collapses selection', () => {
+      const node = getNodeAt(1);
+      nodeStore.setDomNode(node.node, node.id);
+
+      let collapseCalled = false;
+      chrome.readingMode.onCollapseSelection = () => {
+        collapseCalled = true;
+      };
+
+      // Set a collapsed selection at the end of node (offset 10)
+      selection.setBaseAndExtent(node.node, 10, node.node, 10);
+      selectionController.onSelectionChange(selection);
+
+      assertTrue(collapseCalled);
+      assertEquals(-1, actualAnchorId);
+      assertEquals(-1, actualFocusId);
+    });
+
+    test(
+        'backward selection is correctly normalized without shifting past boundaries',
+        () => {
+          // Register text nodes
+          for (let i = 0; i < textNodes.length; i++) {
+            const node = getNodeAt(i);
+            nodeStore.setDomNode(node.node, node.id);
+          }
+
+          // Drag backward from end of node 1 (offset length) to start of node 1
+          // (offset 0)
+          const node = getNodeAt(1);
+          selectNodes(node, node.text.length, node, 0);
+
+          // Anchor is end, Focus is start.
+          // With backward selection, the focus (start) should NOT shift
+          // backward to node 0 (title) and the anchor (end) should NOT shift
+          // forward to node 2.
+          assertEquals(node.id, actualAnchorId);
+          assertEquals(node.id, actualFocusId);
+          assertEquals(node.text.length, actualAnchorOffset);
+          assertEquals(0, actualFocusOffset);
+        });
+
+    test('selection in node with axNodeOffset', () => {
+      const node = getNodeAt(1);
+      const axNodeOffset = 10;
+      nodeStore.setDomNode(node.node, node.id);
+      nodeStore.setAxNodeOffset(node.node, axNodeOffset);
+
+      const anchorOffset = 2;
+      const focusOffset = 5;
+      selectNodes(node, anchorOffset, node, focusOffset);
+
+      assertEquals(node.id, actualAnchorId);
+      assertEquals(node.id, actualFocusId);
+
+      assertEquals(anchorOffset + axNodeOffset, actualAnchorOffset);
+      assertEquals(focusOffset + axNodeOffset, actualFocusOffset);
+    });
+
+    test('selection in highlighted node with ancestor and axNodeOffset', () => {
+      const axNodeOffset = 20;
+      const highlightStart = 5;
+      highlightAtOffset(0, highlightStart);
+
+      const node = getNodeAt(0);  // This is the text node inside the span
+      const parentSpan = node.node.parentElement!;
+      nodeStore.setAxNodeOffset(parentSpan, axNodeOffset);
+
+      const anchorOffset = 2;
+      const focusOffset = 4;
+      selectNodes(node, anchorOffset, node, focusOffset);
+
+      assertEquals(parentIds[0], actualAnchorId);
+      // Expected = user_offset(2) + offset_in_span(5) + span_ax_offset(20) = 27
+      assertEquals(
+          anchorOffset + highlightStart + axNodeOffset, actualAnchorOffset);
+    });
+
+    test('shifts focus backward skipping unmapped nodes in readability', () => {
+      // Recreate clean DOM for scenario where whitespace unmapped nodes exist.
+      document.body.innerHTML = window.trustedTypes!.emptyHTML;
+      const parent = document.createElement('p');
+      const node0 = document.createTextNode(texts[0]!);
+      const spacer1 = document.createTextNode(' \n  ');
+      const spacer2 = document.createTextNode('   ');
+      const node1 = document.createTextNode(texts[1]!);
+      parent.appendChild(node0);
+      parent.appendChild(spacer1);
+      parent.appendChild(spacer2);
+      parent.appendChild(node1);
+      document.body.appendChild(parent);
+
+      // Register parent, node0 and node1, but NOT the spacers.
+      nodeStore.setDomNode(parent, parentIds[0]!);
+      nodeStore.setDomNode(node0, textNodeIds[0]!);
+      nodeStore.setDomNode(node1, textNodeIds[1]!);
+
+      // Drag from end of node0 to start of node1 (offset 0), which is a
+      // forward drag (isBackward = false).
+      selection.setBaseAndExtent(node0, 5, node1, 0);
+      selectionController.onSelectionChange(selection);
+
+      // The focus node (node1 at offset 0) should be shifted backward
+      // skipping the unmapped spacer1 and spacer2 to the end of node0!
+      assertEquals(textNodeIds[0], actualAnchorId);
+      assertEquals(textNodeIds[0], actualFocusId);
+      assertEquals(5, actualAnchorOffset);
+      assertEquals(node0.textContent.length, actualFocusOffset);
+    });
+
+    test('shifts anchor forward skipping unmapped nodes in readability', () => {
+      // Recreate clean DOM for scenario where whitespace unmapped nodes exist.
+      document.body.innerHTML = window.trustedTypes!.emptyHTML;
+      const parent = document.createElement('p');
+      const node0 = document.createTextNode(texts[0]!);
+      const spacer1 = document.createTextNode(' \n  ');
+      const spacer2 = document.createTextNode('   ');
+      const node1 = document.createTextNode(texts[1]!);
+      parent.appendChild(node0);
+      parent.appendChild(spacer1);
+      parent.appendChild(spacer2);
+      parent.appendChild(node1);
+      document.body.appendChild(parent);
+
+      nodeStore.setDomNode(parent, parentIds[0]!);
+      nodeStore.setDomNode(node0, textNodeIds[0]!);
+      nodeStore.setDomNode(node1, textNodeIds[1]!);
+
+      // Drag from end of node0 (offset length) to some point in node1.
+      // This is a forward drag (isBackward = false), so start boundary
+      // sits at the end of node0 and should shift forward.
+      selection.setBaseAndExtent(node0, node0.textContent.length, node1, 5);
+      selectionController.onSelectionChange(selection);
+
+      // The anchor node (node0 at offset length) should be shifted
+      // forward skipping the unmapped spacer1 and spacer2 to the start of
+      // node1!
+      assertEquals(textNodeIds[1], actualAnchorId);
+      assertEquals(textNodeIds[1], actualFocusId);
+      assertEquals(0, actualAnchorOffset);
+      assertEquals(5, actualFocusOffset);
+    });
   });
 
   suite('updateSelection', () => {
@@ -439,6 +591,31 @@ suite('SelectionController', () => {
     suite('with readability enabled', () => {
       setup(() => {
         chrome.readingMode.isReadabilityEnabled = true;
+        chrome.readingMode.activeDistillationMethod =
+            chrome.readingMode.distillationTypeReadability;
+      });
+
+      test('does nothing when node content is missing', () => {
+        const expectedAnchorOffset = 2;
+        const expectedFocusOffset = 10;
+        selectNodesInMainPanel(
+            100, expectedAnchorOffset, 101, expectedFocusOffset);
+        const prefix =
+            'Being home alone is like being home with no, with no people. ';
+        const content = 'I was alone cause there were no people at all.';
+        chrome.readingMode.getPrefixText = () => prefix;
+        // Simulate one of the nodes not having content.
+        chrome.readingMode.getTextContent = (id: number) =>
+            (id === 100) ? content : '';
+        const p = document.createElement('p');
+        p.appendChild(document.createTextNode(prefix));
+        p.appendChild(document.createTextNode(content));
+        document.body.appendChild(p);
+
+        selectionController.updateSelection(selection, document.body);
+
+        assertFalse(!!selection.anchorNode);
+        assertFalse(!!selection.focusNode);
       });
 
       test('does nothing when ids are unknown', () => {
@@ -812,6 +989,15 @@ suite('SelectionController', () => {
       assertFalse(!!selection.focusNode);
     });
 
+    test('does nothing when selection is invalid', () => {
+      selectNodesInMainPanel(100, 2, 101, 10);
+      chrome.readingMode.hasValidSelection = false;
+      selectionController.updateSelection(selection, document.body);
+
+      assertFalse(!!selection.anchorNode);
+      assertFalse(!!selection.focusNode);
+    });
+
     test('selects nodes directly if they are text nodes', () => {
       const expectedAnchorOffset = 2;
       const expectedFocusOffset = 10;
@@ -986,6 +1172,61 @@ suite('SelectionController', () => {
       assertEquals(node3.text, selection.focusNode?.textContent);
       assertEquals(relativeAnchorOffset, selection.anchorOffset);
       assertEquals(relativeFocusOffset, selection.focusOffset);
+    });
+
+    test('selects correct text when side panel node has axNodeOffset', () => {
+      const axNodeOffset = 17;
+      const node = getNodeAt(1);
+      nodeStore.setDomNode(node.node, node.id);
+      nodeStore.setAxNodeOffset(node.node, axNodeOffset);
+
+      // Main panel selection starts at index 17
+      const mainAnchorOffset = 17;
+      const mainFocusOffset = 21;
+      selectNodesInMainPanel(
+          node.id, mainAnchorOffset, node.id, mainFocusOffset);
+
+      selectionController.updateSelection(selection, document.body);
+
+      assertEquals(node.node, selection.anchorNode);
+      assertEquals(0, selection.anchorOffset);  // 17 - 17
+      assertEquals(4, selection.focusOffset);   // 21 - 17
+    });
+
+    test('ignores selection that starts before axNodeOffset', () => {
+      const axNodeOffset = 17;
+      const node = getNodeAt(1);
+      nodeStore.setDomNode(node.node, node.id);
+      nodeStore.setAxNodeOffset(node.node, axNodeOffset);
+
+      // User selects text in the main panel with an offset that occurs before
+      // the portion of the rendered text node starting offset.
+      const mainAnchorOffset = 0;
+      const mainFocusOffset = 9;
+      selectNodesInMainPanel(
+          node.id, mainAnchorOffset, node.id, mainFocusOffset);
+
+      selectionController.updateSelection(selection, document.body);
+
+      assertFalse(!!selection.anchorNode);
+    });
+
+    test('ignores selection that starts after axNodeOffset range', () => {
+      const axNodeOffset = 17;
+      const node = getNodeAt(1);
+      nodeStore.setDomNode(node.node, node.id);
+      nodeStore.setAxNodeOffset(node.node, axNodeOffset);
+
+      // User selects text in the main panel with an offset that occurs after
+      // the portion of the rendered text node in the side panel.
+      const mainAnchorOffset = axNodeOffset + node.text.length + 1;
+      const mainFocusOffset = mainAnchorOffset + 5;
+      selectNodesInMainPanel(
+          node.id, mainAnchorOffset, node.id, mainFocusOffset);
+
+      selectionController.updateSelection(selection, document.body);
+
+      assertFalse(!!selection.anchorNode);
     });
   });
 });

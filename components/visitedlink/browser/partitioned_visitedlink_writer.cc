@@ -4,6 +4,7 @@
 
 #include "components/visitedlink/browser/partitioned_visitedlink_writer.h"
 
+#include <algorithm>
 #include <array>
 
 #include "base/compiler_specific.h"
@@ -13,6 +14,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/shared_memory_mapping.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/numerics/checked_math.h"
 #include "base/rand_util.h"
 #include "base/trace_event/trace_event.h"
 #include "components/visitedlink/browser/visitedlink_delegate.h"
@@ -47,7 +49,7 @@ namespace visitedlink {
 
 // This value should also be the same as the smallest size in the lookup
 // table in NewTableSizeForCount (prime number).
-const unsigned PartitionedVisitedLinkWriter::kDefaultTableSize = 16381;
+const int32_t PartitionedVisitedLinkWriter::kDefaultTableSize = 16381;
 
 bool PartitionedVisitedLinkWriter::fail_table_creation_for_testing_ = false;
 
@@ -62,11 +64,14 @@ bool PartitionedVisitedLinkWriter::fail_table_creation_for_testing_ = false;
 // system for every partition key in the VisitedLinkDatabase.
 //
 // The builder will store the fingerprints for those links, as well as the
-// origin salts used to calculate those fingerprints, and then marshalls
-// back to the main (UI) thread where the PartitionedVisitedLinkWriter will be
-// notified. The writer then replaces its empty table with a new table
-// containing the computed fingerprints. The map of origin salts is copied into
-// `salts_` and the UI thread is allowed to get or add to the map itself.
+// origin salts used to calculate those fingerprints (unless use_constant_salt
+// is true, in which case we use a constant salt
+// `kPseudoPartitionedConstantSalt`), and then marshalls back to the main (UI)
+// thread where the PartitionedVisitedLinkWriter will be notified. The writer
+// then replaces its empty table with a new table containing the computed
+// fingerprints. The map of origin salts is copied into `salts_` (which remains
+// empty if use_constant_salt is true) and the UI thread is allowed to get or
+// add to the map itself.
 //
 // The builder must remain active while the history system is using it. If the
 // WeakPtr to the PartitionedVisitedLinkWriter is severed during table build, no
@@ -74,7 +79,8 @@ bool PartitionedVisitedLinkWriter::fail_table_creation_for_testing_ = false;
 class PartitionedVisitedLinkWriter::TableBuilder
     : public VisitedLinkDelegate::VisitedLinkEnumerator {
  public:
-  explicit TableBuilder(base::WeakPtr<PartitionedVisitedLinkWriter> writer);
+  TableBuilder(base::WeakPtr<PartitionedVisitedLinkWriter> writer,
+               bool use_constant_salt);
 
   TableBuilder(const TableBuilder&) = delete;
   TableBuilder& operator=(const TableBuilder&) = delete;
@@ -98,6 +104,9 @@ class PartitionedVisitedLinkWriter::TableBuilder
   // TableBuilder, and call this function to get from it or add to it. Once we
   // return to the UI thread, we will copy `local_salts_` to
   // PartitionedVisitedLinkWriter's `salts_` and allow the UI thread access.
+  //
+  // If `use_constant_salt_` is true, this function immediately returns
+  // `kPseudoPartitionedConstantSalt` and does not modify `local_salts_`.
   uint64_t GetOrAddLocalOriginSalt(const url::Origin& origin);
 
   // OnComplete mashals to this function on the main (UI) thread to do the
@@ -116,13 +125,16 @@ class PartitionedVisitedLinkWriter::TableBuilder
   // Stores the salts we computed on the background thread. See
   // GetOrAddLocalOriginSalt() above for more details.
   std::map<url::Origin, uint64_t> local_salts_;
+
+  const bool use_constant_salt_;
 };
 
 // TableBuilder ----------------------------------------------------
 
 PartitionedVisitedLinkWriter::TableBuilder::TableBuilder(
-    base::WeakPtr<PartitionedVisitedLinkWriter> writer)
-    : writer_(std::move(writer)) {}
+    base::WeakPtr<PartitionedVisitedLinkWriter> writer,
+    bool use_constant_salt)
+    : writer_(std::move(writer)), use_constant_salt_(use_constant_salt) {}
 
 void PartitionedVisitedLinkWriter::TableBuilder::OnVisitedLink(
     const GURL& link_url,
@@ -170,15 +182,18 @@ void PartitionedVisitedLinkWriter::TableBuilder::OnVisitedLinkComplete(
 
 uint64_t PartitionedVisitedLinkWriter::TableBuilder::GetOrAddLocalOriginSalt(
     const url::Origin& origin) {
-  // Obtain the salt for this origin if it already exists.
-  auto it = local_salts_.find(origin);
-  if (it != local_salts_.end()) {
-    return it->second;
+  // Pseudo-partitioning uses a constant salt (kPseudoPartitionedConstantSalt)
+  // and therefore does not store salts.
+  if (use_constant_salt_) {
+    return kPseudoPartitionedConstantSalt;
   }
+  // Obtain the salt for this origin if it already exists.
   // Otherwise, generate a new salt for this origin.
-  const uint64_t generated_salt = base::RandUint64();
-  local_salts_.insert({origin, generated_salt});
-  return generated_salt;
+  auto [it, inserted] = local_salts_.try_emplace(origin);
+  if (inserted) {
+    it->second = base::RandUint64();
+  }
+  return it->second;
 }
 
 void PartitionedVisitedLinkWriter::TableBuilder::OnCompleteMainThread() {
@@ -194,22 +209,34 @@ void PartitionedVisitedLinkWriter::TableBuilder::OnCompleteMainThread() {
 // ----------------------------------------------------------
 PartitionedVisitedLinkWriter::PartitionedVisitedLinkWriter(
     content::BrowserContext* browser_context,
-    VisitedLinkDelegate* delegate)
+    VisitedLinkDelegate* delegate,
+    bool use_constant_salt)
     : browser_context_(browser_context),
       delegate_(delegate),
-      listener_(
-          std::make_unique<VisitedLinkEventListener>(browser_context, this)) {}
+      listener_(std::make_unique<VisitedLinkEventListener>(browser_context,
+                                                           this,
+                                                           use_constant_salt)),
+      use_constant_salt_(use_constant_salt) {
+  if (use_constant_salt_) {
+    is_pseudo_partitioned_ = true;
+  }
+}
 
 PartitionedVisitedLinkWriter::PartitionedVisitedLinkWriter(
     std::unique_ptr<Listener> listener,
     VisitedLinkDelegate* delegate,
     bool suppress_build,
-    int32_t default_table_size)
+    int32_t default_table_size,
+    bool use_constant_salt)
     : delegate_(delegate),
       listener_(std::move(listener)),
+      use_constant_salt_(use_constant_salt),
       suppress_build_(suppress_build),
       table_size_override_(default_table_size) {
   DCHECK(listener_);
+  if (use_constant_salt_) {
+    is_pseudo_partitioned_ = true;
+  }
 }
 
 PartitionedVisitedLinkWriter::~PartitionedVisitedLinkWriter() = default;
@@ -262,8 +289,15 @@ bool PartitionedVisitedLinkWriter::CreateVisitedLinkTableHelper(
   DCHECK(memory);
 
   // The hashtable is a shared header followed by the entries.
-  uint32_t alloc_size =
-      num_entries * sizeof(Fingerprint) + sizeof(PartitionedSharedHeader);
+  base::CheckedNumeric<size_t> allocation_size = num_entries;
+  allocation_size *= sizeof(Fingerprint);
+  allocation_size += sizeof(PartitionedSharedHeader);
+  if (!allocation_size.IsValid()) {
+    return false;
+  }
+
+  size_t alloc_size = allocation_size.ValueOrDie();
+
   base::UmaHistogramCustomCounts(
       "History.VisitedLinks.HashTableSizeOnTableCreate",
       alloc_size / 1024 / 1024, 1, 10000, 100);
@@ -274,11 +308,10 @@ bool PartitionedVisitedLinkWriter::CreateVisitedLinkTableHelper(
     return false;
   }
 
-  UNSAFE_TODO(memset(memory->mapping.memory(), 0, alloc_size));
+  std::ranges::fill(memory->mapping, 0);
 
   // Save the header for other processes to read.
-  PartitionedSharedHeader* header =
-      static_cast<PartitionedSharedHeader*>(memory->mapping.memory());
+  auto* header = memory->mapping.GetMemoryAs<PartitionedSharedHeader>();
   header->length = num_entries;
   return true;
 }
@@ -290,20 +323,19 @@ bool PartitionedVisitedLinkWriter::ResizeTableIfNecessary() {
   // keeping the table not very full. This is because we use linear probing
   // which increases the likelihood of clumps of entries which will reduce
   // performance.
-  const float max_table_load = 0.5f;  // Grow when we're > this full.
-  const float min_table_load = 0.2f;  // Shrink when we're < this full.
+  constexpr float kMaxTableLoad = 0.5f;  // Grow when we're > this full.
+  constexpr float kMinTableLoad = 0.2f;  // Shrink when we're < this full.
 
   float load = ComputeTableLoad();
-  if (load < max_table_load &&
-      (table_length_ <= static_cast<float>(kDefaultTableSize) ||
-       load > min_table_load)) {
+  if (load < kMaxTableLoad &&
+      (table_length_ <= kDefaultTableSize || load > kMinTableLoad)) {
     return false;
   }
 
   // Table needs to grow or shrink.
-  int new_size = NewTableSizeForCount(used_items_);
+  int32_t new_size = NewTableSizeForCount(used_items_);
   DCHECK(new_size > used_items_);
-  DCHECK(load <= min_table_load || new_size > table_length_);
+  DCHECK(load <= kMinTableLoad || new_size > table_length_);
   ResizeTable(new_size);
   return true;
 }
@@ -349,8 +381,8 @@ void PartitionedVisitedLinkWriter::ResizeTable(int32_t new_size) {
 bool PartitionedVisitedLinkWriter::BuildTableFromDelegate() {
   DCHECK(!table_builder_);
 
-  table_builder_ =
-      base::MakeRefCounted<TableBuilder>(weak_ptr_factory_.GetWeakPtr());
+  table_builder_ = base::MakeRefCounted<TableBuilder>(
+      weak_ptr_factory_.GetWeakPtr(), use_constant_salt_);
   delegate_->BuildVisitedLinkTable(table_builder_);
   return true;
 }
@@ -372,10 +404,10 @@ VisitedLinkWriter::Hash PartitionedVisitedLinkWriter::AddFingerprint(
     if (cur_fingerprint == fingerprint) {
       base::UmaHistogramEnumeration("History.VisitedLinks.TryToAddFingerprint",
                                     AddFingerprint::kAlreadyVisited);
-      return null_hash_;  // This fingerprint is already in there, do nothing.
+      return kNullHash;  // This fingerprint is already in there, do nothing.
     }
 
-    if (cur_fingerprint == null_fingerprint_) {
+    if (cur_fingerprint == kNullFingerprint) {
       // End of probe sequence found, insert here.
       UNSAFE_TODO(hash_table_[cur_hash]) = fingerprint;
       used_items_++;
@@ -405,8 +437,8 @@ VisitedLinkWriter::Hash PartitionedVisitedLinkWriter::AddFingerprint(
 void PartitionedVisitedLinkWriter::DeleteFingerprintsFromCurrentTable(
     const std::set<Fingerprint>& fingerprints) {
   // Delete the Fingerprints from the table.
-  for (auto i = fingerprints.begin(); i != fingerprints.end(); ++i) {
-    DeleteFingerprint(*i);
+  for (auto fingerprint : fingerprints) {
+    DeleteFingerprint(fingerprint);
   }
 
   // These deleted fingerprints may make us shrink the table.
@@ -448,23 +480,23 @@ bool PartitionedVisitedLinkWriter::DeleteFingerprint(Fingerprint fingerprint) {
   absl::InlinedVector<Fingerprint, 32> shuffled_fingerprints;
   Hash stop_loop = IncrementHash(end_range);  // The end range is inclusive.
   for (Hash i = deleted_hash; i != stop_loop; i = IncrementHash(i)) {
-    if (UNSAFE_TODO(hash_table_[i]) != fingerprint) {
+    auto this_fingerprint =
+        std::exchange(UNSAFE_TODO(hash_table_[i]), kNullFingerprint);
+    if (this_fingerprint != fingerprint) {
       // Don't save the one we're deleting!
-      shuffled_fingerprints.push_back(UNSAFE_TODO(hash_table_[i]));
+      shuffled_fingerprints.push_back(this_fingerprint);
 
       // This will balance the increment of this value in AddFingerprint below
       // so there is no net change.
       used_items_--;
     }
-    UNSAFE_TODO(hash_table_[i]) = null_fingerprint_;
   }
 
-  if (!shuffled_fingerprints.empty()) {
-    // Need to add the new items back.
-    for (size_t i = 0; i < shuffled_fingerprints.size(); i++) {
-      AddFingerprint(shuffled_fingerprints[i], false);
-    }
+  // Need to add any new items back.
+  for (auto shuffled_fingerprint : shuffled_fingerprints) {
+    AddFingerprint(shuffled_fingerprint, false);
   }
+
   return true;
 }
 
@@ -481,11 +513,11 @@ void PartitionedVisitedLinkWriter::OnTableBuildComplete(
     salts_ = std::move(salts);
 
     // Generate space for the new table in shared memory.
-    int new_table_size = NewTableSizeForCount(
-        static_cast<int>(fingerprints.size() + added_during_build_.size()));
+    int32_t new_table_size = NewTableSizeForCount(
+        static_cast<int32_t>(fingerprints.size() + added_during_build_.size()));
     if (CreateVisitedLinkTable(new_table_size)) {
       // Add the stored fingerprints to the hash table.
-      for (const auto& fingerprint : fingerprints) {
+      for (auto fingerprint : fingerprints) {
         AddFingerprint(fingerprint, false);
       }
 
@@ -530,18 +562,18 @@ void PartitionedVisitedLinkWriter::OnTableBuildComplete(
   }
 }
 
-uint32_t PartitionedVisitedLinkWriter::DefaultTableSize() const {
+int32_t PartitionedVisitedLinkWriter::DefaultTableSize() const {
   if (table_size_override_) {
     return table_size_override_;
   }
   return kDefaultTableSize;
 }
 
-uint32_t PartitionedVisitedLinkWriter::NewTableSizeForCount(
-    int32_t item_count) const {
+// static
+int32_t PartitionedVisitedLinkWriter::NewTableSizeForCount(int32_t item_count) {
   // These table sizes are selected to be the maximum prime number less than
   // a "convenient" multiple of 1K.
-  static const auto table_sizes = std::to_array<int>({
+  static constexpr auto kTableSizes = std::to_array<const int32_t>({
       16381,     // 16K  = 16384   <- don't shrink below this table size
                  //                   (should be == default_table_size)
       32767,     // 32K  = 32768
@@ -554,16 +586,16 @@ uint32_t PartitionedVisitedLinkWriter::NewTableSizeForCount(
       4194301,   // 4M   = 4194304
       8388571,   // 8M   = 8388608
       16777199,  // 16M  = 16777216
-      33554347,
-  });  // 32M  = 33554432
+      33554347,  // 32M  = 33554432
+  });
 
   // Try to leave the table 33% full.
-  int desired = item_count * 3;
+  int32_t desired = item_count * 3;
 
   // Find the closest prime.
-  for (size_t i = 0; i < std::size(table_sizes); i++) {
-    if (table_sizes[i] > desired) {
-      return table_sizes[i];
+  for (auto size : kTableSizes) {
+    if (size > desired) {
+      return size;
     }
   }
 
@@ -578,7 +610,7 @@ void PartitionedVisitedLinkWriter::AddVisitedLink(const VisitedLink& link) {
                               used_items_);
   // Attempt to add the visited link to the in-memory partitioned hashtable and
   // record whether we returned a valid hash index.
-  bool did_add_link = (TryToAddVisitedLink(link) != null_hash_);
+  bool did_add_link = (TryToAddVisitedLink(link) != kNullHash);
 
   // When kPartitionVisitedLinkDatabaseWithSelfLinks is enabled, we attempt to
   // add <link_url, link_url, link_url> to the in-memory partitioned hashtable
@@ -590,8 +622,7 @@ void PartitionedVisitedLinkWriter::AddVisitedLink(const VisitedLink& link) {
     if (self_link.has_value()) {
       // Attempt to add the self-link and record whether we returned a valid
       // hash index.
-      did_add_self_link =
-          (TryToAddVisitedLink(self_link.value()) != null_hash_);
+      did_add_self_link = (TryToAddVisitedLink(self_link.value()) != kNullHash);
     }
   }
 
@@ -616,7 +647,7 @@ VisitedLinkWriter::Hash PartitionedVisitedLinkWriter::TryToAddVisitedLink(
 
   // We don't want to add any invalid VisitedLinks to the hashtable.
   if (!link.IsValid()) {
-    return null_hash_;
+    return kNullHash;
   }
 
   // If the table isn't finished building, accumulated links will be
@@ -632,7 +663,7 @@ VisitedLinkWriter::Hash PartitionedVisitedLinkWriter::TryToAddVisitedLink(
 
   const std::optional<uint64_t> salt = GetOrAddOriginSalt(link.frame_origin);
   if (!salt.has_value()) {
-    return null_hash_;
+    return kNullHash;
   }
   Fingerprint fingerprint = ComputePartitionedFingerprint(link, salt.value());
 
@@ -641,7 +672,7 @@ VisitedLinkWriter::Hash PartitionedVisitedLinkWriter::TryToAddVisitedLink(
   // the table resizing to fail. This check prevents a hang in that case. Note
   // that this is *not* the resize limit, this is just a sanity check.
   if (used_items_ / 8 > table_length_ / 10) {
-    return null_hash_;  // Table is more than 80% full.
+    return kNullHash;  // Table is more than 80% full.
   }
 
   return AddFingerprint(fingerprint, true);
@@ -666,8 +697,8 @@ void PartitionedVisitedLinkWriter::DeleteAllVisitedLinks() {
 }
 
 void PartitionedVisitedLinkWriter::DeleteVisitedLinks(
-    VisitedLinkIterator* links) {
-  if (!links->HasNextVisitedLink()) {
+    const std::vector<VisitedLink>& links) {
+  if (links.empty()) {
     return;
   }
 
@@ -681,9 +712,8 @@ void PartitionedVisitedLinkWriter::DeleteVisitedLinks(
   if (table_builder_.get()) {
     // A build is in progress, save this deletion in the temporary
     // list so it can be deleted once the build is complete.
-    while (links->HasNextVisitedLink()) {
+    for (const auto& link : links) {
       // Obtain the next link we want to delete from the hashtable.
-      const VisitedLink& link(links->NextVisitedLink());
       if (!link.IsValid()) {
         continue;
       }
@@ -711,8 +741,7 @@ void PartitionedVisitedLinkWriter::DeleteVisitedLinks(
 
   // Compute the deleted URLs' fingerprints and delete them.
   std::set<Fingerprint> deleted_fingerprints;
-  while (links->HasNextVisitedLink()) {
-    const VisitedLink& link(links->NextVisitedLink());
+  for (const auto& link : links) {
     if (!link.IsValid()) {
       continue;
     }
@@ -746,6 +775,10 @@ void PartitionedVisitedLinkWriter::DeleteVisitedLinks(
 
 std::optional<uint64_t> PartitionedVisitedLinkWriter::GetOrAddOriginSalt(
     const url::Origin& origin) {
+  if (use_constant_salt_) {
+    // Pseudo-partitioning uses a constant salt rather than per-origin salts.
+    return kPseudoPartitionedConstantSalt;
+  }
   // To avoid race conditions, we should not get from or add to the salt map
   // while the hashtable is building.
   // TODO(crbug.com/332364003): implement a new VisitedLinkNotificationSink
@@ -755,14 +788,12 @@ std::optional<uint64_t> PartitionedVisitedLinkWriter::GetOrAddOriginSalt(
     return std::nullopt;
   }
   // Obtain the salt for this origin if it already exists.
-  auto it = salts_.find(origin);
-  if (it != salts_.end()) {
-    return it->second;
-  }
   // Otherwise, generate a new salt for this origin.
-  const uint64_t generated_salt = base::RandUint64();
-  salts_.insert({origin, generated_salt});
-  return generated_salt;
+  auto [it, inserted] = salts_.try_emplace(origin);
+  if (inserted) {
+    it->second = base::RandUint64();
+  }
+  return it->second;
 }
 
 // static
@@ -772,8 +803,39 @@ PartitionedVisitedLinkWriter::GetHashTableFromMapping(
   DCHECK(hash_table_mapping.IsValid());
   // Our table pointer is just the data immediately following the header.
   return reinterpret_cast<Fingerprint*>(
-      UNSAFE_TODO(static_cast<char*>(hash_table_mapping.memory()) +
-                  sizeof(PartitionedSharedHeader)));
+      UNSAFE_TODO(hash_table_mapping.data() + sizeof(PartitionedSharedHeader)));
+}
+
+void PartitionedVisitedLinkWriter::AddPseudoPartitionedVisitedLink(
+    const GURL& link_url) {
+  AddPseudoPartitionedVisitedLinks({link_url});
+}
+
+void PartitionedVisitedLinkWriter::AddPseudoPartitionedVisitedLinks(
+    const std::vector<GURL>& link_urls) {
+  bool did_add = false;
+  for (const auto& url : link_urls) {
+    // To construct the VisitedLink to be stored in the partitioned table, we
+    // use the URL in each of the three VisitedLink fields.
+    VisitedLink link = CreatePseudoPartitionedLink(url);
+    if (TryToAddVisitedLink(link) != kNullHash) {
+      did_add = true;
+    }
+  }
+  if (!table_builder_ && did_add) {
+    ResizeTableIfNecessary();
+  }
+}
+
+void PartitionedVisitedLinkWriter::DeletePseudoPartitionedVisitedLinks(
+    const std::vector<GURL>& link_urls) {
+  std::vector<VisitedLink> links;
+  for (const auto& url : link_urls) {
+    // To construct the VisitedLink for lookup in the partitioned table, we
+    // use the URL in each of the three VisitedLink fields.
+    links.push_back(CreatePseudoPartitionedLink(url));
+  }
+  DeleteVisitedLinks(links);
 }
 
 }  // namespace visitedlink

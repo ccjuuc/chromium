@@ -33,6 +33,7 @@
 #include "net/cookies/cookie_monster.h"
 #include "net/disk_cache/buildflags.h"
 #include "net/dns/context_host_resolver.h"
+#include "net/dns/dns_platform_attempt_factory.h"
 #include "net/dns/host_resolver.h"
 #include "net/dns/host_resolver_manager.h"
 #include "net/dns/stale_host_resolver.h"
@@ -53,6 +54,7 @@
 #include "net/quic/quic_session_pool.h"
 #include "net/shared_dictionary/shared_dictionary_network_transaction_factory.h"
 #include "net/socket/network_binding_client_socket_factory.h"
+#include "net/ssl/ech_mode_getter.h"
 #include "net/ssl/ssl_config_service_defaults.h"
 #include "net/url_request/static_http_user_agent_settings.h"
 #include "net/url_request/url_request_context.h"
@@ -68,6 +70,7 @@
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/android_info.h"
+#include "net/ssl/ech_mode_getter_android.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
@@ -187,11 +190,6 @@ void URLRequestContextBuilder::set_persistent_reporting_and_nel_store(
         persistent_reporting_and_nel_store) {
   persistent_reporting_and_nel_store_ =
       std::move(persistent_reporting_and_nel_store);
-}
-
-void URLRequestContextBuilder::set_enterprise_reporting_endpoints(
-    const base::flat_map<std::string, GURL>& enterprise_reporting_endpoints) {
-  enterprise_reporting_endpoints_ = enterprise_reporting_endpoints;
 }
 #endif  // BUILDFLAG(ENABLE_REPORTING)
 
@@ -347,6 +345,7 @@ std::unique_ptr<URLRequestContext> URLRequestContextBuilder::Build() {
     // QUIC connection migration should not be enabled when binding a context
     // to a network.
     quic_params->migrate_sessions_on_network_change_v2 = false;
+    quic_params->migrate_sessions_early_v2 = false;
 
     // Objects used by network sessions for this context shouldn't listen to
     // network changes.
@@ -388,8 +387,12 @@ std::unique_ptr<URLRequestContext> URLRequestContextBuilder::Build() {
   if (ssl_config_service_) {
     context->set_ssl_config_service(std::move(ssl_config_service_));
   } else {
+    std::unique_ptr<net::EchModeGetter> ech_mode_getter;
+#if BUILDFLAG(IS_ANDROID)
+    ech_mode_getter = std::make_unique<net::EchModeGetterAndroid>();
+#endif
     context->set_ssl_config_service(
-        std::make_unique<SSLConfigServiceDefaults>());
+        std::make_unique<SSLConfigServiceDefaults>(std::move(ech_mode_getter)));
   }
 
   if (http_auth_handler_factory_) {
@@ -489,7 +492,7 @@ std::unique_ptr<URLRequestContext> URLRequestContextBuilder::Build() {
     context->set_reporting_service(
         ReportingService::Create(*reporting_policy_, context.get(),
                                  persistent_reporting_and_nel_store_.get(),
-                                 enterprise_reporting_endpoints_));
+                                 std::move(prepare_upload_request_callback_)));
   }
 
   if (network_error_logging_enabled_) {
@@ -529,7 +532,10 @@ std::unique_ptr<URLRequestContext> URLRequestContextBuilder::Build() {
               context->unexportable_key_service()));
     }
     context->set_device_bound_session_service(
-        device_bound_sessions::SessionService::Create(context.get()));
+        device_bound_sessions::SessionService::Create(
+            context.get(), device_bound_sessions_restricted_sites_,
+            std::move(device_bound_sessions_client_cert_handler_),
+            std::move(device_bound_sessions_cookie_access_callback_)));
   } else {
     if (device_bound_session_service_) {
       context->set_device_bound_session_service(
@@ -545,6 +551,9 @@ std::unique_ptr<URLRequestContext> URLRequestContextBuilder::Build() {
       context.get(), &network_session_context,
       suppress_setting_socket_performance_watcher_factory_for_testing_,
       client_socket_factory_raw_);
+
+  context->set_dns_platform_attempt_factory(
+      std::move(dns_platform_attempt_factory_));
 
   context->set_http_network_session(std::make_unique<HttpNetworkSession>(
       http_network_session_params_, network_session_context));

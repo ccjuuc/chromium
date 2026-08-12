@@ -8,7 +8,6 @@
 
 #include "ash/public/cpp/desk_template.h"
 #include "ash/wm/desks/desks_controller.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notimplemented.h"
 #include "base/numerics/safe_conversions.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
@@ -27,6 +26,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "components/app_constants/constants.h"
 #include "components/app_restore/app_restore_data.h"
@@ -239,17 +239,19 @@ void DesksTemplatesAppLaunchHandler::LaunchBrowsers() {
         continue;
       }
 
-      Browser::CreateParams create_params =
+      BrowserWindowCreateParams create_params =
           !app_name.empty()
-              ? Browser::CreateParams::CreateForApp(app_name,
-                                                    /*trusted_source=*/true,
-                                                    current_bounds, profile(),
-                                                    /*user_gesture=*/false)
-              : Browser::CreateParams(Browser::TYPE_NORMAL, profile(),
-                                      /*user_gesture=*/false);
+              ? BrowserWindowCreateParams::CreateForApp(
+                    app_name, /*trusted_source=*/true, current_bounds,
+                    profile(),
+                    /*user_gesture=*/false)
+              : BrowserWindowCreateParams(BrowserWindowInterface::TYPE_NORMAL,
+                                          profile(),
+                                          /*from_user_gesture=*/false);
 
       create_params.restore_id = window_iter.first;
-      create_params.creation_source = Browser::CreationSource::kDeskTemplate;
+      create_params.creation_source =
+          BrowserWindowCreateParams::CreationSource::kDeskTemplate;
 
       const std::optional<chromeos::WindowStateType>& window_state_type =
           app_restore_data->window_info.window_state_type;
@@ -266,7 +268,8 @@ void DesksTemplatesAppLaunchHandler::LaunchBrowsers() {
         create_params.should_trigger_session_restore = false;
       }
 
-      Browser* browser = Browser::Create(create_params);
+      Browser* browser = CreateBrowserWindow(std::move(create_params))
+                             ->GetBrowserForMigrationOnly();
 
       std::optional<int32_t> active_tab_index =
           browser_extra_info.active_tab_index;
@@ -295,11 +298,11 @@ void DesksTemplatesAppLaunchHandler::LaunchBrowsers() {
       // window types, it's not shown.
       if (window_state_type &&
           *window_state_type == chromeos::WindowStateType::kMinimized) {
-        browser->window()->Minimize();
+        browser->GetWindow()->Minimize();
         continue;
       }
 
-      browser->window()->ShowInactive();
+      browser->GetWindow()->ShowInactive();
     }
   }
   restore_data()->RemoveApp(app_constants::kChromeAppId);
@@ -318,7 +321,7 @@ void DesksTemplatesAppLaunchHandler::MaybeLaunchArcApps() {
       [&app_ids, &app_id_to_launch_list](const apps::AppUpdate& update) {
         if (update.Readiness() == apps::Readiness::kReady &&
             update.AppType() == apps::AppType::kArc &&
-            base::Contains(app_id_to_launch_list, update.AppId())) {
+            app_id_to_launch_list.contains(update.AppId())) {
           app_ids.insert(update.AppId());
         }
       });

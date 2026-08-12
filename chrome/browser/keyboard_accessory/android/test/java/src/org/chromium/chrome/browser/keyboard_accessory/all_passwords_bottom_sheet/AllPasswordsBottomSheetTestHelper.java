@@ -7,12 +7,15 @@ package org.chromium.chrome.browser.keyboard_accessory.all_passwords_bottom_shee
 import android.app.Activity;
 import android.view.ViewGroup;
 
+import org.chromium.base.ThreadUtils;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerFactory;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager.ScrimClient;
 import org.chromium.ui.KeyboardVisibilityDelegate;
+import org.chromium.ui.base.ImmutableWeakReference;
+import org.chromium.ui.insets.InsetObserver;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 
 import java.util.List;
@@ -27,8 +30,7 @@ public class AllPasswordsBottomSheetTestHelper {
                     /* formattedUsername= */ "ana@gmail.com",
                     /* originUrl= */ "https://example.com",
                     /* isAndroidCredential= */ false,
-                    /* appDisplayName= */ "",
-                    /* isPlusAddressUsername= */ true);
+                    /* appDisplayName= */ "");
     public static final Credential NO_ONE =
             new Credential(
                     /* username= */ "",
@@ -36,8 +38,7 @@ public class AllPasswordsBottomSheetTestHelper {
                     /* formattedUsername= */ "No Username",
                     /* originUrl= */ "https://m.example.xyz",
                     /* isAndroidCredential= */ false,
-                    /* appDisplayName= */ "",
-                    /* isPlusAddressUsername= */ false);
+                    /* appDisplayName= */ "");
     public static final Credential BOB =
             new Credential(
                     /* username= */ "Bob",
@@ -45,8 +46,7 @@ public class AllPasswordsBottomSheetTestHelper {
                     /* formattedUsername= */ "Bob",
                     /* originUrl= */ "android://com.facebook.org",
                     /* isAndroidCredential= */ true,
-                    /* appDisplayName= */ "facebook",
-                    /* isPlusAddressUsername= */ false);
+                    /* appDisplayName= */ "facebook");
     public static final List<Credential> TEST_CREDENTIALS = List.of(ANA, NO_ONE, BOB);
 
     private AllPasswordsBottomSheetTestHelper() {}
@@ -59,18 +59,28 @@ public class AllPasswordsBottomSheetTestHelper {
      */
     public static BottomSheetController createBottomSheetController(Activity activity) {
         assert activity != null : "Activity must not be null!";
-        ViewGroup contentView = activity.findViewById(android.R.id.content);
-        ScrimManager scrimManager = new ScrimManager(activity, contentView, ScrimClient.NONE);
-        BottomSheetController bottomSheetController =
-                BottomSheetControllerFactory.createBottomSheetController(
-                        () -> scrimManager,
-                        (unused) -> {},
-                        activity.getWindow(),
-                        KeyboardVisibilityDelegate.getInstance(),
-                        () -> contentView,
-                        () -> 0,
-                        /* desktopWindowStateManager= */ null);
-        return bottomSheetController;
+        return ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    ViewGroup contentView = activity.findViewById(android.R.id.content);
+                    ScrimManager scrimManager =
+                            new ScrimManager(activity, contentView, ScrimClient.NONE);
+                    InsetObserver insetObserver =
+                            new InsetObserver(
+                                    new ImmutableWeakReference<>(
+                                            activity.getWindow().getDecorView()),
+                                    new ImmutableWeakReference<>(activity.getApplicationContext()),
+                                    /* enableKeyboardOverlayMode= */ false,
+                                    /* enableExtraEdgeToEdgeLogging= */ false);
+                    return BottomSheetControllerFactory.createBottomSheetController(
+                            () -> scrimManager,
+                            activity.getWindow(),
+                            KeyboardVisibilityDelegate.getInstance(),
+                            () -> contentView,
+                            () -> 0,
+                            /* desktopWindowStateManager= */ null,
+                            insetObserver,
+                            /* enableLargeFormFactorUi= */ false);
+                });
     }
 
     /**

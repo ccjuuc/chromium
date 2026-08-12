@@ -16,7 +16,6 @@
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/version.h"
-#include "base/win/windows_version.h"
 #include "build/build_config.h"
 #include "components/cdm/common/buildflags.h"
 #include "content/public/common/cdm_info.h"
@@ -45,6 +44,10 @@
 #if BUILDFLAG(IS_ANDROID)
 #include "components/cdm/common/android_cdm_registration.h"
 #endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_WIN)
+#include "base/win/windows_version.h"
+#endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(ENABLE_PLAYREADY)
 #include "base/file_version_info_win.h"
@@ -343,10 +346,7 @@ void AddExternalClearKey(std::vector<content::CdmInfo>* cdms) {
 #if BUILDFLAG(ENABLE_PLAYREADY)
 void AddPlayReady(std::vector<content::CdmInfo>* cdms) {
   DVLOG(1) << __func__;
-  // TODO(crbug.com/423799624): Need to clean up this check logic when
-  // deprecating Widevine hardware secure support on Windows.
-  if (!base::FeatureList::IsEnabled(media::kHardwareSecureDecryption) ||
-      (base::win::GetVersion() < base::win::Version::WIN11) ||
+  if ((base::win::GetVersion() < base::win::Version::WIN11) ||
       !media::SupportMediaFoundationEncryptedPlayback()) {
     DVLOG(1) << __func__ << ": Not adding PlayReady CdmInfo";
     return;

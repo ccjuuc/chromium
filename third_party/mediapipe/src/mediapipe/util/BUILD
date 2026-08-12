@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("//mediapipe/framework:mediapipe_cc_test.bzl", "mediapipe_cc_test")
 load("//mediapipe/framework/port:build_config.bzl", "mediapipe_proto_library")
 # Placeholder: load py_library
@@ -49,6 +51,20 @@ mediapipe_proto_library(
     deps = ["//mediapipe/util:color_proto"],
 )
 
+cc_test(
+    name = "audio_decoder_test",
+    srcs = ["audio_decoder_test.cc"],
+    deps = [
+        ":audio_decoder",
+        "//mediapipe/framework:packet",
+        "//mediapipe/framework/formats:matrix",
+        "//mediapipe/framework/port:file_helpers",
+        "//mediapipe/framework/port:gtest",
+        "//mediapipe/framework/port:gtest_main",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
 cc_library(
     name = "audio_decoder",
     srcs = ["audio_decoder.cc"],
@@ -73,7 +89,7 @@ cc_library(
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/time",
-        "@eigen_archive//:eigen3",
+        "@eigen//:eigen3",
     ],
 )
 
@@ -138,6 +154,17 @@ cc_library(
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/strings",
         "@libyuv",
+    ],
+)
+
+cc_test(
+    name = "image_frame_util_test",
+    srcs = ["image_frame_util_test.cc"],
+    deps = [
+        ":image_frame_util",
+        "//mediapipe/framework/port:benchmark",
+        "//mediapipe/framework/port:gtest_main",
+        "//mediapipe/framework/port:opencv_core",
     ],
 )
 
@@ -409,7 +436,7 @@ cc_library(
         "@com_google_absl//absl/log:absl_check",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/strings",
-        "@eigen_archive//:eigen3",
+        "@eigen//:eigen3",
     ],
 )
 
@@ -423,7 +450,7 @@ cc_test(
         "//mediapipe/framework:calculator_framework",
         "//mediapipe/framework/formats:time_series_header_cc_proto",
         "//mediapipe/framework/port:gtest_main",
-        "@eigen_archive//:eigen3",
+        "@eigen//:eigen3",
     ],
 )
 

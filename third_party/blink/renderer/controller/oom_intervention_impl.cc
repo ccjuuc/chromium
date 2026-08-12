@@ -42,7 +42,7 @@ void NavigateLocalAdsFrames(LocalFrame* frame) {
     if (auto* child_local_frame = DynamicTo<LocalFrame>(child)) {
       if (child_local_frame->IsAdFrame()) {
         FrameLoadRequest request(frame->DomWindow(),
-                                 ResourceRequest(BlankURL()));
+                                 ResourceRequest(BlankUrl()));
         child_local_frame->Navigate(request, WebFrameLoadType::kStandard);
       }
     }
@@ -123,7 +123,12 @@ void OomInterventionImpl::Check(MemoryUsage usage) {
     base::debug::SetCrashKeyString(GetStateCrashKey(), "during");
 
     if (navigate_ads_enabled_ || purge_v8_memory_enabled_) {
-      for (const auto& page : Page::OrdinaryPages()) {
+      // Copy Page::OrdinaryPages() to avoid UAF. Synchronous JS
+      // execution during iteration can create new pages, which causes rehashing
+      // of the OrdinaryPages() set and invalidates the iterator.
+      // See crbug.com/502089411
+      Page::PageSet pages(Page::OrdinaryPages());
+      for (const auto& page : pages) {
         for (Frame* frame = page->MainFrame(); frame;
              frame = frame->Tree().TraverseNext()) {
           auto* local_frame = DynamicTo<LocalFrame>(frame);

@@ -4,9 +4,13 @@
 
 #include "components/infobars/core/confirm_infobar_delegate.h"
 
+#include <optional>
+
+#include "base/no_destructor.h"
 #include "build/build_config.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/ui_base_types.h"
 #include "ui/strings/grit/ui_strings.h"
 
 ConfirmInfoBarDelegate::~ConfirmInfoBarDelegate() = default;
@@ -33,6 +37,33 @@ const ConfirmInfoBarDelegate* ConfirmInfoBarDelegate::AsConfirmInfoBarDelegate()
 std::u16string ConfirmInfoBarDelegate::GetTitleText() const {
   return std::u16string();
 }
+
+std::u16string ConfirmInfoBarDelegate::GetMessageTextTemplate() const {
+  return std::u16string();
+}
+
+const std::vector<MessageSubstitution>&
+ConfirmInfoBarDelegate::GetMessageSubstitutions() const {
+  static const base::NoDestructor<std::vector<MessageSubstitution>> empty_subs;
+  return *empty_subs;
+}
+
+MessageSubstitution::MessageSubstitution(
+    std::u16string text,
+    bool is_link,
+    std::optional<std::u16string> accessible_name)
+    : text(std::move(text)),
+      is_link(is_link),
+      accessible_name(std::move(accessible_name)) {}
+
+MessageSubstitution::MessageSubstitution(const MessageSubstitution& other) =
+    default;
+MessageSubstitution::MessageSubstitution(MessageSubstitution&& other) = default;
+MessageSubstitution& MessageSubstitution::operator=(
+    const MessageSubstitution& other) = default;
+MessageSubstitution& MessageSubstitution::operator=(
+    MessageSubstitution&& other) = default;
+MessageSubstitution::~MessageSubstitution() = default;
 
 gfx::ElideBehavior ConfirmInfoBarDelegate::GetMessageElideBehavior() const {
   return gfx::ELIDE_TAIL;
@@ -63,6 +94,11 @@ std::u16string ConfirmInfoBarDelegate::GetButtonTooltip(
   return std::u16string();
 }
 
+std::optional<ui::ButtonStyle> ConfirmInfoBarDelegate::GetButtonStyle(
+    InfoBarButton button) const {
+  return std::nullopt;
+}
+
 bool ConfirmInfoBarDelegate::ShouldShowLinkBeforeButton() const {
   return false;
 }
@@ -73,6 +109,10 @@ int ConfirmInfoBarDelegate::GetLinkSpacingWhenPositionedBeforeButton() const {
 
 #if BUILDFLAG(IS_IOS)
 bool ConfirmInfoBarDelegate::UseIconBackgroundTint() const {
+  return true;
+}
+
+bool ConfirmInfoBarDelegate::IgnoreIconColorWithTint() const {
   return true;
 }
 #endif
@@ -86,6 +126,12 @@ bool ConfirmInfoBarDelegate::Accept() {
 
 bool ConfirmInfoBarDelegate::Cancel() {
   return true;
+}
+
+bool ConfirmInfoBarDelegate::InlineSubstitutionLinkClicked(
+    size_t index,
+    WindowOpenDisposition disposition) {
+  return false;
 }
 
 void ConfirmInfoBarDelegate::AddObserver(Observer* observer) {

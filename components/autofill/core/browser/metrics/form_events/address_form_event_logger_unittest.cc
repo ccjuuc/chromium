@@ -8,6 +8,7 @@
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile_test_api.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/foundations/autofill_manager_test_api.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics_test_base.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics_utils.h"
 #include "components/autofill/core/browser/suggestions/addresses/address_suggestion_generator.h"
@@ -66,10 +67,11 @@ class CategoryResolvedKeyMetricsTest : public AutofillMetricsBaseTest,
         profile.guid()));
     autofill_manager().OnAskForValuesToFillTest(
         form, form.fields().front().global_id());
-    autofill_manager().FillOrPreviewForm(mojom::ActionPersistence::kFill, form,
-                                         form.fields().front().global_id(),
-                                         &profile,
-                                         AutofillTriggerSource::kPopup);
+    autofill_manager().FillOrPreviewForm(
+        mojom::ActionPersistence::kFill, form.global_id(),
+        form.fields().front().global_id(), &profile,
+        AutofillTriggerSource::kPopup,
+        /*blocked_fields=*/{});
   }
 
  protected:
@@ -377,10 +379,6 @@ class AutofillOnDidShowSuggestionsMetricsTest : public AutofillMetricsBaseTest,
     personal_data().test_address_data_manager().ClearProfiles();
   }
   void TearDown() override { TearDownHelper(); }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list{
-      features::kAutofillEnableSupportForHomeAndWork};
 };
 
 TEST_F(AutofillOnDidShowSuggestionsMetricsTest,
@@ -392,14 +390,15 @@ TEST_F(AutofillOnDidShowSuggestionsMetricsTest,
   FormData form = test::CreateTestAddressFormData();
 
   autofill_manager().OnFormsSeen(/*updated_forms=*/{form},
-                                 /*removed_forms=*/{});
+                                 /*removed_forms=*/{},
+                                 AutofillManagerTestApi::pass_key());
 
   autofill_manager().OnAskForValuesToFillTest(
       form, form.fields().front().global_id());
 
   external_delegate().CheckSuggestions(
       form.fields()[0].global_id(),
-      {Suggestion("John", "666 Erebus St.", Suggestion::Icon::kHome,
+      {Suggestion(u"John", u"666 Erebus St.", Suggestion::Icon::kHome,
                   SuggestionType::kAddressEntry),
        Suggestion(SuggestionType::kSeparator),
        CreateManageAddressesSuggestion()});
@@ -408,7 +407,8 @@ TEST_F(AutofillOnDidShowSuggestionsMetricsTest,
 
   base::HistogramTester histogram_tester;
 
-  autofill_manager().DidShowSuggestions(generated_suggestions, form,
+  autofill_manager().DidShowSuggestions(generated_suggestions, std::nullopt,
+                                        form.global_id(),
                                         form.fields()[0].global_id(), {});
 
   ResetAutofillDriver(autofill_driver());
@@ -433,14 +433,15 @@ TEST_F(AutofillOnDidShowSuggestionsMetricsTest,
   FormData form = test::CreateTestAddressFormData();
 
   autofill_manager().OnFormsSeen(/*updated_forms=*/{form},
-                                 /*removed_forms=*/{});
+                                 /*removed_forms=*/{},
+                                 AutofillManagerTestApi::pass_key());
 
   autofill_manager().OnAskForValuesToFillTest(
       form, form.fields().front().global_id());
 
   external_delegate().CheckSuggestions(
       form.fields()[0].global_id(),
-      {Suggestion("Pablo Diego", "123 Mainstreet", Suggestion::Icon::kAccount,
+      {Suggestion(u"Pablo Diego", u"123 Mainstreet", Suggestion::Icon::kAccount,
                   SuggestionType::kAddressEntry),
        Suggestion(SuggestionType::kSeparator),
        CreateManageAddressesSuggestion()});
@@ -449,7 +450,8 @@ TEST_F(AutofillOnDidShowSuggestionsMetricsTest,
 
   base::HistogramTester histogram_tester;
 
-  autofill_manager().DidShowSuggestions(generated_suggestions, form,
+  autofill_manager().DidShowSuggestions(generated_suggestions, std::nullopt,
+                                        form.global_id(),
                                         form.fields()[0].global_id(), {});
 
   ResetAutofillDriver(autofill_driver());

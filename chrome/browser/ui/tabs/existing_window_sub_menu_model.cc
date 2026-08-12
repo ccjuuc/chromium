@@ -6,10 +6,12 @@
 
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_menu_model_delegate.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
+#include "chrome/browser/ui/window_metadata/window_metadata_controller.h"
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/accelerators/accelerator.h"
 
@@ -88,7 +90,18 @@ bool ExistingWindowSubMenuModel::IsCommandIdEnabled(int command_id) const {
 
 // static:
 bool ExistingWindowSubMenuModel::ShouldShowSubmenu(Profile* profile) {
-  return chrome::GetTabbedBrowserCount(profile) > 1;
+  int tabbed_browser_count = 0;
+  ProfileBrowserCollection::GetForProfile(profile)->ForEach(
+      [&tabbed_browser_count](BrowserWindowInterface* browser) {
+        // Stop iterating if `tabbed_browser_count` is already greater than 1.
+        if (browser->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) {
+          tabbed_browser_count++;
+          return tabbed_browser_count < 2;
+        }
+        // Continue iterating if not a tabbed browser.
+        return true;
+      });
+  return tabbed_browser_count > 1;
 }
 
 bool ExistingWindowSubMenuModel::ShouldShowSubmenuForApp(
@@ -111,7 +124,7 @@ ExistingWindowSubMenuModel::BuildMenuItemInfoVectorForBrowsers(
   for (size_t i = 0; i < existing_browsers.size(); ++i) {
     BrowserWindowInterface* browser = existing_browsers[i];
     auto window_title =
-        browser->GetBrowserForMigrationOnly()->GetWindowTitleForMaxWidth(
+        WindowMetadataController::From(browser)->GetWindowTitleForMaxWidth(
             kWindowTitleForMenuMaxWidth);
     menu_item_infos.emplace_back(window_title);
     menu_item_infos.back().may_have_mnemonics = false;

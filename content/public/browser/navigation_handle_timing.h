@@ -10,6 +10,7 @@
 #include "base/time/time.h"
 #include "content/common/content_export.h"
 #include "net/base/load_timing_internal_info.h"
+#include "net/dns/public/resolution_details.h"
 #include "net/http/alternate_protocol_usage.h"
 
 namespace content {
@@ -29,6 +30,11 @@ struct CONTENT_EXPORT NavigationHandleTiming {
         net::AdvertisedAltSvcState::kUnknown;
     // Whether QUIC is enabled in the HttpNetworkSession for the navigation.
     bool http_network_session_quic_enabled = false;
+    // The time taken for a SPDY/QUIC session to create an active stream due to
+    // max stream limits.
+    std::optional<base::TimeDelta> max_stream_limit_pending_delay;
+    // The details of the host resolution result.
+    std::optional<net::ResolutionDetails> resolution_details;
   };
 
   NavigationHandleTiming();
@@ -161,17 +167,64 @@ struct CONTENT_EXPORT NavigationHandleTiming {
   base::TimeDelta final_request_connect_delay;
   base::TimeDelta final_request_ssl_delay;
 
+  // Absolute timestamps for the first HTTP response ConnectTiming.
+  base::TimeTicks first_request_domain_lookup_start_time;
+  base::TimeTicks first_request_domain_lookup_end_time;
+  base::TimeTicks first_request_connect_start_time;
+  base::TimeTicks first_request_connect_end_time;
+  base::TimeTicks first_request_ssl_start_time;
+
+  // Absolute timestamps for the final HTTP response ConnectTiming.
+  base::TimeTicks final_request_domain_lookup_start_time;
+  base::TimeTicks final_request_domain_lookup_end_time;
+  base::TimeTicks final_request_connect_start_time;
+  base::TimeTicks final_request_connect_end_time;
+  base::TimeTicks final_request_ssl_start_time;
+
   // CreateStream related delay information.
   base::TimeDelta create_stream_delay;
 
   // HttpNetwork::Transaction connected callback delay information.
   base::TimeDelta connected_callback_delay;
 
+  // Whether the Accept-CH frame was received.
+  bool accept_ch_frame_received = false;
+
   // InitializeStream related delay information.
   base::TimeDelta initialize_stream_delay;
 
+  // The OS-level timestamp of the user input event leading to the navigation.
+  // This timestamp can be empty if the navigation is started without user
+  // input, or this might be null if the navigation started and synchronously
+  // committed in the renderer, such as for renderer-initiated same-document
+  // navigations or synchronous about:blank navigations.
+  base::TimeTicks user_interaction;
+
+  // The time at which the navigation starts, as accurately as we can
+  // determine. Note that for renderer-initiated navigations, this will be the
+  // time when the navigation starts in the renderer.
+  //
+  // Note that this may not be the start time used by many current navigation
+  // related metrics, such as FCP, since those often use `common_params_start`
+  // to avoid including beforeunload durations.
+  // TODO(crbug.com/385170155): Update these metrics to have a more consistent
+  // and representative start time and duration.
+  //
+  // (See: NavigationRequest::Timeline::start)
+  base::TimeTicks actual_navigation_start;
+
+  // The duration the beforeunload dialog was shown. This includes the time
+  // spent waiting for user interaction. This is zero if no dialog was shown.
+  base::TimeDelta before_unload_dialog_duration;
+
   // Details about the network session used for the navigation, if available.
   std::optional<SessionDetails> session_details;
+
+  // The time when Fast Fetch eligibility check was run.
+  base::TimeTicks fast_fetch_eligibility_check_time;
+
+  // Whether the navigation was eligible for Fast Fetch.
+  bool is_fast_fetch_eligible = false;
 };
 
 }  // namespace content

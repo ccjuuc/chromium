@@ -9,6 +9,7 @@ import("//build/config/cast.gni")
 import("//build/config/features.gni")
 import("//build/config/linux/pkg_config.gni")
 import("//build/config/ui.gni")
+import("//media/gpu/args.gni")
 import("//media/media_options.gni")
 import("//testing/libfuzzer/fuzzer_test.gni")
 import("//testing/test.gni")
@@ -42,7 +43,6 @@ buildflag_header("media_buildflags") {
     "SYSTEM_LOOPBACK_AS_AEC_REFERENCE=$system_loopback_as_aec_reference_supported",
     "ENABLE_PLATFORM_AC3_EAC3_AUDIO=$enable_platform_ac3_eac3_audio",
     "ENABLE_PLATFORM_AC4_AUDIO=$enable_platform_ac4_audio",
-    "ENABLE_CAST_AUDIO_RENDERER=$enable_cast_audio_renderer",
     "ENABLE_DAV1D_DECODER=$enable_dav1d_decoder",
     "ENABLE_OPENH264_VIDEO_DECODER=$enable_openh264_video_decoder_in_build",
     "ENABLE_AV1_DECODER=$enable_av1_decoder",
@@ -52,7 +52,6 @@ buildflag_header("media_buildflags") {
     "ENABLE_FFMPEG_VIDEO_DECODERS=$enable_ffmpeg_video_decoders",
     "ENABLE_PLATFORM_HEVC=$enable_platform_hevc",
     "ENABLE_HEVC_PARSER_AND_HW_DECODER=$enable_hevc_parser_and_hw_decoder",
-    "ENABLE_PLATFORM_VVC=$enable_platform_vvc",
     "ENABLE_HLS_DEMUXER=$enable_hls_demuxer",
     "ENABLE_LIBAOM=$enable_libaom",
     "ENABLE_LIBRARY_CDMS=$enable_library_cdms",
@@ -61,9 +60,11 @@ buildflag_header("media_buildflags") {
     "ENABLE_MEDIA_DRM_STORAGE=$enable_media_drm_storage",
     "ENABLE_MEDIA_REMOTING=$enable_media_remoting",
     "ENABLE_MEDIA_REMOTING_RPC=$enable_media_remoting_rpc",
+    "ENABLE_MEDIA_REMOTING_REDIRECTION=$enable_media_remoting_redirection",
     "ENABLE_OPENH264=$media_use_openh264",
     "ENABLE_PASSTHROUGH_AUDIO_CODECS=$enable_passthrough_audio_codecs",
     "ENABLE_PLATFORM_DTS_AUDIO=$enable_platform_dts_audio",
+    "ENABLE_IAMF_TOOLS=$media_use_iamf_tools",
     "ENABLE_PLATFORM_IAMF_AUDIO=$enable_platform_iamf_audio",
     "ENABLE_PLATFORM_MPEG_H_AUDIO=$enable_platform_mpeg_h_audio",
     "ENABLE_MSE_MPEG2TS_STREAM_PARSER=$enable_mse_mpeg2ts_stream_parser",
@@ -199,6 +200,11 @@ if (is_ios) {
 # TODO(xhwang): Move mojo/capture/remoting tests here where applicable.
 test("media_unittests") {
   use_xvfb = use_xvfb_in_this_config
+
+  fuzztests = [ "ContainerNamesTest.DetermineContainerDoesNotCrash" ]
+  if (use_av1_hw_decoder && media_use_ffmpeg) {
+    fuzztests += [ "AV1DecoderFuzz.DecodeDoesNotCrash" ]
+  }
 
   deps = [
     "//media/audio:unit_tests",
@@ -338,7 +344,10 @@ if (media_use_ffmpeg && !is_android) {
 if (proprietary_codecs) {
   fuzzer_test("media_cenc_utils_fuzzer") {
     sources = [ "cdm/cenc_utils_fuzzertest.cc" ]
-    deps = [ ":media" ]
+    deps = [
+      ":media",
+      "//testing/libfuzzer:libfuzzer_base_wrappers",
+    ]
   }
 }
 
@@ -368,6 +377,7 @@ fuzzer_test("cbcs_decryptor_fuzzer") {
     ":media",
     "//base",
     "//crypto",
+    "//testing/libfuzzer:libfuzzer_base_wrappers",
   ]
 }
 
@@ -377,6 +387,7 @@ fuzzer_test("cenc_decryptor_fuzzer") {
     ":media",
     "//base",
     "//crypto",
+    "//testing/libfuzzer:libfuzzer_base_wrappers",
   ]
 }
 
@@ -385,6 +396,7 @@ fuzzer_test("json_web_key_fuzzer") {
   deps = [
     ":media",
     "//base",
+    "//testing/libfuzzer:libfuzzer_base_wrappers",
   ]
 }
 
@@ -394,6 +406,7 @@ if (proprietary_codecs) {
     deps = [
       ":media",
       "//base",
+      "//testing/libfuzzer:libfuzzer_base_wrappers",
     ]
   }
 
@@ -402,6 +415,7 @@ if (proprietary_codecs) {
     deps = [
       ":media",
       "//base",
+      "//testing/libfuzzer:libfuzzer_base_wrappers",
     ]
     libfuzzer_options = [ "max_len=500" ]
     dict = "test/mp4.dict"
@@ -414,6 +428,7 @@ if (enable_mse_mpeg2ts_stream_parser) {
     deps = [
       ":media",
       "//base",
+      "//testing/libfuzzer:libfuzzer_base_wrappers",
     ]
   }
 
@@ -422,6 +437,7 @@ if (enable_mse_mpeg2ts_stream_parser) {
     deps = [
       ":media",
       "//base",
+      "//testing/libfuzzer:libfuzzer_base_wrappers",
     ]
   }
 
@@ -430,6 +446,7 @@ if (enable_mse_mpeg2ts_stream_parser) {
     deps = [
       ":media",
       "//base",
+      "//testing/libfuzzer:libfuzzer_base_wrappers",
     ]
   }
 }

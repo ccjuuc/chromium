@@ -35,15 +35,11 @@ using InsetValueSequence =
 
 namespace {
 
-bool IsBlockDirection(ViewTimeline::ScrollAxis axis, WritingMode writing_mode) {
+bool IsBlockDirection(PhysicalAxis axis, WritingMode writing_mode) {
   switch (axis) {
-    case ViewTimeline::ScrollAxis::kBlock:
-      return true;
-    case ViewTimeline::ScrollAxis::kInline:
-      return false;
-    case ViewTimeline::ScrollAxis::kX:
+    case PhysicalAxis::kHorizontal:
       return !blink::IsHorizontalWritingMode(writing_mode);
-    case ViewTimeline::ScrollAxis::kY:
+    case PhysicalAxis::kVertical:
       return blink::IsHorizontalWritingMode(writing_mode);
   }
 }
@@ -56,23 +52,26 @@ bool IsBlockDirection(ViewTimeline::ScrollAxis axis, WritingMode writing_mode) {
 //
 // https://drafts.csswg.org/scroll-animations-1/#valdef-view-timeline-inset-auto
 TimelineInset ResolveAuto(const TimelineInset& inset,
-                          Element& source,
-                          ViewTimeline::ScrollAxis axis) {
-  const ComputedStyle* style = source.GetComputedStyle();
-  if (!style)
+                          const Node* resolved_source,
+                          PhysicalAxis axis) {
+  const LayoutObject* layout_object =
+      resolved_source ? resolved_source->GetLayoutObject() : nullptr;
+  if (!layout_object) {
     return inset;
+  }
 
+  const ComputedStyle& style = layout_object->StyleRef();
   const Length& start = inset.GetStart();
   const Length& end = inset.GetEnd();
 
-  if (IsBlockDirection(axis, style->GetWritingMode())) {
+  if (IsBlockDirection(axis, style.GetWritingMode())) {
     return TimelineInset(
-        start.IsAuto() ? style->ScrollPaddingBlockStart() : start,
-        end.IsAuto() ? style->ScrollPaddingBlockEnd() : end);
+        start.IsAuto() ? style.ScrollPaddingBlockStart() : start,
+        end.IsAuto() ? style.ScrollPaddingBlockEnd() : end);
   }
   return TimelineInset(
-      start.IsAuto() ? style->ScrollPaddingInlineStart() : start,
-      end.IsAuto() ? style->ScrollPaddingInlineEnd() : end);
+      start.IsAuto() ? style.ScrollPaddingInlineStart() : start,
+      end.IsAuto() ? style.ScrollPaddingInlineEnd() : end);
 }
 
 LayoutUnit ComputeInset(const Length& inset, LayoutUnit viewport_size) {
@@ -302,12 +301,13 @@ ViewTimeline::ViewTimeline(Document* document,
       inset_(inset) {}
 
 void ViewTimeline::CalculateOffsets(PaintLayerScrollableArea* scrollable_area,
-                                    ScrollOrientation physical_orientation,
+                                    PhysicalAxis physical_orientation,
                                     TimelineState* state) const {
   // Do not call this method with an unresolved timeline.
   // Called from ScrollTimeline::ComputeTimelineState, which has safeguard.
   // Any new call sites will require a similar safeguard.
-  LayoutBox* scroll_container = ComputeScrollContainer(state->resolved_source);
+  LayoutBox* scroll_container =
+      ComputeScrollContainer(state->resolved_source, physical_orientation);
   DCHECK(scroll_container);
   DCHECK(subject());
 
@@ -322,12 +322,12 @@ void ViewTimeline::CalculateOffsets(PaintLayerScrollableArea* scrollable_area,
   DCHECK(subject_position);
 
   // TODO(crbug.com/1448801): Handle nested sticky elements.
-  double target_offset = physical_orientation == kHorizontalScroll
+  double target_offset = physical_orientation == PhysicalAxis::kHorizontal
                              ? subject_position->x()
                              : subject_position->y();
   double target_size;
   LayoutUnit viewport_size;
-  if (physical_orientation == kHorizontalScroll) {
+  if (physical_orientation == PhysicalAxis::kHorizontal) {
     target_size = subject_size->width();
     viewport_size = scrollable_area->LayoutContentRect().Width();
   } else {
@@ -335,9 +335,8 @@ void ViewTimeline::CalculateOffsets(PaintLayerScrollableArea* scrollable_area,
     viewport_size = scrollable_area->LayoutContentRect().Height();
   }
 
-  Element* source = ComputeSourceNoLayout();
-  DCHECK(source);
-  TimelineInset inset = ResolveAuto(GetInset(), *source, GetAxis());
+  TimelineInset inset =
+      ResolveAuto(GetInset(), state->resolved_source, physical_orientation);
 
   // Update inset lengths if style dependent.
   if (style_dependant_start_inset_ || style_dependant_end_inset_) {
@@ -383,7 +382,7 @@ void ViewTimeline::ApplyStickyAdjustments(ScrollOffsets& scroll_offsets,
                                           double viewport_size,
                                           double target_size,
                                           double target_offset,
-                                          ScrollOrientation orientation,
+                                          PhysicalAxis orientation,
                                           LayoutBox* scroll_container) const {
   if (!subject()) {
     return;
@@ -400,18 +399,17 @@ void ViewTimeline::ApplyStickyAdjustments(ScrollOffsets& scroll_offsets,
     return;
   }
 
-  StickyPositionScrollingConstraints* constraints =
+  StickyPositionScrollingConstraints constraints =
       sticky_container->StickyConstraints();
-  if (!constraints) {
+
+  const auto* axis_data = constraints.AxisData(orientation);
+  if (!axis_data) {
     return;
   }
 
-  const PhysicalRect& container =
-      constraints->scroll_container_relative_containing_block_rect;
-  const PhysicalRect& sticky_rect =
-      constraints->scroll_container_relative_sticky_box_rect;
-
-  bool is_horizontal = orientation == kHorizontalScroll;
+  const BoxEdge& container =
+      axis_data->scroll_container_relative_containing_block_range;
+  const BoxEdge& sticky = axis_data->scroll_container_relative_sticky_box_range;
 
   // This is the sticky element's maximum forward displacement (from its static
   // position) due to having "left" or "top" set. It is based on the available
@@ -431,35 +429,17 @@ void ViewTimeline::ApplyStickyAdjustments(ScrollOffsets& scroll_offsets,
 
   // The maximum adjustment from each offset property is the available room
   // from the opposite edge of the sticky element in its static position.
-  if (is_horizontal) {
-    if (constraints->left_inset) {
-      max_forward_adjust = (container.Right() - sticky_rect.Right()).ToDouble();
-      forward_stickiness =
-          ComputeStickinessRange(*constraints->left_inset, sticky_rect.X(),
-                                 viewport_size, target_size, target_offset);
-    }
-    if (constraints->right_inset) {
-      max_backward_adjust = (container.X() - sticky_rect.X()).ToDouble();
-      backward_stickiness = ComputeStickinessRange(
-          LayoutUnit(viewport_size) - *constraints->right_inset -
-              sticky_rect.Width(),
-          sticky_rect.X(), viewport_size, target_size, target_offset);
-    }
-  } else {  // Vertical.
-    if (constraints->top_inset) {
-      max_forward_adjust =
-          (container.Bottom() - sticky_rect.Bottom()).ToDouble();
-      forward_stickiness =
-          ComputeStickinessRange(*constraints->top_inset, sticky_rect.Y(),
-                                 viewport_size, target_size, target_offset);
-    }
-    if (constraints->bottom_inset) {
-      max_backward_adjust = (container.Y() - sticky_rect.Y()).ToDouble();
-      backward_stickiness = ComputeStickinessRange(
-          LayoutUnit(viewport_size) - *constraints->bottom_inset -
-              sticky_rect.Height(),
-          sticky_rect.Y(), viewport_size, target_size, target_offset);
-    }
+  if (axis_data->min_inset) {
+    max_forward_adjust = (container.End() - sticky.End()).ToDouble();
+    forward_stickiness =
+        ComputeStickinessRange(*axis_data->min_inset, sticky.offset,
+                               viewport_size, target_size, target_offset);
+  }
+  if (axis_data->max_inset) {
+    max_backward_adjust = (container.offset - sticky.offset).ToDouble();
+    backward_stickiness = ComputeStickinessRange(
+        LayoutUnit(viewport_size) - *axis_data->max_inset - sticky.size,
+        sticky.offset, viewport_size, target_size, target_offset);
   }
 
   // Now apply the necessary adjustments to scroll_offsets and view_offsets.
@@ -542,22 +522,20 @@ std::optional<gfx::PointF> ViewTimeline::SubjectPosition(
   if (!subject_layout_object || !scroll_container) {
     return std::nullopt;
   }
-  MapCoordinatesFlags flags =
-      kIgnoreScrollOffset | kIgnoreStickyOffset | kIgnoreTransforms;
+  MapCoordinatesFlags flags = {MapCoordinatesMode::kIgnoreScrollOffset,
+                               MapCoordinatesMode::kIgnoreStickyOffset,
+                               MapCoordinatesMode::kIgnoreTransforms};
   gfx::PointF subject_pos = subject_layout_object->LocalToAncestorPoint(
       gfx::PointF(), scroll_container, flags);
 
-  // We call LayoutObject::ClientLeft/Top directly and avoid
-  // Element::clientLeft/Top because:
-  //
-  // - We may reach this function during style resolution,
-  //   and clientLeft/Top also attempt to update style/layout.
-  // - Those functions return the unzoomed values, and we require the zoomed
-  //   values.
-
-  return gfx::PointF(
-      subject_pos.x() - scroll_container->ClientLeft().ToDouble(),
-      subject_pos.y() - scroll_container->ClientTop().ToDouble());
+  // We call LayoutObject::PhysicalPaddingBoxRect directly and avoid
+  // Element::clientLeft, Element::clientTop because:
+  //  - We may reach this function during style resolution, and
+  //    clientLeft/clientTop also attempt to update style/layout.
+  //  - Those functions return the unzoomed values, and we require
+  //    the zoomed values.
+  return subject_pos -
+         gfx::Vector2dF(scroll_container->PhysicalPaddingBoxRect().offset);
 }
 
 // https://www.w3.org/TR/scroll-animations-1/#named-range-getTime
@@ -598,15 +576,14 @@ CSSNumericValue* ViewTimeline::getCurrentTime(const String& rangeName) {
   if (range == 0)
     return nullptr;
 
-  std::optional<base::TimeDelta> current_time = CurrentPhaseAndTime().time;
+  std::optional<base::TimeDelta> current_time = CurrentTimeInternal();
   // If current time is null then the timeline must be inactive, which is
   // handled above.
   DCHECK(current_time);
   DCHECK(GetDuration());
 
-  double timeline_progress =
-      CurrentPhaseAndTime().time.value().InMillisecondsF() /
-      GetDuration().value().InMillisecondsF();
+  double timeline_progress = current_time.value().InMillisecondsF() /
+                             GetDuration().value().InMillisecondsF();
 
   double named_range_progress =
       (timeline_progress - relative_start_offset) / range;

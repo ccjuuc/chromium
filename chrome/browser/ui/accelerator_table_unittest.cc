@@ -6,9 +6,11 @@
 
 #include <stddef.h>
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -89,17 +91,19 @@ TEST(AcceleratorTableTest, CheckDuplicatedAcceleratorsAsh) {
       continue;  // kAcceleratorMap does not have any release accelerators.
     }
     // A few shortcuts are defined in the browser as well as in ash so that web
-    // contents can consume them. http://crbug.com/309915, 370019, 412435,
+    // contents can consume them. http://crbug.com/41067358, 370019, 412435,
     // 321568.
-    if (base::Contains(ash::kActionsInterceptableByBrowser, ash_entry.action)) {
+    if (std::ranges::contains(ash::kActionsInterceptableByBrowser,
+                              ash_entry.action)) {
       continue;
     }
 
     // The following actions are duplicated in both ash and browser accelerator
     // list to ensure BrowserView can retrieve browser command id from the
     // accelerator without needing to know ash.
-    // See http://crbug.com/737307 for details.
-    if (base::Contains(ash::kActionsDuplicatedWithBrowser, ash_entry.action)) {
+    // See http://crbug.com/40527772 for details.
+    if (std::ranges::contains(ash::kActionsDuplicatedWithBrowser,
+                              ash_entry.action)) {
       AcceleratorMapping entry;
       entry.keycode = ash_entry.keycode;
       entry.modifiers = ash_entry.modifiers;

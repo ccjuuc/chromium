@@ -9,7 +9,6 @@
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/callback.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/bluetooth/chrome_bluetooth_delegate.h"
@@ -169,7 +168,7 @@ void FakeBluetoothGattCharacteristic::StartNotifySession(
 void FakeBluetoothGattCharacteristic::StopNotifySession(
     BluetoothGattNotifySession::Id session,
     base::OnceClosure callback) {
-  EXPECT_TRUE(base::Contains(active_notify_sessions_, session));
+  EXPECT_TRUE(active_notify_sessions_.contains(session));
   std::move(callback).Run();
 }
 
@@ -179,14 +178,14 @@ bool FakeBluetoothGattCharacteristic::IsNotifying() const {
 
 // Do not call the readValue callback until midway through the completion
 // of the startNotification callback registration.
-// https://crbug.com/1153426
+// https://crbug.com/40159093
 void FakeBluetoothGattCharacteristic::DeferReadUntilNotificationStart() {
   defer_read_until_notification_start_ = true;
 }
 
 // Possibly trigger value characteristicvaluechanged events on the page
 // during the setup of startNotifications.
-// https://crbug.com/1153426.
+// https://crbug.com/40159093.
 void FakeBluetoothGattCharacteristic::
     EmitChangeNotificationAtNotificationStart() {
   emit_value_change_at_notification_start_ = true;

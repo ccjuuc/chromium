@@ -38,7 +38,16 @@ enum {
   kSearchSuggestEnabled = 200008,
   kTrackPricesOnTabsEnabled = 200009,
   kVoiceSearchLocale = 200010,
-  kIOSBwgConsent = 200011
+  kIOSBwgConsent = 200011,
+  kIOSGeminiLiveConsent = 200012,
+  kIOSGeminiLiveIntroPlayed = 200013,
+  kLevelUpCompletedTasks = 200014,
+  kLevelUpHighestLevel = 200015,
+  kLevelUpUIEnabled = 200016,
+  kLevelUpTabsDeclutteredStat = 200017,
+  kLevelUpTypingSavedStat = 200018,
+  kLevelUpPasswordsVerifiedStat = 200019,
+  kLevelUpPhotoSearchesPerformedStat = 200020
   // See components/sync_preferences/README.md about adding new entries here.
   // vvvvv IMPORTANT! vvvvv
   // Note to the reviewer: IT IS YOUR RESPONSIBILITY to ensure that new syncable
@@ -93,18 +102,60 @@ constexpr auto kIOSChromeSyncablePrefsAllowlist =
          {syncable_prefs_ids::kIOSBwgConsent, syncer::PREFERENCES,
           sync_preferences::PrefSensitivity::kNone,
           sync_preferences::MergeBehavior::kNone}},
+        {prefs::kIOSGeminiLiveConsent,
+         {syncable_prefs_ids::kIOSGeminiLiveConsent, syncer::PREFERENCES,
+          sync_preferences::PrefSensitivity::kNone,
+          sync_preferences::MergeBehavior::kNone}},
+        {prefs::kIOSGeminiLiveIntroPlayed,
+         {syncable_prefs_ids::kIOSGeminiLiveIntroPlayed, syncer::PREFERENCES,
+          sync_preferences::PrefSensitivity::kNone,
+          sync_preferences::MergeBehavior::kNone}},
+        {prefs::kLevelUpCompletedTasks,
+         {syncable_prefs_ids::kLevelUpCompletedTasks, syncer::PREFERENCES,
+          sync_preferences::PrefSensitivity::kNone,
+          sync_preferences::MergeBehavior::kNone,
+          sync_preferences::WriteBehavior::kWriteToAccountOnly}},
+        {prefs::kLevelUpHighestLevel,
+         {syncable_prefs_ids::kLevelUpHighestLevel, syncer::PREFERENCES,
+          sync_preferences::PrefSensitivity::kNone,
+          sync_preferences::MergeBehavior::kNone,
+          sync_preferences::WriteBehavior::kWriteToAccountOnly}},
+        {prefs::kLevelUpUIEnabled,
+         {syncable_prefs_ids::kLevelUpUIEnabled, syncer::PREFERENCES,
+          sync_preferences::PrefSensitivity::kNone,
+          sync_preferences::MergeBehavior::kNone,
+          sync_preferences::WriteBehavior::kWriteToAccountOnly}},
+        {prefs::kLevelUpTabsDeclutteredStat,
+         {syncable_prefs_ids::kLevelUpTabsDeclutteredStat, syncer::PREFERENCES,
+          sync_preferences::PrefSensitivity::kNone,
+          sync_preferences::MergeBehavior::kNone,
+          sync_preferences::WriteBehavior::kWriteToAccountOnly}},
+        {prefs::kLevelUpTypingSavedStat,
+         {syncable_prefs_ids::kLevelUpTypingSavedStat, syncer::PREFERENCES,
+          sync_preferences::PrefSensitivity::kNone,
+          sync_preferences::MergeBehavior::kNone,
+          sync_preferences::WriteBehavior::kWriteToAccountOnly}},
+        {prefs::kLevelUpPasswordsVerifiedStat,
+         {syncable_prefs_ids::kLevelUpPasswordsVerifiedStat,
+          syncer::PREFERENCES, sync_preferences::PrefSensitivity::kNone,
+          sync_preferences::MergeBehavior::kNone,
+          sync_preferences::WriteBehavior::kWriteToAccountOnly}},
+        {prefs::kLevelUpPhotoSearchesPerformedStat,
+         {syncable_prefs_ids::kLevelUpPhotoSearchesPerformedStat,
+          syncer::PREFERENCES, sync_preferences::PrefSensitivity::kNone,
+          sync_preferences::MergeBehavior::kNone,
+          sync_preferences::WriteBehavior::kWriteToAccountOnly}},
     });
 
 }  // namespace
 
-std::optional<sync_preferences::SyncablePrefMetadata>
+const sync_preferences::SyncablePrefMetadata*
 IOSChromeSyncablePrefsDatabase::GetSyncablePrefMetadata(
     std::string_view pref_name) const {
   const auto it = kIOSChromeSyncablePrefsAllowlist.find(pref_name);
   if (it != kIOSChromeSyncablePrefsAllowlist.end()) {
-    DCHECK(!common_syncable_prefs_database_.GetSyncablePrefMetadata(pref_name)
-                .has_value());
-    return it->second;
+    DCHECK(!common_syncable_prefs_database_.GetSyncablePrefMetadata(pref_name));
+    return &it->second;
   }
   // Check in `common_syncable_prefs_database_`.
   return common_syncable_prefs_database_.GetSyncablePrefMetadata(pref_name);

@@ -69,7 +69,7 @@ class WebViewInternalCaptureVisibleRegionFunction
 
  private:
   // extensions::WebContentsCaptureClient:
-  ScreenshotAccess GetScreenshotAccess(
+  base::expected<void, ScreenshotAccessError> GetScreenshotAccess(
       content::WebContents* web_contents) const override;
   bool ClientAllowsTransparency() override;
   void OnCaptureSuccess(const SkBitmap& bitmap) override;
@@ -375,7 +375,7 @@ class WebViewInternalFindFunction : public WebViewInternalExtensionFunction {
       delete;
 
   // Used by WebViewInternalFindHelper to Respond().
-  void ForwardResponse(base::Value::Dict results);
+  void ForwardResponse(base::DictValue results);
 
  protected:
   ~WebViewInternalFindFunction() override;

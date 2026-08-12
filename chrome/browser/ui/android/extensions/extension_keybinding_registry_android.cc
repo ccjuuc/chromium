@@ -4,11 +4,13 @@
 
 #include "chrome/browser/ui/android/extensions/extension_keybinding_registry_android.h"
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "chrome/browser/extensions/commands/command_service.h"
 #include "chrome/browser/extensions/extension_keybinding_registry.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/android/tab_model/tab_model.h"
+#include "chrome/browser/ui/android/tab_model/tab_model_list.h"
+#include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/extension.h"
 #include "third_party/jni_zero/jni_zero.h"
@@ -21,10 +23,15 @@
 namespace extensions {
 
 ExtensionKeybindingRegistryAndroid::ExtensionKeybindingRegistryAndroid(
-    content::BrowserContext* context)
+    content::BrowserContext* context,
+    TabListInterface* tab_list_interface,
+    ExtensionsToolbarViewModel* toolbar_view_model)
     : ExtensionKeybindingRegistry(context,
-                                  ExtensionFilter::ALL_EXTENSIONS,
-                                  nullptr) {}
+                                  tab_list_interface,
+                                  ExtensionFilter::ALL_EXTENSIONS),
+      toolbar_view_model_(toolbar_view_model) {
+  Init();
+}
 
 ExtensionKeybindingRegistryAndroid::~ExtensionKeybindingRegistryAndroid() =
     default;
@@ -76,8 +83,7 @@ bool ExtensionKeybindingRegistryAndroid::ShouldIgnoreCommand(
   return false;
 }
 
-std::variant<bool, std::string>
-ExtensionKeybindingRegistryAndroid::HandleKeyDownEvent(
+bool ExtensionKeybindingRegistryAndroid::HandleKeyDownEvent(
     const ui::KeyEventAndroid& key_event) {
   if (is_shortcut_handling_suspended_) {
     return false;
@@ -91,7 +97,13 @@ ExtensionKeybindingRegistryAndroid::HandleKeyDownEvent(
   }
   auto it = active_action_accelerators_.find(accelerator);
   if (it != active_action_accelerators_.end()) {
-    return it->second;
+    ToolbarActionViewModel* model =
+        toolbar_view_model_->GetActionModelForId(it->second);
+    if (model == nullptr || !model->CanHandleAccelerators()) {
+      return false;
+    }
+
+    return model->TryHandleAcceleratorPress();
   }
 
   return NotifyEventTargets(accelerator);

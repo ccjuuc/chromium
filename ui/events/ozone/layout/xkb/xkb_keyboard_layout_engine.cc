@@ -654,7 +654,10 @@ void LoadKeymap(const std::string& layout_name,
         FROM_HERE, base::BindOnce(std::move(reply_callback), layout_name,
                                   std::move(keymap_str)));
   } else {
-    LOG(FATAL) << "Keymap file failed to load: " << layout_name;
+    LOG(ERROR) << "Keymap file failed to load: " << layout_name;
+    reply_runner->PostTask(
+        FROM_HERE, base::BindOnce(std::move(reply_callback), layout_name,
+                                  std::unique_ptr<char, base::FreeDeleter>()));
   }
 }
 #endif
@@ -732,6 +735,11 @@ void XkbKeyboardLayoutEngine::OnKeymapLoaded(
     xkb_keymap* keymap = xkb_keymap_new_from_string(
         xkb_context_.get(), keymap_str.get(), XKB_KEYMAP_FORMAT_TEXT_V1,
         XKB_KEYMAP_COMPILE_NO_FLAGS);
+    if (!keymap) {
+      LOG(ERROR) << "Failed to compile keymap from string: " << layout_name;
+      std::move(callback).Run(/*success=*/false);
+      return;
+    }
     XkbKeymapEntry entry = {layout_name, keymap};
     xkb_keymaps_.push_back(entry);
     if (layout_name == current_layout_name_) {
@@ -741,7 +749,8 @@ void XkbKeyboardLayoutEngine::OnKeymapLoaded(
       std::move(callback).Run(/*success=*/false);
     }
   } else {
-    LOG(FATAL) << "Keymap file failed to load: " << layout_name;
+    LOG(ERROR) << "Keymap file failed to load: " << layout_name;
+    std::move(callback).Run(/*success=*/false);
   }
 }
 
@@ -1046,10 +1055,15 @@ KeyboardCode XkbKeyboardLayoutEngine::DifficultKeyboardCode(
     xkb_keysym_t xkb_keysym,
     char16_t character) const {
   // Get the layout interpretation without modifiers, so that
-  // e.g. Ctrl+D correctly generates VKEY_D.
+  // e.g. Ctrl+D correctly generates VKEY_D. Keep NumLock enabled if it was
+  // active, because it changes the function of the keypad keys (e.g. from
+  // navigation keys to numeric/decimal keys) rather than being a shortcut
+  // modifier.
+  xkb_mod_mask_t num_lock_flags = xkb_modifier_converter_.MaskFromUiFlags(
+      ui_flags & ui::EF_NUM_LOCK_ON);
   xkb_keysym_t plain_keysym;
   uint32_t plain_character;
-  if (!XkbLookup(xkb_keycode, 0, &plain_keysym, &plain_character))
+  if (!XkbLookup(xkb_keycode, num_lock_flags, &plain_keysym, &plain_character))
     return VKEY_UNKNOWN;
 
   // If the plain key is non-printable, that determines the VKEY.
@@ -1145,6 +1159,19 @@ void XkbKeyboardLayoutEngine::ParseLayoutName(const std::string& layout_name,
   } else if (dash_index != std::string::npos) {
     *layout_id = layout_name.substr(0, dash_index);
     *layout_variant = layout_name.substr(dash_index + 1);
+  }
+
+  // Sanitize the layout ID and variant to only allow safe characters.
+  const char kAllowedChars[] =
+      "abcdefghijklmnopqrstuvwxyz"
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      "0123456789"
+      "_()-:";
+  if (!base::ContainsOnlyChars(*layout_id, kAllowedChars)) {
+    layout_id->clear();
+  }
+  if (!base::ContainsOnlyChars(*layout_variant, kAllowedChars)) {
+    layout_variant->clear();
   }
 }
 

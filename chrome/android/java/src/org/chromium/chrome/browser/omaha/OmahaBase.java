@@ -235,7 +235,7 @@ public class OmahaBase {
         //                    case a scheduling error occurs.
         if (nextTimestamp != Long.MAX_VALUE && nextTimestamp >= 0) {
             long currentTimestamp = mDelegate.getScheduler().getCurrentTime();
-            Log.d(TAG, "Attempting to schedule next job for: " + new Date(nextTimestamp));
+            Log.d(TAG, "Attempting to schedule next job for: %s", new Date(nextTimestamp));
             mDelegate.scheduleService(currentTimestamp, nextTimestamp);
         }
 
@@ -362,8 +362,8 @@ public class OmahaBase {
             mTimestampForNextPostAttempt = scheduler.calculateNextTimestamp();
             Log.d(
                     TAG,
-                    "Request to Server Successful. Timestamp for next request:"
-                            + mTimestampForNextPostAttempt);
+                    "Request to Server Successful. Timestamp for next request: %d",
+                    mTimestampForNextPostAttempt);
         } else {
             // Set the alarm to try again later.  Failures are incremented after setting the timer
             // to allow the first failure to incur the minimum base delay between POSTs.
@@ -448,24 +448,25 @@ public class OmahaBase {
                 NetworkTrafficAnnotationTag.createComplete(
                         "omaha_client_android_uc",
                         """
-                semantics {
-                  sender: 'Updates'
-                  description:
-                    'This traffic checks whether the browser is up-to-date and '
-                    'provides basic browser telemetry using the Omaha protocol.'
-                  trigger: 'Manual or automatic checks for updates.'
-                  data:
-                    'Various OS and browser parameters such as version, '
-                    'architecture, channel, and the calendar date of the previous '
-                    'communication. '
-                    'A unique identifier for the device may be transmitted.'
-                  destination: GOOGLE_OWNED_SERVICE
-                }
-                policy {
-                  cookies_allowed: NO
-                  policy_exception_justification: 'Not implemented.'
-                  setting: 'This feature cannot be disabled.'
-                }""");
+                        semantics {
+                          sender: 'Updates'
+                          description:
+                            'This traffic checks whether the browser is up-to-date and '
+                            'provides basic browser telemetry using the Omaha protocol.'
+                          trigger: 'Manual or automatic checks for updates.'
+                          data:
+                            'Various OS and browser parameters such as version, '
+                            'architecture, channel, and the calendar date of the previous '
+                            'communication. '
+                            'A unique identifier for the device may be transmitted.'
+                          destination: GOOGLE_OWNED_SERVICE
+                        }
+                        policy {
+                          cookies_allowed: NO
+                          policy_exception_justification: 'Not implemented.'
+                          setting: 'This feature cannot be disabled.'
+                        }\
+                        """);
         try {
             URL url = new URL(assumeNonNull(getRequestGenerator()).getServerUrl());
             HttpURLConnection connection =
@@ -603,7 +604,7 @@ public class OmahaBase {
                 | IndexOutOfBoundsException
                 | IllegalArgumentException e) {
             // IndexOutOfBoundsException is thought to be triggered by a bug in okio.
-            // IllegalArgumentException is triggered by a bug in okio. crbug.com/1149863.
+            // IllegalArgumentException is triggered by a bug in okio. crbug.com/40732106.
             throw new RequestFailureException(
                     "Failed to write request to server: ",
                     e,

@@ -326,6 +326,15 @@ void TransferredMediaStreamTrack::RegisterSink(
   // initialized.
 }
 
+void TransferredMediaStreamTrack::UnregisterSink(
+    SpeechRecognitionMediaStreamAudioSink* sink) {
+  if (track_) {
+    track_->UnregisterSink(sink);
+  }
+  // TODO(https://crbug.com/1288839): Save and forward to track_ once it's
+  // initialized.
+}
+
 // EventTarget
 const AtomicString& TransferredMediaStreamTrack::InterfaceName() const {
   // TODO(https://crbug.com/1288839): Should TMST have its own interface name?
@@ -356,10 +365,11 @@ bool TransferredMediaStreamTrack::HasPendingActivity() const {
 std::unique_ptr<AudioSourceProvider>
 TransferredMediaStreamTrack::CreateWebAudioSource(
     int context_sample_rate,
-    base::TimeDelta platform_buffer_duration) {
+    base::TimeDelta platform_buffer_duration,
+    uint32_t render_quantum_frames) {
   if (track_) {
-    return track_->CreateWebAudioSource(context_sample_rate,
-                                        platform_buffer_duration);
+    return track_->CreateWebAudioSource(
+        context_sample_rate, platform_buffer_duration, render_quantum_frames);
   }
   // TODO(https://crbug.com/1288839): Create one based on transferred data?
   return nullptr;

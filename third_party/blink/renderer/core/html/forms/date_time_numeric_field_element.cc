@@ -30,8 +30,11 @@
 #include "third_party/blink/renderer/core/events/keyboard_event.h"
 #include "third_party/blink/renderer/core/layout/text_utils.h"
 #include "third_party/blink/renderer/platform/fonts/font.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 #include "third_party/blink/renderer/platform/text/text_run.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 
 namespace blink {
 
@@ -66,7 +69,7 @@ DateTimeNumericFieldElement::DateTimeNumericFieldElement(
 
   // We show a direction-neutral string such as "--" as a placeholder. It
   // should follow the direction of numeric values.
-  if (LocaleForOwner().IsRTL()) {
+  if (LocaleForOwner().IsRtl()) {
     unicode::CharDirection dir = unicode::Direction(FormatValue(Maximum())[0]);
     if (dir == unicode::kLeftToRight || dir == unicode::kEuropeanNumber ||
         dir == unicode::kArabicNumber) {
@@ -108,10 +111,10 @@ void DateTimeNumericFieldElement::SetFocused(
 String DateTimeNumericFieldElement::FormatValue(int value) const {
   Locale& locale = LocaleForOwner();
   if (hard_limits_.maximum > 999)
-    return locale.ConvertToLocalizedNumber(String::Format("%04d", value));
+    return locale.ConvertToLocalizedNumber(Format("{:04}", value));
   if (hard_limits_.maximum > 99)
-    return locale.ConvertToLocalizedNumber(String::Format("%03d", value));
-  return locale.ConvertToLocalizedNumber(String::Format("%02d", value));
+    return locale.ConvertToLocalizedNumber(Format("{:03}", value));
+  return locale.ConvertToLocalizedNumber(Format("{:02}", value));
 }
 
 void DateTimeNumericFieldElement::HandleKeyboardEvent(
@@ -145,8 +148,12 @@ void DateTimeNumericFieldElement::HandleKeyboardEvent(
     UpdateVisibleValue(kDispatchEvent);
   }
 
+  int limit =
+    RuntimeEnabledFeatures::DateTimeInputTypeEarlyAdvanceFixEnabled()
+        ? hard_limits_.maximum
+        : range_.maximum;
   if (type_ahead_buffer_.length() >= maximum_length ||
-      new_value * 10 > range_.maximum)
+      new_value * 10 > limit)
     FocusOnNextField();
 
   keyboard_event.SetDefaultHandled();
@@ -216,8 +223,9 @@ int DateTimeNumericFieldElement::ValueAsInteger() const {
 }
 
 int DateTimeNumericFieldElement::TypeAheadValue() const {
-  if (type_ahead_buffer_.length())
-    return type_ahead_buffer_.ToString().ToInt();
+  if (type_ahead_buffer_.length()) {
+    return StringToIntLoose(type_ahead_buffer_.ToString()).value_or(0);
+  }
   return -1;
 }
 

@@ -5,7 +5,17 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_MULTIPLE_REQUEST_PAYMENTS_NETWORK_INTERFACE_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_MULTIPLE_REQUEST_PAYMENTS_NETWORK_INTERFACE_H_
 
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/types/strong_alias.h"
+#include "base/values.h"
 #include "components/autofill/core/browser/payments/multiple_request_payments_network_interface_base.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/payments_request_details.h"
 
 namespace autofill::payments {
@@ -20,7 +30,7 @@ class MultipleRequestPaymentsNetworkInterface
   using GetDetailsForCreateCardCallback = base::OnceCallback<void(
       PaymentsAutofillClient::PaymentsRpcResult result,
       const std::u16string& context_token,
-      std::unique_ptr<base::Value::Dict> legal_message,
+      std::unique_ptr<base::DictValue> legal_message,
       std::vector<std::pair<int, int>> supported_card_bin_ranges)>;
 
   // `identity_manager` must outlive this.

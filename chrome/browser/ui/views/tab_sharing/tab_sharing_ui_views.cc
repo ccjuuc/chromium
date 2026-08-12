@@ -13,7 +13,6 @@
 
 #include "base/check.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
@@ -26,10 +25,9 @@
 #include "chrome/browser/media/webrtc/webrtc_logging_controller.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/sad_tab_helper.h"
 #include "chrome/browser/ui/tab_sharing/tab_sharing_infobar_delegate.h"
 #include "chrome/browser/ui/tab_sharing/tab_sharing_ui.h"
@@ -90,10 +88,6 @@ bool g_apply_dlp_for_all_users_for_testing_ = false;
 #endif
 
 url_formatter::SchemeDisplay GetSharedTabSchemeDisplay() {
-  if (!base::FeatureList::IsEnabled(features::kTabCaptureInfobarLinks)) {
-    return url_formatter::SchemeDisplay::SHOW;
-  }
-
   if (base::FeatureList::IsEnabled(kTabSharingBarOmitHttpAndHttps)) {
     return url_formatter::SchemeDisplay::OMIT_HTTP_AND_HTTPS;
   }
@@ -219,7 +213,7 @@ TabSharingUIViews::TabSharingUIViews(
 TabSharingUIViews::~TabSharingUIViews() {
   // Unconditionally call StopSharing(), to ensure all clean-up has been
   // performed if tasks race (e.g., OnStarted() is called after
-  // OnInfoBarRemoved()). See: https://crbug.com/1155426
+  // OnInfoBarRemoved()). See: https://crbug.com/40054066
   StopSharing("TabSharingUIViews destroyed");
 }
 
@@ -336,7 +330,6 @@ void TabSharingUIViews::OnTabStripModelChanged(
 }
 
 void TabSharingUIViews::OnTabChangedAt(tabs::TabInterface* tab,
-                                       int index,
                                        TabChangeType change_type) {
   content::WebContents* contents = tab->GetContents();
   // Sad tab cannot be shared so don't create an infobar for it.
@@ -442,8 +435,10 @@ void TabSharingUIViews::CreateInfobarForWebContents(WebContents* contents) {
 
   // Don't show the info bar in a Picture in Picture window, since it doesn't
   // typically fit anyway.
-  Browser* browser = chrome::FindBrowserWithTab(contents);
-  if (browser && browser->is_type_picture_in_picture()) {
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(contents);
+  if (browser && browser->GetType() ==
+                     BrowserWindowInterface::Type::TYPE_PICTURE_IN_PICTURE) {
     return;
   }
 
@@ -468,26 +463,13 @@ void TabSharingUIViews::CreateInfobarForWebContents(WebContents* contents) {
   // active, create an observer that will inform us when its compliance state
   // changes.
   if (capturer_restricted_to_same_origin_ && is_share_instead_button_possible &&
-      !base::Contains(same_origin_observers_, contents)) {
+      !same_origin_observers_.contains(contents)) {
     // We explicitly remove all infobars and clear all policy observers before
     // destruction, so base::Unretained is safe here.
     same_origin_observers_[contents] = std::make_unique<SameOriginObserver>(
         contents, capturer_origin_,
         base::BindRepeating(&TabSharingUIViews::CreateInfobarForWebContents,
                             base::Unretained(this)));
-  }
-
-  content::GlobalRenderFrameHostId focus_target;
-  if (can_focus_capturer_) {
-    // Self-capture -> no switch-to button.
-    // Capturer -> switch-to-captured.
-    // Captured -> switch-to-capturer.
-    // Otherwise -> no switch-to button.
-    if (is_capturing_tab && !is_captured_tab) {
-      focus_target = GetGlobalId(shared_tab_);
-    } else if (!is_capturing_tab && is_captured_tab) {
-      focus_target = capturer_;
-    }
   }
 
   // Determine if we are currently allowed to share this tab by policy.
@@ -517,12 +499,21 @@ void TabSharingUIViews::CreateInfobarForWebContents(WebContents* contents) {
           ? TabSharingInfoBarDelegate::ButtonState::ENABLED
           : TabSharingInfoBarDelegate::ButtonState::DISABLED;
 
-  infobars_[contents] = TabSharingInfoBarDelegate::Create(
+  infobars::InfoBar* infobar = TabSharingInfoBarDelegate::Create(
       infobar_manager, old_infobar, GetGlobalId(shared_tab_), capturer_,
       shared_tab_name_, capturer_name_, contents,
       GetTabRole(is_capturing_tab, is_captured_tab),
-      share_this_tab_instead_button_state, focus_target,
-      captured_surface_control_active_, this, capture_type_);
+      share_this_tab_instead_button_state, captured_surface_control_active_,
+      this, capture_type_);
+
+  // Avoid creating entries with null infobar pointer. This happens when Chrome
+  // for Testing or Chrome Headless Mode are running with infobars disabled
+  // using --disable-infobars switch. See http://crbug.com/483918494.
+  if (infobar) {
+    infobars_[contents] = infobar;
+  } else {
+    infobar_manager->RemoveObserver(this);
+  }
 }
 
 void TabSharingUIViews::RemoveInfobarsForAllTabs() {
@@ -530,6 +521,7 @@ void TabSharingUIViews::RemoveInfobarsForAllTabs() {
   TabStripModelObserver::StopObservingAll(this);
 
   for (const auto& infobars_entry : infobars_) {
+    CHECK(infobars_entry.second);
     infobars_entry.second->owner()->RemoveObserver(this);
     infobars_entry.second->RemoveSelf();
   }

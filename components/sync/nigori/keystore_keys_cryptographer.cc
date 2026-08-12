@@ -8,7 +8,7 @@
 
 #include "base/check.h"
 #include "base/memory/ptr_util.h"
-#include "components/sync/engine/nigori/key_derivation_params.h"
+#include "components/sync/model/crypto/key_derivation_params.h"
 #include "components/sync/nigori/cryptographer_impl.h"
 #include "components/sync/nigori/nigori_key_bag.h"
 #include "components/sync/protocol/encryption.pb.h"
@@ -37,8 +37,7 @@ KeystoreKeysCryptographer::FromKeystoreKeys(
   std::string last_key_name;
 
   for (const std::string& key : keystore_keys) {
-    last_key_name = key_bag.AddKey(Nigori::CreateByDerivation(
-        KeyDerivationParams::CreateForPbkdf2(), key));
+    last_key_name = key_bag.AddKey(KeyDerivationParams::CreateForPbkdf2(), key);
 
     if (last_key_name.empty()) {
       // TODO(crbug.com/40868132): this shouldn't be possible, clean up once
@@ -63,9 +62,6 @@ KeystoreKeysCryptographer::KeystoreKeysCryptographer(
 
 KeystoreKeysCryptographer::~KeystoreKeysCryptographer() = default;
 
-std::string KeystoreKeysCryptographer::GetLastKeystoreKeyName() const {
-  return last_keystore_key_name_;
-}
 
 bool KeystoreKeysCryptographer::IsEmpty() const {
   return keystore_keys_.empty();

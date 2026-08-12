@@ -39,7 +39,7 @@
 #include "chrome/browser/browsing_data/counters/tabs_counter.h"
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_HOSTED_APPS)
 #include "base/strings/string_split.h"
 #include "chrome/browser/browsing_data/counters/hosted_apps_counter.h"
 #endif
@@ -70,38 +70,23 @@ TEST_F(BrowsingDataCounterUtilsTest, CacheCounterResult) {
   const struct TestCase {
     int bytes;
     bool is_upper_limit;
-    bool is_basic_tab;
     std::string expected_output;
   } kTestCases[] = {
-      {42, false, false, "Less than 1 MB"},
-      {42, false, true,
-       "Frees up less than 1 MB. Some sites may load more slowly on your next "
-       "visit."},
-      {static_cast<int>(2.312 * kBytesInAMegabyte), false, false, "2.3 MB"},
-      {static_cast<int>(2.312 * kBytesInAMegabyte), false, true,
-       "Frees up 2.3 MB. Some sites may load more slowly on your next visit."},
-      {static_cast<int>(2.312 * kBytesInAMegabyte), true, false,
-       "Less than 2.3 MB"},
-      {static_cast<int>(2.312 * kBytesInAMegabyte), true, true,
-       "Frees up less than 2.3 MB. Some sites may load more slowly on your "
-       "next visit."},
-      {static_cast<int>(500.2 * kBytesInAMegabyte), false, false, "500 MB"},
-      {static_cast<int>(500.2 * kBytesInAMegabyte), true, false,
-       "Less than 500 MB"},
+      {42, false, "Less than 1 MB"},
+      {static_cast<int>(2.312 * kBytesInAMegabyte), false, "2.3 MB"},
+      {static_cast<int>(2.312 * kBytesInAMegabyte), true, "Less than 2.3 MB"},
+      {static_cast<int>(500.2 * kBytesInAMegabyte), false, "500 MB"},
+      {static_cast<int>(500.2 * kBytesInAMegabyte), true, "Less than 500 MB"},
   };
 
   for (const TestCase& test_case : kTestCases) {
     CacheCounter counter(GetProfile());
-    browsing_data::ClearBrowsingDataTab tab =
-        test_case.is_basic_tab ? browsing_data::ClearBrowsingDataTab::BASIC
-                               : browsing_data::ClearBrowsingDataTab::ADVANCED;
-    counter.Init(GetProfile()->GetPrefs(), tab,
+    counter.Init(GetProfile()->GetPrefs(),
                  browsing_data::BrowsingDataCounter::ResultCallback());
     CacheCounter::CacheResult result(&counter, test_case.bytes,
                                      test_case.is_upper_limit);
-    SCOPED_TRACE(base::StringPrintf(
-        "Test params: %d bytes, %d is_upper_limit, %d is_basic_tab.",
-        test_case.bytes, test_case.is_upper_limit, test_case.is_basic_tab));
+    SCOPED_TRACE(base::StringPrintf("Test params: %d bytes, %d is_upper_limit.",
+                                    test_case.bytes, test_case.is_upper_limit));
 
     std::u16string output =
         GetChromeCounterTextFromResult(&result, GetProfile());
@@ -121,40 +106,27 @@ TEST_F(BrowsingDataCounterUtilsTest, CacheCounterResultAndroid) {
   const struct TestCase {
     int bytes;
     bool is_upper_limit;
-    bool is_basic_tab;
     std::string expected_output;
   } kTestCases[] = {
-      {42, false, false,
+      {42, false,
        "Less than 1 MB. Some sites may load more slowly on your next "
        "visit."},
-      {42, false, true,
-       "Frees up less than 1 MB. Some sites may load more slowly on your next "
-       "visit."},
-      {static_cast<int>(2.312 * kBytesInAMegabyte), false, false,
+      {static_cast<int>(2.312 * kBytesInAMegabyte), false,
        "2.3 MB. Some sites may load more slowly on your next "
        "visit."},
-      {static_cast<int>(2.312 * kBytesInAMegabyte), false, true,
-       "Frees up 2.3 MB. Some sites may load more slowly on your next visit."},
-      {static_cast<int>(2.312 * kBytesInAMegabyte), true, false,
+      {static_cast<int>(2.312 * kBytesInAMegabyte), true,
        "Less than 2.3 MB. Some sites may load more slowly on your next "
        "visit."},
-      {static_cast<int>(2.312 * kBytesInAMegabyte), true, true,
-       "Frees up less than 2.3 MB. Some sites may load more slowly on your "
-       "next visit."},
   };
 
   for (const TestCase& test_case : kTestCases) {
     CacheCounter counter(GetProfile());
-    browsing_data::ClearBrowsingDataTab tab =
-        test_case.is_basic_tab ? browsing_data::ClearBrowsingDataTab::BASIC
-                               : browsing_data::ClearBrowsingDataTab::ADVANCED;
-    counter.Init(GetProfile()->GetPrefs(), tab,
+    counter.Init(GetProfile()->GetPrefs(),
                  browsing_data::BrowsingDataCounter::ResultCallback());
     CacheCounter::CacheResult result(&counter, test_case.bytes,
                                      test_case.is_upper_limit);
-    SCOPED_TRACE(base::StringPrintf(
-        "Test params: %d bytes, %d is_upper_limit, %d is_basic_tab.",
-        test_case.bytes, test_case.is_upper_limit, test_case.is_basic_tab));
+    SCOPED_TRACE(base::StringPrintf("Test params: %d bytes, %d is_upper_limit.",
+                                    test_case.bytes, test_case.is_upper_limit));
 
     std::u16string output =
         GetChromeCounterTextFromResult(&result, GetProfile());
@@ -163,7 +135,7 @@ TEST_F(BrowsingDataCounterUtilsTest, CacheCounterResultAndroid) {
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_HOSTED_APPS)
 // Tests the complex output of the hosted apps counter.
 TEST_F(BrowsingDataCounterUtilsTest, HostedAppsCounterResult) {
   HostedAppsCounter counter(GetProfile());
@@ -205,7 +177,7 @@ TEST_F(BrowsingDataCounterUtilsTest, HostedAppsCounterResult) {
 }
 #endif
 
-// Tests the output for "Passwords and passkeys" on the advanced tab.
+// Tests the output for "Passwords and passkeys".
 TEST_F(BrowsingDataCounterUtilsTest, DeletePasswordsAndSigninData) {
   // This test assumes that the strings are served exactly as defined,
   // i.e. that the locale is set to the default "en".
@@ -213,7 +185,7 @@ TEST_F(BrowsingDataCounterUtilsTest, DeletePasswordsAndSigninData) {
 
   auto password_store =
       base::MakeRefCounted<password_manager::TestPasswordStore>();
-  password_store->Init(/*affiliated_match_helper=*/nullptr);
+  password_store->Init();
 
   // This counter does not really count anything; we just need a reference to
   // pass to the SigninDataResult ctor.
@@ -295,8 +267,6 @@ TEST_F(BrowsingDataCounterUtilsTest, TabsCounterResult) {
   // This test assumes that the strings are served exactly as defined,
   // i.e. that the locale is set to the default "en".
   ASSERT_EQ("en", TestingBrowserProcess::GetGlobal()->GetApplicationLocale());
-  browsing_data::ClearBrowsingDataTab tab =
-      browsing_data::ClearBrowsingDataTab::ADVANCED;
 
   // Test the output for various forms of CacheResults.
   const struct TestCase {
@@ -312,7 +282,7 @@ TEST_F(BrowsingDataCounterUtilsTest, TabsCounterResult) {
 
   for (const TestCase& test_case : kTestCases) {
     TabsCounter counter(GetProfile());
-    counter.Init(GetProfile()->GetPrefs(), tab,
+    counter.Init(GetProfile()->GetPrefs(),
                  browsing_data::BrowsingDataCounter::ResultCallback());
     TabsCounter::TabsResult result(&counter, test_case.tab_count,
                                    test_case.window_count);
@@ -334,8 +304,7 @@ class CookieBrowsingDataCounterUtilsTest : public BrowsingDataCounterUtilsTest {
   enum class SigninState {
     kSignedOut,
     kAccountAware,
-    kImplicitSignin,  // Legacy Dice automatic signin.
-    kExplicitSignin,
+    kSignin,
     kSigninPending,
     // TODO(crbug.com/417950948): Remove sync-related states.
     kSyncing,
@@ -368,13 +337,11 @@ class CookieBrowsingDataCounterUtilsTest : public BrowsingDataCounterUtilsTest {
       signin::ConsentLevel consent_level,
       signin::IdentityTestEnvironment* identity_test_env,
       syncer::TestSyncService* test_sync_service,
-      PrefService* prefs,
-      bool explicit_signin) {
+      PrefService* prefs) {
     CoreAccountInfo account_info =
         identity_test_env->MakePrimaryAccountAvailable("user@gmail.com",
                                                        consent_level);
     test_sync_service->SetSignedIn(consent_level, account_info);
-    prefs->SetBoolean(prefs::kExplicitBrowserSignin, explicit_signin);
     return account_info;
   }
 
@@ -383,8 +350,7 @@ class CookieBrowsingDataCounterUtilsTest : public BrowsingDataCounterUtilsTest {
                              PrefService* prefs) {
     CoreAccountInfo account_info =
         SetSignedInState(signin::ConsentLevel::kSignin, identity_test_env,
-                         test_sync_service, prefs,
-                         /*explicit_signin=*/true);
+                         test_sync_service, prefs);
     identity_test_env->UpdatePersistentErrorOfRefreshTokenForAccount(
         account_info.account_id,
         GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
@@ -401,8 +367,7 @@ class CookieBrowsingDataCounterUtilsTest : public BrowsingDataCounterUtilsTest {
                           PrefService* prefs) {
     CoreAccountInfo account_info =
         SetSignedInState(signin::ConsentLevel::kSync, identity_test_env,
-                         test_sync_service, prefs,
-                         /*explicit_signin=*/true);
+                         test_sync_service, prefs);
     identity_test_env->UpdatePersistentErrorOfRefreshTokenForAccount(
         account_info.account_id,
         GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
@@ -450,30 +415,21 @@ class CookieBrowsingDataCounterUtilsTest : public BrowsingDataCounterUtilsTest {
       case SigninState::kAccountAware:
         SetAccountAwareState(identity_test_env, test_sync_service);
         break;
-      case SigninState::kExplicitSignin:
+      case SigninState::kSignin:
         SetSignedInState(signin::ConsentLevel::kSignin, identity_test_env,
-                         test_sync_service, testing_profile->GetPrefs(),
-                         /*explicit_signin=*/true);
-        break;
-      case SigninState::kImplicitSignin:
-        SetSignedInState(signin::ConsentLevel::kSignin, identity_test_env,
-                         test_sync_service, testing_profile->GetPrefs(),
-                         /*explicit_signin=*/false);
+                         test_sync_service, testing_profile->GetPrefs());
         break;
       case SigninState::kSigninPending:
         SetSigninPendingState(identity_test_env, test_sync_service,
                               testing_profile->GetPrefs());
         break;
       case SigninState::kSyncing:
-        CHECK(!base::FeatureList::IsEnabled(
-            syncer::kReplaceSyncPromosWithSignInPromos));
+        CHECK(!syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
         SetSignedInState(signin::ConsentLevel::kSync, identity_test_env,
-                         test_sync_service, testing_profile->GetPrefs(),
-                         /*explicit_signin=*/true);
+                         test_sync_service, testing_profile->GetPrefs());
         break;
       case SigninState::kSyncPaused:
-        CHECK(!base::FeatureList::IsEnabled(
-            syncer::kReplaceSyncPromosWithSignInPromos));
+        CHECK(!syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
         SetSyncPausedState(identity_test_env, test_sync_service,
                            testing_profile->GetPrefs());
         break;
@@ -482,7 +438,6 @@ class CookieBrowsingDataCounterUtilsTest : public BrowsingDataCounterUtilsTest {
     // Run the test case.
     SiteDataCounter counter(testing_profile.get());
     counter.Init(testing_profile->GetPrefs(),
-                 browsing_data::ClearBrowsingDataTab::ADVANCED,
                  browsing_data::BrowsingDataCounter::ResultCallback());
 
     browsing_data::BrowsingDataCounter::FinishedResult result(
@@ -494,59 +449,22 @@ class CookieBrowsingDataCounterUtilsTest : public BrowsingDataCounterUtilsTest {
 };
 
 TEST_F(CookieBrowsingDataCounterUtilsTest, CookieCounterResult) {
-  base::test::ScopedFeatureList feature;
-  feature.InitAndDisableFeature(browsing_data::features::kDbdRevampDesktop);
   // This test assumes that the strings are served exactly as defined, i.e. that
   // the locale is set to the default "en".
   ASSERT_EQ("en", TestingBrowserProcess::GetGlobal()->GetApplicationLocale());
 
-  // Test the output for various forms of cookie results.
+  // Test the output for various forms of cookie results.b
   std::vector<TestCase> test_cases = {
       {/*num_sites= */ 0, SigninState::kSignedOut, "None"},
       {/*num_sites= */ 1, SigninState::kSignedOut, "From 1 site"},
       {/*num_sites= */ 42, SigninState::kAccountAware, "From 42 sites"},
-      {/*num_sites= */ 1, SigninState::kImplicitSignin, "From 1 site"},
       {/*num_sites= */ 5, SigninState::kSigninPending, "From 5 sites"},
-      {/*num_sites= */ 1, SigninState::kExplicitSignin,
-       "From 1 site (you'll stay signed in to your Google Account)"},
-  };
-
-  if (!base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos)) {
-    test_cases.push_back(
-        {/*num_sites= */ 10, SigninState::kSyncPaused, "From 10 sites"});
-    test_cases.push_back(
-        {/*num_sites= */ 42, SigninState::kSyncing,
-         "From 42 sites (you'll stay signed in to your Google Account)"});
-    test_cases.push_back({/*num_sites= */ 0, SigninState::kSyncing, "None"});
-  }
-
-  for (const TestCase& test_case : test_cases) {
-    VerifyTestCase(test_case);
-  }
-}
-
-TEST_F(CookieBrowsingDataCounterUtilsTest, CookieCounterResult_RevampEnabled) {
-  base::test::ScopedFeatureList feature(
-      browsing_data::features::kDbdRevampDesktop);
-  // This test assumes that the strings are served exactly as defined, i.e. that
-  // the locale is set to the default "en".
-  ASSERT_EQ("en", TestingBrowserProcess::GetGlobal()->GetApplicationLocale());
-
-  // Test the output for various forms of cookie results.
-  std::vector<TestCase> test_cases = {
-      {/*num_sites= */ 0, SigninState::kSignedOut, "None"},
-      {/*num_sites= */ 1, SigninState::kSignedOut, "From 1 site"},
-      {/*num_sites= */ 42, SigninState::kAccountAware, "From 42 sites"},
-      {/*num_sites= */ 1, SigninState::kImplicitSignin, "From 1 site"},
-      {/*num_sites= */ 5, SigninState::kSigninPending, "From 5 sites"},
-      {/*num_sites= */ 1, SigninState::kExplicitSignin,
+      {/*num_sites= */ 1, SigninState::kSignin,
        "From 1 site. To delete Google cookies from this device, <a href=\"#\" "
        "target=\"_blank\" id=\"signOutLink\">sign out of Chrome</a>."},
   };
 
-  if (!base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos)) {
+  if (!syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     test_cases.push_back(
         {/*num_sites= */ 10, SigninState::kSyncPaused, "From 10 sites"});
     test_cases.push_back(

@@ -7,7 +7,6 @@
 #include <memory>
 #include <utility>
 
-#include "ash/constants/ash_features.h"
 #include "base/containers/flat_map.h"
 #include "base/files/file.h"
 #include "base/functional/bind.h"
@@ -379,7 +378,7 @@ void NearbyConnectionBrokerImpl::OnAcceptConnectionResult(Status status) {
     // was already accepted). To ensure we don't accidentally disconnect from a
     // valid connection, only transition to
     // kWaitingForConnectionToBeAcceptedByRemoteDevice if we are still accepting
-    // the connection. See https://crbug.com/1175489 for details.
+    // the connection. See https://crbug.com/40747380 for details.
     if (connection_status_ == ConnectionStatus::kAcceptingConnection) {
       NotifyConnectionStateChanged(
           mojom::NearbyConnectionStep::kAcceptingConnectionFinished,
@@ -734,8 +733,7 @@ void NearbyConnectionBrokerImpl::OnPayloadReceived(
         std::string(message_as_bytes.begin(), message_as_bytes.end()));
 
     util::LogMessageAction(util::MessageAction::kMessageReceived);
-  } else if (ash::features::IsPhoneHubCameraRollEnabled() &&
-             payload->content->is_file()) {
+  } else if (payload->content->is_file()) {
     if (!file_payload_listeners_.contains(payload->id)) {
       PA_LOG(WARNING)
           << "OnPayloadReceived(): Received unregistered file payload with ID "
@@ -779,10 +777,6 @@ mojom::FileTransferStatus ConvertFileTransferStatus(PayloadStatus status) {
 void NearbyConnectionBrokerImpl::OnPayloadTransferUpdate(
     const std::string& endpoint_id,
     ::nearby::connections::mojom::PayloadTransferUpdatePtr update) {
-  if (!ash::features::IsPhoneHubCameraRollEnabled()) {
-    return;
-  }
-
   if (remote_endpoint_id_ != endpoint_id) {
     PA_LOG(WARNING) << "OnPayloadTransferUpdate(): unexpected endpoint ID; "
                     << "expected=" << endpoint_id

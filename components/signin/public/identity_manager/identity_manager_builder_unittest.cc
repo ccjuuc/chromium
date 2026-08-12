@@ -10,9 +10,11 @@
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
 #include "components/image_fetcher/core/fake_image_decoder.h"
+#include "components/metrics/profile_metrics_service.h"
 #include "components/signin/internal/identity_manager/account_capabilities_fetcher.h"
-#include "components/signin/internal/identity_manager/account_capabilities_fetcher_factory.h"
+#include "components/signin/internal/identity_manager/account_fetcher_factory.h"
 #include "components/signin/internal/identity_manager/account_fetcher_service.h"
+#include "components/signin/internal/identity_manager/account_info_fetcher.h"
 #include "components/signin/public/base/test_signin_client.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
@@ -27,6 +29,7 @@
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/ash/components/account_manager/account_manager_factory.h"
+#include "components/account_manager_core/chromeos/account_manager.h"
 #endif
 
 #if BUILDFLAG(IS_IOS)
@@ -35,18 +38,26 @@
 
 namespace signin {
 
-class MockAccountCapabilitiesFetcherFactory
-    : public AccountCapabilitiesFetcherFactory {
+class MockAccountFetcherFactory : public AccountFetcherFactory {
  public:
-  MockAccountCapabilitiesFetcherFactory() = default;
-  ~MockAccountCapabilitiesFetcherFactory() override = default;
+  MockAccountFetcherFactory() = default;
+  ~MockAccountFetcherFactory() override = default;
 
-  MOCK_METHOD3(
-      CreateAccountCapabilitiesFetcher,
-      std::unique_ptr<AccountCapabilitiesFetcher>(
-          const CoreAccountInfo& account_info,
-          AccountCapabilitiesFetcher::FetchPriority fetch_priority,
-          AccountCapabilitiesFetcher::OnCompleteCallback on_complete_callback));
+  MOCK_METHOD(std::unique_ptr<AccountInfoFetcher>,
+              CreateAccountInfoFetcher,
+              (const CoreAccountId&,
+               base::OnceCallback<void(std::optional<AccountInfo>)>),
+              (override));
+
+  MOCK_METHOD(std::unique_ptr<AccountCapabilitiesFetcher>,
+              CreateAccountCapabilitiesFetcher,
+              (const CoreAccountInfo& account_info,
+               AccountCapabilitiesFetcher::FetchPriority fetch_priority,
+               AccountCapabilitiesFetcher::OnSomeCapabilitiesFetchedCallback
+                   on_some_capabilities_fetched_callback,
+               AccountCapabilitiesFetcher::OnAllFetchesCompleteCallback
+                   on_all_fetches_complete_callback),
+              (override));
 };
 
 class IdentityManagerBuilderTest : public testing::Test {
@@ -64,6 +75,14 @@ class IdentityManagerBuilderTest : public testing::Test {
     return &pref_service_;
   }
 
+  metrics::ProfileMetricsService* GetProfileMetricsService() {
+    return &profile_metrics_service_;
+  }
+
+  network::TestURLLoaderFactory* GetTestURLLoaderFactory() {
+    return &test_url_loader_factory_;
+  }
+
  public:
   IdentityManagerBuilderTest(const IdentityManagerBuilderTest&) = delete;
   IdentityManagerBuilderTest& operator=(const IdentityManagerBuilderTest&) =
@@ -74,6 +93,7 @@ class IdentityManagerBuilderTest : public testing::Test {
   sync_preferences::TestingPrefServiceSyncable pref_service_;
   network::TestURLLoaderFactory test_url_loader_factory_;
   TestSigninClient signin_client_;
+  metrics::ProfileMetricsService profile_metrics_service_;
 };
 
 // Test that IdentityManagerBuilder properly set all required parameters to the
@@ -88,7 +108,6 @@ TEST_F(IdentityManagerBuilderTest, BuildIdentityManagerInitParameters) {
 #endif
 
   IdentityManagerBuildParams params;
-  params.account_consistency = AccountConsistencyMethod::kDisabled;
   params.image_decoder = std::make_unique<image_fetcher::FakeImageDecoder>();
   params.local_state = GetPrefService();
   params.network_connection_tracker =
@@ -96,12 +115,13 @@ TEST_F(IdentityManagerBuilderTest, BuildIdentityManagerInitParameters) {
   params.pref_service = GetPrefService();
   params.profile_path = profile_path;
   params.signin_client = GetSigninClient();
+  params.profile_metrics_service = GetProfileMetricsService();
 
 #if BUILDFLAG(IS_IOS)
   params.device_accounts_provider =
       std::make_unique<FakeDeviceAccountsProvider>();
-  params.account_capabilities_fetcher_factory =
-      std::make_unique<MockAccountCapabilitiesFetcherFactory>();
+  params.account_fetcher_factory =
+      std::make_unique<MockAccountFetcherFactory>();
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -109,9 +129,12 @@ TEST_F(IdentityManagerBuilderTest, BuildIdentityManagerInitParameters) {
   // `ProfileOAuth2TokenServiceDelegateChromeOS`.
   ash::AccountManagerFactory account_manager_factory;
 
+  account_manager_factory.GetAccountManager(profile_path.value())
+      ->InitializeInEphemeralMode(
+          GetTestURLLoaderFactory()->GetSafeWeakWrapper());
+
   params.account_manager_facade =
-      ash::AccountManagerFactory::Get()->GetAccountManagerFacade(
-          profile_path.value());
+      account_manager_factory.GetAccountManagerFacade(profile_path.value());
   params.is_regular_profile = true;
 #endif
 

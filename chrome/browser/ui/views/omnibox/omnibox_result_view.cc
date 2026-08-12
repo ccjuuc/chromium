@@ -6,15 +6,11 @@
 
 #include <limits.h>
 
-#include <algorithm>
 #include <utility>
 
 #include "base/check.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
-#include "base/strings/string_util.h"
-#include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/layout_constants.h"
@@ -29,28 +25,19 @@
 #include "chrome/browser/ui/views/omnibox/omnibox_suggestion_button_row_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_text_view.h"
 #include "chrome/browser/ui/views/omnibox/remove_suggestion_bubble.h"
-#include "chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/omnibox/browser/actions/omnibox_pedal.h"
 #include "components/omnibox/browser/autocomplete_match_type.h"
 #include "components/omnibox/browser/omnibox.mojom-shared.h"
 #include "components/omnibox/browser/omnibox_client.h"
 #include "components/omnibox/browser/omnibox_popup_selection.h"
-#include "components/omnibox/browser/vector_icons.h"
-#include "components/omnibox/common/omnibox_features.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
-#include "third_party/metrics_proto/omnibox_event.pb.h"
-#include "third_party/omnibox_proto/answer_data.pb.h"
-#include "third_party/omnibox_proto/rich_answer_template.pb.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "third_party/skia/include/core/SkPathBuilder.h"
 #include "ui/accessibility/ax_enums.mojom.h"
-#include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/events/event.h"
@@ -71,13 +58,8 @@
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/layout/layout_types.h"
-#include "ui/views/metadata/type_conversion.h"
 #include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
-
-#if BUILDFLAG(IS_WIN)
-#include "base/win/atl.h"
-#endif
 
 namespace {
 
@@ -385,6 +367,7 @@ void OmniboxResultView::SetMatch(const AutocompleteMatch& match) {
 
   suggestion_view_->OnMatchUpdate(this, match_);
   UpdateDividerLineVisibility();
+  UpdateSecondaryTextVisibility();
   UpdateFeedbackButtonsVisibility();
   UpdateRemoveSuggestionVisibility();
   if (match_.IsIphSuggestion()) {
@@ -429,37 +412,45 @@ void OmniboxResultView::ApplyThemeAndRefreshIcons(bool force_reapply_styles) {
   views::SetImageFromVectorIconWithColor(
       thumbs_up_button_,
       match_.feedback_type == FeedbackType::kThumbsUp
-          ? vector_icons::kThumbUpFilledIcon
-          : vector_icons::kThumbUpIcon,
-      GetLayoutConstant(LOCATION_BAR_ICON_SIZE),
-      GetColorProvider()->GetColor(icon_color_id),
-      /* omnibox buttons are never disabled */
-      gfx::kPlaceholderColor);
+          ? features::IsRoundedIconsEnabled()
+                ? vector_icons::kThumbUpFilledIcon
+                : vector_icons::kThumbUpFilledOldIcon
+      : features::IsRoundedIconsEnabled() ? vector_icons::kThumbUpIcon
+                                          : vector_icons::kThumbUpOldIcon,
+      GetLayoutConstant(LayoutConstant::kLocationBarIconSize),
+      {icon_color_id,
+       /* omnibox buttons are never disabled */
+       gfx::kPlaceholderColor, icon_color_id});
   if (thumbs_up_button_->GetVisible()) {
-    views::FocusRing::Get(thumbs_up_button_)->SchedulePaint();
+    views::FocusRing::Get(thumbs_up_button_)->Refresh();
   }
 
   views::SetImageFromVectorIconWithColor(
       thumbs_down_button_,
       match_.feedback_type == FeedbackType::kThumbsDown
-          ? vector_icons::kThumbDownFilledIcon
-          : vector_icons::kThumbDownIcon,
-      GetLayoutConstant(LOCATION_BAR_ICON_SIZE),
-      GetColorProvider()->GetColor(icon_color_id),
-      /* omnibox buttons are never disabled */
-      gfx::kPlaceholderColor);
+          ? features::IsRoundedIconsEnabled()
+                ? vector_icons::kThumbDownFilledIcon
+                : vector_icons::kThumbDownFilledOldIcon
+      : features::IsRoundedIconsEnabled() ? vector_icons::kThumbDownIcon
+                                          : vector_icons::kThumbDownOldIcon,
+      GetLayoutConstant(LayoutConstant::kLocationBarIconSize),
+      {icon_color_id,
+       /* omnibox buttons are never disabled */
+       gfx::kPlaceholderColor, icon_color_id});
   if (thumbs_down_button_->GetVisible()) {
-    views::FocusRing::Get(thumbs_down_button_)->SchedulePaint();
+    views::FocusRing::Get(thumbs_down_button_)->Refresh();
   }
 
   views::SetImageFromVectorIconWithColor(
-      remove_suggestion_button_, vector_icons::kCloseRoundedIcon,
-      GetLayoutConstant(LOCATION_BAR_ICON_SIZE),
-      GetColorProvider()->GetColor(icon_color_id),
-      /* omnibox buttons are never disabled */
-      gfx::kPlaceholderColor);
+      remove_suggestion_button_,
+      features::IsRoundedIconsEnabled() ? vector_icons::kCloseIcon
+                                        : vector_icons::kCloseRoundedOldIcon,
+      GetLayoutConstant(LayoutConstant::kLocationBarIconSize),
+      {icon_color_id,
+       /* omnibox buttons are never disabled */
+       gfx::kPlaceholderColor, icon_color_id});
   if (remove_suggestion_button_->GetVisible()) {
-    views::FocusRing::Get(remove_suggestion_button_)->SchedulePaint();
+    views::FocusRing::Get(remove_suggestion_button_)->Refresh();
   }
 
   const OmniboxPartState state = GetThemeState();
@@ -484,7 +475,7 @@ void OmniboxResultView::ApplyThemeAndRefreshIcons(bool force_reapply_styles) {
   }
 
   // We must reapply colors for all the text fields here. If we don't, we can
-  // break theme changes for ZeroSuggest. See https://crbug.com/1095205.
+  // break theme changes for ZeroSuggest. See https://crbug.com/40135721.
   //
   // TODO(crbug.com/430318151): We should finish migrating this logic to live
   // entirely within OmniboxTextView, which should keep track of its own
@@ -521,30 +512,17 @@ void OmniboxResultView::ApplyThemeAndRefreshIcons(bool force_reapply_styles) {
   }
 
   if (suggestion_view_->iph_link_view()->GetVisible()) {
-    views::FocusRing::Get(suggestion_view_->iph_link_view())->SchedulePaint();
+    views::FocusRing::Get(suggestion_view_->iph_link_view())->Refresh();
   }
 }
 
 void OmniboxResultView::OnSelectionStateChanged() {
   UpdateDividerLineVisibility();
+  UpdateSecondaryTextVisibility();
   UpdateFeedbackButtonsVisibility();
   UpdateRemoveSuggestionVisibility();
   UpdateAccessibleName();
   UpdateAccessibilitySelectedState();
-  if (GetMatchSelected()) {
-    const auto selection_state = popup_view_->GetSelection().state;
-
-    // The text is also accessible via text/value change events in the omnibox
-    // but this selection event allows the screen reader to get more details
-    // about the list and the user's position within it.
-    // Limit which selection states fire the events, in order to avoid duplicate
-    // events. Specifically, OmniboxPopupViewViews::ProvideButtonFocusHint()
-    // already fires the correct events when the user tabs to an attached button
-    // in the current row.
-    if (selection_state == OmniboxPopupSelection::NORMAL) {
-      popup_view_->FireAXEventsForNewActiveDescendant(this);
-    }
-  }
   ApplyThemeAndRefreshIcons();
   button_row_->SelectionStateChanged();
 }
@@ -656,17 +634,6 @@ bool OmniboxResultView::OnMouseDragged(const ui::MouseEvent& event) {
 }
 
 void OmniboxResultView::OnMouseReleased(const ui::MouseEvent& event) {
-  if (AutocompleteMatch::IsFeaturedSearchType(match_.type)) {
-    // Featured search matches in the keyword mode refresh are a special case
-    // that does not commit the omnibox by opening a selected match.
-    OmniboxEditModel* model = popup_view_->controller()->edit_model();
-    model->ClearKeyword();
-    model->SetPopupSelection(OmniboxPopupSelection(
-        model_index_, OmniboxPopupSelection::LineState::KEYWORD_MODE));
-    model->AcceptKeyword(metrics::OmniboxEventProto::TAB);
-    return;
-  }
-
   if (event.IsOnlyMiddleMouseButton() || event.IsOnlyLeftMouseButton()) {
     const auto disposition = event.IsOnlyLeftMouseButton()
                                  ? WindowOpenDisposition::CURRENT_TAB
@@ -724,6 +691,7 @@ gfx::Image OmniboxResultView::GetIcon() const {
 
 void OmniboxResultView::UpdateHoverState() {
   UpdateDividerLineVisibility();
+  UpdateSecondaryTextVisibility();
   UpdateFeedbackButtonsVisibility();
   UpdateRemoveSuggestionVisibility();
   ApplyThemeAndRefreshIcons();
@@ -738,6 +706,20 @@ void OmniboxResultView::UpdateDividerLineVisibility() {
 
   if (old_visibility != new_visibility) {
     InvalidateLayout();
+  }
+}
+
+void OmniboxResultView::UpdateSecondaryTextVisibility() {
+  const bool is_contextual = match_.IsContextualSearchSuggestion();
+
+  const bool show_description =
+      !is_contextual || GetMatchSelected() || IsMouseHovered();
+  if (suggestion_view_->description()->GetVisible() != show_description) {
+    suggestion_view_->description()->SetVisible(show_description);
+    suggestion_view_->separator()->SetVisible(show_description);
+    // Explicitly notify the parent that the preferred size has changed, as
+    // the row's FlexLayout depends on this to allocate space.
+    suggestion_view_->OnSecondaryTextVisibilityChanged();
   }
 }
 
@@ -816,8 +798,9 @@ void OmniboxResultView::UpdateAccessibleName() {
     } else {
       label = AutocompleteMatchType::ToAccessibilityLabel(
           raw_match,
-          popup_view_->controller()->edit_model()->GetSuggestionGroupHeaderText(
-              raw_match.suggestion_group_id),
+          popup_view_->controller()
+              ->autocomplete_controller()
+              ->GetSuggestionGroupHeaderText(raw_match.suggestion_group_id),
           raw_match.contents);
     }
     GetViewAccessibility().SetName(label);

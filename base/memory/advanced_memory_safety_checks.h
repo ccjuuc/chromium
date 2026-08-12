@@ -19,6 +19,7 @@
 #include "base/compiler_specific.h"
 #include "base/dcheck_is_on.h"
 #include "base/export_template.h"
+#include "partition_alloc/fnv1a_consteval.h"  // nogncheck
 
 // This header defines `ADVANCED_MEMORY_SAFETY_CHECKS()` macro.
 // They can be used to specify a class/struct that is targeted to perform
@@ -88,15 +89,20 @@
   }                                                                            \
   SPECIFIER static void operator delete(void* ptr) noexcept {                  \
     base::internal::HandleMemorySafetyCheckedOperatorDelete<                   \
-        kMemorySafetyChecks>(ptr);                                             \
+        kMemorySafetyChecks>(ptr, kPartitionAllocSanitizedObjectTypeId);       \
   }                                                                            \
   SPECIFIER static void operator delete(void* ptr,                             \
                                         std::align_val_t alignment) noexcept { \
     base::internal::HandleMemorySafetyCheckedOperatorDelete<                   \
-        kMemorySafetyChecks>(ptr, alignment);                                  \
+        kMemorySafetyChecks>(ptr, alignment,                                   \
+                             kPartitionAllocSanitizedObjectTypeId);            \
   }                                                                            \
                                                                                \
  private:                                                                      \
+  static constexpr uint32_t kPartitionAllocSanitizedObjectTypeId = [] {        \
+    return partition_alloc::fnv1a_hash(std::string_view(__PRETTY_FUNCTION__)); \
+  }();                                                                         \
+                                                                               \
   static_assert(true) /* semicolon here */
 
 #if DCHECK_IS_ON()
@@ -112,11 +118,23 @@
       NOINLINE NOT_TAIL_CALLED,                                               \
       base::internal::kAdvancedMemorySafetyChecks __VA_OPT__(, ) __VA_ARGS__, \
       kNone, kNone)
+
+#define LEAKED_SANITIZED_OBJECT(...)                                     \
+  MEMORY_SAFETY_CHECKS_INTERNAL(                                         \
+      NOINLINE NOT_TAIL_CALLED,                                          \
+      base::internal::kLeakedSanitizedObject __VA_OPT__(, ) __VA_ARGS__, \
+      kNone, kNone)
 #else
 #define ADVANCED_MEMORY_SAFETY_CHECKS(...)                                    \
   MEMORY_SAFETY_CHECKS_INTERNAL(                                              \
       ALWAYS_INLINE,                                                          \
       base::internal::kAdvancedMemorySafetyChecks __VA_OPT__(, ) __VA_ARGS__, \
+      kNone, kNone)
+
+#define LEAKED_SANITIZED_OBJECT(...)                                     \
+  MEMORY_SAFETY_CHECKS_INTERNAL(                                         \
+      ALWAYS_INLINE,                                                     \
+      base::internal::kLeakedSanitizedObject __VA_OPT__(, ) __VA_ARGS__, \
       kNone, kNone)
 #endif  // DCHECK_IS_ON()
 
@@ -160,6 +178,10 @@
   MEMORY_SAFETY_CHECKS_INTERNAL(          \
       ALWAYS_INLINE, kNone __VA_OPT__(, ) __VA_ARGS__, kNone, kNone)
 
+namespace partition_alloc {
+class PartitionRoot;
+}  // namespace partition_alloc
+
 // We cannot hide things behind anonymous namespace because they are referenced
 // via macro, which can be defined anywhere.
 // To avoid tainting ::base namespace, define things inside this namespace.
@@ -171,6 +193,8 @@ enum class MemorySafetyCheck : uint32_t {
   // Enables |FreeFlags::kSchedulerLoopQuarantineForAdvancedMemorySafetyChecks|.
   // Requires PA-E.
   kSchedulerLoopQuarantine = (1u << 1),
+  // Enables |FreeFlags::kInfiniteQuarantine|. Requires PA-E.
+  kInfiniteQuarantine = 1u << 2,
 };
 
 #define FOR_EACH_BASE_INTERNAL_MEMORY_SAFETY_CHECK_VALUE(MACRO)        \
@@ -178,7 +202,10 @@ enum class MemorySafetyCheck : uint32_t {
   MACRO(::base::internal::MemorySafetyCheck::kForcePartitionAlloc)     \
   MACRO(::base::internal::MemorySafetyCheck::kSchedulerLoopQuarantine) \
   MACRO(::base::internal::MemorySafetyCheck::kForcePartitionAlloc |    \
-        ::base::internal::MemorySafetyCheck::kSchedulerLoopQuarantine)
+        ::base::internal::MemorySafetyCheck::kSchedulerLoopQuarantine) \
+  MACRO(::base::internal::MemorySafetyCheck::kInfiniteQuarantine)      \
+  MACRO(::base::internal::MemorySafetyCheck::kForcePartitionAlloc |    \
+        ::base::internal::MemorySafetyCheck::kInfiniteQuarantine)
 
 constexpr MemorySafetyCheck operator|(MemorySafetyCheck a,
                                       MemorySafetyCheck b) {
@@ -215,25 +242,31 @@ inline constexpr auto kAdvancedMemorySafetyChecks =
     MemorySafetyCheck::kForcePartitionAlloc |
     MemorySafetyCheck::kSchedulerLoopQuarantine;
 
+inline constexpr auto kLeakedSanitizedObject =
+    MemorySafetyCheck::kForcePartitionAlloc |
+    MemorySafetyCheck::kInfiniteQuarantine;
+
 template <MemorySafetyCheck checks>
 void* HandleMemorySafetyCheckedOperatorNew(std::size_t count);
 template <MemorySafetyCheck checks>
 void* HandleMemorySafetyCheckedOperatorNew(std::size_t count,
                                            std::align_val_t alignment);
 template <MemorySafetyCheck checks>
-void HandleMemorySafetyCheckedOperatorDelete(void* ptr);
+void HandleMemorySafetyCheckedOperatorDelete(void* ptr, uint32_t type_id);
 template <MemorySafetyCheck checks>
 void HandleMemorySafetyCheckedOperatorDelete(void* ptr,
-                                             std::align_val_t alignment);
+                                             std::align_val_t alignment,
+                                             uint32_t type_id);
 
 #define INSTANTIATE_HANDLE_MEMORY_SAFETY_CHECKED_OPERATORS(EXPORT, checks) \
   EXPORT void* HandleMemorySafetyCheckedOperatorNew<checks>(               \
       std::size_t count);                                                  \
   EXPORT void* HandleMemorySafetyCheckedOperatorNew<checks>(               \
       std::size_t count, std::align_val_t alignment);                      \
-  EXPORT void HandleMemorySafetyCheckedOperatorDelete<checks>(void* ptr);  \
   EXPORT void HandleMemorySafetyCheckedOperatorDelete<checks>(             \
-      void* ptr, std::align_val_t alignment);
+      void* ptr, uint32_t type_id);                                        \
+  EXPORT void HandleMemorySafetyCheckedOperatorDelete<checks>(             \
+      void* ptr, std::align_val_t alignment, uint32_t type_id);
 
 #define DECLARE_BASE_INTERNAL_HANDLE_MEMORY_SAFETY_CHECKED_OPERATORS(checks) \
   INSTANTIATE_HANDLE_MEMORY_SAFETY_CHECKED_OPERATORS(                        \
@@ -245,6 +278,8 @@ void HandleMemorySafetyCheckedOperatorDelete(void* ptr,
 
 FOR_EACH_BASE_INTERNAL_MEMORY_SAFETY_CHECK_VALUE(
     DECLARE_BASE_INTERNAL_HANDLE_MEMORY_SAFETY_CHECKED_OPERATORS)
+
+BASE_EXPORT partition_alloc::PartitionRoot* LeakedSecurityObjectAllocator();
 
 }  // namespace base::internal
 

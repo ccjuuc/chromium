@@ -10,13 +10,14 @@
 #include <variant>
 #include <vector>
 
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/constants/web_app_id_constants.h"
 #include "ash/public/cpp/app_list/app_list_config.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/auto_reset.h"
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
@@ -25,6 +26,7 @@
 #include "base/strings/to_string.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/browser/apps/app_preload_service/app_preload_service.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
@@ -50,9 +52,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/file_manager/app_id.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/app_constants/constants.h"
@@ -185,7 +184,7 @@ sync_pb::AppListSpecifics::AppListItemType GetAppListItemType(
 
 void RemoveSyncItemFromLocalStorage(Profile* profile,
                                     const std::string& item_id) {
-  ScopedDictPrefUpdate(profile->GetPrefs(), prefs::kAppListLocalState)
+  ScopedDictPrefUpdate(profile->GetPrefs(), ash::prefs::kAppListLocalState)
       ->Remove(item_id);
 }
 
@@ -197,8 +196,8 @@ void UpdateSyncItemInLocalStorage(
     return;
 
   ScopedDictPrefUpdate pref_update(profile->GetPrefs(),
-                                   prefs::kAppListLocalState);
-  base::Value::Dict* dict_item = pref_update->EnsureDict(sync_item->item_id);
+                                   ash::prefs::kAppListLocalState);
+  base::DictValue* dict_item = pref_update->EnsureDict(sync_item->item_id);
   dict_item->Set(kNameKey, sync_item->item_name);
   dict_item->Set(kPromisePackageIdKey, !sync_item->promise_package_id.empty()
                                            ? sync_item->promise_package_id
@@ -401,9 +400,9 @@ class AppListSyncableService::ModelUpdaterObserver
 // static
 void AppListSyncableService::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
-  registry->RegisterDictionaryPref(prefs::kAppListLocalState);
+  registry->RegisterDictionaryPref(ash::prefs::kAppListLocalState);
   registry->RegisterIntegerPref(
-      prefs::kAppListPreferredOrder,
+      ash::prefs::kAppListPreferredOrder,
       static_cast<int>(ash::AppListSortOrder::kCustom),
       user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF);
 }
@@ -481,8 +480,8 @@ void AppListSyncableService::InitFromLocalStorage() {
   DCHECK(!IsInitialized());
 
   // Restore initial state from local storage.
-  const base::Value::Dict& local_items =
-      profile_->GetPrefs()->GetDict(prefs::kAppListLocalState);
+  const base::DictValue& local_items =
+      profile_->GetPrefs()->GetDict(ash::prefs::kAppListLocalState);
   local_state_initially_empty_ = local_items.empty();
 
   for (auto [item_id, item] : local_items) {
@@ -1246,7 +1245,7 @@ void AppListSyncableService::PruneEmptySyncFolders() {
     if (sync_item->item_id == ash::kOemFolderId)
       continue;
 
-    if (!base::Contains(parent_ids, sync_item->item_id)) {
+    if (!parent_ids.contains(sync_item->item_id)) {
       DeleteSyncItem(sync_item->item_id);
     }
   }
@@ -1291,7 +1290,7 @@ AppListSyncableService::MergeDataAndStartSyncing(
 
   // Reset local state and recreate from sync info.
   ScopedDictPrefUpdate pref_update(profile_->GetPrefs(),
-                                   prefs::kAppListLocalState);
+                                   ash::prefs::kAppListLocalState);
   pref_update->clear();
 
   sync_processor_ = std::move(sync_processor);
@@ -1358,7 +1357,7 @@ AppListSyncableService::MergeDataAndStartSyncing(
   oem_folder_using_provisional_default_position_ = false;
 
   // Fix items that do not contain valid app list position, required for
-  // builds prior to M53 (crbug.com/677647).
+  // builds prior to M53 (crbug.com/40499759).
   for (const auto& [item_id, sync_item] : sync_items_) {
     sync_item->ordinal_to_undo_on_non_empty_initial_sync.reset();
     if (sync_item->item_type != sync_pb::AppListSpecifics::TYPE_APP ||
@@ -1466,7 +1465,7 @@ void AppListSyncableService::Shutdown() {
 void AppListSyncableService::SetAppListPreferredOrder(
     ash::AppListSortOrder order) {
   // Update the preferred order that is shared among syncable devices.
-  profile_->GetPrefs()->SetInteger(prefs::kAppListPreferredOrder,
+  profile_->GetPrefs()->SetInteger(ash::prefs::kAppListPreferredOrder,
                                    static_cast<int>(order));
 
   if (order == ash::AppListSortOrder::kCustom) {
@@ -1519,7 +1518,7 @@ bool AppListSyncableService::CalculateItemPositionInPermanentSortOrder(
 
 ash::AppListSortOrder AppListSyncableService::GetPermanentSortingOrder() const {
   return static_cast<ash::AppListSortOrder>(
-      profile_->GetPrefs()->GetInteger(prefs::kAppListPreferredOrder));
+      profile_->GetPrefs()->GetInteger(ash::prefs::kAppListPreferredOrder));
 }
 
 // AppListSyncableService private
@@ -1603,7 +1602,14 @@ void AppListSyncableService::ProcessExistingSyncItem(SyncItem* sync_item) {
 
   // The only place where sync can change an item's folder. Prevent moving OEM
   // item to the folder, other than OEM folder.
-  const bool update_folder = !AppIsOem(sync_item->item_id);
+  bool update_folder = !AppIsOem(sync_item->item_id);
+  if (update_folder && !sync_item->parent_id.empty()) {
+    SyncItem* parent = FindSyncItem(sync_item->parent_id);
+    if (parent && parent->item_type != sync_pb::AppListSpecifics::TYPE_FOLDER) {
+      update_folder = false;
+    }
+  }
+
   model_updater_->UpdateAppItemFromSyncItem(
       sync_item,
       sync_item->item_id != ash::kOemFolderId,  // Don't sync oem folder's name.
@@ -1679,11 +1685,11 @@ AppListSyncableService::SyncItem* AppListSyncableService::CreateSyncItem(
     const std::string& item_id,
     sync_pb::AppListSpecifics::AppListItemType item_type,
     bool is_new) {
-  DCHECK(!base::Contains(sync_items_, item_id));
+  DCHECK(!sync_items_.contains(item_id));
   sync_items_[item_id] = std::make_unique<SyncItem>(item_id, item_type, is_new);
 
   // In case we have pending attributes to apply, process it asynchronously.
-  if (base::Contains(pending_transfer_map_, item_id)) {
+  if (pending_transfer_map_.contains(item_id)) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&AppListSyncableService::ApplyAppAttributes,
                                   weak_ptr_factory_.GetWeakPtr(), item_id,

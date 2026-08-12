@@ -7,27 +7,24 @@
 #include <algorithm>
 #include <string>
 
-#include "ash/constants/ash_features.h"
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/network_icon_image_source.h"
 #include "ash/public/cpp/notification_utils.h"
+#include "ash/resources/vector_icons/vector_icons.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "ash/webui/settings/public/constants/routes.mojom.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/notifications/notification_display_service.h"
 #include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/settings_window_manager_chromeos.h"
-#include "chrome/common/url_constants.h"
-#include "chrome/common/webui_url_constants.h"
-#include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
 #include "chromeos/ash/components/network/network_connect.h"
 #include "chromeos/ash/components/tether/pref_names.h"
+#include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -83,8 +80,14 @@ class SettingsUiDelegateImpl
 
   void ShowSettingsSubPageForProfile(Profile* profile,
                                      const std::string& sub_page) override {
-    chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(profile,
-                                                                 sub_page);
+    auto* user =
+        ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile);
+    if (!user) {
+      // TODO(crbug.com/447287122): Revisit here to see if there's a case that
+      // `profile` is non user profile.
+      return;
+    }
+    ash::SettingsAppManager::Get()->Open(*user, {.sub_page = sub_page});
   }
 };
 
@@ -233,11 +236,8 @@ void TetherNotificationPresenter::NotifyConnectionToHostFailed() {
 
   ShowNotification(CreateSystemNotificationPtr(
       message_center::NotificationType::NOTIFICATION_TYPE_SIMPLE, id,
-      features::IsInstantHotspotRebrandEnabled()
-          ? l10n_util::GetStringUTF16(
-                IDS_TETHER_NOTIFICATION_CONNECTION_FAILED_TITLE)
-          : l10n_util::GetStringUTF16(
-                IDS_TETHER_NOTIFICATION_CONNECTION_FAILED_TITLE_LEGACY),
+      l10n_util::GetStringUTF16(
+          IDS_TETHER_NOTIFICATION_CONNECTION_FAILED_TITLE),
       l10n_util::GetStringUTF16(
           IDS_TETHER_NOTIFICATION_CONNECTION_FAILED_MESSAGE),
       std::u16string() /* display_source */, GURL() /* origin_url */,
@@ -248,7 +248,7 @@ void TetherNotificationPresenter::NotifyConnectionToHostFailed() {
       new message_center::HandleNotificationClickDelegate(base::BindRepeating(
           &TetherNotificationPresenter::OnNotificationClicked,
           weak_ptr_factory_.GetWeakPtr(), id)),
-      kNotificationCellularAlertIcon,
+      ash::kNotificationCellularAlertIcon,
       message_center::SystemNotificationWarningLevel::WARNING));
 }
 
@@ -337,9 +337,6 @@ TetherNotificationPresenter::CreateNotification(
               &TetherNotificationPresenter::OnNotificationClosed,
               weak_ptr_factory_.GetWeakPtr(), id)));
   notification->SetSmallImage(gfx::Image(small_image));
-  if (base::FeatureList::IsEnabled(ash::features::kInstantHotspotRebrand)) {
-    notification->set_never_timeout(true);
-  }
   return notification;
 }
 

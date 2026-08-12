@@ -9,6 +9,7 @@
 #include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include "base/containers/flat_map.h"
 #include "base/files/scoped_temp_dir.h"
@@ -33,19 +34,16 @@
 #include "components/update_client/unzip/unzip_impl.h"
 #include "components/update_client/unzipper.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "url/gurl.h"
 
 namespace update_client {
-
 namespace {
-
 std::vector<GURL> MakeDefaultUrls() {
-  std::vector<GURL> urls;
-  urls.push_back(GURL(POST_INTERCEPT_SCHEME
-                      "://" POST_INTERCEPT_HOSTNAME POST_INTERCEPT_PATH));
-  return urls;
+  return std::vector<GURL>{
+      GURL(absl::StrFormat("%s://%s%s", kPostInterceptScheme,
+                           kPostInterceptHostname, kPostInterceptPath))};
 }
-
 }  // namespace
 
 TestConfigurator::TestConfigurator(PrefService* pref_service)
@@ -117,7 +115,7 @@ std::vector<GURL> TestConfigurator::PingUrl() const {
 
 std::string TestConfigurator::GetProdId() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return "fake_prodid";
+  return prod_id_;
 }
 
 base::Version TestConfigurator::GetBrowserVersion() const {
@@ -225,6 +223,13 @@ scoped_refptr<CrxCache> TestConfigurator::GetCrxCache() const {
   return crx_cache_;
 }
 
+#if BUILDFLAG(CHROME_FOR_TESTING)
+std::vector<std::string> TestConfigurator::GetRequiredComponents() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return {};
+}
+#endif
+
 bool TestConfigurator::IsConnectionMetered() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return is_network_connection_metered_;
@@ -288,6 +293,11 @@ void TestConfigurator::SetUpdaterStateProvider(
     UpdaterStateProvider update_state_provider) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   updater_state_provider_ = update_state_provider;
+}
+
+void TestConfigurator::SetProdId(const std::string& prod_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  prod_id_ = prod_id;
 }
 
 }  // namespace update_client

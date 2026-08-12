@@ -125,10 +125,10 @@ class CORE_EXPORT HTMLPlugInElement
 
   void DispatchErrorEvent();
   bool IsErrorplaceholder();
-  void ReattachOnPluginChangeIfNeeded();
+  void ReattachOnPluginChangeIfNeeded(bool require_layout);
 
-  void SetUrl(const String& url) {
-    url_ = url;
+  void SetUrl(const StringView& url) {
+    url_ = url.ToString();
     UpdateServiceTypeIfEmpty();
   }
 

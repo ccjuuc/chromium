@@ -39,7 +39,6 @@
 #include "content/browser/indexed_db/indexed_db_value.h"
 #include "content/browser/indexed_db/instance/backing_store_test_base.h"
 #include "content/browser/indexed_db/instance/leveldb/backing_store.h"
-#include "content/browser/indexed_db/instance/leveldb/cleanup_scheduler.h"
 #include "content/browser/indexed_db/status.h"
 #include "net/base/features.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -387,7 +386,7 @@ TEST_P(LevelDbBackingStoreTestWithExternalObjects, ActiveBlobJournal) {
   EXPECT_TRUE(result.has_value());
   IndexedDBValue read_result_value = std::move(result.value());
 
-  CommitTransactionAndVerify(*transaction2);
+  CommitTransactionAndVerify(std::move(transaction2));
   EXPECT_EQ(base::span(value3_.bits), base::span(read_result_value.bits));
   EXPECT_TRUE(CheckBlobInfoMatches(read_result_value.external_objects));
   EXPECT_TRUE(CheckBlobReadsMatchWrites(read_result_value.external_objects));
@@ -406,7 +405,7 @@ TEST_P(LevelDbBackingStoreTestWithExternalObjects, ActiveBlobJournal) {
       transaction3
           ->DeleteRange(1, IndexedDBKeyRange(key3_.Clone(), {}, false, false))
           .ok());
-  CommitTransactionAndVerify(*transaction3);
+  CommitTransactionAndVerify(std::move(transaction3));
   VerifyNumBlobsRemoved(0);
   for (const IndexedDBExternalObject& external_object :
        read_result_value.external_objects) {
@@ -481,7 +480,7 @@ TEST_F(LevelDbBackingStoreTest, HighIds) {
                                            index_key, *record);
     EXPECT_TRUE(s.ok());
 
-    CommitTransactionAndVerify(transaction1);
+    CommitTransactionAndVerify(std::move(txn1));
   }
 
   {
@@ -504,7 +503,7 @@ TEST_F(LevelDbBackingStoreTest, HighIds) {
     ASSERT_TRUE(new_primary_key.has_value());
     EXPECT_TRUE(new_primary_key->Equals(key1));
 
-    CommitTransactionAndVerify(transaction2);
+    CommitTransactionAndVerify(std::move(txn2));
   }
 }
 
@@ -821,7 +820,7 @@ TEST_P(LevelDbBackingStoreTestWithExternalObjects, RollbackClearsDiskSpace) {
                   .has_value());
 
   // Commit the initial transaction (Phase 1 and Phase 2).
-  CommitTransactionAndVerify(initial_transaction);
+  CommitTransactionAndVerify(std::move(it));
 
   // Track the path of the initially written blob.
   ASSERT_GT(blob_context_->writes().size(), 0u);
@@ -925,7 +924,7 @@ TEST_F(LevelDbBackingStoreTestWithBlobs, SchemaUpgradeV3ToV4) {
         (*db)->GetMetadata().object_stores.find(object_store_id)->second;
     EXPECT_EQ(object_store.id, object_store_id);
 
-    CommitTransactionAndVerify(transaction);
+    CommitTransactionAndVerify(std::move(txn));
   }
   task_environment_.RunUntilIdle();
 
@@ -1014,7 +1013,7 @@ TEST_F(LevelDbBackingStoreTestWithBlobs, SchemaUpgradeV3ToV4) {
   IndexedDBValue result_value = std::move(result.value());
 
   // Finish up transaction2, verifying blob reads.
-  CommitTransactionAndVerify(transaction2);
+  CommitTransactionAndVerify(std::move(txn2));
   EXPECT_EQ(base::span(value3_.bits), base::span(result_value.bits));
   EXPECT_TRUE(CheckBlobInfoMatches(result_value.external_objects));
 }
@@ -1059,7 +1058,7 @@ TEST_F(LevelDbBackingStoreTestWithBlobs, SchemaUpgradeV4ToV5) {
         (*db)->GetMetadata().object_stores.find(object_store_id)->second;
     EXPECT_EQ(object_store.id, object_store_id);
 
-    CommitTransactionAndVerify(transaction);
+    CommitTransactionAndVerify(std::move(txn));
   }
   task_environment_.RunUntilIdle();
 
@@ -1128,31 +1127,6 @@ TEST_F(LevelDbBackingStoreTestWithBlobs, SchemaUpgradeV4ToV5) {
   }
 }
 
-class LevelDbBackingStoreTestForCleanupScheduler
-    : public LevelDbBackingStoreTest {
- public:
-  LevelDbBackingStoreTestForCleanupScheduler() {
-    scoped_feature_list_.InitAndEnableFeature(kIdbInSessionDbCleanup);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-TEST_F(LevelDbBackingStoreTestForCleanupScheduler,
-       SchedulerInitializedIfTombstoneThresholdExceeded) {
-  backing_store()->OnTransactionComplete(false);
-  EXPECT_FALSE(backing_store()
-                   ->GetLevelDBCleanupSchedulerForTesting()
-                   .GetRunningStateForTesting()
-                   .has_value());
-  backing_store()->OnTransactionComplete(true);
-  EXPECT_TRUE(backing_store()
-                  ->GetLevelDBCleanupSchedulerForTesting()
-                  .GetRunningStateForTesting()
-                  .has_value());
-}
-
 TEST_F(LevelDbBackingStoreTest, TombstoneSweeperTiming) {
   // Open a connection.
   EXPECT_FALSE(backing_store()->ShouldRunTombstoneSweeper());
@@ -1193,81 +1167,6 @@ TEST_F(LevelDbBackingStoreTest, CompactionTaskTiming) {
   task_environment_.FastForwardBy(kMaxBucketCompactionDelay);
 
   EXPECT_TRUE(backing_store()->ShouldRunCompaction());
-}
-
-TEST_F(LevelDbBackingStoreTest, InSessionCleanupVerification) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      /*enabled_features=*/
-      {content::indexed_db::level_db::kIdbInSessionDbCleanup,
-       content::indexed_db::level_db::kIdbVerifyInSessionDbCleanup},
-      /*disabled_features=*/{});
-
-  const int object_store_id = 1;
-  auto db_creation_result = backing_store()->CreateOrOpenDatabase(u"name");
-  ASSERT_TRUE(db_creation_result.has_value());
-  indexed_db::BackingStore::Database& db = **db_creation_result;
-
-  {
-    auto txn =
-        db.CreateTransaction(blink::mojom::IDBTransactionDurability::Relaxed,
-                             blink::mojom::IDBTransactionMode::VersionChange);
-    txn->Begin(CreateDummyLock());
-
-    EXPECT_TRUE(txn->CreateObjectStore(object_store_id, u"object_store_name",
-                                       IndexedDBKeyPath(u"object_store_key"),
-                                       /*auto_increment=*/true)
-                    .ok());
-    CommitTransactionAndVerify(*txn);
-  }
-
-  {
-    auto txn =
-        db.CreateTransaction(blink::mojom::IDBTransactionDurability::Relaxed,
-                             blink::mojom::IDBTransactionMode::ReadWrite);
-    txn->Begin(CreateDummyLock());
-    EXPECT_TRUE(txn->PutRecord(object_store_id, IndexedDBKey("key"),
-                               IndexedDBValue("value", {}))
-                    .has_value());
-    CommitTransactionAndVerify(*txn);
-  }
-
-  // Verify that cleanup verification only occurs once in a while, not on every
-  // cleanup.
-  base::HistogramTester histograms;
-
-  // Verify on first cleanup.
-  backing_store()->OnCleanupStarted();
-  backing_store()->OnCleanupDone();
-  histograms.ExpectBucketCount(
-      "IndexedDB.LevelDB.InSessionCleanupVerificationEvent",
-      level_db::BackingStore::InSessionCleanupVerificationEvent::
-          kCleanupStarted,
-      1);
-
-  // Don't verify on next few cleanups.
-  for (int i = 0; i < 60; ++i) {
-    backing_store()->OnCleanupStarted();
-    backing_store()->OnCleanupDone();
-  }
-
-  histograms.ExpectBucketCount(
-      "IndexedDB.LevelDB.InSessionCleanupVerificationEvent",
-      level_db::BackingStore::InSessionCleanupVerificationEvent::
-          kCleanupStarted,
-      1);
-
-  // Verify again eventually.
-  for (int i = 0; i < 60; ++i) {
-    backing_store()->OnCleanupStarted();
-    backing_store()->OnCleanupDone();
-  }
-
-  histograms.ExpectBucketCount(
-      "IndexedDB.LevelDB.InSessionCleanupVerificationEvent",
-      level_db::BackingStore::InSessionCleanupVerificationEvent::
-          kCleanupStarted,
-      2);
 }
 
 }  // namespace content::indexed_db::level_db

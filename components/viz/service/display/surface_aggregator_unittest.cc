@@ -448,7 +448,7 @@ class SurfaceAggregatorTest : public testing::Test, public DisplayTimeSource {
     quad->SetAll(shared_state, output_rect, output_rect,
                  /*needs_blending=*/true, render_pass_id, kInvalidResourceId,
                  gfx::RectF(), gfx::Size(), gfx::Vector2dF(1.0f, 1.0f),
-                 gfx::PointF(), gfx::RectF(),
+                 gfx::PointF(),
                  /*force_anti_aliasing_off=*/false,
                  /*backdrop_filter_quality=*/1.0f, intersects_damage_under);
   }
@@ -465,11 +465,16 @@ class SurfaceAggregatorTest : public testing::Test, public DisplayTimeSource {
     auto* quad = pass->CreateAndAppendDrawQuad<TextureDrawQuad>();
     const gfx::PointF kUVTopLeft(0.1f, 0.2f);
     const gfx::PointF kUVBottomRight(1.0f, 1.0f);
+
+    gfx::RectF tex_coord_rect = gfx::BoundingRect(kUVTopLeft, kUVBottomRight);
+    tex_coord_rect.Scale(output_rect.width(), output_rect.height());
+
     quad->SetNew(shared_state, output_rect, output_rect,
-                 false /*needs_blending*/, ResourceId(1), kUVTopLeft,
-                 kUVBottomRight, SkColors::kTransparent,
-                 false /*nearest_neighbor*/, false /*secure_output_only*/,
-                 gfx::ProtectedVideoType::kClear);
+                 false /*needs_blending*/, ResourceId(1),
+                 tex_coord_rect.origin(), tex_coord_rect.bottom_right(),
+                 SkColors::kTransparent, false /*nearest_neighbor*/,
+                 false /*secure_output_only*/, gfx::ProtectedVideoType::kClear,
+                 /*is_tex_coords_normalized=*/false);
 
     if (per_quad_damage_output) {
       quad->damage_rect = output_rect;
@@ -1211,8 +1216,8 @@ class TestVizClient {
   CopyOutputRequest* RequestCopyOfOutput() {
     auto copy_request = CopyOutputRequest::CreateStubForTesting();
     auto* copy_request_ptr = copy_request.get();
-    root_sink_->RequestCopyOfOutput(PendingCopyOutputRequest{
-        local_surface_id(), SubtreeCaptureId(), std::move(copy_request)});
+    root_sink_->RequestCopyOfOutput(std::make_unique<PendingCopyOutputRequest>(
+        local_surface_id(), SubtreeCaptureId(), std::move(copy_request)));
     return copy_request_ptr;
   }
 
@@ -2009,9 +2014,10 @@ TEST_F(SurfaceAggregatorValidSurfaceTest, CopyRequest) {
 
   auto copy_request = CopyOutputRequest::CreateStubForTesting();
   auto* copy_request_ptr = copy_request.get();
-  embedded_support->RequestCopyOfOutput({embedded_surface_id.local_surface_id(),
-                                         SubtreeCaptureId(),
-                                         std::move(copy_request)});
+  embedded_support->RequestCopyOfOutput(
+      std::make_unique<PendingCopyOutputRequest>(
+          embedded_surface_id.local_surface_id(), SubtreeCaptureId(),
+          std::move(copy_request)));
 
   CompositorFrame root_frame =
       CompositorFrameBuilder()
@@ -2066,9 +2072,10 @@ TEST_F(SurfaceAggregatorValidSurfaceTest,
       embedded_surface_id.local_surface_id(), std::move(embedded_frame));
 
   auto copy_request = CopyOutputRequest::CreateStubForTesting();
-  embedded_support->RequestCopyOfOutput({embedded_surface_id.local_surface_id(),
-                                         SubtreeCaptureId(),
-                                         std::move(copy_request)});
+  embedded_support->RequestCopyOfOutput(
+      std::make_unique<PendingCopyOutputRequest>(
+          embedded_surface_id.local_surface_id(), SubtreeCaptureId(),
+          std::move(copy_request)));
 
   CompositorFrame root_frame =
       CompositorFrameBuilder()
@@ -2119,8 +2126,9 @@ TEST_F(SurfaceAggregatorValidSurfaceTest,
 
     auto copy_request = CopyOutputRequest::CreateStubForTesting();
     embedded_support->RequestCopyOfOutput(
-        {embedded_surface_id.local_surface_id(), SubtreeCaptureId(),
-         std::move(copy_request)});
+        std::make_unique<PendingCopyOutputRequest>(
+            embedded_surface_id.local_surface_id(), SubtreeCaptureId(),
+            std::move(copy_request)));
   }
 
   {
@@ -2217,8 +2225,9 @@ TEST_F(SurfaceAggregatorValidSurfaceTest,
 
     auto copy_request = CopyOutputRequest::CreateStubForTesting();
     embedded_support->RequestCopyOfOutput(
-        {embedded_surface_id.local_surface_id(), SubtreeCaptureId(),
-         std::move(copy_request)});
+        std::make_unique<PendingCopyOutputRequest>(
+            embedded_surface_id.local_surface_id(), SubtreeCaptureId(),
+            std::move(copy_request)));
   }
 
   {
@@ -2361,9 +2370,9 @@ TEST_F(SurfaceAggregatorValidSurfaceTest,
 
   auto copy_request = CopyOutputRequest::CreateStubForTesting();
   auto* copy_request_ptr = copy_request.get();
-  root_sink_->RequestCopyOfOutput({root_surface_id_.local_surface_id(),
-                                   SubtreeCaptureId(),
-                                   std::move(copy_request)});
+  root_sink_->RequestCopyOfOutput(std::make_unique<PendingCopyOutputRequest>(
+      root_surface_id_.local_surface_id(), SubtreeCaptureId(),
+      std::move(copy_request)));
 
   aggregator_.set_take_copy_requests(false);
   auto aggregated_frame = AggregateFrame(root_surface_id_);
@@ -2417,8 +2426,9 @@ TEST_F(SurfaceAggregatorValidSurfaceTest, VideoCapturePreventsMerge) {
     auto copy_request = CopyOutputRequest::CreateStubForTesting();
     auto* copy_request_ptr = copy_request.get();
     embedded_support->RequestCopyOfOutput(
-        {embedded_surface_id.local_surface_id(), SubtreeCaptureId(),
-         std::move(copy_request)});
+        std::make_unique<PendingCopyOutputRequest>(
+            embedded_surface_id.local_surface_id(), SubtreeCaptureId(),
+            std::move(copy_request)));
 
     auto aggregated_frame = AggregateFrame(root_surface_id_);
 
@@ -2482,9 +2492,10 @@ TEST_F(SurfaceAggregatorValidSurfaceTest, UnreferencedSurface) {
                         device_scale_factor);
   auto copy_request(CopyOutputRequest::CreateStubForTesting());
   auto* copy_request_ptr = copy_request.get();
-  embedded_support->RequestCopyOfOutput({embedded_surface_id.local_surface_id(),
-                                         SubtreeCaptureId(),
-                                         std::move(copy_request)});
+  embedded_support->RequestCopyOfOutput(
+      std::make_unique<PendingCopyOutputRequest>(
+          embedded_surface_id.local_surface_id(), SubtreeCaptureId(),
+          std::move(copy_request)));
 
   TestSurfaceIdAllocator parent_surface_id(parent_support->frame_sink_id());
 
@@ -5888,7 +5899,8 @@ CompositorFrame BuildCompositorFrameWithResources(
         gfx::ProtectedVideoType::kClear;
     quad->SetAll(sqs, rect, visible_rect, needs_blending, resource_id,
                  uv_top_left, uv_bottom_right, background_color,
-                 nearest_neighbor, secure_output_only, protected_video_type);
+                 nearest_neighbor, secure_output_only, protected_video_type,
+                 /*is_tex_coords_normalized=*/false);
   }
   frame.render_pass_list.push_back(std::move(pass));
   return frame;
@@ -7852,11 +7864,17 @@ TEST_F(SurfaceAggregatorValidSurfaceTest, PerQuadDamageSameSharedQuadState) {
 
     const gfx::PointF kUVTopLeft(0.1f, 0.2f);
     const gfx::PointF kUVBottomRight(1.0f, 1.0f);
+
+    gfx::RectF tex_coord_rect = gfx::BoundingRect(kUVTopLeft, kUVBottomRight);
+    tex_coord_rect.Scale(quad_rects[i].size().width(),
+                         quad_rects[i].size().height());
+
     texure_quad->SetNew(
         sqs, quad_rects[i], quad_rects[i], false /*needs_blending*/,
-        ResourceId(1), kUVTopLeft, kUVBottomRight, SkColors::kTransparent,
-        false /*nearest_neighbor*/, false /*secure_output_only*/,
-        gfx::ProtectedVideoType::kClear);
+        ResourceId(1), tex_coord_rect.origin(), tex_coord_rect.bottom_right(),
+        SkColors::kTransparent, false /*nearest_neighbor*/,
+        false /*secure_output_only*/, gfx::ProtectedVideoType::kClear,
+        /*is_tex_coords_normalized=*/false);
 
     texure_quad->damage_rect = damage_rects[i];
   }
@@ -7875,7 +7893,7 @@ TEST_F(SurfaceAggregatorValidSurfaceTest, PerQuadDamageSameSharedQuadState) {
 
   int draw_rect_index = 0;
   for (auto* quad : output_root_pass->quad_list) {
-    auto* quad_sqs = quad->shared_quad_state;
+    const SharedQuadState* quad_sqs = quad->shared_quad_state;
     EXPECT_TRUE(quad_sqs->overlay_damage_index.has_value());
     EXPECT_EQ(
         aggregated_frame
@@ -9698,6 +9716,209 @@ TEST_F(SurfaceAggregatorValidSurfaceTest,
   EXPECT_FALSE(new_aggregated_frame.delegated_ink_metadata);
 }
 
+// Confirm that tracked element rects on all surfaces are aggregated to the
+// aggregated frame and transformed to the root target space.
+TEST_F(SurfaceAggregatorValidSurfaceTest, AggregateTrackedElementRects) {
+  TrackedElementFeature feature =
+      TrackedElementFeature::kTrackedElementFeatureMax;
+
+  // Element on the root surface.
+  TrackedElementId element_id0 = base::Token::CreateRandom();
+  TrackedElementRect rect0(element_id0, gfx::Rect(25, 25, 30, 30));
+
+  // Elements on the first child surface.
+  TrackedElementId element_id1 = base::Token::CreateRandom();
+  TrackedElementId element_id2 = base::Token::CreateRandom();
+  TrackedElementRect rect1(element_id1, gfx::Rect(10, 10, 20, 20));
+  TrackedElementRect rect2(element_id2, gfx::Rect(50, 50, 30, 30));
+
+  // Element on the second child surface.
+  TrackedElementId element_id3 = base::Token::CreateRandom();
+  TrackedElementRect rect3(element_id3, gfx::Rect(20, 20, 30, 30));
+
+  // Set up the first child surface.
+  TestSurfaceIdAllocator child_surface_id(child_sink_->frame_sink_id());
+  {
+    CompositorFrame child_frame =
+        CompositorFrameBuilder()
+            .AddRenderPass(
+                RenderPassBuilder(CompositorRenderPassId{1},
+                                  gfx::Size(100, 100))
+                    .AddSolidColorQuad(gfx::Rect(5, 5), SkColors::kGreen))
+            .AddTrackedElementRect(feature, rect1)
+            .AddTrackedElementRect(feature, rect2)
+            .Build();
+    child_sink_->SubmitCompositorFrame(child_surface_id.local_surface_id(),
+                                       std::move(child_frame));
+  }
+
+  // Set up the second child surface.
+  auto child_2_sink = std::make_unique<CompositorFrameSinkSupport>(
+      nullptr, &manager_, kArbitraryMiddleFrameSinkId, /*is_root=*/false);
+  TestSurfaceIdAllocator child_2_surface_id(child_2_sink->frame_sink_id());
+  {
+    CompositorFrame child_2_frame =
+        CompositorFrameBuilder()
+            .AddRenderPass(
+                RenderPassBuilder(CompositorRenderPassId{1},
+                                  gfx::Size(100, 100))
+                    .AddSolidColorQuad(gfx::Rect(5, 5), SkColors::kBlue))
+            .AddTrackedElementRect(feature, rect3)
+            .Build();
+    child_2_sink->SubmitCompositorFrame(child_2_surface_id.local_surface_id(),
+                                        std::move(child_2_frame));
+  }
+
+  // Set up the root surface.
+  gfx::Transform scale_and_translate1;
+  scale_and_translate1.Scale(1.5, 1.5);
+  scale_and_translate1.Translate(70, 240);
+  gfx::Transform scale_and_translate2;
+  scale_and_translate2.Scale(0.5, 0.5);
+  scale_and_translate2.Translate(10, 10);
+
+  CompositorFrame root_frame =
+      CompositorFrameBuilder()
+          .AddRenderPass(RenderPassBuilder(CompositorRenderPassId{1},
+                                           gfx::Size(1000, 1000))
+                             .AddSurfaceQuad(gfx::Rect(1000, 1000),
+                                             SurfaceRange(child_surface_id))
+                             .SetQuadToTargetTransform(scale_and_translate1)
+                             .AddSurfaceQuad(gfx::Rect(1000, 1000),
+                                             SurfaceRange(child_2_surface_id))
+                             .SetQuadToTargetTransform(scale_and_translate2))
+          .AddTrackedElementRect(feature, rect0)
+          .Build();
+
+  // Update the expected tracked_element_rects to reflect the transforms.
+  gfx::Rect expected_bounds1 = cc::MathUtil::MapEnclosingClippedRect(
+      scale_and_translate1, rect1.visible_bounds);
+
+  gfx::Rect expected_bounds2 = cc::MathUtil::MapEnclosingClippedRect(
+      scale_and_translate1, rect2.visible_bounds);
+
+  gfx::Rect expected_bounds3 = cc::MathUtil::MapEnclosingClippedRect(
+      scale_and_translate2, rect3.visible_bounds);
+
+  root_sink_->SubmitCompositorFrame(root_surface_id_.local_surface_id(),
+                                    std::move(root_frame));
+
+  auto aggregated_frame = AggregateFrame(root_surface_id_);
+
+  // Confirm that the tracked element rects from all surfaces have been
+  // aggregated to the aggregated frame and transformed to the root target
+  // space.
+  EXPECT_EQ(aggregated_frame.tracked_element_rects.size(), 1u);
+  auto& elements = aggregated_frame.tracked_element_rects[feature];
+  ASSERT_EQ(elements.size(), 4u);
+
+  EXPECT_EQ(elements[0].id, element_id0);
+  EXPECT_EQ(elements[0].visible_bounds, rect0.visible_bounds);
+
+  EXPECT_EQ(elements[1].id, element_id1);
+  EXPECT_EQ(elements[1].visible_bounds, expected_bounds1);
+
+  EXPECT_EQ(elements[2].id, element_id2);
+  EXPECT_EQ(elements[2].visible_bounds, expected_bounds2);
+
+  EXPECT_EQ(elements[3].id, element_id3);
+  EXPECT_EQ(elements[3].visible_bounds, expected_bounds3);
+
+  // Send frames with no tracked_element_rects.
+  CompositorFrame blank_frame =
+      CompositorFrameBuilder()
+          .AddRenderPass(
+              RenderPassBuilder(CompositorRenderPassId{1}, gfx::Size(100, 100))
+                  .AddSolidColorQuad(gfx::Rect(5, 5), SkColors::kGreen))
+          .Build();
+  child_sink_->SubmitCompositorFrame(child_surface_id.local_surface_id(),
+                                     std::move(blank_frame));
+  CompositorFrame blank_frame2 =
+      CompositorFrameBuilder()
+          .AddRenderPass(
+              RenderPassBuilder(CompositorRenderPassId{1}, gfx::Size(100, 100))
+                  .AddSolidColorQuad(gfx::Rect(5, 5), SkColors::kBlue))
+          .Build();
+  child_2_sink->SubmitCompositorFrame(child_2_surface_id.local_surface_id(),
+                                      std::move(blank_frame2));
+  CompositorFrame blank_root_frame =
+      CompositorFrameBuilder()
+          .AddRenderPass(RenderPassBuilder(CompositorRenderPassId{1},
+                                           gfx::Size(1000, 1000))
+                             .AddSurfaceQuad(gfx::Rect(1000, 1000),
+                                             SurfaceRange(child_surface_id))
+                             .SetQuadToTargetTransform(scale_and_translate1)
+                             .AddSurfaceQuad(gfx::Rect(1000, 1000),
+                                             SurfaceRange(child_2_surface_id))
+                             .SetQuadToTargetTransform(scale_and_translate2))
+          .Build();
+  root_sink_->SubmitCompositorFrame(root_surface_id_.local_surface_id(),
+                                    std::move(blank_root_frame));
+
+  // Confirm that the |tracked_element_rects| was reset and the new
+  // aggregated frame does not contain any tracked elements.
+  auto new_aggregated_frame = AggregateFrame(root_surface_id_);
+  EXPECT_TRUE(new_aggregated_frame.tracked_element_rects.empty());
+}
+
+// Confirm that tracked element rects are expanded to include the filter bounds
+// when they intersect with a pixel-moving filter rect.
+TEST_F(SurfaceAggregatorValidSurfaceTest,
+       AggregateTrackedElementRectsWithPixelMovingFilter) {
+  // Tracked element on the child surface. The element rect will intersect with
+  // the area affected by the filter.
+  TrackedElementFeature feature =
+      TrackedElementFeature::kTrackedElementFeatureMax;
+  TrackedElementId element_id = base::Token::CreateRandom();
+  TrackedElementRect element_rect(element_id, gfx::Rect(50, 50, 25, 25));
+
+  // The child surface has a pass with a pixel-moving filter.
+  TestSurfaceIdAllocator child_surface_id(child_sink_->frame_sink_id());
+  {
+    CompositorFrame child_frame =
+        CompositorFrameBuilder()
+            .AddRenderPass(
+                RenderPassBuilder(CompositorRenderPassId{1}, gfx::Size(50, 50))
+                    .AddSolidColorQuad(gfx::Rect(50, 50), SkColors::kGreen)
+                    .AddFilter(cc::FilterOperation::CreateBlurFilter(5.0f)))
+            .AddRenderPass(RenderPassBuilder(CompositorRenderPassId{2},
+                                             gfx::Size(100, 100))
+                               .AddRenderPassQuad(gfx::Rect(50, 50),
+                                                  CompositorRenderPassId{1}))
+            .AddTrackedElementRect(feature, element_rect)
+            .Build();
+    child_sink_->SubmitCompositorFrame(child_surface_id.local_surface_id(),
+                                       std::move(child_frame));
+  }
+
+  // The root surface embeds the child surface.
+  CompositorFrame root_frame =
+      CompositorFrameBuilder()
+          .AddRenderPass(
+              RenderPassBuilder(CompositorRenderPassId{1}, gfx::Size(100, 100))
+                  .AddSurfaceQuad(gfx::Rect(100, 100),
+                                  SurfaceRange(child_surface_id)))
+          .Build();
+
+  root_sink_->SubmitCompositorFrame(root_surface_id_.local_surface_id(),
+                                    std::move(root_frame));
+
+  auto aggregated_frame = AggregateFrame(root_surface_id_);
+
+  // Confirm that the tracked element rect was added to the aggregated frame.
+  EXPECT_EQ(aggregated_frame.tracked_element_rects.size(), 1u);
+  auto& elements = aggregated_frame.tracked_element_rects[feature];
+  // The element bounds should be expanded by the blur filter bounds (15 pixels
+  // in all directions around the 50x50 pass quad), which would be
+  // [-15, -15, 80x80]. However, this is clipped to the root target space (the
+  // 100x100 root pass), so the filter rect is actually [0, 0, 65x65]. The
+  // union of the tracked element rect, at [50, 50, 25x25], and the clipped
+  // 65x65 filter rect is: [0, 0, 75x75].
+  gfx::Rect expected_bounds(0, 0, 75, 75);
+  EXPECT_THAT(elements,
+              ElementsAre(TrackedElementRect(element_id, expected_bounds)));
+}
+
 // Confirm that delegated ink metadata on an undrawn surface is not on the
 // aggregated surface unless the undrawn surface contains a CopyOutputRequest.
 TEST_F(SurfaceAggregatorValidSurfaceTest,
@@ -9752,9 +9973,9 @@ TEST_F(SurfaceAggregatorValidSurfaceTest,
   // Now add a CopyOutputRequest on the child surface, so that the delegated
   // ink metadata does get populated on the aggregated frame.
   auto copy_request = CopyOutputRequest::CreateStubForTesting();
-  child_sink_->RequestCopyOfOutput({child_surface_id.local_surface_id(),
-                                    SubtreeCaptureId(),
-                                    std::move(copy_request)});
+  child_sink_->RequestCopyOfOutput(std::make_unique<PendingCopyOutputRequest>(
+      child_surface_id.local_surface_id(), SubtreeCaptureId(),
+      std::move(copy_request)));
 
   aggregated_frame = AggregateFrame(root_surface_id_);
 

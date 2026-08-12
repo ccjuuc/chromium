@@ -53,9 +53,9 @@ import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.Token;
-import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
@@ -63,9 +63,9 @@ import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.base.test.util.UserActionTester;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.app.tabmodel.ArchivedTabModelOrchestrator;
-import org.chromium.chrome.browser.app.tabmodel.ArchivedTabModelOrchestrator.Observer;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.layouts.LayoutTestUtils;
@@ -82,7 +82,6 @@ import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.undo_tab_close_snackbar.SavedTabGroupUndoBarController;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.hub.ArchivedTabsDialogStation;
@@ -111,7 +110,13 @@ import java.util.List;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @DoNotBatch(reason = "TODO(crbug.com/348068134): Batch this test suite.")
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
-@DisableFeatures({"IPH_AndroidTabDeclutter", ChromeFeatureList.SETTINGS_MULTI_COLUMN})
+@DisableFeatures({
+    "IPH_AndroidTabDeclutter",
+    ChromeFeatureList.SETTINGS_MULTI_COLUMN,
+    ChromeFeatureList.DRAW_CHROME_PAGES_EDGE_TO_EDGE,
+    ChromeFeatureList.EDGE_TO_EDGE_BOTTOM_CHIN
+})
+@DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287024
 public class ArchivedTabsDialogCoordinatorTest {
     private static final String SYNC_GROUP_ID1 = "test_sync_group_id1";
     private static final String SYNC_GROUP_ID2 = "test_sync_group_id2";
@@ -128,7 +133,7 @@ public class ArchivedTabsDialogCoordinatorTest {
     @Rule
     public ChromeRenderTestRule mRenderTestRule =
             ChromeRenderTestRule.Builder.withPublicCorpus()
-                    .setRevision(2)
+                    .setRevision(3)
                     .setBugComponent(ChromeRenderTestRule.Component.UI_BROWSER_MOBILE_HUB)
                     .build();
 
@@ -155,6 +160,20 @@ public class ArchivedTabsDialogCoordinatorTest {
     public void setUp() {
         TabGroupSyncServiceFactory.setForTesting(mTabGroupSyncService);
         when(mTabGroupSyncService.getAllGroupIds()).thenReturn(new String[] {});
+        when(mTabGroupSyncService.getArchivedGroupCount())
+                .thenAnswer(
+                        invocation -> {
+                            TabGroupSyncService service =
+                                    (TabGroupSyncService) invocation.getMock();
+                            int count = 0;
+                            for (String syncId : service.getAllGroupIds()) {
+                                SavedTabGroup group = service.getGroup(syncId);
+                                if (group != null && group.archivalTimeMs != null) {
+                                    count++;
+                                }
+                            }
+                            return count;
+                        });
         doNothing()
                 .when(mTabGroupSyncService)
                 .addObserver(mTabGroupSyncServiceObserverCaptor.capture());
@@ -171,20 +190,22 @@ public class ArchivedTabsDialogCoordinatorTest {
                 });
 
         mArchivedTabModelOrchestrator = ArchivedTabModelOrchestrator.getForProfile(mProfile);
+        waitForArchivedTabModelsToLoad(mArchivedTabModelOrchestrator);
         mArchivedTabModel = mArchivedTabModelOrchestrator.getTabModelSelector().getModel(false);
         mUserActionTester = new UserActionTester();
         mTabArchiveSettings = mArchivedTabModelOrchestrator.getTabArchiveSettings();
         mTabArchiveSettings.setShouldShowDialogIphForTesting(false);
-        waitForArchivedTabModelsToLoad(mArchivedTabModelOrchestrator);
     }
 
     @After
     public void tearDown() {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mArchivedTabModel
-                            .getTabRemover()
-                            .forceCloseTabs(TabClosureParams.closeAllTabs().build());
+                    if (mArchivedTabModel != null) {
+                        mArchivedTabModel
+                                .getTabRemover()
+                                .forceCloseTabs(TabClosureParams.closeAllTabs().build());
+                    }
                     mTabArchiveSettings.resetSettingsForTesting();
                 });
     }
@@ -835,6 +856,7 @@ public class ArchivedTabsDialogCoordinatorTest {
     @Test
     @MediumTest
     @Restriction({DeviceFormFactor.TABLET_OR_DESKTOP, DeviceRestriction.RESTRICTION_TYPE_NON_AUTO})
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/445994927
     // Flaky in automotive, https://crbug.com/462785937
     @Feature({"RenderTest"})
     public void testIphMessageResizedOnTablet() throws IOException {
@@ -1456,24 +1478,7 @@ public class ArchivedTabsDialogCoordinatorTest {
 
     private void waitForArchivedTabModelsToLoad(
             ArchivedTabModelOrchestrator archivedTabModelOrchestrator) {
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    CallbackHelper callbackHelper = new CallbackHelper();
-                    if (archivedTabModelOrchestrator.isTabModelInitialized()) {
-                        callbackHelper.notifyCalled();
-                    } else {
-                        archivedTabModelOrchestrator.addObserver(
-                                new Observer() {
-                                    @Override
-                                    public void onTabModelCreated(TabModel archivedTabModel) {
-                                        archivedTabModelOrchestrator.removeObserver(this);
-                                        callbackHelper.notifyCalled();
-                                    }
-                                });
-                    }
-
-                    return null;
-                });
+        CriteriaHelper.pollUiThread(() -> archivedTabModelOrchestrator.isTabModelInitialized());
     }
 
     private void dismissIphMessage(int numOfArchivedTabs) {

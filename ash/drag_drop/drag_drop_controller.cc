@@ -10,6 +10,7 @@
 #include "ash/drag_drop/drag_image_view.h"
 #include "ash/drag_drop/toplevel_window_drag_delegate.h"
 #include "ash/shell.h"
+#include "ash/wm/toplevel_window_event_handler.h"
 #include "ash/wm/window_util.h"
 #include "base/functional/bind.h"
 #include "base/run_loop.h"
@@ -146,6 +147,10 @@ DragOperation DragDropController::StartDragAndDrop(
   if (!enabled_ || IsDragDropInProgress())
     return DragOperation::kNone;
 
+  if (Shell::Get()->toplevel_window_event_handler()->is_drag_in_progress()) {
+    return DragOperation::kNone;
+  }
+
   weak_factory_.InvalidateWeakPtrs();
 
   const ui::OSExchangeDataProvider* provider = &data->provider();
@@ -222,28 +227,7 @@ DragOperation DragDropController::StartDragAndDrop(
         gfx::PointF(start_location_), source, drag_source_window_);
   }
 
-  if (TabDragDropDelegate::IsChromeTabDrag(*drag_data_)) {
-    // TODO(aluh): Figure out why this allocation is outside the inner if-block.
-    DCHECK(!tab_drag_drop_delegate_);
-    tab_drag_drop_delegate_ = std::make_unique<TabDragDropDelegate>(
-        root_window, drag_source_window_, start_location_);
-    if (drag_image_widget_) {
-      static_cast<DragImageView*>(drag_image_widget_->GetContentsView())
-          ->SetTouchDragOperationHintOff();
-    }
-    // Avoid taking capture twice.
-    if (is_touch_source && !touch_capture_attempted) {
-      touch_capture_attempted = true;
-      if (tab_drag_drop_delegate_->TakeCapture(
-              root_window, source_window,
-              base::BindRepeating(&DragDropController::CancelIfInProgress,
-                                  base::Unretained(this)),
-              ui::TransferTouchesBehavior::kDontCancel)) {
-        capture_delegate_ = tab_drag_drop_delegate_.get();
-      }
-    }
-  }
-  // If touch is not captured by either extended drag nor tab drag, start
+  // If touch is not captured by extended drag, start
   // a normal drag-and-drop using DragDropCaptureDelegate.
   if (is_touch_source && !touch_capture_attempted) {
     touch_capture_attempted = true;
@@ -538,10 +522,6 @@ void DragDropController::OnWindowDestroying(aura::Window* window) {
     if (drag_source_window_->HasObserver(this))
       drag_source_window_->RemoveObserver(this);
     drag_source_window_ = nullptr;
-
-    // TabDragDropDelegate dereferences |drag_source_window_| in its logic,
-    // and is meaningless without a valid instance of it.
-    tab_drag_drop_delegate_.reset();
   }
 }
 
@@ -616,15 +596,6 @@ void DragDropController::DragUpdate(aura::Window* target,
     drag_image->SetScreenPosition(root_location_in_screen - drag_image_offset_);
     drag_image->SetTouchDragOperation(drag_info.drag_operation);
   }
-
-  if (tab_drag_drop_delegate_) {
-    // TabDragDropDelegate assumes the root window doesn't change. Tab drags are
-    // only seen in tablet mode which precludes dragging between displays.
-    // DCHECK just to make sure.
-    DCHECK_EQ(target->GetRootWindow(), tab_drag_drop_delegate_->root_window());
-
-    tab_drag_drop_delegate_->DragUpdate(root_location_in_screen);
-  }
 }
 
 void DragDropController::Drop(aura::Window* target,
@@ -663,8 +634,6 @@ void DragDropController::Drop(aura::Window* target,
   gfx::Point drop_location_in_screen = event.root_location();
   ::wm::ConvertPointToScreen(target->GetRootWindow(), &drop_location_in_screen);
 
-  const bool is_tab_drag_drop = (tab_drag_drop_delegate_.get() != nullptr);
-
   DCHECK_EQ(drag_window_, target);
 
   DropIfAllowed(
@@ -672,14 +641,9 @@ void DragDropController::Drop(aura::Window* target,
       base::BindOnce(&DragDropController::PerformDrop,
                      weak_factory_.GetWeakPtr(), drop_location_in_screen, e,
                      std::move(drag_data_), std::move(delegate_drop_cb),
-                     std::move(tab_drag_drop_delegate_),
                      std::move(drag_cancel)));
 
   Cleanup();
-
-  // Tab drag-n-drop should never be async.
-  if (is_tab_drag_drop)
-    DCHECK(!drag_image_widget_);
 
   // If the drop is async and cancelled animation isn't running, reset
   // |drag_image_widget_|.
@@ -814,12 +778,11 @@ void DragDropController::Cleanup() {
   if (drag_window_ && drag_window_ != drag_source_window_)
     drag_window_->RemoveObserver(this);
   drag_window_ = nullptr;
+  capture_delegate_ = nullptr;
   drag_drop_completed_ = true;
   drag_data_.reset();
   allowed_operations_ = 0;
-  tab_drag_drop_delegate_.reset();
   touch_drag_drop_delegate_.reset();
-  capture_delegate_ = nullptr;
 }
 
 void DragDropController::CleanupPendingLongTap() {
@@ -835,7 +798,6 @@ void DragDropController::PerformDrop(
     ui::DropTargetEvent event,
     std::unique_ptr<ui::OSExchangeData> drag_data,
     aura::client::DragDropDelegate::DropCallback drop_cb,
-    std::unique_ptr<TabDragDropDelegate> tab_drag_drop_delegate,
     base::ScopedClosureRunner cancel_drag_callback) {
   // Event copy constructor dooesn't copy the target. That's why we set it here.
   // DragDropController observes the `drag_window_`, so if it's destroyed, the
@@ -851,17 +813,7 @@ void DragDropController::PerformDrop(
             : nullptr);
   }
 
-  if (operation_ == DragOperation::kNone && tab_drag_drop_delegate) {
-    // Release the ownership of object so that it can delete itself.
-    tab_drag_drop_delegate.release()->DropAndDeleteSelf(drop_location_in_screen,
-                                                        copied_data);
-    // Override the drag event's drop effect as a move to inform the front-end
-    // that the tab or group was moved. Otherwise, the WebUI tab strip does
-    // not know that a drop resulted in a tab being moved and will temporarily
-    // visually return the tab to its original position. (crbug.com/1081905)
-    operation_ = DragOperation::kMove;
-    drag_image_widget_.reset();
-  } else if (operation_ == DragOperation::kNone) {
+  if (operation_ == DragOperation::kNone) {
     StartCanceledAnimation(kCancelAnimationDuration);
   } else {
     drag_image_widget_.reset();

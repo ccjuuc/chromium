@@ -27,6 +27,12 @@ include_rules = [
   "+chrome/browser/profiles",
   "+chrome/browser/signin",
   "+chrome/common/chrome_switches.h",
-  "+chrome/common/pref_names.h",
   "+chrome/test/base",
 ]
+
+specific_include_rules = {
+  "arc_policy_bridge\\.cc": [
+    "+chrome/browser/browser_process.h",
+    "+chrome/browser/browser_process_platform_part_ash.h",
+  ]
+}

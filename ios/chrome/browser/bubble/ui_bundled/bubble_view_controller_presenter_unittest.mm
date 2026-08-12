@@ -15,6 +15,7 @@
 #import "ios/chrome/browser/bubble/ui_bundled/bubble_view.h"
 #import "ios/chrome/browser/bubble/ui_bundled/bubble_view_controller.h"
 #import "ios/chrome/browser/bubble/ui_bundled/bubble_view_controller_presenter+Testing.h"
+#import "ios/chrome/test/app/uikit_test_util.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/platform_test.h"
 
@@ -34,11 +35,13 @@ class BubbleViewControllerPresenterTest : public PlatformTest {
               run_loop_.Quit();
             }]),
         window_([[UIWindow alloc]
-            initWithFrame:CGRectMake(0.0, 0.0, 500.0, 500.0)]),
+            initWithWindowScene:chrome_test_util::GetAnyWindowScene()]),
         parent_view_controller_([[UIViewController alloc] init]),
         anchor_point_(CGPointMake(250.0, 250.0)),
         dismissal_callback_count_(0) {
-    parent_view_controller_.view.frame = CGRectMake(0.0, 0.0, 500.0, 500.0);
+    CGRect frame = CGRectMake(0.0, 0.0, 500.0, 500.0);
+    parent_view_controller_.view.frame = frame;
+    window_.frame = frame;
     [window_ addSubview:parent_view_controller_.view];
   }
 
@@ -267,4 +270,48 @@ TEST_F(BubbleViewControllerPresenterTest, BubbleViewGestureRecognizersRemoved) {
   EXPECT_TRUE(bubble_view);
   EXPECT_EQ([[bubble_view gestureRecognizers] count], 0U);
   EXPECT_EQ([[parent_view_controller_.view gestureRecognizers] count], 0U);
+}
+
+// Tests that tapping the bubble view's next button invoke the dismissal
+// callback with a next action.
+TEST_F(BubbleViewControllerPresenterTest,
+       BubbleViewNextButtonCallDismissalCallback) {
+  __block IPHDismissalReasonType dismissedReason =
+      IPHDismissalReasonType::kUnknown;
+  BubbleViewControllerPresenter* presenter =
+      [[BubbleViewControllerPresenter alloc]
+               initWithText:@"Text"
+                      title:@"Title"
+             arrowDirection:BubbleArrowDirectionUp
+                  alignment:BubbleAlignmentCenter
+                 bubbleType:BubbleViewTypeRichWithNext
+            pageControlPage:BubblePageControlPageNone
+          dismissalCallback:^(IPHDismissalReasonType reason) {
+            dismissal_callback_count_++;
+            dismissedReason = reason;
+          }];
+  [presenter presentInViewController:parent_view_controller_
+                         anchorPoint:anchor_point_];
+  BubbleView* bubble_view = base::apple::ObjCCastStrict<BubbleView>(
+      presenter.bubbleViewController.view);
+  EXPECT_TRUE(bubble_view);
+  UIButton* next_button = GetNextButtonFromBubbleView(bubble_view);
+  EXPECT_TRUE(next_button);
+  [next_button sendActionsForControlEvents:UIControlEventTouchUpInside];
+  EXPECT_EQ(1, dismissal_callback_count_);
+  EXPECT_EQ(IPHDismissalReasonType::kTappedNext, dismissedReason);
+}
+
+// Tests that the bubble is NOT dismissed automatically after the timeout
+// when `dismissalTimerDisabled` is set to YES.
+TEST_F(BubbleViewControllerPresenterTest, BubbleNotDismissedWhenTimerDisabled) {
+  bubble_view_controller_presenter_.dismissalTimerDisabled = YES;
+  [bubble_view_controller_presenter_
+      presentInViewController:parent_view_controller_
+                  anchorPoint:anchor_point_];
+
+  EXPECT_EQ(nil, bubble_view_controller_presenter_.bubbleDismissalTimer);
+
+  task_environment_.FastForwardBy(base::Seconds(kBubbleVisibilityDuration + 1));
+  EXPECT_EQ(0, dismissal_callback_count_);
 }

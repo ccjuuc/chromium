@@ -7,7 +7,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_writer.h"
@@ -17,6 +16,7 @@
 #include "base/metrics/user_metrics.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/tick_clock.h"
 #include "chromecast/base/metrics/cast_histograms.h"
@@ -47,7 +47,7 @@ constexpr base::TimeDelta kAppLoadTimeout = base::Minutes(5);
 // into components/metrics/serialization/.
 // static
 bool CastMetricsHelper::DecodeAppInfoFromMetricsName(
-    const std::string& metrics_name,
+    std::string_view metrics_name,
     std::string* action_name,
     std::string* app_id,
     std::string* session_id,
@@ -57,36 +57,30 @@ bool CastMetricsHelper::DecodeAppInfoFromMetricsName(
   DCHECK(session_id);
   DCHECK(sdk_version);
 
-  if (!base::Contains(metrics_name, kMetricsNameAppInfoDelimiter)) {
+  if (!metrics_name.contains(kMetricsNameAppInfoDelimiter)) {
     return false;
   }
 
-  std::vector<std::string> tokens = base::SplitString(
-      metrics_name, std::string(1, kMetricsNameAppInfoDelimiter),
+  std::vector<std::string_view> tokens = base::SplitStringPiece(
+      metrics_name, std::string_view(&kMetricsNameAppInfoDelimiter, 1),
       base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
   DCHECK_EQ(tokens.size(), 4u);
   // The order of tokens should match EncodeAppInfoIntoMetricsName().
-  *action_name = tokens[0];
-  *app_id = tokens[1];
-  *session_id = tokens[2];
-  *sdk_version = tokens[3];
+  *action_name = std::string(tokens[0]);
+  *app_id = std::string(tokens[1]);
+  *session_id = std::string(tokens[2]);
+  *sdk_version = std::string(tokens[3]);
   return true;
 }
 
 // static
 std::string CastMetricsHelper::EncodeAppInfoIntoMetricsName(
-    const std::string& action_name,
-    const std::string& app_id,
-    const std::string& session_id,
-    const std::string& sdk_version) {
-  std::string result(action_name);
-  result.push_back(kMetricsNameAppInfoDelimiter);
-  result.append(app_id);
-  result.push_back(kMetricsNameAppInfoDelimiter);
-  result.append(session_id);
-  result.push_back(kMetricsNameAppInfoDelimiter);
-  result.append(sdk_version);
-  return result;
+    std::string_view action_name,
+    std::string_view app_id,
+    std::string_view session_id,
+    std::string_view sdk_version) {
+  return base::JoinString({action_name, app_id, session_id, sdk_version},
+                          std::string_view(&kMetricsNameAppInfoDelimiter, 1));
 }
 
 // static
@@ -215,21 +209,20 @@ void CastMetricsHelper::LogTimeToBufferAv(BufferingType buffering_type,
 }
 
 std::string CastMetricsHelper::GetMetricsNameWithAppName(
-    const std::string& prefix,
-    const std::string& suffix) const {
+    std::string_view prefix,
+    std::string_view suffix) const {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  std::string metrics_name(prefix);
+  std::vector<std::string_view> components;
+  if (!prefix.empty()) {
+    components.push_back(prefix);
+  }
   if (!app_id_.empty()) {
-    if (!metrics_name.empty())
-      metrics_name.push_back('.');
-    metrics_name.append(app_id_);
+    components.push_back(app_id_);
   }
   if (!suffix.empty()) {
-    if (!metrics_name.empty())
-      metrics_name.push_back('.');
-    metrics_name.append(suffix);
+    components.push_back(suffix);
   }
-  return metrics_name;
+  return base::JoinString(components, ".");
 }
 
 void CastMetricsHelper::SetMetricsSink(MetricsSink* delegate) {
@@ -289,8 +282,8 @@ void CastMetricsHelper::LogMediumTimeHistogramEvent(const std::string& name,
                         50);
 }
 
-base::Value::Dict CastMetricsHelper::CreateEventBase(const std::string& name) {
-  base::Value::Dict cast_event;
+base::DictValue CastMetricsHelper::CreateEventBase(const std::string& name) {
+  base::DictValue cast_event;
   cast_event.Set("name", name);
   const double time = (Now() - base::TimeTicks()).InMicrosecondsF();
   cast_event.Set("time", time);
@@ -299,7 +292,7 @@ base::Value::Dict CastMetricsHelper::CreateEventBase(const std::string& name) {
 
 void CastMetricsHelper::RecordEventWithValue(const std::string& event,
                                              int value) {
-  base::Value::Dict cast_event = CreateEventBase(event);
+  base::DictValue cast_event = CreateEventBase(event);
   cast_event.Set("value", value);
   RecordSimpleAction(base::WriteJson(cast_event).value_or(""));
 }
@@ -312,7 +305,7 @@ void CastMetricsHelper::RecordApplicationEvent(const std::string& app_id,
                                                const std::string& session_id,
                                                const std::string& sdk_version,
                                                const std::string& event) {
-  base::Value::Dict cast_event = CreateEventBase(event);
+  base::DictValue cast_event = CreateEventBase(event);
   cast_event.Set("app_id", app_id);
   cast_event.Set("session_id", session_id);
   cast_event.Set("sdk_version", sdk_version);
@@ -322,7 +315,7 @@ void CastMetricsHelper::RecordApplicationEvent(const std::string& app_id,
 void CastMetricsHelper::RecordApplicationEventWithValue(
     const std::string& event,
     int value) {
-  base::Value::Dict cast_event = CreateEventBase(event);
+  base::DictValue cast_event = CreateEventBase(event);
   cast_event.Set("app_id", app_id_);
   cast_event.Set("session_id", session_id_);
   cast_event.Set("sdk_version", sdk_version_);
@@ -336,7 +329,7 @@ void CastMetricsHelper::RecordApplicationEventWithValue(
     const std::string& sdk_version,
     const std::string& event,
     int value) {
-  base::Value::Dict cast_event = CreateEventBase(event);
+  base::DictValue cast_event = CreateEventBase(event);
   cast_event.Set("app_id", app_id);
   cast_event.Set("session_id", session_id);
   cast_event.Set("sdk_version", sdk_version);

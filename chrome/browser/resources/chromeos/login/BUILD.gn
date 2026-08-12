@@ -28,7 +28,6 @@ build_webui("build") {
     "images/app_icons/files.svg",
     "images/app_icons/photos.svg",
     "images/app_icons/settings.svg",
-    "images/arc_vm_data_migration_icon.svg",
     "images/browser_sync.svg",
     "images/cfm/enrollment.svg",
     "images/cfm/welcome.svg",
@@ -74,6 +73,9 @@ build_webui("build") {
     "screens/oobe/demo_setup.ts",
     "screens/oobe/enable_debugging.ts",
     "screens/oobe/enterprise_enrollment.ts",
+    "screens/oobe/fjord_fw_update.ts",
+    "screens/oobe/fjord_image_download.ts",
+    "screens/oobe/fjord_image_selection.ts",
     "screens/oobe/fjord_station_setup.ts",
     "screens/oobe/fjord_touch_controller.ts",
     "screens/oobe/hid_detection.ts",
@@ -135,7 +137,6 @@ build_webui("build") {
     "screens/common/wrong_hwid.ts",
 
     # Login screens
-    "screens/login/arc_vm_data_migration.ts",
     "screens/login/checking_downloading_update.ts",
     "screens/login/encryption_migration.ts",
     "screens/login/management_transition.ts",
@@ -154,6 +155,7 @@ build_webui("build") {
     "screens/osauth/osauth_error.ts",
     "screens/osauth/password_selection.ts",
     "screens/osauth/pin_setup.ts",
+    "screens/osauth/remove_local_auth_factors.ts",
 
     # Components
     "components/api_keys_notice.ts",
@@ -198,12 +200,12 @@ build_webui("build") {
     "components/long_touch_detector.ts",
     "components/mixins/login_screen_mixin.ts",
     "components/mixins/multi_step_mixin.ts",
-    "components/online_auth_utils.ts",
     "components/mixins/oobe_base_mixin.ts",
     "components/mixins/oobe_dialog_host_mixin.ts",
     "components/mixins/oobe_focus_mixin.ts",
     "components/mixins/oobe_i18n_mixin.ts",
     "components/mixins/oobe_scrollable_mixin.ts",
+    "components/online_auth_utils.ts",
     "components/oobe_select.ts",
     "components/oobe_types.ts",
     "components/qr_code_canvas.ts",

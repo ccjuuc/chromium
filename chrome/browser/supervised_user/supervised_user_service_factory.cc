@@ -4,63 +4,55 @@
 
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 
+#include <memory>
+
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/version_info/channel.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/supervised_user/family_link_settings_service_factory.h"
 #include "chrome/browser/supervised_user/supervised_user_browser_utils.h"
-#include "chrome/browser/supervised_user/supervised_user_content_filters_service_factory.h"
-#include "chrome/browser/supervised_user/supervised_user_settings_service_factory.h"
-#include "chrome/browser/sync/sync_service_factory.h"
-#include "components/supervised_user/core/browser/kids_chrome_management_url_checker_client.h"
+#include "components/supervised_user/core/browser/device_parental_controls.h"
+#include "components/supervised_user/core/browser/family_link_url_filter.h"
 #include "components/supervised_user/core/browser/supervised_user_service.h"
-#include "components/supervised_user/core/browser/supervised_user_url_filter.h"
-#include "components/sync/service/sync_service.h"
+#include "components/supervised_user/core/browser/supervised_user_url_checker_client.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition.h"
 #include "extensions/buildflags/buildflags.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/browser/extension_system_provider.h"
 #include "extensions/browser/extensions_browser_client.h"
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
-#include "base/check_deref.h"
-#include "chrome/browser/global_features.h"
 #include "chrome/browser/supervised_user/android/supervised_user_service_platform_delegate.h"
-#include "components/supervised_user/core/browser/android/android_parental_controls.h"
 #else
 #include "chrome/browser/supervised_user/desktop/supervised_user_service_platform_delegate.h"
 #endif
 
-class FilterDelegateImpl
-    : public supervised_user::SupervisedUserURLFilter::Delegate {
+namespace supervised_user {
+
+class FilterDelegateImpl : public FamilyLinkUrlFilter::Delegate {
  public:
   bool SupportsWebstoreURL(const GURL& url) const override {
-    return supervised_user::IsSupportedChromeExtensionURL(url);
+    return IsSupportedChromeExtensionURL(url);
   }
 };
 
 // static
-supervised_user::SupervisedUserService*
-SupervisedUserServiceFactory::GetForProfile(Profile* profile) {
-  return static_cast<supervised_user::SupervisedUserService*>(
+SupervisedUserService* SupervisedUserServiceFactory::GetForProfile(
+    Profile* profile) {
+  return static_cast<SupervisedUserService*>(
       GetInstance()->GetServiceForBrowserContext(profile, true));
 }
-
-supervised_user::SupervisedUserService*
-SupervisedUserServiceFactory::GetForBrowserContext(
-    content::BrowserContext* context) {
-  return GetForProfile(Profile::FromBrowserContext(context));
-}
-
 // static
-supervised_user::SupervisedUserService*
-SupervisedUserServiceFactory::GetForProfileIfExists(Profile* profile) {
-  return static_cast<supervised_user::SupervisedUserService*>(
+SupervisedUserService* SupervisedUserServiceFactory::GetForProfileIfExists(
+    Profile* profile) {
+  return static_cast<SupervisedUserService*>(
       GetInstance()->GetServiceForBrowserContext(profile, /*create=*/false));
 }
 
@@ -80,45 +72,32 @@ std::unique_ptr<KeyedService> SupervisedUserServiceFactory::BuildInstanceFor(
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory =
       profile->GetDefaultStoragePartition()
           ->GetURLLoaderFactoryForBrowserProcess();
-  return std::make_unique<supervised_user::SupervisedUserService>(
+  FamilyLinkSettingsService& family_link_settings_service =
+      CHECK_DEREF(FamilyLinkSettingsServiceFactory::GetInstance()->GetForKey(
+          profile->GetProfileKey()));
+  return std::make_unique<SupervisedUserService>(
       identity_manager, url_loader_factory, *profile->GetPrefs(),
-      *SupervisedUserSettingsServiceFactory::GetInstance()->GetForKey(
-          profile->GetProfileKey()),
-#if BUILDFLAG(IS_ANDROID)
-      SupervisedUserContentFiltersServiceFactory::GetInstance()->GetForKey(
-          profile->GetProfileKey()),
-#else
-      nullptr,
-#endif  // BUILDFLAG(IS_ANDROID)
-      SyncServiceFactory::GetInstance()->GetForProfile(profile),
-      std::make_unique<supervised_user::SupervisedUserURLFilter>(
-          *profile->GetPrefs(), std::make_unique<FilterDelegateImpl>(),
-          std::make_unique<
-              supervised_user::KidsChromeManagementURLCheckerClient>(
+      family_link_settings_service,
+      std::make_unique<FamilyLinkUrlFilter>(
+          family_link_settings_service, *profile->GetPrefs(),
+          std::make_unique<FilterDelegateImpl>(),
+          std::make_unique<SupervisedUserUrlCheckerClient>(
               identity_manager, url_loader_factory, *profile->GetPrefs(),
               platform_delegate->GetCountryCode(),
               platform_delegate->GetChannel())),
-      std::move(platform_delegate)
-#if BUILDFLAG(IS_ANDROID)
-          ,
-      CHECK_DEREF(
-          g_browser_process->GetFeatures()->GetAndroidParentalControls())
-#endif  // BUILDFLAG(IS_ANDROID)
-  );
+      std::move(platform_delegate),
+      g_browser_process->device_parental_controls());
 }
 
 SupervisedUserServiceFactory::SupervisedUserServiceFactory()
-    : ProfileKeyedServiceFactory(
-          "SupervisedUserService",
-          supervised_user::BuildProfileSelectionsForRegularAndGuest()) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+    : ProfileKeyedServiceFactory("SupervisedUserService",
+                                 BuildProfileSelectionsForRegularAndGuest()) {
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   DependsOn(
       extensions::ExtensionsBrowserClient::Get()->GetExtensionSystemFactory());
 #endif
   DependsOn(IdentityManagerFactory::GetInstance());
-  DependsOn(SyncServiceFactory::GetInstance());
-  DependsOn(SupervisedUserSettingsServiceFactory::GetInstance());
-  DependsOn(SupervisedUserContentFiltersServiceFactory::GetInstance());
+  DependsOn(FamilyLinkSettingsServiceFactory::GetInstance());
 }
 
 SupervisedUserServiceFactory::~SupervisedUserServiceFactory() = default;
@@ -128,3 +107,5 @@ SupervisedUserServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* profile) const {
   return BuildInstanceFor(static_cast<Profile*>(profile));
 }
+
+}  // namespace supervised_user

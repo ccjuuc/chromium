@@ -4,19 +4,25 @@
 
 #include "components/autofill/core/browser/studies/autofill_ablation_study.h"
 
+#include <stddef.h>
+#include <stdint.h>
+
+#include <array>
+#include <memory>
+#include <ranges>
+#include <string>
+#include <string_view>
+
 #include "base/base64.h"
-#include "base/check_op.h"
-#include "base/command_line.h"
 #include "base/containers/span.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/field_trial.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/no_destructor.h"
 #include "base/numerics/byte_conversions.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_util.h"
 #include "base/time/time.h"
-#include "base/types/zip.h"
 #include "components/autofill/core/browser/integrators/optimization_guide/autofill_optimization_guide_decider.h"
 #include "components/autofill/core/common/autofill_clock.h"
 #include "components/autofill/core/common/autofill_debug_features.h"
@@ -60,12 +66,12 @@ std::string GetSeed(PrefService* pref_service) {
   if (!pref_service) {
     return std::string();
   }
-  if (!pref_service->HasPrefPath(autofill::prefs::kAutofillAblationSeedPref)) {
+  if (!pref_service->HasPrefPath(prefs::kAutofillAblationSeedPref)) {
     pref_service->SetString(
-        autofill::prefs::kAutofillAblationSeedPref,
+        prefs::kAutofillAblationSeedPref,
         base::Base64Encode(base::RandBytesAsVector(kSeedLengthInBytes)));
   }
-  return pref_service->GetString(autofill::prefs::kAutofillAblationSeedPref);
+  return pref_service->GetString(prefs::kAutofillAblationSeedPref);
 }
 
 }  // namespace
@@ -197,7 +203,7 @@ AblationGroup AutofillAblationStudy::GetAblationGroup(
 
   base::Time now = AutofillClock::Now();
   for (auto [param, optimization_type] :
-       base::zip(ablation_list_params, ablation_optimization_types)) {
+       std::views::zip(ablation_list_params, ablation_optimization_types)) {
     // Do some basic checks for plausibility. Note that for testing purposes
     // we allow that ablation_weight == 1000. In this case 100% of forms are
     // in the ablation case. In practice ablation_weight * 2 <= total_weight

@@ -4,7 +4,6 @@
 
 #include <stddef.h>
 
-#include "base/containers/contains.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -166,8 +165,9 @@ class ExtensionManagementTest : public extensions::ExtensionBrowserTest {
     extensions::ExtensionHost* ext_host =
         manager->GetBackgroundHostForExtension(extension->id());
     EXPECT_TRUE(ext_host);
-    if (!ext_host)
+    if (!ext_host) {
       return false;
+    }
 
     std::string version_from_bg =
         content::EvalJs(ext_host->host_contents(), "version()").ExtractString();
@@ -329,10 +329,10 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, DisableEnable) {
 }
 
 #if BUILDFLAG(IS_WIN)
-// Fails consistently on Windows XP, see: http://crbug.com/120640.
+// Fails consistently on Windows XP, see: http://crbug.com/40765075.
 #define MAYBE_AutoUpdate DISABLED_AutoUpdate
 #else
-// See http://crbug.com/103371 and http://crbug.com/120640.
+// See http://crbug.com/40111471 and http://crbug.com/40765075.
 #if defined(ADDRESS_SANITIZER)
 #define MAYBE_AutoUpdate DISABLED_AutoUpdate
 #else
@@ -395,7 +395,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, MAYBE_AutoUpdate) {
     ASSERT_TRUE(extension);
     ASSERT_EQ("2.0", extension->VersionString());
     ASSERT_TRUE(install_finished);
-    ASSERT_TRUE(base::Contains(updates, "ogjcoiohnmldgjemafoockdghcjciccf"));
+    ASSERT_TRUE(updates.contains("ogjcoiohnmldgjemafoockdghcjciccf"));
   }
 
   // Now try doing an update to version 3, which has been incorrectly
@@ -418,7 +418,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, MAYBE_AutoUpdate) {
     params2.callback = run_loop.QuitClosure();
     updater->CheckNow(std::move(params2));
     run_loop.Run();
-    ASSERT_TRUE(base::Contains(updates, "ogjcoiohnmldgjemafoockdghcjciccf"));
+    ASSERT_TRUE(updates.contains("ogjcoiohnmldgjemafoockdghcjciccf"));
   }
 
   // Make sure the extension state is the same as before.
@@ -430,7 +430,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, MAYBE_AutoUpdate) {
 }
 
 #if BUILDFLAG(IS_WIN)
-// Fails consistently on Windows XP, see: http://crbug.com/120640.
+// Fails consistently on Windows XP, see: http://crbug.com/40765075.
 #define MAYBE_AutoUpdateDisabledExtensions DISABLED_AutoUpdateDisabledExtensions
 #else
 #if defined(ADDRESS_SANITIZER)
@@ -504,7 +504,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest,
   EnableExtension(extension->id());
   EXPECT_TRUE(listener2.WaitUntilSatisfied());
   ASSERT_TRUE(install_finished);
-  ASSERT_TRUE(base::Contains(updates, "ogjcoiohnmldgjemafoockdghcjciccf"));
+  ASSERT_TRUE(updates.contains("ogjcoiohnmldgjemafoockdghcjciccf"));
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, ExternalUrlUpdate) {
@@ -594,7 +594,7 @@ const char kForceInstallNotEmptyHelp[] =
 
 }
 
-// See http://crbug.com/57378 for flakiness details.
+// See http://crbug.com/41231588 for flakiness details.
 IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, ExternalPolicyRefresh) {
   // Mark as enterprise managed.
   policy::ScopedDomainEnterpriseManagement scoped_domain;
@@ -623,7 +623,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, ExternalPolicyRefresh) {
           .empty())
       << kForceInstallNotEmptyHelp;
 
-  base::Value::List forcelist;
+  base::ListValue forcelist;
   forcelist.Append(BuildForceInstallPolicyValue(kExtensionId,
                                                 GetUpdateUrl().spec().c_str()));
   PolicyMap policies;
@@ -697,7 +697,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest,
 
   ExtensionRegistry* registry = extension_registry();
 
-  base::Value::List forcelist;
+  base::ListValue forcelist;
   forcelist.Append(BuildForceInstallPolicyValue(kExtensionId,
                                                 GetUpdateUrl().spec().c_str()));
   PolicyMap policies;
@@ -739,7 +739,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest,
   ASSERT_NO_FATAL_FAILURE(SetUpExtensionUpdateResponse(
       temp_dir.GetPath(), "v2.crx", "manifest_v2.xml.template"));
 
-  base::Value::List forcelist;
+  base::ListValue forcelist;
   forcelist.Append(BuildForceInstallPolicyValue(kExtensionId,
                                                 GetUpdateUrl().spec().c_str()));
   PolicyMap policies;
@@ -784,7 +784,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest,
   ASSERT_NO_FATAL_FAILURE(SetUpExtensionUpdateResponse(
       temp_dir.GetPath(), "v2.crx", "manifest_v2.xml.template"));
 
-  base::Value::List forcelist;
+  base::ListValue forcelist;
   forcelist.Append(BuildForceInstallPolicyValue(kExtensionId,
                                                 GetUpdateUrl().spec().c_str()));
   PolicyMap policies;
@@ -805,7 +805,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest,
 }
 #endif
 
-// See http://crbug.com/103371 and http://crbug.com/120640.
+// See http://crbug.com/40111471 and http://crbug.com/40765075.
 #if defined(ADDRESS_SANITIZER) || BUILDFLAG(IS_WIN)
 #define MAYBE_PolicyOverridesUserInstall DISABLED_PolicyOverridesUserInstall
 #else
@@ -852,7 +852,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementTest,
   EXPECT_TRUE(registrar->IsExtensionEnabled(kExtensionId));
 
   // Setup the force install policy. It should override the location.
-  base::Value::List forcelist;
+  base::ListValue forcelist;
   forcelist.Append(BuildForceInstallPolicyValue(kExtensionId,
                                                 GetUpdateUrl().spec().c_str()));
   PolicyMap policies;

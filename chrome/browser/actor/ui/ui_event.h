@@ -9,8 +9,9 @@
 #include <variant>
 
 #include "chrome/browser/actor/actor_task.h"
-#include "chrome/browser/actor/shared_types.h"
-#include "chrome/common/actor/task_id.h"
+#include "chrome/common/actor.mojom-forward.h"
+#include "chrome/common/glic_enums.mojom.h"
+#include "components/actor/core/task_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "ui/gfx/geometry/point.h"
 
@@ -18,11 +19,18 @@ namespace actor::ui {
 
 // The source of a target on a page.
 enum class TargetSource {
-  kUnresolvableInApc = 0,  // The ToolRequest DomTarget couldn't be resolved
-                           // from the AnnotatedPageContent.
-  kToolRequest = 1,        // The target came directly from the ToolRequest.
-  kDerivedFromApc = 2,     // The target was derived from AnnotatedPageContent.
-  kMaxValue = kDerivedFromApc,
+  // The ToolRequest DomTarget couldn't be resolved from the
+  // AnnotatedPageContent.
+  kUnresolvableInApc = 0,
+  // The target came directly from the ToolRequest.
+  kToolRequest = 1,
+  // The target was derived from AnnotatedPageContent.
+  kDerivedFromApc = 2,
+  // The target couldn't be resolved from the renderer.
+  kUnresolvableFromRenderer = 3,
+  // The target came from the renderer validation step.
+  kRendererResolved = 4,
+  kMaxValue = kRendererResolved,
 };
 
 // STATUS: Dispatched when ActorTask state changes from Created to Acting.
@@ -42,11 +50,15 @@ struct StopTask {
   ActorTask::State final_state;
   std::string title;
   tabs::TabInterface::Handle last_acted_on_tab_handle;
+  ActorTask::TaskDuration duration;
+  glic::mojom::FeatureMode feature_mode;
 
   StopTask(actor::TaskId,
            ActorTask::State,
            const std::string& title,
-           tabs::TabInterface::Handle);
+           tabs::TabInterface::Handle,
+           ActorTask::TaskDuration,
+           glic::mojom::FeatureMode = glic::mojom::FeatureMode::kUnspecified);
   StopTask(const StopTask&);
   ~StopTask();
 };
@@ -96,10 +108,12 @@ struct MouseMove {
 // STATUS: Dispatched pre-tool invocation.
 struct MouseClick {
   tabs::TabInterface::Handle tab_handle;
-  MouseClickType click_type;
-  MouseClickCount click_count;
+  actor::mojom::ClickType click_type;
+  actor::mojom::ClickCount click_count;
 
-  MouseClick(tabs::TabInterface::Handle, MouseClickType, MouseClickCount);
+  MouseClick(tabs::TabInterface::Handle,
+             actor::mojom::ClickType,
+             actor::mojom::ClickCount);
   MouseClick(const MouseClick&);
   ~MouseClick();
 };

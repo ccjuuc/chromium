@@ -11,7 +11,6 @@
 #include "base/time/time.h"
 #include "cc/cc_export.h"
 #include "cc/metrics/scroll_jank_v4_frame.h"
-#include "cc/metrics/scroll_jank_v4_frame_stage.h"
 #include "cc/metrics/scroll_jank_v4_result.h"
 
 namespace cc {
@@ -70,7 +69,7 @@ class CC_EXPORT ScrollJankV4Decider {
   //
   // `args2.frame_time` must be strictly greater than `args1.frame_time`.
   ScrollJankV4Result DecideJankForFrameWithRealScrollUpdates(
-      const ScrollJankV4FrameStage::ScrollUpdates& updates,
+      const ScrollJankV4Frame::Stage::ScrollUpdates& updates,
       const ScrollJankV4Frame::ScrollDamage& damage,
       const ScrollJankV4Frame::BeginFrameArgsForScrollJank& args);
 
@@ -80,39 +79,46 @@ class CC_EXPORT ScrollJankV4Decider {
   // This method behaves similarly to
   // `DecideJankForFrameWithRealScrollUpdates()` with one additional argument:
   //
-  //   * `future_real_frame_is_fast_scroll_or_sufficiently_fast_fling`: Whether
-  //     the earliest future real frame is a fast scroll or a sufficiently fast
-  //     scroll (i.e.
-  //     `future_real_frame_is_fast_scroll_or_sufficiently_fast_fling ==
-  //     (IsFastScroll(future_real) || IsSufficientlyFastFling(future_real))`).
-  //     False if there are no real frames between this synthetic frame and the
-  //     end of the current scroll.
+  //   * `future_real_updates`: The real scroll updates of the earliest future
+  //     real frame in the scroll. `nullptr` if there are no real frames between
+  //     this synthetic frame and the end of the current scroll.
   //
-  // Note: The method signature (specifically the
-  // `future_real_frame_is_fast_scroll_or_sufficiently_fast_fling` argument)
-  // might seem awkward because, in order to decide whether a synthetic frame is
-  // janky, the decider needs information about the speed of a future real
-  // frame. `ScrollJankV4DecisionQueue` takes care of this "look-ahead"
-  // dependency and presents a simpler callback-based API.
+  // Note: The method signature (specifically the `future_real_updates`
+  // argument) might seem awkward because, in order to decide whether a
+  // synthetic frame is janky, the decider needs information about the speed of
+  // a future real frame. `ScrollJankV4DecisionQueue` takes care of this
+  // "look-ahead" dependency and presents a simpler callback-based API.
   ScrollJankV4Result DecideJankForFrameWithSyntheticScrollUpdatesOnly(
-      const ScrollJankV4FrameStage::ScrollUpdates& updates,
+      const ScrollJankV4Frame::Stage::ScrollUpdates& updates,
       const ScrollJankV4Frame::ScrollDamage& damage,
       const ScrollJankV4Frame::BeginFrameArgsForScrollJank& args,
-      bool future_real_frame_is_fast_scroll_or_sufficiently_fast_fling);
+      const ScrollJankV4Frame::Stage::ScrollUpdates::Real* future_real_updates);
 
   void OnScrollStarted();
   void OnScrollEnded();
 
   static bool IsValidFrame(
-      const ScrollJankV4FrameStage::ScrollUpdates& updates,
+      const ScrollJankV4Frame::Stage::ScrollUpdates& updates,
       const ScrollJankV4Frame::ScrollDamage& damage,
       const ScrollJankV4Frame::BeginFrameArgsForScrollJank& args);
-  static bool IsFastScroll(
-      const ScrollJankV4FrameStage::ScrollUpdates::Real& real_updates);
-  static bool IsSufficientlyFastFling(
-      const ScrollJankV4FrameStage::ScrollUpdates::Real& real_updates);
 
  private:
+  // Classification of the velocity of a
+  // `ScrollJankV4Frame::Stage::ScrollUpdates::Real` scroll update, based on
+  // `ScrollJankV4Frame::Stage::ScrollUpdates::Real::total_raw_delta_pixels`.
+  enum class RealScrollVelocityType {
+    // Between `-features::kScrollJankV4MetricFastScrollContinuityThreshold` and
+    // `features::kScrollJankV4MetricFastScrollContinuityThreshold` (both
+    // exclusive).
+    kSlow,
+    // Greater than or equal to
+    // `features::kScrollJankV4MetricFastScrollContinuityThreshold`.
+    kFastPositive,
+    // Less than or equal to
+    // `-features::kScrollJankV4MetricFastScrollContinuityThreshold`.
+    kFastNegative,
+  };
+
   // Information about the previous frame, for which the decider has most
   // recently decided whether it's janky or not.
   struct PreviousFrameData {
@@ -120,17 +126,12 @@ class CC_EXPORT ScrollJankV4Decider {
     // fling).
     bool has_inertial_input;
 
-    // Whether the most recent real frame (possibly the previous frame) was a
-    // fast scroll.
+    // The scroll velocity of the most recent real frame (possibly the previous
+    // frame).
     //
-    // True if the absolute total raw (unpredicted) delta of all
-    // real inputs in the most recent real frame was at least
-    // `features::kScrollJankV4MetricFastScrollContinuityThreshold`. See
-    // `IsFastScroll()`.
-    //
-    // False if there have been no real frames since the start of the scroll
-    // (which is very unlikely).
-    bool is_most_recent_real_frame_fast_scroll;
+    // `RealScrollVelocityType::kSlow` if there have been no real frames since
+    // the start of the scroll (which is very unlikely).
+    RealScrollVelocityType most_recent_real_frame_velocity;
 
     // When the last real input included (coalesced) in the previous frame was
     // generated by the hardware.
@@ -251,25 +252,34 @@ class CC_EXPORT ScrollJankV4Decider {
     std::optional<base::TimeDelta> running_delivery_cutoff;
   };
 
+  static RealScrollVelocityType GetScrollVelocity(
+      const ScrollJankV4Frame::Stage::ScrollUpdates::Real& real_updates);
+  static bool IsSufficientlyFastFling(
+      const ScrollJankV4Frame::Stage::ScrollUpdates::Real& real_updates);
+  static bool IsInFastScroll(RealScrollVelocityType velocity1,
+                             RealScrollVelocityType velocity2);
+
   ScrollJankV4Result DecideJankForFrameWithScrollUpdates(
-      const ScrollJankV4FrameStage::ScrollUpdates& updates,
+      const ScrollJankV4Frame::Stage::ScrollUpdates& updates,
       const ScrollJankV4Frame::ScrollDamage& damage,
       const ScrollJankV4Frame::BeginFrameArgsForScrollJank& args,
-      bool treat_as_fast_scroll);
+      RealScrollVelocityType treat_as_velocity,
+      bool treat_as_sufficiently_fast_fling);
 
   JankReasonArray<int> CalculateMissedVsyncsPerReason(
       int vsyncs_since_previous_frame,
       std::optional<base::TimeTicks> earliest_input_generation_ts,
-      const ScrollJankV4FrameStage::ScrollUpdates& updates,
+      const ScrollJankV4Frame::Stage::ScrollUpdates& updates,
       const ScrollJankV4Frame::ScrollDamage& damage,
       const ScrollJankV4Frame::BeginFrameArgsForScrollJank& args,
-      bool treat_as_fast_scroll,
+      RealScrollVelocityType treat_as_velocity,
+      bool treat_as_sufficiently_fast_fling,
       ScrollJankV4Result& result) const;
 
   std::optional<base::TimeDelta> CalculateRunningDeliveryCutoff(
       int vsyncs_since_previous_frame,
       bool is_janky,
-      const ScrollJankV4FrameStage::ScrollUpdates& updates,
+      const ScrollJankV4Frame::Stage::ScrollUpdates& updates,
       const ScrollJankV4Frame::ScrollDamage& damage,
       const ScrollJankV4Frame::BeginFrameArgsForScrollJank& args,
       ScrollJankV4Result& result) const;
@@ -287,7 +297,7 @@ class CC_EXPORT ScrollJankV4Decider {
   // presented real frame (similarly to
   // `PreviousFrameData::last_input_generation_ts`).
   ScrollJankV4Result::FirstScrollUpdate GetFirstScrollUpdate(
-      const ScrollJankV4FrameStage::ScrollUpdates& updates) const;
+      const ScrollJankV4Frame::Stage::ScrollUpdates& updates) const;
 
   // Information about the previous frame, for which the decider has most
   // recently decided whether it's janky or not.

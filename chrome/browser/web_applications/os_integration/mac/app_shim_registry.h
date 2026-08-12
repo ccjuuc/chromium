@@ -14,6 +14,7 @@
 #include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
 #include "base/values.h"
 #include "chrome/services/mac_notifications/public/mojom/mac_notifications.mojom.h"
@@ -26,11 +27,18 @@ class PrefService;
 class PrefRegistrySimple;
 
 // This class is used to store information about which app shims have been
-// installed for which profiles in local storage. This is used to:
+// installed for which profiles in local storage. This is needed to reason
+// about the state of installed PWAs in all profiles without loading those
+// profiles into memory. For this purpose, `AppShimRegistry` stores the needed
+// information in Chrome's "Local State" (global preferences).
+// This is used to:
 //  - Open the last active profile when an app shim is launched.
 //  - Populate the profile switcher menu in the app with only those profile
 //    for which the app is installed.
 //  - Only delete the app shim when it has been uninstalled for all profiles.
+//  - Store what file and protocol handlers are enabled for a web app in each
+//    profile it is installed in (to make sure all file and protocol handlers
+//    for the app are accounted for when updating the App Shim).
 // All base::FilePath arguments to functions are expected to be full profile
 // paths (e.g, the result of calling Profile::GetPath).
 //
@@ -60,6 +68,19 @@ class AppShimRegistry {
     kSuccess = 0,
     kEncryptionFailed = 1,
     kMaxValue = kEncryptionFailed,
+  };
+
+  // The result of verifying the code directory hash for an app.
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class VerifyCdHashResult {
+    kSuccess = 0,
+    kNoAppInfo = 1,
+    kNoCdHash = 2,
+    kDecodeFailure = 3,
+    kUnexpectedSize = 4,
+    kVerificationFailed = 5,
+    kMaxValue = kVerificationFailed,
   };
 
   AppShimRegistry(const AppShimRegistry& other) = delete;
@@ -178,7 +199,7 @@ class AppShimRegistry {
       const base::FilePath& user_data_dir);
 
   // For logging and debug purposes.
-  base::Value::Dict AsDebugDict() const;
+  base::DictValue AsDebugDict() const;
 
  protected:
   friend class base::NoDestructor<AppShimRegistry>;
@@ -230,10 +251,10 @@ class AppShimRegistry {
  private:
   void DoSaveCdHashForApp(const std::string& app_id,
                           std::vector<uint8_t> cd_hash,
-                          os_crypt_async::Encryptor encryptor);
+                          scoped_refptr<os_crypt_async::Encryptor> encryptor);
   bool DoVerifyCdHashForApp(const std::string& app_id,
                             std::vector<uint8_t> cd_hash,
-                            os_crypt_async::Encryptor encryptor);
+                            scoped_refptr<os_crypt_async::Encryptor> encryptor);
 
   // An in-memory cache of the HMAC key.
   std::optional<HmacKey> hmac_key_;

@@ -8,14 +8,16 @@
 
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/task/sequenced_task_runner.h"
+#include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/content_settings/generated_javascript_optimizer_pref.h"
 #include "chrome/browser/engagement/site_engagement_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/site_protection/site_familiarity_heuristic_name.h"
 #include "chrome/browser/site_protection/site_familiarity_utils.h"
 #include "chrome/browser/site_protection/site_protection_metrics.h"
+#include "components/content_settings/browser/ui/javascript_optimizer_setting.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/safe_browsing/core/browser/db/database_manager.h"
@@ -130,14 +132,17 @@ void SiteProtectionMetricsObserver::PrimaryPageChanged(content::Page& page) {
         SiteFamiliarityHeuristicName::kSiteEngagementScoreExists);
   }
 
-  url::Origin last_committed_origin = metrics_data->last_committed_origin;
-  history_service_->GetLastVisitToOrigin(
-      last_committed_origin, base::Time(), base::Time::Now() - base::Hours(4),
-      history::VisitQuery404sPolicy::kInclude404s,
-      base::BindOnce(
-          &SiteProtectionMetricsObserver::OnGotVisitToOriginOlderThan4HoursAgo,
-          weak_factory_.GetWeakPtr(), std::move(metrics_data)),
-      &task_tracker_);
+  // Delay the history service call to avoid impacting side panel opening
+  // animation performance.
+  base::TimeDelta delay;
+#if !BUILDFLAG(IS_ANDROID)
+  delay = base::Milliseconds(450);
+#endif
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(&SiteProtectionMetricsObserver::FetchHistoryData,
+                     weak_factory_.GetWeakPtr(), std::move(metrics_data)),
+      delay);
 }
 
 void SiteProtectionMetricsObserver::DidFinishNavigation(
@@ -344,6 +349,22 @@ void SiteProtectionMetricsObserver::OnKnowIfSiteWasLikelyPreviouslyFamiliar(
   }
 
   LogMetrics(std::move(metrics_data));
+}
+
+void SiteProtectionMetricsObserver::FetchHistoryData(
+    std::unique_ptr<MetricsData> metrics_data) {
+  if (!history_service_) {
+    return;
+  }
+
+  url::Origin last_committed_origin = metrics_data->last_committed_origin;
+  history_service_->GetLastVisitToOrigin(
+      last_committed_origin, base::Time(), base::Time::Now() - base::Hours(4),
+      history::VisitQuery404sPolicy::kInclude404s,
+      base::BindOnce(
+          &SiteProtectionMetricsObserver::OnGotVisitToOriginOlderThan4HoursAgo,
+          weak_factory_.GetWeakPtr(), std::move(metrics_data)),
+      &task_tracker_);
 }
 
 void SiteProtectionMetricsObserver::LogMetrics(

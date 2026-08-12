@@ -7,6 +7,7 @@
 #include "base/check.h"
 #include "components/translate/core/browser/translate_driver.h"
 #include "components/translate/core/browser/translate_metrics_logger.h"
+#include "components/translate/core/common/translate_language_matcher.h"
 
 namespace translate {
 
@@ -28,7 +29,7 @@ LanguageState::~LanguageState() = default;
 void LanguageState::DidNavigate(bool is_same_document_navigation,
                                 bool is_main_frame,
                                 bool reload,
-                                const std::string& href_translate,
+                                std::string_view href_translate,
                                 bool navigation_from_google) {
   is_same_document_navigation_ = is_same_document_navigation;
   if (is_same_document_navigation_ || !is_main_frame)
@@ -49,6 +50,7 @@ void LanguageState::DidNavigate(bool is_same_document_navigation,
   SetIsPageTranslated(false);
 
   translation_pending_ = false;
+  ClearPendingTranslationLanguages();
   translation_error_ = false;
   translation_declined_ = false;
   translation_type_ = TranslationType::kUninitialized;
@@ -56,10 +58,11 @@ void LanguageState::DidNavigate(bool is_same_document_navigation,
   navigation_from_google_ = navigation_from_google;
 
   SetTranslateEnabled(false);
+  pdf_translatability_status_ = PdfTranslatabilityStatus::kNotChecked;
 }
 
 void LanguageState::LanguageDetermined(
-    const std::string& page_language,
+    std::string_view page_language,
     bool page_level_translation_criteria_met) {
   if (is_same_document_navigation_ && !source_lang_.empty()) {
     // Same-document navigation, we don't expect our states to change.
@@ -84,12 +87,12 @@ bool LanguageState::InTranslateNavigation() const {
          translate_driver_->IsLinkNavigation();
 }
 
-void LanguageState::SetSourceLanguage(const std::string& language) {
+void LanguageState::SetSourceLanguage(std::string_view language) {
   source_lang_ = language;
   SetIsPageTranslated(current_lang_ != source_lang_);
 }
 
-void LanguageState::SetCurrentLanguage(const std::string& language) {
+void LanguageState::SetCurrentLanguage(std::string_view language) {
   current_lang_ = language;
   SetIsPageTranslated(current_lang_ != source_lang_);
 }
@@ -123,6 +126,18 @@ void LanguageState::SetIsPageTranslated(bool value) {
   // With the translation done, the translate feature must be enabled.
   if (is_page_translated_)
     SetTranslateEnabled(true);
+}
+
+void LanguageState::SetPredefinedTargetLanguage(
+    const base::i18n::LanguageTag& language,
+    bool should_auto_translate) {
+  predefined_target_language_ = std::string(
+      GetTranslateLanguageMatcher().MatchOrDefault(language).tag_string());
+  if (should_auto_translate) {
+    should_auto_translate_to_predefined_target_language_ = language;
+  } else {
+    should_auto_translate_to_predefined_target_language_ = std::nullopt;
+  }
 }
 
 }  // namespace translate

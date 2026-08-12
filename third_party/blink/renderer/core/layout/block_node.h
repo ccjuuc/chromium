@@ -85,7 +85,8 @@ class CORE_EXPORT BlockNode : public LayoutInputNode {
   // To be called when we're done repeating a node, when at the last fragment.
   void FinishRepeatableRoot() const;
 
-  LayoutInputNode NextSibling() const;
+  BlockNode NextBlockSibling() const;
+  LayoutInputNode NextSibling() const { return NextBlockSibling(); }
 
   // Computes the value of min-content and max-content for this node's border
   // box.
@@ -131,13 +132,16 @@ class CORE_EXPORT BlockNode : public LayoutInputNode {
       InlineNode* first_child_out = nullptr) const;
 
   bool IsInlineLevel() const;
-  bool IsAtomicInlineLevel() const;
   bool IsInTopOrViewTransitionLayer() const;
+
+  bool IsMulticolContainer() const { return box_->IsMulticolContainer(); }
 
   // Returns the aspect ratio of a replaced element.
   LogicalSize GetReplacedAspectRatio() const;
 
   bool MayContainAnchor() const { return box_->MayContainAnchor(); }
+
+  bool IsOverscrollAreaParent() const { return box_->IsOverscrollAreaParent(); }
 
   bool HasLeftOverflow() const { return box_->HasLeftOverflow(); }
   bool HasTopOverflow() const { return box_->HasTopOverflow(); }
@@ -158,14 +162,18 @@ class CORE_EXPORT BlockNode : public LayoutInputNode {
   //
   // https://quirks.spec.whatwg.org/#the-body-element-fills-the-html-element-quirk
   bool IsQuirkyAndFillsViewport() const {
-    if (!GetDocument().InQuirksMode())
+    if (!GetDocument().InQuirksMode()) {
       return false;
-    if (IsOutOfFlowPositioned())
+    }
+    if (IsOutOfFlowPositioned()) {
       return false;
-    if (IsFloating())
+    }
+    if (IsFloating()) {
       return false;
-    if (IsAtomicInlineLevel())
+    }
+    if (IsInlineLevel()) {
       return false;
+    }
     return (IsDocumentElement() || IsBody());
   }
 

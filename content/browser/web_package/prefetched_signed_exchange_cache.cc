@@ -99,9 +99,7 @@ class RedirectResponseURLLoader : public network::mojom::URLLoader {
  private:
   // network::mojom::URLLoader overrides:
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_headers,
+      network::HttpRequestHeadersUpdateParams headers_update_params,
       const std::optional<GURL>& new_url) override {
     NOTREACHED();
   }
@@ -552,6 +550,10 @@ void PrefetchedSignedExchangeCache::AddObserverForTesting(
 void PrefetchedSignedExchangeCache::RemoveObserverForTesting(
     const TestObserver* observer) {
   test_observers_.RemoveObserver(observer);
+}
+
+void PrefetchedSignedExchangeCache::AddEntryForTesting(const GURL& url) {
+  exchanges_[url] = nullptr;
 }
 
 }  // namespace content

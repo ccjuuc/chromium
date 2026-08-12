@@ -20,7 +20,6 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.components.payments.R;
 import org.chromium.components.payments.ui.ItemDividerBase;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.SimpleRecyclerViewAdapter;
@@ -39,7 +38,7 @@ import org.chromium.ui.widget.TextViewWithClickableSpans;
      */
     public static View createItemView(ViewGroup parent) {
         return LayoutInflater.from(parent.getContext())
-                .inflate(R.layout.payments_item, parent, false);
+                .inflate(R.layout.payments_instrument, parent, false);
     }
 
     /* package */ final RelativeLayout mContentView;

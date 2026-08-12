@@ -45,11 +45,7 @@ class SingleFieldFillRouterTest : public testing::Test {
                                   &promo_code_manager()) {
     prefs_ = test::PrefServiceForTesting();
 
-    // Mock such that we don't trigger the cleanup.
-    prefs_->SetInteger(prefs::kAutocompleteLastVersionRetentionPolicy,
-                       version_info::GetMajorVersionNumberAsInt());
     web_data_service_ = base::MakeRefCounted<MockAutofillWebDataService>();
-    history_manager().Init(web_data_service_, prefs_.get(), false);
 
     FormData form;
     test_api(form).Append(
@@ -81,8 +77,7 @@ class SingleFieldFillRouterTest : public testing::Test {
   std::unique_ptr<PrefService> prefs_;
   MockAutocompleteHistoryManager autocomplete_history_manager_;
   MockIbanManager iban_manager_;
-  MockMerchantPromoCodeManager merchant_promo_code_manager_{
-      &personal_data_manager().payments_data_manager()};
+  MockMerchantPromoCodeManager merchant_promo_code_manager_;
   SingleFieldFillRouter single_field_fill_router_;
   std::unique_ptr<FormStructure> form_structure_;
 };
@@ -113,11 +108,10 @@ TEST_F(SingleFieldFillRouterTest, RouteToAllFillers_OnWillSubmitForm) {
                       MERCHANT_PROMO_CODE});
 #endif
 
-  EXPECT_CALL(
-      history_manager(),
-      OnWillSubmitFormWithFields(SizeIs(number_of_fields_for_testing), true));
-  router().OnWillSubmitForm(form_data, &form_structure,
-                            /*is_autocomplete_enabled=*/true);
+  EXPECT_CALL(history_manager(),
+              OnWillSubmitFormWithFields(SizeIs(form_data.fields().size()),
+                                         &form_structure));
+  router().OnWillSubmitForm(form_data, &form_structure);
 }
 
 // Ensure that the router routes to fillers for this CancelPendingQueries call.
@@ -130,17 +124,26 @@ TEST_F(SingleFieldFillRouterTest, RouteToAllFillers_CancelPendingQueries) {
 // OnRemoveCurrentSingleFieldSuggestion call.
 TEST_F(SingleFieldFillRouterTest,
        RouteToAutocompleteHistoryManager_OnRemoveCurrentSingleFieldSuggestion) {
-  EXPECT_CALL(history_manager(), OnRemoveCurrentSingleFieldSuggestion);
+  const std::u16string field_name = u"Field Name";
+  const std::u16string field_label = u"Field Label";
+  const std::u16string field_value = u"Value";
+  field().set_label(field_label);
+
+  EXPECT_CALL(history_manager(), OnRemoveCurrentSingleFieldSuggestion(
+                                     field_name, field_label, field_value,
+                                     SuggestionType::kAutocompleteEntry));
 
   router().OnRemoveCurrentSingleFieldSuggestion(
-      /*field_name=*/u"Field Name", /*value=*/u"Value",
-      SuggestionType::kAutocompleteEntry);
+      field_name, field_label, field_value, SuggestionType::kAutocompleteEntry);
 }
 
 // Ensure that the router routes to AutocompleteHistoryManager for this
 // OnSingleFieldSuggestionSelected call.
 TEST_F(SingleFieldFillRouterTest,
        RouteToAutocompleteHistoryManager_OnSingleFieldSuggestionSelected) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      features::kAutofillLabelSensitiveAutocomplete);
   EXPECT_CALL(history_manager(), OnSingleFieldSuggestionSelected);
 
   Suggestion suggestion(u"Value", SuggestionType::kAutocompleteEntry);

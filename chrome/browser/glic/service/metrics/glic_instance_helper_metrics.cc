@@ -6,6 +6,7 @@
 
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
+#include "base/strings/strcat.h"
 
 namespace glic {
 
@@ -35,11 +36,12 @@ void GlicInstanceHelperMetrics::OnPinnedByInstance(
   pinned_by_instances_.insert(instance_id);
 }
 
-void GlicInstanceHelperMetrics::SetIsDaisyChained() {
+void GlicInstanceHelperMetrics::SetIsDaisyChained(DaisyChainSource source) {
   if (is_daisy_chained_) {
     return;
   }
   is_daisy_chained_ = true;
+  daisy_chain_source_ = source;
   metric_finalized_ = false;
   current_metric_action_ = DaisyChainFirstAction::kNoAction;
   flush_timer_.Stop();
@@ -51,9 +53,19 @@ void GlicInstanceHelperMetrics::OnDaisyChainAction(
     return;
   }
 
+  // kNoAction should not overwrite any other action.
+  if (action == DaisyChainFirstAction::kNoAction &&
+      current_metric_action_ != DaisyChainFirstAction::kNoAction) {
+    return;
+  }
+
   current_metric_action_ = action;
 
-  if (action == DaisyChainFirstAction::kSidePanelClosed) {
+  // Switching tabs or explicitly closing the side panel can be ambiguous, e.g.
+  // user may cycle through tabs or quickly re-open the panel to finish
+  // something. We start a timer to wait for a more definitive action.
+  if (action == DaisyChainFirstAction::kTabSwitched ||
+      action == DaisyChainFirstAction::kSidePanelClosed) {
     // Ambiguous action. Start/restart timer.
     flush_timer_.Start(FROM_HERE, base::Seconds(5), this,
                        &GlicInstanceHelperMetrics::FlushMetric);
@@ -67,8 +79,11 @@ void GlicInstanceHelperMetrics::FlushMetric() {
   if (metric_finalized_) {
     return;
   }
-  base::UmaHistogramEnumeration("Glic.Instance.FirstActionInDaisyChainPanel",
-                                current_metric_action_);
+  std::string source_str = GetDaisyChainSourceString(daisy_chain_source_);
+
+  base::UmaHistogramEnumeration(
+      base::StrCat({"Glic.Instance.AutoOpenedPanel.FirstAction.", source_str}),
+      current_metric_action_);
   metric_finalized_ = true;
   flush_timer_.Stop();
 }

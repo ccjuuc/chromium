@@ -19,6 +19,7 @@ import androidx.test.filters.SmallTest;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.junit.After;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -27,13 +28,16 @@ import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
 import org.chromium.base.test.util.DoNotBatch;
+import org.chromium.build.BuildConfig;
 import org.chromium.net.ConnectionCloseSource;
 import org.chromium.net.CronetEngine;
 import org.chromium.net.CronetLoggerTestRule;
 import org.chromium.net.CronetTestFramework.CronetImplementation;
 import org.chromium.net.CronetTestRule;
+import org.chromium.net.CronetTestRule.Flags;
 import org.chromium.net.CronetTestRule.IgnoreFor;
 import org.chromium.net.CronetTestRule.RequiresMinAndroidApi;
+import org.chromium.net.CronetTestRule.StringFlag;
 import org.chromium.net.ExperimentalCronetEngine;
 import org.chromium.net.Http2TestServer;
 import org.chromium.net.NativeTestServer;
@@ -241,6 +245,17 @@ public final class CronetLoggerTest {
     @Test
     @SmallTest
     public void testCronetEngineBuilderInitializedLoggedFromApi() {
+        // This test is disabled in AOSP for two reasons:
+        //
+        // 1. CronetEngine.Builder(..) is not part of the exposed API surface in AOSP.
+        //    The HttpEngine creation path explicitly uses NativeCronetEngineBuilderImpl instead:
+        //    http://ac/external/cronet/android/java/src/android/net/http/HttpEngine.java?l=149-150
+        //
+        // 2. CronetEngine.Builder(...) prioritizes HttpEngine over Cronet because the
+        //    HttpEngine version is always more recent. This causes the test to fail because
+        //    HttpEngine does not expose the required testing-specific APIs.
+        //    Ref: http://b/495755401
+        Assume.assumeFalse(BuildConfig.CRONET_FOR_AOSP_BUILD);
         assertThat(mTestLogger.callsToLogCronetEngineBuilderInitializedInfo()).isEqualTo(0);
         // The test framework bypasses the logic in CronetEngine.Builder, so we have to call it
         // directly. We want to use the test framework context though for things like
@@ -474,6 +489,7 @@ public final class CronetLoggerTest {
         assertThat(trafficInfo.getTimeToEstablishSSLMicros()).isGreaterThan(0);
         assertThat(trafficInfo.getTimeToConnectMicros()).isGreaterThan(0);
         assertThat(trafficInfo.getTimeToSendFirstByteMicros()).isGreaterThan(0);
+        assertThat(trafficInfo.isProxied()).isFalse();
 
         assertThat(mTestLogger.callsToLogCronetEngineCreation()).isEqualTo(1);
         assertThat(mTestLogger.callsToLogCronetTrafficInfo()).isEqualTo(1);
@@ -617,6 +633,11 @@ public final class CronetLoggerTest {
         assertThat(trafficInfo.getNetworkInternalErrorCode()).isEqualTo(0);
         assertThat(trafficInfo.getFailureReason())
                 .isEqualTo(CronetTrafficInfo.RequestFailureReason.UNKNOWN);
+        // The request failed before we received the response headers from the destination. In this
+        // scenario we don't know whether //net would have proxied the request. We report null to
+        // differentiate against the scenario where we received response headers but the request
+        // failed (in which case we definitely do know whether the request has been proxied or not).
+        assertThat(trafficInfo.isProxied()).isNull();
         assertThat(mTestLogger.callsToLogCronetEngineCreation()).isEqualTo(1);
         assertThat(mTestLogger.callsToLogCronetTrafficInfo()).isEqualTo(1);
     }
@@ -698,6 +719,10 @@ public final class CronetLoggerTest {
             assertThat(trafficInfo.getTimeToEstablishSSLMicros()).isGreaterThan(0);
             assertThat(trafficInfo.getTimeToConnectMicros()).isGreaterThan(0);
             assertThat(trafficInfo.getTimeToSendFirstByteMicros()).isGreaterThan(0);
+            switch (mTestRule.implementationUnderTest()) {
+                case STATICALLY_LINKED -> assertThat(trafficInfo.isProxied()).isFalse();
+                default -> throw new AssertionError("Unexpected implementation");
+            }
             assertThat(mTestLogger.callsToLogCronetEngineCreation()).isEqualTo(1);
             assertThat(mTestLogger.callsToLogCronetTrafficInfo()).isEqualTo(1);
         } finally {
@@ -738,5 +763,329 @@ public final class CronetLoggerTest {
         headersList.add(new AbstractMap.SimpleImmutableEntry<>(null, "")); // 33 + 0 + 0 = 33
 
         assertThat(CronetRequestCommon.estimateHeadersSizeInBytes(headersList)).isEqualTo(33);
+    }
+
+    @Test
+    @SmallTest
+    @Flags(
+            stringFlags = {
+                @StringFlag(name = CronetLibraryLoader.CRONET_UMA_ALLOWLIST_FLAG, value = "*")
+            })
+    public void testCronetUmaLogging() throws Exception {
+        mTestRule.getTestFramework().startEngine();
+
+        mTestLogger.clearUmaSamples();
+
+        final String histogramName = "Test.Cronet.Uma";
+        final long expectedHash = 2937041049411630354L;
+        final int sampleValue1 = 42;
+        final int sampleValue2 = 43;
+        CronetUmaRecorder.triggerUmaHistogramForTesting(histogramName, sampleValue1);
+        CronetUmaRecorder.triggerUmaHistogramForTesting(histogramName, sampleValue2);
+
+        waitForUmaSamples(expectedHash, 2);
+
+        List<TestLogger.UmaSample> samples = getMatchingSamples(expectedHash);
+        assertThat(samples).hasSize(2);
+        assertThat(samples.get(0).value).isEqualTo(sampleValue1);
+        assertThat(samples.get(1).value).isEqualTo(sampleValue2);
+    }
+
+    @Test
+    @SmallTest
+    @Flags(
+            stringFlags = {
+                @StringFlag(name = CronetLibraryLoader.CRONET_UMA_ALLOWLIST_FLAG, value = "12345")
+            })
+    public void testCronetUmaLoggingFiltered() throws Exception {
+        mTestRule.getTestFramework().startEngine();
+
+        mTestLogger.clearUmaSamples();
+
+        final String histogramName = "Test.Cronet.Uma";
+        final long expectedHash = 2937041049411630354L;
+        final int sampleValue = 42;
+        CronetUmaRecorder.triggerUmaHistogramForTesting(histogramName, sampleValue);
+
+        List<TestLogger.UmaSample> samples = getMatchingSamples(expectedHash);
+        assertThat(samples).isEmpty();
+    }
+
+    @Test
+    @SmallTest
+    @Flags(
+            stringFlags = {
+                @StringFlag(
+                        name = CronetLibraryLoader.CRONET_UMA_ALLOWLIST_FLAG,
+                        value = "2937041049411630354")
+            })
+    public void testCronetUmaLoggingAllowed() throws Exception {
+        mTestRule.getTestFramework().startEngine();
+
+        mTestLogger.clearUmaSamples();
+
+        final String histogramName = "Test.Cronet.Uma";
+        final long expectedHash = 2937041049411630354L;
+        final int sampleValue = 42;
+        CronetUmaRecorder.triggerUmaHistogramForTesting(histogramName, sampleValue);
+
+        waitForUmaSamples(expectedHash, 1);
+
+        List<TestLogger.UmaSample> samples = getMatchingSamples(expectedHash);
+        assertThat(samples).hasSize(1);
+        assertThat(samples.get(0).value).isEqualTo(sampleValue);
+        assertThat(samples.get(0).source).isEqualTo(getExpectedSource());
+    }
+
+    @Test
+    @SmallTest
+    @Flags(
+            stringFlags = {
+                @StringFlag(name = CronetLibraryLoader.CRONET_UMA_ALLOWLIST_FLAG, value = "")
+            })
+    public void testCronetUmaLoggingDisabled() throws Exception {
+        mTestRule.getTestFramework().startEngine();
+
+        mTestLogger.clearUmaSamples();
+
+        final String histogramName = "Test.Cronet.Uma";
+        final long expectedHash = 2937041049411630354L;
+        final int sampleValue = 42;
+        CronetUmaRecorder.triggerUmaHistogramForTesting(histogramName, sampleValue);
+
+        List<TestLogger.UmaSample> samples = getMatchingSamples(expectedHash);
+        assertThat(samples).isEmpty();
+    }
+
+    @Test
+    @SmallTest
+    @Flags(
+            stringFlags = {
+                // Only allow Test.Cronet.Uma (2937041049411630354)
+                @StringFlag(
+                        name = CronetLibraryLoader.CRONET_UMA_ALLOWLIST_FLAG,
+                        value = "2937041049411630354")
+            })
+    public void testCronetUmaLoggingMixed() throws Exception {
+        mTestRule.getTestFramework().startEngine();
+
+        mTestLogger.clearUmaSamples();
+
+        final String allowedHistogram = "Test.Cronet.Uma";
+        final long allowedHash = 2937041049411630354L;
+
+        final String filteredHistogram = "Test.Cronet.Uma2";
+        final long filteredHash = 7019680913562261270L;
+
+        // Trigger both histograms.
+        CronetUmaRecorder.triggerUmaHistogramForTesting(allowedHistogram, 42);
+        CronetUmaRecorder.triggerUmaHistogramForTesting(filteredHistogram, 43);
+
+        waitForUmaSamples(allowedHash, 1);
+
+        // Verify that only the allowed histogram was logged.
+        List<TestLogger.UmaSample> allowedSamples = getMatchingSamples(allowedHash);
+        assertThat(allowedSamples).hasSize(1);
+        assertThat(allowedSamples.get(0).value).isEqualTo(42);
+        assertThat(allowedSamples.get(0).source).isEqualTo(getExpectedSource());
+
+        List<TestLogger.UmaSample> filteredSamples = getMatchingSamples(filteredHash);
+        assertThat(filteredSamples).isEmpty();
+    }
+
+    @Test
+    @SmallTest
+    @Flags(
+            stringFlags = {
+                @StringFlag(
+                        name = CronetLibraryLoader.CRONET_UMA_ALLOWLIST_FLAG,
+                        value = "2937041049411630354,8946698020320526722")
+            })
+    public void testCronetUmaLoggingMultipleAllowed() throws Exception {
+        mTestRule.getTestFramework().startEngine();
+
+        mTestLogger.clearUmaSamples();
+
+        final String allowedHistogram1 = "Test.Cronet.Uma";
+        final long allowedHash1 = 2937041049411630354L;
+
+        final String allowedHistogram2 = "Test.Cronet.Uma4";
+        final long allowedHash2 = 8946698020320526722L;
+
+        final String filteredHistogram = "Test.Cronet.Uma3";
+
+        // Trigger all histograms.
+        CronetUmaRecorder.triggerUmaHistogramForTesting(allowedHistogram1, 42);
+        CronetUmaRecorder.triggerUmaHistogramForTesting(allowedHistogram2, 43);
+        CronetUmaRecorder.triggerUmaHistogramForTesting(filteredHistogram, 44);
+
+        waitForUmaSamples(allowedHash1, 1);
+        waitForUmaSamples(allowedHash2, 1);
+
+        List<TestLogger.UmaSample> samples = mTestLogger.getUmaSamples();
+        assertThat(samples).hasSize(2);
+
+        // Verify that only the allowed histograms were logged.
+        List<TestLogger.UmaSample> allowedSamples1 = getMatchingSamples(allowedHash1);
+        assertThat(allowedSamples1).hasSize(1);
+        assertThat(allowedSamples1.get(0).value).isEqualTo(42);
+        assertThat(allowedSamples1.get(0).source).isEqualTo(getExpectedSource());
+
+        List<TestLogger.UmaSample> allowedSamples2 = getMatchingSamples(allowedHash2);
+        assertThat(allowedSamples2).hasSize(1);
+        assertThat(allowedSamples2.get(0).value).isEqualTo(43);
+        assertThat(allowedSamples2.get(0).source).isEqualTo(getExpectedSource());
+    }
+
+    @Test
+    @SmallTest
+    @Flags(
+            stringFlags = {
+                @StringFlag(
+                        name = CronetLibraryLoader.CRONET_UMA_ALLOWLIST_FLAG,
+                        value = "2937041049411630354:1.0,8946698020320526722:1.0")
+            })
+    public void testCronetUmaLoggingWithRate100() throws Exception {
+        mTestRule.getTestFramework().startEngine();
+
+        mTestLogger.clearUmaSamples();
+
+        final String allowedHistogram1 = "Test.Cronet.Uma";
+        final long allowedHash1 = 2937041049411630354L;
+
+        final String allowedHistogram2 = "Test.Cronet.Uma4";
+        final long allowedHash2 = 8946698020320526722L;
+
+        final String filteredHistogram = "Test.Cronet.Uma3";
+        final long filteredHash = 7019680913562261270L;
+
+        CronetUmaRecorder.triggerUmaHistogramForTesting(allowedHistogram1, 42);
+        CronetUmaRecorder.triggerUmaHistogramForTesting(allowedHistogram2, 43);
+        CronetUmaRecorder.triggerUmaHistogramForTesting(filteredHistogram, 44);
+
+        waitForUmaSamples(allowedHash1, 1);
+        waitForUmaSamples(allowedHash2, 1);
+
+        List<TestLogger.UmaSample> samples = mTestLogger.getUmaSamples();
+        assertThat(samples).hasSize(2);
+
+        List<TestLogger.UmaSample> allowedSamples1 = getMatchingSamples(allowedHash1);
+        assertThat(allowedSamples1).hasSize(1);
+        assertThat(allowedSamples1.get(0).value).isEqualTo(42);
+        assertThat(allowedSamples1.get(0).source).isEqualTo(getExpectedSource());
+
+        List<TestLogger.UmaSample> allowedSamples2 = getMatchingSamples(allowedHash2);
+        assertThat(allowedSamples2).hasSize(1);
+        assertThat(allowedSamples2.get(0).value).isEqualTo(43);
+        assertThat(allowedSamples2.get(0).source).isEqualTo(getExpectedSource());
+
+        List<TestLogger.UmaSample> filteredSamples = getMatchingSamples(filteredHash);
+        assertThat(filteredSamples).isEmpty();
+    }
+
+    @Test
+    @SmallTest
+    @Flags(
+            stringFlags = {
+                @StringFlag(
+                        name = CronetLibraryLoader.CRONET_UMA_ALLOWLIST_FLAG,
+                        value = "2937041049411630354:0.5")
+            })
+    public void testCronetUmaLoggingWithRateSubsampled() throws Exception {
+        mTestRule.getTestFramework().startEngine();
+
+        mTestLogger.clearUmaSamples();
+
+        final String histogramName = "Test.Cronet.Uma";
+        final long hash = 2937041049411630354L;
+
+        for (int i = 0; i < 500; i++) {
+            CronetUmaRecorder.triggerUmaHistogramForTesting(histogramName, i);
+        }
+
+        // Wait for lower bound (195) to arrive, then allow 1000ms for rate limiting
+        // to flush any remaining queued samples.
+        waitForUmaSamples(hash, 195);
+        Thread.sleep(1000);
+
+        List<TestLogger.UmaSample> samples = getMatchingSamples(hash);
+        // For a binomial distribution (n=500, p=0.5), μ = 250 and σ ≈ 11.18.
+        // To achieve a 99.9999% confidence interval (z ≈ 4.892, 1 in 1,000,000 failure rate):
+        // Margin = z * σ ≈ 54.69, giving bounds [195.31, 304.69].
+        // Rounding outward to integers guarantees > 99.9999% probability of falling in [195, 305].
+        assertThat(samples.size()).isAtLeast(195);
+        assertThat(samples.size()).isAtMost(305);
+    }
+
+    @Test
+    @SmallTest
+    @Flags(
+            stringFlags = {
+                @StringFlag(name = CronetLibraryLoader.CRONET_UMA_ALLOWLIST_FLAG, value = "*")
+            })
+    public void testCronetUmaLoggingFlushingBehavior() throws Exception {
+        mTestRule.getTestFramework().startEngine();
+
+        mTestLogger.clearUmaSamples();
+
+        final String histogramName = "Test.Cronet.Uma";
+        final long expectedHash = 2937041049411630354L;
+
+        // Send first batch of samples.
+        CronetUmaRecorder.triggerUmaHistogramForTesting(histogramName, 42);
+        CronetUmaRecorder.triggerUmaHistogramForTesting(histogramName, 43);
+
+        waitForUmaSamples(expectedHash, 2);
+
+        // Verify first batch is received.
+        List<TestLogger.UmaSample> samples = getMatchingSamples(expectedHash);
+        assertThat(samples).hasSize(2);
+        assertThat(samples.get(0).value).isEqualTo(42);
+        assertThat(samples.get(0).source).isEqualTo(getExpectedSource());
+        assertThat(samples.get(1).value).isEqualTo(43);
+        assertThat(samples.get(1).source).isEqualTo(getExpectedSource());
+
+        // Clear samples in logger to start fresh.
+        mTestLogger.clearUmaSamples();
+
+        // Wait another 1s and make sure nothing new is sent.
+        Thread.sleep(1000);
+        assertThat(getMatchingSamples(expectedHash)).isEmpty();
+
+        // Send second batch of samples.
+        CronetUmaRecorder.triggerUmaHistogramForTesting(histogramName, 44);
+        CronetUmaRecorder.triggerUmaHistogramForTesting(histogramName, 45);
+
+        waitForUmaSamples(expectedHash, 2);
+
+        // Verify second batch is received.
+        samples = getMatchingSamples(expectedHash);
+        assertThat(samples).hasSize(2);
+        assertThat(samples.get(0).value).isEqualTo(44);
+        assertThat(samples.get(0).source).isEqualTo(getExpectedSource());
+        assertThat(samples.get(1).value).isEqualTo(45);
+        assertThat(samples.get(1).source).isEqualTo(getExpectedSource());
+    }
+
+    private List<TestLogger.UmaSample> getMatchingSamples(long hash) {
+        List<TestLogger.UmaSample> matching = new ArrayList<>();
+        for (TestLogger.UmaSample sample : mTestLogger.getUmaSamples()) {
+            if (sample.hash == hash) {
+                matching.add(sample);
+            }
+        }
+        return matching;
+    }
+
+    private CronetSource getExpectedSource() {
+        return BuildConfig.CRONET_FOR_AOSP_BUILD
+                ? CronetSource.CRONET_SOURCE_PLATFORM
+                : CronetSource.CRONET_SOURCE_STATICALLY_LINKED;
+    }
+
+    private void waitForUmaSamples(long hash, int expectedCount) {
+        while (getMatchingSamples(hash).size() < expectedCount) {
+            mTestLogger.waitForLogCronetUmaHistogram();
+        }
     }
 }

@@ -73,6 +73,7 @@
 #include "third_party/blink/renderer/platform/webrtc/webrtc_video_utils.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/webrtc/api/audio_codecs/audio_format.h"
 #include "third_party/webrtc/api/video_codecs/sdp_video_format.h"
@@ -237,12 +238,13 @@ bool IsValidMimeType(const String& content_type,
   if (!parsed_content_type.IsValid())
     return false;
 
+  String mime_type = parsed_content_type.MimeType();
   // Valid ParsedContentType implies we have a mime type.
-  DCHECK(parsed_content_type.MimeType());
-  if (!parsed_content_type.MimeType().StartsWith(prefix) &&
-      (is_webrtc ||
-       !parsed_content_type.MimeType().StartsWith(kApplicationMimeTypePrefix)))
+  DCHECK(mime_type);
+  if (!mime_type.starts_with(prefix) &&
+      (is_webrtc || !mime_type.starts_with(kApplicationMimeTypePrefix))) {
     return false;
+  }
 
   // No requirement on parameters for RTP MIME types.
   if (is_webrtc)
@@ -256,7 +258,7 @@ bool IsValidMimeType(const String& content_type,
   if (parameters.ParameterCount() == 0)
     return true;
 
-  return EqualIgnoringASCIICase(parameters.begin()->name, kCodecsMimeTypeParam);
+  return EqualIgnoringAsciiCase(parameters.begin()->name, kCodecsMimeTypeParam);
 }
 
 bool IsValidMediaConfiguration(const MediaConfiguration* configuration) {
@@ -385,7 +387,7 @@ WebAudioConfiguration ToWebAudioConfiguration(
   DCHECK(parsed_content_type.IsValid());
   DCHECK(!parsed_content_type.GetParameters().HasDuplicatedNames());
 
-  web_configuration.mime_type = parsed_content_type.MimeType().LowerASCII();
+  web_configuration.mime_type = parsed_content_type.MimeType().ToAsciiLower();
   web_configuration.codec =
       parsed_content_type.ParameterValueForName(kCodecsMimeTypeParam);
 
@@ -412,7 +414,7 @@ WebVideoConfiguration ToWebVideoConfiguration(
   ParsedContentType parsed_content_type(configuration->contentType());
   DCHECK(parsed_content_type.IsValid());
   DCHECK(!parsed_content_type.GetParameters().HasDuplicatedNames());
-  web_configuration.mime_type = parsed_content_type.MimeType().LowerASCII();
+  web_configuration.mime_type = parsed_content_type.MimeType().ToAsciiLower();
   web_configuration.codec =
       parsed_content_type.ParameterValueForName(kCodecsMimeTypeParam);
 
@@ -464,15 +466,16 @@ webrtc::SdpAudioFormat ToSdpAudioFormat(
   // Convert audio_configuration to SdpAudioFormat.
   ParsedContentType parsed_content_type(configuration->contentType());
   DCHECK(parsed_content_type.IsValid());
-  const String codec_name =
+  const StringView codec_name =
       WebrtcCodecNameFromMimeType(parsed_content_type.MimeType(), "audio");
   // TODO(https://crbug.com/1187565): Deal with the special case where the clock
   // rate is not the same as the sample rate.
   const int clockrate_hz =
       configuration->hasSamplerate() ? configuration->samplerate() : 0;
-  const size_t channels = configuration->hasChannels()
-                              ? configuration->channels().ToUIntStrict()
-                              : 0;
+  const size_t channels =
+      configuration->hasChannels()
+          ? StringToUintStrict(configuration->channels()).value_or(0)
+          : 0;
   return {codec_name.Utf8(), clockrate_hz, channels};
 }
 
@@ -482,7 +485,7 @@ webrtc::SdpVideoFormat ToSdpVideoFormat(
   // Convert video_configuration to SdpVideoFormat.
   ParsedContentType parsed_content_type(configuration->contentType());
   DCHECK(parsed_content_type.IsValid());
-  const String codec_name =
+  const StringView codec_name =
       WebrtcCodecNameFromMimeType(parsed_content_type.MimeType(), "video");
   const std::map<std::string, std::string> parameters =
       ConvertToSdpVideoFormatParameters(parsed_content_type.GetParameters());
@@ -541,17 +544,19 @@ void ParseDynamicRangeConfigurations(
     *hdr_metadata = gfx::HdrMetadataType::kNone;
   }
 
+  auto primaries = color_space->primaries();
+  auto transfer = color_space->transfer();
+
   if (video_config->hasColorGamut()) {
     switch (video_config->colorGamut().AsEnum()) {
       case V8ColorGamut::Enum::kSRGB:
-        color_space->primaries = media::VideoColorSpace::PrimaryID::BT709;
+        primaries = media::VideoColorSpace::PrimaryID::BT709;
         break;
       case V8ColorGamut::Enum::kP3:
-        color_space->primaries =
-            media::VideoColorSpace::PrimaryID::SMPTEST431_2;
+        primaries = media::VideoColorSpace::PrimaryID::SMPTEST431_2;
         break;
       case V8ColorGamut::Enum::kRec2020:
-        color_space->primaries = media::VideoColorSpace::PrimaryID::BT2020;
+        primaries = media::VideoColorSpace::PrimaryID::BT2020;
         break;
     }
   }
@@ -559,17 +564,19 @@ void ParseDynamicRangeConfigurations(
   if (video_config->hasTransferFunction()) {
     switch (video_config->transferFunction().AsEnum()) {
       case V8TransferFunction::Enum::kSRGB:
-        color_space->transfer = media::VideoColorSpace::TransferID::BT709;
+        transfer = media::VideoColorSpace::TransferID::BT709;
         break;
       case V8TransferFunction::Enum::kPq:
-        color_space->transfer = media::VideoColorSpace::TransferID::SMPTEST2084;
+        transfer = media::VideoColorSpace::TransferID::SMPTEST2084;
         break;
       case V8TransferFunction::Enum::kHlg:
-        color_space->transfer =
-            media::VideoColorSpace::TransferID::ARIB_STD_B67;
+        transfer = media::VideoColorSpace::TransferID::ARIB_STD_B67;
         break;
     }
   }
+
+  *color_space = media::VideoColorSpace(
+      primaries, transfer, color_space->matrix(), color_space->range());
 }
 
 // Returns whether the audio codec associated with the audio configuration is
@@ -673,8 +680,8 @@ bool IsVideoConfigurationSupported(const String& mime_type,
   if (video_color_space.IsSpecified() &&
       codec_string_has_non_default_color_space) {
     // Per spec, report unsupported if color space information is mismatched.
-    if (video_color_space.transfer != result->color_space.transfer ||
-        video_color_space.primaries != result->color_space.primaries) {
+    if (video_color_space.transfer() != result->color_space.transfer() ||
+        video_color_space.primaries() != result->color_space.primaries()) {
       DLOG(ERROR) << "Mismatched color spaces between config and codec string.";
       return false;
     }
@@ -720,15 +727,15 @@ bool ParseContentType(const String& content_type,
     return false;
   }
 
-  *mime_type = parsed_content_type.MimeType().LowerASCII();
+  *mime_type = parsed_content_type.MimeType().ToAsciiLower();
   *codec = parsed_content_type.ParameterValueForName(kCodecsMimeTypeParam);
   return true;
 }
 
 #if BUILDFLAG(ENABLE_PLATFORM_ENCRYPTED_DOLBY_VISION)
 bool IsDolbyVisionVideoCodec(const String& video_codec_str) {
-  return video_codec_str.StartsWith("dvh1.", kTextCaseSensitive) ||
-         video_codec_str.StartsWith("dvhe.", kTextCaseSensitive);
+  return video_codec_str.starts_with("dvh1.") ||
+         video_codec_str.starts_with("dvhe.");
 }
 #endif  // BUILDFLAG(ENABLE_PLATFORM_ENCRYPTED_DOLBY_VISION)
 
@@ -835,6 +842,7 @@ ScriptPromise<MediaCapabilitiesDecodingInfo> MediaCapabilities::decodingInfo(
           media::VIDEO_CODEC_PROFILE_UNKNOWN;
       int video_pixels = 0;
       int frames_per_second = 0;
+      std::optional<gfx::Size> video_resolution;
       if (config->hasVideo()) {
         sdp_video_format =
             std::make_optional(ToSdpVideoFormat(config->video()));
@@ -845,8 +853,10 @@ ScriptPromise<MediaCapabilitiesDecodingInfo> MediaCapabilities::decodingInfo(
         // Additional information needed for lookup in WebrtcVideoPerfHistory.
         codec_profile =
             WebRtcVideoFormatToMediaVideoCodecProfile(*sdp_video_format);
-        video_pixels = config->video()->width() * config->video()->height();
         frames_per_second = base::ClampRound(config->video()->framerate());
+        video_resolution =
+            gfx::Size(config->video()->width(), config->video()->height());
+        video_pixels = video_resolution->GetCheckedArea().ValueOrDefault(0);
       }
       media::mojom::blink::WebrtcPredictionFeaturesPtr features =
           media::mojom::blink::WebrtcPredictionFeatures::New(
@@ -855,6 +865,7 @@ ScriptPromise<MediaCapabilitiesDecodingInfo> MediaCapabilities::decodingInfo(
 
       handler->DecodingInfo(
           sdp_audio_format, sdp_video_format, spatial_scalability,
+          video_resolution,
           BindOnce(&MediaCapabilities::OnWebrtcSupportInfo,
                    WrapPersistent(this), callback_id, std::move(features),
                    frames_per_second, OperationType::kDecoding));
@@ -931,9 +942,11 @@ ScriptPromise<MediaCapabilitiesDecodingInfo> MediaCapabilities::decodingInfo(
   // Fill in values for range, matrix since `VideoConfiguration` doesn't have
   // such concepts; these aren't used, but ensure VideoColorSpace.IsSpecified()
   // works as expected downstream.
-  media::VideoColorSpace video_color_space;
-  video_color_space.range = gfx::ColorSpace::RangeID::DERIVED;
-  video_color_space.matrix = media::VideoColorSpace::MatrixID::BT709;
+  media::VideoColorSpace video_color_space(
+      media::VideoColorSpace::PrimaryID::UNSPECIFIED,
+      media::VideoColorSpace::TransferID::UNSPECIFIED,
+      media::VideoColorSpace::MatrixID::BT709,
+      gfx::ColorSpace::RangeID::DERIVED);
 
   gfx::HdrMetadataType hdr_metadata_type = gfx::HdrMetadataType::kNone;
   if (config->hasVideo()) {
@@ -1065,6 +1078,7 @@ ScriptPromise<MediaCapabilitiesInfo> MediaCapabilities::encodingInfo(
           media::VIDEO_CODEC_PROFILE_UNKNOWN;
       int video_pixels = 0;
       int frames_per_second = 0;
+      std::optional<gfx::Size> video_resolution;
       if (config->hasVideo()) {
         sdp_video_format =
             std::make_optional(ToSdpVideoFormat(config->video()));
@@ -1077,6 +1091,8 @@ ScriptPromise<MediaCapabilitiesInfo> MediaCapabilities::encodingInfo(
             WebRtcVideoFormatToMediaVideoCodecProfile(*sdp_video_format);
         video_pixels = config->video()->width() * config->video()->height();
         frames_per_second = base::ClampRound(config->video()->framerate());
+        video_resolution =
+            gfx::Size(config->video()->width(), config->video()->height());
       }
       media::mojom::blink::WebrtcPredictionFeaturesPtr features =
           media::mojom::blink::WebrtcPredictionFeatures::New(
@@ -1085,6 +1101,7 @@ ScriptPromise<MediaCapabilitiesInfo> MediaCapabilities::encodingInfo(
 
       handler->EncodingInfo(
           sdp_audio_format, sdp_video_format, scalability_mode,
+          video_resolution,
           BindOnce(&MediaCapabilities::OnWebrtcSupportInfo,
                    WrapPersistent(this), callback_id, std::move(features),
                    frames_per_second, OperationType::kEncoding));
@@ -1255,9 +1272,15 @@ ScriptPromise<MediaCapabilitiesDecodingInfo> MediaCapabilities::GetEmeSupport(
     audio_capability->setContentType(configuration->audio()->contentType());
     // If config.keySystemConfiguration.audio is present, set the robustness
     // attribute to config.keySystemConfiguration.audio.robustness.
-    if (key_system_config->hasAudio())
+    if (key_system_config->hasAudio()) {
       audio_capability->setRobustness(key_system_config->audio()->robustness());
-
+      if (RuntimeEnabledFeatures::
+              KeySystemTrackConfigurationEncryptionSchemeEnabled() &&
+          key_system_config->audio()->hasEncryptionScheme()) {
+        audio_capability->setEncryptionScheme(
+            key_system_config->audio()->encryptionScheme());
+      }
+    }
     eme_config->setAudioCapabilities(
         HeapVector<Member<MediaKeySystemMediaCapability>>(1, audio_capability));
   }
@@ -1272,9 +1295,15 @@ ScriptPromise<MediaCapabilitiesDecodingInfo> MediaCapabilities::GetEmeSupport(
     video_capability->setContentType(configuration->video()->contentType());
     // If config.keySystemConfiguration.video is present, set the robustness
     // attribute to config.keySystemConfiguration.video.robustness.
-    if (key_system_config->hasVideo())
+    if (key_system_config->hasVideo()) {
       video_capability->setRobustness(key_system_config->video()->robustness());
-
+      if (RuntimeEnabledFeatures::
+              KeySystemTrackConfigurationEncryptionSchemeEnabled() &&
+          key_system_config->video()->hasEncryptionScheme()) {
+        video_capability->setEncryptionScheme(
+            key_system_config->video()->encryptionScheme());
+      }
+    }
     eme_config->setVideoCapabilities(
         HeapVector<Member<MediaKeySystemMediaCapability>>(1, video_capability));
   }

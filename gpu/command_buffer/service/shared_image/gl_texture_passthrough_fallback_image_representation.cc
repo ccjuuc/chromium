@@ -82,12 +82,13 @@ GLTexturePassthroughFallbackImageRepresentation::
 
     const GLFormatDesc format_desc =
         GetGLFormatDesc(format(), plane, gl_format_caps);
-    plane_textures_
-        .emplace_back(viz::SkColorTypeToSinglePlaneSharedImageFormat(plane_ct),
-                      plane_size, /*is_passthrough=*/true, progress_reporter)
-        .InitializeWithTexture(
-            format_desc,
-            CreateGLTexture(format_desc, plane_size, progress_reporter));
+    auto texture_holder = base::MakeRefCounted<GLTextureHolder>(
+        viz::SkColorTypeToSinglePlaneSharedImageFormat(plane_ct), plane_size,
+        /*is_passthrough=*/true, progress_reporter);
+    texture_holder->InitializeWithTexture(
+        format_desc,
+        CreateGLTexture(format_desc, plane_size, progress_reporter));
+    plane_textures_.push_back(std::move(texture_holder));
   }
 }
 
@@ -96,10 +97,9 @@ GLTexturePassthroughFallbackImageRepresentation::
 
 const scoped_refptr<gles2::TexturePassthrough>&
 GLTexturePassthroughFallbackImageRepresentation::GetTexturePassthrough(
-    int plane_index) {
-  CHECK_GE(plane_index, 0);
-  CHECK_LT(static_cast<size_t>(plane_index), plane_textures_.size());
-  return plane_textures_[plane_index].passthrough_texture();
+    size_t plane_index) {
+  CHECK_LT(plane_index, plane_textures_.size());
+  return plane_textures_[plane_index]->passthrough_texture();
 }
 
 bool GLTexturePassthroughFallbackImageRepresentation::BeginAccess(GLenum mode) {
@@ -111,7 +111,7 @@ bool GLTexturePassthroughFallbackImageRepresentation::BeginAccess(GLenum mode) {
     }
 
     for (int plane = 0; plane < format().NumberOfPlanes(); plane++) {
-      if (!plane_textures_[plane].UploadFromMemory(plane_pixmaps_[plane])) {
+      if (!plane_textures_[plane]->UploadFromMemory(plane_pixmaps_[plane])) {
         LOG(ERROR) << "GL UploadFromMemory failed";
         return false;
       }
@@ -122,7 +122,7 @@ bool GLTexturePassthroughFallbackImageRepresentation::BeginAccess(GLenum mode) {
 
 void GLTexturePassthroughFallbackImageRepresentation::EndAccess() {
   for (int plane = 0; plane < format().NumberOfPlanes(); plane++) {
-    if (!plane_textures_[plane].ReadbackToMemory(plane_pixmaps_[plane])) {
+    if (!plane_textures_[plane]->ReadbackToMemory(plane_pixmaps_[plane])) {
       LOG(ERROR) << "GL ReadbackToMemory failed";
       return;
     }

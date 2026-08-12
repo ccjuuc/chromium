@@ -15,31 +15,38 @@
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/shell.h"
 #include "ash/webui/boca_ui/url_constants.h"
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "ash/wm/screen_pinning_controller.h"
-#include "base/containers/contains.h"
+#include "ash/wm/window_state.h"
 #include "base/functional/bind.h"
 #include "base/strings/string_util.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
+#include "chrome/browser/ash/boca/on_task/on_task_locked_controller.h"
 #include "chrome/browser/ash/boca/on_task/on_task_pod_controller_impl.h"
 #include "chrome/browser/ash/browser_delegate/browser_controller.h"
 #include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
+#include "chrome/browser/ui/unload_controller.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chromeos/ash/components/boca/boca_role_util.h"
 #include "chromeos/ash/components/boca/boca_window_observer.h"
 #include "chromeos/ash/components/boca/on_task/activity/active_tab_tracker.h"
 #include "chromeos/ash/components/boca/on_task/notification_constants.h"
 #include "chromeos/ash/components/boca/on_task/on_task_notifications_manager.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
+#include "chromeos/ui/base/window_properties.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/page.h"
+#include "content/public/browser/webid/identity_credential_source.h"
+#include "ui/aura/window.h"
+#include "ui/aura/window_tracker.h"
 #include "ui/base/l10n/l10n_util.h"
 
 LockedSessionWindowTracker::LockedSessionWindowTracker(
@@ -85,7 +92,7 @@ void LockedSessionWindowTracker::InitializeBrowserInfoForTracking(
     return;
   }
   browser_ = browser;
-  browser_->GetBrowser().tab_strip_model()->AddObserver(this);
+  browser_->GetBrowser().GetTabStripModel()->AddObserver(this);
 
   if (ash::features::IsBocaOnTaskPodEnabled()) {
     on_task_pod_controller_ =
@@ -102,8 +109,19 @@ void LockedSessionWindowTracker::RefreshUrlBlocklist() {
   on_task_blocklist_->RefreshForUrlBlocklist(browser_->GetActiveWebContents());
 }
 
+void LockedSessionWindowTracker::set_oauth_in_progress(
+    bool in_progress,
+    ash::BrowserDelegate* browser) {
+  oauth_in_progress_ = in_progress;
+  if (in_progress && browser &&
+      browser->GetType() == ash::BrowserType::kAppPopup) {
+    authorized_oauth_browser_ = browser;
+  }
+}
+
 void LockedSessionWindowTracker::MaybeCloseBrowser(
     ash::BrowserDelegate* browser) {
+  CHECK(browser);
   pending_close_tasks_.erase(browser);
 
   // The browser window needs to be closed if:
@@ -121,18 +139,22 @@ void LockedSessionWindowTracker::MaybeCloseBrowser(
     // Same instance as the one being tracked. Skip close.
     return;
   }
-  if (!browser_ && browser->GetBrowser().IsLockedForOnTask()) {
+  if (!browser_ &&
+      ash::boca::OnTaskLockedController::From(&browser->GetBrowser())
+          ->is_locked_for_on_task()) {
     // New instance that has been prepared for OnTask but is not being tracked
     // yet. Skip close because it is a managed instance.
     return;
   }
-  if (browser->GetType() == ash::BrowserType::kAppPopup && oauth_in_progress_) {
-    // Oauth popup and oauth is still in progress. Skip close.
+  if (browser->GetType() == ash::BrowserType::kAppPopup && oauth_in_progress_ &&
+      browser == authorized_oauth_browser_) {
+    // Authorized Oauth popup and oauth is still in progress. Skip close.
     return;
   }
 
-  bool is_boca_app_instance = ash::IsBrowserForSystemWebApp(
-      &browser->GetBrowser(), ash::SystemWebAppType::BOCA);
+  bool is_boca_app_instance =
+      ash::IsBrowserForSystemWebApp(*browser, ash::SystemWebAppType::BOCA);
+
   if (browser_ &&
       !platform_util::IsBrowserLockedFullscreen(&browser_->GetBrowser()) &&
       !is_boca_app_instance) {
@@ -158,12 +180,12 @@ void LockedSessionWindowTracker::MaybeCloseWebContents(
   }
   if (browser_->GetWebContentsCount() > 1) {
     int index =
-        browser_->GetBrowser().tab_strip_model()->GetIndexOfWebContents(tab);
+        browser_->GetBrowser().GetTabStripModel()->GetIndexOfWebContents(tab);
     if (index == TabStripModel::kNoTab) {
       return;
     }
     on_task_blocklist()->RemoveChildFilter(tab);
-    browser_->GetBrowser().tab_strip_model()->CloseWebContentsAt(
+    browser_->GetBrowser().GetTabStripModel()->CloseWebContentsAt(
         index, TabCloseTypes::CLOSE_NONE);
   }
 }
@@ -179,22 +201,13 @@ void LockedSessionWindowTracker::OnPauseModeChanged(bool paused) {
     on_task_pod_controller_->OnPauseModeChanged(paused);
   }
 
-  // Immersive mode needs to be disabled when in pause mode to ensure users
-  // cannot switch tabs. Since there is a possibility that it can be re-enabled
-  // in certain scenarios (like switching to tablet mode), we monitor the
-  // browsing instance for such anomalies.
-  auto* const immersive_mode_controller =
-      ImmersiveModeController::From(&browser_->GetBrowser());
-  if (paused) {
-    immersive_mode_controller->SetEnabled(false);
-    immersive_mode_controller_observation_.Reset();
-    immersive_mode_controller_observation_.Observe(immersive_mode_controller);
-  } else {
-    immersive_mode_controller_observation_.Reset();
-    bool enable_immersive_mode =
-        platform_util::IsBrowserLockedFullscreen(&browser_->GetBrowser());
-    immersive_mode_controller->SetEnabled(enable_immersive_mode);
-  }
+  // Immersive mode is disabled when in pause mode to ensure users cannot switch
+  // tabs. We keep the window property always set to restore the window to its
+  // previously intended state.
+  browser_->GetNativeWindow()->SetProperty(
+      chromeos::kUseImmersiveInTrustedPinned, !paused);
+  BrowserView::GetBrowserViewForBrowser(&browser_->GetBrowser())
+      ->FullscreenStateChanged();
 }
 
 void LockedSessionWindowTracker::set_can_start_navigation_throttle(
@@ -207,7 +220,7 @@ OnTaskBlocklist* LockedSessionWindowTracker::on_task_blocklist() {
   return on_task_blocklist_.get();
 }
 
-Browser* LockedSessionWindowTracker::browser() {
+BrowserWindowInterface* LockedSessionWindowTracker::browser() {
   return browser_ ? &browser_->GetBrowser() : nullptr;
 }
 
@@ -217,17 +230,18 @@ bool LockedSessionWindowTracker::CanOpenNewPopup() {
 
 void LockedSessionWindowTracker::CleanupWindowTracker() {
   if (browser_) {
-    browser_->GetBrowser().tab_strip_model()->RemoveObserver(this);
+    browser_->GetBrowser().GetTabStripModel()->RemoveObserver(this);
   }
   if (on_task_blocklist_) {
     on_task_blocklist_->CleanupBlocklist();
   }
   on_task_pod_controller_.reset();
-  immersive_mode_controller_observation_.Reset();
 
   browser_ = nullptr;
   can_open_new_popup_ = true;
   oauth_in_progress_ = false;
+  authorized_oauth_browser_ = nullptr;
+  identity_credential_source_for_testing_ = nullptr;
 
   for (auto& observer : observers_) {
     observer.OnWindowTrackerCleanedup();
@@ -253,9 +267,8 @@ void LockedSessionWindowTracker::ShowURLBlockedToast() {
   notifications_manager_->CreateToast(std::move(toast_create_params));
 }
 
-// TabStripModel Implementation
+// TabStripModelObserver Implementation
 void LockedSessionWindowTracker::OnTabChangedAt(tabs::TabInterface* tab,
-                                                int index,
                                                 TabChangeType change_type) {
   if (change_type == TabChangeType::kAll) {
     RefreshUrlBlocklist();
@@ -263,7 +276,7 @@ void LockedSessionWindowTracker::OnTabChangedAt(tabs::TabInterface* tab,
   // When all tabs are closing, the tab strip model is still active, but the
   // active tab is no longer valid. This can cause a crash if we try to access
   // the navigation context of the active tab.
-  if (!browser_->GetBrowser().tab_strip_model()->closing_all() &&
+  if (!browser_->GetBrowser().GetTabStripModel()->closing_all() &&
       browser_->GetWebContentsCount() && on_task_pod_controller_) {
     on_task_pod_controller_->OnPageNavigationContextChanged();
   }
@@ -276,17 +289,27 @@ void LockedSessionWindowTracker::OnTabChangedAt(tabs::TabInterface* tab,
   }
 }
 
+ash::OnTaskPodController* LockedSessionWindowTracker::on_task_pod_controller() {
+  if (!on_task_pod_controller_) {
+    return nullptr;
+  }
+  return on_task_pod_controller_.get();
+}
+
 void LockedSessionWindowTracker::SetNotificationManagerForTesting(
     std::unique_ptr<ash::boca::OnTaskNotificationsManager>
         notifications_manager) {
   notifications_manager_ = std::move(notifications_manager);
 }
 
-ash::OnTaskPodController* LockedSessionWindowTracker::on_task_pod_controller() {
-  if (!on_task_pod_controller_) {
-    return nullptr;
-  }
-  return on_task_pod_controller_.get();
+void LockedSessionWindowTracker::SetIdentityCredentialSourceForTesting(
+    content::webid::IdentityCredentialSource* source) {
+  identity_credential_source_for_testing_ = source;
+}
+
+void LockedSessionWindowTracker::TriggerFedCmFederatedLoginCompletionForTesting(
+    bool success) {
+  OnFedCmFederatedLogin(success);
 }
 
 void LockedSessionWindowTracker::OnTabStripModelChanged(
@@ -309,24 +332,30 @@ void LockedSessionWindowTracker::OnTabStripModelChanged(
     }
   }
   if (change.type() == TabStripModelChange::kInserted) {
-    content::WebContents* const old_contents = selection.old_contents;
-    SessionID active_tab_id = SessionID::InvalidValue();
-    // When new tabs are added, if the current active tab is closed or is boca
-    // app homepage, then we set `active_tab_id` to be invalid.
-    if (old_contents &&
-        (TabStripModel::kNoTab !=
-         browser_->GetBrowser().tab_strip_model()->GetIndexOfWebContents(
-             old_contents)) &&
-        (old_contents->GetVisibleURL() !=
-         GURL(ash::boca::kChromeBocaAppUntrustedIndexURL))) {
-      active_tab_id = sessions::SessionTabHelper::IdForTab(old_contents);
-    }
     for (const auto& contents : change.GetInsert()->contents) {
       SessionID tab_id =
           sessions::SessionTabHelper::IdForTab(contents.contents);
       GURL url = contents.contents->GetVisibleURL();
+      SessionID parent_tab_id = SessionID::InvalidValue();
+      content::WebContents* const opener =
+          contents.contents->GetFirstWebContentsInLiveOriginalOpenerChain();
+      if (opener) {
+        parent_tab_id = sessions::SessionTabHelper::IdForTab(opener);
+      } else {
+        content::WebContents* const old_contents = selection.old_contents;
+        // When new tabs are added, if the current active tab is closed or is
+        // boca app homepage, then we set `parent_tab_id` to be invalid.
+        if (old_contents &&
+            (TabStripModel::kNoTab !=
+             browser_->GetBrowser().GetTabStripModel()->GetIndexOfWebContents(
+                 old_contents)) &&
+            (old_contents->GetVisibleURL() !=
+             GURL(ash::boca::kChromeBocaAppUntrustedIndexURL))) {
+          parent_tab_id = sessions::SessionTabHelper::IdForTab(old_contents);
+        }
+      }
       for (auto& observer : observers_) {
-        observer.OnTabAdded(active_tab_id, tab_id, url);
+        observer.OnTabAdded(parent_tab_id, tab_id, url);
       }
     }
   }
@@ -350,9 +379,9 @@ void LockedSessionWindowTracker::WillCloseAllTabs(
   // Force browser to skip tab unload so we can proceed with the close
   // operation.
   // TODO (crbug.com/372362860): Add browser tests to test tab unload.
-  Browser* const browser = static_cast<Browser*>(
-      tab_strip_model->delegate()->GetBrowserWindowInterface());
-  browser->set_force_skip_warning_user_on_close(true);
+  BrowserWindowInterface* const browser =
+      tab_strip_model->delegate()->GetBrowserWindowInterface();
+  UnloadController::From(browser)->set_force_skip_warning_user_on_close(true);
 }
 
 // ash::BrowserController::Observer Implementation
@@ -373,6 +402,7 @@ void LockedSessionWindowTracker::OnBrowserClosed(
         ->SetAllowWindowStackingWithPinnedWindow(false);
     can_open_new_popup_ = true;
     oauth_in_progress_ = false;
+    authorized_oauth_browser_ = nullptr;
   }
 }
 
@@ -401,7 +431,30 @@ void LockedSessionWindowTracker::OnBrowserActivated(
   if (!browser || !browser_) {
     return;
   }
+
   if (browser != browser_) {
+    if (browser->GetType() == ash::BrowserType::kNormal &&
+        browser != authorized_oauth_browser_ &&
+        platform_util::IsBrowserLockedFullscreen(&browser_->GetBrowser())) {
+      aura::Window* const window = browser->GetNativeWindow();
+      if (window) {
+        std::unique_ptr<aura::WindowTracker> tracker =
+            std::make_unique<aura::WindowTracker>();
+        tracker->Add(window);
+        base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE, base::BindOnce(
+                           [](std::unique_ptr<aura::WindowTracker> tracker) {
+                             if (!tracker->windows().empty()) {
+                               aura::Window* w = tracker->windows()[0];
+                               auto* window_state = ash::WindowState::Get(w);
+                               if (window_state) {
+                                 window_state->Minimize();
+                               }
+                             }
+                           },
+                           std::move(tracker)));
+      }
+    }
     for (auto& observer : observers_) {
       observer.OnActiveTabChanged(
           l10n_util::GetStringUTF16(IDS_NOT_IN_CLASS_TOOLS));
@@ -426,9 +479,7 @@ void LockedSessionWindowTracker::DidFinishNavigation(
   if (!browser || !browser_) {
     return;
   }
-  if (browser != browser_) {
-    EnsureMaybeCloseBrowserTaskPosted(browser);
-  } else {
+  if (browser == browser_) {
     content::WebContents* const tab = navigation_handle->GetWebContents();
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
@@ -437,16 +488,42 @@ void LockedSessionWindowTracker::DidFinishNavigation(
   }
 }
 
-void LockedSessionWindowTracker::OnImmersiveRevealStarted() {
-  // Disable immersive mode when in pause mode to ensure the toolbar is not
-  // accessible as it allows for exiting this mode.
-  auto* const immersive_mode_controller =
-      immersive_mode_controller_observation_.GetSource();
-  immersive_mode_controller->SetEnabled(false);
+void LockedSessionWindowTracker::DidFinishLoad(
+    content::RenderFrameHost* render_frame_host,
+    const GURL& validated_url) {
+  if (!render_frame_host->IsInPrimaryMainFrame()) {
+    return;
+  }
+  ash::BrowserDelegate* const browser =
+      ash::BrowserController::GetInstance()->GetBrowserForTab(
+          content::WebContents::FromRenderFrameHost(render_frame_host));
+  if (!browser || !browser_) {
+    return;
+  }
+  if (browser != browser_) {
+    if (browser->GetType() == ash::BrowserType::kAppPopup) {
+      // Verify if there are pending FedCM oauth requests for tracking purposes.
+      content::webid::IdentityCredentialSource* const source =
+          GetIdentityCredentialSource(render_frame_host->GetPage());
+      if (source && source->HasPendingRequest()) {
+        set_oauth_in_progress(true, browser);
+      }
+    }
+    EnsureMaybeCloseBrowserTaskPosted(browser);
+  }
 }
 
-void LockedSessionWindowTracker::OnImmersiveModeControllerDestroyed() {
-  immersive_mode_controller_observation_.Reset();
+void LockedSessionWindowTracker::OnFedCmFederatedLogin(bool success) {
+  set_oauth_in_progress(false, nullptr);
+  if (web_contents()) {
+    ash::BrowserDelegate* const browser =
+        ash::BrowserController::GetInstance()->GetBrowserForTab(web_contents());
+    if (browser && browser != browser_) {
+      // Attempt to close the oauth popup window now that the oauth flow has
+      // completed.
+      EnsureMaybeCloseBrowserTaskPosted(browser);
+    }
+  }
 }
 
 void LockedSessionWindowTracker::EnsureMaybeCloseBrowserTaskPosted(
@@ -460,4 +537,12 @@ void LockedSessionWindowTracker::EnsureMaybeCloseBrowserTaskPosted(
   pending_close_tasks_.emplace(browser, std::move(task));
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, pending_close_tasks_[browser]->callback());
+}
+
+content::webid::IdentityCredentialSource*
+LockedSessionWindowTracker::GetIdentityCredentialSource(content::Page& page) {
+  if (identity_credential_source_for_testing_) {
+    return identity_credential_source_for_testing_.get();
+  }
+  return content::webid::IdentityCredentialSource::FromPage(page);
 }

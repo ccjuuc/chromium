@@ -25,15 +25,12 @@
 #include "chrome/browser/android/resource_mapper.h"
 #include "chrome/browser/keyboard_accessory/android/accessory_controller.h"
 #include "chrome/browser/keyboard_accessory/android/accessory_sheet_enums.h"
-#include "chrome/browser/keyboard_accessory/test_utils/android/mock_affiliated_plus_profiles_provider.h"
 #include "chrome/browser/keyboard_accessory/test_utils/android/mock_manual_filling_controller.h"
 #include "chrome/browser/password_manager/android/grouped_affiliations/acknowledge_grouped_credential_sheet_controller_test_helper.h"
 #include "chrome/browser/password_manager/android/mock_password_manager_error_message_helper_bridge.h"
 #include "chrome/browser/password_manager/android/password_generation_controller.h"
 #include "chrome/browser/password_manager/android/password_generation_controller_impl.h"
 #include "chrome/browser/password_manager/password_manager_test_util.h"
-#include "chrome/browser/plus_addresses/plus_address_service_factory.h"
-#include "chrome/browser/ui/plus_addresses/android/all_plus_addresses_bottom_sheet_controller.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/autofill/content/browser/test_autofill_client_injector.h"
@@ -51,21 +48,19 @@
 #include "components/password_manager/core/browser/password_generation_frame_helper.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
 #include "components/password_manager/core/browser/password_store/mock_password_store_interface.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
 #include "components/password_manager/core/browser/stub_password_manager_client.h"
 #include "components/password_manager/core/browser/stub_password_manager_driver.h"
 #include "components/password_manager/core/browser/webauthn_credentials_delegate.h"
 #include "components/password_manager/core/common/password_manager_features.h"
-#include "components/plus_addresses/core/browser/fake_plus_address_service.h"
-#include "components/plus_addresses/core/browser/grit/plus_addresses_strings.h"
-#include "components/plus_addresses/core/browser/plus_address_test_utils.h"
-#include "components/plus_addresses/core/common/features.h"
 #include "components/prefs/pref_service.h"
 #include "components/resources/android/theme_resources.h"
 #include "components/security_state/core/security_state.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/sync/service/sync_service_utils.h"
 #include "components/webauthn/android/cred_man_support.h"
+#include "components/webauthn/android/stub_webauthn_client_android.h"
 #include "components/webauthn/android/webauthn_cred_man_delegate.h"
 #include "components/webauthn/android/webauthn_cred_man_delegate_factory.h"
 #include "content/public/browser/render_frame_host.h"
@@ -97,10 +92,9 @@ using password_manager::PasswordGenerationFrameHelper;
 using password_manager::PasswordManagerClient;
 using password_manager::PasswordManagerDriver;
 using password_manager::PasswordManagerInterface;
+using password_manager::PasswordStoreBackendError;
 using password_manager::PasswordStoreInterface;
 using password_manager::TestPasswordStore;
-using plus_addresses::FakePlusAddressService;
-using plus_addresses::PlusProfile;
 using testing::_;
 using testing::AnyNumber;
 using testing::ByMove;
@@ -117,7 +111,7 @@ using FillingSource = ManualFillingController::FillingSource;
 using IsFillingSourceAvailable = AccessoryController::IsFillingSourceAvailable;
 using IsExactMatch = autofill::UserInfo::IsExactMatch;
 using ShouldShowAction = ManualFillingController::ShouldShowAction;
-
+using BackendErrorType = password_manager::PasswordStoreBackendErrorType;
 constexpr char kExampleSite[] = "https://example.com";
 constexpr char kExampleAndroidApp[] = "android://hash@com.example.android";
 constexpr char kExampleHttpSite[] = "http://example.com";
@@ -174,7 +168,7 @@ class MockPasswordManagerClient
 
   MOCK_METHOD(bool,
               IsSavingAndFillingEnabled,
-              (const GURL&),
+              (const url::Origin&, base::optional_ref<const GURL>),
               (const, override));
 
   MOCK_METHOD(std::unique_ptr<device_reauth::DeviceAuthenticator>,
@@ -230,15 +224,6 @@ class MockPasswordManagerDriver
               (override));
 };
 
-class MockAutofillClient : public autofill::TestContentAutofillClient {
- public:
-  using autofill::TestContentAutofillClient::TestContentAutofillClient;
-  MOCK_METHOD(void,
-              TriggerPlusAddressUserPerceptionSurvey,
-              (plus_addresses::hats::SurveyType),
-              (override));
-};
-
 std::u16string password_for_str(const std::u16string& user) {
   return l10n_util::GetStringFUTF16(
       IDS_PASSWORD_MANAGER_ACCESSORY_PASSWORD_DESCRIPTION, user);
@@ -249,19 +234,9 @@ std::u16string passwords_empty_str(const std::u16string& domain) {
       IDS_PASSWORD_MANAGER_ACCESSORY_PASSWORD_LIST_EMPTY_MESSAGE, domain);
 }
 
-std::u16string passwords_title(const std::u16string& domain) {
-  return l10n_util::GetStringFUTF16(
-      IDS_PASSWORD_MANAGER_ACCESSORY_PASSWORD_LIST_TITLE, domain);
-}
-
 std::u16string trusted_vault_key_retrieval_required_title() {
   return l10n_util::GetStringUTF16(
       IDS_PASSWORD_MANAGER_ACCESSORY_TRUSTED_VAULT_KEY_RETRIEVAL_REQUIRED_MESSAGE);
-}
-
-std::u16string plus_address_title(const std::u16string& domain) {
-  return l10n_util::GetStringFUTF16(
-      IDS_PLUS_ADDRESS_FALLBACK_MANUAL_FILLING_SHEET_TITLE, domain);
 }
 
 std::u16string no_user_str() {
@@ -303,18 +278,12 @@ std::u16string select_passkey_str() {
       IDS_PASSWORD_MANAGER_ACCESSORY_SELECT_PASSKEY);
 }
 
-std::u16string select_plus_address_str() {
-  return l10n_util::GetStringUTF16(
-      IDS_PLUS_ADDRESS_SELECT_PLUS_ADDRESS_LINK_ANDROID);
-}
-
 // Creates a AccessorySheetDataBuilder object with a "Manage passwords..."
 // footer.
 AccessorySheetData::Builder PasswordAccessorySheetDataBuilder(
-    const std::u16string& user_info_title,
-    const std::u16string plus_address_title = u"") {
+    const std::u16string& user_info_title) {
   return AccessorySheetData::Builder(AccessoryTabType::PASSWORDS,
-                                     user_info_title, plus_address_title)
+                                     user_info_title)
       .AppendFooterCommand(manage_passwords_str(),
                            autofill::AccessoryAction::MANAGE_PASSWORDS);
 }
@@ -334,11 +303,6 @@ PasswordForm MakeSavedPassword() {
   return form;
 }
 
-std::unique_ptr<KeyedService> BuildFakePlusAddressService(
-    content::BrowserContext* context) {
-  return std::make_unique<FakePlusAddressService>();
-}
-
 }  // namespace
 
 class PasswordAccessoryControllerTest : public ChromeRenderViewHostTestHarness {
@@ -350,9 +314,6 @@ class PasswordAccessoryControllerTest : public ChromeRenderViewHostTestHarness {
   void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
     window_android_ = ui::WindowAndroid::CreateForTesting();
-
-    PlusAddressServiceFactory::GetInstance()->SetTestingFactory(
-        GetBrowserContext(), base::BindRepeating(&BuildFakePlusAddressService));
 
     NavigateAndCommit(GURL(kExampleSite));
     FocusWebContentsOnMainFrame();
@@ -375,6 +336,9 @@ class PasswordAccessoryControllerTest : public ChromeRenderViewHostTestHarness {
         .WillByDefault(Return(&mock_password_manager_));
     NavigateAndCommit(GURL(kExampleSite));
 
+    webauthn::WebAuthnClientAndroid::SetClient(
+        std::make_unique<webauthn::StubWebAuthnClientAndroid>());
+
     webauthn_credentials_delegate_ = std::make_unique<
         NiceMock<password_manager::MockWebAuthnCredentialsDelegate>>();
     ON_CALL(*webauthn_credentials_delegate(), GetPasskeys)
@@ -387,7 +351,7 @@ class PasswordAccessoryControllerTest : public ChromeRenderViewHostTestHarness {
             IsSecurityKeyOrHybridFlowAvailable)
         .WillByDefault(Return(false));
     ON_CALL(*password_client()->GetPasswordFeatureManager(),
-            IsAccountStorageEnabled)
+            IsAccountStorageActive)
         .WillByDefault(Return(false));
     window_android_.get()->get()->AddChild(web_contents()->GetNativeView());
 
@@ -399,6 +363,11 @@ class PasswordAccessoryControllerTest : public ChromeRenderViewHostTestHarness {
                     ShouldShowAction(false),
                     autofill::AccessoryAction::RETRIEVE_TRUSTED_VAULT_KEY))
         .Times(AnyNumber());
+  }
+
+  void TearDown() override {
+    webauthn::WebAuthnClientAndroid::ClearClientForTesting();
+    ChromeRenderViewHostTestHarness::TearDown();
   }
 
   webauthn::WebAuthnCredManDelegate* cred_man_delegate() {
@@ -447,14 +416,8 @@ class PasswordAccessoryControllerTest : public ChromeRenderViewHostTestHarness {
     return webauthn_credentials_delegate_.get();
   }
 
-  MockAutofillClient& autofill_client() {
+  autofill::TestContentAutofillClient& autofill_client() {
     return *autofill_client_injector_[web_contents()];
-  }
-
-  FakePlusAddressService& plus_address_service() {
-    return *static_cast<FakePlusAddressService*>(
-        PlusAddressServiceFactory::GetForBrowserContext(
-            web_contents()->GetBrowserContext()));
   }
 
  protected:
@@ -470,8 +433,7 @@ class PasswordAccessoryControllerTest : public ChromeRenderViewHostTestHarness {
     return mock_profile_password_store_.get();
   }
 
-  base::test::ScopedFeatureList features_{
-      plus_addresses::features::kPlusAddressesEnabled};
+  base::test::ScopedFeatureList features_;
   StrictMock<MockManualFillingController> mock_manual_filling_controller_;
   base::MockCallback<AccessoryController::FillingSourceObserver>
       filling_source_observer_;
@@ -495,7 +457,8 @@ class PasswordAccessoryControllerTest : public ChromeRenderViewHostTestHarness {
   std::unique_ptr<MockPasswordGenerationFrameHelper> mock_frame_helper_;
   std::unique_ptr<password_manager::MockWebAuthnCredentialsDelegate>
       webauthn_credentials_delegate_;
-  autofill::TestAutofillClientInjector<NiceMock<MockAutofillClient>>
+  autofill::TestAutofillClientInjector<
+      NiceMock<autofill::TestContentAutofillClient>>
       autofill_client_injector_;
   std::unique_ptr<ui::WindowAndroid::ScopedWindowAndroidForTesting>
       window_android_;
@@ -874,8 +837,7 @@ TEST_F(PasswordAccessoryControllerTest, AddsGenerationCommandWhenAvailable) {
   EXPECT_EQ(
       controller()->GetSheetData(),
       AccessorySheetData::Builder(AccessoryTabType::PASSWORDS,
-                                  passwords_empty_str(kExampleDomain),
-                                  /*plus_address_title=*/std::u16string())
+                                  passwords_empty_str(kExampleDomain))
           .AppendFooterCommand(
               generate_password_str(),
               autofill::AccessoryAction::GENERATE_PASSWORD_MANUAL)
@@ -904,8 +866,7 @@ TEST_F(PasswordAccessoryControllerTest,
   EXPECT_EQ(
       controller()->GetSheetData(),
       AccessorySheetData::Builder(AccessoryTabType::PASSWORDS,
-                                  passwords_empty_str(kExampleDomain),
-                                  /*plus_address_title=*/std::u16string())
+                                  passwords_empty_str(kExampleDomain))
           .AppendFooterCommand(
               generate_password_str(),
               autofill::AccessoryAction::GENERATE_PASSWORD_MANUAL)
@@ -973,7 +934,8 @@ TEST_F(PasswordAccessoryControllerTest, AddsSaveToggleIfIsBlocklisted) {
   cache()->SaveCredentialsAndBlocklistedForOrigin(
       {}, CredentialCache::IsOriginBlocklisted(true), std::nullopt,
       url::Origin::Create(GURL(kExampleSite)));
-  ON_CALL(*password_client(), IsSavingAndFillingEnabled(GURL(kExampleSite)))
+  ON_CALL(*password_client(),
+          IsSavingAndFillingEnabled(url::Origin::Create(GURL(kExampleSite)), _))
       .WillByDefault(Return(true));
 
   EXPECT_CALL(filling_source_observer_,
@@ -997,7 +959,8 @@ TEST_F(PasswordAccessoryControllerTest,
 
   // Simulate saving being disabled (e.g. being in incognito or having password
   // saving disabled from settings).
-  ON_CALL(*password_client(), IsSavingAndFillingEnabled(GURL(kExampleSite)))
+  ON_CALL(*password_client(),
+          IsSavingAndFillingEnabled(url::Origin::Create(GURL(kExampleSite)), _))
       .WillByDefault(Return(false));
 
   cache()->SaveCredentialsAndBlocklistedForOrigin(
@@ -1025,7 +988,8 @@ TEST_F(PasswordAccessoryControllerTest, AddsSaveToggleIfWasBlocklisted) {
   cache()->SaveCredentialsAndBlocklistedForOrigin(
       {}, CredentialCache::IsOriginBlocklisted(false), std::nullopt,
       url::Origin::Create(GURL(kExampleSite)));
-  ON_CALL(*password_client(), IsSavingAndFillingEnabled(GURL(kExampleSite)))
+  ON_CALL(*password_client(),
+          IsSavingAndFillingEnabled(url::Origin::Create(GURL(kExampleSite)), _))
       .WillByDefault(Return(true));
 
   EXPECT_CALL(filling_source_observer_,
@@ -1048,7 +1012,8 @@ TEST_F(PasswordAccessoryControllerTest, AddsSaveToggleOnAnyFieldIfBlocked) {
   cache()->SaveCredentialsAndBlocklistedForOrigin(
       {}, CredentialCache::IsOriginBlocklisted(true), std::nullopt,
       url::Origin::Create(GURL(kExampleSite)));
-  ON_CALL(*password_client(), IsSavingAndFillingEnabled(GURL(kExampleSite)))
+  ON_CALL(*password_client(),
+          IsSavingAndFillingEnabled(url::Origin::Create(GURL(kExampleSite)), _))
       .WillByDefault(Return(true));
 
   EXPECT_CALL(filling_source_observer_,
@@ -1066,181 +1031,7 @@ TEST_F(PasswordAccessoryControllerTest, AddsSaveToggleOnAnyFieldIfBlocked) {
           .Build());
 }
 
-TEST_F(PasswordAccessoryControllerTest, AppendsPlusAddressSuggestions) {
-  CreateSheetController();
 
-  MockAffiliatedPlusProfilesProvider provider;
-  EXPECT_CALL(provider, AddObserver(controller()));
-  controller()->RegisterPlusProfilesProvider(provider.GetWeakPtr());
-
-  // Provide 1 plus address, which is not used as a username in any credential.
-  // It should appear as a standalone suggestion in the password sheet.
-  std::vector<PlusProfile> profiles{plus_addresses::test::CreatePlusProfile(
-      /*plus_address=*/"example@gmail", /*is_confirmed=*/true)};
-  EXPECT_CALL(filling_source_observer_,
-              Run(controller(), IsFillingSourceAvailable(true)));
-  EXPECT_CALL(provider, GetAffiliatedPlusProfiles)
-      .WillRepeatedly(Return(base::span(profiles)));
-  controller()->RefreshSuggestionsForField(
-      FocusedFieldType::kFillableNonSearchField,
-      /*is_field_eligible_for_manual_generation=*/false);
-
-  EXPECT_EQ(
-      controller()->GetSheetData(),
-      PasswordAccessorySheetDataBuilder(passwords_empty_str(kExampleDomain),
-                                        plus_address_title(kExampleDomain))
-          .AddPlusAddressInfo("https://foo.com", u"example@gmail")
-          .AppendFooterCommand(
-              l10n_util::GetStringUTF16(
-                  IDS_PLUS_ADDRESS_MANAGE_PLUS_ADDRESSES_LINK_ANDROID),
-              AccessoryAction::MANAGE_PLUS_ADDRESS_FROM_PASSWORD_SHEET)
-          .Build());
-}
-
-TEST_F(PasswordAccessoryControllerTest, PlusAddressUsedAsUsername) {
-  CreateSheetController();
-
-  std::vector<PasswordForm> matches = {
-      CreateEntry("example@gmail", "S3cur3", GURL(kExampleSite),
-                  PasswordForm::MatchType::kExact)};
-  cache()->SaveCredentialsAndBlocklistedForOrigin(
-      matches, CredentialCache::IsOriginBlocklisted(false), std::nullopt,
-      url::Origin::Create(GURL(kExampleSite)));
-
-  MockAffiliatedPlusProfilesProvider provider;
-  EXPECT_CALL(provider, AddObserver(controller()));
-  controller()->RegisterPlusProfilesProvider(provider.GetWeakPtr());
-
-  // Provide 1 plus address, which is used as a username in the saved
-  // credential. It should not appear as a standalone suggestion in the password
-  // sheet.
-  std::vector<PlusProfile> profiles{plus_addresses::test::CreatePlusProfile(
-      /*plus_address=*/"example@gmail", /*is_confirmed=*/true)};
-  EXPECT_CALL(filling_source_observer_,
-              Run(controller(), IsFillingSourceAvailable(true)));
-  EXPECT_CALL(provider, GetAffiliatedPlusProfiles)
-      .WillRepeatedly(Return(base::span(profiles)));
-  controller()->RefreshSuggestionsForField(
-      FocusedFieldType::kFillableNonSearchField,
-      /*is_field_eligible_for_manual_generation=*/false);
-
-  EXPECT_EQ(
-      controller()->GetSheetData(),
-      PasswordAccessorySheetDataBuilderEmptyTitle()
-          .AddUserInfo(kExampleSite)
-          .AppendField(
-              AccessorySuggestionType::kCredentialUsername, u"example@gmail",
-              u"example@gmail", u"example@gmail", "",
-              ResourceMapper::MapToJavaDrawableId(IDR_AUTOFILL_PLUS_ADDRESS),
-              false, true)
-          .AppendField(AccessorySuggestionType::kCredentialPassword, u"S3cur3",
-                       password_for_str(u"example@gmail"), true, false)
-          .AppendFooterCommand(
-              l10n_util::GetStringUTF16(
-                  IDS_PLUS_ADDRESS_MANAGE_PLUS_ADDRESSES_LINK_ANDROID),
-              AccessoryAction::MANAGE_PLUS_ADDRESS_FROM_PASSWORD_SHEET)
-          .Build());
-}
-
-TEST_F(PasswordAccessoryControllerTest, BothPlusAddressAndCredentialShown) {
-  CreateSheetController();
-
-  std::vector<PasswordForm> matches = {
-      CreateEntry("foo.bar@gmail", "S3cur3", GURL(kExampleSite),
-                  PasswordForm::MatchType::kExact)};
-  cache()->SaveCredentialsAndBlocklistedForOrigin(
-      matches, CredentialCache::IsOriginBlocklisted(false), std::nullopt,
-      url::Origin::Create(GURL(kExampleSite)));
-
-  MockAffiliatedPlusProfilesProvider provider;
-  EXPECT_CALL(provider, AddObserver(controller()));
-  controller()->RegisterPlusProfilesProvider(provider.GetWeakPtr());
-
-  // Provide 1 plus address, which is used as a username in the saved
-  // credential. It should not appear as a standalone suggestion in the password
-  // sheet.
-  std::vector<PlusProfile> profiles{plus_addresses::test::CreatePlusProfile(
-      /*plus_address=*/"example@gmail", /*is_confirmed=*/true)};
-  EXPECT_CALL(filling_source_observer_,
-              Run(controller(), IsFillingSourceAvailable(true)));
-  EXPECT_CALL(provider, GetAffiliatedPlusProfiles)
-      .WillRepeatedly(Return(base::span(profiles)));
-  controller()->RefreshSuggestionsForField(
-      FocusedFieldType::kFillableNonSearchField,
-      /*is_field_eligible_for_manual_generation=*/false);
-
-  EXPECT_EQ(
-      controller()->GetSheetData(),
-      PasswordAccessorySheetDataBuilder(passwords_title(kExampleDomain),
-                                        plus_address_title(kExampleDomain))
-          .AddUserInfo(kExampleSite)
-          .AddPlusAddressInfo("https://foo.com", u"example@gmail")
-          .AppendField(AccessorySuggestionType::kCredentialUsername,
-                       u"foo.bar@gmail", u"foo.bar@gmail",
-                       /*is_obfuscated=*/false, /*selectable=*/true)
-          .AppendField(AccessorySuggestionType::kCredentialPassword, u"S3cur3",
-                       password_for_str(u"foo.bar@gmail"), true, false)
-          .AppendFooterCommand(
-              l10n_util::GetStringUTF16(
-                  IDS_PLUS_ADDRESS_MANAGE_PLUS_ADDRESSES_LINK_ANDROID),
-              AccessoryAction::MANAGE_PLUS_ADDRESS_FROM_PASSWORD_SHEET)
-          .Build());
-}
-
-// Verify that the action to open plus address creation bottom sheet is appended
-// when the corresponding feature flag is enabled.
-TEST_F(PasswordAccessoryControllerTest,
-       PlusAddressFillingDisabled_NoPlusAddressesActions) {
-  CreateSheetController();
-
-  controller()->RefreshSuggestionsForField(
-      FocusedFieldType::kFillableUsernameField,
-      /*is_field_eligible_for_manual_generation=*/false);
-
-  EXPECT_EQ(
-      controller()->GetSheetData(),
-      PasswordAccessorySheetDataBuilder(passwords_empty_str(kExampleDomain))
-          .Build());
-}
-
-TEST_F(PasswordAccessoryControllerTest,
-       NoPlusAddressesSaved_NoSelectPlusAddressAction) {
-  CreateSheetController();
-
-  controller()->RefreshSuggestionsForField(
-      FocusedFieldType::kFillableUsernameField,
-      /*is_field_eligible_for_manual_generation=*/false);
-
-  // Although the plus address filling is enabled, the user doesn't have any
-  // saved plus addresses. The "Select plus address" should not be displayed.
-  plus_address_service().set_is_plus_address_filling_enabled(true);
-
-  EXPECT_EQ(
-      controller()->GetSheetData(),
-      PasswordAccessorySheetDataBuilder(passwords_empty_str(kExampleDomain))
-          .Build());
-}
-
-TEST_F(PasswordAccessoryControllerTest,
-       PlusAddressFillingEnabled_AppendsSelectPlusAddressAction) {
-  CreateSheetController();
-
-  controller()->RefreshSuggestionsForField(
-      FocusedFieldType::kFillableUsernameField,
-      /*is_field_eligible_for_manual_generation=*/false);
-
-  plus_address_service().add_plus_profile(
-      plus_addresses::test::CreatePlusProfile());
-  plus_address_service().set_is_plus_address_filling_enabled(true);
-
-  EXPECT_EQ(
-      controller()->GetSheetData(),
-      PasswordAccessorySheetDataBuilder(passwords_empty_str(kExampleDomain))
-          .AppendFooterCommand(select_plus_address_str(),
-                               autofill::AccessoryAction::
-                                   SELECT_PLUS_ADDRESS_FROM_PASSWORD_SHEET)
-          .Build());
-}
 
 TEST_F(PasswordAccessoryControllerTest,
        RecordsAccessoryImpressionsForBlocklisted) {
@@ -1251,7 +1042,8 @@ TEST_F(PasswordAccessoryControllerTest,
   cache()->SaveCredentialsAndBlocklistedForOrigin(
       {}, CredentialCache::IsOriginBlocklisted(true), std::nullopt,
       url::Origin::Create(GURL(kExampleSite)));
-  ON_CALL(*password_client(), IsSavingAndFillingEnabled(GURL(kExampleSite)))
+  ON_CALL(*password_client(),
+          IsSavingAndFillingEnabled(url::Origin::Create(GURL(kExampleSite)), _))
       .WillByDefault(Return(true));
 
   EXPECT_CALL(filling_source_observer_,
@@ -1276,7 +1068,8 @@ TEST_F(PasswordAccessoryControllerTest, NoAccessoryImpressionsIfUnblocklisted) {
       {}, CredentialCache::IsOriginBlocklisted(false), std::nullopt,
       url::Origin::Create(GURL(kExampleSite)));
 
-  ON_CALL(*password_client(), IsSavingAndFillingEnabled(GURL(kExampleSite)))
+  ON_CALL(*password_client(),
+          IsSavingAndFillingEnabled(url::Origin::Create(GURL(kExampleSite)), _))
       .WillByDefault(Return(true));
   EXPECT_CALL(filling_source_observer_,
               Run(controller(), IsFillingSourceAvailable(true)));
@@ -1299,7 +1092,7 @@ TEST_F(PasswordAccessoryControllerTest, SavePasswordsToggledUpdatesCache) {
 TEST_F(PasswordAccessoryControllerTest,
        SavePasswordsEnabledUpdatesAccountStore) {
   ON_CALL(*password_client()->GetPasswordFeatureManager(),
-          IsAccountStorageEnabled)
+          IsAccountStorageActive)
       .WillByDefault(Return(true));
   CreateSheetController();
   password_manager::PasswordFormDigest form_digest(
@@ -1322,7 +1115,7 @@ TEST_F(PasswordAccessoryControllerTest,
 TEST_F(PasswordAccessoryControllerTest,
        SavePasswordsDisabledUpdatesAccountStore) {
   ON_CALL(*password_client()->GetPasswordFeatureManager(),
-          IsAccountStorageEnabled)
+          IsAccountStorageActive)
       .WillByDefault(Return(true));
   CreateSheetController();
   PasswordForm expected_form;
@@ -1331,7 +1124,8 @@ TEST_F(PasswordAccessoryControllerTest,
   expected_form.signon_realm = kExampleSignonRealm;
   expected_form.url = GURL(kExampleSite);
   expected_form.date_created = base::Time::Now();
-  EXPECT_CALL(*mock_account_password_store_, AddLogin(Eq(expected_form), _));
+  EXPECT_CALL(*mock_account_password_store_,
+              AddLogin(password_manager::EqStoredCredential(expected_form), _));
   controller()->OnToggleChanged(
       autofill::AccessoryAction::TOGGLE_SAVE_PASSWORDS, false);
 }
@@ -1345,7 +1139,8 @@ TEST_F(PasswordAccessoryControllerTest,
   expected_form.signon_realm = kExampleSignonRealm;
   expected_form.url = GURL(kExampleSite);
   expected_form.date_created = base::Time::Now();
-  EXPECT_CALL(*mock_profile_password_store_, AddLogin(Eq(expected_form), _));
+  EXPECT_CALL(*mock_profile_password_store_,
+              AddLogin(password_manager::EqStoredCredential(expected_form), _));
   controller()->OnToggleChanged(
       autofill::AccessoryAction::TOGGLE_SAVE_PASSWORDS, false);
 }
@@ -1414,9 +1209,7 @@ TEST_F(PasswordAccessoryControllerTest, FillsPasswordIfNoAuthAvailable) {
 TEST_F(PasswordAccessoryControllerTest, FillsPasswordIfAuthSuccessful) {
   features_.Reset();
   features_.InitWithFeatures(
-      {plus_addresses::features::kPlusAddressesEnabled,
-       password_manager::features::kBiometricTouchToFill},
-      {});
+      {password_manager::features::kBiometricTouchToFill}, {});
   CreateSheetController();
 
   std::vector<PasswordForm> matches = {CreateEntry(
@@ -1457,9 +1250,7 @@ TEST_F(PasswordAccessoryControllerTest, FillsPasswordIfAuthSuccessful) {
 TEST_F(PasswordAccessoryControllerTest, DoesntFillPasswordIfAuthFails) {
   features_.Reset();
   features_.InitWithFeatures(
-      {plus_addresses::features::kPlusAddressesEnabled,
-       password_manager::features::kBiometricTouchToFill},
-      {});
+      {password_manager::features::kBiometricTouchToFill}, {});
   CreateSheetController();
 
   std::vector<PasswordForm> matches = {CreateEntry(
@@ -1642,9 +1433,7 @@ TEST_F(PasswordAccessoryControllerTest,
 TEST_F(PasswordAccessoryControllerTest, CancelsOngoingAuthIfDestroyed) {
   features_.Reset();
   features_.InitWithFeatures(
-      {plus_addresses::features::kPlusAddressesEnabled,
-       password_manager::features::kBiometricTouchToFill},
-      {});
+      {password_manager::features::kBiometricTouchToFill}, {});
   CreateSheetController();
 
   std::vector<PasswordForm> matches = {CreateEntry(
@@ -1685,27 +1474,6 @@ TEST_F(PasswordAccessoryControllerTest, CancelsOngoingAuthIfDestroyed) {
   EXPECT_CALL(*mock_authenticator_ptr, Cancel());
 }
 
-TEST_F(PasswordAccessoryControllerTest, FillsPlusAddressSuggestion) {
-  CreateSheetController();
-  controller()->RefreshSuggestionsForField(
-      FocusedFieldType::kFillableUsernameField,
-      /*is_field_eligible_for_manual_generation=*/false);
-
-  EXPECT_CALL(autofill_client(), TriggerPlusAddressUserPerceptionSurvey(
-                                     plus_addresses::hats::SurveyType::
-                                         kFilledPlusAddressViaManualFallack));
-  EXPECT_CALL(*driver(),
-              FillIntoFocusedField(
-                  false, Eq(plus_addresses::test::kFakePlusAddressU16)));
-  controller()->OnFillingTriggered(
-      autofill::FieldGlobalId(),
-      AccessorySheetField::Builder()
-          .SetSuggestionType(AccessorySuggestionType::kPlusAddress)
-          .SetDisplayText(plus_addresses::test::kFakePlusAddressU16)
-          .SetSelectable(true)
-          .Build());
-  EXPECT_TRUE(plus_address_service().was_plus_address_suggestion_filled());
-}
 
 TEST_F(PasswordAccessoryControllerTest, ShowCredManReentry) {
   WebAuthnCredManDelegate::override_cred_man_support_for_testing(
@@ -1799,8 +1567,7 @@ TEST_F(PasswordAccessoryControllerTest, ShowAndSelectCredManReentryOption) {
   EXPECT_EQ(
       controller()->GetSheetData(),
       AccessorySheetData::Builder(AccessoryTabType::PASSWORDS,
-                                  passwords_empty_str(kExampleDomain),
-                                  /*plus_address_title=*/std::u16string())
+                                  passwords_empty_str(kExampleDomain))
           .AppendFooterCommand(
               select_passkey_str(),
               autofill::AccessoryAction::CREDMAN_CONDITIONAL_UI_REENTRY)
@@ -1831,8 +1598,7 @@ TEST_F(PasswordAccessoryControllerTest, ShowAndSelectHybridPasskeyOption) {
   EXPECT_EQ(
       controller()->GetSheetData(),
       AccessorySheetData::Builder(AccessoryTabType::PASSWORDS,
-                                  passwords_empty_str(kExampleDomain),
-                                  /*plus_address_title=*/std::u16string())
+                                  passwords_empty_str(kExampleDomain))
           .AppendFooterCommand(cross_device_passkeys_str(),
                                autofill::AccessoryAction::CROSS_DEVICE_PASSKEY)
           .AppendFooterCommand(manage_passwords_str(),
@@ -1870,8 +1636,7 @@ TEST_F(PasswordAccessoryControllerTest, ShowAndSelectPasskey) {
   EXPECT_EQ(
       controller()->GetSheetData(),
       AccessorySheetData::Builder(AccessoryTabType::PASSWORDS,
-                                  /*user_info_title=*/std::u16string(),
-                                  /*plus_address_title=*/std::u16string())
+                                  /*user_info_title=*/std::u16string())
           .AddPasskeySection(kTestPasskey.display_name(),
                              kTestPasskey.credential_id())
           .AppendFooterCommand(manage_passwords_and_passkeys_str(),
@@ -1901,62 +1666,19 @@ TEST_F(PasswordAccessoryControllerTest,
   EXPECT_EQ(
       controller()->GetSheetData(),
       AccessorySheetData::Builder(AccessoryTabType::PASSWORDS,
-                                  passwords_empty_str(kExampleDomain),
-                                  /*plus_address_title=*/std::u16string())
+                                  passwords_empty_str(kExampleDomain))
           .AppendFooterCommand(manage_passwords_str(),
                                autofill::AccessoryAction::MANAGE_PASSWORDS)
           .Build());
 }
 
-TEST_F(PasswordAccessoryControllerTest, TriggersManagePlusAddress) {
-  base::UserActionTester user_action_tester;
-  CreateSheetController();
-  controller()->OnOptionSelected(
-      AccessoryAction::MANAGE_PLUS_ADDRESS_FROM_PASSWORD_SHEET);
-  EXPECT_EQ(user_action_tester.GetActionCount(
-                "PlusAddresses.ManageOptionOnPasswordManualFallbackSelected"),
-            1);
-}
 
-TEST_F(PasswordAccessoryControllerTest, TriggersSelectPlusAddressMenu) {
-  base::UserActionTester user_action_tester;
-  CreateSheetController();
-  EXPECT_CALL(mock_manual_filling_controller_, Hide());
-
-  controller()->OnOptionSelected(
-      AccessoryAction::SELECT_PLUS_ADDRESS_FROM_PASSWORD_SHEET);
-  EXPECT_EQ(user_action_tester.GetActionCount(
-                "PlusAddresses."
-                "SelectPlusAddressOptionOnPasswordManualFallbackSelected"),
-            1);
-}
-
-TEST_F(PasswordAccessoryControllerTest, SelectPlusAddressItemFromMenu) {
-  base::UserActionTester user_action_tester;
-  CreateSheetController();
-  plus_addresses::PlusProfile plus_profile =
-      plus_addresses::test::CreatePlusProfile();
-  plus_address_service().add_plus_profile(plus_profile);
-  plus_address_service().set_is_plus_address_filling_enabled(true);
-
-  EXPECT_CALL(mock_manual_filling_controller_, Hide());
-
-  controller()->OnOptionSelected(
-      AccessoryAction::SELECT_PLUS_ADDRESS_FROM_PASSWORD_SHEET);
-  controller()
-      ->GetAllPlusAddressesControllerForTesting()
-      ->OnPlusAddressSelected(plus_profile.plus_address.value());
-  EXPECT_EQ(user_action_tester.GetActionCount(
-                "PlusAddresses."
-                "StandaloneFillSuggestionOnPasswordManualFallbackAccepted"),
-            1);
-}
 
 TEST_F(PasswordAccessoryControllerTest, ShowTrustedVaultError) {
   CreateSheetController();
   cache()->SaveCredentialsAndBlocklistedForOrigin(
       {}, CredentialCache::IsOriginBlocklisted(false),
-      password_manager::PasswordStoreBackendErrorType::kKeyRetrievalRequired,
+      PasswordStoreBackendError(BackendErrorType::kKeyRetrievalRequired),
       url::Origin::Create(GURL(kExampleSite)));
 
   EXPECT_CALL(mock_manual_filling_controller_,
@@ -1972,8 +1694,7 @@ TEST_F(PasswordAccessoryControllerTest, ShowTrustedVaultError) {
       controller()->GetSheetData(),
       AccessorySheetData::Builder(
           AccessoryTabType::PASSWORDS,
-          /*user_info_title=*/trusted_vault_key_retrieval_required_title(),
-          /*plus_address_title=*/std::u16string())
+          /*user_info_title=*/trusted_vault_key_retrieval_required_title())
           .AppendFooterCommand(
               retrieve_trusted_vault_key_str(),
               autofill::AccessoryAction::RETRIEVE_TRUSTED_VAULT_KEY)
@@ -1995,7 +1716,7 @@ TEST_F(PasswordAccessoryControllerTest,
   CreateSheetController();
   cache()->SaveCredentialsAndBlocklistedForOrigin(
       {}, CredentialCache::IsOriginBlocklisted(false),
-      password_manager::PasswordStoreBackendErrorType::kKeyRetrievalRequired,
+      PasswordStoreBackendError(BackendErrorType::kKeyRetrievalRequired),
       url::Origin::Create(GURL(kExampleSite)));
 
   // Trusted vault error key retrieval required on a username field should show
@@ -2042,9 +1763,6 @@ TEST_F(PasswordAccessoryControllerTest,
 }
 
 TEST_F(PasswordAccessoryControllerTest, LogBackupPasswordSelected) {
-  base::test::ScopedFeatureList features;
-  features.InitAndEnableFeature(
-      password_manager::features::kFillRecoveryPassword);
   CreateSheetController();
   std::vector<PasswordForm> matches = {CreateEntry(
       "Ben", "S3cur3", GURL(kExampleSite), PasswordForm::MatchType::kExact)};
@@ -2085,8 +1803,8 @@ class PasswordAccessoryControllerWithTestStoreTest
 
   void SetUp() override {
     PasswordAccessoryControllerTest::SetUp();
-    test_account_store_->Init(/*affiliated_match_helper=*/nullptr);
-    test_profile_store_->Init(/*affiliated_match_helper=*/nullptr);
+    test_account_store_->Init();
+    test_profile_store_->Init();
   }
 
   void TearDown() override {
@@ -2115,9 +1833,11 @@ class PasswordAccessoryControllerWithTestStoreTest
 TEST_P(PasswordAccessoryControllerWithTestStoreTest,
        AddsShowOtherPasswordsForPasswordField) {
   if (GetParam()) {
-    test_account_store().AddLogin(MakeSavedPassword());
+    test_account_store().AddLogin(
+        password_manager::FromPasswordForm(MakeSavedPassword()));
   } else {
-    test_profile_store().AddLogin(MakeSavedPassword());
+    test_profile_store().AddLogin(
+        password_manager::FromPasswordForm(MakeSavedPassword()));
   }
   task_environment()->RunUntilIdle();
   CreateSheetController();
@@ -2132,8 +1852,7 @@ TEST_P(PasswordAccessoryControllerWithTestStoreTest,
   EXPECT_EQ(
       controller()->GetSheetData(),
       AccessorySheetData::Builder(AccessoryTabType::PASSWORDS,
-                                  passwords_empty_str(kExampleDomain),
-                                  /*plus_address_title=*/std::u16string())
+                                  passwords_empty_str(kExampleDomain))
           .AppendFooterCommand(show_other_passwords_str(),
                                autofill::AccessoryAction::USE_OTHER_PASSWORD)
           .AppendFooterCommand(manage_passwords_str(),
@@ -2144,9 +1863,11 @@ TEST_P(PasswordAccessoryControllerWithTestStoreTest,
 TEST_P(PasswordAccessoryControllerWithTestStoreTest,
        AddsShowOtherPasswordsForUsernameField) {
   if (GetParam()) {
-    test_account_store().AddLogin(MakeSavedPassword());
+    test_account_store().AddLogin(
+        password_manager::FromPasswordForm(MakeSavedPassword()));
   } else {
-    test_profile_store().AddLogin(MakeSavedPassword());
+    test_profile_store().AddLogin(
+        password_manager::FromPasswordForm(MakeSavedPassword()));
   }
   task_environment()->RunUntilIdle();
   CreateSheetController();
@@ -2161,8 +1882,7 @@ TEST_P(PasswordAccessoryControllerWithTestStoreTest,
   EXPECT_EQ(
       controller()->GetSheetData(),
       AccessorySheetData::Builder(AccessoryTabType::PASSWORDS,
-                                  passwords_empty_str(kExampleDomain),
-                                  /*plus_address_title=*/std::u16string())
+                                  passwords_empty_str(kExampleDomain))
           .AppendFooterCommand(show_other_passwords_str(),
                                autofill::AccessoryAction::USE_OTHER_PASSWORD)
           .AppendFooterCommand(manage_passwords_str(),
@@ -2173,9 +1893,11 @@ TEST_P(PasswordAccessoryControllerWithTestStoreTest,
 TEST_P(PasswordAccessoryControllerWithTestStoreTest,
        AddsShowOtherPasswordForOnlyCryptographicSchemeSites) {
   if (GetParam()) {
-    test_account_store().AddLogin(MakeSavedPassword());
+    test_account_store().AddLogin(
+        password_manager::FromPasswordForm(MakeSavedPassword()));
   } else {
-    test_profile_store().AddLogin(MakeSavedPassword());
+    test_profile_store().AddLogin(
+        password_manager::FromPasswordForm(MakeSavedPassword()));
   }
   task_environment()->RunUntilIdle();
   CreateSheetController();
@@ -2191,8 +1913,7 @@ TEST_P(PasswordAccessoryControllerWithTestStoreTest,
   EXPECT_EQ(
       controller()->GetSheetData(),
       AccessorySheetData::Builder(AccessoryTabType::PASSWORDS,
-                                  passwords_empty_str(kExampleHttpSite16),
-                                  /*plus_address_title=*/std::u16string())
+                                  passwords_empty_str(kExampleHttpSite16))
           .AppendFooterCommand(manage_passwords_str(),
                                autofill::AccessoryAction::MANAGE_PASSWORDS)
           .Build());
@@ -2201,9 +1922,11 @@ TEST_P(PasswordAccessoryControllerWithTestStoreTest,
 TEST_P(PasswordAccessoryControllerWithTestStoreTest,
        HideShowOtherPasswordForLowSecurityLevelSites) {
   if (GetParam()) {
-    test_account_store().AddLogin(MakeSavedPassword());
+    test_account_store().AddLogin(
+        password_manager::FromPasswordForm(MakeSavedPassword()));
   } else {
-    test_profile_store().AddLogin(MakeSavedPassword());
+    test_profile_store().AddLogin(
+        password_manager::FromPasswordForm(MakeSavedPassword()));
   }
   task_environment()->RunUntilIdle();
   CreateSheetController(security_state::WARNING);
@@ -2217,8 +1940,7 @@ TEST_P(PasswordAccessoryControllerWithTestStoreTest,
   EXPECT_EQ(
       controller()->GetSheetData(),
       AccessorySheetData::Builder(AccessoryTabType::PASSWORDS,
-                                  passwords_empty_str(kExampleDomain),
-                                  /*plus_address_title=*/std::u16string())
+                                  passwords_empty_str(kExampleDomain))
           .AppendFooterCommand(manage_passwords_str(),
                                autofill::AccessoryAction::MANAGE_PASSWORDS)
           .Build());
@@ -2237,8 +1959,7 @@ TEST_P(PasswordAccessoryControllerWithTestStoreTest,
   EXPECT_EQ(
       controller()->GetSheetData(),
       AccessorySheetData::Builder(AccessoryTabType::PASSWORDS,
-                                  passwords_empty_str(kExampleDomain),
-                                  /*plus_address_title=*/std::u16string())
+                                  passwords_empty_str(kExampleDomain))
           .AppendFooterCommand(manage_passwords_str(),
                                autofill::AccessoryAction::MANAGE_PASSWORDS)
           .Build());

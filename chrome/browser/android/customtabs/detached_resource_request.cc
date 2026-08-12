@@ -10,7 +10,7 @@
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/time/time.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
@@ -167,7 +167,7 @@ void DetachedResourceRequest::Start(
   // DNS error, not a network configuration change. This is visible in
   // metrics. As a consequence, retry the request on DNS errors as well. Note
   // that this is harmless, since the request cannot have server-side
-  // side-effects if the DNS resolution failed. See crbug.com/1078350 for
+  // side-effects if the DNS resolution failed. See crbug.com/40689293 for
   // details.
   int retry_mode = network::SimpleURLLoader::RETRY_ON_NETWORK_CHANGE |
                    network::SimpleURLLoader::RETRY_ON_NAME_NOT_RESOLVED;

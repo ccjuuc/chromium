@@ -10,6 +10,7 @@ assert(enable_extensions_core)
 source_set("extensions") {
   # The files that can be included from other modules.
   public = [
+    "activity_log_policy_util.h",
     "api/notifications/notification_style.h",
     "api/omnibox/omnibox_handler.h",
     "api/storage/storage_schema_manifest_handler.h",
@@ -25,12 +26,11 @@ source_set("extensions") {
     "permissions/chrome_permission_message_rules.h",
     "shenzhenapi_availability.h",
     "sync_helper.h",
-    "webstore_install_result.h",
-    "webstore_override.h",
   ]
 
   # Files that can only be included from here.
   sources = [
+    "activity_log_policy_util.cc",
     "api/notifications/notification_style.cc",
     "api/omnibox/omnibox_handler.cc",
     "api/storage/storage_schema_manifest_handler.cc",
@@ -39,7 +39,6 @@ source_set("extensions") {
     "chrome_extensions_client.cc",
     "chrome_manifest_handlers.cc",
     "chrome_manifest_handlers.h",
-    "extension_constants.cc",
     "extension_metrics.cc",
     "manifest_handlers/app_launch_info.cc",
     "manifest_handlers/minimum_chrome_version_checker.cc",
@@ -52,8 +51,6 @@ source_set("extensions") {
     "permissions/chrome_permission_message_rules.cc",
     "shenzhenapi_availability.cc",
     "sync_helper.cc",
-    "webstore_install_result.cc",
-    "webstore_override.cc",
   ]
 
   public_deps = [
@@ -118,31 +115,116 @@ source_set("extensions") {
     public += [ "api/file_system_provider_capabilities/file_system_provider_capabilities_handler.h" ]
 
     sources += [ "api/file_system_provider_capabilities/file_system_provider_capabilities_handler.cc" ]
+
+    public_deps += [ "//ash/constants" ]
   }
 }
 
-# TODO(zturner): Enable this on Windows. See
-# BrowserWithTestWindowTest::SetUp() for a comment explaining why this is
-# broken.
-if (is_chromeos) {
-  source_set("unit_tests") {
-    testonly = true
+source_set("test_support") {
+  testonly = true
 
-    sources = [
-      "api/file_browser_handlers/file_browser_handler_manifest_unittest.cc",
-      "api/file_system_provider/file_system_provider_handler_unittest.cc",
-    ]
+  sources = [
+    "manifest_tests/chrome_manifest_test.cc",
+    "manifest_tests/chrome_manifest_test.h",
+  ]
 
-    deps = [
-      ":extensions",
-      "//base",
-      "//chrome/test:test_support",
-      "//extensions:test_support",
-      "//extensions/common",
-      "//extensions/common:common_constants",
-      "//testing/gtest",
+  deps = [
+    "//base",
+    "//chrome/common:constants",
+    "//components/version_info",
+    "//extensions:test_support",
+    "//extensions/buildflags",
+    "//extensions/common",
+    "//testing/gtest",
+  ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+
+  sources = [
+    "activity_log_policy_util_unittest.cc",
+    "api/common_extension_api_unittest.cc",
+    "api/storage/storage_schema_manifest_handler_unittest.cc",
+    "chrome_extensions_client_unittest.cc",
+    "extension_unittest.cc",
+    "manifest_handlers/automation_unittest.cc",
+    "manifest_handlers/background_scripts_manifest_unittest.cc",
+    "manifest_handlers/content_scripts_manifest_unittest.cc",
+    "manifest_handlers/exclude_matches_manifest_unittest.cc",
+    "manifest_handlers/icons_manifest_unittest.cc",
+    "manifest_handlers/natively_connectable_handler_unittest.cc",
+    "manifest_handlers/settings_overrides_handler_unittest.cc",
+    "manifest_handlers/theme_handler_unittest.cc",
+    "manifest_handlers/theme_manifest_unittest.cc",
+    "manifest_tests/extension_manifests_background_unittest.cc",
+    "manifest_tests/extension_manifests_chromepermission_unittest.cc",
+    "manifest_tests/extension_manifests_contentsecuritypolicy_unittest.cc",
+    "manifest_tests/extension_manifests_default_extent_path_unittest.cc",
+    "manifest_tests/extension_manifests_experimental_unittest.cc",
+    "manifest_tests/extension_manifests_icons_unittest.cc",
+    "manifest_tests/extension_manifests_initvalue_unittest.cc",
+    "manifest_tests/extension_manifests_kiosk_unittest.cc",
+    "manifest_tests/extension_manifests_launch_unittest.cc",
+    "manifest_tests/extension_manifests_manifest_version_unittest.cc",
+    "manifest_tests/extension_manifests_name_unittest.cc",
+    "manifest_tests/extension_manifests_offline_unittest.cc",
+    "manifest_tests/extension_manifests_old_unittest.cc",
+    "manifest_tests/extension_manifests_options_unittest.cc",
+    "manifest_tests/extension_manifests_portsinpermissions_unittest.cc",
+    "manifest_tests/extension_manifests_sample_unittest.cc",
+    "manifest_tests/extension_manifests_theme_unittest.cc",
+    "manifest_tests/extension_manifests_ui_unittest.cc",
+    "manifest_tests/extension_manifests_validapp_unittest.cc",
+    "manifest_tests/extension_manifests_web_accessible_resources_unittest.cc",
+    "manifest_tests/extension_manifests_web_unittest.cc",
+    "manifest_tests/permissions_parser_unittest.cc",
+    "manifest_unittest.cc",
+    "permissions/chrome_api_permissions_unittest.cc",
+    "permissions/chrome_permission_message_provider_unittest.cc",
+    "permissions/chrome_permission_message_rules_unittest.cc",
+    "permissions/permission_set_unittest.cc",
+    "permissions/permissions_data_unittest.cc",
+    "permissions/settings_override_permission_unittest.cc",
+    "sync_type_unittest.cc",
+  ]
+
+  if (!is_android) {
+    sources += [
+      "api/extension_action/browser_action_manifest_unittest.cc",
+
+      # Side panel is not yet supported on desktop Android.
+      "manifest_tests/extension_manifests_side_panel_unittest.cc",
     ]
   }
+
+  if (is_chromeos) {
+    sources += [
+      "api/file_browser_handlers/file_browser_handler_manifest_unittest.cc",
+      "api/file_system_provider/file_system_provider_handler_unittest.cc",
+      "manifest_tests/extension_manifests_webview_accessible_resources_unittest.cc",
+    ]
+  }
+
+  if (enable_platform_apps) {
+    sources += [
+      "api/url_handlers/url_handlers_parser_unittest.cc",
+      "manifest_tests/extension_manifests_platformapp_unittest.cc",
+    ]
+  }
+
+  deps = [
+    ":extension_features_unittest",
+    ":extensions",
+    ":test_support",
+    "//base",
+    "//chrome/test:test_support",
+    "//extensions:test_support",
+    "//extensions/common",
+    "//extensions/common:common_constants",
+    "//extensions/strings",
+    "//testing/gtest",
+  ]
 }
 
 json_features("extension_features_unittest") {

@@ -22,6 +22,10 @@
 #include "net/dns/public/dns_over_https_server_config.h"
 #include "net/dns/public/secure_dns_mode.h"
 
+namespace policy {
+class DeviceAttributes;
+}  // namespace policy
+
 namespace user_manager {
 class User;
 }  // namespace user_manager
@@ -57,7 +61,9 @@ class SecureDnsManager : public NetworkStateHandlerObserver {
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
+  // `device_attributes` must not be null.
   SecureDnsManager(PrefService* local_state,
+                   std::unique_ptr<policy::DeviceAttributes> device_attributes,
                    user_manager::User& user,
                    bool is_profile_managed);
   SecureDnsManager(const SecureDnsManager&) = delete;
@@ -96,8 +102,8 @@ class SecureDnsManager : public NetworkStateHandlerObserver {
 
   // Computes a collection of secure DNS providers to use based on the |mode|
   // and |templates| prefs applied to |local_doh_providers_|.
-  base::Value::Dict GetProviders(const std::string& mode,
-                                 const std::string& templates) const;
+  base::DictValue GetProviders(const std::string& mode,
+                               const std::string& templates) const;
 
   // Starts tracking user-configured secure DNS settings. This settings are
   // mapped to the pref service that belongs to the profile associated with the

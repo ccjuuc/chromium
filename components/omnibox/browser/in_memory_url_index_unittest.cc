@@ -423,11 +423,21 @@ bool LimitedInMemoryURLIndexTest::InitializeInMemoryURLIndexInSetUp() const {
 TEST_F(LimitedInMemoryURLIndexTest, Initialization) {
   // Verify that the database contains the expected number of items, which is
   // the pre-filtered count, i.e. all the items.
-  sql::Statement statement(GetDB().GetUniqueStatement("SELECT * FROM urls;"));
-  ASSERT_TRUE(statement.is_valid());
   uint64_t row_count = 0;
-  while (statement.Step())
-    ++row_count;
+  history_service_->ScheduleDBTaskForUI(base::BindLambdaForTesting(
+      [&](history::HistoryBackend* backend, history::URLDatabase* url_db) {
+        if (!url_db) {
+          return;
+        }
+        history::URLDatabase::URLEnumerator enumerator;
+        if (url_db->InitURLEnumeratorForEverything(&enumerator)) {
+          history::URLRow row;
+          while (enumerator.GetNextURL(&row)) {
+            ++row_count;
+          }
+        }
+      }));
+  BlockUntilHistoryProcessesPendingRequests(history_service_.get());
   EXPECT_EQ(1U, row_count);
 
   InitializeInMemoryURLIndex();
@@ -540,28 +550,6 @@ TEST_F(InMemoryURLIndexTest, Retrieval) {
   EXPECT_EQ(34, matches[0].url_info.id());
   EXPECT_EQ("http://fubarfubarandfubar.com/", matches[0].url_info.url().spec());
   EXPECT_EQ(u"Situation Normal -- FUBARED", matches[0].url_info.title());
-}
-
-// Regression test for crbug.com/1494484. Exercises a URL that is valid but may
-// become invalid if handled with url_formatter::FormatUrl().
-TEST_F(InMemoryURLIndexTest,
-       RetrievalWithInternationalizedDomainNameWithInvalidCodePoint) {
-  const GURL url("https://xn--b4ab3a0a.xn--b4aew.com/");
-
-  ASSERT_TRUE(url.is_valid());
-  ASSERT_FALSE(GURL(url_formatter::FormatUrl(
-                        url, url_formatter::kFormatUrlOmitUsernamePassword,
-                        base::UnescapeRule::NONE, nullptr, nullptr, nullptr))
-                   .is_valid());
-
-  history::URLID new_row_id = 87654321;  // Arbitrarily chosen large new row id.
-  history::URLRow new_row = history::URLRow(url, new_row_id++);
-  new_row.set_last_visit(base::Time::Now());
-
-  EXPECT_TRUE(UpdateURL(new_row));
-  EXPECT_EQ(1U, HistoryItemsForTerms(u"\u04a5\u049b\u049d",
-                                     std::u16string::npos, kProviderMaxMatches)
-                    .size());
 }
 
 TEST_F(InMemoryURLIndexTest, CursorPositionRetrieval) {

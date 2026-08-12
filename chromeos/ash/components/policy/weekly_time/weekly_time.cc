@@ -24,7 +24,7 @@ const char WeeklyTime::kDayOfWeek[] = "day_of_week";
 const char WeeklyTime::kTime[] = "time";
 const char WeeklyTime::kTimezoneOffset[] = "timezone_offset";
 
-const std::vector<std::string> WeeklyTime::kWeekDays = {
+const std::array<const char*, 8> WeeklyTime::kWeekDays = {
     "UNSPECIFIED", "MONDAY", "TUESDAY",  "WEDNESDAY",
     "THURSDAY",    "FRIDAY", "SATURDAY", "SUNDAY"};
 
@@ -133,7 +133,7 @@ std::unique_ptr<WeeklyTime> WeeklyTime::ExtractFromProto(
 
 // static
 std::unique_ptr<WeeklyTime> WeeklyTime::ExtractFromDict(
-    const base::Value::Dict& dict,
+    const base::DictValue& dict,
     std::optional<int> timezone_offset) {
   auto* day_of_week = dict.FindString(kDayOfWeek);
   if (!day_of_week) {

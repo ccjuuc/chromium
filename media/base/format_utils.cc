@@ -14,26 +14,35 @@ std::optional<VideoPixelFormat> SharedImageFormatToVideoPixelFormat(
   } else if (format == viz::SinglePlaneFormat::kBGRA_8888) {
     return PIXEL_FORMAT_ARGB;
   } else if (format == viz::SinglePlaneFormat::kRGBX_8888) {
-    // There is no PIXEL_FORMAT_XBGR which would have been the right mapping.
-    // See ui/ozone drm_util.cc::GetFourCCFormatFromBufferFormat as reference.
-    // But here it is only about indicating to not consider the alpha channel.
-    // Useful for the compositor to avoid drawing behind as mentioned in
-    // https://chromium-review.googlesource.com/590772.
-    return PIXEL_FORMAT_XRGB;
+    return PIXEL_FORMAT_XBGR;
   } else if (format == viz::SinglePlaneFormat::kRGBA_8888) {
     return PIXEL_FORMAT_ABGR;
   } else if (format == viz::SinglePlaneFormat::kRGBA_1010102) {
+    return PIXEL_FORMAT_XB30;
+  } else if (format == viz::SinglePlaneFormat::kBGRA_1010102) {
     return PIXEL_FORMAT_XR30;
   } else if (format == viz::SinglePlaneFormat::kRGBA_F16) {
     return PIXEL_FORMAT_RGBAF16;
+  } else if (format == viz::MultiPlaneFormat::kI420) {
+    return PIXEL_FORMAT_I420;
+  } else if (format == viz::MultiPlaneFormat::kI420A) {
+    return PIXEL_FORMAT_I420A;
   } else if (format == viz::MultiPlaneFormat::kYV12) {
     return PIXEL_FORMAT_YV12;
   } else if (format == viz::MultiPlaneFormat::kNV12) {
     return PIXEL_FORMAT_NV12;
+  } else if (format == viz::MultiPlaneFormat::kNV16) {
+    return PIXEL_FORMAT_NV16;
+  } else if (format == viz::MultiPlaneFormat::kNV24) {
+    return PIXEL_FORMAT_NV24;
   } else if (format == viz::MultiPlaneFormat::kNV12A) {
     return PIXEL_FORMAT_NV12A;
   } else if (format == viz::MultiPlaneFormat::kP010) {
     return PIXEL_FORMAT_P010LE;
+  } else if (format == viz::MultiPlaneFormat::kP210) {
+    return PIXEL_FORMAT_P210LE;
+  } else if (format == viz::MultiPlaneFormat::kP410) {
+    return PIXEL_FORMAT_P410LE;
   } else {
     DLOG(WARNING) << "Unsupported SharedImageFormat: " << format.ToString();
     return std::nullopt;
@@ -51,8 +60,10 @@ std::optional<viz::SharedImageFormat> VideoPixelFormatToSharedImageFormat(
       return viz::SinglePlaneFormat::kRGBA_8888;
     case PIXEL_FORMAT_XBGR:
       return viz::SinglePlaneFormat::kRGBX_8888;
-    case PIXEL_FORMAT_XR30:
+    case PIXEL_FORMAT_XB30:
       return viz::SinglePlaneFormat::kRGBA_1010102;
+    case PIXEL_FORMAT_XR30:
+      return viz::SinglePlaneFormat::kBGRA_1010102;
     case PIXEL_FORMAT_RGBAF16:
       return viz::SinglePlaneFormat::kRGBA_F16;
     case PIXEL_FORMAT_YV12:

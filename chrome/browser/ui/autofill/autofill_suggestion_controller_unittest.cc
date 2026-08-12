@@ -82,37 +82,6 @@ using TestAutofillSuggestionControllerAutofillClient =
     TestAutofillPopupControllerAutofillClient<>;
 #endif
 
-content::RenderFrameHost* CreateAndNavigateChildFrame(
-    content::RenderFrameHost* parent,
-    const GURL& url,
-    std::string_view name) {
-  content::RenderFrameHost* rfh =
-      content::RenderFrameHostTester::For(parent)->AppendChild(
-          std::string(name));
-  // ContentAutofillDriverFactory::DidFinishNavigation() creates a driver for
-  // subframes only if
-  // `NavigationHandle::HasSubframeNavigationEntryCommitted()` is true. This
-  // is not the case for the first navigation. (In non-unit-tests, the first
-  // navigation creates a driver in
-  // ContentAutofillDriverFactory::BindAutofillDriver().) Therefore,
-  // we simulate *two* navigations here, and explicitly set the transition
-  // type for the second navigation.
-  std::unique_ptr<content::NavigationSimulator> simulator;
-  // First navigation: `HasSubframeNavigationEntryCommitted() == false`.
-  // Must be a different URL from the second navigation.
-  GURL about_blank("about:blank");
-  CHECK_NE(about_blank, url);
-  simulator =
-      content::NavigationSimulator::CreateRendererInitiated(about_blank, rfh);
-  simulator->Commit();
-  rfh = simulator->GetFinalRenderFrameHost();
-  // Second navigation: `HasSubframeNavigationEntryCommitted() == true`.
-  // Must set the transition type to ui::PAGE_TRANSITION_MANUAL_SUBFRAME.
-  simulator = content::NavigationSimulator::CreateRendererInitiated(url, rfh);
-  simulator->SetTransition(ui::PAGE_TRANSITION_MANUAL_SUBFRAME);
-  simulator->Commit();
-  return simulator->GetFinalRenderFrameHost();
-}
 
 content::RenderFrameHost* NavigateAndCommitFrame(content::RenderFrameHost* rfh,
                                                  const GURL& url) {
@@ -125,7 +94,7 @@ content::RenderFrameHost* NavigateAndCommitFrame(content::RenderFrameHost* rfh,
 using AutofillSuggestionControllerTest = AutofillSuggestionControllerTestBase<
     TestAutofillSuggestionControllerAutofillClient>;
 
-// Regression test for (crbug.com/1513574): Showing an Autofill Compose
+// Regression test for (crbug.com/41486145): Showing an Autofill Compose
 // suggestion twice does not crash.
 TEST_F(AutofillSuggestionControllerTest, ShowTwice) {
   ShowSuggestions(manager(), {Suggestion(u"Help me write",
@@ -297,10 +266,11 @@ TEST_F(AutofillSuggestionControllerTest, GetOrCreate) {
   auto create_controller = [&](gfx::RectF bounds) {
     return AutofillSuggestionController::GetOrCreate(
         client().suggestion_controller(manager()).GetWeakPtr(),
-        manager().external_delegate().GetWeakPtrForTest(), nullptr,
-        PopupControllerCommon(std::move(bounds), base::i18n::UNKNOWN_DIRECTION,
-                              gfx::NativeView()),
-        /*form_control_ax_id=*/0);
+        manager().external_delegate().GetWeakPtrForTest(), web_contents(),
+        PopupControllerCommon(LocalFrameToken(*main_frame()->GetFrameToken()),
+                              std::move(bounds), base::i18n::UNKNOWN_DIRECTION),
+        /*form_control_ax_id=*/0,
+        AutofillSuggestionTriggerSource::kUnspecified);
   };
   WeakPtr<AutofillSuggestionController> controller =
       create_controller(gfx::RectF());
@@ -366,16 +336,21 @@ TEST_F(AutofillSuggestionControllerTest, ProperlyResetController) {
   base::WeakPtr<AutofillSuggestionController> controller =
       AutofillSuggestionController::GetOrCreate(
           client().suggestion_controller(manager()).GetWeakPtr(),
-          manager().external_delegate().GetWeakPtrForTest(), nullptr,
-          PopupControllerCommon(gfx::RectF(), base::i18n::UNKNOWN_DIRECTION,
-                                gfx::NativeView()),
-          /*form_control_ax_id=*/0);
+          manager().external_delegate().GetWeakPtrForTest(), web_contents(),
+          PopupControllerCommon(LocalFrameToken(*main_frame()->GetFrameToken()),
+                                gfx::RectF(), base::i18n::UNKNOWN_DIRECTION),
+          /*form_control_ax_id=*/0,
+          AutofillSuggestionTriggerSource::kUnspecified);
   EXPECT_EQ(0, controller->GetLineCount());
+  if (controller) {
+    controller->Hide(SuggestionHidingReason::kViewDestroyed);
+  }
+  task_environment()->RunUntilIdle();
 }
 
 TEST_F(AutofillSuggestionControllerTest, HidingClearsPreview) {
   EXPECT_CALL(manager().external_delegate(), ClearPreviewedForm());
-  EXPECT_CALL(manager().external_delegate(), OnSuggestionsHidden());
+  EXPECT_CALL(manager().external_delegate(), OnSuggestionsHidden);
   client().suggestion_controller(manager()).DoHide();
 }
 
@@ -518,15 +493,7 @@ TEST_F(AutofillSuggestionControllerTestHidingLogic,
   ShowSuggestions(manager(), {SuggestionType::kAddressEntry});
   test::GenerateTestAutofillPopup(&manager().external_delegate());
   // The navigation generates a PrimaryMainFrameWasResized callback.
-  SuggestionHidingReason reason;
-  // On Android, keyboard accessory is not hidden if the Chrome native widget
-  // changes its size. The keyboard accessory is still hidden because the input
-  // field looses.
-  if constexpr (BUILDFLAG(IS_ANDROID)) {
-    reason = SuggestionHidingReason::kNavigation;
-  } else {
-    reason = SuggestionHidingReason::kWidgetChanged;
-  }
+  SuggestionHidingReason reason = SuggestionHidingReason::kRendererEvent;
   EXPECT_CALL(client().suggestion_controller(manager()), Hide(reason));
   NavigateAndCommitFrame(main_frame(), GURL("https://bar.com/"));
   // Verify and clear before TearDown() closes the popup.
@@ -539,14 +506,8 @@ TEST_F(AutofillSuggestionControllerTestHidingLogic,
        HideInSubFrameOnSubFrameNavigation) {
   ShowSuggestions(sub_manager(), {SuggestionType::kAddressEntry});
   test::GenerateTestAutofillPopup(&sub_manager().external_delegate());
-  if (sub_frame()->ShouldChangeRenderFrameHostOnSameSiteNavigation()) {
-    // If the RenderFrameHost changes, a RenderFrameDeleted will fire first.
-    EXPECT_CALL(client().suggestion_controller(sub_manager()),
-                Hide(SuggestionHidingReason::kRendererEvent));
-  } else {
-    EXPECT_CALL(client().suggestion_controller(sub_manager()),
-                Hide(SuggestionHidingReason::kNavigation));
-  }
+  EXPECT_CALL(client().suggestion_controller(sub_manager()),
+              Hide(SuggestionHidingReason::kRendererEvent));
   NavigateAndCommitFrame(sub_frame(), GURL("https://bar.com/"));
   // Verify and clear before TearDown() closes the popup.
   Mock::VerifyAndClearExpectations(
@@ -564,15 +525,7 @@ TEST_F(AutofillSuggestionControllerTestHidingLogic,
        HideInSubFrameOnMainFrameNavigation) {
   ShowSuggestions(sub_manager(), {SuggestionType::kAddressEntry});
   test::GenerateTestAutofillPopup(&sub_manager().external_delegate());
-  SuggestionHidingReason reason;
-  // On Android, keyboard accessory is not hidden if the Chrome native widget
-  // changes its size. The keyboard accessory is still hidden because the input
-  // field looses.
-  if constexpr (BUILDFLAG(IS_ANDROID)) {
-    reason = SuggestionHidingReason::kRendererEvent;
-  } else {
-    reason = SuggestionHidingReason::kWidgetChanged;
-  }
+  SuggestionHidingReason reason = SuggestionHidingReason::kRendererEvent;
   EXPECT_CALL(client().suggestion_controller(sub_manager()), Hide(reason));
   NavigateAndCommitFrame(main_frame(), GURL("https://bar.com/"));
 }

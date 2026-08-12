@@ -13,7 +13,6 @@
 #include "ash/public/cpp/login_screen_model.h"
 #include "base/check_deref.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/lazy_instance.h"
@@ -31,6 +30,7 @@
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service_factory.h"
 #include "chrome/browser/ash/certificate_provider/pin_dialog_manager.h"
 #include "chrome/browser/ash/login/helper.h"
+#include "chrome/browser/ash/login/lock/screen_locker_controller.h"
 #include "chrome/browser/ash/login/lock/views_screen_locker.h"
 #include "chrome/browser/ash/login/login_auth_recorder.h"
 #include "chrome/browser/ash/login/quick_unlock/fingerprint_storage.h"
@@ -42,14 +42,15 @@
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_utils.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/browser_process_platform_part.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/login/login_screen_client_impl.h"
 #include "chrome/browser/ui/ash/login/user_adding_screen.h"
 #include "chrome/browser/ui/ash/session/session_controller_client_impl.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/grit/browser_resources.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/dbus/biod/constants.pb.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
@@ -93,70 +94,6 @@ bool IsFingerprintAvailableForUser(
              quick_unlock::Purpose::kUnlock);
 }
 
-// Observer to start ScreenLocker when locking the screen is requested.
-class ScreenLockObserver : public SessionManagerClient::StubDelegate,
-                           public UserAddingScreen::Observer,
-                           public session_manager::SessionManagerObserver {
- public:
-  ScreenLockObserver() : session_started_(false) {
-    session_manager::SessionManager::Get()->AddObserver(this);
-    SessionManagerClient::Get()->SetStubDelegate(this);
-  }
-
-  ScreenLockObserver(const ScreenLockObserver&) = delete;
-  ScreenLockObserver& operator=(const ScreenLockObserver&) = delete;
-
-  ~ScreenLockObserver() override {
-    session_manager::SessionManager::Get()->RemoveObserver(this);
-    if (SessionManagerClient::Get()) {
-      SessionManagerClient::Get()->SetStubDelegate(nullptr);
-    }
-  }
-
-  bool session_started() const { return session_started_; }
-
-  // SessionManagerClient::StubDelegate overrides:
-  void LockScreenForStub() override {
-    ScreenLocker::HandleShowLockScreenRequest();
-  }
-
-  // session_manager::SessionManagerObserver:
-  void OnSessionStateChanged() override {
-    TRACE_EVENT0("login", "ScreenLockObserver::OnSessionStateChanged");
-    // Only set MarkStrongAuth for the first time session becomes active, which
-    // is when user first sign-in.
-    // For unlocking case which state changes from active->lock->active, it
-    // should be handled in OnAuthSuccess.
-    if (session_started_ ||
-        session_manager::SessionManager::Get()->session_state() !=
-            session_manager::SessionState::ACTIVE) {
-      return;
-    }
-
-    session_started_ = true;
-
-    // The user session has just started, so the user has logged in. Mark a
-    // strong authentication to allow them to use PIN to unlock the device.
-    user_manager::User* user =
-        user_manager::UserManager::Get()->GetActiveUser();
-    quick_unlock::QuickUnlockStorage* quick_unlock_storage =
-        quick_unlock::QuickUnlockFactory::GetForUser(user);
-    if (quick_unlock_storage) {
-      quick_unlock_storage->MarkStrongAuth();
-    }
-  }
-
-  // UserAddingScreen::Observer overrides:
-  void OnUserAddingFinished() override {
-    UserAddingScreen::Get()->RemoveObserver(this);
-    ScreenLocker::HandleShowLockScreenRequest();
-  }
-
- private:
-  bool session_started_;
-};
-
-ScreenLockObserver* g_screen_lock_observer = nullptr;
 const base::Clock* g_clock_for_testing_ = nullptr;
 const base::TickClock* g_tick_clock_for_testing_ = nullptr;
 
@@ -177,7 +114,9 @@ ScreenLocker* ScreenLocker::screen_locker_ = nullptr;  // Only on UI thread
 // ScreenLocker, public:
 
 ScreenLocker::ScreenLocker(const user_manager::UserList& users)
-    : users_(users) {
+    : users_(users),
+      // TODO(crbug.com/404133029): Avoid using g_browser_process.
+      challenge_response_auth_keys_loader_(g_browser_process->local_state()) {
   CHECK(base::CurrentUIThread::IsSet());
   CHECK(!screen_locker_);
   screen_locker_ = this;
@@ -215,7 +154,17 @@ void ScreenLocker::Init() {
 
   // Create ViewScreenLocker that calls into the views-based lock screen via
   // mojo.
-  views_screen_locker_ = std::make_unique<ViewsScreenLocker>();
+  // TODO(crbug.com/404133029): Avoid using g_browser_process.
+  PrefService* local_state = g_browser_process->local_state();
+  ApplicationLocaleStorage* application_locale_storage =
+      g_browser_process->GetFeatures()->application_locale_storage();
+  scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory =
+      g_browser_process->shared_url_loader_factory();
+  policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash =
+      g_browser_process->platform_part()->browser_policy_connector_ash();
+  views_screen_locker_ = std::make_unique<ViewsScreenLocker>(
+      local_state, application_locale_storage,
+      std::move(shared_url_loader_factory), browser_policy_connector_ash);
 
   // Create and display lock screen.
   CHECK(LoginScreenClientImpl::HasInstance());
@@ -245,8 +194,8 @@ void ScreenLocker::OnAuthFailure(const AuthFailure& error) {
   session_manager::SessionManager::Get()->NotifyUnlockAttempt(
       /*success*/ false, TransformUnlockType());
 
-  if (auth_status_consumer_) {
-    auth_status_consumer_->OnAuthFailure(error);
+  if (auth_status_consumer_for_testing_) {
+    auth_status_consumer_for_testing_->OnAuthFailure(error);
   }
 
   if (pending_auth_state_) {
@@ -318,8 +267,8 @@ void ScreenLocker::OnAuthSuccess(const UserContext& user_context) {
     pending_auth_state_.reset();
   }
 
-  if (auth_status_consumer_) {
-    auth_status_consumer_->OnAuthSuccess(user_context);
+  if (auth_status_consumer_for_testing_) {
+    auth_status_consumer_for_testing_->OnAuthSuccess(user_context);
   }
   weak_factory_.InvalidateWeakPtrs();
 
@@ -362,8 +311,8 @@ void ScreenLocker::Authenticate(std::unique_ptr<UserContext> user_context,
   // Do not attempt authentication if it is disabled for the user.
   if (IsAuthTemporarilyDisabledForUser(user_context->GetAccountId())) {
     VLOG(1) << "Authentication disabled for user.";
-    if (auth_status_consumer_) {
-      auth_status_consumer_->OnAuthFailure(
+    if (auth_status_consumer_for_testing_) {
+      auth_status_consumer_for_testing_->OnAuthFailure(
           AuthFailure(AuthFailure::AUTH_DISABLED));
     }
     if (callback) {
@@ -408,19 +357,21 @@ void ScreenLocker::AuthenticateWithChallengeResponse(
   // Do not attempt authentication if it is disabled for the user.
   if (IsAuthTemporarilyDisabledForUser(account_id)) {
     VLOG(1) << "Authentication disabled for user.";
-    if (auth_status_consumer_) {
-      auth_status_consumer_->OnAuthFailure(
+    if (auth_status_consumer_for_testing_) {
+      auth_status_consumer_for_testing_->OnAuthFailure(
           AuthFailure(AuthFailure::AUTH_DISABLED));
     }
     std::move(callback).Run(false);
     return;
   }
 
-  if (!ChallengeResponseAuthKeysLoader::CanAuthenticateUser(account_id)) {
+  // TODO(crbug.com/404133029): Avoid using g_browser_process.
+  if (!ChallengeResponseAuthKeysLoader::CanAuthenticateUser(
+          CHECK_DEREF(g_browser_process->local_state()), account_id)) {
     LOG(ERROR)
         << "Challenge-response authentication isn't supported for the user";
-    if (auth_status_consumer_) {
-      auth_status_consumer_->OnAuthFailure(
+    if (auth_status_consumer_for_testing_) {
+      auth_status_consumer_for_testing_->OnAuthFailure(
           AuthFailure(AuthFailure::UNLOCK_FAILED));
     }
     std::move(callback).Run(false);
@@ -524,52 +475,6 @@ user_manager::UserList ScreenLocker::GetUsersToShow() const {
   return users_to_show;
 }
 
-void ScreenLocker::SetLoginStatusConsumer(AuthStatusConsumer* consumer) {
-  auth_status_consumer_ = consumer;
-}
-
-// static
-void ScreenLocker::InitClass() {
-  DCHECK(!g_screen_lock_observer);
-  g_screen_lock_observer = new ScreenLockObserver;
-}
-
-// static
-void ScreenLocker::ShutDownClass() {
-  DCHECK(g_screen_lock_observer);
-  delete g_screen_lock_observer;
-  g_screen_lock_observer = nullptr;
-
-  // Delete `screen_locker_` if it is being shown.
-  ScheduleDeletion();
-}
-
-// static
-void ScreenLocker::HandleShowLockScreenRequest() {
-  VLOG(1) << "Received ShowLockScreen request from session manager";
-  DCHECK(g_screen_lock_observer);
-  if (UserAddingScreen::Get()->IsRunning()) {
-    VLOG(1) << "Waiting for user adding screen to stop";
-    UserAddingScreen::Get()->AddObserver(g_screen_lock_observer);
-    UserAddingScreen::Get()->Cancel();
-    return;
-  }
-  auto* active_user = user_manager::UserManager::Get()->GetActiveUser();
-  if (g_screen_lock_observer->session_started() && active_user &&
-      active_user->CanLock()) {
-    ScreenLocker::Show();
-  } else {
-    // If the current user's session cannot be locked or the user has not
-    // completed all sign-in steps yet, log out instead. The latter is done to
-    // avoid complications with displaying the lock screen over the login
-    // screen while remaining secure in the case the user walks away during
-    // the sign-in steps. See crbug.com/112225 and crbug.com/110933.
-    VLOG(1) << "The user session cannot be locked, logging out";
-    SessionTerminationManager::Get()->StopSession(
-        login_manager::SessionStopReason::FAILED_TO_LOCK);
-  }
-}
-
 // static
 void ScreenLocker::Show() {
   VLOG(1) << "ScreenLocker::Show()";
@@ -656,12 +561,23 @@ void ScreenLocker::ScheduleDeletion() {
 
 bool ScreenLocker::IsAuthTemporarilyDisabledForUser(
     const AccountId& account_id) {
-  return base::Contains(users_with_temporarily_disabled_auth_, account_id);
+  return users_with_temporarily_disabled_auth_.contains(account_id);
 }
 
-void ScreenLocker::SetAuthenticatorsForTesting(
+base::WeakAutoReset<ScreenLocker, scoped_refptr<Authenticator>>
+ScreenLocker::SetAuthenticatorsForTesting(
     scoped_refptr<Authenticator> authenticator) {
-  authenticator_ = std::move(authenticator);
+  return base::WeakAutoReset<ScreenLocker, scoped_refptr<Authenticator>>(
+      weak_factory_.GetWeakPtr(), &ScreenLocker::authenticator_,
+      std::move(authenticator));
+}
+
+base::WeakAutoReset<ScreenLocker, raw_ptr<AuthStatusConsumer>>
+ScreenLocker::SetLoginStatusConsumerForTesting(AuthStatusConsumer* consumer) {
+  CHECK(!auth_status_consumer_for_testing_);
+  return base::WeakAutoReset<ScreenLocker, raw_ptr<AuthStatusConsumer>>(
+      weak_factory_.GetWeakPtr(),
+      &ScreenLocker::auth_status_consumer_for_testing_, consumer);
 }
 
 // static
@@ -846,7 +762,7 @@ void ScreenLocker::OnAuthScanDone(
   }
 
   UserContext user_context(*primary_user);
-  if (!base::Contains(matches, primary_user->username_hash())) {
+  if (!matches.contains(primary_user->username_hash())) {
     LOG(ERROR) << "Fingerprint unlock failed because it does not match primary"
                << " user's record";
     OnFingerprintAuthFailure(*primary_user);
@@ -897,9 +813,9 @@ void ScreenLocker::OnFingerprintAuthFailure(const user_manager::User& user) {
     }
   }
 
-  if (auth_status_consumer_) {
+  if (auth_status_consumer_for_testing_) {
     AuthFailure failure(AuthFailure::UNLOCK_FAILED);
-    auth_status_consumer_->OnAuthFailure(failure);
+    auth_status_consumer_for_testing_->OnAuthFailure(failure);
   }
 }
 

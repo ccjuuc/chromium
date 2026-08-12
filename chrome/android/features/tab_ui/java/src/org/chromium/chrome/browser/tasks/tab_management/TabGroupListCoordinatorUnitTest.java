@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.tasks.tab_management;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.notNull;
@@ -33,6 +34,7 @@ import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab_ui.TabListFaviconProvider;
+import org.chromium.chrome.browser.tab_ui.TabListMode;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelper;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelper.FaviconImageCallback;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelperJni;
@@ -73,7 +75,7 @@ public class TabGroupListCoordinatorUnitTest {
         mTabListFaviconProvider =
                 new TabListFaviconProvider(
                         activity,
-                        /* isTabStrip= */ false,
+                        TabListMode.GRID,
                         R.dimen.default_favicon_corner_radius,
                         /* tabWebContentsFaviconDelegate= */ null);
     }
@@ -91,7 +93,12 @@ public class TabGroupListCoordinatorUnitTest {
         resolver.resolve(JUnitTestGURLs.URL_1, mCallback);
         verify(mFaviconHelperJniMock)
                 .getForeignFaviconImageForURL(
-                        anyLong(), any(), any(), anyInt(), mFaviconImageCallbackCaptor.capture());
+                        anyLong(),
+                        any(),
+                        any(),
+                        anyInt(),
+                        anyBoolean(),
+                        mFaviconImageCallbackCaptor.capture());
 
         mFaviconImageCallbackCaptor.getValue().onFaviconAvailable(mBitmap, JUnitTestGURLs.URL_2);
         verify(mCallback).onResult(notNull());
@@ -105,7 +112,12 @@ public class TabGroupListCoordinatorUnitTest {
         resolver.resolve(JUnitTestGURLs.URL_1, mCallback);
         verify(mFaviconHelperJniMock)
                 .getForeignFaviconImageForURL(
-                        anyLong(), any(), any(), anyInt(), mFaviconImageCallbackCaptor.capture());
+                        anyLong(),
+                        any(),
+                        any(),
+                        anyInt(),
+                        anyBoolean(),
+                        mFaviconImageCallbackCaptor.capture());
 
         mFaviconImageCallbackCaptor.getValue().onFaviconAvailable(null, JUnitTestGURLs.URL_2);
         verify(mCallback).onResult(notNull());

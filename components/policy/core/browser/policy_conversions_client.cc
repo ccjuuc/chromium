@@ -10,6 +10,7 @@
 #include "base/functional/bind.h"
 #include "base/hash/hash.h"
 #include "base/json/json_writer.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
@@ -28,8 +29,6 @@
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
-
-using base::Value;
 
 namespace policy {
 
@@ -80,7 +79,7 @@ void PolicyConversionsClient::EnableShowMachineValues(bool enabled) {
 }
 
 std::string PolicyConversionsClient::ConvertValueToJSON(
-    const Value& value) const {
+    const base::Value& value) const {
   std::string json_string;
   base::JSONWriter::WriteWithOptions(
       value,
@@ -89,14 +88,14 @@ std::string PolicyConversionsClient::ConvertValueToJSON(
   return json_string;
 }
 
-base::Value::Dict PolicyConversionsClient::GetChromePolicies() {
+base::DictValue PolicyConversionsClient::GetChromePolicies() {
   DCHECK(HasUserPolicies());
 
   PolicyService* policy_service = GetPolicyService();
 
   auto* schema_registry = GetPolicySchemaRegistry();
   if (!schema_registry) {
-    return Value::Dict();
+    return base::DictValue();
   }
 
   const scoped_refptr<SchemaMap> schema_map = schema_registry->schema_map();
@@ -122,7 +121,7 @@ base::Value::Dict PolicyConversionsClient::GetChromePolicies() {
                          GetKnownPolicies(schema_map, policy_namespace));
 }
 
-base::Value::Dict PolicyConversionsClient::GetPrecedencePolicies() {
+base::DictValue PolicyConversionsClient::GetPrecedencePolicies() {
   DCHECK(HasUserPolicies());
 
   VLOG_POLICY(3, POLICY_FETCHING) << "Client has user policies; getting "
@@ -136,10 +135,10 @@ base::Value::Dict PolicyConversionsClient::GetPrecedencePolicies() {
   if (!schema_registry) {
     LOG_POLICY(ERROR, POLICY_PROCESSING)
         << "Cannot retrieve Chrome precedence policies, no schema registry";
-    return Value::Dict();
+    return base::DictValue();
   }
 
-  base::Value::Dict values;
+  base::DictValue values;
   // Iterate through all precedence metapolicies and retrieve their value only
   // if they are set in the PolicyMap.
   for (auto* policy : metapolicy::kPrecedence) {
@@ -157,7 +156,7 @@ base::Value::Dict PolicyConversionsClient::GetPrecedencePolicies() {
   return values;
 }
 
-base::Value::List PolicyConversionsClient::GetPrecedenceOrder() {
+base::ListValue PolicyConversionsClient::GetPrecedenceOrder() {
   DCHECK(HasUserPolicies());
 
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -215,7 +214,7 @@ base::Value::List PolicyConversionsClient::GetPrecedenceOrder() {
                                     IDS_POLICY_PRECEDENCE_CLOUD_USER};
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
-  base::Value::List precedence_order_localized;
+  base::ListValue precedence_order_localized;
   for (int label_id : precedence_order) {
     precedence_order_localized.Append(l10n_util::GetStringUTF16(label_id));
   }
@@ -223,15 +222,15 @@ base::Value::List PolicyConversionsClient::GetPrecedenceOrder() {
   return precedence_order_localized;
 }
 
-Value PolicyConversionsClient::CopyAndMaybeConvert(
-    const Value& value,
+base::Value PolicyConversionsClient::CopyAndMaybeConvert(
+    const base::Value& value,
     const std::optional<Schema>& schema,
     PolicyScope scope) const {
   if (IsMachineInfoHidden(scope, show_machine_values_)) {
     return base::Value(kSensitiveValueMask);
   }
 
-  Value value_copy = value.Clone();
+  base::Value value_copy = value.Clone();
   if (schema.has_value()) {
     schema->MaskSensitiveValues(&value_copy);
   }
@@ -239,16 +238,16 @@ Value PolicyConversionsClient::CopyAndMaybeConvert(
   if (!convert_values_enabled_)
     return value_copy;
   if (value_copy.is_dict())
-    return Value(ConvertValueToJSON(value_copy));
+    return base::Value(ConvertValueToJSON(value_copy));
 
   if (!value_copy.is_list()) {
     return value_copy;
   }
 
-  Value::List result;
+  base::ListValue result;
   for (const auto& element : value_copy.GetList()) {
     if (element.is_dict()) {
-      result.Append(Value(ConvertValueToJSON(element)));
+      result.Append(base::Value(ConvertValueToJSON(element)));
     } else {
       result.Append(element.Clone());
     }
@@ -256,7 +255,7 @@ Value PolicyConversionsClient::CopyAndMaybeConvert(
   return base::Value(std::move(result));
 }
 
-Value::Dict PolicyConversionsClient::GetPolicyValue(
+base::DictValue PolicyConversionsClient::GetPolicyValue(
     const std::string& policy_name,
     const PolicyMap::Entry& policy,
     const PoliciesSet& deprecated_policies,
@@ -266,7 +265,7 @@ Value::Dict PolicyConversionsClient::GetPolicyValue(
         known_policy_schemas) const {
   std::optional<Schema> known_policy_schema =
       GetKnownPolicySchema(known_policy_schemas, policy_name);
-  Value::Dict value;
+  base::DictValue value;
   value.Set("value", CopyAndMaybeConvert(*policy.value_unsafe(),
                                          known_policy_schema, policy.scope));
   if (convert_types_enabled_) {
@@ -345,7 +344,8 @@ Value::Dict PolicyConversionsClient::GetPolicyValue(
     if (policy_details && !policy_details->supports_dynamic_refresh) {
       bool policy_changed = false;
       // Check if value has changed or policy is newly set
-      if (policy_service) {
+      if (policy_service &&
+          policy_service->IsFirstPolicyLoadComplete(POLICY_DOMAIN_CHROME)) {
         const base::Value* policy_value = policy.value_unsafe();
         std::optional<size_t> current_value_hash;
         if (policy_value) {
@@ -367,13 +367,13 @@ Value::Dict PolicyConversionsClient::GetPolicyValue(
   }
 
   if (!policy.conflicts.empty()) {
-    Value::List override_values;
-    Value::List supersede_values;
+    base::ListValue override_values;
+    base::ListValue supersede_values;
 
     bool has_override_values = false;
     bool has_supersede_values = false;
     for (const auto& conflict : policy.conflicts) {
-      base::Value::Dict conflicted_policy_value =
+      base::DictValue conflicted_policy_value =
           GetPolicyValue(policy_name, conflict.entry(), deprecated_policies,
                          future_policies, errors, known_policy_schemas);
       switch (conflict.conflict_type()) {
@@ -400,7 +400,7 @@ Value::Dict PolicyConversionsClient::GetPolicyValue(
   return value;
 }
 
-Value::Dict PolicyConversionsClient::GetPolicyValues(
+base::DictValue PolicyConversionsClient::GetPolicyValues(
     const PolicyMap& map,
     PolicyErrorMap* errors,
     const PoliciesSet& deprecated_policies,
@@ -409,7 +409,7 @@ Value::Dict PolicyConversionsClient::GetPolicyValues(
         known_policy_schemas) const {
   DVLOG_POLICY(2, POLICY_PROCESSING) << "Retrieving map of policy values";
 
-  base::Value::Dict values;
+  base::DictValue values;
   for (const auto& entry : map) {
     const std::string& policy_name = entry.first;
     const PolicyMap::Entry& policy = entry.second;
@@ -417,7 +417,7 @@ Value::Dict PolicyConversionsClient::GetPolicyValues(
       continue;
     if (policy.IsDefaultValue() && drop_default_values_enabled_)
       continue;
-    base::Value::Dict value =
+    base::DictValue value =
         GetPolicyValue(policy_name, policy, deprecated_policies,
                        future_policies, errors, known_policy_schemas);
     values.Set(policy_name, std::move(value));
@@ -470,15 +470,15 @@ bool PolicyConversionsClient::GetUserPoliciesEnabled() const {
   return user_policies_enabled_;
 }
 
-#if BUILDFLAG(IS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
-Value::Dict PolicyConversionsClient::ConvertUpdaterPolicies(
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+base::DictValue PolicyConversionsClient::ConvertUpdaterPolicies(
     PolicyMap updater_policies,
     std::optional<PolicyConversions::PolicyToSchemaMap>
         updater_policy_schemas) {
   return GetPolicyValues(updater_policies, nullptr, PoliciesSet(),
                          PoliciesSet(), updater_policy_schemas);
 }
-#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 
 std::string PolicyConversionsClient::GetPolicyScope(
     const std::string& policy_name,

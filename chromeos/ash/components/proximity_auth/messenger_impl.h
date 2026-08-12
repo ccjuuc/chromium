@@ -11,6 +11,7 @@
 #include "base/memory/advanced_memory_safety_checks.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/scoped_observation.h"
 #include "base/values.h"
 #include "chromeos/ash/components/proximity_auth/messenger.h"
 #include "chromeos/ash/services/secure_channel/public/cpp/client/client_channel.h"
@@ -49,7 +50,7 @@ class MessengerImpl : public Messenger,
   // been sent yet or is waiting for a response from the remote device.
   struct PendingMessage {
     PendingMessage();
-    explicit PendingMessage(const base::Value::Dict& message);
+    explicit PendingMessage(const base::DictValue& message);
     explicit PendingMessage(const std::string& message);
     ~PendingMessage();
 
@@ -69,11 +70,11 @@ class MessengerImpl : public Messenger,
 
   // Handles an incoming "status_update" |message|, parsing and notifying
   // observers of the content.
-  void HandleRemoteStatusUpdateMessage(const base::Value::Dict& message);
+  void HandleRemoteStatusUpdateMessage(const base::DictValue& message);
 
   // Handles an incoming "unlock_response" message, notifying observers of the
   // response.
-  void HandleUnlockResponseMessage(const base::Value::Dict& message);
+  void HandleUnlockResponseMessage(const base::DictValue& message);
 
   // ash::secure_channel::ClientChannel::Observer:
   void OnDisconnected() override;
@@ -91,7 +92,7 @@ class MessengerImpl : public Messenger,
   std::unique_ptr<ash::secure_channel::ClientChannel> channel_;
 
   // The registered observers of |this_| messenger.
-  base::ObserverList<MessengerObserver>::Unchecked observers_;
+  base::ObserverList<MessengerObserver> observers_;
 
   // Queue of messages to send to the remote device.
   base::circular_deque<PendingMessage> queued_messages_;
@@ -99,6 +100,10 @@ class MessengerImpl : public Messenger,
   // The current message being sent or waiting on the remote device for a
   // response. Null if there is no message currently in this state.
   std::unique_ptr<PendingMessage> pending_message_;
+
+  base::ScopedObservation<ash::secure_channel::ClientChannel,
+                          ash::secure_channel::ClientChannel::Observer>
+      channel_observation_{this};
 
   base::WeakPtrFactory<MessengerImpl> weak_ptr_factory_{this};
 };

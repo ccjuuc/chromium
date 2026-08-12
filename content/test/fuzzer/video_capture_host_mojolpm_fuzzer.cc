@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <stdint.h>
+
 #include <memory>
 #include <string>
 #include <utility>
@@ -32,9 +33,9 @@
 #include "content/public/browser/media_device_id.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_browser_context.h"
+#include "content/public/test/test_content_browser_client.h"
 #include "content/test/fuzzer/mojolpm_fuzzer_support.h"
 #include "content/test/fuzzer/video_capture_host_mojolpm_fuzzer.pb.h"
-#include "content/test/test_content_browser_client.h"
 #include "media/audio/audio_system_impl.h"
 #include "media/audio/mock_audio_manager.h"
 #include "media/audio/test_audio_thread.h"
@@ -560,30 +561,6 @@ void VideoCaptureHostTestcase::AddVideoCaptureHost(uint32_t id,
   mojolpm::GetContext()->AddInstance(id, std::move(remote));
 }
 
-/* Matches signature of a mojolpm::ToProto implementation, which has not been
- * implemented yet, to be replaced once that is done.
- * see "mojo/public/mojom/base/unguessable_token.mojom-mojolpm.h"
- */
-bool ToProto(const ::base::UnguessableToken& input,
-             mojolpm::mojo_base::mojom::UnguessableToken& output) {
-  if (output.has_new_()) {
-    output.mutable_new_()->set_id(1UL);
-    output.mutable_new_()->set_m_low(input.GetLowForSerialization());
-    output.mutable_new_()->set_m_high(input.GetHighForSerialization());
-    return true;
-  }
-  auto allocated_new = std::make_unique<
-      mojolpm::mojo_base::mojom::UnguessableToken_ProtoStruct>();
-
-  allocated_new->set_id(1UL);
-  allocated_new->set_m_low(input.GetLowForSerialization());
-  allocated_new->set_m_high(input.GetHighForSerialization());
-
-  // passes ownership of `allocated_new`
-  output.set_allocated_new_(allocated_new.release());
-  return true;
-}
-
 void VideoCaptureHostTestcase::HandleDeviceRemoteAction(
     const content::fuzzing::video_capture_host::proto::
         VideoCaptureHostDeviceRemoteAction& device_remote_action) {
@@ -631,8 +608,9 @@ VideoCaptureHostTestcase::RemoteActionInjectSessionId(
       return remote_method_action;
   }
 
-  if (!ToProto(token, *m_session_id))
+  if (!mojolpm::ToProto(token, *m_session_id)) {
     return remote_method_action;
+  }
   return remote_method_action_mutable;
 }
 

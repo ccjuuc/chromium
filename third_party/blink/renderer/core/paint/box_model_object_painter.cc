@@ -32,14 +32,20 @@ BoxModelObjectPainter::BoxModelObjectPainter(const LayoutBoxModelObject& box)
     : BoxPainterBase(box.GetDocument(), box.StyleRef(), GetNode(box)),
       box_model_(box) {}
 
+Node* BoxModelObjectPainter::ImageGeneratingNode() const {
+  return box_model_.GeneratingNode();
+}
+
 PhysicalRect BoxModelObjectPainter::AdjustRectForScrolledContent(
     GraphicsContext& context,
     const PhysicalBoxStrut& border,
     const PhysicalRect& rect) const {
   // Clip to the overflow area.
-  // TODO(chrishtr): this should be pixel-snapped.
+  // TODO(crbug.com/539155974): Properly snap to pixels.
   const auto& this_box = To<LayoutBox>(box_model_);
-  context.Clip(gfx::RectF(this_box.OverflowClipRect(rect.offset)));
+  PhysicalRect clip_rect = this_box.OverflowClipRect();
+  clip_rect.Move(rect.offset);
+  context.Clip(gfx::RectF(clip_rect));
 
   // Adjust the paint rect to reflect a scrolled content box with borders at
   // the ends.
@@ -47,8 +53,9 @@ PhysicalRect BoxModelObjectPainter::AdjustRectForScrolledContent(
   scrolled_paint_rect.offset -=
       PhysicalOffset(this_box.PixelSnappedScrolledContentOffset());
   scrolled_paint_rect.SetWidth(border.HorizontalSum() + this_box.ScrollWidth());
-  scrolled_paint_rect.SetHeight(this_box.BorderTop() + this_box.ScrollHeight() +
-                                this_box.BorderBottom());
+  // FIXME: Why isn't this using the provided pixel snapped borders?
+  scrolled_paint_rect.SetHeight(this_box.BorderOutsets().VerticalSum() +
+                                this_box.ScrollHeight());
   return scrolled_paint_rect;
 }
 

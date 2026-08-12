@@ -16,7 +16,7 @@
 #include "content/public/renderer/render_thread.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/permissions/permissions_data.h"
-#include "extensions/grit/extensions_renderer_resources.h"
+#include "extensions/grit/extensions_renderer_generated_resources.h"
 #include "extensions/renderer/extension_frame_helper.h"
 #include "extensions/renderer/injection_host.h"
 #include "extensions/renderer/script_context.h"
@@ -76,8 +76,8 @@ struct GreasemonkeyApiJsString {
 GreasemonkeyApiJsString::GreasemonkeyApiJsString() {
   std::string greasemonky_api_js(
       ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
-          IDR_GREASEMONKEY_API_JS));
-  source_ = blink::WebString::FromUTF8(greasemonky_api_js);
+          IDR_EXTENSIONS_RENDERER_GENERATED_GREASEMONKEY_API_JS));
+  source_ = blink::WebString::FromUtf8(greasemonky_api_js);
 }
 
 blink::WebScriptSource GreasemonkeyApiJsString::GetSource() const {
@@ -98,6 +98,24 @@ bool ShouldInjectScripts(const UserScript::ContentList& script_contents,
     }
   }
   return false;
+}
+
+std::optional<blink::ExtensionScriptStreamer> TakeScriptStreamerIfAvailable(
+    std::map<GURL, std::optional<blink::ExtensionScriptStreamer>>&
+        script_streamers,
+    const GURL& url) {
+  auto it = script_streamers.find(url);
+  if (it == script_streamers.end()) {
+    // No streamer found for the given URL.
+    return std::nullopt;
+  }
+  std::optional<blink::ExtensionScriptStreamer> streamer =
+      std::move(it->second);
+  script_streamers.erase(it);
+  if (streamer->CancelStreamingIfNotStarted()) {
+    return std::nullopt;
+  }
+  return streamer;
 }
 
 }  // namespace
@@ -238,7 +256,8 @@ PermissionsData::PageAccess UserScriptInjector::CanExecuteOnFrame(
 std::vector<blink::WebScriptSource> UserScriptInjector::GetJsSources(
     mojom::RunLocation run_location,
     std::set<std::string>* executing_scripts,
-    size_t* num_injected_js_scripts) const {
+    size_t* num_injected_js_scripts,
+    ExtensionFrameHelper* frame_helper) const {
   DCHECK(script_);
   std::vector<blink::WebScriptSource> sources;
 
@@ -258,9 +277,13 @@ std::vector<blink::WebScriptSource> UserScriptInjector::GetJsSources(
       continue;
     }
 
-    sources.push_back(blink::WebScriptSource(
+    std::optional<blink::ExtensionScriptStreamer> script_streamer =
+        TakeScriptStreamerIfAvailable(frame_helper->GetScriptStreamersMap(),
+                                      script_url);
+
+    sources.emplace_back(
         user_script_set_->GetJsSource(*file, script_->emulate_greasemonkey()),
-        script_url));
+        script_url, std::move(script_streamer));
 
     ++*num_injected_js_scripts;
     executing_scripts->insert(script_url.GetPath());

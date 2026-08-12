@@ -48,6 +48,12 @@ void AssertJsonEqual(const std::string& expected_str,
   ASSERT_EQ(expected_normalized_str, actual_normalized_str);
 }
 
+void ExpectInvalidPromptBehavior(const base::Value& value) {
+  PromptBehavior prompt_behavior;
+  EXPECT_EQ(kInvalidArgument,
+            PromptBehavior::Create(true, value, prompt_behavior).code());
+}
+
 TEST(PromptBehaviorTest, StrEmpty) {
   PromptBehavior prompt_behavior;
   Status status =
@@ -161,7 +167,7 @@ TEST(PromptBehaviorTest, StrIgnore) {
 
 TEST(PromptBehaviorTest, EmptyDict) {
   PromptBehavior prompt_behavior;
-  Status status = PromptBehavior::Create(true, base::Value(base::Value::Dict()),
+  Status status = PromptBehavior::Create(true, base::Value(base::DictValue()),
                                          prompt_behavior);
   ASSERT_TRUE(status.IsOk());
   AssertPromptBehavior(
@@ -172,6 +178,40 @@ TEST(PromptBehaviorTest, EmptyDict) {
           {dialog_types::kConfirm, PromptHandlerType::kDismiss, true},
           {dialog_types::kPrompt, PromptHandlerType::kDismiss, true},
       });
+}
+
+TEST(PromptBehaviorTest, DictUnknownKey) {
+  ExpectInvalidPromptBehavior(
+      base::Value(base::test::ParseJsonDict(R"({"foo": "accept"})")));
+}
+
+TEST(PromptBehaviorTest, DictMisspelledKey) {
+  ExpectInvalidPromptBehavior(
+      base::Value(base::test::ParseJsonDict(R"({"beforeunload": "bar"})")));
+}
+
+TEST(PromptBehaviorTest, DictAllValidKeys) {
+  constexpr char kCapabilityJson[] = R"({
+    "alert": "accept",
+    "beforeUnload": "accept",
+    "confirm": "dismiss",
+    "default": "ignore",
+    "file": "dismiss",
+    "prompt": "ignore"
+  })";
+  PromptBehavior prompt_behavior;
+
+  Status status = PromptBehavior::Create(
+      true, base::Value(base::test::ParseJsonDict(kCapabilityJson)),
+      prompt_behavior);
+
+  ASSERT_TRUE(status.IsOk()) << status.message();
+  AssertJsonEqual(kCapabilityJson, prompt_behavior.CapabilityView());
+}
+
+TEST(PromptBehaviorTest, DictInvalidFileHandler) {
+  ExpectInvalidPromptBehavior(
+      base::Value(base::test::ParseJsonDict(R"({"file": false})")));
 }
 
 class PromptBehaviorCreateDictInvariantTest
@@ -205,7 +245,7 @@ TEST_P(PromptBehaviorCreateDictInvariantTest, CreateDictWithDefault) {
   std::string default_prompt_type = handler_type_str == prompt_behavior::kAccept
                                         ? prompt_behavior::kDismiss
                                         : prompt_behavior::kAccept;
-  base::Value::Dict requested_capability;
+  base::DictValue requested_capability;
   requested_capability.Set("default", default_prompt_type);
   requested_capability.Set(prompt_type_in_capability, handler_type_str);
 
@@ -237,7 +277,7 @@ TEST_P(PromptBehaviorCreateDictInvariantTest, CreateDictWithoutDefault) {
           // other prompts are dismissed by default.
           : prompt_behavior::kDismissAndNotify;
 
-  base::Value::Dict requested_capability;
+  base::DictValue requested_capability;
   requested_capability.Set(prompt_type_in_capability, handler_type_str);
 
   PromptBehavior prompt_behavior;

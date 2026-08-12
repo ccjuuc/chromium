@@ -31,19 +31,15 @@ class TipsClient : public NotificationSchedulerClient {
   void BeforeShowNotification(
       std::unique_ptr<NotificationData> notification_data,
       NotificationDataCallback callback) override;
+  void OnShowNotification(
+      std::unique_ptr<NotificationData> notification_data) override;
   void OnSchedulerInitialized(bool success,
                               std::set<std::string> guids) override;
   void OnUserAction(const UserActionData& action_data) override;
   void GetThrottleConfig(ThrottleConfigCallback callback) override;
 
   std::unique_ptr<TipsAgent> tips_agent_;
-  // The pointer for this PrefService is susceptible to becoming a dangling
-  // pointer during testing in notification_schedule_service_browsertest.cc's
-  // Show/ScheduleNotification, when passed in to the schedule service. This is
-  // safe in practice because the schedule service (including the tips client)
-  // as part of a keyed service will be cleaned up after it is used before
-  // PrefService is cleaned up since there is an explicit dependency.
-  raw_ptr<PrefService, DisableDanglingPtrDetection> pref_service_;
+  raw_ptr<PrefService> pref_service_;
 };
 
 }  // namespace notifications

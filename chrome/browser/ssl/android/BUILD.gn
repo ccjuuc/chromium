@@ -6,8 +6,10 @@ import("//build/config/android/rules.gni")
 import("//third_party/jni_zero/jni_zero.gni")
 
 generate_jni("jni_headers") {
-  sources =
-      [ "java/src/org/chromium/chrome/browser/ssl/HttpsFirstModeBridge.java" ]
+  sources = [
+    "java/src/org/chromium/chrome/browser/ssl/HttpsFirstModeBridge.java",
+    "java/src/org/chromium/chrome/browser/ssl/HttpsUpgradesInterceptor.java",
+  ]
 }
 
 android_library("java") {
@@ -15,6 +17,7 @@ android_library("java") {
     "java/src/org/chromium/chrome/browser/ssl/HttpsFirstModeBridge.java",
     "java/src/org/chromium/chrome/browser/ssl/HttpsFirstModeSettingsFragment.java",
     "java/src/org/chromium/chrome/browser/ssl/HttpsFirstModeVariantPreference.java",
+    "java/src/org/chromium/chrome/browser/ssl/HttpsUpgradesInterceptor.java",
   ]
   deps = [
     ":java_resources",
@@ -28,8 +31,8 @@ android_library("java") {
     "//components/browser_ui/settings/android:java",
     "//components/browser_ui/styles/android:java",
     "//components/browser_ui/widget/android:java",
-    "//components/permissions/android:java",
     "//components/prefs/android:java",
+    "//components/safe_browsing/android:safe_browsing_java",
     "//components/user_prefs/android:java",
     "//third_party/androidx:androidx_annotation_annotation_java",
     "//third_party/androidx:androidx_browser_browser_java",

@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/core/frame/post_layout_snapshot_client.h"
 
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -15,7 +16,9 @@ PostLayoutSnapshotClient::PostLayoutSnapshotClient(LocalFrame* frame) {
 }
 
 void PostLayoutSnapshotClient::UpdateSnapshotForServiceAnimations() {
-  UpdateSnapshot();
+  if (!RuntimeEnabledFeatures::RunSnapshotPostLayoutStateStepsEnabled()) {
+    UpdateSnapshot();
+  }
 }
 
 }  // namespace blink

@@ -6,6 +6,7 @@
 
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/renderer/core/layout/constraint_space_builder.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
 
 namespace blink {
@@ -44,7 +45,7 @@ struct ExclusionSpaceForTesting {
     exclusion_space.Add(ExclusionArea::Create(
         BfcRect(BfcOffset(LayoutUnit(inline_start), LayoutUnit(block_start)),
                 BfcOffset(LayoutUnit(inline_end), LayoutUnit(block_end))),
-        EFloat::kLeft, /*is_hidden_for_paint*/ false));
+        EFloat::kLeft));
   }
 
   void AddForInitialLetterBox(float inline_start,
@@ -55,14 +56,14 @@ struct ExclusionSpaceForTesting {
     exclusion_space.Add(ExclusionArea::CreateForInitialLetterBox(
         BfcRect(BfcOffset(LayoutUnit(inline_start), LayoutUnit(block_start)),
                 BfcOffset(LayoutUnit(inline_end), LayoutUnit(block_end))),
-        EFloat::kLeft, /*is_hidden_for_paint*/ false));
+        EFloat::kLeft));
   }
 
   LayoutOpportunityVector AllLayoutOpportunities(float inline_offset,
                                                  float block_offset) const {
     return exclusion_space.AllLayoutOpportunities(
         BfcOffset(LayoutUnit(inline_offset), LayoutUnit(block_offset)),
-        available_inline_size);
+        available_inline_size, TextDirection::kLtr);
   }
 
   LayoutOpportunity FindLayoutOpportunity(float inline_offset,
@@ -70,7 +71,8 @@ struct ExclusionSpaceForTesting {
                                           float minimal_inline_size) {
     return exclusion_space.FindLayoutOpportunity(
         BfcOffset(LayoutUnit(inline_offset), LayoutUnit(block_offset)),
-        available_inline_size, LayoutUnit(minimal_inline_size));
+        available_inline_size, TextDirection::kLtr,
+        LayoutUnit(minimal_inline_size));
   }
 };
 
@@ -91,7 +93,7 @@ TEST(ExclusionSpaceTest, Empty) {
 
   LayoutOpportunityVector opportunites = exclusion_space.AllLayoutOpportunities(
       /* offset */ {LayoutUnit(), LayoutUnit()},
-      /* available_size */ LayoutUnit(100));
+      /* available_size */ LayoutUnit(100), TextDirection::kLtr);
 
   EXPECT_EQ(1u, opportunites.size());
   TEST_OPPORTUNITY(opportunites[0], BfcOffset(LayoutUnit(), LayoutUnit()),
@@ -99,7 +101,7 @@ TEST(ExclusionSpaceTest, Empty) {
 
   opportunites = exclusion_space.AllLayoutOpportunities(
       /* offset */ {LayoutUnit(-30), LayoutUnit(-100)},
-      /* available_size */ LayoutUnit(50));
+      /* available_size */ LayoutUnit(50), TextDirection::kLtr);
 
   EXPECT_EQ(1u, opportunites.size());
   TEST_OPPORTUNITY(opportunites[0],
@@ -108,11 +110,58 @@ TEST(ExclusionSpaceTest, Empty) {
 
   opportunites = exclusion_space.AllLayoutOpportunities(
       /* offset */ {LayoutUnit(30), LayoutUnit(100)},
-      /* available_size */ LayoutUnit(50));
+      /* available_size */ LayoutUnit(50), TextDirection::kLtr);
 
   EXPECT_EQ(1u, opportunites.size());
   TEST_OPPORTUNITY(opportunites[0], BfcOffset(LayoutUnit(30), LayoutUnit(100)),
                    BfcOffset(LayoutUnit(80), LayoutUnit::Max()));
+}
+
+TEST(ExclusionSpaceTest, LineLayoutOpportunityClampsNonDominantSide) {
+  test::TaskEnvironment task_environment;
+
+  auto create_space = [](TextDirection direction) {
+    ConstraintSpaceBuilder builder(WritingMode::kHorizontalTb,
+                                   {WritingMode::kHorizontalTb, direction},
+                                   /* is_new_formatting_context */ false);
+    builder.SetAvailableSize({LayoutUnit(100), LayoutUnit(100)});
+    builder.SetBfcOffset({LayoutUnit(10), LayoutUnit()});
+    return builder.ToConstraintSpace();
+  };
+
+  const ConstraintSpace ltr_space = create_space(TextDirection::kLtr);
+  const LayoutOpportunity ltr_opportunity(BfcRect(
+      {LayoutUnit(20), LayoutUnit()}, {LayoutUnit(150), LayoutUnit(100)}));
+  const LineLayoutOpportunity ltr_line =
+      ltr_opportunity.ComputeLineLayoutOpportunity(ltr_space, LayoutUnit(10),
+                                                   LayoutUnit());
+  EXPECT_EQ(LayoutUnit(20), ltr_line.line_left_offset);
+  EXPECT_EQ(LayoutUnit(110), ltr_line.line_right_offset);
+
+  const LayoutOpportunity ltr_opportunity_past_available_space(BfcRect(
+      {LayoutUnit(120), LayoutUnit()}, {LayoutUnit(150), LayoutUnit(100)}));
+  const LineLayoutOpportunity ltr_line_past_available_space =
+      ltr_opportunity_past_available_space.ComputeLineLayoutOpportunity(
+          ltr_space, LayoutUnit(10), LayoutUnit());
+  EXPECT_EQ(LayoutUnit(120), ltr_line_past_available_space.line_left_offset);
+  EXPECT_EQ(LayoutUnit(120), ltr_line_past_available_space.line_right_offset);
+
+  const ConstraintSpace rtl_space = create_space(TextDirection::kRtl);
+  const LayoutOpportunity rtl_opportunity(BfcRect(
+      {LayoutUnit(-50), LayoutUnit()}, {LayoutUnit(100), LayoutUnit(100)}));
+  const LineLayoutOpportunity rtl_line =
+      rtl_opportunity.ComputeLineLayoutOpportunity(rtl_space, LayoutUnit(10),
+                                                   LayoutUnit());
+  EXPECT_EQ(LayoutUnit(10), rtl_line.line_left_offset);
+  EXPECT_EQ(LayoutUnit(100), rtl_line.line_right_offset);
+
+  const LayoutOpportunity rtl_opportunity_past_available_space(BfcRect(
+      {LayoutUnit(-50), LayoutUnit()}, {LayoutUnit(), LayoutUnit(100)}));
+  const LineLayoutOpportunity rtl_line_past_available_space =
+      rtl_opportunity_past_available_space.ComputeLineLayoutOpportunity(
+          rtl_space, LayoutUnit(10), LayoutUnit());
+  EXPECT_EQ(LayoutUnit(), rtl_line_past_available_space.line_left_offset);
+  EXPECT_EQ(LayoutUnit(), rtl_line_past_available_space.line_right_offset);
 }
 
 TEST(ExclusionSpaceTest, SingleExclusion) {
@@ -122,11 +171,11 @@ TEST(ExclusionSpaceTest, SingleExclusion) {
   exclusion_space.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(10), LayoutUnit(20)),
                                     BfcOffset(LayoutUnit(60), LayoutUnit(90))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
 
   LayoutOpportunityVector opportunites = exclusion_space.AllLayoutOpportunities(
       /* offset */ {LayoutUnit(), LayoutUnit()},
-      /* available_size */ LayoutUnit(100));
+      /* available_size */ LayoutUnit(100), TextDirection::kLtr);
 
   EXPECT_EQ(3u, opportunites.size());
   TEST_OPPORTUNITY(opportunites[0], BfcOffset(LayoutUnit(), LayoutUnit()),
@@ -138,7 +187,7 @@ TEST(ExclusionSpaceTest, SingleExclusion) {
 
   opportunites = exclusion_space.AllLayoutOpportunities(
       /* offset */ {LayoutUnit(-10), LayoutUnit(-100)},
-      /* available_size */ LayoutUnit(100));
+      /* available_size */ LayoutUnit(100), TextDirection::kLtr);
 
   EXPECT_EQ(3u, opportunites.size());
   TEST_OPPORTUNITY(opportunites[0],
@@ -153,7 +202,7 @@ TEST(ExclusionSpaceTest, SingleExclusion) {
   // opportunity.
   opportunites = exclusion_space.AllLayoutOpportunities(
       /* offset */ {LayoutUnit(10), LayoutUnit(10)},
-      /* available_size */ LayoutUnit(50));
+      /* available_size */ LayoutUnit(50), TextDirection::kLtr);
 
   EXPECT_EQ(3u, opportunites.size());
   TEST_OPPORTUNITY(opportunites[0], BfcOffset(LayoutUnit(10), LayoutUnit(10)),
@@ -167,7 +216,7 @@ TEST(ExclusionSpaceTest, SingleExclusion) {
   // the search area creates a zero-width opportunity.
   opportunites = exclusion_space.AllLayoutOpportunities(
       /* offset */ {LayoutUnit(10), LayoutUnit(10)},
-      /* available_size */ LayoutUnit(49));
+      /* available_size */ LayoutUnit(49), TextDirection::kLtr);
 
   EXPECT_EQ(3u, opportunites.size());
   TEST_OPPORTUNITY(opportunites[0], BfcOffset(LayoutUnit(10), LayoutUnit(10)),
@@ -185,15 +234,15 @@ TEST(ExclusionSpaceTest, TwoExclusions) {
   exclusion_space.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(), LayoutUnit()),
                                     BfcOffset(LayoutUnit(150), LayoutUnit(75))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
   exclusion_space.Add(ExclusionArea::Create(
       BfcRect(BfcOffset(LayoutUnit(100), LayoutUnit(75)),
               BfcOffset(LayoutUnit(400), LayoutUnit(150))),
-      EFloat::kRight, /*is_hidden_for_paint*/ false));
+      EFloat::kRight));
 
   LayoutOpportunityVector opportunites = exclusion_space.AllLayoutOpportunities(
       /* offset */ {LayoutUnit(), LayoutUnit()},
-      /* available_size */ LayoutUnit(400));
+      /* available_size */ LayoutUnit(400), TextDirection::kLtr);
 
   EXPECT_EQ(3u, opportunites.size());
   TEST_OPPORTUNITY(opportunites[0], BfcOffset(LayoutUnit(150), LayoutUnit()),
@@ -226,23 +275,23 @@ TEST(ExclusionSpaceTest, SolidEdges) {
   exclusion_space.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(), LayoutUnit()),
                                     BfcOffset(LayoutUnit(20), LayoutUnit(15))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
   exclusion_space.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(65), LayoutUnit()),
                                     BfcOffset(LayoutUnit(85), LayoutUnit(15))),
-                            EFloat::kRight, /*is_hidden_for_paint*/ false));
+                            EFloat::kRight));
   exclusion_space.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(10), LayoutUnit(25)),
                                     BfcOffset(LayoutUnit(30), LayoutUnit(40))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
   exclusion_space.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(50), LayoutUnit(25)),
                                     BfcOffset(LayoutUnit(70), LayoutUnit(35))),
-                            EFloat::kRight, /*is_hidden_for_paint*/ false));
+                            EFloat::kRight));
 
   LayoutOpportunityVector opportunites = exclusion_space.AllLayoutOpportunities(
       /* offset */ {LayoutUnit(), LayoutUnit()},
-      /* available_size */ LayoutUnit(80));
+      /* available_size */ LayoutUnit(80), TextDirection::kLtr);
 
   EXPECT_EQ(5u, opportunites.size());
   TEST_OPPORTUNITY(opportunites[0], BfcOffset(LayoutUnit(20), LayoutUnit()),
@@ -278,19 +327,19 @@ TEST(ExclusionSpaceTest, OverlappingWithShelf) {
   exclusion_space.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(), LayoutUnit()),
                                     BfcOffset(LayoutUnit(20), LayoutUnit(15))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
   exclusion_space.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(65), LayoutUnit()),
                                     BfcOffset(LayoutUnit(85), LayoutUnit(15))),
-                            EFloat::kRight, /*is_hidden_for_paint*/ false));
+                            EFloat::kRight));
   exclusion_space.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(70), LayoutUnit(25)),
                                     BfcOffset(LayoutUnit(90), LayoutUnit(35))),
-                            EFloat::kRight, /*is_hidden_for_paint*/ false));
+                            EFloat::kRight));
 
   LayoutOpportunityVector opportunites = exclusion_space.AllLayoutOpportunities(
       /* offset */ {LayoutUnit(), LayoutUnit()},
-      /* available_size */ LayoutUnit(80));
+      /* available_size */ LayoutUnit(80), TextDirection::kLtr);
 
   EXPECT_EQ(4u, opportunites.size());
   TEST_OPPORTUNITY(opportunites[0], BfcOffset(LayoutUnit(20), LayoutUnit()),
@@ -326,19 +375,19 @@ TEST(ExclusionSpaceTest, InsertBetweenShelves) {
   exclusion_space.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(), LayoutUnit()),
                                     BfcOffset(LayoutUnit(30), LayoutUnit(10))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
   exclusion_space.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(65), LayoutUnit()),
                                     BfcOffset(LayoutUnit(85), LayoutUnit(35))),
-                            EFloat::kRight, /*is_hidden_for_paint*/ false));
+                            EFloat::kRight));
   exclusion_space.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(10), LayoutUnit(15)),
                                     BfcOffset(LayoutUnit(30), LayoutUnit(25))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
 
   LayoutOpportunityVector opportunites = exclusion_space.AllLayoutOpportunities(
       /* offset */ {LayoutUnit(30), LayoutUnit(15)},
-      /* available_size */ LayoutUnit(30));
+      /* available_size */ LayoutUnit(30), TextDirection::kLtr);
 
   // NOTE: This demonstrates a quirk when querying the exclusion space for
   // opportunities. The exclusion space may return multiple exclusions of
@@ -810,11 +859,11 @@ TEST(ExclusionSpaceTest, ZeroInlineSizeOpportunity) {
   exclusion_space.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(), LayoutUnit()),
                                     BfcOffset(LayoutUnit(100), LayoutUnit(10))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
 
   LayoutOpportunityVector opportunites = exclusion_space.AllLayoutOpportunities(
       /* offset */ {LayoutUnit(), LayoutUnit()},
-      /* available_size */ LayoutUnit(100));
+      /* available_size */ LayoutUnit(100), TextDirection::kLtr);
 
   EXPECT_EQ(2u, opportunites.size());
   TEST_OPPORTUNITY(opportunites[0], BfcOffset(LayoutUnit(100), LayoutUnit()),
@@ -830,15 +879,25 @@ TEST(ExclusionSpaceTest, NegativeInlineSizeOpportunityLeft) {
   exclusion_space.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(), LayoutUnit()),
                                     BfcOffset(LayoutUnit(120), LayoutUnit(10))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
 
   LayoutOpportunityVector opportunites = exclusion_space.AllLayoutOpportunities(
       /* offset */ {LayoutUnit(), LayoutUnit()},
-      /* available_size */ LayoutUnit(100));
+      /* available_size */ LayoutUnit(100), TextDirection::kLtr);
 
   EXPECT_EQ(2u, opportunites.size());
   TEST_OPPORTUNITY(opportunites[0], BfcOffset(LayoutUnit(120), LayoutUnit()),
                    BfcOffset(LayoutUnit(120), LayoutUnit::Max()));
+  TEST_OPPORTUNITY(opportunites[1], BfcOffset(LayoutUnit(), LayoutUnit(10)),
+                   BfcOffset(LayoutUnit(100), LayoutUnit::Max()));
+
+  opportunites = exclusion_space.AllLayoutOpportunities(
+      /* offset */ {LayoutUnit(), LayoutUnit()},
+      /* available_size */ LayoutUnit(100), TextDirection::kRtl);
+
+  EXPECT_EQ(2u, opportunites.size());
+  TEST_OPPORTUNITY(opportunites[0], BfcOffset(LayoutUnit(100), LayoutUnit()),
+                   BfcOffset(LayoutUnit(100), LayoutUnit::Max()));
   TEST_OPPORTUNITY(opportunites[1], BfcOffset(LayoutUnit(), LayoutUnit(10)),
                    BfcOffset(LayoutUnit(100), LayoutUnit::Max()));
 }
@@ -850,15 +909,25 @@ TEST(ExclusionSpaceTest, NegativeInlineSizeOpportunityRight) {
   exclusion_space.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(-20), LayoutUnit()),
                                     BfcOffset(LayoutUnit(100), LayoutUnit(10))),
-                            EFloat::kRight, /*is_hidden_for_paint*/ false));
+                            EFloat::kRight));
 
   LayoutOpportunityVector opportunites = exclusion_space.AllLayoutOpportunities(
       /* offset */ {LayoutUnit(), LayoutUnit()},
-      /* available_size */ LayoutUnit(100));
+      /* available_size */ LayoutUnit(100), TextDirection::kLtr);
 
   EXPECT_EQ(2u, opportunites.size());
   TEST_OPPORTUNITY(opportunites[0], BfcOffset(LayoutUnit(), LayoutUnit()),
                    BfcOffset(LayoutUnit(), LayoutUnit::Max()));
+  TEST_OPPORTUNITY(opportunites[1], BfcOffset(LayoutUnit(), LayoutUnit(10)),
+                   BfcOffset(LayoutUnit(100), LayoutUnit::Max()));
+
+  opportunites = exclusion_space.AllLayoutOpportunities(
+      /* offset */ {LayoutUnit(), LayoutUnit()},
+      /* available_size */ LayoutUnit(100), TextDirection::kRtl);
+
+  EXPECT_EQ(2u, opportunites.size());
+  TEST_OPPORTUNITY(opportunites[0], BfcOffset(LayoutUnit(-20), LayoutUnit()),
+                   BfcOffset(LayoutUnit(-20), LayoutUnit::Max()));
   TEST_OPPORTUNITY(opportunites[1], BfcOffset(LayoutUnit(), LayoutUnit(10)),
                    BfcOffset(LayoutUnit(100), LayoutUnit::Max()));
 }
@@ -870,11 +939,11 @@ TEST(ExclusionSpaceTest, PreInitialization) {
   original_exclusion_space.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(), LayoutUnit()),
                                     BfcOffset(LayoutUnit(20), LayoutUnit(15))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
   original_exclusion_space.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(65), LayoutUnit()),
                                     BfcOffset(LayoutUnit(85), LayoutUnit(15))),
-                            EFloat::kRight, /*is_hidden_for_paint*/ false));
+                            EFloat::kRight));
 
   ExclusionSpace exclusion_space1;
   exclusion_space1.PreInitialize(original_exclusion_space);
@@ -883,21 +952,21 @@ TEST(ExclusionSpaceTest, PreInitialization) {
   exclusion_space1.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(), LayoutUnit()),
                                     BfcOffset(LayoutUnit(20), LayoutUnit(15))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
   EXPECT_NE(original_exclusion_space, exclusion_space1);
 
   // Adding the same exclusions will make the spaces equal.
   exclusion_space1.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(65), LayoutUnit()),
                                     BfcOffset(LayoutUnit(85), LayoutUnit(15))),
-                            EFloat::kRight, /*is_hidden_for_paint*/ false));
+                            EFloat::kRight));
   EXPECT_EQ(original_exclusion_space, exclusion_space1);
 
   // Adding a third exclusion will make the spaces non-equal.
   exclusion_space1.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(10), LayoutUnit(25)),
                                     BfcOffset(LayoutUnit(30), LayoutUnit(40))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
   EXPECT_NE(original_exclusion_space, exclusion_space1);
 
   ExclusionSpace exclusion_space2;
@@ -907,14 +976,14 @@ TEST(ExclusionSpaceTest, PreInitialization) {
   exclusion_space2.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(), LayoutUnit()),
                                     BfcOffset(LayoutUnit(20), LayoutUnit(15))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
   EXPECT_NE(original_exclusion_space, exclusion_space2);
 
   // Adding a different second exclusion will make the spaces non-equal.
   exclusion_space2.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(10), LayoutUnit(25)),
                                     BfcOffset(LayoutUnit(30), LayoutUnit(40))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
   EXPECT_NE(original_exclusion_space, exclusion_space2);
 }
 
@@ -926,7 +995,7 @@ TEST(ExclusionSpaceTest, MergeExclusionSpacesNoPreviousExclusions) {
   old_output.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(10), LayoutUnit(25)),
                                     BfcOffset(LayoutUnit(30), LayoutUnit(40))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
 
   ExclusionSpace new_input;
 
@@ -941,7 +1010,7 @@ TEST(ExclusionSpaceTest, MergeExclusionSpacesNoPreviousExclusions) {
   expected.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(20), LayoutUnit(45)),
                                     BfcOffset(LayoutUnit(40), LayoutUnit(60))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
 
   EXPECT_EQ(expected, new_output);
 }
@@ -952,19 +1021,19 @@ TEST(ExclusionSpaceTest, MergeExclusionSpacesPreviousExclusions) {
   old_input.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(20), LayoutUnit(45)),
                                     BfcOffset(LayoutUnit(40), LayoutUnit(60))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
 
   ExclusionSpace old_output = old_input;
   old_output.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(100), LayoutUnit(45)),
                                     BfcOffset(LayoutUnit(140), LayoutUnit(60))),
-                            EFloat::kRight, /*is_hidden_for_paint*/ false));
+                            EFloat::kRight));
 
   ExclusionSpace new_input;
   new_input.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(20), LayoutUnit(45)),
                                     BfcOffset(LayoutUnit(40), LayoutUnit(50))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
 
   ExclusionSpace new_output = ExclusionSpace::MergeExclusionSpaces(
       old_output, old_input, new_input,
@@ -977,11 +1046,11 @@ TEST(ExclusionSpaceTest, MergeExclusionSpacesPreviousExclusions) {
   expected.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(20), LayoutUnit(45)),
                                     BfcOffset(LayoutUnit(40), LayoutUnit(50))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
   expected.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(110), LayoutUnit(65)),
                                     BfcOffset(LayoutUnit(150), LayoutUnit(80))),
-                            EFloat::kRight, /*is_hidden_for_paint*/ false));
+                            EFloat::kRight));
 
   EXPECT_EQ(expected, new_output);
 }
@@ -992,11 +1061,11 @@ TEST(ExclusionSpaceTest, MergeExclusionSpacesNoOutputExclusions) {
   old_input.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(20), LayoutUnit(45)),
                                     BfcOffset(LayoutUnit(40), LayoutUnit(60))),
-                            EFloat::kLeft, /*is_hidden_for_paint*/ false));
+                            EFloat::kLeft));
   old_input.Add(
       ExclusionArea::Create(BfcRect(BfcOffset(LayoutUnit(100), LayoutUnit(45)),
                                     BfcOffset(LayoutUnit(140), LayoutUnit(60))),
-                            EFloat::kRight, /*is_hidden_for_paint*/ false));
+                            EFloat::kRight));
 
   ExclusionSpace old_output = old_input;
 

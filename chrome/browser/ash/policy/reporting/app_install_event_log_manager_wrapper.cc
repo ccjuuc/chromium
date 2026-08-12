@@ -6,6 +6,8 @@
 
 #include <memory>
 
+#include "ash/constants/ash_policy_pref_names.h"
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
@@ -13,9 +15,7 @@
 #include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
 #include "chrome/browser/ash/policy/reporting/install_event_log_util.h"
-#include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/reporting/client/report_queue_configuration.h"
@@ -24,60 +24,44 @@
 
 namespace policy {
 
-BASE_FEATURE(kUseEncryptedReportingPipelineToReportArcAppInstallEvents,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 AppInstallEventLogManagerWrapper::~AppInstallEventLogManagerWrapper() = default;
 
 // static
-AppInstallEventLogManagerWrapper*
-AppInstallEventLogManagerWrapper::CreateForProfile(Profile* profile) {
+void AppInstallEventLogManagerWrapper::CreateForProfile(
+    PrefService* local_state,
+    Profile* profile) {
+  // `wrapper` manages its own lifetime.
   AppInstallEventLogManagerWrapper* wrapper =
-      new AppInstallEventLogManagerWrapper(profile);
+      new AppInstallEventLogManagerWrapper(local_state, profile);
   wrapper->Init();
-  return wrapper;
 }
 
 // static
 void AppInstallEventLogManagerWrapper::RegisterProfilePrefs(
     PrefRegistrySimple* registry) {
-  registry->RegisterBooleanPref(prefs::kArcAppInstallEventLoggingEnabled,
+  registry->RegisterBooleanPref(ash::prefs::kArcAppInstallEventLoggingEnabled,
                                 false);
 }
 
 AppInstallEventLogManagerWrapper::AppInstallEventLogManagerWrapper(
+    PrefService* local_state,
     Profile* profile)
-    : use_encrypted_reporting_pipeline_(base::FeatureList::IsEnabled(
-          kUseEncryptedReportingPipelineToReportArcAppInstallEvents)),
-      profile_(profile) {
-  log_task_runner_ =
-      std::make_unique<ArcAppInstallEventLogManager::LogTaskRunnerWrapper>();
+    : local_state_(CHECK_DEREF(local_state)), profile_(profile) {
+  session_termination_observation_.Observe(
+      ash::SessionTerminationManager::Get());
 
   pref_change_registrar_.Init(profile->GetPrefs());
   pref_change_registrar_.Add(
-      prefs::kArcAppInstallEventLoggingEnabled,
+      ash::prefs::kArcAppInstallEventLoggingEnabled,
       base::BindRepeating(&AppInstallEventLogManagerWrapper::EvaluatePref,
                           base::Unretained(this)));
-  on_app_terminating_subscription_ =
-      browser_shutdown::AddAppTerminatingCallback(
-          base::BindOnce(&AppInstallEventLogManagerWrapper::OnAppTerminating,
-                         base::Unretained(this)));
 }
 
 void AppInstallEventLogManagerWrapper::Init() {
   EvaluatePref();
 }
 
-void AppInstallEventLogManagerWrapper::CreateManager() {
-  log_manager_ = std::make_unique<ArcAppInstallEventLogManager>(
-      log_task_runner_.get(),
-      profile_->GetUserCloudPolicyManagerAsh()->GetAppInstallEventLogUploader(),
-      profile_);
-}
 
-void AppInstallEventLogManagerWrapper::DestroyManager() {
-  log_manager_.reset();
-}
 
 void AppInstallEventLogManagerWrapper::CreateEncryptedReporter() {
   // Log events using the encrypted reporting pipeline.
@@ -90,7 +74,7 @@ void AppInstallEventLogManagerWrapper::CreateEncryptedReporter() {
                .destination = ::reporting::Destination::ARC_INSTALL})
               .SetSourceInfo(std::move(source_info)));
   encrypted_reporter_ = std::make_unique<ArcAppInstallEncryptedEventReporter>(
-      std::move(report_queue), profile_);
+      &local_state_.get(), std::move(report_queue), profile_);
 }
 
 void AppInstallEventLogManagerWrapper::DestroyEncryptedReporter() {
@@ -98,33 +82,25 @@ void AppInstallEventLogManagerWrapper::DestroyEncryptedReporter() {
 }
 
 void AppInstallEventLogManagerWrapper::InitLogging() {
-  if (use_encrypted_reporting_pipeline_) {
-    CreateEncryptedReporter();
-  } else if (!log_manager_) {
-    // Log events using the cloud policy client.
-    CreateManager();
-  }
+  CreateEncryptedReporter();
 }
 
 void AppInstallEventLogManagerWrapper::DisableLogging() {
-  if (use_encrypted_reporting_pipeline_) {
-    DestroyEncryptedReporter();
-  } else {
-    DestroyManager();
-  }
+  DestroyEncryptedReporter();
 }
 
 void AppInstallEventLogManagerWrapper::EvaluatePref() {
   if (profile_->GetPrefs()->GetBoolean(
-          prefs::kArcAppInstallEventLoggingEnabled)) {
+          ash::prefs::kArcAppInstallEventLoggingEnabled)) {
     InitLogging();
   } else {
     DisableLogging();
-    ArcAppInstallEventLogManager::Clear(log_task_runner_.get(), profile_);
+    ArcAppInstallEventLogger::Clear(profile_);
   }
 }
 
 void AppInstallEventLogManagerWrapper::OnAppTerminating() {
+  session_termination_observation_.Reset();
   base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE,
                                                                 this);
 }

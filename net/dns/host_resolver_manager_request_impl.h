@@ -20,12 +20,14 @@
 #include "net/base/address_list.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/network_anonymization_key.h"
+#include "net/base/network_handle.h"
 #include "net/base/request_priority.h"
 #include "net/dns/host_cache.h"
 #include "net/dns/host_resolver.h"
 #include "net/dns/host_resolver_manager.h"
 #include "net/dns/host_resolver_manager_job.h"
 #include "net/dns/public/host_resolver_results.h"
+#include "net/dns/public/resolution_details.h"
 #include "net/dns/public/resolve_error_info.h"
 #include "net/log/net_log_with_source.h"
 
@@ -51,6 +53,7 @@ class HostResolverManager::RequestImpl
   RequestImpl(NetLogWithSource source_net_log,
               HostResolver::Host request_host,
               NetworkAnonymizationKey network_anonymization_key,
+              handles::NetworkHandle target_network,
               std::optional<ResolveHostParameters> optional_parameters,
               base::WeakPtr<ResolveContext> resolve_context,
               base::WeakPtr<HostResolverManager> resolver,
@@ -72,8 +75,10 @@ class HostResolverManager::RequestImpl
   net::ResolveErrorInfo GetResolveErrorInfo() const override;
   const std::optional<HostCache::EntryStaleness>& GetStaleInfo() const override;
   void ChangeRequestPriority(RequestPriority priority) override;
+  std::optional<ResolutionDetails> GetResolutionDetails() const override;
 
-  void set_results(HostCache::Entry results);
+  void SetResults(HostCache::Entry results,
+                  ResolutionDetails resolution_details);
   void set_error_info(int error, bool is_secure_network_error);
   void set_stale_info(HostCache::EntryStaleness stale_info);
 
@@ -102,6 +107,8 @@ class HostResolverManager::RequestImpl
   const NetworkAnonymizationKey& network_anonymization_key() const {
     return network_anonymization_key_;
   }
+
+  handles::NetworkHandle target_network() const { return target_network_; }
 
   const ResolveHostParameters& parameters() const { return parameters_; }
 
@@ -152,6 +159,7 @@ class HostResolverManager::RequestImpl
 
   const HostResolver::Host request_host_;
   const NetworkAnonymizationKey network_anonymization_key_;
+  const handles::NetworkHandle target_network_ = handles::kInvalidNetworkHandle;
   ResolveHostParameters parameters_;
   base::WeakPtr<ResolveContext> resolve_context_;
 
@@ -172,6 +180,7 @@ class HostResolverManager::RequestImpl
   bool complete_ = false;
   bool only_ipv6_reachable_ = false;
   std::optional<HostCache::Entry> results_;
+  std::optional<ResolutionDetails> resolution_details_;
   std::optional<HostCache::EntryStaleness> stale_info_;
   AddressList legacy_address_results_;
   std::vector<HostResolverEndpointResult> endpoint_results_;

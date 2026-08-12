@@ -15,7 +15,6 @@
 #include "chrome/browser/web_applications/locks/app_lock.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
-#include "chrome/browser/web_applications/web_app_install_finalizer.h"
 #include "chrome/browser/web_applications/web_app_install_utils.h"
 #include "components/webapps/browser/install_result_code.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
@@ -25,8 +24,7 @@ namespace web_app {
 namespace {
 
 webapps::AppId GetAppId(const WebAppInstallInfo& install_info) {
-  return GenerateAppIdFromManifestId(install_info.manifest_id(),
-                                     install_info.parent_app_manifest_id);
+  return GenerateAppIdFromManifestId(install_info.manifest_id());
 }
 }  // namespace
 
@@ -69,7 +67,7 @@ void InstallFromInfoCommand::OnShutdown(
 
 void InstallFromInfoCommand::StartWithLock(std::unique_ptr<AppLock> lock) {
   lock_ = std::move(lock);
-  install_from_info_job_->Start(lock_.get());
+  install_from_info_job_->Start(lock_.get(), lock_.get());
 }
 
 void InstallFromInfoCommand::OnInstallFromInfoJobCompleted(

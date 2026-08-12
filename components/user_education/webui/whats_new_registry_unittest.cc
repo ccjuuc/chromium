@@ -4,9 +4,9 @@
 
 #include "components/user_education/webui/whats_new_registry.h"
 
+#include <algorithm>
 #include <memory>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/test/scoped_feature_list.h"
 #include "components/user_education/webui/mock_whats_new_storage_service.h"
@@ -29,41 +29,32 @@ using BrowserCommand = browser_command::mojom::Command;
 // Modules
 // Enabled through feature list.
 BASE_FEATURE(kTestModuleEnabled,
-             "TestModuleEnabled",
              base::FEATURE_DISABLED_BY_DEFAULT);
 // Disabled through feature list.
 BASE_FEATURE(kTestModuleDisabled,
-             "TestModuleDisabled",
              base::FEATURE_DISABLED_BY_DEFAULT);
 // Enabled by default.
 BASE_FEATURE(kTestModuleEnabledByDefault,
-             "TestModuleEnabledByDefault",
              base::FEATURE_ENABLED_BY_DEFAULT);
 // Disabled by default.
 BASE_FEATURE(kTestModuleDisabledByDefault,
-             "TestModuleDisabledByDefault",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Editions
 // Enabled through feature list.
 BASE_FEATURE(kTestEditionEnabled1,
-             "TestEditionEnabled1",
              base::FEATURE_DISABLED_BY_DEFAULT);
 // Enabled through feature list.
 BASE_FEATURE(kTestEditionEnabled2,
-             "TestEditionEnabled2",
              base::FEATURE_DISABLED_BY_DEFAULT);
 // Enabled by default.
 BASE_FEATURE(kTestEditionEnabledByDefault,
-             "TestEditionEnabledByDefault",
              base::FEATURE_ENABLED_BY_DEFAULT);
 // Disabled by default.
 BASE_FEATURE(kTestEditionDisabled,
-             "TestEditionDisabled",
              base::FEATURE_DISABLED_BY_DEFAULT);
 // Previously used edition, enabled by default, unregistered.
 BASE_FEATURE(kTestOldUnregisteredEdition,
-             "TestOldUnregisteredEdition",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace
@@ -138,8 +129,8 @@ class WhatsNewRegistryTest : public testing::Test {
   }
 
  protected:
-  base::Value::List stored_enabled_modules_;
-  base::Value::Dict stored_used_editions_;
+  base::ListValue stored_enabled_modules_;
+  base::DictValue stored_used_editions_;
   std::unique_ptr<WhatsNewRegistry> whats_new_registry_;
   base::test::ScopedFeatureList feature_list_;
 };
@@ -150,8 +141,10 @@ TEST_F(WhatsNewRegistryTest, CommandsAreActiveForEnabledFeatures) {
 
   auto active_commands = whats_new_registry_->GetActiveCommands();
   EXPECT_EQ(static_cast<size_t>(2), active_commands.size());
-  EXPECT_TRUE(base::Contains(active_commands, BrowserCommand::kNoOpCommand));
-  EXPECT_TRUE(base::Contains(active_commands, BrowserCommand::kUnknownCommand));
+  EXPECT_TRUE(
+      std::ranges::contains(active_commands, BrowserCommand::kNoOpCommand));
+  EXPECT_TRUE(
+      std::ranges::contains(active_commands, BrowserCommand::kUnknownCommand));
 }
 
 TEST_F(WhatsNewRegistryTest, CommandsAreActiveForEnabledModulesAndEditions) {
@@ -160,15 +153,18 @@ TEST_F(WhatsNewRegistryTest, CommandsAreActiveForEnabledModulesAndEditions) {
 
   auto active_commands = whats_new_registry_->GetActiveCommands();
   EXPECT_EQ(static_cast<size_t>(4), active_commands.size());
-  EXPECT_TRUE(base::Contains(active_commands, BrowserCommand::kNoOpCommand));
-  EXPECT_TRUE(base::Contains(active_commands, BrowserCommand::kUnknownCommand));
+  EXPECT_TRUE(
+      std::ranges::contains(active_commands, BrowserCommand::kNoOpCommand));
+  EXPECT_TRUE(
+      std::ranges::contains(active_commands, BrowserCommand::kUnknownCommand));
 
   // Note: If you are removing one of these commands, you may change
   // these to any available command to match the above Edition
   // registratrion.
-  EXPECT_TRUE(base::Contains(active_commands, BrowserCommand::kOpenAISettings));
   EXPECT_TRUE(
-      base::Contains(active_commands, BrowserCommand::kOpenSafetyCheck));
+      std::ranges::contains(active_commands, BrowserCommand::kOpenAISettings));
+  EXPECT_TRUE(
+      std::ranges::contains(active_commands, BrowserCommand::kOpenSafetyCheck));
 }
 
 TEST_F(WhatsNewRegistryTest, FindModulesForActiveFeatures) {
@@ -298,6 +294,17 @@ TEST_F(WhatsNewRegistryTest, ResetStorageService) {
   RegisterModules(std::move(mock_storage_service));
 
   whats_new_registry_->ResetData();
+}
+
+TEST_F(WhatsNewRegistryTest, VersionOverride) {
+  auto mock_storage_service = std::make_unique<MockWhatsNewStorageService>();
+  RegisterModules(std::move(mock_storage_service));
+
+  EXPECT_EQ(std::nullopt, whats_new_registry_->version_override());
+
+  int32_t value = 100;
+  whats_new_registry_->set_version_override(value);
+  EXPECT_EQ(value, whats_new_registry_->version_override());
 }
 
 }  // namespace user_education

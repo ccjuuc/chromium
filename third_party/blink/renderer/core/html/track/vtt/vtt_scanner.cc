@@ -72,36 +72,32 @@ String VTTScanner::RestOfInputAsString() {
 }
 
 size_t VTTScanner::ScanDigits(unsigned& number) {
-  const size_t num_digits = CountWhile<IsASCIIDigit>();
+  const size_t num_digits = CountWhile<IsAsciiDigit>();
   if (num_digits == 0) {
     number = 0;
     return 0;
   }
-  bool valid_number;
-  number = Invoke([num_digits, &valid_number](auto& buf) {
+  number = Invoke([num_digits](auto& buf) {
     // Consume the digits.
-    return CharactersToUInt(buf.take_first(num_digits), NumberParsingOptions(),
-                            &valid_number);
+    // Since we know that ScanDigits only scanned valid (ASCII) digits (and
+    // hence that's what got passed to CharactersToUInt()), the remaining
+    // failure mode for CharactersToUInt() is overflow, so if std::nullopt is
+    // returned, then set `number` to the maximum unsigned value.
+    return CharactersToUInt(buf.take_first(num_digits), NumberParsingOptions())
+        .value_or(std::numeric_limits<unsigned>::max());
   });
-
-  // Since we know that scanDigits only scanned valid (ASCII) digits (and
-  // hence that's what got passed to charactersToUInt()), the remaining
-  // failure mode for charactersToUInt() is overflow, so if |validNumber| is
-  // not true, then set |number| to the maximum unsigned value.
-  if (!valid_number)
-    number = std::numeric_limits<unsigned>::max();
   return num_digits;
 }
 
 bool VTTScanner::ScanDouble(double& number) {
   const State start_state = state_;
-  const size_t num_integer_digits = CountWhile<IsASCIIDigit>();
+  const size_t num_integer_digits = CountWhile<IsAsciiDigit>();
   AdvanceIfNonZero(num_integer_digits);
   size_t length_of_double = num_integer_digits;
   size_t num_decimal_digits = 0;
   if (Scan('.')) {
     length_of_double++;
-    num_decimal_digits = CountWhile<IsASCIIDigit>();
+    num_decimal_digits = CountWhile<IsAsciiDigit>();
     AdvanceIfNonZero(num_decimal_digits);
     length_of_double += num_decimal_digits;
   }
@@ -113,18 +109,16 @@ bool VTTScanner::ScanDouble(double& number) {
     return false;
   }
 
-  bool valid_number;
   number = Invoke(
-      [length_of_double, &valid_number](auto& buf) {
-        return CharactersToDouble(buf.first(length_of_double), &valid_number);
+      [length_of_double](auto& buf) {
+        return CharactersToDouble(buf.first(length_of_double))
+            .value_or(std::numeric_limits<double>::max());
       },
       start_state);
 
   if (number == std::numeric_limits<double>::infinity())
     return false;
 
-  if (!valid_number)
-    number = std::numeric_limits<double>::max();
   return true;
 }
 

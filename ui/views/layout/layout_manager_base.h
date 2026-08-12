@@ -16,6 +16,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/types/pass_key.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
@@ -34,6 +35,9 @@ class View;
 // CalculateProposedLayout(). Used in interpolating and animating layouts.
 class VIEWS_EXPORT LayoutManagerBase : public LayoutManager,
                                        public ViewObserver {
+ public:
+  METADATA_HEADER(LayoutManagerBase, LayoutManager)
+
  public:
   using PassKeyType = base::NonCopyablePassKey<LayoutManagerBase>;
 
@@ -138,6 +142,10 @@ class VIEWS_EXPORT LayoutManagerBase : public LayoutManager,
   // Default implementation is just getting the proposed layout for the host
   // size and then applying it.
   virtual void LayoutImpl();
+
+  // Handle any processing that only needs to be done before a layout is
+  // applied. Does nothing by default.
+  virtual void BeforeApplyLayout(const ProposedLayout& layout);
 
   // Applies |layout| to the children of the host view.
   void ApplyLayout(const ProposedLayout& layout);

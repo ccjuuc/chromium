@@ -25,6 +25,10 @@
 #include "chrome/browser/ui/toasts/toast_controller.h"
 #endif
 
+namespace content {
+class WebContents;
+}
+
 class Profile;
 
 namespace safe_browsing {
@@ -61,7 +65,11 @@ class SafeBrowsingPrefChangeHandler {
   // Handles notifying the user when necessary. The type of notification shown
   // depends on the platform and whether the user is currently on the security
   // settings page. Virtual for tests.
-  virtual void MaybeShowEnhancedProtectionSettingChangeNotification();
+  virtual void MaybeShowEnhancedProtectionSettingChangeNotification(
+      content::WebContents* web_contents);
+  void MaybeShowEnhancedProtectionSettingChangeNotification() {
+    MaybeShowEnhancedProtectionSettingChangeNotification(nullptr);
+  }
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN) || \
     BUILDFLAG(IS_MAC)
@@ -69,6 +77,10 @@ class SafeBrowsingPrefChangeHandler {
 #endif
 
  private:
+  // Returns true if the notification should be suppressed for Tailored
+  // Security.
+  bool SuppressNotificationForTailoredSecurity();
+
   // Member variable to store the Profile*.
   raw_ptr<Profile> profile_;
 
@@ -99,6 +111,8 @@ class SafeBrowsingPrefChangeHandler {
   FRIEND_TEST_ALL_PREFIXES(
       SafeBrowsingPrefChangeHandlerAndroidTest,
       MaybeShowEnhancedProtectionSettingChangeNotificationResetsPref);
+  FRIEND_TEST_ALL_PREFIXES(SafeBrowsingPrefChangeHandlerAndroidTest,
+                           NoRetryAfterTailoredSecuritySync);
 
   // Functions used for testing.
   // Sets the TabModel for testing purposes.

@@ -49,7 +49,8 @@ function mojoTimeToDate(mojoTime: Time) {
   // milliseconds.
   const windowsEpoch = Date.UTC(1601, 0, 1, 0, 0, 0, 0);
   const unixEpoch = Date.UTC(1970, 0, 1, 0, 0, 0, 0);
-  // `epochDeltaInMs` is equal to `base::Time::kTimeTToMicrosecondsOffset`.
+  // `epochDeltaInMs` is equal to
+  // `base::Time::kMicrosecondsFromWindowsToUnixEpoch`.
   const epochDeltaInMs = unixEpoch - windowsEpoch;
   const timeInMs = Number(mojoTime.internalValue) / 1000;
   return new Date(timeInMs - epochDeltaInMs);
@@ -356,9 +357,12 @@ export class DiagnoseInfoViewElement extends CustomElement {
         LAST_NETWORK_RESPONSE_TABLE_ID, tableData, footerMessage);
   }
 
-  outputTables(): Record<string, any> {
+  outputTables():
+      Record<string, Array<Record<string, Array<Record<string, string>>>>> {
     const tables = this.$all('diagnose-info-table');
-    const output: Record<string, any> = {};
+    const output:
+        Record<string, Array<Record<string, Array<Record<string, string>>>>> =
+            {};
     output['LocationInternals'] = [];
     for (const table of tables) {
       if (!table.visible()) {

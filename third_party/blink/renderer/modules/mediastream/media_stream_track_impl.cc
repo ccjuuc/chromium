@@ -174,7 +174,8 @@ std::unique_ptr<WebAudioSourceProvider>
 CreateWebAudioSourceFromMediaStreamTrack(
     MediaStreamComponent* component,
     int context_sample_rate,
-    base::TimeDelta platform_buffer_duration) {
+    base::TimeDelta platform_buffer_duration,
+    uint32_t render_quantum_frames) {
   MediaStreamTrackPlatform* media_stream_track = component->GetPlatformTrack();
   if (!media_stream_track) {
     DLOG(ERROR) << "Native track missing for webaudio source.";
@@ -185,7 +186,8 @@ CreateWebAudioSourceFromMediaStreamTrack(
   DCHECK_EQ(source->GetType(), MediaStreamSource::kTypeAudio);
 
   return std::make_unique<WebAudioMediaStreamAudioSink>(
-      component, context_sample_rate, platform_buffer_duration);
+      component, context_sample_rate, platform_buffer_duration,
+      render_quantum_frames);
 }
 
 void DidCloneMediaStreamTrack(MediaStreamComponent* clone) {
@@ -418,8 +420,8 @@ void MediaStreamTrackImpl::setReadyState(
   if (ready_state_ != MediaStreamSource::kReadyStateEnded &&
       ready_state_ != ready_state) {
     ready_state_ = ready_state;
-    SendLogMessage(String::Format("%s({ready_state=%s})", __func__,
-                                  readyState().AsCStr()));
+    SendLogMessage(UNSAFE_TODO(String::Format("%s({ready_state=%s})", __func__,
+                                              readyState().AsCStr())));
 
     // Observers may dispatch events which create and add new Observers;
     // take a snapshot so as to safely iterate.
@@ -1071,10 +1073,12 @@ bool MediaStreamTrackImpl::HasPendingActivity() const {
 
 std::unique_ptr<AudioSourceProvider> MediaStreamTrackImpl::CreateWebAudioSource(
     int context_sample_rate,
-    base::TimeDelta platform_buffer_duration) {
+    base::TimeDelta platform_buffer_duration,
+    uint32_t render_quantum_frames) {
   return std::make_unique<MediaStreamWebAudioSource>(
       CreateWebAudioSourceFromMediaStreamTrack(Component(), context_sample_rate,
-                                               platform_buffer_duration));
+                                               platform_buffer_duration,
+                                               render_quantum_frames));
 }
 
 std::optional<const MediaStreamDevice> MediaStreamTrackImpl::device() const {
@@ -1155,6 +1159,11 @@ void MediaStreamTrackImpl::RegisterSink(
   registered_sinks_.insert(sink);
 }
 
+void MediaStreamTrackImpl::UnregisterSink(
+    SpeechRecognitionMediaStreamAudioSink* sink) {
+  registered_sinks_.erase(sink);
+}
+
 const AtomicString& MediaStreamTrackImpl::InterfaceName() const {
   return event_target_names::kMediaStreamTrack;
 }
@@ -1232,13 +1241,14 @@ void MediaStreamTrackImpl::AddObserver(MediaStreamTrack::Observer* observer) {
 
 void MediaStreamTrackImpl::SendLogMessage(const String& message) {
   WebRtcLogMessage(
-      String::Format(
-          "MST::%s [kind: %s, id: %s, label: %s, enabled: %s, muted: %s, "
-          "readyState: %s, remote=%s]",
-          message.Utf8().c_str(), kind().Utf8().c_str(), id().Utf8().c_str(),
-          label().Utf8().c_str(), enabled() ? "true" : "false",
-          muted() ? "true" : "false", readyState().AsCStr(),
-          component_->Remote() ? "true" : "false")
+      UNSAFE_TODO(
+          String::Format(
+              "MST::%s [kind: %s, id: %s, label: %s, enabled: %s, muted: %s, "
+              "readyState: %s, remote=%s]",
+              message.Utf8().c_str(), kind().Utf8().c_str(),
+              id().Utf8().c_str(), label().Utf8().c_str(),
+              enabled() ? "true" : "false", muted() ? "true" : "false",
+              readyState().AsCStr(), component_->Remote() ? "true" : "false"))
           .Utf8());
 }
 

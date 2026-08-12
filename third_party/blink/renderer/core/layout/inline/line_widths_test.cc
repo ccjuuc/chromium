@@ -44,7 +44,7 @@ class LineWidthsTest : public RenderingTest {
         exclusion_space.AllLayoutOpportunities(
             {space.GetBfcOffset().line_offset,
              /*bfc_block_offset*/ LayoutUnit()},
-            space.AvailableSize().inline_size);
+            space.AvailableSize().inline_size, space.Direction());
     LineWidths line_width;
     if (line_width.Set(node, opportunities)) {
       return line_width;
@@ -175,7 +175,7 @@ INSTANTIATE_TEST_SUITE_P(LineWidthsTest,
 TEST_P(LineWidthsDataTest, Data) {
   const auto& data = GetParam();
   LoadAhem();
-  SetBodyInnerHTML(String::Format(R"HTML(
+  SetBodyInnerHTML(StrCat({R"HTML(
     <!DOCTYPE html>
     <style>
     #target {
@@ -194,9 +194,8 @@ TEST_P(LineWidthsDataTest, Data) {
       height: 10px;
     }
     </style>
-    %s
-  )HTML",
-                                  data.html));
+    )HTML",
+                           data.html, "\n"}));
   const InlineNode target = GetInlineNodeByElementId("target");
   const std::optional<LineWidths> line_widths = ComputeLineWidths(target);
   std::vector<int> actual_widths;

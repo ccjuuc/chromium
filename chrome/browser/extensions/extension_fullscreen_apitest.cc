@@ -38,7 +38,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_ExtensionFullscreenAccessPass) {
 }
 
 #if BUILDFLAG(IS_MAC)
-// Entering fullscreen is flaky on Mac: http://crbug.com/824517
+// Entering fullscreen is flaky on Mac: http://crbug.com/41378166
 #define MAYBE_FocusWindowDoesNotExitFullscreen \
     DISABLED_FocusWindowDoesNotExitFullscreen
 #else
@@ -54,9 +54,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest,
           url::Origin(),
           EXCLUSIVE_ACCESS_BUBBLE_TYPE_BROWSER_FULLSCREEN_EXIT_INSTRUCTION,
           FullscreenTabParams());
-  ASSERT_TRUE(browser()->window()->IsFullscreen());
+  ASSERT_TRUE(browser()->GetWindow()->IsFullscreen());
   ASSERT_TRUE(RunExtensionTest("window_update/focus")) << message_;
-  ASSERT_TRUE(browser()->window()->IsFullscreen());
+  ASSERT_TRUE(browser()->GetWindow()->IsFullscreen());
 }
 
 // Fails flakily: crbug.com/335640705.
@@ -71,11 +71,11 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest,
           EXCLUSIVE_ACCESS_BUBBLE_TYPE_BROWSER_FULLSCREEN_EXIT_INSTRUCTION,
           FullscreenTabParams());
   ASSERT_TRUE(RunExtensionTest("window_update/sizing")) << message_;
-  ASSERT_FALSE(browser()->window()->IsFullscreen());
+  ASSERT_FALSE(browser()->GetWindow()->IsFullscreen());
 }
 
 #if BUILDFLAG(IS_MAC)
-// Fails on MAC: http://crbug.com/480370
+// Fails on MAC: http://crbug.com/40415216
 #define MAYBE_DisplayModeWindowIsInFullscreen \
   DISABLED_DisplayModeWindowIsInFullscreen
 #else

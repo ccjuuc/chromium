@@ -314,6 +314,26 @@ extern const char kValidLogoUrlSchemeRequired[];
 // the "secure-payment-confirmation" method.
 extern const char kLogoLabelRequired[];
 
+// Used when SPC is disabled but the renderer passes a non-null SPC object.
+extern const char kSpcDisabledMustBeNull[];
+
+// Used when SPC is requested alongside other payment methods.
+extern const char kSpcMustBeOnlyPaymentMethod[];
+
+// Used when SPC is requested with unsupported options like shipping or payer
+// info.
+extern const char kSpcUnsupportedOptions[];
+
+// Used when SPC is enabled but the renderer passes a null SPC object.
+extern const char kSpcEnabledMustNotBeNull[];
+
+// Used when an internal validation error occurs.
+extern const char kInternalError[];
+
+// Used when a SecurePaymentConfirmationRequest includes one or more disallowed
+// WebAuthn extensions.
+extern const char kWebAuthnExtensionsNotSupported[];
+
 }  // namespace errors
 }  // namespace payments
 

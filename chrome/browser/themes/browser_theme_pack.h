@@ -77,7 +77,7 @@ class BrowserThemePack : public CustomThemeSupplier {
   // pointer swizzling. Returns NULL on any error attempting to read |path|.
   static scoped_refptr<BrowserThemePack> BuildFromDataPack(
       const base::FilePath& path,
-      const std::string& expected_id);
+      std::string_view expected_id);
 
   // Returns whether the specified identifier is one of the images we persist
   // in the data pack.
@@ -116,7 +116,7 @@ class BrowserThemePack : public CustomThemeSupplier {
   bool GetColor(int id, SkColor* color) const override;
   bool GetDisplayProperty(int id, int* result) const override;
   gfx::Image GetImageNamed(int id) const override;
-  base::RefCountedMemory* GetRawData(
+  scoped_refptr<base::RefCountedMemory> GetRawData(
       int id,
       ui::ResourceScaleFactor scale_factor) const override;
   bool HasCustomImage(int id) const override;
@@ -197,20 +197,20 @@ class BrowserThemePack : public CustomThemeSupplier {
 
   // Transforms the JSON tint values into their final versions in the |tints_|
   // array. Does nothing if |tints_value| is nullptr.
-  void SetTintsFromJSON(const base::Value::Dict* tints_value);
+  void SetTintsFromJSON(const base::DictValue* tints_value);
 
   // Transforms the JSON color values into their final versions in the
   // |colors_| array and also fills in unspecified colors based on tint values.
   // Does nothing if |color_value| is nullptr.
-  void SetColorsFromJSON(const base::Value::Dict* color_value);
+  void SetColorsFromJSON(const base::DictValue* color_value);
 
   // Implementation details of BuildColorsFromJSON().
-  void ReadColorsFromJSON(const base::Value::Dict& colors_value,
+  void ReadColorsFromJSON(const base::DictValue& colors_value,
                           std::map<int, SkColor>* temp_colors);
 
   // Transforms the JSON display properties into |display_properties_|. Does
   // nothing if |display_value| is nullptr.
-  void SetDisplayPropertiesFromJSON(const base::Value::Dict* display_value);
+  void SetDisplayPropertiesFromJSON(const base::DictValue* display_value);
 
   // Parses the image names out of an extension. Does nothing if |theme_images|
   // is nullptr.
@@ -218,12 +218,6 @@ class BrowserThemePack : public CustomThemeSupplier {
       const extensions::ThemeInfo::ThemeImages* theme_images,
       const base::FilePath& images_path,
       FilePathMap* file_paths) const;
-
-  // Transforms the JSON |tab_group_color_palette_value| into their final
-  // versions in the |tab_group_color_palette_shades_| array. Does nothing if
-  // |tab_group_color_palette_value| is nullptr.
-  void SetTabGroupColorPaletteShadesFromJSON(
-      const base::Value::Dict* tab_group_color_palette_value);
 
   // Helper function to populate the FilePathMap.
   void AddFileAtScaleToMap(const std::string& image_name,
@@ -320,7 +314,7 @@ class BrowserThemePack : public CustomThemeSupplier {
   // please.
   // NOTE: This structs can only contain primary data types to be reliably
   // seralized and de-seralized. Not even nested structs will work across
-  // different machines, see crbug.com/988055.
+  // different machines, see crbug.com/41472985.
 #pragma pack(push, 1)
   // Header that is written to disk.
   struct BrowserThemePackHeader {
@@ -359,22 +353,7 @@ class BrowserThemePack : public CustomThemeSupplier {
   raw_ptr<DisplayPropertyPair, DanglingUntriaged | AllowPtrArithmetic>
       display_properties_ = nullptr;
 
-  struct TabGroupColorPaletteShadesPair {
-    // The `TabGroupColorId` that is to be overridden/customized.
-    int32_t id = -1;
-    // The shades generated based on the specified hue. These shades will be
-    // used to customize this `id`.
-    std::array<SkColor, ui::kGeneratedShadesCount> shades{};
-  };
 
-  // Number of color options in the tab group color palette.
-  static constexpr size_t kTabGroupColorPaletteLength =
-      static_cast<size_t>(tab_groups::TabGroupColorId::kNumEntries);
-
-  // This array stores an instance for each of the tab group colors that are
-  // overridden by the theme.
-  std::array<TabGroupColorPaletteShadesPair, kTabGroupColorPaletteLength>
-      tab_group_color_palette_shades_{};
 
   // A list of included source images. A pointer to a -1 terminated array of
   // our persistent IDs. The IDs are `int`s, but must be wrapped in a struct so

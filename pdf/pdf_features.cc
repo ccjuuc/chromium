@@ -17,15 +17,20 @@ bool g_is_oopif_pdf_policy_enabled = true;
 
 BASE_FEATURE(kAccessiblePDFForm, base::FEATURE_DISABLED_BY_DEFAULT);
 
+// Enables PDFium to support the experimental PDF 2.0 /BrotliDecode filter
+// allowing for PDFs encoded with Brotli to be viewable by Chrome's PDF
+// viewer. This flag would be enabled by default when the spec for
+// /BrotliDecode is finalized and support for the feature becomes official.
+BASE_FEATURE(kPdfBrotliDecode, base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Reuse buffers in PaintManager.
+BASE_FEATURE(kPdfBufferedPaintManager, base::FEATURE_DISABLED_BY_DEFAULT);
+
 // "Incremental loading" refers to loading the PDF as it arrives.
 // TODO(crbug.com/40123601): Remove this once incremental loading is fixed.
 BASE_FEATURE(kPdfIncrementalLoading, base::FEATURE_DISABLED_BY_DEFAULT);
 
-#if BUILDFLAG(IS_CHROMEOS)
-BASE_FEATURE(kPdfOopif, base::FEATURE_DISABLED_BY_DEFAULT);
-#else
 BASE_FEATURE(kPdfOopif, base::FEATURE_ENABLED_BY_DEFAULT);
-#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // "Partial loading" refers to loading only specific parts of the PDF.
 // TODO(crbug.com/40123601): Remove this once partial loading is fixed.
@@ -54,17 +59,18 @@ const base::FeatureParam<bool> kPdfUseSkiaPremultiplied{
 // Feature has no effect if Chrome is built with no XFA support.
 BASE_FEATURE(kPdfXfaSupport, base::FEATURE_DISABLED_BY_DEFAULT);
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_WIN)
 // Enables PDFium's version 2 font mapping interface, which uses per-request
-// font matching instead of enumerating all fonts upfront. This eliminates the
-// need for the ListFamilies() IPC call and improves PDF load performance on
-// Linux and ChromeOS. Version 2 makes PDFium call MapFont() directly for each
-// font request rather than searching a pre-built font list.
+// font matching instead of enumerating all fonts upfront. This should improve
+// PDF loading performance on Windows, since the version 2 interface makes
+// PDFium call MapFont() directly for each font request rather than searching a
+// pre-built font list.
 //
-// TODO(crbug.com/462403025): Remove this flag and the code that exists only to
+// TODO(crbug.com/500793593): Remove this flag and the code that exists only to
 // support the version 1 font mapping interface, once this safely rolls out.
-BASE_FEATURE(kPdfiumPerRequestFontMatching, base::FEATURE_ENABLED_BY_DEFAULT);
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+BASE_FEATURE(kPdfiumPerRequestFontMatchingWin,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
 
 #if BUILDFLAG(ENABLE_PDF_INK2)
 BASE_FEATURE(kPdfInk2, base::FEATURE_ENABLED_BY_DEFAULT);
@@ -72,15 +78,11 @@ BASE_FEATURE(kPdfInk2, base::FEATURE_ENABLED_BY_DEFAULT);
 // Enables text annotations.
 const base::FeatureParam<bool> kPdfInk2TextAnnotations{
     &kPdfInk2, "text-annotations", false};
-
-// Enables text highlighting with the Ink highlighter brush.
-const base::FeatureParam<bool> kPdfInk2TextHighlighting{
-    &kPdfInk2, "text-highlighting", false};
 #endif  // BUILDFLAG(ENABLE_PDF_INK2)
 
 #if BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
 // Saves the PDF file to Google Drive.
-BASE_FEATURE(kPdfSaveToDrive, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kPdfSaveToDrive, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Enables the survey for saving PDF to Google Drive.
 BASE_FEATURE(kPdfSaveToDriveSurvey, base::FEATURE_DISABLED_BY_DEFAULT);

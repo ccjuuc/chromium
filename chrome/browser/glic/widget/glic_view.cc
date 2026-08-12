@@ -5,26 +5,30 @@
 #include "chrome/browser/glic/widget/glic_view.h"
 
 #include "base/command_line.h"
+#include "base/metrics/user_metrics.h"
 #include "chrome/browser/file_select_helper.h"
+#include "chrome/browser/glic/public/features.h"
+#include "chrome/browser/glic/public/glic_keyed_service.h"
+#include "chrome/browser/glic/public/glic_keyed_service_factory.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/layout_constants.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/tabs/glic_button.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
+#include "components/input/native_web_keyboard_event.h"
 #include "content/public/browser/file_select_listener.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/drop_data.h"
 #include "third_party/blink/public/mojom/page/draggable_region.mojom.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_variant.h"
 #include "ui/events/event_observer.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/views/background.h"
 #include "ui/views/event_monitor.h"
@@ -71,20 +75,37 @@ void GlicView::RunFileChooser(
                                    params);
 }
 
-void GlicView::SetWebContents(content::WebContents* web_contents) {
-  views::WebView::SetWebContents(web_contents);
-  if (web_contents) {
-    web_contents->SetDelegate(this);
+bool GlicView::CanDragEnter(content::WebContents* source,
+                            const content::DropData& data,
+                            blink::DragOperationsMask operations_allowed) {
+  if (!base::FeatureList::IsEnabled(features::kGlicDragAndDropFileUpload)) {
+    return false;
+  }
+  // Check for local files or URLs.
+  bool has_files = !data.filenames.empty() || !data.file_system_files.empty();
+  bool has_url = !data.url_infos.empty();
+
+  return has_files || (has_url && base::FeatureList::IsEnabled(
+                                      features::kGlicWebDragAndDropFileUpload));
+}
+
+void GlicView::SetWebContents(content::WebContents* new_web_contents) {
+  // Clear the delegate on the old WebContents if this view is currently the
+  // delegate. Checks `GetDelegate() == this` to avoid clearing the delegate if
+  // another view has already taken over (e.g. during transitions between panel
+  // and floaty).
+  if (web_contents() && web_contents()->GetDelegate() == this) {
+    web_contents()->SetDelegate(nullptr);
+  }
+  views::WebView::SetWebContents(new_web_contents);
+  if (new_web_contents) {
+    new_web_contents->SetDelegate(this);
   }
 }
 
 void GlicView::DraggableRegionsChanged(
     const std::vector<blink::mojom::DraggableRegionPtr>& regions,
     content::WebContents* contents) {
-  // `GlicView::DraggableRegionsChanged()` is called when draggable regions for
-  // either the main-webcontents or guest-webcontents are changed.
-  // guest-webcontents are the webcontents associated to `<webview>` hosting the
-  // glic web app,
   SkRegion sk_region;
   for (const auto& region : regions) {
     sk_region.op(
@@ -93,33 +114,18 @@ void GlicView::DraggableRegionsChanged(
         region->draggable ? SkRegion::kUnion_Op : SkRegion::kDifference_Op);
   }
 
-  SetDraggableRegion(sk_region);
+  // `GlicView::DraggableRegionsChanged()` is called when draggable regions for
+  // either the main-webcontents or guest-webcontents are changed.
+  // guest-webcontents are the webcontents associated to `<webview>` hosting the
+  // glic web app,
+  const bool is_webview_contents = web_contents() != contents;
+  SetDraggableRegion(sk_region, /*for_webview=*/is_webview_contents);
 }
 
-void GlicView::SetDraggableAreas(
-    const std::vector<gfx::Rect>& draggable_areas) {
-  draggable_areas_.assign(draggable_areas.begin(), draggable_areas.end());
-}
-
-bool GlicView::IsPointWithinDraggableArea(const gfx::Point& point) {
-  if (base::FeatureList::IsEnabled(features::kGlicWindowDragRegions)) {
-    return draggable_region_.contains(point.x(), point.y());
-  }
-
-  for (const gfx::Rect& rect : draggable_areas_) {
-    if (rect.Contains(point)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-void GlicView::UpdatePrimaryDraggableAreaOnResize() {
-  if (draggable_areas_.empty()) {
-    return;
-  }
-
-  draggable_areas_[0].set_width(width());
+bool GlicView::IsPointWithinDraggableRegion(const gfx::Point& point) {
+  // Draggable region of webview takes precedence.
+  return webview_draggable_region_.contains(point.x(), point.y()) ||
+         draggable_region_.contains(point.x(), point.y());
 }
 
 void GlicView::UpdateBackgroundColor() {
@@ -142,6 +148,11 @@ void GlicView::UpdateBackgroundColor() {
   }
 }
 
+void GlicView::OnThemeChanged() {
+  views::WebView::OnThemeChanged();
+  UpdateBackgroundColor();
+}
+
 void GlicView::SetBackgroundRoundedCorners(const gfx::RoundedCornersF& radii) {
   if (radii == background_radii_) {
     return;
@@ -159,10 +170,8 @@ bool GlicView::AcceleratorPressed(const ui::Accelerator& accelerator) {
   return false;
 }
 
-void GlicView::SetDraggableRegion(const SkRegion& region) {
-  // Since <webview> covers the entire main web-contents, overriding the
-  // draggable regions set by main web-contents (if any) is okay.
-  draggable_region_ = region;
+void GlicView::SetDraggableRegion(const SkRegion& region, bool for_webview) {
+  (for_webview ? webview_draggable_region_ : draggable_region_) = region;
 }
 
 std::optional<SkColor> GlicView::GetClientBackgroundColor() {

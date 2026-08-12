@@ -5,6 +5,7 @@
 #include "content/browser/preloading/preload_pipeline_info_impl.h"
 
 #include "base/trace_event/trace_event.h"
+#include "content/browser/preloading/prerender/prerender_host.h"
 
 namespace content {
 
@@ -34,13 +35,11 @@ PreloadPipelineInfoImpl::PreloadPipelineInfoImpl(
       // We use `low` of `Token` because `perfetto::Track::FromPointer()`
       // crashes by a `DCHECK`. It looks `Tracing::Initialize()` to be not
       // called.
-      track_(perfetto::Track::Global(id_.GetLowForSerialization())) {
-  TRACE_EVENT_BEGIN("loading", "Navigational preload", track_);
-}
+      track_("Navigational preload", id_.GetLowForSerialization()) {}
 
 PreloadPipelineInfoImpl::~PreloadPipelineInfoImpl() = default;
 
-const perfetto::Track& PreloadPipelineInfoImpl::GetTrack() const {
+const perfetto::NamedTrack& PreloadPipelineInfoImpl::GetTrack() const {
   return track_;
 }
 
@@ -48,8 +47,7 @@ perfetto::Flow PreloadPipelineInfoImpl::GetFlow() const {
   // Returns consistent flows in its lifecycle as `PreloadPipelineInfo` is
   // refcounted and not movable.
 
-  return perfetto::Flow::FromPointer(
-      const_cast<PreloadPipelineInfoImpl*>(this));
+  return perfetto::Flow::FromPointer(this, "Navigational preload");
 }
 
 void PreloadPipelineInfoImpl::SetPrefetchEligibility(
@@ -60,6 +58,16 @@ void PreloadPipelineInfoImpl::SetPrefetchEligibility(
 void PreloadPipelineInfoImpl::SetPrefetchStatus(
     PrefetchStatus prefetch_status) {
   prefetch_status_ = prefetch_status;
+}
+
+bool PreloadPipelineInfoImpl::IsPrerenderMatchedWithPrefetch(
+    const PrerenderHostId& prerender_host_id) const {
+  return prerender_ids_matched_with_prefetch_.contains(prerender_host_id);
+}
+
+void PreloadPipelineInfoImpl::MarkPrerenderMatchedWithPrefetch(
+    PrerenderHostId prerender_host_id) {
+  prerender_ids_matched_with_prefetch_.insert(prerender_host_id);
 }
 
 }  // namespace content

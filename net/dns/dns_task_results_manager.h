@@ -63,9 +63,8 @@ class NET_EXPORT_PRIVATE DnsTaskResultsManager {
 
   // Processes a query response represented by HostResolverInternalResults.
   // Expected be called when a DnsTransaction is completed.
-  void ProcessDnsTransactionResults(
-      DnsQueryType query_type,
-      std::set<const HostResolverInternalResult*> results);
+  void ProcessDnsTransactionResults(DnsQueryType query_type,
+                                    HostResolverDnsTask::ResultRefs results);
 
   // Returns the current service endpoints. The results could change over time.
   // Use the delegate's OnServiceEndpointsUpdated() to watch for updates.
@@ -107,6 +106,9 @@ class NET_EXPORT_PRIVATE DnsTaskResultsManager {
   std::vector<ServiceEndpoint> current_endpoints_;
 
   bool is_metadata_ready_ = false;
+
+  // True when the AAAA DNS transaction completes (including NODATA / empty
+  // results).
   bool aaaa_response_received_ = false;
 
   std::set<std::string> aliases_;
@@ -116,6 +118,10 @@ class NET_EXPORT_PRIVATE DnsTaskResultsManager {
 
   base::TimeTicks resolution_delay_start_time_;
   base::OneShotTimer resolution_delay_timer_;
+
+  // True when the AAAA resolution delay timer times out, meaning we stop
+  // waiting for an AAAA response and allow intermediate endpoint updates.
+  bool aaaa_resolution_delay_timed_out_ = false;
 };
 
 }  // namespace net

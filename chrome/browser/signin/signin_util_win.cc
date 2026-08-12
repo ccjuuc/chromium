@@ -4,6 +4,10 @@
 
 #include "chrome/browser/signin/signin_util_win.h"
 
+#include <windows.h>
+
+#include <wincrypt.h>
+
 #include <memory>
 #include <string>
 #include <utility>
@@ -17,7 +21,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/win/registry.h"
 #include "base/win/win_util.h"
-#include "base/win/wincrypt_shim.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/profiles/profile.h"
@@ -28,8 +31,7 @@
 #include "chrome/browser/signin/about_signin_internals_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/webui/signin/history_sync_optin_service.h"
 #include "chrome/browser/ui/webui/signin/history_sync_optin_service_factory.h"
 #include "chrome/browser/ui/webui/signin/signin_ui_error.h"
@@ -55,8 +57,7 @@ constexpr signin_metrics::AccessPoint kCredentialsProviderAccessPointWin =
     signin_metrics::AccessPoint::kMachineLogon;
 
 signin::ConsentLevel GetConsentLevel() {
-  return base::FeatureList::IsEnabled(
-             syncer::kReplaceSyncPromosWithSignInPromos)
+  return syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
              ? signin::ConsentLevel::kSignin
              : signin::ConsentLevel::kSync;
 }
@@ -95,7 +96,7 @@ void ShowHistorySyncPromo(const CoreAccountId& account_id,
     base::debug::DumpWithoutCrashing();
     return;
   }
-  CHECK_EQ(browser->profile(), profile);
+  CHECK_EQ(browser->GetProfile(), profile);
 
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile);
@@ -123,7 +124,7 @@ void FinishImportCredentialsFromProvider(const CoreAccountId& account_id,
     base::debug::DumpWithoutCrashing();
     return;
   }
-  CHECK_EQ(browser->profile(), profile);
+  CHECK_EQ(browser->GetProfile(), profile);
 
   // TurnSyncOnHelper deletes itself once done.
   if (GetTurnSyncOnHelperDelegateForTestingStorage()->get()) {
@@ -146,7 +147,10 @@ void FinishImportCredentialsFromProvider(const CoreAccountId& account_id,
 // |profile|, or schedules it to run once a browser is added.
 void RunOnBrowserReady(Profile* profile,
                        base::OnceCallback<void(Browser*)> callback) {
-  Browser* browser = chrome::FindLastActiveWithProfile(profile);
+  BrowserWindowInterface* current_browser =
+      ProfileBrowserCollection::GetForProfile(profile)->GetLastActiveBrowser();
+  Browser* browser =
+      current_browser ? current_browser->GetBrowserForMigrationOnly() : nullptr;
   if (browser) {
     std::move(callback).Run(browser);
   } else {
@@ -187,8 +191,8 @@ void ImportCredentialsFromProvider(Profile* profile,
         account_id, signin::ConsentLevel::kSignin,
         kCredentialsProviderAccessPointWin);
 
-    const bool kReplaceSyncPromos = base::FeatureList::IsEnabled(
-        syncer::kReplaceSyncPromosWithSignInPromos);
+    const bool kReplaceSyncPromos =
+        syncer::IsReplaceSyncPromosWithSignInPromosEnabled();
     const bool kUnoPhase2FollowUp =
         base::FeatureList::IsEnabled(syncer::kUnoPhase2FollowUp);
 

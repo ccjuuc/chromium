@@ -47,6 +47,7 @@
 #include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/text/text_direction.h"
+#include "third_party/blink/renderer/platform/text/text_justify.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
@@ -91,7 +92,10 @@ struct ShapeResultCharacterData {
     safe_to_break_before = new_safe_to_break_before;
   }
 
-  LayoutUnit x_position;
+  union {
+    LayoutUnit x_position{};
+    TextRunLayoutUnit advance;
+  };
   // Set for the logical first character of a cluster.
   unsigned is_cluster_base : 1 = false;
   unsigned safe_to_break_before : 1 = false;
@@ -170,10 +174,7 @@ class PLATFORM_EXPORT ShapeResult : public GarbageCollected<ShapeResult> {
   unsigned NumGlyphs() const;
   bool HasFallbackFonts(const SimpleFontData* primary_font) const;
 
-  // TODO(eae): Remove start_x and return value once ShapeResultBuffer has been
-  // removed.
-  float IndividualCharacterRanges(Vector<CharacterRange>* ranges,
-                                  float start_x = 0) const;
+  Vector<CharacterRange> IndividualCharacterRanges() const;
 
   // The character start/end index of a range shape result.
   unsigned StartIndex() const { return start_index_; }
@@ -236,8 +237,12 @@ class PLATFORM_EXPORT ShapeResult : public GarbageCollected<ShapeResult> {
     return LayoutUnit::FromFloatCeil(PositionForOffset(offset));
   }
 
-  // Computes and caches a position data object as needed.
-  void EnsurePositionData() const;
+  // Computes and caches a position data object as needed. For a
+  // constant-advance (monospace) result the cache is compacted to a single
+  // shared advance; pass `allow_compaction = false` to force the full
+  // per-character table, which mutators that read or write per-character data
+  // (e.g. auto-spacing) require.
+  void EnsurePositionData(bool allow_compaction = true) const;
 
   const ShapeResultCharacterData& CharacterData(unsigned offset) const;
   ShapeResultCharacterData& CharacterData(unsigned offset);
@@ -388,6 +393,7 @@ class PLATFORM_EXPORT ShapeResult : public GarbageCollected<ShapeResult> {
                                       TextDirection,
                                       Vector<uint16_t> safe_break_offsets = {});
 #if DCHECK_IS_ON()
+  bool operator==(const ShapeResult&) const;
   void CheckConsistency() const;
 #endif
 
@@ -397,10 +403,6 @@ class PLATFORM_EXPORT ShapeResult : public GarbageCollected<ShapeResult> {
   // Ensure |grapheme_| is computed. |BreakGlyphs| is valid only when
   // |grapheme_| is computed.
   void EnsureGraphemes(const StringView& text) const;
-
-  static unsigned CountGraphemesInClusterDeprecated(base::span<const UChar>,
-                                                    uint16_t start_index,
-                                                    uint16_t end_index);
 
   template <typename Iterator>
   void AddUnsafeToBreak(Iterator offsets_begin, const Iterator offsets_end);
@@ -421,8 +423,8 @@ class PLATFORM_EXPORT ShapeResult : public GarbageCollected<ShapeResult> {
                              ShapeResult* target) const;
 
   template <bool>
-  void ComputePositionData() const;
-  void RecalcCharacterPositions() const;
+  void ComputePositionData(bool allow_compaction) const;
+  void RecalcCharacterPositions(bool allow_compaction = true) const;
 
   // if `method` is std::nullopt, this handles letter-spacing/word-spacing.
   // Otherwise, this handles expansion.

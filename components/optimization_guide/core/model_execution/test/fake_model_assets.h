@@ -7,8 +7,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <vector>
 
-#include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/values.h"
@@ -33,6 +33,9 @@ class FakeBaseModelAsset {
     uint32_t cache_weight = 0;
     uint32_t encoder_cache_weight = 0;
     uint32_t adapter_cache_weight = 0;
+    // Using C string to avoid manual ctor of non-trivial types for test-only
+    // purposes, otherwise non-aggregate initializer for struct is disallowed.
+    const char* shader_cache_data = "";
   };
   FakeBaseModelAsset();
   explicit FakeBaseModelAsset(Content content);
@@ -40,6 +43,9 @@ class FakeBaseModelAsset {
       const std::vector<proto::OnDeviceModelPerformanceHint>& hints);
   explicit FakeBaseModelAsset(
       proto::OnDeviceModelValidationConfig&& validation_config);
+  FakeBaseModelAsset(
+      const std::vector<proto::OnDeviceModelPerformanceHint>& hints,
+      Content content);
   ~FakeBaseModelAsset();
 
   // Overwrites content in the same file.
@@ -51,7 +57,7 @@ class FakeBaseModelAsset {
   const std::string& version() const { return version_; }
 
   // Returns a fake manifest content for this asset.
-  base::Value::Dict Manifest() const;
+  base::DictValue Manifest() const;
 
   // Pass this asset to manager->SetReady.
   void SetReadyIn(OnDeviceModelComponentStateManager& manager) const;
@@ -61,7 +67,7 @@ class FakeBaseModelAsset {
 
  private:
   std::string version_ = "0.0.1";
-  base::Value::List supported_performance_hints_;
+  base::ListValue supported_performance_hints_;
   base::ScopedTempDir temp_dir_;
 };
 
@@ -81,7 +87,7 @@ class FakeAdaptationAsset {
   mojom::OnDeviceFeature feature() const { return feature_; }
   OnDeviceModelAdaptationMetadata metadata() const { return *metadata_; }
 
-  const ModelInfo& model_info() const { return *model_info_; }
+  const ModelInfo& model_info() const { return model_info_; }
 
   void SendTo(OnDeviceModelServiceController& controller) const;
 
@@ -90,7 +96,7 @@ class FakeAdaptationAsset {
  private:
   base::ScopedTempDir temp_dir_;
   mojom::OnDeviceFeature feature_;
-  std::unique_ptr<ModelInfo> model_info_;
+  ModelInfo model_info_;
   std::unique_ptr<on_device_model::AdaptationAssetPaths> paths_;
   std::unique_ptr<OnDeviceModelAdaptationMetadata> metadata_;
 };
@@ -101,12 +107,12 @@ class FakeLanguageModelAsset {
   FakeLanguageModelAsset();
   ~FakeLanguageModelAsset();
 
-  const ModelInfo& model_info() const { return *model_info_; }
+  const ModelInfo& model_info() const { return model_info_; }
   base::FilePath model_path() const;
 
  private:
   base::ScopedTempDir temp_dir_;
-  std::unique_ptr<ModelInfo> model_info_;
+  ModelInfo model_info_;
 };
 
 // Safety model files and metadata suitable for a FakeOnDeviceModelService.
@@ -124,16 +130,20 @@ class FakeSafetyModelAsset {
 
   ~FakeSafetyModelAsset();
 
-  const ModelInfo& model_info() const { return *model_info_; }
+  const ModelInfo& model_info() const { return model_info_; }
 
-  base::flat_set<base::FilePath> AdditionalFiles() const {
-    return model_info_->GetAdditionalFiles();
+  const std::vector<base::FilePath>& AdditionalFiles() const {
+    return model_info_.additional_files;
   }
 
  private:
   base::ScopedTempDir temp_dir_;
-  std::unique_ptr<ModelInfo> model_info_;
+  ModelInfo model_info_;
 };
+
+// File paths that can be used in testing, handling platform differences, namely
+// C:\ in Windows.
+extern const char kTestAbsoluteFilePath[];
 
 }  // namespace optimization_guide
 

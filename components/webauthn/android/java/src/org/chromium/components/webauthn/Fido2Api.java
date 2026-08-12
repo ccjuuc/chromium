@@ -41,6 +41,7 @@ import org.chromium.blink.mojom.UvmEntry;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.mojo.bindings.DeserializationException;
 import org.chromium.mojo_base.mojom.TimeDelta;
 
 import java.nio.ByteBuffer;
@@ -780,7 +781,7 @@ public final class Fido2Api {
     private static String transportToString(int transport) {
         // This is the closest one can get to a static assert that no new enumeration values have
         // been added.
-        assert AuthenticatorTransport.MAX_VALUE == AuthenticatorTransport.INTERNAL;
+        assert AuthenticatorTransport.MAX_VALUE == AuthenticatorTransport.SMART_CARD;
 
         switch (transport) {
             case AuthenticatorTransport.NFC:
@@ -791,6 +792,8 @@ public final class Fido2Api {
                 return "internal";
             case AuthenticatorTransport.HYBRID:
                 return "cable";
+            case AuthenticatorTransport.SMART_CARD:
+                return "smart-card";
             case AuthenticatorTransport.USB:
             default:
                 return "usb";
@@ -862,7 +865,7 @@ public final class Fido2Api {
             length = parcel.readInt();
         }
 
-        return new Pair(tag, length);
+        return new Pair<>(tag, length);
     }
 
     /**
@@ -985,7 +988,7 @@ public final class Fido2Api {
                     response =
                             MakeCredentialAuthenticatorResponse.deserialize(
                                     ByteBuffer.wrap(responseSerialized));
-                } catch (org.chromium.mojo.bindings.DeserializationException e) {
+                } catch (DeserializationException e) {
                     throw new IllegalArgumentException(e);
                 }
 
@@ -1027,7 +1030,7 @@ public final class Fido2Api {
                     response =
                             GetAssertionAuthenticatorResponse.deserialize(
                                     ByteBuffer.wrap(responseSerialized));
-                } catch (org.chromium.mojo.bindings.DeserializationException e) {
+                } catch (DeserializationException e) {
                     throw new IllegalArgumentException(e);
                 }
 
@@ -1136,6 +1139,8 @@ public final class Fido2Api {
                 pending[j++] = AuthenticatorTransport.HYBRID;
             } else if ("internal".equals(transport)) {
                 pending[j++] = AuthenticatorTransport.INTERNAL;
+            } else if ("smart-card".equals(transport)) {
+                pending[j++] = AuthenticatorTransport.SMART_CARD;
             }
         }
 
@@ -1487,7 +1492,7 @@ public final class Fido2Api {
     /** AttestationObjectParts groups together the return values of |parseAttestationObject|. */
     public static final class AttestationObjectParts {
         @Initializer
-        @CalledByNative("AttestationObjectParts")
+        @CalledByNative
         void setAll(
                 byte[] authenticatorData,
                 byte[] spki,

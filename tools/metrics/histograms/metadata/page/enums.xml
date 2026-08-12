@@ -41,6 +41,29 @@ chromium-metrics-reviews@google.com.
 
 <!-- LINT.ThenChange(//services/network/public/mojom/load_timing_internal_info.mojom:AdvertisedAltSvcState) -->
 
+<!-- LINT.IfChange(CaptchaFrameAgentContext) -->
+
+<enum name="CaptchaFrameAgentContext">
+  <int value="0" label="Unknown"/>
+  <int value="1" label="No known agent is active on tab"/>
+  <int value="2" label="Glic agent is active on tab"/>
+  <int value="3" label="DevTools agent is active on tab"/>
+  <int value="4" label="Multiple agents are active on tab"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/page_load_metrics/observers/captcha_metrics_observer.h:CaptchaFrameAgentContext) -->
+
+<!-- LINT.IfChange(CaptchaProvider) -->
+
+<enum name="CaptchaProvider">
+  <int value="0" label="Unknown"/>
+  <int value="1" label="reCaptcha"/>
+  <int value="2" label="hCaptcha"/>
+  <int value="3" label="Cloudflare Turnstile"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/page_load_metrics/observers/captcha_provider_manager.h:CaptchaProvider) -->
+
 <!-- LINT.IfChange(ConnectionReuseStatus) -->
 
 <enum name="ConnectionReuseStatus">
@@ -55,21 +78,6 @@ chromium-metrics-reviews@google.com.
   <int value="0" label="Ad Origin indeterminable"/>
   <int value="1" label="Main Frame Origin same as Ad"/>
   <int value="2" label="Main Frame Origin differs from Ad"/>
-</enum>
-
-<enum name="CrossOriginCreativeStatus">
-  <int value="0" label="Ad Creative Origin indeterminable"/>
-  <int value="1" label="Main Frame Origin same as Ad Creative"/>
-  <int value="2" label="Main Frame Origin differs from Ad Creative"/>
-</enum>
-
-<enum name="CrossOriginCreativeStatusWithThrottling">
-  <int value="0" label="Ad Creative Origin Unknown and Ad Not Throttled"/>
-  <int value="1" label="Ad Creative Origin Unknown and Ad Throttled"/>
-  <int value="2"
-      label="Ad Creative Origin Same as Main Frame and Ad Not Throttled"/>
-  <int value="3"
-      label="Ad Creative Origin Differs from Main Frame and Ad Not Throttled"/>
 </enum>
 
 <!-- LINT.IfChange(GwsWarmUpType) -->
@@ -99,6 +107,17 @@ chromium-metrics-reviews@google.com.
     The ad exceeded the peak CPU usage threshold for the Heavy Ad Intervention.
   </int>
 </enum>
+
+<!-- LINT.IfChange(HttpConnectionInfoCoarse) -->
+
+<enum name="HttpConnectionInfoCoarse">
+  <int value="0" label="HTTP1"/>
+  <int value="1" label="HTTP2"/>
+  <int value="2" label="QUIC"/>
+  <int value="3" label="OTHER"/>
+</enum>
+
+<!-- LINT.ThenChange(//net/http/http_connection_info.h:HttpConnectionInfoCoarse) -->
 
 <enum name="InternalErrorLoadEvent">
   <summary>Internal Errors in the page_load_metrics system</summary>
@@ -145,28 +164,6 @@ chromium-metrics-reviews@google.com.
   <int value="4" label="Failure(False positive): Another indexed LCP.">
     Prediction failed. LCP is predicted but the actual LCP is one with another
     leaned locator.
-  </int>
-</enum>
-
-<enum name="LinkPreviewUsage">
-  <int value="0" label="Not used"/>
-  <int value="1" label="Used but not promited"/>
-  <int value="2" label="Used and promoted"/>
-</enum>
-
-<enum name="MhtmlLoadResult">
-  <int value="0" label="Success">Archive loaded successfully</int>
-  <int value="1" label="Empty file">
-    Failed to load archive because the file was empty
-  </int>
-  <int value="2" label="URL scheme not allowed">
-    Failed to load archive because the url wasn't http(s), file, or content
-  </int>
-  <int value="3" label="Invalid archive">
-    Failed to load archive because it was not valid MHTML
-  </int>
-  <int value="4" label="Missing main resource">
-    Failed to load archive because it had no main resource
   </int>
 </enum>
 
@@ -246,7 +243,7 @@ chromium-metrics-reviews@google.com.
 
 <enum name="PageActionIconType">
   <int value="0" label="Bookmarks Star"/>
-  <int value="1" label="Click to Call"/>
+  <int value="1" label="(Deprecated) Click to Call"/>
   <int value="2" label="Cookie Controls"/>
   <int value="3" label="File System Access"/>
   <int value="4" label="Find"/>
@@ -255,14 +252,14 @@ chromium-metrics-reviews@google.com.
   <int value="7" label="(Deprecated) Local Card Migration"/>
   <int value="8" label="Manage Passwords"/>
   <int value="9" label="Payments Offer Notification"/>
-  <int value="10" label="Price Tracking"/>
+  <int value="10" label="(Deprecated) Price Tracking"/>
   <int value="11" label="PWA Install"/>
   <int value="12" label="(Deprecated) QR Code Generator"/>
   <int value="13" label="(Deprecated) Reader Mode"/>
   <int value="14" label="Autofill Address"/>
   <int value="15" label="Save Card"/>
   <int value="16" label="(Deprecated) Send Tab to Self"/>
-  <int value="17" label="Sharing Hub"/>
+  <int value="17" label="(Deprecated) Sharing Hub"/>
   <int value="18" label="(Deprecated) Side Search"/>
   <int value="19" label="(Deprecated) SMS Remote Fetcher"/>
   <int value="20" label="Translate"/>
@@ -284,6 +281,17 @@ chromium-metrics-reviews@google.com.
   <int value="36" label="Reading mode"/>
   <int value="37" label="Contextual Task"/>
   <int value="38" label="JS Optimizations"/>
+  <int value="39" label="RecordReplay"/>
+  <int value="40" label="Indigo"/>
+  <int value="41" label="Federation"/>
+  <int value="42" label="Glic"/>
+  <int value="43" label="Anchored Contextual Cue"/>
+  <int value="44" label="Web Authentication Ambient"/>
+  <int value="45" label="Autofill Payment"/>
+  <int value="46" label="Multistep Filter"/>
+  <int value="47" label="Payments Churned Users"/>
+  <int value="48" label="Fake Page Action For Debug"/>
+  <int value="49" label="Wallet Reminder Notice"/>
 </enum>
 
 <!-- LINT.ThenChange(//chrome/browser/ui/page_action/page_action_icon_type.h:PageActionIconType) -->
@@ -343,35 +351,6 @@ chromium-metrics-reviews@google.com.
 
 <!-- LINT.ThenChange(//components/page_load_metrics/browser/page_load_metrics_update_dispatcher.h:PageLoadTimingStatus) -->
 
-<enum name="PageVisitType">
-  <int value="0"
-      label="Independent Visit; the page is opened from UI or in new tab, and
-             not followed by any link navigation. (obsolete)"/>
-  <int value="1"
-      label="Origin Visit; the page is opened from UI or in new tab, and
-             followed by a link navigation. (obsolete)"/>
-  <int value="2"
-      label="PassingVisit; the page is visited and followed by link
-             navigations."/>
-  <int value="3"
-      label="TerminalVisit; the page is visited by a link navigation, but not
-             followed by any link navigation."/>
-  <int value="4"
-      label="HistoryVisit; the page is visited by a history navigation."/>
-  <int value="5"
-      label="Independent Link Visit; the page is opened in a new tab, and not
-             followed by any link navigation."/>
-  <int value="6"
-      label="Independent UI Visit; the page is opened from UI, and not
-             followed by any link navigation."/>
-  <int value="7"
-      label="Origin Link Visit; the page is opened in a new tab, and followed
-             by a link navigation."/>
-  <int value="8"
-      label="Origin UI Visit; the page is opened from UI, and followed by a
-             link navigation."/>
-</enum>
-
 <!-- LINT.IfChange(PaidContentState) -->
 
 <enum name="PaidContentState">
@@ -393,10 +372,43 @@ chromium-metrics-reviews@google.com.
 
 <!-- LINT.ThenChange(//components/page_load_metrics/google/browser/prerender_prewarm_navigation_data.h:PrerenderPrewarmNavigationStatus) -->
 
-<enum name="PreviewFinalStatus">
-  <int value="0" label="just previewed"/>
-  <int value="1" label="previewed and promoted"/>
+<!-- LINT.IfChange(PriorPrewarmCommitStatus) -->
+
+<enum name="PriorPrewarmCommitStatus">
+  <int value="0" label="No prewarm triggered"/>
+  <int value="1" label="Prewarm triggered, not committed"/>
+  <int value="2" label="Prewarm triggered, committed"/>
 </enum>
+
+<!-- LINT.ThenChange(//components/page_load_metrics/google/browser/prerender_prewarm_navigation_data.h:PriorPrewarmCommitStatus) -->
+
+<!-- LINT.IfChange(SoftNavigationPageLoadMetricsObserverState) -->
+
+<enum name="SoftNavigationPageLoadMetricsObserverState">
+  <int value="0" label="initial (softnav unexpected)">
+    softnav unexpected - no navigation recognized
+  </int>
+  <int value="1" label="started (softnav expected)">
+    softnav expected - a (hard) navigation was started
+  </int>
+  <int value="2" label="prerenderStarted (softnav unexpected)">
+    softnav unexpected - a prerender was started
+  </int>
+  <int value="3" label="prerenderActivated (softnav expected)">
+    softnav expected - a prerender was activated
+  </int>
+  <int value="4" label="inBackForwardCache (softnav unexpected)">
+    softnav unexpected - the page entered the bfcache
+  </int>
+  <int value="5" label="restoredFromBackForwardCache (softnav expected)">
+    softnav expected - the page was restored from bfcache
+  </int>
+  <int value="6" label="complete (softnav unexpected)">
+    softnav unexpected - the navigation completed
+  </int>
+</enum>
+
+<!-- LINT.ThenChange(//components/page_load_metrics/browser/observers/soft_navigation_page_load_metrics_observer.h:SoftNavigationPageLoadMetricsObserverState) -->
 
 <!-- LINT.IfChange(WebViewPageAttemptResult) -->
 

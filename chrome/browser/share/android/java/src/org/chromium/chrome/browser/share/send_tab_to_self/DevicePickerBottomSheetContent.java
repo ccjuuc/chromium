@@ -5,7 +5,6 @@
 package org.chromium.chrome.browser.share.send_tab_to_self;
 
 import android.content.Context;
-import android.content.res.Resources;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -17,13 +16,18 @@ import android.widget.TextView;
 import androidx.annotation.StringRes;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.widget.Toast;
 
 import java.util.List;
+import java.util.function.Supplier;
 
 /**
  * Bottom sheet content to display a list of devices a user can send a tab to after they have chosen
@@ -39,6 +43,10 @@ class DevicePickerBottomSheetContent implements BottomSheetContent, OnItemClickL
     private final Profile mProfile;
     private final String mUrl;
     private final String mTitle;
+    private final Supplier<@Nullable Tab> mTabProvider;
+    private final @ShareEntryPoint int mEntryPoint;
+
+    private boolean mIsActionStarted;
 
     public DevicePickerBottomSheetContent(
             Context context,
@@ -46,13 +54,17 @@ class DevicePickerBottomSheetContent implements BottomSheetContent, OnItemClickL
             String title,
             BottomSheetController controller,
             List<TargetDeviceInfo> targetDevices,
-            Profile profile) {
+            Profile profile,
+            Supplier<@Nullable Tab> tabProvider,
+            @ShareEntryPoint int entryPoint) {
         mContext = context;
         mController = controller;
         mProfile = profile;
         mAdapter = new DevicePickerBottomSheetAdapter(targetDevices);
         mUrl = url;
         mTitle = title;
+        mTabProvider = tabProvider;
+        mEntryPoint = entryPoint;
 
         createToolbarView();
         createContentView();
@@ -144,17 +156,35 @@ class DevicePickerBottomSheetContent implements BottomSheetContent, OnItemClickL
 
     @Override
     public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
-        MetricsRecorder.recordCrossDeviceTabJourney();
-        TargetDeviceInfo targetDeviceInfo = mAdapter.getItem(position);
-
-        SendTabToSelfAndroidBridge.addEntry(mProfile, mUrl, mTitle, targetDeviceInfo.cacheGuid);
-
-        Resources res = mContext.getResources();
-
-        String toastMessage =
-                res.getString(R.string.send_tab_to_self_toast, targetDeviceInfo.deviceName);
-        Toast.makeText(mContext, toastMessage, Toast.LENGTH_SHORT).show();
+        // Only process the click once to avoid multiple entries being sent if the user
+        // taps multiple items quickly.
+        if (mIsActionStarted) return;
+        mIsActionStarted = true;
 
         mController.hideContent(this, true);
+
+        SendTabToSelfMetricsRecorder.recordCrossDeviceTabJourney();
+        TargetDeviceInfo targetDeviceInfo = mAdapter.getItem(position);
+
+        // TODO(crbug.com/492072882): Remove the optimistic toast completely once the
+        // SendTabToSelfPostSendToast feature has fully launched.
+        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.SEND_TAB_TO_SELF_POST_SEND_TOAST)) {
+            String toastMessage =
+                    mContext.getString(
+                            R.string.send_tab_to_self_toast, targetDeviceInfo.deviceName);
+            Toast.makeText(mContext, toastMessage, Toast.LENGTH_SHORT).show();
+        }
+
+        Tab tab = mTabProvider.get();
+        WebContents webContents = (tab != null) ? tab.getWebContents() : null;
+
+        SendTabToSelfAndroidBridge.sendTabToDevice(
+                mProfile,
+                webContents,
+                targetDeviceInfo.cacheGuid,
+                targetDeviceInfo.deviceName,
+                mUrl,
+                mTitle,
+                mEntryPoint);
     }
 }

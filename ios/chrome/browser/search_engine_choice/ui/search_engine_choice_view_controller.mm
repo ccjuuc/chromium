@@ -25,7 +25,6 @@
 #import "ios/chrome/common/ui/util/button_util.h"
 #import "ios/chrome/common/ui/util/chrome_button.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
-#import "ios/chrome/common/ui/util/device_util.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/components/ui_util/dynamic_type_util.h"
 #import "net/base/apple/url_conversions.h"
@@ -167,8 +166,8 @@ CGFloat GetSubtitleMarginDistance() {
 
 }  // namespace
 
-@interface SearchEngineChoiceViewController () <UITextViewDelegate,
-                                                UITextDragDelegate>
+@interface SearchEngineChoiceViewController () <UITextDragDelegate,
+                                                UITextViewDelegate>
 @end
 
 @implementation SearchEngineChoiceViewController {
@@ -608,10 +607,10 @@ CGFloat GetSubtitleMarginDistance() {
          selector:@selector(accessibilityElementFocusedNotification:)
              name:UIAccessibilityElementFocusedNotification
            object:nil];
-  NSArray<UITrait>* traits = TraitCollectionSetForTraits(@[
+  NSArray<UITrait>* traits = @[
     UITraitPreferredContentSizeCategory.class, UITraitVerticalSizeClass.class,
     UITraitHorizontalSizeClass.class
-  ]);
+  ];
   [self registerForTraitChanges:traits
                      withAction:@selector(updateUIOnTraitChange)];
 }

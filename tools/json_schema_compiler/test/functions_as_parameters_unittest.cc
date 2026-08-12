@@ -7,8 +7,11 @@
 #include <memory>
 
 #include "base/values.h"
+#include "extensions/buildflags/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "tools/json_schema_compiler/test/test_util.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using test::api::functions_as_parameters::FunctionType;
 using test::api::functions_as_parameters::OptionalFunctionType;
@@ -24,7 +27,7 @@ TEST(JsonSchemaCompilerFunctionsAsParametersTest, RequiredFunctionFromValue) {
   }
   {
     base::Value value(base::Value::Type::DICT);
-    value.GetDict().Set("event_callback", base::Value::Dict());
+    value.GetDict().Set("event_callback", base::DictValue());
 
     auto out = FunctionType::FromValue(value);
     ASSERT_TRUE(out);
@@ -34,18 +37,18 @@ TEST(JsonSchemaCompilerFunctionsAsParametersTest, RequiredFunctionFromValue) {
 
 TEST(JsonSchemaCompilerFunctionsAsParametersTest, RequiredFunctionToValue) {
   {
-    base::Value::Dict value;
-    value.Set("event_callback", base::Value::Dict());
+    base::DictValue value;
+    value.Set("event_callback", base::DictValue());
 
     auto out = FunctionType::FromValue(value);
     ASSERT_TRUE(out);
     EXPECT_EQ(value, out->ToValue());
   }
   {
-    base::Value::Dict value;
-    base::Value::Dict expected_value;
-    value.Set("event_callback", base::Value::Dict());
-    expected_value.Set("event_callback", base::Value::Dict());
+    base::DictValue value;
+    base::DictValue expected_value;
+    value.Set("event_callback", base::DictValue());
+    expected_value.Set("event_callback", base::DictValue());
 
     auto out = FunctionType::FromValue(value);
     ASSERT_TRUE(out);
@@ -56,15 +59,15 @@ TEST(JsonSchemaCompilerFunctionsAsParametersTest, RequiredFunctionToValue) {
 
 TEST(JsonSchemaCompilerFunctionsAsParametersTest, OptionalFunctionFromValue) {
   {
-    base::Value::Dict empty_dictionary;
+    base::DictValue empty_dictionary;
     auto out = OptionalFunctionType::FromValue(empty_dictionary);
     ASSERT_TRUE(out);
     EXPECT_FALSE(out->event_callback.has_value());
     EXPECT_EQ(out->Clone().ToValue(), out->ToValue());
   }
   {
-    base::Value::Dict value;
-    value.Set("event_callback", base::Value::Dict());
+    base::DictValue value;
+    value.Set("event_callback", base::DictValue());
 
     auto out = OptionalFunctionType::FromValue(value);
     ASSERT_TRUE(out);
@@ -75,15 +78,15 @@ TEST(JsonSchemaCompilerFunctionsAsParametersTest, OptionalFunctionFromValue) {
 
 TEST(JsonSchemaCompilerFunctionsAsParametersTest, OptionalFunctionToValue) {
   {
-    base::Value::Dict empty_value;
+    base::DictValue empty_value;
     auto out = OptionalFunctionType::FromValue(empty_value);
     ASSERT_TRUE(out);
     // event_callback should not be set in the return from ToValue.
     EXPECT_EQ(empty_value, out->ToValue());
   }
   {
-    base::Value::Dict value;
-    value.Set("event_callback", base::Value::Dict());
+    base::DictValue value;
+    value.Set("event_callback", base::DictValue());
 
     auto out = OptionalFunctionType::FromValue(value);
     ASSERT_TRUE(out);
@@ -95,7 +98,7 @@ TEST(JsonSchemaCompilerFunctionsAsParametersTest, SerializableFunctionTypes) {
   constexpr char kFunction[] = "function() {}";
   SerializableFunctionType serializable_type;
   serializable_type.function_property = kFunction;
-  base::Value::Dict serialized = serializable_type.ToValue();
+  base::DictValue serialized = serializable_type.ToValue();
   ASSERT_TRUE(SerializableFunctionType::FromValue(std::move(serialized)));
   EXPECT_EQ(kFunction, serializable_type.function_property);
   EXPECT_EQ(serializable_type.Clone().ToValue(), serializable_type.ToValue());
@@ -108,7 +111,7 @@ TEST(JsonSchemaCompilerFunctionsAsParametersTest,
     // Test with the optional property set.
     OptionalSerializableFunctionType serializable_type;
     serializable_type.function_property = kFunction;
-    base::Value::Dict serialized = serializable_type.ToValue();
+    base::DictValue serialized = serializable_type.ToValue();
     ASSERT_TRUE(
         OptionalSerializableFunctionType::FromValue(std::move(serialized)));
     ASSERT_TRUE(serializable_type.function_property);
@@ -118,7 +121,7 @@ TEST(JsonSchemaCompilerFunctionsAsParametersTest,
   {
     // Test without the property set.
     OptionalSerializableFunctionType serializable_type;
-    base::Value::Dict serialized = serializable_type.ToValue();
+    base::DictValue serialized = serializable_type.ToValue();
     ASSERT_TRUE(
         OptionalSerializableFunctionType::FromValue(std::move(serialized)));
     EXPECT_FALSE(serializable_type.function_property);

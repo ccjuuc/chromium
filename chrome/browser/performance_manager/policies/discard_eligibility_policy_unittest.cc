@@ -8,8 +8,8 @@
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -137,9 +137,9 @@ TEST_F(DiscardEligibilityPolicyTest, TestCanDiscardMultipleCurrentMainFrames) {
   ASSERT_TRUE(other_frame_node->GetURL().is_empty());
   ASSERT_TRUE(other_frame_node->IsCurrent());
 
-  // An arbitrary "current" frame will be returned by GetMainFrameNode(). Make
-  // sure the page can be discarded even if the one without a url is returned.
-  // Discarding is only blocked if neither have a url.
+  // An arbitrary "current" frame will be returned by GetPrimaryMainFrameNode().
+  // Make sure the page can be discarded even if the one without a url is
+  // returned. Discarding is only blocked if neither have a url.
   ExpectCanDiscardEligibleAllReasons(page_node());
 
   SetPageAndFrameUrl(GURL(), page_node(), frame_node());
@@ -241,7 +241,8 @@ TEST_F(DiscardEligibilityPolicyTest, TestCanDiscardNeverAudiblePage) {
   constexpr base::TimeDelta kMinTimeInBackground = kTabAudioProtectionTime / 2;
   task_env().FastForwardBy(kMinTimeInBackground);
 
-  ExpectCanDiscardEligibleAllReasons(page_node(), kMinTimeInBackground);
+  ExpectCanDiscardEligibleAllReasons(new_page_node.get(),
+                                     /*ignore_recent_visibility=*/true);
 }
 
 #if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
@@ -249,7 +250,8 @@ TEST_F(DiscardEligibilityPolicyTest,
        TestCannotDiscardRecentlyVisiblePageUnlessExplicitlyRequested) {
   page_node()->SetIsVisible(true);
   page_node()->SetIsVisible(false);
-  AdvanceClock(base::Seconds(1));
+  AdvanceClock(internal::kNonVisiblePagesUrgentProtectionTime -
+               base::Seconds(1));
 
   ExpectCanDiscardProtected(page_node(),
                             {DiscardReason::URGENT, DiscardReason::PROACTIVE,
@@ -259,7 +261,9 @@ TEST_F(DiscardEligibilityPolicyTest,
       page_node(),
       {DiscardReason::EXTERNAL, DiscardReason::FROZEN_WITH_GROWING_MEMORY});
 
-  ExpectCanDiscardEligibleAllReasons(page_node(), base::Seconds(1));
+  AdvanceClock(base::Seconds(1));
+
+  ExpectCanDiscardEligibleAllReasons(page_node());
 }
 #endif
 
@@ -586,6 +590,34 @@ TEST_F(DiscardEligibilityPolicyTest, TestAlwaysDiscardForTesting) {
       ->SetIsActiveTabForTesting(true);
 
   ExpectCanDiscardEligibleAllReasons(page_node());
+}
+
+TEST_F(DiscardEligibilityPolicyTest, RecordsDiscardDecisionMetrics) {
+  base::HistogramTester histogram_tester;
+
+  // Set the page as visible so that the discard attempt is rejected.
+  page_node()->SetIsVisible(true);
+
+  // Create a vector to capture the reasons.
+  std::vector<CannotDiscardReason> reasons;
+
+  const auto* policy = DiscardEligibilityPolicy::GetFromGraph(graph());
+
+  // Pass the address of 'reasons' instead of nullptr
+  policy->CanDiscard(page_node(), DiscardReason::URGENT,
+                     /*ignore_recent_visibility=*/true, &reasons);
+
+  histogram_tester.ExpectBucketCount(
+      "PerformanceManager.Discarding.DecisionResult",
+      CanDiscardResult::kProtected, 1);
+
+  histogram_tester.ExpectBucketCount(
+      "PerformanceManager.Discarding.DecisionResult.Urgent",
+      CanDiscardResult::kProtected, 1);
+
+  histogram_tester.ExpectBucketCount(
+      "PerformanceManager.Discarding.ProtectionReason",
+      CannotDiscardReason::kVisible, 1);
 }
 
 }  // namespace performance_manager::policies

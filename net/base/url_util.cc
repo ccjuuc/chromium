@@ -76,8 +76,8 @@ GURL AppendQueryParameter(const GURL& url,
   if (!query.empty())
     query += "&";
 
-  query += (base::EscapeQueryParamValue(name, true) + "=" +
-            base::EscapeQueryParamValue(value, true));
+  base::StrAppend(&query, {base::EscapeQueryParamValue(name, true), "=",
+                           base::EscapeQueryParamValue(value, true)});
   GURL::Replacements replacements;
   replacements.SetQueryStr(query);
   return url.ReplaceComponents(replacements);
@@ -107,7 +107,7 @@ GURL AppendOrReplaceQueryParameter(const GURL& url,
       if (!should_keep_param)
         continue;
 
-      key_value_pair = param_name + "=" + param_value;
+      key_value_pair = base::StrCat({param_name, "=", param_value});
     } else {
       key_value_pair = std::string(
           input.substr(key_range.begin, value_range.end() - key_range.begin));
@@ -121,7 +121,7 @@ GURL AppendOrReplaceQueryParameter(const GURL& url,
     if (!output.empty())
       output += "&";
 
-    output += (param_name + "=" + param_value);
+    base::StrAppend(&output, {param_name, "=", param_value});
   }
   GURL::Replacements replacements;
   replacements.SetQueryStr(output);
@@ -219,7 +219,7 @@ bool ParseHostAndPort(std::string_view input, std::string* host, int* port) {
 
   int parsed_port_number = -1;
   if (port_component.is_nonempty()) {
-    parsed_port_number = url::ParsePort(input.data(), port_component);
+    parsed_port_number = url::ParsePort(input, port_component);
 
     // If parsing failed, port_number will be either PORT_INVALID or
     // PORT_UNSPECIFIED, both of which are negative.
@@ -597,10 +597,7 @@ std::string UnescapePercentEncodedUrl(std::string_view input) {
     }
   }
   // Run UTF-8 decoding without BOM on the percent-decoding.
-  url::RawCanonOutputT<char16_t> canon_output;
-  url::DecodeURLEscapeSequences(result, url::DecodeURLMode::kUTF8,
-                                &canon_output);
-  return base::UTF16ToUTF8(canon_output.view());
+  return url::DecodeUrlEscapeSequences(result, url::DecodeUrlMode::kUtf8);
 }
 
 }  // namespace net

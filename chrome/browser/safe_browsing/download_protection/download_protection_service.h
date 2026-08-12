@@ -28,6 +28,7 @@
 #include "base/types/optional_ref.h"
 #include "chrome/browser/download/download_commands.h"
 #include "chrome/browser/enterprise/connectors/common.h"
+#include "chrome/browser/safe_browsing/download_protection/deep_scanning_request.h"
 #include "chrome/browser/safe_browsing/download_protection/download_protection_delegate.h"
 #include "chrome/browser/safe_browsing/download_protection/download_protection_observer.h"
 #include "chrome/browser/safe_browsing/download_protection/download_protection_util.h"
@@ -37,10 +38,6 @@
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/sessions/core/session_id.h"
 #include "url/gurl.h"
-
-#if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/safe_browsing/download_protection/deep_scanning_request.h"
-#endif
 
 namespace content {
 class PageNavigator;
@@ -230,7 +227,6 @@ class DownloadProtectionService {
   void ReportDelayedBypassEvent(download::DownloadItem* download,
                                 download::DownloadDangerType danger_type);
 
-#if !BUILDFLAG(IS_ANDROID)
   // Uploads `metadata` to Safe Browsing for deep scanning, using the upload
   // service attached to the profile `item` was downloaded in. This is
   // non-blocking, and the result we be provided through `callback`. `trigger`
@@ -265,7 +261,6 @@ class DownloadProtectionService {
       base::flat_map<base::FilePath, base::FilePath> save_package_files,
       CheckDownloadRepeatingCallback callback,
       enterprise_connectors::AnalysisSettings analysis_settings);
-#endif  // !BUILDFLAG(IS_ANDROID)
 
   virtual scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory(
       content::BrowserContext* browser_context);
@@ -289,10 +284,7 @@ class DownloadProtectionService {
   friend class CheckClientDownloadRequest;
   friend class CheckFileSystemAccessWriteRequest;
   friend class DownloadRequestMaker;
-
-#if !BUILDFLAG(IS_ANDROID)
   friend class DeepScanningRequest;
-#endif
 
   FRIEND_TEST_ALL_PREFIXES(DownloadProtectionServiceMockTimeTest,
                            TestDownloadRequestTimeout);
@@ -342,11 +334,9 @@ class DownloadProtectionService {
                        content::BrowserContext* browser_context,
                        DownloadCheckResult result);
 
-#if !BUILDFLAG(IS_ANDROID)
   // Called by a DeepScanningRequest when it finishes, to remove it from
   // |deep_scanning_requests_|.
   virtual void RequestFinished(DeepScanningRequest* request);
-#endif
 
   // Routes the dangerous download opened reports to `SafeBrowsingEventRouter`
   // and `ReportingEventRouter`, if available.
@@ -387,13 +377,11 @@ class DownloadProtectionService {
       download::DownloadItem* item,
       Profile* profile);
 
-#if !BUILDFLAG(IS_ANDROID)
   // Get the BinaryUploadService for the given |profile|. Virtual so it can be
   // overridden in tests.
   virtual enterprise_connectors::BinaryUploadService* GetBinaryUploadService(
       Profile* profile,
       const enterprise_connectors::AnalysisSettings& settings);
-#endif
 
   // Callback when deep scanning has finished, but we may want to do the
   // metadata check anyway.
@@ -416,10 +404,8 @@ class DownloadProtectionService {
                      std::unique_ptr<CheckClientDownloadRequestBase>>>
       context_download_requests_;
 
-#if !BUILDFLAG(IS_ANDROID)
   // Set of pending server requests for deep scanning.
   base::flat_set<std::unique_ptr<DeepScanningRequest>> deep_scanning_requests_;
-#endif
 
   // Keeps track of the state of the service.
   bool enabled_ = false;

@@ -34,10 +34,17 @@ class AudioCapturePermissionChecker {
   // This enum is used to track the audio permission state.
   enum class State { kUnknown, kChecking, kGranted, kDenied };
 
+  class Factory {
+   public:
+    virtual std::unique_ptr<AudioCapturePermissionChecker> Create(
+        base::RepeatingClosure callback) = 0;
+  };
+  static void SetFactoryForTesting(Factory* factory);
+
   // Create an AudioCapturePermissionChecker if there is one available and
   // enabled for this platform.
   static std::unique_ptr<AudioCapturePermissionChecker> MaybeCreate(
-      base::RepeatingCallback<void(void)> callback);
+      base::RepeatingClosure callback);
 
   virtual ~AudioCapturePermissionChecker() = default;
 

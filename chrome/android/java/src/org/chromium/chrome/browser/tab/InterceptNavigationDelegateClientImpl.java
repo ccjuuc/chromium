@@ -6,7 +6,6 @@ package org.chromium.chrome.browser.tab;
 
 import static org.chromium.build.NullUtil.assertNonNull;
 import static org.chromium.build.NullUtil.assumeNonNull;
-import static org.chromium.chrome.browser.tabwindow.TabWindowManager.INVALID_WINDOW_ID;
 
 import android.app.Activity;
 import android.content.Intent;
@@ -24,7 +23,7 @@ import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.app.tab_activity_glue.ReparentingTask;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.NewWindowAppSource;
-import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceOrchestratorFactory;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
 import org.chromium.components.external_intents.ExternalNavigationHandler;
 import org.chromium.components.external_intents.InterceptNavigationDelegateClient;
@@ -34,6 +33,8 @@ import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.NavigationHandle;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.WindowAndroid;
+
+import java.util.Collections;
 
 /**
  * Class that provides embedder-level information to InterceptNavigationDelegateImpl based off a
@@ -107,7 +108,8 @@ public class InterceptNavigationDelegateClientImpl implements InterceptNavigatio
 
     @Override
     public @Nullable Activity getActivity() {
-        return mTab.getActivity();
+        WindowAndroid window = mTab.getWindowAndroid();
+        return window != null && window.getActivity() != null ? window.getActivity().get() : null;
     }
 
     @Override
@@ -123,18 +125,23 @@ public class InterceptNavigationDelegateClientImpl implements InterceptNavigatio
     @Override
     public void closeTab() {
         if (mTab.isClosing()) return;
-        ChromeActivity activity = assumeNonNull(mTab.getActivity());
-        if (mTab.isCustomTab() && !activity.didFinishNativeInitialization()) {
-            // Test the assumption that the tab hasn't been added to a tab model yet.
-            assert activity.getTabModelSelector().getModelForTabId(mTab.getId()) == null;
-            // Tab is closing before being attached to a tab model. Delay the closing until native
-            // initialization finishes.
-            mTab.setDidCloseWhileDetached();
-        } else {
-            activity.getTabModelSelector()
-                    .tryCloseTab(
-                            TabClosureParams.closeTab(mTab).allowUndo(false).build(),
-                            /* allowDialog= */ false);
+        Activity activity = getActivity();
+        if (activity instanceof ChromeActivity chromeActivity) {
+            if (mTab.isCustomTab() && !chromeActivity.didFinishNativeInitialization()) {
+                // Test the assumption that the tab hasn't been added to a tab model yet.
+                assert chromeActivity.getTabModelSelector().getModelForTabId(mTab.getId()) == null;
+                // Tab is closing before being attached to a tab model. Delay the closing until
+                // native initialization finishes.
+                mTab.setDidCloseWhileDetached();
+            } else {
+                chromeActivity
+                        .getTabModelSelector()
+                        .tryCloseTab(
+                                TabClosureParams.closeTab(mTab)
+                                        .allowUndo(/* allowUndo= */ false)
+                                        .build(),
+                                /* allowDialog= */ false);
+            }
         }
     }
 
@@ -145,7 +152,7 @@ public class InterceptNavigationDelegateClientImpl implements InterceptNavigatio
 
         // If the launch was from an External app, Chrome came from the
         // background and acted as an intermediate link redirector between two
-        // apps (crbug.com/487938).
+        // apps (crbug.com/41174521).
         if (wasTabLaunchedFromExternalApp()) {
             Activity activity = assumeNonNull(getActivity());
             if (ChromeFeatureList.sCctDestroyTabWhenModelIsEmpty.isEnabled()
@@ -228,22 +235,13 @@ public class InterceptNavigationDelegateClientImpl implements InterceptNavigatio
     public void startReparentingTaskToNewWindow() {
         PostTask.postTask(
                 TaskTraits.UI_DEFAULT,
-                () -> {
-                    Intent intent =
-                            MultiWindowUtils.createNewWindowIntent(
-                                    assumeNonNull(getActivity()),
-                                    INVALID_WINDOW_ID,
-                                    true,
-                                    true,
-                                    true,
-                                    NewWindowAppSource.OTHER);
-                    ReparentingTask.from(mTab)
-                            .begin(
-                                    ContextUtils.getApplicationContext(),
-                                    intent,
-                                    /* startActivityOptions= */ null,
-                                    cleanupPendingTabClosure());
-                });
+                () ->
+                        MultiInstanceOrchestratorFactory.getInstance()
+                                .moveTabsToNewWindow(
+                                        getActivity(),
+                                        Collections.singletonList(mTab),
+                                        cleanupPendingTabClosure(),
+                                        NewWindowAppSource.EXTERNAL_NAVIGATION));
     }
 
     private Runnable cleanupPendingTabClosure() {

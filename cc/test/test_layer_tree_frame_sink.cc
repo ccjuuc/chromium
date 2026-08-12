@@ -83,7 +83,9 @@ class TestLayerTreeFrameSink::TestCompositorFrameSinkSupport
 
     if (!display_->has_scheduler()) {
       // In synchronous mode, we manually issue DrawAndSwap.
-      display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+      viz::DrawAndSwapParams params;
+      params.expected_display_time = base::TimeTicks::Now();
+      display_->DrawAndSwap(params);
     }
     return result;
   }
@@ -191,6 +193,10 @@ void TestLayerTreeFrameSink::SetDisplayColorSpace(
   display_color_spaces_ = gfx::DisplayColorSpaces(display_color_space);
   if (display_)
     display_->SetDisplayColorSpaces(display_color_spaces_);
+}
+
+viz::CompositorFrameSinkSupport* TestLayerTreeFrameSink::support() const {
+  return support_.get();
 }
 
 bool TestLayerTreeFrameSink::BindToClient(LayerTreeFrameSinkClient* client) {
@@ -413,7 +419,7 @@ void TestLayerTreeFrameSink::DisplayDidDrawAndSwap() {
 }
 
 void TestLayerTreeFrameSink::DisplayDidReceiveCALayerParams(
-    const gfx::CALayerParams& ca_layer_params) {}
+    gfx::CALayerParams ca_layer_params) {}
 
 void TestLayerTreeFrameSink::DisplayDidCompleteSwapWithSize(
     const gfx::Size& pixel_Size) {}

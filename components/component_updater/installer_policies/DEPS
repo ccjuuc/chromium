@@ -1,4 +1,5 @@
 include_rules = [
+  "+components/actor/core",
   "+components/autofill/core/browser",
   "+components/autofill/core/common",
   "+components/content_settings/core",
@@ -12,7 +13,8 @@ include_rules = [
   "+components/plus_addresses/core/browser",
   "+components/plus_addresses/core/common",
   "+components/prefs",
-  "+components/tpcd",
+  "+components/private_verification_tokens/common",
+  "+components/webapps/isolated_web_apps/key_distribution",
   "+mojo/public/cpp/base",
   "+net/base",
   "+services/network/public",

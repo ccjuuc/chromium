@@ -42,7 +42,7 @@ class ProfileCustomizationUI
     : public ui::MojoWebUIController,
       public theme_color_picker::mojom::ThemeColorPickerHandlerFactory {
  public:
-  static constexpr int kPreferredHeight = 560;
+  static constexpr int kPreferredHeight = 570;
   static constexpr int kPreferredWidth = 512;
 
   explicit ProfileCustomizationUI(content::WebUI* web_ui);
@@ -69,10 +69,10 @@ class ProfileCustomizationUI
  private:
   // theme_color_picker::mojom::ThemeColorPickerHandlerFactory:
   void CreateThemeColorPickerHandler(
-      mojo::PendingReceiver<theme_color_picker::mojom::ThemeColorPickerHandler>
-          handler,
       mojo::PendingRemote<theme_color_picker::mojom::ThemeColorPickerClient>
-          client) override;
+          client,
+      mojo::PendingReceiver<theme_color_picker::mojom::ThemeColorPickerHandler>
+          handler) override;
 
   std::unique_ptr<ThemeColorPickerHandler> theme_color_picker_handler_;
   mojo::Receiver<theme_color_picker::mojom::ThemeColorPickerHandlerFactory>

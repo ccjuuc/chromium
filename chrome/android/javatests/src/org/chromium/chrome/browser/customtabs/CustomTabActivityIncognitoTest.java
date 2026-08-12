@@ -60,11 +60,13 @@ import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisableIf;
-import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
+import org.chromium.base.test.util.Features;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.browserservices.intents.SessionHolder;
 import org.chromium.chrome.browser.customtabs.CustomTabsIntentTestUtils.OnFinishedForTest;
 import org.chromium.chrome.browser.customtabs.features.toolbar.CustomTabToolbar;
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.incognito.IncognitoDataTestUtils;
 import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthController;
@@ -78,12 +80,13 @@ import org.chromium.chrome.browser.translate.TranslateBridge;
 import org.chromium.chrome.browser.translate.TranslateBridgeJni;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuTestSupport;
+import org.chromium.chrome.browser.util.BrowserUiUtils;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.net.test.EmbeddedTestServerRule;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 
 import java.util.concurrent.ExecutionException;
@@ -96,6 +99,10 @@ import java.util.concurrent.TimeoutException;
  */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@Features.DisableFeatures({
+    // TODO(crbug.com/504757384): Add test for three dot menu flag.
+    ChromeFeatureList.THREE_DOT_MENU_BACK_BUTTON
+})
 @Batch(Batch.PER_CLASS)
 public class CustomTabActivityIncognitoTest {
     private static final String TEST_PAGE = "/chrome/test/data/android/google.html";
@@ -116,8 +123,7 @@ public class CustomTabActivityIncognitoTest {
     public void setUp() throws TimeoutException {
 
         // Mock translate bridge so "Translate..." menu item doesn't unexpectedly show up.
-        org.chromium.chrome.browser.translate.TranslateBridgeJni.setInstanceForTesting(
-                mTranslateBridgeJniMock);
+        TranslateBridgeJni.setInstanceForTesting(mTranslateBridgeJniMock);
         TranslateBridgeJni.setInstanceForTesting(mTranslateBridgeJniMock);
 
         FirstRunStatus.setFirstRunFlowComplete(true);
@@ -363,6 +369,7 @@ public class CustomTabActivityIncognitoTest {
 
     @Test
     @MediumTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/415118264
     public void ensureAddCustomMenuItemHasNoEffect() throws Exception {
         Intent intent = createTestCustomTabIntent();
         CustomTabsIntentTestUtils.addMenuEntriesToIntent(intent, 3, TEST_MENU_TITLE);
@@ -373,9 +380,14 @@ public class CustomTabActivityIncognitoTest {
                 AppMenuTestSupport.getMenuModelList(
                         mCustomTabActivityTestRule.getAppMenuCoordinator());
 
-        // Check the menu items have only 3 items visible including the top icon row menu for
+        int expectedMenuSize =
+                BrowserUiUtils.isPageInfoMovedToAppMenu(mCustomTabActivityTestRule.getActivity())
+                        ? 4
+                        : 3;
+
+        // Check the menu items have only 3 or 4 items visible including the top icon row menu for
         // incognito tabs.
-        CustomTabsTestUtils.assertMenuSize(menuItemsModelList, 3);
+        CustomTabsTestUtils.assertMenuSize(menuItemsModelList, expectedMenuSize);
 
         assertNotNull(
                 AppMenuTestSupport.getMenuItemPropertyModel(
@@ -390,38 +402,6 @@ public class CustomTabActivityIncognitoTest {
 
         // Check top icons are still the same.
         testTopActionIconsIsVisible();
-    }
-
-    @Test
-    @MediumTest
-    public void ensureAddCustomMenuItemIsEnabledForReaderMode() throws Exception {
-        Intent intent = createTestCustomTabIntent();
-        CustomTabIntentDataProvider.addReaderModeUiExtras(intent);
-        IncognitoCustomTabIntentDataProvider.addIncognitoExtrasForChromeFeatures(
-                intent, BrowserServicesIntentDataProvider.IncognitoCctCallerId.READER_MODE);
-        CustomTabActivity activity = launchIncognitoCustomTab(intent);
-        CustomTabsTestUtils.openAppMenuAndAssertMenuShown(activity);
-
-        ModelList menuItemsModelList =
-                AppMenuTestSupport.getMenuModelList(
-                        mCustomTabActivityTestRule.getAppMenuCoordinator());
-        // Check the menu items have only 2 items visible "not" including the top icon row menu.
-        CustomTabsTestUtils.assertMenuSize(menuItemsModelList, 2);
-        assertNotNull(
-                AppMenuTestSupport.getMenuItemPropertyModel(
-                        mCustomTabActivityTestRule.getAppMenuCoordinator(),
-                        R.id.reader_mode_prefs_id));
-        assertNotNull(
-                AppMenuTestSupport.getMenuItemPropertyModel(
-                        mCustomTabActivityTestRule.getAppMenuCoordinator(), R.id.find_in_page_id));
-
-        assertNull(
-                AppMenuTestSupport.getMenuItemPropertyModel(
-                        mCustomTabActivityTestRule.getAppMenuCoordinator(), R.id.icon_row_menu_id));
-        assertNull(
-                AppMenuTestSupport.getMenuItemPropertyModel(
-                        mCustomTabActivityTestRule.getAppMenuCoordinator(),
-                        R.id.request_desktop_site_id));
     }
 
     @Test
@@ -487,7 +467,7 @@ public class CustomTabActivityIncognitoTest {
     public void ensureMayLaunchUrlIsBlockedForIncognitoWithExtraInConnection() throws Exception {
         // mayLaunchUrl should be blocked for incognito mode since it runs with always regular
         // profile. Need to update the test if the mayLaunchUrl is ever
-        // allowed in incognito. (crbug.com/1106757)
+        // allowed in incognito. (crbug.com/40706528)
         Intent intent = createTestCustomTabIntent();
         final CustomTabsConnection connection = CustomTabsTestUtils.warmUpAndWait();
         final var token = SessionHolder.getSessionHolderFromIntent(intent);
@@ -518,7 +498,7 @@ public class CustomTabActivityIncognitoTest {
         // Creation of hidden tab should be blocked for incognito mode for the same setup as regular
         // mode above. Currently hidden tabs are created always with regular profile, so we
         // should block the hidden tab creation. Need to update the test if the hidden tabs are
-        // allowed in incognito. (crbug.com/1190971)
+        // allowed in incognito. (crbug.com/40174356)
         Intent intent = createTestCustomTabIntent();
         final CustomTabsConnection connection = CustomTabsTestUtils.warmUpAndWait();
         final var token = SessionHolder.getSessionHolderFromIntent(intent);
@@ -543,7 +523,7 @@ public class CustomTabActivityIncognitoTest {
         connection.cleanUpSession(token.getSessionAsCustomTab());
     }
 
-    /** Regression test for crbug.com/1325331. */
+    /** Regression test for crbug.com/40839771. */
     @Test
     @MediumTest
     public void testIncognitoReauthControllerCreated_WhenReauthFeatureIsEnabled()

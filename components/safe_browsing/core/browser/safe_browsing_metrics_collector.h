@@ -14,7 +14,7 @@
 #include "base/values.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
-#include "components/safe_browsing/core/browser/db/hit_report.h"
+#include "components/safe_browsing/core/common/threat_enums.h"
 
 class PrefService;
 
@@ -98,8 +98,10 @@ class SafeBrowsingMetricsCollector : public KeyedService {
     ANDROID_SAFEBROWSING_INTERSTITIAL_BYPASS = 15,
     // The user started a download deep scan
     DOWNLOAD_DEEP_SCAN = 16,
+    // The user bypasses an interstitial triggered by Glic Counter Abuse.
+    GLIC_COUNTER_ABUSE_INTERSTITIAL_BYPASS = 17,
 
-    kMaxValue = DOWNLOAD_DEEP_SCAN
+    kMaxValue = GLIC_COUNTER_ABUSE_INTERSTITIAL_BYPASS
   };
 
   using EventTypeFilter = base::RepeatingCallback<bool(const EventType&)>;
@@ -177,7 +179,7 @@ class SafeBrowsingMetricsCollector : public KeyedService {
 
   static bool IsBypassEventType(const EventType& type);
   static bool IsSecuritySensitiveEventType(const EventType& type);
-  static std::string GetUserStateMetricSuffix(const UserState& user_state);
+  static std::string_view GetUserStateMetricSuffix(const UserState& user_state);
 
   // For daily metrics.
   void LogMetricsAndScheduleNextLogging();
@@ -208,7 +210,7 @@ class SafeBrowsingMetricsCollector : public KeyedService {
   std::optional<SafeBrowsingMetricsCollector::Event>
   GetLatestEventFromEventTypeFilter(UserState user_state,
                                     EventTypeFilter event_type_filter);
-  const base::Value::Dict* GetSafeBrowsingEventDictionary(UserState user_state);
+  const base::DictValue* GetSafeBrowsingEventDictionary(UserState user_state);
   int GetEventCountSince(UserState user_state,
                          EventType event_type,
                          base::Time since_time);

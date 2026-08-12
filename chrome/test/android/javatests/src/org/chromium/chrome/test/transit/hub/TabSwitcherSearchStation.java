@@ -25,23 +25,25 @@ import androidx.test.espresso.action.ViewActions;
 import androidx.test.espresso.matcher.ViewMatchers;
 
 import org.hamcrest.Matcher;
+import org.hamcrest.Matchers;
 
 import org.chromium.base.test.transit.Facility;
 import org.chromium.base.test.transit.Station;
 import org.chromium.base.test.transit.ViewElement;
 import org.chromium.base.test.transit.ViewSpec;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.omnibox.LocationBarLayout;
 import org.chromium.chrome.browser.omnibox.UrlBar;
 import org.chromium.chrome.browser.omnibox.suggestions.base.BaseSuggestionView;
 import org.chromium.chrome.browser.searchwidget.SearchActivity;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.OmniboxTestUtils.InputMethodManagerIsActiveCondition;
 import org.chromium.chrome.test.util.OmniboxTestUtils.SuggestionsNotShownCondition;
 import org.chromium.chrome.test.util.OmniboxTestUtils.SuggestionsShownCondition;
 import org.chromium.chrome.test.util.OmniboxTestUtils.UrlBarHasFocusCondition;
+import org.chromium.components.omnibox.OmniboxCapabilities;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -49,7 +51,10 @@ import java.util.List;
 /** The base station for Hub tab switcher stations. */
 public class TabSwitcherSearchStation extends Station<SearchActivity> {
     private static final ViewSpec<View> SUGGESTIONS_LIST =
-            viewSpec(withId(R.id.omnibox_results_container));
+            viewSpec(
+                    allOf(
+                            withId(R.id.search_activity_suggestions_container),
+                            withEffectiveVisibility(ViewMatchers.Visibility.VISIBLE)));
 
     private final boolean mIsIncognito;
     public ViewElement<LocationBarLayout> locationBarElement;
@@ -122,12 +127,6 @@ public class TabSwitcherSearchStation extends Station<SearchActivity> {
         noopTo().enterFacilities(allSuggestionFacilities.toArray(new Facility[0]));
     }
 
-    /** Expect a suggestion with the given |index| and |text|. */
-    public SectionHeaderFacility findSectionHeaderByIndexAndText(int index, String text) {
-        SUGGESTIONS_LIST.printFromRoot();
-        return noopTo().enterFacility(new SectionHeaderFacility(index, text));
-    }
-
     /** A suggestion in the search results. */
     public class SuggestionFacility extends Facility<TabSwitcherSearchStation> {
         private final @Nullable String mText;
@@ -143,11 +142,16 @@ public class TabSwitcherSearchStation extends Station<SearchActivity> {
                 matchers.add(withParentIndex(index));
             }
             if (title != null) {
+                var titleMatcher =
+                        OmniboxCapabilities.isDesktopPlatform()
+                                ? Matchers.startsWith(title)
+                                : Matchers.equalTo(title);
+
                 matchers.add(
                         hasDescendant(
                                 allOf(
                                         withId(R.id.line_1),
-                                        withText(title),
+                                        withText(titleMatcher),
                                         withEffectiveVisibility(ViewMatchers.Visibility.VISIBLE))));
             }
             if (text != null) {
@@ -159,8 +163,14 @@ public class TabSwitcherSearchStation extends Station<SearchActivity> {
                                         withEffectiveVisibility(ViewMatchers.Visibility.VISIBLE))));
             }
             matchers.add(instanceOf(BaseSuggestionView.class));
-            matchers.add(isDescendantOfA(withId(R.id.omnibox_results_container)));
+            matchers.add(
+                    isDescendantOfA(
+                            allOf(
+                                    withId(R.id.search_activity_suggestions_container),
+                                    withEffectiveVisibility(ViewMatchers.Visibility.VISIBLE))));
 
+            // Generic array creation is not permitted in Java; suppress the unchecked warning.
+            @SuppressWarnings("unchecked")
             Matcher<View>[] matchersArray = new Matcher[matchers.size()];
             matchers.toArray(matchersArray);
 
@@ -197,20 +207,6 @@ public class TabSwitcherSearchStation extends Station<SearchActivity> {
                     .withEntryPoint()
                     .withExpectedUrlSubstring(mText)
                     .build();
-        }
-    }
-
-    /** A section header in the search results. */
-    public static class SectionHeaderFacility extends Facility<TabSwitcherSearchStation> {
-        public ViewElement<View> headerElement;
-
-        public SectionHeaderFacility(int index, String text) {
-            headerElement =
-                    declareView(
-                            viewSpec(
-                                    withText(text),
-                                    withParentIndex(index),
-                                    isDescendantOfA(withId(R.id.omnibox_results_container))));
         }
     }
 }

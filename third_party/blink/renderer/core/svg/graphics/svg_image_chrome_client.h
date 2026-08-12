@@ -48,6 +48,10 @@ class IsolatedSVGChromeClient : public EmptyChromeClient {
   // Callback to allow restoring (resuming) animations that was suspended due
   // to changes in page visibility (see Page::SetVisibilityState).
   virtual void RestoreAnimationIfNeeded() {}
+
+  // Used to pipe a UMA metric through from parsing stage to when
+  // the embedding document of an SVGImage reports UMA stats.
+  virtual void SetDidEncounterXSL() {}
 };
 
 class CORE_EXPORT SVGImageChromeClient final : public IsolatedSVGChromeClient {
@@ -63,6 +67,8 @@ class CORE_EXPORT SVGImageChromeClient final : public IsolatedSVGChromeClient {
   void ResumeAnimation();
   void RestoreAnimationIfNeeded() override;
 
+  void SetDidEncounterXSL() override;
+
   bool IsSuspended() const { return timeline_state_ >= kSuspended; }
 
   void Trace(Visitor*) const final;
@@ -71,6 +77,7 @@ class CORE_EXPORT SVGImageChromeClient final : public IsolatedSVGChromeClient {
   void ChromeDestroyed() override;
   void InvalidateContainer() override;
   void ScheduleAnimation(const LocalFrameView*,
+                         cc::BeginMainFrameReason,
                          base::TimeDelta,
                          bool urgent) override;
 
@@ -90,6 +97,13 @@ class CORE_EXPORT SVGImageChromeClient final : public IsolatedSVGChromeClient {
 
   FRIEND_TEST_ALL_PREFIXES(SVGImageTest, TimelineSuspendAndResume);
   FRIEND_TEST_ALL_PREFIXES(SVGImageTest, ResetAnimation);
+  FRIEND_TEST_ALL_PREFIXES(SVGImageTest,
+                           ResetAnimationRewindsRunningFiniteCssAnimation);
+  FRIEND_TEST_ALL_PREFIXES(SVGImageTest,
+                           ResetAnimationPreservesPausedFiniteCssAnimation);
+  FRIEND_TEST_ALL_PREFIXES(
+      SVGImageTest,
+      ResetAnimationRestoresPlaybackForFinishedFiniteCssAnimation);
   FRIEND_TEST_ALL_PREFIXES(SVGImageSimTest, PageVisibilityHiddenToVisible);
   FRIEND_TEST_ALL_PREFIXES(SVGImageSimTest,
                            AnimationsPausedWhenImageScrolledOutOfView);

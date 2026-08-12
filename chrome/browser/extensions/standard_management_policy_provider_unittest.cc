@@ -87,7 +87,7 @@ TEST_F(StandardManagementPolicyProviderTest, RequiredExtension) {
   // The Webstore hosted app is an exception, in that it is a component
   // extension, but it should not be able to modify policy required extensions.
   // Note: We add to the manifest JSON to build this as a hosted app.
-  // Regression test for crbug.com/1363793
+  // Regression test for crbug.com/40060975
   constexpr char kHostedApp[] = R"(
       "app": {
         "launch": {
@@ -164,7 +164,7 @@ TEST_F(StandardManagementPolicyProviderTest,
                                        extension_urls::kChromeWebstoreUpdateURL)
                        .AddFlags(Extension::FROM_WEBSTORE)
                        .Build();
-  base::Value::Dict forced_list_pref;
+  base::DictValue forced_list_pref;
   ExternalPolicyLoader::AddExtension(forced_list_pref, extension->id(),
                                      extension_urls::kChromeWebstoreUpdateURL);
   profile_.GetTestingPrefService()->SetManagedPref(
@@ -252,11 +252,11 @@ TEST_F(StandardManagementPolicyProviderTest, NotRequiredExtension) {
 TEST_F(StandardManagementPolicyProviderTest, ThemeExtension) {
   auto extension = ExtensionBuilder("testTheme")
                        .SetLocation(ManifestLocation::kInternal)
-                       .SetManifestKey("theme", base::Value::Dict())
+                       .SetManifestKey("theme", base::DictValue())
                        .Build();
   std::u16string error16;
 
-  EXPECT_EQ(extension->GetType(), Manifest::TYPE_THEME);
+  EXPECT_EQ(extension->GetType(), Manifest::Type::kTheme);
   EXPECT_TRUE(provider_.UserMayLoad(extension.get(), &error16));
   EXPECT_EQ(std::u16string(), error16);
 
@@ -274,29 +274,5 @@ TEST_F(StandardManagementPolicyProviderTest, ThemeExtension) {
   EXPECT_TRUE(provider_.UserMayLoad(extension.get(), &error16));
 }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
-
-// Tests the behavior of the ManagementPolicy provider methods for an extension
-// which manifest version is controlled by policy.
-TEST_F(StandardManagementPolicyProviderTest, ManifestVersion) {
-  auto extension = ExtensionBuilder("testManifestVersion")
-                       .SetLocation(ManifestLocation::kExternalPolicyDownload)
-                       .SetManifestVersion(2)
-                       .Build();
-
-  std::u16string error16;
-  EXPECT_TRUE(provider_.UserMayLoad(extension.get(), &error16));
-  EXPECT_TRUE(error16.empty());
-
-  profile_.GetTestingPrefService()->SetManagedPref(
-      pref_names::kManifestV2Availability,
-      std::make_unique<base::Value>(static_cast<int>(
-          internal::GlobalSettings::ManifestV2Setting::kDisabled)));
-
-  EXPECT_FALSE(provider_.UserMayLoad(extension.get(), &error16));
-  EXPECT_EQ(
-      u"The administrator of this machine requires testManifestVersion "
-      "to have a minimum manifest version of 3.",
-      error16);
-}
 
 }  // namespace extensions

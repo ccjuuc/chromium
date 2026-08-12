@@ -6,9 +6,12 @@
 
 #include <cstdint>
 
+#include "base/memory_coordinator/memory_coordinator_features.h"
+#include "base/memory_coordinator/test_memory_consumer_registry.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
+#include "components/variations/scoped_variations_ids_provider.h"
 #include "content/browser/preloading/preload_pipeline_info_impl.h"
 #include "content/browser/preloading/preloading.h"
 #include "content/browser/preloading/preloading_confidence.h"
@@ -91,11 +94,36 @@ void CommitPrerenderNavigation(PrerenderHost& host) {
 
 class PrerenderHostRegistryTest : public RenderViewHostImplTestHarness {
  public:
-  PrerenderHostRegistryTest() = default;
+  PrerenderHostRegistryTest()
+      : scoped_variations_ids_provider_(
+            variations::test::ScopedVariationsIdsProvider(
+                variations::VariationsIdsProvider::Mode::kUseSignedInState)) {
+    scoped_feature_list_prerender2_fallback_.InitWithFeaturesAndParameters(
+        {
+            {
+                features::kPrerender2FallbackPrefetchSpecRules,
+                {
+                    {
+                        features::
+                            kPrerender2FallbackPrefetchUseBlockUntilHeadTimetout
+                                .name,
+                        "false",
+                    },
+                    {
+                        features::kPrerender2FallbackPrefetchSchedulerPolicy
+                            .name,
+                        "NotUse",
+                    },
+                },
+            },
+        },
+        {});
+  }
   ~PrerenderHostRegistryTest() override = default;
 
   void SetUp() override {
     RenderViewHostImplTestHarness::SetUp();
+
     web_contents_delegate_ =
         std::make_unique<test::ScopedPrerenderWebContentsDelegate>(*contents());
     contents()->NavigateAndCommit(GURL("https://example.com/"));
@@ -189,7 +217,7 @@ class PrerenderHostRegistryTest : public RenderViewHostImplTestHarness {
   PrerenderAttributes GeneratePrerenderAttributes(
       const GURL& url,
       PreloadingTriggerType trigger_type,
-      const std::string& embedder_histogram_suffix,
+      const std::string& histogram_suffix,
       std::optional<blink::mojom::SpeculationEagerness> eagerness,
       RenderFrameHostImpl* rfh) {
     switch (trigger_type) {
@@ -197,7 +225,7 @@ class PrerenderHostRegistryTest : public RenderViewHostImplTestHarness {
       case PreloadingTriggerType::kSpeculationRuleFromIsolatedWorld:
       case PreloadingTriggerType::kSpeculationRuleFromAutoSpeculationRules:
         return PrerenderAttributes(
-            url, trigger_type, embedder_histogram_suffix,
+            url, trigger_type, histogram_suffix,
             std::make_optional(SpeculationRulesParams(
                 blink::mojom::SpeculationTargetHint::kNoHint,
                 eagerness.value_or(
@@ -217,7 +245,7 @@ class PrerenderHostRegistryTest : public RenderViewHostImplTestHarness {
             /*form_submission=*/false);
       case PreloadingTriggerType::kEmbedder:
         return PrerenderAttributes(
-            url, trigger_type, embedder_histogram_suffix,
+            url, trigger_type, histogram_suffix,
             /*speculation_rules_params=*/std::nullopt, Referrer(),
             /*no_vary_search_hint=*/std::nullopt,
             /*initiator_render_frame_host=*/nullptr, contents()->GetWeakPtr(),
@@ -253,21 +281,21 @@ class PrerenderHostRegistryTest : public RenderViewHostImplTestHarness {
 
   void ExpectUniqueSampleOfEmbedderFinalStatus(
       PrerenderFinalStatus status,
-      const std::string& embedder_histogram_suffix,
+      const std::string& histogram_suffix,
       base::HistogramBase::Count32 count = 1) {
     histogram_tester_.ExpectUniqueSample(
         "Prerender.Experimental.PrerenderHostFinalStatus.Embedder_" +
-            embedder_histogram_suffix,
+            histogram_suffix,
         status, count);
   }
 
   void ExpectBucketCountOfEmbedderFinalStatus(
       PrerenderFinalStatus status,
-      const std::string& embedder_histogram_suffix,
+      const std::string& histogram_suffix,
       base::HistogramBase::Count32 count = 1) {
     histogram_tester_.ExpectBucketCount(
         "Prerender.Experimental.PrerenderHostFinalStatus.Embedder_" +
-            embedder_histogram_suffix,
+            histogram_suffix,
         status, count);
   }
 
@@ -297,9 +325,17 @@ class PrerenderHostRegistryTest : public RenderViewHostImplTestHarness {
 
  private:
   test::ScopedPrerenderFeatureList scoped_feature_list_;
+  base::test::ScopedFeatureList scoped_feature_list_prerender2_fallback_;
   base::HistogramTester histogram_tester_;
+
+ protected:
+  base::TestMemoryConsumerRegistry test_registry_;
   std::unique_ptr<test::ScopedPrerenderWebContentsDelegate>
       web_contents_delegate_;
+  // Prevent `DCHECK(g_instance)` failure in
+  // `VariationsIdsProvider::GetInstance()` via
+  // `PrefetchContainer::MakeInitialResourceRequest()`.
+  variations::test::ScopedVariationsIdsProvider scoped_variations_ids_provider_;
 };
 
 TEST_F(PrerenderHostRegistryTest, CreateAndStartHost_SpeculationRule) {
@@ -644,7 +680,14 @@ class PrerenderHostRegistryLimitGroupTest
  public:
   using PrerenderLimitGroup = PrerenderHostRegistry::PrerenderLimitGroup;
 
-  const std::string embedder_histogram_suffix = "EmbedderSuffixForTest";
+  void SetUp() override {
+    feature_list_.InitWithFeatures({base::kStatefulMemoryPressure,
+                                    blink::features::kPrerender2MemoryControls},
+                                   {});
+    PrerenderHostRegistryTest::SetUp();
+  }
+
+  const std::string histogram_suffix = "EmbedderSuffixForTest";
 
   bool IsNewTabTrigger(PrerenderLimitGroup limit_group) {
     return GetParam() && limit_group != PrerenderLimitGroup::kEmbedder;
@@ -671,7 +714,7 @@ class PrerenderHostRegistryLimitGroupTest
         case PrerenderLimitGroup::kEmbedder:
           return GeneratePrerenderAttributes(
               prerendering_url, PreloadingTriggerType::kEmbedder,
-              embedder_histogram_suffix, std::nullopt, nullptr);
+              histogram_suffix, std::nullopt, nullptr);
       }
     }();
 
@@ -704,6 +747,9 @@ class PrerenderHostRegistryLimitGroupTest
                      enacting_predictor, PreloadingConfidence{100})
                : registry().CreateAndStartHost(prerender_attributes);
   }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
 };
 
 INSTANTIATE_TEST_SUITE_P(All,
@@ -743,7 +789,7 @@ TEST_P(PrerenderHostRegistryLimitGroupTest, Immediate) {
       PrerenderFinalStatus::kMaxNumOfRunningImmediatePrerendersExceeded, 1);
   ExpectUniqueSampleOfEmbedderFinalStatus(
       PrerenderFinalStatus::kMaxNumOfRunningEmbedderPrerendersExceeded,
-      embedder_histogram_suffix, 0);
+      histogram_suffix, 0);
 }
 
 TEST_P(PrerenderHostRegistryLimitGroupTest, NonImmediate) {
@@ -778,9 +824,8 @@ TEST_P(PrerenderHostRegistryLimitGroupTest, NonImmediate) {
         WebContents::FromFrameTreeNodeId(prerender_frame_tree_node_id));
     PrerenderHost* prerender_host = nullptr;
     if (web_contents_impl) {
-      prerender_host =
-          web_contents_impl->GetPrerenderHostRegistry()
-              ->FindNonReservedHostById(prerender_frame_tree_node_id);
+      prerender_host = web_contents_impl->GetPrerenderHostRegistry()
+                           ->FindNonReservedHostById(id);
     }
     if (id == started_prerender_ids[0]) {
       // The oldest prerender has been canceled.
@@ -803,7 +848,7 @@ TEST_P(PrerenderHostRegistryLimitGroupTest, NonImmediate) {
       PrerenderFinalStatus::kMaxNumOfRunningNonImmediatePrerendersExceeded, 1);
   ExpectUniqueSampleOfEmbedderFinalStatus(
       PrerenderFinalStatus::kMaxNumOfRunningEmbedderPrerendersExceeded,
-      embedder_histogram_suffix, 0);
+      histogram_suffix, 0);
 }
 
 TEST_P(PrerenderHostRegistryLimitGroupTest, Embedder) {
@@ -823,7 +868,7 @@ TEST_P(PrerenderHostRegistryLimitGroupTest, Embedder) {
   EXPECT_FALSE(prerender_host_id_embedder_exceeded);
   ExpectUniqueSampleOfEmbedderFinalStatus(
       PrerenderFinalStatus::kMaxNumOfRunningEmbedderPrerendersExceeded,
-      embedder_histogram_suffix, 1);
+      histogram_suffix, 1);
 
   // On the other hand, prerenders belonging to different limit group(immediate,
   // non-egaer) can still be started.
@@ -840,8 +885,436 @@ TEST_P(PrerenderHostRegistryLimitGroupTest, Embedder) {
       PrerenderFinalStatus::kMaxNumOfRunningNonImmediatePrerendersExceeded, 0);
   ExpectUniqueSampleOfEmbedderFinalStatus(
       PrerenderFinalStatus::kMaxNumOfRunningEmbedderPrerendersExceeded,
-      embedder_histogram_suffix, 1);
+      histogram_suffix, 1);
 }
+
+TEST_P(PrerenderHostRegistryLimitGroupTest, StatefulNumberLimit) {
+  // Set memory limit to 50%.
+  {
+    base::RunLoop run_loop;
+    test_registry_.NotifyUpdateMemoryLimitAsync(50, run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
+  const int default_limit =
+      PrerenderHostRegistry::kMaxRunningSpeculationRulesImmediatePrerenders;
+  const int expected_limit = default_limit / 2;
+
+  std::vector<PrerenderHostId> prerender_host_ids;
+
+  for (int i = 0; i < expected_limit + 1; i++) {
+    PrerenderHostId prerender_host_id = CreateAndStartHostByLimitGroup(
+        PrerenderLimitGroup::kSpeculationRulesImmediate);
+    prerender_host_ids.push_back(prerender_host_id);
+  }
+
+  for (int i = 0; i < expected_limit; i++) {
+    EXPECT_TRUE(prerender_host_ids[i]);
+    if (IsNewTabTrigger(PrerenderLimitGroup::kSpeculationRulesImmediate)) {
+      EXPECT_TRUE(
+          registry().HasNewTabHandleByIdForTesting(prerender_host_ids[i]));
+    } else {
+      EXPECT_TRUE(registry().FindNonReservedHostById(prerender_host_ids[i]) !=
+                  nullptr);
+    }
+  }
+  EXPECT_FALSE(prerender_host_ids[expected_limit]);
+  EXPECT_EQ(expected_limit,
+            registry().GetHostCountByLimitGroupForTesting(
+                PrerenderLimitGroup::kSpeculationRulesImmediate));
+}
+
+class PrerenderHostRegistryLegacyMemoryControlsTest
+    : public PrerenderHostRegistryTest {
+ public:
+  void SetUp() override {
+    feature_list_.InitWithFeatures({blink::features::kPrerender2MemoryControls},
+                                   {base::kStatefulMemoryPressure});
+    PrerenderHostRegistryTest::SetUp();
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+TEST_F(PrerenderHostRegistryLegacyMemoryControlsTest,
+       StatefulNumberLimit_Disabled_NonCritical) {
+  const GURL prerendering_url("https://example.com/next");
+  PrerenderHostId prerender_host_id =
+      registry().CreateAndStartHost(GeneratePrerenderAttributes(
+          prerendering_url, PreloadingTriggerType::kSpeculationRule, "",
+          blink::mojom::SpeculationEagerness::kImmediate,
+          contents()->GetPrimaryMainFrame()));
+  EXPECT_TRUE(prerender_host_id);
+
+  {
+    base::RunLoop run_loop;
+    test_registry_.NotifyUpdateMemoryLimitAsync(80, base::DoNothing());
+    test_registry_.NotifyReleaseMemoryAsync(run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
+  EXPECT_TRUE(registry().FindNonReservedHostById(prerender_host_id));
+}
+
+TEST_F(PrerenderHostRegistryLegacyMemoryControlsTest,
+       StatefulNumberLimit_Disabled_Critical) {
+  const GURL prerendering_url("https://example.com/next");
+  PrerenderHostId prerender_host_id =
+      registry().CreateAndStartHost(GeneratePrerenderAttributes(
+          prerendering_url, PreloadingTriggerType::kSpeculationRule, "",
+          blink::mojom::SpeculationEagerness::kImmediate,
+          contents()->GetPrimaryMainFrame()));
+  EXPECT_TRUE(prerender_host_id);
+
+  // Under the legacy memory pressure system (when kStatefulMemoryPressure is
+  // disabled), critical memory pressure notifications are dispatched with a
+  // simulated memory limit of 0% (<= kCriticalMemoryPressureThreshold).
+  {
+    base::RunLoop run_loop;
+    test_registry_.NotifyUpdateMemoryLimitAsync(0, base::DoNothing());
+    test_registry_.NotifyReleaseMemoryAsync(run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
+  EXPECT_FALSE(registry().FindNonReservedHostById(prerender_host_id));
+
+  // Verify that after critical memory pressure cancellation in legacy mode,
+  // future prerenders are not prevented from being created.
+  const GURL prerendering_url2("https://example.com/next2");
+  PrerenderHostId new_host_id =
+      registry().CreateAndStartHost(GeneratePrerenderAttributes(
+          prerendering_url2, PreloadingTriggerType::kSpeculationRule, "",
+          blink::mojom::SpeculationEagerness::kImmediate,
+          contents()->GetPrimaryMainFrame()));
+  EXPECT_TRUE(new_host_id);
+}
+
+TEST_P(PrerenderHostRegistryLimitGroupTest, StatefulNumberLimit_Critical) {
+  const int initial_count = 3;
+  std::vector<PrerenderHostId> prerender_host_ids;
+  for (int i = 0; i < initial_count; i++) {
+    PrerenderHostId prerender_host_id = CreateAndStartHostByLimitGroup(
+        PrerenderLimitGroup::kSpeculationRulesImmediate);
+    prerender_host_ids.push_back(prerender_host_id);
+  }
+  EXPECT_EQ(initial_count,
+            registry().GetHostCountByLimitGroupForTesting(
+                PrerenderLimitGroup::kSpeculationRulesImmediate));
+
+  // Under stateful memory pressure (when kStatefulMemoryPressure is enabled),
+  // a critical memory pressure notification (0%) actively evicts all running
+  // hosts AND statefully updates the current memory limit to 0%, preventing
+  // any new prerenders from starting.
+  {
+    base::RunLoop run_loop;
+    test_registry_.NotifyUpdateMemoryLimitAsync(0, base::DoNothing());
+    test_registry_.NotifyReleaseMemoryAsync(run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
+  EXPECT_EQ(0, registry().GetHostCountByLimitGroupForTesting(
+                   PrerenderLimitGroup::kSpeculationRulesImmediate));
+
+  // Verify that under stateful memory controls, future prerenders are indeed
+  // prevented from starting while critical memory pressure persists.
+  PrerenderHostId new_host_id = CreateAndStartHostByLimitGroup(
+      PrerenderLimitGroup::kSpeculationRulesImmediate);
+  EXPECT_EQ(PrerenderHostId(), new_host_id);
+  EXPECT_EQ(0, registry().GetHostCountByLimitGroupForTesting(
+                   PrerenderLimitGroup::kSpeculationRulesImmediate));
+
+  // Reset memory limit back to 100% for subsequent tests.
+  {
+    base::RunLoop run_loop;
+    test_registry_.NotifyUpdateMemoryLimitAsync(100, base::DoNothing());
+    test_registry_.NotifyReleaseMemoryAsync(run_loop.QuitClosure());
+    run_loop.Run();
+  }
+}
+
+TEST_F(PrerenderHostRegistryTest, MemoryControlsDisabled_NoOp) {
+  const GURL prerendering_url("https://example.com/next");
+  PrerenderHostId prerender_host_id =
+      registry().CreateAndStartHost(GeneratePrerenderAttributes(
+          prerendering_url, PreloadingTriggerType::kSpeculationRule, "",
+          blink::mojom::SpeculationEagerness::kImmediate,
+          contents()->GetPrimaryMainFrame()));
+  EXPECT_TRUE(prerender_host_id);
+
+  // When kPrerender2MemoryControls is disabled, memory pressure notifications
+  // must be completely ignored as a no-op, avoiding CancelAllHosts.
+  {
+    base::RunLoop run_loop;
+    test_registry_.NotifyUpdateMemoryLimitAsync(0, base::DoNothing());
+    test_registry_.NotifyReleaseMemoryAsync(run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
+  EXPECT_TRUE(registry().FindNonReservedHostById(prerender_host_id));
+}
+
+TEST_P(PrerenderHostRegistryLimitGroupTest, StatefulActiveEviction) {
+  const int initial_count = 10;
+  std::vector<PrerenderHostId> prerender_host_ids;
+  for (int i = 0; i < initial_count; i++) {
+    PrerenderHostId host_id = CreateAndStartHostByLimitGroup(
+        PrerenderLimitGroup::kSpeculationRulesImmediate);
+    ASSERT_TRUE(host_id);
+    prerender_host_ids.push_back(host_id);
+  }
+
+  EXPECT_EQ(initial_count,
+            registry().GetHostCountByLimitGroupForTesting(
+                PrerenderLimitGroup::kSpeculationRulesImmediate));
+
+  {
+    base::RunLoop run_loop;
+    test_registry_.NotifyUpdateMemoryLimitAsync(50, base::DoNothing());
+    test_registry_.NotifyReleaseMemoryAsync(run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
+  const int expected_remaining = initial_count / 2;
+  EXPECT_EQ(expected_remaining,
+            registry().GetHostCountByLimitGroupForTesting(
+                PrerenderLimitGroup::kSpeculationRulesImmediate));
+
+  // The oldest 5 hosts should remain running.
+  for (int i = 0; i < expected_remaining; i++) {
+    if (IsNewTabTrigger(PrerenderLimitGroup::kSpeculationRulesImmediate)) {
+      EXPECT_TRUE(
+          registry().HasNewTabHandleByIdForTesting(prerender_host_ids[i]));
+    } else {
+      EXPECT_TRUE(registry().FindNonReservedHostById(prerender_host_ids[i]));
+    }
+  }
+
+  // The newest 5 hosts should be evicted.
+  for (int i = expected_remaining; i < initial_count; i++) {
+    if (IsNewTabTrigger(PrerenderLimitGroup::kSpeculationRulesImmediate)) {
+      EXPECT_FALSE(
+          registry().HasNewTabHandleByIdForTesting(prerender_host_ids[i]));
+    } else {
+      EXPECT_FALSE(registry().FindNonReservedHostById(prerender_host_ids[i]));
+    }
+  }
+}
+
+TEST_P(PrerenderHostRegistryLimitGroupTest,
+       StatefulActiveEviction_MixedTriggers) {
+  if (GetParam()) {
+    // Pending queue logic is tested for standard in-tab prerendering.
+    return;
+  }
+
+  const int initial_count = 10;
+  std::vector<PrerenderHostId> prerender_host_ids;
+  for (int i = 0; i < initial_count; i++) {
+    const GURL prerendering_url("https://example.com/next_mixed_" +
+                                base::NumberToString(i));
+    auto attributes = GeneratePrerenderAttributes(
+        prerendering_url, PreloadingTriggerType::kSpeculationRule, "",
+        blink::mojom::SpeculationEagerness::kImmediate,
+        contents()->GetPrimaryMainFrame());
+
+    PrerenderHostId host_id;
+    if (i % 2 == 0) {
+      host_id = registry().CreateAndStartHost(attributes);
+    } else {
+      host_id = registry().CreateAndStartHostForNewTab(
+          attributes, content_preloading_predictor::kSpeculationRules,
+          content_preloading_predictor::kSpeculationRules,
+          PreloadingConfidence{100});
+    }
+    ASSERT_TRUE(host_id);
+    prerender_host_ids.push_back(host_id);
+  }
+
+  EXPECT_EQ(initial_count, registry().GetHostCountByLimitGroupForTesting(
+                               PrerenderHostRegistry::PrerenderLimitGroup::
+                                   kSpeculationRulesImmediate));
+
+  {
+    base::RunLoop run_loop;
+    test_registry_.NotifyUpdateMemoryLimitAsync(50, base::DoNothing());
+    test_registry_.NotifyReleaseMemoryAsync(run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
+  const int expected_remaining = initial_count / 2;
+  EXPECT_EQ(expected_remaining, registry().GetHostCountByLimitGroupForTesting(
+                                    PrerenderHostRegistry::PrerenderLimitGroup::
+                                        kSpeculationRulesImmediate));
+
+  // The oldest 5 hosts (indices 0 to 4) should remain running.
+  for (int i = 0; i < expected_remaining; i++) {
+    if (i % 2 == 0) {
+      EXPECT_TRUE(registry().FindNonReservedHostById(prerender_host_ids[i]));
+    } else {
+      EXPECT_TRUE(
+          registry().HasNewTabHandleByIdForTesting(prerender_host_ids[i]));
+    }
+  }
+
+  // The newest 5 hosts (indices 5 to 9) should be evicted.
+  for (int i = expected_remaining; i < initial_count; i++) {
+    if (i % 2 == 0) {
+      EXPECT_FALSE(registry().FindNonReservedHostById(prerender_host_ids[i]));
+    } else {
+      EXPECT_FALSE(
+          registry().HasNewTabHandleByIdForTesting(prerender_host_ids[i]));
+    }
+  }
+}
+
+TEST_P(PrerenderHostRegistryLimitGroupTest,
+       StatefulActiveEviction_NonImmediate) {
+  PrerenderHostId host1 = CreateAndStartHostByLimitGroup(
+      PrerenderLimitGroup::kSpeculationRulesNonImmediate);
+  ASSERT_TRUE(host1);
+
+  PrerenderHostId host2 = CreateAndStartHostByLimitGroup(
+      PrerenderLimitGroup::kSpeculationRulesNonImmediate);
+  ASSERT_TRUE(host2);
+
+  EXPECT_EQ(2, registry().GetHostCountByLimitGroupForTesting(
+                   PrerenderLimitGroup::kSpeculationRulesNonImmediate));
+
+  // Set memory limit to 50% (scaled limit becomes 2 * 50% = 1).
+  {
+    base::RunLoop run_loop;
+    test_registry_.NotifyUpdateMemoryLimitAsync(50, base::DoNothing());
+    test_registry_.NotifyReleaseMemoryAsync(run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
+  // Under FIFO eviction for non-immediate prerenders, host1 (oldest) should be
+  // evicted and host2 (newest) should remain running.
+  EXPECT_EQ(1, registry().GetHostCountByLimitGroupForTesting(
+                   PrerenderLimitGroup::kSpeculationRulesNonImmediate));
+  if (IsNewTabTrigger(PrerenderLimitGroup::kSpeculationRulesNonImmediate)) {
+    EXPECT_FALSE(registry().HasNewTabHandleByIdForTesting(host1));
+    EXPECT_TRUE(registry().HasNewTabHandleByIdForTesting(host2));
+  } else {
+    EXPECT_FALSE(registry().FindNonReservedHostById(host1));
+    EXPECT_TRUE(registry().FindNonReservedHostById(host2));
+  }
+}
+
+struct StatefulPerGroupScalingParams {
+  bool scale_immediate;
+  bool scale_non_immediate;
+  bool scale_embedder;
+};
+
+class PrerenderHostRegistryStatefulPerGroupTest
+    : public PrerenderHostRegistryTest,
+      public ::testing::WithParamInterface<StatefulPerGroupScalingParams> {
+ public:
+  void SetUp() override {
+    const auto& params = GetParam();
+    feature_list_.InitWithFeaturesAndParameters(
+        {{base::kStatefulMemoryPressure,
+          {{"PrerenderScaleImmediate",
+            params.scale_immediate ? "true" : "false"},
+           {"PrerenderScaleNonImmediate",
+            params.scale_non_immediate ? "true" : "false"},
+           {"PrerenderScaleEmbedder",
+            params.scale_embedder ? "true" : "false"}}},
+         {blink::features::kPrerender2MemoryControls, {}}},
+        {});
+    PrerenderHostRegistryTest::SetUp();
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+TEST_P(PrerenderHostRegistryStatefulPerGroupTest, ScalingBehavior_AllGroups) {
+  const auto& params = GetParam();
+
+  // Set memory limit to 50%.
+  {
+    base::RunLoop run_loop;
+    test_registry_.NotifyUpdateMemoryLimitAsync(50, run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
+  // Immediate Group
+  const int expected_immediate =
+      params.scale_immediate
+          ? PrerenderHostRegistry::
+                    kMaxRunningSpeculationRulesImmediatePrerenders /
+                2
+          : PrerenderHostRegistry::
+                kMaxRunningSpeculationRulesImmediatePrerenders;
+
+  // Non-Immediate Group
+  const int expected_non_immediate =
+      params.scale_non_immediate
+          ? PrerenderHostRegistry::
+                    kMaxRunningSpeculationRulesNonImmediatePrerenders /
+                2
+          : PrerenderHostRegistry::
+                kMaxRunningSpeculationRulesNonImmediatePrerenders;
+
+  // Embedder Group
+  const int max_embedder =
+      web_contents()->GetDelegate()->AllowedPrerenderingCount(*web_contents());
+  const int expected_embedder =
+      params.scale_embedder ? max_embedder / 2 : max_embedder;
+
+  EXPECT_EQ(expected_immediate, registry().GetScaledLimitForTesting(
+                                    PrerenderHostRegistry::PrerenderLimitGroup::
+                                        kSpeculationRulesImmediate));
+
+  EXPECT_EQ(expected_non_immediate,
+            registry().GetScaledLimitForTesting(
+                PrerenderHostRegistry::PrerenderLimitGroup::
+                    kSpeculationRulesNonImmediate));
+
+  EXPECT_EQ(expected_embedder,
+            registry().GetScaledLimitForTesting(
+                PrerenderHostRegistry::PrerenderLimitGroup::kEmbedder));
+}
+
+TEST_P(PrerenderHostRegistryStatefulPerGroupTest,
+       CriticalMemoryPressure_SafetyNet) {
+  // Start 1 host of immediate group
+  PrerenderHostId imm_id =
+      registry().CreateAndStartHost(GeneratePrerenderAttributes(
+          GURL("https://example.com/imm"),
+          PreloadingTriggerType::kSpeculationRule, "",
+          blink::mojom::SpeculationEagerness::kImmediate,
+          contents()->GetPrimaryMainFrame()));
+  ASSERT_TRUE(imm_id);
+
+  // Trigger critical memory pressure (0%)
+  {
+    base::RunLoop run_loop;
+    test_registry_.NotifyUpdateMemoryLimitAsync(0, base::DoNothing());
+    test_registry_.NotifyReleaseMemoryAsync(run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
+  // Verify all hosts are cancelled under critical memory pressure safety net
+  EXPECT_EQ(0, registry().GetHostCountByLimitGroupForTesting(
+                   PrerenderHostRegistry::PrerenderLimitGroup::
+                       kSpeculationRulesImmediate));
+  EXPECT_EQ(0, registry().GetHostCountByLimitGroupForTesting(
+                   PrerenderHostRegistry::PrerenderLimitGroup::
+                       kSpeculationRulesNonImmediate));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AllGroupScalingCombinations,
+    PrerenderHostRegistryStatefulPerGroupTest,
+    ::testing::Values(StatefulPerGroupScalingParams{false, false, false},
+                      StatefulPerGroupScalingParams{true, false, false},
+                      StatefulPerGroupScalingParams{false, true, false},
+                      StatefulPerGroupScalingParams{false, false, true},
+                      StatefulPerGroupScalingParams{true, true, true}));
 
 TEST_F(PrerenderHostRegistryTest,
        ReserveHostToActivateBeforeReadyForActivation) {
@@ -907,12 +1380,9 @@ TEST_F(PrerenderHostRegistryTest, CancelHost) {
           blink::mojom::SpeculationEagerness::kImmediate,
           contents()->GetPrimaryMainFrame()));
   ASSERT_TRUE(prerender_host_id);
-  const FrameTreeNodeId prerender_frame_tree_node_id =
-      PrerenderHost::GetFrameTreeNodeIdForId(prerender_host_id);
   EXPECT_NE(registry().FindHostByUrlForTesting(kPrerenderingUrl), nullptr);
 
-  registry().CancelHost(prerender_frame_tree_node_id,
-                        PrerenderFinalStatus::kDestroyed);
+  registry().CancelHost(prerender_host_id, PrerenderFinalStatus::kDestroyed);
   EXPECT_EQ(registry().FindHostByUrlForTesting(kPrerenderingUrl), nullptr);
 }
 
@@ -930,8 +1400,6 @@ TEST_F(PrerenderHostRegistryTest,
           blink::mojom::SpeculationEagerness::kImmediate,
           contents()->GetPrimaryMainFrame()));
   ASSERT_TRUE(prerender_host_id);
-  const FrameTreeNodeId prerender_frame_tree_node_id =
-      PrerenderHost::GetFrameTreeNodeIdForId(prerender_host_id);
   PrerenderHost* prerender_host =
       registry().FindHostByUrlForTesting(kPrerenderingUrl);
   CommitPrerenderNavigation(*prerender_host);
@@ -965,8 +1433,7 @@ TEST_F(PrerenderHostRegistryTest,
     EXPECT_EQ(contents()->GetLastCommittedURL(), original_url);
 
     // Cancel the prerender while the CommitDeferringCondition is running.
-    registry().CancelHost(prerender_frame_tree_node_id,
-                          PrerenderFinalStatus::kDestroyed);
+    registry().CancelHost(prerender_host_id, PrerenderFinalStatus::kDestroyed);
     prerender_host_observer.WaitForDestroyed();
     EXPECT_FALSE(prerender_host_observer.was_activated());
     EXPECT_EQ(registry().FindHostByUrlForTesting(kPrerenderingUrl), nullptr);
@@ -994,8 +1461,6 @@ TEST_F(PrerenderHostRegistryTest,
           blink::mojom::SpeculationEagerness::kImmediate,
           contents()->GetPrimaryMainFrame()));
   ASSERT_TRUE(prerender_host_id);
-  const FrameTreeNodeId prerender_frame_tree_node_id =
-      PrerenderHost::GetFrameTreeNodeIdForId(prerender_host_id);
   PrerenderHost* prerender_host =
       registry().FindHostByUrlForTesting(kPrerenderingUrl);
   CommitPrerenderNavigation(*prerender_host);
@@ -1031,8 +1496,7 @@ TEST_F(PrerenderHostRegistryTest,
     EXPECT_EQ(contents()->GetLastCommittedURL(), original_url);
 
     // Cancel the prerender while the CommitDeferringCondition is running.
-    registry().CancelHost(prerender_frame_tree_node_id,
-                          PrerenderFinalStatus::kDestroyed);
+    registry().CancelHost(prerender_host_id, PrerenderFinalStatus::kDestroyed);
     prerender_host_observer.WaitForDestroyed();
     EXPECT_FALSE(prerender_host_observer.was_activated());
     EXPECT_EQ(registry().FindHostByUrlForTesting(kPrerenderingUrl), nullptr);
@@ -1046,13 +1510,11 @@ TEST_F(PrerenderHostRegistryTest,
             blink::mojom::SpeculationEagerness::kImmediate,
             contents()->GetPrimaryMainFrame()));
     ASSERT_TRUE(prerender_host_id2);
-    const FrameTreeNodeId prerender_frame_tree_node_id2 =
-        PrerenderHost::GetFrameTreeNodeIdForId(prerender_host_id2);
     PrerenderHost* prerender_host2 =
         registry().FindHostByUrlForTesting(kPrerenderingUrl);
     CommitPrerenderNavigation(*prerender_host2);
 
-    EXPECT_NE(prerender_frame_tree_node_id, prerender_frame_tree_node_id2);
+    EXPECT_NE(prerender_host_id, prerender_host_id2);
   }
 
   // Resume the initial activation. This should not reserve the second
@@ -1133,7 +1595,7 @@ TEST_F(PrerenderHostRegistryTest,
 TEST_F(PrerenderHostRegistryTest, PurposeHeaderIsIgnoredForParamMatching) {
   EXPECT_TRUE(CheckIsActivatedForParams(
       base::BindLambdaForTesting([](NavigationSimulatorImpl* navigation) {
-        navigation->set_request_headers("Purpose: Test");
+        navigation->set_request_headers("Sec-Purpose: Test");
       })));
   ExpectUniqueSampleOfActivationNavigationParamsMatch(
       PrerenderHost::ActivationNavigationParamsMatch::kOk);
@@ -1334,23 +1796,10 @@ TEST_F(PrerenderHostRegistryTest,
             insecure_navigations);
 }
 
-TEST_F(PrerenderHostRegistryTest,
-       HasPotentiallyTrustworthyUniqueOriginIsSetWhilePrerendering) {
-  SetupPrerenderAndCommit(
-      base::BindLambdaForTesting([](NavigationSimulatorImpl* navigation) {
-        navigation->set_has_potentially_trustworthy_unique_origin(true);
-      }));
-  EXPECT_TRUE(contents()
-                  ->GetPrimaryMainFrame()
-                  ->frame_tree_node()
-                  ->current_replication_state()
-                  .has_potentially_trustworthy_unique_origin);
-}
-
 // End replication state matching tests ------------
 
 TEST_F(PrerenderHostRegistryTest, OneTaskToDeleteAllHosts) {
-  std::vector<FrameTreeNodeId> frame_tree_node_ids;
+  std::vector<PrerenderHostId> prerender_host_ids;
   std::vector<std::unique_ptr<test::PrerenderHostObserver>>
       prerender_host_observers;
 
@@ -1362,18 +1811,16 @@ TEST_F(PrerenderHostRegistryTest, OneTaskToDeleteAllHosts) {
             prerendering_url, PreloadingTriggerType::kSpeculationRule, "",
             blink::mojom::SpeculationEagerness::kImmediate,
             contents()->GetPrimaryMainFrame()));
-    const FrameTreeNodeId frame_tree_node_id =
-        PrerenderHost::GetFrameTreeNodeIdForId(prerender_host_id);
 
     prerender_host_observers.emplace_back(
         std::make_unique<test::PrerenderHostObserver>(*contents(),
-                                                      frame_tree_node_id));
-    frame_tree_node_ids.push_back(frame_tree_node_id);
+                                                      prerender_host_id));
+    prerender_host_ids.push_back(prerender_host_id);
   }
   int pending_task_before_posting_abandon_task =
       task_environment()->GetPendingMainThreadTaskCount();
   registry().CancelHosts(
-      frame_tree_node_ids,
+      prerender_host_ids,
       PrerenderCancellationReason(PrerenderFinalStatus::kDestroyed));
   int pending_task_after_posting_abandon_task =
       task_environment()->GetPendingMainThreadTaskCount();

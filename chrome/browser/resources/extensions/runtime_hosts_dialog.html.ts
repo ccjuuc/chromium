@@ -14,14 +14,14 @@ export function getHtml(this: ExtensionsRuntimeHostsDialogElement) {
   <div slot="body">
     <cr-input id="input" label="$i18n{runtimeHostsDialogInputLabel}"
         placeholder="http://example.com" .value="${this.site_}"
-        @value-changed="${this.onSiteChanged_}" @input="${this.validate_}"
+        @value-changed="${this.onSiteValueChanged_}" @input="${this.onInput_}"
         ?invalid="${this.inputInvalid_}"
         error-message="$i18n{runtimeHostsDialogInputError}" spellcheck="false"
         autofocus>
     </cr-input>
     <div class="matching-restricted-sites-warning"
         ?hidden="${!this.matchingRestrictedSites_.length}">
-      <cr-icon icon="cr:info-outline"></cr-icon>
+      <cr-icon icon="cr:info"></cr-icon>
       <span>${this.computeMatchingRestrictedSitesWarning_()}</span>
     </div>
   </div>

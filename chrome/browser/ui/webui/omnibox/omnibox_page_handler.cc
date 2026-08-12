@@ -41,9 +41,9 @@
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_provider.h"
 #include "components/omnibox/browser/autocomplete_result.h"
+#include "components/omnibox/browser/autocomplete_scoring_model_service.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/omnibox/common/omnibox_feature_configs.h"
-#include "components/optimization_guide/machine_learning_tflite_buildflags.h"
 #include "components/search_engines/template_url.h"
 #include "content/public/browser/web_ui.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
@@ -52,10 +52,6 @@
 #include "third_party/omnibox_proto/answer_type.pb.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/image/image.h"
-
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
-#include "components/omnibox/browser/autocomplete_scoring_model_service.h"
-#endif
 
 OmniboxPageHandler::OmniboxPageHandler(
     Profile* profile,
@@ -202,7 +198,7 @@ void OmniboxPageHandler::StartOmniboxQuery(const std::string& input_string,
                                            int32_t cursor_position,
                                            bool zero_suggest,
                                            bool prevent_inline_autocomplete,
-                                           bool prefer_keyword,
+                                           bool in_keyword_mode,
                                            const std::string& current_url,
                                            int32_t page_classification) {
   // Reset the controller.  If we don't do this, then the
@@ -224,10 +220,7 @@ void OmniboxPageHandler::StartOmniboxQuery(const std::string& input_string,
   }
   input.set_current_title(base::UTF8ToUTF16(current_url));
   input.set_prevent_inline_autocomplete(prevent_inline_autocomplete);
-  input.set_prefer_keyword(prefer_keyword);
-  if (prefer_keyword) {
-    input.set_keyword_mode_entry_method(metrics::OmniboxEventProto::TAB);
-  }
+  input.set_in_keyword_mode(in_keyword_mode);
   input.set_focus_type(zero_suggest
                            ? metrics::OmniboxFocusType::INTERACTION_FOCUS
                            : metrics::OmniboxFocusType::INTERACTION_DEFAULT);
@@ -235,7 +228,6 @@ void OmniboxPageHandler::StartOmniboxQuery(const std::string& input_string,
 }
 
 void OmniboxPageHandler::GetMlModelVersion(GetMlModelVersionCallback callback) {
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
   if (auto* service = GetMlService()) {
     auto version = service->GetModelVersion();
     if (version == -1) {
@@ -248,15 +240,11 @@ void OmniboxPageHandler::GetMlModelVersion(GetMlModelVersionCallback callback) {
   } else {
     std::move(callback).Run(-1);
   }
-#else
-  std::move(callback).Run(-1);
-#endif
 }
 
 void OmniboxPageHandler::StartMl(
     const AutocompleteMatch::ScoringSignals& signals,
     StartMlCallback callback) {
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
   if (auto* service = GetMlService()) {
     std::vector<AutocompleteScoringModelService::Result> result =
         service->BatchScoreAutocompleteUrlMatchesSync({&signals});
@@ -264,9 +252,6 @@ void OmniboxPageHandler::StartMl(
   } else {
     std::move(callback).Run(-1);
   }
-#else
-  std::move(callback).Run(-1);
-#endif
 }
 
 std::unique_ptr<AutocompleteController> OmniboxPageHandler::CreateController(
@@ -302,12 +287,8 @@ OmniboxPageHandler::GetAutocompleteControllerType(
 }
 
 AutocompleteScoringModelService* OmniboxPageHandler::GetMlService() {
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
   return OmniboxFieldTrial::IsMlUrlScoringEnabled()
              ? AutocompleteScoringModelServiceFactory::GetInstance()
                    ->GetForProfile(profile_)
              : nullptr;
-#else
-  return nullptr;
-#endif
 }

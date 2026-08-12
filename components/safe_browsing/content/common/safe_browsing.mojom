@@ -129,8 +129,12 @@ enum PhishingDetectorResult {
 
   // Visual extraction failed.
   VISUAL_EXTRACTION_FAILED = 10,
+
+  // Classification was skipped.
+  CLASSIFICATION_SKIPPED = 11,
 };
 
+// LINT.IfChange(ClientSideDetectionType)
 enum ClientSideDetectionType {
   // Send a CSD request regardless of the client side model's score values.
   kForceRequest,
@@ -154,7 +158,13 @@ enum ClientSideDetectionType {
   kCreditCardForm,
   // Image embedding matched.
   kImageEmbeddingMatch,
+  // User reported an unsafe site.
+  kUserReport,
+  // Unfamiliar login page triggered.
+  kUnfamiliarLoginPage,
 };
+
+// LINT.ThenChange(//tools/metrics/histograms/metadata/sb_client/histograms.xml:ClassifierRequestType)
 
 // Interface for starting phishing classification. This is scoped to a
 // particular RenderFrame.
@@ -167,7 +177,7 @@ interface PhishingDetector {
   // `request_type` correlates to the phishing detection request type from the
   // browser process and is only used for logging on the renderer.
   StartPhishingDetection(
-    url.mojom.Url url, ClientSideDetectionType request_type)
+      url.mojom.Url url, ClientSideDetectionType request_type)
       => (PhishingDetectorResult result,
           mojo_base.mojom.ProtoWrapper? request);
 };
@@ -178,35 +188,40 @@ interface PhishingDetector {
 interface PhishingModelSetter {
   // A classification model for client-side phishing detection in addition to
   // the image embedding model. This call sends the model and the image
-  // embedding model from browser process to the renderer process. The image
-  // embedding model is converted from a TfLite file to a string in the browser
-  // process to be used to create an ImageEmbedder in the renderer process. This
+  // embedding model from the browser process to the renderer process. This
   // function call should only be called for Enhanced Safe Browsing enabled
   // users who will allow the ImageEmbedding output as part of the CSD-Phishing
   // ping to be sent to CSPP for better model training. All else is the same as
-  // the SetPhishingFlatBufferModel function.
-  SetImageEmbeddingAndPhishingFlatBufferModel(
-      mojo_base.mojom.ReadOnlySharedMemoryRegion region,
-      mojo_base.mojom.ReadOnlyFile? tflite_model,
+  // the SetPhishingFlatBufferModel function. The input width and heights for
+  // both TfLite library calls are included in the parameter.
+  SetImageEmbeddingAndPhishingTfLiteModel(
+      int32 classification_input_width,
+      int32 classification_input_height,
+      mojo_base.mojom.ReadOnlyFile? classification_model,
+      int32 image_embedding_input_width,
+      int32 image_embedding_input_height,
       mojo_base.mojom.ReadOnlyFile? image_embedding_model);
 
   // The image embedding model is a complementary model that is used with the
   // classification process, and this function will attach the model to an
-  // already existing model object in the renderer process if the versions
-  // match.
-  AttachImageEmbeddingModel(
+  // already existing model object in the renderer process. It must only be
+  // called if the version of `image_embedding_model` matches the existing
+  // classification model metadata version. Input width and height for image
+  // embedding are included in the parameter to be used during the embedding
+  // renderer process.
+  AttachImageEmbeddingModelAndDimensions(
+      int32 image_embedding_input_width,
+      int32 image_embedding_input_height,
       mojo_base.mojom.ReadOnlyFile? image_embedding_model);
 
   // A classification model for client-side phishing detection. This call sends
-  // the model from the browser process to the renderer process. The model is
-  // sent as a safe_browsing::ClientSideModel flatbuffer string in a
-  // ReadOnlySharedMemoryRegion to client-side phishing detection on the
-  // renderer process. An invalid region is used to disable classification. The
+  // the model from the browser process to the renderer process. The
   // |tflite_model| is a file handle with contents a TfLite model, which is used
-  // to classify the appearance of pages.
-  SetPhishingFlatBufferModel(
-      mojo_base.mojom.ReadOnlySharedMemoryRegion region,
-      mojo_base.mojom.ReadOnlyFile? tflite_model);
+  // to classify the appearance of pages. The dimensions of this model are also
+  // passed on for classification.
+  SetPhishingTfLiteModel(int32 classification_input_width,
+                         int32 classification_input_height,
+                         mojo_base.mojom.ReadOnlyFile? classification_model);
 
   // When OptimizationGuide server sends a null model, this signals there is a
   // bad model on disk. Calling this function clears the current Scorer object
@@ -229,6 +244,8 @@ interface PhishingModelSetterTestObserver {
 // Enum representing possible outcomes of the renderer-side image embedding
 // process. These values are persisted to logs. Entries should not be renumbered
 // and numeric values should never be reused.
+//
+// LINT.IfChange(PhishingImageEmbeddingResult)
 enum PhishingImageEmbeddingResult {
   // The feature collection succeeded.
   kSuccess,
@@ -241,7 +258,12 @@ enum PhishingImageEmbeddingResult {
   kForwardBackTransition,
   // the image embedder process failed
   kFailed,
+  // Invalid URL request came in that is not HTTP/HTTPS or GET requests.
+  kInvalidURLFormatRequest,
+  // WebDocumentLoader failed to load.
+  kInvalidDocumentLoader,
 };
+// LINT.ThenChange(//components/safe_browsing/core/browser/client_side_detection_host_base.h:ImageEmbeddingResult)
 
 // Interface for starting image embedding. This is scoped to a
 // particular RenderFrame.
@@ -250,10 +272,12 @@ interface PhishingImageEmbedderDetector {
   // Tells the renderer to begin image embedding. This should only happen if the
   // user is subscribed to ESB, and the verdict is phishy or LLAMA force trigger
   // the CSPP ping. The return objects are Image Embedding process result and a
-  // ImageFeatureEmbedding object declared in csd.proto
-  StartImageEmbedding(url.mojom.Url url)
+  // ImageFeatureEmbedding object declared in csd.proto, and the latter is only
+  // included if extract_visual_features is true.
+  StartImageEmbedding(url.mojom.Url url, bool extract_visual_features)
       => (PhishingImageEmbeddingResult result,
-          mojo_base.mojom.ProtoWrapper? image_embedding_request);
+          mojo_base.mojom.ProtoWrapper? image_embedding_request,
+          mojo_base.mojom.ProtoWrapper? visual_features);
 };
 
 // Enum representing protocol type of a web request.

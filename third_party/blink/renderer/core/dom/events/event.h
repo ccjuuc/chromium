@@ -109,14 +109,6 @@ class CORE_EXPORT Event : public ScriptWrappable, public DOMOriginUtils {
     return MakeGarbageCollected<Event>(type, initializer);
   }
 
-  // Creates event objects for use with fenced frames. Because timestamps are
-  // a potential privacy leak from the frame to its embedder, clamp all of them
-  // to the epoch.
-  static Event* CreateFenced(const AtomicString& type) {
-    return MakeGarbageCollected<Event>(type, Bubbles::kYes, Cancelable::kYes,
-                                       base::TimeTicks::UnixEpoch());
-  }
-
   Event();
   Event(const AtomicString& type,
         Bubbles,
@@ -156,10 +148,10 @@ class CORE_EXPORT Event : public ScriptWrappable, public DOMOriginUtils {
   // retargeting. Can be a pseudo-element. Shouldn't we web exposed.
   EventTarget* RawTarget() const { return target_.Get(); }
 
-  void SetPseudoElementTarget(PseudoElement* pseudo_element_target) {
-    pseudo_element_target_ = pseudo_element_target;
-  }
-  PseudoElement* PseudoElementTarget() const { return pseudo_element_target_; }
+  // Converts |pseudo_element_target| to its CSSPseudoElement wrapper via
+  // CSSPseudoElement::From() and stores it. Called while the pseudo is still
+  // connected (during event path construction), so From() won't crash.
+  void SetPseudoElementTarget(PseudoElement* pseudo_element_target);
 
   EventTarget* currentTarget() const;
   void SetCurrentTarget(EventTarget* current_target) {
@@ -178,7 +170,8 @@ class CORE_EXPORT Event : public ScriptWrappable, public DOMOriginUtils {
   // is dangerous.
   virtual void DoneDispatchingEventAtCurrentTarget() {}
 
-  void SetRelatedTargetIfExists(EventTarget* related_target);
+  virtual EventTarget* relatedTarget() const { return nullptr; }
+  virtual void SetRelatedTarget(EventTarget*) {}
 
   PhaseType eventPhase() const { return event_phase_; }
   void SetEventPhase(PhaseType event_phase) { event_phase_ = event_phase; }
@@ -243,7 +236,6 @@ class CORE_EXPORT Event : public ScriptWrappable, public DOMOriginUtils {
   virtual bool IsGestureEvent() const;
   virtual bool IsWheelEvent() const;
   virtual bool IsPointerEvent() const;
-  virtual bool IsHighlightPointerEvent() const;
   virtual bool IsInputEvent() const;
   virtual bool IsCompositionEvent() const;
 
@@ -259,7 +251,6 @@ class CORE_EXPORT Event : public ScriptWrappable, public DOMOriginUtils {
   virtual bool IsErrorEvent() const;
 
   virtual bool IsPatchEvent() const;
-  virtual bool IsRouteEvent() const;
 
   bool PropagationStopped() const {
     return propagation_stopped_ || immediate_propagation_stopped_;
@@ -407,7 +398,10 @@ class CORE_EXPORT Event : public ScriptWrappable, public DOMOriginUtils {
 
   Member<EventTarget> current_target_;
   Member<EventTarget> target_;
-  Member<PseudoElement> pseudo_element_target_;
+  // Set eagerly in SetPseudoElementTarget() while the pseudo is connected.
+  // Storing CSSPseudoElement directly avoids calling From() on a possibly
+  // disconnected pseudo later during dispatch.
+  Member<CSSPseudoElement> pseudo_element_target_;
   Member<const Event> underlying_event_;
   Member<EventPath> event_path_;
   // The monotonic platform time in seconds, for input events it is the

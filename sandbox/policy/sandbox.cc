@@ -12,7 +12,10 @@
 #include "sandbox/policy/switches.h"
 
 #if BUILDFLAG(IS_ANDROID)
+#include <unistd.h>
+
 #include "base/android/jni_android.h"
+#include "third_party/jni_zero/common_apis.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
@@ -88,15 +91,18 @@ bool Sandbox::IsProcessSandboxed() {
   }
 
 #if BUILDFLAG(IS_ANDROID)
-  // Note that this does not check the status of the Seccomp sandbox. Call
-  // https://developer.android.com/reference/android/os/Process#isIsolated().
-  JNIEnv* env = base::android::AttachCurrentThread();
-  base::android::ScopedJavaLocalRef<jclass> process_class =
-      base::android::GetClass(env, "android/os/Process");
-  jmethodID is_isolated =
-      base::android::MethodID::Get<base::android::MethodID::TYPE_STATIC>(
-          env, process_class.obj(), "isIsolated", "()Z");
-  return env->CallStaticBooleanMethod(process_class.obj(), is_isolated);
+  // Note that this does not check the status of the Seccomp sandbox.
+  if (base::android::IsJavaAvailable()) {
+    JNIEnv* env = base::android::AttachCurrentThread();
+    return jni_zero::ProcessIsIsolated(env);
+  }
+
+  // Fallback for javaless processes where JVM is not initialized.
+  // Check the UID range matching Android's Process.isIsolatedUid
+  // implementation.
+  uid_t uid = getuid();
+  uid_t app_id = uid % 100000;
+  return (app_id >= 90000 && app_id <= 99999);
 #elif BUILDFLAG(IS_FUCHSIA)
   // TODO(crbug.com/40126761): Figure out what to do here. Process
   // launching controls the sandbox and there are no ambient capabilities, so

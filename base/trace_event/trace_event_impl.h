@@ -37,10 +37,6 @@ using ArgumentFilterPredicate =
 using MetadataFilterPredicate =
     base::RepeatingCallback<bool(const std::string& metadata_name)>;
 
-struct TraceEventHandle {
-  uint64_t dummy;
-};
-
 class BASE_EXPORT TraceEvent {
  public:
   TraceEvent(PlatformThreadId thread_id,
@@ -58,9 +54,6 @@ class BASE_EXPORT TraceEvent {
   // Allow move operations.
   TraceEvent(TraceEvent&&) noexcept;
   TraceEvent& operator=(TraceEvent&&) noexcept;
-
-  // Reset instance to empty state.
-  void Reset();
 
   TimeTicks timestamp() const { return timestamp_; }
   char phase() const { return phase_; }

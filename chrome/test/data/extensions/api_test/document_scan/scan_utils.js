@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-OperationResult = chrome.documentScan.OperationResult;
-OptionType = chrome.documentScan.OptionType;
+const OperationResult = chrome.documentScan.OperationResult;
+const OptionType = chrome.documentScan.OptionType;
 
 async function getScannerList(filter) {
   return new Promise(resolve => {
@@ -18,7 +18,7 @@ async function openScanner(scannerId) {
 }
 
 async function getOptionGroups(scannerHandle) {
- return new Promise(resolve => {
+  return new Promise(resolve => {
     chrome.documentScan.getOptionGroups(scannerHandle, resolve);
   });
 }
@@ -34,8 +34,8 @@ async function getScannerId() {
     local: true,
     secure: true,
   };
-  let response = await getScannerList(filter);
-  if (response.result != OperationResult.SUCCESS) {
+  const response = await getScannerList(filter);
+  if (response.result !== OperationResult.SUCCESS) {
     return null;
   }
   if (response.scanners.length < 1) {
@@ -50,17 +50,17 @@ async function getScannerHandle() {
     return null;
   }
 
-  let openResponse = await openScanner(scannerId);
+  const openResponse = await openScanner(scannerId);
   return openResponse.scannerHandle;
 }
 
 async function startScan(scannerHandle, maxReadSize) {
   return new Promise(resolve => {
-    let options = {
+    const options = {
       format: 'format',
     };
-    if (maxReadSize != undefined) {
-      options['maxReadSize'] = maxReadSize;
+    if (maxReadSize !== undefined) {
+      options.maxReadSize = maxReadSize;
     }
     chrome.documentScan.startScan(scannerHandle, options, resolve);
   });

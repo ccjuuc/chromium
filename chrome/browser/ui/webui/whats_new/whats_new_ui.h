@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_UI_WEBUI_WHATS_NEW_WHATS_NEW_UI_H_
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "chrome/browser/ui/webui/whats_new/whats_new.mojom.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -50,7 +51,7 @@ class WhatsNewUI : public ui::MojoWebUIController,
 
   static void RegisterLocalStatePrefs(PrefRegistrySimple* registry);
 
-  static base::RefCountedMemory* GetFaviconResourceBytes(
+  static scoped_refptr<base::RefCountedMemory> GetFaviconResourceBytes(
       ui::ResourceScaleFactor scale_factor);
 
   // Instantiates the implementor of the
@@ -74,7 +75,6 @@ class WhatsNewUI : public ui::MojoWebUIController,
  private:
   // whats_new::mojom::PageHandlerFactory:
   void CreatePageHandler(
-      mojo::PendingRemote<whats_new::mojom::Page> page,
       mojo::PendingReceiver<whats_new::mojom::PageHandler> receiver) override;
 
   std::unique_ptr<WhatsNewHandler> page_handler_;

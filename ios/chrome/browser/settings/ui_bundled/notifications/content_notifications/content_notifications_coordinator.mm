@@ -55,10 +55,14 @@
 }
 
 - (void)start {
+  ContentNotificationsViewController* viewController =
+      [[ContentNotificationsViewController alloc]
+          initWithStyle:ChromeTableViewStyle()];
+  self.viewController = viewController;
   AuthenticationService* authService =
       AuthenticationServiceFactory::GetForProfile(self.profile);
-  id<SystemIdentity> identity =
-      authService->GetPrimaryIdentity(signin::ConsentLevel::kSignin);
+  self.viewController.presentationDelegate = self;
+  id<SystemIdentity> identity = authService->GetPrimaryIdentity();
   PrefService* prefService = self.profile->GetPrefs();
   self.mediator = [[ContentNotificationsMediator alloc]
       initWithPrefService:prefService

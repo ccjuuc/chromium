@@ -17,7 +17,6 @@ import androidx.appcompat.content.res.AppCompatResources;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuHandler.AppMenuItemType;
-import org.chromium.chrome.browser.ui.appmenu.test.R;
 import org.chromium.ui.modelutil.MVCListAdapter;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -129,7 +128,7 @@ class TestAppMenuPropertiesDelegate implements AppMenuPropertiesDelegate {
 
     @Nullable
     @Override
-    public Bundle getBundleForMenuItem(int itemId) {
+    public Bundle getBundleForMenuItem(PropertyModel model) {
         return null;
     }
 
@@ -160,6 +159,11 @@ class TestAppMenuPropertiesDelegate implements AppMenuPropertiesDelegate {
 
     @Override
     public boolean isMenuIconAtStart() {
+        return false;
+    }
+
+    @Override
+    public boolean shouldShowIconRow() {
         return false;
     }
 

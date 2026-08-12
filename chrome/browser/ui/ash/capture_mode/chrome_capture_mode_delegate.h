@@ -26,9 +26,7 @@
 #include "components/drive/file_errors.h"
 #include "components/lens/proto/server/lens_overlay_response.pb.h"
 #include "components/signin/public/identity_manager/primary_account_access_token_fetcher.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
 #include "services/screen_ai/public/mojom/screen_ai_service.mojom-forward.h"
-#include "third_party/lens_server_proto/lens_overlay_service_deps.pb.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 class ApplicationLocaleStorage;
@@ -115,14 +113,14 @@ class ChromeCaptureModeDelegate : public ash::CaptureModeDelegate {
   bool IsCameraDisabledByPolicy() const override;
   bool IsAudioCaptureDisabledByPolicy() const override;
   void RegisterVideoConferenceManagerClient(
-      crosapi::mojom::VideoConferenceManagerClient* client,
+      ash::VideoConferenceManagerClient* client,
       const base::UnguessableToken& client_id) override;
   void UnregisterVideoConferenceManagerClient(
       const base::UnguessableToken& client_id) override;
   void UpdateVideoConferenceManager(
-      crosapi::mojom::VideoConferenceMediaUsageStatusPtr status) override;
+      ash::VideoConferenceMediaUsageStatus status) override;
   void NotifyDeviceUsedWhileDisabled(
-      crosapi::mojom::VideoConferenceMediaDevice device) override;
+      ash::VideoConferenceMediaDevice device) override;
   void FinalizeSavedFile(
       base::OnceCallback<void(bool, const base::FilePath&)> callback,
       const base::FilePath& path,
@@ -214,10 +212,6 @@ class ChromeCaptureModeDelegate : public ash::CaptureModeDelegate {
       const std::string& access_token,
       const int request_id,
       std::optional<std::string> response_body);
-
-  // Called after the response to a /qfmetadata GET request (for text detection)
-  // is received and the response body has been decoded.
-  void OnJsonParsed(data_decoder::DataDecoder::ValueOrError result);
 
   const raw_ref<PrefService> local_state_;
   const raw_ref<ApplicationLocaleStorage> application_locale_storage_;

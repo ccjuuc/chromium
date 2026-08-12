@@ -6,15 +6,218 @@
 
 #include "base/feature_list.h"
 #include "base/notreached.h"
+#include "components/contextual_tasks/public/features.h"
+#include "components/wallet/core/common/wallet_features.h"
 #include "google_apis/gaia/gaia_constants.h"
 
 namespace {
 
+// Keep the list of OAuth2 scopes sorted alphabetically.
+// keep-sorted start case=no
+
+// OAuth2 scope for access to the Reauth flow.
+constexpr char kAccountsReauthOAuth2Scope[] =
+    "https://www.googleapis.com/auth/accounts.reauth";
+constexpr char kAgenticPermissionOAuth2Scope[] =
+    "https://www.googleapis.com/auth/agenticpermission";
+// OAuth2 scope for DevTools GenAI features.
+constexpr char kAiCodeOAuth2Scope[] = "https://www.googleapis.com/auth/aicode";
+// OAuth2 scope for DevTools GenAI features.
+constexpr char kAidaOAuth2Scope[] = "https://www.googleapis.com/auth/aida";
+// OAuth2 scope for access to audit recording (ARI).
+constexpr char kAuditRecordingOAuth2Scope[] =
+    "https://www.googleapis.com/auth/auditrecording-pa";
+// OAuth 2 scope for readonly access to Calendar.
+constexpr char kCalendarReadOnlyOAuth2Scope[] =
+    "https://www.googleapis.com/auth/calendar.readonly";
+// OAuth2 scope for access to Cast backdrop API.
+constexpr char kCastBackdropOAuth2Scope[] =
+    "https://www.googleapis.com/auth/cast.backdrop";
+// OAuth2 scope to access the ChromebookEmailService API.
+constexpr char kChromebookOAuth2Scope[] =
+    "https://www.googleapis.com/auth/chromebook.email";
+constexpr char kChromeMemexOAuth2Scope[] =
+    "https://www.googleapis.com/auth/chromememex";
+// OAuth2 scope for access to Chrome safe browsing API.
+constexpr char kChromeSafeBrowsingOAuth2Scope[] =
+    "https://www.googleapis.com/auth/chrome-safe-browsing";
+// OAuth2 scope for access to kid permissions by URL.
+constexpr char kClassifyUrlKidPermissionOAuth2Scope[] =
+    "https://www.googleapis.com/auth/kid.permission";
+// OAuth 2 scopes for Google Classroom API.
+// https://developers.google.com/identity/protocols/oauth2/scopes#classroom
+constexpr char kClassroomCourseWorkMaterialsOAuthScope[] =
+    "https://www.googleapis.com/auth/classroom.courseworkmaterials";
+constexpr char kClassroomProfileEmailOauth2Scope[] =
+    "https://www.googleapis.com/auth/classroom.profile.emails";
+constexpr char kClassroomProfilePhotoUrlScope[] =
+    "https://www.googleapis.com/auth/classroom.profile.photos";
+constexpr char kClassroomReadOnlyCoursesOAuth2Scope[] =
+    "https://www.googleapis.com/auth/classroom.courses.readonly";
+constexpr char kClassroomReadOnlyCourseWorkSelfOAuth2Scope[] =
+    "https://www.googleapis.com/auth/classroom.coursework.me.readonly";
+constexpr char kClassroomReadOnlyCourseWorkStudentsOAuth2Scope[] =
+    "https://www.googleapis.com/auth/classroom.coursework.students.readonly";
+constexpr char kClassroomReadOnlyRostersOAuth2Scope[] =
+    "https://www.googleapis.com/auth/classroom.rosters.readonly";
+constexpr char kClassroomReadOnlyStudentSubmissionsSelfOAuth2Scope[] =
+    "https://www.googleapis.com/auth/classroom.student-submissions.me.readonly";
+// OAuth2 scope for access for DriveFS to use client-side notifications.
+constexpr char kClientChannelOAuth2Scope[] =
+    "https://www.googleapis.com/auth/client_channel";
+// OAuth2 scope for Cloud Search query API.
+constexpr char kCloudSearchQueryOAuth2Scope[] =
+    "https://www.googleapis.com/auth/cloud_search.query";
+// OAuth2 scope for read-write access to contacts.
+constexpr char kContactsOAuth2Scope[] =
+    "https://www.googleapis.com/auth/contacts";
+// OAuth2 scope for access to Context Memory Service API.
+constexpr char kContextMemoryServiceOAuth2Scope[] =
+    "https://www.googleapis.com/auth/chrome-context-memory";
+constexpr char kCryptAuthOAuth2Scope[] =
+    "https://www.googleapis.com/auth/cryptauth";
+// OAuth2 scope for Discovery Engine suggestion API.
+constexpr char kDiscoveryEngineCompleteQueryOAuth2Scope[] =
+    "https://www.googleapis.com/auth/discoveryengine.complete_query";
+// OAuth2 scope for Access Code Cast.
+constexpr char kDiscoveryOAuth2Scope[] =
+    "https://www.googleapis.com/auth/cast-edu-messaging";
+// OAuth2 scope for access to Drive Apps.
+constexpr char kDriveAppsOAuth2Scope[] =
+    "https://www.googleapis.com/auth/drive.apps";
+// OAuth2 scope for access to readonly Drive Apps.
+constexpr char kDriveAppsReadonlyOAuth2Scope[] =
+    "https://www.googleapis.com/auth/drive.apps.readonly";
+// OAuth 2 scope for readonly access to Drive.
+constexpr char kDriveReadOnlyOAuth2Scope[] =
+    "https://www.googleapis.com/auth/drive.readonly";
+// OAuth2 scope for access for DriveFS to access flags.
+constexpr char kExperimentsAndConfigsOAuth2Scope[] =
+    "https://www.googleapis.com/auth/experimentsandconfigs";
+// OAuth 2 scope for the Discover feed.
+constexpr char kFeedOAuth2Scope[] = "https://www.googleapis.com/auth/googlenow";
+// OAuth2 scope for Footprints Service.
+constexpr char kFpopOAuth2Scope[] =
+    "https://www.googleapis.com/auth/webhistory";
+// OAuth2 scopes for access to GCM.
+constexpr char kGCMCheckinServerOAuth2Scope[] =
+    "https://www.googleapis.com/auth/android_checkin";
+constexpr char kGCMGroupServerOAuth2Scope[] =
+    "https://www.googleapis.com/auth/gcm";
+// OAuth2 scope for DevTools Google Developer Program features.
+constexpr char kGdpOAuth2Scope[] =
+    "https://www.googleapis.com/auth/devprofiles.full_control";
+// OAuth2 scope for readonly access to Gmail metadata.
+constexpr char kGmailMetadataOAuth2Scope[] =
+    "https://www.googleapis.com/auth/gmail.metadata";
+// OAuth2 scope for readonly access to Gmail OTP email data.
+constexpr char kGmailOtpReadonlyOAuth2Scope[] =
+    "https://www.googleapis.com/auth/gmail.otp.readonly";
+// OAuth 2 scope for the k-Anonymity Service API.
+constexpr char kKAnonymityServiceOAuth2Scope[] =
+    "https://www.googleapis.com/auth/chromekanonymity";
+// OAuth2 scope for access to kid family (read-only).
+constexpr char kKidFamilyReadonlyOAuth2Scope[] =
+    "https://www.googleapis.com/auth/kid.family.readonly";
+// OAuth2 scope for parental consent logging for secondary account addition.
+constexpr char kKidManagementPrivilegedOAuth2Scope[] =
+    "https://www.googleapis.com/auth/kid.management.privileged";
+// OAuth2 scope for access to Google Family Link Supervision Setup.
+constexpr char kKidsSupervisionSetupChildOAuth2Scope[] =
+    "https://www.googleapis.com/auth/kids.supervision.setup.child";
+// OAuth2 scope for manta.
+constexpr char kMantaOAuth2Scope[] =
+    "https://www.googleapis.com/auth/mdi.aratea";
+// OAuth2 scope for access to nearby devices (fast pair) APIs.
+constexpr char kNearbyDevicesOAuth2Scope[] =
+    "https://www.googleapis.com/auth/nearbydevices-pa";
+// OAuth2 scope for access to nearby sharing.
+constexpr char kNearbyPresenceOAuth2Scope[] =
+    "https://www.googleapis.com/auth/nearbypresence-pa";
+// OAuth2 scope for access to nearby sharing.
+constexpr char kNearbyShareOAuth2Scope[] =
+    "https://www.googleapis.com/auth/nearbysharing-pa";
+// OAuth2 scope for One Time Token Service.
+constexpr char kOneTimeTokenOAuth2Scope[] =
+    "https://www.googleapis.com/auth/chrome.passwords.onetimetoken";
+// OAuth2 scopes for Optimization Guide.
+constexpr char kOptimizationGuideServiceGetHintsOAuth2Scope[] =
+    "https://www.googleapis.com/auth/chrome-optimization-guide";
+constexpr char kOptimizationGuideServiceModelExecutionOAuth2Scope[] =
+    "https://www.googleapis.com/auth/chrome-model-execution";
+// OAuth2 scope for access to the parent approval widget.
+constexpr char kParentApprovalOAuth2Scope[] =
+    "https://www.googleapis.com/auth/kids.parentapproval";
+// OAuth2 scope for Passbox credential sharing.
+constexpr char kPassboxCredentialOAuth2Scope[] =
+    "https://www.googleapis.com/auth/passbox.credential";
+// OAuth 2 scope for Google Password Manager passkey enclaves.
+constexpr char kPasskeysEnclaveOAuth2Scope[] =
+    "https://www.googleapis.com/auth/secureidentity.action";
+// OAuth2 scope for access to passwords leak checking API.
+constexpr char kPasswordsLeakCheckOAuth2Scope[] =
+    "https://www.googleapis.com/auth/identity.passwords.leak.check";
+// OAuth2 scope for access to payments.
+constexpr char kPaymentsOAuth2Scope[] =
+    "https://www.googleapis.com/auth/wallet.chrome";
+// OAuth2 scope for access to the people API (read-only).
+constexpr char kPeopleApiReadOnlyOAuth2Scope[] =
+    "https://www.googleapis.com/auth/peopleapi.readonly";
+// OAuth2 scope for access to the people API (read-write).
+constexpr char kPeopleApiReadWriteOAuth2Scope[] =
+    "https://www.googleapis.com/auth/peopleapi.readwrite";
+// OAuth 2 scope for NTP Photos module image API.
+constexpr char kPhotosModuleImageOAuth2Scope[] =
+    "https://www.googleapis.com/auth/photos.image.readonly";
+// OAuth 2 scope for NTP Photos module API.
+constexpr char kPhotosModuleOAuth2Scope[] =
+    "https://www.googleapis.com/auth/photos.firstparty.readonly";
+// OAuth2 scope for access to the Photos API.
+constexpr char kPhotosOAuth2Scope[] = "https://www.googleapis.com/auth/photos";
+// OAuth2 scope for Private AI.
+constexpr char kPrivateAiAuthScope[] = "https://www.googleapis.com/auth/paic";
+// OAuth2 scope for access to the people API person's locale preferences
+// (read-only).
+constexpr char kProfileLanguageReadOnlyOAuth2Scope[] =
+    "https://www.googleapis.com/auth/profile.language.read";
+// OAuth2 scope for access to the programmatic challenge API (read-only).
+constexpr char kProgrammaticChallengeOAuth2Scope[] =
+    "https://www.googleapis.com/auth/accounts.programmaticchallenge";
+// OAuth2 scope for push notifications.
+constexpr char kPushNotificationOAuth2Scope[] =
+    "https://www.googleapis.com/auth/notifications";
+constexpr char kSchoolToolsAuthScope[] =
+    "https://www.googleapis.com/auth/chromeosschooltools";
+// OAuth2 scope for Site Automation Index.
+constexpr char kSiteAutomationIndexOAuth2Scope[] =
+    "https://www.googleapis.com/auth/siteautomationindex";
+// OAuth2 scope for access to Tachyon api.
+constexpr char kTachyonOAuthScope[] = "https://www.googleapis.com/auth/tachyon";
+// OAuth 2 scopes for Google Tasks API.
+// https://developers.google.com/identity/protocols/oauth2/scopes#tasks
+constexpr char kTasksOAuth2Scope[] = "https://www.googleapis.com/auth/tasks";
+constexpr char kTasksReadOnlyOAuth2Scope[] =
+    "https://www.googleapis.com/auth/tasks.readonly";
+constexpr char kWalletPassesOAuth2Scope[] =
+    "https://www.googleapis.com/auth/wallet_1p_passes";
+// OAuth2 scope for web history.
+constexpr char kWebHistoryOAuth2Scope[] =
+    "https://www.googleapis.com/auth/webhistory";
+// OAuth2 scope for Chrome Web Store.
+constexpr char kWebstoreOAuth2Scope[] =
+    "https://www.googleapis.com/auth/chromewebstore.readonly";
+// OAuth 2 scope for YouTube Music API.
+// https://developers.google.com/youtube/mediaconnect/guides/authentication#identify-access-scope
+constexpr char kYouTubeMusicOAuth2Scope[] =
+    "https://www.googleapis.com/auth/music";
+// keep-sorted end
+
 constexpr char kSyncName[] = "sync";
+constexpr char kSecureGatewayServiceName[] = "secure_gateway_service";
+constexpr char kFpopServiceName[] = "fpop_service";
 constexpr char kWallpaperGooglePhotosFetcherName[] =
     "wallpaper_google_photos_fetcher";
 constexpr char kWallpaperFetcherDelegateName[] = "wallpaper_fetcher_delegate";
-constexpr char kIpProtectionServiceName[] = "ip_protection_service";
 constexpr char kSanitizedImageSourceName[] = "sanitized_image_source";
 constexpr char kOptimizationGuideGetHintsName[] =
     "optimization_guide_get_hints";
@@ -25,7 +228,6 @@ constexpr char kProjectorTokenFetcherName[] = "projector_token_fetcher";
 constexpr char kAddSupervisionName[] = "add_supervision";
 constexpr char kParentAccessName[] = "parent_access";
 constexpr char kDataSharingName[] = "data_sharing";
-constexpr char kLauncherItemSuggestName[] = "launcher_item_suggest";
 constexpr char kMarketingBackendConnectorName[] = "marketing_backend_connector";
 constexpr char kPasswordSyncTokenFetcherName[] = "password_sync_token_fetcher";
 constexpr char kLocaleSwitchScreenName[] = "locale_switch_screen";
@@ -86,7 +288,6 @@ constexpr char kArcBackgroundAuthCodeFetcherName[] =
     "arc_background_auth_code_fetcher";
 constexpr char kGcmAccountTrackerName[] = "gcm_account_tracker";
 constexpr char kPolicyTokenForwarderName[] = "policy_token_forwarder";
-constexpr char kPluginVmLicenseCheckerName[] = "plugin_vm_license_checker";
 constexpr char kDrivefsAuthName[] = "drivefs_auth";
 constexpr char kNearbyPresenceServerClientName[] =
     "nearby_presence_server_client";
@@ -98,6 +299,7 @@ constexpr char kExtensionsIdentityAPIName[] = "extensions_identity_api";
 constexpr char kMantaName[] = "manta";
 constexpr char kChromeMemexName[] = "chrome_memex";
 constexpr char kDevtoolsAidaName[] = "devtools_aida_client";
+constexpr char kDevtoolsAiCodeName[] = "devtools_aicode_client";
 constexpr char kChromeOsBabelOrcaName[] = "chromeos_babel_orca";
 constexpr char kChromeOsBocaSchoolToolsAuthName[] =
     "chromeos_boca_school_tools_auth";
@@ -109,7 +311,7 @@ constexpr char kAuthServiceGlanceablesClassroomName[] =
     "auth_service_glanceables_classroom";
 constexpr char kAuthServiceTasksClientName[] = "auth_service_tasks_client";
 constexpr char kYouTubeMusicName[] = "youtube_music";
-constexpr char kContextualTasksName[] = "contextual_tasks";
+
 constexpr char kDevtoolsGdpName[] = "devtools_gdp_client";
 constexpr char kAshDriveIntegrationName[] = "ash_drive_integration";
 constexpr char kAshClassroomPageHandlerName[] = "ash_classroom_page_handler";
@@ -117,7 +319,20 @@ constexpr char kAshScannerKeyedServiceName[] = "ash_scanner_keyed_service";
 constexpr char kAshAutotestPrivateApiName[] = "ash_autotest_private_api";
 constexpr char kSyncDeviceStatisticsMetricsName[] =
     "sync_device_statistics_metrics";
-
+constexpr char kPrivateAiServiceName[] = "private_ai_service";
+constexpr char kWalletPassesName[] = "wallet_passes";
+constexpr char kAimEligibilityServiceName[] = "aim_eligibility_service";
+constexpr char kAccessibilityAnnotatorName[] = "accessibility_annotator";
+constexpr char kActorLoginPermissionServiceName[] =
+    "actor_login_permission_service";
+constexpr char kGapisServiceName[] = "gapis_service";
+constexpr char kOneTimeTokenServiceName[] = "one_time_token_service";
+constexpr char kMultistepFilterName[] = "multistep_filter";
+constexpr char kContextMemoryServiceName[] = "context_memory_service";
+constexpr char kSyncPreviewName[] = "chromesync_preview";
+constexpr char kNotebooksServiceName[] = "notebooks_service";
+constexpr char kRemoteActorLoginCredentialsServiceName[] =
+    "remote_actor_login_credentials_service";
 }  // namespace
 
 namespace signin {
@@ -148,65 +363,54 @@ OAuthConsumer OAuthConsumerRegistry::GetOAuthConsumerFromId(
     case OAuthConsumerId::kWallpaperGooglePhotosFetcher:
       return OAuthConsumer(
           /*name=*/kWallpaperGooglePhotosFetcherName,
-          /*scopes=*/{GaiaConstants::kPhotosModuleOAuth2Scope});
+          /*scopes=*/{kPhotosModuleOAuth2Scope});
     case OAuthConsumerId::kWallpaperFetcherDelegate:
       return OAuthConsumer(
           /*name=*/kWallpaperFetcherDelegateName,
-          /*scopes=*/{GaiaConstants::kPhotosModuleImageOAuth2Scope});
-    case OAuthConsumerId::kIpProtectionService:
-      return OAuthConsumer(
-          /*name=*/kIpProtectionServiceName,
-          /*scopes=*/{GaiaConstants::kIpProtectionAuthScope});
+          /*scopes=*/{kPhotosModuleImageOAuth2Scope});
     case OAuthConsumerId::kSanitizedImageSource:
       return OAuthConsumer(
           /*name=*/kSanitizedImageSourceName,
-          /*scopes=*/{GaiaConstants::kPhotosModuleImageOAuth2Scope});
+          /*scopes=*/{kPhotosModuleImageOAuth2Scope});
     case OAuthConsumerId::kOptimizationGuideGetHints:
       return OAuthConsumer(
           /*name=*/kOptimizationGuideGetHintsName,
-          /*scopes=*/{
-              GaiaConstants::kOptimizationGuideServiceGetHintsOAuth2Scope});
+          /*scopes=*/{kOptimizationGuideServiceGetHintsOAuth2Scope});
     case OAuthConsumerId::kOptimizationGuideModelExecution:
       return OAuthConsumer(
           /*name=*/kOptimizationGuideModelExecutionName,
-          /*scopes=*/{GaiaConstants::
-                          kOptimizationGuideServiceModelExecutionOAuth2Scope});
+          /*scopes=*/{kOptimizationGuideServiceModelExecutionOAuth2Scope});
     case OAuthConsumerId::kNearbySharing:
       return OAuthConsumer(
           /*name=*/kNearbySharingName,
-          /*scopes=*/{GaiaConstants::kTachyonOAuthScope});
+          /*scopes=*/{kTachyonOAuthScope});
     case OAuthConsumerId::kProjectorTokenFetcher:
       return OAuthConsumer(
           /*name=*/kProjectorTokenFetcherName,
           /*scopes=*/{GaiaConstants::kDriveOAuth2Scope,
-                      GaiaConstants::kDriveReadOnlyOAuth2Scope});
+                      kDriveReadOnlyOAuth2Scope});
     case OAuthConsumerId::kAddSupervision:
       return OAuthConsumer(
           /*name=*/kAddSupervisionName,
-          /*scopes=*/{GaiaConstants::kKidsSupervisionSetupChildOAuth2Scope,
-                      GaiaConstants::kPeopleApiReadOnlyOAuth2Scope,
-                      GaiaConstants::kAccountsReauthOAuth2Scope,
-                      GaiaConstants::kAuditRecordingOAuth2Scope,
+          /*scopes=*/{kKidsSupervisionSetupChildOAuth2Scope,
+                      kPeopleApiReadOnlyOAuth2Scope, kAccountsReauthOAuth2Scope,
+                      kAuditRecordingOAuth2Scope,
                       GaiaConstants::kClearCutOAuth2Scope});
     case OAuthConsumerId::kParentAccess:
       return OAuthConsumer(
           /*name=*/kParentAccessName,
-          /*scopes=*/{GaiaConstants::kParentApprovalOAuth2Scope,
-                      GaiaConstants::kProgrammaticChallengeOAuth2Scope});
+          /*scopes=*/{kParentApprovalOAuth2Scope,
+                      kProgrammaticChallengeOAuth2Scope});
     case OAuthConsumerId::kDataSharing:
       return OAuthConsumer(
           /*name=*/kDataSharingName,
-          /*scopes=*/{GaiaConstants::kPeopleApiReadWriteOAuth2Scope,
-                      GaiaConstants::kPeopleApiReadOnlyOAuth2Scope,
+          /*scopes=*/{kPeopleApiReadWriteOAuth2Scope,
+                      kPeopleApiReadOnlyOAuth2Scope,
                       GaiaConstants::kClearCutOAuth2Scope});
-    case OAuthConsumerId::kLauncherItemSuggest:
-      return OAuthConsumer(
-          /*name=*/kLauncherItemSuggestName,
-          /*scopes=*/{GaiaConstants::kDriveReadOnlyOAuth2Scope});
     case OAuthConsumerId::kMarketingBackendConnector:
       return OAuthConsumer(
           /*name=*/kMarketingBackendConnectorName,
-          /*scopes=*/{GaiaConstants::kChromebookOAuth2Scope});
+          /*scopes=*/{kChromebookOAuth2Scope});
     case OAuthConsumerId::kPasswordSyncTokenFetcher:
       return OAuthConsumer(
           /*name=*/kPasswordSyncTokenFetcherName,
@@ -215,9 +419,9 @@ OAuthConsumer OAuthConsumerRegistry::GetOAuthConsumerFromId(
     case OAuthConsumerId::kLocaleSwitchScreen:
       return OAuthConsumer(
           /*name=*/kLocaleSwitchScreenName,
-          /*scopes=*/{GaiaConstants::kPeopleApiReadOnlyOAuth2Scope,
+          /*scopes=*/{kPeopleApiReadOnlyOAuth2Scope,
                       GaiaConstants::kGoogleUserInfoProfile,
-                      GaiaConstants::kProfileLanguageReadOnlyOAuth2Scope});
+                      kProfileLanguageReadOnlyOAuth2Scope});
     case OAuthConsumerId::kTokenHandleService:
       return OAuthConsumer(
           /*name=*/kTokenHandleServiceName,
@@ -225,27 +429,27 @@ OAuthConsumer OAuthConsumerRegistry::GetOAuthConsumerFromId(
     case OAuthConsumerId::kSupervisedUserListFamilyMembers:
       return OAuthConsumer(
           /*name=*/kSupervisedUserListFamilyMembersName,
-          /*scopes=*/{GaiaConstants::kKidFamilyReadonlyOAuth2Scope});
+          /*scopes=*/{kKidFamilyReadonlyOAuth2Scope});
     case OAuthConsumerId::kSupervisedUserClassifyUrl:
       return OAuthConsumer(
           /*name=*/kSupervisedUserClassifyUrlName,
-          /*scopes=*/{GaiaConstants::kClassifyUrlKidPermissionOAuth2Scope});
+          /*scopes=*/{kClassifyUrlKidPermissionOAuth2Scope});
     case OAuthConsumerId::kSupervisedUserCreatePermissionRequest:
       return OAuthConsumer(
           /*name=*/kSupervisedUserCreatePermissionRequestName,
-          /*scopes=*/{GaiaConstants::kClassifyUrlKidPermissionOAuth2Scope});
+          /*scopes=*/{kClassifyUrlKidPermissionOAuth2Scope});
     case OAuthConsumerId::kExtensionDownloader:
       return OAuthConsumer(
           /*name=*/kExtensionDownloaderName,
-          /*scopes=*/{GaiaConstants::kWebstoreOAuth2Scope});
+          /*scopes=*/{kWebstoreOAuth2Scope});
     case OAuthConsumerId::kEnclaveManager:
       return OAuthConsumer(
           /*name=*/kEnclaveManagerName,
-          /*scopes=*/{GaiaConstants::kPasskeysEnclaveOAuth2Scope});
+          /*scopes=*/{kPasskeysEnclaveOAuth2Scope});
     case OAuthConsumerId::kNtpDriveService:
       return OAuthConsumer(
           /*name=*/kNtpDriveServiceName,
-          /*scopes=*/{GaiaConstants::kDriveReadOnlyOAuth2Scope});
+          /*scopes=*/{kDriveReadOnlyOAuth2Scope});
     case OAuthConsumerId::kForceSigninVerifier:
       return OAuthConsumer(
           /*name=*/kForceSigninVerifierName,
@@ -261,7 +465,7 @@ OAuthConsumer OAuthConsumerRegistry::GetOAuthConsumerFromId(
     case OAuthConsumerId::kNearbyShare:
       return OAuthConsumer(
           /*name=*/kNearbyShareName,
-          /*scopes=*/{GaiaConstants::kNearbyShareOAuth2Scope});
+          /*scopes=*/{kNearbyShareOAuth2Scope});
     case OAuthConsumerId::kAdvancedProtectionStatusManager:
       return OAuthConsumer(
           /*name=*/kAdvancedProtectionStatusManagerName,
@@ -269,11 +473,11 @@ OAuthConsumer OAuthConsumerRegistry::GetOAuthConsumerFromId(
     case OAuthConsumerId::kPushNotification:
       return OAuthConsumer(
           /*name=*/kPushNotificationName,
-          /*scopes=*/{GaiaConstants::kPushNotificationOAuth2Scope});
+          /*scopes=*/{kPushNotificationOAuth2Scope});
     case OAuthConsumerId::kKAnonymityService:
       return OAuthConsumer(
           /*name=*/kKAnonymityServiceName,
-          /*scopes=*/{GaiaConstants::kKAnonymityServiceOAuth2Scope});
+          /*scopes=*/{kKAnonymityServiceOAuth2Scope});
     case OAuthConsumerId::kFeedbackUploader:
       return OAuthConsumer(
           /*name=*/kFeedbackUploaderName,
@@ -286,7 +490,7 @@ OAuthConsumer OAuthConsumerRegistry::GetOAuthConsumerFromId(
       if (base::FeatureList::IsEnabled(kWebHistoryUseSpecificScope)) {
         return OAuthConsumer(
             /*name=*/kWebHistoryServiceName,
-            /*scopes=*/{GaiaConstants::kWebHistoryOAuth2Scope});
+            /*scopes=*/{kWebHistoryOAuth2Scope});
       } else {
         return OAuthConsumer(
             /*name=*/kWebHistoryServiceName,
@@ -295,19 +499,20 @@ OAuthConsumer OAuthConsumerRegistry::GetOAuthConsumerFromId(
     case OAuthConsumerId::kComposeboxQueryController:
       return OAuthConsumer(
           /*name=*/kComposeboxQueryControllerName,
-          /*scopes=*/{GaiaConstants::kLensOAuth2Scope});
+          /*scopes=*/{GaiaConstants::kLensOAuth2Scope,
+                      kDriveReadOnlyOAuth2Scope});
     case OAuthConsumerId::kDocumentSuggestionsService:
       return OAuthConsumer(
           /*name=*/kDocumentSuggestionsServiceName,
-          /*scopes=*/{GaiaConstants::kCloudSearchQueryOAuth2Scope});
+          /*scopes=*/{kCloudSearchQueryOAuth2Scope});
     case OAuthConsumerId::kEnterpriseSearchAggregator:
       return OAuthConsumer(
           /*name=*/kEnterpriseSearchAggregatorName,
-          /*scopes=*/{GaiaConstants::kDiscoveryEngineCompleteQueryOAuth2Scope});
+          /*scopes=*/{kDiscoveryEngineCompleteQueryOAuth2Scope});
     case OAuthConsumerId::kParentPermissionDialog:
       return OAuthConsumer(
           /*name=*/kParentPermissionDialogName,
-          /*scopes=*/{GaiaConstants::kAccountsReauthOAuth2Scope});
+          /*scopes=*/{kAccountsReauthOAuth2Scope});
     case OAuthConsumerId::kUserCloudSigninRestrictionPolicyFetcher:
       return OAuthConsumer(
           /*name=*/kUserCloudSigninRestrictionPolicyFetcherName,
@@ -320,11 +525,11 @@ OAuthConsumer OAuthConsumerRegistry::GetOAuthConsumerFromId(
     case OAuthConsumerId::kSafeBrowsing:
       return OAuthConsumer(
           /*name=*/kSafeBrowsingName,
-          /*scopes=*/{GaiaConstants::kChromeSafeBrowsingOAuth2Scope});
+          /*scopes=*/{kChromeSafeBrowsingOAuth2Scope});
     case OAuthConsumerId::kTailoredSecurityService:
       return OAuthConsumer(
           /*name=*/kTailoredSecurityServiceName,
-          /*scopes=*/{GaiaConstants::kChromeSafeBrowsingOAuth2Scope});
+          /*scopes=*/{kChromeSafeBrowsingOAuth2Scope});
     case OAuthConsumerId::kLensOverlayQueryController:
       return OAuthConsumer(
           /*name=*/kLensOverlayQueryControllerName,
@@ -332,19 +537,19 @@ OAuthConsumer OAuthConsumerRegistry::GetOAuthConsumerFromId(
     case OAuthConsumerId::kTrustedVaultFrontend:
       return OAuthConsumer(
           /*name=*/kTrustedVaultFrontendName,
-          /*scopes=*/{GaiaConstants::kCryptAuthOAuth2Scope});
+          /*scopes=*/{kCryptAuthOAuth2Scope});
     case OAuthConsumerId::kFeedNetwork:
       return OAuthConsumer(
           /*name=*/kFeedNetworkName,
-          /*scopes=*/{GaiaConstants::kFeedOAuth2Scope});
+          /*scopes=*/{kFeedOAuth2Scope});
     case OAuthConsumerId::kAutofillPayments:
       return OAuthConsumer(
           /*name=*/kAutofillPaymentsName,
-          /*scopes=*/{GaiaConstants::kPaymentsOAuth2Scope});
+          /*scopes=*/{kPaymentsOAuth2Scope});
     case OAuthConsumerId::kPaymentsAccessTokenFetcher:
       return OAuthConsumer(
           /*name=*/kPaymentsAccessTokenFetcherName,
-          /*scopes=*/{GaiaConstants::kPaymentsOAuth2Scope});
+          /*scopes=*/{kPaymentsOAuth2Scope});
     case OAuthConsumerId::kSaveToDrive:
       return OAuthConsumer(
           /*name=*/kSaveToDriveName,
@@ -352,19 +557,18 @@ OAuthConsumer OAuthConsumerRegistry::GetOAuthConsumerFromId(
     case OAuthConsumerId::kFastPair:
       return OAuthConsumer(
           /*name=*/kFastPairName,
-          /*scopes=*/{GaiaConstants::kNearbyDevicesOAuth2Scope});
+          /*scopes=*/{kNearbyDevicesOAuth2Scope});
     case OAuthConsumerId::kEduCoexistenceLoginHandler:
       return OAuthConsumer(
           /*name=*/kEduCoexistenceLoginHandlerName,
-          /*scopes=*/{GaiaConstants::kKidsSupervisionSetupChildOAuth2Scope,
-                      GaiaConstants::kAccountsReauthOAuth2Scope,
-                      GaiaConstants::kAuditRecordingOAuth2Scope,
+          /*scopes=*/{kKidsSupervisionSetupChildOAuth2Scope,
+                      kAccountsReauthOAuth2Scope, kAuditRecordingOAuth2Scope,
                       GaiaConstants::kClearCutOAuth2Scope,
-                      GaiaConstants::kKidManagementPrivilegedOAuth2Scope});
+                      kKidManagementPrivilegedOAuth2Scope});
     case OAuthConsumerId::kEduAccountLoginHandler:
       return OAuthConsumer(
           /*name=*/kEduAccountLoginHandlerName,
-          /*scopes=*/{GaiaConstants::kAccountsReauthOAuth2Scope});
+          /*scopes=*/{kAccountsReauthOAuth2Scope});
     case OAuthConsumerId::kChromeosFamilyLinkUserMetricsProvider:
       return OAuthConsumer(
           /*name=*/kChromeosFamilyLinkUserMetricsProviderName,
@@ -377,7 +581,7 @@ OAuthConsumer OAuthConsumerRegistry::GetOAuthConsumerFromId(
     case OAuthConsumerId::kPasswordManagerLeakDetection:
       return OAuthConsumer(
           /*name=*/kPasswordManagerLeakDetectionName,
-          /*scopes=*/{GaiaConstants::kPasswordsLeakCheckOAuth2Scope});
+          /*scopes=*/{kPasswordsLeakCheckOAuth2Scope});
     case OAuthConsumerId::kAndroidManagementClient:
       return OAuthConsumer(
           /*name=*/kAndroidManagementClientName,
@@ -390,36 +594,31 @@ OAuthConsumer OAuthConsumerRegistry::GetOAuthConsumerFromId(
     case OAuthConsumerId::kGcmAccountTracker:
       return OAuthConsumer(
           /*name=*/kGcmAccountTrackerName,
-          /*scopes=*/{GaiaConstants::kGCMGroupServerOAuth2Scope,
-                      GaiaConstants::kGCMCheckinServerOAuth2Scope});
+          /*scopes=*/{kGCMGroupServerOAuth2Scope,
+                      kGCMCheckinServerOAuth2Scope});
     case OAuthConsumerId::kPolicyTokenForwarder:
       return OAuthConsumer(
           /*name=*/kPolicyTokenForwarderName,
           /*scopes=*/{GaiaConstants::kDeviceManagementServiceOAuth,
                       GaiaConstants::kGoogleUserInfoEmail});
-    case OAuthConsumerId::kPluginVmLicenseChecker:
-      return OAuthConsumer(
-          /*name=*/kPluginVmLicenseCheckerName,
-          /*scopes=*/{GaiaConstants::kLicenseCheckOAuth2Scope});
     case OAuthConsumerId::kDrivefsAuth:
       return OAuthConsumer(
           /*name=*/kDrivefsAuthName,
-          /*scopes=*/{GaiaConstants::kClientChannelOAuth2Scope,
+          /*scopes=*/{kClientChannelOAuth2Scope,
                       GaiaConstants::kDriveOAuth2Scope,
-                      GaiaConstants::kExperimentsAndConfigsOAuth2Scope});
+                      kExperimentsAndConfigsOAuth2Scope});
     case OAuthConsumerId::kNearbyPresenceServerClient:
       return OAuthConsumer(
           /*name=*/kNearbyPresenceServerClientName,
-          /*scopes=*/{GaiaConstants::kNearbyPresenceOAuth2Scope});
+          /*scopes=*/{kNearbyPresenceOAuth2Scope});
     case OAuthConsumerId::kCryptAuthClient:
       return OAuthConsumer(
           /*name=*/kCryptAuthClientName,
-          /*scopes=*/{GaiaConstants::kCryptAuthOAuth2Scope});
+          /*scopes=*/{kCryptAuthOAuth2Scope});
     case OAuthConsumerId::kAmbientMode:
       return OAuthConsumer(
           /*name=*/kAmbientModeName,
-          /*scopes=*/{GaiaConstants::kPhotosOAuth2Scope,
-                      GaiaConstants::kCastBackdropOAuth2Scope});
+          /*scopes=*/{kPhotosOAuth2Scope, kCastBackdropOAuth2Scope});
     case OAuthConsumerId::kProfileDownloader:
       return OAuthConsumer(
           /*name=*/kProfileDownloaderName,
@@ -428,8 +627,8 @@ OAuthConsumer OAuthConsumerRegistry::GetOAuthConsumerFromId(
     case OAuthConsumerId::kDataSharingAndroid:
       return OAuthConsumer(
           /*name=*/kDataSharingAndroidName,
-          /*scopes=*/{GaiaConstants::kPeopleApiReadWriteOAuth2Scope,
-                      GaiaConstants::kPeopleApiReadOnlyOAuth2Scope});
+          /*scopes=*/{kPeopleApiReadWriteOAuth2Scope,
+                      kPeopleApiReadOnlyOAuth2Scope});
     case OAuthConsumerId::kExtensionsIdentityAPI:
       return OAuthConsumer(
           /*name=*/kExtensionsIdentityAPIName,
@@ -437,23 +636,23 @@ OAuthConsumer OAuthConsumerRegistry::GetOAuthConsumerFromId(
     case OAuthConsumerId::kManta:
       return OAuthConsumer(
           /*name=*/kMantaName,
-          /*scopes=*/{GaiaConstants::kMantaOAuth2Scope});
+          /*scopes=*/{kMantaOAuth2Scope});
     case OAuthConsumerId::kChromeMemex:
       return OAuthConsumer(
           /*name=*/kChromeMemexName,
-          /*scopes=*/{GaiaConstants::kChromeMemexOAuth2Scope});
+          /*scopes=*/{kChromeMemexOAuth2Scope});
     case OAuthConsumerId::kDevtoolsAida:
       return OAuthConsumer(
           /*name=*/kDevtoolsAidaName,
-          /*scopes=*/{GaiaConstants::kAidaOAuth2Scope});
+          /*scopes=*/{kAidaOAuth2Scope});
     case OAuthConsumerId::kChromeOsBabelOrca:
       return OAuthConsumer(
           /*name=*/kChromeOsBabelOrcaName,
-          /*scopes=*/{GaiaConstants::kTachyonOAuthScope});
+          /*scopes=*/{kTachyonOAuthScope});
     case signin::OAuthConsumerId::kChromeOsBocaSchoolToolsAuth:
       return OAuthConsumer(
           /*name=*/kChromeOsBocaSchoolToolsAuthName,
-          /*scopes=*/{GaiaConstants::kSchoolToolsAuthScope});
+          /*scopes=*/{kSchoolToolsAuthScope});
     case OAuthConsumerId::kSharedDataPreview:
       return OAuthConsumer(
           /*name=*/kSharedDataPreviewName,
@@ -461,67 +660,59 @@ OAuthConsumer OAuthConsumerRegistry::GetOAuthConsumerFromId(
     case OAuthConsumerId::kAccessCodeCastDiscovery:
       return OAuthConsumer(
           /*name=*/kAccessCodeCastDiscoveryName,
-          /*scopes=*/{GaiaConstants::kDiscoveryOAuth2Scope});
+          /*scopes=*/{kDiscoveryOAuth2Scope});
     case OAuthConsumerId::kAuthServiceDriveApi:
       return OAuthConsumer(
           /*name=*/kAuthServiceDriveApiName,
-          /*scopes=*/{GaiaConstants::kDriveOAuth2Scope,
-                      GaiaConstants::kDriveAppsOAuth2Scope,
-                      GaiaConstants::kDriveAppsReadonlyOAuth2Scope});
+          /*scopes=*/{GaiaConstants::kDriveOAuth2Scope, kDriveAppsOAuth2Scope,
+                      kDriveAppsReadonlyOAuth2Scope});
     case OAuthConsumerId::kAuthServiceCalendar:
       return OAuthConsumer(
           /*name=*/kAuthServiceCalendarName,
-          /*scopes=*/{GaiaConstants::kCalendarReadOnlyOAuth2Scope});
+          /*scopes=*/{kCalendarReadOnlyOAuth2Scope});
     case OAuthConsumerId::kAuthServiceGlanceablesClassroom:
       return OAuthConsumer(
           /*name=*/kAuthServiceGlanceablesClassroomName,
-          /*scopes=*/{
-              GaiaConstants::kClassroomReadOnlyCoursesOAuth2Scope,
-              GaiaConstants::kClassroomReadOnlyCourseWorkSelfOAuth2Scope,
-              GaiaConstants::
-                  kClassroomReadOnlyStudentSubmissionsSelfOAuth2Scope});
+          /*scopes=*/{kClassroomReadOnlyCoursesOAuth2Scope,
+                      kClassroomReadOnlyCourseWorkSelfOAuth2Scope,
+                      kClassroomReadOnlyStudentSubmissionsSelfOAuth2Scope});
     case OAuthConsumerId::kAuthServiceTasksClient:
       return OAuthConsumer(
           /*name=*/kAuthServiceTasksClientName,
-          /*scopes=*/{GaiaConstants::kTasksReadOnlyOAuth2Scope,
-                      GaiaConstants::kTasksOAuth2Scope});
+          /*scopes=*/{kTasksReadOnlyOAuth2Scope, kTasksOAuth2Scope});
     case OAuthConsumerId::kYouTubeMusic:
       return OAuthConsumer(
           /*name=*/kYouTubeMusicName,
-          /*scopes=*/{GaiaConstants::kYouTubeMusicOAuth2Scope});
+          /*scopes=*/{kYouTubeMusicOAuth2Scope});
     case OAuthConsumerId::kContextualTasks:
-      // TODO(crbug.com/461578148): Remove kChromeSyncOAuth2Scope once a scope
-      // is created specifically for the search results page.
-      return OAuthConsumer(
-          /*name=*/kContextualTasksName,
-          /*scopes=*/{GaiaConstants::kChromeSyncOAuth2Scope,
-                      GaiaConstants::kClearCutOAuth2Scope});
+      return GetOAuthConsumerForContextualTasks();
     case OAuthConsumerId::kEnterprisePlusAddress:
       return GetOAuthConsumerForEnterprisePlusAddress();
     case OAuthConsumerId::kGlicUserStatus:
       return GetOAuthConsumerForGlicUserStatus();
+    case OAuthConsumerId::kIndigo:
+      return GetOAuthConsumerForIndigo();
     case OAuthConsumerId::kDevtoolsGdp:
       return OAuthConsumer(
           /*name=*/kDevtoolsGdpName,
-          /*scopes=*/{GaiaConstants::kGdpOAuth2Scope});
+          /*scopes=*/{kGdpOAuth2Scope});
     case OAuthConsumerId::kAshDriveIntegration:
       return OAuthConsumer(
           /*name=*/kAshDriveIntegrationName,
-          /*scopes=*/{GaiaConstants::kDriveReadOnlyOAuth2Scope});
+          /*scopes=*/{kDriveReadOnlyOAuth2Scope});
     case OAuthConsumerId::kAshBocaClassroomPageHandler:
       return OAuthConsumer(
           /*name=*/kAshClassroomPageHandlerName,
-          /*scopes=*/{
-              GaiaConstants::kClassroomReadOnlyRostersOAuth2Scope,
-              GaiaConstants::kClassroomReadOnlyCoursesOAuth2Scope,
-              GaiaConstants::kClassroomReadOnlyCourseWorkStudentsOAuth2Scope,
-              GaiaConstants::kClassroomProfileEmailOauth2Scope,
-              GaiaConstants::kClassroomProfilePhotoUrlScope,
-              GaiaConstants::kClassroomCourseWorkMaterialsOAuthScope});
+          /*scopes=*/{kClassroomReadOnlyRostersOAuth2Scope,
+                      kClassroomReadOnlyCoursesOAuth2Scope,
+                      kClassroomReadOnlyCourseWorkStudentsOAuth2Scope,
+                      kClassroomProfileEmailOauth2Scope,
+                      kClassroomProfilePhotoUrlScope,
+                      kClassroomCourseWorkMaterialsOAuthScope});
     case OAuthConsumerId::kAshScannerKeyedService:
       return OAuthConsumer(
           /*name=*/kAshScannerKeyedServiceName,
-          /*scopes=*/{GaiaConstants::kContactsOAuth2Scope});
+          /*scopes=*/{kContactsOAuth2Scope});
     case OAuthConsumerId::kAshAutotestPrivateApi:
       // This consumer id should be converted using
       // GetOAuthConsumerForDynamicScopes().
@@ -530,6 +721,86 @@ OAuthConsumer OAuthConsumerRegistry::GetOAuthConsumerFromId(
       return OAuthConsumer(
           /*name=*/kSyncDeviceStatisticsMetricsName,
           /*scopes=*/{GaiaConstants::kChromeSyncOAuth2Scope});
+    case OAuthConsumerId::kPrivateAiService:
+      return OAuthConsumer(
+          /*name=*/kPrivateAiServiceName,
+          /*scopes=*/{kPrivateAiAuthScope});
+    case OAuthConsumerId::kWalletPasses: {
+      CHECK(base::FeatureList::IsEnabled(
+          wallet::features::kWalletApiPrivatePassesEnabled));
+      return signin::OAuthConsumer(
+          /*name=*/kWalletPassesName,
+          /*scopes=*/{kWalletPassesOAuth2Scope});
+    }
+    case OAuthConsumerId::kAimEligibilityService:
+      return OAuthConsumer(
+          /*name=*/kAimEligibilityServiceName,
+          /*scopes=*/{GaiaConstants::kSearchResultsOAuth2Scope});
+    case OAuthConsumerId::kDevtoolsAiCode:
+      return OAuthConsumer(
+          /*name=*/kDevtoolsAiCodeName,
+          /*scopes=*/{kAiCodeOAuth2Scope});
+    case OAuthConsumerId::kAccessibilityAnnotator:
+      // TODO(b/493530228): Use narrow scope for the accessibility annotator.
+      return OAuthConsumer(
+          /*name=*/kAccessibilityAnnotatorName,
+          /*scopes=*/{GaiaConstants::kChromeSyncOAuth2Scope});
+    case OAuthConsumerId::kActorLoginPermissionService:
+      return OAuthConsumer(
+          /*name=*/kActorLoginPermissionServiceName,
+          /*scopes=*/{kAgenticPermissionOAuth2Scope});
+    case OAuthConsumerId::kGapisService:
+      return OAuthConsumer(
+          /*name=*/kGapisServiceName,
+          /*scopes=*/{GaiaConstants::kChromeSyncOAuth2Scope});
+    case OAuthConsumerId::kOneTimeTokenService:
+      return OAuthConsumer(
+          /*name=*/kOneTimeTokenServiceName,
+          /*scopes=*/{kOneTimeTokenOAuth2Scope, kGmailMetadataOAuth2Scope,
+                      kGmailOtpReadonlyOAuth2Scope});
+    case OAuthConsumerId::kMultistepFilter:
+      return OAuthConsumer(
+          /*name=*/kMultistepFilterName,
+          /*scopes=*/{kSiteAutomationIndexOAuth2Scope});
+    case OAuthConsumerId::kGlicInvokeApi:
+      return GetOAuthConsumerForGlicInvokeApi();
+    case OAuthConsumerId::kSkillsService:
+      return GetOAuthConsumerForSkillsService();
+    case OAuthConsumerId::kSecureGatewayService:
+      return OAuthConsumer(
+          /*name=*/kSecureGatewayServiceName,
+          /*scopes=*/{GaiaConstants::kSecureGatewayOAuth2Scope});
+    case OAuthConsumerId::kDrivePickerHost:
+      return GetOAuthConsumerForDrivePickerHost();
+    case OAuthConsumerId::kContextMemoryService:
+      return OAuthConsumer(
+          /*name=*/kContextMemoryServiceName,
+          /*scopes=*/{kContextMemoryServiceOAuth2Scope,
+                      kWebHistoryOAuth2Scope});
+    case OAuthConsumerId::kSyncPreview:
+      return OAuthConsumer(
+          /*name=*/kSyncPreviewName,
+          /*scopes=*/{GaiaConstants::kChromeSyncPreviewOAuth2Scope});
+    case OAuthConsumerId::kFpopService:
+      return OAuthConsumer(
+          /*name=*/kFpopServiceName,
+          /*scopes=*/{kFpopOAuth2Scope});
+    case OAuthConsumerId::kNotebooksService:
+      return OAuthConsumer(
+          /*name=*/kNotebooksServiceName,
+          /*scopes=*/{GaiaConstants::kGoogleUserInfoEmail});
+    case OAuthConsumerId::kRemoteActorLoginCredentialsService:
+      return OAuthConsumer(
+          /*name=*/kRemoteActorLoginCredentialsServiceName,
+          /*scopes=*/{kPassboxCredentialOAuth2Scope});
+    case OAuthConsumerId::kBrowserActuator:
+      return GetOAuthConsumerForBrowserActuator();
+    case OAuthConsumerId::kTabContextContainersService:
+      return OAuthConsumer(
+          /*name=*/oauth_consumer_name::kTabContextContainersServiceName,
+          /*scopes=*/{GaiaConstants::kChromeSyncOAuth2Scope});
+    case OAuthConsumerId::kSiteTokenProvider:
+      return GetOAuthConsumerForSiteTokenProvider();
   }
 }
 

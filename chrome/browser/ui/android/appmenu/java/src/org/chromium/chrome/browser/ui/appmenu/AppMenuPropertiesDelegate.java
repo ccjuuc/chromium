@@ -13,8 +13,9 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.ModelListAdapter;
+import org.chromium.ui.modelutil.PropertyModel;
 
-import java.util.function.Function;
+import java.util.function.BiFunction;
 
 /** App Menu helper that handles hiding and showing menu items based on activity state. */
 @NullMarked
@@ -32,7 +33,7 @@ public interface AppMenuPropertiesDelegate {
      */
     default void registerCustomViewBinders(
             ModelListAdapter modelListAdapter,
-            SparseArray<Function<Context, Integer>> customSizingSuppliers) {}
+            SparseArray<BiFunction<Context, PropertyModel, Integer>> customSizingSuppliers) {}
 
     /**
      * Gets the menu items for app menu.
@@ -44,13 +45,14 @@ public interface AppMenuPropertiesDelegate {
     /**
      * Gets a bundle of (optional) extra data associated with the provided MenuItem.
      *
-     * @param itemId The id of the menu item for which to return the Bundle.
+     * @param model The {@link PropertyModel} of the menu item for which to return the Bundle.
      * @return A {@link Bundle} for the provided MenuItem containing extra data, if any.
      */
-    @Nullable Bundle getBundleForMenuItem(int itemId);
+    @Nullable Bundle getBundleForMenuItem(PropertyModel model);
 
     /**
      * Notify the delegate that the load state changed.
+     *
      * @param isLoading Whether the page is currently loading.
      */
     void loadingStateChanged(boolean isLoading);
@@ -75,4 +77,7 @@ public interface AppMenuPropertiesDelegate {
 
     /** Returns whether the menu icon is positioned at the start. */
     boolean isMenuIconAtStart();
+
+    /** Returns whether the icon row is showing. */
+    boolean shouldShowIconRow();
 }

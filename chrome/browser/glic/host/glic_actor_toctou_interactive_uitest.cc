@@ -6,6 +6,7 @@
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/glic/host/glic_actor_interactive_uitest_common.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "components/optimization_guide/proto/features/actions_data.pb.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -214,8 +215,7 @@ IN_PROC_BROWSER_TEST_F(GlicActorToctouUiTest, TimeOfUseCheckOnTextNode) {
       base::BindLambdaForTesting([this, &checkbox_label_bounds]() {
         apc::Actions action =
             actor::MakeClick(tab_handle_, checkbox_label_bounds.CenterPoint(),
-                             ClickAction::LEFT, ClickAction::SINGLE);
-        action.set_task_id(task_id_.value());
+                             ClickAction::LEFT, ClickAction::SINGLE, task_id_);
         return EncodeActionProto(action);
       });
   RunTestSequence(

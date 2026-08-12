@@ -15,9 +15,11 @@
 #include "base/task/cancelable_task_tracker.h"
 #include "chrome/browser/actor/tools/tool.h"
 #include "chrome/browser/actor/tools/tool_callbacks.h"
-#include "chrome/browser/password_manager/actor_login/actor_login_quality_logger.h"
-#include "chrome/browser/password_manager/actor_login/actor_login_service.h"
 #include "chrome/common/actor_webui.mojom-forward.h"
+#include "components/actor/core/shared_types.h"
+#include "components/actor/public/mojom/actor_types.mojom-forward.h"
+#include "components/password_manager/core/browser/actor_login/actor_login_quality_logger.h"
+#include "components/password_manager/core/browser/actor_login/actor_login_service.h"
 #include "components/tabs/public/tab_interface.h"
 
 class GURL;
@@ -35,7 +37,10 @@ class AttemptLoginTool : public Tool {
  public:
   AttemptLoginTool(TaskId task_id,
                    ToolDelegate& tool_delegate,
-                   tabs::TabInterface& tab);
+                   tabs::TabInterface& tab,
+                   std::optional<PageTarget> password_button,
+                   std::optional<PageTarget> sign_in_with_google_button,
+                   bool requires_opening_web_contents);
   ~AttemptLoginTool() override;
 
   // actor::Tool
@@ -57,11 +62,15 @@ class AttemptLoginTool : public Tool {
                      GURL origin,
                      const favicon_base::FaviconImageResult& result);
   void OnAllIconsFetched();
+  void OnAffiliationsUpdated();
   void OnCredentialCachingDone(
       actor_login::Credential selected_credential,
       webui::mojom::UserGrantedPermissionDuration permission_duration);
   void OnCredentialSelected(
       webui::mojom::SelectCredentialDialogResponsePtr response);
+  void SetUserSelectedCredential(
+      actor_login::Credential selected_credential,
+      webui::mojom::UserGrantedPermissionDuration permission_duration);
   void OnAttemptLogin(actor_login::Credential selected_credential,
                       bool should_store_permission,
                       actor_login::LoginStatusResultOrError login_status);
@@ -77,6 +86,9 @@ class AttemptLoginTool : public Tool {
   void MaybeRetryCredentialNeedingFocus();
 
   actor_login::ActorLoginService& GetActorLoginService();
+  actor_login::FrameFillingStartedCallback GetFrameFillingStartedCallback(
+      tabs::TabInterface* tab,
+      const actor_login::Credential& credential);
 
   // Holds the credentials after they are returned from the login service. The
   // credentials are cleared after the login attempt is made.
@@ -102,6 +114,17 @@ class AttemptLoginTool : public Tool {
 
   tabs::TabHandle tab_handle_;
 
+  // Identifies a button to submit (or advance) a password form.
+  std::optional<PageTarget> password_button_;
+  // Identifies a "Sign in with Google" button.
+  std::optional<PageTarget> sign_in_with_google_button_;
+
+  const bool requires_opening_web_contents_;
+
+  // The time where the attempt tool is created, used to calculate the overall
+  // time of the flow until filling and submission time.
+  const base::TimeTicks attempt_login_tool_start_time_;
+
   // Helper class which uploads the model quality log for each filling.
   ActorLoginQualityLogger quality_logger_;
 
@@ -110,6 +133,11 @@ class AttemptLoginTool : public Tool {
   content::GlobalRenderFrameHostToken main_rfh_token_;
 
   ToolCallback invoke_callback_;
+
+  // Track if the affiliations update has finished. This is only relevant on
+  // Android. On other platforms, the update happens on startup.
+  bool affiliations_updated_ = !BUILDFLAG(IS_ANDROID);
+  base::OnceClosure on_affiliations_updated_callback_;
 
   base::WeakPtrFactory<AttemptLoginTool> weak_ptr_factory_{this};
 };

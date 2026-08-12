@@ -12,7 +12,6 @@
 #include "ash/public/cpp/window_properties.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_util.h"
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "ash/wm/coral/coral_test_util.h"
 #include "ash/wm/desks/desks_controller.h"
 #include "ash/wm/desks/desks_test_util.h"
@@ -21,30 +20,33 @@
 #include "ash/wm/overview/birch/birch_chip_button_base.h"
 #include "ash/wm/overview/birch/coral_chip_button.h"
 #include "ash/wm/overview/overview_test_util.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/scoped_observation.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ash/app_restore/app_restore_test_util.h"
 #include "chrome/browser/ash/app_restore/full_restore_app_launch_handler.h"
+#include "chrome/browser/ash/browser_delegate/browser_controller.h"
+#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/birch/birch_test_util.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/test/base/ash/util/ash_test_util.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "chromeos/ash/services/coral/public/mojom/coral_service.mojom.h"
 #include "components/app_restore/restore_data.h"
 #include "content/public/test/browser_test.h"
 #include "gmock/gmock.h"
+#include "ui/aura/test/window_destroyed_waiter.h"
 #include "ui/aura/window.h"
-#include "ui/aura/window_observer.h"
 
 namespace ash {
 namespace {
@@ -87,38 +89,16 @@ aura::Window* GetNativeWindowForSwa(SystemWebAppType swa_type) {
   aura::Window* found_window = nullptr;
   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
       [swa_type, &found_window](BrowserWindowInterface* browser) {
-        if (IsBrowserForSystemWebApp(browser, swa_type)) {
+        if (ash::IsBrowserForSystemWebApp(
+                CHECK_DEREF(ash::BrowserController::GetInstance()->GetDelegate(
+                    browser)),
+                swa_type)) {
           found_window = browser->GetWindow()->GetNativeWindow();
         }
         return !found_window;
       });
   return found_window;
 }
-
-class WindowDestroyedObserver : public aura::WindowObserver {
- public:
-  explicit WindowDestroyedObserver(aura::Window* window) {
-    CHECK(window);
-    window_observation_.Observe(window);
-  }
-
-  void Wait() {
-    if (window_observation_.IsObserving()) {
-      run_loop_.Run();
-    }
-  }
-
-  // aura::WindowObserver:
-  void OnWindowDestroyed(aura::Window* window) override {
-    window_observation_.Reset();
-    run_loop_.Quit();
-  }
-
- private:
-  base::RunLoop run_loop_;
-  base::ScopedObservation<aura::Window, aura::WindowObserver>
-      window_observation_{this};
-};
 
 }  // namespace
 
@@ -149,10 +129,10 @@ class CoralBrowserTest : public InProcessBrowserTest {
 
   void CloseBrowserAndNativeWindowSynchronously(
       BrowserWindowInterface* browser) {
-    WindowDestroyedObserver window_destroyed_observer(
+    aura::test::WindowDestroyedWaiter waiter(
         browser->GetWindow()->GetNativeWindow());
     CloseBrowserSynchronously(browser);
-    window_destroyed_observer.Wait();
+    waiter.Wait();
   }
 
  private:
@@ -189,7 +169,7 @@ IN_PROC_BROWSER_TEST_F(CoralBrowserTest, PRE_PostLoginLaunch) {
 // Launches a browser with the expected tabs when the post login coral chip is
 // clicked.
 IN_PROC_BROWSER_TEST_F(CoralBrowserTest, PostLoginLaunch) {
-  ASSERT_EQ(chrome::GetTotalBrowserCount(), 0u);
+  ASSERT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 0u);
 
   Profile* profile = ProfileManager::GetActiveUserProfile();
 
@@ -212,7 +192,7 @@ IN_PROC_BROWSER_TEST_F(CoralBrowserTest, PostLoginLaunch) {
   // TODO(zxdan): These tabs and apps are currently hardcoded in ash for
   // `switches::kForceBirchFakeCoral`. Update to use a test coral provider
   // instead.
-  ASSERT_EQ(chrome::GetTotalBrowserCount(), 4u);
+  ASSERT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 4u);
   const std::vector<BrowserWindowInterface*> browsers =
       ui_test_utils::FindMatchingBrowsers(
           [](BrowserWindowInterface* browser) { return true; });

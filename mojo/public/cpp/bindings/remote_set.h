@@ -8,9 +8,9 @@
 #include <iterator>
 #include <optional>
 #include <set>
+#include <string_view>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
@@ -140,7 +140,7 @@ class RemoteSetImpl {
   // Similar to the method above, but also specifies a disconnect reason.
   void RemoveWithReason(RemoteSetElementId id,
                         uint32_t custom_reason_code,
-                        const std::string& description) {
+                        std::string_view description) {
     auto it = storage_.find(id);
     if (it == storage_.end()) {
       return;
@@ -151,7 +151,7 @@ class RemoteSetImpl {
   }
 
   // Indicates whether a remote with the given ID is present in the set.
-  bool Contains(RemoteSetElementId id) { return base::Contains(storage_, id); }
+  bool Contains(RemoteSetElementId id) { return storage_.contains(id); }
 
   // Returns an `Interface*` for the given ID, that can be used to issue
   // interface calls.
@@ -184,7 +184,7 @@ class RemoteSetImpl {
 
   void Clear() { storage_.clear(); }
   void ClearWithReason(uint32_t custom_reason_code,
-                       const std::string& description) {
+                       std::string_view description) {
     for (auto& [_, remote] : storage_) {
       remote.ResetWithReason(custom_reason_code, description);
     }

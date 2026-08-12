@@ -3,6 +3,8 @@
 # found in the LICENSE file.
 
 import os
+import re
+import json
 
 # Runs PRESUBMIT.py in py3 mode by git cl presubmit.
 USE_PYTHON3 = True
@@ -10,94 +12,83 @@ USE_PYTHON3 = True
 DEBUG = False
 
 API_FILE = 'chrome/browser/resources/glic/glic_api/glic_api.ts'
+API_GEN_FILE = 'chrome/browser/resources/glic/glic_api/glic_api_generated.ts'
 
 TRIGGERING_FILE_PREFIXES = [
-    'chrome/browser/resources/glic/glic_api/',
-    'chrome/browser/resources/glic/presubmit/',
+    'chrome/browser/resources/glic/',
 ]
 
 
-def CheckApiChangesAreBackwardsCompatible(input_api, output_api, api_file,
-                                          on_upload):
-    """
-    Sets up a temporary directory with a copy of the glic_api.ts before
-    modification, and a tsconfig.json file to build
-    chrome/browser/resources/glic/presubmit/check_api_compatibility.ts.
-    """
+def _GetOldContents(input_api, local_path):
+    for f in input_api.AffectedFiles():
+        if f.LocalPath() == local_path:
+            return '\n'.join(f.OldContents())
+    src_root = input_api.os_path.join(os.getcwd(), '../../../../')
+    full_path = input_api.os_path.join(src_root, local_path)
+    if os.path.exists(full_path):
+        with open(full_path, 'r') as f:
+            return f.read()
+    return ""
+
+
+def CheckApiChanges(input_api, output_api, api_file, on_upload):
     skip_compatibility_check = (
         'Bypass-Glic-Api-Compatibility-Check'
         in input_api.change.GitFootersFromDescription())
-    if skip_compatibility_check:
-        return []
-
     src_root = input_api.os_path.join(os.getcwd(), '../../../../')
-    tmp_dir = input_api.tempfile.TemporaryDirectory()
-    tmp_dir_name = tmp_dir.name
+    api_file_path = input_api.os_path.join(src_root, API_FILE)
 
-    # For debugging, use a temporary directory that won't be deleted.
-    if DEBUG:
-        tmp_dir_name = input_api.tempfile.mkdtemp()
+    api_dir = input_api.os_path.dirname(API_FILE)
+    api_dir_path = input_api.os_path.join(src_root, api_dir)
 
-    # If API_FILE was modified, get its old contents. Otherwise, use its current
-    # contents to confirm any modified checks still pass.
-    if api_file:
-        old_contents = '\n'.join(api_file.OldContents())
-    else:
-        with open(input_api.os_path.join(src_root, API_FILE), 'r') as f:
-            old_contents = f.read()
-    with open(input_api.os_path.join(tmp_dir_name, 'old_glic_api.ts'),
-              'w') as oldfile:
-        oldfile.write(old_contents)
+    filenames = set()
+    if os.path.exists(api_dir_path):
+        for filename in os.listdir(api_dir_path):
+            filenames.add(filename)
 
-    tsconfig_path = input_api.os_path.join(tmp_dir_name, 'tsconfig.json')
-    with open(input_api.os_path.join(tmp_dir_name, 'tsconfig.json'),
-              'w') as tsconfigfile:
-        tsconfigfile.write('''{
-  "extends": "$ROOT/chrome/browser/resources/glic/presubmit/tsconfig.json",
-    "compilerOptions": {
-      "baseUrl": "$ROOT",
-      "paths": {
-        "@tmp/*": ["$TMP/*"]
-      }
-    }
-}
-'''.replace("$TMP",
-            tmp_dir_name.replace('\\',
-                                 '/')).replace('$ROOT',
-                                               src_root.replace('\\', '/')))
+    for f in input_api.AffectedFiles():
+        if f.LocalPath().startswith(api_dir + '/'):
+            filenames.add(input_api.os_path.basename(f.LocalPath()))
 
-    message = (
-        '** Your changelist is a backwards-incompatible Glic API change!\n' +
-        '** Did you add a non-optional field or function, or change the\n' +
-        '** type of an existing field or function?\n' +
-        '** Please fix, or add Bypass-Glic-Api-Compatibility-Check: <reason>' +
-        ' to your changelist description if this is intended. Error:\n  ')
+    old_files_map = {}
+    for filename in filenames:
+        if filename.endswith('.ts') and not filename.endswith('.d.ts'):
+            local_path = input_api.os_path.join(api_dir,
+                                                filename).replace('\\', '/')
+            old_files_map[local_path] = _GetOldContents(input_api, local_path)
+    old_contents = json.dumps(old_files_map)
 
-    tsc_cmd = [
+    cmd = [
         input_api.python_executable,
-        input_api.os_path.join(src_root, 'third_party/node/node.py'),
-        input_api.os_path.join(
-            src_root, 'third_party/node/node_modules/typescript/bin/tsc'),
-        '--noEmit', '-p', tsconfig_path
+        input_api.os_path.join(input_api.PresubmitLocalPath(), 'presubmit',
+                               'check_api.py'),
+        '--old-stdin',
+        '--api-file-path=' + api_file_path,
     ]
+    if skip_compatibility_check:
+        cmd.append('--skip-compatibility-check')
 
-    if DEBUG:
-        print('Running', ' '.join(tsc_cmd))
-
+    presubmit_results = []
     try:
-        input_api.subprocess.check_output(tsc_cmd,
-                                          stderr=input_api.subprocess.STDOUT)
-    except input_api.subprocess.CalledProcessError as e:
-        message = message + e.output.decode('utf-8')
-        if on_upload:
-            return [output_api.PresubmitPromptWarning(message)]
-        else:
-            return [output_api.PresubmitError(message)]
-    return []
+        proc = input_api.subprocess.Popen(cmd,
+                                          stdin=input_api.subprocess.PIPE,
+                                          stdout=input_api.subprocess.PIPE,
+                                          stderr=input_api.subprocess.STDOUT,
+                                          text=True)
+        message, _ = proc.communicate(input=old_contents)
+        if proc.returncode != 0:
+            if on_upload:
+                presubmit_results.append(
+                    output_api.PresubmitPromptWarning(message))
+            else:
+                presubmit_results.append(output_api.PresubmitError(message))
+    except Exception as e:
+        presubmit_results.append(output_api.PresubmitError(str(e)))
+
+    return presubmit_results
 
 
-def CheckApiChangesAreBackwardsCompatibleIfModified(input_api, output_api,
-                                                    on_upload):
+def CheckApiChangesIfModified(input_api, output_api, on_upload):
     os_path = input_api.os_path
     api_file_affected = None
     need_api_check = False
@@ -115,9 +106,8 @@ def CheckApiChangesAreBackwardsCompatibleIfModified(input_api, output_api,
 
     if need_api_check:
         results.extend(
-            CheckApiChangesAreBackwardsCompatible(input_api, output_api,
-                                                  api_file_affected,
-                                                  on_upload))
+            CheckApiChanges(input_api, output_api, api_file_affected,
+                            on_upload))
     return results
 
 
@@ -127,8 +117,7 @@ def _CommonChecks(input_api, output_api, on_upload):
         input_api.sys.path.insert(0, "../../../..")
         from chrome.browser.resources.glic.common_checks import GlicCommonChecks
         return sum([
-            CheckApiChangesAreBackwardsCompatibleIfModified(
-                input_api, output_api, on_upload),
+            CheckApiChangesIfModified(input_api, output_api, on_upload),
             GlicCommonChecks(input_api, output_api),
         ], [])
     finally:

@@ -25,14 +25,16 @@ void FragmentData::RareData::EnsureId() {
 void FragmentData::RareData::SetLayer(PaintLayer* new_layer) {
   if (layer && layer != new_layer) {
     layer->Destroy();
-    sticky_constraints = nullptr;
+    x_sticky_constraints = nullptr;
+    y_sticky_constraints = nullptr;
   }
   layer = new_layer;
 }
 
 void FragmentData::RareData::Trace(Visitor* visitor) const {
   visitor->Trace(layer);
-  visitor->Trace(sticky_constraints);
+  visitor->Trace(x_sticky_constraints);
+  visitor->Trace(y_sticky_constraints);
   visitor->Trace(additional_fragments);
   visitor->Trace(paint_properties);
   visitor->Trace(local_border_box_properties);
@@ -52,12 +54,11 @@ void FragmentData::SetLayer(PaintLayer* layer) {
 
 const TransformPaintPropertyNodeOrAlias& FragmentData::PreTransform() const {
   if (const auto* properties = PaintProperties()) {
-    for (const TransformPaintPropertyNode* transform :
-         properties->AllCSSTransformPropertiesOutsideToInside()) {
-      if (transform) {
-        DCHECK(transform->Parent());
-        return *transform->Parent();
-      }
+    auto range = properties->CSSTransformPropertiesOutsideToInside();
+    if (range.begin() != range.end()) {
+      const auto* transform = *range.begin();
+      DCHECK(transform->Parent());
+      return *transform->Parent();
     }
   }
   return LocalBorderBoxProperties().Transform();
@@ -66,14 +67,21 @@ const TransformPaintPropertyNodeOrAlias& FragmentData::PreTransform() const {
 const TransformPaintPropertyNodeOrAlias& FragmentData::ContentsTransform()
     const {
   if (const auto* properties = PaintProperties()) {
-    if (properties->TransformIsolationNode())
+    if (properties->TransformIsolationNode()) {
       return *properties->TransformIsolationNode();
-    if (properties->ScrollTranslation())
+    }
+    if (properties->ScrollTranslation()) {
       return *properties->ScrollTranslation();
-    if (properties->ReplacedContentTransform())
+    }
+    if (properties->ReplacedContentTransform()) {
       return *properties->ReplacedContentTransform();
-    if (properties->Perspective())
+    }
+    if (properties->Perspective()) {
       return *properties->Perspective();
+    }
+    if (properties->ContentTranslation()) {
+      return *properties->ContentTranslation();
+    }
   }
   return LocalBorderBoxProperties().Transform();
 }

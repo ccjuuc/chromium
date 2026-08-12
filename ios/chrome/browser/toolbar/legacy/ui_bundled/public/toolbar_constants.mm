@@ -52,15 +52,15 @@ const CGFloat kToolbarOmniboxHeight = 50;
 const CGFloat kPrimaryToolbarWithOmniboxHeight = kToolbarOmniboxHeight;
 const CGFloat kSecondaryToolbarWithoutOmniboxHeight = 44;
 const CGFloat kNonDynamicToolbarHeight = 14;
-const CGFloat kToolbarHeightFullscreen = 20;
+const CGFloat kLegacyToolbarHeightFullscreen = 20;
 const CGFloat kNonDynamicToolbarHeightFullscreen = 3;
 
-NSString* const kToolbarToolsMenuButtonIdentifier =
-    @"kToolbarToolsMenuButtonIdentifier";
+NSString* const kLegacyToolbarToolsMenuButtonIdentifier =
+    @"kLegacyToolbarToolsMenuButtonIdentifier";
 NSString* const kToolbarStackButtonIdentifier =
     @"kToolbarStackButtonIdentifier";
-NSString* const kToolbarShareButtonIdentifier =
-    @"kToolbarShareButtonIdentifier";
+NSString* const kLegacyToolbarShareButtonIdentifier =
+    @"kLegacyToolbarShareButtonIdentifier";
 NSString* const kToolbarNewTabButtonIdentifier =
     @"kToolbarNewTabButtonIdentifier";
 

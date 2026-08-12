@@ -13,6 +13,9 @@ CryptData::CryptData()
   Method=CRYPT_NONE;
   KDF3CachePos=0;
   KDF5CachePos=0;
+#if defined(CHROMIUM_UNRAR)
+  KDFCacheMisses=0;
+#endif
   memset(CRCTab,0,sizeof(CRCTab));
 }
 
@@ -55,7 +58,10 @@ bool CryptData::SetCryptKeys(bool Encrypt,CRYPT_METHOD Method,
   wchar PwdW[MAXPASSWORD];
   Password->Get(PwdW,ASIZE(PwdW));
 
-  if (wcslen(PwdW)>=MAXPASSWORD_RAR)
+  // Display this warning only when encrypting. Users complained that
+  // it is distracting when decrypting. It still can be useful when encrypting,
+  // so users do not waste time to excessively long passwords.
+  if (Encrypt && wcslen(PwdW)>=MAXPASSWORD_RAR)
     uiMsg(UIERROR_TRUNCPSW,MAXPASSWORD_RAR-1);
 
   PwdW[Min(MAXPASSWORD_RAR,MAXPASSWORD)-1]=0; // For compatibility with existing archives.
@@ -80,7 +86,7 @@ bool CryptData::SetCryptKeys(bool Encrypt,CRYPT_METHOD Method,
       break;
 #endif
     case CRYPT_RAR30:
-      SetKey30(Encrypt,Password,PwdW,Salt);
+      Success=SetKey30(Encrypt,Password,PwdW,Salt);
       break;
     case CRYPT_RAR50:
       Success=SetKey50(Encrypt,Password,PwdW,Salt,InitV,Lg2Cnt,HashKey,PswCheck);

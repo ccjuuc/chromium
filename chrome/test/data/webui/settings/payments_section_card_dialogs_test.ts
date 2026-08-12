@@ -42,7 +42,7 @@ suite('PaymentsSectionCardDialogs', function() {
    */
   function createCreditCardDialogWithPrefs(
       creditCardItem: chrome.autofillPrivate.CreditCardEntry,
-      prefsValues: any): SettingsCreditCardEditDialogElement {
+      prefsValues: unknown): SettingsCreditCardEditDialogElement {
     const dialog = document.createElement('settings-credit-card-edit-dialog');
     dialog.creditCard = creditCardItem;
     dialog.prefs = {autofill: prefsValues};
@@ -99,7 +99,7 @@ suite('PaymentsSectionCardDialogs', function() {
     ]);
   });
 
-  test('verifyExpiredCreditCardYear', function() {
+  test('verifyExpiredCreditCardYear', async function() {
     const creditCard = createCreditCardEntry();
 
     // 2015 is over unless time goes wobbly.
@@ -108,24 +108,21 @@ suite('PaymentsSectionCardDialogs', function() {
 
     const creditCardDialog = createCreditCardDialog(creditCard);
 
-    return whenAttributeIs(creditCardDialog.$.dialog, 'open', '')
-        .then(function() {
-          const now = new Date();
-          const maxYear = now.getFullYear() + 19;
-          const yearInput =
-              creditCardDialog.shadowRoot!.querySelector<HTMLSelectElement>(
-                  '#year');
-          const yearOptions = yearInput!.options;
+    await whenAttributeIs(creditCardDialog.$.dialog, 'open', '');
+    const now = new Date();
+    const maxYear = now.getFullYear() + 19;
+    const yearInput =
+        creditCardDialog.shadowRoot!.querySelector<HTMLSelectElement>('#year');
+    const yearOptions = yearInput!.options;
 
-          assertEquals('2015', yearOptions[0]!.textContent.trim());
-          assertEquals(
-              maxYear.toString(),
-              yearOptions[yearOptions.length - 1]!.textContent.trim());
-          assertEquals(creditCard.expirationYear, yearInput!.value);
-        });
+    assertEquals('2015', yearOptions[0]!.textContent.trim());
+    assertEquals(
+        maxYear.toString(),
+        yearOptions[yearOptions.length - 1]!.textContent.trim());
+    assertEquals(creditCard.expirationYear, yearInput!.value);
   });
 
-  test('verifyVeryFutureCreditCardYear', function() {
+  test('verifyVeryFutureCreditCardYear', async function() {
     const creditCard = createCreditCardEntry();
 
     // Expiring 25 years from now is unusual.
@@ -135,23 +132,20 @@ suite('PaymentsSectionCardDialogs', function() {
 
     const creditCardDialog = createCreditCardDialog(creditCard);
 
-    return whenAttributeIs(creditCardDialog.$.dialog, 'open', '')
-        .then(function() {
-          const yearInput =
-              creditCardDialog.shadowRoot!.querySelector<HTMLSelectElement>(
-                  '#year');
-          const yearOptions = yearInput!.options;
+    await whenAttributeIs(creditCardDialog.$.dialog, 'open', '');
+    const yearInput =
+        creditCardDialog.shadowRoot!.querySelector<HTMLSelectElement>('#year');
+    const yearOptions = yearInput!.options;
 
-          assertEquals(
-              now.getFullYear().toString(), yearOptions[0]!.textContent.trim());
-          assertEquals(
-              farFutureYear.toString(),
-              yearOptions[yearOptions.length - 1]!.textContent.trim());
-          assertEquals(creditCard.expirationYear, yearInput!.value);
-        });
+    assertEquals(
+        now.getFullYear().toString(), yearOptions[0]!.textContent.trim());
+    assertEquals(
+        farFutureYear.toString(),
+        yearOptions[yearOptions.length - 1]!.textContent.trim());
+    assertEquals(creditCard.expirationYear, yearInput!.value);
   });
 
-  test('verifyVeryNormalCreditCardYear', function() {
+  test('verifyVeryNormalCreditCardYear', async function() {
     const creditCard = createCreditCardEntry();
 
     // Expiring 2 years from now is not unusual.
@@ -162,20 +156,17 @@ suite('PaymentsSectionCardDialogs', function() {
 
     const creditCardDialog = createCreditCardDialog(creditCard);
 
-    return whenAttributeIs(creditCardDialog.$.dialog, 'open', '')
-        .then(function() {
-          const yearInput =
-              creditCardDialog.shadowRoot!.querySelector<HTMLSelectElement>(
-                  '#year');
-          const yearOptions = yearInput!.options;
+    await whenAttributeIs(creditCardDialog.$.dialog, 'open', '');
+    const yearInput =
+        creditCardDialog.shadowRoot!.querySelector<HTMLSelectElement>('#year');
+    const yearOptions = yearInput!.options;
 
-          assertEquals(
-              now.getFullYear().toString(), yearOptions[0]!.textContent.trim());
-          assertEquals(
-              maxYear.toString(),
-              yearOptions[yearOptions.length - 1]!.textContent.trim());
-          assertEquals(creditCard.expirationYear, yearInput!.value);
-        });
+    assertEquals(
+        now.getFullYear().toString(), yearOptions[0]!.textContent.trim());
+    assertEquals(
+        maxYear.toString(),
+        yearOptions[yearOptions.length - 1]!.textContent.trim());
+    assertEquals(creditCard.expirationYear, yearInput!.value);
   });
 
   test('verifySaveNewCreditCard', async function() {
@@ -423,28 +414,52 @@ suite('PaymentsSectionCardDialogs', function() {
     assertEquals(creditCardDialog.get('nickname_'), creditCard.nickname);
   });
 
-  test('verifyCancelCreditCardEdit', function(done) {
+  test('verifyNicknameCharacterCount', async function() {
+    const creditCard = createCreditCardEntry();
+    const creditCardDialog = createCreditCardDialog(creditCard);
+
+    await whenAttributeIs(creditCardDialog.$.dialog, 'open', '');
+
+    const charCount =
+        creditCardDialog.shadowRoot!.querySelector<HTMLElement>('#charCount');
+    assertTrue(!!charCount);
+    assertTrue(charCount.hidden);
+
+    // It should be visible when nickname is present.
+    const nicknameInput = creditCardDialog.$.nicknameInput;
+    await simulateInput(nicknameInput, 'NickName');
+    assertFalse(charCount.hidden);
+    assertEquals('8/25', charCount.textContent.trim());
+
+    // It should be hidden when nickname is empty.
+    await simulateInput(nicknameInput, '');
+    assertTrue(charCount.hidden);
+  });
+
+  test('verifyCancelCreditCardEdit', async function() {
     const creditCard = createEmptyCreditCardEntry();
     const creditCardDialog = createCreditCardDialog(creditCard);
 
-    whenAttributeIs(creditCardDialog.$.dialog, 'open', '').then(function() {
-      eventToPromise('save-credit-card', creditCardDialog).then(function() {
-        // Fail the test because the save event should not be called
-        // when cancel is clicked.
-        assertTrue(false);
-      });
+    await whenAttributeIs(creditCardDialog.$.dialog, 'open', '');
 
-      eventToPromise('close', creditCardDialog).then(function() {
-        // Test is |done| in a timeout in order to ensure that
-        // 'save-credit-card' is NOT fired after this test.
-        window.setTimeout(done, 100);
-      });
-
-      const cancelButton =
-          creditCardDialog.shadowRoot!.querySelector<CrButtonElement>(
-              '#cancelButton');
-      cancelButton!.click();
+    let saveFired = false;
+    eventToPromise('save-credit-card', creditCardDialog).then(() => {
+      saveFired = true;
     });
+
+    const closePromise = eventToPromise('close', creditCardDialog);
+
+    const cancelButton =
+        creditCardDialog.shadowRoot!.querySelector<CrButtonElement>(
+            '#cancelButton');
+    assertTrue(!!cancelButton);
+    cancelButton.click();
+
+    await closePromise;
+
+    // Wait a bit to ensure 'save-credit-card' is NOT fired.
+    await new Promise(resolve => window.setTimeout(resolve, 100));
+    assertFalse(saveFired);
   });
 
   test('verifyRemoveLocalCreditCardDialogConfirmed', async function() {

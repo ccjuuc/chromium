@@ -39,7 +39,6 @@
 #include "chrome/browser/ui/translate/translate_bubble_test_utils.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
 #include "components/autofill/core/browser/field_types.h"
@@ -105,14 +104,14 @@ ElementExpr GetElementByXpath(const std::string& xpath) {
 
 std::optional<std::vector<std::string>> GetExpectedFormSignatures(
     const base::FilePath& recipe_file_path) {
-  std::optional<base::Value::Dict> recipe =
+  std::optional<base::DictValue> recipe =
       captured_sites_test_utils::ReadRecipeFile(recipe_file_path);
   if (!recipe) {
     VLOG(1) << "Failed to read recipe file: " << recipe_file_path.value();
     return std::nullopt;
   }
 
-  base::Value::List* form_signatures_list =
+  base::ListValue* form_signatures_list =
       recipe.value().FindList("formSignaturesSubmitted");
   if (!form_signatures_list) {
     VLOG(1) << "No expected form signatures in recipe.";
@@ -267,8 +266,8 @@ class AutofillCapturedSitesInteractiveTest
       translate::test_utils::CloseCurrentBubble(browser());
       TryToCloseAllPrompts(web_contents);
 
-      autofill_manager.client().HideAutofillSuggestions(
-          SuggestionHidingReason::kViewDestroyed);
+      autofill_manager.client().HideSuggestions(
+          SuggestionHidingReason::kViewDestroyed, /*product=*/std::nullopt);
 
       testing::AssertionResult suggestions_shown = ShowAutofillSuggestion(
           focus_element_css_selector, iframe_path, frame);
@@ -320,8 +319,8 @@ class AutofillCapturedSitesInteractiveTest
       return true;
     }
 
-    autofill_manager.client().HideAutofillSuggestions(
-        SuggestionHidingReason::kViewDestroyed);
+    autofill_manager.client().HideSuggestions(
+        SuggestionHidingReason::kViewDestroyed, /*product=*/std::nullopt);
     ADD_FAILURE() << "Failed to autofill the form!";
     return false;
   }
@@ -332,12 +331,12 @@ class AutofillCapturedSitesInteractiveTest
   }
 
   bool SetupAutofillProfile() override {
-    AddTestAutofillData(browser()->profile(), profile_controller_->profile(),
+    AddTestAutofillData(browser()->GetProfile(), profile_controller_->profile(),
                         profile_controller_->credit_card());
     // Disable the Password Manager to prevent password bubbles from occurring.
     // The password bubbles could overlap with the Autofill popups, in which
-    // case the Autofill popup would not be shown (crbug.com/1223898).
-    browser()->profile()->GetPrefs()->SetBoolean(
+    // case the Autofill popup would not be shown (crbug.com/40187831).
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         password_manager::prefs::kCredentialsEnableService, false);
     return true;
   }
@@ -371,8 +370,8 @@ class AutofillCapturedSitesInteractiveTest
     form_submission_counter_ =
         std::make_unique<FormSubmissionCounter>(GetWebContents());
 
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
-                                                 false);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
+                                                    false);
   }
 
   void TearDownOnMainThread() override {
@@ -418,7 +417,7 @@ class AutofillCapturedSitesInteractiveTest
                "true"},
           }},
          {features::debug::kAutofillCapturedSiteTestsUseAutofillFlow, {}}},
-        /*disabled_features=*/{features::kAutofillSkipPreFilledFields});
+        /*disabled_features=*/{});
     command_line->AppendSwitchASCII(
         variations::switches::kVariationsOverrideCountry, "us");
     AutofillUiTest::SetUpCommandLine(command_line);
@@ -590,7 +589,7 @@ IN_PROC_BROWSER_TEST_P(AutofillCapturedSitesInteractiveTest, Recipe) {
 
 // This test is called with a dynamic list and will be empty during the Password
 // run instance, so adding GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST a la
-// crbug/1192206
+// crbug.com/40174793
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(
     AutofillCapturedSitesInteractiveTest);
 INSTANTIATE_TEST_SUITE_P(
@@ -675,7 +674,7 @@ IN_PROC_BROWSER_TEST_P(AutofillCapturedSitesRefresh, Recipe) {
 
 // This test is called with a dynamic list and will be empty during the Password
 // run instance, so adding GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST a la
-// crbug/1192206
+// crbug.com/40174793
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(AutofillCapturedSitesRefresh);
 INSTANTIATE_TEST_SUITE_P(
     All,

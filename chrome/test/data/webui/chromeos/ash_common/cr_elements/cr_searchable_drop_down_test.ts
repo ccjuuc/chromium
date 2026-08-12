@@ -347,10 +347,10 @@ suite('cr-searchable-drop-down', function() {
     const input = dropDown.shadowRoot!.querySelector('cr-input')!;
 
     dropDown.readonly = true;
-    assertTrue(!!input.readonly);
+    assertTrue(input.readonly);
 
     dropDown.readonly = false;
-    assertFalse(!!input.readonly);
+    assertFalse(input.readonly);
   });
 
   // When a user types in the dropdown but does not choose a valid option, the
@@ -403,5 +403,16 @@ suite('cr-searchable-drop-down', function() {
     getList()[0]!.click();
 
     assertEquals('rat', dropDown.value);
+  });
+
+  // The autofocus attribute is passed through to the inner cr-input.
+  test('autofocus attribute', function() {
+    const input = dropDown.shadowRoot!.querySelector('cr-input')!;
+
+    dropDown.autofocus = true;
+    assertTrue(input.autofocus);
+
+    dropDown.autofocus = false;
+    assertFalse(input.autofocus);
   });
 });

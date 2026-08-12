@@ -4,10 +4,8 @@
 
 import type {DismissModuleElementEvent, DismissModuleInstanceEvent, MostRelevantTabResumptionModuleElement} from 'chrome://new-tab-page/lazy_load.js';
 import {mostRelevantTabResumptionDescriptor, MostRelevantTabResumptionProxyImpl} from 'chrome://new-tab-page/lazy_load.js';
-import {PageHandlerRemote, ScoredURLUserAction} from 'chrome://new-tab-page/most_relevant_tab_resumption.mojom-webui.js';
-import {$$} from 'chrome://new-tab-page/new_tab_page.js';
-import {DecorationType, FormFactor, VisitSource} from 'chrome://new-tab-page/url_visit_types.mojom-webui.js';
-import type {URLVisit} from 'chrome://new-tab-page/url_visit_types.mojom-webui.js';
+import type {URLVisit} from 'chrome://new-tab-page/new_tab_page.js';
+import {$$, DecorationType, FormFactor, ScoredURLUserAction, TabResumptionPageHandlerRemote as PageHandlerRemote, VisitSource} from 'chrome://new-tab-page/new_tab_page.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import type {MetricsTracker} from 'chrome://webui-test/metrics_test_support.js';
@@ -35,7 +33,7 @@ function createSampleURLVisit(
         formFactor: FormFactor.kDesktop,
         isKnownToSync: false,
         sessionName: 'Test Device',
-        url: {url: 'https://www.foo.com'},
+        url: 'https://www.foo.com',
         urlKey: '',
         title: 'Test Tab Title',
         timestamp: Date.now(),
@@ -57,6 +55,7 @@ suite('NewTabPageModulesMostRelevantTabResumptionModuleTest', () => {
     loadTimeData.overrideValues({
       modulesRedesignedEnabled: true,
       hideDismissModules: false,
+      modulesMostRelevantTabResumptionSeeMoreAcc: 'See more tabs',
     });
   });
 
@@ -71,7 +70,7 @@ suite('NewTabPageModulesMostRelevantTabResumptionModuleTest', () => {
 
   async function initializeModule(urlVisits: URLVisit[]):
       Promise<MostRelevantTabResumptionModuleElement> {
-    handler.setResultFor('getURLVisits', Promise.resolve({urlVisits}));
+    handler.setPromiseResolveFor('getURLVisits', {urlVisits});
     const moduleElement = await mostRelevantTabResumptionDescriptor.initialize(
                               0) as MostRelevantTabResumptionModuleElement;
     document.body.append(moduleElement);
@@ -219,6 +218,8 @@ suite('NewTabPageModulesMostRelevantTabResumptionModuleTest', () => {
           ($$(moduleElement,
               '#seeMoreButtonContainer'))!.querySelector<HTMLElement>('a');
       assertTrue(!!seeMoreButtonElement);
+      assertEquals(
+          'See more tabs', seeMoreButtonElement.getAttribute('aria-label'));
       const waitForUsageEvent = eventToPromise('usage', moduleElement);
       seeMoreButtonElement.removeAttribute('href');
       seeMoreButtonElement.click();

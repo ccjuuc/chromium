@@ -26,11 +26,11 @@
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
-#include "chrome/common/pref_names.h"
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/common/extension_l10n_util.h"
 #endif
 
@@ -46,7 +46,7 @@ extern void InitializeLocalState(
     PrefService* local_state = chrome_feature_list_creator->local_state();
     DCHECK(local_state);
 
-    std::string owner_locale = local_state->GetString(prefs::kOwnerLocale);
+    std::string owner_locale = local_state->GetString(ash::prefs::kOwnerLocale);
     // Ensure that we start with owner's locale.
     if (!owner_locale.empty() &&
         local_state->GetString(language::prefs::kApplicationLocale) !=
@@ -108,7 +108,7 @@ std::string InitResourceBundleAndDetermineLocale(PrefService* local_state,
 #endif  // BUILDFLAG(IS_ANDROID)
   }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   extension_l10n_util::SetProcessLocale(actual_locale);
   extension_l10n_util::SetPreferredLocale(preferred_locale);
 #endif
@@ -127,7 +127,8 @@ std::string LoadLocalState(
   InitializeLocalState(chrome_feature_list_creator);
 
   chrome_feature_list_creator->local_state()->UpdateCommandLinePrefStore(
-      new ChromeCommandLinePrefStore(base::CommandLine::ForCurrentProcess()));
+      base::MakeRefCounted<ChromeCommandLinePrefStore>(
+          base::CommandLine::ForCurrentProcess()));
 
   return InitResourceBundleAndDetermineLocale(
       chrome_feature_list_creator->local_state(), is_running_tests);

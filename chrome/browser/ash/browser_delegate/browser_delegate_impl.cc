@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/browser_delegate/browser_delegate_impl.h"
 
+#include "ash/wm/window_pin_util.h"
 #include "base/check_deref.h"
 #include "base/check_is_test.h"
 #include "chrome/app/chrome_command_ids.h"
@@ -12,15 +13,21 @@
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_command_controller.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/browser_init_state.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/unload_controller.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/web_app_launch_utils.h"
+#include "chrome/browser/ui/window_metadata/window_metadata_controller.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
 #include "components/tab_groups/tab_group_id.h"
@@ -34,21 +41,21 @@ BrowserDelegateImpl::BrowserDelegateImpl(Browser* browser)
 
 BrowserDelegateImpl::~BrowserDelegateImpl() = default;
 
-Browser& BrowserDelegateImpl::GetBrowser() const {
+BrowserWindowInterface& BrowserDelegateImpl::GetBrowser() const {
   return browser_.get();
 }
 
 BrowserType BrowserDelegateImpl::GetType() const {
-  return FromInternalBrowserType(browser_->type());
+  return FromInternalBrowserType(browser_->GetType());
 }
 
 SessionID BrowserDelegateImpl::GetSessionID() const {
-  return browser_->session_id();
+  return browser_->GetSessionID();
 }
 
 const AccountId& BrowserDelegateImpl::GetAccountId() const {
-  const AccountId* id =
-      ash::AnnotatedAccountId::Get(browser_->profile()->GetOriginalProfile());
+  const AccountId* id = ash::AnnotatedAccountId::Get(
+      browser_->GetProfile()->GetOriginalProfile());
   if (id) {
     CHECK(id->is_valid());
   } else {
@@ -58,11 +65,21 @@ const AccountId& BrowserDelegateImpl::GetAccountId() const {
 }
 
 bool BrowserDelegateImpl::IsOffTheRecord() const {
-  return browser_->profile()->IsOffTheRecord();
+  return browser_->GetProfile()->IsOffTheRecord();
+}
+
+bool BrowserDelegateImpl::IsCreatedByStartupCreator() const {
+  return BrowserInitState::From(&*browser_)->creation_source() ==
+         Browser::CreationSource::kStartupCreator;
+}
+
+bool BrowserDelegateImpl::IsCreatedBySessionRestoreForStartupUrls() const {
+  return BrowserInitState::From(&*browser_)->creation_source() ==
+         Browser::CreationSource::kLastAndUrlsStartupPref;
 }
 
 gfx::Rect BrowserDelegateImpl::GetBounds() const {
-  return browser_->window()->GetBounds();
+  return browser_->GetWindow()->GetBounds();
 }
 
 content::WebContents* BrowserDelegateImpl::GetActiveWebContents() const {
@@ -76,6 +93,11 @@ size_t BrowserDelegateImpl::GetWebContentsCount() const {
 content::WebContents* BrowserDelegateImpl::GetWebContentsAt(
     size_t index) const {
   return browser_->tab_strip_model()->GetWebContentsAt(index);
+}
+
+tabs::TabIteratorRange BrowserDelegateImpl::GetTabIterator() const {
+  TabStripModel* tab_strip_model = browser_->tab_strip_model();
+  return {tab_strip_model->begin(), tab_strip_model->end()};
 }
 
 content::WebContents* BrowserDelegateImpl::GetInspectedWebContents() const {
@@ -92,63 +114,76 @@ content::WebContents* BrowserDelegateImpl::GetInspectedWebContents() const {
 }
 
 ui::BaseWindow* BrowserDelegateImpl::GetWindow() const {
-  return browser_->window();
+  return browser_->GetWindow();
 }
 
 aura::Window* BrowserDelegateImpl::GetNativeWindow() const {
-  return browser_->window()->GetNativeWindow();
+  return browser_->GetWindow()->GetNativeWindow();
 }
 
 std::optional<webapps::AppId> BrowserDelegateImpl::GetAppId() const {
   // The implementation of `GetAppIdFromApplicationName()` isn't specific to
   // WebApps, although the function resides in web_app_helpers.cc|h.
-  std::string app_id =
-      web_app::GetAppIdFromApplicationName(browser_->app_name());
+  std::string app_id = web_app::GetAppIdFromApplicationName(
+      BrowserInitState::From(&*browser_)->create_params().app_name);
   return app_id.empty() ? std::nullopt : std::optional<webapps::AppId>(app_id);
+}
+
+std::optional<std::string> BrowserDelegateImpl::GetUserDefinedWindowTitle()
+    const {
+  const std::string& title =
+      CHECK_DEREF(WindowMetadataController::From(&*browser_)).user_title();
+  return title.empty() ? std::nullopt : std::optional<std::string>(title);
 }
 
 bool BrowserDelegateImpl::IsWebApp() const {
   return web_app::AppBrowserController::IsWebApp(&*browser_);
 }
 
+const SystemWebAppDelegate* BrowserDelegateImpl::GetSWADelegate() const {
+  return web_app::GetSystemWebAppDelegate(&*browser_);
+}
+
 bool BrowserDelegateImpl::IsAttemptingToClose() const {
-  return browser_->IsAttemptingToCloseBrowser();
+  auto* unload_controller = UnloadController::From(&*browser_);
+  return unload_controller ? unload_controller->is_attempting_to_close_browser()
+                           : IsClosing();
 }
 
 bool BrowserDelegateImpl::IsClosing() const {
-  return browser_->is_delete_scheduled();
+  return browser_->IsDeleteScheduled();
 }
 
 bool BrowserDelegateImpl::IsActive() const {
-  return browser_->window()->IsActive();
+  return browser_->GetWindow()->IsActive();
 }
 
 bool BrowserDelegateImpl::IsMinimized() const {
-  return browser_->window()->IsMinimized();
+  return browser_->GetWindow()->IsMinimized();
 }
 
 bool BrowserDelegateImpl::IsVisible() const {
-  return browser_->window()->IsVisible();
+  return browser_->GetWindow()->IsVisible();
 }
 
 void BrowserDelegateImpl::Show() {
-  browser_->window()->Show();
+  browser_->GetWindow()->Show();
 }
 
 void BrowserDelegateImpl::ShowInactive() {
-  browser_->window()->ShowInactive();
+  browser_->GetWindow()->ShowInactive();
 }
 
 void BrowserDelegateImpl::Activate() {
-  browser_->window()->Activate();
+  browser_->GetWindow()->Activate();
 }
 
 void BrowserDelegateImpl::Minimize() {
-  browser_->window()->Minimize();
+  browser_->GetWindow()->Minimize();
 }
 
 void BrowserDelegateImpl::Close() {
-  browser_->window()->Close();
+  browser_->GetWindow()->Close();
 }
 
 void BrowserDelegateImpl::AddTab(const GURL& url,
@@ -166,19 +201,27 @@ void BrowserDelegateImpl::CloseWebContentsAt(size_t index,
                  : TabCloseTypes::CLOSE_NONE);
 }
 
-content::WebContents* BrowserDelegateImpl::NavigateWebApp(const GURL& url,
-                                                          TabPinning pin_tab) {
+content::WebContents* BrowserDelegateImpl::NavigateWebApp(
+    const GURL& url,
+    TabPinning pin_tab,
+    std::optional<webapps::LaunchParams> launch_params) {
   CHECK(GetType() == BrowserType::kApp || GetType() == BrowserType::kAppPopup)
       << "Unexpected browser type " << static_cast<int>(GetType()) << "("
-      << browser_->type() << ")";
+      << browser_->GetType() << ")";
 
   NavigateParams nav_params(&browser_.get(), url,
                             ui::PAGE_TRANSITION_AUTO_BOOKMARK);
   if (pin_tab == TabPinning::kYes) {
     nav_params.tabstrip_add_types |= AddTabTypes::ADD_PINNED;
   }
+  if (launch_params) {
+    nav_params.web_app_navigation_data.emplace();
+    nav_params.web_app_navigation_data->SetLaunchParams(
+        *std::move(launch_params));
+  }
 
-  return web_app::NavigateWebAppUsingParams(nav_params);
+  Navigate(&nav_params);
+  return nav_params.navigated_or_inserted_contents;
 }
 
 void BrowserDelegateImpl::CreateTabGroup(
@@ -221,7 +264,48 @@ bool BrowserDelegateImpl::CreateWebAppFromActiveWebContents() {
 }
 
 void BrowserDelegateImpl::ResetLocationBar() {
-  browser_->window()->GetLocationBar()->Revert();
+  BrowserWindow::FromBrowser(&*browser_)->GetLocationBar()->Revert();
+}
+
+void BrowserDelegateImpl::EnterLockedFullscreen(bool focus_toolbar) {
+  CHECK(!IsLockedFullscreen());
+  ash::PinWindow(GetNativeWindow(), /*trusted=*/true);
+  chrome::BrowserCommandController::From(&browser_.get())
+      ->LockedFullscreenStateChanged();
+  if (focus_toolbar) {
+    BrowserWindow::FromBrowser(&*browser_)->FocusToolbar();
+  }
+}
+
+void BrowserDelegateImpl::LeaveLockedFullscreen() {
+  CHECK(IsLockedFullscreen());
+  ash::UnpinWindow(GetNativeWindow());
+  chrome::BrowserCommandController::From(&browser_.get())
+      ->LockedFullscreenStateChanged();
+}
+
+bool BrowserDelegateImpl::IsLockedFullscreen() const {
+  return ash::GetWindowPinType(GetNativeWindow()) ==
+         chromeos::WindowPinType::kLockedFullscreen;
+}
+
+void BrowserDelegateImpl::SetDevToolsCommandsEnabled(bool enabled) {
+  chrome::BrowserCommandController* const command_controller =
+      chrome::BrowserCommandController::From(&browser_.get());
+  command_controller->UpdateCommandEnabled(IDC_DEV_TOOLS, enabled);
+  command_controller->UpdateCommandEnabled(IDC_DEV_TOOLS_CONSOLE, enabled);
+  command_controller->UpdateCommandEnabled(IDC_DEV_TOOLS_DEVICES, enabled);
+  command_controller->UpdateCommandEnabled(IDC_DEV_TOOLS_INSPECT, enabled);
+  command_controller->UpdateCommandEnabled(IDC_DEV_TOOLS_TOGGLE, enabled);
+}
+
+void BrowserDelegateImpl::SetTabSwitchCommandsEnabled(bool enabled) {
+  chrome::BrowserCommandController::From(&browser_.get())
+      ->SetTabSwitchCommandsEnabled(enabled);
+}
+
+void BrowserDelegateImpl::ActivateWebContentsAt(size_t index) {
+  browser_->tab_strip_model()->ActivateTabAt(static_cast<int>(index));
 }
 
 }  // namespace ash

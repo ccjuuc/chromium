@@ -18,7 +18,6 @@
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
-#include "chrome/browser/browser_features.h"
 #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
 #include "chrome/browser/devtools/devtools_window_testing.h"
 #include "chrome/browser/extensions/api/developer_private/developer_private_functions.h"
@@ -406,7 +405,7 @@ IN_PROC_BROWSER_TEST_F(LazyBackgroundPageApiTest, MAYBE_WaitForView) {
   EXPECT_FALSE(IsBackgroundPageAlive(last_loaded_extension_id()));
 }
 
-// Flaky. https://crbug.com/1006634
+// Flaky. https://crbug.com/40099951
 // Tests that the lazy background page stays alive until all network requests
 // are complete.
 IN_PROC_BROWSER_TEST_F(LazyBackgroundPageApiTest, DISABLED_WaitForRequest) {
@@ -438,7 +437,7 @@ IN_PROC_BROWSER_TEST_F(LazyBackgroundPageApiTest, DISABLED_WaitForRequest) {
 
 // Tests that the lazy background page stays alive until all visible views are
 // closed.
-// http://crbug.com/175778; test fails frequently on OS X
+// http://crbug.com/40963152; test fails frequently on OS X
 // TODO: crbug.com/379109454 - Fix flakiness of the test.
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 #define MAYBE_WaitForNTP DISABLED_WaitForNTP
@@ -456,7 +455,7 @@ IN_PROC_BROWSER_TEST_F(LazyBackgroundPageApiTest, MAYBE_WaitForNTP) {
   content::WebContents* active_tab = GetActiveWebContents();
   EXPECT_TRUE(content::WaitForLoadStop(active_tab));
   // The extension should've opened a new tab to an extension page.
-  EXPECT_EQ(GURL(chrome::kChromeUINewTabURL),
+  EXPECT_EQ(chrome::ChromeUINewTabURLAsGURL(),
             active_tab->GetLastCommittedURL());
 
   // Lazy Background Page still exists, because the extension created a new tab
@@ -475,7 +474,7 @@ IN_PROC_BROWSER_TEST_F(LazyBackgroundPageApiTest, MAYBE_WaitForNTP) {
 
 // Tests that an incognito split mode extension gets 2 lazy background pages,
 // and they each load and unload at the proper times.
-// See crbug.com/248437
+// See crbug.com/41017045
 IN_PROC_BROWSER_TEST_F(LazyBackgroundPageApiTest, DISABLED_IncognitoSplitMode) {
   // Open incognito window.
   Browser* incognito_browser =
@@ -492,7 +491,7 @@ IN_PROC_BROWSER_TEST_F(LazyBackgroundPageApiTest, DISABLED_IncognitoSplitMode) {
 
   // Lazy Background Page doesn't exist yet.
   ProcessManager* pm = ProcessManager::Get(profile());
-  ProcessManager* pmi = ProcessManager::Get(incognito_browser->profile());
+  ProcessManager* pmi = ProcessManager::Get(incognito_browser->GetProfile());
   EXPECT_FALSE(pm->GetBackgroundHostForExtension(last_loaded_extension_id()));
   EXPECT_FALSE(pmi->GetBackgroundHostForExtension(last_loaded_extension_id()));
 
@@ -526,7 +525,7 @@ IN_PROC_BROWSER_TEST_F(LazyBackgroundPageApiTest, DISABLED_IncognitoSplitMode) {
 
     ExtensionHostTestHelper original_host(profile());
     original_host.RestrictToType(mojom::ViewType::kExtensionBackgroundPage);
-    ExtensionHostTestHelper incognito_host(incognito_browser->profile());
+    ExtensionHostTestHelper incognito_host(incognito_browser->GetProfile());
     incognito_host.RestrictToType(mojom::ViewType::kExtensionBackgroundPage);
     BookmarkModel* bookmark_model =
         BookmarkModelFactory::GetForBrowserContext(profile());
@@ -550,7 +549,7 @@ IN_PROC_BROWSER_TEST_F(LazyBackgroundPageApiTest, DISABLED_IncognitoSplitMode) {
 
 // Tests that messages from the content script activate the lazy background
 // page, and keep it alive until all channels are closed.
-// http://crbug.com/1179524; test fails occasionally on OS X 10.15
+// http://crbug.com/40169579; test fails occasionally on OS X 10.15
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_Messaging DISABLED_Messaging
 #else
@@ -639,7 +638,7 @@ IN_PROC_BROWSER_TEST_F(LazyBackgroundPageApiTest, EventDispatchToTab) {
 
 // Tests that the lazy background page will be unloaded if the onSuspend event
 // handler calls an API function such as chrome.storage.local.set().
-// See: http://crbug.com/296834
+// See: http://crbug.com/40333980
 IN_PROC_BROWSER_TEST_F(LazyBackgroundPageApiTest, OnSuspendUseStorageApi) {
   EXPECT_TRUE(LoadExtensionAndWait("on_suspend"));
 }
@@ -649,7 +648,7 @@ IN_PROC_BROWSER_TEST_F(LazyBackgroundPageApiTest, OnSuspendUseStorageApi) {
 
 // Ensure that the events page of an extension is properly torn down and the
 // process does not linger around.
-// See https://crbug.com/612668.
+// See https://crbug.com/41254364.
 IN_PROC_BROWSER_TEST_F(LazyBackgroundPageApiTest, EventProcessCleanup) {
   ASSERT_TRUE(LoadExtensionAndWait("event_page_with_web_iframe"));
 
@@ -702,7 +701,7 @@ IN_PROC_BROWSER_TEST_F(LazyBackgroundPageApiTest,
 
 // Tests that an extension can not fetch a file scheme URL from the lazy
 // background page, if it does not have file access.
-// Flaky on various builders: crbug.com/1284362.
+// Flaky on various builders: crbug.com/40814300.
 IN_PROC_BROWSER_TEST_F(LazyBackgroundPageApiTest,
                        DISABLED_FetchFileSchemeURLWithNoFileAccess) {
   ASSERT_TRUE(RunExtensionTest(

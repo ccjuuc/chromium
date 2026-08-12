@@ -35,7 +35,6 @@
 #include "third_party/blink/renderer/platform/fonts/simple_font_data.h"
 #include "third_party/blink/renderer/platform/fonts/text_fragment_paint_info.h"
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/character.h"
 #include "third_party/blink/renderer/platform/text/text_run.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
@@ -192,15 +191,20 @@ void GetTextInterceptsInternal(const ShapeResultBloberizer::BlobBuffer& blobs,
 }  // anonymous namespace
 
 void Font::GetTextIntercepts(const TextFragmentPaintInfo& text_info,
+                             InkSkipCJKHandling ink_skip_cjk_handling,
                              const cc::PaintFlags& flags,
                              const std::tuple<float, float>& bounds,
                              Vector<TextIntercept>& intercepts) const {
   if (ShouldSkipDrawing())
     return;
 
+  ShapeResultBloberizer::Type intercept_type =
+      ink_skip_cjk_handling == InkSkipCJKHandling::kIncludeCJK
+          ? ShapeResultBloberizer::Type::kTextInterceptsAll
+          : ShapeResultBloberizer::Type::kTextIntercepts;
   ShapeResultBloberizer::FillGlyphsNG bloberizer(
       GetFontDescription(), text_info.text, text_info.from, text_info.to,
-      text_info.shape_result, ShapeResultBloberizer::Type::kTextIntercepts);
+      text_info.shape_result, intercept_type);
 
   GetTextInterceptsInternal(bloberizer.Blobs(), flags, bounds, intercepts);
 }
@@ -209,8 +213,8 @@ base::span<const FontFeatureRange> Font::GetFontFeatures() const {
   return EnsureFontFallbackList()->GetFontFeatures(font_description_);
 }
 
-bool Font::HasNonInitialFontFeatures() const {
-  return EnsureFontFallbackList()->HasNonInitialFontFeatures(font_description_);
+bool Font::HasSimpleFontFeatures() const {
+  return EnsureFontFallbackList()->HasSimpleFontFeatures(font_description_);
 }
 
 bool Font::CanShapeWordByWord() const {
@@ -252,31 +256,41 @@ GlyphData Font::GetEmphasisMarkGlyphData(const AtomicString& mark) const {
       .EmphasisMarkGlyphData(font_description_);
 }
 
-int Font::EmphasisMarkAscent(const AtomicString& mark) const {
+LayoutUnit Font::EmphasisMarkAscent(const AtomicString& mark) const {
   const auto mark_glyph_data = GetEmphasisMarkGlyphData(mark);
   const SimpleFontData* mark_font_data = mark_glyph_data.font_data;
   if (!mark_font_data)
-    return 0;
+    return LayoutUnit();
 
-  return mark_font_data->GetFontMetrics().Ascent();
+  if (RuntimeEnabledFeatures::TextEmphasisAsRubyEnabled()) {
+    return mark_font_data->NormalizedTypoAscent();
+  }
+  return mark_font_data->GetFontMetrics().FixedAscent();
 }
 
-int Font::EmphasisMarkDescent(const AtomicString& mark) const {
+LayoutUnit Font::EmphasisMarkDescent(const AtomicString& mark) const {
   const auto mark_glyph_data = GetEmphasisMarkGlyphData(mark);
   const SimpleFontData* mark_font_data = mark_glyph_data.font_data;
   if (!mark_font_data)
-    return 0;
+    return LayoutUnit();
 
-  return mark_font_data->GetFontMetrics().Descent();
+  if (RuntimeEnabledFeatures::TextEmphasisAsRubyEnabled()) {
+    return mark_font_data->NormalizedTypoDescent();
+  }
+  return mark_font_data->GetFontMetrics().FixedDescent();
 }
 
-int Font::EmphasisMarkHeight(const AtomicString& mark) const {
+LayoutUnit Font::EmphasisMarkHeight(const AtomicString& mark) const {
   const auto mark_glyph_data = GetEmphasisMarkGlyphData(mark);
   const SimpleFontData* mark_font_data = mark_glyph_data.font_data;
   if (!mark_font_data)
-    return 0;
+    return LayoutUnit();
 
-  return mark_font_data->GetFontMetrics().Height();
+  if (RuntimeEnabledFeatures::TextEmphasisAsRubyEnabled()) {
+    return mark_font_data->NormalizedTypoAscentAndDescent().LineHeight();
+  }
+  return LayoutUnit::FromFloatRound(
+      mark_font_data->GetFontMetrics().FloatHeight());
 }
 
 float Font::TextAutoSpaceInlineSize() const {
@@ -310,8 +324,7 @@ float Font::TabWidth(const SimpleFontData* font_data,
     return GetFontDescription().LetterSpacing();
 
   float modulized_position = fmodf(position, base_tab_width);
-  if (RuntimeEnabledFeatures::TabWidthNegativePositionEnabled() &&
-      modulized_position < 0) [[unlikely]] {
+  if (modulized_position < 0) [[unlikely]] {
     modulized_position += base_tab_width;
   }
 
@@ -334,8 +347,7 @@ LayoutUnit Font::TabWidth(const TabSize& tab_size, LayoutUnit position) const {
   }
 
   float modulized_position = fmodf(position, base_tab_width);
-  if (RuntimeEnabledFeatures::TabWidthNegativePositionEnabled() &&
-      modulized_position < 0) [[unlikely]] {
+  if (modulized_position < 0) [[unlikely]] {
     modulized_position += base_tab_width;
   }
 

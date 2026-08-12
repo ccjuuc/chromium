@@ -2,13 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import type {File} from 'chrome://new-tab-page/file_suggestion.mojom-webui.js';
-import {RecommendationType} from 'chrome://new-tab-page/file_suggestion.mojom-webui.js';
 import type {DisableModuleEvent, DismissModuleInstanceEvent, MicrosoftFilesModuleElement} from 'chrome://new-tab-page/lazy_load.js';
 import {microsoftFilesModuleDescriptor, MicrosoftFilesProxyImpl, ParentTrustedDocumentProxy} from 'chrome://new-tab-page/lazy_load.js';
-import {MicrosoftFilesPageHandlerRemote} from 'chrome://new-tab-page/microsoft_files.mojom-webui.js';
-import {$$} from 'chrome://new-tab-page/new_tab_page.js';
-import {MicrosoftAuthUntrustedDocumentRemote} from 'chrome://new-tab-page/ntp_microsoft_auth_shared_ui.mojom-webui.js';
+import type {File} from 'chrome://new-tab-page/new_tab_page.js';
+import {$$, MicrosoftAuthUntrustedDocumentRemote, MicrosoftFilesPageHandlerRemote, RecommendationType} from 'chrome://new-tab-page/new_tab_page.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {fakeMetricsPrivate} from 'chrome://webui-test/metrics_test_support.js';
@@ -44,8 +41,8 @@ suite('MicrosoftFilesModule', () => {
         justificationText: 'Trending in your organization',
         title: `Document ${i}`,
         id: `${i}`,
-        iconUrl: {url: 'https://foo.com/'},
-        itemUrl: {url: `https://foo.com/${i}`},
+        iconUrl: 'https://foo.com/',
+        itemUrl: `https://foo.com/${i}`,
         recommendationType: RecommendationType.kUsed,
       });
     }
@@ -54,7 +51,7 @@ suite('MicrosoftFilesModule', () => {
 
   test('clicking the info button opens the ntp info dialog box', async () => {
     // Arrange.
-    handler.setResultFor('getFiles', Promise.resolve({files: createFiles(6)}));
+    handler.setPromiseResolveFor('getFiles', {files: createFiles(6)});
     const microsoftFilesModule =
         await microsoftFilesModuleDescriptor.initialize(0) as
         MicrosoftFilesModuleElement;
@@ -64,7 +61,7 @@ suite('MicrosoftFilesModule', () => {
     assertFalse(!!$$(microsoftFilesModule, 'ntp-info-dialog'));
 
     // Act.
-    const infoButton = microsoftFilesModule.$.moduleHeaderElementV2.shadowRoot
+    const infoButton = microsoftFilesModule.$.moduleHeader.shadowRoot
                            .querySelector<HTMLElement>('#info');
     assertTrue(!!infoButton);
     infoButton.click();
@@ -76,7 +73,7 @@ suite('MicrosoftFilesModule', () => {
 
   test('clicking the disable button fires a disable module event', async () => {
     // Arrange.
-    handler.setResultFor('getFiles', Promise.resolve({files: createFiles(6)}));
+    handler.setPromiseResolveFor('getFiles', {files: createFiles(6)});
     const microsoftFilesModule =
         await microsoftFilesModuleDescriptor.initialize(0) as
         MicrosoftFilesModuleElement;
@@ -86,9 +83,8 @@ suite('MicrosoftFilesModule', () => {
 
     // Act.
     const whenFired = eventToPromise('disable-module', microsoftFilesModule);
-    const disableButton =
-        microsoftFilesModule.$.moduleHeaderElementV2.shadowRoot
-            .querySelector<HTMLElement>('#disable');
+    const disableButton = microsoftFilesModule.$.moduleHeader.shadowRoot
+                              .querySelector<HTMLElement>('#disable');
     assertTrue(!!disableButton);
     disableButton.click();
 
@@ -101,7 +97,7 @@ suite('MicrosoftFilesModule', () => {
 
   test('clicking the sign out button sends sign out request', async () => {
     // Arrange.
-    handler.setResultFor('getFiles', Promise.resolve({files: createFiles(6)}));
+    handler.setPromiseResolveFor('getFiles', {files: createFiles(6)});
     const microsoftFilesModule =
         await microsoftFilesModuleDescriptor.initialize(0) as
         MicrosoftFilesModuleElement;
@@ -110,9 +106,8 @@ suite('MicrosoftFilesModule', () => {
     await microtasksFinished();
 
     // Act.
-    const signoutButton =
-        microsoftFilesModule.$.moduleHeaderElementV2.shadowRoot
-            .querySelector<HTMLElement>('#signout');
+    const signoutButton = microsoftFilesModule.$.moduleHeader.shadowRoot
+                              .querySelector<HTMLElement>('#signout');
     assertTrue(!!signoutButton);
     signoutButton.click();
 
@@ -122,7 +117,7 @@ suite('MicrosoftFilesModule', () => {
 
   test('creates module', async () => {
     // Set up module.
-    handler.setResultFor('getFiles', Promise.resolve({files: createFiles(6)}));
+    handler.setPromiseResolveFor('getFiles', {files: createFiles(6)});
     const microsoftFilesModule =
         await microsoftFilesModuleDescriptor.initialize(0) as
         MicrosoftFilesModuleElement;
@@ -131,14 +126,14 @@ suite('MicrosoftFilesModule', () => {
     await microtasksFinished();
 
     // Assert.
-    assertTrue(isVisible(microsoftFilesModule.$.moduleHeaderElementV2));
+    assertTrue(isVisible(microsoftFilesModule.$.moduleHeader));
     assertEquals(
-        microsoftFilesModule.$.moduleHeaderElementV2.headerText,
+        microsoftFilesModule.$.moduleHeader.headerText,
         modulesMicrosoftFilesName);
   });
 
   test('module not created when there are no files', async () => {
-    handler.setResultFor('getFiles', Promise.resolve({files: createFiles(0)}));
+    handler.setPromiseResolveFor('getFiles', {files: createFiles(0)});
     const microsoftFilesModule =
         await microsoftFilesModuleDescriptor.initialize(0) as
         MicrosoftFilesModuleElement;
@@ -148,7 +143,7 @@ suite('MicrosoftFilesModule', () => {
 
   test('dismiss and restore module', async () => {
     // Set up module.
-    handler.setResultFor('getFiles', Promise.resolve({files: createFiles(3)}));
+    handler.setPromiseResolveFor('getFiles', {files: createFiles(3)});
     const microsoftFilesModule =
         await microsoftFilesModuleDescriptor.initialize(0) as
         MicrosoftFilesModuleElement;
@@ -159,9 +154,8 @@ suite('MicrosoftFilesModule', () => {
     // Dismiss module.
     const whenFired =
         eventToPromise('dismiss-module-instance', microsoftFilesModule);
-    const dismissButton =
-        microsoftFilesModule.$.moduleHeaderElementV2.shadowRoot
-            .querySelector<HTMLElement>('#dismiss');
+    const dismissButton = microsoftFilesModule.$.moduleHeader.shadowRoot
+                              .querySelector<HTMLElement>('#dismiss');
     assertTrue(!!dismissButton);
     dismissButton.click();
 
@@ -179,8 +173,7 @@ suite('MicrosoftFilesModule', () => {
     const metrics = fakeMetricsPrivate();
     // Set up module.
     const numFiles = 3;
-    handler.setResultFor(
-        'getFiles', Promise.resolve({files: createFiles(numFiles)}));
+    handler.setPromiseResolveFor('getFiles', {files: createFiles(numFiles)});
     const microsoftFilesModule =
         await microsoftFilesModuleDescriptor.initialize(0) as
         MicrosoftFilesModuleElement;

@@ -27,7 +27,6 @@ import {getAppPermissionProvider} from './mojo_interface_provider.js';
 import type {PrivacyHubBrowserProxy} from './privacy_hub_browser_proxy.js';
 import {PrivacyHubBrowserProxyImpl} from './privacy_hub_browser_proxy.js';
 import {getTemplate} from './privacy_hub_camera_subpage.html.js';
-import {CAMERA_SUBPAGE_USER_ACTION_HISTOGRAM_NAME, NUMBER_OF_POSSIBLE_USER_ACTIONS, PrivacyHubSensorSubpageUserAction} from './privacy_hub_metrics_util.js';
 
 /**
  * Whether the app has camera permission defined.
@@ -103,17 +102,17 @@ export class SettingsPrivacyHubCameraSubpage extends
     };
   }
 
-  private appList_: App[];
+  declare private appList_: App[];
   private appPermissionsObserverReceiver_: AppPermissionsObserverReceiver|null;
   private browserProxy_: PrivacyHubBrowserProxy;
-  private cameraAccessStateText_: string;
-  private cameraFallbackMechanismEnabled_: boolean;
-  private cameraSwitchForceDisabled_: boolean;
-  private connectedCameraNames_: string[];
-  private isCameraListEmpty_: boolean;
+  declare private cameraAccessStateText_: string;
+  declare private cameraFallbackMechanismEnabled_: boolean;
+  declare private cameraSwitchForceDisabled_: boolean;
+  declare private connectedCameraNames_: string[];
+  declare private isCameraListEmpty_: boolean;
   private mojoInterfaceProvider_: AppPermissionsHandlerInterface;
-  private shouldDisableCameraToggle_: boolean;
-  private systemApps_: App[];
+  declare private shouldDisableCameraToggle_: boolean;
+  declare private systemApps_: App[];
 
   constructor() {
     super();
@@ -170,7 +169,7 @@ export class SettingsPrivacyHubCameraSubpage extends
   }
 
   private isCameraAllowed_(): boolean {
-    return this.getPref('ash.user.camera_allowed').value;
+    return this.getPref<boolean>('ash.user.camera_allowed').value;
   }
 
   private getSystemServicesPermissionText_(): string {
@@ -265,20 +264,8 @@ export class SettingsPrivacyHubCameraSubpage extends
   }
 
   private onManagePermissionsInChromeRowClick_(): void {
-    chrome.metricsPrivate.recordEnumerationValue(
-        CAMERA_SUBPAGE_USER_ACTION_HISTOGRAM_NAME,
-        PrivacyHubSensorSubpageUserAction.WEBSITE_PERMISSION_LINK_CLICKED,
-        NUMBER_OF_POSSIBLE_USER_ACTIONS);
-
     this.mojoInterfaceProvider_.openBrowserPermissionSettings(
         PermissionType.kCamera);
-  }
-
-  private onCameraToggleClick_(): void {
-    chrome.metricsPrivate.recordEnumerationValue(
-        CAMERA_SUBPAGE_USER_ACTION_HISTOGRAM_NAME,
-        PrivacyHubSensorSubpageUserAction.SYSTEM_ACCESS_CHANGED,
-        NUMBER_OF_POSSIBLE_USER_ACTIONS);
   }
 }
 

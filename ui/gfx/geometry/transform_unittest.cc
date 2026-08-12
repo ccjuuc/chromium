@@ -13,7 +13,6 @@
 #include <optional>
 #include <ostream>
 
-#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/numerics/angle_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -1632,13 +1631,13 @@ double ComputeDecompRecompError(const Transform& transform) {
   DecomposedTransform decomp = *transform.Decompose();
   Transform composed = Transform::Compose(decomp);
 
-  float expected[16];
-  float actual[16];
+  std::array<float, 16> expected;
+  std::array<float, 16> actual;
   transform.GetColMajorF(expected);
   composed.GetColMajorF(actual);
   double sse = 0;
   for (int i = 0; i < 16; i++) {
-    double diff = UNSAFE_TODO(expected[i]) - UNSAFE_TODO(actual[i]);
+    double diff = expected[i] - actual[i];
     sse += diff * diff;
   }
   return sse;
@@ -2022,7 +2021,11 @@ TEST(XFormTest, MakeRotation) {
 }
 
 TEST(XFormTest, ColMajorF) {
-  float data[] = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17};
+  // clang-format off
+  auto data = std::to_array<float>({
+    2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17
+  });
+  // clang-format on
   auto transform = Transform::ColMajorF(data);
 
   EXPECT_ROW0_EQ(2.0, 6.0, 10.0, 14.0, transform);
@@ -2030,10 +2033,9 @@ TEST(XFormTest, ColMajorF) {
   EXPECT_ROW2_EQ(4.0, 8.0, 12.0, 16.0, transform);
   EXPECT_ROW3_EQ(5.0, 9.0, 13.0, 17.0, transform);
 
-  float data1[16];
+  std::array<float, 16> data1;
   transform.GetColMajorF(data1);
-  for (int i = 0; i < 16; i++)
-    UNSAFE_TODO(EXPECT_EQ(data1[i], data[i]));
+  EXPECT_EQ(data1, data);
   EXPECT_EQ(transform, Transform::ColMajorF(data1));
 }
 
@@ -3511,6 +3513,23 @@ TEST(XFormTest, MapRect) {
 
   auto rotate = Transform::Make90degRotation();
   EXPECT_EQ(RectF(-6.5f, 1.25f, 4.f, 3.75f), rotate.MapRect(rect));
+
+  // A scale+translation stored as a full matrix (e.g. from Affine()) must map
+  // identically to the same transform stored as an AxisTransform2d.
+  auto scale_translate = Transform::Affine(2, 0, 0, 4, 3, 7);
+  auto axis = Transform::MakeScale(2, 4);
+  axis.PostTranslate(3, 7);
+  EXPECT_EQ(RectF(5.5f, 17.f, 7.5f, 16.f), axis.MapRect(rect));
+  EXPECT_EQ(RectF(5.5f, 17.f, 7.5f, 16.f), scale_translate.MapRect(rect));
+
+  // A negative scale stored as a full matrix fails the fast path's
+  // non-negative scale check and must fall back to the general path.
+  auto negative_scale_full = Transform::Affine(-1, 0, 0, -2, 0, 0);
+  EXPECT_EQ(RectF(-5.f, -13.f, 3.75f, 8.f), negative_scale_full.MapRect(rect));
+
+  auto rotate_90 = Transform::Make90degRotation();
+  EXPECT_EQ(RectF(-12.f, 2.f, 8.f, 6.f),
+            rotate_90.MapRect(RectF(2.f, 4.f, 6.f, 8.f)));
 }
 
 TEST(XFormTest, MapIntRect) {
@@ -3540,6 +3559,25 @@ TEST(XFormTest, TransformRectReverse) {
 
   auto rotate = Transform::Make90degRotation();
   EXPECT_EQ(RectF(2.5f, -5.f, 4.f, 3.75f), rotate.InverseMapRect(rect));
+
+  // A scale+translation stored as a full matrix must inverse-map identically to
+  // the same transform stored as an AxisTransform2d.
+  auto scale_translate = Transform::Affine(2, 0, 0, 4, 3, 7);
+  auto axis = Transform::MakeScale(2, 4);
+  axis.PostTranslate(3, 7);
+  EXPECT_EQ(RectF(-0.875f, -1.125f, 1.875f, 1.f), axis.InverseMapRect(rect));
+  EXPECT_EQ(RectF(-0.875f, -1.125f, 1.875f, 1.f),
+            scale_translate.InverseMapRect(rect));
+
+  // Same as above: a negative scale stored as a full matrix falls back to the
+  // general path.
+  auto negative_scale_full = Transform::Affine(-1, 0, 0, -2, 0, 0);
+  EXPECT_EQ(RectF(-5.f, -3.25f, 3.75f, 2.f),
+            negative_scale_full.InverseMapRect(rect));
+
+  auto rotate_90 = Transform::Make90degRotation();
+  EXPECT_EQ(RectF(4.f, -8.f, 8.f, 6.f),
+            rotate_90.InverseMapRect(RectF(2.f, 4.f, 6.f, 8.f)));
 }
 
 TEST(XFormTest, InverseMapIntRect) {
@@ -3902,7 +3940,7 @@ TEST(XFormTest, PostConcatAxisTransform2d) {
 }
 
 TEST(XFormTest, ClampOutput) {
-  double entries[][2] = {
+  std::array<std::array<double, 2>, 6> entries = {{
       // The first entry is used to initialize the transform.
       // The second entry is used to initialize the object to be mapped.
       {std::numeric_limits<float>::max(),
@@ -3918,11 +3956,11 @@ TEST(XFormTest, ClampOutput) {
           std::numeric_limits<float>::lowest(),
           -std::numeric_limits<float>::infinity(),
       },
-  };
+  }};
 
-  for (double* entry : entries) {
+  for (const auto& entry : entries) {
     const float mv = entry[0];
-    const float factor = UNSAFE_TODO(entry[1]);
+    const float factor = entry[1];
 
     auto is_valid_point = [&](const PointF& p) -> bool {
       return std::isfinite(p.x()) && std::isfinite(p.y());

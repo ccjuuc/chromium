@@ -4,6 +4,8 @@
 
 #include "chrome/browser/android/preferences/autofill/settings_navigation_helper.h"
 
+#include <utility>
+
 #include "base/android/jni_android.h"
 #include "content/public/browser/web_contents.h"
 
@@ -19,6 +21,33 @@ void ShowAutofillProfileSettings(content::WebContents* web_contents) {
 
 void ShowAutofillCreditCardSettings(content::WebContents* web_contents) {
   Java_SettingsNavigationHelper_showAutofillCreditCardSettings(
+      base::android::AttachCurrentThread(), web_contents->GetJavaWebContents());
+}
+
+void ShowAutofillIdentityDocsSettings(content::WebContents* web_contents) {
+  Java_SettingsNavigationHelper_showAutofillIdentityDocsSettings(
+      base::android::AttachCurrentThread(), web_contents->GetJavaWebContents());
+}
+
+void ShowAutofillTravelSettings(content::WebContents* web_contents) {
+  Java_SettingsNavigationHelper_showAutofillTravelSettings(
+      base::android::AttachCurrentThread(), web_contents->GetJavaWebContents());
+}
+
+void ShowAutofillShoppingSettings(content::WebContents* web_contents) {
+  Java_SettingsNavigationHelper_showAutofillShoppingSettings(
+      base::android::AttachCurrentThread(), web_contents->GetJavaWebContents());
+}
+
+void ShowAutofillPersonalContextSettings(content::WebContents* web_contents,
+                                         AutofillOptionsReferrer referrer) {
+  Java_SettingsNavigationHelper_showAutofillPersonalContextSettings(
+      base::android::AttachCurrentThread(), web_contents->GetJavaWebContents(),
+      std::to_underlying(referrer));
+}
+
+void ShowAutofillSettings(content::WebContents* web_contents) {
+  Java_SettingsNavigationHelper_showAutofillSettings(
       base::android::AttachCurrentThread(), web_contents->GetJavaWebContents());
 }
 

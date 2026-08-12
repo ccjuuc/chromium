@@ -21,6 +21,7 @@ import org.chromium.components.autofill.payments.BankAccount;
 import org.chromium.components.autofill.payments.Ewallet;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerProvider;
+import org.chromium.components.facilitated_payments.core.metrics.FacilitatedPaymentsType;
 import org.chromium.ui.base.WindowAndroid;
 
 import java.util.Arrays;
@@ -38,10 +39,11 @@ public class FacilitatedPaymentsPaymentMethodsViewBridge {
     private FacilitatedPaymentsPaymentMethodsViewBridge(
             Context context,
             BottomSheetController bottomSheetController,
+            WindowAndroid windowAndroid,
             Delegate delegate,
             Profile profile) {
         mComponent = new FacilitatedPaymentsPaymentMethodsCoordinator();
-        mComponent.initialize(context, bottomSheetController, delegate, profile);
+        mComponent.initialize(context, bottomSheetController, windowAndroid, delegate, profile);
     }
 
     @CalledByNative
@@ -68,7 +70,7 @@ public class FacilitatedPaymentsPaymentMethodsViewBridge {
         }
 
         return new FacilitatedPaymentsPaymentMethodsViewBridge(
-                context, bottomSheetController, delegate, profile);
+                context, bottomSheetController, windowAndroid, delegate, profile);
     }
 
     /**
@@ -91,8 +93,8 @@ public class FacilitatedPaymentsPaymentMethodsViewBridge {
      * @param bankAccounts User's bank accounts which passed from facilitated payments client.
      */
     @CalledByNative
-    public void requestShowContent(@JniType("std::vector") Object[] bankAccounts) {
-        mComponent.showSheetForPix((List<BankAccount>) (List<?>) Arrays.asList(bankAccounts));
+    public void requestShowContent(@JniType("std::vector") List<BankAccount> bankAccounts) {
+        mComponent.showSheetForPix(bankAccounts);
     }
 
     /**
@@ -102,13 +104,12 @@ public class FacilitatedPaymentsPaymentMethodsViewBridge {
      * @param apps User's installed apps which passed from facilitated payments client.
      */
     @CalledByNative
+    @SuppressWarnings("unchecked") // `apps` is Object[] from jobjectArray; cast is unavoidable.
     public void requestShowContentForPaymentLink(
-            @JniType("std::vector") Object[] eWallets, Object[] apps) {
-        List<Ewallet> eWalletList =
-                (eWallets == null) ? List.of() : (List<Ewallet>) (List<?>) Arrays.asList(eWallets);
+            @JniType("std::vector") List<Ewallet> eWallets, Object[] apps) {
         List<ResolveInfo> appList =
                 (apps == null) ? List.of() : (List<ResolveInfo>) (List<?>) Arrays.asList(apps);
-        mComponent.showSheetForPaymentLink(eWalletList, appList);
+        mComponent.showSheetForPaymentLink(eWallets, appList);
     }
 
     /**
@@ -141,7 +142,28 @@ public class FacilitatedPaymentsPaymentMethodsViewBridge {
 
     /** Requests to show the Pix account linking prompt in a bottom sheet. */
     @CalledByNative
-    public void showPixAccountLinkingPrompt() {
-        mComponent.showPixAccountLinkingPrompt();
+    public void showPixAccountLinkingPrompt(int strikeCount, String accountEmail) {
+        mComponent.showPixAccountLinkingPrompt(strikeCount, accountEmail);
+    }
+
+    /** Requests to show the Pix account linking success screen in a bottom sheet. */
+    @CalledByNative
+    public void showPixAccountLinkingSuccessScreen() {
+        mComponent.showPixAccountLinkingSuccessScreen();
+    }
+
+    /** Requests to show the account linking prompt in a bottom sheet. */
+    @CalledByNative
+    public void showAccountLinkingPrompt(
+            @FacilitatedPaymentsType int fopType,
+            @JniType("std::u16string") String fopDisplayName,
+            int strikeCount) {
+        mComponent.showAccountLinkingPrompt(fopType, fopDisplayName, strikeCount);
+    }
+
+    /** Requests to show the account linking failure notification. */
+    @CalledByNative
+    public void showAccountLinkingFailureNotification(@FacilitatedPaymentsType int fopType) {
+        mComponent.showAccountLinkingFailureNotification(fopType);
     }
 }

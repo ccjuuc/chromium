@@ -17,29 +17,26 @@ include_rules = [
   "+chrome/browser/app_mode/test",
   "+chrome/browser/ash/app_mode",
   "+chrome/browser/ash/login",
-  "+chrome/browser/ash/ownership",
   "+chrome/browser/ash/policy/core",
   "+chrome/browser/ash/policy/remote_commands",
   "+chrome/browser/ash/policy/test_support",
   "+chrome/browser/ash/settings",
-  "+chrome/browser/browser_process.h",
-  "+chrome/browser/browser_process_platform_part.h",
-  "+chrome/browser/browser_process_platform_part_ash.h",
   "+chrome/browser/extensions/browsertest_util.h",
   "+chrome/browser/extensions/extension_service.h",
   "+chrome/browser/extensions/extension_service_test_base.h",
   "+chrome/browser/extensions/forced_extensions",
   "+chrome/browser/extensions/policy_handlers.h",
-  "+chrome/browser/lifetime",
   "+chrome/browser/policy",
   "+chrome/browser/profiles",
   "+chrome/browser/ui/ash/keyboard",
   "+chrome/browser/ui/ash/login",
-  "+chrome/browser/ui/browser.h",
-  "+chrome/browser/ui/browser_list.h",
-  "+chrome/browser/ui/test",
   "+chrome/browser/ui/webui/ash/login",
   "+chrome/browser/ui/webui/ash/system_web_dialog",
-  "+chrome/common/pref_names.h",
   "+chrome/test/base",
 ]
+
+specific_include_rules = {
+  "kiosk_launch_controller_unittest\\.cc": [
+    "+chrome/browser/browser_process_platform_part.h",
+  ]
+}

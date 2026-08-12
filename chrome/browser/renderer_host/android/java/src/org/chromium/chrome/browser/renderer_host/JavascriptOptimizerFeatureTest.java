@@ -9,6 +9,7 @@ import static org.junit.Assert.assertTrue;
 
 import androidx.test.filters.MediumTest;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.ClassRule;
 import org.junit.Rule;
@@ -16,13 +17,13 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
-import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.AdvancedProtectionTestRule;
 import org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridge;
@@ -40,13 +41,13 @@ import org.chromium.url.GURL;
     ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1",
     "ignore-certificate-errors"
 })
-@DoNotBatch(reason = "Tests manipulate global profile state")
+@Batch(Batch.PER_CLASS)
 public class JavascriptOptimizerFeatureTest {
     private static final String TEST_PAGE = "/chrome/test/data/android/test.html";
 
     @Rule
-    public FreshCtaTransitTestRule mActivityTestRule =
-            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     @ClassRule
     public static AdvancedProtectionTestRule sAdvancedProtectionRule =
@@ -57,9 +58,34 @@ public class JavascriptOptimizerFeatureTest {
 
     @Before
     public void setUp() {
-        mTestServer = mActivityTestRule.getTestServer();
+        // These tests need an HTTPS test server as enabling Advanced
+        // Protection also forces on HTTPS-First Mode.
+        mTestServer =
+                mActivityTestRule
+                        .getEmbeddedTestServerRule()
+                        .setServerUsesHttps(/* useHttps= */ true)
+                        .getServer();
         sAdvancedProtectionRule.setIsAdvancedProtectionRequestedByOs(false);
         mPage = mActivityTestRule.startOnBlankPage();
+    }
+
+    @After
+    public void tearDown() {
+        sAdvancedProtectionRule.setIsAdvancedProtectionRequestedByOs(false);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    Profile profile = mActivityTestRule.getProfile(/* incognito= */ false);
+                    WebsitePreferenceBridge.setDefaultContentSetting(
+                            profile,
+                            ContentSettingsType.JAVASCRIPT_OPTIMIZER,
+                            ContentSetting.DEFAULT);
+                    for (var exception :
+                            new WebsitePreferenceBridge()
+                                    .getContentSettingsExceptions(
+                                            profile, ContentSettingsType.JAVASCRIPT_OPTIMIZER)) {
+                        exception.setContentSetting(profile, ContentSetting.DEFAULT);
+                    }
+                });
     }
 
     private boolean queryJavascriptOptimizersEnabledForActiveWebContents() {
@@ -97,7 +123,7 @@ public class JavascriptOptimizerFeatureTest {
 
     /**
      * Test that specifying an exception in site settings has higher priority than the {@link
-     * OsAdditionalSecurityPermissionProvider}-provided setting.
+     * OsAdditionalSecurityProvider}-provided setting.
      */
     @Test
     @MediumTest
@@ -108,11 +134,11 @@ public class JavascriptOptimizerFeatureTest {
                 () -> {
                     GURL pageOrigin = new GURL(pageUrl.getScheme() + "://" + pageUrl.getHost());
                     Profile profile = mActivityTestRule.getProfile(/* incognito= */ false);
-                    WebsitePreferenceBridge.setContentSettingDefaultScope(
+                    WebsitePreferenceBridge.setContentSettingCustomScope(
                             profile,
                             ContentSettingsType.JAVASCRIPT_OPTIMIZER,
-                            pageOrigin,
-                            pageOrigin,
+                            pageOrigin.getHost(),
+                            "*",
                             ContentSetting.ALLOW);
                 });
 
@@ -172,7 +198,7 @@ public class JavascriptOptimizerFeatureTest {
                     WebsitePreferenceBridge.setContentSettingCustomScope(
                             profile,
                             ContentSettingsType.JAVASCRIPT_OPTIMIZER,
-                            "http://[*.]allowed.test",
+                            "https://[*.]allowed.test",
                             "*",
                             ContentSetting.ALLOW);
                 });

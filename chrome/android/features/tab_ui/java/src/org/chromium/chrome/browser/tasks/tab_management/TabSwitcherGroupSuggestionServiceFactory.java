@@ -9,9 +9,8 @@ import static org.chromium.chrome.browser.tab_ui.TabSwitcherGroupSuggestionServi
 import android.app.Activity;
 
 import org.chromium.base.CallbackUtils;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -20,7 +19,7 @@ import org.chromium.chrome.browser.tab_ui.SuggestionLifecycleObserverHandler;
 import org.chromium.chrome.browser.tab_ui.TabSwitcherGroupSuggestionService;
 import org.chromium.chrome.browser.tab_ui.TabSwitcherGroupSuggestionService.SuggestionLifecycleObserver;
 import org.chromium.chrome.browser.tab_ui.TabSwitcherGroupSuggestionService.SuggestionUiEvent;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
+import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabwindow.WindowId;
 
 import java.util.HashSet;
@@ -33,14 +32,14 @@ public class TabSwitcherGroupSuggestionServiceFactory {
      * Creates a {@link TabSwitcherGroupSuggestionService} instance for the given activity.
      *
      * @param activity The activity to create the service for.
-     * @param currentTabGroupModelFilterSupplier Supplies the current tab group model filter.
+     * @param currentTabModelSupplier Supplies the current tab model.
      * @param profile The profile to use for the service.
      * @param tabListCoordinator Used for highlighting tabs when a suggestion is shown.
      * @param messageService Used for showing a suggestion message.
      */
     public static TabSwitcherGroupSuggestionService build(
             Activity activity,
-            ObservableSupplier<@Nullable TabGroupModelFilter> currentTabGroupModelFilterSupplier,
+            MonotonicObservableSupplier<TabModel> currentTabModelSupplier,
             Profile profile,
             TabListCoordinator tabListCoordinator,
             TabGroupSuggestionMessageService messageService) {
@@ -53,7 +52,7 @@ public class TabSwitcherGroupSuggestionServiceFactory {
                 initObserver(tabListCoordinator, messageService);
 
         return new TabSwitcherGroupSuggestionService(
-                windowId, currentTabGroupModelFilterSupplier, profile, handler);
+                windowId, currentTabModelSupplier, profile, handler);
     }
 
     private static SuggestionLifecycleObserverHandler initObserver(
@@ -86,6 +85,7 @@ public class TabSwitcherGroupSuggestionServiceFactory {
 
                     @Override
                     public void onShowSuggestion(List<@TabId Integer> tabIdsSortedByIndex) {
+                        if (tabIdsSortedByIndex.isEmpty()) return;
                         @TabId
                         int lastTabId = tabIdsSortedByIndex.get(tabIdsSortedByIndex.size() - 1);
                         int lastCardIndex = tabListCoordinator.getTabIndexFromTabId(lastTabId) + 1;

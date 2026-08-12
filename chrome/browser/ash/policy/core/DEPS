@@ -15,6 +15,7 @@ include_rules = [
   # individually. Other dependencies within //chrome are listed on a per-
   # directory basis. See //tools/chromeos/gen_deps.sh for details.
   "+chrome/browser/apps/app_service",
+  "+chrome/browser/ash/app_mode/auto_sleep",
   "+chrome/browser/ash/attestation",
   "+chrome/browser/ash/cert_provisioning",
   "+chrome/browser/ash/extensions",
@@ -48,14 +49,12 @@ include_rules = [
   "+chrome/browser/chromeos/extensions",
   "+chrome/browser/device_identity",
   "+chrome/browser/enterprise/reporting",
-  "+chrome/browser/extensions/crx_installer.h",
   "+chrome/browser/extensions/extension_service.h",
   "+chrome/browser/extensions/external_loader.h",
   "+chrome/browser/extensions/external_provider_impl.h",
   "+chrome/browser/extensions/policy_handlers.h",
   "+chrome/browser/extensions/updater",
   "+chrome/browser/invalidation",
-  "+chrome/browser/lifetime",
   "+chrome/browser/metrics",
   "+chrome/browser/net",
   "+chrome/browser/policy",
@@ -70,8 +69,6 @@ include_rules = [
   "+chrome/common/chrome_paths.h",
   "+chrome/common/chrome_switches.h",
   "+chrome/common/extensions",
-  "+chrome/common/pref_names.h",
-  "+chrome/grit",
 ]
 
 specific_include_rules = {
@@ -82,9 +79,6 @@ specific_include_rules = {
     "+chrome/browser/ui/ash/login",
     "+chrome/browser/ui/browser_commands.h",
     "+chrome/browser/ui/browser.h",
-    "+chrome/browser/ui/browser_finder.h",
-    "+chrome/browser/ui/browser_list.h",
-    "+chrome/browser/ui/browser_list_observer.h",
     "+chrome/browser/ui/browser_window.h",
     "+chrome/browser/ui/browser_window/public",
     "+chrome/browser/ui/tabs",
@@ -95,5 +89,8 @@ specific_include_rules = {
   "browser_policy_connector_ash_unittest\\.cc": [
     "+chrome/browser/ash/wallpaper_handlers/test_wallpaper_fetcher_delegate.h",
     "+chrome/browser/ui/ash/wallpaper",
+  ],
+  ".*unittest\\.cc": [
+    "+chrome/browser/global_features.h",
   ],
 }

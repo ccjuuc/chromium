@@ -26,6 +26,7 @@ class SiteInstance;
 namespace content {
 class BrowserContext;
 class RenderProcessHost;
+class SecurityPrincipal;
 class StoragePartitionConfig;
 
 using SiteInstanceId = base::IdType32<class SiteInstanceIdTag>;
@@ -164,24 +165,9 @@ class CONTENT_EXPORT SiteInstance : public base::RefCounted<SiteInstance> {
   // SiteInstances) belongs.
   virtual BrowserContext* GetBrowserContext() = 0;
 
-  // Get the web site that this SiteInstance is rendering pages for. This
-  // includes the scheme and registered domain, but not the port.
-  //
-  // NOTE: In most cases, code should be performing checks against the origin
-  // returned by |RenderFrameHost::GetLastCommittedOrigin()|. In contrast, the
-  // GURL returned by |GetSiteURL()| should not be considered authoritative
-  // because:
-  // - a SiteInstance can host pages from multiple sites if "site per process"
-  //   is not enabled and the SiteInstance isn't hosting pages that require
-  //   process isolation (e.g. WebUI or extensions)
-  // - even with site per process, the site URL is not an origin: while often
-  //   derived from the origin, it only contains the scheme and the eTLD + 1,
-  //   i.e. an origin with the host "deeply.nested.subdomain.example.com"
-  //   corresponds to a site URL with the host "example.com".
-  virtual const GURL& GetSiteURL() const = 0;
-
-  // Get the StoragePartitionConfig used by this SiteInstance.
-  virtual const StoragePartitionConfig& GetStoragePartitionConfig() = 0;
+  // Returns the security principal identifying all documents and workers within
+  // this SiteInstance.
+  virtual const SecurityPrincipal& GetSecurityPrincipal() const = 0;
 
   // Gets a SiteInstance for the given URL that shares the current
   // BrowsingInstance, creating a new SiteInstance if necessary.  This ensures
@@ -207,10 +193,6 @@ class CONTENT_EXPORT SiteInstance : public base::RefCounted<SiteInstance> {
   // process. This only returns true under the "site per process" process model.
   virtual bool RequiresDedicatedProcess() = 0;
 
-  // Returns true if the SiteInstance is for a process-isolated sandboxed
-  // documents only.
-  virtual bool IsSandboxed() = 0;
-
   // Return whether this SiteInstance and the provided |url| are part of the
   // same web site, for the purpose of assigning them to processes accordingly.
   // The decision is currently based on the registered domain of the URLs
@@ -222,9 +204,6 @@ class CONTENT_EXPORT SiteInstance : public base::RefCounted<SiteInstance> {
   // that to be part of the same web site for the purposes for process
   // assignment.
   virtual bool IsSameSiteWithURL(const GURL& url) = 0;
-
-  // Returns true if this object is used for a <webview> guest.
-  virtual bool IsGuest() = 0;
 
   // Returns how this SiteInstance was assigned to a renderer process the most
   // recent time that such an assignment was done. This allows the content

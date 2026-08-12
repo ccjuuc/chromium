@@ -13,6 +13,7 @@
 
 #include "base/base64.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/field_trial.h"
@@ -23,6 +24,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/run_until.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
@@ -30,7 +32,9 @@
 #include "chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.h"
 #include "chrome/browser/autocomplete/document_suggestions_service_factory.h"
 #include "chrome/browser/autocomplete/remote_suggestions_service_factory.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
+#include "chrome/browser/omnibox/geolocation_header_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/signin/chrome_signin_client_factory.h"
 #include "chrome/browser/signin/chrome_signin_client_test_util.h"
@@ -38,8 +42,13 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/browser/permission_settings_info.h"
+#include "components/content_settings/core/browser/permission_settings_registry.h"
+#include "components/content_settings/core/common/content_settings_utils.h"
 #include "components/google/core/common/google_switches.h"
 #include "components/history/core/browser/history_service.h"
+#include "components/history/core/common/pref_names.h"
 #include "components/lens/lens_features.h"
 #include "components/lens/proto/server/lens_overlay_response.pb.h"
 #include "components/omnibox/browser/autocomplete_controller.h"
@@ -49,6 +58,7 @@
 #include "components/omnibox/browser/autocomplete_provider.h"
 #include "components/omnibox/browser/autocomplete_provider_listener.h"
 #include "components/omnibox/browser/base_search_provider.h"
+#include "components/omnibox/browser/geolocation_header_service.h"
 #include "components/omnibox/browser/history_url_provider.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/omnibox/browser/omnibox_triggered_feature_service.h"
@@ -67,6 +77,7 @@
 #include "components/variations/variations_associated_data.h"
 #include "content/public/test/browser_task_environment.h"
 #include "net/http/http_util.h"
+#include "services/device/public/cpp/test/scoped_geolocation_overrider.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "services/network/test/test_url_loader_factory.h"
@@ -76,6 +87,10 @@
 #include "third_party/metrics_proto/omnibox_focus_type.pb.h"
 #include "third_party/omnibox_proto/navigational_intent.pb.h"
 #include "ui/base/device_form_factor.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "components/location/android/mock_location_settings.h"
+#endif
 
 using base::ASCIIToUTF16;
 using testing::_;
@@ -269,7 +284,7 @@ class BaseSearchProviderTest : public testing::Test,
 
   void TearDown() override;
 
-  void RunTest(base::span<const TestData> cases, bool prefer_keyword);
+  void RunTest(base::span<const TestData> cases, bool in_keyword_mode);
 
  protected:
   // Default values used for testing.
@@ -311,8 +326,7 @@ class BaseSearchProviderTest : public testing::Test,
   // Invokes Start on provider_, then runs all pending tasks.
   void QueryForInput(const std::u16string& text,
                      bool prevent_inline_autocomplete,
-                     bool prefer_keyword,
-                     bool keyword_mode);
+                     bool in_keyword_mode);
 
   // Calls QueryForInput(), finishes any suggest query, then if |wyt_match| is
   // not nullptr, sets it to the "what you typed" entry for |text|.
@@ -325,7 +339,7 @@ class BaseSearchProviderTest : public testing::Test,
   // configured.
   void QueryForInputAndWaitForFetcherResponses(
       const std::u16string& text,
-      const bool prefer_keyword,
+      const bool in_keyword_mode,
       std::string_view default_fetcher_response,
       std::string_view keyword_fetcher_response);
 
@@ -381,6 +395,7 @@ void BaseSearchProviderTest::CustomizableSetUp(
   data.SetShortName(u"t");
   data.SetURL(search_url);
   data.suggestions_url = suggestions_url;
+  data.send_x_geo_header = true;
   default_t_url_ = turl_model->Add(std::make_unique<TemplateURL>(data));
   turl_model->SetUserSelectedDefaultSearchProvider(default_t_url_);
   TemplateURLID default_provider_id = default_t_url_->id();
@@ -420,18 +435,18 @@ void BaseSearchProviderTest::TearDown() {
 }
 
 void BaseSearchProviderTest::RunTest(base::span<const TestData> cases,
-                                     bool prefer_keyword) {
+                                     bool in_keyword_mode) {
   ACMatches matches;
   for (const auto& test_case : cases) {
     AutocompleteInput input(std::u16string(test_case.input),
                             metrics::OmniboxEventProto::OTHER,
                             ChromeAutocompleteSchemeClassifier(profile_.get()));
-    input.set_prefer_keyword(prefer_keyword);
+    input.set_in_keyword_mode(in_keyword_mode);
     provider_->Start(input, false);
     matches = provider_->matches();
     SCOPED_TRACE(base::StrCat(
-        {u"Input was: ", test_case.input, u"; prefer_keyword was: ",
-         base::ASCIIToUTF16(base::ToString(prefer_keyword))}));
+        {u"Input was: ", test_case.input, u"; in_keyword_mode was: ",
+         base::ASCIIToUTF16(base::ToString(in_keyword_mode))}));
     EXPECT_EQ(test_case.num_results, matches.size());
     if (matches.size() == test_case.num_results) {
       for (size_t j = 0; j < test_case.num_results; ++j) {
@@ -475,16 +490,11 @@ void BaseSearchProviderTest::QueryForInput(const AutocompleteInput& input) {
 
 void BaseSearchProviderTest::QueryForInput(const std::u16string& text,
                                            bool prevent_inline_autocomplete,
-                                           bool prefer_keyword,
-                                           bool keyword_mode) {
+                                           bool in_keyword_mode) {
   AutocompleteInput input(text, metrics::OmniboxEventProto::OTHER,
                           ChromeAutocompleteSchemeClassifier(profile_.get()));
   input.set_prevent_inline_autocomplete(prevent_inline_autocomplete);
-  input.set_prefer_keyword(prefer_keyword);
-  if (keyword_mode) {
-    input.set_keyword_mode_entry_method(
-        metrics::OmniboxEventProto_KeywordModeEntryMethod_TAB);
-  }
+  input.set_in_keyword_mode(in_keyword_mode);
 
   QueryForInput(input);
 }
@@ -492,7 +502,7 @@ void BaseSearchProviderTest::QueryForInput(const std::u16string& text,
 void BaseSearchProviderTest::QueryForInputAndSetWYTMatch(
     const std::u16string& text,
     AutocompleteMatch* wyt_match) {
-  QueryForInput(text, false, false, false);
+  QueryForInput(text, false, false);
   profile_->BlockUntilHistoryProcessesPendingRequests();
   ASSERT_NO_FATAL_FAILURE(FinishDefaultSuggestQuery(text));
   if (!wyt_match)
@@ -509,11 +519,11 @@ void BaseSearchProviderTest::QueryForInputAndSetWYTMatch(
 
 void BaseSearchProviderTest::QueryForInputAndWaitForFetcherResponses(
     const std::u16string& text,
-    const bool prefer_keyword,
+    const bool in_keyword_mode,
     std::string_view default_fetcher_response,
     std::string_view keyword_fetcher_response) {
   test_url_loader_factory_.ClearResponses();
-  QueryForInput(text, false, prefer_keyword, false);
+  QueryForInput(text, false, in_keyword_mode);
 
   std::string text8;
   ASSERT_TRUE(base::UTF16ToUTF8(text.data(), text.size(), &text8));
@@ -643,7 +653,7 @@ class SearchProviderTest : public BaseSearchProviderTest {
 // created for the default provider suggest results.
 TEST_F(SearchProviderTest, QueryDefaultProvider) {
   const std::u16string term(term1_.substr(0, term1_.size() - 1));
-  QueryForInput(term, false, false, false);
+  QueryForInput(term, false, false);
 
   // Make sure the default providers suggest service was queried.
   std::string expected_url(
@@ -730,7 +740,7 @@ TEST_F(SearchProviderTest, QueryDefaultProvider_LensSearchbox) {
 // middle of processing the query.
 TEST_F(SearchProviderTest, HasQueryWhatYouTypedIfDefaultKeywordChanges) {
   std::u16string query = u"query";
-  QueryForInput(query, false, false, false);
+  QueryForInput(query, false, false);
 
   // Make sure the default provider's suggest service was queried.
   EXPECT_TRUE(test_url_loader_factory_.IsPending("https://defaultturl2/query"));
@@ -764,7 +774,7 @@ TEST_F(SearchProviderTest, HasQueryWhatYouTypedIfDefaultKeywordChanges) {
 
 TEST_F(SearchProviderTest, HonorPreventInlineAutocomplete) {
   const std::u16string term(term1_.substr(0, term1_.size() - 1));
-  QueryForInput(term, true, false, false);
+  QueryForInput(term, true, false);
 
   ASSERT_FALSE(provider_->matches().empty());
   ASSERT_EQ(AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED,
@@ -776,7 +786,7 @@ TEST_F(SearchProviderTest, HonorPreventInlineAutocomplete) {
 // is queried as well as URLFetchers getting created.
 TEST_F(SearchProviderTest, QueryKeywordProvider) {
   const std::u16string term(keyword_term_.substr(0, keyword_term_.size() - 1));
-  QueryForInput(base::StrCat({u"k ", term}), false, false, true);
+  QueryForInput(base::StrCat({u"k ", term}), false, true);
 
   // Make sure the default providers suggest service wasn't queried.
   EXPECT_FALSE(
@@ -857,7 +867,7 @@ TEST_F(SearchProviderTest, SendDataToSuggestAtAppropriateTimes) {
 
   for (const auto& test_case : kCases) {
     SCOPED_TRACE(base::StrCat({"for input=", test_case.input}));
-    QueryForInput(ASCIIToUTF16(test_case.input), false, false, false);
+    QueryForInput(ASCIIToUTF16(test_case.input), false, false);
     // Make sure the default provider's suggest service was or was not queried
     // as appropriate.
     EXPECT_EQ(
@@ -868,7 +878,7 @@ TEST_F(SearchProviderTest, SendDataToSuggestAtAppropriateTimes) {
     // Send the same input with an explicitly invoked keyword.  In all cases,
     // it's okay to send the request to the keyword suggest server.
     QueryForInput(base::StrCat({u"k ", ASCIIToUTF16(test_case.input)}), false,
-                  false, true);
+                  true);
     EXPECT_TRUE(test_url_loader_factory_.IsPending(base::StrCat(
         {"http://suggest_keyword/", base::EscapePath(test_case.input)})));
   }
@@ -2122,7 +2132,7 @@ TEST_F(SearchProviderTest, KeywordFetcherSuggestRelevance) {
     // allow an asynchronous response to change the default match.
     for (size_t j = 0; j < 2; ++j) {
       test_url_loader_factory_.ClearResponses();
-      QueryForInput(u"k a", false, true, true);
+      QueryForInput(u"k a", false, true);
 
       // Make sure the default search engine isn't queried.
       ASSERT_FALSE(
@@ -2376,7 +2386,7 @@ TEST_F(SearchProviderTest, DontInlineAutocompleteAsynchronously) {
         base::StrCat({"synchronous response after the first keystroke after "
                       "input with first_json=",
                       test_case.first_json});
-    QueryForInput(u"ab", false, false, false);
+    QueryForInput(u"ab", false, false);
     CheckMatches(description, test_case.sync_matches, provider_->matches());
 
     // Finally, get the provided JSON response, |second_json|, and verify the
@@ -2426,7 +2436,7 @@ TEST_F(SearchProviderTest, DontCacheCalculatorSuggestions) {
   });
 
   // Note: SearchSuggestionParser::ParseSuggestResults swaps the content and
-  // answer fields on Desktop. See https://crbug.com/1325124#c1.
+  // answer fields on Desktop. See https://crbug.com/40225355#comment2.
   // As a result of the field flip, the Calculator answer is only permitted
   // to be the default suggestion on the Desktop.
   if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_DESKTOP)
@@ -2448,7 +2458,7 @@ TEST_F(SearchProviderTest, DontCacheCalculatorSuggestions) {
         base::StrCat({"synchronous response after the first keystroke after "
                       "input with json=",
                       test_case.json});
-    QueryForInput(u"1+23", false, false, false);
+    QueryForInput(u"1+23", false, false);
     CheckMatches(description, test_case.sync_matches, provider_->matches());
   }
 }
@@ -2984,7 +2994,7 @@ TEST_F(SearchProviderTest, NavigationInline) {
 
   for (const auto& test_case : kCases) {
     // First test regular mode.
-    QueryForInput(ASCIIToUTF16(test_case.input), false, false, false);
+    QueryForInput(ASCIIToUTF16(test_case.input), false, false);
     SearchSuggestionParser::NavigationResult result(
         ChromeAutocompleteSchemeClassifier(profile_.get()), GURL(test_case.url),
         AutocompleteMatchType::NAVSUGGEST,
@@ -3001,7 +3011,7 @@ TEST_F(SearchProviderTest, NavigationInline) {
               match.allowed_to_be_default_match);
 
     // Then test prevent-inline-autocomplete mode.
-    QueryForInput(ASCIIToUTF16(test_case.input), true, false, false);
+    QueryForInput(ASCIIToUTF16(test_case.input), true, false);
     SearchSuggestionParser::NavigationResult result_prevent_inline(
         ChromeAutocompleteSchemeClassifier(profile_.get()), GURL(test_case.url),
         AutocompleteMatchType::NAVSUGGEST,
@@ -3034,7 +3044,7 @@ TEST_F(SearchProviderTest, NavigationInlineSchemeSubstring) {
   result.set_received_after_last_keystroke(false);
 
   // Check the offset and strings when inline autocompletion is allowed.
-  QueryForInput(input, false, false, false);
+  QueryForInput(input, false, false);
   AutocompleteMatch match_inline(provider_->NavigationToMatch(result));
   EXPECT_EQ(url, match_inline.fill_into_edit);
   EXPECT_EQ(url.substr(5), match_inline.inline_autocompletion);
@@ -3042,7 +3052,7 @@ TEST_F(SearchProviderTest, NavigationInlineSchemeSubstring) {
   EXPECT_EQ(url, match_inline.contents);
 
   // Check the same strings when inline autocompletion is prevented.
-  QueryForInput(input, true, false, false);
+  QueryForInput(input, true, false);
   AutocompleteMatch match_prevent(provider_->NavigationToMatch(result));
   EXPECT_EQ(url, match_prevent.fill_into_edit);
   EXPECT_FALSE(match_prevent.allowed_to_be_default_match);
@@ -3052,7 +3062,7 @@ TEST_F(SearchProviderTest, NavigationInlineSchemeSubstring) {
 // Verifies that input "h" matches navsuggest "http://www.[h]ttp.com/http" and
 // "http://www." is trimmed.
 TEST_F(SearchProviderTest, NavigationInlineDomainClassify) {
-  QueryForInput(u"h", false, false, false);
+  QueryForInput(u"h", false, false);
   SearchSuggestionParser::NavigationResult result(
       ChromeAutocompleteSchemeClassifier(profile_.get()),
       GURL("http://www.http.com/http"), AutocompleteMatchType::NAVSUGGEST,
@@ -3080,7 +3090,7 @@ TEST_F(SearchProviderTest, NavigationInlineDomainClassify) {
 // the input from being a perfect prefix of the suggest text; e.g., the input
 // 'moon.com', matches 'http://[moon.com]/moon' and the 2nd 'moon' is unmatched.
 TEST_F(SearchProviderTest, NavigationPrefixClassify) {
-  QueryForInput(u"moon", false, false, false);
+  QueryForInput(u"moon", false, false);
   SearchSuggestionParser::NavigationResult result(
       ChromeAutocompleteSchemeClassifier(profile_.get()),
       GURL("http://moon.com/moon"), AutocompleteMatchType::NAVSUGGEST,
@@ -3102,7 +3112,7 @@ TEST_F(SearchProviderTest, NavigationPrefixClassify) {
 
 // Verifies navsuggests prohibit mid-word matches; e.g., 'f[acebook].com'.
 TEST_F(SearchProviderTest, NavigationMidWordClassify) {
-  QueryForInput(u"acebook", false, false, false);
+  QueryForInput(u"acebook", false, false);
   SearchSuggestionParser::NavigationResult result(
       ChromeAutocompleteSchemeClassifier(profile_.get()),
       GURL("http://www.facebook.com"), AutocompleteMatchType::NAVSUGGEST,
@@ -3121,7 +3131,7 @@ TEST_F(SearchProviderTest, NavigationMidWordClassify) {
 // Verifies navsuggests break user and suggest texts on words;
 // e.g., the input 'duck', matches 'yellow-animals.com/[duck]'
 TEST_F(SearchProviderTest, NavigationWordBreakClassify) {
-  QueryForInput(u"duck", false, false, false);
+  QueryForInput(u"duck", false, false);
   SearchSuggestionParser::NavigationResult result(
       ChromeAutocompleteSchemeClassifier(profile_.get()),
       GURL("http://www.yellow-animals.com/duck"),
@@ -3153,7 +3163,7 @@ TEST_F(SearchProviderTest, DoTrimHttpScheme) {
       std::u16string(), std::string(), false,
       /*navigational_intent=*/omnibox::NAV_INTENT_NONE, 0, false, input);
 
-  QueryForInput(input, false, false, false);
+  QueryForInput(input, false, false);
   AutocompleteMatch match_inline(provider_->NavigationToMatch(result));
   EXPECT_EQ(u"facebook.com", match_inline.contents);
 }
@@ -3170,7 +3180,7 @@ TEST_F(SearchProviderTest, DontTrimHttpSchemeIfInputHasScheme) {
       std::u16string(), std::string(), false,
       /*navigational_intent=*/omnibox::NAV_INTENT_NONE, 0, false, input);
 
-  QueryForInput(input, false, false, false);
+  QueryForInput(input, false, false);
   AutocompleteMatch match_inline(provider_->NavigationToMatch(result));
   EXPECT_EQ(u"http://facebook.com", match_inline.contents);
 }
@@ -3187,7 +3197,7 @@ TEST_F(SearchProviderTest, DontTrimHttpsSchemeIfInputHasScheme) {
       std::u16string(), std::string(), false,
       /*navigational_intent=*/omnibox::NAV_INTENT_NONE, 0, false, input);
 
-  QueryForInput(input, false, false, false);
+  QueryForInput(input, false, false);
   AutocompleteMatch match_inline(provider_->NavigationToMatch(result));
   EXPECT_EQ(u"https://facebook.com", match_inline.contents);
 }
@@ -3203,7 +3213,7 @@ TEST_F(SearchProviderTest, DoTrimHttpsScheme) {
       std::u16string(), std::string(), false,
       /*navigational_intent=*/omnibox::NAV_INTENT_NONE, 0, false, input);
 
-  QueryForInput(input, false, false, false);
+  QueryForInput(input, false, false);
   AutocompleteMatch match_inline(provider_->NavigationToMatch(result));
   EXPECT_EQ(u"facebook.com", match_inline.contents);
 }
@@ -3351,7 +3361,7 @@ TEST_F(SearchProviderTest, PrefetchMetadataParsing) {
 
   struct {
     const std::string_view input_text;
-    bool prefer_keyword_provider_results;
+    bool in_keyword_mode_provider_results;
     const std::string_view default_provider_response_json;
     const std::string_view keyword_provider_response_json;
     const std::array<Match, 5> matches;
@@ -3431,9 +3441,9 @@ TEST_F(SearchProviderTest, PrefetchMetadataParsing) {
   for (const auto& test_case : kCases) {
     QueryForInputAndWaitForFetcherResponses(
         ASCIIToUTF16(test_case.input_text),
-        test_case.prefer_keyword_provider_results,
+        test_case.in_keyword_mode_provider_results,
         test_case.default_provider_response_json,
-        test_case.prefer_keyword_provider_results
+        test_case.in_keyword_mode_provider_results
             ? test_case.keyword_provider_response_json
             : std::string_view());
 
@@ -3861,7 +3871,7 @@ TEST_F(SearchProviderTest, TestDeleteHistoryQueryMatch) {
   profile_->BlockUntilHistoryProcessesPendingRequests();
 
   AutocompleteMatch games;
-  QueryForInput(u"fla", false, false, false);
+  QueryForInput(u"fla", false, false);
   profile_->BlockUntilHistoryProcessesPendingRequests();
   ASSERT_NO_FATAL_FAILURE(FinishDefaultSuggestQuery(u"fla"));
   ASSERT_TRUE(FindMatchWithContents(u"flash games", &games));
@@ -3875,10 +3885,36 @@ TEST_F(SearchProviderTest, TestDeleteHistoryQueryMatch) {
 
   // Check that the match is gone.
   test_url_loader_factory_.ClearResponses();
-  QueryForInput(u"fla", false, false, false);
+  QueryForInput(u"fla", false, false);
   profile_->BlockUntilHistoryProcessesPendingRequests();
   ASSERT_NO_FATAL_FAILURE(FinishDefaultSuggestQuery(u"fla"));
   EXPECT_FALSE(FindMatchWithContents(u"flash games", &games));
+}
+
+TEST_F(SearchProviderTest, TestHistoryMatchDeletablePolicy) {
+  AddSearchToHistory(default_t_url_, u"flash games", 1);
+  profile_->BlockUntilHistoryProcessesPendingRequests();
+
+  AutocompleteMatch games;
+
+  // By default, the match should be deletable.
+  QueryForInput(u"fla", false, false);
+  profile_->BlockUntilHistoryProcessesPendingRequests();
+  ASSERT_NO_FATAL_FAILURE(FinishDefaultSuggestQuery(u"fla"));
+  ASSERT_TRUE(FindMatchWithContents(u"flash games", &games));
+  EXPECT_TRUE(games.deletable);
+
+  // Disable deleting browser history policy.
+  profile_->GetPrefs()->SetBoolean(prefs::kAllowDeletingBrowserHistory, false);
+
+  // The match should no longer be deletable.
+  test_url_loader_factory_.ClearResponses();
+  ClearAllResults();
+  QueryForInput(u"fla", false, false);
+  profile_->BlockUntilHistoryProcessesPendingRequests();
+  ASSERT_NO_FATAL_FAILURE(FinishDefaultSuggestQuery(u"fla"));
+  ASSERT_TRUE(FindMatchWithContents(u"flash games", &games));
+  EXPECT_FALSE(games.deletable);
 }
 
 // Verifies that duplicates are preserved in AddMatchToMap().
@@ -3926,7 +3962,7 @@ TEST_F(SearchProviderTest, SuggestQueryUsesToken) {
   turl_model->SetUserSelectedDefaultSearchProvider(default_t_url_);
 
   const std::u16string term(term1_.substr(0, term1_.size() - 1));
-  QueryForInput(term, false, false, false);
+  QueryForInput(term, false, false);
 
   // And the URL matches what we expected.
   TemplateURLRef::SearchTermsArgs search_terms_args(term);
@@ -3979,7 +4015,7 @@ TEST_F(SearchProviderTest, AnswersCache) {
       /*navigational_intent=*/omnibox::NAV_INTENT_NONE,
       /*relevance=*/1200, /*relevance_from_server=*/false,
       /*input_text=*/query);
-  QueryForInput(u"weather l", false, false, false);
+  QueryForInput(u"weather l", false, false);
   provider_->transformed_default_history_results_.push_back(suggest_result);
   answer = provider_->FindAnswersPrefetchData();
   EXPECT_EQ(u"weather los angeles", answer.full_query_text);
@@ -4041,7 +4077,7 @@ TEST_F(SearchProviderTest, DuplicateCardAnswer) {
 }
 
 TEST_F(SearchProviderTest, CopyAnswerToVerbatim) {
-  QueryForInput(u"weather los angeles ", false, false, false);
+  QueryForInput(u"weather los angeles ", false, false);
 
   AutocompleteMatch match;
   match.answer_type = omnibox::ANSWER_TYPE_WEATHER;
@@ -4059,10 +4095,58 @@ TEST_F(SearchProviderTest, CopyAnswerToVerbatim) {
   EXPECT_TRUE(provider_->matches()[0].answer_template);
 }
 
+TEST_F(SearchProviderTest, VerbatimAimSuggestion) {
+  // With an AIM tool mode, the verbatim match should have the sparkle icon.
+  {
+    AutocompleteInput input(u"query",
+                            metrics::OmniboxEventProto::NTP_COMPOSEBOX,
+                            ChromeAutocompleteSchemeClassifier(profile_.get()));
+    omnibox::InputState input_state;
+    input_state.active_tool = omnibox::ToolMode::TOOL_MODE_DEEP_SEARCH;
+    input.set_input_state(input_state);
+    QueryForInput(input);
+
+    AutocompleteMatch verbatim_match;
+    EXPECT_TRUE(FindMatchWithContents(u"query", &verbatim_match));
+    ASSERT_TRUE(verbatim_match.suggest_template.has_value());
+    EXPECT_EQ(verbatim_match.suggest_template->type_icon(),
+              omnibox::SuggestTemplateInfo_IconType_SEARCH_LOOP_WITH_SPARKLE);
+  }
+
+  ClearAllResults();
+  {
+    AutocompleteInput input(u"query",
+                            metrics::OmniboxEventProto::NTP_COMPOSEBOX,
+                            ChromeAutocompleteSchemeClassifier(profile_.get()));
+    omnibox::InputState input_state;
+    input_state.active_tool = omnibox::ToolMode::TOOL_MODE_CANVAS;
+    input.set_input_state(input_state);
+    QueryForInput(input);
+
+    AutocompleteMatch verbatim_match;
+    EXPECT_TRUE(FindMatchWithContents(u"query", &verbatim_match));
+    ASSERT_TRUE(verbatim_match.suggest_template.has_value());
+    EXPECT_EQ(verbatim_match.suggest_template->type_icon(),
+              omnibox::SuggestTemplateInfo_IconType_SEARCH_LOOP_WITH_SPARKLE);
+  }
+
+  // Without an AIM tool mode, the verbatim match should not have the sparkle
+  // icon.
+  ClearAllResults();
+  {
+    AutocompleteInput input(u"query", metrics::OmniboxEventProto::OTHER,
+                            ChromeAutocompleteSchemeClassifier(profile_.get()));
+    QueryForInput(input);
+
+    AutocompleteMatch verbatim_match;
+    EXPECT_TRUE(FindMatchWithContents(u"query", &verbatim_match));
+    EXPECT_FALSE(verbatim_match.suggest_template.has_value());
+  }
+}
+
 TEST_F(SearchProviderTest, DoesNotProvideOnFocus) {
   AutocompleteInput input(u"f", metrics::OmniboxEventProto::OTHER,
                           ChromeAutocompleteSchemeClassifier(profile_.get()));
-  input.set_prefer_keyword(true);
   input.set_focus_type(metrics::OmniboxFocusType::INTERACTION_FOCUS);
   provider_->Start(input, false);
   EXPECT_TRUE(provider_->matches().empty());
@@ -4071,7 +4155,6 @@ TEST_F(SearchProviderTest, DoesNotProvideOnFocus) {
 TEST_F(SearchProviderTest, SendsWarmUpRequestOnFocus) {
   AutocompleteInput input(u"f", metrics::OmniboxEventProto::OTHER,
                           ChromeAutocompleteSchemeClassifier(profile_.get()));
-  input.set_prefer_keyword(true);
   input.set_focus_type(metrics::OmniboxFocusType::INTERACTION_FOCUS);
 
   provider_->Start(input, false);
@@ -4174,27 +4257,17 @@ TEST_F(SearchProviderRequestTest, LensContextualSearchboxSuggestRequest) {
       "https://www.google.com/suggest?q=foo&client=chrome-contextual"));
 }
 
-TEST_F(SearchProviderRequestTest, SendRequestWithAimToolMode) {
+TEST_F(SearchProviderRequestTest, NoRequestWithAimToolMode) {
   // Start a query.
   AutocompleteInput input(u"foo", metrics::OmniboxEventProto::NTP_COMPOSEBOX,
                           ChromeAutocompleteSchemeClassifier(profile_.get()));
-  input.set_aim_tool_mode(
-      omnibox::ChromeAimToolsAndModels::TOOL_MODE_DEEP_SEARCH);
+  omnibox::InputState input_state;
+  input_state.active_tool = omnibox::ToolMode::TOOL_MODE_DEEP_SEARCH;
+  input.set_input_state(input_state);
   input.set_current_url(GURL("https://www.example.com"));
-  provider_->Start(input, false);
+  QueryForInput(input);
 
-  // Make sure the default provider's suggest endpoint was queried with the
-  // expected client and Lens Suggest signals.
-  EXPECT_FALSE(provider_->done());
-  EXPECT_EQ(1, test_url_loader_factory_.NumPending());
-  EXPECT_TRUE(base::EndsWith(
-      test_url_loader_factory_.GetPendingRequest(0)->request.url.spec(),
-      "azm=1", base::CompareCase::SENSITIVE));
-
-  test_url_loader_factory_.AddResponse(
-      test_url_loader_factory_.GetPendingRequest(0)->request.url.spec(),
-      R"(["",[],[],[],{}])");
-  RunTillProviderDone();
+  EXPECT_EQ(0, test_url_loader_factory_.NumPending());
 }
 
 TEST_F(SearchProviderRequestTest, LensContextualSearchboxNoSuggestRequest) {
@@ -4244,7 +4317,7 @@ class SearchProviderInvalidSuggestEndpointTest : public SearchProviderTest {
 
 TEST_F(SearchProviderInvalidSuggestEndpointTest, DoesNotSendSuggestRequest) {
   std::u16string query = u"query";
-  QueryForInput(query, false, false, false);
+  QueryForInput(query, false, false);
 
   // Make sure the default provider's suggest service was not queried.
   EXPECT_FALSE(test_url_loader_factory_.IsPending("http://defaulturl/query"));
@@ -4382,4 +4455,471 @@ TEST_F(SearchProviderCommandLineOverrideTest, CommandLineOverrides) {
   };
 
   RunTest(kCases, false);
+}
+
+class SearchProviderInlineLocationSignalingConfigurableTest
+    : public BaseSearchProviderTest {
+ public:
+  SearchProviderInlineLocationSignalingConfigurableTest() = default;
+
+  void SetupFeaturesAndPriming(const std::string& display_order,
+                               const std::string& wording,
+                               bool site_permission_allowed = false,
+                               bool precise = false) {
+#if BUILDFLAG(IS_ANDROID)
+    GeolocationHeaderServiceFactory::GetInstance()->SetTestingFactory(
+        profile_.get(),
+        base::BindRepeating([](content::BrowserContext* context)
+                                -> std::unique_ptr<KeyedService> {
+          Profile* profile = Profile::FromBrowserContext(context);
+          auto mock_location_settings =
+              std::make_unique<MockLocationSettings>();
+          MockLocationSettings::SetLocationStatus(true, true, true);
+          return std::make_unique<GeolocationHeaderService>(
+              HostContentSettingsMapFactory::GetForProfile(profile),
+              TemplateURLServiceFactory::GetForProfile(profile),
+              std::move(mock_location_settings));
+        }));
+#endif
+    scoped_feature_list_.Reset();
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        {{omnibox::kInlineLocationSignaling,
+          {{"display_order", display_order}, {"wording", wording}}},
+         {omnibox::kPlatformAgnosticXGeo, {}}},
+        {});
+
+    CustomizableSetUp(
+        /* search_url */ "https://defaultturl/{searchTerms}",
+        /* suggestions_url */ "https://defaultturl2/{searchTerms}");
+
+    geolocation_overrider_ =
+        std::make_unique<device::ScopedGeolocationOverrider>(0.0, 0.0);
+
+    auto* geo_service =
+        GeolocationHeaderServiceFactory::GetForProfile(profile_.get());
+    ASSERT_NE(nullptr, geo_service);
+
+    if (site_permission_allowed) {
+      HostContentSettingsMap* settings_map =
+          HostContentSettingsMapFactory::GetForProfile(profile_.get());
+      ContentSettingsType type =
+          content_settings::GeolocationContentSettingsType();
+      const content_settings::PermissionSettingsInfo* info =
+          content_settings::PermissionSettingsRegistry::GetInstance()->Get(
+              type);
+      PermissionSetting allow_setting =
+          info->delegate().ToPermissionSetting(CONTENT_SETTING_ALLOW);
+      settings_map->SetPermissionSettingDefaultScope(
+          GURL("https://defaultturl/"), GURL("https://defaultturl/"), type,
+          allow_setting);
+    }
+
+    auto result = device::mojom::GeopositionResult::NewPosition(
+        device::mojom::Geoposition::New());
+    result->get_position()->latitude = 37.3861;
+    result->get_position()->longitude = -122.0839;
+    result->get_position()->accuracy = precise ? 1.0 : 100.0;
+    result->get_position()->timestamp = base::Time::Now();
+    result->get_position()->is_precise = precise;
+    geolocation_overrider_->UpdateLocation(std::move(result));
+
+    geo_service->PrimeLocation();
+    EXPECT_TRUE(base::test::RunUntil(
+        [&]() { return geo_service->HasCachedLocation(); }));
+  }
+
+ protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
+  std::unique_ptr<device::ScopedGeolocationOverrider> geolocation_overrider_;
+};
+
+// Verifies that when `display_order` parameter is `kDisplayBelow` and wording
+// is `kUseApproximateLocation`, the location sending suggestion is appended
+// after the match.
+TEST_F(SearchProviderInlineLocationSignalingConfigurableTest,
+       DisplayBelow_UseApproximateLocation) {
+  SetupFeaturesAndPriming("DisplayBelow", "UseApproximateLocation");
+
+  QueryForInputAndWaitForFetcherResponses(
+      u"a", false,
+      "[\"a\",[\"location-relevant-suggestion\"],[],[],"
+      "{\"google:suggestsubtypes\":[[457]],"
+      "\"google:suggestrelevance\":[1300]}]",
+      std::string());
+
+  const auto& matches = provider_->matches();
+  ASSERT_EQ(matches.size(), 3u);
+
+  EXPECT_EQ(matches[0].contents, u"a");
+  EXPECT_EQ(matches[1].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[2].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[2].description, u"Use approximate location");
+  EXPECT_NE(matches[2].extra_headers.find("x-geo"),
+            matches[2].extra_headers.end());
+}
+
+// Checks that when `display_order` parameter is `kDisplayBelow` and wording is
+// `kUseLocation`, the suggestion row gets displayed with custom wording below
+// its parent.
+TEST_F(SearchProviderInlineLocationSignalingConfigurableTest,
+       DisplayBelow_UseLocation) {
+  SetupFeaturesAndPriming("DisplayBelow", "UseLocation");
+
+  QueryForInputAndWaitForFetcherResponses(
+      u"a", false,
+      "[\"a\",[\"location-relevant-suggestion\"],[],[],"
+      "{\"google:suggestsubtypes\":[[457]],"
+      "\"google:suggestrelevance\":[1300]}]",
+      std::string());
+
+  const auto& matches = provider_->matches();
+  ASSERT_EQ(matches.size(), 3u);
+
+  EXPECT_EQ(matches[0].contents, u"a");
+  EXPECT_EQ(matches[1].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[2].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[2].description, u"Use location");
+}
+
+// Verifies that when `display_order` is `kDisplayAbove`, the suggestion row is
+// placed preceding the original parent suggested entry.
+TEST_F(SearchProviderInlineLocationSignalingConfigurableTest,
+       DisplayAbove_UseApproximateLocation) {
+  SetupFeaturesAndPriming("DisplayAbove", "UseApproximateLocation");
+
+  QueryForInputAndWaitForFetcherResponses(
+      u"a", false,
+      "[\"a\",[\"location-relevant-suggestion\"],[],[],"
+      "{\"google:suggestsubtypes\":[[457]],"
+      "\"google:suggestrelevance\":[1300]}]",
+      std::string());
+
+  const auto& matches = provider_->matches();
+  ASSERT_EQ(matches.size(), 3u);
+
+  EXPECT_EQ(matches[0].contents, u"a");
+  EXPECT_EQ(matches[1].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[2].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[2].description, u"Use approximate location");
+}
+
+// Tests injecting suggestion when order is Above and wording is Location.
+TEST_F(SearchProviderInlineLocationSignalingConfigurableTest,
+       DisplayAbove_UseLocation) {
+  SetupFeaturesAndPriming("DisplayAbove", "UseLocation");
+
+  QueryForInputAndWaitForFetcherResponses(
+      u"a", false,
+      "[\"a\",[\"location-relevant-suggestion\"],[],[],"
+      "{\"google:suggestsubtypes\":[[457]],"
+      "\"google:suggestrelevance\":[1300]}]",
+      std::string());
+
+  const auto& matches = provider_->matches();
+  ASSERT_EQ(matches.size(), 3u);
+
+  EXPECT_EQ(matches[0].contents, u"a");
+  EXPECT_EQ(matches[1].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[2].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[2].description, u"Use location");
+}
+
+// Tests that a suggest result is ignored if suggest subtypes do not match.
+TEST_F(SearchProviderInlineLocationSignalingConfigurableTest,
+       SubtypeMismatchDoesNotDuplicate) {
+  SetupFeaturesAndPriming("DisplayBelow", "UseLocation");
+
+  QueryForInputAndWaitForFetcherResponses(
+      u"a", false,
+      "[\"a\",[\"location-relevant-suggestion\"],[],[],"
+      "{\"google:suggestsubtypes\":[[100]],"
+      "\"google:suggestrelevance\":[1300]}]",
+      std::string());
+
+  const auto& matches = provider_->matches();
+  ASSERT_EQ(matches.size(), 2u);
+
+  EXPECT_EQ(matches[0].contents, u"a");
+  EXPECT_EQ(matches[1].contents, u"location-relevant-suggestion");
+}
+
+// Tests correct placement logic when display order is set to Above.
+TEST_F(SearchProviderInlineLocationSignalingConfigurableTest,
+       OrderPlacementAbove) {
+  SetupFeaturesAndPriming("DisplayAbove", "UseApproximateLocation");
+
+  QueryForInputAndWaitForFetcherResponses(
+      u"a", false,
+      "[\"a\",[\"location-relevant-suggestion\"],[],[],"
+      "{\"google:suggestsubtypes\":[[457]],"
+      "\"google:suggestrelevance\":[1300]}]",
+      std::string());
+
+  const auto& matches = provider_->matches();
+  ASSERT_EQ(matches.size(), 3u);
+
+  EXPECT_EQ(matches[0].contents, u"a");
+  EXPECT_EQ(matches[1].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[2].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[2].description, u"Use approximate location");
+}
+
+// Tests correct placement logic when display order is set to Below.
+TEST_F(SearchProviderInlineLocationSignalingConfigurableTest,
+       OrderPlacementBelow) {
+  SetupFeaturesAndPriming("DisplayBelow", "UseApproximateLocation");
+
+  QueryForInputAndWaitForFetcherResponses(
+      u"a", false,
+      "[\"a\",[\"location-relevant-suggestion\"],[],[],"
+      "{\"google:suggestsubtypes\":[[457]],"
+      "\"google:suggestrelevance\":[1300]}]",
+      std::string());
+
+  const auto& matches = provider_->matches();
+  ASSERT_EQ(matches.size(), 3u);
+
+  EXPECT_EQ(matches[0].contents, u"a");
+  EXPECT_EQ(matches[1].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[2].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[2].description, u"Use approximate location");
+}
+
+// Tests that duplication is bypassed when location permission has already been
+// granted.
+TEST_F(SearchProviderInlineLocationSignalingConfigurableTest,
+       SkippedWhenSitePermissionAllowed) {
+  SetupFeaturesAndPriming("DisplayBelow", "UseLocation",
+                          /*site_permission_allowed=*/true);
+
+  QueryForInputAndWaitForFetcherResponses(
+      u"a", false,
+      "[\"a\",[\"location-relevant-suggestion\"],[],[],"
+      "{\"google:suggestsubtypes\":[[457]],"
+      "\"google:suggestrelevance\":[1300]}]",
+      std::string());
+
+  const auto& matches = provider_->matches();
+  ASSERT_EQ(matches.size(), 2u);
+
+  EXPECT_EQ(matches[0].contents, u"a");
+  EXPECT_EQ(matches[1].contents, u"location-relevant-suggestion");
+}
+
+// Verifies that suggestions are not copied when transmitting over insecure HTTP
+// connections.
+TEST_F(SearchProviderInlineLocationSignalingConfigurableTest,
+       SkippedOverHttpSchemaConnection) {
+  scoped_feature_list_.Reset();
+  scoped_feature_list_.InitWithFeaturesAndParameters(
+      {{omnibox::kInlineLocationSignaling,
+        {{"display_order", "DisplayBelow"},
+         {"wording", "UseApproximateLocation"}}},
+       {omnibox::kPlatformAgnosticXGeo, {}}},
+      {});
+
+  CustomizableSetUp(
+      /* search_url */ "http://defaultturl/{searchTerms}",
+      /* suggestions_url */ "https://defaultturl2/{searchTerms}");
+
+  geolocation_overrider_ =
+      std::make_unique<device::ScopedGeolocationOverrider>(0.0, 0.0);
+
+  auto* geo_service =
+      GeolocationHeaderServiceFactory::GetForProfile(profile_.get());
+  ASSERT_NE(nullptr, geo_service);
+
+  auto result = device::mojom::GeopositionResult::NewPosition(
+      device::mojom::Geoposition::New());
+  result->get_position()->latitude = 37.3861;
+  result->get_position()->longitude = -122.0839;
+  result->get_position()->accuracy = 100.0;
+  result->get_position()->timestamp = base::Time::Now();
+  result->get_position()->is_precise = false;
+  geolocation_overrider_->UpdateLocation(std::move(result));
+
+  geo_service->PrimeLocation();
+  EXPECT_FALSE(geo_service->HasCachedLocation());
+
+  QueryForInputAndWaitForFetcherResponses(
+      u"a", false,
+      "[\"a\",[\"location-relevant-suggestion\"],[],[],"
+      "{\"google:suggestsubtypes\":[[457]],"
+      "\"google:suggestrelevance\":[1300]}]",
+      std::string());
+
+  const auto& matches = provider_->matches();
+  ASSERT_EQ(matches.size(), 2u);
+
+  EXPECT_EQ(matches[0].contents, u"a");
+  EXPECT_EQ(matches[1].contents, u"location-relevant-suggestion");
+}
+
+// Tests that duplication logic applies exclusively to the first match when
+// multiple are supplied.
+TEST_F(SearchProviderInlineLocationSignalingConfigurableTest,
+       OnlyFirstEligibleSubtypeIsDuplicated) {
+  SetupFeaturesAndPriming("DisplayBelow", "UseApproximateLocation");
+
+  QueryForInputAndWaitForFetcherResponses(
+      u"a", false,
+      "[\"a\",[\"location-relevant-suggestion\", \"other-suggestion\"],[],[],"
+      "{\"google:suggestsubtypes\":[[457],[457]],"
+      "\"google:suggestrelevance\":[1300,1299]}]",
+      std::string());
+
+  const auto& matches = provider_->matches();
+  ASSERT_EQ(matches.size(), 4u);
+
+  EXPECT_EQ(matches[0].contents, u"a");
+  EXPECT_EQ(matches[1].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[2].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[2].description, u"Use approximate location");
+  EXPECT_EQ(matches[3].contents, u"other-suggestion");
+}
+
+// Tests match placement below suggestions list.
+TEST_F(SearchProviderInlineLocationSignalingConfigurableTest,
+       IntermediatePlacementBelow) {
+  SetupFeaturesAndPriming("DisplayBelow", "UseApproximateLocation");
+
+  QueryForInputAndWaitForFetcherResponses(
+      u"a", false,
+      "[\"a\",[\"other-suggestion\", \"location-relevant-suggestion\", "
+      "\"other-suggestion\"],[],[],"
+      "{\"google:suggestsubtypes\":[[],[457],[]],"
+      "\"google:suggestrelevance\":[1300,1299,1298]}]",
+      std::string());
+
+  const auto& matches = provider_->matches();
+  ASSERT_EQ(matches.size(), 4u);
+
+  EXPECT_EQ(matches[0].contents, u"a");
+  EXPECT_EQ(matches[1].contents, u"other-suggestion");
+  EXPECT_EQ(matches[2].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[3].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[3].description, u"Use approximate location");
+}
+
+// Tests match placement above suggestions list.
+TEST_F(SearchProviderInlineLocationSignalingConfigurableTest,
+       IntermediatePlacementAbove) {
+  SetupFeaturesAndPriming("DisplayAbove", "UseApproximateLocation");
+
+  QueryForInputAndWaitForFetcherResponses(
+      u"a", false,
+      "[\"a\",[\"other-suggestion\", \"location-relevant-suggestion\", "
+      "\"other-suggestion\"],[],[],"
+      "{\"google:suggestsubtypes\":[[],[457],[]],"
+      "\"google:suggestrelevance\":[1300,1299,1298]}]",
+      std::string());
+
+  const auto& matches = provider_->matches();
+  ASSERT_EQ(matches.size(), 4u);
+
+  EXPECT_EQ(matches[0].contents, u"a");
+  EXPECT_EQ(matches[1].contents, u"other-suggestion");
+  EXPECT_EQ(matches[2].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[3].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[3].description, u"Use approximate location");
+}
+
+// Tests that match reordering keeps highest priority items visible.
+TEST_F(SearchProviderInlineLocationSignalingConfigurableTest,
+       FirstPlacementAbove) {
+  SetupFeaturesAndPriming("DisplayAbove", "UseApproximateLocation");
+
+  QueryForInputAndWaitForFetcherResponses(
+      u"a", false,
+      "[\"a\",[\"location-relevant-suggestion\", \"other-suggestion\"],[],[],"
+      "{\"google:suggestsubtypes\":[[457],[]],"
+      "\"google:suggestrelevance\":[1300,1299]}]",
+      std::string());
+
+  const auto& matches = provider_->matches();
+  ASSERT_EQ(matches.size(), 4u);
+
+  EXPECT_EQ(matches[0].contents, u"a");
+  EXPECT_EQ(matches[1].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[2].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[2].description, u"Use approximate location");
+  EXPECT_EQ(matches[3].contents, u"other-suggestion");
+}
+
+// Verifies injected location sending suggestions never override verbatim
+// queries at index 0.
+TEST_F(SearchProviderInlineLocationSignalingConfigurableTest,
+       SignalingMatchNeverTakesIndexZero) {
+  SetupFeaturesAndPriming("DisplayAbove", "UseApproximateLocation");
+
+  QueryForInputAndWaitForFetcherResponses(
+      u"query", false,
+      "[\"query\",[\"query\"],[],[],"
+      "{\"google:suggestsubtypes\":[[457]],"
+      "\"google:suggestrelevance\":[1400]}]",
+      std::string());
+
+  const auto& matches = provider_->matches();
+  ASSERT_EQ(matches.size(), 2u);
+
+  EXPECT_EQ(matches[0].contents, u"query");
+  EXPECT_EQ(matches[0].description, u"");
+
+  EXPECT_EQ(matches[1].contents, u"query");
+  EXPECT_EQ(matches[1].description, u"Use approximate location");
+}
+
+// Verifies that when cached location is precise, the description text is
+// "Use precise location", regardless of the wording param being
+// UseApproximateLocation.
+TEST_F(SearchProviderInlineLocationSignalingConfigurableTest,
+       DynamicWordingPreciseWordingApproximateParam) {
+  SetupFeaturesAndPriming("DisplayBelow", "UseApproximateLocation",
+                          /*site_permission_allowed=*/false, /*precise=*/true);
+
+  QueryForInputAndWaitForFetcherResponses(
+      u"a", false,
+      "[\"a\",[\"location-relevant-suggestion\"],[],[],"
+      "{\"google:suggestsubtypes\":[[457]],"
+      "\"google:suggestrelevance\":[1300]}]",
+      std::string());
+
+  const auto& matches = provider_->matches();
+  ASSERT_EQ(matches.size(), 3u);
+
+  EXPECT_EQ(matches[0].contents, u"a");
+  EXPECT_EQ(matches[0].description, u"");
+
+  EXPECT_EQ(matches[1].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[1].description, u"");
+
+  EXPECT_EQ(matches[2].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[2].description, u"Use precise location");
+}
+
+// Verifies that when cached location is precise, the description text is
+// "Use precise location", regardless of the wording param being UseLocation.
+TEST_F(SearchProviderInlineLocationSignalingConfigurableTest,
+       DynamicWordingPreciseWordingUseLocationParam) {
+  SetupFeaturesAndPriming("DisplayBelow", "UseLocation",
+                          /*site_permission_allowed=*/false, /*precise=*/true);
+
+  QueryForInputAndWaitForFetcherResponses(
+      u"a", false,
+      "[\"a\",[\"location-relevant-suggestion\"],[],[],"
+      "{\"google:suggestsubtypes\":[[457]],"
+      "\"google:suggestrelevance\":[1300]}]",
+      std::string());
+
+  const auto& matches = provider_->matches();
+  ASSERT_EQ(matches.size(), 3u);
+
+  EXPECT_EQ(matches[0].contents, u"a");
+  EXPECT_EQ(matches[0].description, u"");
+
+  EXPECT_EQ(matches[1].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[1].description, u"");
+
+  EXPECT_EQ(matches[2].contents, u"location-relevant-suggestion");
+  EXPECT_EQ(matches[2].description, u"Use precise location");
 }

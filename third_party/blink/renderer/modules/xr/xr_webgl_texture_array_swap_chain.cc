@@ -7,7 +7,6 @@
 #include "third_party/blink/renderer/modules/webgl/webgl_framebuffer.h"
 #include "third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h"
 #include "third_party/blink/renderer/modules/webgl/webgl_texture.h"
-#include "third_party/blink/renderer/platform/graphics/accelerated_static_bitmap_image.h"
 
 namespace blink {
 
@@ -15,7 +14,8 @@ namespace {
 
 XRWebGLSwapChain::Descriptor MakeLayerDescriptor(
     XRWebGLSwapChain* wrapped_swap_chain,
-    uint32_t layers) {
+    uint32_t layers,
+    bool clear_on_access) {
   // Copy the wrapped swap chain's descriptor and divide its width by the
   // number of requested layers.
   XRWebGLSwapChain::Descriptor descriptor = wrapped_swap_chain->descriptor();
@@ -23,6 +23,8 @@ XRWebGLSwapChain::Descriptor MakeLayerDescriptor(
   CHECK_EQ(descriptor.width % layers, 0ul);
   descriptor.width /= layers;
   descriptor.layers = layers;
+  descriptor.is_texture_array = true;
+  descriptor.clear_on_access = clear_on_access;
   return descriptor;
 }
 
@@ -30,22 +32,28 @@ XRWebGLSwapChain::Descriptor MakeLayerDescriptor(
 
 XRWebGLTextureArraySwapChain::XRWebGLTextureArraySwapChain(
     XRWebGLSwapChain* wrapped_swap_chain,
-    uint32_t layers)
-    : XRWebGLSwapChain(wrapped_swap_chain->context(),
-                       MakeLayerDescriptor(wrapped_swap_chain, layers),
-                       wrapped_swap_chain->webgl2()),
+    uint32_t layers,
+    bool clear_on_access)
+    : XRWebGLSwapChain(
+          wrapped_swap_chain->context(),
+          MakeLayerDescriptor(wrapped_swap_chain, layers, clear_on_access),
+          wrapped_swap_chain->webgl2()),
       wrapped_swap_chain_(wrapped_swap_chain) {
   CHECK(wrapped_swap_chain_);
   CHECK(webgl2());  // Texture arrays are only available in WebGL 2
 }
 
-XRWebGLTextureArraySwapChain::~XRWebGLTextureArraySwapChain() {
-  if (owned_texture_) {
-    gpu::gles2::GLES2Interface* gl = context()->ContextGL();
-    if (!gl) {
-      return;
-    }
+void XRWebGLTextureArraySwapChain::Dispose() {
+  gpu::gles2::GLES2Interface* gl = context()->ContextGL();
+  if (!gl) {
+    return;
+  }
 
+  if (vao_) {
+    gl->DeleteVertexArraysOES(1, &vao_);
+  }
+
+  if (owned_texture_) {
     gl->DeleteTextures(1, &owned_texture_);
   }
 }
@@ -94,6 +102,12 @@ void XRWebGLTextureArraySwapChain::OnFrameEnd() {
     return;
   }
 
+  // Generate an internal VAO if one hasn't been already to more easily handle
+  // the default vertex state needed for this copy.
+  if (!vao_) {
+    gl->GenVertexArraysOES(1, &vao_);
+  }
+
   // Copy from the layers texture to the side-by-side wrapped texture.
   // Note: This could be done with less state-shifting but a bug on Qualcomm
   // devices prevents copying from non-zero layers of an array textures.
@@ -106,77 +120,24 @@ void XRWebGLTextureArraySwapChain::OnFrameEnd() {
   gl->FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                            wrapped_texture->Object(), 0);
 
-  // It would be more efficient to track this state in the WebGL context and
-  // restore to the tracked values, but this is a temporary solution for an edge
-  // case that should no longer be needed once array SharedImages are available
-  // so in the meantime we'll simply query the values.
-  std::array<GLint, 4> curr_viewport = {0, 0, 0, 0};
-  gl->GetIntegerv(GL_VIEWPORT, curr_viewport.data());
+  {
+    ScopedXRWebGLStateRestorer restorer(context(), GL_TEXTURE_2D_ARRAY);
 
-  const bool depth_test_enabled = gl->IsEnabled(GL_DEPTH_TEST);
-  const bool stencil_test_enabled = gl->IsEnabled(GL_STENCIL_TEST);
-  const bool culling_enabled = gl->IsEnabled(GL_CULL_FACE);
-  const bool blend_enabled = gl->IsEnabled(GL_BLEND);
-  const bool dither_enabled = gl->IsEnabled(GL_DITHER);
+    gl->Viewport(0, 0, wrapped_swap_chain_->descriptor().width,
+                 wrapped_swap_chain_->descriptor().height);
 
-  // Ensure that all possible state that could interfere with the draw is reset.
-  gl->Viewport(0, 0, wrapped_swap_chain_->descriptor().width,
-               wrapped_swap_chain_->descriptor().height);
+    gl->BindVertexArrayOES(vao_);
 
-  gl->Disable(GL_DEPTH_TEST);
-  gl->Disable(GL_STENCIL_TEST);
-  gl->Disable(GL_CULL_FACE);
-  gl->Disable(GL_BLEND);
-  gl->Disable(GL_DITHER);
-  gl->Disable(GL_SCISSOR_TEST);
+    gl->UseProgram(GetCopyProgram());
+    gl->Uniform1i(texture_uniform_, 0);
+    gl->Uniform1f(layer_count_uniform_, descriptor().layers);
 
-  gl->ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-  gl->DepthMask(GL_FALSE);
-  gl->BindVertexArrayOES(vao_);
+    gl->ActiveTexture(GL_TEXTURE0);
+    gl->BindTexture(GL_TEXTURE_2D_ARRAY, source_texture->Object());
 
-  gl->UseProgram(GetCopyProgram());
-  gl->Uniform1i(texture_uniform_, 0);
-  gl->Uniform1f(layer_count_uniform_, descriptor().layers);
-
-  gl->ActiveTexture(GL_TEXTURE0);
-  gl->BindTexture(GL_TEXTURE_2D_ARRAY, source_texture->Object());
-
-  // Draw one quad for each layer.
-  gl->DrawArraysInstancedANGLE(GL_TRIANGLES, 0, 6, descriptor().layers);
-
-  // ClearCurrentTexture resets the framebuffer binding and mask/clear values
-  // prior to returning.
-  ClearCurrentTexture();
-
-  // Restore manually tracked state
-  gl->Viewport(curr_viewport[0], curr_viewport[1], curr_viewport[2],
-               curr_viewport[3]);
-  if (depth_test_enabled) {
-    gl->Enable(GL_DEPTH_TEST);
+    // Draw one quad for each layer.
+    gl->DrawArraysInstancedANGLE(GL_TRIANGLES, 0, 6, descriptor().layers);
   }
-  if (stencil_test_enabled) {
-    gl->Enable(GL_STENCIL_TEST);
-  }
-  if (culling_enabled) {
-    gl->Enable(GL_CULL_FACE);
-  }
-  if (blend_enabled) {
-    gl->Enable(GL_BLEND);
-  }
-  if (dither_enabled) {
-    gl->Enable(GL_DITHER);
-  }
-
-  // WebGLRenderingContextBase inherits from DrawingBuffer::Client, but makes
-  // all the methods private. Downcasting allows us to access them.
-  DrawingBuffer::Client* client =
-      static_cast<DrawingBuffer::Client*>(context());
-  client->DrawingBufferClientRestoreTexture2DArrayBinding();
-  client->DrawingBufferClientRestoreScissorTest();
-
-  context()->RestoreVertexArrayObjectBinding();
-  context()->RestoreProgram();
-  context()->RestoreActiveTexture();
 
   wrapped_swap_chain_->OnFrameEnd();
 
@@ -216,12 +177,12 @@ GLuint XRWebGLTextureArraySwapChain::GetCopyProgram() {
           vec2 pos = quad[gl_VertexID] + vec2(float(gl_InstanceID), 0.0f);
           pos /= vec2(u_layer_count, 1.0f);
           gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
-          v_texcoord = vec3(quad[gl_VertexID], gl_InstanceID);
+          v_texcoord = vec3(quad[gl_VertexID], float(gl_InstanceID));
       }
     )";
 
     const GLchar* vert_shader_data = vert_source.c_str();
-    const GLint vert_shader_length = vert_source.length();
+    const GLint vert_shader_length = static_cast<GLint>(vert_source.length());
 
     GLuint vs = gl->CreateShader(GL_VERTEX_SHADER);
     gl->ShaderSource(vs, 1, &vert_shader_data, &vert_shader_length);
@@ -243,7 +204,7 @@ GLuint XRWebGLTextureArraySwapChain::GetCopyProgram() {
     )";
 
     const GLchar* frag_shader_data = frag_source.c_str();
-    const GLint frag_shader_length = frag_source.length();
+    const GLint frag_shader_length = static_cast<GLint>(frag_source.length());
 
     GLuint fs = gl->CreateShader(GL_FRAGMENT_SHADER);
     gl->ShaderSource(fs, 1, &frag_shader_data, &frag_shader_length);
@@ -261,9 +222,9 @@ GLuint XRWebGLTextureArraySwapChain::GetCopyProgram() {
   return copy_program_;
 }
 
-scoped_refptr<StaticBitmapImage>
-XRWebGLTextureArraySwapChain::TransferToStaticBitmapImage() {
-  return wrapped_swap_chain_->TransferToStaticBitmapImage();
+std::unique_ptr<SharedImageHolder>
+XRWebGLTextureArraySwapChain::TransferToSharedImageHolder() {
+  return wrapped_swap_chain_->TransferToSharedImageHolder();
 }
 
 void XRWebGLTextureArraySwapChain::Trace(Visitor* visitor) const {

@@ -4,7 +4,9 @@
 
 #include "content/browser/renderer_host/data_transfer_util.h"
 
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -23,6 +25,7 @@
 #include "storage/browser/blob/blob_storage_context.h"
 #include "storage/browser/file_system/external_mount_points.h"
 #include "storage/browser/file_system/file_system_context.h"
+#include "third_party/blink/public/common/page/source_effect_allowed_mojom_util.h"
 #include "third_party/blink/public/mojom/blob/serialized_blob.mojom.h"
 #include "third_party/blink/public/mojom/drag/drag.mojom.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_data_transfer_token.mojom.h"
@@ -50,6 +53,43 @@ content::PathType MaybeRemapPath(base::FilePath* entry_path) {
   }
 #endif
   return content::PathType::kLocal;
+}
+
+// Parse the download metadata set in DataTransfer.setData. The metadata
+// consists of a set of the following values separated by ":"
+// * MIME type
+// * File name
+// * URL
+// If the file name contains special characters, they need to be escaped
+// appropriately.
+// For example, we can have
+//   text/plain:example.txt:http://example.com/example.txt
+// TODO(crbug.com/497928951): Move this to the renderer.
+std::optional<DownloadUrlMetadata> ParseDownloadMetadata(
+    std::u16string_view metadata) {
+  const char16_t separator = L':';
+
+  size_t mime_type_end_pos = metadata.find(separator);
+  if (mime_type_end_pos == std::u16string_view::npos) {
+    return std::nullopt;
+  }
+
+  size_t file_name_end_pos = metadata.find(separator, mime_type_end_pos + 1);
+  if (file_name_end_pos == std::u16string_view::npos) {
+    return std::nullopt;
+  }
+
+  GURL parsed_url = GURL(metadata.substr(file_name_end_pos + 1));
+  if (!parsed_url.is_valid()) {
+    return std::nullopt;
+  }
+
+  DownloadUrlMetadata result;
+  result.mime_type = base::UTF16ToUTF8(metadata.substr(0, mime_type_end_pos));
+  result.suggested_file_name = base::UTF16ToUTF8(metadata.substr(
+      mime_type_end_pos + 1, file_name_end_pos - mime_type_end_pos - 1));
+  result.url = std::move(parsed_url);
+  return result;
 }
 
 }  // namespace
@@ -100,8 +140,10 @@ FileSystemFileInfosToDragItemFileSystemFilePtr(
     storage::FileSystemURL file_system_url =
         file_system_access_manager->context()->CrackURLInFirstPartyContext(
             file_system_file.url);
-    DCHECK(file_system_url.type() != storage::kFileSystemTypePersistent);
-    DCHECK(file_system_url.type() != storage::kFileSystemTypeTemporary);
+    CHECK(file_system_url.type() != storage::kFileSystemTypePersistent,
+          base::NotFatalUntil::M152);
+    CHECK(file_system_url.type() != storage::kFileSystemTypeTemporary,
+          base::NotFatalUntil::M152);
 
     std::string uuid = base::Uuid::GenerateRandomV4().AsLowercaseString();
 
@@ -150,8 +192,9 @@ blink::mojom::DragDataPtr DropDataToDragData(
     int child_id,
     scoped_refptr<ChromeBlobStorageContext> chrome_blob_storage_context) {
   // These fields are currently unused when dragging into Blink.
-  DCHECK(drop_data.download_metadata.empty());
-  DCHECK(drop_data.file_contents_content_disposition.empty());
+  // TODO(crbug.com/540942115): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK(!drop_data.download_metadata.has_value());
 
   std::vector<blink::mojom::DragItemPtr> items;
   if (drop_data.text) {
@@ -199,14 +242,28 @@ blink::mojom::DragDataPtr DropDataToDragData(
     items.push_back(
         blink::mojom::DragItem::NewFileSystemFile(std::move(file_system_file)));
   }
-  if (drop_data.file_contents_source_url.is_valid()) {
+  // A genuine file drag (a JS-constructed File round-trip or a Chromium
+  // file-promise) carries a source URL or a Content-Disposition. A plain <img>
+  // drag populates `file_contents` on macOS (kept for browser-side consumers
+  // such as Glic) but carries neither signal, so it must not surface as a File
+  // in the renderer's DataTransfer.files.
+  if (!drop_data.file_contents.empty() &&
+      (drop_data.file_contents_source_url.is_valid() ||
+       !drop_data.file_contents_content_disposition.empty())) {
     blink::mojom::DragItemBinaryPtr item = blink::mojom::DragItemBinary::New();
-    item->data =
-        mojo_base::BigBuffer(base::as_byte_span(drop_data.file_contents));
+    item->data = mojo_base::BigBuffer(drop_data.file_contents);
     item->is_image_accessible = drop_data.file_contents_image_accessible;
-    item->source_url = drop_data.file_contents_source_url;
+    // source_url is synthesized from Content-Disposition for JS-constructed
+    // File objects. If absent (e.g. dropped from a non-Chromium app), leave
+    // it empty; the renderer will produce a File with an empty name.
+    if (drop_data.file_contents_source_url.is_valid()) {
+      item->source_url = drop_data.file_contents_source_url;
+    }
     item->filename_extension =
         base::FilePath(drop_data.file_contents_filename_extension);
+    if (!drop_data.file_contents_content_disposition.empty()) {
+      item->content_disposition = drop_data.file_contents_content_disposition;
+    }
     items.push_back(blink::mojom::DragItem::NewBinary(std::move(item)));
   }
   for (const std::pair<const std::u16string, std::u16string>& data :
@@ -215,6 +272,13 @@ blink::mojom::DragDataPtr DropDataToDragData(
     item->string_type = base::UTF16ToUTF8(data.first);
     item->string_data = data.second;
     items.push_back(blink::mojom::DragItem::NewString(std::move(item)));
+  }
+
+  std::optional<blink::mojom::SourceEffectAllowed> source_effect_allowed;
+  if (drop_data.source_effect_allowed &&
+      !drop_data.source_effect_allowed->empty()) {
+    source_effect_allowed = blink::SourceEffectAllowedFromString(
+        base::UTF16ToUTF8(*drop_data.source_effect_allowed));
   }
 
   return blink::mojom::DragData::New(
@@ -229,7 +293,7 @@ blink::mojom::DragDataPtr DropDataToDragData(
           : std::optional<std::string>(
                 base::UTF16ToUTF8(drop_data.filesystem_id)),
       /*force_default_action=*/!drop_data.document_is_handling_drag,
-      drop_data.referrer_policy);
+      source_effect_allowed, drop_data.referrer_policy);
 }
 
 blink::mojom::DragDataPtr DropMetaDataToDragData(
@@ -285,14 +349,19 @@ blink::mojom::DragDataPtr DropMetaDataToDragData(
   }
   return blink::mojom::DragData::New(std::move(items), std::nullopt,
                                      /*force_default_action=*/false,
+                                     /*source_effect_allowed=*/std::nullopt,
                                      network::mojom::ReferrerPolicy::kDefault);
 }
 
 DropData DragDataToDropData(const blink::mojom::DragData& drag_data) {
   // This field should be empty when dragging from the renderer.
-  DCHECK(!drag_data.file_system_id);
+  CHECK(!drag_data.file_system_id, base::NotFatalUntil::M152);
 
   DropData result;
+  if (drag_data.source_effect_allowed.has_value()) {
+    result.source_effect_allowed = base::UTF8ToUTF16(
+        blink::SourceEffectAllowedToString(*drag_data.source_effect_allowed));
+  }
   for (const blink::mojom::DragItemPtr& item : drag_data.items) {
     switch (item->which()) {
       case blink::mojom::DragItemDataView::Tag::kString: {
@@ -322,7 +391,8 @@ DropData DragDataToDropData(const blink::mojom::DragData& drag_data) {
             result.url_infos.front().title = *string_item->title;
           }
         } else if (str_type == ui::kMimeTypeDownloadUrl) {
-          result.download_metadata = string_item->string_data;
+          result.download_metadata =
+              ParseDownloadMetadata(string_item->string_data);
           result.referrer_policy = drag_data.referrer_policy;
         } else if (str_type == ui::kMimeTypeHtml) {
           result.html = string_item->string_data;
@@ -336,7 +406,11 @@ DropData DragDataToDropData(const blink::mojom::DragData& drag_data) {
         break;
       }
       case blink::mojom::DragItemDataView::Tag::kBinary: {
-        DCHECK(result.file_contents.empty());
+        // DropData only supports a single file_contents entry.
+        // Skip additional binary items until multi-file support is added.
+        if (!result.file_contents.empty()) {
+          break;
+        }
 
         const blink::mojom::DragItemBinaryPtr& binary_item = item->get_binary();
         base::span<const uint8_t> contents(binary_item->data);
@@ -345,7 +419,7 @@ DropData DragDataToDropData(const blink::mojom::DragData& drag_data) {
             binary_item->is_image_accessible;
         result.file_contents_source_url = binary_item->source_url;
         result.file_contents_filename_extension =
-            binary_item->filename_extension.value();
+            binary_item->filename_extension.BaseName().value();
         if (binary_item->content_disposition) {
           result.file_contents_content_disposition =
               *binary_item->content_disposition;
@@ -362,7 +436,8 @@ DropData DragDataToDropData(const blink::mojom::DragData& drag_data) {
         const blink::mojom::DragItemFileSystemFilePtr& file_system_file_item =
             item->get_file_system_file();
         // This field should be empty when dragging from the renderer.
-        DCHECK(!file_system_file_item->file_system_id);
+        CHECK(!file_system_file_item->file_system_id,
+              base::NotFatalUntil::M152);
 
         DropData::FileSystemFileInfo info;
         info.url = file_system_file_item->url;

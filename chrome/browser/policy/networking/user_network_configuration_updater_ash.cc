@@ -86,7 +86,7 @@ bool UserNetworkConfigurationUpdaterAsh::
   if (!policy_value)
     return false;
 
-  base::Value::List certificates_value;
+  base::ListValue certificates_value;
   chromeos::onc::ParseAndValidateOncForImport(
       policy_value->GetString(), onc::ONC_SOURCE_USER_POLICY,
       /*network_configs=*/nullptr, /*global_network_config=*/nullptr,
@@ -118,7 +118,7 @@ UserNetworkConfigurationUpdaterAsh::UserNetworkConfigurationUpdaterAsh(
   // responsible for creating it. This requires |GetNSSCertDatabaseForProfile|
   // call, which is not safe before the profile initialization is finalized.
   // Thus, listen for OnProfileInitializationComplete notification, on which
-  // |cert_importer_| creation should start. https://crbug.com/171406
+  // |cert_importer_| creation should start. https://crbug.com/40299450
   // TODO(crbug.com/40113187): Investigate if this is still required.
   profile_observation_.Observe(profile);
 
@@ -150,8 +150,8 @@ void UserNetworkConfigurationUpdaterAsh::ImportClientCertificates() {
 }
 
 void UserNetworkConfigurationUpdaterAsh::ApplyNetworkPolicy(
-    const base::Value::List& network_configs_onc,
-    const base::Value::Dict& global_network_config) {
+    const base::ListValue& network_configs_onc,
+    const base::DictValue& global_network_config) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(user_);
 

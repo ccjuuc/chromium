@@ -35,6 +35,7 @@ class UnexportableKeyService;
 namespace net {
 class CertVerifier;
 class ClientSocketFactory;
+class DnsPlatformAttemptFactory;
 class CookieStore;
 class HostResolver;
 class HttpAuthHandlerFactory;
@@ -124,6 +125,7 @@ class NET_EXPORT URLRequestContext final {
       RequestPriority priority,
       URLRequest::Delegate* delegate,
       NetworkTrafficAnnotationTag traffic_annotation,
+      handles::NetworkHandle target_network,
       bool is_for_websockets = false,
       const std::optional<net::NetLogSource> net_log_source =
           std::nullopt) const;
@@ -178,6 +180,10 @@ class NET_EXPORT URLRequestContext final {
   const URLRequestJobFactory* job_factory() const { return job_factory_; }
 
   QuicContext* quic_context() const { return quic_context_.get(); }
+
+  DnsPlatformAttemptFactory* dns_platform_attempt_factory() const {
+    return dns_platform_attempt_factory_.get();
+  }
 
   // Gets the URLRequest objects that hold a reference to this
   // URLRequestContext.
@@ -251,6 +257,8 @@ class NET_EXPORT URLRequestContext final {
 
   // If != handles::kInvalidNetworkHandle, the network which this
   // context has been bound to.
+  // TODO(crbug.com/495684670): Remove this once multi-network Cronet and CCT
+  // no longer depend on network-bound URLRequestContexts.
   handles::NetworkHandle bound_network() const { return bound_network_; }
 
   void AssertCalledOnValidThread() {
@@ -260,6 +268,30 @@ class NET_EXPORT URLRequestContext final {
   // DEPRECATED: Do not use this even in tests. This is for a legacy use.
   void SetJobFactoryForTesting(const URLRequestJobFactory* job_factory) {
     job_factory_ = job_factory;
+  }
+
+  // If `target_network` is not empty, configures URLRequestContext for
+  // multi-networking tests, enabling checks for every URLRequest created. When
+  // `CreateRequest` is called with network X, if:
+  // - X does not match `target_network`, we CHECK-fail (see `CreateRequest` for
+  //   more details).
+  // - X matches `target_network`, X is ignored and the URLRequest is sent over
+  //   the default network.
+  // If `target_network` is empty, the behavior is reset to the default (no
+  // checking takes place).
+  // NOTE: this is necessary to prevent requests triggered by multi-network
+  // tests to fail due to a fake network handle being used. Unfortunately,
+  // Android does not offer a way to easily setup fake networks for testing
+  // purposes, so this is the best we can do. Nevertheless, this allows
+  // multi-network tests to still confirm that the target network is correctly
+  // propagated through the stack.
+  void set_expected_target_network_for_testing(
+      std::optional<handles::NetworkHandle> target_network) {
+    expected_target_network_for_testing_ = target_network;
+  }
+  std::optional<handles::NetworkHandle> expected_target_network_for_testing()
+      const {
+    return expected_target_network_for_testing_;
   }
 
  private:
@@ -299,6 +331,9 @@ class NET_EXPORT URLRequestContext final {
       std::unique_ptr<ClientSocketFactory> client_socket_factory);
   void set_cache_encryption_delegate(
       std::unique_ptr<CacheEncryptionDelegate> cache_encryption_delegate);
+  void set_dns_platform_attempt_factory(
+      std::unique_ptr<DnsPlatformAttemptFactory> dns_platform_attempt_factory);
+
 #if BUILDFLAG(ENABLE_REPORTING)
   void set_persistent_reporting_and_nel_store(
       std::unique_ptr<PersistentReportingAndNelStore>
@@ -355,6 +390,7 @@ class NET_EXPORT URLRequestContext final {
   std::unique_ptr<QuicContext> quic_context_;
   std::unique_ptr<ClientSocketFactory> client_socket_factory_;
   std::unique_ptr<CacheEncryptionDelegate> cache_encryption_delegate_;
+  std::unique_ptr<DnsPlatformAttemptFactory> dns_platform_attempt_factory_;
 
   // The storage duplication for URLRequestJobFactory is needed because of
   // SetJobFactoryForTesting. Once this method is removable, we can only store a
@@ -407,6 +443,8 @@ class NET_EXPORT URLRequestContext final {
   bool require_network_anonymization_key_ = false;
 
   handles::NetworkHandle bound_network_;
+
+  std::optional<handles::NetworkHandle> expected_target_network_for_testing_;
 
   THREAD_CHECKER(thread_checker_);
 };

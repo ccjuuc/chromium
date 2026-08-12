@@ -8,6 +8,7 @@
 #include "base/memory/raw_ref.h"
 #include "base/types/optional_ref.h"
 #include "components/autofill/content/renderer/autofill_agent.h"
+#include "components/autofill/content/renderer/javascript_autofill_tracker.h"
 #include "components/autofill/content/renderer/password_autofill_agent.h"
 
 namespace autofill {
@@ -18,8 +19,8 @@ class AutofillAgentTestApi {
 
   bool is_dom_content_loaded() const { return agent_->is_dom_content_loaded_; }
 
-  FormTracker& form_tracker() { return *agent_->form_tracker_; }
-  void set_form_tracker(std::unique_ptr<FormTracker> form_tracker) {
+  FormSubmissionTracker& form_tracker() { return *agent_->form_tracker_; }
+  void set_form_tracker(std::unique_ptr<FormSubmissionTracker> form_tracker) {
     agent_->form_tracker_ = std::move(form_tracker);
   }
 
@@ -42,14 +43,45 @@ class AutofillAgentTestApi {
     agent_->ShowSuggestionsForContentEditable(element, trigger_source);
   }
 
+  void ContentEditableDidChange(const blink::WebElement& element) {
+    agent_->ContentEditableDidChange(element);
+  }
+
+  void TextFieldValueChanged(const blink::WebFormControlElement& element) {
+    agent_->TextFieldValueChanged(element);
+  }
+
+  void SelectFieldOptionsChanged(const blink::WebFormControlElement& element) {
+    agent_->SelectFieldOptionsChanged(element);
+  }
+
+  void DidChangeScrollOffset() { agent_->DidChangeScrollOffset(); }
+
+  void set_focus_requires_scroll(bool focus_requires_scroll) {
+    const_cast<AutofillAgent::Config&>(agent_->config_).focus_requires_scroll =
+        AutofillAgent::FocusRequiresScroll(focus_requires_scroll);
+  }
+
   const FormCache& form_cache() { return agent_->form_cache_; }
 
-  PasswordAutofillAgent& password_autofill_agent() {
-    return *agent_->password_autofill_agent_;
+  PasswordAutofillAgent* password_autofill_agent() {
+    return agent_->password_autofill_agent_.get();
   }
 
   const base::OneShotTimer& process_forms_after_dynamic_change_timer() {
     return agent_->process_forms_after_dynamic_change_timer_;
+  }
+
+  EmailVerificationHandler& email_verification_handler() {
+    return agent_->email_verification_handler_;
+  }
+
+  JavaScriptAutofillTracker& javascript_autofill_tracker() {
+    return agent_->javascript_autofill_tracker_;
+  }
+
+  base::WeakPtr<AutofillAgent> GetWeakPtr() {
+    return agent_->weak_ptr_factory_.GetWeakPtr();
   }
 
  private:

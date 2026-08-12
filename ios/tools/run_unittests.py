@@ -18,16 +18,17 @@ from shared_test_utils import Colors, Simulator, print_header, print_command
 
 
 
-def _build_tests(out_dir: str) -> bool:
+def _build_tests(out_dir: str, test_target: str) -> bool:
   """Builds the unit test target.
 
   Args:
     out_dir: The output directory for the build.
+    test_target: The target to build.
 
   Returns:
     True if the build was successful, False otherwise.
   """
-  build_command = ['autoninja', '-C', out_dir, 'ios_chrome_unittests']
+  build_command = ['autoninja', '-C', out_dir, test_target]
   print_header("--- Building Tests ---")
   print_command(build_command)
   try:
@@ -39,18 +40,20 @@ def _build_tests(out_dir: str) -> bool:
 
 
 def _run_tests(out_dir: str, simulator_udid: str,
-               gtest_filter: Optional[str]) -> int:
+               gtest_filter: Optional[str], test_target: str,
+               gtest_repeat: Optional[str] = None) -> int:
   """Installs and runs the tests on the specified simulator.
 
   Args:
     out_dir: The output directory for the build.
     simulator_udid: The UDID of the simulator to use.
     gtest_filter: The gtest filter to apply.
+    test_target: The target to run.
 
   Returns:
     The exit code of the test runner (0 for success, non-zero for failure).
   """
-  app_path = os.path.join(out_dir, 'ios_chrome_unittests.app')
+  app_path = os.path.join(out_dir, f'{test_target}.app')
   info_plist_path = os.path.join(app_path, 'Info.plist')
   with open(info_plist_path, 'rb') as f:
     info_plist = plistlib.load(f)
@@ -66,6 +69,8 @@ def _run_tests(out_dir: str, simulator_udid: str,
   ]
   if gtest_filter:
     launch_command.append('--gtest_filter=' + gtest_filter)
+  if gtest_repeat:
+    launch_command.append('--gtest_repeat=' + gtest_repeat)
   print_header("--- Running Tests ---")
   print_command(launch_command)
 
@@ -119,9 +124,24 @@ def main() -> int:
       help='The output directory to use for the build (default: %(default)s).')
   parser.add_argument('--gtest_filter',
                       help='The gtest_filter to use for running the tests.')
-  parser.add_argument('--device', help='The device type to use for the test.')
-  parser.add_argument('--os',
-                      help='The OS version to use for the test (e.g., 17.5).')
+  parser.add_argument('--gtest_repeat',
+                      help='The gtest_repeat to use for running the tests.')
+  parser.add_argument(
+      '--device',
+      help='The device type or UDID to use for the test '
+           '(can also be set via IOS_SIMULATOR_DEFAULT_DEVICE).')
+  parser.add_argument(
+      '--os',
+      help='The OS version to use for the test (e.g., 17.5) '
+           '(can also be set via IOS_SIMULATOR_DEFAULT_OS).')
+  parser.add_argument(
+      '--test-target',
+      default='ios_chrome_unittests',
+      help='The test target to run (default: %(default)s).')
+  parser.add_argument(
+      '--no-build',
+      action='store_true',
+      help='Skip compiling/building the tests and only run them.')
   args = parser.parse_args()
 
   simulator = shared_test_utils.find_and_boot_simulator(
@@ -129,10 +149,12 @@ def main() -> int:
   if not simulator:
     return 1
 
-  if not _build_tests(args.out_dir):
-    return 1
+  if not args.no_build:
+    if not _build_tests(args.out_dir, args.test_target):
+      return 1
 
-  return _run_tests(args.out_dir, simulator.udid, args.gtest_filter)
+  return _run_tests(args.out_dir, simulator.udid, args.gtest_filter,
+                    args.test_target, args.gtest_repeat)
 
 
 if __name__ == '__main__':

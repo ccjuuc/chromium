@@ -9,9 +9,11 @@
 #include <unordered_set>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/login_screen.h"
+#include "base/check_deref.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
@@ -19,22 +21,18 @@
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/apps/user_type_filter.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/marketing_backend_connector.h"
 #include "chrome/browser/ash/login/screen_manager.h"
 #include "chrome/browser/ash/login/screens/gesture_navigation_screen.h"
 #include "chrome/browser/ash/login/users/chrome_user_manager_util.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ash/system/timezone_util.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/prefs/pref_service_syncable_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/webui/ash/login/gesture_navigation_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/marketing_opt_in_screen_handler.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/prefs/pref_service.h"
 #include "components/sync_preferences/pref_service_syncable.h"
@@ -47,12 +45,6 @@ namespace {
 constexpr char kUserActionGetStarted[] = "get-started";
 constexpr char kUserActionSetA11yNavigationButtonsEnabled[] =
     "set-a11y-button-enable";
-
-void RecordShowShelfNavigationButtonsValueChange(bool enabled) {
-  base::UmaHistogramBoolean(
-      "Accessibility.CrosShelfNavigationButtonsInTabletModeChanged.OOBE",
-      enabled);
-}
 
 // Records the opt-in and opt-out rates for Chromebook emails. Differentiates
 // between users who have a default opt-in vs. a default opt-out option.
@@ -95,20 +87,18 @@ std::string MarketingOptInScreen::GetResultString(Result result) {
 }
 
 MarketingOptInScreen::MarketingOptInScreen(
+    PrefService* local_state,
     base::WeakPtr<MarketingOptInScreenView> view,
     const ScreenExitCallback& exit_callback)
     : BaseScreen(MarketingOptInScreenView::kScreenId,
                  OobeScreenPriority::DEFAULT),
+      local_state_(CHECK_DEREF(local_state)),
       view_(std::move(view)),
       exit_callback_(exit_callback) {
   DCHECK(view_);
 }
 
-MarketingOptInScreen::~MarketingOptInScreen() {
-  if (a11y_nav_buttons_toggle_metrics_reporter_timer_.IsRunning()) {
-    a11y_nav_buttons_toggle_metrics_reporter_timer_.FireNow();
-  }
-}
+MarketingOptInScreen::~MarketingOptInScreen() = default;
 
 bool MarketingOptInScreen::MaybeSkip(WizardContext& context) {
   if (context.skip_post_login_screens_for_tests) {
@@ -129,7 +119,7 @@ bool MarketingOptInScreen::MaybeSkip(WizardContext& context) {
 void MarketingOptInScreen::ShowImpl() {
   DCHECK(initialized_);
 
-  // Show a verbose legal footer for Canada. (https://crbug.com/1124956)
+  // Show a verbose legal footer for Canada. (https://crbug.com/40147627)
   const bool legal_footer_visible =
       email_opt_in_visible_ && countries_with_legal_footer.count(country_);
 
@@ -175,7 +165,7 @@ void MarketingOptInScreen::HideImpl() {
   active_user_pref_change_registrar_.reset();
 }
 
-void MarketingOptInScreen::OnUserAction(const base::Value::List& args) {
+void MarketingOptInScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
 
   if (action_id == kUserActionGetStarted) {
@@ -243,8 +233,8 @@ bool MarketingOptInScreen::IsCurrentUserManaged() {
 void MarketingOptInScreen::Initialize() {
   // Set the country to be used based on the timezone
   // and supported country list.
-  SetCountryFromTimezoneIfAvailable(g_browser_process->local_state()->GetString(
-      ::prefs::kSigninScreenTimezone));
+  SetCountryFromTimezoneIfAvailable(
+      local_state_->GetString(ash::prefs::kSigninScreenTimezone));
 
   // Only show the opt in option if this is a supported region, and if the user
   // never made a choice regarding emails.
@@ -279,9 +269,6 @@ void MarketingOptInScreen::SetCountryFromTimezoneIfAvailable(
 void MarketingOptInScreen::SetA11yNavigationButtonsEnabled(bool enabled) {
   ProfileManager::GetActiveUserProfile()->GetPrefs()->SetBoolean(
       prefs::kAccessibilityTabletModeShelfNavigationButtonsEnabled, enabled);
-  a11y_nav_buttons_toggle_metrics_reporter_timer_.Start(
-      FROM_HERE, base::Seconds(10),
-      base::BindOnce(&RecordShowShelfNavigationButtonsValueChange, enabled));
 }
 
 bool MarketingOptInScreen::ShouldShowOptionToSubscribe() {

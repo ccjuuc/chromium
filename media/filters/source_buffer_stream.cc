@@ -11,6 +11,7 @@
 #include <string>
 
 #include "base/compiler_specific.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/trace_event/trace_event.h"
 #include "media/base/demuxer_memory_limit.h"
@@ -21,6 +22,9 @@
 namespace media {
 
 namespace {
+
+// TODO(crbug.com/486351442): Kill-switch to be removed after M147 goes stable.
+BASE_FEATURE(kMergeRangesDuringAppend, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // The minimum interbuffer decode timestamp delta (or buffer duration) for use
 // in fudge room for range membership, adjacency and coalescing.
@@ -144,7 +148,7 @@ std::string BufferQueueMetadataToLogString(
 
 SourceBufferStream::SourceBufferStream(const AudioDecoderConfig& audio_config,
                                        MediaLog* media_log)
-    : media_log_(media_log),
+    : media_log_(MediaLog::CloneSafely(media_log)),
       seek_buffer_timestamp_(kNoTimestamp),
       coded_frame_group_start_pts_(kNoTimestamp),
       range_for_next_append_(ranges_.end()),
@@ -159,7 +163,7 @@ SourceBufferStream::SourceBufferStream(const AudioDecoderConfig& audio_config,
 
 SourceBufferStream::SourceBufferStream(const VideoDecoderConfig& video_config,
                                        MediaLog* media_log)
-    : media_log_(media_log),
+    : media_log_(MediaLog::CloneSafely(media_log)),
       seek_buffer_timestamp_(kNoTimestamp),
       coded_frame_group_start_pts_(kNoTimestamp),
       range_for_next_append_(ranges_.end()),
@@ -407,6 +411,9 @@ void SourceBufferStream::Append(const BufferQueue& buffers) {
 
   SetSelectedRangeIfNeeded(next_buffer_timestamp);
 
+  if (base::FeatureList::IsEnabled(kMergeRangesDuringAppend)) {
+    MergeAllAdjacentRanges();
+  }
   DVLOG(1) << __func__ << " " << GetStreamTypeName()
            << ": done. ranges_=" << RangesToString(ranges_);
   DCHECK(IsRangeListSorted(ranges_));
@@ -1022,12 +1029,11 @@ size_t SourceBufferStream::FreeBuffers(size_t total_bytes_to_free,
     }
 
     if (current_range->GetMemoryUsage() == 0) {
-      DCHECK_NE(current_range, selected_range_);
-      DCHECK(range_for_next_append_ == ranges_.end() ||
-             range_for_next_append_->get() != current_range);
-
-      // Delete |current_range| by popping it out of |ranges_|.
-      reverse_direction ? ranges_.pop_back() : ranges_.pop_front();
+      CHECK_NE(current_range, selected_range_);
+      auto range_to_delete =
+          reverse_direction ? std::prev(ranges_.end()) : ranges_.begin();
+      current_range = nullptr;
+      DeleteAndRemoveRange(&range_to_delete);
     }
 
     if (reverse_direction && new_range_for_append) {
@@ -1274,16 +1280,30 @@ void SourceBufferStream::PrepareRangesForNextAppend(
   //   B. Type is audio and overlapped duration is 0. We've encountered Vorbis
   //      streams containing zero-duration buffers (i.e. no real overlap). For
   //      non-zero duration removing overlapped frames is important to preserve
-  //      A/V sync (see AudioClock).
+  //      A/V sync (see AudioClock). However, if both the previous and new
+  //      buffers are zero-duration, they are duplicates and we want to
+  //      overwrite them to prevent infinite accumulation.
   const bool exclude_start =
       highest_timestamp_in_append_sequence_ ==
           new_buffers.front()->timestamp() &&
       (GetType() == SourceBufferStreamType::kVideo ||
-       last_appended_buffer_duration_ == base::TimeDelta());
+       (last_appended_buffer_duration_ == base::TimeDelta() &&
+        new_buffers.front()->duration() != base::TimeDelta()));
 
   // Finally do the deletion of overlap.
   RemoveInternal(buffers_start_timestamp, buffers_end_timestamp, exclude_start,
                  deleted_buffers);
+  if (range_for_next_append_ != ranges_.end()) {
+    base::TimeDelta group_start_pts =
+        new_coded_frame_group_ ? coded_frame_group_start_pts_ : kNoTimestamp;
+    if (!(*range_for_next_append_)
+             ->CanAppendBuffersToEnd(new_buffers, group_start_pts)) {
+      DVLOG(1) << __func__ << " " << GetStreamTypeName()
+               << ": Resetting range_for_next_append_ since it cannot accept "
+                  "new buffers after overlap removal.";
+      range_for_next_append_ = ranges_.end();
+    }
+  }
 }
 
 // static
@@ -2006,6 +2026,10 @@ bool SourceBufferStream::SetPendingBuffer(
   pending_buffer_.swap(*out_buffer);
   pending_buffers_complete_ = false;
   return true;
+}
+
+bool SourceBufferStream::IsRangeListSortedForTesting() const {
+  return IsRangeListSorted(ranges_);
 }
 
 }  // namespace media

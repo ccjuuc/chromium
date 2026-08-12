@@ -4,15 +4,18 @@
 
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_regex_provider.h"
 
+#include <memory>
+#include <string>
 #include <utility>
 
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
+#include "base/synchronization/lock.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_constants.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_utils.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/common/autofill_features.h"
+#include "third_party/re2/src/re2/re2.h"
 
 namespace autofill {
 
@@ -329,26 +332,6 @@ std::string ParseHispanicLastNameExpression() {
            {NoCapturePatternOptional(kLastNamePrefixRe), kSingleWordRe})});
 }
 
-std::string ParseHispanicLastNameCoreExpression() {
-  return CaptureTypeWithPattern(
-      NAME_LAST_CORE,
-      {CaptureTypeWithPattern(
-           NAME_LAST_FIRST,
-           {NoCapturePatternOptional(kLastNamePrefixRe), kSingleWordRe}),
-       CaptureTypeWithPatternOptional(NAME_LAST_CONJUNCTION,
-                                      kHispanicLastNameConjunctionsRe),
-       // This capture doesn't capture last name prefix, because naming model
-       // stores only first encountered prefix.
-       CaptureTypeWithPattern(
-           NAME_LAST_SECOND,
-           {NoCapturePatternOptional(kLastNamePrefixRe), kSingleWordRe})});
-}
-
-std::string ParseHispanicLastNameExpressionWithCore() {
-  return CaptureTypeWithPattern(NAME_LAST,
-                                {ParseHispanicLastNameCoreExpression()});
-}
-
 // Returns an expression to parse a full Hispanic/Latinx name that
 // contains an optional honorific prefix which is ignored, a first name, and a
 // last name as specified by |ParseHispanicLastNameExpression()|.
@@ -359,9 +342,7 @@ std::string ParseHispanicFullNameExpression() {
        CaptureTypeWithPattern(
            NAME_FIRST, kMultipleLazyWordsRe,
            CaptureOptions{.quantifier = MatchQuantifier::kLazyOptional}),
-       base::FeatureList::IsEnabled(features::kAutofillSupportLastNamePrefix)
-           ? ParseHispanicLastNameExpressionWithCore()
-           : ParseHispanicLastNameExpression()});
+       ParseHispanicLastNameExpression()});
 }
 
 // Returns an expression that parses the whole |LAST_NAME| into
@@ -370,19 +351,6 @@ std::string ParseLastNameIntoSecondLastNameExpression() {
   return CaptureTypeWithPattern(
       NAME_LAST,
       {CaptureTypeWithPattern(NAME_LAST_SECOND, kMultipleLazyWordsRe)});
-}
-
-std::string ParseLastNameCoreIntoSecondLastNameExpression() {
-  return CaptureTypeWithPattern(
-      NAME_LAST_CORE,
-      {CaptureTypeWithPattern(NAME_LAST_SECOND, kMultipleLazyWordsRe)});
-}
-
-std::string ParseLastNameExpression() {
-  return CaptureTypeWithPattern(
-      NAME_LAST,
-      {CaptureTypeWithPatternOptional(NAME_LAST_PREFIX, kLastNamePrefixRe),
-       CaptureTypeWithPattern(NAME_LAST_CORE, kMultipleLazyWordsRe)});
 }
 
 // Returns an expression to parse a street address into the street name, the
@@ -548,18 +516,12 @@ std::string StructuredAddressesRegExProvider::GetPattern(
       return ParseFirstMiddleLastNameExpression();
     case RegEx::kParseHispanicLastName:
       return ParseHispanicLastNameExpression();
-    case RegEx::kParseHispanicLastNameCore:
-      return ParseHispanicLastNameCoreExpression();
     case RegEx::kParseHispanicFullName:
       return ParseHispanicFullNameExpression();
     case RegEx::kMatchMiddleNameInitialsCharacteristics:
       return kMiddleNameInitialsCharacteristicsRe;
-    case RegEx::kParseLastName:
-      return ParseLastNameExpression();
     case RegEx::kParseLastNameIntoSecondLastName:
       return ParseLastNameIntoSecondLastNameExpression();
-    case RegEx::kParseLastNameCoreIntoSecondLastName:
-      return ParseLastNameCoreIntoSecondLastNameExpression();
     case RegEx::kParseHouseNumberStreetName:
       return ParseHouseNumberStreetNameExpression();
     case RegEx::kParseStreetNameHouseNumberSuffixedFloor:

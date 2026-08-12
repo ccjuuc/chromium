@@ -4,13 +4,15 @@
 
 package org.chromium.chrome.browser.history;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+
 import android.content.Intent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 
-import org.chromium.base.CallbackUtils;
 import org.chromium.base.IntentUtils;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
@@ -22,10 +24,12 @@ import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeControllerFactory;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerFactory;
 import org.chromium.components.browser_ui.bottomsheet.ManagedBottomSheetController;
+import org.chromium.components.browser_ui.modaldialog.AppModalPresenter;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager.ScrimClient;
-import org.chromium.ui.KeyboardVisibilityDelegate;
 import org.chromium.ui.edge_to_edge.EdgeToEdgePadAdjuster;
+import org.chromium.ui.modaldialog.ModalDialogManager;
+import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
 
 import java.util.function.Function;
 
@@ -55,13 +59,17 @@ public class HistoryActivity extends SnackbarActivity {
                             EdgeToEdgeControllerFactory.createForViewAndObserveSupplier(
                                     view, getEdgeToEdgeSupplier());
         }
+
         mHistoryManager =
                 new HistoryManager(
+                        profile,
+                        getWindowAndroid(),
                         this,
                         true,
                         getSnackbarManager(),
-                        profile,
-                        () -> mBottomSheetController,
+                        () -> assertNonNull(mBottomSheetController),
+                        getModalDialogManagerSupplier().asNonNull(),
+                        getActivityResultTracker(),
                         /* Supplier<@Nullable Tab>= */ null,
                         new BrowsingHistoryBridge(profile.getOriginalProfile()),
                         historyUmaRecorder,
@@ -69,6 +77,7 @@ public class HistoryActivity extends SnackbarActivity {
                         shouldShowClearData,
                         appSpecificHistory,
                         showAppFilter,
+                        ChromeFeatureList.isEnabled(ChromeFeatureList.ANDROID_HISTORY_CLUSTERING),
                         /* openHistoryItemCallback= */ null,
                         edgeToEdgePadAdjusterGenerator);
         ViewGroup contentView = mHistoryManager.getView();
@@ -85,18 +94,26 @@ public class HistoryActivity extends SnackbarActivity {
                 new ScrimManager(this, contentView, ScrimClient.HISTORY_ACTIVITY);
         mBottomSheetController =
                 BottomSheetControllerFactory.createBottomSheetController(
-                        () -> scrimManager,
-                        CallbackUtils.emptyCallback(),
+                        SupplierUtils.of(scrimManager),
                         getWindow(),
-                        KeyboardVisibilityDelegate.getInstance(),
-                        () -> sheetContainer,
-                        () -> 0,
-                        /* desktopWindowStateManager= */ null);
+                        getWindowAndroid().getKeyboardDelegate(),
+                        SupplierUtils.of(sheetContainer),
+                        SupplierUtils.of(0),
+                        /* desktopWindowStateManager= */ null,
+                        getWindowAndroid().getInsetObserver(),
+                        /* enableLargeFormFactorUi= */ ChromeFeatureList
+                                .sBottomSheetOnDesktopWindowing
+                                .isEnabled());
 
         // HistoryActivity needs its own container for bottom sheet. Add it as a child of the
         // layout enclosing the history list layout so they'll be siblings. HistoryPage doesn't
         // need this since it may share the one from tabbed browser activity.
         contentView.addView(sheetContainer);
+    }
+
+    @Override
+    protected ModalDialogManager createModalDialogManager() {
+        return new ModalDialogManager(new AppModalPresenter(this), ModalDialogType.APP);
     }
 
     @Override

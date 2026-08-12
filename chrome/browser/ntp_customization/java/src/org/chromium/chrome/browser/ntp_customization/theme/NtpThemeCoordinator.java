@@ -7,8 +7,9 @@ package org.chromium.chrome.browser.ntp_customization.theme;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType.CHROME_COLORS;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType.THEME;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType.THEME_COLLECTIONS;
-import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundImageType.CHROME_COLOR;
-import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundImageType.THEME_COLLECTION;
+import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.CHROME_COLOR;
+import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.IMAGE_FROM_DISK;
+import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.THEME_COLLECTION;
 import static org.chromium.chrome.browser.ntp_customization.theme.NtpThemeProperty.THEME_KEYS;
 
 import android.app.Activity;
@@ -20,24 +21,34 @@ import androidx.activity.ComponentActivity;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.CallbackController;
+import org.chromium.base.ObserverList;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.ntp_customization.BottomSheetDelegate;
 import org.chromium.chrome.browser.ntp_customization.BottomSheetViewBinder;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationConfigManager;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType;
+import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationViewProperties;
 import org.chromium.chrome.browser.ntp_customization.R;
 import org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpChromeColorsCoordinator;
 import org.chromium.chrome.browser.ntp_customization.theme.theme_collections.BackgroundCollection;
 import org.chromium.chrome.browser.ntp_customization.theme.theme_collections.NtpThemeCollectionManager;
 import org.chromium.chrome.browser.ntp_customization.theme.theme_collections.NtpThemeCollectionsCoordinator;
+import org.chromium.chrome.browser.ntp_customization.theme.upload_image.BackgroundImageInfo;
 import org.chromium.chrome.browser.ntp_customization.theme.upload_image.UploadImagePreviewCoordinator;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataBase;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataUploadImage;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.PlatformType;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 
 import java.util.List;
+import java.util.Objects;
 
 /** Coordinator for the NTP appearance settings bottom sheet in the NTP customization. */
 @NullMarked
@@ -49,11 +60,14 @@ public class NtpThemeCoordinator {
     private final Runnable mDismissBottomSheetRunnable;
     private final NtpThemeCollectionManager mNtpThemeCollectionManager;
     private final CallbackController mCallbackController = new CallbackController();
+    private final boolean mIsNtpThemeSyncEnabled;
     private NtpThemeMediator mMediator;
     private NtpThemeBottomSheetView mNtpThemeBottomSheetView;
     private @Nullable UploadImagePreviewCoordinator mUploadPreviewCoordinator;
     private @Nullable NtpThemeCollectionsCoordinator mNtpThemeCollectionsCoordinator;
     private @Nullable NtpChromeColorsCoordinator mNtpChromeColorsCoordinator;
+    private final ObserverList<ThemeBottomSheetObserver> mThemeBottomSheetObservers =
+            new ObserverList<>();
 
     public NtpThemeCoordinator(
             Context context,
@@ -72,6 +86,7 @@ public class NtpThemeCoordinator {
                                         null,
                                         false);
 
+        mIsNtpThemeSyncEnabled = ChromeFeatureList.sNewTabPageCustomizationThemeSync.isEnabled();
         delegate.registerBottomSheetLayout(THEME, mNtpThemeBottomSheetView);
 
         // The bottomSheetPropertyModel is responsible for managing the back press handler of the
@@ -108,6 +123,7 @@ public class NtpThemeCoordinator {
                                     mBottomSheetDelegate.onNewColorSelected(
                                             /* isDifferentColor= */ true);
                                     mBottomSheetDelegate.onNewThemeCollectionImageSelected(bitmap);
+                                    notifyBottomSheetBackgroundTypeChanged();
                                 }));
         mNtpThemeDelegate = createNtpThemeDelegate();
         mMediator =
@@ -128,12 +144,45 @@ public class NtpThemeCoordinator {
      * This is the callback method that gets invoked by the Mediator to initialize the {@code
      * UploadImagePreviewCoordinator}.
      */
-    public void onImageSelectedForPreview(@Nullable Bitmap bitmap) {
+    public void onImageSelectedForPreview(@Nullable Bitmap bitmap, String fileIdHash) {
         if (bitmap == null) return;
+
+        // A non-null file ID is used when NTP theme sync is enabled. This is because we only keep
+        // at most one image file for upload image theme if sync is disabled.
+        String fileIdHashToUse = mIsNtpThemeSyncEnabled ? fileIdHash : null;
+
+        // Tablets bypass the preview dialog and apply the selection directly.
+        if (DeviceFormFactor.isNonMultiDisplayContextOnTablet(mContext)) {
+            NtpBackgroundDataBase currentBackgroundData =
+                    NtpCustomizationConfigManager.getInstance().getNtpBackgroundData();
+
+            // Applies the background immediately for instant visual feedback.
+            // Full Activity recreation to finalize theme changes is deferred
+            // until the ntp customization bottom sheets are fully dismissed.
+            BackgroundImageInfo info =
+                    NtpCustomizationUtils.getDefaultBackgroundImageInfo(mContext, bitmap);
+            NtpBackgroundDataUploadImage uploadImageData =
+                    new NtpBackgroundDataUploadImage(
+                            PlatformType.ANDROID,
+                            info,
+                            bitmap,
+                            /* primaryColor= */ null,
+                            fileIdHashToUse);
+            NtpCustomizationConfigManager.getInstance()
+                    .onBackgroundDataChanged(mContext, uploadImageData);
+            onPreviewClosed(
+                    /* isImageSelected= */ true,
+                    !Objects.equals(currentBackgroundData, uploadImageData));
+            return;
+        }
 
         mUploadPreviewCoordinator =
                 new UploadImagePreviewCoordinator(
-                        (Activity) mContext, mProfile, bitmap, this::onPreviewClosed);
+                        (Activity) mContext,
+                        mProfile,
+                        bitmap,
+                        fileIdHashToUse,
+                        this::onPreviewClosed);
     }
 
     /**
@@ -149,17 +198,13 @@ public class NtpThemeCoordinator {
             @Override
             public void onChromeColorsClicked() {
                 if (mNtpChromeColorsCoordinator == null) {
-                    Runnable onChromeColorSelectedCallback =
-                            () -> {
-                                mMediator.updateForChoosingDefaultOrChromeColorOption(CHROME_COLOR);
-                            };
-
                     mNtpChromeColorsCoordinator =
                             new NtpChromeColorsCoordinator(
                                     mContext,
                                     mBottomSheetDelegate,
                                     mCallbackController.makeCancelable(
-                                            onChromeColorSelectedCallback));
+                                            NtpThemeCoordinator.this::onChromeColorSelected));
+                    mThemeBottomSheetObservers.addObserver(mNtpChromeColorsCoordinator);
                 }
                 mNtpChromeColorsCoordinator.prepareToShow();
                 mBottomSheetDelegate.showBottomSheet(CHROME_COLORS);
@@ -167,9 +212,15 @@ public class NtpThemeCoordinator {
 
             @Override
             public void onThemeCollectionsClicked(
-                    Runnable onDailyRefreshCancelledCallback,
+                    Runnable resetCustomizedThemeRunnable,
                     List<BackgroundCollection> themeCollectionsList) {
                 if (mNtpThemeCollectionsCoordinator == null) {
+                    Runnable onDailyRefreshCancelledCallback =
+                            () -> {
+                                resetCustomizedThemeRunnable.run();
+                                initializeBottomSheetContent(
+                                        BottomSheetType.SINGLE_THEME_COLLECTION);
+                            };
                     mNtpThemeCollectionsCoordinator =
                             new NtpThemeCollectionsCoordinator(
                                     mContext,
@@ -178,25 +229,43 @@ public class NtpThemeCoordinator {
                                     mNtpThemeCollectionManager,
                                     onDailyRefreshCancelledCallback,
                                     themeCollectionsList);
+                    mThemeBottomSheetObservers.addObserver(mNtpThemeCollectionsCoordinator);
                 }
                 mBottomSheetDelegate.showBottomSheet(THEME_COLLECTIONS);
             }
+
+            @Override
+            public void onChromeDefaultClicked() {
+                notifyBottomSheetBackgroundTypeChanged();
+            }
         };
+    }
+
+    @VisibleForTesting
+    void onChromeColorSelected() {
+        mMediator.updateForChoosingDefaultOrChromeColorOption(CHROME_COLOR);
+        notifyBottomSheetBackgroundTypeChanged();
     }
 
     public void destroy() {
         mMediator.destroy();
         mNtpThemeBottomSheetView.destroy();
+        mThemeBottomSheetObservers.clear();
+
         if (mUploadPreviewCoordinator != null) {
             mUploadPreviewCoordinator.destroy();
+            mUploadPreviewCoordinator = null;
         }
         if (mNtpThemeCollectionsCoordinator != null) {
             mNtpThemeCollectionsCoordinator.destroy();
+            mNtpThemeCollectionsCoordinator = null;
         }
         if (mNtpChromeColorsCoordinator != null) {
             mNtpChromeColorsCoordinator.destroy();
+            mNtpChromeColorsCoordinator = null;
         }
         mNtpThemeCollectionManager.destroy();
+
         mCallbackController.destroy();
     }
 
@@ -211,12 +280,47 @@ public class NtpThemeCoordinator {
         }
     }
 
-    @VisibleForTesting
-    void onPreviewClosed(boolean isImageSelected) {
-        if (isImageSelected) {
-            mBottomSheetDelegate.onNewColorSelected(/* isDifferentColor= */ true);
+    /**
+     * Notifies all registered {@link ThemeBottomSheetObserver} instances that the ntp background
+     * type has been updated.
+     *
+     * <p><b>Important:</b> This method must be called strictly <i>after</i> the new background type
+     * has been definitively set (i.e. updated in the config manager). Observers rely on querying
+     * the current global background type to correctly refresh their visual state. Calling this
+     * beforehand will result in observers reading stale data.
+     */
+    void notifyBottomSheetBackgroundTypeChanged() {
+        for (ThemeBottomSheetObserver observer : mThemeBottomSheetObservers) {
+            observer.onBackgroundTypeChanged();
         }
+    }
+
+    @VisibleForTesting
+    void onPreviewClosed(boolean isImageSelected, boolean isDifferentTheme) {
+        if (!isImageSelected) {
+            return;
+        }
+        onImageSelectedForPreviewImpl(isDifferentTheme);
         mDismissBottomSheetRunnable.run();
+    }
+
+    /**
+     * Finalizes the selection of a device-stored image by updating theme-related information.
+     *
+     * <ul>
+     *   <li>Updates the Mediator to show the selection indicator for the "Upload an image" section.
+     *   <li>Triggers the delegate callback to handle the theme changes.
+     * </ul>
+     *
+     * <p>Currently, when an uploaded image is selected and confirmed, the entire NTP customization
+     * bottom sheet is dismissed, which means {@link #notifyBottomSheetBackgroundTypeChanged()} does
+     * not need to be called. If future changes allow users to switch to other bottom sheets after
+     * confirming an uploaded image, an invocation of {@link
+     * #notifyBottomSheetBackgroundTypeChanged()} should be added here.
+     */
+    private void onImageSelectedForPreviewImpl(boolean isDifferentTheme) {
+        mMediator.updateTrailingIconVisibilityForSectionType(IMAGE_FROM_DISK);
+        mBottomSheetDelegate.onNewColorSelected(isDifferentTheme);
     }
 
     NtpThemeMediator getMediatorForTesting() {
@@ -224,7 +328,9 @@ public class NtpThemeCoordinator {
     }
 
     void setMediatorForTesting(NtpThemeMediator mediator) {
+        var oldValue = mMediator;
         mMediator = mediator;
+        ResettersForTesting.register(() -> mMediator = oldValue);
     }
 
     void setNtpThemeBottomSheetViewForTesting(NtpThemeBottomSheetView ntpThemeBottomSheetView) {
@@ -235,12 +341,33 @@ public class NtpThemeCoordinator {
         return mNtpThemeCollectionManager;
     }
 
+    @Nullable NtpChromeColorsCoordinator getNtpChromeColorsCoordinatorForTesting() {
+        return mNtpChromeColorsCoordinator;
+    }
+
+    @Nullable NtpThemeCollectionsCoordinator getNtpThemeCollectionsCoordinatorForTesting() {
+        return mNtpThemeCollectionsCoordinator;
+    }
+
+    boolean hasThemeBottomSheetObserverForTesting(ThemeBottomSheetObserver observer) {
+        return mThemeBottomSheetObservers.hasObserver(observer);
+    }
+
     NtpThemeDelegate getNtpThemeDelegateForTesting() {
         return mNtpThemeDelegate;
+    }
+
+    void setNtpChromeColorsCoordinatorForTesting(
+            NtpChromeColorsCoordinator ntpChromeColorsCoordinator) {
+        mNtpChromeColorsCoordinator = ntpChromeColorsCoordinator;
     }
 
     void setNtpThemeCollectionsCoordinatorForTesting(
             NtpThemeCollectionsCoordinator ntpThemeCollectionsCoordinator) {
         mNtpThemeCollectionsCoordinator = ntpThemeCollectionsCoordinator;
+    }
+
+    void addThemeBottomSheetObserverForTesting(ThemeBottomSheetObserver observer) {
+        mThemeBottomSheetObservers.addObserver(observer);
     }
 }

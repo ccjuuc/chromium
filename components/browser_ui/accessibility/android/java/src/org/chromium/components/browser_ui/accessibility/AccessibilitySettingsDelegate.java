@@ -5,7 +5,9 @@
 package org.chromium.components.browser_ui.accessibility;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.settings.SettingsNavigation;
+import org.chromium.components.dom_distiller.core.DistilledPagePrefs;
 import org.chromium.content_public.browser.BrowserContextHandle;
 
 /**
@@ -78,6 +80,9 @@ public interface AccessibilitySettingsDelegate {
      */
     BooleanPreferenceDelegate getReaderAccessibilityDelegate();
 
+    /** Returns an instance of DistilledPagePrefs. */
+    DistilledPagePrefs getDistilledPagePrefs();
+
     /**
      * Returns whether the material slider should be used for the page zoom preference.
      *
@@ -94,4 +99,11 @@ public interface AccessibilitySettingsDelegate {
 
     /** Sets whether caret browsing is enabled. */
     void setCaretBrowsingEnabled(boolean enabled);
+
+    /**
+     * @return String preference key for caret browsing.
+     */
+    default @Nullable String getCaretBrowsingPreferenceKey() {
+        return null;
+    }
 }

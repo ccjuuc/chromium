@@ -53,18 +53,18 @@ public abstract class VideoCapture {
     // individual implementations.
     protected boolean mInvertDeviceOrientationReadings;
 
+    protected boolean mIsExternalCamera;
+
     protected @Nullable VideoCaptureFormat mCaptureFormat;
 
-    protected final int mId;
+    protected final String mId;
     // Native callback context variable.
     private long mNativeVideoCaptureDeviceAndroid;
-
-    protected boolean mUseBackgroundThreadForTesting;
 
     // Lock for guarding |mNativeVideoCaptureDeviceAndroid|.
     private final Object mNativeVideoCaptureLock = new Object();
 
-    VideoCapture(int id, long nativeVideoCaptureDeviceAndroid) {
+    VideoCapture(String id, long nativeVideoCaptureDeviceAndroid) {
         mId = id;
         mNativeVideoCaptureDeviceAndroid = nativeVideoCaptureDeviceAndroid;
     }
@@ -76,7 +76,8 @@ public abstract class VideoCapture {
             int height,
             int frameRate,
             boolean enableFaceDetection,
-            boolean useHardwareBuffers);
+            boolean useHardwareBuffers,
+            boolean enableBackgroundMediaCapturing);
 
     // Success is indicated by returning true and a callback to
     // VideoCaptureJni.get().onStarted(,  VideoCapture.this), which may occur synchronously or
@@ -169,7 +170,7 @@ public abstract class VideoCapture {
     }
 
     @CalledByNative
-    public final int getColorspace() {
+    public final int getPixelFormat() {
         assumeNonNull(mCaptureFormat);
         switch (mCaptureFormat.mPixelFormat) {
             case ImageFormat.YV12:
@@ -184,12 +185,11 @@ public abstract class VideoCapture {
         }
     }
 
-    @CalledByNative
-    public final void setTestMode() {
-        mUseBackgroundThreadForTesting = true;
-    }
-
     protected final int getCameraRotation() {
+        // For external camera, we should not rotate the frame.
+        if (mIsExternalCamera) {
+            return 0;
+        }
         int rotation =
                 mInvertDeviceOrientationReadings
                         ? (360 - getDeviceRotation())
@@ -299,15 +299,6 @@ public abstract class VideoCapture {
     }
 
     // JNI wrapper methods.
-    protected void onFrameAvailable(byte[] data, int length, int rotation) {
-        synchronized (mNativeVideoCaptureLock) {
-            if (mNativeVideoCaptureDeviceAndroid != 0) {
-                VideoCaptureJni.get()
-                        .onFrameAvailable(mNativeVideoCaptureDeviceAndroid, data, length, rotation);
-            }
-        }
-    }
-
     protected void onI420FrameAvailable(
             ByteBuffer yBuffer,
             int yStride,
@@ -318,7 +309,8 @@ public abstract class VideoCapture {
             int width,
             int height,
             int rotation,
-            long timestamp) {
+            long timestamp,
+            int dataSpace) {
         synchronized (mNativeVideoCaptureLock) {
             if (mNativeVideoCaptureDeviceAndroid != 0) {
                 VideoCaptureJni.get()
@@ -333,19 +325,21 @@ public abstract class VideoCapture {
                                 width,
                                 height,
                                 rotation,
-                                timestamp);
+                                timestamp,
+                                dataSpace);
             }
         }
     }
 
     protected void onHardwareBufferAvailable(
-            HardwareBuffer hardwareBuffer, int rotation, long timestamp) {
+            HardwareBuffer hardwareBuffer, int dataSpace, int rotation, long timestamp) {
         synchronized (mNativeVideoCaptureLock) {
             if (mNativeVideoCaptureDeviceAndroid != 0) {
                 VideoCaptureJni.get()
                         .onHardwareBufferAvailable(
                                 mNativeVideoCaptureDeviceAndroid,
                                 hardwareBuffer,
+                                dataSpace,
                                 rotation,
                                 timestamp);
             }
@@ -404,6 +398,15 @@ public abstract class VideoCapture {
         }
     }
 
+    protected void onInteractiveStateChanged(boolean isInteractive) {
+        synchronized (mNativeVideoCaptureLock) {
+            if (mNativeVideoCaptureDeviceAndroid != 0) {
+                VideoCaptureJni.get()
+                        .onInteractiveStateChanged(mNativeVideoCaptureDeviceAndroid, isInteractive);
+            }
+        }
+    }
+
     protected void dCheckCurrentlyOnIncomingTaskRunner() {
         synchronized (mNativeVideoCaptureLock) {
             if (mNativeVideoCaptureDeviceAndroid != 0) {
@@ -416,9 +419,6 @@ public abstract class VideoCapture {
     @NativeMethods
     interface Natives {
         // Method for VideoCapture implementations to call back native code.
-        void onFrameAvailable(
-                long nativeVideoCaptureDeviceAndroid, byte[] data, int length, int rotation);
-
         void onI420FrameAvailable(
                 long nativeVideoCaptureDeviceAndroid,
                 ByteBuffer yBuffer,
@@ -430,11 +430,13 @@ public abstract class VideoCapture {
                 int width,
                 int height,
                 int rotation,
-                long timestamp);
+                long timestamp,
+                int dataSpace);
 
         void onHardwareBufferAvailable(
                 long nativeVideoCaptureDeviceAndroid,
                 HardwareBuffer hardwareBuffer,
+                int dataSpace,
                 int rotation,
                 long timestamp);
 
@@ -458,6 +460,9 @@ public abstract class VideoCapture {
 
         // Method for VideoCapture implementations to report device started event.
         void onStarted(long nativeVideoCaptureDeviceAndroid);
+
+        // Method for VideoCapture implementations to report screen state change.
+        void onInteractiveStateChanged(long nativeVideoCaptureDeviceAndroid, boolean isInteractive);
 
         void dCheckCurrentlyOnIncomingTaskRunner(long nativeVideoCaptureDeviceAndroid);
     }

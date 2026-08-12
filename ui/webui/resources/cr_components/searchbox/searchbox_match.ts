@@ -12,7 +12,7 @@ import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 import {NavigationPredictor} from '//resources/mojo/components/omnibox/browser/omnibox.mojom-webui.js';
 import type {ACMatchClassification, AutocompleteMatch, OmniboxPopupSelection, PageHandlerInterface} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
-import {SelectionLineState, SideType} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
+import {KeywordType, SelectionLineState, SideType} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
 
 import {createAutocompleteMatch, SearchboxBrowserProxy} from './searchbox_browser_proxy.js';
 import type {SearchboxIconElement} from './searchbox_icon.js';
@@ -39,7 +39,7 @@ enum AcMatchClassificationStyle {
 const ENTITY_MATCH_TYPE: string = 'search-suggest-entity';
 
 // Represents the initial selection when a match is created or reset.
-const defaultSelection: OmniboxPopupSelection = {
+export const kDefaultSelection: OmniboxPopupSelection = {
   line: -1,
   state: SelectionLineState.kNormal,
   actionIndex: 0,
@@ -57,7 +57,7 @@ export interface SearchboxMatchElement {
     description: HTMLElement,
     remove: HTMLElement,
     separator: HTMLElement,
-    'focus-indicator': HTMLElement,
+    focusIndicator: HTMLElement,
   };
 }
 
@@ -82,7 +82,10 @@ export class SearchboxMatchElement extends CrLitElement {
       //========================================================================
 
       /** Element's 'aria-label' attribute. */
-      ariaLabel: {type: String},
+      ariaLabel: {
+        type: String,
+        reflect: true,
+      },
 
       hasAction: {
         type: Boolean,
@@ -97,7 +100,7 @@ export class SearchboxMatchElement extends CrLitElement {
         reflect: true,
       },
 
-      hasKeyword: {
+      hasKeywordChip: {
         type: Boolean,
         reflect: true,
       },
@@ -137,9 +140,16 @@ export class SearchboxMatchElement extends CrLitElement {
       showEllipsis: {type: Boolean},
       sideType: {type: Number},
 
+      virtualFocusEnabled: {type: Boolean},
+
       //========================================================================
       // Private properties
       //========================================================================
+
+      isContextualSuggestion_: {
+        type: Boolean,
+        reflect: true,
+      },
 
       isTopChromeSearchbox_: {
         type: Boolean,
@@ -180,15 +190,17 @@ export class SearchboxMatchElement extends CrLitElement {
   override accessor ariaLabel: string = '';
   accessor hasAction: boolean = false;
   accessor hasImage: boolean = false;
-  accessor hasKeyword: boolean = false;
+  accessor hasKeywordChip: boolean = false;
   accessor isEntitySuggestion: boolean = false;
   accessor isRichSuggestion: boolean = false;
   accessor match: AutocompleteMatch = createAutocompleteMatch();
-  accessor selection: OmniboxPopupSelection = defaultSelection;
+  accessor selection: OmniboxPopupSelection = kDefaultSelection;
   accessor matchIndex: number = -1;
   accessor sideType: SideType = SideType.kDefaultPrimary;
   accessor showThumbnail: boolean = false;
   accessor showEllipsis: boolean = false;
+  accessor virtualFocusEnabled: boolean = false;
+  private accessor isContextualSuggestion_: boolean = false;
   private accessor isTopChromeSearchbox_: boolean =
       loadTimeData.getBoolean('isTopChromeSearchbox');
   private accessor isLensSearchbox_: boolean =
@@ -214,12 +226,6 @@ export class SearchboxMatchElement extends CrLitElement {
     this.pageHandler_ = SearchboxBrowserProxy.getInstance().handler;
   }
 
-  override firstUpdated() {
-    this.addEventListener('click', (event) => this.onMatchClick_(event));
-    this.addEventListener('focusin', () => this.onMatchFocusin_());
-    this.addEventListener('mousedown', () => this.onMatchMouseDown_());
-  }
-
   override willUpdate(changedProperties: PropertyValues<this>) {
     super.willUpdate(changedProperties);
 
@@ -228,14 +234,15 @@ export class SearchboxMatchElement extends CrLitElement {
       this.contentsHtml_ = this.computeContentsHtml_();
       this.descriptionHtml_ = this.computeDescriptionHtml_();
       this.hasAction = this.computeHasAction_();
-      this.hasKeyword = this.computeHasKeyword_();
+      this.hasKeywordChip = this.computeHasKeywordChip_();
       this.hasImage = this.computeHasImage_();
+      this.isContextualSuggestion_ = this.computeIsContextualSuggestion_();
       this.isEntitySuggestion = this.computeIsEntitySuggestion_();
       this.isRichSuggestion = this.computeIsRichSuggestion_();
       this.removeButtonAriaLabel_ = this.computeRemoveButtonAriaLabel_();
       this.separatorText_ = this.computeSeparatorText_();
       this.tailSuggestPrefix_ = this.computeTailSuggestPrefix_();
-      this.selection = defaultSelection;
+      this.selection = kDefaultSelection;
     }
 
     const changedPrivateProperties =
@@ -248,11 +255,47 @@ export class SearchboxMatchElement extends CrLitElement {
     }
   }
 
+  override firstUpdated() {
+    this.addEventListener('click', (event) => this.onMatchClick_(event));
+    this.addEventListener('auxclick', (event) => this.onMatchClick_(event));
+    this.addEventListener('focusin', () => this.onMatchFocusin_());
+    this.addEventListener('mousedown', () => this.onMatchMouseDown_());
+  }
+
+  override updated(changedProperties: PropertyValues<this>) {
+    super.updated(changedProperties);
+    if (changedProperties.has('selection') || changedProperties.has('match')) {
+      this.updateAriaLabel_();
+    }
+  }
+
+  private updateAriaLabel_() {
+    if (!this.virtualFocusEnabled) {
+      return;
+    }
+
+    const state = this.selection.state;
+    if (this.selection.line === this.matchIndex) {
+      if (state === SelectionLineState.kNormal) {
+        this.ariaLabel = this.computeAriaLabel_();
+      } else if (state === SelectionLineState.kKeywordMode) {
+        this.ariaLabel = this.match.keywordModel?.chipA11y || '';
+      } else if (state === SelectionLineState.kFocusedButtonAction) {
+        const action = this.match.actions[this.selection.actionIndex];
+        this.ariaLabel = action ? action.a11yLabel : '';
+      } else if (state === SelectionLineState.kFocusedButtonRemoveSuggestion) {
+        this.ariaLabel = this.removeButtonAriaLabel_ || '';
+      }
+    } else {
+      this.ariaLabel = this.computeAriaLabel_();
+    }
+  }
+
   //============================================================================
   // Event handlers
   //============================================================================
 
-  protected onActivateKeyword_(e: ActionEvent) {
+  protected onKeywordExecuteAction_(e: ActionEvent) {
     // Keyboard activation isn't possible because when the keyword chip is
     // focused, focus is redirected to the omnibox view.
     const event = e.detail.event as PointerEvent;
@@ -285,8 +328,14 @@ export class SearchboxMatchElement extends CrLitElement {
 
     this.pageHandler_.openAutocompleteMatch(
         this.matchIndex, this.match.destinationUrl,
-        /* are_matches_showing */ true, e.button || 0, e.altKey, e.ctrlKey,
-        e.metaKey, e.shiftKey);
+        /*areMatchesShowing=*/ true,
+        /*mouseButton=*/ e.button || 0, {
+          altKey: e.altKey,
+          ctrlKey: e.ctrlKey,
+          metaKey: e.metaKey,
+          shiftKey: e.shiftKey,
+        },
+        /*viaKeyboard=*/ false);
 
     // Duplicates the logic in `ui::DispositionFromClick()`.
     const backgroundTab = (e.metaKey || e.ctrlKey) && e.shiftKey;
@@ -316,11 +365,12 @@ export class SearchboxMatchElement extends CrLitElement {
     e.preventDefault();   // Prevents default browser action (navigation).
     e.stopPropagation();  // Prevents <iron-selector> from selecting the match.
 
+    this.fire('match-remove');
     this.pageHandler_.deleteAutocompleteMatch(
         this.matchIndex, this.match.destinationUrl);
   }
 
-  protected onRemoveButtonMouseDown_(e: Event) {
+  protected onRemoveButtonMousedown_(e: Event) {
     e.preventDefault();  // Prevents default browser action (focus).
   }
 
@@ -332,11 +382,27 @@ export class SearchboxMatchElement extends CrLitElement {
     if (!this.match) {
       return '';
     }
-    return this.match.a11yLabel;
+    let label = this.match.a11yLabel;
+    const description = this.getMatchDescription_();
+    if (description) {
+      label = `${label}, ${description}`;
+    }
+    return label;
   }
 
-  private sanitizeInnerHtml_(html: string): TrustedHTML {
-    return sanitizeInnerHtml(html, {attrs: ['class']});
+  /**
+   * Sanitizes .innerHTML from `renderTextWithClassifications_()` through
+   * `sanitizeInnerHtml` to ensure it only contains allowed tags.
+   * @param innerHtml The .innerHTML from `renderTextWithClassifications_()`
+   * @return Sanitized TrustedHTML safe for rendering
+   */
+  private sanitizeInnerHtml_(innerHtml: string): TrustedHTML {
+    try {
+      return sanitizeInnerHtml(innerHtml, {attrs: ['class']});
+    } catch (e) {
+      // If sanitization fails return empty HTML.
+      return window.trustedTypes!.emptyHTML;
+    }
   }
 
   private computeContentsHtml_(): TrustedHTML {
@@ -360,14 +426,11 @@ export class SearchboxMatchElement extends CrLitElement {
     if (!this.match) {
       return window.trustedTypes!.emptyHTML;
     }
-    const match = this.match;
-    if (match.answer) {
-      return this.sanitizeInnerHtml_(this.getMatchDescription_());
-    }
     return this.sanitizeInnerHtml_(
         this.renderTextWithClassifications_(
                 this.getMatchDescription_(),
-                this.getMatchDescriptionClassifications_())
+                this.match.answer ? [] :
+                                    this.getMatchDescriptionClassifications_())
             .innerHTML);
   }
 
@@ -375,12 +438,16 @@ export class SearchboxMatchElement extends CrLitElement {
     return this.match?.actions?.length > 0;
   }
 
-  private computeHasKeyword_(): boolean {
-    return this.match && !!this.match.keywordChipHint;
+  private computeHasKeywordChip_(): boolean {
+    return this.match?.keywordModel?.type === KeywordType.kChip;
   }
 
   private computeHasImage_(): boolean {
     return this.match && !!this.match.imageUrl;
+  }
+
+  private computeIsContextualSuggestion_(): boolean {
+    return this.match.isContextualSuggestion;
   }
 
   private computeIsEntitySuggestion_(): boolean {
@@ -463,17 +530,36 @@ export class SearchboxMatchElement extends CrLitElement {
    */
   private renderTextWithClassifications_(
       text: string, classifications: ACMatchClassification[]): Element {
-    return classifications
-        .map(({offset, style}, index) => {
-          const next = classifications[index + 1] || {offset: text.length};
-          const subText = text.substring(offset, next.offset);
-          const classes = this.convertClassificationStyleToCssClasses_(style);
-          return this.createSpanWithClasses_(subText, classes);
-        })
-        .reduce((container, currentElement) => {
-          container.appendChild(currentElement);
-          return container;
-        }, document.createElement('span'));
+    const container = document.createElement('span');
+
+    // If no classifications are provided, render the entire text unstyled.
+    if (classifications.length === 0) {
+      container.appendChild(this.createSpanWithClasses_(text, []));
+      return container;
+    }
+
+    // If the first classification doesn't start at 0, render the prefix text
+    // unstyled. `AutocompleteMatch::ValidateClassifications()` guarantees the
+    // first offset is 0, however this is only validated in debug builds.
+    const firstClassification = classifications[0]!;
+    if (firstClassification.offset > 0) {
+      const prefix = text.substring(0, firstClassification.offset);
+      container.appendChild(this.createSpanWithClasses_(prefix, []));
+    }
+
+    classifications.map(({offset, style}, index) => {
+      // Each classification defines a region from its offset to the next
+      // classification's offset or end of string for the last one. This covers
+      // the entire string with no gaps.
+      const nextOffset = index + 1 < classifications.length ?
+          classifications[index + 1]!.offset :
+          text.length;
+      const subString = text.substring(offset, nextOffset);
+      const classes = this.convertClassificationStyleToCssClasses_(style);
+      container.appendChild(this.createSpanWithClasses_(subString, classes));
+    });
+
+    return container;
   }
 
   private getMatchContents_(): string {
@@ -525,7 +611,7 @@ export class SearchboxMatchElement extends CrLitElement {
   protected getFocusIndicatorCssClass_(): string {
     return this.selection.line === this.matchIndex &&
             this.selection.state !== SelectionLineState.kNormal &&
-            !this.match.hasInstantKeyword ?
+            this.match.keywordModel?.type !== KeywordType.kInstant ?
         'selected-within' :
         '';
   }

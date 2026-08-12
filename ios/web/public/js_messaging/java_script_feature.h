@@ -15,7 +15,8 @@
 #import "base/memory/weak_ptr.h"
 #import "base/values.h"
 #import "ios/web/public/js_messaging/content_world.h"
-#include "ios/web/public/js_messaging/web_frame.h"
+#import "ios/web/public/js_messaging/origin_filter.h"
+#import "ios/web/public/js_messaging/web_frame.h"
 
 namespace base {
 class TimeDelta;
@@ -37,6 +38,7 @@ class WebFramesManager;
 // state itself and can be used application-wide across browser states. However,
 // this is not guaranteed of JavaScriptFeature subclasses.
 class JavaScriptFeature {
+  friend class ContentJavaScriptFeatureManager;
   // `FuzzerEnvWithJavaScriptFeature` stores subclasses of `JavaScriptFeature`
   // and invokes `ScriptMessageReceived` function in a public API. So fuzzers
   // can call `ScriptMessageReceived` functions without friending with each
@@ -84,7 +86,9 @@ class JavaScriptFeature {
     // Creates a FeatureScript with the script file from the application bundle
     // with `filename` to be injected at `injection_time` into `target_frames`
     // using `reinjection_behavior`. If `replacements` is provided, it will be
-    // used to replace placeholder with the corresponding string values.
+    // used to replace placeholder with the corresponding string values. If
+    // `origin_filter` is provided, the script will have no effect in pages from
+    // other origins.
     static FeatureScript CreateWithFilename(
         const std::string& filename,
         InjectionTime injection_time,
@@ -92,12 +96,14 @@ class JavaScriptFeature {
         ReinjectionBehavior reinjection_behavior =
             ReinjectionBehavior::kInjectOncePerWindow,
         const PlaceholderReplacementsCallback& replacements_callback =
-            PlaceholderReplacementsCallback());
+            PlaceholderReplacementsCallback(),
+        OriginFilter origin_filter = OriginFilter::kPublic);
 
     // Creates a FeatureScript with the string `script` to be injected at
     // `injection_time` into `target_frames` using `reinjection_behavior`. If
     // `replacements` is provided, it will be used to replace placeholder with
-    // the corresponding string values.
+    // the corresponding string values. If `origin_filter` is provided, the
+    // script will have no effect in pages from other origins.
     static FeatureScript CreateWithString(
         const std::string& script,
         InjectionTime injection_time,
@@ -105,7 +111,8 @@ class JavaScriptFeature {
         ReinjectionBehavior reinjection_behavior =
             ReinjectionBehavior::kInjectOncePerWindow,
         const PlaceholderReplacementsCallback& replacements_callback =
-            PlaceholderReplacementsCallback());
+            PlaceholderReplacementsCallback(),
+        OriginFilter origin_filter = OriginFilter::kPublic);
 
     FeatureScript(const FeatureScript& other);
     FeatureScript& operator=(const FeatureScript&);
@@ -118,6 +125,7 @@ class JavaScriptFeature {
 
     InjectionTime GetInjectionTime() const { return injection_time_; }
     TargetFrames GetTargetFrames() const { return target_frames_; }
+    OriginFilter GetOriginFilter() const { return origin_filter_; }
 
     ~FeatureScript();
 
@@ -128,7 +136,8 @@ class JavaScriptFeature {
                   InjectionTime injection_time,
                   TargetFrames target_frames,
                   ReinjectionBehavior reinjection_behavior,
-                  const PlaceholderReplacementsCallback& replacements_callback);
+                  const PlaceholderReplacementsCallback& replacements_callback,
+                  OriginFilter origin_filter);
 
     // Returns `script` after swapping the placeholders with their value as
     // instructed by `replacements_callback_`.
@@ -140,6 +149,7 @@ class JavaScriptFeature {
     InjectionTime injection_time_;
     TargetFrames target_frames_;
     ReinjectionBehavior reinjection_behavior_;
+    OriginFilter origin_filter_;
     PlaceholderReplacementsCallback replacements_callback_;
   };
 
@@ -148,15 +158,19 @@ class JavaScriptFeature {
   // configured within that same world.
   // NOTE: Features should use `kIsolatedWorld` whenever possible to allow for
   // isolation between the feature and the loaded webpage JavaScript.
-  JavaScriptFeature(ContentWorld supported_world,
-                    std::vector<FeatureScript> feature_scripts);
-  // Same as above constructor with the addition of dependent features. If
-  // `dependent_features` are given, they will be setup in the world specified
-  // prior to configuring this feaure.
+  // If `dependent_features` are given, they will be setup in the world
+  // specified prior to configuring this feaure. If `origin_filter` is set
+  // message will only be processed if coming from this domain. All
+  // FeatureScript in `feature_script` must have the same OriginFilter.
   JavaScriptFeature(ContentWorld supported_world,
                     std::vector<FeatureScript> feature_scripts,
-                    std::vector<const JavaScriptFeature*> dependent_features);
+                    std::vector<const JavaScriptFeature*> dependent_feature =
+                        std::vector<const JavaScriptFeature*>(),
+                    OriginFilter origin_filter = OriginFilter::kPublic);
   virtual ~JavaScriptFeature();
+
+  // Returns a weak ptr to the feature.
+  base::WeakPtr<JavaScriptFeature> AsWeakPtr() const;
 
   // Returns the supported content world for this feature.
   ContentWorld GetSupportedContentWorld() const;
@@ -182,12 +196,8 @@ class JavaScriptFeature {
   // messages from JavaScript. Returning null will not register any handler.
   virtual std::optional<std::string> GetScriptMessageHandlerName() const;
 
-  using ScriptMessageHandler =
-      base::RepeatingCallback<void(WebState* web_state,
-                                   const ScriptMessage& message)>;
-  // Returns the script message handler callback if
-  // `GetScriptMessageHandlerName()` returns a handler name.
-  std::optional<ScriptMessageHandler> GetScriptMessageHandler() const;
+  // Returns whether the feature replies to messages sent from JavaScript.
+  virtual bool GetFeatureRepliesToMessages() const;
 
   JavaScriptFeature(const JavaScriptFeature&) = delete;
 
@@ -199,7 +209,7 @@ class JavaScriptFeature {
   // See WebFrame::CallJavaScriptFunction for more details.
   bool CallJavaScriptFunction(WebFrame* web_frame,
                               const std::string& function_name,
-                              const base::Value::List& parameters);
+                              const base::ListValue& parameters);
 
   // Calls `function_name` with `parameters` in `web_frame` within the content
   // world that this feature has been configured. `callback` will be called with
@@ -209,9 +219,17 @@ class JavaScriptFeature {
   bool CallJavaScriptFunction(
       WebFrame* web_frame,
       const std::string& function_name,
-      const base::Value::List& parameters,
+      const base::ListValue& parameters,
       base::OnceCallback<void(const base::Value*)> callback,
       base::TimeDelta timeout);
+
+  // Calls `name` with `parameters` in `web_frame` within the content
+  // world that this feature has been configured. `web_frame` must not be null.
+  // See WebFrame::CallAsyncJavaScriptFunction for more details.
+  bool CallAsyncJavaScriptFunction(WebFrame* web_frame,
+                                   const std::string& name,
+                                   const base::DictValue& parameters,
+                                   ExecuteJavaScriptCallbackWithError callback);
 
   // Use of this function is DISCOURAGED. Prefer the `CallJavaScriptFunction`
   // family of functions instead to keep the API clear and well defined.
@@ -222,16 +240,55 @@ class JavaScriptFeature {
                          const std::u16string& script,
                          ExecuteJavaScriptCallbackWithError callback);
 
+  // Use of this function is DISCOURAGED. Prefer the
+  // `CallAsyncJavaScriptFunction` function instead to keep the API clear and
+  // well defined. Executes an async `script` in `web_frame` within the content
+  // world that this feature has been configured. See
+  // WebFrame::ExecuteAsyncJavaScript for more details.
+  bool ExecuteAsyncJavaScript(WebFrame* web_frame,
+                              const std::u16string& script,
+                              const base::DictValue& parameters,
+                              ExecuteJavaScriptCallbackWithError callback);
+
+  // Friending JavaScriptContentWorld so it can bind ScriptMessageReceived and
+  // ScriptMessageReceivedWithReply.
+  friend class JavaScriptContentWorld;
+
   // Callback for script messages registered through `GetScriptMessageHandler`.
   // `ScriptMessageReceived` is called when `web_state` receives a `message`.
   // `web_state` will always be non-null.
+  // Must be overridden in subclass for features that opt out to reply to
+  // messages.
   virtual void ScriptMessageReceived(WebState* web_state,
                                      const ScriptMessage& message);
 
+  using ScriptMessageReplyCallback =
+      base::OnceCallback<void(const base::Value* reply, NSString* error)>;
+
+  // Callback for script messages registered through
+  // `GetScriptMessageHandlerWithReply`. `ScriptMessageReceived` is called when
+  // `web_state` receives a `message`. `web_state` will always be non-null.
+  // Must be overridden in subclass for features that opt in to reply to
+  // messages.
+  virtual void ScriptMessageReceivedWithReply(
+      WebState* web_state,
+      const ScriptMessage& message,
+      ScriptMessageReplyCallback callback);
+
  private:
+  // Whether this feature can call into a frame with `origin`. Always returns
+  // `YES` for `kPublic` features.
+  bool ShouldAllowCallingFunctionInOrigin(const url::Origin& origin);
+
+  // Whether a message coming from a frame showing a page from `origin` should
+  // be handled. Always returns `YES` for `kPublic` features.
+  bool ShouldHandleMessageFromOrigin(const url::Origin& origin);
+
   ContentWorld supported_world_;
   const std::vector<FeatureScript> scripts_;
   const std::vector<const JavaScriptFeature*> dependent_features_;
+  OriginFilter origin_filter_ = OriginFilter::kPublic;
+  std::vector<url::Origin> origin_filter_origins_;
   base::WeakPtrFactory<JavaScriptFeature> weak_factory_;
 };
 

@@ -16,7 +16,10 @@ import org.chromium.base.Log;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.components.omnibox.OmniboxFeatures;
+import org.chromium.components.omnibox.OmniboxWordBoundary;
+import org.chromium.components.omnibox.TextSelection;
 import org.chromium.ui.accessibility.AccessibilityState;
+import org.chromium.ui.base.KeyNavigationUtil;
 
 import java.util.regex.Pattern;
 
@@ -81,8 +84,8 @@ public class SpannableAutocompleteEditTextModel
                         delegate.getText().toString(),
                         null,
                         null,
-                        delegate.getSelectionStart(),
-                        delegate.getSelectionEnd());
+                        new TextSelection(delegate.getSelectionStart(), delegate.getSelectionEnd()),
+                        null);
         mPreviouslyNotifiedState = new AutocompleteState(mCurrentState);
         mPreviouslySetState = new AutocompleteState(mCurrentState);
 
@@ -154,8 +157,7 @@ public class SpannableAutocompleteEditTextModel
             mDelegate.sendAccessibilityEvent(event);
         }
 
-        if (oldState.getSelStart() != newState.getSelStart()
-                || oldState.getSelEnd() != newState.getSelEnd()) {
+        if (!oldState.getSelection().equals(newState.getSelection())) {
             mDelegate.sendAccessibilityEvent(
                     AccessibilityEvent.obtain(AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED));
         }
@@ -252,26 +254,96 @@ public class SpannableAutocompleteEditTextModel
                 || code == KeyEvent.KEYCODE_DPAD_RIGHT;
     }
 
+    /** Returns whether {@code event} is a Ctrl-modified delete-by-word event. */
+    @Override
+    public boolean isDeleteByWord(final KeyEvent event) {
+        return event.getAction() == KeyEvent.ACTION_DOWN
+                && event.isCtrlPressed()
+                && !event.isShiftPressed()
+                && (event.getKeyCode() == KeyEvent.KEYCODE_DEL
+                        || event.getKeyCode() == KeyEvent.KEYCODE_FORWARD_DEL);
+    }
+
+    /**
+     * Deletes the word adjacent to the cursor.
+     *
+     * @param forward True for a forward delete; false for backward.
+     * @return True if a word was deleted and the event was consumed; false otherwise.
+     */
+    private boolean deleteByWord(final boolean forward) {
+        assert mInputConnection != null;
+        TextSelection selection = mCurrentState.getSelection();
+        if (!selection.isCollapsed()) return false;
+
+        String userText = mCurrentState.getUserText();
+        int length = userText.length();
+        int cursor = Math.max(0, Math.min(selection.to, length));
+
+        int boundary = OmniboxWordBoundary.getDeletionBoundary(userText, cursor, forward);
+        if (forward) {
+            if (boundary <= cursor) return false;
+            mInputConnection.deleteSurroundingText(0, boundary - cursor);
+        } else {
+            if (boundary >= cursor) return false;
+            mInputConnection.deleteSurroundingText(cursor - boundary, 0);
+        }
+
+        mLastEditWasTyping = false;
+        return true;
+    }
+
+    /**
+     * Translates specific keyboard combinations into standardized key events.
+     *
+     * @param event The original key event.
+     * @return The translated key event, or the original if no translation is needed.
+     */
+    private KeyEvent translateKeyEvent(final KeyEvent event) {
+        if (event.getKeyCode() == KeyEvent.KEYCODE_DEL && event.isAltPressed()) {
+            int newMetaState = event.getMetaState() & ~KeyEvent.META_ALT_MASK;
+            return new KeyEvent(
+                    event.getDownTime(),
+                    event.getEventTime(),
+                    event.getAction(),
+                    KeyEvent.KEYCODE_FORWARD_DEL,
+                    event.getRepeatCount(),
+                    newMetaState);
+        }
+        return event;
+    }
+
     @Override
     public boolean dispatchKeyEvent(final KeyEvent event) {
         if (DEBUG) Log.i(TAG, "dispatchKeyEvent");
+
+        KeyEvent dispatchedEvent = translateKeyEvent(event);
+
         if (mInputConnection == null) {
-            return mDelegate.super_dispatchKeyEvent(event);
+            // Hardware typing bypasses IME batch edits when mInputConnection is null. Mark
+            // mLastEditWasTyping so onTextChanged recognizes edits as user typing.
+            if (dispatchedEvent.getAction() == KeyEvent.ACTION_DOWN
+                    && dispatchedEvent.isPrintingKey()) {
+                setLastEditWasTyping(true);
+            }
+            return mDelegate.super_dispatchKeyEvent(dispatchedEvent);
         }
 
         boolean retVal;
         mInputConnection.onBeginImeCommand();
-        if (hasAutocomplete() && event.getAction() == KeyEvent.ACTION_DOWN) {
-            if (event.getKeyCode() == KeyEvent.KEYCODE_FORWARD_DEL) {
-                // The editor doesn't see the selected text so won't handle forward delete.
+        if (hasAutocomplete() && dispatchedEvent.getAction() == KeyEvent.ACTION_DOWN) {
+            if (dispatchedEvent.getKeyCode() == KeyEvent.KEYCODE_FORWARD_DEL
+                    || dispatchedEvent.getKeyCode() == KeyEvent.KEYCODE_DEL) {
+                // The editor doesn't see the selected text so won't handle forward delete. Normal
+                // delete doesn't always work on the last character on hard keyboards, so handle it
+                // similarly.
                 clearAutocompleteText();
                 mLastEditWasTyping = false;
 
                 retVal = true;
-            } else if (cursorMovementCommitsAutocomplete(event)) {
+            } else if (cursorMovementCommitsAutocomplete(dispatchedEvent)) {
                 // These commands treat the autocomplete suggestion as a selection and then apply
                 // the cursor movement.
-                int currentPos = mCurrentState.getSelStart();
+                int currentPos = mCurrentState.getSelection().from;
                 int totalLength = mCurrentState.getUserText().length();
                 String autocompleteText = mCurrentState.getAutocompleteText();
                 if (autocompleteText != null) {
@@ -280,8 +352,8 @@ public class SpannableAutocompleteEditTextModel
 
                 mInputConnection.commitAutocomplete();
                 mDelegate.setSelection(currentPos, totalLength);
-                retVal = mDelegate.super_dispatchKeyEvent(event);
-            } else if (event.getKeyCode() == KeyEvent.KEYCODE_TAB) {
+                retVal = mDelegate.super_dispatchKeyEvent(dispatchedEvent);
+            } else if (KeyNavigationUtil.isTabNavigation(dispatchedEvent)) {
                 mInputConnection.commitAutocomplete();
                 retVal = true;
             } else {
@@ -289,16 +361,19 @@ public class SpannableAutocompleteEditTextModel
                 // AutocompleteMediator queries us via getTextWithAutocomplete() so it's included
                 // either way. Avoiding the extra commit eliminates a brief cursor flash at the end
                 // of the autocomplete suggestion.
-                retVal = mDelegate.super_dispatchKeyEvent(event);
+                retVal = mDelegate.super_dispatchKeyEvent(dispatchedEvent);
             }
+        } else if (isDeleteByWord(dispatchedEvent)
+                && deleteByWord(dispatchedEvent.getKeyCode() == KeyEvent.KEYCODE_FORWARD_DEL)) {
+            retVal = true;
         } else {
-            if (event.getAction() == KeyEvent.ACTION_DOWN
-                    && event.getKeyCode() == KeyEvent.KEYCODE_FORWARD_DEL) {
+            if (dispatchedEvent.getAction() == KeyEvent.ACTION_DOWN
+                    && dispatchedEvent.getKeyCode() == KeyEvent.KEYCODE_FORWARD_DEL) {
                 // Delete key when there's no autocomplete suggestion. Use the normal behavior but
                 // inhibit suggestions.
                 mLastEditWasTyping = false;
             }
-            retVal = mDelegate.super_dispatchKeyEvent(event);
+            retVal = mDelegate.super_dispatchKeyEvent(dispatchedEvent);
         }
 
         mInputConnection.onEndImeCommand();
@@ -310,7 +385,12 @@ public class SpannableAutocompleteEditTextModel
         if (DEBUG) Log.i(TAG, "onSetText: " + text);
         // setText() does not necessarily trigger onTextChanged(). We need to accept the new text
         // and reset the states.
-        mCurrentState.set(text.toString(), null, null, text.length(), text.length());
+        mCurrentState.set(
+                text.toString(),
+                null,
+                null,
+                new TextSelection(text.length(), text.length()),
+                null);
         mSpanCursorController.reset();
         if (mIgnoreTextChangeFromAutocomplete) {
             mPreviouslyNotifiedState.copyFrom(mCurrentState);
@@ -322,7 +402,8 @@ public class SpannableAutocompleteEditTextModel
     @Override
     public void onSelectionChanged(int selStart, int selEnd) {
         if (DEBUG) Log.i(TAG, "onSelectionChanged [%d,%d]", selStart, selEnd);
-        if (mCurrentState.getSelStart() == selStart && mCurrentState.getSelEnd() == selEnd) return;
+        TextSelection selection = mCurrentState.getSelection();
+        if (selection.from == selStart && selection.to == selEnd) return;
 
         // Do not allow users to select the space between additional texts.
         String autocompleteText = mCurrentState.getAutocompleteText();
@@ -336,7 +417,7 @@ public class SpannableAutocompleteEditTextModel
             return;
         }
 
-        mCurrentState.setSelection(selStart, selEnd);
+        mCurrentState.setSelection(new TextSelection(selStart, selEnd));
         if (mBatchEditNestCount > 0) return;
         int len = mCurrentState.getUserText().length();
         if (autocompleteText != null) {
@@ -360,8 +441,8 @@ public class SpannableAutocompleteEditTextModel
             // Reset selection now. It will be updated immediately after focus is re-gained.
             // We do this to ensure the selection changed announcements are advertised by us
             // since we suppress all TEXT_SELECTION_CHANGED announcements coming from EditText.
-            mPreviouslyNotifiedState.setSelection(-1, -1);
-            mCurrentState.setSelection(-1, -1);
+            mPreviouslyNotifiedState.setSelection(TextSelection.INVALID);
+            mCurrentState.setSelection(TextSelection.INVALID);
         }
     }
 
@@ -370,8 +451,10 @@ public class SpannableAutocompleteEditTextModel
         if (DEBUG) Log.i(TAG, "onTextChanged: " + text);
         mSpanCursorController.reflectTextUpdateInState(mCurrentState, text);
         if (mBatchEditNestCount > 0) return; // let endBatchEdit() handles changes from IME.
-        // An external change such as text paste occurred.
-        mLastEditWasTyping = false;
+        if (!mLastEditWasTyping && !mIgnoreTextChangeFromAutocomplete) {
+            // An external change such as text paste occurred.
+            mLastEditWasTyping = false;
+        }
         clearAutocompleteTextAndUpdateSpanCursor();
     }
 
@@ -416,7 +499,8 @@ public class SpannableAutocompleteEditTextModel
     public void setAutocompleteText(
             CharSequence userText,
             @Nullable CharSequence inlineAutocompleteText,
-            @Nullable String additionalText) {
+            @Nullable String additionalText,
+            @Nullable String siteSearchLabel) {
         // Note: this is invoked when the Autocomplete text is supplied by the Autocomplete
         // subsystem. These changes should be ignored for Autocomplete, specifically should not
         // be sent back to the Autocomplete subsystem to trigger suggestions fetch.
@@ -424,19 +508,23 @@ public class SpannableAutocompleteEditTextModel
         setAutocompleteTextInternal(
                 userText.toString(),
                 inlineAutocompleteText != null ? inlineAutocompleteText.toString() : null,
-                additionalText);
+                additionalText,
+                siteSearchLabel);
         setIgnoreTextChangeFromAutocomplete(false);
     }
 
     private void setAutocompleteTextInternal(
-            String userText, @Nullable String autocompleteText, @Nullable String additionalText) {
+            String userText,
+            @Nullable String autocompleteText,
+            @Nullable String additionalText,
+            @Nullable String siteSearchLabel) {
         if (DEBUG) Log.i(TAG, "setAutocompleteText: %s[%s]", userText, autocompleteText);
         mPreviouslySetState.set(
                 userText,
                 TextUtils.isEmpty(autocompleteText) ? null : autocompleteText,
                 additionalText,
-                userText.length(),
-                userText.length());
+                new TextSelection(userText.length(), userText.length()),
+                siteSearchLabel);
         // TODO(changwan): avoid any unnecessary removal and addition of autocomplete text when it
         // is not changed or when it is appended to the existing autocomplete text.
         if (mInputConnection != null) {
@@ -450,6 +538,7 @@ public class SpannableAutocompleteEditTextModel
         boolean retVal =
                 mBatchEditNestCount == 0
                         && mLastEditWasTyping
+                        && mCurrentState.getSelection().isCollapsed()
                         && mCurrentState.isCursorAtEndOfUserText()
                         && doesKeyboardSupportAutocomplete()
                         && isNonCompositionalText(getTextWithoutAutocomplete());
@@ -459,14 +548,15 @@ public class SpannableAutocompleteEditTextModel
 
     private boolean doesKeyboardSupportAutocomplete() {
         String pkgName = mDelegate.getKeyboardPackageName();
-        return !pkgName.contains(".iqqi") // crbug.com/767016
+        return !pkgName.contains(".iqqi") // crbug.com/41345660
                 && !pkgName.contains("omronsoft")
-                && !pkgName.contains(".iwnn"); // crbug.com/758443
+                && !pkgName.contains(".iwnn"); // crbug.com/40536735
     }
 
     @Override
     public boolean shouldFinishCompositionOnDeletion() {
-        // crbug.com/758443, crbug.com/766888: Japanese keyboard does not finish composition when we
+        // crbug.com/40536735, crbug.com/41345594: Japanese keyboard does not finish composition
+        // when we
         // restore the deleted text, and later typing will make Japanese keyboard move before the
         // restored character. Most keyboards accept finishComposingText and update their internal
         // states.
@@ -476,7 +566,7 @@ public class SpannableAutocompleteEditTextModel
         // keyboards, instead we call finishComposingText() for all the keyboards except for Samsung
         // keyboard.
         return !pkgName.contains("com.sec.android.inputmethod")
-                // crbug.com/1071011: LG keyboard has the same issue.
+                // crbug.com/40684893: LG keyboard has the same issue.
                 && !pkgName.contains("com.lge.ime");
     }
 

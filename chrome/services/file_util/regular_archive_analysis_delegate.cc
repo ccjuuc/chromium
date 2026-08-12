@@ -6,11 +6,15 @@
 
 #include <optional>
 
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "chrome/utility/safe_browsing/zip_writer_delegate.h"
+#include "third_party/zlib/google/zip_reader.h"
+
+#if USE_UNRAR
 #include "third_party/unrar/google/unrar_delegates.h"
 #include "third_party/unrar/google/unrar_wrapper.h"
-#include "third_party/zlib/google/zip_reader.h"
+#endif
 
 namespace safe_browsing {
 
@@ -58,8 +62,8 @@ class ZipWriterDelegate : public zip::FileWriterDelegate,
     return success;
   }
 
-  bool WriteBytes(const char* data, int num_bytes) override {
-    bool success = zip::FileWriterDelegate::WriteBytes(data, num_bytes);
+  bool WriteBytes(base::span<const uint8_t> data) override {
+    const bool success = zip::FileWriterDelegate::WriteBytes(data);
     has_disk_error_ |= !success;
     return success;
   }
@@ -91,6 +95,7 @@ RegularArchiveAnalysisDelegate::CreateZipWriterDelegate(base::File file) {
   return std::make_unique<ZipWriterDelegate>(std::move(file));
 }
 
+#if USE_UNRAR
 std::unique_ptr<third_party_unrar::RarReaderDelegate>
 RegularArchiveAnalysisDelegate::CreateRarReaderDelegate(base::File file) {
   return std::make_unique<third_party_unrar::FileReader>(std::move(file));
@@ -100,6 +105,7 @@ std::unique_ptr<third_party_unrar::RarWriterDelegate>
 RegularArchiveAnalysisDelegate::CreateRarWriterDelegate(base::File file) {
   return std::make_unique<third_party_unrar::FileWriter>(std::move(file));
 }
+#endif
 
 std::unique_ptr<ArchiveAnalysisDelegate>
 RegularArchiveAnalysisDelegate::CreateNestedDelegate(

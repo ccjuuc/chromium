@@ -10,12 +10,16 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_readable_writable_pair.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/fetch/body_stream_buffer.h"
 #include "third_party/blink/renderer/core/fetch/fetch_data_loader.h"
 #include "third_party/blink/renderer/core/fileapi/blob.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/forms/form_data.h"
+#include "third_party/blink/renderer/core/streams/readable_stream.h"
+#include "third_party/blink/renderer/core/streams/text_decoder_transformer.h"
+#include "third_party/blink/renderer/core/streams/transform_stream.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
 #include "third_party/blink/renderer/core/url/url_search_params.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
@@ -25,7 +29,9 @@
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/text_resource_decoder_options.h"
 #include "third_party/blink/renderer/platform/network/parsed_content_type.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/text/text_encoding.h"
 
 namespace blink {
 
@@ -52,9 +58,15 @@ class BodyConsumerBase : public GarbageCollected<BodyConsumerBase>,
     }
   }
 
-  void Abort() override {
-    resolver_->Reject(
-        MakeGarbageCollected<DOMException>(DOMExceptionCode::kAbortError));
+  void Abort(ScriptValue reason) override {
+    if (RuntimeEnabledFeatures::ForwardReasonToFetchBodyAbortEnabled()) {
+      // This is the standardized behavior, but is currently behind an
+      // experiment as it's a potentially breaking change.
+      resolver_->Reject(reason);
+    } else {
+      resolver_->Reject(
+          MakeGarbageCollected<DOMException>(DOMExceptionCode::kAbortError));
+    }
   }
 
   // Resource Timing event is not yet added, so delay the resolution timing
@@ -301,7 +313,7 @@ ScriptPromise<FormData> Body::formData(ScriptState* script_state,
   };
   const ParsedContentType parsed_type_with_parameters(ContentType());
   const String parsed_type =
-      parsed_type_with_parameters.MimeType().LowerASCII();
+      parsed_type_with_parameters.MimeType().ToAsciiLower();
   if (parsed_type == "multipart/form-data") {
     const String boundary =
         parsed_type_with_parameters.ParameterValueForName("boundary");
@@ -377,6 +389,47 @@ ReadableStream* Body::body() {
   }
 
   return nullptr;
+}
+
+ReadableStream* Body::textStream(ScriptState* script_state,
+                                 ExceptionState& exception_state) {
+  ReadableStream* body_stream = body();
+  if (!body_stream) {
+    ReadableStream* stream =
+        ReadableStream::Create(script_state, exception_state);
+    if (stream && !exception_state.HadException()) {
+      stream->CloseStream(script_state, exception_state);
+    }
+    return stream;
+  }
+
+  RejectInvalidConsumption(exception_state);
+  if (exception_state.HadException()) {
+    return nullptr;
+  }
+
+  // Spec: https://github.com/whatwg/fetch/pull/1862
+  // Always using utf-8, ignoring response headers.
+  auto* transformer = MakeGarbageCollected<TextDecoderTransformer>(
+      script_state, Utf8Encoding(), /*fatal=*/false,
+      /*ignore_bom=*/false);
+  TransformStream* transform_stream =
+      TransformStream::Create(script_state, transformer, exception_state);
+  if (exception_state.HadException() || !transform_stream) {
+    return nullptr;
+  }
+
+  ReadableWritablePair* pair = ReadableWritablePair::Create();
+  pair->setReadable(transform_stream->readable());
+  pair->setWritable(transform_stream->writable());
+
+  ReadableStream* piped_stream =
+      body_stream->pipeThrough(script_state, pair, exception_state);
+  if (exception_state.HadException()) {
+    return nullptr;
+  }
+
+  return piped_stream;
 }
 
 bool Body::IsBodyUsed() const {

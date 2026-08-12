@@ -18,6 +18,7 @@
 #include "content/browser/web_contents/web_contents_view.h"
 #include "content/common/content_export.h"
 #include "content/common/web_contents_ns_view_bridge.mojom.h"
+#include "content/public/browser/clipboard_types.h"
 #include "content/public/browser/visibility.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
@@ -47,11 +48,12 @@ namespace content {
 
 // Mac-specific implementation of the WebContentsView. It owns an NSView that
 // contains all of the contents of the tab and associated child views.
-class WebContentsViewMac : public WebContentsView,
-                           public RenderViewHostDelegateView,
-                           public PopupMenuHelper::Delegate,
-                           public remote_cocoa::mojom::WebContentsNSViewHost,
-                           public ui::ViewsHostableView {
+class CONTENT_EXPORT WebContentsViewMac
+    : public WebContentsView,
+      public RenderViewHostDelegateView,
+      public PopupMenuHelper::Delegate,
+      public remote_cocoa::mojom::WebContentsNSViewHost,
+      public ui::ViewsHostableView {
  public:
   // The corresponding WebContentsImpl is passed in the constructor, and manages
   // our lifetime. This doesn't need to be the case, but is this way currently
@@ -96,14 +98,14 @@ class WebContentsViewMac : public WebContentsView,
   void DestroyBackForwardTransitionAnimationManager() override;
 
   // RenderViewHostDelegateView:
-  void StartDragging(const DropData& drop_data,
-                     const url::Origin& source_origin,
-                     blink::DragOperationsMask allowed_operations,
-                     const gfx::ImageSkia& image,
-                     const gfx::Vector2d& cursor_offset,
-                     const gfx::Rect& drag_obj_rect,
-                     const blink::mojom::DragEventSourceInfo& event_info,
-                     RenderWidgetHostImpl* source_rwh) override;
+  void StartDragging(
+      RenderFrameHost& source_rfh,
+      const DropData& drop_data,
+      blink::DragOperationsMask allowed_operations,
+      const gfx::ImageSkia& image,
+      const gfx::Vector2d& cursor_offset,
+      const gfx::Rect& drag_obj_rect,
+      const blink::mojom::DragEventSourceInfo& event_info) override;
   void UpdateDragOperation(ui::mojom::DragOperation operation,
                            bool document_is_handling_drag) override;
   void GotFocus(RenderWidgetHostImpl* render_widget_host) override;
@@ -111,6 +113,8 @@ class WebContentsViewMac : public WebContentsView,
   void TakeFocus(bool reverse) override;
   void ShowContextMenu(RenderFrameHost& render_frame_host,
                        const ContextMenuParams& params) override;
+
+#if BUILDFLAG(USE_EXTERNAL_POPUP_MENU)
   void ShowPopupMenu(
       RenderFrameHost* render_frame_host,
       mojo::PendingRemote<blink::mojom::PopupMenuClient> popup_client,
@@ -120,6 +124,7 @@ class WebContentsViewMac : public WebContentsView,
       std::vector<blink::mojom::MenuItemPtr> menu_items,
       bool right_aligned,
       bool allow_multiple_selection) override;
+#endif
 
   // PopupMenuHelper::Delegate:
   void OnMenuClosed() override;
@@ -127,7 +132,8 @@ class WebContentsViewMac : public WebContentsView,
   // ViewsHostableView:
   void ViewsHostableAttach(ViewsHostableView::Host* host) override;
   void ViewsHostableDetach() override;
-  void ViewsHostableSetBounds(const gfx::Rect& bounds_in_superview) override;
+  void ViewsHostableSetBounds(const gfx::Rect& bounds_in_superview,
+                              int superview_height) override;
   void ViewsHostableSetVisible(bool visible) override;
   void ViewsHostableMakeFirstResponder() override;
   void ViewsHostableSetParentAccessible(
@@ -170,10 +176,10 @@ class WebContentsViewMac : public WebContentsView,
                        uint32_t* out_result) override;
   bool PerformDragOperation(remote_cocoa::mojom::DraggingInfoPtr dragging_info,
                             bool* out_result) override;
-  bool DragPromisedFileTo(const base::FilePath& file_path,
+  bool DragPromisedFileTo(content::ChildProcessId render_process_id,
+                          const blink::DocumentToken& document_token,
+                          const base::FilePath& file_path,
                           const DropData& drop_data,
-                          const GURL& download_url,
-                          const url::Origin& source_origin,
                           base::FilePath* out_file_path) override;
   void EndDrag(uint32_t drag_operation,
                const gfx::PointF& local_point,
@@ -193,10 +199,10 @@ class WebContentsViewMac : public WebContentsView,
                        DraggingUpdatedCallback callback) override;
   void PerformDragOperation(remote_cocoa::mojom::DraggingInfoPtr dragging_info,
                             PerformDragOperationCallback callback) override;
-  void DragPromisedFileTo(const base::FilePath& file_path,
+  void DragPromisedFileTo(content::ChildProcessId render_process_id,
+                          const blink::DocumentToken& document_token,
+                          const base::FilePath& file_path,
                           const DropData& drop_data,
-                          const GURL& download_url,
-                          const url::Origin& source_origin,
                           DragPromisedFileToCallback callback) override;
 
   // Return the list of child RenderWidgetHostViewMacs. This will remove any

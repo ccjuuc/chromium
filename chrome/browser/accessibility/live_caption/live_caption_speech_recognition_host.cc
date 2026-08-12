@@ -4,13 +4,13 @@
 
 #include "chrome/browser/accessibility/live_caption/live_caption_speech_recognition_host.h"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
@@ -19,7 +19,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/accessibility/caption_bubble_context_browser.h"
 #include "chrome/browser/accessibility/live_caption/live_caption_controller_factory.h"
-#include "chrome/browser/accessibility/live_translate_controller_factory.h"
+#include "chrome/browser/accessibility/live_caption/live_translate_controller_factory.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/live_caption/greedy_text_stabilizer.h"
@@ -88,7 +88,7 @@ bool IsLanguageInstallable(std::string_view language_code) {
     }
   }
 
-  return base::Contains(
+  return std::ranges::contains(
       speech::SodaInstaller::GetInstance()->GetLiveCaptionEnabledLanguages(),
       language_code);
 }

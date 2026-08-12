@@ -24,10 +24,17 @@ ProtocolHandlerRegistryFactory* ProtocolHandlerRegistryFactory::GetInstance() {
 // static
 std::unique_ptr<KeyedService> BuildProtocolHandlerRegistryService(
     content::BrowserContext* context) {
+  // Each profile gets its own ProtocolHandlerRegistry instance
+  // (ProfileSelection::kOwnInstance). OTR contexts receive a non-null
+  // PrefService whose OverlayUserPrefStore reads through to the originating
+  // profile's prefs; the registry's insertion guard rejects disallowed
+  // handlers loaded from that overlay. OTR writes go to the ephemeral
+  // overlay and are not persisted to disk.
   PrefService* prefs = user_prefs::UserPrefs::Get(context);
-  DCHECK(prefs);
+  CHECK(prefs);
   return custom_handlers::ProtocolHandlerRegistry::Create(
-      prefs, std::make_unique<ChromeProtocolHandlerRegistryDelegate>());
+      prefs, std::make_unique<ChromeProtocolHandlerRegistryDelegate>(),
+      context->IsOffTheRecord());
 }
 
 // static
@@ -47,15 +54,13 @@ ProtocolHandlerRegistryFactory::GetForBrowserContext(
 ProtocolHandlerRegistryFactory::ProtocolHandlerRegistryFactory()
     : ProfileKeyedServiceFactory(
           "ProtocolHandlerRegistry",
-          // Allows the produced registry to be used in incognito mode.
+          // Each profile gets its own registry instance. OTR profiles are
+          // isolated from the originating profile's handlers; see
+          // BuildProtocolHandlerRegistryService above.
           ProfileSelections::Builder()
-              .WithRegular(ProfileSelection::kRedirectedToOriginal)
-              // TODO(crbug.com/40257657): Check if this service is needed in
-              // Guest mode.
-              .WithGuest(ProfileSelection::kRedirectedToOriginal)
-              // TODO(crbug.com/41488885): Check if this service is needed for
-              // Ash Internals.
-              .WithAshInternals(ProfileSelection::kRedirectedToOriginal)
+              .WithRegular(ProfileSelection::kOwnInstance)
+              .WithGuest(ProfileSelection::kOwnInstance)
+              .WithAshInternals(ProfileSelection::kOwnInstance)
               .Build()) {}
 
 ProtocolHandlerRegistryFactory::~ProtocolHandlerRegistryFactory() = default;

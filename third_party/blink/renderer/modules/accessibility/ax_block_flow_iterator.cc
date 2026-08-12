@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "base/check_deref.h"
+#include "base/containers/span.h"
 #include "third_party/blink/renderer/core/layout/inline/fragment_item.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_item_span.h"
 #include "third_party/blink/renderer/core/layout/inline/offset_mapping.h"
@@ -192,14 +193,17 @@ AXBlockFlowData::Neighbor AXBlockFlowData::ComputeNeighborOnLine(
         return FailureReason::kAtLineBoundary;
 
       case FragmentItem::kBox:
-        if (it->BoxFragment()) {
+        if (it->BoxFragment() && !it->IsInlineBox()) {
           // TODO(accessibility): Add a test that exercises this branch.
           // TODO(crbug.com/399204651): Implement navigating into separate
           // PhysicalBox
           // fragments.
           return FailureReason::kAtBoxFragment;
         }
-        // Inline-box continues on to the next/previous item.
+        // Inline-box continues on to the next/previous item. An inline box
+        // like <span> or <a> can have a box fragment of its own, for instance
+        // when it has an outline, but its contents are still in this item
+        // list and it does not change where the lines break.
         break;
 
       case FragmentItem::kInvalid:
@@ -272,7 +276,7 @@ void AXBlockFlowData::ProcessBoxFragment(const PhysicalBoxFragment* fragment,
   // Then item 5 is on a separate nested line containing the annotation. For the
   // purpose of next-previous on-line, we want to be using the line within the
   // paragraph (item 1).
-  std::optional<size_t> current_outermost_line_index;
+  std::optional<wtf_size_t> current_outermost_line_index;
   for (auto it = items->Items().begin(); it != items->Items().end();
        it++, fragment_index++) {
     const LayoutObject* layout_object = it->GetLayoutObject();
@@ -435,24 +439,20 @@ void AXBlockFlowIterator::GetCharacterLayoutPixelOffsets(Vector<int>& offsets) {
     return;
   }
 
-    ShapeResult* shape_result = shape_result_view->CreateShapeResult();
-    if (!shape_result) {
-      return;
+  const ShapeResult* shape_result = shape_result_view->CreateShapeResult();
+  const Vector<CharacterRange> ranges =
+      shape_result->IndividualCharacterRanges();
+  float width_so_far = 0.0;
+  for (wtf_size_t i = 0; i < offsets.size(); ++i) {
+    if (i < ranges.size()) {
+      // The shaper can fail to return glyph metrics for all characters (see
+      // crbug.com/613915 and crbug.com/615661) so add empty ranges to ensure
+      // all characters have an associated range. This means that if there is
+      // no range value, we assume 0 and just add the previous offset.
+      width_so_far += ranges[i].Width();
     }
-      Vector<CharacterRange> ranges;
-      shape_result->IndividualCharacterRanges(&ranges);
-      float width_so_far = 0.0;
-      for (wtf_size_t i = 0; i < offsets.size(); ++i) {
-        if (i < ranges.size()) {
-          // The shaper can fail to return glyph metrics for all characters (see
-          // crbug.com/613915 and crbug.com/615661) so add empty ranges to
-          // ensure all characters have an associated range. This means that if
-          // there is no range value, we assume 0 and just add the previous
-          // offset.
-          width_so_far += ranges[i].Width();
-        }
-        offsets[i] = roundf(width_so_far);
-      }
+    offsets[i] = roundf(width_so_far);
+  }
 }
 
 AXBlockFlowData::Neighbor AXBlockFlowIterator::NextOnLineAsIndex() {
@@ -543,7 +543,7 @@ TextOffsetRange AXBlockFlowIterator::TextOffset() const {
 
 PhysicalDirection AXBlockFlowIterator::GetDirection() const {
   auto* layout_text = To<LayoutText>(layout_object_);
-  return WritingDirectionMode(layout_text->Style()->GetWritingMode(),
+  return WritingDirectionMode(layout_text->StyleRef().GetWritingMode(),
                               block_flow_data_->ItemAt(current_index_.value())
                                   ->ResolvedDirection())
       .InlineEnd();

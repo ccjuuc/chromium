@@ -167,8 +167,9 @@ QualifiedName ConstructQualifiedName(const SVGElement& svg_element,
                                      const AtomicString& attribute_name) {
   if (attribute_name.empty())
     return AnyQName();
-  if (!attribute_name.Contains(':'))
+  if (!attribute_name.contains(':')) {
     return QualifiedName(attribute_name);
+  }
 
   AtomicString prefix;
   AtomicString local_name;
@@ -707,11 +708,19 @@ bool SVGAnimateElement::CalculateFromAndByValues(const String& from_string,
     return false;
   }
 
+  // from-by with empty from: assumes that nothing additive will have a
+  // "usable" empty value, so we can't compute to (from + by).
+  if (GetAnimationMode() == kFromByAnimation && from_string.empty()) {
+    return false;
+  }
+
   from_property_ = from_parsed_value.property;
   from_property_value_type_ = from_parsed_value.property_value_type;
   to_property_ = to_parsed_value.property;
   to_property_value_type_ = to_parsed_value.property_value_type;
-  to_property_->Add(from_property_, targetElement());
+  if (!to_property_->Add(from_property_, targetElement())) {
+    return false;
+  }
   return true;
 }
 

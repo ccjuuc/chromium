@@ -29,7 +29,7 @@ import org.chromium.base.test.params.ParameterSet;
 import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
-import org.chromium.components.browser_ui.widget.test.R;
+import org.chromium.components.browser_ui.widget.R;
 import org.chromium.ui.test.util.BlankUiTestActivity;
 import org.chromium.ui.test.util.NightModeTestUtils;
 import org.chromium.ui.test.util.RenderTestRule;
@@ -180,6 +180,23 @@ public class ChipViewRenderTest {
         reduceChipWidth(chip);
 
         renderChip(chip, "two_line_chip_with_reduced_width");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    public void renderLoadingTwoLineChip() throws Exception {
+        ChipView chip =
+                (ChipView)
+                        mActivityTestRule
+                                .getActivity()
+                                .getLayoutInflater()
+                                .inflate(R.layout.two_line_chip_view_test_item, null);
+        chip.getPrimaryTextView().setText("Primary text");
+        chip.getSecondaryTextView().setText("Secondary text");
+        chip.showLoadingView(/* loadingViewObserver= */ null);
+
+        renderChip(chip, "loading_two_line_chip");
     }
 
     private void renderChip(ChipView chipView, String name) throws Exception {

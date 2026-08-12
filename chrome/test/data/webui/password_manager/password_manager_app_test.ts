@@ -4,10 +4,11 @@
 
 import 'chrome://password-manager/password_manager.js';
 
-import type {PasswordManagerAppElement} from 'chrome://password-manager/password_manager.js';
-import {OpenWindowProxyImpl, Page, PasswordManagerImpl, Router, UrlParam} from 'chrome://password-manager/password_manager.js';
+import type {PasswordManagerAppElement, TrustedVaultErrorDialogElement} from 'chrome://password-manager/password_manager.js';
+import {OpenWindowProxyImpl, Page, PasswordManagerActionableError, PasswordManagerImpl, Router, UrlParam} from 'chrome://password-manager/password_manager.js';
+import {COLORS_CSS_SELECTOR} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
 import {TestOpenWindowProxy} from 'chrome://webui-test/test_open_window_proxy.js';
 import {eventToPromise, isVisible} from 'chrome://webui-test/test_util.js';
@@ -22,6 +23,7 @@ suite('PasswordManagerAppTest', function() {
   let passwordManager: TestPasswordManagerProxy;
 
   setup(function() {
+    loadTimeData.overrideValues({enableTrustedVaultUnlock: true});
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     openWindowProxy = new TestOpenWindowProxy();
     OpenWindowProxyImpl.setInstance(openWindowProxy);
@@ -76,7 +78,7 @@ suite('PasswordManagerAppTest', function() {
 
   test('app drawer', async () => {
     assertEquals(null, app.shadowRoot!.querySelector('#drawerSidebar'));
-    assertFalse(!!app.$.drawer.open);
+    assertFalse(app.$.drawer.open);
 
     const drawerOpened = eventToPromise('cr-drawer-opened', app.$.drawer);
     app.$.drawer.openDrawer();
@@ -100,7 +102,7 @@ suite('PasswordManagerAppTest', function() {
     app.setNarrowForTesting(true);
 
     assertEquals(null, app.shadowRoot!.querySelector('#drawerSidebar'));
-    assertFalse(!!app.$.drawer.open);
+    assertFalse(app.$.drawer.open);
 
     const drawerOpened = eventToPromise('cr-drawer-opened', app.$.drawer);
     app.$.drawer.openDrawer();
@@ -328,7 +330,7 @@ suite('PasswordManagerAppTest', function() {
   });
 
   // TODO(crbug.com/331450809): This test is flaky.
-  test.skip('promo card password moved toast', async () => {
+  test.skip('notification card password moved toast', async () => {
     const testEmail = 'test.user@gmail.com';
     const group = createCredentialGroup({
       name: 'test.com',
@@ -416,5 +418,73 @@ suite('PasswordManagerAppTest', function() {
     await flushTasks();
 
     assertEquals(Page.SETTINGS, Router.getInstance().currentRoute.page);
+  });
+
+  test('opens trusted vault error dialog when locked', async function() {
+    app.actionableError = PasswordManagerActionableError.kTrustedVaultKeyNeeded;
+    await flushTasks();
+
+    const errorDialog =
+        app.shadowRoot!.querySelector<TrustedVaultErrorDialogElement>(
+            'trusted-vault-error-dialog');
+    assertTrue(!!errorDialog);
+    assertTrue(errorDialog.$.dialog.open);
+  });
+
+  test(
+      'does not open trusted vault error dialog when feature disabled',
+      async function() {
+        loadTimeData.overrideValues({enableTrustedVaultUnlock: false});
+        app.actionableError =
+            PasswordManagerActionableError.kTrustedVaultKeyNeeded;
+        await flushTasks();
+
+        assertFalse(
+            !!app.shadowRoot!.querySelector('trusted-vault-error-dialog'));
+      });
+
+  test(
+      'does not open trusted vault error dialog for different actionable error',
+      async function() {
+        app.actionableError = PasswordManagerActionableError.kNoError;
+        await flushTasks();
+
+        assertFalse(
+            !!app.shadowRoot!.querySelector('trusted-vault-error-dialog'));
+      });
+});
+
+suite('WebuiRefresh2026', function() {
+  const WEBUI_REFRESH_ATTR = 'webui-refresh-2026';
+  let app: PasswordManagerAppElement;
+  let openWindowProxy: TestOpenWindowProxy;
+  let passwordManager: TestPasswordManagerProxy;
+
+  setup(function() {
+    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+    openWindowProxy = new TestOpenWindowProxy();
+    OpenWindowProxyImpl.setInstance(openWindowProxy);
+    passwordManager = new TestPasswordManagerProxy();
+    PasswordManagerImpl.setInstance(passwordManager);
+  });
+
+  function createApp() {
+    app = document.createElement('password-manager-app');
+    document.body.appendChild(app);
+    return flushTasks();
+  }
+
+  test('Enabled', async () => {
+    loadTimeData.overrideValues({webuiRefresh2026: WEBUI_REFRESH_ATTR});
+    await createApp();
+
+    assertNotEquals(null, document.body.querySelector(COLORS_CSS_SELECTOR));
+  });
+
+  test('Disabled', async () => {
+    loadTimeData.overrideValues({webuiRefresh2026: ''});
+    await createApp();
+
+    assertEquals(null, document.body.querySelector(COLORS_CSS_SELECTOR));
   });
 });

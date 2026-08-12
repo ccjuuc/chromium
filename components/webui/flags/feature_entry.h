@@ -6,6 +6,7 @@
 #define COMPONENTS_WEBUI_FLAGS_FEATURE_ENTRY_H_
 
 #include <string>
+#include <string_view>
 
 #include "base/containers/span.h"
 #include "base/feature_list.h"
@@ -148,11 +149,10 @@ struct FeatureEntry {
     // get translated. The other parts here use ids for historical reasons and
     // can realistically also be moved to direct description_texts.
     const char* description_text;
-    // This is not a raw_ptr because every instance of FeatureParam is
+    // This is not a raw_span because every instance of FeatureParam is
     // statically-allocated at namespace scope, so pointers to them can never
     // dangle.
-    RAW_PTR_EXCLUSION const FeatureParam* params;
-    int num_params;
+    RAW_PTR_EXCLUSION base::span<const FeatureParam> params;
     // A variation id number in the format of
     // VariationsIdsProvider::ForceVariationIds() or nullptr if you do
     // not need to set any variation_id for this feature variation.
@@ -248,7 +248,7 @@ struct FeatureEntry {
   // Check whether internal |name| matches this FeatureEntry. Depending on the
   // type of entry, this compared it to either |internal_name| or the values
   // produced by NameForOption().
-  bool InternalNameMatches(const std::string& name) const;
+  bool InternalNameMatches(std::string_view name) const;
 
   // Number of options to choose from. This is used if type is MULTI_VALUE,
   // ENABLE_DISABLE_VALUE, FEATURE_VALUE, or FEATURE_WITH_PARAMS_VALUE.

@@ -9,6 +9,7 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "chromeos/ash/services/multidevice_setup/feature_state_manager.h"
 #include "chromeos/ash/services/multidevice_setup/global_state_feature_manager.h"
 #include "chromeos/ash/services/multidevice_setup/host_status_provider.h"
@@ -29,9 +30,6 @@ class DeviceSyncClient;
 namespace multidevice_setup {
 
 class AccountStatusChangeDelegateNotifier;
-class AndroidSmsAppHelperDelegate;
-class AndroidSmsPairingStateTracker;
-class AndroidSmsAppInstallingStatusObserver;
 class AuthTokenValidator;
 class EligibleHostDevicesProvider;
 class GrandfatheredEasyUnlockHostDisabler;
@@ -53,8 +51,6 @@ class MultiDeviceSetupImpl : public MultiDeviceSetupBase,
         device_sync::DeviceSyncClient* device_sync_client,
         AuthTokenValidator* auth_token_validator,
         OobeCompletionTracker* oobe_completion_tracker,
-        AndroidSmsAppHelperDelegate* android_sms_app_helper_delegate,
-        AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
         bool is_secondary_user);
     static void SetFactoryForTesting(Factory* test_factory);
 
@@ -65,8 +61,6 @@ class MultiDeviceSetupImpl : public MultiDeviceSetupBase,
         device_sync::DeviceSyncClient* device_sync_client,
         AuthTokenValidator* auth_token_validator,
         OobeCompletionTracker* oobe_completion_tracker,
-        AndroidSmsAppHelperDelegate* android_sms_app_helper_delegate,
-        AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
         bool is_secondary_user) = 0;
 
    private:
@@ -86,8 +80,6 @@ class MultiDeviceSetupImpl : public MultiDeviceSetupBase,
       device_sync::DeviceSyncClient* device_sync_client,
       AuthTokenValidator* auth_token_validator,
       OobeCompletionTracker* oobe_completion_tracker,
-      AndroidSmsAppHelperDelegate* android_sms_app_helper_delegate,
-      AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
       bool is_secondary_user);
 
   // mojom::MultiDeviceSetup:
@@ -154,13 +146,16 @@ class MultiDeviceSetupImpl : public MultiDeviceSetupBase,
   std::unique_ptr<WifiSyncNotificationController>
       wifi_sync_notification_controller_;
   std::unique_ptr<FeatureStateManager> feature_state_manager_;
-  std::unique_ptr<AndroidSmsAppInstallingStatusObserver>
-      android_sms_app_installing_host_observer_;
   raw_ptr<AuthTokenValidator> auth_token_validator_;
   std::string qs_phone_instance_id_;
 
   mojo::RemoteSet<mojom::HostStatusObserver> host_status_observers_;
   mojo::RemoteSet<mojom::FeatureStateObserver> feature_state_observers_;
+
+  base::ScopedObservation<HostStatusProvider, HostStatusProvider::Observer>
+      host_status_provider_observation_{this};
+  base::ScopedObservation<FeatureStateManager, FeatureStateManager::Observer>
+      feature_state_manager_observation_{this};
 };
 
 }  // namespace multidevice_setup

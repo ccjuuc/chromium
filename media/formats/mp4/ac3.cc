@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/formats/mp4/ac3.h"
 
 #include <algorithm>
@@ -48,7 +43,7 @@ bool AC3::Parse(const std::vector<uint8_t>& data, MediaLog* media_log) {
   }
 
   // Parse dac3 box using reader.
-  BitReader reader(&data[0], data.size());
+  BitReader reader(data);
 
   // skip fscod, bsid, bsmod
   RCHECK(reader.SkipBits(2 + 5 + 3));
@@ -76,8 +71,8 @@ uint32_t AC3::GetChannelCount() const {
   return channel_count_;
 }
 
-ChannelLayout AC3::GetChannelLayout() const {
-  return channel_layout_;
+ChannelLayoutConfig AC3::GetChannelLayout() const {
+  return ChannelLayoutConfig::FromLayout(channel_layout_);
 }
 
 }  // namespace mp4

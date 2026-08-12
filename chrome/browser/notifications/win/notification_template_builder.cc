@@ -10,7 +10,6 @@
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/i18n/time_formatting.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -18,12 +17,9 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "chrome/browser/notifications/win/notification_launch_id.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/notifications/notification_image_retainer.h"
 #include "chrome/grit/branded_strings.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/url_formatter/elide_url.h"
-#include "third_party/icu/source/i18n/unicode/timezone.h"
 #include "third_party/libxml/chromium/xml_writer.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/image/image_skia.h"
@@ -123,11 +119,12 @@ void StartToastElement(XmlWriter* xml_writer,
   if (notification.timestamp().is_null())
     return;
 
-  xml_writer->AddAttribute(
-      kToastElementDisplayTimestamp,
-      base::UnlocalizedTimeFormatWithPattern(notification.timestamp(),
-                                             "yyyy-MM-dd'T'HH:mm:ssX",
-                                             icu::TimeZone::getGMT()));
+  base::Time::Exploded exploded;
+  notification.timestamp().UTCExplode(&exploded);
+  std::string timestamp_str = base::StringPrintf(
+      "%04d-%02d-%02dT%02d:%02d:%02dZ", exploded.year, exploded.month,
+      exploded.day_of_month, exploded.hour, exploded.minute, exploded.second);
+  xml_writer->AddAttribute(kToastElementDisplayTimestamp, timestamp_str);
 }
 
 void EndToastElement(XmlWriter* xml_writer) {
@@ -352,7 +349,7 @@ void AddContextMenu(XmlWriter* xml_writer,
 // Ensures that every reminder has at least one button, as the Action Center
 // does not respect the Reminder setting on notifications with no buttons, so we
 // must add a Dismiss button to the notification for those cases. For more
-// details, see issue https://crbug.com/781792.
+// details, see issue https://crbug.com/40548271.
 void EnsureReminderHasButton(XmlWriter* xml_writer,
                              const message_center::Notification& notification,
                              NotificationLaunchId copied_launch_id) {

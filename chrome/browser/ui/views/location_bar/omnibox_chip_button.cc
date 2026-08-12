@@ -8,19 +8,14 @@
 
 #include "base/numerics/safe_conversions.h"
 #include "base/time/time.h"
-#include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_util.h"
 #include "chrome/browser/ui/views/location_bar/omnibox_chip_theme.h"
-#include "components/vector_icons/vector_icons.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/theme_provider.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
-#include "ui/gfx/color_utils.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/highlight_path_generator.h"
@@ -59,7 +54,8 @@ OmniboxChipButton::OmniboxChipButton(PressedCallback callback)
   SetCustomPadding(
       gfx::Insets::VH(kChipVerticalPadding, kChipHorizontalPadding));
   label()->SetTextStyle(views::style::STYLE_BODY_4_EMPHASIS);
-  SetCornerRadius(GetLayoutConstant(LOCATION_BAR_CHILD_CORNER_RADIUS));
+  SetCornerRadius(
+      GetLayoutConstant(LayoutConstant::kLocationBarChildCornerRadius));
   animation_ = std::make_unique<gfx::SlideAnimation>(this);
 
   UpdateIconAndColors();
@@ -201,8 +197,8 @@ void OmniboxChipButton::OnAnimationValueMaybeChanged() {
 int OmniboxChipButton::GetIconSize() const {
   // Mimic the sizing for other trailing icons.
   return GetLayoutConstant((theme_ == OmniboxChipTheme::kIconStyle)
-                               ? LOCATION_BAR_TRAILING_ICON_SIZE
-                               : LOCATION_BAR_CHIP_ICON_SIZE);
+                               ? LayoutConstant::kLocationBarTrailingIconSize
+                               : LayoutConstant::kLocationBarChipIconSize);
 }
 
 void OmniboxChipButton::AddObserver(Observer* observer) {

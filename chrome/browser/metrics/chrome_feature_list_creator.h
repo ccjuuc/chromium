@@ -58,9 +58,6 @@ class ChromeFeatureListCreator {
   // what was used when creating field trials.
   void SetApplicationLocale(const std::string& locale);
 
-  // Overrides cached UI strings on the resource bundle once it is initialized.
-  void OverrideCachedUIStrings();
-
   // Gets the MetricsServicesManagerClient* used in this class.
   metrics_services_manager::MetricsServicesManagerClient*
   GetMetricsServicesManagerClient();
@@ -116,12 +113,8 @@ class ChromeFeatureListCreator {
   void CreateNetworkTimeTracker();
 
   // Sets up the field trials and related initialization. Call only after
-  // about:flags have been converted to switches. However,
-  // |command_line_variation_ids| should be the value of the
-  // "--force-variation-ids" switch before it is mutated. See
-  // VariationsFieldTrialCreator::SetUpFieldTrials() for the format of
-  // |command_line_variation_ids|.
-  void SetUpFieldTrials(const std::string& command_line_variation_ids);
+  // about:flags have been converted to switches.
+  void SetUpFieldTrials();
 
   void CreateMetricsServices();
 

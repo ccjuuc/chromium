@@ -24,7 +24,6 @@ import {sanitizeInnerHtml} from 'chrome://resources/js/parse_html_subset.js';
 
 import type {CurrentAttribution, CurrentWallpaper, GooglePhotosPhoto, WallpaperCollection, WallpaperImage} from '../../personalization_app.mojom-webui.js';
 import {WallpaperLayout, WallpaperType} from '../../personalization_app.mojom-webui.js';
-import {isGooglePhotosSharedAlbumsEnabled} from '../load_time_booleans.js';
 import {Paths} from '../personalization_router_element.js';
 import {WithPersonalizationStore} from '../personalization_store.js';
 
@@ -163,48 +162,40 @@ export class WallpaperSelectedElement extends WithPersonalizationStore {
         type: String,
         value: null,
       },
-
-      googlePhotosSharedAlbumsEnabled_: {
-        type: Boolean,
-        value() {
-          return isGooglePhotosSharedAlbumsEnabled();
-        },
-      },
     };
   }
 
   // Only one of |collectionId| and |googlePhotosAlbumId| should ever be set,
   // since we can't be in a Backdrop collection or a Google Photos album
   // simultaneously
-  collectionId: string|undefined;
-  isGooglePhotosAlbumShared: boolean;
-  googlePhotosAlbumId: string|undefined;
-  path: string;
-  private actionUrl_: string|null;
-  private attribution_: CurrentAttribution|null;
-  private image_: CurrentWallpaper|null;
-  private imageTitle_: string;
-  private imageOtherAttribution_: string[];
-  private dailyRefreshState_: DailyRefreshState|null;
-  private isLoading_: boolean;
-  private hasError_: boolean;
-  private showDailyRefreshConfirmationDialog_: boolean;
-  private showImage_: boolean;
-  private showLayoutOptions_: boolean;
-  private showDescriptionButton_: boolean;
-  private showDescriptionDialog_: boolean;
-  private showDailyRefreshButton_: boolean;
-  private showRefreshButton_: boolean;
-  private dailyRefreshIcon_: string;
-  private ariaPressed_: string;
-  private fillIcon_: string;
-  private centerIcon_: string;
-  private error_: string;
-  private googlePhotosSharedAlbumsEnabled_: boolean;
-  private imagesByCollectionId_:
+  declare collectionId: string|undefined;
+  declare isGooglePhotosAlbumShared: boolean;
+  declare googlePhotosAlbumId: string|undefined;
+  declare path: string;
+  declare private actionUrl_: string|null;
+  declare private attribution_: CurrentAttribution|null;
+  declare private image_: CurrentWallpaper|null;
+  declare private imageTitle_: string;
+  declare private imageOtherAttribution_: string[];
+  declare private dailyRefreshState_: DailyRefreshState|null;
+  declare private isLoading_: boolean;
+  declare private hasError_: boolean;
+  declare private showDailyRefreshConfirmationDialog_: boolean;
+  declare private showImage_: boolean;
+  declare private showLayoutOptions_: boolean;
+  declare private showDescriptionButton_: boolean;
+  declare private showDescriptionDialog_: boolean;
+  declare private showDailyRefreshButton_: boolean;
+  declare private showRefreshButton_: boolean;
+  declare private dailyRefreshIcon_: string;
+  declare private ariaPressed_: string;
+  declare private fillIcon_: string;
+  declare private centerIcon_: string;
+  declare private error_: string;
+  declare private imagesByCollectionId_:
       Record<WallpaperCollection['id'], WallpaperImage[]|null>|undefined;
-  private photosByAlbumId_: Record<string, GooglePhotosPhoto[]|null|undefined>|
-      undefined;
+  declare private photosByAlbumId_:
+      Record<string, GooglePhotosPhoto[]|null|undefined>|undefined;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -439,8 +430,7 @@ export class WallpaperSelectedElement extends WithPersonalizationStore {
   private enableDailyRefresh_() {
     if (this.googlePhotosAlbumId) {
       assert(!this.collectionId);
-      if (this.googlePhotosSharedAlbumsEnabled_ &&
-          this.isGooglePhotosAlbumShared) {
+      if (this.isGooglePhotosAlbumShared) {
         this.showDailyRefreshConfirmationDialog_ = true;
       } else {
         this.enableGooglePhotosAlbumDailyRefresh_();
@@ -535,12 +525,12 @@ export class WallpaperSelectedElement extends WithPersonalizationStore {
   }
 
   private computeActionUrl_(image: CurrentWallpaper|null): string|null {
-    if (!image?.actionUrl?.url) {
+    if (!image?.actionUrl) {
       return null;
     }
 
     try {
-      return sanitizeInnerHtml(image.actionUrl.url).toString();
+      return sanitizeInnerHtml(image.actionUrl).toString();
     } catch (e) {
       console.warn('cannot display learn more link', e);
       return null;

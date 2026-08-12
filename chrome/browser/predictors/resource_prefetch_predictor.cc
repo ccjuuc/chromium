@@ -11,7 +11,6 @@
 #include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
@@ -76,9 +75,13 @@ GURL CreateRedirectURL(const std::string& scheme,
 
 PrefetchRequest::PrefetchRequest(
     const GURL& url,
-    network::mojom::RequestDestination destination)
+    network::mojom::RequestDestination destination,
+    base::UnguessableToken network_restrictions_id,
+    content::GlobalRenderFrameHostId initiator_frame_id)
     : url(url),
-      destination(destination) {
+      destination(destination),
+      network_restrictions_id(network_restrictions_id),
+      initiator_frame_id(initiator_frame_id) {
   CHECK(
       base::FeatureList::IsEnabled(features::kLoadingPredictorPrefetch) ||
       base::FeatureList::IsEnabled(blink::features::kLCPPPrefetchSubresource));
@@ -364,7 +367,7 @@ bool ResourcePrefetchPredictor::PredictPreconnectOrigins(
   }
   net::SchemefulSite redirect_site = net::SchemefulSite(redirect_origin);
   auto network_anonymization_key =
-      net::NetworkAnonymizationKey::CreateSameSite(redirect_site);
+      net::NetworkAnonymizationKey::CreateSameSite(std::move(redirect_site));
 
   for (const OriginStat& origin : data.origins()) {
     float confidence = static_cast<float>(origin.number_of_hits()) /

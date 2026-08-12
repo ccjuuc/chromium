@@ -2,20 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 
+#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "base/uuid.h"
 #include "build/build_config.h"
 #include "components/saved_tab_groups/internal/saved_tab_group_sync_bridge.h"
+#include "components/saved_tab_groups/proto/saved_tab_group_data.pb.h"
+#include "components/saved_tab_groups/public/features.h"
 #include "components/saved_tab_groups/public/saved_tab_group.h"
 #include "components/saved_tab_groups/public/saved_tab_group_tab.h"
 #include "components/saved_tab_groups/public/utils.h"
 #include "components/saved_tab_groups/test_support/saved_tab_group_test_utils.h"
 #include "components/sync/protocol/saved_tab_group_specifics.pb.h"
 #include "components/tab_groups/tab_group_color.h"
+#include "extensions/buildflags/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 namespace tab_groups {
 
@@ -135,7 +141,7 @@ TEST_F(SavedTabGroupConversionTest, GroupToDataRetainsData) {
 }
 
 TEST_F(SavedTabGroupConversionTest, TabToDataRetainsData) {
-  SavedTabGroupTab tab(GURL("chrome://hidden_link"), u"Hidden Title",
+  SavedTabGroupTab tab(GURL("https://www.google.com"), u"Google",
                        base::Uuid::GenerateRandomV4(), /*position=*/0,
                        base::Uuid::GenerateRandomV4(), std::nullopt,
                        std::nullopt, std::nullopt, time_, time_);
@@ -172,6 +178,78 @@ TEST_F(SavedTabGroupConversionTest, DataToGroupRetainsData) {
       SavedTabGroupSyncBridge::SavedTabGroupToDataForTest(
           SavedTabGroupSyncBridge::DataToSavedTabGroupForTest(pb_data))
           .specifics());
+}
+
+TEST_F(SavedTabGroupConversionTest, DataToTabWithInvalidURLFallback) {
+  proto::SavedTabGroupData pb_data;
+  sync_pb::SavedTabGroupSpecifics* pb_specific = pb_data.mutable_specifics();
+  pb_specific->set_guid(base::Uuid::GenerateRandomV4().AsLowercaseString());
+
+  int64_t time_in_micros = time_.ToDeltaSinceWindowsEpoch().InMicroseconds();
+  pb_specific->set_creation_time_windows_epoch_micros(time_in_micros);
+  pb_specific->set_update_time_windows_epoch_micros(time_in_micros);
+
+  sync_pb::SavedTabGroupTab* pb_tab = pb_specific->mutable_tab();
+  pb_tab->set_url("invalid_url");
+  pb_tab->set_group_guid(base::Uuid::GenerateRandomV4().AsLowercaseString());
+  pb_tab->set_title("Invalid URL Title");
+
+  SavedTabGroupTab tab =
+      SavedTabGroupSyncBridge::DataToSavedTabGroupTabForTest(pb_data);
+
+  auto [default_url, default_title] = GetDefaultUrlAndTitle();
+  EXPECT_EQ(tab.url(), default_url);
+  EXPECT_EQ(tab.title(), default_title);
+}
+
+TEST_F(SavedTabGroupConversionTest, DataToTabWithFileURL) {
+  proto::SavedTabGroupData pb_data;
+  sync_pb::SavedTabGroupSpecifics* pb_specific = pb_data.mutable_specifics();
+  pb_specific->set_guid(base::Uuid::GenerateRandomV4().AsLowercaseString());
+
+  int64_t time_in_micros = time_.ToDeltaSinceWindowsEpoch().InMicroseconds();
+  pb_specific->set_creation_time_windows_epoch_micros(time_in_micros);
+  pb_specific->set_update_time_windows_epoch_micros(time_in_micros);
+
+  sync_pb::SavedTabGroupTab* pb_tab = pb_specific->mutable_tab();
+  pb_tab->set_url("file:///tmp/test.html");
+  pb_tab->set_group_guid(base::Uuid::GenerateRandomV4().AsLowercaseString());
+  pb_tab->set_title("File URL Title");
+
+  SavedTabGroupTab tab =
+      SavedTabGroupSyncBridge::DataToSavedTabGroupTabForTest(pb_data);
+
+  EXPECT_EQ(tab.url(), GURL("file:///tmp/test.html"));
+  EXPECT_EQ(tab.title(), u"File URL Title");
+}
+
+TEST_F(SavedTabGroupConversionTest, DataToTabWithExtensionURL) {
+  proto::SavedTabGroupData pb_data;
+  sync_pb::SavedTabGroupSpecifics* pb_specific = pb_data.mutable_specifics();
+  pb_specific->set_guid(base::Uuid::GenerateRandomV4().AsLowercaseString());
+
+  int64_t time_in_micros = time_.ToDeltaSinceWindowsEpoch().InMicroseconds();
+  pb_specific->set_creation_time_windows_epoch_micros(time_in_micros);
+  pb_specific->set_update_time_windows_epoch_micros(time_in_micros);
+
+  sync_pb::SavedTabGroupTab* pb_tab = pb_specific->mutable_tab();
+  pb_tab->set_url(
+      "chrome-extension://gbkeeggdbebmphjfgccenjimijgnhkjj/suspended.html");
+  pb_tab->set_group_guid(base::Uuid::GenerateRandomV4().AsLowercaseString());
+  pb_tab->set_title("Extension URL Title");
+
+  SavedTabGroupTab tab =
+      SavedTabGroupSyncBridge::DataToSavedTabGroupTabForTest(pb_data);
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  EXPECT_EQ(tab.url(), GURL("chrome-extension://"
+                            "gbkeeggdbebmphjfgccenjimijgnhkjj/suspended.html"));
+  EXPECT_EQ(tab.title(), u"Extension URL Title");
+#else
+  auto [expected_url, expected_title] = GetDefaultUrlAndTitle();
+  EXPECT_EQ(tab.url(), expected_url);
+  EXPECT_EQ(tab.title(), expected_title);
+#endif
 }
 
 TEST_F(SavedTabGroupConversionTest, DataToTabRetainsData) {
@@ -305,6 +383,29 @@ TEST_F(SavedTabGroupConversionTest, MergedTabWithUnsupportedURL) {
   EXPECT_EQ(tab1.title(), title);
   EXPECT_EQ(tab1.creator_cache_guid(), "creator_cache_guid");
   EXPECT_EQ(tab1.last_updater_cache_guid(), "last_updater_cache_guid");
+}
+
+TEST_F(SavedTabGroupConversionTest, GroupToData) {
+  base::Uuid guid = base::Uuid::GenerateRandomV4();
+  SavedTabGroup group(u"Title", tab_groups::TabGroupColorId::kBlue, {}, 10,
+                      guid);
+  proto::SavedTabGroupData proto =
+      SavedTabGroupSyncBridge::SavedTabGroupToDataForTest(group);
+
+  EXPECT_TRUE(proto.specifics().group().has_pinned_position());
+  EXPECT_EQ(10u, proto.specifics().group().pinned_position());
+  EXPECT_EQ(guid.AsLowercaseString(), proto.specifics().guid());
+}
+
+TEST_F(SavedTabGroupConversionTest, DataToGroup) {
+  proto::SavedTabGroupData pb_data;
+  pb_data.mutable_specifics()->set_guid(
+      base::Uuid::GenerateRandomV4().AsLowercaseString());
+  pb_data.mutable_specifics()->mutable_group()->set_pinned_position(20);
+
+  SavedTabGroup group =
+      SavedTabGroupSyncBridge::DataToSavedTabGroupForTest(pb_data);
+  EXPECT_EQ(20u, group.position());
 }
 
 }  // namespace tab_groups

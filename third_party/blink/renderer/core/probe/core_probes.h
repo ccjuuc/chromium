@@ -32,10 +32,10 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_PROBE_CORE_PROBES_H_
 
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
+#include "third_party/blink/renderer/core/ad_tracker/script_initiation_monitor.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
-#include "third_party/blink/renderer/core/frame/ad_tracker.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/platform/bindings/callback_function_base.h"
 
@@ -107,7 +107,7 @@ class CORE_EXPORT AsyncTask {
   bool recurring_;
 
   // This persistent is safe since the class is STACK_ALLOCATED.
-  Persistent<AdTracker> ad_tracker_;
+  Persistent<ScriptInitiationMonitor> script_initiation_monitor_;
 };
 
 // Called from generated instrumentation code.
@@ -137,6 +137,10 @@ inline CoreProbeSink* ToCoreProbeSink(Document* document) {
 
 inline CoreProbeSink* ToCoreProbeSink(CoreProbeSink* sink) {
   return sink;
+}
+
+inline CoreProbeSink* ToCoreProbeSink(Node& node) {
+  return ToCoreProbeSink(node.GetDocument());
 }
 
 inline CoreProbeSink* ToCoreProbeSink(Node* node) {

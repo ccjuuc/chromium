@@ -6,13 +6,17 @@
 
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/base64.h"
 #include "base/check.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/json/values_util.h"
 #include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -55,7 +59,6 @@ constexpr char kAPKey[] = "ap_key";
 constexpr char kLang[] = "lang";
 
 constexpr char kHadApps[] = "had_apps";
-constexpr char kUsageStatsEnabledKey[] = "usage_stats_enabled";
 constexpr char kRemoteLoggingCookie[] = "remote_logging_cookie";
 constexpr char kNextAllowedLoggingAttemptTime[] = "next_logging_attempt_time";
 constexpr char kEulaRequired[] = "eula_required";
@@ -539,7 +542,7 @@ void PersistedData::RegisterApp(const RegistrationRequest& rq) {
 bool PersistedData::HasApp(const std::string& id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  const base::Value::Dict* apps =
+  const base::DictValue* apps =
       pref_service_->GetDict(update_client::kPersistedDataPreference)
           .FindDict("apps");
   return apps && apps->Find(base::ToLowerASCII(id)) != nullptr;
@@ -569,7 +572,7 @@ bool PersistedData::RemoveApp(const std::string& id) {
 
   ScopedDictPrefUpdate update(pref_service_,
                               update_client::kPersistedDataPreference);
-  base::Value::Dict* apps = update->FindDict("apps");
+  base::DictValue* apps = update->FindDict("apps");
 
   return apps ? apps->Remove(base::ToLowerASCII(id)) : false;
 }
@@ -580,9 +583,9 @@ std::vector<std::string> PersistedData::GetAppIds() const {
   // The prefs is a dictionary of dictionaries, where each inner dictionary
   // corresponds to an app:
   // {"updateclientdata":{"apps":{"{44FC7FE2-65CE-487C-93F4-EDEE46EEAAAB}":{...
-  const base::Value::Dict& dict =
+  const base::DictValue& dict =
       pref_service_->GetDict(update_client::kPersistedDataPreference);
-  const base::Value::Dict* apps = dict.FindDict("apps");
+  const base::DictValue* apps = dict.FindDict("apps");
   if (!apps) {
     return {};
   }
@@ -597,14 +600,14 @@ std::vector<std::string> PersistedData::GetAppIds() const {
   return app_ids;
 }
 
-const base::Value::Dict* PersistedData::GetAppKey(const std::string& id) const {
+const base::DictValue* PersistedData::GetAppKey(const std::string& id) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!pref_service_) {
     return nullptr;
   }
-  const base::Value::Dict& dict =
+  const base::DictValue& dict =
       pref_service_->GetDict(update_client::kPersistedDataPreference);
-  const base::Value::Dict* apps = dict.FindDict("apps");
+  const base::DictValue* apps = dict.FindDict("apps");
   if (!apps) {
     return nullptr;
   }
@@ -614,7 +617,7 @@ const base::Value::Dict* PersistedData::GetAppKey(const std::string& id) const {
 std::string PersistedData::GetString(const std::string& id,
                                      const std::string& key) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  const base::Value::Dict* app_key = GetAppKey(id);
+  const base::DictValue* app_key = GetAppKey(id);
   if (!app_key) {
     return {};
   }
@@ -625,11 +628,11 @@ std::string PersistedData::GetString(const std::string& id,
   return *value;
 }
 
-base::Value::Dict* PersistedData::GetOrCreateAppKey(const std::string& id,
-                                                    base::Value::Dict& root) {
+base::DictValue* PersistedData::GetOrCreateAppKey(const std::string& id,
+                                                  base::DictValue& root) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::Value::Dict* apps = root.EnsureDict("apps");
-  base::Value::Dict* app = apps->EnsureDict(base::ToLowerASCII(id));
+  base::DictValue* apps = root.EnsureDict("apps");
+  base::DictValue* app = apps->EnsureDict(base::ToLowerASCII(id));
   return app;
 }
 
@@ -641,11 +644,11 @@ std::optional<int> PersistedData::GetInteger(const std::string& id,
   }
   ScopedDictPrefUpdate update(pref_service_,
                               update_client::kPersistedDataPreference);
-  base::Value::Dict* apps = update->FindDict("apps");
+  base::DictValue* apps = update->FindDict("apps");
   if (!apps) {
     return std::nullopt;
   }
-  base::Value::Dict* app = apps->FindDict(base::ToLowerASCII(id));
+  base::DictValue* app = apps->FindDict(base::ToLowerASCII(id));
   if (!app) {
     return std::nullopt;
   }
@@ -695,8 +698,7 @@ std::optional<PersistedData::Cookie> PersistedData::GetRemoteLoggingCookie()
     return std::nullopt;
   }
 
-  const base::Value::Dict& cookie =
-      pref_service_->GetDict(kRemoteLoggingCookie);
+  const base::DictValue& cookie = pref_service_->GetDict(kRemoteLoggingCookie);
   const std::string* value = cookie.FindString(kCookieValueKey);
   std::optional<base::Time> expiration =
       base::ValueToTime(cookie.Find(kCookieExpirationKey));
@@ -715,7 +717,7 @@ void PersistedData::SetRemoteLoggingCookie(const Cookie& logging_cookie) {
   if (pref_service_) {
     pref_service_->SetDict(
         kRemoteLoggingCookie,
-        base::Value::Dict()
+        base::DictValue()
             .Set(kCookieValueKey, logging_cookie.value)
             .Set(kCookieExpirationKey,
                  base::TimeToValue(logging_cookie.expiration)));
@@ -797,35 +799,40 @@ std::optional<OSVERSIONINFOEX> PersistedData::GetLastOSVersion() const {
     return std::nullopt;
   }
 
-  const std::optional<std::vector<uint8_t>> decoded_os_version =
-      base::Base64Decode(encoded_os_version);
-  if (!decoded_os_version ||
-      decoded_os_version->size() != sizeof(OSVERSIONINFOEX)) {
-    return std::nullopt;
-  }
+  return base::Base64Decode(encoded_os_version)
+      .and_then([](const std::vector<uint8_t>& decoded)
+                    -> std::optional<OSVERSIONINFOEX> {
+        if (decoded.size() != sizeof(OSVERSIONINFOEX)) {
+          return std::nullopt;
+        }
+        auto reader = base::SpanReader(base::span(decoded));
+        OSVERSIONINFOEX info;
+        info.dwOSVersionInfoSize =
+            base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
+        info.dwMajorVersion =
+            base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
+        info.dwMinorVersion =
+            base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
+        info.dwBuildNumber =
+            base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
+        info.dwPlatformId =
+            base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
+        base::as_writable_byte_span(info.szCSDVersion)
+            .copy_from(
+                *reader.Read<sizeof((OSVERSIONINFOEX){}.szCSDVersion)>());
+        info.wServicePackMajor =
+            base::U16FromNativeEndian(*reader.Read<sizeof(WORD)>());
+        info.wServicePackMinor =
+            base::U16FromNativeEndian(*reader.Read<sizeof(WORD)>());
+        info.wSuiteMask =
+            base::U16FromNativeEndian(*reader.Read<sizeof(WORD)>());
+        info.wProductType =
+            base::U8FromNativeEndian(*reader.Read<sizeof(BYTE)>());
+        info.wReserved = base::U8FromNativeEndian(*reader.Read<sizeof(BYTE)>());
 
-  auto reader = base::SpanReader(base::span(*decoded_os_version));
-  OSVERSIONINFOEX info;
-  info.dwOSVersionInfoSize =
-      base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
-  info.dwMajorVersion =
-      base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
-  info.dwMinorVersion =
-      base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
-  info.dwBuildNumber = base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
-  info.dwPlatformId = base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
-  base::as_writable_byte_span(info.szCSDVersion)
-      .copy_from(*reader.Read<sizeof((OSVERSIONINFOEX){}.szCSDVersion)>());
-  info.wServicePackMajor =
-      base::U16FromNativeEndian(*reader.Read<sizeof(WORD)>());
-  info.wServicePackMinor =
-      base::U16FromNativeEndian(*reader.Read<sizeof(WORD)>());
-  info.wSuiteMask = base::U16FromNativeEndian(*reader.Read<sizeof(WORD)>());
-  info.wProductType = base::U8FromNativeEndian(*reader.Read<sizeof(BYTE)>());
-  info.wReserved = base::U8FromNativeEndian(*reader.Read<sizeof(BYTE)>());
-
-  CHECK_EQ(reader.remaining(), 0u);
-  return info;
+        CHECK_EQ(reader.remaining(), 0u);
+        return info;
+      });
 }
 
 void PersistedData::SetLastOSVersion() {
@@ -859,14 +866,6 @@ void RegisterPersistedDataPrefs(scoped_refptr<PrefRegistrySimple> registry) {
   registry->RegisterTimePref(kLastStarted, {});
   registry->RegisterStringPref(kLastOSVersion, {});
   registry->RegisterDictionaryPref(kRemoteLoggingCookie, {});
-
-  // TODO(crbug.com/422187975): Remove obsolete pref no earlier than 6/3/2026.
-  registry->RegisterBooleanPref(kUsageStatsEnabledKey, false);
-}
-
-void MigrateObsoletePersistedDataPrefs(PrefService* pref_service) {
-  // TODO(crbug.com/422187975): Remove obsolete pref no earlier than 6/3/2026.
-  pref_service->ClearPref(kUsageStatsEnabledKey);
 }
 
 }  // namespace updater

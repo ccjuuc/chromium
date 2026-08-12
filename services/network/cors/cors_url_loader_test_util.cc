@@ -79,6 +79,14 @@ void TestURLLoaderFactory::NotifyClientOnReceiveResponse(
                                     std::nullopt);
 }
 
+void TestURLLoaderFactory::NotifyClientOnReceiveResponse(
+    mojom::URLResponseHeadPtr response_head,
+    mojo::ScopedDataPipeConsumerHandle body) {
+  DCHECK(client_remote_);
+  client_remote_->OnReceiveResponse(std::move(response_head), std::move(body),
+                                    std::nullopt);
+}
+
 void TestURLLoaderFactory::NotifyClientOnComplete(int error_code) {
   DCHECK(client_remote_);
   client_remote_->OnComplete(URLLoaderCompletionStatus(error_code));
@@ -100,6 +108,13 @@ void TestURLLoaderFactory::NotifyClientOnReceiveRedirect(
     response->headers->SetHeader(header.first, header.second);
 
   client_remote_->OnReceiveRedirect(redirect_info, std::move(response));
+}
+
+void TestURLLoaderFactory::NotifyClientOnReceiveRedirect(
+    const net::RedirectInfo& redirect_info,
+    mojom::URLResponseHeadPtr response_head) {
+  DCHECK(client_remote_);
+  client_remote_->OnReceiveRedirect(redirect_info, std::move(response_head));
 }
 
 void TestURLLoaderFactory::ResetClientRemote() {
@@ -147,6 +162,9 @@ CorsURLLoaderTestBase::ResetFactoryParams::ResetFactoryParams() {
 }
 
 CorsURLLoaderTestBase::ResetFactoryParams::~ResetFactoryParams() = default;
+
+const OriginatingProcessId CorsURLLoaderTestBase::kRendererProcessId =
+    OriginatingProcessId::renderer(RendererProcessId(573));
 
 // CORS URL LOADER TEST BASE
 // =========================
@@ -268,10 +286,11 @@ void CorsURLLoaderTestBase::AddBlockListEntryForOrigin(
 }
 
 void CorsURLLoaderTestBase::ResetFactory(std::optional<url::Origin> initiator,
-                                         uint32_t process_id,
+                                         OriginatingProcessId process_id,
                                          const ResetFactoryParams& params) {
-  if (process_id != mojom::kBrowserProcessId)
+  if (!process_id.is_browser()) {
     DCHECK(initiator.has_value());
+  }
 
   test_url_loader_factory_ = std::make_unique<TestURLLoaderFactory>();
   test_url_loader_factory_receiver_ =
@@ -284,7 +303,7 @@ void CorsURLLoaderTestBase::ResetFactory(std::optional<url::Origin> initiator,
   }
   factory_params->is_trusted = params.is_trusted;
   factory_params->process_id = process_id;
-  factory_params->is_orb_enabled = (process_id != mojom::kBrowserProcessId);
+  factory_params->is_orb_enabled = !process_id.is_browser();
   factory_params->ignore_isolated_world_origin =
       params.ignore_isolated_world_origin;
   factory_params->factory_override = mojom::URLLoaderFactoryOverride::New();
@@ -301,8 +320,7 @@ void CorsURLLoaderTestBase::ResetFactory(std::optional<url::Origin> initiator,
   auto resource_scheduler_client =
       base::MakeRefCounted<ResourceSchedulerClient>(
           ResourceScheduler::ClientId::Create(),
-          IsBrowserInitiated(process_id == mojom::kBrowserProcessId),
-          &resource_scheduler_,
+          IsBrowserInitiated(process_id.is_browser()), &resource_scheduler_,
           url_request_context_->network_quality_estimator());
 
   // Avoid the raw_ptr<> becoming dangling.

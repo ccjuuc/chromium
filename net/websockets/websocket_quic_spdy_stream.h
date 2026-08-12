@@ -9,21 +9,18 @@
 
 #include "base/memory/raw_ptr.h"
 #include "net/base/net_export.h"
-#include "net/quic/quic_chromium_client_stream.h"
-#include "net/third_party/quiche/src/quiche/quic/core/http/quic_spdy_client_session_base.h"
-#include "net/third_party/quiche/src/quiche/quic/core/http/quic_spdy_stream.h"
-#include "net/third_party/quiche/src/quiche/quic/core/quic_types.h"
+#include "net/quic/quic_chromium_client_stream_base.h"
 
 namespace quic {
 class QuicHeaderList;
-class QuicSpdyClientSessionBase;
 }  // namespace quic
 
 namespace net {
 
 class IOBuffer;
 
-class NET_EXPORT_PRIVATE WebSocketQuicSpdyStream : public quic::QuicSpdyStream {
+class NET_EXPORT_PRIVATE WebSocketQuicSpdyStream
+    : public QuicChromiumClientStreamBase {
  public:
   class NET_EXPORT_PRIVATE Delegate {
    public:
@@ -50,6 +47,7 @@ class NET_EXPORT_PRIVATE WebSocketQuicSpdyStream : public quic::QuicSpdyStream {
   WebSocketQuicSpdyStream& operator=(const WebSocketQuicSpdyStream&) = delete;
   ~WebSocketQuicSpdyStream() override;
 
+  // Sets the delegate to receive stream events.
   void set_delegate(Delegate* delegate) { delegate_ = delegate; }
 
   void OnInitialHeadersComplete(
@@ -61,6 +59,12 @@ class NET_EXPORT_PRIVATE WebSocketQuicSpdyStream : public quic::QuicSpdyStream {
   int Read(IOBuffer* buf, int buf_len);
 
   void OnCanWriteNewData() override;
+
+  // Decouples the delegate from this stream and cancels the underlying QUIC
+  // stream. This allows the delegate to be destroyed independently while
+  // ensuring the stream is properly terminated. The stream is reset with
+  // QUIC_STREAM_CANCELLED to signal intentional closure to the peer.
+  void DetachDelegate();
 
  private:
   // Maps QUIC connection and stream errors to net error codes.

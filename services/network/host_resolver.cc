@@ -15,6 +15,7 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/net_errors.h"
+#include "net/base/network_handle.h"
 #include "net/dns/host_resolver.h"
 #include "net/dns/public/host_resolver_source.h"
 #include "net/dns/public/secure_dns_policy.h"
@@ -22,7 +23,6 @@
 #include "net/net_buildflags.h"
 #include "services/network/host_resolver_mdns_listener.h"
 #include "services/network/public/cpp/host_resolver_mojom_traits.h"
-#include "services/network/public/mojom/host_resolver.mojom-shared.h"
 #include "services/network/public/mojom/host_resolver.mojom.h"
 #include "services/network/resolve_host_request.h"
 
@@ -37,8 +37,9 @@ HostResolver::ResolveHostCallback& GetResolveHostCallback() {
 std::optional<net::HostResolver::ResolveHostParameters>
 ConvertOptionalParameters(
     const mojom::ResolveHostParametersPtr& mojo_parameters) {
-  if (!mojo_parameters)
+  if (!mojo_parameters) {
     return std::nullopt;
+  }
 
   net::HostResolver::ResolveHostParameters parameters;
   parameters.dns_query_type = mojo_parameters->dns_query_type;
@@ -61,8 +62,9 @@ ConvertOptionalParameters(
   parameters.include_canonical_name = mojo_parameters->include_canonical_name;
   parameters.loopback_only = mojo_parameters->loopback_only;
   parameters.is_speculative = mojo_parameters->is_speculative;
-  mojo::EnumTraits<mojom::SecureDnsPolicy, net::SecureDnsPolicy>::FromMojom(
-      mojo_parameters->secure_dns_policy, &parameters.secure_dns_policy);
+  parameters.secure_dns_policy =
+      mojo::EnumTraits<mojom::SecureDnsPolicy, net::SecureDnsPolicy>::FromMojom(
+          mojo_parameters->secure_dns_policy);
   return parameters;
 }
 }  // namespace
@@ -118,18 +120,25 @@ void HostResolver::ResolveHost(
 
   auto request = std::make_unique<ResolveHostRequest>(
       internal_resolver_, std::move(host), network_anonymization_key,
+      // There is currently no use case for targeting a specific network when
+      // resolving a host through the network service. Expose this capability
+      // once (if) there is a need. Until then, we always use the default
+      // network.
+      net::handles::kInvalidNetworkHandle,
       ConvertOptionalParameters(optional_parameters), net_log_);
 
   mojo::PendingReceiver<mojom::ResolveHostHandle> control_handle_receiver;
-  if (optional_parameters)
+  if (optional_parameters) {
     control_handle_receiver = std::move(optional_parameters->control_handle);
+  }
 
   int rv = request->Start(
       std::move(control_handle_receiver), std::move(response_client),
       base::BindOnce(&HostResolver::OnResolveHostComplete,
                      base::Unretained(this), request.get()));
-  if (rv != net::ERR_IO_PENDING)
+  if (rv != net::ERR_IO_PENDING) {
     return;
+  }
 
   // Store the request with the resolver so it can be cancelled on resolver
   // shutdown.

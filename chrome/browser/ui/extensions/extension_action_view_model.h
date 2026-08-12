@@ -11,7 +11,6 @@
 #include "chrome/browser/extensions/commands/command_service.h"
 #include "chrome/browser/extensions/extension_context_menu_model.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/tabs/tab_list_interface_observer.h"
 #include "chrome/browser/ui/toolbar/toolbar_action_hover_card_types.h"
 #include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
@@ -29,7 +28,6 @@ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 class ExtensionActionDelegate;
 class IconWithBadgeImageSource;
 enum class PopupShowAction;
-class TabListInterface;
 
 namespace extensions {
 class Command;
@@ -55,9 +53,6 @@ class ImageModel;
 // they will typically return empty or default values, except GetId().
 class ExtensionActionViewModel
     : public ToolbarActionViewModel,
-      public content::WebContentsObserver,
-      public TabListInterfaceObserver,
-      public ToolbarActionsModel::Observer,
       public extensions::ExtensionActionIconFactory::Observer,
       public extensions::CommandService::Observer,
       public extensions::ExtensionContextMenuModel::PopupDelegate {
@@ -74,7 +69,7 @@ class ExtensionActionViewModel
 
   // ToolbarActionViewModel:
   std::string GetId() const override;
-  base::CallbackListSubscription RegisterUpdateObserver(
+  base::CallbackListSubscription RegisterIconUpdateObserver(
       base::RepeatingClosure observer) override;
   ui::ImageModel GetIcon(content::WebContents* web_contents,
                          const gfx::Size& size) override;
@@ -86,12 +81,15 @@ class ExtensionActionViewModel
   std::u16string GetTooltip(content::WebContents* web_contents) const override;
   ToolbarActionViewModel::HoverCardState GetHoverCardState(
       content::WebContents* web_contents) const override;
+  ToolbarActionViewModel::HoverCardUiState GetHoverCardUiState(
+      const ToolbarActionViewModel::HoverCardState& state,
+      content::WebContents* web_contents) const override;
   extensions::SitePermissionsHelper::SiteInteraction GetSiteInteraction(
       content::WebContents* web_contents) const override;
   bool IsEnabled(content::WebContents* web_contents) const override;
   bool IsShowingPopup() const override;
   void HidePopup() override;
-  gfx::NativeView GetPopupNativeView() override;
+  gfx::NativeView GetPopupNativeViewForTesting() override;
   ui::MenuModel* GetContextMenu(
       extensions::ExtensionContextMenuModel::ContextMenuSource
           context_menu_source) override;
@@ -99,22 +97,8 @@ class ExtensionActionViewModel
   void TriggerPopupForAPI(ShowPopupCallback callback) override;
   void RegisterCommand() override;
   void UnregisterCommand() override;
-
-  // content::WebContentsObserver:
-  void DidFinishNavigation(content::NavigationHandle* handle) override;
-
-  // TabListInterfaceObserver:
-  void OnActiveTabChanged(tabs::TabInterface* tab) override;
-
-  // ToolbarActionsModel::Observer:
-  void OnToolbarActionAdded(
-      const ToolbarActionsModel::ActionId& action_id) override;
-  void OnToolbarActionRemoved(
-      const ToolbarActionsModel::ActionId& action_id) override;
-  void OnToolbarActionUpdated(
-      const ToolbarActionsModel::ActionId& action_id) override;
-  void OnToolbarModelInitialized() override;
-  void OnToolbarPinnedActionsChanged() override;
+  bool CanHandleAccelerators() const override;
+  bool TryHandleAcceleratorPress() override;
 
   // extensions::CommandService::Observer:
   void OnExtensionCommandAdded(const std::string& extension_id,
@@ -133,13 +117,6 @@ class ExtensionActionViewModel
   // exists. Returns true if |command| was populated.
   bool GetExtensionCommand(extensions::Command* command) const;
 
-  // Returns true if this controller can handle accelerators (i.e., keyboard
-  // commands) on the currently-active WebContents.
-  // This must only be called if the extension has an associated command.
-  // TODO(devlin): Move accelerator logic out of the platform delegate and into
-  // this class.
-  bool CanHandleAccelerators() const;
-
   ExtensionActionDelegate* delegate() { return delegate_.get(); }
 
   std::unique_ptr<IconWithBadgeImageSource> GetIconImageSourceForTesting(
@@ -157,8 +134,8 @@ class ExtensionActionViewModel
   // Returns the current web contents.
   content::WebContents* GetCurrentWebContents() const;
 
-  // Notifies observers that the underlying data has been updated.
-  void NotifyObservers();
+  // Notifies observers that icon has been updated.
+  void NotifyIconObservers();
 
   // extensions::ExtensionActionIconFactory::Observer:
   void OnIconUpdated() override;
@@ -177,6 +154,9 @@ class ExtensionActionViewModel
   void TriggerPopup(PopupShowAction show_action,
                     bool by_user,
                     ShowPopupCallback callback);
+
+  // Closes the extensions menu via the `delegate_`.
+  void CloseMenuTask();
 
   // Returns the image source for the icon.
   std::unique_ptr<IconWithBadgeImageSource> GetIconImageSource(
@@ -203,8 +183,8 @@ class ExtensionActionViewModel
   // The context menu model for the extension.
   std::unique_ptr<extensions::ExtensionContextMenuModel> context_menu_model_;
 
-  // Our observers.
-  base::RepeatingClosureList observers_;
+  // Our observers listening for updates to the icon.
+  base::RepeatingClosureList icon_observers_;
 
   // The delegate to handle platform-specific implementations.
   std::unique_ptr<ExtensionActionDelegate> delegate_;
@@ -218,15 +198,11 @@ class ExtensionActionViewModel
   // The associated ExtensionRegistry; cached for quick checking.
   raw_ptr<extensions::ExtensionRegistry> extension_registry_;
 
-  base::ScopedObservation<ToolbarActionsModel, ToolbarActionsModel::Observer>
-      toolbar_model_observation_{this};
-
-  base::ScopedObservation<TabListInterface, TabListInterfaceObserver>
-      tab_list_observation_{this};
-
   base::ScopedObservation<extensions::CommandService,
                           extensions::CommandService::Observer>
       command_service_observation_{this};
+
+  base::WeakPtrFactory<ExtensionActionViewModel> weak_ptr_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_UI_EXTENSIONS_EXTENSION_ACTION_VIEW_MODEL_H_

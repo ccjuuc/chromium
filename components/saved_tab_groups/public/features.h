@@ -6,6 +6,7 @@
 #define COMPONENTS_SAVED_TAB_GROUPS_PUBLIC_FEATURES_H_
 
 #include "base/feature_list.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/time/time.h"
 
 namespace tab_groups {
@@ -26,8 +27,6 @@ BASE_DECLARE_FEATURE(kEnableUrlRestriction);
 
 BASE_DECLARE_FEATURE(kEnableOriginatingSavedGroupCleanUp);
 
-BASE_DECLARE_FEATURE(kLeftClickOpensTabGroupBubble);
-
 extern bool IsTabGroupSyncDelegateAndroidEnabled();
 
 extern bool IsTabGroupSyncCoordinatorEnabled();
@@ -47,6 +46,7 @@ extern bool IsUrlRestrictionEnabled();
 extern bool IsOriginatingSavedGroupCleanUpEnabled();
 
 extern base::TimeDelta GetOriginatingSavedGroupCleanUpTimeInterval();
+
 }  // namespace tab_groups
 
 #endif  // COMPONENTS_SAVED_TAB_GROUPS_PUBLIC_FEATURES_H_

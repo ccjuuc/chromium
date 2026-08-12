@@ -4,6 +4,7 @@
 
 #include "components/performance_manager/graph/policies/process_priority_policy.h"
 
+#include "components/performance_manager/public/features.h"
 #include "components/performance_manager/public/render_process_host_proxy.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
@@ -22,22 +23,21 @@ size_t g_instance_count = 0;
 // the RenderProcessHost.
 ProcessPriorityPolicy::SetPriorityOnUiThreadCallback* g_callback = nullptr;
 
-base::Process::Priority ToProcessPriority(base::TaskPriority priority) {
-  switch (priority) {
-    case base::TaskPriority::BEST_EFFORT:
-      return base::Process::Priority::kBestEffort;
-    case base::TaskPriority::USER_VISIBLE:
-      return base::Process::Priority::kUserVisible;
-    case base::TaskPriority::USER_BLOCKING:
-      return base::Process::Priority::kUserBlocking;
-  }
-}
-
 // Dispatches a process priority change to the RenderProcessHost associated with
 // a given ProcessNode.
 void SetProcessPriority(const ProcessNode* process_node,
                         base::Process::Priority priority) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+#if BUILDFLAG(IS_WIN)
+  if (base::FeatureList::IsEnabled(
+          features::kBrowserProcessAboveNormalPriority) &&
+      process_node->GetProcessType() == content::PROCESS_TYPE_BROWSER) {
+    // Browser process should be kUserBlocking by default.
+    CHECK_EQ(priority, base::Process::Priority::kUserBlocking);
+    base::Process::Current().SetPriority(priority);
+  }
+#endif
 
   if (process_node->GetProcessType() != content::PROCESS_TYPE_RENDERER) {
     // This is triggered from ProcessNode observers that fire for all process
@@ -101,7 +101,7 @@ void ProcessPriorityPolicy::OnTakenFromGraph(Graph* graph) {
 
 void ProcessPriorityPolicy::OnProcessNodeAdded(
     const ProcessNode* process_node) {
-  CHECK_NE(process_node->GetPriority(), base::TaskPriority::USER_VISIBLE);
+  CHECK_NE(process_node->GetPriority(), base::Process::Priority::kUserVisible);
   // Set the initial process priority.
   // TODO(chrisha): Get provisional nodes working so we can make an informed
   // choice in the graph (processes launching ads-to-be, or extensions, or
@@ -110,16 +110,13 @@ void ProcessPriorityPolicy::OnProcessNodeAdded(
   // TODO(chrisha): Make process creation take a detour through the graph in
   // order to get the initial priority parameter that is set here. Currently
   // this is effectively a nop.
-  SetProcessPriority(process_node,
-                     ToProcessPriority(process_node->GetPriority()));
+  SetProcessPriority(process_node, process_node->GetPriority());
 }
 
 void ProcessPriorityPolicy::OnPriorityChanged(
     const ProcessNode* process_node,
-    base::TaskPriority previous_value) {
-  base::Process::Priority previous_priority = ToProcessPriority(previous_value);
-  base::Process::Priority current_priority =
-      ToProcessPriority(process_node->GetPriority());
+    base::Process::Priority previous_priority) {
+  base::Process::Priority current_priority = process_node->GetPriority();
 
   // Only set if the resulting process priority has changed.
   if (previous_priority != current_priority) {

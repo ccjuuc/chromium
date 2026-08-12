@@ -82,52 +82,32 @@ const char kWebViewUseSeparateResourceContext[] =
 
 // Override and enable features useful for BSA library testing/debugging.
 const char kDebugBsa[] = "debug-bsa";
-
-// Enables using startup tasks logic for webview chromium initialization which
-// - runs the startup tasks asynchronously if startup is triggered from a
-// background thread. Otherwise runs startup synchronously.
-// - caches any chromium startup exception and rethrows it if startup is retried
-// without a restart.
-// Note: WebViewUseStartupTasksLogicP2 and kWebViewStartupTasksYieldToNative
-// also enable the same behaviour as this flag.
-const char kWebViewUseStartupTasksLogic[] = "webview-use-startup-tasks-logic";
-
-// Enables phase 2 of using startup tasks logic for webview chromium
-// initialization which also starts browser process asynchronously, when
-// starting webview asynchronously.
-// Note: This also enables the same behaviour as WebViewUseStartupTasksLogic and
-// WebViewStartupTasksYieldToNative with minor differences.
-const char kWebViewUseStartupTasksLogicP2[] =
-    "webview-use-startup-tasks-logic-p2";
-
-// Enables running native startup tasks asynchronously if WebView startup is
-// asynchronous.
-// Note: This also enables the same behaviour as WebViewUseStartupTasksLogic and
-// WebViewUseStartupTasksLogicP2, with minor additions.
-const char kWebViewStartupTasksYieldToNative[] =
-    "webview-startup-tasks-yield-to-native";
-
-// Enables running native startup tasks asynchronously if WebView startup is
-// asynchronous in addition to preventing multiprocess enabled checks from
-// starting chromium.
-const char kWebViewStartupTasksPlusMultiProcess[] =
-    "webview-startup-tasks-plus-multi-process";
-
-// Stop browser startup in isMultiProcessEnabled.
-const char kWebViewStopBrowserStartupInIsMultiProcessEnabled[] =
-    "webview-stop-browser-startup-in-is-multi-process-enabled";
-
+// Enables non-blocking WebView constructor.
 const char kStartupNonBlockingWebViewConstructor[] =
     "startup-non-blocking-webview-constructor";
+
+// Post Chromium startup in the WebView constructor. Only has any effect
+// when kStartupNonBlockingWebViewConstructor is enabled.
+const char kPostChromiumStartupInWebViewConstructor[] =
+    "post-chromium-startup-in-webview-constructor";
+
+// Certain static methods in SharedStatics do not trigger startup.
+const char kWebViewStaticMethodsNotTriggerStartup[] =
+    "webview-static-methods-not-trigger-startup";
+
+// Certain ProfileStore methods do not trigger startup.
+const char kWebViewProfileStoreNotTriggerStartup[] =
+    "webview-profile-store-not-trigger-startup";
 
 // Opts in WebView to GMSCore's bindService optimizations
 const char kWebViewOptInToGmsBindServiceOptimization[] =
     "webview-opt-in-to-gms-bind-service-optimization";
 
-// Enables/disables renderer-side native library prefetching.
-const char kWebViewRendererLibraryPrefetch[] =
-    "webview-renderer-library-prefetch";
-const char kWebViewRendererLibraryPrefetchDisabled[] = "disabled";
-const char kWebViewRendererLibraryPrefetchEnabled[] = "enabled";
+
+// Enables different reductions of the user-agent.
+const char kWebViewReduceUserAgentMinorVersion[] =
+    "webview-reduce-user-agent-minor-version";
+const char kWebViewReduceUAAndroidVersionDeviceModel[] =
+    "webview-reduce-ua-android-version-device-model";
 
 }  // namespace switches

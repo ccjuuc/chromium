@@ -61,7 +61,8 @@ bool FillsViewport(const Element& element) {
 
   gfx::Rect bounding_box = gfx::ToEnclosingRect(quad.BoundingBox());
 
-  gfx::Size icb_size = top_document.GetLayoutView()->GetLayoutSize();
+  gfx::Size icb_size =
+      top_document.GetLayoutView()->GetLayoutSize(kExcludeScrollbars);
 
   float zoom = top_document.GetFrame()->LayoutZoomFactor();
   gfx::Size controls_hidden_size = gfx::ToCeiledSize(gfx::ScaleSize(
@@ -89,8 +90,10 @@ PaintLayerScrollableArea* GetScrollableArea(const Element& element) {
     return frame_view->LayoutViewport();
   }
 
-  if (!element.GetLayoutBoxForScrolling())
+  if (auto* box = element.GetLayoutBoxForScrolling();
+      !box || !box->GetScrollableArea()->ScrollableAxes()) {
     return nullptr;
+  }
 
   return element.GetLayoutBoxForScrolling()->GetScrollableArea();
 }
@@ -308,17 +311,16 @@ bool RootScrollerController::IsValidImplicit(const Element& element) const {
     // the URL bar movement). Test it for scrolling so that we only promote if
     // we know we won't block scrolling the main document.
     if (IsA<LayoutView>(ancestor)) {
-      const ComputedStyle* ancestor_style = ancestor->Style();
-      DCHECK(ancestor_style);
-
+      const ComputedStyle& ancestor_style = ancestor->StyleRef();
       PaintLayerScrollableArea* area = ancestor->GetScrollableArea();
       DCHECK(area);
 
-      if (ancestor_style->ScrollsOverflowY() && area->HasVerticalOverflow())
+      if (ancestor_style.ScrollsOverflowY() && area->HasVerticalOverflow()) {
         return false;
+      }
     } else {
       if (ancestor->ShouldClipOverflowAlongEitherAxis() ||
-          ancestor->HasMask() || ancestor->HasClip() ||
+          ancestor->HasMask() || ancestor->HasCSSClip() ||
           ancestor->HasClipPath()) {
         return false;
       }

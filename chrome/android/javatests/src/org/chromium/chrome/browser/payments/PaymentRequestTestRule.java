@@ -24,12 +24,11 @@ import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.CriteriaNotSatisfiedException;
-import org.chromium.base.test.util.UrlUtils;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.autofill.CardUnmaskPrompt;
 import org.chromium.chrome.browser.autofill.CardUnmaskPrompt.CardUnmaskObserverForTest;
-import org.chromium.chrome.browser.autofill.editors.EditorObserverForTest;
+import org.chromium.chrome.browser.autofill.editors.common.EditorObserverForTest;
 import org.chromium.chrome.browser.payments.ChromePaymentRequestFactory.ChromePaymentRequestDelegateImpl;
 import org.chromium.chrome.browser.payments.ChromePaymentRequestFactory.ChromePaymentRequestDelegateImplObserverForTest;
 import org.chromium.chrome.browser.payments.ui.PaymentRequestSection.OptionSection;
@@ -123,6 +122,9 @@ import java.util.concurrent.atomic.AtomicReference;
     /* package */ static final String ENABLE_EXPERIMENTAL_WEB_PLATFORM_FEATURES =
             "enable-experimental-web-platform-features";
 
+    // We need a consistent port so that strings don't vary for render tests.
+    private static final int TEST_PORT = 41234;
+
     private final PaymentsCallbackHelper<PaymentRequestUi> mShowCalled;
     private final PaymentsCallbackHelper<PaymentRequestUi> mReadyForInput;
     private final PaymentsCallbackHelper<PaymentRequestUi> mReadyToPay;
@@ -159,6 +161,8 @@ import java.util.concurrent.atomic.AtomicReference;
 
     private CardUnmaskPrompt mCardUnmaskPrompt;
 
+    private int mFactoryCount;
+
     /**
      * Creates an instance of PaymentRequestTestRule.
      *
@@ -179,7 +183,7 @@ import java.util.concurrent.atomic.AtomicReference;
      *     the main activity would start automatically.
      */
     /* package */ PaymentRequestTestRule(String testFileName, boolean delayStartActivity) {
-        this(testFileName, /* pathPrefix= */ "components/test/data/payments/", delayStartActivity);
+        this(testFileName, /* pathPrefix= */ "/components/test/data/payments/", delayStartActivity);
     }
 
     /**
@@ -195,6 +199,7 @@ import java.util.concurrent.atomic.AtomicReference;
     private PaymentRequestTestRule(
             String testFilePath, String pathPrefix, boolean delayStartActivity) {
         super();
+        getEmbeddedTestServerRule().setServerPort(TEST_PORT);
         mShowCalled = new PaymentsCallbackHelper<>();
         mReadyForInput = new PaymentsCallbackHelper<>();
         mReadyToPay = new PaymentsCallbackHelper<>();
@@ -221,7 +226,7 @@ import java.util.concurrent.atomic.AtomicReference;
         if (testFilePath.equals("about:blank") || testFilePath.startsWith("data:")) {
             mTestFilePath = testFilePath;
         } else {
-            mTestFilePath = UrlUtils.getIsolatedTestFilePath(pathPrefix + testFilePath);
+            mTestFilePath = getTestServer().getURL(pathPrefix + testFilePath);
         }
         mDelayStartActivity = delayStartActivity;
         mAutoAdvanceInputProtectorClock = true;
@@ -1186,7 +1191,8 @@ import java.util.concurrent.atomic.AtomicReference;
             @FactorySpeed int factorySpeed,
             @AppSpeed int appSpeed) {
         TestFactory factory = new TestFactory(appMethodName, appPresence, factorySpeed, appSpeed);
-        PaymentAppService.getInstance().addFactory(factory);
+        String factoryId = "testFactoryId_" + mFactoryCount++;
+        PaymentAppService.getInstance().addUniqueFactory(factory, factoryId);
         return factory;
     }
 
@@ -1299,9 +1305,16 @@ import java.util.concurrent.atomic.AtomicReference;
     @Override
     protected void before() throws Throwable {
         super.before();
+        PaymentAppService.getInstance().resetForTest();
         if (!mDelayStartActivity) {
             startMainActivityWithURL(mTestFilePath);
             setObserversAndWaitForInitialPageLoad();
         }
+    }
+
+    @Override
+    protected void after() {
+        PaymentAppService.getInstance().resetForTest();
+        super.after();
     }
 }

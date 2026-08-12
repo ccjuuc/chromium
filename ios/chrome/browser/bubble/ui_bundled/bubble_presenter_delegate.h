@@ -5,6 +5,8 @@
 #ifndef IOS_CHROME_BROWSER_BUBBLE_UI_BUNDLED_BUBBLE_PRESENTER_DELEGATE_H_
 #define IOS_CHROME_BROWSER_BUBBLE_UI_BUNDLED_BUBBLE_PRESENTER_DELEGATE_H_
 
+#import <Foundation/Foundation.h>
+
 @class BubblePresenter;
 
 // Delegate for the BubblePresenter.
@@ -16,8 +18,8 @@
 // Whether the NTP exists.
 - (BOOL)isNTPActiveForBubblePresenter:(BubblePresenter*)bubblePresenter;
 
-// Whether the NTP is scrolled to top.
-- (BOOL)isNTPScrolledToTopForBubblePresenter:(BubblePresenter*)bubblePresenter;
+// Scrolls the New Tab Page (NTP) to the top for the given bubble presenter.
+- (void)scrollNTPToTopForBubblePresenter:(BubblePresenter*)bubblePresenter;
 
 // Whether overscroll actions are supported.
 - (BOOL)isOverscrollActionsSupportedForBubblePresenter:

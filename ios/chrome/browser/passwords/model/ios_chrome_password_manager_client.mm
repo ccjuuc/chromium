@@ -18,9 +18,11 @@
 #import "components/autofill/core/browser/logging/log_manager.h"
 #import "components/autofill/core/browser/logging/log_router.h"
 #import "components/autofill/ios/browser/autofill_client_ios.h"
+#import "components/device_reauth/device_authenticator.h"
 #import "components/enterprise/connectors/core/features.h"
 #import "components/enterprise/connectors/core/reporting_event_router.h"
 #import "components/keyed_service/core/service_access_type.h"
+#import "components/password_manager/core/browser/features/password_features.h"
 #import "components/password_manager/core/browser/password_form.h"
 #import "components/password_manager/core/browser/password_form_manager_for_ui.h"
 #import "components/password_manager/core/browser/password_manager.h"
@@ -36,7 +38,12 @@
 #import "components/ukm/ios/ukm_url_recorder.h"
 #import "components/webauthn/ios/features.h"
 #import "components/webauthn/ios/ios_webauthn_credentials_delegate_factory.h"
+#import "ios/chrome/browser/device_reauth/model/ios_device_authenticator.h"
+#import "ios/chrome/browser/device_reauth/model/ios_device_authenticator_factory.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service_factory.h"
 #import "ios/chrome/browser/enterprise/connectors/reporting/ios_reporting_event_router_factory.h"
+#import "ios/chrome/browser/metrics/model/ios_profile_metrics_service_factory.h"
 #import "ios/chrome/browser/passwords/model/features.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_account_password_store_factory.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_password_reuse_manager_factory.h"
@@ -97,6 +104,23 @@ bool IOSChromePasswordManagerClient::PromptUserToChooseCredentials(
   return false;
 }
 
+bool IOSChromePasswordManagerClient::IsReauthBeforeFillingRequired(
+    device_reauth::DeviceAuthenticator* authenticator) {
+  CHECK(authenticator);
+  return authenticator->CanAuthenticateWithBiometricOrScreenLock();
+}
+
+std::unique_ptr<device_reauth::DeviceAuthenticator>
+IOSChromePasswordManagerClient::GetDeviceAuthenticator() {
+  ProfileIOS* profile = bridge_.profile;
+  CHECK(profile);
+  device_reauth::DeviceAuthParams params(
+      base::Seconds(60), device_reauth::DeviceAuthSource::kPasswordManager);
+  id<ReauthenticationProtocol> reauthModule =
+      ReauthenticationServiceFactory::GetForProfile(profile)->GetReauthModule();
+  return CreateIOSDeviceAuthenticator(reauthModule, profile, params);
+}
+
 bool IOSChromePasswordManagerClient::PromptUserToSaveOrUpdatePassword(
     std::unique_ptr<PasswordFormManagerForUI> form_to_save,
     bool update_password) {
@@ -145,7 +169,9 @@ void IOSChromePasswordManagerClient::FocusedInputChanged(
 void IOSChromePasswordManagerClient::AutomaticPasswordSave(
     std::unique_ptr<PasswordFormManagerForUI> saved_form_manager,
     bool is_update_confirmation) {
-  NOTIMPLEMENTED();
+  if (base::FeatureList::IsEnabled(kPasswordSavedInfobar)) {
+    [bridge_ showPasswordSavedInfoBar:std::move(saved_form_manager)];
+  }
 }
 
 void IOSChromePasswordManagerClient::PromptUserToEnableAutosignin() {
@@ -173,6 +199,11 @@ PrefService* IOSChromePasswordManagerClient::GetPrefs() const {
 
 PrefService* IOSChromePasswordManagerClient::GetLocalStatePrefs() const {
   return GetApplicationContext()->GetLocalState();
+}
+
+metrics::ProfileMetricsService*
+IOSChromePasswordManagerClient::GetProfileMetricsService() {
+  return IOSProfileMetricsServiceFactory::GetForProfile(bridge_.profile);
 }
 
 const syncer::SyncService* IOSChromePasswordManagerClient::GetSyncService()
@@ -288,15 +319,30 @@ void IOSChromePasswordManagerClient::NotifyUserCredentialsWereLeaked(
 void IOSChromePasswordManagerClient::NotifyKeychainError() {}
 
 bool IOSChromePasswordManagerClient::IsSavingAndFillingEnabled(
-    const GURL& url) const {
+    const url::Origin& origin,
+    base::optional_ref<const GURL> url) const {
   return *saving_passwords_enabled_ && !IsOffTheRecord() &&
          !net::IsCertStatusError(GetMainFrameCertStatus()) &&
-         IsFillingEnabled(url);
+         IsFillingEnabled(origin, url);
 }
 
-bool IOSChromePasswordManagerClient::IsFillingEnabled(const GURL& url) const {
-  return url.DeprecatedGetOriginAsURL() !=
-         GURL(password_manager::kPasswordManagerAccountDashboardURL);
+bool IOSChromePasswordManagerClient::IsFillingEnabled(
+    const url::Origin& origin,
+    base::optional_ref<const GURL> url) const {
+  if (origin.opaque() &&
+      base::FeatureList::IsEnabled(
+          password_manager::features::kPasswordBlockOpaqueOrigins)) {
+    return false;
+  }
+
+  if (url && !base::FeatureList::IsEnabled(
+                 password_manager::features::kPasswordBlockOpaqueOrigins)) {
+    return url->DeprecatedGetOriginAsURL() !=
+           GURL(password_manager::kPasswordManagerAccountDashboardURL);
+  }
+
+  return origin != url::Origin::Create(GURL(
+                       password_manager::kPasswordManagerAccountDashboardURL));
 }
 
 bool IOSChromePasswordManagerClient::IsFieldFilledWithOtp(
@@ -395,13 +441,14 @@ bool IOSChromePasswordManagerClient::IsNewTabPage() const {
 password_manager::WebAuthnCredentialsDelegate*
 IOSChromePasswordManagerClient::GetWebAuthnCredentialsDelegateForDriver(
     password_manager::PasswordManagerDriver* driver) {
-  if (!base::FeatureList::IsEnabled(kIOSPasskeyModalLoginWithShim)) {
+  if (!base::FeatureList::IsEnabled(kIOSPasskeyModalLoginWithShim) &&
+      !base::FeatureList::IsEnabled(kIOSPasskeyConditionalLoginWithShim)) {
     return nullptr;
   }
 
   return webauthn::IOSWebAuthnCredentialsDelegateFactory::GetFactory(
              bridge_.webState)
-      ->GetDelegateForFrame(
+      ->GetDelegateForFrameId(
           static_cast<IOSPasswordManagerDriver*>(driver)->web_frame_id());
 }
 

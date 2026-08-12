@@ -31,13 +31,6 @@ namespace gl::init {
 // synchronization on platforms that does not have GL fences but support EGL
 namespace {
 
-// If enabled, adds a delay to GL program link whose value is given by the
-// feature param. Used for an ablation study.
-BASE_FEATURE(kAddDelayToGLProgramLink, base::FEATURE_DISABLED_BY_DEFAULT);
-constexpr base::FeatureParam<int> kGLProgramLinkDelayMicroseconds{
-    &kAddDelayToGLProgramLink, /*name=*/"GLProgramLinkDelayMicroseconds",
-    /*default_value=*/1000};
-
 struct EGLFenceData {
   EGLSync sync;
   EGLDisplay display;
@@ -188,11 +181,6 @@ bind_timed_compile_function(R(GL_BINDING_CALL* func)(GLuint shader, Args...),
     gl::ScopedProgressReporter scoped_reporter(progress_reporter);
     SCOPED_UMA_HISTOGRAM_TIMER_MICROS("Gpu.GrCompileShaderUs");
 
-    base::TimeDelta delay = features::GetGLCompileShaderDelay();
-    if (delay.is_positive()) {
-      base::PlatformThread::Sleep(delay);
-    }
-
     func(shader, args...);
 
     GLint compile_result = 0;
@@ -214,11 +202,6 @@ GrGLFunction<R GR_GL_FUNCTION_TYPE(GLuint, Args...)> bind_timed_link_function(
                                                    Args... args) -> R {
     gl::ScopedProgressReporter scoped_reporter(progress_reporter);
     SCOPED_UMA_HISTOGRAM_TIMER_MICROS("Gpu.GrLinkProgramUs");
-
-    if (base::FeatureList::IsEnabled(kAddDelayToGLProgramLink)) {
-      base::PlatformThread::Sleep(
-          base::Microseconds(kGLProgramLinkDelayMicroseconds.Get()));
-    }
 
     func(program, args...);
 
@@ -418,8 +401,8 @@ sk_sp<GrGLInterface> CreateGrGLInterface(
                  Droppable, SlowOnMac);
 
   // GL 4.0 or GL_ARB_draw_indirect or ES 3.1
-  BIND(DrawArraysIndirect, Droppable, SlowOnMac);
-  BIND(DrawElementsIndirect, Droppable, SlowOnMac);
+  // BIND(DrawArraysIndirect, Droppable, SlowOnMac);
+  // BIND(DrawElementsIndirect, Droppable, SlowOnMac);
 
   BIND(DrawRangeElements, Droppable, SlowOnMac);
   BIND(Enable);
@@ -433,7 +416,7 @@ sk_sp<GrGLInterface> CreateGrGLInterface(
   BIND(GetError);
   BIND(GetFloatv);
   BIND(GetIntegerv);
-  BIND(GetMultisamplefv);
+  // BIND(GetMultisamplefv);
   BIND(GetQueryObjectuiv);
   BIND(GetQueryObjecti64v);
   BIND(GetQueryObjectui64v);
@@ -447,7 +430,7 @@ sk_sp<GrGLInterface> CreateGrGLInterface(
   functions->fGetString = get_string;
   BIND(GetStringi);
   BIND(GetShaderPrecisionFormat);
-  BIND(GetTexLevelParameteriv);
+  // BIND(GetTexLevelParameteriv);
   BIND(GenQueries);
   BIND(GenSamplers);
   BIND(GenTextures);
@@ -461,7 +444,7 @@ sk_sp<GrGLInterface> CreateGrGLInterface(
   // BIND(MultiDrawArraysIndirect);
   // BIND(MultiDrawElementsIndirect);
 
-  BIND(PatchParameteri);
+  BIND_EXTENSION(PatchParameteri, PatchParameteriOES);
   BIND(PixelStorei);
   BIND(PolygonMode);
 
@@ -487,8 +470,8 @@ sk_sp<GrGLInterface> CreateGrGLInterface(
   BIND(StencilMaskSeparate);
   BIND(StencilOp);
   BIND(StencilOpSeparate);
-  BIND(TexBuffer);
-  BIND(TexBufferRange);
+  BIND_EXTENSION(TexBuffer, TexBufferOES);
+  BIND_EXTENSION(TexBufferRange, TexBufferRangeOES);
   BIND(TexImage2D, Slow, NeedFlushOnMac);
   BIND(TexParameterf);
   BIND(TexParameterfv);
@@ -708,16 +691,17 @@ sk_sp<GrGLInterface> CreateGrGLInterface(
   // Some drivers report GL_KHR_debug but do not provide functions. Validate and
   // remove reported extension from the list if necessary
   // See https://crbug.com/1008125
-  if (gl->glDebugMessageControlFn && gl->glDebugMessageInsertFn &&
-      gl->glDebugMessageCallbackFn && gl->glGetDebugMessageLogFn &&
-      gl->glPushDebugGroupFn && gl->glPopDebugGroupFn && gl->glObjectLabelFn) {
-    BIND(DebugMessageControl);
-    BIND(DebugMessageInsert);
-    BIND(DebugMessageCallback);
-    BIND(GetDebugMessageLog);
-    BIND(PushDebugGroup);
-    BIND(PopDebugGroup);
-    BIND(ObjectLabel);
+  if (gl->glDebugMessageControlKHRFn && gl->glDebugMessageInsertKHRFn &&
+      gl->glDebugMessageCallbackKHRFn && gl->glGetDebugMessageLogKHRFn &&
+      gl->glPushDebugGroupKHRFn && gl->glPopDebugGroupKHRFn &&
+      gl->glObjectLabelKHRFn) {
+    BIND_EXTENSION(DebugMessageControl, DebugMessageControlKHR);
+    BIND_EXTENSION(DebugMessageInsert, DebugMessageInsertKHR);
+    BIND_EXTENSION(DebugMessageCallback, DebugMessageCallbackKHR);
+    BIND_EXTENSION(GetDebugMessageLog, GetDebugMessageLogKHR);
+    BIND_EXTENSION(PushDebugGroup, PushDebugGroupKHR);
+    BIND_EXTENSION(PopDebugGroup, PopDebugGroupKHR);
+    BIND_EXTENSION(ObjectLabel, ObjectLabelKHR);
   } else {
     extensions.remove("GL_KHR_debug");
   }

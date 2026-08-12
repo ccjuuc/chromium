@@ -143,46 +143,9 @@ RealtimeReportingClient::GetReportingSettings() {
   return service->GetReportingSettings();
 }
 
-void RealtimeReportingClient::ReportRealtimeEvent(
-    const std::string& name,
-    const ReportingSettings& settings,
-    base::Value::Dict event) {
-  ReportEventWithTimestampDeprecated(name, settings, std::move(event),
-                                     base::Time::Now(),
-                                     /*include_profile_user_name=*/true);
-}
-
-void RealtimeReportingClient::ReportPastEvent(const std::string& name,
-                                              const ReportingSettings& settings,
-                                              base::Value::Dict event,
-                                              const base::Time& time) {
-  // Do not include profile information for past events because for crash events
-  // we do not necessarily know which profile caused the crash .
-  ReportEventWithTimestampDeprecated(name, settings, std::move(event), time,
-                                     /*include_profile_user_name=*/false);
-}
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
-void AddCrowdstrikeSignalsToEvent(
-    base::Value::Dict& event,
-    const device_signals::SignalsAggregationResponse& response) {
-  if (!response.agent_signals_response ||
-      !response.agent_signals_response->crowdstrike_signals) {
-    return;
-  }
-  const auto& crowdstrike_signals =
-      response.agent_signals_response->crowdstrike_signals.value();
-
-  base::Value::Dict crowdstrike_agent_fields;
-  crowdstrike_agent_fields.Set("agent_id", crowdstrike_signals.agent_id);
-  crowdstrike_agent_fields.Set("customer_id", crowdstrike_signals.customer_id);
-  base::Value::Dict crowdstrike_agent;
-  crowdstrike_agent.Set("crowdstrike", std::move(crowdstrike_agent_fields));
-  base::Value::List agents;
-  agents.Append(std::move(crowdstrike_agent));
-  event.Set("securityAgents", std::move(agents));
-}
 
 void AddCrowdstrikeSignalsToEvent(
     Event& event,
@@ -265,6 +228,8 @@ void AddCrowdstrikeSignalsToEvent(
     case Event::kSuspiciousUrlEvent:
     case Event::kPrototypeRawEvent:
     case Event::kTelomereEvent:
+    case Event::kSaasUsageReportEvent:
+    case Event::kBrowserLaunchEvent:
       break;
   }
 }
@@ -371,111 +336,34 @@ void RealtimeReportingClient::PopulateSignalsAndReportEvent(
   UploadSecurityEvent(std::move(event), client, settings);
 }
 
-void RealtimeReportingClient::MaybeCollectDeviceSignalsAndReportEventDeprecated(
-    base::Value::Dict event,
-    policy::CloudPolicyClient* client,
-    std::string name,
-    const ReportingSettings& settings,
-    base::Time time) {
-  Profile* profile = Profile::FromBrowserContext(context_);
-  device_signals::SignalsAggregator* signals_aggregator =
-      enterprise_signals::SignalsAggregatorFactory::GetForProfile(profile);
-  if (signals_aggregator) {
-    device_signals::SignalsAggregationRequest request;
-    request.signal_names.emplace(device_signals::SignalName::kAgent);
-    signals_aggregator->GetSignals(
-        request,
-        base::BindOnce(
-            &RealtimeReportingClient::PopulateSignalsAndReportEventDeprecated,
-            AsWeakPtrImpl(), std::move(event), client, name, settings, context_,
-            time));
-  } else {
-    UploadSecurityEventReportDeprecated(std::move(event), client, name,
-                                        settings, time);
-  }
-}
-
-void RealtimeReportingClient::PopulateSignalsAndReportEventDeprecated(
-    base::Value::Dict event,
-    policy::CloudPolicyClient* client,
-    std::string name,
-    ReportingSettings settings,
-    content::BrowserContext* context,
-    base::Time time,
-    device_signals::SignalsAggregationResponse response) {
-  AddCrowdstrikeSignalsToEvent(event, response);
-  UploadSecurityEventReportDeprecated(std::move(event), client, name, settings,
-                                      time);
-}
 #endif
 
 bool RealtimeReportingClient::ShouldIncludeDeviceInfo(bool per_profile) {
   return IncludeDeviceInfo(Profile::FromBrowserContext(context_), per_profile);
 }
 
-base::Value::Dict RealtimeReportingClient::ReportErrorDetails(
+base::DictValue RealtimeReportingClient::ReportErrorDetails(
     const policy::CloudPolicyClient::Result& upload_result) {
-  base::Value::Dict event_wrapper = base::Value::Dict();
+  base::DictValue event_wrapper = base::DictValue();
   event_wrapper.Set("uploaded_successfully", upload_result.IsSuccess());
   if (!upload_result.IsSuccess()) {
-    event_wrapper.Set("error_code", upload_result.GetNetError());
+    int error_code = upload_result.GetResponseCode() != 0
+                         ? upload_result.GetResponseCode()
+                         : upload_result.GetNetError();
+    event_wrapper.Set("error_code", error_code);
     event_wrapper.Set("error_message", upload_result.GetResponse().Clone());
   }
   return event_wrapper;
 }
 
-void RealtimeReportingClient::UploadCallbackDeprecated(
-    base::Value::Dict event_wrapper,
-    bool per_profile,
-    policy::CloudPolicyClient* client,
-    EnterpriseReportingEventType event_type,
-    base::TimeTicks upload_started_at,
-    policy::CloudPolicyClient::Result upload_result) {
-  // TODO(crbug.com/256553070): Do not crash if the client is unregistered.
-  CHECK(!upload_result.IsClientNotRegisteredError());
-
-// Device DM token is already set on ChromeOS by reporting::GetContext(...)
-#if !BUILDFLAG(IS_CHROMEOS)
-  if (!per_profile && client) {
-    event_wrapper.SetByDottedPath(
-        "context.device",
-        policy::ReportingJobConfigurationBase::DeviceDictionaryBuilder::
-            BuildDeviceDictionary(client->dm_token(), client->client_id()));
-  }
-#endif
-  base::Value::Dict error_details = ReportErrorDetails(upload_result);
-  event_wrapper.Merge(std::move(error_details));
-
-  safe_browsing::WebUIContentInfoSingleton::GetInstance()->AddToReportingEvents(
-      std::move(event_wrapper));
-
-  if (upload_result.IsSuccess()) {
-    base::UmaHistogramEnumeration("Enterprise.ReportingEventUploadSuccess",
-                                  event_type);
-    base::UmaHistogramCustomTimes(
-        GetSuccessfulUploadDurationUmaMetricName(event_type),
-        base::TimeTicks::Now() - upload_started_at, base::Milliseconds(1),
-        base::Minutes(5), 50);
-
-  } else {
-    base::UmaHistogramEnumeration("Enterprise.ReportingEventUploadFailure",
-                                  event_type);
-    base::UmaHistogramCustomTimes(
-        GetFailedUploadDurationUmaMetricName(event_type),
-        base::TimeTicks::Now() - upload_started_at, base::Milliseconds(1),
-        base::Minutes(5), 50);
-  }
-}
-
 void RealtimeReportingClient::UploadCallback(
-    ::chrome::cros::reporting::proto::UploadEventsRequest request,
     bool per_profile,
     policy::CloudPolicyClient* client,
     EnterpriseReportingEventType event_type,
     base::TimeTicks upload_started_at,
     policy::CloudPolicyClient::Result upload_result) {
   safe_browsing::WebUIContentInfoSingleton::GetInstance()->AddToReportingEvents(
-      std::move(request), ReportErrorDetails(upload_result));
+      upload_result.upload_events_request(), ReportErrorDetails(upload_result));
 
   if (upload_result.IsSuccess()) {
     base::UmaHistogramEnumeration("Enterprise.ReportingEventUploadSuccess",
@@ -493,10 +381,6 @@ void RealtimeReportingClient::UploadCallback(
         base::TimeTicks::Now() - upload_started_at, base::Milliseconds(1),
         base::Minutes(5), 50);
   }
-}
-
-base::Value::Dict RealtimeReportingClient::GetContext() {
-  return reporting::GetContext(Profile::FromBrowserContext(context_));
 }
 
 ::chrome::cros::reporting::proto::UploadEventsRequest
@@ -521,7 +405,7 @@ void RealtimeReportingClient::RemoveDmTokenFromRejectedSet(
 }
 
 void RealtimeReportingClient::OnClientError(policy::CloudPolicyClient* client) {
-  base::Value::Dict error_value;
+  base::DictValue error_value;
   error_value.Set("error",
                   "An event got an error status and hasn't been reported. Find "
                   "details below in error_message and error_code.");

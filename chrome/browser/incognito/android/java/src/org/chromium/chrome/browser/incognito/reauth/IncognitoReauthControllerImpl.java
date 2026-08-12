@@ -15,8 +15,9 @@ import org.chromium.base.ApplicationStatus;
 import org.chromium.base.Callback;
 import org.chromium.base.CallbackController;
 import org.chromium.base.metrics.RecordHistogram;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.OneshotSupplier;
+import org.chromium.build.BuildConfig;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.layouts.LayoutStateProvider;
@@ -53,6 +54,9 @@ public class IncognitoReauthControllerImpl
     // A key that would be persisted in saved instance that would be true if there were
     // incognito tabs present before Chrome went to background.
     public static final String KEY_IS_INCOGNITO_REAUTH_PENDING = "incognitoReauthPending";
+
+    // TODO(crbug.com/474346053): Find a better home for this persistent state key.
+    public static final String PREVIOUS_VERSION_CODE = "previous_version_code";
 
     /**
      * A list of all {@link IncognitoReauthCallback} that would be triggered from
@@ -116,7 +120,7 @@ public class IncognitoReauthControllerImpl
 
                 @Override
                 public void onFinishedHiding(int layoutType) {
-                    if (layoutType == LayoutType.TAB_SWITCHER) {
+                    if (layoutType == LayoutType.HUB) {
                         hideDialogIfShowing(DialogDismissalCause.DIALOG_INTERACTION_DEFERRED);
                     }
                 }
@@ -149,7 +153,7 @@ public class IncognitoReauthControllerImpl
 
     private final ActivityLifecycleDispatcher mActivityLifecycleDispatcher;
     private final TabModelSelector mTabModelSelector;
-    private final ObservableSupplier<Profile> mProfileObservableSupplier;
+    private final MonotonicObservableSupplier<Profile> mProfileObservableSupplier;
     private final IncognitoReauthCoordinatorFactory mIncognitoReauthCoordinatorFactory;
     private final int mTaskId;
     private final boolean mIsTabbedActivity;
@@ -210,14 +214,14 @@ public class IncognitoReauthControllerImpl
             TabModelSelector tabModelSelector,
             ActivityLifecycleDispatcher dispatcher,
             OneshotSupplier<LayoutStateProvider> layoutStateProviderOneshotSupplier,
-            ObservableSupplier<Profile> profileSupplier,
+            MonotonicObservableSupplier<Profile> profileSupplier,
             IncognitoReauthCoordinatorFactory incognitoReauthCoordinatorFactory,
             Supplier<Boolean> incognitoReauthPendingOnRestoreSupplier,
             int taskId) {
         mTabModelSelector = tabModelSelector;
         mActivityLifecycleDispatcher = dispatcher;
         mProfileObservableSupplier = profileSupplier;
-        mProfileObservableSupplier.addObserver(mProfileSupplierCallback);
+        mProfileObservableSupplier.addSyncObserverAndPostIfNonNull(mProfileSupplierCallback);
         mIncognitoReauthCoordinatorFactory = incognitoReauthCoordinatorFactory;
         mIsTabbedActivity = mIncognitoReauthCoordinatorFactory.getIsTabbedActivity();
         mBackPressInReauthFullScreenRunnable =
@@ -248,8 +252,7 @@ public class IncognitoReauthControllerImpl
 
         TabModelUtils.runOnTabStateInitialized(
                 mTabModelSelector,
-                mCallbackController.makeCancelable(
-                        unusedTabModelSelector -> onTabStateInitializedForReauth()));
+                mCallbackController.makeCancelable(_ -> onTabStateInitializedForReauth()));
     }
 
     /**
@@ -277,6 +280,14 @@ public class IncognitoReauthControllerImpl
             mIncognitoReauthCoordinator.destroy();
             mIncognitoReauthCoordinator = null;
         }
+    }
+
+    /** Returns whether an app update has happened. */
+    public static boolean isFromUpdate(@Nullable PersistableBundle persistableBundle) {
+        if (persistableBundle == null) return false;
+
+        return BuildConfig.VERSION_CODE
+                != persistableBundle.getLong(PREVIOUS_VERSION_CODE, BuildConfig.VERSION_CODE);
     }
 
     /** Override from {@link IncognitoReauthController}. */
@@ -380,8 +391,7 @@ public class IncognitoReauthControllerImpl
 
         boolean showFullScreen =
                 !mIsTabbedActivity
-                        || !assumeNonNull(mLayoutStateProvider)
-                                .isLayoutVisible(LayoutType.TAB_SWITCHER);
+                        || !assumeNonNull(mLayoutStateProvider).isLayoutVisible(LayoutType.HUB);
         if (!mIncognitoReauthCoordinatorFactory.areDependenciesReadyFor(showFullScreen)) {
             return;
         }

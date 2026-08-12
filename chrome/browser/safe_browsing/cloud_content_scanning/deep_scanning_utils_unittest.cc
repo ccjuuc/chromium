@@ -14,11 +14,18 @@
 #include "chrome/browser/enterprise/connectors/common.h"
 #include "components/crash/core/common/crash_buildflags.h"
 #include "components/crash/core/common/crash_key.h"
+#include "components/enterprise/common/proto/connectors.pb.h"
+#include "components/enterprise/connectors/core/cloud_content_scanning/deep_scanning_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace safe_browsing {
 
 namespace {
+
+using enterprise_connectors::DecrementCrashKey;
+using enterprise_connectors::IncrementCrashKey;
+using enterprise_connectors::RecordDeepScanMetrics;
+using enterprise_connectors::ScanningCrashKey;
 
 constexpr enterprise_connectors::ScanRequestUploadResult
     kAllBinaryUploadServiceResults[]{
@@ -30,6 +37,7 @@ constexpr enterprise_connectors::ScanRequestUploadResult
         enterprise_connectors::ScanRequestUploadResult::kFailedToGetToken,
         enterprise_connectors::ScanRequestUploadResult::kUnauthorized,
         enterprise_connectors::ScanRequestUploadResult::kFileEncrypted,
+        enterprise_connectors::ScanRequestUploadResult::kUserCancelled,
     };
 
 #if !BUILDFLAG(USE_CRASH_KEY_STUBS)
@@ -79,7 +87,8 @@ class DeepScanningUtilsUMATest
   }
 
   std::string result_value(bool success) const {
-    return BinaryUploadServiceResultToString(result(), success);
+    return enterprise_connectors::BinaryUploadServiceResultToString(result(),
+                                                                    success);
   }
 
   const base::HistogramTester& histograms() const { return histograms_; }
@@ -104,7 +113,8 @@ INSTANTIATE_TEST_SUITE_P(
             enterprise_connectors::DeepScanAccessPoint::DRAG_AND_DROP,
             enterprise_connectors::DeepScanAccessPoint::PASTE,
             enterprise_connectors::DeepScanAccessPoint::PRINT,
-            enterprise_connectors::DeepScanAccessPoint::FILE_TRANSFER),
+            enterprise_connectors::DeepScanAccessPoint::FILE_TRANSFER,
+            enterprise_connectors::DeepScanAccessPoint::ACTOR),
         testing::ValuesIn(kAllBinaryUploadServiceResults)));
 
 TEST_P(DeepScanningUtilsUMATest, SuccessfulScanVerdicts) {
@@ -315,5 +325,41 @@ TEST_P(DeepScanningUtilsCrashKeysTest, InvalidModifications) {
   EXPECT_EQ("999999", crash_reporter::GetCrashKeyValue(key_string()));
 }
 #endif  // !BUILDFLAG(USE_CRASH_KEY_STUBS)
+
+TEST(DeepScanningUtilsTest, AccessPointFromRequest) {
+  EXPECT_EQ(enterprise_connectors::DeepScanAccessPoint::DOWNLOAD,
+            AccessPointFromRequest(
+                enterprise_connectors::FILE_DOWNLOADED,
+                enterprise_connectors::ContentAnalysisRequest::UNKNOWN));
+  EXPECT_EQ(enterprise_connectors::DeepScanAccessPoint::DRAG_AND_DROP,
+            AccessPointFromRequest(
+                enterprise_connectors::FILE_ATTACHED,
+                enterprise_connectors::ContentAnalysisRequest::DRAG_AND_DROP));
+  EXPECT_EQ(
+      enterprise_connectors::DeepScanAccessPoint::PASTE,
+      AccessPointFromRequest(
+          enterprise_connectors::FILE_ATTACHED,
+          enterprise_connectors::ContentAnalysisRequest::CLIPBOARD_PASTE));
+  EXPECT_EQ(enterprise_connectors::DeepScanAccessPoint::UPLOAD,
+            AccessPointFromRequest(
+                enterprise_connectors::FILE_ATTACHED,
+                enterprise_connectors::ContentAnalysisRequest::UNKNOWN));
+  EXPECT_EQ(enterprise_connectors::DeepScanAccessPoint::PASTE,
+            AccessPointFromRequest(
+                enterprise_connectors::BULK_DATA_ENTRY,
+                enterprise_connectors::ContentAnalysisRequest::UNKNOWN));
+  EXPECT_EQ(enterprise_connectors::DeepScanAccessPoint::PRINT,
+            AccessPointFromRequest(
+                enterprise_connectors::PRINT,
+                enterprise_connectors::ContentAnalysisRequest::UNKNOWN));
+  EXPECT_EQ(enterprise_connectors::DeepScanAccessPoint::FILE_TRANSFER,
+            AccessPointFromRequest(
+                enterprise_connectors::FILE_TRANSFER,
+                enterprise_connectors::ContentAnalysisRequest::UNKNOWN));
+  EXPECT_EQ(enterprise_connectors::DeepScanAccessPoint::UPLOAD,
+            AccessPointFromRequest(
+                enterprise_connectors::ANALYSIS_CONNECTOR_UNSPECIFIED,
+                enterprise_connectors::ContentAnalysisRequest::UNKNOWN));
+}
 
 }  // namespace safe_browsing

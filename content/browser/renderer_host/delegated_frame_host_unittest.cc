@@ -53,6 +53,15 @@ class DelegatedFrameHostTest : public testing::Test {
 
   void SetUp() override;
 
+  void TearDown() override {
+    if (delegated_frame_host_) {
+      delegated_frame_host_->DetachFromCompositor();
+    }
+    delegated_frame_host_.reset();
+    compositor_.reset();
+    ImageTransportFactory::Terminate();
+  }
+
  private:
   BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME,
@@ -105,7 +114,7 @@ TEST_F(DelegatedFrameHostTest, NoCopyOutputRequestWithNoValidSurface) {
   base::RunLoop run_loop;
   dfh->CopyFromCompositingSurface(
       /*src_subrect=*/gfx::Rect(),
-      /*output_size=*/gfx::Size(),
+      /*output_size=*/gfx::Size(), base::TimeDelta(),
       base::BindOnce(
           [](base::RepeatingClosure quit_closure,
              const content::CopyFromSurfaceResult& result) {
@@ -114,6 +123,15 @@ TEST_F(DelegatedFrameHostTest, NoCopyOutputRequestWithNoValidSurface) {
           },
           run_loop.QuitClosure()));
   run_loop.Run();
+}
+
+TEST_F(DelegatedFrameHostTest, ForceSpecifiedDeadline) {
+  auto* dfh = delegated_frame_host();
+  EXPECT_EQ(std::nullopt, dfh->GetForceSpecifiedDeadlineForTesting());
+  dfh->SetForceSpecifiedDeadline(5);
+  EXPECT_EQ(5u, dfh->GetForceSpecifiedDeadlineForTesting());
+  dfh->SetForceSpecifiedDeadline(std::nullopt);
+  EXPECT_EQ(std::nullopt, dfh->GetForceSpecifiedDeadlineForTesting());
 }
 
 }  // namespace content

@@ -87,6 +87,22 @@ declare global {
         allowJavascript: boolean;
       }
 
+      // <if expr="enable_pdf_ink2">
+      export interface Typeface {
+        uniqueId: number;
+        serializedTypeface: ArrayBuffer;
+      }
+
+      export interface GetTextInfoResult {
+        typefaces: Typeface[];
+        mojoTextInfo: ArrayBuffer;
+      }
+
+      export function getTextInfo(
+          textarea: HTMLTextAreaElement, knownFontIds: number[]):
+              Promise<GetTextInfoResult>;
+      // </if>
+
       export function getStreamInfo(callback: (info: StreamInfo) => void): void;
       export function isAllowedLocalFileAccess(
           url: string, callback: (isAllowed: boolean) => void): void;
@@ -96,6 +112,7 @@ declare global {
       export function setPdfDocumentTitle(title: string): void;
       export function setPdfPluginAttributes(attributes: PdfPluginAttributes):
           void;
+      export function glicSummarize(): void;
       export const onSave: ChromeEvent<(url: string) => void>;
       // <if expr="enable_pdf_save_to_drive">
       export const onSaveToDriveProgress:

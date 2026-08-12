@@ -51,7 +51,7 @@ PerformanceEntry::PerformanceEntry(const AtomicString& name,
                                    double start_time,
                                    double finish_time,
                                    DOMWindow* source,
-                                   uint32_t navigation_id)
+                                   uint64_t navigation_id)
     : PerformanceEntry(finish_time - start_time,
                        name,
                        start_time,
@@ -62,7 +62,7 @@ PerformanceEntry::PerformanceEntry(double duration,
                                    const AtomicString& name,
                                    double start_time,
                                    DOMWindow* source,
-                                   uint32_t navigation_id)
+                                   uint64_t navigation_id)
     : duration_(duration),
       name_(name),
       start_time_(start_time),
@@ -80,7 +80,7 @@ DOMHighResTimeStamp PerformanceEntry::duration() const {
   return duration_;
 }
 
-uint32_t PerformanceEntry::navigationId() const {
+uint64_t PerformanceEntry::navigationId() const {
   return navigation_id_;
 }
 
@@ -145,15 +145,16 @@ PerformanceEntry::EntryType PerformanceEntry::ToEntryTypeEnum(
   if (entry_type == performance_entry_names::kContainer) {
     return kContainer;
   }
+  if (entry_type == performance_entry_names::kScroll) {
+    return kScroll;
+  }
   return kInvalid;
 }
 
 DOMHighResTimeStamp PerformanceEntry::paintTime() const {
-  CHECK(RuntimeEnabledFeatures::PaintTimingMixinEnabled());
   return paint_timing_info_ ? paint_timing_info_->paint_time : 0;
 }
 std::optional<DOMHighResTimeStamp> PerformanceEntry::presentationTime() const {
-  CHECK(RuntimeEnabledFeatures::PaintTimingMixinEnabled());
   return paint_timing_info_ ? paint_timing_info_->presentation_time : 0;
 }
 
@@ -179,7 +180,7 @@ void PerformanceEntry::BuildJSONValue(V8ObjectBuilder& builder) const {
     builder.AddNumber("navigationId", navigationId());
   }
 
-  if (paint_timing_info_ && RuntimeEnabledFeatures::PaintTimingMixinEnabled()) {
+  if (paint_timing_info_) {
     builder.AddNumber("paintTime", paint_timing_info_->paint_time);
     builder.AddNumber("presentationTime",
                       paint_timing_info_->presentation_time);

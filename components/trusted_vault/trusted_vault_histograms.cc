@@ -10,7 +10,6 @@
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "components/trusted_vault/local_recovery_factor.h"
-#include "components/trusted_vault/recovery_key_store_connection.h"
 #include "components/trusted_vault/trusted_vault_server_constants.h"
 
 namespace trusted_vault {
@@ -40,6 +39,10 @@ std::string GetTrustedVaultURLFetchReasonSuffix(
       return "DownloadAuthenticationFactorsRegistrationState";
     case TrustedVaultURLFetchReasonForUMA::kRegisterICloudKeychain:
       return "RegisterICloudKeychain";
+    case TrustedVaultURLFetchReasonForUMA::kDownloadGaiaPasswordPublicKey:
+      return "DownloadGaiaPasswordPublicKey";
+    case TrustedVaultURLFetchReasonForUMA::kRotateSharedKey:
+      return "RotateSharedKey";
   }
 
   NOTREACHED();
@@ -88,13 +91,6 @@ void RecordTrustedVaultHintDegradedRecoverabilityChangedReason(
   base::UmaHistogramEnumeration(
       "TrustedVault.TrustedVaultHintDegradedRecoverabilityChangedReason",
       hint_degraded_recoverability_changed_reason);
-}
-
-void RecordTrustedVaultDeviceRegistrationState(
-    TrustedVaultDeviceRegistrationStateForUMA registration_state) {
-  RecordTrustedVaultRecoveryFactorRegistrationState(
-      LocalRecoveryFactorType::kPhysicalDevice, SecurityDomainId::kChromeSync,
-      registration_state);
 }
 
 void RecordTrustedVaultRecoveryFactorRegistrationState(
@@ -274,6 +270,12 @@ std::string GetSecurityDomainNameForUma(SecurityDomainId domain) {
       // If adding a new value, also update the variants for SecurityDomainId
       // in tools/metrics/histograms/metadata/trusted_vault/histograms.xml.
   }
+}
+
+void RecordTrustedVaultRecoveryFlowTriggeredEndpoint(
+    TrustedVaultRecoveryFlowEndpoint endpoint) {
+  base::UmaHistogramEnumeration("TrustedVault.RecoveryFlowTriggeredEndpoint",
+                                endpoint);
 }
 
 }  // namespace trusted_vault

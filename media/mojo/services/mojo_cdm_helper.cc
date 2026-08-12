@@ -6,6 +6,7 @@
 
 #include <tuple>
 
+#include "base/logging.h"
 #include "build/build_config.h"
 #include "media/base/cdm_context.h"
 #include "media/cdm/cdm_helpers.h"
@@ -76,6 +77,11 @@ void MojoCdmHelper::SetCdmClientToken(
 void MojoCdmHelper::OnCdmEvent(CdmEvent event, HRESULT hresult) {
   ConnectToCdmDocumentService();
   cdm_document_service_->OnCdmEvent(event, hresult);
+}
+
+void MojoCdmHelper::GetContentProtectionWindow(
+    GetContentProtectionWindowCB callback) {
+  frame_interfaces_->GetContentProtectionWindow(std::move(callback));
 }
 #endif  // BUILDFLAG(IS_WIN)
 
@@ -176,6 +182,31 @@ void MojoCdmHelper::RecordUkm(const CdmMetricsData& cdm_metrics_data) {
   if (cdm_metrics_data.decoder_check1_error_count.has_value()) {
     ukm_builder.SetDecoderCheck1ErrorCount(
         cdm_metrics_data.decoder_check1_error_count.value());
+  }
+
+  if (cdm_metrics_data.key_system_data_time1.has_value()) {
+    ukm_builder.SetKeySystemDataTime1(
+        cdm_metrics_data.key_system_data_time1.value());
+  }
+
+  if (cdm_metrics_data.key_system_data_time2.has_value()) {
+    ukm_builder.SetKeySystemDataTime2(
+        cdm_metrics_data.key_system_data_time2.value());
+  }
+
+  if (cdm_metrics_data.key_system_data_time3.has_value()) {
+    ukm_builder.SetKeySystemDataTime3(
+        cdm_metrics_data.key_system_data_time3.value());
+  }
+
+  if (cdm_metrics_data.key_system_data_bool1.has_value()) {
+    ukm_builder.SetKeySystemDataBool1(
+        cdm_metrics_data.key_system_data_bool1.value());
+  }
+
+  if (cdm_metrics_data.session_init_data_type.has_value()) {
+    ukm_builder.SetSessionInitDataType(
+        cdm_metrics_data.session_init_data_type.value());
   }
 
   ukm_builder.SetNumberOfVideoFrames(cdm_metrics_data.video_frames_processed);

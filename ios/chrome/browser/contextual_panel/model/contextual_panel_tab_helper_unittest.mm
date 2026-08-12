@@ -55,7 +55,7 @@ class ContextualPanelTabHelperTest : public PlatformTest {
     sample_model_ = std::make_unique<SamplePanelModel>();
 
     std::map<ContextualPanelItemType,
-             raw_ptr<ContextualPanelModel, DanglingUntriaged>>
+             raw_ptr<ContextualPanelModel>>
         models;
     models.emplace(ContextualPanelItemType::SamplePanelItem,
                    sample_model_.get());
@@ -76,9 +76,12 @@ class ContextualPanelTabHelperTest : public PlatformTest {
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 
   base::RunLoop run_loop_;
+  // sample_model_ must be declared before web_state_ so that it is destroyed
+  // after the web_state_ (and its owned ContextualPanelTabHelper), preventing
+  // the tab helper from holding a dangling raw_ptr during teardown.
+  std::unique_ptr<SamplePanelModel> sample_model_;
   web::FakeWebState web_state_;
   TestContextualPanelTabHelperObserver observer_;
-  std::unique_ptr<SamplePanelModel> sample_model_;
 };
 
 // Tests that the tab helper observer disconnects before the tab helper is
@@ -122,4 +125,19 @@ TEST_F(ContextualPanelTabHelperTest,
   tester.ExpectUniqueTimeSample(
       "IOS.ContextualPanel.SamplePanelItem.ModelResponseTime", base::Seconds(0),
       1);
+}
+
+// Tests that data is only refreshed for navigations that are not same document.
+TEST_F(ContextualPanelTabHelperTest, ShouldRefreshData) {
+  // Test with a different document navigation.
+  web::FakeNavigationContext different_document_context;
+  different_document_context.SetIsSameDocument(false);
+  EXPECT_TRUE(ContextualPanelTabHelper()->ShouldRefreshData(
+      &web_state_, &different_document_context));
+
+  // Test with a same document navigation.
+  web::FakeNavigationContext same_document_context;
+  same_document_context.SetIsSameDocument(true);
+  EXPECT_FALSE(ContextualPanelTabHelper()->ShouldRefreshData(
+      &web_state_, &same_document_context));
 }

@@ -10,6 +10,7 @@
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/raw_ref.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
@@ -50,7 +51,6 @@
 #include "third_party/skia/include/core/SkYUVAPixmaps.h"
 #include "third_party/skia/include/gpu/ganesh/GrBackendSemaphore.h"
 #include "ui/gfx/color_space.h"
-#include "ui/gfx/color_transform.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/skia_span_util.h"
@@ -112,7 +112,7 @@ struct ReadbackTextureInfo {
 size_t GetRowBytesForColorType(int width, SkColorType color_type) {
   size_t row_bytes = width;
   switch (color_type) {
-    case kAlpha_8_SkColorType:
+    case kR8_unorm_SkColorType:
       break;
     case kR8G8_unorm_SkColorType:
       row_bytes *= 2;
@@ -137,7 +137,8 @@ void ReadbackTexturesOnGpuThread(
   }
 
   auto representation = shared_image_manager->ProduceSkia(
-      mailbox, context_state->memory_type_tracker(), context_state);
+      mailbox, context_state->memory_type_tracker(), context_state,
+      /*required_usages=*/{});
 
   SkSurfaceProps surface_props{0, kUnknown_SkPixelGeometry};
 
@@ -217,7 +218,7 @@ void ReadbackNV12Planes(TestGpuServiceHolder* gpu_service_holder,
                                   .get();
 
         std::vector<ReadbackTextureInfo> texture_infos;
-        texture_infos.emplace_back(texture_size, kAlpha_8_SkColorType,
+        texture_infos.emplace_back(texture_size, kR8_unorm_SkColorType,
                                    out_luma_plane);
         texture_infos.emplace_back(
             gfx::Size(texture_size.width() / 2, texture_size.height() / 2),
@@ -414,7 +415,8 @@ class ReadbackPixelTest : public VizPixelTest {
 
       renderer_->DrawFrame(
           &pass_list, 1.0f, gfx::Size(bitmap.width(), bitmap.height()),
-          gfx::DisplayColorSpaces(), std::move(surface_damage_rect_list));
+          gfx::DisplayColorSpaces(), std::move(surface_damage_rect_list),
+          TrackedElementRects());
       // Call SwapBuffersSkipped(), so the renderer can have a chance to release
       // resources.
       renderer_->SwapBuffersSkipped();
@@ -442,10 +444,11 @@ class ReadbackPixelTest : public VizPixelTest {
                          pixels.data(), pixels.size()));
       return shared_image;
     } else {
-      return sii->CreateSharedImage(
-          {format, size, color_space, gpu::SHARED_IMAGE_USAGE_DISPLAY_READ,
-           "TestLabels"},
-          pixels);
+      return sii->CreateSharedImage({format, size, color_space,
+                                     gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
+                                         gpu::SHARED_IMAGE_USAGE_DISPLAY_WRITE,
+                                     "TestLabels"},
+                                    pixels);
     }
   }
 
@@ -624,7 +627,7 @@ class ReadbackPixelTestRGBAWithBlit
       : ReadbackPixelTest(std::get<0>(GetParam())),
         should_scale_by_half_(std::get<1>(GetParam())),
         letterboxing_behavior_(std::get<2>(GetParam())),
-        populates_gpu_memory_buffer_(std::get<3>(GetParam())) {}
+        populates_mappable_shared_image_(std::get<3>(GetParam())) {}
 
   CopyOutputResult::Destination RequestDestination() const {
     return CopyOutputResult::Destination::kSharedImage;
@@ -643,16 +646,16 @@ class ReadbackPixelTestRGBAWithBlit
   }
 
   // Test parameter that will return `true` if we'll claim that the textures we
-  // create come from GpuMemoryBuffer, `false` otherwise. This exercises a
-  // different code path in SkiaRenderer.
-  bool populates_gpu_memory_buffer() const {
-    return populates_gpu_memory_buffer_;
+  // create come from a mappable SharedImage, `false` otherwise. This exercises
+  // a different code path in SkiaRenderer.
+  bool populates_mappable_shared_image() const {
+    return populates_mappable_shared_image_;
   }
 
  private:
   bool should_scale_by_half_ = false;
   LetterboxingBehavior letterboxing_behavior_;
-  bool populates_gpu_memory_buffer_ = false;
+  bool populates_mappable_shared_image_ = false;
 };
 
 // Test that RGBA readback works correctly using existing textures.
@@ -696,10 +699,10 @@ TEST_P(ReadbackPixelTestRGBAWithBlit, ExecutesCopyRequestWithBlit) {
 
             request.set_result_selection(result_selection);
 
-            request.set_blit_request(
-                BlitRequest(destination_subregion.origin(),
-                            GetLetterboxingBehavior(), std::move(shared_image),
-                            gpu::SyncToken(), populates_gpu_memory_buffer()));
+            request.set_blit_request(BlitRequest(
+                destination_subregion.origin(), GetLetterboxingBehavior(),
+                std::move(shared_image), gpu::SyncToken(),
+                populates_mappable_shared_image()));
           }));
 
   // Check that a result was produced and is of the expected rect/size.
@@ -894,7 +897,7 @@ class ReadbackPixelTestNV12WithBlit
       : ReadbackPixelTest(std::get<0>(GetParam())),
         should_scale_by_half_(std::get<1>(GetParam())),
         letterboxing_behavior_(std::get<2>(GetParam())),
-        populates_gpu_memory_buffer_(std::get<3>(GetParam())) {}
+        populates_mappable_shared_image_(std::get<3>(GetParam())) {}
 
   CopyOutputResult::Destination RequestDestination() const {
     return CopyOutputResult::Destination::kSharedImage;
@@ -915,14 +918,14 @@ class ReadbackPixelTestNV12WithBlit
   // Test parameter that will return `true` if we'll claim that the textures we
   // create come from GpuMemoryBuffer, `false` otherwise. This exercises a
   // different code path in SkiaRenderer.
-  bool populates_gpu_memory_buffer() const {
-    return populates_gpu_memory_buffer_;
+  bool populates_mappable_shared_image() const {
+    return populates_mappable_shared_image_;
   }
 
  private:
   bool should_scale_by_half_ = false;
   LetterboxingBehavior letterboxing_behavior_;
-  bool populates_gpu_memory_buffer_ = false;
+  bool populates_mappable_shared_image_ = false;
 };
 
 // Test that NV12 readback works correctly using existing textures.
@@ -983,7 +986,7 @@ TEST_P(ReadbackPixelTestNV12WithBlit, ExecutesCopyRequestWithBlit) {
     pixels[i] = (i == 0) ? GeneratePixels(plane_size_in_bytes, luma_pattern)
                          : GeneratePixels(plane_size_in_bytes, chromas_pattern);
 
-    auto color_type = i == 0 ? kAlpha_8_SkColorType : kR8G8_unorm_SkColorType;
+    auto color_type = i == 0 ? kR8_unorm_SkColorType : kR8G8_unorm_SkColorType;
     size_t row_bytes = plane_size.width() * (i == 0 ? 1 : 2);
     pixmaps[i] =
         SkPixmap(SkImageInfo::Make(plane_size.width(), plane_size.height(),
@@ -994,6 +997,7 @@ TEST_P(ReadbackPixelTestNV12WithBlit, ExecutesCopyRequestWithBlit) {
   auto shared_image = sii->CreateSharedImage(
       {MultiPlaneFormat::kNV12, source_size, gfx::ColorSpace::CreateREC709(),
        gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
+           gpu::SHARED_IMAGE_USAGE_DISPLAY_WRITE |
            gpu::SHARED_IMAGE_USAGE_RASTER_WRITE,
        "TestLabels"},
       gpu::kNullSurfaceHandle);
@@ -1031,7 +1035,7 @@ TEST_P(ReadbackPixelTestNV12WithBlit, ExecutesCopyRequestWithBlit) {
 
         request.set_blit_request(BlitRequest(
             destination_subregion.origin(), GetLetterboxingBehavior(),
-            shared_image, sync_token, populates_gpu_memory_buffer()));
+            shared_image, sync_token, populates_mappable_shared_image()));
       }));
 
   // Check that a result was produced and is of the expected rect/size.

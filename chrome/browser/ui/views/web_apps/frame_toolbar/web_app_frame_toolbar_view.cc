@@ -7,21 +7,25 @@
 #include <memory>
 
 #include "base/memory/raw_ptr.h"
+#include "base/notreached.h"
+#include "chrome/browser/ui/layout_constants.h"
+#include "chrome/browser/ui/page_action/page_action_properties_provider.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_button.h"
-#include "chrome/browser/ui/views/extensions/extensions_toolbar_container.h"
-#include "chrome/browser/ui/views/extensions/extensions_toolbar_container_view_controller.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_coordinator.h"
+#include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
+#include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop_view_controller.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_controller.h"
-#include "chrome/browser/ui/views/page_action/page_action_properties_provider.h"
 #include "chrome/browser/ui/views/page_action/page_action_view.h"
+#include "chrome/browser/ui/views/page_action/page_action_view_interface.h"
+#include "chrome/browser/ui/views/toolbar/app_menu_control.h"
+#include "chrome/browser/ui/views/toolbar/avatar_toolbar_button_interface.h"
 #include "chrome/browser/ui/views/toolbar/back_forward_button.h"
+#include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.h"
 #include "chrome/browser/ui/views/toolbar/reload_button.h"
-#include "chrome/browser/ui/views/toolbar/reload_button_web_view.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_content_settings_container.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_menu_button.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_navigation_button_container.h"
@@ -93,7 +97,10 @@ class WebAppFrameToolbarView::ViewTargeter
 };
 
 WebAppFrameToolbarView::WebAppFrameToolbarView(BrowserView* browser_view)
-    : browser_view_(browser_view) {
+    : browser_view_(browser_view),
+      scoped_unowned_user_data_(
+          browser_view_->browser()->GetUnownedUserDataHost(),
+          *this) {
   DCHECK(browser_view_);
   DCHECK(web_app::AppBrowserController::IsWebApp(browser_view_->browser()));
   SetID(VIEW_ID_WEB_APP_FRAME_TOOLBAR);
@@ -108,7 +115,8 @@ WebAppFrameToolbarView::WebAppFrameToolbarView(BrowserView* browser_view)
     layout->SetCrossAxisAlignment(views::LayoutAlignment::kStretch);
   }
 
-  const auto* app_controller = browser_view_->browser()->app_controller();
+  const auto* app_controller =
+      web_app::AppBrowserController::From(browser_view_->browser());
 
   if (app_controller->HasMinimalUiButtons()) {
     left_container_ =
@@ -138,19 +146,11 @@ WebAppFrameToolbarView::WebAppFrameToolbarView(BrowserView* browser_view)
 
   UpdateStatusIconsVisibility();
 
-  DCHECK(
-      !browser_view_->toolbar_button_provider() ||
-      views::IsViewClass<WebAppFrameToolbarView>(
-          browser_view_->toolbar_button_provider()->GetAsAccessiblePaneView()))
-      << "This should be the first ToolbarButtorProvider or a replacement for "
-         "an existing instance of this class during a window frame refresh.";
-  browser_view_->SetToolbarButtonProvider(this);
-
   if (browser_view_->IsWindowControlsOverlayEnabled()) {
     OnWindowControlsOverlayEnabledChanged();
   }
-  if (browser_view_->AppUsesBorderlessMode()) {
-    UpdateBorderlessModeEnabled();
+  if (browser_view_->AppUsesUnframedMode()) {
+    UpdateUnframedModeEnabled();
   }
 
   SetEventTargeter(std::make_unique<views::ViewTargeter>(
@@ -263,50 +263,42 @@ void WebAppFrameToolbarView::LayoutForWindowControlsOverlay(
   SetBounds(x, available_space.y(), width, available_space.height());
 }
 
-ExtensionsToolbarContainer*
-WebAppFrameToolbarView::GetExtensionsToolbarContainer() {
+ExtensionsContainerViews*
+WebAppFrameToolbarView::GetExtensionsContainerViews() {
   return right_container_->extensions_container();
 }
 
-PinnedToolbarActionsContainer*
-WebAppFrameToolbarView::GetPinnedToolbarActionsContainer() {
+PinnedToolbarActions* WebAppFrameToolbarView::GetPinnedToolbarActions() {
   return right_container_->pinned_toolbar_actions_container();
 }
 
 gfx::Size WebAppFrameToolbarView::GetToolbarButtonSize() const {
-  const int size = GetLayoutConstant(WEB_APP_MENU_BUTTON_SIZE);
+  const int size = GetLayoutConstant(LayoutConstant::kWebAppMenuButtonSize);
   return gfx::Size(size, size);
 }
 
-views::View* WebAppFrameToolbarView::GetDefaultExtensionDialogAnchorView() {
-  ExtensionsToolbarContainer* extensions_container =
-      GetExtensionsToolbarContainer();
-  if (extensions_container && extensions_container->GetVisible()) {
-    return extensions_container->GetExtensionsButton();
+views::BubbleAnchor WebAppFrameToolbarView::GetDefaultExtensionDialogAnchor() {
+  ExtensionsContainerViews* extensions_container =
+      GetExtensionsContainerViews();
+  if (extensions_container && extensions_container->IsVisible()) {
+    return extensions_container->GetExtensionsButtonAnchor();
   }
-  return GetAppMenuButton();
+  auto* control = GetAppMenuControl();
+  return control ? control->GetAnchor() : views::BubbleAnchor();
 }
 
-PageActionIconView* WebAppFrameToolbarView::GetPageActionIconView(
-    PageActionIconType type) {
-  return right_container_->page_action_icon_controller()->GetIconView(type);
-}
-
-IconLabelBubbleView* WebAppFrameToolbarView::GetPageActionView(
+page_actions::PageActionViewInterface*
+WebAppFrameToolbarView::GetPageActionViewInterface(
     actions::ActionId action_id) {
   page_actions::PageActionPropertiesProvider provider;
   if (!provider.Contains(action_id)) {
     return nullptr;
   }
-  const auto& properties = provider.GetProperties(action_id);
-  if (IsPageActionMigrated(properties.type)) {
-    return right_container_->page_action_container()->GetPageActionView(
-        action_id);
-  }
-  return GetPageActionIconView(properties.type);
+  return right_container_->page_action_container()->GetPageActionView(
+      action_id);
 }
 
-AppMenuButton* WebAppFrameToolbarView::GetAppMenuButton() {
+AppMenuControl* WebAppFrameToolbarView::GetAppMenuControl() {
   return right_container_->web_app_menu_button();
 }
 
@@ -318,9 +310,16 @@ gfx::Rect WebAppFrameToolbarView::GetFindBarBoundingBox(int contents_bottom) {
   // If LTR find bar will be right aligned so align to right edge of app menu
   // button. Otherwise it will be left aligned so align to the left edge of the
   // app menu button.
-  views::View* anchor_view = GetAnchorView(std::nullopt);
-  gfx::Rect anchor_bounds =
-      anchor_view->ConvertRectToWidget(anchor_view->GetLocalBounds());
+  views::BubbleAnchor anchor = GetBubbleAnchor(std::nullopt);
+  gfx::Rect anchor_bounds;
+  if (auto* view = anchor.GetIfView()) {
+    anchor_bounds = view->ConvertRectToWidget(view->GetLocalBounds());
+  } else if (auto* element = anchor.GetIfElement()) {
+    anchor_bounds = views::View::ConvertRectFromScreen(
+        GetWidget()->GetRootView(), element->GetScreenBounds());
+  } else {
+    NOTREACHED();
+  }
   int x_pos = 0;
   int width = anchor_bounds.right();
   if (base::i18n::IsRTL()) {
@@ -332,44 +331,44 @@ gfx::Rect WebAppFrameToolbarView::GetFindBarBoundingBox(int contents_bottom) {
 }
 
 void WebAppFrameToolbarView::FocusToolbar() {
-  SetPaneFocus(nullptr);
+  SetPaneFocusAndFocusDefault();
 }
 
 views::AccessiblePaneView* WebAppFrameToolbarView::GetAsAccessiblePaneView() {
   return this;
 }
 
-views::View* WebAppFrameToolbarView::GetAnchorView(
-    std::optional<actions::ActionId> action_id) {
-  views::View* anchor = GetAppMenuButton();
-  return anchor ? anchor : this;
-}
-
 views::BubbleAnchor WebAppFrameToolbarView::GetBubbleAnchor(
     std::optional<actions::ActionId> action_id) {
-  if (views::View* view = GetAnchorView(action_id)) {
-    return view;
+  auto* control = GetAppMenuControl();
+  if (control) {
+    return control->GetAnchor();
   }
-  return nullptr;
+  return views::BubbleAnchor(this);
+}
+
+views::BubbleAnchor WebAppFrameToolbarView::GetPageActionBubbleAnchor(
+    actions::ActionId action_id) {
+  page_actions::PageActionViewInterface* view =
+      GetPageActionViewInterface(action_id);
+  if (view) {
+    return view->GetBubbleAnchor();
+  }
+  return views::BubbleAnchor();
 }
 
 void WebAppFrameToolbarView::ZoomChangedForActiveTab(bool can_show_bubble) {
-  if (IsPageActionMigrated(PageActionIconType::kZoom)) {
-    auto* zoom_view_controller = browser_view_->browser()
-                                     ->GetActiveTabInterface()
-                                     ->GetTabFeatures()
-                                     ->zoom_view_controller();
-    CHECK(zoom_view_controller);
-    zoom_view_controller->UpdatePageActionIconAndBubbleVisibility(
-        /*prefer_to_show_bubble=*/can_show_bubble, /*from_user_gesture=*/false);
-    return;
-  }
-
-  right_container_->page_action_icon_controller()->ZoomChangedForActiveTab(
-      can_show_bubble);
+  auto* zoom_view_controller = browser_view_->browser()
+                                   ->GetActiveTabInterface()
+                                   ->GetTabFeatures()
+                                   ->zoom_view_controller();
+  CHECK(zoom_view_controller);
+  zoom_view_controller->UpdatePageActionIconAndBubbleVisibility(
+      /*prefer_to_show_bubble=*/can_show_bubble, /*from_user_gesture=*/false);
 }
 
-AvatarToolbarButton* WebAppFrameToolbarView::GetAvatarToolbarButton() {
+AvatarToolbarButtonInterface*
+WebAppFrameToolbarView::GetAvatarToolbarButtonInterface() {
   return right_container_ ? right_container_->avatar_button() : nullptr;
 }
 
@@ -381,12 +380,13 @@ ReloadControl* WebAppFrameToolbarView::GetReloadButton() {
   return left_container_ ? left_container_->reload_button() : nullptr;
 }
 
-IntentChipButton* WebAppFrameToolbarView::GetIntentChipButton() {
-  return nullptr;
-}
 
 ToolbarButton* WebAppFrameToolbarView::GetDownloadButton() {
   return right_container_ ? right_container_->GetDownloadButton() : nullptr;
+}
+
+WebUIToolbarWebView* WebAppFrameToolbarView::GetWebUIToolbarViewForTesting() {
+  return nullptr;
 }
 
 void WebAppFrameToolbarView::OnWindowControlsOverlayEnabledChanged() {
@@ -407,31 +407,62 @@ void WebAppFrameToolbarView::OnWindowControlsOverlayEnabledChanged() {
     DestroyLayer();
     views::SetHitTestComponent(this, static_cast<int>(HTNOWHERE));
   }
+  right_container_->WindowControlsOverlayEnabledChanged();
   right_container_->extensions_toolbar_coordinator()
       ->GetExtensionsContainerViewController()
       ->WindowControlsOverlayEnabledChanged(
           browser_view_->IsWindowControlsOverlayEnabled());
 }
 
-void WebAppFrameToolbarView::UpdateBorderlessModeEnabled() {
-  bool is_borderless_mode_enabled = browser_view_->IsBorderlessModeEnabled();
+void WebAppFrameToolbarView::UpdateUnframedModeEnabled() {
+  bool is_unframed_mode_enabled = browser_view_->IsUnframedModeEnabled();
 
   // The toolbar is hidden and not set to null, because there are many features
   // that depend on the toolbar and would not work without it. For example all
   // the shortcut commands (e.g. Ctrl+F, zoom) rely on the menu button (child of
   // toolbar) so when these are hidden, the shortcuts will still work.
-  SetVisible(!is_borderless_mode_enabled);
+  SetVisible(!is_unframed_mode_enabled);
 }
 
 void WebAppFrameToolbarView::SetWindowControlsOverlayToggleVisible(
     bool visible) {
-  right_container_->window_controls_overlay_toggle_button()->SetVisible(
-      visible);
+  if (auto* button =
+          right_container_->window_controls_overlay_toggle_button()) {
+    button->SetVisible(visible);
+  }
 }
 
-PageActionIconController*
-WebAppFrameToolbarView::GetPageActionIconControllerForTesting() {
-  return right_container_->page_action_icon_controller();
+views::View* WebAppFrameToolbarView::GetDefaultFocusableChild() {
+  // If the app is in minimal-ui mode and navigation buttons (like back/reload)
+  // are visible, we want focus to start on the leftmost navigation control.
+  const auto* app_controller =
+      web_app::AppBrowserController::From(browser_view_->browser());
+  if (app_controller && app_controller->HasMinimalUiButtons() &&
+      left_container_ && left_container_->GetVisible()) {
+    views::View* first_focusable = GetFirstFocusableChild();
+    if (first_focusable && left_container_->Contains(first_focusable)) {
+      return first_focusable;
+    }
+  }
+
+  // Focus content settings buttons first if active.
+  if (right_container_ && right_container_->content_settings_container()) {
+    for (views::View* view : right_container_->content_settings_container()
+                                 ->get_content_setting_views()) {
+      if (view && view->IsFocusable()) {
+        return view;
+      }
+    }
+  }
+
+  // Fall back to the 3-dot app menu button as the standard default
+  // focus point when the toolbar is focused.
+  if (right_container_ && right_container_->web_app_menu_button() &&
+      right_container_->web_app_menu_button()->IsFocusable()) {
+    return right_container_->web_app_menu_button();
+  }
+
+  return GetFirstFocusableChild();
 }
 
 void WebAppFrameToolbarView::ChildPreferredSizeChanged(views::View* child) {

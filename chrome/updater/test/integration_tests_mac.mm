@@ -5,6 +5,7 @@
 #include "chrome/updater/test/integration_tests_mac.h"
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -35,6 +36,7 @@
 #include "base/test/test_timeouts.h"
 #include "base/time/time.h"
 #include "base/version.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/updater/activity.h"
@@ -133,7 +135,7 @@ void Clean(UpdaterScope scope) {
   for (const auto& token : base::SplitStringPiece(out, base::kWhitespaceASCII,
                                                   base::TRIM_WHITESPACE,
                                                   base::SPLIT_WANT_NONEMPTY)) {
-    if (base::StartsWith(token, MAC_BUNDLE_IDENTIFIER_STRING)) {
+    if (token.starts_with(MAC_BUNDLE_IDENTIFIER_STRING)) {
       std::string out_rm;
       base::CommandLine launchctl_rm(base::FilePath("/bin/launchctl"));
       launchctl_rm.AppendArg("remove");
@@ -411,7 +413,7 @@ base::CommandLine MakeElevated(base::CommandLine command_line) {
   return command_line;
 }
 
-void SetPlatformPolicies(const base::Value::Dict& values) {
+void SetPlatformPolicies(const base::DictValue& values) {
   const CFStringRef domain = CFSTR(LEGACY_GOOGLE_UPDATE_APPID);
 
   // Synchronize just to be safe. Ignore spurious errors if the domain
@@ -579,6 +581,35 @@ void ExpectKSAdminXattrBrand(UpdaterScope scope,
                       std::move(want_brand), want_exit);
 }
 
+void ExpectKSAdminRegister(UpdaterScope scope,
+                           const std::string& app_id,
+                           const base::FilePath& tagged_pkg_path,
+                           const base::FilePath& brand_path,
+                           const std::string& brand_key,
+                           const std::string& brand_value,
+                           const std::string& write_brand_file) {
+  std::map<std::string, std::string> switches;
+  switches["--register"] = "";
+  switches["--productid"] = app_id;
+  if (!tagged_pkg_path.empty()) {
+    switches["--tagged-pkg-path"] = tagged_pkg_path.value();
+  }
+  if (!brand_path.empty()) {
+    switches["--brand-path"] = brand_path.value();
+  }
+  if (!brand_key.empty()) {
+    switches["--brand-key"] = brand_key;
+  }
+  if (!brand_value.empty()) {
+    switches["--brand-value"] = brand_value;
+  }
+  if (!write_brand_file.empty()) {
+    switches["--write-brand-file"] = write_brand_file;
+  }
+
+  ExpectKSAdminResult(scope, false, switches, {}, EXIT_SUCCESS);
+}
+
 void ExpectCRURegistrationCannotFindKSAdmin() {
   @autoreleasepool {
     CRURegistration* registration = [[CRURegistration alloc]
@@ -641,10 +672,11 @@ void ExpectCRURegistrationFindsKSAdmin(UpdaterScope scope) {
     ADD_FAILURE() << "test issue - no impl provided";
     return false;
   }
-  NSString* ns_xc_path = @"NOT PROVIDED FOR THIS TEST";
-  if (!xc_path.empty()) {
-    ns_xc_path = base::apple::FilePathToNSString(xc_path);
+  if (xc_path.empty()) {
+    ADD_FAILURE() << "test issue - xc_path must not be empty";
+    return false;
   }
+  NSString* ns_xc_path = base::apple::FilePathToNSString(xc_path);
   if (!ns_xc_path) {
     ADD_FAILURE() << "test issue - xc_path could not be converted to NSString";
     return false;
@@ -744,12 +776,13 @@ void ExpectCRURegistrationCannotRegister(const std::string& app_id,
   }
 }
 
-void ExpectCRURegistrationMarksActive(const std::string& app_id) {
+void ExpectCRURegistrationMarksActive(const std::string& app_id,
+                                      const base::FilePath& xc_path) {
   @autoreleasepool {
     __block NSError* got_error = nil;
 
     ASSERT_TRUE(InvokeCRURegistrationAndWait(
-        app_id, {},
+        app_id, xc_path,
         ^(CRURegistration* registration, dispatch_semaphore_t semaphore) {
           [registration markActiveWithReply:^(NSError* error) {
             got_error = error;
@@ -758,6 +791,29 @@ void ExpectCRURegistrationMarksActive(const std::string& app_id) {
         }));
 
     EXPECT_FALSE(got_error) << base::SysNSStringToUTF8([got_error description]);
+  }
+}
+
+void ExpectCRURegistrationChecksForUpdate(const std::string& app_id,
+                                          const base::FilePath& xc_path,
+                                          const std::string& expected_version) {
+  @autoreleasepool {
+    __block NSError* got_error = nil;
+    __block NSString* got_version = nil;
+
+    ASSERT_TRUE(InvokeCRURegistrationAndWait(
+        app_id, xc_path,
+        ^(CRURegistration* registration, dispatch_semaphore_t semaphore) {
+          [registration
+              checkForUpdateWithReply:^(NSString* version, NSError* error) {
+                got_version = version;
+                got_error = error;
+                dispatch_semaphore_signal(semaphore);
+              }];
+        }));
+
+    EXPECT_FALSE(got_error) << base::SysNSStringToUTF8([got_error description]);
+    EXPECT_EQ(base::SysNSStringToUTF8(got_version), expected_version);
   }
 }
 

@@ -32,39 +32,27 @@ import {
   CrOSEvents_RecorderAppTranscriptionEnableState,
   CrOSEvents_RecorderAppTranscriptionLocale,
 } from 'chrome://resources/ash/common/metrics/structured_events.js';
-import {
-  record,
-} from 'chrome://resources/ash/common/metrics/structured_metrics_service.js';
 
-import {
-  ChangePlaybackSpeedParams,
-  ChangePlaybackVolumeParams,
-  EventsSender as EventsSenderBase,
-  ExportEventParams,
-  FeedbackEventParams,
-  isTranscriptionModelDownloadPerf,
-  OnboardEventParams,
-  PerfEvent,
-  RecordEventParams,
-  StartSessionEventParams,
-  SuggestTitleEventParams,
-  SummarizeEventParams,
-} from '../../core/events_sender.js';
+import type {ChangePlaybackSpeedParams, ChangePlaybackVolumeParams, ExportEventParams, FeedbackEventParams, OnboardEventParams, PerfEvent, RecordEventParams, StartSessionEventParams, SuggestTitleEventParams, SummarizeEventParams} from '../../core/events_sender.js';
+import {EventsSender as EventsSenderBase, isTranscriptionModelDownloadPerf} from '../../core/events_sender.js';
+import type {ModelResponseError} from '../../core/on_device_model/types.js';
 import {
   ModelExecutionError,
   ModelLoadError,
-  ModelResponseError,
 } from '../../core/on_device_model/types.js';
 import {LanguageCode} from '../../core/soda/language_info.js';
+import type {ExportSettings} from '../../core/state/settings.js';
 import {
   ExportAudioFormat,
-  ExportSettings,
   ExportTranscriptionFormat,
   SpeakerLabelEnableState,
   SummaryEnableState,
   TranscriptionEnableState,
 } from '../../core/state/settings.js';
 import {assertExhaustive} from '../../core/utils/assert.js';
+import type {Event} from '../../mojom/event.mojom-webui.js';
+
+import type {PageHandlerRemote} from './types.js';
 
 function getSpeakerLabelEnableState(
   transcriptionAvailable: boolean,
@@ -290,6 +278,14 @@ function convertToModelFeedback(
 }
 
 export class EventsSender extends EventsSenderBase {
+  constructor(private readonly remote: PageHandlerRemote) {
+    super();
+  }
+
+  private record(event: Event) {
+    this.remote.recordStructuredMetrics([event]);
+  }
+
   override sendStartSessionEvent({
     speakerLabelEnableState,
     summaryAvailable,
@@ -319,7 +315,7 @@ export class EventsSender extends EventsSenderBase {
                     .setTranscriptionEnableState(transcription)
                     .build();
 
-    record(event);
+    this.record(event);
   }
 
   override sendRecordEvent(params: RecordEventParams): void {
@@ -349,7 +345,7 @@ export class EventsSender extends EventsSenderBase {
                     .setWordCount(BigInt(params.wordCount))
                     .build();
 
-    record(event);
+    this.record(event);
   }
 
   override sendSuggestTitleEvent(params: SuggestTitleEventParams): void {
@@ -362,7 +358,7 @@ export class EventsSender extends EventsSenderBase {
         .setWordCount(BigInt(params.wordCount))
         .build();
 
-    record(event);
+    this.record(event);
   }
 
   override sendSummarizeEvent(params: SummarizeEventParams): void {
@@ -372,7 +368,7 @@ export class EventsSender extends EventsSenderBase {
         .setWordCount(BigInt(params.wordCount))
         .build();
 
-    record(event);
+    this.record(event);
   }
 
   override sendFeedbackTitleSuggestionEvent({
@@ -382,7 +378,7 @@ export class EventsSender extends EventsSenderBase {
                     .setFeedback(convertToModelFeedback(isPositive))
                     .build();
 
-    record(event);
+    this.record(event);
   }
 
   override sendFeedbackSummaryEvent({isPositive}: FeedbackEventParams): void {
@@ -390,7 +386,7 @@ export class EventsSender extends EventsSenderBase {
                     .setFeedback(convertToModelFeedback(isPositive))
                     .build();
 
-    record(event);
+    this.record(event);
   }
 
   override sendOnboardEvent(params: OnboardEventParams): void {
@@ -408,7 +404,7 @@ export class EventsSender extends EventsSenderBase {
                     .setTranscriptionEnableState(transcription)
                     .build();
 
-    record(event);
+    this.record(event);
   }
 
   override sendExportEvent(params: ExportEventParams): void {
@@ -424,7 +420,7 @@ export class EventsSender extends EventsSenderBase {
                     .setTranscriptFormat(transcriptFormat)
                     .build();
 
-    record(event);
+    this.record(event);
   }
 
   override sendChangePlaybackSpeedEvent(
@@ -434,7 +430,7 @@ export class EventsSender extends EventsSenderBase {
                     .setPlaybackSpeed(params.playbackSpeed)
                     .build();
 
-    record(event);
+    this.record(event);
   }
 
   override sendChangePlaybackVolumeEvent(
@@ -445,7 +441,7 @@ export class EventsSender extends EventsSenderBase {
                     .setVolume(BigInt(params.volume))
                     .build();
 
-    record(event);
+    this.record(event);
   }
 
   override sendPerfEvent(event: PerfEvent, duration: number): void {
@@ -483,7 +479,7 @@ export class EventsSender extends EventsSenderBase {
     const event =
       new CrOSEvents_RecorderApp_AppStartPerf().setDuration(dur).build();
 
-    record(event);
+    this.record(event);
   }
 
   private sendTranscriptionModelDownloadPerf(
@@ -496,7 +492,7 @@ export class EventsSender extends EventsSenderBase {
         .setTranscriptionLocale(convertTranscriptionLocaleType(language))
         .build();
 
-    record(event);
+    this.record(event);
   }
 
   private sendSummaryModelDownloadPerf(duration: number): void {
@@ -504,7 +500,7 @@ export class EventsSender extends EventsSenderBase {
                     .setDuration(BigInt(duration))
                     .build();
 
-    record(event);
+    this.record(event);
   }
 
   private sendExportPerf(duration: number, recordingSize: number): void {
@@ -513,7 +509,7 @@ export class EventsSender extends EventsSenderBase {
                     .setRecordingSize(BigInt(recordingSize))
                     .build();
 
-    record(event);
+    this.record(event);
   }
 
   private sendRecordingSavingPerf(
@@ -527,7 +523,7 @@ export class EventsSender extends EventsSenderBase {
                     .setWordCount(BigInt(wordCount))
                     .build();
 
-    record(event);
+    this.record(event);
   }
 
   private sendTitleSuggestionPerf(duration: number, wordCount: number): void {
@@ -536,7 +532,7 @@ export class EventsSender extends EventsSenderBase {
                     .setWordCount(BigInt(wordCount))
                     .build();
 
-    record(event);
+    this.record(event);
   }
 
   private sendSummaryPerf(duration: number, wordCount: number): void {
@@ -545,6 +541,6 @@ export class EventsSender extends EventsSenderBase {
                     .setWordCount(BigInt(wordCount))
                     .build();
 
-    record(event);
+    this.record(event);
   }
 }

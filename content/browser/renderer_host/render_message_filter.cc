@@ -26,16 +26,23 @@ RenderMessageFilter::RenderMessageFilter(
 
 RenderMessageFilter::~RenderMessageFilter() {
   // This function should be called on the IO thread.
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M154);
 }
 
 mojom::FrameRoutingInfoPtr RenderMessageFilter::AllocateNewRoutingInfo() {
   auto result = mojom::FrameRoutingInfo::New();
   result->routing_id = render_widget_helper_->GetNextRoutingID();
   result->devtools_frame_token = base::UnguessableToken::Create();
+  // This sandbox_origin_token is used to deterministically generate opaque
+  // origins for newly created sandboxed frames in both browser and renderer
+  // processes, ensuring consistent origin creation. It is pre-allocated here
+  // alongside routing IDs and frame tokens but will only be used if the frame
+  // actually ends up being sandboxed.
+  result->sandbox_origin_token = base::UnguessableToken::Create();
   render_widget_helper_->StoreNextFrameRoutingID(
       result->routing_id, result->frame_token, result->devtools_frame_token,
-      result->document_token);
+      result->document_token,
+      std::make_unique<base::UnguessableToken>(result->sandbox_origin_token));
   return result;
 }
 

@@ -14,7 +14,6 @@
 #include <string_view>
 
 #include "base/debug/alias.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/trace_event.h"
@@ -123,6 +122,10 @@ void SideLoadFontForTesting(base::FilePath path) {
     g_sideloaded_fonts = new std::vector<base::FilePath>();
   }
   g_sideloaded_fonts->push_back(path);
+}
+
+const std::vector<base::FilePath>* GetSideloadedFontsForTesting() {
+  return g_sideloaded_fonts;
 }
 
 void CreateDWriteFactory(IDWriteFactory** factory) {

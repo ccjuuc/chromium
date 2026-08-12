@@ -4,10 +4,11 @@
 
 #include "ui/aura/window_tree_host.h"
 
-#include "base/containers/contains.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
+#include "ui/aura/client/capture_client_observer.h"
+#include "ui/aura/client/default_capture_client.h"
 #include "ui/aura/native_window_occlusion_tracker.h"
 #include "ui/aura/test/aura_test_base.h"
 #include "ui/aura/test/aura_test_utils.h"
@@ -507,7 +508,7 @@ TEST_F(WindowTreeHostWithThrottleTest, Basic) {
   EXPECT_TRUE(test::GetThrottledHosts().empty());
   host()->SetNativeWindowOcclusionState(Window::OcclusionState::OCCLUDED, {});
   EXPECT_TRUE(host()->compositor()->IsVisible());
-  EXPECT_TRUE(base::Contains(test::GetThrottledHosts(), host()));
+  EXPECT_TRUE(test::GetThrottledHosts().contains(host()));
   host()->SetNativeWindowOcclusionState(Window::OcclusionState::VISIBLE, {});
   EXPECT_TRUE(test::GetThrottledHosts().empty());
   EXPECT_TRUE(host()->compositor()->IsVisible());
@@ -524,7 +525,7 @@ TEST_F(WindowTreeHostWithThrottleTest, CallHideDirectly) {
   EXPECT_TRUE(test::GetThrottledHosts().empty());
   host()->SetNativeWindowOcclusionState(Window::OcclusionState::OCCLUDED, {});
   EXPECT_TRUE(host()->compositor()->IsVisible());
-  EXPECT_TRUE(base::Contains(test::GetThrottledHosts(), host()));
+  EXPECT_TRUE(test::GetThrottledHosts().contains(host()));
   host()->Hide();
   EXPECT_TRUE(test::GetThrottledHosts().empty());
   EXPECT_FALSE(host()->compositor()->IsVisible());
@@ -625,7 +626,7 @@ TEST_F(WindowTreeHostWithThrottleAndReleaseTest, ToggleOccluded) {
   EXPECT_TRUE(test::GetThrottledHosts().empty());
   host()->SetNativeWindowOcclusionState(Window::OcclusionState::OCCLUDED, {});
   EXPECT_FALSE(host()->compositor()->IsVisible());
-  EXPECT_TRUE(base::Contains(test::GetThrottledHosts(), host()));
+  EXPECT_TRUE(test::GetThrottledHosts().contains(host()));
   host()->SetNativeWindowOcclusionState(Window::OcclusionState::VISIBLE, {});
   EXPECT_TRUE(host()->compositor()->IsVisible());
   EXPECT_TRUE(test::GetThrottledHosts().empty());
@@ -657,7 +658,7 @@ TEST_F(WindowTreeHostWithThrottleAndReleaseTest, DestroyWhileThrottled) {
   EXPECT_TRUE(test::GetThrottledHosts().empty());
   host()->SetNativeWindowOcclusionState(Window::OcclusionState::OCCLUDED, {});
   EXPECT_FALSE(host()->compositor()->IsVisible());
-  EXPECT_TRUE(base::Contains(test::GetThrottledHosts(), host()));
+  EXPECT_TRUE(test::GetThrottledHosts().contains(host()));
   // Expect not to crash after destroying WindowTreeHost after this.
 }
 
@@ -672,7 +673,7 @@ TEST_F(WindowTreeHostWithThrottleAndReleaseTest,
   EXPECT_TRUE(test::GetThrottledHosts().empty());
   host()->SetNativeWindowOcclusionState(Window::OcclusionState::OCCLUDED, {});
   EXPECT_FALSE(host()->compositor()->IsVisible());
-  EXPECT_TRUE(base::Contains(test::GetThrottledHosts(), host()));
+  EXPECT_TRUE(test::GetThrottledHosts().contains(host()));
   std::unique_ptr<WindowTreeHost::VideoCaptureLock> lock =
       host()->CreateVideoCaptureLock();
   EXPECT_TRUE(host()->compositor()->IsVisible());
@@ -685,7 +686,7 @@ TEST_F(WindowTreeHostWithThrottleAndReleaseTest,
   EXPECT_TRUE(test::GetThrottledHosts().empty());
   lock.reset();
   EXPECT_FALSE(host()->compositor()->IsVisible());
-  EXPECT_TRUE(base::Contains(test::GetThrottledHosts(), host()));
+  EXPECT_TRUE(test::GetThrottledHosts().contains(host()));
   host()->SetNativeWindowOcclusionState(Window::OcclusionState::VISIBLE, {});
   EXPECT_TRUE(host()->compositor()->IsVisible());
   EXPECT_TRUE(test::GetThrottledHosts().empty());
@@ -763,5 +764,48 @@ TEST_F(WindowTreeHostWithThrottleAndReleaseTest,
 }
 
 #endif  // BUILDFLAG(IS_WIN)
+
+class DeleteHostOnCaptureChangeObserver : public client::CaptureClientObserver {
+ public:
+  explicit DeleteHostOnCaptureChangeObserver(
+      std::unique_ptr<TestWindowTreeHost>* host_ptr)
+      : host_ptr_(host_ptr) {}
+
+  // client::CaptureClientObserver:
+  void OnCaptureChanged(Window* lost_capture, Window* gained_capture) override {
+    host_ptr_->reset();
+  }
+
+ private:
+  raw_ptr<std::unique_ptr<TestWindowTreeHost>> host_ptr_;
+};
+
+using WindowTreeHostDeathTest = WindowTreeHostTest;
+
+TEST_F(WindowTreeHostDeathTest, DeleteHostDuringUnlockMouse) {
+  std::unique_ptr<TestWindowTreeHost> host =
+      std::make_unique<TestWindowTreeHost>();
+  Window* root_window = host->window();
+  client::DefaultCaptureClient default_capture_client(root_window);
+  client::CaptureClient* capture_client = &default_capture_client;
+
+  std::unique_ptr<Window> child = std::make_unique<Window>(nullptr);
+  child->Init(ui::LAYER_NOT_DRAWN);
+  root_window->AddChild(child.get());
+  child->Show();
+
+  capture_client->SetCapture(child.get());
+  EXPECT_TRUE(child->HasCapture());
+
+  DeleteHostOnCaptureChangeObserver observer(&host);
+  capture_client->AddObserver(&observer);
+
+  // This should call ReleaseCapture, which triggers observer, which deletes
+  // host, which deletes root_window, which should crash because of
+  // ScopedDeleteBlocker.
+  EXPECT_DEATH(host->UnlockMouse(child.get()), "");
+
+  capture_client->RemoveObserver(&observer);
+}
 
 }  // namespace aura

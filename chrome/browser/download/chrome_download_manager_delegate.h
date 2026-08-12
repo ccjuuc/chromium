@@ -36,8 +36,8 @@
 #include "ui/shell_dialogs/selected_file_info.h"
 
 #if BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/download/android/download_dialog_bridge.h"
-#include "chrome/browser/download/android/download_message_bridge.h"
+#include "chrome/browser/download/android/download_dialog_bridge.h"  // nogncheck crbug.com/40147906
+#include "chrome/browser/download/android/download_message_bridge.h"  // nogncheck crbug.com/40147906
 #endif
 
 #if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
@@ -181,6 +181,7 @@ class ChromeDownloadManagerDelegate
 #else
   void AttachExtraInfo(download::DownloadItem* item) override;
 #endif  // BUILDFLAG(IS_ANDROID)
+  bool SupportsHistoryLoading() override;
 
   // Opens a download using the platform handler. DownloadItem::OpenDownload,
   // which ends up being handled by OpenDownload(), will open a download in the
@@ -263,9 +264,11 @@ class ChromeDownloadManagerDelegate
       bool create_directory,
       download::DownloadPathReservationTracker::FilenameConflictAction
           conflict_action,
+      const base::FilePath& containment_directory,
       ReservedPathCallback callback) override;
 #if BUILDFLAG(IS_ANDROID)
   void RequestIncognitoWarningConfirmation(
+      content::WebContents* web_contents,
       IncognitoWarningConfirmationCallback) override;
 #endif
   void RequestConfirmation(download::DownloadItem* download,
@@ -328,6 +331,7 @@ class ChromeDownloadManagerDelegate
 #if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
   // Called when obfuscated download files are deobfuscated.
   void OnDeobfuscationComplete(
+      uint32_t download_id,
       base::OnceClosure callback,
       base::expected<void, enterprise_obfuscation::Error> deobfuscation_result);
 #endif

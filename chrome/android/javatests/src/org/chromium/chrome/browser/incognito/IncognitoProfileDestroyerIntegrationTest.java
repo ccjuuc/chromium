@@ -201,6 +201,7 @@ public class IncognitoProfileDestroyerIntegrationTest {
     @Test
     @MediumTest
     @Feature({"OffTheRecord"})
+    // TODO(crbug.com/457847264): Change to @Restriction(DeviceFormFactor.PHONE) after launch
     @DisableFeatures({ChromeFeatureList.ANDROID_OPEN_INCOGNITO_AS_WINDOW})
     public void test_ActivateAfterEmpty() throws ExecutionException {
         // Open a single incognito tab.

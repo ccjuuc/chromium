@@ -135,6 +135,7 @@ LIGHTWEIGHT_TESTERS = [
     'win-10_laptop_low_end-perf',
     'win-11-perf',
     'mac-m4-mini-perf',
+    'mac-m4-pro-perf',
 ]
 
 UPLOAD_SKIA_JSON_BUILDERS = frozenset([
@@ -147,14 +148,13 @@ UPLOAD_SKIA_JSON_BUILDERS = frozenset([
     'android-pixel4-perf',
     'android-pixel4_webview-perf',  # One of the mobile testers.
     'android-pixel4_webview-perf-pgo',
-    'android-pixel6-perf',
     'android-pixel6-perf-pgo',
-    'android-pixel6-pro-perf',
     'android-pixel9-perf',
     'android-pixel9-pro-perf',
     'android-pixel9-pro-xl-perf',
-    'android-pixel25-ultra-perf',
-    'android-pixel25-ultra-xl-perf',
+    'android-pixel10-perf',
+    'android-pixel10_webview-perf',
+    'android-pixel10_webview-perf-pgo',
     'android-brya-kano-i5-8gb-perf',
     'android-corsola-steelix-8gb-perf',
     'android-nissa-uldren-8gb-perf',
@@ -163,7 +163,7 @@ UPLOAD_SKIA_JSON_BUILDERS = frozenset([
     'linux-perf',
     'linux-perf-fyi',
     'linux-perf-rel',
-    'linux-processor-perf',
+    'linux-r350-processor-perf',
     'linux-r350-perf',
     'mac-arm-builder-perf',
     'mac-builder-perf',
@@ -175,6 +175,7 @@ UPLOAD_SKIA_JSON_BUILDERS = frozenset([
     'mac-m2-pro-perf',
     'mac-m3-pro-perf',
     'mac-m4-mini-processor-perf',
+    'mac-m4-pro-processor-perf',
     'win-10-processor-perf',
     'win-10_amd_laptop-perf',
     'win-10_laptop_low_end-processor-perf',
@@ -186,11 +187,63 @@ UPLOAD_SKIA_JSON_BUILDERS = frozenset([
 ])
 
 PUBLIC_PERF_BUILDERS = [
-    'linux-perf',  # ChromiumPerf
-    'linux-perf-fyi',  # ChromiumPerfFyi
-    'linux-r350-perf',  # ChromiumPerf
-    'win-10-perf',  # ChromiumPerf
+    # all except latest pixels
+    'android_arm64-builder-perf',
+    'android-builder-perf',
+    'android-go-wembley-perf',
+    'android-go-wembley_webview-perf',
+    'android-pixel-fold-perf',
+    'android-pixel-tangor-perf',
+    'android-pixel4-perf',
+    'android-pixel4_webview-perf',  # One of the mobile testers.
+    'android-pixel4_webview-perf-pgo',
+    'android-pixel6-perf-pgo',
+    'android-pixel9-perf',
+    'android-pixel9-pro-perf',
+    'android-pixel9-pro-xl-perf',
+    'android-pixel10-perf',
+    'android-pixel10_webview-perf',
+    'android-pixel10_webview-perf-pgo',
+    'linux-builder-perf',
+    'linux-falcon-rak-5070-perf',
+    'linux-perf',
+    'linux-perf-fyi',
+    'linux-perf-rel',
+    'linux-r350-processor-perf',
+    'linux-r350-perf',
+    'mac-arm-builder-perf',
+    'mac-builder-perf',
+    'mac-intel-perf',
+    'mac-m1-pro-perf',
+    'mac-m1_mini_2020-no-brp-perf',
+    'mac-m1_mini_2020-perf',
+    'mac-m1_mini_2020-perf-pgo',
+    'mac-m2-pro-perf',
+    'mac-m3-pro-perf',
+    'mac-m4-mini-perf',
+    'mac-m4-mini-processor-perf',
+    'mac-m4-pro-perf',
+    'mac-m4-pro-processor-perf',
+    'win-10-processor-perf',
+    'win-10_amd_laptop-perf',
+    'win-10_laptop_low_end-perf',
+    'win-10_laptop_low_end-processor-perf',
+    'win-10_laptop_low_end-perf_HP-Candidate',
+    'win-11-perf',
+    'win-11-processor-perf',
+    'win-falcon-rak-5070-perf',
+    'win64-builder-perf',
+    'win-arm64-snapdragon-elite-perf',
 ]
+
+# TODO(zijiehe): Fuchsia should check the os version, i.e. --os-check=check, but
+# perf test run multiple suites in sequential and the os checks are performed
+# multiple times. Currently there isn't a simple way to check only once at the
+# beginning of the test.
+# See the revision:
+# https://crsrc.org/c/tools/perf/core/bot_platforms.py
+#   ;drc=93a804bc8c5871e1fb70a762e461d787749cb2d7;l=470
+_COMMON_FUCHSIA_ARGS = ['-d', '--os-check=ignore']
 
 # This is an opt-in list for builders which uses dynamic sharding.
 DYNAMIC_SHARDING_TESTERS = []
@@ -222,7 +275,6 @@ FYI_BUILDERS = {
             'performance_test_suite',
             'extra_args': [
                 '--output-format=histograms',
-                '--experimental-tbmv3-metrics',
             ],
         }],
         'platform':
@@ -235,30 +287,9 @@ FYI_BUILDERS = {
     },
     'fuchsia-perf-nsn': {
         'tests': [{
-            'isolate':
-            'performance_web_engine_test_suite',
-            'extra_args': ['--output-format=histograms'] +
-            bot_platforms.FUCHSIA_EXEC_ARGS['nelson'],
-            'type':
-            TEST_TYPES.TELEMETRY,
-        }],
-        'platform':
-        'fuchsia-wes',
-        'dimension': {
-            'cpu': None,
-            'device_type': 'Nelson',
-            'os': 'Fuchsia',
-            'pool': 'chrome.tests',
-        },
-    },
-    'fuchsia-perf-nsn-pgo': {
-        'tests': [{
-            'isolate':
-            'performance_web_engine_test_suite',
-            'extra_args': ['--output-format=histograms'] +
-            bot_platforms.FUCHSIA_EXEC_ARGS['nelson'],
-            'type':
-            TEST_TYPES.TELEMETRY,
+            'isolate': 'performance_web_engine_test_suite',
+            'extra_args': ['--output-format=histograms'] + _COMMON_FUCHSIA_ARGS,
+            'type': TEST_TYPES.TELEMETRY,
         }],
         'platform':
         'fuchsia-wes',
@@ -271,30 +302,9 @@ FYI_BUILDERS = {
     },
     'fuchsia-perf-shk': {
         'tests': [{
-            'isolate':
-            'performance_web_engine_test_suite',
-            'extra_args': ['--output-format=histograms'] +
-            bot_platforms.FUCHSIA_EXEC_ARGS['sherlock'],
-            'type':
-            TEST_TYPES.TELEMETRY,
-        }],
-        'platform':
-        'fuchsia-wes',
-        'dimension': {
-            'cpu': None,
-            'device_type': 'Sherlock',
-            'os': 'Fuchsia',
-            'pool': 'chrome.tests',
-        },
-    },
-    'fuchsia-perf-shk-pgo': {
-        'tests': [{
-            'isolate':
-            'performance_web_engine_test_suite',
-            'extra_args': ['--output-format=histograms'] +
-            bot_platforms.FUCHSIA_EXEC_ARGS['sherlock'],
-            'type':
-            TEST_TYPES.TELEMETRY,
+            'isolate': 'performance_web_engine_test_suite',
+            'extra_args': ['--output-format=histograms'] + _COMMON_FUCHSIA_ARGS,
+            'type': TEST_TYPES.TELEMETRY,
         }],
         'platform':
         'fuchsia-wes',
@@ -312,7 +322,6 @@ FYI_BUILDERS = {
                 'performance_test_suite',
                 'extra_args': [
                     '--output-format=histograms',
-                    '--experimental-tbmv3-metrics',
                     # crbug.com/457520120#comment3 Disabling the feature on waterfall.
                     '--extra-browser-args=--disable-features=SessionRestoreInfobar',
                 ],
@@ -363,12 +372,6 @@ FYI_BUILDERS = {
         },
     },
     'fuchsia-builder-perf-arm64': {
-        'additional_compile_targets': [
-            'web_engine_shell_pkg', 'cast_runner_pkg', 'chromium_builder_perf',
-            'base_perftests'
-        ],
-    },
-    'fuchsia-builder-perf-arm64-pgo': {
         'additional_compile_targets': [
             'web_engine_shell_pkg', 'cast_runner_pkg', 'chromium_builder_perf',
             'base_perftests'
@@ -463,7 +466,11 @@ BUILDERS = {
         'perf_trigger': False,
     },
     'android_arm64_high_end-builder-perf': {
-        'additional_compile_targets': ['trichrome_google_64_32_minimal_apks'],
+        'additional_compile_targets': [
+            'trichrome_google_64_32_minimal_apks',
+            'system_webview_apk',
+            'system_webview_google_apk',
+        ],
         'pinpoint_additional_compile_targets': [],
     },
     'linux-builder-perf': {
@@ -718,21 +725,6 @@ BUILDERS = {
             'device_os_flavor': 'google',
         },
     },
-    'android-pixel6-perf': {
-        'tests': [{
-            'isolate':
-            'performance_test_suite_android_trichrome_chrome_google_64_32_bundle',
-        }],
-        'platform':
-        'android-trichrome-chrome-google-64-32-bundle',
-        'dimension': {
-            'pool': 'chrome.tests.perf',
-            'os': 'Android',
-            'device_type': 'oriole',
-            'device_os': 'AP1A.240405.002',
-            'device_os_flavor': 'google',
-        },
-    },
     'android-pixel6-perf-pgo': {
         'tests': [{
             'isolate':
@@ -776,21 +768,6 @@ BUILDERS = {
             'pool': 'chrome.tests.perf',
             'os': 'Android',
             'device_type': 'tangorpro',
-            'device_os_flavor': 'google',
-        },
-    },
-    'android-pixel6-pro-perf': {
-        'tests': [{
-            'isolate':
-            'performance_test_suite_android_trichrome_chrome_google_64_32_bundle',
-        }],
-        'platform':
-        'android-trichrome-chrome-google-64-32-bundle',
-        'dimension': {
-            'pool': 'chrome.tests.perf',
-            'os': 'Android',
-            'device_type': 'raven',
-            'device_os': 'AP1A.240405.002',
             'device_os_flavor': 'google',
         },
     },
@@ -854,7 +831,7 @@ BUILDERS = {
             'device_os_flavor': 'google',
         },
     },
-    'android-pixel25-ultra-perf': {
+    'android-pixel10-perf': {
         'tests': [{
             'isolate':
             'performance_test_suite_android_trichrome_chrome_google_64_32_bundle',
@@ -864,23 +841,34 @@ BUILDERS = {
         'dimension': {
             'pool': 'chrome.tests.perf',
             'os': 'Android',
-            'device_type': 'mustang',
+            'device_type': 'frankel',
             'device_os': 'B',
             'device_os_flavor': 'google',
         },
     },
-    'android-pixel25-ultra-xl-perf': {
+    'android-pixel10_webview-perf': {
         'tests': [{
-            'isolate':
-            'performance_test_suite_android_trichrome_chrome_google_64_32_bundle',
+            'isolate': 'performance_webview_test_suite',
         }],
-        'platform':
-        'android-trichrome-chrome-google-64-32-bundle',
+        'platform': 'android-webview-standalone-google',
         'dimension': {
-            'pool': 'chrome.tests.perf',
+            'pool': 'chrome.tests.perf-webview',
             'os': 'Android',
-            'device_type': 'blazer',
-            'device_os': 'B',
+            'device_type': 'frankel',
+            'device_os': 'BP4A.260105.004.E1',
+            'device_os_flavor': 'google',
+        },
+    },
+    'android-pixel10_webview-perf-pgo': {
+        'tests': [{
+            'isolate': 'performance_webview_test_suite',
+        }],
+        'platform': 'android-webview-standalone-google',
+        'dimension': {
+            'pool': 'chrome.tests.perf-webview-pgo',
+            'os': 'Android',
+            'device_type': 'frankel',
+            'device_os': 'BP4A.260105.004.E1',
             'device_os_flavor': 'google',
         },
     },
@@ -923,9 +911,10 @@ BUILDERS = {
                 ],
             },
         ],
-        'platform': 'linux',
+        'platform':
+        'linux',
         'dimension': {
-            'gpu': '10de:2184-580.95.05',
+            'gpu': '10de:2184',
             'os': 'Ubuntu-22.04',
             'pool': 'chrome.tests.perf',
             'synthetic_product_name': 'Precision 3930 Rack (Dell Inc.)'
@@ -996,14 +985,15 @@ BUILDERS = {
         'platform':
         'linux',
         'dimension': {
-            'os': 'Ubuntu-22.04.5',
+            'os':
+            'Ubuntu-22.04.5',
             'pool':
             'chrome.tests.perf',
             'synthetic_product_name':
             'System Product Name [System Version] (Falcon Northwest)',
         },
     },
-    'linux-processor-perf': {
+    'linux-r350-processor-perf': {
         'platform': 'linux',
         'perf_processor': True,
     },
@@ -1179,6 +1169,58 @@ BUILDERS = {
         'platform': 'linux',
         'perf_processor': True,
     },
+    'mac-m4-pro-perf': {
+        'tests': [
+            {
+                'isolate': 'performance_test_suite',
+                'extra_args': [
+                    '--assert-gpu-compositing',
+                ],
+            },
+        ],
+        'platform':
+        'mac',
+        'dimension': {
+            'cpu':
+            'arm',
+            'mac_model':
+            'Mac16,8',
+            'os':
+            'Mac',
+            'pool':
+            'chrome.tests.perf',
+            'synthetic_product_name':
+            'Mac16,8_arm64-64-Apple_M4_Pro_apple m4 pro_24576_APPLE SSD AP0512Z',
+        },
+    },
+    'mac-m4-pro-processor-perf': {
+        'platform': 'linux',
+        'perf_processor': True,
+    },
+    'mac-m5-pro-perf': {
+        'tests': [
+            {
+                'isolate': 'performance_test_suite',
+                'extra_args': [
+                    '--assert-gpu-compositing',
+                ],
+            },
+        ],
+        'platform':
+        'mac',
+        'dimension': {
+            'cpu':
+            'arm',
+            'mac_model':
+            'Mac17,9',
+            'os':
+            'Mac',
+            'pool':
+            'chrome.tests.perf',
+            'synthetic_product_name':
+            'Mac17,9_arm64-64-Apple_M5_Pro_apple m5 pro_24576_APPLE SSD AP1024Z',
+        },
+    },
     'win-10_amd_laptop-perf': {
         'tests': [
             {
@@ -1351,7 +1393,7 @@ BUILDERS = {
             # that we can be informed if this
             # version ever changes or becomes inconsistent. It is important
             # that bots are homogeneous. See crbug.com/988045 for history.
-            'os': 'Windows-11-22631.2428',
+            'os': 'Windows-11-26200',
             'gpu': '102b:0536-4.5.0.5',
             'synthetic_product_name': 'PowerEdge R350 (Dell Inc.)'
         },
@@ -1375,7 +1417,7 @@ BUILDERS = {
             # that we can be informed if this
             # version ever changes or becomes inconsistent. It is important
             # that bots are homogeneous. See crbug.com/988045 for history.
-            'os': 'Windows-11-22631.2428',
+            'os': 'Windows-11-26200',
             'gpu': '102b:0536-4.5.0.5',
             'synthetic_product_name': 'PowerEdge R350 (Dell Inc.)'
         },
@@ -1394,7 +1436,8 @@ BUILDERS = {
         'target_bits':
         64,
         'dimension': {
-            'os': 'Windows-11-26100.1742',
+            'os':
+            'Windows-11-26100.1742',
             'pool':
             'chrome.tests.perf',
             'synthetic_product_name':
@@ -1556,9 +1599,11 @@ class BenchmarkMetadata(object):
 GTEST_BENCHMARKS = {
     'base_perftests':
     BenchmarkMetadata(
-        'skyostil@chromium.org, gab@chromium.org', 'Internals>SequenceManager',
+        'skyostil@chromium.org, gab@chromium.org',
+        'Internals>SequenceManager',
         ('https://chromium.googlesource.com/chromium/src/+/HEAD/base/' +
-         'README.md#performance-testing')),
+         'README.md#performance-testing'),
+        stories=[benchmark_utils.StoryInfo('_gtest_', '', ['all'])]),
     'tracing_perftests':
     BenchmarkMetadata(
         'eseckler@chromium.org, khokhlov@chromium.org, kraskevich@chromium.org',

@@ -10,6 +10,7 @@
 
 #include "base/allocator/dispatcher/tls.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/containers/to_vector.h"
 #include "base/debug/stack_trace.h"
 #include "base/functional/bind.h"
@@ -92,9 +93,8 @@ const char* GetAndLeakThreadName() {
         // BUILDFLAG(IS_ANDROID)
 
   // Use tid if we don't have a thread name.
-  UNSAFE_TODO(snprintf(
-      name, sizeof(name), "Thread %lu",
-      static_cast<unsigned long>(base::PlatformThread::CurrentId().raw())));
+  snprintf(name, sizeof(name), "Thread %lu",
+           static_cast<unsigned long>(base::PlatformThread::CurrentId().raw()));
   return UNSAFE_TODO(strdup(name));
 }
 
@@ -132,13 +132,15 @@ StackUnwinder ChooseStackUnwinder() {
 
 }  // namespace
 
-SamplingHeapProfiler::Sample::Sample(size_t size,
-                                     size_t total,
-                                     uint32_t ordinal)
-    : size(size), total(total), ordinal(ordinal) {}
+SamplingHeapProfiler::Sample::Sample(size_t size, size_t total)
+    : size(size), total(total) {}
+
+SamplingHeapProfiler::Sample::~Sample() = default;
 
 SamplingHeapProfiler::Sample::Sample(const Sample&) = default;
-SamplingHeapProfiler::Sample::~Sample() = default;
+
+SamplingHeapProfiler::Sample& SamplingHeapProfiler::Sample::operator=(
+    const Sample&) = default;
 
 SamplingHeapProfiler::SamplingHeapProfiler() = default;
 SamplingHeapProfiler::~SamplingHeapProfiler() {
@@ -147,31 +149,71 @@ SamplingHeapProfiler::~SamplingHeapProfiler() {
   }
 }
 
-uint32_t SamplingHeapProfiler::Start() {
+std::optional<SamplingHeapProfiler::Session> SamplingHeapProfiler::Start(
+    base::ByteSize sampling_interval,
+    Priority priority) {
   const auto unwinder = ChooseStackUnwinder();
   if (unwinder == StackUnwinder::kUnavailable) {
     LOG(WARNING) << "Sampling heap profiler: Stack unwinding is not available.";
-    return 0;
+    return std::nullopt;
   }
   unwinder_.store(unwinder, std::memory_order_release);
 
   AutoLock lock(start_stop_mutex_);
-  if (!running_sessions_++) {
+  SessionId session_id = session_id_generator_.GenerateNextId();
+  uint32_t start_ordinal = last_sample_ordinal_.load(std::memory_order_acquire);
+
+  sessions_[session_id] = {.sampling_interval = sampling_interval,
+                           .priority = priority};
+
+  if (sessions_.size() == 1) {
     PoissonAllocationSampler::Get()->AddSamplesObserver(this);
   }
-  return last_sample_ordinal_.load(std::memory_order_acquire);
+
+  UpdateSamplingInterval();
+
+  return Session(session_id, start_ordinal);
 }
 
-void SamplingHeapProfiler::Stop() {
+void SamplingHeapProfiler::Stop(const Session& session) {
   AutoLock lock(start_stop_mutex_);
-  DCHECK_GT(running_sessions_, 0);
-  if (!--running_sessions_) {
+  auto it = sessions_.find(session.id);
+  CHECK(it != sessions_.end());
+  sessions_.erase(it);
+
+  if (sessions_.empty()) {
     PoissonAllocationSampler::Get()->RemoveSamplesObserver(this);
   }
+  UpdateSamplingInterval();
 }
 
-void SamplingHeapProfiler::SetSamplingInterval(size_t sampling_interval_bytes) {
-  PoissonAllocationSampler::Get()->SetSamplingInterval(sampling_interval_bytes);
+void SamplingHeapProfiler::UpdateSamplingInterval() {
+  base::ByteSize min_interactive_interval = base::ByteSize::Max();
+  base::ByteSize min_background_interval = base::ByteSize::Max();
+
+  for (const auto& [id, info] : sessions_) {
+    if (info.sampling_interval.is_zero()) {
+      continue;
+    }
+    if (info.priority == Priority::kInteractive) {
+      min_interactive_interval =
+          std::min(min_interactive_interval, info.sampling_interval);
+    } else {
+      min_background_interval =
+          std::min(min_background_interval, info.sampling_interval);
+    }
+  }
+
+  base::ByteSize chosen_interval =
+      base::ByteSize(PoissonAllocationSampler::kDefaultSamplingIntervalBytes);
+  if (!min_interactive_interval.is_max()) {
+    chosen_interval = min_interactive_interval;
+  } else if (!min_background_interval.is_max()) {
+    chosen_interval = min_background_interval;
+  }
+
+  PoissonAllocationSampler::Get()->SetSamplingInterval(
+      checked_cast<size_t>(chosen_interval.InBytes()));
 }
 
 void SamplingHeapProfiler::EnableRecordThreadNames() {
@@ -224,7 +266,7 @@ void SamplingHeapProfiler::SampleAdded(void* address,
   DCHECK(PoissonAllocationSampler::ScopedMuteThreadSamples::IsMuted());
   uint32_t previous_last =
       last_sample_ordinal_.fetch_add(1, std::memory_order_acq_rel);
-  Sample sample(size, total, previous_last + 1);
+  Sample sample(size, total);
   sample.allocator = type;
   CaptureNativeStack(context, &sample);
   AutoLock lock(mutex_);
@@ -242,7 +284,9 @@ void SamplingHeapProfiler::SampleAdded(void* address,
   // the sampling heap profiler failed to observe the destruction -- possibly
   // because the sampling heap profiler was temporarily disabled. We should
   // override the old entry.
-  samples_.insert_or_assign(address, std::move(sample));
+  samples_.insert_or_assign(
+      address,
+      OrderedSample{.sample = std::move(sample), .ordinal = previous_last + 1});
 }
 
 void SamplingHeapProfiler::CaptureNativeStack(const char* context,
@@ -278,18 +322,19 @@ void SamplingHeapProfiler::SampleRemoved(void* address) {
 }
 
 std::vector<SamplingHeapProfiler::Sample> SamplingHeapProfiler::GetSamples(
-    uint32_t profile_id) {
+    std::optional<Session> session) {
   // Make sure the sampler does not invoke |SampleAdded| or |SampleRemoved|
   // on this thread. Otherwise it could have end up with a deadlock.
   // See crbug.com/882495
   PoissonAllocationSampler::ScopedMuteThreadSamples no_samples_scope;
+  uint32_t start_ordinal = session ? session->start_ordinal : 0;
+
   AutoLock lock(mutex_);
   std::vector<Sample> samples;
   samples.reserve(samples_.size());
-  for (auto& it : samples_) {
-    Sample& sample = it.second;
-    if (sample.ordinal > profile_id) {
-      samples.push_back(sample);
+  for (const auto& [address, ordered_sample] : samples_) {
+    if (ordered_sample.ordinal > start_ordinal) {
+      samples.push_back(ordered_sample.sample);
     }
   }
   return samples;
@@ -298,7 +343,7 @@ std::vector<SamplingHeapProfiler::Sample> SamplingHeapProfiler::GetSamples(
 std::vector<const char*> SamplingHeapProfiler::GetStrings() {
   PoissonAllocationSampler::ScopedMuteThreadSamples no_samples_scope;
   AutoLock lock(mutex_);
-  return std::vector<const char*>(strings_.begin(), strings_.end());
+  return std::vector<const char*>(std::from_range, strings_);
 }
 
 // static

@@ -16,6 +16,7 @@
 #include "base/check_deref.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/to_vector.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -27,11 +28,14 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/bind.h"
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_path_override.h"
 #include "base/test/task_environment.h"
+#include "base/time/time.h"
 #include "base/types/expected.h"
+#include "base/uuid.h"
 #include "base/values.h"
 #include "base/version.h"
 #include "build/build_config.h"
@@ -62,6 +66,12 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+
+#include "base/win/windows_types.h"
+#endif  // BUILDFLAG(IS_WIN)
 
 namespace update_client {
 namespace {
@@ -135,7 +145,7 @@ class MockObserver : public UpdateClient::Observer {
 
   ~MockObserver() override { update_client_->RemoveObserver(this); }
 
-  MOCK_METHOD1(OnEvent, void(const CrxUpdateItem& item));
+  MOCK_METHOD(void, OnEvent, (const CrxUpdateItem& item), (override));
 
  private:
   const scoped_refptr<UpdateClient> update_client_;
@@ -147,8 +157,10 @@ class MockActionHandler : public ActionHandler {
   MockActionHandler(const MockActionHandler&) = delete;
   MockActionHandler& operator=(const MockActionHandler&) = delete;
 
-  MOCK_METHOD3(Handle,
-               void(const base::FilePath&, const std::string&, Callback));
+  MOCK_METHOD(void,
+              Handle,
+              (const base::FilePath&, const std::string&, Callback),
+              (override));
 
  private:
   ~MockActionHandler() override = default;
@@ -569,13 +581,13 @@ class MockPingManagerImpl : public PingManager {
 
   void SendPing(const std::string& session_id,
                 const CrxComponent& component,
-                std::vector<base::Value::Dict> events,
+                std::vector<base::DictValue> events,
                 base::OnceClosure callback) override;
 
   const std::vector<PingData>& ping_data() const;
   const std::vector<PingData>& terminal_ping_data() const;
 
-  const std::vector<base::Value::Dict>& events() const;
+  const std::vector<base::DictValue>& events() const;
 
  protected:
   ~MockPingManagerImpl() override;
@@ -583,7 +595,7 @@ class MockPingManagerImpl : public PingManager {
  private:
   std::vector<PingData> ping_data_;
   std::vector<PingData> terminal_ping_data_;
-  std::vector<base::Value::Dict> events_;
+  std::vector<base::DictValue> events_;
 };
 
 MockPingManagerImpl::MockPingManagerImpl(scoped_refptr<Configurator> config)
@@ -593,9 +605,9 @@ MockPingManagerImpl::~MockPingManagerImpl() = default;
 
 void MockPingManagerImpl::SendPing(const std::string& session_id,
                                    const CrxComponent& component,
-                                   std::vector<base::Value::Dict> events,
+                                   std::vector<base::DictValue> events,
                                    base::OnceClosure callback) {
-  for (const base::Value::Dict& event : events) {
+  auto event_to_ping_data = [&](const base::DictValue& event) {
     PingData ping_data;
     ping_data.id = component.app_id;
     int event_type = event.FindInt("eventtype").value_or(0);
@@ -627,10 +639,14 @@ void MockPingManagerImpl::SendPing(const std::string& session_id,
     if (event_type != 0) {
       ping_data.event_type = event_type;
     }
-    ping_data_.push_back(ping_data);
-    if (event_type == protocol_request::kEventInstall ||
-        event_type == protocol_request::kEventUpdate ||
-        event_type == protocol_request::kEventUninstall) {
+    return ping_data;
+  };
+
+  ping_data_ = base::ToVector(events, event_to_ping_data);
+  for (const auto& ping_data : ping_data_) {
+    if (ping_data.event_type == protocol_request::kEventInstall ||
+        ping_data.event_type == protocol_request::kEventUpdate ||
+        ping_data.event_type == protocol_request::kEventUninstall) {
       terminal_ping_data_.push_back(ping_data);
     }
   }
@@ -649,7 +665,7 @@ MockPingManagerImpl::terminal_ping_data() const {
   return terminal_ping_data_;
 }
 
-const std::vector<base::Value::Dict>& MockPingManagerImpl::events() const {
+const std::vector<base::DictValue>& MockPingManagerImpl::events() const {
   return events_;
 }
 
@@ -2001,10 +2017,12 @@ TEST_F(UpdateClientTest, OneCrxDiffUpdate) {
 TEST_F(UpdateClientTest, OneCrxInstallError) {
   class MockInstaller : public CrxInstaller {
    public:
-    MOCK_METHOD1(DoInstall, void(const base::FilePath& unpack_path));
-    MOCK_METHOD1(GetInstalledFile,
-                 std::optional<base::FilePath>(const std::string& file));
-    MOCK_METHOD0(Uninstall, bool());
+    MOCK_METHOD(void, DoInstall, (const base::FilePath& unpack_path));
+    MOCK_METHOD(std::optional<base::FilePath>,
+                GetInstalledFile,
+                (const std::string& file),
+                (override));
+    MOCK_METHOD(bool, Uninstall, (), (override));
 
     void Install(const base::FilePath& unpack_path,
                  const std::string& public_key,
@@ -2881,7 +2899,7 @@ TEST_F(UpdateClientTest, OneCrxInstall) {
   EXPECT_EQ(ComponentState::kUpdated, items[5].state);
   EXPECT_EQ("jebgalgnebhfojomionfpkfelancnnkf", items[5].id);
 
-  const base::Value::Dict& dict =
+  const base::DictValue& dict =
       config()->GetPrefService()->GetDict("updateclientdata");
   EXPECT_EQ("1.0", CHECK_DEREF(dict.FindStringByDottedPath(
                        "apps.jebgalgnebhfojomionfpkfelancnnkf.pv")));
@@ -3109,7 +3127,6 @@ TEST_F(UpdateClientTest, EmptyIdList) {
     }
   };
 
-
   class MockCrxDownloader : public CrxDownloader {
    public:
     MockCrxDownloader() = default;
@@ -3220,10 +3237,6 @@ TEST_F(UpdateClientTest, DiskFull) {
                 })));
     EXPECT_CALL(observer, OnEvent(Truly([](const CrxUpdateItem& item) {
                   return item.id == "jebgalgnebhfojomionfpkfelancnnkf" &&
-                         item.state == ComponentState::kDownloading;
-                })));
-    EXPECT_CALL(observer, OnEvent(Truly([](const CrxUpdateItem& item) {
-                  return item.id == "jebgalgnebhfojomionfpkfelancnnkf" &&
                          item.state == ComponentState::kUpdateError;
                 })));
   }
@@ -3241,15 +3254,13 @@ TEST_F(UpdateClientTest, DiskFull) {
       false, ExpectErrorThenQuit(runloop_, Error::NONE));
   runloop_.Run();
 
-  EXPECT_EQ(4u, items.size());
+  EXPECT_EQ(3u, items.size());
   EXPECT_EQ(ComponentState::kChecking, items[0].state);
   EXPECT_EQ("jebgalgnebhfojomionfpkfelancnnkf", items[0].id);
   EXPECT_EQ(ComponentState::kCanUpdate, items[1].state);
   EXPECT_EQ("jebgalgnebhfojomionfpkfelancnnkf", items[1].id);
-  EXPECT_EQ(ComponentState::kDownloading, items[2].state);
+  EXPECT_EQ(ComponentState::kUpdateError, items[2].state);
   EXPECT_EQ("jebgalgnebhfojomionfpkfelancnnkf", items[2].id);
-  EXPECT_EQ(ComponentState::kUpdateError, items[3].state);
-  EXPECT_EQ("jebgalgnebhfojomionfpkfelancnnkf", items[3].id);
 }
 
 TEST_F(UpdateClientTest, DiskFullDiff) {
@@ -3546,16 +3557,6 @@ TEST_F(UpdateClientTest, DiskFullDiff) {
                 })));
     EXPECT_CALL(observer, OnEvent(Truly([](const CrxUpdateItem& item) {
                   return item.id == "ihfokbkgjpifnbbojhneepfflplebdkc" &&
-                         item.state == ComponentState::kDownloading;
-                })))
-        .Times(AtLeast(1));
-    EXPECT_CALL(observer, OnEvent(Truly([](const CrxUpdateItem& item) {
-                  return item.id == "ihfokbkgjpifnbbojhneepfflplebdkc" &&
-                         item.state == ComponentState::kDownloading;
-                })))
-        .Times(AtLeast(1));
-    EXPECT_CALL(observer, OnEvent(Truly([](const CrxUpdateItem& item) {
-                  return item.id == "ihfokbkgjpifnbbojhneepfflplebdkc" &&
                          item.state == ComponentState::kUpdateError;
                 })));
   }
@@ -3618,17 +3619,13 @@ TEST_F(UpdateClientTest, DiskFullDiff) {
         false, ExpectErrorThenQuit(runloop, Error::NONE));
     runloop.Run();
 
-    EXPECT_EQ(5u, items.size());
+    EXPECT_EQ(3u, items.size());
     EXPECT_EQ(ComponentState::kChecking, items[0].state);
     EXPECT_EQ("ihfokbkgjpifnbbojhneepfflplebdkc", items[0].id);
     EXPECT_EQ(ComponentState::kCanUpdate, items[1].state);
     EXPECT_EQ("ihfokbkgjpifnbbojhneepfflplebdkc", items[1].id);
-    EXPECT_EQ(ComponentState::kDownloading, items[2].state);
+    EXPECT_EQ(ComponentState::kUpdateError, items[2].state);
     EXPECT_EQ("ihfokbkgjpifnbbojhneepfflplebdkc", items[2].id);
-    EXPECT_EQ(ComponentState::kDownloading, items[3].state);
-    EXPECT_EQ("ihfokbkgjpifnbbojhneepfflplebdkc", items[3].id);
-    EXPECT_EQ(ComponentState::kUpdateError, items[4].state);
-    EXPECT_EQ("ihfokbkgjpifnbbojhneepfflplebdkc", items[4].id);
   }
 }
 
@@ -4648,7 +4645,7 @@ TEST_F(UpdateClientTest, ActionRun_Install) {
       downloaded=48141 total=48141 download_time_ms="1000"
       previousversion="0.0" nextversion="1.0"/>
       */
-      const base::Value::Dict& event0 = events()[0];
+      const base::DictValue& event0 = events()[0];
       EXPECT_EQ(14, event0.FindInt("eventtype"));
       EXPECT_EQ(1, event0.FindInt("eventresult"));
       EXPECT_EQ("unknown", CHECK_DEREF(event0.FindString("downloader")));
@@ -4662,21 +4659,21 @@ TEST_F(UpdateClientTest, ActionRun_Install) {
 
       // <event eventtype="63" eventresult="1" previousversion="0.0"
       // nextversion="1.0"/>
-      const base::Value::Dict& event1 = events()[1];
+      const base::DictValue& event1 = events()[1];
       EXPECT_EQ(63, event1.FindInt("eventtype"));
       EXPECT_EQ(1, event1.FindInt("eventresult"));
       EXPECT_EQ("0.0", CHECK_DEREF(event1.FindString("previousversion")));
       EXPECT_EQ("1.0", CHECK_DEREF(event1.FindString("nextversion")));
 
       // <event eventtype="42" eventresult="1" errorcode="1877345072"/>
-      const base::Value::Dict& event2 = events()[2];
+      const base::DictValue& event2 = events()[2];
       EXPECT_EQ(42, event2.FindInt("eventtype"));
       EXPECT_EQ(1, event2.FindInt("eventresult"));
       EXPECT_EQ(1877345072, event2.FindInt("errorcode"));
 
       // <event eventtype="2" eventresult="1" previousversion="0.0"
       // nextversion="1.0"/>
-      const base::Value::Dict& event3 = events()[3];
+      const base::DictValue& event3 = events()[3];
       EXPECT_EQ(2, event3.FindInt("eventtype"));
       EXPECT_EQ(1, event3.FindInt("eventresult"));
       EXPECT_EQ("0.0", CHECK_DEREF(event3.FindString("previousversion")));
@@ -4773,12 +4770,12 @@ TEST_F(UpdateClientTest, ActionRun_NoUpdate) {
 
     Unpacker::Unpack(
         "gjpmebpgbhcamgdgjcmnjfhggjpgcimm", "UpdateClientTest",
-        std::vector<uint8_t>(std::begin(gjpm_hash), std::end(gjpm_hash)),
-        GetTestFilePath("runaction_test_win.crx3"),
+        base::ToVector(gjpm_hash), GetTestFilePath("runaction_test_win.crx3"),
         base::MakeRefCounted<UnzipChromiumFactory>(
             base::BindRepeating(&unzip::LaunchInProcessUnzipper))
             ->Create(),
         crx_file::VerifierFormat::CRX3,
+        /*is_foreground=*/true,
         base::BindOnce(
             [](base::FilePath* unpack_path, base::OnceClosure quit_closure,
                const Unpacker::Result& result) {
@@ -5168,7 +5165,7 @@ TEST_F(UpdateClientTest, CancelInstallBeforeInstall) {
       EXPECT_EQ(base::Version("0.0"), ping_data[0].previous_version);
       EXPECT_EQ(base::Version("1.0"), ping_data[0].next_version);
       EXPECT_EQ(ErrorCategory::kService, ping_data[0].error_category);
-      EXPECT_EQ(static_cast<int>(ServiceError::CANCELLED),
+      EXPECT_EQ(std::to_underlying(ServiceError::CANCELLED),
                 ping_data[0].error_code);
     }
   };
@@ -5308,7 +5305,7 @@ TEST_F(UpdateClientTest, CancelInstallBeforeDownload) {
       EXPECT_EQ(base::Version("0.0"), ping_data[0].previous_version);
       EXPECT_EQ(base::Version("1.0"), ping_data[0].next_version);
       EXPECT_EQ(ErrorCategory::kService, ping_data[0].error_category);
-      EXPECT_EQ(static_cast<int>(ServiceError::CANCELLED),
+      EXPECT_EQ(std::to_underlying(ServiceError::CANCELLED),
                 ping_data[0].error_code);
     }
   };
@@ -5520,7 +5517,7 @@ TEST_F(UpdateClientTest, CheckForUpdate_UpdateAvailable) {
       EXPECT_EQ(ping_data[0].next_version, base::Version("1.0"));
       EXPECT_EQ(ping_data[0].error_category, ErrorCategory::kService);
       EXPECT_EQ(ping_data[0].error_code,
-                static_cast<int>(ServiceError::CHECK_FOR_UPDATE_ONLY));
+                std::to_underlying(ServiceError::CHECK_FOR_UPDATE_ONLY));
       EXPECT_EQ(ping_data[0].extra_code1, 0);
     }
   };
@@ -5773,15 +5770,6 @@ TEST_F(UpdateClientTest, CheckForUpdate_Stop) {
 
   MockObserver observer(update_client);
   {
-    InSequence seq;
-    EXPECT_CALL(observer, OnEvent(Truly([](const CrxUpdateItem& item) {
-                  return item.id == "jebgalgnebhfojomionfpkfelancnnkf" &&
-                         item.state == ComponentState::kChecking;
-                })));
-    EXPECT_CALL(observer, OnEvent(Truly([](const CrxUpdateItem& item) {
-                  return item.id == "jebgalgnebhfojomionfpkfelancnnkf" &&
-                         item.state == ComponentState::kUpToDate;
-                })));
   }
 
   std::vector<CrxUpdateItem> items;
@@ -5790,8 +5778,7 @@ TEST_F(UpdateClientTest, CheckForUpdate_Stop) {
       .WillRepeatedly(
           [&items](const CrxUpdateItem& item) { items.push_back(item); });
 
-  // Do two `CheckForUpdate` calls, expect the second call to be cancelled,
-  // because `Stop` cancels the queued up subsequent call.
+  // Do two `CheckForUpdate` calls, expect both calls to be cancelled.
   base::RepeatingClosure barrier_quit_closure =
       BarrierClosure(2, runloop_.QuitClosure());
   const std::string id = "jebgalgnebhfojomionfpkfelancnnkf";
@@ -5799,20 +5786,16 @@ TEST_F(UpdateClientTest, CheckForUpdate_Stop) {
       id, base::BindOnce(&DataCallbackMock::Callback),
       base::BindRepeating(&MockCrxStateChangeReceiver::Receive, receiver),
       /*is_foreground=*/true,
-      ExpectErrorThenQuit(barrier_quit_closure, Error::NONE));
+      ExpectErrorThenQuit(barrier_quit_closure, Error::UPDATE_CANCELED));
   update_client->CheckForUpdate(
       id, base::BindOnce(&DataCallbackMock::Callback),
       base::BindRepeating(&MockCrxStateChangeReceiver::Receive, receiver),
       /*is_foreground=*/true,
       ExpectErrorThenQuit(barrier_quit_closure, Error::UPDATE_CANCELED));
-  update_client->Stop();
   EXPECT_TRUE(update_client->IsUpdating(id));
+  update_client->Stop();
   runloop_.Run();
-  EXPECT_EQ(items.size(), 2u);
-  EXPECT_EQ(items[0].state, ComponentState::kChecking);
-  EXPECT_EQ(items[0].id, "jebgalgnebhfojomionfpkfelancnnkf");
-  EXPECT_EQ(items[1].state, ComponentState::kUpToDate);
-  EXPECT_EQ(items[1].id, "jebgalgnebhfojomionfpkfelancnnkf");
+  EXPECT_TRUE(items.empty());
 }
 
 TEST_F(UpdateClientTest, CheckForUpdate_Errors) {
@@ -5903,7 +5886,7 @@ TEST_F(UpdateClientTest, CheckForUpdate_Errors) {
   EXPECT_EQ(items.size(), 1u);
   EXPECT_EQ(items[0].state, ComponentState::kUpdateError);
   EXPECT_EQ(items[0].id, "jebgalgnebhfojomionfpkfelancnnkf");
-  EXPECT_EQ(items[0].error_code, static_cast<int>(Error::CRX_NOT_FOUND));
+  EXPECT_EQ(items[0].error_code, std::to_underlying(Error::CRX_NOT_FOUND));
 }
 
 // Tests `CheckForUpdate` when the updates are disabled but the server ignores
@@ -5960,7 +5943,7 @@ TEST_F(UpdateClientTest, UpdateCheck_UpdateDisabled) {
       EXPECT_EQ(ping_data[0].next_version, base::Version("1.0"));
       EXPECT_EQ(ping_data[0].error_category, ErrorCategory::kService);
       EXPECT_EQ(ping_data[0].error_code,
-                static_cast<int>(ServiceError::UPDATE_DISABLED));
+                std::to_underlying(ServiceError::UPDATE_DISABLED));
     }
   };
 
@@ -6107,7 +6090,7 @@ TEST_F(UpdateClientTest, OneCrxCachedUpdate) {
       EXPECT_EQ("jebgalgnebhfojomionfpkfelancnnkf", ping_data[1].id);
       EXPECT_EQ(base::Version("0.9"), ping_data[1].previous_version);
       EXPECT_EQ(base::Version("1.0"), ping_data[1].next_version);
-      EXPECT_EQ(0, static_cast<int>(ping_data[1].error_category));
+      EXPECT_EQ(ping_data[1].error_category, ErrorCategory::kNone);
       EXPECT_EQ(0, ping_data[1].error_code);
     }
   };
@@ -6356,6 +6339,98 @@ TEST_F(UpdateClientTest, UnsupportedOperationType) {
   EXPECT_EQ("jebgalgnebhfojomionfpkfelancnnkf", items[2].id);
 }
 
+class UpdateClientCleanupTest : public UpdateClientTest {
+ protected:
+  base::FilePath temp_dir_;
+
+  void SetUp() override {
+#if BUILDFLAG(IS_WIN)
+    ASSERT_TRUE(base::GetSecureTempDirectory(&temp_dir_));
+#else   // BUILDFLAG(IS_WIN)
+    ASSERT_TRUE(base::GetTempDir(&temp_dir_));
+#endif  // BUILDFLAG(IS_WIN)
+
+    config()->SetProdId(
+        base::Uuid::GenerateRandomV4().AsLowercaseString().substr(0, 8));
+  }
+
+  base::FilePath CreateFakeDownloadDir(const std::string& prod_id,
+                                       const std::string& suffix,
+                                       base::TimeDelta age) {
+    // Pattern matching `UpdateClient::CreateDownloadDir`.
+    const base::FilePath path = temp_dir_.Append(
+        base::StrCat({UTF8ToStringType(prod_id),
+                      FILE_PATH_LITERAL("_chrome_url_fetcher_")}) +
+        UTF8ToStringType(suffix));
+    EXPECT_TRUE(base::CreateDirectory(path));
+
+    if (age.is_zero()) {
+      return path;
+    }
+
+#if BUILDFLAG(IS_WIN)
+    // Manually set the directory's creation/access time to simulate age.
+    FILETIME creation_filetime =
+        (base::Time::NowFromSystemTime() + age).ToFileTime();
+    base::File download_dir(path, base::File::FLAG_OPEN |
+                                      base::File::FLAG_WIN_BACKUP_SEMANTICS |
+                                      base::File::FLAG_WRITE_ATTRIBUTES);
+    EXPECT_TRUE(download_dir.IsValid());
+    EXPECT_TRUE(::SetFileTime(download_dir.GetPlatformFile(),
+                              &creation_filetime, NULL, NULL));
+    download_dir.Close();
+#endif  // BUILDFLAG(IS_WIN)
+
+    return path;
+  }
+};
+
+TEST_F(UpdateClientCleanupTest, CleansStaleDirectoriesOnConstruction) {
+  constexpr base::TimeDelta kStaleTime = base::Seconds(0);
+  constexpr base::TimeDelta kFreshTime = base::Minutes(10);
+
+  const base::FilePath stale_dir =
+      CreateFakeDownloadDir(config()->GetProdId(), "stale", kStaleTime);
+  const base::FilePath fresh_dir =
+      CreateFakeDownloadDir(config()->GetProdId(), "fresh", kFreshTime);
+
+  // Create a stale directory for a different prod_id. It should not be deleted.
+  const base::FilePath other_prod_dir = CreateFakeDownloadDir(
+      base::StrCat({"other_prod", config()->GetProdId()}), "stale", kStaleTime);
+
+  // Instantiate `UpdateClient` and call `CleanupStaleDownloads`, which should
+  // trigger the asynchronous cleanup.
+  base::MakeRefCounted<UpdateClientImpl>(
+      config(), base::MakeRefCounted<MockPingManagerImpl>(config()),
+      MockUpdateCheckerFactory<
+          MockUpdateCheckerImpl<UpdateCheckerOptionsUnsupportedOperationType>>()
+          .GetFactory())
+      ->CleanupStaleDownloads(base::Time::Now(), base::DoNothing());
+
+  // Wait to allow the cleanup task to execute.
+  base::ThreadPoolInstance::Get()->FlushForTesting();
+
+  EXPECT_FALSE(base::PathExists(stale_dir))
+      << stale_dir << " should be deleted.";
+
+#if BUILDFLAG(IS_WIN)
+  EXPECT_TRUE(base::PathExists(fresh_dir))
+      << fresh_dir << " should be preserved.";
+#else   // BUILDFLAG(IS_WIN)
+  EXPECT_FALSE(base::PathExists(fresh_dir))
+      << fresh_dir << " should be deleted.";
+#endif  // BUILDFLAG(IS_WIN)
+
+  EXPECT_TRUE(base::PathExists(other_prod_dir))
+      << other_prod_dir << " should be preserved.";
+
+#if BUILDFLAG(IS_WIN)
+  ASSERT_TRUE(RetryFileOperation(&base::DeletePathRecursively, fresh_dir));
+#endif  // BUILDFLAG(IS_WIN)
+
+  ASSERT_TRUE(RetryFileOperation(&base::DeletePathRecursively, other_prod_dir));
+}
+
 TEST_F(UpdateClientTest,
        AllPipelinesContainingOperationsWithInvalidAttributesNoUpdate) {
   class DataCallbackMock {
@@ -6597,6 +6672,175 @@ TEST_F(UpdateClientTest,
   EXPECT_EQ("jebgalgnebhfojomionfpkfelancnnkf", items[1].id);
   EXPECT_EQ(ComponentState::kUpdateError, items[2].state);
   EXPECT_EQ("jebgalgnebhfojomionfpkfelancnnkf", items[2].id);
+}
+
+// Tests cancellation of an active download when `UpdateClient::Stop` is called.
+TEST_F(UpdateClientTest, Install_StopCancelsActiveDownload) {
+  base::FilePath temp_dir;
+#if BUILDFLAG(IS_WIN)
+  ASSERT_TRUE(base::GetSecureTempDirectory(&temp_dir));
+#else   // BUILDFLAG(IS_WIN)
+  ASSERT_TRUE(base::GetTempDir(&temp_dir));
+#endif  // BUILDFLAG(IS_WIN)
+
+  base::FileEnumerator(
+      temp_dir, /*recursive=*/false, base::FileEnumerator::DIRECTORIES,
+      base::StrCat({UTF8ToStringType(config()->GetProdId()),
+                    FILE_PATH_LITERAL("_chrome_url_fetcher_")}))
+      .ForEach([](const base::FilePath& path) {
+        ASSERT_TRUE(RetryFileOperation(&base::DeletePathRecursively, path));
+      });
+
+  class DataCallbackMock {
+   public:
+    static void Callback(
+        const std::vector<std::string>& ids,
+        base::OnceCallback<
+            void(const std::vector<std::optional<CrxComponent>>&)> callback) {
+      CrxComponent crx;
+      crx.app_id = "jebgalgnebhfojomionfpkfelancnnkf";
+      crx.name = "test_jebg";
+      crx.pk_hash = base::ToVector(jebg_hash);
+      crx.version = base::Version("0.0");
+      crx.installer = base::MakeRefCounted<TestInstaller>();
+      crx.crx_format_requirement = crx_file::VerifierFormat::CRX3;
+      std::move(callback).Run({crx});
+    }
+  };
+
+  MockUpdateCheckerFactory<
+      MockUpdateCheckerImpl<UpdateCheckerOptionsOneCrxInstall>>
+      mock_update_checker_factory;
+
+  class MockCrxDownloader : public CrxDownloader {
+   public:
+    MockCrxDownloader() = default;
+
+   private:
+    ~MockCrxDownloader() override = default;
+
+    base::OnceClosure DoStartDownload(const GURL& url) override {
+      DownloadMetrics download_metrics;
+      base::FilePath path;
+      Result result;
+      if (url.GetPath() == "/download/jebgalgnebhfojomionfpkfelancnnkf.crx") {
+        download_metrics.url = url;
+        download_metrics.downloader = DownloadMetrics::kNone;
+        download_metrics.error = 0;
+        download_metrics.downloaded_bytes = 1015;
+        download_metrics.total_bytes = 1015;
+        download_metrics.download_time_ms = 1000;
+
+        EXPECT_TRUE(MakeTestFile(
+            GetTestFilePath("jebgalgnebhfojomionfpkfelancnnkf.crx"), &path));
+
+        result.error = 0;
+        result.response = path;
+      } else {
+        ADD_FAILURE();
+      }
+
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(&MockCrxDownloader::OnDownloadProgress,
+                                    base::Unretained(this),
+                                    download_metrics.downloaded_bytes,
+                                    download_metrics.total_bytes));
+
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(&MockCrxDownloader::OnDownloadComplete,
+                                    base::Unretained(this), true, result,
+                                    download_metrics));
+
+      EXPECT_CALL(cancel_callback_, Run()).Times(testing::AtLeast(1));
+      return cancel_callback_.Get();
+    }
+
+    base::MockCallback<base::OnceClosure> cancel_callback_;
+  };
+
+  class MockPingManager : public MockPingManagerImpl {
+   public:
+    explicit MockPingManager(scoped_refptr<Configurator> config)
+        : MockPingManagerImpl(config) {}
+
+   protected:
+    ~MockPingManager() override {
+      // Verify the ping data shows that the active task was cancelled.
+      const auto ping_data = MockPingManagerImpl::terminal_ping_data();
+      EXPECT_EQ(1u, ping_data.size());
+      EXPECT_EQ("jebgalgnebhfojomionfpkfelancnnkf", ping_data[0].id);
+      EXPECT_EQ(base::Version("0.0"), ping_data[0].previous_version);
+      EXPECT_EQ(base::Version("1.0"), ping_data[0].next_version);
+      EXPECT_EQ(ErrorCategory::kService, ping_data[0].error_category);
+      EXPECT_EQ(static_cast<int>(ServiceError::CANCELLED),
+                ping_data[0].error_code);
+    }
+  };
+
+  SetMockCrxDownloader<MockCrxDownloader>();
+  scoped_refptr<UpdateClient> update_client =
+      base::MakeRefCounted<UpdateClientImpl>(
+          config(), base::MakeRefCounted<MockPingManager>(config()),
+          mock_update_checker_factory.GetFactory());
+
+  MockObserver observer(update_client);
+  {
+    InSequence seq;
+    EXPECT_CALL(observer, OnEvent(Truly([](const CrxUpdateItem& item) {
+                  return item.id == "jebgalgnebhfojomionfpkfelancnnkf" &&
+                         item.state == ComponentState::kChecking;
+                })));
+    EXPECT_CALL(observer, OnEvent(Truly([](const CrxUpdateItem& item) {
+                  return item.id == "jebgalgnebhfojomionfpkfelancnnkf" &&
+                         item.state == ComponentState::kCanUpdate;
+                })));
+    EXPECT_CALL(observer, OnEvent(Truly([](const CrxUpdateItem& item) {
+                  return item.id == "jebgalgnebhfojomionfpkfelancnnkf" &&
+                         item.state == ComponentState::kDownloading;
+                })))
+        .Times(AtLeast(1))
+        .WillRepeatedly([&update_client] {
+          // Call `Stop` during the download.
+          update_client->Stop();
+        });
+    EXPECT_CALL(observer, OnEvent(Truly([](const CrxUpdateItem& item) {
+                  return item.id == "jebgalgnebhfojomionfpkfelancnnkf" &&
+                         item.state == ComponentState::kUpdateError;
+                })));
+  }
+
+  std::vector<CrxUpdateItem> items;
+  auto receiver = base::MakeRefCounted<MockCrxStateChangeReceiver>();
+  EXPECT_CALL(*receiver, Receive(_))
+      .WillRepeatedly(
+          [&items](const CrxUpdateItem& item) { items.push_back(item); });
+
+  update_client->Install(
+      std::string("jebgalgnebhfojomionfpkfelancnnkf"),
+      base::BindOnce(&DataCallbackMock::Callback),
+      base::BindRepeating(&MockCrxStateChangeReceiver::Receive, receiver),
+      ExpectErrorThenQuit(runloop_, Error::NONE));
+  runloop_.Run();
+
+  EXPECT_EQ(5u, items.size());
+  EXPECT_EQ(ComponentState::kChecking, items[0].state);
+  EXPECT_EQ("jebgalgnebhfojomionfpkfelancnnkf", items[0].id);
+  EXPECT_EQ(ComponentState::kCanUpdate, items[1].state);
+  EXPECT_EQ("jebgalgnebhfojomionfpkfelancnnkf", items[1].id);
+  EXPECT_EQ(ComponentState::kDownloading, items[2].state);
+  EXPECT_EQ("jebgalgnebhfojomionfpkfelancnnkf", items[2].id);
+  EXPECT_EQ(ComponentState::kDownloading, items[3].state);
+  EXPECT_EQ("jebgalgnebhfojomionfpkfelancnnkf", items[3].id);
+  EXPECT_EQ(ComponentState::kUpdateError, items[4].state);
+  EXPECT_EQ("jebgalgnebhfojomionfpkfelancnnkf", items[4].id);
+
+  base::FileEnumerator(
+      temp_dir, /*recursive=*/false, base::FileEnumerator::DIRECTORIES,
+      base::StrCat({UTF8ToStringType(config()->GetProdId()),
+                    FILE_PATH_LITERAL("_chrome_url_fetcher_")}))
+      .ForEach([](const base::FilePath& path) {
+        ADD_FAILURE() << "Unexpected left over directory found: " << path;
+      });
 }
 
 }  // namespace update_client

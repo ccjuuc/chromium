@@ -85,7 +85,7 @@ TEST_F(AppActivityTest, SendAppMessageToReceiver) {
           [](const openscreen::cast::proto::CastMessage& cast_message) {
             EXPECT_EQ("theClientId", cast_message.source_id());
             EXPECT_EQ("theTransportId", cast_message.destination_id());
-            EXPECT_EQ("urn:x-cast:com.google.foo", cast_message.namespace_());
+            EXPECT_EQ(kFakeCastNamespace, cast_message.namespace_());
             EXPECT_TRUE(cast_message.has_payload_utf8());
             EXPECT_THAT(cast_message.payload_utf8(),
                         IsJson(R"({"foo": "bar"})"));
@@ -317,9 +317,9 @@ TEST_F(AppActivityTest, OnAppMessage) {
   SetUpSession();
 
   auto* client = AddMockClient("theClientId");
-  auto message = cast_channel::CreateCastMessage(
-      "urn:x-cast:com.google.foo", base::Value(base::Value::Dict()), "sourceId",
-      "theClientId");
+  auto message = cast_channel::CreateCastMessage("urn:x-cast:com.google.foo",
+                                                 base::Value(base::DictValue()),
+                                                 "sourceId", "theClientId");
   EXPECT_CALL(*client,
               SendMessageToClient(IsPresentationConnectionMessage(
                   CreateAppMessage("theSessionId", "theClientId", message)
@@ -332,9 +332,9 @@ TEST_F(AppActivityTest, OnAppMessageAllClients) {
 
   auto* client1 = AddMockClient("theClientId1");
   auto* client2 = AddMockClient("theClientId2");
-  auto message = cast_channel::CreateCastMessage(
-      "urn:x-cast:com.google.foo", base::Value(base::Value::Dict()), "sourceId",
-      "*");
+  auto message = cast_channel::CreateCastMessage("urn:x-cast:com.google.foo",
+                                                 base::Value(base::DictValue()),
+                                                 "sourceId", "*");
   EXPECT_CALL(*client1,
               SendMessageToClient(IsPresentationConnectionMessage(
                   CreateAppMessage("theSessionId", "theClientId1", message)
@@ -372,7 +372,7 @@ TEST_F(AppActivityTest, RemoveConnectionOnReceiver) {
 
 TEST_F(AppActivityTest, ForwardInternalMediaMessage) {
   const std::string client_id = "theClientId";
-  base::Value::Dict payload = ParseJsonDict(R"({
+  base::DictValue payload = ParseJsonDict(R"({
     "type": "v2_message",
     "clientId": "theClientId",
     "message": {
@@ -391,7 +391,7 @@ TEST_F(AppActivityTest, ForwardInternalMediaMessage) {
 
 TEST_F(AppActivityTest, IgnoreInternalMediaStatusMessage) {
   const std::string client_id = "theClientId";
-  base::Value::Dict media_status_payload = ParseJsonDict(R"({
+  base::DictValue media_status_payload = ParseJsonDict(R"({
     "type": "v2_message",
     "clientId": "theClientId",
     "message": {

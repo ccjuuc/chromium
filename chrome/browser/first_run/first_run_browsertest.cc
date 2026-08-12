@@ -3,12 +3,12 @@
 // found in the LICENSE file.
 #include "chrome/browser/first_run/first_run.h"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -108,6 +108,18 @@ class FirstRunMasterPrefsBrowserTestBase : public InProcessBrowserTest {
     extensions::ComponentLoader::EnableBackgroundExtensionsForTesting();
   }
 
+#if BUILDFLAG(IS_LINUX)
+  bool SetUpUserDataDirectory() override {
+    if (!InProcessBrowserTest::SetUpUserDataDirectory()) {
+      return false;
+    }
+    base::FilePath user_data_dir;
+    base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
+    base::WriteFile(user_data_dir.Append("EULA Accepted"), "");
+    return true;
+  }
+#endif
+
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
   void SetUpInProcessBrowserTestFixture() override {
     InProcessBrowserTest::SetUpInProcessBrowserTestFixture();
@@ -205,7 +217,7 @@ IN_PROC_BROWSER_TEST_F(FirstRunMasterPrefsImportBookmarksFile,
 }
 
 // Test an import with all import options disabled. This is a regression test
-// for http://crbug.com/169984 where this would cause the import process to
+// for http://crbug.com/40959863 where this would cause the import process to
 // stay running, and the NTP to be loaded with no apps.
 const char kImportNothing[] =
     "{\n"
@@ -222,7 +234,7 @@ IN_PROC_BROWSER_TEST_F(FirstRunMasterPrefsImportNothing,
                        ImportNothingAndShowNewTabPage) {
   EXPECT_EQ(AUTO_IMPORT_CALLED, auto_import_state());
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(),
-                                           GURL(chrome::kChromeUINewTabURL)));
+                                           chrome::ChromeUINewTabURLAsGURL()));
   content::WebContents* tab = browser()->tab_strip_model()->GetWebContentsAt(0);
   EXPECT_TRUE(WaitForLoadStop(tab));
 }
@@ -249,7 +261,7 @@ class FirstRunMasterPrefsWithTrackedPreferences
 
 IN_PROC_BROWSER_TEST_F(FirstRunMasterPrefsWithTrackedPreferences,
                        TrackedPreferencesSurviveFirstRun) {
-  const PrefService* user_prefs = browser()->profile()->GetPrefs();
+  const PrefService* user_prefs = browser()->GetProfile()->GetPrefs();
   EXPECT_EQ("example.com", user_prefs->GetString(prefs::kHomePage));
   EXPECT_FALSE(user_prefs->GetBoolean(prefs::kHomePageIsNewTabPage));
 
@@ -379,7 +391,7 @@ IN_PROC_BROWSER_TEST_P(FirstRunMasterPrefsVariationsSeedTest, PRE_SecondRun) {
   // states. Persist the state so that we can verify its randomization persists
   // in FirstRunMasterPrefsVariationsSeedTest.SecondRun.
   const std::string group_name = base::FieldTrialList::FindFullName(kTrialName);
-  ASSERT_TRUE(base::Contains(kTrialGroups, group_name)) << group_name;
+  ASSERT_TRUE(std::ranges::contains(kTrialGroups, group_name)) << group_name;
   // Ensure trial is active (not disabled).
   ASSERT_TRUE(base::FieldTrialList::IsTrialActive(kTrialName));
   WriteTrialGroupToTestFile(group_name);
@@ -389,7 +401,7 @@ IN_PROC_BROWSER_TEST_P(FirstRunMasterPrefsVariationsSeedTest, SecondRun) {
   // This test runs after PRE_SecondRun and verifies that the trial state on
   // the second run matches what was seen in the PRE_ test.
   const std::string group_name = base::FieldTrialList::FindFullName(kTrialName);
-  ASSERT_TRUE(base::Contains(kTrialGroups, group_name)) << group_name;
+  ASSERT_TRUE(std::ranges::contains(kTrialGroups, group_name)) << group_name;
   // Ensure trial is active (not disabled).
   ASSERT_TRUE(base::FieldTrialList::IsTrialActive(kTrialName));
   // Read the trial group name that was saved by PRE_ForceTrials from the
@@ -445,7 +457,7 @@ class FirstRunMasterPrefsImportBookmarkFaviconBrowserTest
 
 IN_PROC_BROWSER_TEST_P(FirstRunMasterPrefsImportBookmarkFaviconBrowserTest,
                        ImportBookmarksDict) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   bookmarks::BookmarkModel* bookmark_model =
       BookmarkModelFactory::GetForBrowserContext(profile);
 

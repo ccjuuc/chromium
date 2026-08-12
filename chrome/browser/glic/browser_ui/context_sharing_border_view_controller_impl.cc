@@ -10,10 +10,9 @@
 #include "chrome/browser/glic/public/context/glic_sharing_manager.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
-#include "chrome/browser/glic/widget/glic_window_controller.h"
+#include "chrome/browser/glic/public/service/glic_instance_coordinator.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/contents_web_view.h"
 
 namespace glic {
@@ -33,7 +32,8 @@ void ContextSharingBorderViewControllerImpl::Initialize(
       GlicKeyedServiceFactory::GetGlicKeyedService(browser->GetProfile());
 
   // Subscribe to glow updates from the actor border controller.
-  if (features::kGlicActorUiBorderGlow.Get()) {
+  if (base::FeatureList::IsEnabled(features::kGlicActorUi) &&
+      features::kGlicActorUiBorderGlow.Get()) {
     actor_border_view_controller_subscription_ =
         ActorBorderViewController::From(browser)
             ->AddOnActorBorderGlowUpdatedCallback(
@@ -47,8 +47,8 @@ void ContextSharingBorderViewControllerImpl::Initialize(
 
   // Subscribe to changes in the focus tab.
   focus_change_subscription_ =
-      glic_service_->sharing_manager().AddFocusedTabChangedCallback(
-          base::BindRepeating(
+      glic_service_->active_instance_sharing_manager()
+          .AddFocusedTabChangedCallback(base::BindRepeating(
               &ContextSharingBorderViewControllerImpl::OnFocusedTabChanged,
               base::Unretained(this)));
 
@@ -68,12 +68,6 @@ void ContextSharingBorderViewControllerImpl::Initialize(
 
 ContentsWebView* ContextSharingBorderViewControllerImpl::contents_web_view() {
   return contents_web_view_;
-}
-
-bool ContextSharingBorderViewControllerImpl::IsSidePanelOpen() const {
-  // TODO(crbug.com/456589738, crbug.com/462446138): Have the controller track
-  // whether the currently open side panel is for glic or contextual tasks.
-  return glic::GlicEnabling::IsMultiInstanceEnabled();
 }
 
 void ContextSharingBorderViewControllerImpl::OnFocusedTabChanged(
@@ -119,15 +113,10 @@ void ContextSharingBorderViewControllerImpl::OnActorBorderGlowUpdated(
   actor_border_glow_enabled_ = enabled;
 
   if (actor_border_glow_enabled_) {
-    // Force the border to show, regardless of other states. This gives the
-    // actor priority over other signals.
+    // Force the border to hide, regardless of other states. This gives the
+    // actor priority over other signals since it provides its own standalone
+    // border glow.
     border_view_->StopShowing();
-    // If the standalone border glow param is enabled, don't actually just
-    // suppress the glic_border_view from showing, as it is controlled by a
-    // different component.
-    if (!features::kGlicActorUiStandaloneBorderGlow.Get()) {
-      border_view_->Show();
-    }
   } else {
     // Revert to the last known state based on other signals like tab focus
     // or context access.
@@ -188,7 +177,7 @@ void ContextSharingBorderViewControllerImpl::UpdateBorderView(
   SCOPED_CRASH_KEY_BOOL("crbug-398319435", "glic_focused_contents",
                         !!glic_focused_contents_in_current_view_);
   SCOPED_CRASH_KEY_BOOL("crbug-398319435", "is_glic_window_showing",
-                        IsGlicWindowShowing());
+                        IsAnyGlicPanelShowing());
 
   switch (reason) {
     case UpdateBorderReason::kContextAccessIndicatorOn: {
@@ -205,14 +194,7 @@ void ContextSharingBorderViewControllerImpl::UpdateBorderView(
       break;
     }
     case UpdateBorderReason::kFocusedTabChanged_NoFocusChange: {
-      if (ShouldShowBorderAnimation()) {
-        if (!border_view_->IsShowing()) {
-          // There is be a chance that the border view has already stopped
-          // showing. In that case, gracefully handle the crash case in
-          // crbug.com/398319435 by closing(minimizing) the glic window.
-          glic_service_->window_controller().Close();
-        }
-
+      if (ShouldShowBorderAnimation() && border_view_->IsShowing()) {
         border_view_->ResetAnimationCycle();
       }
       break;
@@ -233,13 +215,13 @@ void ContextSharingBorderViewControllerImpl::UpdateBorderView(
   }
 }
 
-bool ContextSharingBorderViewControllerImpl::IsGlicWindowShowing() const {
-  return glic_service_->IsWindowShowing();
+bool ContextSharingBorderViewControllerImpl::IsAnyGlicPanelShowing() const {
+  return glic_service_->instance_coordinator().IsAnyPanelShowing();
 }
 
 bool ContextSharingBorderViewControllerImpl::IsTabInCurrentView(
     const content::WebContents* tab) const {
-  return contents_web_view_->web_contents() == tab;
+  return tab && contents_web_view_->web_contents() == tab;
 }
 
 bool ContextSharingBorderViewControllerImpl::ShouldShowBorderAnimation() {
@@ -252,13 +234,7 @@ bool ContextSharingBorderViewControllerImpl::ShouldShowBorderAnimation() {
     return false;
   }
 
-  // For multi-instance we rely on the sharing manager signal for everything
-  // else.
-  if (GlicEnabling::IsMultiInstanceEnabled()) {
-    return true;
-  }
-
-  return IsGlicWindowShowing();
+  return true;
 }
 
 std::string ContextSharingBorderViewControllerImpl::UpdateReasonToString(

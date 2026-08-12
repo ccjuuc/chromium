@@ -6,9 +6,12 @@
 
 #include <utility>
 
+#include "ash/constants/ash_features.h"
 #include "ash/constants/web_app_id_constants.h"
+#include "ash/constants/webui_url_constants.h"
 #include "ash/public/cpp/new_window_delegate.h"
 #include "ash/resources/vector_icons/vector_icons.h"
+#include "base/check_deref.h"
 #include "base/containers/enum_set.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
@@ -41,12 +44,9 @@
 #include "chrome/browser/ash/file_manager/open_with_browser.h"
 #include "chrome/browser/ash/file_manager/volume_manager.h"
 #include "chrome/browser/ash/file_system_provider/mount_path_util.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/upload_office_to_cloud/upload_office_to_cloud.h"
 #include "chrome/browser/notifications/notification_display_service.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload.mojom.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_ui.h"
@@ -55,11 +55,9 @@
 #include "chrome/browser/ui/webui/ash/cloud_upload/hats_office_trigger.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/one_drive_upload_handler.h"
 #include "chrome/browser/ui/webui/ash/office_fallback/office_fallback_ui.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/experiences/system_web_apps/types/system_web_app_delegate.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/user_manager/user_manager.h"
 #include "extensions/browser/api/file_handlers/mime_util.h"
@@ -281,10 +279,10 @@ void OpenFileFromODFS(
                     [](Profile* profile,
                        base::OnceCallback<void(OfficeOneDriveOpenErrors)>
                            callback,
-                       apps::LaunchResult&& launch_result) {
+                       apps::LaunchResult launch_result) {
                       OfficeOneDriveOpenErrors open;
-                      switch (launch_result.state) {
-                        case apps::LaunchResult::State::kSuccess:
+                      switch (launch_result) {
+                        case apps::LaunchResult::kSuccess:
                           open = OfficeOneDriveOpenErrors::kSuccess;
                           break;
                         default:
@@ -297,7 +295,7 @@ void OpenFileFromODFS(
                     },
                     profile, std::move(callback)));
             if (base::FeatureList::IsEnabled(
-                    ::features::kHappinessTrackingOffice)) {
+                    ash::features::kHappinessTrackingOffice)) {
               ash::cloud_upload::HatsOfficeTrigger::Get()
                   .ShowSurveyAfterAppInactive(
                       ash::kMicrosoft365AppId,
@@ -372,9 +370,7 @@ bool HaveExplicitFileHandlers(Profile* profile,
 }
 
 void RecordMicrosoft365Availability(const char* metric, Profile* profile) {
-  base::EnumSet<Microsoft365Availability, Microsoft365Availability::kMinValue,
-                Microsoft365Availability::kMaxValue>
-      ms365_state;
+  base::EnumSet<Microsoft365Availability> ms365_state;
   if (IsOfficeWebAppInstalled(profile)) {
     ms365_state.Put(Microsoft365Availability::kPWA);
   }
@@ -471,7 +467,7 @@ bool CloudOpenTask::Execute(
       LOG(ERROR) << "File already being opened";
       // If a cloud upload dialog already exists, bring it to the front to
       // prompt the user to keep going.
-      BringDialogToFrontIfItExists(chrome::kChromeUICloudUploadURL);
+      BringDialogToFrontIfItExists(ash::kChromeUICloudUploadURL);
       // Notify the user that a file is already being opened. Nothing is wrong
       // when the file is already being opened, so use a normal level
       // notification
@@ -516,7 +512,8 @@ CloudOpenTask::CloudOpenTask(
       source_type_(source_type),
       cloud_provider_(cloud_provider),
       cloud_open_metrics_(std::move(cloud_open_metrics)) {
-  BrowserList::AddObserver(this);
+  browser_collection_observation_.Observe(
+      GlobalBrowserCollection::GetInstance());
 }
 
 CloudOpenTask::~CloudOpenTask() {
@@ -528,7 +525,6 @@ CloudOpenTask::~CloudOpenTask() {
   } else {
     LOG(ERROR) << "Cannot get EventRouter";
   }
-  BrowserList::RemoveObserver(this);
 }
 
 // Runs setup if it's never been completed. Runs the fixup version of setup if
@@ -1091,7 +1087,7 @@ bool CloudOpenTask::InitAndShowSetupOrMoveDialog(
   // bring it to the front to prompt the user to keep going. In the case of
   // multiple upload requests, they should either be handled simultaneously or
   // queued.
-  if (BringDialogToFrontIfItExists(chrome::kChromeUICloudUploadURL)) {
+  if (BringDialogToFrontIfItExists(ash::kChromeUICloudUploadURL)) {
     LOG(WARNING) << "Another cloud upload dialog is already being shown";
     if (dialog_page == SetupOrMoveDialogPage::kMoveConfirmationGoogleDrive ||
         dialog_page == SetupOrMoveDialogPage::kMoveConfirmationOneDrive) {
@@ -1287,18 +1283,23 @@ void CloudOpenTask::SetTaskArgs(
   }
 }
 
-void CloudOpenTask::OnBrowserAdded(Browser* browser) {
+void CloudOpenTask::OnBrowserCreated(BrowserWindowInterface* browser) {
   if (!need_new_files_app_) {
     return;
   }
+
   // TODO(petermarshall): Add a timeout. If Files app never launches for some
   // reason, then we will never show the dialog.
   DCHECK(pending_dialog_);
-  if (!IsBrowserForSystemWebApp(browser, SystemWebAppType::FILE_MANAGER)) {
+  const BrowserDelegate& delegate =
+      CHECK_DEREF(ash::BrowserController::GetInstance()->GetDelegate(browser));
+  if (!ash::IsBrowserForSystemWebApp(delegate,
+                                     SystemWebAppType::FILE_MANAGER)) {
     // Wait for Files app to launch.
     LOG(WARNING) << "Browser did not match Files app";
     return;
   }
+
   need_new_files_app_ = false;
   files_app_browser_ = BrowserController::GetInstance()->GetDelegate(browser);
 
@@ -1547,9 +1548,10 @@ void CloudOpenTask::SetTasksForTest(
 
 void CloudUploadDialog::OnDialogShown(content::WebUI* webui) {
   CHECK(dialog_args_);
+  auto* dialog_ui_ =
+      &CHECK_DEREF(webui->GetController()->GetAs<CloudUploadUI>());
   SystemWebDialogDelegate::OnDialogShown(webui);
-  static_cast<CloudUploadUI*>(webui->GetController())
-      ->SetDialogArgs(dialog_args_.Clone());
+  dialog_ui_->SetDialogArgs(dialog_args_.Clone());
 }
 
 void CloudUploadDialog::OnDialogClosed(const std::string& json_retval) {
@@ -1566,7 +1568,7 @@ void CloudUploadDialog::OnDialogClosed(const std::string& json_retval) {
 CloudUploadDialog::CloudUploadDialog(mojom::DialogArgsPtr args,
                                      UploadRequestCallback callback,
                                      bool office_move_confirmation_shown)
-    : SystemWebDialogDelegate(GURL(chrome::kChromeUICloudUploadURL),
+    : SystemWebDialogDelegate(GURL(ash::kChromeUICloudUploadURL),
                               std::u16string() /* title */),
       dialog_args_(std::move(args)),
       callback_(std::move(callback)),
@@ -1649,7 +1651,7 @@ bool ShowConnectOneDriveDialog(gfx::NativeWindow modal_parent) {
   // bring it to the front to prompt the user to keep going. Only one of either
   // this dialog, or CloudOpenTask can be shown at a time because they use the
   // same WebUI for dialogs.
-  if (BringDialogToFrontIfItExists(chrome::kChromeUICloudUploadURL)) {
+  if (BringDialogToFrontIfItExists(ash::kChromeUICloudUploadURL)) {
     LOG(WARNING) << "Another cloud upload dialog is already being shown";
     return false;
   }

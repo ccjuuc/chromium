@@ -51,6 +51,24 @@ class CONTENT_EXPORT WebUIConfig {
   // WebUIs should be created for all requests to their host. Defaults to true.
   virtual bool ShouldHandleURL(const GURL& url);
 
+  // Returns whether the browser should crash on javascript errors. Development
+  // builds only. Defaults to false.
+  virtual bool ShouldCrashOnJavascriptErrorInDevelopmentBuild() const;
+
+  // Returns whether the WebUI should be kept marked as visible until the
+  // first visually non-empty paint has occurred. Defaults to false.
+  // The occlusion calculation can be expensive and block the first visually
+  // non-empty paint. This config option is an optimization for that.
+  virtual bool ShouldKeepVisibleUntilFirstVisuallyNonEmptyPaint();
+
+  // Returns whether the WebUI supports in-process resource loading V2.
+  // Defaults to false.
+  // WARNING: WebUIs that opt-in to V2 MUST NOT dynamically update their
+  // WebUIDataSource (e.g. via WebUIDataSource::Update() or ManagedUIHandler)
+  // after the first navigation commits. Doing so will trigger a safety CHECK
+  // crash, because V2 serializes and freezes resources during commit.
+  virtual bool SupportsInProcessResourceLoadingV2() const;
+
   // Returns a WebUIController for WebUI and GURL.
   //
   // URLDataSource is usually created in the constructor of WebUIController. The

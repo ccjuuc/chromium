@@ -14,6 +14,7 @@
 #include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/web_applications/app_service/web_app_publisher_helper.h"
 #include "chrome/browser/web_applications/locks/noop_lock.h"
@@ -190,7 +191,8 @@ IN_PROC_BROWSER_TEST_F(WebAppProfileDeletionBrowserTest, OsIntegrationRemoved) {
   Profile& profile_to_delete = profiles::testing::CreateProfileSync(
       profile_manager, profile_path_to_delete);
 #endif
-  Browser::Create(Browser::CreateParams(&profile_to_delete, true));
+  CreateBrowserWindow(BrowserWindowCreateParams(&profile_to_delete,
+                                                /*from_user_gesture=*/true));
   const webapps::AppId app_id =
       InstallAppToProfile(&profile_to_delete, app_url);
   auto* provider = WebAppProvider::GetForTest(&profile_to_delete);
@@ -238,8 +240,7 @@ IN_PROC_BROWSER_TEST_F(WebAppProfileDeletionBrowserTest,
   base::test::TestFuture<bool> commands_not_scheduled_future;
   command_scheduler.ScheduleCallbackWithResult(
       "TestCommandPostProfileDeletion", web_app::NoopLockDescription(),
-      base::BindOnce(
-          [](web_app::NoopLock&, base::Value::Dict&) { return true; }),
+      base::BindOnce([](web_app::NoopLock&, base::DictValue&) { return true; }),
       commands_not_scheduled_future.GetCallback(), /*arg_for_shutdown=*/false);
 
   ASSERT_TRUE(commands_not_scheduled_future.Wait());
@@ -262,7 +263,8 @@ IN_PROC_BROWSER_TEST_F(WebAppProfileDeletionBrowserTest_WebAppPublisher,
   Profile& profile_to_delete = profiles::testing::CreateProfileSync(
       profile_manager, profile_path_to_delete);
 #endif
-  Browser::Create(Browser::CreateParams(&profile_to_delete, true));
+  CreateBrowserWindow(BrowserWindowCreateParams(&profile_to_delete,
+                                                /*from_user_gesture=*/true));
   const webapps::AppId app_id =
       InstallAppToProfile(&profile_to_delete, app_url);
   auto* provider = WebAppProvider::GetForTest(&profile_to_delete);

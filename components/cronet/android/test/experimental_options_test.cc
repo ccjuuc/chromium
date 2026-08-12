@@ -29,7 +29,7 @@ using base::android::JavaRef;
 namespace cronet {
 
 namespace {
-void WriteToHostCacheOnNetworkThread(jlong jcontext_adapter,
+void WriteToHostCacheOnNetworkThread(int64_t jcontext_adapter,
                                      const std::string& address_string) {
   net::URLRequestContext* context =
       TestUtil::GetURLRequestContext(jcontext_adapter);
@@ -38,13 +38,14 @@ void WriteToHostCacheOnNetworkThread(jlong jcontext_adapter,
 
   // Create multiple keys to ensure the test works in a variety of network
   // conditions.
-  net::HostCache::Key key1(hostname, net::DnsQueryType::UNSPECIFIED, 0,
-                           net::HostResolverSource::ANY,
-                           net::NetworkAnonymizationKey());
+  net::HostCache::Key key1(
+      hostname, net::DnsQueryType::UNSPECIFIED, 0, net::HostResolverSource::ANY,
+      net::NetworkAnonymizationKey(), net::handles::kInvalidNetworkHandle);
   net::HostCache::Key key2(hostname, net::DnsQueryType::A,
                            net::HOST_RESOLVER_DEFAULT_FAMILY_SET_DUE_TO_NO_IPV6,
                            net::HostResolverSource::ANY,
-                           net::NetworkAnonymizationKey());
+                           net::NetworkAnonymizationKey(),
+                           net::handles::kInvalidNetworkHandle);
 
   net::IPAddress address;
   CHECK(address.AssignFromIPLiteral(address_string));
@@ -57,7 +58,7 @@ void WriteToHostCacheOnNetworkThread(jlong jcontext_adapter,
 
 static void JNI_ExperimentalOptionsTest_WriteToHostCache(
     JNIEnv* env,
-    jlong jcontext_adapter,
+    int64_t jcontext_adapter,
     const JavaRef<jstring>& jaddress) {
   TestUtil::RunAfterContextInit(
       jcontext_adapter,
@@ -65,7 +66,7 @@ static void JNI_ExperimentalOptionsTest_WriteToHostCache(
                      base::android::ConvertJavaStringToUTF8(env, jaddress)));
 }
 
-static jboolean
+static bool
 JNI_ExperimentalOptionsTest_ExperimentalOptionsParsingIsAllowedToFail(
     JNIEnv* env) {
   return URLRequestContextConfig::ExperimentalOptionsParsingIsAllowedToFail();

@@ -17,6 +17,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/observer_list_types.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "extensions/browser/blocklist_state.h"
 #include "extensions/buildflags/buildflags.h"
@@ -39,7 +40,7 @@ class BlocklistStateFetcher;
 // The blocklist of extensions backed by safe browsing.
 class Blocklist : public KeyedService {
  public:
-  class Observer {
+  class Observer : public base::CheckedObserver {
    public:
     // Observes `blocklist` on construction and unobserves on destruction.
     explicit Observer(Blocklist* blocklist);
@@ -47,7 +48,7 @@ class Blocklist : public KeyedService {
     virtual void OnBlocklistUpdated() = 0;
 
    protected:
-    virtual ~Observer();
+    ~Observer() override;
 
    private:
     raw_ptr<Blocklist> blocklist_;
@@ -57,9 +58,6 @@ class Blocklist : public KeyedService {
 
   using GetBlocklistedIDsCallback =
       base::OnceCallback<void(const BlocklistStateMap&)>;
-
-  using GetMalwareIDsCallback =
-      base::OnceCallback<void(const std::set<ExtensionId>&)>;
 
   using IsBlocklistedCallback = base::OnceCallback<void(BlocklistState)>;
 
@@ -82,13 +80,6 @@ class Blocklist : public KeyedService {
   // see ExtensionPrefs::IsExtensionBlocklisted.
   void GetBlocklistedIDs(const std::set<ExtensionId>& ids,
                          GetBlocklistedIDsCallback callback);
-
-  // From the subset of extension IDs passed in via `ids`, select the ones
-  // marked in the blocklist as BLOCKLISTED_MALWARE and asynchronously pass
-  // to `callback`. Basically, will call GetBlocklistedIDs and filter its
-  // results.
-  void GetMalwareIDs(const std::set<ExtensionId>& ids,
-                     GetMalwareIDsCallback callback);
 
   // More convenient form of GetBlocklistedIDs for checking a single extension.
   void IsBlocklisted(const ExtensionId& extension_id,
@@ -144,7 +135,7 @@ class Blocklist : public KeyedService {
 
   raw_ptr<content::BrowserContext> context_;
 
-  base::ObserverList<Observer>::Unchecked observers_;
+  base::ObserverList<Observer> observers_;
 
   base::CallbackListSubscription database_updated_subscription_;
   base::CallbackListSubscription database_changed_subscription_;

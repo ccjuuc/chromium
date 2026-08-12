@@ -18,6 +18,7 @@
 #include "base/compiler_specific.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -41,6 +42,7 @@ namespace {
 const char kInputSubsystem[] = "input";
 const char kUsbSubsystem[] = "usb";
 const char kUsbDeviceType[] = "usb_device";
+const char kUsbInterfaceDeviceType[] = "usb_interface";
 const float kMaxLinuxAxisValue = 32767.0;
 const int kInvalidEffectId = -1;
 const uint16_t kRumbleMagnitudeMax = 0xffff;
@@ -437,7 +439,7 @@ bool GamepadDeviceLinux::ReadEvdevSpecialKeys(Gamepad* pad) {
 GamepadStandardMappingFunction GamepadDeviceLinux::GetMappingFunction() const {
   return GetGamepadStandardMappingFunction(name_, vendor_id_, product_id_,
                                            hid_specification_version_,
-                                           version_number_, bus_type_);
+                                           version_number_, bus_type_, driver_);
 }
 
 bool GamepadDeviceLinux::IsSameDevice(const UdevGamepadLinux& pad_info) {
@@ -455,6 +457,17 @@ bool GamepadDeviceLinux::OpenJoydevNode(const UdevGamepadLinux& pad_info,
       base::ScopedFD(open(pad_info.path.c_str(), O_RDONLY | O_NONBLOCK));
   if (!joydev_fd_.is_valid())
     return false;
+
+  udev_device* parent_interface =
+      device::udev_device_get_parent_with_subsystem_devtype(
+          device, kUsbSubsystem, kUsbInterfaceDeviceType);
+
+  const GamepadDriver driver =
+      parent_interface &&
+              ToStringView(device::udev_device_get_driver(parent_interface)) ==
+                  "xpad"
+          ? kGamepadDriverXpad
+          : kGamepadDriverUnknown;
 
   udev_device* parent_device =
       device::udev_device_get_parent_with_subsystem_devtype(
@@ -514,6 +527,7 @@ bool GamepadDeviceLinux::OpenJoydevNode(const UdevGamepadLinux& pad_info,
   name_ = name_string;
   gamepad_id_ =
       GamepadIdList::Get().GetGamepadId(name_, vendor_id_, product_id_);
+  driver_ = driver;
 
   return true;
 }
@@ -606,8 +620,12 @@ void GamepadDeviceLinux::OnOpenHidrawNodeComplete(
     OpenDeviceNodeCallback callback,
     base::ScopedFD fd) {
   DCHECK(polling_runner_->RunsTasksInCurrentSequence());
-  if (fd.is_valid())
+  if (fd.is_valid()) {
+    VLOG(1) << "Successfully opened hidraw node.";
     InitializeHidraw(std::move(fd));
+  } else {
+    VLOG(1) << "Failed to open hidraw node.";
+  }
   std::move(callback).Run(this);
 }
 

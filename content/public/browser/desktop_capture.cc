@@ -6,6 +6,10 @@
 
 #include "base/feature_list.h"
 #include "build/build_config.h"
+#if BUILDFLAG(IS_MAC)
+#include "content/browser/media/capture/desktop_capture_util_mac.h"
+#endif
+#include "content/browser/media/capture/pip_screen_capture_coordinator.h"
 #include "content/browser/renderer_host/media/media_stream_manager.h"
 #include "content/browser/renderer_host/media/video_capture_manager.h"
 #include "content/common/features.h"
@@ -50,8 +54,7 @@ webrtc::DesktopCaptureOptions CreateDesktopCaptureOptions() {
 #if BUILDFLAG(IS_WIN)
   // TODO(crbug.com/webrtc/15045): Possibly remove this flag. Keeping for now
   // to force fallback to GDI.
-  static BASE_FEATURE(kDirectXCapturer, "DirectXCapturer",
-                      base::FEATURE_ENABLED_BY_DEFAULT);
+  static BASE_FEATURE(kDirectXCapturer, base::FEATURE_ENABLED_BY_DEFAULT);
   if (base::FeatureList::IsEnabled(kDirectXCapturer)) {
     // Results in DirectX as main capture API and GDI as fallback solution.
     options.set_allow_directx_capturer(true);
@@ -131,11 +134,9 @@ void OpenNativeScreenCapturePicker(
     base::OnceCallback<void(webrtc::DesktopCapturer::Source)> picker_callback,
     base::OnceCallback<void()> cancel_callback,
     base::OnceCallback<void()> error_callback) {
-  content::MediaStreamManager::GetInstance()
-      ->video_capture_manager()
-      ->OpenNativeScreenCapturePicker(
-          type, std::move(created_callback), std::move(picker_callback),
-          std::move(cancel_callback), std::move(error_callback));
+  content::MediaStreamManager::GetInstance()->OpenNativeScreenCapturePicker(
+      type, std::move(created_callback), std::move(picker_callback),
+      std::move(cancel_callback), std::move(error_callback));
 }
 
 void CloseNativeScreenCapturePicker(DesktopMediaID source_id) {
@@ -143,5 +144,14 @@ void CloseNativeScreenCapturePicker(DesktopMediaID source_id) {
       ->video_capture_manager()
       ->CloseNativeScreenCapturePicker(source_id);
 }
+
+#if BUILDFLAG(IS_MAC)
+void GetApplicationAudioCaptureId(
+    DesktopMediaID desktop_media_id,
+    GetApplicationAudioCaptureIdCallback callback) {
+  content::GetApplicationAudioCaptureIdInternal(desktop_media_id,
+                                                std::move(callback));
+}
+#endif  // #if BUILDFLAG(IS_MAC)
 
 }  // namespace content::desktop_capture

@@ -205,7 +205,8 @@ TEST_F(HTMLFencedFrameElementTest, HistogramTestIncompatibleUrlHTTPDefault) {
 
   histogram_tester_.ExpectUniqueSample(
       kFencedFrameCreationOrNavigationOutcomeHistogram,
-      FencedFrameCreationOutcome::kIncompatibleURLDefault, test_cases.size());
+      FencedFrameCreationOutcome::kIncompatibleURLDefault,
+      static_cast<int>(test_cases.size()));
 }
 
 TEST_F(HTMLFencedFrameElementTest, HistogramTestResizeAfterFreeze) {
@@ -285,16 +286,6 @@ TEST_F(HTMLFencedFrameElementTest, HistogramTestSandboxFlagsInIframe) {
   // outermost main frame.
   histogram_tester_.ExpectUniqueSample(
       kFencedFrameFailedSandboxLoadInTopLevelFrame, false, 1);
-}
-
-TEST_F(HTMLFencedFrameElementTest, HistogramTestCanLoadOpaqueURL) {
-  EXPECT_FALSE(
-      GetDocument().IsUseCounted(WebFeature::kFencedFrameCanLoadOpaqueURL));
-  ScriptState* script_state =
-      ToScriptStateForMainWorld(GetDocument().GetFrame());
-  HTMLFencedFrameElement::canLoadOpaqueURL(script_state);
-  EXPECT_TRUE(
-      GetDocument().IsUseCounted(WebFeature::kFencedFrameCanLoadOpaqueURL));
 }
 
 }  // namespace blink

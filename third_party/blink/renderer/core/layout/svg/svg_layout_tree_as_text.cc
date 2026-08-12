@@ -213,7 +213,7 @@ static StringBuilder& operator<<(StringBuilder& ts, LineJoin style) {
 static StringBuilder& operator<<(StringBuilder& ts,
                                  const SVGSpreadMethodType& type) {
   auto* name = GetEnumerationMap<SVGSpreadMethodType>().NameFromValue(type);
-  ts << String(name).UpperASCII();
+  ts << String(name).ToAsciiUpper();
   return ts;
 }
 
@@ -290,8 +290,8 @@ static void WriteStyle(StringBuilder& ts, const LayoutObject& object) {
       const SVGViewportResolver viewport_resolver(object);
       double dash_offset =
           ValueForLength(style.StrokeDashOffset(), viewport_resolver, style);
-      double stroke_width =
-          ValueForLength(style.StrokeWidth(), viewport_resolver);
+      double stroke_width = ValueForLength(
+          style.StrokeWidth(), viewport_resolver, style.EffectiveZoom());
       DashArray dash_array = SVGLayoutSupport::ResolveSVGDashArray(
           style.StrokeDashArray(), style, viewport_resolver);
 
@@ -474,7 +474,8 @@ void WriteSVGResourceContainer(StringBuilder& ts,
                                                       Filter::kBoundingBox);
     SVGFilterBuilder builder(dummy_filter->GetSourceGraphic());
     builder.BuildGraph(dummy_filter,
-                       To<SVGFilterElement>(*filter->GetElement()), dummy_rect);
+                       To<SVGFilterElement>(*filter->GetElement()), dummy_rect,
+                       std::nullopt);
     if (FilterEffect* last_effect = builder.LastEffect())
       last_effect->ExternalRepresentation(ts, indent + 1);
   } else if (resource->ResourceType() == kClipperResourceType) {

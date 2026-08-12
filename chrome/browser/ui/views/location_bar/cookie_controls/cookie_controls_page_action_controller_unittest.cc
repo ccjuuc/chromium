@@ -9,20 +9,20 @@
 
 #include "base/callback_list.h"
 #include "base/test/metrics/user_action_tester.h"
-#include "base/test/scoped_feature_list.h"
+#include "chrome/browser/content_settings/cookie_settings_factory.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
+#include "chrome/browser/ui/page_action/test_support/mock_page_action_controller.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
-#include "chrome/browser/ui/views/page_action/page_action_controller.h"
-#include "chrome/browser/ui/views/page_action/test_support/mock_page_action_controller.h"
-#include "chrome/browser/ui/views/page_action/test_support/mock_page_action_model.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/user_education/mock_browser_user_education_interface.h"
 #include "components/content_settings/core/common/cookie_controls_state.h"
+#include "components/feature_engagement/public/feature_constants.h"
 #include "components/privacy_sandbox/privacy_sandbox_features.h"
-#include "components/strings/grit/privacy_sandbox_strings.h"
 #include "components/tabs/public/mock_tab_interface.h"
 #include "components/user_education/common/feature_promo/feature_promo_result.h"
 #include "content/public/test/browser_task_environment.h"
@@ -77,14 +77,18 @@ class FakeBubbleDelegate
   MOCK_METHOD(void,
               ShowBubble,
               (ToolbarButtonProvider * toolbar_button_provider,
-               content::WebContents* web_contents,
-               content_settings::CookieControlsController* controller),
+               content::WebContents* web_contents),
               (override));
 
   base::CallbackListSubscription RegisterBubbleClosingCallback(
       base::RepeatingClosure callback) override {
     return closing_callbacks_.Add(std::move(callback));
   }
+
+  MOCK_METHOD(content_settings::CookieControlsController*,
+              GetController,
+              (),
+              (override));
 
   void TriggerBubbleClosed() { closing_callbacks_.Notify(); }
 
@@ -95,11 +99,6 @@ class FakeBubbleDelegate
 class CookieControlsPageActionControllerTestBase : public testing::Test {
  public:
   CookieControlsPageActionControllerTestBase() {
-    scoped_feature_list_.InitWithFeaturesAndParameters(
-        {{features::kPageActionsMigration,
-          {{features::kPageActionsMigrationCookieControls.name, "true"}}}},
-        {});
-
     auto fake_bubble_delegate = std::make_unique<FakeBubbleDelegate>();
     fake_bubble_delegate_ = fake_bubble_delegate.get();
 
@@ -125,9 +124,18 @@ class CookieControlsPageActionControllerTestBase : public testing::Test {
         .WillByDefault([](user_education::FeaturePromoParams params) {
           std::move(params.show_promo_result_callback)
               .Run(user_education::FeaturePromoResult::Success());
+          return true;
         });
 
     ON_CALL(*fake_bubble_delegate_, HasBubble()).WillByDefault(Return(false));
+
+    cookie_controls_controller_ =
+        std::make_unique<content_settings::CookieControlsController>(
+            CookieSettingsFactory::GetForProfile(&profile_), nullptr,
+            HostContentSettingsMapFactory::GetForProfile(&profile_),
+            profile_.IsIncognitoProfile());
+    ON_CALL(*fake_bubble_delegate_, GetController())
+        .WillByDefault(Return(cookie_controls_controller_.get()));
 
     cookie_controls_page_action_controller_ =
         std::make_unique<CookieControlsPageActionController>(
@@ -167,7 +175,6 @@ class CookieControlsPageActionControllerTestBase : public testing::Test {
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   content::RenderViewHostTestEnabler rvh_test_enabler_;
 
-  base::test::ScopedFeatureList scoped_feature_list_;
   ui::UnownedUserDataHost user_data_host_;
   TestingProfile profile_;
   std::unique_ptr<content::WebContents> web_contents_;
@@ -176,6 +183,8 @@ class CookieControlsPageActionControllerTestBase : public testing::Test {
 
   std::optional<MockBrowserUserEducationInterface> user_education_;
   FakePageActionController page_action_controller_;
+  std::unique_ptr<content_settings::CookieControlsController>
+      cookie_controls_controller_;
   std::unique_ptr<CookieControlsPageActionController>
       cookie_controls_page_action_controller_;
   raw_ptr<FakeBubbleDelegate> fake_bubble_delegate_;
@@ -207,25 +216,7 @@ TEST_F(CookieControlsPageActionControllerTest, IconVisibleWhenBubbleShowing) {
 
   // Call with icon_visible=false, which should be ignored.
   controller().OnCookieControlsIconStatusChanged(
-      /*icon_visible=*/false, CookieControlsState::kAllowed3pc,
-      /*should_highlight=*/false);
-}
-
-// Verifies the suggestion chip is not shown when the bubble is open.
-TEST_F(CookieControlsPageActionControllerTest, ChipNotShownWhenBubbleShowing) {
-  EXPECT_CALL(*fake_bubble_delegate(), HasBubble()).WillOnce(Return(true));
-
-  // The chip should NOT be shown because the bubble is already visible.
-  EXPECT_CALL(page_action_controller(),
-              ShowSuggestionChip(kActionShowCookieControls, _))
-      .Times(0);
-  EXPECT_CALL(page_action_controller(), Show(kActionShowCookieControls))
-      .Times(1);
-
-  // Call with should_highlight=true, which should be ignored for the chip.
-  controller().OnCookieControlsIconStatusChanged(
-      /*icon_visible=*/true, CookieControlsState::kBlocked3pc,
-      /*should_highlight=*/true);
+      /*icon_visible=*/false, CookieControlsState::kAllowed3pc);
 }
 
 TEST_F(CookieControlsPageActionControllerTest,
@@ -236,8 +227,7 @@ TEST_F(CookieControlsPageActionControllerTest,
               ShowSuggestionChip(kActionShowCookieControls, _))
       .Times(0);
   controller().OnCookieControlsIconStatusChanged(
-      /*icon_visible=*/true, CookieControlsState::kBlocked3pc,
-      /*should_highlight=*/false);
+      /*icon_visible=*/true, CookieControlsState::kBlocked3pc);
 }
 
 TEST_F(CookieControlsPageActionControllerTest,
@@ -248,58 +238,7 @@ TEST_F(CookieControlsPageActionControllerTest,
   EXPECT_CALL(page_action_controller(), Show(kActionShowCookieControls))
       .Times(0);
   controller().OnCookieControlsIconStatusChanged(
-      /*icon_visible=*/false, CookieControlsState::kAllowed3pc,
-      /*should_highlight=*/false);
-}
-
-TEST_F(CookieControlsPageActionControllerTest,
-       IconAnimatesOnPageReloadWithChanged3pcSettings) {
-  // Set initial state without highlighting.
-  EXPECT_CALL(page_action_controller(), Show(kActionShowCookieControls));
-  EXPECT_CALL(page_action_controller(), ShowSuggestionChip(_, _)).Times(0);
-  controller().OnCookieControlsIconStatusChanged(
-      /*icon_visible=*/true, CookieControlsState::kBlocked3pc,
-      /*should_highlight=*/false);
-  testing::Mock::VerifyAndClearExpectations(&page_action_controller());
-
-  // Force the icon to animate and set the label again upon reload.
-  EXPECT_CALL(page_action_controller(),
-              ShowSuggestionChip(kActionShowCookieControls, _));
-  EXPECT_CALL(page_action_controller(),
-              OverrideTooltip(kActionShowCookieControls, BlockedLabel()));
-  controller().OnFinishedPageReloadWithChangedSettings();
-
-  // The label for the chip should be the "Blocked" label.
-  EXPECT_EQ(page_action_controller().last_text(), BlockedLabel());
-}
-
-TEST_F(CookieControlsPageActionControllerTest, ShowChipOnIPHFailure) {
-  EXPECT_CALL(user_education(), MaybeShowFeaturePromo)
-      .WillOnce([](user_education::FeaturePromoParams params) {
-        std::move(params.show_promo_result_callback)
-            .Run(user_education::FeaturePromoResult::kError);
-      });
-  EXPECT_CALL(page_action_controller(),
-              ShowSuggestionChip(kActionShowCookieControls, _))
-      .Times(1);
-  controller().OnCookieControlsIconStatusChanged(
-      /*icon_visible=*/true, CookieControlsState::kBlocked3pc,
-      /*should_highlight=*/true);
-}
-
-TEST_F(CookieControlsPageActionControllerTest, SetActivityOnIPHShown) {
-  EXPECT_CALL(user_education(), MaybeShowFeaturePromo)
-      .WillOnce([](user_education::FeaturePromoParams params) {
-        std::move(params.show_promo_result_callback)
-            .Run(user_education::FeaturePromoResult::Success());
-      });
-  EXPECT_CALL(page_action_controller(), AddActivity(kActionShowCookieControls))
-      .Times(1)
-      .WillOnce(Return(page_actions::ScopedPageActionActivity(
-          page_action_controller(), kActionShowCookieControls)));
-  controller().OnCookieControlsIconStatusChanged(
-      /*icon_visible=*/true, CookieControlsState::kBlocked3pc,
-      /*should_highlight=*/true);
+      /*icon_visible=*/false, CookieControlsState::kAllowed3pc);
 }
 
 TEST_F(CookieControlsPageActionControllerTest, WebContentsChangeUpdatesIcon) {
@@ -308,8 +247,7 @@ TEST_F(CookieControlsPageActionControllerTest, WebContentsChangeUpdatesIcon) {
   EXPECT_CALL(page_action_controller(),
               OverrideTooltip(kActionShowCookieControls, BlockedLabel()));
   controller().OnCookieControlsIconStatusChanged(
-      /*icon_visible=*/true, CookieControlsState::kBlocked3pc,
-      /*should_highlight=*/false);
+      /*icon_visible=*/true, CookieControlsState::kBlocked3pc);
   EXPECT_EQ(page_action_controller().last_text(), BlockedLabel());
   testing::Mock::VerifyAndClearExpectations(&page_action_controller());
 
@@ -324,20 +262,8 @@ TEST_F(CookieControlsPageActionControllerTest, WebContentsChangeUpdatesIcon) {
   EXPECT_CALL(page_action_controller(),
               OverrideTooltip(kActionShowCookieControls, AllowedLabel()));
   controller().OnCookieControlsIconStatusChanged(
-      /*icon_visible=*/true, CookieControlsState::kAllowed3pc,
-      /*should_highlight=*/false);
+      /*icon_visible=*/true, CookieControlsState::kAllowed3pc);
   EXPECT_EQ(page_action_controller().last_text(), AllowedLabel());
-}
-
-TEST_F(CookieControlsPageActionControllerTest, ChipHidesAfterTimeout) {
-  EXPECT_CALL(page_action_controller(),
-              HideSuggestionChip(kActionShowCookieControls))
-      .Times(1);
-
-  page_actions::PageActionState state;
-  controller().OnPageActionChipShown(state);
-
-  task_environment().FastForwardBy(base::Seconds(12));
 }
 
 TEST_F(CookieControlsPageActionControllerTest, IconRespondsToBubbleHidden) {
@@ -367,14 +293,10 @@ INSTANTIATE_TEST_SUITE_P(
 
 TEST_P(CookieControlsPageActionControllerActionTest, ExecuteAction) {
   // Setup controller so that the icon is visible.
-  controller().OnCookieControlsIconStatusChanged(
-      true, GetParam().controls_state, false);
+  controller().OnCookieControlsIconStatusChanged(true,
+                                                 GetParam().controls_state);
 
   EXPECT_CALL(*fake_bubble_delegate(), ShowBubble);
-  EXPECT_CALL(user_education(),
-              NotifyFeaturePromoFeatureUsed(
-                  testing::Ref(feature_engagement::kIPHCookieControlsFeature),
-                  FeaturePromoFeatureUsedAction::kClosePromoIfPresent));
   controller().ExecutePageAction(nullptr);
 
   EXPECT_EQ(1, user_action_tester().GetActionCount(GetParam().action_name));

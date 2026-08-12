@@ -14,6 +14,7 @@
 #include "base/one_shot_event.h"
 #include "base/types/pass_key.h"
 #include "build/build_config.h"
+#include "chrome/browser/web_applications/web_app_isolation_delegate.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/webapps/common/manifest_id_constants.h"
 #include "components/webapps/common/web_app_id.h"
@@ -36,10 +37,12 @@ class ExtensionsManager;
 class ExternallyManagedAppManager;
 class FakeWebAppProvider;
 class FileUtilsWrapper;
+enum class WebAppDatabaseOpenResult;
 class GeneratedIconFixManager;
-class IsolatedWebAppInstallationManager;
+class IsolatedWebAppDevInstallManager;
 class IsolatedWebAppPolicyManager;
 class IsolatedWebAppUpdateManager;
+class IsolatedWebAppUserInstalledManager;
 class ManifestUpdateManager;
 class NavigationCapturingLog;
 class OsIntegrationManager;
@@ -49,7 +52,6 @@ class WebAppAudioFocusIdMap;
 class WebAppCommandManager;
 class WebAppCommandScheduler;
 class WebAppIconManager;
-class WebAppInstallFinalizer;
 class WebAppInstallManager;
 class WebAppOriginAssociationManager;
 class WebAppPolicyManager;
@@ -60,7 +62,7 @@ class WebAppTranslationManager;
 class WebAppUiManager;
 class WebContentsManager;
 class WebAppProfileDeletionManager;
-enum class FetchManifestAndUpdateResult;
+struct FetchManifestAndUpdateCompletionInfo;
 
 #if BUILDFLAG(IS_CHROMEOS)
 class WebAppRunOnOsLoginManager;
@@ -72,6 +74,8 @@ class IwaBundleCacheManager;
 // Connects Web App features, such as the installation of default and
 // policy-managed web apps, with Profiles (as WebAppProvider is a
 // Profile-linked KeyedService) and their associated PrefService.
+// This is a per-profile object housing all the various web app subsystems.
+// This is the "main()" of the web app implementation where everything starts.
 //
 // Lifecycle notes:
 // - WebAppProvider and its sub-managers are not ready for use until the
@@ -91,16 +95,14 @@ class IwaBundleCacheManager;
 // - Similarly, in destruction, subsystems should not refer to each other.
 class WebAppProvider : public KeyedService {
  public:
-  // Deprecated: Use GetForWebApps instead.
-  static WebAppProvider* GetDeprecated(Profile* profile);
-
   // This returns a WebAppProvider for the given `profile`, or `nullptr` if
   // installed web apps are not supported on the given `profile`. Use
   // `web_app::AreWebAppsEnabled` to determine if web apps are supported on a
-  // profile.
-  // Note: On ChromeOS, to support the system web app implementation, this also
-  // considers the `profile`'s 'original' profile, if `AreWebAppsEnabled`
-  // returns `false` for `profile`.
+  // profile. If `AreWebAppsEnabled` returns true, then this must return a
+  // non-nullptr.
+  //  Note: On ChromeOS, to support the system web app implementation, this also
+  //  considers the `profile`'s 'original' profile, if `AreWebAppsEnabled`
+  //  returns `false` for `profile`.
   // TODO(https://crbug.com/384063076): Stop returning the WebAppProvider for
   // profiles where `AreWebAppsEnabled` returns `false` to support CrOS system
   // web apps.
@@ -165,8 +167,6 @@ class WebAppProvider : public KeyedService {
   WebAppSyncBridge& sync_bridge_unsafe();
   // UIs can use WebAppInstallManager for user-initiated Web Apps install.
   WebAppInstallManager& install_manager();
-  // Implements persistence for Web Apps install.
-  WebAppInstallFinalizer& install_finalizer();
   // Keeps app metadata up to date with site manifests.
   ManifestUpdateManager& manifest_update_manager();
   // Clients can use ExternallyManagedAppManager to install, uninstall, and
@@ -175,22 +175,26 @@ class WebAppProvider : public KeyedService {
   // Clients can use WebAppPolicyManager to request updates of policy installed
   // Web Apps.
   WebAppPolicyManager& policy_manager();
-  // `IsolatedWebAppInstallationManager` is the entry point for Isolated Web App
+  // `IsolatedWebAppDevInstallManager` is the entry point for Isolated Web App
   // installation.
-  IsolatedWebAppInstallationManager& isolated_web_app_installation_manager();
+  IsolatedWebAppDevInstallManager& isolated_web_app_dev_install_manager();
   // Keeps Isolated Web Apps up to date by regularly checking for updates,
   // downloading them, and applying them.
-  IsolatedWebAppUpdateManager& iwa_update_manager();
+  IsolatedWebAppUpdateManager& isolated_web_app_update_manager();
+  // Manages the lifetime of IsolatedWebApps, e.g., removes apps that are added
+  // to the blocklist
+  IsolatedWebAppUserInstalledManager& isolated_web_app_user_installed_manager();
 
 #if BUILDFLAG(IS_CHROMEOS)
   // Runs web apps on OS login.
   WebAppRunOnOsLoginManager& run_on_os_login_manager();
 
   // Isolated Web App bundle cache manager.
-  IwaBundleCacheManager& iwa_cache_manager();
+  IwaBundleCacheManager& isolated_web_app_cache_manager();
 #endif
 
-  IsolatedWebAppPolicyManager& iwa_policy_manager();
+  IsolatedWebAppPolicyManager& isolated_web_app_policy_manager();
+  WebAppIsolationDelegate& isolation_delegate();
 
   WebAppUiManager& ui_manager();
 
@@ -276,14 +280,20 @@ class WebAppProvider : public KeyedService {
 
   // Start sync bridge. All other subsystems depend on it.
   void StartSyncBridge();
-  void OnSyncBridgeReady();
+  void OnSyncBridgeReady(
+      WebAppDatabaseOpenResult open_result,
+      std::vector<std::pair<webapps::AppId, GURL>> salvaged_apps);
+  void OnDatabaseCorruptionRecovered();
 
   void CheckIsConnected() const;
 
   void DoDelayedPostStartupWork();
 
-  void OnDefaultAppUpdateComplete(const webapps::AppId& app_id,
-                                  FetchManifestAndUpdateResult result);
+  void ReportSubAppMetricsOnStartup();
+
+  void OnDefaultAppUpdateComplete(
+      const webapps::AppId& app_id,
+      FetchManifestAndUpdateCompletionInfo completion_info);
 
   std::unique_ptr<AbstractWebAppDatabaseFactory> database_factory_;
   std::unique_ptr<WebAppRegistrarMutable> registrar_;
@@ -291,19 +301,21 @@ class WebAppProvider : public KeyedService {
   std::unique_ptr<PreinstalledWebAppManager> preinstalled_web_app_manager_;
   std::unique_ptr<WebAppIconManager> icon_manager_;
   std::unique_ptr<WebAppTranslationManager> translation_manager_;
-  std::unique_ptr<WebAppInstallFinalizer> install_finalizer_;
   std::unique_ptr<ManifestUpdateManager> manifest_update_manager_;
   std::unique_ptr<ExternallyManagedAppManager> externally_managed_app_manager_;
   std::unique_ptr<WebAppAudioFocusIdMap> audio_focus_id_map_;
   std::unique_ptr<WebAppInstallManager> install_manager_;
   std::unique_ptr<WebAppPolicyManager> web_app_policy_manager_;
-  std::unique_ptr<IsolatedWebAppInstallationManager>
-      isolated_web_app_installation_manager_;
-  std::unique_ptr<IsolatedWebAppUpdateManager> iwa_update_manager_;
+  std::unique_ptr<IsolatedWebAppDevInstallManager>
+      isolated_web_app_dev_install_manager_;
+  std::unique_ptr<IsolatedWebAppUpdateManager> isolated_web_app_update_manager_;
+  std::unique_ptr<IsolatedWebAppUserInstalledManager>
+      isolated_web_app_user_installed_manager_;
   std::unique_ptr<IsolatedWebAppPolicyManager> isolated_web_app_policy_manager_;
+  std::unique_ptr<WebAppIsolationDelegate> isolation_delegate_;
 #if BUILDFLAG(IS_CHROMEOS)
+  std::unique_ptr<IwaBundleCacheManager> isolated_web_app_cache_manager_;
   std::unique_ptr<WebAppRunOnOsLoginManager> web_app_run_on_os_login_manager_;
-  std::unique_ptr<IwaBundleCacheManager> iwa_cache_manager_;
 #endif  // BUILDFLAG(IS_CHROMEOS)
   std::unique_ptr<WebAppUiManager> ui_manager_;
   std::unique_ptr<OsIntegrationManager> os_integration_manager_;

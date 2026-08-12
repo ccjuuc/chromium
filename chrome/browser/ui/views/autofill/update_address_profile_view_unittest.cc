@@ -12,7 +12,6 @@
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
-#include "components/autofill/core/common/autofill_features.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -128,9 +127,9 @@ void UpdateAddressProfileViewTest::CreateViewAndShow() {
   ON_CALL(*mock_controller(), GetOriginalProfile())
       .WillByDefault(testing::ReturnRef(original_profile()));
 
-  view_ = new UpdateAddressProfileView(anchor_widget_->GetContentsView(),
-                                       std::move(mock_controller_unique),
-                                       test_web_contents_.get());
+  view_ = new UpdateAddressProfileView(
+      views::BubbleAnchor(anchor_widget_->GetContentsView()),
+      std::move(mock_controller_unique), test_web_contents_.get());
   views::BubbleDialogDelegateView::CreateBubble(view_)->Show();
 }
 

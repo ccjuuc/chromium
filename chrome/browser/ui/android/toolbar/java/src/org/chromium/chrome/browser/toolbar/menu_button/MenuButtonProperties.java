@@ -12,6 +12,7 @@ import androidx.core.graphics.Insets;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.ui.actions.appmenu.MenuButtonState;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuButtonHelper;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.ui.modelutil.PropertyKey;
@@ -59,7 +60,7 @@ class MenuButtonProperties {
     public static final WritableObjectPropertyKey<Supplier<MenuButtonState>> STATE_SUPPLIER =
             new WritableObjectPropertyKey<>();
     public static final WritableObjectPropertyKey<ShowBadgeProperty> SHOW_UPDATE_BADGE =
-            new WritableObjectPropertyKey(true);
+            new WritableObjectPropertyKey<>(true);
     public static final WritableObjectPropertyKey<ThemeProperty> THEME =
             new WritableObjectPropertyKey<>(true);
     public static final WritableFloatPropertyKey TRANSLATION_X = new WritableFloatPropertyKey();

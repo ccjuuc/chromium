@@ -22,7 +22,6 @@ import org.chromium.base.Callback;
 import org.chromium.base.CallbackUtils;
 import org.chromium.base.SelectionActionMenuClientWrapper;
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.Nullable;
@@ -169,20 +168,6 @@ public class AwContentsStatics {
                 });
     }
 
-    /**
-     * Return the first substring consisting of the address of a physical location.
-     *
-     * @see {@link android.webkit.WebView#findAddress(String)}
-     * @param addr The string to search for addresses.
-     * @return the address, or if no address is found, return null.
-     */
-    public static String findAddress(String addr) {
-        if (addr == null) {
-            throw new NullPointerException("addr is null");
-        }
-        return FindAddress.findAddress(addr);
-    }
-
     /** Returns true if WebView is running in multi process mode. */
     public static boolean isMultiProcessEnabled() {
         return AwContentsStaticsJni.get().isMultiProcessEnabled();
@@ -190,10 +175,7 @@ public class AwContentsStatics {
 
     /** Returns the variations header used with the X-Client-Data header. */
     public static String getVariationsHeader() {
-        String header = AwContentsStaticsJni.get().getVariationsHeader();
-        RecordHistogram.recordCount100Histogram(
-                "Android.WebView.VariationsHeaderLength", header.length());
-        return header;
+        return AwContentsStaticsJni.get().getVariationsHeader();
     }
 
     // Note that this can be called before browser process initialization.
@@ -206,13 +188,6 @@ public class AwContentsStatics {
         sDefaultTrafficStatsUid = uid;
     }
 
-    public static void setRendererLibraryPrefetchMode(int mode) {
-        AwContentsStaticsJni.get().setRendererLibraryPrefetchMode(mode);
-    }
-
-    public static int getRendererLibraryPrefetchMode() {
-        return AwContentsStaticsJni.get().getRendererLibraryPrefetchMode();
-    }
 
     public static void setSelectionActionMenuClient(
             @Nullable SelectionActionMenuClientWrapper client) {
@@ -233,7 +208,7 @@ public class AwContentsStatics {
         return sDefaultTrafficStatsUid;
     }
 
-    public static void forceVariationIdsForTesting( // IN-TEST
+    public static void forceVariationIdsForTesting(
             List<String> variationIds, String commandLineVariationIds) {
         AwContentsStaticsJni.get()
                 .forceVariationIdsForTesting(variationIds, commandLineVariationIds); // IN-TEST
@@ -264,9 +239,6 @@ public class AwContentsStatics {
         @JniType("std::string")
         String getVariationsHeader();
 
-        void setRendererLibraryPrefetchMode(int mode);
-
-        int getRendererLibraryPrefetchMode();
 
         void forceVariationIdsForTesting( // IN-TEST
                 @JniType("std::vector<std::string>") List<String> variationIds,

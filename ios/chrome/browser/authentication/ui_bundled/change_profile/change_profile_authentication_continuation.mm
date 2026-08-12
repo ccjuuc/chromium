@@ -7,7 +7,6 @@
 #import "base/functional/callback.h"
 #import "base/functional/callback_helpers.h"
 #import "google_apis/gaia/gaia_id.h"
-#import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
@@ -65,23 +64,23 @@ void SigninForContext(URLContext* context,
                       base::OnceClosure closure) {
   // Iterate over all identities on device because the newGaia could
   // be in a different profile.
-  id<SystemIdentity> newIdentity;
+  id<SystemIdentity> new_identity = nil;
   NSMutableArray<id<SystemIdentity>>* identities =
       [[NSMutableArray alloc] init];
   GetApplicationContext()->GetSystemIdentityManager()->IterateOverIdentities(
       base::BindRepeating(&IdentitiesOnDevice, identities));
   for (id<SystemIdentity> identity in identities) {
     if (identity.gaiaId == context.gaiaID) {
-      newIdentity = identity;
+      new_identity = identity;
     }
   }
   // Don't perform sign-in if the new identity is not found.
-  if (!newIdentity) {
+  if (!new_identity) {
     std::move(closure).Run();
     return;
   }
 
-  authentication_service->SignIn(newIdentity,
+  authentication_service->SignIn(new_identity,
                                  signin_metrics::AccessPoint::kWidget);
   if (openURL) {
     scene_state.URLContextsToOpen = contexts;
@@ -104,8 +103,7 @@ void ChangeProfileAuthenticationContinuation(URLContext* context,
 
   if (context.type == AccountSwitchType::kSignOut) {
     // Perform sign-out only if there is a signed-in account in the profile.
-    if (authentication_service->HasPrimaryIdentity(
-            signin::ConsentLevel::kSignin)) {
+    if (authentication_service->HasPrimaryIdentity()) {
       SignoutAndOpenContexts(browser, openURL, contexts, authentication_service,
                              std::move(closure));
     } else {
@@ -115,16 +113,12 @@ void ChangeProfileAuthenticationContinuation(URLContext* context,
       std::move(closure).Run();
     }
   } else {
-    if (!authentication_service->HasPrimaryIdentity(
-            signin::ConsentLevel::kSignin)) {
+    if (!authentication_service->HasPrimaryIdentity()) {
       SigninForContext(context, contexts, openURL, authentication_service,
                        scene_state, std::move(closure));
     } else if (context.gaiaID !=
-                   authentication_service
-                       ->GetPrimaryIdentity(signin::ConsentLevel::kSignin)
-                       .gaiaId &&
-               !authentication_service->HasPrimaryIdentityManaged(
-                   signin::ConsentLevel::kSignin)) {
+                   authentication_service->GetPrimaryIdentity().gaiaId &&
+               !authentication_service->HasPrimaryIdentityManaged()) {
       base::OnceClosure completion = base::BindOnce(
           &SigninForContext, context, contexts, openURL, authentication_service,
           scene_state, std::move(closure));

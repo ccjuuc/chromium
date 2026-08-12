@@ -42,15 +42,17 @@ enum class AdaptiveToolbarButtonVariant {
   // Price Insights action.
   kPriceInsights = 12,
   // Page Summary button.
-  kPageSummary = 13,
+  kPageSummary [[deprecated]] = 13,
   // Discounts action.
   kDiscounts = 14,
   // Open In Browser action.
   kOpenInBrowser = 15,
   // Tab grouping action.
   kTabGrouping = 16,
+  // Glic button.
+  kGlic = 17,
 
-  kMaxValue = kTabGrouping,
+  kMaxValue = kGlic,
 };
 // LINT.ThenChange(/tools/metrics/histograms/enums.xml:AdaptiveToolbarButtonVariant)
 

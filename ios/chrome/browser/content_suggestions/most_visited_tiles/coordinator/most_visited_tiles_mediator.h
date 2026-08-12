@@ -17,6 +17,14 @@ namespace favicon {
 class LargeIconService;
 }  // namespace favicon
 
+namespace feature_engagement {
+class Tracker;
+}  // namespace feature_engagement
+
+namespace history {
+class HistoryService;
+}  // namespace history
+
 namespace ntp_tiles {
 class MostVisitedSites;
 }  // namespace ntp_tiles
@@ -27,8 +35,9 @@ class ChromeAccountManagerService;
 @protocol ContentSuggestionsConsumer;
 @protocol ContentSuggestionsDelegate;
 enum class ContentSuggestionsModuleType;
-@class ContentSuggestionsMetricsRecorder;
+@protocol HelpCommands;
 class LargeIconCache;
+@class LayoutGuideCenter;
 @class MostVisitedTilesConfig;
 @protocol NewTabPageActionsDelegate;
 class PrefService;
@@ -45,10 +54,6 @@ class UrlLoadingBrowserAgent;
 // The config object for the latest Most Visited Tiles.
 @property(nonatomic, strong, readonly)
     MostVisitedTilesConfig* mostVisitedConfig;
-
-// Recorder for content suggestions metrics.
-@property(nonatomic, weak)
-    ContentSuggestionsMetricsRecorder* contentSuggestionsMetricsRecorder;
 
 // Action factory for mediator.
 @property(nonatomic, strong) BrowserActionFactory* actionFactory;
@@ -67,21 +72,24 @@ class UrlLoadingBrowserAgent;
 // Handler for snackbar commands.
 @property(nonatomic, weak) id<SnackbarCommands> snackbarHandler;
 
+// Handler for in-product help commands.
+@property(nonatomic, weak) id<HelpCommands> helpHandler;
+
 // Delegate for reporting content suggestions actions to the NTP.
 @property(nonatomic, weak) id<NewTabPageActionsDelegate> NTPActionsDelegate;
-
-// Get the maximum number of sites shown.
-+ (NSUInteger)maxSitesShown;
 
 // Default initializer.
 - (instancetype)
     initWithMostVisitedSite:
         (std::unique_ptr<ntp_tiles::MostVisitedSites>)mostVisitedSites
+             historyService:(history::HistoryService*)historyService
                 prefService:(PrefService*)prefService
            largeIconService:(favicon::LargeIconService*)largeIconService
              largeIconCache:(LargeIconCache*)largeIconCache
      URLLoadingBrowserAgent:(UrlLoadingBrowserAgent*)URLLoadingBrowserAgent
       accountManagerService:(ChromeAccountManagerService*)accountManagerService
+          engagementTracker:(feature_engagement::Tracker*)engagementTracker
+          layoutGuideCenter:(LayoutGuideCenter*)layoutGuideCenter
     NS_DESIGNATED_INITIALIZER;
 
 - (instancetype)init NS_UNAVAILABLE;

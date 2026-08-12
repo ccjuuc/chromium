@@ -8,7 +8,6 @@
 #include <string>
 
 #include "base/containers/flat_set.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/rand_util.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -39,7 +38,7 @@ enum class CacheMetric {
   kMaxValue = kStale,
 };
 
-base::Value::Dict NetLogCacheStatusParams(const CacheMetric metric) {
+base::DictValue NetLogCacheStatusParams(const CacheMetric metric) {
   std::string cache_status;
   switch (metric) {
     case CacheMetric::kHitAndPass:
@@ -56,7 +55,7 @@ base::Value::Dict NetLogCacheStatusParams(const CacheMetric metric) {
       break;
   }
 
-  return base::Value::Dict().Set("status", cache_status);
+  return base::DictValue().Set("status", cache_status);
 }
 
 void RecordCacheMetricNetLog(CacheMetric metric,
@@ -103,7 +102,8 @@ bool PreflightCache::CheckIfRequestCanSkipPreflight(
     const net::HttpRequestHeaders& request_headers,
     bool is_revalidating,
     const net::NetLogWithSource& net_log,
-    bool acam_preflight_spec_conformant) {
+    bool acam_preflight_spec_conformant,
+    bool is_ad_auction_trusted_signals_request) {
   // Check if the entry exists in the cache.
   auto key = std::make_tuple(origin, url.spec(), network_isolation_key);
   auto cache_entry = cache_.find(key);
@@ -119,7 +119,8 @@ bool PreflightCache::CheckIfRequestCanSkipPreflight(
     if (cache_entry->second->EnsureAllowedRequest(
             credentials_mode, method, request_headers, is_revalidating,
             NonWildcardRequestHeadersSupport(true),
-            acam_preflight_spec_conformant)) {
+            acam_preflight_spec_conformant,
+            is_ad_auction_trusted_signals_request)) {
       // Note that we always use the "with non-wildcard request headers"
       // variant, because it is hard to generate the correct error information
       // from here, and cache miss is in most case recoverable.
@@ -203,7 +204,8 @@ void PreflightCache::MayPurge(size_t max_entries, size_t purge_unit) {
   }
   DCHECK_GE(cache_.size(), purge_unit);
   auto purge_begin_entry = cache_.begin();
-  std::advance(purge_begin_entry, base::RandInt(0, cache_.size() - purge_unit));
+  std::advance(purge_begin_entry,
+               base::RandIntInclusive(0, cache_.size() - purge_unit));
   auto purge_end_entry = purge_begin_entry;
   std::advance(purge_end_entry, purge_unit);
   cache_.erase(purge_begin_entry, purge_end_entry);

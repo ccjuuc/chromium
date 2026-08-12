@@ -21,6 +21,10 @@
       "name": "script"
     },
     {
+      "namespace": "http://www.w3.org/1999/xhtml",
+      "name": "base"
+    },
+    {
       "namespace": "http://www.w3.org/2000/svg",
       "name": "script"
     },
@@ -41,6 +45,7 @@
     "onauxclick",
     "onbeforecopy",
     "onbeforecut",
+    "onbeforefilter",
     "onbeforeinput",
     "onbeforepaste",
     "onbeforeprint",
@@ -83,6 +88,7 @@
     "ongotpointercapture",
     "onhashchange",
     "oninput",
+    "oninstallresult",
     "oninvalid",
     "onkeydown",
     "onkeypress",
@@ -108,7 +114,6 @@
     "onoffline",
     "ononline",
     "onorientationchange",
-    "onoverscroll",
     "onpagehide",
     "onpageshow",
     "onpaste",
@@ -147,6 +152,7 @@
     "onshow",
     "onslotchange",
     "onstalled",
+    "onstream",
     "onstorage",
     "onsubmit",
     "onsuspend",
@@ -169,5 +175,6 @@
     "onwebkitfullscreenerror",
     "onwebkittransitionend",
     "onwheel"
-  ]
+  ],
+  "removeProcessingInstructions": []
 }

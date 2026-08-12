@@ -23,7 +23,6 @@
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_enumerator.h"
@@ -42,6 +41,7 @@
 #include "build/buildflag.h"
 #include "sql/database.h"
 #include "sql/fuzzers/sql_disk_corruption.pb.h"
+#include "sql/fuzzers/sql_disk_corruption_fuzzable.pb.h"
 #include "sql/recovery.h"
 #include "sql/statement.h"
 #include "sql/test/test_helpers.h"
@@ -143,7 +143,11 @@ class Environment {
 #if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
     base::CommandLine::Init(0, nullptr);
     base::FilePath shmem_temp_dir;
-    CHECK(base::GetShmemTempDir(false, &shmem_temp_dir));
+    if (char* env_shmdir = std::getenv("SQL_RECOVERY_FUZZER_TEMP_DIR")) {
+      shmem_temp_dir = base::FilePath(env_shmdir);
+    } else {
+      CHECK(base::GetShmemTempDir(false, &shmem_temp_dir));
+    }
     base::ScopedTempDir temp_dir;
     CHECK(temp_dir.CreateUniqueTempDirUnderPath(shmem_temp_dir));
     return temp_dir;
@@ -239,7 +243,13 @@ std::ostream& operator<<(std::ostream& os, const TestCase& test_case) {
 
 }  // namespace
 
-DEFINE_PROTO_FUZZER(const sql_fuzzers::RecoveryFuzzerTestCase& fuzzer_input) {
+DEFINE_PROTO_FUZZER(const fuzzable::sql_fuzzers::RecoveryFuzzerTestCase&
+                        fuzzable_fuzzer_input) {
+  std::string serialized;
+  CHECK(fuzzable_fuzzer_input.SerializeToString(&serialized));
+  sql_fuzzers::RecoveryFuzzerTestCase fuzzer_input;
+  CHECK(fuzzer_input.ParseFromString(serialized));
+
   static Environment env;
 
   // Ignore this input if it includes any "ATTACH DATABASE" queries. These
@@ -285,8 +295,8 @@ DEFINE_PROTO_FUZZER(const sql_fuzzers::RecoveryFuzzerTestCase& fuzzer_input) {
 
   // Mutate the backing file. Skip the expensive file operations when there are
   // no bytes to mutate.
-  std::optional<int64_t> file_length = GetFileSize(env.db_path());
-  if (*file_length > 0) {
+  std::optional<int64_t> file_length = base::GetFileSize(env.db_path());
+  if (file_length.value_or(0) > 0) {
     base::File file(env.db_path(), base::File::FLAG_OPEN |
                                        base::File::FLAG_READ |
                                        base::File::FLAG_WRITE);
@@ -301,9 +311,9 @@ DEFINE_PROTO_FUZZER(const sql_fuzzers::RecoveryFuzzerTestCase& fuzzer_input) {
       }
 
       uint64_t buf = 0;
-      const int num_read = UNSAFE_TODO(
-          file.Read(mutation.pos, reinterpret_cast<char*>(&buf), sizeof(buf)));
-      CHECK_NE(num_read, -1);
+      const std::optional<size_t> num_read =
+          file.Read(mutation.pos, base::byte_span_from_ref(buf));
+      CHECK(num_read.has_value());
       if (num_read == 0) {
         continue;
       }
@@ -312,9 +322,9 @@ DEFINE_PROTO_FUZZER(const sql_fuzzers::RecoveryFuzzerTestCase& fuzzer_input) {
 
       // Write `buf` back to the file, being careful not to add bytes to the
       // file that did not exist before.
-      UNSAFE_TODO(CHECK_NE(
-          file.Write(mutation.pos, reinterpret_cast<char*>(&buf), num_read),
-          -1));
+      std::optional<size_t> num_written = file.Write(
+          mutation.pos, base::byte_span_from_ref(buf).first(*num_read));
+      CHECK(num_written.has_value());
     }
     CHECK_EQ(*file_length, file.GetLength());
   }

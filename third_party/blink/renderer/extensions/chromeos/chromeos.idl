@@ -5,6 +5,6 @@
 [
     TargetOfExposed=ChromeOSExtensions
 ] interface ChromeOS {
-  [RuntimeEnabled=BlinkExtensionChromeOSKiosk,CallWith=ExecutionContext]
-  readonly attribute CrosKiosk kiosk;
+  [IsolatedContext, CallWith=ExecutionContext]
+  readonly attribute IsolatedWebApp isolatedWebApp;
 };

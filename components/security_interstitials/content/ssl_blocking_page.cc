@@ -38,7 +38,7 @@ SSLBlockingPage::GetTypeForTesting() {
 SSLBlockingPage::~SSLBlockingPage() = default;
 
 void SSLBlockingPage::PopulateInterstitialStrings(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   ssl_error_ui_->PopulateStringsForHTML(load_time_data);
   PopulateEnhancedProtectionMessage(load_time_data);
 }
@@ -47,7 +47,7 @@ void SSLBlockingPage::PopulateInterstitialStrings(
 // No error happening loading a sub-resource triggers an interstitial so far.
 SSLBlockingPage::SSLBlockingPage(
     content::WebContents* web_contents,
-    int cert_error,
+    net::Error cert_error,
     const net::SSLInfo& ssl_info,
     const GURL& request_url,
     int options_mask,

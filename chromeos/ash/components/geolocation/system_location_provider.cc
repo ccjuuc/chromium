@@ -40,6 +40,9 @@ std::string_view GetClientIdUmaName(
       return "SimpleGeolocation.Provider.WizardControllerRequestInterval";
     case SystemLocationProvider::ClientId::kTimezoneResolver:
       return "SimpleGeolocation.Provider.TimezoneResolverRequestInterval";
+    case SystemLocationProvider::ClientId::kQueryGeolocationCommand:
+      return "SimpleGeolocation.Provider."
+             "QueryGeolocationCommandRequestInterval";
     case SystemLocationProvider::ClientId::kForTesting:
       // This case is unused but required to avoid a compiler warning about
       // missing 'default' case in the switch.
@@ -127,7 +130,7 @@ void SystemLocationProvider::DestroyForTesting() {
   g_geolocation_provider = nullptr;
 }
 
-bool SystemLocationProvider::IsGeolocationUsageAllowedForSystem() {
+bool SystemLocationProvider::IsGeolocationUsageAllowedForSystem() const {
   switch (geolocation_access_level_) {
     case GeolocationAccessLevel::kAllowed:
     case GeolocationAccessLevel::kOnlyAllowedForSystem:

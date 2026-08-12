@@ -39,6 +39,15 @@ class AdjustForAbsoluteZoom {
   STATIC_ONLY(AdjustForAbsoluteZoom);
 
  public:
+  inline static float GetAbsoluteZoom(const LayoutObject& layout_object) {
+    if (layout_object.GetDocument().StandardizedBrowserZoomEnabled()) {
+      if (LocalFrame* frame = layout_object.GetFrame()) {
+        return frame->LayoutZoomFactor();
+      }
+    }
+    return layout_object.StyleRef().EffectiveZoom();
+  }
+
   // FIXME: Reduce/remove the dependency on zoom adjusted int values.
   // The float or LayoutUnit versions of layout values should be used.
   static int AdjustInt(int value, float zoom_factor) {
@@ -91,28 +100,23 @@ class AdjustForAbsoluteZoom {
     return PhysicalSize(AdjustLayoutUnit(size.width, style),
                         AdjustLayoutUnit(size.height, style));
   }
+  inline static gfx::SizeF AdjustSize(gfx::SizeF size,
+                                      const ComputedStyle& style) {
+    return gfx::SizeF{AdjustFloat(size.width(), style),
+                      AdjustFloat(size.height(), style)};
+  }
 
   inline static void AdjustQuadMaybeExcludingCSSZoom(
       gfx::QuadF& quad,
       const LayoutObject& layout_object) {
-    float zoom;
-    if (layout_object.GetDocument().StandardizedBrowserZoomEnabled()) {
-      zoom = layout_object.GetFrame()->LayoutZoomFactor();
-    } else {
-      zoom = layout_object.StyleRef().EffectiveZoom();
-    }
+    float zoom = GetAbsoluteZoom(layout_object);
     if (zoom != 1)
       quad.Scale(1 / zoom, 1 / zoom);
   }
   inline static void AdjustRectMaybeExcludingCSSZoom(
       gfx::RectF& rect,
       const LayoutObject& layout_object) {
-    float zoom;
-    if (layout_object.GetDocument().StandardizedBrowserZoomEnabled()) {
-      zoom = layout_object.GetFrame()->LayoutZoomFactor();
-    } else {
-      zoom = layout_object.StyleRef().EffectiveZoom();
-    }
+    float zoom = GetAbsoluteZoom(layout_object);
 
     if (zoom != 1) {
       rect.Scale(1 / zoom, 1 / zoom);

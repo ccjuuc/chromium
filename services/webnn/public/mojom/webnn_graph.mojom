@@ -467,9 +467,9 @@ struct Reduce {
 // Represents an average or max pooling operation across all the elements with
 // moving window over the input tensor.
 // This struct also contains the attributes of pool2d operator, but the
-// `roundingType` and `outputSizes` array in MLPool2dOptions are not included
-// because they are used to calculate the output dimensions of pool2d in blink
-// side.
+// `outputShapeRounding` and `outputSizes` array in MLPool2dOptions are not
+// included because they are used to calculate the output dimensions of pool2d
+// in blink side.
 struct Pool2d {
   enum Kind {
     kAveragePool2d,
@@ -576,7 +576,7 @@ struct Elu {
 // Therefore, the implementation must "sanitize" `indices` before using it to
 // perform memory addressing operations on `input`.
 //
-// For some backends like DirectML, the native ML APIs have already done the
+// For some backends, the native ML APIs have already done the
 // "sanitization" so `indices` can be passed directly to the API. For other
 // backends, the specific "sanitization" relies on the browser implementation.
 //
@@ -1441,21 +1441,5 @@ struct GraphInfo {
   // which identifies the respective pending constant operand.
   map<OperandId, blink.mojom.WebNNPendingConstantToken>
       constant_operand_ids_to_handles;
-  // A map of tensors used for graph constants. The key is the id of
-  // the constant operand, while the value is a handle to the tensor containing
-  // the weights.
-  map<OperandId, blink.mojom.WebNNTensorToken>
-      id_to_constant_tensor_operand_map;
 };
 
-// WebNNGraph runs in the GPU process and is called by the renderer process to
-// execute the computational graph. Graph execution is performed by calling
-// hardware accelerated OS machine learning APIs.
-interface WebNNGraph {
-  // Called by the renderer process to carry out the computational workload of
-  // the compiled graph. The key of map is the name of input/output to identify
-  // the tensor in the graph, the value is the MLTensor containing the tensor
-  // data.
-  Dispatch(map<string, blink.mojom.WebNNTensorToken> named_inputs,
-           map<string, blink.mojom.WebNNTensorToken> named_outputs);
-};

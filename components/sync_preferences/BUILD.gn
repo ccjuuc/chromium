@@ -31,6 +31,7 @@ static_library("sync_preferences") {
   ]
 
   deps = [
+    ":features",
     "//base",
     "//components/metrics/demographics",
     "//components/policy/core/browser",
@@ -58,6 +59,7 @@ source_set("common_syncable_prefs_database") {
     "//components/browsing_data/core",
     "//components/commerce/core:pref_names",
     "//components/content_settings/core/common",
+    "//components/contextual_search:prefs",
     "//components/desktop_to_mobile_promos",
     "//components/dom_distiller/core",
     "//components/language/core/browser",
@@ -72,6 +74,7 @@ source_set("common_syncable_prefs_database") {
     "//components/safe_browsing/core/common:safe_browsing_prefs",
     "//components/saved_tab_groups/public",
     "//components/sharing_message",
+    "//components/subscription_eligibility",
     "//components/sync_preferences/cross_device_pref_tracker/prefs",
     "//components/translate/core/browser",
     "//components/variations/service",
@@ -108,6 +111,7 @@ source_set("unit_tests") {
   ]
 
   deps = [
+    ":features",
     ":sync_preferences",
     ":test_support",
     "//base/test:test_support",

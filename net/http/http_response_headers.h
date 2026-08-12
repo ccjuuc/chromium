@@ -11,10 +11,9 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <unordered_set>
 #include <vector>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/check.h"
 #include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
@@ -33,7 +32,7 @@ class Pickle;
 class PickleIterator;
 class Time;
 class TimeDelta;
-}
+}  // namespace base
 
 namespace net {
 
@@ -100,7 +99,7 @@ class NET_EXPORT HttpResponseHeaders
   // Persist options.
   typedef int PersistOptions;
   static const PersistOptions PERSIST_RAW = -1;  // Raw, unparsed headers.
-  static const PersistOptions PERSIST_ALL = 0;  // Parsed headers.
+  static const PersistOptions PERSIST_ALL = 0;   // Parsed headers.
   static const PersistOptions PERSIST_SANS_COOKIES = 1 << 0;
   static const PersistOptions PERSIST_SANS_CHALLENGES = 1 << 1;
   static const PersistOptions PERSIST_SANS_HOP_BY_HOP = 1 << 2;
@@ -123,6 +122,7 @@ class NET_EXPORT HttpResponseHeaders
   static constexpr char kCacheControl[] = "cache-control";
   static constexpr char kNoStore[] = "no-store";
   static constexpr char kNoCache[] = "no-cache";
+  static constexpr char kImmutable[] = "immutable";
   static constexpr char kMustRevalidate[] = "must-revalidate";
   static constexpr char kMaxAge[] = "max-age=";
   static constexpr char kStaleWhileRevalidate[] = "stale-while-revalidate=";
@@ -173,6 +173,10 @@ class NET_EXPORT HttpResponseHeaders
   // The options argument can be a combination of PersistOptions.
   void Persist(base::Pickle* pickle, PersistOptions options);
 
+  // Serializes this object to a byte array for Mojo serialization. Any cookie
+  // headers are stripped out of the returned string.
+  std::vector<uint8_t> SerializeForMojoIpc() const;
+
   // Performs header merging as described in 13.5.3 of RFC 2616.
   void Update(const HttpResponseHeaders& new_headers);
 
@@ -180,7 +184,7 @@ class NET_EXPORT HttpResponseHeaders
   void RemoveHeader(std::string_view name);
 
   // Removes all instances of particular headers.
-  void RemoveHeaders(const std::unordered_set<std::string>& header_names);
+  void RemoveHeaders(const std::vector<std::string>& header_names);
 
   // Removes a particular header line. The header name is compared
   // case-insensitively.
@@ -238,9 +242,7 @@ class NET_EXPORT HttpResponseHeaders
   std::string GetStatusLine() const;
 
   // Get the HTTP version of the normalized status line.
-  HttpVersion GetHttpVersion() const {
-    return http_version_;
-  }
+  HttpVersion GetHttpVersion() const { return http_version_; }
 
   // Get the HTTP status text of the normalized status line.
   std::string GetStatusText() const;
@@ -400,7 +402,7 @@ class NET_EXPORT HttpResponseHeaders
 
   // Returns the value of the Content-Length header or nullopt if there is no
   // such header in the response.
-  std::optional<base::ByteCount> GetContentLength() const;
+  std::optional<base::ByteSize> GetContentLength() const;
 
   // Returns the value of the specified header or nullopt if there is no such
   // header in the response.
@@ -421,7 +423,7 @@ class NET_EXPORT HttpResponseHeaders
   bool IsChunkEncoded() const;
 
   // Creates a Value for use with the NetLog containing the response headers.
-  base::Value::Dict NetLogParams(NetLogCaptureMode capture_mode) const;
+  base::DictValue NetLogParams(NetLogCaptureMode capture_mode) const;
 
   // Returns the HTTP response code.  This is 0 if the response code text seems
   // to exist but could not be parsed.  Otherwise, it defaults to 200 if the
@@ -446,7 +448,7 @@ class NET_EXPORT HttpResponseHeaders
  private:
   friend class base::RefCountedThreadSafe<HttpResponseHeaders>;
 
-  using HeaderSet = std::unordered_set<std::string>;
+  class HeaderSet;
 
   // The members of this structure point into raw_headers_.
   struct ParsedHeader;
@@ -461,6 +463,8 @@ class NET_EXPORT HttpResponseHeaders
   };
 
   struct CacheControlFreshnessDirectives {
+    // Whether the 'immutable' directive is present.
+    bool immutable = false;
     // Whether the 'must-revalidate' directive is present
     bool must_revalidate = false;
     // Value of the 'max-age' directive in seconds, if present
@@ -536,7 +540,7 @@ class NET_EXPORT HttpResponseHeaders
   bool HasCacheRestriction() const;
 
   // Parses Cache-Control headers to extract directives related to response
-  // freshness. Processes "must-revalidate", "max-age", and
+  // freshness. Processes "immutable", "must-revalidate", "max-age", and
   // "stale-while-revalidate" directives, which control how long a cached
   // response can be considered fresh and whether it can be used while
   // asynchronously revalidating in the background.
@@ -552,6 +556,10 @@ class NET_EXPORT HttpResponseHeaders
 
   // Shorthand for `std::string_view(raw_headers_).substr(begin, end - begin)`.
   std::string_view subrange(size_t begin, size_t end) const;
+
+  // Returns a representation of this object.
+  // The options argument can be a combination of PersistOptions.
+  std::vector<uint8_t> Serialize(PersistOptions options) const;
 
   // Returns the name/value using `raw_headers_` and indices from `parsed`.
   std::string_view header_name(const ParsedHeader& parsed) const;

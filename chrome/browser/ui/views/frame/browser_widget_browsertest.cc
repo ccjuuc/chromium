@@ -9,6 +9,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/devtools/devtools_window_testing.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/themes/custom_theme_supplier.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser.h"
@@ -20,6 +21,7 @@
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/theme_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/pref_service.h"
@@ -40,6 +42,17 @@
 #include "ui/views/views_delegate.h"
 
 namespace {
+
+class MockCustomThemeSupplier : public CustomThemeSupplier {
+ public:
+  MockCustomThemeSupplier() : CustomThemeSupplier(ThemeType::kExtension) {
+    set_extension_id("mock_extension_id");
+  }
+  bool HasCustomImage(int id) const override { return id == IDR_THEME_TOOLBAR; }
+
+ protected:
+  ~MockCustomThemeSupplier() override = default;
+};
 
 ui::mojom::BrowserColorVariant GetColorVariant(
     std::optional<ui::ColorProviderKey::SchemeVariant> scheme_variant) {
@@ -94,13 +107,13 @@ IN_PROC_BROWSER_TEST_F(BrowserWidgetTest, DevToolsHasBoundsOnOpen) {
 IN_PROC_BROWSER_TEST_F(BrowserWidgetTest, WebAppsHasBoundsOnOpen) {
   auto web_app_info = web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(
       GURL("https://example.org/"));
-  webapps::AppId app_id = web_app::test::InstallWebApp(browser()->profile(),
+  webapps::AppId app_id = web_app::test::InstallWebApp(browser()->GetProfile(),
                                                        std::move(web_app_info));
 
   Browser* app_browser =
-      web_app::LaunchWebAppBrowser(browser()->profile(), app_id);
-  ASSERT_TRUE(app_browser->is_type_app());
-  app_browser->window()->Close();
+      web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
+  ASSERT_EQ(app_browser->GetType(), BrowserWindowInterface::Type::TYPE_APP);
+  app_browser->GetWindow()->Close();
 }
 
 class MockThemeObserver : public views::WidgetObserver {
@@ -123,7 +136,7 @@ IN_PROC_BROWSER_TEST_F(BrowserWidgetTest, ChildWidgetsReceiveThemeUpdates) {
   // Create a child popup Widget for the BrowserWidget.
   const auto child_widget = std::make_unique<views::Widget>();
   views::Widget::InitParams params(
-      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+      views::Widget::InitParams::CLIENT_OWNS_WIDGET,
       views::Widget::InitParams::TYPE_POPUP);
   params.shadow_elevation = 1;
   params.shadow_type = views::Widget::InitParams::ShadowType::kDrop;
@@ -148,7 +161,7 @@ IN_PROC_BROWSER_TEST_F(BrowserWidgetTest, ChildWidgetsReceiveThemeUpdates) {
       ->UserChangedTheme(BrowserThemeChangeType::kBrowserTheme);
 }
 
-// Regression test for crbug.com/1476462. Ensures that browser theme change
+// Regression test for crbug.com/40070763. Ensures that browser theme change
 // notifications are always propagated correctly by the BrowserWidget with a
 // default frame type.
 IN_PROC_BROWSER_TEST_F(BrowserWidgetTest,
@@ -178,7 +191,7 @@ class BrowserWidgetColorProviderTest : public BrowserWidgetTest {
     // Set the default browser pref to follow system color mode.
     profile()->GetPrefs()->SetInteger(
         prefs::kBrowserColorScheme,
-        static_cast<int>(ThemeService::BrowserColorScheme::kSystem));
+        std::to_underlying(ThemeService::BrowserColorScheme::kSystem));
   }
 
  protected:
@@ -195,6 +208,11 @@ class BrowserWidgetColorProviderTest : public BrowserWidgetTest {
   // Sets the `kUserColor` pref for the `profile`.
   void SetUserColor(Profile* profile, std::optional<SkColor> user_color) {
     GetThemeService(profile)->SetUserColor(user_color);
+  }
+
+  void SwapThemeSupplier(Profile* profile,
+                         scoped_refptr<CustomThemeSupplier> theme_supplier) {
+    GetThemeService(profile)->SwapThemeSupplier(theme_supplier);
   }
 
   // Sets the `kGrayscaleThemeEnabled` pref for the `profile`.
@@ -218,7 +236,7 @@ class BrowserWidgetColorProviderTest : public BrowserWidgetTest {
         BrowserView::GetBrowserViewForBrowser(browser)->GetWidget());
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
   ui::MockOsSettingsProvider& os_settings_provider() {
     return os_settings_provider_;
   }
@@ -268,12 +286,12 @@ IN_PROC_BROWSER_TEST_F(BrowserWidgetColorProviderTest,
 
   // The incognito browser should reflect the dark color mode irrespective of
   // the current BrowserColorScheme.
-  SetBrowserColorScheme(incognito_browser->profile(),
+  SetBrowserColorScheme(incognito_browser->GetProfile(),
                         ThemeService::BrowserColorScheme::kLight);
   EXPECT_EQ(ui::ColorProviderKey::ColorMode::kDark,
             GetColorProviderKey(incognito_browser).color_mode);
 
-  SetBrowserColorScheme(incognito_browser->profile(),
+  SetBrowserColorScheme(incognito_browser->GetProfile(),
                         ThemeService::BrowserColorScheme::kDark);
   EXPECT_EQ(ui::ColorProviderKey::ColorMode::kDark,
             GetColorProviderKey(incognito_browser).color_mode);
@@ -360,7 +378,7 @@ IN_PROC_BROWSER_TEST_F(BrowserWidgetColorProviderTest,
 
   // Set the user color in both the OS and the profile pref.
   os_settings_provider().SetAccentColor(SK_ColorBLUE);
-  SetUserColor(incognito_browser->profile(), SK_ColorGREEN);
+  SetUserColor(incognito_browser->GetProfile(), SK_ColorGREEN);
   incognito_browser_frame->ThemeChanged();
 
   // The incognito browser should always set the user_color_source to grayscale.
@@ -406,13 +424,13 @@ IN_PROC_BROWSER_TEST_F(BrowserWidgetColorProviderTest,
 
   // Set the is_grayscale pref to false. The incognito browser should force the
   // is_grayscale setting to true.
-  SetIsGrayscale(incognito_browser->profile(), false);
+  SetIsGrayscale(incognito_browser->GetProfile(), false);
   EXPECT_EQ(ui::ColorProviderKey::UserColorSource::kGrayscale,
             GetColorProviderKey(incognito_browser).user_color_source);
 
   // Set the is_grayscale pref to true. The incognito browser should continue to
   // force the is_grayscale setting to true.
-  SetIsGrayscale(incognito_browser->profile(), true);
+  SetIsGrayscale(incognito_browser->GetProfile(), true);
   EXPECT_EQ(ui::ColorProviderKey::UserColorSource::kGrayscale,
             GetColorProviderKey(incognito_browser).user_color_source);
 }
@@ -513,4 +531,46 @@ IN_PROC_BROWSER_TEST_F(BrowserWidgetColorProviderTest,
 
   EXPECT_EQ(ui::ColorProviderKey::UserColorSource::kBaseline,
             GetColorProviderKey(browser()).user_color_source);
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserWidgetColorProviderTest,
+                       UserColorOverrideStripsCustomTheme) {
+  // Install an autogenerated theme so custom_theme is set.
+  ThemeService* theme_service = ThemeServiceFactory::GetForProfile(profile());
+  constexpr SkColor kAutogeneratedColor = SkColorSetRGB(100, 100, 100);
+  theme_service->BuildAutogeneratedThemeFromColor(kAutogeneratedColor);
+
+  auto key = GetColorProviderKey(browser());
+  EXPECT_NE(nullptr, key.custom_theme);
+
+  // Set user_color_override on the BrowserWidget.
+  constexpr SkColor kOverrideColor = SkColorSetRGB(50, 50, 50);
+  GetBrowserWidget(browser())->SetUserColorOverride(kOverrideColor);
+
+  key = GetColorProviderKey(browser());
+  EXPECT_EQ(nullptr, key.custom_theme);
+  EXPECT_EQ(ui::ColorProviderKey::UserColorSource::kAccent,
+            key.user_color_source);
+  EXPECT_EQ(kOverrideColor, key.user_color);
+
+  // Clear the override and verify custom_theme is restored.
+  GetBrowserWidget(browser())->SetUserColorOverride(std::nullopt);
+  key = GetColorProviderKey(browser());
+  EXPECT_NE(nullptr, key.custom_theme);
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserWidgetColorProviderTest,
+                       FocusModeThemeProviderSuppressesCustomImage) {
+  SwapThemeSupplier(profile(), base::MakeRefCounted<MockCustomThemeSupplier>());
+
+  EXPECT_TRUE(GetBrowserWidget(browser())->GetThemeProvider()->HasCustomImage(
+      IDR_THEME_TOOLBAR));
+
+  GetBrowserWidget(browser())->SetUserColorOverride(SK_ColorBLUE);
+  EXPECT_FALSE(GetBrowserWidget(browser())->GetThemeProvider()->HasCustomImage(
+      IDR_THEME_TOOLBAR));
+
+  GetBrowserWidget(browser())->SetUserColorOverride(std::nullopt);
+  EXPECT_TRUE(GetBrowserWidget(browser())->GetThemeProvider()->HasCustomImage(
+      IDR_THEME_TOOLBAR));
 }

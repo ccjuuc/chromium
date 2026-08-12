@@ -15,6 +15,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_host.h"
 #include "content/public/browser/service_worker_client_info.h"
+#include "content/public/common/child_process_id.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/network/public/cpp/single_request_url_loader_factory.h"
@@ -51,7 +52,7 @@ class CONTENT_EXPORT ServiceWorkerMainResourceLoaderInterceptor final
   CreateForWorker(
       const network::ResourceRequest& resource_request,
       const net::IsolationInfo& isolation_info,
-      int process_id,
+      ChildProcessId process_id,
       const DedicatedOrSharedWorkerToken& worker_token,
       base::WeakPtr<ServiceWorkerMainResourceHandle> navigation_handle);
 
@@ -61,6 +62,17 @@ class CONTENT_EXPORT ServiceWorkerMainResourceLoaderInterceptor final
       base::WeakPtr<ServiceWorkerMainResourceHandle> navigation_handle,
       scoped_refptr<network::SharedURLLoaderFactory>
           network_url_loader_factory);
+
+  // Creates a ServiceWorkerMainResourceLoaderInterceptor for a download
+  // request ("Save link as", "Save image as", <a download>). Returns nullptr
+  // if the interceptor could not be created for the URL.
+  // Precondition: `resource_request.trusted_params` must be set; its
+  // `isolation_info` is consumed when constructing the ServiceWorkerClient.
+  // Requires features::kServiceWorkerInterceptDownloads to be enabled.
+  static std::unique_ptr<ServiceWorkerMainResourceLoaderInterceptor>
+  CreateForDownload(
+      const network::ResourceRequest& resource_request,
+      base::WeakPtr<ServiceWorkerMainResourceHandle> navigation_handle);
 
   ServiceWorkerMainResourceLoaderInterceptor(
       const ServiceWorkerMainResourceLoaderInterceptor&) = delete;

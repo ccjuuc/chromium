@@ -4,11 +4,14 @@
 
 package org.chromium.chrome.browser.pdf;
 
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
 
 import android.app.Activity;
 import android.net.Uri;
+import android.os.Build;
 import android.view.View;
 import android.view.ViewGroup;
 
@@ -22,12 +25,20 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
+import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowLooper;
 
+import org.chromium.base.UserDataHost;
 import org.chromium.base.lifetime.Destroyable;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.ui.native_page.NativePageHost;
 import org.chromium.chrome.browser.util.ChromeFileProvider;
 import org.chromium.components.embedder_support.util.UrlConstants;
@@ -35,7 +46,11 @@ import org.chromium.ui.base.MimeTypeUtils;
 import org.chromium.ui.base.TestActivity;
 
 @RunWith(BaseRobolectricTestRunner.class)
+@EnableFeatures(ChromeFeatureList.INLINE_PDF_V2)
+@DisableFeatures(ChromeFeatureList.PDF_REUSE_FRAGMENT)
 public class PdfPageUnitTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+
     @Rule
     public ActivityScenarioRule<TestActivity> mActivityScenarioRule =
             new ActivityScenarioRule<>(TestActivity.class);
@@ -43,8 +58,11 @@ public class PdfPageUnitTest {
     @Mock private NativePageHost mMockNativePageHost;
     @Mock private Profile mMockProfile;
     @Mock private Destroyable mMarginSupplier;
+    @Mock private PdfFragmentViewTracker mPdfFragmentViewTracker;
+    @Mock private Tab mMockTab;
+
     private Activity mActivity;
-    private AutoCloseable mCloseableMocks;
+    private UserDataHost mUserDataHost;
     private PdfInfo mPdfInfo;
     private String mPdfPageUrl;
     private String mPdfPageBlobUrl;
@@ -61,7 +79,6 @@ public class PdfPageUnitTest {
 
     @Before
     public void setUp() {
-        mCloseableMocks = MockitoAnnotations.openMocks(this);
         mActivityScenarioRule
                 .getScenario()
                 .onActivity(
@@ -75,11 +92,14 @@ public class PdfPageUnitTest {
         PdfCoordinator.skipLoadPdfForTesting(true);
         mPdfPageUrl = PdfUtils.encodePdfPageUrl(PDF_LINK);
         mPdfPageBlobUrl = PdfUtils.encodePdfPageUrl(PDF_BLOB_URL);
+        mUserDataHost = new UserDataHost();
+        doReturn(mUserDataHost).when(mMockTab).getUserDataHost();
+        doReturn(mMockProfile).when(mMockTab).getProfile();
+        doReturn(TAB_ID).when(mMockTab).getId();
     }
 
     @After
     public void tearDown() throws Exception {
-        mCloseableMocks.close();
         ChromeFileProvider.setGeneratedUriForTesting(null);
         PdfCoordinator.skipLoadPdfForTesting(false);
     }
@@ -94,42 +114,99 @@ public class PdfPageUnitTest {
         PdfPage pdfPage =
                 new PdfPage(
                         mMockNativePageHost,
-                        mMockProfile,
+                        mMockTab,
                         mActivity,
                         encodedUrl,
                         mPdfInfo,
                         DEFAULT_TAB_TITLE,
-                        TAB_ID);
+                        mPdfFragmentViewTracker);
         Assert.assertNotNull(pdfPage);
         Assert.assertEquals(
                 "Pdf page host should match.", UrlConstants.PDF_HOST, pdfPage.getHost());
         Assert.assertEquals("Pdf page url should match.", encodedUrl, pdfPage.getUrl());
         Assert.assertFalse(
                 "Pdf should not be loaded when the view is not attached to window.",
-                pdfPage.mPdfCoordinator.getIsPdfLoadedForTesting());
+                ((PdfCoordinator) pdfPage.mPdfCoordinator).getIsPdfLoadedForTesting());
 
         // Simulate tab brought from background to foreground
         View view = pdfPage.mPdfCoordinator.getView();
         ViewGroup contentView = mActivity.findViewById(android.R.id.content);
         contentView.addView(view);
+        ShadowLooper.idleMainLooper();
         Assert.assertTrue(
                 "Pdf should be loaded when the view is attached to window.",
-                pdfPage.mPdfCoordinator.getIsPdfLoadedForTesting());
+                ((PdfCoordinator) pdfPage.mPdfCoordinator).getIsPdfLoadedForTesting());
         String jsonString = pdfPage.requestAssistContent(/* isWorkProfile= */ true);
         Assert.assertNotNull(
                 "Assist content should be generated when the pdf is ready to load", jsonString);
         JSONObject jsonObject = new JSONObject(jsonString);
-        JSONObject metadata = (JSONObject) jsonObject.get("file_metadata");
+        JSONObject metadata = (JSONObject) jsonObject.get(PdfCoordinator.JSON_KEY_FILE_METADATA);
         Assert.assertEquals(
                 "File uri should match.",
                 pdfPage.mPdfCoordinator.getUri().toString(),
-                metadata.get("file_uri"));
+                metadata.get(PdfCoordinator.JSON_KEY_FILE_URI));
         Assert.assertEquals(
-                "File name should match.", pdfPage.getTitle(), metadata.get("file_name"));
+                "File name should match.",
+                pdfPage.getTitle(),
+                metadata.get(PdfCoordinator.JSON_KEY_FILE_NAME));
         Assert.assertEquals(
-                "Mime type should match.", MimeTypeUtils.PDF_MIME_TYPE, metadata.get("mime_type"));
-        Assert.assertEquals("Work profile should match.", true, metadata.get("is_work_profile"));
+                "Mime type should match.",
+                MimeTypeUtils.PDF_MIME_TYPE,
+                metadata.get(PdfCoordinator.JSON_KEY_MIME_TYPE));
+        Assert.assertEquals(
+                "Work profile should match.",
+                true,
+                metadata.get(PdfCoordinator.JSON_KEY_IS_WORK_PROFILE));
         histogramExpectation.assertExpected();
+
+        Uri fileUri =
+                pdfPage.getFileUri(
+                        /* isWorkProfile= */ true, "com.google.android.googlequicksearchbox");
+        Assert.assertNotNull("File uri should be generated when the pdf is ready to load", fileUri);
+        Assert.assertEquals(
+                "File uri should match.",
+                pdfPage.mPdfCoordinator.getUri().toString(),
+                fileUri.toString());
+
+        contentView.removeView(view);
+        pdfPage.destroy();
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.INLINE_PDF_V2)
+    @Config(sdk = Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    public void testReload_RecreatesFragment() throws Exception {
+        String encodedUrl = PdfUtils.encodePdfPageUrl(CONTENT_URL);
+        PdfPage pdfPage =
+                new PdfPage(
+                        mMockNativePageHost,
+                        mMockTab,
+                        mActivity,
+                        encodedUrl,
+                        mPdfInfo,
+                        DEFAULT_TAB_TITLE,
+                        mPdfFragmentViewTracker);
+        Assert.assertNotNull(pdfPage);
+
+        // Simulate tab brought from background to foreground to load PDF
+        View view = pdfPage.mPdfCoordinator.getView();
+        ViewGroup contentView = mActivity.findViewById(android.R.id.content);
+        contentView.addView(view);
+        ShadowLooper.idleMainLooper();
+        Assert.assertTrue(
+                "Pdf should be loaded when the view is attached to window.",
+                ((PdfCoordinator) pdfPage.mPdfCoordinator).getIsPdfLoadedForTesting());
+
+        PdfCoordinator.ChromePdfViewerFragment oldFragment =
+                ((PdfCoordinator) pdfPage.mPdfCoordinator).mChromePdfViewerFragment;
+        Assert.assertNotNull("Fragment should not be null initially", oldFragment);
+
+        pdfPage.reload();
+
+        Assert.assertNotSame(
+                "Fragment should be recreated",
+                oldFragment,
+                ((PdfCoordinator) pdfPage.mPdfCoordinator).mChromePdfViewerFragment);
 
         contentView.removeView(view);
         pdfPage.destroy();
@@ -141,12 +218,12 @@ public class PdfPageUnitTest {
         PdfPage pdfPage =
                 new PdfPage(
                         mMockNativePageHost,
-                        mMockProfile,
+                        mMockTab,
                         mActivity,
                         encodedUrl,
                         mPdfInfo,
                         DEFAULT_TAB_TITLE,
-                        TAB_ID);
+                        mPdfFragmentViewTracker);
         Assert.assertNotNull(pdfPage);
         Assert.assertEquals("Pdf page title should match.", FILE_NAME, pdfPage.getTitle());
         Assert.assertEquals(
@@ -154,15 +231,16 @@ public class PdfPageUnitTest {
         Assert.assertEquals("Pdf page url should match.", encodedUrl, pdfPage.getUrl());
         Assert.assertFalse(
                 "Pdf should not be loaded when the view is not attached to window.",
-                pdfPage.mPdfCoordinator.getIsPdfLoadedForTesting());
+                ((PdfCoordinator) pdfPage.mPdfCoordinator).getIsPdfLoadedForTesting());
 
         // Simulate tab brought from background to foreground
         View view = pdfPage.mPdfCoordinator.getView();
         ViewGroup contentView = mActivity.findViewById(android.R.id.content);
         contentView.addView(view);
+        ShadowLooper.idleMainLooper();
         Assert.assertTrue(
                 "Pdf should be loaded when the view is attached to window.",
-                pdfPage.mPdfCoordinator.getIsPdfLoadedForTesting());
+                ((PdfCoordinator) pdfPage.mPdfCoordinator).getIsPdfLoadedForTesting());
         contentView.removeView(view);
     }
 
@@ -176,6 +254,76 @@ public class PdfPageUnitTest {
         testCreatePdfPage_WithPdfLink(mPdfPageBlobUrl);
     }
 
+    // Test the current NativePage for a local pdf is reused for various pdf URLs.
+    @Test
+    @EnableFeatures(ChromeFeatureList.PDF_REUSE_FRAGMENT)
+    public void testShouldReusePage_LocalPdf() throws Exception {
+        String encodedUrl = PdfUtils.encodePdfPageUrl(CONTENT_URL);
+        String currentUrl = encodedUrl;
+        String nextUrl = "content://media/external/downloads/1000000088";
+        String nextUrlExternal = PDF_LINK;
+        PdfPage pdfPage =
+                new PdfPage(
+                        mMockNativePageHost,
+                        mMockTab,
+                        mActivity,
+                        encodedUrl,
+                        mPdfInfo,
+                        DEFAULT_TAB_TITLE,
+                        mPdfFragmentViewTracker);
+        assertTrue(
+                "Entering a local pdf URL should reuse the page",
+                pdfPage.shouldReusePage(currentUrl, nextUrl, /* preferReuse= */ true));
+        assertTrue(
+                "Navigating to a local pdf should reuse the page",
+                pdfPage.shouldReusePage(currentUrl, nextUrl, /* preferReuse= */ false));
+        assertFalse(
+                "Reloading a local pdf URL on activity restart should create a new the page",
+                pdfPage.shouldReusePage(currentUrl, currentUrl, /* preferReuse= */ false));
+
+        assertTrue(
+                "Entering an external pdf URL should reuse the page",
+                pdfPage.shouldReusePage(currentUrl, nextUrlExternal, /* preferReuse= */ true));
+        assertTrue(
+                "Navigating to an external pdf should reuse the page",
+                pdfPage.shouldReusePage(currentUrl, nextUrlExternal, /* preferReuse= */ false));
+    }
+
+    // Test the current NativePage for an external pdf is reused for various pdf URLs.
+    @Test
+    @EnableFeatures(ChromeFeatureList.PDF_REUSE_FRAGMENT)
+    public void testShouldReusePage_ExternalPdf() throws Exception {
+        String encodedUrl = PdfUtils.encodePdfPageUrl(PDF_LINK);
+        String currentUrl = encodedUrl;
+        String nextUrlLocal = "content://media/external/downloads/1000000088";
+        String nextUrlExternal = "https://abc.xyz/report.pdf";
+        PdfPage pdfPage =
+                new PdfPage(
+                        mMockNativePageHost,
+                        mMockTab,
+                        mActivity,
+                        encodedUrl,
+                        mPdfInfo,
+                        DEFAULT_TAB_TITLE,
+                        mPdfFragmentViewTracker);
+        assertTrue(
+                "Entering a local pdf URL should reuse the page",
+                pdfPage.shouldReusePage(currentUrl, nextUrlLocal, /* preferReuse= */ true));
+        assertTrue(
+                "Navigating to a local pdf should reuse the page",
+                pdfPage.shouldReusePage(currentUrl, nextUrlLocal, /* preferReuse= */ false));
+        assertFalse(
+                "Reloading the current pdf URL on activity restart should create a new the page",
+                pdfPage.shouldReusePage(currentUrl, PDF_LINK, /* preferReuse= */ false));
+
+        assertTrue(
+                "Entering an external pdf URL should reuse the page",
+                pdfPage.shouldReusePage(currentUrl, nextUrlExternal, /* preferReuse= */ true));
+        assertTrue(
+                "Navigating to an external pdf should reuse the page",
+                pdfPage.shouldReusePage(currentUrl, nextUrlExternal, /* preferReuse= */ false));
+    }
+
     private void testCreatePdfPage_WithPdfLink(String pdfPageUrl) throws Exception {
         HistogramWatcher histogramExpectation =
                 HistogramWatcher.newBuilder()
@@ -184,16 +332,16 @@ public class PdfPageUnitTest {
         PdfPage pdfPage =
                 new PdfPage(
                         mMockNativePageHost,
-                        mMockProfile,
+                        mMockTab,
                         mActivity,
                         pdfPageUrl,
                         mPdfInfo,
                         DEFAULT_TAB_TITLE,
-                        TAB_ID);
+                        mPdfFragmentViewTracker);
         Assert.assertNotNull(pdfPage);
         Assert.assertFalse(
                 "Pdf should not be loaded when the download is not completed.",
-                pdfPage.mPdfCoordinator.getIsPdfLoadedForTesting());
+                ((PdfCoordinator) pdfPage.mPdfCoordinator).getIsPdfLoadedForTesting());
         Assert.assertNull(
                 "Assist content cannot be generated when the pdf is not ready to load",
                 pdfPage.requestAssistContent(/* isWorkProfile= */ false));
@@ -206,30 +354,47 @@ public class PdfPageUnitTest {
         Assert.assertEquals("Pdf page url should match.", pdfPageUrl, pdfPage.getUrl());
         Assert.assertFalse(
                 "Pdf should not be loaded when the view is not attached to window.",
-                pdfPage.mPdfCoordinator.getIsPdfLoadedForTesting());
+                ((PdfCoordinator) pdfPage.mPdfCoordinator).getIsPdfLoadedForTesting());
 
         // Simulate tab brought from background to foreground
         View view = pdfPage.mPdfCoordinator.getView();
         ViewGroup contentView = mActivity.findViewById(android.R.id.content);
         contentView.addView(view);
+        ShadowLooper.idleMainLooper();
         Assert.assertTrue(
                 "Pdf should be loaded when the view is attached to window.",
-                pdfPage.mPdfCoordinator.getIsPdfLoadedForTesting());
+                ((PdfCoordinator) pdfPage.mPdfCoordinator).getIsPdfLoadedForTesting());
         String jsonString = pdfPage.requestAssistContent(/* isWorkProfile= */ false);
         Assert.assertNotNull(
                 "Assist content should be generated when the pdf is ready to load", jsonString);
         JSONObject jsonObject = new JSONObject(jsonString);
-        JSONObject metadata = (JSONObject) jsonObject.get("file_metadata");
+        JSONObject metadata = (JSONObject) jsonObject.get(PdfCoordinator.JSON_KEY_FILE_METADATA);
         Assert.assertEquals(
                 "File uri should match.",
                 pdfPage.mPdfCoordinator.getUri().toString(),
-                metadata.get("file_uri"));
+                metadata.get(PdfCoordinator.JSON_KEY_FILE_URI));
         Assert.assertEquals(
-                "File name should match.", pdfPage.getTitle(), metadata.get("file_name"));
+                "File name should match.",
+                pdfPage.getTitle(),
+                metadata.get(PdfCoordinator.JSON_KEY_FILE_NAME));
         Assert.assertEquals(
-                "Mime type should match.", MimeTypeUtils.PDF_MIME_TYPE, metadata.get("mime_type"));
-        Assert.assertEquals("Work profile should match.", false, metadata.get("is_work_profile"));
+                "Mime type should match.",
+                MimeTypeUtils.PDF_MIME_TYPE,
+                metadata.get(PdfCoordinator.JSON_KEY_MIME_TYPE));
+        Assert.assertEquals(
+                "Work profile should match.",
+                false,
+                metadata.get(PdfCoordinator.JSON_KEY_IS_WORK_PROFILE));
         histogramExpectation.assertExpected();
+
+        Uri fileUri =
+                pdfPage.getFileUri(
+                        /* isWorkProfile= */ false, "com.google.android.googlequicksearchbox");
+        Assert.assertNotNull("File uri should be generated when the pdf is ready to load", fileUri);
+        Assert.assertEquals(
+                "File uri should match.",
+                pdfPage.mPdfCoordinator.getUri().toString(),
+                fileUri.toString());
 
         contentView.removeView(view);
         pdfPage.destroy();

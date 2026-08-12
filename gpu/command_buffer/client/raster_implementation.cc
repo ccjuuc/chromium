@@ -21,11 +21,12 @@
 #include "base/atomic_sequence_num.h"
 #include "base/atomicops.h"
 #include "base/bits.h"
+#include "base/check.h"
 #include "base/compiler_specific.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/stack_allocated.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notimplemented.h"
 #include "base/numerics/safe_math.h"
 #include "base/trace_event/memory_allocator_dump.h"
@@ -49,7 +50,6 @@
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
-#include "ui/gfx/ipc/color/gfx_param_traits.h"
 
 #if defined(GPU_CLIENT_DEBUG)
 #define GPU_CLIENT_SINGLE_THREAD_CHECK() SingleThreadChecker checker(this);
@@ -196,7 +196,7 @@ class RasterImplementation::TransferCacheSerializeHelperImpl final
   }
 
   uint32_t CreateEntryInternal(const cc::ClientTransferCacheEntry& entry,
-                               uint8_t* memory) final {
+                               base::span<uint8_t> memory) final {
     uint32_t size = entry.SerializedSize();
     // Cap the entries inlined to a specific size.
     if (size <= ri_->max_inlined_entry_size_ && ri_->raster_mapped_buffer_) {
@@ -226,32 +226,29 @@ class RasterImplementation::TransferCacheSerializeHelperImpl final
     ri_->UnlockTransferCacheEntries(transformed);
   }
 
-  // Writes the entry into |memory| if there is enough space. Returns the number
+  // Writes the entry into `memory` if there is enough space. Returns the number
   // of bytes written on success or 0u on failure due to insufficient size.
   uint32_t InlineEntry(const cc::ClientTransferCacheEntry& entry,
-                       uint8_t* memory) {
-    DCHECK(memory);
-    DCHECK(SkIsAlign4(reinterpret_cast<uintptr_t>(memory)));
+                       base::span<uint8_t> memory) {
+    DCHECK(SkIsAlign4(reinterpret_cast<uintptr_t>(memory.data())));
 
     // The memory passed from the PaintOpWriter for inlining the transfer cache
     // entry must be from the transfer buffer mapped during RasterCHROMIUM.
     const auto& buffer = ri_->raster_mapped_buffer_;
-    DCHECK(buffer->BelongsToBuffer(memory));
+    DCHECK(buffer->BelongsToBuffer(memory.data()));
 
-    DCHECK(base::CheckedNumeric<uint32_t>(
-               memory - static_cast<uint8_t*>(buffer->address()))
+    base::span<const uint8_t> buffer_span = buffer->as_byte_span();
+    DCHECK(base::CheckedNumeric<uint32_t>(memory.data() - buffer_span.data())
                .IsValid());
-    uint32_t memory_offset = memory - static_cast<uint8_t*>(buffer->address());
+    uint32_t memory_offset = memory.data() - buffer_span.data();
     uint32_t bytes_to_write = entry.SerializedSize();
-    uint32_t bytes_remaining = buffer->size() - memory_offset;
     DCHECK_GT(bytes_to_write, 0u);
 
-    if (bytes_to_write > bytes_remaining) {
+    if (bytes_to_write > memory.size()) {
       return 0u;
     }
 
-    bool succeeded = entry.Serialize(UNSAFE_TODO(
-        base::span(reinterpret_cast<uint8_t*>(memory), bytes_remaining)));
+    bool succeeded = entry.Serialize(memory.first(bytes_to_write));
     DCHECK(succeeded);
     ri_->transfer_cache_.AddTransferCacheEntry(
         entry.UnsafeType(), entry.Id(), buffer->shm_id(),
@@ -281,8 +278,7 @@ class RasterImplementation::PaintOpSerializer {
         transfer_cache_helper_(transfer_cache_helper),
         font_manager_(font_manager),
         max_op_size_hint_(max_op_size_hint) {
-    buffer_ =
-        static_cast<char*>(ri_->MapRasterCHROMIUM(initial_size, &free_bytes_));
+    buffer_ = ri_->MapRasterCHROMIUM(initial_size);
   }
 
   PaintOpSerializer(const PaintOpSerializer&) = delete;
@@ -302,9 +298,8 @@ class RasterImplementation::PaintOpSerializer {
       return 0;
     }
 
-    size_t size =
-        op.Serialize(UNSAFE_TODO(buffer_ + written_bytes_), free_bytes_,
-                     options, flags_to_serialize, current_ctm, original_ctm);
+    size_t size = op.Serialize(buffer_.subspan(written_bytes_), options,
+                               flags_to_serialize, current_ctm, original_ctm);
     size_t block_size = *max_op_size_hint_;
 
     if (!size) {
@@ -316,15 +311,13 @@ class RasterImplementation::PaintOpSerializer {
       const unsigned int max_size = ri_->transfer_buffer_->GetMaxSize();
       DCHECK_LE(block_size, max_size);
       while (true) {
-        buffer_ = static_cast<char*>(
-            ri_->MapRasterCHROMIUM(block_size, &free_bytes_));
-        if (!buffer_) {
+        buffer_ = ri_->MapRasterCHROMIUM(block_size);
+        if (buffer_.empty()) {
           return 0;
         }
 
-        size = op.Serialize(UNSAFE_TODO(buffer_ + written_bytes_), free_bytes_,
-                            options, flags_to_serialize, current_ctm,
-                            original_ctm);
+        size = op.Serialize(buffer_.subspan(written_bytes_), options,
+                            flags_to_serialize, current_ctm, original_ctm);
         if (size) {
           *max_op_size_hint_ = std::max(size, *max_op_size_hint_);
           break;
@@ -345,12 +338,11 @@ class RasterImplementation::PaintOpSerializer {
       }
     }
 
-    DCHECK_LE(size, free_bytes_);
+    DCHECK_LE(size, buffer_.size() - written_bytes_);
     DCHECK(base::CheckAdd<uint32_t>(written_bytes_, size).IsValid());
 
     ri_->paint_cache_->FinalizePendingEntries();
     written_bytes_ += size;
-    free_bytes_ -= size;
     return size;
   }
 
@@ -393,17 +385,16 @@ class RasterImplementation::PaintOpSerializer {
     written_bytes_ = 0;
   }
 
-  bool valid() const { return !!buffer_; }
+  bool valid() const { return !buffer_.empty(); }
 
  private:
   RasterImplementation* const ri_ = nullptr;
-  char* buffer_ = nullptr;
+  base::span<uint8_t> buffer_;
   cc::DecodeStashingImageProvider* const stashing_image_provider_ = nullptr;
   TransferCacheSerializeHelperImpl* const transfer_cache_helper_ = nullptr;
   ClientFontManager* font_manager_ = nullptr;
 
   uint32_t written_bytes_ = 0;
-  uint32_t free_bytes_ = 0;
 
   size_t* max_op_size_hint_ = nullptr;
 };
@@ -1071,21 +1062,18 @@ void RasterImplementation::GetQueryObjectuivEXT(GLuint id,
   }
 }
 
-void* RasterImplementation::MapRasterCHROMIUM(uint32_t size,
-                                              uint32_t* size_allocated) {
-  *size_allocated = 0u;
+base::span<uint8_t> RasterImplementation::MapRasterCHROMIUM(uint32_t size) {
   if (raster_mapped_buffer_) {
     SetGLError(GL_INVALID_OPERATION, "glMapRasterCHROMIUM", "already mapped");
-    return nullptr;
+    return {};
   }
   raster_mapped_buffer_.emplace(size, helper_, transfer_buffer_);
   if (!raster_mapped_buffer_->valid()) {
     SetGLError(GL_INVALID_OPERATION, "glMapRasterCHROMIUM", "size too big");
     raster_mapped_buffer_ = std::nullopt;
-    return nullptr;
+    return {};
   }
-  *size_allocated = raster_mapped_buffer_->size();
-  return raster_mapped_buffer_->address();
+  return raster_mapped_buffer_->as_byte_span();
 }
 
 base::span<uint8_t> RasterImplementation::MapFontBuffer(uint32_t size) {
@@ -1271,6 +1259,11 @@ void RasterImplementation::WritePixels(const gpu::Mailbox& dest_mailbox,
 void RasterImplementation::WritePixelsYUV(const gpu::Mailbox& dest_mailbox,
                                           const SkYUVAPixmaps& src_yuv_pixmap) {
   TRACE_EVENT0("gpu", "RasterImplementation::WritePixelsYUV");
+  if (!capabilities().texture_rg) {
+    SetGLError(GL_INVALID_OPERATION, "WritePixelsYUV", "unsupported");
+    return;
+  }
+
   const auto& src_yuv_info = src_yuv_pixmap.yuvaInfo();
   const auto& src_yuv_pixmap_info = src_yuv_pixmap.pixmapsInfo();
   const std::array<SkPixmap, SkYUVAInfo::kMaxPlanes>& src_sk_pixmaps =
@@ -1356,7 +1349,8 @@ void RasterImplementation::RasterCHROMIUM(
     const gfx::Vector2dF& post_scale,
     bool requires_clear,
     const ScrollOffsetMap* raster_inducing_scroll_offsets,
-    size_t* max_op_size_hint) {
+    size_t* max_op_size_hint,
+    base::RepeatingCallback<void(SkCanvas*, uint32_t)> custom_raster_callback) {
   TRACE_EVENT1("gpu", "RasterImplementation::RasterCHROMIUM",
                "raster_chromium_id", ++raster_chromium_id_);
   DCHECK(max_op_size_hint);
@@ -1401,15 +1395,17 @@ void RasterImplementation::RasterCHROMIUM(
                                   &transfer_cache_serialize_helper,
                                   &font_manager_, max_op_size_hint);
 
-  cc::PaintOpBufferSerializer serializer(
-      PaintOpSerializer::Serialize, &op_serializer,
-      cc::PaintOp::SerializeOptions(
-          &stashing_image_provider, &transfer_cache_serialize_helper,
-          GetOrCreatePaintCache(), font_manager_.strike_server(),
-          raster_properties_->color_space, &skottie_serialization_history_,
-          raster_properties_->can_use_lcd_text,
-          capabilities().context_supports_distance_field_text,
-          capabilities().max_texture_size, raster_inducing_scroll_offsets));
+  cc::PaintOp::SerializeOptions options(
+      &stashing_image_provider, &transfer_cache_serialize_helper,
+      GetOrCreatePaintCache(), font_manager_.strike_server(),
+      raster_properties_->color_space, &skottie_serialization_history_,
+      raster_properties_->can_use_lcd_text,
+      capabilities().context_supports_distance_field_text,
+      capabilities().max_texture_size, raster_inducing_scroll_offsets);
+  options.custom_callback = custom_raster_callback;
+
+  cc::PaintOpBufferSerializer serializer(PaintOpSerializer::Serialize,
+                                         &op_serializer, options);
   serializer.Serialize(list->paint_op_buffer(), &temp_raster_offsets_,
                        preamble);
   // TODO(piman): raise error if !serializer.valid()?
@@ -1643,7 +1639,7 @@ bool RasterImplementation::ReadbackImagePixels(
 void RasterImplementation::ReadbackYUVPixelsAsync(
     const gpu::Mailbox& source_mailbox,
     GLenum source_target,
-    const gfx::Size& source_size,
+    const gfx::Rect& source_rect,
     const gfx::Rect& output_rect,
     bool vertically_flip_texture,
     int y_plane_row_stride_bytes,
@@ -1652,7 +1648,6 @@ void RasterImplementation::ReadbackYUVPixelsAsync(
     base::span<uint8_t> u_plane_data,
     int v_plane_row_stride_bytes,
     base::span<uint8_t> v_plane_data,
-    const gfx::Point& paste_location,
     base::OnceCallback<void()> release_mailbox,
     base::OnceCallback<void(bool)> readback_done) {
   TRACE_EVENT0("gpu", "RasterImplementation::ReadbackYUVPixelsAsync");
@@ -1725,9 +1720,11 @@ void RasterImplementation::ReadbackYUVPixelsAsync(
   GenQueriesEXT(1, &query);
   BeginQueryEXT(GL_COMMANDS_ISSUED_CHROMIUM, query);
   helper_->ReadbackYUVImagePixelsINTERNALImmediate(
-      output_rect.width(), output_rect.height(), shm_id, shm_offset, y_offset,
-      y_plane_row_stride_bytes, u_offset, u_plane_row_stride_bytes, v_offset,
-      v_plane_row_stride_bytes, source_mailbox.name);
+      source_rect.x(), source_rect.y(), source_rect.width(),
+      source_rect.height(), output_rect.width(), output_rect.height(), shm_id,
+      shm_offset, y_offset, y_plane_row_stride_bytes, u_offset,
+      u_plane_row_stride_bytes, v_offset, v_plane_row_stride_bytes,
+      source_mailbox.name);
   EndQueryEXT(GL_COMMANDS_ISSUED_CHROMIUM);
 
   auto request = std::make_unique<AsyncYUVReadbackRequest>(

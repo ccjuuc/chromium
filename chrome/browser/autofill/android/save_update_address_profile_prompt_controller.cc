@@ -4,10 +4,10 @@
 
 #include "chrome/browser/autofill/android/save_update_address_profile_prompt_controller.h"
 
+#include <algorithm>
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/notimplemented.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
@@ -38,7 +38,7 @@ namespace autofill {
 SaveUpdateAddressProfilePromptController::
     SaveUpdateAddressProfilePromptController(
         std::unique_ptr<SaveUpdateAddressProfilePromptView> prompt_view,
-        autofill::PersonalDataManager* personal_data,
+        PersonalDataManager* personal_data,
         const AutofillProfile& profile,
         const AutofillProfile* original_profile,
         SaveUpdateAddressProfilePromptMode prompt_mode,
@@ -55,6 +55,10 @@ SaveUpdateAddressProfilePromptController::
     const std::string& locale = g_browser_process->GetApplicationLocale();
     differences_for_ui_ =
         GetProfileDifferenceForUi(original_profile_.value(), profile_, locale);
+    // TODO(crbug.com/481234059): Convert this to CHECK after investigation.
+    // Based of hypothesis in crbug.com/477044258, `GetProfileDifferenceForUi`
+    // is returning empty.
+    DUMP_WILL_BE_CHECK(!differences_for_ui_.empty());
     std::tie(old_diff_, new_diff_) = GetDiffFromOldToNewProfile();
   }
   DCHECK(prompt_view_);
@@ -90,24 +94,20 @@ std::u16string SaveUpdateAddressProfilePromptController::GetTitle() const {
             ? IDS_AUTOFILL_ACCOUNT_MIGRATE_ADDRESS_PROMPT_TITLE
             : IDS_AUTOFILL_SAVE_ADDRESS_PROMPT_TITLE);
   }
-  if (base::FeatureList::IsEnabled(
-          features::kAutofillEnableSupportForHomeAndWork)) {
-    // A new profile is created when extending a Home & Work profile, so the
-    // title should reflect this.
-    if (original_profile_->IsHomeAndWorkProfile()) {
-      return l10n_util::GetStringUTF16(
-          IDS_AUTOFILL_SAVE_ADDRESS_WITH_MORE_INFO_ADDRESS_PROMPT_TITLE);
-    }
-    // If there are no old values to replace, inform user that a new data
-    // point is being added to the profile.
-    if (old_diff_.empty()) {
-      return l10n_util::GetStringUTF16(
-          IDS_AUTOFILL_ADD_NEW_INFO_ADDRESS_PROMPT_TITLE);
-    }
-    // If the an existing value from profile is changed, inform user that a
-    // profile will be updated.
-    return l10n_util::GetStringUTF16(IDS_AUTOFILL_UPDATE_ADDRESS_PROMPT_TITLE);
+  // A new profile is created when extending a Home & Work profile, so the
+  // title should reflect this.
+  if (original_profile_->IsHomeAndWorkProfile()) {
+    return l10n_util::GetStringUTF16(
+        IDS_AUTOFILL_SAVE_ADDRESS_WITH_MORE_INFO_ADDRESS_PROMPT_TITLE);
   }
+  // If there are no old values to replace, inform user that a new data
+  // point is being added to the profile.
+  if (old_diff_.empty()) {
+    return l10n_util::GetStringUTF16(
+        IDS_AUTOFILL_ADD_NEW_INFO_ADDRESS_PROMPT_TITLE);
+  }
+  // If the an existing value from profile is changed, inform user that a
+  // profile will be updated.
   return l10n_util::GetStringUTF16(IDS_AUTOFILL_UPDATE_ADDRESS_PROMPT_TITLE);
 }
 
@@ -127,13 +127,9 @@ std::u16string SaveUpdateAddressProfilePromptController::GetRecordTypeNotice(
 
   // Notify user that their address is saved only in Chrome and can be migrated
   // to their Google account.
-  // TODO(crbug.com/40066949): Simplify once ConsentLevel::kSync is not used
-  // anymore, and thus IsSyncFeatureEnabledForAutofill() will always be false.
   if (IsMigrationToAccount()) {
     return l10n_util::GetStringFUTF16(
-        personal_data_->address_data_manager().IsSyncFeatureEnabledForAutofill()
-            ? IDS_AUTOFILL_SYNCABLE_PROFILE_MIGRATION_PROMPT_NOTICE
-            : IDS_AUTOFILL_LOCAL_PROFILE_MIGRATION_PROMPT_NOTICE,
+        IDS_AUTOFILL_LOCAL_PROFILE_MIGRATION_PROMPT_NOTICE,
         base::UTF8ToUTF16(account->email));
   }
 
@@ -146,27 +142,24 @@ std::u16string SaveUpdateAddressProfilePromptController::GetRecordTypeNotice(
   }
   // Notify user that their address has already been saved in their Google
   // account and is only going to be updated there.
-  if (base::FeatureList::IsEnabled(
-          features::kAutofillEnableSupportForHomeAndWork)) {
-    switch (original_profile_->record_type()) {
-      case AutofillProfile::RecordType::kAccountHome:
-        return l10n_util::GetStringFUTF16(
-            IDS_AUTOFILL_ADDRESS_HOME_RECORD_TYPE_NOTICE,
-            base::UTF8ToUTF16(account->email));
-      case AutofillProfile::RecordType::kAccountWork:
-        return l10n_util::GetStringFUTF16(
-            IDS_AUTOFILL_ADDRESS_WORK_RECORD_TYPE_NOTICE,
-            base::UTF8ToUTF16(account->email));
-      case AutofillProfile::RecordType::kAccount:
-        return l10n_util::GetStringFUTF16(
-            IDS_AUTOFILL_ADDRESS_ALREADY_SAVED_IN_ACCOUNT_RECORD_TYPE_NOTICE,
-            base::UTF8ToUTF16(account->email));
-      case AutofillProfile::RecordType::kAccountNameEmail:
-        NOTIMPLEMENTED();
-        break;
-      case AutofillProfile::RecordType::kLocalOrSyncable:
-        NOTREACHED();
-    }
+  switch (original_profile_->record_type()) {
+    case AutofillProfile::RecordType::kAccountHome:
+      return l10n_util::GetStringFUTF16(
+          IDS_AUTOFILL_ADDRESS_HOME_RECORD_TYPE_NOTICE,
+          base::UTF8ToUTF16(account->email));
+    case AutofillProfile::RecordType::kAccountWork:
+      return l10n_util::GetStringFUTF16(
+          IDS_AUTOFILL_ADDRESS_WORK_RECORD_TYPE_NOTICE,
+          base::UTF8ToUTF16(account->email));
+    case AutofillProfile::RecordType::kAccount:
+      return l10n_util::GetStringFUTF16(
+          IDS_AUTOFILL_ADDRESS_ALREADY_SAVED_IN_ACCOUNT_RECORD_TYPE_NOTICE,
+          base::UTF8ToUTF16(account->email));
+    case AutofillProfile::RecordType::kAccountNameEmail:
+      NOTIMPLEMENTED();
+      break;
+    case AutofillProfile::RecordType::kLocalOrSyncable:
+      NOTREACHED();
   }
   return l10n_util::GetStringFUTF16(
       IDS_AUTOFILL_ADDRESS_ALREADY_SAVED_IN_ACCOUNT_RECORD_TYPE_NOTICE,
@@ -181,18 +174,13 @@ std::u16string SaveUpdateAddressProfilePromptController::GetPositiveButtonText()
             ? IDS_AUTOFILL_SAVE_ADDRESS_PROMPT_MIGRATION_OK_BUTTON_LABEL
             : IDS_AUTOFILL_SAVE_ADDRESS_PROMPT_OK_BUTTON_LABEL);
   }
-  if (base::FeatureList::IsEnabled(
-          features::kAutofillEnableSupportForHomeAndWork)) {
-    if (original_profile_->IsHomeAndWorkProfile()) {
-      return l10n_util::GetStringUTF16(
-          IDS_AUTOFILL_SAVE_ADDRESS_PROMPT_OK_BUTTON_LABEL);
-    }
-    if (old_diff_.empty()) {
-      return l10n_util::GetStringUTF16(
-          IDS_AUTOFILL_UPDATE_ADDRESS_ADD_NEW_INFO_PROMPT_OK_BUTTON_LABEL);
-    }
+  if (original_profile_->IsHomeAndWorkProfile()) {
     return l10n_util::GetStringUTF16(
-        IDS_AUTOFILL_UPDATE_ADDRESS_PROMPT_OK_BUTTON_LABEL);
+        IDS_AUTOFILL_SAVE_ADDRESS_PROMPT_OK_BUTTON_LABEL);
+  }
+  if (old_diff_.empty()) {
+    return l10n_util::GetStringUTF16(
+        IDS_AUTOFILL_UPDATE_ADDRESS_ADD_NEW_INFO_PROMPT_OK_BUTTON_LABEL);
   }
   return l10n_util::GetStringUTF16(
       IDS_AUTOFILL_UPDATE_ADDRESS_PROMPT_OK_BUTTON_LABEL);
@@ -240,7 +228,7 @@ std::u16string SaveUpdateAddressProfilePromptController::GetPhoneNumber()
 std::u16string SaveUpdateAddressProfilePromptController::GetSubtitle() const {
   DCHECK(original_profile_);
   const std::string locale = g_browser_process->GetApplicationLocale();
-  bool address_updated = base::Contains(
+  bool address_updated = std::ranges::contains(
       differences_for_ui_, ADDRESS_HOME_ADDRESS, &ProfileValueDifference::type);
   return GetProfileDescription(
       original_profile_.value(), locale,

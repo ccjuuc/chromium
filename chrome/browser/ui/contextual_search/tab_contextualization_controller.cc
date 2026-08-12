@@ -8,14 +8,15 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/thread_pool.h"
-#include "chrome/browser/page_content_annotations/page_content_extraction_service.h"
 #include "chrome/browser/page_content_annotations/page_content_extraction_service_factory.h"
-#include "chrome/browser/page_content_annotations/page_content_extraction_types.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/lens/lens_features.h"
 #include "components/optimization_guide/content/browser/page_context_eligibility.h"
+#include "components/page_content_annotations/content/page_content_extraction_service.h"
+#include "components/page_content_annotations/core/page_content_extraction_types.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -79,6 +80,24 @@ void TabContextualizationController::PrimaryPageChanged(content::Page& page) {
   is_page_context_eligible_ = false;
 }
 
+void TabContextualizationController::DidFinishLoad(
+    content::RenderFrameHost* render_frame_host,
+    const GURL& validated_url) {
+  if (render_frame_host && render_frame_host->IsInPrimaryMainFrame()) {
+    FlushPendingPageContextCallbacks();
+  }
+}
+
+void TabContextualizationController::FlushPendingPageContextCallbacks() {
+  std::vector<GetPageContextCallback> callbacks =
+      std::move(pending_page_context_callbacks_);
+  pending_page_context_callbacks_.clear();
+
+  for (auto& callback : callbacks) {
+    FetchPageContextInternal(std::move(callback));
+  }
+}
+
 void TabContextualizationController::OnEligibilityChecked(
     bool is_page_context_eligible,
     optimization_guide::AIPageContentResultOrError apc) {
@@ -103,7 +122,10 @@ void TabContextualizationController::GetAnnotatedPageContent(
       optimization_guide::DefaultAIPageContentOptions(
           /*on_critical_path=*/true);
   ai_page_content_options->max_meta_elements = 20;
-  ai_page_content_options->include_same_site_only = true;
+  ai_page_content_options->include_same_site_only =
+      base::FeatureList::IsEnabled(
+          lens::features::
+              kLensRestrictAnnotatedPageContentToSameSiteFramesForNextQueries);
   optimization_guide::GetAIPageContent(tab_->GetContents(),
                                        std::move(ai_page_content_options),
                                        std::move(callback));
@@ -124,9 +146,7 @@ void TabContextualizationController::OnAnnotatedPageContentReceived(
   }
 
   std::move(callback).Run(
-      optimization_guide::IsPageContextEligible(
-          tab_url.GetHost(), tab_url.GetPath(),
-          std::move(frame_metadata_structs), page_context_eligibility_),
+      IsPageContextEligible(tab_url, std::move(frame_metadata_structs)),
       std::move(result));
 }
 
@@ -176,14 +196,10 @@ bool TabContextualizationController::GetInitialPageContextEligibility() {
     return false;
   }
 
-  std::optional<page_content_annotations::ExtractedPageContentResult>
-      extracted_page_content_result =
-          page_content_extraction_service
-              ->GetExtractedPageContentAndEligibilityForPage(
-                  web_contents->GetPrimaryPage());
-
-  return !extracted_page_content_result ||
-         extracted_page_content_result->is_eligible_for_server_upload;
+  std::optional<bool> server_upload_eligibility =
+      page_content_extraction_service->GetServerUploadEligibilityForPage(
+          web_contents->GetPrimaryPage());
+  return server_upload_eligibility.value_or(true);
 }
 
 bool TabContextualizationController::GetCurrentPageContextEligibility() {
@@ -192,17 +208,39 @@ bool TabContextualizationController::GetCurrentPageContextEligibility() {
 
 void TabContextualizationController::GetPageContext(
     GetPageContextCallback callback) {
-  auto contextual_input_data = std::make_unique<lens::ContextualInputData>();
-
-  // TODO(crbug.com/439595898): Get contextual input bytes using APC. Also,
-  // populate the mime type, tab eligibility, and pdf current page.
-  contextual_input_data->context_input = {};
+  // If the tab doesn't have an active renderer (e.g. tabs after restart on
+  // android), or if the tab was discarded, first load the tab on-demand.
+  tab_->LoadIfNeeded();
 
   content::WebContents* web_contents = tab_->GetContents();
   if (!web_contents) {
     std::move(callback).Run(nullptr);
     return;
   }
+
+  Observe(web_contents);
+
+  if (web_contents->IsLoading()) {
+    pending_page_context_callbacks_.push_back(std::move(callback));
+    return;
+  }
+
+  FetchPageContextInternal(std::move(callback));
+}
+
+void TabContextualizationController::FetchPageContextInternal(
+    GetPageContextCallback callback) {
+  content::WebContents* web_contents = tab_->GetContents();
+  if (!web_contents) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
+
+  auto contextual_input_data = std::make_unique<lens::ContextualInputData>();
+
+  // TODO(crbug.com/439595898): Get contextual input bytes using APC. Also,
+  // populate the mime type, tab eligibility, and pdf current page.
+  contextual_input_data->context_input = {};
 
   contextual_input_data->tab_session_id =
       sessions::SessionTabHelper::IdForTab(web_contents);
@@ -213,7 +251,7 @@ void TabContextualizationController::GetPageContext(
 #if BUILDFLAG(ENABLE_PDF)
   // Capture the PDF bytes if the PDF helper exists.
   pdf::PDFDocumentHelper* pdf_helper =
-      pdf::PDFDocumentHelper::MaybeGetForWebContents(web_contents);
+      pdf::PDFDocumentHelper::MaybeGetForWebContents(*web_contents);
   if (pdf_helper) {
     // Fetch the PDF bytes then run the callback.
     pdf_helper->GetPdfBytes(
@@ -258,6 +296,15 @@ void TabContextualizationController::OnPdfBytesReceived(
     return;
   }
 
+  // Check if the PDF is context eligible. This is required since all files
+  // are marked context ineligible until their data is received. This is usually
+  // done after the annotated page content is received, but since PDFs don't go
+  // through that codepath, eligibility must be checked here. This matches the
+  // behavior of the launched Lens flow.
+  const auto& tab_url = web_contents->GetLastCommittedURL();
+  data->is_page_context_eligible =
+      IsPageContextEligible(tab_url, /*frame_metadata=*/{});
+
   base::span<const uint8_t> file_data_span = base::span(bytes);
   std::vector<uint8_t> file_data_vector(file_data_span.begin(),
                                         file_data_span.end());
@@ -266,7 +313,7 @@ void TabContextualizationController::OnPdfBytesReceived(
 
   // Get the most visible page index if the PDF helper exists.
   pdf::PDFDocumentHelper* pdf_helper =
-      pdf::PDFDocumentHelper::MaybeGetForWebContents(web_contents);
+      pdf::PDFDocumentHelper::MaybeGetForWebContents(*web_contents);
   if (pdf_helper) {
     // TODO(crbug.com/443743308): Parallelize the PDF page index fetch with the
     // PDF bytes fetch.
@@ -333,7 +380,7 @@ void TabContextualizationController::CaptureScreenshot(
       std::move(callback));
 
   view->CopyFromSurface(
-      /*src_rect=*/gfx::Rect(), /*output_size=*/gfx::Size(),
+      /*src_rect=*/gfx::Rect(), /*output_size=*/gfx::Size(), base::TimeDelta(),
       base::BindPostTask(base::SequencedTaskRunner::GetCurrentDefault(),
                          std::move(callback_wrapper)));
 }
@@ -373,6 +420,14 @@ void TabContextualizationController::AddScreenshotToContextDataAndContinue(
   }
 
   std::move(callback).Run(std::move(data));
+}
+
+bool TabContextualizationController::IsPageContextEligible(
+    const GURL& url,
+    const std::vector<optimization_guide::FrameMetadata>& frame_metadata) {
+  return optimization_guide::IsPageContextEligible(url.GetHost(), url.GetPath(),
+                                                   frame_metadata,
+                                                   page_context_eligibility_);
 }
 
 }  // namespace lens

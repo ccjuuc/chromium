@@ -4,6 +4,7 @@
 
 #include <android/api-level.h>
 #include <android/binder_ibinder.h>
+#include <dlfcn.h>
 #include <pthread.h>
 #include <signal.h>
 
@@ -18,22 +19,25 @@
 #include "base/android/device_info.h"
 #include "base/android/library_loader/library_loader_hooks.h"
 #include "base/command_line.h"
+#include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/memory_pressure_listener.h"
+#include "base/memory/memory_pressure_listener_registry.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/process/process_handle.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/condition_variable.h"
 #include "base/synchronization/lock.h"
 #include "base/task/single_thread_task_runner.h"
-#include "base/task/thread_pool.h"
-#include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/threading/simple_thread.h"
 #include "base/trace_event/trace_event.h"
 #include "base/version_info/android/channel_getter.h"
+#include "build/build_config.h"
 #include "content/app/android/content_main_android.h"
 #include "content/common/shared_file_util.h"
 #include "content/public/app/content_main.h"
@@ -66,8 +70,7 @@ class ChildProcessService : public BnChildProcessService,
   ScopedAStatus onMemoryPressure(int32_t pressure) override;
   ScopedAStatus onSelfFreeze() override;
   ScopedAStatus dumpProcessStack() override;
-  ScopedAStatus getAppInfoStrings(
-      std::vector<std::string>* _aidl_return) override;
+  ScopedAStatus getSourceDir(std::string* _aidl_return) override;
   ScopedAStatus consumeRelroLibInfo(
       const std::optional<IRelroLibInfo>& in_libInfo) override;
 
@@ -151,6 +154,9 @@ void ChildProcessService::Run() {
     parent_process = parent_process_;
   }
 
+  std::vector<std::string> command_line_copy = args->commandLine;
+  base::android::CommandLineInit(command_line_copy);
+
   base::android::LibraryProcessType process_type =
       static_cast<base::android::LibraryProcessType>(args->libraryProcessType);
   if (!NativeInitializationHook(process_type)) {
@@ -159,9 +165,8 @@ void ChildProcessService::Run() {
   SetBuildInfo(*args);
   InitChildProcessCommon(args->cpuCount, args->cpuFeatures);
 
-  std::vector<std::string> command_line_copy = args->commandLine;
-  base::android::CommandLineInit(command_line_copy);
   base::android::LibraryLoaded(process_type);
+  base::UmaHistogramBoolean("Android.ChildProcess.JavalessStarted", true);
 
   RegisterFileDescriptors(*args);
   StartContentMain(false);
@@ -172,8 +177,18 @@ void ChildProcessService::Run() {
 }
 
 void ChildProcessService::SpawnMainThread() {
-  thread_ =
-      std::make_unique<base::DelegateSimpleThread>(this, "CrRendererMain");
+  // LINT.IfChange
+#if defined(ARCH_CPU_64_BITS)
+  size_t stack_size = 8 * 1024 * 1024;
+#else
+  size_t stack_size = 4 * 1024 * 1024;
+#endif
+  // LINT.ThenChange(//base/android/java/src/org/chromium/base/process_launcher/ChildProcessService.java)
+  // Set up stack size to match Java.
+  base::SimpleThread::Options options;
+  options.stack_size = stack_size;
+  thread_ = std::make_unique<base::DelegateSimpleThread>(this, "CrRendererMain",
+                                                         options);
   thread_->StartAsync();
 }
 
@@ -234,19 +249,17 @@ ScopedAStatus ChildProcessService::forceKill() {
 }
 
 ScopedAStatus ChildProcessService::onMemoryPressure(int32_t pressure) {
-  // Need to make sure the threadpool exists. If it doesn't exist, that means we
-  // are probably before starting the renderer main thread, and notifying memory
-  // pressure likely won't work either.
-  if (base::ThreadPoolInstance::Get()) {
+  // Make sure the renderer main thread has been initialized. If it hasn't, it's
+  // probably too early during startup, and notifying memory pressure likely
+  // won't work either.
+  if (base::SingleThreadTaskRunner::HasMainThreadDefault()) {
     // This logic doesn't match the Java equivalent. In the Java implementation,
     // we assume that the ChildProcessService is getting memory pressure signals
     // from the browser process (this function), and ComponentCallbacks2. We
     // only have signals from the browser process available to a javaless
     // renderer, so we trust what it sends entirely.
-    base::ThreadPool::PostTask(
-        FROM_HERE,
-        base::BindOnce(&base::MemoryPressureListener::NotifyMemoryPressure,
-                       static_cast<base::MemoryPressureLevel>(pressure)));
+    base::MemoryPressureListenerRegistry::NotifyMemoryPressureFromAnyThread(
+        static_cast<base::MemoryPressureLevel>(pressure));
   }
   return ScopedAStatus::ok();
 }
@@ -261,11 +274,28 @@ ScopedAStatus ChildProcessService::dumpProcessStack() {
   return ScopedAStatus::ok();
 }
 
-ScopedAStatus ChildProcessService::getAppInfoStrings(
-    std::vector<std::string>* _aidl_return) {
-  // Not implemented yet - unsure if this check can work with Javaless
-  // renderers, as getting the sourceDir or sharedLibraryFiles are things that
-  // aren't exposed to the NDK.
+ScopedAStatus ChildProcessService::getSourceDir(std::string* _aidl_return) {
+  Dl_info dl_info;
+  // Nothing special about SetBuildInfo, just a function already available in
+  // this file that is is not a member function (which would make dladdr a bit
+  // more annoying to use).
+  if (dladdr(reinterpret_cast<const void*>(&SetBuildInfo), &dl_info) == 0 ||
+      !dl_info.dli_fname) {
+    LOG(ERROR) << "Failed to obtain sourceDir via dladdr";
+    return ScopedAStatus::ok();
+  }
+
+  std::string_view fname(dl_info.dli_fname);
+  // Android's dynamic linker may return paths like
+  // "/data/app/.../base.apk!/lib/arm64-v8a/libchrome.so" or
+  // "/data/app/.../base.apk". Truncate after ".apk" to match Java's
+  // ApplicationInfo.sourceDir.
+  size_t ext_pos = fname.find(".apk");
+  if (ext_pos != std::string_view::npos) {
+    *_aidl_return = std::string(fname.substr(0, ext_pos + 4));
+  } else {
+    *_aidl_return = std::string(fname);
+  }
   return ScopedAStatus::ok();
 }
 
@@ -332,4 +362,13 @@ EXPORT_TO_ANDROID void NativeChildProcessService_onCreate(
   ANativeService_setOnUnbindCallback(service, &content::onUnbind);
   ANativeService_setOnRebindCallback(service, &content::onRebind);
   ANativeService_setOnDestroyCallback(service, &content::onDestroy);
+}
+
+// This is a hook for libraries to use who might want something happening very
+// early on process start. Note that JNI_OnLoad does not work with javaless
+// renderers, so often things you might put there should go into a override of
+// this instead.
+__attribute__((weak)) bool NativeInitializationHook(
+    base::android::LibraryProcessType library_process_type) {
+  return false;
 }

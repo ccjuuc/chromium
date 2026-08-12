@@ -19,7 +19,6 @@
 #include "base/types/id_type.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
-#include "chrome/browser/apps/app_service/launch_result_type.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_install_manager.h"
@@ -34,6 +33,7 @@
 #include "components/services/app_service/public/cpp/icon_types.h"
 #include "components/services/app_service/public/cpp/intent.h"
 #include "components/services/app_service/public/cpp/intent_filter.h"
+#include "components/services/app_service/public/cpp/launch_result.h"
 #include "components/services/app_service/public/cpp/permission.h"
 #include "components/webapps/common/web_app_id.h"
 #include "ui/gfx/native_ui_types.h"
@@ -46,9 +46,11 @@
 #include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
 #include "chrome/browser/notifications/notification_common.h"
 #include "chrome/browser/notifications/notification_display_service.h"
+#include "components/services/app_service/public/cpp/app_registry_cache.h"
+#include "components/services/app_service/public/cpp/preferred_apps_list_handle.h"
 #endif
 
-class Browser;
+class BrowserWindowInterface;
 class ContentSettingsPattern;
 class ContentSettingsTypeSet;
 class Profile;
@@ -116,6 +118,8 @@ class WebAppPublisherHelper : public WebAppRegistrarObserver,
 #if BUILDFLAG(IS_CHROMEOS)
                               public NotificationDisplayService::Observer,
                               public MediaStreamCaptureIndicator::Observer,
+                              public apps::PreferredAppsListHandle::Observer,
+                              public apps::AppRegistryCache::Observer,
 #endif
                               public content_settings::Observer {
  public:
@@ -307,6 +311,10 @@ class WebAppPublisherHelper : public WebAppRegistrarObserver,
   void OnWebAppUninstalled(
       const webapps::AppId& app_id,
       webapps::WebappUninstallSource uninstall_source) override;
+  // Dynamically update the AppService on an app being migrated from being the
+  // `source_app` to being the `destination_app`.
+  void OnWebAppMigrated(const webapps::AppId& source_app_id,
+                        const webapps::AppId& target_app_id) override;
   void OnWebAppInstallManagerDestroyed() override;
 
   // WebAppRegistrarObserver:
@@ -316,10 +324,12 @@ class WebAppPublisherHelper : public WebAppRegistrarObserver,
       const webapps::AppId& app_id) override;
   void OnWebAppLastLaunchTimeChanged(
       const std::string& app_id,
-      const base::Time& last_launch_time) override;
+      const std::optional<base::Time>& last_launch_time) override;
   void OnWebAppUserDisplayModeChanged(
       const webapps::AppId& app_id,
       mojom::UserDisplayMode user_display_mode) override;
+  void OnWebAppEffectiveScopeChanged(const webapps::AppId& app_id,
+                                     const WebAppScope& new_scope) override;
   void OnWebAppRunOnOsLoginModeChanged(
       const webapps::AppId& app_id,
       RunOnOsLoginMode run_on_os_login_mode) override;
@@ -345,6 +355,18 @@ class WebAppPublisherHelper : public WebAppRegistrarObserver,
                                  bool is_capturing_video) override;
   void OnIsCapturingAudioChanged(content::WebContents* web_contents,
                                  bool is_capturing_audio) override;
+
+  // apps::PreferredAppsListHandle::Observer:
+  void OnPreferredAppsListInitialized() override;
+  void OnPreferredAppChanged(const std::string& app_id,
+                             bool is_preferred_app) override;
+  void OnPreferredAppsListWillBeDestroyed(
+      apps::PreferredAppsListHandle* handle) override;
+
+  // apps::AppRegistryCache::Observer:
+  void OnAppTypeInitialized(apps::AppType app_type) override;
+  void OnAppRegistryCacheWillBeDestroyed(
+      apps::AppRegistryCache* cache) override;
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   // content_settings::Observer:
@@ -393,6 +415,14 @@ class WebAppPublisherHelper : public WebAppRegistrarObserver,
   // Returns whether the app should show a badge.
   bool ShouldShowBadge(const std::string& app_id,
                        bool has_notification_indicator);
+
+  // Sets a web app as supported for capturing links if there are no other
+  // non-web apps that captures the similar set of links. Call this after
+  // `CreateWebApp()` has been called and the web app has been published to the
+  // AppService so that the intent_filters are set on the corresponding
+  // `AppPtr`.
+  void MaybeSetSupportedLinksPreference(const WebApp* web_app,
+                                        bool app_had_supported_links);
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Called after the user has allowed or denied an app launch with files.
@@ -416,12 +446,19 @@ class WebAppPublisherHelper : public WebAppRegistrarObserver,
       bool is_system_web_app,
       std::optional<GURL> override_url,
       base::OnceCallback<void(content::WebContents*)> on_complete,
-      base::WeakPtr<Browser> browser,
+      base::WeakPtr<BrowserWindowInterface> browser,
       base::WeakPtr<content::WebContents> web_contents,
       apps::LaunchContainer container);
 
   void OnGetWebAppSize(webapps::AppId app_id,
                        std::optional<ComputedAppSizeWithOrigin> size);
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Triggers one-time migration or rollback of web app link capturing
+  // preferences with respect to other types of apps on ChromeOS startup when
+  // the navigation capturing feature flag state changes.
+  void MaybeMigrateLinkCapturingPreferences();
+#endif
 
   const raw_ptr<Profile, DanglingUntriaged> profile_;
 
@@ -456,6 +493,14 @@ class WebAppPublisherHelper : public WebAppRegistrarObserver,
       media_indicator_observation_{this};
 
   apps::MediaRequests media_requests_;
+
+  base::ScopedObservation<apps::PreferredAppsListHandle,
+                          apps::PreferredAppsListHandle::Observer>
+      preferred_apps_list_observation_{this};
+
+  base::ScopedObservation<apps::AppRegistryCache,
+                          apps::AppRegistryCache::Observer>
+      app_registry_cache_observation_{this};
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   std::map<std::string, WebAppShortcutsMenuItemInfo> shortcut_id_map_;

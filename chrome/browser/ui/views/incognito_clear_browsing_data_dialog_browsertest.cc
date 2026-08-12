@@ -7,14 +7,14 @@
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/incognito_clear_browsing_data_dialog_coordinator.h"
-#include "chrome/browser/ui/views/profiles/avatar_toolbar_button.h"
+#include "chrome/browser/ui/views/toolbar/avatar_toolbar_button_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
@@ -27,13 +27,17 @@ namespace {
 class IncognitoClearBrowsingDataDialogTest : public InProcessBrowserTest {
  public:
   void OpenDialog(IncognitoClearBrowsingDataDialogInterface::Type type) {
-    incognito_browser_ = CreateIncognitoBrowser(GetProfile());
+    if (!incognito_browser_) {
+      incognito_browser_ = CreateIncognitoBrowser(GetProfile());
+    }
+
     auto* coordinator = GetCoordinator();
     BrowserView* browser_view =
         BrowserView::GetBrowserViewForBrowser(incognito_browser_);
-    views::View* anchor_view =
-        browser_view->toolbar_button_provider()->GetAvatarToolbarButton();
-    coordinator->Show(type, anchor_view);
+    views::BubbleAnchor anchor = browser_view->toolbar_button_provider()
+                                     ->GetAvatarToolbarButtonInterface()
+                                     ->GetBubbleAnchor(*incognito_browser_);
+    coordinator->Show(type, anchor);
     EXPECT_TRUE(coordinator->IsShowing());
   }
 
@@ -113,12 +117,14 @@ IN_PROC_BROWSER_TEST_F(IncognitoClearBrowsingDataDialogTest,
   auto destroyed_observer = BubbleWidgetDestroyedObserver(
       GetIncognitoBrowser(), GetDialogView()->GetWidget());
 
+  ui_test_utils::BrowserDestroyedObserver observer(GetIncognitoBrowser());
   GetDialogView()->AcceptDialog();
   histogram_tester.ExpectBucketCount(
       "Incognito.ClearBrowsingDataDialog.ActionType",
       IncognitoClearBrowsingDataDialog::DialogActionType::kCloseIncognito, 1);
-  ui_test_utils::WaitForBrowserToClose(GetIncognitoBrowser());
-  ASSERT_EQ(0u, chrome::GetIncognitoBrowserCount());
+  observer.Wait();
+  ASSERT_EQ(0u,
+            GlobalBrowserCollection::GetInstance()->GetIncognitoBrowserCount());
 }
 
 IN_PROC_BROWSER_TEST_F(IncognitoClearBrowsingDataDialogTest, TestCancelButton) {
@@ -145,7 +151,8 @@ IN_PROC_BROWSER_TEST_F(IncognitoClearBrowsingDataDialogTest,
 
   CloseBrowserSynchronously(GetIncognitoBrowser());
 
-  ASSERT_EQ(0u, chrome::GetIncognitoBrowserCount());
+  ASSERT_EQ(0u,
+            GlobalBrowserCollection::GetInstance()->GetIncognitoBrowserCount());
 }
 
 IN_PROC_BROWSER_TEST_F(IncognitoClearBrowsingDataDialogTest,
@@ -182,9 +189,11 @@ IN_PROC_BROWSER_TEST_F(IncognitoClearBrowsingDataDialogTest,
   OpenDialog(IncognitoClearBrowsingDataDialogInterface::Type::
                  kHistoryDisclaimerBubble);
 
+  ui_test_utils::BrowserDestroyedObserver observer(GetIncognitoBrowser());
   GetDialogView()->CancelDialog();
-  ui_test_utils::WaitForBrowserToClose(GetIncognitoBrowser());
-  ASSERT_EQ(0u, chrome::GetIncognitoBrowserCount());
+  observer.Wait();
+  ASSERT_EQ(0u,
+            GlobalBrowserCollection::GetInstance()->GetIncognitoBrowserCount());
 }
 
 IN_PROC_BROWSER_TEST_F(IncognitoClearBrowsingDataDialogTest, TestGotItButton) {
@@ -195,6 +204,39 @@ IN_PROC_BROWSER_TEST_F(IncognitoClearBrowsingDataDialogTest, TestGotItButton) {
 
   GetDialogView()->AcceptDialog();
   destroyed_waiter.Wait();
+
+  ASSERT_FALSE(GetCoordinator()->IsShowing());
+  ASSERT_FALSE(GetDialogView());
+}
+
+IN_PROC_BROWSER_TEST_F(IncognitoClearBrowsingDataDialogTest, ShowTwice) {
+  OpenDialog(IncognitoClearBrowsingDataDialogInterface::Type::
+                 kHistoryDisclaimerBubble);
+  auto* const first_incognito_cbd_dialog_view = GetDialogView();
+  EXPECT_TRUE(first_incognito_cbd_dialog_view);
+
+  // `view_tracker_for_first_view` is used to check if
+  // `first_incognito_cbd_dialog_view` has been released.
+  views::ViewTracker view_tracker_for_first_view(
+      first_incognito_cbd_dialog_view);
+
+  // Show again with the same type.
+  OpenDialog(IncognitoClearBrowsingDataDialogInterface::Type::
+                 kHistoryDisclaimerBubble);
+  const auto* const second_incognito_cbd_dialog_view = GetDialogView();
+  EXPECT_TRUE(second_incognito_cbd_dialog_view);
+
+  // Two views should not be the same.
+  EXPECT_NE(first_incognito_cbd_dialog_view, second_incognito_cbd_dialog_view);
+
+  views::test::WidgetDestroyedWaiter destroyed_waiter(GetDialogWidget());
+
+  GetDialogView()->AcceptDialog();
+  destroyed_waiter.Wait();
+
+  // `first_incognito_cbd_dialog_view` should already have been released when
+  // the second dialog is created.
+  EXPECT_FALSE(view_tracker_for_first_view.view());
 
   ASSERT_FALSE(GetCoordinator()->IsShowing());
   ASSERT_FALSE(GetDialogView());

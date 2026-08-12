@@ -23,7 +23,11 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "components/history/core/browser/history_database_params.h"
+#include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/url_database.h"
+#include "components/history/core/test/history_service_test_util.h"
+#include "components/history/core/test/test_history_database.h"
 #include "components/omnibox/browser/autocomplete_input.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_provider.h"
@@ -244,8 +248,15 @@ void VerifyMatches(ACMatches matches,
 
 class MockHistoryService : public history::HistoryService {
  public:
-  MockHistoryService() = default;
+  MockHistoryService() {
+    CHECK(history_dir_.CreateUniqueTempDir());
+    Init(history::TestHistoryDatabaseParamsForPath(history_dir_.GetPath()));
+  }
+
   MOCK_METHOD1(DeleteURLs, void(const std::vector<GURL>&));
+
+ private:
+  base::ScopedTempDir history_dir_;
 };
 
 // ShortcutsProviderTest ------------------------------------------------------
@@ -301,6 +312,10 @@ void ShortcutsProviderTest::SetUp() {
 
 void ShortcutsProviderTest::TearDown() {
   provider_ = nullptr;
+  if (client_) {
+    history::BlockUntilHistoryProcessesPendingRequests(
+        client_->GetHistoryService());
+  }
   client_.reset();
   task_environment_.RunUntilIdle();
   scoped_feature_list_.Reset();
@@ -526,12 +541,12 @@ TEST_F(ShortcutsProviderTest, SimpleSingleMatchKeyword) {
   PopulateShortcutsBackendWithTestData(client_->GetShortcutsBackend(),
                                        shortcuts);
 
-  const auto test = [&](const std::u16string text, bool prefer_keyword,
+  const auto test = [&](const std::u16string text, bool in_keyword_mode,
                         std::string expected_url, bool allowed_to_be_default,
                         std::u16string expected_autocompletion) {
     AutocompleteInput input(text, metrics::OmniboxEventProto::OTHER,
                             TestSchemeClassifier());
-    input.set_prefer_keyword(prefer_keyword);
+    input.set_in_keyword_mode(in_keyword_mode);
 
     ExpectedURLs expected_urls;
     expected_urls.push_back(

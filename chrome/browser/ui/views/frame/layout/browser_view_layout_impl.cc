@@ -4,11 +4,20 @@
 
 #include "chrome/browser/ui/views/frame/layout/browser_view_layout_impl.h"
 
+#include "base/functional/bind.h"
+#include "build/build_config.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
+#include "chrome/browser/ui/views/frame/custom_corners_background.h"
 #include "chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h"
+#include "chrome/browser/ui/views/frame/multi_contents_view.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/views/view.h"
+
+#if BUILDFLAG(IS_MAC)
+#include "chrome/browser/ui/views/frame/glass_frame_service.h"
+#endif
 
 // Proposed layout implementation.
 
@@ -120,7 +129,18 @@ BrowserViewLayoutImpl::BrowserViewLayoutImpl(
     std::unique_ptr<BrowserViewLayoutDelegate> delegate,
     Browser* browser,
     BrowserViewLayoutViews views)
-    : BrowserViewLayout(std::move(delegate), browser, std::move(views)) {}
+    : BrowserViewLayout(std::move(delegate), browser, std::move(views)) {
+#if BUILDFLAG(IS_MAC)
+  if (auto* const glass_frame_service = GlassFrameService::GetInstance()) {
+    in_glass_mode_ = glass_frame_service->IsBrowserWindowEligible(browser);
+    glass_mode_subscription_ =
+        glass_frame_service->RegisterGlassFrameEligibilityChangedCallback(
+            browser, base::BindRepeating(
+                         &BrowserViewLayoutImpl::OnGlassModeChangedCallback,
+                         base::Unretained(this)));
+  }
+#endif
+}
 
 BrowserViewLayoutImpl::~BrowserViewLayoutImpl() = default;
 
@@ -189,9 +209,8 @@ gfx::Rect BrowserViewLayoutImpl::GetTopContainerBoundsInParent(
     // If the immersive mode controller is animating the top container overlay,
     // it may be partly offscreen. The controller knows where the container
     // needs to be.
-    top =
-        delegate().GetImmersiveModeController()->GetTopContainerVerticalOffset(
-            gfx::Size(parent_params.visual_client_area.width(), height));
+    top = controller->GetTopContainerVerticalOffset(
+        gfx::Size(parent_params.visual_client_area.width(), height));
   }
 
   gfx::Rect bounds = local_bounds;
@@ -200,27 +219,22 @@ gfx::Rect BrowserViewLayoutImpl::GetTopContainerBoundsInParent(
   return bounds;
 }
 
-int BrowserViewLayoutImpl::GetMinWebContentsWidthForTesting() const {
-  return kContentsContainerMinimumWidth;
-}
-
 // Layout logic.
 
 void BrowserViewLayoutImpl::Layout(views::View* host) {
-  const auto params =
-      delegate().GetBrowserLayoutParams(/*use_browser_bounds=*/true);
+  if (reentrancy_guard_) {
+    return;
+  }
+  base::AutoReset<bool> guard_reset(&reentrancy_guard_, true);
+
+  auto params = delegate().GetBrowserLayoutParams(/*use_browser_bounds=*/true);
   if (params.IsEmpty()) {
     return;
   }
 
-  // Lay out the browser view itself.
-  CalculateProposedLayout(params).ApplyLayout(
-      host, [this](views::View* view, bool visible) {
-        SetViewVisibility(view, visible);
-      });
+  DoPreLayoutComputations(params);
 
-  // If the top container is not parented to the main container, it is an
-  // overlay and must be laid out separately.
+  // If the top container is separate from the browser view, lay it out now.
   if (views().top_container &&
       views().top_container->parent() != views().browser_view) {
     // In slide/immersive mode, animating the top container is handled by
@@ -241,7 +255,25 @@ void BrowserViewLayoutImpl::Layout(views::View* host) {
     // Position the top container in its parent, whatever that is.
     views().top_container->SetBoundsRect(
         GetTopContainerBoundsInParent(top_container_local_bounds, params));
+
+    // In (for example) fullscreen-with-toolbar, if the size of the top
+    // container changes, then the overall layout dimensions may also change.
+    // See https://crbug.com/519626620 for more information.
+    const auto new_params =
+        delegate().GetBrowserLayoutParams(/*use_browser_bounds=*/true);
+    if (params != new_params) {
+      OnLayoutParamsChanged(params, new_params);
+      params = new_params;
+    }
   }
+
+  // Lay out the browser view itself.
+  auto layout = CalculateProposedLayout(params);
+  dialog_top_ = GetDialogTop(layout);
+  dialog_bottom_ = GetDialogBottom(layout);
+  std::move(layout).ApplyLayout(host, [this](views::View* view, bool visible) {
+    SetViewVisibility(view, visible);
+  });
 
   // The normal clipping created by `View::Paint()` may not cover the bottom of
   // the TopContainerView at certain scale factor because both of the position
@@ -270,12 +302,59 @@ void BrowserViewLayoutImpl::Layout(views::View* host) {
     apply_bottom_paint_allowance(views().top_container);
   }
 
+  // Change how the top container is painted based on layout.
+  auto* const background =
+      views().top_container->background()->AsA<CustomCornersBackground>();
+  CHECK(background)
+      << "Expected top container to have a CustomCornersBackground.";
+  ConfigureTopContainerBackground(params, background);
+
   // Do any additional adjustments required by the specific layout.
-  DoPostLayoutVisualAdjustments();
+  DoPostLayoutVisualAdjustments(params);
 
   // Update bubbles (like the find bar).
   UpdateBubbles();
+
+  DoPostLayoutCleanup();
 }
+
+void BrowserViewLayoutImpl::ConfigureTopContainerBackground(
+    const BrowserLayoutParams& params,
+    CustomCornersBackground* background) {
+  if (is_fullscreen(delegate().GetBrowserWindowState())) {
+    // When in immersive mode, top container is painted with the frame color.
+    // The color matches the active frame, allowing the tabstrip to paint
+    // correctly.
+    background->SetVisible(true);
+    background->SetPrimaryColor(ui::kColorFrameActive);
+    background->SetCorners(CustomCornersBackground::Corners());
+  } else {
+    // No need to paint otherwise.
+    background->SetVisible(false);
+  }
+}
+
+void BrowserViewLayoutImpl::DoPreLayoutComputations(
+    const BrowserLayoutParams& params) {}
+
+void BrowserViewLayoutImpl::DoPostLayoutVisualAdjustments(
+    const BrowserLayoutParams& params) {}
+
+void BrowserViewLayoutImpl::DoPostLayoutCleanup() {}
+
+void BrowserViewLayoutImpl::OnLayoutParamsChanged(
+    const BrowserLayoutParams& old_params,
+    const BrowserLayoutParams& new_params) {}
+
+void BrowserViewLayoutImpl::OnGlassModeChangedCallback(bool in_glass_mode) {
+  if (in_glass_mode == in_glass_mode_) {
+    return;
+  }
+  in_glass_mode_ = in_glass_mode;
+  OnGlassModeChanged();
+}
+
+void BrowserViewLayoutImpl::OnGlassModeChanged() {}
 
 // Dialog positioning.
 
@@ -292,7 +371,7 @@ int BrowserViewLayoutImpl::GetDialogTop(const ProposedLayout& layout) const {
 int BrowserViewLayoutImpl::GetDialogBottom(const ProposedLayout& layout) const {
   const auto* const browser_view = views().browser_view.get();
   if (const auto contents_rect =
-          layout.GetBoundsFor(views().contents_container, browser_view)) {
+          layout.GetBoundsFor(views().multi_contents_view, browser_view)) {
     return contents_rect->bottom();
   }
   return browser_view->height();
@@ -305,14 +384,12 @@ gfx::Point BrowserViewLayoutImpl::GetDialogPosition(
   if (params.IsEmpty()) {
     return gfx::Point();
   }
-  const ProposedLayout layout = CalculateProposedLayout(params);
 
   // Calculate the dialog bounds in browser view space.
   const int browser_width = params.visual_client_area.width();
   const int dialog_x =
       params.visual_client_area.x() + (browser_width - dialog_size.width()) / 2;
-  const int dialog_y = GetDialogTop(layout);
-  gfx::Rect dialog_rect(dialog_x, dialog_y, dialog_size.width(),
+  gfx::Rect dialog_rect(dialog_x, dialog_top_, dialog_size.width(),
                         dialog_size.height());
 
   // TODO: consider whether this should change in RTL?
@@ -325,11 +402,9 @@ gfx::Size BrowserViewLayoutImpl::GetMaximumDialogSize() const {
   if (params.IsEmpty()) {
     return gfx::Size();
   }
-  const ProposedLayout layout = CalculateProposedLayout(params);
 
   // This computation is irrespective of coordinate system (all coordinates
   // happen to be in browser view space).
-  const int top = GetDialogTop(layout);
-  const int bottom = GetDialogBottom(layout);
-  return gfx::Size(params.visual_client_area.width(), bottom - top);
+  return gfx::Size(params.visual_client_area.width(),
+                   dialog_bottom_ - dialog_top_);
 }

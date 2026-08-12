@@ -12,16 +12,18 @@
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/scoped_feature_list.h"
+#include "base/test/with_feature_override.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/api/extension_action/extension_action_api.h"
 #include "chrome/browser/extensions/api/extension_action/test_icon_image_observer.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/test_extension_action_dispatcher_observer.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/extensions/extensions_container.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/version_info/channel.h"
 #include "content/public/browser/render_frame_host.h"
@@ -44,6 +46,7 @@
 #include "extensions/common/extension_features.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/manifest_constants.h"
+#include "extensions/common/manifest_handlers/description_info.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
 #include "extensions/test/test_extension_dir.h"
@@ -110,8 +113,9 @@ class TestStateStoreObserver : public StateStore::TestObserver {
 
   void WillSetExtensionValue(const ExtensionId& extension_id,
                              const std::string& key) override {
-    if (extension_id == extension_id_)
+    if (extension_id == extension_id_) {
       ++updated_values_[key];
+    }
   }
 
   int CountForKey(const std::string& key) const {
@@ -222,6 +226,59 @@ void FlushStateStore(Profile* profile) {
 
 }  // namespace
 
+class ExtensionActionSetBadgeTextApiTest
+    : public ExtensionApiTest,
+      public base::test::WithFeatureOverride {
+ public:
+  ExtensionActionSetBadgeTextApiTest()
+      : base::test::WithFeatureOverride(
+            extensions_features::kApiActionSetBadgeTextByteLimit) {}
+};
+
+// Test that the histogram for determining maximum badge text lengths counts
+// the length of the badge text in each successful call.
+// TODO(crbug.com/491158086, crbug.com/492555224): Remove this histogram test.
+IN_PROC_BROWSER_TEST_P(ExtensionActionSetBadgeTextApiTest,
+                       TextLengthHistogram) {
+  // Propagate kApiActionSetBadgeTextByteLimit feature state to extension
+  // background.
+  SetCustomArg(IsParamFeatureEnabled() ? "true" : "false");
+
+  base::HistogramTester histogram;
+
+  // Run extension which modifies the badge text a few times.
+  EXPECT_TRUE(RunExtensionTest("extension_action/badge_text")) << message_;
+
+  // Check that every setting of badge text is counted exactly once.
+  histogram.ExpectTotalCount("Extensions.Action.SetBadgeTextLength",
+                             /*expected_count=*/4);
+
+  // Check number of samples in each affected bucket and two empty buckets.
+  histogram.ExpectBucketCount("Extensions.Action.SetBadgeTextLength",
+                              /*sample=*/0,
+                              /*expected_count=*/1);
+  histogram.ExpectBucketCount("Extensions.Action.SetBadgeTextLength",
+                              /*sample=*/1,
+                              /*expected_count=*/1);
+  histogram.ExpectBucketCount("Extensions.Action.SetBadgeTextLength",
+                              /*sample=*/2,
+                              /*expected_count=*/0);
+  histogram.ExpectBucketCount("Extensions.Action.SetBadgeTextLength",
+                              /*sample=*/3,
+                              /*expected_count=*/1);
+  histogram.ExpectBucketCount("Extensions.Action.SetBadgeTextLength",
+                              /*sample=*/4,
+                              /*expected_count=*/0);
+  // Histogram always logs the call, even if it exceeds the limit and fails.
+  histogram.ExpectBucketCount("Extensions.Action.SetBadgeTextLength",
+                              /*sample=*/150,
+                              /*expected_count=*/1);
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         ExtensionActionSetBadgeTextApiTest,
+                         testing::Bool());
+
 // A class that allows for cross-origin navigations with embedded test server.
 class ExtensionActionAPITest : public ExtensionApiTest {
  protected:
@@ -231,6 +288,32 @@ class ExtensionActionAPITest : public ExtensionApiTest {
     ASSERT_TRUE(StartEmbeddedTestServer());
   }
 };
+
+// Test that the histogram for determining maximum title lengths counts
+// the length of the title in each successful call.
+// TODO(crbug.com/492555224): Remove this histogram test.
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, ActionSetTitleLengthHistogram) {
+  base::HistogramTester histogram;
+
+  // Run extension which modifies the badge text a few times.
+  EXPECT_TRUE(RunExtensionTest("extension_action/title")) << message_;
+
+  // Check that rejected calls do not increment the counts.
+  histogram.ExpectTotalCount("Extensions.Action.SetTitleLength",
+                             /*expected_count=*/4);
+
+  // Check number of samples in each affected bucket and one empty bucket.
+  histogram.ExpectBucketCount("Extensions.Action.SetTitleLength",
+                              /*sample=*/0, /*expected_count=*/1);
+  histogram.ExpectBucketCount("Extensions.Action.SetTitleLength",
+                              /*sample=*/1, /*expected_count=*/1);
+  histogram.ExpectBucketCount("Extensions.Action.SetTitleLength",
+                              /*sample=*/2, /*expected_count=*/0);
+  histogram.ExpectBucketCount("Extensions.Action.SetTitleLength",
+                              /*sample=*/60, /*expected_count=*/1);
+  histogram.ExpectBucketCount("Extensions.Action.SetTitleLength",
+                              /*sample=*/150, /*expected_count=*/1);
+}
 
 #if !BUILDFLAG(IS_ANDROID)
 // Alias these for readability, when a test only exercises one type of action.
@@ -257,8 +340,9 @@ class MultiActionAPITest
 
   // Ensures the |action| is enabled on the tab with the given |tab_id|.
   void EnsureActionIsEnabledOnTab(ExtensionAction* action, int tab_id) {
-    if (action->GetIsVisible(tab_id))
+    if (action->GetIsVisible(tab_id)) {
       return;
+    }
     action->SetIsVisible(tab_id, true);
     // Just setting the state on the action doesn't update the UI. Ensure
     // observers are notified.
@@ -358,7 +442,7 @@ IN_PROC_BROWSER_TEST_F(BrowserActionAPITest, TestNoUnnecessaryIO) {
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 // Verify that tab-specific values are cleared on navigation and on tab
-// removal. Regression test for https://crbug.com/834033.
+// removal. Regression test for https://crbug.com/41383956.
 IN_PROC_BROWSER_TEST_P(MultiActionAPITest,
                        ValuesAreClearedOnNavigationAndTabRemoval) {
   TestExtensionDir test_dir;
@@ -412,7 +496,7 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest,
 }
 
 // Tests that tooltips of an extension action icon can be specified using UTF8.
-// See http://crbug.com/25349.
+// See http://crbug.com/41020882.
 IN_PROC_BROWSER_TEST_P(MultiActionAPITest, TitleLocalization) {
   TestExtensionDir test_dir;
   constexpr char kManifestTemplate[] =
@@ -437,7 +521,7 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, TitleLocalization) {
   ASSERT_TRUE(action);
 
   EXPECT_EQ(base::WideToUTF8(L"Hreggvi\u00F0ur: l10n action"),
-            extension->description());
+            DescriptionInfo::GetDescription(*extension));
   EXPECT_EQ(base::WideToUTF8(L"Hreggvi\u00F0ur is my name"), extension->name());
   content::WebContents* web_contents = GetActiveWebContents();
   int tab_id = sessions::SessionTabHelper::IdForTab(web_contents).id();
@@ -446,11 +530,8 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, TitleLocalization) {
             action->GetTitle(ExtensionAction::kDefaultTabId));
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 // Tests dispatching the onClicked event to listeners when the extension action
 // in the toolbar is pressed.
-// TODO(crbug.com/419057482): Enable on Android when we have a cross-platform
-// window interface and can implement ExtensionActionTestHelper without Browser.
 IN_PROC_BROWSER_TEST_P(MultiActionAPITest, OnClickedDispatching) {
   constexpr char kManifestTemplate[] =
       R"({
@@ -466,6 +547,7 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, OnClickedDispatching) {
            chrome.test.assertTrue(!!tab);
            chrome.test.assertTrue(tab.id > 0);
            chrome.test.assertTrue(tab.index > -1);
+           chrome.test.assertTrue(chrome.test.isProcessingUserGesture());
            chrome.test.notifyPass();
          });)";
 
@@ -483,17 +565,14 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, OnClickedDispatching) {
                      base::StringPrintf(kBackgroundJsTemplate,
                                         GetAPINameForActionType(GetParam())));
 
-  // Though this says "ExtensionActionTestHelper", it's actually used for all
-  // toolbar actions.
-  // TODO(devlin): Rename it to ToolbarActionTestUtil.
-  std::unique_ptr<ExtensionActionTestHelper> toolbar_helper =
-      ExtensionActionTestHelper::Create(browser());
-  EXPECT_EQ(0, toolbar_helper->NumberOfBrowserActions());
+  ExtensionsContainer* extensions_container =
+      ExtensionsContainer::From(*browser_window_interface());
+  EXPECT_FALSE(extensions_container->HasAnyExtensions());
 
   const Extension* extension = LoadExtension(test_dir.UnpackedPath());
   ASSERT_TRUE(extension);
-  ASSERT_EQ(1, toolbar_helper->NumberOfBrowserActions());
-  EXPECT_TRUE(toolbar_helper->HasAction(extension->id()));
+  EXPECT_TRUE(extensions_container->HasAnyExtensions());
+  EXPECT_TRUE(extensions_container->GetActionForId(extension->id()));
 
   ExtensionAction* action = GetExtensionAction(*extension);
   ASSERT_TRUE(action);
@@ -504,14 +583,23 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, OnClickedDispatching) {
   EXPECT_FALSE(action->HasPopup(tab_id));
 
   ResultCatcher result_catcher;
-  toolbar_helper->Press(extension->id());
+  ToolbarActionViewModel* model =
+      extensions_container->GetActionForId(extension->id());
+  ASSERT_TRUE(model);
+  model->ExecuteUserAction(
+      ToolbarActionViewModel::InvocationSource::kToolbarButton);
   ASSERT_TRUE(result_catcher.GetNextResult()) << result_catcher.message();
 }
 
 // Tests the creation of a popup when one is specified in the manifest.
-// TODO(crbug.com/419057482): Enable on Android when we have a cross-platform
-// window interface and can implement ExtensionActionTestHelper without Browser.
-IN_PROC_BROWSER_TEST_P(MultiActionAPITest, PopupCreation) {
+// TODO(crbug.com/478717514): Enable on Android when we support triggering a
+// popup of an unpinned extension.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_PopupCreation DISABLED_PopupCreation
+#else
+#define MAYBE_PopupCreation PopupCreation
+#endif
+IN_PROC_BROWSER_TEST_P(MultiActionAPITest, MAYBE_PopupCreation) {
   constexpr char kManifestTemplate[] =
       R"({
            "name": "Test Clicking",
@@ -540,8 +628,8 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, PopupCreation) {
   const Extension* extension = LoadExtension(test_dir.UnpackedPath());
   ASSERT_TRUE(extension);
 
-  std::unique_ptr<ExtensionActionTestHelper> toolbar_helper =
-      ExtensionActionTestHelper::Create(browser());
+  ExtensionsContainer* extensions_container =
+      ExtensionsContainer::From(*browser_window_interface());
 
   ExtensionAction* action = GetExtensionAction(*extension);
   ASSERT_TRUE(action);
@@ -552,7 +640,11 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, PopupCreation) {
   EXPECT_TRUE(action->HasPopup(tab_id));
 
   ResultCatcher result_catcher;
-  toolbar_helper->Press(extension->id());
+  ToolbarActionViewModel* model =
+      extensions_container->GetActionForId(extension->id());
+  ASSERT_TRUE(model);
+  model->ExecuteUserAction(
+      ToolbarActionViewModel::InvocationSource::kToolbarButton);
   EXPECT_TRUE(result_catcher.GetNextResult()) << result_catcher.message();
 
   ProcessManager* process_manager = ProcessManager::Get(profile());
@@ -634,10 +726,10 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, SetPopupToEmptyString) {
 
 // Tests that sessionStorage does not persist between closing and opening of a
 // popup.
-// TODO(crbug.com/419057482): Enable on Android when we have a cross-platform
-// window interface and can implement ExtensionActionTestHelper without Browser.
+// TODO(crbug.com/478717514): Enable on Android when we support triggering a
+// popup of an unpinned extension.
 // TODO(crbug.com/40795982): Flaky on Linux.
-#if BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_ANDROID)
 #define MAYBE_SessionStorageDoesNotPersistBetweenOpenings \
   DISABLED_SessionStorageDoesNotPersistBetweenOpenings
 #else
@@ -683,7 +775,7 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest,
   ASSERT_TRUE(extension);
 
   ExtensionsContainer* extensions_container =
-      browser()->window()->GetExtensionsContainer();
+      ExtensionsContainer::From(*browser_window_interface());
   ASSERT_TRUE(extensions_container);
   ToolbarActionViewModel* model =
       extensions_container->GetActionForId(extension->id());
@@ -742,7 +834,6 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest,
   EXPECT_NE(session_storage_id1, session_storage_id2);
   EXPECT_EQ("1", content::EvalJs(popup_contents, "sessionStorage.foo"));
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 using ActionAndBrowserActionAPITest = MultiActionAPITest;
 
@@ -807,7 +898,7 @@ IN_PROC_BROWSER_TEST_P(ActionAndBrowserActionAPITest, ValuesArePersisted) {
   EXPECT_EQ(expected_badge_text,
             action->GetExplicitlySetBadgeText(ExtensionAction::kDefaultTabId));
 
-  // Due to https://crbug.com/1110156, action values with defaults specified in
+  // Due to https://crbug.com/40708464, action values with defaults specified in
   // the manifest - like popup and title - aren't persisted, even for browser
   // actions.
   EXPECT_EQ(extension->GetResourceURL("default_popup.html"),
@@ -960,7 +1051,7 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPICanvasTest, DISABLED_DynamicSetIcon) {
 
 // Tests calling setIcon() from JS with hooks that might cause issues with our
 // custom bindings.
-// Regression test for https://crbug.com/1087948.
+// Regression test for https://crbug.com/40695168.
 IN_PROC_BROWSER_TEST_P(MultiActionAPITest, SetIconWithJavascriptHooks) {
   constexpr char kManifestTemplate[] =
       R"({
@@ -1022,7 +1113,7 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, SetIconWithJavascriptHooks) {
 }
 
 // Tests calling setIcon() from JS with `self` defined at the top-level.
-// Regression test for https://crbug.com/1087948.
+// Regression test for https://crbug.com/40695168.
 IN_PROC_BROWSER_TEST_P(MultiActionAPITest, SetIconWithSelfDefined) {
   // TODO(devlin): Pull code to load an extension like this into a helper
   // function.
@@ -1068,7 +1159,7 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, SetIconWithSelfDefined) {
   // Try setting the icon. This should succeed. Previously, the custom bindings
   // for the setIcon code looked at the 'self' variable, but this could be
   // overridden by the extension.
-  // See also https://crbug.com/1087948.
+  // See also https://crbug.com/40695168.
   constexpr char kSetIconScript[] =
       "setIcon({tabId: %d, path: 'blue_icon.png'});";
   RunTestAndWaitForSuccess(web_contents,
@@ -1135,8 +1226,8 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, SetIconInTabWithInvalidPath) {
 }
 
 // Tests calling setIcon() in the service worker with an invalid icon paths
-// specified. Regression test for https://crbug.com/1262029. Regression test for
-// https://crbug.com/1372518.
+// specified. Regression test for https://crbug.com/40799229. Regression test
+// for https://crbug.com/40871095.
 IN_PROC_BROWSER_TEST_F(ExtensionActionAPITest, SetIconInWorkerWithInvalidPath) {
   constexpr char kManifestTemplate[] =
       R"({
@@ -1374,10 +1465,11 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, GettersAndSetters) {
         auto check_value = [action, &value_getter, &test_helper](
                                const ValuePair& expected_value, int tab_id) {
           EXPECT_EQ(expected_value.cpp, value_getter.Run(action, tab_id));
-          if (tab_id == ExtensionAction::kDefaultTabId)
+          if (tab_id == ExtensionAction::kDefaultTabId) {
             test_helper.CheckDefaultValue(expected_value.js.c_str());
-          else
+          } else {
             test_helper.CheckValueForTab(expected_value.js.c_str(), tab_id);
+          }
         };
 
         // Page actions don't support setting a default value (because they are
@@ -1385,8 +1477,9 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, GettersAndSetters) {
         bool supports_default = GetParam() != ActionInfo::Type::kPage;
 
         // Check the initial state. These should start at the defaults.
-        if (supports_default)
+        if (supports_default) {
           check_value(default_value, ExtensionAction::kDefaultTabId);
+        }
         check_value(default_value, first_tab_id);
         check_value(default_value, second_tab_id);
 
@@ -1396,8 +1489,9 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, GettersAndSetters) {
         // The first tab should have the custom value, while the second tab
         // (and the default tab, if supported) should still have the default
         // value.
-        if (supports_default)
+        if (supports_default) {
           check_value(default_value, ExtensionAction::kDefaultTabId);
+        }
         check_value(custom_value1, first_tab_id);
         check_value(default_value, second_tab_id);
 
@@ -1635,10 +1729,7 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, EnableAndDisable) {
   }
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 // Tests that the check for enabled and disabled status are correctly reported.
-// TODO(crbug.com/371432155): Port to desktop Android when the chrome.tabs API
-// is supported.
 IN_PROC_BROWSER_TEST_F(ExtensionActionAPITest, IsEnabled) {
   ASSERT_TRUE(RunExtensionTest("extension_action/is_enabled")) << message_;
 }
@@ -1717,11 +1808,18 @@ IN_PROC_BROWSER_TEST_F(ExtensionActionAPITest, IsEnabledIgnoreDeclarative) {
       BackgroundScriptExecutor::ResultCapture::kSendScriptResult);
   EXPECT_FALSE(script_result.GetBool());
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
-using ActionAPITest = ExtensionApiTest;
+class ActionAPITest : public ExtensionApiTest {
+ public:
+  ActionAPITest() {
+    scoped_feature_list_.InitAndDisableFeature(
+        features::kExtensionsPinnedByDefault);
+  }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
 IN_PROC_BROWSER_TEST_F(ActionAPITest, TestGetUserSettings) {
   constexpr char kManifest[] =
       R"({
@@ -1754,13 +1852,15 @@ IN_PROC_BROWSER_TEST_F(ActionAPITest, TestGetUserSettings) {
       ToolbarActionsModel::Get(profile());
   EXPECT_FALSE(toolbar_model->IsActionPinned(extension->id()));
 
-  std::unique_ptr<ExtensionActionTestHelper> toolbar_helper =
-      ExtensionActionTestHelper::Create(browser());
+  ExtensionsContainer* extensions_container =
+      ExtensionsContainer::From(*browser_window_interface());
 
-  auto get_response = [extension, toolbar_helper = toolbar_helper.get()]() {
+  auto get_response = [extension, extensions_container]() {
     ExtensionTestMessageListener listener;
     listener.set_extension_id(extension->id());
-    toolbar_helper->Press(extension->id());
+    extensions_container->GetActionForId(extension->id())
+        ->ExecuteUserAction(
+            ToolbarActionViewModel::InvocationSource::kToolbarButton);
     EXPECT_TRUE(listener.WaitUntilSatisfied());
     return listener.message();
   };
@@ -1772,7 +1872,6 @@ IN_PROC_BROWSER_TEST_F(ActionAPITest, TestGetUserSettings) {
 
   EXPECT_EQ(R"({"isOnToolbar":true})", get_response());
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // Tests dispatching the onUserSettingsChanged event to listeners when the user
 // pins or unpins the extension action.
@@ -1787,7 +1886,8 @@ IN_PROC_BROWSER_TEST_F(ActionAPITest, OnUserSettingsChanged) {
          })";
   constexpr char kWorker[] =
       R"(chrome.action.onUserSettingsChanged.addListener(change => {
-           chrome.test.sendMessage(JSON.stringify(change));
+           const userGesture = chrome.test.isProcessingUserGesture();
+           chrome.test.sendMessage(JSON.stringify({change, userGesture}));
          });)";
 
   TestExtensionDir test_dir;
@@ -1810,10 +1910,10 @@ IN_PROC_BROWSER_TEST_F(ActionAPITest, OnUserSettingsChanged) {
     return listener.message();
   };
 
-  EXPECT_EQ(R"({"isOnToolbar":true})",
+  EXPECT_EQ(R"({"change":{"isOnToolbar":true},"userGesture":false})",
             change_visibility_and_get_response(/*pinned_state=*/true));
 
-  EXPECT_EQ(R"({"isOnToolbar":false})",
+  EXPECT_EQ(R"({"change":{"isOnToolbar":false},"userGesture":false})",
             change_visibility_and_get_response(/*pinned_state=*/false));
 }
 
@@ -1972,77 +2072,6 @@ IN_PROC_BROWSER_TEST_P(ActionAndBrowserActionAPITest,
   EXPECT_TRUE(run_script_and_wait_for_callback(kUnsetGlobalText).GetBool());
   EXPECT_EQ("", action->GetExplicitlySetBadgeText(tab_id1));
   EXPECT_EQ("", action->GetExplicitlySetBadgeText(tab_id2));
-}
-
-class ExtensionActionWithOpenPopupFeatureDisabledTest
-    : public ExtensionActionAPITest {
- public:
-  ExtensionActionWithOpenPopupFeatureDisabledTest() {
-    feature_list_.InitAndDisableFeature(
-        extensions_features::kApiActionOpenPopup);
-  }
-  ~ExtensionActionWithOpenPopupFeatureDisabledTest() override = default;
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-// Tests that the action.openPopup() API is available to policy-installed
-// extensions on even if the feature flag is disabled. Since this is controlled
-// through our features files (which are tested separately), this is more of a
-// smoke test than an end-to-end test.
-// TODO(crbug.com/40057101): Remove this test when the API is available
-// for all extensions on stable without a feature flag.
-IN_PROC_BROWSER_TEST_F(ExtensionActionWithOpenPopupFeatureDisabledTest,
-                       OpenPopupAvailabilityOnStableChannel) {
-  TestExtensionDir test_dir;
-  static constexpr char kManifest[] =
-      R"({
-           "name": "Test",
-           "manifest_version": 3,
-           "version": "0.1",
-           "background": {"service_worker": "background.js"},
-           "action": {}
-         })";
-  test_dir.WriteManifest(kManifest);
-  test_dir.WriteFile(FILE_PATH_LITERAL("background.js"),
-                     "chrome.test.sendMessage('ready');");
-
-  auto is_open_popup_defined = [this](const Extension& extension) {
-    static constexpr char kScript[] =
-        R"(chrome.test.sendScriptResult(!!chrome.action.openPopup);)";
-    return BackgroundScriptExecutor::ExecuteScript(
-        profile(), extension.id(), kScript,
-        BackgroundScriptExecutor::ResultCapture::kSendScriptResult);
-  };
-
-  // Technically, we don't need the "ready" listener here, but this ensures we
-  // don't cross streams with the policy extension loaded below (where we do
-  // need the listener).
-  ExtensionTestMessageListener non_policy_listener("ready");
-  const Extension* non_policy_extension =
-      LoadExtension(test_dir.UnpackedPath());
-  ASSERT_TRUE(non_policy_extension);
-  ASSERT_TRUE(non_policy_listener.WaitUntilSatisfied());
-
-  // Somewhat annoying: due to how our test helpers are written,
-  // `EXPECT_EQ(false, base::Value)` works, but EXPECT_FALSE(base::Value) does
-  // not.
-  EXPECT_EQ(false, is_open_popup_defined(*non_policy_extension));
-
-  // Unlike `LoadExtension()`, `InstallExtension()` doesn't wait for the service
-  // worker to be ready, so we need a few manual waiters.
-  base::FilePath packed_path = test_dir.Pack();
-  service_worker_test_utils::TestServiceWorkerContextObserver
-      registration_observer(profile());
-  ExtensionTestMessageListener policy_listener("ready");
-  const Extension* policy_extension = InstallExtension(
-      packed_path, 1, mojom::ManifestLocation::kExternalPolicyDownload);
-  ASSERT_TRUE(policy_extension);
-  ASSERT_TRUE(policy_listener.WaitUntilSatisfied());
-  registration_observer.WaitForRegistrationStored();
-
-  EXPECT_EQ(true, is_open_popup_defined(*policy_extension));
 }
 
 #if BUILDFLAG(IS_ANDROID)

@@ -8,6 +8,7 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.content.Context;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
 
@@ -24,8 +25,7 @@ import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncActivityLaunche
 import org.chromium.chrome.browser.ui.signin.account_picker.AccountPickerBottomSheetStrings;
 import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncConfig;
 import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncHelper;
-import org.chromium.components.signin.base.CoreAccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
+import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
 
@@ -98,7 +98,7 @@ public class HistoryPageSigninPromoDelegate extends SigninPromoDelegate {
     }
 
     @Override
-    void onDismissButtonClicked() {
+    void permanentlyDismissPromo() {
         ChromeSharedPreferences.getInstance()
                 .writeBoolean(ChromePreferenceKeys.SIGNIN_PROMO_HISTORY_PAGE_DECLINED, true);
     }
@@ -109,7 +109,7 @@ public class HistoryPageSigninPromoDelegate extends SigninPromoDelegate {
     }
 
     @Override
-    boolean refreshPromoState(@Nullable CoreAccountInfo visibleAccount) {
+    boolean refreshPromoState(@Nullable DisplayableProfileData visibleAccount) {
         @PromoState int newState = computePromoState();
         boolean wasStateChanged = mPromoState != newState;
         mPromoState = newState;
@@ -134,11 +134,6 @@ public class HistoryPageSigninPromoDelegate extends SigninPromoDelegate {
     @Override
     boolean shouldHideSecondaryButton() {
         return true;
-    }
-
-    @Override
-    boolean shouldHideDismissButton() {
-        return false;
     }
 
     @Override
@@ -176,6 +171,12 @@ public class HistoryPageSigninPromoDelegate extends SigninPromoDelegate {
         return ChromeSharedPreferences.getInstance().readInt(mPromoShowCountPreferenceName);
     }
 
+    @Override
+    @ColorInt
+    int getAccountPickerBackgroundColor() {
+        return SemanticColorUtils.getColorSurface(mContext);
+    }
+
     private @PromoState int computePromoState() {
         // The history page promo should always be hidden in CCT for privacy concern: it's hard to
         // clarify that the history sync promo affect only Chrome and not the app that launched the
@@ -207,7 +208,7 @@ public class HistoryPageSigninPromoDelegate extends SigninPromoDelegate {
         IdentityManager identityManager =
                 IdentityServicesProvider.get().getIdentityManager(mProfile);
         assumeNonNull(identityManager);
-        if (!identityManager.hasPrimaryAccount(ConsentLevel.SIGNIN)) {
+        if (!identityManager.hasPrimaryAccount()) {
             // Hide promo for signed-out users.
             return PromoState.NONE;
         }

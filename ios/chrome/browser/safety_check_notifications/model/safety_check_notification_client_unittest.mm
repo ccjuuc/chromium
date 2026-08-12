@@ -73,9 +73,6 @@ UpgradeRecommendedDetails OutdatedAppDetails() {
 class SafetyCheckNotificationClientTest : public PlatformTest {
  public:
   void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        kSeparateProfilesForManagedAccounts);
-
     SetupMockNotificationCenter();
 
     ScopedDictPrefUpdate update(GetApplicationContext()->GetLocalState(),
@@ -94,12 +91,9 @@ class SafetyCheckNotificationClientTest : public PlatformTest {
 
     BrowserList* list = BrowserListFactory::GetForProfile(profile_.get());
 
-    mock_scene_state_ = OCMClassMock([SceneState class]);
-
-    OCMStub([mock_scene_state_ activationLevel])
-        .andReturn(SceneActivationLevelForegroundActive);
-
-    browser_ = std::make_unique<TestBrowser>(profile_.get(), mock_scene_state_);
+    scene_state_ = [[SceneState alloc] init];
+    scene_state_.activationLevel = SceneActivationLevelForegroundActive;
+    browser_ = std::make_unique<TestBrowser>(profile_.get(), scene_state_);
 
     list->AddBrowser(browser_.get());
 
@@ -259,14 +253,13 @@ class SafetyCheckNotificationClientTest : public PlatformTest {
 
   web::WebTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<SafetyCheckNotificationClient> notification_client_;
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   TestProfileManagerIOS profile_manager_;
   raw_ptr<IOSChromeSafetyCheckManager> safety_check_manager_;
   id mock_notification_center_;
   std::unique_ptr<ScopedBlockSwizzler> notification_center_swizzler_;
-  id mock_scene_state_;
+  SceneState* scene_state_;
   std::unique_ptr<TestBrowser> browser_;
   raw_ptr<ProfileIOS> profile_;
   raw_ptr<PrefService> pref_service_;

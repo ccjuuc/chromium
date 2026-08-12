@@ -13,10 +13,8 @@
 #include "base/test/test_future.h"
 #include "build/build_config.h"
 #include "chrome/browser/actor/actor_keyed_service.h"
-#include "chrome/browser/actor/actor_switches.h"
+#include "chrome/browser/actor/actor_proto_conversion.h"
 #include "chrome/browser/actor/actor_test_util.h"
-#include "chrome/browser/actor/browser_action_util.h"
-#include "chrome/browser/actor/shared_types.h"
 #include "chrome/browser/actor/tools/click_tool_request.h"
 #include "chrome/browser/actor/tools/navigate_tool_request.h"
 #include "chrome/browser/ai/ai_data_keyed_service_factory.h"
@@ -30,24 +28,25 @@
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
 #include "chrome/common/buildflags.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/actor/core/actor_switches.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
 #include "components/autofill/core/browser/foundations/autofill_manager.h"
+#include "components/autofill/core/browser/foundations/autofill_manager_test_api.h"
 #include "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
 #include "components/autofill/core/browser/test_utils/autofill_form_test_utils.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_prefs.h"
 #include "components/autofill/core/common/autofill_test_utils.h"
 #include "components/autofill/core/common/form_data.h"
-#include "components/history_embeddings/mock_answerer.h"
-#include "components/history_embeddings/mock_intent_classifier.h"
+#include "components/history_embeddings/core/mock_answerer.h"
+#include "components/history_embeddings/core/mock_intent_classifier.h"
 #include "components/network_session_configurator/common/network_switches.h"
 #include "components/optimization_guide/content/browser/page_content_proto_provider.h"
 #include "components/optimization_guide/proto/features/actions_data.pb.h"
 #include "components/optimization_guide/proto/features/common_quality_data.pb.h"
-#include "components/passage_embeddings/passage_embeddings_test_util.h"
+#include "components/passage_embeddings/core/passage_embeddings_test_util.h"
 #include "components/tabs/public/tab_group.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
@@ -85,7 +84,7 @@ class AiDataKeyedServiceBrowserTest : public InProcessBrowserTest {
     ASSERT_TRUE(https_server_->Start());
 
     HistoryEmbeddingsServiceFactory::GetInstance()->SetTestingFactory(
-        browser()->profile(),
+        browser()->GetProfile(),
         base::BindLambdaForTesting([this](content::BrowserContext* context) {
           return HistoryEmbeddingsServiceFactory::
               BuildServiceInstanceForBrowserContextForTesting(
@@ -99,11 +98,11 @@ class AiDataKeyedServiceBrowserTest : public InProcessBrowserTest {
 
   AiDataKeyedService& ai_data_service() {
     return *AiDataKeyedServiceFactory::GetAiDataKeyedService(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   actor::ActorKeyedService& actor_service() {
-    return *actor::ActorKeyedService::Get(browser()->profile());
+    return *actor::ActorKeyedService::Get(browser()->GetProfile());
   }
 
   content::WebContents* web_contents() {
@@ -341,8 +340,7 @@ IN_PROC_BROWSER_TEST_F(AiDataKeyedServiceBrowserTest, AIPageContent) {
   {
     const auto& page_content = ai_data->action_annotated_page_content();
     EXPECT_EQ(page_content.version(),
-              optimization_guide::proto::
-                  ANNOTATED_PAGE_CONTENT_VERSION_ONLY_ACTIONABLE_ELEMENTS_1_0);
+              optimization_guide::proto::ANNOTATED_PAGE_CONTENT_VERSION_1_0);
     const auto& content_attributes =
         page_content.root_node().content_attributes();
     EXPECT_EQ(content_attributes.attribute_type(),
@@ -415,8 +413,9 @@ IN_PROC_BROWSER_TEST_F(AiDataKeyedServiceBrowserTest,
       driver->GetAutofillManager(),
       &autofill::AutofillManager::Observer::OnAfterFormsSeen,
       testing::ElementsAre(expected_form.global_id()), testing::IsEmpty());
-  driver->GetAutofillManager().OnFormsSeen(/*updated_forms=*/{expected_form},
-                                           /*removed_forms=*/{});
+  driver->GetAutofillManager().OnFormsSeen(
+      /*updated_forms=*/{expected_form},
+      /*removed_forms=*/{}, autofill::AutofillManagerTestApi::pass_key());
   ASSERT_TRUE(std::move(wait_for_forms_seen).Wait());
 
   // Query the API for `expected_form`'s first field.

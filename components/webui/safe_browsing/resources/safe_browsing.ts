@@ -3,6 +3,11 @@
  * found in the LICENSE file. */
 
 import 'chrome://resources/cr_elements/cr_tab_box/cr_tab_box.js';
+// <if expr="is_ios">
+// TODO(crbug.com/41173939): Remove this once injected by web. -->
+import 'chrome://resources/js/ios/web_ui.js';
+
+// </if>
 
 import {assert} from 'chrome://resources/js/assert.js';
 import {addWebUiListener, sendWithPromise} from 'chrome://resources/js/cr.js';
@@ -28,11 +33,19 @@ interface RealtimeReportingResult {
 interface DeepScanResult {
   request: string;
   request_time: string;
+  http_headers: string;
   token: string;
   response: string;
   response_time: string;
   response_status: string;
 }
+
+interface TailoredVerdictResponse {
+  status: number;
+  override_value: object;
+}
+
+const deepScanData: Map<string, DeepScanResult> = new Map();
 
 /**
  * Asks the C++ SafeBrowsingUIHandler to get the lists of Safe Browsing
@@ -41,24 +54,24 @@ interface DeepScanResult {
  * addPreferences() (below).
  */
 function initialize() {
-  sendWithPromise('getExperiments', [])
+  sendWithPromise<string[]>('getExperiments', [])
       .then((experiments: string[]) => addExperiments(experiments));
-  sendWithPromise('getPrefs', []).then((prefs: string[]) => addPrefs(prefs));
-  sendWithPromise('getPolicies', [])
+  sendWithPromise<string[]>('getPrefs', [])
+      .then((prefs: string[]) => addPrefs(prefs));
+  sendWithPromise<Array<string|boolean>>('getPolicies', [])
       .then((policies: Array<string|boolean>) => addPolicies(policies));
-  sendWithPromise('getCookie', []).then((cookie: [
-                                          string, number
-                                        ]) => addCookie(cookie));
-  sendWithPromise('getSavedPasswords', [])
+  sendWithPromise<[string, number]>('getCookie', [])
+      .then((cookie: [string, number]) => addCookie(cookie));
+  sendWithPromise<Array<string|boolean>>('getSavedPasswords', [])
       .then((passwords: Array<string|boolean>) => addSavedPasswords(passwords));
-  sendWithPromise('getDatabaseManagerInfo', [])
+  sendWithPromise<Array<string|number|string[]>>('getDatabaseManagerInfo', [])
       .then(function(databaseState: Array<string|number|string[]>) {
         const fullHashCacheState = databaseState.splice(-1, 1) as string[];
         addDatabaseManagerInfo(databaseState);
         addFullHashCacheInfo(fullHashCacheState);
       });
 
-  sendWithPromise('getDownloadUrlsChecked', [])
+  sendWithPromise<string[]>('getDownloadUrlsChecked', [])
       .then((urlsChecked: string[]) => {
         urlsChecked.forEach(function(urlAndResult) {
           addDownloadUrlChecked(urlAndResult);
@@ -69,7 +82,7 @@ function initialize() {
         addDownloadUrlChecked(urlAndResult);
       });
 
-  sendWithPromise('getSentClientDownloadRequests', [])
+  sendWithPromise<string[]>('getSentClientDownloadRequests', [])
       .then((sentClientDownloadRequests: string[]) => {
         sentClientDownloadRequests.forEach(function(cdr) {
           addSentClientDownloadRequestsInfo(cdr);
@@ -80,7 +93,7 @@ function initialize() {
         addSentClientDownloadRequestsInfo(result);
       });
 
-  sendWithPromise('getReceivedClientDownloadResponses', [])
+  sendWithPromise<string[]>('getReceivedClientDownloadResponses', [])
       .then((receivedClientDownloadResponses: string[]) => {
         receivedClientDownloadResponses.forEach(function(cdr) {
           addReceivedClientDownloadResponseInfo(cdr);
@@ -91,7 +104,7 @@ function initialize() {
         addReceivedClientDownloadResponseInfo(result);
       });
 
-  sendWithPromise('getSentClientPhishingRequests', [])
+  sendWithPromise<string[]>('getSentClientPhishingRequests', [])
       .then((sentClientPhishingRequests: string[]) => {
         sentClientPhishingRequests.forEach(function(cpr: string) {
           addSentClientPhishingRequestsInfo(cpr);
@@ -102,7 +115,7 @@ function initialize() {
         addSentClientPhishingRequestsInfo(result);
       });
 
-  sendWithPromise('getReceivedClientPhishingResponses', [])
+  sendWithPromise<string[]>('getReceivedClientPhishingResponses', [])
       .then((receivedClientPhishingResponses: string[]) => {
         receivedClientPhishingResponses.forEach(function(cpr) {
           addReceivedClientPhishingResponseInfo(cpr);
@@ -113,7 +126,8 @@ function initialize() {
         addReceivedClientPhishingResponseInfo(result);
       });
 
-  sendWithPromise('getSentCSBRRs', []).then((sentCSBRRs: string[]) => {
+  sendWithPromise<string[]>('getSentCSBRRs', [
+  ]).then((sentCSBRRs: string[]) => {
     sentCSBRRs.forEach(function(csbrr) {
       addSentCSBRRsInfo(csbrr);
     });
@@ -122,11 +136,8 @@ function initialize() {
     addSentCSBRRsInfo(result);
   });
 
-  addWebUiListener('sent-hit-report-list', function(result: string) {
-    addSentHitReportsInfo(result);
-  });
-
-  sendWithPromise('getPGEvents', []).then((pgEvents: ReportingResult[]) => {
+  sendWithPromise<ReportingResult[]>('getPGEvents', [
+  ]).then((pgEvents: ReportingResult[]) => {
     pgEvents.forEach(function(pgEvent) {
       addPGEvent(pgEvent);
     });
@@ -135,7 +146,7 @@ function initialize() {
     addPGEvent(result);
   });
 
-  sendWithPromise('getSecurityEvents', [])
+  sendWithPromise<ReportingResult[]>('getSecurityEvents', [])
       .then((securityEvents: ReportingResult[]) => {
         securityEvents.forEach(function(securityEvent) {
           addSecurityEvent(securityEvent);
@@ -145,7 +156,7 @@ function initialize() {
     addSecurityEvent(result);
   });
 
-  sendWithPromise('getPGPings', []).then((pgPings: string[][]) => {
+  sendWithPromise<string[][]>('getPGPings', []).then((pgPings: string[][]) => {
     pgPings.forEach(function(pgPing) {
       addPGPing(pgPing);
     });
@@ -154,7 +165,8 @@ function initialize() {
     addPGPing(result);
   });
 
-  sendWithPromise('getPGResponses', []).then((pgResponses: string[][]) => {
+  sendWithPromise<string[][]>('getPGResponses', [
+  ]).then((pgResponses: string[][]) => {
     pgResponses.forEach(function(pgResponse) {
       addPGResponse(pgResponse);
     });
@@ -163,7 +175,7 @@ function initialize() {
     addPGResponse(result);
   });
 
-  sendWithPromise('getURTLookupPings', [])
+  sendWithPromise<string[][]>('getURTLookupPings', [])
       .then((urtLookupPings: string[][]) => {
         urtLookupPings.forEach(function(urtLookupPing) {
           addURTLookupPing(urtLookupPing);
@@ -173,7 +185,7 @@ function initialize() {
     addURTLookupPing(result);
   });
 
-  sendWithPromise('getURTLookupResponses', [])
+  sendWithPromise<string[][]>('getURTLookupResponses', [])
       .then((urtLookupResponses: string[][]) => {
         urtLookupResponses.forEach(function(urtLookupResponse) {
           addURTLookupResponse(urtLookupResponse);
@@ -183,7 +195,7 @@ function initialize() {
     addURTLookupResponse(result);
   });
 
-  sendWithPromise('getHPRTLookupPings', [])
+  sendWithPromise<string[][]>('getHPRTLookupPings', [])
       .then((hprtLookupPings: string[][]) => {
         hprtLookupPings.forEach(function(hprtLookupPing: string[]) {
           addHPRTLookupPing(hprtLookupPing);
@@ -193,7 +205,7 @@ function initialize() {
     addHPRTLookupPing(result);
   });
 
-  sendWithPromise('getHPRTLookupResponses', [])
+  sendWithPromise<string[][]>('getHPRTLookupResponses', [])
       .then((hprtLookupResponses: string[][]) => {
         hprtLookupResponses.forEach(function(hprtLookupResponse) {
           addHPRTLookupResponse(hprtLookupResponse);
@@ -203,7 +215,7 @@ function initialize() {
     addHPRTLookupResponse(result);
   });
 
-  sendWithPromise('getLogMessages', [])
+  sendWithPromise<ReportingResult[]>('getLogMessages', [])
       .then((logMessages: ReportingResult[]) => {
         logMessages.forEach(function(message) {
           addLogMessage(message);
@@ -213,7 +225,7 @@ function initialize() {
     addLogMessage(message);
   });
 
-  sendWithPromise('getReportingEvents', [])
+  sendWithPromise<RealtimeReportingResult[]>('getReportingEvents', [])
       .then((reportingEvents: RealtimeReportingResult[]) => {
         reportingEvents.forEach(function(reportingEvent) {
           addReportingEvent(reportingEvent);
@@ -225,7 +237,8 @@ function initialize() {
         addReportingEvent(reportingEvent);
       });
 
-  sendWithPromise('getDeepScans', []).then((requests: DeepScanResult[]) => {
+  sendWithPromise<DeepScanResult[]>('getDeepScans', [
+  ]).then((requests: DeepScanResult[]) => {
     requests.forEach(function(request) {
       addDeepScan(request);
     });
@@ -235,8 +248,11 @@ function initialize() {
         addDeepScan(result);
       });
 
+  const deepScanExportButton = $('deep-scan-export-btn');
+  assert(deepScanExportButton);
+  deepScanExportButton.addEventListener('click', exportDeepScanData);
   // <if expr="is_android">
-  sendWithPromise('getReferringAppInfo', []).then((info: string) => {
+  sendWithPromise<string>('getReferringAppInfo', []).then((info: string) => {
     addReferringAppInfo(info);
   });
   // </if>
@@ -245,7 +261,7 @@ function initialize() {
   assert(referrerChangeForm);
   referrerChangeForm.addEventListener('submit', addReferrerChain);
 
-  sendWithPromise('getTailoredVerdictOverride', [])
+  sendWithPromise<TailoredVerdictResponse>('getTailoredVerdictOverride', [])
       .then(displayTailoredVerdictOverride);
   addWebUiListener(
       'tailored-verdict-override-update', displayTailoredVerdictOverride);
@@ -361,7 +377,7 @@ function addDatabaseManagerInfo(
 
     labelDOM.textContent = databaseManagerInfo[i] + ': ';
     const value = databaseManagerInfo[i + 1];
-    assert(value);
+    assert(value !== undefined && value !== null);
     if (Array.isArray(value)) {
       const blockQuote = document.createElement('blockquote');
       value.forEach(item => {
@@ -450,11 +466,6 @@ function addSentCSBRRsInfo(csbrrsInfo: string) {
   appendChildWithInnerText(logDiv, csbrrsInfo);
 }
 
-function addSentHitReportsInfo(hitReportsInfo: string) {
-  const logDiv = $('sent-hit-report-list');
-  appendChildWithInnerText(logDiv, hitReportsInfo);
-}
-
 function addPGEvent(pgEvent: ReportingResult) {
   const logDiv = $('pg-event-log');
   const eventFormatted =
@@ -532,27 +543,56 @@ function addResultToTableHelper(
 
 function addDeepScan(result: DeepScanResult) {
   if (result.request_time !== null) {
-    const requestFormatted = '[' +
-        (new Date(result.request_time)).toLocaleString() + ']\n' +
-        result.request;
+    let requestFormatted =
+        '[' + (new Date(result.request_time)).toLocaleString() + ']\n';
+
+    if (result.http_headers != null) {
+      requestFormatted += result.http_headers;
+    }
+    requestFormatted += result.request;
+
     addResultToTable('deep-scan-list', result.token, requestFormatted, 0);
   }
 
+
   if (result.response_time != null) {
-    if (result.response_status === 'SUCCESS') {
-      // Display the response instead
-      const resultFormatted = '[' +
-          (new Date(result.response_time)).toLocaleString() + ']\n' +
-          result.response;
-      addResultToTable('deep-scan-list', result.token, resultFormatted, 1);
-    } else {
-      // Display the error
-      const resultFormatted = '[' +
-          (new Date(result.response_time)).toLocaleString() + ']\n' +
-          result.response_status;
-      addResultToTable('deep-scan-list', result.token, resultFormatted, 1);
+    let resultFormatted =
+        '[' + (new Date(result.response_time)).toLocaleString() + ']\n';
+    // Display result if it is non-success
+    if (result.response_status && result.response_status !== 'SUCCESS') {
+      resultFormatted += result.response_status + '\n';
     }
+    // Regardless of the result status, the response is always logged.
+    if (result.response) {
+      resultFormatted += result.response;
+    }
+    addResultToTable('deep-scan-list', result.token, resultFormatted, 1);
   }
+
+  deepScanData.set(result.token, result);
+}
+
+// Exports the data currently displayed in the Deep Scan tab as a JSON file.
+function exportDeepScanData(): void {
+  const exportData = Array.from(deepScanData.values()).map(entry => {
+    return {
+      'request_time': new Date(entry.request_time).toLocaleString(),
+      'http_headers': entry.http_headers,
+      'request': JSON.parse(entry.request),
+      'response_time': new Date(entry.response_time).toLocaleString(),
+      'response': JSON.parse(entry.response),
+    };
+  });
+
+  const deepScanJson =
+      JSON.stringify(exportData, /* replacer= */ null, /* space= */ 2);
+  const blob = new Blob([deepScanJson], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `deep_scan_export_${Date.now()}.json`;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 function addLogMessage(logMessage: ReportingResult) {
@@ -638,7 +678,7 @@ function addReferrerChain(ev: Event) {
 
   const referrerChainURL = $<HTMLInputElement>('referrer-chain-url');
   assert(referrerChainURL);
-  sendWithPromise('getReferrerChain', referrerChainURL.value)
+  sendWithPromise<string>('getReferrerChain', referrerChainURL.value)
       .then((referrerChain: string) => {
         const referrerChainContent = $('referrer-chain-content');
         assert(referrerChainContent);
@@ -667,8 +707,7 @@ function addReferringAppInfo(info: string|null) {
 // </if>
 
 // Format the browser's response nicely.
-function displayTailoredVerdictOverride(
-    response: {status: number, override_value: object}) {
+function displayTailoredVerdictOverride(response: TailoredVerdictResponse) {
   let displayString = `Status: ${response.status}`;
   if (response.override_value) {
     displayString +=
@@ -698,7 +737,8 @@ function setTailoredVerdictOverride(e: Event) {
     tailored_verdict_type: inputs.tailored_verdict_type.value,
   };
 
-  sendWithPromise('setTailoredVerdictOverride', inputValue)
+  sendWithPromise<TailoredVerdictResponse>(
+      'setTailoredVerdictOverride', inputValue)
       .then(displayTailoredVerdictOverride);
 }
 
@@ -710,7 +750,7 @@ function clearTailoredVerdictOverride(e: Event) {
   assert(form);
   form.reset();
 
-  sendWithPromise('clearTailoredVerdictOverride')
+  sendWithPromise<TailoredVerdictResponse>('clearTailoredVerdictOverride')
       .then(displayTailoredVerdictOverride);
 }
 

@@ -13,17 +13,22 @@
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/keyboard/ui_bundled/UIKeyCommand+Chrome.h"
 #import "ios/chrome/browser/menu/ui_bundled/action_factory.h"
+#import "ios/chrome/browser/saved_tab_groups/ui/face_pile_color_updater.h"
 #import "ios/chrome/browser/saved_tab_groups/ui/face_pile_providing.h"
 #import "ios/chrome/browser/share_kit/model/sharing_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/scene_layout_state.h"
 #import "ios/chrome/browser/shared/model/web_state_list/tab_group.h"
 #import "ios/chrome/browser/shared/public/commands/tab_groups_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/elements/extended_touch_target_button.h"
+#import "ios/chrome/browser/shared/ui/elements/gradient/gradient_view.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
+#import "ios/chrome/browser/shared/ui/util/color_palette/tab_group_color_palette.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/grid_constants.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/tab_group_grid_view_controller.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_grid_paging.h"
+#import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_groups/tab_group_gradient_view.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_groups/tab_group_mutator.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_groups/tab_group_presentation_commands.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_groups/tab_groups_constants.h"
@@ -31,7 +36,6 @@
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/toolbars/tab_grid_toolbars_grid_delegate.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_group_action_type.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
-#import "ios/chrome/common/ui/elements/gradient_view.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util_mac.h"
@@ -54,6 +58,7 @@ constexpr CGFloat kBottomToolbarMargin = 8;
 constexpr CGFloat kButtonSpacing = 10;
 constexpr CGFloat kCloseImageSize = 12.5;
 constexpr CGFloat kMenuImageSize = 16;
+constexpr CGFloat kButtonAlpha = 0.2;
 
 // Animation.
 constexpr CGFloat kTranslationCompletion = 0;
@@ -65,31 +70,33 @@ constexpr CGFloat kSpace = 8;
 
 // Container constraints.
 constexpr CGFloat kContainerMargin = 12;
-constexpr CGFloat kContainerMultiplier = 0.8;
+constexpr CGFloat kDefaultContainerMultiplier = 0.8;
+constexpr CGFloat kContainerMultiplier = 0.75;
 constexpr CGFloat kContainerCornerRadius = 24;
-constexpr CGFloat kContainerBackgroundAlpha = 0.8;
 
 // Returns a button to be added to the top toolbar.
-UIButton* TopToolbarButton(NSString* symbol_name,
+UIButton* TopToolbarButton(Symbol symbol,
                            UIAction* action,
-                           CGFloat image_size) {
+                           CGFloat image_size,
+                           UIColor* background_color) {
   UIBackgroundConfiguration* background_configuration =
       [UIBackgroundConfiguration clearConfiguration];
+  // This visualEffect should stay in sync with the one used by the
+  // `_titleButton` of `TabGroupHeader`.
   background_configuration.visualEffect = [UIBlurEffect
       effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark];
-  background_configuration.backgroundColor =
-      TabGroupViewButtonBackgroundColor();
+  background_configuration.backgroundColor = background_color;
 
   UIButtonConfiguration* configuration =
       [UIButtonConfiguration plainButtonConfiguration];
   configuration.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
   configuration.baseForegroundColor = UIColor.whiteColor;
   configuration.background = background_configuration;
-  configuration.image = DefaultSymbolWithConfiguration(
-      symbol_name, [UIImageSymbolConfiguration
-                       configurationWithPointSize:image_size
-                                           weight:UIImageSymbolWeightBold
-                                            scale:UIImageSymbolScaleMedium]);
+  configuration.image = SymbolWithConfiguration(
+      symbol, [UIImageSymbolConfiguration
+                  configurationWithPointSize:image_size
+                                      weight:UIImageSymbolWeightBold
+                                       scale:UIImageSymbolScaleMedium]);
   ExtendedTouchTargetButton* button =
       [ExtendedTouchTargetButton buttonWithConfiguration:configuration
                                            primaryAction:action];
@@ -120,14 +127,14 @@ UIButton* TopToolbarButton(NSString* symbol_name,
   UIView* _topToolbarBackground;
   // The stack view containing the buttons of the top toolbar.
   UIStackView* _topToolbarButtonsStackView;
-  // The the tab group menu button.
+  // The tab group menu button.
   UIButton* _menuButton;
+  // The tab group view's close button.
+  UIButton* _closeButton;
   // Tab Groups handler.
-  __weak id<TabGroupsCommands> _handler;
+  __weak id<TabGroupsCommands> _tabGroupsHandler;
   // Group's title.
   NSString* _groupTitle;
-  // Group's color.
-  UIColor* _groupColor;
   // The blur background.
   UIVisualEffectView* _blurView;
   // Currently displayed group.
@@ -154,7 +161,7 @@ UIButton* TopToolbarButton(NSString* symbol_name,
   // The button containing the facepile.
   UIButton* _facePileContainer;
   // The face pile view that displays the share button or the face pile.
-  UIView* _facePileView;
+  UIView<FacePileColorUpdater>* _facePileView;
   // Constraints for the container on narrow vs large windows.
   NSArray<NSLayoutConstraint*>* _narrowWidthConstraints;
   NSArray<NSLayoutConstraint*>* _largeWidthConstraints;
@@ -162,29 +169,35 @@ UIButton* TopToolbarButton(NSString* symbol_name,
   UIView* _container;
   // The background of the container, for animations.
   UIView* _containerBackground;
+  // An ivar that stores the _containerBackground as TabGroupGradientView,
+  // should be removed once IsTabGroupColorOnSurfaceEnabled shipped.
+  TabGroupGradientView* _containerGradientBackground;
   // The gesture recognizer to swipe to dismiss the tab group view.
   UIPanGestureRecognizer* _swipeDownGestureRecognizer;
   // Face pile provider.
   id<FacePileProviding> _facePileProvider;
+  // The color palette for the tab group view.
+  TabGroupColorPalette* _tabGroupColorPalette;
 }
 
 #pragma mark - Public
 
-- (instancetype)initWithHandler:(id<TabGroupsCommands>)handler
+- (instancetype)initWithHandler:(id<TabGroupsCommands>)tabGroupsHandler
                       incognito:(BOOL)incognito
                        tabGroup:(const TabGroup*)tabGroup {
   CHECK(tabGroup);
   if ((self = [super init])) {
-    _handler = handler;
+    _tabGroupsHandler = tabGroupsHandler;
     _incognito = incognito;
     _tabGroup = tabGroup;
     _gridViewController = [[TabGroupGridViewController alloc] init];
     if (!incognito) {
-      _gridViewController.theme = GridThemeLight;
+      _gridViewController.theme = GridTheme::kDynamic;
     } else {
-      _gridViewController.theme = GridThemeDark;
+      _gridViewController.theme = GridTheme::kDark;
     }
     _gridViewController.viewDelegate = self;
+    _gridViewController.tabGroupHeaderDelegate = self;
 
     // This view controller has a dark background and should be considered as
     // dark mode regardless of the theme of the grid.
@@ -262,8 +275,10 @@ UIButton* TopToolbarButton(NSString* symbol_name,
 }
 
 - (void)gridViewControllerDidScroll {
-  _bottomGradient.hidden = self.gridViewController.scrolledToBottom;
-  _topToolbarBackground.hidden = self.gridViewController.scrolledToTop;
+  _bottomGradient.hidden =
+      self.gridViewController.remainingScrollDistanceBottom <= 0;
+  _topToolbarBackground.hidden =
+      self.gridViewController.remainingScrollDistanceTop <= 0;
 }
 
 #pragma mark - UIViewController
@@ -306,11 +321,9 @@ UIButton* TopToolbarButton(NSString* symbol_name,
   _container.translatesAutoresizingMaskIntoConstraints = NO;
   [self.view addSubview:_container];
 
-  _containerBackground = [[UIView alloc] init];
-  _containerBackground.translatesAutoresizingMaskIntoConstraints = NO;
-  _containerBackground.backgroundColor =
-      [UIColor.blackColor colorWithAlphaComponent:kContainerBackgroundAlpha];
+  _containerBackground = [self configuredBackground];
   [_container addSubview:_containerBackground];
+
   AddSameConstraints(_container, _containerBackground);
 
   _container.layer.cornerRadius = kContainerCornerRadius;
@@ -323,8 +336,11 @@ UIButton* TopToolbarButton(NSString* symbol_name,
                                             constant:-kContainerMargin],
   ];
   _largeWidthConstraints = @[
-    [_container.widthAnchor constraintEqualToAnchor:self.view.widthAnchor
-                                         multiplier:kContainerMultiplier],
+    [_container.widthAnchor
+        constraintEqualToAnchor:self.view.widthAnchor
+                     multiplier:IsChromeNextIaEnabled()
+                                    ? kContainerMultiplier
+                                    : kDefaultContainerMultiplier],
   ];
 
   [self updateContainerConstraints];
@@ -332,8 +348,11 @@ UIButton* TopToolbarButton(NSString* symbol_name,
   [NSLayoutConstraint activateConstraints:@[
     [self.view.centerXAnchor constraintEqualToAnchor:_container.centerXAnchor],
     [self.view.centerYAnchor constraintEqualToAnchor:_container.centerYAnchor],
-    [_container.heightAnchor constraintEqualToAnchor:self.view.heightAnchor
-                                          multiplier:kContainerMultiplier],
+    [_container.heightAnchor
+        constraintEqualToAnchor:self.view.heightAnchor
+                     multiplier:IsChromeNextIaEnabled()
+                                    ? kContainerMultiplier
+                                    : kDefaultContainerMultiplier],
   ]];
 
   _topToolbar = [self configuredTopToolbar];
@@ -410,14 +429,14 @@ UIButton* TopToolbarButton(NSString* symbol_name,
 - (BOOL)navigationBar:(UINavigationBar*)navigationBar
         shouldPopItem:(UINavigationItem*)item {
   _backButtonTapped = YES;
-  [_handler hideTabGroup];
+  [_tabGroupsHandler hideTabGroup];
   return NO;
 }
 
 - (void)navigationBar:(UINavigationBar*)navigationBar
            didPopItem:(UINavigationItem*)item {
   _backButtonTapped = YES;
-  [_handler hideTabGroup];
+  [_tabGroupsHandler hideTabGroup];
 }
 
 #pragma mark - UIBarPositioningDelegate
@@ -436,10 +455,14 @@ UIButton* TopToolbarButton(NSString* symbol_name,
   [_titleLabel setText:_groupTitle];
 }
 
-- (void)setGroupColor:(UIColor*)color {
-  _groupColor = color;
-  _gridViewController.groupColor = color;
-  [_coloredDotView setBackgroundColor:_groupColor];
+- (void)setTabGroupColorPalette:(TabGroupColorPalette*)tabGroupColorPalette {
+  _tabGroupColorPalette = tabGroupColorPalette;
+  // Forward it to the TabGroupGridViewController.
+  _gridViewController.tabGroupColorPalette = _tabGroupColorPalette;
+  if (!self.viewLoaded) {
+    return;
+  }
+  [self updateGroupColorSurfaces];
 }
 
 - (void)setShareAvailable:(BOOL)shareAvailable {
@@ -498,7 +521,7 @@ UIButton* TopToolbarButton(NSString* symbol_name,
 // The close button has been tapped.
 - (void)didTapCloseButton {
   _backButtonTapped = YES;
-  [_handler hideTabGroup];
+  [_tabGroupsHandler hideTabGroup];
 }
 
 // The facePile button has been tapped.
@@ -508,7 +531,11 @@ UIButton* TopToolbarButton(NSString* symbol_name,
 
 // Returns the menu button, configured.
 - (UIButton*)configuredMenuButton {
-  UIButton* button = TopToolbarButton(kMenuSymbol, nil, kMenuImageSize);
+  UIColor* backgroundColor =
+      [_tabGroupColorPalette.commonColor colorWithAlphaComponent:kButtonAlpha];
+
+  UIButton* button =
+      TopToolbarButton(SymbolMenu, nil, kMenuImageSize, backgroundColor);
   button.showsMenuAsPrimaryAction = YES;
   button.menu = [self configuredTabGroupMenu];
   button.accessibilityIdentifier = kTabGroupOverflowMenuButtonIdentifier;
@@ -529,6 +556,7 @@ UIButton* TopToolbarButton(NSString* symbol_name,
                 primaryAction:[UIAction actionWithHandler:^(UIAction* action) {
                   [weakSelf didTapFacePileButton];
                 }]];
+
   container.accessibilityIdentifier = kTabGroupFacePileButtonIdentifier;
   [self updateFacePileContainer:container withFacePile:_facePileView];
   return container;
@@ -553,12 +581,14 @@ UIButton* TopToolbarButton(NSString* symbol_name,
     [weakSelf didTapCloseButton];
   }];
 
-  UIButton* closeButton =
-      TopToolbarButton(kXMarkSymbol, closeAction, kCloseImageSize);
-  closeButton.accessibilityLabel = l10n_util::GetNSString(IDS_CLOSE);
-  closeButton.accessibilityIdentifier = kTabGroupCloseButtonIdentifier;
+  UIColor* backgroundColor =
+      [_tabGroupColorPalette.commonColor colorWithAlphaComponent:kButtonAlpha];
+  _closeButton = TopToolbarButton(SymbolXMark, closeAction, kCloseImageSize,
+                                  backgroundColor);
+  _closeButton.accessibilityLabel = l10n_util::GetNSString(IDS_CLOSE);
+  _closeButton.accessibilityIdentifier = kTabGroupCloseButtonIdentifier;
 
-  [stackView addArrangedSubview:closeButton];
+  [stackView addArrangedSubview:_closeButton];
 
   return stackView;
 }
@@ -619,7 +649,7 @@ UIButton* TopToolbarButton(NSString* symbol_name,
   UIView* dotView = [[UIView alloc] initWithFrame:CGRectZero];
   dotView.translatesAutoresizingMaskIntoConstraints = NO;
   dotView.layer.cornerRadius = kDotSize / 2;
-  dotView.backgroundColor = _groupColor;
+  dotView.backgroundColor = _tabGroupColorPalette.commonColor;
 
   [NSLayoutConstraint activateConstraints:@[
     [dotView.heightAnchor constraintEqualToConstant:kDotSize],
@@ -683,6 +713,7 @@ UIButton* TopToolbarButton(NSString* symbol_name,
 // Adds the bottom toolbar containing the "plus" button.
 - (void)configureBottomToolbar {
   TabGridBottomToolbar* bottomToolbar = [[TabGridBottomToolbar alloc] init];
+  bottomToolbar.layoutState = self.layoutState;
   _bottomToolbar = bottomToolbar;
   bottomToolbar.translatesAutoresizingMaskIntoConstraints = NO;
 
@@ -692,6 +723,8 @@ UIButton* TopToolbarButton(NSString* symbol_name,
       _incognito ? TabGridPageIncognitoTabs : TabGridPageRegularTabs;
   bottomToolbar.mode = TabGridMode::kNormal;
   bottomToolbar.isInTabGroupView = YES;
+  [_bottomToolbar
+      updateNewTabButtonBackgroundColor:_tabGroupColorPalette.commonColor];
 
   [_container addSubview:bottomToolbar];
 
@@ -707,10 +740,22 @@ UIButton* TopToolbarButton(NSString* symbol_name,
   [self updateGridInsets];
 }
 
+// Returns the background, with a gradient.
+- (TabGroupGradientView*)configuredBackground {
+  TabGroupGradientView* background = [[TabGroupGradientView alloc]
+      initWithColors:[TabGroupColorPalette
+                         gradientBackgroundColors:_tabGroupColorPalette
+                                                      .tabGroupColorID]];
+  background.translatesAutoresizingMaskIntoConstraints = NO;
+  _containerGradientBackground = background;
+
+  return background;
+}
+
 // Displays the menu to rename and change the color of the currently displayed
 // group.
 - (void)displayEditionMenu {
-  [_handler showTabGroupEditionForGroup:_tabGroup];
+  [_tabGroupsHandler showTabGroupEditionForGroup:_tabGroup->GetWeakPtr()];
 }
 
 // Returns the tab group menu.
@@ -806,12 +851,12 @@ UIButton* TopToolbarButton(NSString* symbol_name,
 // Opens a new tab in the group.
 - (void)openNewTab {
   if ([self.mutator addNewItemInGroup]) {
-    [_handler showActiveTab];
+    [_tabGroupsHandler showActiveTab];
   } else {
     // Dismiss the view as it looks like the policy changed, and it is not
     // possible to create a new tab anymore. In this case, the user should not
     // see any tabs.
-    [_handler hideTabGroup];
+    [_tabGroupsHandler hideTabGroup];
   }
 }
 
@@ -819,7 +864,7 @@ UIButton* TopToolbarButton(NSString* symbol_name,
 - (void)ungroup {
   // Shows the confirmation to ungroup the current group (keep the tab) and
   // close the view. Do nothing when a user cancels the action.
-  [_handler
+  [_tabGroupsHandler
       showTabGroupConfirmationForAction:TabGroupActionType::kUngroupTabGroup
                                   group:_tabGroup->GetWeakPtr()
                              sourceView:_menuButton];
@@ -828,14 +873,14 @@ UIButton* TopToolbarButton(NSString* symbol_name,
 // Closes the tabs and deletes the current group and closes the view.
 - (void)closeGroup {
   [self.mutator closeGroup];
-  [_handler hideTabGroup];
+  [_tabGroupsHandler hideTabGroup];
 }
 
 // Deletes the tabs and deletes the current group and closes the view.
 - (void)deleteGroup {
   // Shows the confirmation to delete the tabs, delete the current group and
   // close the view. Do nothing when a user cancels the action.
-  [_handler
+  [_tabGroupsHandler
       showTabGroupConfirmationForAction:TabGroupActionType::kDeleteTabGroup
                                   group:_tabGroup->GetWeakPtr()
                              sourceView:_menuButton];
@@ -846,7 +891,7 @@ UIButton* TopToolbarButton(NSString* symbol_name,
   CHECK(_gridViewController.shared);
   CHECK_EQ(_sharingState, SharingState::kSharedAndOwned);
 
-  [_handler
+  [_tabGroupsHandler
       startLeaveOrDeleteSharedGroup:_tabGroup->GetWeakPtr()
                           forAction:TabGroupActionType::kDeleteSharedTabGroup
                          sourceView:_menuButton];
@@ -857,7 +902,7 @@ UIButton* TopToolbarButton(NSString* symbol_name,
   CHECK(_gridViewController.shared);
   CHECK_EQ(_sharingState, SharingState::kShared);
 
-  [_handler
+  [_tabGroupsHandler
       startLeaveOrDeleteSharedGroup:_tabGroup->GetWeakPtr()
                           forAction:TabGroupActionType::kLeaveSharedTabGroup
                          sourceView:_menuButton];
@@ -911,6 +956,10 @@ UIButton* TopToolbarButton(NSString* symbol_name,
   }
   facePile.userInteractionEnabled = NO;
   facePile.translatesAutoresizingMaskIntoConstraints = NO;
+  [_facePileView
+      setShareButtonBackgroundColor:[_tabGroupColorPalette.commonColor
+                                        colorWithAlphaComponent:kButtonAlpha]];
+
   [facePileContainer addSubview:facePile];
   AddSameConstraints(facePile, facePileContainer);
 }
@@ -918,14 +967,14 @@ UIButton* TopToolbarButton(NSString* symbol_name,
 // Starts managing the shared group.
 - (void)manageGroup {
   CHECK(_gridViewController.shared);
-  [_handler showManageForGroup:_tabGroup->GetWeakPtr()];
+  [_tabGroupsHandler showManageForGroup:_tabGroup->GetWeakPtr()];
 }
 
 // Starts sharing the group.
 - (void)shareGroup {
   CHECK(!_gridViewController.shared);
   CHECK(_shareAvailable);
-  [_handler showShareForGroup:_tabGroup->GetWeakPtr()];
+  [_tabGroupsHandler showShareForGroup:_tabGroup->GetWeakPtr()];
 }
 
 // Called when the gesture recognizer has an update.
@@ -970,6 +1019,33 @@ UIButton* TopToolbarButton(NSString* symbol_name,
       _container.transform = CGAffineTransformIdentity;
       break;
   }
+}
+
+// Updates the UI elements' colors.
+- (void)updateGroupColorSurfaces {
+  UIColor* buttonColor =
+      [_tabGroupColorPalette.commonColor colorWithAlphaComponent:kButtonAlpha];
+
+  UIButtonConfiguration* menuButtonConfig = _menuButton.configuration;
+  menuButtonConfig.background.backgroundColor = buttonColor;
+  _menuButton.configuration = menuButtonConfig;
+
+  UIButtonConfiguration* closeButtonConfig = _closeButton.configuration;
+  closeButtonConfig.background.backgroundColor = buttonColor;
+  _closeButton.configuration = closeButtonConfig;
+
+  [_containerGradientBackground
+      updateColors:[TabGroupColorPalette
+                       gradientBackgroundColors:_tabGroupColorPalette
+                                                    .tabGroupColorID]];
+
+  [_facePileView
+      setShareButtonBackgroundColor:[_tabGroupColorPalette.commonColor
+                                        colorWithAlphaComponent:kButtonAlpha]];
+
+  [_bottomToolbar
+      updateNewTabButtonBackgroundColor:_tabGroupColorPalette.commonColor];
+  _coloredDotView.backgroundColor = _tabGroupColorPalette.commonColor;
 }
 
 #pragma mark - UIGestureRecognizerDelegate
@@ -1030,7 +1106,13 @@ UIButton* TopToolbarButton(NSString* symbol_name,
 
 - (void)showRecentActivity {
   CHECK(_gridViewController.shared);
-  [_handler showRecentActivityForGroup:_tabGroup->GetWeakPtr()];
+  [_tabGroupsHandler showRecentActivityForGroup:_tabGroup->GetWeakPtr()];
+}
+
+#pragma mark - TabGroupHeaderDelegate
+
+- (void)tabGroupHeaderDidTapTitle:(TabGroupHeader*)tabGroupHeader {
+  [self displayEditionMenu];
 }
 
 #pragma mark - TabGridToolbarsGridDelegate
@@ -1043,7 +1125,11 @@ UIButton* TopToolbarButton(NSString* symbol_name,
   NOTREACHED() << "Should not be called in a tab group.";
 }
 
-- (void)doneButtonTapped:(id)sende {
+- (void)exitTabGridButtonTapped:(id)sende {
+  NOTREACHED();
+}
+
+- (void)exitSelectionButtonTapped:(id)sende {
   NOTREACHED();
 }
 

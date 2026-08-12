@@ -7,9 +7,9 @@
 #import <variant>
 
 #import "base/memory/raw_ptr.h"
+#import "base/strings/stringprintf.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/test/metrics/histogram_tester.h"
-#import "base/test/scoped_feature_list.h"
 #import "components/image_fetcher/core/image_fetcher.h"
 #import "components/image_fetcher/core/mock_image_fetcher.h"
 #import "components/image_fetcher/core/request_metadata.h"
@@ -60,13 +60,13 @@ std::unique_ptr<KeyedService> CreateUserUploadedImageManager(
       base::SequencedTaskRunner::GetCurrentDefault());
 }
 
-// Post reply to image fetch. `p0` represents the image to return. `p1`
+// Post reply to image data fetch. `p0` represents the data to return. `p1`
 // represents the HTTP response code.
-ACTION_P(PostFetchReply, image, http_response_code) {
+ACTION_P(PostFetchDataReply, data, http_response_code) {
   image_fetcher::RequestMetadata metadata;
   metadata.http_response_code = http_response_code;
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(*arg2), image, metadata));
+      FROM_HERE, base::BindOnce(std::move(*arg1), data, metadata));
 }
 
 }  // namespace
@@ -104,8 +104,6 @@ class HomeCustomizationBackgroundConfigurationMediatorTest
     : public PlatformTest {
  public:
   void SetUp() override {
-    feature_list_.InitAndEnableFeature(kNTPBackgroundCustomization);
-
     TestProfileIOS::Builder test_profile_builder;
     test_profile_builder.SetPrefService(CreatePrefService());
     test_profile_builder.AddTestingFactory(
@@ -172,20 +170,18 @@ class HomeCustomizationBackgroundConfigurationMediatorTest
     image.asset_id = asset_id;
 
     image.image_url =
-        GURL(std::format("http://www.google.com/image{}", asset_id));
+        GURL(base::StringPrintf("http://www.google.com/image%d", asset_id));
     image.thumbnail_image_url = AddOptionsToImageURL(
         image.image_url.spec(), GetThumbnailImageOptions());
     image.attribution = {"Drawn by", "Chrome on iOS"};
-    image.attribution_action_url =
-        GURL(std::format("http://www.google.com/attribution{}", asset_id));
+    image.attribution_action_url = GURL(
+        base::StringPrintf("http://www.google.com/attribution%d", asset_id));
 
     return image;
   }
 
  protected:
   web::WebTaskEnvironment task_environment_;
-
-  base::test::ScopedFeatureList feature_list_;
 
   std::unique_ptr<TestProfileIOS> profile_;
 
@@ -271,10 +267,12 @@ TEST_F(HomeCustomizationBackgroundConfigurationMediatorTest,
 
   BackgroundCollectionConfiguration* collection = consumer_.configurations[0];
 
-  // First element is the default background, so expected size is number of
-  // colors + 1.
-  EXPECT_EQ(kSeedColors.size() + 1, collection.configurationOrder.count);
-  EXPECT_EQ(kSeedColors.size() + 1, collection.configurations.count);
+  // First element is the default background. Last element may be the custom
+  // color option. So expected size is number of colors + 1 or 2.
+  std::size_t expected_size =
+      kSeedColors.size() + 1 + (IsNTPBackgroundColorSliderEnabled() ? 1 : 0);
+  EXPECT_EQ(expected_size, collection.configurationOrder.count);
+  EXPECT_EQ(expected_size, collection.configurations.count);
 
   for (size_t i = 0; i < kSeedColors.size(); i++) {
     NSString* item_id = collection.configurationOrder[i];
@@ -650,10 +648,12 @@ TEST_F(HomeCustomizationBackgroundConfigurationMediatorTest,
   // Set up call.
   GURL url("https://www.google.com/image");
   gfx::Image expected_image = gfx::test::CreateImage(20, 20);
+  NSData* data = UIImagePNGRepresentation(expected_image.ToUIImage());
+  std::string png_data((const char*)[data bytes], [data length]);
 
   EXPECT_CALL(*mock_image_fetcher_.get(),
               FetchImageAndData_(url, testing::_, testing::_, testing::_))
-      .WillOnce(PostFetchReply(expected_image, 200));
+      .WillOnce(PostFetchDataReply(png_data, 200));
 
   base::RunLoop run_loop;
   base::RunLoop* run_loop_ptr = &run_loop;
@@ -683,13 +683,12 @@ TEST_F(HomeCustomizationBackgroundConfigurationMediatorTest,
 // works correctly.
 TEST_F(HomeCustomizationBackgroundConfigurationMediatorTest,
        FetchThumbnailImage_Failure) {
-  // Set up call with empty image to indicate failure.
+  // Set up call with empty data to indicate failure.
   GURL url("https://www.google.com/image");
-  gfx::Image empty_image;
 
   EXPECT_CALL(*mock_image_fetcher_.get(),
               FetchImageAndData_(url, testing::_, testing::_, testing::_))
-      .WillOnce(PostFetchReply(empty_image, 404));
+      .WillOnce(PostFetchDataReply("", 404));
 
   base::RunLoop run_loop;
   base::RunLoop* run_loop_ptr = &run_loop;
@@ -729,18 +728,25 @@ TEST_F(HomeCustomizationBackgroundConfigurationMediatorTest,
   base::RunLoop run_loop;
   base::RunLoop* run_loop_ptr = &run_loop;
   __block UIImage* actual_image;
+  __block CGSize actual_original_size;
 
   [mediator_
       fetchBackgroundCustomizationUserUploadedImage:base::SysUTF8ToNSString(
                                                         image_path.value())
+                                        targetSize:CGSizeMake(390, 844)
                                          completion:^(
                                              UIImage* image,
+                                             CGSize originalImageSize,
                                              UserUploadedImageError error) {
                                            actual_image = image;
+                                           actual_original_size =
+                                               originalImageSize;
                                            run_loop_ptr->Quit();
                                          }];
 
   run_loop.Run();
 
   EXPECT_EQ(expected_image, actual_image);
+  EXPECT_GT(actual_original_size.width, 0);
+  EXPECT_GT(actual_original_size.height, 0);
 }

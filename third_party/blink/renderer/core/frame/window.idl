@@ -135,12 +135,12 @@
     [MeasureAs=WindowPageXOffset, Replaceable] readonly attribute double pageXOffset;
     [MeasureAs=WindowScrollY, Replaceable] readonly attribute double scrollY;
     [MeasureAs=WindowPageYOffset, Replaceable] readonly attribute double pageYOffset;
-    [ImplementedAs=scrollTo, CallWith=ScriptState] Promise<undefined> scroll(optional ScrollToOptions options = {});
-    [ImplementedAs=scrollTo, CallWith=ScriptState] Promise<undefined> scroll(unrestricted double x, unrestricted double y);
-    [CallWith=ScriptState] Promise<undefined> scrollTo(optional ScrollToOptions options = {});
-    [CallWith=ScriptState] Promise<undefined> scrollTo(unrestricted double x, unrestricted double y);
-    [CallWith=ScriptState] Promise<undefined> scrollBy(optional ScrollToOptions options = {});
-    [CallWith=ScriptState] Promise<undefined> scrollBy(unrestricted double x, unrestricted double y);
+    [ImplementedAs=scrollTo, CallWith=ScriptState] Promise<ScrollResult> scroll(optional ScrollToOptions options = {});
+    [ImplementedAs=scrollTo, CallWith=ScriptState] Promise<ScrollResult> scroll(unrestricted double x, unrestricted double y);
+    [CallWith=ScriptState] Promise<ScrollResult> scrollTo(optional ScrollToOptions options = {});
+    [CallWith=ScriptState] Promise<ScrollResult> scrollTo(unrestricted double x, unrestricted double y);
+    [CallWith=ScriptState] Promise<ScrollResult> scrollBy(optional ScrollToOptions options = {});
+    [CallWith=ScriptState] Promise<ScrollResult> scrollBy(unrestricted double x, unrestricted double y);
 
     // Visual Viewport API
     // https://github.com/WICG/ViewportAPI
@@ -179,8 +179,8 @@
     [RuntimeEnabled=PageSwapEvent] attribute EventHandler onpageswap;
 
     // Event handler attribute for the pagereveal event.
-    // https://drafts.csswg.org/css-view-transitions-2/#reveal-event
-    [RuntimeEnabled=PageRevealEvent] attribute EventHandler onpagereveal;
+    // https://html.spec.whatwg.org/multipage/nav-history-apis.html#the-pagerevealevent-interface
+    attribute EventHandler onpagereveal;
 
     // https://dom.spec.whatwg.org/#interface-window-extensions
     [Replaceable, GetterCallWith=ScriptState, MeasureAs=WindowEvent] readonly attribute any event;
@@ -216,7 +216,7 @@
 
     // See
     // https://github.com/WICG/crash-reporting/blob/gh-pages/crashStorage-explainer.md.
-    [RuntimeEnabled=CrashReportingStorageAPI] readonly attribute CrashReportStorage? crashReport;
+    [RuntimeEnabled=CrashReportingStorageAPI] readonly attribute CrashReportContext? crashReport;
 
     // Responsively-sized iframes
     [RuntimeEnabled=ResponsiveIframes, RaisesException] void requestResize();

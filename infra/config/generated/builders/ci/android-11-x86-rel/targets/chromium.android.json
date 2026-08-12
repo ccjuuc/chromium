@@ -7,6 +7,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -20,6 +21,9 @@
         "module_scheme": "gtest",
         "name": "absl_hardening_tests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -55,6 +59,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -68,6 +73,9 @@
         "module_scheme": "gtest",
         "name": "android_browsertests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -92,7 +100,7 @@
             }
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 4
+          "shards": 12
         },
         "test": "android_browsertests",
         "test_id_prefix": "ninja://chrome/test:android_browsertests/"
@@ -104,6 +112,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -117,6 +126,9 @@
         "module_scheme": "gtest",
         "name": "android_sync_integration_tests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -151,6 +163,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -164,6 +177,9 @@
         "module_scheme": "gtest",
         "name": "android_webview_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -197,6 +213,7 @@
           "-v",
           "--avd-config=../../tools/android/avd/proto/android_30_google_apis_x86.textpb"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -204,6 +221,9 @@
         "module_scheme": "gtest",
         "name": "angle_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -239,6 +259,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -252,6 +273,9 @@
         "module_scheme": "gtest",
         "name": "base_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -286,6 +310,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -299,6 +324,9 @@
         "module_scheme": "gtest",
         "name": "base_unittests_android_death_tests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -333,6 +361,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -346,6 +375,9 @@
         "module_scheme": "gtest",
         "name": "blink_common_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -380,6 +412,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -393,6 +426,9 @@
         "module_scheme": "gtest",
         "name": "blink_heap_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -428,6 +464,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -446,6 +483,9 @@
           "--buildbucket-id=${buildbucket_build_id}"
         ],
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -480,6 +520,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -493,6 +534,9 @@
         "module_scheme": "gtest",
         "name": "blink_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -528,6 +572,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -541,6 +586,9 @@
         "module_scheme": "gtest",
         "name": "boringssl_crypto_tests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -575,6 +623,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -588,6 +637,9 @@
         "module_scheme": "gtest",
         "name": "boringssl_ssl_tests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -623,6 +675,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -636,6 +689,9 @@
         "module_scheme": "gtest",
         "name": "capture_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -670,6 +726,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -683,6 +740,9 @@
         "module_scheme": "gtest",
         "name": "cast_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -718,6 +778,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -731,6 +792,9 @@
         "module_scheme": "gtest",
         "name": "cc_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -765,6 +829,58 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
+        "merge": {
+          "args": [
+            "--bucket",
+            "chromium-result-details",
+            "--test-name",
+            "chrome_public_bundle_smoke_test"
+          ],
+          "script": "//build/android/pylib/results/presentation/test_results_presentation.py"
+        },
+        "module_name": "//chrome/android:chrome_public_bundle_smoke_test",
+        "module_scheme": "junit",
+        "name": "chrome_public_bundle_smoke_test",
+        "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
+          "enable": true,
+          "has_native_resultdb_integration": true
+        },
+        "swarming": {
+          "dimensions": {
+            "cores": "4",
+            "cpu": "x86-64",
+            "device_os": null,
+            "device_type": null,
+            "os": "Ubuntu-22.04",
+            "pool": "chromium.tests.avd"
+          },
+          "named_caches": [
+            {
+              "name": "android_30_google_apis_x86",
+              "path": ".android_emulator/android_30_google_apis_x86"
+            }
+          ],
+          "optional_dimensions": {
+            "60": {
+              "caches": "android_30_google_apis_x86"
+            }
+          },
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+        },
+        "test": "chrome_public_bundle_smoke_test",
+        "test_id_prefix": "ninja://chrome/android:chrome_public_bundle_smoke_test/"
+      },
+      {
+        "args": [
+          "--avd-config=../../tools/android/avd/proto/android_30_google_apis_x86.textpb",
+          "--gs-results-bucket=chromium-result-details",
+          "--recover-devices"
+        ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -778,6 +894,9 @@
         "module_scheme": "junit",
         "name": "chrome_public_smoke_test",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -812,6 +931,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -825,6 +945,9 @@
         "module_scheme": "gtest",
         "name": "components_browsertests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -861,6 +984,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -874,6 +998,9 @@
         "module_scheme": "gtest",
         "name": "components_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -911,6 +1038,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -924,6 +1052,9 @@
         "module_scheme": "junit",
         "name": "content_shell_test_apk",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -959,6 +1090,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -972,6 +1104,9 @@
         "module_scheme": "gtest",
         "name": "content_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1008,6 +1143,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1021,6 +1157,9 @@
         "module_scheme": "gtest",
         "name": "crashpad_tests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1055,6 +1194,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1068,6 +1208,9 @@
         "module_scheme": "gtest",
         "name": "crypto_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1102,6 +1245,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1115,6 +1259,9 @@
         "module_scheme": "gtest",
         "name": "device_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1149,6 +1296,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1162,6 +1310,9 @@
         "module_scheme": "gtest",
         "name": "display_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1197,6 +1348,7 @@
           "--recover-devices"
         ],
         "ci_only": true,
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1210,6 +1362,9 @@
         "module_scheme": "gtest",
         "name": "env_chromium_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1244,6 +1399,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1257,6 +1413,9 @@
         "module_scheme": "gtest",
         "name": "events_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1291,6 +1450,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1304,6 +1464,9 @@
         "module_scheme": "gtest",
         "name": "fuzzing_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1338,6 +1501,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1351,6 +1515,9 @@
         "module_scheme": "gtest",
         "name": "gcm_unit_tests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1385,6 +1552,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1398,6 +1566,9 @@
         "module_scheme": "gtest",
         "name": "gfx_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1432,6 +1603,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1445,6 +1617,9 @@
         "module_scheme": "gtest",
         "name": "gin_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1481,6 +1656,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1494,6 +1670,9 @@
         "module_scheme": "gtest",
         "name": "gl_tests_validating",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1528,6 +1707,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1541,6 +1721,9 @@
         "module_scheme": "gtest",
         "name": "gl_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1575,6 +1758,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1588,6 +1772,9 @@
         "module_scheme": "gtest",
         "name": "google_apis_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1622,6 +1809,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1635,6 +1823,9 @@
         "module_scheme": "gtest",
         "name": "gpu_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1669,6 +1860,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1682,6 +1874,9 @@
         "module_scheme": "gtest",
         "name": "gwp_asan_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1716,6 +1911,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1729,6 +1925,9 @@
         "module_scheme": "gtest",
         "name": "ipc_tests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1763,6 +1962,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1776,6 +1976,9 @@
         "module_scheme": "gtest",
         "name": "latency_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1811,6 +2014,7 @@
           "--recover-devices"
         ],
         "ci_only": true,
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1824,6 +2028,9 @@
         "module_scheme": "gtest",
         "name": "leveldb_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1858,6 +2065,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1871,6 +2079,9 @@
         "module_scheme": "gtest",
         "name": "libjingle_xmpp_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1905,6 +2116,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1918,6 +2130,9 @@
         "module_scheme": "gtest",
         "name": "liburlpattern_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -1953,6 +2168,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -1966,6 +2182,9 @@
         "module_scheme": "gtest",
         "name": "media_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2000,6 +2219,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2013,6 +2233,9 @@
         "module_scheme": "gtest",
         "name": "midi_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2047,6 +2270,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2060,6 +2284,9 @@
         "module_scheme": "junit",
         "name": "mojo_test_apk",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2094,6 +2321,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2107,6 +2335,9 @@
         "module_scheme": "gtest",
         "name": "mojo_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2141,6 +2372,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2154,6 +2386,9 @@
         "module_scheme": "gtest",
         "name": "net_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2189,6 +2424,58 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
+        "merge": {
+          "args": [
+            "--bucket",
+            "chromium-result-details",
+            "--test-name",
+            "puffin_unittests"
+          ],
+          "script": "//build/android/pylib/results/presentation/test_results_presentation.py"
+        },
+        "module_name": "//third_party/puffin:puffin_unittests",
+        "module_scheme": "gtest",
+        "name": "puffin_unittests",
+        "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
+          "enable": true,
+          "has_native_resultdb_integration": true
+        },
+        "swarming": {
+          "dimensions": {
+            "cores": "4",
+            "cpu": "x86-64",
+            "device_os": null,
+            "device_type": null,
+            "os": "Ubuntu-22.04",
+            "pool": "chromium.tests.avd"
+          },
+          "named_caches": [
+            {
+              "name": "android_30_google_apis_x86",
+              "path": ".android_emulator/android_30_google_apis_x86"
+            }
+          ],
+          "optional_dimensions": {
+            "60": {
+              "caches": "android_30_google_apis_x86"
+            }
+          },
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+        },
+        "test": "puffin_unittests",
+        "test_id_prefix": "ninja://third_party/puffin:puffin_unittests/"
+      },
+      {
+        "args": [
+          "--avd-config=../../tools/android/avd/proto/android_30_google_apis_x86.textpb",
+          "--gs-results-bucket=chromium-result-details",
+          "--recover-devices"
+        ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2202,6 +2489,9 @@
         "module_scheme": "gtest",
         "name": "sandbox_linux_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2237,6 +2527,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2250,6 +2541,9 @@
         "module_scheme": "gtest",
         "name": "services_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2284,6 +2578,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2297,6 +2592,9 @@
         "module_scheme": "gtest",
         "name": "shell_dialogs_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2331,6 +2629,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2344,6 +2643,9 @@
         "module_scheme": "gtest",
         "name": "skia_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2378,6 +2680,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2391,6 +2694,9 @@
         "module_scheme": "gtest",
         "name": "sql_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2425,6 +2731,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2438,6 +2745,9 @@
         "module_scheme": "gtest",
         "name": "storage_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2472,6 +2782,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2485,6 +2796,9 @@
         "module_scheme": "junit",
         "name": "system_webview_shell_layout_test_apk",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2519,53 +2833,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
-        "merge": {
-          "args": [
-            "--bucket",
-            "chromium-result-details",
-            "--test-name",
-            "trichrome_chrome_bundle_smoke_test"
-          ],
-          "script": "//build/android/pylib/results/presentation/test_results_presentation.py"
-        },
-        "module_name": "//chrome/android:trichrome_chrome_bundle_smoke_test",
-        "module_scheme": "junit",
-        "name": "trichrome_chrome_bundle_smoke_test",
-        "resultdb": {
-          "enable": true,
-          "has_native_resultdb_integration": true
-        },
-        "swarming": {
-          "dimensions": {
-            "cores": "4",
-            "cpu": "x86-64",
-            "device_os": null,
-            "device_type": null,
-            "os": "Ubuntu-22.04",
-            "pool": "chromium.tests.avd"
-          },
-          "named_caches": [
-            {
-              "name": "android_30_google_apis_x86",
-              "path": ".android_emulator/android_30_google_apis_x86"
-            }
-          ],
-          "optional_dimensions": {
-            "60": {
-              "caches": "android_30_google_apis_x86"
-            }
-          },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
-        },
-        "test": "trichrome_chrome_bundle_smoke_test",
-        "test_id_prefix": "ninja://chrome/android:trichrome_chrome_bundle_smoke_test/"
-      },
-      {
-        "args": [
-          "--avd-config=../../tools/android/avd/proto/android_30_google_apis_x86.textpb",
-          "--gs-results-bucket=chromium-result-details",
-          "--recover-devices"
-        ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2579,6 +2847,9 @@
         "module_scheme": "gtest",
         "name": "ui_android_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2613,6 +2884,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2626,6 +2898,9 @@
         "module_scheme": "gtest",
         "name": "ui_base_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2660,6 +2935,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2673,6 +2949,9 @@
         "module_scheme": "gtest",
         "name": "ui_touch_selection_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2707,6 +2986,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2720,6 +3000,9 @@
         "module_scheme": "gtest",
         "name": "unit_tests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2755,6 +3038,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2768,6 +3052,9 @@
         "module_scheme": "gtest",
         "name": "url_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2802,6 +3089,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2815,6 +3103,9 @@
         "module_scheme": "gtest",
         "name": "video_encode_accelerator_tests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2850,6 +3141,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2863,6 +3155,9 @@
         "module_scheme": "gtest",
         "name": "viz_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2898,6 +3193,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2911,6 +3207,9 @@
         "module_scheme": "junit",
         "name": "webview_cts_tests full_mode",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2919,7 +3218,7 @@
             {
               "cipd_package": "chromium/android_webview/tools/cts_archive",
               "location": "android_webview/tools/cts_archive/cipd",
-              "revision": "8BpUBTnmt5bH3GiqPKpmTWTP-Ie2X1TuUgf4F0IsgVgC"
+              "revision": "oW6-jyOPGwPJeLlaldYwrxZoYqzXpjO1OZUdyF3Qq7sC"
             }
           ],
           "dimensions": {
@@ -2958,6 +3257,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2971,6 +3271,9 @@
         "module_scheme": "junit",
         "name": "webview_cts_tests instant_mode",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -2979,7 +3282,7 @@
             {
               "cipd_package": "chromium/android_webview/tools/cts_archive",
               "location": "android_webview/tools/cts_archive/cipd",
-              "revision": "8BpUBTnmt5bH3GiqPKpmTWTP-Ie2X1TuUgf4F0IsgVgC"
+              "revision": "oW6-jyOPGwPJeLlaldYwrxZoYqzXpjO1OZUdyF3Qq7sC"
             }
           ],
           "dimensions": {
@@ -3015,6 +3318,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -3028,6 +3332,9 @@
         "module_scheme": "junit",
         "name": "webview_instrumentation_test_apk_multiple_process_mode",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -3063,6 +3370,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -3076,6 +3384,9 @@
         "module_scheme": "gtest",
         "name": "wtf_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -3110,6 +3421,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -3123,6 +3435,9 @@
         "module_scheme": "gtest",
         "name": "zlib_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },

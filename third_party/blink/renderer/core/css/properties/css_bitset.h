@@ -57,20 +57,13 @@ class CORE_EXPORT CSSBitsetBase {
   inline void Set(CSSPropertyID id) {
     size_t bit = static_cast<size_t>(static_cast<unsigned>(id));
     DCHECK_LT(bit, kBits);
-    UNSAFE_TODO(chunks_.data()[bit / 64]) |= (1ull << (bit % 64));
-  }
-
-  inline void Or(CSSPropertyID id, bool v) {
-    size_t bit = static_cast<size_t>(static_cast<unsigned>(id));
-    DCHECK_LT(bit, kBits);
-    UNSAFE_TODO(chunks_.data()[bit / 64]) |=
-        (static_cast<uint64_t>(v) << (bit % 64));
+    UNSAFE_BUFFERS(chunks_.data()[bit / 64]) |= (1ull << (bit % 64));
   }
 
   inline bool Has(CSSPropertyID id) const {
     size_t bit = static_cast<size_t>(static_cast<unsigned>(id));
     DCHECK_LT(bit, kBits);
-    return UNSAFE_TODO(chunks_.data()[bit / 64]) & (1ull << (bit % 64));
+    return UNSAFE_BUFFERS(chunks_.data()[bit / 64]) & (1ull << (bit % 64));
   }
 
   inline bool HasAny() const {
@@ -82,9 +75,7 @@ class CORE_EXPORT CSSBitsetBase {
     return false;
   }
 
-  inline void Reset() {
-    UNSAFE_TODO(std::memset(chunks_.data(), 0, sizeof(chunks_)));
-  }
+  inline void Reset() { std::fill(chunks_.begin(), chunks_.end(), 0); }
 
   // Yields the CSSPropertyIDs which are set.
   class Iterator {
@@ -116,7 +107,7 @@ class CORE_EXPORT CSSBitsetBase {
           index_ = kBits;
           return;
         }
-        chunk_ = UNSAFE_TODO(chunks_[chunk_index_]);
+        chunk_ = UNSAFE_BUFFERS(chunks_[chunk_index_]);
       }
       index_ = chunk_index_ * 64 + std::countr_zero(chunk_);
       chunk_ &= chunk_ - 1;  // Clear the lowest bit.

@@ -8,8 +8,6 @@
 #include <string_view>
 
 #include "base/observer_list.h"
-#include "base/strings/string_util.h"
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/file_system_access/file_system_access_features.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
@@ -21,9 +19,7 @@
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/page_info/page_info.h"
-#include "components/permissions/features.h"
 #include "components/permissions/permission_util.h"
-#include "components/strings/grit/components_strings.h"
 #include "components/url_formatter/elide_url.h"
 #include "components/vector_icons/vector_icons.h"
 #include "media/base/media_switches.h"
@@ -47,8 +43,11 @@ const ui::ImageModel GetManagedPermissionIcon(
     const PageInfo::PermissionInfo& info) {
   const gfx::VectorIcon& managed_vector_icon =
       info.source == content_settings::SettingSource::kExtension
-          ? vector_icons::kExtensionIcon
-          : vector_icons::kBusinessIcon;
+          ? features::IsRoundedIconsEnabled()
+                ? vector_icons::kExtensionFilledIcon
+                : vector_icons::kExtensionOldIcon
+      : features::IsRoundedIconsEnabled() ? vector_icons::kDomainIcon
+                                          : vector_icons::kBusinessOldIcon;
   return PageInfoViewFactory::GetImageModel(managed_vector_icon);
 }
 
@@ -58,6 +57,8 @@ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PermissionToggleRowView,
                                       kRowSubTitleCameraElementId);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PermissionToggleRowView,
                                       kRowSubTitleMicrophoneElementId);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PermissionToggleRowView,
+                                      kSubpageButtonElementId);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(
     PermissionToggleRowView,
     kPermissionDisabledAtSystemLevelElementId);
@@ -220,7 +221,7 @@ void PermissionToggleRowView::InitForUserSource(
       views::DISTANCE_RELATED_LABEL_HORIZONTAL);
   AddToggleButton(toggle_accessible_name, icon_label_spacing);
 
-  const int icon_size = GetLayoutConstant(PAGE_INFO_ICON_SIZE);
+  const int icon_size = GetLayoutConstant(LayoutConstant::kPageInfoIconSize);
 
   if (permission_.is_one_time ||
       permissions::PermissionUtil::DoesSupportTemporaryGrants(
@@ -238,7 +239,12 @@ void PermissionToggleRowView::InitForUserSource(
                   row->permission_.type);
             },
             base::Unretained(this)),
-        vector_icons::kSubmenuArrowChromeRefreshIcon, icon_size);
+        features::IsRoundedIconsEnabled()
+            ? vector_icons::kKeyboardArrowRightFlippableIcon
+            : vector_icons::kSubmenuArrowChromeRefreshOldIcon,
+        icon_size);
+    subpage_button->SetProperty(views::kElementIdentifierKey,
+                                kSubpageButtonElementId);
     subpage_button->SetTooltipText(
         PageInfoUI::PermissionSubpageButtonTooltipString(permission_.type));
     views::InstallCircleHighlightPathGenerator(subpage_button.get());

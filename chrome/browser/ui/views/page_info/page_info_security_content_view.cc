@@ -9,11 +9,9 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/layout_constants.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/page_info/page_info_view_factory.h"
-#include "components/safe_browsing/core/common/features.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "net/base/features.h"
@@ -22,6 +20,7 @@
 #include "ui/base/ui_base_features.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/widget/widget.h"
 
 PageInfoSecurityContentView::PageInfoSecurityContentView(
     PageInfo* presenter,
@@ -54,7 +53,7 @@ void PageInfoSecurityContentView::SetIdentityInfo(
       GetSecurityDescription(identity_info);
   security_description_type_ = security_description->type;
 
-  const int icon_size = GetLayoutConstant(PAGE_INFO_ICON_SIZE);
+  const int icon_size = GetLayoutConstant(LayoutConstant::kPageInfoIconSize);
   if (security_description->summary_style == SecuritySummaryColor::RED) {
     if (identity_info.safe_browsing_status ==
             PageInfo::SAFE_BROWSING_STATUS_MALWARE ||
@@ -63,12 +62,15 @@ void PageInfoSecurityContentView::SetIdentityInfo(
         identity_info.safe_browsing_status ==
             PageInfo::SAFE_BROWSING_STATUS_UNWANTED_SOFTWARE) {
       security_view_->SetIcon(ui::ImageModel::FromVectorIcon(
-          vector_icons::kDangerousIcon, ui::kColorAlertHighSeverity,
-          icon_size));
+          features::IsRoundedIconsEnabled() ? vector_icons::kDangerousFilledIcon
+                                            : vector_icons::kDangerousOldIcon,
+          ui::kColorAlertHighSeverity, icon_size));
     } else {
       security_view_->SetIcon(ui::ImageModel::FromVectorIcon(
-          vector_icons::kNotSecureWarningIcon, ui::kColorAlertHighSeverity,
-          icon_size));
+          features::IsRoundedIconsEnabled()
+              ? vector_icons::kWarningFilledIcon
+              : vector_icons::kNotSecureWarningOldIcon,
+          ui::kColorAlertHighSeverity, icon_size));
     }
     security_view_->SetSummary(security_description->summary, STYLE_RED);
   } else if (security_description->summary_style ==
@@ -77,8 +79,9 @@ void PageInfoSecurityContentView::SetIdentityInfo(
                   PageInfo::SAFE_BROWSING_STATUS_MANAGED_POLICY_WARN ||
               identity_info.safe_browsing_status ==
                   PageInfo::SAFE_BROWSING_STATUS_MANAGED_POLICY_BLOCK)) {
-    security_view_->SetIcon(
-        PageInfoViewFactory::GetImageModel(vector_icons::kBusinessIcon));
+    security_view_->SetIcon(PageInfoViewFactory::GetImageModel(
+        features::IsRoundedIconsEnabled() ? vector_icons::kDomainIcon
+                                          : vector_icons::kBusinessOldIcon));
     security_view_->SetSummary(security_description->summary,
                                views::style::STYLE_BODY_3_MEDIUM);
   } else {
@@ -121,11 +124,19 @@ void PageInfoSecurityContentView::SetIdentityInfo(
     // Add the Certificate Section.
     const ui::ImageModel icon =
         base::FeatureList::IsEnabled(net::features::kVerifyQWACs)
-            ? PageInfoViewFactory::GetImageModel(vector_icons::kStickyNote2Icon)
-            : (valid_identity ? PageInfoViewFactory::GetImageModel(
-                                    vector_icons::kCertificateIcon)
-                              : PageInfoViewFactory::GetImageModel(
-                                    vector_icons::kCertificateOffIcon));
+            ? PageInfoViewFactory::GetImageModel(
+                  features::IsRoundedIconsEnabled()
+                      ? vector_icons::kStickyNote2Icon
+                      : vector_icons::kStickyNote2OldIcon)
+            : (valid_identity
+                   ? PageInfoViewFactory::GetImageModel(
+                         features::IsRoundedIconsEnabled()
+                             ? vector_icons::kDomainVerificationIcon
+                             : vector_icons::kCertificateOldIcon)
+                   : PageInfoViewFactory::GetImageModel(
+                         features::IsRoundedIconsEnabled()
+                             ? vector_icons::kDomainVerificationOffIcon
+                             : vector_icons::kCertificateOffOldIcon));
     const int title_id = (valid_identity && !base::FeatureList::IsEnabled(
                                                 net::features::kVerifyQWACs))
                              ? IDS_PAGE_INFO_CERTIFICATE_IS_VALID
@@ -151,8 +162,8 @@ void PageInfoSecurityContentView::SetIdentityInfo(
     if (base::FeatureList::IsEnabled(net::features::kVerifyQWACs)) {
       std::u16string qwac_title =
           l10n_util::GetStringUTF16(IDS_PAGE_INFO_QWAC_STATUS_TITLE);
-      const ui::ImageModel qwac_icon =
-          PageInfoViewFactory::GetImageModel(vector_icons::kQwacStatusIcon);
+      const ui::ImageModel qwac_icon = PageInfoViewFactory::GetImageModel(
+          vector_icons::kQwacStatusCustomIcon);
       // If QWAC info line has been added previously, remove the old one before
       // recreating it. Re-adding it bumps it to the bottom of the
       // container, but its unlikely that the user will notice, since other
@@ -270,7 +281,7 @@ void PageInfoSecurityContentView::SecurityDetailsClicked(
     presenter_->OpenSafetyTipHelpCenterPage();
   } else if (security_description_type_ ==
              SecurityDescriptionType::SAFE_BROWSING) {
-    presenter_->OpenSafeBrowsingHelpCenterPage(event);
+    presenter_->OpenSafeBrowsingHelpCenterPage(&event);
   } else {
     presenter_->OpenConnectionHelpCenterPage(event);
   }

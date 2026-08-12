@@ -9,7 +9,6 @@
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/views/payments/payment_handler_modal_dialog_manager_delegate.h"
 #include "chrome/browser/ui/views/payments/payment_request_sheet_controller.h"
-#include "components/payments/content/developer_console_logger.h"
 #include "components/payments/content/payment_request_display_manager.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -18,6 +17,10 @@
 #include "url/gurl.h"
 
 class Profile;
+
+namespace blink {
+class WebInputEvent;
+}
 
 namespace views {
 class View;
@@ -88,17 +91,26 @@ class PaymentHandlerWebFlowViewController
       bool* was_blocked) override;
   bool HandleKeyboardEvent(content::WebContents* source,
                            const input::NativeWebKeyboardEvent& event) override;
+  void CloseContents(content::WebContents* source) override;
+  void RequestMediaAccessPermission(
+      content::WebContents* web_contents,
+      const content::MediaStreamRequest& request,
+      content::MediaResponseCallback callback) override;
+  bool CheckMediaAccessPermission(content::RenderFrameHost* render_frame_host,
+                                  const url::Origin& security_origin,
+                                  blink::mojom::MediaStreamType type) override;
 
   // content::WebContentsObserver:
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override;
   void LoadProgressChanged(double progress) override;
   void TitleWasSet(content::NavigationEntry* entry) override;
+  void DidGetUserInteraction(const blink::WebInputEvent& event) override;
+  void DidStopLoading() override;
 
   void AbortPayment();
   void SetHeaderColorsAndOriginLabelText();
 
-  DeveloperConsoleLogger log_;
   raw_ptr<Profile> profile_;
   GURL target_;
   base::WeakPtr<PaymentHandlerProgressBar> progress_bar_;

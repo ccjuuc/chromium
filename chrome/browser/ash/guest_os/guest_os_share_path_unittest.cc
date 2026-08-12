@@ -26,7 +26,6 @@
 #include "chrome/browser/ash/guest_os/guest_os_share_path_factory.h"
 #include "chrome/browser/ash/guest_os/public/guest_os_service.h"
 #include "chrome/browser/ash/guest_os/public/types.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/browser_process_platform_part_test_api_chromeos.h"
@@ -41,9 +40,10 @@
 #include "chromeos/ash/components/dbus/seneschal/fake_seneschal_client.h"
 #include "chromeos/ash/components/dbus/seneschal/seneschal_client.h"
 #include "chromeos/ash/components/dbus/seneschal/seneschal_service.pb.h"
-#include "chromeos/ash/components/dbus/vm_plugin_dispatcher/vm_plugin_dispatcher_client.h"
 #include "chromeos/ash/components/disks/disk_mount_manager.h"
 #include "chromeos/ash/components/disks/fake_disk_mount_manager.h"
+#include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/experiences/arc/arc_util.h"
 #include "chromeos/ash/experiences/arc/session/arc_session_runner.h"
 #include "chromeos/ash/experiences/arc/test/fake_arc_session.h"
@@ -68,6 +68,7 @@ namespace {
 std::unique_ptr<KeyedService> BuildVolumeManager(
     content::BrowserContext* context) {
   return std::make_unique<file_manager::VolumeManager>(
+      TestingBrowserProcess::GetGlobal()->local_state(),
       Profile::FromBrowserContext(context),
       nullptr /* drive_integration_service */,
       nullptr /* power_manager_client */,
@@ -97,10 +98,10 @@ class GuestOsSharePathTest : public testing::Test {
       const base::FilePath& container_path,
       bool success,
       const std::string& failure_reason) {
-    const base::Value::Dict& prefs =
+    const base::DictValue& prefs =
         profile()->GetPrefs()->GetDict(prefs::kGuestOSPathsSharedToVms);
 
-    const base::Value::List* shared_path_list =
+    const base::ListValue* shared_path_list =
         prefs.FindList(shared_path_.value());
     ASSERT_TRUE(shared_path_list);
     EXPECT_EQ(shared_path_list->size(), 1U);
@@ -174,7 +175,7 @@ class GuestOsSharePathTest : public testing::Test {
       const std::string& expected_failure_reason,
       bool success,
       const std::string& failure_reason) {
-    const base::Value::Dict& prefs =
+    const base::DictValue& prefs =
         profile()->GetPrefs()->GetDict(prefs::kGuestOSPathsSharedToVms);
     if (expected_persist == Persist::YES) {
       EXPECT_NE(prefs.Find(path.value()), nullptr);
@@ -219,7 +220,6 @@ class GuestOsSharePathTest : public testing::Test {
     ash::ConciergeClient::InitializeFake();
     ash::DebugDaemonClient::InitializeFake();
     ash::SeneschalClient::InitializeFake();
-    ash::VmPluginDispatcherClient::InitializeFake();
 
     fake_concierge_client_ = ash::FakeConciergeClient::Get();
     fake_seneschal_client_ = ash::FakeSeneschalClient::Get();
@@ -229,7 +229,6 @@ class GuestOsSharePathTest : public testing::Test {
   GuestOsSharePathTest& operator=(const GuestOsSharePathTest&) = delete;
 
   ~GuestOsSharePathTest() override {
-    ash::VmPluginDispatcherClient::Shutdown();
     ash::SeneschalClient::Shutdown();
     ash::DebugDaemonClient::Shutdown();
     ash::ConciergeClient::Shutdown();
@@ -240,7 +239,7 @@ class GuestOsSharePathTest : public testing::Test {
   void SharePathFor(std::string vm_name) {
     ScopedDictPrefUpdate update(profile()->GetPrefs(),
                                 prefs::kGuestOSPathsSharedToVms);
-    base::Value::List pref;
+    base::ListValue pref;
     pref.Append(vm_name);
     update->Set(shared_path_.value(), std::move(pref));
     guest_os_share_path_->RegisterSharedPath(vm_name, shared_path_);
@@ -648,11 +647,11 @@ TEST_F(GuestOsSharePathTest, SharePathVmToBeRestarted) {
 TEST_F(GuestOsSharePathTest, SharePersistedPaths) {
   base::FilePath share_path2_ = root_.AppendASCII("path-to-share-2");
   ASSERT_TRUE(base::CreateDirectory(share_path2_));
-  base::Value::Dict shared_paths;
-  base::Value::List vms;
+  base::DictValue shared_paths;
+  base::ListValue vms;
   vms.Append(base::Value(crostini::kCrostiniDefaultVmName));
   shared_paths.Set(share_path_.value(), std::move(vms));
-  base::Value::List vms2;
+  base::ListValue vms2;
   vms2.Append(base::Value(crostini::kCrostiniDefaultVmName));
   shared_paths.Set(share_path2_.value(), std::move(vms2));
   profile()->GetPrefs()->SetDict(prefs::kGuestOSPathsSharedToVms,
@@ -665,13 +664,13 @@ TEST_F(GuestOsSharePathTest, SharePersistedPaths) {
 }
 
 TEST_F(GuestOsSharePathTest, RegisterPersistedPaths) {
-  base::Value::Dict shared_paths;
+  base::DictValue shared_paths;
   profile()->GetPrefs()->SetDict(prefs::kGuestOSPathsSharedToVms,
                                  std::move(shared_paths));
 
   guest_os_share_path_->RegisterPersistedPaths("v1",
                                                {base::FilePath("/a/a/a")});
-  const base::Value::Dict& prefs =
+  const base::DictValue& prefs =
       profile()->GetPrefs()->GetDict(prefs::kGuestOSPathsSharedToVms);
   EXPECT_EQ(prefs.size(), 1U);
   EXPECT_EQ(prefs.FindList("/a/a/a")->size(), 1U);
@@ -740,7 +739,7 @@ TEST_F(GuestOsSharePathTest, RegisterPersistedPaths) {
 TEST_F(GuestOsSharePathTest, UnsharePathSuccess) {
   ScopedDictPrefUpdate update(profile()->GetPrefs(),
                               prefs::kGuestOSPathsSharedToVms);
-  base::Value::List vms;
+  base::ListValue vms;
   vms.Append("vm-running");
   update->Set(shared_path_.value(), std::move(vms));
   guest_os_share_path_->UnsharePath(
@@ -764,7 +763,7 @@ TEST_F(GuestOsSharePathTest, UnsharePathRoot) {
 TEST_F(GuestOsSharePathTest, UnsharePathVmNotRunning) {
   ScopedDictPrefUpdate update(profile()->GetPrefs(),
                               prefs::kGuestOSPathsSharedToVms);
-  base::Value::List vms;
+  base::ListValue vms;
   vms.Append("vm-not-running");
   update->Set(shared_path_.value(), std::move(vms));
   guest_os_share_path_->UnsharePath(
@@ -789,22 +788,22 @@ TEST_F(GuestOsSharePathTest, UnsharePathInvalidPath) {
 
 TEST_F(GuestOsSharePathTest, GetPersistedSharedPaths) {
   // path1:['vm1'], path2:['vm2'], path3:['vm3'], path12:['vm1','vm2']
-  base::Value::Dict shared_paths;
+  base::DictValue shared_paths;
 
   base::FilePath path1("/path1");
-  base::Value::List path1vms;
+  base::ListValue path1vms;
   path1vms.Append(base::Value("vm1"));
   shared_paths.Set(path1.value(), std::move(path1vms));
   base::FilePath path2("/path2");
-  base::Value::List path2vms;
+  base::ListValue path2vms;
   path2vms.Append(base::Value("vm2"));
   shared_paths.Set(path2.value(), std::move(path2vms));
   base::FilePath path3("/path3");
-  base::Value::List path3vms;
+  base::ListValue path3vms;
   path3vms.Append(base::Value("vm3"));
   shared_paths.Set(path3.value(), std::move(path3vms));
   base::FilePath path12("/path12");
-  base::Value::List path12vms;
+  base::ListValue path12vms;
   path12vms.Append(base::Value("vm1"));
   path12vms.Append(base::Value("vm2"));
   shared_paths.Set(path12.value(), std::move(path12vms));

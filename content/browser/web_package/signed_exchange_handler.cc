@@ -5,12 +5,15 @@
 #include "content/browser/web_package/signed_exchange_handler.h"
 
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <utility>
 
+#include "base/byte_size.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_view_util.h"
 #include "base/strings/stringprintf.h"
@@ -50,6 +53,7 @@
 #include "net/cert/x509_util.h"
 #include "net/cookies/cookie_setting_override.h"
 #include "net/filter/source_stream.h"
+#include "net/net_buildflags.h"
 #include "net/ssl/ssl_info.h"
 #include "net/storage_access_api/status.h"
 #include "services/network/public/cpp/features.h"
@@ -67,8 +71,6 @@ namespace {
 constexpr char kDigestHeader[] = "digest";
 constexpr char kHistogramSignatureVerificationResult[] =
     "SignedExchange.SignatureVerificationResult";
-constexpr char kHistogramCertVerificationResult[] =
-    "SignedExchange.CertVerificationResult";
 constexpr char kHistogramCTVerificationResult[] =
     "SignedExchange.CTVerificationResult";
 constexpr char kHistogramOCSPResponseStatus[] =
@@ -94,7 +96,7 @@ using VerifyCallback =
 
 void VerifyCert(const scoped_refptr<net::X509Certificate>& certificate,
                 const GURL& url,
-                const std::string& ocsp_result,
+                const std::string& ocsp_response,
                 const std::string& sct_list,
                 FrameTreeNodeId frame_tree_node_id,
                 VerifyCallback callback) {
@@ -115,7 +117,7 @@ void VerifyCert(const scoped_refptr<net::X509Certificate>& certificate,
   }
 
   network_context->VerifyCertForSignedExchange(
-      certificate, net::HostPortPair::FromURL(url), ocsp_result, sct_list,
+      certificate, net::HostPortPair::FromURL(url), ocsp_response, sct_list,
       std::move(wrapped_callback));
 }
 
@@ -301,7 +303,7 @@ void SignedExchangeHandler::DidReadHeader(bool completed_syncly,
   }
 
   header_read_buf_->DidConsume(read_result);
-  exchange_header_length_ += read_result;
+  exchange_header_length_ += base::ByteSize(base::as_unsigned(read_result));
   if (header_read_buf_->BytesRemaining() == 0) {
     SignedExchangeLoadResult result = SignedExchangeLoadResult::kSuccess;
     switch (state_) {
@@ -603,8 +605,6 @@ void SignedExchangeHandler::OnVerifyCert(int32_t error_code,
                                          bool pkp_bypassed) {
   TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("loading"),
                "SignedExchangeHandler::OnCertVerifyComplete");
-  // net::Error codes are negative, so we put - in front of it.
-  base::UmaHistogramSparse(kHistogramCertVerificationResult, -error_code);
   UMA_HISTOGRAM_ENUMERATION(kHistogramCTVerificationResult,
                             cv_result.policy_compliance,
                             net::ct::CTPolicyCompliance::CT_POLICY_COUNT);
@@ -668,10 +668,12 @@ void SignedExchangeHandler::OnVerifyCert(int32_t error_code,
   ssl_info.is_issued_by_known_root = cv_result.is_issued_by_known_root;
   ssl_info.pkp_bypassed = pkp_bypassed;
   ssl_info.public_key_hashes = cv_result.public_key_hashes;
-  ssl_info.ocsp_result = cv_result.ocsp_result;
   ssl_info.is_fatal_cert_error = net::IsCertStatusError(ssl_info.cert_status);
   ssl_info.signed_certificate_timestamps = cv_result.scts;
   ssl_info.ct_policy_compliance = cv_result.policy_compliance;
+#if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+  ssl_info.crs_root_id = cv_result.crs_root_id;
+#endif
   response_head->ssl_info = std::move(ssl_info);
 
   if (!request_matcher_->MatchRequest(envelope_->response_headers())) {
@@ -770,7 +772,7 @@ void SignedExchangeHandler::CreateResponse(
   response_head->load_timing.send_start = now;
   response_head->load_timing.send_end = now;
   response_head->load_timing.receive_headers_end = now;
-  std::optional<base::ByteCount> content_length =
+  std::optional<base::ByteSize> content_length =
       response_head->headers->GetContentLength();
   response_head->content_length =
       content_length ? content_length->InBytes() : -1;

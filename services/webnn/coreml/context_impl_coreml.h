@@ -27,7 +27,7 @@ class API_AVAILABLE(macos(14.4)) ContextImplCoreml final
       mojo::PendingReceiver<mojom::WebNNContext> receiver,
       base::WeakPtr<WebNNContextProviderImpl> context_provider,
       mojom::CreateContextOptionsPtr options,
-      std::unique_ptr<ScopedGpuSequence> gpu_sequence,
+      std::unique_ptr<GpuTaskScheduler> gpu_task_scheduler,
       scoped_refptr<gpu::MemoryTracker> memory_tracker,
       scoped_refptr<base::SingleThreadTaskRunner> owning_task_runner,
       gpu::SharedImageManager* shared_image_manager,
@@ -37,7 +37,7 @@ class API_AVAILABLE(macos(14.4)) ContextImplCoreml final
       mojo::PendingReceiver<mojom::WebNNContext> receiver,
       base::WeakPtr<WebNNContextProviderImpl> context_provider,
       mojom::CreateContextOptionsPtr options,
-      std::unique_ptr<ScopedGpuSequence> gpu_sequence,
+      std::unique_ptr<GpuTaskScheduler> gpu_task_scheduler,
       scoped_refptr<gpu::MemoryTracker> memory_tracker,
       scoped_refptr<base::SingleThreadTaskRunner> owning_task_runner,
       gpu::SharedImageManager* shared_image_manager,
@@ -53,12 +53,10 @@ class API_AVAILABLE(macos(14.4)) ContextImplCoreml final
   ~ContextImplCoreml() override;
 
   void CreateGraphImpl(
-      mojo::PendingAssociatedReceiver<mojom::WebNNGraph> receiver,
       mojom::GraphInfoPtr graph_info,
       WebNNGraphImpl::ComputeResourceInfo compute_resource_info,
       base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>
           constant_operands,
-      base::flat_map<OperandId, WebNNTensorImpl*> constant_tensor_operands,
       CreateGraphImplCallback callback) override;
 
   base::expected<scoped_refptr<WebNNTensorImpl>, mojom::ErrorPtr>
@@ -70,6 +68,11 @@ class API_AVAILABLE(macos(14.4)) ContextImplCoreml final
       mojo::PendingAssociatedReceiver<mojom::WebNNTensor> receiver,
       mojom::TensorInfoPtr tensor_info,
       WebNNTensorImpl::RepresentationPtr representation) override;
+
+  std::string_view GetBackendName() const override;
+
+  std::vector<mojom::WebNNExecutionProviderDetailsPtr>
+  GetExecutionProvidersInfo() const override;
 
   base::WeakPtrFactory<ContextImplCoreml> weak_factory_{this};
 };

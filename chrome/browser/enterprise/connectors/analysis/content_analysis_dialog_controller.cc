@@ -7,12 +7,13 @@
 #include <cstddef>
 #include <memory>
 
+#include "base/check.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/enterprise/connectors/analysis/content_analysis_delegate.h"
 #include "chrome/browser/enterprise/connectors/analysis/content_analysis_views.h"
 #include "chrome/browser/safe_browsing/cloud_content_scanning/deep_scanning_utils.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -28,8 +29,17 @@ namespace {
 
 // These time values are non-const in order to be overridden in test so they
 // complete faster.
-base::TimeDelta minimum_pending_dialog_time_ = base::Seconds(2);
-base::TimeDelta success_dialog_timeout_ = base::Seconds(1);
+
+// The number of dialogs shown from browser start that use prolonged latency.
+size_t prolonged_latency_dialog_count = 1;
+size_t dialog_shown_count = 0;
+
+// These latencies will be used for the initial dialogs.
+base::TimeDelta success_dialog_timeout_ = base::Seconds(2);
+
+// Shortened latencies to be used for subsequent dialogs.
+base::TimeDelta short_success_dialog_timeout_ = base::Seconds(0);
+
 base::TimeDelta show_dialog_delay_ = base::Seconds(1);
 
 ContentAnalysisDialogController::TestObserver* observer_for_testing = nullptr;
@@ -37,13 +47,11 @@ ContentAnalysisDialogController::TestObserver* observer_for_testing = nullptr;
 }  // namespace
 
 // static
-base::TimeDelta ContentAnalysisDialogController::GetMinimumPendingDialogTime() {
-  return minimum_pending_dialog_time_;
-}
-
-// static
 base::TimeDelta ContentAnalysisDialogController::GetSuccessDialogTimeout() {
-  return success_dialog_timeout_;
+  if (dialog_shown_count <= prolonged_latency_dialog_count) {
+    return success_dialog_timeout_;
+  }
+  return short_success_dialog_timeout_;
 }
 
 // static
@@ -112,8 +120,12 @@ void ContentAnalysisDialogController::ShowDialogNow() {
     return;
   }
 
-  auto* manager =
-      web_modal::WebContentsModalDialogManager::FromWebContents(web_contents());
+  web_modal::WebContentsModalDialogManager* manager = nullptr;
+  if (web_contents()) {
+    manager = web_modal::WebContentsModalDialogManager::FromWebContents(
+        web_contents());
+  }
+
   if (!manager) {
     // `manager` being null indicates that `web_contents()` doesn't correspond
     // to a browser tab (ex: an extension background page reading the
@@ -121,7 +133,10 @@ void ContentAnalysisDialogController::ShowDialogNow() {
     // accept/cancel the result immediately. See crbug.com/374120523 and
     // crbug.com/388049470 for more context.
     if (!dialog_delegate_->is_pending()) {
-      CancelButtonClicked();
+      content::GetUIThreadTaskRunner({})->PostTask(
+          FROM_HERE,
+          base::BindOnce(&ContentAnalysisDialogController::CancelButtonClicked,
+                         weak_ptr_factory_.GetWeakPtr()));
     }
     return;
   }
@@ -130,6 +145,7 @@ void ContentAnalysisDialogController::ShowDialogNow() {
   // dialog has not yet been shown, show it now.
   if (web_contents() && !widget_) {
     DVLOG(1) << __func__ << ": first time";
+    dialog_shown_count++;
     first_shown_timestamp_ = base::TimeTicks::Now();
     widget_ = constrained_window::ShowWebModalDialogViewsOwned(
         dialog_delegate_.get(), web_contents(),
@@ -164,7 +180,7 @@ void ContentAnalysisDialogController::SuccessCallback() {
     // It's possible focus has been lost and gained back incorrectly if the user
     // clicked on the page between the time the scan started and the time the
     // dialog closes. This results in the behaviour detailed in
-    // crbug.com/1139050. The fix is to preemptively take back focus when this
+    // crbug.com/40153261. The fix is to preemptively take back focus when this
     // dialog closes on its own.
     scoped_ignore_input_events_.reset();
     web_contents()->Focus();
@@ -190,18 +206,7 @@ void ContentAnalysisDialogController::ShowResult(
 
   dialog_delegate_->UpdateStateFromFinalResult(result);
 
-  // Update the pending dialog only after it has been shown for a minimum amount
-  // of time.
-  base::TimeDelta time_shown = base::TimeTicks::Now() - first_shown_timestamp_;
-  if (time_shown >= GetMinimumPendingDialogTime()) {
-    UpdateDialog();
-  } else {
-    content::GetUIThreadTaskRunner({})->PostDelayedTask(
-        FROM_HERE,
-        base::BindOnce(&ContentAnalysisDialogController::UpdateDialog,
-                       weak_ptr_factory_.GetWeakPtr()),
-        GetMinimumPendingDialogTime() - time_shown);
-  }
+  UpdateDialog();
 }
 
 ContentAnalysisDialogController::~ContentAnalysisDialogController() {
@@ -246,11 +251,18 @@ void ContentAnalysisDialogController::UpdateDialog() {
 
   // Schedule the dialog to close itself in the success case.
   if (dialog_delegate_->is_success()) {
-    content::GetUIThreadTaskRunner({})->PostDelayedTask(
-        FROM_HERE,
-        base::BindOnce(&ContentAnalysisDialogDelegate::CancelDialog,
-                       dialog_delegate_->GetWeakPtr()),
-        GetSuccessDialogTimeout());
+    if (GetSuccessDialogTimeout() == base::Seconds(0)) {
+      content::GetUIThreadTaskRunner({})->PostTask(
+          FROM_HERE,
+          base::BindOnce(&ContentAnalysisDialogDelegate::CancelDialog,
+                         dialog_delegate_->GetWeakPtr()));
+    } else {
+      content::GetUIThreadTaskRunner({})->PostDelayedTask(
+          FROM_HERE,
+          base::BindOnce(&ContentAnalysisDialogDelegate::CancelDialog,
+                         dialog_delegate_->GetWeakPtr()),
+          GetSuccessDialogTimeout());
+    }
   }
 
   if (observer_for_testing) {
@@ -300,11 +312,6 @@ ContentAnalysisDialogController::dialog_delegate_for_testing() {
   return dialog_delegate_.get();
 }
 
-// static
-void ContentAnalysisDialogController::SetMinimumPendingDialogTimeForTesting(
-    base::TimeDelta delta) {
-  minimum_pending_dialog_time_ = delta;
-}
 
 // static
 void ContentAnalysisDialogController::SetSuccessDialogTimeoutForTesting(
@@ -316,6 +323,12 @@ void ContentAnalysisDialogController::SetSuccessDialogTimeoutForTesting(
 void ContentAnalysisDialogController::SetShowDialogDelayForTesting(
     base::TimeDelta delta) {
   show_dialog_delay_ = delta;
+}
+
+// static
+void ContentAnalysisDialogController::SetDialogShownCountForTesting(
+    size_t count) {
+  dialog_shown_count = count;
 }
 
 // static

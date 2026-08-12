@@ -4,7 +4,7 @@
 
 #include "components/sync/base/user_selectable_type.h"
 
-#include "base/containers/enum_set.h"
+#include "build/build_config.h"
 #include "components/sync/base/data_type.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -53,15 +53,10 @@ class UserSelectableTypeTest : public ::testing::Test {
     data_types.Put(SHARED_TAB_GROUP_ACCOUNT_DATA);
     data_types.Put(SHARED_COMMENT);
 
-    // TODO(crbug.com/445841720): In CL #3, map AI_THREAD to an existing
-    // selectable type or to a new one and remove it from here (unless it's
-    // ambiguous).
-    data_types.Put(AI_THREAD);
     // TODO(crbug.com/445840788): In CL #3, map CONTEXTUAL_TASK to an existing
     // selectable type or to a new one and remove it from here (unless it's
     // ambiguous).
     data_types.Put(CONTEXTUAL_TASK);
-
     return data_types;
   }
 };
@@ -100,18 +95,18 @@ TEST_F(UserSelectableTypeTest, UserSelectableTypeSetToValueList) {
   UserSelectableTypeSet types = {UserSelectableType::kBookmarks,
                                  UserSelectableType::kPasswords,
                                  UserSelectableType::kPreferences};
-  base::Value::List value_list = UserSelectableTypeSetToValueList(types);
-  EXPECT_EQ(value_list, base::Value::List()
+  base::ListValue value_list = UserSelectableTypeSetToValueList(types);
+  EXPECT_EQ(value_list, base::ListValue()
                             .Append("bookmarks")
                             .Append("preferences")
                             .Append("passwords"));
 }
 
 TEST_F(UserSelectableTypeTest, ValueListToUserSelectableTypeSet) {
-  base::Value::List value_list = base::Value::List()
-                                     .Append("bookmarks")
-                                     .Append("passwords")
-                                     .Append("preferences");
+  base::ListValue value_list = base::ListValue()
+                                   .Append("bookmarks")
+                                   .Append("passwords")
+                                   .Append("preferences");
   UserSelectableTypeSet types = ValueListToUserSelectableTypeSet(value_list);
   EXPECT_EQ(types, UserSelectableTypeSet({UserSelectableType::kBookmarks,
                                           UserSelectableType::kPreferences,

@@ -4,6 +4,7 @@
 
 #include "chrome/updater/app/app_server.h"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -12,14 +13,18 @@
 
 #include "base/check_op.h"
 #include "base/command_line.h"
+#include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/process/launch.h"
 #include "base/process/process.h"
 #include "base/run_loop.h"
+#include "base/synchronization/lock.h"
 #include "base/time/time.h"
 #include "base/version.h"
+#include "build/build_config.h"
 #include "chrome/updater/activity.h"
 #include "chrome/updater/app/app_utils.h"
 #include "chrome/updater/configurator.h"
@@ -82,7 +87,7 @@ base::OnceClosure AppServer::ModeCheck() {
 
 #if BUILDFLAG(IS_WIN)
     return base::BindOnce(&AppServer::Shutdown, this,
-                          static_cast<int>(UpdateService::Result::kInactive));
+                          std::to_underlying(UpdateService::Result::kInactive));
 #else
     return base::BindOnce(&AppServer::ActiveDuty, this,
                           MakeInactiveUpdateService());
@@ -94,17 +99,23 @@ base::OnceClosure AppServer::ModeCheck() {
     if (!local_prefs->GetQualified()) {
       global_prefs = nullptr;
       prefs_ = local_prefs;
-      config_ = base::MakeRefCounted<Configurator>(prefs_, external_constants_,
-                                                   updater_scope());
+      scoped_refptr<Configurator> config;
+      {
+        base::AutoLock lock(config_lock_);
+        config_ = base::MakeRefCounted<Configurator>(
+            prefs_, external_constants_, updater_scope());
+        config = config_;
+      }
       if (IsInternalService()) {
         return base::BindOnce(
             &AppServer::ActiveDutyInternal, this,
-            MakeQualifyingUpdateServiceInternal(config_, local_prefs));
+            MakeQualifyingUpdateServiceInternal(config, local_prefs));
       }
 
 #if BUILDFLAG(IS_WIN)
-      return base::BindOnce(&AppServer::Shutdown, this,
-                            static_cast<int>(UpdateService::Result::kInactive));
+      return base::BindOnce(
+          &AppServer::Shutdown, this,
+          std::to_underlying(UpdateService::Result::kInactive));
 #else
       return base::BindOnce(&AppServer::ActiveDuty, this,
                             MakeInactiveUpdateService());
@@ -135,16 +146,22 @@ base::OnceClosure AppServer::ModeCheck() {
 
   server_starts_ = global_prefs->CountServerStarts();
   prefs_ = global_prefs;
-  config_ = base::MakeRefCounted<Configurator>(prefs_, external_constants_,
-                                               updater_scope());
+  scoped_refptr<Configurator> config;
+  {
+    base::AutoLock lock(config_lock_);
+    config_ = base::MakeRefCounted<Configurator>(prefs_, external_constants_,
+                                                 updater_scope());
+    config = config_;
+  }
   return base::BindOnce(
       &AppServer::ActiveDuty, this,
-      base::MakeRefCounted<UpdateServiceImpl>(updater_scope(), config_));
+      base::MakeRefCounted<UpdateServiceImpl>(updater_scope(), config));
 }
 
 void AppServer::TaskStarted() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   ++tasks_running_;
+  VLOG(2) << "TaskStarted. Count: " << tasks_running_;
 }
 
 void AppServer::TaskCompleted() {
@@ -154,6 +171,7 @@ void AppServer::TaskCompleted() {
       base::BindOnce(
           [](scoped_refptr<AppServer> server) {
             --(server->tasks_running_);
+            VLOG(2) << "TaskCompleted. Count: " << server->tasks_running_;
             server->OnDelayedTaskComplete();
             if (server->IsIdle() && server->ShutdownIfIdleAfterTask()) {
               server->Shutdown(0);
@@ -163,15 +181,20 @@ void AppServer::TaskCompleted() {
       external_constants()->ServerKeepAliveTime());
 }
 
-bool AppServer::IsIdle() {
+bool AppServer::IsIdle() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return tasks_running_ == 0;
 }
 
 void AppServer::Uninitialize() {
-  if (config_ && config_->GetEventLogger()) {
+  scoped_refptr<Configurator> config;
+  {
+    base::AutoLock lock(config_lock_);
+    config = config_;
+  }
+  if (config && config->GetEventLogger()) {
     base::RunLoop run_loop;
-    config_->GetEventLogger()->Flush(run_loop.QuitClosure());
+    config->GetEventLogger()->Flush(run_loop.QuitClosure());
     run_loop.Run();
   }
   // Simply stopping the timer does not destroy its task. The task holds a
@@ -192,16 +215,24 @@ void AppServer::Uninitialize() {
   // Because this instance is leaky when running on Windows, the following
   // references must be reset to destroy the objects, otherwise `Prefs` leaks.
   prefs_ = nullptr;
-  config_ = nullptr;
+  {
+    base::AutoLock lock(config_lock_);
+    config_ = nullptr;
+  }
 }
 
 void AppServer::MaybeUninstall() {
-  if (!config_ || IsInternalService()) {
+  scoped_refptr<Configurator> config;
+  {
+    base::AutoLock lock(config_lock_);
+    config = config_;
+  }
+  if (!config || IsInternalService()) {
     return;
   }
 
   scoped_refptr<PersistedData> persisted_data =
-      config_->GetUpdaterPersistedData();
+      config->GetUpdaterPersistedData();
   if (ShouldUninstall(persisted_data->GetAppIds(), server_starts_,
                       persisted_data->GetHadApps())) {
     std::optional<base::FilePath> executable =
@@ -230,6 +261,7 @@ void AppServer::FirstTaskRun() {
                     base::BindRepeating(
                         [](scoped_refptr<AppServer> server) {
                           if (server->IsIdle()) {
+                            VLOG(2) << "Server is idle.";
                             server->Shutdown(kErrorIdle);
                           }
                         },

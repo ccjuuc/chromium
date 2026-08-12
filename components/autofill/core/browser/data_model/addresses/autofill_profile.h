@@ -10,6 +10,7 @@
 #include <array>
 #include <iosfwd>
 #include <list>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -17,10 +18,11 @@
 
 #include "base/containers/span.h"
 #include "base/time/time.h"
+#include "build/buildflag.h"
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_model/addresses/address.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
 #include "components/autofill/core/browser/data_model/addresses/contact_info.h"
 #include "components/autofill/core/browser/data_model/addresses/phone_number.h"
 #include "components/autofill/core/browser/data_model/form_group.h"
@@ -60,7 +62,7 @@ class AutofillProfile : public FormGroup {
     // migrate it to a kAccount profile on form submission.
     kLocalOrSyncable = 0,
     // The default type of new profiles for signed-in, account storage eligible
-    // users (most users are eligible, see `ContactInfoPreconditionChecker`).
+    // users (most users are eligible, see `ContactInfoDataTypeController`).
     // Addresses of this type are stored in the signed-in users account and are
     // available across devices through `ContactInfoSyncBridge`.
     kAccount = 1,
@@ -71,7 +73,7 @@ class AutofillProfile : public FormGroup {
     // Like kAccount addresses, kAccountHome and kAccountWork are read through
     // `ContactInfoSyncBridge` (but the latter two are not written, since they
     // are read-only). As a result, the same eligiblity criteria from
-    // `ContactInfoPreconditionChecker` apply.
+    // `ContactInfoDataTypeController` apply.
     // Users need to set a Home/Work addresses from outside of Chrome (e.g. in
     // MyAccount) for them to become available in Chrome. At most one of each
     // type can exist.
@@ -82,7 +84,7 @@ class AutofillProfile : public FormGroup {
     // A profile created from the sign-in user's account name and email address.
     // It it created from data of the `signin::IdentityManager` and not synced
     // through `ContactInfoSyncBridge`, so it isn't restricted by the
-    // `ContactInfoPreconditionChecker`'s eligibility criteria (but it does
+    // `ContactInfoDataTypeController`'s eligibility criteria (but it does
     // respect the "Addresses and more" sync setting).
     // Like kAccountHome and kAccountWork, kAccountNameEmail is read-only in
     // Chrome and at most one kAccountNameEmail can exist.
@@ -93,19 +95,26 @@ class AutofillProfile : public FormGroup {
     kMaxValue = kAccountNameEmail,
   };
 
+  // Result of merging another profile into this profile via `MergeDataFrom()`.
+  enum class ProfileMergeResult {
+    // The merge failed, either because profiles are not mergeable or
+    // because merging one of the sub-components failed. The target profile is
+    // unchanged.
+    kMergeFailed = 0,
+    // The merge succeeded and the target profile was modified.
+    kMergeSucceededWithModification = 1,
+    // The merge succeeded and the target profile was not modified.
+    kMergeSucceededWithoutModification = 2,
+    kMaxValue = kMergeSucceededWithoutModification,
+  };
+
   // These fields are, by default, the only candidates for being added to the
   // list of profile labels. Note that the call to generate labels can specify a
   // custom set of fields, in which case such set would be used instead of this
   // one.
   // TODO(crbug.com/380273791): Change this into a FieldTypeSet once the
   // priority is not decided by the order of these entries anymore.
-  static constexpr auto kDefaultDistinguishingFieldsForLabels =
-      std::to_array<FieldType>(
-          {NAME_FULL, ADDRESS_HOME_LINE1, ADDRESS_HOME_LINE2,
-           ADDRESS_HOME_DEPENDENT_LOCALITY, ADDRESS_HOME_CITY,
-           ADDRESS_HOME_STATE, ADDRESS_HOME_ZIP, ADDRESS_HOME_SORTING_CODE,
-           ADDRESS_HOME_COUNTRY, EMAIL_ADDRESS, PHONE_HOME_WHOLE_NUMBER,
-           COMPANY_NAME});
+  static base::span<const FieldType> DefaultDistinguishingFieldsForLabels();
 
   // All FieldTypes stored for an AutofillProfile in the local_addresses or
   // contact_info table (depending on the profile source) in AutofillTable.
@@ -132,9 +141,8 @@ class AutofillProfile : public FormGroup {
     return stored_types;
   }();
 
-  // The values used to represent Autofill in the `initial_creator_id()` and
-  // `last_modifier_id()`.
-  static constexpr int kInitialCreatorOrModifierChrome = 70073;
+  // The values used to represent Autofill in the `initial_creator_id()`.
+  static constexpr int kInitialCreatorChrome = 70073;
   AutofillProfile(const std::string& guid,
                   RecordType record_type,
                   AddressCountryCode country_code);
@@ -218,10 +226,6 @@ class AutofillProfile : public FormGroup {
   // Returns true if there are no values (field types) set.
   bool IsEmpty(std::string_view app_locale) const;
 
-  // Returns true if the `type` of data in this profile is present, but invalid.
-  // Otherwise returns false.
-  bool IsPresentButInvalid(FieldType type) const;
-
   // Comparison for Sync.  Returns 0 if the profile is the same as `this`,
   // or < 0, or > 0 if it is different.  The implied ordering can be used for
   // culling duplicates.  The ordering is based on collation order of the
@@ -267,11 +271,11 @@ class AutofillProfile : public FormGroup {
   // Expects that the profiles have the same guid.
   void OverwriteDataFromForLegacySync(const AutofillProfile& profile);
 
-  // Merges the data from `this` profile and the given `profile` into `this`
-  // profile. Expects that `this` and `profile` have already been deemed
-  // mergeable by an AutofillProfileComparator.
-  bool MergeDataFrom(const AutofillProfile& profile,
-                     std::string_view app_locale);
+  // Merges the data from `profile` into `this` profile if they are mergeable.
+  // Returns a `ProfileMergeResult` indicating whether the merge succeeded and
+  // whether `this` was modified. If mergeable, modifies `this` in-place.
+  ProfileMergeResult MergeDataFrom(const AutofillProfile& profile,
+                                   std::string_view app_locale);
 
   // Creates a differentiating label for each of the `profiles`.
   // Labels consist of the minimal differentiating combination of:
@@ -291,11 +295,8 @@ class AutofillProfile : public FormGroup {
   // users to recognize a profile (like their full name) and a possible second
   // label if this leads to two profiles having the same label, for example if
   // there are two profiles with the same full name, it might add their email
-  // data to differentiate them. In this context the `triggering_field_type` is
-  // used to help deciding whether the differentiate label is needed. If the
-  // profile value for `triggering_field_type` is unique (and therefore the
-  // `Suggestion::main_text`), no differentiating label will be added. If
-  // `suggested_fields` is not nullopt, the resulting label fields are drawn
+  // data to differentiate them.
+  // If `suggested_fields` is not nullopt, the resulting label fields are drawn
   // from it minus those in `excluded_fields`. Otherwise, the label fields are
   // drawn from a default set. Each label includes at least
   // `minimal_fields_shown` fields, if possible.
@@ -304,11 +305,9 @@ class AutofillProfile : public FormGroup {
   static std::vector<std::u16string> CreateInferredLabels(
       base::span<const AutofillProfile* const> profiles,
       const std::optional<FieldTypeSet> suggested_fields,
-      std::optional<FieldType> triggering_field_type,
       FieldTypeSet excluded_fields,
       size_t minimal_fields_shown,
-      std::string_view app_locale,
-      bool use_improved_labels_order = false);
+      std::string_view app_locale);
 
   // Builds inferred label from the first `num_fields_to_include` non-empty
   // fields in `label_fields`. Uses as many fields as possible if there are not
@@ -371,11 +370,6 @@ class AutofillProfile : public FormGroup {
     initial_creator_id_ = creator_id;
   }
 
-  int last_modifier_id() const { return last_modifier_id_; }
-  void set_last_modifier_id(int modifier_id) {
-    last_modifier_id_ = modifier_id;
-  }
-
   // Converts a non-`kAccount` profile to a `kAccount` profile and returns it.
   // The converted profile shares the same content, but with a different GUID
   // and with `record_type` `kAccount`. Additional `kAccount`-specific metadata
@@ -430,7 +424,6 @@ class AutofillProfile : public FormGroup {
       const std::vector<FieldType>& field_types,
       size_t num_fields_to_include,
       std::string_view app_locale,
-      bool force_differentiating_label_in_front,
       std::vector<std::u16string>& labels);
 
   // Utilities for listing and lookup of the data members that constitute
@@ -483,16 +476,14 @@ class AutofillProfile : public FormGroup {
 
   RecordType record_type_;
 
-  // Indicates the application that initially created the profile and the
-  // application that performed the last non-metadata modification of it.
+  // Indicates the application that initially created the profile.
   // Only relevant for `record_type_ == kAccount` profiles, since
   // `kLocalOrSyncable` profiles are only used within Autofill. The integer
   // values represent a server-side enum `BillableService`, which is not
   // duplicated in Chromium. For Autofill, the exact application that
-  // created/modified the profile is thus opaque. However, Autofill is
-  // represented by the value `kInitialCreatorOrModifierChrome`.
+  // created the profile is thus opaque. However, Autofill is
+  // represented by the value `kInitialCreatorChrome`.
   int initial_creator_id_ = 0;
-  int last_modifier_id_ = 0;
 
   // Stores information about the quality of this profile's stored types.
   ProfileTokenQuality token_quality_;

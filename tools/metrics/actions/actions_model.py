@@ -8,8 +8,9 @@ import re
 import sys
 from typing import Any, List
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'common'))
-import models
+import setup_modules  # pylint: disable=unused-import
+
+import chromium_src.tools.metrics.common.models as models
 
 _OBSOLETE_TYPE = models.TextNodeType('obsolete', single_line=True)
 _OWNER_TYPE = models.TextNodeType('owner', single_line=True)
@@ -76,33 +77,30 @@ _TOKEN_TYPE = models.ObjectNodeType('token',
                                                          multiple=True),
                                     ])
 
-_ACTION_TYPE = models.ObjectNodeType('action',
-                                     attributes=[
-                                         ('name', str, None),
-                                         ('not_user_triggered', str, None),
-                                     ],
-                                     required_attributes=['name'],
-                                     alphabetization=[
-                                         (_OBSOLETE_TYPE.tag, _KEEP_ORDER),
-                                         (_OWNER_TYPE.tag, _KEEP_ORDER),
-                                         (_DESCRIPTION_TYPE.tag, _KEEP_ORDER),
-                                         (_TOKEN_TYPE.tag, _KEEP_ORDER),
-                                     ],
-                                     extra_newlines=(1, 1, 1),
-                                     children=[
-                                         models.ChildType(_OBSOLETE_TYPE.tag,
-                                                          _OBSOLETE_TYPE,
-                                                          multiple=False),
-                                         models.ChildType(_OWNER_TYPE.tag,
-                                                          _OWNER_TYPE,
-                                                          multiple=True),
-                                         models.ChildType(_DESCRIPTION_TYPE.tag,
-                                                          _DESCRIPTION_TYPE,
-                                                          multiple=False),
-                                         models.ChildType(_TOKEN_TYPE.tag,
-                                                          _TOKEN_TYPE,
-                                                          multiple=True),
-                                     ])
+_ACTION_TYPE = models.ObjectNodeType(
+    'action',
+    attributes=[
+        ('name', str, None),
+        # Boolean is formatted in a python way so we use regex. This also allows
+        # empty value as it is properly handled
+        ('not_user_triggered', str, '^(true|false|)$'),
+    ],
+    required_attributes=['name'],
+    alphabetization=[
+        (_OBSOLETE_TYPE.tag, _KEEP_ORDER),
+        (_OWNER_TYPE.tag, _KEEP_ORDER),
+        (_DESCRIPTION_TYPE.tag, _KEEP_ORDER),
+        (_TOKEN_TYPE.tag, _KEEP_ORDER),
+    ],
+    extra_newlines=(1, 1, 1),
+    children=[
+        models.ChildType(_OBSOLETE_TYPE.tag, _OBSOLETE_TYPE, multiple=False),
+        models.ChildType(_OWNER_TYPE.tag, _OWNER_TYPE, multiple=True),
+        models.ChildType(_DESCRIPTION_TYPE.tag,
+                         _DESCRIPTION_TYPE,
+                         multiple=False),
+        models.ChildType(_TOKEN_TYPE.tag, _TOKEN_TYPE, multiple=True),
+    ])
 
 _ACTION_SUFFIX_TYPE = models.ObjectNodeType(
     'action-suffix',

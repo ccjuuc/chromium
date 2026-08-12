@@ -34,11 +34,10 @@ import org.chromium.chrome.browser.dragdrop.ChromeDropDataAndroid;
 import org.chromium.chrome.browser.dragdrop.ChromeTabDropDataAndroid;
 import org.chromium.chrome.browser.dragdrop.ChromeTabGroupDropDataAndroid;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tabmodel.TabGroupMergeNotificationType;
 import org.chromium.chrome.browser.tabmodel.TabGroupMetadata;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter.MergeNotificationType;
 import org.chromium.chrome.browser.tasks.tab_management.TabDragHandlerBase;
 import org.chromium.ui.dragdrop.DragDropGlobalState;
-import org.chromium.ui.dragdrop.DragDropGlobalState.TrackerToken;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -71,7 +70,6 @@ public class ExternalViewDragDropReorderStrategyTest extends ReorderStrategyTest
                         mAnimationHost,
                         mScrollDelegate,
                         mModel,
-                        mTabGroupModelFilter,
                         mContainerView,
                         mGroupIdToHideSupplier,
                         mTabWidthSupplier,
@@ -290,7 +288,6 @@ public class ExternalViewDragDropReorderStrategyTest extends ReorderStrategyTest
         // Group tabs.
         mockTabGroup(
                 GROUP_ID1,
-                INTERACTING_VIEW_ID,
                 mModel.getTabById(INTERACTING_VIEW_ID),
                 mModel.getTabById(TAB_ID2));
         float initialBottomIndicatorWidth = mInteractingGroupTitle.getBottomIndicatorWidth();
@@ -390,12 +387,12 @@ public class ExternalViewDragDropReorderStrategyTest extends ReorderStrategyTest
         // Verify
         Tab expectedPrimaryTab = mModel.getTabByIdChecked(INTERACTING_VIEW_ID);
         int expectedMergeIndex = 0;
-        verify(mTabGroupModelFilter)
+        verify(mModel)
                 .mergeListOfTabsToGroup(
                         mTabListCaptor.capture(),
                         eq(expectedPrimaryTab),
                         eq(expectedMergeIndex),
-                        eq(MergeNotificationType.DONT_NOTIFY));
+                        eq(TabGroupMergeNotificationType.DONT_NOTIFY));
         List<Tab> mergedTabs = mTabListCaptor.getValue();
         assertEquals("Unexpected number of tabs.", list.size(), mergedTabs.size());
         for (Tab tab : mergedTabs) {
@@ -419,8 +416,7 @@ public class ExternalViewDragDropReorderStrategyTest extends ReorderStrategyTest
         mStrategy.handleDrop(mGroupTitles, Collections.singletonList(draggedTabId), dropIndex);
 
         // Verify
-        verify(mTabGroupModelFilter, never())
-                .mergeListOfTabsToGroup(anyList(), any(), anyInt(), anyInt());
+        verify(mModel, never()).mergeListOfTabsToGroup(anyList(), any(), anyInt(), anyInt());
         assertNull(
                 "mInteractingViewDuringStop should be null",
                 mStrategy.getInteractingViewDuringStopForTesting());
@@ -490,7 +486,7 @@ public class ExternalViewDragDropReorderStrategyTest extends ReorderStrategyTest
 
     private void mockTabInGroup(int id) {
         Tab tab = mModel.getTabById(id);
-        mockTabGroup(GROUP_ID1, tab.getId(), tab);
+        mockTabGroup(GROUP_ID1, tab);
     }
 
     private void setupDragDropState(boolean isGroupDrag) {
@@ -517,9 +513,9 @@ public class ExternalViewDragDropReorderStrategyTest extends ReorderStrategyTest
         } else {
             dropData = new ChromeTabDropDataAndroid.Builder().withTab(tab).build();
         }
-        TrackerToken dragTrackerToken =
+        Token dragToken =
                 DragDropGlobalState.store(
                         /* dragSourceInstanceId= */ 1, dropData, /* dragShadowBuilder= */ null);
-        TabDragHandlerBase.setDragTrackerTokenForTesting(dragTrackerToken);
+        TabDragHandlerBase.setDragTokenForTesting(dragToken);
     }
 }

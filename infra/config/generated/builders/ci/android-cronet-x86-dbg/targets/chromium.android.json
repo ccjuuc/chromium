@@ -7,7 +7,6 @@
       "cronet_smoketests_missing_native_library_instrumentation_apk",
       "cronet_smoketests_platform_only_instrumentation_apk",
       "cronet_test_instrumentation_apk",
-      "cronet_tests_android",
       "cronet_unittests_android",
       "net_unittests"
     ],
@@ -48,6 +47,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -95,6 +95,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -142,6 +143,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -189,6 +191,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -237,6 +240,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -286,53 +290,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
-        "merge": {
-          "args": [
-            "--bucket",
-            "chromium-result-details",
-            "--test-name",
-            "cronet_tests_android"
-          ],
-          "script": "//build/android/pylib/results/presentation/test_results_presentation.py"
-        },
-        "module_name": "//components/cronet/android:cronet_tests_android",
-        "module_scheme": "gtest",
-        "name": "cronet_tests_android",
-        "resultdb": {
-          "enable": true,
-          "has_native_resultdb_integration": true
-        },
-        "swarming": {
-          "dimensions": {
-            "cores": "4",
-            "cpu": "x86-64",
-            "device_os": null,
-            "device_type": null,
-            "os": "Ubuntu-22.04",
-            "pool": "chromium.tests.avd"
-          },
-          "named_caches": [
-            {
-              "name": "android_29_google_apis_x86",
-              "path": ".android_emulator/android_29_google_apis_x86"
-            }
-          ],
-          "optional_dimensions": {
-            "60": {
-              "caches": "android_29_google_apis_x86"
-            }
-          },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
-        },
-        "test": "cronet_tests_android",
-        "test_id_prefix": "ninja://components/cronet/android:cronet_tests_android/"
-      },
-      {
-        "args": [
-          "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
-          "--gs-results-bucket=chromium-result-details",
-          "--recover-devices"
-        ],
+        "description": "Run with android_29_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -381,6 +339,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -433,6 +392,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -446,6 +406,9 @@
         "module_scheme": "junit",
         "name": "cronet_sample_test_apk",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -480,6 +443,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -493,6 +457,9 @@
         "module_scheme": "junit",
         "name": "cronet_smoketests_apk",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -527,6 +494,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -540,6 +508,9 @@
         "module_scheme": "junit",
         "name": "cronet_smoketests_missing_native_library_instrumentation_apk",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -574,6 +545,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -587,6 +559,9 @@
         "module_scheme": "junit",
         "name": "cronet_smoketests_platform_only_instrumentation_apk",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -622,6 +597,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -635,6 +611,9 @@
         "module_scheme": "junit",
         "name": "cronet_test_instrumentation_apk",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -671,53 +650,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
-        "merge": {
-          "args": [
-            "--bucket",
-            "chromium-result-details",
-            "--test-name",
-            "cronet_tests_android"
-          ],
-          "script": "//build/android/pylib/results/presentation/test_results_presentation.py"
-        },
-        "module_name": "//components/cronet/android:cronet_tests_android",
-        "module_scheme": "gtest",
-        "name": "cronet_tests_android",
-        "resultdb": {
-          "enable": true,
-          "has_native_resultdb_integration": true
-        },
-        "swarming": {
-          "dimensions": {
-            "cores": "4",
-            "cpu": "x86-64",
-            "device_os": null,
-            "device_type": null,
-            "os": "Ubuntu-22.04",
-            "pool": "chromium.tests.avd"
-          },
-          "named_caches": [
-            {
-              "name": "android_30_google_apis_x86",
-              "path": ".android_emulator/android_30_google_apis_x86"
-            }
-          ],
-          "optional_dimensions": {
-            "60": {
-              "caches": "android_30_google_apis_x86"
-            }
-          },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
-        },
-        "test": "cronet_tests_android",
-        "test_id_prefix": "ninja://components/cronet/android:cronet_tests_android/"
-      },
-      {
-        "args": [
-          "--avd-config=../../tools/android/avd/proto/android_30_google_apis_x86.textpb",
-          "--gs-results-bucket=chromium-result-details",
-          "--recover-devices"
-        ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -731,6 +664,9 @@
         "module_scheme": "gtest",
         "name": "cronet_unittests_android",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -765,6 +701,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_30_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -778,6 +715,9 @@
         "module_scheme": "gtest",
         "name": "net_unittests",
         "resultdb": {
+          "base_variant": {
+            "device_os": "RSR1.210722.013.A2"
+          },
           "enable": true,
           "has_native_resultdb_integration": true
         },
@@ -817,6 +757,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with generic_android23",
         "merge": {
           "args": [
             "--bucket",
@@ -864,6 +805,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with generic_android23",
         "merge": {
           "args": [
             "--bucket",
@@ -911,6 +853,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with generic_android23",
         "merge": {
           "args": [
             "--bucket",
@@ -958,6 +901,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with generic_android23",
         "merge": {
           "args": [
             "--bucket",
@@ -1006,6 +950,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with generic_android23",
         "merge": {
           "args": [
             "--bucket",
@@ -1055,53 +1000,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
-        "merge": {
-          "args": [
-            "--bucket",
-            "chromium-result-details",
-            "--test-name",
-            "cronet_tests_android"
-          ],
-          "script": "//build/android/pylib/results/presentation/test_results_presentation.py"
-        },
-        "module_name": "//components/cronet/android:cronet_tests_android",
-        "module_scheme": "gtest",
-        "name": "cronet_tests_android",
-        "resultdb": {
-          "enable": true,
-          "has_native_resultdb_integration": true
-        },
-        "swarming": {
-          "dimensions": {
-            "cores": "4",
-            "cpu": "x86-64",
-            "device_os": null,
-            "device_type": null,
-            "os": "Ubuntu-22.04",
-            "pool": "chromium.tests.avd"
-          },
-          "named_caches": [
-            {
-              "name": "generic_android23",
-              "path": ".android_emulator/generic_android23"
-            }
-          ],
-          "optional_dimensions": {
-            "60": {
-              "caches": "generic_android23"
-            }
-          },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
-        },
-        "test": "cronet_tests_android",
-        "test_id_prefix": "ninja://components/cronet/android:cronet_tests_android/"
-      },
-      {
-        "args": [
-          "--avd-config=../../tools/android/avd/proto/generic_android23.textpb",
-          "--gs-results-bucket=chromium-result-details",
-          "--recover-devices"
-        ],
+        "description": "Run with generic_android23",
         "merge": {
           "args": [
             "--bucket",
@@ -1149,6 +1048,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with generic_android23",
         "merge": {
           "args": [
             "--bucket",
@@ -1201,6 +1101,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with generic_android24",
         "merge": {
           "args": [
             "--bucket",
@@ -1248,6 +1149,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with generic_android24",
         "merge": {
           "args": [
             "--bucket",
@@ -1295,6 +1197,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with generic_android24",
         "merge": {
           "args": [
             "--bucket",
@@ -1342,6 +1245,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with generic_android24",
         "merge": {
           "args": [
             "--bucket",
@@ -1390,6 +1294,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with generic_android24",
         "merge": {
           "args": [
             "--bucket",
@@ -1439,53 +1344,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
-        "merge": {
-          "args": [
-            "--bucket",
-            "chromium-result-details",
-            "--test-name",
-            "cronet_tests_android"
-          ],
-          "script": "//build/android/pylib/results/presentation/test_results_presentation.py"
-        },
-        "module_name": "//components/cronet/android:cronet_tests_android",
-        "module_scheme": "gtest",
-        "name": "cronet_tests_android",
-        "resultdb": {
-          "enable": true,
-          "has_native_resultdb_integration": true
-        },
-        "swarming": {
-          "dimensions": {
-            "cores": "4",
-            "cpu": "x86-64",
-            "device_os": null,
-            "device_type": null,
-            "os": "Ubuntu-22.04",
-            "pool": "chromium.tests.avd"
-          },
-          "named_caches": [
-            {
-              "name": "generic_android24",
-              "path": ".android_emulator/generic_android24"
-            }
-          ],
-          "optional_dimensions": {
-            "60": {
-              "caches": "generic_android24"
-            }
-          },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
-        },
-        "test": "cronet_tests_android",
-        "test_id_prefix": "ninja://components/cronet/android:cronet_tests_android/"
-      },
-      {
-        "args": [
-          "--avd-config=../../tools/android/avd/proto/generic_android24.textpb",
-          "--gs-results-bucket=chromium-result-details",
-          "--recover-devices"
-        ],
+        "description": "Run with generic_android24",
         "merge": {
           "args": [
             "--bucket",
@@ -1533,6 +1392,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with generic_android24",
         "merge": {
           "args": [
             "--bucket",
@@ -1585,6 +1445,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with generic_android26",
         "merge": {
           "args": [
             "--bucket",
@@ -1632,6 +1493,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with generic_android26",
         "merge": {
           "args": [
             "--bucket",
@@ -1679,6 +1541,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with generic_android26",
         "merge": {
           "args": [
             "--bucket",
@@ -1726,6 +1589,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with generic_android26",
         "merge": {
           "args": [
             "--bucket",
@@ -1774,6 +1638,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with generic_android26",
         "merge": {
           "args": [
             "--bucket",
@@ -1823,53 +1688,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
-        "merge": {
-          "args": [
-            "--bucket",
-            "chromium-result-details",
-            "--test-name",
-            "cronet_tests_android"
-          ],
-          "script": "//build/android/pylib/results/presentation/test_results_presentation.py"
-        },
-        "module_name": "//components/cronet/android:cronet_tests_android",
-        "module_scheme": "gtest",
-        "name": "cronet_tests_android",
-        "resultdb": {
-          "enable": true,
-          "has_native_resultdb_integration": true
-        },
-        "swarming": {
-          "dimensions": {
-            "cores": "4",
-            "cpu": "x86-64",
-            "device_os": null,
-            "device_type": null,
-            "os": "Ubuntu-22.04",
-            "pool": "chromium.tests.avd"
-          },
-          "named_caches": [
-            {
-              "name": "generic_android26",
-              "path": ".android_emulator/generic_android26"
-            }
-          ],
-          "optional_dimensions": {
-            "60": {
-              "caches": "generic_android26"
-            }
-          },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
-        },
-        "test": "cronet_tests_android",
-        "test_id_prefix": "ninja://components/cronet/android:cronet_tests_android/"
-      },
-      {
-        "args": [
-          "--avd-config=../../tools/android/avd/proto/generic_android26.textpb",
-          "--gs-results-bucket=chromium-result-details",
-          "--recover-devices"
-        ],
+        "description": "Run with generic_android26",
         "merge": {
           "args": [
             "--bucket",
@@ -1918,6 +1737,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with generic_android26",
         "merge": {
           "args": [
             "--bucket",
@@ -1970,6 +1790,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_28_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2017,6 +1838,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_28_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2064,6 +1886,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_28_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2111,6 +1934,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_28_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2159,6 +1983,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_28_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2208,53 +2033,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
-        "merge": {
-          "args": [
-            "--bucket",
-            "chromium-result-details",
-            "--test-name",
-            "cronet_tests_android"
-          ],
-          "script": "//build/android/pylib/results/presentation/test_results_presentation.py"
-        },
-        "module_name": "//components/cronet/android:cronet_tests_android",
-        "module_scheme": "gtest",
-        "name": "cronet_tests_android",
-        "resultdb": {
-          "enable": true,
-          "has_native_resultdb_integration": true
-        },
-        "swarming": {
-          "dimensions": {
-            "cores": "4",
-            "cpu": "x86-64",
-            "device_os": null,
-            "device_type": null,
-            "os": "Ubuntu-22.04",
-            "pool": "chromium.tests.avd"
-          },
-          "named_caches": [
-            {
-              "name": "android_28_google_apis_x86",
-              "path": ".android_emulator/android_28_google_apis_x86"
-            }
-          ],
-          "optional_dimensions": {
-            "60": {
-              "caches": "android_28_google_apis_x86"
-            }
-          },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
-        },
-        "test": "cronet_tests_android",
-        "test_id_prefix": "ninja://components/cronet/android:cronet_tests_android/"
-      },
-      {
-        "args": [
-          "--avd-config=../../tools/android/avd/proto/android_28_google_apis_x86.textpb",
-          "--gs-results-bucket=chromium-result-details",
-          "--recover-devices"
-        ],
+        "description": "Run with android_28_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",
@@ -2303,6 +2082,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_28_google_apis_x86",
         "merge": {
           "args": [
             "--bucket",

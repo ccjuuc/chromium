@@ -14,7 +14,6 @@ include_rules = [
   # Files residing in certain directories (e.g., //chrome/browser) are listed
   # individually. Other dependencies within //chrome are listed on a per-
   # directory basis. See //tools/chromeos/gen_deps.sh for details.
-  "+chrome/app/vector_icons",
   "+chrome/browser/apps/app_service",
   "+chrome/browser/ash/drive",
   "+chrome/browser/ash/file_manager",
@@ -28,7 +27,7 @@ include_rules = [
   "+chrome/browser/ui/ash/holding_space",
   "+chrome/browser/ui/ash/session",
   "+chrome/browser/ui/ash/system_web_apps",
-  "+chrome/browser/ui/chrome_select_file_policy.h",
+  "+chrome/browser/ui/select_file_policy/chrome_select_file_policy.h",
   "+chrome/common/chrome_paths.h",
   "+chrome/grit",
   "+chrome/test/base",
@@ -36,7 +35,7 @@ include_rules = [
 ]
 
 specific_include_rules = {
-  "scan_service\.h": [
+  "scan_service\\.h": [
     "+services/device/wake_lock/power_save_blocker/power_save_blocker.h",
   ],
 }

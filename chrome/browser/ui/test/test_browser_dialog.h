@@ -65,6 +65,12 @@ class TestBrowserDialog : public TestBrowserUi {
   // Widget::CanClose() and DialogDelegate::Close().
   virtual bool AlwaysCloseAsynchronously();
 
+  // Whether to wait for the dialog widget to become visible in VerifyUi() by
+  // pumping the run loop. Subclasses that run blocking modal loops should
+  // return false to avoid deadlocks. Defaults to true on macOS to account for
+  // asynchronous modal sheet presentation, and false on other platforms.
+  virtual bool ShouldWaitForDialogBeforeVerify();
+
   // Get the name of a non-dialog window that should be included in testing.
   // VerifyUi() only considers dialog windows and windows with a matching name.
   virtual std::string GetNonDialogName();
@@ -84,7 +90,7 @@ class TestBrowserDialog : public TestBrowserUi {
   // If set to true, the dialog bounds will be verified to fit inside the
   // display's work area.
   // This should always be true, but some dialogs don't yet size themselves
-  // properly. https://crbug.com/893292.
+  // properly. https://crbug.com/41419544.
   bool should_verify_dialog_bounds_ = true;
 };
 

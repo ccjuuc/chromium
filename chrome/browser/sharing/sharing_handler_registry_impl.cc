@@ -4,8 +4,17 @@
 
 #include "chrome/browser/sharing/sharing_handler_registry_impl.h"
 
+#include "base/feature_list.h"
 #include "build/build_config.h"
+#include "chrome/browser/glic/public/glic_keyed_service_factory.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/sharing/browser_actuator/browser_actuator_message_handler.h"
+#include "chrome/browser/sharing/glic_experimental_triggering/glic_experimental_triggering_message_handler.h"
+#include "chrome/browser/sharing/one_time_tokens/one_time_token_sharing_handler.h"
 #include "chrome/browser/sharing/optimization_guide/optimization_guide_message_handler.h"
+#include "chrome/common/chrome_features.h"
+#include "components/browser_actuator/public/features.h"
+#include "components/one_time_tokens/core/browser/gmail_otp_backend.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/sharing_message/ack_message_handler.h"
 #include "components/sharing_message/ping_message_handler.h"
@@ -14,10 +23,7 @@
 #include "components/sharing_message/sharing_message_sender.h"
 
 #if BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/sharing/click_to_call/click_to_call_message_handler_android.h"
 #include "chrome/browser/sharing/sms/sms_fetch_request_handler.h"
-#else
-#include "chrome/browser/sharing/shared_clipboard/shared_clipboard_message_handler_desktop.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
@@ -30,7 +36,8 @@ SharingHandlerRegistryImpl::SharingHandlerRegistryImpl(
     SharingDeviceRegistration* sharing_device_registration,
     SharingMessageSender* message_sender,
     SharingDeviceSource* device_source,
-    content::SmsFetcher* sms_fetcher) {
+    content::SmsFetcher* sms_fetcher,
+    one_time_tokens::GmailOtpBackend* gmail_otp_backend) {
   AddSharingHandler(std::make_unique<PingMessageHandler>(),
                     {components_sharing_message::SharingMessage::kPingMessage});
 
@@ -38,11 +45,6 @@ SharingHandlerRegistryImpl::SharingHandlerRegistryImpl(
                     {components_sharing_message::SharingMessage::kAckMessage});
 
 #if BUILDFLAG(IS_ANDROID)
-  // Note: IsClickToCallSupported() is not used as it requires JNI call.
-  AddSharingHandler(
-      std::make_unique<ClickToCallMessageHandler>(),
-      {components_sharing_message::SharingMessage::kClickToCallMessage});
-
   if (sharing_device_registration->IsSmsFetcherSupported()) {
     AddSharingHandler(
         std::make_unique<SmsFetchRequestHandler>(device_source, sms_fetcher),
@@ -59,18 +61,6 @@ SharingHandlerRegistryImpl::SharingHandlerRegistryImpl(
                            kOptimizationGuidePushNotification});
   }
 
-#if !BUILDFLAG(IS_ANDROID)
-  if (sharing_device_registration->IsSharedClipboardSupported()) {
-    std::unique_ptr<SharingMessageHandler> shared_clipboard_message_handler;
-    shared_clipboard_message_handler =
-        std::make_unique<SharedClipboardMessageHandlerDesktop>(device_source,
-                                                               profile);
-    AddSharingHandler(
-        std::move(shared_clipboard_message_handler),
-        {components_sharing_message::SharingMessage::kSharedClipboardMessage});
-  }
-#endif  // !BUILDFLAG(IS_ANDROID)
-
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS)
   if (sharing_device_registration->IsRemoteCopySupported()) {
@@ -80,6 +70,43 @@ SharingHandlerRegistryImpl::SharingHandlerRegistryImpl(
   }
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
         // BUILDFLAG(IS_CHROMEOS)
+#if !BUILDFLAG(IS_ANDROID)
+  if (sharing_device_registration
+          ->IsOneTimeTokenBackendNotificationSupported()) {
+    AddSharingHandler(
+        std::make_unique<OneTimeTokenSharingHandler>(gmail_otp_backend),
+        {components_sharing_message::SharingMessage::
+             kOneTimeTokenBackendNotification});
+  }
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+  bool browser_actuator_enabled =
+      base::FeatureList::IsEnabled(browser_actuator::kBrowserActuator);
+  bool browser_actuator_for_glic_enabled =
+      browser_actuator_enabled &&
+      base::FeatureList::IsEnabled(
+          browser_actuator::
+              kEnableBrowserActuatorForGlicExperimentalTriggering);
+  bool glic_experimental_triggering_enabled =
+      base::FeatureList::IsEnabled(features::kGlicExperimentalTriggering);
+
+  if ((browser_actuator_for_glic_enabled ||
+       glic_experimental_triggering_enabled) &&
+      glic::GlicKeyedServiceFactory::GetGlicKeyedService(profile,
+                                                         /*create=*/true)) {
+    if (browser_actuator_for_glic_enabled) {
+      AddSharingHandler(
+          std::make_unique<BrowserActuatorMessageHandler>(profile),
+          {components_sharing_message::SharingMessage::
+               kGlicExperimentalTriggering});
+    } else {
+      AddSharingHandler(
+          std::make_unique<GlicExperimentalTriggeringMessageHandler>(
+              profile, message_sender),
+          {components_sharing_message::SharingMessage::
+               kGlicExperimentalTriggering});
+    }
+  }
 }
 
 SharingHandlerRegistryImpl::~SharingHandlerRegistryImpl() = default;
@@ -87,12 +114,14 @@ SharingHandlerRegistryImpl::~SharingHandlerRegistryImpl() = default;
 SharingMessageHandler* SharingHandlerRegistryImpl::GetSharingHandler(
     components_sharing_message::SharingMessage::PayloadCase payload_case) {
   auto it = handler_map_.find(payload_case);
-  if (it != handler_map_.end())
+  if (it != handler_map_.end()) {
     return it->second;
+  }
 
   auto extra_it = extra_handler_map_.find(payload_case);
-  if (extra_it != extra_handler_map_.end())
+  if (extra_it != extra_handler_map_.end()) {
     return extra_it->second.get();
+  }
 
   return nullptr;
 }

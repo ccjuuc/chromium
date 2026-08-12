@@ -26,6 +26,7 @@ import org.chromium.android_webview.common.AwFeatures;
 import org.chromium.android_webview.test.AwActivityTestRule.PopupInfo;
 import org.chromium.android_webview.test.util.CommonResources;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.content_public.browser.NavigationEntry;
 import org.chromium.content_public.browser.NavigationHistory;
 import org.chromium.content_public.browser.test.util.HistoryUtils;
@@ -62,11 +63,11 @@ public class NavigationHistoryTest extends AwParameterizedTest {
 
     @Before
     public void setUp() throws Exception {
-        AwContents.setShouldDownloadFavicons();
         mContentsClient = new TestAwContentsClient();
         final AwTestContainerView testContainerView =
                 mActivityTestRule.createAwTestContainerViewOnMainSync(mContentsClient);
         mAwContents = testContainerView.getAwContents();
+        mAwContents.getSettings().setDownloadFaviconsEnabled(true);
         AwActivityTestRule.enableJavaScriptOnUiThread(mAwContents);
         mWebServer = TestWebServer.start();
         mLoadedNotifier = new TestPageLoadedNotifier();
@@ -264,7 +265,10 @@ public class NavigationHistoryTest extends AwParameterizedTest {
 
     @Test
     @SmallTest
+    @CommandLineFlags.Add({"enable-features=WebViewDownloadFavicons"})
     public void testFavicon() throws Throwable {
+        // fake onReceivedIcon overridden so that the favicon is
+        // sent when page is loaded
         mWebServer.setResponseBase64(
                 "/" + CommonResources.FAVICON_FILENAME,
                 CommonResources.FAVICON_DATA_BASE64,

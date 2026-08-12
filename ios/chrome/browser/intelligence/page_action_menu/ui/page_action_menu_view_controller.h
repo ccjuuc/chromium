@@ -10,16 +10,18 @@
 #import "ios/chrome/browser/intelligence/page_action_menu/ui/page_action_menu_consumer.h"
 #import "ios/chrome/browser/reader_mode/ui/reader_mode_options_consumer.h"
 
-@protocol BWGCommands;
 @protocol LensOverlayCommands;
 @protocol PageActionMenuCommands;
 @protocol PageActionMenuMutator;
 @protocol PageActionMenuViewControllerDelegate;
 @protocol ReaderModeCommands;
+@protocol ReaderModeOptionsCommands;
 
 // The view controller representing the presented page action menu UI.
 @interface PageActionMenuViewController
-    : UIViewController <PageActionMenuConsumer, ReaderModeOptionsConsumer>
+    : UIViewController <PageActionMenuConsumer,
+                        ReaderModeOptionsConsumer,
+                        UITextViewDelegate>
 
 // The delegate for this view controller.
 @property(nonatomic, weak) id<PageActionMenuViewControllerDelegate> delegate;
@@ -31,9 +33,6 @@
 // The mutator for communicating with the mediator.
 @property(nonatomic, weak) id<PageActionMenuMutator> mutator;
 
-// The handler for sending BWG commands.
-@property(nonatomic, weak) id<BWGCommands> BWGHandler;
-
 // The handler for sending page action menu commands.
 @property(nonatomic, weak) id<PageActionMenuCommands> pageActionMenuHandler;
 
@@ -42,6 +41,13 @@
 
 // The handler for sending reader mode commands.
 @property(nonatomic, weak) id<ReaderModeCommands> readerModeHandler;
+
+// The handler for Reader Mode options commands.
+@property(nonatomic, weak) id<ReaderModeOptionsCommands>
+    readerModeOptionsHandler;
+
+// Updates the loading state on the Ask Gemini button.
+- (void)updateGeminiLoadingState:(BOOL)loading;
 
 @end
 

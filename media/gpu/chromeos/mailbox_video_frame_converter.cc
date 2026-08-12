@@ -4,7 +4,6 @@
 
 #include "media/gpu/chromeos/mailbox_video_frame_converter.h"
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
@@ -25,13 +24,27 @@
 
 namespace media {
 namespace {
-// The SharedImage size ultimately must correspond to the size used to import
-// the decoded frame into a graphics API (e.g., the EGL image size when using
-// OpenGL). For most videos, this is simply frame->visible_rect().size().
-// However, some H.264 videos specify a visible rectangle that doesn't start
-// at (0, 0). Since clients are expected to calculate UV coordinates to handle
-// these exotic visible rectangles, we must include the area on the left and
-// on the top of the frames when computing the SharedImage size.
+
+// Note the use of GetRectSizeFromOrigin() as the SharedImage size. The reason
+// is that the SharedImage size will end up being the coded_size() of the
+// outgoing VideoFrame, and this tells the client what the "usable area" of the
+// frame's buffer is so that it issues rendering commands correctly and we avoid
+// edge artifacts when using bilinear filtering. Ultimately, this size must
+// correspond to the size used to import the decoded frame into a graphics API
+// (e.g., the EGL image size when using OpenGL). For most videos, the usable
+// area is simply frame->visible_rect().size(). However, there are two special
+// cases to consider:
+//
+// - When detiling is needed, we have a custom Vulkan shader pipeline for
+//   scanning out these buffers that needs to know the underlying coded buffer
+//   size for detiling computations.
+//
+// - When detiling is not needed, we use the visible area, but have to account
+//   for the fact that some videos (e.g., some H.264 videos) define a visible
+//   rectangle that doesn't start at (0, 0). For these frames, the usable area
+//   includes the non-visible area on the left and on top of the visible area so
+//   that the client can calculate the UV coordinates correctly. Hence the use
+//   of GetRectSizeFromOrigin().
 inline gfx::Size to_shared_image_size(FrameResource* origin_frame,
                                       scoped_refptr<FrameResource> frame) {
   return origin_frame->metadata().needs_detiling
@@ -39,32 +52,15 @@ inline gfx::Size to_shared_image_size(FrameResource* origin_frame,
              : GetRectSizeFromOrigin(frame->visible_rect());
 }
 
-// Note the use of GetRectSizeFromOrigin() as the coded size. The reason is
-// that the coded_size() of the outgoing FrameResource tells the client what
-// the "usable area" of the frame's buffer is so that it issues rendering
-// commands correctly. For most videos, this usable area is simply
-// frame->visible_rect().size(). However, some H.264 videos define a visible
-// rectangle that doesn't start at (0, 0). For these frames, the usable area
-// includes the non-visible area on the left and on top of the visible area
-// (so that the client can calculate the UV coordinates correctly). Hence the
-// use of GetRectSizeFromOrigin().
-//
-// Most video frames should use visible size instead of coded size because
-// some videos use 0s to pad the frames to coded size, which will cause
-// artifacting along the edges of the image when we scale using bilinear
-// filtering. Tiled protected content is an exception though, because we have
-// a custom Vulkan shader pipeline for scanning out these buffers that needs
-// to know the underlying coded buffer size for detiling computations.
-//
-// The metadata field |needs_detiling| technically comes from an untrusted
-// source, but we don't believe this is a security risk since the worst case
-// scenario simply involves video corruption when the Vulkan detiler
-// misinterprets the frame.
-inline gfx::Size to_coded_size(scoped_refptr<FrameResource> frame) {
-  return frame->metadata().needs_detiling
-             ? frame->coded_size()
-             : GetRectSizeFromOrigin(frame->visible_rect());
+
+// Provides a default color space if the frame color space was invalid.
+// TODO(b/425634684): Perform this fallback higher up the stack on
+// FrameResource.
+gfx::ColorSpace GetDefaultColorSpace(const viz::SharedImageFormat& format) {
+  return format.is_single_plane() ? gfx::ColorSpace::CreateSRGB()
+                                  : gfx::ColorSpace::CreateREC709();
 }
+
 }  // namespace
 
 // static
@@ -148,6 +144,14 @@ void MailboxVideoFrameConverter::ConvertFrameImpl(
   TRACE_EVENT1("media,gpu", "ConvertFrameImpl", "FrameResource id",
                origin_frame->unique_id());
 
+  gfx::ColorSpace color_space = frame->ColorSpace();
+  if (!color_space.IsValid()) {
+    auto si_format = VideoPixelFormatToSharedImageFormat(frame->format());
+    if (si_format) {
+      color_space = GetDefaultColorSpace(si_format.value());
+    }
+  }
+
   auto shared_image_it = shared_images_.find(origin_frame->unique_id());
   // If there's a |stored_shared_image| associated with |origin_frame|, update
   // it and call the continuation callback, otherwise create a SharedImage and
@@ -158,12 +162,13 @@ void MailboxVideoFrameConverter::ConvertFrameImpl(
     if (stored_shared_image &&
         stored_shared_image->size() ==
             to_shared_image_size(origin_frame, frame) &&
-        stored_shared_image->color_space() == frame->ColorSpace()) {
-      shared_image_interface_->UpdateSharedImage(
-          gpu::SyncToken(), stored_shared_image->mailbox());
-      WrapSharedImageAndVideoFrameAndOutput(
-          origin_frame, std::move(frame), std::move(stored_shared_image),
-          shared_image_interface_->GenVerifiedSyncToken());
+        stored_shared_image->color_space() == color_space) {
+      gpu::SyncToken sync_token =
+          stored_shared_image->BackingWasExternallyUpdated(gpu::SyncToken());
+      shared_image_interface_->VerifySyncToken(sync_token);
+      WrapSharedImageAndVideoFrameAndOutput(origin_frame, std::move(frame),
+                                            std::move(stored_shared_image),
+                                            sync_token);
       return;
     }
   }
@@ -191,16 +196,18 @@ void MailboxVideoFrameConverter::WrapSharedImageAndVideoFrameAndOutput(
   DCHECK(shared_image);
 
   const UniqueID origin_frame_id = origin_frame->unique_id();
-  DCHECK(base::Contains(shared_images_, origin_frame_id));
+  DCHECK(shared_images_.contains(origin_frame_id));
 
   // GenerateSharedImage() should have checked the |origin_frame|'s format
   // (which should be the same as the |frame|'s format).
   CHECK_EQ(frame->format(), origin_frame->format());
+  CHECK_EQ(frame->metadata().needs_detiling,
+           origin_frame->metadata().needs_detiling);
+  CHECK_EQ(frame->coded_size(), origin_frame->coded_size());
 
-  const gfx::Size coded_size = to_coded_size(frame);
   scoped_refptr<VideoFrame> mailbox_frame = VideoFrame::WrapSharedImage(
       frame->format(), shared_image, shared_image_sync_token,
-      /*mailbox_holder_release_cb=*/{}, coded_size, frame->visible_rect(),
+      /*shared_image_release_cb=*/{}, frame->visible_rect(),
       frame->natural_size(), frame->timestamp());
   mailbox_frame->set_color_space(shared_image->color_space());
   mailbox_frame->set_hdr_metadata(frame->hdr_metadata());
@@ -239,12 +246,18 @@ MailboxVideoFrameConverter::GenerateSharedImage(
 
   const gfx::Size shared_image_size = to_shared_image_size(origin_frame, frame);
 
-  // The allocated SharedImages should be usable for the (Display) compositor
-  // and, potentially, for overlays (Scanout). The shared image can be copied to
-  // GL texture over WebGL either directly or over raster interface.
+  // The allocated SharedImages should be usable for the (Display) compositor.
+  // The shared image can be copied to GL texture over WebGL either directly or
+  // over raster interface.
   gpu::SharedImageUsageSet shared_image_usage =
-      gpu::SHARED_IMAGE_USAGE_DISPLAY_READ | gpu::SHARED_IMAGE_USAGE_SCANOUT |
+      gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
       gpu::SHARED_IMAGE_USAGE_GLES2_READ | gpu::SHARED_IMAGE_USAGE_RASTER_READ;
+
+  // These SharedImage can potentially be used for overlays (Scanout).
+  if (shared_image_interface_->GetCapabilities()
+          .supports_scanout_shared_images) {
+    shared_image_usage |= gpu::SHARED_IMAGE_USAGE_SCANOUT;
+  }
 
   // These SharedImages might also be used for zero-copy import into WebGPU to
   // serve as the sources of WebGPU reads (e.g., for video effects processing).
@@ -254,10 +267,16 @@ MailboxVideoFrameConverter::GenerateSharedImage(
     shared_image_usage |= gpu::SHARED_IMAGE_USAGE_WEBGPU_READ;
   }
 
+  gfx::ColorSpace color_space = frame->ColorSpace();
+  // Set a default color space on the SharedImage if the frame color space is
+  // invalid.
+  if (!color_space.IsValid()) {
+    color_space = GetDefaultColorSpace(si_format.value());
+  }
   scoped_refptr<gpu::ClientSharedImage> client_shared_image =
       shared_image_interface_->CreateSharedImage(
-          {*si_format, shared_image_size, frame->ColorSpace(),
-           shared_image_usage, "MailboxVideoFrameConverter"},
+          {*si_format, shared_image_size, color_space, shared_image_usage,
+           "MailboxVideoFrameConverter"},
           std::move(gpu_memory_buffer_handle));
   if (!client_shared_image) {
     OnError(FROM_HERE, "Failed to create shared image.");
@@ -275,7 +294,7 @@ void MailboxVideoFrameConverter::RegisterSharedImage(
   DVLOGF(4) << "frame: " << origin_frame->unique_id();
   DCHECK(parent_task_runner()->RunsTasksInCurrentSequence());
   DCHECK(client_shared_image);
-  DCHECK(!base::Contains(shared_images_, origin_frame->unique_id()) ||
+  DCHECK(!shared_images_.contains(origin_frame->unique_id()) ||
          shared_images_.find(origin_frame->unique_id())->second !=
              client_shared_image);
 

@@ -10,9 +10,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
@@ -22,6 +20,7 @@
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_icon_image.h"
 #include "extensions/browser/extension_registrar.h"
+#include "extensions/browser/ui_util.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/icons/extension_icon_set.h"
@@ -32,6 +31,7 @@
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/base/window_open_disposition_utils.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/gfx/image/image_skia.h"
@@ -61,7 +61,9 @@ class DeprecatedAppsDialogView::DeprecatedAppsTableModel
               ->GetInstalledExtension(app_id);
       DCHECK(extension);
       const gfx::ImageSkia default_icon = gfx::CreateVectorIcon(
-          vector_icons::kExtensionIcon, gfx::kFaviconSize, gfx::kGoogleGrey700);
+          features::IsRoundedIconsEnabled() ? vector_icons::kExtensionFilledIcon
+                                            : vector_icons::kExtensionOldIcon,
+          gfx::kFaviconSize, gfx::kGoogleGrey700);
 
       auto app_icon = std::make_unique<extensions::IconImage>(
           browser_context, extension,
@@ -158,15 +160,16 @@ DeprecatedAppsDialogView::DeprecatedAppsDialogView(
         extensions::ExtensionRegistry::Get(web_contents_->GetBrowserContext())
             ->GetInstalledExtension(optional_launched_extension_id);
     launched_extension_name_ =
-        extensions::util::GetFixupExtensionNameForUIDisplay(extension->name());
+        extensions::ui_util::GetFixupExtensionNameForUIDisplay(
+            extension->name());
   }
   if (deprecated_app_ids_.size() == 1) {
     const extensions::Extension* extension =
         extensions::ExtensionRegistry::Get(web_contents_->GetBrowserContext())
             ->GetInstalledExtension(*deprecated_app_ids_.begin());
     DCHECK(extension);
-    single_app_name_ =
-        extensions::util::GetFixupExtensionNameForUIDisplay(extension->name());
+    single_app_name_ = extensions::ui_util::GetFixupExtensionNameForUIDisplay(
+        extension->name());
   }
   deprecated_apps_table_model_ = std::make_unique<DeprecatedAppsTableModel>(
       deprecated_app_ids, web_contents,

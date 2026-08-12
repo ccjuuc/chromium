@@ -8,7 +8,6 @@
 
 #include "base/check.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/webui/tab_strip_internals/tab_strip_internals_handler.h"
 #include "chrome/grit/tab_strip_internals_resources.h"
 #include "chrome/grit/tab_strip_internals_resources_map.h"
@@ -33,12 +32,6 @@ TabStripInternalsUI::~TabStripInternalsUI() = default;
 
 WEB_UI_CONTROLLER_TYPE_IMPL(TabStripInternalsUI)
 
-bool TabStripInternalsUIConfig::IsWebUIEnabled(
-    content::BrowserContext* browser_context) {
-  return DefaultInternalWebUIConfig::IsWebUIEnabled(browser_context) &&
-         base::FeatureList::IsEnabled(tabs::kDebugUITabStrip);
-}
-
 void TabStripInternalsUI::BindInterface(
     mojo::PendingReceiver<tab_strip_internals::mojom::PageHandlerFactory>
         receiver) {
@@ -50,10 +43,6 @@ void TabStripInternalsUI::CreatePageHandler(
     mojo::PendingRemote<tab_strip_internals::mojom::Page> page,
     mojo::PendingReceiver<tab_strip_internals::mojom::PageHandler> receiver) {
   CHECK(page);
-  content::WebContents* web_contents = web_ui()->GetWebContents();
-  Profile* profile =
-      Profile::FromBrowserContext(web_contents->GetBrowserContext());
-  CHECK(profile);
   page_handler_ = std::make_unique<TabStripInternalsPageHandler>(
-      profile, std::move(receiver), std::move(page));
+      web_ui()->GetWebContents(), std::move(receiver), std::move(page));
 }

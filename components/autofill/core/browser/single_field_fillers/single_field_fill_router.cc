@@ -4,14 +4,22 @@
 
 #include "components/autofill/core/browser/single_field_fillers/single_field_fill_router.h"
 
+#include <stddef.h>
+
 #include <string>
 #include <vector>
 
+#include "base/check.h"
 #include "base/check_deref.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/payments/iban_manager.h"
 #include "components/autofill/core/browser/single_field_fillers/autocomplete/autocomplete_history_manager.h"
 #include "components/autofill/core/browser/single_field_fillers/payments/merchant_promo_code_manager.h"
+#include "components/autofill/core/browser/suggestions/suggestion.h"
+#include "components/autofill/core/browser/suggestions/suggestion_type.h"
+#include "components/autofill/core/common/autofill_features.h"
+#include "components/autofill/core/common/form_field_data.h"
 
 namespace autofill {
 
@@ -27,29 +35,14 @@ SingleFieldFillRouter::~SingleFieldFillRouter() = default;
 
 void SingleFieldFillRouter::OnWillSubmitForm(
     const FormData& form,
-    const FormStructure* form_structure,
-    bool is_autocomplete_enabled) {
+    const FormStructure* form_structure) {
   CHECK(!form_structure ||
         form.fields().size() == form_structure->field_count());
-  std::vector<FormFieldData> autocomplete_fields;
-  for (size_t i = 0; i < form.fields().size(); ++i) {
-    // If |form_structure| is present, then the fields in |form_structure| and
-    // the fields in |form| are 1:1. |form_structure| not being present
-    // indicates we may have fields that were not able to be parsed, so we route
-    // them to autocomplete functionality by default.
-    bool skip_because_promo_code =
-        merchant_promo_code_manager_ && form_structure &&
-        form_structure->field(i)->Type().GetTypes().contains(
-            MERCHANT_PROMO_CODE);
-    bool skip_because_iban =
-        iban_manager_ && form_structure &&
-        form_structure->field(i)->Type().GetTypes().contains(IBAN_VALUE);
-    if (!skip_because_iban && !skip_because_promo_code) {
-      autocomplete_fields.push_back(form.fields()[i]);
-    }
+  autocomplete_history_manager_->OnWillSubmitFormWithFields(form.fields(),
+                                                            form_structure);
+  if (iban_manager_) {
+    iban_manager_->OnWillSubmitFormWithFields();
   }
-  autocomplete_history_manager_->OnWillSubmitFormWithFields(
-      autocomplete_fields, is_autocomplete_enabled);
 }
 
 void SingleFieldFillRouter::CancelPendingQueries() {
@@ -58,11 +51,12 @@ void SingleFieldFillRouter::CancelPendingQueries() {
 
 void SingleFieldFillRouter::OnRemoveCurrentSingleFieldSuggestion(
     const std::u16string& field_name,
+    const std::u16string& field_label,
     const std::u16string& value,
     SuggestionType type) {
   if (type == SuggestionType::kAutocompleteEntry) {
     autocomplete_history_manager_->OnRemoveCurrentSingleFieldSuggestion(
-        field_name, value, type);
+        field_name, field_label, value, type);
   }
 }
 
@@ -76,7 +70,12 @@ void SingleFieldFillRouter::OnSingleFieldSuggestionSelected(
   } else if (iban_manager_ && type == SuggestionType::kIbanEntry) {
     iban_manager_->OnSingleFieldSuggestionSelected(suggestion);
   } else if (type == SuggestionType::kAutocompleteEntry) {
-    autocomplete_history_manager_->OnSingleFieldSuggestionSelected(suggestion);
+    // TODO(crbug.com/507313423): Reimplement this metric.
+    if (!base::FeatureList::IsEnabled(
+            features::kAutofillLabelSensitiveAutocomplete)) {
+      autocomplete_history_manager_->OnSingleFieldSuggestionSelected(
+          suggestion);
+    }
   }
 }
 

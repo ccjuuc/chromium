@@ -25,6 +25,8 @@
 #include "chrome/browser/ash/login/test/logged_in_user_mixin.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_browsertest_base.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
@@ -72,7 +74,7 @@ class GraduationManagerTest : public SystemWebAppBrowserTestBase,
     logged_in_user_mixin_.LogInUser();
     SetMockClocksAndTaskRunner();
     WaitForTestSystemAppInstall();
-    WaitForAppRegistryCommands(browser()->profile());
+    WaitForAppRegistryCommands(browser()->GetProfile());
   }
 
   static void SetTimeNow(base::Time new_time_now) { time_now_ = new_time_now; }
@@ -84,7 +86,7 @@ class GraduationManagerTest : public SystemWebAppBrowserTestBase,
     base::Time start_time;
     EXPECT_TRUE(base::Time::FromUTCString(kSessionStartTime, &start_time));
     task_runner_ = base::MakeRefCounted<base::TestMockTimeTaskRunner>(
-        start_time, base::TimeTicks::UnixEpoch());
+        start_time, base::TimeTicks());
 
     ash::graduation::GraduationManagerImpl::Get()->SetClocksForTesting(
         task_runner_->GetMockClock(), task_runner_->GetMockTickClock());
@@ -122,7 +124,7 @@ class GraduationManagerTest : public SystemWebAppBrowserTestBase,
   apps::Readiness GetAppReadiness(const webapps::AppId& app_id) {
     apps::Readiness readiness;
     bool app_found =
-        GetAppServiceProxy(browser()->profile())
+        GetAppServiceProxy(browser()->GetProfile())
             ->AppRegistryCache()
             .ForOneApp(app_id, [&readiness](const apps::AppUpdate& update) {
               readiness = update.Readiness();
@@ -132,9 +134,9 @@ class GraduationManagerTest : public SystemWebAppBrowserTestBase,
   }
 
   void SetGraduationEnablement(bool is_enabled) {
-    base::Value::Dict status;
+    base::DictValue status;
     status.Set("is_enabled", is_enabled);
-    browser()->profile()->GetPrefs()->SetDict(
+    browser()->GetProfile()->GetPrefs()->SetDict(
         prefs::kGraduationEnablementStatus, status.Clone());
   }
 
@@ -142,14 +144,14 @@ class GraduationManagerTest : public SystemWebAppBrowserTestBase,
                                             int day,
                                             int month,
                                             int year) {
-    base::Value::Dict status;
+    base::DictValue status;
     status.Set("is_enabled", is_enabled);
-    base::Value::Dict start_date;
+    base::DictValue start_date;
     start_date.Set("day", day);
     start_date.Set("month", month);
     start_date.Set("year", year);
     status.Set("start_date", start_date.Clone());
-    browser()->profile()->GetPrefs()->SetDict(
+    browser()->GetProfile()->GetPrefs()->SetDict(
         prefs::kGraduationEnablementStatus, status.Clone());
   }
 
@@ -157,14 +159,14 @@ class GraduationManagerTest : public SystemWebAppBrowserTestBase,
                                           int day,
                                           int month,
                                           int year) {
-    base::Value::Dict status;
+    base::DictValue status;
     status.Set("is_enabled", is_enabled);
-    base::Value::Dict end_date;
+    base::DictValue end_date;
     end_date.Set("day", day);
     end_date.Set("month", month);
     end_date.Set("year", year);
     status.Set("end_date", end_date.Clone());
-    browser()->profile()->GetPrefs()->SetDict(
+    browser()->GetProfile()->GetPrefs()->SetDict(
         prefs::kGraduationEnablementStatus, status.Clone());
   }
 
@@ -234,7 +236,7 @@ IN_PROC_BROWSER_TEST_F(GraduationManagerTest, AppPinnedWhenPolicyEnabled) {
   EXPECT_TRUE(IsItemPinned(ash::kGraduationAppId));
 
   SetGraduationEnablement(false);
-  WaitForAppRegistryCommands(browser()->profile());
+  WaitForAppRegistryCommands(browser()->GetProfile());
 
   EXPECT_FALSE(IsItemPinned(ash::kGraduationAppId));
   EXPECT_EQ(apps::Readiness::kDisabledByPolicy,
@@ -255,7 +257,7 @@ IN_PROC_BROWSER_TEST_F(GraduationManagerTest, AppPinnedWhenStartDateIsReached) {
 
   // Fast forward to the policy enablement start date set in the pre-test.
   AdvanceTimeBy(base::Days(1));
-  WaitForAppRegistryCommands(browser()->profile());
+  WaitForAppRegistryCommands(browser()->GetProfile());
   WaitForShelfItemAdd();
 
   EXPECT_TRUE(IsItemPinned(ash::kGraduationAppId));
@@ -277,7 +279,7 @@ IN_PROC_BROWSER_TEST_F(GraduationManagerTest,
 
   // Fast forward to the policy enablement start date set in the pre-test.
   AdvanceTimeBy(base::Days(2));
-  WaitForAppRegistryCommands(browser()->profile());
+  WaitForAppRegistryCommands(browser()->GetProfile());
   // Wait for the new shelf iteme to finish.
   WaitForShelfItemAdd();
 
@@ -297,7 +299,7 @@ IN_PROC_BROWSER_TEST_F(GraduationManagerTest, AppPinnedOnEndDate) {
 
   // Fast forward to the policy enablement end date set in the pre-test.
   AdvanceTimeBy(base::Days(1));
-  WaitForAppRegistryCommands(browser()->profile());
+  WaitForAppRegistryCommands(browser()->GetProfile());
 
   // Since this is the last day the app is available, the app should be pinned.
   EXPECT_TRUE(IsItemPinned(ash::kGraduationAppId));
@@ -310,7 +312,7 @@ IN_PROC_BROWSER_TEST_F(GraduationManagerTest, AppUnpinnedWhenPolicyUnset) {
             GetAppReadiness(ash::kGraduationAppId));
 
   SetGraduationEnablement(true);
-  WaitForAppRegistryCommands(browser()->profile());
+  WaitForAppRegistryCommands(browser()->GetProfile());
 
   EXPECT_EQ(apps::Readiness::kReady, GetAppReadiness(ash::kGraduationAppId));
   EXPECT_TRUE(IsItemPinned(ash::kGraduationAppId));
@@ -329,7 +331,7 @@ IN_PROC_BROWSER_TEST_F(GraduationManagerTest, AppUnpinnedWhenPolicyDisabled) {
             GetAppReadiness(ash::kGraduationAppId));
 
   SetGraduationEnablement(true);
-  WaitForAppRegistryCommands(browser()->profile());
+  WaitForAppRegistryCommands(browser()->GetProfile());
 
   EXPECT_EQ(apps::Readiness::kReady, GetAppReadiness(ash::kGraduationAppId));
   EXPECT_TRUE(IsItemPinned(ash::kGraduationAppId));
@@ -349,7 +351,7 @@ IN_PROC_BROWSER_TEST_F(GraduationManagerTest, AppUnpinnedWhenEndDateHasPassed) {
   // Fast forward to one day past the policy enablement end date set in the
   // pre-test.
   AdvanceTimeBy(base::Days(2));
-  WaitForAppRegistryCommands(browser()->profile());
+  WaitForAppRegistryCommands(browser()->GetProfile());
   // Wait for the shelf item to finish being removed.
   WaitForShefItemRemoved();
 
@@ -364,9 +366,10 @@ IN_PROC_BROWSER_TEST_F(GraduationManagerTest, GetLanguageCode) {
 
   // Switch the application locale to Spanish.
   base::RunLoop run_loop;
-  locale_util::SwitchLanguage("es", true, false,
-                              base::BindRepeating(&OnLocaleSwitched, &run_loop),
-                              ProfileManager::GetActiveUserProfile());
+  locale_util::SwitchLanguage(
+      g_browser_process->GetFeatures()->application_locale_storage(), "es",
+      true, false, base::BindRepeating(&OnLocaleSwitched, &run_loop),
+      ProfileManager::GetActiveUserProfile());
   run_loop.Run();
 
   EXPECT_EQ("es", GetLanguageCode());
@@ -389,7 +392,7 @@ class GraduationManagerWithConsumerUserTest
     SystemWebAppBrowserTestBase::SetUpOnMainThread();
     logged_in_user_mixin_.LogInUser();
     WaitForTestSystemAppInstall();
-    WaitForAppRegistryCommands(browser()->profile());
+    WaitForAppRegistryCommands(browser()->GetProfile());
   }
 
  private:

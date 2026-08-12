@@ -24,7 +24,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/base/host_port_pair.h"
-#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-data-view.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -101,7 +101,7 @@ void ExpectUDPSocketOk(content::WebContents* web_contents) {
     })();
   )";
 
-  ASSERT_THAT(EvalJs(web_contents, kScriptUDP), content::EvalJsResult::IsOk());
+  ASSERT_TRUE(content::ExecJs(web_contents, kScriptUDP));
 }
 
 void ExpectTCPSocketOk(content::WebContents* web_contents) {
@@ -115,7 +115,7 @@ void ExpectTCPSocketOk(content::WebContents* web_contents) {
     })();
   )";
 
-  ASSERT_THAT(EvalJs(web_contents, kScriptTCP), content::EvalJsResult::IsOk());
+  ASSERT_TRUE(content::ExecJs(web_contents, kScriptTCP));
 }
 
 void WaitForPageLoad(content::WebContents* contents) {
@@ -150,8 +150,10 @@ CreateTestIwaWithDirectSockets() {
                      network::mojom::PermissionsPolicyFeature::kDirectSockets,
                      /*self=*/true, /*origins=*/{})
                  .AddPermissionsPolicy(
-                     network::mojom::PermissionsPolicyFeature::
-                         kDirectSocketsPrivate,
+                     network::mojom::PermissionsPolicyFeature::kLocalNetwork,
+                     /*self=*/true, /*origins=*/{})
+                 .AddPermissionsPolicy(
+                     network::mojom::PermissionsPolicyFeature::kLoopbackNetwork,
                      /*self=*/true, /*origins=*/{}))
       .BuildBundle(GetTestKeyPair());
 }

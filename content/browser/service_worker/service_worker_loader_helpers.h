@@ -11,6 +11,7 @@
 #include <string_view>
 
 #include "content/browser/service_worker/service_worker_version.h"
+#include "content/browser/storage_partition_impl.h"
 #include "content/common/content_export.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
@@ -33,6 +34,7 @@ enum class ServiceWorkerUpdateViaCache;
 namespace content {
 
 class BrowserContext;
+class ServiceWorkerContextCore;
 
 namespace service_worker_loader_helpers {
 
@@ -89,24 +91,38 @@ CONTENT_EXPORT bool IsPathRestrictionSatisfiedWithoutHeader(
     const GURL& script_url,
     std::string* error_message);
 
+// Validates a request for a service worker main script.
+// Returns the validation result.
+ServiceWorkerMainScriptRequestValidationResult ValidateMainScriptRequest(
+    const network::ResourceRequest& resource_request,
+    const ServiceWorkerVersion& version);
+
 // Returns the set of hash strings of fetch handlers which can be bypassed.
 const base::flat_set<std::string> FetchHandlerBypassedHashStrings();
 
 // Check if `client_url` is eligible for Synsthtic Response.
 // Exposes one method which accepts `allowed_url` for testing.
 bool IsEligibleForSyntheticResponse(BrowserContext* browser_context,
+                                    StoragePartitionImpl* storage_partition,
                                     const GURL& client_url);
 CONTENT_EXPORT bool IsEligibleForSyntheticResponseForTesting(  // IN-TEST
     BrowserContext* browser_context,
+    StoragePartitionImpl* storage_partition,
     const GURL& client_url,
     const std::string& allowed_url,
     const std::string& denied_url_params);
 bool IsEligibleForSyntheticResponseInternal(
     BrowserContext* browser_context,
+    StoragePartitionImpl* storage_partition,
     const GURL& client_url,
     const std::string& allowed_url,
     const base::flat_set<std::string>& denied_url_params);
 bool IsSyntheticResponseDryRunModeEnabled();
+
+CONTENT_EXPORT storage::mojom::ServiceWorkerFindRegistrationResultPtr
+GetOrCreateSyntheticRegistration(ServiceWorkerContextCore* context,
+                                 const GURL& client_url,
+                                 const blink::StorageKey& key);
 }  // namespace service_worker_loader_helpers
 
 }  // namespace content

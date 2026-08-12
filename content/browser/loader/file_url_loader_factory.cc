@@ -5,12 +5,13 @@
 #include "content/browser/loader/file_url_loader_factory.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/containers/span.h"
 #include "base/files/file.h"
@@ -44,10 +45,10 @@
 #include "mojo/public/cpp/system/file_data_source.h"
 #include "mojo/public/cpp/system/string_data_source.h"
 #include "net/base/directory_lister.h"
-#include "net/base/directory_listing.h"
 #include "net/base/filename_util.h"
 #include "net/base/mime_sniffer.h"
 #include "net/base/mime_util.h"
+#include "net/base/module/directory_listing.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_byte_range.h"
 #include "net/http/http_response_headers.h"
@@ -173,9 +174,7 @@ class FileURLDirectoryLoader
 
   // network::mojom::URLLoader:
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_headers,
+      network::HttpRequestHeadersUpdateParams headers_update_params,
       const std::optional<GURL>& new_url) override {}
   void SetPriority(net::RequestPriority priority,
                    int32_t intra_priority_value) override {}
@@ -283,7 +282,9 @@ class FileURLDirectoryLoader
 #endif
       pending_data_.append(net::GetDirectoryListingEntry(
           filename.LossyDisplayName(), raw_bytes, data.info.IsDirectory(),
-          base::ByteCount(data.info.GetSize()),
+          data.info.GetSize() >= 0 ? std::make_optional<base::ByteSize>(
+                                         base::as_unsigned(data.info.GetSize()))
+                                   : std::nullopt,
           data.info.GetLastModifiedTime()));
     }
 
@@ -349,9 +350,12 @@ class FileURLDirectoryLoader
     data_producer_.reset();
 
     network::URLLoaderCompletionStatus completion_status(status);
-    completion_status.encoded_data_length = total_bytes_written_;
-    completion_status.encoded_body_length = total_bytes_written_;
-    completion_status.decoded_body_length = total_bytes_written_;
+    completion_status.encoded_data_length =
+        base::ByteSize(total_bytes_written_);
+    completion_status.encoded_body_length =
+        base::ByteSize(total_bytes_written_);
+    completion_status.decoded_body_length =
+        base::ByteSize(total_bytes_written_);
 
     client_->OnComplete(completion_status);
     client_.reset();
@@ -406,9 +410,7 @@ class FileURLLoader : public network::mojom::URLLoader {
 
   // network::mojom::URLLoader:
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_headers,
+      network::HttpRequestHeadersUpdateParams headers_update_params,
       const std::optional<GURL>& new_url) override {
     // |removed_headers| and |modified_headers| are unused. It doesn't make
     // sense for files. The FileURLLoader can redirect only to another file.
@@ -798,9 +800,9 @@ class FileURLLoader : public network::mojom::URLLoader {
 
     if (result == MOJO_RESULT_OK) {
       network::URLLoaderCompletionStatus status(net::OK);
-      status.encoded_data_length = total_bytes_written_;
-      status.encoded_body_length = total_bytes_written_;
-      status.decoded_body_length = total_bytes_written_;
+      status.encoded_data_length = base::ByteSize(total_bytes_written_);
+      status.encoded_body_length = base::ByteSize(total_bytes_written_);
+      status.decoded_body_length = base::ByteSize(total_bytes_written_);
       client_->OnComplete(status);
     } else {
       client_->OnComplete(network::URLLoaderCompletionStatus(net::ERR_FAILED));
@@ -828,8 +830,9 @@ FileURLLoaderFactory::FileURLLoaderFactory(
     const base::FilePath& profile_path,
     scoped_refptr<SharedCorsOriginAccessList> shared_cors_origin_access_list,
     base::TaskPriority task_priority,
-    mojo::PendingReceiver<network::mojom::URLLoaderFactory> factory_receiver)
-    : network::SelfDeletingURLLoaderFactory(std::move(factory_receiver)),
+    mojo::PendingReceiver<network::mojom::URLLoaderFactory> factory_receiver,
+    base::SelfDeletingPassKey key)
+    : network::SelfDeletingURLLoaderFactory(std::move(factory_receiver), key),
       profile_path_(profile_path),
       shared_cors_origin_access_list_(
           std::move(shared_cors_origin_access_list)),
@@ -958,7 +961,7 @@ FileURLLoaderFactory::Create(
   // The FileURLLoaderFactory will delete itself when there are no more
   // receivers - see the network::SelfDeletingURLLoaderFactory::OnDisconnect
   // method.
-  new FileURLLoaderFactory(
+  base::MakeSelfDeleting<FileURLLoaderFactory>(
       profile_path, std::move(shared_cors_origin_access_list), task_priority,
       pending_remote.InitWithNewPipeAndPassReceiver());
 

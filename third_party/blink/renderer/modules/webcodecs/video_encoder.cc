@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/format_macros.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -70,6 +69,7 @@
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/keywords.h"
 #include "third_party/blink/renderer/core/streams/readable_stream.h"
 #include "third_party/blink/renderer/core/streams/writable_stream.h"
 #include "third_party/blink/renderer/modules/event_modules.h"
@@ -94,6 +94,7 @@
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier_base.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier_std.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 #if BUILDFLAG(ENABLE_LIBAOM)
 #include "media/video/av1_video_encoder.h"
@@ -188,16 +189,21 @@ media::EncoderStatus IsAcceleratedConfigurationSupported(
     return media::EncoderStatus::Codes::kEncoderAccelerationSupportMissing;
   }
 
-  // Hardware encoders don't currently support high bit depths or subsamplings
-  // other than 4:2:0, except for AV1 profile 1 we require 4:4:4.
+  // Hardware encoders only support subsamplings other than 4:2:0 for AV1
+  // profile 1, where we require 4:4:4. High bit depths are supported by HEVC
+  // Main10 only.
   media::VideoChromaSampling required_sampling =
       (profile == media::AV1PROFILE_PROFILE_HIGH)
           ? media::VideoChromaSampling::k444
           : media::VideoChromaSampling::k420;
 
+  const int bit_depth = options.bit_depth.value_or(8);
+  const bool bit_depth_supported =
+      bit_depth == 8 ||
+      (bit_depth == 10 && profile == media::HEVCPROFILE_MAIN10);
   if ((options.subsampling.has_value() &&
        options.subsampling.value() != required_sampling) ||
-      options.bit_depth.value_or(8) != 8) {
+      !bit_depth_supported) {
     return media::EncoderStatus::Codes::kEncoderUnsupportedConfig;
   }
 
@@ -244,8 +250,8 @@ media::EncoderStatus IsAcceleratedConfigurationSupported(
     }
 
     if (options.scalability_mode.has_value() &&
-        !base::Contains(supported_profile.scalability_modes,
-                        options.scalability_mode.value())) {
+        !std::ranges::contains(supported_profile.scalability_modes,
+                               options.scalability_mode.value())) {
       continue;
     }
 
@@ -293,7 +299,8 @@ VideoEncoderTraits::ParsedConfig* ParseConfigStatic(
           : media::VideoEncoder::LatencyMode::Realtime;
 
   if (config->hasContentHint()) {
-    if (config->contentHint() == "detail" || config->contentHint() == "text") {
+    if (config->contentHint() == "detail" ||
+        config->contentHint() == keywords::kText) {
       result->options.content_hint = media::VideoEncoder::ContentHint::Screen;
     } else if (config->contentHint() == "motion") {
       result->options.content_hint = media::VideoEncoder::ContentHint::Camera;
@@ -359,12 +366,11 @@ VideoEncoderTraits::ParsedConfig* ParseConfigStatic(
       result->options.scalability_mode = media::SVCScalabilityMode::kL1T2;
     } else if (config->scalabilityMode() == "L1T3") {
       result->options.scalability_mode = media::SVCScalabilityMode::kL1T3;
-    } else if (config->scalabilityMode() == "manual") {
+    } else if (config->scalabilityMode() == keywords::kManual) {
       result->options.manual_reference_buffer_control = true;
     } else {
       result->not_supported_error_message =
-          String::Format("Unsupported scalabilityMode: %s",
-                         config->scalabilityMode().Utf8().c_str());
+          StrCat({"Unsupported scalabilityMode: ", config->scalabilityMode()});
       return result;
     }
   }
@@ -471,7 +477,8 @@ bool VerifyCodecSupportStatic(VideoEncoderTraits::ParsedConfig* config,
       break;
 #if BUILDFLAG(ENABLE_PLATFORM_HEVC)
     case media::VideoCodec::kHEVC:
-      if (config->profile != media::VideoCodecProfile::HEVCPROFILE_MAIN) {
+      if (config->profile != media::VideoCodecProfile::HEVCPROFILE_MAIN &&
+          config->profile != media::VideoCodecProfile::HEVCPROFILE_MAIN10) {
         *js_error_message = "Unsupported hevc profile.";
         return false;
       }
@@ -594,7 +601,50 @@ EncoderType GetRequiredEncoderType(media::VideoCodecProfile profile,
   return EncoderType::kHardware;
 }
 
+gfx::ColorSpace::MatrixID GetYuvMatrixForPrimaries(
+    gfx::ColorSpace::PrimaryID primaries) {
+  switch (primaries) {
+    case gfx::ColorSpace::PrimaryID::BT470M:
+      return gfx::ColorSpace::MatrixID::FCC;
+    case gfx::ColorSpace::PrimaryID::BT470BG:
+      return gfx::ColorSpace::MatrixID::BT470BG;
+    case gfx::ColorSpace::PrimaryID::SMPTE170M:
+      return gfx::ColorSpace::MatrixID::SMPTE170M;
+    case gfx::ColorSpace::PrimaryID::SMPTE240M:
+      return gfx::ColorSpace::MatrixID::SMPTE240M;
+    case gfx::ColorSpace::PrimaryID::BT2020:
+      return gfx::ColorSpace::MatrixID::BT2020_NCL;
+    default:
+      // Primaries without a corresponding YCbCr matrix, such as P3 and XYZ,
+      // use BT.709 as the conversion matrix.
+      return gfx::ColorSpace::MatrixID::BT709;
+  }
+}
+
 }  // namespace
+
+gfx::ColorSpace GetReadbackYuvColorSpace(
+    const gfx::ColorSpace& source_color_space) {
+  if (!source_color_space.IsValid()) {
+    return gfx::ColorSpace::CreateREC709();
+  }
+
+  const gfx::ColorSpace::MatrixID source_matrix =
+      source_color_space.GetMatrixID();
+  // If the source already declares a YCbCr matrix, preserve it. The readback
+  // frame is always video range.
+  if (source_matrix != gfx::ColorSpace::MatrixID::RGB &&
+      source_matrix != gfx::ColorSpace::MatrixID::GBR) {
+    return source_color_space.GetWithMatrixAndRange(
+        source_matrix, gfx::ColorSpace::RangeID::LIMITED);
+  }
+
+  // RGB/GBR are identity matrices. Select a YCbCr matrix from the primaries
+  // before RGB-to-YUV readback.
+  return source_color_space.GetWithMatrixAndRange(
+      GetYuvMatrixForPrimaries(source_color_space.GetPrimaryID()),
+      gfx::ColorSpace::RangeID::LIMITED);
+}
 
 // static
 const char* VideoEncoderTraits::GetName() {
@@ -602,14 +652,14 @@ const char* VideoEncoderTraits::GetName() {
 }
 
 String VideoEncoderTraits::ParsedConfig::ToString() {
-  return String::Format(
-      "{codec: %s, profile: %s, level: %d, hw_pref: %s, "
-      "options: {%s}, codec_string: %s, display_size: %s}",
-      media::GetCodecName(codec).c_str(),
-      media::GetProfileName(profile).c_str(), level,
-      HardwarePreferenceToIdlEnum(hw_pref).AsCStr(), options.ToString().c_str(),
-      codec_string.Utf8().c_str(),
-      display_size ? display_size->ToString().c_str() : "");
+  return UNSAFE_TODO(
+      String::Format("{codec: %s, profile: %s, level: %d, hw_pref: %s, "
+                     "options: {%s}, codec_string: %s, display_size: %s}",
+                     media::GetCodecName(codec).c_str(),
+                     media::GetProfileName(profile).c_str(), level,
+                     HardwarePreferenceToIdlEnum(hw_pref).AsCStr(),
+                     options.ToString().c_str(), codec_string.Utf8().c_str(),
+                     display_size ? display_size->ToString().c_str() : ""));
 }
 
 // static
@@ -816,7 +866,7 @@ void VideoEncoder::ContinueConfigureWithGpuFactories(
         << "Configured " << self->active_config_->ToString();
 
     if (!status.is_ok()) {
-      std::string error_message;
+      const char* error_message;
       switch (status.code()) {
         case media::EncoderStatus::Codes::kEncoderUnsupportedProfile:
           error_message = "Unsupported codec profile.";
@@ -833,7 +883,7 @@ void VideoEncoder::ContinueConfigureWithGpuFactories(
       }
 
       self->ReportError(
-          error_message.c_str(), std::move(status),
+          error_message, std::move(status),
           /*is_error_message_from_software_codec=*/!is_platform_encoder);
     } else {
       base::UmaHistogramEnumeration("Blink.WebCodecs.VideoEncoder.Codec",
@@ -985,6 +1035,7 @@ bool VideoEncoder::StartReadback(scoped_refptr<media::VideoFrame> frame,
       if (!result_frame)
         return result_frame;
       result_frame->set_timestamp(txt_frame->timestamp());
+      result_frame->set_hdr_metadata(txt_frame->hdr_metadata());
       result_frame->metadata().MergeMetadataFrom(txt_frame->metadata());
       result_frame->metadata().ClearTextureFrameMetadata();
       return result_frame;
@@ -993,19 +1044,23 @@ bool VideoEncoder::StartReadback(scoped_refptr<media::VideoFrame> frame,
     auto callback_chain = ConvertToBaseOnceCallback(
                               CrossThreadBindOnce(metadata_fix_lambda, frame))
                               .Then(std::move(pool_result_cb));
+    const gfx::ColorSpace readback_color_space =
+        GetReadbackYuvColorSpace(frame->ColorSpace());
 
-    TRACE_EVENT_BEGIN("media", "CopyRGBATextureToVideoFrame",
-                      perfetto::Track::FromPointer(this), "timestamp",
-                      frame->timestamp());
+    TRACE_EVENT_BEGIN(
+        "media", "CopyRGBATextureToVideoFrame",
+        perfetto::NamedTrack::FromPointer("blink::VideoEncoder", this),
+        "timestamp", frame->timestamp());
     if (accelerated_frame_pool_->CopyRGBATextureToVideoFrame(
             frame->coded_size(), frame->shared_image(),
-            frame->acquire_sync_token(), gfx::ColorSpace::CreateREC709(),
+            frame->acquire_sync_token(), readback_color_space,
             std::move(callback_chain))) {
       return true;
     }
 
-    TRACE_EVENT_END("media", /*CopyRGBATextureToVideoFrame*/
-                    perfetto::Track::FromPointer(this));
+    TRACE_EVENT_END(
+        "media", /*CopyRGBATextureToVideoFrame*/
+        perfetto::NamedTrack::FromPointer("blink::VideoEncoder", this));
 
     // Error occurred, fall through to normal readback path below.
     disable_accelerated_frame_pool_ = true;
@@ -1095,10 +1150,12 @@ void VideoEncoder::ProcessEncode(Request* request) {
   request->StartTracingVideoEncode(encode_options.key_frame,
                                    frame->timestamp());
 
-  bool mappable = frame->IsMappable() || frame->HasMappableSharedImage();
+  bool mappable =
+      frame->HasDirectCpuAccess() || frame->HasMappableSharedImage();
   bool can_handle_shared_image =
-      encoder_info_.DoesSupportGpuSharedImages(frame->format()) &&
-      frame->HasSharedImage();
+      frame->HasSharedImage() &&
+      encoder_info_.DoesSupportGpuSharedImages(frame->shared_image()->usage(),
+                                               frame->format());
 
   // Currently underlying encoders can't handle frame backed by textures,
   // so let's readback pixel data to CPU memory.
@@ -1113,9 +1170,11 @@ void VideoEncoder::ProcessEncode(Request* request) {
     // resolve synchronously.
     blocking_request_in_progress_ = request;
 
-    auto readback_done_callback = blink::BindOnce(
-        &VideoEncoder::OnReadbackDone, WrapWeakPersistent(this),
-        WrapPersistent(request), frame, std::move(encode_done_callback));
+    auto readback_done_callback =
+        blink::BindOnce(&VideoEncoder::OnReadbackDone,
+                        MakeUnwrappingCrossThreadWeakHandle(this),
+                        MakeUnwrappingCrossThreadHandle(request), frame,
+                        std::move(encode_done_callback));
 
     if (StartReadback(std::move(frame), std::move(readback_done_callback))) {
       request->input->close();
@@ -1242,8 +1301,9 @@ void VideoEncoder::OnReadbackDone(
     scoped_refptr<media::VideoFrame> txt_frame,
     media::VideoEncoder::EncoderStatusCB done_callback,
     scoped_refptr<media::VideoFrame> result_frame) {
-  TRACE_EVENT_END("media", /*CopyRGBATextureToVideoFrame*/
-                  perfetto::Track::FromPointer(this));
+  TRACE_EVENT_END(
+      "media", /*CopyRGBATextureToVideoFrame*/
+      perfetto::NamedTrack::FromPointer("blink::VideoEncoder", this));
   if (reset_count_ != request->reset_count) {
     return;
   }
@@ -1600,13 +1660,12 @@ void VideoEncoder::CallOutputCallback(
   }
 
   encoder_metrics_provider_->IncrementEncodedFrameCount();
-  TRACE_EVENT_BEGIN1(kCategory, GetTraceNames()->output.c_str(), "timestamp",
-                     chunk->timestamp());
+  TRACE_EVENT(kCategory,
+              perfetto::StaticString(GetTraceNames()->output.c_str()),
+              "timestamp", chunk->timestamp());
 
   ScriptState::Scope scope(script_state_);
   output_callback_->InvokeAndReportException(nullptr, chunk, metadata);
-
-  TRACE_EVENT_END0(kCategory, GetTraceNames()->output.c_str());
 }
 
 void VideoEncoder::ResetInternal(DOMException* ex) {
@@ -1753,7 +1812,8 @@ ScriptPromise<VideoEncoderSupport> VideoEncoder::isConfigSupported(
           script_state);
   auto promise = resolver->Promise();
   auto find_any_callback = HeapBarrierCallback<VideoEncoderSupport>(
-      num_callbacks, BindOnce(&FindAnySupported, WrapPersistent(resolver)));
+      num_callbacks,
+      BindOnce(&FindAnySupported, MakeUnwrappingCrossThreadHandle(resolver)));
 
   if (parsed_config->hw_pref != HardwarePreference::kPreferSoftware ||
       media::MayHaveAndAllowSelectOSSoftwareEncoder(parsed_config->codec)) {

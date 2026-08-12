@@ -26,7 +26,13 @@ struct RawPtrNoOpImpl {
   // Notifies the allocator when a wrapped pointer is being removed or
   // replaced.
   template <typename T>
-  PA_ALWAYS_INLINE static constexpr void ReleaseWrappedPtr(T*) {}
+  PA_ALWAYS_INLINE static constexpr void ReleaseWrappedPtr(
+      [[maybe_unused]] T* wrapped_ptr) {
+    // Other RawPtrImpls use wrapped_ptr here. Check that it's initialized.
+    if (!std::is_constant_evaluated()) {
+      PA_MSAN_CHECK_MEM_IS_INITIALIZED(&wrapped_ptr, sizeof(wrapped_ptr));
+    }
+  }
 
   // Unwraps the pointer, while asserting that memory hasn't been freed. The
   // function is allowed to crash on nullptr.
@@ -105,6 +111,10 @@ struct RawPtrNoOpImpl {
 
   // `WrapRawPtrForDuplication` and `UnsafelyUnwrapPtrForDuplication` are used
   // to create a new raw_ptr<T> from another raw_ptr<T> of a different flavor.
+  // Report the current wrapped pointer if pointee isn't alive anymore.
+  template <typename T>
+  PA_ALWAYS_INLINE static void ReportIfDangling(T* wrapped_ptr) {}
+
   template <typename T>
   PA_ALWAYS_INLINE static constexpr T* WrapRawPtrForDuplication(T* ptr) {
     return ptr;

@@ -22,7 +22,6 @@ import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.LoyaltyCardInfo;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.OptionToggle;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.PasskeySection;
-import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.PlusAddressInfo;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.PromoCodeInfo;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.UserInfo;
 import org.chromium.chrome.browser.keyboard_accessory.data.Provider;
@@ -72,6 +71,25 @@ class ManualFillingComponentBridge {
     }
 
     @CalledByNative
+    private static boolean isLargeFormFactor(WebContents webContents) {
+        if (webContents == null) {
+            return false;
+        }
+        WindowAndroid windowAndroid = webContents.getTopLevelNativeWindow();
+        if (windowAndroid == null) {
+            return false;
+        }
+
+        android.app.Activity activity = windowAndroid.getActivity().get();
+        if (activity == null) {
+            return false;
+        }
+
+        return KeyboardAccessoryUtils.isLargeFormFactor(
+                activity, windowAndroid.getKeyboardDelegate());
+    }
+
+    @CalledByNative
     private void onItemsAvailable(AccessorySheetData accessorySheetData) {
         assertOnUiThread();
         Provider<AccessorySheetData> provider =
@@ -86,10 +104,9 @@ class ManualFillingComponentBridge {
     }
 
     @CalledByNative
-    void show(boolean waitForKeyboard, boolean isCredentialFieldOrHasAutofillSuggestions) {
+    void show(boolean waitForKeyboard, boolean shouldShowOnLargeFormFactor) {
         if (getManualFillingComponent() != null) {
-            getManualFillingComponent()
-                    .show(waitForKeyboard, isCredentialFieldOrHasAutofillSuggestions);
+            getManualFillingComponent().show(waitForKeyboard, shouldShowOnLargeFormFactor);
         }
     }
 
@@ -129,9 +146,8 @@ class ManualFillingComponentBridge {
     private static AccessorySheetData createAccessorySheetData(
             @AccessoryTabType int type,
             @JniType("std::u16string") String userInfoTitle,
-            @JniType("std::u16string") String plusAddressTitle,
             @JniType("std::u16string") String warning) {
-        return new AccessorySheetData(type, userInfoTitle, plusAddressTitle, warning);
+        return new AccessorySheetData(type, userInfoTitle, warning);
     }
 
     @CalledByNative
@@ -209,37 +225,6 @@ class ManualFillingComponentBridge {
                                 .setIsObfuscated(isObfuscated)
                                 .setCallback(callback)
                                 .build());
-    }
-
-    @CalledByNative
-    private void addPlusAddressInfoToAccessorySheetData(
-            AccessorySheetData accessorySheetData,
-            @AccessoryTabType int sheetType,
-            @AccessorySuggestionType int suggestionType,
-            @JniType("std::string") String origin,
-            @JniType("std::u16string") String plusAddress) {
-        Callback<UserInfoField> callback =
-                (field) -> {
-                    assert mNativeView != 0 : "Controller was destroyed but the bridge wasn't!";
-                    ManualFillingMetricsRecorder.recordActionSelected(
-                            AccessoryAction.AUTOFILL_SUGGESTION_FROM_ACCESSORY_SHEET);
-                    ManualFillingMetricsRecorder.recordSuggestionSelected(
-                            sheetType, suggestionType);
-                    ManualFillingComponentBridgeJni.get()
-                            .onFillingTriggered(mNativeView, sheetType, field);
-                };
-        UserInfoField field =
-                new UserInfoField.Builder()
-                        .setSuggestionType(suggestionType)
-                        .setDisplayText(plusAddress)
-                        .setTextToFill(plusAddress)
-                        .setA11yDescription(plusAddress)
-                        .setId("")
-                        .setIsObfuscated(false)
-                        .setCallback(callback)
-                        .build();
-
-        accessorySheetData.getPlusAddressInfoList().add(new PlusAddressInfo(origin, field));
     }
 
     @CalledByNative
@@ -381,6 +366,10 @@ class ManualFillingComponentBridge {
                                 }));
     }
 
+    public static boolean isAtMemoryEnabled(WebContents webContents) {
+        return ManualFillingComponentBridgeJni.get().isAtMemoryEnabled(webContents);
+    }
+
     @VisibleForTesting
     public static void cachePasswordSheetData(
             WebContents webContents,
@@ -460,6 +449,15 @@ class ManualFillingComponentBridge {
         ManualFillingComponentBridgeJni.get().onOptionSelected(mNativeView, action.getActionType());
     }
 
+    static void onOptionSelectedForWebContents(WebContents webContents, int accessoryAction) {
+        ManualFillingComponentBridgeJni.get()
+                .onOptionSelectedForWebContents(webContents, accessoryAction);
+    }
+
+    static void hideAtMemoryBottomSheet(WebContents webContents) {
+        ManualFillingComponentBridgeJni.get().hideAtMemoryBottomSheet(webContents);
+    }
+
     @NativeMethods
     interface Natives {
         void onFillingTriggered(
@@ -471,6 +469,8 @@ class ManualFillingComponentBridge {
                 @JniType("std::vector<uint8_t>") byte[] passkeyId);
 
         void onOptionSelected(long nativeManualFillingViewAndroid, int accessoryAction);
+
+        void onOptionSelectedForWebContents(WebContents webContents, int accessoryAction);
 
         void onToggleChanged(
                 long nativeManualFillingViewAndroid, int accessoryAction, boolean enabled);
@@ -491,5 +491,9 @@ class ManualFillingComponentBridge {
         void signalAutoGenerationStatusForTesting(WebContents webContents, boolean available);
 
         void disableServerPredictionsForTesting();
+
+        boolean isAtMemoryEnabled(WebContents webContents);
+
+        void hideAtMemoryBottomSheet(WebContents webContents);
     }
 }

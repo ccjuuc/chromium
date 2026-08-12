@@ -23,6 +23,7 @@
 #include "net/ssl/ssl_connection_status_flags.h"
 #include "net/test/cert_test_util.h"
 #include "net/test/test_data_directory.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_versions.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 
 namespace net {
@@ -49,12 +50,6 @@ FakeServiceEndpointResolution&
 FakeServiceEndpointResolution::CompleteStartSynchronously(int rv) {
   start_result_ = rv;
   endpoints_crypto_ready_ = true;
-  return *this;
-}
-
-FakeServiceEndpointResolution& FakeServiceEndpointResolution::set_start_result(
-    int start_result) {
-  start_result_ = start_result;
   return *this;
 }
 
@@ -135,9 +130,25 @@ FakeServiceEndpointRequest& FakeServiceEndpointRequest::set_priority(
   return *this;
 }
 
+FakeServiceEndpointRequest& FakeServiceEndpointRequest::set_start_callback(
+    base::OnceClosure start_callback) {
+  DCHECK(!start_callback_);
+  start_callback_ = std::move(start_callback);
+  return *this;
+}
+
 FakeServiceEndpointRequest&
 FakeServiceEndpointRequest::CompleteStartSynchronously(int rv) {
   resolution_.CompleteStartSynchronously(rv);
+  return *this;
+}
+
+FakeServiceEndpointRequest&
+FakeServiceEndpointRequest::CompleteStartAsynchronously(int rv) {
+  DCHECK(!resolution_.endpoints_crypto_ready());
+  DCHECK_EQ(resolution_.start_result(), ERR_IO_PENDING);
+  set_start_callback(base::BindOnce(&FakeServiceEndpointRequest::CompleteAsync,
+                                    weak_ptr_factory_.GetWeakPtr(), rv));
   return *this;
 }
 
@@ -148,18 +159,20 @@ FakeServiceEndpointRequest::CallOnServiceEndpointsUpdated() {
   return *this;
 }
 
-FakeServiceEndpointRequest&
-FakeServiceEndpointRequest::CallOnServiceEndpointRequestFinished(int rv) {
+void FakeServiceEndpointRequest::CallOnServiceEndpointRequestFinished(int rv) {
   CHECK(delegate_);
   resolution_.set_crypto_ready(true);
   delegate_->OnServiceEndpointRequestFinished(rv);
-  return *this;
 }
 
 int FakeServiceEndpointRequest::Start(Delegate* delegate) {
   CHECK(!delegate_);
   CHECK(delegate);
   delegate_ = delegate;
+  if (start_callback_) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, std::move(start_callback_));
+  }
   return resolution_.start_result();
 }
 
@@ -185,8 +198,8 @@ const HostCache::EntryStaleness* FakeServiceEndpointRequest::GetStaleInfo()
   return nullptr;
 }
 
-bool FakeServiceEndpointRequest::IsStaleWhileRefresing() const {
-  return false;
+bool FakeServiceEndpointRequest::IsStaleWhileRefreshing() const {
+  return is_stale_while_refreshing_;
 }
 
 void FakeServiceEndpointRequest::ChangeRequestPriority(
@@ -194,9 +207,23 @@ void FakeServiceEndpointRequest::ChangeRequestPriority(
   resolution_.set_priority(priority);
 }
 
+std::optional<ResolutionDetails>
+FakeServiceEndpointRequest::GetResolutionDetails() const {
+  return std::nullopt;
+}
+
+void FakeServiceEndpointRequest::CompleteAsync(int rv) {
+  set_crypto_ready(true);
+  CallOnServiceEndpointRequestFinished(rv);
+}
+
 FakeServiceEndpointResolver::FakeServiceEndpointResolver() = default;
 
-FakeServiceEndpointResolver::~FakeServiceEndpointResolver() = default;
+FakeServiceEndpointResolver::~FakeServiceEndpointResolver() {
+  if (expect_all_fake_requests_consumed_) {
+    EXPECT_TRUE(requests_.empty());
+  }
+}
 
 base::WeakPtr<FakeServiceEndpointRequest>
 FakeServiceEndpointResolver::AddFakeRequest() {
@@ -220,6 +247,7 @@ std::unique_ptr<HostResolver::ResolveHostRequest>
 FakeServiceEndpointResolver::CreateRequest(
     url::SchemeHostPort host,
     NetworkAnonymizationKey network_anonymization_key,
+    handles::NetworkHandle target_network,
     NetLogWithSource net_log,
     std::optional<ResolveHostParameters> optional_parameters) {
   NOTREACHED();
@@ -229,6 +257,7 @@ std::unique_ptr<HostResolver::ResolveHostRequest>
 FakeServiceEndpointResolver::CreateRequest(
     const HostPortPair& host,
     const NetworkAnonymizationKey& network_anonymization_key,
+    handles::NetworkHandle target_network,
     const NetLogWithSource& net_log,
     const std::optional<ResolveHostParameters>& optional_parameters) {
   NOTREACHED();
@@ -238,6 +267,7 @@ std::unique_ptr<HostResolver::ServiceEndpointRequest>
 FakeServiceEndpointResolver::CreateServiceEndpointRequest(
     Host host,
     NetworkAnonymizationKey network_anonymization_key,
+    handles::NetworkHandle target_network,
     NetLogWithSource net_log,
     ResolveHostParameters parameters) {
   if (requests_.empty() && default_resolution_.has_value()) {
@@ -245,6 +275,7 @@ FakeServiceEndpointResolver::CreateServiceEndpointRequest(
         std::make_unique<FakeServiceEndpointRequest>();
     request->resolution_ = *default_resolution_;
     request->set_priority(parameters.initial_priority);
+    request->resolve_host_params_ = parameters;
     return request;
   }
 
@@ -253,6 +284,7 @@ FakeServiceEndpointResolver::CreateServiceEndpointRequest(
       std::move(requests_.front());
   requests_.pop_front();
   request->set_priority(parameters.initial_priority);
+  request->resolve_host_params_ = parameters;
   return request;
 }
 
@@ -291,6 +323,11 @@ ServiceEndpointBuilder& ServiceEndpointBuilder::set_alpns(
     std::vector<std::string> alpns) {
   endpoint_.metadata.supported_protocol_alpns = std::move(alpns);
   return *this;
+}
+
+ServiceEndpointBuilder& ServiceEndpointBuilder::set_alpn(
+    quic::ParsedQuicVersion quic_version) {
+  return set_alpns({quic::AlpnForVersion(quic_version)});
 }
 
 ServiceEndpointBuilder& ServiceEndpointBuilder::set_ech_config_list(
@@ -379,26 +416,33 @@ void FakeStreamSocket::DisconnectAfterIsConnectedCall(int count) {
   disconnect_after_is_connected_call_count_ = count;
 }
 
+StreamKeyBuilder::StreamKeyBuilder(std::string_view destination)
+    : destination_(url::SchemeHostPort(GURL(destination))) {}
+
+StreamKeyBuilder::~StreamKeyBuilder() = default;
+
 StreamKeyBuilder& StreamKeyBuilder::from_key(const HttpStreamKey& key) {
   destination_ = key.destination();
   privacy_mode_ = key.privacy_mode();
   secure_dns_policy_ = key.secure_dns_policy();
   disable_cert_network_fetches_ = key.disable_cert_network_fetches();
+  target_network_ = key.target_network();
   return *this;
 }
 
 HttpStreamKey StreamKeyBuilder::Build() const {
   return HttpStreamKey(destination_, privacy_mode_, SocketTag(),
                        NetworkAnonymizationKey(), secure_dns_policy_,
-                       disable_cert_network_fetches_);
+                       disable_cert_network_fetches_, target_network_,
+                       alt_service_);
 }
 
 HttpStreamKey GroupIdToHttpStreamKey(
     const ClientSocketPool::GroupId& group_id) {
-  return HttpStreamKey(group_id.destination(), group_id.privacy_mode(),
-                       SocketTag(), group_id.network_anonymization_key(),
-                       group_id.secure_dns_policy(),
-                       group_id.disable_cert_network_fetches());
+  return HttpStreamKey(
+      group_id.destination(), group_id.privacy_mode(), SocketTag(),
+      group_id.network_anonymization_key(), group_id.secure_dns_policy(),
+      group_id.disable_cert_network_fetches(), group_id.target_network());
 }
 
 void WaitForAttemptManagerComplete(

@@ -15,6 +15,7 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -27,6 +28,8 @@ import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaym
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.ERROR_SCREEN_SHOWN;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.ISSUER_SELECTION_SCREEN_AFFIRM_LINKED_SELECTED;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.ISSUER_SELECTION_SCREEN_AFFIRM_UNLINKED_SELECTED;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.ISSUER_SELECTION_SCREEN_AI_BASED_AMOUNT_EXTRACTION_TERMS_SHOWN_IN_BOLD_FONT;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.ISSUER_SELECTION_SCREEN_AI_BASED_AMOUNT_EXTRACTION_TERMS_SHOWN_IN_NORMAL_FONT;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.ISSUER_SELECTION_SCREEN_BACK_BUTTON_SELECTED;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.ISSUER_SELECTION_SCREEN_DISMISSED;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.ISSUER_SELECTION_SCREEN_KLARNA_LINKED_SELECTED;
@@ -42,6 +45,7 @@ import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaym
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.SCREEN_ACCEPTED;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.SCREEN_DISMISSED;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.SCREEN_SHOWN;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.TABBED_HOME_SCREEN_DISMISSED;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.TOUCH_TO_FILL_AFFILIATED_LOYALTY_CARDS_SCREEN_INDEX_SELECTED;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.TOUCH_TO_FILL_ALL_LOYALTY_CARDS_SCREEN_INDEX_SELECTED;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.TOUCH_TO_FILL_BNPL_SELECT_ISSUER_NUMBER_OF_ISSUERS_SHOWN;
@@ -54,6 +58,7 @@ import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaym
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.TOUCH_TO_FILL_IBAN_INDEX_SELECTED;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.TOUCH_TO_FILL_IBAN_OUTCOME_HISTOGRAM;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.TOUCH_TO_FILL_LOYALTY_CARD_OUTCOME_HISTOGRAM;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.TOUCH_TO_FILL_LOYALTY_CARD_SOURCE_HISTOGRAM;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.TOUCH_TO_FILL_NUMBER_OF_AFFILIATED_LOYALTY_CARDS_SHOWN;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.TOUCH_TO_FILL_NUMBER_OF_CARDS_SHOWN;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.TOUCH_TO_FILL_NUMBER_OF_IBANS_SHOWN;
@@ -69,19 +74,20 @@ import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaym
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplIssuerContextProperties.ON_ISSUER_CLICK_ACTION;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplIssuerTosTextItemProperties.BNPL_TOS_ICON_ID;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplIssuerTosTextItemProperties.DESCRIPTION_TEXT;
-import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSelectionProgressTermsProperties.APPLY_LINK_DEACTIVATED_STYLE;
-import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSelectionProgressTermsProperties.HIDE_OPTIONS_LINK_TEXT;
-import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSelectionProgressTermsProperties.ON_LINK_CLICK_CALLBACK;
-import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSelectionProgressTermsProperties.TERMS_TEXT_ID;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSelectionProgressTermsProperties.TERMS_TEXT;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSuggestionProperties.BNPL_ICON_ID;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSuggestionProperties.IS_ENABLED;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSuggestionProperties.ON_BNPL_CLICK_ACTION;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSuggestionProperties.PRIMARY_TEXT;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSuggestionProperties.SECONDARY_TEXT;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplTosHeaderProperties.ICON_CONTENT_DESCRIPTION_ID;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplTosHeaderProperties.ISSUER_IMAGE_DRAWABLE_ID;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplTosHeaderProperties.ISSUER_TITLE_STRING;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ButtonProperties.ON_CLICK_ACTION;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ButtonProperties.TEXT_ID;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.CURRENT_SCREEN;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.CreditCardSuggestionProperties.APPLY_DEACTIVATED_STYLE;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.CreditCardSuggestionProperties.CARD_IMAGE;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.CreditCardSuggestionProperties.FIRST_LINE_LABEL;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.CreditCardSuggestionProperties.MAIN_TEXT;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.CreditCardSuggestionProperties.MAIN_TEXT_CONTENT_DESCRIPTION;
@@ -113,14 +119,18 @@ import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaym
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.FOOTER;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.HEADER;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.IBAN;
-import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.LOYALTY_CARD;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.PROGRESS_ICON;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.TERMS_LABEL;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.TEXT_BUTTON;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.TOS_FOOTER;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.TOS_HEADER;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.WALLET_SETTINGS_BUTTON;
-import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.LoyaltyCardProperties.LOYALTY_CARD_NUMBER;
-import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.LoyaltyCardProperties.MERCHANT_NAME;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.LoyaltyCardProperties.LOYALTY_CARD;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.LoyaltyCardProperties.LOYALTY_CARD_ICON;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.LoyaltyCardProperties.ON_LOYALTY_CARD_CLICK_ACTION;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.PaymentMethodTabId.PAY_LATER;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.PaymentMethodTabId.PAY_NOW;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.SELECTED_TAB_INDEX;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.SHEET_CLOSED_DESCRIPTION_ID;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.SHEET_CONTENT_DESCRIPTION_ID;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.SHEET_FULL_HEIGHT_DESCRIPTION_ID;
@@ -132,15 +142,27 @@ import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaym
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ScreenId.ERROR_SCREEN;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ScreenId.HOME_SCREEN;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ScreenId.PROGRESS_SCREEN;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ScreenId.TABBED_HOME_SCREEN;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.TABBED_HEADER_LOGO_DRAWABLE_ID;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.TABBED_HEADER_TITLE_ID;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.TAB_SELECTION_HANDLER;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.TermsLabelProperties.TERMS_LABEL_TEXT_ID;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.TosFooterProperties.LEGAL_MESSAGE_LINES;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.TosFooterProperties.LINK_OPENER;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.VISIBLE;
 
 import android.app.Activity;
+import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.text.SpannableString;
+import android.text.TextPaint;
 import android.text.TextUtils;
+import android.text.style.CharacterStyle;
 import android.text.style.ClickableSpan;
+import android.text.style.StyleSpan;
+import android.view.View;
 
 import androidx.annotation.IdRes;
 import androidx.annotation.StringRes;
@@ -159,16 +181,17 @@ import org.chromium.base.ContextUtils;
 import org.chromium.base.ServiceLoaderUtil;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.UserActionTester;
-import org.chromium.chrome.R;
 import org.chromium.chrome.browser.autofill.AutofillImageFetcher;
 import org.chromium.chrome.browser.autofill.AutofillUiUtils;
+import org.chromium.chrome.browser.autofill.PersonalDataManager;
 import org.chromium.chrome.browser.autofill.PersonalDataManager.CreditCard;
 import org.chromium.chrome.browser.autofill.PersonalDataManager.Iban;
+import org.chromium.chrome.browser.autofill.PersonalDataManagerFactory;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.touch_to_fill.common.BottomSheetFocusHelper;
 import org.chromium.chrome.browser.touch_to_fill.common.TouchToFillResourceProvider;
 import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.TouchToFillBnplSuggestionInteraction;
@@ -176,7 +199,9 @@ import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMeth
 import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.TouchToFillCreditCardOutcome;
 import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.TouchToFillIbanOutcome;
 import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.TouchToFillLoyaltyCardOutcome;
+import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodMediator.TouchToFillLoyaltyCardSource;
 import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.AllLoyaltyCardsItemProperties;
+import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType;
 import org.chromium.components.autofill.AutofillFeatures;
 import org.chromium.components.autofill.AutofillSuggestion;
 import org.chromium.components.autofill.LoyaltyCard;
@@ -184,12 +209,18 @@ import org.chromium.components.autofill.SuggestionType;
 import org.chromium.components.autofill.payments.BnplIssuerContext;
 import org.chromium.components.autofill.payments.BnplIssuerTosDetail;
 import org.chromium.components.autofill.payments.LegalMessageLine;
+import org.chromium.components.autofill.payments.TouchToFillDisplayOptions;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
 import org.chromium.components.payments.ui.InputProtector;
 import org.chromium.components.payments.ui.test_support.FakeClock;
-import org.chromium.ui.accessibility.AccessibilityState;
+import org.chromium.components.prefs.PrefChangeRegistrar;
+import org.chromium.components.prefs.PrefChangeRegistrarJni;
+import org.chromium.components.prefs.PrefService;
+import org.chromium.components.user_prefs.UserPrefs;
+import org.chromium.components.user_prefs.UserPrefsJni;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -209,9 +240,13 @@ import java.util.stream.StreamSupport;
  * TouchToFillPaymentMethodMediator}
  */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.PER_CLASS)
 @EnableFeatures({AutofillFeatures.AUTOFILL_ENABLE_NEW_FOP_DISPLAY_ANDROID})
-@DisableFeatures({AutofillFeatures.AUTOFILL_ENABLE_SECURITY_TOUCH_EVENT_FILTERING_ANDROID})
+@DisableFeatures({
+    AutofillFeatures.AUTOFILL_ENABLE_SECURITY_TOUCH_EVENT_FILTERING_ANDROID,
+    AutofillFeatures.AUTOFILL_ENABLE_WALLET_BRANDING,
+    AutofillFeatures.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION,
+    AutofillFeatures.AUTOFILL_ENABLE_PAY_NOW_PAY_LATER_TABS
+})
 public class TouchToFillPaymentMethodControllerRobolectricTest {
     private static final CreditCard VISA =
             createCreditCard(
@@ -278,7 +313,9 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                     /* programName= */ "Loyalty program",
                     /* programLogo= */ new GURL("https://site.com/icon.png"),
                     /* loyaltyCardNumber= */ "1234",
-                    /* merchantDomains= */ Collections.emptyList());
+                    /* merchantDomains= */ Collections.emptyList(),
+                    /* useDate= */ 0,
+                    /* useCount= */ 0);
 
     private static final LoyaltyCard LOYALTY_CARD_2 =
             new LoyaltyCard(
@@ -287,7 +324,9 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                     /* programName= */ "Coffee pro",
                     /* programLogo= */ new GURL("https://coffee.com/logo.png"),
                     /* loyaltyCardNumber= */ "4321",
-                    /* merchantDomains= */ Collections.emptyList());
+                    /* merchantDomains= */ Collections.emptyList(),
+                    /* useDate= */ 0,
+                    /* useCount= */ 0);
 
     private static final AutofillSuggestion VISA_SUGGESTION =
             createCreditCardSuggestion(
@@ -301,8 +340,21 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                     VISA.getIssuerIconDrawableId(),
                     /* applyDeactivatedStyle= */ false,
                     /* shouldDisplayTermsAvailable= */ false,
-                    VISA.getGUID(),
-                    VISA.getIsLocal());
+                    VISA.getGUID());
+    private static final GURL VISA_ART_URL = new GURL("https://example.com/art.png");
+    private static final AutofillSuggestion VISA_SUGGESTION_WITH_ART =
+            createCreditCardSuggestion(
+                    VISA.getCardNameForAutofillDisplay(),
+                    VISA.getObfuscatedLastFourDigits(),
+                    VISA.getFormattedExpirationDate(ContextUtils.getApplicationContext()),
+                    /* secondarySubLabel= */ "",
+                    /* labelContentDescription= */ "",
+                    /* suggestionType= */ SuggestionType.CREDIT_CARD_ENTRY,
+                    /* customIconUrl= */ VISA_ART_URL,
+                    VISA.getIssuerIconDrawableId(),
+                    /* applyDeactivatedStyle= */ false,
+                    /* shouldDisplayTermsAvailable= */ false,
+                    VISA.getGUID());
     private static final AutofillSuggestion VISA_SUGGESTION_WITH_CARD_BENEFITS =
             createCreditCardSuggestion(
                     VISA.getCardNameForAutofillDisplay(),
@@ -315,8 +367,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                     VISA.getIssuerIconDrawableId(),
                     /* applyDeactivatedStyle= */ false,
                     /* shouldDisplayTermsAvailable= */ true,
-                    VISA.getGUID(),
-                    VISA.getIsLocal());
+                    VISA.getGUID());
     private static final AutofillSuggestion NICKNAMED_VISA_SUGGESTION =
             createCreditCardSuggestion(
                     NICKNAMED_VISA.getCardNameForAutofillDisplay(),
@@ -332,8 +383,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                     NICKNAMED_VISA.getIssuerIconDrawableId(),
                     /* applyDeactivatedStyle= */ false,
                     /* shouldDisplayTermsAvailable= */ false,
-                    NICKNAMED_VISA.getGUID(),
-                    NICKNAMED_VISA.getIsLocal());
+                    NICKNAMED_VISA.getGUID());
     private static final AutofillSuggestion MASTERCARD_SUGGESTION =
             createCreditCardSuggestion(
                     MASTERCARD.getCardNameForAutofillDisplay(),
@@ -346,8 +396,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                     MASTERCARD.getIssuerIconDrawableId(),
                     /* applyDeactivatedStyle= */ false,
                     /* shouldDisplayTermsAvailable= */ false,
-                    MASTERCARD.getGUID(),
-                    MASTERCARD.getIsLocal());
+                    MASTERCARD.getGUID());
     private static final AutofillSuggestion NON_ACCEPTABLE_VIRTUAL_CARD_SUGGESTION =
             createCreditCardSuggestion(
                     VIRTUAL_CARD.getCardNameForAutofillDisplay(),
@@ -360,8 +409,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                     VIRTUAL_CARD.getIssuerIconDrawableId(),
                     /* applyDeactivatedStyle= */ true,
                     /* shouldDisplayTermsAvailable= */ false,
-                    VIRTUAL_CARD.getGUID(),
-                    VIRTUAL_CARD.getIsLocal());
+                    VIRTUAL_CARD.getGUID());
     private static final AutofillSuggestion ACCEPTABLE_VIRTUAL_CARD_SUGGESTION =
             createCreditCardSuggestion(
                     VIRTUAL_CARD.getCardNameForAutofillDisplay(),
@@ -374,8 +422,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                     VIRTUAL_CARD.getIssuerIconDrawableId(),
                     /* applyDeactivatedStyle= */ false,
                     /* shouldDisplayTermsAvailable= */ false,
-                    VIRTUAL_CARD.getGUID(),
-                    VIRTUAL_CARD.getIsLocal());
+                    VIRTUAL_CARD.getGUID());
     private static final AutofillSuggestion VIRTUAL_CARD_SUGGESTION_WITH_CARD_BENEFITS =
             createCreditCardSuggestion(
                     VIRTUAL_CARD.getCardNameForAutofillDisplay(),
@@ -388,8 +435,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                     VIRTUAL_CARD.getIssuerIconDrawableId(),
                     /* applyDeactivatedStyle= */ false,
                     /* shouldDisplayTermsAvailable= */ true,
-                    VIRTUAL_CARD.getGUID(),
-                    VIRTUAL_CARD.getIsLocal());
+                    VIRTUAL_CARD.getGUID());
     private static final AutofillSuggestion BNPL_SUGGESTION =
             createCreditCardSuggestion(
                     /* label= */ "Pay later options",
@@ -402,8 +448,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                     /* iconId= */ R.drawable.bnpl_icon_generic,
                     /* applyDeactivatedStyle= */ false,
                     /* shouldDisplayTermsAvailable= */ false,
-                    /* guid= */ "",
-                    /* isLocalPaymentsMethod= */ false);
+                    /* guid= */ "");
     private static final AutofillSuggestion DEACTIVATED_BNPL_SUGGESTION =
             createCreditCardSuggestion(
                     /* label= */ "Pay later options",
@@ -416,11 +461,9 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                     /* iconId= */ R.drawable.bnpl_icon_generic,
                     /* applyDeactivatedStyle= */ true,
                     /* shouldDisplayTermsAvailable= */ false,
-                    /* guid= */ "",
-                    /* isLocalPaymentsMethod= */ false);
+                    /* guid= */ "");
     private static final BnplIssuerContext BNPL_ISSUER_CONTEXT_AFFIRM_LINKED =
             new BnplIssuerContext(
-                    /* iconId= */ R.drawable.affirm_linked,
                     /* issuerId= */ "affirm",
                     /* displayName= */ "Affirm",
                     /* selectionText= */ "Monthly or 4 installments",
@@ -428,7 +471,6 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                     /* isEligible= */ true);
     private static final BnplIssuerContext BNPL_ISSUER_CONTEXT_AFFIRM_UNLINKED =
             new BnplIssuerContext(
-                    /* iconId= */ R.drawable.affirm_unlinked,
                     /* issuerId= */ "affirm",
                     /* displayName= */ "Affirm",
                     /* selectionText= */ "Monthly or 4 installments",
@@ -436,7 +478,6 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                     /* isEligible= */ true);
     private static final BnplIssuerContext BNPL_ISSUER_CONTEXT_KLARNA_LINKED =
             new BnplIssuerContext(
-                    /* iconId= */ R.drawable.klarna_linked,
                     /* issuerId= */ "klarna",
                     /* displayName= */ "Klarna",
                     /* selectionText= */ "Pay in low monthly installments",
@@ -444,7 +485,6 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                     /* isEligible= */ true);
     private static final BnplIssuerContext BNPL_ISSUER_CONTEXT_KLARNA_UNLINKED =
             new BnplIssuerContext(
-                    /* iconId= */ R.drawable.klarna_unlinked,
                     /* issuerId= */ "klarna",
                     /* displayName= */ "Klarna",
                     /* selectionText= */ "Pay in low monthly installments",
@@ -452,7 +492,6 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                     /* isEligible= */ true);
     private static final BnplIssuerContext BNPL_ISSUER_CONTEXT_ZIP_LINKED =
             new BnplIssuerContext(
-                    /* iconId= */ R.drawable.zip_linked,
                     /* issuerId= */ "zip",
                     /* displayName= */ "Zip",
                     /* selectionText= */ "Pay in easy installments",
@@ -460,7 +499,6 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                     /* isEligible= */ true);
     private static final BnplIssuerContext BNPL_ISSUER_CONTEXT_ZIP_UNLINKED =
             new BnplIssuerContext(
-                    /* iconId= */ R.drawable.zip_unlinked,
                     /* issuerId= */ "zip",
                     /* displayName= */ "Zip",
                     /* selectionText= */ "Pay in easy installments",
@@ -469,7 +507,6 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     private static final BnplIssuerContext
             BNPL_ISSUER_CONTEXT_INELIGIBLE_NOT_SUPPORTED_BY_MERCHANT =
                     new BnplIssuerContext(
-                            /* iconId= */ R.drawable.affirm_linked,
                             /* issuerId= */ "affirm",
                             /* displayName= */ "Affirm",
                             /* selectionText= */ "Not supported by merchant",
@@ -477,7 +514,6 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                             /* isEligible= */ false);
     private static final BnplIssuerContext BNPL_ISSUER_CONTEXT_INELIGIBLE_CHECKOUT_AMOUNT_TOO_LOW =
             new BnplIssuerContext(
-                    /* iconId= */ R.drawable.klarna_linked,
                     /* issuerId= */ "klarna",
                     /* displayName= */ "Klarna",
                     /* selectionText= */ "Purchase must be over $50.00",
@@ -485,7 +521,6 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                     /* isEligible= */ false);
     private static final BnplIssuerContext BNPL_ISSUER_CONTEXT_INELIGIBLE_CHECKOUT_AMOUNT_TOO_HIGH =
             new BnplIssuerContext(
-                    /* iconId= */ R.drawable.zip_unlinked,
                     /* issuerId= */ "zip",
                     /* displayName= */ "Zip",
                     /* selectionText= */ "Purchase must be under $10,000.00",
@@ -522,7 +557,6 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                             new LegalMessageLine(LEGAL_MESSAGE_LINE)));
     private static final BnplIssuerContext UNKNOWN_BNPL_ISSUER_CONTEXT =
             new BnplIssuerContext(
-                    /* iconId= */ R.drawable.bnpl_icon_generic,
                     /* issuerId= */ "unknownId",
                     /* displayName= */ "Test",
                     /* selectionText= */ "Daily or 1000 installments",
@@ -531,6 +565,15 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     private static final String ERROR_SCREEN_TITLE = "Something went wrong";
     private static final String ERROR_SCREEN_DESCRIPTION =
             "Pay later is unavailable at this time. Try again or choose another payment method.";
+    private static final String BNPL_TERMS =
+            "Payment plans are subject to eligibility.\n"
+                    + "To hide pay later options, go to payment settings";
+    private static final String BNPL_AI_TERMS =
+            "Content from the checkout page is shared with Google to offer these options."
+                    + " Payment plans are subject to eligibility. To hide pay later options, go to"
+                    + " payment settings.";
+    private static final String BNPL_AI_TERMS_BOLDED_TEXT =
+            "Content from the checkout page is shared with Google to offer these options.";
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -545,9 +588,15 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     @Mock private BottomSheetFocusHelper mBottomSheetFocusHelper;
     @Mock private AutofillImageFetcher mImageFetcher;
     @Mock private TouchToFillResourceProvider mResourceProvider;
+    @Mock private Profile mProfile;
+    @Mock private PersonalDataManager mPersonalDataManager;
+    @Mock private PrefChangeRegistrar.Natives mPrefChangeRegistrarJni;
+    @Mock private PrefService mPrefService;
+    @Mock private UserPrefs.Natives mUserPrefsJni;
 
     public TouchToFillPaymentMethodControllerRobolectricTest() {
         mActivity = Robolectric.buildActivity(Activity.class).get();
+        mActivity.setTheme(R.style.Theme_BrowserUI_DayNight);
     }
 
     @Before
@@ -559,10 +608,17 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
         when(mBottomSheetController.requestShowContent(any(BottomSheetContent.class), anyBoolean()))
                 .thenReturn(true);
         when(mResourceProvider.getBnplIssuerTosDrawableId(anyString(), anyBoolean()))
+                .thenReturn(R.drawable.google_pay);
+        when(mResourceProvider.getBnplIssuerDrawableId(anyString(), anyBoolean()))
                 .thenReturn(R.drawable.bnpl_icon_generic);
+        when(mUserPrefsJni.get(mProfile)).thenReturn(mPrefService);
+        PersonalDataManagerFactory.setInstanceForTesting(mPersonalDataManager);
+        PrefChangeRegistrarJni.setInstanceForTesting(mPrefChangeRegistrarJni);
+        UserPrefsJni.setInstanceForTesting(mUserPrefsJni);
         mCoordinator = new TouchToFillPaymentMethodCoordinator();
         mCoordinator.initialize(
                 mActivity,
+                mProfile,
                 mImageFetcher,
                 mBottomSheetController,
                 mDelegateMock,
@@ -576,15 +632,16 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
     @After
     public void tearDown() {
+        mCoordinator.hideSheet();
+        PrefChangeRegistrarJni.setInstanceForTesting(null);
+        UserPrefsJni.setInstanceForTesting(null);
         BNPL_SUGGESTION.getPaymentsPayload().setExtractedAmount(null);
         mActionTester.tearDown();
     }
 
     @Test
     public void testAddsTheBottomSheetHelperToObserveTheSheetForCreditCard() {
-        mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION), /* shouldShowScanCreditCard= */ false);
-
+        mCoordinator.showPaymentMethods(List.of(VISA_SUGGESTION), new TouchToFillDisplayOptions());
         verify(mBottomSheetFocusHelper, times(1)).registerForOneTimeUse();
     }
 
@@ -594,25 +651,21 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
         assertNotNull(mTouchToFillPaymentMethodModel.get(DISMISS_HANDLER));
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
         assertThat(mTouchToFillPaymentMethodModel.get(VISIBLE), is(false));
-        mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION), /* shouldShowScanCreditCard= */ false);
-
+        mCoordinator.showPaymentMethods(List.of(VISA_SUGGESTION), new TouchToFillDisplayOptions());
         assertModelHasCorrectAccessibilityStringIds(
                 mTouchToFillPaymentMethodModel,
                 R.string.autofill_payment_method_bottom_sheet_content_description,
                 R.string.autofill_payment_method_bottom_sheet_half_height,
                 R.string.autofill_payment_method_bottom_sheet_full_height,
                 R.string.autofill_payment_method_bottom_sheet_closed,
-                org.chromium.chrome.browser.touch_to_fill.payments.R.id
-                        .touch_to_fill_payment_method_home_screen);
+                R.id.touch_to_fill_payment_method_home_screen);
         assertThat(mTouchToFillPaymentMethodModel.get(VISIBLE), is(true));
     }
 
     @Test
     public void testShowCreditCardSuggestionsWithOneEntry() throws TimeoutException {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION), /* shouldShowScanCreditCard= */ false);
-
+                List.of(VISA_SUGGESTION), new TouchToFillDisplayOptions().showGPayLogo(false));
         assertEquals(
                 1,
                 RecordHistogram.getHistogramValueCountForTesting(
@@ -641,8 +694,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     public void testShowCreditCardSuggestionsWithTwoEntries() throws TimeoutException {
         mCoordinator.showPaymentMethods(
                 List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION),
-                /* shouldShowScanCreditCard= */ false);
-
+                new TouchToFillDisplayOptions().showGPayLogo(false));
         assertEquals(
                 1,
                 RecordHistogram.getHistogramValueCountForTesting(
@@ -681,8 +733,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 HistogramWatcher.newSingleRecordWatcher(TOUCH_TO_FILL_NUMBER_OF_CARDS_SHOWN, 2);
         mCoordinator.showPaymentMethods(
                 List.of(NON_ACCEPTABLE_VIRTUAL_CARD_SUGGESTION, MASTERCARD_SUGGESTION),
-                /* shouldShowScanCreditCard= */ false);
-
+                new TouchToFillDisplayOptions().showGPayLogo(true));
         metricsWatcher.assertExpected();
 
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
@@ -710,8 +761,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                         MASTERCARD_SUGGESTION,
                         VISA_SUGGESTION_WITH_CARD_BENEFITS,
                         VIRTUAL_CARD_SUGGESTION_WITH_CARD_BENEFITS),
-                /* shouldShowScanCreditCard= */ false);
-
+                new TouchToFillDisplayOptions().showGPayLogo(true));
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
         assertThat(getModelsOfType(itemList, CREDIT_CARD).size(), is(3));
 
@@ -768,8 +818,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     @Test
     public void testShowCreditCardSuggestionsWithBnplSuggestion() throws TimeoutException {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), /* shouldShowScanCreditCard= */ false);
-
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
         assertEquals(
                 1,
                 RecordHistogram.getHistogramValueCountForTesting(
@@ -806,8 +855,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
             throws TimeoutException {
         mCoordinator.showPaymentMethods(
                 List.of(VISA_SUGGESTION, DEACTIVATED_BNPL_SUGGESTION),
-                /* shouldShowScanCreditCard= */ false);
-
+                new TouchToFillDisplayOptions());
         assertEquals(
                 1,
                 RecordHistogram.getHistogramValueCountForTesting(
@@ -848,7 +896,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
         Long extractedAmount = 100L;
         BNPL_SUGGESTION.getPaymentsPayload().setExtractedAmount(extractedAmount);
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
         assertThat(mTouchToFillPaymentMethodModel.get(VISIBLE), is(true));
 
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
@@ -864,6 +912,26 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     }
 
     @Test
+    public void testBnplSuggestionWhenBnplFeatureDisabledInSettings() {
+        when(mPersonalDataManager.isBuyNowPayLaterEnabled()).thenReturn(true);
+        mCoordinator.showPaymentMethods(
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
+        assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
+
+        // Verify that the BNPL suggestion is enabled on the home screen.
+        PropertyModel bnplSuggestionModel =
+                mCoordinator.getMediatorForTesting().getBnplSuggestionModelForTesting();
+        assertTrue(bnplSuggestionModel.get(IS_ENABLED));
+
+        // Disable the BNPL feature.
+        when(mPersonalDataManager.isBuyNowPayLaterEnabled()).thenReturn(false);
+        mCoordinator.getMediatorForTesting().updateBnplSuggestionOnPrefChange();
+
+        // Verify that the BNPL suggestion is now disabled on the home screen.
+        assertFalse(bnplSuggestionModel.get(IS_ENABLED));
+    }
+
+    @Test
     public void testShowProgressScreenForBnpl() {
         mCoordinator.getMediatorForTesting().showProgressScreen();
 
@@ -875,8 +943,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 R.string.autofill_bnpl_progress_sheet_half_height,
                 R.string.autofill_bnpl_progress_sheet_full_height,
                 R.string.autofill_bnpl_progress_sheet_closed,
-                org.chromium.chrome.browser.touch_to_fill.payments.R.id
-                        .touch_to_fill_progress_screen);
+                R.id.touch_to_fill_progress_screen);
 
         ModelList sheetItems = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
         assertThat(sheetItems.size(), is(3));
@@ -904,20 +971,12 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
         assertThat(
                 bnplSelectionProgressTerms.type,
                 is(TouchToFillPaymentMethodProperties.ItemType.BNPL_SELECTION_PROGRESS_TERMS));
-        assertBnplSelectionProgressTermsModelHasExpectedValues(
-                sheetItems,
-                /* expectedTermsTextId= */ R.string.autofill_bnpl_issuer_bottom_sheet_terms_label,
-                /* expectedHideOptionsLinkText= */ ContextUtils.getApplicationContext()
-                        .getString(
-                                R.string
-                                        .autofill_card_bnpl_select_provider_bottom_sheet_footnote_hide_option),
-                /* expectedEnabled= */ false);
     }
 
     @Test
     public void testBnplSuggestionPosition() {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
         ModelList sheetItems = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
 
         assertThat(sheetItems.size(), is(4));
@@ -935,8 +994,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
         // The BNPL suggestion is the third suggestion to ensure that it starts fully visible.
         mCoordinator.showPaymentMethods(
                 List.of(VISA_SUGGESTION, VISA_SUGGESTION, BNPL_SUGGESTION),
-                /* shouldShowScanCreditCard= */ false);
-
+                new TouchToFillDisplayOptions());
         // Simulate amount extraction succeeding, which ensures the BNPL suggestion remains
         // selectable.
         mCoordinator
@@ -969,8 +1027,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
         // The BNPL suggestion is the fourth suggestion to ensure that it starts partially visible.
         mCoordinator.showPaymentMethods(
                 List.of(VISA_SUGGESTION, VISA_SUGGESTION, VISA_SUGGESTION, BNPL_SUGGESTION),
-                /* shouldShowScanCreditCard= */ false);
-
+                new TouchToFillDisplayOptions());
         // Simulate amount extraction succeeding, which ensures the BNPL suggestion remains
         // selectable.
         mCoordinator
@@ -1008,8 +1065,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                         VISA_SUGGESTION,
                         VISA_SUGGESTION,
                         BNPL_SUGGESTION),
-                /* shouldShowScanCreditCard= */ false);
-
+                new TouchToFillDisplayOptions());
         // Simulate amount extraction succeeding, which ensures the BNPL suggestion remains
         // selectable.
         mCoordinator
@@ -1041,7 +1097,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     public void testDoesNotRecordBnplSuggestionVisibilityHistograms() {
         // BNPL suggestion visibility metrics should not be logged when touch exploration is
         // enabled.
-        AccessibilityState.setIsTouchExplorationEnabledForTesting(true);
+        AccessibilityStateTestHelper.setIsTouchExplorationEnabledForTesting(true);
 
         for (int visibility = 0;
                 visibility <= TouchToFillBnplSuggestionVisibility.MAX_VALUE;
@@ -1067,28 +1123,21 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 RecordHistogram.getHistogramTotalCountForTesting(
                         TOUCH_TO_FILL_BNPL_SUGGESTION_STARTED_FULLY_VISIBLE_HISTOGRAM));
 
-        AccessibilityState.setIsTouchExplorationEnabledForTesting(false);
+        AccessibilityStateTestHelper.setIsTouchExplorationEnabledForTesting(false);
     }
 
     @Test
     public void testDismissProgressScreenRecordsUserActions() {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION),
-                /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION), new TouchToFillDisplayOptions());
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
         mCoordinator.getMediatorForTesting().showProgressScreen();
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(PROGRESS_SCREEN));
 
         mTouchToFillPaymentMethodModel.get(DISMISS_HANDLER).onResult(StateChangeReason.SWIPE);
 
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION + PROGRESS_SCREEN_SHOWN));
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION + PROGRESS_SCREEN_DISMISSED));
+        assertEquals(1, getUserActionCount(PROGRESS_SCREEN_SHOWN));
+        assertEquals(1, getUserActionCount(PROGRESS_SCREEN_DISMISSED));
     }
 
     @Test
@@ -1107,8 +1156,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     public void testBnplSelectionProgressHeaderBackButtonReshowsHomeScreen() {
         // Show the credit card list first to populate the mediator's suggestions.
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION),
-                /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION), new TouchToFillDisplayOptions());
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
         assertThat(
                 getModelsOfType(mTouchToFillPaymentMethodModel.get(SHEET_ITEMS), CREDIT_CARD)
@@ -1158,8 +1206,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 R.string.autofill_bnpl_issuer_bottom_sheet_half_height,
                 R.string.autofill_bnpl_issuer_bottom_sheet_full_height,
                 R.string.autofill_bnpl_issuer_bottom_sheet_closed,
-                org.chromium.chrome.browser.touch_to_fill.payments.R.id
-                        .touch_to_fill_bnpl_issuer_selection_screen);
+                R.id.touch_to_fill_bnpl_issuer_selection_screen);
 
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
         assertThat(getModelsOfType(itemList, BNPL_ISSUER).size(), is(3));
@@ -1167,15 +1214,6 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
         assertBnplIssuerContextModelMatches(itemList, BNPL_ISSUER_CONTEXT_AFFIRM_LINKED);
         assertBnplIssuerContextModelMatches(itemList, BNPL_ISSUER_CONTEXT_KLARNA_LINKED);
         assertBnplIssuerContextModelMatches(itemList, BNPL_ISSUER_CONTEXT_ZIP_LINKED);
-
-        assertBnplSelectionProgressTermsModelHasExpectedValues(
-                itemList,
-                /* expectedTermsTextId= */ R.string.autofill_bnpl_issuer_bottom_sheet_terms_label,
-                /* expectedHideOptionsLinkText= */ ContextUtils.getApplicationContext()
-                        .getString(
-                                R.string
-                                        .autofill_card_bnpl_select_provider_bottom_sheet_footnote_hide_option),
-                /* expectedEnabled= */ true);
     }
 
     @Test
@@ -1199,8 +1237,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 R.string.autofill_bnpl_issuer_bottom_sheet_half_height,
                 R.string.autofill_bnpl_issuer_bottom_sheet_full_height,
                 R.string.autofill_bnpl_issuer_bottom_sheet_closed,
-                org.chromium.chrome.browser.touch_to_fill.payments.R.id
-                        .touch_to_fill_bnpl_issuer_selection_screen);
+                R.id.touch_to_fill_bnpl_issuer_selection_screen);
 
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
         assertThat(getModelsOfType(itemList, BNPL_ISSUER).size(), is(3));
@@ -1208,15 +1245,6 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
         assertBnplIssuerContextModelMatches(itemList, BNPL_ISSUER_CONTEXT_AFFIRM_UNLINKED);
         assertBnplIssuerContextModelMatches(itemList, BNPL_ISSUER_CONTEXT_KLARNA_UNLINKED);
         assertBnplIssuerContextModelMatches(itemList, BNPL_ISSUER_CONTEXT_ZIP_UNLINKED);
-
-        assertBnplSelectionProgressTermsModelHasExpectedValues(
-                itemList,
-                /* expectedTermsTextId= */ R.string.autofill_bnpl_issuer_bottom_sheet_terms_label,
-                /* expectedHideOptionsLinkText= */ ContextUtils.getApplicationContext()
-                        .getString(
-                                R.string
-                                        .autofill_card_bnpl_select_provider_bottom_sheet_footnote_hide_option),
-                /* expectedEnabled= */ true);
     }
 
     @Test
@@ -1240,8 +1268,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 R.string.autofill_bnpl_issuer_bottom_sheet_half_height,
                 R.string.autofill_bnpl_issuer_bottom_sheet_full_height,
                 R.string.autofill_bnpl_issuer_bottom_sheet_closed,
-                org.chromium.chrome.browser.touch_to_fill.payments.R.id
-                        .touch_to_fill_bnpl_issuer_selection_screen);
+                R.id.touch_to_fill_bnpl_issuer_selection_screen);
 
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
         assertThat(getModelsOfType(itemList, BNPL_ISSUER).size(), is(3));
@@ -1252,15 +1279,214 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 itemList, BNPL_ISSUER_CONTEXT_INELIGIBLE_CHECKOUT_AMOUNT_TOO_LOW);
         assertBnplIssuerContextModelMatches(
                 itemList, BNPL_ISSUER_CONTEXT_INELIGIBLE_CHECKOUT_AMOUNT_TOO_HIGH);
+    }
 
-        assertBnplSelectionProgressTermsModelHasExpectedValues(
-                itemList,
-                /* expectedTermsTextId= */ R.string.autofill_bnpl_issuer_bottom_sheet_terms_label,
-                /* expectedHideOptionsLinkText= */ ContextUtils.getApplicationContext()
-                        .getString(
-                                R.string
-                                        .autofill_card_bnpl_select_provider_bottom_sheet_footnote_hide_option),
-                /* expectedEnabled= */ true);
+    @Test
+    @EnableFeatures({AutofillFeatures.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION})
+    public void testBnplSelectionScreenTerms_AiBasedAmountExtractionEnabled_HasSeenAiTerms() {
+        when(mPersonalDataManager.isAutofillAmountExtractionAiTermsSeenPrefEnabled())
+                .thenReturn(true);
+
+        mCoordinator
+                .getMediatorForTesting()
+                .showBnplIssuers(List.of(BNPL_ISSUER_CONTEXT_AFFIRM_LINKED));
+
+        assertThat(
+                mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN),
+                is(BNPL_ISSUER_SELECTION_SCREEN));
+
+        Optional<PropertyModel> termsModel =
+                getBnplSelectionProgressTermsModel(mTouchToFillPaymentMethodModel.get(SHEET_ITEMS));
+        assertTrue(termsModel.isPresent());
+
+        // Verify the expecteed terms text.
+        CharSequence termsText = termsModel.get().get(TERMS_TEXT);
+        assertThat(termsText.toString(), is(BNPL_AI_TERMS));
+
+        // Verify the expecteed terms is SpannableString type.
+        assertTrue("Terms text should be a SpannableString", termsText instanceof SpannableString);
+        SpannableString spannable = (SpannableString) termsText;
+        ClickableSpan[] spans = spannable.getSpans(0, spannable.length(), ClickableSpan.class);
+        assertEquals("There should be exactly one clickable span", 1, spans.length);
+        assertExpectedBnplSelectionScreenTermsLink(spans[0]);
+
+        // Verify no bold span for AI terms.
+        StyleSpan[] styleSpans = spannable.getSpans(0, spannable.length(), StyleSpan.class);
+        assertEquals(0, styleSpans.length);
+        assertEquals(
+                1,
+                getUserActionCount(
+                        ISSUER_SELECTION_SCREEN_AI_BASED_AMOUNT_EXTRACTION_TERMS_SHOWN_IN_NORMAL_FONT));
+    }
+
+    @Test
+    @EnableFeatures({AutofillFeatures.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION})
+    public void testBnplSelectionScreenTerms_AiBasedAmountExtractionEnabled_HasNotSeenAiTerms() {
+        when(mPersonalDataManager.isAutofillAmountExtractionAiTermsSeenPrefEnabled())
+                .thenReturn(false);
+
+        mCoordinator
+                .getMediatorForTesting()
+                .showBnplIssuers(List.of(BNPL_ISSUER_CONTEXT_AFFIRM_LINKED));
+
+        assertThat(
+                mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN),
+                is(BNPL_ISSUER_SELECTION_SCREEN));
+
+        Optional<PropertyModel> termsModel =
+                getBnplSelectionProgressTermsModel(mTouchToFillPaymentMethodModel.get(SHEET_ITEMS));
+        assertTrue(termsModel.isPresent());
+
+        // Verify the expecteed terms text.
+        CharSequence termsText = termsModel.get().get(TERMS_TEXT);
+        assertThat(termsText.toString(), is(BNPL_AI_TERMS));
+
+        // Verify the expecteed terms is SpannableString type.
+        assertTrue("Terms text should be a SpannableString", termsText instanceof SpannableString);
+        SpannableString spannable = (SpannableString) termsText;
+        ClickableSpan[] spans = spannable.getSpans(0, spannable.length(), ClickableSpan.class);
+        assertEquals("There should be exactly one clickable span", 1, spans.length);
+        assertExpectedBnplSelectionScreenTermsLink(spans[0]);
+
+        // Verify the bold span for AI terms.
+        StyleSpan[] styleSpans = spannable.getSpans(0, spannable.length(), StyleSpan.class);
+        assertEquals(1, styleSpans.length);
+        StyleSpan boldTextSpan = styleSpans[0];
+        assertTrue(boldTextSpan.getStyle() == Typeface.BOLD);
+        assertEquals(
+                BNPL_AI_TERMS_BOLDED_TEXT,
+                spannable
+                        .toString()
+                        .substring(
+                                spannable.getSpanStart(boldTextSpan),
+                                spannable.getSpanEnd(boldTextSpan)));
+        assertEquals(
+                1,
+                getUserActionCount(
+                        ISSUER_SELECTION_SCREEN_AI_BASED_AMOUNT_EXTRACTION_TERMS_SHOWN_IN_BOLD_FONT));
+    }
+
+    @Test
+    @DisableFeatures({AutofillFeatures.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION})
+    public void testBnplSelectionScreenTerms_AiBasedAmountExtractionDisabled() {
+        mCoordinator
+                .getMediatorForTesting()
+                .showBnplIssuers(List.of(BNPL_ISSUER_CONTEXT_AFFIRM_LINKED));
+
+        assertThat(
+                mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN),
+                is(BNPL_ISSUER_SELECTION_SCREEN));
+
+        Optional<PropertyModel> termsModel =
+                getBnplSelectionProgressTermsModel(mTouchToFillPaymentMethodModel.get(SHEET_ITEMS));
+        assertTrue(termsModel.isPresent());
+
+        // Verify the expecteed terms text.
+        CharSequence termsText = termsModel.get().get(TERMS_TEXT);
+        assertThat(termsText.toString(), is(BNPL_TERMS));
+
+        // Verify the expecteed terms is SpannableString type.
+        assertTrue("Terms text should be a SpannableString", termsText instanceof SpannableString);
+        SpannableString spannable = (SpannableString) termsText;
+        ClickableSpan[] spans = spannable.getSpans(0, spannable.length(), ClickableSpan.class);
+        assertEquals("There should be exactly one clickable span", 1, spans.length);
+        assertExpectedBnplSelectionScreenTermsLink(spans[0]);
+    }
+
+    @Test
+    @EnableFeatures({AutofillFeatures.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION})
+    public void testBnplProgressScreenTerms_AiBasedAmountExtractionEnabled_HasSeenAiTerms() {
+        when(mPersonalDataManager.isAutofillAmountExtractionAiTermsSeenPrefEnabled())
+                .thenReturn(true);
+
+        mCoordinator
+                .getMediatorForTesting()
+                .showBnplIssuers(List.of(BNPL_ISSUER_CONTEXT_AFFIRM_LINKED));
+        mCoordinator.getMediatorForTesting().showProgressScreen();
+
+        assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(PROGRESS_SCREEN));
+
+        Optional<PropertyModel> termsModel =
+                getBnplSelectionProgressTermsModel(mTouchToFillPaymentMethodModel.get(SHEET_ITEMS));
+        assertTrue(termsModel.isPresent());
+
+        // Verify the expecteed terms text.
+        CharSequence termsText = termsModel.get().get(TERMS_TEXT);
+        assertThat(termsText.toString(), is(BNPL_AI_TERMS));
+
+        // Verify the expecteed terms is SpannableString type.
+        assertTrue("Terms text should be a SpannableString", termsText instanceof SpannableString);
+        SpannableString spannable = (SpannableString) termsText;
+        CharacterStyle[] spans = spannable.getSpans(0, spannable.length(), CharacterStyle.class);
+        assertEquals("There should be exactly one character style span", 1, spans.length);
+        assertExpectedBnplProgressScreenTermsLink(spans[0]);
+    }
+
+    @Test
+    @EnableFeatures({AutofillFeatures.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION})
+    public void testBnplProgressScreenTerms_AiBasedAmountExtractionEnabled_HasNotSeenAiTerms() {
+        when(mPersonalDataManager.isAutofillAmountExtractionAiTermsSeenPrefEnabled())
+                .thenReturn(false);
+
+        mCoordinator
+                .getMediatorForTesting()
+                .showBnplIssuers(List.of(BNPL_ISSUER_CONTEXT_AFFIRM_LINKED));
+        mCoordinator.getMediatorForTesting().showProgressScreen();
+
+        assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(PROGRESS_SCREEN));
+
+        Optional<PropertyModel> termsModel =
+                getBnplSelectionProgressTermsModel(mTouchToFillPaymentMethodModel.get(SHEET_ITEMS));
+        assertTrue(termsModel.isPresent());
+
+        // Verify the expecteed terms text.
+        CharSequence termsText = termsModel.get().get(TERMS_TEXT);
+        assertThat(termsText.toString(), is(BNPL_AI_TERMS));
+
+        // Verify the expecteed terms is SpannableString type.
+        assertTrue("Terms text should be a SpannableString", termsText instanceof SpannableString);
+
+        // Verify there are two spans: one for an unclickable link and another for the bolded text.
+        SpannableString spannable = (SpannableString) termsText;
+        CharacterStyle[] spans = spannable.getSpans(0, spannable.length(), CharacterStyle.class);
+        assertEquals("There should be exactly two style spans", 2, spans.length);
+        assertExpectedBnplProgressScreenTermsLink(spans[1]);
+
+        // Verify the bold span for AI terms.
+        StyleSpan[] styleSpans = spannable.getSpans(0, spannable.length(), StyleSpan.class);
+        assertEquals(1, styleSpans.length);
+        StyleSpan boldTextSpan = styleSpans[0];
+        assertTrue(boldTextSpan.getStyle() == Typeface.BOLD);
+        assertEquals(
+                BNPL_AI_TERMS_BOLDED_TEXT,
+                spannable
+                        .toString()
+                        .substring(
+                                spannable.getSpanStart(boldTextSpan),
+                                spannable.getSpanEnd(boldTextSpan)));
+    }
+
+    @Test
+    @DisableFeatures({AutofillFeatures.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION})
+    public void testBnplProgressScreenTerms_AiBasedAmountExtractionDisabled() {
+        mCoordinator.getMediatorForTesting().showProgressScreen();
+
+        assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(PROGRESS_SCREEN));
+
+        Optional<PropertyModel> termsModel =
+                getBnplSelectionProgressTermsModel(mTouchToFillPaymentMethodModel.get(SHEET_ITEMS));
+        assertTrue(termsModel.isPresent());
+
+        // Verify the expecteed terms text.
+        CharSequence termsText = termsModel.get().get(TERMS_TEXT);
+        assertThat(termsText.toString(), is(BNPL_TERMS));
+
+        // Verify the expecteed terms is SpannableString type.
+        assertTrue("Terms text should be a SpannableString", termsText instanceof SpannableString);
+        SpannableString spannable = (SpannableString) termsText;
+        CharacterStyle[] spans = spannable.getSpans(0, spannable.length(), CharacterStyle.class);
+        assertEquals("There should be exactly one character style span", 1, spans.length);
+        assertExpectedBnplProgressScreenTermsLink(spans[0]);
     }
 
     @Test
@@ -1294,9 +1520,17 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
         Optional<PropertyModel> termsModel = getBnplSelectionProgressTermsModel(sheetItems);
         assertTrue(termsModel.isPresent());
 
-        termsModel.get().get(ON_LINK_CLICK_CALLBACK).onResult(null);
+        SpannableString spannableTerms = (SpannableString) termsModel.get().get(TERMS_TEXT);
+        ClickableSpan[] spans =
+                spannableTerms.getSpans(0, spannableTerms.length(), ClickableSpan.class);
+        assertEquals(
+                "There should be exactly one clickable span for the settings link",
+                1,
+                spans.length);
 
-        verify(mDelegateMock).showPaymentMethodSettings();
+        spans[0].onClick(new TextViewWithClickableSpans(mActivity));
+
+        verify(mDelegateMock, times(1)).showPaymentMethodSettings();
     }
 
     @Test
@@ -1309,10 +1543,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 .showBnplIssuers(List.of(BNPL_ISSUER_CONTEXT_AFFIRM_LINKED));
 
         numIssuersShownHistogram.assertExpected();
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION + ISSUER_SELECTION_SCREEN_SHOWN));
+        assertEquals(1, getUserActionCount(ISSUER_SELECTION_SCREEN_SHOWN));
     }
 
     @Test
@@ -1328,17 +1559,14 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                                 BNPL_ISSUER_CONTEXT_KLARNA_LINKED));
 
         numIssuersShownHistogram.assertExpected();
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION + ISSUER_SELECTION_SCREEN_SHOWN));
+        assertEquals(1, getUserActionCount(ISSUER_SELECTION_SCREEN_SHOWN));
     }
 
     @Test
     public void testShowBnplIssuerTwiceRecordsHistogramAndUserAction() {
         // Show the initial payment method selection screen.
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
 
         // Simulate showing the BNPL issuer selection bottom sheet for the first time.
@@ -1372,10 +1600,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 2,
                 RecordHistogram.getHistogramValueCountForTesting(
                         TOUCH_TO_FILL_BNPL_SELECT_ISSUER_NUMBER_OF_ISSUERS_SHOWN, /* sample= */ 1));
-        assertEquals(
-                2,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION + ISSUER_SELECTION_SCREEN_SHOWN));
+        assertEquals(2, getUserActionCount(ISSUER_SELECTION_SCREEN_SHOWN));
     }
 
     @Test
@@ -1393,11 +1618,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
         verify(mDelegateMock)
                 .onBnplIssuerSuggestionSelected(BNPL_ISSUER_CONTEXT_AFFIRM_LINKED.getIssuerId());
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION
-                                + ISSUER_SELECTION_SCREEN_AFFIRM_LINKED_SELECTED));
+        assertEquals(1, getUserActionCount(ISSUER_SELECTION_SCREEN_AFFIRM_LINKED_SELECTED));
     }
 
     @Test
@@ -1415,11 +1636,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
         verify(mDelegateMock)
                 .onBnplIssuerSuggestionSelected(BNPL_ISSUER_CONTEXT_AFFIRM_UNLINKED.getIssuerId());
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION
-                                + ISSUER_SELECTION_SCREEN_AFFIRM_UNLINKED_SELECTED));
+        assertEquals(1, getUserActionCount(ISSUER_SELECTION_SCREEN_AFFIRM_UNLINKED_SELECTED));
     }
 
     @Test
@@ -1437,11 +1654,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
         verify(mDelegateMock)
                 .onBnplIssuerSuggestionSelected(BNPL_ISSUER_CONTEXT_KLARNA_LINKED.getIssuerId());
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION
-                                + ISSUER_SELECTION_SCREEN_KLARNA_LINKED_SELECTED));
+        assertEquals(1, getUserActionCount(ISSUER_SELECTION_SCREEN_KLARNA_LINKED_SELECTED));
     }
 
     @Test
@@ -1459,11 +1672,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
         verify(mDelegateMock)
                 .onBnplIssuerSuggestionSelected(BNPL_ISSUER_CONTEXT_KLARNA_UNLINKED.getIssuerId());
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION
-                                + ISSUER_SELECTION_SCREEN_KLARNA_UNLINKED_SELECTED));
+        assertEquals(1, getUserActionCount(ISSUER_SELECTION_SCREEN_KLARNA_UNLINKED_SELECTED));
     }
 
     @Test
@@ -1481,11 +1690,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
         verify(mDelegateMock)
                 .onBnplIssuerSuggestionSelected(BNPL_ISSUER_CONTEXT_ZIP_LINKED.getIssuerId());
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION
-                                + ISSUER_SELECTION_SCREEN_ZIP_LINKED_SELECTED));
+        assertEquals(1, getUserActionCount(ISSUER_SELECTION_SCREEN_ZIP_LINKED_SELECTED));
     }
 
     @Test
@@ -1503,11 +1708,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
         verify(mDelegateMock)
                 .onBnplIssuerSuggestionSelected(BNPL_ISSUER_CONTEXT_ZIP_UNLINKED.getIssuerId());
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION
-                                + ISSUER_SELECTION_SCREEN_ZIP_UNLINKED_SELECTED));
+        assertEquals(1, getUserActionCount(ISSUER_SELECTION_SCREEN_ZIP_UNLINKED_SELECTED));
     }
 
     @Test
@@ -1529,7 +1730,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     @Test
     public void testBackButtonSelectedOnIssuerSelectionScreenRecordsUserAction() {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
         mCoordinator
                 .getMediatorForTesting()
@@ -1548,18 +1749,13 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 .run();
 
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION
-                                + ISSUER_SELECTION_SCREEN_BACK_BUTTON_SELECTED));
+        assertEquals(1, getUserActionCount(ISSUER_SELECTION_SCREEN_BACK_BUTTON_SELECTED));
     }
 
     @Test
     public void testSettingsLinkSelectedOnIssuerSelectionScreenRecordsUserAction() {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION),
-                /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION), new TouchToFillDisplayOptions());
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
         mCoordinator
                 .getMediatorForTesting()
@@ -1572,21 +1768,24 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
         Optional<PropertyModel> termsModel = getBnplSelectionProgressTermsModel(sheetItems);
         assertTrue(termsModel.isPresent());
 
-        termsModel.get().get(ON_LINK_CLICK_CALLBACK).onResult(null);
-
-        verify(mDelegateMock).showPaymentMethodSettings();
+        SpannableString spannableTerms = (SpannableString) termsModel.get().get(TERMS_TEXT);
+        ClickableSpan[] spans =
+                spannableTerms.getSpans(0, spannableTerms.length(), ClickableSpan.class);
         assertEquals(
+                "There should be exactly one clickable span for the settings link",
                 1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION
-                                + ISSUER_SELECTION_SCREEN_SETTINGS_LINK_SELECTED));
+                spans.length);
+
+        spans[0].onClick(new TextViewWithClickableSpans(mActivity));
+
+        verify(mDelegateMock, times(1)).showPaymentMethodSettings();
+        assertEquals(1, getUserActionCount(ISSUER_SELECTION_SCREEN_SETTINGS_LINK_SELECTED));
     }
 
     @Test
     public void testDismissBnplIssuerScreenRecordsUserAction() {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION),
-                /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION), new TouchToFillDisplayOptions());
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
         mCoordinator
                 .getMediatorForTesting()
@@ -1597,17 +1796,14 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
         mTouchToFillPaymentMethodModel.get(DISMISS_HANDLER).onResult(StateChangeReason.SWIPE);
 
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION + ISSUER_SELECTION_SCREEN_DISMISSED));
+        assertEquals(1, getUserActionCount(ISSUER_SELECTION_SCREEN_DISMISSED));
     }
 
     @Test
     public void testOnPurchaseAmountExtractedWithUnSupportedAmountOnHomeScreen()
             throws TimeoutException {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
         PropertyModel bnplSuggestionModel =
                 mCoordinator.getMediatorForTesting().getBnplSuggestionModelForTesting();
@@ -1638,7 +1834,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     public void testOnPurchaseAmountExtractedWithInvalidAmountOnHomeScreen()
             throws TimeoutException {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
         PropertyModel bnplSuggestionModel =
                 mCoordinator.getMediatorForTesting().getBnplSuggestionModelForTesting();
@@ -1669,7 +1865,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     public void testOnPurchaseAmountExtractedWithValidAmountOnHomeScreen() throws TimeoutException {
         long extractedAmount = 100L;
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
         PropertyModel bnplSuggestionModel =
                 mCoordinator.getMediatorForTesting().getBnplSuggestionModelForTesting();
@@ -1695,7 +1891,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
             throws TimeoutException {
         long extractedAmount = 100L;
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
         PropertyModel bnplSuggestionModel =
                 mCoordinator.getMediatorForTesting().getBnplSuggestionModelForTesting();
         assertNotNull(bnplSuggestionModel);
@@ -1729,7 +1925,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
             throws TimeoutException {
         long extractedAmount = 5L;
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
         assertNull(BNPL_SUGGESTION.getPaymentsPayload().getExtractedAmount());
         mCoordinator.getMediatorForTesting().showProgressScreen();
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(PROGRESS_SCREEN));
@@ -1755,7 +1951,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     public void testOnPurchaseAmountExtractedWithInvalidAmountOnProgressScreen()
             throws TimeoutException {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
         assertNull(BNPL_SUGGESTION.getPaymentsPayload().getExtractedAmount());
         mCoordinator.getMediatorForTesting().showProgressScreen();
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(PROGRESS_SCREEN));
@@ -1781,8 +1977,9 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
     @Test
     public void testIssuerSelectionBackButtonEnablesBnplChipOnHomeForEligibleIssuers() {
+        when(mPersonalDataManager.isBuyNowPayLaterEnabled()).thenReturn(true);
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
         PropertyModel bnplSuggestionModel =
                 mCoordinator.getMediatorForTesting().getBnplSuggestionModelForTesting();
         assertNotNull(bnplSuggestionModel);
@@ -1820,9 +2017,77 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     }
 
     @Test
+    public void testOnImageFetchedRefreshesHomeScreen() {
+        mCoordinator.showPaymentMethods(
+                List.of(VISA_SUGGESTION_WITH_ART), new TouchToFillDisplayOptions());
+        assertThat(mTouchToFillPaymentMethodModel.get(VISIBLE), is(true));
+        assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
+
+        ModelList sheetItems = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
+        assertThat(getModelsOfType(sheetItems, CREDIT_CARD).size(), is(1));
+        PropertyModel cardModel =
+                getCardSuggestionModel(sheetItems, VISA_SUGGESTION_WITH_ART).get();
+        Drawable oldIcon = cardModel.get(CARD_IMAGE);
+
+        // Simulate an image being fetched and available in cache.
+        when(mImageFetcher.getImageIfAvailable(any(), any()))
+                .thenReturn(Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888));
+        mCoordinator.getMediatorForTesting().onImageFetched(VISA_ART_URL);
+
+        // Verify that the icon has been updated (new drawable set).
+        Drawable newIcon = cardModel.get(CARD_IMAGE);
+        assertTrue(oldIcon != newIcon);
+
+        // The model itself should be the same (surgical update).
+        assertThat(
+                getCardSuggestionModel(sheetItems, VISA_SUGGESTION_WITH_ART).get(), is(cardModel));
+    }
+
+    @Test
+    public void testOnImageFetchedRefreshesLoyaltyCards() {
+        mCoordinator.showAffiliatedLoyaltyCards(
+                List.of(LOYALTY_CARD_2), List.of(LOYALTY_CARD_2), false);
+        assertThat(mTouchToFillPaymentMethodModel.get(VISIBLE), is(true));
+        assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
+
+        ModelList sheetItems = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
+        PropertyModel loyaltyCardModel = getModelsOfType(sheetItems, ItemType.LOYALTY_CARD).get(0);
+        Drawable oldIcon = loyaltyCardModel.get(LOYALTY_CARD_ICON);
+
+        // Simulate an image being fetched.
+        mCoordinator.getMediatorForTesting().onImageFetched(LOYALTY_CARD_2.getProgramLogo());
+
+        // Verify that the icon has been updated.
+        Drawable newIcon = loyaltyCardModel.get(LOYALTY_CARD_ICON);
+        assertTrue(oldIcon != newIcon);
+    }
+
+    @Test
+    public void testOnImageFetchedDoesNotRefreshWhenNotOnHomeScreen() {
+        mCoordinator.showPaymentMethods(
+                List.of(VISA_SUGGESTION_WITH_ART), new TouchToFillDisplayOptions());
+        assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
+
+        // Switch to BNPL progress screen.
+        mCoordinator.getMediatorForTesting().showProgressScreen();
+        assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(PROGRESS_SCREEN));
+
+        ModelList sheetItems = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
+        PropertyModel progressIconModel = getModelsOfType(sheetItems, PROGRESS_ICON).get(0);
+
+        // Simulate an image being fetched.
+        mCoordinator.getMediatorForTesting().onImageFetched(VISA_ART_URL);
+
+        // Verify that the sheet items have NOT been updated (still progress screen).
+        assertThat(
+                mTouchToFillPaymentMethodModel.get(SHEET_ITEMS).get(1).model,
+                is(progressIconModel));
+    }
+
+    @Test
     public void testIssuerSelectionBackButtonDisablesBnplChipOnHomeForNonEligibleIssuers() {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
         PropertyModel bnplSuggestionModel =
                 mCoordinator.getMediatorForTesting().getBnplSuggestionModelForTesting();
         assertNotNull(bnplSuggestionModel);
@@ -1863,6 +2128,45 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     }
 
     @Test
+    public void
+            testIssuerSelectionBackButtonDisablesBnplChipOnHomeWhenBnplFeatureDisabledInSettings() {
+        when(mPersonalDataManager.isBuyNowPayLaterEnabled()).thenReturn(true);
+        mCoordinator.showPaymentMethods(
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
+        assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
+
+        mCoordinator
+                .getMediatorForTesting()
+                .showBnplIssuers(List.of(BNPL_ISSUER_CONTEXT_AFFIRM_LINKED));
+        assertThat(
+                mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN),
+                is(BNPL_ISSUER_SELECTION_SCREEN));
+
+        // Verify that the BNPL suggestion is enabled on the home screen.
+        PropertyModel bnplSuggestionModel =
+                mCoordinator.getMediatorForTesting().getBnplSuggestionModelForTesting();
+        assertTrue(bnplSuggestionModel.get(IS_ENABLED));
+
+        // Disable the BNPL feature.
+        when(mPersonalDataManager.isBuyNowPayLaterEnabled()).thenReturn(false);
+        mCoordinator.getMediatorForTesting().updateBnplSuggestionOnPrefChange();
+
+        // Find the back button in the BNPL screen header and invoke it.
+        ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
+        assertThat(itemList.get(0).type, is(BNPL_SELECTION_PROGRESS_HEADER));
+        PropertyModel bnplSelectionProgressHeaderModel = itemList.get(0).model;
+        bnplSelectionProgressHeaderModel
+                .get(
+                        TouchToFillPaymentMethodProperties.BnplSelectionProgressHeaderProperties
+                                .BNPL_ON_BACK_BUTTON_CLICKED)
+                .run();
+        assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
+
+        // Verify that the BNPL suggestion is now disabled on the home screen.
+        assertFalse(bnplSuggestionModel.get(IS_ENABLED));
+    }
+
+    @Test
     public void testShowBnplIssuerTos() throws TimeoutException {
         mCoordinator.showBnplIssuerTos(BNPL_ISSUER_TOS_DETAIL_AFFIRM);
 
@@ -1875,27 +2179,20 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 R.string.autofill_bnpl_issuer_tos_bottom_sheet_half_height,
                 R.string.autofill_bnpl_issuer_tos_bottom_sheet_full_height,
                 R.string.autofill_bnpl_issuer_tos_bottom_sheet_closed,
-                org.chromium.chrome.browser.touch_to_fill.payments.R.id
-                        .touch_to_fill_bnpl_issuer_tos_screen);
+                R.id.touch_to_fill_bnpl_issuer_tos_screen);
 
-        List<PropertyModel> headerModel = getModelsOfType(itemList, HEADER);
+        List<PropertyModel> headerModel = getModelsOfType(itemList, TOS_HEADER);
         assertThat(headerModel.size(), is(1));
         assertThat(
-                headerModel.get(0).get(TITLE_STRING),
+                headerModel.get(0).get(ISSUER_TITLE_STRING),
                 is(
                         mActivity.getString(
                                 R.string.autofill_bnpl_tos_unlinked_title,
                                 BNPL_ISSUER_TOS_DETAIL_AFFIRM.getIssuerName())));
-        assertThat(headerModel.get(0).get(IMAGE_DRAWABLE_ID), is(R.drawable.bnpl_icon_generic));
+        assertThat(headerModel.get(0).get(ISSUER_IMAGE_DRAWABLE_ID), is(R.drawable.google_pay));
 
         List<PropertyModel> bnplTosItemModel = getModelsOfType(itemList, BNPL_TOS_TEXT);
         assertThat(bnplTosItemModel.size(), is(3));
-        assertThat(
-                bnplTosItemModel.get(0).get(DESCRIPTION_TEXT),
-                is(
-                        mActivity.getString(
-                                R.string.autofill_bnpl_tos_review_text,
-                                BNPL_ISSUER_TOS_DETAIL_AFFIRM.getIssuerName())));
         assertThat(bnplTosItemModel.get(0).get(BNPL_TOS_ICON_ID), is(R.drawable.checklist));
         assertThat(
                 bnplTosItemModel.get(1).get(DESCRIPTION_TEXT),
@@ -1922,14 +2219,56 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     }
 
     @Test
+    // Move the asserts in this test back to testShowBnplIssuerTos() when the flag is cleaned up.
+    @EnableFeatures({AutofillFeatures.AUTOFILL_ENABLE_WALLET_BRANDING})
+    public void testShowBnplIssuerTos_WalletBrandingEnabled() {
+        mCoordinator.showBnplIssuerTos(BNPL_ISSUER_TOS_DETAIL_AFFIRM);
+
+        assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(BNPL_ISSUER_TOS_SCREEN));
+        ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
+
+        List<PropertyModel> bnplTosHeaderModel = getModelsOfType(itemList, TOS_HEADER);
+        assertThat(
+                bnplTosHeaderModel.get(0).get(ICON_CONTENT_DESCRIPTION_ID),
+                is(R.string.autofill_bnpl_affirm));
+
+        List<PropertyModel> bnplTosItemModel = getModelsOfType(itemList, BNPL_TOS_TEXT);
+        assertThat(
+                bnplTosItemModel.get(0).get(DESCRIPTION_TEXT),
+                is(
+                        mActivity.getString(
+                                R.string.autofill_bnpl_tos_review_text_wallet_branding,
+                                BNPL_ISSUER_TOS_DETAIL_AFFIRM.getIssuerName())));
+    }
+
+    @Test
+    @DisableFeatures({AutofillFeatures.AUTOFILL_ENABLE_WALLET_BRANDING})
+    public void testShowBnplIssuerTos_WalletBrandingDisabled() {
+        mCoordinator.showBnplIssuerTos(BNPL_ISSUER_TOS_DETAIL_AFFIRM);
+
+        assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(BNPL_ISSUER_TOS_SCREEN));
+        ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
+
+        List<PropertyModel> bnplTosHeaderModel = getModelsOfType(itemList, TOS_HEADER);
+        assertThat(
+                bnplTosHeaderModel.get(0).get(ICON_CONTENT_DESCRIPTION_ID),
+                is(R.string.autofill_google_pay_and_affirm_logo_accessible_name));
+
+        List<PropertyModel> bnplTosItemModel = getModelsOfType(itemList, BNPL_TOS_TEXT);
+        assertThat(
+                bnplTosItemModel.get(0).get(DESCRIPTION_TEXT),
+                is(
+                        mActivity.getString(
+                                R.string.autofill_bnpl_tos_review_text,
+                                BNPL_ISSUER_TOS_DETAIL_AFFIRM.getIssuerName())));
+    }
+
+    @Test
     public void testAffirmBnplTosShownLogged() throws TimeoutException {
         mCoordinator.showBnplIssuerTos(BNPL_ISSUER_TOS_DETAIL_AFFIRM);
 
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(BNPL_ISSUER_TOS_SCREEN));
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION + AFFIRM_TOS_SCREEN + SCREEN_SHOWN));
+        assertEquals(1, getUserActionCount(AFFIRM_TOS_SCREEN + SCREEN_SHOWN));
     }
 
     @Test
@@ -1937,10 +2276,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
         mCoordinator.showBnplIssuerTos(BNPL_ISSUER_TOS_DETAIL_KLARNA);
 
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(BNPL_ISSUER_TOS_SCREEN));
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION + KLARNA_TOS_SCREEN + SCREEN_SHOWN));
+        assertEquals(1, getUserActionCount(KLARNA_TOS_SCREEN + SCREEN_SHOWN));
     }
 
     @Test
@@ -1948,10 +2284,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
         mCoordinator.showBnplIssuerTos(BNPL_ISSUER_TOS_DETAIL_ZIP);
 
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(BNPL_ISSUER_TOS_SCREEN));
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION + ZIP_TOS_SCREEN + SCREEN_SHOWN));
+        assertEquals(1, getUserActionCount(ZIP_TOS_SCREEN + SCREEN_SHOWN));
     }
 
     @Test
@@ -1987,17 +2320,13 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 .run();
 
         verify(mDelegateMock).onBnplTosAccepted();
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION + AFFIRM_TOS_SCREEN + SCREEN_ACCEPTED));
+        assertEquals(1, getUserActionCount(AFFIRM_TOS_SCREEN + SCREEN_ACCEPTED));
     }
 
     @Test
     public void testBnplTosScreenDismissedHistogram() {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION),
-                /* shouldShowScanCreditCard= */ true);
+                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION), new TouchToFillDisplayOptions());
         mCoordinator.showBnplIssuers(List.of(BNPL_ISSUER_CONTEXT_AFFIRM_LINKED));
         mCoordinator.showBnplIssuerTos(BNPL_ISSUER_TOS_DETAIL_ZIP);
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
@@ -2006,10 +2335,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 .get(ON_CLICK_ACTION)
                 .run();
 
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION + ZIP_TOS_SCREEN + SCREEN_DISMISSED));
+        assertEquals(1, getUserActionCount(ZIP_TOS_SCREEN + SCREEN_DISMISSED));
     }
 
     @Test
@@ -2023,10 +2349,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
         linkText.getSpans(0, linkText.length(), ClickableSpan.class)[0].onClick(
                 new TextViewWithClickableSpans(mActivity));
 
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION + KLARNA_TOS_SCREEN + WALLET_LINK_CLICKED));
+        assertEquals(1, getUserActionCount(KLARNA_TOS_SCREEN + WALLET_LINK_CLICKED));
     }
 
     @Test
@@ -2038,12 +2361,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 .get(LINK_OPENER)
                 .accept("http://www.test.com");
 
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION
-                                + AFFIRM_TOS_SCREEN
-                                + LEGAL_MESSAGE_LINK_CLICKED));
+        assertEquals(1, getUserActionCount(AFFIRM_TOS_SCREEN + LEGAL_MESSAGE_LINK_CLICKED));
     }
 
     @Test
@@ -2061,7 +2379,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 R.string.autofill_bnpl_error_sheet_half_height,
                 R.string.autofill_bnpl_error_sheet_full_height,
                 R.string.autofill_bnpl_error_sheet_closed,
-                org.chromium.chrome.browser.touch_to_fill.payments.R.id.touch_to_fill_error_screen);
+                R.id.touch_to_fill_error_screen);
 
         ModelList sheetItems = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
         assertThat(sheetItems.size(), is(3));
@@ -2085,8 +2403,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     @Test
     public void testDismissErrorScreenRecordsUserActions() {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION),
-                /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION), new TouchToFillDisplayOptions());
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
         mCoordinator
                 .getMediatorForTesting()
@@ -2095,13 +2412,8 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
         mTouchToFillPaymentMethodModel.get(DISMISS_HANDLER).onResult(StateChangeReason.SWIPE);
 
-        assertEquals(
-                1,
-                mActionTester.getActionCount(TOUCH_TO_FILL_BNPL_USER_ACTION + ERROR_SCREEN_SHOWN));
-        assertEquals(
-                1,
-                mActionTester.getActionCount(
-                        TOUCH_TO_FILL_BNPL_USER_ACTION + ERROR_SCREEN_DISMISSED));
+        assertEquals(1, getUserActionCount(ERROR_SCREEN_SHOWN));
+        assertEquals(1, getUserActionCount(ERROR_SCREEN_DISMISSED));
     }
 
     @Test
@@ -2125,7 +2437,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     @Test
     public void testBenefitsTermsLabel_ShownWhenCardHasBenefits() {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION_WITH_CARD_BENEFITS), /* shouldShowScanCreditCard= */ true);
+                List.of(VISA_SUGGESTION_WITH_CARD_BENEFITS), new TouchToFillDisplayOptions());
 
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
 
@@ -2135,8 +2447,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
     @Test
     public void testBenefitsTermsLabel_HiddenWhenCardHasNoBenefits() {
-        mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION), /* shouldShowScanCreditCard= */ true);
+        mCoordinator.showPaymentMethods(List.of(VISA_SUGGESTION), new TouchToFillDisplayOptions());
 
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
         assertEquals(0, getModelsOfType(itemList, TERMS_LABEL).size());
@@ -2146,7 +2457,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     public void testScanNewCardIsShownForCreditCards() {
         mCoordinator.showPaymentMethods(
                 List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION),
-                /* shouldShowScanCreditCard= */ true);
+                new TouchToFillDisplayOptions().showScanCreditCard(true));
         int lastItemPos = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS).size() - 1;
         mTouchToFillPaymentMethodModel
                 .get(SHEET_ITEMS)
@@ -2165,8 +2476,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     @Test
     public void testShowPaymentMethodSettingsForCreditCards() {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION),
-                /* shouldShowScanCreditCard= */ true);
+                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION), new TouchToFillDisplayOptions());
         int lastItemPos = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS).size() - 1;
         mTouchToFillPaymentMethodModel
                 .get(SHEET_ITEMS)
@@ -2184,8 +2494,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
     @Test
     public void testNoCallbackForCreditCardSuggestionOnSelectingItemBeforeInputTime() {
-        mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+        mCoordinator.showPaymentMethods(List.of(VISA_SUGGESTION), new TouchToFillDisplayOptions());
         assertThat(mTouchToFillPaymentMethodModel.get(VISIBLE), is(true));
 
         Optional<PropertyModel> cardSuggestionModel =
@@ -2209,8 +2518,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
     @Test
     public void testCallsCallbackForCreditCardSuggestionOnSelectingItem() {
-        mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+        mCoordinator.showPaymentMethods(List.of(VISA_SUGGESTION), new TouchToFillDisplayOptions());
         assertThat(mTouchToFillPaymentMethodModel.get(VISIBLE), is(true));
 
         Optional<PropertyModel> cardSuggestionModel =
@@ -2234,7 +2542,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     @Test
     public void testCallsCallbackForVirtualCardSuggestionOnSelectingItem() {
         mCoordinator.showPaymentMethods(
-                List.of(ACCEPTABLE_VIRTUAL_CARD_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+                List.of(ACCEPTABLE_VIRTUAL_CARD_SUGGESTION), new TouchToFillDisplayOptions());
         assertThat(mTouchToFillPaymentMethodModel.get(VISIBLE), is(true));
 
         Optional<PropertyModel> cardSuggestionModel =
@@ -2259,8 +2567,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
     @Test
     public void testShowsContinueButtonWhenOneCreditCard() {
-        mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION), /* shouldShowScanCreditCard= */ true);
+        mCoordinator.showPaymentMethods(List.of(VISA_SUGGESTION), new TouchToFillDisplayOptions());
 
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
         assertEquals(1, getModelsOfType(itemList, FILL_BUTTON).size());
@@ -2269,8 +2576,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     @Test
     public void testNoContinueButtonWhenManyCreditCards() {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION),
-                /* shouldShowScanCreditCard= */ true);
+                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION), new TouchToFillDisplayOptions());
 
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
         assertEquals(0, getModelsOfType(itemList, FILL_BUTTON).size());
@@ -2278,8 +2584,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
     @Test
     public void testDismissPaymentMethodsScreenCallsDelegate() {
-        mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+        mCoordinator.showPaymentMethods(List.of(VISA_SUGGESTION), new TouchToFillDisplayOptions());
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
 
         mTouchToFillPaymentMethodModel.get(DISMISS_HANDLER).onResult(StateChangeReason.NONE);
@@ -2289,8 +2594,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
     @Test
     public void testDismissPaymentMethodsScreenCallsDelegate_DismissedByUser() {
-        mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+        mCoordinator.showPaymentMethods(List.of(VISA_SUGGESTION), new TouchToFillDisplayOptions());
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
 
         mTouchToFillPaymentMethodModel.get(DISMISS_HANDLER).onResult(StateChangeReason.SWIPE);
@@ -2301,7 +2605,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     @Test
     public void testDismissPaymentMethodsScreenAfterBackButtonPressCallsDelegate_DismissedByUser() {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
 
         mCoordinator
@@ -2458,8 +2762,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     @Test
     public void testDismissWithSwipeForCreditCard() {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION),
-                /* shouldShowScanCreditCard= */ true);
+                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION), new TouchToFillDisplayOptions());
 
         mTouchToFillPaymentMethodModel.get(DISMISS_HANDLER).onResult(StateChangeReason.SWIPE);
         assertEquals(
@@ -2476,8 +2779,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                         TOUCH_TO_FILL_CREDIT_CARD_OUTCOME_HISTOGRAM,
                         TouchToFillCreditCardOutcome.DISMISS);
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION),
-                /* shouldShowScanCreditCard= */ true);
+                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION), new TouchToFillDisplayOptions());
 
         mTouchToFillPaymentMethodModel.get(DISMISS_HANDLER).onResult(StateChangeReason.TAP_SCRIM);
 
@@ -2488,7 +2790,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     public void testScanNewCardClick() {
         mCoordinator.showPaymentMethods(
                 List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION),
-                /* shouldShowScanCreditCard= */ true);
+                new TouchToFillDisplayOptions().showScanCreditCard(true));
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
         getModelsOfType(itemList, FOOTER).get(0).get(SCAN_CREDIT_CARD_CALLBACK).run();
 
@@ -2498,8 +2800,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     @Test
     public void testManagePaymentMethodsClickForCreditCard() {
         mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION),
-                /* shouldShowScanCreditCard= */ false);
+                List.of(VISA_SUGGESTION, MASTERCARD_SUGGESTION), new TouchToFillDisplayOptions());
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
         assertThat(getModelsOfType(itemList, FOOTER).size(), is(1));
         assertThat(
@@ -2512,8 +2813,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
     @Test
     public void testContinueButtonClickForCreditCard() {
-        mCoordinator.showPaymentMethods(
-                List.of(VISA_SUGGESTION), /* shouldShowScanCreditCard= */ false);
+        mCoordinator.showPaymentMethods(List.of(VISA_SUGGESTION), new TouchToFillDisplayOptions());
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
         mClock.advanceCurrentTimeMillis(InputProtector.POTENTIALLY_UNINTENDED_INPUT_THRESHOLD);
         getModelsOfType(itemList, FILL_BUTTON).get(0).get(ON_CLICK_ACTION).run();
@@ -2523,8 +2823,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     @Test
     public void testCardSuggestionModelForNicknamedCardContainsANetworkName() {
         mCoordinator.showPaymentMethods(
-                List.of(NICKNAMED_VISA_SUGGESTION), /* shouldShowScanCreditCard= */ false);
-
+                List.of(NICKNAMED_VISA_SUGGESTION), new TouchToFillDisplayOptions());
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
 
         Optional<PropertyModel> cardSuggestionModel =
@@ -2689,7 +2988,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
     @Test
     public void testShowOneLoyaltyCardFirstTime() throws TimeoutException {
-        mCoordinator.showLoyaltyCards(
+        mCoordinator.showAffiliatedLoyaltyCards(
                 List.of(LOYALTY_CARD_1), List.of(LOYALTY_CARD_1), /* firstTimeUsage= */ true);
 
         assertModelHasCorrectAccessibilityStringIds(
@@ -2713,12 +3012,14 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 headerModel.get(SUBTITLE_ID),
                 is(R.string.autofill_loyalty_card_first_time_usage_bottom_sheet_subtitle));
 
-        assertThat(getModelsOfType(itemList, LOYALTY_CARD).size(), is(1));
+        assertThat(getModelsOfType(itemList, ItemType.LOYALTY_CARD).size(), is(1));
         PropertyModel loyaltyCardModel = itemList.get(1).model;
         assertThat(
-                loyaltyCardModel.get(LOYALTY_CARD_NUMBER),
+                loyaltyCardModel.get(LOYALTY_CARD).getLoyaltyCardNumber(),
                 is(LOYALTY_CARD_1.getLoyaltyCardNumber()));
-        assertThat(loyaltyCardModel.get(MERCHANT_NAME), is(LOYALTY_CARD_1.getMerchantName()));
+        assertThat(
+                loyaltyCardModel.get(LOYALTY_CARD).getMerchantName(),
+                is(LOYALTY_CARD_1.getMerchantName()));
 
         assertThat(getModelsOfType(itemList, ALL_LOYALTY_CARDS).size(), is(0));
 
@@ -2738,7 +3039,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 HistogramWatcher.newSingleRecordWatcher(
                         TOUCH_TO_FILL_LOYALTY_CARD_OUTCOME_HISTOGRAM,
                         TouchToFillLoyaltyCardOutcome.WALLET_SETTINGS);
-        mCoordinator.showLoyaltyCards(
+        mCoordinator.showAffiliatedLoyaltyCards(
                 List.of(LOYALTY_CARD_1), List.of(LOYALTY_CARD_1), /* firstTimeUsage= */ true);
 
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
@@ -2757,8 +3058,11 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 HistogramWatcher.newBuilder()
                         .expectIntRecord(TOUCH_TO_FILL_NUMBER_OF_AFFILIATED_LOYALTY_CARDS_SHOWN, 1)
                         .expectIntRecord(TOUCH_TO_FILL_NUMBER_OF_LOYALTY_CARDS_SHOWN, 2)
+                        .expectIntRecord(
+                                TOUCH_TO_FILL_LOYALTY_CARD_SOURCE_HISTOGRAM,
+                                TouchToFillLoyaltyCardSource.FIELD_WITH_AFFILIATED_LOYALTY_CARDS)
                         .build();
-        mCoordinator.showLoyaltyCards(
+        mCoordinator.showAffiliatedLoyaltyCards(
                 List.of(LOYALTY_CARD_1),
                 List.of(LOYALTY_CARD_1, LOYALTY_CARD_2),
                 /* firstTimeUsage= */ false);
@@ -2774,12 +3078,14 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
         assertThat(
                 headerModel.get(TITLE_ID), is(R.string.autofill_loyalty_card_bottom_sheet_title));
 
-        assertThat(getModelsOfType(itemList, LOYALTY_CARD).size(), is(1));
+        assertThat(getModelsOfType(itemList, ItemType.LOYALTY_CARD).size(), is(1));
         PropertyModel loyaltyCardModel = itemList.get(1).model;
         assertThat(
-                loyaltyCardModel.get(LOYALTY_CARD_NUMBER),
+                loyaltyCardModel.get(LOYALTY_CARD).getLoyaltyCardNumber(),
                 is(LOYALTY_CARD_1.getLoyaltyCardNumber()));
-        assertThat(loyaltyCardModel.get(MERCHANT_NAME), is(LOYALTY_CARD_1.getMerchantName()));
+        assertThat(
+                loyaltyCardModel.get(LOYALTY_CARD).getMerchantName(),
+                is(LOYALTY_CARD_1.getMerchantName()));
 
         assertThat(getModelsOfType(itemList, ALL_LOYALTY_CARDS).size(), is(1));
         assertThat(getModelsOfType(itemList, FILL_BUTTON).size(), is(1));
@@ -2794,7 +3100,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                         .expectIntRecord(TOUCH_TO_FILL_NUMBER_OF_LOYALTY_CARDS_SHOWN, 2)
                         .expectIntRecord(TOUCH_TO_FILL_NUMBER_OF_AFFILIATED_LOYALTY_CARDS_SHOWN, 2)
                         .build();
-        mCoordinator.showLoyaltyCards(
+        mCoordinator.showAffiliatedLoyaltyCards(
                 List.of(LOYALTY_CARD_1, LOYALTY_CARD_2),
                 List.of(LOYALTY_CARD_1, LOYALTY_CARD_2),
                 /* firstTimeUsage= */ false);
@@ -2809,18 +3115,21 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
         assertThat(
                 headerModel.get(TITLE_ID), is(R.string.autofill_loyalty_card_bottom_sheet_title));
 
-        assertThat(getModelsOfType(itemList, LOYALTY_CARD).size(), is(2));
+        assertThat(getModelsOfType(itemList, ItemType.LOYALTY_CARD).size(), is(2));
         PropertyModel loyaltyCardModel1 = itemList.get(1).model;
         assertThat(
-                loyaltyCardModel1.get(LOYALTY_CARD_NUMBER),
+                loyaltyCardModel1.get(LOYALTY_CARD).getLoyaltyCardNumber(),
                 is(LOYALTY_CARD_1.getLoyaltyCardNumber()));
-        assertThat(loyaltyCardModel1.get(MERCHANT_NAME), is(LOYALTY_CARD_1.getMerchantName()));
-
+        assertThat(
+                loyaltyCardModel1.get(LOYALTY_CARD).getMerchantName(),
+                is(LOYALTY_CARD_1.getMerchantName()));
         PropertyModel loyaltyCardModel2 = itemList.get(2).model;
         assertThat(
-                loyaltyCardModel2.get(LOYALTY_CARD_NUMBER),
+                loyaltyCardModel2.get(LOYALTY_CARD).getLoyaltyCardNumber(),
                 is(LOYALTY_CARD_2.getLoyaltyCardNumber()));
-        assertThat(loyaltyCardModel2.get(MERCHANT_NAME), is(LOYALTY_CARD_2.getMerchantName()));
+        assertThat(
+                loyaltyCardModel2.get(LOYALTY_CARD).getMerchantName(),
+                is(LOYALTY_CARD_2.getMerchantName()));
 
         assertThat(getModelsOfType(itemList, ALL_LOYALTY_CARDS).size(), is(1));
         assertThat(getModelsOfType(itemList, FILL_BUTTON).size(), is(0));
@@ -2829,8 +3138,8 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     }
 
     @Test
-    public void testShowAllLoyaltyCards() throws TimeoutException {
-        mCoordinator.showLoyaltyCards(
+    public void testShowAllLoyaltyCardsSubpage() throws TimeoutException {
+        mCoordinator.showAffiliatedLoyaltyCards(
                 List.of(LOYALTY_CARD_1),
                 List.of(LOYALTY_CARD_1, LOYALTY_CARD_2),
                 /* firstTimeUsage= */ false);
@@ -2846,24 +3155,25 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(ALL_LOYALTY_CARDS_SCREEN));
         assertThat(
                 mTouchToFillPaymentMethodModel.get(FOCUSED_VIEW_ID_FOR_ACCESSIBILITY),
-                is(
-                        org.chromium.chrome.browser.touch_to_fill.payments.R.id
-                                .all_loyalty_cards_back_image_button));
+                is(R.id.all_loyalty_cards_back_image_button));
         itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
         assertThat(itemList.size(), is(2));
 
-        assertThat(getModelsOfType(itemList, LOYALTY_CARD).size(), is(2));
+        assertThat(getModelsOfType(itemList, ItemType.LOYALTY_CARD).size(), is(2));
         PropertyModel loyaltyCardModel1 = itemList.get(0).model;
         assertThat(
-                loyaltyCardModel1.get(LOYALTY_CARD_NUMBER),
+                loyaltyCardModel1.get(LOYALTY_CARD).getLoyaltyCardNumber(),
                 is(LOYALTY_CARD_1.getLoyaltyCardNumber()));
-        assertThat(loyaltyCardModel1.get(MERCHANT_NAME), is(LOYALTY_CARD_1.getMerchantName()));
-
+        assertThat(
+                loyaltyCardModel1.get(LOYALTY_CARD).getMerchantName(),
+                is(LOYALTY_CARD_1.getMerchantName()));
         PropertyModel loyaltyCardModel2 = itemList.get(1).model;
         assertThat(
-                loyaltyCardModel2.get(LOYALTY_CARD_NUMBER),
+                loyaltyCardModel2.get(LOYALTY_CARD).getLoyaltyCardNumber(),
                 is(LOYALTY_CARD_2.getLoyaltyCardNumber()));
-        assertThat(loyaltyCardModel2.get(MERCHANT_NAME), is(LOYALTY_CARD_2.getMerchantName()));
+        assertThat(
+                loyaltyCardModel2.get(LOYALTY_CARD).getMerchantName(),
+                is(LOYALTY_CARD_2.getMerchantName()));
 
         mClock.advanceCurrentTimeMillis(InputProtector.POTENTIALLY_UNINTENDED_INPUT_THRESHOLD);
         loyaltyCardModel1.get(ON_LOYALTY_CARD_CLICK_ACTION).run();
@@ -2871,8 +3181,57 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     }
 
     @Test
+    public void testShowAllLoyaltyCards() throws TimeoutException {
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(TOUCH_TO_FILL_NUMBER_OF_LOYALTY_CARDS_SHOWN, 2)
+                        .expectIntRecord(
+                                TOUCH_TO_FILL_LOYALTY_CARD_SOURCE_HISTOGRAM,
+                                TouchToFillLoyaltyCardSource.KA_ALL_YOUR_LOYALTY_CARDS)
+                        .expectIntRecord(
+                                TOUCH_TO_FILL_LOYALTY_CARD_OUTCOME_HISTOGRAM,
+                                TouchToFillLoyaltyCardOutcome.NON_AFFILIATED_LOYALTY_CARD)
+                        .build();
+        mCoordinator.showAllLoyaltyCards(List.of(LOYALTY_CARD_1, LOYALTY_CARD_2));
+        assertThat(
+                mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(ALL_LOYALTY_CARDS_SCREEN));
+
+        // Verify that both loyalty cards are shown.
+        ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
+        assertThat(getModelsOfType(itemList, ItemType.LOYALTY_CARD).size(), is(2));
+
+        PropertyModel loyaltyCardModel = itemList.get(0).model;
+        assertThat(
+                loyaltyCardModel.get(LOYALTY_CARD).getLoyaltyCardNumber(),
+                is(LOYALTY_CARD_1.getLoyaltyCardNumber()));
+        assertThat(
+                loyaltyCardModel.get(LOYALTY_CARD).getMerchantName(),
+                is(LOYALTY_CARD_1.getMerchantName()));
+
+        mClock.advanceCurrentTimeMillis(InputProtector.POTENTIALLY_UNINTENDED_INPUT_THRESHOLD);
+        loyaltyCardModel.get(ON_LOYALTY_CARD_CLICK_ACTION).run();
+        verify(mDelegateMock).loyaltyCardSuggestionSelected(LOYALTY_CARD_1);
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
+    public void testPressBackFromAllLoyaltyCardsScreen() throws TimeoutException {
+        mCoordinator.showAllLoyaltyCards(List.of(LOYALTY_CARD_1, LOYALTY_CARD_2));
+        assertThat(
+                mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(ALL_LOYALTY_CARDS_SCREEN));
+
+        // Verify that both loyalty cards are shown.
+        ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
+        assertThat(getModelsOfType(itemList, ItemType.LOYALTY_CARD).size(), is(2));
+
+        // Press back closes the bottom sheet.
+        mTouchToFillPaymentMethodModel.get(BACK_PRESS_HANDLER).run();
+        assertThat(mTouchToFillPaymentMethodModel.get(VISIBLE), is(false));
+    }
+
+    @Test
     public void testSelectNonAffiliatedLoyaltyCard() {
-        mCoordinator.showLoyaltyCards(
+        mCoordinator.showAffiliatedLoyaltyCards(
                 List.of(LOYALTY_CARD_1),
                 List.of(LOYALTY_CARD_1, LOYALTY_CARD_2),
                 /* firstTimeUsage= */ false);
@@ -2899,7 +3258,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                                 TouchToFillLoyaltyCardOutcome.NON_AFFILIATED_LOYALTY_CARD)
                         .build();
 
-        assertThat(getModelsOfType(itemList, LOYALTY_CARD).size(), is(2));
+        assertThat(getModelsOfType(itemList, ItemType.LOYALTY_CARD).size(), is(2));
         PropertyModel loyaltyCardModel = itemList.get(1).model;
         mClock.advanceCurrentTimeMillis(InputProtector.POTENTIALLY_UNINTENDED_INPUT_THRESHOLD);
         loyaltyCardModel.get(ON_LOYALTY_CARD_CLICK_ACTION).run();
@@ -2909,14 +3268,14 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
     @Test
     public void testPressBackButtonToShowHomeScreen() {
-        mCoordinator.showLoyaltyCards(
+        mCoordinator.showAffiliatedLoyaltyCards(
                 List.of(LOYALTY_CARD_1),
                 List.of(LOYALTY_CARD_1, LOYALTY_CARD_2),
                 /* firstTimeUsage= */ false);
 
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
-        assertThat(getModelsOfType(itemList, LOYALTY_CARD).size(), is(1));
+        assertThat(getModelsOfType(itemList, ItemType.LOYALTY_CARD).size(), is(1));
 
         // Open the screen with all loyalty cards of a user.
         assertThat(getModelsOfType(itemList, ALL_LOYALTY_CARDS).size(), is(1));
@@ -2929,7 +3288,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
         assertThat(
                 mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(ALL_LOYALTY_CARDS_SCREEN));
         itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
-        assertThat(getModelsOfType(itemList, LOYALTY_CARD).size(), is(2));
+        assertThat(getModelsOfType(itemList, ItemType.LOYALTY_CARD).size(), is(2));
 
         // Open the home screen again.
         mTouchToFillPaymentMethodModel.get(BACK_PRESS_HANDLER).run();
@@ -2937,21 +3296,21 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
         assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(HOME_SCREEN));
         assertThat(
                 mTouchToFillPaymentMethodModel.get(FOCUSED_VIEW_ID_FOR_ACCESSIBILITY),
-                is(org.chromium.chrome.browser.touch_to_fill.payments.R.id.all_loyalty_cards_item));
+                is(R.id.all_loyalty_cards_item));
         itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
-        assertThat(getModelsOfType(itemList, LOYALTY_CARD).size(), is(1));
+        assertThat(getModelsOfType(itemList, ItemType.LOYALTY_CARD).size(), is(1));
     }
 
     @Test
     public void testCallsDelegateWhenLoyaltyCardIsSelected() {
-        mCoordinator.showLoyaltyCards(
+        mCoordinator.showAffiliatedLoyaltyCards(
                 List.of(LOYALTY_CARD_1),
                 List.of(LOYALTY_CARD_1, LOYALTY_CARD_2),
                 /* firstTimeUsage= */ false);
         assertThat(mTouchToFillPaymentMethodModel.get(VISIBLE), is(true));
 
         ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
-        assertThat(getModelsOfType(itemList, LOYALTY_CARD).size(), is(1));
+        assertThat(getModelsOfType(itemList, ItemType.LOYALTY_CARD).size(), is(1));
 
         HistogramWatcher histogramWatcher =
                 HistogramWatcher.newBuilder()
@@ -2971,7 +3330,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
     @Test
     public void testManageLoyaltyCardsClick() {
-        mCoordinator.showLoyaltyCards(
+        mCoordinator.showAffiliatedLoyaltyCards(
                 List.of(LOYALTY_CARD_1), List.of(LOYALTY_CARD_1), /* firstTimeUsage= */ false);
         assertThat(mTouchToFillPaymentMethodModel.get(VISIBLE), is(true));
 
@@ -2993,7 +3352,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
     @Test
     public void testDismissWithSwipeForLoyaltyCards() {
-        mCoordinator.showLoyaltyCards(
+        mCoordinator.showAffiliatedLoyaltyCards(
                 List.of(LOYALTY_CARD_1), List.of(LOYALTY_CARD_1), /* firstTimeUsage= */ false);
 
         HistogramWatcher histogramWatcher =
@@ -3003,6 +3362,166 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
 
         mTouchToFillPaymentMethodModel.get(DISMISS_HANDLER).onResult(StateChangeReason.SWIPE);
         histogramWatcher.assertExpected();
+    }
+
+    @Test
+    @EnableFeatures({AutofillFeatures.AUTOFILL_ENABLE_PAY_NOW_PAY_LATER_TABS})
+    public void testShowPaymentMethodsWithTabsEnabled() {
+        mCoordinator.showPaymentMethods(
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
+
+        // Verify we are on the tabbed home screen
+        assertThat(mTouchToFillPaymentMethodModel.get(CURRENT_SCREEN), is(TABBED_HOME_SCREEN));
+
+        // Verify the flat header properties are set
+        assertThat(
+                mTouchToFillPaymentMethodModel.get(TABBED_HEADER_LOGO_DRAWABLE_ID),
+                is(R.drawable.google_pay));
+        assertThat(
+                mTouchToFillPaymentMethodModel.get(TABBED_HEADER_TITLE_ID),
+                is(R.string.autofill_payment_method_bottom_sheet_title));
+
+        // Verify default selected tab is PAY_NOW (Pay Now)
+        assertThat(mTouchToFillPaymentMethodModel.get(SELECTED_TAB_INDEX), is(PAY_NOW));
+
+        // Verify only credit cards are shown in the list (Pay Now tab)
+        ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
+        assertThat(getModelsOfType(itemList, CREDIT_CARD).size(), is(1));
+        assertThat(getModelsOfType(itemList, BNPL).size(), is(0));
+
+        assertModelHasCorrectAccessibilityStringIds(
+                mTouchToFillPaymentMethodModel,
+                R.string.autofill_payment_method_bottom_sheet_content_description,
+                R.string.autofill_payment_method_bottom_sheet_half_height,
+                R.string.autofill_payment_method_bottom_sheet_full_height,
+                R.string.autofill_payment_method_bottom_sheet_closed,
+                R.id.touch_to_fill_payment_method_tabbed_home_screen);
+    }
+
+    @Test
+    @EnableFeatures({AutofillFeatures.AUTOFILL_ENABLE_PAY_NOW_PAY_LATER_TABS})
+    public void testSwitchingTabsUpdatesSheetItems() {
+        // Stub the delegate to show BNPL issuers when Pay Later tab is selected
+        doAnswer(
+                        invocation -> {
+                            mCoordinator.onPurchaseAmountExtracted(
+                                    List.of(
+                                            BNPL_ISSUER_CONTEXT_AFFIRM_LINKED,
+                                            BNPL_ISSUER_CONTEXT_KLARNA_LINKED),
+                                    /* extractedAmount= */ null,
+                                    /* isAmountSupportedByAnyIssuer= */ false);
+                            return null;
+                        })
+                .when(mDelegateMock)
+                .bnplSuggestionSelected(null);
+
+        mCoordinator.showPaymentMethods(
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
+
+        // Switch to tab PAY_LATER (Pay Later) by invoking the selection callback
+        mTouchToFillPaymentMethodModel.get(TAB_SELECTION_HANDLER).onResult(PAY_LATER);
+
+        // Verify selected tab index is updated
+        assertThat(mTouchToFillPaymentMethodModel.get(SELECTED_TAB_INDEX), is(PAY_LATER));
+
+        // Verify the list now contains the BNPL issuers and terms, but no credit cards
+        ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
+        assertThat(getModelsOfType(itemList, CREDIT_CARD).size(), is(0));
+        assertThat(getModelsOfType(itemList, BNPL_ISSUER).size(), is(2));
+        assertThat(getModelsOfType(itemList, BNPL_SELECTION_PROGRESS_TERMS).size(), is(1));
+        assertThat(getModelsOfType(itemList, PROGRESS_ICON).size(), is(0));
+
+        // Switch back to tab PAY_NOW (Pay Now) by invoking the selection callback
+        mTouchToFillPaymentMethodModel.get(TAB_SELECTION_HANDLER).onResult(PAY_NOW);
+
+        // Verify selected tab index is updated
+        assertThat(mTouchToFillPaymentMethodModel.get(SELECTED_TAB_INDEX), is(PAY_NOW));
+
+        // Verify only credit cards are shown again
+        itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
+        assertThat(getModelsOfType(itemList, CREDIT_CARD).size(), is(1));
+        assertThat(getModelsOfType(itemList, BNPL).size(), is(0));
+        assertThat(getModelsOfType(itemList, BNPL_ISSUER).size(), is(0));
+    }
+
+    @Test
+    public void testOnTabSelectedPayNowNotifiesNative() {
+        mCoordinator.showPaymentMethods(
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
+        assertThat(mTouchToFillPaymentMethodModel.get(VISIBLE), is(true));
+
+        // Select Pay Now tab
+        mCoordinator.getMediatorForTesting().onTabSelected(PAY_NOW);
+
+        verify(mDelegateMock).onUserDecisionToUseSavedCards();
+        assertThat(mTouchToFillPaymentMethodModel.get(SELECTED_TAB_INDEX), is(PAY_NOW));
+    }
+
+    @Test
+    @EnableFeatures({AutofillFeatures.AUTOFILL_ENABLE_PAY_NOW_PAY_LATER_TABS})
+    public void testPayLaterTabSelectedAmountExtractedAfterSwitchingBackToPayNow() {
+        mCoordinator.showPaymentMethods(
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
+
+        // Select PAY_LATER tab (amount not extracted yet and shows loading screen)
+        mTouchToFillPaymentMethodModel.get(TAB_SELECTION_HANDLER).onResult(PAY_LATER);
+        mCoordinator.showProgressScreen();
+
+        ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
+        assertThat(getModelsOfType(itemList, PROGRESS_ICON).size(), is(1));
+        assertThat(getModelsOfType(itemList, BNPL_ISSUER).size(), is(0));
+
+        // Select PAY_NOW tab
+        mTouchToFillPaymentMethodModel.get(TAB_SELECTION_HANDLER).onResult(PAY_NOW);
+        itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
+        assertThat(getModelsOfType(itemList, CREDIT_CARD).size(), is(1));
+
+        // Amount is extracted
+        mCoordinator.showBnplIssuers(List.of(BNPL_ISSUER_CONTEXT_AFFIRM_LINKED));
+
+        // Select PAY_LATER tab again -> BNPL issuers are shown
+        mTouchToFillPaymentMethodModel.get(TAB_SELECTION_HANDLER).onResult(PAY_LATER);
+        itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
+        assertThat(getModelsOfType(itemList, PROGRESS_ICON).size(), is(0));
+        assertThat(getModelsOfType(itemList, BNPL_ISSUER).size(), is(1));
+    }
+
+    @Test
+    @EnableFeatures({AutofillFeatures.AUTOFILL_ENABLE_PAY_NOW_PAY_LATER_TABS})
+    public void testPayLaterTabSelectedAmountStillNotExtractedAfterSwitchingBackToPayNow() {
+        mCoordinator.showPaymentMethods(
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
+
+        // Select PAY_LATER tab (amount not extracted yet and shows loading screen 1st time)
+        mTouchToFillPaymentMethodModel.get(TAB_SELECTION_HANDLER).onResult(PAY_LATER);
+        mCoordinator.showProgressScreen();
+
+        ModelList itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
+        assertThat(getModelsOfType(itemList, PROGRESS_ICON).size(), is(1));
+
+        // Select PAY_NOW tab
+        mTouchToFillPaymentMethodModel.get(TAB_SELECTION_HANDLER).onResult(PAY_NOW);
+        itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
+        assertThat(getModelsOfType(itemList, CREDIT_CARD).size(), is(1));
+
+        // Select PAY_LATER tab again (amount still not extracted and shows loading screen 2nd time)
+        mTouchToFillPaymentMethodModel.get(TAB_SELECTION_HANDLER).onResult(PAY_LATER);
+        mCoordinator.showProgressScreen();
+
+        itemList = mTouchToFillPaymentMethodModel.get(SHEET_ITEMS);
+        assertThat(getModelsOfType(itemList, PROGRESS_ICON).size(), is(1));
+        assertThat(getModelsOfType(itemList, BNPL_ISSUER).size(), is(0));
+    }
+
+    @Test
+    @EnableFeatures({AutofillFeatures.AUTOFILL_ENABLE_PAY_NOW_PAY_LATER_TABS})
+    public void testDismissTabbedHomeScreenRecordsUserAction() {
+        mCoordinator.showPaymentMethods(
+                List.of(VISA_SUGGESTION, BNPL_SUGGESTION), new TouchToFillDisplayOptions());
+
+        mTouchToFillPaymentMethodModel.get(DISMISS_HANDLER).onResult(StateChangeReason.SWIPE);
+
+        assertEquals(1, getUserActionCount(TABBED_HOME_SCREEN_DISMISSED));
     }
 
     private static List<PropertyModel> getModelsOfType(ModelList items, int type) {
@@ -3046,7 +3565,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                                                 .get(ISSUER_SELECTION_TEXT)
                                                 .equals(issuerContext.getSelectionText())
                                         && item.model.get(ISSUER_ICON_ID)
-                                                == issuerContext.getIconId()
+                                                == R.drawable.bnpl_icon_generic
                                         && item.model.get(ISSUER_LINKED) == issuerContext.isLinked()
                                         && item.model.get(APPLY_ISSUER_DEACTIVATED_STYLE)
                                                 != issuerContext.isEligible())
@@ -3066,8 +3585,7 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 bnplIssuerContextModel.get().get(ISSUER_SELECTION_TEXT),
                 is(expectedBnplIssuerContext.getSelectionText()));
         assertThat(
-                bnplIssuerContextModel.get().get(ISSUER_ICON_ID),
-                is(expectedBnplIssuerContext.getIconId()));
+                bnplIssuerContextModel.get().get(ISSUER_ICON_ID), is(R.drawable.bnpl_icon_generic));
         assertThat(
                 bnplIssuerContextModel.get().get(ISSUER_LINKED),
                 is(expectedBnplIssuerContext.isLinked()));
@@ -3100,19 +3618,6 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
                 .map(item -> item.model);
     }
 
-    private static void assertBnplSelectionProgressTermsModelHasExpectedValues(
-            ModelList itemList,
-            @StringRes int expectedTermsTextId,
-            String expectedHideOptionsLinkText,
-            boolean expectedEnabled) {
-        Optional<PropertyModel> termsModel = getBnplSelectionProgressTermsModel(itemList);
-        assertTrue(termsModel.isPresent());
-        assertThat(termsModel.get().get(TERMS_TEXT_ID), is(expectedTermsTextId));
-        assertThat(termsModel.get().get(HIDE_OPTIONS_LINK_TEXT), is(expectedHideOptionsLinkText));
-        assertThat(termsModel.get().get(APPLY_LINK_DEACTIVATED_STYLE), is(!expectedEnabled));
-        assertNotNull(termsModel.get().get(ON_LINK_CLICK_CALLBACK));
-    }
-
     private static Optional<PropertyModel> getTermsLabelModel(ModelList items) {
         return StreamSupport.stream(items.spliterator(), false)
                 .filter(item -> item.type == TERMS_LABEL)
@@ -3124,6 +3629,27 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
         Optional<PropertyModel> termsModel = getTermsLabelModel(itemList);
         assertTrue(termsModel.isPresent());
         assertThat(termsModel.get().get(TERMS_LABEL_TEXT_ID), is(textId));
+    }
+
+    private void assertExpectedBnplSelectionScreenTermsLink(ClickableSpan span) {
+        TextPaint paint = new TextPaint();
+        span.updateDrawState(paint);
+        float alpha = Color.alpha(paint.getColor()) / 255f;
+
+        assertEquals("Link should be fully opaque on the selection screen", 1.0f, alpha, 0.01f);
+
+        // Verify the ClickableSpan is clickable.
+        span.onClick(new View(mActivity));
+        verify(mDelegateMock, times(1)).showPaymentMethodSettings();
+    }
+
+    private void assertExpectedBnplProgressScreenTermsLink(CharacterStyle span) {
+        TextPaint paint = new TextPaint();
+        span.updateDrawState(paint);
+        float alpha = Color.alpha(paint.getColor()) / 255f;
+
+        assertEquals(
+                "Link should be grayed out (38% opacity) in progress screen", 0.38f, alpha, 0.01f);
     }
 
     private static Optional<PropertyModel> getIbanModelByAutofillName(ModelList items, Iban iban) {
@@ -3139,5 +3665,9 @@ public class TouchToFillPaymentMethodControllerRobolectricTest {
     private void advanceClockAndClick(PropertyModel cardSuggestionModel) {
         mClock.advanceCurrentTimeMillis(InputProtector.POTENTIALLY_UNINTENDED_INPUT_THRESHOLD);
         cardSuggestionModel.get(ON_CREDIT_CARD_CLICK_ACTION).run();
+    }
+
+    private int getUserActionCount(String userAction) {
+        return mActionTester.getActionCount(TOUCH_TO_FILL_BNPL_USER_ACTION + userAction);
     }
 }

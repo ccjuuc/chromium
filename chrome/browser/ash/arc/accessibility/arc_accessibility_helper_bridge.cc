@@ -9,7 +9,7 @@
 #include "ash/public/cpp/window_properties.h"
 #include "base/containers/flat_map.h"
 #include "base/functional/bind.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/ash/accessibility/magnification_manager.h"
@@ -18,7 +18,6 @@
 #include "chrome/browser/ash/arc/input_method_manager/arc_input_method_manager_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/accessibility_private.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
 #include "chromeos/ash/experiences/arc/message_center/arc_notification_surface.h"
 #include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
@@ -118,15 +117,15 @@ class ArcAccessibilityHelperBridgeFactory
   static constexpr const char* kName = "ArcAccessibilityHelperBridgeFactory";
 
   static ArcAccessibilityHelperBridgeFactory* GetInstance() {
-    return base::Singleton<ArcAccessibilityHelperBridgeFactory>::get();
+    static base::NoDestructor<ArcAccessibilityHelperBridgeFactory> instance;
+    return instance.get();
   }
 
  protected:
   bool ServiceIsCreatedWithBrowserContext() const override { return true; }
 
  private:
-  friend struct base::DefaultSingletonTraits<
-      ArcAccessibilityHelperBridgeFactory>;
+  friend base::NoDestructor<ArcAccessibilityHelperBridgeFactory>;
 
   ArcAccessibilityHelperBridgeFactory() {
     // ArcAccessibilityHelperBridge needs to track task creation and

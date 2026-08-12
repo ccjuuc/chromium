@@ -47,8 +47,9 @@ class IsolatedWebAppInstallerViewImpl : public IsolatedWebAppInstallerView {
   void ShowGetMetadataScreen() override;
   void UpdateGetMetadataProgress(double percent) override;
 
-  void ShowMetadataScreen(
-      const SignedWebBundleMetadata& bundle_metadata) override;
+  void ShowMetadataScreen(const SignedWebBundleMetadata& bundle_metadata,
+                          const std::vector<UpdateManifest::ChannelMetadata>&
+                              available_channels) override;
 
   void ShowInstallScreen(
       const SignedWebBundleMetadata& bundle_metadata) override;
@@ -58,7 +59,8 @@ class IsolatedWebAppInstallerViewImpl : public IsolatedWebAppInstallerView {
       const SignedWebBundleMetadata& bundle_metadata) override;
 
   views::Widget* ShowDialog(
-      const IsolatedWebAppInstallerModel::Dialog& dialog) override;
+      const IsolatedWebAppInstallerModel::Dialog& dialog,
+      const views::DialogDelegate* dialog_delegate) override;
 
  private:
   template <class T, class... Args>
@@ -66,7 +68,8 @@ class IsolatedWebAppInstallerViewImpl : public IsolatedWebAppInstallerView {
     return AddChildView(std::make_unique<T>(std::forward<Args>(args)...));
   }
 
-  void Dim(bool dim);
+  void ApplyDim(const views::DialogDelegate* dialog_delegate);
+  void RemoveDim();
 
   views::Widget* ShowChildDialog(int title,
                                  const ui::DialogModelLabel& subtitle,

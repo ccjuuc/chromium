@@ -21,12 +21,10 @@
 #include "components/autofill/content/common/mojom/autofill_driver.mojom.h"
 #include "components/autofill/content/renderer/autofill_agent.h"
 #include "components/autofill/content/renderer/form_autofill_util.h"
-#include "components/autofill/content/renderer/form_tracker.h"
 #include "components/autofill/content/renderer/html_based_username_detector.h"
 #include "components/autofill/content/renderer/synchronous_form_cache.h"
 #include "components/autofill/core/common/field_data_manager.h"
 #include "components/autofill/core/common/form_field_data.h"
-#include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom.h"
 #include "components/autofill/core/common/password_form_fill_data.h"
 #include "components/autofill/core/common/unique_ids.h"
@@ -111,7 +109,7 @@ class PasswordAutofillAgent : public content::RenderFrameObserver,
   void SetPasswordGenerationAgent(PasswordGenerationAgent* generation_agent);
 
   // Callers should not store the returned value longer than a function scope.
-  mojom::PasswordManagerDriver& GetPasswordManagerDriver();
+  mojom::PasswordManagerDriver* unsafe_driver();
 
   // mojom::PasswordAutofillAgent:
   void ApplyFillDataOnParsingCompletion(
@@ -207,12 +205,6 @@ class PasswordAutofillAgent : public content::RenderFrameObserver,
   // user has already accepted a password suggestion on another password field.
   // This is useful to suppress a popups for already filled forms.
   bool HasAcceptedSuggestionOnOtherField(const blink::WebInputElement& element);
-
-  // Shows password suggestions for the given `password_request`.
-  // Returns true if any suggestions were shown, false otherwise. `form_cache`
-  // can be used to optimize form extractions occurring synchronously after this
-  // function call.
-  void ShowSuggestions(const PasswordSuggestionRequest& password_request);
 
   // Called when new form controls are inserted. `form_cache` can be used to
   // optimize form extractions occurring synchronously after this function call.
@@ -347,7 +339,7 @@ class PasswordAutofillAgent : public content::RenderFrameObserver,
   };
 
   struct PasswordInfo {
-    FieldRef password_field;
+    FieldRendererId password_field_id;
     PasswordFormFillData fill_data;
     // The user accepted a suggestion from a dropdown on a password field.
     bool password_field_suggestion_was_accepted = false;
@@ -411,8 +403,25 @@ class PasswordAutofillAgent : public content::RenderFrameObserver,
     void ShowValue(blink::WebInputElement element);
 
     bool was_user_gesture_seen_;
-    std::vector<FieldRef> elements_;
+    std::vector<FieldRendererId> element_ids_;
   };
+
+  // The RenderFrame* is nullptr while the PasswordAutofillAgent is pending
+  // deletion, between AutofillAgent::OnDestruct() and ~PasswordAutofillAgent().
+  content::RenderFrame* unsafe_render_frame() const {
+    return content::RenderFrameObserver::render_frame();
+  }
+
+  // Use unsafe_render_frame() instead.
+  template <typename T = int>
+  content::RenderFrame* render_frame(T* = 0) const {
+    static_assert(
+        std::is_void_v<T>,
+        "Beware that the RenderFrame may become nullptr by OnDestruct() "
+        "because the owner of PasswordAutofillAgent destructs itself "
+        "asynchronously. Use unsafe_render_frame() instead and test that it is "
+        "non-nullptr.");
+  }
 
   void OnFormSubmitted(const FormData& submitted_form);
 
@@ -501,6 +510,8 @@ class PasswordAutofillAgent : public content::RenderFrameObserver,
   // `password` respectively into them.
   // Uses `suggestion_source` to update the `FieldPropertiesMask` of filled
   // fields.
+  // Returns whether the fields were filled with the requested values
+  // successfully.
   bool FillUsernameAndPasswordElements(
       blink::WebInputElement username_element,
       blink::WebInputElement password_element,
@@ -520,14 +531,11 @@ class PasswordAutofillAgent : public content::RenderFrameObserver,
   // This function attempts to fill `username_element` and `password_element`
   // with values from `fill_data` when the page is loaded. The
   // `username_element` and `password_element` will only have the suggestedValue
-  // set. Notifies the browser about successful filling based on
-  // `notify_browser_of_successful_filling`. Returns true if filling was
-  // successful.
+  // set. Returns true if filling was successful.
   bool FillCredentialsAutomatically(blink::WebInputElement username_element,
                                     blink::WebInputElement password_element,
                                     const PasswordFormFillData& fill_data,
-                                    RendererSavePasswordProgressLogger* logger,
-                                    bool notify_browser_of_successful_filling);
+                                    RendererSavePasswordProgressLogger* logger);
 
   void HidePopup();
 
@@ -607,15 +615,15 @@ class PasswordAutofillAgent : public content::RenderFrameObserver,
   // password manager has fill information for.
   //
   // After any mutation, `last_supplied_password_info_iter_` must be updated.
-  std::map<FieldRef, PasswordInfo> web_input_to_password_info_;
+  std::map<FieldRendererId, PasswordInfo> web_input_to_password_info_;
 
   // A (sort-of) reverse map to `web_input_to_password_info_`.
-  std::map<FieldRef, FieldRef> password_to_username_;
+  std::map<FieldRendererId, FieldRendererId> password_to_username_;
 
   // The chronologically last insertion into `web_input_to_password_info_`.
   // This iterator always points to `web_input_to_password_info_`.
-  std::map<FieldRef, PasswordInfo>::iterator last_supplied_password_info_iter_ =
-      web_input_to_password_info_.end();
+  std::map<FieldRendererId, PasswordInfo>::iterator
+      last_supplied_password_info_iter_ = web_input_to_password_info_.end();
 
   // Set of fields that are reliably identified as non-credential fields.
   base::flat_set<FieldRendererId> suggestion_banned_fields_;

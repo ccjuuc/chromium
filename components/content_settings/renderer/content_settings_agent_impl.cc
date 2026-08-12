@@ -8,12 +8,13 @@
 
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings.mojom.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/content_settings/core/common/content_settings_utils.h"
+#include "components/content_settings/core/common/features.h"
 #include "content/public/child/child_thread.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/origin_util.h"
@@ -167,13 +168,42 @@ void ContentSettingsAgentImpl::DidCommitProvisionalLoad(
   if (frame->Parent())
     return;  // Not a top-level navigation.
 
-#if DCHECK_IS_ON()
   GURL url = frame->GetDocument().Url();
+#if DCHECK_IS_ON()
   // If we start failing this DCHECK, please makes sure we don't regress
   // this bug: http://code.google.com/p/chromium/issues/detail?id=79304
   DCHECK(frame->GetDocument().GetSecurityOrigin().ToString() == "null" ||
          !url.SchemeIs(url::kDataScheme));
 #endif
+
+  // Eagerly fetch localStorage and sessionStorage settings. We use
+  // enable_logging_usage=false because the JS hasn't actually accessed storage
+  // yet. We limit this to HTTP/HTTPS schemes because System Profiles (used for
+  // internal UIs like chrome://profile-picker) do not have CookieSettings and
+  // would crash if we blindly send an IPC to them.
+  if (base::FeatureList::IsEnabled(
+          features::kEagerStorageAccessPermissionCheck) &&
+      url.SchemeIsHTTPOrHTTPS()) {
+    EagerlyFetchStorageSettings(StorageType::kLocalStorage);
+    EagerlyFetchStorageSettings(StorageType::kSessionStorage);
+  }
+}
+
+void ContentSettingsAgentImpl::EagerlyFetchStorageSettings(StorageType type) {
+  blink::WebLocalFrame* frame = render_frame()->GetWebFrame();
+  GetContentSettingsManager().IsStorageAccessAllowed(
+      frame->GetSecurityOrigin(), frame->GetDocument().SiteForCookies(),
+      frame->GetDocument().TopFrameOrigin(),
+      base::BindOnce(&ContentSettingsAgentImpl::OnEagerStorageSettingsFetched,
+                     base::Unretained(this),
+                     StoragePermissionsKey(
+                         url::Origin(frame->GetSecurityOrigin()), type)));
+}
+
+void ContentSettingsAgentImpl::OnEagerStorageSettingsFetched(
+    StoragePermissionsKey key,
+    bool result) {
+  cached_storage_permissions_[key] = result;
 }
 
 void ContentSettingsAgentImpl::OnDestruct() {
@@ -234,9 +264,19 @@ void ContentSettingsAgentImpl::AllowStorageAccess(
 
   StoragePermissionsKey key(url::Origin(frame->GetSecurityOrigin()),
                             storage_type);
+  bool is_first_access = storage_accessed_.insert(key).second;
+
   const auto permissions = cached_storage_permissions_.find(key);
   if (permissions != cached_storage_permissions_.end()) {
     std::move(callback).Run(permissions->second);
+    // If the cached permission is returned, asynchronously notify the browser
+    // so it can accurately track metrics and update the UI, but only once.
+    if (is_first_access) {
+      GetContentSettingsManager().AllowStorageAccess(
+          frame->GetLocalFrameToken(), ConvertToMojoStorageType(storage_type),
+          frame->GetSecurityOrigin(), frame->GetDocument().SiteForCookies(),
+          frame->GetDocument().TopFrameOrigin(), base::DoNothing());
+    }
     return;
   }
 
@@ -259,6 +299,12 @@ void ContentSettingsAgentImpl::AllowStorageAccess(
 
 bool ContentSettingsAgentImpl::AllowStorageAccessSync(
     StorageType storage_type) {
+  constexpr char kAllowStorageAccessSyncHistogram[] =
+      "ContentSettings.AllowStorageAccessSync";
+  constexpr char kCacheHitHistogram[] =
+      "ContentSettings.AllowStorageAccessSync.CacheHit";
+
+  base::ScopedUmaHistogramTimer timer(kAllowStorageAccessSyncHistogram);
   WebLocalFrame* frame = render_frame()->GetWebFrame();
   if (delegate_->IsFrameAllowlistedForStorageAccess(frame)) {
     return true;
@@ -270,17 +316,29 @@ bool ContentSettingsAgentImpl::AllowStorageAccessSync(
 
   StoragePermissionsKey key(url::Origin(frame->GetSecurityOrigin()),
                             storage_type);
-  const auto permissions = cached_storage_permissions_.find(key);
-  if (permissions != cached_storage_permissions_.end())
-    return permissions->second;
+  bool is_first_access = storage_accessed_.insert(key).second;
 
-  SCOPED_UMA_HISTOGRAM_TIMER("ContentSettings.AllowStorageAccessSync");
+  const auto permissions = cached_storage_permissions_.find(key);
+  if (permissions != cached_storage_permissions_.end()) {
+    base::UmaHistogramBoolean(kCacheHitHistogram, true);
+    // If the cached permission is returned, asynchronously notify the browser
+    // so it can accurately track metrics and update the UI, but only once.
+    if (is_first_access) {
+      GetContentSettingsManager().AllowStorageAccess(
+          frame->GetLocalFrameToken(), ConvertToMojoStorageType(storage_type),
+          frame->GetSecurityOrigin(), frame->GetDocument().SiteForCookies(),
+          frame->GetDocument().TopFrameOrigin(), base::DoNothing());
+    }
+    return permissions->second;
+  }
+
   bool result = false;
   GetContentSettingsManager().AllowStorageAccess(
       frame->GetLocalFrameToken(), ConvertToMojoStorageType(storage_type),
       frame->GetSecurityOrigin(), frame->GetDocument().SiteForCookies(),
       frame->GetDocument().TopFrameOrigin(), &result);
   cached_storage_permissions_[key] = result;
+  base::UmaHistogramBoolean(kCacheHitHistogram, false);
   return result;
 }
 

@@ -5,7 +5,9 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_PAGE_ACTION_PAGE_ACTION_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_PAGE_ACTION_PAGE_ACTION_VIEW_H_
 
+#include <memory>
 #include <optional>
+#include <string>
 
 #include "base/callback_list.h"
 #include "base/functional/callback.h"
@@ -13,33 +15,50 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
+#include "chrome/browser/ui/page_action/page_action_icon_type.h"
+#include "chrome/browser/ui/page_action/page_action_model_observer.h"
 #include "chrome/browser/ui/views/location_bar/icon_label_bubble_view.h"
-#include "chrome/browser/ui/views/page_action/page_action_model_observer.h"
-#include "chrome/browser/ui/views/page_action/page_action_triggers.h"
+#include "chrome/browser/ui/views/page_action/anchored_message_view.h"
+#include "chrome/browser/ui/views/page_action/page_action_view_interface.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/actions/actions.h"
 #include "ui/base/interaction/element_identifier.h"
+#include "ui/base/models/image_model.h"
 #include "ui/events/event.h"
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/views/view.h"
+#include "ui/views/view_observer.h"
+#include "ui/views/widget/widget.h"
 
 namespace page_actions {
 
-class PageActionController;
 class PageActionModelInterface;
 struct PageActionViewParams;
 
 // PageActionView is the view displaying the page action. There is one per
 // browser, per page action.
 class PageActionView : public IconLabelBubbleView,
-                       public PageActionModelObserver {
+                       public PageActionViewInterface,
+                       public PageActionModelObserver,
+                       public PageActionController::Delegate,
+                       public AnchoredMessageBubbleView::Delegate {
   METADATA_HEADER(PageActionView, IconLabelBubbleView)
  public:
   PageActionView(actions::ActionItem* action_item,
                  const PageActionViewParams& params,
+                 PageActionIconType type,
                  ui::ElementIdentifier element_identifier);
   PageActionView(const PageActionView&) = delete;
   PageActionView& operator=(const PageActionView&) = delete;
   ~PageActionView() override;
+
+  // PageActionViewInterface:
+  views::BubbleAnchor GetBubbleAnchor() override;
+  std::u16string GetTooltipText() const override;
+  std::u16string GetAccessibleName() const override;
+  void SetVisible(bool visible) override;
+  IconLabelBubbleView* GetIconLabelBubbleViewNotMigrated() override;
 
   // Sets the controller for this view, and attaches this view in the
   // controller.
@@ -54,15 +73,34 @@ class PageActionView : public IconLabelBubbleView,
   // expanding and collapsing).
   bool IsChipVisible() const;
 
+  // Indicates whether this view is showing an anchored message
+  bool IsAnchoredMessageVisible() const;
+
   // Reports the chip visibility change state at the beginning of the animation.
   using ChipVisibilityChanged = base::RepeatingCallback<void(PageActionView*)>;
   base::CallbackListSubscription AddChipVisibilityChangedCallback(
       ChipVisibilityChanged callback);
 
+  // Reports the anchored message visibility change state
+  using AnchoredMessageVisibilityCallback =
+      base::RepeatingCallback<void(PageActionView*)>;
+  base::CallbackListSubscription AddAnchoredMessageVisibilityChangedCallback(
+      AnchoredMessageVisibilityCallback callback);
+
+  // PageActionController::Delegate:
   // Reports the chip visibility change state at the end of the animation.
-  using IsChipShowingChangedCallback =
-      base::RepeatingCallback<void(bool is_chip_showing)>;
-  void SetIsChipShowingChangedCallback(IsChipShowingChangedCallback callback);
+  void SetIsChipShowingChangedCallback(
+      IsChipShowingChangedCallback callback) override;
+  void SetImageAnimationStartedCallback(
+      ImageAnimationStartedCallback callback) override;
+  void SetAnchoredMessageCloseCallback(
+      base::RepeatingClosure callback) override;
+  void SetAnchoredMessageExpandCallback(
+      base::RepeatingClosure callback) override;
+  void SetAnchoredMessageCollapseCallback(
+      base::RepeatingClosure callback) override;
+  void SetClickCallback(
+      base::RepeatingCallback<void(PageActionTrigger)> callback) override;
 
   // PageActionModelObserver:
   void OnPageActionModelChanged(const PageActionModelInterface& model) override;
@@ -84,23 +122,38 @@ class PageActionView : public IconLabelBubbleView,
   bool IsTriggerableEvent(const ui::Event& event) override;
   void AnimationEnded(const gfx::Animation* animation) override;
 
+  // views::LayoutDelegate:
+  void BeforeApplyLayout(const views::ProposedLayout& layout) override;
+
+  // AnchoredMessageBubbleView::Delegate:
+  void AnchoredMessageChipClick() override;
+  void CloseAnchoredMessage() override;
+  void AnchoredMessageExpanded() override;
+  void AnchoredMessageCollapsed() override;
+
   actions::ActionId GetActionId() const;
 
   views::View* GetLabelForTesting();
   gfx::SlideAnimation& GetSlideAnimationForTesting();
+  AnchoredMessageBubbleView* GetAnchoredMessageForTesting();
 
-  static base::PassKey<PageActionView> PassKeyForTesting() { return PassKey(); }
+  // IconLabelBubbleView:
+  SkColor GetBackgroundColor() const override;
+
+  static PageActionPassKey PassKeyForTesting() { return PageActionPassKey(); }
 
  protected:
-  static base::PassKey<PageActionView> PassKey() {
-    return base::PassKey<PageActionView>();
-  }
+  static PageActionPassKey PassKey() { return PageActionPassKey(); }
 
  private:
   // The image associated with the `action_item_` size may be different from the
   // size needed for the location bar page action icon. Therefore, we should to
   // update the image size if needed.
   void UpdateIconImage();
+  void UpdateTooltipText();
+
+  void AnimateImage(const page_actions::PageActionAnimationParams& params,
+                    SkColor icon_color);
 
   const gfx::Insets GetInsetsForNonVectorIcon() const;
 
@@ -111,6 +164,17 @@ class PageActionView : public IconLabelBubbleView,
   // Runs `is_chip_showing_changed_callback_` asynchronously to ensure that this
   // notification will happen after PageActionModel::NotifyChange().
   void NotifyIsChipShowingChange();
+
+  void MaybeRecordCollapsedMetrics(int label_width);
+
+  void OnAnchoredMessageWidgetClose(views::Widget::ClosedReason closed_reason);
+
+  void CreateAndShowAnchoredMessage(const PageActionModelInterface& model);
+
+  void UpdateAnimationState(const PageActionModelInterface& model);
+  void HandleSlideAndCrossfadeTransition(const PageActionModelInterface& model);
+  void HandleSuggestionChipTransition(const PageActionModelInterface& model);
+  void CloseWidgetDeferred(base::WeakPtr<views::Widget> widget_to_close);
 
   base::WeakPtr<actions::ActionItem> action_item_ = nullptr;
   base::ScopedObservation<PageActionModelInterface, PageActionModelObserver>
@@ -132,11 +196,25 @@ class PageActionView : public IconLabelBubbleView,
   base::RepeatingCallbackList<void(PageActionView*)>
       chip_visibility_changed_callbacks_;
 
+  // Client-provided callbacks for changes to anchored message state.
+  base::RepeatingCallbackList<void(PageActionView*)>
+      anchored_message_visibility_changed_callbacks_;
+
   // Used to notify when the chip state changes (expanded/hidden). The state is
   // only reported when there is not an ongoing animation. It's initialized to
   // base::DoNothing() for testing purpose.
   IsChipShowingChangedCallback is_chip_showing_changed_callback_ =
       base::DoNothing();
+
+  // Client-provided callbacks for when image animation starts.
+  ImageAnimationStartedCallback image_animation_started_callback_ =
+      base::DoNothing();
+
+  // The last "chip showing" state that was sent for a notification.
+  std::optional<bool> last_notified_is_chip_showing_;
+
+  PageActionIconType type_;
+  bool chip_shown_metric_recorded_ = false;
 
   // Used to record click event histogram. It's initialized to base::DoNothing()
   // for testing purpose.
@@ -145,6 +223,16 @@ class PageActionView : public IconLabelBubbleView,
 
   // If set, ensures this view is highlighted.
   std::optional<views::Button::ScopedAnchorHighlight> highlight_;
+
+  raw_ptr<AnchoredMessageBubbleView> anchored_message_ = nullptr;
+  std::unique_ptr<views::Widget> anchored_message_widget_;
+
+  base::RepeatingClosure anchored_message_close_callback_ = base::DoNothing();
+  base::RepeatingClosure anchored_message_expand_callback_ = base::DoNothing();
+  base::RepeatingClosure anchored_message_collapse_callback_ =
+      base::DoNothing();
+
+  base::WeakPtrFactory<PageActionView> weak_factory_{this};
 };
 
 }  // namespace page_actions

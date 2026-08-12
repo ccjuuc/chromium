@@ -226,7 +226,7 @@ DownloadProtectionDelegateAndroid::ProduceClientDownloadRequestModifications(
   if (profile) {
     modifications.emplace_back(base::BindOnce(
         &DownloadProtectionDelegateAndroid::PopulateRateLimitingKey,
-        weak_factory_.GetWeakPtr(), profile->UniqueId()));
+        weak_factory_.GetWeakPtr(), profile->UniqueToken()));
   }
 
   return modifications;
@@ -311,11 +311,6 @@ bool DownloadProtectionDelegateAndroid::ShouldSampleEligibleFile() const {
   if (sample_percentage < 0 || sample_percentage > 100) {
     sample_percentage = 100;
   }
-  // This ensures that in telemetry-only mode, we sample at most 10% of
-  // eligible downloads.
-  if (kMaliciousApkDownloadCheckTelemetryOnly.Get()) {
-    sample_percentage = std::min(sample_percentage, 10);
-  }
   // Avoid the syscall if possible.
   if (sample_percentage >= 100) {
     CHECK_EQ(sample_percentage, 100);
@@ -350,7 +345,7 @@ bool DownloadProtectionDelegateAndroid::MayCheckItem(
 }
 
 void DownloadProtectionDelegateAndroid::PopulateRateLimitingKey(
-    const std::string& profile_id,
+    const base::UnguessableToken& profile_id,
     CollectModificationCallback callback) {
   if (!rate_limiting_key_manager_) {
     base::OnceCallback<void(const std::string&)> on_got_safety_net_id =

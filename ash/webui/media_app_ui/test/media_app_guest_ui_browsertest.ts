@@ -5,7 +5,8 @@
 /** @fileoverview Test suite for chrome-untrusted://media-app. */
 
 /// <reference path="media_app.d.ts" />
-/// <reference path="test_api.d.ts" />
+
+import {assertEquals, assertTrue} from 'chrome-untrusted://webui-test/chai_assert.js';
 
 import {GUEST_TEST} from './guest_query_receiver.js';
 import {ReceivedFileList} from './receiver.js';
@@ -22,7 +23,7 @@ export function eventToPromise(eventType: string, target: EventTarget) {
 // Test web workers can be spawned from chrome-untrusted://media-app. Errors
 // will be logged in console from web_ui_browser_test.cc.
 GUEST_TEST('GuestCanSpawnWorkers', async () => {
-  const worker = new Worker('test_worker.js');
+  const worker = new Worker('test_worker.js', {type: 'module'});
   const workerResponse = new Promise<MessageEvent>((resolve, reject) => {
     /**
      * Registers onmessage event handler.
@@ -48,7 +49,7 @@ GUEST_TEST('GuestLoadsLoadTimeData', () => {
   // TODO(b/314827247): Add types for `sandboxed_load_time_data.js`.
   const loadTimeData = (window as any)['loadTimeData'];
   // Check `LoadTimeData` exists on the global window object.
-  chai.assert.isTrue(loadTimeData !== undefined);
+  assertTrue(loadTimeData !== undefined);
   // Check data loaded into `LoadTimeData` by "strings.js" via
   // `source->UseStringsJs()` exists.
   assertEquals(loadTimeData.getValue('appLocale'), 'en-US');
@@ -83,9 +84,10 @@ GUEST_TEST('GuestCanLoadWithCspRestrictions', async () => {
 });
 
 GUEST_TEST('GuestStartsWithDefaultFileList', async () => {
-  chai.assert.isDefined(window.customLaunchData);
-  chai.assert.isDefined(window.customLaunchData.files);
-  chai.assert.isTrue(window.customLaunchData.files.length === 0);
+  const customLaunchData = (window as any).customLaunchData;
+  assertTrue(customLaunchData !== undefined);
+  assertTrue(customLaunchData.files !== undefined);
+  assertEquals(0, customLaunchData.files.length);
 });
 
 GUEST_TEST('GuestFailsToFetchMissingFonts', async () => {

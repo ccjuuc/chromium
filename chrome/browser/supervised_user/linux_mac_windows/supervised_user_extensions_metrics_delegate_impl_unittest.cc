@@ -13,10 +13,9 @@
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #include "chrome/browser/supervised_user/supervised_user_url_filtering_service_factory.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/supervised_user/core/browser/device_parental_controls_noop_impl.h"
 #include "components/supervised_user/core/browser/supervised_user_metrics_service.h"
-#include "components/supervised_user/core/browser/supervised_user_preferences.h"
 #include "components/supervised_user/core/browser/supervised_user_service.h"
-#include "components/supervised_user/core/browser/supervised_user_url_filter.h"
 #include "components/supervised_user/core/common/pref_names.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_registrar.h"
@@ -52,9 +51,10 @@ class SupervisedUserExtensionsMetricsDelegateImplTest
     supervised_user_metrics_service_ =
         std::make_unique<supervised_user::SupervisedUserMetricsService>(
             profile()->GetPrefs(),
-            *SupervisedUserServiceFactory::GetForProfile(profile()),
+            *supervised_user::SupervisedUserServiceFactory::GetForProfile(profile()),
             *supervised_user::SupervisedUserUrlFilteringServiceFactory::
                 GetForProfile(profile()),
+            device_parental_controls_,
             std::make_unique<SupervisedUserExtensionsMetricsDelegateImpl>(
                 extensions::ExtensionRegistry::Get(profile()), profile()),
             /*metrics_service_accessor_delegate=*/nullptr);
@@ -81,6 +81,7 @@ class SupervisedUserExtensionsMetricsDelegateImplTest
   base::HistogramTester histogram_tester_;
 
  private:
+  supervised_user::DeviceParentalControlsNoOpImpl device_parental_controls_;
   std::unique_ptr<supervised_user::SupervisedUserMetricsService>
       supervised_user_metrics_service_;
 };

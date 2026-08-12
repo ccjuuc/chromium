@@ -4,7 +4,10 @@
 
 #include "components/autofill/core/browser/payments/credit_card_fido_authenticator.h"
 
+#include <stdint.h>
+
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -12,28 +15,38 @@
 
 #include "base/android/android_info.h"
 #include "base/base64.h"
+#include "base/check.h"
 #include "base/check_deref.h"
+#include "base/check_op.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
 #include "base/containers/to_vector.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/memory/weak_ptr.h"
+#include "base/notreached.h"
 #include "base/strings/string_util.h"
+#include "base/time/time.h"
+#include "base/values.h"
 #include "build/build_config.h"
-#include "components/autofill/core/browser/autofill_progress_dialog_type.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
-#include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/metrics/payments/better_auth_metrics.h"
+#include "components/autofill/core/browser/payments/full_card_request.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/payments_network_interface.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
 #include "components/autofill/core/browser/payments/payments_service_url.h"
 #include "components/autofill/core/browser/strike_databases/payments/fido_authentication_strike_database.h"
 #include "components/autofill/core/browser/studies/autofill_experiments.h"
-#include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/autofill/core/common/autofill_prefs.h"
 #include "components/signin/public/identity_manager/account_info.h"
+#include "components/strike_database/strike_database.h"
 #include "device/fido/public/authenticator_selection_criteria.h"
+#include "device/fido/public/fido_transport_protocol.h"
 #include "device/fido/public/fido_types.h"
+#include "device/fido/public/public_key_credential_descriptor.h"
 #include "google_apis/gaia/gaia_id.h"
 #include "third_party/blink/public/mojom/webauthn/authenticator.mojom.h"
 #include "url/gurl.h"
@@ -71,7 +84,7 @@ CreditCardFidoAuthenticator::~CreditCardFidoAuthenticator() {
 void CreditCardFidoAuthenticator::Authenticate(
     CreditCard card,
     base::WeakPtr<Requester> requester,
-    base::Value::Dict request_options,
+    base::DictValue request_options,
     std::optional<std::string> context_token) {
   card_ = std::move(card);
   requester_ = requester;
@@ -90,7 +103,7 @@ void CreditCardFidoAuthenticator::Authenticate(
 }
 
 void CreditCardFidoAuthenticator::Register(std::string card_authorization_token,
-                                           base::Value::Dict creation_options) {
+                                           base::DictValue creation_options) {
   // Cancel any previous pending WebAuthn requests.
   authenticator()->Cancel();
 
@@ -111,7 +124,7 @@ void CreditCardFidoAuthenticator::Register(std::string card_authorization_token,
 void CreditCardFidoAuthenticator::Authorize(
     base::WeakPtr<Requester> requester,
     std::string card_authorization_token,
-    base::Value::Dict request_options) {
+    base::DictValue request_options) {
   requester_ = requester;
   card_authorization_token_ = card_authorization_token;
 
@@ -272,15 +285,14 @@ CreditCardFidoAuthenticator::GetOrCreateFidoAuthenticationStrikeDatabase() {
   if (!fido_authentication_strike_database_) {
     if (auto* strike_database = autofill_client_->GetStrikeDatabase()) {
       fido_authentication_strike_database_ =
-          std::make_unique<FidoAuthenticationStrikeDatabase>(
-              FidoAuthenticationStrikeDatabase(strike_database));
+          std::make_unique<FidoAuthenticationStrikeDatabase>(strike_database);
     }
   }
   return fido_authentication_strike_database_.get();
 }
 
 bool CreditCardFidoAuthenticator::IsValidRequestOptions(
-    const base::Value::Dict& request_options) {
+    const base::DictValue& request_options) {
   if (request_options.empty() || !request_options.contains("challenge") ||
       !request_options.contains("key_info")) {
     return false;
@@ -351,7 +363,7 @@ void CreditCardFidoAuthenticator::MakeCredential(
 }
 
 void CreditCardFidoAuthenticator::OptChange(
-    base::Value::Dict authenticator_response) {
+    base::DictValue authenticator_response) {
   payments::OptChangeRequestDetails request_details;
   request_details.app_locale = payments_data_manager().app_locale();
 
@@ -526,7 +538,7 @@ void CreditCardFidoAuthenticator::OnFullCardRequestFailed(
 
 blink::mojom::PublicKeyCredentialRequestOptionsPtr
 CreditCardFidoAuthenticator::ParseRequestOptions(
-    base::Value::Dict request_options) {
+    base::DictValue request_options) {
   auto options = blink::mojom::PublicKeyCredentialRequestOptions::New();
   options->extensions =
       blink::mojom::AuthenticationExtensionsClientInputs::New();
@@ -553,7 +565,7 @@ CreditCardFidoAuthenticator::ParseRequestOptions(
 
 blink::mojom::PublicKeyCredentialCreationOptionsPtr
 CreditCardFidoAuthenticator::ParseCreationOptions(
-    base::Value::Dict creation_options) {
+    base::DictValue creation_options) {
   auto options = blink::mojom::PublicKeyCredentialCreationOptions::New();
 
   std::string* const rpid = creation_options.FindString("relying_party_id");
@@ -570,9 +582,11 @@ CreditCardFidoAuthenticator::ParseCreationOptions(
   const std::string& gaia_id_str = account_info.gaia.ToString();
   options->user.id =
       std::vector<uint8_t>(gaia_id_str.begin(), gaia_id_str.end());
-  options->user.display_name = autofill_client_->GetIdentityManager()
-                                   ->FindExtendedAccountInfo(account_info)
-                                   .given_name;
+  options->user.display_name =
+      std::string(autofill_client_->GetIdentityManager()
+                      ->FindExtendedAccountInfo(account_info)
+                      .GetGivenName()
+                      .value_or(""));
   options->user.name = std::move(account_info.email);
   options->challenge =
       Base64ToBytes(CHECK_DEREF(creation_options.FindString("challenge")));
@@ -643,9 +657,9 @@ CreditCardFidoAuthenticator::ParseCredentialDescriptor(
       std::move(authenticator_transports));
 }
 
-base::Value::Dict CreditCardFidoAuthenticator::ParseAssertionResponse(
+base::DictValue CreditCardFidoAuthenticator::ParseAssertionResponse(
     blink::mojom::GetAssertionAuthenticatorResponsePtr assertion_response) {
-  base::Value::Dict response;
+  base::DictValue response;
   response.Set("credential_id",
                BytesToBase64(assertion_response->info->raw_id));
   response.Set("authenticator_data",
@@ -656,11 +670,11 @@ base::Value::Dict CreditCardFidoAuthenticator::ParseAssertionResponse(
   return response;
 }
 
-base::Value::Dict CreditCardFidoAuthenticator::ParseAttestationResponse(
+base::DictValue CreditCardFidoAuthenticator::ParseAttestationResponse(
     blink::mojom::MakeCredentialAuthenticatorResponsePtr attestation_response) {
-  base::Value::Dict response;
+  base::DictValue response;
 
-  base::Value::Dict fido_attestation_info;
+  base::DictValue fido_attestation_info;
   fido_attestation_info.Set(
       "client_data",
       BytesToBase64(attestation_response->info->client_data_json));
@@ -668,7 +682,7 @@ base::Value::Dict CreditCardFidoAuthenticator::ParseAttestationResponse(
       "attestation_object",
       BytesToBase64(attestation_response->attestation_object));
 
-  base::Value::List authenticator_transport_list;
+  base::ListValue authenticator_transport_list;
   for (device::FidoTransportProtocol protocol :
        attestation_response->transports) {
     authenticator_transport_list.Append(
@@ -683,7 +697,7 @@ base::Value::Dict CreditCardFidoAuthenticator::ParseAttestationResponse(
 }
 
 bool CreditCardFidoAuthenticator::IsValidCreationOptions(
-    const base::Value::Dict& creation_options) {
+    const base::DictValue& creation_options) {
   return creation_options.contains("challenge");
 }
 
@@ -732,7 +746,7 @@ void CreditCardFidoAuthenticator::HandleGetAssertionSuccess(
     blink::mojom::GetAssertionAuthenticatorResponsePtr assertion_response) {
   switch (current_flow_) {
     case Flow::kAuthenticationFlow: {
-      base::Value::Dict response =
+      base::DictValue response =
           ParseAssertionResponse(std::move(assertion_response));
       full_card_request_ =
           std::make_unique<payments::FullCardRequest>(autofill_client_);
@@ -773,7 +787,7 @@ void CreditCardFidoAuthenticator::HandleGetAssertionSuccess(
     }
   }
 
-  base::Value::Dict response;
+  base::DictValue response;
   response.Set("fido_assertion_info",
                ParseAssertionResponse(std::move(assertion_response)));
   OptChange(std::move(response));

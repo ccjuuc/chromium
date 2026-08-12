@@ -14,6 +14,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 
 import static org.chromium.chrome.browser.keyboard_accessory.button_group_component.KeyboardAccessoryButtonGroupProperties.ACTIVE_TAB;
+import static org.chromium.chrome.browser.keyboard_accessory.button_group_component.KeyboardAccessoryButtonGroupProperties.AT_MEMORY_CALLBACK;
 import static org.chromium.chrome.browser.keyboard_accessory.button_group_component.KeyboardAccessoryButtonGroupProperties.TABS;
 
 import org.junit.Before;
@@ -25,7 +26,6 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
-import org.chromium.base.task.test.CustomShadowAsyncTask;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData;
 import org.chromium.ui.modelutil.ListObservable;
@@ -35,20 +35,19 @@ import org.chromium.ui.modelutil.PropertyObservable.PropertyObserver;
 
 /** Controller tests for the keyboard accessory tab layout component. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {CustomShadowAsyncTask.class})
+@Config(manifest = Config.NONE)
 public class KeyboardAccessoryButtonGroupControllerTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private PropertyObserver<PropertyKey> mMockPropertyObserver;
     @Mock private ListObservable.ListObserver<Void> mMockTabListObserver;
+    @Mock private Runnable mMockAtMemoryCallback;
 
     @Mock
     private KeyboardAccessoryButtonGroupCoordinator.AccessoryTabObserver mMockAccessoryTabObserver;
 
     private final KeyboardAccessoryData.Tab mTestTab =
-            new KeyboardAccessoryData.Tab("Passwords", null, null, 0, 0, null);
+            new KeyboardAccessoryData.Tab("Passwords", 0, null, 0, 0, null);
 
     private KeyboardAccessoryButtonGroupCoordinator mCoordinator;
     private PropertyModel mModel;
@@ -60,6 +59,12 @@ public class KeyboardAccessoryButtonGroupControllerTest {
         mMediator = mCoordinator.getMediatorForTesting();
         mModel = mCoordinator.getModelForTesting();
         mCoordinator.setTabObserver(mMockAccessoryTabObserver);
+    }
+
+    @Test
+    public void testSetsAtMemoryCallback() {
+        mCoordinator.getAtMemoryDelegate().setAtMemoryCallback(mMockAtMemoryCallback);
+        assertThat(mModel.get(AT_MEMORY_CALLBACK), is(mMockAtMemoryCallback));
     }
 
     @Test

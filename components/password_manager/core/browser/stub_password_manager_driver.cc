@@ -15,8 +15,8 @@ namespace password_manager {
 StubPasswordManagerDriver::StubPasswordManagerDriver() = default;
 StubPasswordManagerDriver::~StubPasswordManagerDriver() = default;
 
-int StubPasswordManagerDriver::GetId() const {
-  return 0;
+DriverId StubPasswordManagerDriver::GetId() const {
+  return DriverId(1);
 }
 
 void StubPasswordManagerDriver::PropagateFillDataOnParsingCompletion(
@@ -84,6 +84,11 @@ StubPasswordManagerDriver::GetPasswordAutofillManager() {
   return nullptr;
 }
 
+autofill::PasswordManagerDelegate*
+StubPasswordManagerDriver::GetPasswordManagerDelegate() {
+  return nullptr;
+}
+
 bool StubPasswordManagerDriver::IsDirectChildOfPrimaryMainFrame() const {
   return false;
 }
@@ -101,7 +106,7 @@ bool StubPasswordManagerDriver::CanShowAutofillUi() const {
 }
 
 int StubPasswordManagerDriver::GetFrameId() const {
-  return GetId();
+  return GetId().GetUnsafeValue();
 }
 
 const GURL& StubPasswordManagerDriver::GetLastCommittedURL() const {
@@ -112,6 +117,10 @@ const url::Origin& StubPasswordManagerDriver::GetLastCommittedOrigin() const {
   return opaque_origin_;
 }
 
+bool StubPasswordManagerDriver::HasCrossOriginAncestor() const {
+  return false;
+}
+
 gfx::RectF StubPasswordManagerDriver::TransformToRootCoordinates(
     const gfx::RectF& bounds_in_frame_coordinates) {
   return gfx::RectF();
@@ -120,6 +129,14 @@ gfx::RectF StubPasswordManagerDriver::TransformToRootCoordinates(
 void StubPasswordManagerDriver::CheckViewAreaVisible(
     autofill::FieldRendererId field_id,
     base::OnceCallback<void(bool)>) {}
+
+bool StubPasswordManagerDriver::HasValidURL(bool may_kill_renderer) {
+  return true;
+}
+
+bool StubPasswordManagerDriver::IsRenderFrameHostSupported() {
+  return true;
+}
 
 autofill::AutofillDriver* StubPasswordManagerDriver::GetAutofillDriver() const {
   return nullptr;

@@ -34,10 +34,12 @@
 #include <string>
 #include <utility>
 
+#include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/common/switches.h"
 #include "third_party/blink/public/mojom/frame/lifecycle.mojom-shared.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
@@ -62,6 +64,7 @@
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/weborigin/known_ports.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
@@ -219,7 +222,6 @@ DOMWebSocket* DOMWebSocket::Create(
   }
 
   DOMWebSocket* websocket = MakeGarbageCollected<DOMWebSocket>(context);
-  websocket->UpdateStateIfNeeded();
 
   DCHECK(protocols);
   switch (protocols->GetContentType()) {
@@ -249,6 +251,13 @@ void DOMWebSocket::Connect(const String& url,
   DVLOG(1) << "WebSocket " << this << " connect() url=" << url;
 
   channel_ = CreateChannel(GetExecutionContext(), this);
+  UpdateStateIfNeeded();
+  // UpdateStateIfNeeded() can trigger closing the WebSocket.
+  // Return early to prevent starting the network connection.
+  if (common_.GetState() == WebSocketCommon::kClosed) {
+    return;
+  }
+
   auto result = common_.Connect(GetExecutionContext(), url, protocols, channel_,
                                 exception_state);
 
@@ -479,13 +488,26 @@ bool DOMWebSocket::HasPendingActivity() const {
 
 void DOMWebSocket::ContextLifecycleStateChanged(
     mojom::FrameLifecycleState state) {
-  if (state == mojom::FrameLifecycleState::kRunning) {
+  if (state == mojom::blink::FrameLifecycleState::kRunning) {
     event_queue_->Unpause();
 
     // If |consumed_buffered_amount_| was updated while the object was paused
     // then the changes to |buffered_amount_| will not yet have been applied.
     // Post another task to update it.
     PostBufferedAmountUpdateTask();
+  } else if (state == mojom::blink::FrameLifecycleState::kFrozen &&
+             RuntimeEnabledFeatures::DisconnectWebSocketOnBFCacheEnabled() &&
+             !base::CommandLine::ForCurrentProcess()->HasSwitch(
+                 blink::switches::kDisableBackForwardCacheForWebSockets)) {
+    event_queue_->Pause();
+    if (common_.GetState() == kConnecting || common_.GetState() == kOpen) {
+      ExecutionContext* context = GetExecutionContext();
+      CHECK(context);
+      CHECK(channel_);
+      channel_->Fail("Page entered Back-Forward Cache.",
+                     mojom::blink::ConsoleMessageLevel::kError,
+                     CaptureSourceLocation(context));
+    }
   } else {
     event_queue_->Pause();
   }

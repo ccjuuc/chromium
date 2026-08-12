@@ -71,6 +71,7 @@ struct OpenXrExtensionMethods {
   OPENXR_DECLARE_FN(xrEnumerateSpatialCapabilitiesEXT);
   OPENXR_DECLARE_FN(xrEnumerateSpatialCapabilityComponentTypesEXT);
   OPENXR_DECLARE_FN(xrQuerySpatialComponentDataEXT);
+  OPENXR_DECLARE_FN(xrGetSpatialBufferVector2fEXT);
 
   // Spatial Anchors
   OPENXR_DECLARE_FN(xrCreateSpatialAnchorEXT);
@@ -107,6 +108,15 @@ struct OpenXrExtensionMethods {
   OPENXR_DECLARE_FN(xrEnumerateDepthSwapchainImagesANDROID);
   OPENXR_DECLARE_FN(xrEnumerateDepthResolutionsANDROID);
   OPENXR_DECLARE_FN(xrAcquireDepthSwapchainImagesANDROID);
+
+  // Meshing
+  OPENXR_DECLARE_FN(xrEnumerateSupportedSemanticLabelSetsANDROID);
+  OPENXR_DECLARE_FN(xrCreateSceneMeshingTrackerANDROID);
+  OPENXR_DECLARE_FN(xrDestroySceneMeshingTrackerANDROID);
+  OPENXR_DECLARE_FN(xrCreateSceneMeshSnapshotANDROID);
+  OPENXR_DECLARE_FN(xrDestroySceneMeshSnapshotANDROID);
+  OPENXR_DECLARE_FN(xrGetAllSubmeshStatesANDROID);
+  OPENXR_DECLARE_FN(xrGetSubmeshDataANDROID);
 #endif
 };
 // Ensure that we don't export our helper macro.
@@ -148,6 +158,13 @@ class OpenXrExtensionHelper {
   // supported.
   bool IsFeatureSupported(device::mojom::XRSessionFeature feature) const;
 
+  // Returns whether the given required/optional features contain any scene
+  // understanding features (anchors, hit-test, plane detection). Used to
+  // decide when CreateSceneUnderstandingManager should be invoked.
+  bool HasSceneUnderstandingFeatures(
+      const std::vector<mojom::XRSessionFeature>& required_features,
+      const std::vector<mojom::XRSessionFeature>& optional_features) const;
+
   // Feature Implementation Helpers ---------------------------------------
   //
   // There may be multiple extensions that can support a given WebXR feature,
@@ -175,6 +192,10 @@ class OpenXrExtensionHelper {
       XrSpace base_space,
       const std::vector<mojom::XRSessionFeature>& required_features,
       const std::vector<mojom::XRSessionFeature>& optional_features) const;
+
+  std::unique_ptr<OpenXrMeshManager> CreateMeshManager(
+      XrSession session,
+      XrSpace mojo_space) const;
 
   std::unique_ptr<OpenXrStageBoundsProvider> CreateStageBoundsProvider(
       XrSession session) const;

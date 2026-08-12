@@ -23,6 +23,7 @@
 #include "components/viz/common/surfaces/region_capture_bounds.h"
 #include "components/viz/common/surfaces/surface_id.h"
 #include "components/viz/common/surfaces/surface_range.h"
+#include "components/viz/common/surfaces/tracked_element_rects.h"
 #include "components/viz/common/viz_common_export.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -47,34 +48,17 @@ namespace viz {
 // A frame token value of 0 indicates an invalid token.
 inline constexpr uint32_t kInvalidFrameToken = 0;
 
-// A frame token value of `kLocalFrameToken` indicates a local frame token. A
-// local frame token is used inside viz when it creates its own CompositorFrame
-// for a surface.
-inline constexpr uint32_t kLocalFrameToken =
-    std::numeric_limits<uint32_t>::max();
-
-// Compares two frame tokens, handling cases where the token wraps around the
-// 32-bit max value.
-inline bool FrameTokenGT(uint32_t token1, uint32_t token2) {
-  // There will be underflow in the subtraction if token1 was created
-  // after token2.
-  return (token2 - token1) > 0x80000000u;
-}
-
 class VIZ_COMMON_EXPORT FrameTokenGenerator {
  public:
   inline uint32_t operator++() {
+    CHECK_LT(frame_token_, std::numeric_limits<uint32_t>::max());
     ++frame_token_;
-    if (frame_token_ == kLocalFrameToken) {
-      ++frame_token_;
-    }
-    if (frame_token_ == kInvalidFrameToken) {
-      ++frame_token_;
-    }
     return frame_token_;
   }
 
   inline uint32_t operator*() const { return frame_token_; }
+
+  void SetValueForTesting(uint32_t value) { frame_token_ = value; }
 
  private:
   uint32_t frame_token_ = kInvalidFrameToken;
@@ -105,7 +89,7 @@ class VIZ_COMMON_EXPORT CompositorFrameMetadata {
 
   gfx::SizeF scrollable_viewport_size;
 
-  // The size of the viewport for the visible region in DIP.
+  // The size of the viewport for the visible region in pixels.
   gfx::Size visible_viewport_size;
 
   gfx::ContentColorUsage content_color_usage = gfx::ContentColorUsage::kSRGB;
@@ -238,6 +222,10 @@ class VIZ_COMMON_EXPORT CompositorFrameMetadata {
 
   // Timestamps for TreesInViz metric reporting.
   TreesInVizTiming trees_in_viz_timing_details;
+
+  // Tracked element rects for the frame. The tracked elements are in the
+  // coordinate space of the root render pass.
+  TrackedElementRects tracked_element_rects;
 
  private:
   CompositorFrameMetadata(const CompositorFrameMetadata& other);

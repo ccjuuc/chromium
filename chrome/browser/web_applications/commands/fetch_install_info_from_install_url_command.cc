@@ -20,31 +20,11 @@
 #include "chrome/browser/web_applications/web_app_install_utils.h"
 #include "chrome/browser/web_applications/web_contents/web_app_data_retriever.h"
 #include "chrome/browser/web_applications/web_contents/web_contents_manager.h"
-#include "chrome/common/chrome_features.h"
 #include "components/webapps/browser/web_contents/web_app_url_loader.h"
 #include "content/public/browser/web_contents.h"
 #include "url/origin.h"
 
 namespace web_app {
-
-std::ostream& operator<<(std::ostream& os, FetchInstallInfoResult result) {
-  switch (result) {
-    case FetchInstallInfoResult::kAppInfoObtained:
-      return os << "kAppInfoObtained";
-    case FetchInstallInfoResult::kWebContentsDestroyed:
-      return os << "kWebContentsDestroyed";
-    case FetchInstallInfoResult::kUrlLoadingFailure:
-      return os << "kUrlLoadingFailure";
-    case FetchInstallInfoResult::kNoValidManifest:
-      return os << "kNoValidManifest";
-    case FetchInstallInfoResult::kWrongManifestId:
-      return os << "kWrongManifestId";
-    case FetchInstallInfoResult::kFailure:
-      return os << "kFailure";
-    case FetchInstallInfoResult::kShutdown:
-      return os << "kShutdown";
-  }
-}
 
 bool FetchInstallInfoFromInstallUrlCommand::
     FetchInstallInfoFromInstallUrlCommand::IsWebContentsDestroyed() {
@@ -76,16 +56,16 @@ FetchInstallInfoFromInstallUrlCommand::FetchInstallInfoFromInstallUrlCommand(
   CHECK(install_url_.is_valid());
 
   if (parent_manifest_id_.has_value()) {
-    CHECK(parent_manifest_id_.value().is_valid());
-    CHECK(url::Origin::Create(manifest_id_)
-              .IsSameOriginWith(
-                  url::Origin::Create(parent_manifest_id_.value())));
-    CHECK_NE(parent_manifest_id_.value(), manifest_id_);
+    CHECK(parent_manifest_id_->is_valid());
+    CHECK(url::IsSameOriginWith(manifest_id_.value(),
+                                parent_manifest_id_->value()));
+    CHECK_NE(*parent_manifest_id_, manifest_id_);
   }
 
   GetMutableDebugValue().Set("manifest_id", manifest_id_.spec());
-  GetMutableDebugValue().Set("parent_manifest_id",
-                             parent_manifest_id_.value_or(GURL("")).spec());
+  GetMutableDebugValue().Set(
+      "parent_manifest_id",
+      parent_manifest_id_.has_value() ? parent_manifest_id_->spec() : "");
   GetMutableDebugValue().Set("install_url", install_url_.spec());
 }
 
@@ -101,7 +81,7 @@ void FetchInstallInfoFromInstallUrlCommand::StartWithLock(
 
   if (IsWebContentsDestroyed()) {
     CompleteCommandAndSelfDestruct(
-        FetchInstallInfoResult::kWebContentsDestroyed,
+        FetchInstallInfoResult::kWebContentsWasDestroyed,
         /*install_info=*/nullptr);
     return;
   }
@@ -141,7 +121,6 @@ void FetchInstallInfoFromInstallUrlCommand::OnGetWebAppInstallInfo(
   }
 
   install_info->install_url = install_url_;
-  install_info->parent_app_manifest_id = parent_manifest_id_;
 
   data_retriever_->CheckInstallabilityAndRetrieveManifest(
       &lock_->shared_web_contents(),
@@ -222,13 +201,11 @@ void FetchInstallInfoFromInstallUrlCommand::OnInstallInfoFetched(
     std::unique_ptr<WebAppInstallInfo> info_from_manifest) {
   CHECK(info_from_manifest);
   info_from_manifest->install_url = install_url_;
-  info_from_manifest->parent_app_manifest_id = parent_manifest_id_;
 
   const webapps::AppId app_id =
-      GenerateAppIdFromManifestId(info_from_manifest->manifest_id(),
-                                  info_from_manifest->parent_app_manifest_id);
-  const webapps::AppId expected_app_id = GenerateAppIdFromManifestId(
-      manifest_id_, info_from_manifest->parent_app_manifest_id);
+      GenerateAppIdFromManifestId(info_from_manifest->manifest_id());
+  const webapps::AppId expected_app_id =
+      GenerateAppIdFromManifestId(manifest_id_);
 
   GetMutableDebugValue().Set("app_id", app_id);
   GetMutableDebugValue().Set("expected_app_id", expected_app_id);

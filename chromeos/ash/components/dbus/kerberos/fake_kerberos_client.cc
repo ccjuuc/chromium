@@ -6,9 +6,9 @@
 #include "chromeos/ash/components/dbus/kerberos/fake_kerberos_client.h"
 
 #include <algorithm>
+#include <string_view>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -16,6 +16,7 @@
 #include "base/strings/string_split.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/cros_system_api/dbus/kerberos/dbus-constants.h"
 
 namespace ash {
@@ -52,9 +53,9 @@ const char* const kBlocklistedConfigOptions[] = {
 
 // Performs a fake validation of a config line by just checking for some
 // non-allowlisted keywords. Returns true if no blocklisted items are contained.
-bool ValidateConfigLine(const std::string& line) {
+bool ValidateConfigLine(std::string_view line) {
   for (const char* option : kBlocklistedConfigOptions) {
-    if (base::Contains(line, option)) {
+    if (line.contains(option)) {
       return false;
     }
   }
@@ -64,8 +65,8 @@ bool ValidateConfigLine(const std::string& line) {
 // Runs ValidateConfigLine() on every line of |krb5_config|. Returns a
 // ConfigErrorInfo object that indicates the first line where validation fails,
 // if any.
-kerberos::ConfigErrorInfo ValidateConfigLines(const std::string& krb5_config) {
-  std::vector<std::string> lines = base::SplitString(
+kerberos::ConfigErrorInfo ValidateConfigLines(std::string_view krb5_config) {
+  std::vector<std::string_view> lines = base::SplitStringPiece(
       krb5_config, "\r\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
   for (size_t line_index = 0; line_index < lines.size(); ++line_index) {
     if (!ValidateConfigLine(lines[line_index])) {
@@ -157,13 +158,13 @@ void FakeKerberosClient::ClearAccounts(
     const kerberos::ClearAccountsRequest& request,
     ClearAccountsCallback callback) {
   MaybeRecordFunctionCallForTesting(__FUNCTION__);
-  std::unordered_set<std::string> keep_list(
+  absl::flat_hash_set<std::string> keep_list(
       request.principal_names_to_ignore_size());
   for (int n = 0; n < request.principal_names_to_ignore_size(); ++n)
     keep_list.insert(request.principal_names_to_ignore(n));
 
   for (auto it = accounts_.begin(); it != accounts_.end(); /* empty */) {
-    if (base::Contains(keep_list, it->principal_name)) {
+    if (keep_list.contains(it->principal_name)) {
       ++it;
       continue;
     }

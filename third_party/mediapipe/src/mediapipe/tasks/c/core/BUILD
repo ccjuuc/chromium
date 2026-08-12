@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
 package(default_visibility = ["//mediapipe/tasks:internal"])
 
 licenses(["notice"])
@@ -22,12 +25,20 @@ cc_library(
 )
 
 cc_library(
+    name = "common",
+    srcs = ["common.cc"],
+    hdrs = ["common.h"],
+    alwayslink = 1,
+)
+
+cc_library(
     name = "base_options_converter",
     srcs = ["base_options_converter.cc"],
     hdrs = ["base_options_converter.h"],
     deps = [
         ":base_options",
         "//mediapipe/tasks/cc/core:base_options",
+        "//mediapipe/tasks/cc/core:host_environment",
     ],
 )
 
@@ -40,5 +51,20 @@ cc_test(
         "//mediapipe/framework/port:gtest",
         "//mediapipe/tasks/cc/core:base_options",
         "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "mp_status",
+    hdrs = ["mp_status.h"],
+)
+
+cc_library(
+    name = "mp_status_converter",
+    srcs = ["mp_status_converter.cc"],
+    hdrs = ["mp_status_converter.h"],
+    deps = [
+        ":mp_status",
+        "@com_google_absl//absl/status",
     ],
 )

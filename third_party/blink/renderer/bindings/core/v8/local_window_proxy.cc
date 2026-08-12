@@ -38,7 +38,6 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/single_sample_metrics.h"
 #include "third_party/blink/renderer/bindings/core/v8/isolated_world_csp.h"
-#include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
 #include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_context_snapshot.h"
@@ -74,11 +73,85 @@
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/runtime_feature_state/runtime_feature_state_override_context.h"
 #include "third_party/blink/renderer/platform/weborigin/reporting_disposition.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "v8/include/v8.h"
 
 namespace blink {
+
+namespace {
+
+// Direct Sockets is a conditional runtime-enabled feature whose exposure on the
+// window object is evaluated by V8 during the initial context creation (which
+// synchronously spawns an `about:blank` document).
+//
+// When a child window is opened in the same BrowsingContextGroup (reusing the
+// process), the initial `about:blank` document inherits the opener's origin but
+// does NOT inherit its browser-overridden RuntimeFeatureState. Since V8 reuses
+// this initial context when the window subsequently navigates same-origin, the
+// API exposure is never re-evaluated, leaving Direct Sockets permanently
+// disabled in the child window even after navigation commits.
+//
+// To prevent this state-loss, we synchronously inherit the `DirectSockets`
+// feature state from the same-origin opener context just before V8 generates
+// the bindings for the initial context.
+bool MaybeInheritDirectSocketsFromOpener(LocalFrame* frame) {
+  if (!frame) {
+    return false;
+  }
+  auto* opener_local_frame = DynamicTo<LocalFrame>(frame->Opener());
+  if (!opener_local_frame) {
+    return false;
+  }
+  LocalDOMWindow* opener_window = opener_local_frame->DomWindow();
+  LocalDOMWindow* window = frame->DomWindow();
+  if (!opener_window || !window) {
+    return false;
+  }
+
+  if (!window->GetSecurityOrigin()->IsSameOriginWith(
+          opener_window->GetSecurityOrigin())) {
+    return false;
+  }
+
+  if (RuntimeEnabledFeatures::DirectSocketsEnabled(opener_window)) {
+    if (auto* target_context =
+            window->GetRuntimeFeatureStateOverrideContext()) {
+      target_context->SetDirectSocketsForceEnabled();
+      return true;
+    }
+  }
+  return false;
+}
+
+// When a V8 context is created from a pre-compiled V8 Context Snapshot,
+// standard wrapper constructor objects (like Window) are retrieved as quick
+// cache-hits from V8's static PerContextData snapshot.
+//
+// Because V8 gets a cache hit, it entirely bypasses the slow compilation path
+// which would normally run standard properties-installation callbacks. As a
+// result, dynamically-enabled conditional properties (like Direct Sockets in an
+// IWA context) are never overlaid onto the restored global Window wrappers.
+//
+// To fix this omission, this helper manually retrieves the restored Window
+// prototype and constructor wrappers from the PerContextData cache, and forces
+// V8 to run the conditional bindings installation for the window.
+void ForceReinstallConditionalFeaturesForWindow(ScriptState* script_state) {
+  V8PerContextData* per_context_data = script_state->PerContextData();
+  v8::Local<v8::Function> interface_object =
+      per_context_data->ConstructorForType(V8Window::GetWrapperTypeInfo());
+  v8::Local<v8::Object> prototype_object =
+      per_context_data->PrototypeForType(V8Window::GetWrapperTypeInfo());
+
+  V8Window::GetWrapperTypeInfo()->InstallConditionalFeatures(
+      script_state->GetContext(), script_state->World(),
+      script_state->GetContext()->Global(), prototype_object, interface_object,
+      v8::Local<v8::Template>());
+}
+
+}  // namespace
 
 void LocalWindowProxy::Trace(Visitor* visitor) const {
   visitor->Trace(script_state_);
@@ -87,6 +160,9 @@ void LocalWindowProxy::Trace(Visitor* visitor) const {
 
 void LocalWindowProxy::DisposeContext(Lifecycle next_status,
                                       FrameReuseStatus frame_reuse_status) {
+  // Clear the deferred callback to prevent it from carrying over to a future
+  // context initialization.
+  abort_script_execution_callback_ = nullptr;
   DCHECK(next_status == Lifecycle::kV8MemoryIsForciblyPurged ||
          next_status == Lifecycle::kGlobalObjectIsDetached ||
          next_status == Lifecycle::kFrameIsDetached ||
@@ -168,6 +244,13 @@ void LocalWindowProxy::Initialize() {
 
   ScriptState::Scope scope(script_state_);
   v8::Local<v8::Context> context = script_state_->GetContext();
+
+  // If a script execution abort callback was deferred, register it now
+  // that the context is initialized.
+  if (abort_script_execution_callback_) {
+    context->SetAbortScriptExecution(abort_script_execution_callback_);
+  }
+
   if (global_proxy_.IsEmpty()) {
     global_proxy_.Reset(GetIsolate(), context->Global());
     CHECK(!global_proxy_.IsEmpty());
@@ -231,9 +314,6 @@ void LocalWindowProxy::CreateContext() {
                GetFrame()->IsOutermostMainFrame());
   base::ElapsedTimer timer;
 
-  v8::ExtensionConfiguration extension_configuration =
-      ScriptController::ExtensionsFor(GetFrame()->DomWindow());
-
   DCHECK(GetFrame()->DomWindow());
   v8::Local<v8::Context> context;
   {
@@ -244,7 +324,7 @@ void LocalWindowProxy::CreateContext() {
 
     v8::Local<v8::Object> global_proxy = global_proxy_.Get(isolate);
     context = V8ContextSnapshot::CreateContextFromSnapshot(
-        isolate, World(), &extension_configuration, global_proxy, document);
+        isolate, World(), global_proxy, document);
     context_was_created_from_snapshot_ = !context.IsEmpty();
 
     // Even if we enable V8 context snapshot feature, we may hit this branch
@@ -256,10 +336,10 @@ void LocalWindowProxy::CreateContext() {
               .As<v8::FunctionTemplate>()
               ->InstanceTemplate();
       CHECK(!global_template.IsEmpty());
-      context = v8::Context::New(isolate, &extension_configuration,
-                                 global_template, global_proxy,
-                                 v8::DeserializeInternalFieldsCallback(),
-                                 GetFrame()->DomWindow()->GetMicrotaskQueue());
+      context =
+          v8::Context::New(isolate, nullptr, global_template, global_proxy,
+                           v8::DeserializeInternalFieldsCallback(),
+                           GetFrame()->DomWindow()->GetMicrotaskQueue());
       VLOG(1) << "A context is created NOT from snapshot";
     }
   }
@@ -288,9 +368,24 @@ void LocalWindowProxy::InstallConditionalFeatures() {
     V8ContextSnapshot::InstallContextIndependentProps(script_state_);
   }
 
+  // Direct Sockets state must be inherited from the opener BEFORE the
+  // unconditional Window wrapper warmup compilation below so that non-snapshot
+  // builds (like ChromeOS) compile the constructor with Direct Sockets natively
+  // active.
+  bool direct_sockets_inherited =
+      MaybeInheritDirectSocketsFromOpener(GetFrame());
+
   V8PerContextData* per_context_data = script_state_->PerContextData();
   std::ignore =
       per_context_data->ConstructorForType(V8Window::GetWrapperTypeInfo());
+
+  // On snapshot-based builds, the warmup above gets a cache hit on the
+  // pre-compiled feature-less wrapper. We must force-reinstall the conditional
+  // features AFTER warmup.
+  if (context_was_created_from_snapshot_ && direct_sockets_inherited) {
+    ForceReinstallConditionalFeaturesForWindow(script_state_);
+  }
+
   // Inform V8 that origin trial information is now connected with the context,
   // and V8 can extend the context with origin trial features.
   script_state_->GetIsolate()->InstallConditionalFeatures(
@@ -321,13 +416,13 @@ void LocalWindowProxy::SetupWindowPrototypeChain() {
 
   // The prototype object of Window interface (aka Window.prototype).
   v8::Local<v8::Object> window_prototype =
-      global_proxy->GetPrototypeV2().As<v8::Object>();
+      global_proxy->GetPrototype().As<v8::Object>();
   CHECK(!window_prototype.IsEmpty());
 
   // The named properties object of Window interface (aka WindowProperties)
   // also needs a link to DOMWindow object.
   v8::Local<v8::Object> window_properties =
-      window_prototype->GetPrototypeV2().As<v8::Object>();
+      window_prototype->GetPrototype().As<v8::Object>();
   CHECK(!window_properties.IsEmpty());
   V8DOMWrapper::SetNativeInfo(GetIsolate(), window_properties, window);
 
@@ -506,15 +601,15 @@ void Getter(v8::Local<v8::Name> property,
   v8::Isolate* isolate = info.GetIsolate();
   AtomicString name = ToCoreAtomicString(isolate, property.As<v8::String>());
   HTMLDocument* html_document =
-      V8HTMLDocument::ToWrappableUnsafe(isolate, info.HolderV2());
+      V8HTMLDocument::ToWrappableUnsafe(isolate, info.Holder());
   DCHECK(html_document);
   v8::Local<v8::Value> namedPropertyValue =
-      GetNamedProperty(html_document, name, info.HolderV2(), isolate);
+      GetNamedProperty(html_document, name, info.Holder(), isolate);
   bool hasNamedProperty = !namedPropertyValue.IsEmpty();
 
   v8::Local<v8::Value> prototypeChainValue;
   bool hasPropertyInPrototypeChain =
-      info.HolderV2()
+      info.Holder()
           ->GetRealNamedPropertyInPrototypeChain(isolate->GetCurrentContext(),
                                                  property.As<v8::String>())
           .ToLocal(&prototypeChainValue);
@@ -536,7 +631,7 @@ void Getter(v8::Local<v8::Name> property,
 
 void EmptySetter(v8::Local<v8::Name> name,
                  v8::Local<v8::Value> value,
-                 const v8::PropertyCallbackInfo<void>& info) {
+                 const v8::PropertyCallbackInfo<v8::Boolean>& info) {
   // Empty setter is required to keep the native data property in "accessor"
   // state even in case the value is updated by user code.
 }
@@ -604,13 +699,15 @@ void LocalWindowProxy::UpdateSecurityOrigin(const SecurityOrigin* origin) {
 
 void LocalWindowProxy::SetAbortScriptExecution(
     v8::Context::AbortScriptExecutionCallback callback) {
-  InitializeIfNeeded();
-  // Aborting script execution may cause some undesired side effects, so
-  // leave some breadcrumbs in case things go wrong.
-  // See https://crbug.com/427166012 for additional context.
-  static auto* const abort_script_execution = AllocateCrashKeyString(
-      "abort_script_execution", base::debug::CrashKeySize::Size32);
-  SetCrashKeyString(abort_script_execution, callback ? "true" : "false");
+  abort_script_execution_callback_ = callback;
+
+  // If the context is not yet initialized, defer registering the callback on
+  // the context until Initialize() is called. Forcing initialization here is
+  // unnecessary and can cause crashes during navigation (e.g. due to stale
+  // wrappers in inline storage).
+  if (lifecycle_ != Lifecycle::kContextIsInitialized) {
+    return;
+  }
 
   script_state_->GetContext()->SetAbortScriptExecution(callback);
 }

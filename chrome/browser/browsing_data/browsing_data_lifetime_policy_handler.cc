@@ -5,7 +5,6 @@
 #include "chrome/browser/browsing_data/browsing_data_lifetime_policy_handler.h"
 
 #include "base/strings/string_util.h"
-#include "base/strings/utf_string_conversions.h"
 #include "components/browsing_data/core/browsing_data_policies_utils.h"
 #include "components/policy/core/browser/policy_error_map.h"
 #include "components/policy/core/common/policy_logger.h"
@@ -106,7 +105,7 @@ void BrowsingDataLifetimePolicyHandler::ApplyPolicySettings(
     base::Value filtered_policy_value =
         policies.GetValueUnsafe(policy_name())->Clone();
     for (auto& item : filtered_policy_value.GetList()) {
-      base::Value::List& data_types =
+      base::ListValue& data_types =
           item.GetDict().Find("data_types")->GetList();
       data_types.erase(
           std::remove_if(data_types.begin(), data_types.end(),

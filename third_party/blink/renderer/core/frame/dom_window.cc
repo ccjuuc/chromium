@@ -10,6 +10,7 @@
 #include "base/containers/fixed_flat_map.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/rand_util.h"
 #include "base/trace_event/trace_event.h"
 #include "services/network/public/mojom/web_sandbox_flags.mojom-blink.h"
 #include "third_party/blink/public/common/features.h"
@@ -546,7 +547,7 @@ String DOMWindow::CrossDomainAccessErrorMessage(
   // there isn't anything else to show other than "null" for its origin.
   KURL target_url = local_dom_window
                         ? local_dom_window->Url()
-                        : KURL(NullURL(), target_origin->ToString());
+                        : KURL(NullUrl(), target_origin->ToString());
   using SandboxFlags = network::mojom::blink::WebSandboxFlags;
   if (GetFrame()->GetSecurityContext()->IsSandboxed(SandboxFlags::kOrigin) ||
       accessing_window->IsSandboxed(SandboxFlags::kOrigin)) {
@@ -608,6 +609,13 @@ String DOMWindow::CrossDomainAccessErrorMessage(
   }
   if (cross_document_access == CrossDocumentAccessPolicy::kDisallowed) {
     return StrCat({message, "The document-access policy denied access."});
+  }
+
+  if (active_origin->CanAccess(target_origin)) {
+    return StrCat({message,
+                   "The frames are same-origin but belong to different agent "
+                   "clusters, possibly due to conflicting Document Isolation "
+                   "Policies."});
   }
 
   // Default.
@@ -720,8 +728,16 @@ void DOMWindow::focus(v8::Isolate* isolate) {
   } else {
     DCHECK(IsMainThread());
 
-    // Allow focus if the request is coming from our opener window.
-    allow_focus = opener() && opener() != this && incumbent_window == opener();
+    if (incumbent_window == this) {
+      // Allow self-focus requests if the frame has appropriate privilege.
+      allow_focus =
+          originating_frame && originating_frame->GetSettings() &&
+          originating_frame->GetSettings()->GetAllowUnrestrictedWindowFocus();
+    } else {
+      // Allow focus if the request is coming from our opener window.
+      allow_focus =
+          opener() && opener() != this && incumbent_window == opener();
+    }
 
     // Also allow focus from a user activation on a document picture-in-picture
     // window opened by this window. In this case, we determine the originating
@@ -753,7 +769,9 @@ void DOMWindow::focus(v8::Isolate* isolate) {
     // We are depending on user activation twice since IsFocusAllowed() will
     // check for activation. This should be addressed in
     // https://crbug.com/959815.
-    if (!local_frame->GetDocument()->IsFocusAllowed(FocusTrigger::kScript)) {
+    if (!originating_frame ||
+        !local_frame->GetDocument()->IsFocusAllowed(FocusTrigger::kScript,
+                                                    *originating_frame)) {
       return;
     }
   }
@@ -1048,8 +1066,8 @@ void DOMWindow::DoPostMessage(scoped_refptr<SerializedScriptValue> message,
   mojom::blink::DelegatedCapability delegated_capability =
       mojom::blink::DelegatedCapability::kNone;
   if (options->hasDelegate()) {
-    Vector<String> capability_list;
-    options->delegate().Split(' ', capability_list);
+    Vector<StringView> capability_list =
+        StringView(options->delegate()).SplitSkippingEmpty(' ');
     if (capability_list.Contains("payment")) {
       delegated_capability = mojom::blink::DelegatedCapability::kPaymentRequest;
     } else if (capability_list.Contains("fullscreen")) {
@@ -1058,6 +1076,16 @@ void DOMWindow::DoPostMessage(scoped_refptr<SerializedScriptValue> message,
     } else if (capability_list.Contains("display-capture")) {
       delegated_capability =
           mojom::blink::DelegatedCapability::kDisplayCaptureRequest;
+    } else if (RuntimeEnabledFeatures::
+                   CapabilityDelegationDigitalCredentialsEnabled(source) &&
+               capability_list.Contains("digital-credentials-create")) {
+      delegated_capability =
+          mojom::blink::DelegatedCapability::kDigitalCredentialsCreate;
+    } else if (RuntimeEnabledFeatures::
+                   CapabilityDelegationDigitalCredentialsEnabled(source) &&
+               capability_list.Contains("digital-credentials-get")) {
+      delegated_capability =
+          mojom::blink::DelegatedCapability::kDigitalCredentialsGet;
     } else {
       exception_state.ThrowDOMException(
           DOMExceptionCode::kNotSupportedError,
@@ -1127,7 +1155,7 @@ void DOMWindow::RecordWindowProxyAccessMetrics(
     // browser-side downsampling rates.
     if (!base::FeatureList::IsEnabled(
             features::kSubSampleWindowProxyUsageMetrics) ||
-        metrics_sub_sampler_.ShouldSample(0.0001)) {
+        base::ShouldRecordSubsampledMetric(0.0001)) {
       accessing_frame->GetLocalFrameHostRemote().RecordWindowProxyUsageMetrics(
           GetFrame()->GetFrameToken(), access_type);
     }

@@ -31,10 +31,11 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_EXPORTED_WEB_VIEW_IMPL_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EXPORTED_WEB_VIEW_IMPL_H_
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
-#include "base/debug/stack_trace.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/observer_list.h"
@@ -103,14 +104,6 @@ class WebViewClient;
 class WebFrameWidgetImpl;
 
 enum class FullscreenRequestType;
-
-namespace mojom {
-namespace blink {
-class TextAutosizerPageInfo;
-}
-}  // namespace mojom
-
-using PaintHoldingCommitTrigger = cc::PaintHoldingCommitTrigger;
 
 class CORE_EXPORT WebViewImpl final : public WebView,
                                       public mojom::blink::PageBroadcast {
@@ -184,7 +177,8 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   gfx::Size ContentsPreferredMinimumSize() override;
   void UpdatePreferredSize() override;
   void EnablePreferredSizeChangedMode() override;
-  void SetZoomFactorForDeviceScaleFactor(float) override;
+  void SetZoomFactorForDeviceScaleFactor(float device_scale_factor,
+                                         float text_scale_multiplier) override;
   float ZoomFactorForViewportLayout() override {
     // This returns the zoom factor to use when determining the layout width
     // while processing the viewport meta tag. We use only the device scale
@@ -200,6 +194,10 @@ class CORE_EXPORT WebViewImpl final : public WebView,
     return compositor_device_scale_factor_override_
                ? compositor_device_scale_factor_override_
                : zoom_factor_for_device_scale_factor_;
+  }
+  float ZoomFactorForViewportLayoutWithoutTextScale() override {
+    return ZoomFactorForViewportLayout() /
+           zoom_factor_for_text_scale_multiplier_;
   }
   bool AutoResizeMode() override;
   void EnableAutoResizeForTesting(const gfx::Size& min_window_size,
@@ -265,6 +263,9 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   void SetBaseBackgroundColorOverrideTransparent(bool override_to_transparent);
   void SetBaseBackgroundColorOverrideForInspector(std::optional<SkColor>);
 
+  // Called when the text-scale meta tag is added or removed
+  void OnTextScaleMetaTagPresentChanged();
+
   // Resize the WebView. You likely should be using
   // MainFrameWidget()->Resize instead.
   void Resize(const gfx::Size&);
@@ -296,6 +297,7 @@ class CORE_EXPORT WebViewImpl final : public WebView,
       mojom::blink::PrerenderPageActivationParamsPtr
           prerender_page_activation_params,
       ActivatePrerenderedPageCallback callback) override;
+  void UpgradePrerenderUntilScriptToFullPrerender() override;
   void UpdateWebPreferences(
       const blink::web_pref::WebPreferences& preferences) override;
   void UpdateRendererPreferences(
@@ -315,8 +317,6 @@ class CORE_EXPORT WebViewImpl final : public WebView,
       override;
   void UpdatePageBrowsingContextGroup(
       const base::UnguessableToken& browsing_context_group_token) override;
-  void SetPageAttributionSupport(
-      network::mojom::AttributionSupport support) override;
   void UpdateColorProviders(
       const ColorProviderColorMaps& color_provider_colors) override;
   void SetSupportsDraggableRegions(bool supports_draggable_regions) override;
@@ -324,6 +324,7 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   void DispatchPersistedPageshow(base::TimeTicks navigation_start);
   void DispatchPagehide(mojom::blink::PagehideDispatch pagehide_dispatch);
   void HookBackForwardCacheEviction(bool hook);
+  void FlushRestoreCallbacks();
 
   float DefaultMinimumPageScaleFactor() const;
   float DefaultMaximumPageScaleFactor() const;
@@ -421,9 +422,6 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   void DidChangeContentsSize();
   void PageScaleFactorChanged();
   void OutermostMainFrameScrollOffsetChanged();
-  void TextAutosizerPageInfoChanged(
-      const mojom::blink::TextAutosizerPageInfo& page_info);
-
   bool ShouldAutoResize() const { return should_auto_resize_; }
 
   gfx::Size MinAutoSize() const { return min_auto_size_; }
@@ -580,36 +578,33 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   // adjacent UI element in the containing window.
   void TakeFocus(bool reverse);
 
-  // Shows a previously created WebView (via window.open()).
-  void Show(const LocalFrameToken& opener_frame_token,
-            NavigationPolicy policy,
-            const gfx::Rect& requested_rect,
-            const gfx::Rect& adjusted_rect,
-            bool opened_by_user_gesture);
-
   // Send the window rect to the browser and call `ack_callback` when the
   // browser has processed it.
   void SendWindowRectToMainFrameHost(const gfx::Rect& bounds,
                                      base::OnceClosure ack_callback);
+  void SendMoveWindowToMainFrameHost(const gfx::Point& origin,
+                                     base::OnceClosure ack_callback);
+  void SendResizeWindowToMainFrameHost(const gfx::Size& size,
+                                       base::OnceClosure ack_callback);
 
   // Tells the browser that another page has accessed the DOM of the initial
   // empty document of a main frame.
   void DidAccessInitialMainDocument();
+  void DidChangeThemeColor(std::optional<SkColor> theme_color);
+  void DidChangeBackgroundColor(SkColor4f background_color, bool color_adjust);
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-  using WindowShowStateChangeCallback = base::OnceCallback<void(bool)>;
+  // Additional Windowing Controls API.
+  using WindowingControlsChangeCallback = base::OnceCallback<void(bool)>;
   // Sends window.minimize() requests to the browser window.
-  void Minimize(WindowShowStateChangeCallback);
+  void Minimize(WindowingControlsChangeCallback);
   // Sends window.maximize() requests to the browser window.
-  void Maximize(WindowShowStateChangeCallback);
+  void Maximize(WindowingControlsChangeCallback);
   // Sends window.restore() requests to the browser window.
-  void Restore(WindowShowStateChangeCallback);
+  void Restore(WindowingControlsChangeCallback);
   // Sends window.setResizable() requests to the browser window.
-  void SetResizable(bool resizable);
-
-  void OnWindowShowStateChanged(ui::mojom::blink::WindowShowState old_state,
-                                ui::mojom::blink::WindowShowState new_state);
-#endif  //  !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  void SetResizable(bool resizable, WindowingControlsChangeCallback);
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
   // TODO(crbug.com/1149992): This is called from the associated widget and this
   // code should eventually move out of WebView into somewhere else.
@@ -634,7 +629,11 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   void DidFirstVisuallyNonEmptyPaint();
 
   // Called once the first contentful paint happens on the main frame.
-  void OnFirstContentfulPaint(const base::TimeDelta& duration);
+  void OnFirstContentfulPaint(const base::TimeTicks& presentation_time);
+
+  // Called when the outermost main frame's largest contentful paint candidate
+  // changed.
+  void OnLargestContentfulPaint(const base::TimeTicks& presentation_time);
 
   scheduler::WebAgentGroupScheduler& GetWebAgentGroupScheduler();
 
@@ -660,12 +659,14 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   FRIEND_TEST_ALL_PREFIXES(WebViewTest, UpdateTargetURLWithInvalidURL);
   FRIEND_TEST_ALL_PREFIXES(WebViewTest, TouchDragContextMenu);
   FRIEND_TEST_ALL_PREFIXES(WebViewTest, ContextMenuAndDrag);
+  FRIEND_TEST_ALL_PREFIXES(WebViewTest,
+                           MouseFocusOnTabindexLinkDoesNotShowBubble);
+  FRIEND_TEST_ALL_PREFIXES(WebViewTest, KeyboardFocusOnTabindexLinkShowsBubble);
 
   friend class frame_test_helpers::WebViewHelper;
   friend class SimCompositor;
   friend class WebView;  // So WebView::Create can call our constructor
 
-  void AcceptLanguagesChanged();
   void ThemeChanged();
 
   // Update the target url locally and tell the browser that the target URL has
@@ -707,10 +708,6 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   // browser.
   void DoDeferredCloseWindowSoon();
 
-#if BUILDFLAG(IS_CHROMEOS)
-  void UpdateUseOverlayScrollbar(bool use_overlay_scrollbar);
-#endif
-
   WebViewImpl(
       WebViewClient*,
       mojom::blink::PageVisibilityState visibility,
@@ -751,10 +748,10 @@ class CORE_EXPORT WebViewImpl final : public WebView,
 
   LocalFrame* FocusedLocalFrameInWidget() const;
 
-  // Clear focus and text input state of the page. If there was a focused
-  // element, this will trigger updates to observers and send focus, selection,
-  // and text input-related events.
-  void RemoveFocusAndTextInputState();
+  // Clear text input state of the page, and optionally clear DOM focus too.
+  // If there was a focused element, this may trigger updates to observers and
+  // send focus, selection, and text input-related events.
+  void RemoveFocusAndTextInputState(bool clear_focus);
 
   // Finds the zoom and scroll parameters for zooming into an editable element
   // with bounds |element_bounds_in_root_frame| and caret bounds
@@ -870,6 +867,10 @@ class CORE_EXPORT WebViewImpl final : public WebView,
 
   // Additional zoom factor used to scale the content by device scale factor.
   double zoom_factor_for_device_scale_factor_ = 1.;
+
+  // The portion of |zoom_factor_for_device_scale_factor_| that is due to the
+  // system text scale factor.
+  double zoom_factor_for_text_scale_multiplier_ = 1.f;
 
   // This value, when multiplied by the font scale factor, gives the maximum
   // page scale that can result from automatic zooms.
@@ -1006,27 +1007,17 @@ class CORE_EXPORT WebViewImpl final : public WebView,
 
   scheduler::WebAgentGroupScheduler& web_agent_group_scheduler_;
 
-  // TODO(crbug.com/1499519): Remove this temporary debugging.
-  std::optional<base::debug::StackTrace> close_task_posted_stack_trace_;
-  std::optional<base::debug::StackTrace> close_called_stack_trace_;
-  std::optional<base::debug::StackTrace> close_window_called_stack_trace_;
-
   // Indicates whether the page supports draggable regions via the app-region
   // CSS property.
   bool supports_draggable_regions_ = false;
 
+  // True if the most recent navigation was a bfcache restoration. This is used
+  // to skip Blink-side scroll restoration to avoid conflicts with the cache's
+  // native restoration. Reset on each lifecycle update.
+  bool last_page_lifecycle_state_update_restored_from_bfcache_ = false;
+
   // All the registered observers.
   base::ObserverList<WebViewObserver> observers_;
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-  enum class WindowShowStateChangeType {
-    Maximize,
-    Minimize,
-    Restore,
-  };
-  std::optional<
-      std::pair<WindowShowStateChangeType, WindowShowStateChangeCallback>>
-      window_show_state_change_callback_;
-#endif
 };
 
 // WebView is always implemented by WebViewImpl, so explicitly allow the

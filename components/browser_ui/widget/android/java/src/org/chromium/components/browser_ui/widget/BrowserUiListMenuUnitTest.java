@@ -11,13 +11,12 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.when;
 
-import static org.chromium.base.test.util.Batch.UNIT_TESTS;
 import static org.chromium.components.browser_ui.widget.BrowserUiListMenuUtils.getBasicListMenu;
 import static org.chromium.ui.listmenu.ListItemType.MENU_ITEM_WITH_SUBMENU;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.CLICK_LISTENER;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.ENABLED;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.TITLE;
-import static org.chromium.ui.listmenu.ListMenuSubmenuItemProperties.SUBMENU_ITEMS;
+import static org.chromium.ui.listmenu.ListMenuSubmenuItemProperties.SUBMENU_PROVIDER;
 
 import android.app.Activity;
 import android.graphics.drawable.ColorDrawable;
@@ -42,8 +41,6 @@ import org.robolectric.shadows.ShadowListView;
 
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
-import org.chromium.ui.R;
 import org.chromium.ui.listmenu.BasicListMenu;
 import org.chromium.ui.listmenu.ListMenuSubmenuItemProperties;
 import org.chromium.ui.listmenu.ListMenuUtils;
@@ -61,7 +58,6 @@ import java.util.List;
 @Config(
         manifest = Config.NONE,
         shadows = {ShadowAppCompatResources.class})
-@Batch(UNIT_TESTS)
 public class BrowserUiListMenuUnitTest {
 
     @Rule
@@ -95,7 +91,7 @@ public class BrowserUiListMenuUnitTest {
                         MENU_ITEM_WITH_SUBMENU,
                         new PropertyModel.Builder(ListMenuSubmenuItemProperties.ALL_KEYS)
                                 .with(TITLE, TEST_LABEL)
-                                .with(SUBMENU_ITEMS, subList)
+                                .with(SUBMENU_PROVIDER, () -> subList)
                                 .with(ENABLED, true)
                                 .build()));
         for (int i = NUM_SUBMENU_ITEMS; i < (NUM_SUBMENU_ITEMS + NUM_NORMAL_ITEMS_IN_ROOT); i++) {
@@ -109,7 +105,7 @@ public class BrowserUiListMenuUnitTest {
         mContentView = Mockito.spy(setupListViewForSubmenuTesting());
         // Assert not showing before navigation
         View hairline = mView.findViewById(R.id.menu_header_bottom_hairline);
-        assertEquals(View.INVISIBLE, hairline.getVisibility());
+        assertEquals(View.GONE, hairline.getVisibility());
         // Navigate to submenu
         ListItem submenuParent = (ListItem) mContentView.getItemAtPosition(0);
         submenuParent.model.get(CLICK_LISTENER).onClick(mView);
@@ -154,11 +150,11 @@ public class BrowserUiListMenuUnitTest {
         ListView listView = setupListViewForSubmenuTesting();
         // Assert not showing before navigation
         View hairline = mView.findViewById(R.id.menu_header_bottom_hairline);
-        assertEquals(View.INVISIBLE, hairline.getVisibility());
+        assertEquals(View.GONE, hairline.getVisibility());
         // Don't navigate to submenu, so there's no fixed header.
         // Scroll and assert hairline is still not visible.
         listView.scrollListBy(1);
-        assertEquals(View.INVISIBLE, hairline.getVisibility());
+        assertEquals(View.GONE, hairline.getVisibility());
     }
 
     @Test
@@ -171,11 +167,11 @@ public class BrowserUiListMenuUnitTest {
                         MENU_ITEM_WITH_SUBMENU,
                         new PropertyModel.Builder(ListMenuSubmenuItemProperties.ALL_KEYS)
                                 .with(TITLE, TEST_LABEL)
-                                .with(SUBMENU_ITEMS, submenuItems)
+                                .with(SUBMENU_PROVIDER, () -> submenuItems)
                                 .build());
         data.add(submenuParentItem);
         mBasicListMenu = getBasicListMenu(mActivity, data, (item, view) -> {}, 0, colorIntForTest);
-        mBasicListMenu.setupCallbacksRecursively(
+        mBasicListMenu.setupCallbacks(
                 () -> {}, ListMenuUtils.createHierarchicalMenuController(mActivity));
         mView = mBasicListMenu.getContentView();
         int itemHeight =
@@ -224,7 +220,7 @@ public class BrowserUiListMenuUnitTest {
     }
 
     private ListView setupListViewForSubmenuTesting() {
-        mBasicListMenu.setupCallbacksRecursively(
+        mBasicListMenu.setupCallbacks(
                 () -> {}, ListMenuUtils.createHierarchicalMenuController(mActivity));
         mView = mBasicListMenu.getContentView();
         int width = mActivity.getResources().getDimensionPixelSize(R.dimen.list_menu_width);

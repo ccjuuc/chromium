@@ -4,36 +4,40 @@
 
 // This file handles messages from the browser, sending messages to the client.
 
-import {loadTimeData} from '//resources/js/load_time_data.js';
-
 import type {PageMetadata as PageMetadataMojo} from '../../ai_page_content_metadata.mojom-webui.js';
-import type {ActorTaskState as ActorTaskStateMojo, AdditionalContext as AdditionalContextMojo, FocusedTabData as FocusedTabDataMojo, OpenPanelInfo as OpenPanelInfoMojo, PanelOpeningData as PanelOpeningDataMojo, PanelState as PanelStateMojo, TabData as TabDataMojo, ViewChangeRequest as ViewChangeRequestMojo, WebClientInterface, ZeroStateSuggestionsOptions as ZeroStateSuggestionsOptionsMojo, ZeroStateSuggestionsV2 as ZeroStateSuggestionsV2Mojo} from '../../glic.mojom-webui.js';
-import type * as api from '../../glic_api/glic_api.js';
-import type {ViewChangeRequest} from '../../glic_api/glic_api.js';
-import {ClientView} from '../../glic_api/glic_api.js';
+import type {AdditionalContext as AdditionalContextMojo, FileUploadPolicyState, FocusedTabData as FocusedTabDataMojo, GeminiEnterpriseSettings as GeminiEnterpriseSettingsMojo, InvokeOptions as InvokeOptionsMojo, OpenPanelInfo as OpenPanelInfoMojo, PanelOpeningData as PanelOpeningDataMojo, PanelState as PanelStateMojo, TabData as TabDataMojo, WebClientInterface} from '../../glic.mojom-webui.js';
+import type {WebClient} from '../request_types.js';
+import {ResponseExtras} from '../transport/messaging.js';
+import type {PostMessageRemote} from '../transport/post_message_transport.js';
 
-import type {NavigationConfirmationRequest as NavigationConfirmationRequestMojo, NavigationConfirmationResponse as NavigationConfirmationResponseMojo, SelectAutofillSuggestionsDialogRequest as SelectAutofillSuggestionsDialogRequestMojo, SelectAutofillSuggestionsDialogResponse as SelectAutofillSuggestionsDialogResponseMojo, SelectCredentialDialogRequest as SelectCredentialDialogRequestMojo, SelectCredentialDialogResponse as SelectCredentialDialogResponseMojo, UserConfirmationDialogRequest as UserConfirmationDialogRequestMojo, UserConfirmationDialogResponse as UserConfirmationDialogResponseMojo} from './../../actor_webui.mojom-webui.js';
-import {ResponseExtras} from './../post_message_transport.js';
-import type {AdditionalContextPartPrivate, AdditionalContextPrivate} from './../request_types.js';
-import {annotatedPageDataToClient, contextDataToClient, focusedTabDataToClient, idToClient, navigationConfirmationRequestToClient, navigationConfirmationResponseToMojo, optionalToClient, originToClient, pageMetadataToClient, panelOpeningDataToClient, panelStateToClient, pdfDocumentDataToClient, screenshotToClient, selectAutofillSuggestionsDialogRequestToClient, selectAutofillSuggestionsDialogResponseToMojo, selectCredentialDialogRequestToClient, selectCredentialDialogResponseToMojo, tabContextToClient, tabDataToClient, timeDeltaFromClient, urlToClient, userConfirmationDialogRequestToClient, userConfirmationDialogResponseToMojo, webClientModeToMojo, webPageDataToClient} from './conversions.js';
-import type {GatedSender} from './gated_sender.js';
+import {additionalContextToClient, fileUploadPolicyStateToClient, focusedTabDataToClient, idToClient, invokeOptionsToClient, pageMetadataToClient, panelOpeningDataToClient, panelStateToClient, tabDataToClient, timeDeltaFromClient, webClientModeToMojo} from './conversions.js';
 import type {ApiHostEmbedder, GlicApiHost} from './glic_api_host.js';
 import {PanelOpenState} from './types.js';
 
 export class WebClientImpl implements WebClientInterface {
-  private sender: GatedSender;
+  private sender: PostMessageRemote<WebClient>;
+  private clientCreated = Promise.withResolvers<void>();
 
   constructor(private host: GlicApiHost, private embedder: ApiHostEmbedder) {
     this.sender = this.host.sender;
   }
 
-  async notifyPanelWillOpen(panelOpeningData: PanelOpeningDataMojo):
+  markCreated() {
+    this.clientCreated.resolve();
+  }
+
+  async checkResponsive(): Promise<void> {
+    return this.sender.requestWithResponse('checkResponsive', undefined);
+  }
+
+  async processNotifyPanelWillOpen(panelOpeningData: PanelOpeningDataMojo):
       Promise<{openPanelInfo: OpenPanelInfoMojo}> {
+    await this.clientCreated.promise;
     this.host.setWaitingOnPanelWillOpen(true);
     let result;
     try {
       result = await this.sender.requestWithResponse(
-          'glicWebClientNotifyPanelWillOpen',
+          'notifyPanelWillOpen',
           {panelOpeningData: panelOpeningDataToClient(panelOpeningData)});
     } finally {
       this.host.setWaitingOnPanelWillOpen(false);
@@ -42,9 +46,9 @@ export class WebClientImpl implements WebClientInterface {
 
     // The web client is ready to show, ensure the webview is
     // displayed.
-    if (!loadTimeData.getBoolean('glicWebContentsWarming')) {
-      this.embedder.webClientReady();
-    }
+    const canUserResize = result.openPanelInfo?.canUserResize ?? true;
+    this.embedder.enableDragResize(canUserResize);
+    this.embedder.webClientReady();
 
     const openPanelInfoMojo: OpenPanelInfoMojo = {
       webClientMode: webClientModeToMojo(result.openPanelInfo?.startingMode),
@@ -58,102 +62,123 @@ export class WebClientImpl implements WebClientInterface {
         width: result.openPanelInfo?.resizeParams?.width,
         height: result.openPanelInfo?.resizeParams?.height,
       };
-      this.embedder.onGuestResizeRequest(size);
       openPanelInfoMojo.panelSize = size;
     }
     return {openPanelInfo: openPanelInfoMojo};
   }
 
-  notifyPanelWasClosed(): Promise<void> {
+  async notifyPanelWillOpen(panelOpeningData: PanelOpeningDataMojo):
+      Promise<{openPanelInfo: OpenPanelInfoMojo}> {
+    return this.processNotifyPanelWillOpen(panelOpeningData);
+  }
+
+  async processNotifyPanelWasClosed(): Promise<void> {
     this.host.panelOpenStateChanged(PanelOpenState.CLOSED);
+    return this.sender.requestWithResponse('notifyPanelWasClosed', undefined);
+  }
+  notifyPanelWasClosed(): Promise<void> {
+    return this.processNotifyPanelWasClosed();
+  }
+
+  invoke(options: InvokeOptionsMojo): Promise<void> {
+    const extras = new ResponseExtras();
     return this.sender.requestWithResponse(
-        'glicWebClientNotifyPanelWasClosed', undefined);
+        'invoke', {
+          options: invokeOptionsToClient(options, extras),
+        },
+        extras.transfers);
   }
 
   notifyPanelStateChange(panelState: PanelStateMojo) {
-    this.sender.requestNoResponse('glicWebClientPanelStateChanged', {
+    this.sender.requestNoResponse('panelStateChanged', {
       panelState: panelStateToClient(panelState),
     });
   }
 
   notifyPanelCanAttachChange(canAttach: boolean) {
-    this.sender.requestNoResponse(
-        'glicWebClientCanAttachStateChanged', {canAttach});
+    this.sender.requestNoResponse('canAttachStateChanged', {canAttach});
+  }
+
+  notifyGeminiEnterpriseSettingsChanged(
+      settings: GeminiEnterpriseSettingsMojo|null): void {
+    this.sender.requestNoResponse('notifyGeminiEnterpriseSettingsChanged', {
+      settings: settings || undefined,
+    });
   }
 
   notifyMicrophonePermissionStateChanged(enabled: boolean): void {
-    this.sender.requestNoResponse(
-        'glicWebClientNotifyMicrophonePermissionStateChanged', {
-          enabled: enabled,
-        });
+    this.sender.requestNoResponse('notifyMicrophonePermissionStateChanged', {
+      enabled: enabled,
+    });
+  }
+
+  stopMicrophone(): Promise<void> {
+    return this.sender.requestWithResponse('stopMicrophone', undefined);
   }
 
   notifyLocationPermissionStateChanged(enabled: boolean): void {
-    this.sender.requestNoResponse(
-        'glicWebClientNotifyLocationPermissionStateChanged', {
-          enabled: enabled,
-        });
+    this.sender.requestNoResponse('notifyLocationPermissionStateChanged', {
+      enabled: enabled,
+    });
   }
 
   notifyTabContextPermissionStateChanged(enabled: boolean): void {
-    this.sender.requestNoResponse(
-        'glicWebClientNotifyTabContextPermissionStateChanged', {
-          enabled: enabled,
-        });
+    this.sender.requestNoResponse('notifyTabContextPermissionStateChanged', {
+      enabled: enabled,
+    });
   }
 
   notifyOsLocationPermissionStateChanged(enabled: boolean): void {
-    this.sender.requestNoResponse(
-        'glicWebClientNotifyOsLocationPermissionStateChanged', {
-          enabled: enabled,
-        });
+    this.sender.requestNoResponse('notifyOsLocationPermissionStateChanged', {
+      enabled: enabled,
+    });
   }
 
   notifyClosedCaptioningSettingChanged(enabled: boolean): void {
-    this.sender.requestNoResponse(
-        'glicWebClientNotifyClosedCaptioningSettingChanged', {
-          enabled: enabled,
-        });
+    this.sender.requestNoResponse('notifyClosedCaptioningSettingChanged', {
+      enabled: enabled,
+    });
   }
 
   notifyDefaultTabContextPermissionStateChanged(enabled: boolean) {
     this.sender.requestNoResponse(
-        'glicWebClientNotifyDefaultTabContextPermissionStateChanged', {
+        'notifyDefaultTabContextPermissionStateChanged', {
           enabled: enabled,
         });
   }
 
   notifyActuationOnWebSettingChanged(enabled: boolean): void {
-    this.sender.requestNoResponse(
-        'glicWebClientNotifyActuationOnWebSettingChanged', {
-          enabled: enabled,
-        });
+    this.sender.requestNoResponse('notifyActuationOnWebSettingChanged', {
+      enabled: enabled,
+    });
+  }
+
+  notifyFileUploadStateChanged(state: FileUploadPolicyState): void {
+    this.sender.requestNoResponse('notifyFileUploadStateChanged', {
+      state: fileUploadPolicyStateToClient(state),
+    });
   }
 
   notifyFocusedTabChanged(focusedTabData: (FocusedTabDataMojo)): void {
     const extras = new ResponseExtras();
-    this.sender.sendLatestWhenActive(
-        'glicWebClientNotifyFocusedTabChanged', {
+    this.sender.requestNoResponse(
+        'notifyFocusedTabChanged', {
           focusedTabDataPrivate: focusedTabDataToClient(focusedTabData, extras),
         },
         extras.transfers);
   }
 
   notifyPanelActiveChange(panelActive: boolean): void {
-    this.sender.requestNoResponse(
-        'glicWebClientNotifyPanelActiveChanged', {panelActive});
+    this.sender.requestNoResponse('notifyPanelActiveChanged', {panelActive});
     this.host.panelIsActive = panelActive;
-    this.host.updateSenderActive();
   }
 
   notifyManualResizeChanged(resizing: boolean): void {
-    this.sender.requestNoResponse(
-        'glicWebClientNotifyManualResizeChanged', {resizing});
+    this.sender.requestNoResponse('notifyManualResizeChanged', {resizing});
   }
 
   notifyBrowserIsOpenChanged(browserIsOpen: boolean): void {
-    this.sender.requestNoResponse(
-        'glicWebClientBrowserIsOpenChanged', {browserIsOpen});
+    this.sender.requestNoResponse('browserIsOpenChanged', {browserIsOpen});
   }
 
   notifyInstanceActivationChanged(instanceIsActive: boolean): void {
@@ -163,152 +188,50 @@ export class WebClientImpl implements WebClientInterface {
   }
 
   notifyOsHotkeyStateChanged(hotkey: string): void {
-    this.sender.requestNoResponse(
-        'glicWebClientNotifyOsHotkeyStateChanged', {hotkey});
+    this.sender.requestNoResponse('notifyOsHotkeyStateChanged', {hotkey});
   }
 
   notifyPinnedTabsChanged(tabData: TabDataMojo[]): void {
     const extras = new ResponseExtras();
-    this.sender.sendLatestWhenActive(
-        'glicWebClientNotifyPinnedTabsChanged',
+    this.sender.requestNoResponse(
+        'notifyPinnedTabsChanged',
         {tabData: tabData.map((x) => tabDataToClient(x, extras))},
         extras.transfers);
   }
 
   notifyPinnedTabDataChanged(tabData: TabDataMojo): void {
     const extras = new ResponseExtras();
-    this.sender.sendLatestWhenActive(
-        'glicWebClientNotifyPinnedTabDataChanged',
-        {tabData: tabDataToClient(tabData, extras)}, extras.transfers,
-        // Cache only one entry per tab ID.
-        `${tabData.tabId}`);
-  }
-
-  notifyZeroStateSuggestionsChanged(
-      suggestions: ZeroStateSuggestionsV2Mojo,
-      options: ZeroStateSuggestionsOptionsMojo): void {
-    this.sender.sendLatestWhenActive(
-        'glicWebClientZeroStateSuggestionsChanged',
-        {suggestions: suggestions, options: options});
-  }
-
-  notifyActorTaskStateChanged(taskId: number, state: ActorTaskStateMojo): void {
-    const clientState = state as number as api.ActorTaskState;
     this.sender.requestNoResponse(
-        'glicWebClientNotifyActorTaskStateChanged',
-        {taskId, state: clientState});
+        'notifyPinnedTabDataChanged',
+        {tabData: tabDataToClient(tabData, extras)}, extras.transfers);
   }
 
-  requestViewChange(requestMojo: ViewChangeRequestMojo): void {
-    let request: ViewChangeRequest|undefined;
-    if (requestMojo.details.actuation) {
-      request = {desiredView: ClientView.ACTUATION};
-    } else if (requestMojo.details.conversation) {
-      request = {desiredView: ClientView.CONVERSATION};
-    }
-    if (!request) {
-      return;
-    }
-    this.sender.requestNoResponse('glicWebClientRequestViewChange', {request});
-  }
 
   notifyPageMetadataChanged(tabId: number, metadata: PageMetadataMojo|null):
       void {
-    this.sender.sendLatestWhenActive(
-        'glicWebClientPageMetadataChanged', {
-          tabId: idToClient(tabId),
-          pageMetadata: pageMetadataToClient(metadata),
-        },
-        undefined, `${tabId}`);
-  }
-
-  async requestToShowCredentialSelectionDialog(
-      request: SelectCredentialDialogRequestMojo):
-      Promise<{response: SelectCredentialDialogResponseMojo}> {
-    const clientResponse = await this.sender.requestWithResponse(
-        'glicWebClientRequestToShowDialog',
-        {request: selectCredentialDialogRequestToClient(request)});
-    return {
-      response: selectCredentialDialogResponseToMojo(clientResponse.response),
-    };
-  }
-
-  async requestToShowUserConfirmationDialog(
-      request: UserConfirmationDialogRequestMojo):
-      Promise<{response: UserConfirmationDialogResponseMojo}> {
-    const clientResponse = await this.sender.requestWithResponse(
-        'glicWebClientRequestToShowConfirmationDialog',
-        {request: userConfirmationDialogRequestToClient(request)});
-    return {
-      response: userConfirmationDialogResponseToMojo(clientResponse.response),
-    };
-  }
-
-  async requestToConfirmNavigation(request: NavigationConfirmationRequestMojo):
-      Promise<{response: NavigationConfirmationResponseMojo}> {
-    const clientResponse = await this.sender.requestWithResponse(
-        'glicWebClientRequestToConfirmNavigation',
-        {request: navigationConfirmationRequestToClient(request)});
-    return {
-      response: navigationConfirmationResponseToMojo(clientResponse.response),
-    };
+    this.sender.requestNoResponse('pageMetadataChanged', {
+      tabId: idToClient(tabId),
+      pageMetadata: pageMetadataToClient(metadata),
+    });
   }
 
   notifyAdditionalContext(context: AdditionalContextMojo): void {
     const extras = new ResponseExtras();
-    const clientParts = context.parts.map(p => {
-      const part: AdditionalContextPartPrivate = {};
-      if (p.data) {
-        part.data = contextDataToClient(p.data, extras);
-      } else if (p.screenshot) {
-        part.screenshot = screenshotToClient(p.screenshot, extras);
-      } else if (p.webPageData) {
-        part.webPageData = webPageDataToClient(p.webPageData);
-      } else if (p.annotatedPageData) {
-        part.annotatedPageData =
-            annotatedPageDataToClient(p.annotatedPageData, extras);
-      } else if (p.pdfDocumentData) {
-        part.pdf = pdfDocumentDataToClient(p.pdfDocumentData, extras);
-      } else if (p.tabContext) {
-        part.tabContext = tabContextToClient(p.tabContext, extras);
-      } else if (p.region) {
-        part.region = p.region;
-      }
-      return part;
-    });
-
-    const clientContext: AdditionalContextPrivate = {
-      name: optionalToClient(context.name),
-      tabId: idToClient(context.tabId),
-      origin: originToClient(context.origin),
-      frameUrl: urlToClient(context.frameUrl),
-      parts: clientParts,
-    };
-
-    this.sender.sendWhenActive(
-        'glicWebClientNotifyAdditionalContext', {context: clientContext},
-        extras.transfers);
+    const clientContext = additionalContextToClient(context, extras);
+    this.sender.requestNoResponse(
+        'notifyAdditionalContext', {context: clientContext}, extras.transfers);
   }
 
   notifyActOnWebCapabilityChanged(canActOnWeb: boolean): void {
     this.sender.requestNoResponse(
-        'glicWebClientNotifyActOnWebCapabilityChanged', {canActOnWeb});
+        'notifyActOnWebCapabilityChanged', {canActOnWeb});
   }
 
   notifyOnboardingCompletedChanged(completed: boolean): void {
-    this.sender.requestNoResponse(
-        'glicWebClientOnboardingCompletedChanged', {completed});
+    this.sender.requestNoResponse('onboardingCompletedChanged', {completed});
   }
 
-  async requestToShowAutofillSuggestionsDialog(
-      request: SelectAutofillSuggestionsDialogRequestMojo):
-      Promise<{response: SelectAutofillSuggestionsDialogResponseMojo}> {
-    const clientResponse = await this.sender.requestWithResponse(
-        'glicWebClientRequestToShowAutofillSuggestionsDialog',
-        {request: selectAutofillSuggestionsDialogRequestToClient(request)});
-    return {
-      response: selectAutofillSuggestionsDialogResponseToMojo(
-          clientResponse.response),
-    };
+  notifyActorTaskListRowClicked(taskId: number): void {
+    this.sender.requestNoResponse('notifyActorTaskListRowClicked', {taskId});
   }
 }

@@ -4,9 +4,7 @@
 
 #include "chrome/browser/ui/views/bubble/webui_bubble_manager.h"
 
-#include "base/feature_list.h"
 #include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/bubble/webui_bubble_dialog_view.h"
 #include "chrome/browser/ui/webui/top_chrome/top_chrome_web_ui_controller.h"
 #include "chrome/browser/ui/webui/top_chrome/webui_contents_wrapper.h"
@@ -14,6 +12,7 @@
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/test/mock_base_window.h"
 #include "ui/views/test/widget_test.h"
 
 namespace {
@@ -69,6 +68,11 @@ class WebUIBubbleManagerTest : public ChromeViewsTestBase {
     browser_window_interface_ = std::make_unique<MockBrowserWindowInterface>();
     ON_CALL(*browser_window_interface_, GetProfile())
         .WillByDefault(::testing::Return(testing_profile_.get()));
+    ON_CALL(*browser_window_interface_, GetWindow())
+        .WillByDefault(::testing::Return(&mock_base_window_));
+    ON_CALL(mock_base_window_, GetNativeWindow()).WillByDefault([this]() {
+      return GetContext();
+    });
     ChromeViewsTestBase::SetUp();
   }
 
@@ -76,19 +80,21 @@ class WebUIBubbleManagerTest : public ChromeViewsTestBase {
     return browser_window_interface_.get();
   }
 
- private:
+ protected:
   TestingProfileManager profile_manager_;
   raw_ptr<TestingProfile> testing_profile_;
   std::unique_ptr<MockBrowserWindowInterface> browser_window_interface_;
+  testing::NiceMock<ui::MockBaseWindow> mock_base_window_;
 };
 
-TEST_F(WebUIBubbleManagerTest, CreateWebUIBubbleDialogWithAnchorProvided) {
+TEST_F(WebUIBubbleManagerTest, CreateWebUIBubbleDialogWithAnchorRectProvided) {
   std::unique_ptr<views::Widget> anchor_widget =
-      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET,
                        views::Widget::InitParams::TYPE_WINDOW);
+  ON_CALL(mock_base_window_, GetNativeWindow())
+      .WillByDefault(::testing::Return(anchor_widget->GetNativeWindow()));
   auto bubble_manager = WebUIBubbleManager::Create<TestWebUIController>(
-      anchor_widget->GetContentsView(), browser_window_interface(),
-      GURL(kTestURL), 1);
+      browser_window_interface(), GURL(kTestURL), 1);
   bubble_manager->DisableCloseBubbleHelperForTesting();
 
   gfx::Rect anchor(666, 666, 0, 0);
@@ -96,4 +102,19 @@ TEST_F(WebUIBubbleManagerTest, CreateWebUIBubbleDialogWithAnchorProvided) {
   auto bubble_view = bubble_manager->bubble_view_for_testing();
 
   EXPECT_EQ(bubble_view->GetAnchorRect(), anchor);
+}
+
+TEST_F(WebUIBubbleManagerTest, CreateWebUIBubbleDialogWithAnchorViewProvided) {
+  std::unique_ptr<views::Widget> anchor_widget =
+      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET,
+                       views::Widget::InitParams::TYPE_WINDOW);
+  auto bubble_manager = WebUIBubbleManager::Create<TestWebUIController>(
+      browser_window_interface(), GURL(kTestURL), 1);
+  bubble_manager->DisableCloseBubbleHelperForTesting();
+
+  views::View* anchor_view = anchor_widget->GetContentsView();
+  bubble_manager->ShowBubble(anchor_view);
+  auto bubble_view = bubble_manager->bubble_view_for_testing();
+
+  EXPECT_EQ(bubble_view->GetAnchorView(), anchor_view);
 }

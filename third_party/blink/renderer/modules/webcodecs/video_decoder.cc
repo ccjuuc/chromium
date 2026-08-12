@@ -54,6 +54,7 @@
 #include "third_party/libgav1/src/src/obu_parser.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/hdr_metadata.h"
 
 #if BUILDFLAG(ENABLE_LIBVPX)
 #include "third_party/libvpx/source/libvpx/vpx/vp8dx.h"        // nogncheck
@@ -566,6 +567,14 @@ VideoDecoder::MakeMediaVideoDecoderConfigInternal(
     return std::nullopt;
   }
 
+  if (decoder_specific_data.decoder_helper) {
+    const gfx::HDRMetadata hdr_metadata =
+        decoder_specific_data.decoder_helper->GetHdrMetadata();
+    if (!hdr_metadata.IsEmpty() && hdr_metadata.IsValid()) {
+      media_config.set_hdr_metadata(hdr_metadata);
+    }
+  }
+
   return media_config;
 }
 
@@ -625,6 +634,7 @@ VideoDecoder::MakeInput(const InputType& chunk, bool verify_key_frame) {
         media::DecoderBuffer::CopyFrom(base::span(buf).first(output_size));
     decoder_buffer->set_timestamp(chunk.buffer()->timestamp());
     decoder_buffer->set_duration(chunk.buffer()->duration());
+    decoder_buffer->set_is_key_frame(chunk.buffer()->is_key_frame());
   }
 
   if (verify_key_frame) {

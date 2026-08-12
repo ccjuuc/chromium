@@ -7,10 +7,13 @@
 #include <memory>
 #include <optional>
 
+#include "base/byte_size.h"
+#include "base/check_op.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/numerics/safe_conversions.h"
 #include "components/web_package/web_bundle_utils.h"
 #include "content/browser/web_package/prefetched_signed_exchange_cache_entry.h"
 #include "content/browser/web_package/signed_exchange_cert_fetcher_factory.h"
@@ -221,9 +224,7 @@ void SignedExchangeLoader::OnComplete(
 }
 
 void SignedExchangeLoader::FollowRedirect(
-    const std::vector<std::string>& removed_headers,
-    const net::HttpRequestHeaders& modified_headers,
-    const net::HttpRequestHeaders& modified_cors_exempt_headers,
+    network::HttpRequestHeadersUpdateParams headers_update_params,
     const std::optional<GURL>& new_url) {
   NOTREACHED();
 }
@@ -364,8 +365,9 @@ void SignedExchangeLoader::NotifyClientOnCompleteIfReady() {
   status.error_code = *decoded_body_read_result_;
   status.completion_time = base::TimeTicks::Now();
   status.encoded_data_length = outer_response_length_info_->encoded_data_length;
-  status.encoded_body_length =
-      outer_response_length_info_->decoded_body_length -
+  status.encoded_body_length = outer_response_length_info_->decoded_body_length;
+  // ByteSize::operator-= will CHECK if the result becomes negative.
+  status.encoded_body_length -=
       signed_exchange_handler_->GetExchangeHeaderLength();
   status.decoded_body_length = body_data_pipe_adapter_->TransferredBytes();
 

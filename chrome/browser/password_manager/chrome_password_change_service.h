@@ -10,10 +10,15 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "build/build_config.h"
 #include "chrome/browser/password_manager/password_change_delegate.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/password_manager/core/browser/password_change_service_interface.h"
 #include "components/password_manager/core/browser/password_form.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/password_manager/password_change/password_change_from_checkup_delegate.h"
+#endif  // BUILDFLAG(IS_ANDROID)
 
 class GURL;
 
@@ -32,6 +37,7 @@ class WebContents;
 }
 
 namespace password_manager {
+struct CredentialUIEntry;
 class PasswordFeatureManager;
 class PasswordManagerSettingsService;
 }
@@ -50,13 +56,16 @@ enum class PasswordChangeAvailability {
   kModelExecutionNotAllowed = 2,
   kPasswordSavingDisabled = 3,
   kDisabledByPolicy = 4,
-  kFeatureDisabled = 5,
-  kUnsupportedLanguage = 6,
-  kUnsupportedCountryCode = 7,
+  // Obsolete kFeatureDisabled = 5,
+  // Obsolete kUnsupportedLanguage = 6,
+  // Obsolete kUnsupportedCountryCode = 7,
   kNotSupportedSite = 8,
   kNoSavedPasswords = 9,
   kThrottled = 10,
-  kMaxValue = kThrottled,
+  kSignupForm = 11,
+  kNonPasswordLogin = 12,
+  kInvisiblePasswordField = 13,
+  kMaxValue = kInvisiblePasswordField,
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/password/enums.xml:PasswordChangeAvailability)
 
@@ -94,14 +103,30 @@ class ChromePasswordChangeService
   virtual PasswordChangeDelegate* GetPasswordChangeDelegate(
       content::WebContents* web_contents);
 
+#if !BUILDFLAG(IS_ANDROID)
+  // Starts the password change flow from the Password Checkup page for the
+  // given `credential`.
+  virtual void StartPasswordChangeFromCheckup(
+      const password_manager::CredentialUIEntry& credential,
+      content::WebContents* web_contents,
+      PasswordChangeFromCheckupDelegate::StateChangeCallback callback =
+          base::DoNothing());
+
+  // Stops the password change flow from the Password Checkup page.
+  virtual void StopPasswordChangeFromCheckup();
+#endif
+
   // PasswordChangeServiceInterface implementation.
   bool IsPasswordChangeAvailable() const override;
   bool IsPasswordChangeSupported(
-      const GURL& url,
-      const autofill::LanguageCode& page_language) const override;
+      const password_manager::PasswordForm& form,
+      bool is_non_password_login_detected) const override;
   void RecordLoginAttemptQuality(
       password_manager::LogInWithChangedPasswordOutcome login_outcome,
       const GURL& page_url) const override;
+
+  // Add overridden change password URL.
+  void AddChangePasswordUrlOverride(const GURL& url) override;
 
   // Checks if user has interacted with the feature and only then general
   // availability.
@@ -114,10 +139,15 @@ class ChromePasswordChangeService
   // KeyedService impl.
   void Shutdown() override;
 
+#if !BUILDFLAG(IS_ANDROID)
   PasswordChangeAvailability GetGeneralAvailability() const;
+
+  bool HasChangePasswordUrlOverride() const;
+  GURL GetChangePasswordURLOverride(const GURL& url) const;
   PasswordChangeAvailability GetPerSiteAvailability(
-      const GURL& url,
-      const autofill::LanguageCode& page_language) const;
+      const password_manager::PasswordForm& form,
+      bool is_non_password_login_detected = false) const;
+#endif
 
   const raw_ptr<PrefService> pref_service_;
   const raw_ptr<affiliations::AffiliationService> affiliation_service_;
@@ -131,6 +161,13 @@ class ChromePasswordChangeService
 
   // The router for logs. Maybe be null in tests.
   const raw_ptr<autofill::LogRouter> log_router_;
+
+#if !BUILDFLAG(IS_ANDROID)
+  std::unique_ptr<PasswordChangeFromCheckupDelegate>
+      password_change_from_checkup_delegate_;
+#endif
+
+  std::vector<GURL> override_urls_;
 
   base::WeakPtrFactory<ChromePasswordChangeService> weak_ptr_factory_{this};
 };

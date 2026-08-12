@@ -32,7 +32,7 @@ class SimpleURLLoader;
 }  // namespace network
 
 namespace sync_pb {
-class DeviceInfoSpecifics;
+class SyncEntity;
 }  // namespace sync_pb
 
 namespace syncer {
@@ -55,15 +55,25 @@ class DeviceStatisticsRequestImpl : public DeviceStatisticsRequest {
   void Start(base::OnceClosure callback) override;
 
   State GetState() const override;
-  const std::vector<sync_pb::DeviceInfoSpecifics>& GetResults() const override;
+  const std::vector<sync_pb::SyncEntity>& GetResults() const override;
 
  private:
+  enum class Outcome {
+    kSuccess = 0,
+    kNetworkError = 1,
+    kHttpError = 2,
+    kAuthError = 3,
+    kEmptyResponse = 4,
+    kInvalidResponse = 5,
+    kMaxValue = kInvalidResponse
+  };
+
   void AccessTokenFetchComplete(GoogleServiceAuthError error,
                                 signin::AccessTokenInfo access_token_info);
   void SimpleLoaderComplete(signin::AccessTokenInfo access_token_info,
                             std::optional<std::string> response_body);
 
-  void UpdateStateAndNotify(State state);
+  void UpdateStateAndNotify(Outcome outcome);
 
   const CoreAccountInfo account_;
 
@@ -79,11 +89,13 @@ class DeviceStatisticsRequestImpl : public DeviceStatisticsRequest {
   base::OnceClosure callback_;
 
   std::unique_ptr<signin::AccessTokenFetcher> access_token_fetcher_;
-  bool has_retried_authorization_ = false;
 
   std::unique_ptr<network::SimpleURLLoader> simple_url_loader_;
 
-  std::vector<sync_pb::DeviceInfoSpecifics> results_;
+  bool has_retried_authorization_ = false;
+  bool has_retried_on_network_error_ = false;
+
+  std::vector<sync_pb::SyncEntity> results_;
 };
 
 }  // namespace syncer

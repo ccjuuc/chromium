@@ -4,7 +4,6 @@
 
 package org.chromium.chrome.browser.webauth;
 
-
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -48,9 +47,9 @@ import org.chromium.base.test.params.ParameterSet;
 import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
-import org.chromium.base.test.util.Features.DisableFeatures;
-import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.blink.mojom.AttestationConveyancePreference;
 import org.chromium.blink.mojom.AuthenticatorAttachment;
 import org.chromium.blink.mojom.AuthenticatorStatus;
 import org.chromium.blink.mojom.AuthenticatorTransport;
@@ -67,7 +66,6 @@ import org.chromium.blink.mojom.PublicKeyCredentialParameters;
 import org.chromium.blink.mojom.PublicKeyCredentialType;
 import org.chromium.blink.mojom.RemoteDesktopClientOverride;
 import org.chromium.blink.mojom.ResidentKeyRequirement;
-import org.chromium.blink_public.common.BlinkFeatures;
 import org.chromium.build.BuildConfig;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
@@ -814,7 +812,7 @@ public class Fido2CredentialRequestTest {
                 Fido2ApiTestHelper.createSuccessfulMakeCredentialIntent());
 
         PublicKeyCredentialCreationOptions customOptions = mCreationOptions;
-        customOptions.attestation = org.chromium.blink.mojom.AttestationConveyancePreference.NONE;
+        customOptions.attestation = AttestationConveyancePreference.NONE;
         handleMakeCredentialRequestTestHelper(
                 customOptions, mBrowserOptions, mOrigin, mOrigin, /* paymentOptions= */ null);
         mCallback.blockUntilCalled();
@@ -831,8 +829,7 @@ public class Fido2CredentialRequestTest {
                 Fido2ApiTestHelper.createSuccessfulMakeCredentialIntent());
 
         PublicKeyCredentialCreationOptions customOptions = mCreationOptions;
-        customOptions.attestation =
-                org.chromium.blink.mojom.AttestationConveyancePreference.INDIRECT;
+        customOptions.attestation = AttestationConveyancePreference.INDIRECT;
         handleMakeCredentialRequestTestHelper(
                 customOptions, mBrowserOptions, mOrigin, mOrigin, /* paymentOptions= */ null);
         mCallback.blockUntilCalled();
@@ -849,7 +846,7 @@ public class Fido2CredentialRequestTest {
                 Fido2ApiTestHelper.createSuccessfulMakeCredentialIntent());
 
         PublicKeyCredentialCreationOptions customOptions = mCreationOptions;
-        customOptions.attestation = org.chromium.blink.mojom.AttestationConveyancePreference.DIRECT;
+        customOptions.attestation = AttestationConveyancePreference.DIRECT;
         handleMakeCredentialRequestTestHelper(
                 customOptions, mBrowserOptions, mOrigin, mOrigin, /* paymentOptions= */ null);
         mCallback.blockUntilCalled();
@@ -866,8 +863,7 @@ public class Fido2CredentialRequestTest {
                 Fido2ApiTestHelper.createSuccessfulMakeCredentialIntent());
 
         PublicKeyCredentialCreationOptions customOptions = mCreationOptions;
-        customOptions.attestation =
-                org.chromium.blink.mojom.AttestationConveyancePreference.ENTERPRISE;
+        customOptions.attestation = AttestationConveyancePreference.ENTERPRISE;
         handleMakeCredentialRequestTestHelper(
                 customOptions, mBrowserOptions, mOrigin, mOrigin, /* paymentOptions= */ null);
         mCallback.blockUntilCalled();
@@ -896,23 +892,6 @@ public class Fido2CredentialRequestTest {
 
     @Test
     @SmallTest
-    @DisableFeatures(BlinkFeatures.SECURE_PAYMENT_CONFIRMATION_BROWSER_BOUND_KEYS)
-    public void testMakeCredential_isPaymentCredentialCreationPassedToFrameHost() {
-        mIntentSender.setNextResultIntent(
-                Fido2ApiTestHelper.createErrorIntent(
-                        Fido2Api.INVALID_STATE_ERR,
-                        "One of the excluded credentials exists on the local device"));
-
-        mCreationOptions.isPaymentCredentialCreation = true;
-        Assert.assertFalse(mFrameHost.isPaymentCredentialCreation());
-        handleMakeCredentialRequestTestHelper(
-                mCreationOptions, mBrowserOptions, mOrigin, mOrigin, /* paymentOptions= */ null);
-        Assert.assertTrue(mFrameHost.isPaymentCredentialCreation());
-    }
-
-    @Test
-    @SmallTest
-    @EnableFeatures(BlinkFeatures.SECURE_PAYMENT_CONFIRMATION_BROWSER_BOUND_KEYS)
     public void
             testMakeCredential_isPaymentCredentialCreationPassedToFrameHostWithPaymentOptions() {
         mIntentSender.setNextResultIntent(
@@ -1217,7 +1196,8 @@ public class Fido2CredentialRequestTest {
         Assert.assertEquals(Integer.valueOf(AuthenticatorStatus.SUCCESS), mCallback.getStatus());
         Fido2ApiTestHelper.validateGetAssertionResponse(mCallback.getGetAssertionResponse());
         Fido2ApiTestHelper.verifyRespondedBeforeTimeout(mStartTimeMs);
-        Assert.assertEquals(1, mMockBrowserBridge.getCleanupCalledCount());
+        CriteriaHelper.pollInstrumentationThread(
+                () -> mMockBrowserBridge.getCleanupCalledCount() == 1);
         Assert.assertEquals(mCallback.getOutcome(), Integer.valueOf(GetAssertionOutcome.SUCCESS));
     }
 
@@ -1235,7 +1215,8 @@ public class Fido2CredentialRequestTest {
                 Integer.valueOf(AuthenticatorStatus.UNKNOWN_ERROR), mCallback.getStatus());
         Assert.assertNull(mCallback.getGetAssertionResponse());
         Fido2ApiTestHelper.verifyRespondedBeforeTimeout(mStartTimeMs);
-        Assert.assertEquals(1, mMockBrowserBridge.getCleanupCalledCount());
+        CriteriaHelper.pollInstrumentationThread(
+                () -> mMockBrowserBridge.getCleanupCalledCount() == 1);
     }
 
     @Test
@@ -1300,7 +1281,8 @@ public class Fido2CredentialRequestTest {
 
         Assert.assertEquals(
                 Integer.valueOf(AuthenticatorStatus.ABORT_ERROR), mCallback.getStatus());
-        Assert.assertEquals(1, mMockBrowserBridge.getCleanupCalledCount());
+        CriteriaHelper.pollInstrumentationThread(
+                () -> mMockBrowserBridge.getCleanupCalledCount() == 1);
     }
 
     @Test
@@ -1326,7 +1308,8 @@ public class Fido2CredentialRequestTest {
         mIntentSender.invokeCallback();
         Assert.assertEquals(Integer.valueOf(AuthenticatorStatus.SUCCESS), mCallback.getStatus());
         Fido2ApiTestHelper.validateGetAssertionResponse(mCallback.getGetAssertionResponse());
-        Assert.assertEquals(1, mMockBrowserBridge.getCleanupCalledCount());
+        CriteriaHelper.pollInstrumentationThread(
+                () -> mMockBrowserBridge.getCleanupCalledCount() == 1);
     }
 
     @Test
@@ -1352,7 +1335,8 @@ public class Fido2CredentialRequestTest {
         mIntentSender.invokeCallback();
         Assert.assertEquals(
                 Integer.valueOf(AuthenticatorStatus.ABORT_ERROR), mCallback.getStatus());
-        Assert.assertEquals(1, mMockBrowserBridge.getCleanupCalledCount());
+        CriteriaHelper.pollInstrumentationThread(
+                () -> mMockBrowserBridge.getCleanupCalledCount() == 1);
     }
 
     @Test
@@ -1405,7 +1389,8 @@ public class Fido2CredentialRequestTest {
         mCallback.blockUntilCalled();
         Assert.assertEquals(Integer.valueOf(AuthenticatorStatus.SUCCESS), mCallback.getStatus());
         Fido2ApiTestHelper.validateGetAssertionResponse(mCallback.getGetAssertionResponse());
-        Assert.assertEquals(1, mMockBrowserBridge.getCleanupCalledCount());
+        CriteriaHelper.pollInstrumentationThread(
+                () -> mMockBrowserBridge.getCleanupCalledCount() == 1);
     }
 
     @Test
@@ -1427,7 +1412,8 @@ public class Fido2CredentialRequestTest {
         Assert.assertEquals(Integer.valueOf(AuthenticatorStatus.SUCCESS), mCallback.getStatus());
         Fido2ApiTestHelper.validateGetAssertionResponse(mCallback.getGetAssertionResponse());
         Fido2ApiTestHelper.verifyRespondedBeforeTimeout(mStartTimeMs);
-        Assert.assertEquals(1, mMockBrowserBridge.getCleanupCalledCount());
+        CriteriaHelper.pollInstrumentationThread(
+                () -> mMockBrowserBridge.getCleanupCalledCount() == 1);
     }
 
     @Test
@@ -1645,7 +1631,7 @@ public class Fido2CredentialRequestTest {
         byte[][] encodings = new byte[2][];
         for (int i = 0; i < encodings.length; i++) {
             Parcel parcel = Parcel.obtain();
-            parcel.writeInt(16 /* VAL_PARCELABLEARRRAY */);
+            parcel.writeInt(16); // VAL_PARCELABLEARRRAY
             if (i > 0) {
                 // include length prefix
                 final int l = TestParcelable.CLASS_NAME.length();
@@ -1743,7 +1729,6 @@ public class Fido2CredentialRequestTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(BlinkFeatures.SECURE_PAYMENT_CONFIRMATION_BROWSER_BOUND_KEYS)
     public void testMakeCredential_setsPaymentOptionsWhenPaymentCredential() {
         mIntentSender.setNextResultIntent(
                 Fido2ApiTestHelper.createSuccessfulMakeCredentialIntent());
@@ -1780,7 +1765,6 @@ public class Fido2CredentialRequestTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(BlinkFeatures.SECURE_PAYMENT_CONFIRMATION_BROWSER_BOUND_KEYS)
     public void testMakeCredential_doesNotSetPaymentOptionsWhenNonPaymentCredential() {
         Assume.assumeFalse(BuildConfig.ENABLE_ASSERTS);
         mIntentSender.setNextResultIntent(

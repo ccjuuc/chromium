@@ -53,6 +53,9 @@ const UrlHandlerInfo* GetMatchingUrlHandler(const Extension* extension,
 namespace mkeys = manifest_keys;
 namespace merrors = manifest_errors;
 
+// static
+const char* UrlHandlers::kManifestDataKey = mkeys::kUrlHandlers;
+
 UrlHandlerInfo::UrlHandlerInfo() = default;
 
 UrlHandlerInfo::UrlHandlerInfo(UrlHandlerInfo&& other) = default;
@@ -66,8 +69,7 @@ UrlHandlers::~UrlHandlers() = default;
 // static
 const std::vector<UrlHandlerInfo>* UrlHandlers::GetUrlHandlers(
     const Extension* extension) {
-  UrlHandlers* info = static_cast<UrlHandlers*>(
-      extension->GetManifestData(mkeys::kUrlHandlers));
+  const UrlHandlers* info = extension->GetManifestData<UrlHandlers>();
   return info ? &info->handlers : nullptr;
 }
 
@@ -95,7 +97,7 @@ UrlHandlersParser::UrlHandlersParser() = default;
 UrlHandlersParser::~UrlHandlersParser() = default;
 
 bool ParseUrlHandler(const std::string& handler_id,
-                     const base::Value::Dict& handler_info,
+                     const base::DictValue& handler_info,
                      std::vector<UrlHandlerInfo>* url_handlers,
                      std::u16string* error,
                      Extension* extension) {
@@ -112,7 +114,7 @@ bool ParseUrlHandler(const std::string& handler_id,
     return false;
   }
 
-  const base::Value::List* manif_patterns =
+  const base::ListValue* manif_patterns =
       handler_info.FindList(mkeys::kMatches);
   if (!manif_patterns || manif_patterns->empty()) {
     *error = ErrorUtils::FormatErrorMessageUTF16(
@@ -142,7 +144,7 @@ bool ParseUrlHandler(const std::string& handler_id,
 
 bool UrlHandlersParser::Parse(Extension* extension, std::u16string* error) {
   std::unique_ptr<UrlHandlers> info(new UrlHandlers);
-  const base::Value::Dict* all_handlers =
+  const base::DictValue* all_handlers =
       extension->manifest()->available_values().FindDict(mkeys::kUrlHandlers);
   if (!all_handlers) {
     *error = merrors::kInvalidURLHandlers;
@@ -153,7 +155,7 @@ bool UrlHandlersParser::Parse(Extension* extension, std::u16string* error) {
 
   for (const auto item : *all_handlers) {
     // A URL handler entry is a title and a list of URL patterns to handle.
-    const base::Value::Dict* handler = item.second.GetIfDict();
+    const base::DictValue* handler = item.second.GetIfDict();
     if (!handler) {
       *error = merrors::kInvalidURLHandlerPatternElement16;
       return false;
@@ -166,7 +168,7 @@ bool UrlHandlersParser::Parse(Extension* extension, std::u16string* error) {
     }
   }
 
-  extension->SetManifestData(mkeys::kUrlHandlers, std::move(info));
+  extension->SetManifestData(std::move(info));
 
   return true;
 }

@@ -145,7 +145,7 @@ class OmniboxSearchAggregatorTest : public InProcessBrowserTest {
     // loaded. Make sure it is loaded so that the autocomplete results are
     // consistent.
     search_test_utils::WaitForTemplateURLServiceToLoad(
-        TemplateURLServiceFactory::GetForProfile(browser()->profile()));
+        TemplateURLServiceFactory::GetForProfile(browser()->GetProfile()));
 
     // Prevent the stop timer from killing the hints fetch early, which might
     // cause test flakiness due to timeout.
@@ -154,7 +154,7 @@ class OmniboxSearchAggregatorTest : public InProcessBrowserTest {
     // Setup an identity profile.
     identity_test_env_adaptor_ =
         std::make_unique<IdentityTestEnvironmentProfileAdaptor>(
-            browser()->profile());
+            browser()->GetProfile());
     identity_test_env()->SetPrimaryAccount("test@mail.com",
                                            signin::ConsentLevel::kSignin);
     identity_test_env()->SetRefreshTokenForPrimaryAccount();
@@ -198,8 +198,8 @@ class OmniboxSearchAggregatorTest : public InProcessBrowserTest {
 
   base::Value CreateEnterpriseSearchAggregatorPolicyValue(
       const std::string& suggest_url = kSearchAggregatorPolicySuggestUrl) {
-    base::Value::Dict policy_value;
-    policy_value = base::Value::Dict()
+    base::DictValue policy_value;
+    policy_value = base::DictValue()
                        .Set(policy::SearchAggregatorPolicyHandler::kIconUrl,
                             kSearchAggregatorPolicyIconUrl)
                        .Set(policy::SearchAggregatorPolicyHandler::kShortcut,
@@ -214,8 +214,7 @@ class OmniboxSearchAggregatorTest : public InProcessBrowserTest {
   }
 
   AutocompleteController* controller() {
-    return browser()
-        ->window()
+    return BrowserWindow::FromBrowser(browser())
         ->GetLocationBar()
         ->GetOmniboxController()
         ->autocomplete_controller();
@@ -275,8 +274,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxSearchAggregatorSingleRequestTest,
 
   AutocompleteInput input(
       kSearchInput, metrics::OmniboxEventProto::NTP,
-      ChromeAutocompleteSchemeClassifier(browser()->profile()));
-  input.set_keyword_mode_entry_method(metrics::OmniboxEventProto::TAB);
+      ChromeAutocompleteSchemeClassifier(browser()->GetProfile()));
+  input.set_in_keyword_mode(true);
   controller()->Start(input);
 
   // Respond for SearchAggregator request.
@@ -358,8 +357,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxSearchAggregatorTest,
 
   AutocompleteInput input(
       kSearchInput, metrics::OmniboxEventProto::NTP,
-      ChromeAutocompleteSchemeClassifier(browser()->profile()));
-  input.set_keyword_mode_entry_method(metrics::OmniboxEventProto::TAB);
+      ChromeAutocompleteSchemeClassifier(browser()->GetProfile()));
+  input.set_in_keyword_mode(true);
   controller()->Start(input);
 
   std::vector<std::string> request_bodies = {};
@@ -408,6 +407,63 @@ IN_PROC_BROWSER_TEST_F(OmniboxSearchAggregatorTest,
           })));
 }
 
+IN_PROC_BROWSER_TEST_F(OmniboxSearchAggregatorSingleRequestTest,
+                       DiscardsInvalidJavascriptUrl) {
+  net::test_server::ControllableHttpResponse search_aggregator_response(
+      embedded_test_server(), kSearchAggregatorPolicySuggestPath);
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  // 1. Start on a benign page (e.g., https://www.google.com).
+  GURL initial_url = embedded_test_server()->GetURL("/title1.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), initial_url));
+
+  base::Value policy_value = CreateEnterpriseSearchAggregatorPolicyValue(
+      embedded_test_server()
+          ->GetURL(kSearchAggregatorPolicySuggestPath)
+          .spec());
+  policy::PolicyMap policies;
+  policies.Set(policy::key::kEnterpriseSearchAggregatorSettings,
+               policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+               policy::POLICY_SOURCE_CLOUD, std::move(policy_value), nullptr);
+  policy_provider()->UpdateChromePolicy(policies);
+
+  // 2. Trigger autocomplete.
+  AutocompleteInput input(
+      kSearchInput, metrics::OmniboxEventProto::NTP,
+      ChromeAutocompleteSchemeClassifier(browser()->GetProfile()));
+  input.set_in_keyword_mode(true);
+  controller()->Start(input);
+
+  // 3. Respond with an invalid javascript: URL.
+  search_aggregator_response.WaitForRequest();
+  const std::string invalid_json = R"invalid({
+    "contentSuggestions": [
+      {
+        "suggestion": "Invalid Suggestion",
+        "document": {
+          "derivedStructData": {
+            "title": "Invalid Suggestion"
+          }
+        },
+        "destinationUri": "javascript:alert(1)",
+        "score": 0.8
+      }
+    ]
+  })invalid";
+  search_aggregator_response.Send(net::HTTP_OK, "application/json",
+                                  invalid_json);
+  search_aggregator_response.Done();
+
+  WaitForAutocompleteDone(browser());
+
+  // 4. Verify that no javascript: match exists.
+  const AutocompleteResult& result = controller()->result();
+  auto it = std::find_if(result.begin(), result.end(), [](const auto& match) {
+    return match.destination_url.SchemeIs(url::kJavaScriptScheme);
+  });
+  EXPECT_EQ(it, result.end());
+}
+
 // TODO(crbug.com/425120649) Flaky.
 IN_PROC_BROWSER_TEST_F(OmniboxSearchAggregatorSingleRequestTest,
                        DISABLED_RedirectedResponse) {
@@ -430,8 +486,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxSearchAggregatorSingleRequestTest,
 
   AutocompleteInput input(
       kSearchInput, metrics::OmniboxEventProto::NTP,
-      ChromeAutocompleteSchemeClassifier(browser()->profile()));
-  input.set_keyword_mode_entry_method(metrics::OmniboxEventProto::TAB);
+      ChromeAutocompleteSchemeClassifier(browser()->GetProfile()));
+  input.set_in_keyword_mode(true);
   controller()->Start(input);
 
   // Redirect response.
@@ -522,8 +578,8 @@ IN_PROC_BROWSER_TEST_P(OmniboxSearchAggregatorHTTPErrorTest,
                        DISABLED_HTTPErrorResponse) {
   AutocompleteInput input(
       kSearchInput, metrics::OmniboxEventProto::NTP,
-      ChromeAutocompleteSchemeClassifier(browser()->profile()));
-  input.set_keyword_mode_entry_method(metrics::OmniboxEventProto::TAB);
+      ChromeAutocompleteSchemeClassifier(browser()->GetProfile()));
+  input.set_in_keyword_mode(true);
   controller()->Start(input);
 
   // Respond to the first SearchAggregator request (1 - query).

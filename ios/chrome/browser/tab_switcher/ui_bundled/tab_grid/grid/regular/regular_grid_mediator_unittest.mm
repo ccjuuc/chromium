@@ -4,7 +4,8 @@
 
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/regular/regular_grid_mediator.h"
 
-#import "base/containers/contains.h"
+#import <algorithm>
+
 #import "base/memory/raw_ptr.h"
 #import "base/test/scoped_feature_list.h"
 #import "components/collaboration/test_support/mock_messaging_backend_service.h"
@@ -20,6 +21,7 @@
 #import "ios/chrome/browser/policy/model/policy_util.h"
 #import "ios/chrome/browser/saved_tab_groups/model/tab_group_service.h"
 #import "ios/chrome/browser/saved_tab_groups/ui/fake_face_pile_provider.h"
+#import "ios/chrome/browser/send_tab_to_self/model/send_tab_to_self_tab_card_label_data.h"
 #import "ios/chrome/browser/sessions/model/ios_chrome_tab_restore_service_factory.h"
 #import "ios/chrome/browser/share_kit/model/test_share_kit_service.h"
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
@@ -29,6 +31,7 @@
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_opener.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/activity_label_data.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/grid_item_identifier.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/grid_mediator_test.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/regular/regular_grid_mediator_delegate.h"
@@ -37,7 +40,10 @@
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/toolbars/tab_grid_toolbars_configuration.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/toolbars/test/fake_tab_grid_toolbars_mediator.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/test/fake_tab_collection_consumer.h"
+#import "ios/chrome/grit/ios_strings.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
+#import "testing/gtest_mac.h"
+#import "ui/base/l10n/l10n_util.h"
 
 using collaboration::messaging::PersistentNotificationType;
 using testing::_;
@@ -83,7 +89,7 @@ class RegularGridMediatorTest : public GridMediatorTestClass {
         /*disable_features=*/{});
 
     GridMediatorTestClass::SetUp();
-    mode_holder_ = [[TabGridModeHolder alloc] init];
+    mode_holder_ = [[TabGridModeHolder alloc] initWithTabGridState:nil];
     share_kit_service_ = std::make_unique<TestShareKitService>(
         nullptr, nullptr, nullptr, tab_group_service_);
 
@@ -114,86 +120,7 @@ class RegularGridMediatorTest : public GridMediatorTestClass {
   TabGridModeHolder* mode_holder_;
   collaboration::messaging::MockMessagingBackendService messaging_backend_;
 };
-
 #pragma mark - Command tests
-
-// Tests that the WebStateList and consumer's list are empty when
-// `-saveAndCloseAllItems` is called.
-TEST_F(RegularGridMediatorTest, SaveAndCloseAllItemsCommand) {
-  // Previously there were 3 items.
-  [mediator_ saveAndCloseAllItems];
-  EXPECT_EQ(0, browser_->GetWebStateList()->count());
-  EXPECT_EQ(0UL, consumer_.items.size());
-}
-
-// Tests that the WebStateList is not restored to 3 items when
-// `-undoCloseAllItems` is called after `-discardSavedClosedItems` is called.
-TEST_F(RegularGridMediatorTest, DiscardSavedClosedItemsCommand) {
-  // Previously there were 3 items.
-  [mediator_ saveAndCloseAllItems];
-  [mediator_ discardSavedClosedItems];
-  [mediator_ undoCloseAllItems];
-  EXPECT_EQ(0, browser_->GetWebStateList()->count());
-  EXPECT_EQ(0UL, consumer_.items.size());
-}
-
-// Tests that the WebStateList is restored to 3 items when
-// `-undoCloseAllItems` is called.
-TEST_F(RegularGridMediatorTest, UndoCloseAllItemsCommand) {
-  // Previously there were 3 items.
-  [mediator_ saveAndCloseAllItems];
-  [mediator_ undoCloseAllItems];
-  EXPECT_EQ(3, browser_->GetWebStateList()->count());
-  EXPECT_EQ(3UL, consumer_.items.size());
-  EXPECT_TRUE(base::Contains(original_identifiers_, consumer_.items[0]));
-  EXPECT_TRUE(base::Contains(original_identifiers_, consumer_.items[1]));
-  EXPECT_TRUE(base::Contains(original_identifiers_, consumer_.items[2]));
-}
-
-// Tests that the WebStateList is restored to 3 items when
-// `-undoCloseAllItems` is called.
-TEST_F(RegularGridMediatorTest, UndoCloseAllItemsCommandWithNTP) {
-  // Previously there were 3 items.
-  [mediator_ saveAndCloseAllItems];
-
-  // There should be no tabs in the WebStateList.
-  EXPECT_EQ(0, browser_->GetWebStateList()->count());
-  EXPECT_EQ(0UL, consumer_.items.size());
-
-  // There should be no "recently closed items" yet.
-  EXPECT_EQ(0u, tab_restore_service_->entries().size());
-
-  // Discarding the saved item should add them to recently closed.
-  [mediator_ discardSavedClosedItems];
-  EXPECT_EQ(3u, tab_restore_service_->entries().size());
-
-  // Add three new tabs.
-  auto web_state1 = CreateFakeWebStateWithURL(GURL("https://test/url1"));
-  browser_->GetWebStateList()->InsertWebState(
-      std::move(web_state1), WebStateList::InsertionParams::AtIndex(0));
-  // Second tab is a NTP.
-  auto web_state2 = CreateFakeWebStateWithURL(GURL(kChromeUINewTabURL));
-  browser_->GetWebStateList()->InsertWebState(
-      std::move(web_state2), WebStateList::InsertionParams::AtIndex(1));
-  auto web_state3 = CreateFakeWebStateWithURL(GURL("https://test/url2"));
-  browser_->GetWebStateList()->InsertWebState(
-      std::move(web_state3), WebStateList::InsertionParams::AtIndex(2));
-  browser_->GetWebStateList()->ActivateWebStateAt(0);
-
-  // Closing item does not add them to the recently closed.
-  [mediator_ saveAndCloseAllItems];
-
-  // There should be no tabs in the WebStateList.
-  EXPECT_EQ(0, browser_->GetWebStateList()->count());
-  EXPECT_EQ(0UL, consumer_.items.size());
-
-  // There should be no new "recently closed items".
-  EXPECT_EQ(3u, tab_restore_service_->entries().size());
-
-  // Undoing the close should restore the items.
-  [mediator_ undoCloseAllItems];
-  EXPECT_EQ(3UL, consumer_.items.size());
-}
 
 // Checks that opening a new regular tab from the toolbar is done when allowed.
 TEST_F(RegularGridMediatorTest, OpenNewTab_OpenIfAllowedByPolicy) {
@@ -243,22 +170,22 @@ TEST_F(RegularGridMediatorTest, OpenNewTab_OpenIfAllowedByPolicy) {
 // configuration is correct.
 TEST_F(RegularGridMediatorTest, TestToolbarsNormalModeWithoutWebstates) {
   EXPECT_EQ(3UL, consumer_.items.size());
-  [mediator_ saveAndCloseAllItems];
+  [mediator_ closeAllItems];
   EXPECT_EQ(0UL, consumer_.items.size());
 
   EXPECT_EQ(TabGridPageRegularTabs, fake_toolbars_mediator_.configuration.page);
 
   EXPECT_TRUE(fake_toolbars_mediator_.configuration.newTabButton);
   EXPECT_TRUE(fake_toolbars_mediator_.configuration.searchButton);
-  EXPECT_TRUE(fake_toolbars_mediator_.configuration.undoButton);
 
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.closeAllButton);
-  EXPECT_FALSE(fake_toolbars_mediator_.configuration.doneButton);
+  EXPECT_FALSE(fake_toolbars_mediator_.configuration.exitTabGridButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.selectTabsButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.deselectAllButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.selectAllButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.addToButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.closeSelectedTabsButton);
+  EXPECT_FALSE(fake_toolbars_mediator_.configuration.closeOtherTabsButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.shareButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.cancelSearchButton);
 }
@@ -486,4 +413,33 @@ TEST_F(RegularGridMediatorTest, ActivityLabelDataForGroupAfterTabRemoved) {
 
   // The activity label data should be nil.
   EXPECT_NE(nil, [mediator_ activityLabelDataForGroup:tab_group_id]);
+}
+
+// Tests that activityLabelDataForTab returns the correct ActivityLabelData
+// containing the sender device name when the tab is auto-opened from
+// SendTabToSelf, and returns nil after the tab is viewed (WasShown).
+TEST_F(RegularGridMediatorTest, ActivityLabelDataForTab) {
+  web::WebState* web_state = browser_->GetWebStateList()->GetWebStateAt(0);
+  GridItemIdentifier* item = [GridItemIdentifier tabIdentifier:web_state];
+
+  // No activity label for the tab initially.
+  ActivityLabelData* label_data = [mediator_ activityLabelDataForItem:item];
+  EXPECT_NSEQ(nil, label_data);
+
+  // Attach SendTabToSelfTabCardLabelData to the WebState.
+  SendTabToSelfTabCardLabelData::CreateForWebState(web_state, "test_guid",
+                                                   "remote_device");
+
+  // Query the activity label again.
+  label_data = [mediator_ activityLabelDataForItem:item];
+  EXPECT_NSNE(nil, label_data);
+  NSString* expected_text = l10n_util::GetNSStringF(
+      IDS_SEND_TAB_TO_SELF_INFOBAR_AUTO_OPEN_SUBTITLE, u"remote_device");
+  EXPECT_NSEQ(expected_text, label_data.labelString);
+
+  // Show the tab (simulating it being viewed). The label data should be
+  // automatically cleared.
+  web_state->WasShown();
+  label_data = [mediator_ activityLabelDataForItem:item];
+  EXPECT_NSEQ(nil, label_data);
 }

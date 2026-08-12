@@ -93,7 +93,6 @@ constexpr char kCrostiniMapSharedWithMe[] = "SharedWithMe";
 constexpr char kCrostiniMapShortcutsSharedWithMe[] = "ShortcutsSharedWithMe";
 constexpr char kFolderNameDownloads[] = "Downloads";
 constexpr char kFolderNameMyFiles[] = "MyFiles";
-constexpr char kFolderNamePvmDefault[] = "PvmDefault";
 constexpr char kFolderNameCamera[] = "Camera";
 constexpr char kFolderNameShareCache[] = "ShareCache";
 constexpr char kDisplayNameGoogleDrive[] = "Google Drive";
@@ -122,7 +121,7 @@ constexpr char kArcRemovableMediaUuidForTesting[] =
     "00000000000000000000000000000000DEADBEEF";
 // The dummy UUID of the MyFiles volume is taken from
 // chromeos/ash/experiences/arc/volume_mounter/arc_volume_mounter_bridge.cc.
-// TODO(crbug.com/929031): Move MyFiles constants to a common place.
+// TODO(crbug.com/255484683): Move MyFiles constants to a common place.
 constexpr char kArcMyFilesContentUrlPrefix[] =
     "content://org.chromium.arc.volumeprovider/"
     "0000000000000000000000000000CAFEF00D2019/";
@@ -279,8 +278,6 @@ std::optional<int> DriveFsFolderToMessageId(std::string folder) {
 std::optional<int> MyFilesFolderToMessageId(std::string folder) {
   if (folder == kFolderNameDownloads) {
     return IDS_FILE_BROWSER_DOWNLOADS_DIRECTORY_LABEL;
-  } else if (folder == kFolderNamePvmDefault) {
-    return IDS_FILE_BROWSER_PLUGIN_VM_DIRECTORY_LABEL;
   } else if (folder == kFolderNameCamera) {
     return IDS_FILE_BROWSER_CAMERA_DIRECTORY_LABEL;
   }
@@ -492,7 +489,9 @@ bool IsBruschettaMountPointName(const std::string& name,
       continue;
     }
     if (name == util::GetGuestOsMountPointName(profile, provider->GuestId())) {
-      *guest_id = provider->GuestId();
+      if (guest_id) {
+        *guest_id = provider->GuestId();
+      }
       return true;
     }
   }

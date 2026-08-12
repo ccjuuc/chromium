@@ -2,17 +2,18 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//components/optimization_guide/features.gni")
 import("//extensions/buildflags/buildflags.gni")
 
 source_set("autocomplete") {
   sources = [
     "autocomplete_classifier_factory.h",
+    "autocomplete_scoring_model_service_factory.h",
     "chrome_autocomplete_provider_client.h",
     "chrome_autocomplete_scheme_classifier.h",
     "document_suggestions_service_factory.h",
     "enterprise_search_aggregator_suggestions_service_factory.h",
     "in_memory_url_index_factory.h",
+    "on_device_tail_model_service_factory.h",
     "provider_state_service_factory.h",
     "remote_suggestions_service_factory.h",
     "shortcuts_backend_factory.h",
@@ -41,23 +42,13 @@ source_set("autocomplete") {
   if (enable_extensions_core) {
     sources += [
       "keyword_extensions_delegate_impl.h",
+      "shortcuts_extensions_manager.h",
       "unscoped_extension_provider_delegate_impl.h",
     ]
     public_deps += [
+      "//extensions/browser",
       "//extensions/buildflags",
       "//extensions/common",
-    ]
-  }
-
-  if (enable_extensions) {
-    sources += [ "shortcuts_extensions_manager.h" ]
-    public_deps += [ "//extensions/browser" ]
-  }
-
-  if (build_with_tflite_lib) {
-    sources += [
-      "autocomplete_scoring_model_service_factory.h",
-      "on_device_tail_model_service_factory.h",
     ]
   }
 }
@@ -65,11 +56,13 @@ source_set("autocomplete") {
 source_set("impl") {
   sources = [
     "autocomplete_classifier_factory.cc",
+    "autocomplete_scoring_model_service_factory.cc",
     "chrome_autocomplete_provider_client.cc",
     "chrome_autocomplete_scheme_classifier.cc",
     "document_suggestions_service_factory.cc",
     "enterprise_search_aggregator_suggestions_service_factory.cc",
     "in_memory_url_index_factory.cc",
+    "on_device_tail_model_service_factory.cc",
     "provider_state_service_factory.cc",
     "remote_suggestions_service_factory.cc",
     "shortcuts_backend_factory.cc",
@@ -80,11 +73,22 @@ source_set("impl") {
     ":autocomplete",
     "//chrome/app:command_ids",
     "//chrome/browser:browser_process",
+    "//chrome/browser:browser_process_platform_part",
     "//chrome/browser:global_features",
     "//chrome/browser/bitmap_fetcher",
+    "//chrome/browser/bookmarks",
+    "//chrome/browser/contextual_search",
+    "//chrome/browser/contextual_tasks:ui",
     "//chrome/browser/custom_handlers",
+    "//chrome/browser/external_protocol",
     "//chrome/browser/history",
+    "//chrome/browser/history_clusters",
+    "//chrome/browser/history_embeddings",
+    "//chrome/browser/lifetime",
+    "//chrome/browser/omnibox",
+    "//chrome/browser/optimization_guide",
     "//chrome/browser/prefs",
+    "//chrome/browser/preloading/prefetch/search_prefetch",
     "//chrome/browser/profiles",
     "//chrome/browser/profiles:profile_io_data",
     "//chrome/browser/search_engines",
@@ -106,9 +110,10 @@ source_set("impl") {
     "//components/custom_handlers",
     "//components/history/core/common",
     "//components/history_clusters/core",
+    "//components/history_embeddings/content",
+    "//components/history_embeddings/core",
     "//components/language/core/browser",
     "//components/lens",
-    "//components/optimization_guide:machine_learning_tflite_buildflags",
     "//components/translate/core/browser",
     "//components/unified_consent",
     "//components/variations/service",
@@ -118,7 +123,9 @@ source_set("impl") {
   if (is_android) {
     sources += [ "../android/autocomplete/tab_matcher_android.cc" ]
     deps += [
+      "//chrome/browser/android:tabs_public",
       "//chrome/browser/flags:flags_android",
+      "//chrome/browser/lens:jni_headers",
       "//chrome/browser/ui/android/omnibox:jni_headers",
       "//chrome/browser/ui/android/tab_model",
     ]
@@ -141,6 +148,7 @@ source_set("impl") {
   if (enable_extensions_core) {
     sources += [
       "keyword_extensions_delegate_impl.cc",
+      "shortcuts_extensions_manager.cc",
       "unscoped_extension_provider_delegate_impl.cc",
     ]
     deps += [
@@ -151,23 +159,13 @@ source_set("impl") {
     ]
   }
 
-  if (enable_extensions) {
-    sources += [ "shortcuts_extensions_manager.cc" ]
-  }
-
-  if (build_with_tflite_lib) {
-    sources += [
-      "autocomplete_scoring_model_service_factory.cc",
-      "on_device_tail_model_service_factory.cc",
-    ]
-    deps += [ "//chrome/browser/optimization_guide" ]
-  }
-
   public_deps = [ "//chrome/browser:browser_public_dependencies" ]
 }
 
 source_set("aim_eligibility_service") {
   sources = [
+    "aim_eligibility_refresh_navigation_throttle.cc",
+    "aim_eligibility_refresh_navigation_throttle.h",
     "aim_eligibility_service_factory.cc",
     "aim_eligibility_service_factory.h",
     "chrome_aim_eligibility_service.cc",
@@ -181,6 +179,8 @@ source_set("aim_eligibility_service") {
     "//chrome/browser/search_engines",
     "//chrome/browser/signin",
     "//components/application_locale_storage",
+    "//components/contextual_tasks/public:feature_list",
+    "//components/embedder_support:user_agent",
     "//components/keyed_service/core",
     "//components/omnibox/browser",
     "//components/prefs",
@@ -188,7 +188,13 @@ source_set("aim_eligibility_service") {
     "//components/variations/service",
     "//content/public/browser",
     "//services/network/public/cpp",
+    "//third_party/blink/public/common:headers",
   ]
+
+  if (is_android) {
+    sources += [ "aim_eligibility_service_factory_android.cc" ]
+    deps += [ "//chrome/browser/search_engines/android:jni_headers" ]
+  }
 }
 
 if (!is_android) {
@@ -209,6 +215,7 @@ if (!is_android) {
       "//build:buildflag_header_h",
       "//chrome/browser",
       "//chrome/browser:browser_process",
+      "//chrome/browser/contextual_tasks",
       "//chrome/browser/extensions",
       "//chrome/browser/history",
       "//chrome/browser/profiles:profile",
@@ -250,6 +257,7 @@ if (!is_android) {
 source_set("unit_tests") {
   testonly = true
   sources = [
+    "aim_eligibility_refresh_navigation_throttle_unittest.cc",
     "chrome_autocomplete_scheme_classifier_unittest.cc",
     "provider_state_service_factory_unittest.cc",
     "remote_suggestions_service_factory_unittest.cc",
@@ -257,10 +265,13 @@ source_set("unit_tests") {
     "shortcuts_provider_extension_unittest.cc",
   ]
   deps = [
+    ":aim_eligibility_service",
     ":autocomplete",
     "//base",
     "//chrome/browser",
+    "//chrome/browser/content_settings:content_settings_factory",
     "//chrome/browser/history",
+    "//chrome/browser/omnibox",
     "//chrome/browser/profiles:test_support",
     "//chrome/browser/search_engines",
     "//chrome/common:constants",
@@ -294,15 +305,21 @@ source_set("unit_tests") {
     "//url",
   ]
 
-  if (enable_extensions) {
-    sources += [ "keyword_extensions_delegate_impl_unittest.cc" ]
-  }
-
   if (enable_extensions_core) {
+    sources += [ "keyword_extensions_delegate_impl_unittest.cc" ]
     deps += [
       "//extensions:test_support",
       "//extensions/browser",
       "//extensions/common",
+    ]
+  }
+
+  if (is_android) {
+    sources += [ "../android/autocomplete/tab_matcher_android_unittest.cc" ]
+    deps += [
+      "//chrome/browser/android:tabs_public",
+      "//chrome/browser/ui/android/tab_model:test_support",
+      "//components/location/android:test_support",
     ]
   }
 

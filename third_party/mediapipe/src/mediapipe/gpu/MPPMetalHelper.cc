@@ -65,8 +65,13 @@ class MetalHelperLegacySupport {
       initWithGpuResources:&cc->Service(mediapipe::kGpuService).GetObject()];
 }
 
-+ (absl::Status)updateContract:(mediapipe::CalculatorContract*)cc {
-  cc->UseService(mediapipe::kGpuService);
++ (absl::Status)updateContract:(mediapipe::CalculatorContract*)cc
+          requestGpuAsOptional:(bool)requestGpuAsOptional {
+  if (requestGpuAsOptional) {
+    cc->UseService(mediapipe::kGpuService).Optional();
+  } else {
+    cc->UseService(mediapipe::kGpuService);
+  }
   // Allow the legacy side packet to be provided, too, for backwards
   // compatibility with existing graphs. It will just be ignored.
   auto& input_side_packets = cc->InputSidePackets();
@@ -75,6 +80,10 @@ class MetalHelperLegacySupport {
     input_side_packets.Get(id).Set<mediapipe::GpuSharedData*>();
   }
   return absl::OkStatus();
+}
+
++ (absl::Status)updateContract:(mediapipe::CalculatorContract*)cc {
+  return [self updateContract:cc requestGpuAsOptional:false];
 }
 
 // Legacy support.
@@ -134,6 +143,7 @@ class MetalHelperLegacySupport {
       [_gpuResources->metal_shared().resources().mtlCommandQueue commandBuffer];
 }
 
+#if MEDIAPIPE_GPU_BUFFER_USE_CV_PIXEL_BUFFER
 - (CVMetalTextureRef)copyCVMetalTextureWithGpuBuffer:
                          (const mediapipe::GpuBuffer&)gpuBuffer
                                                plane:(size_t)plane {
@@ -208,6 +218,7 @@ class MetalHelperLegacySupport {
   cvTexture.adopt([self copyCVMetalTextureWithGpuBuffer:gpuBuffer plane:plane]);
   return CVMetalTextureGetTexture(*cvTexture);
 }
+#endif  // MEDIAPIPE_GPU_BUFFER_USE_CV_PIXEL_BUFFER
 
 - (mediapipe::GpuBuffer)mediapipeGpuBufferWithWidth:(int)width
                                              height:(int)height {

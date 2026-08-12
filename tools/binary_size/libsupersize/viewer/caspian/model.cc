@@ -331,8 +331,9 @@ BaseSizeInfo::BaseSizeInfo(const BaseSizeInfo&) = default;
 BaseSizeInfo::~BaseSizeInfo() = default;
 
 SectionId BaseSizeInfo::ShortSectionName(const char* section_name) {
-  static std::map<const char*, SectionId> short_section_name_cache;
-  SectionId& ret = short_section_name_cache[section_name];
+  static std::map<const char*, SectionId>* short_section_name_cache =
+      new std::map<const char*, SectionId>();
+  SectionId& ret = (*short_section_name_cache)[section_name];
   if (ret == SectionId::kNone) {
     if (!strcmp(section_name, ".text")) {
       ret = SectionId::kText;
@@ -415,8 +416,18 @@ void TreeNode::WriteIntoJson(
     (*out)["helpme"] = std::string(symbol->Name());
     (*out)["idPath"] = std::string(symbol->TemplateName());
     (*out)["fullName"] = std::string(symbol->FullName());
-    if (symbol->NumAliases() > 1) {
-      (*out)["numAliases"] = symbol->NumAliases();
+    if (opts.diff_mode) {
+      const auto* delta_sym = static_cast<const DeltaSymbol*>(symbol);
+      if (delta_sym->Before() && delta_sym->Before()->NumAliases() > 1) {
+        (*out)["beforeNumAliases"] = delta_sym->Before()->NumAliases();
+      }
+      if (delta_sym->After() && delta_sym->After()->NumAliases() > 1) {
+        (*out)["afterNumAliases"] = delta_sym->After()->NumAliases();
+      }
+    } else {
+      if (symbol->NumAliases() > 1) {
+        (*out)["numAliases"] = symbol->NumAliases();
+      }
     }
     if (symbol->ObjectPath()) {
       (*out)["objPath"] = symbol->ObjectPath();

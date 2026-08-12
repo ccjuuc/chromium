@@ -18,7 +18,6 @@ load("//lib/siso.star", "siso")
 
 ci.defaults.set(
     executable = ci_constants.DEFAULT_EXECUTABLE,
-    # TODO(crbug.com/439887309): Enable on ANDROID_BRANCHES
     builder_group = "chromium.android.desktop",
     builder_config_settings = builder_config.ci_settings(
         retry_failed_shards = True,
@@ -48,7 +47,7 @@ targets.builder_defaults.set(
 
 consoles.console_view(
     name = "chromium.android.desktop",
-    branch_selector = branches.selector.MAIN,
+    branch_selector = branches.selector.ANDROID_BRANCHES,
     ordering = {
         None: ["builder", "tester"],
         "*cpu*": ["arm64", "x64"],
@@ -58,7 +57,7 @@ consoles.console_view(
 
 ci.builder(
     name = "android-desktop-arm64-compile-dbg",
-    branch_selector = branches.selector.MAIN,
+    branch_selector = branches.selector.ANDROID_BRANCHES,
     description_html = "Android desktop ARM64 debug compile builder.",
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
@@ -103,6 +102,7 @@ ci.builder(
 
 ci.builder(
     name = "android-desktop-arm64-compile-rel",
+    branch_selector = branches.selector.ANDROID_BRANCHES,
     description_html = "Android desktop ARM64 release compile builder.",
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
@@ -147,6 +147,7 @@ ci.builder(
 
 ci.builder(
     name = "android-desktop-x64-compile-dbg",
+    branch_selector = branches.selector.ANDROID_BRANCHES,
     description_html = "Android desktop x64 debug compile builder.",
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
@@ -192,6 +193,7 @@ ci.builder(
 
 ci.builder(
     name = "android-desktop-x64-compile-rel",
+    branch_selector = branches.selector.ANDROID_BRANCHES,
     description_html = "Android desktop x64 release compile builder.",
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
@@ -241,6 +243,7 @@ ci.builder(
 
 ci.thin_tester(
     name = "android-desktop-x64-rel-15-tests",
+    branch_selector = branches.selector.ANDROID_BRANCHES,
     description_html = "Android desktop x64 release tests on Android 15.",
     parent = "ci/android-desktop-x64-compile-rel",
     builder_spec = builder_config.builder_spec(
@@ -283,7 +286,6 @@ ci.thin_tester(
         ],
         mixins = [
             "isolate_profile_data",
-            "retry_only_failed_tests",
         ],
         per_test_modifications = {
             "android_browsertests": targets.mixin(
@@ -292,19 +294,10 @@ ci.thin_tester(
                     "--emulator-debug-tags=all",
                 ],
                 swarming = targets.swarming(
-                    shards = 20,
+                    shards = 50,
                 ),
             ),
-            "chrome_public_test_apk": targets.mixin(
-                args = [
-                    "--test-launcher-filter-file=../../testing/buildbot/filters/android.desktop.chrome_public_test_apk_desktop.filter",
-                    "--test-launcher-filter-file=../../testing/buildbot/filters/android.desktop.emulator_15.chrome_public_test_apk.filter",
-                ],
-            ),
             "chrome_public_test_apk_desktop": targets.mixin(
-                args = [
-                    "--test-launcher-filter-file=../../testing/buildbot/filters/android.desktop.chrome_public_test_apk_desktop.filter",
-                ],
                 swarming = targets.swarming(
                     shards = 3,
                 ),

@@ -12,13 +12,11 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType;
-import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
-import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncFeatures;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.ui.default_browser_promo.DefaultBrowserPromoUtils;
@@ -27,7 +25,6 @@ import org.chromium.components.feature_engagement.FeatureConstants;
 import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.components.segmentation_platform.InputContext;
 import org.chromium.components.segmentation_platform.ProcessedValue;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.tab_group_sync.TabGroupSyncService;
 
 /** Provides information about the signals of cards in the educational tip module. */
@@ -68,24 +65,32 @@ public class EducationalTipCardProviderSignalHandler {
                         ProcessedValue.fromFloat(syncedTabGroupExists(profile)));
                 return inputContext;
             case ModuleType.QUICK_DELETE_PROMO:
-            // TODO(crbug.com/469425754): Remove once segmentation platform based ranking is
-            // skipped for setup list.
-            case ModuleType.ENHANCED_SAFE_BROWSING_PROMO:
-            case ModuleType.ADDRESS_BAR_PLACEMENT_PROMO:
                 return inputContext;
-
+            case ModuleType.NTP_THEME_PROMO:
+                inputContext.addEntry(
+                        "has_customized_ntp_background",
+                        ProcessedValue.fromBoolean(
+                                NtpCustomizationUtils.getNtpBackgroundType()
+                                        != NtpCustomizationUtils.NtpBackgroundType.DEFAULT));
+                inputContext.addEntry(
+                        "support_customized_ntp_theme",
+                        ProcessedValue.fromBoolean(actionDelegate.supportCustomizedNtpTheme()));
+                boolean isBottomSheetDisabled =
+                        !ChromeFeatureList.sNewTabPageCustomizationV2ShowTipBottomSheet.getValue();
+                boolean hasThemeTipBottomSheetBeenShown =
+                        NtpCustomizationUtils.isThemeTipBottomSheetShownFromSharedPreference();
+                inputContext.addEntry(
+                        "has_theme_tip_bottom_sheet_been_shown",
+                        ProcessedValue.fromBoolean(
+                                isBottomSheetDisabled || hasThemeTipBottomSheetBeenShown));
+                return inputContext;
             case ModuleType.HISTORY_SYNC_PROMO:
                 inputContext.addEntry(
                         "is_eligible_to_history_opt_in",
                         ProcessedValue.fromFloat(isEligibleToHistoryOptIn(profile)));
                 return inputContext;
-            case ModuleType.TIPS_NOTIFICATIONS_PROMO:
-                inputContext.addEntry(
-                        "is_eligible_to_tips_opt_in",
-                        ProcessedValue.fromFloat(isEligibleToTipsOptIn()));
-                return inputContext;
             default:
-                assert false : "Card type not supported!";
+                assert false : "Card type not supported: " + moduleType;
                 return inputContext;
         }
     }
@@ -137,15 +142,11 @@ public class EducationalTipCardProviderSignalHandler {
             return 0.0f;
         }
 
-        TabGroupModelFilter normalFilter =
-                tabModelSelector.getTabGroupModelFilter(/* isIncognito= */ false);
-        assumeNonNull(normalFilter);
+        TabModel normalModel = tabModelSelector.getModel(/* incognito= */ false);
 
-        TabGroupModelFilter incognitoFilter =
-                tabModelSelector.getTabGroupModelFilter(/* isIncognito= */ true);
-        assumeNonNull(incognitoFilter);
+        TabModel incognitoModel = tabModelSelector.getModel(/* incognito= */ true);
 
-        int groupCount = normalFilter.getTabGroupCount() + incognitoFilter.getTabGroupCount();
+        int groupCount = normalModel.getTabGroupCount() + incognitoModel.getTabGroupCount();
         return groupCount > 0 ? 1.0f : 0.0f;
     }
 
@@ -182,7 +183,7 @@ public class EducationalTipCardProviderSignalHandler {
      */
     private static float isEligibleToHistoryOptIn(Profile profile) {
         if (assumeNonNull(IdentityServicesProvider.get().getIdentityManager(profile))
-                .hasPrimaryAccount(ConsentLevel.SIGNIN)) {
+                .hasPrimaryAccount()) {
             HistorySyncHelper helper = HistorySyncHelper.getForProfile(profile);
             return !helper.shouldDisplayHistorySync() || helper.isDeclinedOften() ? 0.0f : 1.0f;
         }
@@ -193,22 +194,10 @@ public class EducationalTipCardProviderSignalHandler {
     /** Returns a value of 1.0f if the user has signed in. Otherwise, it returns 0.0f. */
     private static float isUserSignedIn(Profile profile) {
         if (assumeNonNull(IdentityServicesProvider.get().getIdentityManager(profile))
-                .hasPrimaryAccount(ConsentLevel.SIGNIN)) {
+                .hasPrimaryAccount()) {
             return 1.0f;
         }
 
         return 0.0f;
-    }
-
-    /**
-     * Returns a value of 1.0f if the notifications channel is enabled (not eligible). Otherwise, it
-     * returns 0.0f.
-     */
-    private static float isEligibleToTipsOptIn() {
-        boolean enabled =
-                ChromeSharedPreferences.getInstance()
-                        .readBoolean(
-                                ChromePreferenceKeys.TIPS_NOTIFICATIONS_CHANNEL_ENABLED, false);
-        return enabled ? 1.0f : 0.0f;
     }
 }

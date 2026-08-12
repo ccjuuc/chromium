@@ -15,16 +15,15 @@
 #import "ios/chrome/browser/content_suggestions/ui/content_suggestions_view_controller_audience.h"
 #import "ios/chrome/browser/drag_and_drop/model/url_drag_drop_handler.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_constants.h"
-#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_browser_agent.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_params.h"
 
 @interface ContentSuggestionsViewController () <
     UIGestureRecognizerDelegate,
-    URLDropDelegate,
+    UIScrollViewAccessibilityDelegate,
     UIScrollViewDelegate,
-    UIScrollViewAccessibilityDelegate>
+    URLDropDelegate>
 
 @property(nonatomic, strong) URLDragDropHandler* dragDropHandler;
 
@@ -92,9 +91,8 @@
   if (self.mostVisitedModuleContainer) {
     [self.mostVisitedModuleContainer removeFromSuperview];
   }
-  self.mostVisitedModuleContainer = [[MagicStackModuleContainer alloc]
-      initWithFrame:CGRectZero
-            noInset:IsContentSuggestionsCustomizable()];
+  self.mostVisitedModuleContainer =
+      [[MagicStackModuleContainer alloc] initWithFrame:CGRectZero noInset:YES];
   [self.mostVisitedModuleContainer configureWithConfig:_mostVisitedTileConfig];
   // If viewDidLoad has been called before the first valid Most Visited Tiles
   // are available, construct the most visited tiles.
@@ -103,12 +101,11 @@
   }
 
   for (MostVisitedItem* item in _mostVisitedTileConfig.mostVisitedItems) {
-    [self.contentSuggestionsMetricsRecorder
-        recordMostVisitedTileShown:item
-                           atIndex:item.index];
+    [ContentSuggestionsMetricsRecorder recordMostVisitedTileShown:item
+                                                          atIndex:item.index];
   }
 
-  [self.contentSuggestionsMetricsRecorder recordMostVisitedTilesShown];
+  [ContentSuggestionsMetricsRecorder recordMostVisitedTilesShown];
 }
 
 #pragma mark - Private
@@ -129,6 +126,8 @@
     [self.mostVisitedModuleContainer.bottomAnchor
         constraintEqualToAnchor:self.view.bottomAnchor]
   ]];
+  // Force layout to make sure the subviews correctly calculates its frame size.
+  [self.view setNeedsLayout];
   [self.view layoutIfNeeded];
 }
 

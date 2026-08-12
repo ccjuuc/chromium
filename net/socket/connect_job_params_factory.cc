@@ -186,7 +186,8 @@ ConnectJobParams CreateProxyParams(
     const NetworkAnonymizationKey& endpoint_network_anonymization_key,
     SecureDnsPolicy secure_dns_policy,
     const CommonConnectJobParams* common_connect_job_params,
-    const NetworkAnonymizationKey& proxy_dns_network_anonymization_key) {
+    const NetworkAnonymizationKey& proxy_dns_network_anonymization_key,
+    handles::NetworkHandle target_network) {
   const ProxyServer& proxy_server =
       proxy_chain.GetProxyServer(proxy_chain_index);
 
@@ -242,7 +243,7 @@ ConnectJobParams CreateProxyParams(
     return ConnectJobParams(base::MakeRefCounted<HttpProxySocketParams>(
         std::move(proxy_server_ssl_config), host_port_pair, proxy_chain,
         proxy_chain_index, should_tunnel, *proxy_annotation_tag,
-        network_anonymization_key, secure_dns_policy));
+        network_anonymization_key, secure_dns_policy, target_network));
   } else if (proxy_chain_index == 0) {
     // At the beginning of the chain, create the only TransportSocketParams
     // object, corresponding to the transport socket we want to create to the
@@ -252,14 +253,15 @@ ConnectJobParams CreateProxyParams(
     // with `SCHEME_HTTP` requires handling the HTTPS record upgrade.
     params = ConnectJobParams(base::MakeRefCounted<TransportSocketParams>(
         proxy_server.host_port_pair(), proxy_dns_network_anonymization_key,
-        secure_dns_policy, resolution_callback,
+        secure_dns_policy, target_network, resolution_callback,
         SupportedProtocolsFromSSLConfig(proxy_server_ssl_config)));
   } else {
     params = CreateProxyParams(
         proxy_server.host_port_pair(), true, endpoint, proxy_chain,
         proxy_chain_index - 1, proxy_annotation_tag, resolution_callback,
         endpoint_network_anonymization_key, secure_dns_policy,
-        common_connect_job_params, proxy_dns_network_anonymization_key);
+        common_connect_job_params, proxy_dns_network_anonymization_key,
+        target_network);
   }
 
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
@@ -325,8 +327,9 @@ ConnectJobParams CreateProxyParams(
     params = ConnectJobParams(base::MakeRefCounted<HttpProxySocketParams>(
         std::move(params), host_port_pair, proxy_chain, proxy_chain_index,
         should_tunnel, *proxy_annotation_tag, network_anonymization_key,
-        secure_dns_policy));
+        secure_dns_policy, target_network));
   } else if (proxy_server.is_socks()) {
+    DCHECK(proxy_server.is_socks());
     DCHECK_EQ(1u, proxy_chain.length());
     // TODO(crbug.com/40181080): Pass `endpoint` directly (preserving scheme
     // when available)?
@@ -371,7 +374,8 @@ ConnectJobParams ConstructConnectJobParams(
     SecureDnsPolicy secure_dns_policy,
     bool disable_cert_network_fetches,
     const CommonConnectJobParams* common_connect_job_params,
-    const NetworkAnonymizationKey& proxy_dns_network_anonymization_key) {
+    const NetworkAnonymizationKey& proxy_dns_network_anonymization_key,
+    handles::NetworkHandle target_network) {
   DCHECK(proxy_chain.IsValid());
 
   // Set up `ssl_config` if using SSL to the endpoint.
@@ -402,7 +406,7 @@ ConnectJobParams ConstructConnectJobParams(
   if (proxy_chain.is_direct()) {
     params = ConnectJobParams(base::MakeRefCounted<TransportSocketParams>(
         ToTransportEndpoint(endpoint), endpoint_network_anonymization_key,
-        secure_dns_policy, resolution_callback,
+        secure_dns_policy, target_network, resolution_callback,
         SupportedProtocolsFromSSLConfig(ssl_config)));
   } else {
     bool should_tunnel = force_tunnel || UsingSsl(endpoint) ||
@@ -414,7 +418,7 @@ ConnectJobParams ConstructConnectJobParams(
         /*proxy_chain_index=*/proxy_chain.length() - 1, proxy_annotation_tag,
         resolution_callback, endpoint_network_anonymization_key,
         secure_dns_policy, common_connect_job_params,
-        proxy_dns_network_anonymization_key);
+        proxy_dns_network_anonymization_key, target_network);
   }
 
   if (UsingSsl(endpoint)) {

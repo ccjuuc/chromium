@@ -7,13 +7,11 @@
 #include <map>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/no_destructor.h"
 #include "base/trace_event/common/trace_event_common.h"
 #include "base/trace_event/trace_event.h"
 #include "components/crash/core/common/crash_key.h"
 #include "ui/accessibility/ax_event.h"
-#include "ui/accessibility/ax_language_detection.h"
 #include "ui/accessibility/ax_node_position.h"
 #include "ui/accessibility/ax_selection.h"
 #include "ui/accessibility/platform/automation/automation_api_util.h"
@@ -119,33 +117,10 @@ bool AutomationAXTreeWrapper::OnAccessibilityEvents(
 
   // Refresh child tree id  mappings.
   for (const AXTreeID& child_tree_id : ax_tree_->GetAllChildTreeIds()) {
-    DCHECK(!base::Contains(child_tree_id_reverse_map, child_tree_id));
+    DCHECK(!child_tree_id_reverse_map.contains(child_tree_id));
     child_tree_id_reverse_map.insert(std::make_pair(child_tree_id, this));
   }
 
-  // Perform language detection first thing if we see a load complete event.
-  // We have to run *before* we send the load complete event to javascript
-  // otherwise code which runs immediately on load complete will not be able
-  // to see the results of language detection.
-  //
-  // Currently language detection only runs once for initial load complete, any
-  // content loaded after this will not have language detection performed for
-  // it.
-  for (const auto& event : events) {
-    if (event.event_type == ax::mojom::Event::kLoadComplete) {
-      ax_tree_->language_detection_manager->DetectLanguages();
-      ax_tree_->language_detection_manager->LabelLanguages();
-
-      // After initial language detection, enable language detection for future
-      // content updates in order to support dynamic content changes.
-      //
-      // If the LanguageDetectionDynamic feature flag is not enabled then this
-      // is a no-op.
-      ax_tree_->language_detection_manager->RegisterLanguageDetectionObserver();
-
-      break;
-    }
-  }
 
   // Send all blur and focus events first.
   owner_->MaybeSendFocusAndBlur(this, tree_id, updates, events, mouse_location);

@@ -9,7 +9,7 @@
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
+#include "base/memory/singleton.h"
 #include "base/observer_list.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -18,6 +18,7 @@
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/process_manager.h"
+#include "extensions/browser/service_worker/worker_id.h"
 #include "extensions/common/api/automation_internal.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_id.h"
@@ -48,15 +49,6 @@ AutomationEventRouter::AutomationEventRouter() {
 
 AutomationEventRouter::~AutomationEventRouter() {
   CHECK(!remote_router_);
-}
-
-void AutomationEventRouter::RegisterListenerForOneTree(
-    const ExtensionId& extension_id,
-    const RenderProcessHostId& listener_rph_id,
-    content::WebContents* web_contents,
-    ui::AXTreeID source_ax_tree_id) {
-  Register(extension_id, listener_rph_id, web_contents, source_ax_tree_id,
-           /*desktop=*/false);
 }
 
 void AutomationEventRouter::RegisterListenerWithDesktopPermission(
@@ -129,10 +121,8 @@ void AutomationEventRouter::DispatchTreeDestroyedEvent(ui::AXTreeID tree_id) {
   }
 }
 
-void AutomationEventRouter::DispatchActionResult(
-    const ui::AXActionData& data,
-    bool result,
-    content::BrowserContext* browser_context) {
+void AutomationEventRouter::DispatchActionResult(const ui::AXActionData& data,
+                                                 bool result) {
   CHECK(!data.source_extension_id.empty());
 
   for (const auto& remote : automation_remote_set_) {
@@ -290,7 +280,7 @@ void AutomationEventRouter::RenderProcessHostDestroyed(
 
 void AutomationEventRouter::RemoveAutomationListener(
     content::RenderProcessHost* host) {
-  RenderProcessHostId rph_id = host->GetDeprecatedID();
+  RenderProcessHostId rph_id = host->GetID();
   ExtensionId extension_id;
   for (auto listener = listeners_.begin(); listener != listeners_.end();) {
     if ((*listener)->render_process_host_id == rph_id) {

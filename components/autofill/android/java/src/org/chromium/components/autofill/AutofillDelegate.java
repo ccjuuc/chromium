@@ -5,6 +5,7 @@
 package org.chromium.components.autofill;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.components.autofill.autofill_ai.EntityTypeName;
 
 /** An interface to handle the touch interaction with an autofill popup or keyboard accessory. */
 @NullMarked
@@ -21,6 +22,17 @@ public interface AutofillDelegate {
     void suggestionSelected(int listIndex);
 
     /**
+     * Handles the selection of an Autofill suggestion, with metadata about whether the suggestion
+     * triggers a loading state.
+     *
+     * @param listIndex The index of the selected Autofill suggestion.
+     * @param showLoadingOnAcceptance True if the suggestion shows a loading UI on acceptance.
+     */
+    default void suggestionSelected(int listIndex, boolean showLoadingOnAcceptance) {
+        suggestionSelected(listIndex);
+    }
+
+    /**
      * Initiates the deletion process for an item. (A confirm dialog should be shown.)
      *
      * @param listIndex The index of the suggestion to delete.
@@ -32,4 +44,11 @@ public interface AutofillDelegate {
      * TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED} accessibility event.
      */
     void accessibilityFocusCleared();
+
+    /**
+     * Opens settings for the given entity type.
+     *
+     * @param entityType The entity type for which to open settings.
+     */
+    default void openSettingsForEntityType(@EntityTypeName int entityType) {}
 }

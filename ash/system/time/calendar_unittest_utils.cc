@@ -9,7 +9,6 @@
 #include "ash/ash_export.h"
 #include "base/environment.h"
 #include "base/functional/callback_helpers.h"
-#include "base/i18n/time_formatting.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "google_apis/calendar/calendar_api_response_types.h"
@@ -35,6 +34,67 @@ ScopedLibcTimeZone::~ScopedLibcTimeZone() {
   } else {
     CHECK(env->UnSetVar(kTimeZoneEnvVarName));
   }
+}
+
+CalendarListFetchWaiter::CalendarListFetchWaiter(
+    CalendarListModel* calendar_list_model) {
+  scoped_observation_.Observe(calendar_list_model);
+}
+
+CalendarListFetchWaiter::~CalendarListFetchWaiter() = default;
+
+void CalendarListFetchWaiter::Wait() {
+  if (complete_) {
+    return;
+  }
+  run_loop_.Run();
+}
+
+void CalendarListFetchWaiter::OnCalendarListFetchComplete() {
+  complete_ = true;
+  run_loop_.Quit();
+}
+
+CalendarEventsFetchWaiter::CalendarEventsFetchWaiter(
+    CalendarModel* calendar_model,
+    base::Time start_of_month)
+    : match_successful_month_(true), start_of_month_(start_of_month) {
+  scoped_observation_.Observe(calendar_model);
+}
+
+CalendarEventsFetchWaiter::CalendarEventsFetchWaiter(
+    CalendarModel* calendar_model,
+    base::RepeatingCallback<bool()> complete_predicate)
+    : complete_predicate_(std::move(complete_predicate)) {
+  scoped_observation_.Observe(calendar_model);
+}
+
+CalendarEventsFetchWaiter::~CalendarEventsFetchWaiter() = default;
+
+void CalendarEventsFetchWaiter::Wait() {
+  if (IsComplete()) {
+    return;
+  }
+  run_loop_.Run();
+}
+
+void CalendarEventsFetchWaiter::OnEventsFetched(
+    const CalendarModel::FetchingStatus status,
+    const base::Time start_time) {
+  if (match_successful_month_) {
+    complete_ =
+        status == CalendarModel::kSuccess && start_time == start_of_month_;
+  } else {
+    complete_ = complete_predicate_.Run();
+  }
+
+  if (complete_) {
+    run_loop_.Quit();
+  }
+}
+
+bool CalendarEventsFetchWaiter::IsComplete() {
+  return complete_ || (!match_successful_month_ && complete_predicate_.Run());
 }
 
 std::unique_ptr<google_apis::calendar::SingleCalendar> CreateCalendar(
@@ -139,8 +199,12 @@ std::unique_ptr<google_apis::calendar::EventList> CreateMockEventList(
 
 ASH_EXPORT bool IsTheSameMonth(const base::Time date_a,
                                const base::Time date_b) {
-  return base::UnlocalizedTimeFormatWithPattern(date_a, "MM YYYY") ==
-         base::UnlocalizedTimeFormatWithPattern(date_b, "MM YYYY");
+  base::Time::Exploded exploded_a;
+  date_a.UTCExplode(&exploded_a);
+  base::Time::Exploded exploded_b;
+  date_b.UTCExplode(&exploded_b);
+  return exploded_a.year == exploded_b.year &&
+         exploded_a.month == exploded_b.month;
 }
 
 base::Time GetTimeFromString(const char* start_time) {

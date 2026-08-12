@@ -91,7 +91,7 @@ class MockPasswordManager : public password_manager::PasswordManagerInterface {
               (override));
   MOCK_METHOD(void,
               ProcessAutofillPredictions,
-              (PasswordManagerDriver*,
+              (PasswordManagerDriver&,
                const autofill::FormData&,
                (const base::flat_map<autofill::FieldGlobalId,
                                      autofill::AutofillServerPrediction>&)),
@@ -149,6 +149,8 @@ class MockPasswordManager : public password_manager::PasswordManagerInterface {
               (override));
 #endif
   MOCK_METHOD(bool, IsFormManagerPendingPasswordUpdate, (), (const override));
+  MOCK_METHOD(void, AddObserver, (Observer*), (override));
+  MOCK_METHOD(void, RemoveObserver, (Observer*), (override));
 };
 }  // namespace password_manager
 

@@ -12,6 +12,7 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
@@ -35,8 +36,9 @@ import org.robolectric.annotation.Config;
 
 import org.chromium.base.Token;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabGroupUtils.TabGroupCreationCallback;
 import org.chromium.chrome.browser.tabmodel.TabGroupUtils.TabMovedCallback;
 import org.chromium.chrome.browser.tabmodel.TabList;
@@ -44,6 +46,7 @@ import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabUngrouper;
 import org.chromium.chrome.browser.tasks.tab_management.TabGroupListBottomSheetCoordinator.RowType;
 import org.chromium.chrome.browser.tasks.tab_management.TabGroupListBottomSheetCoordinator.TabGroupListBottomSheetCoordinatorDelegate;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.SheetState;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
@@ -62,13 +65,13 @@ import java.util.Set;
 /** Unit tests for {@link TabGroupListBottomSheetMediator}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
+@EnableFeatures(ChromeFeatureList.CROSS_WINDOW_TAB_GROUP_OPERATIONS)
 public class TabGroupListBottomSheetMediatorUnitTest {
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private BottomSheetController mBottomSheetController;
     @Mock private TabGroupListBottomSheetCoordinatorDelegate mDelegate;
-    @Mock private TabGroupModelFilter mFilter;
     @Mock private TabModel mTabModel;
     @Mock private TabUngrouper mTabUngrouper;
     @Mock private TabList mTabList;
@@ -85,6 +88,7 @@ public class TabGroupListBottomSheetMediatorUnitTest {
     @Mock private SavedTabGroupTab mSavedTabGroupTab1;
     @Mock private SavedTabGroupTab mSavedTabGroupTab2;
     @Mock private SavedTabGroupTab mSavedTabGroupTab3;
+    @Mock private BottomSheetContent mBottomSheetContent;
     @Captor private ArgumentCaptor<BottomSheetObserver> mBottomSheetObserverCaptor;
 
     private ModelList mModelList;
@@ -99,7 +103,7 @@ public class TabGroupListBottomSheetMediatorUnitTest {
         mMediator =
                 new TabGroupListBottomSheetMediator(
                         mModelList,
-                        mFilter,
+                        mTabModel,
                         mTabGroupCreationCallback,
                         mTabMovedCallback,
                         mFaviconResolver,
@@ -117,8 +121,7 @@ public class TabGroupListBottomSheetMediatorUnitTest {
         when(mTabList.getTabAtChecked(2)).thenReturn(mTab3);
 
         when(mTabModel.getComprehensiveModel()).thenReturn(mTabList);
-        when(mFilter.getTabModel()).thenReturn(mTabModel);
-        when(mFilter.getTabUngrouper()).thenReturn(mTabUngrouper);
+        when(mTabModel.getTabUngrouper()).thenReturn(mTabUngrouper);
 
         when(mTab1.getId()).thenReturn(1);
         when(mTab2.getId()).thenReturn(2);
@@ -127,7 +130,7 @@ public class TabGroupListBottomSheetMediatorUnitTest {
         mToken1 = Token.createRandom();
         mToken2 = Token.createRandom();
         mToken3 = Token.createRandom();
-        when(mFilter.getAllTabGroupIds()).thenReturn(Set.of(mToken1, mToken2));
+        when(mTabModel.getAllTabGroupIds()).thenReturn(Set.of(mToken1, mToken2));
 
         when(mTab1.getId()).thenReturn(1);
         when(mTab2.getId()).thenReturn(2);
@@ -165,7 +168,8 @@ public class TabGroupListBottomSheetMediatorUnitTest {
 
         mMediator.requestShowContent(Arrays.asList(mTab1, mTab2));
 
-        verify(mBottomSheetController, never()).addObserver(any());
+        verify(mBottomSheetController).addObserver(any());
+        verify(mBottomSheetController).removeObserver(any());
     }
 
     @Test
@@ -178,8 +182,8 @@ public class TabGroupListBottomSheetMediatorUnitTest {
         // Verify that model list is populated before requesting show content
         inOrder.verify(mModelList).clear();
         inOrder.verify(mModelList, times(3)).add(any());
-        inOrder.verify(mDelegate).requestShowContent();
         inOrder.verify(mBottomSheetController).addObserver(mBottomSheetObserverCaptor.capture());
+        inOrder.verify(mDelegate).requestShowContent();
         assertEquals(3, mModelList.size());
         assertEquals(RowType.NEW_GROUP, mModelList.get(0).type);
     }
@@ -197,8 +201,56 @@ public class TabGroupListBottomSheetMediatorUnitTest {
 
         verify(mBottomSheetController).addObserver(mBottomSheetObserverCaptor.capture());
         BottomSheetObserver observer = mBottomSheetObserverCaptor.getValue();
+
+        // Simulate our content shown.
+        when(mDelegate.isSameContentView(mBottomSheetContent)).thenReturn(true);
+        observer.onSheetContentChanged(mBottomSheetContent);
+
         observer.onSheetClosed(StateChangeReason.BACK_PRESS);
 
+        verify(mBottomSheetController).removeObserver(observer);
+        assertTrue(mModelList.isEmpty());
+    }
+
+    @Test
+    public void testBottomSheetObserver_onSheetClosed_ignoredBeforeShown() {
+        when(mDelegate.requestShowContent())
+                .thenAnswer(
+                        invocation -> {
+                            verify(mBottomSheetController)
+                                    .addObserver(mBottomSheetObserverCaptor.capture());
+                            mBottomSheetObserverCaptor
+                                    .getValue()
+                                    .onSheetClosed(StateChangeReason.BACK_PRESS);
+                            return true;
+                        });
+
+        mMediator.requestShowContent(Arrays.asList(mTab1, mTab2));
+
+        verify(mBottomSheetController, never()).removeObserver(any());
+        assertFalse(mModelList.isEmpty());
+    }
+
+    @Test
+    public void testBottomSheetObserver_onOtherSheetClosed() {
+        when(mDelegate.requestShowContent()).thenReturn(true);
+        mMediator.requestShowContent(Arrays.asList(mTab1, mTab2));
+
+        verify(mBottomSheetController).addObserver(mBottomSheetObserverCaptor.capture());
+        BottomSheetObserver observer = mBottomSheetObserverCaptor.getValue();
+
+        // A different bottom sheet was closed to make way for ours. We should
+        // ignore this event and not clear our model list.
+        observer.onSheetClosed(StateChangeReason.BACK_PRESS);
+        verify(mBottomSheetController, never()).removeObserver(observer);
+        assertFalse(mModelList.isEmpty());
+
+        // Our bottom sheet content is now active.
+        when(mDelegate.isSameContentView(mBottomSheetContent)).thenReturn(true);
+        observer.onSheetContentChanged(mBottomSheetContent);
+
+        // Our bottom sheet is closed. We should now clean up and clear the model list.
+        observer.onSheetClosed(StateChangeReason.BACK_PRESS);
         verify(mBottomSheetController).removeObserver(observer);
         assertTrue(mModelList.isEmpty());
     }
@@ -223,10 +275,63 @@ public class TabGroupListBottomSheetMediatorUnitTest {
 
         verify(mBottomSheetController).addObserver(mBottomSheetObserverCaptor.capture());
         BottomSheetObserver observer = mBottomSheetObserverCaptor.getValue();
+
+        // Simulate our content shown.
+        when(mDelegate.isSameContentView(mBottomSheetContent)).thenReturn(true);
+        observer.onSheetContentChanged(mBottomSheetContent);
+
         observer.onSheetStateChanged(SheetState.HIDDEN, INTERACTION_COMPLETE);
 
         verify(mBottomSheetController).removeObserver(observer);
         assertTrue(mModelList.isEmpty());
+    }
+
+    @Test
+    public void testBottomSheetObserver_onSheetContentChanged_addsPadding() {
+        when(mDelegate.requestShowContent()).thenReturn(true);
+        mMediator.requestShowContent(Arrays.asList(mTab1, mTab2));
+
+        verify(mBottomSheetController).addObserver(mBottomSheetObserverCaptor.capture());
+        BottomSheetObserver observer = mBottomSheetObserverCaptor.getValue();
+
+        BottomSheetContent mockContent = mock();
+        when(mDelegate.isSameContentView(mockContent)).thenReturn(true);
+        when(mBottomSheetController.hasBottomInset()).thenReturn(false);
+
+        observer.onSheetContentChanged(mockContent);
+        verify(mDelegate).addPadding();
+    }
+
+    @Test
+    public void testBottomSheetObserver_onSheetContentChanged_doesNotAddPadding_differentContent() {
+        when(mDelegate.requestShowContent()).thenReturn(true);
+        mMediator.requestShowContent(Arrays.asList(mTab1, mTab2));
+
+        verify(mBottomSheetController).addObserver(mBottomSheetObserverCaptor.capture());
+        BottomSheetObserver observer = mBottomSheetObserverCaptor.getValue();
+
+        BottomSheetContent mockContent = mock();
+        when(mDelegate.isSameContentView(mockContent)).thenReturn(false);
+        when(mBottomSheetController.hasBottomInset()).thenReturn(false);
+
+        observer.onSheetContentChanged(mockContent);
+        verify(mDelegate, never()).addPadding();
+    }
+
+    @Test
+    public void testBottomSheetObserver_onSheetContentChanged_doesNotAddPadding_hasBottomInset() {
+        when(mDelegate.requestShowContent()).thenReturn(true);
+        mMediator.requestShowContent(Arrays.asList(mTab1, mTab2));
+
+        verify(mBottomSheetController).addObserver(mBottomSheetObserverCaptor.capture());
+        BottomSheetObserver observer = mBottomSheetObserverCaptor.getValue();
+
+        BottomSheetContent mockContent = mock();
+        when(mDelegate.isSameContentView(mockContent)).thenReturn(true);
+        when(mBottomSheetController.hasBottomInset()).thenReturn(true);
+
+        observer.onSheetContentChanged(mockContent);
+        verify(mDelegate, never()).addPadding();
     }
 
     @Test
@@ -254,7 +359,7 @@ public class TabGroupListBottomSheetMediatorUnitTest {
         mMediator =
                 new TabGroupListBottomSheetMediator(
                         mModelList,
-                        mFilter,
+                        mTabModel,
                         mTabGroupCreationCallback,
                         mTabMovedCallback,
                         mFaviconResolver,
@@ -304,6 +409,24 @@ public class TabGroupListBottomSheetMediatorUnitTest {
     }
 
     @Test
+    public void testPopulateList_withGroupInAnotherWindow() {
+        // Group 3 is open in another window (localId is non-null, but not in current TabModel)
+        mSavedTabGroup3.localId = new LocalTabGroupId(mToken3);
+
+        when(mDelegate.requestShowContent()).thenReturn(true);
+        mMediator.requestShowContent(Arrays.asList(mTab1, mTab2));
+        verify(mTabGroupSyncService).getAllGroupIds();
+
+        // New group row, plus three rows representing existing groups (including Group 3 from
+        // another window).
+        assertEquals(4, mModelList.size());
+        assertEquals(RowType.NEW_GROUP, mModelList.get(0).type);
+        assertEquals(RowType.EXISTING_GROUP, mModelList.get(1).type);
+        assertEquals(RowType.EXISTING_GROUP, mModelList.get(2).type);
+        assertEquals(RowType.EXISTING_GROUP, mModelList.get(3).type);
+    }
+
+    @Test
     public void testPopulateList_tabsAreSubsetOfSameGroup() {
         mSavedTabGroup3.localId = new LocalTabGroupId(mToken3);
 
@@ -314,8 +437,9 @@ public class TabGroupListBottomSheetMediatorUnitTest {
         mMediator.requestShowContent(Arrays.asList(mTab1, mTab2));
         verify(mTabGroupSyncService).getAllGroupIds();
 
-        // New group row, plus one row representing an existing group. The rest are filtered out.
-        assertEquals(2, mModelList.size());
+        // New group row, plus two rows representing existing groups (including groups in another
+        // window).
+        assertEquals(3, mModelList.size());
         assertEquals(RowType.NEW_GROUP, mModelList.get(0).type);
         assertEquals(RowType.EXISTING_GROUP, mModelList.get(1).type);
 
@@ -335,7 +459,7 @@ public class TabGroupListBottomSheetMediatorUnitTest {
         // Simulate clicking the "New Group" row.
         mModelList.get(0).model.get(ROW_CLICK_RUNNABLE).run();
 
-        verify(mFilter).mergeListOfTabsToGroup(eq(tabs), eq(mTab1), anyInt());
+        verify(mTabModel).mergeListOfTabsToGroup(eq(tabs), eq(mTab1), anyInt());
         verify(mDelegate).hide(INTERACTION_COMPLETE);
         verify(mTabGroupCreationCallback).onTabGroupCreated(any());
     }
@@ -353,7 +477,7 @@ public class TabGroupListBottomSheetMediatorUnitTest {
 
         verify(mTabMovedCallback).onTabMoved();
         verify(mTabUngrouper).ungroupTabs(eq(tabs), anyBoolean(), anyBoolean());
-        verify(mFilter).createSingleTabGroup(mTab1);
+        verify(mTabModel).createSingleTabGroup(mTab1);
         verify(mDelegate).hide(INTERACTION_COMPLETE);
         verify(mTabGroupCreationCallback).onTabGroupCreated(any());
     }
@@ -373,7 +497,7 @@ public class TabGroupListBottomSheetMediatorUnitTest {
         mMediator =
                 new TabGroupListBottomSheetMediator(
                         mModelList,
-                        mFilter,
+                        mTabModel,
                         mTabGroupCreationCallback,
                         mTabMovedCallback,
                         mFaviconResolver,
@@ -391,7 +515,7 @@ public class TabGroupListBottomSheetMediatorUnitTest {
         mMediator =
                 new TabGroupListBottomSheetMediator(
                         mModelList,
-                        mFilter,
+                        mTabModel,
                         mTabGroupCreationCallback,
                         mTabMovedCallback,
                         mFaviconResolver,
@@ -405,7 +529,7 @@ public class TabGroupListBottomSheetMediatorUnitTest {
 
         List<Tab> list = Arrays.asList(mTab1, mTab2);
         mMediator.requestShowContent(list);
-        assertEquals(1, mModelList.size());
+        assertEquals(2, mModelList.size());
     }
 
     @Test
@@ -413,7 +537,7 @@ public class TabGroupListBottomSheetMediatorUnitTest {
         mMediator =
                 new TabGroupListBottomSheetMediator(
                         mModelList,
-                        mFilter,
+                        mTabModel,
                         mTabGroupCreationCallback,
                         mTabMovedCallback,
                         mFaviconResolver,
@@ -427,7 +551,7 @@ public class TabGroupListBottomSheetMediatorUnitTest {
 
         List<Tab> list = List.of(mTab1);
         mMediator.requestShowContent(list);
-        assertEquals(1, mModelList.size());
+        assertEquals(2, mModelList.size());
         assertEquals(RowType.NEW_GROUP, mModelList.get(0).type);
     }
 
@@ -436,7 +560,7 @@ public class TabGroupListBottomSheetMediatorUnitTest {
         mMediator =
                 new TabGroupListBottomSheetMediator(
                         mModelList,
-                        mFilter,
+                        mTabModel,
                         mTabGroupCreationCallback,
                         mTabMovedCallback,
                         mFaviconResolver,

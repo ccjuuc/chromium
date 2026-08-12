@@ -16,7 +16,10 @@
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/pending_extension_manager.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_builder.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -116,7 +119,7 @@ TEST_F(ExtensionMigratorTest, HasBothOldAndNew) {
 }
 
 // Tests that a previously-force-installed extension can be uninstalled.
-// crbug.com/1416682
+// crbug.com/40893640
 TEST_F(ExtensionMigratorTest, HasPreviouslyForceInstalledNew) {
   InitWithExistingProfile();
   scoped_refptr<const Extension> extension =

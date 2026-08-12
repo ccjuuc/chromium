@@ -10,7 +10,8 @@
 
 #if BUILDFLAG(USE_V4L2_CODEC)
 #include <linux/videodev2.h>
-#elif BUILDFLAG(USE_VAAPI)
+#endif
+#if BUILDFLAG(USE_VAAPI)
 #include <va/va.h>
 #endif  // BUILDFLAG(USE_VAAPI)
 
@@ -34,6 +35,7 @@ std::optional<Fourcc> Fourcc::FromUint32(uint32_t fourcc) {
     case MM21:
     case P010:
     case MT2T:
+    case BGR4:
     case AR24:
     case Q08C:
     case Q10C:
@@ -65,10 +67,11 @@ std::optional<Fourcc> Fourcc::FromVideoPixelFormat(
         return Fourcc(P010);
       case PIXEL_FORMAT_ARGB:
         return Fourcc(AR24);
+      case PIXEL_FORMAT_XRGB:
+        return Fourcc(BGR4);
       case PIXEL_FORMAT_UYVY:
         NOTREACHED();
       case PIXEL_FORMAT_ABGR:
-      case PIXEL_FORMAT_XRGB:
       case PIXEL_FORMAT_XBGR:
       case PIXEL_FORMAT_BGRA:
       case PIXEL_FORMAT_I420A:
@@ -188,6 +191,8 @@ VideoPixelFormat Fourcc::ToVideoPixelFormat() const {
       return PIXEL_FORMAT_P010LE;
     case MT2T:
       return PIXEL_FORMAT_P010LE;
+    case BGR4:
+      return PIXEL_FORMAT_XRGB;
     case AR24:
       return PIXEL_FORMAT_ARGB;
     // V4L2_PIX_FMT_QC08C is a proprietary Qualcomm compressed format that can
@@ -219,7 +224,9 @@ uint32_t Fourcc::ToV4L2PixFmt() const {
   // Fourcc as V4L2.
   return static_cast<uint32_t>(value_);
 }
-#elif BUILDFLAG(USE_VAAPI)
+#endif  // BUILDFLAG(USE_V4L2_CODEC)
+
+#if BUILDFLAG(USE_VAAPI)
 // static
 std::optional<Fourcc> Fourcc::FromVAFourCC(uint32_t va_fourcc) {
   switch (va_fourcc) {
@@ -267,6 +274,7 @@ std::optional<uint32_t> Fourcc::ToVAFourCC() const {
     case MT21:
     case MM21:
     case MT2T:
+    case BGR4:
     case Q08C:
     case Q10C:
     case UNDEFINED:
@@ -290,6 +298,7 @@ std::optional<Fourcc> Fourcc::ToSinglePlanar() const {
     case P010:
     case MM21:
     case MT2T:
+    case BGR4:
     case AR24:
       return Fourcc(value_);
     case YM12:
@@ -325,6 +334,7 @@ bool Fourcc::IsMultiPlanar() const {
     case YU16:
     case P010:
     case MT2T:
+    case BGR4:
     case AR24:
     case Q08C:
     case Q10C:
@@ -360,6 +370,7 @@ static_assert(Fourcc::YM16 == V4L2_PIX_FMT_YUV422M, "Mismatch Fourcc");
 static_assert(Fourcc::MM21 == V4L2_PIX_FMT_MM21, "Mismatch Fourcc");
 static_assert(Fourcc::MT21 == V4L2_PIX_FMT_MT21C, "Mismatch Fourcc");
 static_assert(Fourcc::AR24 == V4L2_PIX_FMT_ABGR32, "Mismatch Fourcc");
+static_assert(Fourcc::BGR4 == V4L2_PIX_FMT_BGR32, "Mismatch Fourcc");
 static_assert(Fourcc::P010 == V4L2_PIX_FMT_P010, "Mismatch Fourcc");
 // MT2T has not been upstreamed yet
 #ifdef V4L2_PIX_FMT_MT2T

@@ -78,6 +78,9 @@ base::TimeDelta GetDefaultLocalChangeNudgeDelay(DataType data_type) {
     case COLLABORATION_GROUP:
     case CONTACT_INFO:
     case THEMES:
+    case THEMES_IOS:
+    case ENCRYPTED_TAB_CONTEXT_CONTAINER:
+    case ENCRYPTED_TAB_CONTEXT_ITEM:
     case EXTENSIONS:
     case SEARCH_ENGINES:
     case APPS:
@@ -115,6 +118,11 @@ base::TimeDelta GetDefaultLocalChangeNudgeDelay(DataType data_type) {
     case SHARED_COMMENT:
     case AI_THREAD:
     case CONTEXTUAL_TASK:
+    case SKILL:
+    case GEMINI_THREAD:
+    case THEMES_ANDROID:
+    case NOTEBOOK:
+    case JOURNEY:
       return kMediumLocalChangeNudgeDelay;
     case UNSPECIFIED:
       NOTREACHED();
@@ -150,6 +158,9 @@ bool CanGetCommitsFromExtensions(DataType data_type) {
     case AUTOFILL_WALLET_OFFER:
     case AUTOFILL_WALLET_USAGE:
     case THEMES:
+    case THEMES_IOS:
+    case ENCRYPTED_TAB_CONTEXT_CONTAINER:
+    case ENCRYPTED_TAB_CONTEXT_ITEM:
     case EXTENSIONS:
     case SEARCH_ENGINES:
     case APPS:
@@ -189,6 +200,11 @@ bool CanGetCommitsFromExtensions(DataType data_type) {
     case SHARED_COMMENT:
     case AI_THREAD:
     case CONTEXTUAL_TASK:
+    case SKILL:
+    case GEMINI_THREAD:
+    case THEMES_ANDROID:
+    case NOTEBOOK:
+    case JOURNEY:
       return false;
     case UNSPECIFIED:
       NOTREACHED();
@@ -354,7 +370,8 @@ void DataTypeTracker::ThrottleType(base::TimeDelta duration,
 void DataTypeTracker::BackOffType(base::TimeDelta duration,
                                   base::TimeTicks now) {
   unblock_time_ = std::max(unblock_time_, now + duration);
-  wait_interval_.emplace(WaitInterval::BlockingMode::kExponentialBackoff, duration);
+  wait_interval_.emplace(WaitInterval::BlockingMode::kExponentialBackoff,
+                         duration);
 }
 
 void DataTypeTracker::UpdateThrottleOrBackoffState() {

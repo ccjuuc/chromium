@@ -31,6 +31,7 @@
 #include "base/win/registry.h"
 #include "base/win/scoped_handle.h"
 #include "build/branding_buildflags.h"
+#include "chrome/browser/win/isolated_browser_support.h"
 #include "crypto/random.h"
 #include "net/base/file_stream.h"
 #include "net/base/net_errors.h"
@@ -91,7 +92,7 @@ bool GetManifestPath(HKEY root_key,
 
 // If the Host is an executable, we will invoke it directly to avoid problems
 // if CMD.exe is unavailable due to OS policy or other configuration issues
-// on the client. See https://crbug.com/335558 for details.
+// on the client. See https://crbug.com/41084583 for details.
 base::Process LaunchNativeExeDirectly(const std::wstring& command,
                                       base::LaunchOptions& options,
                                       const std::wstring& in_pipe_name,
@@ -121,11 +122,19 @@ base::Process LaunchNativeExeDirectly(const std::wstring& command,
     return base::Process();
   }
 
-  options.stdin_handle = stdin_file.Get();
-  options.stdout_handle = stdout_file.Get();
+  options.stdin_handle = stdin_file.get();
+  options.stdout_handle = stdout_file.get();
   options.stderr_handle = ::GetStdHandle(STD_ERROR_HANDLE);
   options.handles_to_inherit.push_back(options.stdin_handle);
   options.handles_to_inherit.push_back(options.stdout_handle);
+
+  const auto unisolated_token = chrome::GetUnisolatedAccessToken();
+  if (!unisolated_token) {
+    return base::Process();
+  }
+
+  // Always run native messaging hosts unisolated.
+  options.using_token = unisolated_token->get();
 
   // Inherit Chrome's STD_ERROR_HANDLE, if set, into the Native Host. If Chrome
   // was not started with standard error redirected, this value will be null.
@@ -152,6 +161,15 @@ base::Process LaunchNativeHostViaCmd(const std::wstring& command,
   ::GetEnvironmentVariable(
       L"COMSPEC", base::WriteInto(&comspec, comspec_length), comspec_length);
 
+  const auto unisolated_token = chrome::GetUnisolatedAccessToken();
+
+  if (!unisolated_token) {
+    return base::Process();
+  }
+
+  // Always run native messaging hosts unisolated.
+  options.using_token = unisolated_token->get();
+
   return base::LaunchProcess(
       base::StrCat({comspec, L" /d /s /c \"", command, L"\" < ", in_pipe_name,
                     L" > ", out_pipe_name}),
@@ -167,7 +185,7 @@ base::FilePath LaunchContext::FindManifest(const std::string& host_name,
   std::wstring host_name_wide = base::UTF8ToWide(host_name);
 
   // If permitted, look in HKEY_CURRENT_USER first. If the manifest isn't found
-  // there, then try HKEY_LOCAL_MACHINE. https://crbug.com/1034919#c6
+  // there, then try HKEY_LOCAL_MACHINE. https://crbug.com/40111968#comment7
   std::wstring path_str;
   bool found = false;
   if (allow_user_level_hosts) {
@@ -250,7 +268,7 @@ std::optional<LaunchContext::ProcessState> LaunchContext::LaunchNativeProcess(
   base::Process launched_process;
   if (use_direct_launch) {
     // Compat: If the target is SUBSYSTEM_WINDOWS, then don't set |start_hidden|
-    // in order to mimic legacy behavior: https://crbug.com/1442359.
+    // in order to mimic legacy behavior: https://crbug.com/40266927.
     // A Windows executable will have LOWORD of 0x4550. A GUI executable will
     // have a non-Zero HIWORD while a console executable will have a 0 HIWORD.
     uintptr_t exe_type = ::SHGetFileInfoW(
@@ -316,7 +334,7 @@ void LaunchContext::ConnectPipes(base::ScopedPlatformFile read_file,
   process_watcher_.StartWatchingOnce(native_process_.Handle(), this);
 }
 
-void LaunchContext::OnReadStreamConnectResult(int net_error) {
+void LaunchContext::OnReadStreamConnectResult(net::Error net_error) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (net_error != net::OK) {
     // Failed to connect.
@@ -328,7 +346,7 @@ void LaunchContext::OnReadStreamConnectResult(int net_error) {
   OnPipeConnected();
 }
 
-void LaunchContext::OnWriteStreamConnectResult(int net_error) {
+void LaunchContext::OnWriteStreamConnectResult(net::Error net_error) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (net_error != net::OK) {
     // Failed to connect.

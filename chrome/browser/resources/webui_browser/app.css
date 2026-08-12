@@ -22,13 +22,29 @@
   user-select: none;
 }
 
+:host([inactive]) {
+  background-color: var(--color-frame-inactive);
+}
+
+:host([inactive]) #rootContainer {
+  background-color: var(--color-tab-background-active-frame-inactive);
+}
+
+:host([inactive]) .titlebarDiv {
+  background-color: var(--color-tab-background-inactive-frame-inactive);
+}
+
+:host([inactive]) .caption-button {
+  --iron-icon-stroke-color: var(--color-tab-foreground-active-frame-inactive);
+}
+
 /* Hide browser frame in tab fullscreen mode */
-:host([fullscreen-mode="tab"]) #topContainer {
+:host([fullscreen-mode='tab']) #topContainer {
   display: none;
 }
 
 /* Make content fill the window in tab fullscreen mode */
-:host([fullscreen-mode="tab"]) #contentRegion {
+:host([fullscreen-mode='tab']) #contentRegion {
   position: fixed;
   top: 0;
   left: 0;
@@ -70,9 +86,10 @@ cr-icon-button {
   --cr-icon-button-fill-color: var(--color-toolbar-button-icon);
 }
 
-cr-searchbox {
+webui-browser-searchbox {
   --cr-searchbox-font-size: 14px;
   --cr-searchbox-height: 32px;
+  --cr-searchbox-input-height: 32px;
   --cr-searchbox-shadow: 0 0 0px 1px #20212451;
   --cr-searchbox-icon-left-position: 12px;
   --cr-searchbox-icon-size-in-searchbox: 20px;
@@ -83,18 +100,14 @@ cr-searchbox {
   flex: 1;
 }
 
-cr-searchbox[dropdown-is-visible] {
+webui-browser-searchbox[dropdown-is-visible] {
   --cr-searchbox-shadow: 0 3px 7px 0px #20212451;
 }
 
-.activeFrame {
-  /* Everything below the tab strip is the active frame, so give it the active
-   * background color. */
-  background-color: var(--color-tab-background-active-frame-active);
-}
 
 .titlebarDiv {
   app-region: drag;
+  -webkit-app-region: drag;
   display: flex;
   /* The tab strip is by default mostly inactive content, so give it the
    * inactive background color. */
@@ -103,9 +116,14 @@ cr-searchbox[dropdown-is-visible] {
 
 .tabstripDiv {
   app-region: no-drag;
+  -webkit-app-region: no-drag;
   float: left;
   overflow: hidden;
   text-align: left;
+}
+
+.tabstripDiv:has(webui-browser-tab-strip[drag-in-progress]) {
+  overflow: visible;
 }
 
 .captionButtonsDiv {
@@ -117,6 +135,7 @@ cr-searchbox[dropdown-is-visible] {
 
 .captionButtonsDiv cr-button {
   app-region: no-drag;
+  -webkit-app-region: no-drag;
 }
 
 #addressBox {
@@ -143,7 +162,7 @@ cr-searchbox[dropdown-is-visible] {
 #locationIcon {
   fill: var(--color-searchbox-foreground);
   stroke: var(--color-searchbox-foreground);
-  stroke-width: 0px;
+  stroke-width: 0;
   stroke-linecap: round;
   shape-rendering: geometricPrecision;
 }
@@ -159,6 +178,9 @@ cr-searchbox[dropdown-is-visible] {
 }
 
 #rootContainer {
+  /* Everything below the tab strip is themed with the active frame color
+   * (the active tab's background color). */
+  background-color: var(--color-tab-background-active-frame-active);
   display: grid;
   height: 100%;
   /* *

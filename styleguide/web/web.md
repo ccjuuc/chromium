@@ -376,6 +376,46 @@ let items = document.body.querySelectorAll('div');
   This ensures that if a new enum value is added in the future, the compiler or
   runtime will catch unhandled cases.
 
+* `protected` and `private` members may end with an underscore. In either case,
+  don't mix and match naming styles within single file, instead pick one style
+  and stick with it to keep the naming within the file consistent.
+
+* Do not use `any` to work around compiler errors. Instead, provide an accurate
+  specific type, or use `unknown` for cases where the type is not known.
+
+* Do not re-export imports from other files. Instead, each file should import
+  what it needs directly from the file defining it. Example:
+
+```js
+// Don't do this:
+// bar.js
+import {Foo} from './foo.js';  // foo.js defines class Foo
+export {Foo};
+
+export class Bar {
+  // etc
+}
+
+// baz.js
+import {Foo, Bar} from './bar.js';
+
+// Do this instead
+// bar.js
+import {Foo} from './foo.js';
+
+export class Bar {
+  // etc
+}
+
+// baz.js
+import {Foo} from './foo.js';  // foo.js defines class Foo
+import {Bar} from './bar.js';
+```
+
+  Exception: For WebUI pages that use bundling, files passed as bundle entry
+  points to Rollup using optimize_webui_in_files can re-export imports as needed
+  for tests.
+
 ### ESLint checks
 
 A big part of the styleguide is automatically enforced via ESLint checks. There
@@ -391,10 +431,10 @@ are two types of ESLint checks:
    https://typescript-eslint.io/rules/?=typeInformation) of all possible such
    checks (not all of these are used in Chromium). Build-time ESLint checks can
    be triggered locally by building the `chrome` or `browser_tests` binaries, or
-   by explicitly triggering the `:lint` target for cases where `build_webui()`
-   or `build_webui_tests()` is used. For example by running:
+   by explicitly triggering the `:lint_ts` target for cases where
+   `build_webui()` or `build_webui_tests()` is used. For example by running:
    <br><br>
-   `autoninja -C out/chromium/ chrome/browser/resources/settings:lint`
+   `autoninja -C out/chromium/ chrome/browser/resources/settings:lint_ts`
    <br><br>
    See [`build_webui()` docs](
    https://chromium.googlesource.com/chromium/src/+/HEAD/docs/webui/webui_build_configuration.md#build_webui)

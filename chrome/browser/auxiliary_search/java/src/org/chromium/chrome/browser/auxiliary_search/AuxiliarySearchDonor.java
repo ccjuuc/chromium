@@ -202,6 +202,7 @@ public class AuxiliarySearchDonor {
     }
 
     @SuppressLint({"CheckResult", "NewApi"})
+    @SuppressWarnings("AsyncFunctionReturnsNull")
     @RequiresNonNull("mAppSearchSession")
     @VisibleForTesting
     boolean onConsumerSchemaSearchedImpl(boolean success) {
@@ -436,17 +437,11 @@ public class AuxiliarySearchDonor {
     }
 
     private String getSource(@AuxiliarySearchEntryType int type) {
-        switch (type) {
-            case AuxiliarySearchEntryType.CUSTOM_TAB -> {
-                return SOURCE_CUSTOM_TAB;
-            }
-            case AuxiliarySearchEntryType.TOP_SITE -> {
-                return SOURCE_TOP_SITE;
-            }
-            default -> {
-                return SOURCE_TAB;
-            }
-        }
+        return switch (type) {
+            case AuxiliarySearchEntryType.CUSTOM_TAB -> SOURCE_CUSTOM_TAB;
+            case AuxiliarySearchEntryType.TOP_SITE -> SOURCE_TOP_SITE;
+            default -> SOURCE_TAB;
+        };
     }
 
     @SuppressLint("UnsafeOptInUsageError")

@@ -104,9 +104,7 @@ TEST_F(TextAutoSpaceTest, InsertSpacing) {
   for (const Member<InlineItem>& item_ptr : node_data->items) {
     const InlineItem& item = *item_ptr;
     const auto* shape_result = item.TextShapeResult();
-    Vector<CharacterRange> ranges;
-    shape_result->IndividualCharacterRanges(&ranges);
-    final_ranges.AppendVector(ranges);
+    final_ranges.append_range(shape_result->IndividualCharacterRanges());
   }
   Vector<float> expected_result_start{0, 10, 20, 31.25, 41.25, 51.25, 62.5};
   ASSERT_EQ(expected_result_start.size(), final_ranges.size());
@@ -162,6 +160,8 @@ struct HtmlData {
     {u"あ\u309BX", {2}},  // Katakana-Hiragana Voiced Sound Mark
     {u"\u8279\uFE00\u8279\uFE01X", {4}},          // VS
     {u"\u795E\U000E0100\u793E\U000E0101X", {6}},  // IVS
+    {u"<ruby>\u6F22<rt>kan</rt></ruby>\u5B57", {}},
+    {u"<ruby>\u6F22<rt>\u304B\u3093</rt></ruby>abc", {5}},
 
 };
 class HtmlTest : public TextAutoSpaceTest,

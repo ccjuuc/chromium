@@ -8,24 +8,23 @@
 #include "base/test/bind.h"
 #include "base/test/gmock_move_support.h"
 #include "base/test/mock_callback.h"
-#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/actions/chrome_actions.h"
-#include "chrome/browser/ui/browser_actions.h"
-#include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model_factory.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar.mojom.h"
+#include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/grit/generated_resources.h"
-#include "chrome/test/base/browser_with_test_window_test.h"
+#include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/search_test_utils.h"
-#include "components/contextual_tasks/public/features.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/actions/actions.h"
 
 namespace content {
 class BrowserContext;
@@ -82,11 +81,11 @@ class MockPinnedToolbarActionsModel : public PinnedToolbarActionsModel {
 
 }  // namespace
 
-class CustomizeToolbarHandlerTest : public BrowserWithTestWindowTest {
+class CustomizeToolbarHandlerTest : public ChromeRenderViewHostTestHarness {
  public:
   CustomizeToolbarHandlerTest() = default;
 
-  TestingProfile::TestingFactories GetTestingFactories() override {
+  TestingProfile::TestingFactories GetTestingFactories() const override {
     return {
         TestingProfile::TestingFactory{
             PinnedToolbarActionsModelFactory::GetInstance(),
@@ -103,15 +102,12 @@ class CustomizeToolbarHandlerTest : public BrowserWithTestWindowTest {
 
   void SetUp() override {
     InitializeActionIdStringMapping();
-    BrowserWithTestWindowTest::SetUp();
+    ChromeRenderViewHostTestHarness::SetUp();
 
-    feature_list_.InitWithFeaturesAndParameters(
-        {{contextual_tasks::kContextualTasks,
-          {{"ContextualTasksEntryPoint", "toolbar-permanent"}}}},
-        {});
+    ON_CALL(mock_browser_window_, GetProfile())
+        .WillByDefault(testing::Return(profile()));
 
-    // Open a tab to get a webcontents in the same browser.
-    AddTab(browser(), GURL("about:blank"));
+    webui::SetBrowserWindowInterface(web_contents(), &mock_browser_window_);
 
     mock_pinned_toolbar_actions_model_ =
         static_cast<MockPinnedToolbarActionsModel*>(
@@ -125,8 +121,7 @@ class CustomizeToolbarHandlerTest : public BrowserWithTestWindowTest {
     handler_ = std::make_unique<CustomizeToolbarHandler>(
         mojo::PendingReceiver<
             side_panel::customize_chrome::mojom::CustomizeToolbarHandler>(),
-        mock_page_.BindAndGetRemote(),
-        browser()->tab_strip_model()->GetTabAtIndex(0)->GetContents());
+        mock_page_.BindAndGetRemote(), web_contents());
     mock_page_.FlushForTesting();
     EXPECT_EQ(handler_.get(), pinned_toolbar_actions_model_observer_);
 
@@ -138,12 +133,14 @@ class CustomizeToolbarHandlerTest : public BrowserWithTestWindowTest {
   }
 
   void TearDown() override {
+    webui::SetBrowserWindowInterface(web_contents(), nullptr);
     pinned_toolbar_actions_model_observer_ = nullptr;
     handler_.reset();
     mock_pinned_toolbar_actions_model_ = nullptr;
     actions::ActionIdMap::ResetMapsForTesting();
+    testing::Mock::VerifyAndClear(&mock_browser_window_);
 
-    BrowserWithTestWindowTest::TearDown();
+    ChromeRenderViewHostTestHarness::TearDown();
   }
 
   CustomizeToolbarHandler& handler() { return *handler_; }
@@ -156,7 +153,7 @@ class CustomizeToolbarHandlerTest : public BrowserWithTestWindowTest {
 
  protected:
   testing::NiceMock<MockPage> mock_page_;
-  base::test::ScopedFeatureList feature_list_;
+  testing::NiceMock<MockBrowserWindowInterface> mock_browser_window_;
 
   raw_ptr<MockPinnedToolbarActionsModel> mock_pinned_toolbar_actions_model_;
   raw_ptr<PinnedToolbarActionsModel::Observer>
@@ -184,74 +181,6 @@ TEST_F(CustomizeToolbarHandlerTest, ListCategories) {
                   }),
               categories.end());
   }
-}
-
-TEST_F(CustomizeToolbarHandlerTest, ListActions) {
-  std::vector<side_panel::customize_chrome::mojom::ActionPtr> actions;
-  base::MockCallback<CustomizeToolbarHandler::ListActionsCallback> callback;
-  EXPECT_CALL(callback, Run(_)).Times(1).WillOnce(MoveArg(&actions));
-  handler().ListActions(callback.Get());
-
-  const auto contains_action =
-      [&actions](side_panel::customize_chrome::mojom::ActionId id) -> bool {
-    return std::find_if(
-               actions.begin(), actions.end(),
-               [id](side_panel::customize_chrome::mojom::ActionPtr& action) {
-                 return action->id == id;
-               }) != actions.end();
-  };
-
-  // 11 actions are currently pinnable; more should be pinnable in the future.
-  EXPECT_GE(actions.size(), 11u);
-
-  // History clusters aren't enabled for this testing profile. The rest of the
-  // commented out ones aren't pinnable yet.
-  EXPECT_TRUE(contains_action(
-      side_panel::customize_chrome::mojom::ActionId::kShowBookmarks));
-  // EXPECT_TRUE(contains_action(
-  //     side_panel::customize_chrome::mojom::ActionId::kShowHistoryCluster));
-  EXPECT_TRUE(contains_action(
-      side_panel::customize_chrome::mojom::ActionId::kShowReadAnything));
-  EXPECT_TRUE(contains_action(
-      side_panel::customize_chrome::mojom::ActionId::kShowReadingList));
-  EXPECT_TRUE(contains_action(
-      side_panel::customize_chrome::mojom::ActionId::kShowLensOverlay));
-  EXPECT_TRUE(
-      contains_action(side_panel::customize_chrome::mojom::ActionId::kHome));
-  EXPECT_TRUE(
-      contains_action(side_panel::customize_chrome::mojom::ActionId::kForward));
-  EXPECT_TRUE(contains_action(
-      side_panel::customize_chrome::mojom::ActionId::kNewIncognitoWindow));
-  EXPECT_TRUE(contains_action(
-      side_panel::customize_chrome::mojom::ActionId::kShowPasswordManager));
-  EXPECT_TRUE(contains_action(
-      side_panel::customize_chrome::mojom::ActionId::kShowPaymentMethods));
-  EXPECT_TRUE(contains_action(
-      side_panel::customize_chrome::mojom::ActionId::kShowAddresses));
-  // EXPECT_TRUE(contains_action(
-  //     side_panel::customize_chrome::mojom::ActionId::kShowDownloads));
-  EXPECT_TRUE(contains_action(
-      side_panel::customize_chrome::mojom::ActionId::kClearBrowsingData));
-  EXPECT_TRUE(
-      contains_action(side_panel::customize_chrome::mojom::ActionId::kPrint));
-  EXPECT_TRUE(contains_action(
-      side_panel::customize_chrome::mojom::ActionId::kShowTranslate));
-  EXPECT_TRUE(contains_action(
-      side_panel::customize_chrome::mojom::ActionId::kSendTabToSelf));
-  EXPECT_TRUE(contains_action(
-      side_panel::customize_chrome::mojom::ActionId::kQrCodeGenerator));
-  // EXPECT_TRUE(contains_action(
-  //     side_panel::customize_chrome::mojom::ActionId::kRouteMedia));
-  EXPECT_TRUE(contains_action(
-      side_panel::customize_chrome::mojom::ActionId::kTaskManager));
-  EXPECT_TRUE(contains_action(
-      side_panel::customize_chrome::mojom::ActionId::kDevTools));
-  // EXPECT_TRUE(contains_action(
-  //     side_panel::customize_chrome::mojom::ActionId::kShowChromeLabs));
-  EXPECT_TRUE(contains_action(
-      side_panel::customize_chrome::mojom::ActionId::kSplitTab));
-  EXPECT_TRUE(contains_action(
-      side_panel::customize_chrome::mojom::ActionId::kContextualTasks));
 }
 
 TEST_F(CustomizeToolbarHandlerTest, PinAction) {
@@ -309,20 +238,6 @@ TEST_F(CustomizeToolbarHandlerTest, PinSplitTab) {
   EXPECT_TRUE(profile()->GetPrefs()->GetBoolean(prefs::kPinSplitTabButton));
 }
 
-TEST_F(CustomizeToolbarHandlerTest, PinContextualTasks) {
-  ASSERT_TRUE(
-      profile()->GetPrefs()->GetBoolean(prefs::kPinContextualTaskButton));
-
-  handler().PinAction(
-      side_panel::customize_chrome::mojom::ActionId::kContextualTasks, false);
-  EXPECT_FALSE(
-      profile()->GetPrefs()->GetBoolean(prefs::kPinContextualTaskButton));
-
-  handler().PinAction(
-      side_panel::customize_chrome::mojom::ActionId::kContextualTasks, true);
-  EXPECT_TRUE(
-      profile()->GetPrefs()->GetBoolean(prefs::kPinContextualTaskButton));
-}
 
 TEST_F(CustomizeToolbarHandlerTest, ActionsChanged) {
   EXPECT_CALL(mock_page_, NotifyActionsUpdated).Times(1);
@@ -385,96 +300,108 @@ TEST_F(CustomizeToolbarHandlerTest, SplitTabPrefUpdated) {
   EXPECT_EQ(pin, true);
 }
 
-TEST_F(CustomizeToolbarHandlerTest, PinContextualTaskPrefUpdated) {
-  bool pin;
-  side_panel::customize_chrome::mojom::ActionId id;
-  EXPECT_CALL(mock_page_, SetActionPinned)
-      .Times(2)
-      .WillRepeatedly(DoAll(SaveArg<0>(&id), SaveArg<1>(&pin)));
-
-  profile()->GetPrefs()->SetBoolean(prefs::kPinContextualTaskButton, false);
-  mock_page_.FlushForTesting();
-  EXPECT_EQ(id,
-            side_panel::customize_chrome::mojom::ActionId::kContextualTasks);
-  EXPECT_EQ(pin, false);
-
-  profile()->GetPrefs()->SetBoolean(prefs::kPinContextualTaskButton, true);
-  mock_page_.FlushForTesting();
-  EXPECT_EQ(id,
-            side_panel::customize_chrome::mojom::ActionId::kContextualTasks);
-  EXPECT_EQ(pin, true);
-}
 
 TEST_F(CustomizeToolbarHandlerTest, ResetToDefault) {
   EXPECT_CALL(mock_pinned_toolbar_actions_model(), ResetToDefault).Times(1);
   handler().ResetToDefault();
 }
 
-TEST_F(CustomizeToolbarHandlerTest, ActionsUpdatedOnVisibilityChange) {
-  std::vector<side_panel::customize_chrome::mojom::ActionPtr> actions;
-  base::MockCallback<CustomizeToolbarHandler::ListActionsCallback> callback;
-  EXPECT_CALL(callback, Run(_)).Times(1).WillOnce(MoveArg(&actions));
-  handler().ListActions(callback.Get());
+TEST_F(CustomizeToolbarHandlerTest, GetIsCustomizedForNonPinnedActions) {
+  EXPECT_CALL(mock_pinned_toolbar_actions_model(), ResetToDefault())
+      .WillRepeatedly([this]() {
+        mock_pinned_toolbar_actions_model()
+            .PinnedToolbarActionsModel::ResetToDefault();
+      });
 
-  const auto contains_action =
-      [&actions](side_panel::customize_chrome::mojom::ActionId id) -> bool {
-    return std::find_if(
-               actions.begin(), actions.end(),
-               [id](side_panel::customize_chrome::mojom::ActionPtr& action) {
-                 return action->id == id;
-               }) != actions.end();
-  };
+  // Initially, everything is default.
+  // Home: False, Forward: True, SplitTab: False
+  ASSERT_FALSE(profile()->GetPrefs()->GetBoolean(prefs::kShowHomeButton));
+  ASSERT_TRUE(profile()->GetPrefs()->GetBoolean(prefs::kShowForwardButton));
+  ASSERT_FALSE(profile()->GetPrefs()->GetBoolean(prefs::kPinSplitTabButton));
 
-  // Devtools is initially present in the actions list.
-  ASSERT_TRUE(contains_action(
-      side_panel::customize_chrome::mojom::ActionId::kDevTools));
+  {
+    base::MockCallback<CustomizeToolbarHandler::GetIsCustomizedCallback>
+        callback;
+    EXPECT_CALL(callback, Run(false)).Times(1);
+    handler().GetIsCustomized(callback.Get());
+  }
 
-  // Set visibility of devtools to false, and...
-  actions::ActionItem* const scope_action =
-      browser()->browser_actions()->root_action_item();
-  actions::ActionItem* const devtools_action_item =
-      actions::ActionManager::Get().FindAction(kActionDevTools, scope_action);
+  // Toggle all to non-default values.
+  handler().PinAction(side_panel::customize_chrome::mojom::ActionId::kHome,
+                      true);
+  handler().PinAction(side_panel::customize_chrome::mojom::ActionId::kForward,
+                      false);
+  handler().PinAction(side_panel::customize_chrome::mojom::ActionId::kSplitTab,
+                      true);
 
-  // The WebUI client is notified, and...
-  EXPECT_CALL(mock_page_, NotifyActionsUpdated).Times(1);
-  devtools_action_item->SetVisible(false);
+  // Verify all prefs changed.
+  EXPECT_TRUE(profile()->GetPrefs()->GetBoolean(prefs::kShowHomeButton));
+  EXPECT_FALSE(profile()->GetPrefs()->GetBoolean(prefs::kShowForwardButton));
+  EXPECT_TRUE(profile()->GetPrefs()->GetBoolean(prefs::kPinSplitTabButton));
 
-  // Devtools is now absent from the actions list.
-  EXPECT_CALL(callback, Run(_)).Times(1).WillOnce(MoveArg(&actions));
-  handler().ListActions(callback.Get());
-  EXPECT_FALSE(contains_action(
-      side_panel::customize_chrome::mojom::ActionId::kDevTools));
+  // Verify GetIsCustomized returns true.
+  {
+    base::MockCallback<CustomizeToolbarHandler::GetIsCustomizedCallback>
+        callback;
+    EXPECT_CALL(callback, Run(true)).Times(1);
+    handler().GetIsCustomized(callback.Get());
+  }
+
+  // Reset to default.
+  handler().ResetToDefault();
+
+  // Verify all reset to default.
+  EXPECT_FALSE(profile()->GetPrefs()->GetBoolean(prefs::kShowHomeButton));
+  EXPECT_TRUE(profile()->GetPrefs()->GetBoolean(prefs::kShowForwardButton));
+  EXPECT_FALSE(profile()->GetPrefs()->GetBoolean(prefs::kPinSplitTabButton));
+
+  // Verify GetIsCustomized returns false.
+  {
+    base::MockCallback<CustomizeToolbarHandler::GetIsCustomizedCallback>
+        callback;
+    EXPECT_CALL(callback, Run(false)).Times(1);
+    handler().GetIsCustomized(callback.Get());
+  }
 }
 
-TEST_F(CustomizeToolbarHandlerTest, ChangeBrowserWhileOpen) {
-  // Open a second browser with a new tab.
-  std::unique_ptr<Browser> browser_2 =
-      CreateBrowser(profile(), Browser::TYPE_NORMAL, false);
-  AddTab(browser_2.get(), GURL("about:blank"));
 
-  // Set up a second handler associated with that tab in the second browser.
+
+TEST_F(CustomizeToolbarHandlerTest, ChangeBrowserWhileOpen) {
+  // Create a second web contents and mock browser interface.
+  testing::NiceMock<MockBrowserWindowInterface> mock_browser_2;
+  ON_CALL(mock_browser_2, GetProfile())
+      .WillByDefault(testing::Return(profile()));
+
+  std::unique_ptr<content::WebContents> web_contents_2 =
+      content::WebContents::Create(
+          content::WebContents::CreateParams(profile()));
+  webui::SetBrowserWindowInterface(web_contents_2.get(), &mock_browser_2);
+
+  // Set up a second handler associated with that tab in the second browser
+  // interface.
   testing::NiceMock<MockPage> mock_page_2;
   std::unique_ptr<CustomizeToolbarHandler> handler_2 =
       std::make_unique<CustomizeToolbarHandler>(
           mojo::PendingReceiver<
               side_panel::customize_chrome::mojom::CustomizeToolbarHandler>(),
-          mock_page_2.BindAndGetRemote(),
-          browser_2->tab_strip_model()->GetTabAtIndex(0)->GetContents());
+          mock_page_2.BindAndGetRemote(), web_contents_2.get());
   task_environment()->RunUntilIdle();
 
-  // Move that tab into the first browser.
-  std::unique_ptr<tabs::TabModel> tab =
-      browser_2->tab_strip_model()->DetachTabAtForInsertion(0);
-  browser()->tab_strip_model()->InsertDetachedTabAt(0, std::move(tab),
-                                                    AddTabTypes::ADD_NONE);
+  // Set BrowserWindowInterface to nullptr (e.g. when tab is detaching/moving).
+  webui::SetBrowserWindowInterface(web_contents_2.get(), nullptr);
 
-  // Close the second browser.
-  browser_2->tab_strip_model()->CloseAllTabs();
-  browser_2.reset();
+  // Verify PinAction continues to work without crashing.
+  EXPECT_CALL(mock_pinned_toolbar_actions_model(),
+              UpdatePinnedState(kActionSidePanelShowBookmarks, true))
+      .Times(1);
+  handler_2->PinAction(
+      side_panel::customize_chrome::mojom::ActionId::kShowBookmarks, true);
 
-  // Pinning should not crash, and should instead pin.
-  ASSERT_EQ(false, profile()->GetPrefs()->GetBoolean(prefs::kShowHomeButton));
-  handler().PinAction(side_panel::customize_chrome::mojom::ActionId::kHome,
-                      true);
-  EXPECT_EQ(true, profile()->GetPrefs()->GetBoolean(prefs::kShowHomeButton));
+  // Verify ListActions gracefully returns an empty list when
+  // BrowserWindowInterface is null.
+  std::vector<side_panel::customize_chrome::mojom::ActionPtr> actions;
+  base::MockCallback<CustomizeToolbarHandler::ListActionsCallback> callback;
+  EXPECT_CALL(callback, Run(_)).WillOnce(MoveArg(&actions));
+  handler_2->ListActions(callback.Get());
+  EXPECT_TRUE(actions.empty());
 }

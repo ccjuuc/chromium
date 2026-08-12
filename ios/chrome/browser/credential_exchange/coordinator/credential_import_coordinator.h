@@ -8,9 +8,9 @@
 #import "ios/chrome/browser/shared/coordinator/chrome_coordinator/chrome_coordinator.h"
 
 @class CredentialImportCoordinator;
-@protocol ReauthenticationProtocol;
 
 // Delegate for CredentialImportCoordinator.
+API_AVAILABLE(ios(26.0))
 @protocol CredentialImportCoordinatorDelegate
 
 // Called when the import coordinator should be stopped.
@@ -20,6 +20,7 @@
 @end
 
 // Coordinator for the credential exchange import flow.
+API_AVAILABLE(ios(26.0))
 @interface CredentialImportCoordinator : ChromeCoordinator
 
 // Delegate for this coordinator.
@@ -30,8 +31,6 @@
 - (instancetype)initWithBaseViewController:(UIViewController*)viewController
                                    browser:(Browser*)browser
                                       UUID:(NSUUID*)UUID
-                              reauthModule:
-                                  (id<ReauthenticationProtocol>)reauthModule
     NS_DESIGNATED_INITIALIZER;
 
 - (instancetype)initWithBaseViewController:(UIViewController*)viewController

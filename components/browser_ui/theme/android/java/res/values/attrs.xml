@@ -22,4 +22,12 @@ found in the LICENSE file.
 
   <attr name="closeButtonWidth" format="dimension" />
   <attr name="closeButtonHeight" format="dimension" />
+
+  <attr name="glicTaskMenuEndIconWidth" format="dimension" />
+  <attr name="glicTaskMenuMaxWidth" format="dimension" />
+
+  <attr name="searchBoxActionButtonMargin" format="dimension" />
+
+  <attr name="fuseboxPlusButtonStartMargin" format="dimension" />
+  <attr name="fuseboxPlusButtonBottomMargin" format="dimension" />
 </resources>

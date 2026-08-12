@@ -5,8 +5,15 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MANAGER_ADDRESSES_ACCOUNT_NAME_EMAIL_STRIKE_MANAGER_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MANAGER_ADDRESSES_ACCOUNT_NAME_EMAIL_STRIKE_MANAGER_H_
 
+#include "base/containers/flat_set.h"
+#include "base/containers/span.h"
 #include "base/memory/raw_ref.h"
+#include "base/scoped_observation.h"
+#include "components/autofill/core/browser/filling/form_filler.h"
+#include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/foundations/autofill_manager.h"
+#include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
+#include "components/autofill/core/common/unique_ids.h"
 
 namespace autofill {
 
@@ -24,15 +31,17 @@ class AccountNameEmailStrikeManager : AutofillManager::Observer {
   // AutofillManager::Observer:
   // Sets `was_name_email_suggestion_shown_` if any of the showed suggesions
   // contained kAccountNameEmail profile.
-  void OnSuggestionsShown(
-      autofill::AutofillManager& manager,
-      base::span<const autofill::Suggestion> suggestions) override;
+  void OnSuggestionsShown(AutofillManager& manager,
+                          base::span<const Suggestion> suggestions) override;
   // Checks if the kAccountNameEmail profile was filled.
   void OnFillOrPreviewForm(
       AutofillManager& manager,
       FormGlobalId form_id,
+      FieldGlobalId trigger_field_id,
       mojom::ActionPersistence action_persistence,
       const base::flat_set<FieldGlobalId>& filled_field_ids,
+      const base::flat_map<FieldGlobalId, DenseSet<FieldFillingSkipReason>>&
+          skip_reasons,
       const FillingPayload& filling_payload) override;
 
  private:

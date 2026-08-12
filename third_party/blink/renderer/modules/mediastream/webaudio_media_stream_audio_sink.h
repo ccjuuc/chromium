@@ -8,8 +8,8 @@
 #include <stddef.h>
 
 #include <memory>
-#include <vector>
 
+#include "base/containers/span.h"
 #include "base/gtest_prod_util.h"
 #include "base/synchronization/lock.h"
 #include "base/time/time.h"
@@ -46,11 +46,10 @@ class MODULES_EXPORT WebAudioMediaStreamAudioSink
       public media::AudioConverter::InputCallback,
       public WebMediaStreamAudioSink {
  public:
-  static const int kWebAudioRenderBufferSize;
-
   WebAudioMediaStreamAudioSink(MediaStreamComponent* component,
                                int context_sample_rate,
-                               base::TimeDelta platform_buffer_duration);
+                               base::TimeDelta platform_buffer_duration,
+                               uint32_t render_quantum_frames);
 
   WebAudioMediaStreamAudioSink(const WebAudioMediaStreamAudioSink&) = delete;
   WebAudioMediaStreamAudioSink& operator=(const WebAudioMediaStreamAudioSink&) =
@@ -66,7 +65,7 @@ class MODULES_EXPORT WebAudioMediaStreamAudioSink
 
   // WebAudioSourceProvider implementation.
   void SetClient(WebAudioSourceProviderClient* client) override;
-  void ProvideInput(const std::vector<float*>& audio_data,
+  void ProvideInput(base::span<const base::span<float>> audio_data,
                     int number_of_frames) override;
 
  private:
@@ -95,7 +94,7 @@ class MODULES_EXPORT WebAudioMediaStreamAudioSink
   // Protects the above variables.
   base::Lock lock_;
 
-  // No lock protection needed since only accessed in std::vector version of
+  // No lock protection needed since only accessed in span version of
   // ProvideInput().
   std::unique_ptr<media::AudioBus> output_wrapper_;
 

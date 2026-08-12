@@ -16,6 +16,7 @@ import android.app.Activity;
 import android.content.res.Resources;
 import android.graphics.Color;
 import android.os.Build;
+import android.view.View;
 
 import androidx.annotation.ColorInt;
 import androidx.core.content.ContextCompat;
@@ -39,6 +40,7 @@ import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.compositor.layouts.LayoutManagerImpl;
@@ -46,13 +48,14 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.layouts.LayoutTestUtils;
 import org.chromium.chrome.browser.layouts.LayoutType;
+import org.chromium.chrome.browser.logo.LogoUtils;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiThemeUtil;
 import org.chromium.chrome.browser.toolbar.top.ToolbarLayout;
 import org.chromium.chrome.browser.toolbar.top.ToolbarPhone;
+import org.chromium.chrome.browser.ui.theme.ChromeSemanticColorUtils;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.page.WebPageStation;
@@ -60,7 +63,6 @@ import org.chromium.chrome.test.util.NewTabPageTestUtils;
 import org.chromium.chrome.test.util.OmniboxTestUtils;
 import org.chromium.chrome.test.util.browser.ThemeTestUtils;
 import org.chromium.components.browser_ui.styles.ChromeColors;
-import org.chromium.components.browser_ui.widget.scrim.ScrimProperties;
 import org.chromium.content_public.browser.test.util.TestTouchUtils;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.test.util.DeviceRestriction;
@@ -80,7 +82,6 @@ import java.util.function.Supplier;
     ChromeFeatureList.EDGE_TO_EDGE_EVERYWHERE,
     ChromeFeatureList.ANDROID_SURFACE_COLOR_UPDATE,
     ChromeFeatureList.GRID_TAB_SWITCHER_SURFACE_COLOR_UPDATE,
-    ChromeFeatureList.GRID_TAB_SWITCHER_UPDATE,
     ChromeFeatureList.ANDROID_THEME_MODULE
 })
 // TODO(crbug.com/428056054): Do not read color from system window bars on B+.
@@ -125,8 +126,7 @@ public class StatusBarColorControllerTest {
                 });
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    activity.getLayoutManager()
-                            .showLayout(LayoutType.TAB_SWITCHER, /* animate= */ false);
+                    activity.getLayoutManager().showLayout(LayoutType.HUB, /* animate= */ false);
                 });
 
         waitForStatusBarColor(activity, expectedOverviewIncognitoColor);
@@ -159,8 +159,7 @@ public class StatusBarColorControllerTest {
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    activity.getLayoutManager()
-                            .showLayout(LayoutType.TAB_SWITCHER, /* animate= */ false);
+                    activity.getLayoutManager().showLayout(LayoutType.HUB, /* animate= */ false);
                 });
         waitForStatusBarColor(activity, expectedDefaultStandardColor);
     }
@@ -174,7 +173,7 @@ public class StatusBarColorControllerTest {
     public void testStatusBarColorNtp() {
         ChromeTabbedActivity activity = mActivityTestRule.getActivity();
         final @ColorInt int expectedColor =
-                ContextCompat.getColor(activity, R.color.home_surface_background_color);
+                ChromeSemanticColorUtils.getHomeSurfaceBackgroundColor(activity);
 
         mActivityTestRule.loadUrlInNewTab(getOriginalNativeNtpUrl(), false);
         NewTabPageTestUtils.waitForNtpLoaded(activity.getActivityTab());
@@ -404,7 +403,6 @@ public class StatusBarColorControllerTest {
     @LargeTest
     @Feature({"StatusBar"})
     @Restriction({DeviceFormFactor.TABLET_OR_DESKTOP, DeviceRestriction.RESTRICTION_TYPE_NON_AUTO})
-    @DisableIf.Build(sdk_equals = Build.VERSION_CODES.S_V2, message = "crbug.com/41485874")
     public void testStatusBarColorForTabStripRedesignFolioTablet() {
         final ChromeActivity activity = mActivityTestRule.getActivity();
         final StatusBarColorController statusBarColorController =
@@ -471,9 +469,7 @@ public class StatusBarColorControllerTest {
         // Simulate transition completion by resetting the transition overlay state in
         // StatusBarColorController.
         ThreadUtils.runOnUiThreadBlocking(
-                () ->
-                        statusBarColorController.setTabStripColorOverlay(
-                                ScrimProperties.INVALID_COLOR, 0f));
+                () -> statusBarColorController.setTabStripColorOverlay(Color.TRANSPARENT, 0f));
         assertEquals(
                 "Status bar color on tablet should match the default tab strip background when the"
                         + " tab strip is visible.",
@@ -528,9 +524,12 @@ public class StatusBarColorControllerTest {
     private void scrollUpToolbarUntilPinnedAtTop(Activity activity) {
         Resources resources = activity.getResources();
         // Drag the Feed header title to scroll the toolbar to the top.
+        View logoView = activity.findViewById(R.id.search_provider_logo);
+        int totalLogoHeight = LogoUtils.getTotalLogoHeight(logoView);
+
         int toY =
                 -resources.getDimensionPixelOffset(R.dimen.toolbar_height_no_shadow)
-                        - activity.findViewById(R.id.logo_holder).getHeight();
+                        - totalLogoHeight;
         TestTouchUtils.dragCompleteView(
                 InstrumentationRegistry.getInstrumentation(),
                 activity.findViewById(R.id.header_title),
@@ -566,6 +565,6 @@ public class StatusBarColorControllerTest {
             StatusBarColorController statusBarColorController, float fraction) {
         @ColorInt int compositeScrimColor = ColorUtils.applyAlphaFloat(mScrimColor, fraction);
         ThreadUtils.runOnUiThreadBlocking(
-                () -> statusBarColorController.setScrimColor(compositeScrimColor));
+                () -> statusBarColorController.onScrimColorChanged(compositeScrimColor));
     }
 }

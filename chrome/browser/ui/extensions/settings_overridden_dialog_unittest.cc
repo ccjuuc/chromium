@@ -7,10 +7,12 @@
 #include <optional>
 
 #include "base/memory/raw_ptr.h"
+#include "base/test/bind.h"
 #include "chrome/browser/ui/extensions/extensions_dialogs.h"
 #include "chrome/browser/ui/extensions/settings_overridden_dialog_controller.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/test_with_browser_view.h"
+#include "chrome/browser/ui/views/chrome_constrained_window_views_client.h"
+#include "chrome/test/views/chrome_views_test_base.h"
+#include "components/constrained_window/constrained_window_views.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/any_widget_observer.h"
 #include "ui/views/widget/widget.h"
@@ -30,7 +32,8 @@ struct DialogState {
 class TestDialogController : public SettingsOverriddenDialogController {
  public:
   explicit TestDialogController(DialogState* state)
-      : state_(state), show_params_{u"Dialog Title", u"Dialog Body"} {}
+      : state_(state),
+        show_params_(u"Dialog Title", u"Dialog Body", /*icon=*/nullptr) {}
   TestDialogController(const TestDialogController&) = delete;
   TestDialogController& operator=(const TestDialogController&) = delete;
   ~TestDialogController() override = default;
@@ -38,8 +41,9 @@ class TestDialogController : public SettingsOverriddenDialogController {
  private:
   bool ShouldShow() override { return true; }
   ShowParams GetShowParams() override { return show_params_; }
-  void OnDialogShown() override {
-    EXPECT_FALSE(state_->shown) << "OnDialogShown() called more than once!";
+  void OnDialogWillBeShown() override {
+    EXPECT_FALSE(state_->shown)
+        << "OnDialogWillBeShown() called more than once!";
     state_->shown = true;
   }
   void HandleDialogResult(DialogResult result) override {
@@ -52,7 +56,7 @@ class TestDialogController : public SettingsOverriddenDialogController {
 
 }  // namespace
 
-class SettingsOverriddenDialogUnitTest : public TestWithBrowserView {
+class SettingsOverriddenDialogUnitTest : public ChromeViewsTestBase {
   // TODO(crbug.com/424013924): Remove browser dependency and enable test for
   // Desktop Android
  public:
@@ -63,6 +67,22 @@ class SettingsOverriddenDialogUnitTest : public TestWithBrowserView {
       const SettingsOverriddenDialogUnitTest&) = delete;
   ~SettingsOverriddenDialogUnitTest() override = default;
 
+  void SetUp() override {
+    ChromeViewsTestBase::SetUp();
+    constrained_window::SetConstrainedWindowViewsClient(
+        CreateChromeConstrainedWindowViewsClient());
+
+    parent_widget_ =
+        CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+    parent_widget_->Show();
+  }
+
+  void TearDown() override {
+    parent_widget_.reset();
+    constrained_window::SetConstrainedWindowViewsClient(nullptr);
+    ChromeViewsTestBase::TearDown();
+  }
+
   views::Widget* ShowDialog(DialogState* state) {
     auto controller = std::make_unique<TestDialogController>(state);
     EXPECT_FALSE(state->shown);
@@ -71,12 +91,19 @@ class SettingsOverriddenDialogUnitTest : public TestWithBrowserView {
         views::test::AnyWidgetTestPasskey{},
         kExtensionSettingsOverriddenDialogName);
     extensions::ShowSettingsOverriddenDialog(std::move(controller),
-                                             browser_view()->GetNativeWindow());
+                                             parent_widget_->GetNativeWindow());
     views::Widget* dialog = waiter.WaitIfNeededAndGet();
     EXPECT_TRUE(state->shown);
 
     return dialog;
   }
+
+  gfx::NativeWindow parent_window() {
+    return parent_widget_->GetNativeWindow();
+  }
+
+ private:
+  std::unique_ptr<views::Widget> parent_widget_;
 };
 
 TEST_F(SettingsOverriddenDialogUnitTest, DialogResult_ChangeSettingsBack) {
@@ -123,6 +150,32 @@ TEST_F(SettingsOverriddenDialogUnitTest, DialogResult_CloseParentWidget) {
   dialog->CloseNow();
   dialog_waiter.Wait();
 
+  ASSERT_TRUE(state.result);
+  EXPECT_EQ(DialogResult::kDialogClosedWithoutUserAction, state.result);
+}
+
+// Showing a modal dialog can, on some platforms, result in the dialog widget
+// being synchronously destroyed before Widget::Show() returns (for example if
+// a nested run loop closes the parent window). Verify that the controller is
+// notified that the dialog was shown, and that the result is delivered, even
+// when the dialog is destroyed as soon as it is shown.
+TEST_F(SettingsOverriddenDialogUnitTest, DialogDestroyedWhileBeingShown) {
+  DialogState state;
+
+  views::AnyWidgetObserver observer(views::test::AnyWidgetTestPasskey{});
+  observer.set_shown_callback(
+      base::BindLambdaForTesting([&](views::Widget* widget) {
+        if (widget->GetName() != kExtensionSettingsOverriddenDialogName) {
+          return;
+        }
+        EXPECT_TRUE(state.shown);
+        widget->CloseNow();
+      }));
+
+  extensions::ShowSettingsOverriddenDialog(
+      std::make_unique<TestDialogController>(&state), parent_window());
+
+  EXPECT_TRUE(state.shown);
   ASSERT_TRUE(state.result);
   EXPECT_EQ(DialogResult::kDialogClosedWithoutUserAction, state.result);
 }

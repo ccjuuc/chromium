@@ -5,7 +5,9 @@
 package org.chromium.net;
 
 import static android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET;
+import static android.net.NetworkCapabilities.TRANSPORT_BLUETOOTH;
 import static android.net.NetworkCapabilities.TRANSPORT_CELLULAR;
+import static android.net.NetworkCapabilities.TRANSPORT_ETHERNET;
 import static android.net.NetworkCapabilities.TRANSPORT_VPN;
 import static android.net.NetworkCapabilities.TRANSPORT_WIFI;
 
@@ -51,8 +53,7 @@ import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.MinAndroidSdkLevel;
-import org.chromium.net.NetworkChangeNotifierAutoDetect.ConnectivityManagerDelegate;
-import org.chromium.net.NetworkChangeNotifierAutoDetect.NetworkState;
+import org.chromium.net.ConnectivityManagerWrapper.NetworkState;
 import org.chromium.net.NetworkChangeNotifierAutoDetect.WifiManagerDelegate;
 import org.chromium.net.test.util.NetworkChangeNotifierTestUtil;
 
@@ -127,7 +128,38 @@ public class NetworkChangeNotifierTest {
             // On S+, there are APIs to get the underlying data from the NetworkCapabilities.
             int[] capabilities = request.getCapabilities();
             int[] transportTypes = request.getTransportTypes();
-            return new NetworkCapabilitiesWrapper(capabilities, transportTypes);
+            // The int[]-backed wrapper throws from getLinkDownstreamBandwidthKbps() by design.
+            // Spy it here to report an unknown (0) bandwidth (LTE fallback) without weakening that
+            // production guard.
+            NetworkCapabilitiesWrapper wrapper =
+                    Mockito.spy(new NetworkCapabilitiesWrapper(capabilities, transportTypes));
+            Mockito.doReturn(0).when(wrapper).getLinkDownstreamBandwidthKbps();
+            return wrapper;
+        }
+
+        static NetworkCapabilitiesWrapper getCapabilitiesWithBandwidth(
+                int downstreamKbps, int... transports) {
+            NetworkCapabilitiesWrapper capabilities =
+                    Mockito.mock(NetworkCapabilitiesWrapper.class);
+            for (int transport : transports) {
+                when(capabilities.hasTransport(transport)).thenReturn(true);
+            }
+            when(capabilities.getLinkDownstreamBandwidthKbps()).thenReturn(downstreamKbps);
+            return capabilities;
+        }
+
+        /**
+         * Returns a real {@link android.net.NetworkCapabilities} for use with {@code
+         * NetworkCallback.onCapabilitiesChanged}. NetworkCapabilities is a {@code final} framework
+         * class, so it can't be mocked with Chromium's subclass-based Android MockMaker, and its
+         * {@code Builder}/{@code addTransportType} APIs are hidden (absent from the public SDK), so
+         * transports can't be set without reflection that is blocked on S+. The empty instance is
+         * sufficient here: a non-VPN network is not ignored, so both branches of {@code
+         * onCapabilitiesChanged} run and a CONNECT notification is forwarded regardless of the
+         * (UNKNOWN) derived ConnectionType.
+         */
+        static NetworkCapabilities getRawCapabilities() {
+            return new NetworkCapabilities();
         }
 
         // Create Network object given a NetID. The implementation is based on the code in
@@ -172,7 +204,7 @@ public class NetworkChangeNotifierTest {
     }
 
     /** Mocks out calls to the ConnectivityManager. */
-    private class MockConnectivityManagerDelegate extends ConnectivityManagerDelegate {
+    private class MockConnectivityManagerWrapper extends ConnectivityManagerWrapper {
         // A network we're pretending is currently connected.
         private static class MockNetwork {
             // Network identifier
@@ -209,6 +241,7 @@ public class NetworkChangeNotifierTest {
         private String mPrivateDnsServerName;
         private NetworkCallback mLastRegisteredNetworkCallback;
         private NetworkCallback mLastRegisteredDefaultNetworkCallback;
+        private int mGetConnectionTypeCallCount;
 
         @Override
         public NetworkState getNetworkState(WifiManagerDelegate wifiManagerDelegate) {
@@ -226,7 +259,7 @@ public class NetworkChangeNotifierTest {
 
         @Override
         protected NetworkCapabilitiesWrapper getNetworkCapabilities(Network network) {
-            int netId = demungeNetId(NetworkChangeNotifierAutoDetect.networkToNetId(network));
+            int netId = demungeNetId(ConnectivityManagerWrapper.networkToNetId(network));
             for (MockNetwork mockNetwork : mMockNetworks) {
                 if (netId == mockNetwork.mNetId) {
                     return mockNetwork.getCapabilities();
@@ -237,7 +270,7 @@ public class NetworkChangeNotifierTest {
 
         @Override
         protected boolean vpnAccessible(Network network) {
-            int netId = demungeNetId(NetworkChangeNotifierAutoDetect.networkToNetId(network));
+            int netId = demungeNetId(ConnectivityManagerWrapper.networkToNetId(network));
             for (MockNetwork mockNetwork : mMockNetworks) {
                 if (netId == mockNetwork.mNetId) {
                     return mockNetwork.mVpnAccessible;
@@ -264,6 +297,7 @@ public class NetworkChangeNotifierTest {
 
         @Override
         public int getConnectionType(Network network) {
+            mGetConnectionTypeCallCount++;
             return ConnectionType.CONNECTION_NONE;
         }
 
@@ -314,6 +348,14 @@ public class NetworkChangeNotifierTest {
 
         public NetworkCallback getDefaultNetworkCallback() {
             return mLastRegisteredDefaultNetworkCallback;
+        }
+
+        public void resetGetConnectionTypeCallCount() {
+            mGetConnectionTypeCallCount = 0;
+        }
+
+        public int getConnectionTypeCallCount() {
+            return mGetConnectionTypeCallCount;
         }
 
         /**
@@ -456,7 +498,7 @@ public class NetworkChangeNotifierTest {
     // Network.Network(int netId) pointer.
     private TestNetworkChangeNotifier mNotifier;
     private NetworkChangeNotifierAutoDetect mReceiver;
-    private MockConnectivityManagerDelegate mConnectivityDelegate;
+    private MockConnectivityManagerWrapper mConnectivityWrapper;
     private MockWifiManagerDelegate mWifiDelegate;
 
     private enum WatchForChanges {
@@ -517,9 +559,9 @@ public class NetworkChangeNotifierTest {
         mReceiver = NetworkChangeNotifier.getAutoDetectorForTest();
         Assert.assertNotNull(mReceiver);
 
-        mConnectivityDelegate = new MockConnectivityManagerDelegate();
-        mConnectivityDelegate.setActiveNetworkExists(true);
-        mReceiver.setConnectivityManagerDelegateForTests(mConnectivityDelegate);
+        mConnectivityWrapper = new MockConnectivityManagerWrapper();
+        mConnectivityWrapper.setActiveNetworkExists(true);
+        mReceiver.setConnectivityManagerWrapperForTests(mConnectivityWrapper);
 
         mWifiDelegate = new MockWifiManagerDelegate();
         mReceiver.setWifiManagerDelegateForTests(mWifiDelegate);
@@ -624,10 +666,10 @@ public class NetworkChangeNotifierTest {
     @MediumTest
     @Feature({"Android-AppBase"})
     public void testNetworkChangeNotifierConnectionCost() {
-        mConnectivityDelegate.setIsMetered(true);
+        mConnectivityWrapper.setIsMetered(true);
         mReceiver.updateCurrentNetworkState();
         Assert.assertEquals(ConnectionCost.METERED, getCurrentConnectionCost());
-        mConnectivityDelegate.setIsMetered(false);
+        mConnectivityWrapper.setIsMetered(false);
         mReceiver.updateCurrentNetworkState();
         Assert.assertEquals(ConnectionCost.UNMETERED, getCurrentConnectionCost());
     }
@@ -639,7 +681,7 @@ public class NetworkChangeNotifierTest {
     @Feature({"Android-AppBase"})
     public void testNetworkChangeNotifierConnectionSubtypeEthernet() {
         // Show that for Ethernet the link speed is unknown (+Infinity).
-        mConnectivityDelegate.setNetworkType(ConnectivityManager.TYPE_ETHERNET);
+        mConnectivityWrapper.setNetworkType(ConnectivityManager.TYPE_ETHERNET);
         mReceiver.updateCurrentNetworkState();
         Assert.assertEquals(ConnectionType.CONNECTION_ETHERNET, getCurrentConnectionType());
         Assert.assertEquals(ConnectionSubtype.SUBTYPE_UNKNOWN, getCurrentConnectionSubtype());
@@ -651,7 +693,7 @@ public class NetworkChangeNotifierTest {
     @Feature({"Android-AppBase"})
     public void testNetworkChangeNotifierConnectionSubtypeWifi() {
         // Show that for WiFi the link speed is unknown (+Infinity).
-        mConnectivityDelegate.setNetworkType(ConnectivityManager.TYPE_WIFI);
+        mConnectivityWrapper.setNetworkType(ConnectivityManager.TYPE_WIFI);
         mReceiver.updateCurrentNetworkState();
         Assert.assertEquals(ConnectionType.CONNECTION_WIFI, getCurrentConnectionType());
         Assert.assertEquals(ConnectionSubtype.SUBTYPE_UNKNOWN, getCurrentConnectionSubtype());
@@ -665,7 +707,7 @@ public class NetworkChangeNotifierTest {
         // Show that for WiMax the link speed is unknown (+Infinity), although the type is 4g.
         // TODO(jkarlin): Add support for CONNECTION_WIMAX as specified in
         // http://w3c.github.io/netinfo/.
-        mConnectivityDelegate.setNetworkType(ConnectivityManager.TYPE_WIMAX);
+        mConnectivityWrapper.setNetworkType(ConnectivityManager.TYPE_WIMAX);
         mReceiver.updateCurrentNetworkState();
         Assert.assertEquals(ConnectionType.CONNECTION_4G, getCurrentConnectionType());
         Assert.assertEquals(ConnectionSubtype.SUBTYPE_UNKNOWN, getCurrentConnectionSubtype());
@@ -677,7 +719,7 @@ public class NetworkChangeNotifierTest {
     @Feature({"Android-AppBase"})
     public void testNetworkChangeNotifierConnectionSubtypeBluetooth() {
         // Show that for bluetooth the link speed is unknown (+Infinity).
-        mConnectivityDelegate.setNetworkType(ConnectivityManager.TYPE_BLUETOOTH);
+        mConnectivityWrapper.setNetworkType(ConnectivityManager.TYPE_BLUETOOTH);
         mReceiver.updateCurrentNetworkState();
         Assert.assertEquals(ConnectionType.CONNECTION_BLUETOOTH, getCurrentConnectionType());
         Assert.assertEquals(ConnectionSubtype.SUBTYPE_UNKNOWN, getCurrentConnectionSubtype());
@@ -689,8 +731,8 @@ public class NetworkChangeNotifierTest {
     @Feature({"Android-AppBase"})
     public void testNetworkChangeNotifierConnectionSubtypeMobile() {
         // Test that for mobile types the subtype is used to determine the connection subtype.
-        mConnectivityDelegate.setNetworkType(ConnectivityManager.TYPE_MOBILE);
-        mConnectivityDelegate.setNetworkSubtype(TelephonyManager.NETWORK_TYPE_LTE);
+        mConnectivityWrapper.setNetworkType(ConnectivityManager.TYPE_MOBILE);
+        mConnectivityWrapper.setNetworkSubtype(TelephonyManager.NETWORK_TYPE_LTE);
         mReceiver.updateCurrentNetworkState();
         Assert.assertEquals(ConnectionType.CONNECTION_4G, getCurrentConnectionType());
         Assert.assertEquals(ConnectionSubtype.SUBTYPE_LTE, getCurrentConnectionSubtype());
@@ -702,7 +744,7 @@ public class NetworkChangeNotifierTest {
      */
     private void notifyConnectivityChange() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            mConnectivityDelegate.getDefaultNetworkCallback().onAvailable(null);
+            mConnectivityWrapper.getDefaultNetworkCallback().onAvailable(null);
         } else {
             Intent connectivityIntent = new Intent(ConnectivityManager.CONNECTIVITY_ACTION);
             mReceiver.onReceive(InstrumentationRegistry.getTargetContext(), connectivityIntent);
@@ -737,7 +779,7 @@ public class NetworkChangeNotifierTest {
         notifyConnectivityChange();
         Assert.assertFalse(observer.hasReceivedNotification());
         // We should be notified when we change to Wifi.
-        mConnectivityDelegate.setNetworkType(ConnectivityManager.TYPE_WIFI);
+        mConnectivityWrapper.setNetworkType(ConnectivityManager.TYPE_WIFI);
         notifyConnectivityChange();
         Assert.assertTrue(observer.hasReceivedNotification());
         observer.resetHasReceivedNotification();
@@ -753,29 +795,29 @@ public class NetworkChangeNotifierTest {
         // We should be notified if use of DNS-over-TLS changes.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             // Verify notification for enabling private DNS.
-            mConnectivityDelegate.setIsPrivateDnsActive(true);
-            mConnectivityDelegate.getDefaultNetworkCallback().onLinkPropertiesChanged(null, null);
+            mConnectivityWrapper.setIsPrivateDnsActive(true);
+            mConnectivityWrapper.getDefaultNetworkCallback().onLinkPropertiesChanged(null, null);
             Assert.assertTrue(observer.hasReceivedNotification());
             observer.resetHasReceivedNotification();
             // Verify notification for specifying private DNS server.
-            mConnectivityDelegate.setPrivateDnsServerName("dotserver.com");
-            mConnectivityDelegate.getDefaultNetworkCallback().onLinkPropertiesChanged(null, null);
+            mConnectivityWrapper.setPrivateDnsServerName("dotserver.com");
+            mConnectivityWrapper.getDefaultNetworkCallback().onLinkPropertiesChanged(null, null);
             Assert.assertTrue(observer.hasReceivedNotification());
             observer.resetHasReceivedNotification();
             // Verify no notification for no change.
-            mConnectivityDelegate.getDefaultNetworkCallback().onLinkPropertiesChanged(null, null);
+            mConnectivityWrapper.getDefaultNetworkCallback().onLinkPropertiesChanged(null, null);
             Assert.assertFalse(observer.hasReceivedNotification());
             // Verify notification for disabling.
-            mConnectivityDelegate.setIsPrivateDnsActive(false);
-            mConnectivityDelegate.getDefaultNetworkCallback().onLinkPropertiesChanged(null, null);
+            mConnectivityWrapper.setIsPrivateDnsActive(false);
+            mConnectivityWrapper.getDefaultNetworkCallback().onLinkPropertiesChanged(null, null);
             Assert.assertTrue(observer.hasReceivedNotification());
             observer.resetHasReceivedNotification();
         }
 
         // Mimic that connectivity has been lost and ensure that Chrome notifies our observer.
-        mConnectivityDelegate.setActiveNetworkExists(false);
+        mConnectivityWrapper.setActiveNetworkExists(false);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            mConnectivityDelegate.getDefaultNetworkCallback().onLost(null);
+            mConnectivityWrapper.getDefaultNetworkCallback().onLost(null);
         } else {
             mReceiver.onReceive(InstrumentationRegistry.getTargetContext(), connectivityIntent);
         }
@@ -787,8 +829,8 @@ public class NetworkChangeNotifierTest {
                 (RegistrationPolicyApplicationStatus) mReceiver.getRegistrationPolicy();
         triggerApplicationStateChange(policy, ApplicationState.HAS_PAUSED_ACTIVITIES);
         // Change the state.
-        mConnectivityDelegate.setActiveNetworkExists(true);
-        mConnectivityDelegate.setNetworkType(ConnectivityManager.TYPE_WIFI);
+        mConnectivityWrapper.setActiveNetworkExists(true);
+        mConnectivityWrapper.setNetworkType(ConnectivityManager.TYPE_WIFI);
         // The NetworkChangeNotifierAutoDetect doesn't receive any notification while we are in the
         // background, but when we get back to the foreground the state changed should be detected
         // and a notification sent.
@@ -807,8 +849,8 @@ public class NetworkChangeNotifierTest {
     public void testNetworkChangeNotifierConnectionSubtypeNotifications() {
         mReceiver.register();
         // Initialize the NetworkChangeNotifier with a connection.
-        mConnectivityDelegate.setActiveNetworkExists(true);
-        mConnectivityDelegate.setNetworkType(ConnectivityManager.TYPE_WIFI);
+        mConnectivityWrapper.setActiveNetworkExists(true);
+        mConnectivityWrapper.setNetworkType(ConnectivityManager.TYPE_WIFI);
         Intent connectivityIntent = new Intent(ConnectivityManager.CONNECTIVITY_ACTION);
         mReceiver.onReceive(InstrumentationRegistry.getTargetContext(), connectivityIntent);
         Assert.assertTrue(mNotifier.hasReceivedConnectionSubtypeNotification());
@@ -821,7 +863,7 @@ public class NetworkChangeNotifierTest {
         Assert.assertFalse(mNotifier.hasReceivedConnectionSubtypeNotification());
 
         // We should be notified if bandwidth and connection type changed.
-        mConnectivityDelegate.setNetworkType(ConnectivityManager.TYPE_ETHERNET);
+        mConnectivityWrapper.setNetworkType(ConnectivityManager.TYPE_ETHERNET);
         mReceiver.onReceive(InstrumentationRegistry.getTargetContext(), connectivityIntent);
         Assert.assertTrue(mNotifier.hasReceivedConnectionSubtypeNotification());
         mNotifier.resetHasReceivedConnectionSubtypeNotification();
@@ -829,7 +871,7 @@ public class NetworkChangeNotifierTest {
         // We should be notified if the connection type changed, but not the bandwidth.
         // Note that TYPE_ETHERNET and TYPE_BLUETOOTH have the same +INFINITY max bandwidth.
         // This test will fail if that changes.
-        mConnectivityDelegate.setNetworkType(ConnectivityManager.TYPE_BLUETOOTH);
+        mConnectivityWrapper.setNetworkType(ConnectivityManager.TYPE_BLUETOOTH);
         mReceiver.onReceive(InstrumentationRegistry.getTargetContext(), connectivityIntent);
         Assert.assertTrue(mNotifier.hasReceivedConnectionSubtypeNotification());
     }
@@ -855,7 +897,7 @@ public class NetworkChangeNotifierTest {
     }
 
     /**
-     * Tests that ConnectivityManagerDelegate doesn't crash. This test cannot rely on having any
+     * Tests that ConnectivityManagerWrapper doesn't crash. This test cannot rely on having any
      * active network connections so it cannot usefully check results, but it can at least check
      * that the functions don't crash.
      */
@@ -863,9 +905,9 @@ public class NetworkChangeNotifierTest {
     @UiThreadTest
     @MediumTest
     @Feature({"Android-AppBase"})
-    public void testConnectivityManagerDelegateDoesNotCrash() {
-        ConnectivityManagerDelegate delegate =
-                new ConnectivityManagerDelegate(InstrumentationRegistry.getTargetContext());
+    public void testConnectivityManagerWrapperDoesNotCrash() {
+        ConnectivityManagerWrapper delegate =
+                new ConnectivityManagerWrapper(InstrumentationRegistry.getTargetContext());
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             delegate.getNetworkState(null);
         } else {
@@ -927,8 +969,8 @@ public class NetworkChangeNotifierTest {
                         observer, new RegistrationPolicyApplicationStatus());
 
         // Insert a mocked dummy implementation for the ConnectivityDelegate.
-        ncn.setConnectivityManagerDelegateForTests(
-                new ConnectivityManagerDelegate() {
+        ncn.setConnectivityManagerWrapperForTests(
+                new ConnectivityManagerWrapper() {
                     public final Network[] mNetworks =
                             new Network[] {Helper.netIdToNetwork(111), Helper.netIdToNetwork(333)};
 
@@ -938,7 +980,7 @@ public class NetworkChangeNotifierTest {
                     }
 
                     @Override
-                    Network getDefaultNetwork() {
+                    public Network getDefaultNetwork() {
                         return mNetworks[1];
                     }
 
@@ -975,49 +1017,17 @@ public class NetworkChangeNotifierTest {
     @MediumTest
     @Feature({"Android-AppBase"})
     public void testNetworkCallbacks() throws Exception {
-        // Setup NetworkChangeNotifierAutoDetect
+        // Setup NetworkChangeNotifierAutoDetect, register its NetworkCallback and consume the
+        // initial purge.
         final TestNetworkChangeNotifierAutoDetectObserver observer =
                 new TestNetworkChangeNotifierAutoDetectObserver();
-        Callable<NetworkChangeNotifierAutoDetect> callable =
-                new Callable<NetworkChangeNotifierAutoDetect>() {
-                    @Override
-                    public NetworkChangeNotifierAutoDetect call() {
-                        // This call prevents NetworkChangeNotifierAutoDetect from
-                        // registering for events right off the bat. We'll delay this
-                        // until our MockConnectivityManagerDelegate is first installed
-                        // to prevent inadvertent communication with the real
-                        // ConnectivityManager.
-                        setApplicationHasVisibleActivities(false);
-                        return new NetworkChangeNotifierAutoDetect(
-                                observer, new RegistrationPolicyApplicationStatus());
-                    }
-                };
-        FutureTask<NetworkChangeNotifierAutoDetect> task = new FutureTask<>(callable);
-        ThreadUtils.postOnUiThread(task);
-        NetworkChangeNotifierAutoDetect ncn = task.get();
-
-        // Insert mock ConnectivityDelegate
-        mConnectivityDelegate = new MockConnectivityManagerDelegate();
-        ncn.setConnectivityManagerDelegateForTests(mConnectivityDelegate);
-        // Now that mock ConnectivityDelegate is inserted, pretend app is foregrounded
-        // so NetworkChangeNotifierAutoDetect will register its NetworkCallback.
-        Assert.assertFalse(ncn.isReceiverRegisteredForTesting());
-
+        NetworkCallback networkCallback = setUpAutoDetectForCallbackTest(observer);
+        NetworkChangeNotifierAutoDetect ncn = mReceiver;
         RegistrationPolicyApplicationStatus policy =
                 (RegistrationPolicyApplicationStatus) ncn.getRegistrationPolicy();
-        triggerApplicationStateChange(policy, ApplicationState.HAS_RUNNING_ACTIVITIES);
-        Assert.assertTrue(ncn.isReceiverRegisteredForTesting());
-
-        // Find NetworkChangeNotifierAutoDetect's NetworkCallback, which should have been registered
-        // with mConnectivityDelegate.
-        NetworkCallback networkCallback = mConnectivityDelegate.getLastRegisteredNetworkCallback();
-        Assert.assertNotNull(networkCallback);
-
-        // First thing we'll receive is a purge to initialize any network lists.
-        observer.assertLastChange(ChangeType.PURGE_LIST, NetId.INVALID);
 
         // Test connected signal is passed along.
-        mConnectivityDelegate.addNetwork(100, TRANSPORT_WIFI, false);
+        mConnectivityWrapper.addNetwork(100, TRANSPORT_WIFI, false);
         observer.assertLastChange(ChangeType.CONNECT, 100);
 
         // Test soon-to-be-disconnected signal is passed along.
@@ -1025,7 +1035,7 @@ public class NetworkChangeNotifierTest {
         observer.assertLastChange(ChangeType.SOON_TO_DISCONNECT, 100);
 
         // Test connected signal is passed along.
-        mConnectivityDelegate.removeNetwork(100);
+        mConnectivityWrapper.removeNetwork(100);
         observer.assertLastChange(ChangeType.DISCONNECT, 100);
 
         // Simulate app backgrounding then foregrounding.
@@ -1042,13 +1052,13 @@ public class NetworkChangeNotifierTest {
         //
 
         // Add a couple normal networks
-        mConnectivityDelegate.addNetwork(100, TRANSPORT_WIFI, false);
+        mConnectivityWrapper.addNetwork(100, TRANSPORT_WIFI, false);
         observer.assertLastChange(ChangeType.CONNECT, 100);
-        mConnectivityDelegate.addNetwork(101, TRANSPORT_CELLULAR, false);
+        mConnectivityWrapper.addNetwork(101, TRANSPORT_CELLULAR, false);
         observer.assertLastChange(ChangeType.CONNECT, 101);
 
         // Verify inaccessible VPN is ignored
-        mConnectivityDelegate.addNetwork(102, TRANSPORT_VPN, false);
+        mConnectivityWrapper.addNetwork(102, TRANSPORT_VPN, false);
         NetworkChangeNotifierTestUtil.flushUiThreadTaskQueue();
         Assert.assertEquals(observer.mChanges.size(), 0);
         networkCallback.onLosing(Helper.netIdToNetwork(102), 30);
@@ -1056,11 +1066,11 @@ public class NetworkChangeNotifierTest {
         // The disconnect will be ignored in
         // NetworkChangeNotifierDelegateAndroid::NotifyOfNetworkDisconnect() because no
         // connect event was witnessed, but it will be sent to {@code observer}
-        mConnectivityDelegate.removeNetwork(102);
+        mConnectivityWrapper.removeNetwork(102);
         observer.assertLastChange(ChangeType.DISCONNECT, 102);
 
         // Verify when an accessible VPN connects, all other network disconnect
-        mConnectivityDelegate.addNetwork(103, TRANSPORT_VPN, true);
+        mConnectivityWrapper.addNetwork(103, TRANSPORT_VPN, true);
         NetworkChangeNotifierTestUtil.flushUiThreadTaskQueue();
         Assert.assertEquals(2, observer.mChanges.size());
         Assert.assertEquals(ChangeType.CONNECT, observer.mChanges.get(0).mChangeType);
@@ -1070,7 +1080,7 @@ public class NetworkChangeNotifierTest {
         observer.mChanges.clear();
 
         // Verify when an accessible VPN disconnects, all other networks reconnect
-        mConnectivityDelegate.removeNetwork(103);
+        mConnectivityWrapper.removeNetwork(103);
         NetworkChangeNotifierTestUtil.flushUiThreadTaskQueue();
         Assert.assertEquals(3, observer.mChanges.size());
         Assert.assertEquals(ChangeType.DISCONNECT, observer.mChanges.get(0).mChangeType);
@@ -1079,6 +1089,88 @@ public class NetworkChangeNotifierTest {
         Assert.assertEquals(100, observer.mChanges.get(1).mNetId);
         Assert.assertEquals(ChangeType.CONNECT, observer.mChanges.get(2).mChangeType);
         Assert.assertEquals(101, observer.mChanges.get(2).mNetId);
+    }
+
+    /**
+     * Creates a NetworkChangeNotifierAutoDetect wired to {@code observer} and a fresh
+     * {@link MockConnectivityManagerWrapper} (assigned to {@link #mConnectivityWrapper}), foregrounds
+     * the app so the NetworkCallback registers, and consumes the initial PURGE_LIST notification.
+     * The created notifier is stored in {@link #mReceiver}. Returns the registered NetworkCallback.
+     */
+    private NetworkCallback setUpAutoDetectForCallbackTest(
+            TestNetworkChangeNotifierAutoDetectObserver observer) throws Exception {
+        Callable<NetworkChangeNotifierAutoDetect> callable =
+                new Callable<NetworkChangeNotifierAutoDetect>() {
+                    @Override
+                    public NetworkChangeNotifierAutoDetect call() {
+                        // Delay registration until the mock wrapper is installed, to avoid
+                        // touching the real ConnectivityManager.
+                        setApplicationHasVisibleActivities(false);
+                        return new NetworkChangeNotifierAutoDetect(
+                                observer, new RegistrationPolicyApplicationStatus());
+                    }
+                };
+        FutureTask<NetworkChangeNotifierAutoDetect> task = new FutureTask<>(callable);
+        ThreadUtils.postOnUiThread(task);
+        mReceiver = task.get();
+
+        mConnectivityWrapper = new MockConnectivityManagerWrapper();
+        mReceiver.setConnectivityManagerWrapperForTests(mConnectivityWrapper);
+        // The NetworkCallback should not be registered until the app is foregrounded below.
+        Assert.assertFalse(mReceiver.isReceiverRegisteredForTesting());
+
+        RegistrationPolicyApplicationStatus policy =
+                (RegistrationPolicyApplicationStatus) mReceiver.getRegistrationPolicy();
+        triggerApplicationStateChange(policy, ApplicationState.HAS_RUNNING_ACTIVITIES);
+        Assert.assertTrue(mReceiver.isReceiverRegisteredForTesting());
+
+        NetworkCallback networkCallback = mConnectivityWrapper.getLastRegisteredNetworkCallback();
+        Assert.assertNotNull(networkCallback);
+
+        // First notification is a purge to initialize the network list.
+        observer.assertLastChange(ChangeType.PURGE_LIST, NetId.INVALID);
+        return networkCallback;
+    }
+
+    /**
+     * Tests that {@code onCapabilitiesChanged} forwards a CONNECT notification to the observer, and
+     * that it honors the kDeriveConnectionTypeFromCapabilities flag: when enabled (the default) the
+     * ConnectionType is derived from the delivered NetworkCapabilities without any synchronous
+     * ConnectivityManager#getConnectionType Binder IPC; when disabled it falls back to that IPC.
+     */
+    @Test
+    @MediumTest
+    @Feature({"Android-AppBase"})
+    public void testOnCapabilitiesChangedNotification() throws Exception {
+        final TestNetworkChangeNotifierAutoDetectObserver observer =
+                new TestNetworkChangeNotifierAutoDetectObserver();
+        NetworkCallback networkCallback = setUpAutoDetectForCallbackTest(observer);
+
+        // Bring up a network so onAvailable registers it; this also mirrors a real capabilities
+        // change arriving for an already-connected network.
+        mConnectivityWrapper.addNetwork(200, TRANSPORT_WIFI, false);
+        observer.assertLastChange(ChangeType.CONNECT, 200);
+
+        // Use a real NetworkCapabilities (the framework class is final and can't be mocked here).
+        NetworkCapabilities capabilities = Helper.getRawCapabilities();
+
+        // Default path: derive the ConnectionType from capabilities, no getConnectionType IPC.
+        Assert.assertTrue(ConnectivityManagerWrapper.getDeriveConnectionTypeFromCapabilities());
+        mConnectivityWrapper.resetGetConnectionTypeCallCount();
+        networkCallback.onCapabilitiesChanged(Helper.netIdToNetwork(200), capabilities);
+        observer.assertLastChange(ChangeType.CONNECT, 200);
+        Assert.assertEquals(0, mConnectivityWrapper.getConnectionTypeCallCount());
+
+        // Kill-switch path: with the flag disabled, fall back to getConnectionType (Binder IPC).
+        ConnectivityManagerWrapper.setDeriveConnectionTypeFromCapabilitiesForTesting(false);
+        try {
+            mConnectivityWrapper.resetGetConnectionTypeCallCount();
+            networkCallback.onCapabilitiesChanged(Helper.netIdToNetwork(200), capabilities);
+            observer.assertLastChange(ChangeType.CONNECT, 200);
+            Assert.assertEquals(1, mConnectivityWrapper.getConnectionTypeCallCount());
+        } finally {
+            ConnectivityManagerWrapper.setDeriveConnectionTypeFromCapabilitiesForTesting(true);
+        }
     }
 
     /** Tests that isOnline() returns the correct result. */
@@ -1091,18 +1183,18 @@ public class NetworkChangeNotifierTest {
         Intent intent = new Intent(ConnectivityManager.CONNECTIVITY_ACTION);
         // For any connection type it should return true.
         for (int i = ConnectivityManager.TYPE_MOBILE; i < ConnectivityManager.TYPE_VPN; i++) {
-            mConnectivityDelegate.setActiveNetworkExists(true);
-            mConnectivityDelegate.setNetworkType(i);
+            mConnectivityWrapper.setActiveNetworkExists(true);
+            mConnectivityWrapper.setNetworkType(i);
             mReceiver.onReceive(InstrumentationRegistry.getTargetContext(), intent);
             Assert.assertTrue(NetworkChangeNotifier.isOnline());
         }
-        mConnectivityDelegate.setActiveNetworkExists(false);
+        mConnectivityWrapper.setActiveNetworkExists(false);
         mReceiver.onReceive(InstrumentationRegistry.getTargetContext(), intent);
         Assert.assertFalse(NetworkChangeNotifier.isOnline());
     }
 
     /**
-     * Regression test for crbug.com/805424 where ConnectivityManagerDelegate.vpnAccessible() was
+     * Regression test for crbug.com/805424 where ConnectivityManagerWrapper.vpnAccessible() was
      * found to leak.
      */
     @Test
@@ -1112,8 +1204,8 @@ public class NetworkChangeNotifierTest {
             sdk_is_greater_than = Build.VERSION_CODES.R,
             message = "https://crbug.com/40173842")
     public void testVpnAccessibleDoesNotLeak() {
-        ConnectivityManagerDelegate connectivityManagerDelegate =
-                new ConnectivityManagerDelegate(
+        ConnectivityManagerWrapper connectivityManagerWrapper =
+                new ConnectivityManagerWrapper(
                         InstrumentationRegistry.getInstrumentation().getTargetContext());
         StrictMode.VmPolicy oldPolicy = StrictMode.getVmPolicy();
         StrictMode.setVmPolicy(
@@ -1124,10 +1216,10 @@ public class NetworkChangeNotifierTest {
                         .build());
         try {
             // Test non-existent Network (NetIds only go to 65535).
-            connectivityManagerDelegate.vpnAccessible(Helper.netIdToNetwork(65537));
+            connectivityManagerWrapper.vpnAccessible(Helper.netIdToNetwork(65537));
             // Test existing Networks.
-            for (Network network : connectivityManagerDelegate.getAllNetworksUnfiltered()) {
-                connectivityManagerDelegate.vpnAccessible(network);
+            for (Network network : connectivityManagerWrapper.getAllNetworksUnfiltered()) {
+                connectivityManagerWrapper.vpnAccessible(network);
             }
 
             // Run GC and finalizers a few times to pick up leaked closeables
@@ -1143,15 +1235,15 @@ public class NetworkChangeNotifierTest {
     }
 
     /**
-     * Regression test for crbug.com/946531 where ConnectivityManagerDelegate.vpnAccessible()
+     * Regression test for crbug.com/946531 where ConnectivityManagerWrapper.vpnAccessible()
      * triggered StrictMode's untagged socket prohibition.
      */
     @Test
     @MediumTest
     @MinAndroidSdkLevel(Build.VERSION_CODES.O) // detectUntaggedSockets added in Oreo.
     public void testVpnAccessibleDoesNotCreateUntaggedSockets() {
-        ConnectivityManagerDelegate connectivityManagerDelegate =
-                new ConnectivityManagerDelegate(
+        ConnectivityManagerWrapper connectivityManagerWrapper =
+                new ConnectivityManagerWrapper(
                         InstrumentationRegistry.getInstrumentation().getTargetContext());
         StrictMode.VmPolicy oldPolicy = StrictMode.getVmPolicy();
         StrictMode.setVmPolicy(
@@ -1162,13 +1254,141 @@ public class NetworkChangeNotifierTest {
                         .build());
         try {
             // Test non-existent Network (NetIds only go to 65535).
-            connectivityManagerDelegate.vpnAccessible(Helper.netIdToNetwork(65537));
+            connectivityManagerWrapper.vpnAccessible(Helper.netIdToNetwork(65537));
             // Test existing Networks.
-            for (Network network : connectivityManagerDelegate.getAllNetworksUnfiltered()) {
-                connectivityManagerDelegate.vpnAccessible(network);
+            for (Network network : connectivityManagerWrapper.getAllNetworksUnfiltered()) {
+                connectivityManagerWrapper.vpnAccessible(network);
             }
         } finally {
             StrictMode.setVmPolicy(oldPolicy);
         }
+    }
+
+    /** Tests that getConnectionTypeFromCapabilities() returns the right ConnectionType per transport. */
+    @Test
+    @UiThreadTest
+    @MediumTest
+    @Feature({"Android-AppBase"})
+    public void testGetConnectionTypeFromCapabilities() {
+        Assert.assertEquals(
+                ConnectionType.CONNECTION_WIFI,
+                ConnectivityManagerWrapper.getConnectionTypeFromCapabilities(
+                        Helper.getCapabilities(TRANSPORT_WIFI)));
+        Assert.assertEquals(
+                ConnectionType.CONNECTION_4G,
+                ConnectivityManagerWrapper.getConnectionTypeFromCapabilities(
+                        Helper.getCapabilitiesWithBandwidth(30000, TRANSPORT_CELLULAR)));
+        Assert.assertEquals(
+                ConnectionType.CONNECTION_ETHERNET,
+                ConnectivityManagerWrapper.getConnectionTypeFromCapabilities(
+                        Helper.getCapabilities(TRANSPORT_ETHERNET)));
+        Assert.assertEquals(
+                ConnectionType.CONNECTION_BLUETOOTH,
+                ConnectivityManagerWrapper.getConnectionTypeFromCapabilities(
+                        Helper.getCapabilities(TRANSPORT_BLUETOOTH)));
+        Assert.assertEquals(
+                ConnectionType.CONNECTION_UNKNOWN,
+                ConnectivityManagerWrapper.getConnectionTypeFromCapabilities(
+                        Helper.getCapabilities(TRANSPORT_VPN)));
+        // VPN-over-cellular resolves to the cellular type, not UNKNOWN. crbug.com/40923303
+        Assert.assertEquals(
+                ConnectionType.CONNECTION_4G,
+                ConnectivityManagerWrapper.getConnectionTypeFromCapabilities(
+                        Helper.getCapabilitiesWithBandwidth(
+                                30000, TRANSPORT_VPN, TRANSPORT_CELLULAR)));
+        Assert.assertEquals(
+                ConnectionType.CONNECTION_5G,
+                ConnectivityManagerWrapper.getConnectionTypeFromCapabilities(
+                        Helper.getCapabilitiesWithBandwidth(
+                                50000, TRANSPORT_VPN, TRANSPORT_CELLULAR)));
+    }
+
+    /** Tests the bandwidth-to-RAT approximation used for cellular networks. */
+    @Test
+    @UiThreadTest
+    @MediumTest
+    @Feature({"Android-AppBase"})
+    public void testCellularSubtypeFromKbps() {
+        // Unknown bandwidth falls back to LTE.
+        Assert.assertEquals(
+                TelephonyManager.NETWORK_TYPE_LTE,
+                ConnectivityManagerWrapper.cellularSubtypeFromKbps(0));
+        Assert.assertEquals(
+                TelephonyManager.NETWORK_TYPE_LTE,
+                ConnectivityManagerWrapper.cellularSubtypeFromKbps(-1));
+        // 2G bucket: [1, 100).
+        Assert.assertEquals(
+                TelephonyManager.NETWORK_TYPE_GPRS,
+                ConnectivityManagerWrapper.cellularSubtypeFromKbps(24));
+        Assert.assertEquals(
+                TelephonyManager.NETWORK_TYPE_GPRS,
+                ConnectivityManagerWrapper.cellularSubtypeFromKbps(70));
+        Assert.assertEquals(
+                TelephonyManager.NETWORK_TYPE_GPRS,
+                ConnectivityManagerWrapper.cellularSubtypeFromKbps(99));
+        // 3G bucket: [100, 20000).
+        Assert.assertEquals(
+                TelephonyManager.NETWORK_TYPE_UMTS,
+                ConnectivityManagerWrapper.cellularSubtypeFromKbps(100));
+        Assert.assertEquals(
+                TelephonyManager.NETWORK_TYPE_UMTS,
+                ConnectivityManagerWrapper.cellularSubtypeFromKbps(115));
+        Assert.assertEquals(
+                TelephonyManager.NETWORK_TYPE_UMTS,
+                ConnectivityManagerWrapper.cellularSubtypeFromKbps(13000));
+        Assert.assertEquals(
+                TelephonyManager.NETWORK_TYPE_UMTS,
+                ConnectivityManagerWrapper.cellularSubtypeFromKbps(19999));
+        // 4G bucket: [20000, 40000).
+        Assert.assertEquals(
+                TelephonyManager.NETWORK_TYPE_LTE,
+                ConnectivityManagerWrapper.cellularSubtypeFromKbps(20000));
+        Assert.assertEquals(
+                TelephonyManager.NETWORK_TYPE_LTE,
+                ConnectivityManagerWrapper.cellularSubtypeFromKbps(30000));
+        Assert.assertEquals(
+                TelephonyManager.NETWORK_TYPE_LTE,
+                ConnectivityManagerWrapper.cellularSubtypeFromKbps(39999));
+        // 5G bucket: >= 40000.
+        Assert.assertEquals(
+                TelephonyManager.NETWORK_TYPE_NR,
+                ConnectivityManagerWrapper.cellularSubtypeFromKbps(40000));
+        Assert.assertEquals(
+                TelephonyManager.NETWORK_TYPE_NR,
+                ConnectivityManagerWrapper.cellularSubtypeFromKbps(47000));
+        Assert.assertEquals(
+                TelephonyManager.NETWORK_TYPE_NR,
+                ConnectivityManagerWrapper.cellularSubtypeFromKbps(145000));
+    }
+
+    /**
+     * Tests that {@link NetworkCapabilitiesWrapper#getLinkDownstreamBandwidthKbps} delegates to the
+     * wrapped {@link android.net.NetworkCapabilities} when one is present.
+     */
+    @Test
+    @UiThreadTest
+    @MediumTest
+    @Feature({"Android-AppBase"})
+    public void testGetLinkDownstreamBandwidthKbpsWithWrapped() {
+        NetworkCapabilitiesWrapper capabilities =
+                new NetworkCapabilitiesWrapper(new NetworkCapabilities());
+        // An empty NetworkCapabilities reports an unset (0 Kbps) downstream bandwidth.
+        Assert.assertEquals(0, capabilities.getLinkDownstreamBandwidthKbps());
+    }
+
+    /**
+     * Tests that {@link NetworkCapabilitiesWrapper#getLinkDownstreamBandwidthKbps} throws when the
+     * wrapper was built from raw int[] data (no wrapped NetworkCapabilities), since bandwidth is
+     * not part of that representation.
+     */
+    @Test
+    @UiThreadTest
+    @MediumTest
+    @Feature({"Android-AppBase"})
+    public void testGetLinkDownstreamBandwidthKbpsWithoutWrapped() {
+        NetworkCapabilitiesWrapper capabilities =
+                new NetworkCapabilitiesWrapper(new int[] {}, new int[] {TRANSPORT_CELLULAR});
+        Assert.assertThrows(
+                UnsupportedOperationException.class, capabilities::getLinkDownstreamBandwidthKbps);
     }
 }

@@ -30,9 +30,8 @@
 
 #pragma mark TableViewItem
 
-- (void)configureCell:(LegacyTableViewCell*)tableCell
-           withStyler:(ChromeTableViewStyler*)styler {
-  [super configureCell:tableCell withStyler:styler];
+- (void)configureCell:(LegacyTableViewCell*)tableCell {
+  [super configureCell:tableCell];
 
   BookmarkTextFieldCell* cell =
       base::apple::ObjCCastStrict<BookmarkTextFieldCell>(tableCell);
@@ -130,9 +129,7 @@
 
   [self applyContentSizeCategoryStyles];
 
-  NSArray<UITrait>* traits = TraitCollectionSetForTraits(
-      @[ UITraitPreferredContentSizeCategory.class ]);
-  [self registerForTraitChanges:traits
+  [self registerForTraitChanges:@[ UITraitPreferredContentSizeCategory.class ]
                      withAction:@selector(applyContentSizeCategoryStyles)];
 
   return self;
@@ -140,7 +137,7 @@
 
 - (void)applyContentSizeCategoryStyles {
   if (UIContentSizeCategoryIsAccessibilityCategory(
-          UIScreen.mainScreen.traitCollection.preferredContentSizeCategory)) {
+          self.traitCollection.preferredContentSizeCategory)) {
     self.stackView.axis = UILayoutConstraintAxisVertical;
     self.stackView.alignment = UIStackViewAlignmentLeading;
     self.textField.textAlignment = NSTextAlignmentLeft;

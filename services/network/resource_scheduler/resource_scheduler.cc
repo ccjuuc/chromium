@@ -9,7 +9,6 @@
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/field_trial.h"
@@ -22,6 +21,7 @@
 #include "base/time/tick_clock.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/trace_id_helper.h"
+#include "net/base/features.h"
 #include "net/base/isolation_info.h"
 #include "net/base/load_flags.h"
 #include "net/base/request_priority.h"
@@ -92,7 +92,8 @@ const char* RequestStartTriggerString(RequestStartTrigger trigger) {
 
 const scoped_refptr<base::SingleThreadTaskRunner>& TaskRunner(
     net::RequestPriority priority) {
-  if (features::kNetworkServiceTaskSchedulerResourceScheduler.Get()) {
+  if (base::FeatureList::IsEnabled(net::features::kNetTaskScheduler) &&
+      features::kNetworkServiceTaskSchedulerResourceScheduler.Get()) {
     return net::GetTaskRunner(priority);
   }
   return base::SingleThreadTaskRunner::GetCurrentDefault();
@@ -171,8 +172,8 @@ struct ResourceScheduler::RequestPriorityParams {
 
 class ResourceScheduler::RequestQueue {
  public:
-  using NetQueue =
-      std::multiset<ScheduledResourceRequestImpl*, ScheduledResourceSorter>;
+  using NetQueue = std::multiset<raw_ptr<ScheduledResourceRequestImpl>,
+                                 ScheduledResourceSorter>;
 
   RequestQueue() : fifo_ordering_ids_(0) {}
   ~RequestQueue() {}
@@ -189,7 +190,7 @@ class ResourceScheduler::RequestQueue {
 
   // Returns true if |request| is queued.
   bool IsQueued(ScheduledResourceRequestImpl* request) const {
-    return base::Contains(pointers_, request);
+    return pointers_.contains(request);
   }
 
   // Returns true if no requests are queued.
@@ -385,7 +386,7 @@ bool ResourceScheduler::ScheduledResourceSorter::operator()(
 
 void ResourceScheduler::RequestQueue::Insert(
     ScheduledResourceRequestImpl* request) {
-  DCHECK(!base::Contains(pointers_, request));
+  DCHECK(!pointers_.contains(request));
   TRACE_EVENT("network.scheduler", "ResourceScheduler::RequestQueue::Insert",
               request->flow());
   request->set_fifo_ordering(MakeFifoOrderingId());
@@ -456,7 +457,7 @@ class ResourceScheduler::Client
 
     if (pending_requests_.IsQueued(request)) {
       pending_requests_.Erase(request);
-      DCHECK(!base::Contains(in_flight_requests_, request));
+      DCHECK(!in_flight_requests_.contains(request));
     } else {
       if (!RequestAttributesAreSet(request->attributes(), kAttributeDelayable))
         last_non_delayable_request_end_ = tick_clock_->NowTicks();
@@ -504,7 +505,7 @@ class ResourceScheduler::Client
     request->Reprioritize(new_priority_params);
     SetRequestAttributes(request, DetermineRequestAttributes(request));
     if (!pending_requests_.IsQueued(request)) {
-      DCHECK(base::Contains(in_flight_requests_, request));
+      DCHECK(in_flight_requests_.contains(request));
       // Request has already started.
       return;
     }
@@ -650,8 +651,7 @@ class ResourceScheduler::Client
           current_request_is_pending = true;
       }
       // Account for the current request if it is not in one of the lists yet.
-      if (current_request &&
-          !base::Contains(in_flight_requests_, current_request) &&
+      if (current_request && !in_flight_requests_.contains(current_request) &&
           !current_request_is_pending) {
         if (RequestAttributesAreSet(current_request->attributes(), attributes))
           matching_request_count++;
@@ -691,7 +691,7 @@ class ResourceScheduler::Client
       ScheduledResourceRequestImpl* request) {
     RequestAttributes attributes = kAttributeNone;
 
-    if (base::Contains(in_flight_requests_, request))
+    if (in_flight_requests_.contains(request))
       attributes |= kAttributeInFlight;
 
     if (request->url_request()->priority() < kDelayablePriorityThreshold) {
@@ -1170,7 +1170,7 @@ ResourceScheduler::ScheduleRequest(ClientId client_id,
 
 void ResourceScheduler::RemoveRequest(ScheduledResourceRequestImpl* request) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (base::Contains(unowned_requests_, request)) {
+  if (unowned_requests_.contains(request)) {
     unowned_requests_.erase(request);
     return;
   }
@@ -1188,7 +1188,7 @@ void ResourceScheduler::OnClientCreated(
     IsBrowserInitiated is_browser_initiated,
     net::NetworkQualityEstimator* network_quality_estimator) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!base::Contains(client_map_, client_id));
+  DCHECK(!client_map_.contains(client_id));
 
   client_map_[client_id] = std::make_unique<Client>(
       is_browser_initiated, network_quality_estimator, this, tick_clock_);

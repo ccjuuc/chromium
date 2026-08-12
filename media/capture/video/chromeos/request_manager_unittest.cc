@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/capture/video/chromeos/request_manager.h"
 
 #include <map>
@@ -14,6 +9,8 @@
 #include <utility>
 #include <vector>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
@@ -26,6 +23,7 @@
 #include "media/capture/video/chromeos/camera_device_context.h"
 #include "media/capture/video/chromeos/camera_device_delegate.h"
 #include "media/capture/video/chromeos/mock_video_capture_client.h"
+#include "media/capture/video/chromeos/request_builder.h"
 #include "media/capture/video/chromeos/stream_buffer_manager.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -184,7 +182,8 @@ class RequestManagerTest : public ::testing::TestWithParam<bool> {
     entry->type = cros::mojom::EntryType::TYPE_INT32;
     entry->count = 1;
     uint8_t* as_int8 = reinterpret_cast<uint8_t*>(&partial_result_count);
-    entry->data.assign(as_int8, as_int8 + entry->count * sizeof(int32_t));
+    entry->data.assign(as_int8,
+                       UNSAFE_TODO(as_int8 + entry->count * sizeof(int32_t)));
     static_metadata->entries->push_back(std::move(entry));
 
     entry = cros::mojom::CameraMetadataEntry::New();
@@ -194,7 +193,8 @@ class RequestManagerTest : public ::testing::TestWithParam<bool> {
     entry->count = 1;
     int32_t jpeg_max_size = 65535;
     as_int8 = reinterpret_cast<uint8_t*>(&jpeg_max_size);
-    entry->data.assign(as_int8, as_int8 + entry->count * sizeof(int32_t));
+    entry->data.assign(as_int8,
+                       UNSAFE_TODO(as_int8 + entry->count * sizeof(int32_t)));
     static_metadata->entries->push_back(std::move(entry));
 
     entry = cros::mojom::CameraMetadataEntry::New();
@@ -204,8 +204,9 @@ class RequestManagerTest : public ::testing::TestWithParam<bool> {
     entry->type = cros::mojom::EntryType::TYPE_BYTE;
     entry->count = 1;
     uint8_t pipeline_max_depth = 1;
-    entry->data.assign(&pipeline_max_depth,
-                       &pipeline_max_depth + entry->count * sizeof(uint8_t));
+    entry->data.assign(
+        &pipeline_max_depth,
+        UNSAFE_TODO(&pipeline_max_depth + entry->count * sizeof(uint8_t)));
     static_metadata->entries->push_back(std::move(entry));
 
     return static_metadata;
@@ -331,6 +332,17 @@ class RequestManagerTest : public ::testing::TestWithParam<bool> {
   std::map<uint32_t, RequestManager::CaptureResult>& GetPendingResults() {
     EXPECT_NE(nullptr, request_manager_.get());
     return request_manager_->pending_results_;
+  }
+
+  StreamBufferManager* GetStreamBufferManager() {
+    return request_manager_->stream_buffer_manager_.get();
+  }
+
+  void SubmitCapturedJpegBuffer(uint32_t frame_number,
+                                uint64_t buffer_ipc_id,
+                                StreamType stream_type) {
+    request_manager_->SubmitCapturedJpegBuffer(frame_number, buffer_ipc_id,
+                                               stream_type);
   }
 
   std::vector<cros::mojom::Camera3StreamPtr> PrepareCaptureStream(
@@ -624,6 +636,85 @@ TEST_P(RequestManagerTest, BufferErrorTest) {
 
   // Wait until the MockVideoCaptureClient is deleted.
   DoLoop();
+}
+
+// Regression test for crbug.com/502782711.
+TEST_P(RequestManagerTest, SubmitCapturedJpegBufferInvalidSizeTest) {
+  const uint32_t kFrameNumber = 0;
+  const StreamType kStreamType = StreamType::kJpegOutput;
+
+  request_manager_->SetUpStreamsAndBuffers(
+      capture_params_, GetFakeStaticMetadata(/* partial_result_count */ 1),
+      PrepareCaptureStream(/* max_buffers */ 1));
+
+  // Manually add a pending result.
+  auto& pending_results = GetPendingResults();
+  pending_results[kFrameNumber].unsubmitted_buffer_count = 1;
+
+  // Get a buffer and map it to write a malicious header.
+  auto buffer_info =
+      GetStreamBufferManager()->RequestBufferForCaptureRequest(kStreamType);
+  ASSERT_TRUE(buffer_info.has_value());
+  uint64_t buffer_ipc_id = buffer_info->ipc_id;
+
+  auto shared_image =
+      GetStreamBufferManager()->GetSharedImageById(kStreamType, buffer_ipc_id);
+  auto scoped_mapping = shared_image->Map();
+  ASSERT_TRUE(scoped_mapping);
+
+  gfx::Size buffer_dimension =
+      GetStreamBufferManager()->GetBufferDimension(kStreamType);
+  base::span<uint8_t> data = scoped_mapping->GetMemoryForPlane(0);
+
+  Camera3JpegBlob* header = reinterpret_cast<Camera3JpegBlob*>(
+      data.subspan(buffer_dimension.width() - sizeof(Camera3JpegBlob)).data());
+  header->jpeg_blob_id = kCamera3JpegBlobId;
+  header->jpeg_size =
+      buffer_dimension.width();  // Invalid size: too large (includes header)
+
+  EXPECT_CALL(*GetMockVideoCaptureClient(), OnError(_, _, _)).Times(1);
+
+  SubmitCapturedJpegBuffer(kFrameNumber, buffer_ipc_id, kStreamType);
+}
+
+// Regression test for crbug.com/502782711.
+TEST_P(RequestManagerTest, SubmitCapturedJpegBufferUnderflowTest) {
+  const uint32_t kFrameNumber = 0;
+  const StreamType kStreamType = StreamType::kJpegOutput;
+
+  std::vector<cros::mojom::Camera3StreamPtr> streams;
+  auto still_capture_stream = cros::mojom::Camera3Stream::New();
+  still_capture_stream->id = static_cast<uint64_t>(StreamType::kJpegOutput);
+  still_capture_stream->stream_type =
+      cros::mojom::Camera3StreamType::CAMERA3_STREAM_OUTPUT;
+  still_capture_stream->width = 4;  // Smaller than sizeof(Camera3JpegBlob)
+  still_capture_stream->height = 4;
+  still_capture_stream->format =
+      cros::mojom::HalPixelFormat::HAL_PIXEL_FORMAT_BLOB;
+  still_capture_stream->usage = 0;
+  still_capture_stream->max_buffers = 1;
+  still_capture_stream->data_space = 0;
+  still_capture_stream->rotation =
+      cros::mojom::Camera3StreamRotation::CAMERA3_STREAM_ROTATION_0;
+  streams.push_back(std::move(still_capture_stream));
+
+  request_manager_->SetUpStreamsAndBuffers(
+      capture_params_, GetFakeStaticMetadata(/* partial_result_count */ 1),
+      std::move(streams));
+
+  // Manually add a pending result.
+  auto& pending_results = GetPendingResults();
+  pending_results[kFrameNumber].unsubmitted_buffer_count = 1;
+
+  // Get a buffer to ensure buffer_ipc_id is valid.
+  auto buffer_info =
+      GetStreamBufferManager()->RequestBufferForCaptureRequest(kStreamType);
+  ASSERT_TRUE(buffer_info.has_value());
+  uint64_t buffer_ipc_id = buffer_info->ipc_id;
+
+  EXPECT_CALL(*GetMockVideoCaptureClient(), OnError(_, _, _)).Times(1);
+
+  SubmitCapturedJpegBuffer(kFrameNumber, buffer_ipc_id, kStreamType);
 }
 
 INSTANTIATE_TEST_SUITE_P(, RequestManagerTest, ::testing::Bool());

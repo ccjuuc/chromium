@@ -36,6 +36,8 @@
 #include "ui/accessibility/platform/inspect/ax_api_type.h"
 #include "ui/accessibility/platform/inspect/ax_tree_formatter.h"
 #if BUILDFLAG(IS_WIN)
+#include "base/test/run_until.h"
+#include "ui/accessibility/platform/ax_platform_node_win.h"
 #include "ui/accessibility/platform/browser_accessibility_manager_win.h"
 #endif
 
@@ -43,6 +45,29 @@ namespace content {
 
 using ui::AXPropertyFilter;
 using ui::AXTreeFormatter;
+
+namespace {
+
+void WaitForWindowsAccessibilityEventTestTeardown() {
+#if BUILDFLAG(IS_WIN)
+  // Dump event tests inspect Windows accessibility objects while the page is
+  // live. Shell teardown can briefly leave destroyed nodes waiting on those
+  // COM references to release.
+  const auto get_ghost_count = [] {
+    return ui::AXPlatformNodeWin::GetCounts().ghost_nodes;
+  };
+  if (get_ghost_count() == 0) {
+    return;
+  }
+
+  EXPECT_TRUE(base::test::RunUntil([&] { return get_ghost_count() == 0; }))
+      << "Timed out waiting for Windows accessibility event test teardown; "
+      << get_ghost_count()
+      << " AXPlatformNodeWin COM references are still alive.";
+#endif
+}
+
+}  // namespace
 
 // See content/test/data/accessibility/readme.md for an overview.
 //
@@ -87,6 +112,10 @@ class DumpAccessibilityEventsTest : public DumpAccessibilityTestBase {
     DumpAccessibilityTestBase::SetUpCommandLine(command_line);
   }
 
+  void PostRunTestOnMainThread() override {
+    ContentBrowserTest::PostRunTestOnMainThread();
+    WaitForWindowsAccessibilityEventTestTeardown();
+  }
 
   std::vector<std::string> Dump() override;
 
@@ -449,6 +478,15 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
   RunEventTest(FILE_PATH_LITERAL("aria-hidden-changed.html"));
 }
 
+// TODO(crbug.com/468203351): flakes due to COM interface leaks on Windows
+// platforms. Only run on Android, Linux, and Mac.
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsAriaInvalidStatusChanged) {
+  RunEventTest(FILE_PATH_LITERAL("aria-invalid-status-changed.html"));
+}
+#endif
+
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
                        AccessibilityEventsAriaLevelChanged) {
   RunEventTest(FILE_PATH_LITERAL("aria-level-changed.html"));
@@ -468,6 +506,15 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
                        AccessibilityEventsAriaMultilineChanged) {
   RunEventTest(FILE_PATH_LITERAL("aria-multiline-changed.html"));
 }
+
+// TODO(crbug.com/468203351): flakes due to COM interface leaks on Windows
+// platforms. Only run on Android, Linux, and Mac.
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsAriaMeterValueChange) {
+  RunEventTest(FILE_PATH_LITERAL("aria-meter-value-change.html"));
+}
+#endif
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
                        AccessibilityEventsAriaPosinsetChanged) {
@@ -540,8 +587,9 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
   RunEventTest(FILE_PATH_LITERAL("aria-treeitem-focus-reference-target.html"));
 }
 
+// TODO(crbug.com/509331079): Re-enable this test.
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
-                       AccessibilityEventsAriaComboBoxFocus) {
+                       DISABLED_AccessibilityEventsAriaComboBoxFocus) {
   RunEventTest(FILE_PATH_LITERAL("aria-combo-box-focus.html"));
 }
 
@@ -588,6 +636,24 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
                        AccessibilityEventsAriaSpinButtonValueTextChange) {
   RunEventTest(FILE_PATH_LITERAL("aria-spinbutton-valuetext-change.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsAriaSpinbuttonAppendingTextChanged) {
+  RunEventTest(
+      FILE_PATH_LITERAL("aria-spinbutton-appending-text-changed.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(
+    DumpAccessibilityEventsTest,
+    AccessibilityEventsNativeSpinbuttonAppendingTextChanged) {
+  RunEventTest(
+      FILE_PATH_LITERAL("native-spinbutton-appending-text-changed.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsNativeSpinbuttonArrowUpChanged) {
+  RunEventTest(FILE_PATH_LITERAL("native-spinbutton-arrow-up-changed.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
@@ -674,6 +740,11 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
   }
 
   RunEventTest(FILE_PATH_LITERAL("checked-state-changed.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsButtonHasPopupCheckedStateChanged) {
+  RunEventTest(FILE_PATH_LITERAL("button-haspopup-checked-state-changed.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
@@ -854,9 +925,6 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
                        AccessibilitySelectListboxActivateOptions) {
-  base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-      switches::kEnableBlinkFeatures,
-      blink::features::kSelectMobileDesktopParity.name);
   RunEventTest(FILE_PATH_LITERAL("select-multiple-activate-options.html"));
 }
 
@@ -1363,6 +1431,16 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsMenuPopupCreated) {
+  RunEventTest(FILE_PATH_LITERAL("menu-popup-created.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsMenuPopupStatic) {
+  RunEventTest(FILE_PATH_LITERAL("menu-popup-static.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
                        AccessibilityEventsMenubarShowHideMenus) {
   RunEventTest(FILE_PATH_LITERAL("menubar-show-hide-menus.html"));
 }
@@ -1381,6 +1459,24 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest, DeleteSubtree) {
   RunEventTest(FILE_PATH_LITERAL("delete-subtree.html"));
 }
 
+// TODO(crbug.com/487613492): Disabled due to ghost UIA COM refs on Windows bots.
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       DISABLED_AccessibilityEventsCssHighlightSpellingError) {
+  RunEventTest(FILE_PATH_LITERAL("css-highlight-spelling-error.html"));
+}
+
+// TODO(crbug.com/487613492): Disabled due to ghost UIA COM refs on Windows bots.
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       DISABLED_AccessibilityEventsCssHighlightGrammarError) {
+  RunEventTest(FILE_PATH_LITERAL("css-highlight-grammar-error.html"));
+}
+
+// TODO(crbug.com/487613492): Disabled due to ghost UIA COM refs on Windows bots.
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       DISABLED_AccessibilityEventsCssHighlightAdded) {
+  RunEventTest(FILE_PATH_LITERAL("css-highlight-added.html"));
+}
+
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsWithExperimentalWebFeaturesTest,
                        CarouselWithTabs) {
   RunEventTest(FILE_PATH_LITERAL("carousel-with-tabs.html"));
@@ -1389,6 +1485,11 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsWithExperimentalWebFeaturesTest,
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsWithExperimentalWebFeaturesTest,
                        CarouselWithLinks) {
   RunEventTest(FILE_PATH_LITERAL("carousel-with-links.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsWithExperimentalWebFeaturesTest,
+                       MenuListInvokerNameChange) {
+  RunEventTest(FILE_PATH_LITERAL("menulist-invoker-name-change.html"));
 }
 
 }  // namespace content

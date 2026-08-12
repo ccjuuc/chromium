@@ -21,7 +21,8 @@ include_rules = [
   "+chrome/browser/ash/settings",
   "+chrome/browser/ash/system",
   "+chrome/browser/browser_process.h",
-  "+chrome/browser/lifetime",
+  "+chrome/browser/browser_process_platform_part.h",
+  "+chrome/browser/global_features.h",
   "+chrome/browser/profiles",
   "+chrome/browser/ui/ash",
   "+chrome/browser/ui/ash/assistant",
@@ -31,7 +32,6 @@ include_rules = [
   "+chrome/browser/ui/webui/ash/lock_screen_reauth",
   "+chrome/common/chrome_constants.h",
   "+chrome/common/chrome_switches.h",
-  "+chrome/common/pref_names.h",
   "+chrome/grit",
   "+chrome/test/base",
 ]

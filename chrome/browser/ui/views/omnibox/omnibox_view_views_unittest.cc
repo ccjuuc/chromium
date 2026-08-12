@@ -7,20 +7,18 @@
 #include <stddef.h>
 
 #include <memory>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
 
-#include "base/containers/adapters.h"
 #include "base/functional/bind.h"
 #include "base/i18n/rtl.h"
 #include "base/memory/raw_ptr.h"
-#include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/test/simple_test_clock.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
@@ -31,43 +29,33 @@
 #include "chrome/browser/search_engines/template_url_service_factory_test_util.h"
 #include "chrome/browser/signin/chrome_signin_client_factory.h"
 #include "chrome/browser/signin/chrome_signin_client_test_util.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/omnibox/chrome_omnibox_client.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+#include "chrome/browser/ui/omnibox/omnibox_tab_helper.h"
 #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/grit/generated_resources.h"
-#include "chrome/test/base/test_browser_window.h"
+#include "chrome/browser/ui/views/omnibox/test_location_bar.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
-#include "components/lookalikes/core/safety_tip_test_utils.h"
 #include "components/omnibox/browser/test_location_bar_model.h"
-#include "components/omnibox/common/omnibox_feature_configs.h"
-#include "components/omnibox/common/omnibox_features.h"
-#include "components/unified_consent/pref_names.h"
 #include "content/public/browser/browser_accessibility_state.h"
-#include "content/public/browser/focused_node_details.h"
 #include "content/public/browser/scoped_accessibility_mode.h"
-#include "content/public/test/browser_task_environment.h"
-#include "content/public/test/mock_navigation_handle.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/common/input/web_input_event.h"
-#include "third_party/blink/public/common/input/web_keyboard_event.h"
-#include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
-#include "ui/accessibility/accessibility_features.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
+#include "ui/base/clipboard/test/clipboard_test_util.h"
+#include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/text_edit_commands.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/keycodes/dom/dom_code.h"
-#include "ui/gfx/animation/animation_container_element.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/render_text.h"
 #include "ui/gfx/render_text_test_api.h"
@@ -103,6 +91,16 @@ class TestingOmniboxView : public OmniboxViewViews {
   Range scheme_range() const { return scheme_range_; }
   Range emphasis_range() const { return emphasis_range_; }
   bool base_text_emphasis() const { return base_text_emphasis_; }
+  bool aim_page_action_icon_has_fake_focus() const {
+    return aim_page_action_icon_has_fake_focus_;
+  }
+  void set_aim_page_action_icon_has_fake_focus(bool value) {
+    aim_page_action_icon_has_fake_focus_ = value;
+  }
+  void ApplyFocusRingToAimButton(bool focus_aim) override {
+    OmniboxViewViews::ApplyFocusRingToAimButton(focus_aim);
+    aim_page_action_icon_has_fake_focus_ = focus_aim;
+  }
 
   // Returns the latest color applied to |range| via ApplyColor(), or
   // std::nullopt if no color has been applied to |range|.
@@ -193,7 +191,7 @@ void TestingOmniboxView::CheckUpdatePopupNotCalled() {
 std::optional<SkColor> TestingOmniboxView::GetLatestColorForRange(
     const gfx::Range& range) {
   // Iterate backwards to get the most recently applied color for |range|.
-  for (const auto& [color, other_range] : base::Reversed(range_colors_)) {
+  for (const auto& [color, other_range] : std::views::reverse(range_colors_)) {
     if (range == other_range) {
       return color;
     }
@@ -205,7 +203,7 @@ std::optional<std::pair<gfx::TextStyle, bool>>
 TestingOmniboxView::GetLatestStyleForRange(const gfx::Range& range) const {
   // Iterate backwards to get the most recently applied style for |range|.
   for (const auto& [style, value, other_range] :
-       base::Reversed(range_styles_)) {
+       std::views::reverse(range_styles_)) {
     if (range == other_range) {
       return std::make_pair(style, value);
     }
@@ -262,49 +260,6 @@ void TestingOmniboxView::ApplyStyle(gfx::TextStyle style,
   range_styles_.emplace_back(style, value, range);
   OmniboxViewViews::ApplyStyle(style, value, range);
 }
-
-// TestLocationBar -------------------------------------------------------------
-
-class TestLocationBar : public LocationBar {
- public:
-  TestLocationBar(CommandUpdater* command_updater,
-                  LocationBarModel* location_bar_model)
-      : LocationBar(command_updater), location_bar_model_(location_bar_model) {}
-  TestLocationBar(const TestLocationBar&) = delete;
-  TestLocationBar& operator=(const TestLocationBar&) = delete;
-  ~TestLocationBar() override = default;
-
-  void set_omnibox_view(OmniboxViewViews* view) { omnibox_view_ = view; }
-
-  // LocationBar:
-  void FocusLocation(bool select_all) override {}
-  void FocusSearch() override {}
-  void UpdateContentSettingsIcons() override {}
-  void SaveStateToContents(content::WebContents* contents) override {}
-  void Revert() override {}
-  OmniboxView* GetOmniboxView() override { return nullptr; }
-  OmniboxController* GetOmniboxController() override { return nullptr; }
-  LocationBarTesting* GetLocationBarForTesting() override { return nullptr; }
-  LocationBarModel* GetLocationBarModel() override {
-    return location_bar_model_;
-  }
-  content::WebContents* GetWebContents() override { return nullptr; }
-  std::optional<bubble_anchor_util::AnchorConfiguration> GetChipAnchor()
-      override {
-    return {};
-  }
-  void OnChanged() override {}
-  void UpdateWithoutTabRestore() override {
-    // This is a minimal amount of what LocationBarView does. Not all tests
-    // set |omnibox_view_|.
-    if (omnibox_view_) {
-      omnibox_view_->Update();
-    }
-  }
-
-  raw_ptr<LocationBarModel> location_bar_model_;
-  raw_ptr<OmniboxViewViews> omnibox_view_ = nullptr;
-};
 
 // OmniboxViewViewsTest -------------------------------------------------------
 
@@ -383,7 +338,6 @@ class OmniboxViewViewsTest : public OmniboxViewViewsTestBase {
   }
 
  protected:
-  Browser* browser() { return browser_.get(); }
   Profile* profile() { return profile_.get(); }
   TestLocationBar* location_bar() { return &location_bar_; }
 
@@ -409,7 +363,6 @@ class OmniboxViewViewsTest : public OmniboxViewViewsTestBase {
  private:
   network::TestURLLoaderFactory test_url_loader_factory_;
   std::unique_ptr<TestingProfile> profile_;
-  std::unique_ptr<Browser> browser_;
   std::unique_ptr<TemplateURLServiceFactoryTestUtil> util_;
   CommandUpdaterImpl command_updater_;
   TestLocationBarModel location_bar_model_;
@@ -460,17 +413,12 @@ void OmniboxViewViewsTest::SetUp() {
       base::BindRepeating(&BuildChromeSigninClientWithURLLoader,
                           &test_url_loader_factory_));
   profile_ = profile_builder.Build();
-  auto browser_window = std::make_unique<TestBrowserWindow>();
-  Browser::CreateParams params(profile(), /*user_gesture*/ true);
-  params.type = Browser::TYPE_NORMAL;
-  params.window = browser_window.release();
-  browser_ = Browser::DeprecatedCreateOwnedForTesting(params);
+  location_bar_.set_profile(profile_.get());
 
   util_ = std::make_unique<TemplateURLServiceFactoryTestUtil>(profile_.get());
 
   // We need a widget so OmniboxView can be correctly focused and unfocused.
-  widget_ =
-      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+  widget_ = CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
   widget_->Show();
 
   AutocompleteClassifierFactory::GetInstance()->SetTestingFactoryAndUse(
@@ -479,7 +427,7 @@ void OmniboxViewViewsTest::SetUp() {
 
   // Create the controller and the view and wire them together.
   auto omnibox_client = std::make_unique<ChromeOmniboxClient>(
-      &location_bar_, browser(), profile());
+      &location_bar_, nullptr, profile());
   omnibox_controller_ =
       std::make_unique<OmniboxController>(std::move(omnibox_client));
   auto omnibox_view = std::make_unique<TestingOmniboxView>(
@@ -504,10 +452,8 @@ void OmniboxViewViewsTest::TearDown() {
   widget_.reset();
   omnibox_controller_.reset();
 
-  browser_->tab_strip_model()->CloseAllTabs();
-  browser_ = nullptr;
-
   util_.reset();
+  location_bar()->set_profile(nullptr);
   profile_.reset();
 
   ChromeViewsTestBase::TearDown();
@@ -544,8 +490,33 @@ TEST_F(OmniboxViewViewsTest, UpdatePopupCall) {
   omnibox_view()->CheckUpdatePopupCallInfo(3, u"a", Range(1));
 }
 
+class OmniboxViewViewsAiModeSpaceTest : public OmniboxViewViewsTest {
+ public:
+  OmniboxViewViewsAiModeSpaceTest()
+      : OmniboxViewViewsTest({{omnibox::kAiModeSpaceDoesNotActivate, {}}}, {}) {
+  }
+};
+
+TEST_F(OmniboxViewViewsAiModeSpaceTest, AiModeSpaceDoesNotActivate) {
+  omnibox_view()->set_aim_page_action_icon_has_fake_focus(true);
+  ASSERT_TRUE(omnibox_view()->aim_page_action_icon_has_fake_focus());
+
+  ui::KeyEvent space_pressed(
+      ui::EventType::kKeyPressed, ui::VKEY_SPACE, ui::DomCode::SPACE, 0,
+      ui::DomKey::FromCharacter(' '), ui::EventTimeForNow());
+  omnibox_textfield()->OnKeyEvent(&space_pressed);
+
+  EXPECT_FALSE(space_pressed.handled());
+  EXPECT_FALSE(omnibox_view()->aim_page_action_icon_has_fake_focus());
+
+  // Simulate the fallthrough insertion since `OnKeyEvent` might not do it in
+  // unit tests.
+  omnibox_textfield()->InsertChar(space_pressed);
+  omnibox_view()->CheckUpdatePopupCallInfo(1, u" ", Range(1));
+}
+
 // Test that text cursor is shown in the omnibox after entering any single
-// character in NTP 'Search box'. Test for crbug.com/698172.
+// character in NTP 'Search box'. Test for crbug.com/41305472.
 TEST_F(OmniboxViewViewsTest, EditTextfield) {
   omnibox_textfield()->SetCursorEnabled(false);
   ui::KeyEvent char_event(ui::EventType::kKeyPressed, ui::VKEY_A,
@@ -557,7 +528,7 @@ TEST_F(OmniboxViewViewsTest, EditTextfield) {
 
 // Test that the scheduled text edit command is cleared when Textfield receives
 // a key press event. This ensures that the scheduled text edit command property
-// is always in the correct state. Test for http://crbug.com/613948.
+// is always in the correct state. Test for http://crbug.com/41255127.
 TEST_F(OmniboxViewViewsTest, ScheduledTextEditCommand) {
   omnibox_textfield()->SetTextEditCommandForNextKeyEvent(
       ui::TextEditCommand::MOVE_UP);
@@ -571,7 +542,7 @@ TEST_F(OmniboxViewViewsTest, ScheduledTextEditCommand) {
 }
 
 // Test that Shift+Up and Shift+Down are not captured and let selection mode
-// take over. Test for crbug.com/863543 and crbug.com/892216.
+// take over. Test for crbug.com/41401511 and crbug.com/40596677.
 TEST_F(OmniboxViewViewsTest, SelectWithShift_863543) {
   location_bar_model()->set_url(GURL("http://www.example.com/?query=1"));
   const std::u16string text = u"http://www.example.com/?query=1";
@@ -691,7 +662,7 @@ TEST_F(OmniboxViewViewsTest, EmojiPickerInsertion) {
   }
 }
 
-// Verifies that https://crbug.com/45260 doesn't regress.
+// Verifies that https://crbug.com/40402896 doesn't regress.
 TEST_F(OmniboxViewViewsTest,
        RendererInitiatedFocusSelectsAllWhenStartingBlurred) {
   location_bar_model()->set_url(GURL("about:blank"));
@@ -704,7 +675,7 @@ TEST_F(OmniboxViewViewsTest,
   EXPECT_TRUE(omnibox_view()->IsSelectAll());
 }
 
-// Verifies that https://crbug.com/924935 doesn't regress.
+// Verifies that https://crbug.com/40610912 doesn't regress.
 TEST_F(OmniboxViewViewsTest,
        RendererInitiatedFocusPreservesCursorWhenStartingFocused) {
   // Simulate the user focusing the omnibox and typing something. This is just
@@ -913,12 +884,13 @@ TEST_F(OmniboxViewViewsTest, PasteAndGoToUrlOrSearchCommand) {
       u"Pa&ste and go to https://test.com";
 #endif
   ui::ScopedClipboardWriter(clipboard_buffer).WriteText(u"https://test.com/");
+  omnibox_view()->SetClipboardTextForTesting(u"https://test.com/");
   std::u16string returned_text =
       omnibox_view()->GetLabelForCommandId(IDC_PASTE_AND_GO);
   EXPECT_TRUE(omnibox_view()->IsCommandIdEnabled(IDC_PASTE_AND_GO));
   EXPECT_EQ(expected_text, returned_text);
 
-  // Test input that's URL-like. (crbug.com/980002).
+  // Test input that's URL-like. (crbug.com/41468594).
   expected_text =
 #if BUILDFLAG(IS_MAC)
       u"Pa&ste and Go to test.com";
@@ -926,6 +898,7 @@ TEST_F(OmniboxViewViewsTest, PasteAndGoToUrlOrSearchCommand) {
       u"Pa&ste and go to test.com";
 #endif
   ui::ScopedClipboardWriter(clipboard_buffer).WriteText(u"test.com");
+  omnibox_view()->SetClipboardTextForTesting(u"test.com");
   returned_text = omnibox_view()->GetLabelForCommandId(IDC_PASTE_AND_GO);
   EXPECT_TRUE(omnibox_view()->IsCommandIdEnabled(IDC_PASTE_AND_GO));
   EXPECT_EQ(expected_text, returned_text);
@@ -939,6 +912,7 @@ TEST_F(OmniboxViewViewsTest, PasteAndGoToUrlOrSearchCommand) {
 #endif
   ui::ScopedClipboardWriter(clipboard_buffer)
       .WriteText(u"this is a test sentence");
+  omnibox_view()->SetClipboardTextForTesting(u"this is a test sentence");
   returned_text = omnibox_view()->GetLabelForCommandId(IDC_PASTE_AND_GO);
   EXPECT_TRUE(omnibox_view()->IsCommandIdEnabled(IDC_PASTE_AND_GO));
   EXPECT_EQ(expected_text, returned_text);
@@ -946,17 +920,19 @@ TEST_F(OmniboxViewViewsTest, PasteAndGoToUrlOrSearchCommand) {
 
 TEST_F(OmniboxViewViewsTest, SelectAllCommand) {
   omnibox_view()->SetUserText(u"user text");
-  EXPECT_TRUE(omnibox_view()->IsCommandIdEnabled(views::Textfield::kSelectAll));
+  EXPECT_TRUE(omnibox_view()->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll)));
 
-  omnibox_view()->ExecuteCommand(views::Textfield::kSelectAll, 0);
+  omnibox_view()->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll), 0);
   EXPECT_TRUE(omnibox_view()->IsSelectAll());
   // Test command is disabled if text is already all selected.
-  EXPECT_FALSE(
-      omnibox_view()->IsCommandIdEnabled(views::Textfield::kSelectAll));
+  EXPECT_FALSE(omnibox_view()->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll)));
 }
 
 // Verifies |OmniboxEditModel::State::needs_revert_and_select_all|, and verifies
-// a recent regression in this logic (see https://crbug.com/923290).
+// a recent regression in this logic (see https://crbug.com/41436341).
 TEST_F(OmniboxViewViewsTest, SelectAllOnReactivateTabAfterDeleteAll) {
   location_bar()->set_omnibox_view(omnibox_view());
 
@@ -1095,8 +1071,6 @@ TEST_F(OmniboxViewViewsTest, SchemeStrikethrough) {
 #if BUILDFLAG(SUPPORTS_AX_TEXT_OFFSETS)
 TEST_F(OmniboxViewViewsTest,
        AccessibleTextOffsetsUpdatesAfterElideBehaviorChange) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(::features::kUiaProvider);
   EnableDeferredLoadingAccessibility();
   CHECK(omnibox_view()->GetViewAccessibility().is_initialized());
 
@@ -1227,25 +1201,24 @@ TEST_P(OmniboxViewViewsClipboardTest, ClipboardCopyOrCutURL) {
   EXPECT_EQ(expected_text, omnibox_view()->GetText());
 
   // Make sure the plain text format is available, but the HTML one isn't.
-  EXPECT_TRUE(clipboard->IsFormatAvailable(
-      ui::ClipboardFormatType::PlainTextType(), clipboard_buffer,
+  EXPECT_TRUE(ui::clipboard_test_util::IsFormatAvailable(
+      clipboard, ui::ClipboardFormatType::PlainTextType(), clipboard_buffer,
       /* data_dst = */ nullptr));
-  EXPECT_FALSE(clipboard->IsFormatAvailable(ui::ClipboardFormatType::HtmlType(),
-                                            clipboard_buffer,
-                                            /* data_dst = */ nullptr));
+  EXPECT_FALSE(ui::clipboard_test_util::IsFormatAvailable(
+      clipboard, ui::ClipboardFormatType::HtmlType(), clipboard_buffer,
+      /* data_dst = */ nullptr));
 
   // Windows clipboard only supports text URLs.
   // Mac clipboard not reporting URL format available for some reason.
-  // crbug.com/751031
+  // crbug.com/41337043
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-  EXPECT_TRUE(clipboard->IsFormatAvailable(ui::ClipboardFormatType::UrlType(),
-                                           clipboard_buffer,
-                                           /* data_dst = */ nullptr));
+  EXPECT_TRUE(ui::clipboard_test_util::IsFormatAvailable(
+      clipboard, ui::ClipboardFormatType::UrlType(), clipboard_buffer,
+      /* data_dst = */ nullptr));
 #endif
 
-  std::string read_from_clipboard;
-  clipboard->ReadAsciiText(clipboard_buffer, /* data_dst = */ nullptr,
-                           &read_from_clipboard);
+  std::string read_from_clipboard = ui::clipboard_test_util::ReadAsciiText(
+      clipboard, clipboard_buffer, /* data_dst = */ nullptr);
   EXPECT_EQ("https://test.com/", read_from_clipboard);
 }
 
@@ -1267,16 +1240,15 @@ TEST_P(OmniboxViewViewsClipboardTest, ClipboardCopyOrCutUserText) {
 
   // Make sure HTML format isn't written. See
   // BookmarkNodeData::WriteToClipboard() for details.
-  EXPECT_TRUE(clipboard->IsFormatAvailable(
-      ui::ClipboardFormatType::PlainTextType(), clipboard_buffer,
+  EXPECT_TRUE(ui::clipboard_test_util::IsFormatAvailable(
+      clipboard, ui::ClipboardFormatType::PlainTextType(), clipboard_buffer,
       /* data_dst = */ nullptr));
-  EXPECT_FALSE(clipboard->IsFormatAvailable(ui::ClipboardFormatType::HtmlType(),
-                                            clipboard_buffer,
-                                            /* data_dst = */ nullptr));
+  EXPECT_FALSE(ui::clipboard_test_util::IsFormatAvailable(
+      clipboard, ui::ClipboardFormatType::HtmlType(), clipboard_buffer,
+      /* data_dst = */ nullptr));
 
-  std::string read_from_clipboard;
-  clipboard->ReadAsciiText(clipboard_buffer, /* data_dst = */ nullptr,
-                           &read_from_clipboard);
+  std::string read_from_clipboard = ui::clipboard_test_util::ReadAsciiText(
+      clipboard, clipboard_buffer, /* data_dst = */ nullptr);
   EXPECT_EQ("user text", read_from_clipboard);
 }
 
@@ -1744,7 +1716,7 @@ TEST_F(OmniboxViewViewsSteadyStateElisionsTest,
   // Create a different Widget that will take focus away from the test widget
   // containing our test Omnibox.
   std::unique_ptr<views::Widget> other_widget =
-      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
   other_widget->Show();
   ExpectFullUrlDisplayed();
 
@@ -1774,4 +1746,60 @@ TEST_F(OmniboxViewViewsSteadyStateElisionsTest, UnelideFromModel) {
   EXPECT_EQ(24U, selection.start());
   EXPECT_EQ(0U, selection.end());
   ExpectFullUrlDisplayed();
+}
+
+TEST_F(OmniboxViewViewsTest, SetUserTextForTab) {
+  auto web_contents =
+      content::WebContentsTester::CreateTestWebContents(profile(), nullptr);
+
+  // 1. Setup: Create an initial state for the tab.
+  // Set some user text and save it to the tab.
+  const std::u16string initial_text = u"initial text";
+  omnibox_view()->SetUserText(initial_text);
+  omnibox_view()->SaveStateToTab(web_contents.get());
+
+  // Verify initial state is saved.
+  auto* state1 = static_cast<OmniboxState*>(
+      web_contents->GetUserData(OmniboxTabHelper::kOmniboxStateKey));
+  ASSERT_TRUE(state1);
+  EXPECT_EQ(initial_text, state1->model_state.user_text);
+  EXPECT_TRUE(state1->model_state.user_input_in_progress);
+
+  // 2. Act: Call the static helper to inject new text into this tab's state.
+  const std::u16string injected_text = u"typed in background";
+  OmniboxViewViews::SetUserTextForTab(web_contents.get(), injected_text);
+
+  // 3. Verify: Check that the stored state was updated correctly.
+  auto* state2 = static_cast<OmniboxState*>(
+      web_contents->GetUserData(OmniboxTabHelper::kOmniboxStateKey));
+  ASSERT_TRUE(state2);
+  EXPECT_EQ(injected_text, state2->model_state.user_text);
+  EXPECT_TRUE(state2->model_state.user_input_in_progress);
+}
+
+TEST_F(OmniboxViewViewsTest, DragAndDropTextWithinOmnibox) {
+  // Setup: Set text to "abcdef" and select "bcd".
+  omnibox_view()->SetText(u"abcdef");
+  omnibox_view()->SetSelectedRange(gfx::Range(1, 4));
+  EXPECT_EQ(omnibox_textfield()->GetSelectedText(), u"bcd");
+
+  // Simulate dragging from the Omnibox itself.
+  GetTextfieldTestApi().SetInitiatingDrag(true);
+
+  // Perform a drag & drop.
+  ui::OSExchangeData data;
+  data.SetString(u"bcd");
+  ui::DropTargetEvent event(data, {}, {}, ui::DragDropTypes::DRAG_MOVE);
+  views::View::DropCallback drop_callback =
+      omnibox_view()->GetDropCallback(event);
+  ASSERT_FALSE(drop_callback.is_null());
+  ui::mojom::DragOperation output_drag_op = ui::mojom::DragOperation::kNone;
+  std::move(drop_callback)
+      .Run(event, output_drag_op,
+           /*drag_image_layer_owner=*/nullptr);
+
+  // The text should be moved to the start instead of replacing all omnibox text
+  // like dragging from outside the omnibox would.
+  EXPECT_EQ(omnibox_view()->GetText(), u"bcdaef");
+  EXPECT_EQ(output_drag_op, ui::mojom::DragOperation::kMove);
 }

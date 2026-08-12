@@ -10,6 +10,7 @@
 #include "content/browser/preloading/preloading_data_impl.h"
 #include "content/browser/preloading/prerender/prerender_host.h"
 #include "content/browser/preloading/prerender/prerender_host_registry.h"
+#include "content/browser/preloading/prerender/prerender_metrics.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/frame.mojom.h"
 #include "content/public/browser/web_contents_delegate.h"
@@ -29,10 +30,8 @@ PrerenderNewTabHandle::PrerenderNewTabHandle(
   // Create a new WebContents for prerendering in a new tab.
   // TODO(crbug.com/40234240): Pass the same creation parameters as
   // WebContentsImpl::CreateNewWindow().
-  web_contents_create_params_.opener_render_process_id =
-      initiator_render_frame_host->GetProcess()->GetDeprecatedID();
-  web_contents_create_params_.opener_render_frame_id =
-      initiator_render_frame_host->GetRoutingID();
+  web_contents_create_params_.opener_id =
+      initiator_render_frame_host->GetGlobalId();
   web_contents_create_params_.opener_suppressed = true;
 
   // Set the visibility of the prerendering WebContents to HIDDEN until
@@ -60,8 +59,9 @@ PrerenderNewTabHandle::PrerenderNewTabHandle(
 }
 
 PrerenderNewTabHandle::~PrerenderNewTabHandle() {
-  if (web_contents_)
+  if (web_contents_) {
     web_contents_->SetDelegate(nullptr);
+  }
 }
 
 PrerenderHostId PrerenderNewTabHandle::StartPrerendering(
@@ -85,8 +85,7 @@ PrerenderHostId PrerenderNewTabHandle::StartPrerendering(
   auto* preloading_attempt =
       static_cast<PreloadingAttemptImpl*>(preloading_data->AddPreloadingAttempt(
           creating_predictor, enacting_predictor, PreloadingType::kPrerender,
-          std::move(same_url_matcher),
-          triggered_primary_page_source_id));
+          std::move(same_url_matcher), triggered_primary_page_source_id));
   preloading_data->AddPreloadingPrediction(
       enacting_predictor, confidence,
       PreloadingData::GetSameURLMatcher(attributes_.prerendering_url),
@@ -103,14 +102,29 @@ PrerenderHostId PrerenderNewTabHandle::StartPrerendering(
   return prerender_host_id_;
 }
 
-void PrerenderNewTabHandle::CancelPrerendering(
+// static
+void PrerenderNewTabHandle::CancelPrerenderingAndDestroy(
+    std::unique_ptr<PrerenderNewTabHandle> handle,
     const PrerenderCancellationReason& reason) {
-  if (!prerender_host_id_) {
-    return;
+  auto& registry = handle->GetPrerenderHostRegistry();
+  PrerenderHostId host_id = handle->prerender_host_id();
+
+  if (reason.final_status() == PrerenderFinalStatus::kSpeculationRuleRemoved) {
+    // Defer destruction of the handle until the pagehide event is fired in a
+    // prerendered page in a new tab. The event is fired only when prerendering
+    // is intentionally cancelled by an initiator page (i.e., Speculation rule
+    // is removed).
+    registry.SchedulePendingDeletionPrerenderNewTabHandle(
+        base::PassKey<PrerenderNewTabHandle>(), std::move(handle));
+  } else {
+    // Defer destruction of the handle to avoid synchronous destruction of the
+    // owned WebContentsImpl. This prevents Use-After-Free if this is called
+    // while iterating over a snapshot of raw pointers to all WebContents (e.g.,
+    // in BrowsingDataRemoverImpl::RemoveImpl).
+    base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(
+        FROM_HERE, std::move(handle));
   }
-  FrameTreeNodeId frame_tree_node_id =
-      PrerenderHost::GetFrameTreeNodeIdForId(prerender_host_id_);
-  GetPrerenderHostRegistry().CancelHost(frame_tree_node_id, reason);
+  registry.CancelHost(host_id, reason);
 }
 
 std::unique_ptr<WebContentsImpl>
@@ -125,19 +139,16 @@ PrerenderNewTabHandle::TakeWebContentsIfAvailable(
     // alive.
     return nullptr;
   }
-  if (host->GetInitialUrl() != create_new_window_params.target_url) {
+  if (!host->IsUrlMatch(create_new_window_params.target_url) &&
+      !host->IsNoVarySearchHintUrlMatch(create_new_window_params.target_url)) {
     // The host is not eligible for the target URL.
     return nullptr;
   }
 
   // Verify the opener frame is the same with the frame that triggered
   // prerendering.
-  if (web_contents_create_params_.opener_render_process_id !=
-      web_contents_create_params.opener_render_process_id) {
-    return nullptr;
-  }
-  if (web_contents_create_params_.opener_render_frame_id !=
-      web_contents_create_params.opener_render_frame_id) {
+  if (web_contents_create_params_.opener_id !=
+      web_contents_create_params.opener_id) {
     return nullptr;
   }
 
@@ -155,6 +166,7 @@ PrerenderNewTabHandle::TakeWebContentsIfAvailable(
   // handled here with an approach similar to SameSizeAsDocumentLoader.
 
   CHECK(web_contents_);
+  web_contents_delegate_->PrerenderWebContentsReleased(web_contents_.get());
   web_contents_->SetDelegate(nullptr);
   return std::move(web_contents_);
 }

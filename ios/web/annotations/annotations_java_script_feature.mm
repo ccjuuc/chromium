@@ -20,25 +20,54 @@
 namespace {
 const char kScriptName[] = "text_main";
 const char kScriptHandlerName[] = "annotations";
+
+web::AnnotationsJavaScriptFeature* g_instance_for_testing = nullptr;
+
+web::JavaScriptFeature::FeatureScript::PlaceholderReplacements
+GetAnnotationsReplacements(bool trusted_event_check_enabled) {
+  return @{
+    @"{{SkipTrustedCheckForTesting}}" : trusted_event_check_enabled ? @"false"
+                                                                    : @"true"
+  };
+}
 }  // namespace
 
 namespace web {
 
+const int kMaxAnnotationsTextLength = 65535;
+const int kMaxAnnotationsMetadataLength = 256;
+
 AnnotationsJavaScriptFeature::AnnotationsJavaScriptFeature()
+    : AnnotationsJavaScriptFeature(true) {}
+
+AnnotationsJavaScriptFeature::AnnotationsJavaScriptFeature(
+    bool trusted_event_check_enabled)
     : JavaScriptFeature(
           ContentWorld::kIsolatedWorld,
           {FeatureScript::CreateWithFilename(
               kScriptName,
               FeatureScript::InjectionTime::kDocumentStart,
               FeatureScript::TargetFrames::kMainFrame,
-              FeatureScript::ReinjectionBehavior::kInjectOncePerWindow)}) {}
+              FeatureScript::ReinjectionBehavior::kInjectOncePerWindow,
+              base::BindRepeating(&GetAnnotationsReplacements,
+                                  trusted_event_check_enabled))}),
+      trusted_event_check_enabled_(trusted_event_check_enabled) {}
 
 AnnotationsJavaScriptFeature::~AnnotationsJavaScriptFeature() = default;
 
 // static
 AnnotationsJavaScriptFeature* AnnotationsJavaScriptFeature::GetInstance() {
+  if (g_instance_for_testing) {
+    return g_instance_for_testing;
+  }
   static base::NoDestructor<AnnotationsJavaScriptFeature> instance;
   return instance.get();
+}
+
+// static
+void AnnotationsJavaScriptFeature::SetInstanceForTesting(
+    AnnotationsJavaScriptFeature* instance) {
+  g_instance_for_testing = instance;
 }
 
 void AnnotationsJavaScriptFeature::ExtractText(WebState* web_state,
@@ -50,7 +79,8 @@ void AnnotationsJavaScriptFeature::ExtractText(WebState* web_state,
     return;
   }
 
-  base::Value::List parameters;
+  base::ListValue parameters;
+  parameters.Append(maximum_text_length);
   CallJavaScriptFunction(frame, "annotations.start", parameters);
 }
 
@@ -63,7 +93,7 @@ void AnnotationsJavaScriptFeature::DecorateAnnotations(WebState* web_state,
     return;
   }
 
-  base::Value::List parameters;
+  base::ListValue parameters;
   parameters.Append(std::move(annotations));
   parameters.Append(seq_id);
   CallJavaScriptFunction(frame, "annotations.decorateAnnotations", parameters);
@@ -88,21 +118,11 @@ void AnnotationsJavaScriptFeature::RemoveDecorationsWithType(
     return;
   }
 
-  base::Value::List parameters;
+  base::ListValue parameters;
   parameters.Append(std::move(type));
 
   CallJavaScriptFunction(frame, "annotations.removeDecorationsWithType",
                          parameters);
-}
-
-void AnnotationsJavaScriptFeature::RemoveHighlight(WebState* web_state) {
-  DCHECK(web_state);
-  WebFrame* frame = GetWebFramesManager(web_state)->GetMainWebFrame();
-  if (!frame) {
-    return;
-  }
-
-  CallJavaScriptFunction(frame, "annotations.removeHighlight", {});
 }
 
 void AnnotationsJavaScriptFeature::ScriptMessageReceived(
@@ -119,12 +139,12 @@ void AnnotationsJavaScriptFeature::ScriptMessageReceived(
     return;
   }
 
-  base::Value* response = script_message.body();
+  base::Value* response = script_message.legacy_body();
   if (!response || !response->is_dict()) {
     return;
   }
 
-  const base::Value::Dict& dict = response->GetDict();
+  const base::DictValue& dict = response->GetDict();
 
   const std::string* command = dict.FindString("command");
   if (!command) {
@@ -139,19 +159,54 @@ void AnnotationsJavaScriptFeature::ScriptMessageReceived(
   }
 
   if (*command == "annotations.extractedText") {
+    for (const auto pair : dict) {
+      const std::string& key = pair.first;
+      if (key != "command" && key != "text" && key != "seqId" &&
+          key != "metadata") {
+        return;
+      }
+    }
     const std::string* text = dict.FindString("text");
     std::optional<double> seq_id = dict.FindDouble("seqId");
-    const base::Value::Dict* metadata = dict.FindDict("metadata");
+    const base::DictValue* metadata = dict.FindDict("metadata");
     if (!text || !seq_id || !metadata) {
+      return;
+    }
+    for (const auto pair : *metadata) {
+      const std::string& key = pair.first;
+      if (key != "htmlLang" && key != "httpContentLanguage" &&
+          key != "wkNoTelephone" && key != "wkNoEmail" &&
+          key != "wkNoAddress" && key != "wkNoDate" && key != "wkNoUnit") {
+        return;
+      }
+    }
+    if (text->size() > kMaxAnnotationsTextLength) {
+      return;
+    }
+    const std::string* html_lang = metadata->FindString("htmlLang");
+    if (html_lang && html_lang->size() > kMaxAnnotationsMetadataLength) {
+      return;
+    }
+    const std::string* http_content_language =
+        metadata->FindString("httpContentLanguage");
+    if (http_content_language &&
+        http_content_language->size() > kMaxAnnotationsMetadataLength) {
       return;
     }
     manager->OnTextExtracted(web_state, *text, static_cast<int>(seq_id.value()),
                              *metadata);
   } else if (*command == "annotations.decoratingComplete") {
+    for (const auto pair : dict) {
+      const std::string& key = pair.first;
+      if (key != "command" && key != "annotations" && key != "successes" &&
+          key != "failures" && key != "cancelled") {
+        return;
+      }
+    }
     std::optional<double> optional_annotations = dict.FindDouble("annotations");
     std::optional<double> optional_successes = dict.FindDouble("successes");
     std::optional<double> optional_failures = dict.FindDouble("failures");
-    const base::Value::List* cancelled = dict.FindList("cancelled");
+    const base::ListValue* cancelled = dict.FindList("cancelled");
     if (!optional_annotations || !optional_successes || !optional_failures ||
         !cancelled) {
       return;
@@ -162,6 +217,16 @@ void AnnotationsJavaScriptFeature::ScriptMessageReceived(
     manager->OnDecorated(web_state, annotations, successes, failures,
                          *cancelled);
   } else if (*command == "annotations.onClick") {
+    if (trusted_event_check_enabled_ && !script_message.is_user_interacting()) {
+      return;
+    }
+    for (const auto pair : dict) {
+      const std::string& key = pair.first;
+      if (key != "command" && key != "data" && key != "rect" && key != "text" &&
+          key != "cancel") {
+        return;
+      }
+    }
     const std::string* data = dict.FindString("data");
     std::optional<CGRect> rect =
         shared_highlighting::ParseRect(dict.FindDict("rect"));

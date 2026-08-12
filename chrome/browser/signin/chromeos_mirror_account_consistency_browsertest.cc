@@ -4,14 +4,15 @@
 
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/signin/account_consistency_mode_manager.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "components/account_id/account_id.h"
 #include "components/google/core/common/google_switches.h"
 #include "components/policy/core/common/policy_pref_names.h"
@@ -44,7 +45,10 @@ void TestMirrorRequestForProfile(net::EmbeddedTestServer* test_server,
   replace_host.SetHostStr(kGaiaDomain);
   gaia_url = gaia_url.ReplaceComponents(replace_host);
 
-  Browser* browser = Browser::Create(Browser::CreateParams(profile, true));
+  Browser* browser =
+      CreateBrowserWindow(
+          BrowserWindowCreateParams(profile, /*from_user_gesture=*/true))
+          ->GetBrowserForMigrationOnly();
   ui_test_utils::NavigateToURLWithDisposition(
       browser, gaia_url, WindowOpenDisposition::SINGLETON_TAB,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
@@ -109,7 +113,8 @@ IN_PROC_BROWSER_TEST_F(ChromeOsMirrorAccountConsistencyTest,
   user_manager::User* user = user_manager::UserManager::Get()->GetActiveUser();
   ASSERT_EQ(user, user_manager::UserManager::Get()->GetPrimaryUser());
   ASSERT_EQ(user, user_manager::UserManager::Get()->FindUser(account_id_));
-  Profile* profile = ash::ProfileHelper::Get()->GetProfileByUser(user);
+  Profile* profile = Profile::FromBrowserContext(
+      ash::BrowserContextHelper::Get()->GetBrowserContextByUser(user));
 
   // Supervised flag uses `FindExtendedAccountInfoForAccountWithRefreshToken`,
   // so wait for tokens to be loaded.
@@ -121,9 +126,9 @@ IN_PROC_BROWSER_TEST_F(ChromeOsMirrorAccountConsistencyTest,
   supervised_user::EnableParentalControls(*profile->GetPrefs());
   ASSERT_EQ(1, signin::PROFILE_MODE_INCOGNITO_DISABLED);
 
-  // TODO(http://crbug.com/1134144): This test seems to test supervised profiles
-  // instead of child accounts (but the EnableParentalControls call closely
-  // simulates child account). With the current implementation,
+  // TODO(http://crbug.com/40151308): This test seems to test supervised
+  // profiles instead of child accounts (but the EnableParentalControls call
+  // closely simulates child account). With the current implementation,
   // X-Chrome-Connected header gets a supervised=true argument only for child
   // profiles. Verify if these tests needs to be updated to use child accounts
   // or whether supervised profiles need to be supported as well.
@@ -142,7 +147,8 @@ IN_PROC_BROWSER_TEST_F(ChromeOsMirrorAccountConsistencyTest,
   user_manager::User* user = user_manager::UserManager::Get()->GetActiveUser();
   ASSERT_EQ(user, user_manager::UserManager::Get()->GetPrimaryUser());
   ASSERT_EQ(user, user_manager::UserManager::Get()->FindUser(account_id_));
-  Profile* profile = ash::ProfileHelper::Get()->GetProfileByUser(user);
+  Profile* profile = Profile::FromBrowserContext(
+      ash::BrowserContextHelper::Get()->GetBrowserContextByUser(user));
 
   // Supervised flag uses `FindExtendedAccountInfoForAccountWithRefreshToken`,
   // so wait for tokens to be loaded.

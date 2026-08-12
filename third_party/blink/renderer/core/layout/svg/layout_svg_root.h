@@ -29,6 +29,7 @@
 #include "third_party/blink/renderer/core/layout/layout_replaced.h"
 #include "third_party/blink/renderer/core/layout/svg/svg_content_container.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "ui/gfx/geometry/vector2d_f.h"
 
 namespace blink {
 
@@ -97,6 +98,17 @@ class CORE_EXPORT LayoutSVGRoot final : public LayoutReplaced {
     return container_size_;
   }
 
+  // The scale factors applied by the container (e.g. when
+  // preserveAspectRatio="none" is used in an SVG image container).
+  // This is set by SVGImage before layout so that
+  // vector-effect:non-scaling-stroke can account for the full CTM.
+  void SetContainerScale(const gfx::Vector2dF& container_scale);
+
+  const gfx::Vector2dF& GetContainerScale() const {
+    NOT_DESTROYED();
+    return container_scale_;
+  }
+
   // localToBorderBoxTransform maps local SVG viewport coordinates to local CSS
   // box coordinates.
   const AffineTransform& LocalToBorderBoxTransform() const {
@@ -148,12 +160,15 @@ class CORE_EXPORT LayoutSVGRoot final : public LayoutReplaced {
     return false;
   }
 
+  PhysicalRect VisualOverflowRectIncludingFilters() const override;
+
   void PaintReplaced(const PaintInfo&,
                      const PhysicalOffset& paint_offset) const override;
 
   void WillBeDestroyed() override;
   void StyleDidChange(StyleDifference,
                       const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
                       const StyleChangeContext&) override;
   bool IsChildAllowed(LayoutObject*, const ComputedStyle&) const override;
   void AddChild(LayoutObject* child,
@@ -181,7 +196,7 @@ class CORE_EXPORT LayoutSVGRoot final : public LayoutReplaced {
   bool HitTestChildren(HitTestResult&,
                        const HitTestLocation& location_in_container,
                        const PhysicalOffset& accumulated_offset,
-                       HitTestPhase) override;
+                       HitTestPhase) const override;
   bool IsInSelfHitTestingPhase(HitTestPhase) const final;
 
   void MapLocalToAncestor(const LayoutBoxModelObject* ancestor,
@@ -198,7 +213,6 @@ class CORE_EXPORT LayoutSVGRoot final : public LayoutReplaced {
   bool IntrinsicSizeIsFontMetricsDependent() const;
   bool StyleChangeAffectsIntrinsicSize(const ComputedStyle& old_style) const;
 
-  bool UpdateCachedBoundaries();
   SVGTransformChange BuildLocalToBorderBoxTransform(const PhysicalRect&);
 
   PositionWithAffinity PositionForPoint(const PhysicalOffset&) const final;
@@ -208,6 +222,9 @@ class CORE_EXPORT LayoutSVGRoot final : public LayoutReplaced {
   SVGContentContainer content_;
   PhysicalSize container_size_;
   AffineTransform local_to_border_box_transform_;
+  // The scale factors applied by the container (e.g. when
+  // preserveAspectRatio="none" is used in an SVG image container).
+  gfx::Vector2dF container_scale_{1.f, 1.f};
   HeapHashSet<Member<LayoutSVGText>> text_set_;
 
   // The new content size for SVG roots. This is set during layout, and cleared
@@ -215,9 +232,15 @@ class CORE_EXPORT LayoutSVGRoot final : public LayoutReplaced {
   // laid out.
   const PhysicalSize* new_content_size_ = nullptr;
 
-  bool needs_transform_update_ : 1;
-  mutable bool has_non_isolated_blending_descendants_ : 1;
-  mutable bool has_non_isolated_blending_descendants_dirty_ : 1;
+  // True if the local transform of this object is not up-to-date.
+  bool needs_transform_update_ : 1 = true;
+  // True if the `container_scale_` field has changed.
+  bool container_scale_changed_ : 1 = false;
+  // True if any descendants that are not isolated uses a non-default
+  // blend-mode (not source-over/"normal").
+  mutable bool has_non_isolated_blending_descendants_ : 1 = false;
+  // True if the above flag is not up-to-date.
+  mutable bool has_non_isolated_blending_descendants_dirty_ : 1 = false;
 };
 
 template <>

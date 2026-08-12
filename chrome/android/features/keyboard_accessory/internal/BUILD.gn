@@ -21,7 +21,9 @@ android_library("internal_java") {
     "//components/favicon/android:java",
     "//third_party/jni_zero:jni_zero_java",
 
-    # TODO(crbug.com/41452318): Cyclic dependency. Depend on public only when ready.
+    # TODO(crbug.com/41452318): Cyclic dependency. Depend on public only when
+    # ready.
+    "//base:service_loader_java",
     "//chrome/android:chrome_java",
     "//chrome/browser/autofill/android:java",
     "//chrome/browser/back_press/android:java",
@@ -35,6 +37,7 @@ android_library("internal_java") {
     "//chrome/browser/profiles/android:java",
     "//chrome/browser/tab:java",
     "//chrome/browser/tabmodel:java",
+    "//chrome/browser/touch_to_fill/common/android:java",
     "//chrome/browser/ui/android/edge_to_edge:factory_java",
     "//chrome/browser/ui/android/edge_to_edge:java",
     "//chrome/browser/ui/android/favicon:java",
@@ -69,6 +72,7 @@ android_library("internal_java") {
   srcjar_deps = [ ":jni" ]
   sources = [
     "java/src/org/chromium/chrome/browser/keyboard_accessory/AutofillKeyboardAccessoryViewBridge.java",
+    "java/src/org/chromium/chrome/browser/keyboard_accessory/KeyboardAccessoryUtils.java",
     "java/src/org/chromium/chrome/browser/keyboard_accessory/ManualFillingComponentBridge.java",
     "java/src/org/chromium/chrome/browser/keyboard_accessory/ManualFillingCoordinator.java",
     "java/src/org/chromium/chrome/browser/keyboard_accessory/ManualFillingMediator.java",
@@ -93,7 +97,6 @@ android_library("internal_java") {
     "java/src/org/chromium/chrome/browser/keyboard_accessory/sheet_tabs/PasswordAccessorySheetCoordinator.java",
     "java/src/org/chromium/chrome/browser/keyboard_accessory/sheet_tabs/PasswordAccessorySheetMediator.java",
     "java/src/org/chromium/chrome/browser/keyboard_accessory/sheet_tabs/PasswordAccessorySheetViewBinder.java",
-    "java/src/org/chromium/chrome/browser/keyboard_accessory/sheet_tabs/PlusAddressInfoView.java",
     "java/src/org/chromium/chrome/browser/keyboard_accessory/sheet_tabs/PromoCodeAccessoryInfoView.java",
   ]
 

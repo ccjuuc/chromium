@@ -13,7 +13,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
-#include "components/infobars/core/features.h"
 #include "components/infobars/core/infobar_delegate.h"
 #include "components/infobars/core/infobar_manager.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -94,6 +93,8 @@ class InfoBarContainer : public InfoBarManager::Observer {
                                               InfoBar* new_infobar) {}
   virtual void PlatformSpecificRemoveInfoBar(InfoBar* infobar) = 0;
   virtual void PlatformSpecificInfoBarStateChanged(bool is_animating) {}
+  virtual void PlatformSpecificWillRemoveInfoBar(infobars::InfoBar* infobar) {}
+  virtual void PlatformSpecificInfoBarShown(infobars::InfoBar* infobar) {}
 
   // Adds |infobar| to this container before the existing infobar at position
   // |position| and calls Show() on it.  |animate| is passed along to

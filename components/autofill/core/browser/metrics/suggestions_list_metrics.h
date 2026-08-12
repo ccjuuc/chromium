@@ -5,11 +5,11 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_METRICS_SUGGESTIONS_LIST_METRICS_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_METRICS_SUGGESTIONS_LIST_METRICS_H_
 
-#include <cstddef>
+#include <stddef.h>
 
-#include "base/containers/flat_map.h"
-#include "components/autofill/core/browser/autofill_type.h"
-#include "components/autofill/core/browser/suggestions/suggestion.h"
+#include "base/containers/span.h"
+#include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/suggestions/suggestion_type.h"
 
 namespace autofill {
 class AutofillField;
@@ -23,9 +23,11 @@ void LogSuggestionsCount(size_t num_suggestions,
                          FillingProduct filling_product);
 
 // Log the index of the selected Autofill suggestion in the popup.
-void LogSuggestionAcceptedIndex(int index,
-                                FillingProduct filling_product,
-                                bool off_the_record);
+void LogSuggestionAcceptedIndex(
+    int index,
+    FillingProduct filling_product,
+    bool off_the_record,
+    base::span<const SuggestionType> shown_suggestion_types);
 
 // Logs metrics related to an autofill on typing suggestion being accepted.
 void LogAddressAutofillOnTypingSuggestionAccepted(

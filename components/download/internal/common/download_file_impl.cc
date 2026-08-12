@@ -191,8 +191,7 @@ DownloadFileImpl::DownloadFileImpl(
       download_id_(download_id),
       main_task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()),
       observer_(observer) {
-  TRACE_EVENT_INSTANT0("download", "DownloadFileCreated",
-                       TRACE_EVENT_SCOPE_THREAD);
+  TRACE_EVENT_INSTANT("download", "DownloadFileCreated");
   TRACE_EVENT_BEGIN("download", "DownloadFileActive",
                     perfetto::Track(download_id));
 
@@ -325,11 +324,10 @@ DownloadInterruptReason DownloadFileImpl::ValidateAndWriteDataToFile(
 
 #if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
   if (obfuscator_) {
-    bool is_last_chunk =
-        save_info_->total_bytes > 0 &&
-        static_cast<int64_t>(offset + to_validate.size() + to_write.size()) ==
-            save_info_->total_bytes;
-    auto obfuscated_data = obfuscator_->ObfuscateChunk(to_write, is_last_chunk);
+    // All data chunks are obfuscated with `is_last_chunk = false`. An empty
+    // chunk with `is_last_chunk = true` is appended in `OnDownloadCompleted()`.
+    auto obfuscated_data =
+        obfuscator_->ObfuscateChunk(to_write, /*is_last_chunk=*/false);
 
     // TODO(b/367259664): Add better error handling for file obfuscation.
     if (!obfuscated_data.has_value()) {
@@ -709,9 +707,8 @@ void DownloadFileImpl::StreamActive(SourceStream* source_stream,
   else
     NotifyObserver(source_stream, reason, state, should_terminate);
 
-  TRACE_EVENT_INSTANT2("download", "DownloadStreamDrained",
-                       TRACE_EVENT_SCOPE_THREAD, "stream_size",
-                       total_incoming_data_size, "num_buffers", num_buffers);
+  TRACE_EVENT_INSTANT("download", "DownloadStreamDrained", "stream_size",
+                      total_incoming_data_size, "num_buffers", num_buffers);
 }
 
 void DownloadFileImpl::OnStreamCompleted(SourceStream* source_stream) {
@@ -768,10 +765,11 @@ void DownloadFileImpl::OnDownloadCompleted() {
   weak_factory_.InvalidateWeakPtrs();
 
 #if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
-  // If total bytes not provided, we append an empty obfuscated chunk to
-  // protect against truncation.
-  if (obfuscator_ && save_info_->total_bytes == 0) {
-    auto obfuscated_empty_data = obfuscator_->ObfuscateChunk({}, true);
+  // Append an empty obfuscated chunk to securely mark the end of the file
+  // and protect against truncation.
+  if (obfuscator_) {
+    auto obfuscated_empty_data =
+        obfuscator_->ObfuscateChunk({}, /*is_last_chunk=*/true);
     if (!obfuscated_empty_data.has_value()) {
       SendErrorUpdateIfFinished(DOWNLOAD_INTERRUPT_REASON_FILE_FAILED);
       return;
@@ -787,9 +785,11 @@ void DownloadFileImpl::OnDownloadCompleted() {
   }
 
   std::unique_ptr<crypto::SecureHash> hash_state =
-      obfuscator_ ? obfuscator_->GetUnobfuscatedHash() : file_.Finish();
+      obfuscator_ ? obfuscator_->GetUnobfuscatedHash()
+                  : file_.Finish(potential_file_length_);
 #else
-  std::unique_ptr<crypto::SecureHash> hash_state = file_.Finish();
+  std::unique_ptr<crypto::SecureHash> hash_state =
+      file_.Finish(potential_file_length_);
 #endif
 
   update_timer_.reset();
@@ -939,7 +939,8 @@ void DownloadFileImpl::SendErrorUpdateIfFinished(
   weak_factory_.InvalidateWeakPtrs();
 
   // TODO(b/367257039): Maintain obfuscated file hash for interrupted downloads.
-  std::unique_ptr<crypto::SecureHash> hash_state = file_.Finish();
+  std::unique_ptr<crypto::SecureHash> hash_state =
+      file_.Finish(potential_file_length_);
   main_task_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(&DownloadDestinationObserver::DestinationError, observer_,

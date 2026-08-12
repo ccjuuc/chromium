@@ -15,7 +15,7 @@
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/views/apps/chrome_native_app_window_views_aura.h"
-#include "chrome/browser/ui/views/exclusive_access_bubble_views_context.h"
+#include "chrome/browser/ui/views/exclusive_access/exclusive_access_bubble_views_context.h"
 #include "components/services/app_service/public/cpp/icon_types.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
@@ -74,7 +74,9 @@ class ChromeNativeAppWindowViewsAuraAsh
       const extensions::AppWindow::CreateParams& create_params,
       views::Widget::InitParams* init_params,
       views::Widget* widget) override;
+  std::unique_ptr<views::FrameView> CreateStandardDesktopAppFrame() override;
   std::unique_ptr<views::FrameView> CreateNonStandardAppFrame() override;
+  bool ShouldCreateNonStandardAppFrame() const override;
   bool ShouldRemoveStandardFrame() override;
   void EnsureAppIconCreated() override;
   gfx::RoundedCornersF GetWindowRadii() const override;
@@ -91,8 +93,6 @@ class ChromeNativeAppWindowViewsAuraAsh
       ui::mojom::MenuSourceType source_type) override;
 
   // WidgetDelegate:
-  std::unique_ptr<views::FrameView> CreateFrameView(
-      views::Widget* widget) override;
   views::ClientView* CreateClientView(views::Widget* widget) override;
   ui::ImageModel GetWindowIcon() override;
 

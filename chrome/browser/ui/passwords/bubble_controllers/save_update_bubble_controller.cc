@@ -6,12 +6,14 @@
 
 #include <algorithm>
 
-#include "base/containers/contains.h"
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/strings/utf_ostream_operators.h"
 #include "base/time/default_clock.h"
 #include "chrome/browser/password_manager/factories/password_counter_factory.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/passwords/passwords_model_delegate.h"
@@ -28,7 +30,9 @@
 #include "components/password_manager/core/browser/password_sync_util.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/prefs/pref_service.h"
+#include "components/url_formatter/elide_url.h"
 #include "content/public/browser/web_contents.h"
+#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace {
@@ -79,9 +83,8 @@ std::vector<password_manager::PasswordForm> DeepCopyForms(
     const std::vector<std::unique_ptr<password_manager::PasswordForm>>& forms) {
   std::vector<password_manager::PasswordForm> result;
   result.reserve(forms.size());
-  std::ranges::transform(
-      forms, std::back_inserter(result),
-      &std::unique_ptr<password_manager::PasswordForm>::operator*);
+  std::ranges::transform(forms, std::back_inserter(result),
+                         [](const auto& form) -> const auto& { return *form; });
   return result;
 }
 
@@ -176,9 +179,9 @@ bool SaveUpdateBubbleController::IsCurrentStateUpdate() const {
   if (original_username_ == GetPendingPassword().username_value) {
     return GetState() == password_manager::ui::PENDING_PASSWORD_UPDATE_STATE;
   }
-  return base::Contains(existing_credentials_,
-                        GetPendingPassword().username_value,
-                        &password_manager::PasswordForm::username_value);
+  return std::ranges::contains(existing_credentials_,
+                               GetPendingPassword().username_value,
+                               &password_manager::PasswordForm::username_value);
 }
 
 bool SaveUpdateBubbleController::
@@ -242,7 +245,14 @@ void SaveUpdateBubbleController::ShouldRevealPasswords(
 }
 
 bool SaveUpdateBubbleController::IsUsingAccountStore() {
-  return delegate_->GetPasswordFeatureManager()->IsAccountStorageEnabled();
+  // TODO(crbug.com/470332074): Verify whether this should check for
+  // "enabled" instead of "active".
+  return delegate_->GetPasswordFeatureManager()->IsAccountStorageActive();
+}
+
+bool SaveUpdateBubbleController::IsMaxDismissalCountReached() const {
+  const int kMaxDismissalCount = 3;
+  return interaction_stats_.dismissal_count >= kMaxDismissalCount;
 }
 
 std::u16string SaveUpdateBubbleController::GetTitle() const {
@@ -253,6 +263,17 @@ std::u16string SaveUpdateBubbleController::GetTitle() const {
                                       : PasswordTitleType::SAVE_PASSWORD);
   return GetSavePasswordDialogTitleText(GetWebContents()->GetVisibleURL(),
                                         GetOrigin(), type);
+}
+
+std::optional<std::u16string> SaveUpdateBubbleController::GetDomainForSubhead()
+    const {
+  if (!net::registry_controlled_domains::SameDomainOrHost(
+          GetWebContents()->GetVisibleURL(), GetOrigin(),
+          net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES)) {
+    return url_formatter::FormatOriginForSecurityDisplay(
+        GetOrigin(), url_formatter::SchemeDisplay::OMIT_HTTP_AND_HTTPS);
+  }
+  return std::nullopt;
 }
 
 void SaveUpdateBubbleController::ReportInteractions() {
@@ -322,4 +343,15 @@ void SaveUpdateBubbleController::ReportInteractions() {
   if (metrics_recorder_) {
     metrics_recorder_->RecordUIDismissalReason(GetDismissalReason());
   }
+}
+
+bool SaveUpdateBubbleController::IsSavingBlockedByTrustedVaultError() const {
+  return delegate_->IsSavingBlockedByTrustedVaultError();
+}
+
+void SaveUpdateBubbleController::OnTrustedVaultUnlockClicked() {
+  CHECK(GetState() == password_manager::ui::PENDING_PASSWORD_STATE ||
+        GetState() == password_manager::ui::PENDING_PASSWORD_UPDATE_STATE);
+  delegate_->SavePasswordAfterTrustedVaultErrorResolution();
+  delegate_->StartTrustedVaultErrorResolutionFlow();
 }

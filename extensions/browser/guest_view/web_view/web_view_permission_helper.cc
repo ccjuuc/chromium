@@ -23,7 +23,6 @@
 #include "extensions/browser/guest_view/web_view/web_view_permission_helper_delegate.h"
 #include "extensions/browser/guest_view/web_view/web_view_permission_types.h"
 #include "extensions/common/extension_features.h"
-#include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 
 using base::UserMetricsAction;
@@ -210,7 +209,7 @@ WebViewPermissionHelper* WebViewPermissionHelper::FromRenderFrameHostId(
 void WebViewPermissionHelper::RequestMediaAccessPermission(
     const content::MediaStreamRequest& request,
     content::MediaResponseCallback callback) {
-  base::Value::Dict request_info;
+  base::DictValue request_info;
   request_info.Set(guest_view::kUrl, request.security_origin.spec());
   RequestPermission(
       WEB_VIEW_PERMISSION_TYPE_MEDIA, std::move(request_info),
@@ -266,12 +265,19 @@ void WebViewPermissionHelper::OnMediaPermissionResponse(
                             std::unique_ptr<content::MediaStreamUI>());
     return;
   }
-  if (!web_view_guest()->attached() ||
-      !web_view_guest()->embedder_web_contents()->GetDelegate()) {
-    std::move(callback).Run(
-        blink::mojom::StreamDevicesSet(),
-        blink::mojom::MediaStreamRequestResult::FAILED_DUE_TO_SHUTDOWN,
-        std::unique_ptr<content::MediaStreamUI>());
+  if (!web_view_guest()->attached()) {
+    std::move(callback).Run(blink::mojom::StreamDevicesSet(),
+                            blink::mojom::MediaStreamRequestResult::
+                                FAILED_DUE_TO_SHUTDOWN_WEB_VIEW_NOT_ATTACHED,
+                            std::unique_ptr<content::MediaStreamUI>());
+    return;
+  }
+
+  if (!web_view_guest()->embedder_web_contents()->GetDelegate()) {
+    std::move(callback).Run(blink::mojom::StreamDevicesSet(),
+                            blink::mojom::MediaStreamRequestResult::
+                                FAILED_DUE_TO_SHUTDOWN_NO_WEB_VIEW_DELEGATE,
+                            std::unique_ptr<content::MediaStreamUI>());
     return;
   }
 
@@ -319,6 +325,15 @@ void WebViewPermissionHelper::RequestPointerLockPermission(
     base::OnceCallback<void(bool)> callback) {
   web_view_permission_helper_delegate_->RequestPointerLockPermission(
       user_gesture, last_unlocked_by_target, std::move(callback));
+}
+
+void WebViewPermissionHelper::RequestMediaPermission(
+    ContentSettingsType type,
+    const GURL& requesting_frame_origin,
+    bool user_gesture,
+    base::OnceCallback<void(bool)> callback) {
+  web_view_permission_helper_delegate_->RequestMediaPermission(
+      type, requesting_frame_origin, user_gesture, std::move(callback));
 }
 
 void WebViewPermissionHelper::RequestGeolocationPermission(
@@ -380,7 +395,7 @@ WebViewPermissionHelper::OverridePermissionResult(ContentSettingsType type) {
 
 void WebViewPermissionHelper::RequestPermission(
     WebViewPermissionType permission_type,
-    base::Value::Dict request_info,
+    base::DictValue request_info,
     PermissionResponseCallback callback,
     bool allowed_by_default) {
   // If there are too many pending permission requests then reject this request.
@@ -399,7 +414,7 @@ void WebViewPermissionHelper::RequestPermission(
   int request_id = next_permission_request_id_++;
   pending_permission_requests_[request_id] = PermissionResponseInfo(
       std::move(callback), permission_type, allowed_by_default);
-  base::Value::Dict args;
+  base::DictValue args;
   args.Set(webview::kRequestInfo, std::move(request_info));
   args.Set(webview::kRequestId, request_id);
   switch (permission_type) {

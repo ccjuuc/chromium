@@ -4,13 +4,19 @@
 
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/inactive_tabs/inactive_tabs_view_controller.h"
 
+#import "ios/chrome/browser/app_bar/ui/app_bar_constants.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/scene_layout_state.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/shared/ui/util/util_swift.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/inactive_tabs/inactive_tabs_grid_view_controller.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_grid_constants.h"
+#import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/toolbars/tab_grid_toolbar_background_view.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util_mac.h"
 
-@interface InactiveTabsViewController () <UINavigationBarDelegate>
+@interface InactiveTabsViewController () <SceneLayoutStateObserver,
+                                          UINavigationBarDelegate>
 
 // The embedded navigation bar.
 @property(nonatomic, readonly) UINavigationBar* navigationBar;
@@ -23,14 +29,37 @@
 
 @end
 
-@implementation InactiveTabsViewController
+@implementation InactiveTabsViewController {
+  // The bottom constraint for the bottom bar.
+  NSLayoutConstraint* _bottomBarBottomConstraint;
+
+  // The gradient background view.
+  TabGridToolbarBackgroundView* _gradientBackgroundView;
+}
+
+- (void)setLayoutState:(SceneLayoutState*)layoutState {
+  if (_layoutState == layoutState) {
+    return;
+  }
+  [_layoutState removeObserver:self];
+  _layoutState = layoutState;
+  [_layoutState addObserver:self];
+  [self updateBottomBarConstraints];
+}
+
+#pragma mark - SceneLayoutStateObserver
+
+- (void)layoutState:(SceneLayoutState*)layoutState
+    didChangeAppBarPosition:(AppBarPosition)appBarPosition {
+  [self updateBottomBarConstraints];
+}
 
 - (instancetype)initWithNibName:(NSString*)nibNameOrNil
                          bundle:(NSBundle*)nibBundleOrNil {
   self = [super initWithNibName:nibNameOrNil bundle:nibBundleOrNil];
   if (self) {
     _gridViewController = [[InactiveGridViewController alloc] init];
-    _gridViewController.theme = GridThemeLight;
+    _gridViewController.theme = GridTheme::kDynamic;
   }
   return self;
 }
@@ -81,25 +110,56 @@
     [_bottomBar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
     [_bottomBar.trailingAnchor
         constraintEqualToAnchor:self.view.trailingAnchor],
-    [_bottomBar.bottomAnchor
-        constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor],
   ]];
+  _bottomBarBottomConstraint = [_bottomBar.bottomAnchor
+      constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor];
+  _bottomBarBottomConstraint.active = YES;
+
+  if (IsChromeNextIaEnabled()) {
+    _gradientBackgroundView = [[TabGridToolbarBackgroundView alloc]
+        initWithPosition:TabGridToolbarBackgroundPosition::kBottom];
+    _gradientBackgroundView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view insertSubview:_gradientBackgroundView belowSubview:_bottomBar];
+
+    [NSLayoutConstraint activateConstraints:@[
+      [_gradientBackgroundView.leadingAnchor
+          constraintEqualToAnchor:self.view.leadingAnchor],
+      [_gradientBackgroundView.trailingAnchor
+          constraintEqualToAnchor:self.view.trailingAnchor],
+      [_gradientBackgroundView.bottomAnchor
+          constraintEqualToAnchor:self.view.bottomAnchor],
+      [_gradientBackgroundView.topAnchor
+          constraintEqualToAnchor:_bottomBar.bottomAnchor],
+    ]];
+
+    _bottomBarBottomConstraint = [_bottomBar.bottomAnchor
+        constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor];
+    _bottomBarBottomConstraint.active = YES;
+  }
 
   // Let the bottom bar lay itself out before setting the items, as otherwise it
   // spits out AutoLayout constraints conflicts.
   [_bottomBar layoutIfNeeded];
   NSString* buttonTitle =
       l10n_util::GetNSString(IDS_IOS_INACTIVE_TABS_CLOSE_ALL_BUTTON);
-  __weak __typeof(self) weakSelf = self;
-  UIAction* closeAllInactiveAction =
-      [UIAction actionWithTitle:buttonTitle
-                          image:nil
-                     identifier:nil
-                        handler:^(UIAction* action) {
-                          [weakSelf didTapCloseAllInactive];
-                        }];
+  UIButton* closeAllButton;
+  if (@available(iOS 26, *)) {
+    UIButtonConfiguration* buttonConfiguration =
+        [UIButtonConfiguration plainButtonConfiguration];
+    buttonConfiguration.baseForegroundColor =
+        [UIColor colorNamed:kTextPrimaryColor];
+    buttonConfiguration.title = buttonTitle;
+    closeAllButton = [UIButton buttonWithConfiguration:buttonConfiguration
+                                         primaryAction:nil];
+  } else {
+    closeAllButton = [UIButton systemButtonWithPrimaryAction:nil];
+    [closeAllButton setTitle:buttonTitle forState:UIControlStateNormal];
+  }
+  [closeAllButton addTarget:self
+                     action:@selector(didTapCloseAllInactive:)
+           forControlEvents:UIControlEventTouchUpInside];
   _closeAllInactiveButton =
-      [[UIBarButtonItem alloc] initWithPrimaryAction:closeAllInactiveAction];
+      [[UIBarButtonItem alloc] initWithCustomView:closeAllButton];
   _closeAllInactiveButton.accessibilityIdentifier =
       kInactiveTabGridCloseAllButtonIdentifier;
   UIBarButtonItem* flexibleSpace = [[UIBarButtonItem alloc]
@@ -120,6 +180,9 @@
 
   _gridViewController.contentInsets =
       UIEdgeInsetsMake(topInset, leftInset, bottomInset, rightInset);
+  if (IsChromeNextIaEnabled()) {
+    [self updateBottomBarConstraints];
+  }
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -153,9 +216,17 @@
 #pragma mark - Private
 
 // Called when the user tapped the Close All Inactive button.
-- (void)didTapCloseAllInactive {
+- (void)didTapCloseAllInactive:(UIButton*)sender {
   [self.delegate inactiveTabsViewController:self
-        didTapCloseAllInactiveBarButtonItem:self.closeAllInactiveButton];
+       didTapCloseAllInactiveFromSourceView:sender];
+}
+
+// Updates the bottom bar constraints based on the App Bar position.
+- (void)updateBottomBarConstraints {
+  _bottomBarBottomConstraint.constant =
+      self.layoutState.appBarPosition == AppBarPosition::kBottom
+          ? -AppBarHeightPortrait()
+          : 0;
 }
 
 @end

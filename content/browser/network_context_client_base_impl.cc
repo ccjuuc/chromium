@@ -11,12 +11,15 @@
 #include "base/task/thread_pool.h"
 #include "build/build_config.h"
 #include "components/file_access/scoped_file_access.h"
-#include "content/browser/child_process_security_policy_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/network_context_client_base.h"
+#include "content/public/common/child_process_id.h"
+#include "content/public/common/child_process_id_util.h"
 #include "content/public/common/content_client.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/net_errors.h"
+#include "services/network/public/cpp/features.h"
 #include "services/network/public/mojom/trust_tokens.mojom.h"
 
 namespace content {
@@ -24,7 +27,7 @@ namespace content {
 namespace {
 
 void HandleFileUploadRequest(
-    int32_t process_id,
+    network::OriginatingProcessId process_id,
     bool async,
     const std::vector<base::FilePath>& file_paths,
     network::mojom::NetworkContextClient::OnFileUploadRequestedCallback
@@ -34,10 +37,20 @@ void HandleFileUploadRequest(
   std::vector<base::File> files;
   uint32_t file_flags = base::File::FLAG_OPEN | base::File::FLAG_READ |
                         (async ? base::File::FLAG_ASYNC : 0);
-  ChildProcessSecurityPolicy* cpsp = ChildProcessSecurityPolicy::GetInstance();
+  ChildProcessSecurityPolicyImpl* cpsp =
+      ChildProcessSecurityPolicyImpl::GetInstance();
   for (const auto& file_path : file_paths) {
-    if (process_id != network::mojom::kBrowserProcessId &&
-        !cpsp->CanReadFile(process_id, file_path)) {
+    bool access_denied = false;
+    if (base::FeatureList::IsEnabled(
+            network::features::kBrowserInitiatedFileUploadValidation) &&
+        process_id.is_browser()) {
+      access_denied = !cpsp->CanReadFileForBrowserUpload(file_path);
+    } else if (!process_id.is_browser()) {
+      access_denied = !cpsp->CanReadFile(
+          ToChildProcessId(process_id.renderer_process_id()), file_path);
+    }
+
+    if (access_denied) {
       task_runner->PostTask(
           FROM_HERE, base::BindOnce(std::move(callback), net::ERR_ACCESS_DENIED,
                                     std::vector<base::File>()));
@@ -60,7 +73,7 @@ void HandleFileUploadRequest(
 }  // namespace
 
 void OnScopedFilesAccessAcquired(
-    int32_t process_id,
+    network::OriginatingProcessId process_id,
     bool async,
     const std::vector<base::FilePath>& file_paths,
     network::mojom::NetworkContextClient::OnFileUploadRequestedCallback
@@ -79,7 +92,7 @@ void OnScopedFilesAccessAcquired(
 }
 
 void NetworkContextOnFileUploadRequested(
-    int32_t process_id,
+    network::OriginatingProcessId process_id,
     bool async,
     const std::vector<base::FilePath>& file_paths,
     const GURL& destination_url,
@@ -95,7 +108,7 @@ NetworkContextClientBase::NetworkContextClientBase() = default;
 NetworkContextClientBase::~NetworkContextClientBase() = default;
 
 void NetworkContextClientBase::OnFileUploadRequested(
-    int32_t process_id,
+    const network::OriginatingProcessId& process_id,
     bool async,
     const std::vector<base::FilePath>& file_paths,
     const GURL& destination_url,

@@ -15,6 +15,7 @@
 
 #include "base/functional/callback.h"
 #include "base/types/optional_ref.h"
+#include "base/types/pass_key.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
 #include "components/download/public/common/download_save_info.h"
 #include "components/download/public/common/download_source.h"
@@ -26,6 +27,17 @@
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "url/gurl.h"
 #include "url/origin.h"
+
+namespace content {
+// `RenderFrameHostImpl` is a `//content`-internal type, but it's okay, because:
+// * This forward-declaration only leaks the name of the type
+// * This is needed for `PassKey`-based visibility delegation/restriction below
+class RenderFrameHostImpl;
+}  // namespace content
+
+namespace network {
+class PendingSharedURLLoaderFactory;
+}  // namespace network
 
 namespace download {
 
@@ -79,8 +91,12 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
       const GURL& url,
       const net::NetworkTrafficAnnotationTag& traffic_annotation);
 
+  // `base::PassKey` to shepherd potential callers to instead go through
+  // `content::RenderFrameHost::CreateDownloadUrlParameters`.
   DownloadUrlParameters(
+      base::PassKey<content::RenderFrameHostImpl>,
       const GURL& url,
+      std::optional<url::Origin> initiator,
       int render_process_host_id,
       int render_frame_host_routing_id,
       const net::NetworkTrafficAnnotationTag& traffic_annotation);
@@ -111,9 +127,13 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
 
   // The origin of the context which initiated the request. See
   // net::URLRequest::initiator().
-  void set_initiator(const std::optional<url::Origin>& initiator) {
-    initiator_ = initiator;
+  void set_initiator(std::optional<url::Origin> initiator) {
+    initiator_ = std::move(initiator);
   }
+
+  void set_url_loader_factory(
+      std::unique_ptr<network::PendingSharedURLLoaderFactory>
+          url_loader_factory);
 
   // If this is a request for resuming an HTTP/S download, |last_modified|
   // should be the value of the last seen Last-Modified response header.
@@ -273,6 +293,10 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
     has_user_gesture_ = has_user_gesture;
   }
 
+  void set_render_process_host_id(int render_process_host_id) {
+    render_process_host_id_ = render_process_host_id;
+  }
+
   void set_update_first_party_url_on_redirect(
       bool update_first_party_url_on_redirect) {
     update_first_party_url_on_redirect_ = update_first_party_url_on_redirect;
@@ -282,6 +306,15 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
       const base::optional_ref<const network::PermissionsPolicy>
           permissions_policy) {
     permissions_policy_ = permissions_policy.CopyAsOptional();
+  }
+
+  // When true, the Service Worker download interceptor (gated by
+  // features::kServiceWorkerInterceptDownloads) must not run for this request.
+  // Set on resumes of network-fetched downloads so the resume continues
+  // against the network factory rather than being intercepted by a SW that
+  // would return an unrelated full response.
+  void set_skip_service_worker_interception(bool skip) {
+    skip_service_worker_interception_ = skip;
   }
 
   OnStartedCallback& callback() { return callback_; }
@@ -300,6 +333,11 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   net::ReferrerPolicy referrer_policy() const { return referrer_policy_; }
   const std::string& referrer_encoding() const { return referrer_encoding_; }
   const std::optional<url::Origin>& initiator() const { return initiator_; }
+  std::unique_ptr<network::PendingSharedURLLoaderFactory>
+  take_url_loader_factory();
+  network::PendingSharedURLLoaderFactory* url_loader_factory() {
+    return url_loader_factory_.get();
+  }
   const std::string& request_origin() const { return request_origin_; }
 
   // These will be -1 if the request is not associated with a frame. See
@@ -343,6 +381,9 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   std::optional<network::PermissionsPolicy> permissions_policy() const {
     return permissions_policy_;
   }
+  bool skip_service_worker_interception() const {
+    return skip_service_worker_interception_;
+  }
 
   // STATE CHANGING: All save_info_ sub-objects will be in an indeterminate
   // state following this call.
@@ -359,6 +400,13 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   }
 
  private:
+  DownloadUrlParameters(
+      const GURL& url,
+      std::optional<url::Origin> initiator,
+      int render_process_host_id,
+      int render_frame_host_routing_id,
+      const net::NetworkTrafficAnnotationTag& traffic_annotation);
+
   OnStartedCallback callback_;
   bool content_initiated_;
   RequestHeadersType request_headers_;
@@ -373,6 +421,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   GURL referrer_;
   net::ReferrerPolicy referrer_policy_;
   std::optional<url::Origin> initiator_;
+  std::unique_ptr<network::PendingSharedURLLoaderFactory> url_loader_factory_;
   std::string referrer_encoding_;
   int render_process_host_id_;
   int render_frame_host_routing_id_;
@@ -392,6 +441,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   bool has_user_gesture_;
   bool update_first_party_url_on_redirect_;
   std::optional<network::PermissionsPolicy> permissions_policy_;
+  bool skip_service_worker_interception_;
 };
 
 }  // namespace download

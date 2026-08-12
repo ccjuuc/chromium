@@ -18,26 +18,46 @@
 #include "chrome/browser/ui/views/web_apps/web_app_views_utils.h"
 #include "chrome/browser/ui/web_applications/web_app_info_image_source.h"
 #include "chrome/browser/web_applications/icons/icon_masker.h"
+#include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_icon_generator.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/webapps/common/web_app_id.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/views/controls/button/checkbox.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
+
+namespace web_app {
 
 namespace {
 
 bool g_default_remember_selection = false;
 
-}  // namespace
+std::unique_ptr<views::Label> CreateAppInfoView(
+    const WebAppRegistrar& registrar,
+    const webapps::AppId& app_id) {
+  if (auto parent_app_name = registrar.GetParentAppShortName(app_id)) {
+    return CreateParentNameLabel(base::UTF8ToUTF16(*parent_app_name));
+  }
 
-namespace web_app {
+  if (auto* web_app =
+          registrar.GetAppById(app_id, WebAppFilter::IsIsolatedApp())) {
+    return CreateVersionLabel(web_app->isolation_data()->version().version());
+  }
+
+  return CreateOriginLabelFromStartUrl(registrar.GetAppStartUrl(app_id), true);
+}
+
+}  // namespace
 
 void LaunchAppUserChoiceDialogView::SetDefaultRememberSelectionForTesting(
     bool remember_selection) {
@@ -62,6 +82,8 @@ void LaunchAppUserChoiceDialogView::Init() {
   SetShowCloseButton(true);
   SetCanResize(false);
   set_draggable(true);
+
+  SetDefaultButton(static_cast<int>(ui::mojom::DialogButton::kCancel));
 
   SetAcceptCallback(base::BindOnce(&LaunchAppUserChoiceDialogView::OnAccepted,
                                    base::Unretained(this)));
@@ -147,12 +169,12 @@ void LaunchAppUserChoiceDialogView::InitChildViews() {
     app_name_publisher_view->SetLayoutManager(
         std::make_unique<views::BoxLayout>(
             views::BoxLayout::Orientation::kVertical));
-    app_name_publisher_view->AddChildViewRaw(
-        CreateNameLabel(base::UTF8ToUTF16(registrar.GetAppShortName(app_id_)))
-            .release());
-    app_name_publisher_view->AddChildViewRaw(
-        CreateOriginLabelFromStartUrl(registrar.GetAppStartUrl(app_id_), true)
-            .release());
+    app_name_publisher_view->AddChildView(
+        CreateNameLabel(base::UTF8ToUTF16(registrar.GetAppShortName(app_id_))));
+
+    app_name_publisher_view->AddChildView(
+        CreateAppInfoView(registrar, app_id_));
+
     app_info_view->AddChildView(std::move(app_name_publisher_view));
 
     AddChildView(std::move(app_info_view));
@@ -183,10 +205,12 @@ void LaunchAppUserChoiceDialogView::RunCloseCallback(
 
 void LaunchAppUserChoiceDialogView::OnIconsRead(
     IconMetadataFromDisk icon_metadata) {
-  SizeToBitmap icon_bitmaps = std::move(icon_metadata.icons_map);
-  if (icon_bitmaps.empty() || !icon_image_view_) {
+  if (icon_metadata.icons_map.empty() || !icon_image_view_) {
     return;
   }
+
+  UnorderedSizeToBitmap icon_bitmaps(icon_metadata.icons_map.begin(),
+                                     icon_metadata.icons_map.end());
 
   gfx::Size image_size{web_app::kWebAppIconSmall, web_app::kWebAppIconSmall};
   auto image_skia =
@@ -209,6 +233,11 @@ void LaunchAppUserChoiceDialogView::OnIconMaskedUpdateDialog(
   CHECK(!masked_bitmap.drawsNothing());
   icon_image_view_->SetImage(ui::ImageModel::FromImageSkia(
       gfx::ImageSkia::CreateFrom1xBitmap(std::move(masked_bitmap))));
+}
+
+bool LaunchAppUserChoiceDialogView::ShouldAllowKeyEventsDuringInputProtection()
+    const {
+  return false;
 }
 
 BEGIN_METADATA(LaunchAppUserChoiceDialogView)

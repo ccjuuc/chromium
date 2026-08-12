@@ -3,8 +3,9 @@
 # found in the LICENSE file.
 
 import("//ui/webui/resources/tools/build_webui.gni")
+import("//ui/webui/webui_features.gni")
 
-assert(!is_android)
+assert(enable_webui_ntp)
 
 build_webui("build") {
   grd_prefix = "new_tab_page_untrusted"
@@ -21,8 +22,8 @@ build_webui("build") {
     "microsoft_auth.ts",
     "microsoft_auth_proxy.ts",
     "msal_browser.ts",
-    "one_google_bar_api.ts",
     "one_google_bar.ts",
+    "one_google_bar_api.ts",
   ]
 
   extra_grdp_files = [ "$target_gen_dir/msal_browser_resources.grdp" ]

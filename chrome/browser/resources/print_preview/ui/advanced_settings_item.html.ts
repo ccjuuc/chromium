@@ -13,11 +13,11 @@ export function getHtml(this: AdvancedSettingsItemElement) {
 <div class="value">
   ${this.isCapabilityTypeSelect_() ? html`
     <div>
-      <select class="md-select" @change="${this.onUserInput_}">
-        ${this.capability.select_cap!.option!.map(item => html`
+      <select class="md-select" @change="${this.onSelectChange_}">
+        ${this.capability.select_cap.option!.map(item => html`
           <option class="searchable" value="${item.value}"
               ?selected="${this.isOptionSelected_(item)}">
-             ${this.getDisplayName_(item)}
+            ${this.getDisplayName_(item)}
           </option>
         `)}
       </select>
@@ -29,7 +29,7 @@ export function getHtml(this: AdvancedSettingsItemElement) {
     </cr-input>
   </span>
   <span ?hidden="${!this.isCapabilityTypeCheckbox_()}">
-    <cr-checkbox @change="${this.onCheckboxInput_}"
+    <cr-checkbox @change="${this.onCheckboxChange_}"
         ?checked="${this.isChecked_()}">
     </cr-checkbox>
   </span>

@@ -6,9 +6,9 @@
 
 #include <algorithm>
 
-#include "base/containers/contains.h"
 #include "base/memory/ref_counted_memory.h"
 #include "components/device_event_log/device_event_log.h"
+#include "services/device/public/cpp/device_features.h"
 #include "services/device/public/cpp/hid/hid_blocklist.h"
 #include "services/device/public/cpp/hid/hid_report_type.h"
 #include "services/device/public/cpp/hid/hid_report_utils.h"
@@ -170,26 +170,35 @@ bool HidConnection::IsReportProtected(uint8_t report_id,
       }
       auto* collection_info =
           FindCollectionWithReport(device, report_id, report_type);
-      if (collection_info &&
-          collection_info->usage->usage_page == mojom::kPageFido) {
-        return false;
+      if (collection_info) {
+        if (base::FeatureList::IsEnabled(features::kWebHidRecursiveFiltering)) {
+          if (HasReportInCollectionWithUsagePage(
+                  *collection_info, report_id, report_type, mojom::kPageFido)) {
+            return false;
+          }
+        } else if (collection_info->usage->usage_page == mojom::kPageFido) {
+          return false;
+        }
       }
     }
 
     // Deny access to reports that match HID blocklist rules.
     if (report_type == HidReportType::kInput) {
       if (device.protected_input_report_ids.has_value() &&
-          base::Contains(*device.protected_input_report_ids, report_id)) {
+          std::ranges::contains(*device.protected_input_report_ids,
+                                report_id)) {
         return true;
       }
     } else if (report_type == HidReportType::kOutput) {
       if (device.protected_output_report_ids.has_value() &&
-          base::Contains(*device.protected_output_report_ids, report_id)) {
+          std::ranges::contains(*device.protected_output_report_ids,
+                                report_id)) {
         return true;
       }
     } else if (report_type == HidReportType::kFeature) {
       if (device.protected_feature_report_ids.has_value() &&
-          base::Contains(*device.protected_feature_report_ids, report_id)) {
+          std::ranges::contains(*device.protected_feature_report_ids,
+                                report_id)) {
         return true;
       }
     }
@@ -200,7 +209,12 @@ bool HidConnection::IsReportProtected(uint8_t report_id,
   auto* collection_info =
       FindCollectionWithReport(device, report_id, report_type);
   if (collection_info) {
-    return IsAlwaysProtected(*collection_info->usage, report_type);
+    if (base::FeatureList::IsEnabled(features::kWebHidRecursiveFiltering)) {
+      return HasReportInAlwaysProtectedCollection(*collection_info, report_id,
+                                                  report_type);
+    } else {
+      return IsAlwaysProtected(*collection_info->usage, report_type);
+    }
   }
 
   return HasAlwaysProtectedCollectionFor(report_type);

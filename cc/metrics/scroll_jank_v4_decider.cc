@@ -5,6 +5,7 @@
 #include "cc/metrics/scroll_jank_v4_decider.h"
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -15,7 +16,6 @@
 #include "base/time/time.h"
 #include "cc/base/features.h"
 #include "cc/metrics/scroll_jank_v4_frame.h"
-#include "cc/metrics/scroll_jank_v4_frame_stage.h"
 #include "cc/metrics/scroll_jank_v4_result.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
 
@@ -25,36 +25,76 @@ namespace {
 
 using ScrollDamage = ScrollJankV4Frame::ScrollDamage;
 using DamagingFrame = ScrollJankV4Frame::DamagingFrame;
-using ScrollUpdates = ScrollJankV4FrameStage::ScrollUpdates;
+using ScrollUpdates = ScrollJankV4Frame::Stage::ScrollUpdates;
 
 }  // namespace
 
 ScrollJankV4Result ScrollJankV4Decider::DecideJankForFrameWithRealScrollUpdates(
-    const ScrollJankV4FrameStage::ScrollUpdates& updates,
+    const ScrollJankV4Frame::Stage::ScrollUpdates& updates,
     const ScrollJankV4Frame::ScrollDamage& damage,
     const ScrollJankV4Frame::BeginFrameArgsForScrollJank& args) {
   CHECK(updates.real().has_value());
-  return DecideJankForFrameWithScrollUpdates(updates, damage, args,
-                                             IsFastScroll(*updates.real()));
+  return DecideJankForFrameWithScrollUpdates(
+      updates, damage, args, GetScrollVelocity(*updates.real()),
+      IsSufficientlyFastFling(*updates.real()));
 }
 
 ScrollJankV4Result
 ScrollJankV4Decider::DecideJankForFrameWithSyntheticScrollUpdatesOnly(
-    const ScrollJankV4FrameStage::ScrollUpdates& updates,
+    const ScrollJankV4Frame::Stage::ScrollUpdates& updates,
     const ScrollJankV4Frame::ScrollDamage& damage,
     const ScrollJankV4Frame::BeginFrameArgsForScrollJank& args,
-    bool future_real_frame_is_fast_scroll_or_sufficiently_fast_fling) {
+    const ScrollJankV4Frame::Stage::ScrollUpdates::Real* future_real_updates) {
   CHECK(!updates.real().has_value());
-  return DecideJankForFrameWithScrollUpdates(
-      updates, damage, args,
-      future_real_frame_is_fast_scroll_or_sufficiently_fast_fling);
+
+  auto [treat_as_velocity, treat_as_sufficiently_fast_fling] =
+      [&]() -> std::pair<RealScrollVelocityType, bool> {
+    if (future_real_updates == nullptr) {
+      // There are no real frames until the end of the scroll.
+      return {RealScrollVelocityType::kSlow, false};
+    }
+
+    RealScrollVelocityType future_velocity =
+        GetScrollVelocity(*future_real_updates);
+    bool is_sufficiently_fast_fling =
+        IsSufficientlyFastFling(*future_real_updates);
+    if (future_velocity == RealScrollVelocityType::kSlow &&
+        !is_sufficiently_fast_fling) {
+      return {RealScrollVelocityType::kSlow, false};
+    }
+
+    if (updates.synthetic()->has_inertial_input) {
+      return {RealScrollVelocityType::kSlow, true};
+    }
+
+    // Prefer `future_velocity` over
+    // `prev_frame_data_->most_recent_real_frame_velocity`, so that if
+    // `features::kScrollJankV4MetricFastScrollContinuityRequiresSameDirection`
+    // is enabled and the future real frame has a different scroll direction
+    // than the most recent real frame, the fast scroll continuity rule doesn't
+    // apply.
+    if (future_velocity != RealScrollVelocityType::kSlow) {
+      return {future_velocity, false};
+    }
+
+    if (prev_frame_data_.has_value()) {
+      return {prev_frame_data_->most_recent_real_frame_velocity, false};
+    }
+
+    return {RealScrollVelocityType::kSlow, false};
+  }();
+
+  return DecideJankForFrameWithScrollUpdates(updates, damage, args,
+                                             treat_as_velocity,
+                                             treat_as_sufficiently_fast_fling);
 }
 
 ScrollJankV4Result ScrollJankV4Decider::DecideJankForFrameWithScrollUpdates(
     const ScrollUpdates& updates,
     const ScrollDamage& damage,
     const ScrollJankV4Frame::BeginFrameArgsForScrollJank& args,
-    bool treat_as_fast_scroll) {
+    RealScrollVelocityType treat_as_velocity,
+    bool treat_as_sufficiently_fast_fling) {
   DCHECK(IsValidFrame(updates, damage, args));
   DCHECK(!prev_frame_data_.has_value() ||
          args.frame_time > prev_frame_data_->begin_frame_ts);
@@ -108,7 +148,8 @@ ScrollJankV4Result ScrollJankV4Decider::DecideJankForFrameWithScrollUpdates(
       JankReasonArray<int> missed_vsyncs_per_reason =
           CalculateMissedVsyncsPerReason(
               vsyncs_since_previous_frame, earliest_input_generation_ts,
-              updates, damage, args, treat_as_fast_scroll, result);
+              updates, damage, args, treat_as_velocity,
+              treat_as_sufficiently_fast_fling, result);
 
       // A frame is janky if ANY of the rules decided that Chrome missed one or
       // more VSyncs.
@@ -142,15 +183,17 @@ ScrollJankV4Result ScrollJankV4Decider::DecideJankForFrameWithScrollUpdates(
 
   // Finally, update internal state for the next iteration.
   prev_frame_data_ = {
-      .has_inertial_input =
-          updates.real().has_value() && updates.real()->has_inertial_input,
-      .is_most_recent_real_frame_fast_scroll =
+      .has_inertial_input = updates.real().has_value()
+                                ? updates.real()->has_inertial_input
+                                : updates.synthetic()->has_inertial_input,
+      .most_recent_real_frame_velocity =
           [&]() {
             if (updates.real().has_value()) {
-              return treat_as_fast_scroll;
+              return treat_as_velocity;
             }
-            return prev_frame_data_.has_value() &&
-                   prev_frame_data_->is_most_recent_real_frame_fast_scroll;
+            return prev_frame_data_.has_value()
+                       ? prev_frame_data_->most_recent_real_frame_velocity
+                       : RealScrollVelocityType::kSlow;
           }(),
       .last_input_generation_ts = [&]() -> std::optional<base::TimeTicks> {
         if (updates.real().has_value()) {
@@ -189,7 +232,7 @@ ScrollJankV4Result ScrollJankV4Decider::DecideJankForFrameWithScrollUpdates(
 
 // static
 bool ScrollJankV4Decider::IsValidFrame(
-    const ScrollJankV4FrameStage::ScrollUpdates& updates,
+    const ScrollJankV4Frame::Stage::ScrollUpdates& updates,
     const ScrollJankV4Frame::ScrollDamage& damage,
     const ScrollJankV4Frame::BeginFrameArgsForScrollJank& args) {
   if (!args.interval.is_positive()) {
@@ -243,12 +286,18 @@ void ScrollJankV4Decider::OnScrollEnded() {
 }
 
 // static
-bool ScrollJankV4Decider::IsFastScroll(
+ScrollJankV4Decider::RealScrollVelocityType
+ScrollJankV4Decider::GetScrollVelocity(
     const ScrollUpdates::Real& real_updates) {
   static const double kFastScrollContinuityThreshold =
       features::kScrollJankV4MetricFastScrollContinuityThreshold.Get();
-  return real_updates.abs_total_raw_delta_pixels >=
-         kFastScrollContinuityThreshold;
+  if (real_updates.total_raw_delta_pixels >= kFastScrollContinuityThreshold) {
+    return RealScrollVelocityType::kFastPositive;
+  }
+  if (real_updates.total_raw_delta_pixels <= -kFastScrollContinuityThreshold) {
+    return RealScrollVelocityType::kFastNegative;
+  }
+  return RealScrollVelocityType::kSlow;
 }
 
 // static
@@ -260,13 +309,43 @@ bool ScrollJankV4Decider::IsSufficientlyFastFling(
          kFlingContinuityThreshold;
 }
 
+// static
+bool ScrollJankV4Decider::IsInFastScroll(
+    ScrollJankV4Decider::RealScrollVelocityType velocity1,
+    ScrollJankV4Decider::RealScrollVelocityType velocity2) {
+  // Note: The "fast scroll continuity" rule cannot handle a scenario where the
+  // scroll direction changes within a single frame. For example, given the
+  // following frames:
+  //
+  // * F1: one input with raw scroll delta +10.
+  // * F2: two inputs with raw scroll deltas +10 and -10 respectively
+  // * F3: one input with raw scroll delta -10
+  //
+  // the metric will consider F2 slow and therefore won't mark any VSyncs
+  // between F1-F2 or F2-F3 as missed due to the "fast scroll continuity" rule.
+  // Given that there's typically a gap between the last positive and first
+  // negative scroll update (or vice versa), the metric will most likely mark F2
+  // as janky due to the "running consistency" rule anyway.
+  if (velocity1 == RealScrollVelocityType::kSlow ||
+      velocity2 == RealScrollVelocityType::kSlow) {
+    return false;
+  }
+  if (base::FeatureList::IsEnabled(
+          features::
+              kScrollJankV4MetricFastScrollContinuityRequiresSameDirection)) {
+    return velocity1 == velocity2;
+  }
+  return true;
+}
+
 JankReasonArray<int> ScrollJankV4Decider::CalculateMissedVsyncsPerReason(
     int vsyncs_since_previous_frame,
     std::optional<base::TimeTicks> first_input_generation_ts,
     const ScrollUpdates& updates,
     const ScrollJankV4Frame::ScrollDamage& damage,
     const ScrollJankV4Frame::BeginFrameArgsForScrollJank& args,
-    bool treat_as_fast_scroll,
+    RealScrollVelocityType treat_as_velocity,
+    bool treat_as_sufficiently_fast_fling,
     ScrollJankV4Result& result) const {
   DCHECK_GT(vsyncs_since_previous_frame, 1);
   DCHECK_LE(vsyncs_since_previous_frame,
@@ -336,23 +415,22 @@ JankReasonArray<int> ScrollJankV4Decider::CalculateMissedVsyncsPerReason(
   }
 
   // Rules 2 & 3: Fast scroll and fling continuity.
-  bool cur_is_sufficiently_fast_fling =
-      updates.real().has_value() && IsSufficientlyFastFling(*updates.real());
-  if (cur_is_sufficiently_fast_fling) {
+  if (treat_as_sufficiently_fast_fling) {
     if (prev_frame_data.has_inertial_input) {
       // Chrome missed one or more VSyncs in the middle of a fling.
       missed_vsyncs_per_reason[static_cast<int>(
           JankReason::kMissedVsyncDuringFling)] =
           vsyncs_since_previous_frame - 1;
-    } else if (prev_frame_data.is_most_recent_real_frame_fast_scroll) {
+    } else if (prev_frame_data.most_recent_real_frame_velocity !=
+               RealScrollVelocityType::kSlow) {
       // Chrome missed one or more VSyncs during the transition from a fast
       // regular scroll to a fling.
       missed_vsyncs_per_reason[static_cast<int>(
           JankReason::kMissedVsyncAtStartOfFling)] =
           vsyncs_since_previous_frame - 1;
     }
-  } else if (prev_frame_data.is_most_recent_real_frame_fast_scroll &&
-             treat_as_fast_scroll) {
+  } else if (IsInFastScroll(prev_frame_data.most_recent_real_frame_velocity,
+                            treat_as_velocity)) {
     // Chrome missed one or more VSyncs in the middle of a fast regular scroll.
     missed_vsyncs_per_reason[static_cast<int>(
         JankReason::kMissedVsyncDuringFastScroll)] =

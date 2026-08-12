@@ -4,6 +4,8 @@
 
 #include "ash/wm/window_restore/window_restore_controller.h"
 
+#include <algorithm>
+
 #include "ash/accelerators/accelerator_controller_impl.h"
 #include "ash/app_list/app_list_controller_impl.h"
 #include "ash/screen_util.h"
@@ -23,11 +25,11 @@
 #include "ash/wm/window_positioning_utils.h"
 #include "ash/wm/window_state.h"
 #include "base/cancelable_callback.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "chromeos/ui/base/app_types.h"
 #include "chromeos/ui/base/window_properties.h"
@@ -43,6 +45,8 @@
 #include "ui/wm/core/window_util.h"
 
 namespace ash {
+
+using chromeos::AppType;
 
 namespace {
 
@@ -83,7 +87,7 @@ class WindowRestoreControllerTest : public AshTestBase,
   int GetSaveWindowsCount(aura::Window* window) const {
     const int32_t restore_window_id =
         window->GetProperty(app_restore::kRestoreWindowIdKey);
-    if (!base::Contains(fake_window_restore_file_, restore_window_id))
+    if (!fake_window_restore_file_.contains(restore_window_id))
       return 0;
     return fake_window_restore_file_.at(restore_window_id).call_count;
   }
@@ -109,7 +113,7 @@ class WindowRestoreControllerTest : public AshTestBase,
       aura::Window* window) const {
     const int32_t restore_window_id =
         window->GetProperty(app_restore::kRestoreWindowIdKey);
-    if (!base::Contains(fake_window_restore_file_, restore_window_id)) {
+    if (!fake_window_restore_file_.contains(restore_window_id)) {
       return std::nullopt;
     }
     return fake_window_restore_file_.at(restore_window_id).info;
@@ -142,7 +146,7 @@ class WindowRestoreControllerTest : public AshTestBase,
                        WindowTreeHostManager::GetPrimaryDisplayId(),
                        /*desk_id=*/1);
     return CreateTestWindowRestoredWidgetFromRestoreId(
-        restore_window_id, chromeos::AppType::BROWSER,
+        restore_window_id, AppType::BROWSER,
         /*is_taskless_arc_app=*/false);
   }
 
@@ -151,7 +155,7 @@ class WindowRestoreControllerTest : public AshTestBase,
   // matches `restore_window_id`.
   views::Widget* CreateTestWindowRestoredWidgetFromRestoreId(
       int32_t restore_window_id,
-      chromeos::AppType app_type,
+      AppType app_type,
       bool is_taskless_arc_app) {
     if (!fake_window_restore_file_.contains(restore_window_id))
       return nullptr;
@@ -201,7 +205,7 @@ class WindowRestoreControllerTest : public AshTestBase,
   views::Widget* CreateTestWindowRestoredWidgetFromRestoreId(
       int32_t restore_window_id) {
     return CreateTestWindowRestoredWidgetFromRestoreId(
-        restore_window_id, chromeos::AppType::BROWSER,
+        restore_window_id, AppType::BROWSER,
         /*is_taskless_arc_app=*/false);
   }
 
@@ -273,11 +277,10 @@ class WindowRestoreControllerTest : public AshTestBase,
 
   // aura::EnvObserver:
   void OnWindowInitialized(aura::Window* window) override {
-    std::vector<chromeos::AppType> kSupportedAppTypes = {
-        chromeos::AppType::BROWSER, chromeos::AppType::CHROME_APP,
-        chromeos::AppType::ARC_APP};
-    if (!base::Contains(kSupportedAppTypes,
-                        window->GetProperty(chromeos::kAppTypeKey))) {
+    std::vector<AppType> kSupportedAppTypes = {
+        AppType::BROWSER, AppType::CHROME_APP, AppType::ARC_APP};
+    if (!std::ranges::contains(kSupportedAppTypes,
+                               window->GetProperty(chromeos::kAppTypeKey))) {
       return;
     }
 
@@ -317,10 +320,8 @@ class WindowRestoreControllerTest : public AshTestBase,
 // Tests window save with setting on or off.
 TEST_F(WindowRestoreControllerTest, WindowSaveDisabled) {
   auto account_id = Shell::Get()->session_controller()->GetActiveAccountId();
-  auto window1 =
-      CreateAppWindow(gfx::Rect(600, 600), chromeos::AppType::BROWSER);
-  auto window2 =
-      CreateAppWindow(gfx::Rect(600, 600), chromeos::AppType::BROWSER);
+  auto window1 = CreateWindowWithAppType(AppType::BROWSER, {600, 600});
+  auto window2 = CreateWindowWithAppType(AppType::BROWSER, {600, 600});
   ResetSaveWindowsCount();
 
   // Disable window restore.
@@ -347,8 +348,7 @@ TEST_F(WindowRestoreControllerTest, WindowSaveDisabled) {
 
 // Tests that data gets saved when changing a window's window state.
 TEST_F(WindowRestoreControllerTest, WindowStateChanged) {
-  auto window =
-      CreateAppWindow(gfx::Rect(600, 600), chromeos::AppType::BROWSER);
+  auto window = CreateWindowWithAppType(AppType::BROWSER, {600, 600});
   ResetSaveWindowsCount();
 
   auto* window_state = WindowState::Get(window.get());
@@ -381,8 +381,7 @@ TEST_F(WindowRestoreControllerTest, WindowMovedDesks) {
   ASSERT_EQ(0, desks_controller->GetDeskIndex(
                    desks_controller->GetTargetActiveDesk()));
 
-  auto window =
-      CreateAppWindow(gfx::Rect(200, 200), chromeos::AppType::BROWSER);
+  auto window = CreateWindowWithAppType(AppType::BROWSER, {200, 200});
   aura::Window* previous_parent = window->parent();
   ResetSaveWindowsCount();
 
@@ -402,8 +401,7 @@ TEST_F(WindowRestoreControllerTest, AssignToAllDesks) {
   ASSERT_EQ(0, desks_controller->GetDeskIndex(
                    desks_controller->GetTargetActiveDesk()));
 
-  auto window =
-      CreateAppWindow(gfx::Rect(100, 100), chromeos::AppType::BROWSER);
+  auto window = CreateWindowWithAppType(AppType::BROWSER, {100, 100});
   ResetSaveWindowsCount();
 
   // Assign |window| to all desks. This should trigger a save.
@@ -436,8 +434,7 @@ TEST_F(WindowRestoreControllerTest, AssignToAllDesks) {
 TEST_F(WindowRestoreControllerTest, WindowMovedDisplay) {
   UpdateDisplay("800x700,801+0-800x700");
 
-  auto window =
-      CreateAppWindow(gfx::Rect(50, 50, 200, 200), chromeos::AppType::BROWSER);
+  auto window = CreateWindowWithAppType(AppType::BROWSER, {50, 50, 200, 200});
   ResetSaveWindowsCount();
 
   // Move the window to the next display. Test that we save the window in
@@ -451,8 +448,7 @@ TEST_F(WindowRestoreControllerTest, WindowMovedDisplay) {
 
 // Tests that data gets saved when dragging a window.
 TEST_F(WindowRestoreControllerTest, WindowDragged) {
-  auto window =
-      CreateAppWindow(gfx::Rect(400, 400), chromeos::AppType::BROWSER);
+  auto window = CreateWindowWithAppType(AppType::BROWSER, {400, 400});
   ResetSaveWindowsCount();
 
   // Test that even if we move n times, we will only save to file once.
@@ -476,10 +472,8 @@ TEST_F(WindowRestoreControllerTest, TabletModeChange) {
   TabletModeControllerTestApi().LeaveTabletMode();
   EXPECT_EQ(0, GetTotalSaveWindowsCount());
 
-  auto window1 =
-      CreateAppWindow(gfx::Rect(400, 400), chromeos::AppType::BROWSER);
-  auto window2 =
-      CreateAppWindow(gfx::Rect(400, 400), chromeos::AppType::BROWSER);
+  auto window1 = CreateWindowWithAppType(AppType::BROWSER, {400, 400});
+  auto window2 = CreateWindowWithAppType(AppType::BROWSER, {400, 400});
   ResetSaveWindowsCount();
 
   // Tests that we save each window when entering or exiting tablet mode. Due to
@@ -499,8 +493,7 @@ TEST_F(WindowRestoreControllerTest, TabletModeChange) {
 TEST_F(WindowRestoreControllerTest, DisplayAddRemove) {
   UpdateDisplay("800x700, 800x700");
 
-  auto window =
-      CreateAppWindow(gfx::Rect(800, 0, 400, 400), chromeos::AppType::BROWSER);
+  auto window = CreateWindowWithAppType(AppType::BROWSER, {800, 0, 400, 400});
   ResetSaveWindowsCount();
 
   const int64_t primary_id = WindowTreeHostManager::GetPrimaryDisplayId();
@@ -526,12 +519,9 @@ TEST_F(WindowRestoreControllerTest, DisplayAddRemove) {
 }
 
 TEST_F(WindowRestoreControllerTest, Activation) {
-  auto window1 =
-      CreateAppWindow(gfx::Rect(400, 400), chromeos::AppType::BROWSER);
-  auto window2 =
-      CreateAppWindow(gfx::Rect(400, 400), chromeos::AppType::BROWSER);
-  auto window3 =
-      CreateAppWindow(gfx::Rect(400, 400), chromeos::AppType::BROWSER);
+  auto window1 = CreateWindowWithAppType(AppType::BROWSER, {400, 400});
+  auto window2 = CreateWindowWithAppType(AppType::BROWSER, {400, 400});
+  auto window3 = CreateWindowWithAppType(AppType::BROWSER, {400, 400});
   ResetSaveWindowsCount();
 
   // Tests that an activation will save once for each window.
@@ -553,19 +543,22 @@ TEST_F(WindowRestoreControllerTest, Activation) {
 TEST_F(WindowRestoreControllerTest, TestWindowRestoredWidget) {
   const int32_t kActivationIndex = 2;
   views::Widget* widget = CreateTestWindowRestoredWidget(kActivationIndex);
+  aura::Window* window = widget->GetNativeWindow();
   int32_t* activation_index =
-      widget->GetNativeWindow()->GetProperty(app_restore::kActivationIndexKey);
+      window->GetProperty(app_restore::kActivationIndexKey);
   ASSERT_TRUE(activation_index);
   EXPECT_EQ(kActivationIndex, *activation_index);
 
   // Since `widget` is the topmost window, it can be activated.
-  EXPECT_TRUE(wm::CanActivateWindow(widget->GetNativeWindow()));
+  EXPECT_TRUE(wm::CanActivateWindow(window));
   EXPECT_TRUE(widget->IsActive());
 
-  // Activation permissions are restored in a post task. Spin the run loop and
-  // verify.
-  base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(wm::CanActivateWindow(widget->GetNativeWindow()));
+  // Window restore clears the launched-from-restore property in a post task so
+  // showing the widget does not steal activation during setup.
+  ASSERT_TRUE(base::test::RunUntil([window]() {
+    return !window->GetProperty(app_restore::kLaunchedFromAppRestoreKey);
+  }));
+  EXPECT_TRUE(wm::CanActivateWindow(window));
 }
 
 // Tests that widgets are restored to their proper stacking order, even if they
@@ -574,7 +567,7 @@ TEST_F(WindowRestoreControllerTest, Stacking) {
   // Create a window that is a child of the active desk's container.
   auto* desk_container = desks_util::GetActiveDeskContainerForRoot(
       Shell::Get()->GetPrimaryRootWindow());
-  auto non_restored_sibling = CreateTestWindow();
+  auto non_restored_sibling = CreateWindowWithAppType();
   EXPECT_THAT(desk_container->children(),
               ElementsAre(non_restored_sibling.get()));
 
@@ -753,8 +746,7 @@ TEST_F(WindowRestoreControllerTest, ClamshellFloatWindow) {
 TEST_F(WindowRestoreControllerTest, TabletFloatWindow) {
   TabletModeControllerTestApi().EnterTabletMode();
 
-  auto floated_window =
-      CreateAppWindow(gfx::Rect(600, 600), chromeos::AppType::BROWSER);
+  auto floated_window = CreateWindowWithAppType(AppType::BROWSER, {600, 600});
   PressAndReleaseKey(ui::VKEY_F, ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN);
   ASSERT_TRUE(WindowState::Get(floated_window.get())->IsFloated());
 
@@ -848,10 +840,8 @@ TEST_F(WindowRestoreControllerTest, TabletSplitviewWindow) {
   TabletModeControllerTestApi().EnterTabletMode();
 
   const gfx::Rect bounds(300, 300);
-  auto window1 =
-      CreateAppWindow(gfx::Rect(300, 300), chromeos::AppType::BROWSER);
-  auto window2 =
-      CreateAppWindow(gfx::Rect(300, 300), chromeos::AppType::BROWSER);
+  auto window1 = CreateWindowWithAppType(AppType::BROWSER, {300, 300});
+  auto window2 = CreateWindowWithAppType(AppType::BROWSER, {300, 300});
 
   auto* split_view_controller =
       SplitViewController::Get(Shell::GetPrimaryRootWindow());
@@ -978,16 +968,17 @@ TEST_F(WindowRestoreControllerTest, TabletToClamshell) {
 
   // The tablet mode window manager watches windows when they are added, then
   // tracks them when the window is shown. They must be resizable when tracked,
-  // so we use a views::test::TestWidgetBuilder instead of `CreateTestWindow()`,
-  // which would show the window before we can make it resizable.
+  // so we use a views::test::TestWidgetBuilder instead of
+  // `CreateWindowWithAppType()`, which would
+  // show the window before we can make it resizable.
   const gfx::Rect expected_bounds(300, 300);
-  views::Widget* widget = CreateWidgetBuilderWithDelegate()
-                              .SetBounds(expected_bounds)
-                              .SetContext(Shell::GetPrimaryRootWindow())
-                              .SetShow(false)
-                              .SetWindowProperty(chromeos::kAppTypeKey,
-                                                 chromeos::AppType::CHROME_APP)
-                              .BuildOwnedByNativeWidget();
+  views::Widget* widget =
+      CreateWidgetBuilderWithDelegate()
+          .SetBounds(expected_bounds)
+          .SetContext(Shell::GetPrimaryRootWindow())
+          .SetShow(false)
+          .SetWindowProperty(chromeos::kAppTypeKey, AppType::CHROME_APP)
+          .BuildOwnedByNativeWidget();
   SetResizable(widget);
   widget->Show();
 
@@ -1120,10 +1111,10 @@ TEST_F(WindowRestoreControllerTest, ArcAppWindowCreatedWithoutTask) {
 
   // Restore the window, it should go to the invisible unparented container for
   // now.
-  auto* restored_window = CreateTestWindowRestoredWidgetFromRestoreId(
-                              kRestoreId, chromeos::AppType::ARC_APP,
-                              /*is_taskless_arc_app=*/true)
-                              ->GetNativeWindow();
+  auto* restored_window =
+      CreateTestWindowRestoredWidgetFromRestoreId(kRestoreId, AppType::ARC_APP,
+                                                  /*is_taskless_arc_app=*/true)
+          ->GetNativeWindow();
   EXPECT_EQ(
       Shell::GetContainer(root_window, kShellWindowId_UnparentedContainer),
       restored_window->parent());
@@ -1168,10 +1159,10 @@ TEST_F(WindowRestoreControllerTest,
 
   // Restore the first window, it should go to the invisible unparented
   // container for the secondary display until the ARC task is ready.
-  auto* restored_window1 = CreateTestWindowRestoredWidgetFromRestoreId(
-                               kRestoreId1, chromeos::AppType::ARC_APP,
-                               /*is_taskless_arc_app=*/true)
-                               ->GetNativeWindow();
+  auto* restored_window1 =
+      CreateTestWindowRestoredWidgetFromRestoreId(kRestoreId1, AppType::ARC_APP,
+                                                  /*is_taskless_arc_app=*/true)
+          ->GetNativeWindow();
   EXPECT_EQ(Shell::GetContainer(secondary_root_window,
                                 kShellWindowId_UnparentedContainer),
             restored_window1->parent());
@@ -1183,10 +1174,10 @@ TEST_F(WindowRestoreControllerTest,
 
   // Restore the second window, it should also go to the invisible unparented
   // container for the secondary display.
-  auto* restored_window2 = CreateTestWindowRestoredWidgetFromRestoreId(
-                               kRestoreId2, chromeos::AppType::ARC_APP,
-                               /*is_taskless_arc_app=*/true)
-                               ->GetNativeWindow();
+  auto* restored_window2 =
+      CreateTestWindowRestoredWidgetFromRestoreId(kRestoreId2, AppType::ARC_APP,
+                                                  /*is_taskless_arc_app=*/true)
+          ->GetNativeWindow();
   EXPECT_EQ(Shell::GetContainer(secondary_root_window,
                                 kShellWindowId_UnparentedContainer),
             restored_window2->parent());
@@ -1258,8 +1249,7 @@ TEST_F(WindowRestoreControllerTest, TopmostWindowIsActivatable) {
   // Create a window that is not restored and activate it.
   auto* desk_container = desks_util::GetActiveDeskContainerForRoot(
       Shell::Get()->GetPrimaryRootWindow());
-  auto window =
-      CreateAppWindow(gfx::Rect(100, 100), chromeos::AppType::BROWSER);
+  auto window = CreateWindowWithAppType(AppType::BROWSER, {100, 100});
   wm::ActivateWindow(window.get());
   ASSERT_TRUE(wm::IsActiveWindow(window.get()));
 
@@ -1268,11 +1258,10 @@ TEST_F(WindowRestoreControllerTest, TopmostWindowIsActivatable) {
       /*restore_window_id=*/2, gfx::Rect(200, 200),
       chromeos::WindowStateType::kNormal,
       /*activation_index=*/1, WindowTreeHostManager::GetPrimaryDisplayId());
-  auto* restored_window1 =
-      CreateTestWindowRestoredWidgetFromRestoreId(
-          /*restore_window_id=*/2, chromeos::AppType::CHROME_APP,
-          /*is_taskless_arc_app=*/false)
-          ->GetNativeWindow();
+  auto* restored_window1 = CreateTestWindowRestoredWidgetFromRestoreId(
+                               /*restore_window_id=*/2, AppType::CHROME_APP,
+                               /*is_taskless_arc_app=*/false)
+                               ->GetNativeWindow();
   EXPECT_THAT(desk_container->children(),
               ElementsAre(restored_window1, window.get()));
 
@@ -1312,11 +1301,10 @@ TEST_F(WindowRestoreControllerTest, NextTopmostWindowIsActivatable) {
       /*restore_window_id=*/2, gfx::Rect(200, 200),
       chromeos::WindowStateType::kMinimized,
       /*activation_index=*/2, WindowTreeHostManager::GetPrimaryDisplayId());
-  auto* restored_window2 =
-      CreateTestWindowRestoredWidgetFromRestoreId(
-          /*restore_window_id=*/2, chromeos::AppType::BROWSER,
-          /*is_taskless_arc_app=*/false)
-          ->GetNativeWindow();
+  auto* restored_window2 = CreateTestWindowRestoredWidgetFromRestoreId(
+                               /*restore_window_id=*/2, AppType::BROWSER,
+                               /*is_taskless_arc_app=*/false)
+                               ->GetNativeWindow();
   EXPECT_THAT(desk_container->children(), ElementsAre(restored_window2));
   EXPECT_FALSE(wm::CanActivateWindow(restored_window2));
 
@@ -1327,11 +1315,10 @@ TEST_F(WindowRestoreControllerTest, NextTopmostWindowIsActivatable) {
       /*restore_window_id=*/3, gfx::Rect(200, 200),
       chromeos::WindowStateType::kMinimized,
       /*activation_index=*/3, WindowTreeHostManager::GetPrimaryDisplayId());
-  auto* restored_window3 =
-      CreateTestWindowRestoredWidgetFromRestoreId(
-          /*restore_window_id=*/3, chromeos::AppType::BROWSER,
-          /*is_taskless_arc_app=*/false)
-          ->GetNativeWindow();
+  auto* restored_window3 = CreateTestWindowRestoredWidgetFromRestoreId(
+                               /*restore_window_id=*/3, AppType::BROWSER,
+                               /*is_taskless_arc_app=*/false)
+                               ->GetNativeWindow();
   EXPECT_THAT(desk_container->children(),
               ElementsAre(restored_window3, restored_window2));
   EXPECT_FALSE(wm::CanActivateWindow(restored_window3));
@@ -1345,11 +1332,10 @@ TEST_F(WindowRestoreControllerTest, NextTopmostWindowIsActivatable) {
       /*restore_window_id=*/4, gfx::Rect(200, 200),
       chromeos::WindowStateType::kNormal,
       /*activation_index=*/4, WindowTreeHostManager::GetPrimaryDisplayId());
-  auto* restored_window4 =
-      CreateTestWindowRestoredWidgetFromRestoreId(
-          /*restore_window_id=*/4, chromeos::AppType::BROWSER,
-          /*is_taskless_arc_app=*/false)
-          ->GetNativeWindow();
+  auto* restored_window4 = CreateTestWindowRestoredWidgetFromRestoreId(
+                               /*restore_window_id=*/4, AppType::BROWSER,
+                               /*is_taskless_arc_app=*/false)
+                               ->GetNativeWindow();
   EXPECT_THAT(
       desk_container->children(),
       ElementsAre(restored_window3, restored_window2, restored_window4));
@@ -1379,11 +1365,10 @@ TEST_F(WindowRestoreControllerTest, WindowsOnInactiveDeskAreNotActivatable) {
       chromeos::WindowStateType::kMinimized,
       /*activation_index=*/2, WindowTreeHostManager::GetPrimaryDisplayId(),
       /*desk_id=*/2);
-  auto* restored_window2 =
-      CreateTestWindowRestoredWidgetFromRestoreId(
-          /*restore_window_id=*/2, chromeos::AppType::BROWSER,
-          /*is_taskless_arc_app=*/false)
-          ->GetNativeWindow();
+  auto* restored_window2 = CreateTestWindowRestoredWidgetFromRestoreId(
+                               /*restore_window_id=*/2, AppType::BROWSER,
+                               /*is_taskless_arc_app=*/false)
+                               ->GetNativeWindow();
   EXPECT_FALSE(wm::CanActivateWindow(restored_window2));
 }
 
@@ -1392,8 +1377,8 @@ TEST_F(WindowRestoreControllerTest, WindowsOnInactiveDeskAreNotActivatable) {
 TEST_F(WindowRestoreControllerTest, WindowsSavedInOverview) {
   const gfx::Rect window_bounds(300, 200);
   auto browser_window =
-      CreateAppWindow(window_bounds, chromeos::AppType::BROWSER);
-  auto arc_window = CreateAppWindow(window_bounds, chromeos::AppType::ARC_APP);
+      CreateWindowWithAppType(AppType::BROWSER, window_bounds);
+  auto arc_window = CreateWindowWithAppType(AppType::ARC_APP, window_bounds);
 
   ToggleOverview();
   EXPECT_NE(window_bounds, browser_window->GetBoundsInScreen());
@@ -1422,7 +1407,7 @@ TEST_F(WindowRestoreControllerTest, WindowsRestoredWhileInOverview) {
 
   // Create a restored window. Test that we have exited overview.
   CreateTestWindowRestoredWidgetFromRestoreId(
-      /*restore_window_id=*/1, chromeos::AppType::BROWSER,
+      /*restore_window_id=*/1, AppType::BROWSER,
       /*is_taskless_arc_app=*/false)
       ->GetNativeWindow();
   EXPECT_FALSE(OverviewController::Get()->InOverviewSession());
@@ -1440,11 +1425,10 @@ TEST_F(WindowRestoreControllerTest, WindowsMinimumVisibleArea) {
       /*restore_window_id=*/1,
       gfx::Rect(900, 700, window_length, window_length),
       chromeos::WindowStateType::kNormal);
-  auto* restored_window =
-      CreateTestWindowRestoredWidgetFromRestoreId(
-          /*restore_window_id=*/1, chromeos::AppType::BROWSER,
-          /*is_taskless_arc_app=*/false)
-          ->GetNativeWindow();
+  auto* restored_window = CreateTestWindowRestoredWidgetFromRestoreId(
+                              /*restore_window_id=*/1, AppType::BROWSER,
+                              /*is_taskless_arc_app=*/false)
+                              ->GetNativeWindow();
   const gfx::Rect& bounds_in_screen = restored_window->GetBoundsInScreen();
 
   // Check the intersection of the display bounds and the window bounds in

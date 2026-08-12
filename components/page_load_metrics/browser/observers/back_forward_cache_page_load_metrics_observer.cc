@@ -8,9 +8,9 @@
 #include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
 #include "components/page_load_metrics/browser/features.h"
+#include "components/page_load_metrics/browser/interaction_to_next_paint_calculator.h"
 #include "components/page_load_metrics/browser/observers/core/uma_page_load_metrics_observer.h"
 #include "components/page_load_metrics/browser/page_load_metrics_util.h"
-#include "components/page_load_metrics/browser/responsiveness_metrics_normalization.h"
 #include "components/page_load_metrics/common/page_visit_final_status.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
@@ -89,7 +89,7 @@ page_load_metrics::PageLoadMetricsObserver::ObservePolicy
 BackForwardCachePageLoadMetricsObserver::OnPrerenderStart(
     content::NavigationHandle* navigation_handle,
     const GURL& currently_committed_url) {
-  // This class mainly interested in the behavior after entreing Back/Forward
+  // This class mainly interested in the behavior after entering Back/Forward
   // Cache. Works as same as non prerendering case.
   return CONTINUE_OBSERVING;
 }
@@ -130,6 +130,7 @@ void BackForwardCachePageLoadMetricsObserver::OnRestoreFromBackForwardCache(
       GetDelegate().GetMainFrameRenderData().layout_shift_score;
   restored_layout_shift_score_ =
       GetDelegate().GetPageRenderData().layout_shift_score;
+  soft_navigation_count_ = 0;
   // HistoryNavigation is a singular event, and we share the same instance as
   // long as we use the same source ID.
   ukm::builders::HistoryNavigation builder(
@@ -269,6 +270,62 @@ void BackForwardCachePageLoadMetricsObserver::
   }
 }
 
+void BackForwardCachePageLoadMetricsObserver::
+    RecordResponsivenessMetricsBeforeSoftNavigation() {
+  const page_load_metrics::InteractionToNextPaintCalculator& calculator =
+      GetDelegate().GetSoftNavigationIntervalInteractionToNextPaintCalculator();
+  std::optional<
+      page_load_metrics::InteractionToNextPaintCalculator::InteractionData>
+      inp_data = calculator.ApproximateHighPercentile();
+  if (!inp_data.has_value()) {
+    return;
+  }
+  const page_load_metrics::mojom::EventTiming& inp = inp_data->max_event;
+  ukm::builders::HistoryNavigation builder(
+      GetLastUkmSourceIdForBackForwardCacheRestore());
+  builder
+      .SetBeforeSoftNavigation_UserInteractionLatencyAfterBackForwardCacheRestore_HighPercentile2_MaxEventDurationMs(
+          inp.duration.InMilliseconds());
+  builder.SetBeforeSoftNavigation_NumInteractionsAfterBackForwardCacheRestore(
+      ukm::GetExponentialBucketMinForCounts1000(
+          calculator.num_user_interactions()));
+  builder.Record(ukm::UkmRecorder::Get());
+}
+
+void BackForwardCachePageLoadMetricsObserver::
+    RecordLayoutShiftBeforeSoftNavigation() {
+  const page_load_metrics::NormalizedCLSData& normalized_cls_data =
+      GetDelegate().GetSoftNavigationIntervalNormalizedCLSData();
+  if (normalized_cls_data.data_tainted) {
+    return;
+  }
+  const float max_cls =
+      normalized_cls_data.session_windows_gap1000ms_max5000ms_max_cls;
+  ukm::builders::HistoryNavigation builder(
+      GetLastUkmSourceIdForBackForwardCacheRestore());
+  builder
+      .SetBeforeSoftNavigation_MaxCumulativeShiftScore_MainFrame_SessionWindow_Gap1000ms_Max5000ms(
+          page_load_metrics::LayoutShiftUkmValue(max_cls));
+  builder.Record(ukm::UkmRecorder::Get());
+}
+
+void BackForwardCachePageLoadMetricsObserver::OnSoftNavigation() {
+  if (!has_ever_entered_back_forward_cache_) {
+    // This is a soft navigation after a prerender (see
+    // PrerenderPageLoadMetricsObserver) or a traditional navigation (See
+    // UkmPageLoadMetricsObserver). This observer
+    // (BackForwardCachePageLoadMetricsObserver) only is interested in soft
+    // navigations after back-forward cache restores.
+    return;
+  }
+  CHECK_GE(soft_navigation_count_, 0);
+  soft_navigation_count_++;
+  if (soft_navigation_count_ == 1 && !in_back_forward_cache_) {
+    RecordResponsivenessMetricsBeforeSoftNavigation();
+    RecordLayoutShiftBeforeSoftNavigation();
+  }
+}
+
 page_load_metrics::PageLoadMetricsObserver::ObservePolicy
 BackForwardCachePageLoadMetricsObserver::FlushMetricsOnAppEnterBackground(
     const page_load_metrics::mojom::PageLoadTiming& timing) {
@@ -303,6 +360,11 @@ void BackForwardCachePageLoadMetricsObserver::RecordMetricsOnPageVisitEnd(
   MaybeRecordNormalizedResponsivenessMetrics();
 
   if (has_ever_entered_back_forward_cache_) {
+    ukm::builders::HistoryNavigation(
+        GetLastUkmSourceIdForBackForwardCacheRestore())
+        .SetSoftNavigationCount(soft_navigation_count_)
+        .Record(ukm::UkmRecorder::Get());
+
     page_load_metrics::RecordPageVisitFinalStatusForTiming(
         timing, GetDelegate(), GetLastUkmSourceIdForBackForwardCacheRestore());
     bool is_user_initiated_navigation =
@@ -323,12 +385,11 @@ void BackForwardCachePageLoadMetricsObserver::
   if (!has_ever_entered_back_forward_cache_) {
     return;
   }
-  // Normalized Responsiveness Metrics.
-  const page_load_metrics::ResponsivenessMetricsNormalization&
-      responsiveness_metrics_normalization =
-          GetDelegate().GetResponsivenessMetricsNormalization();
+  // Interaction to Next Paint (INP) Metrics.
+  const page_load_metrics::InteractionToNextPaintCalculator& inp_calculator =
+      GetDelegate().GetInteractionToNextPaintCalculator();
 
-  if (!responsiveness_metrics_normalization.num_user_interactions()) {
+  if (!inp_calculator.num_user_interactions()) {
     return;
   }
 
@@ -338,27 +399,23 @@ void BackForwardCachePageLoadMetricsObserver::
       GetLastUkmSourceIdForBackForwardCacheRestore());
   builder
       .SetWorstUserInteractionLatencyAfterBackForwardCacheRestore_MaxEventDuration2(
-          responsiveness_metrics_normalization.worst_latency()
+          inp_calculator.worst_latency()
               .value()
-              .interaction_latency.InMilliseconds());
+              .max_event.duration.InMilliseconds());
   UmaHistogramCustomTimes(
       internal::
           kWorstUserInteractionLatency_MaxEventDuration_AfterBackForwardCacheRestore,
-      responsiveness_metrics_normalization.worst_latency()
-          .value()
-          .interaction_latency,
+      inp_calculator.worst_latency().value().max_event.duration,
       base::Milliseconds(1), base::Seconds(60), 50);
 
   base::TimeDelta high_percentile2_max_event_duration =
-      responsiveness_metrics_normalization.ApproximateHighPercentile()
-          .value()
-          .interaction_latency;
+      inp_calculator.ApproximateHighPercentile().value().max_event.duration;
   builder
       .SetUserInteractionLatencyAfterBackForwardCacheRestore_HighPercentile2_MaxEventDuration(
           high_percentile2_max_event_duration.InMilliseconds());
   builder.SetNumInteractionsAfterBackForwardCacheRestore(
       ukm::GetExponentialBucketMinForCounts1000(
-          responsiveness_metrics_normalization.num_user_interactions()));
+          inp_calculator.num_user_interactions()));
 
   UmaHistogramCustomTimes(
       internal::
@@ -367,7 +424,7 @@ void BackForwardCachePageLoadMetricsObserver::
       base::Seconds(60), 50);
   base::UmaHistogramCounts1000(
       internal::kNumInteractions_AfterBackForwardCacheRestore,
-      responsiveness_metrics_normalization.num_user_interactions());
+      inp_calculator.num_user_interactions());
 
   builder.Record(ukm::UkmRecorder::Get());
 }

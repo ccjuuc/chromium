@@ -58,7 +58,7 @@ class PrefProvider : public UserModifiableProvider {
   bool SetWebsiteSetting(const ContentSettingsPattern& primary_pattern,
                          const ContentSettingsPattern& secondary_pattern,
                          ContentSettingsType content_type,
-                         base::Value&& value,
+                         const base::Value& value,
                          const ContentSettingConstraints& constraints) override;
   void ClearAllContentSettingsRules(ContentSettingsType content_type) override;
   void ShutdownOnUIThread() override;
@@ -66,12 +66,13 @@ class PrefProvider : public UserModifiableProvider {
                           const GURL& secondary_url,
                           ContentSettingsType content_type,
                           const base::Time time) override;
-  bool ResetLastVisitTime(const ContentSettingsPattern& primary_pattern,
-                          const ContentSettingsPattern& secondary_pattern,
-                          ContentSettingsType content_type) override;
   bool UpdateLastVisitTime(const ContentSettingsPattern& primary_pattern,
                            const ContentSettingsPattern& secondary_pattern,
                            ContentSettingsType content_type) override;
+  bool SetAutorevocationBypassedByUser(
+      const ContentSettingsPattern& primary_pattern,
+      const ContentSettingsPattern& secondary_pattern,
+      ContentSettingsType content_type) override;
   std::optional<base::TimeDelta> RenewContentSetting(
       const GURL& primary_url,
       const GURL& secondary_url,
@@ -88,11 +89,6 @@ class PrefProvider : public UserModifiableProvider {
               const ContentSettingsPattern& secondary_pattern,
               ContentSettingsType content_type);
 
-  bool SetLastVisitTime(const ContentSettingsPattern& primary_pattern,
-                        const ContentSettingsPattern& secondary_pattern,
-                        ContentSettingsType content_type,
-                        const base::Time time);
-
   // Finds the first setting whose Rule satisfies `is_match`, and performs some
   // update. `perform_update` may modify the Rule in-place, and should return
   // true if any modifications were made.  Returns whether or not any setting
@@ -104,8 +100,23 @@ class PrefProvider : public UserModifiableProvider {
   // Clean up the obsolete preferences from the user's profile.
   void DiscardOrMigrateObsoletePreferences();
 
+  // Computes the value that needs to be stored in this provider after an
+  // ephemeral grant was stored.
+  std::optional<base::Value> ValueForHandlingEphemeralGrant(
+      const ContentSettingsPattern& primary_pattern,
+      const ContentSettingsPattern& secondary_pattern,
+      ContentSettingsType content_type,
+      const base::Value& in_value,
+      const ContentSettingConstraints& constraints,
+      mojom::SessionModel* session_model);
+
+#if !BUILDFLAG(IS_IOS)
   // Migrate between GEOLOCATION and GEOLOCATION_WITH_OPTIONS.
   void MigrateGeolocationExceptions();
+
+  // Migrate between LOCAL_NETWORK_ACCESS and LOCAL_NETWORK/LOOPBACK_NETWORK
+  void MigrateLocalNetworkAccessExceptions();
+#endif  // !BUILDFLAG(IS_IOS)
 
   // Returns true if this provider supports the given |content_type|.
   bool supports_type(ContentSettingsType content_type) const {

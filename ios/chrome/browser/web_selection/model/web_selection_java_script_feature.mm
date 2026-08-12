@@ -20,7 +20,7 @@ const char kWebSelectionFunctionName[] = "webSelection.getSelectedText";
 const char kScriptHandlerName[] = "WebSelection";
 
 WebSelectionResponse* ParseResponse(base::WeakPtr<web::WebState> weak_web_state,
-                                    const base::Value::Dict& dict) {
+                                    const base::DictValue& dict) {
   web::WebState* web_state = weak_web_state.get();
   if (!web_state) {
     return [WebSelectionResponse invalidResponse];
@@ -86,7 +86,7 @@ void WebSelectionJavaScriptFeature::ScriptMessageReceived(
     // There is no observer waiting for selection retrieval. Ignore the message.
     return;
   }
-  base::Value* response = script_message.body();
+  base::Value* response = script_message.legacy_body();
   if (!response || !response->is_dict()) {
     NOTREACHED();
   }

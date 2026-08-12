@@ -18,6 +18,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/base/features.h"
+#include "net/base/ip_address.h"
 #include "net/cert/x509_util.h"
 #include "net/net_buildflags.h"
 #include "net/test/cert_test_util.h"
@@ -74,7 +75,7 @@ class CertVerifierServicePolicyTest : public policy::PolicyTest {
 #if BUILDFLAG(CHROME_ROOT_STORE_CERT_MANAGEMENT_UI)
     base::test::TestFuture<void> cert_verifier_service_update_waiter;
     browser()
-        ->profile()
+        ->GetProfile()
         ->GetDefaultStoragePartition()
         ->GetCertVerifierServiceUpdater()
         ->WaitUntilNextUpdateForTesting(
@@ -138,6 +139,63 @@ IN_PROC_BROWSER_TEST_P(CertVerifierServiceCACertificatesPolicyTest,
 
 INSTANTIATE_TEST_SUITE_P(All,
                          CertVerifierServiceCACertificatesPolicyTest,
+                         ::testing::Bool());
+
+class CertVerifierServiceCACertificatesPolicyMldsaTest
+    : public CertVerifierServicePolicyTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  void SetUpInProcessBrowserTestFixture() override {
+    policy::PolicyTest::SetUpInProcessBrowserTestFixture();
+
+    net::TestRootCerts::GetInstance()->Clear();
+
+    // Create a test cert chain using ML-DSA signatures. The leaf has a SAN of
+    // 127.0.0.1 to match the default hostname used by
+    // EmbeddedTestServer::GetURL.
+    auto [leaf, root] = net::CertBuilder::CreateSimpleChain2();
+    root->GenerateMldsa44Key();
+    leaf->GenerateMldsa44Key();
+    leaf->SetSubjectAltNames({}, {net::IPAddress::IPv4Localhost()});
+    scoped_refptr<net::X509Certificate> root_cert = root->GetX509Certificate();
+    ASSERT_TRUE(root_cert);
+
+    // Start the server using the test cert.
+    net::EmbeddedTestServer::ServerCertificateConfig cert_config;
+    cert_config.cert_and_key = net::EmbeddedTestServer::CertAndKey(
+        leaf->DupCertBuffer(), bssl::UpRef(leaf->GetKey()));
+    https_test_server_.SetSSLConfig(cert_config);
+    https_test_server_.ServeFilesFromSourceDirectory("chrome/test/data");
+    ASSERT_TRUE(https_test_server_.Start());
+
+    // Use the CACertificates policy to trust the test root cert.
+    if (add_cert_to_policy()) {
+      std::string b64_cert = base::Base64Encode(root_cert->cert_span());
+      base::Value certs_value(base::Value::Type::LIST);
+      certs_value.GetList().Append(b64_cert);
+      policy::PolicyMap policies;
+      SetPolicy(&policies, policy::key::kCACertificates,
+                std::make_optional(std::move(certs_value)));
+      UpdateProviderPolicy(policies);
+    }
+  }
+
+  bool add_cert_to_policy() const { return GetParam(); }
+
+  net::EmbeddedTestServer https_test_server_{
+      net::EmbeddedTestServer::TYPE_HTTPS};
+};
+
+IN_PROC_BROWSER_TEST_P(CertVerifierServiceCACertificatesPolicyMldsaTest,
+                       TestMldsaCertTrusted) {
+  ASSERT_TRUE(NavigateToUrl(https_test_server_.GetURL("/simple.html"), this));
+  EXPECT_NE(add_cert_to_policy(),
+            chrome_browser_interstitials::IsShowingInterstitial(
+                chrome_test_utils::GetActiveWebContents(this)));
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         CertVerifierServiceCACertificatesPolicyMldsaTest,
                          ::testing::Bool());
 
 // Test update of CACertificates policy after verifier is already
@@ -573,13 +631,13 @@ class CertVerifierServiceCACertsWithConstraintsPolicyTest
         set_proper_dns_name_constraint() ? "localhost" : "cruddyhost";
     std::string b64_cert = base::Base64Encode(
         net::x509_util::CryptoBufferAsStringPiece(root_cert->cert_buffer()));
-    base::Value::List certs_with_constraints_value = base::Value::List().Append(
-        base::Value::Dict()
+    base::ListValue certs_with_constraints_value = base::ListValue().Append(
+        base::DictValue()
             .Set("certificate", b64_cert)
             .Set("constraints",
-                 base::Value::Dict().Set(
+                 base::DictValue().Set(
                      "permitted_dns_names",
-                     base::Value::List().Append(dns_name_constraint))));
+                     base::ListValue().Append(dns_name_constraint))));
     policy::PolicyMap policies;
     SetPolicy(&policies, policy::key::kCACertificatesWithConstraints,
               std::make_optional(
@@ -631,13 +689,13 @@ class CertVerifierServiceCACertsWithCIDRConstraintsPolicyTest
         set_proper_cidr_name_constraint() ? "127.127.0.1/8" : "127.127.0.1/16";
     std::string b64_cert = base::Base64Encode(
         net::x509_util::CryptoBufferAsStringPiece(root_cert->cert_buffer()));
-    base::Value::List certs_with_constraints_value = base::Value::List().Append(
-        base::Value::Dict()
+    base::ListValue certs_with_constraints_value = base::ListValue().Append(
+        base::DictValue()
             .Set("certificate", b64_cert)
             .Set("constraints",
-                 base::Value::Dict().Set(
+                 base::DictValue().Set(
                      "permitted_cidrs",
-                     base::Value::List().Append(cidr_name_constraint))));
+                     base::ListValue().Append(cidr_name_constraint))));
     policy::PolicyMap policies;
     SetPolicy(&policies, policy::key::kCACertificatesWithConstraints,
               std::make_optional(
@@ -688,13 +746,12 @@ class CertVerifierServiceCACertsWithInvalidCIDRConstraintsPolicyTest
     // Set invalid policy.
     std::string b64_cert = base::Base64Encode(
         net::x509_util::CryptoBufferAsStringPiece(root_cert->cert_buffer()));
-    base::Value::List certs_with_constraints_value = base::Value::List().Append(
-        base::Value::Dict()
+    base::ListValue certs_with_constraints_value = base::ListValue().Append(
+        base::DictValue()
             .Set("certificate", b64_cert)
-            .Set("constraints",
-                 base::Value::Dict().Set(
-                     "permitted_cidrs",
-                     base::Value::List().Append("invalidcidr"))));
+            .Set("constraints", base::DictValue().Set(
+                                    "permitted_cidrs",
+                                    base::ListValue().Append("invalidcidr"))));
     policy::PolicyMap policies;
     SetPolicy(&policies, policy::key::kCACertificatesWithConstraints,
               std::make_optional(
@@ -754,13 +811,12 @@ IN_PROC_BROWSER_TEST_F(
     // Set invalid policy.
     std::string b64_cert = base::Base64Encode(
         net::x509_util::CryptoBufferAsStringPiece(root_cert->cert_buffer()));
-    base::Value::List certs_with_constraints_value = base::Value::List().Append(
-        base::Value::Dict()
+    base::ListValue certs_with_constraints_value = base::ListValue().Append(
+        base::DictValue()
             .Set("certificate", b64_cert)
-            .Set("constraints",
-                 base::Value::Dict().Set(
-                     "permitted_cidrs",
-                     base::Value::List().Append("invalidcidr"))));
+            .Set("constraints", base::DictValue().Set(
+                                    "permitted_cidrs",
+                                    base::ListValue().Append("invalidcidr"))));
     policy::PolicyMap policies;
     SetPolicy(&policies, policy::key::kCACertificatesWithConstraints,
               std::make_optional(
@@ -777,13 +833,12 @@ IN_PROC_BROWSER_TEST_F(
     // Update with valid policy
     std::string b64_cert = base::Base64Encode(
         net::x509_util::CryptoBufferAsStringPiece(root_cert->cert_buffer()));
-    base::Value::List certs_with_constraints_value = base::Value::List().Append(
-        base::Value::Dict()
+    base::ListValue certs_with_constraints_value = base::ListValue().Append(
+        base::DictValue()
             .Set("certificate", b64_cert)
-            .Set("constraints",
-                 base::Value::Dict().Set(
-                     "permitted_cidrs",
-                     base::Value::List().Append("127.127.0.1/8"))));
+            .Set("constraints", base::DictValue().Set("permitted_cidrs",
+                                                      base::ListValue().Append(
+                                                          "127.127.0.1/8"))));
     policy::PolicyMap policies;
     SetPolicy(&policies, policy::key::kCACertificatesWithConstraints,
               std::make_optional(
@@ -841,24 +896,24 @@ IN_PROC_BROWSER_TEST_P(CertVerifierServiceNewAndOncCertificatePoliciesTest,
         &onc_hint_pem));
 
     auto onc_ca_cert =
-        base::Value::Dict()
+        base::DictValue()
             .Set(onc::certificate::kGUID, base::Value("guid_root"))
             .Set(onc::certificate::kType, onc::certificate::kAuthority)
             .Set(onc::certificate::kX509, onc_root_pem)
             .Set(onc::certificate::kTrustBits,
-                 base::Value::List().Append(onc::certificate::kWeb));
+                 base::ListValue().Append(onc::certificate::kWeb));
 
     auto onc_hint_cert =
-        base::Value::Dict()
+        base::DictValue()
             .Set(onc::certificate::kGUID, base::Value("guid_hint"))
             .Set(onc::certificate::kType, onc::certificate::kAuthority)
             .Set(onc::certificate::kX509, onc_hint_pem);
 
-    auto onc_certificates = base::Value::List()
+    auto onc_certificates = base::ListValue()
                                 .Append(std::move(onc_ca_cert))
                                 .Append(std::move(onc_hint_cert));
 
-    auto onc_policy = base::Value::Dict()
+    auto onc_policy = base::DictValue()
                           .Set(onc::toplevel_config::kCertificates,
                                std::move(onc_certificates))
                           .Set(onc::toplevel_config::kType,
@@ -867,11 +922,11 @@ IN_PROC_BROWSER_TEST_P(CertVerifierServiceNewAndOncCertificatePoliciesTest,
     std::string onc_policy_json;
     ASSERT_TRUE(base::JSONWriter::Write(onc_policy, &onc_policy_json));
 
-    auto new_ca_certs = base::Value::List().Append(
+    auto new_ca_certs = base::ListValue().Append(
         base::Base64Encode(net::x509_util::CryptoBufferAsStringPiece(
             test_server_for_new_policy.GetRoot()->cert_buffer())));
 
-    auto new_hint_certs = base::Value::List().Append(
+    auto new_hint_certs = base::ListValue().Append(
         base::Base64Encode(net::x509_util::CryptoBufferAsStringPiece(
             test_server_for_new_policy.GetGeneratedIntermediate()
                 ->cert_buffer())));
@@ -939,7 +994,7 @@ IN_PROC_BROWSER_TEST_P(CertVerifierServicePolicyAndUserRootsTest,
   if (add_certs()) {
     net::ServerCertificateDatabaseService* server_certificate_database_service =
         net::ServerCertificateDatabaseServiceFactory::GetForBrowserContext(
-            browser()->profile());
+            browser()->GetProfile());
     {
       scoped_refptr<net::X509Certificate> root_cert =
           test_server_for_user_added.GetRoot();
@@ -974,11 +1029,11 @@ IN_PROC_BROWSER_TEST_P(CertVerifierServicePolicyAndUserRootsTest,
       ASSERT_TRUE(future.Get());
     }
 
-    auto policy_ca_certs = base::Value::List().Append(
+    auto policy_ca_certs = base::ListValue().Append(
         base::Base64Encode(net::x509_util::CryptoBufferAsStringPiece(
             test_server_for_policy.GetRoot()->cert_buffer())));
 
-    auto policy_hint_certs = base::Value::List().Append(
+    auto policy_hint_certs = base::ListValue().Append(
         base::Base64Encode(net::x509_util::CryptoBufferAsStringPiece(
             test_server_for_policy.GetGeneratedIntermediate()->cert_buffer())));
 

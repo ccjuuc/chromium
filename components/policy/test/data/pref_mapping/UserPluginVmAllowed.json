@@ -1,19 +1,5 @@
 [
   {
-    "os": [
-      "chromeos"
-    ],
-    "policy_pref_mapping_tests": [
-      {
-        "policies": {
-          "UserPluginVmAllowed": true
-        },
-        "prefs": {
-          "plugin_vm.allowed": {
-            "value": true
-          }
-        }
-      }
-    ]
+    "reason_for_missing_test": "Policy was deprecated in M152."
   }
 ]

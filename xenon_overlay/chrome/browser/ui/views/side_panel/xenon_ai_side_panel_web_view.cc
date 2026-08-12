@@ -6,7 +6,7 @@
 
 #include "base/memory/ptr_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_scope.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_scope.h"
 #include "chrome/common/webui_url_constants.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_ai/xenon_ai_side_panel_ui.h"

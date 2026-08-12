@@ -6,11 +6,10 @@
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/memory/memory_pressure_listener.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -42,7 +41,6 @@
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/memory_pressure/fake_memory_pressure_monitor.h"
 #include "components/performance_manager/public/features.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/navigation_entry.h"
@@ -112,7 +110,7 @@ class ExpectStateTransitionObserver : public LifecycleUnitObserver {
     } else {
       LOG(ERROR) << "transition to state "
                  << static_cast<int>(lifecycle_unit_->GetState());
-      EXPECT_TRUE(base::Contains(allowed_states_, lifecycle_unit_->GetState()));
+      EXPECT_TRUE(allowed_states_.contains(lifecycle_unit_->GetState()));
     }
   }
 
@@ -178,6 +176,19 @@ class WindowedRenderProcessHostExitObserver
   bool seen_ = false;
 };
 
+// Ensures that |browser| has |num_tabs| open tabs.
+void EnsureTabsInBrowser(BrowserWindowInterface* browser, int num_tabs) {
+  for (int i = 0; i < num_tabs; ++i) {
+    ui_test_utils::NavigateToURLWithDisposition(
+        browser, GURL(chrome::kChromeUICreditsURL),
+        i == 0 ? WindowOpenDisposition::CURRENT_TAB
+               : WindowOpenDisposition::NEW_BACKGROUND_TAB,
+        ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+  }
+
+  EXPECT_EQ(num_tabs, browser->GetTabStripModel()->count());
+}
+
 }  // namespace
 
 class TabManagerTest : public InProcessBrowserTest,
@@ -185,8 +196,9 @@ class TabManagerTest : public InProcessBrowserTest,
  public:
   TabManagerTest()
       : scoped_set_clocks_for_testing_(&test_clock_, &test_tick_clock_) {
-    scoped_feature_list_.InitWithFeatureState(features::kWebContentsDiscard,
-                                              IsRetainedWebContents());
+    scoped_feature_list_.InitWithFeatureStates(
+        {{features::kWebContentsDiscard, IsRetainedWebContents()},
+         {performance_manager::features::kTransientKeepAlivePolicy, false}});
     // Start with a non-null TimeTicks, as there is no discard protection for
     // a tab with a null focused timestamp.
     test_tick_clock_.Advance(kShortDelay);
@@ -198,12 +210,13 @@ class TabManagerTest : public InProcessBrowserTest,
 
     // To avoid flakes when focus changes, set the active tab strip model
     // explicitly.
-    GetTabLifecycleUnitSource()->SetFocusedTabStripModelForTesting(tsm());
+    focused_tab_strip_model_override_ =
+        GetTabLifecycleUnitSource()->SetFocusedTabStripModelForTesting(tsm());
   }
 
   void TearDownOnMainThread() override {
     // Clear the fakely-focused model before browsers are destroyed.
-    GetTabLifecycleUnitSource()->SetFocusedTabStripModelForTesting(nullptr);
+    focused_tab_strip_model_override_.RunAndReset();
     InProcessBrowserTest::TearDownOnMainThread();
   }
 
@@ -225,6 +238,29 @@ class TabManagerTest : public InProcessBrowserTest,
     ASSERT_EQ(2, tsm()->count());
   }
 
+  // Creates a browser with |num_tabs| tabs.
+  BrowserWindowInterface* CreateBrowserWithTabs(int num_tabs) {
+    BrowserWindowInterface* const current_browser =
+        GetLastActiveBrowserWindowInterfaceWithAnyProfile();
+    ui_test_utils::BrowserCreatedObserver browser_created_observer;
+    chrome::NewWindow(current_browser);
+    ui_test_utils::WaitForBrowserSetLastActive(browser_created_observer.Wait());
+    BrowserWindowInterface* new_browser =
+        GetLastActiveBrowserWindowInterfaceWithAnyProfile();
+    EXPECT_NE(new_browser, current_browser);
+
+    // To avoid flakes when focus changes, set the active tab strip model
+    // explicitly. Note: we reset the previous one (if any) first; otherwise,
+    // the reset would re-set it back to the previous (overridden) value.
+    focused_tab_strip_model_override_.RunAndReset();
+    focused_tab_strip_model_override_ =
+        GetTabLifecycleUnitSource()->SetFocusedTabStripModelForTesting(
+            new_browser->GetTabStripModel());
+
+    EnsureTabsInBrowser(new_browser, num_tabs);
+    return new_browser;
+  }
+
   TabManager* tab_manager() { return g_browser_process->GetTabManager(); }
   TabStripModel* tsm() { return browser()->tab_strip_model(); }
 
@@ -240,25 +276,24 @@ class TabManagerTest : public InProcessBrowserTest,
   bool IsRetainedWebContents() const { return GetParam(); }
 
   content::WebContents* UrgentDiscardTabImmediately() {
-    return tab_manager()->DiscardTabImpl(
-        LifecycleUnitDiscardReason::URGENT,
-        /*minimum_time_in_background_to_discard*/ base::TimeDelta());
+    return tab_manager()->DiscardTabImpl(LifecycleUnitDiscardReason::URGENT,
+                                         /*ignore_recent_visibility=*/true);
   }
-
-  memory_pressure::test::FakeMemoryPressureMonitor
-      fake_memory_pressure_monitor_;
 
   base::SimpleTestClock test_clock_;
   base::SimpleTestTickClock test_tick_clock_;
   ScopedSetClocksForTesting scoped_set_clocks_for_testing_;
   base::test::ScopedFeatureList scoped_feature_list_;
+  base::ScopedClosureRunner focused_tab_strip_model_override_;
 };
 
 class TabManagerTestWithTwoTabs : public TabManagerTest {
  public:
   TabManagerTestWithTwoTabs() {
     // Tests using two tabs assume that each tab has a dedicated process.
-    feature_list_.InitAndEnableFeature(features::kDisableProcessReuse);
+    feature_list_.InitWithFeatures(
+        {features::kDisableProcessReuse},
+        {performance_manager::features::kTransientKeepAlivePolicy});
   }
 
   TabManagerTestWithTwoTabs(const TabManagerTestWithTwoTabs&) = delete;
@@ -373,7 +408,7 @@ IN_PROC_BROWSER_TEST_P(TabManagerTest, TabManagerBasics) {
   EXPECT_FALSE(IsTabDiscarded(GetWebContentsAt(2)));
 
   // Navigate the third tab back twice.  We used to crash here due to
-  // crbug.com/121373.
+  // crbug.com/40183760.
   EXPECT_TRUE(chrome::CanGoBack(browser()));
   EXPECT_FALSE(chrome::CanGoForward(browser()));
   chrome::GoBack(browser(), WindowOpenDisposition::CURRENT_TAB);
@@ -967,45 +1002,8 @@ IN_PROC_BROWSER_TEST_P(TabManagerFencedFrameTest, TabManagerWasDiscarded) {
   EXPECT_EQ(true, content::EvalJs(fenced_frame, kDiscardedStateJS));
 }
 
-namespace {
-
-// Ensures that |browser| has |num_tabs| open tabs.
-void EnsureTabsInBrowser(BrowserWindowInterface* browser, int num_tabs) {
-  for (int i = 0; i < num_tabs; ++i) {
-    ui_test_utils::NavigateToURLWithDisposition(
-        browser, GURL(chrome::kChromeUICreditsURL),
-        i == 0 ? WindowOpenDisposition::CURRENT_TAB
-               : WindowOpenDisposition::NEW_BACKGROUND_TAB,
-        ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-  }
-
-  EXPECT_EQ(num_tabs, browser->GetTabStripModel()->count());
-}
-
-// Creates a browser with |num_tabs| tabs.
-BrowserWindowInterface* CreateBrowserWithTabs(int num_tabs) {
-  BrowserWindowInterface* const current_browser =
-      GetLastActiveBrowserWindowInterfaceWithAnyProfile();
-  ui_test_utils::BrowserCreatedObserver browser_created_observer;
-  chrome::NewWindow(current_browser);
-  ui_test_utils::WaitForBrowserSetLastActive(browser_created_observer.Wait());
-  BrowserWindowInterface* new_browser =
-      GetLastActiveBrowserWindowInterfaceWithAnyProfile();
-  EXPECT_NE(new_browser, current_browser);
-
-  // To avoid flakes when focus changes, set the active tab strip model
-  // explicitly.
-  GetTabLifecycleUnitSource()->SetFocusedTabStripModelForTesting(
-      new_browser->GetTabStripModel());
-
-  EnsureTabsInBrowser(new_browser, num_tabs);
-  return new_browser;
-}
-
-}  // namespace
-
 // Do not run in debug or ASAN builds to avoid timeouts due to multiple
-// navigations. https://crbug.com/1106485
+// navigations. https://crbug.com/40706359
 #if !defined(NDEBUG) || defined(ADDRESS_SANITIZER)
 #define MAYBE_DiscardTabsWithMinimizedWindow \
   DISABLED_DiscardTabsWithMinimizedWindow
@@ -1014,11 +1012,11 @@ BrowserWindowInterface* CreateBrowserWithTabs(int num_tabs) {
 #endif
 IN_PROC_BROWSER_TEST_P(TabManagerTest, MAYBE_DiscardTabsWithMinimizedWindow) {
   // Do not override the focused TabStripModel.
-  GetTabLifecycleUnitSource()->SetFocusedTabStripModelForTesting(nullptr);
+  focused_tab_strip_model_override_.RunAndReset();
 
   // Minimized browser.
   EnsureTabsInBrowser(browser(), 2);
-  browser()->window()->Minimize();
+  browser()->GetWindow()->Minimize();
 
   for (int i = 0; i < 8; ++i) {
     UrgentDiscardTabImmediately();
@@ -1035,14 +1033,14 @@ IN_PROC_BROWSER_TEST_P(TabManagerTest, MAYBE_DiscardTabsWithMinimizedWindow) {
       IsTabDiscarded(browser()->tab_strip_model()->GetWebContentsAt(1)));
 
   // Showing the browser again should reload the active tab.
-  browser()->window()->Show();
+  browser()->GetWindow()->Show();
   base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(
       IsTabDiscarded(browser()->tab_strip_model()->GetWebContentsAt(0)));
 }
 
 // Do not run in debug or ASAN builds to avoid timeouts due to multiple
-// navigations. https://crbug.com/1106485
+// navigations. https://crbug.com/40706359
 #if !defined(NDEBUG) || defined(ADDRESS_SANITIZER)
 #define MAYBE_DiscardTabsWithOccludedWindow \
   DISABLED_DiscardTabsWithOccludedWindow
@@ -1052,7 +1050,7 @@ IN_PROC_BROWSER_TEST_P(TabManagerTest, MAYBE_DiscardTabsWithMinimizedWindow) {
 IN_PROC_BROWSER_TEST_P(TabManagerTest, MAYBE_DiscardTabsWithOccludedWindow) {
   // Occluded browser.
   EnsureTabsInBrowser(browser(), 2);
-  browser()->window()->SetBounds(gfx::Rect(10, 10, 10, 10));
+  browser()->GetWindow()->SetBounds(gfx::Rect(10, 10, 10, 10));
   // Other browser that covers the occluded browser.
   BrowserWindowInterface* const other_browser = CreateBrowserWithTabs(1);
   EXPECT_NE(other_browser, browser());
@@ -1104,6 +1102,66 @@ INSTANTIATE_TEST_SUITE_P(
            info) {
       return info.param ? "RetainedWebContents" : "UnretainedWebContents";
     });
+// Data race on Linux. http://crbug.com/41357022
+// Flaky on Mac and Windows: https://crbug.com/41477172
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_WIN)
+#define MAYBE_DiscardTabWithNonVisibleTabs DISABLED_DiscardTabWithNonVisibleTabs
+#else
+#define MAYBE_DiscardTabWithNonVisibleTabs DiscardTabWithNonVisibleTabs
+#endif
+
+// Verify that:
+// - On ChromeOS, DiscardTab can discard every non-visible tab, but cannot
+//   discard a visible tab.
+// - On other platforms, DiscardTab can discard every tab that is not active in
+//   its tab strip.
+IN_PROC_BROWSER_TEST_P(TabManagerTest, MAYBE_DiscardTabWithNonVisibleTabs) {
+  // Create 2 windows. Simulate the second window being hidden/not active.
+  Browser* browser1 = browser();
+
+  ASSERT_TRUE(
+      ui_test_utils::NavigateToURL(browser1, GURL("https://www.example.com")));
+  ui_test_utils::NavigateToURLWithDisposition(
+      browser1, GURL("https://www.example.com"),
+      WindowOpenDisposition::NEW_BACKGROUND_TAB,
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+
+  Browser* browser2 = CreateBrowser(browser1->GetProfile());
+  ASSERT_TRUE(
+      ui_test_utils::NavigateToURL(browser2, GURL("https://www.example.com")));
+  ui_test_utils::NavigateToURLWithDisposition(
+      browser2, GURL("https://www.example.com"),
+      WindowOpenDisposition::NEW_BACKGROUND_TAB,
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+
+  TabStripModel* tab_strip1 = browser1->tab_strip_model();
+  TabStripModel* tab_strip2 = browser2->tab_strip_model();
+
+  ASSERT_EQ(2, tab_strip1->count());
+  ASSERT_EQ(2, tab_strip2->count());
+
+  for (int i = 0; i < 4; ++i) {
+    tab_manager()->DiscardTabByExtension(nullptr);
+  }
+
+  // Active tab in a visible window should not be discarded.
+  EXPECT_FALSE(IsTabDiscarded(tab_strip1->GetWebContentsAt(0)));
+
+  // Non-active tabs should be discarded.
+  EXPECT_TRUE(IsTabDiscarded(tab_strip1->GetWebContentsAt(1)));
+  EXPECT_TRUE(IsTabDiscarded(tab_strip2->GetWebContentsAt(1)));
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // On ChromeOS, a non-visible tab should be discarded even if it's active in
+  // its tab strip.
+  EXPECT_TRUE(IsTabDiscarded(tab_strip2->GetWebContentsAt(0)));
+#else
+  // On other platforms, an active tab is never discarded, even if it's not
+  // visible.
+  EXPECT_FALSE(IsTabDiscarded(tab_strip2->GetWebContentsAt(0)));
+#endif  // BUILDFLAG(IS_CHROMEOS)
+}
 
 }  // namespace resource_coordinator
 

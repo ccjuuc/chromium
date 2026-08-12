@@ -9,11 +9,11 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/task/thread_pool.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/values.h"
 #include "chrome/services/sharing/nearby/platform/wifi_lan_server_socket.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chromeos/ash/components/login/login_state/login_state.h"
 #include "chromeos/ash/components/network/managed_network_configuration_handler.h"
 #include "chromeos/ash/components/network/network_configuration_handler.h"
@@ -28,15 +28,13 @@
 #include "chromeos/ash/services/network_config/in_process_instance.h"
 #include "chromeos/ash/services/network_config/public/cpp/cros_network_config_test_helper.h"
 #include "chromeos/services/network_config/public/mojom/cros_network_config.mojom.h"
-#include "components/cross_device/nearby/nearby_features.h"
 #include "components/onc/onc_constants.h"
 #include "components/onc/onc_pref_names.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/proxy_config/pref_proxy_config_tracker_impl.h"
 #include "components/proxy_config/proxy_config_pref_names.h"
+#include "components/session_manager/test/test_user_session_manager.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
-#include "components/user_manager/fake_user_manager.h"
-#include "components/user_manager/scoped_user_manager.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
 #include "net/base/ip_address.h"
@@ -132,8 +130,9 @@ class WifiLanMediumTest : public ::testing::Test {
     // TODO(b/278643115) Remove LoginState dependency.
     ash::LoginState::Initialize();
 
-    scoped_user_manager_ = std::make_unique<user_manager::ScopedUserManager>(
-        std::make_unique<user_manager::FakeUserManager>());
+    test_user_session_manager_ =
+        std::make_unique<ash::test::TestUserSessionManager>(
+            TestingBrowserProcess::GetGlobal()->local_state());
 
     switch (state) {
       case WifiInitState::kComplete:
@@ -190,7 +189,7 @@ class WifiLanMediumTest : public ::testing::Test {
     ui_proxy_config_service_.reset();
     network_configuration_handler_.reset();
     network_profile_handler_.reset();
-    scoped_user_manager_.reset();
+    test_user_session_manager_.reset();
     found_service_info_.clear();
     lost_service_info_.clear();
     ash::LoginState::Shutdown();
@@ -268,12 +267,10 @@ class WifiLanMediumTest : public ::testing::Test {
               cros_network_config_helper_->network_device_handler());
 
       PrefProxyConfigTrackerImpl::RegisterProfilePrefs(user_prefs_.registry());
-      PrefProxyConfigTrackerImpl::RegisterPrefs(local_state_.registry());
       ::onc::RegisterProfilePrefs(user_prefs_.registry());
-      ::onc::RegisterPrefs(local_state_.registry());
 
       ui_proxy_config_service_ = std::make_unique<ash::UIProxyConfigService>(
-          &user_prefs_, &local_state_,
+          &user_prefs_, TestingBrowserProcess::GetGlobal()->local_state(),
           cros_network_config_helper_->network_state_helper()
               .network_state_handler(),
           network_profile_handler_.get());
@@ -289,8 +286,8 @@ class WifiLanMediumTest : public ::testing::Test {
       managed_network_config_handler_->SetPolicy(
           ::onc::ONC_SOURCE_DEVICE_POLICY,
           /*userhash=*/std::string(),
-          /*network_configs_onc=*/base::Value::List(),
-          /*global_network_config=*/base::Value::Dict());
+          /*network_configs_onc=*/base::ListValue(),
+          /*global_network_config=*/base::DictValue());
 
       base::RunLoop().RunUntilIdle();
     }
@@ -308,7 +305,7 @@ class WifiLanMediumTest : public ::testing::Test {
 
   void AddWifiService(bool add_ip_configs, const net::IPAddress& local_addr) {
     if (add_ip_configs) {
-      base::Value::Dict ipv4;
+      base::DictValue ipv4;
       ipv4.Set(shill::kAddressProperty, local_addr.ToString());
       ipv4.Set(shill::kMethodProperty, shill::kTypeIPv4);
       cros_network_config_helper_->network_state_helper()
@@ -398,8 +395,7 @@ class WifiLanMediumTest : public ::testing::Test {
 
   // Local IP fetching:
   sync_preferences::TestingPrefServiceSyncable user_prefs_;
-  TestingPrefServiceSimple local_state_;
-  std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
+  std::unique_ptr<ash::test::TestUserSessionManager> test_user_session_manager_;
   std::unique_ptr<ash::NetworkProfileHandler> network_profile_handler_;
   std::unique_ptr<ash::NetworkConfigurationHandler>
       network_configuration_handler_;
@@ -694,12 +690,7 @@ TEST_F(WifiLanMediumTest, Listen_DestroyWhileWaiting) {
 /*============================================================================*/
 // Begin: StartDiscovery()
 /*============================================================================*/
-TEST_F(WifiLanMediumTest, Discovery_FlagEnabled_StartAndStopSucceeds) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      /*enabled_features=*/{::features::kEnableNearbyMdns},
-      /*disabled_features=*/{});
-
+TEST_F(WifiLanMediumTest, Discovery_StartAndStopSucceeds) {
   Initialize(WifiInitState::kComplete);
 
   api::WifiLanMedium::DiscoveredServiceCallback discovery_callback = {
@@ -713,31 +704,7 @@ TEST_F(WifiLanMediumTest, Discovery_FlagEnabled_StartAndStopSucceeds) {
       /*service_type=*/kNearbyServiceType));
 }
 
-TEST_F(WifiLanMediumTest, Discovery_FlagDisabled_StartAndStopFails) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      /*enabled_features=*/{},
-      /*disabled_features=*/{::features::kEnableNearbyMdns});
-
-  Initialize(WifiInitState::kComplete);
-
-  api::WifiLanMedium::DiscoveredServiceCallback discovery_callback = {
-      .service_discovered_cb = [](const NsdServiceInfo& service_info) {},
-      .service_lost_cb = [](const NsdServiceInfo& service_info) {}};
-
-  EXPECT_FALSE(wifi_lan_medium_->StartDiscovery(
-      /*service_type=*/kNearbyServiceType,
-      /*callback=*/std::move(discovery_callback)));
-  EXPECT_FALSE(wifi_lan_medium_->StopDiscovery(
-      /*service_type=*/kNearbyServiceType));
-}
-
 TEST_F(WifiLanMediumTest, Discovery_StopUnknownServiceFails) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      /*enabled_features=*/{::features::kEnableNearbyMdns},
-      /*disabled_features=*/{});
-
   Initialize(WifiInitState::kComplete);
 
   api::WifiLanMedium::DiscoveredServiceCallback discovery_callback = {
@@ -752,11 +719,6 @@ TEST_F(WifiLanMediumTest, Discovery_StopUnknownServiceFails) {
 }
 
 TEST_F(WifiLanMediumTest, Discovery_FindsService) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      /*enabled_features=*/{::features::kEnableNearbyMdns},
-      /*disabled_features=*/{});
-
   Initialize(WifiInitState::kComplete);
 
   StartMdnsDiscovery(/*service_type=*/kNearbyServiceType);
@@ -781,11 +743,6 @@ TEST_F(WifiLanMediumTest, Discovery_FindsService) {
 }
 
 TEST_F(WifiLanMediumTest, Discovery_LosesAndFindsService) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      /*enabled_features=*/{::features::kEnableNearbyMdns},
-      /*disabled_features=*/{});
-
   Initialize(WifiInitState::kComplete);
 
   StartMdnsDiscovery(/*service_type=*/kNearbyServiceType);
@@ -830,11 +787,6 @@ TEST_F(WifiLanMediumTest, Discovery_LosesAndFindsService) {
 }
 
 TEST_F(WifiLanMediumTest, Discovery_MultipleDiscovery) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      /*enabled_features=*/{::features::kEnableNearbyMdns},
-      /*disabled_features=*/{});
-
   Initialize(WifiInitState::kComplete);
 
   // Start 2 discovery sessions.

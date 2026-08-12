@@ -15,17 +15,19 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/test/gtest_util.h"
 #include "base/test/mock_log.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/unguessable_token.h"
 #include "content/browser/browsing_instance.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/isolated_origin_util.h"
 #include "content/browser/origin_agent_cluster_isolation_state.h"
 #include "content/browser/process_lock.h"
 #include "content/browser/renderer_host/navigation_entry_impl.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/site_info.h"
 #include "content/browser/url_info.h"
 #include "content/browser/web_contents/web_contents_impl.h"
@@ -33,6 +35,7 @@
 #include "content/browser/webui/url_data_manager_backend.h"
 #include "content/browser/webui/web_ui_controller_factory_registry.h"
 #include "content/common/content_navigation_policy.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_isolation_policy.h"
 #include "content/public/browser/web_exposed_isolation_level.h"
 #include "content/public/browser/web_ui_controller.h"
@@ -47,10 +50,10 @@
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/scoped_web_ui_controller_factory_registration.h"
 #include "content/public/test/test_browser_context.h"
+#include "content/public/test/test_content_browser_client.h"
+#include "content/public/test/test_content_client.h"
 #include "content/public/test/test_utils.h"
 #include "content/test/storage_partition_test_helpers.h"
-#include "content/test/test_content_browser_client.h"
-#include "content/test/test_content_client.h"
 #include "content/test/test_render_view_host.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/origin.h"
@@ -67,9 +70,10 @@ bool DoesURLRequireDedicatedProcess(const IsolationContext& isolation_context,
       .RequiresDedicatedProcess(isolation_context);
 }
 
-SiteInfo CreateSimpleSiteInfo(const GURL& process_lock_url,
-                              bool requires_origin_keyed_process,
-                              const std::string& browser_context_id) {
+SiteInfo CreateSimpleSiteInfo(
+    const GURL& process_lock_url,
+    bool requires_origin_keyed_process,
+    const base::UnguessableToken& browser_context_id) {
   AgentClusterKey agent_cluster_key =
       requires_origin_keyed_process
           ? AgentClusterKey::CreateOriginKeyed(
@@ -86,22 +90,24 @@ SiteInfo CreateSimpleSiteInfo(const GURL& process_lock_url,
                   WebExposedIsolationLevel::kNotIsolated, /*is_guest=*/false,
                   /*does_site_request_dedicated_process_for_coop=*/false,
                   /*is_jit_disabled=*/false,
-                  /*are_v8_optimizations_disabled=*/false, /*is_pdf=*/false,
-                  /*is_fenced=*/false, browser_context_id);
+                  /*are_v8_optimizations_disabled=*/false,
+                  /*is_fenced=*/false, browser_context_id,
+                  EmbedderIsolationInfo::CreateNone());
 }
 
 }  // namespace
 
 const char kPrivilegedScheme[] = "privileged";
 const char kCustomStandardScheme[] = "custom-standard";
-const char kBrowserContextId[] = "browser_context_id";
+const base::UnguessableToken kBrowserContextId =
+    base::UnguessableToken::CreateForTesting(0, 1);
 
 class SiteInstanceTestBrowserClient : public TestContentBrowserClient {
  public:
   bool IsSuitableHost(RenderProcessHost* process_host,
-                      const GURL& site_url) override {
+                      const SecurityPrincipal& security_principal) override {
     return (privileged_process_id_ == process_host->GetDeprecatedID()) ==
-           site_url.SchemeIs(kPrivilegedScheme);
+           security_principal.SchemeIs(kPrivilegedScheme);
   }
 
   void set_privileged_process_id(int process_id) {
@@ -277,7 +283,7 @@ TEST_F(SiteInstanceTest, SiteInfoAsContainerKey) {
 
   auto site_info_1_other_context = CreateSimpleSiteInfo(
       GURL("https://foo.com"), false /* requires_origin_keyed_process */,
-      "other_context");
+      base::UnguessableToken::CreateForTesting(0, 2));
 
   // Test IsSamePrincipalWith.
   EXPECT_TRUE(site_info_1.IsSamePrincipalWith(site_info_1));
@@ -362,7 +368,8 @@ TEST_F(SiteInstanceTest, SiteInfoAsContainerKey) {
                /*does_site_request_dedicated_process_for_coop=*/true,
                /*is_jit_disabled=*/false,
                /*are_v8_optimizations_disabled=*/false,
-               /*is_pdf=*/false, /*is_fenced=*/false, kBrowserContextId);
+               /*is_fenced=*/false, kBrowserContextId,
+               EmbedderIsolationInfo::CreateNone());
   EXPECT_TRUE(
       site_info_1.IsSamePrincipalWith(site_info_1_with_isolation_request));
   EXPECT_EQ(site_info_1, site_info_1_with_isolation_request);
@@ -381,7 +388,8 @@ TEST_F(SiteInstanceTest, SiteInfoAsContainerKey) {
                /*does_site_request_dedicated_process_for_coop=*/false,
                /*is_jit_disabled=*/true,
                /*are_v8_optimizations_disabled=*/false,
-               /*is_pdf=*/false, /*is_fenced=*/false, kBrowserContextId);
+               /*is_fenced=*/false, kBrowserContextId,
+               EmbedderIsolationInfo::CreateNone());
   EXPECT_FALSE(site_info_1.IsSamePrincipalWith(site_info_1_with_jit_disabled));
 
   // Check that SiteInfos with differing values of
@@ -398,7 +406,8 @@ TEST_F(SiteInstanceTest, SiteInfoAsContainerKey) {
                /*does_site_request_dedicated_process_for_coop=*/false,
                /*is_jit_disabled=*/false,
                /*are_v8_optimizations_disabled=*/true,
-               /*is_pdf=*/false, /*is_fenced=*/false, kBrowserContextId);
+               /*is_fenced=*/false, kBrowserContextId,
+               EmbedderIsolationInfo::CreateNone());
   EXPECT_FALSE(
       site_info_1.IsSamePrincipalWith(site_info_1_with_optimizations_disabled));
 
@@ -415,8 +424,9 @@ TEST_F(SiteInstanceTest, SiteInfoAsContainerKey) {
                WebExposedIsolationLevel::kNotIsolated, /*is_guest=*/false,
                /*does_site_request_dedicated_process_for_coop=*/false,
                /*is_jit_disabled=*/false,
-               /*are_v8_optimizations_disabled=*/false, /*is_pdf=*/true,
-               /*is_fenced=*/false, kBrowserContextId);
+               /*are_v8_optimizations_disabled=*/false,
+               /*is_fenced=*/false, kBrowserContextId,
+               EmbedderIsolationInfo::CreateForPdf());
   EXPECT_FALSE(site_info_1.IsSamePrincipalWith(site_info_1_with_pdf));
 
   auto site_info_1_with_is_fenced =
@@ -430,8 +440,9 @@ TEST_F(SiteInstanceTest, SiteInfoAsContainerKey) {
                WebExposedIsolationLevel::kNotIsolated, /*is_guest=*/false,
                /*does_site_request_dedicated_process_for_coop=*/false,
                /*is_jit_disabled=*/false,
-               /*are_v8_optimizations_disabled=*/false, /*is_pdf=*/false,
-               /*is_fenced=*/true, kBrowserContextId);
+               /*are_v8_optimizations_disabled=*/false,
+               /*is_fenced=*/true, kBrowserContextId,
+               EmbedderIsolationInfo::CreateNone());
   EXPECT_FALSE(site_info_1.IsSamePrincipalWith(site_info_1_with_is_fenced));
 
   {
@@ -750,17 +761,53 @@ TEST_F(SiteInstanceTest, GetProcess) {
   DrainMessageLoop();
 }
 
+// Test to ensure GetOrCreateProcess for Guest SiteInstances only locks the
+// process if the guest has a non-empty url.
+TEST_F(SiteInstanceTest, GetOrCreateProcessForGuest) {
+  std::unique_ptr<TestBrowserContext> browser_context(new TestBrowserContext());
+
+  const StoragePartitionConfig kGuestConfig = StoragePartitionConfig::Create(
+      browser_context.get(), "foo", "bar", /*in_memory=*/false);
+
+  auto instance =
+      SiteInstanceImpl::CreateForGuest(browser_context.get(), kGuestConfig);
+
+  auto* host = instance->GetOrCreateProcessForTesting();
+  EXPECT_TRUE(host != nullptr);
+
+  // The guest has an empty site URL, so the process should not be locked yet.
+  EXPECT_TRUE(host->GetProcessLock().AllowsAnySite());
+  EXPECT_TRUE(host->IsUnused());
+
+  // Now create a related SiteInstance with a non-empty URL.
+  // We can't reuse the same SiteInstance because a guest SiteInstance is
+  // created with an empty SiteInfo.
+  auto new_instance = instance->GetRelatedSiteInstance(GURL("http://foo.com"));
+  auto* new_host = new_instance->GetOrCreateProcessForTesting();
+  EXPECT_TRUE(new_host != nullptr);
+
+  if (AreAllSitesIsolatedForTesting()) {
+    // The process should now be locked appropriately.
+    EXPECT_TRUE(new_host->GetProcessLock().IsLockedToSite());
+  }
+  EXPECT_FALSE(new_host->IsUnused());
+
+  DrainMessageLoop();
+}
+
 // Test to ensure SetSite and site() work properly.
 TEST_F(SiteInstanceTest, SetSite) {
   TestBrowserContext context;
 
   scoped_refptr<SiteInstanceImpl> instance(SiteInstanceImpl::Create(&context));
   EXPECT_FALSE(instance->HasSite());
-  EXPECT_TRUE(instance->GetSiteURL().is_empty());
+  EXPECT_TRUE(
+      instance->GetSecurityPrincipal().GetDeprecatedSiteURL().is_empty());
 
   instance->SetSite(
       UrlInfo::CreateForTesting(GURL("http://www.google.com/index.html")));
-  EXPECT_EQ(GURL("http://google.com"), instance->GetSiteURL());
+  EXPECT_EQ(GURL("http://google.com"),
+            instance->GetSecurityPrincipal().GetDeprecatedSiteURL());
 
   EXPECT_TRUE(instance->HasSite());
 
@@ -772,7 +819,7 @@ TEST_F(SiteInstanceTest, GetSiteForURL) {
   TestBrowserContext context;
 
   bool origin_keyed_processes_by_default =
-      SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault();
+      SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault(&context);
 
   // Pages are irrelevant.
   GURL test_url = GURL("http://www.google.com/index.html");
@@ -850,7 +897,7 @@ TEST_F(SiteInstanceTest, GetSiteForURL) {
 
   // Check that there is a serialized nonce in the site URL. The nonce is
   // different each time, but has length 32.
-  EXPECT_EQ(32u, site_url.GetContent().length());
+  EXPECT_EQ(32u, site_url.GetContentPiece().length());
   EXPECT_FALSE(site_url.EqualsIgnoringRef(test_url));
   EXPECT_FALSE(site_url.has_host());
   test_url = GURL("data:text/html,foo#bar");
@@ -912,7 +959,7 @@ TEST_F(SiteInstanceTest, GetSiteForURL) {
       /*is_guest=*/false, /*is_fenced=*/false,
       WebExposedIsolationInfo::CreateNonIsolated(),
       WebExposedIsolationLevel::kNotIsolated,
-      /*cross_origin_isolation_key=*/std::nullopt, context.UniqueId());
+      /*cross_origin_isolation_key=*/std::nullopt, context.UniqueToken());
   test_url = GURL(kUnreachableWebDataURL);
   site_url = GetSiteForURL(test_url);
   EXPECT_EQ(error_site_info.site_url(), site_url);
@@ -945,7 +992,8 @@ TEST_F(SiteInstanceTest, ProcessLockDoesNotUseEffectiveURL) {
   // (foo.com).
   {
     bool origin_keyed_processes_by_default =
-        SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault();
+        SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault(
+            browser_context.get());
 
     auto site_info = SiteInfo::CreateForTesting(isolation_context, test_url);
     if (origin_keyed_processes_by_default) {
@@ -958,7 +1006,8 @@ TEST_F(SiteInstanceTest, ProcessLockDoesNotUseEffectiveURL) {
   }
 
   bool is_origin_keyed_processes_by_default =
-      SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault();
+      SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault(
+          browser_context.get());
   GURL expected_process_lock_url =
       is_origin_keyed_processes_by_default ? test_url : nonapp_site_url;
   AgentClusterKey agent_cluster_key =
@@ -977,7 +1026,8 @@ TEST_F(SiteInstanceTest, ProcessLockDoesNotUseEffectiveURL) {
       WebExposedIsolationLevel::kNotIsolated, /*is_guest=*/false,
       /*does_site_request_dedicated_process_for_coop=*/false,
       /*is_jit_disabled=*/false, /*are_v8_optimizations_disabled=*/false,
-      /*is_pdf=*/false, /*is_fenced=*/false, browser_context->UniqueId());
+      /*is_fenced=*/false, browser_context->UniqueToken(),
+      EmbedderIsolationInfo::CreateNone());
 
   // New SiteInstance in a new BrowsingInstance with a predetermined URL.
   {
@@ -1257,7 +1307,8 @@ TEST_F(SiteInstanceTest, IsSuitableForUrlInfo) {
       SiteInstanceImpl::Create(browser_context.get()));
 
   EXPECT_FALSE(instance->HasSite());
-  EXPECT_TRUE(instance->GetSiteURL().is_empty());
+  EXPECT_TRUE(
+      instance->GetSecurityPrincipal().GetDeprecatedSiteURL().is_empty());
 
   // Check prior to assigning a site or process to the instance, which is
   // expected to return false to allow the SiteInstance to be used for anything.
@@ -1361,7 +1412,8 @@ TEST_F(SiteInstanceTest, ProcessPerSiteWithWrongBindings) {
       SiteInstanceImpl::Create(browser_context.get()));
 
   EXPECT_FALSE(instance->HasSite());
-  EXPECT_TRUE(instance->GetSiteURL().is_empty());
+  EXPECT_TRUE(
+      instance->GetSecurityPrincipal().GetDeprecatedSiteURL().is_empty());
 
   // Simulate navigating to a WebUI URL in a process that does not have WebUI
   // bindings.  This already requires bypassing security checks.
@@ -1403,7 +1455,8 @@ TEST_F(SiteInstanceTest, NoProcessPerSiteForEmptySite) {
 
   instance->SetSite(UrlInfo());
   EXPECT_TRUE(instance->HasSite());
-  EXPECT_TRUE(instance->GetSiteURL().is_empty());
+  EXPECT_TRUE(
+      instance->GetSecurityPrincipal().GetDeprecatedSiteURL().is_empty());
   instance->GetOrCreateProcessForTesting();
 
   EXPECT_FALSE(RenderProcessHostImpl::GetSoleProcessHostForSite(
@@ -1764,7 +1817,8 @@ TEST_F(SiteInstanceTest, OriginalURL) {
   std::unique_ptr<TestBrowserContext> browser_context(new TestBrowserContext());
 
   bool is_origin_keyed_processes_by_default =
-      SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault();
+      SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault(
+          browser_context.get());
   AgentClusterKey agent_cluster_key =
       is_origin_keyed_processes_by_default
           ? AgentClusterKey::CreateOriginKeyed(
@@ -1780,7 +1834,8 @@ TEST_F(SiteInstanceTest, OriginalURL) {
       WebExposedIsolationLevel::kNotIsolated, /*is_guest=*/false,
       /*does_site_request_dedicated_process_for_coop=*/false,
       /*is_jit_disabled=*/false, /*are_v8_optimizations_disabled=*/false,
-      /*is_pdf=*/false, /*is_fenced=*/false, browser_context->UniqueId());
+      /*is_fenced=*/false, browser_context->UniqueToken(),
+      EmbedderIsolationInfo::CreateNone());
 
   // New SiteInstance in a new BrowsingInstance with a predetermined URL.  In
   // this and subsequent cases, the site URL should consist of the effective
@@ -1913,7 +1968,8 @@ ProcessLock ProcessLockFromString(const std::string& url) {
       WebExposedIsolationLevel::kNotIsolated, /*is_guest=*/false,
       /*does_site_request_dedicated_process_for_coop=*/false,
       /*is_jit_disabled=*/false, /*are_v8_optimizations_disabled=*/false,
-      /*is_pdf=*/false, /*is_fenced=*/false, kBrowserContextId));
+      /*is_fenced=*/false, kBrowserContextId,
+      EmbedderIsolationInfo::CreateNone()));
 }
 
 }  // namespace
@@ -2010,7 +2066,8 @@ TEST_F(SiteInstanceTest, CreateForUrlInfo) {
 
   if (AreStrictSiteInstancesEnabled()) {
     EXPECT_FALSE(instance1->IsDefaultSiteInstance());
-    EXPECT_EQ(kNonIsolatedUrl, instance1->GetSiteURL());
+    EXPECT_EQ(kNonIsolatedUrl,
+              instance1->GetSecurityPrincipal().GetDeprecatedSiteURL());
   } else {
     EXPECT_TRUE(instance1->IsDefaultSiteInstance());
   }
@@ -2019,13 +2076,15 @@ TEST_F(SiteInstanceTest, CreateForUrlInfo) {
   EXPECT_TRUE(instance1->IsSameSiteWithURL(kNonIsolatedUrl));
 
   EXPECT_FALSE(instance2->IsDefaultSiteInstance());
-  EXPECT_EQ(kIsolatedUrl, instance2->GetSiteURL());
+  EXPECT_EQ(kIsolatedUrl,
+            instance2->GetSecurityPrincipal().GetDeprecatedSiteURL());
   EXPECT_TRUE(instance2->DoesSiteInfoForURLMatch(
       UrlInfo::CreateForTesting(kIsolatedUrl)));
   EXPECT_TRUE(instance2->IsSameSiteWithURL(kIsolatedUrl));
 
   EXPECT_FALSE(instance3->IsDefaultSiteInstance());
-  EXPECT_EQ(GURL("file:"), instance3->GetSiteURL());
+  EXPECT_EQ(GURL("file:"),
+            instance3->GetSecurityPrincipal().GetDeprecatedSiteURL());
   EXPECT_TRUE(
       instance3->DoesSiteInfoForURLMatch(UrlInfo::CreateForTesting(kFileUrl)));
   // Not same site because file URL's don't have a host.
@@ -2044,7 +2103,8 @@ TEST_F(SiteInstanceTest, CreateForUrlInfo) {
   EXPECT_TRUE(instance5->HasSite());
   if (AreStrictSiteInstancesEnabled()) {
     EXPECT_FALSE(instance5->IsDefaultSiteInstance());
-    EXPECT_EQ("custom-standard://custom/", instance5->GetSiteURL());
+    EXPECT_EQ("custom-standard://custom/",
+              instance5->GetSecurityPrincipal().GetDeprecatedSiteURL());
     EXPECT_EQ("http://foo.com/", instance5->GetSiteInfo().GetProcessLockURL());
   } else {
     EXPECT_TRUE(instance5->IsDefaultSiteInstance());
@@ -2082,8 +2142,9 @@ TEST_F(SiteInstanceTest, CreateForGuest) {
   const StoragePartitionConfig kGuestConfig = StoragePartitionConfig::Create(
       context(), "appid", "partition_name", /*in_memory=*/false);
   auto instance2 = SiteInstanceImpl::CreateForGuest(context(), kGuestConfig);
-  EXPECT_TRUE(instance2->IsGuest());
-  EXPECT_EQ(instance2->GetStoragePartitionConfig(), kGuestConfig);
+  EXPECT_TRUE(instance2->GetSecurityPrincipal().IsGuest());
+  EXPECT_EQ(instance2->GetSecurityPrincipal().GetStoragePartitionConfig(),
+            kGuestConfig);
 }
 
 TEST_F(SiteInstanceTest, DoesSiteRequireDedicatedProcess) {
@@ -2216,10 +2277,10 @@ TEST_F(SiteInstanceTest, ErrorPage) {
       /*is_guest=*/false, /*is_fenced=*/false,
       WebExposedIsolationInfo::CreateNonIsolated(),
       WebExposedIsolationLevel::kNotIsolated,
-      /*cross_origin_isolation_key=*/std::nullopt, context()->UniqueId());
+      /*cross_origin_isolation_key=*/std::nullopt, context()->UniqueToken());
   EXPECT_TRUE(error_site_info.is_error_page());
   EXPECT_FALSE(error_site_info.web_exposed_isolation_info().is_isolated());
-  EXPECT_FALSE(error_site_info.is_guest());
+  EXPECT_FALSE(error_site_info.IsGuest());
 
   // Verify that non-error URLs don't generate error page SiteInfos.
   const auto instance =
@@ -2246,6 +2307,30 @@ TEST_F(SiteInstanceTest, ErrorPage) {
       static_cast<SiteInstanceImpl*>(related_instance.get())->GetSiteInfo());
 }
 
+TEST_F(SiteInstanceTest, SiteInstanceNewStoragePartitionConfig) {
+  const GURL test_url("https://example.com");
+  const auto site_instance = SiteInstanceImpl::Create(context());
+  const auto default_partition_config =
+      CreateStoragePartitionConfigForTesting();
+
+  EXPECT_FALSE(site_instance->HasSite());
+  EXPECT_EQ(default_partition_config,
+            site_instance->GetSecurityPrincipal().GetStoragePartitionConfig());
+
+  const auto non_default_partition_config =
+      CreateStoragePartitionConfigForTesting(
+          /*in_memory=*/false, /*partition_domain=*/"test_partition");
+  EXPECT_NE(default_partition_config, non_default_partition_config);
+
+  const UrlInfo partitioned_url_info(
+      UrlInfoInit(test_url).WithStoragePartitionConfig(
+          non_default_partition_config));
+
+  // Can not change storage partition config after it was accessed before. See
+  // checks in SiteInstanceImpl::SetSiteInfoInternal() for more information.
+  EXPECT_CHECK_DEATH(site_instance->SetSite(partitioned_url_info));
+}
+
 TEST_F(SiteInstanceTest, RelatedSitesInheritStoragePartitionConfig) {
   const GURL test_url("https://example.com");
 
@@ -2265,8 +2350,8 @@ TEST_F(SiteInstanceTest, RelatedSitesInheritStoragePartitionConfig) {
       /*is_fixed_storage_partition=*/false);
   EXPECT_EQ(non_default_partition_config,
             static_cast<SiteInstanceImpl*>(partitioned_instance.get())
-                ->GetSiteInfo()
-                .storage_partition_config());
+                ->GetSecurityPrincipal()
+                .GetStoragePartitionConfig());
 
   // Create a related SiteInstance that doesn't specify a
   // StoragePartitionConfig and make sure the StoragePartition gets propagated.
@@ -2274,8 +2359,8 @@ TEST_F(SiteInstanceTest, RelatedSitesInheritStoragePartitionConfig) {
       partitioned_instance->GetRelatedSiteInstance(test_url);
   EXPECT_EQ(non_default_partition_config,
             static_cast<SiteInstanceImpl*>(related_instance.get())
-                ->GetSiteInfo()
-                .storage_partition_config());
+                ->GetSecurityPrincipal()
+                .GetStoragePartitionConfig());
 }
 
 TEST_F(SiteInstanceTest, GetNonOriginKeyedEquivalentPreservesIsPdf) {
@@ -2283,9 +2368,10 @@ TEST_F(SiteInstanceTest, GetNonOriginKeyedEquivalentPreservesIsPdf) {
       OriginAgentClusterIsolationState::CreateForOriginAgentCluster(
           /*had_oac_request=*/true,
           /*requires_origin_keyed_process=*/true);
-  UrlInfo url_info_pdf_with_oac(UrlInfoInit(GURL("https://foo.com/test.pdf"))
-                                    .WithOACHeaderRequest(oac_header_request)
-                                    .WithIsPdf(true));
+  UrlInfo url_info_pdf_with_oac(
+      UrlInfoInit(GURL("https://foo.com/test.pdf"))
+          .WithOACHeaderRequest(oac_header_request)
+          .WithEmbedderIsolationInfo(EmbedderIsolationInfo::CreateForPdf()));
   SiteInfo site_info_pdf_with_origin_key =
       SiteInfo::Create(IsolationContext(context()), url_info_pdf_with_oac);
   SiteInfo site_info_pdf_no_origin_key =
@@ -2529,6 +2615,166 @@ TEST_F(SiteInstanceTest, SiteInstanceGotProcessAndSite_ProcessPerSite) {
   EXPECT_EQ(2, custom_client.call_count());
 
   SetBrowserClientForTesting(regular_client);
+}
+
+// Verify that an EmbedderIsolationInfo unique-instance id differentiates
+// security principals: same extension URL with different isolation IDs must
+// produce different principals, same IDs must produce the same principal, and
+// a MIME handler SiteInfo must differ from a non-handler SiteInfo for the same
+// URL.
+TEST_F(SiteInstanceTest, MimeHandlerIsolationIdDifferentiatesPrincipals) {
+  const GURL ext_url("chrome-extension://abcdefghijklmnop/handler.html");
+
+  // Two MIME handler SiteInfos with different isolation IDs.
+  SiteInfo handler_id_100 = SiteInfo::Create(
+      IsolationContext(context()),
+      UrlInfo(UrlInfoInit(ext_url).WithEmbedderIsolationInfo(
+          EmbedderIsolationInfo::CreateForUniqueInstance(100))));
+  SiteInfo handler_id_200 = SiteInfo::Create(
+      IsolationContext(context()),
+      UrlInfo(UrlInfoInit(ext_url).WithEmbedderIsolationInfo(
+          EmbedderIsolationInfo::CreateForUniqueInstance(200))));
+
+  // Different isolation IDs must produce different principals.
+  EXPECT_FALSE(handler_id_100.IsSamePrincipalWith(handler_id_200));
+  EXPECT_NE(handler_id_100, handler_id_200);
+
+  // Same isolation ID must produce the same principal.
+  SiteInfo handler_id_100_dup = SiteInfo::Create(
+      IsolationContext(context()),
+      UrlInfo(UrlInfoInit(ext_url).WithEmbedderIsolationInfo(
+          EmbedderIsolationInfo::CreateForUniqueInstance(100))));
+  EXPECT_TRUE(handler_id_100.IsSamePrincipalWith(handler_id_100_dup));
+  EXPECT_EQ(handler_id_100, handler_id_100_dup);
+
+  // MIME handler vs non-handler for the same URL must differ.
+  SiteInfo non_handler = SiteInfo::Create(IsolationContext(context()),
+                                          UrlInfo(UrlInfoInit(ext_url)));
+  EXPECT_FALSE(handler_id_100.IsSamePrincipalWith(non_handler));
+  EXPECT_NE(handler_id_100, non_handler);
+}
+
+// Test ContentBrowserClient that disables strict site isolation. Used to
+// verify that the EmbedderIsolationInfo branch in
+// `SiteInfo::RequiresDedicatedProcessInternal()` earns a dedicated process on
+// its own, rather than relying on `UseDedicatedProcessesForAllSites()`.
+class NoStrictSiteIsolationContentBrowserClient
+    : public SiteInstanceTestBrowserClient {
+ public:
+  bool ShouldEnableStrictSiteIsolation() override { return false; }
+};
+
+// Verify that a SiteInfo with a unique-instance EmbedderIsolationInfo requires
+// a dedicated process, even on platforms where not all sites get dedicated
+// processes.
+TEST_F(SiteInstanceTest, MimeHandlerRequiresDedicatedProcess) {
+  // Disable the global "every site is dedicated" path so that
+  // `RequiresDedicatedProcess()` has to consult the EmbedderIsolationInfo
+  // branch in `RequiresDedicatedProcessInternal()`. Both
+  // `--disable-site-isolation` and an override of
+  // `ShouldEnableStrictSiteIsolation()` are needed:
+  // `UseDedicatedProcessesForAllSites()` first checks `--site-per-process`,
+  // then `IsSiteIsolationDisabled()`, and only then the embedder. We also
+  // strip `--site-per-process` in case it was appended on the command line.
+  base::test::ScopedCommandLine scoped_command_line;
+  scoped_command_line.GetProcessCommandLine()->AppendSwitch(
+      switches::kDisableSiteIsolation);
+  scoped_command_line.GetProcessCommandLine()->RemoveSwitch(
+      switches::kSitePerProcess);
+
+  NoStrictSiteIsolationContentBrowserClient custom_client;
+  ContentBrowserClient* regular_client =
+      SetBrowserClientForTesting(&custom_client);
+
+  ASSERT_FALSE(SiteIsolationPolicy::UseDedicatedProcessesForAllSites());
+
+  const GURL ext_url("chrome-extension://abcdefghijklmnop/handler.html");
+
+  SiteInfo handler_site_info = SiteInfo::Create(
+      IsolationContext(context()),
+      UrlInfo(UrlInfoInit(ext_url).WithEmbedderIsolationInfo(
+          EmbedderIsolationInfo::CreateForUniqueInstance(100))));
+
+  EXPECT_TRUE(
+      handler_site_info.RequiresDedicatedProcess(IsolationContext(context())));
+  EXPECT_TRUE(handler_site_info.embedder_isolation_info().is_unique_instance());
+  EXPECT_EQ(100,
+            handler_site_info.embedder_isolation_info().instance_id().value());
+
+  SetBrowserClientForTesting(regular_client);
+}
+
+// Verify that a SiteInfo with a privileged EmbedderIsolationInfo requires a
+// dedicated process, even on platforms where not all sites get dedicated
+// processes.
+TEST_F(SiteInstanceTest, PrivilegedRequiresDedicatedProcess) {
+  // Disable the global "every site is dedicated" path so that
+  // `RequiresDedicatedProcess()` has to consult the EmbedderIsolationInfo
+  // branch in `RequiresDedicatedProcessInternal()`. See
+  // MimeHandlerRequiresDedicatedProcess for why both switches are needed.
+  base::test::ScopedCommandLine scoped_command_line;
+  scoped_command_line.GetProcessCommandLine()->AppendSwitch(
+      switches::kDisableSiteIsolation);
+  scoped_command_line.GetProcessCommandLine()->RemoveSwitch(
+      switches::kSitePerProcess);
+
+  NoStrictSiteIsolationContentBrowserClient custom_client;
+  ContentBrowserClient* regular_client =
+      SetBrowserClientForTesting(&custom_client);
+
+  ASSERT_FALSE(SiteIsolationPolicy::UseDedicatedProcessesForAllSites());
+
+  const GURL url("https://example.com/");
+
+  SiteInfo privileged_site_info =
+      SiteInfo::Create(IsolationContext(context()),
+                       UrlInfo(UrlInfoInit(url).WithEmbedderIsolationInfo(
+                           EmbedderIsolationInfo::CreateForPrivileged(42))));
+
+  EXPECT_TRUE(privileged_site_info.RequiresDedicatedProcess(
+      IsolationContext(context())));
+  EXPECT_TRUE(privileged_site_info.embedder_isolation_info().is_privileged());
+  EXPECT_EQ(42, privileged_site_info.embedder_isolation_info()
+                    .privileged_feature_id()
+                    .value());
+
+  SetBrowserClientForTesting(regular_client);
+}
+
+// Verify that the privileged feature id differentiates security principals:
+// the same URL with different feature ids must produce different principals,
+// the same feature id must produce the same principal, and a privileged
+// SiteInfo must differ from an ordinary (non-privileged) SiteInfo for the same
+// URL.
+TEST_F(SiteInstanceTest, PrivilegedFeatureIdDifferentiatesPrincipals) {
+  const GURL url("https://example.com/");
+
+  SiteInfo feature_42 =
+      SiteInfo::Create(IsolationContext(context()),
+                       UrlInfo(UrlInfoInit(url).WithEmbedderIsolationInfo(
+                           EmbedderIsolationInfo::CreateForPrivileged(42))));
+  SiteInfo feature_43 =
+      SiteInfo::Create(IsolationContext(context()),
+                       UrlInfo(UrlInfoInit(url).WithEmbedderIsolationInfo(
+                           EmbedderIsolationInfo::CreateForPrivileged(43))));
+
+  // Different feature ids must produce different principals.
+  EXPECT_FALSE(feature_42.IsSamePrincipalWith(feature_43));
+  EXPECT_NE(feature_42, feature_43);
+
+  // The same feature id must produce the same principal.
+  SiteInfo feature_42_dup =
+      SiteInfo::Create(IsolationContext(context()),
+                       UrlInfo(UrlInfoInit(url).WithEmbedderIsolationInfo(
+                           EmbedderIsolationInfo::CreateForPrivileged(42))));
+  EXPECT_TRUE(feature_42.IsSamePrincipalWith(feature_42_dup));
+  EXPECT_EQ(feature_42, feature_42_dup);
+
+  // Privileged vs ordinary content for the same URL must differ.
+  SiteInfo ordinary =
+      SiteInfo::Create(IsolationContext(context()), UrlInfo(UrlInfoInit(url)));
+  EXPECT_FALSE(feature_42.IsSamePrincipalWith(ordinary));
+  EXPECT_NE(feature_42, ordinary);
 }
 
 }  // namespace content

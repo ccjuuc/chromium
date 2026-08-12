@@ -7,16 +7,20 @@
 #include <string>
 #include <vector>
 
+#include "base/files/file_path.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/banners/test_app_banner_manager_desktop.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
@@ -26,7 +30,7 @@
 #include "chrome/browser/web_applications/test/debug_info_printer.h"
 #include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
-#include "chrome/browser/web_applications/web_app_callback_app_identity.h"
+#include "chrome/browser/web_applications/test/web_app_test_observers.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
@@ -35,6 +39,7 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -44,6 +49,10 @@
 #include "content/public/test/browser_test_utils.h"
 #include "net/base/url_util.h"
 #include "net/dns/mock_host_resolver.h"
+#include "net/test/embedded_test_server/embedded_test_server.h"
+#include "net/test/embedded_test_server/http_request.h"
+#include "net/test/embedded_test_server/http_response.h"
+#include "net/test/embedded_test_server/request_handler_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace web_app {
@@ -53,14 +62,7 @@ WebAppBrowserTestBase::WebAppBrowserTestBase()
 
 WebAppBrowserTestBase::WebAppBrowserTestBase(
     const std::vector<base::test::FeatureRef>& enabled_features,
-    const std::vector<base::test::FeatureRef>& disabled_features)
-    // TODO(crbug.com/40874949): Fix the manifest update process by ensuring
-    // during test installs, an app is installed from the manifest so that the
-    // identity update dialog is not triggered after navigation. This will
-    // ensure removal of update_dialog_scope_.
-    : https_server_(net::EmbeddedTestServer::TYPE_HTTPS),
-      update_dialog_scope_(SetIdentityUpdateDialogActionForTesting(
-          AppIdentityUpdate::kSkipped)) {
+    const std::vector<base::test::FeatureRef>& disabled_features) {
   scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
 }
 
@@ -140,8 +142,11 @@ bool WebAppBrowserTestBase::NavigateAndAwaitInstallabilityCheck(
 
 Browser* WebAppBrowserTestBase::NavigateInNewWindowAndAwaitInstallabilityCheck(
     const GURL& url) {
-  Browser* new_browser = Browser::Create(
-      Browser::CreateParams(Browser::TYPE_NORMAL, profile(), true));
+  Browser* new_browser =
+      CreateBrowserWindow(BrowserWindowCreateParams(
+                              BrowserWindowInterface::TYPE_NORMAL, profile(),
+                              /*from_user_gesture=*/true))
+          ->GetBrowserForMigrationOnly();
   AddBlankTabAndShow(new_browser);
   NavigateAndAwaitInstallabilityCheck(new_browser, url);
   return new_browser;
@@ -183,6 +188,98 @@ WebAppBrowserTestBase::os_integration_override() {
   return faked_os_integration_.test_override();
 }
 
+void WebAppBrowserTestBase::RegisterPortReplacementHandler() {
+  embedded_https_test_server().RegisterRequestHandler(base::BindRepeating(
+      &WebAppBrowserTestBase::HandlePortReplacement, base::Unretained(this)));
+}
+
+std::unique_ptr<net::test_server::HttpResponse>
+WebAppBrowserTestBase::HandlePortReplacement(
+    const net::test_server::HttpRequest& request) {
+  if (!request.GetURL().path().contains("manifest.replaceport.json")) {
+    return nullptr;
+  }
+
+  std::unique_ptr<net::test_server::HttpResponse> default_response =
+      net::test_server::HandleFileRequest(
+          net::test_server::EmbeddedTestServer::GetFullPathFromSourceDirectory(
+              GetChromeTestDataDir()),
+          request);
+
+  if (!default_response) {
+    return nullptr;
+  }
+
+  // TODO:Split out a version of HandleFileRequest that returns a
+  // BasicHttpResponse. Then we can avoid static_cast here.
+  auto& basic_response =
+      static_cast<net::test_server::BasicHttpResponse&>(*default_response);
+
+  std::string content(basic_response.content());
+  base::ReplaceSubstringsAfterOffset(
+      &content, 0, "$PORT",
+      base::ToString(embedded_https_test_server().port()));
+  basic_response.set_content(content);
+
+  return default_response;
+}
+
+void WebAppBrowserTestBase::RegisterAssociatedOriginWellKnownHandler(
+    const std::string& source_host,
+    const std::string& target_manifest_id_template,
+    const std::string& allowed_scope) {
+  embedded_https_test_server().RegisterRequestHandler(base::BindRepeating(
+      [](const std::string& expected_host,
+         const std::string& manifest_id_template,
+         const std::string& allowed_scope,
+         const net::test_server::HttpRequest& request)
+          -> std::unique_ptr<net::test_server::HttpResponse> {
+        if (request.GetURL().path() !=
+            "/.well-known/web-app-origin-association") {
+          return nullptr;
+        }
+
+        // Determine the actual host of the request. Since the embedded
+        // test server resolves to 127.0.0.1 locally, we must read the 'Host'
+        // header to check which domain the test is attempting to reach.
+        std::string actual_host(request.GetURL().host());
+        if (auto it = request.headers.find("Host");
+            it != request.headers.end()) {
+          actual_host = std::string(GURL("http://" + it->second).host());
+        }
+
+        if (expected_host != actual_host) {
+          return nullptr;
+        }
+
+        auto response =
+            std::make_unique<net::test_server::BasicHttpResponse>();
+        response->set_code(net::HTTP_OK);
+        response->set_content_type("application/json");
+
+        std::string manifest_id = manifest_id_template;
+        base::ReplaceSubstringsAfterOffset(
+            &manifest_id, 0, "$PORT",
+            base::ToString(request.GetURL().IntPort()));
+
+        // Construct the JSON. The parser requires the root keys to be
+        // valid manifest ID URLs, and 'allow_migration' must evaluate to
+        // true.
+        std::string json = base::ReplaceStringPlaceholders(
+            R"({
+              "$1": {
+                "scope": "$2",
+                "allow_migration": true
+              }
+            })",
+            {manifest_id, allowed_scope}, nullptr);
+        response->set_content(json);
+
+        return response;
+      },
+      source_host, target_manifest_id_template, allowed_scope));
+}
+
 content::WebContents* WebAppBrowserTestBase::OpenApplication(
     const webapps::AppId& app_id) {
   ui_test_utils::UrlLoadObserver url_observer(
@@ -190,7 +287,7 @@ content::WebContents* WebAppBrowserTestBase::OpenApplication(
 
   web_app::WebAppProvider* provider =
       web_app::WebAppProvider::GetForLocalAppsUnchecked(profile());
-  base::test::TestFuture<base::WeakPtr<Browser>,
+  base::test::TestFuture<base::WeakPtr<BrowserWindowInterface>,
                          base::WeakPtr<content::WebContents>,
                          apps::LaunchContainer>
       future;
@@ -204,14 +301,16 @@ content::WebContents* WebAppBrowserTestBase::OpenApplication(
 }
 
 GURL WebAppBrowserTestBase::GetInstallableAppURL() {
-  return https_server()->GetURL("/banners/manifest_test_page.html");
+  return embedded_https_test_server().GetURL(
+      "/banners/manifest_test_page.html");
 }
 
 GURL WebAppBrowserTestBase::GetAppURLWithManifest(
     const std::string& manifest_url) {
   GURL url = GetInstallableAppURL();
-  return net::AppendQueryParameter(url, "manifest",
-                                   https_server()->GetURL(manifest_url).spec());
+  return net::AppendQueryParameter(
+      url, "manifest",
+      embedded_https_test_server().GetURL(manifest_url).spec());
 }
 
 // static
@@ -220,7 +319,9 @@ const char* WebAppBrowserTestBase::GetInstallableAppName() {
 }
 
 void WebAppBrowserTestBase::SetUp() {
-  https_server_.AddDefaultHandlers(GetChromeTestDataDir());
+  if (!embedded_https_test_server().Started()) {
+    embedded_https_test_server().AddDefaultHandlers(GetChromeTestDataDir());
+  }
   webapps::TestAppBannerManagerDesktop::SetUp();
   WebAppBrowserTestBaseParent::SetUp();
 }
@@ -264,20 +365,22 @@ void WebAppBrowserTestBase::SetUpCommandLine(base::CommandLine* command_line) {
 
 void WebAppBrowserTestBase::PreRunTestOnMainThread() {
   WebAppBrowserTestBaseParent::PreRunTestOnMainThread();
-  browser_profile_ = browser()->profile()->GetWeakPtr();
+  browser_profile_ = browser()->GetProfile()->GetWeakPtr();
 }
 
 void WebAppBrowserTestBase::SetUpOnMainThread() {
   WebAppBrowserTestBaseParent::SetUpOnMainThread();
 
   host_resolver()->AddRule("*", "127.0.0.1");
-  ASSERT_TRUE(https_server()->Start());
+  if (!embedded_https_test_server().Started()) {
+    ASSERT_TRUE(embedded_https_test_server().Start());
+  }
 
   // By default, all SSL cert checks are valid. Can be overridden in tests.
   cert_verifier_.mock_cert_verifier()->set_default_result(net::OK);
 
   web_app::test::WaitUntilReady(
-      web_app::WebAppProvider::GetForTest(browser()->profile()));
+      web_app::WebAppProvider::GetForTest(browser()->GetProfile()));
 }
 
 }  // namespace web_app

@@ -14,6 +14,7 @@
 #import "ios/chrome/browser/shared/ui/bottom_sheet/table_view_bottom_sheet_view_controller+subclassing.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/table_view/table_view_cells_constants.h"
+#import "ui/base/device_form_factor.h"
 
 namespace {
 
@@ -82,20 +83,15 @@ NSString* const kCustomDetentIdentifier = @"customDetent";
              : UITableViewCellAccessoryNone;
 }
 
-- (void)adjustTransactionsPrimaryActionButtonHorizontalConstraints {
+- (void)adjustTransactionsButtonHorizontalConstraints {
   CGFloat buttonHorizontalMargin =
-      ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad
-           ? 64.0
-           : 24.0);
+      (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET ? 64.0
+                                                                  : 24.0);
 
-  [self.primaryActionButton.leadingAnchor
-      constraintEqualToAnchor:(self.view.leadingAnchor)
-                     constant:buttonHorizontalMargin]
-      .active = YES;
-  [self.primaryActionButton.trailingAnchor
-      constraintEqualToAnchor:(self.view.trailingAnchor)
-                     constant:-buttonHorizontalMargin]
-      .active = YES;
+  [self applyHorizontalConstraints:buttonHorizontalMargin
+                         forButton:self.primaryActionButton];
+  [self applyHorizontalConstraints:buttonHorizontalMargin
+                         forButton:self.secondaryActionButton];
 }
 
 #pragma mark - Subclassing
@@ -171,15 +167,16 @@ NSString* const kCustomDetentIdentifier = @"customDetent";
   [_tableView.widthAnchor
       constraintEqualToAnchor:self.primaryActionButton.widthAnchor]
       .active = YES;
+  [_tableView.widthAnchor
+      constraintEqualToAnchor:self.secondaryActionButton.widthAnchor]
+      .active = YES;
 
   [self setUpBottomSheetDetents];
 
   // Set selection to the first one.
   [self selectFirstRow];
 
-  NSArray<UITrait>* traits = TraitCollectionSetForTraits(
-      @[ UITraitPreferredContentSizeCategory.class ]);
-  [self registerForTraitChanges:traits
+  [self registerForTraitChanges:@[ UITraitPreferredContentSizeCategory.class ]
                      withAction:@selector(updateHeightOnTraitChange)];
 }
 
@@ -213,6 +210,22 @@ NSString* const kCustomDetentIdentifier = @"customDetent";
 }
 
 #pragma mark - Private
+
+// Applies horizontal constraints to a button.
+- (void)applyHorizontalConstraints:(CGFloat)buttonHorizontalMargin
+                         forButton:(UIView*)button {
+  [button.leadingAnchor
+      constraintGreaterThanOrEqualToAnchor:self.view.safeAreaLayoutGuide
+                                               .leadingAnchor
+                                  constant:buttonHorizontalMargin]
+      .active = YES;
+
+  [button.trailingAnchor
+      constraintLessThanOrEqualToAnchor:self.view.safeAreaLayoutGuide
+                                            .trailingAnchor
+                               constant:-buttonHorizontalMargin]
+      .active = YES;
+}
 
 // Maximum initial number of visible cells.
 - (CGFloat)initialNumberOfVisibleCells {

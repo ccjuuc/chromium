@@ -27,6 +27,9 @@
 - (void)startValidationSpinnerForAccountPicker;
 - (void)stopValidationSpinnerForAccountPicker;
 
+// Show SigninReauthCoordinator for the given identity.
+- (void)showReauthForIdentity:(id<SystemIdentity>)identity;
+
 // Show and hide an alert with "Try Again" and "Cancel" options.
 - (void)showTryAgainOrCancelAlertWithTitle:(NSString*)title
                                    message:(NSString*)message
@@ -50,6 +53,9 @@
 
 // Hide Save to Photos UI.
 - (void)hideSaveToPhotos;
+
+// Open Sign In UI.
+- (void)openSignIn;
 
 @end
 

@@ -6,14 +6,16 @@
 
 #include <random>
 
-#include "base/containers/contains.h"
 #include "base/json/values_util.h"
 #include "base/rand_util.h"
+#include "base/time/default_tick_clock.h"
+#include "base/time/tick_clock.h"
 #include "chrome/browser/apps/app_service/metrics/app_platform_metrics_utils.h"
 #include "chrome/browser/apps/browser_instance/web_contents_instance_id_utils.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_init_state.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
@@ -59,7 +61,7 @@ bool IsAppBrowser(BrowserWindowInterface* browser) {
     return false;
   }
   return !web_app::GetAppIdFromApplicationName(
-              browser->GetBrowserForMigrationOnly()->app_name())
+              BrowserInitState::From(browser)->create_params().app_name)
               .empty();
 }
 
@@ -155,7 +157,7 @@ void WebsiteMetrics::ActiveTabWebContentsObserver::
 }
 
 WebsiteMetrics::UrlInfo::UrlInfo(const base::Value& value) {
-  const base::Value::Dict* data_dict = value.GetIfDict();
+  const base::DictValue* data_dict = value.GetIfDict();
   if (!data_dict) {
     return;
   }
@@ -175,18 +177,21 @@ WebsiteMetrics::UrlInfo::UrlInfo(const base::Value& value) {
   promotable = promotable_value.value();
 }
 
-base::Value::Dict WebsiteMetrics::UrlInfo::ConvertToDict() const {
-  base::Value::Dict usage_time_dict;
+base::DictValue WebsiteMetrics::UrlInfo::ConvertToDict() const {
+  base::DictValue usage_time_dict;
   usage_time_dict.Set(kRunningTimeKey,
                       base::TimeDeltaToValue(running_time_in_two_hours));
   usage_time_dict.Set(kPromotableKey, promotable);
   return usage_time_dict;
 }
 
-WebsiteMetrics::WebsiteMetrics(Profile* profile, int user_type_by_device_type)
+WebsiteMetrics::WebsiteMetrics(Profile* profile,
+                               int user_type_by_device_type,
+                               const base::TickClock& tick_clock)
     : profile_(profile),
       browser_tab_strip_tracker_(this, nullptr),
-      user_type_by_device_type_(user_type_by_device_type) {
+      user_type_by_device_type_(user_type_by_device_type),
+      tick_clock_(tick_clock) {
   browser_collection_observation_.Observe(
       ProfileBrowserCollection::GetForProfile(profile_));
   browser_tab_strip_tracker_.Init();
@@ -222,7 +227,7 @@ void WebsiteMetrics::OnTabStripModelChanged(
     const TabStripSelectionChange& selection) {
   DCHECK(tab_strip_model);
   auto* window = GetWindowWithTabStripModel(tab_strip_model);
-  if (!window || !base::Contains(window_to_web_contents_, window)) {
+  if (!window || !window_to_web_contents_.contains(window)) {
     // Skip the app browser window.
     return;
   }
@@ -271,11 +276,11 @@ void WebsiteMetrics::OnHistoryDeletions(
   webcontents_to_ukm_key_.clear();
   url_infos_.clear();
 
-  profile_->GetPrefs()->SetDict(kWebsiteUsageTime, base::Value::Dict());
+  profile_->GetPrefs()->SetDict(kWebsiteUsageTime, base::DictValue());
 }
 
 void WebsiteMetrics::OnWindowDestroying(aura::Window* window) {
-  if (base::Contains(window_to_web_contents_, window)) {
+  if (window_to_web_contents_.contains(window)) {
     window_to_web_contents_.erase(window);
   }
   observed_windows_.RemoveObservation(window);
@@ -305,7 +310,7 @@ void WebsiteMetrics::OnTwoHours() {
 
   std::map<GURL, UrlInfo> url_infos;
   for (const auto& it : webcontents_to_ukm_key_) {
-    if (!base::Contains(url_infos, it.second) && !it.second.is_empty() &&
+    if (!url_infos.contains(it.second) && !it.second.is_empty() &&
         it.second.SchemeIsHTTPOrHTTPS()) {
       url_infos[it.second] = std::move(url_infos_[it.second]);
     }
@@ -374,7 +379,7 @@ void WebsiteMetrics::OnTabStripModelChangeInsert(
   for (const auto& inserted_tab : insert.contents) {
     content::WebContents* contents = inserted_tab.contents;
     // The tab is new.
-    if (!base::Contains(webcontents_to_observer_map_, contents)) {
+    if (!webcontents_to_observer_map_.contains(contents)) {
       webcontents_to_observer_map_[contents] =
           std::make_unique<WebsiteMetrics::ActiveTabWebContentsObserver>(
               contents, this);
@@ -437,7 +442,7 @@ void WebsiteMetrics::OnActiveTabChanged(aura::Window* window,
     // not be called, so `webcontents_to_ukm_key_` doesn't include
     // `new_contents`. So call PrimaryPageChanged to update web contents and add
     // the website url.
-    if (!base::Contains(webcontents_to_ukm_key_, new_contents)) {
+    if (!webcontents_to_ukm_key_.contains(new_contents)) {
       auto it = webcontents_to_observer_map_.find(new_contents);
       if (it != webcontents_to_observer_map_.end()) {
         it->second->OnPrimaryPageChanged();
@@ -539,7 +544,7 @@ void WebsiteMetrics::OnWebContentsUpdated(content::WebContents* web_contents) {
                       it != window_to_web_contents_.end() &&
                       it->second == web_contents;
   AddUrlInfo(url, web_contents->GetPrimaryMainFrame()->GetPageUkmSourceId(),
-             base::TimeTicks::Now(), is_activated, /*promotable=*/false);
+             tick_clock_->NowTicks(), is_activated, /*promotable=*/false);
 }
 
 void WebsiteMetrics::OnInstallableWebAppStatusUpdated(
@@ -602,7 +607,7 @@ void WebsiteMetrics::SetTabActivated(content::WebContents* web_contents) {
   if (url_it == url_infos_.end()) {
     return;
   }
-  url_it->second.start_time = base::TimeTicks::Now();
+  url_it->second.start_time = tick_clock_->NowTicks();
   url_it->second.is_activated = true;
 }
 
@@ -619,7 +624,7 @@ void WebsiteMetrics::SetTabInActivated(content::WebContents* web_contents) {
     return;
   }
 
-  const auto current_time = base::TimeTicks::Now();
+  const auto current_time = tick_clock_->NowTicks();
   DCHECK_GE(current_time, it->second.start_time);
   it->second.running_time_in_five_minutes +=
       current_time - it->second.start_time;
@@ -627,11 +632,11 @@ void WebsiteMetrics::SetTabInActivated(content::WebContents* web_contents) {
 }
 
 void WebsiteMetrics::SaveUsageTime() {
-  base::Value::Dict dict;
+  base::DictValue dict;
   for (auto& it : url_infos_) {
     if (it.second.is_activated) {
       // Continued usage of active web content.
-      const auto current_time = base::TimeTicks::Now();
+      const auto current_time = tick_clock_->NowTicks();
       DCHECK_GE(current_time, it.second.start_time);
       it.second.running_time_in_five_minutes +=
           current_time - it.second.start_time;
@@ -672,11 +677,11 @@ void WebsiteMetrics::RecordUsageTime() {
 
   // The app usage time AppKMs have been recorded, so clear the saved usage time
   // in the user pref.
-  profile_->GetPrefs()->SetDict(kWebsiteUsageTime, base::Value::Dict());
+  profile_->GetPrefs()->SetDict(kWebsiteUsageTime, base::DictValue());
 }
 
 void WebsiteMetrics::RecordUsageTimeFromPref() {
-  const base::Value::Dict& usage_time =
+  const base::DictValue& usage_time =
       profile_->GetPrefs()->GetDict(kWebsiteUsageTime);
 
   for (const auto [urlstr, url_info_value] : usage_time) {

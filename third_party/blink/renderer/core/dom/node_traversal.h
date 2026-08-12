@@ -30,6 +30,7 @@
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/container_node.h"
+#include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/dom/traversal_range.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
@@ -67,6 +68,7 @@ class CORE_EXPORT NodeTraversal {
   static Node* NextSkippingChildren(const Node&, const Node* stay_within);
 
   static Node* FirstWithin(const Node& current) { return current.firstChild(); }
+  static Node& FirstWithinOrSelf(Node&);
 
   static Node* LastWithin(const ContainerNode&);
   static Node& LastWithinOrSelf(Node&);
@@ -118,6 +120,9 @@ class CORE_EXPORT NodeTraversal {
   static bool HasChildren(const Node& parent) { return FirstChild(parent); }
   static bool IsDescendantOf(const Node& node, const Node& other) {
     return node.IsDescendantOf(&other);
+  }
+  static bool IsInclusiveDescendantOf(const Node& node, const Node& other) {
+    return node == other || IsDescendantOf(node, other);
   }
   static Node* FirstChild(const Node& parent) { return parent.firstChild(); }
   static Node* LastChild(const Node& parent) { return parent.lastChild(); }

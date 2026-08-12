@@ -11,6 +11,7 @@
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/json/json_reader.h"
+#include "base/logging.h"
 #include "components/client_hints/common/client_hints.h"
 #include "components/client_hints/common/switches.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
@@ -40,7 +41,7 @@ ParseInitializeClientHintsStorage() {
       base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
           switches::kInitializeClientHintsStorage);
 
-  std::optional<base::Value::Dict> maybe_value = base::JSONReader::ReadDict(
+  std::optional<base::DictValue> maybe_value = base::JSONReader::ReadDict(
       raw_client_hint_json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   if (!maybe_value) {
@@ -186,14 +187,14 @@ void ClientHints::PersistClientHints(
   }
 
   const auto& persistence_started = base::TimeTicks::Now();
-  base::Value::List client_hints_list;
+  base::ListValue client_hints_list;
   client_hints_list.reserve(client_hints.size());
 
   for (const auto& entry : client_hints) {
     client_hints_list.Append(static_cast<int>(entry));
   }
 
-  base::Value::Dict client_hints_dictionary;
+  base::DictValue client_hints_dictionary;
   client_hints_dictionary.Set(kClientHintsSettingKey,
                               std::move(client_hints_list));
 

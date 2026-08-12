@@ -4,7 +4,7 @@
 
 #include "chrome/browser/memory/enterprise_memory_limit_evaluator.h"
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/performance_manager/public/decorators/process_metrics_decorator.h"
@@ -111,7 +111,7 @@ void EnterpriseMemoryLimitEvaluator::GraphObserver::OnTakenFromGraph(
 void EnterpriseMemoryLimitEvaluator::GraphObserver::
     OnProcessMemoryMetricsAvailable(
         const performance_manager::SystemNode* system_node) {
-  base::ByteCount total_rss;
+  base::ByteSize total_rss;
   for (const performance_manager::ProcessNode* process_node :
        system_node->GetGraph()->GetAllProcessNodes()) {
     total_rss += process_node->GetResidentSet();

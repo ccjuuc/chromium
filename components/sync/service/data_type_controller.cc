@@ -206,15 +206,11 @@ void DataTypeController::Stop(SyncStopMetadataFate fate,
 
   switch (state()) {
     case NOT_RUNNING:
+    case FAILED:
       // Clear metadata if needed.
       if (fate == CLEAR_METADATA) {
         ClearMetadataIfStopped();
       }
-      // Nothing to stop.
-      std::move(callback).Run();
-      return;
-
-    case FAILED:
       // Nothing to stop.
       std::move(callback).Run();
       return;
@@ -256,8 +252,8 @@ DataTypeController::State DataTypeController::state() const {
   return state_;
 }
 
-DataTypeController::PreconditionState DataTypeController::GetPreconditionState()
-    const {
+DataTypeController::PreconditionState DataTypeController::GetPreconditionState(
+    const PreconditionContext& context) const {
   return PreconditionState::kPreconditionsMet;
 }
 
@@ -285,7 +281,7 @@ void DataTypeController::GetUnsyncedDataCount(
 void DataTypeController::GetAllNodesForDebugging(AllNodesCallback callback) {
   // Precautionary safeguard.
   if (state_ != RUNNING) {
-    std::move(callback).Run(base::Value::List());
+    std::move(callback).Run(base::ListValue());
     return;
   }
 

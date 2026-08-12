@@ -26,6 +26,7 @@
 #endif
 
 namespace content {
+class NavigationHandle;
 class RenderFrameHost;
 class RenderWidgetHost;
 class WebDragDestDelegate;
@@ -67,6 +68,9 @@ class CONTENT_EXPORT WebContentsViewDelegate {
   // method).
   virtual void ExecuteCommandForTesting(int command_id, int event_flags);
 
+  // Returns true if a context menu is currently being shown.
+  virtual bool IsContextMenuShowingForTesting();
+
   // Store the current focused view and start tracking it.
   virtual void StoreFocus();
 
@@ -103,6 +107,11 @@ class CONTENT_EXPORT WebContentsViewDelegate {
 
   // Notifies the delegate that the drag operation has ended.
   virtual void WebContentsDragEnded();
+
+#if BUILDFLAG(IS_ANDROID)
+  virtual bool ShouldShowBlurTransitionAnimation(
+      NavigationHandle* navigation_handle);
+#endif
 };
 
 }  // namespace content

@@ -2,15 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
-#pragma allow_unsafe_libc_calls
-#endif
-
 #include "remoting/host/remote_open_url/remote_open_url_main.h"
 
 #include "base/at_exit.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/i18n/icu_util.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
@@ -21,7 +17,6 @@
 #include "remoting/base/host_settings.h"
 #include "remoting/base/logging.h"
 #include "remoting/host/base/host_exit_codes.h"
-#include "remoting/host/chromoting_host_services_client.h"
 #include "remoting/host/remote_open_url/remote_open_url_client.h"
 #include "remoting/host/resources.h"
 #include "remoting/host/usage_stats_consent.h"
@@ -39,7 +34,7 @@ namespace remoting {
 
 int RemoteOpenUrlMain(int argc, char** argv) {
   if (argc > 2) {
-    printf("Usage: %s [URL]\n", argv[0]);
+    UNSAFE_TODO(printf("Usage: %s [URL]\n", argv[0]));
     return -1;
   }
 
@@ -58,10 +53,6 @@ int RemoteOpenUrlMain(int argc, char** argv) {
 #endif  // BUILDFLAG(IS_LINUX)
   }
 #endif  // defined(REMOTING_ENABLE_CRASH_REPORTING)
-
-  if (!ChromotingHostServicesClient::Initialize()) {
-    return kInitializationFailed;
-  }
 
   base::i18n::InitializeICU();
   LoadResources("");

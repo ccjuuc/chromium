@@ -77,6 +77,7 @@ import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager.ScrimClient;
 import org.chromium.components.tab_groups.TabGroupColorId;
 import org.chromium.components.tab_groups.TabGroupColorPickerUtils;
+import org.chromium.components.tab_groups.TabGroupsFeatureMap;
 import org.chromium.ui.accessibility.AccessibilityState;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
@@ -89,7 +90,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Tests for {@link TabGridDialogViewBinder}. */
 @RunWith(ChromeJUnit4ClassRunner.class)
-@DisableFeatures({DATA_SHARING, DATA_SHARING_JOIN_ONLY})
+@DisableFeatures({
+    DATA_SHARING,
+    DATA_SHARING_JOIN_ONLY,
+    TabGroupsFeatureMap.UPDATE_TAB_GROUP_COLORS
+})
 @Batch(Batch.PER_CLASS)
 public class TabGridDialogViewBinderTest {
     private static final int CONTENT_TOP_MARGIN = 56;
@@ -145,14 +150,14 @@ public class TabGridDialogViewBinderTest {
                     mContentView.setLayoutManager(mLayoutManager);
                     boolean isDataSharingEnabled = ChromeFeatureList.isEnabled(DATA_SHARING);
                     @LayoutRes
-                    int toolbar_res_id =
+                    int toolbarResId =
                             isDataSharingEnabled
                                     ? R.layout.tab_grid_dialog_toolbar_two_row
                                     : R.layout.tab_grid_dialog_toolbar;
                     mToolbarView =
                             (TabGridDialogToolbarView)
                                     LayoutInflater.from(sActivity)
-                                            .inflate(toolbar_res_id, mContentView, false);
+                                            .inflate(toolbarResId, mContentView, false);
                     LayoutInflater.from(sActivity)
                             .inflate(R.layout.tab_grid_dialog_layout, parentView, true);
                     mTabGridDialogView = parentView.findViewById(R.id.dialog_parent_view);

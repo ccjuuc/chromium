@@ -7,9 +7,8 @@
 #include <optional>
 
 #include "base/memory/raw_ref.h"
-#include "base/time/time.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ui/layout_constants.h"
-#include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/tab_style.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_root_view.h"
@@ -17,24 +16,26 @@
 #include "chrome/browser/ui/views/tabs/dragging/test/mock_tab_drag_context.h"
 #include "chrome/browser/ui/views/tabs/fake_base_tab_strip_controller.h"
 #include "chrome/browser/ui/views/tabs/fake_tab_slot_controller.h"
-#include "chrome/browser/ui/views/tabs/tab_close_button.h"
+#include "chrome/browser/ui/views/tabs/shared/tab_strip_types.h"
+#include "chrome/browser/ui/views/tabs/tab/glow_hover_controller.h"
+#include "chrome/browser/ui/views/tabs/tab/tab_close_button.h"
 #include "chrome/browser/ui/views/tabs/tab_container_impl.h"
 #include "chrome/browser/ui/views/tabs/tab_group_header.h"
 #include "chrome/browser/ui/views/tabs/tab_group_views.h"
 #include "chrome/browser/ui/views/tabs/tab_strip_layout_helper.h"
-#include "chrome/browser/ui/views/tabs/tab_strip_types.h"
 #include "chrome/browser/ui/views/tabs/tab_style_views.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/views/chrome_views_test_base.h"
+#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_node_data.h"
+#include "ui/accessibility/platform/browser_accessibility.h"
+#include "ui/accessibility/platform/browser_accessibility_manager.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/drop_target_event.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
-#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/events/event.h"
 #include "ui/gfx/animation/animation_test_api.h"
+#include "ui/views/accessibility/tree/widget_ax_manager_test_api.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
@@ -49,6 +50,23 @@ views::View* FindTabView(views::View* view) {
     current = current->parent();
   }
   return current;
+}
+
+ui::AXNodeID AXNodeIDForView(views::View* view) {
+  return static_cast<ui::AXNodeID>(view->GetViewAccessibility().GetUniqueId());
+}
+
+void ExpectBrowserTabIndices(ui::BrowserAccessibility* tab,
+                             int expected_pos_in_set,
+                             int expected_set_size) {
+  ASSERT_NE(tab, nullptr);
+  const std::optional<int> pos_in_set = tab->GetPosInSet();
+  ASSERT_TRUE(pos_in_set.has_value());
+  EXPECT_EQ(expected_pos_in_set, pos_in_set.value());
+
+  const std::optional<int> set_size = tab->GetSetSize();
+  ASSERT_TRUE(set_size.has_value());
+  EXPECT_EQ(expected_set_size, set_size.value());
 }
 
 // An extension of both `TabDragContext` and `TabDragPositionDelegateBase`.
@@ -135,10 +153,7 @@ class FakeTabContainerController final : public TabContainerController {
     return tab_strip_controller_->IsBrowserClosing();
   }
 
-  bool CanExtendDragHandle() const override {
-    return !tab_strip_controller_->IsFrameCondensed() &&
-           !tab_strip_controller_->EverHasVisibleBackgroundTabShapes();
-  }
+  bool CanExtendDragHandle() const override { return true; }
 
   const views::View* GetTabClosingModeMouseWatcherHostView() const override {
     return nullptr;
@@ -168,7 +183,8 @@ class TabContainerTest : public ChromeViewsTestBase {
  public:
   TabContainerTest()
       : animation_mode_reset_(gfx::AnimationTestApi::SetRichAnimationRenderMode(
-            gfx::Animation::RichAnimationRenderMode::FORCE_ENABLED)) {}
+            gfx::Animation::RichAnimationRenderMode::FORCE_ENABLED)) {
+  }
   TabContainerTest(const TabContainerTest&) = delete;
   TabContainerTest& operator=(const TabContainerTest&) = delete;
   ~TabContainerTest() override = default;
@@ -197,7 +213,7 @@ class TabContainerTest : public ChromeViewsTestBase {
     tab_slot_controller_->set_tab_container(tab_container.get());
 
     widget_ =
-        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+        CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
     tab_container_ =
         widget_->GetRootView()->AddChildView(std::move(tab_container));
     drag_context_ =
@@ -337,7 +353,7 @@ class TabContainerTest : public ChromeViewsTestBase {
   views::View::Views GetTabSlotViewsInVisualOrder() {
     views::View::Views ordered_views;
 
-    std::optional<tab_groups::TabGroupId> prev_group = std::nullopt;
+    std::optional<tab_groups::TabGroupId> prev_group;
 
     for (int i = 0; i < tab_container_->GetTabCount(); ++i) {
       Tab* tab = tab_container_->GetTabAtModelIndex(i);
@@ -383,7 +399,8 @@ class TabContainerTest : public ChromeViewsTestBase {
 
   void SetTabContainerWidth(int width) {
     tab_container_width_ = width;
-    gfx::Size size(tab_container_width_, GetLayoutConstant(TAB_STRIP_HEIGHT));
+    gfx::Size size(tab_container_width_,
+                   GetLayoutConstant(LayoutConstant::kTabStripHeight));
     drag_context_->SetSize(size);
     widget_->SetSize(size);
     tab_container_->SetSize(size);
@@ -393,7 +410,8 @@ class TabContainerTest : public ChromeViewsTestBase {
   // from Widget::SetSize.
   void SetTabContainerWidthSingleLayout(int width) {
     tab_container_width_ = width;
-    gfx::Size size(tab_container_width_, GetLayoutConstant(TAB_STRIP_HEIGHT));
+    gfx::Size size(tab_container_width_,
+                   GetLayoutConstant(LayoutConstant::kTabStripHeight));
     tab_container_->SetSize(size);
   }
 
@@ -415,6 +433,12 @@ class TabContainerTest : public ChromeViewsTestBase {
   gfx::AnimationTestApi::RenderModeResetter animation_mode_reset_;
 
   int tab_container_width_ = 0;
+};
+
+class TabContainerAccessibilityTreeTest : public TabContainerTest {
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_{
+      features::kAccessibilityTreeForViews};
 };
 
 TEST_F(TabContainerTest, ExitsClosingModeAtStandardWidth) {
@@ -698,6 +722,12 @@ TEST_F(TabContainerTest, DropIndexForDragLocationIsCorrect) {
 }
 
 TEST_F(TabContainerTest, AccessibilityData) {
+  ui::AXNodeData tab_container_data;
+  tab_container_->GetViewAccessibility().GetAccessibleNodeData(
+      &tab_container_data);
+  EXPECT_EQ(ax::mojom::Role::kTabList, tab_container_data.role);
+  EXPECT_TRUE(tab_container_data.HasState(ax::mojom::State::kMultiselectable));
+
   // When adding tabs, indices should be set.
   AddTab(0);
   AddTab(1, std::nullopt, TabActive::kActive);
@@ -711,6 +741,39 @@ TEST_F(TabContainerTest, AccessibilityData) {
 
   MoveTab(1, 0);
   VerifyTabIndices();
+}
+
+TEST_F(TabContainerAccessibilityTreeTest,
+       BrowserAccessibilityExposesTabIndices) {
+  if (!views::ViewAccessibility::IsViewsAccessibilityTreeEnabled()) {
+    GTEST_SKIP() << "ViewsAX not supported on this platform";
+  }
+
+  ASSERT_NE(widget_->ax_manager(), nullptr);
+  views::WidgetAXManagerTestApi api(widget_->ax_manager());
+  api.Enable();
+
+  Tab* const first_tab = AddTab(0);
+  Tab* const second_tab = AddTab(1, std::nullopt, TabActive::kActive);
+  Tab* const third_tab = AddTab(2);
+
+  api.WaitForNextSerialization();
+
+  ui::BrowserAccessibilityManager* const browser_manager =
+      api.ax_tree_manager();
+  ASSERT_NE(browser_manager, nullptr);
+
+  ui::BrowserAccessibility* const browser_tab_container =
+      browser_manager->GetFromID(AXNodeIDForView(tab_container_));
+  ASSERT_NE(browser_tab_container, nullptr);
+  EXPECT_EQ(ax::mojom::Role::kTabList, browser_tab_container->GetRole());
+
+  ExpectBrowserTabIndices(
+      browser_manager->GetFromID(AXNodeIDForView(first_tab)), 1, 3);
+  ExpectBrowserTabIndices(
+      browser_manager->GetFromID(AXNodeIDForView(second_tab)), 2, 3);
+  ExpectBrowserTabIndices(
+      browser_manager->GetFromID(AXNodeIDForView(third_tab)), 3, 3);
 }
 
 TEST_F(TabContainerTest, GetEventHandlerForOverlappingArea) {
@@ -1015,9 +1078,72 @@ TEST_F(TabContainerTest, GroupUnderlineBasics) {
                 TabGroupUnderline::kStrokeThickness);
 }
 
+TEST_F(TabContainerTest, GroupUnderlineHiddenInFocusMode) {
+  AddTab(0);
+  tab_groups::TabGroupId group = tab_groups::TabGroupId::GenerateNew();
+  AddTabToGroup(0, group);
+  tab_container_->CompleteAnimationAndLayout();
+
+  std::vector<TabGroupViews*> views = ListGroupViews();
+  EXPECT_EQ(1u, views.size());
+  views[0]->UpdateBounds();
+
+  const TabGroupUnderline* underline = views[0]->underline();
+  EXPECT_TRUE(underline->GetVisible());
+
+  // Focus the group and verify underline becomes hidden.
+  tab_strip_controller_->SetFocusedGroup(group);
+  views[0]->UpdateBounds();
+  EXPECT_FALSE(underline->GetVisible());
+
+  // Unfocus the group and verify underline becomes visible again.
+  tab_strip_controller_->SetFocusedGroup(std::nullopt);
+  views[0]->UpdateBounds();
+  EXPECT_TRUE(underline->GetVisible());
+}
+
+TEST_F(TabContainerTest, MultipleGroupsUnderlineHiddenInFocusMode) {
+  AddTab(0);
+  AddTab(1);
+  AddTab(2);
+
+  tab_groups::TabGroupId group1 = tab_groups::TabGroupId::GenerateNew();
+  tab_groups::TabGroupId group2 = tab_groups::TabGroupId::GenerateNew();
+  tab_groups::TabGroupId group3 = tab_groups::TabGroupId::GenerateNew();
+
+  AddTabToGroup(0, group1);
+  AddTabToGroup(1, group2);
+  AddTabToGroup(2, group3);
+
+  tab_container_->CompleteAnimationAndLayout();
+
+  TabGroupViews* group1_views = tab_container_->GetGroupViews(group1);
+  TabGroupViews* group2_views = tab_container_->GetGroupViews(group2);
+  TabGroupViews* group3_views = tab_container_->GetGroupViews(group3);
+
+  EXPECT_TRUE(group1_views->underline()->GetVisible());
+  EXPECT_TRUE(group2_views->underline()->GetVisible());
+  EXPECT_TRUE(group3_views->underline()->GetVisible());
+
+  // Focus group 2 and verify all group underlines are hidden.
+  tab_strip_controller_->SetFocusedGroup(group2);
+  tab_container_->CompleteAnimationAndLayout();
+  EXPECT_FALSE(group1_views->underline()->GetVisible());
+  EXPECT_FALSE(group2_views->underline()->GetVisible());
+  EXPECT_FALSE(group3_views->underline()->GetVisible());
+
+  // Unfocus and verify underlines become visible again.
+  tab_strip_controller_->SetFocusedGroup(std::nullopt);
+  tab_container_->CompleteAnimationAndLayout();
+  EXPECT_TRUE(group1_views->underline()->GetVisible());
+  EXPECT_TRUE(group2_views->underline()->GetVisible());
+  EXPECT_TRUE(group3_views->underline()->GetVisible());
+}
+
 TEST_F(TabContainerTest, UnderlineBoundsTabVisibilityChange) {
   // Validates that group underlines are updated correctly in a single Layout
-  // call when the visibility of tabs in the group change. See crbug.com/1356177
+  // call when the visibility of tabs in the group change. See
+  // crbug.com/40860257
 
   SetTabContainerWidth(200);
   // Add tabs to a single group until the last one is not visible.
@@ -1049,7 +1175,7 @@ TEST_F(TabContainerTest, UnderlineBoundsTabVisibilityChange) {
 TEST_F(TabContainerTest, UnderlineBoundsCollapsedGroupHeaderVisibilityChange) {
   // Validates that group underlines are updated correctly in a single Layout
   // call when the visibility of the group header changes, even if the group is
-  // collapsed. See crbug.com/1374614
+  // collapsed. See crbug.com/40872448
 
   SetTabContainerWidth(200);
   // Create a tab group with one tab and collapse it.
@@ -1280,7 +1406,7 @@ TEST_F(TabContainerTest,
 }
 
 TEST_F(TabContainerTest, ZOrder_MixedScenario) {
-  auto* container_impl = static_cast<TabContainerImpl*>(tab_container_);
+  auto* container_impl = views::AsViewClass<TabContainerImpl>(tab_container_);
   Tab* pinned_tab =
       AddTab(0, std::nullopt, TabActive::kActive, TabPinned::kPinned);
   tab_groups::TabGroupId group = tab_groups::TabGroupId::GenerateNew();
@@ -1290,7 +1416,7 @@ TEST_F(TabContainerTest, ZOrder_MixedScenario) {
   container_impl->CompleteAnimationAndLayout();
 
   // Hover over the grouped tab.
-  grouped_tab->tab_style_views()->ShowHover(TabStyle::ShowHoverStyle::kSubtle);
+  grouped_tab->ShowHover(TabStyle::ShowHoverStyle::kSubtle);
   grouped_tab->tab_style_views()
       ->GetHoverControllerForTesting()
       ->animation_for_testing()
@@ -1334,7 +1460,7 @@ TEST_F(TabContainerTest, ZOrder_MixedScenario) {
 }
 
 TEST_F(TabContainerTest, ZOrder_TabGroup) {
-  auto* container_impl = static_cast<TabContainerImpl*>(tab_container_);
+  auto* container_impl = views::AsViewClass<TabContainerImpl>(tab_container_);
   Tab* regular_tab = AddTab(0);
   tab_groups::TabGroupId group = tab_groups::TabGroupId::GenerateNew();
   Tab* grouped_tab = AddTab(1, group);
@@ -1366,7 +1492,7 @@ TEST_F(TabContainerTest, ZOrder_TabGroup) {
 }
 
 TEST_F(TabContainerTest, ZOrder_PinnedTab) {
-  auto* container_impl = static_cast<TabContainerImpl*>(tab_container_);
+  auto* container_impl = views::AsViewClass<TabContainerImpl>(tab_container_);
   Tab* pinned_tab =
       AddTab(0, std::nullopt, TabActive::kInactive, TabPinned::kPinned);
   Tab* regular_tab = AddTab(1);
@@ -1401,13 +1527,13 @@ TEST_F(TabContainerTest, ZOrder_PinnedTab) {
 }
 
 TEST_F(TabContainerTest, ZOrder_HoveredTabIsAfterNormalTab) {
-  auto* container_impl = static_cast<TabContainerImpl*>(tab_container_);
+  auto* container_impl = views::AsViewClass<TabContainerImpl>(tab_container_);
   Tab* tab1 = AddTab(0);
   Tab* tab2 = AddTab(1);
   container_impl->CompleteAnimationAndLayout();
 
   // Hover over the first tab.
-  tab1->tab_style_views()->ShowHover(TabStyle::ShowHoverStyle::kSubtle);
+  tab1->ShowHover(TabStyle::ShowHoverStyle::kSubtle);
   tab1->tab_style_views()
       ->GetHoverControllerForTesting()
       ->animation_for_testing()
@@ -1425,7 +1551,7 @@ TEST_F(TabContainerTest, ZOrder_HoveredTabIsAfterNormalTab) {
 }
 
 TEST_F(TabContainerTest, ZOrder_ActiveTabIsLast) {
-  auto* container_impl = static_cast<TabContainerImpl*>(tab_container_);
+  auto* container_impl = views::AsViewClass<TabContainerImpl>(tab_container_);
   AddTab(0);
   AddTab(1, std::nullopt, TabActive::kActive);
   AddTab(2);
@@ -1437,7 +1563,7 @@ TEST_F(TabContainerTest, ZOrder_ActiveTabIsLast) {
 }
 
 TEST_F(TabContainerTest, ZOrderCacheUpdatesAfterCRUDOperations) {
-  auto* container_impl = static_cast<TabContainerImpl*>(tab_container_);
+  auto* container_impl = views::AsViewClass<TabContainerImpl>(tab_container_);
   container_impl->CompleteAnimationAndLayout();
   container_impl->UpdateZOrderCacheForTesting();
   EXPECT_EQ(container_impl->GetZOrderCacheForTesting().size(), 0u);
@@ -1477,4 +1603,45 @@ TEST_F(TabContainerTest, ZOrderCacheUpdatesAfterCRUDOperations) {
   container_impl->CompleteAnimationAndLayout();
   container_impl->UpdateZOrderCacheForTesting();
   EXPECT_EQ(container_impl->GetZOrderCacheForTesting().size(), 2u);
+}
+
+TEST_F(TabContainerTest, TabAccessibleNameUpdatesOnGroupTitleChange) {
+  Tab* tab_0 = AddTab(0, std::nullopt, TabActive::kInactive);
+  AddTab(1, std::nullopt, TabActive::kActive);
+  tab_container_->CompleteAnimationAndLayout();
+
+  // Create a tab group and add a tab to it.
+  tab_groups::TabGroupId group = tab_groups::TabGroupId::GenerateNew();
+  AddTabToGroup(0, group);
+  tab_container_->CompleteAnimationAndLayout();
+
+  // Inject a temporary accessibility name. The visual update of the tab group
+  // should trigger an a11y recalculation, clearing this stale value.
+  tab_0->GetViewAccessibility().SetName(u"Tab Name");
+
+  // Get AX Name Before Title Change.
+  ui::AXNodeData initial_ax_data;
+  tab_0->GetViewAccessibility().GetAccessibleNodeData(&initial_ax_data);
+  std::u16string initial_accessible_name =
+      initial_ax_data.GetString16Attribute(ax::mojom::StringAttribute::kName);
+
+  // Update tab group title.
+  tab_groups::TabGroupVisualData old_visuals(
+      u"Untitled Tab Group", tab_groups::TabGroupColorId::kRed, false);
+
+  std::u16string new_group_title = u"Work";
+  tab_groups::TabGroupVisualData new_visuals(
+      new_group_title, tab_groups::TabGroupColorId::kBlue, false);
+
+  // Force OnGroupVisualsChanged notification.
+  auto* container_impl = views::AsViewClass<TabContainerImpl>(tab_container_);
+  container_impl->OnGroupVisualsChanged(group, &old_visuals, &new_visuals);
+
+  // Validate tab name after change.
+  ui::AXNodeData updated_ax_data;
+  tab_0->GetViewAccessibility().GetAccessibleNodeData(&updated_ax_data);
+  std::u16string updated_accessible_name =
+      updated_ax_data.GetString16Attribute(ax::mojom::StringAttribute::kName);
+
+  EXPECT_NE(initial_accessible_name, updated_accessible_name);
 }

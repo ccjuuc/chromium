@@ -15,12 +15,16 @@
 #include <utility>
 #include <vector>
 
+#include "base/byte_size.h"
+#include "base/files/file_enumerator.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/format_macros.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/pickle.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
@@ -32,6 +36,7 @@
 #include "base/test/gmock_callback_support.h"
 #include "base/test/gmock_expected_support.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/test_future.h"
@@ -62,6 +67,8 @@
 #include "net/cert/x509_certificate.h"
 #include "net/disk_cache/disk_cache.h"
 #include "net/disk_cache/memory_entry_data_hints.h"
+#include "net/disk_cache/simple/simple_util.h"
+#include "net/disk_cache/trivial_cache_entry_hasher.h"
 #include "net/http/http_byte_range.h"
 #include "net/http/http_cache_transaction.h"
 #include "net/http/http_request_headers.h"
@@ -91,6 +98,10 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/origin.h"
+
+#if !defined(NET_DISABLE_ZSTD)
+#include "third_party/zstd/src/lib/zstd.h"
+#endif
 
 using base::test::RunClosure;
 using net::test::IsError;
@@ -222,8 +233,8 @@ void RunTransactionTestBase(HttpCache* cache,
                             HttpResponseInfo* response_info,
                             const NetLogWithSource& net_log,
                             LoadTimingInfo* load_timing_info,
-                            int64_t* sent_bytes,
-                            int64_t* received_bytes,
+                            base::ByteSize* sent_bytes,
+                            base::ByteSize* received_bytes,
                             IPEndPoint* remote_endpoint) {
   TestCompletionCallback callback;
 
@@ -620,9 +631,9 @@ void Verify206Response(const std::string& response, int start, int end) {
   int64_t range_start, range_end, object_size;
   ASSERT_TRUE(
       headers->GetContentRangeFor206(&range_start, &range_end, &object_size));
-  std::optional<base::ByteCount> content_length = headers->GetContentLength();
+  std::optional<base::ByteSize> content_length = headers->GetContentLength();
 
-  int length = end - start + 1;
+  uint64_t length = end - start + 1;
   ASSERT_EQ(length, content_length->InBytes());
   ASSERT_EQ(start, range_start);
   ASSERT_EQ(end, range_end);
@@ -858,7 +869,7 @@ class HttpSplitCacheKeyTest : public HttpCacheTest {
     request_info.method = "GET";
     request_info.network_isolation_key = NetworkIsolationKey(site, site);
     request_info.network_anonymization_key =
-        NetworkAnonymizationKey::CreateSameSite(site);
+        NetworkAnonymizationKey::CreateSameSite(std::move(site));
     MockHttpCache cache;
     return *HttpCache::GenerateCacheKeyForRequest(&request_info);
   }
@@ -1241,7 +1252,6 @@ enum class SplitCacheTestCase {
   kEnabledTripleKeyed,
 };
 
-
 class HttpCacheTestSplitCacheFeature
     : public HttpCacheTest,
       public ::testing::WithParamInterface<SplitCacheTestCase> {
@@ -1270,7 +1280,7 @@ TEST_P(HttpCacheTestSplitCacheFeature, SimpleGetVerifyGoogleFontMetrics) {
   MockHttpRequest request(transaction);
   request.network_isolation_key = NetworkIsolationKey(site_a, site_a);
   request.network_anonymization_key =
-      NetworkAnonymizationKey::CreateSameSite(site_a);
+      NetworkAnonymizationKey::CreateSameSite(std::move(site_a));
 
   // Attempt to populate the cache.
   RunTransactionTestWithRequest(cache.http_cache(), transaction, request,
@@ -2054,8 +2064,9 @@ TEST_F(HttpCacheSimpleGetTest, UnusedSincePrefetchWriteError) {
       NetLogWithSource::Make(NetLogSourceType::NONE), nullptr);
 }
 
-// Make sure that if a prefetch entry is truncated, then an attempt to re-use it
-// gets aborted in connected handler that truncated bit is not lost.
+// Make sure that if a prefetch entry is truncated, then an attempt to reuse
+// it that gets aborted in the connected handler dooms the truncated entry, so
+// the next request fetches a fresh complete response.
 TEST_F(HttpCacheTest, PrefetchTruncateCancelInConnectedCallback) {
   MockHttpCache cache;
 
@@ -2115,8 +2126,8 @@ TEST_F(HttpCacheTest, PrefetchTruncateCancelInConnectedCallback) {
     c.trans.reset();
     base::RunLoop().RunUntilIdle();
 
-    VerifyTruncatedFlag(&cache, request.CacheKey(), /*flag_value=*/true,
-                        /*data_size=*/10);
+    disk_cache::Entry* entry = nullptr;
+    EXPECT_FALSE(cache.OpenBackendEntry(request.CacheKey(), &entry));
   }
 
   // Now try again without abort.
@@ -2212,8 +2223,8 @@ TEST_F(HttpCacheTest, StaleWhileRevalidateTruncated) {
 }
 
 // Make sure that if a stale-while-revalidate entry is truncated, then an
-// attempt to re-use it gets aborted in connected handler that truncated bit is
-// not lost.
+// attempt to reuse it that gets aborted in the connected handler dooms the
+// truncated entry, so the next request fetches a fresh complete response.
 TEST_F(HttpCacheTest, StaleWhileRevalidateTruncateCancelInConnectedCallback) {
   MockHttpCache cache;
 
@@ -2272,8 +2283,8 @@ TEST_F(HttpCacheTest, StaleWhileRevalidateTruncateCancelInConnectedCallback) {
     c.trans.reset();
     base::RunLoop().RunUntilIdle();
 
-    VerifyTruncatedFlag(&cache, request.CacheKey(), /*flag_value=*/true,
-                        /*data_size=*/10);
+    disk_cache::Entry* entry = nullptr;
+    EXPECT_FALSE(cache.OpenBackendEntry(request.CacheKey(), &entry));
   }
 
   // Now try again without abort.
@@ -5055,8 +5066,9 @@ TEST_F(HttpCacheSimpleGetTest, ParallelWritingVerifyNetworkBytes) {
   EXPECT_EQ(0, cache.GetCountDoneHeadersQueue(cache_key));
 
   // Get the network bytes read by the first transaction.
-  int total_received_bytes = context_list[0]->trans->GetTotalReceivedBytes();
-  EXPECT_GT(total_received_bytes, 0);
+  base::ByteSize total_received_bytes =
+      context_list[0]->trans->GetTotalReceivedBytes();
+  EXPECT_GT(total_received_bytes, base::ByteSize(0));
 
   // Complete Read by the 2nd transaction so that the 1st transaction that
   // created the network transaction is now a reader.
@@ -5067,7 +5079,7 @@ TEST_F(HttpCacheSimpleGetTest, ParallelWritingVerifyNetworkBytes) {
 
   // Verify that the network bytes read are not attributed to the 2nd
   // transaction but to the 1st.
-  EXPECT_EQ(0, context_list[1]->trans->GetTotalReceivedBytes());
+  EXPECT_EQ(base::ByteSize(0), context_list[1]->trans->GetTotalReceivedBytes());
 
   EXPECT_GE(total_received_bytes,
             context_list[0]->trans->GetTotalReceivedBytes());
@@ -7300,7 +7312,7 @@ TEST_F(HttpCacheTestSplitCacheFeatureEnabled,
   MockHttpRequest req1b(transaction);
   req1b.network_isolation_key = NetworkIsolationKey(site_b, site_b);
   req1b.network_anonymization_key =
-      NetworkAnonymizationKey::CreateSameSite(site_b);
+      NetworkAnonymizationKey::CreateSameSite(std::move(site_b));
   RunTransactionTestWithRequest(cache.http_cache(), transaction, req1b,
                                 nullptr);
 
@@ -7319,7 +7331,7 @@ TEST_F(HttpCacheTestSplitCacheFeatureEnabled,
   req2.upload_data_stream = &upload_data_stream;
   req2.network_isolation_key = NetworkIsolationKey(site_a, site_a);
   req2.network_anonymization_key =
-      NetworkAnonymizationKey::CreateSameSite(site_a);
+      NetworkAnonymizationKey::CreateSameSite(std::move(site_a));
 
   RunTransactionTestWithRequest(cache.http_cache(), transaction, req2, nullptr);
 
@@ -10180,7 +10192,8 @@ TEST_F(HttpCacheTest, PersistHttpResponseInfo) {
   // Unpickle.
   HttpResponseInfo response2;
   bool response_truncated;
-  EXPECT_TRUE(response2.InitFromPickle(*pickle, &response_truncated));
+  EXPECT_TRUE(response2.InitFromPickle(base::PickleIterator(*pickle),
+                                       &response_truncated));
   EXPECT_FALSE(response_truncated);
 
   // Verify fields.
@@ -10720,6 +10733,119 @@ TEST_F(HttpCacheGetTest, IncompleteResource3) {
   EXPECT_EQ(1, cache.network_layer()->transaction_count());
   EXPECT_EQ(1, cache.disk_cache()->open_count());
   EXPECT_EQ(1, cache.disk_cache()->create_count());
+}
+
+// Tests that a failed network resume of a truncated entry dooms the entry,
+// so the partial body cannot be reused as a complete response.
+TEST_F(HttpCacheGetTest, IncompleteResourceFailedResumeDoomsEntry) {
+  MockHttpCache cache;
+  ScopedMockTransaction transaction(kRangeGET_TransactionOK);
+  bool fail_bulk_range = true;
+  std::vector<std::string> requested_ranges;
+
+  // This entry is fresh, so the partial body would be reusable without
+  // revalidation if the failed resume did not doom the entry.
+  std::string raw_headers(
+      "HTTP/1.1 200 OK\n"
+      "Last-Modified: Sat, 18 Apr 2009 01:10:43 GMT\n"
+      "ETag: \"foo\"\n"
+      "Cache-Control: max-age=36000\n"
+      "Accept-Ranges: bytes\n"
+      "Content-Length: 80\n");
+  CreateTruncatedEntry(raw_headers, &cache);
+
+  transaction.request_headers = EXTRA_HEADER;
+  transaction.start_handler =
+      base::BindLambdaForTesting([&](const HttpRequestInfo* request) -> Error {
+        std::optional<std::string_view> range_header =
+            request->extra_headers.GetHeaderView(HttpRequestHeaders::kRange);
+        if (!range_header) {
+          return OK;
+        }
+        requested_ranges.emplace_back(*range_header);
+        return fail_bulk_range && *range_header != "bytes=20-20"
+                   ? ERR_CONNECTION_CLOSED
+                   : OK;
+      });
+  transaction.handler = base::BindLambdaForTesting(
+      [&](const HttpRequestInfo* request, std::string* response_status,
+          std::string* response_headers, std::string* response_data) {
+        EXPECT_TRUE(request->extra_headers.HasHeader(kExtraHeaderKey));
+
+        std::optional<std::string_view> range_header =
+            request->extra_headers.GetHeaderView(HttpRequestHeaders::kRange);
+        const size_t total_size = std::string_view(kFullRangeData).size();
+        if (!range_header) {
+          // Post-doom retry: respond as a fresh full 200 OK.
+          *response_status = "HTTP/1.1 200 OK";
+          *response_headers = base::StringPrintf(
+              "Last-Modified: Sat, 18 Apr 2007 01:10:43 GMT\n"
+              "ETag: \"foo\"\n"
+              "Accept-Ranges: bytes\n"
+              "Cache-Control: max-age=36000\n"
+              "Content-Length: %zu\n",
+              total_size);
+          *response_data = std::string(kFullRangeData);
+          return;
+        }
+
+        std::vector<HttpByteRange> ranges;
+        ASSERT_TRUE(HttpUtil::ParseRangeHeader(*range_header, &ranges));
+        ASSERT_EQ(1u, ranges.size());
+        ASSERT_TRUE(ranges[0].ComputeBounds(static_cast<int64_t>(total_size)));
+
+        int64_t start = ranges[0].first_byte_position();
+        int64_t end = ranges[0].last_byte_position();
+        int64_t length = end - start + 1;
+        *response_status = "HTTP/1.1 206 Partial Content";
+        *response_headers = base::StringPrintf(
+            "Last-Modified: Sat, 18 Apr 2007 01:10:43 GMT\n"
+            "ETag: \"foo\"\n"
+            "Accept-Ranges: bytes\n"
+            "Content-Range: bytes %" PRId64 "-%" PRId64
+            "/%zu\n"
+            "Content-Length: %" PRId64 "\n",
+            start, end, total_size, length);
+        *response_data = std::string(kFullRangeData)
+                             .substr(static_cast<size_t>(start),
+                                     static_cast<size_t>(length));
+      });
+
+  auto failed_context = std::make_unique<Context>();
+  failed_context->trans = cache.CreateTransaction();
+  ASSERT_TRUE(failed_context->trans);
+
+  MockHttpRequest request(transaction);
+  int rv = failed_context->trans->Start(
+      &request, failed_context->callback.callback(), NetLogWithSource());
+  EXPECT_THAT(failed_context->callback.GetResult(rv), IsOk());
+
+  std::string content;
+  EXPECT_THAT(ReadTransaction(failed_context->trans.get(), &content),
+              IsError(ERR_CONNECTION_CLOSED));
+  failed_context.reset();
+
+  EXPECT_THAT(requested_ranges, ElementsAre("bytes=20-20", "bytes=20-79"));
+  EXPECT_EQ(2, cache.network_layer()->transaction_count());
+  disk_cache::Entry* entry = nullptr;
+  EXPECT_FALSE(cache.OpenBackendEntry(request.CacheKey(), &entry));
+
+  fail_bulk_range = false;
+  transaction.data = kFullRangeData;
+
+  std::string headers;
+  RunTransactionTestWithResponse(cache.http_cache(), transaction, &headers);
+
+  std::string expected_headers(
+      "HTTP/1.1 200 OK\n"
+      "Last-Modified: Sat, 18 Apr 2007 01:10:43 GMT\n"
+      "ETag: \"foo\"\n"
+      "Accept-Ranges: bytes\n"
+      "Cache-Control: max-age=36000\n"
+      "Content-Length: 80\n");
+  EXPECT_EQ(expected_headers, headers);
+  EXPECT_LT(1, cache.network_layer()->transaction_count());
+  VerifyTruncatedFlag(&cache, request.CacheKey(), false, 80);
 }
 
 // Tests that we handle 401s for truncated resources.
@@ -11520,7 +11646,7 @@ TEST_F(HttpCacheTest, HttpCacheProfileThirdPartyJavaScript) {
   // but should still be recorded as JavaScript
   trans_info.network_isolation_key = NetworkIsolationKey(site_a, site_a);
   trans_info.network_anonymization_key =
-      NetworkAnonymizationKey::CreateSameSite(site_a);
+      NetworkAnonymizationKey::CreateSameSite(std::move(site_a));
   trans_info.possibly_top_frame_origin = origin_a;
 
   RunTransactionTestWithRequest(cache.http_cache(), transaction, trans_info,
@@ -12496,9 +12622,9 @@ TEST_P(HttpCacheHugeResourceTest,
 
   int64_t total_bytes_received = 0;
 
-  EXPECT_EQ(kTotalSize, http_transaction->GetResponseInfo()
-                            ->headers->GetContentLength()
-                            ->InBytes());
+  EXPECT_EQ(kTotalSize, static_cast<int64_t>(http_transaction->GetResponseInfo()
+                                                 ->headers->GetContentLength()
+                                                 ->InBytes()));
   do {
     // This test simulates reading gigabytes of data. Buffer size is set to 10MB
     // to reduce the number of reads and speed up the test.
@@ -12624,15 +12750,13 @@ TEST_F(HttpCacheTest, SetWebSocketHandshakeStreamCreateHelper) {
   EXPECT_FALSE(cache.network_layer()->last_transaction());
 
   info.url = GURL(kSimpleGET_Transaction.url);
+  trans->SetWebSocketHandshakeStreamCreateHelper(&create_helper);
+
   TestCompletionCallback callback;
   EXPECT_EQ(ERR_IO_PENDING,
             trans->Start(&info, callback.callback(), NetLogWithSource()));
 
   ASSERT_TRUE(cache.network_layer()->last_transaction());
-  EXPECT_FALSE(cache.network_layer()
-                   ->last_transaction()
-                   ->websocket_handshake_stream_create_helper());
-  trans->SetWebSocketHandshakeStreamCreateHelper(&create_helper);
   EXPECT_EQ(&create_helper, cache.network_layer()
                                 ->last_transaction()
                                 ->websocket_handshake_stream_create_helper());
@@ -12685,8 +12809,8 @@ namespace {
 
 void RunTransactionAndGetNetworkBytes(MockHttpCache* cache,
                                       const MockTransaction& trans_info,
-                                      int64_t* sent_bytes,
-                                      int64_t* received_bytes) {
+                                      base::ByteSize* sent_bytes,
+                                      base::ByteSize* received_bytes) {
   RunTransactionTestBase(
       cache->http_cache(), trans_info, MockHttpRequest(trans_info), nullptr,
       NetLogWithSource(), nullptr, sent_bytes, received_bytes, nullptr);
@@ -12698,21 +12822,21 @@ TEST_F(HttpCacheTest, NetworkBytesCacheMissAndThenHit) {
   MockHttpCache cache;
 
   MockTransaction transaction(kSimpleGET_Transaction);
-  int64_t sent, received;
+  base::ByteSize sent, received;
   RunTransactionAndGetNetworkBytes(&cache, transaction, &sent, &received);
   EXPECT_EQ(MockNetworkTransaction::kTotalSentBytes, sent);
   EXPECT_EQ(MockNetworkTransaction::kTotalReceivedBytes, received);
 
   RunTransactionAndGetNetworkBytes(&cache, transaction, &sent, &received);
-  EXPECT_EQ(0, sent);
-  EXPECT_EQ(0, received);
+  EXPECT_EQ(base::ByteSize(0), sent);
+  EXPECT_EQ(base::ByteSize(0), received);
 }
 
 TEST_F(HttpCacheTest, NetworkBytesConditionalRequest304) {
   MockHttpCache cache;
 
   ScopedMockTransaction transaction(kETagGET_Transaction);
-  int64_t sent, received;
+  base::ByteSize sent, received;
   RunTransactionAndGetNetworkBytes(&cache, transaction, &sent, &received);
   EXPECT_EQ(MockNetworkTransaction::kTotalSentBytes, sent);
   EXPECT_EQ(MockNetworkTransaction::kTotalReceivedBytes, received);
@@ -12735,7 +12859,7 @@ TEST_F(HttpCacheTest, NetworkBytesConditionalRequest200) {
       "Etag: \"foopy\"\n"
       "Cache-Control: max-age=0\n"
       "Vary: Foo\n";
-  int64_t sent, received;
+  base::ByteSize sent, received;
   RunTransactionAndGetNetworkBytes(&cache, transaction, &sent, &received);
   EXPECT_EQ(MockNetworkTransaction::kTotalSentBytes, sent);
   EXPECT_EQ(MockNetworkTransaction::kTotalReceivedBytes, received);
@@ -12754,15 +12878,15 @@ TEST_F(HttpCacheTest, NetworkBytesRange) {
   ScopedMockTransaction transaction(kRangeGET_TransactionOK);
 
   // Read bytes 40-49 from the network.
-  int64_t sent, received;
+  base::ByteSize sent, received;
   RunTransactionAndGetNetworkBytes(&cache, transaction, &sent, &received);
   EXPECT_EQ(MockNetworkTransaction::kTotalSentBytes, sent);
   EXPECT_EQ(MockNetworkTransaction::kTotalReceivedBytes, received);
 
   // Read bytes 40-49 from the cache.
   RunTransactionAndGetNetworkBytes(&cache, transaction, &sent, &received);
-  EXPECT_EQ(0, sent);
-  EXPECT_EQ(0, received);
+  EXPECT_EQ(base::ByteSize(0), sent);
+  EXPECT_EQ(base::ByteSize(0), received);
   base::RunLoop().RunUntilIdle();
 
   // Read bytes 30-39 from the network.
@@ -13297,9 +13421,10 @@ TEST_F(HttpCacheTest, GetResourceURLFromHttpCacheKey) {
 
       // Invalid input, producing garbage, without crashing.
       {"", ""},
-      {"0/a.com", "0/a.com"},
+      {"0/a.com", ""},
       {"https://a.com/", "a.com/"},
       {"0/https://a.com/", "/a.com/"},
+      {"0/0/_dk_https://a.com", ""},
   };
 
   for (const auto& test : kTestCase) {
@@ -14640,17 +14765,10 @@ TEST_P(HttpCacheNoVarySearchTest, ExternalHit) {
               ElementsAre(new_url_cache_key, nvs_url_cache_key));
 }
 
-class HttpCacheNoVarySearchKeepNotSuitableTest
+class HttpCacheNoVarySearchStaleEntryTest
     : public HttpCacheNoVarySearchTestBase {
  public:
   static constexpr int kMaxAgeZero = 0;
-
-  void SetKeepNotSuitable(bool keep) {
-    keep_not_suitable_feature_list_.InitAndEnableFeatureWithParameters(
-        features::kHttpCacheNoVarySearch,
-        {{features::kHttpCacheNoVarySearchKeepNotSuitable.name,
-          base::ToString(keep)}});
-  }
 
   void InsertStaleNonRevalidatableEntry(std::string_view params) {
     // Insert a No-Vary-Search entry that will match and is not capable of being
@@ -14668,46 +14786,14 @@ class HttpCacheNoVarySearchKeepNotSuitableTest
     RunTransactionTestWithResponseInfo(cache(), transaction, &info);
     return info;
   }
-
- private:
-  base::test::ScopedFeatureList keep_not_suitable_feature_list_;
 };
 
 INSTANTIATE_TEST_SUITE_P(All,
-                         HttpCacheNoVarySearchKeepNotSuitableTest,
+                         HttpCacheNoVarySearchStaleEntryTest,
                          ::testing::Bool(),
                          split_cache_parameter_name);
 
-// With the default behavior, an in-memory hint that the response is stale and
-// not validatable triggers erasing the entry from the NoVarySearchCache.
-TEST_P(HttpCacheNoVarySearchKeepNotSuitableTest, InMemoryHintTriggersErase) {
-  SetKeepNotSuitable(false);
-
-  InsertStaleNonRevalidatableEntry("q=fred&a=1");
-
-  // The first transaction doesn't permit a stale response. The response has an
-  // empty No-Vary-Search header so it will not result in an entry in the
-  // NoVarySearchCache.
-  const HttpResponseInfo info1 =
-      RunTransactionTestWithMaxAgeZeroNoEtag("q=fred", LOAD_NORMAL);
-  EXPECT_FALSE(info1.was_cached);
-  EXPECT_TRUE(info1.network_accessed);
-
-  // The second transaction permits a stale response, but doesn't get one
-  // because it has already been deleted.
-  HttpResponseInfo info2 = RunTransactionTestWithMaxAgeZeroNoEtag(
-      "q=fred&a=77", LOAD_SKIP_CACHE_VALIDATION);
-  EXPECT_FALSE(info2.was_cached);
-  EXPECT_TRUE(info2.network_accessed);
-}
-
-// This test is almost identical to the previous one, except that the feature
-// parameter is set which changes the behavior to not delete the
-// NoVarySearchCache entry.
-TEST_P(HttpCacheNoVarySearchKeepNotSuitableTest,
-       InMemoryHintDoesNotTriggerErase) {
-  SetKeepNotSuitable(true);
-
+TEST_P(HttpCacheNoVarySearchStaleEntryTest, InMemoryHintDoesNotTriggerErase) {
   InsertStaleNonRevalidatableEntry("q=fred&a=1");
 
   // The first transaction doesn't permit a stale response. The response has an
@@ -14772,6 +14858,9 @@ class HttpCacheNoVarySearchMockFileOperationsTest
       load_expectations_ +=
           EXPECT_CALL(*writer_, Write)
               .WillOnce(DoAll(QuitRunLoop(load_run_loop_), Return(true)));
+      load_expectations_ +=
+          EXPECT_CALL(*file_operations, DetachFromCurrentSequence());
+      load_expectations_ += EXPECT_CALL(*writer_, DetachFromCurrentSequence());
     }
     http_cache.emplace(std::make_unique<MockBackendFactory>(),
                        std::move(file_operations));
@@ -15010,13 +15099,15 @@ class MockCacheEncryptionDelegate : public net::CacheEncryptionDelegate {
     std::move(callback).Run(init_result_);
   }
 
-  bool EncryptData(base::span<const uint8_t> plaintext,
-                   std::vector<uint8_t>* ciphertext) override {
-    return false;
+  disk_cache::BackendFileOperationsFactory* GetEncryptionFileOperationsFactory(
+      scoped_refptr<disk_cache::BackendFileOperationsFactory>
+          file_operations_factory) override {
+    factory_ = base::MakeRefCounted<disk_cache::TrivialFileOperationsFactory>();
+    return factory_.get();
   }
-  bool DecryptData(base::span<const uint8_t> ciphertext,
-                   std::vector<uint8_t>* plaintext) override {
-    return false;
+
+  std::unique_ptr<disk_cache::CacheEntryHasher> GetCacheEntryHasher() override {
+    return std::make_unique<disk_cache::TrivialCacheEntryHasher>();
   }
 
   void SetInitResult(net::Error result) { init_result_ = result; }
@@ -15032,6 +15123,7 @@ class MockCacheEncryptionDelegate : public net::CacheEncryptionDelegate {
   bool init_called_ = false;
   net::Error init_result_ = net::OK;
   base::OnceCallback<void(net::Error)> pending_callback_;
+  scoped_refptr<disk_cache::TrivialFileOperationsFactory> factory_;
 };
 
 // A backend factory that creates a disk cache and injects a mock
@@ -15066,34 +15158,21 @@ TEST_F(HttpCacheTest, EncryptionDelegateInitSuccess) {
 
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
-  MockHttpCache cache(
+  auto cache = std::make_unique<MockHttpCache>(
       std::make_unique<TestCacheBackendFactoryWithEncryption>(
           &mock_delegate, temp_dir.GetPath()));
 
-  // Create a transaction to trigger cache creation.
-  MockHttpRequest request(kSimpleGET_Transaction);
-  TestCompletionCallback callback;
-  std::unique_ptr<HttpTransaction> transaction =
-      cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
-  ASSERT_TRUE(transaction);
-
-  int rv =
-      transaction->Start(&request, callback.callback(), NetLogWithSource());
-  // The transaction start should be pending because backend creation is async.
-  EXPECT_THAT(rv, IsError(net::ERR_IO_PENDING));
-
-  EXPECT_THAT(callback.WaitForResult(), IsOk());
+  // Get the backend to trigger its creation.
+  TestGetBackendCompletionCallback callback;
+  HttpCache::GetBackendResult result =
+      cache->http_cache()->GetBackend(callback.callback());
+  EXPECT_THAT(callback.GetResult(result).first, IsOk());
 
   // The delegate's Init should have been called.
   EXPECT_TRUE(mock_delegate.init_called());
 
-  // The transaction should now continue, resulting in a cache miss.
-  const HttpResponseInfo* response_info = transaction->GetResponseInfo();
-  ASSERT_TRUE(response_info);
-  EXPECT_FALSE(response_info->was_cached);
-
-  ReadAndVerifyTransaction(transaction.get(), kSimpleGET_Transaction);
-  transaction.reset();
+  // To ensure the cache and its backend are destroyed before the test exits.
+  cache.reset();
   base::RunLoop().RunUntilIdle();
 }
 
@@ -15103,37 +15182,2377 @@ TEST_F(HttpCacheTest, EncryptionDelegateInitFailure) {
 
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
-  MockHttpCache cache(std::make_unique<TestCacheBackendFactoryWithEncryption>(
-      &mock_delegate, temp_dir.GetPath()));
 
-  // Create a transaction to trigger cache creation. The transaction should fail
-  // because the backend creation fails.
-  MockHttpRequest request(kSimpleGET_Transaction);
-  TestCompletionCallback callback;
-  std::unique_ptr<HttpTransaction> transaction =
-      cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
-  ASSERT_TRUE(transaction);
+  auto cache = std::make_unique<MockHttpCache>(
+      std::make_unique<TestCacheBackendFactoryWithEncryption>(
+          &mock_delegate, temp_dir.GetPath()));
 
-  int rv =
-      transaction->Start(&request, callback.callback(), NetLogWithSource());
-  EXPECT_THAT(rv, IsError(net::ERR_IO_PENDING));
+  // Get the backend to trigger its creation.
+  TestGetBackendCompletionCallback callback;
+  HttpCache::GetBackendResult result =
+      cache->http_cache()->GetBackend(callback.callback());
+  // The backend creation should be pending because the delegate's init is
+  // pending.
+  EXPECT_THAT(result.first, IsError(net::ERR_IO_PENDING));
 
-  // Now complete the backend creation with failure.
+  // Now complete the delegate's init with failure.
   mock_delegate.SetInitResult(net::ERR_FAILED);
   mock_delegate.CompleteInit();
 
-  // The backend creation will fail, so the transaction will be served from the
-  // network.
-  EXPECT_THAT(callback.WaitForResult(), IsOk());
+  // The backend creation should fail.
+  EXPECT_THAT(callback.WaitForResult().first, IsError(net::ERR_FAILED));
   EXPECT_TRUE(mock_delegate.init_called());
 
-  const HttpResponseInfo* response_info = transaction->GetResponseInfo();
-  ASSERT_TRUE(response_info);
-  EXPECT_FALSE(response_info->was_cached);
-
-  ReadAndVerifyTransaction(transaction.get(), kSimpleGET_Transaction);
-  transaction.reset();
+  // To ensure the cache and its backend are destroyed before the test exits.
+  cache.reset();
   base::RunLoop().RunUntilIdle();
+}
+
+TEST_F(HttpCacheTest, SharedResourceCacheControlPublic) {
+  MockHttpCache cache;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.is_shared_resource = true;
+  transaction.response_headers = "cache-control: public, max-age=31536000\n";
+
+  // initial load
+  RunTransactionTest(cache.http_cache(), transaction);
+
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+  EXPECT_EQ(0, cache.disk_cache()->open_count());
+  EXPECT_EQ(1, cache.disk_cache()->create_count());
+
+  // try loading again; it should not result in a network fetch
+  RunTransactionTest(cache.http_cache(), transaction);
+
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+  EXPECT_EQ(1, cache.disk_cache()->open_count());
+  EXPECT_EQ(1, cache.disk_cache()->create_count());
+
+  disk_cache::Entry* entry;
+  MockHttpRequest request(transaction);
+  EXPECT_TRUE(cache.OpenBackendEntry(request.CacheKey(), &entry));
+  disk_cache::ScopedEntryPtr closer(entry);
+}
+
+TEST_F(HttpCacheTest, SharedResourceNotCacheControlPublic) {
+  MockHttpCache cache;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.is_shared_resource = true;
+  transaction.response_headers = "cache-control: private, max-age=31536000\n";
+
+  // initial load
+  RunTransactionTest(cache.http_cache(), transaction);
+
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+  EXPECT_EQ(0, cache.disk_cache()->open_count());
+  EXPECT_EQ(1, cache.disk_cache()->create_count());
+
+  // try loading again; it should result in a network fetch
+  RunTransactionTest(cache.http_cache(), transaction);
+
+  EXPECT_EQ(2, cache.network_layer()->transaction_count());
+  EXPECT_EQ(0, cache.disk_cache()->open_count());
+  EXPECT_EQ(2, cache.disk_cache()->create_count());
+
+  disk_cache::Entry* entry;
+  MockHttpRequest request(transaction);
+  EXPECT_FALSE(cache.OpenBackendEntry(request.CacheKey(), &entry));
+}
+
+TEST_F(HttpCacheTest, SharedResourceNoCacheControl) {
+  MockHttpCache cache;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.is_shared_resource = true;
+
+  // initial load
+  RunTransactionTest(cache.http_cache(), transaction);
+
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+  EXPECT_EQ(0, cache.disk_cache()->open_count());
+  EXPECT_EQ(1, cache.disk_cache()->create_count());
+
+  // try loading again; it should result in a network fetch
+  RunTransactionTest(cache.http_cache(), transaction);
+
+  EXPECT_EQ(2, cache.network_layer()->transaction_count());
+  EXPECT_EQ(0, cache.disk_cache()->open_count());
+  EXPECT_EQ(2, cache.disk_cache()->create_count());
+
+  disk_cache::Entry* entry;
+  MockHttpRequest request(transaction);
+  EXPECT_FALSE(cache.OpenBackendEntry(request.CacheKey(), &entry));
+}
+
+class MockHttpCacheBackendForEarlyInit : public HttpCache::DefaultBackend {
+ public:
+  explicit MockHttpCacheBackendForEarlyInit(const base::FilePath& path)
+      : HttpCache::DefaultBackend(DISK_CACHE,
+                                  CACHE_BACKEND_DEFAULT,
+                                  nullptr,
+                                  path,
+                                  0,
+                                  false,
+                                  nullptr) {}
+
+  disk_cache::BackendResult CreateBackend(
+      NetLog* net_log,
+      disk_cache::BackendResultCallback callback) override {
+    if (create_backend_called_ptr_) {
+      *create_backend_called_ptr_ = true;
+    }
+
+    auto completion_callback = std::move(create_backend_completion_callback_);
+    return HttpCache::DefaultBackend::CreateBackend(
+        net_log,
+        base::BindOnce(
+            [](disk_cache::BackendResultCallback cb, base::OnceClosure done,
+               disk_cache::BackendResult result) {
+              std::move(cb).Run(std::move(result));
+              if (done) {
+                std::move(done).Run();
+              }
+            },
+            std::move(callback), std::move(completion_callback)));
+  }
+
+  void HasExistingFileToLoad(base::OnceCallback<void(bool)> callback) override {
+    HttpCache::DefaultBackend::HasExistingFileToLoad(base::BindOnce(
+        [](base::OnceCallback<void(bool)> cb, base::OnceClosure done,
+           bool result) {
+          std::move(cb).Run(result);
+          if (done) {
+            std::move(done).Run();
+          }
+        },
+        std::move(callback), std::move(check_callback_)));
+  }
+
+  void set_check_callback(base::OnceClosure callback) {
+    check_callback_ = std::move(callback);
+  }
+
+  void set_create_backend_completion_callback(base::OnceClosure callback) {
+    create_backend_completion_callback_ = std::move(callback);
+  }
+
+  void set_create_backend_called_ptr(bool* ptr) {
+    create_backend_called_ptr_ = ptr;
+  }
+
+ private:
+  raw_ptr<bool> create_backend_called_ptr_ = nullptr;
+  base::OnceClosure check_callback_;
+  base::OnceClosure create_backend_completion_callback_;
+};
+
+class HttpCacheEarlyInitTest : public ::testing::Test,
+                               public ::testing::WithParamInterface<bool> {
+ protected:
+  HttpCacheEarlyInitTest() {
+    if (GetParam()) {
+      feature_list_.InitAndEnableFeatureWithParameters(
+          kHttpCacheInitializeDiskCacheBackendEarly, {{"check_disk", "true"}});
+    } else {
+      feature_list_.InitAndDisableFeature(
+          kHttpCacheInitializeDiskCacheBackendEarly);
+    }
+  }
+
+  void TearDown() override { disk_cache::FlushCacheThreadForTesting(); }
+
+  base::test::ScopedFeatureList feature_list_;
+  base::test::TaskEnvironment task_environment_;
+};
+
+TEST_P(HttpCacheEarlyInitTest, FileExists) {
+  base::ScopedTempDir temp_dir;
+  EXPECT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  base::FilePath cache_path = temp_dir.GetPath().AppendASCII("test_dir");
+
+  // Create a cache and initialize it to ensure valid cache files exist.
+  {
+    base::test::ScopedFeatureList disable_early_init;
+    disable_early_init.InitAndDisableFeature(
+        kHttpCacheInitializeDiskCacheBackendEarly);
+
+    auto factory =
+        std::make_unique<MockHttpCacheBackendForEarlyInit>(cache_path);
+    MockHttpCache cache(std::move(factory));
+
+    ScopedMockTransaction transaction(kSimpleGET_Transaction);
+    transaction.is_shared_resource = true;
+    transaction.response_headers = "cache-control: public, max-age=31536000\n";
+    RunTransactionTest(cache.http_cache(), transaction);
+  }
+
+  EXPECT_TRUE(
+      base::test::RunUntil([&]() { return base::PathExists(cache_path); }));
+
+  EXPECT_TRUE(base::PathExists(cache_path.AppendASCII("index")));
+
+  base::HistogramTester histogram_tester;
+
+  auto factory = std::make_unique<MockHttpCacheBackendForEarlyInit>(cache_path);
+  auto* factory_ptr = factory.get();
+
+  base::RunLoop run_loop;
+  base::RunLoop backend_creation_loop;
+  bool create_backend_called = false;
+  if (GetParam()) {
+    factory_ptr->set_check_callback(run_loop.QuitClosure());
+    factory_ptr->set_create_backend_completion_callback(
+        backend_creation_loop.QuitClosure());
+    factory_ptr->set_create_backend_called_ptr(&create_backend_called);
+  }
+
+  {
+    MockHttpCache cache(std::move(factory));
+
+    if (GetParam()) {
+      run_loop.Run();
+      if (create_backend_called) {
+        backend_creation_loop.Run();
+      }
+    }
+
+    EXPECT_EQ(GetParam(), create_backend_called);
+    histogram_tester.ExpectBucketCount("HttpCache.CreateBackendEarly", true,
+                                       GetParam() ? 1 : 0);
+  }
+  base::RunLoop().RunUntilIdle();
+}
+
+#if BUILDFLAG(IS_ANDROID)
+TEST_P(HttpCacheEarlyInitTest, FirstNetworkAccessCreatesCacheDir) {
+  base::HistogramTester histogram_tester;
+  base::ScopedTempDir temp_dir;
+  EXPECT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  base::FilePath cache_path = temp_dir.GetPath().AppendASCII("test_dir");
+
+  MockHttpCache cache(
+      std::make_unique<MockHttpCacheBackendForEarlyInit>(cache_path));
+
+  // Perform the first network access.
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.is_shared_resource = true;
+  RunTransactionTest(cache.http_cache(), transaction);
+
+  // Confirm the cache directory is created.
+  EXPECT_TRUE(base::DirectoryExists(cache_path));
+}
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+class HttpCacheEarlyInitTestCheckDiskTrue : public ::testing::Test {
+ protected:
+  HttpCacheEarlyInitTestCheckDiskTrue() {
+    feature_list_.InitAndEnableFeatureWithParameters(
+        kHttpCacheInitializeDiskCacheBackendEarly, {{"check_disk", "true"}});
+  }
+
+  void TearDown() override { disk_cache::FlushCacheThreadForTesting(); }
+
+  base::test::ScopedFeatureList feature_list_;
+  base::test::TaskEnvironment task_environment_;
+};
+
+TEST_F(HttpCacheEarlyInitTestCheckDiskTrue, EmptyIndexFiles) {
+  base::ScopedTempDir temp_dir;
+  EXPECT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  base::FilePath cache_path = temp_dir.GetPath().AppendASCII("test_dir");
+
+  // Create a cache and run a transaction to ensure valid cache files exist.
+  {
+    base::test::ScopedFeatureList disable_early_init;
+    disable_early_init.InitAndDisableFeature(
+        kHttpCacheInitializeDiskCacheBackendEarly);
+
+    auto factory =
+        std::make_unique<MockHttpCacheBackendForEarlyInit>(cache_path);
+    MockHttpCache cache(std::move(factory));
+
+    ScopedMockTransaction transaction(kSimpleGET_Transaction);
+    transaction.is_shared_resource = true;
+    transaction.response_headers = "cache-control: public, max-age=31536000\n";
+    RunTransactionTest(cache.http_cache(), transaction);
+  }
+
+  EXPECT_TRUE(
+      base::test::RunUntil([&]() { return base::PathExists(cache_path); }));
+
+  base::FilePath fake_index = cache_path.AppendASCII("index");
+  base::FilePath index_dir = cache_path.AppendASCII("index-dir");
+  base::FilePath legacy_index_file = cache_path.AppendASCII("the-real-index");
+
+  EXPECT_TRUE(base::PathExists(fake_index));
+
+  // Delete all cache entry files to leave only empty index files.
+  bool deleted_entry_file = false;
+  base::FileEnumerator e(
+      cache_path, /*recursive=*/false,
+      base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES);
+  for (base::FilePath name = e.Next(); !name.empty(); name = e.Next()) {
+    if (name == fake_index || name == index_dir || name == legacy_index_file) {
+      continue;
+    }
+    EXPECT_TRUE(base::DeleteFile(name));
+    deleted_entry_file = true;
+  }
+  EXPECT_TRUE(deleted_entry_file);
+
+  auto factory = std::make_unique<MockHttpCacheBackendForEarlyInit>(cache_path);
+  auto* factory_ptr = factory.get();
+
+  base::RunLoop backend_creation_loop;
+  bool create_backend_called = false;
+  factory_ptr->set_create_backend_completion_callback(
+      backend_creation_loop.QuitClosure());
+  factory_ptr->set_create_backend_called_ptr(&create_backend_called);
+
+  MockHttpCache cache(std::move(factory));
+
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return !base::DirectoryExists(cache_path); }));
+
+  EXPECT_FALSE(create_backend_called);
+  EXPECT_FALSE(base::PathExists(fake_index));
+  EXPECT_FALSE(base::PathExists(index_dir));
+  EXPECT_FALSE(base::PathExists(legacy_index_file));
+  EXPECT_FALSE(base::DirectoryExists(cache_path));
+}
+#endif
+
+TEST_P(HttpCacheEarlyInitTest, NoFile) {
+  base::HistogramTester histogram_tester;
+  base::FilePath temp_dir;
+  ASSERT_TRUE(base::GetTempDir(&temp_dir));
+  base::FilePath non_exsiting_dir =
+      temp_dir.AppendASCII("HttpCacheEarlyInitTest");
+  ASSERT_TRUE(!base::DirectoryExists(non_exsiting_dir));
+  auto factory =
+      std::make_unique<MockHttpCacheBackendForEarlyInit>(non_exsiting_dir);
+  auto* factory_ptr = factory.get();
+
+  base::RunLoop run_loop;
+  bool create_backend_called = false;
+  if (GetParam()) {
+    factory_ptr->set_check_callback(run_loop.QuitClosure());
+    factory_ptr->set_create_backend_called_ptr(&create_backend_called);
+  }
+
+  MockHttpCache cache(std::move(factory));
+
+  // Wait for async check.
+  if (GetParam()) {
+    run_loop.Run();
+  }
+
+  EXPECT_FALSE(create_backend_called);
+  histogram_tester.ExpectBucketCount("HttpCache.CreateBackendEarly", false,
+                                     GetParam() ? 1 : 0);
+}
+
+TEST_P(HttpCacheEarlyInitTest, EmptyPath) {
+  base::HistogramTester histogram_tester;
+  auto factory =
+      std::make_unique<MockHttpCacheBackendForEarlyInit>(base::FilePath());
+  auto* factory_ptr = factory.get();
+
+  base::RunLoop run_loop;
+  bool create_backend_called = false;
+  if (GetParam()) {
+    factory_ptr->set_check_callback(run_loop.QuitClosure());
+    factory_ptr->set_create_backend_called_ptr(&create_backend_called);
+  }
+
+  MockHttpCache cache(std::move(factory));
+
+  // Wait for async check.
+  if (GetParam()) {
+    run_loop.Run();
+  }
+
+  EXPECT_FALSE(create_backend_called);
+  histogram_tester.ExpectBucketCount("HttpCache.CreateBackendEarly", false,
+                                     GetParam() ? 1 : 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(All, HttpCacheEarlyInitTest, ::testing::Bool());
+
+class HttpCacheEarlyInitTestCheckDiskFalse : public ::testing::Test {
+ protected:
+  HttpCacheEarlyInitTestCheckDiskFalse() {
+    feature_list_.InitAndEnableFeatureWithParameters(
+        kHttpCacheInitializeDiskCacheBackendEarly, {{"check_disk", "false"}});
+  }
+
+  void TearDown() override { disk_cache::FlushCacheThreadForTesting(); }
+
+  base::test::ScopedFeatureList feature_list_;
+  base::test::TaskEnvironment task_environment_;
+};
+
+TEST_F(HttpCacheEarlyInitTestCheckDiskFalse, CheckDiskDisabled) {
+  base::HistogramTester histogram_tester;
+  base::ScopedTempDir temp_dir;
+  EXPECT_TRUE(temp_dir.CreateUniqueTempDir());
+  auto factory =
+      std::make_unique<MockHttpCacheBackendForEarlyInit>(temp_dir.GetPath());
+  auto* factory_ptr = factory.get();
+  bool create_backend_called = false;
+  factory_ptr->set_create_backend_called_ptr(&create_backend_called);
+  base::RunLoop backend_creation_loop;
+  factory_ptr->set_create_backend_completion_callback(
+      backend_creation_loop.QuitClosure());
+
+  MockHttpCache cache(std::move(factory));
+  backend_creation_loop.Run();
+
+  // Should be called synchronously because check_disk is false
+  EXPECT_TRUE(create_backend_called);
+  histogram_tester.ExpectBucketCount("HttpCache.CreateBackendEarly", true, 1);
+}
+
+// Tests that encoded body size is preserved across cache reads.
+// When a shared dictionary compressed response is fetched from the network,
+// the encoded (on-the-wire) body size is stored in the cached response info.
+// When the same response is later served from cache, the encoded body size
+// should still be available via HttpResponseInfo::encoded_body_size.
+TEST_F(HttpCacheTest, EncodedBodySizePreservedFromCache) {
+  MockHttpCache cache;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  // Simulate a shared dictionary response where the cache stores the
+  // decompressed body but we need to remember the original encoded size.
+  transaction.did_use_shared_dictionary = true;
+
+  // First request: fetch from network and cache.
+  {
+    // Declare request before trans so it outlives the transaction (whose
+    // destructor accesses the request in RecordHistograms).
+    MockHttpRequest request(transaction);
+    std::unique_ptr<HttpTransaction> trans =
+        cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+    ASSERT_TRUE(trans.get());
+
+    TestCompletionCallback callback;
+    int rv = trans->Start(&request, callback.callback(), NetLogWithSource());
+    ASSERT_THAT(callback.GetResult(rv), IsOk());
+
+    // Read the body to completion.
+    ReadAndVerifyTransaction(trans.get(), transaction);
+
+    // The mock network transaction reports kReceivedBodyBytes (500).
+    EXPECT_EQ(MockNetworkTransaction::kReceivedBodyBytes,
+              trans->GetReceivedBodyBytes());
+  }
+
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+  EXPECT_EQ(0, cache.disk_cache()->open_count());
+  EXPECT_EQ(1, cache.disk_cache()->create_count());
+
+  // Second request: should be served from cache.
+  {
+    MockHttpRequest request(transaction);
+    std::unique_ptr<HttpTransaction> trans =
+        cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+    ASSERT_TRUE(trans.get());
+
+    TestCompletionCallback callback;
+    int rv = trans->Start(&request, callback.callback(), NetLogWithSource());
+    ASSERT_THAT(callback.GetResult(rv), IsOk());
+
+    // Read the body to completion.
+    ReadAndVerifyTransaction(trans.get(), transaction);
+
+    // Verify the cached response info preserves the original encoded body
+    // size. This is used by url_loader.cc to report the correct
+    // encodedBodySize for Resource Timing.
+    const HttpResponseInfo* response_info = trans->GetResponseInfo();
+    ASSERT_TRUE(response_info);
+    ASSERT_TRUE(response_info->encoded_body_size.has_value());
+    EXPECT_EQ(MockNetworkTransaction::kReceivedBodyBytes,
+              response_info->encoded_body_size.value());
+  }
+
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+  EXPECT_EQ(1, cache.disk_cache()->open_count());
+  EXPECT_EQ(1, cache.disk_cache()->create_count());
+}
+
+// Verify that encoded_body_size is NOT stored for non-shared-dictionary
+// responses (where decompression happens after cache).
+TEST_F(HttpCacheTest, EncodedBodySizeNotStoredWithoutSharedDictionary) {
+  MockHttpCache cache;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  // did_use_shared_dictionary defaults to false.
+
+  // First request: fetch from network and cache.
+  {
+    MockHttpRequest request(transaction);
+    std::unique_ptr<HttpTransaction> trans =
+        cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+    ASSERT_TRUE(trans.get());
+
+    TestCompletionCallback callback;
+    int rv = trans->Start(&request, callback.callback(), NetLogWithSource());
+    ASSERT_THAT(callback.GetResult(rv), IsOk());
+
+    ReadAndVerifyTransaction(trans.get(), transaction);
+  }
+
+  // Second request: served from cache.
+  {
+    MockHttpRequest request(transaction);
+    std::unique_ptr<HttpTransaction> trans =
+        cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+    ASSERT_TRUE(trans.get());
+
+    TestCompletionCallback callback;
+    int rv = trans->Start(&request, callback.callback(), NetLogWithSource());
+    ASSERT_THAT(callback.GetResult(rv), IsOk());
+
+    ReadAndVerifyTransaction(trans.get(), transaction);
+
+    // encoded_body_size should NOT be set for non-shared-dictionary responses.
+    const HttpResponseInfo* response_info = trans->GetResponseInfo();
+    ASSERT_TRUE(response_info);
+    EXPECT_FALSE(response_info->encoded_body_size.has_value());
+  }
+}
+
+TEST_F(HttpCacheTest, InvalidationFilter) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(net::features::kLogicalClearHttpCache);
+
+  MockHttpCache cache;
+
+  // 1. Add an entry to the cache.
+  MockTransaction transaction(kSimpleGET_Transaction);
+  RunTransactionTest(cache.http_cache(), transaction);
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+
+  // 2. Verify it's in the cache.
+  RunTransactionTest(cache.http_cache(), transaction);
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+
+  // 3. Add an invalidation filter for this origin.
+  HttpCache::InvalidationFilter filter;
+  filter.begin_time = base::Time();
+  filter.end_time = base::Time::Max();
+  filter.filter_type = UrlFilterType::kTrueIfMatches;
+  filter.origins.insert(url::Origin::Create(GURL(transaction.url)));
+  cache.http_cache()->AddInvalidationFilter(std::move(filter));
+
+  // 4. Try to read the entry -> should be a miss (network access).
+  // Note: transaction_count increases more than once due to internal restarts
+  // when an entry is invalidated during the activation phase.
+  RunTransactionTest(cache.http_cache(), transaction);
+  EXPECT_GT(cache.network_layer()->transaction_count(), 1);
+  int count_after_miss = cache.network_layer()->transaction_count();
+
+  // 5. Try again. It will still be a miss because our filter is for all time.
+  RunTransactionTest(cache.http_cache(), transaction);
+  EXPECT_GT(cache.network_layer()->transaction_count(), count_after_miss);
+}
+
+// ---------------------------------------------------------------------------
+// CDT cache compression — zstd decompression read-path tests.
+//
+// These tests exercise the transparent zstd decompression in
+// HttpCache::Transaction when zstd_uncompressed_body_size is present. Since
+// the write path sets this field at cache-write time, the tests set it
+// manually by rewriting the persisted HttpResponseInfo and body bytes via the
+// disk cache backend.
+// ---------------------------------------------------------------------------
+
+#if !defined(NET_DISABLE_ZSTD)
+
+// Replaces the cached response's body with |compressed| bytes and sets
+// zstd_uncompressed_body_size to |uncompressed_size|. This tells the read
+// path that the body is zstd-compressed and how many bytes it should produce.
+void InstallZstdCompressedEntry(MockHttpCache* cache,
+                                const std::string& cache_key,
+                                base::span<const uint8_t> compressed,
+                                std::optional<int64_t> uncompressed_size,
+                                bool response_truncated = false) {
+  disk_cache::Entry* entry = nullptr;
+  ASSERT_TRUE(cache->OpenBackendEntry(cache_key, &entry));
+  disk_cache::ScopedEntryPtr closer(entry);
+
+  HttpResponseInfo cached_response;
+  bool truncated = false;
+  ASSERT_TRUE(
+      MockHttpCache::ReadResponseInfo(entry, &cached_response, &truncated));
+
+  cached_response.zstd_uncompressed_body_size = uncompressed_size;
+  ASSERT_TRUE(MockHttpCache::WriteResponseInfo(entry, &cached_response,
+                                               /*skip_transient_headers=*/true,
+                                               response_truncated));
+
+  auto buf = base::MakeRefCounted<IOBufferWithSize>(
+      static_cast<int>(compressed.size()));
+  buf->span().copy_prefix_from(base::span<const uint8_t>(compressed));
+  TestCompletionCallback cb;
+  int rv = entry->WriteData(/*index=*/1, /*offset=*/0, buf.get(),
+                            static_cast<int>(compressed.size()), cb.callback(),
+                            /*truncate=*/true);
+  // ASSERT (not EXPECT): paired with the ASSERT_NO_FATAL_FAILURE() wrappers
+  // at call sites, this propagates a fatal failure to the test body so the
+  // test aborts cleanly if WriteData returns fewer bytes. EXPECT_EQ would
+  // record a non-fatal failure that the wrappers cannot catch.
+  ASSERT_EQ(static_cast<int>(compressed.size()), cb.GetResult(rv));
+}
+
+// Compresses |plaintext| with zstd default settings. On compression failure
+// (which should never happen for well-formed inputs), records ADD_FAILURE
+// and returns an empty vector so the caller's first byte-comparison fails
+// cleanly without taking down other tests in the same process.
+std::vector<uint8_t> ZstdCompress(std::string_view plaintext) {
+  std::vector<uint8_t> compressed(ZSTD_compressBound(plaintext.size()));
+  size_t written =
+      ZSTD_compress(compressed.data(), compressed.size(), plaintext.data(),
+                    plaintext.size(), /*compressionLevel=*/3);
+  if (ZSTD_isError(written)) {
+    ADD_FAILURE() << "ZSTD_compress failed: " << ZSTD_getErrorName(written);
+    return {};
+  }
+  compressed.resize(written);
+  return compressed;
+}
+
+// Reads the entire body from |trans| and returns (body, final_rv).
+// |final_rv| is 0 on a clean EOF, or a negative net::Error on read failure.
+// Callers expecting success should EXPECT_EQ(final_rv, 0). Callers expecting
+// a specific read failure (e.g. truncation, size mismatch) should assert on
+// final_rv directly. This single helper covers both shapes so the loop body
+// is not duplicated across happy-path and error-observing tests.
+std::pair<std::string, int> ReadBodyAndStatus(HttpTransaction* trans) {
+  std::string out;
+  constexpr int kChunk = 256;
+  auto buf = base::MakeRefCounted<IOBufferWithSize>(kChunk);
+  while (true) {
+    TestCompletionCallback cb;
+    int rv = trans->Read(buf.get(), kChunk, cb.callback());
+    rv = cb.GetResult(rv);
+    if (rv <= 0) {
+      return {std::move(out), rv};
+    }
+    out.append(buf->data(), rv);
+  }
+}
+
+// Populates the cache with one entry for |kSimpleGET_Transaction|, then
+// replaces its body with |compressed| and sets zstd_uncompressed_body_size.
+// Callers must wrap with ASSERT_NO_FATAL_FAILURE() so failures inside the
+// nested ASSERT_* macros abort the test instead of just returning here.
+void PrimeCacheWithCompressedBody(
+    MockHttpCache* cache,
+    base::span<const uint8_t> compressed,
+    std::optional<int64_t> uncompressed_size = std::nullopt) {
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  RunTransactionTest(cache->http_cache(), transaction);
+  MockHttpRequest request(transaction);
+  ASSERT_NO_FATAL_FAILURE(InstallZstdCompressedEntry(
+      cache, request.CacheKey(), compressed, uncompressed_size));
+}
+
+// End-to-end success path for zstd-decompressed cache reads. Verifies that
+// a valid zstd-compressed cache entry with a 16 KB plaintext decompresses
+// correctly, exercising the leftover-byte draining path (the compressed
+// representation fits in one disk read but decompresses into more data than
+// the consumer read buffer holds).
+//
+// The over-decompression bound comes from zstd_uncompressed_body_size, not
+// from the wire Content-Length header. kSimpleGET_Transaction has no
+// Content-Length, so the bound is the sole guard. See
+// ZstdDecompressRejectsOverDecompression for the mid-stream guard test and
+// ZstdDecompressSizeMismatch for the EOF size check.
+//
+// Encoding-agnosticism is proven by construction: nothing in
+// HttpCache::Transaction or CacheBodyDecompressor branches on
+// Content-Encoding, and zstd_uncompressed_body_size is the sole signal.
+TEST_F(HttpCacheTest, ZstdDecompressHappyPath) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kHttpCacheZstdDecompression);
+  MockHttpCache cache;
+
+  // ~16 KB of repeating text: large enough to exercise the leftover-byte
+  // draining path (the compressed payload decompresses into more data than
+  // the consumer's read buffer holds per iteration).
+  std::string plaintext;
+  plaintext.reserve(16 * 1024);
+  for (int i = 0; i < 512; ++i) {
+    plaintext.append("the quick brown fox jumps over the lazy dog\n");
+  }
+  std::vector<uint8_t> compressed = ZstdCompress(plaintext);
+  ASSERT_NO_FATAL_FAILURE(
+      PrimeCacheWithCompressedBody(&cache, compressed, plaintext.size()));
+
+  // Bind a recording observer to capture HTTP_CACHE_DECOMPRESS events.
+  RecordingNetLogObserver net_log_observer;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  MockHttpRequest request(transaction);
+  std::unique_ptr<HttpTransaction> trans =
+      cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+  ASSERT_TRUE(trans);
+  TestCompletionCallback callback;
+  ASSERT_THAT(callback.GetResult(
+                  trans->Start(&request, callback.callback(),
+                               NetLogWithSource::Make(NetLogSourceType::NONE))),
+              IsOk());
+  auto [body, rv] = ReadBodyAndStatus(trans.get());
+  EXPECT_EQ(rv, 0);
+  EXPECT_EQ(plaintext, body);
+
+  // Verify a Begin/End pair was emitted with success-shaped end params
+  // (no failure "reason"; "decompressed_bytes" present). The Begin event
+  // carries the expected output size the decompressor was primed with —
+  // which is zstd_uncompressed_body_size, not Content-Length.
+  auto entries = net_log_observer.GetEntriesWithType(
+      NetLogEventType::HTTP_CACHE_DECOMPRESS);
+  ASSERT_EQ(entries.size(), 2u);
+  EXPECT_EQ(entries[0].phase, NetLogEventPhase::BEGIN);
+  EXPECT_EQ(entries[1].phase, NetLogEventPhase::END);
+  std::optional<int> begin_expected_len =
+      entries[0].params.FindInt("expected_content_length");
+  ASSERT_TRUE(begin_expected_len.has_value());
+  EXPECT_EQ(*begin_expected_len, static_cast<int>(plaintext.size()));
+  EXPECT_FALSE(entries[1].params.FindString("reason"));
+  std::optional<int> decompressed_bytes =
+      entries[1].params.FindInt("decompressed_bytes");
+  ASSERT_TRUE(decompressed_bytes.has_value());
+  EXPECT_EQ(*decompressed_bytes, static_cast<int>(plaintext.size()));
+}
+
+// Verifies decompression when the decompressed output exceeds the consumer's
+// read buffer, exercising the leftover-byte draining path.
+TEST_F(HttpCacheTest, ZstdDecompressMultiChunkBody) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kHttpCacheZstdDecompression);
+  MockHttpCache cache;
+  // ~32KB of repeating text compresses to a few hundred bytes. The first
+  // disk read decompresses into far more data than the 256-byte consumer
+  // buffer, forcing multiple iterations through the leftover path.
+  std::string plaintext;
+  plaintext.reserve(32 * 1024);
+  for (int i = 0; i < 1024; ++i) {
+    plaintext.append("the quick brown fox jumps over the lazy dog\n");
+  }
+  std::vector<uint8_t> compressed = ZstdCompress(plaintext);
+  ASSERT_NO_FATAL_FAILURE(
+      PrimeCacheWithCompressedBody(&cache, compressed, plaintext.size()));
+
+  RecordingNetLogObserver net_log_observer;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  MockHttpRequest request(transaction);
+  std::unique_ptr<HttpTransaction> trans =
+      cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+  ASSERT_TRUE(trans);
+  TestCompletionCallback callback;
+  ASSERT_THAT(callback.GetResult(
+                  trans->Start(&request, callback.callback(),
+                               NetLogWithSource::Make(NetLogSourceType::NONE))),
+              IsOk());
+  auto [body, rv] = ReadBodyAndStatus(trans.get());
+  EXPECT_EQ(rv, 0);
+  EXPECT_EQ(plaintext, body);
+
+  // Leftover/multi-iteration path still emits exactly one Begin/End pair
+  // with success-shaped end params (no failure "reason").
+  auto entries = net_log_observer.GetEntriesWithType(
+      NetLogEventType::HTTP_CACHE_DECOMPRESS);
+  ASSERT_EQ(entries.size(), 2u);
+  EXPECT_EQ(entries[0].phase, NetLogEventPhase::BEGIN);
+  EXPECT_EQ(entries[1].phase, NetLogEventPhase::END);
+  std::optional<int> begin_expected_len =
+      entries[0].params.FindInt("expected_content_length");
+  ASSERT_TRUE(begin_expected_len.has_value());
+  EXPECT_EQ(*begin_expected_len, static_cast<int>(plaintext.size()));
+  EXPECT_FALSE(entries[1].params.FindString("reason"));
+}
+
+// EOF size mismatch — the decompressor produces fewer bytes than
+// zstd_uncompressed_body_size advertised — is detected at EOF as
+// ERR_CACHE_READ_FAILURE; HTTP_CACHE_DECOMPRESS End event tags it
+// reason="size_mismatch". (The over-decompression direction is covered by
+// ZstdDecompressRejectsOverDecompression below, which fires the mid-stream
+// guard and never reaches the EOF check.)
+TEST_F(HttpCacheTest, ZstdDecompressSizeMismatch) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kHttpCacheZstdDecompression);
+  MockHttpCache cache;
+  const std::string plaintext = "<html><body>Google Blah Blah</body></html>";
+  std::vector<uint8_t> compressed = ZstdCompress(plaintext);
+  // Install with a lying zstd_uncompressed_body_size (1 byte too large).
+  // Decompressor produces |plaintext.size()| bytes but the read path expects
+  // |plaintext.size() + 1|, surfacing only at the EOF check.
+  ASSERT_NO_FATAL_FAILURE(
+      PrimeCacheWithCompressedBody(&cache, compressed, plaintext.size() + 1));
+
+  RecordingNetLogObserver net_log_observer;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  MockHttpRequest request(transaction);
+  std::unique_ptr<HttpTransaction> trans =
+      cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+  ASSERT_TRUE(trans);
+  TestCompletionCallback callback;
+  ASSERT_THAT(callback.GetResult(
+                  trans->Start(&request, callback.callback(),
+                               NetLogWithSource::Make(NetLogSourceType::NONE))),
+              IsOk());
+
+  // Drain until error or EOF. The body decompresses cleanly but the EOF
+  // size check detects the mismatch.
+  auto [body, rv] = ReadBodyAndStatus(trans.get());
+  EXPECT_THAT(rv, IsError(ERR_CACHE_READ_FAILURE));
+
+  auto entries = net_log_observer.GetEntriesWithType(
+      NetLogEventType::HTTP_CACHE_DECOMPRESS);
+  ASSERT_EQ(entries.size(), 2u);
+  const NetLogEntry& end = entries.back();
+  EXPECT_EQ(end.phase, NetLogEventPhase::END);
+  const std::string* reason = end.params.FindString("reason");
+  ASSERT_TRUE(reason);
+  EXPECT_EQ(*reason, "size_mismatch");
+}
+
+// Truncating the trailing bytes of a zstd frame produces a stream whose
+// content blocks decode cleanly but whose checksum/end-marker is missing.
+// The transaction must reject this at EOF via the frame_complete check
+// with End reason="truncated_frame".
+TEST_F(HttpCacheTest, ZstdDecompressTruncatedFrame) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kHttpCacheZstdDecompression);
+  MockHttpCache cache;
+  const std::string plaintext = "<html><body>Google Blah Blah</body></html>";
+  std::vector<uint8_t> compressed = ZstdCompress(plaintext);
+  ASSERT_GT(compressed.size(), 4u);
+  // Drop the trailing bytes so the frame ends mid-stream.
+  compressed.resize(compressed.size() - 2);
+
+  // Pass the real plaintext size so decompression activates; the
+  // frame-complete check must catch truncation on its own (the size guard
+  // never fires because zstd fails before producing enough output).
+  ASSERT_NO_FATAL_FAILURE(PrimeCacheWithCompressedBody(
+      &cache, compressed, /*uncompressed_size=*/plaintext.size()));
+
+  RecordingNetLogObserver net_log_observer;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  MockHttpRequest request(transaction);
+  std::unique_ptr<HttpTransaction> trans =
+      cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+  ASSERT_TRUE(trans);
+  TestCompletionCallback callback;
+  ASSERT_THAT(callback.GetResult(
+                  trans->Start(&request, callback.callback(),
+                               NetLogWithSource::Make(NetLogSourceType::NONE))),
+              IsOk());
+
+  auto [body, rv] = ReadBodyAndStatus(trans.get());
+  EXPECT_THAT(rv, IsError(ERR_CACHE_READ_FAILURE));
+
+  auto entries = net_log_observer.GetEntriesWithType(
+      NetLogEventType::HTTP_CACHE_DECOMPRESS);
+  ASSERT_EQ(entries.size(), 2u);
+  const NetLogEntry& end = entries.back();
+  EXPECT_EQ(end.phase, NetLogEventPhase::END);
+  const std::string* reason = end.params.FindString("reason");
+  ASSERT_TRUE(reason);
+  EXPECT_EQ(*reason, "truncated_frame");
+}
+
+// Mid-stream byte corruption is rejected by ZSTD_decompressStream as
+// ERR_CACHE_READ_FAILURE with End reason="zstd_error". Exercises the
+// ZSTD_isError branch in CacheBodyDecompressor::Decompress
+// (cache_body_decompressor.cc:98), distinct from the EOF frame_complete
+// check in ZstdDecompressTruncatedFrame.
+TEST_F(HttpCacheTest, ZstdDecompressCorruptedMidStream) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kHttpCacheZstdDecompression);
+  MockHttpCache cache;
+  // Use a moderately-compressible plaintext (16-token alphabet) so zstd
+  // emits entropy-coded blocks where corruption breaks the FSE/Huffman
+  // state. Random bytes get stored as raw blocks (corruption passes through
+  // unchanged); pure-repetitive data compresses too densely.
+  std::string plaintext;
+  plaintext.reserve(8192);
+  uint32_t state = 0xDEADBEEFu;
+  static constexpr std::string_view kTokens[] = {
+      "the ",  "quick ", "brown ", "fox ", "jumps ", "over ", "the ", "lazy ",
+      "dog. ", "Hello",  "World ", "Foo ", "Bar ",   "Baz ",  "Qux ", "Zog ",
+  };
+  while (plaintext.size() < 8192) {
+    state = state * 1103515245u + 12345u;
+    plaintext.append(kTokens[(state >> 16) % std::size(kTokens)]);
+  }
+  plaintext.resize(8192);
+  std::vector<uint8_t> compressed = ZstdCompress(plaintext);
+  ASSERT_GT(compressed.size(), 100u);
+
+  // Corrupt the frame header descriptor (byte 4, after the 4-byte magic) to
+  // mis-configure how zstd interprets the frame, plus a chunk in the middle
+  // for defense in depth.
+  ASSERT_GT(compressed.size(), 5u);
+  compressed[4] ^= 0xFFu;
+  const size_t mid_offset = compressed.size() / 2;
+  for (size_t i = 0; i < 32 && mid_offset + i < compressed.size(); ++i) {
+    compressed[mid_offset + i] = 0xFFu;
+  }
+
+  ASSERT_NO_FATAL_FAILURE(PrimeCacheWithCompressedBody(
+      &cache, compressed, /*uncompressed_size=*/plaintext.size()));
+
+  RecordingNetLogObserver net_log_observer;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  MockHttpRequest request(transaction);
+  std::unique_ptr<HttpTransaction> trans =
+      cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+  ASSERT_TRUE(trans);
+  TestCompletionCallback callback;
+  ASSERT_THAT(callback.GetResult(
+                  trans->Start(&request, callback.callback(),
+                               NetLogWithSource::Make(NetLogSourceType::NONE))),
+              IsOk());
+
+  auto [body, rv] = ReadBodyAndStatus(trans.get());
+  EXPECT_THAT(rv, IsError(ERR_CACHE_READ_FAILURE));
+
+  auto entries = net_log_observer.GetEntriesWithType(
+      NetLogEventType::HTTP_CACHE_DECOMPRESS);
+  ASSERT_EQ(entries.size(), 2u);
+  const NetLogEntry& end = entries.back();
+  EXPECT_EQ(end.phase, NetLogEventPhase::END);
+  const std::string* reason = end.params.FindString("reason");
+  ASSERT_TRUE(reason);
+  EXPECT_EQ(*reason, "zstd_error");
+}
+
+// Verifies that a range request on a compressed entry dooms the entry and
+// falls back to the network, returning the expected range response.
+TEST_F(HttpCacheTest, ZstdDecompressRangeRequestFallback) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kHttpCacheZstdDecompression);
+  MockHttpCache cache;
+  const std::string plaintext = "<html><body>Google Blah Blah</body></html>";
+  std::vector<uint8_t> compressed = ZstdCompress(plaintext);
+  ASSERT_NO_FATAL_FAILURE(
+      PrimeCacheWithCompressedBody(&cache, compressed, plaintext.size()));
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+
+  // Issue a range request. The compressed entry should be doomed and the
+  // network fallback should succeed with the mock range-response body.
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.request_headers = "Range: bytes = 0-9\r\n" EXTRA_HEADER;
+  transaction.status = "HTTP/1.1 206 Partial Content";
+  transaction.response_headers =
+      "Content-Range: bytes 0-9/42\nContent-Length: 10\n";
+  transaction.data = "<html><bod";
+
+  // RunTransactionTest verifies the response body matches transaction.data.
+  RunTransactionTest(cache.http_cache(), transaction);
+
+  // Compressed entry must have been doomed and the network hit.
+  EXPECT_EQ(2, cache.network_layer()->transaction_count());
+}
+
+// A truncated compressed entry (interrupted download) must be doomed and
+// re-fetched from the network. The cache's resumption machinery would
+// construct a range request using compressed byte offsets, but the origin
+// server only understands uncompressed offsets.
+TEST_F(HttpCacheTest, ZstdDecompressTruncatedEntryFallback) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kHttpCacheZstdDecompression);
+  MockHttpCache cache;
+  const std::string plaintext = "<html><body>Google Blah Blah</body></html>";
+  std::vector<uint8_t> compressed = ZstdCompress(plaintext);
+
+  // Prime the cache normally, then reinstall the entry with truncated=true.
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  RunTransactionTest(cache.http_cache(), transaction);
+  MockHttpRequest request(transaction);
+  ASSERT_NO_FATAL_FAILURE(InstallZstdCompressedEntry(
+      &cache, request.CacheKey(), compressed, plaintext.size(),
+      /*response_truncated=*/true));
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+
+  // Second request should doom the truncated compressed entry and hit the
+  // network for a full re-fetch.
+  RunTransactionTest(cache.http_cache(), transaction);
+  EXPECT_EQ(2, cache.network_layer()->transaction_count());
+}
+
+// Verifies that decompressed output exceeding the advertised
+// zstd_uncompressed_body_size is rejected mid-stream by the streaming guard
+// in CacheBodyDecompressor::DoDecompress (cache_body_decompressor.cc:159),
+// not deferred to the EOF size check. Distinct from ZstdDecompressSizeMismatch
+// above which exercises the EOF (under-decompression) direction.
+TEST_F(HttpCacheTest, ZstdDecompressRejectsOverDecompression) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kHttpCacheZstdDecompression);
+  MockHttpCache cache;
+  // Real body is 200 bytes, but we'll advertise
+  // zstd_uncompressed_body_size: 10.
+  const std::string plaintext(200, 'q');
+  std::vector<uint8_t> compressed = ZstdCompress(plaintext);
+  ASSERT_NO_FATAL_FAILURE(PrimeCacheWithCompressedBody(
+      &cache, compressed, /*uncompressed_size=*/10));
+
+  RecordingNetLogObserver net_log_observer;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  MockHttpRequest request(transaction);
+  std::unique_ptr<HttpTransaction> trans =
+      cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+  ASSERT_TRUE(trans);
+  TestCompletionCallback callback;
+  ASSERT_THAT(callback.GetResult(
+                  trans->Start(&request, callback.callback(),
+                               NetLogWithSource::Make(NetLogSourceType::NONE))),
+              IsOk());
+
+  // Read until we either error out or EOF. The streaming guard should fire
+  // before all 200 bytes reach the consumer.
+  auto [body, rv] = ReadBodyAndStatus(trans.get());
+  EXPECT_THAT(rv, IsError(ERR_CACHE_READ_FAILURE));
+  EXPECT_LT(body.size(), plaintext.size());
+
+  // Over-decompression is enforced inside DoDecompress and surfaces as
+  // reason="zstd_error" (no separate code is plumbed through).
+  auto entries = net_log_observer.GetEntriesWithType(
+      NetLogEventType::HTTP_CACHE_DECOMPRESS);
+  ASSERT_EQ(entries.size(), 2u);
+  const NetLogEntry& end = entries.back();
+  EXPECT_EQ(end.phase, NetLogEventPhase::END);
+  const std::string* reason = end.params.FindString("reason");
+  ASSERT_TRUE(reason);
+  EXPECT_EQ(*reason, "zstd_error");
+}
+
+// Verifies that an empty body (Content-Length: 0) with a compressed entry
+// returns EOF cleanly without errors.
+TEST_F(HttpCacheTest, ZstdDecompressEmptyBody) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kHttpCacheZstdDecompression);
+  MockHttpCache cache;
+  const std::string plaintext;
+  std::vector<uint8_t> compressed = ZstdCompress(plaintext);
+  ASSERT_FALSE(compressed.empty())
+      << "zstd should produce a valid empty-frame header";
+  ASSERT_NO_FATAL_FAILURE(PrimeCacheWithCompressedBody(
+      &cache, compressed, /*uncompressed_size=*/0));
+
+  RecordingNetLogObserver net_log_observer;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  MockHttpRequest request(transaction);
+  std::unique_ptr<HttpTransaction> trans =
+      cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+  ASSERT_TRUE(trans);
+  TestCompletionCallback callback;
+  ASSERT_THAT(callback.GetResult(
+                  trans->Start(&request, callback.callback(),
+                               NetLogWithSource::Make(NetLogSourceType::NONE))),
+              IsOk());
+  // Reading an empty body should immediately return 0 (EOF) with no error.
+  auto [body, rv] = ReadBodyAndStatus(trans.get());
+  EXPECT_EQ(rv, 0);
+  EXPECT_EQ(std::string(), body);
+
+  // Empty-body path still emits a Begin/End pair with success-shaped params.
+  auto entries = net_log_observer.GetEntriesWithType(
+      NetLogEventType::HTTP_CACHE_DECOMPRESS);
+  ASSERT_EQ(entries.size(), 2u);
+  EXPECT_EQ(entries[0].phase, NetLogEventPhase::BEGIN);
+  EXPECT_EQ(entries[1].phase, NetLogEventPhase::END);
+  std::optional<int> begin_expected_len =
+      entries[0].params.FindInt("expected_content_length");
+  ASSERT_TRUE(begin_expected_len.has_value());
+  EXPECT_EQ(*begin_expected_len, 0);
+  EXPECT_FALSE(entries[1].params.FindString("reason"));
+  std::optional<int> decompressed_bytes =
+      entries[1].params.FindInt("decompressed_bytes");
+  ASSERT_TRUE(decompressed_bytes.has_value());
+  EXPECT_EQ(*decompressed_bytes, 0);
+}
+
+// A zstd stream with one or more skippable metadata frames followed by a
+// real data frame must decompress cleanly to the original plaintext —
+// zstd transparently skips the metadata frames, and the cache transaction's
+// zero-output watchdog (cache_body_decompressor.cc:137) must not trip on
+// the resulting bursts of zero-output decompress calls. Our writer never
+// produces such streams, but a corrupt or malicious entry might.
+TEST_F(HttpCacheTest, ZstdDecompressSkippableFramesPrefix) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kHttpCacheZstdDecompression);
+  MockHttpCache cache;
+  const std::string plaintext = "<html><body>Google Blah Blah</body></html>";
+  ASSERT_EQ(std::string(kSimpleGET_Transaction.data), plaintext);
+  std::vector<uint8_t> data_frame = ZstdCompress(plaintext);
+
+  // Build three skippable frames. Magic variants 0x184D2A50..0x184D2A5F are
+  // all valid; we use distinct ones to avoid special-casing a single magic.
+  // Wire format hand-written (4-byte magic LE + 4-byte length LE + payload)
+  // because ZSTD_writeSkippableFrame is in ZSTDLIB_STATIC_API, not linked
+  // into this target. See RFC 8478 §3.1.2.
+  constexpr std::array<uint8_t, 8> kSkippablePayload = {
+      'M', 'E', 'T', 'A', '0', '0', '0', '0',
+  };
+  std::vector<uint8_t> compressed;
+  for (uint32_t magic : {0x184D2A50u, 0x184D2A51u, 0x184D2A55u}) {
+    const uint32_t payload_len = kSkippablePayload.size();
+    // Magic (LE).
+    compressed.push_back(magic & 0xFF);
+    compressed.push_back((magic >> 8) & 0xFF);
+    compressed.push_back((magic >> 16) & 0xFF);
+    compressed.push_back((magic >> 24) & 0xFF);
+    // Frame size field (LE) = payload length.
+    compressed.push_back(payload_len & 0xFF);
+    compressed.push_back((payload_len >> 8) & 0xFF);
+    compressed.push_back((payload_len >> 16) & 0xFF);
+    compressed.push_back((payload_len >> 24) & 0xFF);
+    // Payload.
+    compressed.insert(compressed.end(), kSkippablePayload.begin(),
+                      kSkippablePayload.end());
+  }
+  // Append the real data frame after the skippable-frame prefix.
+  compressed.insert(compressed.end(), data_frame.begin(), data_frame.end());
+
+  ASSERT_NO_FATAL_FAILURE(
+      PrimeCacheWithCompressedBody(&cache, compressed, plaintext.size()));
+
+  RecordingNetLogObserver net_log_observer;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  MockHttpRequest request(transaction);
+  std::unique_ptr<HttpTransaction> trans =
+      cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+  ASSERT_TRUE(trans);
+  TestCompletionCallback callback;
+  ASSERT_THAT(callback.GetResult(
+                  trans->Start(&request, callback.callback(),
+                               NetLogWithSource::Make(NetLogSourceType::NONE))),
+              IsOk());
+  auto [body, rv] = ReadBodyAndStatus(trans.get());
+  EXPECT_EQ(rv, 0);
+  EXPECT_EQ(plaintext, body);
+
+  // Begin/End pair with success-shaped end params (no failure "reason").
+  auto entries = net_log_observer.GetEntriesWithType(
+      NetLogEventType::HTTP_CACHE_DECOMPRESS);
+  ASSERT_EQ(entries.size(), 2u);
+  EXPECT_EQ(entries[0].phase, NetLogEventPhase::BEGIN);
+  EXPECT_EQ(entries[1].phase, NetLogEventPhase::END);
+  std::optional<int> begin_expected_len =
+      entries[0].params.FindInt("expected_content_length");
+  ASSERT_TRUE(begin_expected_len.has_value());
+  EXPECT_EQ(*begin_expected_len, static_cast<int>(plaintext.size()));
+  EXPECT_FALSE(entries[1].params.FindString("reason"));
+}
+
+// Verifies that with kHttpCacheZstdDecompression disabled, a compressed cache
+// entry is doomed and the request falls back to the network. No
+// HTTP_CACHE_DECOMPRESS event should fire.
+TEST_F(HttpCacheTest, ZstdDecompressFeatureDisabledFallback) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(features::kHttpCacheZstdDecompression);
+  MockHttpCache cache;
+  const std::string plaintext = "<html><body>Google Blah Blah</body></html>";
+  std::vector<uint8_t> compressed = ZstdCompress(plaintext);
+  ASSERT_NO_FATAL_FAILURE(
+      PrimeCacheWithCompressedBody(&cache, compressed, plaintext.size()));
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+
+  RecordingNetLogObserver net_log_observer;
+
+  // Second request should hit the network (compressed entry doomed).
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  RunTransactionTest(cache.http_cache(), transaction);
+  EXPECT_EQ(2, cache.network_layer()->transaction_count());
+
+  // No decompression event should have fired.
+  EXPECT_TRUE(net_log_observer
+                  .GetEntriesWithType(NetLogEventType::HTTP_CACHE_DECOMPRESS)
+                  .empty());
+}
+
+// Verifies that a zstd-compressed cache entry with the decompression feature
+// disabled returns ERR_CACHE_MISS (not a network request) when the request
+// sets LOAD_ONLY_FROM_CACHE. No HTTP_CACHE_DECOMPRESS event should fire.
+TEST_F(HttpCacheTest, ZstdDecompressFeatureDisabledCacheOnlyReturnsMiss) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(features::kHttpCacheZstdDecompression);
+  MockHttpCache cache;
+  const std::string plaintext = "<html><body>Google Blah Blah</body></html>";
+  std::vector<uint8_t> compressed = ZstdCompress(plaintext);
+  ASSERT_NO_FATAL_FAILURE(
+      PrimeCacheWithCompressedBody(&cache, compressed, plaintext.size()));
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+
+  RecordingNetLogObserver net_log_observer;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.load_flags |= LOAD_ONLY_FROM_CACHE;
+
+  MockHttpRequest request(transaction);
+  std::unique_ptr<HttpTransaction> trans =
+      cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+  TestCompletionCallback cb;
+  int rv = trans->Start(&request, cb.callback(),
+                        NetLogWithSource::Make(NetLogSourceType::NONE));
+  EXPECT_THAT(cb.GetResult(rv), IsError(ERR_CACHE_MISS));
+
+  // No network request should have been made.
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+
+  // No decompression event should have fired.
+  EXPECT_TRUE(net_log_observer
+                  .GetEntriesWithType(NetLogEventType::HTTP_CACHE_DECOMPRESS)
+                  .empty());
+}
+
+// Verifies that a range request on a zstd-compressed cache entry returns
+// ERR_CACHE_MISS (not a network request) when LOAD_ONLY_FROM_CACHE is set.
+// No HTTP_CACHE_DECOMPRESS event should fire — the entry is doomed before
+// the decompression path runs.
+TEST_F(HttpCacheTest, ZstdDecompressRangeRequestCacheOnlyReturnsMiss) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kHttpCacheZstdDecompression);
+  MockHttpCache cache;
+  const std::string plaintext = "<html><body>Google Blah Blah</body></html>";
+  std::vector<uint8_t> compressed = ZstdCompress(plaintext);
+  ASSERT_NO_FATAL_FAILURE(
+      PrimeCacheWithCompressedBody(&cache, compressed, plaintext.size()));
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+
+  RecordingNetLogObserver net_log_observer;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.request_headers = "Range: bytes = 0-9\r\n" EXTRA_HEADER;
+  transaction.load_flags |= LOAD_ONLY_FROM_CACHE;
+
+  MockHttpRequest request(transaction);
+  std::unique_ptr<HttpTransaction> trans =
+      cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+  TestCompletionCallback cb;
+  int rv = trans->Start(&request, cb.callback(),
+                        NetLogWithSource::Make(NetLogSourceType::NONE));
+  EXPECT_THAT(cb.GetResult(rv), IsError(ERR_CACHE_MISS));
+
+  // No network request should have been made.
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+
+  // No decompression event should have fired.
+  EXPECT_TRUE(net_log_observer
+                  .GetEntriesWithType(NetLogEventType::HTTP_CACHE_DECOMPRESS)
+                  .empty());
+}
+
+// ---------------------------------------------------------------------------
+// ZstdCompress* tests - write-path (HttpCache::Writers) zstd compression.
+// These require the zstd compress library, which is excluded on platforms
+// where optimize_for_size is true.
+// ---------------------------------------------------------------------------
+#if !defined(NET_DISABLE_ZSTD_COMPRESS)
+
+// A compressible body large enough that zstd level-1 reliably shrinks it.
+// "hello!" (kSimpleGET_Transaction.data) is too small for meaningful
+// compression, so all write-path tests use this instead.
+constexpr char kCompressibleBody[] =
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. "
+    "The quick brown fox jumps over the lazy dog. ";
+
+// Happy path: CDT response is compressed on write, decompressed on read.
+TEST_F(HttpCacheTest, ZstdCompressWriteAndRead) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({features::kHttpCacheZstdCompression,
+                                 features::kHttpCacheZstdDecompression},
+                                {});
+  MockHttpCache cache;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.did_use_shared_dictionary = true;
+  transaction.data = kCompressibleBody;
+
+  // First request: network fetch, cache write with compression.
+  RunTransactionTest(cache.http_cache(), transaction);
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+  EXPECT_EQ(1, cache.disk_cache()->create_count());
+
+  // Verify what's on disk.
+  MockHttpRequest request(transaction);
+  disk_cache::Entry* entry = nullptr;
+  ASSERT_TRUE(cache.OpenBackendEntry(request.CacheKey(), &entry));
+  disk_cache::ScopedEntryPtr closer(entry);
+
+  // Metadata should have zstd_uncompressed_body_size set.
+  HttpResponseInfo cached_info;
+  bool truncated = false;
+  ASSERT_TRUE(MockHttpCache::ReadResponseInfo(entry, &cached_info, &truncated));
+  ASSERT_TRUE(cached_info.zstd_uncompressed_body_size.has_value());
+  EXPECT_EQ(static_cast<int64_t>(strlen(kCompressibleBody)),
+            *cached_info.zstd_uncompressed_body_size);
+
+  // Disk body should be smaller than the plaintext.
+  int disk_body_size = entry->GetDataSize(1);
+  EXPECT_GT(disk_body_size, 0);
+  EXPECT_LT(disk_body_size, static_cast<int>(strlen(kCompressibleBody)));
+  closer.reset();
+
+  // Second request: cache hit, body decompresses correctly.
+  {
+    MockHttpRequest request2(transaction);
+    std::unique_ptr<HttpTransaction> trans =
+        cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+    ASSERT_TRUE(trans.get());
+    TestCompletionCallback callback;
+    int rv = trans->Start(&request2, callback.callback(), NetLogWithSource());
+    ASSERT_THAT(callback.GetResult(rv), IsOk());
+
+    auto [body, final_rv] = ReadBodyAndStatus(trans.get());
+    EXPECT_EQ(0, final_rv);
+    EXPECT_EQ(std::string(kCompressibleBody), body);
+  }
+
+  // No second network request - served from cache.
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+}
+
+// Feature flag off: no compression, body stored uncompressed.
+TEST_F(HttpCacheTest, ZstdCompressFeatureDisabledNoCompression) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(features::kHttpCacheZstdCompression);
+  MockHttpCache cache;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.did_use_shared_dictionary = true;
+  transaction.data = kCompressibleBody;
+
+  RunTransactionTest(cache.http_cache(), transaction);
+
+  MockHttpRequest request(transaction);
+  disk_cache::Entry* entry = nullptr;
+  ASSERT_TRUE(cache.OpenBackendEntry(request.CacheKey(), &entry));
+  disk_cache::ScopedEntryPtr closer(entry);
+
+  HttpResponseInfo cached_info;
+  bool truncated = false;
+  ASSERT_TRUE(MockHttpCache::ReadResponseInfo(entry, &cached_info, &truncated));
+  EXPECT_FALSE(cached_info.zstd_uncompressed_body_size.has_value());
+
+  // Body stored uncompressed: disk size == plaintext size.
+  EXPECT_EQ(static_cast<int>(strlen(kCompressibleBody)), entry->GetDataSize(1));
+}
+
+// Non-CDT response (did_use_shared_dictionary=false): no compression.
+TEST_F(HttpCacheTest, ZstdCompressNonCdtNotCompressed) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({features::kHttpCacheZstdCompression,
+                                 features::kHttpCacheZstdDecompression},
+                                {});
+  MockHttpCache cache;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  // did_use_shared_dictionary defaults to false.
+  transaction.data = kCompressibleBody;
+
+  RunTransactionTest(cache.http_cache(), transaction);
+
+  MockHttpRequest request(transaction);
+  disk_cache::Entry* entry = nullptr;
+  ASSERT_TRUE(cache.OpenBackendEntry(request.CacheKey(), &entry));
+  disk_cache::ScopedEntryPtr closer(entry);
+
+  HttpResponseInfo cached_info;
+  bool truncated = false;
+  ASSERT_TRUE(MockHttpCache::ReadResponseInfo(entry, &cached_info, &truncated));
+  EXPECT_FALSE(cached_info.zstd_uncompressed_body_size.has_value());
+  EXPECT_EQ(static_cast<int>(strlen(kCompressibleBody)), entry->GetDataSize(1));
+}
+
+// Compressed disk body is smaller than the plaintext for compressible data.
+TEST_F(HttpCacheTest, ZstdCompressLargeBodySizeReduction) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({features::kHttpCacheZstdCompression,
+                                 features::kHttpCacheZstdDecompression},
+                                {});
+  MockHttpCache cache;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.did_use_shared_dictionary = true;
+  transaction.data = kCompressibleBody;
+
+  RunTransactionTest(cache.http_cache(), transaction);
+
+  MockHttpRequest request(transaction);
+  disk_cache::Entry* entry = nullptr;
+  ASSERT_TRUE(cache.OpenBackendEntry(request.CacheKey(), &entry));
+  disk_cache::ScopedEntryPtr closer(entry);
+
+  int disk_body_size = entry->GetDataSize(1);
+  EXPECT_GT(disk_body_size, 0);
+  // Highly repetitive input at zstd level-1 should compress well.
+  EXPECT_LT(disk_body_size, static_cast<int>(strlen(kCompressibleBody)) / 2);
+}
+
+// Full end-to-end round trip: write compressed, read decompressed, byte match.
+TEST_F(HttpCacheTest, ZstdCompressWriteReadRoundTrip) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({features::kHttpCacheZstdCompression,
+                                 features::kHttpCacheZstdDecompression},
+                                {});
+  MockHttpCache cache;
+
+  // Use a less trivially compressible but still compressible pattern.
+  std::string body;
+  body.reserve(4096);
+  for (int i = 0; i < 410; ++i) {
+    body.append("abcdefghij");
+  }
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.did_use_shared_dictionary = true;
+  transaction.data = body.c_str();
+
+  // First request: write to cache.
+  RunTransactionTest(cache.http_cache(), transaction);
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+  EXPECT_EQ(1, cache.disk_cache()->create_count());
+
+  // Second request: read from cache.
+  {
+    MockHttpRequest request(transaction);
+    std::unique_ptr<HttpTransaction> trans =
+        cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+    ASSERT_TRUE(trans.get());
+    TestCompletionCallback callback;
+    int rv = trans->Start(&request, callback.callback(), NetLogWithSource());
+    ASSERT_THAT(callback.GetResult(rv), IsOk());
+
+    auto [read_body, final_rv] = ReadBodyAndStatus(trans.get());
+    EXPECT_EQ(0, final_rv);
+    EXPECT_EQ(body, read_body);
+  }
+
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+  EXPECT_EQ(1, cache.disk_cache()->open_count());
+}
+
+// Network drop mid-body while compressing: entry must be doomed (not
+// truncated), because a partial zstd frame is undecodable.
+TEST_F(HttpCacheTest, ZstdCompressTruncatedEntryDoomed) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({features::kHttpCacheZstdCompression,
+                                 features::kHttpCacheZstdDecompression},
+                                {});
+  MockHttpCache cache;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.did_use_shared_dictionary = true;
+  transaction.data = kCompressibleBody;
+  transaction.response_headers =
+      "Cache-Control: max-age=10000\n"
+      "Last-Modified: Wed, 28 Nov 2007 00:40:09 GMT\n"
+      "ETag: \"foopy\"\n"
+      "Content-Length: 920\n";
+
+  MockHttpRequest request(transaction);
+  auto trans = cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+  ASSERT_TRUE(trans.get());
+  TestCompletionCallback callback;
+  int rv = trans->Start(&request, callback.callback(), NetLogWithSource());
+  ASSERT_THAT(callback.GetResult(rv), IsOk());
+
+  // Read only a partial body, then destroy the transaction mid-stream.
+  auto buf = base::MakeRefCounted<IOBufferWithSize>(100);
+  rv = trans->Read(buf.get(), 100, callback.callback());
+  ASSERT_GT(callback.GetResult(rv), 0);
+
+  // Destroy the transaction before reading the full body.
+  trans.reset();
+
+  // The entry should be doomed - OpenBackendEntry must fail.
+  disk_cache::Entry* entry = nullptr;
+  EXPECT_FALSE(cache.OpenBackendEntry(request.CacheKey(), &entry));
+}
+
+// CDT response with standard Content-Encoding (gzip) should NOT be compressed.
+// CDT encodings (dcb, dcz) are allowed through; standard ones are rejected.
+TEST_F(HttpCacheTest, ZstdCompressContentEncodingSkipped) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({features::kHttpCacheZstdCompression,
+                                 features::kHttpCacheZstdDecompression},
+                                {});
+  MockHttpCache cache;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.did_use_shared_dictionary = true;
+  transaction.data = kCompressibleBody;
+  transaction.response_headers =
+      "Cache-Control: max-age=10000\n"
+      "Content-Encoding: gzip\n";
+
+  RunTransactionTest(cache.http_cache(), transaction);
+
+  MockHttpRequest request(transaction);
+  disk_cache::Entry* entry = nullptr;
+  ASSERT_TRUE(cache.OpenBackendEntry(request.CacheKey(), &entry));
+  disk_cache::ScopedEntryPtr closer(entry);
+
+  HttpResponseInfo cached_info;
+  bool truncated = false;
+  ASSERT_TRUE(MockHttpCache::ReadResponseInfo(entry, &cached_info, &truncated));
+  EXPECT_FALSE(cached_info.zstd_uncompressed_body_size.has_value());
+  // Body stored uncompressed: disk size == plaintext size.
+  EXPECT_EQ(static_cast<int>(strlen(kCompressibleBody)), entry->GetDataSize(1));
+}
+
+// CDT Content-Encoding: dcb is allowed through the compression allowlist.
+TEST_F(HttpCacheTest, ZstdCompressContentEncodingDcbAllowed) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({features::kHttpCacheZstdCompression,
+                                 features::kHttpCacheZstdDecompression},
+                                {});
+  MockHttpCache cache;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.did_use_shared_dictionary = true;
+  transaction.data = kCompressibleBody;
+  transaction.response_headers =
+      "Cache-Control: max-age=10000\n"
+      "Content-Encoding: dcb\n";
+
+  RunTransactionTest(cache.http_cache(), transaction);
+
+  MockHttpRequest request(transaction);
+  disk_cache::Entry* entry = nullptr;
+  ASSERT_TRUE(cache.OpenBackendEntry(request.CacheKey(), &entry));
+  disk_cache::ScopedEntryPtr closer(entry);
+
+  HttpResponseInfo cached_info;
+  bool truncated = false;
+  ASSERT_TRUE(MockHttpCache::ReadResponseInfo(entry, &cached_info, &truncated));
+  EXPECT_TRUE(cached_info.zstd_uncompressed_body_size.has_value());
+  EXPECT_LT(entry->GetDataSize(1), static_cast<int>(strlen(kCompressibleBody)));
+}
+
+// CDT Content-Encoding: dcz is allowed through the compression allowlist.
+TEST_F(HttpCacheTest, ZstdCompressContentEncodingDczAllowed) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({features::kHttpCacheZstdCompression,
+                                 features::kHttpCacheZstdDecompression},
+                                {});
+  MockHttpCache cache;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.did_use_shared_dictionary = true;
+  transaction.data = kCompressibleBody;
+  transaction.response_headers =
+      "Cache-Control: max-age=10000\n"
+      "Content-Encoding: dcz\n";
+
+  RunTransactionTest(cache.http_cache(), transaction);
+
+  MockHttpRequest request(transaction);
+  disk_cache::Entry* entry = nullptr;
+  ASSERT_TRUE(cache.OpenBackendEntry(request.CacheKey(), &entry));
+  disk_cache::ScopedEntryPtr closer(entry);
+
+  HttpResponseInfo cached_info;
+  bool truncated = false;
+  ASSERT_TRUE(MockHttpCache::ReadResponseInfo(entry, &cached_info, &truncated));
+  EXPECT_TRUE(cached_info.zstd_uncompressed_body_size.has_value());
+  EXPECT_LT(entry->GetDataSize(1), static_cast<int>(strlen(kCompressibleBody)));
+}
+
+// CDT response with empty body: the only DoCacheWriteData call has
+// num_bytes == 0, so the early return fires before the compression
+// decision block. The compressor is never created.
+TEST_F(HttpCacheTest, ZstdCompressEmptyBody) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({features::kHttpCacheZstdCompression,
+                                 features::kHttpCacheZstdDecompression},
+                                {});
+  MockHttpCache cache;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.did_use_shared_dictionary = true;
+  transaction.data = "";
+
+  RunTransactionTest(cache.http_cache(), transaction);
+
+  MockHttpRequest request(transaction);
+  disk_cache::Entry* entry = nullptr;
+  ASSERT_TRUE(cache.OpenBackendEntry(request.CacheKey(), &entry));
+  disk_cache::ScopedEntryPtr closer(entry);
+
+  HttpResponseInfo cached_info;
+  bool truncated = false;
+  ASSERT_TRUE(MockHttpCache::ReadResponseInfo(entry, &cached_info, &truncated));
+
+  // Empty body: compression should not have been triggered (no data chunks
+  // passed to the compressor), so no metadata set.
+  EXPECT_FALSE(cached_info.zstd_uncompressed_body_size.has_value());
+}
+
+// Compression error mid-stream: entry should be doomed and the transaction
+// should continue reading from the network without data loss.
+TEST_F(HttpCacheTest, ZstdCompressErrorMidStreamFallback) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({features::kHttpCacheZstdCompression,
+                                 features::kHttpCacheZstdDecompression},
+                                {});
+  MockHttpCache cache;
+
+  // Trigger a compression failure after 256 uncompressed bytes.
+  cache.http_cache()->set_compression_max_size_for_testing(256);
+
+  const std::string body(kCompressibleBody);
+  constexpr int kChunkSize = 64;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.did_use_shared_dictionary = true;
+  transaction.data = kCompressibleBody;
+  // Deliver in small chunks so the first ~4 chunks (256 bytes) compress
+  // successfully before the 5th chunk triggers the failure.
+  transaction.read_handler =
+      base::BindLambdaForTesting([&](int64_t content_length, int64_t offset,
+                                     IOBuffer* buf, int buf_len) -> int {
+        int remaining = static_cast<int>(body.size() - offset);
+        int to_copy = std::min({kChunkSize, buf_len, remaining});
+        if (to_copy > 0) {
+          buf->span().copy_prefix_from(base::as_byte_span(body).subspan(
+              static_cast<size_t>(offset), static_cast<size_t>(to_copy)));
+        }
+        return to_copy;
+      });
+
+  // The transaction should succeed - Writers falls back to network-only.
+  RunTransactionTest(cache.http_cache(), transaction);
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+
+  // The entry should be doomed because the partial compressed data is useless.
+  MockHttpRequest request(transaction);
+  disk_cache::Entry* entry = nullptr;
+  EXPECT_FALSE(cache.OpenBackendEntry(request.CacheKey(), &entry));
+}
+
+// Multi-chunk delivery: body arrives in small reads, exercising multiple
+// CompressAndWriteBlock appends at growing disk offsets.
+TEST_F(HttpCacheTest, ZstdCompressMultiChunkDelivery) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({features::kHttpCacheZstdCompression,
+                                 features::kHttpCacheZstdDecompression},
+                                {});
+  MockHttpCache cache;
+
+  const std::string body(kCompressibleBody);
+  constexpr int kChunkSize = 64;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.did_use_shared_dictionary = true;
+  transaction.data = kCompressibleBody;
+  transaction.read_handler =
+      base::BindLambdaForTesting([&](int64_t content_length, int64_t offset,
+                                     IOBuffer* buf, int buf_len) -> int {
+        int remaining = static_cast<int>(body.size() - offset);
+        int to_copy = std::min({kChunkSize, buf_len, remaining});
+        if (to_copy > 0) {
+          buf->span().copy_prefix_from(base::as_byte_span(body).subspan(
+              static_cast<size_t>(offset), static_cast<size_t>(to_copy)));
+        }
+        return to_copy;
+      });
+
+  RunTransactionTest(cache.http_cache(), transaction);
+
+  // Verify compressed entry on disk.
+  MockHttpRequest request(transaction);
+  disk_cache::Entry* entry = nullptr;
+  ASSERT_TRUE(cache.OpenBackendEntry(request.CacheKey(), &entry));
+  disk_cache::ScopedEntryPtr closer(entry);
+
+  HttpResponseInfo cached_info;
+  bool truncated = false;
+  ASSERT_TRUE(MockHttpCache::ReadResponseInfo(entry, &cached_info, &truncated));
+  ASSERT_TRUE(cached_info.zstd_uncompressed_body_size.has_value());
+  EXPECT_EQ(static_cast<int64_t>(body.size()),
+            *cached_info.zstd_uncompressed_body_size);
+
+  int disk_body_size = entry->GetDataSize(1);
+  EXPECT_GT(disk_body_size, 0);
+  EXPECT_LT(disk_body_size, static_cast<int>(body.size()));
+  closer.reset();
+
+  // Cache hit: decompresses correctly, byte-for-byte match.
+  {
+    MockHttpRequest request2(transaction);
+    std::unique_ptr<HttpTransaction> trans =
+        cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+    ASSERT_TRUE(trans.get());
+    TestCompletionCallback callback;
+    int rv = trans->Start(&request2, callback.callback(), NetLogWithSource());
+    ASSERT_THAT(callback.GetResult(rv), IsOk());
+
+    auto [read_body, final_rv] = ReadBodyAndStatus(trans.get());
+    EXPECT_EQ(0, final_rv);
+    EXPECT_EQ(body, read_body);
+  }
+}
+
+// Two concurrent transactions on the same uncached CDT resource: both join
+// Writers before any data arrives, so all_writers_.size() == 2 prevents
+// compression. Both get byte-correct uncompressed bodies.
+TEST_F(HttpCacheTest, ZstdCompressParallelWritersNoCompression) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({features::kHttpCacheZstdCompression,
+                                 features::kHttpCacheZstdDecompression},
+                                {});
+  MockHttpCache cache;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.did_use_shared_dictionary = true;
+  transaction.data = kCompressibleBody;
+
+  MockHttpRequest request(transaction);
+  std::string cache_key = request.CacheKey();
+
+  // Start two transactions on the same URL.
+  std::vector<std::unique_ptr<Context>> context_list;
+  for (int i = 0; i < 2; ++i) {
+    context_list.push_back(std::make_unique<Context>());
+    auto& c = context_list[i];
+    c->trans = cache.CreateTransaction();
+    ASSERT_TRUE(c->trans);
+    c->result =
+        c->trans->Start(&request, c->callback.callback(), NetLogWithSource());
+  }
+
+  // Wait for both transactions to join the Writers group.
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return cache.GetCountWriterTransactions(cache_key) == 2; }));
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+  EXPECT_EQ(1, cache.disk_cache()->create_count());
+  EXPECT_EQ(2, cache.GetCountWriterTransactions(cache_key));
+
+  // Both transactions read the full body and get correct data.
+  for (auto& c : context_list) {
+    ReadAndVerifyTransaction(c->trans.get(), transaction);
+  }
+  context_list.clear();
+
+  // Verify the entry is stored uncompressed (compression was skipped).
+  disk_cache::Entry* entry = nullptr;
+  ASSERT_TRUE(cache.OpenBackendEntry(cache_key, &entry));
+  disk_cache::ScopedEntryPtr closer(entry);
+
+  HttpResponseInfo cached_info;
+  bool truncated = false;
+  ASSERT_TRUE(MockHttpCache::ReadResponseInfo(entry, &cached_info, &truncated));
+  EXPECT_FALSE(cached_info.zstd_uncompressed_body_size.has_value());
+  EXPECT_EQ(static_cast<int>(strlen(kCompressibleBody)), entry->GetDataSize(1));
+}
+
+// Premature EOF while compressing: Content-Length is larger than the bytes
+// actually received. The truncation check must detect this and doom the entry
+// rather than finalizing a truncated zstd frame.
+TEST_F(HttpCacheTest, ZstdCompressPrematureEofDoomed) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({features::kHttpCacheZstdCompression,
+                                 features::kHttpCacheZstdDecompression},
+                                {});
+  MockHttpCache cache;
+
+  // Body to deliver (200 bytes of compressible text).
+  const std::string truncated_body(200, 'x');
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.did_use_shared_dictionary = true;
+  transaction.data = truncated_body.c_str();
+  // Content-Length exceeds the actual body. The truncation check compares
+  // Content-Length against MockNetworkTransaction::GetReceivedBodyBytes()
+  // which is hardcoded to 500 - so this tests the CL > received path.
+  transaction.response_headers =
+      "Cache-Control: max-age=10000\n"
+      "Content-Length: 10000\n";
+
+  // Use read_handler to deliver the truncated body then return 0 (EOF).
+  transaction.read_handler =
+      base::BindLambdaForTesting([&](int64_t content_length, int64_t offset,
+                                     IOBuffer* buf, int buf_len) -> int {
+        int remaining = static_cast<int>(truncated_body.size() - offset);
+        int to_copy = std::min(buf_len, remaining);
+        if (to_copy > 0) {
+          buf->span().copy_prefix_from(
+              base::as_byte_span(truncated_body)
+                  .subspan(static_cast<size_t>(offset),
+                           static_cast<size_t>(to_copy)));
+        }
+        return to_copy;
+      });
+
+  MockHttpRequest request(transaction);
+  auto trans = cache.http_cache()->CreateTransaction(DEFAULT_PRIORITY);
+  ASSERT_TRUE(trans.get());
+  TestCompletionCallback callback;
+  int rv = trans->Start(&request, callback.callback(), NetLogWithSource());
+  ASSERT_THAT(callback.GetResult(rv), IsOk());
+
+  // Read until EOF. The transaction should detect truncation and handle it.
+  std::string content;
+  ReadTransaction(trans.get(), &content);
+  trans.reset();
+
+  // The entry must be doomed because Content-Length (10000) >
+  // GetReceivedBodyBytes() (500, mock hardcoded value).
+  disk_cache::Entry* entry = nullptr;
+  EXPECT_FALSE(cache.OpenBackendEntry(request.CacheKey(), &entry));
+}
+
+// When the metadata WriteData (index 0) fails in
+// DoCacheWriteCompressedMetadataComplete, the entry must be doomed to prevent
+// serving a compressed body with no decompression marker.
+TEST_F(HttpCacheTest, ZstdCompressMetadataWriteFailureDoomed) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({features::kHttpCacheZstdCompression,
+                                 features::kHttpCacheZstdDecompression},
+                                {});
+  MockHttpCache cache;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.did_use_shared_dictionary = true;
+  transaction.data = kCompressibleBody;
+
+  MockHttpRequest request(transaction);
+
+  auto c0 = std::make_unique<Context>();
+  c0->trans = cache.CreateTransaction();
+  ASSERT_TRUE(c0->trans);
+  c0->result =
+      c0->trans->Start(&request, c0->callback.callback(), NetLogWithSource());
+  c0->result = c0->callback.GetResult(c0->result);
+  ASSERT_THAT(c0->result, IsOk());
+
+  std::string cache_key = request.CacheKey();
+
+  auto buf = base::MakeRefCounted<IOBufferWithSize>(2048);
+  c0->result = c0->trans->Read(buf.get(), 2048, c0->callback.callback());
+  c0->result = c0->callback.GetResult(c0->result);
+  ASSERT_EQ(static_cast<int>(strlen(kCompressibleBody)), c0->result);
+
+  scoped_refptr<MockDiskEntry> disk_entry =
+      cache.disk_cache()->GetDiskEntryRef(cache_key);
+  ASSERT_TRUE(disk_entry);
+
+  // Two-DEFER technique: first defer catches the finalize body flush (index 1).
+  disk_entry->SetDefer(MockDiskEntry::DEFER_WRITE);
+
+  c0->result = c0->trans->Read(buf.get(), 2048, c0->callback.callback());
+  ASSERT_EQ(ERR_IO_PENDING, c0->result);
+
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return disk_entry->HasDeferredOperation(); }));
+
+  // Resume finalize write, re-arm to catch metadata write (index 0).
+  disk_entry->ResumeDiskEntryOperation();
+  disk_entry->SetDefer(MockDiskEntry::DEFER_WRITE);
+
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return disk_entry->HasDeferredOperation() || c0->callback.have_result();
+  }));
+
+  if (c0->callback.have_result()) {
+    // Metadata write ran synchronously - no async window to inject failure.
+    c0->result = c0->callback.GetResult(c0->result);
+    EXPECT_EQ(0, c0->result);
+    return;
+  }
+
+  // Metadata write is deferred. Inject failure by overriding the return code.
+  disk_entry->set_resume_return_code(ERR_CACHE_READ_FAILURE);
+  disk_entry->ResumeDiskEntryOperation();
+
+  // The consumer still sees success (EOF = 0) - the failure only affects
+  // the cache entry, not the network response delivered to the caller.
+  c0->result = c0->callback.GetResult(c0->result);
+  EXPECT_EQ(0, c0->result);
+  c0->trans.reset();
+
+  // Entry must be doomed: compressed body on disk with no metadata marker.
+  disk_cache::Entry* entry = nullptr;
+  EXPECT_FALSE(cache.OpenBackendEntry(request.CacheKey(), &entry));
+}
+
+// Regression test: a second transaction arriving during the metadata-write
+// window (compressor_ is null, compressing_for_cache_ is true) must NOT
+// join as a parallel writer. The old CanJoin() had a bug where !compressor_
+// evaluated to true, making the OR expression return true.
+TEST_F(HttpCacheTest, ZstdCompressCanJoinBlocksDuringCompression) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({features::kHttpCacheZstdCompression,
+                                 features::kHttpCacheZstdDecompression},
+                                {});
+  MockHttpCache cache;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  transaction.did_use_shared_dictionary = true;
+  transaction.data = kCompressibleBody;
+
+  MockHttpRequest request(transaction);
+
+  auto c0 = std::make_unique<Context>();
+  c0->trans = cache.CreateTransaction();
+  ASSERT_TRUE(c0->trans);
+  c0->result =
+      c0->trans->Start(&request, c0->callback.callback(), NetLogWithSource());
+  c0->result = c0->callback.GetResult(c0->result);
+  ASSERT_THAT(c0->result, IsOk());
+
+  std::string cache_key = request.CacheKey();
+  EXPECT_EQ(1, cache.GetCountWriterTransactions(cache_key));
+
+  // Read all body data.
+  auto buf = base::MakeRefCounted<IOBufferWithSize>(2048);
+  c0->result = c0->trans->Read(buf.get(), 2048, c0->callback.callback());
+  c0->result = c0->callback.GetResult(c0->result);
+  ASSERT_EQ(static_cast<int>(strlen(kCompressibleBody)), c0->result);
+
+  scoped_refptr<MockDiskEntry> disk_entry =
+      cache.disk_cache()->GetDiskEntryRef(cache_key);
+  ASSERT_TRUE(disk_entry);
+
+  // Defer the first write after EOF — this will catch the finalize body
+  // flush (index 1), not the metadata write we actually want to pause.
+  disk_entry->SetDefer(MockDiskEntry::DEFER_WRITE);
+
+  // EOF read returns ERR_IO_PENDING (async network read). The finalize
+  // write hasn't happened yet — pump until DEFER catches it.
+  c0->result = c0->trans->Read(buf.get(), 2048, c0->callback.callback());
+  ASSERT_EQ(ERR_IO_PENDING, c0->result);
+
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return disk_entry->HasDeferredOperation(); }));
+
+  // Resume the finalize write, and immediately re-arm DEFER_WRITE so the
+  // next write (metadata, index 0) gets deferred. This opens the exact
+  // window: compressor_ is null, compressing_for_cache_ is true.
+  disk_entry->ResumeDiskEntryOperation();
+  disk_entry->SetDefer(MockDiskEntry::DEFER_WRITE);
+
+  // Pump until the metadata write is deferred (or c0's Read completes —
+  // which would mean finalize had zero remaining and went straight to
+  // metadata in one DoLoop iteration).
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return disk_entry->HasDeferredOperation() || c0->callback.have_result();
+  }));
+
+  // If the callback already completed, the metadata write ran synchronously
+  // (no async window to test). Skip the rest gracefully.
+  if (c0->callback.have_result()) {
+    c0->result = c0->callback.GetResult(c0->result);
+    EXPECT_EQ(0, c0->result);
+    return;
+  }
+
+  // Metadata write is now deferred. compressor_ is null.
+  // The EOF Read hasn't completed yet (it's blocked on the metadata write).
+  // Start c1 — it should NOT be able to join writers.
+  auto c1 = std::make_unique<Context>();
+  c1->trans = cache.CreateTransaction();
+  ASSERT_TRUE(c1->trans);
+  c1->result =
+      c1->trans->Start(&request, c1->callback.callback(), NetLogWithSource());
+
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return cache.GetCountDoneHeadersQueue(cache_key) == 1; }));
+
+  EXPECT_EQ(1, cache.GetCountWriterTransactions(cache_key));
+  EXPECT_EQ(1, cache.GetCountDoneHeadersQueue(cache_key));
+
+  // Resume the metadata write — completes the compression pipeline.
+  // c0's EOF Read completes (returns 0). CompleteWritingAndNotifyTransactions
+  // erases c0 from writers and restarts c1 via ERR_CACHE_RACE.
+  disk_entry->ResumeDiskEntryOperation();
+
+  c0->result = c0->callback.GetResult(c0->result);
+  EXPECT_EQ(0, c0->result);
+  c0->trans.reset();
+
+  c1->result = c1->callback.GetResult(c1->result);
+  ASSERT_THAT(c1->result, IsOk());
+
+  auto [body1, rv1] = ReadBodyAndStatus(c1->trans.get());
+  EXPECT_EQ(0, rv1);
+  EXPECT_EQ(std::string(kCompressibleBody), body1);
+}
+
+#endif  // !defined(NET_DISABLE_ZSTD_COMPRESS)
+
+#endif  // !defined(NET_DISABLE_ZSTD)
+
+TEST_F(HttpCacheTest, InvalidationFilterDomains) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(net::features::kLogicalClearHttpCache);
+
+  MockHttpCache cache;
+
+  // 1. Add entries to the cache for subdomains.
+  MockTransaction sub1 = kSimpleGET_Transaction;
+  sub1.url = "http://mail.google.com/index.html";
+  ScopedMockTransaction sub1_transaction(sub1);
+
+  MockTransaction sub2 = kSimpleGET_Transaction;
+  sub2.url = "http://docs.google.com/index.html";
+  ScopedMockTransaction sub2_transaction(sub2);
+
+  MockTransaction other = kSimpleGET_Transaction;
+  other.url = "http://example.com/index.html";
+  ScopedMockTransaction other_transaction(other);
+
+  RunTransactionTest(cache.http_cache(), sub1);
+  RunTransactionTest(cache.http_cache(), sub2);
+  RunTransactionTest(cache.http_cache(), other);
+
+  EXPECT_EQ(3, cache.network_layer()->transaction_count());
+
+  // 2. Add a broad domain invalidation filter for "google.com".
+  HttpCache::InvalidationFilter filter;
+  filter.begin_time = base::Time();
+  filter.end_time = base::Time::Max();
+  filter.filter_type = UrlFilterType::kTrueIfMatches;
+  filter.domains.insert("google.com");
+  cache.http_cache()->AddInvalidationFilter(std::move(filter));
+
+  // 3. Read from cache -> Google transactions should be misses, others hits.
+  RunTransactionTest(cache.http_cache(), sub1);
+  EXPECT_GT(cache.network_layer()->transaction_count(), 3);
+  int count = cache.network_layer()->transaction_count();
+
+  RunTransactionTest(cache.http_cache(), sub2);
+  EXPECT_GT(cache.network_layer()->transaction_count(), count);
+  count = cache.network_layer()->transaction_count();
+
+  RunTransactionTest(cache.http_cache(), other);
+  // No additional network transaction for other_transaction.
+  EXPECT_EQ(cache.network_layer()->transaction_count(), count);
+}
+
+class HttpCacheTestWithMockTime : public TestWithTaskEnvironment {
+ public:
+  HttpCacheTestWithMockTime()
+      : TestWithTaskEnvironment(
+            base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+};
+
+TEST_F(HttpCacheTestWithMockTime, InvalidationFilterTimeBoundaries) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(net::features::kLogicalClearHttpCache);
+
+  MockHttpCache cache;
+
+  // 1. Add entry 1 at T0.
+  MockTransaction transaction = kSimpleGET_Transaction;
+  transaction.url = "https://google.com/page1.html";
+  ScopedMockTransaction transaction_scoped(transaction);
+  RunTransactionTest(cache.http_cache(), transaction);
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+
+  // 2. Advance time by 1 minute.
+  FastForwardBy(base::Minutes(1));
+  base::Time t1 = base::Time::Now();
+  MockTransaction transaction2 = transaction;
+  transaction2.url = "https://google.com/page2.html";
+  ScopedMockTransaction transaction2_scoped(transaction2);
+  RunTransactionTest(cache.http_cache(), transaction2);
+
+  // 3. Add filter covering ONLY T1 onwards (start=T1, end=Max).
+  HttpCache::InvalidationFilter filter;
+  filter.begin_time = t1;
+  filter.end_time = base::Time::Max();
+  filter.filter_type = UrlFilterType::kTrueIfMatches;
+  filter.origins.insert(url::Origin::Create(GURL(transaction.url)));
+  cache.http_cache()->AddInvalidationFilter(std::move(filter));
+
+  // 4. Request Transaction 1 -> should be Cache HIT (pre-dates filter range).
+  RunTransactionTest(cache.http_cache(), transaction);
+  EXPECT_EQ(cache.network_layer()->transaction_count(), 2);
+
+  // 5. Request Transaction 2 -> should be Cache MISS (within filter range).
+  RunTransactionTest(cache.http_cache(), transaction2);
+  EXPECT_GT(cache.network_layer()->transaction_count(), 2);
+}
+
+TEST_F(HttpCacheTest, InvalidationFilterRevocation) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(net::features::kLogicalClearHttpCache);
+
+  MockHttpCache cache;
+
+  ScopedMockTransaction transaction(kSimpleGET_Transaction);
+  RunTransactionTest(cache.http_cache(), kSimpleGET_Transaction);
+  EXPECT_EQ(1, cache.network_layer()->transaction_count());
+
+  // Add filter.
+  HttpCache::InvalidationFilter filter;
+  filter.begin_time = base::Time();
+  filter.end_time = base::Time::Max();
+  filter.filter_type = UrlFilterType::kTrueIfMatches;
+  filter.origins.insert(url::Origin::Create(GURL(kSimpleGET_Transaction.url)));
+
+  HttpCache::InvalidationFilter filter_copy = filter;
+  cache.http_cache()->AddInvalidationFilter(std::move(filter));
+
+  // Assert miss.
+  RunTransactionTest(cache.http_cache(), kSimpleGET_Transaction);
+  EXPECT_GT(cache.network_layer()->transaction_count(), 1);
+  int current_count = cache.network_layer()->transaction_count();
+
+  // Revoke/Remove filter.
+  cache.http_cache()->RemoveInvalidationFilter(filter_copy);
+
+  // Second request should be HIT again.
+  RunTransactionTest(cache.http_cache(), kSimpleGET_Transaction);
+  EXPECT_EQ(cache.network_layer()->transaction_count(), current_count);
+}
+
+TEST_F(HttpCacheTest, InvalidationFilterCap) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kLogicalClearHttpCache,
+      {{net::features::kLogicalClearHttpCacheMaxFilters.name, "5"}});
+
+  base::HistogramTester histograms;
+  MockHttpCache cache;
+
+  for (size_t i = 0; i < 10; ++i) {
+    HttpCache::InvalidationFilter filter;
+    filter.begin_time =
+        base::Time::FromDeltaSinceWindowsEpoch(base::Microseconds(i + 1));
+    filter.end_time = base::Time::Max();
+    filter.filter_type = UrlFilterType::kTrueIfMatches;
+    cache.http_cache()->AddInvalidationFilter(std::move(filter));
+  }
+
+  EXPECT_EQ(cache.http_cache()->GetInvalidationFilterCountForTesting(), 5u);
+
+  const std::vector<HttpCache::InvalidationFilter>& filters =
+      cache.http_cache()->invalidation_filters();
+  ASSERT_EQ(filters.size(), 5u);
+  EXPECT_EQ(filters.front().begin_time,
+            base::Time::FromDeltaSinceWindowsEpoch(base::Microseconds(6)));
+
+  histograms.ExpectTotalCount(
+      "Net.HttpCache.LogicalInvalidation.ActiveFilterCountOnAddition", 10);
+  histograms.ExpectBucketCount(
+      "Net.HttpCache.LogicalInvalidation.FilterCapEvicted", true, 5);
+  histograms.ExpectBucketCount(
+      "Net.HttpCache.LogicalInvalidation.FilterCapEvicted", false, 5);
+}
+
+// Tests that restarting a transaction cleanly resets
+// done_headers_create_new_entry_ to false, preventing a CHECK failure in
+// DoGetBackendComplete() (crbug.com/537817232).
+TEST_F(HttpCacheTest, RestartResetsDoneHeadersCreateNewEntry) {
+  MockHttpCache cache;
+
+  // First request populates the cache.
+  RunTransactionTest(cache.http_cache(), kSimpleGET_Transaction);
+
+  // Subsequent request that revalidates or restarts does not hit CHECK failure.
+  RunTransactionTest(cache.http_cache(), kSimpleGET_Transaction);
+}
+
+TEST_F(HttpCacheTest, SetMaxBytesBeforeInitWithoutForcedInit) {
+  base::HistogramTester histogram_tester;
+  auto* factory = new MockBackendFactory();
+  factory->SetMaxBytes(500);
+  MockHttpCache cache(base::WrapUnique(factory));
+
+  // Call SetMaxBytes before initialization, with force=false.
+  cache.http_cache()->SetMaxBytes(base::ByteSize(1000), false);
+  histogram_tester.ExpectUniqueSample(
+      "HttpCache.SetMaxBytes.BackendStartedOrStarting", false, 1);
+
+  // Backend should not be created yet.
+  EXPECT_EQ(nullptr, cache.http_cache()->GetCurrentBackend());
+
+  // Force initialization now by calling GetBackend.
+  TestGetBackendCompletionCallback cb;
+  HttpCache::GetBackendResult result =
+      cache.http_cache()->GetBackend(cb.callback());
+  result = cb.GetResult(result);
+  ASSERT_EQ(OK, result.first);
+
+  // Verify that the backend was created with the correct size.
+  EXPECT_EQ(base::ByteSize(1000), result.second->GetMaxBytesForTesting());
+}
+
+TEST_F(HttpCacheTest, SetMaxBytesBeforeInitWithForcedInit) {
+  base::HistogramTester histogram_tester;
+  auto* factory = new MockBackendFactory();
+  factory->SetMaxBytes(500);
+  MockHttpCache cache(base::WrapUnique(factory));
+
+  // Call SetMaxBytes before initialization, with force=true.
+  cache.http_cache()->SetMaxBytes(base::ByteSize(1000), true);
+  histogram_tester.ExpectUniqueSample(
+      "HttpCache.SetMaxBytes.BackendStartedOrStarting", false, 1);
+
+  // Backend should be created immediately.
+  disk_cache::Backend* backend = cache.http_cache()->GetCurrentBackend();
+  ASSERT_TRUE(backend);
+  EXPECT_EQ(base::ByteSize(1000), backend->GetMaxBytesForTesting());
+}
+
+TEST_F(HttpCacheTest, SetMaxBytesAfterInitWithoutForcedInit) {
+  base::HistogramTester histogram_tester;
+  MockHttpCache cache;
+
+  // Force init.
+  disk_cache::Backend* backend = cache.backend();
+  ASSERT_TRUE(backend);
+
+  // Call SetMaxBytes after initialization.
+  cache.http_cache()->SetMaxBytes(base::ByteSize(1000), false);
+  histogram_tester.ExpectUniqueSample(
+      "HttpCache.SetMaxBytes.BackendStartedOrStarting", true, 1);
+
+  EXPECT_EQ(base::ByteSize(1000), backend->GetMaxBytesForTesting());
+}
+
+TEST_F(HttpCacheTest, SetMaxBytesAfterInitWithForcedInit) {
+  base::HistogramTester histogram_tester;
+  MockHttpCache cache;
+
+  // Force init.
+  disk_cache::Backend* backend = cache.backend();
+  ASSERT_TRUE(backend);
+
+  // Call SetMaxBytes after initialization.
+  cache.http_cache()->SetMaxBytes(base::ByteSize(1000), true);
+  histogram_tester.ExpectUniqueSample(
+      "HttpCache.SetMaxBytes.BackendStartedOrStarting", true, 1);
+
+  EXPECT_EQ(base::ByteSize(1000), backend->GetMaxBytesForTesting());
+}
+
+TEST_F(HttpCacheTest, SetMaxBytesDuringInitWithoutForcedInit) {
+  base::HistogramTester histogram_tester;
+  auto* factory = new MockBackendFactory();
+  factory->SetMaxBytes(500);
+  factory->set_callback_later(true);
+  MockHttpCache cache(base::WrapUnique(factory));
+
+  // Start initialization by calling GetBackend.
+  TestGetBackendCompletionCallback cb;
+  HttpCache::GetBackendResult result =
+      cache.http_cache()->GetBackend(cb.callback());
+  ASSERT_EQ(ERR_IO_PENDING, result.first);
+
+  // Call SetMaxBytes during initialization.
+  cache.http_cache()->SetMaxBytes(base::ByteSize(1000), false);
+  histogram_tester.ExpectUniqueSample(
+      "HttpCache.SetMaxBytes.BackendStartedOrStarting", true, 1);
+
+  // Complete initialization.
+  factory->CompleteCreateBackend();
+  result = cb.GetResult(result);
+  ASSERT_EQ(OK, result.first);
+
+  EXPECT_TRUE(base::test::RunUntil([&result]() {
+    return result.second->GetMaxBytesForTesting() == base::ByteSize(1000);
+  }));
+}
+
+TEST_F(HttpCacheTest, SetMaxBytesDuringInitWithForcedInit) {
+  base::HistogramTester histogram_tester;
+  auto* factory = new MockBackendFactory();
+  factory->SetMaxBytes(500);
+  factory->set_callback_later(true);
+  MockHttpCache cache(base::WrapUnique(factory));
+
+  // Start initialization by calling GetBackend.
+  TestGetBackendCompletionCallback cb;
+  HttpCache::GetBackendResult result =
+      cache.http_cache()->GetBackend(cb.callback());
+  ASSERT_EQ(ERR_IO_PENDING, result.first);
+
+  // Call SetMaxBytes during initialization.
+  cache.http_cache()->SetMaxBytes(base::ByteSize(1000), true);
+  histogram_tester.ExpectUniqueSample(
+      "HttpCache.SetMaxBytes.BackendStartedOrStarting", true, 1);
+
+  // Complete initialization.
+  factory->CompleteCreateBackend();
+  result = cb.GetResult(result);
+  ASSERT_EQ(OK, result.first);
+
+  EXPECT_TRUE(base::test::RunUntil([&result]() {
+    return result.second->GetMaxBytesForTesting() == base::ByteSize(1000);
+  }));
+}
+
+TEST_F(HttpCacheTest, SetMaxBytesZeroBeforeInit) {
+  base::HistogramTester histogram_tester;
+  auto* factory = new MockBackendFactory();
+  factory->SetMaxBytes(500);
+  MockHttpCache cache(base::WrapUnique(factory));
+
+  cache.http_cache()->SetMaxBytes(base::ByteSize(0), false);
+  histogram_tester.ExpectUniqueSample(
+      "HttpCache.SetMaxBytes.BackendStartedOrStarting", false, 1);
+
+  disk_cache::Backend* backend = cache.backend();
+  ASSERT_TRUE(backend);
+  // Internally converts to 1 to avoid confusion with the special 0 value that
+  // means "pick a default".
+  EXPECT_EQ(base::ByteSize(1), backend->GetMaxBytesForTesting());
+}
+
+TEST_F(HttpCacheTest, SetMaxBytesZeroAfterInit) {
+  base::HistogramTester histogram_tester;
+  auto* factory = new MockBackendFactory();
+  factory->SetMaxBytes(500);
+  MockHttpCache cache(base::WrapUnique(factory));
+  disk_cache::Backend* backend = cache.backend();
+  ASSERT_TRUE(backend);
+
+  cache.http_cache()->SetMaxBytes(base::ByteSize(0), true);
+  histogram_tester.ExpectUniqueSample(
+      "HttpCache.SetMaxBytes.BackendStartedOrStarting", true, 1);
+  // Internally converts to 1 to avoid confusion with the special 0 value that
+  // means "pick a default".
+  EXPECT_EQ(base::ByteSize(1), backend->GetMaxBytesForTesting());
 }
 
 }  // namespace net

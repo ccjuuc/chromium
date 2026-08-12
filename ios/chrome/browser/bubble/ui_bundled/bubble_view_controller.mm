@@ -22,10 +22,11 @@ BubbleView* BubbleViewWithType(
     BubbleArrowDirection arrow_direction,
     BubbleAlignment alignment,
     id<BubbleViewDelegate> delegate,
-    BubblePageControlPage page = BubblePageControlPageNone) {
+    BubblePageControlPage page = BubblePageControlPageNone,
+    NSInteger total_page_control_pages = 0,
+    NSString* custom_next_button_title = nil) {
   BOOL show_title = NO;
   BOOL show_close_button = NO;
-  BOOL show_snooze_button = NO;
   BOOL show_next_button = NO;
   NSTextAlignment text_alignment = NSTextAlignmentNatural;
 
@@ -39,10 +40,6 @@ BubbleView* BubbleViewWithType(
     case BubbleViewTypeRich:
       show_title = YES;
       break;
-    case BubbleViewTypeRichWithSnooze:
-      show_title = YES;
-      show_snooze_button = YES;
-      break;
     case BubbleViewTypeRichWithNext:
       show_title = YES;
       show_next_button = YES;
@@ -54,10 +51,11 @@ BubbleView* BubbleViewWithType(
                              alignment:alignment
                       showsCloseButton:show_close_button
                                  title:show_title ? title : nil
-                     showsSnoozeButton:show_snooze_button
                        showsNextButton:show_next_button
                                   page:page
+                 totalPageControlPages:total_page_control_pages
                          textAlignment:text_alignment
+                 customNextButtonTitle:custom_next_button_title
                               delegate:delegate];
   return bubble_view;
 }
@@ -79,6 +77,8 @@ BubbleView* BubbleViewWithType(
 @synthesize text = _text;
 @synthesize arrowDirection = _arrowDirection;
 @synthesize alignment = _alignment;
+@synthesize totalPageControlPages = _totalPageControlPages;
+@synthesize customNextButtonTitle = _customNextButtonTitle;
 @dynamic view;
 
 - (instancetype)initWithText:(NSString*)text
@@ -88,23 +88,70 @@ BubbleView* BubbleViewWithType(
               bubbleViewType:(BubbleViewType)type
              pageControlPage:(BubblePageControlPage)page
                     delegate:(id<BubbleViewDelegate>)delegate {
+  return [self initWithText:text
+                      title:titleString
+             arrowDirection:direction
+                  alignment:alignment
+             bubbleViewType:type
+            pageControlPage:page
+      totalPageControlPages:BubblePageControlPageFourth
+      customNextButtonTitle:nil
+                   delegate:delegate];
+}
+
+- (instancetype)initWithText:(NSString*)text
+                       title:(NSString*)titleString
+              arrowDirection:(BubbleArrowDirection)direction
+                   alignment:(BubbleAlignment)alignment
+              bubbleViewType:(BubbleViewType)type
+             pageControlPage:(BubblePageControlPage)page
+       customNextButtonTitle:(NSString*)customNextButtonTitle
+                    delegate:(id<BubbleViewDelegate>)delegate {
+  return [self initWithText:text
+                      title:titleString
+             arrowDirection:direction
+                  alignment:alignment
+             bubbleViewType:type
+            pageControlPage:page
+      totalPageControlPages:BubblePageControlPageFourth
+      customNextButtonTitle:customNextButtonTitle
+                   delegate:delegate];
+}
+
+- (instancetype)initWithText:(NSString*)text
+                       title:(NSString*)titleString
+              arrowDirection:(BubbleArrowDirection)direction
+                   alignment:(BubbleAlignment)alignment
+              bubbleViewType:(BubbleViewType)type
+             pageControlPage:(BubblePageControlPage)page
+       totalPageControlPages:(NSInteger)totalPageControlPages
+       customNextButtonTitle:(NSString*)customNextButtonTitle
+                    delegate:(id<BubbleViewDelegate>)delegate {
   self = [super initWithNibName:nil bundle:nil];
   if (self) {
     _text = text;
-    self.title = [titleString copy];
+    self.title = titleString;
     _arrowDirection = direction;
     _alignment = alignment;
     _bubbleViewType = type;
     _page = page;
+    BOOL hasCustomPages = totalPageControlPages > 0;
+    _totalPageControlPages =
+        hasCustomPages ? totalPageControlPages : BubblePageControlPageFourth;
+    _customNextButtonTitle = [customNextButtonTitle copy];
     _delegate = delegate;
   }
   return self;
 }
 
 - (void)loadView {
-  self.view = BubbleViewWithType(self.bubbleViewType, self.text, self.title,
-                                 self.arrowDirection, self.alignment,
-                                 self.delegate, _page);
+  self.view = BubbleViewWithType(
+      self.bubbleViewType, self.text, self.title, self.arrowDirection,
+      self.alignment, self.delegate, _page, self.totalPageControlPages,
+      self.customNextButtonTitle);
+  if (self.maximumContentSizeCategory) {
+    self.view.maximumContentSizeCategory = self.maximumContentSizeCategory;
+  }
   // Begin hidden.
   [self.view setAlpha:0.0f];
   [self.view setHidden:YES];
@@ -157,6 +204,14 @@ BubbleView* BubbleViewWithType(
 
 - (void)setBubbleAlignmentOffset:(CGFloat)alignmentOffset {
   self.view.alignmentOffset = alignmentOffset;
+}
+
+- (void)setMaximumContentSizeCategory:
+    (UIContentSizeCategory)maximumContentSizeCategory {
+  _maximumContentSizeCategory = [maximumContentSizeCategory copy];
+  if (self.isViewLoaded) {
+    self.view.maximumContentSizeCategory = maximumContentSizeCategory;
+  }
 }
 
 @end

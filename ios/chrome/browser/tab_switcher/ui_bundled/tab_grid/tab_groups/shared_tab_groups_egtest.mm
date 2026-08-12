@@ -3,8 +3,10 @@
 // found in the LICENSE file.
 
 #import <Foundation/Foundation.h>
+#import <TargetConditionals.h>
 
 #import "base/feature_list.h"
+#import "base/functional/bind.h"
 #import "base/ios/ios_util.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/test/ios/wait_util.h"
@@ -17,6 +19,7 @@
 #import "ios/chrome/browser/authentication/test/signin_earl_grey.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey_ui_test_util.h"
 #import "ios/chrome/browser/share_kit/model/test_constants.h"
+#import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
@@ -35,8 +38,10 @@
 #import "ios/chrome/test/scoped_eg_synchronization_disabler.h"
 #import "ios/testing/earl_grey/app_launch_configuration.h"
 #import "ios/testing/earl_grey/app_launch_manager.h"
+#import "ios/testing/earl_grey/disabled_test_macros.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
+#import "net/test/embedded_test_server/request_handler_util.h"
 #import "ui/base/l10n/l10n_util.h"
 
 using base::test::ios::kWaitForUIElementTimeout;
@@ -173,7 +178,6 @@ AppLaunchConfiguration SharedTabGroupAppLaunchConfiguration(
   } else {
     config.features_enabled.push_back(kDataSharingFeature);
   }
-  config.features_disabled.push_back(kIOSAutoOpenRemoteTabGroupsSettings);
 
   // Add the flag to use FakeTabGroupSyncService.
   config.additional_args.push_back(
@@ -191,6 +195,24 @@ void WaitForFakeJoinFlowView() {
                                               timeout:base::Seconds(20)];
 }
 
+// net::EmbeddedTestServer handler that responds with a page that redirects to
+// the URL specified in the query on load.
+std::unique_ptr<net::test_server::HttpResponse> HandleAttackerPage(
+    const net::test_server::HttpRequest& request) {
+  std::unique_ptr<net::test_server::BasicHttpResponse> http_response(
+      new net::test_server::BasicHttpResponse);
+  http_response->set_content_type("text/html");
+  http_response->set_content(
+      "<html><head><script>"
+      "window.onload = function() {"
+      "    location.href = '" +
+      request.GetURL().GetQuery() +
+      "';"
+      "};"
+      "</script></head><body>Attacker Page</body></html>");
+  return std::move(http_response);
+}
+
 }  // namespace
 
 // Test Shared Tab Groups feature (with group creation access).
@@ -200,18 +222,27 @@ void WaitForFakeJoinFlowView() {
 @implementation SharedTabGroupsTestCase
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
-  return SharedTabGroupAppLaunchConfiguration();
+  AppLaunchConfiguration config = SharedTabGroupAppLaunchConfiguration();
+  // TODO(crbug.com/514608938): Fix test for Chrome Next.
+  config.features_disabled.push_back(kChromeNextIa);
+  return config;
 }
 
 - (void)setUp {
   [super setUp];
   RegisterQueryTitleHandler(self.testServer);
+  self.testServer->RegisterDefaultHandler(base::BindRepeating(
+      net::test_server::HandlePrefixedRequest, "/attacker_page",
+      base::BindRepeating(&HandleAttackerPage)));
   GREYAssertTrue(self.testServer->Start(), @"Test server failed to start");
 
   // Remove the user education screen by default.
   [ChromeEarlGrey
       setUserDefaultsObject:@YES
                      forKey:kSharedTabGroupUserEducationShownOnceKey];
+
+  [ChromeEarlGrey setBoolValue:YES
+                   forUserPref:prefs::kAutomaticallyOpenTabGroupsEnabled];
 
   // `fakeIdentity2` joins shared groups as member.
   FakeSystemIdentity* identity = [FakeSystemIdentity fakeIdentity1];
@@ -225,6 +256,8 @@ void WaitForFakeJoinFlowView() {
 
 - (void)tearDownHelper {
   [super tearDownHelper];
+  [ChromeEarlGrey
+      removeUserDefaultsObjectForKey:kSharedTabGroupUserEducationShownOnceKey];
   // Delete all groups.
   [TabGroupAppInterface cleanup];
 }
@@ -247,6 +280,13 @@ void WaitForFakeJoinFlowView() {
 
 // Tests that the user education is shown in the grid only once.
 - (void)testUserEducationInGrid {
+#if TARGET_OS_SIMULATOR
+  // TODO(crbug.com/515080596): Re-enable this flaky test on iPhone simulator.
+  if (![ChromeEarlGrey isIPadIdiom]) {
+    EARL_GREY_TEST_DISABLED(@"Flaky on iPhone simulator.");
+  }
+#endif
+
   [ChromeEarlGrey
       removeUserDefaultsObjectForKey:kSharedTabGroupUserEducationShownOnceKey];
 
@@ -286,6 +326,13 @@ void WaitForFakeJoinFlowView() {
 
 // Checks opening the Share flow from the Tab Grid and cancelling.
 - (void)testShareGroupButCancel {
+  // TODO(crbug.com/515680760): Re-enable this flaky test on iPhone simulator.
+#if TARGET_OS_SIMULATOR
+  if (![ChromeEarlGrey isIPadIdiom]) {
+    EARL_GREY_TEST_DISABLED(@"Flaky on iPhone simulator.");
+  }
+#endif
+
   // Open the tab grid.
   [ChromeEarlGreyUI openTabGrid];
 
@@ -389,6 +436,11 @@ void WaitForFakeJoinFlowView() {
 // Checks opening the Share flow from the Tab Grid and actually sharing. Then
 // checks opening the Manage flow. Using context menus.
 - (void)testShareGroupAndManageGroupUsingContextMenus {
+  // TODO(crbug.com/514660819): Remove once the issue is resolved.
+  if (![ChromeEarlGrey isIPadIdiom]) {
+    EARL_GREY_TEST_DISABLED(@"Disabled on iPhone.");
+  }
+
   // Open the tab grid.
   [ChromeEarlGreyUI openTabGrid];
 
@@ -454,6 +506,27 @@ void WaitForFakeJoinFlowView() {
       assertWithMatcher:grey_notVisible()];
 }
 
+// Checks that navigation to a share URL via script (not user initiated) is
+// stopped.
+- (void)testShareURLNavigationStopped {
+  [TabGroupAppInterface mockSharedEntitiesPreview];
+
+  GURL joinGroupURL = data_sharing::GetDataSharingUrl(data_sharing::GroupToken(
+      data_sharing::GroupId("resources%2F3be"), "CggHBicxA_slvx"));
+
+  GURL attackerURL =
+      self.testServer->GetURL("/attacker_page?" + joinGroupURL.spec());
+
+  [ChromeEarlGrey loadURL:attackerURL];
+
+  // Wait for the app to idle.
+  [ChromeEarlGreyUI waitForAppToIdle];
+
+  // Verify that the FakeJoinFlowView does NOT appear.
+  [[EarlGrey selectElementWithMatcher:FakeJoinFlowView()]
+      assertWithMatcher:grey_nil()];
+}
+
 // Checks that the IPH is presented when the user foreground the app with a
 // shared tab group active.
 // TODO(crbug.com/411064928): Re-enable this test.
@@ -501,7 +574,8 @@ void WaitForFakeJoinFlowView() {
 
 // Checks opening the Share flow from the Tab Grid and actually sharing. Then
 // deleting the shared group as owner.
-- (void)testShareGroupAndDeleteUsingContextMenus {
+// TODO(crbug.com/489048084): Test is flaky.
+- (void)FLAKY_testShareGroupAndDeleteUsingContextMenus {
   AddSharedGroup(/*owner=*/YES, self.testServer);
 
   // Long press the group.
@@ -524,7 +598,8 @@ void WaitForFakeJoinFlowView() {
 }
 
 // Checks joining a group. Then leaving the shared group as member.
-- (void)testJoinGroupAndLeaveUsingContextMenus {
+// TODO(crbug.com/489048084): Test is flaky.
+- (void)FLAKY_testJoinGroupAndLeaveUsingContextMenus {
   AddSharedGroup(/*owner=*/NO, self.testServer);
 
   // Long press the group.
@@ -678,7 +753,12 @@ void WaitForFakeJoinFlowView() {
 //     - Cross button
 //     - Context menu and then 'Close Tab'
 // * Close from the navigating view, long press on the tab grid icon.
+// TODO(crbug.com/510742361): Disable this test on iPad due to flakiness.
 - (void)testLastTabClosedAlerts {
+  if ([ChromeEarlGrey isIPadIdiom]) {
+    EARL_GREY_TEST_DISABLED(@"Disabled on iPad.");
+  }
+
   AddSharedGroup(/*owner=*/YES, self.testServer);
   [ChromeEarlGrey waitForMainTabCount:1];
   // Open the group view.
@@ -813,7 +893,7 @@ void WaitForFakeJoinFlowView() {
   if (![ChromeEarlGrey areMultipleWindowsSupported]) {
     EARL_GREY_TEST_DISABLED(@"Multiple windows can't be opened.");
   }
-  if (@available(iOS 19.0, *)) {
+  if (@available(iOS 26.0, *)) {
     // TODO(crbug.com/427699033): Re-enable test on iOS 26.
     // Fails to interact with new window.
     EARL_GREY_TEST_DISABLED(@"Test disabled on iOS 26.");
@@ -1000,7 +1080,8 @@ void WaitForFakeJoinFlowView() {
 }
 
 // Ensures new tab is added when moving the last tab of a shared group.
-- (void)testLastTabCloseWithClearBrowsingData {
+// TODO(crbug.com/489048084): Test is flaky.
+- (void)FLAKY_testLastTabCloseWithClearBrowsingData {
   AddSharedGroup(/*owner=*/NO, self.testServer);
   [ChromeEarlGrey waitForMainTabCount:1];
 
@@ -1688,7 +1769,12 @@ void WaitForFakeJoinFlowView() {
   [TabGroupAppInterface mockSharedEntitiesPreview];
   GURL joinGroupURL = data_sharing::GetDataSharingUrl(data_sharing::GroupToken(
       data_sharing::GroupId("resources%2F3be"), "CggHBicxA_slvx"));
-  [ChromeEarlGrey loadURL:joinGroupURL waitForCompletion:NO];
+
+  std::string pageContent =
+      "data:text/html,<html><body><a id='join-link' href='" +
+      joinGroupURL.spec() + "'>Join</a></body></html>";
+  [ChromeEarlGrey loadURL:GURL(pageContent)];
+  [ChromeEarlGrey tapWebStateElementWithID:@"join-link"];
 
   WaitForFakeJoinFlowView();
 

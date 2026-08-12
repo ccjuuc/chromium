@@ -17,8 +17,5 @@ android_library("java") {
 # Public Java factory
 android_library_factory("factory_java") {
   sources = [ "internal/java/src/org/chromium/chrome/browser/ui/extensions/windowing/ExtensionWindowControllerBridgeFactory.java" ]
-  deps = [
-    ":java",
-    "//chrome/browser/ui/browser_window/public/android:java",
-  ]
+  deps = [ ":java" ]
 }

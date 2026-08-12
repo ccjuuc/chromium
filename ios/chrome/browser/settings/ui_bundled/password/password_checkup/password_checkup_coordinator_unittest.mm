@@ -6,6 +6,7 @@
 
 #import <UIKit/UIKit.h>
 
+#import "base/apple/foundation_util.h"
 #import "base/memory/raw_ptr.h"
 #import "base/test/bind.h"
 #import "base/test/ios/wait_util.h"
@@ -14,7 +15,11 @@
 #import "components/password_manager/core/browser/password_manager_test_utils.h"
 #import "components/password_manager/core/browser/password_store/test_password_store.h"
 #import "components/password_manager/core/browser/ui/password_check_referrer.h"
+#import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/affiliations/model/ios_chrome_affiliation_service_factory.h"
+#import "ios/chrome/browser/device_reauth/model/fake_reauthentication_service_util.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service_factory.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_profile_password_store_factory.h"
 #import "ios/chrome/browser/passwords/model/metrics/ios_password_manager_metrics.h"
 #import "ios/chrome/browser/push_notification/model/push_notification_service.h"
@@ -26,14 +31,16 @@
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_manager_ios.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/common/ui/reauthentication/mock_reauthentication_module.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/chrome/test/scoped_key_window.h"
@@ -70,23 +77,27 @@ class PasswordCheckupCoordinatorTest
     // Add authentication service.
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
+    // Add reauthentication service.
+    builder.AddTestingFactory(ReauthenticationServiceFactory::GetInstance(),
+                              base::BindOnce(&CreateFakeReauthService));
 
     // Create scene state for reauthentication coordinator.
-    scene_state_ = [[SceneState alloc] initWithAppState:nil];
+    scene_state_ = [[SceneState alloc] init];
     scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
     profile_ = profile_manager_.AddProfileWithBuilder(std::move(builder));
     browser_ = std::make_unique<TestBrowser>(profile_.get(), scene_state_);
 
-    // Mock ApplicationCommands. Since ApplicationCommands conforms to
+    // Mock SceneCommands. Since SceneCommands conforms to
     // SettingsCommands, it must be mocked as well.
-    mocked_application_commands_handler_ =
-        OCMStrictProtocolMock(@protocol(ApplicationCommands));
+    mocked_scene_handler_ = OCMStrictProtocolMock(@protocol(SceneCommands));
     [browser_->GetCommandDispatcher()
-        startDispatchingToTarget:mocked_application_commands_handler_
-                     forProtocol:@protocol(ApplicationCommands)];
+        startDispatchingToTarget:mocked_scene_handler_
+                     forProtocol:@protocol(SceneCommands)];
     id mocked_application_settings_command_handler =
         OCMProtocolMock(@protocol(SettingsCommands));
     [browser_->GetCommandDispatcher()
@@ -102,12 +113,15 @@ class PasswordCheckupCoordinatorTest
     AuthenticationService* authentication_service =
         AuthenticationServiceFactory::GetForProfile(profile_.get());
     authentication_service->SignIn(fake_system_identity_,
-                                   signin_metrics::AccessPoint::kUnknown);
+                                   signin_metrics::AccessPoint::kStartPage);
 
     // Init navigation controller with a root vc.
     base_navigation_controller_ = [[UINavigationController alloc]
         initWithRootViewController:[[UIViewController alloc] init]];
-    mock_reauth_module_ = [[MockReauthenticationModule alloc] init];
+    mock_reauth_module_ =
+        base::apple::ObjCCastStrict<MockReauthenticationModule>(
+            ReauthenticationServiceFactory::GetForProfile(profile_.get())
+                ->GetReauthModule());
     // Delay auth result so auth doesn't pass right after starting coordinator.
     // Needed for verifying behavior when auth is required.
     mock_reauth_module_.shouldSkipReAuth = NO;
@@ -118,7 +132,6 @@ class PasswordCheckupCoordinatorTest
     coordinator_ = [[PasswordCheckupCoordinator alloc]
         initWithBaseNavigationController:base_navigation_controller_
                                  browser:browser_.get()
-                            reauthModule:mock_reauth_module_
                                 referrer:GetParam()];
 
     scoped_window_.Get().rootViewController = base_navigation_controller_;
@@ -167,7 +180,7 @@ class PasswordCheckupCoordinatorTest
   ScopedKeyWindow scoped_window_;
   UINavigationController* base_navigation_controller_ = nil;
   MockReauthenticationModule* mock_reauth_module_ = nil;
-  id mocked_application_commands_handler_;
+  id mocked_scene_handler_;
   base::HistogramTester histogram_tester_;
   PasswordCheckupCoordinator* coordinator_ = nil;
   FakeSystemIdentity* fake_system_identity_;

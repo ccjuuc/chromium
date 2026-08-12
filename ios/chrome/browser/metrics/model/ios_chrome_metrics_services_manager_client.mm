@@ -13,6 +13,7 @@
 #import "base/path_service.h"
 #import "components/metrics/enabled_state_provider.h"
 #import "components/metrics/metrics_state_manager.h"
+#import "components/metrics/startup_visibility.h"
 #import "components/prefs/pref_service.h"
 #import "components/variations/service/variations_service.h"
 #import "ios/chrome/browser/metrics/model/ios_chrome_metrics_service_accessor.h"
@@ -22,7 +23,6 @@
 #import "ios/chrome/browser/shared/model/profile/incognito_session_tracker.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/variations/model/ios_chrome_variations_service_client.h"
-#import "ios/chrome/browser/variations/model/ios_ui_string_overrider_factory.h"
 #import "services/network/public/cpp/shared_url_loader_factory.h"
 
 class IOSChromeMetricsServicesManagerClient::IOSChromeEnabledStateProvider
@@ -62,7 +62,6 @@ IOSChromeMetricsServicesManagerClient::CreateVariationsService() {
   return variations::VariationsService::Create(
       std::make_unique<IOSChromeVariationsServiceClient>(), local_state_,
       GetMetricsStateManager(), "dummy-disable-background-switch",
-      ::CreateUIStringOverrider(),
       base::BindOnce(&ApplicationContext::GetNetworkConnectionTracker,
                      base::Unretained(GetApplicationContext())));
 }

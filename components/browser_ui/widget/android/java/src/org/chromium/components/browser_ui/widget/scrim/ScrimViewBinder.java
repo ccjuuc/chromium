@@ -20,6 +20,8 @@ import static org.chromium.components.browser_ui.widget.scrim.ScrimProperties.VI
 import android.view.View;
 import android.view.ViewGroup.MarginLayoutParams;
 
+import androidx.annotation.ColorInt;
+
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.UiUtils;
 import org.chromium.ui.modelutil.PropertyKey;
@@ -30,8 +32,17 @@ import org.chromium.ui.modelutil.PropertyModel;
 class ScrimViewBinder {
     static void bind(PropertyModel model, ScrimView view, PropertyKey propertyKey) {
         if (TOP_MARGIN == propertyKey || BOTTOM_MARGIN == propertyKey) {
-            // Noop; this is not used until the anchor is set as the view won't have layout params
+            // Noop until the anchor is set as the view won't have layout params
             // until it is attached to its parent.
+            if (model.get(ANCHOR_VIEW) != null) {
+                assert view.getLayoutParams() instanceof MarginLayoutParams;
+                if (TOP_MARGIN == propertyKey) {
+                    ((MarginLayoutParams) view.getLayoutParams()).topMargin = model.get(TOP_MARGIN);
+                } else {
+                    ((MarginLayoutParams) view.getLayoutParams()).bottomMargin =
+                            model.get(BOTTOM_MARGIN);
+                }
+            }
         } else if (AFFECTS_STATUS_BAR == propertyKey) {
             // Noop; the mediator handles this interaction.
         } else if (ANCHOR_VIEW == propertyKey) {
@@ -72,7 +83,10 @@ class ScrimViewBinder {
             if (view.getVisibility() != targetVisibility) view.setVisibility(targetVisibility);
 
         } else if (BACKGROUND_COLOR == propertyKey) {
-            view.setBackgroundColor(model.get(BACKGROUND_COLOR));
+            @ColorInt Integer backgroundColor = model.get(BACKGROUND_COLOR);
+            // This can happen during init. The mediator will update to a default fallback shortly.
+            if (backgroundColor == null) return;
+            view.setBackgroundColor(backgroundColor);
         } else if (GESTURE_DETECTOR == propertyKey) {
             // Noop; gesture handling is delegated out to the mediator.
         } else if (AFFECTS_NAVIGATION_BAR == propertyKey) {

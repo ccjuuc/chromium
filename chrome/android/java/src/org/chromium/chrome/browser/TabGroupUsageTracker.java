@@ -4,15 +4,13 @@
 
 package org.chromium.chrome.browser;
 
-import static org.chromium.build.NullUtil.assumeNonNull;
-
 import org.chromium.base.CallbackController;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.DestroyObserver;
 import org.chromium.chrome.browser.lifecycle.PauseResumeWithNativeObserver;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
+import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 
@@ -47,9 +45,7 @@ public class TabGroupUsageTracker implements PauseResumeWithNativeObserver, Dest
 
         mTabModelSelector = tabModelSelector;
         TabModelUtils.runOnTabStateInitialized(
-                tabModelSelector,
-                mCallbackController.makeCancelable(
-                        unusedTabModelSelector -> recordTabGroupCount()));
+                tabModelSelector, mCallbackController.makeCancelable(_ -> recordTabGroupCount()));
 
         mActivityLifecycleDispatcher = activityLifecycleDispatcher;
         activityLifecycleDispatcher.register(this);
@@ -75,11 +71,9 @@ public class TabGroupUsageTracker implements PauseResumeWithNativeObserver, Dest
     public void onPauseWithNative() {}
 
     private void recordTabGroupCount() {
-        TabGroupModelFilter normalFilter = mTabModelSelector.getTabGroupModelFilter(false);
-        TabGroupModelFilter incognitoFilter = mTabModelSelector.getTabGroupModelFilter(true);
-        assumeNonNull(normalFilter);
-        assumeNonNull(incognitoFilter);
-        int groupCount = normalFilter.getTabGroupCount() + incognitoFilter.getTabGroupCount();
+        TabModel normalModel = mTabModelSelector.getModel(false);
+        TabModel incognitoModel = mTabModelSelector.getModel(true);
+        int groupCount = normalModel.getTabGroupCount() + incognitoModel.getTabGroupCount();
         RecordHistogram.recordCount1MHistogram("TabGroups.UserGroupCount", groupCount);
     }
 }

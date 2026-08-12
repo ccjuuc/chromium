@@ -16,7 +16,6 @@
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/browser/suggestions/suggestion_test_helpers.h"
 #include "components/feature_engagement/public/feature_constants.h"
-#include "components/plus_addresses/core/browser/grit/plus_addresses_strings.h"
 #include "components/plus_addresses/core/browser/plus_address_preallocator.h"
 #include "components/plus_addresses/core/browser/plus_address_types.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -69,11 +68,11 @@ std::string MakeCreationResponse(const PlusProfile& profile) {
 }
 
 std::string MakeListResponse(const std::vector<PlusProfile>& profiles) {
-  base::Value::Dict response;
-  base::Value::List list;
+  base::DictValue response;
+  base::ListValue list;
   for (const PlusProfile& profile : profiles) {
     std::string json = MakePlusProfile(profile);
-    std::optional<base::Value::Dict> dict =
+    std::optional<base::DictValue> dict =
         base::JSONReader::ReadDict(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     DCHECK(dict.has_value());
     list.Append(std::move(dict.value()));
@@ -86,16 +85,16 @@ std::string MakeListResponse(const std::vector<PlusProfile>& profiles) {
 
 std::string MakePreallocateResponse(
     const std::vector<PreallocatedPlusAddress>& addresses) {
-  base::Value::List profiles;
+  base::ListValue profiles;
   for (const PreallocatedPlusAddress& address : addresses) {
     profiles.Append(
-        base::Value::Dict()
+        base::DictValue()
             .Set("emailAddress", *address.plus_address)
             .Set("reservationLifetime",
                  base::NumberToString(address.lifetime.InSeconds()) + "s"));
   }
   return base::WriteJson(
-             base::Value::Dict().Set("emailAddresses", std::move(profiles)))
+             base::DictValue().Set("emailAddresses", std::move(profiles)))
       .value();
 }
 
@@ -130,7 +129,7 @@ HandleRequestToPlusAddressWithSuccess(
   }
 
   bool is_refresh = [&]() {
-    std::optional<base::Value::Dict> body = base::JSONReader::ReadDict(
+    std::optional<base::DictValue> body = base::JSONReader::ReadDict(
         request.content, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     if (!body) {
       return false;
@@ -151,27 +150,10 @@ HandleRequestToPlusAddressWithSuccess(
 base::Value CreatePreallocatedPlusAddress(base::Time end_of_life,
                                           std::string address) {
   return base::Value(
-      base::Value::Dict()
+      base::DictValue()
           .Set(PlusAddressPreallocator::kEndOfLifeKey,
                base::TimeToValue(end_of_life))
           .Set(PlusAddressPreallocator::kPlusAddressKey, std::move(address)));
-}
-
-Matcher<Suggestion> EqualsFillPlusAddressSuggestion(std::string_view address) {
-  std::vector<std::vector<Suggestion::Text>> labels;
-  if constexpr (!BUILDFLAG(IS_ANDROID)) {
-    labels = {{Suggestion::Text(l10n_util::GetStringUTF16(
-        IDS_PLUS_ADDRESS_FILL_SUGGESTION_SECONDARY_TEXT))}};
-  }
-  return AllOf(EqualsSuggestion(SuggestionType::kFillExistingPlusAddress,
-                                /*main_text=*/base::UTF8ToUTF16(address)),
-               Field(&Suggestion::icon, Suggestion::Icon::kPlusAddress),
-               Field(&Suggestion::labels, labels));
-}
-
-Matcher<std::vector<Suggestion>> IsSingleFillPlusAddressSuggestion(
-    std::string_view address) {
-  return ElementsAre(EqualsFillPlusAddressSuggestion(address));
 }
 
 }  // namespace plus_addresses::test

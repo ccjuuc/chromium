@@ -5,12 +5,13 @@
 #include "chrome/browser/ash/nearby/nearby_dependencies_provider.h"
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/network_config_service.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/notimplemented.h"
 #include "chrome/browser/ash/nearby/bluetooth_adapter_manager.h"
 #include "chrome/browser/ash/nearby/nearby_dependencies_provider_factory.h"
@@ -76,8 +77,9 @@ class NearbyDependenciesProviderShutdownNotifierFactory
     : public BrowserContextKeyedServiceShutdownNotifierFactory {
  public:
   static NearbyDependenciesProviderShutdownNotifierFactory* GetInstance() {
-    return base::Singleton<
-        NearbyDependenciesProviderShutdownNotifierFactory>::get();
+    static base::NoDestructor<NearbyDependenciesProviderShutdownNotifierFactory>
+        instance;
+    return instance.get();
   }
 
   NearbyDependenciesProviderShutdownNotifierFactory(
@@ -86,8 +88,7 @@ class NearbyDependenciesProviderShutdownNotifierFactory
       const NearbyDependenciesProviderShutdownNotifierFactory&) = delete;
 
  private:
-  friend struct base::DefaultSingletonTraits<
-      NearbyDependenciesProviderShutdownNotifierFactory>;
+  friend base::NoDestructor<NearbyDependenciesProviderShutdownNotifierFactory>;
 
   NearbyDependenciesProviderShutdownNotifierFactory()
       : BrowserContextKeyedServiceShutdownNotifierFactory(
@@ -189,7 +190,7 @@ NearbyDependenciesProvider::GetDependencies() {
   dependencies->wifidirect_dependencies = GetWifiDirectDependencies();
 
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  if (command_line->HasSwitch(switches::kNearbyShareVerboseLogging)) {
+  if (command_line->HasSwitch(ash::switches::kNearbyShareVerboseLogging)) {
     dependencies->min_log_severity =
         ::nearby::api::LogMessage::Severity::kVerbose;
   }
@@ -294,18 +295,14 @@ NearbyDependenciesProvider::GetWifiLanDependencies() {
       std::move(tcp_socket_factory.receiver));
 
   MojoPipe<::sharing::mojom::MdnsManager> mdns_manager;
-  if (::features::IsNearbyMdnsEnabled()) {
-    mojo::MakeSelfOwnedReceiver(
-        std::make_unique<::nearby::sharing::NearbyConnectionsMdnsManager>(),
-        std::move(mdns_manager.receiver));
-  }
+  mojo::MakeSelfOwnedReceiver(
+      std::make_unique<::nearby::sharing::NearbyConnectionsMdnsManager>(),
+      std::move(mdns_manager.receiver));
 
   return ::sharing::mojom::WifiLanDependencies::New(
       std::move(cros_network_config.remote),
       std::move(firewall_hole_factory.remote),
-      std::move(tcp_socket_factory.remote),
-      (::features::IsNearbyMdnsEnabled() ? std::move(mdns_manager.remote)
-                                         : mojo::NullRemote()));
+      std::move(tcp_socket_factory.remote), std::move(mdns_manager.remote));
 }
 
 sharing::mojom::WifiDirectDependenciesPtr

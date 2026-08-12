@@ -7,26 +7,23 @@
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/loader/modulescript/document_module_script_fetcher.h"
 #include "third_party/blink/renderer/core/script/import_map.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
 namespace {
-Vector<AtomicString> FindUrlPrefixes(AtomicString specifier) {
-  Vector<size_t> positions;
-  constexpr char slash = '/';
-  size_t position = specifier.find(slash);
 
+Vector<AtomicString> FindUrlPrefixes(AtomicString specifier) {
+  // Use a reasonable, simple heurstic to estimate the number of slashes in a
+  // specifier as roughly one every 4 characters with a minimum of 4.
+  Vector<AtomicString> result;
+  result.ReserveInitialCapacity(specifier.length() / 4 + 4);
+  constexpr char slash = '/';
+  wtf_size_t position = specifier.find(slash);
   while (position != kNotFound) {
-    positions.push_back(++position);
+    ++position;
+    result.emplace_back(specifier.GetString().substr(0, position));
     position = specifier.find(slash, position);
   }
-
-  Vector<AtomicString> result;
-  for (size_t pos : positions) {
-    result.push_back(specifier.GetString().Substring(0, pos));
-  }
-
   return result;
 }
 

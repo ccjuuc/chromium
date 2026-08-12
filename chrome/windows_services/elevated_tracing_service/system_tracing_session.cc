@@ -8,11 +8,9 @@
 
 #include <utility>
 
-#include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/task/sequenced_task_runner.h"
-#include "base/win/win_util.h"
 #include "chrome/windows_services/elevated_tracing_service/service_integration.h"
 #include "chrome/windows_services/service_program/crash_reporting.h"
 #include "chrome/windows_services/service_program/get_calling_process.h"
@@ -39,7 +37,6 @@ void OnTracedProcessReceiver(base::ProcessId client_pid,
     tracing::EtwSystemDataSource::Register(client_pid);
     return true;
   }();
-
   // Drop any previous connection before accepting the new one.
   tracing::TracedProcess::ResetTracedProcessReceiver();
   tracing::TracedProcess::OnTracedProcessRequest(

@@ -4,13 +4,14 @@
 
 #include "third_party/blink/renderer/core/execution_context/security_context_init.h"
 
+#include <algorithm>
 #include <optional>
 
-#include "base/metrics/histogram_macros.h"
 #include "services/network/public/cpp/permissions_policy/fenced_frame_permissions_policies.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy.h"
 #include "services/network/public/cpp/web_sandbox_flags.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom-blink.h"
+#include "third_party/blink/public/web/web_navigation_params.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
@@ -71,10 +72,6 @@ void SecurityContextInit::ApplyDocumentPolicy(
   document_policy = FilterByOriginTrial(document_policy, execution_context_);
   if (!document_policy.feature_state.empty()) {
     UseCounter::Count(execution_context_, WebFeature::kDocumentPolicyHeader);
-    for (const auto& policy_entry : document_policy.feature_state) {
-      UMA_HISTOGRAM_ENUMERATION("Blink.UseCounter.DocumentPolicy.Header",
-                                policy_entry.first);
-    }
   }
   execution_context_->GetSecurityContext().SetDocumentPolicy(
       DocumentPolicy::CreateWithHeaderPolicy(document_policy));
@@ -107,7 +104,8 @@ void SecurityContextInit::ApplyPermissionsPolicy(
     LocalFrame& frame,
     const ResourceResponse& response,
     const FramePolicy& frame_policy,
-    const std::optional<network::ParsedPermissionsPolicy>& isolated_app_policy,
+    const base::optional_ref<const Vector<IsolatedAppPermissionPolicyEntry>>
+        isolated_app_policy,
     const base::optional_ref<const FencedFrame::RedactedFencedFrameProperties>
         fenced_frame_properties,
     const KURL& document_url) {
@@ -139,36 +137,38 @@ void SecurityContextInit::ApplyPermissionsPolicy(
   PolicyParserMessageBuffer report_only_permissions_policy_logger(
       "Error with Permissions-Policy-Report-Only header: ");
 
-  StringBuilder policy_builder;
-  policy_builder.Append(response.HttpHeaderField(http_names::kFeaturePolicy));
-  String feature_policy_header = policy_builder.ToString();
-  if (!feature_policy_header.empty())
+  const AtomicString& feature_policy_header =
+      response.HttpHeaderField(http_names::kFeaturePolicy);
+  if (!feature_policy_header.empty()) {
     UseCounter::Count(execution_context_, WebFeature::kFeaturePolicyHeader);
+  }
 
   permissions_policy_header_ = PermissionsPolicyParser::ParseHeader(
       feature_policy_header, permissions_policy_header,
-      execution_context_->GetSecurityOrigin(), feature_policy_logger,
+      *execution_context_->GetSecurityOrigin(), feature_policy_logger,
       permissions_policy_logger, execution_context_);
 
-  network::ParsedPermissionsPolicy
-      parsed_report_only_permissions_policy_header =
-          PermissionsPolicyParser::ParseHeader(
-              response.HttpHeaderField(http_names::kFeaturePolicyReportOnly),
-              report_only_permissions_policy_header,
-              execution_context_->GetSecurityOrigin(),
-              report_only_feature_policy_logger,
-              report_only_permissions_policy_logger, execution_context_);
-
-  if (!response.HttpHeaderField(http_names::kFeaturePolicyReportOnly).empty()) {
+  const AtomicString& report_only_feature_policy_header =
+      response.HttpHeaderField(http_names::kFeaturePolicyReportOnly);
+  if (!report_only_feature_policy_header.empty()) {
     UseCounter::Count(execution_context_,
                       WebFeature::kFeaturePolicyReportOnlyHeader);
   }
 
-  auto messages = Vector<PolicyParserMessageBuffer::Message>();
-  messages.AppendVector(feature_policy_logger.GetMessages());
-  messages.AppendVector(report_only_feature_policy_logger.GetMessages());
-  messages.AppendVector(permissions_policy_logger.GetMessages());
-  messages.AppendVector(report_only_permissions_policy_logger.GetMessages());
+  network::ParsedPermissionsPolicy
+      parsed_report_only_permissions_policy_header =
+          PermissionsPolicyParser::ParseHeader(
+              report_only_feature_policy_header,
+              report_only_permissions_policy_header,
+              *execution_context_->GetSecurityOrigin(),
+              report_only_feature_policy_logger,
+              report_only_permissions_policy_logger, execution_context_);
+
+  Vector<PolicyParserMessageBuffer::Message> messages;
+  messages.append_range(feature_policy_logger.GetMessages());
+  messages.append_range(report_only_feature_policy_logger.GetMessages());
+  messages.append_range(permissions_policy_logger.GetMessages());
+  messages.append_range(report_only_permissions_policy_logger.GetMessages());
 
   for (const auto& message : messages) {
     execution_context_->AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
@@ -181,11 +181,31 @@ void SecurityContextInit::ApplyPermissionsPolicy(
     container_policy = frame_policy.container_policy;
   }
 
+  if (RuntimeEnabledFeatures::BlockingFocusWithoutUserActivationEnabled(
+          execution_context_)) {
+    // Track when the focus-without-user-activation policy is declared via any
+    // source: iframe allow attribute, Permissions-Policy header, or
+    // Permissions-Policy-Report-Only header.
+    if (IsFeatureDeclared(network::mojom::PermissionsPolicyFeature::
+                              kFocusWithoutUserActivation,
+                          container_policy) ||
+        IsFeatureDeclared(network::mojom::PermissionsPolicyFeature::
+                              kFocusWithoutUserActivation,
+                          permissions_policy_header_) ||
+        IsFeatureDeclared(network::mojom::PermissionsPolicyFeature::
+                              kFocusWithoutUserActivation,
+                          parsed_report_only_permissions_policy_header)) {
+      UseCounter::Count(execution_context_,
+                        WebFeature::kFocusWithoutUserActivationPolicySet);
+    }
+  }
+
   // DocumentLoader applied the sandbox flags before calling this function, so
   // they are accessible here.
   auto sandbox_flags = execution_context_->GetSandboxFlags();
 
-  if (RuntimeEnabledFeatures::BlockingFocusWithoutUserActivationEnabled() &&
+  if (RuntimeEnabledFeatures::BlockingFocusWithoutUserActivationEnabled(
+          execution_context_) &&
       frame.Tree().Parent() &&
       (sandbox_flags & network::mojom::blink::WebSandboxFlags::kNavigation) !=
           network::mojom::blink::WebSandboxFlags::kNone) {
@@ -197,10 +217,12 @@ void SecurityContextInit::ApplyPermissionsPolicy(
   }
 
   if (isolated_app_policy) {
+    permissions_policy_header_ =
+        ParseIsolatedAppPermissionsPolicy(*isolated_app_policy);
     DCHECK(frame.IsOutermostMainFrame());
     std::unique_ptr<network::PermissionsPolicy> permissions_policy =
         network::PermissionsPolicy::CreateFromParsedPolicy(
-            permissions_policy_header_, isolated_app_policy, origin);
+            permissions_policy_header_, origin);
     execution_context_->GetSecurityContext().SetPermissionsPolicy(
         std::move(permissions_policy));
   } else {
@@ -222,7 +244,6 @@ void SecurityContextInit::ApplyPermissionsPolicy(
             network::PermissionsPolicy::CreateFromParsedPolicy(
                 fenced_frame_properties->parent_permissions_info()
                     ->parsed_permissions_policy,
-                /*base_policy=*/std::nullopt,
                 fenced_frame_properties->parent_permissions_info()->origin);
 
         permissions_policy =
@@ -233,8 +254,8 @@ void SecurityContextInit::ApplyPermissionsPolicy(
 
         // Warn if a disallowed permissions policy is attempted to be enabled.
         for (const auto& policy : container_policy) {
-          if (!base::Contains(network::kFencedFrameAllowedFeatures,
-                              policy.feature)) {
+          if (!std::ranges::contains(network::kFencedFrameAllowedFeatures,
+                                     policy.feature)) {
             bool is_isolated_context =
                 execution_context_ && execution_context_->IsIsolatedContext();
             execution_context_->AddConsoleMessage(
@@ -316,4 +337,23 @@ void SecurityContextInit::InitDocumentPolicyFrom(const SecurityContext& other) {
   security_context.SetReportOnlyDocumentPolicy(
       DocumentPolicy::CopyStateFrom(other.GetReportOnlyDocumentPolicy()));
 }
+
+network::ParsedPermissionsPolicy
+SecurityContextInit::ParseIsolatedAppPermissionsPolicy(
+    const Vector<IsolatedAppPermissionPolicyEntry>& isolated_app_policy) {
+  PolicyParserMessageBuffer iwa_policy_logger(
+      "Error with IWA Permissions-Policy: ");
+  auto base_policy = PermissionsPolicyParser::ParseIsolatedAppPermissionsPolicy(
+      isolated_app_policy, permissions_policy_header_,
+      *execution_context_->GetSecurityOrigin(), iwa_policy_logger,
+      execution_context_);
+
+  for (const auto& message : iwa_policy_logger.GetMessages()) {
+    execution_context_->AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
+        mojom::blink::ConsoleMessageSource::kSecurity, message.level,
+        message.content));
+  }
+  return base_policy;
+}
+
 }  // namespace blink

@@ -29,7 +29,8 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.params.BaseJUnit4RunnerDelegate;
@@ -40,11 +41,12 @@ import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features;
 import org.chromium.components.browser_ui.settings.BlankUiTestActivitySettingsTestRule;
 import org.chromium.components.browser_ui.settings.SettingsNavigation;
+import org.chromium.components.dom_distiller.core.DomDistillerFeatures;
 import org.chromium.content.browser.HostZoomMapImpl;
 import org.chromium.content.browser.HostZoomMapImplJni;
 import org.chromium.content_public.browser.BrowserContextHandle;
 import org.chromium.content_public.browser.ContentFeatureList;
-import org.chromium.ui.accessibility.AccessibilityState;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 import org.chromium.ui.widget.ChromeImageButton;
 
 import java.util.Arrays;
@@ -55,7 +57,8 @@ import java.util.List;
 @ParameterAnnotations.UseRunnerDelegate(BaseJUnit4RunnerDelegate.class)
 @Features.DisableFeatures({
     ContentFeatureList.ACCESSIBILITY_PAGE_ZOOM_V2,
-    ContentFeatureList.SMART_ZOOM
+    ContentFeatureList.SMART_ZOOM,
+    DomDistillerFeatures.READER_MODE_TOGGLE_LINKS,
 })
 public class AccessibilitySettingsPageZoomTest {
     @ParameterAnnotations.ClassParameter
@@ -63,6 +66,8 @@ public class AccessibilitySettingsPageZoomTest {
             Arrays.asList(
                     new ParameterSet().value(false).name("useSlider_false"),
                     new ParameterSet().value(true).name("useSlider_true"));
+
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     private final boolean mUseSlider;
     private AccessibilitySettings mAccessibilitySettings;
@@ -87,7 +92,6 @@ public class AccessibilitySettingsPageZoomTest {
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
         HostZoomMapImplJni.setInstanceForTesting(mHostZoomMapBridgeMock);
 
         when(mDelegate.getBrowserContextHandle()).thenReturn(mContextHandleMock);
@@ -101,7 +105,7 @@ public class AccessibilitySettingsPageZoomTest {
 
         // Enable screen reader to display all settings options.
         ThreadUtils.runOnUiThreadBlocking(
-                () -> AccessibilityState.setIsKnownScreenReaderEnabledForTesting(true));
+                () -> AccessibilityStateTestHelper.setIsKnownScreenReaderEnabledForTesting(true));
         when(mDelegate.shouldShowImageDescriptionsSetting()).thenReturn(true);
 
         mSettingsActivityTestRule.launchPreference(
@@ -117,7 +121,7 @@ public class AccessibilitySettingsPageZoomTest {
     @After
     public void tearDown() {
         ThreadUtils.runOnUiThreadBlocking(
-                () -> AccessibilityState.setIsKnownScreenReaderEnabledForTesting(false));
+                () -> AccessibilityStateTestHelper.setIsKnownScreenReaderEnabledForTesting(false));
         when(mDelegate.shouldShowImageDescriptionsSetting()).thenReturn(false);
     }
 

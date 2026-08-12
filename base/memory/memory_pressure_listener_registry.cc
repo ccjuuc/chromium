@@ -4,7 +4,7 @@
 
 #include "base/memory/memory_pressure_listener_registry.h"
 
-#include <atomic>
+#include <string_view>
 
 #include "base/feature_list.h"
 #include "base/memory/memory_pressure_level.h"
@@ -18,35 +18,63 @@
 
 namespace base {
 
+BASE_FEATURE(kSuppressMemoryListeners,
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || \
+    BUILDFLAG(IS_ANDROID)
+             FEATURE_ENABLED_BY_DEFAULT
+#else
+             FEATURE_DISABLED_BY_DEFAULT
+#endif
+);
+
 namespace {
 
 MemoryPressureListenerRegistry* g_memory_pressure_listener_registry = nullptr;
-
-std::atomic<bool> g_notifications_suppressed = false;
-
-BASE_FEATURE(kSuppressMemoryListeners, FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE_PARAM(std::string,
                    kSuppressMemoryListenersMask,
                    &kSuppressMemoryListeners,
                    "suppress_memory_listeners_mask",
-                   "");
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+                   "0200200202220200020020020002020020000002000000020"
+#elif BUILDFLAG(IS_CHROMEOS)
+                   "0000000200000200000000000000000000000000000000000"
+#elif BUILDFLAG(IS_ANDROID)
+                   // Only disable PrerenderHostRegistry.
+                   "0000000000000000000000000000000000000000200000000"
+#else
+                   ""
+#endif
+);
+
+bool IsListenerSuppressed(MemoryPressureListenerTag tag,
+                          MemoryPressureLevel memory_pressure_level,
+                          std::string_view mask) {
+  const size_t tag_index = static_cast<size_t>(tag);
+  if (tag_index >= mask.size()) {
+    return false;
+  }
+
+  const char mask_char = mask[tag_index];
+  switch (mask_char) {
+    case '0':
+      // '0' means do NOT suppress any notifications (always notify).
+      return false;
+
+    case '1':
+      // '1' means suppress only MODERATE notifications.
+      return memory_pressure_level == MEMORY_PRESSURE_LEVEL_MODERATE;
+
+    case '2':
+      // '2' means suppress all notifications.
+      return true;
+
+    default:
+      // Suppress all on unknown mask characters.
+      return true;
+  }
+}
 }  // namespace
-
-MemoryPressureListenerRegistry::MemoryPressureListenerRegistry() {
-  CHECK(!g_memory_pressure_listener_registry);
-  g_memory_pressure_listener_registry = this;
-}
-
-MemoryPressureListenerRegistry::~MemoryPressureListenerRegistry() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  listeners_.Notify(&MemoryPressureListenerRegistration::
-                        OnBeforeMemoryPressureListenerRegistryDestroyed);
-  CHECK(listeners_.empty());
-
-  CHECK_EQ(g_memory_pressure_listener_registry, this);
-  g_memory_pressure_listener_registry = nullptr;
-}
 
 // static
 bool MemoryPressureListenerRegistry::Exists() {
@@ -64,30 +92,33 @@ MemoryPressureListenerRegistry* MemoryPressureListenerRegistry::MaybeGet() {
   return g_memory_pressure_listener_registry;
 }
 
+MemoryPressureListenerRegistry::MemoryPressureListenerRegistry() {
+  CHECK(!g_memory_pressure_listener_registry);
+  g_memory_pressure_listener_registry = this;
+}
+
+MemoryPressureListenerRegistry::~MemoryPressureListenerRegistry() {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  listeners_.Notify(&MemoryPressureListenerRegistration::
+                        OnBeforeMemoryPressureListenerRegistryDestroyed);
+  CHECK(listeners_.empty());
+
+  CHECK_EQ(g_memory_pressure_listener_registry, this);
+  g_memory_pressure_listener_registry = nullptr;
+}
+
 // static
 void MemoryPressureListenerRegistry::NotifyMemoryPressure(
     MemoryPressureLevel memory_pressure_level) {
   CHECK(
       !SingleThreadTaskRunner::HasMainThreadDefault() ||
       SingleThreadTaskRunner::GetMainThreadDefault()->BelongsToCurrentThread());
-  TRACE_EVENT_INSTANT(
-      trace_event::MemoryDumpManager::kTraceCategory,
-      "MemoryPressureListener::NotifyMemoryPressure",
-      [&](perfetto::EventContext ctx) {
-        auto* event = ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>();
-        auto* data = event->set_chrome_memory_pressure_notification();
-        data->set_level(
-            trace_event::MemoryPressureLevelToTraceEnum(memory_pressure_level));
-      });
-  if (AreNotificationsSuppressed()) {
-    return;
-  }
 
   if (!Exists()) {
     return;
   }
 
-  Get().DoNotifyMemoryPressure(memory_pressure_level);
+  Get().SetMemoryPressureLevel(memory_pressure_level);
 }
 
 // static
@@ -115,6 +146,17 @@ void MemoryPressureListenerRegistry::AddObserver(
       !SingleThreadTaskRunner::HasMainThreadDefault() ||
       SingleThreadTaskRunner::GetMainThreadDefault()->BelongsToCurrentThread());
   listeners_.AddObserver(listener);
+
+  if (last_memory_pressure_level_ == MEMORY_PRESSURE_LEVEL_NONE) {
+    return;
+  }
+
+  if (!FeatureList::IsEnabled(kSuppressMemoryListeners) ||
+      !IsListenerSuppressed(listener->tag(), last_memory_pressure_level_,
+                            kSuppressMemoryListenersMask.Get())) {
+    listener->SetInitialMemoryPressureLevel(
+        PassKey<MemoryPressureListenerRegistry>(), last_memory_pressure_level_);
+  }
 }
 
 void MemoryPressureListenerRegistry::RemoveObserver(
@@ -123,55 +165,63 @@ void MemoryPressureListenerRegistry::RemoveObserver(
   listeners_.RemoveObserver(listener);
 }
 
-void MemoryPressureListenerRegistry::DoNotifyMemoryPressure(
-    MemoryPressureLevel memory_pressure_level) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  CHECK(
-      !SingleThreadTaskRunner::HasMainThreadDefault() ||
-      SingleThreadTaskRunner::GetMainThreadDefault()->BelongsToCurrentThread());
-  // Don't repeat MEMORY_PRESSURE_LEVEL_NONE notifications.
-  // TODO(464120006): Turn into a CHECK when this can no longer happen.
-  if (memory_pressure_level == MEMORY_PRESSURE_LEVEL_NONE &&
-      last_memory_pressure_level_ == MEMORY_PRESSURE_LEVEL_NONE) {
-    return;
-  }
-
-  last_memory_pressure_level_ = memory_pressure_level;
-  if (FeatureList::IsEnabled(kSuppressMemoryListeners)) {
-    auto mask = kSuppressMemoryListenersMask.Get();
-    for (auto& listener : listeners_) {
-      const size_t tag_index = static_cast<size_t>(listener.tag());
-      // Only Notify observers that aren't suppressed. An observer is suppressed
-      // if its tag is present in the mask, the value is not '0'. A value of '1'
-      // suppresses non critical levels, and a value of '2' supressess all
-      // levels.
-      if (tag_index >= mask.size() || mask[tag_index] == '0' ||
-          (mask[tag_index] == '1' &&
-           memory_pressure_level == MEMORY_PRESSURE_LEVEL_CRITICAL)) {
-        listener.Notify(memory_pressure_level);
-      }
-    }
-  } else {
-    listeners_.Notify(&MemoryPressureListenerRegistration::Notify,
-                      memory_pressure_level);
-  }
-}
-
 // static
 bool MemoryPressureListenerRegistry::AreNotificationsSuppressed() {
-  return g_notifications_suppressed.load(std::memory_order_acquire);
+  return Get().AreNotificationsSuppressedImpl();
 }
 
 // static
-void MemoryPressureListenerRegistry::SetNotificationsSuppressed(bool suppress) {
-  g_notifications_suppressed.store(suppress, std::memory_order_release);
+void MemoryPressureListenerRegistry::IncreaseNotificationSuppressionCount() {
+  // The registry and its listeners live on the process main thread and are
+  // guarded by `thread_checker_`. In the single-process model (e.g. Android
+  // WebView), the callers of this method (the renderer's MemoryPurgeManager via
+  // MemoryPressureSuppressionToken) run on the in-process renderer thread, not
+  // the process main thread. Marshal the mutation to the main thread so that
+  // all registry state changes happen on its owning thread.
+  auto* main_thread_task_runner =
+      SingleThreadTaskRunner::HasMainThreadDefault()
+          ? SingleThreadTaskRunner::GetMainThreadDefault().get()
+          : nullptr;
+  if (main_thread_task_runner &&
+      !main_thread_task_runner->BelongsToCurrentThread()) {
+    main_thread_task_runner->PostTask(
+        FROM_HERE, BindOnce(&MemoryPressureListenerRegistry::
+                                IncreaseNotificationSuppressionCount));
+    return;
+  }
+  if (auto* registry = MaybeGet()) {
+    registry->IncreaseNotificationSuppressionCountImpl();
+  }
+}
+
+// static
+void MemoryPressureListenerRegistry::DecreaseNotificationSuppressionCount() {
+  // See IncreaseNotificationSuppressionCount() above. Lifting suppression can
+  // synchronously call SendMemoryPressureNotification(), which iterates the
+  // listener list and dispatches into browser-thread-owned memory consumers.
+  // Running that off the main thread (as happens in the single-process model)
+  // races with concurrent registration/notification and can dereference a
+  // freed consumer pointer, so marshal to the main thread first.
+  auto* main_thread_task_runner =
+      SingleThreadTaskRunner::HasMainThreadDefault()
+          ? SingleThreadTaskRunner::GetMainThreadDefault().get()
+          : nullptr;
+  if (main_thread_task_runner &&
+      !main_thread_task_runner->BelongsToCurrentThread()) {
+    main_thread_task_runner->PostTask(
+        FROM_HERE, BindOnce(&MemoryPressureListenerRegistry::
+                                DecreaseNotificationSuppressionCount));
+    return;
+  }
+  if (auto* registry = MaybeGet()) {
+    registry->DecreaseNotificationSuppressionCountImpl();
+  }
 }
 
 // static
 void MemoryPressureListenerRegistry::SimulatePressureNotification(
     MemoryPressureLevel memory_pressure_level) {
-  // Notify all listeners even if regular pressure notifications are suppressed.
-  Get().DoNotifyMemoryPressure(memory_pressure_level);
+  Get().SimulatePressureNotificationImpl(memory_pressure_level);
 }
 
 // static
@@ -183,6 +233,128 @@ void MemoryPressureListenerRegistry::SimulatePressureNotificationAsync(
   SingleThreadTaskRunner::GetCurrentDefault()->PostTaskAndReply(
       FROM_HERE, BindOnce(&SimulatePressureNotification, memory_pressure_level),
       std::move(on_notification_sent_callback));
+}
+
+void MemoryPressureListenerRegistry::SetMemoryPressureLevel(
+    MemoryPressureLevel memory_pressure_level) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  CHECK(
+      !SingleThreadTaskRunner::HasMainThreadDefault() ||
+      SingleThreadTaskRunner::GetMainThreadDefault()->BelongsToCurrentThread());
+
+  // Don't repeat MEMORY_PRESSURE_LEVEL_NONE notifications.
+  // TODO(464120006): Turn into a CHECK when this can no longer happen.
+  if (memory_pressure_level == MEMORY_PRESSURE_LEVEL_NONE &&
+      last_memory_pressure_level_ == MEMORY_PRESSURE_LEVEL_NONE) {
+    return;
+  }
+
+  TRACE_COUNTER("memory_pressure", "MemoryPressureLevel",
+                static_cast<int>(memory_pressure_level));
+
+  TRACE_EVENT(
+      "memory_pressure",
+      "MemoryPressureListenerRegistry::SetMemoryPressureLevel",
+      [&](perfetto::EventContext ctx) {
+        auto* event = ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>();
+        auto* data = event->set_chrome_memory_pressure_notification();
+        data->set_level(
+            trace_event::MemoryPressureLevelToTraceEnum(memory_pressure_level));
+      });
+
+  last_memory_pressure_level_ = memory_pressure_level;
+
+  // Don't send a notification if they are suppressed.
+  if (AreNotificationsSuppressedImpl()) {
+    return;
+  }
+
+  SendMemoryPressureNotification(last_memory_pressure_level_);
+}
+
+void MemoryPressureListenerRegistry::SendMemoryPressureNotification(
+    MemoryPressureLevel memory_pressure_level) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  CHECK(
+      !SingleThreadTaskRunner::HasMainThreadDefault() ||
+      SingleThreadTaskRunner::GetMainThreadDefault()->BelongsToCurrentThread());
+
+  if (FeatureList::IsEnabled(kSuppressMemoryListeners)) {
+    std::string mask = kSuppressMemoryListenersMask.Get();
+    for (auto& listener : listeners_) {
+      if (!IsListenerSuppressed(listener.tag(), memory_pressure_level, mask)) {
+        listener.UpdateMemoryPressureLevel(
+            PassKey<MemoryPressureListenerRegistry>(), memory_pressure_level);
+      }
+    }
+  } else {
+    listeners_.Notify(
+        &MemoryPressureListenerRegistration::UpdateMemoryPressureLevel,
+        PassKey<MemoryPressureListenerRegistry>(), memory_pressure_level);
+  }
+}
+
+bool MemoryPressureListenerRegistry::AreNotificationsSuppressedImpl() {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  return notification_suppression_count_ > 0u;
+}
+
+void MemoryPressureListenerRegistry::
+    IncreaseNotificationSuppressionCountImpl() {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  ++notification_suppression_count_;
+
+  // If notifications suppression was just enabled, remember the current
+  // pressure level.
+  if (notification_suppression_count_ == 1u) {
+    simulated_memory_pressure_level_ = last_memory_pressure_level_;
+  }
+}
+
+void MemoryPressureListenerRegistry::
+    DecreaseNotificationSuppressionCountImpl() {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  CHECK_GT(notification_suppression_count_, 0u);
+  --notification_suppression_count_;
+
+  // If notifications suppression was just disabled, clear the simulated level.
+  if (notification_suppression_count_ == 0u) {
+    if (simulated_memory_pressure_level_.value() !=
+        last_memory_pressure_level_) {
+      SendMemoryPressureNotification(last_memory_pressure_level_);
+    }
+    simulated_memory_pressure_level_ = std::nullopt;
+  }
+}
+
+void MemoryPressureListenerRegistry::SimulatePressureNotificationImpl(
+    MemoryPressureLevel memory_pressure_level) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  if (AreNotificationsSuppressedImpl()) {
+    // Notifications are currently suppressed. Use the simulated level to drive
+    // notifications.
+    if (simulated_memory_pressure_level_ == memory_pressure_level) {
+      return;
+    }
+
+    simulated_memory_pressure_level_ = memory_pressure_level;
+    SendMemoryPressureNotification(memory_pressure_level);
+    return;
+  }
+
+  // When notifications are not suppressed, this does the same as
+  // `NotifyMemoryPressure()`.
+  SetMemoryPressureLevel(memory_pressure_level);
+}
+
+// MemoryPressureSuppressionToken ----------------------------------------------
+
+MemoryPressureSuppressionToken::MemoryPressureSuppressionToken() {
+  MemoryPressureListenerRegistry::IncreaseNotificationSuppressionCount();
+}
+
+MemoryPressureSuppressionToken::~MemoryPressureSuppressionToken() {
+  MemoryPressureListenerRegistry::DecreaseNotificationSuppressionCount();
 }
 
 }  // namespace base

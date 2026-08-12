@@ -11,6 +11,7 @@ import "services/viz/public/mojom/compositing/offset_tag.mojom";
 import "services/viz/public/mojom/compositing/frame_deadline.mojom";
 import "services/viz/public/mojom/compositing/frame_interval_inputs.mojom";
 import "services/viz/public/mojom/compositing/region_capture_bounds.mojom";
+import "services/viz/public/mojom/compositing/tracked_element_rects.mojom";
 import "services/viz/public/mojom/compositing/trees_in_viz_timing.mojom";
 import "services/viz/public/mojom/compositing/selection.mojom";
 import "services/viz/public/mojom/compositing/surface_id.mojom";
@@ -44,9 +45,7 @@ struct CompositorFrameMetadata {
   BeginFrameAck begin_frame_ack;
   uint32 frame_token;
   bool send_frame_token_to_embedder;
-  // TODO(crbug.com/40489779): This should be a `float?`.
-  bool top_controls_visible_height_set;
-  float top_controls_visible_height;
+  float? top_controls_visible_height;
 
   float min_page_scale_factor;
 
@@ -95,4 +94,7 @@ struct CompositorFrameMetadata {
   FrameIntervalInputs frame_interval_inputs;
 
   TreesInVizTiming trees_in_viz_timing;
+
+  // Tracked element rects for the frame.
+  TrackedElementRects tracked_element_rects;
 };

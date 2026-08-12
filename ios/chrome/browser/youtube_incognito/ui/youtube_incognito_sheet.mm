@@ -19,6 +19,7 @@
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/grit/ios_branded_strings.h"
 #import "ios/chrome/grit/ios_strings.h"
+#import "ui/base/device_form_factor.h"
 #import "ui/base/l10n/l10n_util_mac.h"
 
 namespace {
@@ -104,7 +105,7 @@ NSAttributedString* FormatHTMLListForUILabel(NSString* listString) {
 - (void)viewDidLoad {
   [super viewDidLoad];
   self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
-  self.view.backgroundColor = [UIColor systemBackgroundColor];
+  self.view.backgroundColor = [UIColor colorNamed:kBackgroundColor];
 
   _scrollView = [[UIScrollView alloc] init];
   _scrollView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -202,11 +203,11 @@ NSAttributedString* FormatHTMLListForUILabel(NSString* listString) {
 
   [self.view addSubview:primaryButton];
 
-  UIUserInterfaceIdiom idiom = [[UIDevice currentDevice] userInterfaceIdiom];
-
   // Only apply a width offset if the device is Ipad.
   CGFloat incognitoStackWidthOffset =
-      (idiom == UIUserInterfaceIdiomPad) ? kIncognitoStackWidthOffset : 0;
+      (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET)
+          ? kIncognitoStackWidthOffset
+          : 0;
 
   [NSLayoutConstraint activateConstraints:@[
     [_scrollView.topAnchor constraintEqualToAnchor:self.view.topAnchor],
@@ -321,10 +322,10 @@ NSAttributedString* FormatHTMLListForUILabel(NSString* listString) {
   chromeIconView.backgroundColor = [UIColor whiteColor];
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
   UIImage* chromeLogo = MakeSymbolMulticolor(
-      CustomSymbolWithPointSize(kMulticolorChromeballSymbol, kChromeLogoSize));
+      SymbolWithPointSize(SymbolMulticolorChromeball, kChromeLogoSize));
 #else
   UIImage* chromeLogo =
-      CustomSymbolWithPointSize(kChromeProductSymbol, kChromeLogoSize);
+      SymbolWithPointSize(SymbolChromeProduct, kChromeLogoSize);
 #endif  // BUILDFLAG(IOS_USE_BRANDED_ASSETS)
 
   UIImageView* chromeLogoView = [[UIImageView alloc] initWithImage:chromeLogo];
@@ -336,7 +337,7 @@ NSAttributedString* FormatHTMLListForUILabel(NSString* listString) {
   _icognitoIconView.layer.cornerRadius = kTitleContainerCornerRadius;
   _icognitoIconView.backgroundColor = LargeIncognitoBackgroundColor();
   UIImage* incognitoLogo =
-      CustomSymbolWithPointSize(kIncognitoSymbol, kIncognitoLogoSize);
+      SymbolWithPointSize(SymbolIncognito, kIncognitoLogoSize);
   UIImageView* incognitoLogoView =
       [[UIImageView alloc] initWithImage:incognitoLogo];
   incognitoLogoView.tintColor = LargeIncognitoForegroundColor();

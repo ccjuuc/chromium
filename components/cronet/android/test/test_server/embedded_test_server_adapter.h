@@ -5,7 +5,10 @@
 #ifndef COMPONENTS_CRONET_ANDROID_TEST_TEST_SERVER_EMBEDDED_TEST_SERVER_ADAPTER_H_
 #define COMPONENTS_CRONET_ANDROID_TEST_TEST_SERVER_EMBEDDED_TEST_SERVER_ADAPTER_H_
 
+#include <jni.h>
+
 #include <string>
+#include <vector>
 
 #include "net/test/embedded_test_server/embedded_test_server.h"
 
@@ -15,14 +18,21 @@ class FilePath;
 
 namespace cronet {
 
+struct NativeTestServerServerCertificateConfig;
 class NativeTestServerHandleRequestCallback;
 
 class EmbeddedTestServerAdapter {
  public:
-  EmbeddedTestServerAdapter(
-      const base::FilePath& test_files_root,
-      net::EmbeddedTestServer::Type server_type,
+  EmbeddedTestServerAdapter(const base::FilePath& test_files_root,
+                            net::EmbeddedTestServer::Type server_type);
+
+  void SetSSLConfigWithServerCertificate(
+      JNIEnv* env,
       net::EmbeddedTestServer::ServerCertificate server_certificate);
+
+  void SetSSLConfigWithServerCertificateConfig(
+      JNIEnv* env,
+      const NativeTestServerServerCertificateConfig& server_certificate_config);
 
   ~EmbeddedTestServerAdapter();
 
@@ -33,7 +43,7 @@ class EmbeddedTestServerAdapter {
   // This will run the server in default mode (HTTP/1 with no SSL)
   bool Start(JNIEnv* env);
 
-  void EnableConnectProxy(JNIEnv* env, std::vector<std::string>& urls);
+  void EnableConnectProxy(JNIEnv* env, const std::vector<std::string>& urls);
 
   // Returns port number of the server.
   int GetPort(JNIEnv* env);
@@ -93,7 +103,8 @@ class EmbeddedTestServerAdapter {
   // See net::test_server::EmbeddedTestServer::RegisterRequestHandler()
   void RegisterRequestHandler(
       JNIEnv* env,
-      std::unique_ptr<cronet::NativeTestServerHandleRequestCallback>& callback);
+      std::unique_ptr<cronet::NativeTestServerHandleRequestCallback>&&
+          callback);
 
  private:
   net::test_server::EmbeddedTestServer test_server;

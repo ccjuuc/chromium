@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "base/functional/callback_helpers.h"
 #include "chrome/browser/extensions/api/identity/launch_web_auth_flow_delegate.h"
 #include "chrome/browser/extensions/api/identity/web_auth_flow.h"
 #include "extensions/browser/extension_function.h"
@@ -27,6 +28,7 @@ class IdentityLaunchWebAuthFlowFunction : public ExtensionFunction,
   // exposure.
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused.
+  // LINT.IfChange(LaunchWebAuthFlowResult)
   enum class Error {
     kNone = 0,
     kOffTheRecord = 1,
@@ -38,13 +40,20 @@ class IdentityLaunchWebAuthFlowFunction : public ExtensionFunction,
     kCannotCreateWindow = 7,
     kInvalidURLScheme = 8,
     kBrowserContextShutDown = 9,
-    kMaxValue = kBrowserContextShutDown,
+    kWebAuthFlowInProgress = 10,
+    kMaxValue = kWebAuthFlowInProgress,
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:LaunchWebAuthFlowResult)
 
   IdentityLaunchWebAuthFlowFunction();
 
   // Tests may override extension_id.
-  void InitFinalRedirectURLDomainsForTest(const std::string& extension_id);
+  void InitFinalRedirectUrlsForTest(const std::string& extension_id);
+
+  static bool ShouldInterceptRedirect(
+      const GURL& redirect_url,
+      const GURL& default_origin,
+      const std::vector<GURL>& final_redirect_urls);
 
   WebAuthFlow* GetWebAuthFlowForTesting();
 
@@ -70,13 +79,15 @@ class IdentityLaunchWebAuthFlowFunction : public ExtensionFunction,
   void OnAuthFlowURLChange(const GURL& redirect_url) override;
   void OnAuthFlowTitleChange(const std::string& title) override {}
 
-  // Helper to initialize final URL prefix.
-  void InitFinalRedirectURLDomains(const std::string& extension_id,
-                                   const base::Value::List* redirect_urls);
+  // Helper to initialize allowed redirect URLs.
+  void InitFinalRedirectUrls(const std::string& extension_id,
+                             const base::ListValue* redirect_urls);
 
   std::unique_ptr<WebAuthFlow> auth_flow_;
-  std::vector<GURL> final_url_domains_;
+  GURL default_origin_;
+  std::vector<GURL> final_redirect_urls_;
   std::unique_ptr<LaunchWebAuthFlowDelegate> delegate_;
+  base::ScopedClosureRunner auth_flow_tracker_;
 };
 
 }  // namespace extensions

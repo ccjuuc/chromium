@@ -6,15 +6,16 @@
 #include "base/strings/string_util.h"
 #include "base/test/bind.h"
 #include "base/test/simple_test_clock.h"
-#include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/web_apps/web_apps_sync_test_base.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/generated_icon_fix_util.h"
-#include "chrome/browser/web_applications/manifest_update_manager.h"
 #include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
+#include "chrome/browser/web_applications/test/web_app_page_waiter.h"
 #include "chrome/browser/web_applications/test/web_app_test_observers.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
@@ -32,8 +33,6 @@ namespace web_app {
 namespace {
 using Param = std::tuple<bool /*wait_8_days*/,
                          bool /*sync_broken_icons*/,
-                         bool /*trusted_icons_enabled*/,
-                         bool /*predictable_app_updates_enabled*/,
                          SyncTest::SetupSyncMode>;
 }  // namespace
 
@@ -47,13 +46,7 @@ class SingleClientWebAppsSyncGeneratedIconFixSyncTest
         "_",
         std::get<1>(param.param) ? "SyncBrokenIcons" : "SyncNormalIcons",
         "_",
-        std::get<2>(param.param) ? "TrustedIconsEnabled"
-                                 : "TrustedIconsDisabled",
-        "_",
-        std::get<3>(param.param) ? "PredictableAppUpdatesEnabled"
-                                 : "PredictableAppUpdatesDisabled",
-        "_",
-        testing::PrintToString(std::get<4>(param.param)),
+        testing::PrintToString(std::get<2>(param.param)),
     });
   }
 
@@ -67,18 +60,6 @@ class SingleClientWebAppsSyncGeneratedIconFixSyncTest
       enabled_features.push_back(syncer::kReplaceSyncPromosWithSignInPromos);
     }
 
-    if (trusted_icons_enabled()) {
-      enabled_features.push_back(features::kWebAppUsePrimaryIcon);
-    } else {
-      disabled_features.push_back(features::kWebAppUsePrimaryIcon);
-    }
-
-    if (predictable_app_updates_enabled()) {
-      enabled_features.push_back(features::kWebAppPredictableAppUpdating);
-    } else {
-      disabled_features.push_back(features::kWebAppPredictableAppUpdating);
-    }
-
     feature_list_.InitWithFeatures(enabled_features, disabled_features);
   }
 
@@ -86,18 +67,12 @@ class SingleClientWebAppsSyncGeneratedIconFixSyncTest
 
   bool wait_8_days() const { return std::get<0>(GetParam()); }
   bool sync_broken_icons() const { return std::get<1>(GetParam()); }
-  bool trusted_icons_enabled() const { return std::get<2>(GetParam()); }
-  bool predictable_app_updates_enabled() const {
-    return std::get<3>(GetParam());
-  }
 
   WebAppProvider& provider(int index) {
     return *WebAppProvider::GetForTest(GetProfile(index));
   }
 
   void SetUpOnMainThread() override {
-    SyncTest::SetUpOnMainThread();
-    ASSERT_TRUE(SetupSync());
     embedded_test_server()->RegisterRequestHandler(base::BindLambdaForTesting(
         [this](const net::test_server::HttpRequest& request)
             -> std::unique_ptr<net::test_server::HttpResponse> {
@@ -110,8 +85,9 @@ class SingleClientWebAppsSyncGeneratedIconFixSyncTest
           }
           return nullptr;
         }));
-    embedded_test_server_handle_ =
-        embedded_test_server()->StartAndReturnHandle();
+
+    SyncTest::SetUpOnMainThread();
+    ASSERT_TRUE(SetupSync());
 
     // Since this is a single client test and there is only one provider to work
     // with, set the clock just once.
@@ -119,33 +95,32 @@ class SingleClientWebAppsSyncGeneratedIconFixSyncTest
   }
 
   void TearDownOnMainThread() override {
+    // SyncTest::TearDownOnMainThread() does not wait for the browser to be
+    // closed before closing the fake sync server. Do that here explicitly
+    // to prevent dangling pointers and state from leaking across sync tests.
+    CloseExistingBrowserSynchronously();
+    generated_icon_fix_util::SetNowForTesting(base::Time());
     web_app::test::UninstallAllWebApps(GetProfile(/*index=*/0));
     SyncTest::TearDownOnMainThread();
   }
 
   SyncTest::SetupSyncMode GetSetupSyncMode() const override {
-    return std::get<4>(GetParam());
+    return std::get<2>(GetParam());
   }
 
-  // Triggers a manifest update by launching the app or loading the update_url
-  // in a new browser tab as per the manifest update flow being tested.
-  void TriggerManifestUpdateAndAwaitCompletion(const webapps::AppId& app_id,
-                                               GURL update_url) {
+  // Triggers a manifest update by launching the app and waiting for the page
+  // to load and the manifest to be processed.
+  void TriggerManifestUpdateAndAwaitCompletion(const webapps::AppId& app_id) {
     clock_->SetNow(base::Time::Now());
-    base::test::TestFuture<void> future;
-    // TODO(http://crbug.com/452053908): This is no longer needed after we move
-    // waiting for page load to the update command.
-    provider(0).manifest_update_manager().SetLoadFinishedCallbackForTesting(
-        future.GetCallback());
-    if (predictable_app_updates_enabled() && trusted_icons_enabled()) {
-      Browser* app_browser =
-          LaunchWebAppBrowserAndWait(GetProfile(/*index=*/0), app_id);
-      CHECK(app_browser);
-    } else {
-      CHECK(AddTabAtIndexToBrowser(GetBrowser(0), 0, update_url,
-                                   ui::PAGE_TRANSITION_AUTO_TOPLEVEL));
-    }
-    EXPECT_TRUE(future.Wait());
+    CloseExistingBrowserSynchronously();
+    app_browser_ = LaunchWebAppBrowserAndWait(GetProfile(/*index=*/0), app_id);
+    CHECK(app_browser_);
+    GURL expected_url = provider(0).registrar_unsafe().GetAppLaunchUrl(app_id);
+    EXPECT_TRUE(test::WebAppPageWaiter(
+                    app_browser_->tab_strip_model()->GetActiveWebContents())
+                    .ExpectUrl(expected_url)
+                    .ExpectManifest()
+                    .WaitAndFlushCommands());
     provider(0).command_manager().AwaitAllCommandsCompleteForTesting();
   }
 
@@ -161,10 +136,19 @@ class SingleClientWebAppsSyncGeneratedIconFixSyncTest
   std::atomic<bool> serve_pngs_ = true;
 
  private:
+  void CloseExistingBrowserSynchronously() {
+    if (!app_browser_) {
+      return;
+    }
+    Browser* browser = app_browser_;
+    app_browser_ = nullptr;
+    CloseBrowserSynchronously(browser);
+  }
+
   web_app::OsIntegrationTestOverrideBlockingRegistration faked_os_integration_;
-  net::test_server::EmbeddedTestServerHandle embedded_test_server_handle_;
   std::unique_ptr<base::SimpleTestClock> clock_;
   base::test::ScopedFeatureList feature_list_;
+  raw_ptr<Browser> app_browser_ = nullptr;
 };
 
 IN_PROC_BROWSER_TEST_P(SingleClientWebAppsSyncGeneratedIconFixSyncTest,
@@ -266,7 +250,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientWebAppsSyncGeneratedIconFixSyncTest,
   }
 
   // Trigger manifest update, and verify that the icons were updated.
-  TriggerManifestUpdateAndAwaitCompletion(app_id, start_url);
+  TriggerManifestUpdateAndAwaitCompletion(app_id);
 
   // Check icons fixed in time window, provided trusted icons architecture is
   // not enabled. With trusted icons enabled, sync installs always install from
@@ -295,8 +279,6 @@ INSTANTIATE_TEST_SUITE_P(
     SingleClientWebAppsSyncGeneratedIconFixSyncTest,
     testing::Combine(/*wait_8_days=*/testing::Bool(),
                      /*sync_broken_icons=*/testing::Bool(),
-                     /*trusted_icons_enabled=*/testing::Bool(),
-                     /*predictable_app_updates_enabled=*/testing::Bool(),
                      GetSyncTestModes()),
     SingleClientWebAppsSyncGeneratedIconFixSyncTest::ParamToString);
 

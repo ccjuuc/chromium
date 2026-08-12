@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.autofill.settings;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
 
+import android.app.Activity;
 import android.content.Context;
 import android.os.Bundle;
 import android.text.Editable;
@@ -18,12 +19,9 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.AdapterView;
-import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageView;
-import android.widget.LinearLayout;
-import android.widget.Spinner;
 import android.widget.TextView;
 
 import androidx.annotation.VisibleForTesting;
@@ -46,15 +44,15 @@ import org.chromium.chrome.browser.autofill.PersonalDataManager;
 import org.chromium.chrome.browser.autofill.PersonalDataManager.CreditCard;
 import org.chromium.chrome.browser.autofill.PersonalDataManagerFactory;
 import org.chromium.chrome.browser.autofill.settings.CreditCardScannerManager.FieldType;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.init.AsyncInitializationActivity;
 import org.chromium.chrome.browser.settings.SettingsActivity;
-import org.chromium.components.autofill.AutofillProfile;
 import org.chromium.components.browser_ui.settings.SettingsFragment;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+import org.chromium.ui.KeyboardVisibilityDelegate;
 import org.chromium.ui.accessibility.AccessibilityState;
+import org.chromium.ui.base.IntentRequestTracker;
 import org.chromium.ui.text.EmptyTextWatcher;
 
-import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Locale;
 import java.util.regex.Matcher;
@@ -86,18 +84,12 @@ public class AutofillLocalCardEditor extends AutofillCreditCardEditor
     private TextInputLayout mNumberLabel;
     protected EditText mNumberText;
     private View mRequiredFieldsIndicatorLabel;
-    private TextView mExpirationLabelWhenCvcStorageEnabled;
-    private TextView mExpirationLabelWhenCvcStorageDisabled;
-    protected @MonotonicNonNull Spinner mExpirationMonth;
-    protected @MonotonicNonNull Spinner mExpirationYear;
+    private TextView mExpirationLabel;
     // Since the nickname field is optional, an empty nickname is a valid nickname.
     private boolean mIsValidNickname = true;
-    private boolean mIsCvcStorageEnabled;
-    private int mInitialExpirationMonthPos;
     protected @MonotonicNonNull EditText mExpirationDate;
     protected @MonotonicNonNull EditText mCvc;
     protected @MonotonicNonNull ImageView mCvcHintImage;
-    private int mInitialExpirationYearPos;
     protected Button mScanButton;
     private CreditCardScannerManager mScannerManager;
 
@@ -116,16 +108,12 @@ public class AutofillLocalCardEditor extends AutofillCreditCardEditor
             getActivity().getWindow().setAttributes(attributes);
         }
 
-        LayoutInflater localInflater = inflater;
-        if (ChromeFeatureList.sAndroidSettingsContainment.isEnabled()) {
-            // TODO(crbug.com/439911511): Set the style directly in the layout instead.
-            Context themedContext =
-                    new ContextThemeWrapper(
-                            getActivity(), R.style.ThemeOverlay_Chromium_Settings_InputFields);
-            localInflater = inflater.cloneInContext(themedContext);
-        }
+        Context themedContext =
+                new ContextThemeWrapper(
+                        getActivity(), R.style.ThemeOverlay_Chromium_Settings_InputFields);
+        inflater = inflater.cloneInContext(themedContext);
 
-        View v = super.onCreateView(localInflater, container, savedInstanceState);
+        View v = super.onCreateView(inflater, container, savedInstanceState);
 
         mDoneButton = v.findViewById(R.id.button_primary);
         mNameLabel = v.findViewById(R.id.credit_card_name_label);
@@ -135,9 +123,7 @@ public class AutofillLocalCardEditor extends AutofillCreditCardEditor
         mNumberLabel = v.findViewById(R.id.credit_card_number_label);
         mNumberText = v.findViewById(R.id.credit_card_number_edit);
         mRequiredFieldsIndicatorLabel = v.findViewById(R.id.required_fields_indicator_label);
-        mExpirationLabelWhenCvcStorageEnabled =
-                v.findViewById(R.id.credit_card_expiration_month_and_year_label);
-        mExpirationLabelWhenCvcStorageDisabled = v.findViewById(R.id.credit_card_expiration_label);
+        mExpirationLabel = v.findViewById(R.id.credit_card_expiration_month_and_year_label);
 
         if (isTalkBackEnabled()) {
             updateLabelsForTalkBackAccesibility();
@@ -165,59 +151,37 @@ public class AutofillLocalCardEditor extends AutofillCreditCardEditor
                         }
                     }
                 });
+        // Handles the issue of keyboard not appearing with #settings-single-activity flag.
+        // See crbug.com/505762141
+        mNumberText.setOnFocusChangeListener(
+                (view, hasFocus) -> {
+                    if (hasFocus) {
+                        KeyboardVisibilityDelegate.getInstance().showKeyboard(mNumberText);
+                    }
+                });
 
-        mIsCvcStorageEnabled =
-                ChromeFeatureList.isEnabled(ChromeFeatureList.AUTOFILL_ENABLE_CVC_STORAGE);
+        mExpirationDate = v.findViewById(R.id.expiration_month_and_year);
+        mExpirationDate.addTextChangedListener(expirationDateTextWatcher());
 
-        if (mIsCvcStorageEnabled) {
-            LinearLayout creditCardExpirationSpinnerContainer =
-                    v.findViewById(R.id.credit_card_expiration_spinner_container);
-            creditCardExpirationSpinnerContainer.setVisibility(View.GONE);
-            mExpirationLabelWhenCvcStorageDisabled.setVisibility(View.GONE);
+        View cvcLegacyContainer = v.findViewById(R.id.cvc_legacy_container);
+        TextInputLayout cvcMaterialLabel =
+                v.findViewById(R.id.credit_card_security_code_label_material);
 
-            mExpirationDate = v.findViewById(R.id.expiration_month_and_year);
-            mExpirationDate.addTextChangedListener(expirationDateTextWatcher());
+        cvcLegacyContainer.setVisibility(View.GONE);
+        cvcMaterialLabel.setVisibility(View.VISIBLE);
+        mCvc = NullUtil.assertNonNull(cvcMaterialLabel.getEditText());
 
-            View cvcLegacyContainer = v.findViewById(R.id.cvc_legacy_container);
-            TextInputLayout cvcMaterialLabel =
-                    v.findViewById(R.id.credit_card_security_code_label_material);
-
-            if (ChromeFeatureList.sAndroidSettingsContainment.isEnabled()) {
-                cvcLegacyContainer.setVisibility(View.GONE);
-                cvcMaterialLabel.setVisibility(View.VISIBLE);
-                mCvc = NullUtil.assertNonNull(cvcMaterialLabel.getEditText());
-            } else {
-                cvcLegacyContainer.setVisibility(View.VISIBLE);
-                cvcMaterialLabel.setVisibility(View.GONE);
-                mCvc = v.findViewById(R.id.cvc);
-            }
-            mCvcHintImage = v.findViewById(R.id.cvc_hint_image);
-            mNumberText.addTextChangedListener(creditCardNumberTextWatcherForCvc());
-        } else {
-            LinearLayout creditCardExpirationAndCvcLayout =
-                    v.findViewById(R.id.credit_card_expiration_and_cvc_layout);
-            creditCardExpirationAndCvcLayout.setVisibility(View.GONE);
-
-            mExpirationMonth = v.findViewById(R.id.autofill_credit_card_editor_month_spinner);
-            mExpirationYear = v.findViewById(R.id.autofill_credit_card_editor_year_spinner);
-
-            addSpinnerAdapters();
-        }
+        mCvcHintImage = v.findViewById(R.id.cvc_hint_image);
+        mNumberText.addTextChangedListener(creditCardNumberTextWatcherForCvc());
 
         mScanButton = v.findViewById(R.id.scan_card_button);
-        if (ChromeFeatureList.sAndroidSettingsContainment.isEnabled()) {
-            mScanButton.setBackgroundColor(
-                    SemanticColorUtils.getSettingsContainerBackgroundColor(
-                            mScanButton.getContext()));
-        }
+        mScanButton.setBackgroundColor(
+                SemanticColorUtils.getSettingsContainerBackgroundColor(mScanButton.getContext()));
         mScanButton.setVisibility(View.GONE);
         mScannerManager = new CreditCardScannerManager(this);
         if (mScannerManager.canScan()) {
             mScanButton.setVisibility(View.VISIBLE);
-            mScanButton.setOnClickListener(
-                    v1 ->
-                            mScannerManager.scan(
-                                    ((SettingsActivity) getActivity()).getIntentRequestTracker()));
+            mScanButton.setOnClickListener(v1 -> mScannerManager.scan(getIntentRequestTracker()));
         }
 
         addCardDataToEditFields();
@@ -246,8 +210,10 @@ public class AutofillLocalCardEditor extends AutofillCreditCardEditor
         String expirationLabelText =
                 mContext.getString(
                         R.string.autofill_credit_card_editor_expiration_date_content_description);
-        mExpirationLabelWhenCvcStorageEnabled.setText(expirationLabelText);
-        mExpirationLabelWhenCvcStorageDisabled.setText(expirationLabelText);
+        mExpirationLabel.setText(expirationLabelText);
+        mNicknameLabel.setHint(
+                mContext.getString(
+                        R.string.autofill_credit_card_editor_nickname_content_description));
     }
 
     @Override
@@ -264,17 +230,6 @@ public class AutofillLocalCardEditor extends AutofillCreditCardEditor
 
     @Override
     public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-        if (!mIsCvcStorageEnabled) {
-            // If the month spinner was updated.
-            if (parent == mExpirationMonth && position != mInitialExpirationMonthPos) {
-                mScannerManager.fieldEdited(FieldType.MONTH);
-            }
-
-            // If the year spinner was updated.
-            if (parent == mExpirationYear && position != mInitialExpirationYearPos) {
-                mScannerManager.fieldEdited(FieldType.YEAR);
-            }
-        }
         mScannerManager.fieldEdited(FieldType.UNKNOWN);
     }
 
@@ -286,33 +241,6 @@ public class AutofillLocalCardEditor extends AutofillCreditCardEditor
     public static void setObserverForTest(Callback<Fragment> observerForTest) {
         sObserverForTest = observerForTest;
         ResettersForTesting.register(() -> sObserverForTest = null);
-    }
-
-    @SuppressWarnings("DuplicateDateFormatField") // There's probably a bug here...
-    void addSpinnerAdapters() {
-        ArrayAdapter<CharSequence> adapter =
-                new ArrayAdapter<>(getActivity(), android.R.layout.simple_spinner_item);
-
-        // Populate the month dropdown.
-        Calendar calendar = Calendar.getInstance();
-        calendar.set(Calendar.DAY_OF_MONTH, 1);
-        SimpleDateFormat formatter = new SimpleDateFormat("MMMM (MM)", Locale.getDefault());
-
-        for (int month = 0; month < 12; month++) {
-            calendar.set(Calendar.MONTH, month);
-            adapter.add(formatter.format(calendar.getTime()));
-        }
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        assumeNonNull(mExpirationMonth).setAdapter(adapter);
-
-        // Populate the year dropdown.
-        adapter = new ArrayAdapter<>(getActivity(), android.R.layout.simple_spinner_item);
-        int initialYear = calendar.get(Calendar.YEAR);
-        for (int year = initialYear; year < initialYear + 10; year++) {
-            adapter.add(Integer.toString(year));
-        }
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        assumeNonNull(mExpirationYear).setAdapter(adapter);
     }
 
     private void addCardDataToEditFields() {
@@ -337,7 +265,6 @@ public class AutofillLocalCardEditor extends AutofillCreditCardEditor
         // Make the name label focusable in touch mode so that mNameText doesn't get focused.
         mNameLabel.setFocusableInTouchMode(true);
 
-        if (mIsCvcStorageEnabled) {
             assumeNonNull(mExpirationDate);
             assumeNonNull(mCvc);
             if (!mCard.getMonth().isEmpty() && !mCard.getYear().isEmpty()) {
@@ -348,36 +275,6 @@ public class AutofillLocalCardEditor extends AutofillCreditCardEditor
             if (!mCard.getCvc().isEmpty()) {
                 mCvc.setText(mCard.getCvc());
             }
-        } else {
-            assumeNonNull(mExpirationMonth);
-            assumeNonNull(mExpirationYear);
-            int monthAsInt = 1;
-            if (!mCard.getMonth().isEmpty()) {
-                monthAsInt = Integer.parseInt(mCard.getMonth());
-            }
-            mInitialExpirationMonthPos = monthAsInt - 1;
-            mExpirationMonth.setSelection(mInitialExpirationMonthPos);
-
-            mInitialExpirationYearPos = 0;
-            boolean foundYear = false;
-            for (int i = 0; i < mExpirationYear.getAdapter().getCount(); i++) {
-                if (mCard.getYear().equals(mExpirationYear.getAdapter().getItem(i))) {
-                    mInitialExpirationYearPos = i;
-                    foundYear = true;
-                    break;
-                }
-            }
-            // Maybe your card expired years ago? Add the card's year
-            // to the spinner adapter if not found.
-            if (!foundYear && !mCard.getYear().isEmpty()) {
-                @SuppressWarnings("unchecked")
-                ArrayAdapter<CharSequence> adapter =
-                        (ArrayAdapter<CharSequence>) mExpirationYear.getAdapter();
-                adapter.insert(mCard.getYear(), 0);
-                mInitialExpirationYearPos = 0;
-            }
-            mExpirationYear.setSelection(mInitialExpirationYearPos);
-        }
 
         if (!mCard.getNickname().isEmpty()) {
             mNicknameText.setText(mCard.getNickname());
@@ -401,10 +298,9 @@ public class AutofillLocalCardEditor extends AutofillCreditCardEditor
                 personalDataManager.getCreditCardForNumber(
                         removeSpaces(mNumberText.getText().toString()));
         card.setGUID(mGUID);
-        card.setOrigin(SETTINGS_ORIGIN);
+        card.setIsUserConfirmed(true);
         card.setName(mNameText.getText().toString().trim());
 
-        if (mIsCvcStorageEnabled) {
             assumeNonNull(mExpirationDate);
             assumeNonNull(mCvc);
             String expirationDate = mExpirationDate.getText().toString().trim();
@@ -429,36 +325,24 @@ public class AutofillLocalCardEditor extends AutofillCreditCardEditor
                         // Record when an existing card without CVC is edited and CVC was added.
                         RecordUserAction.record("AutofillCreditCardsEditedAndCvcWasAdded");
                     }
+            } else {
+                if (card.getCvc().isEmpty()) {
+                    // Record when an existing card with CVC is edited and CVC was removed.
+                    RecordUserAction.record("AutofillCreditCardsEditedAndCvcWasRemoved");
+                } else if (!card.getCvc().equals(mCard.getCvc())) {
+                    // Record when an existing card with CVC is edited and CVC was updated.
+                    RecordUserAction.record("AutofillCreditCardsEditedAndCvcWasUpdated");
                 } else {
-                    if (card.getCvc().isEmpty()) {
-                        // Record when an existing card with CVC is edited and CVC was removed.
-                        RecordUserAction.record("AutofillCreditCardsEditedAndCvcWasRemoved");
-                    } else if (!card.getCvc().equals(mCard.getCvc())) {
-                        // Record when an existing card with CVC is edited and CVC was updated.
-                        RecordUserAction.record("AutofillCreditCardsEditedAndCvcWasUpdated");
-                    } else {
-                        // Record when an existing card with CVC is edited and CVC was
-                        // unchanged.
-                        RecordUserAction.record("AutofillCreditCardsEditedAndCvcWasUnchanged");
-                    }
+                    // Record when an existing card with CVC is edited and CVC was
+                    // unchanged.
+                    RecordUserAction.record("AutofillCreditCardsEditedAndCvcWasUnchanged");
                 }
             }
-        } else {
-            assumeNonNull(mExpirationMonth);
-            assumeNonNull(mExpirationYear);
-            card.setMonth(String.valueOf(mExpirationMonth.getSelectedItemPosition() + 1));
-            card.setYear((String) mExpirationYear.getSelectedItem());
         }
 
-        if (ChromeFeatureList.sAndroidSettingsContainment.isEnabled()) {
-            card.setBillingAddressId(
-                    mSelectedBillingProfile != null ? mSelectedBillingProfile.getGUID() : "");
-        } else {
-            assert mBillingAddressSpinner != null;
-            AutofillProfile selectedProfile =
-                    (AutofillProfile) mBillingAddressSpinner.getSelectedItem();
-            card.setBillingAddressId(selectedProfile != null ? selectedProfile.getGUID() : "");
-        }
+        card.setBillingAddressId(
+                mSelectedBillingProfile != null ? mSelectedBillingProfile.getGUID() : "");
+
         card.setNickname(mNicknameText.getText().toString().trim());
 
         // Get the current card count before setting the new card.
@@ -489,14 +373,12 @@ public class AutofillLocalCardEditor extends AutofillCreditCardEditor
             return false;
         }
 
-        if (mIsCvcStorageEnabled) {
             assumeNonNull(mExpirationDate);
             if (!validateExpirationDateAndUpdateError(
                     mExpirationDate.getText().toString().trim())) {
                 mExpirationDate.requestFocus();
                 return false;
             }
-        }
 
         if (!mIsValidNickname) {
             mNicknameText.requestFocus();
@@ -540,17 +422,8 @@ public class AutofillLocalCardEditor extends AutofillCreditCardEditor
         mNameText.addTextChangedListener(this);
         mNumberText.addTextChangedListener(this);
 
-        if (mIsCvcStorageEnabled) {
             assumeNonNull(mExpirationDate).addTextChangedListener(this);
             assumeNonNull(mCvc).addTextChangedListener(this);
-        } else {
-            assumeNonNull(mExpirationMonth).setOnItemSelectedListener(this);
-            assumeNonNull(mExpirationYear).setOnItemSelectedListener(this);
-            // Listen for touch events for drop down menus. We clear the keyboard when user touches
-            // any of these fields.
-            mExpirationMonth.setOnTouchListener(this);
-            mExpirationYear.setOnTouchListener(this);
-        }
     }
 
     @Override
@@ -719,5 +592,19 @@ public class AutofillLocalCardEditor extends AutofillCreditCardEditor
     @Override
     public @SettingsFragment.AnimationType int getAnimationType() {
         return SettingsFragment.AnimationType.PROPERTY;
+    }
+
+    private IntentRequestTracker getIntentRequestTracker() {
+        Activity activity = getActivity();
+        // SettingsActivity is used on phones.
+        if (activity instanceof SettingsActivity settingsActivity) {
+            return settingsActivity.getIntentRequestTracker();
+        }
+        // ChromeTabbedActivity, which is-a AsyncInitializationActivity, is used on tablets and
+        // desktops for settings-in-a-tab.
+        if (activity instanceof AsyncInitializationActivity asyncActivity) {
+            return asyncActivity.getIntentRequestTracker();
+        }
+        throw new IllegalStateException("Unknown settings activity type");
     }
 }

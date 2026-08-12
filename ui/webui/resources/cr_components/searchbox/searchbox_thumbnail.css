@@ -44,24 +44,27 @@
   width: 100%;
 }
 
-/* TODO(b/328294049): Switch all hard-coded colors to CSS color tokens. */
 .overlay {
   position: absolute;
   justify-content: center;
   align-items: center;
-  background-color: #0000000D;
+  background-color: var(--color-searchbox-thumbnail-overlay-background);
   display: flex;
   width: 100%;
   height: 100%;
 }
 
-:host([is-deletable_]:hover) .overlay,
+:host([is-deletable]:hover) .overlay,
 :host(:focus-visible) .overlay {
   background-color: var(--color-searchbox-thumbnail-overlay);
 }
 
 #remove {
+  --cr-icon-button-fill-color: white;
   display: none;
+  margin-inline-start: 0;
+  margin-inline-end: 0;
+  background-color: transparent;
 }
 
 :host(:hover) #remove,
@@ -72,11 +75,4 @@
 :host(:focus-visible) #container {
   border: solid 3px var(--color-searchbox-thumbnail-border);
   box-sizing: border-box;
-}
-
-#remove {
-  margin-inline-start: 0px;
-  margin-inline-end: 0px;
-  --cr-icon-button-fill-color: white;
-  background-color: transparent;
 }

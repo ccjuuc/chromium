@@ -55,10 +55,10 @@ public class DownloadLocationPreferenceAdapter extends DownloadDirectoryAdapter
         DirectoryOption directoryOption = (DirectoryOption) getItem(position);
         if (directoryOption == null) return view;
 
-        TextView titleText = (TextView) view.findViewById(R.id.title);
+        TextView titleText = view.findViewById(R.id.title);
         titleText.setText(directoryOption.name);
 
-        TextView summaryText = (TextView) view.findViewById(R.id.description);
+        TextView summaryText = view.findViewById(R.id.description);
         if (isEnabled(position)) {
             String summary =
                     StringUtils.getAvailableBytesForUi(
@@ -94,9 +94,10 @@ public class DownloadLocationPreferenceAdapter extends DownloadDirectoryAdapter
         if (option == null) return;
 
         // Update the native pref, which persists the download directory selected by the user.
-        mDelegate
-                .getDownloadLocationHelper()
-                .setDownloadAndSaveFileDefaultDirectory(option.location);
+        DownloadLocationHelper helper = mDelegate.getDownloadLocationHelper();
+        if (helper != null) {
+            helper.setDownloadAndSaveFileDefaultDirectory(option.location);
+        }
 
         mSelectedPosition = selectedId;
 

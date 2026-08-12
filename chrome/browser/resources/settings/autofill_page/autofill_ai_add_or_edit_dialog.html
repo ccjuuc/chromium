@@ -1,4 +1,4 @@
-<style include="cr-shared-style settings-shared md-select">
+<style include="cr-shared-style settings-shared md-select cr-spinner-style">
   :host {
     white-space: nowrap;
   }
@@ -50,17 +50,93 @@
   #invalid-date-select-label {
     color: var(--cr-fallback-color-error);
   }
+
+  #footer {
+    margin-top: 8px;
+    white-space: initial;
+  }
+
+  .title-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+  }
+
+  .title-icon-container {
+    display: flex;
+    align-items: center;
+  }
+
+  .title-icon-container img {
+    height: 18px;
+    width: auto;
+    display: block;
+  }
+
+  .title-icon-container-standalone {
+    display: flex;
+    align-items: center;
+  }
+
+  .title-icon-container-standalone img {
+    height: 24px;
+    width: 24px;
+    display: block;
+  }
+
+  #validation-error-top {
+    color: var(--cr-fallback-color-error);
+    margin-bottom: 16px;
+  }
+
+  .spinner {
+    --cr-spinner-color: white;
+    --cr-spinner-size: 16px;
+    display: inline-block;
+    vertical-align: middle;
+  }
 </style>
-<cr-dialog id="dialog" close-text="$i18n{close}">
-  <div slot="title">[[dialogTitle]]</div>
+<cr-dialog id="dialog" close-text="$i18n{close}" on-cancel="onDialogCancel_">
+  <div slot="title" class="title-container">
+    <div class="title-text">[[dialogTitle]]</div>
+
+    <template is="dom-if" if="[[shouldShowWalletBranding_(entityInstance)]]">
+      <if expr="_google_chrome">
+        <template is="dom-if" if="[[isWalletPassBranding2026Enabled_]]">
+          <div class="title-icon-container-standalone">
+            <img srcset="[[getScaledSrcSet_('chrome://theme/IDR_AUTOFILL_GOOGLE_WALLET_ICON')]]"
+                alt=""
+                role="presentation">
+          </div>
+        </template>
+        <template is="dom-if" if="[[!isWalletPassBranding2026Enabled_]]">
+          <div class="title-icon-container">
+            <picture id="branding-image">
+              <source srcset="[[getScaledSrcSet_('chrome://theme/IDR_AUTOFILL_GOOGLE_WALLET_DARK')]]"
+                  media="(prefers-color-scheme: dark)">
+              <img srcset="[[getScaledSrcSet_('chrome://theme/IDR_AUTOFILL_GOOGLE_WALLET')]]"
+                  alt=""
+                  role="presentation">
+            </picture>
+          </div>
+        </template>
+      </if>
+    </template>
+  </div>
   <div slot="body">
+    <div id="validation-error-top" class="cr-form-field-label"
+        hidden="[[!validationError_]]">
+      [[validationError_]]
+    </div>
+
     <template is="dom-repeat" items="[[completeAttributeInstanceList_]]"
         as="attributeInstanceItem">
 
       <template is="dom-if" if="[[isDataType_(attributeInstanceItem,
           attributeTypeDataTypeEnum_.COUNTRY)]]">
         <label id="country-select-label" class="cr-form-field-label">
-          [[attributeInstanceItem.type.typeNameAsString]]
+          [[attributeInstanceItem.type.typeNameAsString]][[getRequiredIndicator_(attributeInstanceItem)]]
         </label>
         <select id="country-select" class="md-select"
             aria-label="[[attributeInstanceItem.type.typeNameAsString]]"
@@ -86,13 +162,13 @@
               class="cr-form-field-label"
               hidden="[[isDateInvalid_(attributeInstanceItem,
                   userClickedSaveButton_, attributeInstanceItem.*)]]">
-            [[attributeInstanceItem.type.typeNameAsString]]
+            [[attributeInstanceItem.type.typeNameAsString]][[getRequiredIndicator_(attributeInstanceItem)]]
           </label>
           <label id="invalid-date-select-label"
               class="cr-form-field-label"
               hidden="[[!isDateInvalid_(attributeInstanceItem,
                   userClickedSaveButton_, attributeInstanceItem.*)]]">
-            [[attributeInstanceItem.type.typeNameAsString]]
+            [[attributeInstanceItem.type.typeNameAsString]][[getRequiredIndicator_(attributeInstanceItem)]]
           </label>
 
           <select id="month-select" class="md-select"
@@ -170,27 +246,41 @@
       <template is="dom-if" if="[[isDataType_(attributeInstanceItem,
           attributeTypeDataTypeEnum_.STRING)]]">
         <cr-input id="attribute-instance-field" type="text"
-            label="[[attributeInstanceItem.type.typeNameAsString]]"
+            label="[[computeInputLabel_(attributeInstanceItem)]]"
             value="{{attributeInstanceItem.value}}"
             spellcheck="false" maxlength="1000"
-            on-input="onAttributeInstanceFieldInput_">
+            on-input="onAttributeInstanceFieldInput_"
+            invalid="[[isFieldInvalid_(attributeInstanceItem, validationError_)]]">
         </cr-input>
       </template>
 
     </template>
-
-    <div id="validation-error" class="cr-form-field-label"
-        hidden="[[!allFieldsAreEmpty_]]">
-      $i18n{autofillAiAddOrEditDialogValidationError}
+    <div id="footer"
+         hidden="[[shouldHideFooterText_(footerText_)]]"
+         inner-h-t-m-l="[[footerText_]]">
     </div>
   </div>
   <div slot="button-container">
-    <cr-button class="cancel-button" on-click="onCancelClick_">
+    <cr-button class="cancel-button" on-click="onCancelClick_"
+        disabled="[[saveInProgress_]]">
       $i18n{cancel}
     </cr-button>
     <cr-button class="action-button" disabled="[[!canSave_]]"
         on-click="onConfirmClick_">
-      $i18n{save}
+      <div class="spinner"
+         hidden="[[!shouldShowSpinner_(saveInProgress_)]]">
+      </div>
+
+      <span hidden="[[shouldShowSpinner_(saveInProgress_)]]">
+        <!--
+          When saving a Wallet private pass a consent is recorded that
+          includes the title of the confirmation button. Ensure that the correct
+          string ID is referenced in the backend code.
+        -->
+        <!-- LINT.IfChange -->
+        $i18n{save}
+        <!-- LINT.ThenChange(//chrome/browser/extensions/api/autofill_private/autofill_private_api.cc) -->
+      </span>
     </cr-button>
   </div>
 </cr-dialog>

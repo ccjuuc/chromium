@@ -20,16 +20,24 @@ include_rules = [
   "+chrome/browser/ash/multidevice_setup",
   "+chrome/browser/ash/profiles",
   "+chrome/browser/ash/secure_channel",
-  "+chrome/browser/notifications",
   "+chrome/browser/prefs",
   "+chrome/browser/profiles",
   "+chrome/browser/signin",
-  "+chrome/browser/ui/settings_window_manager_chromeos.h",
   "+chrome/browser/ui/webui/ash/multidevice_setup",
   "+chrome/common/chrome_switches.h",
   "+chrome/common/extensions",
-  "+chrome/common/pref_names.h",
-  "+chrome/common/webui_url_constants.h",
   "+chrome/grit",
   "+chrome/test/base",
 ]
+
+specific_include_rules = {
+  "smart_lock_notification_controller\\.cc": [
+    "+ui/message_center/message_center.h",
+  ],
+  "smart_lock_notification_controller_unittest\\.cc": [
+    "+ui/message_center/message_center.h",
+  ],
+  "smart_lock_service_unittest\\.cc": [
+    "+chrome/common/pref_names.h",
+  ],
+}

@@ -4,19 +4,27 @@
 
 #include "remoting/host/chromoting_host_services_server.h"
 
+#include <memory>
+
 #include "base/command_line.h"
 #include "base/location.h"
 #include "base/process/process.h"
 #include "base/process/process_handle.h"
-#include "base/run_loop.h"
+#include "base/task/thread_pool.h"
+#include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/bind.h"
 #include "base/test/mock_callback.h"
 #include "base/test/multiprocess_test.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "base/test/test_timeouts.h"
-#include "base/threading/thread.h"
+#include "base/threading/platform_thread.h"
+#include "base/threading/thread_restrictions.h"
+#include "components/named_mojo_ipc_server/connection_info.h"
+#include "components/named_mojo_ipc_server/endpoint_options.h"
 #include "components/named_mojo_ipc_server/named_mojo_ipc_server_client_util.h"
 #include "components/named_mojo_ipc_server/named_mojo_ipc_test_util.h"
+#include "mojo/public/c/system/invitation.h"
 #include "mojo/public/c/system/types.h"
 #include "mojo/public/cpp/platform/named_platform_channel.h"
 #include "mojo/public/cpp/platform/platform_channel_endpoint.h"
@@ -55,18 +63,15 @@ MULTIPROCESS_TEST_MAIN(ClientProcess) {
   // in BindChromotingHostServicesCallback.
   mojo::SimpleWatcher watcher(FROM_HERE,
                               mojo::SimpleWatcher::ArmingPolicy::AUTOMATIC);
-  base::RunLoop run_loop;
-  watcher.Watch(
-      message_pipe.get(), MOJO_HANDLE_SIGNAL_PEER_CLOSED,
-      MOJO_WATCH_CONDITION_SATISFIED,
-      base::BindLambdaForTesting(
-          [&](MojoResult watch_result, const mojo::HandleSignalsState& state) {
-            ASSERT_EQ(watch_result, MOJO_RESULT_OK);
-            if (state.peer_closed()) {
-              run_loop.Quit();
-            }
-          }));
-  run_loop.Run();
+  base::test::TestFuture<MojoResult, const mojo::HandleSignalsState&> future;
+  watcher.Watch(message_pipe.get(), MOJO_HANDLE_SIGNAL_PEER_CLOSED,
+                MOJO_WATCH_CONDITION_SATISFIED, future.GetRepeatingCallback());
+  auto [watch_result, state] = future.Take();
+  EXPECT_EQ(watch_result, MOJO_RESULT_OK);
+  EXPECT_TRUE(state.peer_closed());
+  if (watch_result != MOJO_RESULT_OK || !state.peer_closed()) {
+    return 1;
+  }
   return 0;
 }
 
@@ -80,14 +85,14 @@ class ChromotingHostServicesServerTest : public testing::Test {
  protected:
   base::Process LaunchClientProcess();
   int WaitForProcessExit(base::Process& process);
+  named_mojo_ipc_server::EndpointOptions CreateEndpointOptions() {
+    return ChromotingHostServicesServer::CreateEndpointOptions(server_name_);
+  }
 
   mojo::NamedPlatformChannel::ServerName server_name_ =
       named_mojo_ipc_server::test::GenerateRandomServerName();
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::MainThreadType::IO};
-
-  // Helper thread to wait for process exit without blocking the main thread.
-  base::Thread wait_for_process_exit_thread_{"wait_for_process_exit"};
 
   base::MockCallback<ChromotingHostServicesServer::Validator> mock_validator_;
   base::MockCallback<
@@ -98,14 +103,15 @@ class ChromotingHostServicesServerTest : public testing::Test {
 };
 
 ChromotingHostServicesServerTest::ChromotingHostServicesServerTest() {
-  wait_for_process_exit_thread_.StartWithOptions(
-      base::Thread::Options(base::MessagePumpType::IO, 0));
-
   server_.StartServer();
 }
 
 ChromotingHostServicesServerTest::~ChromotingHostServicesServerTest() {
   server_.StopServer();
+  // Server cleanup is thread-sensitive. We must flush the ThreadPool (where
+  // the connector lives) and then the main thread (where the delegate proxy
+  // lives) to ensure all cross-thread destruction tasks complete.
+  base::ThreadPoolInstance::Get()->FlushForTesting();
   task_environment_.RunUntilIdle();
 }
 
@@ -120,17 +126,28 @@ int ChromotingHostServicesServerTest::WaitForProcessExit(
     base::Process& process) {
   int exit_code;
   bool process_exited = false;
-  base::RunLoop wait_for_process_exit_loop;
-  wait_for_process_exit_thread_.task_runner()->PostTaskAndReply(
-      FROM_HERE, base::BindLambdaForTesting([&]() {
+  base::test::TestFuture<void> future;
+  base::ThreadPool::PostTaskAndReply(
+      FROM_HERE, {base::MayBlock()}, base::BindLambdaForTesting([&]() {
+        base::ScopedAllowBaseSyncPrimitivesForTesting allow_wait;
         process_exited = base::WaitForMultiprocessTestChildExit(
             process, TestTimeouts::action_timeout(), &exit_code);
       }),
-      wait_for_process_exit_loop.QuitClosure());
-  wait_for_process_exit_loop.Run();
+      future.GetCallback());
+  EXPECT_TRUE(future.Wait());
   process.Close();
   EXPECT_TRUE(process_exited);
   return exit_code;
+}
+
+TEST_F(ChromotingHostServicesServerTest,
+       EndpointOptions_ClientInvitationIsUntrusted) {
+  // Clients connecting to this server are external processes that share a
+  // process graph with the host's broker, so they must be invited as
+  // untrusted Mojo nodes.
+  named_mojo_ipc_server::EndpointOptions options = CreateEndpointOptions();
+  EXPECT_TRUE(options.extra_send_invitation_flags &
+              MOJO_SEND_INVITATION_FLAG_UNTRUSTED_PROCESS);
 }
 
 TEST_F(ChromotingHostServicesServerTest,
@@ -139,9 +156,10 @@ TEST_F(ChromotingHostServicesServerTest,
   EXPECT_CALL(mock_bind_callback_, Run(_, _))
       .WillOnce(
           [&](mojo::PendingReceiver<mojom::ChromotingHostServices> receiver,
-              base::ProcessId peer_pid) {
+              std::unique_ptr<named_mojo_ipc_server::ConnectionInfo>
+                  connection_info) {
             ASSERT_TRUE(receiver.is_valid());
-            ASSERT_NE(peer_pid, base::kNullProcessId);
+            ASSERT_NE(connection_info->pid, base::kNullProcessId);
           });
 
   base::Process client_process = LaunchClientProcess();

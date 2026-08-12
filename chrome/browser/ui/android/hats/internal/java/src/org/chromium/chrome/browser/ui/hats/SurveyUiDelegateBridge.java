@@ -14,6 +14,7 @@ import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
 import org.jni_zero.NativeMethods;
 
+import org.chromium.base.ResettersForTesting;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorSupplier;
@@ -22,14 +23,19 @@ import org.chromium.components.messages.MessageWrapper;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modelutil.PropertyModel;
 
-import java.util.function.Supplier;
-
 /** Glue code between C++ and Java for passing SurveyUiDelegate. */
 @JNINamespace("hats")
 @NullMarked
 class SurveyUiDelegateBridge implements SurveyUiDelegate {
+    private static @Nullable SurveyUiDelegate sDelegateForTesting;
+
     private final @Nullable SurveyUiDelegate mDelegate;
     private final long mNativePointer;
+
+    static void setDelegateForTesting(SurveyUiDelegate delegate) {
+        sDelegateForTesting = delegate;
+        ResettersForTesting.register(() -> sDelegateForTesting = null);
+    }
 
     /** Called from C++ to create a new SurveyUiDelegate using a message. */
     @CalledByNative
@@ -47,14 +53,15 @@ class SurveyUiDelegateBridge implements SurveyUiDelegate {
         populateDefaultValuesForMessageWrapper(messageWrapper, windowAndroid);
         // TODO(crbug.com/453007852): When ObservableSupplier<E> extends Supplier<@Nullable E>,
         // remove cast to Supplier<@Nullable Boolean>,
-        MessageSurveyUiDelegate delegate =
-                new MessageSurveyUiDelegate(
-                        messageWrapper.getMessageProperties(),
-                        messageDispatcher,
-                        tabModelSelector,
-                        (Supplier<@Nullable Boolean>)
-                                SurveyClientFactory.getInstance()
-                                        .getCrashUploadPermissionSupplier());
+        SurveyUiDelegate delegate = sDelegateForTesting;
+        if (delegate == null) {
+            delegate =
+                    new MessageSurveyUiDelegate(
+                            messageWrapper.getMessageProperties(),
+                            messageDispatcher,
+                            tabModelSelector,
+                            SurveyClientFactory.getInstance().getCrashUploadPermissionSupplier());
+        }
 
         return new SurveyUiDelegateBridge(nativePointer, delegate);
     }

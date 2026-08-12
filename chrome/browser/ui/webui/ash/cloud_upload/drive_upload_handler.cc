@@ -8,7 +8,6 @@
 #include "base/files/file_path.h"
 #include "base/i18n/message_formatter.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -44,16 +43,14 @@ const int kAlternateUrlPollInterval = 200;
 
 std::string GetTargetAppName(base::FilePath file_path) {
   const std::string extension = base::ToLowerASCII(file_path.FinalExtension());
-  if (base::Contains(file_manager::file_tasks::WordGroupExtensions(),
-                     extension)) {
+  if (file_manager::file_tasks::WordGroupExtensions().contains(extension)) {
     return l10n_util::GetStringUTF8(IDS_OFFICE_FILE_HANDLER_APP_GOOGLE_DOCS);
   }
-  if (base::Contains(file_manager::file_tasks::ExcelGroupExtensions(),
-                     extension)) {
+  if (file_manager::file_tasks::ExcelGroupExtensions().contains(extension)) {
     return l10n_util::GetStringUTF8(IDS_OFFICE_FILE_HANDLER_APP_GOOGLE_SHEETS);
   }
-  if (base::Contains(file_manager::file_tasks::PowerPointGroupExtensions(),
-                     extension)) {
+  if (file_manager::file_tasks::PowerPointGroupExtensions().contains(
+          extension)) {
     return l10n_util::GetStringUTF8(IDS_OFFICE_FILE_HANDLER_APP_GOOGLE_SLIDES);
   }
   return l10n_util::GetStringUTF8(IDS_OFFICE_FILE_HANDLER_APP_GOOGLE_DOCS);
@@ -130,7 +127,7 @@ void DriveUploadHandler::Run() {
   io_task_controller_observer_.Observe(io_task_controller_);
 
   // Observe Drive updates.
-  drive::DriveIntegrationService::Observer::Observe(drive_integration_service_);
+  drive_observation_.Observe(drive_integration_service_);
   drivefs::DriveFsHost::Observer::Observe(
       drive_integration_service_->GetDriveFsHost());
 
@@ -498,6 +495,10 @@ void DriveUploadHandler::OnDriveConnectionStatusChanged(
     LOG(ERROR) << "Lost connection to Drive during upload";
     OnEndCopy(OfficeFilesUploadResult::kNoConnection);
   }
+}
+
+void DriveUploadHandler::OnDriveIntegrationServiceDestroyed() {
+  drive_observation_.Reset();
 }
 
 void DriveUploadHandler::OnGetDriveMetadata(

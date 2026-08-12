@@ -53,6 +53,7 @@ import org.chromium.chrome.browser.multiwindow.MultiInstanceManager;
 import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
 import org.chromium.chrome.browser.preloading.PreloadingDataBridge;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.util.DefaultBrowserInfo;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandler;
 import org.chromium.components.browser_ui.widget.gesture.OnSystemNavigationObserver;
 import org.chromium.components.dom_distiller.core.DomDistillerUrlUtils;
@@ -67,6 +68,7 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.lang.ref.WeakReference;
 import java.util.function.Predicate;
 
 /** Responsible for navigating to new pages and going back to previous pages. */
@@ -124,6 +126,7 @@ public class CustomTabActivityNavigationController
     private final CustomTabObserver mCustomTabObserver;
     private final CloseButtonNavigator mCloseButtonNavigator;
     private final Activity mActivity;
+    private final ActivityLifecycleDispatcher mLifecycleDispatcher;
     private final SettableNonNullObservableSupplier<Boolean> mBackPressStateSupplier =
             ObservableSuppliers.createNonNull(false);
 
@@ -184,15 +187,28 @@ public class CustomTabActivityNavigationController
         mCustomTabObserver = customTabObserver;
         mCloseButtonNavigator = closeButtonNavigator;
         mActivity = activity;
+        mLifecycleDispatcher = lifecycleDispatcher;
 
         lifecycleDispatcher.register(this);
         mTabProvider.addObserver(mTabObserver);
         ChromeBrowserInitializer.getInstance()
-                .runNowOrAfterFullBrowserStarted(
-                        () -> {
-                            mBackPressStateSupplier.set(
-                                    mTabProvider.getTab() != null && !shouldDeferToOs());
-                        });
+                .runNowOrAfterFullBrowserStarted(createDeferredBackPressStateUpdate(this));
+    }
+
+    private static Runnable createDeferredBackPressStateUpdate(
+            CustomTabActivityNavigationController controller) {
+        WeakReference<CustomTabActivityNavigationController> weakController =
+                new WeakReference<>(controller);
+        return () -> {
+            CustomTabActivityNavigationController currentController = weakController.get();
+            if (currentController == null
+                    || currentController.mLifecycleDispatcher.isActivityFinishingOrDestroyed()) {
+                return;
+            }
+            currentController.mBackPressStateSupplier.set(
+                    currentController.mTabProvider.getTab() != null
+                            && !currentController.shouldDeferToOs());
+        };
     }
 
     /**
@@ -287,7 +303,7 @@ public class CustomTabActivityNavigationController
     private void finishActivity(@FinishReason int reason, boolean separateTask) {
         // If we're closing the last tab and it doesn't have beforeunload, just finish the Activity
         // manually. If we had called mTabController.closeTab() and waited for the Activity to close
-        // as a result we would have a visual glitch: https://crbug.com/1087108.
+        // as a result we would have a visual glitch: https://crbug.com/40694665.
         MinimizeAppAndCloseTabBackPressHandler.record(MinimizeAppAndCloseTabType.MINIMIZE_APP);
         MinimizeAppAndCloseTabBackPressHandler.recordForCustomTab(
                 MinimizeAppAndCloseTabType.MINIMIZE_APP, separateTask);
@@ -350,12 +366,13 @@ public class CustomTabActivityNavigationController
         assertUrlNotNullForOpenInBrowser(url, tab);
 
         Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        intent.addCategory(Intent.CATEGORY_BROWSABLE);
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         intent.putExtra(IntentHandler.EXTRA_FROM_OPEN_IN_BROWSER, true);
-        ResolveInfo resolveInfo = PackageManagerUtils.resolveDefaultWebBrowserActivity();
+        ResolveInfo resolveInfo = DefaultBrowserInfo.getDefaultWebBrowserInfo();
         if (resolveInfo != null) {
             intent.setPackage(resolveInfo.activityInfo.packageName);
-            // crbug.com/1265223
+            // crbug.com/40801270
             if (intent.resolveActivity(mActivity.getPackageManager()) == null) {
                 intent.setPackage(null);
             }
@@ -369,6 +386,11 @@ public class CustomTabActivityNavigationController
         boolean canFinishActivity =
                 !mIntentDataProvider.isTrustedWebActivity()
                         && !mIntentDataProvider.isWebappOrWebApkActivity();
+
+        // A TWA/Webapp/WebAPK can still hand the tab over to the browser when it is a
+        // separate child tab (e.g. created by target="_blank"): the tab model then falls
+        // back to the app's own tab, so the activity stays alive without finishing.
+        boolean canReparentKeepingActivity = !canFinishActivity && mTabController.getTabCount() > 1;
 
         willChromeHandleIntent |=
                 ExternalNavigationDelegateImpl.willChromeHandleIntent(intent, true);
@@ -392,33 +414,37 @@ public class CustomTabActivityNavigationController
             IntentUtils.addTrustedIntentExtras(intent);
             mActivity.startActivity(intent, startActivityOptions);
             finish(FinishReason.OPEN_IN_BROWSER);
-        } else if (canFinishActivity && willChromeHandleIntent) {
+        } else if ((canFinishActivity || canReparentKeepingActivity) && willChromeHandleIntent) {
             Activity adjacentActivity = MultiWindowUtils.getForegroundWindowActivity(mActivity);
-            if (adjacentActivity != null) {
+            if (canFinishActivity && adjacentActivity != null) {
                 openInAdjacentActivity(tab, adjacentActivity);
-            } else {
+            } else if (canFinishActivity) {
                 // Remove observer to not trigger finishing in onAllTabsClosed() callback - we'll
                 // use reparenting finish callback instead.
                 mTabProvider.removeObserver(mTabObserver);
                 mTabController.detachAndStartReparenting(
                         intent, startActivityOptions, () -> finish(REPARENTING));
+            } else {
+                // Move the in-app browser tab to the browser; the tab model swaps back to
+                // the web app's own tab, keeping the app and its state alive.
+                mTabController.detachAndStartReparenting(intent, startActivityOptions, () -> {});
             }
         } else {
             if (mIntentDataProvider.isInfoPage()) {
                 IntentHandler.startChromeLauncherActivityForTrustedIntent(intent);
             } else if (PackageManagerUtils.canResolveActivity(intent)) {
                 mActivity.startActivity(intent, startActivityOptions);
-                finish(FinishReason.OPEN_IN_BROWSER);
+                // When the tab is hosted by a TWA/Webapp/WebAPK, finishing the activity would
+                // close (and thus crash) the installed app, so only finish plain Custom Tabs.
+                if (canFinishActivity) {
+                    finish(FinishReason.OPEN_IN_BROWSER);
+                }
             } else {
                 Toast.makeText(
                                 mActivity,
                                 R.string.custom_tab_cant_perform_action_toast,
                                 Toast.LENGTH_LONG)
                         .show();
-                // TODO(crbug.com/384992232): Clean up the histogram.
-                boolean isPdf = tab.isNativePage() && assumeNonNull(tab.getNativePage()).isPdf();
-                RecordHistogram.recordBooleanHistogram(
-                        "Android.CustomTab.CannotOpenUrlInBrowser.IsPdf", isPdf);
                 openedInBrowser = false;
             }
         }

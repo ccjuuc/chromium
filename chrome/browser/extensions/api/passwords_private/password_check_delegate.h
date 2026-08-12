@@ -19,7 +19,6 @@
 #include "chrome/common/extensions/api/passwords_private.h"
 #include "components/password_manager/core/browser/leak_detection/bulk_leak_check.h"
 #include "components/password_manager/core/browser/leak_detection/bulk_leak_check_service_interface.h"
-#include "components/password_manager/core/browser/leak_detection/leak_detection_delegate_interface.h"
 #include "components/password_manager/core/browser/leak_detection/leak_detection_request_utils.h"
 #include "components/password_manager/core/browser/ui/bulk_leak_check_service_adapter.h"
 #include "components/password_manager/core/browser/ui/credential_ui_entry.h"
@@ -27,7 +26,11 @@
 #include "components/password_manager/core/browser/ui/insecure_credentials_manager.h"
 #include "components/password_manager/core/browser/ui/saved_passwords_presenter.h"
 
-class Profile;
+class PrefService;
+
+namespace password_manager {
+class BulkLeakCheckServiceInterface;
+}  // namespace password_manager
 
 namespace extensions {
 
@@ -46,10 +49,12 @@ class PasswordCheckDelegate
   using StartPasswordCheckCallback =
       PasswordsPrivateDelegate::StartPasswordCheckCallback;
 
-  PasswordCheckDelegate(Profile* profile,
-                        password_manager::SavedPasswordsPresenter* presenter,
-                        IdGenerator* id_generator,
-                        PasswordsPrivateEventRouter* event_router = nullptr);
+  PasswordCheckDelegate(
+      PrefService* prefs,
+      password_manager::BulkLeakCheckServiceInterface* bulk_leak_check_service,
+      password_manager::SavedPasswordsPresenter* presenter,
+      IdGenerator* id_generator,
+      PasswordsPrivateEventRouter* event_router = nullptr);
   PasswordCheckDelegate(const PasswordCheckDelegate&) = delete;
   PasswordCheckDelegate& operator=(const PasswordCheckDelegate&) = delete;
   ~PasswordCheckDelegate() override;
@@ -57,7 +62,7 @@ class PasswordCheckDelegate
   // Obtains information about insecure credentials. This includes the last
   // time a check was run, as well as all insecure credentials that are
   // present in the password store.
-  // TODO:(crbug.com/1350947) - Rename to GetInsecureCredentialsUiEntry.
+  // TODO:(crbug.com/40234318) - Rename to GetInsecureCredentialsUiEntry.
   std::vector<api::passwords_private::PasswordUiEntry> GetInsecureCredentials();
 
   // Returns a list of vectors. Each vector contains all credentials that share
@@ -129,8 +134,7 @@ class PasswordCheckDelegate
   api::passwords_private::PasswordUiEntry ConstructInsecureCredentialUiEntry(
       password_manager::CredentialUIEntry entry);
 
-  // Raw pointer to the underlying profile. Needs to outlive this instance.
-  raw_ptr<Profile> profile_ = nullptr;
+  const raw_ptr<PrefService> prefs_;
 
   // Used by `insecure_credentials_manager_` to obtain the list of saved
   // passwords.

@@ -12,6 +12,7 @@ import android.content.Intent;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.text.SpannableString;
+import android.text.SpannableStringBuilder;
 import android.text.style.ClickableSpan;
 import android.view.Menu;
 import android.view.MenuInflater;
@@ -21,12 +22,14 @@ import android.view.View;
 import androidx.annotation.VisibleForTesting;
 import androidx.preference.Preference;
 
+import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.Callback;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
@@ -40,9 +43,6 @@ import org.chromium.chrome.browser.prefetch.settings.PreloadPagesSettingsFragmen
 import org.chromium.chrome.browser.privacy.secure_dns.SecureDnsSettings;
 import org.chromium.chrome.browser.privacy_guide.PrivacyGuideFragment;
 import org.chromium.chrome.browser.privacy_guide.PrivacyGuideInteractions;
-import org.chromium.chrome.browser.privacy_sandbox.PrivacySandboxBridge;
-import org.chromium.chrome.browser.privacy_sandbox.PrivacySandboxReferrer;
-import org.chromium.chrome.browser.privacy_sandbox.PrivacySandboxSettingsBaseFragment;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.safe_browsing.AdvancedProtectionStatusManagerAndroidBridge;
 import org.chromium.chrome.browser.safe_browsing.metrics.SettingsAccessPoint;
@@ -69,14 +69,14 @@ import org.chromium.components.browser_ui.site_settings.SingleCategorySettings;
 import org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridge;
 import org.chromium.components.browser_ui.util.TraceEventVectorDrawableCompat;
 import org.chromium.components.content_settings.ContentSettingsType;
-import org.chromium.components.permissions.OsAdditionalSecurityPermissionProvider;
-import org.chromium.components.permissions.OsAdditionalSecurityPermissionUtil;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
+import org.chromium.components.safe_browsing.OsAdditionalSecurityProvider;
+import org.chromium.components.safe_browsing.OsAdditionalSecurityUtil;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 import org.chromium.ui.text.ChromeClickableSpan;
 import org.chromium.ui.text.SpanApplier;
+import org.chromium.ui.widget.ChromeBulletSpan;
 
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -95,16 +95,22 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
     private static final String PREF_SAFE_BROWSING = "safe_browsing";
     private static final String PREF_PASSWORD_LEAK_DETECTION = "password_leak_detection";
     private static final String PREF_SYNC_AND_SERVICES_LINK = "sync_and_services_link";
-    private static final String PREF_PRIVACY_SANDBOX = "privacy_sandbox";
     private static final String PREF_PRIVACY_GUIDE = "privacy_guide";
     private static final String PREF_INCOGNITO_LOCK = "incognito_lock";
     private static final String PREF_JAVASCRIPT_OPTIMIZER = "javascript_optimizer";
     @VisibleForTesting static final String PREF_DO_NOT_TRACK = "do_not_track";
     @VisibleForTesting static final String PREF_THIRD_PARTY_COOKIES = "third_party_cookies";
     private static final String PREF_ADVANCED_PROTECTION_INFO = "advanced_protection_info";
+    private static final int SECURE_CONNECTIONS_MESSAGE_ID =
+            R.string.settings_privacy_and_security_advanced_protection_secure_connections_bullet;
+    private static final int JAVASCRIPT_OPTIMIZER_MESSAGE_ID =
+            R.string.settings_privacy_and_security_advanced_protection_javascript_optimizer_bullet;
+    private static final int WEB_GPU_DISABLED_MESSAGE_ID =
+            R.string.settings_privacy_and_security_advanced_protection_webgpu_disabled_bullet;
 
     private IncognitoLockSettings mIncognitoLockSettings;
-    private final ObservableSupplierImpl<String> mPageTitle = new ObservableSupplierImpl<>();
+    private final SettableMonotonicObservableSupplier<String> mPageTitle =
+            ObservableSuppliers.createMonotonic();
 
     /** Called when the advanced-protection javascript-optimizer-settings link is clicked. */
     @VisibleForTesting
@@ -112,7 +118,8 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
         Bundle extras = new Bundle();
         extras.putString(SingleCategorySettings.EXTRA_CATEGORY, "javascript_optimizer");
         SettingsNavigation navigation = SettingsNavigationFactory.createSettingsNavigation();
-        navigation.startSettings(context, SingleCategorySettings.class, extras);
+        navigation.startSettings(
+                context, SingleCategorySettings.class, extras, /* addToBackStack= */ true);
     }
 
     /** Creates {@link SpanInfo} for link which has the passed-in tag. */
@@ -134,22 +141,6 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
 
         SettingsUtils.addPreferencesFromResource(this, R.xml.privacy_preferences);
 
-        Preference sandboxPreference = findPreference(PREF_PRIVACY_SANDBOX);
-        // Overwrite the click listener to pass a correct referrer to the fragment.
-        sandboxPreference.setOnPreferenceClickListener(
-                preference -> {
-                    PrivacySandboxSettingsBaseFragment.launchPrivacySandboxSettings(
-                            getContext(), PrivacySandboxReferrer.PRIVACY_SETTINGS);
-                    return true;
-                });
-
-        PrivacySandboxBridge privacySandboxBridge = new PrivacySandboxBridge(getProfile());
-        boolean restricted = isRestrictedSandboxEnabled(privacySandboxBridge);
-        sandboxPreference.setSummary(
-                getContext().getString(getPrivacySandboxSummaryId(restricted)));
-        if (shouldHideSandboxPref(privacySandboxBridge)) {
-            getPreferenceScreen().removePreference(sandboxPreference);
-        }
         Preference privacyGuidePreference = findPreference(PREF_PRIVACY_GUIDE);
         // Record the launch of PG from the S&P link-row entry point
         privacyGuidePreference.setOnPreferenceClickListener(
@@ -166,7 +157,11 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
                     // In details it is still a part of SettingsActivity, it will let user find
                     // it is an independent flow.
                     SettingsNavigationFactory.createSettingsNavigation()
-                            .startSettings(getActivity(), PrivacyGuideFragment.class);
+                            .startSettings(
+                                    getActivity(),
+                                    PrivacyGuideFragment.class,
+                                    /* fragmentArgs= */ null,
+                                    /* addToBackStack= */ true);
                     return true;
                 });
         if (getProfile().isChild()
@@ -286,26 +281,6 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
         updatePreferences();
     }
 
-    private static boolean isRestrictedSandboxEnabled(PrivacySandboxBridge bridge) {
-        return bridge.isPrivacySandboxRestricted() && bridge.isRestrictedNoticeEnabled();
-    }
-
-    private static int getPrivacySandboxSummaryId(boolean restricted) {
-        if (restricted) {
-            // Update the summary to one that describes only ad measurement if ad-measurement
-            // is available to restricted users.
-            return R.string.settings_ad_privacy_restricted_link_row_sub_label;
-        } else {
-            return R.string.ad_privacy_link_row_sub_label;
-        }
-    }
-
-    private static boolean shouldHideSandboxPref(PrivacySandboxBridge bridge) {
-        // Hide the Privacy Sandbox if it is restricted and ad-measurement is not available to
-        // restricted users.
-        return bridge.isPrivacySandboxRestricted() && !bridge.isRestrictedNoticeEnabled();
-    }
-
     private static boolean isAdvancedProtectionEnabled() {
         return AdvancedProtectionStatusManagerAndroidBridge.isUnderAdvancedProtection();
     }
@@ -319,7 +294,7 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
     }
 
     @Override
-    public ObservableSupplier<String> getPageTitle() {
+    public MonotonicObservableSupplier<String> getPageTitle() {
         return mPageTitle;
     }
 
@@ -329,7 +304,11 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
                     @Override
                     public void onClick(View view) {
                         SettingsNavigationFactory.createSettingsNavigation()
-                                .startSettings(getActivity(), GoogleServicesSettings.class);
+                                .startSettings(
+                                        getActivity(),
+                                        GoogleServicesSettings.class,
+                                        /* fragmentArgs= */ null,
+                                        /* addToBackStack= */ true);
                     }
                 };
 
@@ -341,11 +320,12 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
                                 .startSettings(
                                         getActivity(),
                                         ManageSyncSettings.class,
-                                        ManageSyncSettings.createArguments(false));
+                                        /* fragmentArgs= */ null,
+                                        /* addToBackStack= */ true);
                     }
                 };
         if (assumeNonNull(IdentityServicesProvider.get().getIdentityManager(getProfile()))
-                        .getPrimaryAccountInfo(ConsentLevel.SIGNIN)
+                        .getPrimaryAccountInfo()
                 == null) {
             // User is signed out, show the string with one link to "Google Services".
             return SpanApplier.applySpans(
@@ -484,12 +464,13 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
             return;
         }
 
-        @Nullable OsAdditionalSecurityPermissionProvider additionalSecurityProvider =
-                OsAdditionalSecurityPermissionUtil.getProviderInstance();
+        @Nullable OsAdditionalSecurityProvider additionalSecurityProvider =
+                OsAdditionalSecurityUtil.getProviderInstance();
         if (additionalSecurityProvider == null) return;
 
         @Nullable Drawable additionalSecurityIcon =
-                additionalSecurityProvider.getColorfulAdvancedProtectionIcon(getContext());
+                ApiCompatibilityUtils.getDrawable(
+                        context.getResources(), R.drawable.gshield_colorful);
 
         Consumer<Context> androidAdvancedProtectionLinkAction =
                 (linkContext) -> {
@@ -503,24 +484,40 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
                 (linkContext) -> {
                     PrivacySettings.onJavascriptOptimizerLinkClicked(linkContext);
                 };
-        SpanApplier.SpanInfo[] spans =
-                new SpanApplier.SpanInfo[] {
-                    createLink(
-                            context,
-                            "link_android_advanced_protection",
-                            androidAdvancedProtectionLinkAction),
-                    createLink(context, "link_javascript_optimizer", javascriptOptimizerLinkAction)
-                };
         String advancedProtectionSectionMessageTemplate =
                 getString(
                         R.string.settings_privacy_and_security_advanced_protection_section_message);
-        SpannableString span =
-                SpanApplier.applySpans(advancedProtectionSectionMessageTemplate, spans);
+        SpannableStringBuilder spannedText =
+                new SpannableStringBuilder(
+                        SpanApplier.applySpans(
+                                advancedProtectionSectionMessageTemplate,
+                                createLink(
+                                        context,
+                                        "link_android_advanced_protection",
+                                        androidAdvancedProtectionLinkAction)));
+
+        appendBullet(spannedText, context, getString(SECURE_CONNECTIONS_MESSAGE_ID));
+
+        appendBullet(
+                spannedText,
+                context,
+                SpanApplier.applySpans(
+                        getString(JAVASCRIPT_OPTIMIZER_MESSAGE_ID),
+                        createLink(
+                                context,
+                                "link_javascript_optimizer",
+                                javascriptOptimizerLinkAction)));
+
+        if (shouldIncludeWebGPUDescription()) {
+            appendBullet(spannedText, context, getString(WEB_GPU_DISABLED_MESSAGE_ID));
+        }
 
         PropertyModel advancedProtectionInfoModel =
                 new PropertyModel.Builder(SafetyHubModuleProperties.ALL_KEYS)
                         .with(SafetyHubModuleProperties.ICON, additionalSecurityIcon)
-                        .with(SafetyHubModuleProperties.SUMMARY, span)
+                        .with(
+                                SafetyHubModuleProperties.SUMMARY,
+                                SpannableString.valueOf(spannedText))
                         .build();
         PropertyModelChangeProcessor.create(
                 advancedProtectionInfoModel,
@@ -529,9 +526,13 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
     }
 
     private static boolean shouldHideAdvancedProtectionInfoPref() {
-        @Nullable OsAdditionalSecurityPermissionProvider additionalSecurityProvider =
-                OsAdditionalSecurityPermissionUtil.getProviderInstance();
+        @Nullable OsAdditionalSecurityProvider additionalSecurityProvider =
+                OsAdditionalSecurityUtil.getProviderInstance();
         return !shouldShowAdvancedProtectionInfo() || additionalSecurityProvider == null;
+    }
+
+    private boolean shouldIncludeWebGPUDescription() {
+        return ChromeFeatureList.isEnabled(ChromeFeatureList.AAPM_BLOCKS_WEB_GPU);
     }
 
     /** Returns whether the advanced-protection section should be shown. */
@@ -548,11 +549,17 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
                 || ((System.currentTimeMillis() - updateTimeMs) < TimeUnit.DAYS.toMillis(90));
     }
 
+    private static void appendBullet(
+            SpannableStringBuilder builder, Context context, CharSequence text) {
+        builder.append("\n");
+        builder.append(text, new ChromeBulletSpan(context), 0);
+    }
+
     @Override
     public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
         menu.clear();
         MenuItem help =
-                menu.add(Menu.NONE, R.id.menu_id_targeted_help, Menu.NONE, R.string.menu_help);
+                menu.add(Menu.NONE, R.id.menu_id_targeted_help, Menu.NONE, getHelpMenuStringRes());
         help.setIcon(
                 TraceEventVectorDrawableCompat.create(
                         getResources(), R.drawable.ic_help_24dp, getActivity().getTheme()));
@@ -593,38 +600,28 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
                 @Override
                 public void updateDynamicPreferences(
                         Context context, SettingsIndexData indexData, Profile profile) {
-                    PrivacySandboxBridge bridge = new PrivacySandboxBridge(profile);
-                    boolean restricted = isRestrictedSandboxEnabled(bridge);
-                    var summaryId = getPrivacySandboxSummaryId(restricted);
-                    updateEntrySummaryForKey(
-                            PREF_PRIVACY_SANDBOX, context.getString(summaryId), indexData);
+                    String frag = PrivacySettings.class.getName();
 
-                    if (shouldHideSandboxPref(bridge)) {
-                        indexData.removeEntry(getUniqueId(PREF_PRIVACY_SANDBOX));
-                    }
+                    // Remove the summary text as it will be replaced by current status.
+                    indexData.updateEntrySummaryForKey(
+                            frag, PREF_PRELOAD_PAGES, /* summaryId= */ 0);
 
                     if (ChromeFeatureList.isEnabled(ChromeFeatureList.HTTPS_FIRST_BALANCED_MODE)) {
                         indexData.removeEntry(getUniqueId(PREF_HTTPS_FIRST_MODE_LEGACY));
                     } else {
                         indexData.removeEntry(getUniqueId(PREF_HTTPS_FIRST_MODE));
                         var textId = httpsFirstLegacySummaryId(isAdvancedProtectionEnabled());
-                        updateEntrySummaryForKey(
-                                PREF_HTTPS_FIRST_MODE_LEGACY, context.getString(textId), indexData);
+                        indexData.updateEntrySummaryForKey(
+                                frag, PREF_HTTPS_FIRST_MODE_LEGACY, textId);
                     }
 
                     if (shouldHideAdvancedProtectionInfoPref()) {
                         indexData.removeEntry(getUniqueId(PREF_ADVANCED_PROTECTION_INFO));
                     }
-                }
 
-                private void updateEntrySummaryForKey(
-                        String key, String summary, SettingsIndexData indexData) {
-                    var entry = indexData.getEntry(getUniqueId(key));
-                    indexData.updateEntry(
-                            getUniqueId(key),
-                            new SettingsIndexData.Entry.Builder(assumeNonNull(entry))
-                                    .setSummary(summary)
-                                    .build());
+                    // The summary in 'Safe Browsing' is a template string. Removes it.
+                    indexData.updateEntrySummaryForKey(
+                            frag, PREF_SAFE_BROWSING, /* summaryId= */ 0);
                 }
             };
 }

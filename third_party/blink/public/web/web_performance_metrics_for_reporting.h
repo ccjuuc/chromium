@@ -5,6 +5,8 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_PERFORMANCE_METRICS_FOR_REPORTING_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_PERFORMANCE_METRICS_FOR_REPORTING_H_
 
+#include <unicode/uscript.h>
+
 #include <array>
 #include <optional>
 #include <vector>
@@ -12,6 +14,7 @@
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
 #include "third_party/blink/public/common/performance/largest_contentful_paint_type.h"
+#include "third_party/blink/public/mojom/navigation/navigation_type_for_navigation_api.mojom-shared.h"
 #include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/platform/web_private_ptr.h"
 #include "third_party/blink/public/platform/web_url_request.h"
@@ -39,15 +42,40 @@ struct LargestContentfulPaintDetailsForReporting {
   std::optional<WebURLRequest::Priority> image_request_priority = std::nullopt;
   // The unclamped paint time of the largest content (image/text).
   std::optional<base::TimeTicks> merged_unclamped_paint_time = std::nullopt;
+  // The offset of the corresponding soft navigation; 0 otherwise.
+  // See SoftNavigationMetricsForReporting.soft_navigation_offset.
+  uint64_t soft_navigation_offset = 0;
+};
+
+struct ScriptFontFallbackDetailsForReporting {
+  // The Unicode script code (UScriptCode) of the character.
+  UScriptCode script_code;
+  // The number of fallback events for this script.
+  size_t fallback_count;
+  // Whether the fallback was for an Emoji.
+  bool is_emoji;
 };
 
 struct SoftNavigationMetricsForReporting {
-  uint64_t count = 0;
+  // A unique number assigned to this soft navigation from the start of the
+  // page load, 1, 2, 3, ... n. For the last soft navigation, it is synonymous
+  // with a count of the soft navigations for the page load.
+  uint64_t soft_navigation_offset = 0;
+
+  // The navigation start (time origin) relative to the start of the
+  // navigation. Note that this field is initially sent with an absolute time,
+  // and only MetricsRenderFrameObserver::DidObserveSoftNavigation makes it
+  // relative to navigation start.
   base::TimeDelta start_time;
-  base::TimeDelta first_contentful_paint;
-  // For the mechanism that generates these ids, see
-  // third_party/blink/renderer/core/timing/navigation_id_generator.h.
-  uint32_t navigation_id = 0;
+
+  // The timestamp that we use for slicing the performance timeline. This is
+  // only a Chrome-internal mechanism and never recorded to UKM.
+  base::TimeTicks soft_navigation_slicing_time;
+
+  // The type of soft navigation, set based on the type of same document
+  // navigation.
+  mojom::NavigationTypeForNavigationApi navigation_type =
+      mojom::NavigationTypeForNavigationApi::kPush;
 
   // Identifies the same document navigation for the initial URL change.
   // This allows us to map to the UKM Source ID in the browser side,
@@ -147,6 +175,16 @@ class BLINK_EXPORT WebPerformanceMetricsForReporting {
   std::optional<base::TimeDelta> UserTimingMarkFullyLoaded() const;
   std::optional<base::TimeDelta> UserTimingMarkFullyVisible() const;
   std::optional<base::TimeDelta> UserTimingMarkInteractive() const;
+
+  base::TimeDelta SystemFallbackFontTime() const;
+  uint32_t SystemFallbackFontCount() const;
+  base::TimeDelta SystemFallbackFontInitialDuration() const;
+  uint32_t ShapeCacheHitCount() const;
+  uint32_t ShapeCacheMissCount() const;
+
+  std::vector<ScriptFontFallbackDetailsForReporting>
+  GetScriptFontFallbackDetails() const;
+
   std::optional<std::tuple<std::string, base::TimeDelta>> CustomUserTimingMark()
       const;
 

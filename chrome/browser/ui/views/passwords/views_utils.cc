@@ -4,20 +4,22 @@
 
 #include "chrome/browser/ui/views/passwords/views_utils.h"
 
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/passwords/ui_utils.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/vector_icons/vector_icons.h"
+#include "third_party/skia/include/core/SkPath.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/simple_combobox_model.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/gfx/canvas.h"
 #include "ui/gfx/range/range.h"
 #include "ui/gfx/vector_icon_utils.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -56,6 +58,30 @@ std::unique_ptr<views::View> CreateRow() {
   return row;
 }
 }  // namespace
+
+CircularImageView::CircularImageView(gfx::Size size) : size_(size) {}
+
+void CircularImageView::OnPaint(gfx::Canvas* canvas) {
+  // Display the avatar picture as a circle.
+  gfx::Rect bounds(GetImageBounds());
+  const SkPath circular_mask = SkPath::Circle(
+      SkIntToScalar(bounds.x() + bounds.right()) / 2,
+      SkIntToScalar(bounds.y() + bounds.bottom()) / 2,
+      SkIntToScalar(std::min(bounds.height(), bounds.width())) / 2);
+  canvas->ClipPath(circular_mask, true);
+  ImageView::OnPaint(canvas);
+}
+
+gfx::Size CircularImageView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  if (!size_.IsEmpty()) {
+    return size_;
+  }
+  return views::ImageView::CalculatePreferredSize(available_size);
+}
+
+BEGIN_METADATA(CircularImageView)
+END_METADATA
 
 std::unique_ptr<views::StyledLabel> CreateGooglePasswordManagerLabel(
     int text_message_id,
@@ -279,7 +305,10 @@ std::unique_ptr<views::View> CreateTitleView(const std::u16string& title) {
   const int close_button_width =
       layout_provider->GetDistanceMetric(
           views::DISTANCE_RELATED_BUTTON_HORIZONTAL) +
-      gfx::GetDefaultSizeOfVectorIcon(vector_icons::kCloseRoundedIcon) +
+      gfx::GetDefaultSizeOfVectorIcon(
+          features::IsRoundedIconsEnabled()
+              ? vector_icons::kCloseIcon
+              : vector_icons::kCloseRoundedOldIcon) +
       layout_provider->GetDistanceMetric(views::DISTANCE_CLOSE_BUTTON_MARGIN);
   const int title_width =
       layout_provider->GetDistanceMetric(

@@ -4,11 +4,11 @@
 
 #include "remoting/host/linux/clipboard_gnome.h"
 
+#include <algorithm>
 #include <array>
 #include <string_view>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "remoting/base/constants.h"
 #include "remoting/base/logging.h"
@@ -23,10 +23,11 @@ namespace {
 constexpr char kRemoteDesktopBusName[] = "org.gnome.Mutter.RemoteDesktop";
 
 // This list was created by looking at the MIME types claimed by some Wayland
-// apps that put text onto the clipboard. The first few are claimed by X11 apps
-// using XWayland (such as xclip).
+// and XWayland apps that put text onto the clipboard. It is ordered by
+// priority, preferring modern explicit UTF-8 formats over legacy string
+// formats.
 constexpr std::array<std::string_view, 5> kTextMimeTypes = {
-    "UTF8_STRING", "STRING", "TEXT", "text/plain;charset=utf-8", "text/plain"};
+    "text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "STRING", "TEXT"};
 
 }  // namespace
 
@@ -114,8 +115,8 @@ void ClipboardGnome::OnSelectionOwnerChanged(
     auto destructure_result =
         maybe_boxed_mime_types->TryDestructure(std::tie(mime_types));
     if (destructure_result.has_value()) {
-      for (auto mime_type : mime_types) {
-        if (base::Contains(kTextMimeTypes, mime_type)) {
+      for (auto mime_type : kTextMimeTypes) {
+        if (std::ranges::contains(mime_types, mime_type)) {
           SelectionRead(mime_type);
           return;
         }
@@ -129,7 +130,7 @@ void ClipboardGnome::OnSelectionTransfer(
   const auto& [mime_type, serial] = args;
   HOST_LOG << "Got SelectionTransfer signal with mime-type: " << mime_type;
 
-  if (!base::Contains(kTextMimeTypes, mime_type)) {
+  if (!std::ranges::contains(kTextMimeTypes, mime_type)) {
     // SelectionTransfer request should be for a mime-type claimed by
     // SetSelection.
     LOG(ERROR) << "Unexpected mime-type requested: " << mime_type;

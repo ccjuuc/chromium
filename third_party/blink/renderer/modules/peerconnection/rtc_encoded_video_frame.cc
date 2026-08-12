@@ -27,7 +27,7 @@ BASE_FEATURE(kAllowRTCEncodedVideoFrameSetMetadataAllFields,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 namespace {
-static constexpr size_t kMaxNumDependencies = 8;
+constexpr size_t kMaxNumDependencies = 8;
 
 bool IsAllowedSetMetadataChange(
     const RTCEncodedVideoFrameMetadata* original_metadata,
@@ -172,7 +172,7 @@ RTCEncodedVideoFrameMetadata* RTCEncodedVideoFrame::getMetadata(
     metadata->setPayloadType(*delegate_->PayloadType());
   }
   if (delegate_->MimeType()) {
-    metadata->setMimeType(String::FromUTF8(*delegate_->MimeType()));
+    metadata->setMimeType(String::FromUtf8(*delegate_->MimeType()));
   }
 
   if (RuntimeEnabledFeatures::RTCEncodedVideoFrameAdditionalMetadataEnabled()) {
@@ -198,11 +198,11 @@ RTCEncodedVideoFrameMetadata* RTCEncodedVideoFrame::getMetadata(
     metadata->setFrameId(*webrtc_metadata->GetFrameId());
   }
 
-  Vector<int64_t> dependencies;
-  for (const auto& dependency : webrtc_metadata->GetFrameDependencies()) {
-    dependencies.push_back(dependency);
+  if (auto webrtc_deps = webrtc_metadata->GetDependencies()) {
+    Vector<int64_t> dependencies;
+    dependencies.append_range(*webrtc_deps);
+    metadata->setDependencies(std::move(dependencies));
   }
-  metadata->setDependencies(dependencies);
   metadata->setWidth(webrtc_metadata->GetWidth());
   metadata->setHeight(webrtc_metadata->GetHeight());
   metadata->setSpatialIndex(webrtc_metadata->GetSpatialIndex());
@@ -276,7 +276,7 @@ base::expected<void, String> RTCEncodedVideoFrame::SetMetadata(
     webrtc_metadata.SetFrameId(metadata->frameId());
   }
   if (metadata->hasDependencies()) {
-    webrtc_metadata.SetFrameDependencies(metadata->dependencies());
+    webrtc_metadata.SetDependencies(metadata->dependencies());
   }
   webrtc_metadata.SetWidth(metadata->width());
   webrtc_metadata.SetHeight(metadata->height());

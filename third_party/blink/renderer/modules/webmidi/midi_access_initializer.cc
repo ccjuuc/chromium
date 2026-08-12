@@ -10,6 +10,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/permissions/permission.mojom-blink.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_midi_options.h"
@@ -49,7 +50,6 @@ ScriptPromise<MIDIAccess> MIDIAccessInitializer::Start(LocalDOMWindow* window) {
           base::FeatureList::IsEnabled(blink::features::kBlockMidiByDefault)
               ? true
               : options_->hasSysex() && options_->sysex()),
-      LocalFrame::HasTransientUserActivation(window->GetFrame()),
       BindOnce(&MIDIAccessInitializer::OnPermissionRequestResult,
                WrapPersistent(this)));
 
@@ -62,8 +62,8 @@ void MIDIAccessInitializer::DidAddInputPort(const String& id,
                                             const String& version,
                                             PortState state) {
   DCHECK(dispatcher_);
-  port_descriptors_.push_back(PortDescriptor(
-      id, manufacturer, name, MIDIPortType::kInput, version, state));
+  port_descriptors_.emplace_back(id, manufacturer, name, MIDIPortType::kInput,
+                                 version, state);
 }
 
 void MIDIAccessInitializer::DidAddOutputPort(const String& id,
@@ -72,8 +72,8 @@ void MIDIAccessInitializer::DidAddOutputPort(const String& id,
                                              const String& version,
                                              PortState state) {
   DCHECK(dispatcher_);
-  port_descriptors_.push_back(PortDescriptor(
-      id, manufacturer, name, MIDIPortType::kOutput, version, state));
+  port_descriptors_.emplace_back(id, manufacturer, name, MIDIPortType::kOutput,
+                                 version, state);
 }
 
 void MIDIAccessInitializer::DidSetInputPortState(unsigned port_index,
@@ -138,9 +138,9 @@ void MIDIAccessInitializer::StartSession() {
 }
 
 void MIDIAccessInitializer::OnPermissionRequestResult(
-    mojom::blink::PermissionStatus status) {
+    mojom::blink::PermissionStatusWithDetailsPtr status) {
   permission_service_.reset();
-  if (status == mojom::blink::PermissionStatus::GRANTED) {
+  if (status->status == mojom::blink::PermissionStatus::GRANTED) {
     // After `OnPermissionRequestResult` returns there is nothing retaining the
     // object.  Use `self_keep_alive_` to prevent it from being garbage
     // collected before the promise is resolved.  See crbug.com/447189642

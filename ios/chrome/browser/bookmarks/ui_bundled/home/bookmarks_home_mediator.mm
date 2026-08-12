@@ -85,6 +85,21 @@ bool AnyNodeHasChildren(const std::vector<const BookmarkNode*>& nodes) {
   return false;
 }
 
+void QueryLocalBookmarksCompletionWithDescription(
+    std::string user_email,
+    queryLocalBookmarksCompletion completion,
+    std::map<syncer::DataType, syncer::LocalDataDescription> description) {
+  CHECK(completion);
+  auto it = description.find(syncer::BOOKMARKS);
+  // GetLocalDataDescriptions() can return an empty result if data type is
+  // still in configuration, or has an error.
+  if (it != description.end()) {
+    completion(it->second.item_count, std::move(user_email));
+    return;
+  }
+  completion(0, std::move(user_email));
+}
+
 }  // namespace
 
 bool IsABookmarkNodeSectionForIdentifier(
@@ -138,6 +153,7 @@ bool IsABookmarkNodeSectionForIdentifier(
   std::unique_ptr<BookmarkModelBridge> _bookmarkModelBridge;
   // List of nodes selected by the user when being in the edit mode.
   bookmark_utils_ios::NodeSet _selectedNodesForEditMode;
+  BOOL _isDisconnected;
 }
 
 + (void)registerProfilePrefs:(user_prefs::PrefRegistrySyncable*)registry {
@@ -194,6 +210,10 @@ bool IsABookmarkNodeSectionForIdentifier(
 }
 
 - (void)disconnect {
+  if (_isDisconnected) {
+    return;
+  }
+  _isDisconnected = YES;
   [_bookmarkPromoController shutdown];
   _bookmarkPromoController.delegate = nil;
   _bookmarkPromoController = nil;
@@ -208,7 +228,7 @@ bool IsABookmarkNodeSectionForIdentifier(
 }
 
 - (void)dealloc {
-  CHECK(!_bookmarkPromoController, base::NotFatalUntil::M152);
+  [self disconnect];
 }
 
 - (BOOL)canDismiss {
@@ -244,10 +264,10 @@ bool IsABookmarkNodeSectionForIdentifier(
       [self shouldDisplayCloudSlashIconWithBookmarkNode:self.displayedNode];
   // Add all bookmarks and folders of the currently displayed node to the table.
   for (const auto& child : self.displayedNode->children()) {
-    BookmarksHomeNodeItem* nodeItem = [[BookmarksHomeNodeItem alloc]
-        initWithType:BookmarksHomeItemTypeBookmark
-        bookmarkNode:child.get()];
-    nodeItem.shouldDisplayCloudSlashIcon = shouldDisplayCloudSlashIcon;
+    BookmarksHomeNodeItem* nodeItem =
+        [BookmarksHomeNodeItem makeItemWithType:BookmarksHomeItemTypeBookmark
+                                   bookmarkNode:child.get()
+                    shouldDisplayCloudSlashIcon:shouldDisplayCloudSlashIcon];
     [self.consumer.tableViewModel
                         addItem:nodeItem
         toSectionWithIdentifier:BookmarksHomeSectionIdentifierBookmarks];
@@ -314,11 +334,12 @@ bool IsABookmarkNodeSectionForIdentifier(
       continue;
     }
 
-    BookmarksHomeNodeItem* item = [[BookmarksHomeNodeItem alloc]
-        initWithType:BookmarksHomeItemTypeBookmark
-        bookmarkNode:permanentNode];
-    item.shouldDisplayCloudSlashIcon =
+    BOOL shouldDisplayCloudSlashIcon =
         [self shouldDisplayCloudSlashIconWithBookmarkNode:permanentNode];
+    BookmarksHomeNodeItem* item =
+        [BookmarksHomeNodeItem makeItemWithType:BookmarksHomeItemTypeBookmark
+                                   bookmarkNode:permanentNode
+                    shouldDisplayCloudSlashIcon:shouldDisplayCloudSlashIcon];
     [self.consumer.tableViewModel addItem:item
                   toSectionWithIdentifier:sectionIdentifier];
   }
@@ -417,7 +438,7 @@ bool IsABookmarkNodeSectionForIdentifier(
     [self.consumer.tableViewModel addItem:signinPromoItem
                   toSectionWithIdentifier:BookmarksHomeSectionIdentifierPromo];
   } else {
-    if (!signinPromoViewMediator.invalidClosedOrNeverVisible) {
+    if (signinPromoViewMediator.isUsable) {
       // When the sign-in view is closed, the promo state changes, but
       // -[SigninPromoViewMediator signinPromoViewIsHidden] should not be
       // called.
@@ -447,22 +468,13 @@ bool IsABookmarkNodeSectionForIdentifier(
                           true);
 }
 
-- (void)queryLocalBookmarks:(void (^)(int local_bookmarks_count,
-                                      std::string user_email))completion {
-  std::string user_email = self.syncService->GetAccountInfo().email;
+- (void)queryLocalBookmarks:(queryLocalBookmarksCompletion)completion {
+  std::string userEmail = self.syncService->GetAccountInfo().email;
+  CHECK(completion);
   self.syncService->GetLocalDataDescriptions(
       syncer::DataTypeSet({syncer::BOOKMARKS}),
-      base::BindOnce(^(std::map<syncer::DataType, syncer::LocalDataDescription>
-                           description) {
-        auto it = description.find(syncer::BOOKMARKS);
-        // GetLocalDataDescriptions() can return an empty result if data type is
-        // still in configuration, or has an error.
-        if (it != description.end()) {
-          completion(it->second.item_count, std::move(user_email));
-          return;
-        }
-        completion(0, std::move(user_email));
-      }));
+      base::BindOnce(&QueryLocalBookmarksCompletionWithDescription, userEmail,
+                     completion));
 }
 
 - (bookmark_utils_ios::NodeSet&)selectedNodesForEditMode {
@@ -614,13 +626,17 @@ bool IsABookmarkNodeSectionForIdentifier(
 }
 
 - (BookmarksHomeNodeItem*)itemForNode:(const BookmarkNode*)bookmarkNode {
+  bookmarks::BookmarkModel* model = _bookmarkModel.get();
+  if (!model) {
+    return nil;
+  }
   NSArray<TableViewItem*>* items = [self.consumer.tableViewModel
       itemsInSectionWithIdentifier:BookmarksHomeSectionIdentifierBookmarks];
   for (TableViewItem* item in items) {
     if (item.type == BookmarksHomeItemTypeBookmark) {
       BookmarksHomeNodeItem* nodeItem =
           base::apple::ObjCCastStrict<BookmarksHomeNodeItem>(item);
-      if (nodeItem.bookmarkNode == bookmarkNode) {
+      if ([nodeItem bookmarkNode:model] == bookmarkNode) {
         return nodeItem;
       }
     }
@@ -635,8 +651,7 @@ bool IsABookmarkNodeSectionForIdentifier(
 }
 
 - (void)configureSigninPromoWithConfigurator:
-            (SigninPromoViewConfigurator*)configurator
-                             identityChanged:(BOOL)identityChanged {
+    (SigninPromoViewConfigurator*)configurator {
   if (![self.consumer.tableViewModel
           hasSectionForSectionIdentifier:BookmarksHomeSectionIdentifierPromo]) {
     return;
@@ -759,18 +774,12 @@ bool IsABookmarkNodeSectionForIdentifier(
     return NO;
   }
   // Do not show if last syncing account is different from the current one.
-  // Note that the "last syncing" account pref is cleared during the migration
-  // of syncing users to the signed-in state, but these users should also be
-  // covered here, so check the "migrated syncing user" pref too.
   // This implicitly covers the case when SyncDisabled policy is enabled, as
-  // kGoogleServicesLastSyncingGaiaId will be empty.
+  // kGoogleServicesSyncingGaiaIdMigratedToSignedIn will be empty.
   ProfileIOS* profile = [self originalProfile];
-  const GaiaId lastSyncingGaiaId(
-      profile->GetPrefs()->GetString(prefs::kGoogleServicesLastSyncingGaiaId));
   const GaiaId migratedGaiaId(profile->GetPrefs()->GetString(
       prefs::kGoogleServicesSyncingGaiaIdMigratedToSignedIn));
-  if (self.syncService->GetAccountInfo().gaia != lastSyncingGaiaId &&
-      self.syncService->GetAccountInfo().gaia != migratedGaiaId) {
+  if (self.syncService->GetAccountInfo().gaia != migratedGaiaId) {
     return NO;
   }
   // Do not show if the user is in an error state that makes data upload
@@ -820,8 +829,8 @@ bool IsABookmarkNodeSectionForIdentifier(
               IDS_IOS_BOOKMARKS_HOME_BULK_UPLOAD_SECTION_DESCRIPTION),
           "count", local_bookmarks_count, "email",
           _syncService->GetAccountInfo().email));
-  item.image = CustomSymbolWithPointSize(kCloudAndArrowUpSymbol,
-                                         kBatchUploadSymbolPointSize);
+  item.image =
+      SymbolWithPointSize(SymbolCloudAndArrowUp, kBatchUploadSymbolPointSize);
   item.enabled = NO;
   item.accessibilityIdentifier =
       kBookmarksHomeBatchUploadRecommendationItemIdentifier;
@@ -936,11 +945,12 @@ bool IsABookmarkNodeSectionForIdentifier(
       bookmarks::GetBookmarksMatchingProperties(_bookmarkModel.get(), query,
                                                 kMaxBookmarksSearchResults);
   for (const BookmarkNode* node : nodes) {
-    BookmarksHomeNodeItem* nodeItem = [[BookmarksHomeNodeItem alloc]
-        initWithType:BookmarksHomeItemTypeBookmark
-        bookmarkNode:node];
-    nodeItem.shouldDisplayCloudSlashIcon =
+    BOOL shouldDisplayCloudSlashIcon =
         [self shouldDisplayCloudSlashIconWithBookmarkNode:node];
+    BookmarksHomeNodeItem* nodeItem =
+        [BookmarksHomeNodeItem makeItemWithType:BookmarksHomeItemTypeBookmark
+                                   bookmarkNode:node
+                    shouldDisplayCloudSlashIcon:shouldDisplayCloudSlashIcon];
     [self.consumer.tableViewModel
                         addItem:nodeItem
         toSectionWithIdentifier:BookmarksHomeSectionIdentifierBookmarks];

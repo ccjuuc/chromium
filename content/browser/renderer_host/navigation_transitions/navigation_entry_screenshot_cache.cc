@@ -8,6 +8,7 @@
 
 #include "base/debug/dump_without_crashing.h"
 #include "base/memory/ptr_util.h"
+#include "base/rand_util.h"
 #include "content/browser/renderer_host/navigation_controller_impl.h"
 #include "content/browser/renderer_host/navigation_request.h"
 #include "content/browser/renderer_host/navigation_transitions/navigation_entry_screenshot.h"
@@ -53,11 +54,11 @@ NavigationEntryScreenshotCache::NavigationEntryScreenshotCache(
     base::SafeRef<NavigationEntryScreenshotManager> manager,
     NavigationControllerImpl* nav_controller)
     : manager_(manager), nav_controller_(nav_controller) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M152);
 }
 
 NavigationEntryScreenshotCache::~NavigationEntryScreenshotCache() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M152);
   PurgeInternal(/*reason=*/std::nullopt);
 }
 
@@ -123,7 +124,7 @@ void NavigationEntryScreenshotCache::SetVisible(bool visible) {
 void NavigationEntryScreenshotCache::SetScreenshotInternal(
     std::unique_ptr<NavigationEntryScreenshot> screenshot,
     bool is_copied_from_embedder) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M152);
 
   int index =
       NavigationTransitionUtils::FindEntryIndexForNavigationTransitionID(
@@ -143,11 +144,14 @@ void NavigationEntryScreenshotCache::SetScreenshotInternal(
     return;
   }
 
-  // A navigation entry without a screenshot will be removed from the cache
-  // first (thus not tracked). Impossible to overwrite for a cached entry.
+  // A navigation entry without a screenshot is removed from the cache (thus not
+  // tracked). We shouldn't be trying to cache a screenshot for an entry that
+  // already has one.
   // TODO(crbug.com/373893401): Find out why this happens.
   if (entry->GetUserData(NavigationEntryScreenshot::kUserDataKey)) {
-    base::debug::DumpWithoutCrashing();
+    if (base::ShouldRecordSubsampledMetric(0.001)) {
+      base::debug::DumpWithoutCrashing();
+    }
     RemoveScreenshot(entry);
   }
 
@@ -163,7 +167,17 @@ void NavigationEntryScreenshotCache::SetScreenshotInternal(
     return;
   }
 
-  const size_t size = screenshot->SetCache(this);
+  const size_t size = screenshot->GetUncompressedSize();
+  if (size > manager_->GetMaxCacheSize()) {
+    transition_data.set_cache_hit_or_miss_reason(
+        NavigationTransitionData::CacheHitOrMissReason::
+            kCacheMissSizeExceedsLimit);
+    // This was probably caused by some transitory layout issues. This
+    // screenshot will not be useful (crbug.com/538409653).
+    return;
+  }
+
+  screenshot->SetCache(this);
 
   entry->SetUserData(NavigationEntryScreenshot::kUserDataKey,
                      std::move(screenshot));
@@ -183,7 +197,7 @@ NavigationEntryScreenshotCache::RemoveScreenshot(
     NavigationEntry* navigation_entry,
     std::optional<NavigationTransitionData::CacheHitOrMissReason>
         cache_hit_or_miss_reason) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M152);
   CHECK(navigation_entry);
   auto it = cached_screenshots_.find(
       static_cast<NavigationEntryImpl*>(navigation_entry)
@@ -206,7 +220,7 @@ NavigationEntryScreenshotCache::RemoveScreenshot(
 
 void NavigationEntryScreenshotCache::RemoveFailedScreenshot(
     NavigationEntryScreenshot* screenshot) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M152);
   int index =
       NavigationTransitionUtils::FindEntryIndexForNavigationTransitionID(
           nav_controller_, screenshot->unique_id());
@@ -223,7 +237,7 @@ void NavigationEntryScreenshotCache::RemoveFailedScreenshot(
 
 void NavigationEntryScreenshotCache::OnNavigationEntryGone(
     NavigationTransitionData::UniqueId screenshot_id) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M152);
   auto it = cached_screenshots_.find(screenshot_id);
   CHECK(it != cached_screenshots_.end());
 
@@ -236,7 +250,7 @@ void NavigationEntryScreenshotCache::OnScreenshotCompressed(
     NavigationTransitionData::UniqueId screenshot_id,
     size_t new_size) {
   TRACE_EVENT("content", "OnScreenshotCompressed");
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M152);
   auto it = cached_screenshots_.find(screenshot_id);
   CHECK(it != cached_screenshots_.end());
 
@@ -254,7 +268,7 @@ void NavigationEntryScreenshotCache::OnScreenshotCompressed(
 }
 
 void NavigationEntryScreenshotCache::EvictScreenshotsUntilUnderBudgetOrEmpty() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M152);
 
   CHECK(!IsEmpty());
 
@@ -337,7 +351,7 @@ void NavigationEntryScreenshotCache::Purge(PurgeReason reason) {
 
 void NavigationEntryScreenshotCache::PurgeInternal(
     std::optional<PurgeReason> reason) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M152);
   auto it = cached_screenshots_.begin();
   while (!IsEmpty()) {
     int evicted_index =

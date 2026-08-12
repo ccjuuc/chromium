@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ui/webui/chrome_urls/chrome_urls_handler.h"
 
+#include <algorithm>
+
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/common/webui_url_constants.h"
@@ -23,8 +25,8 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/webui_url_constants.h"
 #include "ash/webui/file_manager/url_constants.h"
-#include "ash/webui/sanitize_ui/url_constants.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 using testing::_;
@@ -78,20 +80,7 @@ class TestInternalWebUIConfig : public content::InternalWebUIConfig {
   bool enabled_;
 };
 
-class MockPage : public chrome_urls::mojom::Page {
- public:
-  MockPage() = default;
-  ~MockPage() override = default;
 
-  mojo::PendingRemote<chrome_urls::mojom::Page> BindAndGetRemote() {
-    DCHECK(!receiver_.is_bound());
-    return receiver_.BindNewPipeAndPassRemote();
-  }
-
-  void FlushForTesting() { receiver_.FlushForTesting(); }
-
-  mojo::Receiver<chrome_urls::mojom::Page> receiver_{this};
-};
 
 }  // namespace
 
@@ -102,15 +91,12 @@ class ChromeUrlsHandlerTest : public testing::Test {
   void SetUp() override {
     handler_ = std::make_unique<chrome_urls::ChromeUrlsHandler>(
         mojo::PendingReceiver<chrome_urls::mojom::PageHandler>(),
-        mock_page_.BindAndGetRemote(), profile_.get());
-    mock_page_.FlushForTesting();
-    testing::Mock::VerifyAndClearExpectations(&mock_page_);
+        profile_.get());
   }
 
  protected:
   content::BrowserTaskEnvironment task_environment_;
   std::unique_ptr<TestingProfile> profile_;
-  testing::NiceMock<MockPage> mock_page_;
   std::unique_ptr<chrome_urls::ChromeUrlsHandler> handler_;
 };
 
@@ -207,7 +193,7 @@ TEST_F(ChromeUrlsHandlerTest, GetUrls) {
   base::span<const base::cstring_view> expected_urls =
       chrome::ChromeDebugURLs();
   for (const GURL& url : url_data->command_urls) {
-    EXPECT_TRUE(base::Contains(expected_urls, url.spec()));
+    EXPECT_TRUE(std::ranges::contains(expected_urls, url.spec()));
   }
 }
 

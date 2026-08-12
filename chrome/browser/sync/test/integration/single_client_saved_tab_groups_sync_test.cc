@@ -29,9 +29,17 @@
 namespace tab_groups {
 namespace {
 
-sync_pb::SavedTabGroupSpecifics CreateSavedTabGroupSpecific(base::Uuid guid,
-                                                            bool ui_v2,
-                                                            int position) {
+// Determines which version of the tab groups UI model to create the group for.
+enum TabGroupsUiVersion {
+  V1,
+  V2,
+  V3,
+};
+
+sync_pb::SavedTabGroupSpecifics CreateSavedTabGroupSpecific(
+    base::Uuid guid,
+    TabGroupsUiVersion ui_version,
+    int position) {
   sync_pb::SavedTabGroupSpecifics pb_specific;
   pb_specific.set_guid(guid.AsLowercaseString());
   pb_specific.set_creation_time_windows_epoch_micros(
@@ -41,7 +49,7 @@ sync_pb::SavedTabGroupSpecifics CreateSavedTabGroupSpecific(base::Uuid guid,
   sync_pb::SavedTabGroup* pb_group = pb_specific.mutable_group();
   pb_group->set_color(sync_pb::SavedTabGroup::SAVED_TAB_GROUP_COLOR_GREY);
   pb_group->set_title("Test");
-  if (ui_v2) {
+  if (ui_version == TabGroupsUiVersion::V2) {
     pb_group->set_pinned_position(position);
   } else {
     pb_group->set_position(position);
@@ -54,10 +62,11 @@ class SingleClientSavedTabGroupsSyncTest
       public testing::WithParamInterface<SyncTest::SetupSyncMode> {
  public:
   SingleClientSavedTabGroupsSyncTest() : SyncTest(SINGLE_CLIENT) {
+    std::vector<base::test::FeatureRef> enabled_features;
     if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
-      scoped_feature_list_.InitAndEnableFeature(
-          syncer::kReplaceSyncPromosWithSignInPromos);
+      enabled_features.push_back(syncer::kReplaceSyncPromosWithSignInPromos);
     }
+    scoped_feature_list_.InitWithFeatures(enabled_features, {});
   }
   ~SingleClientSavedTabGroupsSyncTest() override = default;
   SingleClientSavedTabGroupsSyncTest(
@@ -133,6 +142,10 @@ class SingleClientSavedTabGroupsSyncTest
 
   TabGroupSyncService* GetService() {
     return tab_groups::TabGroupSyncServiceFactory::GetForProfile(GetProfile(0));
+  }
+
+  base::test::ScopedFeatureList& scoped_feature_list() {
+    return scoped_feature_list_;
   }
 
  private:
@@ -549,7 +562,8 @@ IN_PROC_BROWSER_TEST_P(SingleClientSavedTabGroupsSyncTest, ReorderTabs) {
 IN_PROC_BROWSER_TEST_P(SingleClientSavedTabGroupsSyncTest,
                        V2BrowserWithV1Proto) {
   auto guid1 = base::Uuid::GenerateRandomV4();
-  AddDataToFakeServer(CreateSavedTabGroupSpecific(guid1, /*ui_v2=*/false, 0));
+  AddDataToFakeServer(
+      CreateSavedTabGroupSpecific(guid1, TabGroupsUiVersion::V1, 0));
   SavedTabGroupTab tab1(GURL("about:blank"), u"about:blank", guid1,
                         /*position=*/0);
   AddTabToFakeServer(tab1);
@@ -564,7 +578,8 @@ IN_PROC_BROWSER_TEST_P(SingleClientSavedTabGroupsSyncTest,
   EXPECT_EQ(std::nullopt, service->GetGroup(guid1)->position());
 
   auto guid2 = base::Uuid::GenerateRandomV4();
-  AddDataToFakeServer(CreateSavedTabGroupSpecific(guid2, /*ui_v2=*/false, 1));
+  AddDataToFakeServer(
+      CreateSavedTabGroupSpecific(guid2, TabGroupsUiVersion::V1, 1));
   SavedTabGroupTab tab2(GURL("about:blank"), u"about:blank", guid2,
                         /*position=*/0);
   AddTabToFakeServer(tab2);

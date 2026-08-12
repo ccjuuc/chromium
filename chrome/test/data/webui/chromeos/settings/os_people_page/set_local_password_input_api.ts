@@ -29,6 +29,8 @@ export class SetLocalPasswordInputApi implements
     input.focus();
     input.value = value;
     input.dispatchEvent(new CustomEvent('input'));
+    // Validation only happens on blur.
+    input.dispatchEvent(new CustomEvent('blur'));
   }
 
   async enterConfirmInput(value: string): Promise<void> {
@@ -36,6 +38,7 @@ export class SetLocalPasswordInputApi implements
     input.focus();
     input.value = value;
     input.dispatchEvent(new CustomEvent('input'));
+    input.dispatchEvent(new CustomEvent('blur'));
   }
 
   async assertFirstInputInvalid(invalid: boolean): Promise<void> {
@@ -48,6 +51,20 @@ export class SetLocalPasswordInputApi implements
   async assertConfirmInputInvalid(invalid: boolean): Promise<void> {
     const input = await retry(() => this.confirmInput());
     const property = () => input.invalid === invalid;
+    await assertAsync(property);
+    await assertForDuration(property);
+  }
+
+  async assertHintMessage(expected: string): Promise<void> {
+    const hint = await retry(() => this.firstInputHint());
+    const property = () => hint.textContent.trim() === expected;
+    await assertAsync(property);
+    await assertForDuration(property);
+  }
+
+  async assertFirstInputErrorMessage(expected: string): Promise<void> {
+    const error = await retry(() => this.firstInputError());
+    const property = () => error.textContent.trim() === expected;
     await assertAsync(property);
     await assertForDuration(property);
   }
@@ -68,5 +85,18 @@ export class SetLocalPasswordInputApi implements
     const el = this.shadowRoot().getElementById('confirmInput');
     assertTrue(el instanceof CrInputElement);
     return el;
+  }
+
+  private firstInputHint(): HTMLElement {
+    const el = this.shadowRoot().getElementById('firstInputHint');
+    assertTrue(!!el);
+    assertTrue(el instanceof HTMLElement);
+    return el;
+  }
+
+  private firstInputError(): HTMLElement {
+    const errorLabel = this.firstInput().$.error;
+    assertTrue(!!errorLabel);
+    return errorLabel;
   }
 }

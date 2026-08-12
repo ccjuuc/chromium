@@ -17,6 +17,8 @@
 
 namespace web {
 
+class MojoFacade;
+
 class WebUIIOSImpl : public web::WebUIIOS {
  public:
   explicit WebUIIOSImpl(WebState* web_state);
@@ -36,7 +38,7 @@ class WebUIIOSImpl : public web::WebUIIOS {
                                MessageCallback callback) override;
   void ProcessWebUIIOSMessage(const GURL& source_url,
                               std::string_view message,
-                              const base::Value::List& args) override;
+                              const base::ListValue& args) override;
   void CallJavascriptFunction(std::string_view function_name,
                               base::span<const base::ValueView> args) override;
   void ResolveJavascriptCallback(const base::ValueView callback_id,
@@ -53,6 +55,9 @@ class WebUIIOSImpl : public web::WebUIIOS {
   using MessageCallbackMap =
       std::map<std::string, MessageCallback, std::less<>>;
   MessageCallbackMap message_callbacks_;
+
+  // `MojoFacade` object for a WebState presenting a WebUI page.
+  std::unique_ptr<MojoFacade> mojo_facade_;
 
   // Non-owning pointer to the WebState this WebUIIOS is associated with.
   raw_ptr<WebState> web_state_;

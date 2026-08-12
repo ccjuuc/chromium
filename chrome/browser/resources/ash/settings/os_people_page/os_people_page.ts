@@ -28,7 +28,8 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 
 import {isAccountManagerEnabled} from '../common/load_time_booleans.js';
 import type {PrefsState} from '../common/types.js';
-import {type GraduationHandlerInterface, GraduationObserverReceiver} from '../mojom-webui/graduation_handler.mojom-webui.js';
+import {GraduationObserverReceiver} from '../mojom-webui/graduation_handler.mojom-webui.js';
+import type {GraduationHandlerInterface} from '../mojom-webui/graduation_handler.mojom-webui.js';
 import {Section} from '../mojom-webui/routes.mojom-webui.js';
 
 import {AccountManagerBrowserProxyImpl} from './account_manager_browser_proxy.js';
@@ -101,15 +102,15 @@ export class OsSettingsPeoplePageElement extends
     };
   }
 
-  prefs: PrefsState;
-  private accounts_: Account[];
-  private deviceAccount_: Account|null;
+  declare prefs: PrefsState;
+  declare private accounts_: Account[];
+  declare private deviceAccount_: Account|null;
   private graduationMojoProvider_: GraduationHandlerInterface;
   private graduationObserverReceiver_: GraduationObserverReceiver|null;
-  private isAccountManagerEnabled_: boolean;
-  private showGraduationApp_: boolean;
-  private showParentalControls_: boolean;
-  private section_: Section;
+  declare private isAccountManagerEnabled_: boolean;
+  declare private showGraduationApp_: boolean;
+  declare private showParentalControls_: boolean;
+  declare private section_: Section;
 
   constructor() {
     super();

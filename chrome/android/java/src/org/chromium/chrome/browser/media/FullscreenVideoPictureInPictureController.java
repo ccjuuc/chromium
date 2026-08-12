@@ -4,8 +4,6 @@
 
 package org.chromium.chrome.browser.media;
 
-import static org.chromium.build.NullUtil.assumeNonNull;
-
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.PictureInPictureParams;
@@ -23,13 +21,13 @@ import org.chromium.base.Callback;
 import org.chromium.base.Log;
 import org.chromium.base.MathUtils;
 import org.chromium.base.library_loader.LibraryLoader;
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.ActivityTabProvider;
 import org.chromium.chrome.browser.fullscreen.FullscreenManager;
-import org.chromium.chrome.browser.infobar.InfoBarContainer;
 import org.chromium.chrome.browser.notifications.NotificationIntentInterceptor;
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
@@ -37,6 +35,7 @@ import org.chromium.chrome.browser.util.AndroidTaskUtils;
 import org.chromium.content_public.browser.MediaSession;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsObserver;
+import org.chromium.media_session.mojom.MediaSession.SuspendType;
 import org.chromium.ui.base.WindowAndroid;
 
 import java.lang.annotation.Retention;
@@ -50,6 +49,19 @@ import java.util.Set;
 @NullMarked
 public class FullscreenVideoPictureInPictureController {
     private static final String TAG = "VideoPersist";
+
+    @VisibleForTesting
+    public static final String DURATION_HISTOGRAM =
+            "Media.FullscreenVideoPictureInPicture.Android.Duration";
+
+    @VisibleForTesting
+    public static final String ENTERED_HISTOGRAM =
+            "Media.FullscreenVideoPictureInPicture.Android.Entered";
+
+    @VisibleForTesting
+    public static final String EXIT_REASON_HISTOGRAM =
+            "Media.FullscreenVideoPictureInPicture.Android.ExitReason";
+
     private static final int AUTO_PIP_UPDATE_DELAY = 500 /* msec */;
 
     // Metrics
@@ -65,7 +77,7 @@ public class FullscreenVideoPictureInPictureController {
         MetricsEndReason.START
     })
     @Retention(RetentionPolicy.SOURCE)
-    private @interface MetricsEndReason {
+    public @interface MetricsEndReason {
         int RESUME = 0;
         // Obsolete: NAVIGATION = 1;
         int CLOSE = 2;
@@ -75,6 +87,20 @@ public class FullscreenVideoPictureInPictureController {
         int LEFT_FULLSCREEN = 6;
         int WEB_CONTENTS_LEFT_FULLSCREEN = 7;
         int START = 8;
+        int COUNT = 9;
+    }
+
+    @IntDef({
+        PipEntered.ENTERED,
+        PipEntered.FAILED_NO_WEB_CONTENTS,
+        PipEntered.FAILED_NO_ACTIVITY_TAB
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface PipEntered {
+        int ENTERED = 0;
+        int FAILED_NO_WEB_CONTENTS = 1;
+        int FAILED_NO_ACTIVITY_TAB = 2;
+        int COUNT = 3;
     }
 
     private static final float MIN_ASPECT_RATIO = 1 / 2.39f;
@@ -83,7 +109,7 @@ public class FullscreenVideoPictureInPictureController {
     // Somewhat arbitrarily-chosen minimum interval between when we're notified that we have entered
     // Picture in Picture, and when we'll try to exit it.  Otherwise, Android can get into a bad
     // state when chrome is broght to the foreground again -- it still is clipped to a pip-sized
-    // area, complete with rounded corners.  See https://crbug.com/1421703 for more details.
+    // area, complete with rounded corners.  See https://crbug.com/40259376 for more details.
     /* package */ static final long MIN_EXIT_DELAY_MILLIS = 50;
 
     // Short delay after we're notified that video is being unstashed until we unpause it, if it was
@@ -110,7 +136,7 @@ public class FullscreenVideoPictureInPictureController {
     private final List<Runnable> mOnLeavePipCallbacks = new ArrayList<>();
 
     /** Current observers, if any. */
-    @Nullable DismissActivityOnTabChangeObserver mActivityTabObserver;
+    private @Nullable DismissActivityOnTabChangeObserver mActivityTabObserver;
 
     FullscreenManager.@Nullable Observer mFullscreenListener;
 
@@ -136,6 +162,9 @@ public class FullscreenVideoPictureInPictureController {
 
     /** Was pip dismissed while the screen was off? */
     private boolean mDismissPending;
+
+    /** Should media be suspended if the activity stops, i.e. was the pip window closed? */
+    private boolean mShouldSuspendMediaOnStop;
 
     public FullscreenVideoPictureInPictureController(
             Activity activity,
@@ -281,7 +310,7 @@ public class FullscreenVideoPictureInPictureController {
         // `stashed`.  Also note that `mIsSuspendedForStash` can be reset elsewhere, to help to
         // account for missed events from Android.
         if (mIsPlaying && stashed && !mIsSuspendedForStash) {
-            mediaSession.suspend();
+            mediaSession.suspend(SuspendType.SYSTEM);
             mIsSuspendedForStash = true;
         } else if (!mIsPlaying && !stashed && mIsSuspendedForStash) {
             // Don't resume if we didn't pause it on the transition into stash.  For example, don't
@@ -309,7 +338,7 @@ public class FullscreenVideoPictureInPictureController {
         if (mediaSession == null || mIsPlaying || !mIsSuspendedForStash) {
             return;
         }
-        mediaSession.resume();
+        mediaSession.resume(SuspendType.SYSTEM);
         mIsSuspendedForStash = false;
     }
 
@@ -323,30 +352,40 @@ public class FullscreenVideoPictureInPictureController {
         mLastOnEnteredTimeMillis = SystemClock.elapsedRealtime();
 
         // Inform the WebContents when we enter and when we leave PiP.
-        final WebContents webContents = getWebContents();
-        // If we're closing the tab, just stop here.
+        final Tab activityTab = mActivityTabProvider.get();
+        if (activityTab == null) {
+            Log.i(TAG, "Activity tab is null, not entering Picture-in-picture");
+            RecordHistogram.recordEnumeratedHistogram(
+                    ENTERED_HISTOGRAM, PipEntered.FAILED_NO_ACTIVITY_TAB, PipEntered.COUNT);
+            return;
+        }
+
+        final WebContents webContents = activityTab.getWebContents();
         if (webContents == null) {
             Log.i(TAG, "Tab is closing, not entering Picture-in-picture");
+            RecordHistogram.recordEnumeratedHistogram(
+                    ENTERED_HISTOGRAM, PipEntered.FAILED_NO_WEB_CONTENTS, PipEntered.COUNT);
             return;
         }
 
         webContents.setHasPersistentVideo(true);
 
-        final Tab activityTab = mActivityTabProvider.get();
-
-        // We don't want InfoBars displaying while in PiP, they cover too much content.
-        assumeNonNull(getInfoBarContainerForTab(activityTab)).setHidden(true);
-
         mOnLeavePipCallbacks.add(
                 () -> {
                     Log.i(TAG, "Running Picture-in-picture exit callbacks");
-                    webContents.setHasPersistentVideo(false);
-                    assumeNonNull(getInfoBarContainerForTab(activityTab)).setHidden(false);
+                    if (!webContents.isDestroyed()) {
+                        webContents.setHasPersistentVideo(false);
+                    }
                 });
 
         // Setup observers to dismiss the Activity on events that should end PiP.  In auto-enter
         // mode, these might be registered already.
         addObserversIfNeeded();
+
+        mShouldSuspendMediaOnStop = true;
+
+        RecordHistogram.recordEnumeratedHistogram(
+                ENTERED_HISTOGRAM, PipEntered.ENTERED, PipEntered.COUNT);
     }
 
     /**
@@ -364,7 +403,23 @@ public class FullscreenVideoPictureInPictureController {
         }
     }
 
+    // Stopping while pip is open means the window was closed, since restoring it resumes instead.
+    // Closing used to suspend media as a side-effect of hiding the page, but that no longer happens
+    // on large form factors (see IsBackgroundMediaSuspendEnabled), so suspend it here.
+    public void onStop() {
+        if (mShouldSuspendMediaOnStop) {
+            mShouldSuspendMediaOnStop = false;
+
+            final MediaSession mediaSession = getMediaSession();
+            if (mediaSession != null && mIsPlaying) {
+                mediaSession.suspend(SuspendType.SYSTEM);
+            }
+        }
+    }
+
     public void onResume() {
+        // Pip was restored rather than closed, so media should keep playing.
+        mShouldSuspendMediaOnStop = false;
         // Unconditionally dismiss pip, because the activity has been resumed.  This can happen if
         // we get out of sync; we rely on exiting fullscreen to exit pip, and sometimes that just
         // doesn't happen.  This exits pip if the user starts chrome again while in pip.
@@ -431,8 +486,17 @@ public class FullscreenVideoPictureInPictureController {
 
         // If we don't believe that a Picture in Picture session is active, it means that the
         // cleanup call happened while Chrome was not PIP'ing. The early return also avoid recording
-        // the reason why the (non-)PIP session ended.
+        // the reason why the (non-)PIP session ended and the duration.
         if (!isPipSessionActive()) return;
+
+        RecordHistogram.recordEnumeratedHistogram(
+                EXIT_REASON_HISTOGRAM, reason, MetricsEndReason.COUNT);
+
+        if (mLastOnEnteredTimeMillis > 0) {
+            long duration = SystemClock.elapsedRealtime() - mLastOnEnteredTimeMillis;
+            RecordHistogram.recordLongTimesHistogram(DURATION_HISTOGRAM, duration);
+            mLastOnEnteredTimeMillis = 0;
+        }
 
         // This method can be called when we haven't been PiPed. We use Callbacks to ensure we only
         // do cleanup if it is required.
@@ -593,7 +657,7 @@ public class FullscreenVideoPictureInPictureController {
             final MediaSession mediaSession = getMediaSession();
 
             if (mediaSession != null && mIsPlaying) {
-                mediaSession.suspend();
+                mediaSession.suspend(SuspendType.SYSTEM);
             }
         }
     }
@@ -683,7 +747,7 @@ public class FullscreenVideoPictureInPictureController {
         private DismissActivityOnTabChangeObserver(Activity activity) {
             mActivity = activity;
             mCurrentTab = mActivityTabProvider.get();
-            mActivityTabProvider.asObservable().addObserver(this);
+            mActivityTabProvider.asObservable().addSyncObserverAndPostIfNonNull(this);
             registerTabEventObserver();
         }
 
@@ -780,16 +844,9 @@ public class FullscreenVideoPictureInPictureController {
         }
     }
 
-    /** Protected to allow tests to override, since mocking statics is error-prone. */
-    @VisibleForTesting
-    /* package */ @Nullable InfoBarContainer getInfoBarContainerForTab(@Nullable Tab tab) {
-        if (tab == null) return null;
-        return InfoBarContainer.get(tab);
-    }
-
     /**
-     * Protected to allow tests to override, since it breaks in N.  It's also not clear that we
-     * need this at all.
+     * Protected to allow tests to override, since it breaks in N. It's also not clear that we need
+     * this at all.
      */
     @VisibleForTesting
     /* package */ void assertLibraryLoaderIsInitialized() {

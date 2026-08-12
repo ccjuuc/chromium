@@ -8,8 +8,8 @@
 
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/metrics/metrics_scheduler.h"
 
@@ -64,11 +64,10 @@ base::TimeDelta MetricsUploadScheduler::GetInitialBackoffInterval() {
   return base::Minutes(5);
 }
 
-void MetricsUploadScheduler::UploadFinished(bool server_is_healthy) {
-  // If the server is having issues, back off. Otherwise, reset to default
-  // (unless there are more logs to send, in which case the next upload should
-  // happen sooner).
-  if (!server_is_healthy) {
+void MetricsUploadScheduler::UploadFinished(bool backoff) {
+  // Wait longer for the next upload if `backoff` is set. Otherwise, reset to
+  // default.
+  if (backoff) {
     TaskDone(backoff_interval_);
     backoff_interval_ = BackOffUploadInterval(backoff_interval_);
   } else {

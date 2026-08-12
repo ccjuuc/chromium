@@ -30,6 +30,7 @@
 #include "net/base/ip_address.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
+#include "net/base/network_handle.h"
 #include "net/base/sys_addrinfo.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
@@ -92,7 +93,7 @@ void WebSocket::Connect(net::CompletionOnceCallback callback) {
       std::move(callback).Run(net::ERR_ADDRESS_UNREACHABLE);
       return;
     }
-    base::Value::List endpoints;
+    base::ListValue endpoints;
     for (auto endpoint : addresses)
       endpoints.Append(endpoint.ToStringWithoutPort());
     std::string json;
@@ -112,9 +113,15 @@ void WebSocket::Connect(net::CompletionOnceCallback callback) {
     addresses.Deduplicate();
   }
 
-  net::NetLogSource source;
-  socket_ = std::make_unique<net::TCPClientSocket>(addresses, nullptr, nullptr,
-                                                   nullptr, source);
+  socket_ = std::make_unique<net::TCPClientSocket>(
+      addresses,
+      /* socket_performance_watcher= */ nullptr,
+      /* network_quality_estimator= */ nullptr,
+      /* net_log= */ nullptr, net::NetLogSource(),
+      // This is used only for testing in scenarios that do not involve multiple
+      // networks. With that in mind, it's safe to always use the default
+      // network.
+      net::handles::kInvalidNetworkHandle);
 
   state_ = CONNECTING;
   connect_callback_ = std::move(callback);
@@ -270,7 +277,7 @@ void WebSocket::OnRead(bool read_again, int code) {
   // return to Read() and let it call socket_->Read() to read more data, and
   // potentially call OnRead() again. This is necessary to avoid mutual
   // recursion between Read and OnRead, which can cause stack overflow (e.g.,
-  // see https://crbug.com/877105).
+  // see https://crbug.com/40590674).
   if (read_again && state_ != CLOSED)
     Read();
 }

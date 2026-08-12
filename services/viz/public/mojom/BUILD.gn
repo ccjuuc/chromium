@@ -39,6 +39,7 @@ mojom("mojom") {
     "compositing/texture_releaser.mojom",
     "compositing/thread.mojom",
     "compositing/tiling.mojom",
+    "compositing/tracked_element_rects.mojom",
     "compositing/transferable_resource.mojom",
     "compositing/trees_in_viz_timing.mojom",
     "compositing/vertical_scroll_direction.mojom",
@@ -165,6 +166,8 @@ mojom("mojom") {
       ]
     },
     {
+      # TODO(crbug.com/537760819): Consider consolidating BeginFrmeArgs and
+      # related types into shared_cpp_typemaps.
       types = [
         {
           mojom = "viz.mojom.BeginFrameArgs"
@@ -173,6 +176,10 @@ mojom("mojom") {
         {
           mojom = "viz.mojom.BeginFrameAck"
           cpp = "::viz::BeginFrameAck"
+        },
+        {
+          mojom = "viz.mojom.BeginFrameId"
+          cpp = "::viz::BeginFrameId"
         },
       ]
 
@@ -207,10 +214,7 @@ mojom("mojom") {
       traits_private_headers = [
         "//services/viz/public/cpp/compositing/compositor_frame_mojom_traits.h",
       ]
-      traits_public_deps = [
-        "//components/viz/common",
-        "//services/viz/public/cpp:crash_keys",
-      ]
+      traits_public_deps = [ "//components/viz/common" ]
     },
     {
       types = [
@@ -235,6 +239,19 @@ mojom("mojom") {
       traits_sources = [ "//services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.cc" ]
       traits_headers = [ "//services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h" ]
       traits_public_deps = [ "//components/viz/common" ]
+    },
+    {
+      types = [
+        {
+          mojom = "viz.mojom.TrackedElementRects"
+          cpp = "::viz::TrackedElementRects"
+        },
+      ]
+      traits_headers = [ "//services/viz/public/cpp/compositing/tracked_element_rects_mojom_traits.h" ]
+      traits_public_deps = [
+        "//components/viz/common",
+        "//third_party/blink/public/mojom/tokens:tokens_traits",
+      ]
     },
     {
       types = [
@@ -377,7 +394,6 @@ mojom("mojom") {
       traits_sources = [ "//services/viz/public/cpp/hit_test/hit_test_region_list_mojom_traits.cc" ]
       traits_public_deps = [
         "//components/viz/common",
-        "//services/viz/public/cpp:crash_keys",
         "//ui/gfx/geometry/mojom",
       ]
     },
@@ -505,6 +521,10 @@ mojom("mojom") {
           mojom = "viz.mojom.BeginFrameAck"
           cpp = "::viz::BeginFrameAck"
         },
+        {
+          mojom = "viz.mojom.BeginFrameId"
+          cpp = "::viz::BeginFrameId"
+        },
       ]
       traits_headers =
           [ "//components/viz/common/frame_sinks/begin_frame_args.h" ]
@@ -528,7 +548,6 @@ mojom("mojom") {
       traits_headers = [ "//services/viz/public/cpp/hit_test/hit_test_region_list_mojom_traits.h" ]
       traits_public_deps = [
         "//components/viz/common",
-        "//services/viz/public/cpp:crash_keys",
         "//ui/gfx/geometry/mojom",
       ]
     },
@@ -542,6 +561,19 @@ mojom("mojom") {
       ]
       traits_headers = [ "//services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h" ]
       traits_public_deps = [ "//components/viz/common" ]
+    },
+    {
+      types = [
+        {
+          mojom = "viz.mojom.TrackedElementRects"
+          cpp = "::viz::TrackedElementRects"
+        },
+      ]
+      traits_headers = [ "//services/viz/public/cpp/compositing/tracked_element_rects_mojom_traits.h" ]
+      traits_public_deps = [
+        "//components/viz/common",
+        "//third_party/blink/public/mojom/tokens:tokens_traits",
+      ]
     },
     {
       types = [
@@ -585,7 +617,6 @@ mojom("mojom") {
       ]
       traits_headers = [ "//components/viz/common/quads/compositor_frame.h" ]
       traits_private_headers = [
-        "//gpu/ipc/common/mailbox_holder_mojom_traits.h",
         "//gpu/ipc/common/mailbox_mojom_traits.h",
         "//gpu/ipc/common/sync_token_mojom_traits.h",
         "//ipc/param_traits_utils.h",
@@ -599,6 +630,7 @@ mojom("mojom") {
         "//services/viz/public/cpp/compositing/quads_mojom_traits.h",
         "//services/viz/public/cpp/compositing/selection_mojom_traits.h",
         "//services/viz/public/cpp/compositing/shared_quad_state_mojom_traits.h",
+        "//services/viz/public/cpp/compositing/tracked_element_rects_mojom_traits.h",
         "//services/viz/public/cpp/compositing/transferable_resource_mojom_traits.h",
         "//ui/gfx/mojom/selection_bound_mojom_traits.h",
         "//ui/gfx/mojom/transform_mojom_traits.h",

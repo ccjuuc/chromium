@@ -3,6 +3,8 @@
 # found in the LICENSE file.
 
 source_set("browser") {
+  configs += [ "//components/enterprise:extra_warnings" ]
+
   public = [
     "device_trust_key_manager_impl.h",
     "key_loader.h",
@@ -29,6 +31,7 @@ source_set("browser") {
     "//components/enterprise",
     "//components/enterprise/client_certificates/core",
     "//components/enterprise/client_certificates/core:cloud_management_delegate",
+    "//components/enterprise/device_trust/core",
     "//components/policy/core/common",
     "//components/policy/proto",
     "//third_party/abseil-cpp:absl",
@@ -54,6 +57,8 @@ source_set("browser") {
 
 source_set("test_support") {
   testonly = true
+  configs += [ "//components/enterprise:extra_warnings" ]
+
   public = [
     "mock_device_trust_key_manager.h",
     "mock_key_loader.h",
@@ -76,6 +81,8 @@ source_set("test_support") {
 
 source_set("unit_tests") {
   testonly = true
+  configs += [ "//components/enterprise:extra_warnings" ]
+
   sources = [
     "device_trust_key_manager_impl_unittest.cc",
     "key_loader_unittest.cc",

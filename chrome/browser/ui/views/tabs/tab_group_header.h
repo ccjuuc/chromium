@@ -5,12 +5,18 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_TABS_TAB_GROUP_HEADER_H_
 #define CHROME_BROWSER_UI_VIEWS_TABS_TAB_GROUP_HEADER_H_
 
+#include <memory>
 #include <string_view>
 
+#include "base/callback_list.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
+#include "base/scoped_observation.h"
 #include "base/time/time.h"
+#include "chrome/browser/ui/tabs/tab_group_attention_indicator.h"
+#include "chrome/browser/ui/views/tabs/groups/tab_group_editor_bubble_tracker.h"
+#include "chrome/browser/ui/views/tabs/hovercard/hover_card_anchor_target.h"
 #include "chrome/browser/ui/views/tabs/tab_slot_view.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "ui/base/interaction/element_identifier.h"
@@ -19,12 +25,15 @@
 #include "ui/views/context_menu_controller.h"
 #include "ui/views/controls/focus_ring.h"
 #include "ui/views/view_targeter_delegate.h"
-#include "ui/views/widget/widget_observer.h"
 
 class TabSlotController;
 class TabGroupStyle;
 struct TabSizeInfo;
 class TabStyle;
+
+namespace tabs {
+class TabGroupDataObserver;
+}
 
 namespace views {
 class ImageView;
@@ -37,12 +46,11 @@ class View;
 // strip flow and positioned left of the leftmost tab in the group.
 class TabGroupHeader : public TabSlotView,
                        public views::ContextMenuController,
-                       public views::ViewTargeterDelegate {
+                       public views::ViewTargeterDelegate,
+                       public HoverCardAnchorTarget {
   METADATA_HEADER(TabGroupHeader, TabSlotView)
 
  public:
-  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kAttentionIndicatorViewElementId);
-
   TabGroupHeader(TabSlotController& tab_slot_controller,
                  const tab_groups::TabGroupId& group,
                  const TabGroupStyle& style);
@@ -60,10 +68,17 @@ class TabGroupHeader : public TabSlotView,
   void OnMouseEntered(const ui::MouseEvent& event) override;
   void OnGestureEvent(ui::GestureEvent* event) override;
   void OnFocus() override;
+  void OnBlur() override;
   void OnThemeChanged() override;
   TabSlotView::ViewType GetTabSlotViewType() const override;
   TabSizeInfo GetTabSizeInfo() const override;
   gfx::Rect GetAnchorBoundsInScreen() const override;
+
+  // HoverCardAnchorTarget:
+  bool NeedsToShowThumbnail() const override;
+  bool IsValidHoverCardTarget() const override;
+  views::BubbleAnchor GetAnchor() override;
+  views::BubbleBorder::Arrow GetAnchorPosition() const override;
 
   void OnGroupContentsChanged();
 
@@ -85,14 +100,8 @@ class TabGroupHeader : public TabSlotView,
 
   int GetCollapsedHeaderWidth() const;
 
-  // Removes {editor_bubble_tracker_} from observing the widget.
-  void RemoveObserverFromWidget(views::Widget* widget);
-
-  // Enables or disables attention indicator on a tab group.
-  void SetTabGroupNeedsAttention(bool needs_attention);
-
   // Returns whether the attention indicator should be shown.
-  bool GetShowingAttentionIndicator();
+  bool ShouldShowAttentionIndicator() const;
 
   // Returns the title text for testing.
   std::u16string_view GetTitleTextForTesting() const;
@@ -107,6 +116,12 @@ class TabGroupHeader : public TabSlotView,
   int GetDesiredWidth() const;
   // Determines if the sync icon should be shown in the header.
   bool ShouldShowHeaderIcon() const;
+
+  // Returns the current animated height of the chip.
+  int GetChipHeight() const;
+
+  // Returns the current animated y-position of the chip.
+  int GetChipY() const;
 
   // Updates the local is_collapsed_ state.
   void SetCollapsedState();
@@ -125,6 +140,8 @@ class TabGroupHeader : public TabSlotView,
   void UpdateTooltipText();
 
   void UpdateAccessibleName();
+
+  void OnTabGroupDataChanged();
 
   const raw_ref<TabSlotController> tab_slot_controller_;
 
@@ -162,34 +179,17 @@ class TabGroupHeader : public TabSlotView,
   // changed in the model and we need to react to that.
   bool is_collapsed_;
 
-  // Determines if the tab group should show the attention indicator.
+  // Determines whether the header UI should show the attention indicator needed
+  // for collaboration messaging.
   bool needs_attention_ = false;
 
   base::CallbackListSubscription title_text_changed_subscription_;
 
-  // Tracks whether our editor bubble is open. At most one can be open
-  // at once.
-  class EditorBubbleTracker : public views::WidgetObserver {
-   public:
-    explicit EditorBubbleTracker(TabSlotController& tab_slot_controller);
-    ~EditorBubbleTracker() override;
-
-    void Opened(views::Widget* bubble_widget);
-    bool is_open() const { return is_open_; }
-    views::Widget* widget() const { return widget_; }
-
-    // views::WidgetObserver:
-    void OnWidgetDestroying(views::Widget* widget) override;
-
-   private:
-    bool is_open_ = false;
-    raw_ptr<views::Widget, AcrossTasksDanglingUntriaged> widget_;
-    // Outlives this because it's a dependency inversion interface for the
-    // header's parent View.
-    raw_ref<TabSlotController> tab_slot_controller_;
-  };
-
-  EditorBubbleTracker editor_bubble_tracker_;
+  TabGroupEditorBubbleTracker editor_bubble_tracker_;
+  base::CallbackListSubscription editor_bubble_opened_subscription_;
+  base::CallbackListSubscription editor_bubble_closed_subscription_;
+  std::unique_ptr<tabs::TabGroupDataObserver> tab_group_data_observer_;
+  base::CallbackListSubscription tab_group_data_observer_subscription_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TABS_TAB_GROUP_HEADER_H_

@@ -5,9 +5,11 @@
 #import "ios/chrome/browser/snackbar/ui_bundled/ui/snackbar_view.h"
 
 #import "base/check.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/public/snackbar/snackbar_constants.h"
 #import "ios/chrome/browser/shared/public/snackbar/snackbar_message.h"
 #import "ios/chrome/browser/shared/public/snackbar/snackbar_message_action.h"
+#import "ios/chrome/browser/shared/ui/util/layout_constants.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/snackbar/ui_bundled/ui/snackbar_view_delegate.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
@@ -16,11 +18,6 @@
 #import "ui/base/l10n/l10n_util.h"
 
 namespace {
-
-// The amount of time after a snackbar is presented, during which it will
-// retain a11y focus so that VoiceOver is not interrupted by a modal dismissal
-// transition.
-const double kRetainA11yFocusSeconds = 0.75;
 
 // Animation constants.
 const NSTimeInterval kSnackbarAnimationDuration = 0.8;
@@ -31,7 +28,8 @@ const CGFloat kHorizontalPadding = 16.0;
 const CGFloat kVerticalPadding = 16.0;
 const CGFloat kInterItemSpacing = 16.0;
 const CGFloat kAccessoryViewSize = 32.0;
-const CGFloat kSnackbarMargin = 8.0;
+const CGFloat kSnackbarMarginLegacy = 8.0;
+const CGFloat kSnackbarMarginNext = 4.0;
 const CGFloat kSnackbarMinWidthRegular = 288.0;
 const CGFloat kSnackbarMaxWidthRegular = 568.0;
 
@@ -71,6 +69,8 @@ const CGFloat kTextSpacing = 2.0;
   NSArray<NSLayoutConstraint*>* _compactWidthConstraints;
   // The horizontal constraints for a regular layout.
   NSArray<NSLayoutConstraint*>* _regularWidthConstraints;
+  // Whether the message’s action was tapped.
+  BOOL _actionTapped;
 }
 
 - (instancetype)initWithMessage:(SnackbarMessage*)message {
@@ -90,10 +90,6 @@ const CGFloat kTextSpacing = 2.0;
 #pragma mark - Public
 
 - (void)presentAnimated:(BOOL)animated completion:(void (^)(void))completion {
-  if (UIAccessibilityIsVoiceOverRunning()) {
-    [self retainAccessibilityFocus];
-  }
-
   if (animated && !UIAccessibilityIsReduceMotionEnabled()) {
     self.alpha = 0;
     self.transform = CGAffineTransformMakeTranslation(
@@ -105,16 +101,10 @@ const CGFloat kTextSpacing = 2.0;
           self.transform = CGAffineTransformIdentity;
         }
         completion:^(BOOL finished) {
-          [self scheduleDismissal];
-          if (completion) {
-            completion();
-          }
+          [self handlePresentationCompletedWithCompletion:completion];
         }];
   } else {
-    [self scheduleDismissal];
-    if (completion) {
-      completion();
-    }
+    [self handlePresentationCompletedWithCompletion:completion];
   }
 }
 
@@ -148,7 +138,9 @@ const CGFloat kTextSpacing = 2.0;
 
 - (void)setBottomOffset:(CGFloat)bottomOffset {
   _bottomOffset = bottomOffset;
-  _bottomConstraint.constant = -(self.bottomOffset + kSnackbarMargin);
+  const CGFloat margin =
+      IsChromeNextIaEnabled() ? kSnackbarMarginNext : kSnackbarMarginLegacy;
+  _bottomConstraint.constant = -(self.bottomOffset + margin);
 }
 
 - (void)didMoveToSuperview {
@@ -182,7 +174,11 @@ const CGFloat kTextSpacing = 2.0;
 - (void)setupView {
   _contentView.accessibilityIdentifier = kSnackbarAccessibilityId;
   _contentView.isAccessibilityElement = NO;
-  _contentView.layer.cornerRadius = kSnackbarCornerRadius;
+  if (IsChromeNextIaEnabled()) {
+    _contentView.layer.cornerRadius = kAppBarCornerRadius - kSnackbarMarginNext;
+  } else {
+    _contentView.layer.cornerRadius = kSnackbarCornerRadius;
+  }
   _contentView.clipsToBounds = YES;
 
   UIBlurEffect* blurEffect =
@@ -294,7 +290,12 @@ const CGFloat kTextSpacing = 2.0;
   config.baseBackgroundColor =
       [[UIColor colorNamed:kInvertedPrimaryBackgroundColor]
           colorWithAlphaComponent:kButtonBackgroundAlpha];
-  config.background.cornerRadius = kButtonCornerRadius;
+  if (IsChromeNextIaEnabled()) {
+    config.background.cornerRadius =
+        _contentView.layer.cornerRadius - kButtonMargin;
+  } else {
+    config.background.cornerRadius = kButtonCornerRadius;
+  }
   _button = [UIButton buttonWithConfiguration:config primaryAction:nil];
   _button.accessibilityLabel =
       _message.action.accessibilityLabel ?: _message.action.title;
@@ -398,28 +399,40 @@ const CGFloat kTextSpacing = 2.0;
           constraintEqualToConstant:kAccessoryViewSize],
     ]];
   }
+
+  // Ensure the height is at least twice the corner radius to maintain a capsule
+  // look when chromeNext is enabled.
+  if (IsChromeNextIaEnabled()) {
+    [_contentView.heightAnchor
+        constraintGreaterThanOrEqualToConstant:2 *
+                                               _contentView.layer.cornerRadius]
+        .active = YES;
+  }
 }
 
 // Sets up the constraints with the superview.
 - (void)setupSuperviewConstraints {
   UILayoutGuide* safeAreaLayoutGuide = self.safeAreaLayoutGuide;
+  const CGFloat margin =
+      IsChromeNextIaEnabled() ? kSnackbarMarginNext : kSnackbarMarginLegacy;
   _bottomConstraint = [_contentView.bottomAnchor
       constraintLessThanOrEqualToAnchor:self.bottomAnchor
-                               constant:-(self.bottomOffset + kSnackbarMargin)];
+                               constant:-(self.bottomOffset + margin)];
   _bottomConstraint.active = YES;
+
   [_contentView.bottomAnchor
       constraintLessThanOrEqualToAnchor:safeAreaLayoutGuide.bottomAnchor
-                               constant:-kSnackbarMargin]
+                               constant:-margin]
       .active = YES;
 
   // On iPhone portrait, pin to the edges of the safe area.
   _compactWidthConstraints = @[
     [_contentView.leadingAnchor
         constraintEqualToAnchor:safeAreaLayoutGuide.leadingAnchor
-                       constant:kSnackbarMargin],
+                       constant:margin],
     [_contentView.trailingAnchor
         constraintEqualToAnchor:safeAreaLayoutGuide.trailingAnchor
-                       constant:-kSnackbarMargin],
+                       constant:-margin],
   ];
 
   // On iPad or iPhone landscape, center the snackbar with a min and max width.
@@ -431,10 +444,10 @@ const CGFloat kTextSpacing = 2.0;
         constraintGreaterThanOrEqualToConstant:kSnackbarMinWidthRegular],
     [_contentView.leadingAnchor
         constraintGreaterThanOrEqualToAnchor:safeAreaLayoutGuide.leadingAnchor
-                                    constant:kSnackbarMargin],
+                                    constant:margin],
     [_contentView.trailingAnchor
         constraintLessThanOrEqualToAnchor:safeAreaLayoutGuide.trailingAnchor
-                                 constant:-kSnackbarMargin],
+                                 constant:-margin],
   ];
 }
 
@@ -502,41 +515,54 @@ const CGFloat kTextSpacing = 2.0;
 
 // Handles the action button tap.
 - (void)handleButtonTap {
-  if (self.message.action.handler) {
+  if (self.message.action.handler && !_actionTapped) {
     self.message.action.handler();
+    _actionTapped = YES;
   }
   [self.delegate snackbarViewDidTapActionButton:self];
 }
 
 // Handles the view tap.
 - (void)handleViewTap {
-  [self.delegate snackbarViewDidRequestDismissal:self animated:YES];
+  [self.delegate snackbarViewDidRequestDismissal:self];
 }
 
-// If another view becomes focused, the focus is forced back to the title view.
-- (void)retainAccessibilityFocus {
-  __weak UIView* weakView = _titleLabel;
-  auto retainFocus = ^(NSNotification* notification) {
-    id focusedElement = notification.userInfo[UIAccessibilityFocusedElementKey];
-    if (weakView && focusedElement != weakView) {
-      UIAccessibilityPostNotification(UIAccessibilityLayoutChangedNotification,
-                                      weakView);
+// Handles post-presentation tasks such as accessibility announcement and
+// auto-dismissal.
+- (void)handlePresentationCompletedWithCompletion:(void (^)(void))completion {
+  if (UIAccessibilityIsVoiceOverRunning()) {
+    [self postAccessibilityAnnouncement];
+  }
+  [self scheduleDismissal];
+  if (completion) {
+    completion();
+  }
+}
+
+// Posts a high-priority accessibility announcement for the snackbar message.
+- (void)postAccessibilityAnnouncement {
+  if (!_titleLabel || !self.window) {
+    return;
+  }
+  NSString* announcement = _message.title;
+  if (_message.action) {
+    NSString* actionTitle =
+        _message.action.accessibilityLabel ?: _message.action.title;
+    if (actionTitle.length) {
+      announcement =
+          [NSString stringWithFormat:@"%@. %@", _message.title, actionTitle];
     }
-  };
-
-  // Observe accessibility focus changes.
-  id observer = [[NSNotificationCenter defaultCenter]
-      addObserverForName:UIAccessibilityElementFocusedNotification
-                  object:nil
-                   queue:nil
-              usingBlock:retainFocus];
-
-  // Stop observing after `kRetainA11yFocusSeconds`.
-  dispatch_time_t time =
-      dispatch_time(DISPATCH_TIME_NOW, kRetainA11yFocusSeconds * NSEC_PER_SEC);
-  dispatch_after(time, dispatch_get_main_queue(), ^{
-    [[NSNotificationCenter defaultCenter] removeObserver:observer];
-  });
+  }
+  // Use high priority to prevent the announcement from being interrupted by
+  // subsequent UI transitions or focus changes.
+  NSAttributedString* queuedAnnouncement = [[NSAttributedString alloc]
+      initWithString:announcement
+          attributes:@{
+            UIAccessibilitySpeechAttributeAnnouncementPriority :
+                UIAccessibilityPriorityHigh
+          }];
+  UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification,
+                                  queuedAnnouncement);
 }
 
 // Schedules the automatic dismissal of the snackbar.
@@ -550,8 +576,7 @@ const CGFloat kTextSpacing = 2.0;
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
                                (int64_t)(self.message.duration * NSEC_PER_SEC)),
                  dispatch_get_main_queue(), ^{
-                   [weakSelf.delegate snackbarViewDidRequestDismissal:weakSelf
-                                                             animated:YES];
+                   [weakSelf.delegate snackbarViewDidRequestDismissal:weakSelf];
                  });
 }
 

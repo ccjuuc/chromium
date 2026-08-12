@@ -5,7 +5,6 @@
 #include "chrome/browser/page_load_metrics/observers/serp_page_load_metrics_observer.h"
 
 #include "base/metrics/histogram_functions.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "components/safe_browsing/buildflags.h"
@@ -14,7 +13,7 @@
 #include "content/public/browser/web_contents.h"
 #include "extensions/buildflags/buildflags.h"
 
-#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE) && BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/safe_browsing/extension_telemetry/extension_telemetry_service.h"
 #include "chrome/browser/safe_browsing/extension_telemetry/extension_telemetry_service_factory.h"
 #endif
@@ -84,13 +83,15 @@ void SerpPageLoadMetricsObserver::OnFirstContentfulPaintInPage(
     return;
   }
 
-#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+  // TODO(crbug.com/485331017): Support safe browsing telemetry on desktop
+  // Android.
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE) && BUILDFLAG(ENABLE_EXTENSIONS)
   safe_browsing::ExtensionTelemetryService* telemetry_service =
       safe_browsing::ExtensionTelemetryServiceFactory::GetForProfile(profile);
   if (telemetry_service) {
     telemetry_service->OnDseSerpLoaded();
   }
-#endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+#endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE) && BUILDFLAG(ENABLE_EXTENSIONS)
 }
 
 page_load_metrics::PageLoadMetricsObserver::ObservePolicy

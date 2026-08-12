@@ -32,9 +32,19 @@ void ToolbarChipButton::SetFlatEdge(
 }
 
 float ToolbarChipButton::GetCornerRadiusFor(Edge edge) const {
-  return flat_edge_.has_value() && flat_edge_.value() == edge
-             ? 0
-             : GetRoundedCornerRadius();
+  if (flat_edge_.has_value()) {
+    if (flat_edge_.value() == Edge::kLeft &&
+        (edge == Edge::kLeft || edge == Edge::kTopLeft ||
+         edge == Edge::kBottomLeft)) {
+      return 0;
+    }
+    if (flat_edge_.value() == Edge::kRight &&
+        (edge == Edge::kRight || edge == Edge::kTopRight ||
+         edge == Edge::kBottomRight)) {
+      return 0;
+    }
+  }
+  return GetRoundedCornerRadius();
 }
 
 void ToolbarChipButton::UpdateColorsAndInsets() {
@@ -44,8 +54,9 @@ void ToolbarChipButton::UpdateColorsAndInsets() {
   const auto* color_provider = GetColorProvider();
   if (flat_edge_.has_value() && color_provider) {
     const gfx::Size target_size = GetTargetSize();
-    const int extra_height = std::max(
-        0, target_size.height() - GetLayoutConstant(LOCATION_BAR_HEIGHT));
+    const int extra_height =
+        std::max(0, target_size.height() -
+                        GetLayoutConstant(LayoutConstant::kLocationBarHeight));
     const gfx::Insets paint_insets = gfx::Insets(extra_height / 2) +
                                      *GetProperty(views::kInternalPaddingKey);
     SkColor background_color =

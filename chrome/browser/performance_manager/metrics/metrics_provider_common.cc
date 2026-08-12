@@ -4,7 +4,6 @@
 
 #include "chrome/browser/performance_manager/metrics/metrics_provider_common.h"
 
-#include "base/byte_count.h"
 #include "base/byte_size.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
@@ -68,8 +67,7 @@ MetricsProviderCommon::~MetricsProviderCommon() = default;
 
 void MetricsProviderCommon::RecordAvailableMemoryMetrics() {
   auto available_bytes = base::SysInfo::AmountOfAvailablePhysicalMemory();
-  auto total_bytes = base::ByteSize::FromDeprecatedByteCount(
-      base::SysInfo::AmountOfPhysicalMemory());
+  auto total_bytes = base::SysInfo::AmountOfTotalPhysicalMemory();
 
   base::UmaHistogramMemoryLargeMB("Memory.Experimental.AvailableMemoryMB",
                                   available_bytes.InMiB());
@@ -82,10 +80,6 @@ void MetricsProviderCommon::RecordAvailableMemoryMetrics() {
   if (base::GetSystemMemoryInfo(&info)) {
     base::UmaHistogramMemoryLargeMB(
         "Memory.Experimental.MacFileBackedMemoryMB2", info.file_backed.InMiB());
-    base::UmaHistogramPercentage(
-        "Memory.Experimental.MacAvailableMemoryPercentFreePageCache2",
-        (available_bytes + info.file_backed).InBytes() * 100u /
-            total_bytes.InBytes());
   }
 #endif
 }
@@ -108,8 +102,9 @@ void MetricsProviderCommon::RecordA11yFlags() {
     MaybeRecordAccessibilityModeFlags(mode, ui::AXMode::kLabelImages);
     MaybeRecordAccessibilityModeFlags(mode, ui::AXMode::kPDFPrinting);
     MaybeRecordAccessibilityModeFlags(mode, ui::AXMode::kAnnotateMainNode);
-    // ui::AXMode::kFromPlatform is unconditionally filtered out and is
-    // therefore never present in `mode`.
+    // ui::AXMode::kFromPlatform and ui::AXMode::kNativeAdaptedWebContents are
+    // unconditionally filtered out from the process-wide mode to prevent
+    // metrics/UMA pollution, and are therefore never present in `mode`.
     MaybeRecordAccessibilityModeFlags(mode, ui::AXMode::kScreenReader);
   }
 }

@@ -6,6 +6,7 @@
 
 #include "ash/public/cpp/app_menu_constants.h"
 #include "ash/public/cpp/new_window_delegate.h"
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -21,17 +22,14 @@
 #include "chrome/browser/ash/crostini/crostini_manager.h"
 #include "chrome/browser/ash/crostini/crostini_util.h"
 #include "chrome/browser/ash/guest_os/guest_os_terminal.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_manager.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_manager_factory.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
 #include "chrome/browser/extensions/context_menu_matcher.h"
 #include "chrome/browser/extensions/menu_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/chrome_pages.h"
-#include "chrome/browser/ui/webui/ash/settings/app_management/app_management_uma.h"
-#include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
 #include "components/app_constants/constants.h"
 #include "components/services/app_service/public/cpp/types_util.h"
+#include "components/user_manager/user.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/context_menu_params.h"
@@ -210,9 +208,6 @@ void AppServiceContextMenu::ExecuteCommand(int command_id, int event_flags) {
       if (app_id() == guest_os::kTerminalSystemAppId) {
         crostini::CrostiniManager::GetForProfile(profile())->StopRunningVms(
             base::DoNothing());
-      } else if (app_id() == plugin_vm::kPluginVmShelfAppId) {
-        plugin_vm::PluginVmManagerFactory::GetForProfile(profile())
-            ->StopPluginVm(plugin_vm::kPluginVmName, /*force=*/false);
       } else {
         LOG(ERROR) << "App " << app_id()
                    << " should not have a shutdown guest OS command.";
@@ -382,9 +377,15 @@ void AppServiceContextMenu::BuildExtensionAppShortcutsMenu(
 
 void AppServiceContextMenu::ShowAppInfo() {
   if (app_type_ == apps::AppType::kArc) {
-    chrome::ShowAppManagementPage(
-        profile(), app_id(),
-        ash::settings::AppManagementEntryPoint::kAppListContextMenuAppInfoArc);
+    const user_manager::User* user =
+        ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile());
+    ash::SettingsAppManager::Get()->Open(
+        CHECK_DEREF(user),
+        ash::SettingsAppManager::OpenParams{
+            .sub_page =
+                ash::SettingsAppManager::CreateAppManagementPagePath(app_id()),
+            .entry_point = ash::SettingsAppManager::EntryPoint::
+                kAppListContextMenuAppInfoArc});
     return;
   }
 

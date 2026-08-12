@@ -7,7 +7,7 @@ xml-rs, an XML library for Rust
 
 [Documentation](https://docs.rs/xml/)
 
-  [crates-io-img]: https://img.shields.io/crates/v/xml-rs.svg
+  [crates-io-img]: https://img.shields.io/crates/v/xml.svg
   [docs-img]: https://img.shields.io/badge/docs-latest%20release-6495ed.svg
 
 xml-rs is an XML library for the [Rust](https://www.rust-lang.org/) programming language.
@@ -35,8 +35,7 @@ clean manner.
 
 This parser is mostly full-featured, however, there are limitations:
 * Legacy code pages and non-Unicode encodings are not supported;
-* DTD validation is not supported (but entities defined in the internal subset are supported);
-* attribute value normalization is not performed, and end-of-line characters are not normalized either.
+* DTD validation is not supported (but entities defined in the internal subset are supported).
 
 Other than that the parser tries to be mostly XML-1.1-compliant.
 
@@ -61,7 +60,7 @@ The package exposes a single crate called `xml`.
 Reading XML documents
 ---------------------
 
-[`xml::reader::EventReader`](EventReader) requires a [`Read`](stdread) instance to read from. It can be a `File` wrapped in `BufReader`, or a `Vec<u8>`, or a `&[u8]` slice.
+[`xml::reader::EventReader`][EventReader] requires a [`Read`][stdread] instance to read from. It can be a `File` wrapped in `BufReader`, or a `Vec<u8>`, or a `&[u8]` slice.
 
 [EventReader]: https://docs.rs/xml/latest/xml/reader/struct.EventReader.html
 [stdread]: https://doc.rust-lang.org/stable/std/io/trait.Read.html

@@ -26,12 +26,33 @@ namespace viz {
 
 CopyOutputResult::CopyOutputResult(Format format,
                                    Destination destination,
+                                   Error error)
+    : CopyOutputResult(format,
+                       destination,
+                       gfx::Rect(),
+                       /*needs_lock_for_bitmap=*/false,
+                       error) {}
+
+CopyOutputResult::CopyOutputResult(Format format,
+                                   Destination destination,
                                    const gfx::Rect& rect,
                                    bool needs_lock_for_bitmap)
+    : CopyOutputResult(format,
+                       destination,
+                       rect,
+                       needs_lock_for_bitmap,
+                       Error::kNone) {}
+
+CopyOutputResult::CopyOutputResult(Format format,
+                                   Destination destination,
+                                   const gfx::Rect& rect,
+                                   bool needs_lock_for_bitmap,
+                                   Error error)
     : format_(format),
       destination_(destination),
       rect_(rect),
-      needs_lock_for_bitmap_(needs_lock_for_bitmap) {
+      needs_lock_for_bitmap_(needs_lock_for_bitmap),
+      error_(error) {
   DCHECK(format_ == Format::RGBA || format_ == Format::RGBAF16 ||
          format_ == Format::I420_PLANES || format == Format::NV12);
   DCHECK(destination_ == Destination::kSystemMemory ||
@@ -235,8 +256,8 @@ CopyOutputSharedImageResult::CopyOutputSharedImageResult(
       release_callback_(std::move(release_callback)) {
   // check non-null `shared_image_`
   DCHECK(shared_image_);
-  // If we're constructing empty result, all mailbox_holders must be zero.
-  // Otherwise, the first mailbox must be non-zero.
+  // If we're constructing empty result, all shared image mailboxes must be
+  // zero. Otherwise, the first mailbox must be non-zero.
   DCHECK_EQ(rect.IsEmpty(), shared_image_->mailbox().IsZero());
   // If we're constructing empty result, the callbacks must be empty.
   // From definition of implication: p => q  <=>  !p || q.
@@ -259,6 +280,25 @@ CopyOutputSharedImageResult::GetSharedImage() {
 ReleaseCallback CopyOutputSharedImageResult::TakeSharedImageOwnership() {
   return std::move(release_callback_);
 }
+
+CopyOutputBitmapWithMetadata::CopyOutputBitmapWithMetadata() = default;
+
+CopyOutputBitmapWithMetadata::CopyOutputBitmapWithMetadata(SkBitmap bitmap)
+    : CopyOutputBitmapWithMetadata(std::move(bitmap), TrackedElementRects()) {}
+
+CopyOutputBitmapWithMetadata::CopyOutputBitmapWithMetadata(
+    SkBitmap bitmap,
+    TrackedElementRects tracked_element_rects)
+    : bitmap(std::move(bitmap)),
+      tracked_element_rects(std::move(tracked_element_rects)) {}
+
+CopyOutputBitmapWithMetadata::CopyOutputBitmapWithMetadata(
+    const CopyOutputBitmapWithMetadata& other) = default;
+
+CopyOutputBitmapWithMetadata& CopyOutputBitmapWithMetadata::operator=(
+    const CopyOutputBitmapWithMetadata& other) = default;
+
+CopyOutputBitmapWithMetadata::~CopyOutputBitmapWithMetadata() = default;
 
 CopyOutputResult::ScopedSkBitmap::ScopedSkBitmap() = default;
 
@@ -322,15 +362,20 @@ SkBitmap CopyOutputResult::ScopedSkBitmap::GetOutScopedBitmap() const {
   return bitmap_copy;
 }
 
-base::expected<CopyOutputBitmapWithMetadata, std::string>
+base::expected<CopyOutputBitmapWithMetadata, CopyOutputResult::Error>
 CopyOutputResult::ScopedSkBitmap::GetOutScopedBitmapAndMetadata() const {
   SkBitmap bitmap = GetOutScopedBitmap();
   if (bitmap.drawsNothing()) {
-    return base::unexpected<std::string>(
-        "SkBitmap is empty or null; no pixel data available");
+    if (result_) {
+      return base::unexpected<CopyOutputResult::Error>(result_->error());
+    }
+    return base::unexpected<CopyOutputResult::Error>(
+        CopyOutputResult::Error::kUnknown);
   }
 
-  return CopyOutputBitmapWithMetadata{.bitmap = std::move(bitmap)};
+  return CopyOutputBitmapWithMetadata(
+      std::move(bitmap),
+      result_ ? result_->tracked_element_rects_ : TrackedElementRects());
 }
 
 VIZ_COMMON_EXPORT SharedImageFormat

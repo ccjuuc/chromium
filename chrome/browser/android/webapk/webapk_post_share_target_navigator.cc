@@ -43,17 +43,17 @@ void NavigateShareTargetPost(
 
 static void JNI_WebApkPostShareTargetNavigator_NativeLoadViewForShareTargetPost(
     JNIEnv* env,
-    const jboolean java_is_multipart_encoding,
-    std::vector<std::string>& names,
-    std::vector<std::string>& values,
+    const bool java_is_multipart_encoding,
+    const std::vector<std::string>& names,
+    const std::vector<std::string>& values,
     const JavaRef<jbooleanArray>& java_is_value_file_uris,
-    std::vector<std::string>& filenames,
-    std::vector<std::string>& types,
-    std::string& url,
+    const std::vector<std::string>& filenames,
+    const std::vector<std::string>& types,
+    const std::string& url,
     const JavaRef<jobject>& java_web_contents) {
   std::vector<bool> is_value_file_uris;
 
-  bool is_multipart_encoding = static_cast<bool>(java_is_multipart_encoding);
+  bool is_multipart_encoding = java_is_multipart_encoding;
   base::android::JavaBooleanArrayToBoolVector(env, java_is_value_file_uris,
                                               &is_value_file_uris);
 

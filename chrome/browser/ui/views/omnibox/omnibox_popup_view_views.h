@@ -23,10 +23,13 @@
 #include "ui/views/view.h"
 #include "ui/views/widget/widget_observer.h"
 
+namespace viz {
+class FrameTimingDetails;
+}
+
 class LocationBarView;
 class OmniboxController;
 class OmniboxHeaderView;
-class OmniboxPopupViewWebUI;
 class OmniboxResultView;
 class OmniboxRowGroupedView;
 class OmniboxRowView;
@@ -74,7 +77,7 @@ class OmniboxPopupViewViews : public views::View,
   void GetPopupAccessibleNodeData(ui::AXNodeData* node_data) const override;
   std::u16string_view GetAccessibleButtonTextForResult(
       size_t line) const override;
-  raw_ptr<OmniboxPopupViewWebUI> GetOmniboxPopupViewWebUI() override;
+  bool IsSelectionPopupControlled() const override;
 
   // views::View:
   bool OnMouseDragged(const ui::MouseEvent& event) override;
@@ -91,7 +94,7 @@ class OmniboxPopupViewViews : public views::View,
                           OmniboxPopupSelection new_selection) override;
   void OnMatchIconUpdated(size_t match_index) override;
   void OnContentsChanged() override;
-  void OnKeywordStateChanged(bool is_keyword_selected) override {}
+  void OnCharTyped(base::TimeTicks timestamp) override {}
 
   void FireAXEventsForNewActiveDescendant(View* descendant_view);
 
@@ -172,6 +175,12 @@ class OmniboxPopupViewViews : public views::View,
   // OmniboxPopupView:
   bool IsOpen() const override;
 
+  // Callback to log presentation metrics.
+  void OnPopupFirstPaintPresented(
+      base::TimeTicks request_start_time,
+      std::optional<base::TimeTicks> popup_create_start_time,
+      const viz::FrameTimingDetails& frame_timing_details);
+
   // The popup widget that contains this View. Created and closed by `this`;
   // owned and destroyed by the OS. This is a WeakPtr because it's possible for
   // the OS to destroy the window and thus delete this object before `this` is
@@ -202,6 +211,21 @@ class OmniboxPopupViewViews : public views::View,
   // Used to observe `OmniboxEditModel`.
   base::ScopedObservation<OmniboxEditModel, OmniboxEditModel::Observer>
       edit_model_observation_{this};
+
+  // Whether the first paint of this popup has been recorded. This is used to
+  // ensure that we only record metrics for the first time the popup is shown in
+  // its lifetime, which is 1 per window.
+  bool recorded_first_paint_ = false;
+
+  // Whether the first content ready metric of this popup has been logged.
+  bool has_logged_first_content_ready_ = false;
+
+  // Whether the content ready metric has been logged since the popup was
+  // opened. This is used to ensure that we only record the metric for the
+  // first results that are ready after the popup is opened.
+  bool has_logged_content_ready_since_open_ = false;
+
+  base::WeakPtrFactory<OmniboxPopupViewViews> metrics_weak_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_OMNIBOX_OMNIBOX_POPUP_VIEW_VIEWS_H_

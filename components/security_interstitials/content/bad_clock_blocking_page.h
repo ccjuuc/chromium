@@ -12,6 +12,7 @@
 #include "components/security_interstitials/content/ssl_blocking_page_base.h"
 #include "components/ssl_errors/error_classification.h"
 #include "content/public/browser/certificate_request_result_type.h"
+#include "net/base/net_errors.h"
 #include "net/ssl/ssl_info.h"
 
 class GURL;
@@ -35,7 +36,7 @@ class BadClockBlockingPage : public SSLBlockingPageBase {
   // shown.
   BadClockBlockingPage(
       content::WebContents* web_contents,
-      int cert_error,
+      net::Error cert_error,
       const net::SSLInfo& ssl_info,
       const GURL& request_url,
       const base::Time& time_triggered,
@@ -57,7 +58,7 @@ class BadClockBlockingPage : public SSLBlockingPageBase {
  protected:
   // SecurityInterstitialPage implementation:
   void CommandReceived(const std::string& command) override;
-  void PopulateInterstitialStrings(base::Value::Dict& load_time_data) override;
+  void PopulateInterstitialStrings(base::DictValue& load_time_data) override;
 
  private:
   const net::SSLInfo ssl_info_;

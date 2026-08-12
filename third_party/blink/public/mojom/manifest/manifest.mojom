@@ -8,6 +8,7 @@ import "mojo/public/mojom/base/string16.mojom";
 import "services/device/public/mojom/screen_orientation_lock_types.mojom";
 import "third_party/blink/public/mojom/manifest/display_mode.mojom";
 import "third_party/blink/public/mojom/manifest/manifest_launch_handler.mojom";
+import "third_party/blink/public/mojom/manifest/manifest_migration_behavior.mojom";
 import "services/network/public/mojom/permissions_policy/permissions_policy.mojom";
 import "third_party/blink/public/mojom/safe_url_pattern.mojom";
 import "ui/gfx/geometry/mojom/geometry.mojom";
@@ -60,8 +61,6 @@ struct Manifest {
 
   array<DisplayOverrideItem> display_override;
 
-  array<SafeUrlPattern> borderless_url_patterns;
-
   device.mojom.ScreenOrientationLockType orientation;
 
   array<ManifestImageResource> icons;
@@ -111,21 +110,15 @@ struct Manifest {
   // The app that this PWA intends to migrate to.
   ManifestMigrateTo? migrate_to;
 
-  // TODO(https://crbug.com/657632): Numeric types are not nullable. =(
-  bool has_theme_color;
-  uint32 theme_color;
-
-  // TODO(https://crbug.com/657632): Numeric types are not nullable. =(
-  bool has_background_color;
-  uint32 background_color;
+  // TODO(https://crbug.com/479448266): Use skia.mojom.SkColor.
+  uint32? theme_color;
+  uint32? background_color;
 
   mojo_base.mojom.String16? gcm_sender_id;
 
   // Defaults to the start URL (or document URL if start URL isn't present) with
   // filename, query, and fragment removed if not present.
   url.mojom.Url scope;
-
-  array<network.mojom.ParsedPermissionsPolicyDeclaration> permissions_policy;
 
   // TODO(crbug.com/454569670): This field is non-standard and used for
   // unmanaged IWA installs.
@@ -144,12 +137,12 @@ struct Manifest {
   map<mojo_base.mojom.String16, ManifestTranslationItem> translations;
 
   // TODO(b:340126786): Remove these obsolete fields.
-  // TODO(crbug.com/1318305): This field is non-standard and part of a Chrome
+  // TODO(crbug.com/40222835): This field is non-standard and part of a Chrome
   // experiment. See: https://github.com/w3c/manifest/issues/1045
-  bool has_dark_theme_color;
-  uint32 dark_theme_color;
-  bool has_dark_background_color;
-  uint32 dark_background_color;
+  // TODO(https://crbug.com/479448266): Use skia.mojom.SkColor possibly if these
+  // aren't yet removed.
+  uint32? dark_theme_color;
+  uint32? dark_background_color;
 
   // TODO(crbug.com/897314): This field is non-standard and part of a Chrome
   // experiment. See:
@@ -354,8 +347,6 @@ struct ManifestFileHandler {
   url.mojom.Url action;
   // Human-readable name for the file handler. May be displayed in file manager.
   mojo_base.mojom.String16 name;
-  // Icon representing the file handler. May be displayed in file manager.
-  array<ManifestImageResource> icons;
   // A mapping of a MIME types to a corresponding list of file extensions.
   map<mojo_base.mojom.String16, array<mojo_base.mojom.String16>> accept;
 
@@ -380,14 +371,6 @@ struct ManifestTranslationItem {
   mojo_base.mojom.String16? short_name;
 
   mojo_base.mojom.String16? description;
-};
-
-// Enumeration of possible behaviors for the migration.
-enum ManifestMigrationBehavior {
-  // The migration is suggested (default).
-  kSuggest,
-  // The migration is forced.
-  kForce,
 };
 
 // Structure representing a migration source for a PWA (migrate_from).

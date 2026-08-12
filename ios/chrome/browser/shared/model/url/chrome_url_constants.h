@@ -36,11 +36,14 @@ inline constexpr char kChromeUIOnDeviceLlmInternalsURL[] =
 inline constexpr char kChromeUIPolicyURL[] = "chrome://policy/";
 inline constexpr char kChromeUIPolicyLogsURL[] = "chrome://policy/logs";
 inline constexpr char kChromeUIPolicyTestURL[] = "chrome://policy/test";
+inline constexpr char kChromeUISafeBrowsingURL[] = "chrome://safe-browsing";
 inline constexpr char kChromeUISettingsURL[] = "chrome://settings/";
 inline constexpr char kChromeUITermsURL[] = "chrome://terms/";
+inline constexpr char kChromeUITracingURL[] = "chrome://tracing/";
 inline constexpr char kChromeUIVersionURL[] = "chrome://version/";
 
 // URL components for Chrome on iOS.
+inline constexpr char kChromeUIActorInternalsHost[] = "actor-internals";
 inline constexpr char kChromeUIAutofillInternalsHost[] = "autofill-internals";
 inline constexpr char kChromeUIBrowserCrashHost[] =
     "inducebrowsercrashforrealz";
@@ -48,6 +51,8 @@ inline constexpr char kChromeUICrashHost[] = "crash";
 inline constexpr char kChromeUIChromeURLsHost[] = "chrome-urls";
 inline constexpr char kChromeUICrashesHost[] = "crashes";
 inline constexpr char kChromeUICreditsHost[] = "credits";
+inline constexpr char kChromeUIConnectorsInternalsHost[] =
+    "connectors-internals";
 inline constexpr char kChromeUIDataSharingInternalsHost[] =
     "data-sharing-internals";
 inline constexpr char kChromeUIDinoHost[] = "dino";
@@ -61,10 +66,10 @@ inline constexpr char kChromeUIInspectHost[] = "inspect";
 inline constexpr char kChromeUIInterstitialsHost[] = "interstitials";
 inline constexpr char kChromeUILocalStateHost[] = "local-state";
 inline constexpr char kChromeUIManagementHost[] = "management";
+inline constexpr char kChromeUIMetricsInternalsHost[] = "metrics-internals";
 inline constexpr char kChromeUINetExportHost[] = "net-export";
 inline constexpr char kChromeUINewTabHost[] = "newtab";
 inline constexpr char kChromeUINTPTilesInternalsHost[] = "ntp-tiles-internals";
-inline constexpr char kChromeUIOfflineHost[] = "offline";
 inline constexpr char kChromeUIOmahaHost[] = "omaha";
 inline constexpr char kChromeUIOnDeviceLlmInternalsHost[] =
     "on-device-llm-internals";
@@ -72,9 +77,13 @@ inline constexpr char kChromeUIPasswordManagerInternalsHost[] =
     "password-manager-internals";
 inline constexpr char kChromeUIPolicyHost[] = "policy";
 inline constexpr char kChromeUIPrefsInternalsHost[] = "prefs-internals";
+inline constexpr char kChromeUIPrivateAiInternalsHost[] =
+    "private-ai-internals";
 inline constexpr char kChromeUIProfileInternalsHost[] = "profile-internals";
+inline constexpr char kChromeUISafeBrowsingHost[] = "safe-browsing";
 inline constexpr char kChromeUISignInInternalsHost[] = "signin-internals";
 inline constexpr char kChromeUITermsHost[] = "terms";
+inline constexpr char kChromeUITracingHost[] = "tracing";
 inline constexpr char kChromeUITranslateInternalsHost[] = "translate-internals";
 inline constexpr char kChromeUIURLKeyedMetricsHost[] = "ukm";
 inline constexpr char kChromeUIUserActionsHost[] = "user-actions";
@@ -103,6 +112,11 @@ inline constexpr char kOnDeviceEncryptionLearnMoreURL[] =
 // "What do these mean?" URL for the Page Info bubble.
 inline constexpr char kPageInfoHelpCenterURL[] =
     "https://support.google.com/chrome?p=ui_security_indicator&ios=1";
+
+// Help Center URL for the Assistant AIM / Cobrowse feature.
+inline constexpr char kAssistantAIMHelpCenterURL[] =
+    "https://support.google.com/websearch/answer/"
+    "16011537?hl=en&co=GENIE.Platform%3DiOS&oco=0";
 
 // "Learn more" URL for "Aw snap" page when showing "Reload" button.
 inline constexpr char kCrashReasonURL[] =
@@ -193,27 +207,39 @@ inline constexpr char kEnhancedSafeBrowsingLearnMoreURL[] =
 inline constexpr char kMyActivityURL[] =
     "https://myactivity.google.com/myactivity";
 
+// Help center URL for the Bookmarks limit exceeded error.
+inline constexpr char kBookmarksLimitExceededHelpCenter[] =
+    "https://support.google.com/chrome?p=manage_bookmarks_ios";
+
 // "Learn more" URL for the Lens Overlay.
 inline constexpr char kLearnMoreLensURL[] =
     "https://support.google.com/chrome/?p=google_lens_ios";
 
-// URL for the BWG App Activity Settings row.
-inline constexpr char kBWGAppActivityURL[] =
+// URL for the Gemini App Activity Settings row.
+inline constexpr char kGeminiAppActivityURL[] =
     "https://myactivity.google.com/product/gemini?utm_source=gemini&pli=1";
 
-// URL for the BWG Precise Location Settings row.
-inline constexpr char kBWGPreciseLocationURL[] =
+// URL for the Gemini Precise Location Settings row.
+inline constexpr char kGeminiPreciseLocationURL[] =
     "http://support.google.com/gemini?p=gcr_location_info";
 
-// URL for the BWG Page Content Sharing Settings row.
-inline constexpr char kBWGPageContentSharingURL[] =
+// URL for the Gemini Page Content Sharing Settings row.
+inline constexpr char kGeminiPageContentSharingURL[] =
     "https://support.google.com/gemini?p=chrome_PH#topic=15280100";
 
-// URL for the BWG Extensions Settings row.
-inline constexpr char kBWGExtensionsURL[] = "https://gemini.google.com/apps";
+// URL for the Gemini Extensions Settings row.
+inline constexpr char kGeminiExtensionsURL[] = "https://gemini.google.com/apps";
+
+// URL navigated to after the Gemini App Store External Actions event.
+inline constexpr char kGeminiAppStorePromoURL[] =
+    "https://www.google.com/chrome/mobile/#scrollable-gemini-in-chrome-slide-1";
+
+// URL for the Connected Apps Settings row.
+inline constexpr char kConnectedAppsURL[] =
+    "https://myactivity.google.com/search-services/apps?pli=1";
 
 // Gets the hosts/domains that are shown in chrome://chrome-urls.
-inline constexpr std::array<std::string_view, 21> kChromeHostURLs = {
+inline constexpr auto kChromeHostURLs = std::to_array<std::string_view>({
     commerce::kChromeUICommerceInternalsHost,
     kChromeUIChromeURLsHost,
     kChromeUICreditsHost,
@@ -224,10 +250,13 @@ inline constexpr std::array<std::string_view, 21> kChromeHostURLs = {
     kChromeUIInterstitialsHost,
     kChromeUILocalStateHost,
     kChromeUIManagementHost,
+    kChromeUIMetricsInternalsHost,
     kChromeUINetExportHost,
     kChromeUINewTabHost,
     kChromeUINTPTilesInternalsHost,
     kChromeUIPasswordManagerInternalsHost,
+    kChromeUIPrefsInternalsHost,
+    kChromeUIPrivateAiInternalsHost,
     kChromeUISignInInternalsHost,
     kChromeUISyncInternalsHost,
     kChromeUITermsHost,
@@ -235,6 +264,6 @@ inline constexpr std::array<std::string_view, 21> kChromeHostURLs = {
     kChromeUIVersionHost,
     optimization_guide_internals::kChromeUIOptimizationGuideInternalsHost,
     regional_capabilities::kChromeUIRegionalCapabilitiesInternalsHost,
-};
+});
 
 #endif  // IOS_CHROME_BROWSER_SHARED_MODEL_URL_CHROME_URL_CONSTANTS_H_

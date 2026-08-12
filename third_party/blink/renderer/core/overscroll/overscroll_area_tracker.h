@@ -7,7 +7,7 @@
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/element.h"
-#include "third_party/blink/renderer/core/dom/element_rare_data_field.h"
+#include "third_party/blink/renderer/core/dom/node_rare_data_field.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/heap_traits.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
@@ -19,7 +19,7 @@ class Element;
 
 class CORE_EXPORT OverscrollAreaTracker
     : public GarbageCollected<OverscrollAreaTracker>,
-      public ElementRareDataField {
+      public NodeRareDataField {
  public:
   explicit OverscrollAreaTracker(Element*);
 
@@ -27,10 +27,12 @@ class CORE_EXPORT OverscrollAreaTracker
   void RemoveOverscroll(Element*);
   void RemoveAllOverscroll();
 
-  const VectorOf<Element>& DOMSortedElements();
+  void ToggleArea(Element* overscroll_area);
+  void OpenArea(Element* overscroll_area);
+  void CloseArea(Element* overscroll_area);
+  void CloseAllAreas();
 
-  bool NeedsLayoutTreeRebuild() const { return needs_layout_tree_rebuild_; }
-  void ClearNeedsLayoutTreeRebuild() { needs_layout_tree_rebuild_ = false; }
+  const VectorOf<Element>& DOMSortedElements();
 
   void Trace(Visitor*) const override;
 
@@ -41,7 +43,6 @@ class CORE_EXPORT OverscrollAreaTracker
 
   VectorOf<Element> overscroll_members_;
   bool needs_dom_sort_ = false;
-  bool needs_layout_tree_rebuild_ = false;
 };
 
 }  // namespace blink

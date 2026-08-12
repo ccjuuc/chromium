@@ -16,6 +16,7 @@
 #include "base/pickle.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "net/base/cache_type.h"
@@ -460,7 +461,7 @@ TEST_F(SimpleIndexFileTest, SimpleCacheUpgrade) {
   TrivialFileOperations file_operations;
   // Upgrade the cache.
   ASSERT_EQ(disk_cache::UpgradeSimpleCacheOnDisk(&file_operations, cache_path),
-            SimpleCacheConsistencyResult::kOK);
+            SimpleCacheConsistencyResult::kOKUpgraded);
 
   // Create the backend and initiate index flush by destroying the backend.
   scoped_refptr<disk_cache::BackendCleanupTracker> cleanup_tracker =
@@ -474,7 +475,7 @@ TEST_F(SimpleIndexFileTest, SimpleCacheUpgrade) {
   auto simple_cache = std::make_unique<disk_cache::SimpleBackendImpl>(
       /*file_operations_factory=*/nullptr, cache_path, cleanup_tracker,
       /*file_tracker=*/nullptr, 0, net::DISK_CACHE,
-      /*net_log=*/nullptr, /*cache_encryption_delegate=*/nullptr);
+      /*cache_entry_hasher=*/nullptr, /*net_log=*/nullptr);
   net::TestCompletionCallback cb;
   simple_cache->Init(cb.callback());
   EXPECT_THAT(cb.WaitForResult(), IsOk());
@@ -530,6 +531,26 @@ TEST_F(SimpleIndexFileTest, OverwritesStaleTempFile) {
   // Check that the temporary file was deleted and the index file was created.
   EXPECT_FALSE(base::PathExists(simple_index_file.GetTempIndexFilePath()));
   EXPECT_TRUE(base::PathExists(simple_index_file.GetIndexFilePath()));
+}
+
+TEST_F(SimpleIndexFileTest, WriteReportsUMA) {
+  base::ScopedTempDir cache_dir;
+  ASSERT_TRUE(cache_dir.CreateUniqueTempDir());
+
+  SimpleIndex::EntrySet entries;
+  SimpleIndex::InsertInEntrySet(11, EntryMetadata(Time(), 11u), &entries);
+
+  base::HistogramTester histogram_tester;
+  WrappedSimpleIndexFile simple_index_file(cache_dir.GetPath());
+
+  net::TestClosure closure;
+  simple_index_file.WriteToDisk(net::DISK_CACHE,
+                                SimpleIndex::INDEX_WRITE_REASON_SHUTDOWN,
+                                entries, 120U, closure.closure());
+  closure.WaitForResult();
+
+  histogram_tester.ExpectUniqueSample("SimpleCache.Http.IndexWriteResult", 0,
+                                      1);
 }
 
 }  // namespace disk_cache

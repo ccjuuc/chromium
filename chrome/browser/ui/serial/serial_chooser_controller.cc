@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
@@ -44,7 +43,7 @@
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/chooser_controller/title_util.h"  // nogncheck
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 namespace {
@@ -84,7 +83,8 @@ bool BluetoothPortIsAllowed(
   if (*port.bluetooth_service_class_id == device::GetSerialPortProfileUUID()) {
     return true;
   }
-  return base::Contains(allowed_ids, port.bluetooth_service_class_id.value());
+  return std::ranges::contains(allowed_ids,
+                               port.bluetooth_service_class_id.value());
 }
 
 }  // namespace
@@ -168,8 +168,10 @@ void SerialChooserController::GetDevices() {
     }
   }
 
-  chooser_context_->GetPortManager()->GetDevices(base::BindOnce(
-      &SerialChooserController::OnGetDevices, weak_factory_.GetWeakPtr()));
+  chooser_context_->GetPortManager()->GetDevices(
+      /*allow_bluetooth_system_prompt=*/true,
+      base::BindOnce(&SerialChooserController::OnGetDevices,
+                     weak_factory_.GetWeakPtr()));
 }
 
 bool SerialChooserController::ShouldShowHelpButton() const {
@@ -543,9 +545,10 @@ void SerialChooserController::OpenBluetoothHelpUrl() const {
   }
 #else
   chrome::ScopedTabbedBrowserDisplayer browser_displayer(profile);
-  CHECK(browser_displayer.browser());
-  browser_displayer.browser()->OpenURL(open_url_params,
-                                       /*navigation_handle_callback=*/{});
+  CHECK(browser_displayer.browser_window_interface());
+  browser_displayer.browser_window_interface()->OpenURL(
+      open_url_params,
+      /*navigation_handle_callback=*/{});
 #endif  // BUILDFLAG(IS_ANDROID)
 #endif  // BUILDFLAG(IS_CHROMEOS)
 }

@@ -29,8 +29,10 @@
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
 
 #include <memory>
+#include <optional>
 
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/no_destructor.h"
 #include "base/strings/pattern.h"
 #include "base/strings/string_split.h"
@@ -93,53 +95,77 @@ Referrer SecurityPolicy::GenerateReferrer(
   if (referrer == Referrer::NoReferrer() || referrer.empty())
     return Referrer(Referrer::NoReferrer(), referrer_policy_no_default);
 
-  KURL referrer_url = KURL(NullURL(), referrer).UrlStrippedForUseAsReferrer();
+  KURL referrer_url = KURL(NullUrl(), referrer).UrlStrippedForUseAsReferrer();
+  return GenerateReferrer(referrer_policy, url, referrer_url);
+}
+
+Referrer SecurityPolicy::GenerateReferrer(
+    network::mojom::ReferrerPolicy referrer_policy,
+    const KURL& url,
+    const KURL& referrer_url) {
+  // Enforce that the incoming KURL is pre-stripped (or invalid) since this
+  // overload skips the initial stripping and validation pass.
+  DCHECK(!referrer_url.IsValid() ||
+         referrer_url == referrer_url.UrlStrippedForUseAsReferrer());
+
+  network::mojom::ReferrerPolicy referrer_policy_no_default =
+      ReferrerUtils::MojoReferrerPolicyResolveDefault(referrer_policy);
 
   if (!referrer_url.IsValid())
     return Referrer(Referrer::NoReferrer(), referrer_policy_no_default);
 
   // 5. Let referrerOrigin be the result of stripping referrerSource for use as
   // a referrer, with the origin-only flag set to true.
-  KURL referrer_origin = referrer_url;
-  referrer_origin.SetPath(String());
-  referrer_origin.SetQuery(String());
+  // Creating referrerOrigin can be an expensive operation so we use a lambda
+  // to create it dynamically only for the cases where it is used.
+  std::optional<KURL> referrer_origin;
+  auto get_referrer_origin = [&]() -> const KURL& {
+    if (!referrer_origin) {
+      referrer_origin.emplace(referrer_url);
+      referrer_origin->SetPath(String());
+      referrer_origin->SetQuery(String());
+    }
+    return *referrer_origin;
+  };
 
   // 6. If the result of serializing referrerURL is a string whose length is
   // greater than 4096, set referrerURL to referrerOrigin.
-  if (referrer_url.GetString().length() > 4096)
-    referrer_url = referrer_origin;
+  KURL final_referrer_url = referrer_url;
+  if (final_referrer_url.GetString().length() > 4096) {
+    final_referrer_url = get_referrer_origin();
+  }
 
   switch (referrer_policy_no_default) {
     case network::mojom::ReferrerPolicy::kNever:
       return Referrer(Referrer::NoReferrer(), referrer_policy_no_default);
     case network::mojom::ReferrerPolicy::kAlways:
-      return Referrer(referrer_url, referrer_policy_no_default);
+      return Referrer(final_referrer_url, referrer_policy_no_default);
     case network::mojom::ReferrerPolicy::kOrigin: {
-      return Referrer(referrer_origin, referrer_policy_no_default);
+      return Referrer(get_referrer_origin(), referrer_policy_no_default);
     }
     case network::mojom::ReferrerPolicy::kOriginWhenCrossOrigin: {
-      if (!SecurityOrigin::AreSameOrigin(referrer_url, url)) {
-        return Referrer(referrer_origin, referrer_policy_no_default);
+      if (!SecurityOrigin::AreSameOrigin(final_referrer_url, url)) {
+        return Referrer(get_referrer_origin(), referrer_policy_no_default);
       }
       break;
     }
     case network::mojom::ReferrerPolicy::kSameOrigin: {
-      if (!SecurityOrigin::AreSameOrigin(referrer_url, url)) {
+      if (!SecurityOrigin::AreSameOrigin(final_referrer_url, url)) {
         return Referrer(Referrer::NoReferrer(), referrer_policy_no_default);
       }
-      return Referrer(referrer_url, referrer_policy_no_default);
+      return Referrer(final_referrer_url, referrer_policy_no_default);
     }
     case network::mojom::ReferrerPolicy::kStrictOrigin: {
-      return Referrer(ShouldHideReferrer(url, referrer_url)
+      return Referrer(ShouldHideReferrer(url, final_referrer_url)
                           ? Referrer::NoReferrer()
-                          : referrer_origin,
+                          : get_referrer_origin(),
                       referrer_policy_no_default);
     }
     case network::mojom::ReferrerPolicy::kStrictOriginWhenCrossOrigin: {
-      if (!SecurityOrigin::AreSameOrigin(referrer_url, url)) {
-        return Referrer(ShouldHideReferrer(url, referrer_url)
+      if (!SecurityOrigin::AreSameOrigin(final_referrer_url, url)) {
+        return Referrer(ShouldHideReferrer(url, final_referrer_url)
                             ? Referrer::NoReferrer()
-                            : referrer_origin,
+                            : get_referrer_origin(),
                         referrer_policy_no_default);
       }
       break;
@@ -150,8 +176,9 @@ Referrer SecurityPolicy::GenerateReferrer(
       NOTREACHED();
   }
 
-  return Referrer(ShouldHideReferrer(url, referrer_url) ? Referrer::NoReferrer()
-                                                        : referrer_url,
+  return Referrer(ShouldHideReferrer(url, final_referrer_url)
+                      ? Referrer::NoReferrer()
+                      : final_referrer_url,
                   referrer_policy_no_default);
 }
 
@@ -216,51 +243,51 @@ void SecurityPolicy::ClearOriginAccessList() {
 }
 
 bool SecurityPolicy::ReferrerPolicyFromString(
-    const String& policy,
+    const StringView& policy,
     ReferrerPolicyLegacyKeywordsSupport legacy_keywords_support,
     network::mojom::ReferrerPolicy* result) {
   DCHECK(!policy.IsNull());
   bool support_legacy_keywords =
       (legacy_keywords_support == kSupportReferrerPolicyLegacyKeywords);
 
-  if (EqualIgnoringASCIICase(policy, "no-referrer") ||
-      (support_legacy_keywords && (EqualIgnoringASCIICase(policy, "never") ||
-                                   EqualIgnoringASCIICase(policy, "none")))) {
+  if (EqualIgnoringAsciiCase(policy, "no-referrer") ||
+      (support_legacy_keywords && (EqualIgnoringAsciiCase(policy, "never") ||
+                                   EqualIgnoringAsciiCase(policy, "none")))) {
     *result = network::mojom::ReferrerPolicy::kNever;
     return true;
   }
-  if (EqualIgnoringASCIICase(policy, "unsafe-url") ||
-      (support_legacy_keywords && EqualIgnoringASCIICase(policy, "always"))) {
+  if (EqualIgnoringAsciiCase(policy, "unsafe-url") ||
+      (support_legacy_keywords && EqualIgnoringAsciiCase(policy, "always"))) {
     *result = network::mojom::ReferrerPolicy::kAlways;
     return true;
   }
-  if (EqualIgnoringASCIICase(policy, "origin")) {
+  if (EqualIgnoringAsciiCase(policy, "origin")) {
     *result = network::mojom::ReferrerPolicy::kOrigin;
     return true;
   }
-  if (EqualIgnoringASCIICase(policy, "origin-when-cross-origin") ||
+  if (EqualIgnoringAsciiCase(policy, "origin-when-cross-origin") ||
       (support_legacy_keywords &&
-       EqualIgnoringASCIICase(policy, "origin-when-crossorigin"))) {
+       EqualIgnoringAsciiCase(policy, "origin-when-crossorigin"))) {
     *result = network::mojom::ReferrerPolicy::kOriginWhenCrossOrigin;
     return true;
   }
-  if (EqualIgnoringASCIICase(policy, "same-origin")) {
+  if (EqualIgnoringAsciiCase(policy, "same-origin")) {
     *result = network::mojom::ReferrerPolicy::kSameOrigin;
     return true;
   }
-  if (EqualIgnoringASCIICase(policy, "strict-origin")) {
+  if (EqualIgnoringAsciiCase(policy, "strict-origin")) {
     *result = network::mojom::ReferrerPolicy::kStrictOrigin;
     return true;
   }
-  if (EqualIgnoringASCIICase(policy, "strict-origin-when-cross-origin")) {
+  if (EqualIgnoringAsciiCase(policy, "strict-origin-when-cross-origin")) {
     *result = network::mojom::ReferrerPolicy::kStrictOriginWhenCrossOrigin;
     return true;
   }
-  if (EqualIgnoringASCIICase(policy, "no-referrer-when-downgrade")) {
+  if (EqualIgnoringAsciiCase(policy, "no-referrer-when-downgrade")) {
     *result = network::mojom::ReferrerPolicy::kNoReferrerWhenDowngrade;
     return true;
   }
-  if (support_legacy_keywords && EqualIgnoringASCIICase(policy, "default")) {
+  if (support_legacy_keywords && EqualIgnoringAsciiCase(policy, "default")) {
     *result = ReferrerUtils::NetToMojoReferrerPolicy(
         ReferrerUtils::GetDefaultNetReferrerPolicy());
     return true;
@@ -296,8 +323,8 @@ String SecurityPolicy::ReferrerPolicyAsString(
 namespace {
 
 template <typename CharType>
-inline bool IsASCIIAlphaOrHyphen(CharType c) {
-  return IsASCIIAlpha(c) || c == '-';
+inline bool IsAsciiAlphaOrHyphen(CharType c) {
+  return IsAsciiAlpha(c) || c == '-';
 }
 
 }  // namespace
@@ -309,21 +336,19 @@ bool SecurityPolicy::ReferrerPolicyFromHeaderValue(
   network::mojom::ReferrerPolicy referrer_policy =
       network::mojom::ReferrerPolicy::kDefault;
 
-  Vector<String> tokens;
-  header_value.Split(',', true, tokens);
+  Vector<StringView> tokens = StringView(header_value).Split(',');
   for (const auto& token : tokens) {
     network::mojom::ReferrerPolicy current_result;
     auto stripped_token = token.StripWhiteSpace();
-    if (SecurityPolicy::ReferrerPolicyFromString(token.StripWhiteSpace(),
-                                                 legacy_keywords_support,
-                                                 &current_result)) {
+    if (SecurityPolicy::ReferrerPolicyFromString(
+            stripped_token, legacy_keywords_support, &current_result)) {
       referrer_policy = current_result;
     } else {
-      Vector<UChar> characters;
-      stripped_token.AppendTo(characters);
-      if (SkipWhile<UChar, IsASCIIAlphaOrHyphen>(characters, 0) !=
-          characters.size()) {
-        return false;
+      for (StringView::size_type i = 0; i < stripped_token.length(); ++i) {
+        // SAFETY: length check above.
+        if (!IsAsciiAlphaOrHyphen(UNSAFE_BUFFERS(stripped_token[i]))) {
+          return false;
+        }
       }
     }
   }

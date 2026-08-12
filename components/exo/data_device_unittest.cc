@@ -50,7 +50,7 @@ class TestSeat : public Seat {
   Surface* GetFocusedSurface() override { return surface_; }
 
  private:
-  raw_ptr<Surface, DanglingUntriaged> surface_ = nullptr;
+  raw_ptr<Surface> surface_ = nullptr;
 };
 
 class DataDeviceTest : public test::ExoTestBase {
@@ -64,6 +64,7 @@ class DataDeviceTest : public test::ExoTestBase {
   }
 
   void TearDown() override {
+    seat_->set_focused_surface(nullptr);
     surface_.reset();
     device_.reset();
     seat_.reset();
@@ -351,6 +352,16 @@ TEST_F(DataDeviceTest, ClipboardDeviceCreatedAfterFocus) {
   EXPECT_EQ(test::DataEvent::kSelection, events[1]);
 }
 
+TEST_F(DataDeviceTest, UnsetDragDropDelegateAfterRelease) {
+  auto surface = std::make_unique<Surface>();
+  seat_->NotifySurfaceCreated(surface.get());
+
+  ASSERT_EQ(aura::client::GetDragDropDelegate(surface->window()),
+            static_cast<aura::client::DragDropDelegate*>(device_.get()));
+  device_.reset();
+  ASSERT_EQ(aura::client::GetDragDropDelegate(surface->window()), nullptr);
+}
+
 TEST_F(DataDeviceTest, ClipboardFocusedSurfaceDestroyed) {
   device_->OnSurfaceFocused(surface_.get(), nullptr, true);
   surface_.reset();
@@ -359,6 +370,21 @@ TEST_F(DataDeviceTest, ClipboardFocusedSurfaceDestroyed) {
 
   device_->OnClipboardDataChanged();
   EXPECT_EQ(0u, delegate_.PopEvents(&events));
+}
+
+TEST_F(DataDeviceTest, TestDelegateDestroyed) {
+  auto local_delegate = std::make_unique<test::TestDataDeviceDelegate>();
+  auto local_device =
+      std::make_unique<DataDevice>(local_delegate.get(), seat_.get());
+
+  local_delegate.reset();
+
+  ui::DropTargetEvent event(data_, gfx::PointF(), gfx::PointF(),
+                            ui::DragDropTypes::DRAG_MOVE);
+  ui::Event::DispatcherApi(&event).set_target(surface_->window());
+
+  local_device->OnDragEntered(event);
+  local_device->OnDragUpdated(event);
 }
 
 }  // namespace

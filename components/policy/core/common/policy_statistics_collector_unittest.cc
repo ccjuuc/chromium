@@ -61,13 +61,15 @@ const char kTestChromeSchema[] = R"(
     })";
 
 constexpr auto kTestPolicyDetails = std::to_array<PolicyDetails>({
-    // is_deprecated, is_future, supports_dynamic_refresh, scope id
-    // max_external_data_size, risk tags
-    {false, false, false, kProfile, kTestPolicy1Id, 0},
-    {false, false, false, kProfile, kTestPolicy2Id, 0},
-    {false, false, false, kProfile, kTestPolicy3Id, 0},
-    {false, false, false, kProfile, kEnrollmentTokenPolicyId, 0},
-    {false, false, false, kProfile, kEnrollmentOptionPolicyId, 0},
+    // is_deprecated, is_future, supports_dynamic_refresh, is_device_policy,
+    // source_restriction id, max_external_data_size
+    {false, false, false, kProfile, kSourceRestrictionNone, kTestPolicy1Id, 0},
+    {false, false, false, kProfile, kSourceRestrictionNone, kTestPolicy2Id, 0},
+    {false, false, false, kProfile, kSourceRestrictionNone, kTestPolicy3Id, 0},
+    {false, false, false, kProfile, kSourceRestrictionNone, kEnrollmentTokenPolicyId,
+     0},
+    {false, false, false, kProfile, kSourceRestrictionNone, kEnrollmentOptionPolicyId,
+     0},
 });
 
 }  // namespace

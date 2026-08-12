@@ -74,15 +74,15 @@ chrome.test.runTests([
 
   async function echoArgsOfDifferentTypes() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     const args = [
-        42,
-        0.07,
-        'foo',
-        true,
-        [1, 2, 3],
-        { key: 'value' },
-        null,
+      42,
+      0.07,
+      'foo',
+      true,
+      [1, 2, 3],
+      {key: 'value'},
+      null,
     ];
     const results = await chrome.scripting.executeScript({
       target: {
@@ -98,9 +98,9 @@ chrome.test.runTests([
 
   async function nullInArgsIsNotPreserved() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     const args = [
-        { key: 'value', nullKey: null },
+      {key: 'value', nullKey: null},
     ];
     const results = await chrome.scripting.executeScript({
       target: {
@@ -113,7 +113,7 @@ chrome.test.runTests([
     // Currently, null values in objects are not preserved. We should fix this,
     // but the IDL extension schema currently does not support the preserveNull
     // attribute, and adding it in for arrays is non-trivial.
-    chrome.test.assertEq([{ key: 'value' }], results[0].result);
+    chrome.test.assertEq([{key: 'value'}], results[0].result);
     chrome.test.succeed();
   },
 
@@ -135,7 +135,7 @@ chrome.test.runTests([
 
   async function injectedFunctionReturnsNothing() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     const results = await chrome.scripting.executeScript({
       target: {
         tabId: tab.id,
@@ -156,7 +156,7 @@ chrome.test.runTests([
 
   async function injectedFunctionReturnsNull() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     const results = await chrome.scripting.executeScript({
       target: {
         tabId: tab.id,
@@ -174,12 +174,14 @@ chrome.test.runTests([
 
   async function scriptsInjectIntoSameIsolatedWorld() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     const target = {tabId: tab.id};
     // When `world` is unspecified, it defaults to an isolated world.
     await chrome.scripting.executeScript({
       target: target,
-      func: () => { window.isolatedWorldFlag = 'from isolated world' },
+      func: () => {
+        window.isolatedWorldFlag = 'from isolated world';
+      },
     });
     let results = await chrome.scripting.executeScript({
       target: target,
@@ -206,12 +208,14 @@ chrome.test.runTests([
 
   async function scriptsCanRunInMainWorld() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     const target = {tabId: tab.id};
     // Set a flag in the isolated world.
     await chrome.scripting.executeScript({
       target: target,
-      func: () => { window.isolatedWorldFlag = 'from isolated world' },
+      func: () => {
+        window.isolatedWorldFlag = 'from isolated world';
+      },
     });
 
     // The script executing in the main world should not see the flag from the
@@ -231,12 +235,12 @@ chrome.test.runTests([
 
   async function promisesAreResolved() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     const target = {tabId: tab.id};
 
     const promiseFunc = async () => {
       // Return a promise that resolves asynchronously.
-      let result = await new Promise((r) => {
+      const result = await new Promise((r) => {
         setTimeout(r, 50, 'Hello, World!');
       });
       return result;
@@ -253,7 +257,7 @@ chrome.test.runTests([
 
   async function injectedFunctionHasError() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     const results = await chrome.scripting.executeScript({
       target: {
         tabId: tab.id,
@@ -299,7 +303,7 @@ chrome.test.runTests([
 
   async function multipleFilesSpecified() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     // Double-check that the title is not the one from the script file to be
     // injected.
     chrome.test.assertNe(NEW_TITLE_FROM_FILE, tab.title);
@@ -314,14 +318,14 @@ chrome.test.runTests([
     // and that the order was preserved (since the first sets the title used
     // in the second).
     chrome.test.assertEq(1, results.length);
-    chrome.test.assertEq(NEW_TITLE_FROM_FILE + ' From Second Script',
-                         results[0].result);
+    chrome.test.assertEq(
+        NEW_TITLE_FROM_FILE + ' From Second Script', results[0].result);
     chrome.test.succeed();
   },
 
   async function onlyOneOfFunctionAndFunc() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     await chrome.test.assertPromiseRejects(
         chrome.scripting.executeScript({
           target: {
@@ -331,7 +335,7 @@ chrome.test.runTests([
           function: injectedFunction,
         }),
         `Error: Both 'func' and 'function' were specified. ` +
-        `Only 'func' should be used.`);
+            `Only 'func' should be used.`);
     chrome.test.succeed();
   },
 
@@ -351,7 +355,7 @@ chrome.test.runTests([
   async function noSuchFile() {
     const noSuchFile = 'no_such_file.js';
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     await chrome.test.assertPromiseRejects(
         chrome.scripting.executeScript({
           target: {
@@ -365,7 +369,7 @@ chrome.test.runTests([
 
   async function noFilesSpecified() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     await chrome.test.assertPromiseRejects(
         chrome.scripting.executeScript({
           target: {
@@ -379,7 +383,7 @@ chrome.test.runTests([
 
   async function duplicateFilesSpecified() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     await chrome.test.assertPromiseRejects(
         chrome.scripting.executeScript({
           target: {
@@ -423,30 +427,29 @@ chrome.test.runTests([
 
   async function unserializableCurriedArguments() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
-    const expectedError =
-        'Error in invocation of scripting.executeScript(' +
+    const tab = await getSingleTab(query);
+    const expectedError = 'Error in invocation of scripting.executeScript(' +
         'scripting.ScriptInjection injection, optional function callback): ' +
         'Error at parameter \'injection\': Error at property \'args\': ' +
         'Error at index 0: Value is unserializable.';
+    // Verify `executeScript` throws when passed an unserializable function
+    // argument.
     chrome.test.assertThrows(
-        chrome.scripting.executeScript,
-        [{
+        chrome.scripting.executeScript.bind(null, {
           target: {
             tabId: tab.id,
           },
           func: echoArguments,
           args: [function() {}],
-        }],
+        }),
         expectedError);
     chrome.test.succeed();
   },
 
   async function argsPassedWithFiles() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
-    const expectedError =
-    await chrome.test.assertPromiseRejects(
+    const tab = await getSingleTab(query);
+    const expectedError = await chrome.test.assertPromiseRejects(
         chrome.scripting.executeScript({
           target: {
             tabId: tab.id,
@@ -456,5 +459,5 @@ chrome.test.runTests([
         }),
         `Error: 'args' may not be used with file injections.`);
     chrome.test.succeed();
-  }
+  },
 ]);

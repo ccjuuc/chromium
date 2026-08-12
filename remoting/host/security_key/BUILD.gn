@@ -6,7 +6,12 @@ import("//remoting/build/config/remoting_build.gni")
 
 source_set("security_key") {
   sources = [
+    "security_key_auth_handler.cc",
     "security_key_auth_handler.h",
+    "security_key_auth_handler_mojo.cc",
+    "security_key_auth_handler_mojo.h",
+    "security_key_data_channel_handler.cc",
+    "security_key_data_channel_handler.h",
     "security_key_extension.cc",
     "security_key_extension.h",
     "security_key_extension_session.cc",
@@ -30,6 +35,7 @@ source_set("security_key") {
     "//mojo/public/cpp/system",
     "//net",
     "//net/traffic_annotation",
+    "//remoting/base",
     "//remoting/base:logging",
     "//remoting/host:host_extension",
     "//remoting/host/mojom",
@@ -40,12 +46,15 @@ source_set("security_key") {
   public_deps = [ "//remoting/host:common_headers" ]
 
   if (is_posix) {
-    sources += [ "security_key_auth_handler_posix.cc" ]
+    sources += [
+      "security_key_auth_handler_posix.cc",
+      "security_key_auth_handler_posix.h",
+    ]
+    public_deps += [ "//remoting/base:security_key_socket_name" ]
   }
 
   if (is_win) {
     sources += [
-      "security_key_auth_handler_win.cc",
       "security_key_ipc_client.cc",
       "security_key_ipc_client.h",
       "security_key_message_handler.cc",
@@ -103,6 +112,8 @@ source_set("unit_tests") {
   testonly = true
 
   sources = [
+    "security_key_auth_handler_mojo_unittest.cc",
+    "security_key_data_channel_handler_unittest.cc",
     "security_key_extension_session_unittest.cc",
     "security_key_message_reader_impl_unittest.cc",
     "security_key_message_writer_impl_unittest.cc",
@@ -121,6 +132,7 @@ source_set("unit_tests") {
     "//remoting/host/mojom",
     "//remoting/host/setup:common",
     "//remoting/protocol",
+    "//remoting/protocol:test_support",
   ]
 
   if (is_posix) {
@@ -129,7 +141,6 @@ source_set("unit_tests") {
 
   if (is_win) {
     sources += [
-      "security_key_auth_handler_win_unittest.cc",
       "security_key_ipc_client_unittest.cc",
       "security_key_message_handler_unittest.cc",
     ]

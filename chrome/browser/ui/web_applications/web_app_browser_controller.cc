@@ -23,16 +23,21 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ash/browser_delegate/browser_controller.h"
+#include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
+#include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_menu_model_factory.h"
+#include "chrome/browser/ui/unload_controller.h"
 #include "chrome/browser/ui/web_applications/web_app_dialogs.h"
 #include "chrome/browser/ui/web_applications/web_app_launch_utils.h"
 #include "chrome/browser/ui/web_applications/web_app_tabbed_utils.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
+#include "chrome/browser/web_applications/model/display_override.h"
+#include "chrome/browser/web_applications/model/migration_behavior.h"
 #include "chrome/browser/web_applications/proto/web_app.pb.h"
 #include "chrome/browser/web_applications/ui_manager/update_dialog_types.h"
 #include "chrome/browser/web_applications/url_pattern_with_regex_matcher.h"
@@ -48,7 +53,10 @@
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "chrome/browser/web_applications/web_app_tab_helper.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/keep_alive_registry/keep_alive_types.h"
+#include "components/keep_alive_registry/scoped_keep_alive.h"
 #include "components/password_manager/core/common/password_manager_features.h"
 #include "components/services/app_service/public/cpp/app_registry_cache.h"
 #include "components/services/app_service/public/cpp/app_types.h"
@@ -58,10 +66,12 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/common/safe_url_pattern.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/gfx/image/image.h"
 #include "ui/native_theme/native_theme.h"
+#include "ui/views/layout/layout_provider.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -70,7 +80,6 @@
 #include "chrome/browser/ash/apps/apk_web_app_service.h"
 #include "chrome/browser/ash/system_web_apps/color_helpers.h"
 #include "chrome/browser/web_applications/chromeos_web_app_experiments.h"
-#include "chrome/common/chrome_features.h"
 #include "chromeos/ash/experiences/system_web_apps/types/system_web_app_delegate.h"
 #include "chromeos/constants/chromeos_features.h"
 #endif
@@ -92,6 +101,10 @@ class SystemAppTabMenuModelFactory : public TabMenuModelFactory {
   SystemAppTabMenuModelFactory& operator=(const SystemAppTabMenuModelFactory&) =
       delete;
   ~SystemAppTabMenuModelFactory() override = default;
+
+  TabMenuModel* AsTabMenuModel(ui::SimpleMenuModel* model) override {
+    return nullptr;
+  }
 
   std::unique_ptr<ui::SimpleMenuModel> Create(
       ui::SimpleMenuModel::Delegate* delegate,
@@ -120,7 +133,7 @@ base::OnceClosure& ManifestUpdateAppliedCallbackForTesting() {
 
 WebAppBrowserController::WebAppBrowserController(
     WebAppProvider& provider,
-    Browser* browser,
+    BrowserWindowInterface* browser,
     webapps::AppId app_id,
 #if BUILDFLAG(IS_CHROMEOS)
     const ash::SystemWebAppDelegate* system_app,
@@ -144,6 +157,20 @@ WebAppBrowserController::WebAppBrowserController(
   if (AppUsesWindowControlsOverlay()) {
     per_window_wco_enabled_ =
         registrar().GetWindowControlsOverlayEnabled(this->app_id());
+  }
+
+  if (const WebApp* app = registrar().GetAppById(this->app_id())) {
+    if (auto pending_migration_info = app->pending_migration_info()) {
+      if (pending_migration_info->behavior() == MigrationBehavior::kForce) {
+        base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE,
+            base::BindOnce(&WebAppBrowserController::
+                               CreateMetadataAndTriggerAppMigrationDialog,
+                           weak_ptr_factory_.GetWeakPtr(),
+                           /*is_forced_migration_on_startup=*/true,
+                           base::TimeTicks::Now()));
+      }
+    }
   }
 }
 
@@ -177,6 +204,13 @@ bool WebAppBrowserController::AppUsesWindowControlsOverlay() const {
 }
 
 bool WebAppBrowserController::IsWindowControlsOverlayEnabled() const {
+  if (AppUsesWindowControlsOverlay() &&
+      base::FeatureList::IsEnabled(
+          features::kDesktopPWAsWindowControlsOverlayWithNoToggle)) {
+    return true;
+  }
+
+  // Default behavior: require both manifest support and user enablement.
   return AppUsesWindowControlsOverlay() && per_window_wco_enabled_;
 }
 
@@ -191,7 +225,7 @@ void WebAppBrowserController::ToggleWindowControlsOverlayEnabled(
       AppLockDescription(app_id()),
       base::BindOnce(
           [](const webapps::AppId& app_id, bool wco_enabled, AppLock& lock,
-             base::Value::Dict& debug_value) {
+             base::DictValue& debug_value) {
             lock.sync_bridge().SetAppWindowControlsOverlayEnabled(app_id,
                                                                   wco_enabled);
           },
@@ -199,22 +233,30 @@ void WebAppBrowserController::ToggleWindowControlsOverlayEnabled(
       /*on_complete=*/std::move(on_complete));
 }
 
-bool WebAppBrowserController::AppUsesBorderlessMode() const {
+bool WebAppBrowserController::AppUsesUnframedMode() const {
   return IsIsolatedWebApp() &&
-         effective_display_mode_ == DisplayMode::kBorderless;
+         effective_display_mode_ == DisplayMode::kUnframed;
 }
 
-bool WebAppBrowserController::UrlMatchesBorderlessPattern(
-    const GURL& url) const {
+bool WebAppBrowserController::UrlMatchesUnframedPattern(const GURL& url) const {
   const WebApp* app = registrar().GetAppById(app_id());
   if (app == nullptr) {
     return false;
   }
-  return app->borderless_url_patterns().empty() ||
-         std::ranges::any_of(app->borderless_url_patterns(),
-                             [&url](const blink::SafeUrlPattern& p) {
-                               return UrlPatternWithRegexMatcher(p).Match(url);
-                             });
+
+  auto it = std::ranges::find_if(
+      app->display_mode_override(), [](const DisplayOverride& item) {
+        return item.display_mode() == DisplayMode::kUnframed;
+      });
+  if (it == app->display_mode_override().end()) {
+    return false;
+  }
+
+  return it->url_patterns().empty() ||
+         std::ranges::any_of(
+             it->url_patterns(), [&url](const blink::SafeUrlPattern& pattern) {
+               return UrlPatternWithRegexMatcher(pattern).Match(url);
+             });
 }
 
 bool WebAppBrowserController::AppUsesTabbed() const {
@@ -226,7 +268,8 @@ bool WebAppBrowserController::AppUsesTabbed() const {
 
 bool WebAppBrowserController::IsIsolatedWebApp() const {
   return is_isolated_web_app_for_testing_ ||
-         registrar().AppMatches(app_id(), WebAppFilter::IsIsolatedApp());
+         registrar().AppMatches(app_id(), WebAppFilter::IsIsolatedApp() |
+                                              WebAppFilter::IsIsolatedSubApp());
 }
 
 void WebAppBrowserController::SetIsolatedWebAppTrueForTesting() {
@@ -253,23 +296,39 @@ bool WebAppBrowserController::HasReloadButton() const {
 }
 
 bool WebAppBrowserController::HasPendingUpdate() const {
-  if (!base::FeatureList::IsEnabled(features::kWebAppPredictableAppUpdating)) {
-    return false;
-  }
   const WebApp* app = registrar().GetAppById(app_id());
   return app && app->pending_update_info().has_value();
 }
 
-bool WebAppBrowserController::HasPendingUpdateNotIgnoredByUser() const {
-  if (!base::FeatureList::IsEnabled(features::kWebAppPredictableAppUpdating)) {
+bool WebAppBrowserController::HasPendingMigration() const {
+  if (!base::FeatureList::IsEnabled(blink::features::kWebAppMigrationApi)) {
     return false;
   }
+  if (!registrar().AppMatches(app_id(),
+                              WebAppFilter::IsAppValidMigrationSource())) {
+    return false;
+  }
+  const WebApp* app = registrar().GetAppById(app_id());
+  return app && app->pending_migration_info().has_value();
+}
+
+bool WebAppBrowserController::HasPendingUpdateNotIgnoredByUser() const {
   const WebApp* app = registrar().GetAppById(app_id());
   if (!app || !app->pending_update_info().has_value()) {
     return false;
   }
   CHECK(app->pending_update_info()->has_was_ignored());
   return !app->pending_update_info()->was_ignored();
+}
+
+void WebAppBrowserController::TriggerAppUpdateOrMigrationDialog(
+    base::TimeTicks start_time) const {
+  if (registrar().GetAppById(app_id())->pending_migration_info()) {
+    CreateMetadataAndTriggerAppMigrationDialog(
+        /*is_forced_migration_on_startup=*/false, start_time);
+  } else {
+    CreateMetadataAndTriggerAppUpdateDialog(start_time);
+  }
 }
 
 void WebAppBrowserController::CreateMetadataAndTriggerAppUpdateDialog(
@@ -279,6 +338,45 @@ void WebAppBrowserController::CreateMetadataAndTriggerAppUpdateDialog(
       base::BindOnce(
           &WebAppBrowserController::OnMetadataObtainedTriggerUpdateDialog,
           weak_ptr_factory_.GetWeakPtr(), start_time));
+}
+
+void WebAppBrowserController::CreateMetadataAndTriggerAppMigrationDialog(
+    bool is_forced_migration_on_startup,
+    base::TimeTicks start_time) const {
+  // This can be reached with app migration disabled when syncing a forced
+  // migration.
+  if (!base::FeatureList::IsEnabled(blink::features::kWebAppMigrationApi)) {
+    return;
+  }
+  auto pending_migration_info =
+      registrar().GetAppById(app_id())->pending_migration_info();
+  CHECK(pending_migration_info);
+  std::optional<webapps::ManifestId> manifest_id =
+      pending_migration_info->manifest_id();
+  CHECK(manifest_id.has_value());
+  webapps::AppId destination_app_id =
+      GenerateAppIdFromManifestId(*manifest_id);
+  provider_->scheduler().ReadAppMigrationDataFromDisk(
+      app_id(), destination_app_id, is_forced_migration_on_startup,
+      base::BindOnce(
+          &WebAppBrowserController::OnMetadataObtainedTriggerMigrationDialog,
+          weak_ptr_factory_.GetWeakPtr(), start_time));
+}
+
+bool WebAppBrowserController::IsWindowCaptureHandleAllowed() const {
+// TODO(crbug.com/510716187): Enable for other platforms once macOS native
+// window ID translation is implemented.
+#if BUILDFLAG(IS_CHROMEOS)
+  // Drop PWAs that are actively rendering with a tab strip.
+  if (has_tab_strip()) {
+    return false;
+  }
+
+  return registrar().AppMatches(
+      app_id(), web_app::WebAppFilter::IsWindowCaptureHandleAllowed());
+#else
+  return false;
+#endif
 }
 
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -324,7 +422,7 @@ void WebAppBrowserController::ToggleAlwaysShowToolbarInFullscreen() {
       AppLockDescription(app_id()),
       base::BindOnce(
           [](const webapps::AppId& app_id, AppLock& lock,
-             base::Value::Dict& debug_value) {
+             base::DictValue& debug_value) {
             lock.sync_bridge().SetAlwaysShowToolbarInFullscreen(
                 app_id,
                 !lock.registrar().AlwaysShowToolbarInFullscreen(app_id));
@@ -371,8 +469,8 @@ void WebAppBrowserController::OnRelationshipCheckComplete(
       break;
   }
   is_verified_ = should_show_cct;
-  browser()->window()->UpdateCustomTabBarVisibility(should_show_cct,
-                                                    false /* animate */);
+  BrowserWindow::FromBrowser(browser())->UpdateCustomTabBarVisibility(
+      should_show_cct, false /* animate */);
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
@@ -380,7 +478,11 @@ void WebAppBrowserController::OnWebAppUninstalled(
     const webapps::AppId& uninstalled_app_id,
     webapps::WebappUninstallSource uninstall_source) {
   if (uninstalled_app_id == app_id()) {
+    // Forcibly close the window, skipping any beforeunload prompts.
+    UnloadController::From(browser())->set_force_skip_warning_user_on_close(
+        true);
     chrome::CloseWindow(browser());
+    UpdateCustomTabBarVisibility(/*animate=*/false);
   }
 }
 
@@ -389,7 +491,7 @@ void WebAppBrowserController::OnWebAppManifestUpdated(
   if (updated_app_id == app_id()) {
     UpdateThemePack();
     app_icon_.reset();
-    browser()->window()->UpdateTitleBar();
+    BrowserWindow::FromBrowser(browser())->UpdateTitleBar();
 
     if (ManifestUpdateAppliedCallbackForTesting()) {
       std::move(ManifestUpdateAppliedCallbackForTesting()).Run();
@@ -425,7 +527,7 @@ ui::ImageModel WebAppBrowserController::GetWindowAppIcon() const {
 
 #if BUILDFLAG(IS_CHROMEOS)
   if (apps::AppServiceProxyFactory::IsAppServiceAvailableForProfile(
-          browser()->profile())) {
+          browser()->GetProfile())) {
     LoadAppIcon(true /* allow_placeholder_icon */);
     return *app_icon_;
   }
@@ -461,7 +563,8 @@ ui::ImageModel WebAppBrowserController::GetWindowIcon() const {
 std::optional<SkColor> WebAppBrowserController::GetThemeColor() const {
 #if BUILDFLAG(IS_CHROMEOS)
   // System App popups (settings pages) always use default theme.
-  if (system_app() && browser()->is_type_app_popup()) {
+  if (system_app() &&
+      browser()->GetType() == BrowserWindowInterface::Type::TYPE_APP_POPUP) {
     return std::nullopt;
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -655,18 +758,26 @@ bool WebAppBrowserController::CanUserUninstall() const {
   return registrar().CanUserUninstallWebApp(app_id());
 }
 
+bool WebAppBrowserController::IsPreinstalledOnly() const {
+  return registrar().IsPreinstalledOnly(app_id());
+}
+
 void WebAppBrowserController::Uninstall(
     webapps::WebappUninstallSource webapp_uninstall_source) {
   provider_->ui_manager().PresentUserUninstallDialog(
-      app_id(), webapps::WebappUninstallSource::kAppMenu, browser()->window(),
+      app_id(), webapp_uninstall_source, BrowserWindow::FromBrowser(browser()),
       base::DoNothing());
 }
 
 bool WebAppBrowserController::IsInstalled() const {
-  return registrar().IsInstallState(
-      app_id(), {proto::InstallState::SUGGESTED_FROM_ANOTHER_DEVICE,
-                 proto::InstallState::INSTALLED_WITHOUT_OS_INTEGRATION,
-                 proto::InstallState::INSTALLED_WITH_OS_INTEGRATION});
+  // TODO(crbug.com/379136842): This is likely too 'permissive' of a check, and
+  // different more restrictive filter should likely be used instead.
+  return registrar().AppMatches(app_id(),
+                                WebAppFilter::IsAppSurfaceableToUser());
+}
+
+bool WebAppBrowserController::IsFirstLaunchAfterInstall() const {
+  return !registrar().GetAppLastLaunchTime(app_id()).has_value();
 }
 
 void WebAppBrowserController::SetIconLoadCallbackForTesting(
@@ -708,7 +819,7 @@ const WebAppInstallManager& WebAppBrowserController::install_manager() const {
 
 void WebAppBrowserController::LoadAppIcon(bool allow_placeholder_icon) const {
   apps::AppServiceProxy* proxy =
-      apps::AppServiceProxyFactory::GetForProfile(browser()->profile());
+      apps::AppServiceProxyFactory::GetForProfile(browser()->GetProfile());
   proxy->LoadIcon(app_id(), apps::IconType::kStandard, kWebAppIconSmall,
                   allow_placeholder_icon,
                   base::BindOnce(&WebAppBrowserController::OnLoadIcon,
@@ -754,15 +865,15 @@ void WebAppBrowserController::OnReadIcon(IconPurpose purpose, SkBitmap bitmap) {
 }
 
 void WebAppBrowserController::PerformDigitalAssetLinkVerification(
-    Browser* browser) {
+    BrowserWindowInterface* browser) {
 #if BUILDFLAG(IS_CHROMEOS)
   asset_link_handler_ = std::make_unique<
       content_relationship_verification::DigitalAssetLinksHandler>(
-      browser->profile()->GetURLLoaderFactory());
+      browser->GetProfile()->GetURLLoaderFactory());
   is_verified_ = std::nullopt;
 
   ash::ApkWebAppService* apk_web_app_service =
-      ash::ApkWebAppService::Get(browser->profile());
+      ash::ApkWebAppService::Get(browser->GetProfile());
   if (!apk_web_app_service || !apk_web_app_service->IsWebOnlyTwa(app_id())) {
     return;
   }
@@ -787,14 +898,148 @@ void WebAppBrowserController::OnMetadataObtainedTriggerUpdateDialog(
     return;
   }
 
-  // TODO(crbug.com/436868803): Pipe calling of the final update command to this
-  // function.
   web_app::ShowWebAppReviewUpdateDialog(
       app_id(), *identity_update, browser(), start_time,
-      base::BindOnce([](WebAppIdentityUpdateResult result) {
-        base::UmaHistogramEnumeration("WebApp.PredictableUpdateDialog.Result",
-                                      result);
-      }));
+      base::BindOnce(&WebAppBrowserController::OnUpdateDialogResult,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
+void WebAppBrowserController::OnMetadataObtainedTriggerMigrationDialog(
+    base::TimeTicks start_time,
+    std::optional<WebAppIdentityUpdate> identity_update) const {
+  if (!identity_update) {
+    return;
+  }
+
+  web_app::ShowWebAppReviewUpdateDialog(
+      app_id(), *identity_update, browser(), start_time,
+      base::BindOnce(&WebAppBrowserController::OnMigrationDialogResult,
+                     weak_ptr_factory_.GetWeakPtr(), start_time,
+                     *identity_update));
+}
+
+void WebAppBrowserController::OnUpdateDialogResult(
+    WebAppIdentityUpdateResult result) const {
+  CHECK(!browser()->GetProfile()->IsOffTheRecord());
+  base::UmaHistogramEnumeration("WebApp.PredictableUpdateDialog.Result",
+                                result);
+  auto* web_app_provider =
+      WebAppProvider::GetForWebApps(browser()->GetProfile());
+  CHECK(web_app_provider);
+
+  switch (result) {
+    case WebAppIdentityUpdateResult::kAccept: {
+      auto profile_keep_alive = ScopedProfileKeepAlive::TryAcquire(
+          browser()->GetProfile(), ProfileKeepAliveOrigin::kWebAppUpdate);
+      if (!profile_keep_alive) {
+        // Profile is scheduled for destruction, abort.
+        return;
+      }
+      auto keep_alive = std::make_unique<ScopedKeepAlive>(
+          KeepAliveOrigin::APP_MANIFEST_UPDATE,
+          KeepAliveRestartOption::DISABLED);
+      web_app_provider->scheduler().ScheduleApplyPendingManifestUpdate(
+          app_id(), std::move(keep_alive), std::move(profile_keep_alive),
+          base::DoNothing());
+      return;
+    }
+    case WebAppIdentityUpdateResult::kIgnore:
+      web_app_provider->scheduler().MarkAppPendingUpdateAsIgnored(
+          app_id(), base::DoNothing());
+      return;
+    case WebAppIdentityUpdateResult::kUninstallApp:
+      web_app_provider->ui_manager().PresentUserUninstallDialog(
+          app_id(), webapps::WebappUninstallSource::kAppMenu,
+          BrowserWindow::FromBrowser(browser()), base::DoNothing());
+      return;
+    case WebAppIdentityUpdateResult::kCloseApp:
+      // kCloseApp is only used for migration dialogs.
+      NOTREACHED();
+    case WebAppIdentityUpdateResult::kAppUninstalledDuringDialog:
+    case WebAppIdentityUpdateResult::kUnexpectedError:
+      return;
+  }
+  NOTREACHED();
+}
+
+void WebAppBrowserController::OnMigrationDialogResult(
+    base::TimeTicks start_time,
+    const WebAppIdentityUpdate& identity_update,
+    WebAppIdentityUpdateResult result) const {
+  CHECK(!browser()->GetProfile()->IsOffTheRecord());
+
+  if (identity_update.is_forced_migration) {
+    base::UmaHistogramEnumeration(
+        "WebApp.UpdateDialog.MigrateForced.UserAction", result);
+  } else {
+    base::UmaHistogramEnumeration(
+        "WebApp.UpdateDialog.MigrateSuggested.UserAction", result);
+  }
+
+  auto* web_app_provider =
+      WebAppProvider::GetForWebApps(browser()->GetProfile());
+  CHECK(web_app_provider);
+
+  switch (result) {
+    case WebAppIdentityUpdateResult::kAccept: {
+      auto profile_keep_alive = ScopedProfileKeepAlive::TryAcquire(
+          browser()->GetProfile(), ProfileKeepAliveOrigin::kWebAppUpdate);
+      if (!profile_keep_alive) {
+        // Profile is scheduled for destruction, abort.
+        return;
+      }
+      auto keep_alive = std::make_unique<ScopedKeepAlive>(
+          KeepAliveOrigin::APP_MANIFEST_UPDATE,
+          KeepAliveRestartOption::DISABLED);
+
+      if (auto pending_migration_info =
+              registrar().GetAppById(app_id())->pending_migration_info()) {
+        std::optional<webapps::ManifestId> manifest_id =
+            pending_migration_info->manifest_id();
+        webapps::AppId destination_app_id = GenerateAppIdFromManifestId(
+            *manifest_id);
+
+        const MigrationBehavior migration_behavior =
+            identity_update.is_forced_migration ? MigrationBehavior::kForce
+                                                : MigrationBehavior::kSuggest;
+
+        web_app_provider->scheduler().ApplyManifestMigration(
+            app_id(), destination_app_id, migration_behavior,
+            std::move(keep_alive), std::move(profile_keep_alive),
+            base::DoNothing());
+      }
+      return;
+    }
+    case WebAppIdentityUpdateResult::kUninstallApp: {
+      UninstallCompleteCallback complete_callback =
+          identity_update.is_forced_migration
+              ? base::BindOnce(
+                    [](base::WeakPtr<WebAppBrowserController> controller,
+                       base::TimeTicks start_time,
+                       const WebAppIdentityUpdate& identity_update,
+                       webapps::UninstallResultCode code) {
+                      if (controller &&
+                          code == webapps::UninstallResultCode::kCancelled) {
+                        controller->OnMetadataObtainedTriggerMigrationDialog(
+                            start_time, identity_update);
+                      }
+                    },
+                    weak_ptr_factory_.GetWeakPtr(), start_time, identity_update)
+              : base::DoNothing();
+      web_app_provider->ui_manager().PresentUserUninstallDialog(
+          app_id(), webapps::WebappUninstallSource::kAppMenu,
+          BrowserWindow::FromBrowser(browser()), std::move(complete_callback));
+      return;
+    }
+    case WebAppIdentityUpdateResult::kCloseApp:
+      chrome::CloseWindow(browser());
+      return;
+    case WebAppIdentityUpdateResult::kIgnore:
+    case WebAppIdentityUpdateResult::kAppUninstalledDuringDialog:
+    case WebAppIdentityUpdateResult::kUnexpectedError:
+      return;
+  }
+  NOTREACHED();
 }
 
 std::optional<SkColor>

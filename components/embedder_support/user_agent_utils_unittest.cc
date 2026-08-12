@@ -319,12 +319,6 @@ class UserAgentUtilsTest : public testing::Test,
  public:
   // The minor version in the reduced UA string is always "0.0.0".
   static constexpr char kReducedMinorVersion[] = "0.0.0";
-  // The minor version in the ReduceUserAgentMinorVersion experiment is always
-  // "0.X.0", where X is the frozen build version.
-  const std::string kReduceUserAgentMinorVersion =
-      "0." +
-      std::string(blink::features::kUserAgentFrozenBuildVersion.Get().data()) +
-      ".0";
   // The suffix added after "Chrome/<major_version>.0.0.0" and before
   // "Safari/537.36" in the user agent string when the kUseMobileUserAgent
   // switch is enabled.
@@ -525,23 +519,22 @@ TEST_F(UserAgentUtilsTest, ReduceUserAgentPlatformOsCpu) {
 #if BUILDFLAG(IS_ANDROID)
   scoped_feature_list.Reset();
   scoped_feature_list.InitWithFeatures(
-      {blink::features::kReduceUserAgentMinorVersion},
-      {blink::features::kReduceUserAgentAndroidVersionDeviceModel});
-  // Verify the mobile platform and oscpu user agent string is not reduced when
+      {blink::features::kReduceUserAgentMinorVersion}, {});
+  // Verify the mobile platform and oscpu user agent string is reduced when
   // not using a mobile user agent.
   ASSERT_FALSE(command_line->HasSwitch(kUseMobileUserAgent));
   {
-    EXPECT_NE(GetUserAgent(), GenerateExpectedUserAgent());
-    EXPECT_NE(GetUnifiedPlatformForTesting().c_str(),
+    EXPECT_EQ(GetUserAgent(), GenerateExpectedUserAgent());
+    EXPECT_EQ(GetUnifiedPlatformForTesting().c_str(),
               GetUserAgentPlatformOsCpu(GetUserAgent()));
   }
 
-  // Verify the mobile platform and oscpu user agent string is not reduced when
-  // using a mobile user agent.
+  // Verify the mobile platform and oscpu user agent string is reduced when
+  // using a mobile user agent (but still on Android)
   command_line->AppendSwitch(kUseMobileUserAgent);
   ASSERT_TRUE(command_line->HasSwitch(kUseMobileUserAgent));
   {
-    EXPECT_NE(GetUserAgent(), GenerateExpectedUserAgent(kMobileProductSuffix));
+    EXPECT_EQ(GetUserAgent(), GenerateExpectedUserAgent(kMobileProductSuffix));
   }
 
 #else
@@ -556,8 +549,7 @@ TEST_F(UserAgentUtilsTest, ReduceUserAgentPlatformOsCpu) {
 
 #if BUILDFLAG(IS_IOS)
   // On iOS, also check the kUseMobileUserAgent flag with the features above.
-  // This is similar to the Android case above, but we do not care about
-  // kReduceUserAgentAndroidVersionDeviceModel here.
+  // This is similar to the Android case above.
   command_line->AppendSwitch(kUseMobileUserAgent);
   ASSERT_TRUE(command_line->HasSwitch(kUseMobileUserAgent));
   {
@@ -566,31 +558,19 @@ TEST_F(UserAgentUtilsTest, ReduceUserAgentPlatformOsCpu) {
 #endif  // BUILDFLAG(IS_IOS)
 #endif
 
-// Verify only reduce platform and oscpu in desktop user agent string in
-// phase 5.
-#if BUILDFLAG(IS_ANDROID)
-  scoped_feature_list.Reset();
-  scoped_feature_list.InitWithFeatures(
-      {blink::features::kReduceUserAgentMinorVersion},
-      {blink::features::kReduceUserAgentAndroidVersionDeviceModel});
-  EXPECT_NE(GetUnifiedPlatformForTesting().c_str(),
-            GetUserAgentPlatformOsCpu(GetUserAgent()));
-#else
+  // Verify we reduce platform and oscpu
   scoped_feature_list.Reset();
   scoped_feature_list.InitWithFeatures(
       {blink::features::kReduceUserAgentMinorVersion}, {});
   EXPECT_EQ(GetUnifiedPlatformForTesting().c_str(),
             GetUserAgentPlatformOsCpu(GetUserAgent()));
-#endif
 }
 
 #if BUILDFLAG(IS_ANDROID)
 TEST_F(UserAgentUtilsTest, ReduceUserAgentAndroidVersionDeviceModel) {
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitWithFeatures(
-      {blink::features::kReduceUserAgentMinorVersion,
-       blink::features::kReduceUserAgentAndroidVersionDeviceModel},
-      {});
+      {blink::features::kReduceUserAgentMinorVersion}, {});
   // Verify the correct user agent is returned when the UseMobileUserAgent
   // command line flag is present.
   base::test::ScopedCommandLine scoped_command_line;
@@ -652,28 +632,8 @@ TEST_F(UserAgentUtilsTest, UserAgentMetadata) {
 
 #if BUILDFLAG(IS_WIN)
   VerifyWinPlatformVersion(metadata.platform_version);
-#elif BUILDFLAG(IS_FUCHSIA)
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_FUCHSIA)
   EXPECT_EQ(metadata.platform_version, "");
-#elif BUILDFLAG(IS_LINUX)
-  // TODO(crbug.com/40245146): Remove this Blink feature
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      blink::features::kReduceUserAgentDataLinuxPlatformVersion);
-  {
-    auto metadata_reduced = GetUserAgentMetadata();
-    EXPECT_EQ(metadata_reduced.platform_version, "");
-  }
-  scoped_feature_list.Reset();
-
-  scoped_feature_list.InitAndDisableFeature(
-      blink::features::kReduceUserAgentDataLinuxPlatformVersion);
-  {
-    auto metadata_full = GetUserAgentMetadata();
-    int32_t major, minor, bugfix = 0;
-    base::SysInfo::OperatingSystemVersionNumbers(&major, &minor, &bugfix);
-    EXPECT_EQ(metadata_full.platform_version,
-              base::StringPrintf("%d.%d.%d", major, minor, bugfix));
-  }
 #else
   int32_t major, minor, bugfix = 0;
   base::SysInfo::OperatingSystemVersionNumbers(&major, &minor, &bugfix);
@@ -740,23 +700,51 @@ TEST_F(UserAgentUtilsTest, UserAgentMetadataForXrDevice) {
   base::android::device_info::set_is_xr_for_testing();
   EXPECT_EQ(base::android::device_info::is_xr(), true);
 
-  // Get unified platform of the user-agent on xr device.
+  // By default (flag disabled), it should return Linux.
   EXPECT_EQ(GetUnifiedPlatformForTesting(), "X11; Linux x86_64");
 
   auto metadata = GetUserAgentMetadata();
+  EXPECT_EQ(metadata.platform, "Linux");
+
+  // Enable the flag to spoof as ChromeOS.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(
+        blink::features::kAndroidDesktopUASpoofAsChromeOS);
+
+    // Get unified platform of the user-agent on xr device.
+    EXPECT_EQ(GetUnifiedPlatformForTesting(), "X11; CrOS x86_64 14541.0.0");
+
+    auto metadata_cros = GetUserAgentMetadata();
+    EXPECT_EQ(metadata_cros.platform, "Chrome OS");
+  }
 
   // Verify the XR specific info set.
   // TODO(crbug.com/433345971) The user agent string should contain the actual
   // cpu type information obtained from the Android device.
   EXPECT_EQ(metadata.architecture, "x86");
   EXPECT_EQ(metadata.bitness, "64");
-  EXPECT_EQ(metadata.platform, "Linux");
   EXPECT_EQ(metadata.mobile, false);
   EXPECT_EQ(metadata.platform_version, "");
 
   // Verify user-agent client-hints form-factors
   std::vector<std::string> expected_form_factors = {"Desktop", "XR"};
   EXPECT_EQ(metadata.form_factors, expected_form_factors);
+
+  // The kAndroidDesktopUAPlatform changes XR devices platform client hint to
+  // Android, and reports the real OS version instead of an empty platform
+  // version.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(
+        blink::features::kAndroidDesktopUAPlatform);
+    auto metadata_with_feature = GetUserAgentMetadata();
+    EXPECT_EQ(metadata_with_feature.platform, "Android");
+    int32_t major, minor, bugfix = 0;
+    base::SysInfo::OperatingSystemVersionNumbers(&major, &minor, &bugfix);
+    EXPECT_EQ(metadata_with_feature.platform_version,
+              base::StringPrintf("%d.%d.%d", major, minor, bugfix));
+  }
 
   // Restore the device info.
   base::android::device_info::reset_is_xr_for_testing();
@@ -1025,9 +1013,8 @@ TEST_F(UserAgentUtilsTest, GetProductAndVersion) {
 
   // Feature kReduceUserAgentMinorVersion enabled with version.
   scoped_feature_list.Reset();
-  scoped_feature_list.InitWithFeaturesAndParameters(
-      /*enabled_features=*/{{blink::features::kReduceUserAgentMinorVersion,
-                             {{{"build_version", "0000"}}}}},
+  scoped_feature_list.InitWithFeatures(
+      /*enabled_features=*/{blink::features::kReduceUserAgentMinorVersion},
       /*disabled_features=*/{});
   product = GetProductAndVersion();
   EXPECT_TRUE(re2::RE2::FullMatch(product, kChromeProductVersionRegex,
@@ -1035,7 +1022,7 @@ TEST_F(UserAgentUtilsTest, GetProductAndVersion) {
                                   &build_version, &patch_version));
   EXPECT_EQ(major_version, version_info::GetMajorVersionNumber());
   EXPECT_EQ(minor_version, "0");
-  EXPECT_EQ(build_version, "0000");
+  EXPECT_EQ(build_version, "0");
   EXPECT_EQ(patch_version, "0");
 }
 

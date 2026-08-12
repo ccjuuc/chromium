@@ -24,25 +24,33 @@ namespace printing::test {
 
 const char kPrinterName[] = "DefaultPrinter";
 
-const PrinterSemanticCapsAndDefaults::Paper kPaperLetter{
-    /*display_name=*/"Letter", /*vendor_id=*/"45",
-    /*size_um=*/gfx::Size(215900, 279400),
-    /*printable_area_um=*/gfx::Rect(1764, 1764, 212372, 275872)};
-const PrinterSemanticCapsAndDefaults::Paper kPaperLegal{
-    /*display_name=*/"Legal", /*vendor_id=*/"46",
-    /*size_um=*/gfx::Size(215900, 355600),
-    /*printable_area_um=*/gfx::Rect(1764, 1764, 212372, 352072)};
+PrinterSemanticCapsAndDefaults::Paper GetPaperLetter() {
+  return PrinterSemanticCapsAndDefaults::Paper{
+      /*display_name=*/"Letter", /*vendor_id=*/"45",
+      /*size_um=*/gfx::Size(215900, 279400),
+      /*printable_area_um=*/gfx::Rect(1764, 1764, 212372, 275872)};
+}
 
-const std::vector<gfx::Size> kPrinterCapabilitiesDefaultDpis{
-    kPrinterCapabilitiesDpi};
-const PrinterBasicInfoOptions kPrintInfoOptions{{"opt1", "123"},
-                                                {"opt2", "456"}};
+PrinterSemanticCapsAndDefaults::Paper GetPaperLegal() {
+  return PrinterSemanticCapsAndDefaults::Paper{
+      /*display_name=*/"Legal", /*vendor_id=*/"46",
+      /*size_um=*/gfx::Size(215900, 355600),
+      /*printable_area_um=*/gfx::Rect(1764, 1764, 212372, 352072)};
+}
 
-base::Value::Dict GetPrintTicket(mojom::PrinterType type) {
-  base::Value::Dict ticket;
+std::vector<gfx::Size> GetPrinterCapabilitiesDefaultDpis() {
+  return std::vector<gfx::Size>{kPrinterCapabilitiesDpi};
+}
+
+PrinterBasicInfoOptions GetPrintInfoOptions() {
+  return PrinterBasicInfoOptions{{"opt1", "123"}, {"opt2", "456"}};
+}
+
+base::DictValue GetPrintTicket(mojom::PrinterType type) {
+  base::DictValue ticket;
 
   // Letter
-  base::Value::Dict media_size;
+  base::DictValue media_size;
   media_size.Set(kSettingMediaSizeIsDefault, true);
   media_size.Set(kSettingMediaSizeWidthMicrons, 215900);
   media_size.Set(kSettingMediaSizeHeightMicrons, 279400);
@@ -73,11 +81,11 @@ base::Value::Dict GetPrintTicket(mojom::PrinterType type) {
   ticket.Set(kSettingShowSystemDialog, false);
 
   if (type == mojom::PrinterType::kExtension) {
-    base::Value::Dict capabilities;
+    base::DictValue capabilities;
     capabilities.Set("duplex", true);  // non-empty
     ticket.Set(kSettingCapabilities,
                base::WriteJson(capabilities).value_or(""));
-    base::Value::Dict print_ticket;
+    base::DictValue print_ticket;
     print_ticket.Set("version", "1.0");
     print_ticket.Set("print", base::Value());
     ticket.Set(kSettingTicket, base::WriteJson(print_ticket).value_or(""));
@@ -121,7 +129,7 @@ std::unique_ptr<PrintSettings> MakeUserModifiedPrintSettings(
     // Supply fake data to mimic what might be collected from the system print
     // dialog.  Platform-specific since the fake data still has to be able to
     // pass mojom data validation.
-    base::Value::Dict data;
+    base::DictValue data;
 
 #if BUILDFLAG(IS_MAC)
     data.Set(kMacSystemPrintDialogDataDestinationType, 2);

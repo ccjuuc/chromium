@@ -15,7 +15,6 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
@@ -28,12 +27,11 @@
 #include "chrome/browser/extensions/extension_install_prompt_show_params.h"
 #include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/external_install_manager.h"
-#include "chrome/browser/extensions/webstore_data_fetcher.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/global_error/global_error.h"
 #include "chrome/browser/ui/global_error/global_error_service.h"
 #include "chrome/browser/ui/global_error/global_error_service_factory.h"
@@ -45,7 +43,9 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/pref_names.h"
+#include "extensions/browser/ui_util.h"
 #include "extensions/browser/uninstall_reason.h"
+#include "extensions/browser/webstore_data_fetcher.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -109,7 +109,7 @@ class ExternalInstallMenuAlert : public GlobalError {
 class ExternalInstallBubbleAlert final : public GlobalErrorWithStandardBubble {
  public:
   ExternalInstallBubbleAlert(ExternalInstallError* error,
-                             ExtensionInstallPrompt::Prompt* prompt);
+                             InstallPromptData* prompt);
 
   ExternalInstallBubbleAlert(const ExternalInstallBubbleAlert&) = delete;
   ExternalInstallBubbleAlert& operator=(const ExternalInstallBubbleAlert&) =
@@ -141,7 +141,7 @@ class ExternalInstallBubbleAlert final : public GlobalErrorWithStandardBubble {
 
   // The Prompt with all information, which we then use to populate the bubble.
   // Owned by |error|.
-  raw_ptr<ExtensionInstallPrompt::Prompt> prompt_;
+  raw_ptr<InstallPromptData> prompt_;
 
   base::WeakPtrFactory<ExternalInstallBubbleAlert> weak_ptr_factory_{this};
 };
@@ -196,7 +196,7 @@ GlobalErrorBubbleViewBase* ExternalInstallMenuAlert::GetBubbleView() {
 
 ExternalInstallBubbleAlert::ExternalInstallBubbleAlert(
     ExternalInstallError* error,
-    ExtensionInstallPrompt::Prompt* prompt)
+    InstallPromptData* prompt)
     : error_(error), prompt_(prompt) {
   DCHECK(error_);
   DCHECK(prompt_);
@@ -231,8 +231,7 @@ void ExternalInstallBubbleAlert::ExecuteMenuItem(Browser* browser) {
 std::u16string ExternalInstallBubbleAlert::GetBubbleViewTitle() {
   return l10n_util::GetStringFUTF16(
       IDS_EXTENSION_EXTERNAL_INSTALL_ALERT_BUBBLE_TITLE,
-      extensions::util::GetFixupExtensionNameForUIDisplay(
-          prompt_->extension()->name()));
+      ui_util::GetFixupExtensionNameForUIDisplay(prompt_->extension()->name()));
 }
 
 std::vector<std::u16string>
@@ -303,8 +302,8 @@ ExternalInstallErrorDesktop::ExternalInstallErrorDesktop(
       manager_(manager),
       error_service_(GlobalErrorServiceFactory::GetForProfile(
           Profile::FromBrowserContext(browser_context_))) {
-  prompt_ = std::make_unique<ExtensionInstallPrompt::Prompt>(
-      ExtensionInstallPrompt::EXTERNAL_INSTALL_PROMPT);
+  prompt_ = std::make_unique<InstallPromptData>(
+      InstallPromptData::EXTERNAL_INSTALL_PROMPT);
 
   const Extension* extension = GetExtension();
 
@@ -315,10 +314,10 @@ ExternalInstallErrorDesktop::ExternalInstallErrorDesktop(
 
     PrefService* prefs = profile->GetPrefs();
 
-    const base::Value::List& initial_list =
+    const base::ListValue& initial_list =
         prefs->GetList(pref_names::kInitialInstallList);
 
-    if (base::Contains(initial_list, extension_id_)) {
+    if (initial_list.contains(extension_id_)) {
       prompt_->SetInitialExtensionsProviderName(base::UTF8ToUTF16(
           prefs->GetString(pref_names::kInitialInstallProviderName)));
     }
@@ -425,8 +424,7 @@ ExternalInstallError::AlertType ExternalInstallErrorDesktop::alert_type()
   return alert_type_;
 }
 
-ExtensionInstallPrompt::Prompt*
-ExternalInstallErrorDesktop::GetPromptForTesting() const {
+InstallPromptData* ExternalInstallErrorDesktop::GetPromptForTesting() const {
   return prompt_.get();
 }
 
@@ -456,16 +454,15 @@ void ExternalInstallErrorDesktop::OnFetchComplete() {
   // Create a new ExtensionInstallPrompt. We pass in NULL for the UI
   // components because we display at a later point, and don't want
   // to pass ones which may be invalidated.
-  install_ui_ = base::WrapUnique(
-      new ExtensionInstallPrompt(Profile::FromBrowserContext(browser_context_),
-                                 /*native_window=*/gfx::NativeWindow()));
+  install_ui_ = base::WrapUnique(new ExtensionInstallPrompt(
+      Profile::FromBrowserContext(browser_context_),
+      /*native_window=*/gfx::NativeWindow(), std::move(prompt_)));
 
   install_ui_->ShowDialog(
       base::BindOnce(&ExternalInstallErrorDesktop::OnInstallPromptDone,
                      weak_factory_.GetWeakPtr()),
       GetExtension(),
       nullptr,  // Force a fetch of the icon.
-      std::move(prompt_),
       base::BindRepeating(&ExternalInstallErrorDesktop::OnDialogReady,
                           weak_factory_.GetWeakPtr()));
 }
@@ -473,7 +470,7 @@ void ExternalInstallErrorDesktop::OnFetchComplete() {
 void ExternalInstallErrorDesktop::OnDialogReady(
     std::unique_ptr<ExtensionInstallPromptShowParams> show_params,
     ExtensionInstallPrompt::DoneCallback callback,
-    std::unique_ptr<ExtensionInstallPrompt::Prompt> prompt) {
+    std::unique_ptr<InstallPromptData> prompt) {
   prompt_ = std::move(prompt);
 
   if (alert_type_ == BUBBLE_ALERT) {
@@ -486,10 +483,12 @@ void ExternalInstallErrorDesktop::OnDialogReady(
       // DidChangeInstallAlertVisibility() regardless because we depend on this
       // in unit tests.
       manager_->DidChangeInstallAlertVisibility(this, true);
-      Browser* browser = chrome::FindTabbedBrowser(
-          Profile::FromBrowserContext(browser_context_), true);
+      BrowserWindowInterface* browser =
+          ProfileBrowserCollection::GetForProfile(
+              Profile::FromBrowserContext(browser_context_))
+              ->FindTabbedBrowser(/*match_original_profiles=*/true);
       if (browser) {
-        global_error_->ShowBubbleView(browser);
+        global_error_->ShowBubbleView(browser->GetBrowserForMigrationOnly());
       }
     }
   } else {

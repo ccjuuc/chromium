@@ -5,10 +5,15 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_PAYMENTS_REQUESTS_GET_IBAN_UPLOAD_DETAILS_REQUEST_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_PAYMENTS_REQUESTS_GET_IBAN_UPLOAD_DETAILS_REQUEST_H_
 
+#include <stdint.h>
+
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "base/functional/callback.h"
 #include "base/values.h"
+#include "components/autofill/core/browser/payments/client_behavior_constants.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 
@@ -19,12 +24,13 @@ class GetIbanUploadDetailsRequest : public PaymentsRequest {
   GetIbanUploadDetailsRequest(
       const bool full_sync_enabled,
       const std::string& app_locale,
+      const std::vector<ClientBehaviorConstants>& client_behavior_signals,
       int64_t billing_customer_number,
       const std::string& country_code,
       base::OnceCallback<void(PaymentsAutofillClient::PaymentsRpcResult,
                               const std::u16string& validation_regex,
                               const std::u16string& context_token,
-                              std::unique_ptr<base::Value::Dict>)> callback);
+                              std::unique_ptr<base::DictValue>)> callback);
   GetIbanUploadDetailsRequest(const GetIbanUploadDetailsRequest&) = delete;
   GetIbanUploadDetailsRequest& operator=(const GetIbanUploadDetailsRequest&) =
       delete;
@@ -34,28 +40,33 @@ class GetIbanUploadDetailsRequest : public PaymentsRequest {
   std::string GetRequestUrlPath() override;
   std::string GetRequestContentType() override;
   std::string GetRequestContent() override;
-  void ParseResponse(const base::Value::Dict& response) override;
+  void ParseResponse(const base::DictValue& response) override;
   bool IsResponseComplete() override;
   void RespondToDelegate(
       PaymentsAutofillClient::PaymentsRpcResult result) override;
 
   std::u16string context_token_for_testing() const { return context_token_; }
-  base::Value::Dict* legal_message_for_testing() const {
+  base::DictValue* legal_message_for_testing() const {
     return legal_message_.get();
+  }
+  std::vector<ClientBehaviorConstants> client_behavior_signals_for_testing()
+      const {
+    return client_behavior_signals_;
   }
 
  private:
   const bool full_sync_enabled_;
   std::string app_locale_;
+  const std::vector<ClientBehaviorConstants> client_behavior_signals_;
   std::u16string context_token_;
   std::u16string validation_regex_;
-  std::unique_ptr<base::Value::Dict> legal_message_;
+  std::unique_ptr<base::DictValue> legal_message_;
   const int64_t billing_customer_number_;
   std::string country_code_;
   base::OnceCallback<void(PaymentsAutofillClient::PaymentsRpcResult,
                           const std::u16string& validation_regex,
                           const std::u16string& context_token,
-                          std::unique_ptr<base::Value::Dict>)>
+                          std::unique_ptr<base::DictValue>)>
       callback_;
 };
 

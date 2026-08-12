@@ -37,14 +37,24 @@ class CONTENT_EXPORT WebUIController {
     kUntrusted,
   };
 
+  enum class DisplayDisposition {
+    kRegularPage,
+    kUIElement,
+  };
+
   explicit WebUIController(WebUI* web_ui);
   virtual ~WebUIController();
+
+  // Returns the intended context for this WebUI. By default, WebUIs are regular
+  // pages (e.g. settings, history). Some WebUIs are intended to be rendered as
+  // UI elements embedded within the browser interface.
+  virtual DisplayDisposition GetDisplayDisposition() const;
 
   // Allows the controller to override handling all messages from the page.
   // Return true if the message handling was overridden.
   virtual bool OverrideHandleWebUIMessage(const GURL& source_url,
                                           const std::string& message,
-                                          const base::Value::List& args);
+                                          const base::ListValue& args);
 
   // Called when a WebUI RenderFrame is created.  This is *not* called for every
   // page load because in some cases a RenderFrame will be reused, for example
@@ -62,7 +72,7 @@ class CONTENT_EXPORT WebUIController {
   // content, e.g. theme colors, without creating a full WebUIDataSource.
   //
   // `requesting_origin` is the origin of the WebUI page that is requesting the
-  // resources, e.g. "chrome://reload-button.top-chrome". It matches the origin
+  // resources, e.g. "chrome://webui-toolbar.top-chrome". It matches the origin
   // that the `config` will be sent to.
   virtual void PopulateLocalResourceLoaderConfig(
       blink::mojom::LocalResourceLoaderConfig* config,

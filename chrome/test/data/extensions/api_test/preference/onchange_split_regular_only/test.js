@@ -5,7 +5,7 @@
 // Tests preference.onChange API for an incognito split extension in case the
 // extension's incognito instance is not expected to be brought up.
 
-var hyperlinkAuditing = chrome.privacy.websites.hyperlinkAuditingEnabled;
+const hyperlinkAuditing = chrome.privacy.websites.hyperlinkAuditingEnabled;
 
 function PreferenceChangeListener() {
   this.encounteredEvents = [];
@@ -14,12 +14,12 @@ function PreferenceChangeListener() {
 }
 
 PreferenceChangeListener.prototype.start = function(event) {
-  var listener = this.onPrefChanged_.bind(this);
+  const listener = this.onPrefChanged_.bind(this);
 
   event.addListener(listener);
   this.doneCallback_ = function() {
     event.removeListener(listener);
-  }
+  };
 };
 
 PreferenceChangeListener.prototype.stop = function(callback) {
@@ -38,20 +38,21 @@ PreferenceChangeListener.prototype.listenForValue = function(value, callback) {
 };
 
 PreferenceChangeListener.prototype.getAndClearEncounteredEvents = function() {
-  var events = this.encounteredEvents;
+  const events = this.encounteredEvents;
   this.encounteredEvents = [];
   return events;
 };
 
 PreferenceChangeListener.prototype.onPrefChanged_ = function(pref) {
   this.encounteredEvents.push(pref);
-  var callbacks = this.valueCallbacks_[pref.value];
+  const callbacks = this.valueCallbacks_[pref.value];
   delete this.valueCallbacks_[pref.value];
-  if (callbacks)
+  if (callbacks) {
     callbacks.forEach(callback => callback());
+  }
 };
 
-var hyperlinkAuditingChangeListener = null;
+let hyperlinkAuditingChangeListener = null;
 
 // The incognito background is not expected to be run - send a message to the
 // test runner, and bail out.
@@ -77,10 +78,10 @@ if (chrome.extension.inIncognitoContext) {
     function listenForUserChange() {
       hyperlinkAuditingChangeListener.listenForValue(
           true, chrome.test.callbackPass(function() {
-            var events =
+            const events =
                 hyperlinkAuditingChangeListener.getAndClearEncounteredEvents();
             chrome.test.assertEq(events, [
-              {levelOfControl: 'controllable_by_this_extension', value: true}
+              {levelOfControl: 'controllable_by_this_extension', value: true},
             ]);
           }));
 
@@ -90,10 +91,10 @@ if (chrome.extension.inIncognitoContext) {
     function changeDefault() {
       hyperlinkAuditingChangeListener.listenForValue(
           false, chrome.test.callbackPass(function() {
-            var events =
+            const events =
                 hyperlinkAuditingChangeListener.getAndClearEncounteredEvents();
             chrome.test.assertEq(events, [
-              {value: false, levelOfControl: 'controlled_by_this_extension'}
+              {value: false, levelOfControl: 'controlled_by_this_extension'},
             ]);
           }));
 
@@ -110,10 +111,10 @@ if (chrome.extension.inIncognitoContext) {
     function clearControl() {
       hyperlinkAuditingChangeListener.listenForValue(
           true, chrome.test.callbackPass(function() {
-            var events =
+            const events =
                 hyperlinkAuditingChangeListener.getAndClearEncounteredEvents();
             chrome.test.assertEq(events, [
-              {levelOfControl: 'controllable_by_this_extension', value: true}
+              {levelOfControl: 'controllable_by_this_extension', value: true},
             ]);
           }));
 
@@ -121,9 +122,9 @@ if (chrome.extension.inIncognitoContext) {
     },
 
     function stopPreferenceListener() {
-      var listener = hyperlinkAuditingChangeListener;
+      const listener = hyperlinkAuditingChangeListener;
       hyperlinkAuditingChangeListener = null;
       listener.stop(chrome.test.callbackPass());
-    }
+    },
   ]);
 }

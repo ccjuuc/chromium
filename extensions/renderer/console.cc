@@ -7,6 +7,7 @@
 #include "base/compiler_specific.h"
 #include "base/debug/alias.h"
 #include "base/lazy_instance.h"
+#include "base/logging.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -79,7 +80,7 @@ void AddMessage(ScriptContext* script_context,
   }
 
   blink::WebConsoleMessage web_console_message(
-      level, blink::WebString::FromUTF8(message));
+      level, blink::WebString::FromUtf8(message));
   blink::WebConsoleMessage::LogWebConsoleMessage(script_context->v8_context(),
                                                  web_console_message);
 }

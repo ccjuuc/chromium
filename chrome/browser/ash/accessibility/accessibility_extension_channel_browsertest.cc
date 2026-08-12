@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ash/constants/ash_extension_constants.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/accessibility/accessibility_test_utils.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/common/extensions/extension_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/version_info/channel.h"
 #include "content/public/test/browser_test.h"
@@ -59,14 +59,14 @@ class AccessibilityExtensionChannelTest
       const char* extension_id,
       base::OnceCallback<void()> enable_extension,
       base::OnceCallback<bool()> is_extension_enabled) {
-    ExtensionConsoleErrorObserver console_observer(browser()->profile(),
+    ExtensionConsoleErrorObserver console_observer(browser()->GetProfile(),
                                                    extension_id);
     // Watch events from an MV2 extension which runs in a background page.
-    extensions::ExtensionHostTestHelper host_helper(browser()->profile(),
+    extensions::ExtensionHostTestHelper host_helper(browser()->GetProfile(),
                                                     extension_id);
     // Watch events from an MV3 extension which runs in a service worker.
     extensions::ExtensionRegistryTestHelper extension_observer(
-        extension_id, browser()->profile());
+        extension_id, browser()->GetProfile());
 
     std::move(enable_extension).Run();
 

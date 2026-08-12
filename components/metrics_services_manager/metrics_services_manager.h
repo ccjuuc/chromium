@@ -10,12 +10,14 @@
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/field_trial.h"
 #include "base/threading/thread_checker.h"
+#include "components/metrics/metrics_log_uploader.h"
 #include "components/variations/synthetic_trial_registry.h"
 
 namespace metrics {
 class MetricsService;
 class MetricsServiceClient;
 class ClonedInstallDetector;
+class ReportingService;
 }  // namespace metrics
 
 namespace metrics::structured {
@@ -92,6 +94,10 @@ class MetricsServicesManager {
   // |metrics_service_client_|.
   metrics::structured::StructuredMetricsService* GetStructuredMetricsService();
 
+  // Returns the ReportingService associated with the given service type.
+  metrics::ReportingService* GetReportingService(
+      metrics::MetricsLogUploader::MetricServiceType service_type);
+
   // Returns the VariationsService, creating it if it hasn't been created yet.
   variations::VariationsService* GetVariationsService();
 
@@ -165,12 +171,14 @@ class MetricsServicesManager {
   // Called when loading state changed.
   void LoadingStateChanged(bool is_loading);
 
+
   // Used by |GetOnRendererUnresponsiveCb| to construct the callback that will
   // be run by |MetricsServicesWebContentsObserver|.
   void OnRendererUnresponsive();
 
   // The client passed in from the embedder.
   const std::unique_ptr<MetricsServicesManagerClient> client_;
+
 
   // Ensures that all functions are called from the same thread.
   base::ThreadChecker thread_checker_;

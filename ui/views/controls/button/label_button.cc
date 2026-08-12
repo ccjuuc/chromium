@@ -10,6 +10,7 @@
 #include <string_view>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "base/lazy_instance.h"
 #include "base/logging.h"
@@ -18,6 +19,7 @@
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/actions/actions.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/pointer/touch_ui_controller.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
@@ -28,9 +30,11 @@
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/geometry/vector2d.h"
+#include "ui/gfx/image/canvas_image_source.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
+#include "ui/views/animation/ink_drop_host.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/button/label_button_border.h"
 #include "ui/views/controls/highlight_path_generator.h"
@@ -100,8 +104,32 @@ LabelButton::~LabelButton() {
 }
 
 gfx::ImageSkia LabelButton::GetImage(ButtonState state) const {
-  state = ImageStateForState(state);
-  auto image_model = GetImageModel(state).value_or(ui::ImageModel());
+  const ButtonState for_state = ImageStateForState(state);
+  auto image_model = GetImageModel(for_state).value_or(ui::ImageModel());
+
+  // In forced-colors mode, re-rasterize vector icons so they remain visible
+  // against the opaque ink drop highlight (hover, pressed, or activated).
+  const ui::NativeTheme* theme = GetWidget() ? GetNativeTheme() : nullptr;
+  if (theme &&
+      theme->forced_colors() != ui::ColorProviderKey::ForcedColors::kNone) {
+    const bool is_hover_or_pressed =
+        (state == STATE_HOVERED || state == STATE_PRESSED);
+    const auto* ink_drop_host = InkDrop::Get(this);
+    const bool is_ink_drop_highlighted =
+        ink_drop_host && ink_drop_host->GetHighlighted();
+
+    if ((is_hover_or_pressed || is_ink_drop_highlighted) &&
+        image_model.IsVectorIcon()) {
+      const auto& vector_icon = image_model.GetVectorIcon();
+      if (const gfx::VectorIcon* icon = vector_icon.vector_icon()) {
+        return ui::ImageModel::FromVectorIcon(*icon, ui::kColorIconHovered,
+                                              vector_icon.icon_size(),
+                                              vector_icon.badge_icon())
+            .Rasterize(GetColorProvider());
+      }
+    }
+  }
+
   return image_model.Rasterize(GetColorProvider());
 }
 
@@ -230,7 +258,7 @@ void LabelButton::SetHorizontalAlignment(gfx::HorizontalAlignment alignment) {
     return;
   }
   horizontal_alignment_ = alignment;
-  OnPropertyChanged(&min_size_, PropertyEffects::kLayout);
+  OnPropertyChanged(&horizontal_alignment_, PropertyEffects::kLayout);
 }
 
 gfx::HorizontalAlignment LabelButton::GetHorizontalAlignment() const {
@@ -615,6 +643,14 @@ void LabelButton::OnThemeChanged() {
   // The entire button has to be repainted here, since the native theme can
   // define the tint for the entire background/border/focus ring.
   SchedulePaint();
+
+  // Update the icon when ink drop highlight visibility changes so that
+  // forced-colors mode keeps the icon contrasting with the opaque ink drop.
+  if (auto* ink_drop_host = InkDrop::Get(this)) {
+    ink_drop_highlighted_subscription_ =
+        ink_drop_host->AddHighlightedChangedCallback(base::BindRepeating(
+            &LabelButton::UpdateImage, base::Unretained(this)));
+  }
 }
 
 void LabelButton::StateChanged(ButtonState old_state) {
@@ -744,7 +780,7 @@ void LabelButtonActionViewInterface::ActionItemChangedImpl(
 }
 
 BEGIN_METADATA(LabelButton)
-ADD_PROPERTY_METADATA(std::u16string_view, Text)
+ADD_PROPERTY_METADATA(std::u16string, Text)
 ADD_PROPERTY_METADATA(gfx::HorizontalAlignment, HorizontalAlignment)
 ADD_PROPERTY_METADATA(gfx::Size, MinSize)
 ADD_PROPERTY_METADATA(gfx::Size, MaxSize)

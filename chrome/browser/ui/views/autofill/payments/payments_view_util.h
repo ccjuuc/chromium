@@ -77,6 +77,13 @@ struct LabeledTextfieldWithErrorMessage {
 // Gets the user avatar icon if available, or else a placeholder.
 ui::ImageModel GetProfileAvatar(const AccountInfo& account_info);
 
+// Creates a horizontal box layout view with the user's avatar and email.
+// TODO(crbug.com/538745926): Pass in an AccountInfo object instead of user
+// email and user avatar.
+std::unique_ptr<views::BoxLayoutView> CreateUserAvatarAndEmailView(
+    const std::u16string& user_email,
+    const ui::ImageModel& user_avatar);
+
 // Defines a title view with a label and an icon, to be used by dialogs
 // that need to present the Google or Google Pay logo and custom
 // horizontal padding.
@@ -89,6 +96,8 @@ class TitleWithIconAfterLabelView : public views::BoxLayoutView {
   enum class Icon {
     // Google Pay icon. The "Pay" portion is recolored for light/dark mode.
     GOOGLE_PAY,
+    // Google Wallet icon.
+    GOOGLE_WALLET,
     // Google super G.
     GOOGLE_G,
     // Google Pay logo next to an Affirm logo separated by a vertical line.
@@ -99,6 +108,14 @@ class TitleWithIconAfterLabelView : public views::BoxLayoutView {
     GOOGLE_PAY_AND_ZIP,
     // Google Pay logo next to an Klarna logo separated by a vertical line.
     GOOGLE_PAY_AND_KLARNA,
+    // Affirm logo.
+    AFFIRM,
+    // Afterpay logo.
+    AFTERPAY,
+    // Klarna logo.
+    KLARNA,
+    // Zip logo.
+    ZIP,
   };
 
   TitleWithIconAfterLabelView(const std::u16string& window_title,

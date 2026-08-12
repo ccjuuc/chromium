@@ -27,8 +27,7 @@ import org.chromium.chrome.browser.compositor.overlays.strip.StripTabModelAction
 import org.chromium.chrome.browser.compositor.overlays.strip.reorder.ReorderDelegate.ReorderType;
 import org.chromium.chrome.browser.compositor.overlays.strip.reorder.ReorderDelegate.StripUpdateDelegate;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter.MergeNotificationType;
+import org.chromium.chrome.browser.tabmodel.TabGroupMergeNotificationType;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 import org.chromium.ui.base.LocalizationUtils;
@@ -43,6 +42,7 @@ import java.util.function.Supplier;
 public class TabReorderStrategy extends ReorderStrategyBase {
     // Tab being reordered.
     private @Nullable StripLayoutTab mInteractingTab;
+    private int mOriginIndex = TabModel.INVALID_TAB_INDEX;
 
     // Dependencies
     private final Supplier<Boolean> mInReorderModeSupplier;
@@ -53,7 +53,6 @@ public class TabReorderStrategy extends ReorderStrategyBase {
             AnimationHost animationHost,
             ScrollDelegate scrollDelegate,
             TabModel model,
-            TabGroupModelFilter tabGroupModelFilter,
             View containerView,
             SettableNullableObservableSupplier<Token> groupIdToHideSupplier,
             Supplier<Float> tabWidthSupplier,
@@ -65,7 +64,6 @@ public class TabReorderStrategy extends ReorderStrategyBase {
                 animationHost,
                 scrollDelegate,
                 model,
-                tabGroupModelFilter,
                 containerView,
                 groupIdToHideSupplier,
                 tabWidthSupplier,
@@ -86,6 +84,8 @@ public class TabReorderStrategy extends ReorderStrategyBase {
         RecordUserAction.record("MobileToolbarStartReorderTab");
         mInteractingTab = (StripLayoutTab) interactingView;
         interactingView.setIsForegrounded(/* isForegrounded= */ true);
+
+        mOriginIndex = StripLayoutUtils.findIndexForTab(stripTabs, mInteractingTab.getTabId());
 
         // 1. Select this tab so that it is always in the foreground.
         TabModelUtils.setIndex(
@@ -199,7 +199,10 @@ public class TabReorderStrategy extends ReorderStrategyBase {
     }
 
     @Override
-    public void stopReorderMode(StripLayoutView[] stripViews, StripLayoutGroupTitle[] groupTitles) {
+    public void stopReorderMode(
+            StripLayoutView[] stripViews,
+            StripLayoutGroupTitle[] groupTitles,
+            boolean isDragCancelled) {
         List<Animator> animatorList = new ArrayList<>();
         Runnable onAnimationEnd =
                 () -> {
@@ -208,6 +211,11 @@ public class TabReorderStrategy extends ReorderStrategyBase {
                         mInteractingTab = null;
                     }
                 };
+
+        if (isDragCancelled && mInteractingTab != null) {
+            mModel.moveTab(mInteractingTab.getTabId(), mOriginIndex);
+        }
+
         handleStopReorderMode(
                 stripViews,
                 groupTitles,
@@ -295,12 +303,11 @@ public class TabReorderStrategy extends ReorderStrategyBase {
         boolean towardEnd = isOffsetTowardEnd(offset);
         Tab curTab = mModel.getTabAtChecked(curIndex);
         Tab adjTab = mModel.getTabAt(/* index= */ curIndex + (towardEnd ? 1 : -1));
-        boolean isInGroup = mTabGroupModelFilter.isTabInTabGroup(curTab);
+        boolean isInGroup = mModel.isTabInTabGroup(curTab);
         boolean mayDragInOrOutOfGroup =
                 adjTab == null
                         ? isInGroup
-                        : StripLayoutUtils.notRelatedAndEitherTabInGroup(
-                                mTabGroupModelFilter, curTab, adjTab);
+                        : StripLayoutUtils.notRelatedAndEitherTabInGroup(mModel, curTab, adjTab);
 
         // Do not allow reorder between pinned and unpinned tabs.
         boolean curTabPinned = curTab != null && curTab.getIsPinned();
@@ -376,7 +383,7 @@ public class TabReorderStrategy extends ReorderStrategyBase {
             int curIndex,
             boolean towardEnd) {
         // Move the tab, then animate the adjacent group indicator sliding.
-        int numTabsToSkip = mTabGroupModelFilter.getTabCountForGroup(groupTitle.getTabGroupId());
+        int numTabsToSkip = mModel.getTabCountForGroup(groupTitle.getTabGroupId());
         int destIndex = towardEnd ? curIndex + numTabsToSkip : curIndex - numTabsToSkip;
         mModel.moveTab(interactingTab.getTabId(), destIndex);
         animateViewSliding(groupTitle);
@@ -404,8 +411,11 @@ public class TabReorderStrategy extends ReorderStrategyBase {
         Integer indexInGroup = towardEnd ? 0 : null;
 
         // TODO(crbug.com/451697001): Investigate if we still need to suppress the notifications.
-        mTabGroupModelFilter.mergeListOfTabsToGroup(
-                tabsToMarge, destinationTab, indexInGroup, MergeNotificationType.DONT_NOTIFY);
+        mModel.mergeListOfTabsToGroup(
+                tabsToMarge,
+                destinationTab,
+                indexInGroup,
+                TabGroupMergeNotificationType.DONT_NOTIFY);
         RecordUserAction.record("MobileToolbarReorderTab.TabAddedToGroup");
 
         // Animate the group indicator after updating the tab model.

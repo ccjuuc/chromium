@@ -9,9 +9,15 @@
 #include <iomanip>
 #include <iostream>
 #include <tuple>
+#include <utility>
+#include <vector>
 
+#include "base/containers/span.h"
+#include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
+#include "build/build_config.h"
 #include "chrome/updater/app/app.h"
 #include "chrome/updater/branded_constants.h"
 #include "chrome/updater/constants.h"
@@ -155,8 +161,7 @@ void AppUpdateApps::DoUpdateApps(
           },
           app_id,
           base::BindOnce(&AppUpdateApps::DoUpdateApps, this,
-                         std::vector<updater::UpdateService::AppState>(
-                             states.begin() + 1, states.end()))));
+                         base::ToVector(base::span(states).subspan(1u)))));
 }
 
 void AppUpdateApps::FirstTaskRun() {

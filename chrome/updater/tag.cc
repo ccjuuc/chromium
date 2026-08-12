@@ -10,28 +10,35 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
+#include "base/check.h"
 #include "base/containers/span.h"
+#include "base/containers/span_reader.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/logging.h"
+#include "base/memory/raw_span.h"
 #include "base/no_destructor.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/types/expected.h"
 #include "base/uuid.h"
 #include "build/build_config.h"
 #include "chrome/updater/certificate_tag.h"
+#include "chrome/updater/pkg_tag.h"
+#include "chrome/updater/tag_internal.h"
 
 #if BUILDFLAG(IS_MAC)
 #include <sys/types.h>
@@ -40,10 +47,6 @@
 
 namespace updater::tagging {
 namespace {
-
-// Magic string used to identify the tag in the binary.
-constexpr uint8_t kTagMagicUtf8[] = {'G', 'a', 'c', 't', '2', '.',
-                                     '0', 'O', 'm', 'a', 'h', 'a'};
 
 // These constants are conceptually cross-platform, but only currently used
 // on Mac.
@@ -59,83 +62,8 @@ constexpr size_t kMaxTagStringBytes = 8192;
 // Maximum length for the binary representation of a tag, including its magic
 // signature and length bytes.
 constexpr size_t kMaxBinaryTagBytes =
-    kMaxTagStringBytes + 2 + sizeof(kTagMagicUtf8);
+    kMaxTagStringBytes + 2 + kTagMagicUtf8.size();
 #endif  // BUILDFLAG(IS_MAC)
-
-// The name of the bundle being installed. If not specified, the first app's
-// appname is used.
-constexpr std::string_view kTagArgBundleName = "bundlename";
-
-// The language of the product the user is installing.
-constexpr std::string_view kTagArgLanguage = "lang";
-
-// Flag denoting that the user is flighting a new test feature.
-constexpr std::string_view kTagArgFlighting = "flighting";
-
-// Flag denoting that the user has agreed to provide usage stats, crashreports
-// etc.
-constexpr std::string_view kTagArgUsageStats = "usagestats";
-
-// A unique value for this installation session. It can be used to follow the
-// progress from the website to installation completion.
-constexpr std::string_view kTagArgInstallationId = "iid";
-
-// The brand code used for branding. This value sets the initial brand for the
-// updater and the client app. If a brand value already exists on the system,
-// the new brand value is ignored.
-constexpr std::string_view kTagArgBrandCode = "brand";
-
-// The Client ID used for branding.
-// If a client value already exists on the system, it should be ignored.
-// This value is used to set the initial client for the updater and the client
-// app.
-constexpr std::string_view kTagArgClientId = "client";
-
-// A set of experiment labels used to track installs that are included in
-// experiments. Use "experiments" for per-app arguments; use "omahaexperiments"
-// for updater-specific labels.
-constexpr std::string_view kAppArgExperimentLabels = "experiments";
-constexpr std::string_view kTagArgOmahaExperimentLabels = "omahaexperiments";
-
-// A referral ID used for tracking referrals.
-constexpr std::string_view kTagArgReferralId = "referral";
-
-// Tells the updater what ap value to set in the registry.
-constexpr std::string_view kAppArgAdditionalParameters = "ap";
-
-// Indicates which browser to restart on successful install.
-constexpr std::string_view kTagArgBrowserType = "browser";
-
-// Runtime Mode: "runtime" argument in the tag tells the updater to install
-// itself and stay on the system without any associated application for at least
-// `kMaxServerStartsBeforeFirstReg` wakes. This feature is used to expose the
-// COM API to a process that will install applications via that API.
-// Example:
-//   "runtime=true&needsadmin=true"
-constexpr std::string_view kTagArgRuntimeMode = "runtime";
-
-// Enrollment token: "etoken" argument in the tag tells the per-machine updater
-// to register the machine to the device management server. The value must be a
-// GUID.
-// Example:
-//   "etoken=5d086552-4514-4dfb-8a3e-337024ec35ac"
-constexpr std::string_view kTagArgErollmentToken = "etoken";
-
-// The list of arguments that are needed for a meta-installer, to
-// indicate which application is being installed. These are stamped
-// inside the meta-installer binary.
-constexpr std::string_view kTagArgAppId = "appguid";
-constexpr std::string_view kAppArgAppName = "appname";
-constexpr std::string_view kTagArgNeedsAdmin = "needsadmin";
-constexpr std::string_view kAppArgInstallDataIndex = "installdataindex";
-constexpr std::string_view kAppArgUntrustedData = "untrusteddata";
-
-// This switch allows extra data to be communicated to the application
-// installer. The extra data needs to be URL-encoded. The data will be decoded
-// and written to the file, that is then passed in the command line to the
-// application installer in the form "/installerdata=blah.dat". One per
-// application.
-constexpr std::string_view kAppArgInstallerData = "installerdata";
 
 // Character that is disallowed from appearing in the tag.
 constexpr char kDisallowedCharInTag = '/';
@@ -325,7 +253,7 @@ const GlobalParseTable& GetTable() {
        {kTagArgUsageStats, &ParseUsageStats},
        {kTagArgAppId, &ParseAppId},
        {kTagArgRuntimeMode, &ParseRuntimeMode},
-       {kTagArgErollmentToken, &ParseEnrollmentToken}}};
+       {kTagArgEnrollmentToken, &ParseEnrollmentToken}}};
   return *instance;
 }
 
@@ -627,8 +555,8 @@ ErrorCode ParseAppInstallerDataArgs(std::string_view app_installer_data_args,
 }
 
 // Checks that |args| does not contain |kDisallowedCharInTag|.
-bool IsValidArgs(std::string_view args) {
-  return !base::Contains(args, kDisallowedCharInTag);
+constexpr bool IsValidArgs(std::string_view args) {
+  return !args.contains(kDisallowedCharInTag);
 }
 
 // Returns a `uint16_t` value as big-endian bytes.
@@ -637,16 +565,9 @@ std::array<uint8_t, 2> U16IntToBigEndian(uint16_t value) {
           static_cast<uint8_t>(value & 0x00FF)};
 }
 
-// Converts a big-endian 2-byte value to little-endian and returns it
-// as a uint16_t.
-uint16_t BigEndianReadU16(std::vector<uint8_t>::const_iterator it) {
-  static_assert(ARCH_CPU_LITTLE_ENDIAN, "Machine should be little-endian.");
-  return (uint16_t{*it} << 8) + (uint16_t{*(it + 1)});
-}
-
 // Loads up to the last 80K bytes from `filename`.
 std::vector<uint8_t> ReadFileTail(const base::FilePath& filename) {
-  static constexpr int64_t kMaxBytesToRead = 81920;  // 80K
+  static constexpr size_t kMaxBytesToRead = 81920;  // 80K
 
   base::File file(filename, base::File::FLAG_OPEN | base::File::FLAG_READ);
   if (!file.IsValid()) {
@@ -654,9 +575,14 @@ std::vector<uint8_t> ReadFileTail(const base::FilePath& filename) {
   }
 
   const int64_t file_length = file.GetLength();
-  const int64_t bytes_to_read = std::min(file_length, kMaxBytesToRead);
+  if (file_length < 0) {
+    LOG(ERROR) << "Valid file, invalid length at path: " << filename;
+    return {};
+  }
+  const size_t unsigned_file_length = base::checked_cast<size_t>(file_length);
+  const size_t bytes_to_read = std::min(unsigned_file_length, kMaxBytesToRead);
   const int64_t offset =
-      (file_length > bytes_to_read) ? file_length - bytes_to_read : 0;
+      (unsigned_file_length > bytes_to_read) ? file_length - bytes_to_read : 0;
 
   std::vector<uint8_t> buffer(bytes_to_read);
   return file.ReadAndCheck(offset, base::span(buffer)) ? buffer
@@ -668,7 +594,7 @@ std::string ParseTagBuffer(const std::vector<uint8_t>& tag_buffer) {
     return {};
   }
 
-  const std::string tag_string = ReadTag(tag_buffer.begin(), tag_buffer.end());
+  const std::string tag_string = ReadTag(tag_buffer);
   LOG_IF(ERROR, tag_string.empty()) << __func__ << ": Tag not found in file.";
   return tag_string;
 }
@@ -840,7 +766,7 @@ std::ostream& operator<<(std::ostream& os,
 }
 
 std::vector<uint8_t> GetTagFromTagString(const std::string& tag_string) {
-  std::vector<uint8_t> tag(std::begin(kTagMagicUtf8), std::end(kTagMagicUtf8));
+  std::vector<uint8_t> tag(std::from_range, kTagMagicUtf8);
   const std::array<uint8_t, 2> tag_length =
       U16IntToBigEndian(tag_string.length());
   tag.insert(tag.end(), tag_length.begin(), tag_length.end());
@@ -848,40 +774,38 @@ std::vector<uint8_t> GetTagFromTagString(const std::string& tag_string) {
   return tag;
 }
 
-std::string ReadTag(std::vector<uint8_t>::const_iterator begin,
-                    std::vector<uint8_t>::const_iterator end) {
-  const uint8_t* magic_begin = std::begin(kTagMagicUtf8);
-  const uint8_t* magic_end = std::end(kTagMagicUtf8);
-
-  std::vector<uint8_t>::const_iterator magic_str =
-      std::find_end(begin, end, magic_begin, magic_end);
-  if (magic_str == end) {
-    return std::string();
+ReadTagResult ReadTagAndOffset(base::span<const uint8_t> buffer) {
+  auto magic_str_subrange = std::ranges::find_end(buffer, kTagMagicUtf8);
+  auto magic_str_begin = magic_str_subrange.begin();
+  if (magic_str_begin == buffer.end()) {
+    return NoTagFound{};
   }
 
-  std::vector<uint8_t>::const_iterator taglen_buf =
-      internal::AdvanceIt(magic_str, magic_end - magic_begin, end);
+  size_t magic_offset =
+      base::checked_cast<size_t>(magic_str_begin - buffer.begin());
+  size_t taglen_offset = magic_offset + kTagMagicUtf8.size();
 
-  // Checks that the stored tag length is found within the binary.
-  if (!internal::CheckRange(taglen_buf, sizeof(uint16_t), end)) {
-    return std::string();
+  base::SpanReader reader(buffer.subspan(taglen_offset));
+  uint16_t tag_len = 0;
+  if (!reader.ReadU16BigEndian(tag_len)) {
+    return InvalidTag{.offset = magic_offset};
   }
 
-  // Tag length is stored as a big-endian uint16_t.
-  const uint16_t tag_len = BigEndianReadU16(taglen_buf);
-
-  std::vector<uint8_t>::const_iterator tag_buf =
-      internal::AdvanceIt(taglen_buf, sizeof(uint16_t), end);
-  if (tag_buf == end) {
-    return std::string();
+  std::optional<base::span<const uint8_t>> tag_span = reader.Read(tag_len);
+  if (!tag_span) {
+    return InvalidTag{.offset = magic_offset};
   }
 
-  // Checks that the specified tag is found within the binary.
-  if (!internal::CheckRange(tag_buf, tag_len, end)) {
-    return std::string();
-  }
+  return ValidTag{.offset = magic_offset,
+                  .data = std::string(base::as_string_view(*tag_span))};
+}
 
-  return std::string(tag_buf, tag_buf + tag_len);
+std::string ReadTag(base::span<const uint8_t> buffer) {
+  ReadTagResult result = ReadTagAndOffset(buffer);
+  if (const auto* valid_tag = std::get_if<ValidTag>(&result)) {
+    return valid_tag->data;
+  }
+  return std::string();
 }
 
 std::unique_ptr<tagging::BinaryInterface> CreateBinary(
@@ -891,6 +815,8 @@ std::unique_ptr<tagging::BinaryInterface> CreateBinary(
     return CreatePEBinary(contents);
   } else if (file.MatchesExtension(FILE_PATH_LITERAL(".msi"))) {
     return CreateMSIBinary(contents);
+  } else if (file.MatchesExtension(FILE_PATH_LITERAL(".pkg"))) {
+    return CreatePkgBinary(contents);
   } else {
     std::unique_ptr<BinaryInterface> binary = CreatePEBinary(contents);
     if (!binary) {
@@ -901,6 +827,10 @@ std::unique_ptr<tagging::BinaryInterface> CreateBinary(
 }
 
 std::string BinaryReadTagString(const base::FilePath& file) {
+  if (file.MatchesExtension(FILE_PATH_LITERAL(".pkg"))) {
+    return ReadTagFromPkg(ReadFileTail(file));
+  }
+
   // For MSI files, simply search the tail of the file for the tag.
   if (!file.MatchesExtension(FILE_PATH_LITERAL(".exe"))) {
     return ParseTagBuffer(ReadFileTail(file));
@@ -925,7 +855,7 @@ std::string BinaryReadTagString(const base::FilePath& file) {
   }
 
   const std::vector<uint8_t> tag_data = {tag->begin(), tag->end()};
-  const std::string tag_string = ReadTag(tag_data.begin(), tag_data.end());
+  const std::string tag_string = ReadTag(tag_data);
   if (tag_string.empty()) {
     LOG(ERROR) << __func__ << ": file is untagged: " << file;
   }
@@ -985,8 +915,7 @@ bool BinaryWriteTag(const base::FilePath& in_file,
 
   auto new_contents = bin->SetTag(tag_contents);
   if (!new_contents) {
-    LOG(ERROR) << __func__
-               << "Error while setting superfluous certificate tag.";
+    LOG(ERROR) << __func__ << "Error while setting binary tag.";
     return false;
   }
   if (out_file.empty()) {
@@ -1021,8 +950,8 @@ base::expected<TagArgs, ErrorCode> ReadTagFromApplicationInstanceXattr(
              << path;
     return base::unexpected(ErrorCode::kTagNotFound);
   }
-  std::vector<uint8_t>::iterator tag_data_begin = raw_tag.begin();
-  std::string tag_string = ReadTag(tag_data_begin, tag_data_begin + got_bytes);
+  std::string tag_string =
+      ReadTag(base::span(raw_tag).first(base::checked_cast<size_t>(got_bytes)));
   if (tag_string.empty()) {
     return base::unexpected(ErrorCode::kTagNotFound);
   }

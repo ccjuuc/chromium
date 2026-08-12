@@ -131,7 +131,7 @@ void ModuleDatabase::OnModuleLoad(content::ProcessType process_type,
   DCHECK(process_type == content::PROCESS_TYPE_BROWSER ||
          process_type == content::PROCESS_TYPE_RENDERER)
       << "The current logic in ModuleBlocklistCacheUpdater does not support "
-         "other process types yet. See https://crbug.com/662084 for details.";
+         "other process types yet. See https://crbug.com/40491970 for details.";
 
   ModuleInfo* module_info = nullptr;
   bool new_module = FindOrCreateModuleInfo(
@@ -162,7 +162,7 @@ void ModuleDatabase::OnModuleLoad(content::ProcessType process_type,
 
 // static
 void ModuleDatabase::HandleModuleLoadEvent(content::ProcessType process_type,
-                                           const base::FilePath& module_path,
+                                           base::FilePath module_path,
                                            uint32_t module_size,
                                            uint32_t module_time_date_stamp) {
   GetTaskRunner()->PostTask(
@@ -174,7 +174,8 @@ void ModuleDatabase::HandleModuleLoadEvent(content::ProcessType process_type,
             ModuleDatabase::GetInstance()->OnModuleLoad(
                 process_type, module_path, module_size, module_time_date_stamp);
           },
-          process_type, module_path, module_size, module_time_date_stamp));
+          process_type, std::move(module_path), module_size,
+          module_time_date_stamp));
 }
 
 void ModuleDatabase::OnModuleBlocked(const base::FilePath& module_path,

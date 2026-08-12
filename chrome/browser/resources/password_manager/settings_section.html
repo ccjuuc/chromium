@@ -64,14 +64,12 @@
       </extension-controlled-indicator>
     </div>
   </template>
-  <template is="dom-if" if="[[isPasskeyUpgradeSettingsToggleVisible_]]">
-    <pref-toggle-button id="passkeyUpgradeToggle"
-        label="$i18n{passkeyUpgradeSettingsToggleLabel}"
-        sub-label="$i18n{passkeyUpgradeSettingsToggleSubLabel}"
-        pref="{{prefs.credentials_enable_automatic_passkey_upgrades}}"
-        hidden="[[!prefs.credentials_enable_service.value]]">
-    </pref-toggle-button>
-  </template>
+  <pref-toggle-button id="passkeyUpgradeToggle"
+      label="$i18n{passkeyUpgradeSettingsToggleLabel}"
+      sub-label="$i18n{passkeyUpgradeSettingsToggleSubLabel}"
+      pref="{{prefs.credentials_enable_automatic_passkey_upgrades}}"
+      hidden="[[!prefs.credentials_enable_service.value]]">
+  </pref-toggle-button>
   <pref-toggle-button id="autosigninToggle" class="hr"
       label="$i18n{autosigninLabel}"
       sub-label="$i18n{autosigninDescription}"
@@ -102,9 +100,10 @@
             passwordsOnDevice_, localPasswordCount_)]]"
       restamp>
     <cr-link-row class="cr-row" non-clickable label="[[movePasswordsLabel_]]"
-        sub-label="$i18n{movePasswordsInSettingsSubLabel}" hide-icon>
+        sub-label="$i18n{movePasswordsInSettingsSubLabel}" hide-icon
+        aria-show-label aria-show-sublabel>
       <cr-button id="movePasswordsButton" on-click="onMovePasswordsClicked_"
-          aria-label="[[getAriaLabelMovePasswordsButton_(movePasswordsLabel_)]]">
+          aria-description="[[getAriaDescriptionMovePasswordsButton_(movePasswordsLabel_)]]">
         $i18n{moveSinglePasswordButton}
       </cr-button>
     </cr-link-row>
@@ -146,12 +145,12 @@
         class="cr-row settings-cr-link-row"
         label="$i18n{disconnectCloudAuthenticatorTitle}"
         sub-label="$i18n{disconnectCloudAuthenticatorDescription}"
-        hide-icon non-clickable>
+        hide-icon non-clickable aria-show-label aria-show-sublabel>
       <template is="dom-if"
           if="[[!isDisconnectCloudAuthenticatorInProgress_]]" restamp>
         <cr-button id="disconnectCloudAuthenticatorButton"
             class="cr-row-action-button"
-            aria-label="[[getAriaLabelForCloudAuthenticatorButton_()]]"
+            aria-description="[[getAriaDescriptionForCloudAuthenticatorButton_()]]"
             on-click="onDisconnectCloudAuthenticatorClick_">
           $i18n{disconnectCloudAuthenticatorButton}
         </cr-button>
@@ -191,7 +190,7 @@
     <div id="actorLoginPermissionsList" class="hr">
       <template is="dom-repeat" items="[[actorLoginPermissions_]]">
         <div class="flex-centered">
-          <site-favicon class="favicon" domain="[[item.domainInfo.url.url]]"
+          <site-favicon class="favicon" domain="[[item.domainInfo.url]]"
               url="[[item.faviconUrl.url]]">
           </site-favicon>
           <div class="site-content flex-centered"

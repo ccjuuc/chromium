@@ -7,13 +7,13 @@
  * forms and fields.
  */
 
-import {ID_SYMBOL, UNIQUE_ID_ATTRIBUTE} from '//components/autofill/ios/form_util/resources/fill_constants.js';
+import {HAS_BEEN_PASSWORD_SYMBOL, ID_SYMBOL, UNIQUE_ID_ATTRIBUTE} from '//components/autofill/ios/form_util/resources/fill_constants.js';
 import {gCrWeb} from '//ios/web/public/js_messaging/resources/gcrweb.js';
 
 // Extends the Element to add the ability to access its properties
 // via the [] notation.
 declare interface IndexableElement extends Element {
-  [key: symbol]: number;
+  [key: symbol]: number|boolean;
 }
 
 /**
@@ -21,9 +21,15 @@ declare interface IndexableElement extends Element {
  * Since the autofill API is exclusive to the isolated content world,
  * checking for its registration ensures this map is only created there.
  */
-if (typeof document.__gCrElementMap === 'undefined' &&
-    gCrWeb.hasRegisteredApi('autofill')) {
-  document.__gCrElementMap = new Map();
+export function getElementMap(): Map<any, any>|null {
+  if (typeof document.__gCrElementMap === 'undefined') {
+    if (gCrWeb.hasRegisteredApi('autofill')) {
+      document.__gCrElementMap = new Map();
+    } else {
+      return null;
+    }
+  }
+  return document.__gCrElementMap;
 }
 
 /**
@@ -32,6 +38,17 @@ if (typeof document.__gCrElementMap === 'undefined' &&
  */
 if (typeof document[ID_SYMBOL] === 'undefined') {
   document[ID_SYMBOL] = 1;
+}
+
+/**
+ * Returns true if the password fields tracking feature is enabled.
+ */
+function isTrackPasswordFieldsEnabled(): boolean {
+  if (!gCrWeb.hasRegisteredApi('autofill_form_features')) {
+    return false;
+  }
+  return gCrWeb.getRegisteredApi('autofill_form_features')
+      .getFunction('isAutofillTrackPasswordFieldsEnabled')();
 }
 
 /**
@@ -49,7 +66,16 @@ export function setUniqueIDIfNeeded(element: IndexableElement): void {
       //  the DOM copy when running in the page content world.
       element.setAttribute(UNIQUE_ID_ATTRIBUTE, elementID.toString());
 
-      document.__gCrElementMap.set(elementID, new WeakRef(element));
+      const elementMap = getElementMap();
+      if (elementMap) {
+        elementMap.set(elementID, new WeakRef(element));
+
+        // Set a flag to indicate if this element is a password field.
+        if (element instanceof HTMLInputElement &&
+            element.type === 'password' && isTrackPasswordFieldsEnabled()) {
+          element[HAS_BEEN_PASSWORD_SYMBOL] = true;
+        }
+      }
     }
   } catch (e) {
   }
@@ -61,7 +87,8 @@ export function setUniqueIDIfNeeded(element: IndexableElement): void {
  */
 export function getElementByUniqueID(id: number): Element|null {
   try {
-    return document.__gCrElementMap.get(id).deref();
+    const elementMap = getElementMap();
+    return elementMap ? elementMap.get(id).deref() : null;
   } catch (e) {
     return null;
   }

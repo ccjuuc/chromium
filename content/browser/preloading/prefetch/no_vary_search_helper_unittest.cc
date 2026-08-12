@@ -22,7 +22,7 @@ namespace {
 
 network::mojom::URLResponseHeadPtr CreateHead() {
   network::mojom::URLResponseHeadPtr head =
-      network::mojom::URLResponseHead::New();
+      SuccessfulPrefetchResponseHeadForTesting();
   head->parsed_headers = network::mojom::ParsedHeaders::New();
   head->parsed_headers->no_vary_search_with_parse_error =
       network::mojom::NoVarySearchWithParseError::NewNoVarySearch(
@@ -34,9 +34,8 @@ network::mojom::URLResponseHeadPtr CreateHead() {
 
 class NoVarySearchHelperTester final {
  public:
-  explicit NoVarySearchHelperTester(bool use_prefetches_by_key)
-      : use_prefetches_by_key_(use_prefetches_by_key),
-        prev_document_token_(base::UnguessableToken::CreateForTesting(
+  NoVarySearchHelperTester()
+      : prev_document_token_(base::UnguessableToken::CreateForTesting(
             document_token_->GetHighForSerialization(),
             document_token_->GetLowForSerialization() - 1)),
         next_document_token_(base::UnguessableToken::CreateForTesting(
@@ -48,7 +47,6 @@ class NoVarySearchHelperTester final {
                             network::mojom::URLResponseHeadPtr head) {
     auto prefetch_container = CreatePrefetchContainer(
         referring_render_frame_host, document_token_, url, std::move(head));
-    prefetches_[url] = prefetch_container;
     prefetches_by_key_[prefetch_container->key()] = prefetch_container;
 
     // Also add `PrefetchContainer` with different `DocumentToken`s, to test
@@ -76,24 +74,15 @@ class NoVarySearchHelperTester final {
   }
 
   PrefetchContainer* MatchUrl(const GURL& url) {
-    if (use_prefetches_by_key_) {
-      return no_vary_search::MatchUrl(PrefetchKey(document_token_, url),
-                                      prefetches_by_key_)
-          .get();
-    } else {
-      return no_vary_search::MatchUrl(url, prefetches_).get();
-    }
+    return no_vary_search::MatchUrl(PrefetchKey(document_token_, url),
+                                    prefetches_by_key_)
+        .get();
   }
 
   std::vector<std::pair<GURL, base::WeakPtr<PrefetchContainer>>>
   GetAllForUrlWithoutRefAndQueryForTesting(const GURL& url) {
-    if (use_prefetches_by_key_) {
-      return no_vary_search::GetAllForUrlWithoutRefAndQueryForTesting(
-          PrefetchKey(document_token_, url), prefetches_by_key_);
-    } else {
-      return no_vary_search::GetAllForUrlWithoutRefAndQueryForTesting(
-          url, prefetches_);
-    }
+    return no_vary_search::GetAllForUrlWithoutRefAndQueryForTesting(
+        PrefetchKey(document_token_, url), prefetches_by_key_);
   }
 
  private:
@@ -117,7 +106,6 @@ class NoVarySearchHelperTester final {
                 PreloadPipelineInfo::Create(/*planned_max_preloading_type=*/
                                             PreloadingType::kPrefetch)));
 
-    prefetch_container->SimulatePrefetchEligibleForTest();
     MakeServableStreamingURLLoaderForTest(prefetch_container.get(),
                                           std::move(head), "test body");
     auto weak_prefetch_container = prefetch_container->GetWeakPtr();
@@ -127,9 +115,6 @@ class NoVarySearchHelperTester final {
   }
 
   std::vector<std::unique_ptr<PrefetchContainer>> owned_prefetches_;
-  std::map<GURL, base::WeakPtr<PrefetchContainer>> prefetches_;
-
-  const bool use_prefetches_by_key_;
 
   const blink::DocumentToken document_token_{};
   // Different DocumentTokens are prepared so that `prev_document_token_` <
@@ -139,30 +124,16 @@ class NoVarySearchHelperTester final {
   std::map<PrefetchKey, base::WeakPtr<PrefetchContainer>> prefetches_by_key_;
 };
 
-// bool `GetParam()` indicates whether `MatchUrl` should operate on
-// `prefetches_by_key_`.
-class NoVarySearchHelperTest : public RenderViewHostTestHarness,
-                               public ::testing::WithParamInterface<bool> {
- public:
-  NoVarySearchHelperTest()
-      : RenderViewHostTestHarness(
-            base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+class NoVarySearchHelperTest : public PrefetchingMetricsTestBase {};
 
-  void SetUp() override { RenderViewHostTestHarness::SetUp(); }
-
-  RenderFrameHostImpl* main_rfhi() {
-    return static_cast<RenderFrameHostImpl*>(main_rfh());
-  }
-};
-
-TEST_P(NoVarySearchHelperTest, AddAndMatchUrlNonEmptyVaryParams) {
+TEST_F(NoVarySearchHelperTest, AddAndMatchUrlNonEmptyVaryParams) {
   network::mojom::URLResponseHeadPtr head = CreateHead();
   head->parsed_headers->no_vary_search_with_parse_error->get_no_vary_search()
       ->search_variance =
       network::mojom::SearchParamsVariance::NewVaryParams({"a"});
 
   std::unique_ptr<NoVarySearchHelperTester> helper =
-      std::make_unique<NoVarySearchHelperTester>(GetParam());
+      std::make_unique<NoVarySearchHelperTester>();
   const GURL test_url("https://a.com/index.html?a=2&b=3");
   auto* prefetch_container =
       helper->AddUrl(*main_rfhi(), test_url, std::move(head));
@@ -172,14 +143,14 @@ TEST_P(NoVarySearchHelperTest, AddAndMatchUrlNonEmptyVaryParams) {
   ASSERT_EQ(urls_with_no_vary_search.size(), 1u);
   EXPECT_EQ(urls_with_no_vary_search.at(0).first, test_url);
   EXPECT_THAT(urls_with_no_vary_search.at(0)
-                  .second->GetNoVarySearchData()
-                  ->affected_params(),
+                  .second->GetNoVarySearchDataForTesting()
+                  ->GetAffectedParams(),
               testing::UnorderedElementsAreArray({"a"}));
   EXPECT_FALSE(urls_with_no_vary_search.at(0)
-                   .second->GetNoVarySearchData()
+                   .second->GetNoVarySearchDataForTesting()
                    ->vary_by_default());
   EXPECT_TRUE(urls_with_no_vary_search.at(0)
-                  .second->GetNoVarySearchData()
+                  .second->GetNoVarySearchDataForTesting()
                   ->vary_on_key_order());
   EXPECT_EQ(helper->MatchUrl(GURL("https://a.com/index.html?b=4&a=2&c=5")),
             prefetch_container);
@@ -189,7 +160,7 @@ TEST_P(NoVarySearchHelperTest, AddAndMatchUrlNonEmptyVaryParams) {
   EXPECT_FALSE(helper->MatchUrl(GURL("https://a.com/index.html?b=4")));
 }
 
-TEST_P(NoVarySearchHelperTest, AddAndMatchUrlNonEmptyNoVaryParams) {
+TEST_F(NoVarySearchHelperTest, AddAndMatchUrlNonEmptyNoVaryParams) {
   network::mojom::URLResponseHeadPtr head = CreateHead();
   head->parsed_headers->no_vary_search_with_parse_error->get_no_vary_search()
       ->search_variance =
@@ -197,7 +168,7 @@ TEST_P(NoVarySearchHelperTest, AddAndMatchUrlNonEmptyNoVaryParams) {
   const GURL test_url = GURL("https://a.com/home.html?a=2&b=3");
 
   std::unique_ptr<NoVarySearchHelperTester> helper =
-      std::make_unique<NoVarySearchHelperTester>(GetParam());
+      std::make_unique<NoVarySearchHelperTester>();
   auto* prefetch_container =
       helper->AddUrl(*main_rfhi(), test_url, std::move(head));
   const auto urls_with_no_vary_search =
@@ -205,14 +176,14 @@ TEST_P(NoVarySearchHelperTest, AddAndMatchUrlNonEmptyNoVaryParams) {
   ASSERT_EQ(urls_with_no_vary_search.size(), 1u);
   EXPECT_EQ(urls_with_no_vary_search.at(0).first, test_url);
   EXPECT_THAT(urls_with_no_vary_search.at(0)
-                  .second->GetNoVarySearchData()
-                  ->affected_params(),
+                  .second->GetNoVarySearchDataForTesting()
+                  ->GetAffectedParams(),
               testing::UnorderedElementsAreArray({"a"}));
   EXPECT_TRUE(urls_with_no_vary_search.at(0)
-                  .second->GetNoVarySearchData()
+                  .second->GetNoVarySearchDataForTesting()
                   ->vary_by_default());
   EXPECT_TRUE(urls_with_no_vary_search.at(0)
-                  .second->GetNoVarySearchData()
+                  .second->GetNoVarySearchDataForTesting()
                   ->vary_on_key_order());
   EXPECT_EQ(helper->MatchUrl(test_url), prefetch_container);
   EXPECT_EQ(helper->MatchUrl(GURL("https://a.com/home.html?b=3")),
@@ -223,7 +194,7 @@ TEST_P(NoVarySearchHelperTest, AddAndMatchUrlNonEmptyNoVaryParams) {
   EXPECT_FALSE(helper->MatchUrl(GURL("https://a.com/home.html?b=4")));
 }
 
-TEST_P(NoVarySearchHelperTest, AddAndMatchUrlEmptyNoVaryParams) {
+TEST_F(NoVarySearchHelperTest, AddAndMatchUrlEmptyNoVaryParams) {
   network::mojom::URLResponseHeadPtr head = CreateHead();
   head->parsed_headers->no_vary_search_with_parse_error->get_no_vary_search()
       ->search_variance =
@@ -233,7 +204,7 @@ TEST_P(NoVarySearchHelperTest, AddAndMatchUrlEmptyNoVaryParams) {
   const GURL test_url = GURL("https://a.com/away.html?a=2&b=3&c=6");
 
   std::unique_ptr<NoVarySearchHelperTester> helper =
-      std::make_unique<NoVarySearchHelperTester>(GetParam());
+      std::make_unique<NoVarySearchHelperTester>();
   auto* prefetch_container =
       helper->AddUrl(*main_rfhi(), test_url, std::move(head));
   const auto urls_with_no_vary_search =
@@ -241,14 +212,14 @@ TEST_P(NoVarySearchHelperTest, AddAndMatchUrlEmptyNoVaryParams) {
   ASSERT_EQ(urls_with_no_vary_search.size(), 1u);
   EXPECT_EQ(urls_with_no_vary_search.at(0).first, test_url);
   EXPECT_TRUE(urls_with_no_vary_search.at(0)
-                  .second->GetNoVarySearchData()
-                  ->affected_params()
+                  .second->GetNoVarySearchDataForTesting()
+                  ->GetAffectedParams()
                   .empty());
   EXPECT_TRUE(urls_with_no_vary_search.at(0)
-                  .second->GetNoVarySearchData()
+                  .second->GetNoVarySearchDataForTesting()
                   ->vary_by_default());
   EXPECT_FALSE(urls_with_no_vary_search.at(0)
-                   .second->GetNoVarySearchData()
+                   .second->GetNoVarySearchDataForTesting()
                    ->vary_on_key_order());
   EXPECT_FALSE(helper->MatchUrl(GURL("https://a.com/away.html?b=3")));
   EXPECT_FALSE(helper->MatchUrl(GURL("https://a.com/away.html?b=3&a=4")));
@@ -264,13 +235,13 @@ TEST_P(NoVarySearchHelperTest, AddAndMatchUrlEmptyNoVaryParams) {
   EXPECT_EQ(helper->MatchUrl(test_url), prefetch_container);
 }
 
-TEST_P(NoVarySearchHelperTest, AddUrlWithoutNoVarySearchTest) {
+TEST_F(NoVarySearchHelperTest, AddUrlWithoutNoVarySearchTest) {
   network::mojom::URLResponseHeadPtr head =
-      network::mojom::URLResponseHead::New();
+      SuccessfulPrefetchResponseHeadForTesting();
   head->parsed_headers = network::mojom::ParsedHeaders::New();
 
   std::unique_ptr<NoVarySearchHelperTester> helper =
-      std::make_unique<NoVarySearchHelperTester>(GetParam());
+      std::make_unique<NoVarySearchHelperTester>();
   GURL test_url("https://a.com/index.html?a=2&b=3");
   auto* prefetch_container =
       helper->AddUrl(*main_rfhi(), test_url, std::move(head));
@@ -282,9 +253,9 @@ TEST_P(NoVarySearchHelperTest, AddUrlWithoutNoVarySearchTest) {
   EXPECT_EQ(helper->MatchUrl(test_url), prefetch_container);
 }
 
-TEST_P(NoVarySearchHelperTest, DoNotPrefixMatch) {
+TEST_F(NoVarySearchHelperTest, DoNotPrefixMatch) {
   std::unique_ptr<NoVarySearchHelperTester> helper =
-      std::make_unique<NoVarySearchHelperTester>(GetParam());
+      std::make_unique<NoVarySearchHelperTester>();
 
   // `no_match_url_num` and `no_match_url_foo` have the prefix
   // "https://example.com/index.html" but shouldn't match with
@@ -317,8 +288,9 @@ TEST_P(NoVarySearchHelperTest, DoNotPrefixMatch) {
       helper->AddUrl(*main_rfhi(), no_match_url_foo, head->Clone());
   auto* pc_matching_url_a_1 =
       helper->AddUrl(*main_rfhi(), matching_url_a_1, head->Clone());
-  auto* pc_matching_url_a_0 = helper->AddUrl(
-      *main_rfhi(), matching_url_a_0, network::mojom::URLResponseHead::New());
+  auto* pc_matching_url_a_0 =
+      helper->AddUrl(*main_rfhi(), matching_url_a_0,
+                     SuccessfulPrefetchResponseHeadForTesting());
   auto* pc_matching_url_a_2 =
       helper->AddUrl(*main_rfhi(), matching_url_a_2, head->Clone());
   auto* pc_no_match_url_top =
@@ -370,9 +342,9 @@ TEST_P(NoVarySearchHelperTest, DoNotPrefixMatch) {
   EXPECT_FALSE(helper->MatchUrl(GURL("https://example.com/index.html?a=5")));
 }
 
-TEST_P(NoVarySearchHelperTest, DoNotMatchDifferentDocumentToken) {
+TEST_F(NoVarySearchHelperTest, DoNotMatchDifferentDocumentToken) {
   std::unique_ptr<NoVarySearchHelperTester> helper =
-      std::make_unique<NoVarySearchHelperTester>(GetParam());
+      std::make_unique<NoVarySearchHelperTester>();
 
   network::mojom::URLResponseHeadPtr head = CreateHead();
   head->parsed_headers->no_vary_search_with_parse_error->get_no_vary_search()
@@ -405,11 +377,6 @@ TEST_P(NoVarySearchHelperTest, DoNotMatchDifferentDocumentToken) {
   EXPECT_EQ(helper->GetAllForUrlWithoutRefAndQueryForTesting(foo_url).size(),
             1u);
 }
-
-INSTANTIATE_TEST_SUITE_P(
-    /* no prefix */,
-    NoVarySearchHelperTest,
-    testing::Bool());
 
 }  // namespace
 }  // namespace content

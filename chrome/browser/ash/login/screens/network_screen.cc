@@ -8,6 +8,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "ash/public/cpp/network_config_service.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
@@ -23,15 +24,12 @@
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ui/webui/ash/login/network_screen_handler.h"
 #include "chrome/grit/branded_strings.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
 #include "chromeos/ash/components/network/technology_state_controller.h"
 #include "chromeos/ash/components/quick_start/logging.h"
 #include "chromeos/ash/components/quick_start/quick_start_metrics.h"
-#include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom-shared.h"
 #include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom.h"
-#include "chromeos/services/network_config/public/mojom/cros_network_config.mojom-shared.h"
 #include "chromeos/services/network_config/public/mojom/cros_network_config.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -49,6 +47,9 @@ chromeos::network_config::mojom::SecurityType ConvertSecurityType(
     quick_start::mojom::WifiSecurityType type) {
   switch (type) {
     case quick_start::mojom::WifiSecurityType::kPSK:
+    case quick_start::mojom::WifiSecurityType::kSAE:
+      // Shill groups WPA3-SAE under the same "psk" security class as WPA2-PSK
+      // and negotiates the actual key management with the access point.
       return chromeos::network_config::mojom::SecurityType::kWpaPsk;
     case quick_start::mojom::WifiSecurityType::kWEP:
       return chromeos::network_config::mojom::SecurityType::kWepPsk;
@@ -56,12 +57,17 @@ chromeos::network_config::mojom::SecurityType ConvertSecurityType(
       return chromeos::network_config::mojom::SecurityType::kWpaEap;
     case quick_start::mojom::WifiSecurityType::kOpen:
     case quick_start::mojom::WifiSecurityType::kOWE:
-    case quick_start::mojom::WifiSecurityType::kSAE:
+      // OWE (Enhanced Open) does not use a passphrase and shares the "none"
+      // security class with open networks.
       return chromeos::network_config::mojom::SecurityType::kNone;
   }
 }
 
-chromeos::network_config::mojom::ConfigPropertiesPtr CreateNetworkConfig(
+}  // namespace
+
+// static
+chromeos::network_config::mojom::ConfigPropertiesPtr
+NetworkScreen::CreateNetworkConfig(
     const quick_start::mojom::WifiCredentials& wifi_credentials) {
   auto wifi = chromeos::network_config::mojom::WiFiConfigProperties::New();
   wifi->ssid = wifi_credentials.ssid;
@@ -80,8 +86,6 @@ chromeos::network_config::mojom::ConfigPropertiesPtr CreateNetworkConfig(
   // Proxy settings are not supported for now.
   return config;
 }
-
-}  // namespace
 
 // static
 std::string NetworkScreen::GetResultString(Result result) {
@@ -165,7 +169,7 @@ void NetworkScreen::HideImpl() {
       ->DetachFrontend(this);
 }
 
-void NetworkScreen::OnUserAction(const base::Value::List& args) {
+void NetworkScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionQuickStartButtonClicked) {
     OnQuickStartButtonClicked();
@@ -236,7 +240,7 @@ void NetworkScreen::OnUiUpdateRequested(
     // user that WiFi transfer has failed and that they should try again.
     if (view_) {
       view_->ShowScreenWithData(
-          base::Value::Dict().Set("useQuickStartWiFiErrorStrings", true));
+          base::DictValue().Set("useQuickStartWiFiErrorStrings", true));
     }
   }
 }
@@ -465,7 +469,7 @@ void NetworkScreen::ExitQuickStartFlow(
     if (view_) {
       SetQuickStartButtonVisibility(/*visible=*/true);
       view_->ShowScreenWithData(
-          base::Value::Dict().Set("useQuickStartWiFiErrorStrings", true));
+          base::DictValue().Set("useQuickStartWiFiErrorStrings", true));
     }
     return;
   }
@@ -493,15 +497,14 @@ void NetworkScreen::ShowStepsWhenQuickStartOngoing() {
     const auto credentials = context()->quick_start_wifi_credentials.value();
     context()->quick_start_wifi_credentials.reset();
     ConfigureWifiNetwork(credentials);
-    view_->ShowScreenWithData(
-        base::Value::Dict().Set("ssid", credentials.ssid));
+    view_->ShowScreenWithData(base::DictValue().Set("ssid", credentials.ssid));
   } else {
     // QuickStart is ongoing, but no WiFi credentials have been provided.
     // Customize the UI with a specific subtitle informing the user that they
     // need to connect to a network in order to continue setting up with their
     // Android phone.
     view_->ShowScreenWithData(
-        base::Value::Dict().Set("useQuickStartSubtitle", true));
+        base::DictValue().Set("useQuickStartSubtitle", true));
   }
 }
 

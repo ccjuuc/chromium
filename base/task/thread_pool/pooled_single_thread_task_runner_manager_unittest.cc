@@ -307,17 +307,17 @@ TEST_P(PooledSingleThreadTaskRunnerManagerCommonTest, ThreadNamesSet) {
           ? ""
           : "Shared");
   const std::string background =
-      "^ThreadPoolSingleThread" + maybe_shared + "Background\\d+$";
+      "ThreadPoolSingleThread" + maybe_shared + "Background";
   const std::string utility =
-      "^ThreadPoolSingleThread" + maybe_shared + "Utility\\d+$";
+      "ThreadPoolSingleThread" + maybe_shared + "Utility";
   const std::string foreground =
-      "^ThreadPoolSingleThread" + maybe_shared + "Foreground\\d+$";
+      "ThreadPoolSingleThread" + maybe_shared + "Foreground";
   const std::string background_blocking =
-      "^ThreadPoolSingleThread" + maybe_shared + "BackgroundBlocking\\d+$";
+      "ThreadPoolSingleThread" + maybe_shared + "BackgroundBlocking";
   const std::string utility_blocking =
-      "^ThreadPoolSingleThread" + maybe_shared + "UtilityBlocking\\d+$";
+      "ThreadPoolSingleThread" + maybe_shared + "UtilityBlocking";
   const std::string foreground_blocking =
-      "^ThreadPoolSingleThread" + maybe_shared + "ForegroundBlocking\\d+$";
+      "ThreadPoolSingleThread" + maybe_shared + "ForegroundBlocking";
 
   const struct {
     TaskTraits traits;
@@ -379,9 +379,8 @@ TEST_P(PooledSingleThreadTaskRunnerManagerCommonTest, ThreadNamesSet) {
     TestWaitableEvent event;
     CreateTaskRunner(test_case.traits)
         ->PostTask(FROM_HERE, BindLambdaForTesting([&] {
-                     EXPECT_THAT(PlatformThread::GetName(),
-                                 ::testing::MatchesRegex(
-                                     test_case.expected_thread_name));
+                     EXPECT_EQ(PlatformThread::GetName(),
+                               test_case.expected_thread_name);
                      event.Signal();
                    }));
     event.Wait();
@@ -524,8 +523,7 @@ TEST_F(PooledSingleThreadTaskRunnerManagerJoinTest, ConcurrentJoin) {
         FROM_HERE,
         BindOnce(&TestWaitableEvent::Signal, Unretained(&task_running))));
     EXPECT_TRUE(task_runner->PostTask(
-        FROM_HERE,
-        BindOnce(&TestWaitableEvent::Wait, Unretained(&task_blocking))));
+        FROM_HERE, task_blocking.GetWaitCallbackForTesting()));
   }
 
   task_running.Wait();
@@ -553,8 +551,7 @@ TEST_F(PooledSingleThreadTaskRunnerManagerJoinTest,
         FROM_HERE,
         BindOnce(&TestWaitableEvent::Signal, Unretained(&task_running))));
     EXPECT_TRUE(task_runner->PostTask(
-        FROM_HERE,
-        BindOnce(&TestWaitableEvent::Wait, Unretained(&task_blocking))));
+        FROM_HERE, task_blocking.GetWaitCallbackForTesting()));
     EXPECT_TRUE(task_runner->PostTask(FROM_HERE, DoNothing()));
   }
 

@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/core/workers/shared_worker_reporting_proxy.h"
 
 #include "base/location.h"
+#include "third_party/blink/public/common/loader/javascript_framework_detection.h"
 #include "third_party/blink/renderer/core/exported/web_shared_worker_impl.h"
 #include "third_party/blink/renderer/platform/bindings/source_location.h"
 #include "third_party/blink/renderer/platform/scheduler/public/main_thread.h"
@@ -52,7 +53,7 @@ void SharedWorkerReportingProxy::ReportException(const String& error_message,
   // errors that occur during script evaluation are considered runtime errors
   // and should dispatch a detailed `ErrorEvent`. This should be replaced with a
   // more robust mechanism if one becomes available.
-  const bool is_eval_error = !error_message.Contains("SyntaxError");
+  const bool is_eval_error = !error_message.contains("SyntaxError");
 
   PostCrossThreadTask(
       *main_thread_task_runner_, FROM_HERE,
@@ -87,7 +88,9 @@ void SharedWorkerReportingProxy::DidFailToFetchModuleScript() {
                           CrossThreadUnretained(worker_)));
 }
 
-void SharedWorkerReportingProxy::DidEvaluateTopLevelScript(bool success) {
+void SharedWorkerReportingProxy::DidEvaluateTopLevelScript(
+    bool success,
+    const JavaScriptFrameworkDetectionResult& result) {
   DCHECK(!IsMainThread());
   CHECK(!script_evaluated_);
   script_evaluated_ = true;

@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "base/android/jni_string.h"
-#include "base/metrics/histogram_macros.h"
 #include "components/url_formatter/elide_url.h"
 #include "components/webapps/browser/android/add_to_homescreen_params.h"
 #include "components/webapps/browser/android/shortcut_info.h"
@@ -28,7 +27,7 @@ using base::android::ScopedJavaLocalRef;
 namespace webapps {
 
 // static
-static jlong JNI_AddToHomescreenMediator_Initialize(
+static int64_t JNI_AddToHomescreenMediator_Initialize(
     JNIEnv* env,
     const JavaRef<jobject>& java_ref,
     const JavaRef<jobject>& java_web_contents) {

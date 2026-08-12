@@ -11,6 +11,8 @@
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
+#include "third_party/blink/renderer/core/html/html_element.h"
+#include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/inspector/inspector_trace_events.h"
 #include "third_party/blink/renderer/core/layout/fragmentation_utils.h"
 #include "third_party/blink/renderer/core/layout/layout_video.h"
@@ -55,7 +57,7 @@ class PaintTimelineReporter {
       : layer_(layer) {
     if (ShouldReport(should_paint_content)) {
       reset_current_reporting_.emplace(&current_reporting_, this);
-      TRACE_EVENT_BEGIN1(
+      TRACE_EVENT_BEGIN(
           kDevToolsTimelineCategory, "Paint", "data",
           [&layer](perfetto::TracedValue context) {
             const LayoutObject& object = layer.GetLayoutObject();
@@ -72,7 +74,7 @@ class PaintTimelineReporter {
 
   ~PaintTimelineReporter() {
     if (current_reporting_ == this) {
-      TRACE_EVENT_END0(kDevToolsTimelineCategory, "Paint");
+      TRACE_EVENT_END(kDevToolsTimelineCategory);
     }
   }
 
@@ -143,6 +145,25 @@ scoped_refptr<cc::ViewTransitionContentLayer> GetTransitionScopeSnapshotLayer(
 
 }  // namespace
 
+void PaintLayerPainter::PaintLayerForReplacedNormalFlowStackingContext(
+    const PaintInfo& paint_info) {
+  DCHECK(paint_layer_.ShouldPaintReplacedNormalFlowInline());
+
+  if (paint_info.phase != PaintPhase::kForeground &&
+      paint_info.phase != PaintPhase::kSelectionDragImage) {
+    return;
+  }
+
+  // Early out if pre-paint has not finished.
+  if (!paint_layer_.GetLayoutObject()
+           .FirstFragment()
+           .HasLocalBorderBoxProperties()) {
+    return;
+  }
+
+  Paint(paint_info.context, paint_info.GetPaintFlags());
+}
+
 bool PaintLayerPainter::PaintedOutputInvisible(const ComputedStyle& style) {
   if (style.HasNonInitialBackdropFilter())
     return false;
@@ -150,8 +171,9 @@ bool PaintLayerPainter::PaintedOutputInvisible(const ComputedStyle& style) {
   // Always paint when 'will-change: opacity' is present. Reduces jank for
   // common animation implementation approaches, for example, an element that
   // starts with opacity zero and later begins to animate.
-  if (style.HasWillChangeOpacityHint())
+  if (style.HasWillChangeProperty(CSSPropertyID::kOpacity)) {
     return false;
+  }
 
   if (style.HasCurrentOpacityAnimation())
     return false;
@@ -298,7 +320,7 @@ PaintResult PaintLayerPainter::Paint(GraphicsContext& context,
   // A paint layer should always have LocalBorderBoxProperties when it's ready
   // for paint.
   if (!object.FirstFragment().HasLocalBorderBoxProperties()) {
-    // TODO(crbug.com/848056): This can happen e.g. when we paint a filter
+    // TODO(crbug.com/40578621): This can happen e.g. when we paint a filter
     // referencing a SVG foreign object through feImage, especially when there
     // is circular references. Should find a better solution.
     return kMayBeClippedByCullRect;
@@ -325,6 +347,17 @@ PaintResult PaintLayerPainter::Paint(GraphicsContext& context,
   IgnorePaintTimingScope::SetIsDocumentElementInvisible(
       is_document_element_invisible);
 
+  // Canvas children need to ensure that a composited cc::Layer exists for
+  // canvas draw element, even if no other content is painted.
+  bool force_chunk_for_canvas_draw_element = false;
+  if (const auto* properties = object.FirstFragment().PaintProperties()) {
+    if (const auto* effect = properties->Effect()) {
+      if (effect->HasCanvasChildState()) {
+        force_chunk_for_canvas_draw_element = true;
+      }
+    }
+  }
+
   bool is_self_painting_layer = paint_layer_.IsSelfPaintingLayer();
   bool should_paint_content =
       paint_layer_.HasVisibleContent() &&
@@ -334,11 +367,14 @@ PaintResult PaintLayerPainter::Paint(GraphicsContext& context,
       !paint_layer_.IsUnderSVGHiddenContainer() && is_self_painting_layer;
 
   PaintResult result = kFullyPainted;
+  bool is_unbounded_active = object.IsInclusiveDescendantOfUnboundedElement();
   if (object.IsFragmented() ||
       // When printing, the LayoutView's background should extend infinitely
       // regardless of LayoutView's visual rect, so don't check intersection
       // between the visual rect and the cull rect (custom for each page).
-      (IsA<LayoutView>(object) && object.GetDocument().Printing())) {
+      (IsA<LayoutView>(object) && object.GetDocument().Printing()) ||
+      // Canvas children must paint, regardless of intersection.
+      force_chunk_for_canvas_draw_element || is_unbounded_active) {
     result = kMayBeClippedByCullRect;
   } else {
     gfx::Rect visual_rect = FirstFragmentVisualRect(object);
@@ -391,8 +427,9 @@ PaintResult PaintLayerPainter::Paint(GraphicsContext& context,
   PaintController& controller = context.GetPaintController();
 
   std::optional<ScopedEffectivelyInvisible> effectively_invisible;
-  if (PaintedOutputInvisible(object.StyleRef()))
+  if (PaintedOutputInvisible(object.StyleRef())) {
     effectively_invisible.emplace(controller);
+  }
 
   std::optional<ScopedPaintChunkProperties> layer_chunk_properties;
 
@@ -416,12 +453,17 @@ PaintResult PaintLayerPainter::Paint(GraphicsContext& context,
         controller, object.FirstFragment().LocalBorderBoxProperties(),
         paint_layer_, DisplayItem::kLayerChunk);
 
+    bool ensure_chunk = force_chunk_for_canvas_draw_element;
     // When a reference filter applies to the layer, ensure a chunk is
     // generated so that the filter paints even if no other content is painted
     // by the layer (see `SVGContainerPainter::Paint`).
     auto* properties = object.FirstFragment().PaintProperties();
-    if (properties && properties->Filter() &&
-        properties->Filter()->HasReferenceFilter()) {
+    ensure_chunk |= properties && properties->Filter() &&
+                    properties->Filter()->HasReferenceFilter();
+    ensure_chunk |= properties && properties->Effect() &&
+                    properties->Effect()->HasReferenceFilter();
+
+    if (ensure_chunk) {
       controller.EnsureChunk();
     }
   }
@@ -483,13 +525,15 @@ PaintResult PaintLayerPainter::Paint(GraphicsContext& context,
     if (should_paint_content && !selection_drag_image_only) {
       if (properties->Mask()) {
         if (object.IsSVGForeignObject()) {
-          SVGMaskPainter::Paint(context, object, object);
+          SVGMaskPainter::Paint(context, object, object, paint_flags);
         } else {
           PaintWithPhase(PaintPhase::kMask, context, paint_flags);
         }
       }
-      if (properties->ClipPathMask())
-        ClipPathClipper::PaintClipPathAsMaskImage(context, object, object);
+      if (properties->ClipPathMask()) {
+        ClipPathClipper::PaintClipPathAsMaskImage(context, object, object,
+                                                  paint_flags);
+      }
     }
     if (PaintTransitionPseudos(context, object, paint_flags) ==
         kMayBeClippedByCullRect) {
@@ -514,11 +558,17 @@ void PaintLayerPainter::PaintTransitionScopeSnapshotIfNeeded(
     return;
   }
 
-  PhysicalRect box_border_rect =
-      paint_layer_.LocalBoundingBoxIncludingSelfPaintingDescendants();
-  PhysicalRect ink_overflow_rect = object.ApplyFiltersToRect(box_border_rect);
-  PhysicalOffset paint_offset = ink_overflow_rect.offset;
-  layer->SetBounds(ink_overflow_rect.PixelSnappedSize());
+  gfx::Point paint_offset;
+  if (layer->is_live_content_layer()) {
+    PhysicalRect box_border_rect =
+        paint_layer_.LocalBoundingBoxIncludingSelfPaintingDescendants();
+    PhysicalRect ink_overflow_rect = object.ApplyFiltersToRect(box_border_rect);
+    paint_offset = ToRoundedPoint(ink_overflow_rect.offset);
+    layer->SetBounds(ink_overflow_rect.PixelSnappedSize());
+    layer->SetPaintOffset(paint_offset);
+  } else {
+    paint_offset = layer->paint_offset();
+  }
   layer->SetIsDrawable(true);
 
   PropertyTreeStateOrAlias properties =
@@ -526,9 +576,9 @@ void PaintLayerPainter::PaintTransitionScopeSnapshotIfNeeded(
   DCHECK(effect);
   properties.SetEffect(*effect);
 
-  RecordForeignLayer(
-      context, paint_layer_, DisplayItem::kForeignLayerViewTransitionContent,
-      std::move(layer), ToRoundedPoint(paint_offset), &properties);
+  RecordForeignLayer(context, paint_layer_,
+                     DisplayItem::kForeignLayerViewTransitionContent,
+                     std::move(layer), paint_offset, &properties);
 }
 
 PaintResult PaintLayerPainter::PaintTransitionPseudos(
@@ -572,15 +622,36 @@ PaintResult PaintLayerPainter::PaintChildren(
     return result;
   }
 
-  // Prevent canvas fallback content from being rendered.
-  if (IsA<HTMLCanvasElement>(layout_object.GetNode())) {
-    return result;
+  bool painting_canvas_child = false;
+  auto* canvas = DynamicTo<HTMLCanvasElement>(layout_object.GetNode());
+  if (canvas) {
+    if (RuntimeEnabledFeatures::CanvasDrawElementEnabled(
+            canvas->GetExecutionContext()) &&
+        canvas->layoutSubtree()) {
+      // We need to paint the children for later use by drawElementImage, but
+      // make sure we enforce privacy-preserving paint behavior.
+      paint_flags |= PaintFlag::kPrivacyPreserving;
+      // TODO(https://crbug.com/480074850): Determine how hit test data works
+      // in non-composited subtrees, and test if this is needed.
+      paint_flags |= PaintFlag::kOmitCompositingInfo;
+
+      painting_canvas_child = true;
+    } else {
+      // Prevent canvas fallback content from being rendered.
+      return result;
+    }
   }
 
   PaintLayerPaintOrderIterator iterator(&paint_layer_, children_to_visit);
   while (PaintLayer* child = iterator.Next()) {
-    if (child->IsReplacedNormalFlowStacking())
+    // Replaced normal flow stacking contexts (like <video> and SVG
+    // <foreignObject>) are painted inline by their respective painters
+    // (BoxFragmentPainter or SVGRootPainter/SVGContainerPainter) to maintain
+    // correct paint order with siblings. Skip them here to avoid
+    // double-painting.
+    if (child->ShouldPaintReplacedNormalFlowInline()) {
       continue;
+    }
 
     if (!layout_object.IsViewTransitionRoot() &&
         ViewTransitionUtils::IsViewTransitionRoot(child->GetLayoutObject())) {
@@ -608,6 +679,11 @@ PaintResult PaintLayerPainter::PaintChildren(
         }
       }
     }
+
+    if (painting_canvas_child && child->SelfOrDescendantNeedsRepaint()) {
+      auto* child_el = To<Element>(child->GetLayoutObject().GetNode());
+      layout_object.GetFrameView()->DidPaintCanvasChild(*canvas, *child_el);
+    }
   }
 
   return result;
@@ -632,6 +708,13 @@ void PaintLayerPainter::PaintFragmentWithPhase(
          phase == PaintPhase::kOverlayOverflowControls);
 
   CullRect cull_rect = fragment_data.GetCullRect();
+  if (paint_layer_.GetLayoutObject()
+          .IsInclusiveDescendantOfUnboundedElement()) {
+    // For unbounded elements, we use an infinite cull rect, so these elements
+    // escape ancestor cull rects and are not clipped during paint.
+    DCHECK(RuntimeEnabledFeatures::UnboundedElementEnabled());
+    cull_rect = CullRect::Infinite();
+  }
   if (cull_rect.Rect().IsEmpty())
     return;
 

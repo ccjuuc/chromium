@@ -9,10 +9,10 @@
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_dialogs.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/toasts/api/toast_id.h"
 #include "chrome/browser/ui/toasts/toast_controller.h"
 #include "chrome/grit/branded_strings.h"
@@ -88,8 +88,7 @@ void ShowSharedTabGroupVersionUpToDateToast(
     return;
   }
 
-  ToastController* toast_controller =
-      browser->browser_window_features()->toast_controller();
+  ToastController* toast_controller = browser->GetFeatures().toast_controller();
   if (!toast_controller) {
     return;
   }
@@ -106,12 +105,14 @@ void ShowSharedTabGroupVersionUpToDateToast(
 
 void MaybeShowSharedTabGroupVersionOutOfDateModal(Browser* browser) {
   // Only show on normal browser.
-  if (!browser || !browser->is_type_normal()) {
+  if (!browser ||
+      browser->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL) {
     return;
   }
 
   tab_groups::TabGroupSyncService* tab_group_sync_service =
-      tab_groups::TabGroupSyncServiceFactory::GetForProfile(browser->profile());
+      tab_groups::TabGroupSyncServiceFactory::GetForProfile(
+          browser->GetProfile());
   if (!tab_group_sync_service) {
     return;
   }
@@ -131,12 +132,14 @@ void MaybeShowSharedTabGroupVersionOutOfDateModal(Browser* browser) {
 
 void MaybeShowSharedTabGroupVersionUpToDateToast(Browser* browser) {
   // Only show on normal browser.
-  if (!browser || !browser->is_type_normal()) {
+  if (!browser ||
+      browser->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL) {
     return;
   }
 
   tab_groups::TabGroupSyncService* tab_group_sync_service =
-      tab_groups::TabGroupSyncServiceFactory::GetForProfile(browser->profile());
+      tab_groups::TabGroupSyncServiceFactory::GetForProfile(
+          browser->GetProfile());
   if (!tab_group_sync_service) {
     return;
   }

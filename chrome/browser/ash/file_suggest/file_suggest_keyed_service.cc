@@ -4,12 +4,10 @@
 
 #include "chrome/browser/ash/file_suggest/file_suggest_keyed_service.h"
 
-#include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/app_list/app_list_types.h"
 #include "base/functional/bind.h"
 #include "chrome/browser/ash/file_manager/fileapi_util.h"
-#include "chrome/browser/ash/file_suggest/drive_file_suggestion_provider.h"
 #include "chrome/browser/ash/file_suggest/drive_recent_file_suggestion_provider.h"
 #include "chrome/browser/ash/file_suggest/file_suggest_util.h"
 #include "chrome/browser/ash/file_suggest/local_file_suggestion_provider.h"
@@ -23,7 +21,7 @@ using SuggestResults = std::vector<FileSuggestData>;
 }  // namespace
 
 FileSuggestKeyedService::FileSuggestKeyedService(
-    const ApplicationLocaleStorage* application_locale_storage,
+    PrefService* local_state,
     Profile* profile,
     PersistentProto<app_list::RemovedResultsProto> proto)
     : profile_(profile), proto_(std::move(proto)) {
@@ -44,27 +42,21 @@ FileSuggestKeyedService::FileSuggestKeyedService(
 
   local_file_suggestion_provider_ =
       std::make_unique<LocalFileSuggestionProvider>(
-          profile, base::BindRepeating(
-                       &FileSuggestKeyedService::OnSuggestionProviderUpdated,
-                       weak_factory_.GetWeakPtr()));
+          local_state, profile,
+          base::BindRepeating(
+              &FileSuggestKeyedService::OnSuggestionProviderUpdated,
+              weak_factory_.GetWeakPtr()));
 }
 
 FileSuggestKeyedService::~FileSuggestKeyedService() = default;
-
-void FileSuggestKeyedService::MaybeUpdateItemSuggestCache(
-    base::PassKey<app_list::ZeroStateDriveProvider>) {
-  drive_file_suggestion_provider_->MaybeUpdateItemSuggestCache(
-      base::PassKey<FileSuggestKeyedService>());
-}
 
 void FileSuggestKeyedService::GetSuggestFileData(
     FileSuggestionType type,
     GetSuggestFileDataCallback callback) {
   const auto* const pref_service = profile_->GetPrefs();
   if (!pref_service ||
-      (!base::Contains(pref_service->GetList(
-                           prefs::kContextualGoogleIntegrationsConfiguration),
-                       prefs::kGoogleDriveIntegrationName) &&
+      (!pref_service->GetList(prefs::kContextualGoogleIntegrationsConfiguration)
+            .contains(prefs::kGoogleDriveIntegrationName) &&
        type == FileSuggestionType::kDriveFile)) {
     // When drive is disabled by policy, return an empty list to indicate no
     // further waiting on results is necessary.

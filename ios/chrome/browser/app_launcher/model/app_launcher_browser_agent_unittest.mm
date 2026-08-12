@@ -10,7 +10,6 @@
 
 #import "base/memory/raw_ptr.h"
 #import "base/test/metrics/histogram_tester.h"
-#import "ios/chrome/app/application_delegate/app_state.h"
 #import "ios/chrome/browser/app_launcher/model/app_launcher_tab_helper.h"
 #import "ios/chrome/browser/app_launcher/model/app_launcher_tab_helper_browser_presentation_provider.h"
 #import "ios/chrome/browser/app_launcher/model/fake_app_launcher_abuse_detector.h"
@@ -71,8 +70,7 @@ class AppLauncherBrowserAgentTest : public PlatformTest {
  protected:
   AppLauncherBrowserAgentTest() {
     profile_ = TestProfileIOS::Builder().Build();
-    app_state_ = [[AppState alloc] initWithStartupInformation:nil];
-    scene_state_ = [[SceneState alloc] initWithAppState:app_state_];
+    scene_state_ = [[SceneState alloc] init];
     scene_state_.activationLevel = SceneActivationLevelForegroundActive;
     browser_ = std::make_unique<TestBrowser>(profile_.get(), scene_state_);
     browser_->GetSceneState().activationLevel =
@@ -165,7 +163,6 @@ class AppLauncherBrowserAgentTest : public PlatformTest {
 
   web::WebTaskEnvironment task_environment_;
   std::unique_ptr<TestProfileIOS> profile_;
-  AppState* app_state_;
   SceneState* scene_state_;
   std::unique_ptr<TestBrowser> browser_;
   std::map<web::WebState*, FakeAppLauncherAbuseDetector*> abuse_detectors_;
@@ -425,6 +422,79 @@ TEST_F(AppLauncherBrowserAgentTest, NoUserInteractionRequestShowsAlert) {
 
   histogram_tester.ExpectBucketCount(
       "Tab.ExternalApplicationOpened.NoUserInteraction",
+      /*true*/ 1, 1);
+
+  // Verify that the application attempts to open the URL.
+  [application_ verify];
+}
+
+// Tests that the browser agent shows an alert when opening a shortcuts URL.
+TEST_F(AppLauncherBrowserAgentTest, ShortcutsURLRequestShowsAlert) {
+  const base::HistogramTester histogram_tester;
+  const GURL kShortcutsUrl("shortcuts://1234");
+  const GURL kSourcePageUrl("http://www.chromium.test");
+  web::WebState* web_state =
+      AddWebState(/*opener=*/nullptr, /*nav_item_count=*/1);
+
+  // Request an app launch for kShortcutsUrl while the abuse detector returns
+  // ExternalAppLaunchPolicyPrompt.
+  abuse_detectors_[web_state].policy = ExternalAppLaunchPolicyPrompt;
+  AppLauncherTabHelper::FromWebState(web_state)->RequestToLaunchApp(
+      kShortcutsUrl, kSourcePageUrl, /*link_transition=*/true,
+      /*is_user_initiated=*/true, /*user_tapped_recently=*/true);
+
+  // Add a response allowing the navigation.
+  OverlayRequestQueue* queue = OverlayRequestQueue::FromWebState(
+      web_state, OverlayModality::kWebContentArea);
+  queue->front_request()->GetCallbackManager()->SetCompletionResponse(
+      OverlayResponse::CreateWithInfo<AllowAppLaunchResponse>());
+
+  // Cancel requests in the queue so that the completion callback is executed,
+  // expecting that the application will open the URL.
+  OCMExpect([application_ openURL:net::NSURLWithGURL(kShortcutsUrl)
+                          options:@{}
+                completionHandler:[OCMArg isNotNil]]);
+  queue->CancelAllRequests();
+
+  histogram_tester.ExpectBucketCount(
+      "Tab.ExternalApplicationOpened.ShortcutsURL",
+      /*true*/ 1, 1);
+
+  // Verify that the application attempts to open the URL.
+  [application_ verify];
+}
+
+// Tests that the browser agent shows an alert when opening a workflow
+// (Shortcuts appplication) URL.
+TEST_F(AppLauncherBrowserAgentTest, WorkflowURLRequestShowsAlert) {
+  const base::HistogramTester histogram_tester;
+  const GURL kWorkflowUrl("workflow://1234");
+  const GURL kSourcePageUrl("http://www.chromium.test");
+  web::WebState* web_state =
+      AddWebState(/*opener=*/nullptr, /*nav_item_count=*/1);
+
+  // Request an app launch for kShortcutsUrl while the abuse detector returns
+  // ExternalAppLaunchPolicyPrompt.
+  abuse_detectors_[web_state].policy = ExternalAppLaunchPolicyPrompt;
+  AppLauncherTabHelper::FromWebState(web_state)->RequestToLaunchApp(
+      kWorkflowUrl, kSourcePageUrl, /*link_transition=*/true,
+      /*is_user_initiated=*/true, /*user_tapped_recently=*/true);
+
+  // Add a response allowing the navigation.
+  OverlayRequestQueue* queue = OverlayRequestQueue::FromWebState(
+      web_state, OverlayModality::kWebContentArea);
+  queue->front_request()->GetCallbackManager()->SetCompletionResponse(
+      OverlayResponse::CreateWithInfo<AllowAppLaunchResponse>());
+
+  // Cancel requests in the queue so that the completion callback is executed,
+  // expecting that the application will open the URL.
+  OCMExpect([application_ openURL:net::NSURLWithGURL(kWorkflowUrl)
+                          options:@{}
+                completionHandler:[OCMArg isNotNil]]);
+  queue->CancelAllRequests();
+
+  histogram_tester.ExpectBucketCount(
+      "Tab.ExternalApplicationOpened.ShortcutsURL",
       /*true*/ 1, 1);
 
   // Verify that the application attempts to open the URL.

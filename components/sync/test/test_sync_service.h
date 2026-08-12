@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/flat_set.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
@@ -34,6 +35,7 @@ namespace syncer {
 // the returned state. By default, everything returns "enabled"/"active".
 class TestSyncService : public SyncService {
  public:
+  // By default, the service is signed in, sync everything, and have no errors.
   TestSyncService();
 
   TestSyncService(const TestSyncService&) = delete;
@@ -69,6 +71,9 @@ class TestSyncService : public SyncService {
   // START_DEFERRED. Calling with DISABLED or PAUSED will crash.
   void SetMaxTransportState(TransportState max_transport_state);
 
+  // If `local_sync_enabled` is true, enables local sync, which also sets the
+  // account info to empty to mimic the behavior of the real SyncService.
+  // Disabling local sync will set the account info to a default value.
   void SetLocalSyncEnabled(bool local_sync_enabled);
 
   // Setters to mimic common auth error scenarios. Note that these functions
@@ -165,8 +170,12 @@ class TestSyncService : public SyncService {
   void AddProtocolEventObserver(ProtocolEventObserver* observer) override;
   void RemoveProtocolEventObserver(ProtocolEventObserver* observer) override;
   void GetAllNodesForDebugging(
-      base::OnceCallback<void(base::Value::List)> callback) override;
+      base::OnceCallback<void(base::ListValue)> callback) override;
   DataTypeDownloadStatus GetDownloadStatusFor(DataType type) const override;
+  base::flat_set<std::string> GetCurrentDeviceCacheGuidsForAllGaiaIds()
+      const override;
+  void SetCurrentDeviceCacheGuidsForAllGaiaIds(
+      base::flat_set<std::string> guids);
   void SetInvalidationsForSessionsEnabled(bool enabled) override;
   void SendExplicitPassphraseToPlatformClient() override;
   void GetTypesWithUnsyncedData(
@@ -184,7 +193,8 @@ class TestSyncService : public SyncService {
   void SelectTypeAndMigrateLocalDataItemsWhenActive(
       DataType data_type,
       std::vector<LocalDataItemModel::DataId> items) override;
-  void AcknowledgeBookmarksLimitExceededError() override;
+  void AcknowledgeBookmarksLimitExceededError(
+      BookmarksLimitExceededHelpClickedSource source) override;
 
   // KeyedService implementation.
   void Shutdown() override;
@@ -217,6 +227,8 @@ class TestSyncService : public SyncService {
   GURL sync_service_url_;
 
   DataTypeSet unsynced_types_;
+
+  base::flat_set<std::string> current_device_cache_guids_for_all_gaia_ids_;
 
   std::map<DataType, LocalDataDescription> local_data_descriptions_;
 

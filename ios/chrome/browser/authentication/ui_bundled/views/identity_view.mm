@@ -151,7 +151,7 @@ constexpr CGFloat kEnterpriseIconPointSize = 20;
     // Enterprise icon
     _managementIconView = [[UIImageView alloc] init];
     _managementIconView.image = SymbolWithPalette(
-        CustomSymbolWithPointSize(kEnterpriseSymbol, kEnterpriseIconPointSize),
+        SymbolWithPointSize(SymbolEnterprise, kEnterpriseIconPointSize),
         @[ [UIColor colorNamed:kStaticGrey600Color] ]);
     _managementIconView.translatesAutoresizingMaskIntoConstraints = NO;
     _managementIconView.clipsToBounds = YES;
@@ -271,8 +271,7 @@ constexpr CGFloat kEnterpriseIconPointSize = 20;
     self.subtitle.hidden = NO;
     self.subtitle.text = subtitle;
   }
-  self.managementIconView.hidden =
-      !AreSeparateProfilesForManagedAccountsEnabled() || !managed;
+  self.managementIconView.hidden = !managed;
   // Update the style to reflect the management icon changes.
   [self updateStyle];
 }

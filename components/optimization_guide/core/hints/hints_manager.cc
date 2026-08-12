@@ -9,8 +9,10 @@
 #include <string>
 #include <utility>
 
+#include "base/base64.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
+#include "base/logging.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
@@ -42,7 +44,6 @@
 #include "components/optimization_guide/core/hints/optimization_metadata.h"
 #include "components/optimization_guide/core/hints/tab_url_provider.h"
 #include "components/optimization_guide/core/hints/top_host_provider.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_logger.h"
@@ -62,6 +63,35 @@
 
 namespace optimization_guide {
 
+std::unique_ptr<proto::Configuration>
+ParseComponentConfigFromCommandLine() {
+  base::CommandLine* cmd_line = base::CommandLine::ForCurrentProcess();
+  if (!cmd_line->HasSwitch(kHintsProtoOverrideSwitch))
+    return nullptr;
+
+  std::string b64_pb = cmd_line->GetSwitchValueASCII(kHintsProtoOverrideSwitch);
+
+  std::string binary_pb;
+  if (!base::Base64Decode(b64_pb, &binary_pb)) {
+    LOG(ERROR) << "Invalid base64 encoding of the Hints Proto Override";
+    return nullptr;
+  }
+
+  auto proto_configuration = std::make_unique<proto::Configuration>();
+  if (!proto_configuration->ParseFromString(binary_pb)) {
+    LOG(ERROR) << "Invalid proto provided to the Hints Proto Override";
+    return nullptr;
+  }
+
+  return proto_configuration;
+}
+
+const char kOptimizationGuideServiceGetHintsDefaultURL[] =
+    "https://optimizationguide-pa.googleapis.com/v1:GetHints";
+
+const char kLoadedHintLocalHistogramString[] =
+    "OptimizationGuide.LoadedHint.Result";
+
 BASE_FEATURE(kHintsBatchUpdateForActiveTabsAndTopHosts,
              "OptimizationGuideHintsBatchUpdateForActiveTabsAndTopHosts",
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
@@ -70,14 +100,6 @@ BASE_FEATURE(kHintsBatchUpdateForActiveTabsAndTopHosts,
              base::FEATURE_DISABLED_BY_DEFAULT);
 #endif
 
-BASE_FEATURE(kHintsMaxConcurrentBatchUpdateFetchesOverride,
-             "OptimizationGuideHintsMaxConcurrentBatchUpdateFetchesOverride",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-BASE_FEATURE_PARAM(size_t,
-                   kHintsMaxConcurrentBatchUpdateFetches,
-                   &kHintsMaxConcurrentBatchUpdateFetchesOverride,
-                   "OptimizationGuideHintsMaxConcurrentBatchUpdateFetches",
-                   20);
 
 BASE_FEATURE(kHintsMaxConcurrentNavigationFetchesOverride,
              "OptimizationGuideHintsMaxConcurrentNavigationFetchesOverride",
@@ -89,6 +111,28 @@ BASE_FEATURE_PARAM(size_t,
                    20);
 
 namespace {
+
+bool IsHintComponentProcessingDisabled() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      kHintsProtoOverrideSwitch);
+}
+
+bool ShouldPurgeOptimizationGuideStoreOnStartup() {
+  base::CommandLine* cmd_line = base::CommandLine::ForCurrentProcess();
+  return cmd_line->HasSwitch(kHintsProtoOverrideSwitch) ||
+         cmd_line->HasSwitch(kPurgeHintsStoreSwitch);
+}
+
+bool ShouldOverrideFetchHintsTimer() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      kFetchHintsOverrideTimerSwitch);
+}
+
+bool DisableFetchingHintsAtNavigationStartForTesting() {
+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  return command_line->HasSwitch(
+      kDisableFetchingHintsAtNavigationStartForTestingSwitch);
+}
 
 // The duration of the time window between fetches for hints for the
 // URLs opened in active tabs.
@@ -359,6 +403,8 @@ bool ShouldContextResponsePopulateHintCache(
       return false;
     case proto::RequestContext::CONTEXT_GLIC_ZERO_STATE_SUGGESTIONS:
       return false;
+    case proto::RequestContext::CONTEXT_FILTER_EXECUTION:
+      return false;
   }
   NOTREACHED();
 }
@@ -366,9 +412,8 @@ bool ShouldContextResponsePopulateHintCache(
 void RecordOptimizationFilterStatus(proto::OptimizationType optimization_type,
                                     OptimizationFilterStatus status) {
   base::UmaHistogramExactLinear(
-      base::StringPrintf(
-          "OptimizationGuide.OptimizationFilterStatus.%s",
-          GetStringNameForOptimizationType(optimization_type).c_str()),
+      base::StrCat({"OptimizationGuide.OptimizationFilterStatus.",
+                    GetStringNameForOptimizationType(optimization_type)}),
       static_cast<int>(status),
       static_cast<int>(OptimizationFilterStatus::kMaxValue));
 }
@@ -406,7 +451,7 @@ HintsManager::HintsManager(
       hint_cache_(
           std::make_unique<HintCache>(hint_store,
                                       features::MaxHostKeyedHintCacheSize())),
-      batch_update_hints_fetchers_(kHintsMaxConcurrentBatchUpdateFetches.Get()),
+      batch_update_hints_fetchers_(kMaxConcurrentBatchUpdateFetches),
       page_navigation_hints_fetchers_(
           kHintsMaxConcurrentNavigationFetches.Get()),
       hints_fetcher_factory_(
@@ -433,7 +478,7 @@ HintsManager::HintsManager(
   OptimizationHintsComponentUpdateListener::GetInstance()->AddObserver(this);
 
   hint_cache_->Initialize(
-      switches::ShouldPurgeOptimizationGuideStoreOnStartup(),
+      ShouldPurgeOptimizationGuideStoreOnStartup(),
       base::BindOnce(&HintsManager::OnHintCacheInitialized,
                      weak_ptr_factory_.GetWeakPtr()));
 }
@@ -503,7 +548,7 @@ void HintsManager::OnHintsComponentAvailable(const HintsComponentInfo& info) {
   // Check for if hint component is disabled. This check is needed because the
   // optimization guide still registers with the service as an observer for
   // components as a signal during testing.
-  if (switches::IsHintComponentProcessingDisabled()) {
+  if (IsHintComponentProcessingDisabled()) {
     MaybeRunUpdateClosure(std::move(next_update_closure_));
     return;
   }
@@ -641,7 +686,7 @@ void HintsManager::OnHintCacheInitialized() {
   // don't normally expect one, but if one is provided then use that and do not
   // register as an observer as the opt_guide service.
   std::unique_ptr<proto::Configuration> manual_config =
-      switches::ParseComponentConfigFromCommandLine();
+      ParseComponentConfigFromCommandLine();
   if (manual_config) {
     std::unique_ptr<StoreUpdateData> update_data =
         is_off_the_record_
@@ -735,7 +780,7 @@ void HintsManager::InitiateHintsFetchScheduling() {
   if (base::FeatureList::IsEnabled(kHintsBatchUpdateForActiveTabsAndTopHosts)) {
     SetLastHintsFetchAttemptTime(clock_->Now());
 
-    if (switches::ShouldOverrideFetchHintsTimer() ||
+    if (ShouldOverrideFetchHintsTimer() ||
         features::ShouldDeferStartupActiveTabsHintsFetch()) {
       FetchHintsForActiveTabs();
     } else if (!active_tabs_hints_fetch_timer_.IsRunning()) {
@@ -1144,7 +1189,7 @@ void HintsManager::RegisterOptimizationTypes(
       if (!is_off_the_record_ &&
           !ShouldIgnoreNewlyRegisteredOptimizationType(optimization_type) &&
           !base::CommandLine::ForCurrentProcess()->HasSwitch(
-              switches::kHintsProtoOverride)) {
+              kHintsProtoOverrideSwitch)) {
         should_clear_hints_for_new_type_ = true;
       }
       previously_registered_opt_types->Set(
@@ -1167,9 +1212,9 @@ void HintsManager::RegisterOptimizationTypes(
   }
 
   if (should_load_new_optimization_filter) {
-    if (switches::IsHintComponentProcessingDisabled()) {
+    if (IsHintComponentProcessingDisabled()) {
       std::unique_ptr<proto::Configuration> manual_config =
-          switches::ParseComponentConfigFromCommandLine();
+          ParseComponentConfigFromCommandLine();
       if (manual_config->optimization_allowlists_size() > 0 ||
           manual_config->optimization_blocklists_size() > 0) {
         ProcessOptimizationFilters(manual_config->optimization_allowlists(),
@@ -1253,8 +1298,13 @@ void HintsManager::CanApplyOptimizationOnDemand(
                              optimization_guide_logger_);
 
   if (request_context_metadata != std::nullopt) {
-    if (request_context != proto::RequestContext::CONTEXT_PAGE_INSIGHTS_HUB ||
-        !request_context_metadata->has_page_insights_hub_metadata()) {
+    bool has_valid_metadata =
+        (request_context ==
+             proto::RequestContext::CONTEXT_PAGE_INSIGHTS_HUB &&
+         request_context_metadata->has_page_insights_hub_metadata()) ||
+        (request_context == proto::RequestContext::CONTEXT_FILTER_EXECUTION &&
+         request_context_metadata->has_filter_execution_metadata());
+    if (!has_valid_metadata) {
       request_context_metadata = std::nullopt;
     }
   }
@@ -1308,9 +1358,9 @@ void HintsManager::CanApplyOptimization(
         GetOptimizationGuideDecisionFromOptimizationTypeDecision(type_decision);
 
     base::UmaHistogramEnumeration(
-        "OptimizationGuide.ApplyDecision." +
-            optimization_guide::GetStringNameForOptimizationType(
-                optimization_type),
+        base::StrCat({"OptimizationGuide.ApplyDecision.",
+                      optimization_guide::GetStringNameForOptimizationType(
+                          optimization_type)}),
         type_decision);
 
     std::move(callback).Run(decision, metadata);
@@ -1368,8 +1418,8 @@ void HintsManager::ProcessAndInvokeOnDemandHintsCallbacks(
               type_decision);
       decisions[optimization_type] = {decision, metadata};
       base::UmaHistogramEnumeration(
-          "OptimizationGuide.ApplyDecision." +
-              GetStringNameForOptimizationType(optimization_type),
+          base::StrCat({"OptimizationGuide.ApplyDecision.",
+                        GetStringNameForOptimizationType(optimization_type)}),
           type_decision);
     }
     callback.Run(url, decisions);
@@ -1505,8 +1555,8 @@ void HintsManager::CanApplyOptimizationAsync(
       HasAllInformationForDecisionAvailable(navigation_url,
                                             optimization_type)) {
     base::UmaHistogramEnumeration(
-        "OptimizationGuide.ApplyDecision." +
-            GetStringNameForOptimizationType(optimization_type),
+        base::StrCat({"OptimizationGuide.ApplyDecision.",
+                      GetStringNameForOptimizationType(optimization_type)}),
         type_decision);
     std::move(callback).Run(decision, metadata);
     return;
@@ -1722,8 +1772,8 @@ void HintsManager::OnReadyToInvokeRegisteredCallbacks(
           GetOptimizationGuideDecisionFromOptimizationTypeDecision(
               type_decision);
       base::UmaHistogramEnumeration(
-          "OptimizationGuide.ApplyDecision." +
-              GetStringNameForOptimizationType(opt_type),
+          base::StrCat({"OptimizationGuide.ApplyDecision.",
+                        GetStringNameForOptimizationType(opt_type)}),
           type_decision);
       std::move(callback).Run(decision, metadata);
     }
@@ -1775,7 +1825,7 @@ void HintsManager::OnNavigationStartOrRedirect(
 
   LoadHintForURL(navigation_data->navigation_url(), std::move(callback));
 
-  if (switches::DisableFetchingHintsAtNavigationStartForTesting()) {
+  if (DisableFetchingHintsAtNavigationStartForTesting()) {
     return;
   }
 
@@ -1965,28 +2015,8 @@ void HintsManager::AddHintForTesting(
     const GURL& url,
     proto::OptimizationType optimization_type,
     const std::optional<OptimizationMetadata>& metadata) {
-  std::unique_ptr<proto::Hint> hint = std::make_unique<proto::Hint>();
-  hint->set_key(url.spec());
-  proto::PageHint* page_hint = hint->add_page_hints();
-  page_hint->set_page_pattern("*");
-  proto::Optimization* optimization =
-      page_hint->add_allowlisted_optimizations();
-  optimization->set_optimization_type(optimization_type);
-  if (!metadata) {
-    hint_cache_->AddHintForTesting(url, std::move(hint));  // IN-TEST
-    PrepareToInvokeRegisteredCallbacks(url);
-    return;
-  }
-  if (metadata->loading_predictor_metadata()) {
-    *optimization->mutable_loading_predictor_metadata() =
-        *metadata->loading_predictor_metadata();
-  } else if (metadata->any_metadata()) {
-    *optimization->mutable_any_metadata() = *metadata->any_metadata();
-  } else {
-    NOTREACHED();
-  }
-  hint_cache_->AddHintForTesting(url, std::move(hint));  // IN-TEST
-  PrepareToInvokeRegisteredCallbacks(url);
+  AddHintWithMultipleOptimizationsForTesting(
+      url, {{optimization_type, metadata}});
 }
 
 void HintsManager::AddHintWithMultipleOptimizationsForTesting(
@@ -2001,6 +2031,37 @@ void HintsManager::AddHintWithMultipleOptimizationsForTesting(
     proto::Optimization* optimization =
         page_hint->add_allowlisted_optimizations();
     optimization->set_optimization_type(optimization_type);
+  }
+  hint_cache_->AddHintForTesting(url, std::move(hint));  // IN-TEST
+  PrepareToInvokeRegisteredCallbacks(url);
+}
+
+void HintsManager::AddHintWithMultipleOptimizationsForTesting(
+    const GURL& url,
+    const std::vector<
+        std::pair<optimization_guide::proto::OptimizationType,
+                  std::optional<optimization_guide::OptimizationMetadata>>>&
+        optimization_types_and_metadata) {
+  std::unique_ptr<proto::Hint> hint = std::make_unique<proto::Hint>();
+  hint->set_key(url.spec());
+  proto::PageHint* page_hint = hint->add_page_hints();
+  page_hint->set_page_pattern("*");
+  for (const auto& [optimization_type, metadata] :
+       optimization_types_and_metadata) {
+    proto::Optimization* optimization =
+        page_hint->add_allowlisted_optimizations();
+    optimization->set_optimization_type(optimization_type);
+    if (!metadata) {
+      continue;
+    }
+    if (metadata->loading_predictor_metadata()) {
+      *optimization->mutable_loading_predictor_metadata() =
+          *metadata->loading_predictor_metadata();
+    } else if (metadata->any_metadata()) {
+      *optimization->mutable_any_metadata() = *metadata->any_metadata();
+    } else {
+      NOTREACHED();
+    }
   }
   hint_cache_->AddHintForTesting(url, std::move(hint));  // IN-TEST
   PrepareToInvokeRegisteredCallbacks(url);

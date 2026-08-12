@@ -43,11 +43,10 @@ indexedDB.databases().then(databases => {
   const openRequest = window.indexedDB.open(databaseName, upgradeVersion);
 
   openRequest.onupgradeneeded = async (event) => {
-    const db = openRequest.result;
     const transaction = event.target.transaction;
 
     try {
-      performDatabaseUpgrade(db, transaction);
+      performDatabaseUpgrade(openRequest.result, transaction);
       // Don't call reportDone() here - let onsuccess handle it
     } catch (error) {
       reportError('Error during database upgrade: ', error);

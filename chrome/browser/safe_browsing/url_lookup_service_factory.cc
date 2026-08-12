@@ -11,6 +11,7 @@
 #include "chrome/browser/safe_browsing/advanced_protection_status_manager.h"
 #include "chrome/browser/safe_browsing/advanced_protection_status_manager_factory.h"
 #include "chrome/browser/safe_browsing/chrome_user_population_helper.h"
+#include "chrome/browser/safe_browsing/client_side_detection_intelligent_scan_delegate_factory.h"
 #include "chrome/browser/safe_browsing/network_context_service_factory.h"
 #include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager_factory.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
@@ -27,6 +28,7 @@
 #include "components/safe_browsing/core/common/utils.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/storage_partition.h"
 #include "services/network/public/cpp/cross_thread_pending_shared_url_loader_factory.h"
 
 namespace safe_browsing {
@@ -64,6 +66,7 @@ RealTimeUrlLookupServiceFactory::RealTimeUrlLookupServiceFactory()
 #if BUILDFLAG(FULL_SAFE_BROWSING)
   DependsOn(AdvancedProtectionStatusManagerFactory::GetInstance());
 #endif
+  DependsOn(ClientSideDetectionIntelligentScanDelegateFactory::GetInstance());
   DependsOn(NetworkContextServiceFactory::GetInstance());
 }
 
@@ -76,6 +79,7 @@ RealTimeUrlLookupServiceFactory::BuildServiceInstanceForBrowserContext(
     return nullptr;
   }
   Profile* profile = Profile::FromBrowserContext(context);
+
   return std::make_unique<RealTimeUrlLookupService>(
       GetURLLoaderFactory(context),
       VerdictCacheManagerFactory::GetForProfile(profile),
@@ -95,7 +99,10 @@ RealTimeUrlLookupServiceFactory::BuildServiceInstanceForBrowserContext(
                           profile),
       SafeBrowsingNavigationObserverManagerFactory::GetForBrowserContext(
           profile),
-      WebUIContentInfoSingleton::GetInstance());
+      WebUIContentInfoSingleton::GetInstance(),
+      ClientSideDetectionIntelligentScanDelegateFactory::GetForProfile(profile),
+      base::BindRepeating(&RealTimeUrlLookupServiceFactory::GetNetworkContext,
+                          profile));
 }
 
 scoped_refptr<network::SharedURLLoaderFactory>
@@ -124,6 +131,12 @@ RealTimeUrlLookupServiceFactory::GetMinAllowedTimestampForReferrerChains(
     Profile* profile) {
   return g_browser_process->safe_browsing_service()
       ->GetMinAllowedTimestampForReferrerChains(profile);
+}
+
+// static
+network::mojom::NetworkContext*
+RealTimeUrlLookupServiceFactory::GetNetworkContext(Profile* profile) {
+  return profile->GetDefaultStoragePartition()->GetNetworkContext();
 }
 
 void RealTimeUrlLookupServiceFactory::SetURLLoaderFactoryForTesting(

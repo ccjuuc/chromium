@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.educational_tip;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
@@ -29,6 +30,8 @@ import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType;
+import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
+import org.chromium.chrome.browser.ntp_customization.policy.NtpCustomizationPolicyManager;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -38,14 +41,12 @@ import org.chromium.chrome.browser.tab.TabId;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncFeatures;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncFeaturesJni;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.ui.default_browser_promo.DefaultBrowserPromoUtils;
 import org.chromium.components.feature_engagement.FeatureConstants;
 import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.components.segmentation_platform.InputContext;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.tab_group_sync.TabGroupSyncService;
 
@@ -62,8 +63,6 @@ public class EducationalTipCardProviderSignalHandlerUnitTest {
     @Mock private DefaultBrowserPromoUtils mMockDefaultBrowserPromoUtils;
     @Mock private Tracker mTracker;
     @Mock private TabModelSelector mTabModelSelector;
-    @Mock private TabGroupModelFilter mNormalFilter;
-    @Mock private TabGroupModelFilter mIncognitoFilter;
     @Mock private TabModel mNormalModel;
     @Mock private TabModel mIncognitoModel;
     @Mock private Profile mProfile;
@@ -73,6 +72,7 @@ public class EducationalTipCardProviderSignalHandlerUnitTest {
     @Mock private IdentityManager mIdentityManagerMock;
     @Mock private TabModel mTabModel;
     @Mock private Tab mTab;
+    @Mock private NtpCustomizationPolicyManager mNtpCustomizationPolicyManager;
 
     private Context mContext;
 
@@ -81,10 +81,6 @@ public class EducationalTipCardProviderSignalHandlerUnitTest {
         mContext = ApplicationProvider.getApplicationContext();
         when(mActionDelegate.getContext()).thenReturn(mContext);
         when(mActionDelegate.getTabModelSelector()).thenReturn(mTabModelSelector);
-        when(mTabModelSelector.getTabGroupModelFilter(/* isIncognito= */ false))
-                .thenReturn(mNormalFilter);
-        when(mTabModelSelector.getTabGroupModelFilter(/* isIncognito= */ true))
-                .thenReturn(mIncognitoFilter);
         when(mTabModelSelector.getModel(/* incognito= */ false)).thenReturn(mNormalModel);
         when(mTabModelSelector.getModel(/* incognito= */ true)).thenReturn(mIncognitoModel);
         DefaultBrowserPromoUtils.setInstanceForTesting(mMockDefaultBrowserPromoUtils);
@@ -95,18 +91,15 @@ public class EducationalTipCardProviderSignalHandlerUnitTest {
         IdentityServicesProvider.setInstanceForTests(mIdentityServicesProvider);
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mIdentityManagerMock);
-        when(mIdentityManagerMock.hasPrimaryAccount(ConsentLevel.SIGNIN)).thenReturn(false);
+        when(mIdentityManagerMock.hasPrimaryAccount()).thenReturn(false);
+        NtpCustomizationPolicyManager.setInstanceForTesting(mNtpCustomizationPolicyManager);
+        when(mNtpCustomizationPolicyManager.isNtpCustomBackgroundEnabled()).thenReturn(true);
     }
 
     @Test
     @SmallTest
-    @EnableFeatures({
-        ChromeFeatureList.EDUCATIONAL_TIP_MODULE,
-        ChromeFeatureList.DEFAULT_BROWSER_PROMO_ANDROID2
-    })
+    @EnableFeatures({ChromeFeatureList.DEFAULT_BROWSER_PROMO_ANDROID2})
     public void testCreateInputContext_DefaultBrowserPromoCard() {
-        assertTrue(ChromeFeatureList.sEducationalTipModule.isEnabled());
-
         InputContext inputContext =
                 EducationalTipCardProviderSignalHandler.createInputContext(
                         ModuleType.DEFAULT_BROWSER_PROMO, mActionDelegate, mProfile, mTracker);
@@ -186,13 +179,13 @@ public class EducationalTipCardProviderSignalHandlerUnitTest {
                 0.01);
 
         // Test signal "is_user_signed_in".
-        when(mIdentityManagerMock.hasPrimaryAccount(ConsentLevel.SIGNIN)).thenReturn(false);
+        when(mIdentityManagerMock.hasPrimaryAccount()).thenReturn(false);
         inputContext =
                 EducationalTipCardProviderSignalHandler.createInputContext(
                         ModuleType.DEFAULT_BROWSER_PROMO, mActionDelegate, mProfile, mTracker);
         assertEquals(0, inputContext.getEntryValue("is_user_signed_in").floatValue, 0.01);
 
-        when(mIdentityManagerMock.hasPrimaryAccount(ConsentLevel.SIGNIN)).thenReturn(true);
+        when(mIdentityManagerMock.hasPrimaryAccount()).thenReturn(true);
         inputContext =
                 EducationalTipCardProviderSignalHandler.createInputContext(
                         ModuleType.DEFAULT_BROWSER_PROMO, mActionDelegate, mProfile, mTracker);
@@ -201,10 +194,7 @@ public class EducationalTipCardProviderSignalHandlerUnitTest {
 
     @Test
     @SmallTest
-    @EnableFeatures({ChromeFeatureList.EDUCATIONAL_TIP_MODULE})
     public void testCreateInputContext_TabGroupPromoCard_TabGroupExists() {
-        assertTrue(ChromeFeatureList.sEducationalTipModule.isEnabled());
-
         when(mTabModelSelector.isTabStateInitialized()).thenReturn(true);
         when(mTabModelSelector.isReparentingInProgress()).thenReturn(false);
         when(mTabModelSelector.getCurrentModel()).thenReturn(mTabModel);
@@ -216,15 +206,15 @@ public class EducationalTipCardProviderSignalHandlerUnitTest {
                         ModuleType.TAB_GROUP_PROMO, mActionDelegate, mProfile, mTracker);
         assertEquals(3, inputContext.getSizeForTesting());
 
-        when(mNormalFilter.getTabGroupCount()).thenReturn(0);
-        when(mIncognitoFilter.getTabGroupCount()).thenReturn(0);
+        when(mNormalModel.getTabGroupCount()).thenReturn(0);
+        when(mIncognitoModel.getTabGroupCount()).thenReturn(0);
         inputContext =
                 EducationalTipCardProviderSignalHandler.createInputContext(
                         ModuleType.TAB_GROUP_PROMO, mActionDelegate, mProfile, mTracker);
         assertEquals(0, inputContext.getEntryValue("tab_group_exists").floatValue, 0.01);
 
-        when(mNormalFilter.getTabGroupCount()).thenReturn(5);
-        when(mIncognitoFilter.getTabGroupCount()).thenReturn(6);
+        when(mNormalModel.getTabGroupCount()).thenReturn(5);
+        when(mIncognitoModel.getTabGroupCount()).thenReturn(6);
         inputContext =
                 EducationalTipCardProviderSignalHandler.createInputContext(
                         ModuleType.TAB_GROUP_PROMO, mActionDelegate, mProfile, mTracker);
@@ -233,10 +223,7 @@ public class EducationalTipCardProviderSignalHandlerUnitTest {
 
     @Test
     @SmallTest
-    @EnableFeatures({ChromeFeatureList.EDUCATIONAL_TIP_MODULE})
     public void testCreateInputContext_TabGroupPromoCard_NumberOfTabs() {
-        assertTrue(ChromeFeatureList.sEducationalTipModule.isEnabled());
-
         InputContext inputContext;
 
         // Test cases when tab state is already initialized.
@@ -291,9 +278,7 @@ public class EducationalTipCardProviderSignalHandlerUnitTest {
 
     @Test
     @SmallTest
-    @EnableFeatures({ChromeFeatureList.EDUCATIONAL_TIP_MODULE})
     public void testCreateInputContext_TabGroupSyncPromoCard() {
-        assertTrue(ChromeFeatureList.sEducationalTipModule.isEnabled());
         when(mMockTabGroupSyncService.getAllGroupIds()).thenReturn(new String[] {});
 
         InputContext inputContext =
@@ -321,5 +306,56 @@ public class EducationalTipCardProviderSignalHandlerUnitTest {
                 EducationalTipCardProviderSignalHandler.createInputContext(
                         ModuleType.TAB_GROUP_SYNC_PROMO, mActionDelegate, mProfile, mTracker);
         assertEquals(0, inputContext.getEntryValue("synced_tab_group_exists").floatValue, 0.01);
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures({ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2})
+    public void testCreateInputContext_NtpThemePromoCard() {
+        when(mActionDelegate.supportCustomizedNtpTheme()).thenReturn(true);
+        ChromeSharedPreferences.getInstance()
+                .writeInt(
+                        ChromePreferenceKeys.NTP_CUSTOMIZATION_BACKGROUND_TYPE,
+                        NtpCustomizationUtils.NtpBackgroundType.CHROME_COLOR);
+
+        // Case 1: Bottom sheet is ENABLED, and has been shown.
+        ChromeFeatureList.sNewTabPageCustomizationV2ShowTipBottomSheet.setForTesting(true);
+        NtpCustomizationUtils.setThemeTipBottomSheetShownTimestampToSharedPreference(100L);
+
+        InputContext inputContext =
+                EducationalTipCardProviderSignalHandler.createInputContext(
+                        ModuleType.NTP_THEME_PROMO, mActionDelegate, mProfile, mTracker);
+        assertEquals(4, inputContext.getSizeForTesting());
+
+        assertTrue(inputContext.getEntryValue("support_customized_ntp_theme").booleanValue);
+        assertTrue(inputContext.getEntryValue("has_customized_ntp_background").booleanValue);
+        assertTrue(
+                inputContext.getEntryValue("has_theme_tip_bottom_sheet_been_shown").booleanValue);
+
+        // Case 2: Bottom sheet is ENABLED, but hasn't been shown yet.
+        NtpCustomizationUtils.resetSharedPreferenceForTesting();
+        when(mActionDelegate.supportCustomizedNtpTheme()).thenReturn(false);
+        ChromeSharedPreferences.getInstance()
+                .writeInt(
+                        ChromePreferenceKeys.NTP_CUSTOMIZATION_BACKGROUND_TYPE,
+                        NtpCustomizationUtils.NtpBackgroundType.DEFAULT);
+
+        inputContext =
+                EducationalTipCardProviderSignalHandler.createInputContext(
+                        ModuleType.NTP_THEME_PROMO, mActionDelegate, mProfile, mTracker);
+
+        assertFalse(inputContext.getEntryValue("support_customized_ntp_theme").booleanValue);
+        assertFalse(inputContext.getEntryValue("has_customized_ntp_background").booleanValue);
+        assertFalse(
+                inputContext.getEntryValue("has_theme_tip_bottom_sheet_been_shown").booleanValue);
+
+        // Case 3: Bottom sheet is DISABLED, and hasn't been shown.
+        // (It should still evaluate to true for has_theme_tip_bottom_sheet_been_shown).
+        ChromeFeatureList.sNewTabPageCustomizationV2ShowTipBottomSheet.setForTesting(false);
+        inputContext =
+                EducationalTipCardProviderSignalHandler.createInputContext(
+                        ModuleType.NTP_THEME_PROMO, mActionDelegate, mProfile, mTracker);
+        assertTrue(
+                inputContext.getEntryValue("has_theme_tip_bottom_sheet_been_shown").booleanValue);
     }
 }

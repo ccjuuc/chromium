@@ -2,7 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
+import("//components/spellcheck/spellcheck_build_features.gni")
 
 assert(is_chromeos)
 
@@ -52,7 +52,6 @@ static_library("extensions") {
     "//ash/public/cpp",
     "//ash/webui/mall:app_id",
     "//ash/webui/projector_app/public/cpp",
-    "//ash/webui/system_apps/public:system_web_app_type",
     "//base",
     "//chrome/browser:browser_process",
     "//chrome/browser/ash/app_list",
@@ -68,6 +67,7 @@ static_library("extensions") {
     "//chrome/browser/extensions:external_loader",
     "//chrome/browser/extensions/api/input_ime",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/profiles:profile_manager",
     "//chrome/browser/resources/chromeos:app_icon_resources",
     "//chrome/browser/ui/ash/keyboard",
     "//chrome/browser/ui/ash/multi_user",
@@ -77,6 +77,7 @@ static_library("extensions") {
     "//chromeos/ash/components/file_manager:constants",
     "//chromeos/ash/components/language_packs",
     "//chromeos/ash/components/settings",
+    "//chromeos/ash/components/system_web_apps:system_web_app_type",
     "//chromeos/ash/experiences/arc:arc_app_constants",
     "//chromeos/components/kiosk",
     "//chromeos/constants",
@@ -84,6 +85,7 @@ static_library("extensions") {
     "//components/prefs",
     "//content/public/browser",
     "//extensions/browser",
+    "//extensions/browser:crx_installer",
     "//extensions/browser/updater",
     "//extensions/common",
     "//ui/aura",
@@ -91,10 +93,13 @@ static_library("extensions") {
     "//ui/gfx",
   ]
 
+  if (enable_spellcheck) {
+    deps += [ "//chrome/browser/spellchecker" ]
+  }
+
   allow_circular_includes_from = [
     "//chrome/browser/ash/app_list",
     "//chrome/browser/ash/app_list/search",
-    "//chrome/browser/ash/login/demo_mode",
     "//chrome/browser/ash/policy/core",
   ]
 }
@@ -113,8 +118,10 @@ static_library("test_support") {
     ":extensions",
     "//base",
     "//chrome/browser",
+    "//content/test:test_support",
     "//extensions/browser",
     "//extensions/browser/updater",
+    "//ui/aura:test_support",
   ]
 }
 
@@ -133,6 +140,7 @@ source_set("unit_tests") {
 
   deps = [
     ":extensions",
+    "//ash/constants",
     "//base",
     "//chrome/browser/ash/app_list/arc:test_support",
     "//chrome/browser/ash/login/demo_mode:test_support",
@@ -149,6 +157,7 @@ source_set("unit_tests") {
     "//components/version_info",
     "//content/test:test_support",
     "//extensions/browser",
+    "//extensions/browser:crx_installer",
     "//extensions/common",
     "//testing/gtest",
   ]
@@ -177,6 +186,7 @@ source_set("browser_tests") {
     "//chrome/browser/ash/accessibility:test_support",
     "//chrome/browser/ash/login/lock:test_support",
     "//chrome/browser/extensions",
+    "//chrome/browser/policy:extension_force_install_mixin",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui",
     "//chrome/browser/ui/ash/keyboard",

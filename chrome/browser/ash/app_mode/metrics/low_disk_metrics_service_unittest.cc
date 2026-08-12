@@ -4,10 +4,10 @@
 
 #include "chrome/browser/ash/app_mode/metrics/low_disk_metrics_service.h"
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/check_deref.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chromeos/ash/components/dbus/userdataauth/fake_userdataauth_client.h"
 #include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
@@ -36,14 +36,14 @@ class LowDiskMetricsServiceTest
 
   void TearDown() override {
     TestingBrowserProcess::GetGlobal()->GetTestingLocalState()->RemoveUserPref(
-        prefs::kKioskMetrics);
+        ash::prefs::kKioskMetrics);
   }
   base::HistogramTester* histogram_tester() { return histogram_tester_.get(); }
 
   std::optional<KioskLowDiskSeverity> GetLowDiskSeverityFromLocalState() {
     const auto& metrics_dict =
         TestingBrowserProcess::GetGlobal()->local_state()->GetDict(
-            prefs::kKioskMetrics);
+            ash::prefs::kKioskMetrics);
     const auto severity_value = metrics_dict.FindInt(kKioskLowDiskSeverity);
     if (!severity_value) {
       return std::nullopt;
@@ -54,7 +54,6 @@ class LowDiskMetricsServiceTest
 
   void SendLowDiskSpaceEvent(uint64_t disk_free_bytes) {
     FakeUserDataAuthClient::Get()->NotifyLowDiskSpace(disk_free_bytes);
-    task_environment_.RunUntilIdle();
   }
 
  private:

@@ -15,9 +15,9 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
-#include "base/memory/memory_pressure_listener.h"
-#include "base/memory/memory_pressure_listener_registry.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory_coordinator/memory_coordinator_features.h"
+#include "base/memory_coordinator/test_memory_consumer_registry.h"
 #include "base/metrics/field_trial.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
@@ -41,6 +41,7 @@
 #include "build/build_config.h"
 #include "net/base/cache_type.h"
 #include "net/base/completion_once_callback.h"
+#include "net/base/features.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/base/request_priority.h"
@@ -131,6 +132,7 @@ class DiskCacheBackendTest : public DiskCacheTestWithCache {
   void InitSparseCache(base::Time* doomed_start, base::Time* doomed_end);
 
   bool CreateSetOfRandomEntries(std::set<std::string>* key_pool);
+  void WriteEntrySequence(int num_entries, int entry_size, std::string prefix);
   bool EnumerateAndMatchKeys(int max_to_open,
                              TestIterator* iter,
                              std::set<std::string>* keys_to_match,
@@ -212,8 +214,17 @@ class DiskCacheBackendTest : public DiskCacheTestWithCache {
                      net::BackendType backend_type,
                      bool expect_limit);
 
+  void UpdateLimitAndReleaseMemory(int percentage) {
+    base::RunLoop run_loop;
+    test_memory_consumer_registry_.NotifyUpdateMemoryLimitAsync(
+        percentage, base::DoNothing());
+    test_memory_consumer_registry_.NotifyReleaseMemoryAsync(
+        run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
  private:
-  base::MemoryPressureListenerRegistry memory_pressure_listener_registry_;
+  base::TestMemoryConsumerRegistry test_memory_consumer_registry_;
 };
 
 class DiskCacheGenericBackendTest
@@ -387,6 +398,27 @@ bool DiskCacheBackendTest::CreateSetOfRandomEntries(
          static_cast<size_t>(GetEntryCount() - initial_entry_count);
 }
 
+// Writes a sequence of |num_entries| entries, each of |entry_size| bytes in
+// size. The entries are written with keys [|prefix| + "0", |prefix| + "1",
+// ...]. All entries use distinct random content.
+void DiskCacheBackendTest::WriteEntrySequence(int num_entries,
+                                              int entry_size,
+                                              std::string prefix) {
+  for (int i = 0; i < num_entries; ++i) {
+    AddDelay();
+    disk_cache::Entry* entry = nullptr;
+    ASSERT_THAT(CreateEntry(prefix + base::NumberToString(i), &entry), IsOk());
+    disk_cache::ScopedEntryPtr entry_closer(entry);
+    auto buffer = CacheTestCreateAndFillBuffer(entry_size, false);
+    EXPECT_EQ(entry_size,
+              WriteData(entry, 1, 0, buffer.get(), entry_size, false));
+  }
+
+  // Some backends may handle evictions asynchronously.
+  FlushQueueForTest();
+  AddDelay();
+}
+
 // Performs iteration over the backend and checks that the keys of entries
 // opened are in |keys_to_match|, then erases them. Up to |max_to_open| entries
 // will be opened, if it is positive. Otherwise, iteration will continue until
@@ -486,6 +518,68 @@ void DiskCacheBackendTest::BackendBasics() {
 
 TEST_P(DiskCacheGenericBackendTest, Basics) {
   BackendBasics();
+}
+
+TEST_P(DiskCacheGenericBackendTest, CreateBackendDoubleHttpCache) {
+#if BUILDFLAG(IS_ANDROID)
+  // Android does not support creating blockfile caches via CacheCreator.
+  if (backend_to_test_ == BackendToTest::kBlockfile) {
+    return;
+  }
+#endif
+
+  ASSERT_TRUE(CleanupCacheDir());
+
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      net::features::kEnableBackendCleanupTrackerOnHttpCache);
+
+  ASSERT_EQ(net::DISK_CACHE, type_);
+
+  net::BackendType backend_type = net::CACHE_BACKEND_DEFAULT;
+  switch (backend_to_test_) {
+    case BackendToTest::kBlockfile:
+      backend_type = net::CACHE_BACKEND_BLOCKFILE;
+      break;
+    case BackendToTest::kSimple:
+      backend_type = net::CACHE_BACKEND_SIMPLE;
+      break;
+    case BackendToTest::kMemory:
+      return;
+#if BUILDFLAG(ENABLE_DISK_CACHE_SQL_BACKEND)
+    case BackendToTest::kSql:
+      backend_type = net::CACHE_BACKEND_EXPERIMENTAL_SQL;
+      break;
+#endif
+  }
+
+  TestBackendResultCompletionCallback cb, cb2;
+
+  disk_cache::BackendResult rv = disk_cache::CreateCacheBackend(
+      type_, backend_type, /*file_operations=*/nullptr, cache_path_, 0,
+      disk_cache::ResetHandling::kNeverReset,
+      /*net_log=*/nullptr, /*cache_encryption_delegate=*/nullptr,
+      cb.callback());
+
+  disk_cache::BackendResult rv2 = disk_cache::CreateCacheBackend(
+      type_, backend_type, /*file_operations=*/nullptr, cache_path_, 0,
+      disk_cache::ResetHandling::kNeverReset,
+      /*net_log=*/nullptr, /*cache_encryption_delegate=*/nullptr,
+      cb2.callback());
+
+  rv = cb.GetResult(std::move(rv));
+  EXPECT_THAT(rv.net_error, IsOk());
+  EXPECT_TRUE(rv.backend);
+
+  EXPECT_EQ(net::ERR_IO_PENDING, rv2.net_error);
+  EXPECT_FALSE(rv2.backend);
+  EXPECT_FALSE(cb2.have_result());
+
+  rv.backend.reset();
+
+  rv2 = cb2.GetResult(std::move(rv2));
+  EXPECT_THAT(rv2.net_error, IsOk());
+  EXPECT_TRUE(rv2.backend);
 }
 
 TEST_F(DiskCacheBackendTest, NewEvictionBasics) {
@@ -842,6 +936,9 @@ TEST_F(DiskCacheBackendTest, CreateBackend_MissingFile) {
 }
 
 TEST_F(DiskCacheBackendTest, MemoryListensToMemoryPressure) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(base::kStatefulMemoryPressure);
+
   const int kLimit = 16 * 1024;
   const int kEntrySize = 256;
   SetMaxSize(kLimit);
@@ -862,21 +959,13 @@ TEST_F(DiskCacheBackendTest, MemoryListensToMemoryPressure) {
   EXPECT_GT(CalculateSizeOfAllEntries(), 0.8 * kLimit);
 
   // Signal low-memory of various sorts, and see how small it gets.
-  {
-    base::RunLoop run_loop;
-    base::MemoryPressureListener::SimulatePressureNotificationAsync(
-        base::MEMORY_PRESSURE_LEVEL_MODERATE, run_loop.QuitClosure());
-    run_loop.Run();
-  }
+  UpdateLimitAndReleaseMemory(50);
   EXPECT_LT(CalculateSizeOfAllEntries(), 0.5 * kLimit);
 
-  {
-    base::RunLoop run_loop;
-    base::MemoryPressureListener::SimulatePressureNotificationAsync(
-        base::MEMORY_PRESSURE_LEVEL_CRITICAL, run_loop.QuitClosure());
-    run_loop.Run();
-  }
-  EXPECT_LT(CalculateSizeOfAllEntries(), 0.1 * kLimit);
+  // At 10% memory limit, the new policy (linear interpolation between 10% and
+  // 50% of max_size_) sets a limit of ~18%.
+  UpdateLimitAndReleaseMemory(10);
+  EXPECT_LT(CalculateSizeOfAllEntries(), 0.2 * kLimit);
 }
 
 TEST_F(DiskCacheBackendTest, ExternalFiles) {
@@ -1276,7 +1365,12 @@ void DiskCacheBackendTest::BackendLoad() {
   EXPECT_EQ(0, GetEntryCount());
 }
 
-TEST_P(DiskCacheGenericBackendTest, Load) {
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_Load DISABLED_Load
+#else
+#define MAYBE_Load Load
+#endif
+TEST_P(DiskCacheGenericBackendTest, MAYBE_Load) {
   BackendLoad();
 }
 
@@ -3339,18 +3433,7 @@ void DiskCacheBackendTest::BackendEviction() {
   SetMaxSize(kMaxSize);
   InitSparseCache(nullptr, nullptr);
 
-  auto buffer = CacheTestCreateAndFillBuffer(kWriteSize, false);
-
-  std::string key_prefix("prefix");
-  for (int i = 0; i < kWriteEntryCount; ++i) {
-    AddDelay();
-    disk_cache::Entry* entry = nullptr;
-    ASSERT_THAT(CreateEntry(key_prefix + base::NumberToString(i), &entry),
-                IsOk());
-    disk_cache::ScopedEntryPtr entry_closer(entry);
-    EXPECT_EQ(kWriteSize,
-              WriteData(entry, 1, 0, buffer.get(), kWriteSize, false));
-  }
+  WriteEntrySequence(kWriteEntryCount, kWriteSize, "prefix");
 
   int size = CalculateSizeOfAllEntries();
   EXPECT_GT(kMaxSize, size);
@@ -4022,7 +4105,7 @@ TEST_F(DiskCacheBackendTest, SimpleCacheOverBlockfileCache) {
   // Check that the |SimpleBackendImpl| does not favor this structure.
   auto simple_cache = std::make_unique<disk_cache::SimpleBackendImpl>(
       /*file_operations_factory=*/nullptr, cache_path_, nullptr, nullptr, 0,
-      net::DISK_CACHE, nullptr, nullptr);
+      net::DISK_CACHE, /*cache_entry_hasher=*/nullptr, /*net_log=*/nullptr);
   net::TestCompletionCallback cb;
   simple_cache->Init(cb.callback());
   EXPECT_NE(net::OK, cb.WaitForResult());
@@ -4314,7 +4397,13 @@ TEST_F(DiskCacheBackendTest, SimpleCacheLateDoom) {
             simple_cache_impl_->index()->init_method());
 }
 
-TEST_F(DiskCacheBackendTest, SimpleCacheNegMaxSize) {
+// TODO(crbug.com/475586889): Test has flaked regularly.
+#if BUILDFLAG(IS_ANDROID) || !TARGET_IPHONE_SIMULATOR
+#define MAYBE_SimpleCacheNegMaxSize DISABLED_SimpleCacheNegMaxSize
+#else
+#define MAYBE_SimpleCacheNegMaxSize SimpleCacheNegMaxSize
+#endif
+TEST_F(DiskCacheBackendTest, MAYBE_SimpleCacheNegMaxSize) {
   SetCacheType(net::GENERATED_BYTE_CODE_CACHE);
 
   SetMaxSize(-1);
@@ -4360,6 +4449,37 @@ TEST_F(DiskCacheBackendTest, SimpleCacheNegMaxSize) {
     EXPECT_GE(max_file_size_scaled, max_file_size_without_scaling);
     EXPECT_LE(max_file_size_scaled, 2 * max_file_size_without_scaling);
   }
+}
+
+class MockCacheEncryptionDelegate : public net::CacheEncryptionDelegate {
+ public:
+  MockCacheEncryptionDelegate() = default;
+  ~MockCacheEncryptionDelegate() override = default;
+
+  void Init(base::OnceCallback<void(net::Error)> callback) override {
+    std::move(callback).Run(net::OK);
+  }
+  disk_cache::BackendFileOperationsFactory* GetEncryptionFileOperationsFactory(
+      scoped_refptr<disk_cache::BackendFileOperationsFactory>
+          file_operations_factory) override {
+    return nullptr;
+  }
+  std::unique_ptr<disk_cache::CacheEntryHasher> GetCacheEntryHasher() override {
+    return nullptr;
+  }
+};
+
+TEST_F(DiskCacheTest, SimpleBackendNullHasher) {
+  TestBackendResultCompletionCallback cb;
+  MockCacheEncryptionDelegate delegate;
+  disk_cache::BackendResult rv =
+      disk_cache::CreateCacheBackend(net::DISK_CACHE, net::CACHE_BACKEND_SIMPLE,
+                                     /*file_operations=*/nullptr, cache_path_,
+                                     0, disk_cache::ResetHandling::kNeverReset,
+                                     nullptr, &delegate, cb.callback());
+  rv = cb.GetResult(std::move(rv));
+  ASSERT_NE(net::OK, rv.net_error);
+  ASSERT_FALSE(rv.backend);
 }
 
 TEST_F(DiskCacheBackendTest, SimpleFdLimit) {
@@ -5920,6 +6040,151 @@ TEST_P(DiskCacheGenericBackendTest, BackendDoomNonExistentEntry) {
   } else {
     EXPECT_THAT(DoomEntry(kNonExistentKey), IsOk());
   }
+}
+
+TEST_P(DiskCacheGenericBackendTest, BackendOnlineQuotaIncrease) {
+  constexpr int kWriteSize = 10 * 1024;
+  constexpr int kWriteEntryCount = 20;
+  constexpr int kInitialQuota = 10 * kWriteSize;
+  constexpr int kIncreasedQuota = 20 * kWriteSize;
+  SetMaxSize(kInitialQuota);
+  InitCache();
+
+  WriteEntrySequence(kWriteEntryCount, kWriteSize, "");
+
+  int size_before_increase = CalculateSizeOfAllEntries();
+
+  cache_->SetMaxBytes(base::ByteSize(kIncreasedQuota));
+  FlushQueueForTest();
+
+  if (backend_to_test() == BackendToTest::kBlockfile) {
+    // Blockfile backend does not implement online quota updates.
+    // But, at the very least, it should not crash if SetMaxBytes is called.
+    return;
+  }
+
+  EXPECT_EQ(base::ByteSize(kIncreasedQuota), cache_->GetMaxBytesForTesting());
+
+  WriteEntrySequence(kWriteEntryCount, kWriteSize, "");
+
+  int size_after_increase = CalculateSizeOfAllEntries();
+  EXPECT_GT(size_before_increase, 0);
+  EXPECT_LE(size_before_increase, kInitialQuota);
+  EXPECT_LE(size_after_increase, kIncreasedQuota);
+  EXPECT_GT(size_after_increase, 0);
+  EXPECT_GT(size_after_increase, kInitialQuota);
+  EXPECT_GT(size_after_increase, size_before_increase);
+}
+
+TEST_P(DiskCacheGenericBackendTest, BackendOnlineQuotaDecrease) {
+  constexpr int kWriteSize = 10 * 1024;
+  constexpr int kWriteEntryCount = 20;
+  constexpr int kInitialQuota = 20 * kWriteSize;
+  constexpr int kDecreasedQuota = 10 * kWriteSize;
+  SetMaxSize(kInitialQuota);
+  InitCache();
+
+  WriteEntrySequence(kWriteEntryCount, kWriteSize, "");
+
+  int size_before_decrease = CalculateSizeOfAllEntries();
+
+  cache_->SetMaxBytes(base::ByteSize(kDecreasedQuota));
+  FlushQueueForTest();
+
+  if (backend_to_test() == BackendToTest::kBlockfile) {
+    // Blockfile backend does not implement online quota updates.
+    // But, at the very least, it should not crash if SetMaxBytes is called.
+    return;
+  }
+
+  EXPECT_EQ(base::ByteSize(kDecreasedQuota), cache_->GetMaxBytesForTesting());
+
+  WriteEntrySequence(kWriteEntryCount, kWriteSize, "");
+
+  int size_after_decrease = CalculateSizeOfAllEntries();
+  EXPECT_GT(size_before_decrease, kDecreasedQuota);
+  EXPECT_LE(size_before_decrease, kInitialQuota);
+  EXPECT_GT(size_after_decrease, 0);
+  EXPECT_LE(size_after_decrease, kDecreasedQuota);
+  EXPECT_LT(size_after_decrease, size_before_decrease);
+}
+
+TEST_P(DiskCacheGenericBackendTest, BackendOnlineSetQuotaToZero) {
+  constexpr int kInitialQuota = 1024;
+  SetMaxSize(kInitialQuota);
+  InitCache();
+
+  cache_->SetMaxBytes(base::ByteSize(0));
+  FlushQueueForTest();
+
+  if (backend_to_test() == BackendToTest::kBlockfile) {
+    // Blockfile backend does not implement online quota updates.
+    // But, at the very least, it should not crash if SetMaxBytes is called.
+    return;
+  }
+
+  EXPECT_EQ(cache_->GetMaxBytesForTesting(), base::ByteSize(0));
+}
+
+TEST_P(DiskCacheGenericBackendTest, DeleteBackendWithMassDoom) {
+  if (backend_to_test() == BackendToTest::kMemory) {
+    // Uninteresting w/memory since the delete is synchronous.
+    return;
+  }
+
+  SetCacheType(net::APP_CACHE);  // no optimistic ops.
+
+  InitCache();
+  for (int i = 0; i < 100; ++i) {
+    disk_cache::Entry* entry = nullptr;
+    ASSERT_THAT(CreateEntry(base::NumberToString(i), &entry), IsOk());
+    entry->Close();
+  }
+  // Get closes to actually close.
+  FlushQueueForTest();
+  net::TestCompletionCallback cb;
+
+  // Kick off a doom.
+  int rv = cache_->DoomAllEntries(cb.callback());
+  EXPECT_EQ(net::ERR_IO_PENDING, rv);
+  // We need to go to event loop since DoomAllEntries in Simple has async index
+  // readiness hop, but we don't want to flush all the threads.
+  base::RunLoop().RunUntilIdle();
+
+  base::RunLoop run_loop;
+
+  // Try to open a couple of entries, and delete it in the first callback that
+  // gets invoked. The second open should be safe since we don't go to event
+  // loop between the calls, so the callback can't be delivered yet. Also only
+  // one of the callbacks should be invoked per the cancellation semantics.
+  EntryResult result0 = cache_->OpenEntry(
+      "0", net::HIGHEST, base::BindLambdaForTesting([&](EntryResult result) {
+        EXPECT_EQ(net::ERR_FAILED, result.net_error());
+        TakeCache();
+        run_loop.Quit();
+      }));
+  if (result0.net_error() == net::ERR_FAILED) {
+    // If the delete finished already to the point the open fails synchronously,
+    // we can't really test anything, so don't proceed.
+    return;
+  }
+  EXPECT_EQ(result0.net_error(), net::ERR_IO_PENDING);
+
+  EntryResult result1 = cache_->OpenEntry(
+      "1", net::HIGHEST, base::BindLambdaForTesting([&](EntryResult result) {
+        EXPECT_EQ(net::ERR_FAILED, result.net_error());
+        TakeCache();
+        run_loop.Quit();
+      }));
+  if (result1.net_error() == net::ERR_FAILED) {
+    // If the delete finished already to the point the open fails synchronously,
+    // we can't really test anything, so don't proceed.
+    return;
+  }
+  EXPECT_EQ(result1.net_error(), net::ERR_IO_PENDING);
+
+  EXPECT_EQ(net::OK, cb.GetResult(rv));
+  run_loop.Run();
 }
 
 INSTANTIATE_TEST_SUITE_P(

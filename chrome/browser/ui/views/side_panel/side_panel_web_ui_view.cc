@@ -12,18 +12,22 @@
 #include "chrome/browser/ui/bookmarks/bookmark_utils.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/side_panel/side_panel_content_proxy.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_scope.h"
+#include "chrome/browser/ui/side_panel/side_panel_util.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_content_proxy.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_scope.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_util.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/common/webui_url_constants.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/feature_engagement/public/tracker.h"
+#include "extensions/buildflags/buildflags.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/views/controls/menu/menu_runner.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/browser/extensions/side_panel_helper.h"
+#endif
 
 SidePanelWebUIView::SidePanelWebUIView(SidePanelEntryScope& scope,
                                        base::RepeatingClosure on_show_cb,
@@ -61,6 +65,15 @@ SidePanelWebUIView::SidePanelWebUIView(SidePanelEntryScope& scope,
               webui::SetTabInterface(new_contents, tab);
             }));
   }
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  // We may still need to retrieve relevant information about the current
+  // `BrowserWindowInterface` from the extensions API. For example, by tabs API
+  // `chrome.tabs.query({currentWindow: true})`. This information is provided
+  // via `SidePanelHelper`.
+  extensions::SidePanelHelper::CreateForWebContents(
+      contents_wrapper->web_contents());
+#endif
 }
 
 SidePanelWebUIView::~SidePanelWebUIView() = default;

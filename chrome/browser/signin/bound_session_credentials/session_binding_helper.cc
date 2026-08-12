@@ -28,7 +28,7 @@ unexportable_keys::BackgroundTaskPriority kSessionBindingPriority =
 
 bool ShouldTryToReloadKey(
     const unexportable_keys::ServiceErrorOr<
-        unexportable_keys::UnexportableKeyId>& key_id_or_error) {
+        unexportable_keys::UnexportableSigningKeyId>& key_id_or_error) {
   if (key_id_or_error.has_value()) {
     // The key was successfully loaded, no need to reload.
     return false;
@@ -95,8 +95,8 @@ void SessionBindingHelper::SignAssertionToken(
     std::string_view challenge,
     const GURL& destination_url,
     base::OnceCallback<void(base::expected<std::string, Error>)> callback,
-    unexportable_keys::ServiceErrorOr<unexportable_keys::UnexportableKeyId>
-        binding_key) {
+    unexportable_keys::ServiceErrorOr<
+        unexportable_keys::UnexportableSigningKeyId> binding_key) {
   if (!binding_key.has_value()) {
     std::move(callback).Run(base::unexpected(Error::kLoadKeyFailure));
     return;

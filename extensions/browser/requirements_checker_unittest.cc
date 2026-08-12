@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "base/memory/ref_counted.h"
+#include "base/strings/utf_ostream_operators.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "content/public/browser/gpu_data_manager.h"
@@ -66,7 +67,7 @@ class RequirementsCheckerTest : public ExtensionsTest {
   void RequireFeature(const char feature[]) {
     base::Value* features_list = manifest_dict_.Find(kFeaturesKey);
     if (!features_list) {
-      features_list = manifest_dict_.Set(kFeaturesKey, base::Value::List());
+      features_list = manifest_dict_.Set(kFeaturesKey, base::ListValue());
     }
     features_list->GetList().Append(feature);
   }
@@ -76,7 +77,7 @@ class RequirementsCheckerTest : public ExtensionsTest {
 
  private:
   scoped_refptr<Extension> extension_;
-  base::Value::Dict manifest_dict_;
+  base::DictValue manifest_dict_;
 };
 
 // Tests no requirements.
@@ -124,7 +125,7 @@ TEST_F(RequirementsCheckerTest, RequirementsFailWebGL) {
   StartChecker();
 
   // TODO(michaelpg): Check that the runner actually finishes, which requires
-  // waiting for the GPU check to succeed: crbug.com/706204.
+  // waiting for the GPU check to succeed: crbug.com/40512985.
   if (runner_.errors().size()) {
     EXPECT_THAT(runner_.errors(), testing::UnorderedElementsAre(
                                       PreloadCheck::Error::kWebglNotSupported));

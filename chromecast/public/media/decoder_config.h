@@ -151,24 +151,9 @@ enum VideoProfile : int {
   kHEVCScreenExtended,
   kHEVCScalableRext,
   kHEVCHighThroughputScreenExtended,
-  kVVCProfileMain10,
-  kVVCProfileMain12,
-  kVVCProfileMain12Intra,
-  kVVCProfileMultilayerMain10,
-  kVVCProfileMain10444,
-  kVVCProfileMain12444,
-  kVVCProfileMain16444,
-  kVVCProfileMain12444Intra,
-  kVVCProfileMain16444Intra,
-  kVVCProfileMultilayerMain10444,
-  kVVCProfileMain10Still,
-  kVVCProfileMain12Still,
-  kVVCProfileMain10444Still,
-  kVVCProfileMain12444Still,
-  kVVCProfileMain16444Still,
 
   kVideoProfileMin = kVideoProfileUnknown,
-  kVideoProfileMax = kVVCProfileMain16444Still,
+  kVideoProfileMax = kHEVCHighThroughputScreenExtended,
 };
 
 struct CodecProfileLevel {
@@ -393,8 +378,9 @@ inline bool IsValidConfig(const AudioConfig& config) {
          config.channel_layout != ChannelLayout::UNSUPPORTED &&
          config.sample_format >= kSampleFormatMin &&
          config.sample_format <= kSampleFormatMax &&
+         config.channel_number > 0 && config.channel_number <= 32 &&
          ((config.sample_format != kUnknownSampleFormat &&
-           config.channel_number > 0 && config.bytes_per_channel > 0 &&
+           config.bytes_per_channel > 0 &&
            config.bytes_per_channel <= kMaxBytesPerSample) ||
           config.channel_layout == ChannelLayout::BITSTREAM) &&
          config.samples_per_second > 0 &&

@@ -36,6 +36,7 @@ class Pbkdf2Implementation : public AlgorithmImplementation {
                    blink::WebCryptoKey* key) const override {
     switch (format) {
       case blink::kWebCryptoKeyFormatRaw:
+      case blink::kWebCryptoKeyFormatRawSecret:
         return ImportKeyRaw(key_data, algorithm, extractable, usages, key);
       default:
         return Status::ErrorUnsupportedImportKeyFormat();
@@ -101,6 +102,16 @@ class Pbkdf2Implementation : public AlgorithmImplementation {
       return Status::OperationError();
     }
     return Status::Success();
+  }
+
+  bool Supports(blink::WebCryptoOperation op,
+                const blink::WebCryptoAlgorithm& algorithm,
+                std::optional<unsigned int> length_bits) const override {
+    if (op == blink::kWebCryptoOperationDeriveBits) {
+      return length_bits.has_value() && (length_bits.value() % 8 == 0);
+    } else {
+      return true;
+    }
   }
 
   Status DeserializeKeyForClone(const blink::WebCryptoKeyAlgorithm& algorithm,

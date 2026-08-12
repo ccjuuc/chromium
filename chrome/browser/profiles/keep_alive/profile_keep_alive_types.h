@@ -177,7 +177,16 @@ enum class ProfileKeepAliveOrigin {
   // First Run.
   kWaitingForBookmarksImportOnFirstRun = 42,
 
-  kMaxValue = kWaitingForBookmarksImportOnFirstRun,
+  // Used while showing the Skills dialog.
+  kSkillsDialog = 43,
+
+  // Used during WebApp database cleanup from corruption
+  kWebAppDatabaseCorruptionRecovery = 44,
+
+  // Fetch keepalive / fetchLater URLLoader.
+  kFetchKeepAlive = 45,
+
+  kMaxValue = kFetchKeepAlive,
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/profile/enums.xml)
 

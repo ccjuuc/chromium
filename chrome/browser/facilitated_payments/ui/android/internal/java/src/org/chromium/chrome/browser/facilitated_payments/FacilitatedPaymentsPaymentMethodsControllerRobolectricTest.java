@@ -19,6 +19,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -43,11 +44,17 @@ import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymen
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.PaymentAppProperties.ON_PAYMENT_APP_CLICK_ACTION;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.PaymentAppProperties.PAYMENT_APP_NAME;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.PixAccountLinkingPromptProperties.ACCEPT_BUTTON_CALLBACK;
+import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.PixAccountLinkingPromptProperties.ACCOUNT_EMAIL;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.PixAccountLinkingPromptProperties.DECLINE_BUTTON_CALLBACK;
+import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.PixAccountLinkingPromptProperties.DECLINE_BUTTON_TEXT_ID;
+import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.PixAccountLinkingPromptProperties.SETTINGS_LINK_CALLBACK;
+import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.PixAccountLinkingPromptProperties.VIDEO_LINK_CALLBACK;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.SCREEN;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.SCREEN_VIEW_MODEL;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.SURVIVES_NAVIGATION;
+import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.SequenceScreen.ACCOUNT_LINKING_SUCCESS_SCREEN;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.SequenceScreen.ERROR_SCREEN;
+import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.SequenceScreen.EWALLET_ACCOUNT_LINKING_PROMPT;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.SequenceScreen.FOP_SELECTOR;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.SequenceScreen.PIX_ACCOUNT_LINKING_PROMPT;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.SequenceScreen.PROGRESS_SCREEN;
@@ -82,13 +89,19 @@ import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.autofill.AutofillImageFetcher;
 import org.chromium.chrome.browser.autofill.AutofillImageFetcherFactory;
+import org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.AccountLinkingSuccessScreenProperties;
+import org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.EwalletAccountLinkingPromptProperties;
 import org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.FooterProperties;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
+import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.components.autofill.payments.AccountType;
 import org.chromium.components.autofill.payments.BankAccount;
 import org.chromium.components.autofill.payments.Ewallet;
@@ -97,11 +110,15 @@ import org.chromium.components.autofill.payments.PaymentRail;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.settings.SettingsNavigation;
+import org.chromium.components.facilitated_payments.core.metrics.AccountLinkingPromptUserAction;
+import org.chromium.components.facilitated_payments.core.metrics.FacilitatedPaymentsType;
 import org.chromium.components.facilitated_payments.core.ui_utils.FopSelectorAction;
 import org.chromium.components.facilitated_payments.core.ui_utils.PaymentLinkFopSelectorAction;
 import org.chromium.components.facilitated_payments.core.ui_utils.UiEvent;
 import org.chromium.components.payments.ui.InputProtector;
 import org.chromium.components.payments.ui.test_support.FakeClock;
+import org.chromium.components.signin.identitymanager.IdentityManager;
+import org.chromium.components.signin.test.util.TestAccounts;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -206,6 +223,8 @@ public class FacilitatedPaymentsPaymentMethodsControllerRobolectricTest {
     @Mock private AutofillImageFetcher mAutofillImageFetcher;
     @Mock private Profile mProfile;
     @Mock private SettingsNavigation mSettingsNavigation;
+    @Mock private SnackbarManager mSnackbarManager;
+    @Mock private IdentityManager mIdentityManagerMock;
 
     private final Context mContext;
     private final FacilitatedPaymentsPaymentMethodsCoordinator mCoordinator;
@@ -225,7 +244,14 @@ public class FacilitatedPaymentsPaymentMethodsControllerRobolectricTest {
                 .thenReturn(true);
         ProfileManager.setLastUsedProfileForTesting(mProfile);
         AutofillImageFetcherFactory.setInstanceForTesting(mAutofillImageFetcher);
-        mCoordinator.initialize(mContext, mBottomSheetController, mDelegateMock, mProfile);
+        IdentityServicesProvider.setIdentityManagerForTesting(mIdentityManagerMock);
+        mCoordinator.initialize(
+                mContext,
+                mBottomSheetController,
+                /* windowAndroid= */ null,
+                mDelegateMock,
+                mProfile);
+        mCoordinator.getMediatorForTesting().setSnackbarManagerForTesting(mSnackbarManager);
         mFacilitatedPaymentsPaymentMethodsModel = mCoordinator.getModelForTesting();
         mCoordinator
                 .getMediatorForTesting()
@@ -1429,7 +1455,7 @@ public class FacilitatedPaymentsPaymentMethodsControllerRobolectricTest {
 
     @Test
     public void testCreatesModelForPixAccountLinkingPrompt() {
-        mCoordinator.showPixAccountLinkingPrompt();
+        mCoordinator.showPixAccountLinkingPrompt(0, TestAccounts.ACCOUNT1.getEmail());
 
         // Verify that the bottom sheet model is updated to show the PIX account linking screen.
         assertThat(mFacilitatedPaymentsPaymentMethodsModel.get(VISIBLE_STATE), is(SHOWN));
@@ -1443,15 +1469,60 @@ public class FacilitatedPaymentsPaymentMethodsControllerRobolectricTest {
                         mFacilitatedPaymentsPaymentMethodsModel
                                 .get(SCREEN_VIEW_MODEL)
                                 .getAllProperties();
-        assertThat(propertyKeys, hasSize(2));
+        assertThat(propertyKeys, hasSize(6));
         assertThat(
-                propertyKeys, containsInAnyOrder(ACCEPT_BUTTON_CALLBACK, DECLINE_BUTTON_CALLBACK));
+                propertyKeys,
+                containsInAnyOrder(
+                        ACCEPT_BUTTON_CALLBACK,
+                        DECLINE_BUTTON_CALLBACK,
+                        SETTINGS_LINK_CALLBACK,
+                        VIDEO_LINK_CALLBACK,
+                        DECLINE_BUTTON_TEXT_ID,
+                        ACCOUNT_EMAIL));
         assertThat(mFacilitatedPaymentsPaymentMethodsModel.get(SURVIVES_NAVIGATION), is(true));
     }
 
     @Test
+    public void testShowPixAccountLinkingPrompt_PopulatesAccountEmail() {
+        mCoordinator.showPixAccountLinkingPrompt(0, TestAccounts.ACCOUNT1.getEmail());
+
+        assertThat(
+                mFacilitatedPaymentsPaymentMethodsModel.get(SCREEN_VIEW_MODEL).get(ACCOUNT_EMAIL),
+                is(TestAccounts.ACCOUNT1.getEmail()));
+    }
+
+    @Test
+    public void testPixAccountLinkingPrompt_DeclineButtonText() {
+        // Strike count 0 -> "Not now"
+        mCoordinator.showPixAccountLinkingPrompt(0, TestAccounts.ACCOUNT1.getEmail());
+        assertThat(
+                mFacilitatedPaymentsPaymentMethodsModel
+                        .get(SCREEN_VIEW_MODEL)
+                        .get(DECLINE_BUTTON_TEXT_ID),
+                is(R.string.pix_account_linking_prompt_decline_first_two_times));
+
+        // Strike count 1 -> "Not now"
+        mCoordinator.dismiss();
+        mCoordinator.showPixAccountLinkingPrompt(1, TestAccounts.ACCOUNT1.getEmail());
+        assertThat(
+                mFacilitatedPaymentsPaymentMethodsModel
+                        .get(SCREEN_VIEW_MODEL)
+                        .get(DECLINE_BUTTON_TEXT_ID),
+                is(R.string.pix_account_linking_prompt_decline_first_two_times));
+
+        // Strike count 2 -> "No thanks"
+        mCoordinator.dismiss();
+        mCoordinator.showPixAccountLinkingPrompt(2, TestAccounts.ACCOUNT1.getEmail());
+        assertThat(
+                mFacilitatedPaymentsPaymentMethodsModel
+                        .get(SCREEN_VIEW_MODEL)
+                        .get(DECLINE_BUTTON_TEXT_ID),
+                is(R.string.pix_account_linking_prompt_decline));
+    }
+
+    @Test
     public void testAcceptingPixAccountLinkingPromptInformsDelegate() {
-        mCoordinator.showPixAccountLinkingPrompt();
+        mCoordinator.showPixAccountLinkingPrompt(0, TestAccounts.ACCOUNT1.getEmail());
 
         // Simulate clicking the accept button.
         mFacilitatedPaymentsPaymentMethodsModel
@@ -1464,7 +1535,7 @@ public class FacilitatedPaymentsPaymentMethodsControllerRobolectricTest {
 
     @Test
     public void testDecliningPixAccountLinkingPromptInformsDelegate() {
-        mCoordinator.showPixAccountLinkingPrompt();
+        mCoordinator.showPixAccountLinkingPrompt(0, TestAccounts.ACCOUNT1.getEmail());
 
         // Simulate clicking the accept button.
         mFacilitatedPaymentsPaymentMethodsModel
@@ -1473,6 +1544,166 @@ public class FacilitatedPaymentsPaymentMethodsControllerRobolectricTest {
                 .onClick(null);
 
         verify(mDelegateMock).onPixAccountLinkingPromptDeclined();
+    }
+
+    @Test
+    public void testClickingSettingsLinkInPixAccountLinkingPromptOpensSettings() {
+        mCoordinator.showPixAccountLinkingPrompt(0, TestAccounts.ACCOUNT1.getEmail());
+
+        // Simulate clicking the settings link.
+        mFacilitatedPaymentsPaymentMethodsModel
+                .get(SCREEN_VIEW_MODEL)
+                .get(SETTINGS_LINK_CALLBACK)
+                .onClick(null);
+
+        verify(mSettingsNavigation)
+                .startSettings(mContext, SettingsNavigation.SettingsFragment.FINANCIAL_ACCOUNTS);
+    }
+
+    @Test
+    public void testCreatesModelForEwalletAccountLinkingPrompt() {
+        mCoordinator.showAccountLinkingPrompt(FacilitatedPaymentsType.EWALLET, "eWalletName", 0);
+
+        // Verify that the bottom sheet model is updated to show the eWallet account linking screen.
+        assertThat(mFacilitatedPaymentsPaymentMethodsModel.get(VISIBLE_STATE), is(SHOWN));
+        assertThat(
+                mFacilitatedPaymentsPaymentMethodsModel.get(SCREEN),
+                is(EWALLET_ACCOUNT_LINKING_PROMPT));
+        assertNotNull(mFacilitatedPaymentsPaymentMethodsModel.get(SCREEN_VIEW_MODEL));
+        // Verify screen view properties.
+        List<PropertyKey> propertyKeys =
+                (List<PropertyKey>)
+                        mFacilitatedPaymentsPaymentMethodsModel
+                                .get(SCREEN_VIEW_MODEL)
+                                .getAllProperties();
+        assertThat(propertyKeys, hasSize(4));
+        assertThat(
+                propertyKeys,
+                containsInAnyOrder(
+                        EwalletAccountLinkingPromptProperties.EWALLET_NAME,
+                        EwalletAccountLinkingPromptProperties.ACCEPT_BUTTON_CALLBACK,
+                        EwalletAccountLinkingPromptProperties.DECLINE_BUTTON_CALLBACK,
+                        EwalletAccountLinkingPromptProperties.DECLINE_BUTTON_TEXT_ID));
+        assertThat(mFacilitatedPaymentsPaymentMethodsModel.get(SURVIVES_NAVIGATION), is(true));
+    }
+
+    @Test
+    public void testAcceptingEwalletAccountLinkingPromptInformsDelegate() {
+        mCoordinator.showAccountLinkingPrompt(FacilitatedPaymentsType.EWALLET, "eWalletName", 0);
+
+        // Simulate clicking the accept button.
+        mFacilitatedPaymentsPaymentMethodsModel
+                .get(SCREEN_VIEW_MODEL)
+                .get(EwalletAccountLinkingPromptProperties.ACCEPT_BUTTON_CALLBACK)
+                .onClick(null);
+
+        verify(mDelegateMock)
+                .onAccountLinkingPromptAction(
+                        FacilitatedPaymentsType.EWALLET, AccountLinkingPromptUserAction.ACCEPTED);
+    }
+
+    @Test
+    public void testDecliningEwalletAccountLinkingPromptInformsDelegate() {
+        mCoordinator.showAccountLinkingPrompt(FacilitatedPaymentsType.EWALLET, "eWalletName", 0);
+
+        // Simulate clicking the decline button.
+        mFacilitatedPaymentsPaymentMethodsModel
+                .get(SCREEN_VIEW_MODEL)
+                .get(EwalletAccountLinkingPromptProperties.DECLINE_BUTTON_CALLBACK)
+                .onClick(null);
+
+        verify(mDelegateMock)
+                .onAccountLinkingPromptAction(
+                        FacilitatedPaymentsType.EWALLET, AccountLinkingPromptUserAction.DECLINED);
+    }
+
+    @Test
+    public void testEwalletAccountLinkingPromptShowsNotNowForFirstTwoTimes() {
+        mCoordinator.showAccountLinkingPrompt(FacilitatedPaymentsType.EWALLET, "eWalletName", 0);
+        assertThat(
+                mFacilitatedPaymentsPaymentMethodsModel
+                        .get(SCREEN_VIEW_MODEL)
+                        .get(EwalletAccountLinkingPromptProperties.DECLINE_BUTTON_TEXT_ID),
+                is(R.string.ewallet_account_linking_prompt_action_not_now));
+
+        mCoordinator.showAccountLinkingPrompt(FacilitatedPaymentsType.EWALLET, "eWalletName", 1);
+        assertThat(
+                mFacilitatedPaymentsPaymentMethodsModel
+                        .get(SCREEN_VIEW_MODEL)
+                        .get(EwalletAccountLinkingPromptProperties.DECLINE_BUTTON_TEXT_ID),
+                is(R.string.ewallet_account_linking_prompt_action_not_now));
+    }
+
+    @Test
+    public void testEwalletAccountLinkingPromptShowsNoThanksAfterTwoTimes() {
+        mCoordinator.showAccountLinkingPrompt(FacilitatedPaymentsType.EWALLET, "eWalletName", 2);
+        assertThat(
+                mFacilitatedPaymentsPaymentMethodsModel
+                        .get(SCREEN_VIEW_MODEL)
+                        .get(EwalletAccountLinkingPromptProperties.DECLINE_BUTTON_TEXT_ID),
+                is(R.string.ewallet_account_linking_prompt_action_no_thanks));
+    }
+
+    @Test
+    public void testAcceptingEwalletAccountLinkingPromptMultipleTimesInformsDelegateOnce() {
+        mCoordinator.showAccountLinkingPrompt(FacilitatedPaymentsType.EWALLET, "eWalletName", 0);
+
+        // Simulate clicking the accept button multiple times.
+        mFacilitatedPaymentsPaymentMethodsModel
+                .get(SCREEN_VIEW_MODEL)
+                .get(EwalletAccountLinkingPromptProperties.ACCEPT_BUTTON_CALLBACK)
+                .onClick(null);
+        mFacilitatedPaymentsPaymentMethodsModel
+                .get(SCREEN_VIEW_MODEL)
+                .get(EwalletAccountLinkingPromptProperties.ACCEPT_BUTTON_CALLBACK)
+                .onClick(null);
+
+        verify(mDelegateMock, times(1))
+                .onAccountLinkingPromptAction(
+                        FacilitatedPaymentsType.EWALLET, AccountLinkingPromptUserAction.ACCEPTED);
+    }
+
+    @Test
+    public void testDecliningEwalletAccountLinkingPromptMultipleTimesInformsDelegateOnce() {
+        mCoordinator.showAccountLinkingPrompt(FacilitatedPaymentsType.EWALLET, "eWalletName", 0);
+
+        // Simulate clicking the decline button multiple times.
+        mFacilitatedPaymentsPaymentMethodsModel
+                .get(SCREEN_VIEW_MODEL)
+                .get(EwalletAccountLinkingPromptProperties.DECLINE_BUTTON_CALLBACK)
+                .onClick(null);
+        mFacilitatedPaymentsPaymentMethodsModel
+                .get(SCREEN_VIEW_MODEL)
+                .get(EwalletAccountLinkingPromptProperties.DECLINE_BUTTON_CALLBACK)
+                .onClick(null);
+
+        verify(mDelegateMock, times(1))
+                .onAccountLinkingPromptAction(
+                        FacilitatedPaymentsType.EWALLET, AccountLinkingPromptUserAction.DECLINED);
+    }
+
+    @Test
+    public void testAcceptingEwalletPromptThenClosingDoesNotLogDismissed() {
+        mCoordinator.showAccountLinkingPrompt(FacilitatedPaymentsType.EWALLET, "eWalletName", 0);
+
+        // Simulate clicking the accept button.
+        mFacilitatedPaymentsPaymentMethodsModel
+                .get(SCREEN_VIEW_MODEL)
+                .get(EwalletAccountLinkingPromptProperties.ACCEPT_BUTTON_CALLBACK)
+                .onClick(null);
+
+        // Simulate the bottom sheet closing immediately after.
+        mFacilitatedPaymentsPaymentMethodsModel
+                .get(UI_EVENT_LISTENER)
+                .onResult(UiEvent.SCREEN_CLOSED_BY_USER);
+
+        // Verify that ACCEPTED is logged exactly once, and DISMISSED is never logged.
+        verify(mDelegateMock, times(1))
+                .onAccountLinkingPromptAction(
+                        FacilitatedPaymentsType.EWALLET, AccountLinkingPromptUserAction.ACCEPTED);
+        verify(mDelegateMock, never())
+                .onAccountLinkingPromptAction(
+                        FacilitatedPaymentsType.EWALLET, AccountLinkingPromptUserAction.DISMISSED);
     }
 
     @Test
@@ -1539,6 +1770,44 @@ public class FacilitatedPaymentsPaymentMethodsControllerRobolectricTest {
     }
 
     @Test
+    public void testProgressScreenToSuccessScreenSwapUpdatesModel() {
+        mCoordinator.showProgressScreen();
+
+        Mockito.when(mBottomSheetController.isSheetOpen()).thenReturn(true);
+        mCoordinator.showPixAccountLinkingSuccessScreen();
+
+        assertThat(mFacilitatedPaymentsPaymentMethodsModel.get(VISIBLE_STATE), is(SHOWN));
+        assertThat(
+                mFacilitatedPaymentsPaymentMethodsModel.get(SCREEN),
+                is(ACCOUNT_LINKING_SUCCESS_SCREEN));
+        assertNotNull(mFacilitatedPaymentsPaymentMethodsModel.get(SCREEN_VIEW_MODEL));
+        List<PropertyKey> propertyKeys =
+                (List<PropertyKey>)
+                        mFacilitatedPaymentsPaymentMethodsModel
+                                .get(SCREEN_VIEW_MODEL)
+                                .getAllProperties();
+        assertThat(propertyKeys, hasSize(1));
+        assertThat(
+                propertyKeys,
+                contains(AccountLinkingSuccessScreenProperties.PRIMARY_BUTTON_CALLBACK));
+
+        verify(mDelegateMock, times(2)).onUiEvent(UiEvent.NEW_SCREEN_SHOWN);
+    }
+
+    @Test
+    public void testClickingPrimaryButtonInSuccessScreenDismissesSheet() {
+        mCoordinator.showPixAccountLinkingSuccessScreen();
+
+        mFacilitatedPaymentsPaymentMethodsModel
+                .get(SCREEN_VIEW_MODEL)
+                .get(AccountLinkingSuccessScreenProperties.PRIMARY_BUTTON_CALLBACK)
+                .onClick(null);
+
+        assertThat(mFacilitatedPaymentsPaymentMethodsModel.get(VISIBLE_STATE), is(HIDDEN));
+        assertThat(mFacilitatedPaymentsPaymentMethodsModel.get(SCREEN), is(UNINITIALIZED));
+    }
+
+    @Test
     public void testDismiss() {
         // Show the FOP selector.
         mCoordinator.showSheetForPix(List.of(BANK_ACCOUNT_1));
@@ -1557,6 +1826,20 @@ public class FacilitatedPaymentsPaymentMethodsControllerRobolectricTest {
         // Verify that the bottom sheet closing is triggered. The bottom sheet is initialized in the
         // hidden state which triggers hideContent. The second call is from the dismissal.
         verify(mBottomSheetController, times(2)).hideContent(any(), eq(true));
+    }
+
+    @Test
+    public void testEwalletAccountLinkingPrompt_ClosedByUser_FiresDismissed() {
+        mCoordinator.showAccountLinkingPrompt(
+                FacilitatedPaymentsType.EWALLET, "ChilliPay", /* strikeCount= */ 0);
+
+        mFacilitatedPaymentsPaymentMethodsModel
+                .get(UI_EVENT_LISTENER)
+                .onResult(UiEvent.SCREEN_CLOSED_BY_USER);
+
+        verify(mDelegateMock)
+                .onAccountLinkingPromptAction(
+                        FacilitatedPaymentsType.EWALLET, AccountLinkingPromptUserAction.DISMISSED);
     }
 
     private static List<PropertyModel> getModelsOfType(ModelList items, int type) {
@@ -1608,6 +1891,13 @@ public class FacilitatedPaymentsPaymentMethodsControllerRobolectricTest {
                 .findFirst()
                 .map(item -> item.model)
                 .orElse(null);
+    }
+
+    @Test
+    public void testShowAccountLinkingFailureNotification() {
+        mCoordinator.showAccountLinkingFailureNotification(FacilitatedPaymentsType.PIX);
+
+        verify(mSnackbarManager).showSnackbar(any(Snackbar.class));
     }
 
     private static ResolveInfo createPaymentApp(String packageName, String activityName) {

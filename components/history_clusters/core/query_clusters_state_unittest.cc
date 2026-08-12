@@ -78,7 +78,6 @@ class QueryClustersStateTest : public testing::Test {
     OnGotClustersResult result;
     base::RunLoop loop;
     state->OnGotRawClusters(
-        base::TimeTicks(),
         base::BindLambdaForTesting(
             [&](const std::string& query,
                 std::vector<history::Cluster> cluster_batch, bool can_load_more,
@@ -96,7 +95,6 @@ class QueryClustersStateTest : public testing::Test {
       const std::vector<history::Cluster>& raw_clusters,
       QueryClustersContinuationParams continuation_params) {
     state->OnGotRawClusters(
-        base::TimeTicks(),
         base::BindLambdaForTesting(
             [&](const std::string& query,
                 std::vector<history::Cluster> cluster_batch, bool can_load_more,
@@ -155,11 +153,13 @@ TEST_F(QueryClustersStateTest, PostProcessingOccursAndLogsHistograms) {
 
   std::vector<history::Cluster> raw_clusters;
   raw_clusters.push_back(history::Cluster(
-      1, {GetHardcodedClusterVisit(1), GetHardcodedClusterVisit(2)},
+      history::ClusterId(1),
+      {GetHardcodedClusterVisit(1), GetHardcodedClusterVisit(2)},
       {{u"keyword_one", history::ClusterKeywordData()}},
       /*should_show_on_prominent_ui_surfaces=*/false));
   raw_clusters.push_back(history::Cluster(
-      2, {GetHardcodedClusterVisit(3), GetHardcodedClusterVisit(4)},
+      history::ClusterId(2),
+      {GetHardcodedClusterVisit(3), GetHardcodedClusterVisit(4)},
       {{u"keyword_two", history::ClusterKeywordData()}},
       /*should_show_on_prominent_ui_surfaces=*/true));
 
@@ -170,7 +170,7 @@ TEST_F(QueryClustersStateTest, PostProcessingOccursAndLogsHistograms) {
   // Detailed tests for the behavior of the filtering are in
   // `HistoryClustersUtil`.
   ASSERT_EQ(result.cluster_batch.size(), 1U);
-  EXPECT_EQ(result.cluster_batch[0].cluster_id, 2);
+  EXPECT_EQ(result.cluster_batch[0].cluster_id, history::ClusterId(2));
 
   EXPECT_EQ(result.query, "");
   EXPECT_EQ(result.can_load_more, true);
@@ -178,7 +178,6 @@ TEST_F(QueryClustersStateTest, PostProcessingOccursAndLogsHistograms) {
 
   histogram_tester.ExpectBucketCount(
       "History.Clusters.PercentClustersFilteredByQuery", 50, 1);
-  histogram_tester.ExpectTotalCount("History.Clusters.ServiceLatency", 1);
 }
 
 TEST_F(QueryClustersStateTest, CrossBatchDeduplication) {
@@ -187,12 +186,13 @@ TEST_F(QueryClustersStateTest, CrossBatchDeduplication) {
   {
     std::vector<history::Cluster> raw_clusters;
     // Verify that non-matching prominent clusters are filtered out.
-    raw_clusters.push_back(history::Cluster(
-        1, {}, {{u"keyword_one", history::ClusterKeywordData()}},
-        /*should_show_on_prominent_ui_surfaces=*/true));
+    raw_clusters.push_back(
+        history::Cluster(history::ClusterId(1), {},
+                         {{u"keyword_one", history::ClusterKeywordData()}},
+                         /*should_show_on_prominent_ui_surfaces=*/true));
     // Verify that matching non-prominent clusters still are shown.
     raw_clusters.push_back(
-        history::Cluster(2, {GetHardcodedClusterVisit(1)},
+        history::Cluster(history::ClusterId(2), {GetHardcodedClusterVisit(1)},
                          {{u"myquery", history::ClusterKeywordData()}},
                          /*should_show_on_prominent_ui_surfaces=*/false));
 
@@ -200,7 +200,7 @@ TEST_F(QueryClustersStateTest, CrossBatchDeduplication) {
         InjectRawClustersAndAwaitPostProcessing(&state, raw_clusters, {});
 
     ASSERT_EQ(result.cluster_batch.size(), 1U);
-    EXPECT_EQ(result.cluster_batch[0].cluster_id, 2);
+    EXPECT_EQ(result.cluster_batch[0].cluster_id, history::ClusterId(2));
     ASSERT_EQ(result.cluster_batch[0].visits.size(), 1U);
     EXPECT_EQ(
         result.cluster_batch[0].visits[0].annotated_visit.visit_row.visit_id,
@@ -218,19 +218,19 @@ TEST_F(QueryClustersStateTest, CrossBatchDeduplication) {
     // Verify that a matching non-prominent non-duplicate cluster is still
     // allowed.
     raw_clusters.push_back(
-        history::Cluster(3, {GetHardcodedClusterVisit(2)},
+        history::Cluster(history::ClusterId(3), {GetHardcodedClusterVisit(2)},
                          {{u"myquery", history::ClusterKeywordData()}},
                          /*should_show_on_prominent_ui_surfaces=*/false));
 
     // Verify that a matching non-prominent duplicate cluster is filtered out.
     raw_clusters.push_back(
-        history::Cluster(4, {GetHardcodedClusterVisit(1)},
+        history::Cluster(history::ClusterId(4), {GetHardcodedClusterVisit(1)},
                          {{u"myquery", history::ClusterKeywordData()}},
                          /*should_show_on_prominent_ui_surfaces=*/false));
 
     // Verify that a matching prominent duplicate cluster is still allowed.
     raw_clusters.push_back(
-        history::Cluster(5, {GetHardcodedClusterVisit(1)},
+        history::Cluster(history::ClusterId(5), {GetHardcodedClusterVisit(1)},
                          {{u"myquery", history::ClusterKeywordData()}},
                          /*should_show_on_prominent_ui_surfaces=*/true));
 
@@ -238,8 +238,8 @@ TEST_F(QueryClustersStateTest, CrossBatchDeduplication) {
         InjectRawClustersAndAwaitPostProcessing(&state, raw_clusters, {});
 
     ASSERT_EQ(result.cluster_batch.size(), 2U);
-    EXPECT_EQ(result.cluster_batch[0].cluster_id, 3);
-    EXPECT_EQ(result.cluster_batch[1].cluster_id, 5);
+    EXPECT_EQ(result.cluster_batch[0].cluster_id, history::ClusterId(3));
+    EXPECT_EQ(result.cluster_batch[1].cluster_id, history::ClusterId(5));
 
     EXPECT_EQ(result.query, "myquery");
     EXPECT_EQ(result.can_load_more, true);
@@ -249,9 +249,15 @@ TEST_F(QueryClustersStateTest, CrossBatchDeduplication) {
 
 TEST_F(QueryClustersStateTest, OnGotClusters) {
   const history::Cluster hidden_cluster = {
-      1, {GetHardcodedClusterVisit(1), GetHardcodedClusterVisit(2)}, {}, false};
+      history::ClusterId(1),
+      {GetHardcodedClusterVisit(1), GetHardcodedClusterVisit(2)},
+      {},
+      false};
   const history::Cluster visible_cluster = {
-      2, {GetHardcodedClusterVisit(3), GetHardcodedClusterVisit(4)}, {}, true};
+      history::ClusterId(2),
+      {GetHardcodedClusterVisit(3), GetHardcodedClusterVisit(4)},
+      {},
+      true};
 
   {
     QueryClustersState state(nullptr, nullptr, "");
@@ -344,17 +350,17 @@ TEST_F(QueryClustersStateTest, UniqueRawLabels) {
   std::vector<history::ClusterVisit> cluster_visits = {
       GetHardcodedClusterVisit(1), GetHardcodedClusterVisit(2)};
 
-  auto cluster1 = history::Cluster(1, cluster_visits, {});
+  auto cluster1 = history::Cluster(history::ClusterId(1), cluster_visits, {});
   cluster1.raw_label = u"rawlabel1";
-  auto cluster2 = history::Cluster(2, cluster_visits, {});
+  auto cluster2 = history::Cluster(history::ClusterId(2), cluster_visits, {});
   cluster2.raw_label = u"rawlabel2";
-  auto cluster3 = history::Cluster(3, cluster_visits, {});
+  auto cluster3 = history::Cluster(history::ClusterId(3), cluster_visits, {});
   cluster3.raw_label = u"rawlabel3";
 
   // Now make some clusters with repeated raw labels.
-  auto cluster4 = history::Cluster(4, cluster_visits, {});
+  auto cluster4 = history::Cluster(history::ClusterId(4), cluster_visits, {});
   cluster4.raw_label = u"rawlabel1";
-  auto cluster5 = history::Cluster(5, cluster_visits, {});
+  auto cluster5 = history::Cluster(history::ClusterId(5), cluster_visits, {});
   cluster5.raw_label = u"rawlabel2";
 
   auto result = InjectRawClustersAndAwaitPostProcessing(
@@ -427,8 +433,7 @@ TEST_F(QueryClustersStateTest, GetUngroupedVisits) {
   // Verify that `QueryClustersState` makes an initial call to the
   // HistoryService that makes sense.
   {
-    state.GetUngroupedVisits(base::TimeTicks(),
-                             base::BindLambdaForTesting(result_callback), {},
+    state.GetUngroupedVisits(base::BindLambdaForTesting(result_callback), {},
                              fake_continuation_params);
     // Will quit the loop once GetAnnotatedVisits is run.
     get_ungrouped_visits_loop_1.Run();
@@ -440,8 +445,7 @@ TEST_F(QueryClustersStateTest, GetUngroupedVisits) {
   // Verify that the ungrouped visits can be searched over and returned as part
   // of a special ungrouped cluster.
   {
-    state.OnGotUngroupedVisits(base::TimeTicks(),
-                               base::BindLambdaForTesting(result_callback), {},
+    state.OnGotUngroupedVisits(base::BindLambdaForTesting(result_callback), {},
                                fake_continuation_params,
                                /*ungrouped_visits*/ GetHardcodedTestVisits());
     result_loop.Run();
@@ -461,8 +465,7 @@ TEST_F(QueryClustersStateTest, GetUngroupedVisits) {
         base::Time::FromUTCString("12 Feb 2021 10:00", &new_continuation_time));
     new_fake_continuation_params.continuation_time = new_continuation_time;
 
-    state.GetUngroupedVisits(base::TimeTicks(),
-                             base::BindLambdaForTesting(result_callback), {},
+    state.GetUngroupedVisits(base::BindLambdaForTesting(result_callback), {},
                              new_fake_continuation_params);
     // Will quit the loop once GetAnnotatedVisits is run.
     get_ungrouped_visits_loop_2.Run();
@@ -485,7 +488,6 @@ TEST_F(QueryClustersStateTest, GetUngroupedVisitsDoesCrossBatchDeduplication) {
     std::vector<history::Cluster> final_result;
 
     state.OnGotUngroupedVisits(
-        base::TimeTicks(),
         base::BindLambdaForTesting(
             [&](const std::string& query,
                 std::vector<history::Cluster> cluster_batch, bool can_load_more,
@@ -512,7 +514,6 @@ TEST_F(QueryClustersStateTest, GetUngroupedVisitsDoesCrossBatchDeduplication) {
     continuation_params.exhausted_all_visits = true;
 
     state.OnGotUngroupedVisits(
-        base::TimeTicks(),
         base::BindLambdaForTesting(
             [&](const std::string& query,
                 std::vector<history::Cluster> cluster_batch, bool can_load_more,

@@ -9,6 +9,7 @@
 #import "base/run_loop.h"
 #import "components/sessions/core/live_tab.h"
 #import "components/sessions/core/tab_restore_types.h"
+#import "components/split_tabs/split_tab_id.h"
 
 FakeTabRestoreService::FakeTabRestoreService() = default;
 
@@ -57,12 +58,27 @@ void FakeTabRestoreService::CreateHistoricalGroup(
   NOTREACHED();
 }
 
+void FakeTabRestoreService::CreateHistoricalSplit(
+    sessions::LiveTabContext* context,
+    const split_tabs::SplitTabId& id) {
+  NOTREACHED();
+}
+
 void FakeTabRestoreService::GroupClosed(const tab_groups::TabGroupId& group) {
   NOTREACHED();
 }
 
 void FakeTabRestoreService::GroupCloseStopped(
     const tab_groups::TabGroupId& group) {
+  NOTREACHED();
+}
+
+void FakeTabRestoreService::SplitClosed(const split_tabs::SplitTabId& id) {
+  NOTREACHED();
+}
+
+void FakeTabRestoreService::SplitCloseStopped(
+    const split_tabs::SplitTabId& id) {
   NOTREACHED();
 }
 
@@ -89,6 +105,16 @@ void FakeTabRestoreService::RemoveEntryById(SessionID session_id) {
     return;
   }
   entries_.erase(it);
+}
+
+void FakeTabRestoreService::RemoveLeastRecentlyUsedEntries(int num_to_remove) {
+  if (num_to_remove <= 0 || entries_.empty()) {
+    return;
+  }
+
+  size_t count = std::min(entries_.size(), static_cast<size_t>(num_to_remove));
+  auto start_it = std::prev(entries_.end(), count);
+  entries_.erase(start_it, entries_.end());
 }
 
 std::vector<sessions::LiveTab*> FakeTabRestoreService::RestoreEntryById(

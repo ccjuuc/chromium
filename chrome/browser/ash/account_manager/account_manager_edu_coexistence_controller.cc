@@ -8,13 +8,11 @@
 #include <optional>
 
 #include "ash/constants/ash_pref_names.h"
-#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "chrome/browser/ash/account_manager/account_manager_util.h"
 #include "chrome/browser/ash/child_accounts/edu_coexistence_tos_store_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/ash/edu_coexistence/edu_coexistence_login_handler.h"
-#include "components/account_manager_core/account_manager_facade.h"
 #include "components/account_manager_core/chromeos/account_manager.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
@@ -41,11 +39,9 @@ EduCoexistenceConsentInvalidationController::
     EduCoexistenceConsentInvalidationController(
         Profile* profile,
         account_manager::AccountManager* account_manager,
-        account_manager::AccountManagerFacade* account_manager_facade,
         const AccountId& device_account_id)
     : profile_(profile),
       account_manager_(account_manager),
-      account_manager_facade_(account_manager_facade),
       device_account_id_(device_account_id) {
   DCHECK(profile_);
   DCHECK(profile_->IsChild());
@@ -56,7 +52,7 @@ EduCoexistenceConsentInvalidationController::
     ~EduCoexistenceConsentInvalidationController() = default;
 
 void EduCoexistenceConsentInvalidationController::Init() {
-  account_manager_facade_->GetAccounts(
+  account_manager_->GetAccounts(
       base::BindOnce(&EduCoexistenceConsentInvalidationController::
                          UpdateEduAccountsInTermsOfServicePref,
                      weak_factory_.GetWeakPtr()));
@@ -130,7 +126,7 @@ void EduCoexistenceConsentInvalidationController::TermsOfServicePrefChanged() {
     }
   }
 
-  account_manager_facade_->GetAccounts(base::BindOnce(
+  account_manager_->GetAccounts(base::BindOnce(
       &EduCoexistenceConsentInvalidationController::InvalidateEduAccounts,
       weak_factory_.GetWeakPtr(), std::move(to_invalidate)));
 }
@@ -150,8 +146,8 @@ void EduCoexistenceConsentInvalidationController::InvalidateEduAccounts(
     }
 
     // This account should not be invalidated.
-    if (!base::Contains(account_gaia_ids_to_invalidate,
-                        GaiaId(account.key.id()))) {
+    if (!std::ranges::contains(account_gaia_ids_to_invalidate,
+                               GaiaId(account.key.id()))) {
       continue;
     }
 

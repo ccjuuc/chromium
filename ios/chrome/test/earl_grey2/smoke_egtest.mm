@@ -6,8 +6,8 @@
 
 #import "base/ios/ios_util.h"
 #import "ios/chrome/browser/bookmarks/test/bookmark_earl_grey.h"
+#import "ios/chrome/browser/device_reauth/test/reauthentication_app_interface.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/password_settings/password_settings_constants.h"
-#import "ios/chrome/browser/settings/ui_bundled/password/password_settings_app_interface.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/passwords_table_view_constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_root_table_constants.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
@@ -74,11 +74,19 @@
   [ChromeEarlGreyUI openSettingsMenu];
 
   // Mock successful reauth when opening the Password Manager.
-  [PasswordSettingsAppInterface setUpMockReauthenticationModule];
-  [PasswordSettingsAppInterface mockReauthenticationModuleExpectedResult:
+  [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
                                     ReauthenticationResult::kSuccess];
-  [ChromeEarlGreyUI
-      tapSettingsMenuButton:chrome_test_util::SettingsMenuPasswordsButton()];
+  if ([ChromeEarlGrey isYourSavedInfoSettingsPageIosEnabled]) {
+    [ChromeEarlGreyUI
+        tapSettingsMenuButton:grey_accessibilityID(
+                                  @"kSettingsAutofillAndPasswordsCellId")];
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::
+                                            SettingsMenuPasswordsButton()]
+        performAction:grey_tap()];
+  } else {
+    [ChromeEarlGreyUI
+        tapSettingsMenuButton:chrome_test_util::SettingsMenuPasswordsButton()];
+  }
 
   // Open password settings.
   [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
@@ -105,9 +113,6 @@
   // Close Password Manager.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::SettingsDoneButton()]
       performAction:grey_tap()];
-
-  // Remove mock to keep the app in the same state as before running the test.
-  [PasswordSettingsAppInterface removeMockReauthenticationModule];
 }
 
 // Tests that helpers from chrome_earl_grey.h are available for use in tests.
@@ -118,8 +123,7 @@
 // Tests that string resources are loaded into the ResourceBundle and available
 // for use in tests.
 - (void)testAppResourcesArePresent {
-  NSString* settingsLabel = l10n_util::GetNSString(IDS_IOS_TOOLBAR_SETTINGS);
-  [[EarlGrey selectElementWithMatcher:grey_accessibilityLabel(settingsLabel)]
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::ToolsMenuButton()]
       assertWithMatcher:grey_sufficientlyVisible()];
 }
 
@@ -346,6 +350,40 @@
   [ChromeEarlGrey userBooleanPref:prefs::kIosBookmarkPromoAlreadySeen];
   [ChromeEarlGrey userIntegerPref:prefs::kIosBookmarkCachedTopMostRow];
   [ChromeEarlGrey userStringPref:prefs::kDefaultCharset];
+}
+
+// A test designed to fail, to verify test expectations.
+- (void)testFailingMethod {
+  GREYAssertTrue(NO, @"This test is expected to fail.");
+}
+
+// A test designed to crash, to verify test expectations.
+- (void)testCrashingMethod {
+  [NSException raise:@"SmokeTestCrashException"
+              format:@"Expected smoke test crash"];
+}
+
+// A test designed to fail (or pass), to verify flaky expectations.
+- (void)testFlakyFailureMethod {
+  GREYAssertTrue(NO, @"This test is expected to fail flakily.");
+}
+
+// A test designed to crash (or pass), to verify flaky crash expectations.
+- (void)testFlakyCrashMethod {
+  [NSException raise:@"SmokeTestFlakyCrashException"
+              format:@"Expected smoke test flaky crash"];
+}
+
+// A test designed to pass, to verify flaky expectations allow passing runs.
+- (void)testFlakyPassingMethod {
+  GREYAssertTrue(YES, @"This test is expected to pass.");
+}
+
+// A test designed to pass, to verify flaky crash expectations allow passing
+// runs.
+- (void)testFlakyCrashPassingMethod {
+  GREYAssertTrue(
+      YES, @"This test is expected to pass under flaky crash expectations.");
 }
 
 @end

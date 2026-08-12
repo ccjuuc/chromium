@@ -2,17 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 // IMPORTANT NOTE: All QtShim members that use `delegate_` must be decorated
 // with DISABLE_CFI_VCALL.
 
 #include "ui/qt/qt_shim.h"
-
-#include <cmath>
 
 #include <QApplication>
 #include <QFont>
@@ -24,6 +17,9 @@
 #include <QScreen>
 #include <QStyle>
 #include <QStyleOptionTitleBar>
+#include <cmath>
+
+#include "base/compiler_specific.h"
 
 namespace qt {
 
@@ -107,7 +103,7 @@ SkColor TextureColor(QImage image) {
   size_t b = 0;
   const auto* pixels = reinterpret_cast<QRgb*>(image.bits());
   for (size_t i = 0; i < size; i++) {
-    auto color = QColor::fromRgba(pixels[i]);
+    auto color = QColor::fromRgba(UNSAFE_TODO(pixels[i]));
     a += color.alpha();
     r += color.red();
     g += color.green();
@@ -216,6 +212,16 @@ float GetScreenScale(const QScreen* screen) {
   return scale > 0 ? scale : 1.0;
 }
 
+bool IsValidIconThemeName(const QString& theme) {
+  if (theme.isEmpty() || theme == "." || theme == "..") {
+    return false;
+  }
+  if (theme.contains('/') || theme.contains('\\') || theme.contains("..")) {
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 QtShim::QtShim(QtInterface::Delegate* delegate, int* argc, char** argv)
@@ -275,6 +281,10 @@ FontDescription QtShim::GetFontDescription() const {
 
 Image QtShim::GetIconForContentType(const String& content_type,
                                     int size) const {
+  if (!IsValidIconThemeName(QIcon::themeName())) {
+    QIcon::setThemeName("hicolor");
+  }
+
   QMimeDatabase db;
   for (const char* mime : {content_type.c_str(), "application/octet-stream"}) {
     auto mt = db.mimeTypeForName(mime);

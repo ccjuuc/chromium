@@ -25,7 +25,6 @@ class ClipboardStub;
 class HostStub;
 class InputStub;
 class Session;
-class SessionConfig;
 class TransportContext;
 struct TransportRoute;
 class VideoRenderer;
@@ -96,9 +95,6 @@ class ConnectionToHost {
   // Applies network settings. The connection may be blocked until this method
   // is called.
   virtual void ApplyNetworkSettings(const NetworkSettings& settings) = 0;
-
-  // Returns the session configuration that was negotiated with the host.
-  virtual const SessionConfig& config() = 0;
 
   // Stubs for sending data to the host.
   virtual ClipboardStub* clipboard_forwarder() = 0;

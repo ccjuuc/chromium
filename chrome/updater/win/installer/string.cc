@@ -7,8 +7,11 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <string>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/strings/string_number_conversions.h"
 
 namespace {
@@ -35,7 +38,18 @@ bool HexEncode(const void* bytes, size_t size, wchar_t* str, size_t str_size) {
     return false;
   }
 
-  std::ranges::copy(base::HexEncode(bytes, size), str);
+  // SAFETY: The caller guarantees `bytes` points to at least `size` bytes.
+  // TODO(crbug.com/40284755): Change this helper to take a
+  // `base::span<const uint8_t>` and migrate callers so this `UNSAFE_BUFFERS`
+  // construction can be removed.
+  // We need to pass the data to `base::HexEncode()`, which now takes a span.
+  // Since we only have a raw pointer + explicit length here, we must construct
+  // a view from them; this is safe because `bytes_ptr` is treated as a byte
+  // pointer and we only read up to `size` bytes.
+  const uint8_t* const bytes_ptr = reinterpret_cast<const uint8_t*>(bytes);
+  const auto bytes_span = UNSAFE_BUFFERS(base::span(bytes_ptr, size));
+  const std::string hex = base::HexEncode(bytes_span);
+  std::ranges::copy(hex, str);
   UNSAFE_TODO(str[size * 2]) = L'\0';
   return true;
 }
@@ -118,11 +132,6 @@ const wchar_t* GetNameFromPathExt(const wchar_t* path, size_t size) {
   return ((current == path) && (L'\\' != *current))
              ? current
              : (UNSAFE_TODO(current + 1));
-}
-
-wchar_t* GetNameFromPathExt(wchar_t* path, size_t size) {
-  return const_cast<wchar_t*>(
-      GetNameFromPathExt(const_cast<const wchar_t*>(path), size));
 }
 
 }  // namespace updater

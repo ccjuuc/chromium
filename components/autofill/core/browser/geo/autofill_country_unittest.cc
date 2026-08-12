@@ -7,7 +7,6 @@
 #include <set>
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/field_types.h"
@@ -29,61 +28,63 @@ using ::i18n::addressinput::AddressField;
 // Test the constructor and accessors
 TEST(AutofillCountryTest, AutofillCountry) {
   AutofillCountry united_states_en("US", "en_US");
-  EXPECT_EQ("US", united_states_en.country_code());
-  EXPECT_EQ(u"United States", united_states_en.name());
+  EXPECT_EQ(united_states_en.country_code(), "US");
+  EXPECT_EQ(united_states_en.name(), u"United States");
 
   AutofillCountry united_states_es("US", "es");
-  EXPECT_EQ("US", united_states_es.country_code());
-  EXPECT_EQ(u"Estados Unidos", united_states_es.name());
+  EXPECT_EQ(united_states_es.country_code(), "US");
+  EXPECT_EQ(united_states_es.name(), u"Estados Unidos");
 
   AutofillCountry great_britain_uk_alias("UK", "en_GB");
-  EXPECT_EQ("GB", great_britain_uk_alias.country_code());
-  EXPECT_EQ("GB", great_britain_uk_alias.country_code());
-  EXPECT_EQ(u"United Kingdom", great_britain_uk_alias.name());
+  EXPECT_EQ(great_britain_uk_alias.country_code(), "GB");
+  EXPECT_EQ(great_britain_uk_alias.country_code(), "GB");
+  EXPECT_EQ(great_britain_uk_alias.name(), u"United Kingdom");
 
   AutofillCountry canada_en("CA", "en_US");
-  EXPECT_EQ("CA", canada_en.country_code());
-  EXPECT_EQ(u"Canada", canada_en.name());
+  EXPECT_EQ(canada_en.country_code(), "CA");
+  EXPECT_EQ(canada_en.name(), u"Canada");
 
   AutofillCountry canada_hu("CA", "hu");
-  EXPECT_EQ("CA", canada_hu.country_code());
-  EXPECT_EQ(u"Kanada", canada_hu.name());
+  EXPECT_EQ(canada_hu.country_code(), "CA");
+  EXPECT_EQ(canada_hu.name(), u"Kanada");
 
   // Unrecognizable country codes remain that way.
   AutofillCountry unknown("Unknown", "en_US");
-  EXPECT_EQ("Unknown", unknown.country_code());
+  EXPECT_EQ(unknown.country_code(), "Unknown");
 
   // If no locale is provided, no `name()` is returned.
   AutofillCountry empty_locale("AT");
-  EXPECT_EQ("AT", empty_locale.country_code());
+  EXPECT_EQ(empty_locale.country_code(), "AT");
   EXPECT_TRUE(empty_locale.name().empty());
 }
 
 // Test locale to country code mapping.
 TEST(AutofillCountryTest, CountryCodeForLocale) {
-  EXPECT_EQ("US", AutofillCountry::CountryCodeForLocale("en_US"));
-  EXPECT_EQ("CA", AutofillCountry::CountryCodeForLocale("fr_CA"));
-  EXPECT_EQ("FR", AutofillCountry::CountryCodeForLocale("fr"));
-  EXPECT_EQ("US", AutofillCountry::CountryCodeForLocale("Unknown"));
+  EXPECT_EQ(AutofillCountry::CountryCodeForLocale("en_US"), "US");
+  EXPECT_EQ(AutofillCountry::CountryCodeForLocale("fr_CA"), "CA");
+  EXPECT_EQ(AutofillCountry::CountryCodeForLocale("fr"), "FR");
+  EXPECT_EQ(AutofillCountry::CountryCodeForLocale("Unknown"), "US");
   // "es-419" isn't associated with a country. See base/l10n/l10n_util.cc
   // for details about this locale. Default to US.
-  EXPECT_EQ("US", AutofillCountry::CountryCodeForLocale("es-419"));
+  EXPECT_EQ(AutofillCountry::CountryCodeForLocale("es-419"), "US");
 }
 
 // Test that the correct country code is retrieved from the app locale if no
 // geo ip country code could be retrieved.
 TEST(AutofillCountryTest, GetDefaultCountryCodeForNewAddressFromAppLocale) {
-  EXPECT_EQ("US", AutofillCountry::GetDefaultCountryCodeForNewAddress(
-                      GeoIpCountryCode(""), "en_US")
-                      .value());
+  EXPECT_EQ(AutofillCountry::GetDefaultCountryCodeForNewAddress(
+                GeoIpCountryCode(""), "en_US")
+                .value(),
+            "US");
 }
 
 // Test that the country code is is set as the geo ip country code,
 // and that it is not extracted from the app locale.
 TEST(AutofillCountryTest, GetDefaultCountryCodeForNewAddressFromGeoIp) {
-  EXPECT_EQ("DE", AutofillCountry::GetDefaultCountryCodeForNewAddress(
-                      GeoIpCountryCode("DE"), "en_US")
-                      .value());
+  EXPECT_EQ(AutofillCountry::GetDefaultCountryCodeForNewAddress(
+                GeoIpCountryCode("DE"), "en_US")
+                .value(),
+            "DE");
 }
 
 // Test the address requirement methods for the US.
@@ -177,12 +178,12 @@ TEST(AutofillCountryTest, AllCountryCodesHaveCountryName) {
   const std::vector<std::string>& country_codes =
       CountryDataMap::GetInstance()->country_codes();
   for (const std::string& country_code : country_codes) {
-    if (base::Contains(expected_failures, country_code)) {
+    if (expected_failures.contains(country_code)) {
       continue;
     }
     SCOPED_TRACE("Country code '" + country_code + "' should have a name.");
-    EXPECT_NE(ASCIIToUTF16(country_code),
-              AutofillCountry(country_code, "en").name());
+    EXPECT_NE(AutofillCountry(country_code, "en").name(),
+              ASCIIToUTF16(country_code));
   }
 }
 

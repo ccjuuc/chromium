@@ -17,16 +17,18 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import static org.chromium.chrome.browser.flags.ChromeFeatureList.sStartSurfaceReturnTimeTabletSecs;
+import static org.chromium.chrome.browser.incognito.reauth.IncognitoReauthControllerImpl.PREVIOUS_VERSION_CODE;
 import static org.chromium.chrome.browser.tasks.ReturnToChromeUtil.FAIL_TO_SHOW_HOME_SURFACE_UI_UMA;
 import static org.chromium.chrome.browser.tasks.ReturnToChromeUtil.HOME_SURFACE_SHOWN_AT_STARTUP_UMA;
 import static org.chromium.chrome.browser.tasks.ReturnToChromeUtil.HOME_SURFACE_SHOWN_UMA;
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeNtpUrl;
-import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNonNativeNtpGurl;
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNtpGurl;
 
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Resources;
 import android.os.Bundle;
+import android.os.PersistableBundle;
 import android.text.format.DateUtils;
 
 import androidx.test.filters.SmallTest;
@@ -46,18 +48,19 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.BaseSwitches;
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.SysUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.build.BuildConfig;
 import org.chromium.chrome.browser.ChromeInactivityTracker;
 import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.homepage.HomepageManager;
 import org.chromium.chrome.browser.homepage.HomepagePolicyManager;
-import org.chromium.chrome.browser.magic_stack.HomeModulesMetricsUtils;
 import org.chromium.chrome.browser.ntp.NewTabPage;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
@@ -72,7 +75,8 @@ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 import org.chromium.chrome.browser.tasks.ReturnToChromeUtil.FailToShowHomeSurfaceReason;
 import org.chromium.chrome.browser.ui.native_page.FrozenNativePage;
-import org.chromium.chrome.browser.util.ChromeAccessibilityUtil;
+import org.chromium.ui.R;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.url.JUnitTestGURLs;
 
@@ -109,7 +113,7 @@ public class ReturnToChromeUtilUnitTest {
         // HomepageManager:
         HomepageManager.setInstanceForTesting(mHomepageManager);
         doReturn(true).when(mHomepageManager).isHomepageEnabled();
-        doReturn(getOriginalNonNativeNtpGurl())
+        doReturn(getOriginalNtpGurl())
                 .when(mHomepageManager)
                 .getHomepageGurl(/* isIncognito= */ false);
 
@@ -122,13 +126,13 @@ public class ReturnToChromeUtilUnitTest {
         Assert.assertFalse(SysUtils.isLowEndDevice());
 
         // Sets accessibility:
-        ChromeAccessibilityUtil.get().setAccessibilityEnabledForTesting(false);
+        AccessibilityStateTestHelper.setAccessibilityEnabledForTesting(false);
 
         // Sets for phones, i.e., !DeviceFormFactor.isNonMultiDisplayContextOnTablet():
         doReturn(mResources).when(mContext).getResources();
         doReturn(DeviceFormFactor.SCREEN_BUCKET_TABLET - 1)
                 .when(mResources)
-                .getInteger(org.chromium.ui.R.integer.min_screen_width_bucket);
+                .getInteger(R.integer.min_screen_width_bucket);
         Assert.assertFalse(DeviceFormFactor.isNonMultiDisplayContextOnTablet(mContext));
     }
 
@@ -172,13 +176,20 @@ public class ReturnToChromeUtilUnitTest {
         assertTrue(IntentUtils.isMainIntentFromLauncher(intent));
         assertTrue(
                 ReturnToChromeUtil.shouldShowNtpAsHomeSurfaceAtStartup(
-                        intent, null, mInactivityTracker));
+                        intent, null, /* persistableBundle= */ null, mInactivityTracker));
 
         // Tests the case when the total tab count > 0. Verifies that home surface NTP is shown
         doReturn(1).when(mTabModelSelector).getTotalTabCount();
         assertTrue(
                 ReturnToChromeUtil.shouldShowNtpAsHomeSurfaceAtStartup(
-                        intent, null, mInactivityTracker));
+                        intent, null, /* persistableBundle= */ null, mInactivityTracker));
+
+        // Tests the case when the device is an Android desktop.
+        DeviceInfo.setIsDesktopForTesting(true);
+        assertFalse(
+                ReturnToChromeUtil.shouldShowNtpAsHomeSurfaceAtStartup(
+                        intent, null, /* persistableBundle= */ null, mInactivityTracker));
+        DeviceInfo.setIsDesktopForTesting(false);
     }
 
     @Test
@@ -212,7 +223,7 @@ public class ReturnToChromeUtilUnitTest {
                 mHomeSurfaceTracker);
         verify(mTabCreater, never()).createNewTab(any(), eq(TabLaunchType.FROM_STARTUP), eq(null));
         verify(mCurrentTabModel, never()).setIndex(anyInt(), eq(TabSelectionType.FROM_USER));
-        verify(mNewTabPage, never()).showMagicStack(any());
+        verify(mNewTabPage, never()).showHomeSurfaceUiOnNtp(any());
         verify(mHomeSurfaceTracker).updateHomeSurfaceAndTrackingTabs(eq(mNtpTab), eq(null));
         histogram.assertExpected();
 
@@ -251,7 +262,7 @@ public class ReturnToChromeUtilUnitTest {
                 mHomeSurfaceTracker);
         verify(mTabCreater, never()).createNewTab(any(), eq(TabLaunchType.FROM_STARTUP), eq(null));
         verify(mCurrentTabModel).setIndex(eq(1), eq(TabSelectionType.FROM_USER));
-        verify(mNewTabPage).showMagicStack(eq(mTab1));
+        verify(mNewTabPage).showHomeSurfaceUiOnNtp(eq(mTab1));
         verify(mHomeSurfaceTracker).updateHomeSurfaceAndTrackingTabs(eq(mNtpTab), eq(mTab1));
         histogram.assertExpected();
     }
@@ -295,7 +306,7 @@ public class ReturnToChromeUtilUnitTest {
                 mTabCreater,
                 mHomeSurfaceTracker);
         verify(mTabCreater, times(1)).createNewTab(any(), eq(TabLaunchType.FROM_STARTUP), eq(null));
-        verify(mNewTabPage).showMagicStack(eq(mTab1));
+        verify(mNewTabPage).showHomeSurfaceUiOnNtp(eq(mTab1));
         verify(mHomeSurfaceTracker).updateHomeSurfaceAndTrackingTabs(eq(mNtpTab), eq(mTab1));
         histogram.assertExpected();
     }
@@ -343,7 +354,7 @@ public class ReturnToChromeUtilUnitTest {
                 mHomeSurfaceTracker);
         histogram.assertExpected();
         verify(mHomeSurfaceTracker, never()).updateHomeSurfaceAndTrackingTabs(eq(mNtpTab), any());
-        verify(mNewTabPage, never()).showMagicStack(any());
+        verify(mNewTabPage, never()).showHomeSurfaceUiOnNtp(any());
 
         // Set the last active NTP doesn't have a tracking Tab.
         doReturn(false).when(mHomeSurfaceTracker).canShowHomeSurface(activeNtpTab);
@@ -362,7 +373,7 @@ public class ReturnToChromeUtilUnitTest {
                 mHomeSurfaceTracker);
         histogram.assertExpected();
         verify(mHomeSurfaceTracker, never()).updateHomeSurfaceAndTrackingTabs(eq(mNtpTab), any());
-        verify(mNewTabPage, never()).showMagicStack(any());
+        verify(mNewTabPage, never()).showHomeSurfaceUiOnNtp(any());
     }
 
     @Test
@@ -384,10 +395,7 @@ public class ReturnToChromeUtilUnitTest {
 
     @Test
     @SmallTest
-    @EnableFeatures({ChromeFeatureList.MAGIC_STACK_ANDROID})
     public void testColdStartupWithOnlyLastActiveTabUrl_MagicStack() {
-        assertTrue(HomeModulesMetricsUtils.useMagicStack());
-
         when(mTab1.getUrl()).thenReturn(JUnitTestGURLs.URL_1);
         when(mNtpTab.isNativePage()).thenReturn(true);
         when(mNtpTab.getNativePage()).thenReturn(mNewTabPage);
@@ -408,7 +416,7 @@ public class ReturnToChromeUtilUnitTest {
 
         // Verifies if the added Tab matches the tracking URL, call showHomeSurfaceUi().
         mTabModelObserverCaptor.getValue().willAddTab(mTab1, TabLaunchType.FROM_RESTORE);
-        verify(mNewTabPage).showMagicStack(eq(mTab1));
+        verify(mNewTabPage).showHomeSurfaceUiOnNtp(eq(mTab1));
         verify(mHomeSurfaceTracker).updateHomeSurfaceAndTrackingTabs(eq(mNtpTab), eq(mTab1));
     }
 
@@ -432,21 +440,71 @@ public class ReturnToChromeUtilUnitTest {
         assertTrue(IntentUtils.isMainIntentFromLauncher(intent));
         assertTrue(
                 ReturnToChromeUtil.shouldShowNtpAsHomeSurfaceAtStartup(
-                        intent, mSaveInstanceState, mInactivityTracker));
+                        intent,
+                        mSaveInstanceState,
+                        /* persistableBundle= */ null,
+                        mInactivityTracker));
 
         doReturn(true)
                 .when(mSaveInstanceState)
                 .getBoolean(ChromeActivity.IS_FROM_RECREATING, false);
         assertFalse(
                 ReturnToChromeUtil.shouldShowNtpAsHomeSurfaceAtStartup(
-                        intent, mSaveInstanceState, mInactivityTracker));
+                        intent,
+                        mSaveInstanceState,
+                        /* persistableBundle= */ null,
+                        mInactivityTracker));
 
         doReturn(false)
                 .when(mSaveInstanceState)
                 .getBoolean(ChromeActivity.IS_FROM_RECREATING, false);
         assertTrue(
                 ReturnToChromeUtil.shouldShowNtpAsHomeSurfaceAtStartup(
-                        intent, mSaveInstanceState, mInactivityTracker));
+                        intent,
+                        mSaveInstanceState,
+                        /* persistableBundle= */ null,
+                        mInactivityTracker));
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures({ChromeFeatureList.PERSIST_ACROSS_REBOOTS})
+    public void testShouldNotShowNtpOnAppUpdate() {
+        // Sets main intent from launcher:
+        Intent intent = createMainIntentFromLauncher();
+
+        // Sets background time to make the return time arrive:
+        ChromeSharedPreferences.getInstance()
+                .addToStringSet(
+                        ChromePreferenceKeys.TABBED_ACTIVITY_LAST_BACKGROUNDED_TIME_MS_PREF, "0");
+        sStartSurfaceReturnTimeTabletSecs.setForTesting(0);
+        assertTrue(ReturnToChromeUtil.shouldShowTabSwitcher(0));
+
+        // There should always be at least 1 tab. Otherwise one will be created regardless.
+        doReturn(true).when(mTabModelSelector).isTabStateInitialized();
+        doReturn(1).when(mTabModelSelector).getTotalTabCount();
+
+        doReturn(false)
+                .when(mSaveInstanceState)
+                .getBoolean(ChromeActivity.IS_FROM_RECREATING, false);
+
+        assertTrue(IntentUtils.isMainIntentFromLauncher(intent));
+
+        PersistableBundle persistentState = new PersistableBundle();
+        persistentState.putLong(PREVIOUS_VERSION_CODE, BuildConfig.VERSION_CODE);
+        assertTrue(
+                ReturnToChromeUtil.shouldShowNtpAsHomeSurfaceAtStartup(
+                        intent, mSaveInstanceState, persistentState, mInactivityTracker));
+
+        persistentState.putLong(PREVIOUS_VERSION_CODE, BuildConfig.VERSION_CODE - 1);
+        assertFalse(
+                ReturnToChromeUtil.shouldShowNtpAsHomeSurfaceAtStartup(
+                        intent, mSaveInstanceState, persistentState, mInactivityTracker));
+
+        persistentState.putLong(PREVIOUS_VERSION_CODE, BuildConfig.VERSION_CODE);
+        assertTrue(
+                ReturnToChromeUtil.shouldShowNtpAsHomeSurfaceAtStartup(
+                        intent, mSaveInstanceState, persistentState, mInactivityTracker));
     }
 
     @Test

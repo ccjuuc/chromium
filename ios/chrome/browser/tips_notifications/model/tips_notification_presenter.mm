@@ -16,11 +16,11 @@
 #import "ios/chrome/browser/default_browser/model/promo_source.h"
 #import "ios/chrome/browser/default_browser/model/utils.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/credential_provider_promo_commands.h"
-#import "ios/chrome/browser/shared/public/commands/docking_promo_commands.h"
+#import "ios/chrome/browser/shared/public/commands/promos_manager_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/commands/show_signin_command.h"
 #import "ios/chrome/browser/shared/public/commands/sync_presenter_commands.h"
@@ -39,8 +39,8 @@ void TipsNotificationPresenter::Present(base::WeakPtr<Browser> weakBrowser,
   if (!browser) {
     return;
   }
-  id<ApplicationCommands> application_handler =
-      HandlerForProtocol(browser->GetCommandDispatcher(), ApplicationCommands);
+  id<SceneCommands> application_handler =
+      HandlerForProtocol(browser->GetCommandDispatcher(), SceneCommands);
   auto show_ui_callback = base::CallbackToBlock(base::BindOnce(
       &TipsNotificationPresenter::PresentInternal, weakBrowser, type));
   [application_handler
@@ -93,6 +93,12 @@ void TipsNotificationPresenter::Present(TipsNotificationType type) {
       break;
     case TipsNotificationType::kTrustedVaultKeyRetrieval:
       StartTrustedVaultKeyRetrievalFlow();
+      break;
+    case TipsNotificationType::kTabGroups:
+      ShowTabGroupsPromo();
+      break;
+    case TipsNotificationType::kPriceTracking:
+      ShowPriceTrackingPromo();
       break;
     case TipsNotificationType::kIncognitoLock:
     case TipsNotificationType::kError:
@@ -148,8 +154,8 @@ void TipsNotificationPresenter::ShowSetUpListContinuation() {
 }
 
 void TipsNotificationPresenter::ShowDocking() {
-  [HandlerForProtocol(browser_->GetCommandDispatcher(), DockingPromoCommands)
-      showDockingPromo:YES];
+  [HandlerForProtocol(browser_->GetCommandDispatcher(), PromosManagerCommands)
+      showDockingPromo];
 }
 
 void TipsNotificationPresenter::ShowOmniboxPosition() {
@@ -209,7 +215,8 @@ void TipsNotificationPresenter::StartTrustedVaultKeyRetrievalFlow() {
   }
   [HandlerForProtocol(browser_->GetCommandDispatcher(), SyncPresenterCommands)
       showTrustedVaultReauthForFetchKeysWithTrigger:
-          trusted_vault::TrustedVaultUserActionTriggerForUMA::kNotification];
+          trusted_vault::TrustedVaultUserActionTriggerForUMA::kNotification
+                                         completion:nil];
   base::UmaHistogramEnumeration(
       metric_name, TrustedVaultNotificationEvents::kKeyRetrievalFlowStarted);
 }
@@ -230,6 +237,16 @@ void TipsNotificationPresenter::ShowCPEPromo() {
 void TipsNotificationPresenter::ShowLensOverlayPromo() {
   [HandlerForProtocol(browser_->GetCommandDispatcher(),
                       BrowserCoordinatorCommands) showSearchWhatYouSeePromo];
+}
+
+void TipsNotificationPresenter::ShowTabGroupsPromo() {
+  [HandlerForProtocol(browser_->GetCommandDispatcher(),
+                      BrowserCoordinatorCommands) showTabGroupsPromo];
+}
+
+void TipsNotificationPresenter::ShowPriceTrackingPromo() {
+  [HandlerForProtocol(browser_->GetCommandDispatcher(),
+                      BrowserCoordinatorCommands) showPriceTrackingPromo];
 }
 
 bool TipsNotificationPresenter::HasIdentitiesOnDevice() {

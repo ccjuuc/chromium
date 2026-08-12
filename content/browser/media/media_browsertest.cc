@@ -58,14 +58,18 @@ void MediaBrowserTest::SetUpCommandLine(base::CommandLine* command_line) {
   };
 
   std::vector<base::test::FeatureRef> disabled_features = {
-    // Disable fallback after decode error to avoid unexpected test pass on
-    // the fallback path.
-    media::kFallbackAfterDecodeError,
+      // Disable fallback after decode error to avoid unexpected test pass on
+      // the fallback path.
+      media::kFallbackAfterDecodeError,
+
+      // Disable hardware decoder deprioritization to retain control over
+      // hardware/software decoder selection.
+      media::kResolutionBasedDecoderPriority,
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-    // Disable out of process audio on Linux due to process spawn
-    // failures. http://crbug.com/986021
-    features::kAudioServiceOutOfProcess,
+      // Disable out of process audio on Linux due to process spawn
+      // failures. http://crbug.com/986021
+      features::kAudioServiceOutOfProcess,
 #endif
   };
 
@@ -121,9 +125,7 @@ void MediaBrowserTest::CleanupTest() {
 
 std::string MediaBrowserTest::EncodeErrorMessage(
     const std::string& original_message) {
-  url::RawCanonOutputT<char> buffer;
-  url::EncodeURIComponent(original_message, &buffer);
-  return std::string(buffer.view());
+  return url::EncodeUriComponent(original_message);
 }
 
 void MediaBrowserTest::AddTitlesToAwait(content::TitleWatcher* title_watcher) {
@@ -291,34 +293,17 @@ IN_PROC_BROWSER_TEST_P(MediaTest, VideoBearMovPcmS24be) {
 #if BUILDFLAG(USE_PROPRIETARY_CODECS)
 #if BUILDFLAG(ENABLE_HLS_DEMUXER)
 
-// TODO(crbug.com/384342045): Failing on win11-arm64.
-#if BUILDFLAG(IS_WIN) && defined(ARCH_CPU_ARM64)
-#define MAYBE_HLSSingleFileBear DISABLED_HLSSingleFileBear
-#else
-#define MAYBE_HLSSingleFileBear HLSSingleFileBear
-#endif
-IN_PROC_BROWSER_TEST_P(MediaTest, MAYBE_HLSSingleFileBear) {
+IN_PROC_BROWSER_TEST_P(MediaTest, HLSSingleFileBear) {
   REQUIRE_ACCELERATION_ON_ANDROID();
   PlayVideo("bear-1280x720-hls-clear-mpl.m3u8");
 }
 
-#if BUILDFLAG(IS_WIN) && defined(ARCH_CPU_ARM64)
-#define MAYBE_HLSSingleWithoutExtension DISABLED_HLSSingleWithoutExtension
-#else
-#define MAYBE_HLSSingleWithoutExtension HLSSingleWithoutExtension
-#endif
-IN_PROC_BROWSER_TEST_P(MediaTest, MAYBE_HLSSingleWithoutExtension) {
+IN_PROC_BROWSER_TEST_P(MediaTest, HLSSingleWithoutExtension) {
   REQUIRE_ACCELERATION_ON_ANDROID();
   PlayVideo("hls/mp_ts_avc1.hls");
 }
 
-// TODO(crbug.com/384342045): Failing on win11-arm64.
-#if BUILDFLAG(IS_WIN) && defined(ARCH_CPU_ARM64)
-#define MAYBE_HLSMultivariantBitrateBear DISABLED_HLSMultivariantBitrateBear
-#else
-#define MAYBE_HLSMultivariantBitrateBear HLSMultivariantBitrateBear
-#endif
-IN_PROC_BROWSER_TEST_P(MediaTest, MAYBE_HLSMultivariantBitrateBear) {
+IN_PROC_BROWSER_TEST_P(MediaTest, HLSMultivariantBitrateBear) {
   REQUIRE_ACCELERATION_ON_ANDROID();
   PlayVideo("hls/multi-bitrate-multivariant-bear/playlist.m3u8");
 }

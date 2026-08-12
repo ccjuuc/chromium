@@ -4,19 +4,13 @@
 
 import {assert} from '../../assert.js';
 import {Point} from '../../geometry.js';
-import {
-  Facing,
-  PreviewVideo,
-  Resolution,
-} from '../../type.js';
-import {StreamConstraints} from '../stream_constraints.js';
+import type {Facing, PreviewVideo, Resolution} from '../../type.js';
+import type {StreamConstraints} from '../stream_constraints.js';
 
-import {ModeBase, ModeFactory} from './mode_base.js';
-import {
-  Photo,
-  PhotoHandler,
-  PhotoResult,
-} from './photo.js';
+import type {ModeBase} from './mode_base.js';
+import {ModeFactory} from './mode_base.js';
+import type {PhotoHandler, PhotoResult} from './photo.js';
+import {Photo} from './photo.js';
 
 /**
  * @param size Size of image to be cropped document from.

@@ -12,6 +12,7 @@
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/unguessable_token.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
@@ -45,10 +46,15 @@ class LogWebUIUrlTest : public InProcessBrowserTest {
 
   ~LogWebUIUrlTest() override = default;
 
-  base::HistogramTester& histogram_tester() { return histogram_tester_; }
+  // InProcessBrowserTest:
+  void SetUpOnMainThread() override {
+    histogram_tester_ = std::make_unique<base::HistogramTester>();
+  }
+
+  base::HistogramTester& histogram_tester() { return *histogram_tester_; }
 
   void RunTest(std::u16string title, const GURL& url) {
-    EXPECT_THAT(histogram_tester_.GetAllSamples(webui::kWebUICreatedForUrl),
+    EXPECT_THAT(histogram_tester().GetAllSamples(webui::kWebUICreatedForUrl),
                 ::testing::IsEmpty());
 
     auto* tab = browser()->tab_strip_model()->GetActiveWebContents();
@@ -56,12 +62,12 @@ class LogWebUIUrlTest : public InProcessBrowserTest {
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
     ASSERT_EQ(title, title_watcher.WaitAndGetTitle());
     uint32_t origin_hash = base::Hash(url.DeprecatedGetOriginAsURL().spec());
-    EXPECT_THAT(histogram_tester_.GetAllSamples(webui::kWebUICreatedForUrl),
+    EXPECT_THAT(histogram_tester().GetAllSamples(webui::kWebUICreatedForUrl),
                 ElementsAre(Bucket(origin_hash, 1)));
   }
 
  private:
-  base::HistogramTester histogram_tester_;
+  std::unique_ptr<base::HistogramTester> histogram_tester_;
 };
 
 IN_PROC_BROWSER_TEST_F(LogWebUIUrlTest, TestExtensionsPage) {
@@ -89,8 +95,9 @@ IN_PROC_BROWSER_TEST_F(LogWebUIUrlTest, TestDinoPage) {
 
 #if !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_F(LogWebUIUrlTest, TestChromeUntrustedPage) {
-  RunTest(u"", GURL(base::StrCat(
-                   {chrome::kChromeUIUntrustedPrintURL, "1/1/print.pdf"})));
+  RunTest(u"", GURL(base::StrCat({chrome::kChromeUIUntrustedPrintURL,
+                                  base::UnguessableToken::Create().ToString(),
+                                  "/1/print.pdf"})));
 }
 #endif
 
@@ -104,7 +111,7 @@ IN_PROC_BROWSER_TEST_F(LogWebUIUrlTest, ShownWebUI) {
 
   std::unique_ptr<content::WebContents> web_contents =
       content::WebContents::Create(
-          content::WebContents::CreateParams(browser()->profile()));
+          content::WebContents::CreateParams(browser()->GetProfile()));
 
   ASSERT_TRUE(content::NavigateToURL(web_contents.get(), url));
   ASSERT_TRUE(
@@ -130,7 +137,7 @@ IN_PROC_BROWSER_TEST_F(LogWebUIUrlTest, ShownWebUIForPreloadedPage) {
 
   // Preload the WebUI. The WebUI is created but not shown.
   WebUIContentsPreloadManagerTestAPI preload_test_api;
-  preload_test_api.PreloadUrl(browser()->profile(), url);
+  preload_test_api.PreloadUrl(browser()->GetProfile(), url);
   EXPECT_TRUE(
       content::WaitForLoadStop(preload_test_api.GetPreloadedWebContents()));
   EXPECT_THAT(histogram_tester().GetBucketCount(webui::kWebUICreatedForUrl,
@@ -142,7 +149,7 @@ IN_PROC_BROWSER_TEST_F(LogWebUIUrlTest, ShownWebUIForPreloadedPage) {
   // Show the WebUI.
   std::unique_ptr<content::WebContents> web_contents =
       std::move(preload_test_api.preload_manager()
-                    ->Request(url, browser()->profile())
+                    ->Request(url, browser()->GetProfile())
                     .web_contents);
   EXPECT_THAT(
       histogram_tester().GetBucketCount(webui::kWebUIShownUrl, origin_hash), 1);

@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/core/editing/finder/find_buffer.h"
 
 #include "build/build_config.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/text.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/finder/find_results.h"
@@ -30,14 +31,14 @@ class FindBufferTest : public EditingTestBase {
                                     LastPositionInDocument());
   }
 
-  PositionInFlatTree PositionFromParentId(const char* id, unsigned offset) {
+  PositionInFlatTree PositionFromParentId(const char* id, wtf_size_t offset) {
     return PositionInFlatTree(GetElementById(id)->firstChild(), offset);
   }
 
   EphemeralRangeInFlatTree CreateRange(const Node& start_node,
-                                       int start_offset,
+                                       wtf_size_t start_offset,
                                        const Node& end_node,
-                                       int end_offset) {
+                                       wtf_size_t end_offset) {
     return EphemeralRangeInFlatTree(
         PositionInFlatTree(start_node, start_offset),
         PositionInFlatTree(end_node, end_offset));
@@ -48,8 +49,8 @@ class FindBufferTest : public EditingTestBase {
         SelectionInFlatTree::Builder().SetAsForwardSelection(range).Build());
   }
 
-  static unsigned CaseInsensitiveMatchCount(FindBuffer& buffer,
-                                            const String& query) {
+  static wtf_size_t CaseInsensitiveMatchCount(FindBuffer& buffer,
+                                              const String& query) {
     return buffer.FindMatches(query, kCaseInsensitive).CountForTesting();
   }
 
@@ -76,7 +77,7 @@ TEST_P(FindBufferParamTest, FindInline) {
   EXPECT_TRUE(buffer.PositionAfterBlock().IsNull());
   FindResults results = buffer.FindMatches("abce", kCaseInsensitive);
   EXPECT_EQ(1u, results.CountForTesting());
-  MatchResultICU match = *results.begin();
+  MatchResultIcu match = *results.begin();
   EXPECT_EQ(0u, match.start);
   EXPECT_EQ(4u, match.length);
   EXPECT_EQ(
@@ -683,7 +684,7 @@ TEST_P(FindBufferParamTest, DisplayInline) {
   FindBuffer buffer(WholeDocumentRange(), GetParam());
   const auto results = buffer.FindMatches("find", FindOptions());
   ASSERT_EQ(1u, results.CountForTesting());
-  EXPECT_EQ(MatchResultICU({0, 4}), results.front());
+  EXPECT_EQ(MatchResultIcu({0, 4}), results.front());
 }
 
 TEST_P(FindBufferParamTest, DisplayBlock) {
@@ -699,7 +700,7 @@ TEST_P(FindBufferParamTest, DisplayContents) {
   FindBuffer buffer(WholeDocumentRange(), GetParam());
   const auto results = buffer.FindMatches("find", FindOptions());
   ASSERT_EQ(1u, results.CountForTesting());
-  EXPECT_EQ(MatchResultICU({0, 4}), results.front());
+  EXPECT_EQ(MatchResultIcu({0, 4}), results.front());
 }
 
 TEST_P(FindBufferParamTest, WBRTest) {

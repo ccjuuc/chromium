@@ -29,7 +29,8 @@ class DisplayAccountInfoTest : public testing::Test {
     AccountInfo account_info =
         identity_test_environment_.MakePrimaryAccountAvailable(
             kTestEmail, signin::ConsentLevel::kSignin);
-    account_info.full_name = kTestFullName;
+    account_info =
+        AccountInfo::Builder(account_info).SetFullName(kTestFullName).Build();
     identity_test_environment_.UpdateAccountInfoForAccount(account_info);
     sync_service_.SetSignedIn(signin::ConsentLevel::kSignin, account_info);
   }
@@ -43,7 +44,7 @@ class DisplayAccountInfoTest : public testing::Test {
         << "Trying to update capability of signed-in account when there's none";
     AccountInfo account_info =
         identity_manager()->FindExtendedAccountInfo(core_account_info);
-    AccountCapabilitiesTestMutator(&account_info.capabilities)
+    AccountCapabilitiesTestMutator(&account_info)
         .set_can_have_email_address_displayed(can_display);
     identity_test_environment_.UpdateAccountInfoForAccount(account_info);
   }
@@ -74,7 +75,7 @@ TEST_F(DisplayAccountInfoTest, SignedInWithPasswordsEnabled) {
   std::optional<AccountInfo> account_info =
       GetAccountInfoForPasswordMessages(sync_service(), identity_manager());
   ASSERT_TRUE(account_info.has_value());
-  EXPECT_EQ(account_info->email, kTestEmail);
+  EXPECT_EQ(account_info->GetEmail(), kTestEmail);
   EXPECT_EQ(GetDisplayableAccountName(sync_service(), identity_manager()),
             kTestEmail);
 }

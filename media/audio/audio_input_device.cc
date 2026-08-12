@@ -109,7 +109,6 @@ class AudioInputDevice::AudioThreadCallback
   base::RepeatingClosure got_data_callback_;
 
   AudioDeviceStatsReporter stats_reporter_;
-  const bool confirm_reads_via_shmem_;
 };
 
 AudioInputDevice::AudioInputDevice(std::unique_ptr<AudioInputIPC> ipc,
@@ -396,9 +395,8 @@ AudioInputDevice::AudioThreadCallback::AudioThreadCallback(
                                             audio_parameters.sample_rate()),
       frames_since_last_got_data_callback_(0),
       got_data_callback_(std::move(got_data_callback_)),
-      stats_reporter_(audio_parameters, AudioDeviceStatsReporter::Type::kInput),
-      confirm_reads_via_shmem_(
-          base::FeatureList::IsEnabled(kAudioInputConfirmReadsViaShmem)) {
+      stats_reporter_(audio_parameters,
+                      AudioDeviceStatsReporter::Type::kInput) {
   // CHECK that the shared memory is large enough. The memory allocated must
   // be at least as large as expected.
   CHECK_LE(memory_length_, shared_memory_region_.GetSize());
@@ -441,7 +439,7 @@ void AudioInputDevice::AudioThreadCallback::MapSharedMemory() {
 }
 
 void AudioInputDevice::AudioThreadCallback::Process(uint32_t pending_data) {
-  TRACE_EVENT_BEGIN0("audio", "AudioInputDevice::AudioThreadCallback::Process");
+  TRACE_EVENT_BEGIN("audio", "AudioInputDevice::AudioThreadCallback::Process");
   // The shared memory represents parameters, size of the data buffer and the
   // actual data buffer containing audio data. Map the memory into this
   // structure and parse out parameters and the data area.
@@ -500,22 +498,21 @@ void AudioInputDevice::AudioThreadCallback::Process(uint32_t pending_data) {
 
   capture_callback_->Capture(audio_bus, capture_time, glitch_info,
                              buffer->params.volume);
-  if (confirm_reads_via_shmem_) {
-    // Use memory_order_release to create a memory barrier that ensures that
-    // callback_capture_->Capture() doesn't get moved to after has_unread_data
-    // has been changed, which would risk that the other side overwrites the
-    // memory while being used in Capture().
-    std::atomic_ref<uint32_t> has_unread_data(buffer->params.has_unread_data);
-    has_unread_data.store(0, std::memory_order_release);
-  }
+
+  // Use memory_order_release to create a memory barrier that ensures that
+  // callback_capture_->Capture() doesn't get moved to after has_unread_data
+  // has been changed, which would risk that the other side overwrites the
+  // memory while being used in Capture().
+  std::atomic_ref<uint32_t> has_unread_data(buffer->params.has_unread_data);
+  has_unread_data.store(0, std::memory_order_release);
 
   if (++current_segment_id_ >= total_segments_)
     current_segment_id_ = 0u;
 
-  TRACE_EVENT_END2(
-      "audio", "AudioInputDevice::AudioThreadCallback::Process",
-      "capture_time (ms)", (capture_time - base::TimeTicks()).InMillisecondsF(),
-      "capture_delay (ms)", (now_time - capture_time).InMillisecondsF());
+  TRACE_EVENT_END("audio", "capture_time (ms)",
+                  (capture_time - base::TimeTicks()).InMillisecondsF(),
+                  "capture_delay (ms)",
+                  (now_time - capture_time).InMillisecondsF());
 }
 
 void AudioInputDevice::AudioThreadCallback::OnSocketError() {
@@ -525,7 +522,7 @@ void AudioInputDevice::AudioThreadCallback::OnSocketError() {
 }
 
 bool AudioInputDevice::AudioThreadCallback::WillConfirmReadsViaShmem() const {
-  return confirm_reads_via_shmem_;
+  return true;
 }
 
 }  // namespace media

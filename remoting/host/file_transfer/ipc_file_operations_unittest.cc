@@ -139,7 +139,9 @@ class FakeDesktopSessionAgent : public mojom::DesktopSessionControl {
   // mojom::DesktopSessionControl implementation.
   void CreateVideoCapturer(int64_t desktop_display_id,
                            CreateVideoCapturerCallback callback) override;
-  void SetScreenResolution(const ScreenResolution& resolution) override;
+  void SetScreenResolution(const ScreenResolution& resolution,
+                           std::optional<int64_t> screen_id) override;
+  void SetVideoLayout(const protocol::VideoLayout& video_layout) override;
   void LockWorkstation() override;
   void InjectSendAttentionSequence() override;
   void InjectClipboardEvent(const protocol::ClipboardEvent& event) override;
@@ -153,6 +155,13 @@ class FakeDesktopSessionAgent : public mojom::DesktopSessionControl {
   void BeginFileWrite(const base::FilePath& file_path,
                       BeginFileWriteCallback callback) override;
   void SetHostCursorRenderedByClient() override;
+  void StartAudioInjector(
+      std::unique_ptr<IpcFifoBufferReader> audio_reader) override {}
+  void SetAudioInjectorSampleInfo(
+      const protocol::AudioSampleInfo& info,
+      SetAudioInjectorSampleInfoCallback callback) override {
+    std::move(callback).Run(true);
+  }
 
   // Binds the pending DesktopSessionControl receiver to |receiver_|.
   void Bind(
@@ -192,7 +201,11 @@ void FakeDesktopSessionAgent::CreateVideoCapturer(
     CreateVideoCapturerCallback callback) {}
 
 void FakeDesktopSessionAgent::SetScreenResolution(
-    const ScreenResolution& resolution) {}
+    const ScreenResolution& resolution,
+    std::optional<int64_t> screen_id) {}
+
+void FakeDesktopSessionAgent::SetVideoLayout(
+    const protocol::VideoLayout& video_layout) {}
 
 void FakeDesktopSessionAgent::LockWorkstation() {}
 

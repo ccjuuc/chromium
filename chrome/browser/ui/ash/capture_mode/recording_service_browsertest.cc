@@ -167,13 +167,13 @@ class RecordingServiceBrowserTest : public InProcessBrowserTest {
     // capture any audio and won't produce any audio frames. This will cause the
     // muxer to discard video frames if it expects audio frames but got none,
     // which may cause the produced webm file to be empty. See issues
-    // https://crbug.com/1151167 and https://crbug.com/1151418.
+    // https://crbug.com/40158187 and https://crbug.com/40158296.
     ash::CaptureModeTestApi().SetAudioRecordingMode(
         ash::AudioRecordingMode::kOff);
   }
 
   aura::Window* GetBrowserWindow() const {
-    return browser()->window()->GetNativeWindow();
+    return browser()->GetWindow()->GetNativeWindow();
   }
 
   ui::test::EventGenerator* GetEventGenerator() {
@@ -361,7 +361,7 @@ IN_PROC_BROWSER_TEST_F(RecordingServiceBrowserTest,
 IN_PROC_BROWSER_TEST_F(RecordingServiceBrowserTest,
                        MAYBE_InvalidDownloadsPath) {
   auto* download_prefs =
-      DownloadPrefs::FromBrowserContext(browser()->profile());
+      DownloadPrefs::FromBrowserContext(browser()->GetProfile());
   const base::FilePath removable_path =
       ash::CrosDisksClient::GetRemovableDiskMountPoint();
   const base::FilePath invalid_path =
@@ -388,7 +388,7 @@ IN_PROC_BROWSER_TEST_F(GifRecordingBrowserTest, SuccessfulEncodeDecode) {
   base::AddFeatureIdTagToTestResult(
       "screenplay-9c11ed80-9e97-482c-9562-450bd891732b");
 
-  aura::Window* browser_window = browser()->window()->GetNativeWindow();
+  aura::Window* browser_window = browser()->GetWindow()->GetNativeWindow();
   ash::CaptureModeTestApi test_api;
   test_api.SetRecordingType(ash::RecordingType::kGif);
   test_api.SetUserSelectedRegion(browser_window->GetRootWindow()->bounds());

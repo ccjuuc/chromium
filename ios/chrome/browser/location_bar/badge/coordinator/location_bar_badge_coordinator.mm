@@ -13,9 +13,10 @@
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/animated_scoped_fullscreen_disabler.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_updater.h"
-#import "ios/chrome/browser/intelligence/bwg/model/bwg_service.h"
-#import "ios/chrome/browser/intelligence/bwg/model/bwg_service_factory.h"
-#import "ios/chrome/browser/intelligence/bwg/utils/bwg_constants.h"
+#import "ios/chrome/browser/fullscreen/ui_bundled/scoped_fullscreen_disabler.h"
+#import "ios/chrome/browser/intelligence/bwg/model/gemini_browser_agent.h"
+#import "ios/chrome/browser/intelligence/bwg/model/gemini_service_factory.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_constants.h"
 #import "ios/chrome/browser/location_bar/badge/coordinator/location_bar_badge_coordinator_delegate.h"
 #import "ios/chrome/browser/location_bar/badge/coordinator/location_bar_badge_mediator.h"
 #import "ios/chrome/browser/location_bar/badge/coordinator/location_bar_badge_mediator_delegate.h"
@@ -24,17 +25,17 @@
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
-#import "ios/chrome/browser/shared/public/commands/bwg_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/contextual_panel_entrypoint_commands.h"
 #import "ios/chrome/browser/shared/public/commands/contextual_panel_entrypoint_iph_commands.h"
 #import "ios/chrome/browser/shared/public/commands/contextual_sheet_commands.h"
+#import "ios/chrome/browser/shared/public/commands/fullscreen_commands.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/location_bar_badge_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/omnibox_util.h"
 
 @interface LocationBarBadgeCoordinator () <
-    ContextualPanelEntrypointCommands,
     ContextualPanelEntrypointMediatorDelegate,
     LocationBarBadgeMediatorDelegate>
 @end
@@ -49,7 +50,9 @@
   std::unique_ptr<FullscreenUIUpdater> _locationBarBadgeFullscreenUIUpdater;
   // The AnimatedFullscreenDisabler to disable fullscreen momentarily as the
   // large entrypoint is shown.
-  std::unique_ptr<AnimatedScopedFullscreenDisabler> _animatedFullscreenDisabler;
+  std::unique_ptr<ScopedFullscreenDisabler> _fullscreenDisabler;
+  std::unique_ptr<AnimatedScopedFullscreenDisabler>
+      _legacyAnimatedFullscreenDisabler;
   // Command dispatcher.
   CommandDispatcher* _dispatcher;
   // Pref service.
@@ -62,8 +65,12 @@
   _viewController = [[LocationBarBadgeViewController alloc] init];
   _viewController.layoutGuideCenter = LayoutGuideCenterForBrowser(self.browser);
   _dispatcher = self.browser->GetCommandDispatcher();
-  _locationBarBadgeFullscreenUIUpdater = std::make_unique<FullscreenUIUpdater>(
-      FullscreenController::FromBrowser(self.browser), self.viewController);
+  if (!IsFullscreenRefactoringEnabled()) {
+    _locationBarBadgeFullscreenUIUpdater =
+        std::make_unique<FullscreenUIUpdater>(
+            FullscreenController::FromBrowser(self.browser),
+            self.viewController);
+  }
   feature_engagement::Tracker* tracker =
       feature_engagement::TrackerFactory::GetForProfile(self.profile);
   _prefService = self.browser->GetProfile()->GetPrefs();
@@ -71,7 +78,8 @@
       initWithWebStateList:self.browser->GetWebStateList()
                    tracker:tracker
                prefService:_prefService
-             geminiService:BwgServiceFactory::GetForProfile(self.profile)];
+             geminiService:GeminiServiceFactory::GetForProfile(self.profile)
+        geminiBrowserAgent:GeminiBrowserAgent::FromBrowser(self.browser)];
   _mediator.consumer = _viewController;
   _mediator.delegate = self;
   _viewController.mutator = _mediator;
@@ -80,11 +88,13 @@
   } else {
     [self attachContextualPanelEntrypoint];
   }
-  id<BWGCommands> BWGCommandHandler =
-      HandlerForProtocol(_dispatcher, BWGCommands);
-  _mediator.BWGCommandHandler = BWGCommandHandler;
-  [_dispatcher startDispatchingToTarget:_mediator
-                            forProtocol:@protocol(LocationBarBadgeCommands)];
+  id<GeminiCommands> geminiHandler =
+      HandlerForProtocol(_dispatcher, GeminiCommands);
+  _mediator.geminiHandler = geminiHandler;
+  if (!IsChromeNextIaEnabled()) {
+    [_dispatcher startDispatchingToTarget:_mediator
+                              forProtocol:@protocol(LocationBarBadgeCommands)];
+  }
 }
 
 - (void)stop {
@@ -99,12 +109,17 @@
   [_mediator disconnect];
   _mediator = nil;
   _locationBarBadgeFullscreenUIUpdater = nullptr;
-  _animatedFullscreenDisabler = nullptr;
+  _fullscreenDisabler = nullptr;
+  _legacyAnimatedFullscreenDisabler = nullptr;
 }
 
 - (void)addIncognitoBadgeViewController:
     (IncognitoBadgeViewController*)incognitoViewController {
   self.viewController.incognitoBadgeViewController = incognitoViewController;
+}
+
+- (void)setActive:(BOOL)active {
+  _mediator.active = active;
 }
 
 // TODO(crbug.com/454351425): Remove Contextual Panel pragma when
@@ -131,14 +146,21 @@
 }
 
 - (void)enableFullscreen {
-  _animatedFullscreenDisabler = nullptr;
+  _fullscreenDisabler = nullptr;
+  _legacyAnimatedFullscreenDisabler = nullptr;
 }
 
 - (void)disableFullscreen {
-  _animatedFullscreenDisabler =
-      std::make_unique<AnimatedScopedFullscreenDisabler>(
-          FullscreenController::FromBrowser(self.browser));
-  _animatedFullscreenDisabler->StartAnimation();
+  if (IsFullscreenRefactoringEnabled()) {
+    id<FullscreenCommands> handler = HandlerForProtocol(
+        self.browser->GetCommandDispatcher(), FullscreenCommands);
+    _fullscreenDisabler = std::make_unique<ScopedFullscreenDisabler>(handler);
+  } else {
+    _legacyAnimatedFullscreenDisabler =
+        std::make_unique<AnimatedScopedFullscreenDisabler>(
+            FullscreenController::FromBrowser(self.browser));
+    _legacyAnimatedFullscreenDisabler->StartAnimation();
+  }
 }
 
 - (BOOL)isBottomOmniboxActive {
@@ -169,16 +191,31 @@
   }
 }
 
+#pragma mark - LocationBarBadgeCommands
+
+- (void)updateBadgeConfig:(LocationBarBadgeConfiguration*)config {
+  CHECK(IsChromeNextIaEnabled());
+  [_mediator updateBadgeConfig:config];
+}
+
+- (void)updateColorForIPH {
+  CHECK(IsChromeNextIaEnabled());
+  [_mediator updateColorForIPH];
+}
+
+- (void)markDisplayedBadgeAsUnread:(BOOL)read {
+  CHECK(IsChromeNextIaEnabled());
+  [_mediator markDisplayedBadgeAsUnread:read];
+}
+
 #pragma mark - Private
 
 - (void)attachContextualPanelEntrypoint {
-  if (!IsContextualPanelEnabled()) {
-    return;
+  if (!IsChromeNextIaEnabled()) {
+    [_dispatcher
+        startDispatchingToTarget:self
+                     forProtocol:@protocol(ContextualPanelEntrypointCommands)];
   }
-
-  [_dispatcher
-      startDispatchingToTarget:self
-                   forProtocol:@protocol(ContextualPanelEntrypointCommands)];
   _mediator.contextualSheetHandler =
       HandlerForProtocol(_dispatcher, ContextualSheetCommands);
   _mediator.entrypointHelpHandler =
@@ -189,14 +226,13 @@
 // integrated with LocationBarBadgeMediator.
 // Creates a Contextual Panel entry point mediator.
 - (void)createContextualPanelEntryPointMediator {
-  if (!IsContextualPanelEnabled()) {
-    return;
-  }
   WebStateList* webStateList = self.browser->GetWebStateList();
 
-  [_dispatcher
-      startDispatchingToTarget:self
-                   forProtocol:@protocol(ContextualPanelEntrypointCommands)];
+  if (!IsChromeNextIaEnabled()) {
+    [_dispatcher
+        startDispatchingToTarget:self
+                     forProtocol:@protocol(ContextualPanelEntrypointCommands)];
+  }
 
   id<ContextualSheetCommands> contextualSheetHandler =
       HandlerForProtocol(_dispatcher, ContextualSheetCommands);

@@ -4,21 +4,31 @@
 
 #include "remoting/host/linux/gnome_remote_desktop_session.h"
 
+#include <signal.h>
+
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
 
+#include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_split.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/types/expected.h"
+#include "remoting/base/branding.h"
 #include "remoting/base/file_path_util_linux.h"
 #include "remoting/base/logging.h"
+#include "remoting/host/base/switches.h"
 #include "remoting/host/linux/dbus_interfaces/org_gnome_Mutter_RemoteDesktop.h"
 #include "remoting/host/linux/dbus_interfaces/org_gnome_Mutter_ScreenCast.h"
+#include "remoting/host/linux/ei_input_injector.h"
+#include "remoting/host/linux/ei_keyboard_layout_monitor.h"
 #include "remoting/host/linux/gnome_desktop_display_info_monitor.h"
+#include "remoting/host/linux/screen_saver_inhibitor.h"
 #include "remoting/proto/control.pb.h"
 
 namespace remoting {
@@ -38,21 +48,7 @@ constexpr ObjectPathCStr kScreenCastObjectPath = "/org/gnome/Mutter/ScreenCast";
 
 base::FilePath GetDisplayLayoutFilePath() {
   return (base::FilePath(
-      GetConfigDirectoryPath().Append(GetHostHash() + ".display_layout.pb")));
-}
-
-std::unique_ptr<protocol::VideoLayout> CreateDefaultLayout() {
-  auto default_layout = std::make_unique<protocol::VideoLayout>();
-  default_layout->set_pixel_type(
-      protocol::VideoLayout::PixelType::VideoLayout_PixelType_LOGICAL);
-  protocol::VideoTrackLayout* track = default_layout->add_video_track();
-  track->set_position_x(0);
-  track->set_position_y(0);
-  track->set_width(1280);
-  track->set_height(960);
-  track->set_x_dpi(96);
-  track->set_y_dpi(96);
-  return default_layout;
+      GetConfigDir().Append(GetHostHash() + ".display_layout.pb")));
 }
 
 }  // namespace
@@ -84,7 +80,11 @@ bool GnomeRemoteDesktopSession::IsRunningUnderGnome() {
   if (!xdg_current_desktop) {
     return true;
   }
-  return std::string_view{xdg_current_desktop} == "GNOME";
+  // XDG_CURRENT_DESKTOP is a colon-separated list of desktop names.
+  auto xdg_current_desktop_values = base::SplitString(
+      xdg_current_desktop, ":", base::WhitespaceHandling::TRIM_WHITESPACE,
+      base::SplitResult::SPLIT_WANT_NONEMPTY);
+  return std::ranges::contains(xdg_current_desktop_values, "GNOME");
 }
 
 // static
@@ -155,6 +155,18 @@ void GnomeRemoteDesktopSession::OnConnectionCreated(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   connection_ = std::move(connection);
 
+  const auto* command_line = base::CommandLine::ForCurrentProcess();
+  if (command_line->GetSwitchValueASCII(kProcessTypeSwitchName) ==
+      kProcessTypeDesktop) {
+    // For the multi-process Linux host, the desktop process is always run under
+    // a GDM remote display, so it is guaranteed to be headless.
+    // TODO: yuweih - This needs to be changed if we want to support custom
+    // sessions, or remoting the local session (if it becomes possible) in
+    // multi-process mode.
+    OnHeadlessDetection(/*is_headless=*/true);
+    return;
+  }
+
   headless_detector_.Start(
       connection_,
       base::BindOnce(&GnomeRemoteDesktopSession::OnHeadlessDetection,
@@ -205,14 +217,32 @@ void GnomeRemoteDesktopSession::OnHeadlessDetection(bool is_headless) {
 void GnomeRemoteDesktopSession::OnSessionCreated(std::tuple<ObjectPath> args) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   std::tie(session_path_) = args;
-  // TODO(jamiewalch): While we don't close the session ourselves, the Mutter
-  // remote desktop has a Close signal, which might be fired when the session is
-  // closed externally. See if we need to do something with it.
+
+  session_closed_signal_ =
+      connection_
+          .SignalSubscribe<org_gnome_Mutter_RemoteDesktop_Session::Closed>(
+              kRemoteDesktopBusName, session_path_,
+              base::BindRepeating(&GnomeRemoteDesktopSession::OnSessionClosed,
+                                  weak_ptr_factory_.GetWeakPtr()));
 
   connection_.GetProperty<org_gnome_Mutter_RemoteDesktop_Session::SessionId>(
       kRemoteDesktopBusName, session_path_,
       CheckResultAndContinue(&GnomeRemoteDesktopSession::OnGotSessionId,
                              "Failed to get session ID"));
+}
+
+void GnomeRemoteDesktopSession::OnSessionClosed(std::tuple<>) {
+  // This can happen if the user clicks on GNOME's taskbar button to stop the
+  // recording session.
+  HOST_LOG << "The GNOME remote desktop session was closed externally. "
+              "Restarting the host process now.";
+
+  // Raising SIGTERM causes the host process to run its signal-handler, which
+  // cleanly disconnects the user and shuts down the process. The process will
+  // be automatically restarted and the user can reconnect.
+  // TODO: crbug.com/465280349 - Recreate the GNOME remote desktop session and
+  // streams without disconnecting the user.
+  raise(SIGTERM);
 }
 
 void GnomeRemoteDesktopSession::OnGotSessionId(std::string session_id) {
@@ -242,11 +272,17 @@ void GnomeRemoteDesktopSession::OnScreenCastSessionCreated(
 
 void GnomeRemoteDesktopSession::OnSessionStarted(std::tuple<>) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ConnectToEIS(CheckResultAndContinue(&GnomeRemoteDesktopSession::OnEisFd,
+                                      "Failed to get EIS FD"));
+}
+
+void GnomeRemoteDesktopSession::ConnectToEIS(
+    GDBusConnectionRef::CallCallback<
+        std::pair<std::tuple<GDBusFdList::Handle>, GDBusFdList>> callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   connection_.Call<org_gnome_Mutter_RemoteDesktop_Session::ConnectToEIS>(
       kRemoteDesktopBusName, session_path_,
-      std::tuple(gvariant::EmptyArrayOf<"{sv}">()),
-      CheckResultAndContinue(&GnomeRemoteDesktopSession::OnEisFd,
-                             "Failed to get EIS FD"));
+      std::tuple(gvariant::EmptyArrayOf<"{sv}">()), std::move(callback));
 }
 
 void GnomeRemoteDesktopSession::OnEisFd(
@@ -263,18 +299,47 @@ void GnomeRemoteDesktopSession::OnEisFd(
   EiSenderSession::CreateWithFd(
       std::move(eis_fd),
       CheckResultAndContinue(&GnomeRemoteDesktopSession::OnEiSession,
-                             "Failed to create EI session"));
+                             "Failed to create EI session"),
+      base::BindOnce(&GnomeRemoteDesktopSession::OnEiSessionDisconnected,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
+void GnomeRemoteDesktopSession::OnEiSessionDisconnected() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  HOST_LOG << "EI session disconnected, attempting to reconnect...";
+  ConnectToEIS(base::BindOnce(
+      [](base::WeakPtr<GnomeRemoteDesktopSession> that,
+         base::expected<std::pair<std::tuple<GDBusFdList::Handle>, GDBusFdList>,
+                        Loggable> result) {
+        if (!that) {
+          return;
+        }
+        if (result.has_value()) {
+          that->OnEisFd(std::move(result).value());
+        } else {
+          // Reconnect failed. Since the session is unusable in this state,
+          // terminate the host process and hope that restarting it will
+          // fix the problem.
+          LOG(FATAL) << "Failed to reconnect to EI session: " << result.error();
+        }
+      },
+      weak_ptr_factory_.GetWeakPtr()));
 }
 
 void GnomeRemoteDesktopSession::OnEiSession(
     std::unique_ptr<EiSenderSession> ei_session) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  ei_session_ = std::move(ei_session);
 
-  display_config_subscription_ = display_config_monitor_.AddCallback(
-      base::BindRepeating(&GnomeRemoteDesktopSession::OnDisplayConfigReceived,
-                          weak_ptr_factory_.GetWeakPtr()),
-      /*call_with_current_config=*/true);
+  if (ei_session_) {
+    ei_session_->TransferStateTo(*ei_session);
+    ei_session_ = std::move(ei_session);
+  } else {
+    ei_session_ = std::move(ei_session);
+    display_config_subscription_ = display_config_monitor_.AddCallback(
+        base::BindRepeating(&GnomeRemoteDesktopSession::OnDisplayConfigReceived,
+                            weak_ptr_factory_.GetWeakPtr()),
+        /*call_with_current_config=*/true);
+  }
 }
 
 void GnomeRemoteDesktopSession::OnDisplayConfigReceived(
@@ -293,8 +358,42 @@ void GnomeRemoteDesktopSession::OnDisplayConfigReceived(
   // on a physical machine with physical monitors.
   // TODO: yuweih - see what to do for ME2ME on a physical machine.
   if (config.monitors.empty()) {
-    persistent_display_layout_manager_.Start(CreateDefaultLayout());
+    persistent_display_layout_manager_.Start(
+        base::BindOnce(&GnomeRemoteDesktopSession::OnPersistentLayoutLoaded,
+                       weak_ptr_factory_.GetWeakPtr()));
+  } else {
+    initialization_state_ = InitializationState::kInitialized;
+    init_callbacks_.Notify(base::ok());
+    DCHECK(init_callbacks_.empty());
   }
+
+  if (is_headless_) {
+    // If the session is headless, inhibit screen saver all the time so that
+    // users do not need to unlock when they reconnect CRD.
+    screen_saver_inhibitor_ = std::make_unique<ScreenSaverInhibitor>(
+        connection_, /*reason_for_inhibit=*/"Headless remote desktop session");
+  }
+}
+
+void GnomeRemoteDesktopSession::OnPersistentLayoutLoaded() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // Block and queue up any further display changes for a short period to avoid
+  // a race condition in GNOME/Mutter during session startup.
+  // See: https://gitlab.gnome.org/GNOME/mutter/-/issues/4642
+  // This has been disabled because of http://crbug.com/487749302#comment12. The
+  // delay is not needed on the single-process host because we don't persist
+  // display layouts across session restarts, and on multi-process host, the
+  // problem doesn't seem to reproduce any more.
+  // TODO: crbug.com/487749302 - either remove this or change it back to 6
+  // seconds.
+  desktop_resizer_.BlockAndQueueDisplayChanges();
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(&GnomeDesktopResizer::UnblockAndFlushDisplayChanges,
+                     desktop_resizer_.GetWeakPtr()),
+      base::Seconds(0));
+
   initialization_state_ = InitializationState::kInitialized;
   init_callbacks_.Notify(base::ok());
   DCHECK(init_callbacks_.empty());

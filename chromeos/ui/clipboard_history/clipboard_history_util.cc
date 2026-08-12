@@ -9,11 +9,12 @@
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chromeos/crosapi/mojom/clipboard_history.mojom.h"
 #include "chromeos/ui/base/file_icon_util.h"
+#include "chromeos/ui/clipboard_history/clipboard_history_types.h"
 #include "chromeos/ui/vector_icons/vector_icons.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/ui_base_features.h"
 #include "url/gurl.h"
 
 namespace gfx {
@@ -65,42 +66,47 @@ void SetPasteClipboardItemByIdImpl(PasteClipboardItemByIdImpl impl) {
   old_impl = impl;
 }
 
-void PasteClipboardItemById(
-    const base::UnguessableToken& id,
-    int event_flags,
-    crosapi::mojom::ClipboardHistoryControllerShowSource paste_source) {
+void PasteClipboardItemById(const base::UnguessableToken& id,
+                            int event_flags,
+                            ShowSource paste_source) {
   // `SetPasteClipboardItemByIdImpl()` may not have been called in unit tests.
   if (auto& paste_callback = GetPasteClipboardItemByIdImpl()) {
     paste_callback.Run(id, event_flags, paste_source);
   }
 }
 
-ui::ImageModel GetIconForDescriptor(
-    const crosapi::mojom::ClipboardHistoryItemDescriptor& descriptor) {
+ui::ImageModel GetIconForDescriptor(const ItemDescriptor& descriptor) {
   const gfx::VectorIcon* icon = nullptr;
   switch (descriptor.display_format) {
-    case crosapi::mojom::ClipboardHistoryDisplayFormat::kText:
+    case DisplayFormat::kText:
       // TODO(http://b/275629173): Consider a new display format for URLs.
-      icon = IsUrl(descriptor.display_text) ? &vector_icons::kLinkIcon
-                                            : &kTextIcon;
+      icon = IsUrl(descriptor.display_text)
+                 ? &(::features::IsRoundedIconsEnabled()
+                         ? vector_icons::kLinkIcon
+                         : vector_icons::kLinkOldIcon)
+                 : &kTextIcon;
       break;
-    case crosapi::mojom::ClipboardHistoryDisplayFormat::kPng:
+    case DisplayFormat::kPng:
       icon = &kFiletypeImageIcon;
       break;
-    case crosapi::mojom::ClipboardHistoryDisplayFormat::kHtml:
-      icon = &vector_icons::kCodeIcon;
+    case DisplayFormat::kHtml:
+      icon =
+          &(::features::IsRoundedIconsEnabled() ? vector_icons::kCodeIcon
+                                                : vector_icons::kCodeOldIcon);
       break;
-    case crosapi::mojom::ClipboardHistoryDisplayFormat::kFile: {
+    case DisplayFormat::kFile: {
       // If `display_text` is the name of a single file, use the icon
       // corresponding to the file type, if any; otherwise, use a generic
       // multi-file icon.
       icon = descriptor.file_count == 1
                  ? &chromeos::GetIconForPath(base::FilePath(
                        base::UTF16ToUTF8(descriptor.display_text)))
-                 : &vector_icons::kContentCopyIcon;
+                 : &(::features::IsRoundedIconsEnabled()
+                         ? vector_icons::kContentCopyIcon
+                         : vector_icons::kContentCopyOldIcon);
       break;
     }
-    case crosapi::mojom::ClipboardHistoryDisplayFormat::kUnknown:
+    case DisplayFormat::kUnknown:
       NOTREACHED();
   }
 

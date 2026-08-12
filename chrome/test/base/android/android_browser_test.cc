@@ -4,10 +4,16 @@
 
 #include "chrome/test/base/android/android_browser_test.h"
 
+#include <ranges>
+#include <vector>
+
 #include "base/command_line.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/string_util.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/test_launcher_utils.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
@@ -80,8 +86,17 @@ bool AndroidBrowserTest::SetUpUserDataDirectory() {
 void AndroidBrowserTest::PreRunTestOnMainThread() {}
 
 void AndroidBrowserTest::PostRunTestOnMainThread() {
-  for (TabModel* model : TabModelList::models()) {
-    bool isOtrTabModel = model->IsOffTheRecord();
+  // Closing all tabs in a TabModel can result in it removing itself from
+  // TabModelList::models(), so we must copy the list first.
+  std::vector<raw_ptr<TabModel, VectorExperimental>> models =
+      TabModelList::models();
+  for (TabModel* model : models) {
+    // Ensure this model hasn't already been removed from the main model list.
+    if (!std::ranges::contains(TabModelList::models(), model)) {
+      continue;
+    }
+    CHECK(model);
+    bool is_otr_tab_model = model->IsOffTheRecord();
     if (model->GetTabCount()) {
       model->ForceCloseAllTabs();
     }
@@ -90,7 +105,7 @@ void AndroidBrowserTest::PostRunTestOnMainThread() {
     // ForceCloseAllTabs() above, so we can't call TabModel::GetTabCount()
     // again for off-the-record TabModel.
     // Otherwise, we'll dereference a non-null, but invalid pointer.
-    if (!isOtrTabModel) {
+    if (!is_otr_tab_model) {
       ASSERT_EQ(0, model->GetTabCount());
     }
   }
@@ -116,11 +131,27 @@ base::FilePath AndroidBrowserTest::GetChromeTestDataDir() const {
   return chrome_test_utils::GetChromeTestDataDir();
 }
 
+BrowserWindowInterface* AndroidBrowserTest::GetBrowserWindowInterface() const {
+  std::vector<BrowserWindowInterface*> all_browsers =
+      GetAllBrowserWindowInterfaces();
+  return all_browsers.empty() ? nullptr : all_browsers.front();
+}
+
 Profile* AndroidBrowserTest::GetProfile() const {
   for (TabModel* model : TabModelList::models()) {
     if (model->GetProfile()) {
       return model->GetProfile();
     }
   }
+  return nullptr;
+}
+
+TabListInterface* AndroidBrowserTest::GetTabListInterface() const {
+  for (TabModel* model : TabModelList::models()) {
+    if (model->GetProfile() == GetProfile()) {
+      return model;
+    }
+  }
+  ADD_FAILURE() << "No TabModel found for the current profile.";
   return nullptr;
 }

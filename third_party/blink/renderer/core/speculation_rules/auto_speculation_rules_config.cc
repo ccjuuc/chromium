@@ -11,6 +11,7 @@
 #include "third_party/blink/renderer/platform/json/json_parser.h"
 #include "third_party/blink/renderer/platform/json/json_values.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
@@ -40,19 +41,18 @@ AutoSpeculationRulesConfig::AutoSpeculationRulesConfig(
     for (wtf_size_t i = 0; i < framework_to_speculation_rules->size(); ++i) {
       const JSONObject::Entry entry = framework_to_speculation_rules->at(i);
 
-      bool key_is_int = false;
-      const int key_as_int = entry.first.ToIntStrict(&key_is_int);
-      if (!key_is_int) {
+      const auto key_as_int = StringToIntStrict(entry.first);
+      if (!key_as_int) {
         LOG(ERROR) << "Non-integer key " << entry.first
                    << " inside framework_to_speculation_rules";
         continue;
       }
 
       const mojom::JavaScriptFramework framework =
-          static_cast<mojom::JavaScriptFramework>(key_as_int);
+          static_cast<mojom::JavaScriptFramework>(*key_as_int);
       const bool value_is_known = IsKnownEnumValue(framework);
       if (!value_is_known) {
-        LOG(ERROR) << "Unknown integer key " << key_as_int
+        LOG(ERROR) << "Unknown integer key " << *key_as_int
                    << " inside framework_to_speculation_rules";
         continue;
       }
@@ -98,7 +98,7 @@ void AutoSpeculationRulesConfig::ParseUrlMatchPatternConfig(
         continue;
       }
 
-      if (!entry.first.ContainsOnlyASCIIOrEmpty()) {
+      if (!entry.first.ContainsOnlyAsciiOrEmpty()) {
         LOG(ERROR) << "Non-ASCII key " << entry.first << " inside "
                    << json_key_name;
         continue;
@@ -115,7 +115,7 @@ const AutoSpeculationRulesConfig& AutoSpeculationRulesConfig::GetInstance() {
 
   DEFINE_STATIC_LOCAL(
       AutoSpeculationRulesConfig, instance,
-      (String::FromUTF8(base::GetFieldTrialParamByFeatureAsString(
+      (String::FromUtf8(base::GetFieldTrialParamByFeatureAsString(
           features::kAutoSpeculationRules, "config", "{}"))));
 
   if (g_override) {

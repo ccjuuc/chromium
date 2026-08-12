@@ -5,6 +5,7 @@
 #include "media/capture/video/mappable_shared_image_utils.h"
 
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "media/capture/video/video_capture_gpu_channel_host.h"
 
 namespace media {
@@ -45,7 +46,7 @@ VideoCaptureDevice::Client::ReserveResult AllocateNV12SharedImage(
   multiplanar_si_format.SetPrefersExternalSampler();
 #endif
   *out_shared_image = sii->CreateSharedImage(
-      {multiplanar_si_format, buffer_size, gfx::ColorSpace(),
+      {multiplanar_si_format, buffer_size, gfx::ColorSpace::CreateREC601(),
        gpu::SharedImageUsageSet(si_usage), "AllocatedNV12SharedImage"},
       gpu::kNullSurfaceHandle,
       gfx::BufferUsage::VEA_READ_CAMERA_AND_CPU_READ_WRITE,

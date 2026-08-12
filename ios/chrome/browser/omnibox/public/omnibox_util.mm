@@ -22,9 +22,6 @@ const CGFloat kSymbolLocationBarPointSize = 10;
 
 OmniboxSuggestionIconType GetOmniboxSuggestionIconTypeForAutocompleteMatchType(
     AutocompleteMatchType::Type type) {
-  // TODO(crbug.com/40716245): Handle trending zero-prefix suggestions by
-  // checking the match subtype similar to AutocompleteMatch::GetVectorIcon().
-
   switch (type) {
     case AutocompleteMatchType::BOOKMARK_TITLE:
     case AutocompleteMatchType::CLIPBOARD_URL:
@@ -89,7 +86,7 @@ GetOmniboxSuggestionIconTypeForSuggestTemplateInfoIconType(
     omnibox::SuggestTemplateInfo::IconType type) {
   // Update this assertion and the switch below whenever values are added.
   static_assert(omnibox::SuggestTemplateInfo::IconType_MAX ==
-                omnibox::SuggestTemplateInfo::SUB_ARROW_RIGHT);
+                omnibox::SuggestTemplateInfo::DRAFT_SPARK);
   switch (type) {
     case omnibox::SuggestTemplateInfo_IconType_HISTORY:
       return OmniboxSuggestionIconType::kSearchHistory;
@@ -102,6 +99,19 @@ GetOmniboxSuggestionIconTypeForSuggestTemplateInfoIconType(
     case omnibox::SuggestTemplateInfo_IconType_SUB_ARROW_RIGHT:
       // TODO(crbug.com/437177158): Replace with the correct symbol when it's
       // available.
+      return OmniboxSuggestionIconType::kSearch;
+    case omnibox::SuggestTemplateInfo_IconType_GLOBE_WITH_SEARCH_LOOP:
+    case omnibox::SuggestTemplateInfo_IconType_BANANA:
+      return OmniboxSuggestionIconType::kSearch;
+    case omnibox::SuggestTemplateInfo_IconType_NOTES_SPARK:
+      return OmniboxSuggestionIconType::kNotesSpark;
+    case omnibox::SuggestTemplateInfo_IconType_DRAFT_SPARK:
+      // TODO(crbug.com/486698515): Replace with the correct symbol when it's
+      // available.
+      return OmniboxSuggestionIconType::kSearch;
+    case omnibox::SuggestTemplateInfo_IconType_FAVICON:
+      return OmniboxSuggestionIconType::kDefaultFavicon;
+    case omnibox::SuggestTemplateInfo_IconType_ICON_TYPE_UNSPECIFIED:
       return OmniboxSuggestionIconType::kSearch;
     default:
       return OmniboxSuggestionIconType::kSearch;
@@ -119,17 +129,11 @@ UIImage* GetOmniboxSuggestionIconForSuggestTemplateInfoIconType(
 
 // Returns the asset with "always template" rendering mode.
 UIImage* GetLocationBarSecurityIcon(LocationBarSecurityIconType iconType) {
-  NSString* name = GetLocationBarSecuritySymbolName(iconType);
-  if (!name) {
+  Symbol symbol = GetLocationBarSecuritySymbol(iconType);
+  if (symbol == SymbolNone) {
     return nil;
   }
-
-  if (iconType == LocationBarSecurityIconType::DANGEROUS) {
-    return CustomSymbolTemplateWithPointSize(name, kSymbolLocationBarPointSize);
-  } else {
-    return DefaultSymbolTemplateWithPointSize(name,
-                                              kSymbolLocationBarPointSize);
-  }
+  return SymbolTemplateWithPointSize(symbol, kSymbolLocationBarPointSize);
 }
 
 // Converts the `security_level` to an appropriate security icon type.
@@ -159,6 +163,6 @@ UIImage* GetLocationBarSecurityIconForSecurityState(
 }
 
 UIImage* GetLocationBarOfflineIcon() {
-  return DefaultSymbolTemplateWithPointSize(kDownloadPromptFillSymbol,
-                                            kSymbolLocationBarPointSize);
+  return SymbolTemplateWithPointSize(SymbolDownloadPromptFill,
+                                     kSymbolLocationBarPointSize);
 }

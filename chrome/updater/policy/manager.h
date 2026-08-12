@@ -10,7 +10,6 @@
 #include <vector>
 
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "chrome/updater/constants.h"
 
@@ -31,6 +30,8 @@ class UpdatesSuppressedTimes {
   // Returns true if and only if the `hour`:`minute` wall clock time falls
   // within this suppression period.
   bool contains(int hour, int minute) const;
+
+  std::string ToString() const;
 
   int start_hour_ = kPolicyNotSet;
   int start_minute_ = kPolicyNotSet;

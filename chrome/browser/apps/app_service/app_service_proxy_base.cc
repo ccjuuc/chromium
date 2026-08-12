@@ -13,21 +13,24 @@
 #include "base/check.h"
 #include "base/check_deref.h"
 #include "base/check_is_test.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "chrome/browser/apps/app_service/app_icon_source.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/browser_app_launcher.h"
 #include "chrome/browser/apps/app_service/metrics/app_service_metrics.h"
 #include "chrome/browser/apps/app_service/publisher.h"
+#include "chrome/browser/apps/app_service/publisher_host.h"
+#include "chrome/browser/apps/app_service/publisher_host_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/web_applications/link_capturing_features.h"
+#include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/browser/web_applications/web_app_registrar.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/app_update.h"
-#include "components/services/app_service/public/cpp/features.h"
 #include "components/services/app_service/public/cpp/icon_effects.h"
 #include "components/services/app_service/public/cpp/intent.h"
 #include "components/services/app_service/public/cpp/intent_filter.h"
@@ -123,6 +126,8 @@ AppServiceProxyBase::AppServiceProxyBase(
       profile_(profile) {
   preferred_apps_impl_ = std::make_unique<apps::PreferredAppsImpl>(
       this, profile ? profile->GetPath() : base::FilePath());
+  preferred_apps_impl_->SetLongestPrefixMatchEnabled(
+      apps::features::IsNavigationCapturingOnByDefault());
 }
 
 AppServiceProxyBase::~AppServiceProxyBase() = default;
@@ -143,6 +148,8 @@ void AppServiceProxyBase::ReinitializeForTesting(
       this, profile ? profile->GetPath() : base::FilePath(),
       std::move(read_completed_for_testing),
       std::move(write_completed_for_testing));
+  preferred_apps_impl_->SetLongestPrefixMatchEnabled(
+      apps::features::IsNavigationCapturingOnByDefault());
 
   publishers_.clear();
   Initialize();
@@ -172,12 +179,22 @@ void AppServiceProxyBase::Initialize() {
   // Make the chrome://app-icon/ resource available.
   content::URLDataSource::Add(profile_,
                               std::make_unique<apps::AppIconSource>(profile_));
+
+  publisher_host_ = publisher_host_factory_->CreatePublisherHost(this);
 }
 
 Publisher* AppServiceProxyBase::GetPublisher(AppType app_type) {
   auto it = publishers_.find(app_type);
   return it == publishers_.end() ? nullptr : it->second;
 }
+
+// In ChromeOS, this is defined in AppServiceProxyAsh.
+#if !BUILDFLAG(IS_CHROMEOS)
+bool AppServiceProxyBase::MaybeShowLaunchPreventionDialog(
+    const apps::AppUpdate& update) {
+  return false;
+}
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 apps::AppRegistryCache& AppServiceProxyBase::AppRegistryCache() {
   return app_registry_cache_;
@@ -209,7 +226,7 @@ void AppServiceProxyBase::OnSupportedLinksPreferenceChanged(
     const std::string& app_id,
     bool open_in_app) {
   AppType app_type = AppRegistryCache().GetAppType(app_id);
-  if (!base::Contains(publishers_, app_type)) {
+  if (!publishers_.contains(app_type)) {
     return;
   }
 
@@ -330,12 +347,12 @@ void AppServiceProxyBase::LaunchAppWithIntent(const std::string& app_id,
                                             const AppUpdate& update) mutable {
     auto* publisher = GetPublisher(update.AppType());
     if (!publisher) {
-      std::move(callback).Run(LaunchResult(State::kFailed));
+      std::move(callback).Run(LaunchResult::kFailed);
       return;
     }
 
     if (MaybeShowLaunchPreventionDialog(update)) {
-      std::move(callback).Run(LaunchResult(State::kFailed));
+      std::move(callback).Run(LaunchResult::kFailed);
       return;
     }
 
@@ -374,7 +391,7 @@ void AppServiceProxyBase::LaunchAppWithParams(AppLaunchParams&& params,
   auto app_type = app_registry_cache_.GetAppType(params.app_id);
   auto* publisher = GetPublisher(app_type);
   if (!publisher) {
-    std::move(callback).Run(LaunchResult());
+    std::move(callback).Run(LaunchResult::kFailed);
     return;
   }
 
@@ -382,7 +399,7 @@ void AppServiceProxyBase::LaunchAppWithParams(AppLaunchParams&& params,
       params.app_id,
       [this, &params, &callback, &publisher](const apps::AppUpdate& update) {
         if (MaybeShowLaunchPreventionDialog(update)) {
-          std::move(callback).Run(LaunchResult());
+          std::move(callback).Run(LaunchResult::kFailed);
           return;
         }
         auto launch_source = params.launch_source;
@@ -596,6 +613,22 @@ void AppServiceProxyBase::SetSupportedLinksPreference(
     IntentFilters all_link_filters) {
   DCHECK(!app_id.empty());
 
+  // If the app is a user-installed Web App, we must ensure it cannot be set
+  // as preferred if a non-web app (such as an ARC app) or a System Web App
+  // already captures the same link space. Abort designation if a conflicting
+  // non-web/system app is currently preferred.
+  if (apps::features::IsNavigationCapturingOnByDefault() &&
+      IsNonSystemWebapp(app_id)) {
+    base::flat_set<std::string> overlapping_apps =
+        preferred_apps_impl_->preferred_apps_list().FindPreferredAppsForFilters(
+            app_id, all_link_filters);
+    for (const auto& entry_app_id : overlapping_apps) {
+      if (!IsNonSystemWebapp(entry_app_id)) {
+        return;
+      }
+    }
+  }
+
   preferred_apps_impl_->SetSupportedLinksPreference(
       app_id, std::move(all_link_filters));
 }
@@ -675,8 +708,8 @@ void AppServiceProxyBase::PerformPostUninstallTasks(
     UninstallSource uninstall_source) {}
 
 void AppServiceProxyBase::OnLaunched(LaunchCallback callback,
-                                     LaunchResult&& launch_result) {
-  std::move(callback).Run(std::move(launch_result));
+                                     LaunchResult launch_result) {
+  std::move(callback).Run(launch_result);
 }
 
 bool AppServiceProxyBase::ShouldReadIcons(AppType app_type) {
@@ -695,6 +728,88 @@ IntentLaunchInfo AppServiceProxyBase::CreateIntentLaunchInfo(
       apps_util::IsGenericFileHandler(intent, filter);
   entry.is_file_extension_match = filter->IsFileExtensionsFilter();
   return entry;
+}
+
+bool AppServiceProxyBase::IsNonSystemWebapp(const std::string& app_id) {
+  if (AppRegistryCache().GetAppType(app_id) != AppType::kWeb) {
+    return false;
+  }
+  auto* provider = web_app::WebAppProvider::GetForWebApps(profile_);
+  if (!provider) {
+    return false;
+  }
+  // Check if the app is installed in the Web App Database. If not, it is
+  // not considered a valid user-installed web app for coexistence checks.
+  const web_app::WebApp* web_app =
+      provider->registrar_unsafe().GetAppById(app_id);
+  return web_app && !web_app->IsSystemApp();
+}
+
+bool AppServiceProxyBase::AppScopesMatchForUserLinkCapturing(
+    const std::string& app_id1,
+    const std::string& app_id2) {
+  auto* provider = web_app::WebAppProvider::GetForWebApps(profile_);
+  if (!provider) {
+    return false;
+  }
+  return provider->registrar_unsafe().AppScopesMatchForUserLinkCapturing(
+      app_id1, app_id2);
+}
+
+bool AppServiceProxyBase::QueryConflict(const std::string& first_app_id,
+                                        const IntentFilterPtr& first_filter,
+                                        const std::string& second_app_id,
+                                        const IntentFilterPtr& second_filter) {
+  if (!apps::features::IsNavigationCapturingOnByDefault()) {
+    return true;
+  }
+  // If both apps are non-system Web Apps, we check if their scopes match
+  // exactly. If they don't match exactly (e.g., one is nested inside the
+  // other), then we return false (meaning no conflict, they are allowed to
+  // co-exist).
+  //
+  // Standard web apps can co-exist this way. However, System Web Apps (SWAs)
+  // are kept on the traditional strict isolation path by treating them as
+  // conflicts (returning true on overlap).
+  if (IsNonSystemWebapp(first_app_id) && IsNonSystemWebapp(second_app_id)) {
+    return AppScopesMatchForUserLinkCapturing(first_app_id, second_app_id);
+  }
+  return true;
+}
+
+bool AppServiceProxyBase::IsWebAppInExtendedScope(
+    const GURL& url,
+    const std::string& app_id) const {
+  // Do not "enable" comparison of scope extensions if navigation capturing is
+  // not on-by-default.
+  if (!apps::features::IsNavigationCapturingOnByDefault()) {
+    return false;
+  }
+  // If needed, this code could instead be a method on the apps::AppPublisher
+  // interface, which is a better delegation of responsibilities, but it seems
+  // fine to have it here so this complexity doesn't have to be exposed to the
+  // subclasses.
+  std::optional<AppUpdate> update = app_registry_cache_.GetAppUpdate(app_id);
+  // Return early if the app is not a PWA, to account for non-web apps to not go
+  // through the scope extensions comparison flow.
+  if (!update.has_value() || update->AppType() != AppType::kWeb) {
+    return false;
+  }
+
+  auto* provider = web_app::WebAppProvider::GetForWebApps(profile_);
+  if (!provider) {
+    return false;
+  }
+  std::optional<web_app::WebAppScope> scope =
+      provider->registrar_unsafe().GetEffectiveScope(app_id);
+  if (!scope) {
+    return false;
+  }
+
+  // Ensure that the app is ONLY in the PWA's scope extensions and not in the
+  // primary scope of the PWA.
+  return scope->GetScopeScore(url, {.only_consider_scope_extensions = true}) >
+         0;
 }
 
 IntentLaunchInfo::IntentLaunchInfo() = default;

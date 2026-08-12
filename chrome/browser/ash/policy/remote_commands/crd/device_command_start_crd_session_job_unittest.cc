@@ -8,6 +8,7 @@
 #include <optional>
 #include <utility>
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/check_deref.h"
 #include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
@@ -30,7 +31,6 @@
 #include "chrome/browser/ash/policy/remote_commands/user_session_type_test_util.h"
 #include "chrome/browser/ash/settings/device_settings_test_helper.h"
 #include "chrome/browser/prefs/browser_prefs.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/ash/services/network_config/in_process_instance.h"
@@ -55,7 +55,7 @@ using remoting::features::kAutoApproveEnterpriseSharedSessions;
 using remoting::features::kEnableCrdSharedSessionToUnattendedDevice;
 using test::TestSessionType;
 
-using Payload = base::Value::Dict;
+using Payload = base::DictValue;
 
 namespace em = ::enterprise_management;
 
@@ -292,7 +292,9 @@ class DeviceCommandStartCrdSessionJobTest : public ash::DeviceSettingsTestBase {
   FakeStartCrdSessionJobDelegate& delegate() { return delegate_; }
 
   DeviceCommandStartCrdSessionJob CreateJob() {
-    return DeviceCommandStartCrdSessionJob{delegate_, robot_account_id_};
+    return DeviceCommandStartCrdSessionJob{
+        TestingBrowserProcess::GetGlobal()->local_state(), delegate_,
+        robot_account_id_};
   }
 
   Result RunJobAndWaitForResult(const Payload& payload = Payload()) {
@@ -330,19 +332,19 @@ class DeviceCommandStartCrdSessionJobTest : public ash::DeviceSettingsTestBase {
 
   void SetKioskTroubleshootingPolicyValue(bool enabled) {
     ASSERT_TRUE(profile_);
-    profile_->GetPrefs()->SetBoolean(prefs::kKioskTroubleshootingToolsEnabled,
-                                     enabled);
+    profile_->GetPrefs()->SetBoolean(
+        ash::prefs::kKioskTroubleshootingToolsEnabled, enabled);
   }
 
   void SetDeviceAllowEnterpriseRemoteAccessPolicyValue(bool enabled) {
     TestingBrowserProcess::GetGlobal()->local_state()->SetBoolean(
-        prefs::kDeviceAllowEnterpriseRemoteAccessConnections, enabled);
+        ash::prefs::kDeviceAllowEnterpriseRemoteAccessConnections, enabled);
   }
 
   void SetRemoteAccessHostAllowEnterpriseRemoteSupportConnections(
       bool enabled) {
     TestingBrowserProcess::GetGlobal()->local_state()->SetBoolean(
-        prefs::kRemoteAccessHostAllowEnterpriseRemoteSupportConnections,
+        ash::prefs::kRemoteAccessHostAllowEnterpriseRemoteSupportConnections,
         enabled);
   }
 

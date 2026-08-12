@@ -7,7 +7,7 @@
 
 #include <optional>
 
-#include "chrome/browser/actor/shared_types.h"
+#include "components/actor/core/shared_types.h"
 
 namespace actor::ui {
 
@@ -20,9 +20,13 @@ struct ActorOverlayState {
   // Whether or not the border glow should be visible.
   bool border_glow_visible = false;
   // A magic mouse click was triggered.
+  // Note: This must be false if `mouse_target` is set. Movement and clicking
+  // cannot happen in the same state update.
+  // TODO(crbug.com/422539773): Consider making mouse_down and mouse_target
+  // represented as a union.
   bool mouse_down = false;
   // The target at which the magic mouse should be over.
-  std::optional<gfx::Point> mouse_target = std::nullopt;
+  std::optional<gfx::Point> mouse_target;
 
   bool operator==(const ActorOverlayState& other) const = default;
 };

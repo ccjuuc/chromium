@@ -6,7 +6,6 @@
 
 #include <set>
 
-#include "base/containers/contains.h"
 #include "base/functional/function_ref.h"
 #include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
@@ -31,6 +30,10 @@ TopChromeWebUIConfig::TopChromeWebUIConfig(std::string_view scheme,
 
 TopChromeWebUIConfig::~TopChromeWebUIConfig() {
   GetTopChromeWebUIConfigSet().erase(this);
+}
+
+bool TopChromeWebUIConfig::SupportsInProcessResourceLoadingV2() const {
+  return true;
 }
 
 // static

@@ -64,7 +64,7 @@ class ExtensionApiTest : public ExtensionBrowserTest {
     bool use_extensions_root_dir = false;
 
     // If given, the Profile instance is used. Otherwise, the default Profile
-    // (i.e., taken by browser()->profile()) for the browser_test is used.
+    // (i.e., taken by browser()->GetProfile()) for the browser_test is used.
     raw_ptr<Profile> profile = nullptr;
   };
 
@@ -156,7 +156,7 @@ class ExtensionApiTest : public ExtensionBrowserTest {
   // If it failed, what was the error message?
   std::string message_;
 
-  base::Value::Dict* GetTestConfig() { return test_config_.get(); }
+  base::DictValue* GetTestConfig() { return test_config_.get(); }
 
  private:
   void OpenURL(const GURL& url, bool open_in_incognito);
@@ -166,12 +166,12 @@ class ExtensionApiTest : public ExtensionBrowserTest {
 
   // TODO(https://crbug.com/423465927): Explore a better approach to make the
   // existing tests run with the prewarm feature enabled.
-  test::ScopedPrewarmFeatureList prewarm_feature_list_{
-      test::ScopedPrewarmFeatureList::PrewarmState::kDisabled};
+  ::test::ScopedPrewarmFeatureList prewarm_feature_list_{
+      ::test::ScopedPrewarmFeatureList::PrewarmState::kDisabled};
 
   // Hold details of the test, set in C++, which can be accessed by
   // javascript using chrome.test.getConfig().
-  std::unique_ptr<base::Value::Dict> test_config_;
+  std::unique_ptr<base::DictValue> test_config_;
 
   // Hold the test WebSocket server.
   std::unique_ptr<net::test_server::EmbeddedTestServer> websocket_server_;

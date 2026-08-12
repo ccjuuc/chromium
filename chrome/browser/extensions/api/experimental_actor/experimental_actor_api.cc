@@ -17,19 +17,23 @@
 #include "base/version_info/channel.h"
 #include "chrome/browser/actor/actor_keyed_service.h"
 #include "chrome/browser/actor/actor_keyed_service_factory.h"
+#include "chrome/browser/actor/actor_proto_conversion.h"
 #include "chrome/browser/actor/actor_task_metadata.h"
-#include "chrome/browser/actor/aggregated_journal_file_serializer.h"
-#include "chrome/browser/actor/browser_action_util.h"
+#include "chrome/browser/actor/enterprise_policy_checker.h"
 #include "chrome/browser/actor/tools/tab_management_tool_request.h"
 #include "chrome/browser/ai/ai_data_keyed_service.h"
 #include "chrome/browser/extensions/chrome_extension_function_details.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/common/actor.mojom-shared.h"
 #include "chrome/common/actor/action_result.h"
-#include "chrome/common/actor/journal_details_builder.h"
-#include "chrome/common/actor/task_id.h"
 #include "chrome/common/extensions/api/experimental_actor.h"
 #include "chrome/common/extensions/api/tabs.h"
+#include "components/actor/core/aggregated_journal_file_serializer.h"
+#include "components/actor/core/journal_details_builder.h"
+#include "components/actor/core/task_id.h"
+#include "components/actor/core/task_source_info.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "components/optimization_guide/proto/features/actions_data.pb.h"
 #include "components/optimization_guide/proto/features/model_prototyping.pb.h"
 #include "components/sessions/content/session_tab_helper.h"
@@ -40,6 +44,28 @@
 namespace extensions {
 
 namespace {
+
+class NullPolicyChecker : public actor::EnterprisePolicyChecker {
+ public:
+  actor::EnterprisePolicyChecker::UrlBlockReason Evaluate(
+      const GURL& url) const override {
+    return actor::EnterprisePolicyChecker::UrlBlockReason::kNotBlocked;
+  }
+
+  void ValidateContentSentToRenderer(
+      content::RenderFrameHost* frame,
+      const std::string& content,
+      actor::EnterprisePolicyChecker::ContentValidationCallback callback)
+      const override {
+    std::move(callback).Run(
+        actor::EnterprisePolicyChecker::ContentValidationReason::kAllowed);
+  }
+};
+
+NullPolicyChecker& GetNullPolicyChecker() {
+  static NullPolicyChecker checker;
+  return checker;
+}
 
 // Converts a session tab id to a tab handle.
 int32_t ConvertSessionTabIdToTabHandle(
@@ -157,7 +183,10 @@ ExperimentalActorCreateTaskFunction::~ExperimentalActorCreateTaskFunction() =
 
 ExtensionFunction::ResponseAction ExperimentalActorCreateTaskFunction::Run() {
   auto* actor_service = actor::ActorKeyedService::Get(browser_context());
-  actor::TaskId task_id = actor_service->CreateTask();
+  actor::TaskId task_id = actor_service->CreateTask(
+      actor::TaskSourceInfo(actor::TaskSourceInfo::Client::kExperimentalActor,
+                            /*id=*/std::nullopt),
+      &GetNullPolicyChecker());
 
   return RespondNow(ArgumentList(
       api::experimental_actor::CreateTask::Results::Create(task_id.value())));
@@ -231,6 +260,10 @@ ExperimentalActorPerformActionsFunction::Run() {
         ConvertActionTabId(action.mutable_attempt_form_filling(),
                            browser_context());
         break;
+      case optimization_guide::proto::Action::kAttemptOtpFilling:
+        ConvertActionTabId(action.mutable_attempt_otp_filling(),
+                           browser_context());
+        break;
       case optimization_guide::proto::Action::kWait:
       case optimization_guide::proto::Action::kCreateTab:
       case optimization_guide::proto::Action::kCreateWindow:
@@ -238,6 +271,7 @@ ExperimentalActorPerformActionsFunction::Run() {
       case optimization_guide::proto::Action::kActivateWindow:
       case optimization_guide::proto::Action::kYieldToUser:
       case optimization_guide::proto::Action::kMediaControl:
+      case optimization_guide::proto::Action::kLoadAndExtractContent:
       case optimization_guide::proto::Action::ACTION_NOT_SET:
         // No tab id to convert.
         break;
@@ -245,11 +279,10 @@ ExperimentalActorPerformActionsFunction::Run() {
   }
 
   auto* actor_service = actor::ActorKeyedService::Get(browser_context());
-  actor_service->GetJournal().Log(GURL(), actor::TaskId(actions.task_id()),
-                                  "ExperimentalActorExecuteAction",
-                                  actor::JournalDetailsBuilder()
-                                      .Add("proto", actor::ToBase64(actions))
-                                      .Build());
+  actor_service->GetJournal().LogProto(
+      GURL(), actor::TaskId(actions.task_id()),
+      "ExperimentalActorExecuteAction", /*details=*/{}, actions,
+      "chrome_intelligence_proto_features.Actions");
 
   actor::TaskId task_id(actions.task_id());
 
@@ -267,14 +300,19 @@ ExperimentalActorPerformActionsFunction::Run() {
       actions.has_skip_async_observation_collection() &&
       actions.skip_async_observation_collection();
   if (!requests.has_value()) {
-    std::vector<actor::ActionResultWithLatencyInfo> empty_results;
+    std::vector<actor::ActionResultWithLatencyInfo> action_results;
+    action_results.emplace_back(
+        base::TimeTicks::Now(), base::TimeTicks::Now(),
+        actor::MakeResult(actor::mojom::ActionResultCode::kArgumentsInvalid,
+                          /*requires_page_stabilization=*/false,
+                          base::ToString(requests.error())));
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(
             &ExperimentalActorPerformActionsFunction::OnActionsFinished, this,
             task_id, start_time, skip_async_observation_information,
-            actor::mojom::ActionResultCode::kArgumentsInvalid, requests.error(),
-            std::move(empty_results)));
+            std::nullopt, std::move(action_results),
+            actor::TabObservationStrategy()));
     return RespondLater();
   }
 
@@ -282,7 +320,8 @@ ExperimentalActorPerformActionsFunction::Run() {
       task_id, std::move(requests.value()), actor::ActorTaskMetadata(actions),
       base::BindOnce(
           &ExperimentalActorPerformActionsFunction::OnActionsFinished, this,
-          task_id, start_time, skip_async_observation_information));
+          task_id, start_time, skip_async_observation_information,
+          std::nullopt));
 
   return RespondLater();
 }
@@ -291,31 +330,73 @@ void ExperimentalActorPerformActionsFunction::OnActionsFinished(
     actor::TaskId task_id,
     base::TimeTicks start_time,
     bool skip_async_observation_information,
-    actor::mojom::ActionResultCode result_code,
-    std::optional<size_t> index_of_failed_action,
-    std::vector<actor::ActionResultWithLatencyInfo> action_results) {
+    std::optional<page_content_annotations::ScreenshotOptions::
+                      ScreenshotCollectionOptions>
+        screenshot_collection_options,
+    std::vector<actor::ActionResultWithLatencyInfo> action_results,
+    actor::TabObservationStrategy observation_strategy) {
   auto* actor_service = actor::ActorKeyedService::Get(browser_context());
   actor::ActorTask* task = actor_service->GetTask(task_id);
 
-  // Task is checked when calling PerformActions and it cannot be removed once
-  // added (a stopped task is no longer active but will still be retrieved by
-  // GetTask).
-  CHECK(task);
+  // TODO(b/471210832): Error handling here is duplicated with
+  // GlicActorTaskManager.
+  if (!task) {
+    auto response = std::make_unique<optimization_guide::proto::ActionsResult>(
+        actor::BuildErrorActionsResult(
+            actor::mojom::ActionResultCode::kTaskWentAway, std::nullopt));
+
+    // Note: the arguments in this function are mostly unused other than the
+    // response proto.
+    OnObservationResult(start_time, std::move(action_results), task_id,
+                        skip_async_observation_information,
+                        std::move(screenshot_collection_options),
+                        std::move(response),
+                        /*journal_entry=*/nullptr);
+    return;
+  }
+
+  actor::mojom::ActionResultCode result_code =
+      actor::mojom::ActionResultCode::kOk;
+  std::optional<size_t> index_of_failed_action;
+  for (size_t i = 0; i < action_results.size(); ++i) {
+    if (!actor::IsOk(action_results[i].result->code)) {
+      result_code = action_results[i].result->code;
+      index_of_failed_action = i;
+      break;
+    }
+  }
+
+  if (result_code == actor::mojom::ActionResultCode::kTaskPaused) {
+    auto response = std::make_unique<optimization_guide::proto::ActionsResult>(
+        actor::BuildErrorActionsResult(
+            actor::mojom::ActionResultCode::kTaskPaused, std::nullopt));
+
+    // Note: the arguments in this function are mostly unused other than the
+    // response proto.
+    OnObservationResult(start_time, std::move(action_results), task_id,
+                        skip_async_observation_information,
+                        std::move(screenshot_collection_options),
+                        std::move(response),
+                        /*journal_entry=*/nullptr);
+    return;
+  }
 
   actor::BuildActionsResultWithObservations(
-      *browser_context(), start_time, result_code, index_of_failed_action,
-      std::move(action_results), *task, skip_async_observation_information,
+      *browser_context(), start_time, std::move(action_results), *task,
+      skip_async_observation_information,
+      std::move(screenshot_collection_options),
       base::BindOnce(
           &ExperimentalActorPerformActionsFunction::OnObservationResult, this));
 }
 
 void ExperimentalActorPerformActionsFunction::OnObservationResult(
     base::TimeTicks start_time,
-    actor::mojom::ActionResultCode result_code,
-    std::optional<size_t> index_of_failed_action,
     std::vector<actor::ActionResultWithLatencyInfo> action_results,
     actor::TaskId task_id,
     bool skip_async_observation_information,
+    std::optional<page_content_annotations::ScreenshotOptions::
+                      ScreenshotCollectionOptions>
+        screenshot_collection_options,
     std::unique_ptr<optimization_guide::proto::ActionsResult> response,
     std::unique_ptr<actor::AggregatedJournal::PendingAsyncEntry>
         journal_entry) {
@@ -389,7 +470,7 @@ ExperimentalActorRequestTabObservationFunction::Run() {
   // TODO(dtapuska): We may want to add an optional task_id to the API so
   // we can attribute this tab observation to an appropriate task.
   actor_service->RequestTabObservation(
-      *tab, actor::TaskId(),
+      *tab, actor::TaskId(), std::nullopt,
       base::BindOnce(&ExperimentalActorRequestTabObservationFunction::
                          OnObservationFinished,
                      this));

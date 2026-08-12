@@ -10,7 +10,9 @@
 #include <vector>
 
 #include "base/observer_list.h"
+#include "net/base/ech_mode.h"
 #include "net/base/net_export.h"
+#include "net/cert/x509_certificate.h"
 #include "net/ssl/ssl_config.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
@@ -27,8 +29,6 @@ struct NET_EXPORT SSLNamedGroupInfo {
   bool send_key_share = false;
 
   bool operator==(const SSLNamedGroupInfo&) const = default;
-
-  bool IsPostQuantum() const;
 };
 
 // Configuration options for SSL connections.
@@ -55,16 +55,16 @@ struct NET_EXPORT SSLContextConfig {
   // Anchor IDs are configured.
   bool ShouldAdvertiseTrustAnchorIDs() const;
 
+  // Returns the amount of bytes of padding that should be requested from the
+  // server for the TLS handshake. This will return nullopt if a padding request
+  // should not be sent.
+  std::optional<uint16_t> RequestServerPadding() const;
+
   // Helper function to select TLS Trust Anchor IDs to advertise in the TLS
   // handshake, so that the server can serve a certificate that the client
-  // trusts. `server_advertised_trust_anchor_ids` is a list of Trust Anchor IDs,
-  // in binary representation, that the server has provided out-of-band (e.g. in
-  // a DNS record). The intersection with `trust_anchor_ids` is returned in wire
-  // format (a series of 8-bit length prefixed non-empty strings) such that it
-  // can be passed into BoringSSL.
-  std::vector<uint8_t> SelectTrustAnchorIDs(
-      const std::vector<std::vector<uint8_t>>&
-          server_advertised_trust_anchor_ids) const;
+  // trusts. The list is returned in wire format (a series of 8-bit length
+  // prefixed non-empty strings) such that it can be passed into BoringSSL.
+  std::vector<uint8_t> SelectAllTrustAnchorIDs() const;
 
   // The minimum and maximum protocol versions that are enabled.
   // (Use the SSL_PROTOCOL_VERSION_xxx enumerators defined in ssl_config.h.)
@@ -102,6 +102,11 @@ struct NET_EXPORT SSLContextConfig {
   // MTC TLS Trust Anchor IDs that are configured as trusted, as a list of
   // Trust Anchor IDs in binary representation.
   std::vector<std::vector<uint8_t>> mtc_trust_anchor_ids;
+
+  // The time (represented as seconds since the unix epoch) that the latest
+  // MtcMetadata was generated. See MtcMetadata.update_time_seconds in
+  // net/cert/root_store.proto.
+  int64_t mtc_update_time_seconds = 0;
 };
 
 // The interface for retrieving global SSL configuration.  This interface
@@ -125,6 +130,12 @@ class NET_EXPORT SSLConfigService {
 
   // May not be thread-safe, should only be called on the IO thread.
   virtual SSLContextConfig GetSSLContextConfig() = 0;
+
+  // Returns the host-specific EchMode for `hostname`.
+  //
+  // NOTE: This method should only be called when `ech_enabled` is true in
+  // `SSLContextConfig`.
+  virtual EchMode GetEchMode(std::string_view hostname) const = 0;
 
   // Returns true if connections to |hostname| can reuse, or are permitted to
   // reuse, connections on which a client cert has been negotiated. Note that

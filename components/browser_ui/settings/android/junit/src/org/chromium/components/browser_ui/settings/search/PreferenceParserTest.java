@@ -20,7 +20,7 @@ import org.junit.runner.RunWith;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.components.browser_ui.settings.test.R;
+import org.chromium.components.browser_ui.settings.R;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -114,8 +114,19 @@ public class PreferenceParserTest {
                 processedFragments.contains(FRAGMENT_MAIN));
     }
 
-    @Nullable
-    private Bundle findBundleByKey(List<Bundle> metadata, String key) {
+    @Test
+    public void testParsePreferences_skipsTextMessagePreference() throws Exception {
+        List<Bundle> parsedMetadata =
+                PreferenceParser.parsePreferences(mContext, R.xml.test_search_root_prefs);
+
+        Bundle textMessageBundle = findBundleByKey(parsedMetadata, "ignored_text_message");
+        assertNull(
+                "TextMessagePreference 'ignored_text_message' should be ignored/eliminated by the"
+                        + " parser.",
+                textMessageBundle);
+    }
+
+    private @Nullable Bundle findBundleByKey(List<Bundle> metadata, String key) {
         for (Bundle bundle : metadata) {
             if (key.equals(bundle.getString(PreferenceParser.METADATA_KEY))) {
                 return bundle;

@@ -7,7 +7,6 @@ package org.chromium.chrome.browser.autofill;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
@@ -35,7 +34,9 @@ import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.chrome.browser.autofill.editors.AddressEditorCoordinator;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.browser.autofill.editors.address.AddressEditorCoordinator;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
@@ -43,15 +44,16 @@ import org.chromium.components.autofill.AutofillProfile;
 import org.chromium.components.autofill.FieldType;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.sync.SyncService;
-import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.ui.test.util.BlankUiTestActivity;
 import org.chromium.ui.test.util.modaldialog.FakeModalDialogManager;
 
 /** Unit tests for {@link SaveUpdateAddressProfilePrompt}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
+@EnableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
 public class SaveUpdateAddressProfilePromptTest {
     private static final long NATIVE_SAVE_UPDATE_ADDRESS_PROFILE_PROMPT_CONTROLLER = 100L;
     private static final boolean NO_MIGRATION = false;
@@ -62,7 +64,6 @@ public class SaveUpdateAddressProfilePromptTest {
     @Mock private PersonalDataManager mPersonalDataManager;
     @Mock private Profile mProfile;
     @Mock private AddressEditorCoordinator mAddressEditor;
-    @Mock private IdentityServicesProvider mIdentityServicesProvider;
     @Mock private IdentityManager mIdentityManager;
     @Mock private SyncService mSyncService;
 
@@ -78,10 +79,9 @@ public class SaveUpdateAddressProfilePromptTest {
         PersonalDataManagerFactory.setInstanceForTesting(mPersonalDataManager);
         when(mPersonalDataManager.getDefaultCountryCodeForNewAddress()).thenReturn("US");
         SyncServiceFactory.setInstanceForTesting(mSyncService);
-        IdentityServicesProvider.setInstanceForTests(mIdentityServicesProvider);
-        when(mIdentityServicesProvider.getIdentityManager(any())).thenReturn(mIdentityManager);
+        IdentityServicesProvider.setIdentityManagerForTesting(mIdentityManager);
 
-        mActivity = Robolectric.setupActivity(TestActivity.class);
+        mActivity = Robolectric.setupActivity(BlankUiTestActivity.class);
 
         mPromptController =
                 SaveUpdateAddressProfilePromptController.create(
@@ -99,7 +99,7 @@ public class SaveUpdateAddressProfilePromptTest {
     }
 
     private void createAndShowPrompt(@SaveUpdateAddressProfilePromptMode int promptMode) {
-        AutofillProfile dummyProfile = AutofillProfile.builder().build();
+        AutofillProfile autofillProfile = AutofillProfile.builder().build();
         mModalDialogManager = new FakeModalDialogManager(ModalDialogType.APP);
         mPrompt =
                 new SaveUpdateAddressProfilePrompt(
@@ -107,7 +107,7 @@ public class SaveUpdateAddressProfilePromptTest {
                         mModalDialogManager,
                         mActivity,
                         mProfile,
-                        dummyProfile,
+                        autofillProfile,
                         promptMode);
         mPrompt.setAddressEditorForTesting(mAddressEditor);
         mPrompt.show();

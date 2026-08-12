@@ -80,14 +80,14 @@ gfx::RectF InitializeRootRect(const LayoutObject* root) {
     // testing. Use the FrameView geometry instead.
     // 2) An element wider than the ICB can cause us to resize the FrameView so
     // we can zoom out to fit the entire element width.
-    result = layout_view->OverflowClipRect(PhysicalOffset());
+    result = layout_view->OverflowClipRect();
   } else if (auto* layout_box = DynamicTo<LayoutBox>(root)) {
     if (layout_box->ShouldClipOverflowAlongBothAxis()) {
       // TODO(https://github.com/w3c/IntersectionObserver/issues/518):
       // This doesn't strictly conform to the current spec (which says we
       // should use the padding box rect) when there is overflow-clip-margin.
       // We should also consider overflow-clip along only one axis.
-      result = layout_box->OverflowClipRect(PhysicalOffset());
+      result = layout_box->OverflowClipRect();
     } else {
       result = layout_box->PhysicalBorderBoxRect();
     }
@@ -104,7 +104,7 @@ gfx::RectF GetBoxBounds(const LayoutBox* box, bool use_overflow_clip_edge) {
   // clip edge and not something else.
   if (use_overflow_clip_edge && box->ShouldApplyOverflowClipMargin()) {
     // OverflowClipRect() may be larger than PhysicalBorderBoxRect().
-    bounds.Unite(box->OverflowClipRect(PhysicalOffset()));
+    bounds.Unite(box->OverflowClipRect());
   }
   return gfx::RectF(bounds);
 }
@@ -147,9 +147,9 @@ VisibilityInfo ComputeVisibilityInfo(const LayoutObject* target,
           mojom::blink::FrameOcclusionState::kGuaranteedNotOccluded) {
     return {false, kInvalidDOMNodeId};
   }
-  if (RuntimeEnabledFeatures::CanvasDrawElementEnabled() &&
-      IsA<Element>(target->GetNode()) &&
-      To<Element>(target->GetNode())->IsInCanvasSubtree()) {
+  if (RuntimeEnabledFeatures::CanvasDrawElementEnabled(
+          target->GetDocument().GetExecutionContext()) &&
+      target->IsInCanvasSubtree()) {
     return {false, kInvalidDOMNodeId};
   }
   if (target->HasDistortingVisualEffects())
@@ -196,7 +196,7 @@ gfx::Transform ObjectToViewTransform(const LayoutObject& object) {
 
   // Fall back to MapLocalToAncestor.
   TransformState transform_state(TransformState::kApplyTransformDirection);
-  object.MapLocalToAncestor(nullptr, transform_state, 0);
+  object.MapLocalToAncestor(nullptr, transform_state, {});
   return transform_state.AccumulatedTransform();
 }
 
@@ -208,7 +208,7 @@ void ScrollingContentsToBorderBoxSpace(const LayoutBox* box, gfx::RectF& rect) {
 }
 
 bool ClipsSelf(const LayoutObject& object) {
-  return object.HasClip() || object.HasClipPath() || object.HasMask() ||
+  return object.HasCSSClip() || object.HasClipPath() || object.HasMask() ||
          // For simplicity, assume all SVG children clip self (with e.g.
          // SVG mask).
          object.IsSVGChild();
@@ -606,7 +606,8 @@ void IntersectionGeometry::ComputeGeometry(const RootGeometry& root_geometry,
           TransformState::kUnapplyInverseTransformDirection);
       target->View()->MapAncestorToLocal(
           nullptr, implicit_root_to_target_document_transform,
-          kTraverseDocumentBoundaries | kApplyRemoteMainFrameTransform);
+          {MapCoordinatesMode::kTraverseDocumentBoundaries,
+           MapCoordinatesMode::kApplyRemoteMainFrameTransform});
       gfx::Transform matrix =
           implicit_root_to_target_document_transform.AccumulatedTransform()
               .InverseOrIdentity();
@@ -725,8 +726,7 @@ bool IntersectionGeometry::ClipToRoot(const RootAndTarget& root_and_target,
   if (!scroll_margin.empty()) {
     // Apply clip and scroll margin for each intermediate scroller.
     for (const LayoutBox* scroller : root_and_target.intermediate_scrollers) {
-      gfx::RectF scroller_rect =
-          gfx::RectF(scroller->OverflowClipRect(PhysicalOffset()));
+      gfx::RectF scroller_rect = gfx::RectF(scroller->OverflowClipRect());
       if (std::optional<gfx::RectF> clip_path_box =
               ClipPathClipper::LocalClipPathBoundingBox(*scroller)) {
         scroller_rect.Intersect(*clip_path_box);
@@ -770,16 +770,17 @@ bool IntersectionGeometry::ApplyClip(const LayoutObject* target,
                                      bool ignore_local_clip_path,
                                      bool root_scrolls_target,
                                      CachedRects* cached_rects) {
-  unsigned flags = kDefaultVisualRectFlags | kEdgeInclusive |
-                   kDontApplyMainFrameOverflowClip | kUsePreciseClipPath;
+  VisualRectFlags flags = {VisualRectFlag::kEdgeInclusive,
+                           VisualRectFlag::kDontApplyMainFrameOverflowClip,
+                           VisualRectFlag::kUsePreciseClipPath};
   if (!ShouldRespectFilters()) {
-    flags |= kIgnoreFilters;
+    flags.Put(VisualRectFlag::kIgnoreFilters);
   }
   if (CanUseGeometryMapper(*target)) {
-    flags |= kUseGeometryMapper;
+    flags.Put(VisualRectFlag::kUseGeometryMapper);
   }
   if (ignore_local_clip_path) {
-    flags |= kIgnoreLocalClipPath;
+    flags.Put(VisualRectFlag::kIgnoreLocalClipPath);
   }
 
   bool does_intersect = false;
@@ -788,8 +789,7 @@ bool IntersectionGeometry::ApplyClip(const LayoutObject* target,
     does_intersect = cached_rects->does_intersect;
   } else {
     does_intersect = target->MapToVisualRectInAncestorSpace(
-        local_ancestor, unclipped_intersection_rect,
-        static_cast<VisualRectFlags>(flags));
+        local_ancestor, unclipped_intersection_rect, flags);
     if (local_ancestor && local_ancestor->IsScrollContainer() &&
         !root_scrolls_target) {
       // Convert the rect from the scrolling contents space to the border box
@@ -860,7 +860,8 @@ bool IntersectionGeometry::ApplyClip(const LayoutObject* target,
         clip_rect = ToPixelSnappedRect(
             local_root_frame->ContentLayoutObject()->LocalToAncestorRect(
                 PhysicalRect(clip_rect), nullptr,
-                kTraverseDocumentBoundaries | kApplyRemoteMainFrameTransform));
+                {MapCoordinatesMode::kTraverseDocumentBoundaries,
+                 MapCoordinatesMode::kApplyRemoteMainFrameTransform}));
         intersection_rect = unclipped_intersection_rect;
         does_intersect &=
             intersection_rect.InclusiveIntersect(gfx::RectF(clip_rect));

@@ -13,6 +13,7 @@
 #include "chrome/browser/ui/safety_hub/abusive_notification_permissions_manager.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
+#include "components/content_settings/core/browser/permission_settings_registry.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/content_settings/core/common/features.h"
@@ -34,21 +35,36 @@ const ContentSettingsType mediastream_type =
     ContentSettingsType::MEDIASTREAM_CAMERA;
 const ContentSettingsType notifications_type =
     ContentSettingsType::NOTIFICATIONS;
-const ContentSettingsType chooser_type =
-    ContentSettingsType::FILE_SYSTEM_ACCESS_CHOOSER_DATA;
 
 std::set<ContentSettingsType> abusive_permission_types({notifications_type});
-std::set<ContentSettingsType> unused_permission_types({geolocation_type,
-                                                       chooser_type});
+std::set<ContentSettingsType> unused_permission_types({geolocation_type});
 std::set<ContentSettingsType> abusive_and_unused_permission_types(
-    {notifications_type, geolocation_type, chooser_type});
+    {notifications_type, geolocation_type});
+
+base::Value GetPermissionDataValue(ContentSettingsType permission_type) {
+  switch (permission_type) {
+    case notifications_type:
+      return base::Value();
+    case ContentSettingsType::GEOLOCATION_WITH_OPTIONS:
+      return content_settings::PermissionSettingsRegistry::GetInstance()
+          ->Get(ContentSettingsType::GEOLOCATION_WITH_OPTIONS)
+          ->delegate()
+          .ToValue(GeolocationSetting{.approximate = PermissionOption::kAllowed,
+                                      .precise = PermissionOption::kDenied});
+    default:
+      return base::Value(CONTENT_SETTING_ALLOW);
+  }
+}
 
 PermissionsData CreatePermissionsData(
     ContentSettingsPattern& primary_pattern,
     std::set<ContentSettingsType>& permission_types) {
   PermissionsData permissions_data;
   permissions_data.primary_pattern = primary_pattern;
-  permissions_data.permission_types = permission_types;
+  for (ContentSettingsType permission_type : permission_types) {
+    permissions_data.permissions.insert(std::make_pair(
+        permission_type, GetPermissionDataValue(permission_type)));
+  }
   return permissions_data;
 }
 
@@ -64,12 +80,8 @@ class RevokedPermissionsResultTest
                      /*should_setup_disruptive_sites*/ bool>> {
  public:
   RevokedPermissionsResultTest() {
-    std::vector<base::test::FeatureRef> enabled_features;
-    enabled_features.push_back(
-        content_settings::features::kSafetyCheckUnusedSitePermissions);
-    enabled_features.push_back(
-        content_settings::features::
-            kSafetyCheckUnusedSitePermissionsForSupportedChooserPermissions);
+    std::vector<base::test::FeatureRef> enabled_features = {
+        content_settings::features::kSafetyCheckUnusedSitePermissions};
     if (ShouldSetupDisruptiveSites()) {
       enabled_features.push_back(
           features::kSafetyHubDisruptiveNotificationRevocation);
@@ -99,7 +111,7 @@ class RevokedPermissionsResultTest
   bool IsUrlInRevokedSettings(std::list<PermissionsData> permissions_data,
                               std::string url) {
     // TODO(crbug.com/40250875): Replace the below with a lambda method and
-    // base::Contains.
+    // std::ranges::contains.
     std::string url_pattern =
         ContentSettingsPattern::FromURLNoWildcard(GURL(url)).ToString();
     for (const auto& permission : permissions_data) {
@@ -155,7 +167,7 @@ TEST_P(RevokedPermissionsResultTest, ResultToFromDict) {
 
   // When converting to dict, the values of the revoked permissions should be
   // correctly converted to base::Value.
-  base::Value::Dict dict = result->ToDictValue();
+  base::DictValue dict = result->ToDictValue();
   auto* revoked_origins_list = dict.FindList(kRevokedPermissionsResultKey);
   if (ShouldSetupUnusedSites() && ShouldSetupSafeBrowsing()) {
     EXPECT_THAT(*revoked_origins_list, UnorderedElementsAre(url1, url2, url3));

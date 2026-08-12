@@ -25,10 +25,9 @@ bool HasHost(const mojom::CSPSource& source) {
 }
 
 bool DecodePath(std::string_view path, std::string* output) {
-  url::RawCanonOutputT<char16_t> unescaped;
-  url::DecodeURLEscapeSequences(path, url::DecodeURLMode::kUTF8OrIsomorphic,
-                                &unescaped);
-  return base::UTF16ToUTF8(unescaped.data(), unescaped.length(), output);
+  url::UrlEscapeDecoder unescaped(path, url::DecodeUrlMode::kUtf8OrIsomorphic);
+  std::u16string_view view = unescaped.view();
+  return base::UTF16ToUTF8(view.data(), view.length(), output);
 }
 
 int DefaultPortForScheme(const std::string& scheme) {

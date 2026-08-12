@@ -5,9 +5,16 @@
 #ifndef CHROME_BROWSER_GLIC_GLIC_PREF_NAMES_H_
 #define CHROME_BROWSER_GLIC_GLIC_PREF_NAMES_H_
 
+#include <optional>
+
+#include "base/time/time.h"
 #include "build/build_config.h"
+#include "chrome/browser/glic/host/glic.mojom.h"
+#include "components/glic/glic_pref_names.h"
+#include "components/prefs/pref_registry_simple.h"
 
 class PrefRegistrySimple;
+class PrefService;
 namespace user_prefs {
 class PrefRegistrySyncable;
 }  // namespace user_prefs
@@ -15,35 +22,56 @@ class PrefRegistrySyncable;
 namespace glic::prefs {
 
 // ************* LOCAL STATE PREFS ***************
-// These prefs are per-Chrome-installation
+// These prefs are per-Chrome-installation.
 
 // Boolean pref that enables or disables the launcher.
 inline constexpr char kGlicLauncherEnabled[] = "glic.launcher_enabled";
 
-#if !BUILDFLAG(IS_ANDROID)
 // String pref that keeps track of the non-localized version of the registered
-// hotkey for Glic.
+// hotkey for Glic. Note that on Android, this hotkey is implemented in
+// local_hotkey_manager.cc, otherwise it is implemented in
+// chrome/browser/background/.
+// TODO(b/517917926): Migrate handling of the launcher to
+// local_hotkey_manager.cc.
 inline constexpr char kGlicLauncherHotkey[] = "glic.launcher_hotkey";
+
+// Boolean pref that determines if the Glic hotkey scope is global (true) or
+// local (false).
+inline constexpr char kGlicHotkeyGlobalScopeEnabled[] =
+    "glic.hotkey_global_scope_enabled";
+
+// Boolean pref that tracks if the hotkey scope has been migrated.
+inline constexpr char kGlicHotkeyGlobalScopeMigrated[] =
+    "glic.hotkey_global_scope_migrated";
+
+// String pref that keeps track of the non-localized version of the registered
+// selection hotkey for Glic.
+inline constexpr char kGlicSelectionHotkey[] = "glic.selection_hotkey";
 
 // String pref that keeps track of the non-localized version of the registered
 // hotkey for toggling focus between Glic and the browser window.
 inline constexpr char kGlicFocusToggleHotkey[] = "glic.focus_toggle_hotkey";
-#endif
 
-// String pref that keeps track of whether any loaded profile is, or has ever
-// been, of a subscription tier that should enable multi-instance.
-inline constexpr char kGlicMultiInstanceEnabledBySubscriptionTier[] =
-    "glic.multi_instance_enabled_by_tier";
+// String prefs that keep track of user-configured Glic guest URL presets for
+// different environments.
+inline constexpr char kGlicGuestUrlPresetAutopush[] =
+    "glic.guest_url_preset_autopush";
+inline constexpr char kGlicGuestUrlPresetStaging[] =
+    "glic.guest_url_preset_staging";
+inline constexpr char kGlicGuestUrlPresetPreprod[] =
+    "glic.guest_url_preset_preprod";
+inline constexpr char kGlicGuestUrlPresetProd[] = "glic.guest_url_preset_prod";
+
+// String prefs that keep track of the user-configured Glic web continuity
+// originating host URL
+inline constexpr char kGlicWebContinuityOriginatingHostUrlPreset[] =
+    "glic.web_continuity_originating_host_url_preset";
 
 // ************* PROFILE PREFS ***************
-// Prefs below are tied to a user profile
+// Prefs below are tied to a user profile.
 
-// Value enums for the browser.gemini_settings pref. Integer pref that
-// determines Glic enabling state for this user profile. This is controlled from
-// enterprise policy.
-// TODO(crbug.com/393537628): This should be moved to a less Glic-specific
-// place.
-enum class SettingsPolicyState {
+// Values for the "glic.actuation_on_web" pref.
+enum class GlicActuationOnWebPolicyState {
   kMinValue = 0,
 
   kEnabled = kMinValue,
@@ -52,19 +80,27 @@ enum class SettingsPolicyState {
   kMaxValue = kDisabled
 };
 
-// Value enums for the glic.completed_fre pref. Integer pref that determines the
-// Fre status for user profile.
-enum class FreStatus {
+// Values for the "glic.file_upload_allowed" pref.
+enum class GlicFileUploadPolicyState {
   kMinValue = 0,
 
-  kNotStarted = kMinValue,
-  kCompleted = 1,
-  kIncomplete = 2,
+  kEnabled = kMinValue,
+  kDisabled = 1,
 
-  kMaxValue = kIncomplete
+  kMaxValue = kDisabled
 };
 
-// Boolean pref that determines if the glic button in tabstrip is pinned.
+// Values for the "glic.spark_setting" pref.
+enum class GlicSparkPolicyState {
+  kMinValue = 0,
+
+  kEnabled = kMinValue,
+  kDisabled = 1,
+
+  kMaxValue = kDisabled
+};
+
+// Boolean pref that determines if the Glic button in the tabstrip is pinned.
 inline constexpr char kGlicPinnedToTabstrip[] = "glic.pinned_to_tabstrip";
 
 // Boolean pref that enables or disables geolocation access for Glic.
@@ -78,6 +114,10 @@ inline constexpr char kGlicTabContextEnabled[] = "glic.tab_context_enabled";
 inline constexpr char kGlicDefaultTabContextEnabled[] =
     "glic.default_tab_context_enabled";
 
+// Integer pref that determines if Glic Spark is enabled.
+// Controlled by enterprise policy.
+inline constexpr char kGlicSparkPolicySettings[] = "glic.spark_policy_settings";
+
 // Boolean pref that determines the rollout eligibility for the user profile.
 inline constexpr char kGlicRolloutEligibility[] =
     "sync.glic_rollout_eligibility";
@@ -85,9 +125,11 @@ inline constexpr char kGlicRolloutEligibility[] =
 // Dict pref that records user status.
 inline constexpr char kGlicUserStatus[] = "glic.user_status";
 
-// Integer pref that determines the Fre status for user profile. Values are from
-// the FreStatus enum.
-inline constexpr char kGlicCompletedFre[] = "glic.completed_fre";
+// Integer pref that records the zoom level for the Glic webview as a
+// percentage (e.g. 100 indicates 100%). Note that zoom level is already
+// persisted in the glic webview partition - this pref is only used for
+// recording usage metrics.
+inline constexpr char kGlicZoomLevel[] = "glic.zoom_level";
 
 // Time pref that records the last time a user dismissed the Glic window.
 inline constexpr char kGlicWindowLastDismissedTime[] =
@@ -101,23 +143,27 @@ inline constexpr char kGlicPreviousPositionY[] = "glic.previous_bounds.y";
 inline constexpr char kGlicClosedCaptioningEnabled[] =
     "glic.closed_captioning_enabled";
 
+// Bool pref for the media understanding setting.
+inline constexpr char kGlicMediaUnderstandingEnabled[] =
+    "glic.media_understanding_enabled";
+
+// Bool pref that determines if errors are allowed to be shown.
+inline constexpr char kGlicShowErrorAllowed[] = "glic.show_error_allowed";
+
 // Bool pref for the daisy chain new tabs setting.
 inline constexpr char kGlicKeepSidepanelOpenOnNewTabsEnabled[] =
     "glic.keep_sidepanel_open_on_new_tabs_enabled";
 
-// Value enums for the "glic.actuation_on_web" pref. Integer pref that
-// determines if glic actuation is enabled. This is controlled from the
-// enterprise policy.
-enum class GlicActuationOnWebPolicyState {
-  kMinValue = 0,
-
-  kEnabled = kMinValue,
-  kDisabled = 1,
-
-  kMaxValue = kDisabled
-};
-// This perf is only applicable to enterprise accounts.
+// Bool pref for enabling the shake trigger to capture region.
+inline constexpr char kGlicShakeTriggerEnabled[] = "glic.shake_trigger_enabled";
+// Integer pref that determines if Glic actuation is enabled. This is
+// controlled from the enterprise policy. Only applicable to enterprise
+// accounts.
 inline constexpr char kGlicActuationOnWeb[] = "glic.actuation_on_web";
+
+// Integer pref that determines if Glic file upload is enabled. This is
+// controlled from the enterprise policy.
+inline constexpr char kGlicFileUploadAllowed[] = "glic.file_upload_allowed";
 
 // List prefs for allow/blocklists of URLs for more granular control than
 // `kGlicActuationOnWeb`.
@@ -126,9 +172,36 @@ inline constexpr char kGlicActuationOnWebAllowedForURLs[] =
 inline constexpr char kGlicActuationOnWebBlockedForURLs[] =
     "glic.actuation_on_web_blocked_for_urls";
 
-// Boolean pref for the user enabled actuation on web setting.
-inline constexpr char kGlicUserEnabledActuationOnWeb[] =
-    "glic.user_enabled_actuation_on_web";
+// Dict pref storing details for Gemini Enterprise.
+inline constexpr char kGlicGeminiEnterpriseSettings[] =
+    "glic.gemini_enterprise_settings";
+
+// Boolean pref that tracks if the Glic partition needs a cookie sync.
+inline constexpr char kGlicPartitionNeedsCookieSync[] =
+    "glic.partition_needs_cookie_sync";
+
+// Boolean pref that tracks if the Glic local storage keys have been copied from
+// the Glic partition to the main partition.
+inline constexpr char kGlicLocalStorageCopiedToMainPartition[] =
+    "glic.local_storage_copied_to_main_partition";
+
+// Boolean pref that tracks if the Glic profile was previously ineligible.
+inline constexpr char kGlicPreviouslyNotAllowed[] =
+    "glic.previously_not_allowed";
+
+#if BUILDFLAG(IS_MAC)
+inline constexpr char kGlicUseAltOSIcon[] = "glic.use_alt_os_icon";
+#endif
+
+// Returns the actuation capability policy state if the preference contains a
+// valid enumerator value, or std::nullopt otherwise.
+std::optional<GlicActuationOnWebPolicyState> GetActuationOnWebCapability(
+    const PrefService* pref_service);
+
+// Returns the file upload capability policy state. Defaults to kDisabled if the
+// preference is missing or invalid.
+glic::mojom::FileUploadPolicyState GetFileUploadAllowedCapability(
+    const PrefService* pref_service);
 
 void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 void RegisterLocalStatePrefs(PrefRegistrySimple* registry);

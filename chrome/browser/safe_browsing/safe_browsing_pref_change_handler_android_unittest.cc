@@ -7,19 +7,47 @@
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/android/tab_android.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/safe_browsing/tailored_security/tailored_security_service_factory.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_test_helper.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/messages/android/mock_message_dispatcher_bridge.h"
 #include "components/prefs/pref_service.h"
+#include "components/safe_browsing/core/browser/tailored_security_service/tailored_security_service.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace safe_browsing {
+
+class MockTailoredSecurityService : public TailoredSecurityService {
+ public:
+  MockTailoredSecurityService()
+      : TailoredSecurityService(nullptr, nullptr, nullptr) {}
+  ~MockTailoredSecurityService() override = default;
+
+  MOCK_METHOD(scoped_refptr<network::SharedURLLoaderFactory>,
+              GetURLLoaderFactory,
+              (),
+              (override));
+};
+
+class FailOnGetTabCountTabModel : public OwningTestTabModel {
+ public:
+  using OwningTestTabModel::OwningTestTabModel;
+
+  int GetTabCount() const override {
+    ADD_FAILURE()
+        << "GetTabCount() should not be called when WebContents is available.";
+    return OwningTestTabModel::GetTabCount();
+  }
+};
 
 class SafeBrowsingPrefChangeHandlerAndroidTest : public testing::Test {
  public:
@@ -28,6 +56,15 @@ class SafeBrowsingPrefChangeHandlerAndroidTest : public testing::Test {
   void SetUp() override {
     TestingProfile::Builder profile_builder;
     profile_ = profile_builder.Build();
+
+    TailoredSecurityServiceFactory::GetInstance()->SetTestingFactory(
+        profile_.get(),
+        base::BindRepeating([](content::BrowserContext* context)
+                                -> std::unique_ptr<KeyedService> {
+          return std::make_unique<
+              testing::NiceMock<MockTailoredSecurityService>>();
+        }));
+
     // Pass the profile to the constructor.
     pref_change_handler_ =
         std::make_unique<SafeBrowsingPrefChangeHandler>(profile_.get());
@@ -37,6 +74,11 @@ class SafeBrowsingPrefChangeHandlerAndroidTest : public testing::Test {
   void TearDown() override { pref_change_handler_.reset(); }
 
   TestingProfile* profile() { return profile_.get(); }
+
+  MockTailoredSecurityService* tailored_security_service() {
+    return static_cast<MockTailoredSecurityService*>(
+        TailoredSecurityServiceFactory::GetForProfile(profile()));
+  }
 
  protected:
   content::BrowserTaskEnvironment task_environment_;
@@ -104,24 +146,35 @@ TEST_F(SafeBrowsingPrefChangeHandlerAndroidTest, RegisterObserver) {
 }
 
 TEST_F(SafeBrowsingPrefChangeHandlerAndroidTest, DidAddTab) {
+  messages::MockMessageDispatcherBridge mock_message_bridge;
+  messages::MessageDispatcherBridge::SetInstanceForTesting(
+      &mock_message_bridge);
+
+  EXPECT_CALL(mock_message_bridge,
+              EnqueueWindowScopedMessage(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Return(true));
+
   // Create a test tab model and web contents.
-  TestTabModel tab_model(profile());
-  TabModelList::AddTabModel(&tab_model);
+  FailOnGetTabCountTabModel tab_model(profile());
   std::unique_ptr<content::WebContents> web_contents(
       content::WebContentsTester::CreateTestWebContents(profile(), nullptr));
-  // Use the TestTabModel to create and manage the TabAndroid.
-  tab_model.SetWebContentsList({web_contents.get()});
-  TabAndroid* tab = tab_model.GetTabAt(0);
+  // Use the FailOnGetTabCountTabModel to manage the TabAndroid.
+  TabAndroid* tab = tab_model.AddTabFromWebContents(std::move(web_contents), 0,
+                                                    /*select=*/true);
 
   pref_change_handler_->AddTabModelObserver();
   pref_change_handler_->AddTabModelListObserver();
   // Simulate adding a tab.
   pref_change_handler_->DidAddTab(tab, TabModel::TabLaunchType::FROM_LINK);
 
+  // Verify that the message was created.
+  EXPECT_NE(pref_change_handler_->message_, nullptr);
+
   // After adding a tab and calling DidAddTab, the observers should be removed.
   EXPECT_FALSE(pref_change_handler_->IsObservingTabModelForTesting());
   EXPECT_FALSE(pref_change_handler_->IsObservingTabModelListForTesting());
-  TabModelList::RemoveTabModel(&tab_model);
+
+  messages::MessageDispatcherBridge::SetInstanceForTesting(nullptr);
 }
 
 TEST_F(SafeBrowsingPrefChangeHandlerAndroidTest, OnTabModelAddedAndRemoved) {
@@ -166,6 +219,47 @@ TEST_F(SafeBrowsingPrefChangeHandlerAndroidTest,
       prefs::kSafeBrowsingSyncedEnhancedProtectionSetLocally));
 
   TabModelList::RemoveTabModel(&tab_model);
+}
+
+// Verifies that Tailored Security sync updates correctly suppress redundant
+// generic notifications on Android, even after the sync flow completes.
+TEST_F(SafeBrowsingPrefChangeHandlerAndroidTest,
+       NoRetryAfterTailoredSecuritySync) {
+  // Force the handler into a retry-needed state (e.g., no WebContents).
+  pref_change_handler_->MaybeShowEnhancedProtectionSettingChangeNotification();
+  ASSERT_EQ(profile()->GetPrefs()->GetInteger(
+                prefs::kSafeBrowsingSyncedEnhancedProtectionRetryState),
+            static_cast<int>(MessageRetryHandler::RetryState::RETRY_NEEDED));
+
+  // Simulate Tailored Security sync flow.
+  {
+    TailoredSecurityService::ScopedSyncNotificationGuard guard(
+        *tailored_security_service());
+
+    profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnhanced, true);
+    profile()->GetPrefs()->SetBoolean(
+        prefs::kEnhancedProtectionEnabledViaTailoredSecurity, true);
+
+    // Generic modal is suppressed, and retry state is cleared because Tailored
+    // Security is handling the update.
+    pref_change_handler_
+        ->MaybeShowEnhancedProtectionSettingChangeNotification();
+    EXPECT_EQ(
+        profile()->GetPrefs()->GetInteger(
+            prefs::kSafeBrowsingSyncedEnhancedProtectionRetryState),
+        static_cast<int>(MessageRetryHandler::RetryState::NO_RETRY_NEEDED));
+  }
+
+  // After the sync, the retry logic should see the suppression pref and clear
+  // the retry state again.
+  pref_change_handler_->RetryStateCallback();
+
+  EXPECT_EQ(profile()->GetPrefs()->GetInteger(
+                prefs::kSafeBrowsingSyncedEnhancedProtectionRetryState),
+            static_cast<int>(MessageRetryHandler::RetryState::NO_RETRY_NEEDED));
+
+  // The generic modal should be suppressed even during the retry.
+  EXPECT_EQ(pref_change_handler_->message_, nullptr);
 }
 
 }  // namespace safe_browsing

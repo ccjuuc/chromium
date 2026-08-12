@@ -1,7 +1,6 @@
 <?xml version="1.0" ?>
 <!DOCTYPE translationbundle>
 <translationbundle lang="ur">
-<translation id="1028699632127661925"><ph name="DEVICE_NAME" /> پر بھیجا جا رہا ہے…</translation>
 <translation id="111910763555783249">اطلاع کی ترتیبات</translation>
 <translation id="1127811143501539442">{DAYS,plural, =1{1 دن پہلے}other{# دن پہلے}}</translation>
 <translation id="1156623771253174079">{SECONDS,plural, =1{1 منٹ پہلے}other{# منٹ پہلے}}</translation>
@@ -12,7 +11,6 @@
 <translation id="1253734725326687145">ٹچ ٹارگیٹ کو اوپر دائیں طرف منتقل کیا گیا۔ یہاں تھپتھپائیں۔</translation>
 <translation id="1266864766717917324"><ph name="CONTENT_TYPE" /> کا اشتراک نہیں کیا جا سکا</translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">چھوٹے ٹکڑوں میں متن کا اشتراک کرنے کی کوشش کریں۔</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">بائیں سے دائیں</translation>
 <translation id="1383876407941801731">تلاش کریں</translation>
@@ -20,6 +18,7 @@
 <translation id="1432724887402139994">{SECONDS,plural, =1{1 منٹ پہلے}other{# منٹ پہلے}}</translation>
 <translation id="1450753235335490080"><ph name="CONTENT_TYPE" /> کا اشتراک نہیں کیا جا سکتا</translation>
 <translation id="1523230076022876491">{MONTHS,plural, =1{1 ماہ پہلے}other{# ماہ پہلے}}</translation>
+<translation id="1591017414891297549">پیش منظر</translation>
 <translation id="1591184457164800433">{MINUTES,plural, =1{1 منٹ اور }other{# منٹ اور }}</translation>
 <translation id="1643823602425662293">اطلاع</translation>
 <translation id="169515659049020177">Shift</translation>
@@ -44,8 +43,7 @@
 <translation id="2148716181193084225">آج</translation>
 <translation id="2168039046890040389">صفحہ اوپر</translation>
 <translation id="2190355936436201913">(خالی)</translation>
-<translation id="2192232475740621500">کم کثافت کا استعمال کریں</translation>
-<translation id="2267918077332197517">اس سائٹ سے تمام اطلاعات کو مسدود کریں</translation>
+<translation id="2267918077332197517">اس سائٹ سے تمام اطلاعات کو بلاک کریں</translation>
 <translation id="2283117145434822734">F6</translation>
 <translation id="2289052229480071835">اپنی اسکرین پر ٹچ اہداف کو تھپتھپائیں۔</translation>
 <translation id="2295140143284145483">سروے</translation>
@@ -56,7 +54,6 @@
 <translation id="2388990488038464401">آپ کے فون سے اس نمبر پر کال کریں؟</translation>
 <translation id="2435457462613246316">پاس ورڈ دکھائیں</translation>
 <translation id="24452542372838207">اطلاع پھیلائيں</translation>
-<translation id="2445449901874883781">زیادہ کثافت کا استعمال کریں</translation>
 <translation id="2448407890032181691">ٹچ ٹارگیٹ کو اوپر دائیں طرف منتقل کیا گیا۔ یہاں تھپتھپائیں۔</translation>
 <translation id="2482878487686419369">اطلاعات</translation>
 <translation id="2497284189126895209">سبھی فائلیں</translation>
@@ -69,7 +66,6 @@
 <translation id="2586657967955657006">کلپ بورڈ</translation>
 <translation id="2653844658857826081">نیا</translation>
 <translation id="2666092431469916601">سرفہرست</translation>
-<translation id="2701330563083355633"><ph name="DEVICE_NAME" /> سے اشتراک کردہ</translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{1 سال پہلے}other{# سال پہلے}}</translation>
 <translation id="2878511608894704031">سبھی کو حذف کریں</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{1 دن میں}other{# دنوں میں}}</translation>
@@ -88,7 +84,6 @@
 <translation id="3306688585798492231">پہلے سے شامل ڈسپلے</translation>
 <translation id="335581015389089642">اسپیچ</translation>
 <translation id="3372635229069101468"><ph name="BEGIN_BOLD" />تفصیلات<ph name="END_BOLD" /> پر کلک کریں</translation>
-<translation id="3389286852084373014">متن کافی بڑا ہے</translation>
 <translation id="3406306243914553062">‏HTML مواد</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{1 دن باقی}other{# دن باقی}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" /> فائل</translation>
@@ -109,6 +104,7 @@
 <translation id="4031910098617850788">F5</translation>
 <translation id="40579289237549812">{UNREAD_NOTIFICATIONS,plural, =1{1 نہ پڑھی ہوئی اطلاع}other{# نہ پڑھی ہوئی اطلاعات}}</translation>
 <translation id="41501027364808384">{COUNT,plural, =1{پوشیدگی وضع میں درج ذیل ایکسٹینشن کو آن کریں:}other{پوشیدگی وضع میں درج ذیل ایکسٹینشنز کو آن کریں:}}</translation>
+<translation id="4230098358142093034">ہوم</translation>
 <translation id="4266252015790371705">{MONTHS,plural, =1{1 مہینہ پہلے}other{# مہینے پہلے}}</translation>
 <translation id="4277033906326892359">کالم <ph name="COLUMN_NAME" /> کو صعودی ترتیب میں ترتیب دیا گیا</translation>
 <translation id="4289300219472526559">بولنا شروع کریں</translation>
@@ -169,7 +165,7 @@
 <translation id="6394627529324717982">کوما</translation>
 <translation id="6397363302884558537">بولنا بند کریں</translation>
 <translation id="6404817160109697034">{SECONDS,plural, =1{1 سیکنڈ پہلے}other{# سیکنڈ پہلے}}</translation>
-<translation id="6430678249303439055">اس ایپ سے تمام اطلاعات کو مسدود کریں</translation>
+<translation id="6430678249303439055">اس ایپ سے تمام اطلاعات کو بلاک کریں</translation>
 <translation id="6483402905448010557">{SECONDS,plural, =1{1 سیکنڈ پہلے}other{# سیکنڈ پہلے}}</translation>
 <translation id="6503257047630241175">‏RTF مواد</translation>
 <translation id="6539092367496845964">کچھ غلط ہو گیا۔ بعد میں دوبارہ کوشش کریں۔</translation>
@@ -190,7 +186,6 @@
 <translation id="6965382102122355670">ٹھیک ہے</translation>
 <translation id="6974053822202609517">دائیں سے بائیں</translation>
 <translation id="7052633198403197513">F1</translation>
-<translation id="7170202025028120564">اگلی بار ری اسٹارٹ ہونے پر آپ کی ایپلیکیشن کے ڈسپلے کی ترتیبات لاگو ہوں گی۔</translation>
 <translation id="7222373446505536781">F11</translation>
 <translation id="7238427729722629793">{MINUTES,plural, =1{1 منٹ باقی}other{# منٹ باقی}}</translation>
 <translation id="7252604552361840748">اوپر ایکسٹینشن تلاش کریں</translation>
@@ -200,6 +195,7 @@
 <translation id="7410957453383678442">{MINUTES,plural, =1{1 منٹ باقی}other{# منٹ باقی}}</translation>
 <translation id="7437971918971306061"><ph name="COLUMN_NAME" /> کالم ترتیب نہیں دیا گیا۔</translation>
 <translation id="7460907917090416791">‎<ph name="QUANTITY" /> TB</translation>
+<translation id="7485236722522518129">F4</translation>
 <translation id="7507604095951736240">Emoji</translation>
 <translation id="7620655452534002301">ہٹا دیا گیا۔</translation>
 <translation id="7658239707568436148">منسوخ کریں</translation>
@@ -232,6 +228,7 @@
 <translation id="8677655579646609597"><ph name="QUANTITY" /> KB/s</translation>
 <translation id="8725488761726303204">+<ph name="NUMBER" /> مزید</translation>
 <translation id="8730621377337864115">ہوگیا</translation>
+<translation id="8741385002816058621">یہ پیش منظر میں ایک خصوصیت ہے</translation>
 <translation id="8772073294905169192">{HOURS,plural, =1{1h}other{#h}}</translation>
 <translation id="8798099450830957504">ڈیفالٹ</translation>
 <translation id="8841375032071747811">'پیچھے' بٹن</translation>
@@ -245,7 +242,6 @@
 <translation id="9170848237812810038">&amp;کالعدم کریں</translation>
 <translation id="9195990613383871904">آئندہ کل</translation>
 <translation id="928628199082367701">Super</translation>
-<translation id="932327136139879170">ھوم</translation>
 <translation id="944069440740578670">نہ پڑھی ہوئی اطلاعات</translation>
 <translation id="966963601246348639">{SECONDS,plural, =1{1 سیکنڈ پہلے}other{# سیکنڈ پہلے}}</translation>
 </translationbundle>

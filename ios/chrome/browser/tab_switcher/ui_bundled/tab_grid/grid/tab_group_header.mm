@@ -4,9 +4,37 @@
 
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/tab_group_header.h"
 
+#import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_groups/tab_group_edition_delegate.h"
+#import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_groups/tab_groups_constants.h"
+#import "ios/chrome/common/ui/util/constraints_ui_util.h"
+#import "ios/chrome/grit/ios_strings.h"
+#import "ui/base/l10n/l10n_util_mac.h"
+
 namespace {
 constexpr CGFloat kDotTitleSeparationMargin = 8;
 constexpr CGFloat kColoredDotSize = 20;
+constexpr CGFloat kTitleHorizontalInset = 12;
+constexpr CGFloat kTitleVerticalInset = 8;
+constexpr CGFloat kTitleBackgroundCornerRadius = 16;
+constexpr CGFloat kTitleBackgroundAlpha = 0.2;
+
+// Returns the horizontal inset constraint for the title and dot views.
+CGFloat GetHorizontalInsetForConstraints() {
+  if (IsOpenEditGroupViewByTappingTitleEnabled()) {
+    return kTitleHorizontalInset;
+  }
+  return 0;
+}
+
+// Returns the vertical inset constraint for the title view.
+CGFloat GetVerticalInsetForConstraints() {
+  if (IsOpenEditGroupViewByTappingTitleEnabled()) {
+    return kTitleVerticalInset;
+  }
+  return 0;
+}
+
 }  // namespace
 
 @implementation TabGroupHeader {
@@ -14,8 +42,8 @@ constexpr CGFloat kColoredDotSize = 20;
   UILabel* _titleView;
   // Dot view.
   UIView* _coloredDotView;
-  // Container for the whole title.
-  UIView* _container;
+  // The button container for the whole title.
+  UIButton* _titleButton;
   // Constraints for regular width.
   NSArray<NSLayoutConstraint*>* _regularWidthConstraints;
   // Constraints for compact width.
@@ -27,27 +55,30 @@ constexpr CGFloat kColoredDotSize = 20;
   if (self) {
     _titleView = [self titleView];
     _coloredDotView = [self coloredDotView];
-    _container = [[UIView alloc] init];
-    _container.translatesAutoresizingMaskIntoConstraints = NO;
 
-    [self addSubview:_container];
-    [_container addSubview:_coloredDotView];
-    [_container addSubview:_titleView];
+    _titleButton = [self titleButton];
+    _titleButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self addSubview:_titleButton];
+
+    [_titleButton addSubview:_coloredDotView];
+    [_titleButton addSubview:_titleView];
 
     _regularWidthConstraints = @[
-      [_container.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
-      [_container.widthAnchor
+      [_titleButton.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
+      [_titleButton.widthAnchor
           constraintLessThanOrEqualToAnchor:self.widthAnchor],
     ];
 
     _compactWidthConstraints = @[
-      [_container.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
-      [_container.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+      [_titleButton.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+      [_titleButton.trailingAnchor
+          constraintLessThanOrEqualToAnchor:self.trailingAnchor],
     ];
 
     [NSLayoutConstraint activateConstraints:@[
       [_coloredDotView.leadingAnchor
-          constraintEqualToAnchor:_container.leadingAnchor],
+          constraintEqualToAnchor:_titleButton.leadingAnchor
+                         constant:GetHorizontalInsetForConstraints()],
       [_coloredDotView.centerYAnchor
           constraintEqualToAnchor:_titleView.centerYAnchor],
 
@@ -56,12 +87,17 @@ constexpr CGFloat kColoredDotSize = 20;
                          constant:kDotTitleSeparationMargin],
 
       [_titleView.trailingAnchor
-          constraintEqualToAnchor:_container.trailingAnchor],
-      [_titleView.topAnchor constraintEqualToAnchor:_container.topAnchor],
-      [_titleView.bottomAnchor constraintEqualToAnchor:_container.bottomAnchor],
+          constraintEqualToAnchor:_titleButton.trailingAnchor
+                         constant:-GetHorizontalInsetForConstraints()],
+      [_titleView.topAnchor
+          constraintEqualToAnchor:_titleButton.topAnchor
+                         constant:GetVerticalInsetForConstraints()],
+      [_titleView.bottomAnchor
+          constraintEqualToAnchor:_titleButton.bottomAnchor
+                         constant:-GetVerticalInsetForConstraints()],
 
-      [_container.topAnchor constraintEqualToAnchor:self.topAnchor],
-      [_container.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+      [_titleButton.topAnchor constraintEqualToAnchor:self.topAnchor],
+      [_titleButton.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
     ]];
 
     if (self.traitCollection.horizontalSizeClass ==
@@ -92,6 +128,9 @@ constexpr CGFloat kColoredDotSize = 20;
                     value:[UIFont fontWithDescriptor:boldDescriptor size:0.0]
                     range:NSMakeRange(0, title.length)];
   _titleView.attributedText = boldTitle;
+  if (IsOpenEditGroupViewByTappingTitleEnabled()) {
+    _titleButton.accessibilityLabel = title;
+  }
 }
 
 - (void)setColor:(UIColor*)color {
@@ -100,6 +139,15 @@ constexpr CGFloat kColoredDotSize = 20;
   }
   _color = color;
   _coloredDotView.backgroundColor = color;
+
+  if (!IsOpenEditGroupViewByTappingTitleEnabled()) {
+    return;
+  }
+
+  UIButtonConfiguration* containerConfiguration = _titleButton.configuration;
+  containerConfiguration.background.backgroundColor =
+      [color colorWithAlphaComponent:kTitleBackgroundAlpha];
+  _titleButton.configuration = containerConfiguration;
 }
 
 #pragma mark - Private
@@ -109,6 +157,7 @@ constexpr CGFloat kColoredDotSize = 20;
   UIView* dotView = [[UIView alloc] initWithFrame:CGRectZero];
   dotView.translatesAutoresizingMaskIntoConstraints = NO;
   dotView.layer.cornerRadius = kColoredDotSize / 2;
+  dotView.userInteractionEnabled = NO;
 
   [NSLayoutConstraint activateConstraints:@[
     [dotView.heightAnchor constraintEqualToConstant:kColoredDotSize],
@@ -125,6 +174,7 @@ constexpr CGFloat kColoredDotSize = 20;
   titleLabel.numberOfLines = 1;
   titleLabel.adjustsFontForContentSizeCategory = YES;
   titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
+  titleLabel.userInteractionEnabled = NO;
   return titleLabel;
 }
 
@@ -137,6 +187,48 @@ constexpr CGFloat kColoredDotSize = 20;
   } else {
     [NSLayoutConstraint deactivateConstraints:_regularWidthConstraints];
     [NSLayoutConstraint activateConstraints:_compactWidthConstraints];
+  }
+}
+
+// Configures the title button.
+- (UIButton*)titleButton {
+  if (!IsOpenEditGroupViewByTappingTitleEnabled()) {
+    return [[UIButton alloc] init];
+  }
+
+  UIBackgroundConfiguration* backgroundConfiguration =
+      [UIBackgroundConfiguration clearConfiguration];
+  // This visualEffect should stay in sync with the one used for the
+  // buttons of the `topToolBar` in `TabGroupViewController`.
+  backgroundConfiguration.visualEffect = [UIBlurEffect
+      effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark];
+  backgroundConfiguration.cornerRadius = kTitleBackgroundCornerRadius;
+
+  UIButtonConfiguration* buttonConfiguration =
+      [UIButtonConfiguration plainButtonConfiguration];
+  buttonConfiguration.background = backgroundConfiguration;
+
+  UIButton* titleButton = [UIButton buttonWithConfiguration:buttonConfiguration
+                                              primaryAction:nil];
+
+  titleButton.accessibilityIdentifier =
+      kTabGroupTitleButtonToEditGroupIdentifier;
+  titleButton.accessibilityHint =
+      l10n_util::GetNSString(IDS_IOS_TAB_GROUP_EDITION_ACCESSIBILITY_HINT);
+  titleButton.accessibilityTraits |= UIAccessibilityTraitHeader;
+
+  [titleButton addTarget:self
+                  action:@selector(displayEditionMenu)
+        forControlEvents:UIControlEventTouchUpInside];
+
+  return titleButton;
+}
+
+// Shows the edition menu for the group.
+- (void)displayEditionMenu {
+  if ([self.tabGroupHeaderDelegate
+          respondsToSelector:@selector(tabGroupHeaderDidTapTitle:)]) {
+    [self.tabGroupHeaderDelegate tabGroupHeaderDidTapTitle:self];
   }
 }
 

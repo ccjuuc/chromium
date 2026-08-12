@@ -35,10 +35,6 @@ namespace content {
 class MockRenderThread;
 }
 
-namespace v8 {
-class ExtensionConfiguration;
-}
-
 namespace extensions {
 
 class ScriptContext;
@@ -76,12 +72,12 @@ class TestIPCMessageSender : public IPCMessageSender {
   MOCK_METHOD4(SendAddFilteredEventListenerIPC,
                void(ScriptContext* context,
                     const std::string& event_name,
-                    const base::Value::Dict& filter,
+                    const base::DictValue& filter,
                     bool is_lazy));
   MOCK_METHOD4(SendRemoveFilteredEventListenerIPC,
                void(ScriptContext* context,
                     const std::string& event_name,
-                    const base::Value::Dict& filter,
+                    const base::DictValue& filter,
                     bool remove_lazy_listener));
   MOCK_METHOD2(
       SendBindAutomationIPC,
@@ -101,7 +97,7 @@ class TestIPCMessageSender : public IPCMessageSender {
                     const ExtensionId& extension_id,
                     IPCMessageSender::ActivityLogCallType call_type,
                     const std::string& call_name,
-                    base::Value::List args,
+                    base::ListValue args,
                     const std::string& extra));
   const mojom::RequestParams* last_params() const { return last_params_.get(); }
 
@@ -130,7 +126,6 @@ class NativeExtensionBindingsSystemUnittest
   void SetUp() override;
   void TearDown() override;
   void OnWillDisposeContext(v8::Local<v8::Context> context) override;
-  v8::ExtensionConfiguration* GetV8ExtensionConfiguration() override;
   std::unique_ptr<TestJSRunner::Scope> CreateTestJSRunner() override;
 
   ScriptContext* CreateScriptContext(v8::Local<v8::Context> v8_context,
@@ -156,6 +151,7 @@ class NativeExtensionBindingsSystemUnittest
   void set_allow_unregistered_contexts(bool allow_unregistered_contexts) {
     allow_unregistered_contexts_ = allow_unregistered_contexts;
   }
+  void DestroyBindingsSystem();
 
   // NativeExtensionBindingsSystem::Delegate implementation.
   ScriptContextSetIterable* GetScriptContextSet() override;

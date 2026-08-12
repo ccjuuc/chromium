@@ -26,7 +26,6 @@
 #include "chrome/browser/ui/safety_hub/safety_hub_constants.h"
 #include "chrome/browser/ui/safety_hub/safety_hub_result.h"
 #include "chrome/browser/ui/safety_hub/safety_hub_util.h"
-#include "chrome/common/chrome_features.h"
 
 SafetyHubHatsService::SafetyHubHatsService(
     TrustSafetySentimentService* tss_service,
@@ -154,7 +153,7 @@ safety_hub::SafetyHubCardState SafetyHubHatsService::GetOverallState() {
 
   // Get the card data for all remaining modules (Chrome Version, Password
   // Status Check, Safe Browsing).
-  std::vector<base::Value::Dict> cards;
+  std::vector<base::DictValue> cards;
   cards.push_back(safety_hub_util::GetVersionCardData());
 
   PasswordStatusCheckService* psc_service =

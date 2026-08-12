@@ -25,7 +25,7 @@ class StaticBitmapImageTransformTest : public ::testing::Test {
     test_sii_ = base::MakeRefCounted<gpu::TestSharedImageInterface>();
     SharedGpuContext::Reset();
     test_context_provider_ = viz::TestContextProvider::CreateRaster();
-    InitializeSharedGpuContextRaster(test_context_provider_.get());
+    InitializeSharedGpuContext(test_context_provider_.get());
   }
 
   scoped_refptr<AcceleratedStaticBitmapImage> CreateAccelerated(
@@ -41,7 +41,7 @@ class StaticBitmapImageTransformTest : public ::testing::Test {
         gpu::kNullSurfaceHandle);
     return AcceleratedStaticBitmapImage::CreateFromCanvasSharedImage(
         std::move(client_si), test_sii_->GenUnverifiedSyncToken(), alpha_type,
-        SharedGpuContext::ContextProviderWrapper(),
+        gfx::HDRMetadata(), SharedGpuContext::ContextProviderWrapper(),
         base::PlatformThread::CurrentRef(),
         base::MakeRefCounted<base::NullTaskRunner>(), base::DoNothing());
   }
@@ -59,13 +59,13 @@ TEST_F(StaticBitmapImageTransformTest, ConvertColorSpace) {
 
   // A no-op color space conversion should not create a copy.
   auto image_srgb = StaticBitmapImageTransform::ConvertToColorSpace(
-      image, gfx::ColorSpace::CreateSRGB().ToSkColorSpace());
+      image, gfx::ColorSpace::CreateSRGB());
   EXPECT_EQ(image_srgb, image);
 
   // A non-no-op color space conversion should create a copy, and the copy
   // should have been done by the GPU.
   auto image_p3 = StaticBitmapImageTransform::ConvertToColorSpace(
-      image, gfx::ColorSpace::CreateDisplayP3D65().ToSkColorSpace());
+      image, gfx::ColorSpace::CreateDisplayP3D65());
   EXPECT_NE(image_p3, image);
   EXPECT_TRUE(image_p3->IsTextureBacked());
 }

@@ -11,14 +11,11 @@
 #include "base/strings/escape.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
+#include "components/download/public/common/download_item.h"
 #include "components/enterprise/connectors/core/connectors_prefs.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "ui/gfx/range/range.h"
-
-#if BUILDFLAG(USE_BLINK)
-#include "components/download/public/common/download_item.h"  // nogncheck
-#endif  // BUILDFLAG(USE_BLINK)
 
 namespace enterprise_connectors {
 
@@ -49,6 +46,10 @@ inline constexpr auto kUmaEnumToStringMap =
          kBrowserCrashUmaMetricName},
         {EnterpriseReportingEventType::kExtensionTelemetryEvent,
          kExtensionTelemetryUmaMetricName},
+        {EnterpriseReportingEventType::kSaasUsageReportEvent,
+         kSaasUsageUmaMetricName},
+        {EnterpriseReportingEventType::kBrowserLaunchEvent,
+         kBrowserLaunchUmaMetricName},
     });
 
 inline constexpr auto kEventCaseToUmaEnumMap =
@@ -76,6 +77,10 @@ inline constexpr auto kEventCaseToUmaEnumMap =
          EnterpriseReportingEventType::kBrowserCrashEvent},
         {EventCase::kExtensionTelemetryEvent,
          EnterpriseReportingEventType::kExtensionTelemetryEvent},
+        {EventCase::kSaasUsageReportEvent,
+         EnterpriseReportingEventType::kSaasUsageReportEvent},
+        {EventCase::kBrowserLaunchEvent,
+         EnterpriseReportingEventType::kBrowserLaunchEvent},
     });
 
 ContentAnalysisAcknowledgement::FinalAction RuleActionToAckAction(
@@ -87,6 +92,8 @@ ContentAnalysisAcknowledgement::FinalAction RuleActionToAckAction(
       return ContentAnalysisAcknowledgement::REPORT_ONLY;
     case TriggeredRule::WARN:
       return ContentAnalysisAcknowledgement::WARN;
+    case TriggeredRule::KEEP_IN_MANAGED_CHROME:
+      return ContentAnalysisAcknowledgement::KEEP_IN_MANAGED_CHROME;
     case TriggeredRule::FORCE_SAVE_TO_CLOUD:
     case TriggeredRule::BLOCK:
       return ContentAnalysisAcknowledgement::BLOCK;
@@ -114,10 +121,14 @@ const char* AnalysisConnectorPref(AnalysisConnector connector) {
       return kOnFileAttachedPref;
     case AnalysisConnector::PRINT:
       return kOnPrintPref;
+    case AnalysisConnector::NETWORK_REQUEST:
+      return kOnNetworkRequestPref;
     case AnalysisConnector::FILE_TRANSFER:
 #if BUILDFLAG(IS_CHROMEOS)
       return kOnFileTransferPref;
 #endif
+    case AnalysisConnector::DATA_COPIED:
+      return kOnDataCopiedPref;
     case AnalysisConnector::ANALYSIS_CONNECTOR_UNSPECIFIED:
       NOTREACHED() << "Using unspecified analysis connector";
   }
@@ -133,10 +144,14 @@ const char* AnalysisConnectorScopePref(AnalysisConnector connector) {
       return kOnFileAttachedScopePref;
     case AnalysisConnector::PRINT:
       return kOnPrintScopePref;
+    case AnalysisConnector::NETWORK_REQUEST:
+      return kOnNetworkRequestScopePref;
     case AnalysisConnector::FILE_TRANSFER:
 #if BUILDFLAG(IS_CHROMEOS)
       return kOnFileTransferScopePref;
 #endif
+    case AnalysisConnector::DATA_COPIED:
+      return kOnDataCopiedScopePref;
     case AnalysisConnector::ANALYSIS_CONNECTOR_UNSPECIFIED:
       NOTREACHED() << "Using unspecified analysis connector";
   }
@@ -171,13 +186,18 @@ TriggeredRule::Action GetHighestPrecedenceAction(
   // Don't use the enum's int values to determine precedence since that
   // may introduce bugs for new actions later.
   //
-  // The current precedence is BLOCK > WARN > REPORT_ONLY > UNSPECIFIED
+  // The current precedence is BLOCK > FORCE_SAVE_TO_CLOUD >
+  // KEEP_IN_MANAGED_CHROME > WARN > REPORT_ONLY > UNSPECIFIED
   if (action_1 == TriggeredRule::BLOCK || action_2 == TriggeredRule::BLOCK) {
     return TriggeredRule::BLOCK;
   }
   if (action_1 == TriggeredRule::FORCE_SAVE_TO_CLOUD ||
       action_2 == TriggeredRule::FORCE_SAVE_TO_CLOUD) {
     return TriggeredRule::FORCE_SAVE_TO_CLOUD;
+  }
+  if (action_1 == TriggeredRule::KEEP_IN_MANAGED_CHROME ||
+      action_2 == TriggeredRule::KEEP_IN_MANAGED_CHROME) {
+    return TriggeredRule::KEEP_IN_MANAGED_CHROME;
   }
   if (action_1 == TriggeredRule::WARN || action_2 == TriggeredRule::WARN) {
     return TriggeredRule::WARN;
@@ -199,10 +219,15 @@ ContentAnalysisAcknowledgement::FinalAction GetHighestPrecedenceAction(
   // Don't use the enum's int values to determine precedence since that
   // may introduce bugs for new actions later.
   //
-  // The current precedence is BLOCK > WARN > REPORT_ONLY > ALLOW > UNSPECIFIED
+  // The current precedence is BLOCK > KEEP_IN_MANAGED_CHROME > WARN >
+  // REPORT_ONLY > ALLOW > UNSPECIFIED
   if (action_1 == ContentAnalysisAcknowledgement::BLOCK ||
       action_2 == ContentAnalysisAcknowledgement::BLOCK) {
     return ContentAnalysisAcknowledgement::BLOCK;
+  }
+  if (action_1 == ContentAnalysisAcknowledgement::KEEP_IN_MANAGED_CHROME ||
+      action_2 == ContentAnalysisAcknowledgement::KEEP_IN_MANAGED_CHROME) {
+    return ContentAnalysisAcknowledgement::KEEP_IN_MANAGED_CHROME;
   }
   if (action_1 == ContentAnalysisAcknowledgement::WARN ||
       action_2 == ContentAnalysisAcknowledgement::WARN) {
@@ -316,7 +341,6 @@ CreateSampleCustomRuleMessage(const std::u16string& msg,
   return custom_message;
 }
 
-#if BUILDFLAG(USE_BLINK)
 std::optional<ContentAnalysisResponse::Result::TriggeredRule::CustomRuleMessage>
 GetDownloadsCustomRuleMessage(const download::DownloadItem* download_item,
                               download::DownloadDangerType danger_type) {
@@ -353,7 +377,6 @@ GetDownloadsCustomRuleMessage(const download::DownloadItem* download_item,
   }
   return std::nullopt;
 }
-#endif  // BUILDFLAG(USE_BLINK)
 
 bool ContainsMalwareVerdict(const ContentAnalysisResponse& response) {
   return std::ranges::any_of(response.results(), [](const auto& result) {
@@ -415,6 +438,8 @@ std::string EventResultToString(EventResult result) {
       return "EVENT_RESULT_BYPASSED";
     case EventResult::FORCED_SAVE_TO_CLOUD:
       return "EVENT_RESULT_FORCED_SAVE_TO_CLOUD";
+    case EventResult::CANCELLED:
+      return "EVENT_RESULT_CANCELLED";
   }
   NOTREACHED();
 }
@@ -445,6 +470,7 @@ std::string GetFailedUploadDurationUmaMetricName(
              : base::StrCat({kUnknownUmaMetricName, "UploadFailure.Duration"});
 }
 
+// LINT.IfChange(EnterpriseConnector)
 std::string DeepScanAccessPointToString(DeepScanAccessPoint access_point) {
   switch (access_point) {
     case DeepScanAccessPoint::DOWNLOAD:
@@ -459,6 +485,38 @@ std::string DeepScanAccessPointToString(DeepScanAccessPoint access_point) {
       return "Print";
     case DeepScanAccessPoint::FILE_TRANSFER:
       return "FileTransfer";
+    case DeepScanAccessPoint::ACTOR:
+      return "Actor";
+    case DeepScanAccessPoint::COPY:
+      return "Copy";
+    case DeepScanAccessPoint::NETWORK_REQUEST:
+      return "NetworkRequest";
+  }
+  NOTREACHED();
+}
+// LINT.ThenChange(//tools/metrics/histograms/metadata/safe_browsing/histograms.xml:EnterpriseConnector)
+
+std::string FinalContentAnalysisResultToString(
+    FinalContentAnalysisResult result) {
+  switch (result) {
+    case FinalContentAnalysisResult::FAILURE:
+      return "Failure";
+    case FinalContentAnalysisResult::FAIL_CLOSED:
+      return "FailClosed";
+    case FinalContentAnalysisResult::LARGE_FILES:
+      return "LargeFiles";
+    case FinalContentAnalysisResult::ENCRYPTED_FILES:
+      return "EncryptedFiles";
+    case FinalContentAnalysisResult::WARNING:
+      return "Warning";
+    case FinalContentAnalysisResult::SUCCESS:
+      return "Success";
+    case FinalContentAnalysisResult::FORCE_SAVE_TO_CLOUD:
+      return "ForceSaveToCloud";
+    case FinalContentAnalysisResult::CANCELLED:
+      return "Cancelled";
+    case FinalContentAnalysisResult::KEPT_IN_MANAGED_CHROME:
+      return "KeptInManagedChrome";
   }
   NOTREACHED();
 }

@@ -5,105 +5,228 @@
 package org.chromium.chrome.browser.ntp.search;
 
 import android.content.Context;
-import android.graphics.Color;
+import android.content.res.ColorStateList;
+import android.content.res.Resources;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
-import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
+import android.view.TouchDelegate;
 import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import org.chromium.base.Log;
+import androidx.annotation.Px;
+import androidx.core.widget.ImageViewCompat;
+
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.composeplate.ComposeplateUtils;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils;
+import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
+import org.chromium.chrome.browser.omnibox.GlifStrokeDrawable;
+import org.chromium.components.browser_ui.widget.RoundedCornerOutlineProvider;
+import org.chromium.components.browser_ui.widget.chips.ChipView;
 
 /** Provides the additional capabilities needed for the SearchBox container layout. */
 @NullMarked
 public class SearchBoxContainerView extends LinearLayout {
-    private static final String TAG = "SearchBoxContainer";
-    private View mComposeplateButtonView;
+    private final int mPaddingForShadowLateralPx;
+    TextView mHintTextView;
+    ImageView mDseIconView;
+    View mSearchBoxView;
+    ImageView mVoiceSearchButton;
+    ImageView mLensButton;
+    ImageView mPlusButton;
+    ChipView mAiChip;
+    GlifStrokeDrawable mGlifStrokeDrawable;
+    boolean mIsNtpAuroraEnabled;
+
+    private @Nullable TouchDelegate mTouchDelegate;
+    private @Nullable Rect mLastTouchDelegateRect;
 
     /** Constructor for inflating from XML. */
     public SearchBoxContainerView(Context context, AttributeSet attrs) {
         super(context, attrs);
+        mPaddingForShadowLateralPx =
+                getResources().getDimensionPixelSize(R.dimen.search_box_padding_for_shadow_lateral);
     }
 
     @Override
     protected void onFinishInflate() {
         super.onFinishInflate();
 
-        // TODO(crbug.com/347509698): Remove the log statements after fixing the bug.
-        Log.i(TAG, "SearchBoxContainerView.onFinishInflate before set typeface");
+        mHintTextView = findViewById(R.id.search_box_text);
+        mDseIconView = findViewById(R.id.search_box_engine_icon);
+        mSearchBoxView = findViewById(R.id.search_box_shadow_container);
+        mVoiceSearchButton = findViewById(R.id.voice_search_button);
+        mLensButton = findViewById(R.id.lens_camera_button);
+        mPlusButton = findViewById(R.id.search_box_plus_button);
+        mAiChip = findViewById(R.id.search_box_ai_chip);
+        // TODO(crbug.com/544731730): Remove this once ChipView#updateLayoutDirection is cleaned up
+        // and its render tests are updated to set layout direction on their test containers.
+        mAiChip.setLayoutDirection(LAYOUT_DIRECTION_INHERIT);
+        mPlusButton.addOnLayoutChangeListener(
+                (v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+                    updateTouchDelegate();
+                });
+        mIsNtpAuroraEnabled = NewTabPageUtils.isNtpAuroraEnabled();
 
-        TextView searchBoxTextView = findViewById(R.id.search_box_text);
         Typeface typeface = Typeface.create("google-sans-medium", Typeface.NORMAL);
-        searchBoxTextView.setTypeface(typeface);
+        mHintTextView.setTypeface(typeface);
+        Resources res = getResources();
+        @Px int size = res.getDimensionPixelSize(R.dimen.omnibox_search_engine_logo_composed_size);
+        @Px int radius = size / 2;
+        mDseIconView.setOutlineProvider(new RoundedCornerOutlineProvider(radius));
+        mDseIconView.setClipToOutline(true);
+        ImageViewCompat.setImageTintList(mDseIconView, /* tintList= */ null);
+        float cornerRadius = res.getDimension(R.dimen.ai_chip_corner_radius);
+        mGlifStrokeDrawable = new GlifStrokeDrawable(getContext(), cornerRadius);
 
-        mComposeplateButtonView = findViewById(R.id.composeplate_button);
-
-        Log.i(TAG, "SearchBoxContainerView.onFinishInflate after set typeface");
+        LayerDrawable foreground = (LayerDrawable) mAiChip.getForeground();
+        foreground.setDrawableByLayerId(R.id.glif_border_layer, mGlifStrokeDrawable);
+        mAiChip.setOnHoverListener(
+                (v, event) -> {
+                    if (event.getAction() == MotionEvent.ACTION_HOVER_ENTER) {
+                        mGlifStrokeDrawable.start();
+                    }
+                    return false;
+                });
     }
 
     @Override
     public boolean onInterceptTouchEvent(MotionEvent ev) {
         if (ev.getActionMasked() == MotionEvent.ACTION_DOWN) {
             if (getBackground() instanceof RippleDrawable) {
-                ((RippleDrawable) getBackground()).setHotspot(ev.getX(), ev.getY());
+                getBackground().setHotspot(ev.getX(), ev.getY());
             }
         }
         return super.onInterceptTouchEvent(ev);
     }
 
-    void setComposeplateButtonVisibility(boolean isVisible) {
-        mComposeplateButtonView.setVisibility(isVisible ? View.VISIBLE : View.GONE);
-        int endPaddingInDp =
-                isVisible
-                        ? R.dimen.fake_search_box_with_composeplate_button_end_padding
-                        : R.dimen.fake_search_box_end_padding;
-        setPaddingRelative(
-                getPaddingStart(),
-                getPaddingTop(),
-                getResources().getDimensionPixelSize(endPaddingInDp),
-                getPaddingBottom());
+    void setDseIconDrawable(@Nullable Drawable drawable) {
+        mDseIconView.setImageDrawable(drawable);
+    }
+
+    void setPlusButtonClickListener(@Nullable OnClickListener listener) {
+        mPlusButton.setOnClickListener(listener);
+    }
+
+    /**
+     * Updates the visibility of the plus button and DSE icon, synchronizing the touch delegate.
+     *
+     * @param visible Whether the plus button should be visible.
+     */
+    void updateStartIconVisibility(boolean visible) {
+        mPlusButton.setVisibility(visible ? View.VISIBLE : View.GONE);
+        mDseIconView.setVisibility(visible ? View.GONE : View.VISIBLE);
+        updateTouchDelegate();
     }
 
     /**
      * Applies or cleans up the white background for the search box.
      *
-     * @param apply Whether to apply a white background color to the fake search box.
+     * @param applyWhiteBackground Whether to apply a white background color to the fake search box.
      */
-    void applyWhiteBackgroundWithShadow(boolean apply) {
-        Context context = getContext();
-        Drawable defaultBackground =
-                context.getDrawable(R.drawable.home_surface_search_box_background);
-        View searchBoxContainerView = findViewById(R.id.search_box_container);
-        if (!apply) {
-            setBackground(null);
-            // Sets elevation to 0 to remove the shadow.
-            setElevation(0f);
-            setClipToOutline(false);
-            // Resets to the default background drawable.
-            searchBoxContainerView.setBackground(defaultBackground);
+    void applyWhiteBackgroundAndShadow(boolean applyWhiteBackground) {
+        View searchBoxShadowContainerView = findViewById(R.id.search_box_shadow_container);
+        if (searchBoxShadowContainerView == null) return;
+
+        ComposeplateUtils.applyWhiteBackground(
+                getContext(), searchBoxShadowContainerView, applyWhiteBackground);
+        applyShadow(searchBoxShadowContainerView);
+        updateSearchBoxPaddingAndMarginForShadow(mIsNtpAuroraEnabled);
+    }
+
+    private void applyShadow(View searchBoxShadowContainerView) {
+        if (mIsNtpAuroraEnabled) {
+            NtpCustomizationUtils.applyShadow(
+                    getContext(), searchBoxShadowContainerView, mIsNtpAuroraEnabled);
+            // Disable clipping to allow the shadow to be drawn outside the view bounds. This
+            // provides a solution without adding margins to the top/bottom of the view.
+            setClipToPadding(false);
+            setClipChildren(false);
             return;
         }
 
-        if (defaultBackground == null) return;
+        // Reset clipping to default to avoid unexpected behavior.
+        setClipToPadding(true);
+        setClipChildren(true);
+    }
 
-        // Adds a black shadow around the search box.
-        setElevation(
-                context.getResources().getDimensionPixelSize(R.dimen.ntp_search_box_elevation));
-        setClipToOutline(true);
-        GradientDrawable shadowBackground = (GradientDrawable) defaultBackground.mutate();
-        shadowBackground.setColor(Color.BLACK);
-        setBackground(shadowBackground);
+    private void updateSearchBoxPaddingAndMarginForShadow(boolean applyShadow) {
+        ViewGroup.MarginLayoutParams layoutParams =
+                (ViewGroup.MarginLayoutParams) getLayoutParams();
+        if (layoutParams == null) return;
 
-        // Changes the background of the search_box_container to be white.
-        GradientDrawable searchBoxBackground = (GradientDrawable) defaultBackground.mutate();
-        searchBoxBackground.setColor(Color.WHITE);
+        if (applyShadow) {
+            setPadding(
+                    mPaddingForShadowLateralPx,
+                    getPaddingTop(),
+                    mPaddingForShadowLateralPx,
+                    getPaddingBottom());
+        } else {
+            setPadding(0, getPaddingTop(), 0, getPaddingBottom());
+        }
 
-        searchBoxContainerView.setBackground(searchBoxBackground);
+        setLayoutParams(layoutParams);
+    }
+
+    /**
+     * Applies elevation to the search box.
+     *
+     * @param apply Whether to apply elevation to the search box.
+     */
+    void applyElevation(boolean apply) {
+        if (!apply) {
+            mSearchBoxView.setElevation(0);
+            // Reset clipping to default to avoid unexpected behavior.
+            setClipToPadding(true);
+            setClipChildren(true);
+            return;
+        }
+
+        float elevation = getResources().getDimension(R.dimen.fake_search_box_elevation);
+        mSearchBoxView.setElevation(elevation);
+
+        // Disable clipping to allow the shadow to be drawn outside the view bounds. This provides a
+        // solution without adding margins to the top/bottom of the view.
+        setClipToPadding(false);
+        setClipChildren(false);
+    }
+
+    void setDseIconTint(@Nullable ColorStateList tint) {
+        ImageViewCompat.setImageTintList(mDseIconView, tint);
+    }
+
+    private void updateTouchDelegate() {
+        if (mPlusButton.getVisibility() != View.VISIBLE) {
+            if (mTouchDelegate != null) {
+                setTouchDelegate(null);
+                mTouchDelegate = null;
+                mLastTouchDelegateRect = null;
+            }
+            return;
+        }
+
+        Rect bounds = new Rect();
+        mPlusButton.getHitRect(bounds);
+        if (bounds.isEmpty()) return;
+
+        int minTargetSize = getResources().getDimensionPixelSize(R.dimen.min_touch_target_size);
+        int widthDelta = Math.max(0, minTargetSize - bounds.width()) / 2;
+        int heightDelta = Math.max(0, minTargetSize - bounds.height()) / 2;
+        bounds.inset(-widthDelta, -heightDelta);
+
+        if (bounds.equals(mLastTouchDelegateRect)) return;
+        mLastTouchDelegateRect = bounds;
+        mTouchDelegate = new TouchDelegate(bounds, mPlusButton);
+        setTouchDelegate(mTouchDelegate);
     }
 }

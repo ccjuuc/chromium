@@ -195,9 +195,9 @@ int GetGroupDegreeInBytes(EC_KEY* ec) {
 }
 
 // Extracts the public key as affine coordinates (x,y).
-Status GetPublicKey(EC_KEY* ec,
-                    bssl::UniquePtr<BIGNUM>* x,
-                    bssl::UniquePtr<BIGNUM>* y) {
+Status GetEcPublicKeyAffineCoordinates(EC_KEY* ec,
+                                       bssl::UniquePtr<BIGNUM>* x,
+                                       bssl::UniquePtr<BIGNUM>* y) {
   const EC_GROUP* group = EC_KEY_get0_group(ec);
   const EC_POINT* point = EC_KEY_get0_public_key(ec);
 
@@ -302,6 +302,7 @@ Status EcAlgorithm::ImportKey(blink::WebCryptoKeyFormat format,
                               blink::WebCryptoKey* key) const {
   switch (format) {
     case blink::kWebCryptoKeyFormatRaw:
+    case blink::kWebCryptoKeyFormatRawPublic:
       return ImportKeyRaw(key_data, algorithm, extractable, usages, key);
     case blink::kWebCryptoKeyFormatPkcs8:
       return ImportKeyPkcs8(key_data, algorithm, extractable, usages, key);
@@ -319,6 +320,7 @@ Status EcAlgorithm::ExportKey(blink::WebCryptoKeyFormat format,
                               std::vector<uint8_t>* buffer) const {
   switch (format) {
     case blink::kWebCryptoKeyFormatRaw:
+    case blink::kWebCryptoKeyFormatRawPublic:
       return ExportKeyRaw(key, buffer);
     case blink::kWebCryptoKeyFormatPkcs8:
       return ExportKeyPkcs8(key, buffer);
@@ -329,6 +331,23 @@ Status EcAlgorithm::ExportKey(blink::WebCryptoKeyFormat format,
     default:
       return Status::ErrorUnsupportedExportKeyFormat();
   }
+}
+
+Status EcAlgorithm::GetPublicKey(const blink::WebCryptoKey& key,
+                                 blink::WebCryptoKeyUsageMask usages,
+                                 blink::WebCryptoKey* public_key) const {
+  Status status = CheckKeyCreationUsages(all_public_key_usages_, usages);
+  if (status.IsError()) {
+    return status;
+  }
+
+  bssl::UniquePtr<EVP_PKEY> pub_pkey(EVP_PKEY_copy_public(GetEVP_PKEY(key)));
+  if (!pub_pkey) {
+    return Status::OperationError();
+  }
+
+  return CreateWebCryptoPublicKey(std::move(pub_pkey), key.Algorithm(), true,
+                                  usages, public_key);
 }
 
 Status EcAlgorithm::ImportKeyRaw(base::span<const uint8_t> key_data,
@@ -621,7 +640,7 @@ Status EcAlgorithm::ExportKeyJwk(const blink::WebCryptoKey& key,
 
   bssl::UniquePtr<BIGNUM> x;
   bssl::UniquePtr<BIGNUM> y;
-  status = GetPublicKey(ec, &x, &y);
+  status = GetEcPublicKeyAffineCoordinates(ec, &x, &y);
   if (status.IsError())
     return status;
 
@@ -642,6 +661,14 @@ Status EcAlgorithm::ExportKeyJwk(const blink::WebCryptoKey& key,
 
   jwk.ToJson(buffer);
   return Status::Success();
+}
+
+bool EcAlgorithm::Supports(blink::WebCryptoOperation op,
+                           const blink::WebCryptoAlgorithm& algorithm,
+                           std::optional<unsigned int> length_bits) const {
+  // For all operations with parameters, only parameter to check is the
+  // namedCurve and that is checked at algorithm parse time.
+  return true;
 }
 
 // TODO(eroman): Defer import to the crypto thread. http://crbug.com/430763

@@ -32,6 +32,7 @@
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/geometry/length.h"
+#include "third_party/blink/renderer/platform/geometry/length_point.h"
 #include "third_party/blink/renderer/platform/geometry/length_size.h"
 #include "third_party/blink/renderer/platform/geometry/path_types.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
@@ -82,55 +83,17 @@ class CORE_EXPORT BasicShape : public GarbageCollected<BasicShape> {
   virtual bool IsEqualAssumingSameType(const BasicShape&) const = 0;
 };
 
-class BasicShapeCenterCoordinate {
-  DISALLOW_NEW();
-
- public:
-  enum Direction { kTopLeft, kBottomRight };
-
-  explicit BasicShapeCenterCoordinate(Direction direction = kTopLeft,
-                                      const Length& length = Length::Fixed(0))
-      : direction_(direction),
-        length_(length),
-        computed_length_(direction == kTopLeft
-                             ? length
-                             : length.SubtractFromOneHundredPercent()) {}
-
-  BasicShapeCenterCoordinate(const BasicShapeCenterCoordinate&) = default;
-  BasicShapeCenterCoordinate& operator=(const BasicShapeCenterCoordinate&) =
-      default;
-
-  bool operator==(const BasicShapeCenterCoordinate& other) const {
-    return direction_ == other.direction_ && length_ == other.length_ &&
-           computed_length_ == other.computed_length_;
-  }
-
-  Direction GetDirection() const { return direction_; }
-
-  // <length> that has not been adjusted based on starting edge/direction. Used
-  // for recreating a CSSValue.
-  const Length& length() const { return length_; }
-
-  // <length> that has been adjusted based on starting edge/direction. Used to
-  // produce a used value.
-  const Length& ComputedLength() const { return computed_length_; }
-
- private:
-  Direction direction_;
-  Length length_;
-  Length computed_length_;
-};
-
-// Resolve a pair of <x, y> "center coordinates" into a point.
-gfx::PointF PointForCenterCoordinate(const BasicShapeCenterCoordinate& center_x,
-                                     const BasicShapeCenterCoordinate& center_y,
-                                     gfx::SizeF box_size);
-
 class BasicShapeRadius {
   DISALLOW_NEW();
 
  public:
-  enum RadiusType { kValue, kClosestSide, kFarthestSide };
+  enum RadiusType {
+    kValue,
+    kClosestSide,
+    kFarthestSide,
+    kClosestCorner,
+    kFarthestCorner
+  };
   BasicShapeRadius() : type_(kClosestSide) {}
   explicit BasicShapeRadius(const Length& v) : value_(v), type_(kValue) {}
   explicit BasicShapeRadius(RadiusType t) : type_(t) {}
@@ -155,18 +118,15 @@ class BasicShapeWithCenterAndRadii : public BasicShape {
   }
   bool HasExplicitCenter() const { return is_center_explicitly_set_; }
 
-  void SetCenterX(BasicShapeCenterCoordinate center_x) { center_x_ = center_x; }
-  void SetCenterY(BasicShapeCenterCoordinate center_y) { center_y_ = center_y; }
-  const BasicShapeCenterCoordinate& CenterX() const { return center_x_; }
-  const BasicShapeCenterCoordinate& CenterY() const { return center_y_; }
+  void SetCenter(LengthPoint&& center) { center_ = center; }
+  const LengthPoint& Center() const { return center_; }
 
   virtual Path GetPathFromCenter(const gfx::PointF&,
                                  const gfx::RectF&,
                                  float path_scale) const = 0;
 
  protected:
-  BasicShapeCenterCoordinate center_x_;
-  BasicShapeCenterCoordinate center_y_;
+  LengthPoint center_;
 
  private:
   bool is_center_explicitly_set_ = true;
@@ -218,9 +178,8 @@ class BasicShapeEllipse final : public BasicShapeWithCenterAndRadii {
 
   const BasicShapeRadius& RadiusX() const { return radius_x_; }
   const BasicShapeRadius& RadiusY() const { return radius_y_; }
-  float FloatValueForRadiusInBox(const BasicShapeRadius&,
-                                 float center,
-                                 float box_width_or_height) const;
+  gfx::SizeF ResolveRadii(const gfx::PointF& center,
+                          const gfx::SizeF& box_size) const;
 
   void SetRadiusX(BasicShapeRadius radius_x) { radius_x_ = radius_x; }
   void SetRadiusY(BasicShapeRadius radius_y) { radius_y_ = radius_y; }
@@ -236,6 +195,9 @@ class BasicShapeEllipse final : public BasicShapeWithCenterAndRadii {
   bool IsEqualAssumingSameType(const BasicShape&) const override;
 
  private:
+  float FloatValueForRadiusInBox(const BasicShapeRadius&,
+                                 float center,
+                                 float box_width_or_height) const;
 
   BasicShapeRadius radius_x_;
   BasicShapeRadius radius_y_;
@@ -250,11 +212,17 @@ struct DowncastTraits<BasicShapeEllipse> {
 
 class BasicShapePolygon final : public BasicShape {
  public:
-  BasicShapePolygon() : wind_rule_(RULE_NONZERO) {}
+  BasicShapePolygon()
+      : wind_rule_(RULE_NONZERO), rounding_radius_(Length::Fixed(0)) {}
 
   const Vector<Length>& Values() const { return values_; }
+  bool HasRoundingRadius() const { return !rounding_radius_.IsZero(); }
+  const Length& RoundingRadius() const { return rounding_radius_; }
 
   void SetWindRule(WindRule wind_rule) { wind_rule_ = wind_rule; }
+  void SetRoundingRadius(const Length& rounding_radius) {
+    rounding_radius_ = rounding_radius;
+  }
   void AppendPoint(const Length& x, const Length& y) {
     values_.push_back(x);
     values_.push_back(y);
@@ -271,6 +239,7 @@ class BasicShapePolygon final : public BasicShape {
 
  private:
   WindRule wind_rule_;
+  Length rounding_radius_;
   Vector<Length> values_;
 };
 

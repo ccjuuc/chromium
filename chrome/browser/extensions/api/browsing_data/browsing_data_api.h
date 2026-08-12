@@ -91,14 +91,13 @@ class BrowsingDataSettingsFunction : public ExtensionFunction {
   // indicating whether the data type is both selected and permitted to be
   // removed; and a value in the `permitted_dict` with the `data_type` as a
   // key, indicating only whether the data type is permitted to be removed.
-  void SetDetails(base::Value::Dict* selected_dict,
-                  base::Value::Dict* permitted_dict,
+  void SetDetails(base::DictValue* selected_dict,
+                  base::DictValue* permitted_dict,
                   const char* data_type,
                   bool is_selected);
 
-  // Returns whether `data_type` is currently selected for deletion on `tab`.
-  bool isDataTypeSelected(browsing_data::BrowsingDataType data_type,
-                          browsing_data::ClearBrowsingDataTab tab);
+  // Returns whether `data_type` is currently selected for deletion.
+  bool isDataTypeSelected(browsing_data::BrowsingDataType data_type);
 
   raw_ptr<PrefService> prefs_ = nullptr;
 };
@@ -149,7 +148,7 @@ class BrowsingDataRemoverFunction
   // that can be used with the BrowsingDataRemover.
   // Returns true if parsing was successful.
   // Pre-condition: `options` is a dictionary.
-  bool ParseOriginTypeMask(const base::Value::Dict& options,
+  bool ParseOriginTypeMask(const base::DictValue& options,
                            uint64_t* origin_type_mask);
 
   // Parses the developer-provided list of origins into `result`.
@@ -157,7 +156,7 @@ class BrowsingDataRemoverFunction
   // `error_response` will contain the error response.
   using OriginParsingResult =
       base::expected<std::vector<url::Origin>, ResponseValue>;
-  OriginParsingResult ParseOrigins(const base::Value::List& list_value);
+  OriginParsingResult ParseOrigins(const base::ListValue& list_value);
 
   // Called when we're ready to start removing data.
   void StartRemoving();

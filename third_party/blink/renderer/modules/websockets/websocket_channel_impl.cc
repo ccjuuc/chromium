@@ -37,16 +37,19 @@
 #include <limits>
 #include <memory>
 
+#include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
+#include "base/numerics/checked_math.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_view_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/types/strong_alias.h"
+#include "third_party/blink/public/common/switches.h"
 #include "third_party/blink/public/mojom/websockets/websocket_connector.mojom-blink.h"
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/platform.h"
@@ -289,15 +292,19 @@ bool WebSocketChannelImpl::Connect(const KURL& url, const String& protocol) {
   }
 
   if (auto* scheduler = execution_context_->GetScheduler()) {
-    // Two features are registered here:
-    // - `kWebSocket`: a non-sticky feature that will disable BFCache for any
-    // page. It will be reset after the `WebSocketChannel` is closed.
-    // - `kWebSocketSticky`: a sticky feature that will only disable BFCache for
-    // the page containing "Cache-Control: no-store" header. It won't be reset
-    // even if the `WebSocketChannel` is closed.
-    feature_handle_for_scheduler_ = scheduler->RegisterFeature(
-        SchedulingPolicy::Feature::kWebSocket,
-        SchedulingPolicy{SchedulingPolicy::DisableBackForwardCache()});
+    if (!RuntimeEnabledFeatures::DisconnectWebSocketOnBFCacheEnabled() ||
+        base::CommandLine::ForCurrentProcess()->HasSwitch(
+            blink::switches::kDisableBackForwardCacheForWebSockets)) {
+      // Two features are registered here:
+      // - `kWebSocket`: a non-sticky feature that will disable BFCache for any
+      // page. It will be reset after the `WebSocketChannel` is closed.
+      // - `kWebSocketSticky`: a sticky feature that will only disable BFCache
+      // for the page containing "Cache-Control: no-store" header. It won't be
+      // reset even if the `WebSocketChannel` is closed.
+      feature_handle_for_scheduler_ = scheduler->RegisterFeature(
+          SchedulingPolicy::Feature::kWebSocket,
+          SchedulingPolicy{SchedulingPolicy::DisableBackForwardCache()});
+    }
     scheduler->RegisterStickyFeature(
         SchedulingPolicy::Feature::kWebSocketSticky,
         SchedulingPolicy{SchedulingPolicy::DisableBackForwardCache()});
@@ -320,7 +327,7 @@ bool WebSocketChannelImpl::Connect(const KURL& url, const String& protocol) {
   if (!protocol.empty()) {
     // Since protocol is already verified and escaped, we can simply split
     // it.
-    protocol.Split(", ", true, protocols);
+    protocols = protocol.Split(", ");
   }
 
   // If the connection needs to be filtered, asynchronously fail. Synchronous
@@ -339,13 +346,11 @@ bool WebSocketChannelImpl::Connect(const KURL& url, const String& protocol) {
   // are throttled by the network service.
   if (connection_count_tracker_handle_.IncrementAndCheckStatus() ==
       ConnectionCountTrackerHandle::CountStatus::kShouldNotConnect) {
-    StringBuilder message;
-    message.Append("WebSocket connection to '");
-    message.Append(url.GetString());
-    message.Append("' failed: Insufficient resources");
+    String message = StrCat({"WebSocket connection to '", url.GetString(),
+                             "' failed: Insufficient resources"});
     execution_context_->AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
         mojom::blink::ConsoleMessageSource::kNetwork,
-        mojom::blink::ConsoleMessageLevel::kError, message.ToString()));
+        mojom::blink::ConsoleMessageLevel::kError, message));
     execution_context_->GetTaskRunner(TaskType::kNetworking)
         ->PostTask(FROM_HERE,
                    BindOnce(&WebSocketChannelImpl::TearDownFailedConnection,
@@ -358,17 +363,16 @@ bool WebSocketChannelImpl::Connect(const KURL& url, const String& protocol) {
       connector.BindNewPipeAndPassReceiver(
           execution_context_->GetTaskRunner(TaskType::kWebSocket)));
 
-  std::optional<base::UnguessableToken> devtools_token;
+  std::optional<base::UnguessableToken> devtools_throttling_token;
   probe::WillCreateWebSocket(execution_context_, identifier_, url, protocol,
-                             &devtools_token);
+                             &devtools_throttling_token);
 
   connector->Connect(
-      url, protocols, GetBaseFetchContext()->GetSiteForCookies(),
-      execution_context_->UserAgent(),
+      url, protocols, execution_context_->UserAgent(),
       execution_context_->GetStorageAccessApiStatus(),
       handshake_client_receiver_.BindNewPipeAndPassRemote(
           execution_context_->GetTaskRunner(TaskType::kWebSocket)),
-      /*throttling_profile_id=*/devtools_token);
+      /*throttling_profile_id=*/devtools_throttling_token);
   handshake_client_receiver_.set_disconnect_with_reason_handler(
       blink::BindOnce(&WebSocketChannelImpl::OnConnectionError,
                       WrapWeakPersistent(this), FROM_HERE));
@@ -623,8 +627,14 @@ void WebSocketChannelImpl::OnDataFrame(bool fin,
   DCHECK_EQ(GetState(), State::kOpen);
   DVLOG(1) << this << " OnDataFrame(" << fin << ", " << type << ", "
            << "(data_length = " << data_length << "))";
-  pending_data_frames_.push_back(
-      DataFrame(fin, type, static_cast<uint32_t>(data_length)));
+  if (!base::IsValueInRangeForNumericType<uint32_t>(data_length)) {
+    // TODO(crbug.com/489056768): Change the mojo type to uint32_t since
+    // frames are never larger than the data pipe capacity.
+    mojo::ReportBadMessage("Frame too large");
+    return;
+  }
+  pending_data_frames_.emplace_back(fin, type,
+                                    base::checked_cast<uint32_t>(data_length));
   ConsumePendingDataFrames();
 }
 
@@ -980,7 +990,7 @@ void WebSocketChannelImpl::DidFailLoadingBlob(FileErrorCode error_code) {
   }
   // FIXME: Generate human-friendly reason message.
   FailAsError(StrCat({"Failed to load Blob: error code = ",
-                      String::Number(static_cast<unsigned>(error_code))}));
+                      String::Number(static_cast<int>(error_code))}));
 }
 
 void WebSocketChannelImpl::TearDownFailedConnection() {
@@ -1086,9 +1096,29 @@ void WebSocketChannelImpl::ConsumeDataFrame(bool fin,
       break;
   }
 
-  const size_t message_size_so_far = message_chunks_->GetSize();
-  if (message_size_so_far > std::numeric_limits<wtf_size_t>::max()) {
+  // data.size() is always smaller than a mojo pipe, and
+  // message_chunks_->GetSize() is always smaller than 4GB, so this sum never
+  // overflows.
+  const size_t message_size =
+      base::CheckAdd(message_chunks_->GetSize(), data.size()).ValueOrDie();
+
+  // All characters representable in 1 UTF-16 code unit are represented in 3 or
+  // less bytes in UTF-8. Characters that require 4 bytes of UTF-8 are outside
+  // the basic multilingual plane, and so require 2 code units of UTF-16, so
+  // the ratio is never greater than 3.
+  static constexpr size_t kMaxUtf8BytesPerUtf16CodeUnit = 3u;
+  static constexpr size_t kMaxWtfSizeT = std::numeric_limits<wtf_size_t>::max();
+  static constexpr size_t kMaxStringBytes = std::min<size_t>(
+      kMaxWtfSizeT,
+      base::ValueOrDieForType<size_t>(base::CheckMul(
+          v8::String::kMaxLength, kMaxUtf8BytesPerUtf16CodeUnit)));
+  const size_t max_size = std::min(
+      max_message_size_,
+      receiving_message_type_is_text_ ? kMaxStringBytes : kMaxWtfSizeT);
+  if (message_size > max_size) {
     message_chunks_->Clear();
+    // TODO(crbug.com/491996744): This sends Close code 1001, "Going
+    // Away". It should actually send 1009, "Message Too Big".
     FailAsError("Message size is too large.");
     return;
   }
@@ -1097,7 +1127,7 @@ void WebSocketChannelImpl::ConsumeDataFrame(bool fin,
   // instead.
   if (receiving_message_type_is_text_ && received_text_is_all_ascii_) {
     for (auto& i : data) {
-      if (!IsASCII(i)) {
+      if (!IsAscii(i)) {
         received_text_is_all_ascii_ = false;
         break;
       }
@@ -1122,8 +1152,12 @@ void WebSocketChannelImpl::ConsumeDataFrame(bool fin,
       "WebSocketReceive", InspectorWebSocketTransferEvent::Data,
       execution_context_.Get(), identifier_, data.size());
   if (receiving_message_type_is_text_) {
-    String message = GetTextMessage(
-        chunks, static_cast<wtf_size_t>(message_size_so_far + data.size()));
+    // This checked_cast cannot fail as long as `max_message_size_` is less than
+    // or equal to `wtf_size_t` max value, due to the check earlier in this
+    // function. `max_message_size_` is always equal to `wtf_size_t` max value
+    // in production.
+    String message =
+        GetTextMessage(chunks, base::checked_cast<wtf_size_t>(message_size));
     if (message.IsNull()) {
       FailAsError("Could not decode a text frame as UTF-8.");
     } else {
@@ -1199,14 +1233,14 @@ String WebSocketChannelImpl::GetTextMessage(
   if (chunks.size() > 1) {
     flatten.reserve(size);
     for (const auto& chunk : chunks) {
-      flatten.AppendSpan(chunk);
+      flatten.append_range(chunk);
     }
     span = base::span(flatten);
   } else if (chunks.size() == 1) {
     span = chunks[0];
   }
   DCHECK_EQ(span.size(), size);
-  return String::FromUTF8(span);
+  return String::FromUtf8(span);
 }
 
 void WebSocketChannelImpl::OnConnectionError(const base::Location& set_from,
@@ -1221,7 +1255,7 @@ void WebSocketChannelImpl::OnConnectionError(const base::Location& set_from,
   if (description.empty()) {
     message = failure_message_;
   } else {
-    message = String::FromUTF8(description);
+    message = String::FromUtf8(description);
   }
 
   // This function is called when the implementation in the network service is

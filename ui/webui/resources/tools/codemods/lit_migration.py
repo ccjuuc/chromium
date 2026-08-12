@@ -16,26 +16,30 @@ import node
 
 """
  Instructions to run this script locally.
- 1) Create a package.json file in the same folder with the following contents.
+ 1) From the root of the repository run the following command
 
-{
-  "dependencies": {
-    "jscodeshift": "^0.15.1"
-  }
-}
+    npm install --prefix ui/webui/resources/tools/codemods/ --no-bin-links \
+        --no-fund --ignore-scripts --omit=dev --omit=optional
 
- 2) Run 'npm install' in the same folder.
-
- 3) Invoke the script from the root directory of the repository. For example
+ 2) Invoke the script from the root directory of the repository. For example
 
     python3 ui/webui/resources/tools/codemods/lit_migration.py \
         --file ui/webui/resources/cr_components/most_visited/most_visited.ts
+
+    To keep the HTML content in the .html file (but with styles removed and
+    some automated modifications made), instead of putting it into a .html.ts
+    wrapper file, pass the --output-html flag:
+
+    python3 ui/webui/resources/tools/codemods/lit_migration.py \
+        --file ui/webui/resources/cr_components/most_visited/most_visited.ts \
+        --output-html
 """
 
 
 def main(argv):
   parser = argparse.ArgumentParser()
   parser.add_argument('--file', required=True)
+  parser.add_argument('--output-html', dest='output_html', action='store_true')
   args = parser.parse_args(argv)
 
   print(f'Migrating {args.file}...')
@@ -52,13 +56,19 @@ def main(argv):
   ])
 
   # Update HTML/CSS file.
-  out = node.RunNode([
-      os.path.join(_HERE_PATH, 'lit_migration_templates.mjs'),
-      '--file=' + args.file,
-  ])
+  if args.output_html:
+    out = node.RunNode([
+        os.path.join(_HERE_PATH, 'lit_migration_templates.mjs'),
+        '--outputHtml',
+        '--file=' + args.file,
+    ])
+  else:
+    out = node.RunNode([
+        os.path.join(_HERE_PATH, 'lit_migration_templates.mjs'),
+        '--file=' + args.file,
+    ])
 
   print('DONE')
-
 
 if __name__ == '__main__':
   main(sys.argv[1:])

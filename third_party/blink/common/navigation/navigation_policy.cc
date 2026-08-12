@@ -55,7 +55,8 @@ void NavigationDownloadPolicy::ApplyDownloadFramePolicy(
     bool has_gesture,
     bool openee_can_access_opener_origin,
     bool has_download_sandbox_flag,
-    bool from_ad) {
+    bool from_ad_frame,
+    bool is_ad_script_in_stack) {
   if (!has_gesture)
     SetAllowed(NavigationDownloadType::kNoGesture);
 
@@ -69,26 +70,16 @@ void NavigationDownloadPolicy::ApplyDownloadFramePolicy(
     SetDisallowed(NavigationDownloadType::kSandbox);
   }
 
-  if (from_ad) {
+  if (from_ad_frame) {
     SetAllowed(NavigationDownloadType::kAdFrame);
     if (!has_gesture) {
       SetDisallowed(NavigationDownloadType::kAdFrameNoGesture);
     }
   }
-}
 
-blink::mojom::NavigationInitiatorActivationAndAdStatus
-GetNavigationInitiatorActivationAndAdStatus(bool has_user_activation,
-                                            bool initiator_frame_is_ad,
-                                            bool is_ad_script_in_stack) {
-  return has_user_activation
-             ? ((initiator_frame_is_ad || is_ad_script_in_stack)
-                    ? blink::mojom::NavigationInitiatorActivationAndAdStatus::
-                          kStartedWithTransientActivationFromAd
-                    : blink::mojom::NavigationInitiatorActivationAndAdStatus::
-                          kStartedWithTransientActivationFromNonAd)
-             : blink::mojom::NavigationInitiatorActivationAndAdStatus::
-                   kDidNotStartWithTransientActivation;
+  if (is_ad_script_in_stack) {
+    SetAllowed(NavigationDownloadType::kAdScript);
+  }
 }
 
 }  // namespace blink

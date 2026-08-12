@@ -58,13 +58,13 @@ class AndroidIdleMonitor {
 
   int CalculateIdleTime() {
     JNIEnv* env = AttachCurrentThread();
-    jlong result = Java_IdleDetector_getIdleTime(env, j_idle_manager_);
+    int64_t result = Java_IdleDetector_getIdleTime(env, j_idle_manager_);
     return result;
   }
 
   bool CheckIdleStateIsLocked() {
     JNIEnv* env = AttachCurrentThread();
-    jboolean result = Java_IdleDetector_isScreenLocked(env, j_idle_manager_);
+    bool result = Java_IdleDetector_isScreenLocked(env, j_idle_manager_);
     return result;
   }
 
@@ -83,12 +83,6 @@ bool CheckIdleStateIsLocked() {
     return IdleStateForTesting().value() == IDLE_STATE_LOCKED;
 
   return AndroidIdleMonitor::GetInstance()->CheckIdleStateIsLocked();
-}
-
-IdleState CalculateIdleState(int idle_threshold) {
-  // TODO(crbug.com/40591477): implementation pending.
-  NOTIMPLEMENTED();
-  return IdleState::IDLE_STATE_UNKNOWN;
 }
 
 }  // namespace ui

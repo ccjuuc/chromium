@@ -6,16 +6,24 @@
 
 #include <utility>
 
+#include "components/policy/core/common/features.h"
 #include "components/policy/core/common/policy_pref_names.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 constexpr char kAllTrafficWildcard[] = "*";
 
 // Returns a URL filter that covers all URL navigations.
-base::Value::List GetAllTrafficFilter() {
-  base::Value::List all_traffic;
+base::ListValue GetAllTrafficFilter() {
+  base::ListValue all_traffic;
   all_traffic.Append(kAllTrafficWildcard);
+  // URLBlocklistManager excludes chrome:// and chrome-untrusted:// URLs by
+  // default, see b/483966539. However in the Always-on VPN in strict mode with
+  // lockdown enabled case, they should be blocked by default and only allowed
+  // if explicitly allowlisted by the Administrator.
+  all_traffic.Append("chrome://*");
+  all_traffic.Append("chrome-untrusted://*");
   return all_traffic;
 }
 
@@ -36,11 +44,11 @@ class AlwaysOnVpnPreConnectBlocklistSource : public policy::BlocklistSource {
       const AlwaysOnVpnPreConnectBlocklistSource&) = delete;
   ~AlwaysOnVpnPreConnectBlocklistSource() override = default;
 
-  const base::Value::List* GetBlocklistSpec() const override {
+  const base::ListValue* GetBlocklistSpec() const override {
     return &blocklist_;
   }
 
-  const base::Value::List* GetAllowlistSpec() const override {
+  const base::ListValue* GetAllowlistSpec() const override {
     return &pref_change_registrar_.prefs()->GetList(
         policy::policy_prefs::kAlwaysOnVpnPreConnectUrlAllowlist);
   }
@@ -55,8 +63,10 @@ class AlwaysOnVpnPreConnectBlocklistSource : public policy::BlocklistSource {
         policy::policy_prefs::kAlwaysOnVpnPreConnectUrlAllowlist, observer);
   }
 
+  bool DowngradeAllowlistWildcardToNeutral() const override { return true; }
+
  private:
-  const base::Value::List blocklist_;
+  const base::ListValue blocklist_;
   PrefChangeRegistrar pref_change_registrar_;
 };
 
@@ -90,6 +100,37 @@ PolicyBlocklistService::GetURLBlocklistState(const GURL& url) const {
 PolicyBlocklistService::PolicyBlocklistState
 PolicyBlocklistService::GetURLBlocklistStateWithPolicySource(
     const GURL& url) const {
+  const auto general_state = url_blocklist_manager_->GetURLBlocklistState(url);
+
+  // If the feature is enabled we will check the Incognito blocklist state
+  // against the general blocklist state. If the URL is allowlisted against the
+  // Incognito blocklist but blocklisted against the general blocklist, we will
+  // block it.
+  if (base::FeatureList::IsEnabled(
+          policy::features::kURLBlocklistOverridesIncognitoAllowlist)) {
+    if (incognito_url_blocklist_manager_) {
+      const auto incognito_state =
+          incognito_url_blocklist_manager_->GetURLBlocklistState(url);
+
+      if (incognito_state != policy::URLBlocklist::URL_IN_BLOCKLIST &&
+          general_state == policy::URLBlocklist::URL_IN_BLOCKLIST) {
+        return {.url_blocklist_state = policy::URLBlocklist::URL_IN_BLOCKLIST,
+                .policy_source =
+                    PolicyBlocklistService::PolicyBlocklistState::URL_POLICY};
+      }
+
+      if (incognito_state != policy::URLBlocklist::URL_NEUTRAL_STATE) {
+        return {
+            .url_blocklist_state = incognito_state,
+            .policy_source =
+                PolicyBlocklistService::PolicyBlocklistState::INCOGNITO_POLICY};
+      }
+    }
+    return {.url_blocklist_state = general_state,
+            .policy_source =
+                PolicyBlocklistService::PolicyBlocklistState::URL_POLICY};
+  }
+
   if (incognito_url_blocklist_manager_) {
     const auto incognito_state =
         incognito_url_blocklist_manager_->GetURLBlocklistState(url);
@@ -100,10 +141,9 @@ PolicyBlocklistService::GetURLBlocklistStateWithPolicySource(
               PolicyBlocklistService::PolicyBlocklistState::INCOGNITO_POLICY};
     }
   }
-  return {
-      .url_blocklist_state = url_blocklist_manager_->GetURLBlocklistState(url),
-      .policy_source =
-          PolicyBlocklistService::PolicyBlocklistState::URL_POLICY};
+  return {.url_blocklist_state = general_state,
+          .policy_source =
+              PolicyBlocklistService::PolicyBlocklistState::URL_POLICY};
 }
 
 #if BUILDFLAG(IS_CHROMEOS)

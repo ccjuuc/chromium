@@ -73,20 +73,20 @@ float MotionEventAndroidSourceJava::GetPressure(size_t pointer_index) const {
 }
 
 float MotionEventAndroidSourceJava::GetAxisHscroll(size_t pointer_index) const {
-  return Java_MotionEvent_getAxisValue(AttachCurrentThread(), event_,
-                                       JNI_MotionEvent::AXIS_HSCROLL,
-                                       pointer_index);
+  return JNI_MotionEvent::Java_MotionEvent_getAxisValue(
+      AttachCurrentThread(), event_, MotionEventJni::AXIS_HSCROLL,
+      pointer_index);
 }
 
 float MotionEventAndroidSourceJava::GetAxisVscroll(size_t pointer_index) const {
-  return Java_MotionEvent_getAxisValue(AttachCurrentThread(), event_,
-                                       JNI_MotionEvent::AXIS_VSCROLL,
-                                       pointer_index);
+  return JNI_MotionEvent::Java_MotionEvent_getAxisValue(
+      AttachCurrentThread(), event_, MotionEventJni::AXIS_VSCROLL,
+      pointer_index);
 }
 
 float MotionEventAndroidSourceJava::GetRawTilt(size_t pointer_index) const {
-  return Java_MotionEvent_getAxisValue(
-      AttachCurrentThread(), event_, JNI_MotionEvent::AXIS_TILT, pointer_index);
+  return JNI_MotionEvent::Java_MotionEvent_getAxisValue(
+      AttachCurrentThread(), event_, MotionEventJni::AXIS_TILT, pointer_index);
 }
 
 MotionEvent::ToolType MotionEventAndroidSourceJava::GetToolType(
@@ -107,7 +107,7 @@ int MotionEventAndroidSourceJava::GetButtonState() const {
 
 base::TimeTicks MotionEventAndroidSourceJava::GetHistoricalEventTime(
     size_t historical_index) const {
-  jlong time_ms = JNI_MotionEvent::Java_MotionEvent_getHistoricalEventTime(
+  int64_t time_ms = JNI_MotionEvent::Java_MotionEvent_getHistoricalEventTime(
       AttachCurrentThread(), event_, historical_index);
   return base::TimeTicks::FromUptimeMillis(time_ms);
 }

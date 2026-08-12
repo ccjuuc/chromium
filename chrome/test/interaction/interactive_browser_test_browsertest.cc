@@ -103,6 +103,35 @@ IN_PROC_BROWSER_TEST_F(InteractiveBrowserTestBrowsertest, DumpElements) {
                   DumpElements());
 }
 
+IN_PROC_BROWSER_TEST_F(InteractiveBrowserTestBrowsertest, DumpWebContents) {
+  const GURL url = embedded_test_server()->GetURL(kDocumentWithNamedElement);
+  RunTestSequence(
+      InstrumentTab(kWebContentsId), NavigateWebContents(kWebContentsId, url),
+      ExecuteJsAt(kWebContentsId, DeepQuery({"#select"}), "(el) => el.focus()"),
+      DumpWebContents(kWebContentsId));
+}
+
+IN_PROC_BROWSER_TEST_F(InteractiveBrowserTestBrowsertest, DumpWebContentsAt) {
+  const GURL url = embedded_test_server()->GetURL(kDocumentWithNamedElement);
+  RunTestSequence(InstrumentTab(kWebContentsId),
+                  NavigateWebContents(kWebContentsId, url),
+                  DumpWebContentsAt(kWebContentsId, DeepQuery({"#select"})));
+}
+
+IN_PROC_BROWSER_TEST_F(InteractiveBrowserTestBrowsertest, DumpWebUiPage) {
+  const GURL url("chrome://history");
+  RunTestSequence(InstrumentTab(kWebContentsId),
+                  NavigateWebContents(kWebContentsId, url),
+                  DumpWebContents(kWebContentsId));
+}
+
+IN_PROC_BROWSER_TEST_F(InteractiveBrowserTestBrowsertest,
+                       DumpWebContentsWithEverything) {
+  const GURL url("chrome://history");
+  RunTestSequence(InstrumentTab(kWebContentsId),
+                  NavigateWebContents(kWebContentsId, url), DumpElements());
+}
+
 IN_PROC_BROWSER_TEST_F(InteractiveBrowserTestBrowsertest,
                        EnsurePresentNotPresent) {
   const GURL url = embedded_test_server()->GetURL(kDocumentWithNamedElement);
@@ -1155,7 +1184,8 @@ INSTANTIATE_TEST_SUITE_P(,
 
 // TODO(crbug.com/390224186) Re-enable the test after fixing the flakiness.
 // TODO(crbug.com/430147700) Re-enable after fixing flakiness on ChromeOS.
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+// TODO(crbug.com/478925583) Re-enable after fixing flakiness on Windows.
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
 #define MAYBE_TestCoverageEmits DISABLED_TestCoverageEmits
 #else
 #define MAYBE_TestCoverageEmits TestCoverageEmits
@@ -1189,7 +1219,7 @@ class InteractiveBrowserTestDialog : public views::DialogDelegateView {
     switch (modal_type) {
       case ui::mojom::ModalType::kWindow:
         widget = constrained_window::CreateBrowserModalDialogViews(
-            std::move(dialog), parent->window()->GetNativeWindow());
+            std::move(dialog), parent->GetWindow()->GetNativeWindow());
         break;
       case ui::mojom::ModalType::kChild:
         widget = constrained_window::CreateWebModalDialogViews(

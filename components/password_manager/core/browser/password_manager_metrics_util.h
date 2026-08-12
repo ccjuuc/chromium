@@ -8,6 +8,7 @@
 #include <stddef.h>
 
 #include <string>
+#include <string_view>
 
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -22,6 +23,12 @@
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/password_manager/core/common/credential_manager_types.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+
+class PrefService;
+
+namespace metrics {
+class ProfileMetricsService;
+}
 
 namespace password_manager::metrics_util {
 
@@ -382,7 +389,9 @@ enum class PasswordDropdownSelectedOption {
   // "Trouble signing in" disclaimer, displayed when trying to log in with APC
   // password.
   kTroubleSigningIn = 9,
-  kMaxValue = kTroubleSigningIn
+  // User selected the WebAuthn passkey QR code suggestion.
+  kWebAuthnPasskeyQrCode = 10,
+  kMaxValue = kWebAuthnPasskeyQrCode
 };
 
 // These values are persisted to logs. Entries should not be renumbered and
@@ -405,17 +414,6 @@ enum class SignInState {
   kSyncing = 2,
 };
 
-#if BUILDFLAG(IS_ANDROID)
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-// Should be kept in sync with SaveFlowStep in enums.xml.
-enum class SaveFlowStep {
-  // The form was submitted. Does not strictly require a successful submission.
-  kFormSubmitted = 0,
-  kSavePromptShown = 1,
-  kMaxValue = kSavePromptShown,
-};
-#endif
 
 // Represents different user interactions related to adding credential from the
 // setting. These values are persisted to logs. Entries should not be renumbered
@@ -440,10 +438,10 @@ enum class AddCredentialFromSettingsUserInteractions {
 };
 
 // Metrics: PasswordManager.MoveToAccountStoreTrigger.
-// This must be kept in sync with the enum in move_single_password_dialog.ts (in
-// chrome/browser/resources/password_manager/dialogs/).
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
+// This must be kept in sync with the enum in
+// `chrome/browser/resources/password_manager/sharing/metrics_utils.ts`. These
+// values are persisted to logs. Entries should not be renumbered and numeric
+// values should never be reused.
 enum class MoveToAccountStoreTrigger {
   // The user successfully logged in with a password from the profile store.
   kSuccessfulLoginWithProfileStorePassword = 0,
@@ -452,7 +450,7 @@ enum class MoveToAccountStoreTrigger {
   // The user explicitly asked to move multiple passwords at once in Settings.
   kExplicitlyTriggeredForMultiplePasswordsInSettings = 2,
   // Deprecated: kUserOptedInAfterSavingLocally = 3,
-  // Deprecated: kExplicitlyTriggeredForSinglePasswordInDetailsInSettings = 4,
+  kExplicitlyTriggeredForSinglePasswordInDetailsInSettings = 4,
   // The user clicked a link in a footer of the manage passwords bubble.
   kExplicitlyTriggeredInPasswordsManagementBubble = 5,
   kMaxValue = kExplicitlyTriggeredInPasswordsManagementBubble,
@@ -478,7 +476,7 @@ enum class PasswordNoteAction {
   kMaxValue = kNoteNotChanged,
 };
 
-std::string GetPasswordAccountStorageUserStateHistogramSuffix(
+std::string_view GetPasswordAccountStorageUserStateHistogramSuffix(
     password_manager::features_util::PasswordAccountStorageUserState
         user_state);
 
@@ -563,7 +561,8 @@ enum PasswordChangeFlowStep {
   kOpenFormStep = 0,
   kSubmitFormStep = 1,
   kVerifySubmissionStep = 2,
-  kMaxValue = kVerifySubmissionStep,
+  kLoginCheckStep = 3,
+  kMaxValue = kLoginCheckStep,
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/password/enums.xml:PasswordChangeFlowStep)
 
@@ -656,7 +655,7 @@ enum class BrowserAssistedLoginType {
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/password/enums.xml:BrowserAssistedLoginType)
 
-std::string GetPasswordAccountStorageUsageLevelHistogramSuffix(
+std::string_view GetPasswordAccountStorageUsageLevelHistogramSuffix(
     password_manager::features_util::PasswordAccountStorageUsageLevel
         usage_level);
 
@@ -689,7 +688,7 @@ class LeakDialogMetricsRecorder {
   double ukm_sampling_rate_ = 0.1;
 
   // Helper method to determine the suffix for the UMA.
-  const char* GetUMASuffix() const;
+  std::string_view GetUMASuffix() const;
 
   // The source id associated with the navigation.
   ukm::SourceId source_id_;
@@ -714,11 +713,6 @@ void LogSaveUIDismissalReason(
 
 // Log the |reason| a user dismissed the update password bubble.
 void LogUpdateUIDismissalReason(UIDismissalReason reason);
-
-// Log the |reason| a user dismissed the move password bubble.
-void LogMoveUIDismissalReason(
-    UIDismissalReason reason,
-    features_util::PasswordAccountStorageUserState user_state);
 
 // Log the appropriate display disposition.
 void LogUIDisplayDisposition(UIDisplayDisposition disposition);
@@ -785,7 +779,8 @@ void LogIfSavedPasswordWasGenerated(
     bool is_generated_password,
     password_manager::features_util::PasswordAccountStorageUsageLevel
         account_storage_usage_level,
-    ukm::SourceId ukm_source_id);
+    ukm::SourceId ukm_source_id,
+    metrics::ProfileMetricsService* profile_metrics_service);
 
 // Log whether the generated password was accepted or rejected for generation of
 // |type| (automatic or manual).
@@ -861,7 +856,7 @@ base::OnceCallback<R(Args...)> TimeCallbackMediumTimes(
 #if BUILDFLAG(IS_ANDROID)
 void LogTouchToFillPasswordGenerationTriggerOutcome(
     TouchToFillPasswordGenerationTriggerOutcome outcome);
-void LogFormSubmissionsVsSavePromptsHistogram(SaveFlowStep save_flow_step);
+
 void LogSharedPrefCredentialsAccessOutcome(
     SharedPrefCredentialsAccessOutcome outcome);
 #endif

@@ -4,12 +4,12 @@
 
 /* #css_wrapper_metadata_start
  * #type=style-lit
- * #import=chrome://customize-chrome-side-panel.top-chrome/shared/sp_shared_style_lit.css.js
+ * #import=chrome://customize-chrome-side-panel.top-chrome/shared/sp_shared_style.css.js
  * #import=chrome://resources/cr_elements/cr_hidden_style_lit.css.js
  * #import=chrome://resources/cr_elements/cr_icons_lit.css.js
  * #import=chrome://resources/cr_elements/cr_shared_vars.css.js
  * #scheme=relative
- * #include=cr-hidden-style-lit cr-icons-lit sp-shared-style-lit
+ * #include=cr-hidden-style-lit cr-icons-lit sp-shared-style
  * #css_wrapper_metadata_end */
 
 sp-heading {
@@ -152,7 +152,7 @@ customize-chrome-combobox {
 }
 
 #colorPickerIcon {
-  -webkit-mask-image: url(chrome://resources/images/colorize.svg);
+  -webkit-mask-image: url(chrome://resources/images/colorize_old.svg);
   -webkit-mask-repeat: no-repeat;
   -webkit-mask-size: 100%;
   background-color: var(
@@ -311,4 +311,8 @@ cr-grid {
 
 .expand-carets {
   --cr-icon-image: url(icons/expand_carets.svg);
+}
+
+:host-context([webui-rounded-icons]) #colorPickerIcon {
+  -webkit-mask-image: url(chrome://resources/images/colorize.svg);
 }

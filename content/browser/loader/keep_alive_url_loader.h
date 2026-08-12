@@ -15,6 +15,7 @@
 
 #include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
@@ -29,6 +30,7 @@
 #include "net/url_request/url_request.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/url_loader_completion_status.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "third_party/blink/public/common/features.h"
@@ -46,7 +48,7 @@ class URLLoaderThrottle;
 
 namespace content {
 
-class KeepAliveAttributionRequestHelper;
+class BrowserContext;
 class KeepAliveRequestTracker;
 class KeepAliveRequestBrowserTestBase;
 class KeepAliveURLLoaderService;
@@ -90,10 +92,6 @@ class WeakDocumentPtr;
 // The lifetime of an instance is roughly equal to the lifetime of a keepalive
 // request, which may surpass the initiator renderer's lifetime.
 //
-// TODO(crbug.com/447954811): Consider if connection allowlists feature
-// requires special handling in this class or is the check for subresource
-// fetch in the URLLoaderFactory sufficient.
-//
 // * Design Doc:
 // https://docs.google.com/document/d/1ZzxMMBvpqn8VZBZKnb7Go8TWjnrGcXuLS_USwVVRUvY
 // * Mojo Connections:
@@ -104,9 +102,9 @@ class CONTENT_EXPORT KeepAliveURLLoader
       public blink::mojom::FetchLaterLoader {
  public:
   // A callback type to delete this loader immediately on triggered.
-  using OnDeleteCallback = base::OnceCallback<void(void)>;
+  using OnDeleteCallback = base::OnceClosure;
   using CheckRetryEligibilityCallback = base::RepeatingCallback<bool(void)>;
-  using OnRetryScheduledCallback = base::RepeatingCallback<void(void)>;
+  using OnRetryScheduledCallback = base::RepeatingClosure;
 
   // A callback type to return URLLoaderThrottles to be used by this loader.
   using URLLoaderThrottlesGetter = base::RepeatingCallback<
@@ -139,9 +137,7 @@ class CONTENT_EXPORT KeepAliveURLLoader
       std::optional<ukm::SourceId> ukm_source_id,
       StoragePartitionImpl* storage_partition,
       URLLoaderThrottlesGetter throttles_getter,
-      base::PassKey<KeepAliveURLLoaderService>,
-      std::unique_ptr<KeepAliveAttributionRequestHelper>
-          attribution_request_helper);
+      base::PassKey<KeepAliveURLLoaderService>);
   ~KeepAliveURLLoader() override;
 
   // Not copyable.
@@ -228,9 +224,7 @@ class CONTENT_EXPORT KeepAliveURLLoader
   // Receives actions from renderer.
   // `network::mojom::URLLoader` overrides:
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_headers,
+      network::HttpRequestHeadersUpdateParams headers_update_params,
       const std::optional<GURL>& new_url) override;
   void SetPriority(net::RequestPriority priority,
                    int intra_priority_value) override;
@@ -354,6 +348,8 @@ class CONTENT_EXPORT KeepAliveURLLoader
   FRIEND_TEST_ALL_PREFIXES(KeepAliveURLLoaderServiceRetryTest,
                            ReceivedResponseWillNotBeRetried);
   FRIEND_TEST_ALL_PREFIXES(KeepAliveURLLoaderServiceRetryTest,
+                           RetryAfterRedirectResetsPerAttemptState);
+  FRIEND_TEST_ALL_PREFIXES(KeepAliveURLLoaderServiceRetryTest,
                            ExceededRedirectLimitWillNotBeRetried);
   FRIEND_TEST_ALL_PREFIXES(KeepAliveURLLoaderServiceRetryTest,
                            SelfDeletionOnMaxAge);
@@ -365,6 +361,10 @@ class CONTENT_EXPORT KeepAliveURLLoader
                            CookiesClearingWillDeleteRetryingLoader);
   FRIEND_TEST_ALL_PREFIXES(KeepAliveURLLoaderServiceRetryTest,
                            FailedMaxAttemptWillForwardLastError);
+  FRIEND_TEST_ALL_PREFIXES(KeepAliveURLLoaderServiceRetryTest,
+                           IneligibleErrorWillNotBeRetriedOnDisconnect);
+  FRIEND_TEST_ALL_PREFIXES(KeepAliveURLLoaderServiceRetryTest,
+                           NoResultWillBeRetriedOnDisconnect);
 
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused.
@@ -377,7 +377,7 @@ class CONTENT_EXPORT KeepAliveURLLoader
     kBeacon = 1,  // not used here.
     kPing = 2,
     kReporting = 3,
-    kAttribution = 4,  // not used here.
+    // kAttribution = 4,  obsolete.
     kBackgroundFetchIcon = 5,
     kMaxValue = kBackgroundFetchIcon,
   };
@@ -461,8 +461,14 @@ class CONTENT_EXPORT KeepAliveURLLoader
   // The UKM source ID used by `request_tracker_`.
   std::optional<ukm::SourceId> ukm_source_id_;
 
-  // The tracker to record the browser-side UKM metrics for this request.
-  std::unique_ptr<KeepAliveRequestTracker> request_tracker_;
+  // The trackers to record the browser-side UKM metrics for this request.
+  std::vector<std::unique_ptr<KeepAliveRequestTracker>> request_trackers_;
+
+  // The BrowserContext that owns `storage_partition_`. Cached because
+  // `StoragePartitionImpl::~StoragePartitionImpl()` clears its BrowserContext
+  // pointer in the destructor body before member destruction tears down the
+  // KeepAliveURLLoaderService that owns this loader.
+  const raw_ref<BrowserContext> browser_context_;
 
   // The StoragePartition that initiates this loader.
   // It is ensured to outlive this because it owns KeepAliveURLLoaderService
@@ -515,6 +521,12 @@ class CONTENT_EXPORT KeepAliveURLLoader
   };
   RetryState retry_state_ = RetryState::kNotAttemptingRetry;
 
+  // Stores the completion status of the most recent attempt.
+  // Set in `RetryOrDelayErrorIfNeeded()` when an error occurs, and reset in
+  // `MaybeScheduleRetry()` when a retry is scheduled.
+  std::optional<network::URLLoaderCompletionStatus>
+      last_attempt_completion_status_;
+
   // The last delay used for `retry_timer_` to schedule a retry.
   base::TimeDelta last_retry_delay_;
 
@@ -543,13 +555,6 @@ class CONTENT_EXPORT KeepAliveURLLoader
   // See also
   // https://docs.google.com/document/d/1RKPgoLBrrLZBPn01XtwHJiLlH9rA7nIRXQJIR7BUqJA/edit#heading=h.y1og20bzkuf7
   std::unique_ptr<blink::ThrottlingURLLoader> url_loader_;
-
-  // Request helper responsible for processing Attribution Reporting API
-  // operations (https://github.com/WICG/attribution-reporting-api). Only set if
-  // the request is related to attribution. When set, responses (redirects &
-  // final) handled by the loader will be forwarded to the helper.
-  std::unique_ptr<KeepAliveAttributionRequestHelper>
-      attribution_request_helper_;
 
   // For testing only:
   // Not owned.

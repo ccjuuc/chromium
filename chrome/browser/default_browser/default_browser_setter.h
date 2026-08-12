@@ -15,16 +15,27 @@ using DefaultBrowserState = shell_integration::DefaultWebClientState;
 using DefaultBrowserSetterCompletionCallback =
     base::OnceCallback<void(DefaultBrowserState)>;
 
+// LINT.IfChange(DefaultBrowserSetterType)
 enum class DefaultBrowserSetterType {
   // This setter utilizes `shell_integration` to set the Default Browser
   // directly (Mac and Linux) or by opening the Settings Panel UI and navigating
   // to the application page (Windows).
   kShellIntegration = 0,
-  kMaxValue = kShellIntegration
+
+  // On Mac and Linux, this setter will set the Default Browser directly.
+  // On Windows, this setter open the Settings Panel UI with a visual guided
+  // page to assist the user to set the default browser.
+  kVisualGuide = 1,
+  kMaxValue = kVisualGuide,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/ui/histograms.xml:DefaultBrowserSetterType)
 
 class DefaultBrowserSetter {
  public:
+  struct ExecuteParams {
+    bool can_pin_to_taskbar = false;
+  };
+
   virtual ~DefaultBrowserSetter() = default;
 
   // Returns the setter's type for UI configuration.
@@ -32,7 +43,8 @@ class DefaultBrowserSetter {
 
   // Asynchronously starts the process of setting the browser as default.
   // Accepts a callback for success/failure handling.
-  virtual void Execute(DefaultBrowserSetterCompletionCallback on_complete) = 0;
+  virtual void Execute(DefaultBrowserSetterCompletionCallback on_complete,
+                       const ExecuteParams& params) = 0;
 };
 
 }  // namespace default_browser

@@ -8,7 +8,9 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.omnibox.suggestions.SuggestionHost;
 import org.chromium.components.browser_ui.widget.chips.ChipProperties;
 import org.chromium.components.omnibox.AutocompleteMatch;
+import org.chromium.components.omnibox.action.ActionPresentationMode;
 import org.chromium.components.omnibox.action.OmniboxAction;
+import org.chromium.components.omnibox.action.OmniboxActionDelegate;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -17,12 +19,16 @@ import org.chromium.ui.modelutil.PropertyModel;
 @NullMarked
 public class ActionChipsProcessor {
     private final SuggestionHost mSuggestionHost;
+    private final OmniboxActionDelegate mActionDelegate;
 
     /**
      * @param suggestionHost Component receiving suggestion events.
+     * @param actionDelegate Delegate for OmniboxAction execution.
      */
-    public ActionChipsProcessor(SuggestionHost suggestionHost) {
+    public ActionChipsProcessor(
+            SuggestionHost suggestionHost, OmniboxActionDelegate actionDelegate) {
         mSuggestionHost = suggestionHost;
+        mActionDelegate = actionDelegate;
     }
 
     /**
@@ -33,7 +39,7 @@ public class ActionChipsProcessor {
      * @param position The position of the suggestion with OmniboxAction(s) on the suggestion list.
      */
     public void populateModel(AutocompleteMatch suggestion, PropertyModel model, int position) {
-        if (suggestion.getActions().isEmpty()) {
+        if (suggestion.getActions().isEmpty() || suggestion.getTakeoverAction() != null) {
             model.set(ActionChipsProperties.ACTION_CHIPS, null);
             return;
         }
@@ -43,7 +49,7 @@ public class ActionChipsProcessor {
 
         for (OmniboxAction action : actions) {
             // Skip the action that is shown as button, instead of chip.
-            if (action.showAsActionButton) {
+            if (action.presentationMode != ActionPresentationMode.CHIP) {
                 continue;
             }
 
@@ -55,6 +61,11 @@ public class ActionChipsProcessor {
                             .with(
                                     ChipProperties.CLICK_HANDLER,
                                     m -> executeAction(action, position))
+                            .with(
+                                    ChipProperties.SELECT_HANDLER,
+                                    isSelected ->
+                                            action.onActionFocusedFromKeyboard(
+                                                    isSelected, mActionDelegate))
                             .with(ChipProperties.ICON, action.icon.chipIconRes)
                             .with(ChipProperties.APPLY_ICON_TINT, action.icon.tintWithTextColor)
                             .with(

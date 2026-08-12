@@ -39,11 +39,6 @@ class CONTENT_EXPORT ActiveBlobRegistry {
 
   ~ActiveBlobRegistry();
 
-  // Most methods of this class, and the closure returned by
-  // GetMarkBlobActiveCallback, should only be called on the backing_store's
-  // task runner.  The exception is the closure returned by
-  // GetFinalReleaseCallback, which just calls MarkBlobInactiveThreadSafe.
-
   // Called when the given database is deleted (and all blob infos inside of
   // it). Returns true if any of the deleted blobs are active (i.e. referenced
   // by a client).
@@ -66,6 +61,9 @@ class CONTENT_EXPORT ActiveBlobRegistry {
   // called after it is deleted.
   base::RepeatingClosure GetMarkBlobActiveCallback(int64_t database_id,
                                                    int64_t blob_number);
+  // Returns true if any blobs are currently referenced by clients.
+  bool HasOutstandingBlobs() const;
+
   // Call this to force the registry to drop its use counts, permitting the
   // factory to drop any blob-related refcount for the backing store.
   // This will also turn any outstanding callbacks into no-ops.

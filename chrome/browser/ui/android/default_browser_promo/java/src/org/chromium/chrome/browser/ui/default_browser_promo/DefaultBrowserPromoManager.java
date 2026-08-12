@@ -11,6 +11,8 @@ import android.content.Context;
 import android.content.Intent;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.ui.default_browser_promo.DefaultBrowserPromoUtils.DefaultBrowserPromoEntryPoint;
 import org.chromium.chrome.browser.util.DefaultBrowserInfo.DefaultBrowserState;
 import org.chromium.ui.base.WindowAndroid;
 
@@ -24,22 +26,26 @@ public class DefaultBrowserPromoManager {
     private final WindowAndroid mWindowAndroid;
     private final DefaultBrowserPromoImpressionCounter mImpressionCounter;
     private final DefaultBrowserStateProvider mStateProvider;
+    @Nullable private final Integer mSource;
 
     /**
      * @param activity Activity to show promo dialogs.
      * @param windowAndroid The {@link WindowAndroid} for sending an intent.
      * @param impressionCounter The {@link DefaultBrowserPromoImpressionCounter}
      * @param stateProvider The {@link DefaultBrowserStateProvider}
+     * @param source The nullable source string for metrics (e.g. App Menu).
      */
     public DefaultBrowserPromoManager(
             Activity activity,
             WindowAndroid windowAndroid,
             DefaultBrowserPromoImpressionCounter impressionCounter,
-            DefaultBrowserStateProvider stateProvider) {
+            DefaultBrowserStateProvider stateProvider,
+            @Nullable @DefaultBrowserPromoEntryPoint Integer source) {
         mActivity = activity;
         mWindowAndroid = windowAndroid;
         mImpressionCounter = impressionCounter;
         mStateProvider = stateProvider;
+        mSource = source;
     }
 
     @SuppressLint({"WrongConstant", "NewApi"})
@@ -53,11 +59,31 @@ public class DefaultBrowserPromoManager {
         mWindowAndroid.showCancelableIntent(
                 intent,
                 (resultCode, data) -> {
-                    DefaultBrowserPromoMetrics.recordOutcome(
-                            currentState,
-                            mStateProvider.getCurrentDefaultBrowserState(),
-                            mImpressionCounter.getPromoCount());
+                    // After shown the Role Manager dialog, the default browser state may change,
+                    // We need to fetch the default browser info again to make sure the state is
+                    // updated before recording the outcome.
+                    DefaultBrowserPromoUtils.getInstance()
+                            .fetchDefaultBrowserInfo(
+                                    result -> {
+                                        recordOutcome(currentState);
+                                    });
                 },
                 null);
+    }
+
+    /**
+     * Records the outcome of a default browser promo interaction by comparing the browser's default
+     * state before and after the user responded to the promo. Logs both general outcome metrics.
+     *
+     * @param oldState The {@link DefaultBrowserState} captured before the promo was shown.
+     */
+    private void recordOutcome(int oldState) {
+        @DefaultBrowserState int newState = mStateProvider.getCurrentDefaultBrowserState();
+        DefaultBrowserPromoMetrics.recordOutcome(
+                oldState, newState, mImpressionCounter.getPromoCount());
+        // Source (e.g. App Menu) specific metric.
+        if (mSource != null) {
+            DefaultBrowserPromoMetrics.recordOutcome(newState, mSource);
+        }
     }
 }

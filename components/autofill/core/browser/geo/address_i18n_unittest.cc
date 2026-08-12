@@ -10,8 +10,8 @@
 #include <string>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/uuid.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
@@ -109,9 +109,20 @@ TEST(AddressI18nTest, UnconvertableFields) {
 
 TEST(AddressI18nTest, CreateAddressDataFromAutofillProfile) {
   AutofillProfile profile(i18n_model_definition::kLegacyHierarchyCountryCode);
-  test::SetProfileInfo(&profile, "John", "H.", "Doe", "johndoe@hades.com",
-                       "Underworld", "666 Erebus St.", "Apt 8", "Elysium", "CA",
-                       "91111", "US", "16502111111");
+  test::SetProfileInfo(&profile, test::SetProfileInfoOptionsBuilder()
+                                     .with_first_name("John")
+                                     .with_middle_name("H.")
+                                     .with_last_name("Doe")
+                                     .with_email("johndoe@hades.com")
+                                     .with_company("Underworld")
+                                     .with_address1("666 Erebus St.")
+                                     .with_address2("Apt 8")
+                                     .with_city("Elysium")
+                                     .with_state("CA")
+                                     .with_zipcode("91111")
+                                     .with_country("US")
+                                     .with_phone("16502111111")
+                                     .Build());
   profile.set_language_code("en");
   std::unique_ptr<AddressData> actual =
       CreateAddressDataFromAutofillProfile(profile, "en_US");
@@ -132,8 +143,9 @@ TEST(AddressI18nTest, CreateAddressDataFromAutofillProfile) {
 
 TEST(AddressI18nTest, ProfileOnlyWithAddressLine2ReturnsOneAddressLine) {
   AutofillProfile profile(i18n_model_definition::kLegacyHierarchyCountryCode);
-  test::SetProfileInfo(&profile, "", "", "", "", "", "", "Apt 8", "", "", "",
-                       "", "");
+  test::SetProfileInfo(
+      &profile,
+      test::SetProfileInfoOptionsBuilder().with_address2("Apt 8").Build());
   profile.set_language_code("en");
   std::unique_ptr<AddressData> actual =
       CreateAddressDataFromAutofillProfile(profile, "en_US");

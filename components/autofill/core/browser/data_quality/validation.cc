@@ -6,15 +6,12 @@
 
 #include <stddef.h>
 
-#include <ostream>
+#include <array>
+#include <string>
 #include <string_view>
 
-#include "base/check.h"
-#include "base/containers/adapters.h"
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/fixed_flat_set.h"
-#include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -25,7 +22,6 @@
 #include "components/autofill/core/common/autofill_regex_constants.h"
 #include "components/autofill/core/common/autofill_regexes.h"
 #include "components/autofill/core/common/credit_card_network_identifiers.h"
-#include "components/strings/grit/components_strings.h"
 
 namespace autofill {
 
@@ -76,6 +72,12 @@ bool IsPossiblePhoneNumber(std::u16string_view text,
   return i18n::IsPossiblePhoneNumber(base::UTF16ToUTF8(text), country_code);
 }
 
+bool IsPlaceholder(std::u16string_view text) {
+  static constexpr char16_t kPlaceholderRe[] =
+      u"\\b(?:select|choose|optional)\\b";
+  return MatchesRegex<kPlaceholderRe>(text);
+}
+
 bool IsValidZip(std::u16string_view text,
                 const AddressCountryCode& country_code,
                 bool extended_validation) {
@@ -121,7 +123,7 @@ bool IsValidZip(std::u16string_view text,
     if (country_code == AddressCountryCode("BR")) {
       return MatchesRegex<kBrZipCharacters>(text);
     }
-    if (base::Contains(kNumericZipCodeCountriesSet, country_code.value())) {
+    if (kNumericZipCodeCountriesSet.contains(country_code.value())) {
       return MatchesRegex<kNumericZipPattern>(text);
     }
     return true;
@@ -205,19 +207,13 @@ bool IsUPIVirtualPaymentAddress(std::u16string_view value) {
   return MatchesRegex<kUPIVirtualPaymentAddressRe>(value);
 }
 
-bool IsInternationalBankAccountNumber(std::u16string_view value) {
-  std::u16string no_spaces;
-  base::RemoveChars(value, u" ", &no_spaces);
-  return MatchesRegex<kInternationalBankAccountNumberValueRe>(no_spaces);
-}
-
 bool IsAchRoutingTransitNumber(std::u16string_view value) {
   // For a 9-digit Routing Transit Number, multiply the first eight digits by
   // [3,7,1,3,7,1,3,7], and total the results. The remaining ninth digit is the
   // checksum necessary to make the total sum up to the nearest value that is
   // evenly divisible by 10.
-  std::u16string trimmed_value;
-  base::TrimWhitespace(value, base::TRIM_ALL, &trimmed_value);
+  const std::u16string_view trimmed_value =
+      base::TrimWhitespace(value, base::TRIM_ALL);
 
   if (trimmed_value.length() != 9) {
     return false;

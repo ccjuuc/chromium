@@ -14,13 +14,14 @@
 #include "base/functional/callback.h"
 #include "build/build_config.h"
 #include "chrome/browser/web_applications/ui_manager/update_dialog_types.h"
-#include "chrome/browser/web_applications/web_app_callback_app_identity.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_uninstall_dialog_user_options.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
+#include "components/webapps/common/web_app_id.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/interaction/element_identifier.h"
+#include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/native_ui_types.h"
 
 static_assert(BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
@@ -44,7 +45,18 @@ class MlInstallOperationTracker;
 enum class WebappUninstallSource;
 }  // namespace webapps
 
+namespace views {
+class View;
+}  // namespace views
+
 namespace web_app {
+
+enum class NotSupportedReason {
+  kGuestMode = 0,
+  kOffTheRecord = 1,
+  kPolicyDisabled = 2,
+  kMaxValue = kPolicyDisabled
+};
 
 class IsolatedWebAppInstallerCoordinator;
 class WebAppScreenshotFetcher;
@@ -66,23 +78,6 @@ void ShowCreateShortcutDialog(
     std::unique_ptr<webapps::MlInstallOperationTracker> install_tracker,
     AppInstallationAcceptanceCallback callback);
 
-// When an app changes its icon or name, that is considered an app identity
-// change which (for some types of apps) needs confirmation from the user.
-// This function shows that confirmation dialog. |app_id| is the unique id of
-// the app that is updating and |title_change| and |icon_change| specify which
-// piece of information is changing. Can be one or the other, or both (but
-// both cannot be |false|). |old_title| and |new_title|, as well as |old_icon|
-// and |new_icon| show the 'before' and 'after' values. A response is sent
-// back via the |callback|.
-void ShowWebAppIdentityUpdateDialog(const std::string& app_id,
-                                    bool title_change,
-                                    bool icon_change,
-                                    const std::u16string& old_title,
-                                    const std::u16string& new_title,
-                                    const SkBitmap& old_icon,
-                                    const SkBitmap& new_icon,
-                                    content::WebContents* web_contents,
-                                    AppIdentityDialogCallback callback);
 
 // Shows the an app update review dialog that always shows the name, icon, and
 // start url of the before and after states of the app. The user can accept,
@@ -96,6 +91,20 @@ void ShowWebAppReviewUpdateDialog(const webapps::AppId& app_id,
                                   base::TimeTicks start_time,
                                   UpdateReviewDialogCallback callback);
 
+struct SubAppUninstallMetadata {
+  explicit SubAppUninstallMetadata(std::u16string app_name,
+                                   IconMetadataFromDisk icon_metadata)
+      : app_name(std::move(app_name)),
+        icon_metadata(std::move(icon_metadata)) {}
+  SubAppUninstallMetadata(SubAppUninstallMetadata&&) = default;
+  SubAppUninstallMetadata& operator=(SubAppUninstallMetadata&&) = default;
+  SubAppUninstallMetadata(const SubAppUninstallMetadata&) = delete;
+  SubAppUninstallMetadata& operator=(const SubAppUninstallMetadata&) = delete;
+
+  std::u16string app_name;
+  IconMetadataFromDisk icon_metadata;
+};
+
 // Shows the web app uninstallation dialog on a page whenever user has decided
 // to uninstall an installed dPWA from a variety of OS surfaces and chrome.
 void ShowWebAppUninstallDialog(
@@ -104,6 +113,7 @@ void ShowWebAppUninstallDialog(
     webapps::WebappUninstallSource uninstall_source,
     gfx::NativeWindow parent,
     IconMetadataFromDisk icon_metadata,
+    std::vector<SubAppUninstallMetadata> sub_app_info,
     UninstallDialogCallback uninstall_dialog_result_callback);
 
 // Callback used to indicate whether a user has accepted the launch of a
@@ -126,14 +136,44 @@ void ShowWebAppFileLaunchDialog(const std::vector<base::FilePath>& file_paths,
                                 Profile* profile,
                                 const webapps::AppId& app_id,
                                 WebAppLaunchAcceptanceCallback close_callback);
-// Sets whether |ShowWebAppDialog| should accept immediately without any
-// user interaction. |auto_open_in_window| sets whether the open in window
-// checkbox is checked.
-void SetAutoAcceptWebAppDialogForTesting(bool auto_accept,
-                                         bool auto_open_in_window);
-
 // Sets an override title for the Create Shortcut confirmation view.
 void SetOverrideTitleForTesting(const char* title_to_use);
+
+enum class InstallDialogTestResponse {
+  kNone,
+  kDeny,
+  kAcceptAndLaunch,
+  kAcceptNoLaunch,
+};
+
+base::AutoReset<InstallDialogTestResponse>
+SetPwaInstallationAutoRespondForTesting(InstallDialogTestResponse response);
+
+InstallDialogTestResponse GetPwaInstallationDialogAutoResponseForTesting();
+
+enum class InstallDialogDeactivateAction {
+  kClose,
+  kKeepOpen,
+};
+
+base::AutoReset<InstallDialogDeactivateAction>
+SetPwaInstallationDialogDeactivateActionForTesting(
+    InstallDialogDeactivateAction action);
+
+InstallDialogDeactivateAction
+GetPwaInstallationDialogDeactivateActionForTesting();
+
+enum class CreateShortcutDialogCheckState {
+  kDefault,
+  kChecked,
+  kUnchecked,
+};
+
+base::AutoReset<CreateShortcutDialogCheckState>
+SetCreateShortcutDialogCheckStateForTesting(
+    CreateShortcutDialogCheckState state);
+
+CreateShortcutDialogCheckState GetCreateShortcutDialogCheckStateForTesting();
 
 // Describes the state of in-product-help being shown to the user.
 enum class PwaInProductHelpState {
@@ -145,7 +185,7 @@ enum class PwaInProductHelpState {
 
 DECLARE_ELEMENT_IDENTIFIER_VALUE(kSimpleInstallDialogAppTitle);
 DECLARE_ELEMENT_IDENTIFIER_VALUE(kSimpleInstallDialogIconView);
-DECLARE_ELEMENT_IDENTIFIER_VALUE(kSimpleInstallDialogOriginLabel);
+DECLARE_ELEMENT_IDENTIFIER_VALUE(kSimpleInstallDialogAppInfoLabel);
 
 // Shows the PWA installation confirmation bubble anchored off the PWA install
 // icon in the omnibox.
@@ -184,21 +224,16 @@ void ShowWebAppDetailedInstallDialog(
     base::WeakPtr<WebAppScreenshotFetcher> screenshot_fetcher,
     PwaInProductHelpState iph_state = PwaInProductHelpState::kNotShown);
 
-// Sets whether |ShowSimpleInstallDialogForWebApps| should accept immediately
-// without any user interaction.
-base::AutoReset<bool> SetAutoAcceptPWAInstallConfirmationForTesting();
-
-// Sets whether |ShowSimpleInstallDialogForWebApps| should decline immediately
-// without any user interaction.
-base::AutoReset<bool> SetAutoDeclinePWAInstallConfirmationForTesting();
-
-// Sets whether |ShowDiyInstallDialogForWebApps| should accept immediately
-// without any user interaction.
-void SetAutoAcceptDiyAppsInstallDialogForTesting(bool auto_accept);
-
-// Sets whether the bubble should close when it is not in an active window
-// during testing.
-base::AutoReset<bool> SetDontCloseOnDeactivateForTesting();
+// Creates and shows a dialog that requests the consent from the user to
+// install the requested apps as sub apps to the named parent app. This is
+// triggered by an app calling the Multi App API add() function. The dialog is
+// modal to the browser window containing the app calling the API.
+void ShowSubAppsInstallDialog(
+    content::WebContents* web_contents,
+    const std::vector<std::unique_ptr<WebAppInstallInfo>>& sub_apps,
+    const std::string& parent_app_name,
+    const webapps::AppId& parent_app_id,
+    base::OnceCallback<void(bool)> callback);
 
 // Shows the Isolated Web App manual install wizard.
 IsolatedWebAppInstallerCoordinator* LaunchIsolatedWebAppInstaller(
@@ -234,16 +269,32 @@ void ShowWebInstallAppLaunchDialog(
     const SkBitmap& icon,
     WebInstallAppLaunchAcceptanceCallback callback);
 
-// Sets whether |ShowWebInstallAppLaunchDialog| should accept immediately.
-base::AutoReset<bool> SetAutoAcceptWebInstallLaunchDialogForTesting();
-
 // Shows the install not supported dialog for web apps. This dialog is
 // displayed when the user tries to install a web app in an unsupported
 // environment, such as Incognito or Guest mode. The |callback| is called
 // when the dialog is closed.
 void ShowInstallNotSupportedDialog(content::WebContents* web_contents,
                                    Profile* profile,
+                                   NotSupportedReason reason,
                                    base::OnceClosure callback);
+
+// Creates a simple install dialog view that contains
+// WebAppIconNameAndOriginView.
+std::unique_ptr<views::View> CreateSimpleInstallDialogView(
+    gfx::ImageSkia icon_image,
+    const std::u16string& title,
+    const GURL& start_url,
+    bool is_maskable);
+
+// Creates a view for the DIY install dialog that contains the
+// input dialog.
+std::unique_ptr<views::View> CreateDiyInstallDialogView(
+    gfx::ImageSkia icon_image,
+    const std::u16string& title,
+    const GURL& start_url,
+    content::WebContents* web_contents,
+    base::RepeatingCallback<void(const std::u16string&)>
+        on_textfield_changed_callback);
 
 }  // namespace web_app
 

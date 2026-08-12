@@ -170,7 +170,7 @@ std::unique_ptr<net::test_server::HttpResponse> StandardResponse(
   [super tearDownHelper];
 }
 
-// From history, delets browsing data with the default values which is 15min
+// From history, deletes browsing data with the default values which is 15min
 // time range and includes history.
 - (void)deleteBrowsingDataFromHistory {
   [ChromeEarlGreyUI tapPrivacyMenuButton:HistoryClearBrowsingDataButton()];
@@ -374,7 +374,8 @@ std::unique_ptr<net::test_server::HttpResponse> StandardResponse(
 
 // Tests that if all history entries are deleted from Delete Browsing Data, that
 // then the history view is updated to show the empty state.
-- (void)testEmptyState {
+// TODO(crbug.com/493894843): Deflake the test.
+- (void)DISABLED_testEmptyState {
   // Disable closing tabs as it's on by default in delete browsing data, so the
   // tab closure animation is not run in iPads. This is needed so the history UI
   // is not closed due to the animation.
@@ -390,7 +391,7 @@ std::unique_ptr<net::test_server::HttpResponse> StandardResponse(
   [[EarlGrey selectElementWithMatcher:NavigationEditButton()]
       assertWithMatcher:grey_notNil()];
 
-  [ChromeEarlGreyUI openAndClearBrowsingDataFromHistory];
+  [ChromeEarlGreyUI clearBrowsingDataFromHistory];
 
   // Toolbar should only contain CBD button and the background should contain
   // the Illustrated empty view

@@ -16,6 +16,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
@@ -26,11 +27,11 @@
 #include "chrome/test/base/testing_profile.h"
 #include "components/unexportable_keys/features.h"
 #include "components/unexportable_keys/mock_unexportable_key_service.h"
-#include "components/unexportable_keys/scoped_mock_unexportable_key_provider.h"
 #include "components/unexportable_keys/service_error.h"
 #include "components/unexportable_keys/unexportable_key_id.h"
 #include "components/unexportable_keys/unexportable_key_service.h"
 #include "content/public/test/browser_task_environment.h"
+#include "crypto/scoped_mock_unexportable_key_provider.h"
 #include "crypto/unexportable_key.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -41,6 +42,7 @@ namespace {
 
 using ::base::test::RunOnceCallback;
 using ::testing::_;
+using ::testing::ElementsAre;
 using ::testing::Return;
 using ::testing::StrictMock;
 using ::testing::Test;
@@ -79,20 +81,21 @@ class UnexportableKeyProfileGarbageCollectionServiceFactoryMacTest
   absl::flat_hash_map<std::string, MockUnexportableKeyService*>
       created_services_;
 
-  ScopedMockUnexportableKeyProvider scoped_key_provider_;
+  crypto::ScopedMockUnexportableKeyProvider scoped_key_provider_;
 };
 
 TEST_F(UnexportableKeyProfileGarbageCollectionServiceFactoryMacTest,
        GarbageCollectionOnRegularProfile) {
   base::test::ScopedFeatureList feature_list(kUnexportableKeyDeletion);
+  base::HistogramTester histogram_tester;
   TestingProfile profile;
 
   MockUnexportableKeyService* created_service =
       GetServiceForConfig(GetConfigForProfilePath(profile.GetPath()));
   ASSERT_TRUE(created_service);
 
-  UnexportableKeyId active_key_id;
-  UnexportableKeyId orphaned_key_id;
+  UnexportableSigningKeyId active_key_id;
+  UnexportableSigningKeyId orphaned_key_id;
 
   std::string profile_path_tag =
       GetConfigForProfilePath(profile.GetPath()).application_tag;
@@ -117,24 +120,41 @@ TEST_F(UnexportableKeyProfileGarbageCollectionServiceFactoryMacTest,
   EXPECT_CALL(*created_service, GetKeyTag(orphaned_key_id))
       .WillOnce(Return(orphaned_tag));
 
-  EXPECT_CALL(*created_service,
-              GetAllSigningKeysForGarbageCollectionSlowlyAsync)
+  EXPECT_CALL(*created_service, GetAllKeysForGarbageCollectionSlowlyAsync)
       .WillOnce(RunOnceCallback<1>(base::ToVector({
           active_key_id,
           orphaned_key_id,
       })));
 
-  EXPECT_CALL(*created_service, DeleteKeySlowlyAsync(orphaned_key_id, _, _));
-  EXPECT_CALL(*created_service, DeleteKeySlowlyAsync(active_key_id, _, _))
-      .Times(0);
+  EXPECT_CALL(*created_service,
+              DeleteKeysSlowlyAsync(ElementsAre(orphaned_key_id), _, _))
+      .WillOnce(RunOnceCallback<2>(1));
 
   // Fast forward to trigger garbage collection.
   task_environment().FastForwardBy(kGarbageCollectionDelay);
+
+  histogram_tester.ExpectUniqueSample(
+      "Crypto.UnexportableKeys.GarbageCollection.ObsoleteOTRProfiles."
+      "TotalKeyCount",
+      2, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Crypto.UnexportableKeys.GarbageCollection.ObsoleteOTRProfiles."
+      "UsedKeyCount",
+      1, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Crypto.UnexportableKeys.GarbageCollection.ObsoleteOTRProfiles."
+      "ObsoleteKeyCount",
+      1, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Crypto.UnexportableKeys.GarbageCollection.ObsoleteOTRProfiles."
+      "ObsoleteKeyDeletionCount",
+      1, 1);
 }
 
 TEST_F(UnexportableKeyProfileGarbageCollectionServiceFactoryMacTest,
        DeleteAllKeysOnOtrProfileShutdown) {
   base::test::ScopedFeatureList feature_list(kUnexportableKeyDeletion);
+  base::HistogramTester histogram_tester;
   TestingProfile profile;
   Profile* otr_profile = profile.GetOffTheRecordProfile(
       Profile::OTRProfileID::PrimaryID(), /*create_if_needed=*/true);
@@ -143,8 +163,14 @@ TEST_F(UnexportableKeyProfileGarbageCollectionServiceFactoryMacTest,
       GetServiceForConfig(GetConfigForProfile(*otr_profile));
   ASSERT_TRUE(created_service);
 
-  EXPECT_CALL(*created_service, DeleteAllKeysSlowlyAsync);
+  EXPECT_CALL(*created_service, DeleteAllKeysSlowlyAsync)
+      .WillOnce(RunOnceCallback<0>(3));
   profile.DestroyOffTheRecordProfile(otr_profile);
+
+  histogram_tester.ExpectUniqueSample(
+      "Crypto.UnexportableKeys.GarbageCollection.DestroyedOTRProfiles."
+      "ObsoleteKeyDeletionCount",
+      3, 1);
 }
 
 TEST_F(UnexportableKeyProfileGarbageCollectionServiceFactoryMacTest,

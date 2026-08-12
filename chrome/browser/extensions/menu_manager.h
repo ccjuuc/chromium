@@ -116,6 +116,7 @@ class MenuItem {
     BROWSER_ACTION = 1024,
     PAGE_ACTION = 2048,
     ACTION = 4096,
+    TAB = 8192,
   };
 
   // An item can be only one of these types.
@@ -217,12 +218,12 @@ class MenuItem {
   bool SetChecked(bool checked);
 
   // Converts to Value for serialization to preferences.
-  base::Value::Dict ToValue() const;
+  base::DictValue ToValue() const;
 
   // Returns a new MenuItem created from `value`, or NULL if there is
   // an error.
   static std::unique_ptr<MenuItem> Populate(const std::string& extension_id,
-                                            const base::Value::Dict& value,
+                                            const base::DictValue& value,
                                             std::string* error);
 
   // Sets any document and target URL patterns from `properties`.

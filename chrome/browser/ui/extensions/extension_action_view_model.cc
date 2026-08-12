@@ -11,6 +11,7 @@
 #include "base/check_op.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/json/values_util.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
@@ -19,23 +20,27 @@
 #include "chrome/browser/extensions/commands/command_service.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
 #include "chrome/browser/extensions/extension_context_menu_model.h"
+#include "chrome/browser/extensions/extension_ui_util.h"
 #include "chrome/browser/extensions/extension_view.h"
 #include "chrome/browser/extensions/extension_view_host.h"
 #include "chrome/browser/extensions/extension_view_host_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/extensions/extension_action_delegate.h"
 #include "chrome/browser/ui/extensions/extension_popup_types.h"
 #include "chrome/browser/ui/extensions/icon_with_badge_image_source.h"
-#include "chrome/browser/ui/tabs/tab_list_interface.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_action.h"
 #include "extensions/browser/extension_action_manager.h"
+#include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/permissions/site_permissions_helper.h"
+#include "extensions/browser/pref_names.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/extension_action/action_info.h"
 #include "extensions/common/extension.h"
@@ -55,7 +60,6 @@
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
-using content::WebContentsObserver;
 using extensions::ActionInfo;
 using extensions::CommandService;
 using extensions::ExtensionActionRunner;
@@ -134,6 +138,81 @@ ExtensionActionViewModel::HoverCardState::AdminPolicy GetHoverCardPolicyState(
   return ExtensionActionViewModel::HoverCardState::AdminPolicy::kNone;
 }
 
+std::u16string GetHoverCardSiteAccessTitle(
+    ToolbarActionViewModel::HoverCardState::SiteAccess state) {
+  int title_id = -1;
+  switch (state) {
+    case ToolbarActionViewModel::HoverCardState::SiteAccess::
+        kAllExtensionsAllowed:
+    case ToolbarActionViewModel::HoverCardState::SiteAccess::
+        kExtensionHasAccess:
+      title_id = IDS_EXTENSIONS_TOOLBAR_ACTION_HOVER_CARD_TITLE_HAS_ACCESS;
+      break;
+    case ToolbarActionViewModel::HoverCardState::SiteAccess::
+        kAllExtensionsBlocked:
+      title_id = IDS_EXTENSIONS_TOOLBAR_ACTION_HOVER_CARD_TITLE_BLOCKED_ACCESS;
+      break;
+    case ToolbarActionViewModel::HoverCardState::SiteAccess::
+        kExtensionRequestsAccess:
+      title_id = IDS_EXTENSIONS_TOOLBAR_ACTION_HOVER_CARD_TITLE_REQUESTS_ACCESS;
+      break;
+    case ToolbarActionViewModel::HoverCardState::SiteAccess::
+        kExtensionDoesNotWantAccess:
+      NOTREACHED();
+  }
+  return l10n_util::GetStringUTF16(title_id);
+}
+
+std::u16string GetHoverCardSiteAccessDescription(
+    ToolbarActionViewModel::HoverCardState::SiteAccess state,
+    std::u16string host) {
+  int description_id = -1;
+  switch (state) {
+    case ToolbarActionViewModel::HoverCardState::SiteAccess::
+        kAllExtensionsAllowed:
+      description_id =
+          IDS_EXTENSIONS_TOOLBAR_ACTION_HOVER_CARD_DESCRIPTION_ALL_EXTENSIONS_ALLOWED_ACCESS;
+      break;
+    case ToolbarActionViewModel::HoverCardState::SiteAccess::
+        kAllExtensionsBlocked:
+      description_id =
+          IDS_EXTENSIONS_TOOLBAR_ACTION_HOVER_CARD_DESCRIPTION_ALL_EXTENSIONS_BLOCKED_ACCESS;
+      break;
+    case ToolbarActionViewModel::HoverCardState::SiteAccess::
+        kExtensionHasAccess:
+      description_id =
+          IDS_EXTENSIONS_TOOLBAR_ACTION_HOVER_CARD_DESCRIPTION_EXTENSION_HAS_ACCESS;
+      break;
+    case ToolbarActionViewModel::HoverCardState::SiteAccess::
+        kExtensionRequestsAccess:
+      description_id =
+          IDS_EXTENSIONS_TOOLBAR_ACTION_HOVER_CARD_DESCRIPTION_EXTENSION_REQUESTS_ACCESS;
+      break;
+    case ToolbarActionViewModel::HoverCardState::SiteAccess::
+        kExtensionDoesNotWantAccess:
+      NOTREACHED();
+  }
+  return l10n_util::GetStringFUTF16(description_id, host);
+}
+
+std::u16string GetHoverCardPolicyText(
+    ToolbarActionViewModel::HoverCardState::AdminPolicy state) {
+  int text_id = -1;
+  switch (state) {
+    case ToolbarActionViewModel::HoverCardState::AdminPolicy::kPinnedByAdmin:
+      text_id =
+          IDS_EXTENSIONS_TOOLBAR_ACTION_HOVER_CARD_POLICY_LABEL_PINNED_TEXT;
+      break;
+    case ToolbarActionViewModel::HoverCardState::AdminPolicy::kInstalledByAdmin:
+      text_id =
+          IDS_EXTENSIONS_TOOLBAR_ACTION_HOVER_CARD_POLICY_LABEL_INSTALLED_TEXT;
+      break;
+    case ToolbarActionViewModel::HoverCardState::AdminPolicy::kNone:
+      NOTREACHED();
+  }
+  return l10n_util::GetStringUTF16(text_id);
+}
+
 }  // namespace
 
 // static
@@ -174,26 +253,35 @@ ExtensionActionViewModel::ExtensionActionViewModel(
       icon_factory_(extension_.get(), extension_action, this),
       extension_registry_(extension_registry) {
   delegate_->AttachToModel(this);
-  WebContentsObserver::Observe(GetCurrentWebContents());
-  tab_list_observation_.Observe(TabListInterface::From(browser_));
-  toolbar_model_observation_.Observe(ToolbarActionsModel::Get(profile_));
   command_service_observation_.Observe(
       extensions::CommandService::Get(profile_));
 }
 
 ExtensionActionViewModel::~ExtensionActionViewModel() {
+#if !BUILDFLAG(IS_ANDROID)
+  // On Android, the UI is destroyed by the Java coordinator before the native
+  // model is destroyed.
   DCHECK(!IsShowingPopup());
-  WebContentsObserver::Observe(nullptr);
+#endif
   delegate_->DetachFromModel();
 }
+
+ToolbarActionViewModel::HoverCardUiState::HoverCardUiState() = default;
+ExtensionActionViewModel::HoverCardUiState::HoverCardUiState(
+    HoverCardUiState&&) = default;
+ExtensionActionViewModel::HoverCardUiState&
+ExtensionActionViewModel::HoverCardUiState::operator=(HoverCardUiState&&) =
+    default;
+ExtensionActionViewModel::HoverCardUiState::~HoverCardUiState() = default;
 
 std::string ExtensionActionViewModel::GetId() const {
   return extension_id_;
 }
 
-base::CallbackListSubscription ExtensionActionViewModel::RegisterUpdateObserver(
+base::CallbackListSubscription
+ExtensionActionViewModel::RegisterIconUpdateObserver(
     base::RepeatingClosure observer) {
-  return observers_.Add(observer);
+  return icon_observers_.Add(observer);
 }
 
 ui::ImageModel ExtensionActionViewModel::GetIcon(
@@ -270,6 +358,13 @@ std::u16string ExtensionActionViewModel::GetAccessibleName(
 
 std::u16string ExtensionActionViewModel::GetTooltip(
     content::WebContents* web_contents) const {
+  // On Android, `web_contents` might be null for native pages, e.g. new tab.
+  // TODO(crbug.com/448420873): Remove this workaround once we ensure that
+  // `web_contents` is always non-null for all tabs.
+  if (!web_contents) {
+    return GetActionName();
+  }
+
   if (base::FeatureList::IsEnabled(
           extensions_features::kExtensionsMenuAccessControl)) {
     std::u16string action_title = GetActionTitle(web_contents);
@@ -352,8 +447,8 @@ void ExtensionActionViewModel::HidePopup() {
   return delegate_->HidePopup();
 }
 
-gfx::NativeView ExtensionActionViewModel::GetPopupNativeView() {
-  return delegate_->GetPopupNativeView();
+gfx::NativeView ExtensionActionViewModel::GetPopupNativeViewForTesting() {
+  return delegate_->GetPopupNativeViewForTesting();
 }
 
 ui::MenuModel* ExtensionActionViewModel::GetContextMenu(
@@ -380,6 +475,11 @@ void ExtensionActionViewModel::ExecuteUserAction(InvocationSource source) {
 
   content::WebContents* const web_contents = GetCurrentWebContents();
   if (!IsEnabled(web_contents)) {
+    // Close the extensions menu async, because closing the menu causes teardown
+    // that destroys `this`.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&ExtensionActionViewModel::CloseMenuTask,
+                                  weak_ptr_factory_.GetWeakPtr()));
     delegate_->ShowContextMenuAsFallback();
     return;
   }
@@ -392,7 +492,35 @@ void ExtensionActionViewModel::ExecuteUserAction(InvocationSource source) {
 
   RecordInvocationSource(source);
 
-  delegate_->CloseOverflowMenuIfOpen();
+  extensions::ExtensionPrefs* prefs =
+      extensions::ExtensionPrefs::Get(browser_->GetProfile());
+  if (prefs) {
+    std::string time_str;
+    if (prefs->ReadPrefAsString(
+            extension_->id(),
+            extensions::pref_names::kPrefInstallTimeForActionMetric,
+            &time_str)) {
+      base::Time install_time =
+          base::ValueToTime(base::Value(time_str)).value_or(base::Time());
+      if (!install_time.is_null()) {
+        base::TimeDelta elapsed_time = base::Time::Now() - install_time;
+        if (!elapsed_time.is_negative()) {
+          base::UmaHistogramLongTimes(
+              "Extensions.Toolbar.TimeToFirstActionClick", elapsed_time);
+        }
+        prefs->UpdateExtensionPref(
+            extension_->id(),
+            extensions::pref_names::kPrefInstallTimeForActionMetric,
+            std::nullopt);
+      }
+    }
+  }
+
+  // Asynchronously close the menu in case the action didn't trigger a
+  // focus-stealing popup.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&ExtensionActionViewModel::CloseMenuTask,
+                                weak_ptr_factory_.GetWeakPtr()));
 
   // This method is only called to execute an action by the user, so we can
   // always grant tab permissions.
@@ -432,33 +560,20 @@ void ExtensionActionViewModel::UnregisterCommand() {
   delegate_->UnregisterCommand();
 }
 
-void ExtensionActionViewModel::DidFinishNavigation(
-    content::NavigationHandle* handle) {
-  NotifyObservers();
-}
+bool ExtensionActionViewModel::TryHandleAcceleratorPress() {
+  DCHECK(CanHandleAccelerators());
 
-void ExtensionActionViewModel::OnActiveTabChanged(tabs::TabInterface* tab) {
-  WebContentsObserver::Observe(GetCurrentWebContents());
-  NotifyObservers();
-}
-
-void ExtensionActionViewModel::OnToolbarActionAdded(
-    const ToolbarActionsModel::ActionId& action_id) {}
-
-void ExtensionActionViewModel::OnToolbarActionRemoved(
-    const ToolbarActionsModel::ActionId& action_id) {}
-
-void ExtensionActionViewModel::OnToolbarActionUpdated(
-    const ToolbarActionsModel::ActionId& action_id) {
-  if (action_id != extension_->id()) {
-    return;
+  if (IsShowingPopup()) {
+    // TODO(crbug.com/498029086): This code is not reached on Android, because
+    // the popup absorbs commands when the popup is open, which is a divergent
+    // behavior from Desktop.
+    HidePopup();
+  } else {
+    ExecuteUserAction(ToolbarActionViewModel::InvocationSource::kCommand);
   }
-  NotifyObservers();
+
+  return true;
 }
-
-void ExtensionActionViewModel::OnToolbarModelInitialized() {}
-
-void ExtensionActionViewModel::OnToolbarPinnedActionsChanged() {}
 
 void ExtensionActionViewModel::OnExtensionCommandAdded(
     const std::string& extension_id,
@@ -513,15 +628,15 @@ content::WebContents* ExtensionActionViewModel::GetCurrentWebContents() const {
   return tab->GetContents();
 }
 
-void ExtensionActionViewModel::NotifyObservers() {
+void ExtensionActionViewModel::NotifyIconObservers() {
   if (!TabListInterface::From(browser_)->GetActiveTab()) {
     return;
   }
-  observers_.Notify();
+  icon_observers_.Notify();
 }
 
 void ExtensionActionViewModel::OnIconUpdated() {
-  NotifyObservers();
+  NotifyIconObservers();
 }
 
 extensions::SitePermissionsHelper::SiteInteraction
@@ -558,9 +673,7 @@ bool ExtensionActionViewModel::GetExtensionCommand(
 ToolbarActionViewModel::HoverCardState
 ExtensionActionViewModel::GetHoverCardState(
     content::WebContents* web_contents) const {
-  DCHECK(web_contents);
-
-  if (!ExtensionIsValid()) {
+  if (!web_contents || !ExtensionIsValid()) {
     HoverCardState state;
     state.site_access = HoverCardState::SiteAccess::kExtensionDoesNotWantAccess;
     state.policy = HoverCardState::AdminPolicy::kNone;
@@ -579,6 +692,28 @@ ExtensionActionViewModel::GetHoverCardState(
   state.policy = GetHoverCardPolicyState(*profile_, GetId());
 
   return state;
+}
+
+ToolbarActionViewModel::HoverCardUiState
+ExtensionActionViewModel::GetHoverCardUiState(
+    const ToolbarActionViewModel::HoverCardState& state,
+    content::WebContents* web_contents) const {
+  ExtensionActionViewModel::HoverCardUiState ui_state;
+
+  if (state.site_access != ToolbarActionViewModel::HoverCardState::SiteAccess::
+                               kExtensionDoesNotWantAccess) {
+    ui_state.site_access_title = GetHoverCardSiteAccessTitle(state.site_access);
+    ui_state.site_access_description = GetHoverCardSiteAccessDescription(
+        state.site_access,
+        extensions::ui_util::GetFormattedHostForDisplay(*web_contents));
+  }
+
+  if (state.policy !=
+      ToolbarActionViewModel::HoverCardState::AdminPolicy::kNone) {
+    ui_state.policy_text = GetHoverCardPolicyText(state.policy);
+  }
+
+  return ui_state;
 }
 
 bool ExtensionActionViewModel::CanHandleAccelerators() const {
@@ -638,6 +773,12 @@ void ExtensionActionViewModel::TriggerPopup(PopupShowAction show_action,
                           std::move(callback));
 }
 
+void ExtensionActionViewModel::CloseMenuTask() {
+  if (delegate_) {
+    delegate_->CloseExtensionsMenuIfOpen();
+  }
+}
+
 std::unique_ptr<IconWithBadgeImageSource>
 ExtensionActionViewModel::GetIconImageSource(content::WebContents* web_contents,
                                              const gfx::Size& size) {
@@ -682,9 +823,9 @@ ExtensionActionViewModel::GetIconImageSource(content::WebContents* web_contents,
   bool has_side_panel_action = false;
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
   bool is_grayscale =
+      !action_is_visible && !has_side_panel_action &&
       GetSiteInteraction(web_contents) ==
-          extensions::SitePermissionsHelper::SiteInteraction::kNone &&
-      !action_is_visible && !has_side_panel_action;
+          extensions::SitePermissionsHelper::SiteInteraction::kNone;
   image_source->set_grayscale(is_grayscale);
 
   if (base::FeatureList::IsEnabled(

@@ -52,6 +52,8 @@ class BLINK_COMMON_EXPORT WebMouseWheelEvent : public WebMouseEvent {
     kScrollVertical
   };
 
+  // These values run positive in the up and left direction of scrolling.
+  // Notably, this is the reverse as used in Blink, CC, and WebAPIs.
   float delta_x = 0.0f;
   float delta_y = 0.0f;
   float wheel_ticks_x = 0.0f;
@@ -63,7 +65,7 @@ class BLINK_COMMON_EXPORT WebMouseWheelEvent : public WebMouseEvent {
   Phase phase = kPhaseNone;
   Phase momentum_phase = kPhaseNone;
 
-  RailsMode rails_mode = kRailsModeFree;
+  RailsMode rails_mode = WebInputEvent::RailsMode::kRailsModeFree;
 
   // Whether the event is blocking, non-blocking, all event
   // listeners were passive or was forced to be non-blocking.

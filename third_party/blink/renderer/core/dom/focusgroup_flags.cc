@@ -23,6 +23,12 @@
 namespace blink::focusgroup {
 
 namespace {
+
+// "nowrap" is a valid modifier token but has no corresponding flag bits (it
+// suppresses wrapping rather than enabling it), so it is not in kModifierMap
+// and needs its own constant.
+constexpr const char kNowrapToken[] = "nowrap";
+
 struct FlagMapping {
   const char* token;
   FocusgroupFlags flag;
@@ -32,20 +38,30 @@ struct BehaviorMapping {
   const char* token;
   FocusgroupBehavior behavior;
   ax::mojom::blink::Role aria_role;
+  FocusgroupFlags default_flags;
 };
 
 // List of behavior flags and corresponding ARIA role mappings.
 // This should be kept in sync with FocusgroupBehavior.
 constexpr BehaviorMapping kBehaviorMap[] = {
-    {"toolbar", FocusgroupBehavior::kToolbar, ax::mojom::blink::Role::kToolbar},
-    {"tablist", FocusgroupBehavior::kTablist, ax::mojom::blink::Role::kTabList},
+    {"toolbar", FocusgroupBehavior::kToolbar, ax::mojom::blink::Role::kToolbar,
+     FocusgroupFlags::kInline},
+    {"tablist", FocusgroupBehavior::kTablist, ax::mojom::blink::Role::kTabList,
+     FocusgroupFlags::kInline | FocusgroupFlags::kWrapInline},
     {"radiogroup", FocusgroupBehavior::kRadiogroup,
-     ax::mojom::blink::Role::kRadioGroup},
-    {"listbox", FocusgroupBehavior::kListbox, ax::mojom::blink::Role::kListBox},
-    {"menu", FocusgroupBehavior::kMenu, ax::mojom::blink::Role::kMenu},
-    {"menubar", FocusgroupBehavior::kMenubar, ax::mojom::blink::Role::kMenuBar},
-    {"grid", FocusgroupBehavior::kGrid, ax::mojom::blink::Role::kGrid},
-    {"none", FocusgroupBehavior::kOptOut, ax::mojom::blink::Role::kUnknown}};
+     ax::mojom::blink::Role::kRadioGroup,
+     FocusgroupFlags::kWrapInline | FocusgroupFlags::kWrapBlock},
+    {"listbox", FocusgroupBehavior::kListbox, ax::mojom::blink::Role::kListBox,
+     FocusgroupFlags::kBlock},
+    {"menu", FocusgroupBehavior::kMenu, ax::mojom::blink::Role::kMenu,
+     FocusgroupFlags::kBlock | FocusgroupFlags::kWrapBlock},
+    {"menubar", FocusgroupBehavior::kMenubar, ax::mojom::blink::Role::kMenuBar,
+     FocusgroupFlags::kInline | FocusgroupFlags::kWrapInline},
+    {"grid", FocusgroupBehavior::kGrid, ax::mojom::blink::Role::kGrid,
+     FocusgroupFlags::kNone},
+    {"none", FocusgroupBehavior::kOptOut, ax::mojom::blink::Role::kUnknown,
+     FocusgroupFlags::kNone},
+};
 
 // Unified mapping of all recognized modifier tokens.
 // This should be kept in sync with FocusgroupFlags.
@@ -58,7 +74,7 @@ constexpr FlagMapping kModifierMap[] = {
     {"flow", FocusgroupFlags::kRowFlow | FocusgroupFlags::kColFlow},
     {"row-flow", FocusgroupFlags::kRowFlow},
     {"col-flow", FocusgroupFlags::kColFlow},
-    {"no-memory", FocusgroupFlags::kNoMemory},
+    {"nomemory", FocusgroupFlags::kNoMemory},
 };
 
 // Returns true if a flag contains a modifier only meaningful for grid
@@ -78,7 +94,7 @@ inline bool IsGridOnlyFlag(FocusgroupFlags flag) {
 // Returns a string representation of all valid behavior tokens.
 String ValidBehaviorTokenListString(ExecutionContext* context) {
   const bool is_grid_enabled =
-      RuntimeEnabledFeatures::FocusgroupGridEnabled(context);
+      RuntimeEnabledFeatures::FocusgroupV2Enabled(context);
 
   std::string assembled;
   for (const auto& behavior_mapping : kBehaviorMap) {
@@ -87,18 +103,22 @@ String ValidBehaviorTokenListString(ExecutionContext* context) {
         behavior_mapping.behavior == FocusgroupBehavior::kGrid) {
       continue;
     }
+    // Filter out the opt-out token: "none".
+    if (behavior_mapping.behavior == FocusgroupBehavior::kOptOut) {
+      continue;
+    }
     if (!assembled.empty()) {
       assembled.append(", ");
     }
     DCHECK_NE(behavior_mapping.token, String());
     assembled.append(behavior_mapping.token);
   }
-  return String(assembled.c_str());
+  return String(assembled);
 }
 
 String ValidTokenListString(ExecutionContext* context) {
   const bool is_grid_enabled =
-      RuntimeEnabledFeatures::FocusgroupGridEnabled(context);
+      RuntimeEnabledFeatures::FocusgroupV2Enabled(context);
 
   std::string assembled;
   for (const auto& mapping : kModifierMap) {
@@ -112,7 +132,12 @@ String ValidTokenListString(ExecutionContext* context) {
     DCHECK_NE(mapping.token, String());
     assembled.append(mapping.token);
   }
-  return String(assembled.c_str());
+  // Add nowrap (not in kModifierMap since it has no flag bits).
+  if (!assembled.empty()) {
+    assembled.append(", ");
+  }
+  assembled.append(kNowrapToken);
+  return String(assembled);
 }
 
 // Returns the corresponding flag for a recognized token, or kNone if invalid.
@@ -158,7 +183,7 @@ FocusgroupData ParseFocusgroup(const Element* element,
   ExecutionContext* context = element->GetExecutionContext();
   DCHECK(RuntimeEnabledFeatures::FocusgroupEnabled(context));
   const bool is_grid_enabled =
-      RuntimeEnabledFeatures::FocusgroupGridEnabled(context);
+      RuntimeEnabledFeatures::FocusgroupV2Enabled(context);
 
   UseCounter::Count(context, WebFeature::kFocusgroup);
 
@@ -171,6 +196,7 @@ FocusgroupData ParseFocusgroup(const Element* element,
   bool has_row_flow = false;
   bool has_col_flow = false;
   bool has_no_memory = false;
+  bool has_nowrap = false;
 
   // Helpers to avoid repeated enum boilerplate for console messages.
   auto Warn = [&](const String& msg) {
@@ -186,13 +212,12 @@ FocusgroupData ParseFocusgroup(const Element* element,
             mojom::blink::ConsoleMessageLevel::kError, msg));
   };
 
-  SpaceSplitString tokens(input);
+  SpaceSplitString tokens(AtomicString(input.GetString().ToAsciiLower()));
 
   // Build a consolidated error message for missing/invalid first token.
   auto FirstTokenErrorMessage = [&]() {
-    return String(StrCat({"focusgroup requires a behavior token (",
-                          ValidBehaviorTokenListString(context),
-                          ") or 'none' as the first value."}));
+    return String(StrCat({"focusgroup requires a recognized behavior token (",
+                          ValidBehaviorTokenListString(context), ")."}));
   };
 
   // Two step process - first parse all flags, then validate the combination for
@@ -205,39 +230,66 @@ FocusgroupData ParseFocusgroup(const Element* element,
     return {};
   }
 
-  // Validate and consume the first token before iterating the rest.
-  AtomicString first_token = tokens[0].LowerASCII();
-  // First token is the single allowed behavior.
+  // Check for "none" anywhere in the token list. If present, the
+  // element opts out regardless of other tokens. This matches the spec
+  // algorithm: "If input contains 'none', then the element opts out."
+  for (unsigned i = 0; i < tokens.size(); i++) {
+    if (FocusgroupBehaviorFromString(tokens[i]) ==
+        FocusgroupBehavior::kOptOut) {
+      return {FocusgroupBehavior::kOptOut, FocusgroupFlags::kNone};
+    }
+  }
+
+  // Find the first recognized behavior token anywhere in the token list.
   FocusgroupData data;
-  data.behavior = FocusgroupBehaviorFromString(first_token);
+  unsigned behavior_index = tokens.size();  // Sentinel: no behavior found.
+  for (unsigned i = 0; i < tokens.size(); i++) {
+    FocusgroupBehavior behavior = FocusgroupBehaviorFromString(tokens[i]);
+    DCHECK_NE(behavior, FocusgroupBehavior::kOptOut);
+    if (behavior != FocusgroupBehavior::kNoBehavior) {
+      data.behavior = behavior;
+      behavior_index = i;
+      break;
+    }
+  }
 
   if (data.behavior == FocusgroupBehavior::kNoBehavior) {
-    // Unrecognized first token, emit error and return.
-    Error(StrCat({FirstTokenErrorMessage(), " Found: '", first_token, "'."}));
+    Error(FirstTokenErrorMessage());
     return {};
   }
 
   if (data.behavior == FocusgroupBehavior::kGrid && !is_grid_enabled) {
-    Error(
-        "Focusgroup behavior 'grid' is not supported because the "
-        "FocusgroupGrid feature is disabled.");
+    Error("Focusgroup behavior 'grid' requires Focusgroup V2.");
     return {};
   }
 
-  if (data.behavior == FocusgroupBehavior::kOptOut) {
-    if (tokens.size() > 1) {
-      Warn(
-          "focusgroup attribute value 'none' disables focusgroup behavior; all "
-          "other tokens are ignored.");
-    }
-    return {FocusgroupBehavior::kOptOut, FocusgroupFlags::kNone};
-  }
-
   StringBuilder invalid_tokens;
-  // Start at the second token.
-  for (unsigned i = 1; i < tokens.size(); i++) {
-    AtomicString lowercase_token = tokens[i].LowerASCII();
-    // The fist token is always a behavior, subsequent tokens are modifiers.
+  // Iterate all tokens, skipping the behavior token.
+  for (unsigned i = 0; i < tokens.size(); i++) {
+    if (i == behavior_index) {
+      continue;
+    }
+    const AtomicString& lowercase_token = tokens[i];
+
+    // Handle nowrap specially (not in kModifierMap since it has no flag bits).
+    if (lowercase_token == kNowrapToken) {
+      has_nowrap = true;
+      continue;
+    }
+
+    // Skip additional behavior tokens (the first recognized one is used). Treat
+    // them as unrecognized for warning purposes.
+    FocusgroupBehavior extra_behavior =
+        FocusgroupBehaviorFromString(lowercase_token);
+    if (extra_behavior != FocusgroupBehavior::kNoBehavior) {
+      if (!invalid_tokens.empty()) {
+        invalid_tokens.Append(", ");
+      }
+      invalid_tokens.Append(tokens[i]);
+      continue;
+    }
+
+    // Try to match as a modifier token.
     FocusgroupFlags flag = FocusgroupFlagFromString(lowercase_token);
     // If this is a grid-only modifier flag and the grid feature is disabled,
     // warn and ignore it (do not classify as invalid for easier to understand
@@ -301,6 +353,25 @@ FocusgroupData ParseFocusgroup(const Element* element,
     data.flags |= FocusgroupFlags::kNoMemory;
   }
 
+  // Find the behavior mapping for accessing default modifiers.
+  const BehaviorMapping* current_behavior = nullptr;
+  for (const auto& mapping : kBehaviorMap) {
+    if (data.behavior == mapping.behavior) {
+      current_behavior = &mapping;
+      break;
+    }
+  }
+  DCHECK(current_behavior);
+
+  // Validate wrap + nowrap conflict.
+  if (has_wrap && has_nowrap) {
+    Error(
+        "Specifying both 'wrap' and 'nowrap' is an author error; both are "
+        "ignored.");
+    has_wrap = false;
+    has_nowrap = false;
+  }
+
   // 2. Go over the set flags and ensure the combination is valid.
 
   // Grid focusgroup specific validation and flag setting.
@@ -319,10 +390,12 @@ FocusgroupData ParseFocusgroup(const Element* element,
             "omitted because focusgroup already wraps in both axes.");
       }
     } else {
-      if (has_row_wrap)
+      if (has_row_wrap) {
         data.flags |= FocusgroupFlags::kWrapInline;
-      if (has_col_wrap)
+      }
+      if (has_col_wrap) {
         data.flags |= FocusgroupFlags::kWrapBlock;
+      }
 
       if (has_row_wrap && has_col_wrap) {
         Warn(
@@ -391,6 +464,11 @@ FocusgroupData ParseFocusgroup(const Element* element,
           "Focusgroup attribute value 'block' is not valid for grid "
           "focusgroups; use row-wrap/col-wrap or flow modifiers instead.");
     }
+    if (has_nowrap) {
+      Warn(
+          "Focusgroup attribute value 'nowrap' is not valid for grid "
+          "focusgroups; use row-wrap/col-wrap modifiers instead.");
+    }
     return data;
   }
 
@@ -420,29 +498,49 @@ FocusgroupData ParseFocusgroup(const Element* element,
         "Focusgroup attribute value 'col-flow' is only valid for grid "
         "focusgroups.");
   }
-  if (has_inline && has_block) {
+  // Redundancy check: specifying both 'inline' and 'block' is only redundant
+  // when the behavior has no default axis (both axes is the fallback).
+  constexpr auto kAxisMask = FocusgroupFlags::kInline | FocusgroupFlags::kBlock;
+  if (has_inline && has_block &&
+      !(current_behavior->default_flags & kAxisMask)) {
     Warn(
         "Focusgroup attribute values 'inline' and 'block' used together "
         "are redundant (this is the default behavior for linear focusgroups) "
         "and can be omitted.");
   }
 
-  // When no axis is specified for linear focusgroups, it means that the
-  // focusgroup should handle both.
-  if (!has_inline && !has_block) {
-    data.flags |= FocusgroupFlags::kInline | FocusgroupFlags::kBlock;
-  } else {
+  // Determine the navigation axes. Priority:
+  // 1. Explicit inline/block modifiers from the author.
+  // 2. Behavior token's default axis.
+  // 3. Both axes (fallback when neither explicit nor default is provided).
+  if (has_inline || has_block) {
     if (has_inline) {
       data.flags |= FocusgroupFlags::kInline;
     }
     if (has_block) {
       data.flags |= FocusgroupFlags::kBlock;
     }
+  } else if (current_behavior->default_flags & kAxisMask) {
+    data.flags |= current_behavior->default_flags & kAxisMask;
+  } else {
+    data.flags |= FocusgroupFlags::kInline | FocusgroupFlags::kBlock;
   }
 
-  // 6. Determine in what axis a linear focusgroup should wrap. This needs to be
-  // performed once the supported axes are final.
-  if (has_wrap) {
+  // Determine wrapping behavior. Priority:
+  // 1. Explicit 'nowrap' suppresses all wrapping.
+  // 2. Explicit 'wrap' applies wrapping in the active axes.
+  // 3. Behavior token's default wrap applies wrapping in the active axes.
+  if (has_nowrap) {
+    // Explicitly suppress wrapping; no wrap flags set.
+  } else if (has_wrap) {
+    if (data.flags & FocusgroupFlags::kInline) {
+      data.flags |= FocusgroupFlags::kWrapInline;
+    }
+    if (data.flags & FocusgroupFlags::kBlock) {
+      data.flags |= FocusgroupFlags::kWrapBlock;
+    }
+  } else if (current_behavior->default_flags &
+             (FocusgroupFlags::kWrapInline | FocusgroupFlags::kWrapBlock)) {
     if (data.flags & FocusgroupFlags::kInline) {
       data.flags |= FocusgroupFlags::kWrapInline;
     }
@@ -537,6 +635,37 @@ ax::mojom::blink::Role FocusgroupItemMinimumAriaRole(
   NOTREACHED()
       << "Unhandled FocusgroupBehavior in FocusgroupItemMinimumAriaRole: "
       << static_cast<int>(data.behavior);
+}
+
+bool IsValidFocusgroupToken(const AtomicString& token) {
+  const bool is_grid_enabled = RuntimeEnabledFeatures::FocusgroupV2Enabled();
+
+  // Check behavior tokens.
+  for (const auto& mapping : kBehaviorMap) {
+    if (token == mapping.token) {
+      if (mapping.behavior == FocusgroupBehavior::kGrid) {
+        return is_grid_enabled;
+      }
+      return true;
+    }
+  }
+
+  // Check modifier tokens.
+  for (const auto& mapping : kModifierMap) {
+    if (token == mapping.token) {
+      if (IsGridOnlyFlag(mapping.flag)) {
+        return is_grid_enabled;
+      }
+      return true;
+    }
+  }
+
+  // "nowrap" is valid but has no flag bits (not in kModifierMap).
+  if (token == kNowrapToken) {
+    return true;
+  }
+
+  return false;
 }
 
 }  // namespace blink::focusgroup

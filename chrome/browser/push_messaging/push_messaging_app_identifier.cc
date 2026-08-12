@@ -8,6 +8,7 @@
 
 #include "base/check_op.h"
 #include "base/notreached.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -41,7 +42,7 @@ AppIdentifier PushMessagingAppIdentifier::FindByAppId(
   }
 
   // Since we now know this is a Push Messaging app_id, check the case hasn't
-  // been mangled (crbug.com/461867).
+  // been mangled (crbug.com/40407250).
   DCHECK_EQ(push_messaging::kAppIdentifierPrefix,
             app_id.substr(0, push_messaging::kPrefixLength));
   DCHECK_GE(app_id.size(),
@@ -50,7 +51,7 @@ AppIdentifier PushMessagingAppIdentifier::FindByAppId(
             base::ToUpperASCII(
                 app_id.substr(app_id.size() - push_messaging::kGuidLength)));
 
-  const base::Value::Dict& map =
+  const base::DictValue& map =
       profile->GetPrefs()->GetDict(prefs::kPushMessagingAppIdentifierMap);
 
   const std::string* map_value = map.FindString(app_id);
@@ -68,16 +69,19 @@ AppIdentifier PushMessagingAppIdentifier::FindByServiceWorker(
     Profile* profile,
     const GURL& origin,
     int64_t service_worker_registration_id) {
-  const std::string base_pref_value =
-      AppIdentifier::Generate(origin, service_worker_registration_id)
-          .ToPrefValue();
-
-  const base::Value::Dict& map =
+  const base::DictValue& map =
       profile->GetPrefs()->GetDict(prefs::kPushMessagingAppIdentifierMap);
+  std::string search_prefix =
+      base::StrCat({origin.spec(), "#",
+                    base::NumberToString(service_worker_registration_id)});
+  std::string search_prefix_with_sep = base::StrCat({search_prefix, "#"});
+
   for (auto entry : map) {
-    if (entry.second.is_string() &&
-        base::StartsWith(entry.second.GetString(), base_pref_value,
-                         base::CompareCase::SENSITIVE)) {
+    if (!entry.second.is_string()) {
+      continue;
+    }
+    const std::string& val = entry.second.GetString();
+    if (val == search_prefix || base::StartsWith(val, search_prefix_with_sep)) {
       return FindByAppId(profile, entry.first);
     }
   }
@@ -89,7 +93,7 @@ std::vector<AppIdentifier> PushMessagingAppIdentifier::GetAll(
     Profile* profile) {
   std::vector<AppIdentifier> result;
 
-  const base::Value::Dict& map =
+  const base::DictValue& map =
       profile->GetPrefs()->GetDict(prefs::kPushMessagingAppIdentifierMap);
   for (auto entry : map) {
     result.push_back(FindByAppId(profile, entry.first));
@@ -101,7 +105,7 @@ std::vector<AppIdentifier> PushMessagingAppIdentifier::GetAll(
 // static
 void PushMessagingAppIdentifier::DeleteAllFromPrefs(Profile* profile) {
   profile->GetPrefs()->SetDict(prefs::kPushMessagingAppIdentifierMap,
-                               base::Value::Dict());
+                               base::DictValue());
 }
 
 // static
@@ -119,7 +123,7 @@ void PushMessagingAppIdentifier::PersistToPrefs(const AppIdentifier& id,
 
   ScopedDictPrefUpdate update(profile->GetPrefs(),
                               prefs::kPushMessagingAppIdentifierMap);
-  base::Value::Dict& map = update.Get();
+  base::DictValue& map = update.Get();
 
   // Delete any stale entry with the same origin and Service Worker
   // registration id (hence we ensure there is a 1:1 not 1:many mapping).
@@ -138,6 +142,6 @@ void PushMessagingAppIdentifier::DeleteFromPrefs(const AppIdentifier& id,
 
   ScopedDictPrefUpdate update(profile->GetPrefs(),
                               prefs::kPushMessagingAppIdentifierMap);
-  base::Value::Dict& map = update.Get();
+  base::DictValue& map = update.Get();
   map.Remove(id.app_id());
 }

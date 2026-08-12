@@ -11,6 +11,7 @@
 
 #import "base/memory/weak_ptr.h"
 #import "base/scoped_observation.h"
+#import "base/types/optional_ref.h"
 #import "components/autofill/core/common/language_code.h"
 #import "components/password_manager/core/browser/leak_detection_dialog_utils.h"
 #import "components/password_manager/core/browser/password_feature_manager_impl.h"
@@ -31,6 +32,10 @@
 #import "services/metrics/public/cpp/ukm_source_id.h"
 
 class ProfileIOS;
+
+namespace device_reauth {
+class DeviceAuthenticator;
+}  // namespace device_reauth
 
 namespace autofill {
 class LogManager;
@@ -91,6 +96,10 @@ class IOSChromePasswordManagerClient
       std::vector<std::unique_ptr<password_manager::PasswordForm>> local_forms,
       const url::Origin& origin,
       CredentialsCallback callback) override;
+  bool IsReauthBeforeFillingRequired(
+      device_reauth::DeviceAuthenticator* authenticator) override;
+  std::unique_ptr<device_reauth::DeviceAuthenticator> GetDeviceAuthenticator()
+      override;
   void AutomaticPasswordSave(
       std::unique_ptr<password_manager::PasswordFormManagerForUI>
           saved_form_manager,
@@ -102,6 +111,7 @@ class IOSChromePasswordManagerClient
       const override;
   PrefService* GetPrefs() const override;
   PrefService* GetLocalStatePrefs() const override;
+  metrics::ProfileMetricsService* GetProfileMetricsService() override;
   const syncer::SyncService* GetSyncService() const override;
   affiliations::AffiliationService* GetAffiliationService() override;
   password_manager::PasswordStoreInterface* GetProfilePasswordStore()
@@ -133,8 +143,13 @@ class IOSChromePasswordManagerClient
   void NotifyUserCredentialsWereLeaked(
       password_manager::LeakedPasswordDetails details) override;
   void NotifyKeychainError() override;
-  bool IsSavingAndFillingEnabled(const GURL& url) const override;
-  bool IsFillingEnabled(const GURL& url) const override;
+  using password_manager::PasswordManagerClient::IsFillingEnabled;
+  using password_manager::PasswordManagerClient::IsSavingAndFillingEnabled;
+  bool IsSavingAndFillingEnabled(
+      const url::Origin& origin,
+      base::optional_ref<const GURL> url) const override;
+  bool IsFillingEnabled(const url::Origin& origin,
+                        base::optional_ref<const GURL> url) const override;
   bool IsFieldFilledWithOtp(autofill::FormGlobalId form_id,
                             autofill::FieldGlobalId field_id) override;
   bool IsCommittedMainFrameSecure() const override;

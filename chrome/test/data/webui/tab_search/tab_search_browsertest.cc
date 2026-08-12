@@ -11,10 +11,6 @@ class TabSearchTest : public WebUIMochaBrowserTest {
   TabSearchTest() { set_test_loader_host(chrome::kChromeUITabSearchHost); }
 };
 
-IN_PROC_BROWSER_TEST_F(TabSearchTest, App) {
-  RunTest("tab_search/tab_search_app_test.js", "mocha.run()");
-}
-
 // TODO(crbug.com/451682396): Disabled on Linux dbg due to flakiness.
 #if BUILDFLAG(IS_LINUX) && !defined(NDEBUG)
 #define MAYBE_Page DISABLED_Page
@@ -41,10 +37,6 @@ IN_PROC_BROWSER_TEST_F(TabSearchTest, MediaTabs) {
   RunTest("tab_search/tab_search_media_tabs_test.js", "mocha.run()");
 }
 
-IN_PROC_BROWSER_TEST_F(TabSearchTest, OrganizationSelector) {
-  RunTest("tab_search/tab_organization_selector_test.js", "mocha.run()");
-}
-
-IN_PROC_BROWSER_TEST_F(TabSearchTest, SplitNewTabPage) {
-  RunTest("tab_search/split_new_tab_page_test.js", "mocha.run()");
+IN_PROC_BROWSER_TEST_F(TabSearchTest, SplitItem) {
+  RunTest("tab_search/tab_search_split_item_test.js", "mocha.run()");
 }

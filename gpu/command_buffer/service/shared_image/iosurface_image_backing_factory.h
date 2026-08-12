@@ -10,6 +10,7 @@
 #include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/service/feature_info.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_backing.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_backing_factory.h"
@@ -19,7 +20,6 @@
 
 namespace gfx {
 class Size;
-class ColorSpace;
 }  // namespace gfx
 
 namespace gl {
@@ -38,7 +38,7 @@ class GPU_GLES2_EXPORT IOSurfaceImageBackingFactory
  public:
   IOSurfaceImageBackingFactory(GrContextType gr_context_type,
                                int32_t max_texture_size,
-                               const gles2::FeatureInfo* feature_info,
+                               gles2::FeatureInfo* feature_info,
                                gl::ProgressReporter* progress_reporter,
                                uint32_t texture_target);
   ~IOSurfaceImageBackingFactory() override;
@@ -50,47 +50,23 @@ class GPU_GLES2_EXPORT IOSurfaceImageBackingFactory
   // SharedImageBackingFactory implementation.
   std::unique_ptr<SharedImageBacking> CreateSharedImage(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
+      const SharedImageInfo& si_info,
       SurfaceHandle surface_handle,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label,
       bool is_thread_safe) override;
   std::unique_ptr<SharedImageBacking> CreateSharedImage(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label,
+      const SharedImageInfo& si_info,
       bool is_thread_safe,
       base::span<const uint8_t> pixel_data) override;
   std::unique_ptr<SharedImageBacking> CreateSharedImage(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label,
+      const SharedImageInfo& si_info,
       bool is_thread_safe,
       gfx::GpuMemoryBufferHandle handle) override;
   std::unique_ptr<SharedImageBacking> CreateSharedImage(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
+      const SharedImageInfo& si_info,
       SurfaceHandle surface_handle,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label,
       bool is_thread_safe,
       gfx::BufferUsage buffer_usage) override;
   bool IsSupported(SharedImageUsageSet usage,
@@ -105,38 +81,24 @@ class GPU_GLES2_EXPORT IOSurfaceImageBackingFactory
  private:
   std::unique_ptr<SharedImageBacking> CreateSharedImageInternal(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
+      const SharedImageInfo& si_info,
       SurfaceHandle surface_handle,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      gpu::SharedImageUsageSet usage,
-      std::string debug_label,
       bool is_thread_safe,
       base::span<const uint8_t> pixel_data);
   std::unique_ptr<SharedImageBacking> CreateSharedImageGMBs(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      gpu::SharedImageUsageSet usage,
-      std::string debug_label,
+      const SharedImageInfo& si_info,
       gfx::GpuMemoryBufferHandle handle,
       bool is_thread_safe,
       std::optional<gfx::BufferUsage> buffer_usage = std::nullopt);
 
   const GrContextType gr_context_type_;
   const int32_t max_texture_size_;
-  const bool angle_texture_usage_;
-
-  base::flat_set<viz::SharedImageFormat> supported_formats_;
+  const raw_ptr<gles2::FeatureInfo> feature_info_ = nullptr;
 
   // Used to notify the watchdog before a buffer allocation in case it takes
   // long.
-  const raw_ptr<gl::ProgressReporter> progress_reporter_;
+  const raw_ptr<gl::ProgressReporter> progress_reporter_ = nullptr;
 
   const uint32_t texture_target_;
 };

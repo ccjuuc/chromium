@@ -133,7 +133,14 @@ class VIEWS_EXPORT FocusManager : public ViewObserver {
 
     // The focus changed due to a click or a shortcut to jump directly to
     // a particular view.
-    kDirectFocusChange
+    kDirectFocusChange,
+
+    // The focus changed because a native view is focused.
+    // Note that if the focus change was initiated by the FocusManager (e.g.
+    // via kDirectFocusChange), a native view may be be focused. However, this
+    // won't trigger a kFocusNativeView focus change because the NativeView's
+    // hosting view (e.g., views::WebView) is already focused.
+    kFocusNativeView,
   };
 
   // TODO(dmazzoni): use Direction in place of bool reverse throughout.
@@ -152,6 +159,11 @@ class VIEWS_EXPORT FocusManager : public ViewObserver {
   // further.
   bool OnKeyEvent(const ui::KeyEvent& event);
 
+  // Returns true if the focused view wants to process the key event as is
+  // (and there is no priority handler registered for the accelerator).
+  bool ShouldSkipAcceleratorProcessing(
+      const ui::Accelerator& accelerator) const;
+
   // Returns true is the specified is part of the hierarchy of the window
   // associated with this FocusManager.
   bool ContainsView(View* view);
@@ -165,7 +177,7 @@ class VIEWS_EXPORT FocusManager : public ViewObserver {
 
   // Low-level methods to force the focus to change (and optionally provide
   // a reason). If the focus change should only happen if the view is
-  // currenty focusable, enabled, and visible, call view->RequestFocus().
+  // currently focusable, enabled, and visible, call view->RequestFocus().
   void SetFocusedViewWithReason(View* view, FocusChangeReason reason);
   void SetFocusedView(View* view);
 
@@ -300,6 +312,9 @@ class VIEWS_EXPORT FocusManager : public ViewObserver {
   // Checks if a focused view is being set.
   bool IsSettingFocusedView() const;
 
+  // Returns true if RestoreFocusedView() is on the call stack.
+  bool is_restoring_focused_view() const { return in_restoring_focused_view_; }
+
  private:
   // Returns the focusable view found in the FocusTraversable specified starting
   // at the specified view. This traverses down along the FocusTraversable
@@ -350,7 +365,11 @@ class VIEWS_EXPORT FocusManager : public ViewObserver {
       FocusChangeReason::kDirectFocusChange;
 
   // The list of registered FocusChange listeners.
-  base::ObserverList<FocusChangeListener, true>::Unchecked
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      FocusChangeListener,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>::Unchecked
       focus_change_listeners_;
 
   // This is true if full keyboard accessibility is needed. This causes

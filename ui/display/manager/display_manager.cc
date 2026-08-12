@@ -16,7 +16,6 @@
 
 #include "base/auto_reset.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
@@ -538,12 +537,34 @@ void DisplayManager::UpdateInternalDisplay(
 void DisplayManager::RefreshFontParams() {
   bool force_disable_subpixel_font_rendering = false;
   if (features::DoesFormFactorControlSubpixelRendering()) {
-    force_disable_subpixel_font_rendering =
-        chromeos::GetFormFactor() != chromeos::form_factor::kClamshell;
+    const chromeos::DeviceType device_type = chromeos::GetDeviceType();
+    const bool should_enable_subpixel_rendering =
+        device_type != chromeos::DeviceType::kChromebit &&
+        device_type != chromeos::DeviceType::kChromebox &&
+        device_type != chromeos::DeviceType::kUnknown;
+    force_disable_subpixel_font_rendering = !should_enable_subpixel_rendering;
   }
+
+  // TODO(vincentchiang): Create per display subpixel rendering controls, and
+  // get rid of the global setting.
+  for (const auto& display : active_display_list_) {
+    if (display.IsInternal()) {
+      const ManagedDisplayInfo& info = GetDisplayInfo(display.id());
+      if (info.GetLogicalActiveRotation() != Display::ROTATE_0) {
+        force_disable_subpixel_font_rendering = true;
+      }
+      break;
+    }
+  }
+
   if (features::IsOledScaleFactorEnabled()) {
     force_disable_subpixel_font_rendering = true;
   }
+
+  if (!chromeos::DeviceSupportsSubpixelFontRendering()) {
+    force_disable_subpixel_font_rendering = true;
+  }
+
   gfx::SetForceDisableSubpixelFontRendering(
       force_disable_subpixel_font_rendering);
 
@@ -1307,7 +1328,7 @@ bool DisplayManager::UpdateDisplaysWith(
   std::vector<size_t> updated_indices;
   UpdateNonPrimaryDisplayBoundsForLayout(&new_displays, &updated_indices);
   for (size_t updated_index : updated_indices) {
-    if (!base::Contains(added_display_indices, updated_index)) {
+    if (!std::ranges::contains(added_display_indices, updated_index)) {
       uint32_t metrics = DisplayObserver::DISPLAY_METRIC_BOUNDS |
                          DisplayObserver::DISPLAY_METRIC_WORK_AREA;
       if (display_changes.find(updated_index) != display_changes.end()) {
@@ -1950,8 +1971,8 @@ bool DisplayManager::UpdateDisplayBounds(int64_t display_id,
   display_info_[display_id].SetBounds(new_bounds);
   // Don't notify observers if the mirrored window has changed.
   if (IsInSoftwareMirrorMode() &&
-      base::Contains(software_mirroring_display_list_, display_id,
-                     &Display::id)) {
+      std::ranges::contains(software_mirroring_display_list_, display_id,
+                            &Display::id)) {
     return false;
   }
 
@@ -2097,8 +2118,8 @@ void DisplayManager::CreateSoftwareMirroringDisplayInfo(
             layout_store()->GetRegisteredDisplayLayout(
                 CreateDisplayIdList(*display_info_list));
         source_id = layout.primary_id;
-        if (!base::Contains(*display_info_list, source_id,
-                            &ManagedDisplayInfo::id)) {
+        if (!std::ranges::contains(*display_info_list, source_id,
+                                   &ManagedDisplayInfo::id)) {
           // It is possible that primary display is removed in the new display
           // configuration.
           source_id = first_display_id_;
@@ -2575,8 +2596,9 @@ void DisplayManager::NotifyMetricsChanged(const Display& display,
     delegate_->UpdateDisplayMetrics(display, metrics);
   }
 
-  display_observers_.Notify(&DisplayObserver::OnDisplayMetricsChanged, display,
-                            metrics);
+  // TODO(crbug.com/484371187): Investigate if this can be non reentrant.
+  display_observers_.NotifyAllowReentrancyUntriaged(
+      &DisplayObserver::OnDisplayMetricsChanged, display, metrics);
 }
 
 void DisplayManager::NotifyDisplayAdded(const Display& display) {

@@ -20,6 +20,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/common/result_codes.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_test.h"
@@ -107,8 +108,7 @@ class ExtensionCrashRecoveryTest : public extensions::ExtensionBrowserTest {
     extensions::ProcessMap* process_map =
         extensions::ProcessMap::Get(profile());
     ASSERT_TRUE(process_map->Contains(
-        extension_id,
-        extension_host->render_process_host()->GetDeprecatedID()));
+        extension_id, extension_host->render_process_host()->GetID()));
   }
 
   void LoadTestExtension() {
@@ -214,7 +214,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionCrashRecoveryTest,
   ASSERT_EQ(1U, CountNotifications());
 
   // Open a new tab, but the balloon will still be there.
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   WebContents* new_current_tab = GetActiveWebContents();
   ASSERT_TRUE(new_current_tab);
   ASSERT_NE(new_current_tab, original_tab);
@@ -356,7 +356,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionCrashRecoveryTest,
   ASSERT_EQ(count_before, GetEnabledExtensionCount());
 }
 
-// Flaky, http://crbug.com/241573.
+// Flaky, http://crbug.com/41012851.
 IN_PROC_BROWSER_TEST_F(ExtensionCrashRecoveryTest,
                        DISABLED_TwoExtensionsIgnoreFirst) {
   const size_t count_before = GetEnabledExtensionCount();
@@ -457,7 +457,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionCrashRecoveryTest,
   LoadTestExtension();
 
   // Open a tab extension.
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), GURL(std::string(extensions::kExtensionScheme) +
                       url::kStandardSchemeSeparator + first_extension_id_ +

@@ -4,7 +4,7 @@
 
 #include "services/device/public/cpp/hid/hid_report_utils.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
 
 namespace device {
 
@@ -21,6 +21,14 @@ const std::vector<mojom::HidReportDescriptionPtr>& ReportsForType(
     case HidReportType::kFeature:
       return collection.feature_reports;
   }
+}
+
+bool CollectionContainsReport(const mojom::HidCollectionInfo& collection,
+                              uint8_t report_id,
+                              HidReportType report_type) {
+  return std::ranges::contains(ReportsForType(collection, report_type),
+                               report_id,
+                               &mojom::HidReportDescription::report_id);
 }
 
 }  // namespace
@@ -101,9 +109,9 @@ const mojom::HidCollectionInfo* FindCollectionWithReport(
   // `report_type`, or nullptr if it is not in any collection.
   auto find_it = std::ranges::find_if(
       device.collections, [report_id, report_type](const auto& collection) {
-        return base::Contains(ReportsForType(*collection, report_type),
-                              report_id,
-                              &mojom::HidReportDescription::report_id);
+        return std::ranges::contains(ReportsForType(*collection, report_type),
+                                     report_id,
+                                     &mojom::HidReportDescription::report_id);
       });
   if (find_it == device.collections.end()) {
     return nullptr;
@@ -111,6 +119,43 @@ const mojom::HidCollectionInfo* FindCollectionWithReport(
 
   CHECK(find_it->get());
   return find_it->get();
+}
+
+bool HasReportInAlwaysProtectedCollection(
+    const mojom::HidCollectionInfo& collection,
+    uint8_t report_id,
+    HidReportType report_type) {
+  if (!CollectionContainsReport(collection, report_id, report_type)) {
+    return false;
+  }
+  if (collection.collection_type == mojom::kHIDCollectionTypeApplication &&
+      IsAlwaysProtected(*collection.usage, report_type)) {
+    return true;
+  }
+  return std::ranges::any_of(collection.children, [report_id, report_type](
+                                                      const auto& child) {
+    return HasReportInAlwaysProtectedCollection(*child, report_id, report_type);
+  });
+}
+
+bool HasReportInCollectionWithUsagePage(
+    const mojom::HidCollectionInfo& collection,
+    uint8_t report_id,
+    HidReportType report_type,
+    uint16_t usage_page) {
+  if (!CollectionContainsReport(collection, report_id, report_type)) {
+    return false;
+  }
+  if (collection.collection_type == mojom::kHIDCollectionTypeApplication &&
+      collection.usage->usage_page == usage_page) {
+    return true;
+  }
+  return std::ranges::any_of(
+      collection.children,
+      [report_id, report_type, usage_page](const auto& child) {
+        return HasReportInCollectionWithUsagePage(*child, report_id,
+                                                  report_type, usage_page);
+      });
 }
 
 }  // namespace device

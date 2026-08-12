@@ -9,14 +9,14 @@
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_test_util.h"
 #include "ui/base/interaction/element_tracker.h"
-#include "ui/base/interaction/framework_specific_implementation.h"
+#include "ui/base/interaction/safe_castable.h"
 
 namespace user_education::test {
 
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(TestHelpBubble, kElementId);
-DEFINE_FRAMEWORK_SPECIFIC_METADATA(TestHelpBubble)
-DEFINE_FRAMEWORK_SPECIFIC_METADATA(TestHelpBubbleElement)
-DEFINE_FRAMEWORK_SPECIFIC_METADATA(TestHelpBubbleFactory)
+DEFINE_SAFE_CAST_TARGET(TestHelpBubble)
+DEFINE_SAFE_CAST_TARGET(TestHelpBubbleElement)
+DEFINE_SAFE_CAST_TARGET(TestHelpBubbleFactory)
 
 // static
 constexpr int TestHelpBubble::kNoButtonWithTextIndex;
@@ -84,10 +84,14 @@ int TestHelpBubble::GetIndexOfButtonWithText(std::u16string text) {
   return kNoButtonWithTextIndex;
 }
 
-void TestHelpBubble::CloseBubbleImpl() {
+bool TestHelpBubble::Close(CloseReason reason) {
+  auto scoped_callbacks = BeginClose(reason);
+
   bubble_element_.reset();
   anchor_element_ = nullptr;
   element_hidden_subscription_ = base::CallbackListSubscription();
+
+  return scoped_callbacks.is_valid();
 }
 
 ui::ElementContext TestHelpBubble::GetContext() const {

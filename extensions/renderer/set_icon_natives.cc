@@ -149,7 +149,8 @@ bool SetIconNatives::ConvertImageDataToBitmapValue(
   // Construct the Value object.
   std::vector<uint8_t> s = skia::mojom::InlineBitmap::Serialize(&bitmap);
   blink::WebArrayBuffer buffer = blink::WebArrayBuffer::Create(s.size(), 1);
-  UNSAFE_TODO(memcpy(buffer.Data(), s.data(), s.size()));
+  buffer.ByteSpan().copy_from(s);
+
   *image_data_bitmap =
       blink::WebArrayBufferConverter::ToV8Value(&buffer, isolate);
 
@@ -185,8 +186,9 @@ bool SetIconNatives::ConvertImageDataSetToBitmapValueSet(
         property_names->Get(v8_context, i).ToLocalChecked();
     v8::String::Utf8Value utf8_key(isolate, key);
     int size;
-    if (!base::StringToInt(std::string(*utf8_key), &size))
+    if (!base::StringToInt(*utf8_key, &size)) {
       continue;
+    }
     v8::Local<v8::Value> v8_image_value;
     if (!image_data_set->Get(v8_context, key).ToLocal(&v8_image_value)) {
       return false;
@@ -217,7 +219,7 @@ void SetIconNatives::SetIconCommon(
   auto set_null_prototype = [v8_context, isolate](v8::Local<v8::Object> obj) {
     // Avoid any pesky Object.prototype manipulation.
     bool succeeded =
-        obj->SetPrototypeV2(v8_context, v8::Null(isolate)).ToChecked();
+        obj->SetPrototype(v8_context, v8::Null(isolate)).ToChecked();
     CHECK(succeeded);
   };
   set_null_prototype(bitmap_set_value);

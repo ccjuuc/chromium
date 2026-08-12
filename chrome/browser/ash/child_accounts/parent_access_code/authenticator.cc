@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/numerics/byte_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -33,7 +34,7 @@ constexpr char kClockDriftDictKey[] = "clock_drift_tolerance";
 
 // static
 std::optional<AccessCodeConfig> AccessCodeConfig::FromDictionary(
-    const base::Value::Dict& dict) {
+    const base::DictValue& dict) {
   const std::string* secret = dict.FindString(kSharedSecretDictKey);
   if (!secret || secret->empty())
     return std::nullopt;
@@ -74,8 +75,8 @@ AccessCodeConfig& AccessCodeConfig::operator=(AccessCodeConfig&&) = default;
 
 AccessCodeConfig::~AccessCodeConfig() = default;
 
-base::Value::Dict AccessCodeConfig::ToDictionary() const {
-  base::Value::Dict config;
+base::DictValue AccessCodeConfig::ToDictionary() const {
+  base::DictValue config;
   config.Set(kSharedSecretDictKey, base::Value(shared_secret_));
   config.Set(kCodeValidityDictKey,
              base::Value(static_cast<int>(code_validity_.InSeconds())));
@@ -166,7 +167,7 @@ std::optional<AccessCode> Authenticator::ValidateInRange(
                                  kAccessCodeGranularity.InMilliseconds();
   const int64_t end_interval = valid_to.InMillisecondsSinceUnixEpoch() /
                                kAccessCodeGranularity.InMilliseconds();
-  for (int i = start_interval; i <= end_interval; ++i) {
+  for (int64_t i = start_interval; i <= end_interval; ++i) {
     const base::Time generation_timestamp =
         base::Time::FromMillisecondsSinceUnixEpoch(
             i * kAccessCodeGranularity.InMilliseconds());

@@ -10,19 +10,28 @@
 #import "base/test/scoped_mock_clock_override.h"
 #import "components/infobars/core/infobar.h"
 #import "components/infobars/core/infobar_manager.h"
+#import "components/signin/public/base/consent_level.h"
+#import "components/signin/public/identity_manager/primary_account_change_event.h"
 #import "components/sync/service/sync_service_utils.h"
 #import "components/sync/test/mock_sync_service.h"
 #import "ios/chrome/browser/infobars/model/infobar_ios.h"
 #import "ios/chrome/browser/infobars/model/infobar_manager_impl.h"
 #import "ios/chrome/browser/infobars/model/infobar_utils.h"
 #import "ios/chrome/browser/settings/model/sync/utils/sync_util.h"
+#import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/sync_presenter_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
+#import "ios/chrome/browser/signin/model/authentication_service.h"
+#import "ios/chrome/browser/signin/model/authentication_service_factory.h"
+#import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
+#import "ios/chrome/browser/signin/model/fake_system_identity.h"
+#import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
 #import "ios/chrome/browser/sync/model/mock_sync_service_utils.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
+#import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/test/fakes/fake_navigation_manager.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
 #import "ios/web/public/test/web_task_environment.h"
@@ -39,6 +48,23 @@ using ::testing::Return;
 constexpr SyncErrorInfoBarTrigger kSyncErrorInfoBarTrigger =
     SyncErrorInfoBarTrigger::kNewTabOpened;
 
+const FakeSystemIdentity* kPrimaryIdentity = [FakeSystemIdentity fakeIdentity1];
+
+class MockInfoBarManager : public infobars::InfoBarManager {
+ public:
+  MockInfoBarManager() = default;
+  ~MockInfoBarManager() override = default;
+
+  MOCK_METHOD(void, RemoveInfoBar, (infobars::InfoBar * infobar), (override));
+  MOCK_METHOD(int, GetActiveEntryID, (), (override));
+  MOCK_METHOD(void,
+              OpenURL,
+              (const GURL& url,
+               WindowOpenDisposition disposition,
+               const std::string& text_fragment),
+              (override));
+};
+
 class SyncErrorInfobarDelegateTest : public PlatformTest {
  protected:
   void SetUp() override {
@@ -46,6 +72,10 @@ class SyncErrorInfobarDelegateTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
                               base::BindRepeating(&CreateMockSyncService));
+    builder.AddTestingFactory(
+        AuthenticationServiceFactory::GetInstance(),
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
+            std::make_unique<FakeAuthenticationServiceDelegate>()));
     profile_ = std::move(builder).Build();
     presenter_ = OCMStrictProtocolMock(@protocol(SyncPresenterCommands));
     web_state_.SetBrowserState(profile_.get());
@@ -53,9 +83,16 @@ class SyncErrorInfobarDelegateTest : public PlatformTest {
     web_state_.SetNavigationManager(
         std::make_unique<web::FakeNavigationManager>());
     InfoBarManagerImpl::CreateForWebState(&web_state_);
+    fake_system_identity_manager_ =
+        FakeSystemIdentityManager::FromSystemIdentityManager(
+            GetApplicationContext()->GetSystemIdentityManager());
+    authentication_service_ =
+        AuthenticationServiceFactory::GetForProfile(profile_.get());
   }
 
   void TearDown() override {
+    fake_system_identity_manager_ = nullptr;
+    authentication_service_ = nullptr;
     EXPECT_OCMOCK_VERIFY((id)presenter_);
     PlatformTest::TearDown();
   }
@@ -69,6 +106,10 @@ class SyncErrorInfobarDelegateTest : public PlatformTest {
     return InfoBarManagerImpl::FromWebState(&web_state_);
   }
 
+  // ScopedTestingLocalState needed for the authentication service.
+  IOSChromeScopedTestingLocalState scoped_testing_local_state_;
+  raw_ptr<FakeSystemIdentityManager> fake_system_identity_manager_;
+  raw_ptr<AuthenticationService> authentication_service_;
   id<SyncPresenterCommands> presenter_;
   web::WebTaskEnvironment task_environment_;
   std::unique_ptr<TestProfileIOS> profile_;
@@ -86,7 +127,7 @@ TEST_F(SyncErrorInfobarDelegateTest, SyncServiceSignInNeedsUpdate) {
   auto delegate = std::make_unique<SyncErrorInfoBarDelegate>(
       profile_.get(), presenter_, kSyncErrorInfoBarTrigger);
 
-  EXPECT_FALSE(delegate->Accept());
+  EXPECT_TRUE(delegate->Accept());
 }
 
 // Tests that the user sign-out while the infobar is displayed, check that
@@ -115,11 +156,14 @@ TEST_F(SyncErrorInfobarDelegateTest, SyncServiceSignInNeedsUpdateAndSignout) {
 }
 
 TEST_F(SyncErrorInfobarDelegateTest, SyncServiceUnrecoverableError) {
+  fake_system_identity_manager_->AddIdentity(kPrimaryIdentity);
+  authentication_service_->SignIn(kPrimaryIdentity,
+                                  signin_metrics::AccessPoint::kStartPage);
   OCMExpect([presenter_ showAccountSettings]);
   auto delegate = std::make_unique<SyncErrorInfoBarDelegate>(
       profile_.get(), presenter_, kSyncErrorInfoBarTrigger);
 
-  EXPECT_FALSE(delegate->Accept());
+  EXPECT_TRUE(delegate->Accept());
 }
 
 TEST_F(SyncErrorInfobarDelegateTest, SyncServiceNeedsPassphrase) {
@@ -131,7 +175,7 @@ TEST_F(SyncErrorInfobarDelegateTest, SyncServiceNeedsPassphrase) {
   auto delegate = std::make_unique<SyncErrorInfoBarDelegate>(
       profile_.get(), presenter_, kSyncErrorInfoBarTrigger);
 
-  EXPECT_FALSE(delegate->Accept());
+  EXPECT_TRUE(delegate->Accept());
 }
 
 TEST_F(SyncErrorInfobarDelegateTest, SyncServiceNeedsTrustedVaultKey) {
@@ -139,14 +183,14 @@ TEST_F(SyncErrorInfobarDelegateTest, SyncServiceNeedsTrustedVaultKey) {
       .WillByDefault(Return(syncer::SyncService::UserActionableError::
                                 kNeedsTrustedVaultKeyForEverything));
 
-  OCMExpect(
-      [presenter_ showTrustedVaultReauthForFetchKeysWithTrigger:
-                      trusted_vault ::TrustedVaultUserActionTriggerForUMA::
-                          kNewTabPageInfobar]);
+  OCMExpect([presenter_
+      showTrustedVaultReauthForFetchKeysWithTrigger:
+          trusted_vault::TrustedVaultUserActionTriggerForUMA::kNewTabPageInfobar
+                                         completion:nil]);
   auto delegate = std::make_unique<SyncErrorInfoBarDelegate>(
       profile_.get(), presenter_, kSyncErrorInfoBarTrigger);
 
-  EXPECT_FALSE(delegate->Accept());
+  EXPECT_TRUE(delegate->Accept());
 }
 
 TEST_F(SyncErrorInfobarDelegateTest,
@@ -156,14 +200,30 @@ TEST_F(SyncErrorInfobarDelegateTest,
           Return(syncer::SyncService::UserActionableError::
                      kTrustedVaultRecoverabilityDegradedForEverything));
 
-  OCMExpect(
-      [presenter_ showTrustedVaultReauthForDegradedRecoverabilityWithTrigger:
-                      trusted_vault ::TrustedVaultUserActionTriggerForUMA::
-                          kNewTabPageInfobar]);
+  OCMExpect([presenter_
+      showTrustedVaultReauthForDegradedRecoverabilityWithTrigger:
+          trusted_vault::TrustedVaultUserActionTriggerForUMA::kNewTabPageInfobar
+                                                      completion:nil]);
   auto delegate = std::make_unique<SyncErrorInfoBarDelegate>(
       profile_.get(), presenter_, kSyncErrorInfoBarTrigger);
 
-  EXPECT_FALSE(delegate->Accept());
+  EXPECT_TRUE(delegate->Accept());
+}
+
+TEST_F(SyncErrorInfobarDelegateTest, SyncServiceBookmarksLimitExceeded) {
+  ON_CALL(*mock_sync_service(), GetUserActionableError())
+      .WillByDefault(Return(
+          syncer::SyncService::UserActionableError::kBookmarksLimitExceeded));
+
+  OCMExpect([presenter_ showBookmarksLimitExceededHelp]);
+  auto delegate = std::make_unique<SyncErrorInfoBarDelegate>(
+      profile_.get(), presenter_, kSyncErrorInfoBarTrigger);
+
+  EXPECT_FALSE(delegate->GetTitleText().empty());
+  EXPECT_FALSE(delegate->GetMessageText().empty());
+  EXPECT_FALSE(
+      delegate->GetButtonLabel(SyncErrorInfoBarDelegate::BUTTON_OK).empty());
+  EXPECT_TRUE(delegate->Accept());
 }
 
 TEST_F(SyncErrorInfobarDelegateTest, LogsMetricOnDismissal) {
@@ -237,6 +297,39 @@ TEST_F(SyncErrorInfobarDelegateTest, InfobarTimeoutActiveAfterIgnoredByUser) {
   scoped_clock_.Advance(base::Minutes(2));
   EXPECT_TRUE(SyncErrorInfoBarDelegate::Create(
       infobar_manager(), profile_.get(), presenter_, kSyncErrorInfoBarTrigger));
+}
+
+// Tests that the infobar is automatically dismissed if the primary identity is
+// removed.
+TEST_F(SyncErrorInfobarDelegateTest, InfobarAutoDismissAfterSignOut) {
+  ON_CALL(*mock_sync_service(), GetUserActionableError())
+      .WillByDefault(
+          Return(syncer::SyncService::UserActionableError::kSignInNeedsUpdate));
+
+  OCMExpect([presenter_ showPrimaryAccountReauth]);
+  auto delegate_unique_ptr = std::make_unique<SyncErrorInfoBarDelegate>(
+      profile_.get(), presenter_, kSyncErrorInfoBarTrigger);
+  SyncErrorInfoBarDelegate* delegate = delegate_unique_ptr.get();
+  // The infobar must be set, otherwise the delegate believes the infobar is
+  // being stopped.
+  infobars::InfoBar* info_bar =
+      new infobars::InfoBar(std::move(delegate_unique_ptr));
+  testing::NiceMock<MockInfoBarManager> mock_infobar_manager;
+  info_bar->SetOwner(&mock_infobar_manager);
+
+  EXPECT_TRUE(delegate->Accept());
+  AccountInfo account_info =
+      AccountInfo::Builder(GaiaId("gaia"), "person@example.org").Build();
+  signin::PrimaryAccountChangeEvent::State previous_state(
+      account_info, signin::ConsentLevel::kSignin);
+  signin::PrimaryAccountChangeEvent::State current_state;
+  signin::PrimaryAccountChangeEvent event_details(
+      previous_state, current_state, signin_metrics::ProfileSignout::kTest);
+  EXPECT_CALL(mock_infobar_manager, RemoveInfoBar(info_bar)).Times(1);
+  delegate->OnPrimaryAccountChanged(event_details);
+  // This destroyes `info_bar`.
+  info_bar->CloseSoon();
+  info_bar = nullptr;
 }
 
 }  // namespace

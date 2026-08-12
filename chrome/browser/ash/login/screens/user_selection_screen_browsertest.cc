@@ -5,6 +5,7 @@
 #include <memory>
 #include <utility>
 
+#include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/login_accelerators.h"
@@ -14,10 +15,10 @@
 #include "base/command_line.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/time/default_clock.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
-#include "chrome/browser/ash/login/test/local_state_mixin.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/test/offline_login_test_mixin.h"
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
@@ -62,6 +63,12 @@ const test::UIPath kErrorMessageGuestSigninLink = {"error-message",
                                                    "error-guest-signin-link"};
 const test::UIPath kErrorMessageOfflineSigninLink = {
     "error-message", "error-offline-login-link"};
+
+constexpr char kTokenHandlePref[] = "PasswordTokenHandle";
+constexpr char kTokenHandleStatusPref[] = "TokenHandleStatus";
+constexpr char kTokenHandleStatusStale[] = "stale";
+
+constexpr char kTestTokenHandle[] = "test-token-handle";
 
 class UserSelectionScreenTest : public LoginManagerTest {
  public:
@@ -142,8 +149,7 @@ IN_PROC_BROWSER_TEST_F(UserSelectionScreenTest, ShowDircryptoMigrationBanner) {
                                        0);
 }
 
-class UserSelectionScreenEnforceOnlineTest : public LoginManagerTest,
-                                             public LocalStateMixin::Delegate {
+class UserSelectionScreenEnforceOnlineTest : public LoginManagerTest {
  public:
   UserSelectionScreenEnforceOnlineTest() : LoginManagerTest() {
     login_manager_mixin_.AppendManagedUsers(2);
@@ -154,12 +160,12 @@ class UserSelectionScreenEnforceOnlineTest : public LoginManagerTest,
   UserSelectionScreenEnforceOnlineTest& operator=(
       const UserSelectionScreenEnforceOnlineTest&) = delete;
 
-  // LocalStateMixin::Delegate:
-  void SetUpLocalState() override {
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    LoginManagerTest::SetUpLocalStatePrefService(local_state);
     const auto& users = login_manager_mixin_.users();
     const base::Time now = base::DefaultClock::GetInstance()->Now();
 
-    user_manager::KnownUser known_user(g_browser_process->local_state());
+    user_manager::KnownUser known_user(local_state);
     // User with expired offline login timeout.
     known_user.SetLastOnlineSignin(users[0].account_id,
                                    now - kLoginOnlineLongDelay);
@@ -174,7 +180,6 @@ class UserSelectionScreenEnforceOnlineTest : public LoginManagerTest,
 
  protected:
   LoginManagerMixin login_manager_mixin_{&mixin_host_};
-  LocalStateMixin local_state_mixin_{&mixin_host_, this};
 };
 
 IN_PROC_BROWSER_TEST_F(UserSelectionScreenEnforceOnlineTest,
@@ -188,8 +193,60 @@ IN_PROC_BROWSER_TEST_F(UserSelectionScreenEnforceOnlineTest,
   EXPECT_TRUE(LoginScreenTestApi::IsOobeDialogVisible());
 }
 
-class UserSelectionScreenBlockOfflineTest : public LoginManagerTest,
-                                            public LocalStateMixin::Delegate {
+class UserSelectionScreenOldTokenHandlePathStaleTokenTest
+    : public LoginManagerTest {
+ public:
+  UserSelectionScreenOldTokenHandlePathStaleTokenTest() : LoginManagerTest() {
+    login_manager_mixin_.AppendManagedUsers(1);
+    // Disable the feature to test the old code path.
+    scoped_feature_list_.InitAndDisableFeature(
+        ash::features::kUseTokenHandleStore);
+  }
+
+  ~UserSelectionScreenOldTokenHandlePathStaleTokenTest() override = default;
+  UserSelectionScreenOldTokenHandlePathStaleTokenTest(
+      const UserSelectionScreenOldTokenHandlePathStaleTokenTest&) = delete;
+  UserSelectionScreenOldTokenHandlePathStaleTokenTest& operator=(
+      const UserSelectionScreenOldTokenHandlePathStaleTokenTest&) = delete;
+
+ protected:
+  LoginManagerMixin login_manager_mixin_{&mixin_host_};
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Test to check online login is enforced with the feature disabled.
+IN_PROC_BROWSER_TEST_F(UserSelectionScreenOldTokenHandlePathStaleTokenTest,
+                       PRE_IsOnlineLoginEnforcedWhenTokenStale) {
+  const auto& users = login_manager_mixin_.users();
+  user_manager::KnownUser known_user(g_browser_process->local_state());
+
+  known_user.SetStringPref(users[0].account_id, kTokenHandlePref,
+                           kTestTokenHandle);
+  known_user.SetStringPref(users[0].account_id, kTokenHandleStatusPref,
+                           kTokenHandleStatusStale);
+}
+
+// Test to check online login is enforced with the feature disabled.
+IN_PROC_BROWSER_TEST_F(UserSelectionScreenOldTokenHandlePathStaleTokenTest,
+                       IsOnlineLoginEnforcedWhenTokenStale) {
+  // kUseTokenHandleStore is DISABLED via the constructor.
+  const auto& users = login_manager_mixin_.users();
+
+  const AccountId user_id = users[0].account_id;
+
+  EXPECT_TRUE(ash::LoginScreenTestApi::FocusUser(user_id));
+
+  // Now, check if the UI reflects that online signin is required.
+  EXPECT_TRUE(ash::LoginScreenTestApi::IsForcedOnlineSignin(user_id));
+
+  // Since reauth is required, clicking the pod or attempting to log in
+  // should navigate to the Gaia screen. OobeScreenWaiter will wait for this
+  // transition.
+  ash::OobeScreenWaiter(ash::GaiaView::kScreenId).Wait();
+  EXPECT_TRUE(ash::LoginScreenTestApi::IsOobeDialogVisible());
+}
+
+class UserSelectionScreenBlockOfflineTest : public LoginManagerTest {
  public:
   UserSelectionScreenBlockOfflineTest() = default;
   ~UserSelectionScreenBlockOfflineTest() override = default;
@@ -198,11 +255,11 @@ class UserSelectionScreenBlockOfflineTest : public LoginManagerTest,
   UserSelectionScreenBlockOfflineTest& operator=(
       const UserSelectionScreenBlockOfflineTest&) = delete;
 
-  // LocalStateMixin::Delegate:
-  void SetUpLocalState() override {
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    LoginManagerTest::SetUpLocalStatePrefService(local_state);
     const base::Time now = base::DefaultClock::GetInstance()->Now();
 
-    user_manager::KnownUser known_user(g_browser_process->local_state());
+    user_manager::KnownUser known_user(local_state);
     known_user.SetLastOnlineSignin(test_user_over_the_limit_.account_id,
                                    now - kLoginOnlineLongDelay);
     known_user.SetOfflineSigninLimit(test_user_over_the_limit_.account_id,
@@ -240,7 +297,6 @@ class UserSelectionScreenBlockOfflineTest : public LoginManagerTest,
       {test_user_over_the_limit_, test_user_under_the_limit_,
        test_user_limit_not_set_, test_child_user_}};
   OfflineLoginTestMixin offline_login_test_mixin_{&mixin_host_};
-  LocalStateMixin local_state_mixin_{&mixin_host_, this};
 };
 
 // Tests that offline login link is hidden on the network error screen when

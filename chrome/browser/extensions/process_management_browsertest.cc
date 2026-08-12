@@ -25,6 +25,7 @@
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/site_isolation_policy.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
@@ -35,6 +36,7 @@
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/browser/process_map.h"
+#include "extensions/common/extension_features.h"
 #include "extensions/common/manifest_handlers/web_accessible_resources_info.h"
 #include "extensions/common/switches.h"
 #include "net/dns/mock_host_resolver.h"
@@ -106,7 +108,7 @@ class ChromeWebStoreProcessTest
 
     // Only use the override if this test case is testing the override URL.
     if (GetParam() == kWebstoreURLOverride) {
-      command_line->AppendSwitchASCII(::switches::kAppsGalleryURL,
+      command_line->AppendSwitchASCII(switches::kAppsGalleryURL,
                                       webstore_url().spec());
     }
   }
@@ -162,6 +164,15 @@ class ChromeWebStoreInIsolatedOriginTest : public ChromeWebStoreProcessTest {
   }
 };
 
+std::set<int> GetCurrentProcessIds() {
+  std::set<int> process_ids;
+  for (auto* web_contents : content::GetAllWebContents()) {
+    process_ids.insert(
+        web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID());
+  }
+  return process_ids;
+}
+
 }  // namespace
 
 // Ensure that hosted apps, extensions, normal web sites, and WebUI never share
@@ -195,13 +206,13 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest, ProcessOverflow) {
   // Create multiple tabs for each type of renderer that might exist.
   // Tab 0: NTP 1.
   ASSERT_TRUE(
-      NavigateToURL(GetActiveWebContents(), GURL(chrome::kChromeUINewTabURL)));
+      NavigateToURL(GetActiveWebContents(), chrome::ChromeUINewTabURLAsGURL()));
   // Tab 1: Hosted app 1.
   NavigateToURLInNewTab(base_url.Resolve("hosted_app/main.html"));
   // Tab 2: Web page 1.
   NavigateToURLInNewTab(base_url.Resolve("test_file.html"));
   // Tab 3: NTP 2.
-  NavigateToURLInNewTab(GURL(chrome::kChromeUINewTabURL));
+  NavigateToURLInNewTab(chrome::ChromeUINewTabURLAsGURL());
   // Tab 4: Hosted app 2.
   NavigateToURLInNewTab(
       base_url.Resolve("api_test/app_process/path1/empty.html"));
@@ -292,9 +303,12 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest, ProcessOverflow) {
 // Test that pushing both extensions and web processes past the limit creates
 // the expected number of processes.
 //
-// Sets the process limit to 3, with 1 expected extension process when sharing
-// is allowed between extensions. The test then creates 3 separate extensions,
-// 3 same-site web pages, and 1 cross-site web page.
+// Test does the following:
+// 1. Sets the process limit to 1 before loading 3 extensions. This verifies
+//    that extensions are always granted dedicated processes even
+//    beyond the limit.
+// 2. Sets the process limit relative to the resulting baseline (Infrastructure
+//    + Extensions) before loading web pages.
 //
 // With extension process sharing, there should be 1 process for all extensions,
 // 2 processes for the same-site pages, and an extra process for the cross-site
@@ -305,11 +319,14 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest, ProcessOverflow) {
 // the extensions, so there are 2 web processes for the same-site pages, and an
 // extra process for the cross-site page due to Site Isolation.
 IN_PROC_BROWSER_TEST_F(ProcessManagementTest, ExtensionAndWebProcessOverflow) {
-  // Set max renderers to 3, to expect a single extension process when sharing
-  // is allowed.
-  content::RenderProcessHost::SetMaxRendererProcessCount(3);
-
   ASSERT_TRUE(embedded_test_server()->Start());
+
+  // Identify all current renderer processes for baseline.
+  size_t infra_process_count = GetCurrentProcessIds().size();
+
+  // Set max renderers to 1 to explicitly verify that extensions are not forced
+  // to share processes even when the limit is reached.
+  content::RenderProcessHost::SetMaxRendererProcessCount(1);
 
   // Load 3 extensions with background processes, similar to Chrome startup.
   ASSERT_TRUE(LoadExtension(
@@ -319,18 +336,25 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest, ExtensionAndWebProcessOverflow) {
   ASSERT_TRUE(LoadExtension(
       test_data_dir_.AppendASCII("api_test/browser_action/add_popup")));
 
-  // Verify the number of extension processes.
-  std::set<int> process_ids;
+  // Identify all current renderer processes after loading extensions.
+  std::set<int> process_ids = GetCurrentProcessIds();
+  size_t base_process_count = process_ids.size();
+
+  // Verify that each extension got its own process, pushing us to infra + 3.
+  EXPECT_EQ(infra_process_count + 3, base_process_count);
+
   ProcessManager* epm = ProcessManager::Get(profile());
   for (ExtensionHost* host : epm->background_hosts()) {
     SCOPED_TRACE(testing::Message()
                  << "When testing extension: " << host->extension_id());
     // The process should be locked.
     EXPECT_TRUE(host->render_process_host()->IsProcessLockedToSiteForTesting());
-    process_ids.insert(host->render_process_host()->GetDeprecatedID());
   }
-  // Each extension is in a locked process, unavailable for sharing.
-  EXPECT_EQ(3u, process_ids.size());
+
+  // Set max renderers to base_process_count + 1. This allows for the expected
+  // number of web processes for same site tabs.
+  content::RenderProcessHost::SetMaxRendererProcessCount(base_process_count +
+                                                         1);
 
   // Load 3 same-site tabs after the extensions.
   GURL web_url1(embedded_test_server()->GetURL("foo.com", "/title1.html"));
@@ -357,12 +381,12 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest, ExtensionAndWebProcessOverflow) {
       web_contents3->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID());
 
   // The web processes still share 2 processes as if there were a single
-  // extension process (making a total of 5 processes counting the existing 3
-  // extension processes). This avoids starving the web pages with a single
-  // process (if the extensions pushed us past the limit on their own), or
-  // increasing the process count further (if all extension processes were
-  // ignored).
-  EXPECT_EQ(5u, process_ids.size());
+  // extension process (making a total of base_process_count + 2 processes
+  // counting the existing extension processes). This avoids starving the web
+  // pages with a single process (if the extensions pushed us past the limit on
+  // their own), or increasing the process count further (if all extension
+  // processes were ignored).
+  EXPECT_EQ(base_process_count + 2, process_ids.size());
 
   // Add a cross-site web process.
   // Ensure bar.com has its own process by explicitly isolating it.
@@ -376,7 +400,7 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest, ExtensionAndWebProcessOverflow) {
       web_contents4->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID());
   // The cross-site process adds 1 more process to the total, to avoid sharing
   // with the existing web renderer processes (due to Site Isolation).
-  EXPECT_EQ(6u, process_ids.size());
+  EXPECT_EQ(base_process_count + 3, process_ids.size());
 }
 
 IN_PROC_BROWSER_TEST_F(ProcessManagementTest,
@@ -462,7 +486,8 @@ IN_PROC_BROWSER_TEST_P(ChromeWebStoreProcessTest,
   // The two non-Webstore urls are same-site, but cross-origin. If
   // kOriginKeyedProcessesByDefault is enabled they will be placed in different
   // processes, otherwise they'll share a process.
-  if (content::SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault()) {
+  if (content::SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault(
+          profile())) {
     EXPECT_NE(non_cws_contents_1->GetPrimaryMainFrame()->GetProcess(),
               non_cws_contents_2->GetPrimaryMainFrame()->GetProcess());
   } else {
@@ -527,8 +552,12 @@ IN_PROC_BROWSER_TEST_P(ChromeWebStoreProcessTest,
   content::RenderProcessHost* new_process_host =
       web_contents->GetPrimaryMainFrame()->GetProcess();
   if (GetParam() == kWebstoreURL) {
-    EXPECT_TRUE(extensions::ProcessMap::Get(profile())->Contains(
-        extensions::kWebStoreAppId, new_process_host->GetDeprecatedID()));
+    // The webstore should be in the process map if and only if the hosted app
+    // is loaded.
+    EXPECT_EQ(
+        base::FeatureList::IsEnabled(extensions_features::kWebstoreHostedApp),
+        extensions::ProcessMap::Get(profile())->Contains(
+            extensions::kWebStoreAppId, new_process_host->GetID()));
   }
 
   // Verify that Webstore is isolated in a separate renderer process.
@@ -543,7 +572,7 @@ INSTANTIATE_TEST_SUITE_P(All,
 
 // Check that navigations to the Chrome Web Store succeed when the Chrome Web
 // Store URL's origin is set as an isolated origin via the
-// --isolate-origins flag.  See https://crbug.com/788837.
+// --isolate-origins flag.  See https://crbug.com/40551716.
 IN_PROC_BROWSER_TEST_P(ChromeWebStoreInIsolatedOriginTest,
                        NavigationLoadsChromeWebStore) {
   // Sanity check that a SiteInstance for a Chrome Web Store URL requires a
@@ -562,8 +591,16 @@ IN_PROC_BROWSER_TEST_P(ChromeWebStoreInIsolatedOriginTest,
 
   // Double-check that the page has access to the restricted APIs we expect to
   // be available to the Webstore.
-  EXPECT_EQ(true, content::EvalJs(web_contents,
-                                  "!!chrome && !!chrome.webstorePrivate"));
+
+  // We only expect the API to be available to the new (or overridden) URLs.
+  // The old URL was granted access via the component hosted app, which is no
+  // longer supported.
+  bool expect_private_api =
+      GetParam() == kNewWebstoreURL || GetParam() == kWebstoreURLOverride;
+
+  EXPECT_EQ(
+      expect_private_api,
+      content::EvalJs(web_contents, "!!chrome && !!chrome.webstorePrivate"));
 
   // Verify that we have the Webstore hosted app loaded into the Web Contents if
   // this is for the old Webstore URL. Note: The new Webstore and the Webstore
@@ -572,8 +609,12 @@ IN_PROC_BROWSER_TEST_P(ChromeWebStoreInIsolatedOriginTest,
   if (GetParam() == kWebstoreURL) {
     content::RenderProcessHost* render_process_host =
         web_contents->GetPrimaryMainFrame()->GetProcess();
-    EXPECT_TRUE(extensions::ProcessMap::Get(profile())->Contains(
-        extensions::kWebStoreAppId, render_process_host->GetDeprecatedID()));
+    // The webstore should be in the process map if and only if the hosted app
+    // is loaded.
+    EXPECT_EQ(
+        base::FeatureList::IsEnabled(extensions_features::kWebstoreHostedApp),
+        extensions::ProcessMap::Get(profile())->Contains(
+            extensions::kWebStoreAppId, render_process_host->GetID()));
   }
 }
 
@@ -651,7 +692,7 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest,
 
 // Check that whether we can access the window object of a window.open()'d url
 // to an extension is the same regardless of whether the extension is installed.
-// https://crbug.com/598265.
+// https://crbug.com/40083949.
 IN_PROC_BROWSER_TEST_F(
     ProcessManagementTest,
     TestForkingBehaviorForUninstalledAndNonAccessibleExtensions) {

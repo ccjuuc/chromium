@@ -7,6 +7,7 @@
 #include "base/at_exit.h"
 #include "base/check.h"
 #include "base/i18n/icu_util.h"
+#include "base/no_destructor.h"
 #include "base/test/scoped_feature_list.h"
 #include "mojo/core/embedder/embedder.h"
 #include "net/base/features.h"
@@ -28,9 +29,8 @@ struct Environment {
   base::AtExitManager at_exit_manager;
 };
 
-Environment* env = new Environment();
-
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+  static const base::NoDestructor<Environment> env;
   std::string serialized_storage_key(reinterpret_cast<const char*>(data), size);
   for (const bool toggle : {false, true}) {
     base::test::ScopedFeatureList scope_feature_list;
@@ -46,9 +46,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     // Test mojom conversion path.
     std::vector<uint8_t> mojom_serialized =
         blink::mojom::StorageKey::Serialize(&*maybe_storage_key);
-    blink::Vector<uint8_t> mojom_serialized_as_wtf;
-    mojom_serialized_as_wtf.AppendRange(mojom_serialized.begin(),
-                                        mojom_serialized.end());
+    blink::Vector<uint8_t> mojom_serialized_as_wtf(mojom_serialized);
     blink::BlinkStorageKey mojom_blink_storage_key;
     CHECK(blink::mojom::blink::StorageKey::Deserialize(
         mojom_serialized_as_wtf, &mojom_blink_storage_key));

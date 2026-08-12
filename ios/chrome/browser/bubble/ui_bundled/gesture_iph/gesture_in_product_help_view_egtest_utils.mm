@@ -35,6 +35,8 @@ void MakeFirstRunRecent() {
 
 void ResetFirstRunRecency() {
   [ChromeEarlGrey removeUserDefaultsObjectForKey:kFirstRunRecencyKey];
+  [ChromeEarlGrey
+      removeUserDefaultsObjectForKey:@"ForceExperienceForDeviceSwitcher"];
 }
 
 void RelaunchWithIPHFeature(NSString* feature, BOOL safari_switcher) {
@@ -67,7 +69,7 @@ void AssertGestureIPHVisibleWithDismissAction(NSString* description,
           testUIElementAppearanceWithMatcher:
               grey_allOf(
                   grey_accessibilityID(kGestureInProductHelpViewBackgroundAXId),
-                  grey_sufficientlyVisible(), nil)
+                  grey_notNil(), nil)
                                      timeout:kWaitForGestureIPHTimeOut] &&
       [ChromeEarlGrey
           testUIElementAppearanceWithMatcher:
@@ -84,24 +86,22 @@ void AssertGestureIPHVisibleWithDismissAction(NSString* description,
 void AssertGestureIPHInvisible(NSString* description) {
   // Disable scoped synchronization to perform checks with animation running.
   ScopedSynchronizationDisabler sync_disabler;
-
-  id<GREYMatcher> iphBackgroundMatcher =
-      grey_allOf(grey_accessibilityID(kGestureInProductHelpViewBackgroundAXId),
-                 grey_sufficientlyVisible(), nil);
-  id<GREYMatcher> iphBubbleMatcher =
+  id<GREYMatcher> bubble_matcher =
       grey_allOf(grey_accessibilityID(kGestureInProductHelpViewBubbleAXId),
                  grey_sufficientlyVisible(), nil);
 
   ConditionBlock iphInvisible = ^{
     NSError* error = nil;
-    [[EarlGrey selectElementWithMatcher:iphBackgroundMatcher]
+    [[EarlGrey
+        selectElementWithMatcher:grey_accessibilityID(
+                                     kGestureInProductHelpViewBackgroundAXId)]
         assertWithMatcher:grey_nil()
                     error:&error];
     if (error) {
       return NO;
     }
 
-    [[EarlGrey selectElementWithMatcher:iphBubbleMatcher]
+    [[EarlGrey selectElementWithMatcher:bubble_matcher]
         assertWithMatcher:grey_nil()
                     error:&error];
     return error == nil;
@@ -114,14 +114,16 @@ void AssertGestureIPHInvisible(NSString* description) {
   // Also make sure it doesn't re-appear.
   ConditionBlock iphVisible = ^{
     NSError* error = nil;
-    [[EarlGrey selectElementWithMatcher:iphBackgroundMatcher]
+    [[EarlGrey
+        selectElementWithMatcher:grey_accessibilityID(
+                                     kGestureInProductHelpViewBackgroundAXId)]
         assertWithMatcher:grey_notNil()
                     error:&error];
     if (error) {
       return NO;
     }
 
-    [[EarlGrey selectElementWithMatcher:iphBubbleMatcher]
+    [[EarlGrey selectElementWithMatcher:bubble_matcher]
         assertWithMatcher:grey_notNil()
                     error:&error];
     return error == nil;

@@ -4,6 +4,8 @@
 
 #include "components/global_media_controls/public/views/media_item_ui_updated_view.h"
 
+#include <algorithm>
+
 #include "base/metrics/histogram_functions.h"
 #include "components/global_media_controls/media_view_utils.h"
 #include "components/global_media_controls/public/format_duration.h"
@@ -15,6 +17,7 @@
 #include "third_party/skia/include/core/SkRRect.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
@@ -148,16 +151,26 @@ MediaItemUIUpdatedView::MediaItemUIUpdatedView(
       media_color_theme_.secondary_foreground_color_id);
   favicon_source->SetFlexForView(source_label_, 1);
 
+  // Create the save video frame button.
+  save_video_frame_button_ = CreateMediaActionButton(
+      source_row, static_cast<int>(MediaSessionAction::kSaveVideoFrame),
+      vector_icons::kVideoFrameSaveIcon,
+      IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_SAVE_VIDEO_FRAME);
+
   // Create the start casting button.
   start_casting_button_ = CreateMediaActionButton(
-      source_row, kEmptyMediaActionButtonId, vector_icons::kCastIcon,
+      source_row, kEmptyMediaActionButtonId,
+      features::IsRoundedIconsEnabled() ? vector_icons::kCastIcon
+                                        : vector_icons::kCastOldIcon,
       IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_SHOW_DEVICE_LIST);
   start_casting_button_->SetVisible(false);
 
   // Create the picture-in-picture button.
   picture_in_picture_button_ = CreateMediaActionButton(
       source_row, static_cast<int>(MediaSessionAction::kEnterPictureInPicture),
-      vector_icons::kPictureInPictureAltIcon,
+      features::IsRoundedIconsEnabled()
+          ? vector_icons::kPictureInPictureAltIcon
+          : vector_icons::kPictureInPictureAltOldIcon,
       IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_ENTER_PIP);
 
   // Create the casting indicator view which is visible when footer view is
@@ -166,7 +179,8 @@ MediaItemUIUpdatedView::MediaItemUIUpdatedView(
       source_row->AddChildView(std::make_unique<views::ImageView>());
   casting_indicator_view_->SetPreferredSize(kMediaActionButtonSize);
   casting_indicator_view_->SetImage(ui::ImageModel::FromVectorIcon(
-      vector_icons::kCastIcon,
+      features::IsRoundedIconsEnabled() ? vector_icons::kCastIcon
+                                        : vector_icons::kCastOldIcon,
       media_color_theme_.device_selector_foreground_color_id,
       kMediaActionButtonIconSize));
 
@@ -208,7 +222,9 @@ MediaItemUIUpdatedView::MediaItemUIUpdatedView(
       metadata_row->AddChildView(std::make_unique<views::BoxLayoutView>());
   play_pause_button_ = CreateMediaActionButton(
       play_pause_button_container, static_cast<int>(MediaSessionAction::kPlay),
-      vector_icons::kPlayArrowIcon,
+      features::IsRoundedIconsEnabled()
+          ? vector_icons::kPlayArrowFilledFlippableIcon
+          : vector_icons::kPlayArrowOldIcon,
       IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_PLAY);
   play_pause_button_->SetBackground(views::CreateRoundedRectBackground(
       media_color_theme_.play_button_container_color_id,
@@ -229,13 +245,15 @@ MediaItemUIUpdatedView::MediaItemUIUpdatedView(
   // Create the previous track button.
   CreateMediaActionButton(
       progress_row, static_cast<int>(MediaSessionAction::kPreviousTrack),
-      vector_icons::kSkipPreviousIcon,
+      features::IsRoundedIconsEnabled() ? vector_icons::kSkipPreviousIcon
+                                        : vector_icons::kSkipPreviousOldIcon,
       IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_PREVIOUS_TRACK);
 
   // Create the replay 10 button.
   CreateMediaActionButton(
       progress_row, static_cast<int>(MediaSessionAction::kSeekBackward),
-      vector_icons::kReplay10Icon,
+      features::IsRoundedIconsEnabled() ? vector_icons::kReplay10Icon
+                                        : vector_icons::kReplay10OldIcon,
       IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_REPLAY_10);
 
   // Create the progress view.
@@ -272,13 +290,15 @@ MediaItemUIUpdatedView::MediaItemUIUpdatedView(
   // Create the forward 10 button.
   CreateMediaActionButton(
       progress_row, static_cast<int>(MediaSessionAction::kSeekForward),
-      vector_icons::kForward10Icon,
+      features::IsRoundedIconsEnabled() ? vector_icons::kForward10Icon
+                                        : vector_icons::kForward10OldIcon,
       IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_FORWARD_10);
 
   // Create the next track button.
   CreateMediaActionButton(
       progress_row, static_cast<int>(MediaSessionAction::kNextTrack),
-      vector_icons::kSkipNextIcon,
+      features::IsRoundedIconsEnabled() ? vector_icons::kSkipNextIcon
+                                        : vector_icons::kSkipNextOldIcon,
       IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_NEXT_TRACK);
 
   // Create the duration timestamp label after the progress view.
@@ -334,7 +354,7 @@ MediaItemUIUpdatedView::~MediaItemUIUpdatedView() {
 
 gfx::Size MediaItemUIUpdatedView::CalculatePreferredSize(
     const views::SizeBounds& available_size) const {
-  auto size = GetLayoutManager()->GetPreferredSize(this);
+  auto size = GetLayoutManager()->GetPreferredSize(this, {kFixedWidth, {}});
   return gfx::Size(kFixedWidth, size.height());
 }
 
@@ -391,7 +411,9 @@ void MediaItemUIUpdatedView::UpdateWithMediaSessionInfo(
                           media_session::mojom::MediaPlaybackState::kPlaying;
   if (playing) {
     play_pause_button_->Update(
-        static_cast<int>(MediaSessionAction::kPause), vector_icons::kPauseIcon,
+        static_cast<int>(MediaSessionAction::kPause),
+        features::IsRoundedIconsEnabled() ? vector_icons::kPauseFilledIcon
+                                          : vector_icons::kPauseOldIcon,
         IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_PAUSE,
         media_color_theme_.pause_button_foreground_color_id);
     play_pause_button_->SetBackground(views::CreateRoundedRectBackground(
@@ -400,7 +422,9 @@ void MediaItemUIUpdatedView::UpdateWithMediaSessionInfo(
   } else {
     play_pause_button_->Update(
         static_cast<int>(MediaSessionAction::kPlay),
-        vector_icons::kPlayArrowIcon,
+        features::IsRoundedIconsEnabled()
+            ? vector_icons::kPlayArrowFilledFlippableIcon
+            : vector_icons::kPlayArrowOldIcon,
         IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_PLAY,
         media_color_theme_.play_button_foreground_color_id);
     play_pause_button_->SetBackground(views::CreateRoundedRectBackground(
@@ -415,13 +439,16 @@ void MediaItemUIUpdatedView::UpdateWithMediaSessionInfo(
   if (in_picture_in_picture_) {
     picture_in_picture_button_->Update(
         static_cast<int>(MediaSessionAction::kExitPictureInPicture),
-        vector_icons::kPipExitIcon,
+        features::IsRoundedIconsEnabled() ? vector_icons::kPipExitIcon
+                                          : vector_icons::kPipExitOldIcon,
         IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_EXIT_PIP,
         media_color_theme_.secondary_foreground_color_id);
   } else {
     picture_in_picture_button_->Update(
         static_cast<int>(MediaSessionAction::kEnterPictureInPicture),
-        vector_icons::kPictureInPictureAltIcon,
+        features::IsRoundedIconsEnabled()
+            ? vector_icons::kPictureInPictureAltIcon
+            : vector_icons::kPictureInPictureAltOldIcon,
         IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_ENTER_PIP,
         media_color_theme_.secondary_foreground_color_id);
   }
@@ -479,7 +506,8 @@ void MediaItemUIUpdatedView::UpdateWithMediaArtwork(
 void MediaItemUIUpdatedView::UpdateWithFavicon(const gfx::ImageSkia& icon) {
   if (icon.isNull()) {
     favicon_view_->SetImage(ui::ImageModel::FromVectorIcon(
-        vector_icons::kGlobeIcon,
+        features::IsRoundedIconsEnabled() ? vector_icons::kGlobeIcon
+                                          : vector_icons::kGlobeOldIcon,
         media_color_theme_.primary_foreground_color_id, kFaviconSize.width()));
   } else {
     favicon_view_->SetImageSize(
@@ -541,8 +569,12 @@ void MediaItemUIUpdatedView::UpdateFooterView(
 }
 
 void MediaItemUIUpdatedView::UpdateDeviceSelectorIssue(bool has_issue) {
-  start_casting_button_->UpdateIcon(has_issue ? vector_icons::kCastWarningIcon
-                                              : vector_icons::kCastIcon);
+  start_casting_button_->UpdateIcon(
+      has_issue                           ? features::IsRoundedIconsEnabled()
+                                                ? vector_icons::kCastWarningIcon
+                                                : vector_icons::kCastWarningOldIcon
+      : features::IsRoundedIconsEnabled() ? vector_icons::kCastIcon
+                                          : vector_icons::kCastOldIcon);
 }
 
 MediaActionButton* MediaItemUIUpdatedView::CreateMediaActionButton(
@@ -595,14 +627,19 @@ void MediaItemUIUpdatedView::MediaActionButtonPressed(views::Button* button) {
           kMediaItemUIUpdatedViewActionHistogram,
           MediaItemUIUpdatedViewAction::kExitPictureInPicture);
       break;
+    case MediaSessionAction::kSaveVideoFrame:
+      base::UmaHistogramEnumeration(
+          kMediaItemUIUpdatedViewActionHistogram,
+          MediaItemUIUpdatedViewAction::kSaveVideoFrame);
+      break;
     default:
       NOTREACHED();
   }
 
   // Make the screen reader announce the button text for accessibility since
   // there are only visual changes outside these buttons when they are clicked.
-  if (base::Contains(kProgressRowMediaActions,
-                     static_cast<MediaSessionAction>(button->GetID()))) {
+  if (std::ranges::contains(kProgressRowMediaActions,
+                            static_cast<MediaSessionAction>(button->GetID()))) {
     GetViewAccessibility().AnnouncePolitely(button->GetTooltipText());
   }
 
@@ -624,20 +661,25 @@ void MediaItemUIUpdatedView::UpdateMediaActionButtonsVisibility() {
   bool should_invalidate_layout = false;
 
   for (views::Button* button : media_action_buttons_) {
-    bool should_show = base::Contains(
-        media_actions_, static_cast<MediaSessionAction>(button->GetID()));
-    // Do not show the picture-in-picture button for a casting media item.
-    if (button == picture_in_picture_button_ && footer_view_) {
+    bool should_show = media_actions_.contains(
+        static_cast<MediaSessionAction>(button->GetID()));
+    // Do not show the picture-in-picture button or the save video frame button
+    // for a casting media item.
+    if ((button == picture_in_picture_button_ ||
+         button == save_video_frame_button_) &&
+        footer_view_) {
       should_show = false;
     }
 
-    if (base::Contains(kProgressRowMediaActions,
-                       static_cast<MediaSessionAction>(button->GetID()))) {
+    if (std::ranges::contains(
+            kProgressRowMediaActions,
+            static_cast<MediaSessionAction>(button->GetID()))) {
       if (is_live_) {
         // For live media, the seek progress buttons are always hidden and the
         // other buttons are visible if their media actions are supported.
-        if (base::Contains(kProgressRowSeekMediaActions,
-                           static_cast<MediaSessionAction>(button->GetID()))) {
+        if (std::ranges::contains(
+                kProgressRowSeekMediaActions,
+                static_cast<MediaSessionAction>(button->GetID()))) {
           should_show = false;
         }
       } else {

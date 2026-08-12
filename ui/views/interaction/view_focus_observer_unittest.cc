@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "base/functional/callback_helpers.h"
+#include "build/build_config.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/label_button.h"
@@ -82,7 +83,13 @@ class ViewFocusObserverTest : public InteractiveViewsTestMixin<ViewsTestBase> {
   std::unique_ptr<Widget> widget_;
 };
 
-TEST_F(ViewFocusObserverTest, TracksFocus) {
+#if BUILDFLAG(IS_FUCHSIA) && defined(ARCH_CPU_ARM64) && !defined(NDEBUG)
+// TODO(https://crbug.com/464455929): Crash on Fuchsia on arm64 in debug.
+#define MAYBE_TracksFocus DISABLED_TracksFocus
+#else
+#define MAYBE_TracksFocus TracksFocus
+#endif
+TEST_F(ViewFocusObserverTest, MAYBE_TracksFocus) {
   RunTestSequence(
       ObserveState(kCurrentFocusedView, widget_.get()),
       ObserveState(kCurrentFocusedViewId, widget_.get()), Focus(button1_),

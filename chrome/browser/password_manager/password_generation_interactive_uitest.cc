@@ -9,15 +9,17 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "build/build_config.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/password_manager/password_manager_interactive_test_base.h"
+#include "chrome/browser/password_manager/password_manager_test_util.h"
 #include "chrome/browser/password_manager/password_manager_uitest_util.h"
 #include "chrome/browser/password_manager/passwords_navigation_observer.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/passwords/password_generation_popup_observer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
 #include "components/autofill/content/browser/test_autofill_client_injector.h"
@@ -29,6 +31,7 @@
 #include "components/password_manager/core/browser/password_form_manager.h"
 #include "components/password_manager/core/browser/password_generation_frame_helper.h"
 #include "components/password_manager/core/browser/password_manager_util.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
@@ -38,6 +41,7 @@
 #include "content/public/test/prerender_test_util.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/test/ui_controls.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/geometry/point_f.h"
@@ -227,8 +231,10 @@ class PasswordGenerationAutofillPopupInteractiveTest
       autofill_client_injector_;
 };
 
+// TODO(https://crbug.com/501668599): Re-enable this test after flakiness is
+// resolved.
 IN_PROC_BROWSER_TEST_F(PasswordGenerationInteractiveTest,
-                       PopupShownAndPasswordSelected) {
+                       DISABLED_PopupShownAndPasswordSelected) {
   FocusPasswordField();
   WaitForGenerationPopupShowing();
   base::HistogramTester histogram_tester;
@@ -285,8 +291,10 @@ IN_PROC_BROWSER_TEST_F(PasswordGenerationInteractiveTest,
       1);
 }
 
+// TODO(https://crbug.com/501668599): Re-enable this test after flakiness is
+// resolved.
 IN_PROC_BROWSER_TEST_F(PasswordGenerationInteractiveTest,
-                       PopupShownManuallyAndPasswordErased) {
+                       DISABLED_PopupShownManuallyAndPasswordErased) {
   NavigateToFile("/password/password_form.html");
   FocusPasswordField();
   EXPECT_FALSE(GenerationPopupShowing());
@@ -321,13 +329,13 @@ IN_PROC_BROWSER_TEST_F(PasswordGenerationInteractiveTest,
   // password suggestion would not appear without stored passwords.
   password_manager::PasswordStoreInterface* password_store =
       ProfilePasswordStoreFactory::GetForProfile(
-          browser()->profile(), ServiceAccessType::IMPLICIT_ACCESS)
+          browser()->GetProfile(), ServiceAccessType::IMPLICIT_ACCESS)
           .get();
   password_manager::PasswordForm signin_form;
   signin_form.signon_realm = embedded_test_server()->base_url().spec();
   signin_form.username_value = u"temp";
   signin_form.password_value = u"random123";
-  password_store->AddLogin(signin_form);
+  password_store->AddLogin(password_manager::FromPasswordForm(signin_form));
   WaitForPasswordStore();
   NavigateToFile("/password/signup_form_new_password.html");
 
@@ -355,13 +363,13 @@ IN_PROC_BROWSER_TEST_F(
   // password suggestion would not appear otherwise.
   password_manager::PasswordStoreInterface* password_store =
       ProfilePasswordStoreFactory::GetForProfile(
-          browser()->profile(), ServiceAccessType::IMPLICIT_ACCESS)
+          browser()->GetProfile(), ServiceAccessType::IMPLICIT_ACCESS)
           .get();
   password_manager::PasswordForm signin_form;
   signin_form.signon_realm = embedded_test_server()->base_url().spec();
   signin_form.username_value = u"temp";
   signin_form.password_value = u"random123";
-  password_store->AddLogin(signin_form);
+  password_store->AddLogin(password_manager::FromPasswordForm(signin_form));
   WaitForPasswordStore();
 
   NavigateToFile("/password/signup_form_new_password.html");
@@ -380,12 +388,28 @@ IN_PROC_BROWSER_TEST_F(
   autofill_client().WaitForAutofillPopup();
 }
 
+// TODO(https://crbug.com/501668599): Re-enable this test after flakiness is
+// resolved.
 IN_PROC_BROWSER_TEST_F(PasswordGenerationInteractiveTest,
-                       PopupShownAndDismissed) {
+                       DISABLED_PopupShownAndDismissed) {
   FocusPasswordField();
   WaitForGenerationPopupShowing();
 
-  FocusUsernameField();
+  // Simulate the tap on username field using a native platform event. This is
+  // necessary for tests running in forced accessibility mode, where the popup
+  // would only be closed due to the widget deactivating, which doesn't happen
+  // through a renderer-simulated event in some test environments. More details
+  // in crrev.com/c/7735522.
+  gfx::PointF click_point =
+      GetCenterCoordinatesOfElementWithId(WebContents(), "username_field");
+  gfx::Rect container_bounds = WebContents()->GetContainerBounds();
+  gfx::Point screen_point(click_point.x() + container_bounds.x(),
+                          click_point.y() + container_bounds.y());
+  ASSERT_TRUE(ui_test_utils::SendMouseMoveSync(screen_point));
+  ASSERT_TRUE(
+      ui_test_utils::SendMouseEventsSync(ui_controls::LEFT, ui_controls::DOWN));
+  ASSERT_TRUE(
+      ui_test_utils::SendMouseEventsSync(ui_controls::LEFT, ui_controls::UP));
 
   // Popup is dismissed.
   WaitForStatus(TestGenerationPopupObserver::GenerationPopup::kHidden);
@@ -402,8 +426,10 @@ IN_PROC_BROWSER_TEST_F(PasswordGenerationInteractiveTest,
   EXPECT_FALSE(GenerationPopupShowing());
 }
 
+// TODO(https://crbug.com/501668599): Re-enable this test after flakiness is
+// resolved.
 IN_PROC_BROWSER_TEST_F(PasswordGenerationInteractiveTest,
-                       PopupShownAndDismissedByScrolling) {
+                       DISABLED_PopupShownAndDismissedByScrolling) {
   FocusPasswordField();
   WaitForGenerationPopupShowing();
 
@@ -474,10 +500,7 @@ IN_PROC_BROWSER_TEST_F(PasswordGenerationInteractiveTest,
 IN_PROC_BROWSER_TEST_F(PasswordGenerationInteractiveTest,
                        AutoSavingGeneratedPassword) {
   scoped_refptr<password_manager::TestPasswordStore> password_store =
-      static_cast<password_manager::TestPasswordStore*>(
-          ProfilePasswordStoreFactory::GetForProfile(
-              browser()->profile(), ServiceAccessType::IMPLICIT_ACCESS)
-              .get());
+      GetDefaultPasswordStore(browser()->GetProfile());
 
   FocusPasswordField();
   WaitForGenerationPopupShowing();
@@ -485,12 +508,8 @@ IN_PROC_BROWSER_TEST_F(PasswordGenerationInteractiveTest,
 
   // Change username.
   FocusUsernameField();
-  content::SimulateKeyPress(WebContents(), ui::DomKey::FromCharacter('U'),
-                            ui::DomCode::US_U, ui::VKEY_U, false, false, false,
-                            false);
-  content::SimulateKeyPress(WebContents(), ui::DomKey::FromCharacter('N'),
-                            ui::DomCode::US_N, ui::VKEY_N, false, false, false,
-                            false);
+  content::SimulateCharTyped(WebContents(), 'U');
+  content::SimulateCharTyped(WebContents(), 'N');
 
   // Submit form.
   PasswordsNavigationObserver observer(WebContents());
@@ -500,11 +519,11 @@ IN_PROC_BROWSER_TEST_F(PasswordGenerationInteractiveTest,
   ASSERT_TRUE(observer.Wait());
 
   WaitForPasswordStore();
-  EXPECT_FALSE(password_store->IsEmpty());
+  EXPECT_FALSE(GetAllLoginsSync(password_store.get()).empty());
 
   // Make sure the username is correct.
   password_manager::TestPasswordStore::PasswordMap stored_passwords =
-      password_store->stored_passwords();
+      GetAllLoginsSync(password_store.get());
   EXPECT_EQ(1u, stored_passwords.size());
   EXPECT_EQ(1u, stored_passwords.begin()->second.size());
   EXPECT_EQ(u"UN", (stored_passwords.begin()->second)[0].username_value);
@@ -524,8 +543,10 @@ IN_PROC_BROWSER_TEST_F(PasswordGenerationInteractiveTest,
   EXPECT_FALSE(GenerationPopupShowing());
 }
 
+// TODO(https://crbug.com/501668599): Re-enable this test after flakiness is
+// resolved.
 IN_PROC_BROWSER_TEST_F(PasswordGenerationInteractiveTest,
-                       GenerationPopupNotShownAfterUserRejected) {
+                       DISABLED_GenerationPopupNotShownAfterUserRejected) {
   FocusPasswordField();
   WaitForGenerationPopupShowing();
 
@@ -567,7 +588,7 @@ IN_PROC_BROWSER_TEST_F(PasswordGenerationPopupViewPrerenderingTest,
 
   auto prerender_url = embedded_test_server()->GetURL("/empty.html");
   // Loads a page in the prerender.
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_helper()->AddPrerender(prerender_url);
   content::test::PrerenderHostObserver host_observer(*WebContents(), host_id);
   // It should keep the current popup controller since the prerenedering should

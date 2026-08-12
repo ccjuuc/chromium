@@ -25,7 +25,7 @@
 #include "content/common/media/media_log_records.mojom.h"
 #include "content/public/browser/render_process_host_creation_observer.h"
 #include "content/public/browser/render_process_host_observer.h"
-#include "ipc/constants.mojom.h"
+#include "ipc/constants.mojom-forward.h"
 #include "media/audio/audio_logging.h"
 #include "media/base/media_log.h"
 #include "media/capture/video/video_capture_device_descriptor.h"
@@ -168,7 +168,7 @@ class CONTENT_EXPORT MediaInternals : public media::AudioLogFactory,
   void UpdateAudioLog(AudioLogUpdateType type,
                       std::string_view cache_key,
                       std::string_view function,
-                      const base::Value::Dict& value);
+                      const base::DictValue& value);
 
   std::unique_ptr<AudioLogImpl> CreateAudioLogImpl(AudioComponent component,
                                                    int component_id,
@@ -182,7 +182,7 @@ class CONTENT_EXPORT MediaInternals : public media::AudioLogFactory,
   std::map<int, std::list<media::MediaLogRecord>> saved_events_by_process_;
 
   // Must only be accessed on the IO thread.
-  base::Value::List video_capture_capabilities_cached_data_;
+  base::ListValue video_capture_capabilities_cached_data_;
 
   base::ScopedMultiSourceObservation<content::RenderProcessHost,
                                      content::RenderProcessHostObserver>
@@ -195,7 +195,7 @@ class CONTENT_EXPORT MediaInternals : public media::AudioLogFactory,
   // All variables below must be accessed under |lock_|.
   base::Lock lock_;
   bool can_update_ = false;
-  base::Value::Dict audio_streams_cached_data_;
+  base::DictValue audio_streams_cached_data_;
   std::array<int,
              std::to_underlying(
                  media::AudioLogFactory::AudioComponent::kAudiocomponentMax)>

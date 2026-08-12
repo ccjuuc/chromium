@@ -15,6 +15,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/path_service.h"
+#include "base/rand_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
@@ -48,6 +49,7 @@
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "base/command_line.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
@@ -94,12 +96,20 @@ std::set<content::BrowserContext*>& GetProfileInstances() {
 
 namespace {
 
-const char kDevToolsOTRProfileIDPrefix[] = "Devtools::BrowserContext";
-const char kMediaRouterOTRProfileIDPrefix[] = "MediaRouter::Presentation";
-const char kTestOTRProfileIDPrefix[] = "Test::OTR";
+// The primary Profile ID used by Incognito and Guest profiles.
+constexpr char kPrimaryOTRProfileID[] = "profile::primary_otr";
+
+// WARNING: Adding new Profile ID prefixes is strongly discouraged.
+// Please avoid adding new prefixes and associated custom logic for Profile
+// differentiated by such prefixes. Consult with the profile owners before
+// proceeding if you believe a new prefix is strictly necessary.
+// See `chrome/browser/PRESUBMIT.py` which enforces this via a warning.
+constexpr char kDevToolsOTRProfileIDPrefix[] = "Devtools::BrowserContext";
+constexpr char kMediaRouterOTRProfileIDPrefix[] = "MediaRouter::Presentation";
+constexpr char kTestOTRProfileIDPrefix[] = "Test::OTR";
 
 #if BUILDFLAG(IS_CHROMEOS)
-const char kCaptivePortalOTRProfileIDPrefix[] = "CaptivePortal::Signin";
+constexpr char kCaptivePortalOTRProfileIDPrefix[] = "CaptivePortal::Signin";
 #endif
 
 using perfetto::protos::pbzero::ChromeTrackEvent;
@@ -143,7 +153,7 @@ bool Profile::OTRProfileID::IsCaptivePortal() const {
 const Profile::OTRProfileID Profile::OTRProfileID::PrimaryID() {
   // OTRProfileID value should be same as
   // |OtrProfileId.java#sPrimaryOtrProfileId| variable.
-  return OTRProfileID("profile::primary_otr");
+  return OTRProfileID(kPrimaryOTRProfileID);
 }
 
 // static
@@ -274,7 +284,7 @@ Profile* Profile::FromBrowserContext(content::BrowserContext* browser_context) {
   // For code running in a chrome/ environment, it is safe to cast to Profile*
   // because Profile is the only implementation of BrowserContext used. In
   // testing, however, there are several BrowserContext subclasses that are not
-  // Profile subclasses, and we can catch them. http://crbug.com/725276
+  // Profile subclasses, and we can catch them. http://crbug.com/40522064
 #if DCHECK_IS_ON()
   base::AutoLock lock(GetProfileInstancesLock());
   if (!GetProfileInstances().count(browser_context)) {
@@ -375,7 +385,7 @@ void Profile::RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
                                std::string(), caption_registration_flags);
   registry->RegisterDictionaryPref(prefs::kPartitionDefaultZoomLevel);
   registry->RegisterDictionaryPref(prefs::kPartitionPerHostZoomLevels);
-  registry->RegisterStringPref(prefs::kPreinstalledApps, "install");
+  registry->RegisterStringPref(prefs::kPreinstalledExtensions, "install");
   registry->RegisterIntegerPref(prefs::kProfileIconVersion, 0);
   registry->RegisterBooleanPref(prefs::kProfileIconWin11Format, false);
   registry->RegisterBooleanPref(prefs::kAllowDinosaurEasterEgg, true);
@@ -389,8 +399,9 @@ void Profile::RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterStringPref(
       language::prefs::kApplicationLocale, std::string(),
       user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PRIORITY_PREF);
-  registry->RegisterStringPref(prefs::kApplicationLocaleBackup, std::string());
-  registry->RegisterStringPref(prefs::kApplicationLocaleAccepted,
+  registry->RegisterStringPref(ash::prefs::kApplicationLocaleBackup,
+                               std::string());
+  registry->RegisterStringPref(ash::prefs::kApplicationLocaleAccepted,
                                std::string());
 #endif
 
@@ -496,12 +507,14 @@ void Profile::MaybeSendDestroyedNotification() {
 }
 
 // static
-PrefStore* Profile::CreateExtensionPrefStore(Profile* profile,
-                                             bool incognito_pref_store) {
+scoped_refptr<PrefStore> Profile::CreateExtensionPrefStore(
+    Profile* profile,
+    bool incognito_pref_store) {
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   if (ExtensionPrefValueMap* pref_value_map =
           ExtensionPrefValueMapFactory::GetForBrowserContext(profile)) {
-    return new ExtensionPrefStore(pref_value_map, incognito_pref_store);
+    return base::MakeRefCounted<ExtensionPrefStore>(pref_value_map,
+                                                    incognito_pref_store);
   }
 #endif
   return nullptr;
@@ -609,7 +622,20 @@ base::WeakPtr<Profile> Profile::GetWeakPtr() {
   return weak_factory_.GetWeakPtr();
 }
 
-std::string Profile::ToDebugString() {
+uint64_t Profile::GetLomProfileId() {
+  PrefService* prefs = GetPrefs();
+  CHECK(prefs);
+  uint64_t id = prefs->GetUint64(prefs::kLomProfileId);
+  if (id == 0u) {
+    while (id == 0u) {
+      id = base::RandUint64();
+    }
+    prefs->SetUint64(prefs::kLomProfileId, id);
+  }
+  return id;
+}
+
+std::string Profile::ToDebugString() const {
   std::ostringstream out;
   out << "(" << this << "):" << (IsRegularProfile() ? " regular" : "")
       << (IsIncognitoProfile() ? " incognito" : "")

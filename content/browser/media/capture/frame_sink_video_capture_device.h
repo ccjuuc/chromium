@@ -75,6 +75,11 @@ class CONTENT_EXPORT FrameSinkVideoCaptureDevice
       const media::VideoCaptureParams& params,
       std::unique_ptr<media::VideoFrameReceiver> receiver);
 
+  // Sets the buffer format preference for the capturer. Must be called before
+  // the device starts. If not set, defaults to preferring mappable shared
+  // images.
+  void SetBufferFormatPreference(viz::mojom::BufferFormatPreference preference);
+
   // Returns the VideoCaptureParams passed to AllocateAndStartWithReceiver().
   const media::VideoCaptureParams& capture_params() const {
     return capture_params_;
@@ -115,9 +120,13 @@ class CONTENT_EXPORT FrameSinkVideoCaptureDevice
       uint32_t sub_capture_target_version);
   virtual void OnTargetPermanentlyLost();
 
+  // Set the rotation of the video frames. This is used when capturing a
+  // rotated screen.
+  void SetVideoRotation(media::VideoRotation video_rotation);
+
  protected:
   MouseCursorOverlayController* cursor_controller() const {
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+#if !BUILDFLAG(IS_IOS)
     return cursor_controller_.get();
 #else
     return nullptr;
@@ -234,7 +243,7 @@ class CONTENT_EXPORT FrameSinkVideoCaptureDevice
 
   SEQUENCE_CHECKER(sequence_checker_);
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+#if !BUILDFLAG(IS_IOS)
   // Controls the overlay that renders the mouse cursor onto each video frame.
   const std::unique_ptr<MouseCursorOverlayController,
                         BrowserThread::DeleteOnUIThread>
@@ -255,6 +264,10 @@ class CONTENT_EXPORT FrameSinkVideoCaptureDevice
   mojo::Remote<device::mojom::WakeLock> wake_lock_;
 
   bool has_sent_on_started_to_client_ = false;
+
+  media::VideoRotation video_rotation_ = media::VIDEO_ROTATION_0;
+
+  std::optional<viz::mojom::BufferFormatPreference> buffer_format_preference_;
 
   // Creates WeakPtrs for use on the device thread.
   base::WeakPtrFactory<FrameSinkVideoCaptureDevice> weak_factory_{this};

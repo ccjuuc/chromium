@@ -146,7 +146,7 @@ XRProjectionLayer* XRGPUBinding::createProjectionLayer(
   XRGPUTextureArraySwapChain* wrapped_swap_chain =
       MakeGarbageCollected<XRGPUTextureArraySwapChain>(
           device_, color_swap_chain, AsDawnEnum(init->colorFormat()),
-          session()->array_texture_layers());
+          base::checked_cast<uint32_t>(session()->array_texture_layers()));
 
   // Create the depth/stencil swap chain
   XRGPUStaticSwapChain* depth_stencil_swap_chain = nullptr;
@@ -166,19 +166,17 @@ XRProjectionLayer* XRGPUBinding::createProjectionLayer(
   auto* drawing_context = MakeGarbageCollected<XRGPUDrawingContext>(
       this, wrapped_swap_chain, depth_stencil_swap_chain);
 
-  return MakeGarbageCollected<XRProjectionLayer>(this, drawing_context);
+  const V8XRLayerLayout::Enum layout = session()->StereoscopicViews()
+                                           ? V8XRLayerLayout::Enum::kStereo
+                                           : V8XRLayerLayout::Enum::kMono;
+
+  return MakeGarbageCollected<XRProjectionLayer>(session(), this,
+                                                 drawing_context, layout);
 }
 
 XRGPUSubImage* XRGPUBinding::getViewSubImage(XRProjectionLayer* layer,
                                              XRView* view,
                                              ExceptionState& exception_state) {
-  if (!OwnsLayer(layer)) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kInvalidStateError,
-        "Layer was not created with this binding.");
-    return nullptr;
-  }
-
   if (!view || view->session() != session()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidStateError,
@@ -186,7 +184,7 @@ XRGPUSubImage* XRGPUBinding::getViewSubImage(XRProjectionLayer* layer,
     return nullptr;
   }
 
-  // The layer passed the OwnsLayer check, confirming it can only contain
+  // The layer passed the session check, confirming it can only contain
   // a GPU drawing context. This makes the static_cast safe.
   XRGPUDrawingContext* drawing_context =
       static_cast<XRGPUDrawingContext*>(layer->drawing_context());
@@ -215,8 +213,6 @@ XRGPUSubImage* XRGPUBinding::getViewSubImage(XRProjectionLayer* layer,
 
 gfx::Rect XRGPUBinding::GetViewportForView(XRProjectionLayer* layer,
                                            XRViewData* view) {
-  CHECK(OwnsLayer(layer));
-
   return gfx::Rect(0, 0, layer->textureWidth() * view->CurrentViewportScale(),
                    layer->textureHeight() * view->CurrentViewportScale());
 }

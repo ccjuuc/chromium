@@ -7,7 +7,8 @@
  * setting elements with deep links.
  */
 
-import {afterNextRender, dedupingMixin, type PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {afterNextRender, dedupingMixin} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import type {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
 
@@ -51,7 +52,7 @@ export const DeepLinkingMixin = dedupingMixin(
         // Disabling the naming convention rule since this property mirrors
         // the exact value of the Setting enum.
         // eslint-disable-next-line @typescript-eslint/naming-convention
-        Setting: Setting;
+        declare Setting: Setting;
 
         /**
          * Set of setting IDs that could be deep linked to. Initialized as an

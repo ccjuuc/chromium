@@ -16,19 +16,29 @@
 #include <string_view>
 
 #include "base/memory/raw_ptr.h"
+#include "base/time/time.h"
+#include "components/omnibox/browser/omnibox_popup_selection.h"
+#include "ui/base/window_open_disposition.h"
 
 class OmniboxController;
-class OmniboxPopupViewWebUI;
+class OmniboxPopupPresenterBase;
 class OmniboxResultView;
 class OmniboxSuggestionButtonRowView;
+class OmniboxPopupViewBrowserView;
 namespace ui {
 struct AXNodeData;
+}
+
+namespace content {
+class WebContents;
 }
 
 class OmniboxPopupView {
  public:
   explicit OmniboxPopupView(OmniboxController* controller);
   virtual ~OmniboxPopupView();
+
+  virtual OmniboxPopupPresenterBase* presenter();
 
   // Returns true if the popup is currently open.
   virtual bool IsOpen() const = 0;
@@ -57,7 +67,43 @@ class OmniboxPopupView {
   virtual std::u16string_view GetAccessibleButtonTextForResult(
       size_t line) const;
 
-  virtual raw_ptr<OmniboxPopupViewWebUI> GetOmniboxPopupViewWebUI() = 0;
+  // Informs the popup of user intent to change popup selection.
+  virtual void StepSelection(OmniboxPopupSelection::Direction direction,
+                             OmniboxPopupSelection::Step step) {}
+
+  // Informs the popup of user intent to open its current selection.
+  virtual void OpenCurrentSelection(WindowOpenDisposition disposition) {}
+
+  // Saves state to the given tab.
+  virtual void SaveStateToTab(content::WebContents* contents) {}
+
+  // Syncs the text and selection state from the native location bar to the
+  // WebUI omnibox.
+  virtual void SyncNativeStateToWebUI(bool query_zps) {}
+
+  // Called when the active tab changes.
+  virtual void OnTabChanged(content::WebContents* contents) {}
+
+  // Called when the omnibox gains focus.
+  virtual void OnFocus(bool query_zps) {}
+
+  // Called when the omnibox loses focus.
+  virtual void OnBlur() {}
+
+  // Called when the WebUI omnibox reports a manual blur.
+  virtual void OnManualBlur() {}
+
+  // Returns true if the popup controls its own selection state.
+  virtual bool IsSelectionPopupControlled() const = 0;
+
+  // Returns true if the popup is currently processing a revert/Escape action.
+  virtual bool IsReverting() const;
+  virtual void SetIsReverting(bool reverting);
+
+  // Safe downcasting to the BrowserView-embedded implementation.
+  virtual OmniboxPopupViewBrowserView* AsOmniboxPopupViewBrowserView();
+
+  base::TimeTicks construction_time() const { return construction_time_; }
 
  protected:
   friend class OmniboxResultView;
@@ -69,6 +115,9 @@ class OmniboxPopupView {
  private:
   // Owned by the LocationBarView that owns this. Outlives this.
   const raw_ptr<OmniboxController> controller_;
+
+  // Time when this instance was constructed, or null after use for histogram.
+  base::TimeTicks construction_time_;
 };
 
 #endif  // CHROME_BROWSER_UI_OMNIBOX_OMNIBOX_POPUP_VIEW_H_

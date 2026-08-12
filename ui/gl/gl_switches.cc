@@ -6,6 +6,8 @@
 
 #include <array>
 
+#include "base/command_line.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "ui/gl/buildflags.h"
@@ -31,7 +33,6 @@ const char kGLImplementationStubName[] = "stub";
 const char kGLImplementationDisabledName[] = "disabled";
 
 const char kANGLEImplementationDefaultName[]  = "default";
-const char kANGLEImplementationD3D9Name[]     = "d3d9";
 const char kANGLEImplementationD3D11Name[]    = "d3d11";
 const char kANGLEImplementationD3D11on12Name[] = "d3d11on12";
 const char kANGLEImplementationD3D11WarpName[] = "d3d11-warp";
@@ -91,6 +92,11 @@ const char kEnableGPUServiceTracing[]       = "enable-gpu-service-tracing";
 //  gles: GLES renderer, ES2 and ES3.
 const char kUseANGLE[]                      = "use-angle";
 
+#if BUILDFLAG(USE_STATIC_ANGLE)
+// Use ANGLE shared libraries even if ANGLE is built as a static library.
+const char kUseDynamicAngle[] = "use-dynamic-angle";
+#endif
+
 // Use the Pass-through command decoder, skipping all validation and state
 // tracking. Switch lives in ui/gl because it affects the GL binding
 // initialization on platforms that would otherwise not default to using
@@ -137,9 +143,6 @@ const char kOverrideUseSoftwareGLForTests[] =
 
 // Disables specified comma separated GL Extensions if found.
 const char kDisableGLExtensions[] = "disable-gl-extensions";
-
-// Enables SwapBuffersWithBounds if it is supported.
-const char kEnableSwapBuffersWithBounds[] = "enable-swap-buffers-with-bounds";
 
 // Disable DirectComposition.
 const char kDisableDirectComposition[] = "disable-direct-composition";
@@ -188,13 +191,18 @@ const auto kGLSwitchesCopiedFromGpuProcessHostArray = std::to_array({
     kDisableGLDrawingForTests,
     kOverrideUseSoftwareGLForTests,
     kUseANGLE,
-    kEnableSwapBuffersWithBounds,
+#if BUILDFLAG(USE_STATIC_ANGLE)
+    kUseDynamicAngle,
+#endif
     kDisableDirectComposition,
     kEnableDirectCompositionVideoOverlays,
     kDirectCompositionVideoSwapChainFormat,
     kTintDcLayer,
     kEnableUnsafeSwiftShader,
     kDisableD3D11Warp,
+#if BUILDFLAG(IS_WIN)
+    kFakeVsyncRate,
+#endif
 });
 // An external span to the array above, so that it can be exposed from the
 // header file without specifying the size of the array manually.
@@ -212,6 +220,27 @@ const base::span<const char* const> kGLSwitchesCopiedFromGpuProcessHost =
 const char kDisableAndroidNativeFenceSyncForTesting[] =
     "disable-android-native-fence-sync-for-testing";
 #endif
+
+#if BUILDFLAG(IS_WIN)
+const char kFakeVsyncRate[] = "fake-vsync-rate";
+
+std::optional<base::TimeDelta> GetFakeVsyncIntervalFromCommandLine() {
+  static const std::optional<base::TimeDelta> fake_interval = [] {
+    const base::CommandLine* command_line =
+        base::CommandLine::ForCurrentProcess();
+    double fake_hz = 0;
+    if (command_line->HasSwitch(kFakeVsyncRate) &&
+        base::StringToDouble(command_line->GetSwitchValueASCII(kFakeVsyncRate),
+                             &fake_hz) &&
+        fake_hz > 0) {
+      return std::optional<base::TimeDelta>(base::Seconds(1.0 / fake_hz));
+    }
+    return std::optional<base::TimeDelta>();
+  }();
+  return fake_interval;
+}
+#endif
+
 }  // namespace switches
 
 namespace features {
@@ -230,10 +259,6 @@ BASE_FEATURE(kDCompTripleBufferVideoSwapChain,
 // Allow overlay swapchain to present on all GPUs even if they only support
 // software overlays. GPU deny lists limit it to NVIDIA only at the moment.
 BASE_FEATURE(kDirectCompositionSoftwareOverlays,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-// Detect and mark a single full screen video during overlay processing.
-BASE_FEATURE(kEarlyFullScreenVideoOptimization,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Adjust the letterbox video size and position to the center of the screen so
@@ -344,18 +369,6 @@ bool IsDefaultANGLEVulkan() {
     return false;
 
 #if BUILDFLAG(IS_ANDROID)
-  // Samsung GPUs already use ANGLE as the GLES driver.  Always choose
-  // ANGLE/Vulkan on these GPUs to avoid the inefficiencies of translating
-  // over ANGLE twice.  This is not done if the feature is explicitly disabled
-  // (from command line, or by webview).
-  if (active_gpu.driverId == VK_DRIVER_ID_SAMSUNG_PROPRIETARY) {
-    if (!(feature_list && feature_list->IsFeatureOverriddenFromCommandLine(
-                              features::kDefaultANGLEVulkan.name,
-                              base::FeatureList::OVERRIDE_DISABLE_FEATURE))) {
-      return true;
-    }
-  }
-
   // Exclude SwiftShader-based Android emulators for now.
   if (active_gpu.driverId == VK_DRIVER_ID_GOOGLE_SWIFTSHADER) {
     return false;

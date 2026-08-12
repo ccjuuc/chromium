@@ -31,12 +31,21 @@ static const GUID kUiaPropertyUniqueIdGuid = {
     0x4f4c,
     {0xaf, 0xf6, 0x1c, 0x2e, 0x57, 0x52, 0xad, 0x8e}};
 
-// {28A68D78-3EA6-4FE4-B7C6-1E0F089A72A5}
-static const GUID kUiaPropertyVirtualContentGuid = {
-    0x28A68D78,
-    0x3EA6,
-    0x4FE4,
-    {0xB7, 0xC6, 0x1E, 0x0F, 0x08, 0x9A, 0x72, 0xA5}};
+// {FA170AB3-3229-4E7C-827F-DD05EE0481D9}
+// This GUID matches Microsoft Word's MathML property for compatibility.
+// https://learn.microsoft.com/en-us/office/uia/word/wordcustomproperties
+static const GUID kUiaPropertyMathMlGuid = {
+    0xFA170AB3,
+    0x3229,
+    0x4E7C,
+    {0x82, 0x7F, 0xDD, 0x05, 0xEE, 0x04, 0x81, 0xD9}};
+
+// {8C787AC3-0405-4C94-AC09-7A56A173F7EF}
+static const GUID kUiaPropertyAriaActionsGuid = {
+    0x8c787ac3,
+    0x0405,
+    0x4c94,
+    {0xac, 0x09, 0x7a, 0x56, 0xa1, 0x73, 0xf7, 0xef}};
 
 class COMPONENT_EXPORT(AX_PLATFORM) UiaRegistrarWin {
  public:
@@ -48,7 +57,9 @@ class COMPONENT_EXPORT(AX_PLATFORM) UiaRegistrarWin {
 
   // UIA custom properties.
   PROPERTYID GetUniqueIdPropertyId() const;
-  PROPERTYID GetVirtualContentPropertyId() const;
+
+  PROPERTYID GetMathMLPropertyId() const;
+  PROPERTYID GetAriaActionsPropertyId() const;
 
   static const UiaRegistrarWin& GetInstance();
 
@@ -58,7 +69,9 @@ class COMPONENT_EXPORT(AX_PLATFORM) UiaRegistrarWin {
 
   // UIA custom properties.
   PROPERTYID unique_id_property_id_ = 0;
-  PROPERTYID virtual_content_property_id_ = 0;
+
+  PROPERTYID mathml_property_id_ = 0;
+  PROPERTYID aria_actions_property_id_ = 0;
 };
 
 }  // namespace ui

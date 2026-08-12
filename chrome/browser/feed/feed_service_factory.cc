@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "base/check.h"
+#include "base/feature_list.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -24,6 +25,7 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_version.h"
+#include "chrome/common/pref_names.h"
 #include "components/background_task_scheduler/background_task_scheduler_factory.h"
 #include "components/feed/core/proto/v2/keyvalue_store.pb.h"
 #include "components/feed/core/proto/v2/store.pb.h"
@@ -47,20 +49,6 @@ namespace feed {
 const base::FilePath::CharType kFeedv2Folder[] = FILE_PATH_LITERAL("feedv2");
 
 namespace internal {
-const std::string_view GetFollowingFeedFollowCountGroupName(
-    size_t follow_count) {
-  if (follow_count == 0)
-    return "None";
-  if (follow_count <= 4)
-    return "1-4";
-  if (follow_count <= 8)
-    return "5-8";
-  if (follow_count <= 12)
-    return "9-12";
-  if (follow_count <= 20)
-    return "13-20";
-  return "21+";
-}
 
 #if !BUILDFLAG(IS_ANDROID)
 // TODO(jianli): Need to figure out what to do for desktop version.
@@ -69,9 +57,9 @@ class NoOpRefreshTaskScheduler : public feed::RefreshTaskScheduler {
   NoOpRefreshTaskScheduler() = default;
   ~NoOpRefreshTaskScheduler() override = default;
 
-  void EnsureScheduled(RefreshTaskId id, base::TimeDelta delay) override {}
-  void Cancel(RefreshTaskId id) override {}
-  void RefreshTaskComplete(RefreshTaskId id) override {}
+  void EnsureScheduled(base::TimeDelta delay) override {}
+  void Cancel() override {}
+  void RefreshTaskComplete() override {}
 };
 #endif
 
@@ -133,12 +121,7 @@ class FeedServiceDelegateImpl : public FeedService::Delegate {
       }
     }
   }
-  void RegisterFollowingFeedFollowCountFieldTrial(
-      size_t follow_count) override {
-    ChromeMetricsServiceAccessor::RegisterSyntheticFieldTrial(
-        "FollowingFeedFollowCount",
-        internal::GetFollowingFeedFollowCountGroupName(follow_count));
-  }
+
   void RegisterFeedUserSettingsFieldTrial(std::string_view group) override {
     ChromeMetricsServiceAccessor::RegisterSyntheticFieldTrial(
         "FeedUserSettings", group);
@@ -194,7 +177,6 @@ FeedServiceFactory::FeedServiceFactory()
               .Build()) {
   DependsOn(IdentityManagerFactory::GetInstance());
   DependsOn(HistoryServiceFactory::GetInstance());
-  DependsOn(background_task::BackgroundTaskSchedulerFactory::GetInstance());
   DependsOn(TemplateURLServiceFactory::GetInstance());
 
 #if BUILDFLAG(IS_ANDROID)
@@ -235,6 +217,10 @@ FeedServiceFactory::BuildServiceInstanceForBrowserContext(
           profile);
   chrome_info.is_new_tab_search_engine_url_android_enabled =
       regional_capabilities->IsInEeaCountry();
+  if (base::FeatureList::IsEnabled(
+          chrome::android::kUserFeedbackAllowedPolicy)) {
+    chrome_info.user_feedback_allowed_pref_key = ::prefs::kUserFeedbackAllowed;
+  }
 #else
   chrome_info.is_new_tab_search_engine_url_android_enabled = false;
 #endif
@@ -243,8 +229,7 @@ FeedServiceFactory::BuildServiceInstanceForBrowserContext(
       std::make_unique<FeedServiceDelegateImpl>(),
 #if BUILDFLAG(IS_ANDROID)
       std::make_unique<RefreshTaskSchedulerImpl>(
-          background_task::BackgroundTaskSchedulerFactory::GetForKey(
-              profile->GetProfileKey())),
+          background_task::BackgroundTaskSchedulerFactory::GetScheduler()),
 #else
       std::make_unique<internal::NoOpRefreshTaskScheduler>(),
 #endif

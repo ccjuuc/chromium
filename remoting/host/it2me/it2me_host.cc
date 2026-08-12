@@ -52,6 +52,7 @@
 #include "remoting/host/it2me/reconnect_params.h"
 #include "remoting/host/it2me_desktop_environment.h"
 #include "remoting/host/passthrough_register_support_host_request.h"
+#include "remoting/host/peer_session_impl.h"
 #include "remoting/host/session_policies_from_dict.h"
 #include "remoting/proto/ftl/v1/chromoting_message.pb.h"
 #include "remoting/protocol/auth_util.h"
@@ -60,7 +61,6 @@
 #include "remoting/protocol/ice_config_fetcher_default.h"
 #include "remoting/protocol/it2me_host_authenticator_factory.h"
 #include "remoting/protocol/jingle_session_manager.h"
-#include "remoting/protocol/session_config.h"
 #include "remoting/protocol/session_manager.h"
 #include "remoting/protocol/transport.h"
 #include "remoting/protocol/transport_context.h"
@@ -217,18 +217,16 @@ void It2MeHost::SendReconnectSessionMessage() const {
       reconnect_params_->support_id);
   SignalingAddress signaling_address(reconnect_params_->client_ftl_address);
 
-  signal_strategy_->SendMessage(signaling_address,
-                                SignalingMessage{crd_message});
+  signal_strategy_->SendFtlMessage(signaling_address, std::move(crd_message));
 }
 
 void It2MeHost::Connect(
     std::unique_ptr<ChromotingHostContext> host_context,
-    base::Value::Dict policies,
+    base::DictValue policies,
     std::unique_ptr<It2MeConfirmationDialogFactory> dialog_factory,
     base::WeakPtr<It2MeHost::Observer> observer,
     CreateDeferredConnectContext create_context,
-    const std::string& username,
-    const protocol::IceConfig& ice_config) {
+    const std::string& username) {
   DCHECK(host_context->ui_task_runner()->BelongsToCurrentThread());
 
   host_context_ = std::move(host_context);
@@ -257,9 +255,8 @@ void It2MeHost::Connect(
 
   // Switch to the network thread to start the actual connection.
   host_context_->network_task_runner()->PostTask(
-      FROM_HERE,
-      base::BindOnce(&It2MeHost::ConnectOnNetworkThread, this, username,
-                     ice_config, std::move(create_context)));
+      FROM_HERE, base::BindOnce(&It2MeHost::ConnectOnNetworkThread, this,
+                                username, std::move(create_context)));
 }
 
 void It2MeHost::Disconnect() {
@@ -271,7 +268,6 @@ void It2MeHost::Disconnect() {
 
 void It2MeHost::ConnectOnNetworkThread(
     const std::string& username,
-    const protocol::IceConfig& ice_config,
     CreateDeferredConnectContext create_context) {
   DCHECK(host_context_->network_task_runner()->BelongsToCurrentThread());
   DCHECK_EQ(It2MeHostState::kDisconnected, state_);
@@ -367,26 +363,17 @@ void It2MeHost::ConnectOnNetworkThread(
       base::BindOnce(&It2MeHost::OnReceivedSupportID,
                      weak_factory_.GetWeakPtr()));
 
-  auto ice_config_fetcher = std::make_unique<protocol::IceConfigFetcherDefault>(
+  auto get_ice_config_fetcher_cb = base::BindRepeating(
+      [](scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+         OAuthTokenGetter* api_token_getter)
+          -> std::unique_ptr<protocol::IceConfigFetcher> {
+        return std::make_unique<protocol::IceConfigFetcherDefault>(
+            url_loader_factory, api_token_getter);
+      },
       host_context_->url_loader_factory(), api_token_getter_.get());
-  auto transport_context = base::MakeRefCounted<protocol::TransportContext>(
-      std::make_unique<protocol::ChromiumPortAllocatorFactory>(),
-      webrtc::ThreadWrapper::current()->SocketServer(),
-      std::move(ice_config_fetcher), protocol::TransportRole::SERVER);
-  if (!ice_config.is_null()) {
-    transport_context->set_turn_ice_config(ice_config);
-  }
 
   std::unique_ptr<protocol::SessionManager> session_manager(
       new protocol::JingleSessionManager(signal_strategy_.get()));
-
-  std::unique_ptr<protocol::CandidateSessionConfig> protocol_config =
-      protocol::CandidateSessionConfig::CreateDefault();
-  // Disable audio by default.
-  // TODO(sergeyu): Add UI to enable it.
-  protocol_config->DisableAudioChannel();
-  protocol_config->set_webrtc_supported(true);
-  session_manager->set_protocol_config(std::move(protocol_config));
 
   if (use_corp_session_authz_) {
     corp_host_status_logger_ = CorpHostStatusLogger::CreateForRemoteSupport(
@@ -425,15 +412,19 @@ void It2MeHost::ConnectOnNetworkThread(
                      << ConvertChromeOsEnterpriseAudioPlaybackToString(
                             chrome_os_enterprise_params_->audio_playback);
     }
+  } else {
+    // Audio remoting is disabled for non-enterprise ChromeOS connections.
+    options.set_audio_playback_mode(AudioPlaybackMode::kLocalOnly);
   }
-#endif
+#endif  // BUILDFLAG(IS_CHROMEOS) || !defined(NDEBUG)
+
+  auto peer_session_factory = std::make_unique<PeerSessionImplFactory>(
+      desktop_environment_factory_.get(), std::move(get_ice_config_fetcher_cb));
 
   // Create the host.
   host_ = std::make_unique<ChromotingHost>(
-      desktop_environment_factory_.get(), std::move(session_manager),
-      /* secondary_session_manager */ nullptr, transport_context,
-      host_context_->audio_task_runner(),
-      host_context_->video_encode_task_runner(), options,
+      std::move(peer_session_factory), std::move(session_manager),
+      /* secondary_session_manager */ nullptr, options,
       base::BindRepeating(&It2MeHost::OnEffectiveSessionPoliciesReceived,
                           base::Unretained(this)),
       local_session_policies_provider_.get());
@@ -519,7 +510,7 @@ void It2MeHost::SetHostEventReporterFactoryForTesting(
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-void It2MeHost::OnPolicyUpdate(base::Value::Dict policies) {
+void It2MeHost::OnPolicyUpdate(base::DictValue policies) {
   // The policy watcher runs on the |ui_task_runner|.
   if (!host_context_->network_task_runner()->BelongsToCurrentThread()) {
     host_context_->network_task_runner()->PostTask(
@@ -542,7 +533,7 @@ void It2MeHost::OnPolicyUpdate(base::Value::Dict policies) {
   remote_support_connections_allowed_ =
       RemoteSupportConnectionsAllowed(policies);
 
-  const base::Value::List* host_domain_list =
+  const base::ListValue* host_domain_list =
       policies.FindList(policy::key::kRemoteAccessHostDomainList);
   if (host_domain_list) {
     std::vector<std::string> host_domain_list_vector;
@@ -552,7 +543,7 @@ void It2MeHost::OnPolicyUpdate(base::Value::Dict policies) {
     UpdateHostDomainListPolicy(std::move(host_domain_list_vector));
   }
 
-  const base::Value::List* client_domain_list =
+  const base::ListValue* client_domain_list =
       policies.FindList(policy::key::kRemoteAccessHostClientDomainList);
   if (client_domain_list) {
     std::vector<std::string> client_domain_list_vector;
@@ -641,7 +632,7 @@ void It2MeHost::UpdateClientDomainListPolicy(
 }
 
 void It2MeHost::UpdateLocalSessionPolicies(
-    const base::Value::Dict& platform_policies) {
+    const base::DictValue& platform_policies) {
   // |local_session_policies_provider_| is null if there is no active
   // connection. Connect() calls OnPolicyUpdate() with the platform policies, so
   // we don't need to track session policies when there is no active connection.
@@ -986,7 +977,7 @@ void It2MeHost::OnConfirmationResult(ValidationResultCallback result_callback,
 }
 
 bool It2MeHost::RemoteSupportConnectionsAllowed(
-    const base::Value::Dict& policies) {
+    const base::DictValue& policies) {
 #if BUILDFLAG(IS_CHROMEOS)
   // The policy to disallow remote support connections
   // (RemoteAccessHostAllowRemoteSupportConnections) does not apply to support

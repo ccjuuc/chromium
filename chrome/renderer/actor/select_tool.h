@@ -6,10 +6,11 @@
 #define CHROME_RENDERER_ACTOR_SELECT_TOOL_H_
 
 #include "base/memory/raw_ref.h"
+#include "base/memory/weak_ptr.h"
 #include "base/types/expected.h"
 #include "chrome/common/actor.mojom.h"
-#include "chrome/common/actor/task_id.h"
 #include "chrome/renderer/actor/tool_base.h"
+#include "components/actor/core/task_id.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/web/web_select_element.h"
 
@@ -31,6 +32,7 @@ class SelectTool : public ToolBase {
   ~SelectTool() override;
 
   // actor::ToolBase
+  ValidationResult Validate() override;
   void Execute(ToolFinishedCallback callback) override;
   std::string DebugString() const override;
 
@@ -39,11 +41,11 @@ class SelectTool : public ToolBase {
     blink::WebSelectElement select;
     blink::WebString option_value;
   };
-  using ValidatedResult =
-      base::expected<TargetAndValue, mojom::ActionResultPtr>;
-  ValidatedResult Validate() const;
 
   mojom::SelectActionPtr action_;
+  std::optional<TargetAndValue> validated_target_and_value_;
+
+  base::WeakPtrFactory<SelectTool> weak_ptr_factory_{this};
 };
 
 }  // namespace actor

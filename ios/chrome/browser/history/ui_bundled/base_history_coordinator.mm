@@ -250,11 +250,12 @@ history::WebHistoryService* WebHistoryServiceGetter(
       [[SharingParams alloc] initWithURL:URL
                                    title:title
                                 scenario:SharingScenario::HistoryEntry];
+  [_sharingCoordinator stop];
   _sharingCoordinator =
       [[SharingCoordinator alloc] initWithBaseViewController:self.viewController
                                                      browser:self.browser
                                                       params:params
-                                                  originView:view];
+                                                  sourceItem:view];
   [_sharingCoordinator start];
 }
 

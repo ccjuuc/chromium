@@ -127,8 +127,9 @@ class COMPONENT_EXPORT(UI_DATA_PACK) DataPack : public ResourceHandle {
    public:
     virtual ~DataSource() = default;
 
-    virtual size_t GetLength() const = 0;
-    virtual const uint8_t* GetData() const = 0;
+    size_t GetLength() const { return bytes().size(); }
+    const uint8_t* GetData() const { return bytes().data(); }
+    virtual base::span<const uint8_t> bytes() const = 0;
   };
 
   // Load a pack file from |path|, returning false on error. If the final
@@ -148,6 +149,7 @@ class COMPONENT_EXPORT(UI_DATA_PACK) DataPack : public ResourceHandle {
     kBoundsExceeded,
     kOrderingViolation,
     kAliasTableCorrupt,
+    kEmptyFile,
   };
 
   struct ErrorState {
@@ -198,7 +200,7 @@ class COMPONENT_EXPORT(UI_DATA_PACK) DataPack : public ResourceHandle {
   bool HasResource(uint16_t resource_id) const override;
   std::optional<std::string_view> GetStringView(
       uint16_t resource_id) const override;
-  base::RefCountedStaticMemory* GetStaticMemory(
+  scoped_refptr<base::RefCountedStaticMemory> GetStaticMemory(
       uint16_t resource_id) const override;
   TextEncodingType GetTextEncodingType() const override;
   ResourceScaleFactor GetResourceScaleFactor() const override;

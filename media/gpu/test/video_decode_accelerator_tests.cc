@@ -7,7 +7,6 @@
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/cpu.h"
 #include "base/functional/callback_helpers.h"
 #include "base/numerics/safe_conversions.h"
@@ -16,6 +15,7 @@
 #include "base/test/bind.h"
 #include "base/test/launcher/unit_test_launcher.h"
 #include "build/build_config.h"
+#include "media/base/decoder.h"
 #include "media/base/decoder_buffer.h"
 #include "media/base/encryption_scheme.h"
 #include "media/base/media_switches.h"
@@ -31,7 +31,7 @@
 #include "media/gpu/test/video_player/decoder_listener.h"
 #include "media/gpu/test/video_player/decoder_wrapper.h"
 #include "media/gpu/test/video_player/frame_renderer_dummy.h"
-#include "media/gpu/test/video_player/mappable_video_frame_converter.h"
+#include "media/gpu/test/video_player/mappable_si_video_frame_converter.h"
 #include "media/gpu/test/video_player/video_player_test_environment.h"
 #include "media/gpu/test/video_test_helpers.h"
 #include "media/media_buildflags.h"
@@ -164,7 +164,8 @@ class VideoDecoderTest : public ::testing::Test {
     std::unique_ptr<VideoDecoder> decoder = VideoDecoderPipeline::Create(
         gpu::GpuDriverBugWorkarounds(),
         base::SingleThreadTaskRunner::GetCurrentDefault(),
-        std::move(frame_pool), MappableVideoFrameConverter::CreateForTesting(),
+        std::move(frame_pool),
+        MappableSIVideoFrameConverter::CreateForTesting(),
         VideoDecoderPipeline::DefaultPreferredRenderableFourccs(),
         std::make_unique<NullMediaLog>(),
         /*oop_video_decoder=*/{},
@@ -281,13 +282,7 @@ TEST_F(VideoDecoderTest, GetSupportedConfigs) {
                     "media::VideoDecoder interface;";
   }
   const media::VideoDecoderType decoder_type =
-#if BUILDFLAG(USE_VAAPI)
-      media::VideoDecoderType::kVaapi;
-#elif BUILDFLAG(USE_V4L2_CODEC)
-      media::VideoDecoderType::kV4L2;
-#else
-      media::VideoDecoderType::kUnknown;
-#endif
+      media::ActiveLinuxVideoDecoderType();
   const auto supported_configs = VideoDecoderPipeline::GetSupportedConfigs(
       decoder_type, gpu::GpuDriverBugWorkarounds());
   ASSERT_FALSE(supported_configs->empty());

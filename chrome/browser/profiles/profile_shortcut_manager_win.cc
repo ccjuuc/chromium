@@ -15,7 +15,6 @@
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -176,7 +175,7 @@ base::FilePath CreateOrUpdateShortcutIconForProfile(
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
     // On Win 11, SHCNE_ASSOCCHANGED doesn't update the taskbar icons, so find
     // the affected shortcuts and tell Windows they've changed.
-    // TODO:(crbug.com/1287111) Find all affected shortcuts, e.g., desktop, and
+    // TODO:(crbug.com/40816037) Find all affected shortcuts, e.g., desktop, and
     // remove the SHCNE_ASSOCCHANGED notification, to avoid flashing the
     // desktop (and taskbar on Win 10). Remove Win 11 version check.
     if (base::win::GetVersion() >= base::win::Version::WIN11) {
@@ -1018,7 +1017,7 @@ void ProfileShortcutManagerWin::OnProfileAvatarChanged(
 
 void ProfileShortcutManagerWin::OnProfileHighResAvatarLoaded(
     const base::FilePath& profile_path) {
-  if (base::Contains(profiles_with_pending_avatar_load_, profile_path)) {
+  if (profiles_with_pending_avatar_load_.contains(profile_path)) {
     profiles_with_pending_avatar_load_.erase(profile_path);
     CreateOrUpdateProfileIcon(profile_path);
   }

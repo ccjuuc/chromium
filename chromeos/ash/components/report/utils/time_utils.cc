@@ -7,10 +7,10 @@
 #include <memory>
 #include <string_view>
 
-#include "base/i18n/time_formatting.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
 #include "chromeos/ash/components/policy/weekly_time/time_utils.h"
@@ -148,18 +148,23 @@ bool IsFirstActiveUnderNDaysAgo(base::Time active_ts,
 }
 
 std::string FormatTimestampToMidnightGMTString(base::Time ts) {
-  return base::UnlocalizedTimeFormatWithPattern(ts, "yyyy-MM-dd 00:00:00.000 z",
-                                                icu::TimeZone::getGMT());
+  base::Time::Exploded exploded;
+  ts.UTCExplode(&exploded);
+  return base::StringPrintf("%04d-%02d-%02d 00:00:00.000 GMT", exploded.year,
+                            exploded.month, exploded.day_of_month);
 }
 
 std::string TimeToYYYYMMDDString(base::Time ts) {
-  return base::UnlocalizedTimeFormatWithPattern(ts, "yyyyMMdd",
-                                                icu::TimeZone::getGMT());
+  base::Time::Exploded exploded;
+  ts.UTCExplode(&exploded);
+  return base::StringPrintf("%04d%02d%02d", exploded.year, exploded.month,
+                            exploded.day_of_month);
 }
 
 std::string TimeToYYYYMMString(base::Time ts) {
-  return base::UnlocalizedTimeFormatWithPattern(ts, "yyyyMM",
-                                                icu::TimeZone::getGMT());
+  base::Time::Exploded exploded;
+  ts.UTCExplode(&exploded);
+  return base::StringPrintf("%04d%02d", exploded.year, exploded.month);
 }
 
 // The ActivateDate is formatted: YYYY-WW and is generated based on UTC date
@@ -206,8 +211,8 @@ std::optional<base::Time> GetFirstActiveWeek() {
   std::optional<std::string_view> first_active_week_val =
       system::StatisticsProvider::GetInstance()->GetMachineStatistic(
           system::kActivateDateKey);
-  std::string first_active_week_str =
-      std::string(first_active_week_val.value_or(kActivateDateKeyNotFound));
+  std::string_view first_active_week_str =
+      first_active_week_val.value_or(kActivateDateKeyNotFound);
 
   if (first_active_week_str == kActivateDateKeyNotFound) {
     LOG(ERROR)
@@ -233,8 +238,9 @@ std::optional<base::Time> GetFirstActiveWeek() {
   const int expected_year_size = 4;
   const int expected_weeks_size = 2;
 
-  std::string parsed_year = first_active_week_str.substr(0, expected_year_size);
-  std::string parsed_weeks = first_active_week_str.substr(
+  std::string_view parsed_year =
+      first_active_week_str.substr(0, expected_year_size);
+  std::string_view parsed_weeks = first_active_week_str.substr(
       expected_delimiter_index + 1, expected_weeks_size);
 
   if (parsed_year.empty() || parsed_weeks.empty()) {

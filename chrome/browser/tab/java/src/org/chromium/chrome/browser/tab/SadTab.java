@@ -19,6 +19,7 @@ import androidx.annotation.ColorInt;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.UserData;
+import org.chromium.base.UserDataHost;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -59,10 +60,11 @@ public class SadTab extends EmptyTabObserver implements UserData, TabViewProvide
     }
 
     public static @Nullable SadTab get(Tab tab) {
-        return tab.getUserDataHost().getUserData(USER_DATA_KEY);
+        UserDataHost host = tab.getUserDataHost();
+        return host != null ? host.getUserData(USER_DATA_KEY) : null;
     }
 
-    public static boolean isShowing(Tab tab) {
+    public static boolean isShowing(@Nullable Tab tab) {
         if (tab == null || !tab.isInitialized()) return false;
         SadTab sadTab = get(tab);
         return sadTab != null ? sadTab.isShowing() : false;
@@ -174,18 +176,18 @@ public class SadTab extends EmptyTabObserver implements UserData, TabViewProvide
         sadTabView.setLayoutParams(
                 new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
 
-        TextView titleText = (TextView) sadTabView.findViewById(R.id.sad_tab_title);
+        TextView titleText = sadTabView.findViewById(R.id.sad_tab_title);
         int titleTextId =
                 showSendFeedbackView ? R.string.sad_tab_reload_title : R.string.sad_tab_title;
         titleText.setText(titleTextId);
 
         if (showSendFeedbackView) intializeSuggestionsViews(context, sadTabView, isIncognito);
 
-        TextView messageText = (TextView) sadTabView.findViewById(R.id.sad_tab_message);
+        TextView messageText = sadTabView.findViewById(R.id.sad_tab_message);
         messageText.setText(getHelpMessage(context, suggestionAction, showSendFeedbackView));
         messageText.setMovementMethod(LinkMovementMethod.getInstance());
 
-        Button button = (Button) sadTabView.findViewById(R.id.sad_tab_button);
+        Button button = sadTabView.findViewById(R.id.sad_tab_button);
         int buttonTextId =
                 showSendFeedbackView
                         ? R.string.sad_tab_send_feedback_label
@@ -250,7 +252,7 @@ public class SadTab extends EmptyTabObserver implements UserData, TabViewProvide
         suggestionsTitle.setVisibility(View.VISIBLE);
         suggestionsTitle.setText(R.string.sad_tab_reload_try);
 
-        TextView suggestions = (TextView) sadTabView.findViewById(R.id.sad_tab_suggestions);
+        TextView suggestions = sadTabView.findViewById(R.id.sad_tab_suggestions);
         suggestions.setVisibility(View.VISIBLE);
 
         SpannableStringBuilder spannableString = new SpannableStringBuilder();

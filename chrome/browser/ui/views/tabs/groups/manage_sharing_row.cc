@@ -4,17 +4,16 @@
 
 #include "chrome/browser/ui/views/tabs/groups/manage_sharing_row.h"
 
-#include "base/uuid.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/tabs/groups/avatar_container_view.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/saved_tab_groups/public/types.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/pointer/touch_ui_controller.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/compositor/layer.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
@@ -86,7 +85,9 @@ void ManageSharingRow::RebuildChildren() {
           member_size));
 
   manage_group_icon_ = AddChildView(std::make_unique<views::ImageView>(
-      ui::ImageModel::FromVectorIcon(kTabGroupSharingIcon)));
+      ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                         ? kGroupCustomIcon
+                                         : kTabGroupSharingOldIcon)));
   manage_group_icon_->SetProperty(
       views::kMarginsKey, gfx::Insets::TLBR(0, 0, 0, kImageLabelSpacing));
   manage_group_icon_->SetProperty(

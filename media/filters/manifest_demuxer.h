@@ -169,8 +169,18 @@ class MEDIA_EXPORT ManifestDemuxer : public Demuxer, ManifestDemuxerEngineHost {
 
     // Handle track changes. Only one audio or video track is allowed to be
     // enabled at once.
-    virtual void SelectVideoVariant(const MediaTrack::Id&) = 0;
-    virtual void SelectAudioRendition(const MediaTrack::Id&) = 0;
+    virtual void SelectAudioTrack(const MediaTrack::Id&) = 0;
+    virtual void SelectVideoTrack(const MediaTrack::Id&) = 0;
+
+    // ManifestDemuxer always provides at most 1 stream for each stream type,
+    // and instead performs track changes by flushing ChunkDemuxer internally
+    // and using different data sources. However, the actual types of streams
+    // are only known to the engine (ie, is this AudioOnly playback for some
+    // file which actually has video content). This gives the engine an
+    // opportunity to filter out streams which might not be declared in the
+    // manifest.
+    virtual std::vector<raw_ptr<DemuxerStream>> FilterDemuxerStreams(
+        std::vector<raw_ptr<DemuxerStream>>&&) = 0;
   };
 
   // ManifestDemuxer takes and keeps ownership of `impl` for the lifetime of
@@ -183,7 +193,7 @@ class MEDIA_EXPORT ManifestDemuxer : public Demuxer, ManifestDemuxerEngineHost {
   ~ManifestDemuxer() override;
 
   // `media::Demuxer` implementation
-  std::vector<DemuxerStream*> GetAllStreams() override;
+  std::vector<raw_ptr<DemuxerStream>> GetAllStreams() override;
   std::string GetDisplayName() const override;
   DemuxerType GetDemuxerType() const override;
   void Initialize(DemuxerHost* host, PipelineStatusCallback status_cb) override;
@@ -265,6 +275,7 @@ class MEDIA_EXPORT ManifestDemuxer : public Demuxer, ManifestDemuxerEngineHost {
     StreamLiveness liveness() const override;
     void EnableBitstreamConverter() override;
     bool SupportsConfigChanges() override;
+    bool ManagesTrackSwitchesInternally() const override;
 
    private:
     WrapperReadCb read_cb_;

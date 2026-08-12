@@ -12,14 +12,17 @@
 #include "base/containers/queue.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
+#include "base/not_fatal_until.h"
 #include "content/browser/navigation_or_document_handle.h"
 #include "content/browser/renderer_host/frame_tree.h"
 #include "content/browser/renderer_host/page_factory.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
+#include "content/browser/storage_partition_impl.h"
 #include "content/public/browser/document_service.h"
 #include "content/public/browser/document_service_internal.h"
 #include "content/public/browser/render_frame_host.h"
 #include "net/cookies/cookie_setting_override.h"
+#include "services/network/public/cpp/constants.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 
@@ -44,7 +47,9 @@ DocumentAssociatedData::DocumentAssociatedData(
     RenderFrameHostImpl& document,
     const blink::DocumentToken& token)
     : token_(token),
-      network_restrictions_id_(std::nullopt),
+      network_restrictions_id_(
+          base::MakeRefCounted<base::RefCountedData<base::UnguessableToken>>(
+              network::GetNoOpNetworkRestrictionsId())),
       weak_factory_(&document) {
   auto [_, inserted] = GetDocumentTokenMap().insert({token_, &document});
   CHECK(inserted);
@@ -83,12 +88,15 @@ DocumentAssociatedData::~DocumentAssociatedData() {
     owned_page_->ClearAllUserData();
   }
 
-  // Remove any network restrictions for this document from the network service
-  if (network_restrictions_id_.has_value()) {
+  // Remove any network restrictions for this document from the network service.
+  // The network_restrictions_id is ref-counted: multiple documents may share
+  // the same id (e.g. initial empty documents inherit their creator's id).
+  // Only the last document holding a reference should schedule the clearing.
+  if (network_restrictions_id_->HasOneRef()) {
     StoragePartitionImpl* storage_partition =
         GetWeakPtr()->GetStoragePartition();
-    storage_partition->ClearNoncesInNetworkContextAfterDelay({
-        network_restrictions_id_.value(),
+    storage_partition->ClearNetworkRestrictionsAfterDelay({
+        network_restrictions_id_->data,
     });
   }
 
@@ -100,6 +108,31 @@ DocumentAssociatedData::~DocumentAssociatedData() {
 void DocumentAssociatedData::set_navigation_or_document_handle(
     scoped_refptr<NavigationOrDocumentHandle> handle) {
   navigation_or_document_handle_ = std::move(handle);
+}
+
+void DocumentAssociatedData::SetNetworkRestrictionsId(
+    base::UnguessableToken network_restrictions_id) {
+  CHECK(!network_restrictions_id.is_empty(), base::NotFatalUntil::M165);
+  network_restrictions_id_ =
+      base::MakeRefCounted<base::RefCountedData<base::UnguessableToken>>(
+          network_restrictions_id);
+}
+
+void DocumentAssociatedData::ShareNetworkRestrictionsId(
+    scoped_refptr<base::RefCountedData<base::UnguessableToken>>
+        network_restrictions_id) {
+  CHECK(network_restrictions_id, base::NotFatalUntil::M165);
+  network_restrictions_id_ = std::move(network_restrictions_id);
+}
+
+base::UnguessableToken DocumentAssociatedData::NetworkRestrictionsId() const {
+  CHECK(network_restrictions_id_, base::NotFatalUntil::M165);
+  return network_restrictions_id_->data;
+}
+
+const scoped_refptr<base::RefCountedData<base::UnguessableToken>>&
+DocumentAssociatedData::NetworkRestrictionsIdHandle() const {
+  return network_restrictions_id_;
 }
 
 void DocumentAssociatedData::AddService(
@@ -133,6 +166,11 @@ void DocumentAssociatedData::RunPostPrerenderingActivationSteps() {
 void DocumentAssociatedData::PutCookieSettingOverride(
     net::CookieSettingOverride cookie_setting_override) {
   cookie_setting_overrides_.Put(cookie_setting_override);
+}
+
+void DocumentAssociatedData::SetCrashReportContextRegion(
+    base::UnsafeSharedMemoryRegion region) {
+  crash_report_storage_region_ = std::move(region);
 }
 
 void DocumentAssociatedData::RemoveCookieSettingOverride(

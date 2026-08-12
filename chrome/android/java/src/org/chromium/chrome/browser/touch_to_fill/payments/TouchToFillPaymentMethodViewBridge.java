@@ -6,13 +6,12 @@ package org.chromium.chrome.browser.touch_to_fill.payments;
 
 import android.content.Context;
 
-import androidx.annotation.Nullable;
-
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
 import org.jni_zero.JniType;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.autofill.AutofillImageFetcher;
 import org.chromium.chrome.browser.autofill.AutofillImageFetcherFactory;
 import org.chromium.chrome.browser.autofill.PersonalDataManager;
@@ -24,12 +23,12 @@ import org.chromium.components.autofill.LoyaltyCard;
 import org.chromium.components.autofill.SuggestionType;
 import org.chromium.components.autofill.payments.BnplIssuerContext;
 import org.chromium.components.autofill.payments.BnplIssuerTosDetail;
+import org.chromium.components.autofill.payments.TouchToFillDisplayOptions;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerProvider;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.url.GURL;
 
-import java.util.Arrays;
 import java.util.List;
 
 /** JNI wrapper for C++ TouchToFillPaymentMethodViewImpl. Delegates calls from native to Java. */
@@ -40,6 +39,7 @@ class TouchToFillPaymentMethodViewBridge {
 
     private TouchToFillPaymentMethodViewBridge(
             TouchToFillPaymentMethodComponent.Delegate delegate,
+            Profile profile,
             Context context,
             AutofillImageFetcher imageFetcher,
             BottomSheetController bottomSheetController,
@@ -47,6 +47,7 @@ class TouchToFillPaymentMethodViewBridge {
         mComponent = new TouchToFillPaymentMethodCoordinator();
         mComponent.initialize(
                 context,
+                profile,
                 imageFetcher,
                 bottomSheetController,
                 delegate,
@@ -66,6 +67,7 @@ class TouchToFillPaymentMethodViewBridge {
         if (bottomSheetController == null) return null;
         return new TouchToFillPaymentMethodViewBridge(
                 delegate,
+                profile,
                 context,
                 AutofillImageFetcherFactory.getForProfile(profile),
                 bottomSheetController,
@@ -74,10 +76,9 @@ class TouchToFillPaymentMethodViewBridge {
 
     @CalledByNative
     private void showPaymentMethods(
-            @JniType("std::vector") Object[] suggestions, boolean shouldShowScanCreditCard) {
-        mComponent.showPaymentMethods(
-                (List<AutofillSuggestion>) (List<?>) Arrays.asList(suggestions),
-                shouldShowScanCreditCard);
+            @JniType("std::vector") List<AutofillSuggestion> suggestions,
+            TouchToFillDisplayOptions touchToFillDisplayOptions) {
+        mComponent.showPaymentMethods(suggestions, touchToFillDisplayOptions);
     }
 
     @CalledByNative
@@ -86,11 +87,18 @@ class TouchToFillPaymentMethodViewBridge {
     }
 
     @CalledByNative
-    private void showLoyaltyCards(
+    private void showAffiliatedLoyaltyCards(
             @JniType("base::span<const LoyaltyCard>") List<LoyaltyCard> affiliatedLoyaltyCards,
             @JniType("base::span<const LoyaltyCard>") List<LoyaltyCard> allLoyaltyCards,
             boolean firstTimeUsage) {
-        mComponent.showLoyaltyCards(affiliatedLoyaltyCards, allLoyaltyCards, firstTimeUsage);
+        mComponent.showAffiliatedLoyaltyCards(
+                affiliatedLoyaltyCards, allLoyaltyCards, firstTimeUsage);
+    }
+
+    @CalledByNative
+    private void showAllLoyaltyCards(
+            @JniType("base::span<const LoyaltyCard>") List<LoyaltyCard> allLoyaltyCards) {
+        mComponent.showAllLoyaltyCards(allLoyaltyCards);
     }
 
     @CalledByNative

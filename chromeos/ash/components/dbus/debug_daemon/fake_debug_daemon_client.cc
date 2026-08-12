@@ -14,7 +14,6 @@
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
 #include "base/functional/bind.h"
@@ -167,18 +166,33 @@ void FakeDebugDaemonClient::BackupArcBugReport(
 }
 
 void FakeDebugDaemonClient::GetAllLogs(GetLogsCallback callback) {
-  std::map<std::string, std::string> sample;
-  sample["Sample Log"] = "Your email address is abc@abc.com";
+  std::map<std::string, std::string> result(logs_.begin(), logs_.end());
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), false, sample));
+      FROM_HERE, base::BindOnce(std::move(callback), true, std::move(result)));
 }
 
 void FakeDebugDaemonClient::GetLog(
     const std::string& log_name,
     chromeos::DBusMethodCallback<std::string> callback) {
-  std::string result = log_name + ": response from GetLog";
+  std::optional<std::string> result;
+  if (auto it = logs_.find(log_name); it != logs_.end()) {
+    result = it->second;
+  }
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), std::move(result)));
+}
+
+void FakeDebugDaemonClient::SetLog(std::string_view log_name,
+                                   std::optional<std::string> log_data) {
+  if (auto it = logs_.find(log_name); it != logs_.end()) {
+    if (log_data.has_value()) {
+      it->second = std::move(*log_data);
+    } else {
+      logs_.erase(it);
+    }
+  } else if (log_data.has_value()) {
+    logs_.emplace(log_name, std::move(*log_data));
+  }
 }
 
 void FakeDebugDaemonClient::TestICMP(const std::string& ip_address,
@@ -257,69 +271,6 @@ void FakeDebugDaemonClient::SetServiceIsAvailable(bool is_available) {
   callbacks.swap(pending_wait_for_service_to_be_available_callbacks_);
   for (auto& callback : callbacks)
     std::move(callback).Run(true);
-}
-
-void FakeDebugDaemonClient::CupsAddManuallyConfiguredPrinter(
-    const std::string& name,
-    const std::string& uri,
-    const std::string& language,
-    const std::string& ppd_contents,
-    CupsAddPrinterCallback callback) {
-  printers_.insert_or_assign(name, ppd_contents);
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), 0));
-}
-
-void FakeDebugDaemonClient::CupsAddAutoConfiguredPrinter(
-    const std::string& name,
-    const std::string& uri,
-    const std::string& language,
-    CupsAddPrinterCallback callback) {
-  printers_.insert_or_assign(name, "");
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), 0));
-}
-
-void FakeDebugDaemonClient::CupsRemovePrinter(
-    const std::string& name,
-    CupsRemovePrinterCallback callback,
-    base::OnceClosure error_callback) {
-  const bool has_printer = base::Contains(printers_, name);
-  if (has_printer)
-    printers_.erase(name);
-
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), has_printer));
-}
-
-void FakeDebugDaemonClient::CupsRetrievePrinterPpd(
-    const std::string& name,
-    CupsRetrievePrinterPpdCallback callback,
-    base::OnceClosure error_callback) {
-  auto it = printers_.find(name);
-  if (it == printers_.end()) {
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, std::move(error_callback));
-    return;
-  }
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback),
-                                std::vector<uint8_t>(it->second.begin(),
-                                                     it->second.end())));
-}
-
-void FakeDebugDaemonClient::StartPluginVmDispatcher(
-    const std::string& /* owner_id */,
-    const std::string& /* lang */,
-    PluginVmDispatcherCallback callback) {
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), true));
-}
-
-void FakeDebugDaemonClient::StopPluginVmDispatcher(
-    PluginVmDispatcherCallback callback) {
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), true));
 }
 
 void FakeDebugDaemonClient::SetRlzPingSent(SetRlzPingSentCallback callback) {

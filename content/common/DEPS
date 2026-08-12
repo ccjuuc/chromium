@@ -2,8 +2,10 @@ include_rules = [
   "-storage/browser",
 
   "+components/discardable_memory/common",
+  "+components/network_session_configurator/common",
   "+components/viz/common",
   "+device/base/synchronization",
+  "+services/data_decoder/public/cpp",
   "+services/media_session/public/cpp",
   "+services/device/public/mojom",
   "+services/network/public/cpp",
@@ -28,7 +30,6 @@ include_rules = [
   "+third_party/blink/public/platform/web_http_body.h",
   "+third_party/blink/public/platform/web_history_scroll_restoration_type.h",
   "+third_party/blink/public/platform/web_storage_area.h",
-  "+third_party/blink/public/platform/web_text_autosizer_page_info.h",
   "+third_party/blink/public/platform/linux/web_fallback_font.h",
   "+third_party/blink/public/platform/mac/web_scrollbar_theme.h",
   "+third_party/blink/public/platform/modules/mediastream/media_devices.mojom.h",

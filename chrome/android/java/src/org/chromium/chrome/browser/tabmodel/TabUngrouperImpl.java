@@ -23,6 +23,7 @@ import org.chromium.components.browser_ui.widget.ActionConfirmationResult;
 import org.chromium.components.data_sharing.member_role.MemberRole;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -35,13 +36,13 @@ public class TabUngrouperImpl implements TabUngrouper {
     /**
      * @param context The activity context.
      * @param modalDialogManager The manager to use for warning dialogs.
-     * @param tabGroupModelFilterSupplier The supplier of the {@link TabGroupModelFilter}.
+     * @param tabModelSupplier The supplier of the {@link TabModel}.
      */
     public TabUngrouperImpl(
             Context context,
             ModalDialogManager modalDialogManager,
-            Supplier<TabGroupModelFilter> tabGroupModelFilterSupplier) {
-        this(new TabModelRemover(context, modalDialogManager, tabGroupModelFilterSupplier));
+            Supplier<@Nullable TabModel> tabModelSupplier) {
+        this(new TabModelRemover(context, modalDialogManager, tabModelSupplier));
     }
 
     @VisibleForTesting
@@ -55,8 +56,7 @@ public class TabUngrouperImpl implements TabUngrouper {
             boolean trailing,
             boolean allowDialog,
             @Nullable TabModelActionListener listener) {
-        ungroupTabsInternal(
-                (unused) -> tabs, trailing, /* isTabGroup= */ false, allowDialog, listener);
+        ungroupTabsInternal(_ -> tabs, trailing, /* isTabGroup= */ false, allowDialog, listener);
     }
 
     @Override
@@ -65,25 +65,25 @@ public class TabUngrouperImpl implements TabUngrouper {
             boolean trailing,
             boolean allowDialog,
             @Nullable TabModelActionListener listener) {
-        Function<TabGroupModelFilter, List<Tab>> tabsFetcher =
-                (filter) -> PassthroughTabUngrouper.getTabsToUngroup(filter, tabGroupId);
+        Function<TabModel, List<Tab>> tabsFetcher =
+                (tabModel) -> PassthroughTabUngrouper.getTabsToUngroup(tabModel, tabGroupId);
 
         ungroupTabsInternal(tabsFetcher, trailing, /* isTabGroup= */ true, allowDialog, listener);
     }
 
     private void ungroupTabsInternal(
-            Function<TabGroupModelFilter, List<Tab>> tabsFetcher,
+            Function<TabModel, List<Tab>> tabsFetcher,
             boolean trailing,
             boolean isTabGroup,
             boolean allowDialog,
             @Nullable TabModelActionListener listener) {
-        TabGroupModelFilterInternal filter = mTabModelRemover.getTabGroupModelFilter();
-        List<Tab> tabs = tabsFetcher.apply(filter);
+        TabModelInternal tabModelInternal = mTabModelRemover.getTabModelInternal();
+        List<Tab> tabs = tabsFetcher.apply(tabModelInternal);
         if (tabs == null || tabs.isEmpty()) return;
 
         UngroupTabsHandler ungroupTabsHandler =
                 new UngroupTabsHandler(
-                        filter,
+                        tabModelInternal,
                         mTabModelRemover.getActionConfirmationManager(),
                         tabs,
                         trailing,
@@ -93,7 +93,7 @@ public class TabUngrouperImpl implements TabUngrouper {
     }
 
     private static class UngroupTabsHandler implements TabModelRemoverFlowHandler {
-        private final TabGroupModelFilterInternal mTabGroupModelFilter;
+        private final TabModelInternal mTabModel;
         private final ActionConfirmationManager mActionConfirmationManager;
         private final List<Tab> mTabsToUngroup;
         private final boolean mTrailing;
@@ -101,13 +101,13 @@ public class TabUngrouperImpl implements TabUngrouper {
         private @Nullable TabModelActionListener mListener;
 
         UngroupTabsHandler(
-                TabGroupModelFilterInternal tabGroupModelFilter,
+                TabModelInternal tabModel,
                 ActionConfirmationManager actionConfirmationManager,
                 List<Tab> tabsToUngroup,
                 boolean trailing,
                 boolean isTabGroup,
                 @Nullable TabModelActionListener listener) {
-            mTabGroupModelFilter = tabGroupModelFilter;
+            mTabModel = tabModel;
             mActionConfirmationManager = actionConfirmationManager;
             mTabsToUngroup = tabsToUngroup;
             mTrailing = trailing;
@@ -118,7 +118,13 @@ public class TabUngrouperImpl implements TabUngrouper {
         @Override
         public GroupsPendingDestroy computeGroupsPendingDestroy() {
             return DataSharingTabGroupUtils.getSyncedGroupsDestroyedByTabRemoval(
-                    mTabGroupModelFilter.getTabModel(), mTabsToUngroup);
+                    mTabModel, mTabsToUngroup);
+        }
+
+        @Override
+        public List<Integer> getOngoingActorTasks() {
+            // Intentionally returning an empty list to skip this check.
+            return Collections.emptyList();
         }
 
         @Override
@@ -147,6 +153,13 @@ public class TabUngrouperImpl implements TabUngrouper {
         }
 
         @Override
+        public void showActorTaskDeletionConfirmationDialog(
+                Callback<@ActionConfirmationResult Integer> onResult) {
+            assert false : "Ungroup tab does not support actor task deletion dialogs.";
+            onResult.onResult(ActionConfirmationResult.IMMEDIATE_CONTINUE);
+        }
+
+        @Override
         public void showCollaborationKeepDialog(
                 @MemberRole int memberRole, String title, Callback<MaybeBlockingResult> onResult) {
             @Nullable TabModelActionListener listener = takeListener();
@@ -168,20 +181,19 @@ public class TabUngrouperImpl implements TabUngrouper {
 
         @Override
         public void performAction() {
-            TabGroupModelFilterInternal filter = mTabGroupModelFilter;
-            TabModel tabModel = filter.getTabModel();
+            TabModelInternal tabModel = mTabModel;
             List<Tab> newTabsToUngroup =
                     TabModelUtils.getTabsById(
                             TabModelUtils.getTabIds(mTabsToUngroup),
                             tabModel,
                             /* allowClosing= */ false,
-                            filter::isTabInTabGroup);
+                            tabModel::isTabInTabGroup);
 
             @Nullable TabModelActionListener listener = takeListener();
             if (listener != null) {
                 listener.willPerformActionOrShowDialog(DialogType.NONE, /* willSkipDialog= */ true);
             }
-            PassthroughTabUngrouper.doUngroupTabs(filter, newTabsToUngroup, mTrailing);
+            PassthroughTabUngrouper.doUngroupTabs(tabModel, newTabsToUngroup, mTrailing);
             if (listener != null) {
                 listener.onConfirmationDialogResult(
                         DialogType.NONE, ActionConfirmationResult.IMMEDIATE_CONTINUE);

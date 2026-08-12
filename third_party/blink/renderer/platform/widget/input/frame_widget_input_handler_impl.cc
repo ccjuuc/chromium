@@ -8,6 +8,7 @@
 
 #include "base/check.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -76,6 +77,12 @@ void FrameWidgetInputHandlerImpl::ClearImeTextSpansByType(
         handler->ClearImeTextSpansByType(start, end, type);
       },
       widget_, main_thread_frame_widget_input_handler_, start, end, type));
+}
+
+void FrameWidgetInputHandlerImpl::CancelStylusGesturePreview() {
+  RunOnMainThread(base::BindOnce(
+      &mojom::blink::FrameWidgetInputHandler::CancelStylusGesturePreview,
+      main_thread_frame_widget_input_handler_));
 }
 
 void FrameWidgetInputHandlerImpl::SetCompositionFromExistingText(
@@ -262,6 +269,22 @@ void FrameWidgetInputHandlerImpl::PasteAndMatchStyle() {
       base::BindOnce(&FrameWidgetInputHandlerImpl::ExecuteCommandOnMainThread,
                      widget_, main_thread_frame_widget_input_handler_,
                      "PasteAndMatchStyle", UpdateState::kIsPasting));
+}
+
+void FrameWidgetInputHandlerImpl::PasteFromImageBytes(
+    mojo_base::BigBuffer image_bytes,
+    const String& media_format) {
+  RunOnMainThread(base::BindOnce(
+      [](base::WeakPtr<WidgetBase> widget,
+         base::WeakPtr<mojom::blink::FrameWidgetInputHandler> handler,
+         mojo_base::BigBuffer image_bytes, const String& media_format) {
+        if (handler) {
+          HandlingState handling_state(widget, UpdateState::kIsPasting);
+          handler->PasteFromImageBytes(std::move(image_bytes), media_format);
+        }
+      },
+      widget_, main_thread_frame_widget_input_handler_, std::move(image_bytes),
+      media_format));
 }
 
 void FrameWidgetInputHandlerImpl::Replace(const String& word) {

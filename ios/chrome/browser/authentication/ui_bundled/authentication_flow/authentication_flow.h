@@ -69,6 +69,16 @@ class Browser;
 // Sign-in access point.
 @property(nonatomic, assign, readonly) signin_metrics::AccessPoint accessPoint;
 
+// Whether the user can authenticate even if the identity needs a reauth.
+// Defaults to NO.
+@property(nonatomic, assign) BOOL skipReauthIfNeeded;
+
+// A block called if the successful authentication flow would cause a profile
+// switch in order to get the user to decide whether they want this switch to
+// occur or not.
+@property(nonatomic, copy)
+    SigninChangeProfileConfirmationBlock confirmChangeProfile;
+
 @end
 
 #endif  // IOS_CHROME_BROWSER_AUTHENTICATION_UI_BUNDLED_AUTHENTICATION_FLOW_AUTHENTICATION_FLOW_H_

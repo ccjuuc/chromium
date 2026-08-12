@@ -12,6 +12,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
+#include "components/viz/common/display/display_scheduler_draw_result.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
 #include "components/viz/common/frame_sinks/begin_frame_source.h"
 
@@ -39,7 +40,8 @@ class FakeExternalBeginFrameSource : public BeginFrameSource {
   // BeginFrameSource implementation.
   void AddObserver(BeginFrameObserver* obs) override;
   void RemoveObserver(BeginFrameObserver* obs) override;
-  void DidFinishFrame(BeginFrameObserver* obs) override;
+  void DidFinishFrame(BeginFrameObserver* obs,
+                      DisplaySchedulerDrawResult result) override;
   void OnGpuNoLongerBusy() override {}
 
   BeginFrameArgs CreateBeginFrameArgs(
@@ -49,7 +51,8 @@ class FakeExternalBeginFrameSource : public BeginFrameSource {
   BeginFrameArgs CreateBeginFrameArgsWithGenerator(
       base::TimeTicks frame_time,
       base::TimeTicks next_frame_time,
-      base::TimeDelta vsync_interval);
+      base::TimeDelta vsync_interval,
+      base::TimeDelta unthrottled_interval = base::TimeDelta());
   uint64_t next_begin_frame_number() const { return next_begin_frame_number_; }
 
   void TestOnBeginFrame(const BeginFrameArgs& args);

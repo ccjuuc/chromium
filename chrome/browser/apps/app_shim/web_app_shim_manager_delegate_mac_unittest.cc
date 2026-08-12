@@ -9,7 +9,6 @@
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/test/bind.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/test/fake_os_integration_manager.h"
@@ -18,6 +17,7 @@
 #include "chrome/browser/web_applications/test/web_app_test.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -471,16 +471,19 @@ TEST_F(WebAppShimManagerDelegateTest, GetAppShortcutsMenuItemInfos) {
         web_app::mojom::UserDisplayMode::kStandalone;
 
     shortcut_info1.name = u"shortcut_info1";
-    shortcut_info1.url = GURL(".");
+    shortcut_info1.url = GURL("https://mytestpwa.com/");
     web_app_info->shortcuts_menu_item_infos.push_back(shortcut_info1);
+    web_app_info->shortcuts_menu_icon_bitmaps.emplace_back();
 
     shortcut_info2.name = u"shortcut_info2";
-    shortcut_info2.url = GURL("/settings");
+    shortcut_info2.url = GURL("https://mytestpwa.com/settings");
     web_app_info->shortcuts_menu_item_infos.push_back(shortcut_info2);
+    web_app_info->shortcuts_menu_icon_bitmaps.emplace_back();
 
     shortcut_info3.name = u"shortcut_info3";
-    shortcut_info3.url = GURL("https://anothersite.com");
+    shortcut_info3.url = GURL("https://mytestpwa.com/shortcut3");
     web_app_info->shortcuts_menu_item_infos.push_back(shortcut_info3);
+    web_app_info->shortcuts_menu_icon_bitmaps.emplace_back();
 
     webapps::AppId shortcut_app_id =
         web_app::test::InstallWebApp(profile(), std::move(web_app_info));

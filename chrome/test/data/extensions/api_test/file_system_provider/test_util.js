@@ -37,8 +37,8 @@ export const defaultMetadata = {
     isDirectory: true,
     name: '',
     size: 0,
-    modificationTime: new Date(2014, 4, 28, 10, 39, 15)
-  }
+    modificationTime: new Date(2014, 4, 28, 10, 39, 15),
+  },
 };
 
 /**
@@ -58,7 +58,7 @@ export const openedFiles = {};
  */
 export const getVolumeInfo = function(fileSystemId, callback) {
   chrome.fileManagerPrivate.getVolumeMetadataList(function(volumeList) {
-    for (var i = 0; i < volumeList.length; i++) {
+    for (let i = 0; i < volumeList.length; i++) {
       // For extension backed providers, the provider id is equal to extension
       // id.
       if (volumeList[i].providerId === chrome.runtime.id &&
@@ -80,42 +80,42 @@ export const getVolumeInfo = function(fileSystemId, callback) {
  * @param {Object=} opt_options Optional extra options.
  */
 export const mountFileSystem = function(callback, opt_options) {
-  var options = {
+  const options = {
     fileSystemId: FILE_SYSTEM_ID,
     displayName: FILE_SYSTEM_NAME,
-    writable: true
+    writable: true,
   };
 
   // If any extra options are provided then merge then. They may override the
   // default ones.
   if (opt_options) {
-    for (var key in opt_options)
+    for (const key in opt_options) {
       options[key] = opt_options[key];
+    }
   }
 
-  chrome.fileSystemProvider.mount(
-      options,
-      function() {
-        // Note that chrome.test.callbackPass() cannot be used, as it would
-        // prematurely finish the test at the setUp() stage.
-        if (chrome.runtime.lastError)
-          chrome.test.fail(chrome.runtime.lastError.message);
+  chrome.fileSystemProvider.mount(options, function() {
+    // Note that chrome.test.callbackPass() cannot be used, as it would
+    // prematurely finish the test at the setUp() stage.
+    if (chrome.runtime.lastError) {
+      chrome.test.fail(chrome.runtime.lastError.message);
+    }
 
-        getVolumeInfo(options.fileSystemId, function(volumeInfo) {
-          chrome.test.assertTrue(!!volumeInfo);
-          chrome.fileSystem.requestFileSystem(
-              {
-                volumeId: volumeInfo.volumeId,
-                writable: true
-              },
-              function(inFileSystem) {
-                chrome.test.assertTrue(!!inFileSystem);
-                fileSystem = inFileSystem;
-                volumeId = volumeInfo.volumeId;
-                callback();
-              });
-        });
-      });
+    getVolumeInfo(options.fileSystemId, function(volumeInfo) {
+      chrome.test.assertTrue(!!volumeInfo);
+      chrome.fileSystem.requestFileSystem(
+          {
+            volumeId: volumeInfo.volumeId,
+            writable: true,
+          },
+          function(inFileSystem) {
+            chrome.test.assertTrue(!!inFileSystem);
+            fileSystem = inFileSystem;
+            volumeId = volumeInfo.volumeId;
+            callback();
+          });
+    });
+  });
 };
 
 /**
@@ -155,7 +155,7 @@ export const onOpenFileRequested = function(options, onSuccess, onError) {
     return;
   }
 
-  var metadata = defaultMetadata[options.filePath];
+  const metadata = defaultMetadata[options.filePath];
   if (metadata && !metadata.is_directory) {
     openedFiles[options.requestId] = options.filePath;
     onSuccess();
@@ -210,7 +210,7 @@ export const onCreateFileRequested = function(options, onSuccess, onError) {
     isDirectory: false,
     name: options.filePath.split('/').pop(),
     size: 0,
-    modificationTime: new Date()
+    modificationTime: new Date(),
   };
 
   onSuccess();  // enum ProviderError.
@@ -267,12 +267,10 @@ export const onRemoveWatcherRequested = function(options, onSuccess, onError) {
  *     on error.
  */
 export const toExternalEntry = function(entry) {
-  return new Promise(
-      function(fulfill, reject) {
-        chrome.fileManagerPrivate.resolveIsolatedEntries(
-            [entry],
-            function(entries) {
-              fulfill(entries && entries.length ? entries[0] : null);
-            });
-      });
+  return new Promise(function(fulfill, reject) {
+    chrome.fileManagerPrivate.resolveIsolatedEntries(
+        [entry], function(entries) {
+          fulfill(entries && entries.length ? entries[0] : null);
+        });
+  });
 };

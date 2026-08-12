@@ -9,14 +9,25 @@
 #include "base/containers/flat_set.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/strings/strcat.h"
 #include "chrome/browser/glic/glic_metrics.h"
 #include "chrome/browser/glic/host/host.h"
 #include "chrome/browser/glic/public/glic_instance.h"
+#include "chrome/browser/glic/service/glic_instance_impl.h"
 #include "chrome/common/chrome_features.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 
 namespace glic {
+
+namespace {
+int BytesToMB(uint64_t bytes) {
+  return static_cast<int>(bytes / 1024 / 1024);
+}
+
+const base::FeatureParam<base::TimeDelta> kMemoryMetricsPeriod{
+    &features::kGlicRecordMemoryFootprintMetrics, "period", base::Minutes(30)};
+}  // namespace
 
 GlicInstanceCoordinatorMetrics::GlicInstanceCoordinatorMetrics(
     DataProvider* data_provider)
@@ -24,6 +35,15 @@ GlicInstanceCoordinatorMetrics::GlicInstanceCoordinatorMetrics(
 
 GlicInstanceCoordinatorMetrics::~GlicInstanceCoordinatorMetrics() {
   EndConcurrentVisibility();
+}
+
+void GlicInstanceCoordinatorMetrics::StartPeriodicMemoryMetricsRecording() {
+  if (base::FeatureList::IsEnabled(
+          features::kGlicRecordMemoryFootprintMetrics)) {
+    memory_metrics_timer_.Start(
+        FROM_HERE, kMemoryMetricsPeriod.Get(), this,
+        &GlicInstanceCoordinatorMetrics::RecordPeriodicMemoryMetrics);
+  }
 }
 
 void GlicInstanceCoordinatorMetrics::OnInstanceVisibilityChanged() {
@@ -64,60 +84,90 @@ void GlicInstanceCoordinatorMetrics::RecordSwitchConversationTarget(
                                 target);
 }
 
-void GlicInstanceCoordinatorMetrics::OnHighMemoryUsage(int memory_mb) {
-  base::UmaHistogramMemoryLargeMB("Glic.Instance.MemoryUsageAtThreshold",
-                                  memory_mb);
+void GlicInstanceCoordinatorMetrics::RecordActivateTabCandidateTabCount(
+    size_t count) {
+  base::UmaHistogramCounts100(
+      "Glic.ActivateTabWithConversation.CandidateTabCount", count);
 }
 
 void GlicInstanceCoordinatorMetrics::OnMemoryPressure(
     base::MemoryPressureLevel level) {
+  std::string_view suffix = (level == base::MEMORY_PRESSURE_LEVEL_MODERATE)
+                                ? ".ModeratePressure"
+                                : ".CriticalPressure";
+  RecordMemoryFootprint(suffix);
+}
+
+void GlicInstanceCoordinatorMetrics::RecordPeriodicMemoryMetrics() {
+  RecordMemoryFootprint(".Periodic");
+}
+
+void GlicInstanceCoordinatorMetrics::RecordMemoryFootprint(
+    std::string_view suffix) {
   if (!base::FeatureList::IsEnabled(
           features::kGlicRecordMemoryFootprintMetrics)) {
     return;
   }
 
-  for (auto* instance : data_provider_->GetInstances()) {
-    base::flat_set<content::RenderProcessHost*> unique_processes;
-    Host& host = instance->host();
-    if (auto* contents = host.webui_contents()) {
-      if (auto* process = contents->GetPrimaryMainFrame()->GetProcess()) {
-        unique_processes.insert(process);
+  auto web_contents_list = data_provider_->GetAllUnhibernatedWebContents();
+  if (web_contents_list.empty()) {
+    return;
+  }
+  size_t instance_count = web_contents_list.size();
+
+  uint64_t total_webui_bytes = 0;
+  uint64_t total_client_bytes = 0;
+  uint64_t absolute_total_bytes = 0;
+
+  base::flat_set<content::RenderProcessHost*> unique_webui_processes;
+  base::flat_set<content::RenderProcessHost*> unique_client_processes;
+
+  for (const auto& item : web_contents_list) {
+    if (item.webui_contents) {
+      if (auto* process =
+              item.webui_contents->GetPrimaryMainFrame()->GetProcess()) {
+        unique_webui_processes.insert(process);
       }
     }
-    if (auto* contents = host.web_client_contents()) {
-      if (auto* process = contents->GetPrimaryMainFrame()->GetProcess()) {
-        unique_processes.insert(process);
+    if (item.web_client_contents) {
+      if (auto* process =
+              item.web_client_contents->GetPrimaryMainFrame()->GetProcess()) {
+        unique_client_processes.insert(process);
       }
-    }
-
-    uint64_t instance_memory_bytes = 0;
-    for (auto* process : unique_processes) {
-      instance_memory_bytes += process->GetPrivateMemoryFootprint();
-    }
-
-    int instance_memory_mb =
-        static_cast<int>(instance_memory_bytes / 1024 / 1024);
-
-    if (level == base::MEMORY_PRESSURE_LEVEL_MODERATE) {
-      base::UmaHistogramMemoryLargeMB(
-          "Glic.Instance.PrivateMemoryFootprint.ModeratePressure",
-          instance_memory_mb);
-    } else if (level == base::MEMORY_PRESSURE_LEVEL_CRITICAL) {
-      base::UmaHistogramMemoryLargeMB(
-          "Glic.Instance.PrivateMemoryFootprint.CriticalPressure",
-          instance_memory_mb);
     }
   }
+
+  for (auto* process : unique_webui_processes) {
+    total_webui_bytes += process->GetPrivateMemoryFootprint();
+  }
+  for (auto* process : unique_client_processes) {
+    total_client_bytes += process->GetPrivateMemoryFootprint();
+  }
+  // Assuming WebUI and Client processes are disjoint due to Site Isolation,
+  // we can sum them to get the total.
+  absolute_total_bytes = total_webui_bytes + total_client_bytes;
+
+  int avg_webui_mb = BytesToMB(total_webui_bytes / instance_count);
+  int avg_client_mb = BytesToMB(total_client_bytes / instance_count);
+  int avg_total_mb = BytesToMB(absolute_total_bytes / instance_count);
+  int total_mb = BytesToMB(absolute_total_bytes);
+
+  base::UmaHistogramMemoryLargeMB(
+      base::StrCat({"Glic.Instance.AvgWebUIPrivateMemoryFootprint", suffix}),
+      avg_webui_mb);
+  base::UmaHistogramMemoryLargeMB(
+      base::StrCat({"Glic.Instance.AvgClientPrivateMemoryFootprint", suffix}),
+      avg_client_mb);
+  base::UmaHistogramMemoryLargeMB(
+      base::StrCat({"Glic.Instance.AvgTotalPrivateMemoryFootprint", suffix}),
+      avg_total_mb);
+  base::UmaHistogramMemoryLargeMB(
+      base::StrCat({"Glic.Instance.TotalPrivateMemoryFootprint", suffix}),
+      total_mb);
 }
 
 int GlicInstanceCoordinatorMetrics::GetVisibleInstanceCount() const {
-  int count = 0;
-  for (const auto* instance : data_provider_->GetInstances()) {
-    if (instance->IsShowing()) {
-      count++;
-    }
-  }
-  return count;
+  return data_provider_->GetVisibleInstanceCount();
 }
 
 void GlicInstanceCoordinatorMetrics::EndConcurrentVisibility() {
@@ -138,24 +188,49 @@ void GlicInstanceCoordinatorMetrics::EndConcurrentVisibility() {
 std::optional<std::string>
 GlicInstanceCoordinatorMetrics::GetMostRecentlyActiveConversationId(
     raw_ptr<GlicInstance> excluded_instance) {
-  auto instances = data_provider_->GetInstances();
-  GlicInstance* most_recent = nullptr;
-  for (GlicInstance* instance : instances) {
-    if (instance == excluded_instance) {
+  auto conversations = data_provider_->GetRecentlyActiveConversations(2);
+  for (const auto& info : conversations) {
+    if (info->conversation_id.empty()) {
       continue;
     }
-    if (!instance->conversation_id().has_value()) {
+    if (excluded_instance &&
+        info->conversation_id ==
+            excluded_instance->conversation_id().value_or("")) {
       continue;
     }
-    if (!most_recent ||
-        instance->GetLastActiveTime() > most_recent->GetLastActiveTime()) {
-      most_recent = instance;
-    }
+    return info->conversation_id;
   }
-  if (most_recent) {
-    return most_recent->conversation_id();
-  } else {
-    return std::nullopt;
-  }
+  return std::nullopt;
 }
+
+void GlicInstanceCoordinatorMetrics::RecordCountOnCreation() {
+  size_t count = data_provider_->GetInstances().size();
+  base::UmaHistogramExactLinear("Glic.Instances.Count.OnCreation", count, 10);
+}
+
+void GlicInstanceCoordinatorMetrics::RecordCountAwakeOnContentsCreated() {
+  size_t unhibernated_count = 0;
+  for (GlicInstanceImpl* instance : data_provider_->GetInstances()) {
+    if (!instance->IsHibernated()) {
+      unhibernated_count++;
+    }
+  }
+  // The current instance is about to become unhibernated by this container
+  // creation.
+  unhibernated_count++;
+  base::UmaHistogramExactLinear("Glic.Instances.CountAwake.OnContentsCreated",
+                                unhibernated_count, 10);
+}
+
+void GlicInstanceCoordinatorMetrics::RecordCountActuatingOnTaskCreation() {
+  size_t actuating_count = 0;
+  for (GlicInstanceImpl* instance : data_provider_->GetInstances()) {
+    if (instance->IsActuating()) {
+      actuating_count++;
+    }
+  }
+  base::UmaHistogramExactLinear("Glic.Instances.CountActuating.OnTaskCreation",
+                                actuating_count, 10);
+}
+
 }  // namespace glic

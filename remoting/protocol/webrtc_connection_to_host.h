@@ -22,7 +22,6 @@ namespace remoting::protocol {
 
 class ClientControlDispatcher;
 class ClientEventDispatcher;
-class SessionConfig;
 class WebrtcVideoRendererAdapter;
 class WebrtcAudioSinkAdapter;
 
@@ -50,7 +49,6 @@ class WebrtcConnectionToHost : public ConnectionToHost,
                HostEventCallback* event_callback) override;
   void Disconnect(ErrorCode error) override;
   void ApplyNetworkSettings(const NetworkSettings& settings) override;
-  const SessionConfig& config() override;
   ClipboardStub* clipboard_forwarder() override;
   HostStub* host_stub() override;
   InputStub* input_stub() override;

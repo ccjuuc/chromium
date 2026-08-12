@@ -10,6 +10,7 @@
 #include "ash/system/tray/system_tray_observer.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation_traits.h"
 #include "base/time/time.h"
@@ -21,6 +22,8 @@ namespace ash {
 enum class ParentCodeValidationResult;
 class LoginAuthRecorder;
 }  // namespace ash
+
+class PrefService;
 
 // Handles method calls sent from ash to chrome. Also sends messages from chrome
 // to ash.
@@ -56,15 +59,8 @@ class LoginScreenClientImpl : public ash::LoginScreenClient,
                                            const std::string& input_method) = 0;
   };
 
-  // Handles methods related to parent access coming from ash into chrome.
-  class ParentAccessDelegate {
-   public:
-    virtual ~ParentAccessDelegate();
-
-    virtual bool ValidateParentAccessCode(const std::string& access_code) = 0;
-  };
-
-  LoginScreenClientImpl();
+  // `local_state` must be non-null and must outlive `this`.
+  explicit LoginScreenClientImpl(PrefService* local_state);
 
   LoginScreenClientImpl(const LoginScreenClientImpl&) = delete;
   LoginScreenClientImpl& operator=(const LoginScreenClientImpl&) = delete;
@@ -129,7 +125,7 @@ class LoginScreenClientImpl : public ash::LoginScreenClient,
   void LoginAsGuest();
   void SetPublicSessionKeyboardLayout(const AccountId& account_id,
                                       const std::string& locale,
-                                      base::Value::List keyboard_layouts);
+                                      base::ListValue keyboard_layouts);
 
   void MakePreAuthenticationChecks(const AccountId& account_id,
                                    base::OnceClosure continuation);
@@ -141,12 +137,14 @@ class LoginScreenClientImpl : public ash::LoginScreenClient,
   void ShowGaiaSigninInternal(const AccountId& prefilled_account);
   void StartUserRecoveryInternal(const AccountId& account_to_recover);
 
+  const raw_ref<PrefService> local_state_;
+
   raw_ptr<Delegate> delegate_ = nullptr;
 
   // Captures authentication related user metrics for login screen.
   std::unique_ptr<ash::LoginAuthRecorder> auth_recorder_;
 
-  base::ObserverList<ash::SystemTrayObserver>::Unchecked system_tray_observers_;
+  base::ObserverList<ash::SystemTrayObserver> system_tray_observers_;
 
   base::ObserverList<LoginScreenShownObserver> login_screen_shown_observers_;
 

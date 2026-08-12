@@ -21,17 +21,18 @@ VideoBitrateSuggester::VideoBitrateSuggester(
     : get_bandwidth_cb_(std::move(get_bitrate_cb)),
       min_bitrate_(config.min_bitrate),
       max_bitrate_(config.max_bitrate),
+      max_frame_rate_(config.max_frame_rate),
       suggested_bitrate_(max_bitrate_) {
   CHECK_GE(max_bitrate_, min_bitrate_);
 }
 
 VideoBitrateSuggester::~VideoBitrateSuggester() = default;
 
-int VideoBitrateSuggester::GetSuggestedBitrate() {
+uint32_t VideoBitrateSuggester::GetSuggestedBitrate() {
   // The bitrate retrieved from the callback is based on network usage, however
   // we also need to consider how well this device is handling encoding at
   // this bitrate overall.
-  const int suggested_bitrate =
+  const uint32_t suggested_bitrate =
       std::min(get_bandwidth_cb_.Run(), suggested_bitrate_);
 
   // Honor the config boundaries.
@@ -53,17 +54,36 @@ void VideoBitrateSuggester::RecordShouldDropNextFrame(bool should_drop) {
 }
 
 void VideoBitrateSuggester::UpdateSuggestionUsingExponentialAlgorithm() {
-  static constexpr int kWindowSize = 30;
-  if (frames_requested_ == kWindowSize) {
-    // Be more conservative about increasing than decreasing the bitrate.
-    constexpr double kIncreaseFactor = 1.1;
-    constexpr double kDecreaseFactor = 0.7;
+  // This is the V2 implementation of the exponential algorithm.
+  int window_size =
+      media::kCastStreamingExponentialVideoBitrateAlgorithmWindowSize.Get();
+  const double multiplier =
+      media::
+          kCastStreamingExponentialVideoBitrateAlgorithmDynamicWindowMultiplier
+              .Get();
+  if (multiplier > 0.0) {
+    window_size = std::max(1, static_cast<int>(max_frame_rate_ * multiplier));
+  }
 
-    // Dropping any frames is a bad sign.
+  if (frames_requested_ >= window_size) {
+    const int drop_threshold =
+        media::kCastStreamingExponentialVideoBitrateAlgorithmDropThreshold
+            .Get();
+    const double increase_factor =
+        media::kCastStreamingExponentialVideoBitrateAlgorithmIncreaseFactor
+            .Get();
+    const double decrease_factor =
+        media::kCastStreamingExponentialVideoBitrateAlgorithmDecreaseFactor
+            .Get();
+
     suggested_bitrate_ =
-        (frames_dropped_ > 0)
-            ? std::max<int>(min_bitrate_, suggested_bitrate_ * kDecreaseFactor)
-            : std::min<int>(max_bitrate_, suggested_bitrate_ * kIncreaseFactor);
+        (frames_dropped_ > drop_threshold)
+            ? std::max<uint32_t>(
+                  min_bitrate_,
+                  static_cast<uint32_t>(suggested_bitrate_ * decrease_factor))
+            : std::min<uint32_t>(
+                  max_bitrate_,
+                  static_cast<uint32_t>(suggested_bitrate_ * increase_factor));
 
     // Reset the frame counts to start a new window.
     frames_requested_ = 0;
@@ -72,16 +92,34 @@ void VideoBitrateSuggester::UpdateSuggestionUsingExponentialAlgorithm() {
 }
 
 void VideoBitrateSuggester::UpdateSuggestionUsingLinearAlgorithm() {
+  // The window size here is fixed at 100 frames, which ends up being between
+  // ~1.5 seconds at 60 FPS and ~3.3 seconds at 30 FPS. This is a relatively
+  // good balance between responsiveness and stability.
   static constexpr int kWindowSize = 100;
   if (frames_requested_ == kWindowSize) {
-    static constexpr int kBitrateSteps = 8;
-    const int adjustment = (max_bitrate_ - min_bitrate_) / kBitrateSteps;
+    // If more than 2% of frames were dropped, decrease the bitrate.
+    // 1% is common on even good WiFi, so 2% is a better threshold for
+    // sustained performance issues.
+    static constexpr int kDropThreshold = 2;
 
-    // Dropping any frames is a bad sign.
-    suggested_bitrate_ =
-        (frames_dropped_ > 0)
-            ? std::max(min_bitrate_, suggested_bitrate_ - adjustment)
-            : std::min(max_bitrate_, suggested_bitrate_ + adjustment);
+    // The adjust step allows for eight steps between the minimum and maximum
+    // bitrate. These concrete delta values ensure that the encoder does not
+    // have to make major adjustments for only minor changes in bitrate.
+    static constexpr int kBitrateSteps = 8;
+    const uint32_t adjustment = (max_bitrate_ - min_bitrate_) / kBitrateSteps;
+
+    if (frames_dropped_ > kDropThreshold) {
+      // Decrease bitrate: protect against unsigned underflow first.
+      auto decreased_bitrate = (suggested_bitrate_ > adjustment)
+                                   ? suggested_bitrate_ - adjustment
+                                   : 0;
+
+      suggested_bitrate_ = std::max(min_bitrate_, decreased_bitrate);
+    } else {
+      // Increase bitrate: clamp to the absolute maximum
+      suggested_bitrate_ =
+          std::min(max_bitrate_, suggested_bitrate_ + adjustment);
+    }
 
     // Reset the frame counts to start a new window.
     frames_requested_ = 0;

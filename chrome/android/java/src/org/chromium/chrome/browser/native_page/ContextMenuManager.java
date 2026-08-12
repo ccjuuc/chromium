@@ -13,8 +13,11 @@ import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.download.DownloadUtils;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
+import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
 import org.chromium.chrome.browser.offlinepages.OfflinePageBridge;
+import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.suggestions.tile.TileUtils;
 import org.chromium.chrome.browser.ui.native_page.TouchEnabledDelegate;
 import org.chromium.components.browser_ui.widget.BrowserUiListMenuUtils;
@@ -27,6 +30,7 @@ import org.chromium.ui.listmenu.ListMenuItemProperties;
 import org.chromium.ui.modelutil.MVCListAdapter;
 import org.chromium.ui.mojom.WindowOpenDisposition;
 import org.chromium.ui.widget.RectProvider;
+import org.chromium.ui.widget.Toast;
 import org.chromium.ui.widget.ViewRectProvider;
 import org.chromium.url.GURL;
 
@@ -48,6 +52,7 @@ public class ContextMenuManager {
         ContextMenuItemId.OPEN_IN_NEW_TAB_IN_GROUP,
         ContextMenuItemId.OPEN_IN_INCOGNITO_TAB,
         ContextMenuItemId.OPEN_IN_INCOGNITO_WINDOW,
+        ContextMenuItemId.OPEN_IN_NEW_WINDOW,
         ContextMenuItemId.OPEN_IN_OTHER_WINDOW,
         ContextMenuItemId.OPEN_ALL,
         ContextMenuItemId.SAVE_FOR_OFFLINE,
@@ -71,20 +76,21 @@ public class ContextMenuManager {
         int OPEN_IN_NEW_TAB_IN_GROUP = 2;
         int OPEN_IN_INCOGNITO_TAB = 3;
         int OPEN_IN_INCOGNITO_WINDOW = 4;
-        int OPEN_IN_OTHER_WINDOW = 5;
-        int OPEN_ALL = 6;
-        int SAVE_FOR_OFFLINE = 7;
-        int ADD_TO_MY_APPS = 8;
-        int REMOVE = 9;
-        int REMOVE_ALL = 10;
-        int PIN_THIS_SHORTCUT = 11;
-        int EDIT_SHORTCUT = 12;
-        int UNPIN = 13;
-        int MOVE_UP = 14;
-        int MOVE_DOWN = 15;
-        int HIDE_ALL = 16;
+        int OPEN_IN_NEW_WINDOW = 5;
+        int OPEN_IN_OTHER_WINDOW = 6;
+        int OPEN_ALL = 7;
+        int SAVE_FOR_OFFLINE = 8;
+        int ADD_TO_MY_APPS = 9;
+        int REMOVE = 10;
+        int REMOVE_ALL = 11;
+        int PIN_THIS_SHORTCUT = 12;
+        int EDIT_SHORTCUT = 13;
+        int UNPIN = 14;
+        int MOVE_UP = 15;
+        int MOVE_DOWN = 16;
+        int HIDE_ALL = 17;
 
-        int NUM_ENTRIES = 17;
+        int NUM_ENTRIES = 18;
     }
 
     private final NativePageNavigationDelegate mNavigationDelegate;
@@ -252,7 +258,15 @@ public class ContextMenuManager {
             if (!shouldShowItem(itemId, delegate)) continue;
 
             int titleId = getResourceIdForMenuItem(itemId);
-            menuModel.add(new ListItemBuilder().withTitleRes(titleId).withMenuId(itemId).build());
+            ListItemBuilder builder =
+                    new ListItemBuilder().withTitleRes(titleId).withMenuId(itemId);
+            if (itemId == ContextMenuItemId.SAVE_FOR_OFFLINE
+                    && ProfileManager.isInitialized()
+                    && DownloadUtils.isDownloadRestrictedByPolicy(
+                            ProfileManager.getLastUsedRegularProfile())) {
+                builder.withEnabled(false);
+            }
+            menuModel.add(builder.build());
         }
 
         if (menuModel.isEmpty()) {
@@ -349,11 +363,13 @@ public class ContextMenuManager {
             case ContextMenuItemId.OPEN_IN_INCOGNITO_TAB:
                 return mNavigationDelegate.isOpenInIncognitoEnabled()
                         && !IncognitoUtils.shouldOpenIncognitoAsWindow();
+            case ContextMenuItemId.OPEN_IN_NEW_WINDOW:
+                return MultiWindowUtils.isLinkNavigationToNewWindowSupported();
             case ContextMenuItemId.OPEN_IN_INCOGNITO_WINDOW:
                 return mNavigationDelegate.isOpenInIncognitoEnabled()
-                        && IncognitoUtils.shouldOpenIncognitoAsWindow();
+                        && MultiWindowUtils.isLinkNavigationToIncognitoWindowSupported();
             case ContextMenuItemId.OPEN_IN_OTHER_WINDOW:
-                return mNavigationDelegate.isOpenInAnotherWindowEnabled();
+                return mNavigationDelegate.isOpenInOtherWindowEnabled();
             case ContextMenuItemId.OPEN_ALL:
                 return true;
             case ContextMenuItemId.SAVE_FOR_OFFLINE:
@@ -399,6 +415,8 @@ public class ContextMenuManager {
                 return R.string.contextmenu_open_in_incognito_tab;
             case ContextMenuItemId.OPEN_IN_INCOGNITO_WINDOW:
                 return R.string.contextmenu_open_in_incognito_window;
+            case ContextMenuItemId.OPEN_IN_NEW_WINDOW:
+                return R.string.contextmenu_open_in_new_window;
             case ContextMenuItemId.OPEN_IN_OTHER_WINDOW:
                 return R.string.contextmenu_open_in_other_window;
             case ContextMenuItemId.OPEN_ALL:
@@ -452,9 +470,11 @@ public class ContextMenuManager {
                 RecordUserAction.record(
                         mUserActionPrefix + ".ContextMenu.OpenItemInIncognitoWindow");
                 return true;
+            case ContextMenuItemId.OPEN_IN_NEW_WINDOW:
+                delegate.openItem(WindowOpenDisposition.NEW_WINDOW);
+                RecordUserAction.record(mUserActionPrefix + ".ContextMenu.OpenItemInNewWindow");
+                return true;
             case ContextMenuItemId.OPEN_IN_OTHER_WINDOW:
-                // TODO(crbug.com/450631766): Update WindowOpenDisposition to handle
-                // OPEN_IN_OTHER_WINDOW
                 delegate.openItem(WindowOpenDisposition.NEW_WINDOW);
                 RecordUserAction.record(mUserActionPrefix + ".ContextMenu.OpenItemInOtherWindow");
                 return true;
@@ -463,7 +483,19 @@ public class ContextMenuManager {
                 RecordUserAction.record(mUserActionPrefix + ".ContextMenu.OpenAllItems");
                 return true;
             case ContextMenuItemId.SAVE_FOR_OFFLINE:
-                delegate.openItem(WindowOpenDisposition.SAVE_TO_DISK);
+                if (ProfileManager.isInitialized()
+                        && DownloadUtils.isDownloadRestrictedByPolicy(
+                                ProfileManager.getLastUsedRegularProfile())) {
+                    if (mAnchorView != null) {
+                        Toast.makeText(
+                                        mAnchorView.getContext(),
+                                        R.string.download_message_single_download_blocked,
+                                        Toast.LENGTH_SHORT)
+                                .show();
+                    }
+                } else {
+                    delegate.openItem(WindowOpenDisposition.SAVE_TO_DISK);
+                }
                 RecordUserAction.record(mUserActionPrefix + ".ContextMenu.DownloadItem");
                 return true;
             case ContextMenuItemId.REMOVE:

@@ -15,6 +15,8 @@
 #include <sstream>
 #include <utility>
 
+#include "ash/constants/ash_policy_pref_names.h"
+#include "ash/constants/ash_pref_names.h"
 #include "base/base64.h"
 #include "base/check.h"
 #include "base/feature_list.h"
@@ -34,7 +36,6 @@
 #include "chrome/browser/ash/policy/status_collector/child_activity_storage.h"
 #include "chrome/browser/ash/policy/status_collector/status_collector_state.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/login/login_state/login_state.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
@@ -167,7 +168,7 @@ ChildStatusCollector::ChildStatusCollector(
   DCHECK(pref_service_->GetInitializationStatus() !=
          PrefService::INITIALIZATION_STATUS_WAITING);
   activity_storage_ = std::make_unique<ChildActivityStorage>(
-      pref_service_, prefs::kUserActivityTimes, activity_day_start);
+      pref_service_, ash::prefs::kUserActivityTimes, activity_day_start);
 }
 
 ChildStatusCollector::~ChildStatusCollector() {
@@ -177,7 +178,7 @@ ChildStatusCollector::~ChildStatusCollector() {
 base::TimeDelta ChildStatusCollector::GetActiveChildScreenTime() {
   UpdateChildUsageTime();
   return base::Milliseconds(
-      pref_service_->GetInteger(prefs::kChildScreenTimeMilliseconds));
+      pref_service_->GetInteger(ash::prefs::kChildScreenTimeMilliseconds));
 }
 
 // static
@@ -235,9 +236,10 @@ void ChildStatusCollector::UpdateChildUsageTime() {
   if (reset_time > now)
     reset_time -= base::Days(1);
   // Reset screen time if it has not been reset today.
-  if (reset_time > pref_service_->GetTime(prefs::kLastChildScreenTimeReset)) {
-    pref_service_->SetTime(prefs::kLastChildScreenTimeReset, now);
-    pref_service_->SetInteger(prefs::kChildScreenTimeMilliseconds, 0);
+  if (reset_time >
+      pref_service_->GetTime(ash::prefs::kLastChildScreenTimeReset)) {
+    pref_service_->SetTime(ash::prefs::kLastChildScreenTimeReset, now);
+    pref_service_->SetInteger(ash::prefs::kChildScreenTimeMilliseconds, 0);
     pref_service_->CommitPendingWrite();
   }
 
@@ -304,7 +306,7 @@ bool ChildStatusCollector::GetAppActivity(
     base::UmaHistogramMemoryKB(kReportSizeHistogramName, size_in_bytes / 1024);
 
     int64_t last_successful_report_time_int = pref_service_->GetInt64(
-        prefs::kPerAppTimeLimitsLastSuccessfulReportTime);
+        ash::prefs::kPerAppTimeLimitsLastSuccessfulReportTime);
     if (last_successful_report_time_int > 0) {
       base::Time last_successful_report_time =
           base::Time::FromDeltaSinceWindowsEpoch(
@@ -355,7 +357,7 @@ bool ChildStatusCollector::FillUserSpecificFields(
 
   // Android status.
   const bool report_android_status =
-      profile_->GetPrefs()->GetBoolean(prefs::kReportArcStatusEnabled);
+      profile_->GetPrefs()->GetBoolean(ash::prefs::kReportArcStatusEnabled);
   if (report_android_status)
     GetAndroidStatus(state);
 

@@ -506,4 +506,95 @@ TEST_F(ArcFileSystemBridgeTest, PropagatesOnMediaStoreUriAddedEvents) {
   arc_file_system_bridge_->OnMediaStoreUriAdded(uri, mojo::Clone(metadata));
 }
 
+TEST_F(ArcFileSystemBridgeTest,
+       DropsOnMediaStoreUriAddedEventsForInvalidNames) {
+  class MockObserver : public ArcFileSystemBridge::Observer {
+   public:
+    MOCK_METHOD(void,
+                OnMediaStoreUriAdded,
+                (const GURL& uri, const mojom::MediaStoreMetadata& metadata),
+                (override));
+  };
+
+  // Register a mock observer.
+  testing::NiceMock<MockObserver> observer;
+  base::ScopedObservation<ArcFileSystemBridge, ArcFileSystemBridge::Observer>
+      observation{&observer};
+  observation.Observe(arc_file_system_bridge_.get());
+
+  // Expect observer never to be notified for any of the events below.
+  EXPECT_CALL(observer, OnMediaStoreUriAdded).Times(0);
+
+  // Display names which are not a single path component should be rejected.
+  for (const std::string display_name :
+       {"../foo.pdf", "..", "bar/foo.pdf", "/foo.pdf"}) {
+    auto metadata = mojom::MediaStoreMetadata::NewDownload(
+        mojom::MediaStoreDownloadMetadata::New(
+            display_name,
+            /*owner_package_name=*/"com.android.documentsui",
+            /*relative_path=*/base::FilePath("Download/")));
+
+    // Simulate an `OnMediaStoreUriAdded()` event from ARC.
+    arc_file_system_bridge_->OnMediaStoreUriAdded(GURL("uri"),
+                                                  std::move(metadata));
+  }
+}
+
+TEST_F(ArcFileSystemBridgeTest, OpenFileToReadOnArcVmRequiresSharedPath) {
+  auto* command_line = base::CommandLine::ForCurrentProcess();
+  command_line->InitFromArgv({"", "--enable-arcvm"});
+  EXPECT_TRUE(IsArcVmEnabled());
+
+  const guest_os::GuestId arcvm_id = guest_os::GuestId(
+      guest_os::VmType::ARCVM, kArcVmName, /*container_name=*/"");
+  guest_os::GuestOsSessionTrackerFactory::GetForProfile(profile_)
+      ->AddGuestForTesting(
+          arcvm_id,
+          guest_os::GuestInfo{arcvm_id, /*cid=*/32, /*username=*/"",
+                              /*homedir=*/base::FilePath(), /*ipv4_address=*/"",
+                              /*sftp_vsock_port=*/0});
+
+  // Create a real file in temp directory that we will try to open.
+  base::FilePath temp_file_path;
+  ASSERT_TRUE(
+      base::CreateTemporaryFileInDir(temp_dir_.GetPath(), &temp_file_path));
+  ASSERT_TRUE(base::WriteFile(temp_file_path, "hello"));
+
+  // Register the temp directory as an SmbFs mount point.
+  storage::ExternalMountPoints* system_mount_points =
+      storage::ExternalMountPoints::GetSystemInstance();
+  constexpr char kSmbFsTestMountName[] = "test-smb";
+  EXPECT_TRUE(system_mount_points->RegisterFileSystem(
+      kSmbFsTestMountName, storage::FileSystemType::kFileSystemTypeSmbFs, {},
+      temp_dir_.GetPath()));
+
+  // Create the externalfile URL.
+  GURL smbfs_url =
+      ash::CreateExternalFileURLFromPath(profile_, temp_file_path, true);
+  GURL chrome_content_provider_url =
+      EncodeToChromeContentProviderUrl(smbfs_url);
+
+  // 1. Without sharing the path, OpenFileToRead should fail.
+  {
+    base::test::TestFuture<mojo::ScopedHandle> future;
+    arc_file_system_bridge_->OpenFileToRead(chrome_content_provider_url.spec(),
+                                            future.GetCallback());
+    EXPECT_FALSE(future.Get().is_valid());
+  }
+
+  // 2. Register the path as shared.
+  guest_os::GuestOsSharePathFactory::GetForProfile(profile_)
+      ->RegisterSharedPath(kArcVmName, temp_file_path);
+
+  // 3. With sharing the path, OpenFileToRead should succeed.
+  {
+    base::test::TestFuture<mojo::ScopedHandle> future;
+    arc_file_system_bridge_->OpenFileToRead(chrome_content_provider_url.spec(),
+                                            future.GetCallback());
+    EXPECT_TRUE(future.Get().is_valid());
+  }
+
+  system_mount_points->RevokeFileSystem(kSmbFsTestMountName);
+}
+
 }  // namespace arc

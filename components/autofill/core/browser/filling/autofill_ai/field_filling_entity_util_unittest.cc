@@ -14,24 +14,27 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/autofill_format_string.h"
 #include "components/autofill/core/browser/data_manager/autofill_ai/entity_data_manager.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type_names.h"
 #include "components/autofill/core/browser/data_quality/addresses/address_normalizer_impl.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/filling/field_filling_util.h"
 #include "components/autofill/core/browser/form_processing/autofill_ai/determine_attribute_types.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/form_structure_test_api.h"
 #include "components/autofill/core/browser/foundations/test_autofill_client.h"
 #include "components/autofill/core/browser/geo/alternative_state_name_map_test_utils.h"
+#include "components/autofill/core/browser/network/autofill_ai/mock_autofill_ai_personal_context_access_manager.h"
 #include "components/autofill/core/browser/proto/api_v1.pb.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/entity_data_test_utils.h"
 #include "components/autofill/core/browser/webdata/autofill_ai/entity_table.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service_test_helper.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_test_utils.h"
-#include "components/autofill/core/common/mojom/autofill_types.mojom-data-view.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -52,6 +55,7 @@ using ::i18n::addressinput::TestdataSource;
 using ::testing::ElementsAre;
 using ::testing::IsEmpty;
 using ::testing::Pointee;
+using ::testing::Return;
 using ::testing::UnorderedElementsAre;
 using FieldPrediction =
     AutofillQueryResponse::FormSuggestion::FieldSuggestion::FieldPrediction;
@@ -101,6 +105,10 @@ std::u16string GetFillValueForEntity(
             return AttributeType(AttributeTypeName::kRedressNumberName);
           case EntityTypeName::kVehicle:
             return AttributeType(AttributeTypeName::kVehicleOwner);
+          case EntityTypeName::kOrder:
+            return std::nullopt;
+          case EntityTypeName::kShipment:
+            return std::nullopt;
         }
         return std::nullopt;
       }();
@@ -111,9 +119,10 @@ std::u16string GetFillValueForEntity(
     }
   }
 
-  return GetFillValueForEntity(entity, fields_and_types, *fields[0],
-                               action_persistence, app_locale,
-                               address_normalizer);
+  return GetFillingValueAndTypeForEntity(entity, fields_and_types, *fields[0],
+                                         action_persistence, app_locale,
+                                         address_normalizer)
+      .value;
 }
 
 // Wrapper for GetFillValueForEntity() that calls DetermineAttributeTypes() for
@@ -136,7 +145,9 @@ class FieldFillingEntityUtilTest : public testing::Test {
         client().GetPrefs(), client().GetIdentityManager(),
         client().GetSyncService(), helper_.autofill_webdata_service(),
         /*history_service=*/nullptr,
-        /*strike_database=*/nullptr));
+        /*pcontext_manager=*/nullptr,
+        /*strike_database=*/nullptr,
+        /*variation_country_code=*/GeoIpCountryCode("US")));
     client().SetUpPrefsAndIdentityForAutofillAi();
 
     test_api(form_).PushField(
@@ -196,6 +207,29 @@ TEST_F(FieldFillingEntityUtilTest, GetFillableEntityInstances_DependsOnPrefs) {
   EXPECT_THAT(GetFillableEntityInstances(client()), IsEmpty());
 }
 
+TEST_F(FieldFillingEntityUtilTest,
+       GetFillableEntityInstances_DependsOnEnterprisePolicy) {
+  base::test::ScopedFeatureList feature_list{
+      features::kAutofillEnableAutofillSettingsEnterprisePolicy};
+
+  EntityInstance passport = test::GetPassportEntityInstance();
+  EntityInstance vehicle = test::GetVehicleEntityInstance();
+  AddOrUpdateEntityInstance(passport);
+  AddOrUpdateEntityInstance(vehicle);
+
+  client().SetAutofillTypeBlockedByPolicy(
+      AutofillClient::AutofillPolicyDataCategory::kIdentityDocs, true);
+  EXPECT_THAT(GetFillableEntityInstances(client()),
+              UnorderedElementsAre(Pointee(vehicle)));
+
+  client().SetAutofillTypeBlockedByPolicy(
+      AutofillClient::AutofillPolicyDataCategory::kIdentityDocs, false);
+  client().SetAutofillTypeBlockedByPolicy(
+      AutofillClient::AutofillPolicyDataCategory::kTravel, true);
+  EXPECT_THAT(GetFillableEntityInstances(client()),
+              UnorderedElementsAre(Pointee(passport)));
+}
+
 // If there are no Autofill AI fields, none is blocked.
 TEST_F(FieldFillingEntityUtilTest, NoAutofillAiField) {
   AddOrUpdateEntityInstance(test::GetPassportEntityInstance());
@@ -241,10 +275,198 @@ TEST_F(FieldFillingEntityUtilTest, FillingUnavailable) {
   EXPECT_THAT(GetFieldsFillableByAutofillAi(form(), client()), IsEmpty());
 }
 
+TEST_F(FieldFillingEntityUtilTest, GetEntityTypesBeingFetched) {
+  AutofillField field;
+  field.SetTypeTo(AutofillType(PASSPORT_NUMBER),
+                  AutofillPredictionSource::kServerCrowdsourcing);
+
+  // When access manager is null, returns empty.
+  client().set_personal_context_access_manager(nullptr);
+  EXPECT_THAT(GetEntityTypesBeingFetched(field, client()), IsEmpty());
+
+  testing::NiceMock<MockAutofillAiPersonalContextAccessManager> access_manager;
+  client().set_personal_context_access_manager(&access_manager);
+  using RequestStatus = AutofillAiPersonalContextAccessManager::RequestStatus;
+
+  // When ServerHasSpiiPresenceSignal is false, returns empty.
+  ON_CALL(access_manager,
+          ServerHasSpiiPresenceSignal(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(false));
+  ON_CALL(access_manager,
+          GetPrefetchStatusByEntityType(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(RequestStatus::kPending));
+  EXPECT_THAT(GetEntityTypesBeingFetched(field, client()), IsEmpty());
+
+  // When status is not kPending (e.g. kSuccess), returns empty.
+  ON_CALL(access_manager,
+          ServerHasSpiiPresenceSignal(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(true));
+  ON_CALL(access_manager,
+          GetPrefetchStatusByEntityType(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(RequestStatus::kSuccess));
+  EXPECT_THAT(GetEntityTypesBeingFetched(field, client()), IsEmpty());
+
+  // When ServerHasSpiiPresenceSignal is true and status is kPending, returns
+  // entity type.
+  ON_CALL(access_manager,
+          GetPrefetchStatusByEntityType(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(RequestStatus::kPending));
+  EXPECT_THAT(GetEntityTypesBeingFetched(field, client()),
+              UnorderedElementsAre(EntityType(EntityTypeName::kPassport)));
+}
+
+TEST_F(FieldFillingEntityUtilTest, GetFieldsFillableByAutofillAi_BeingFetched) {
+  testing::NiceMock<MockAutofillAiPersonalContextAccessManager> access_manager;
+  client().set_personal_context_access_manager(&access_manager);
+  using RequestStatus = AutofillAiPersonalContextAccessManager::RequestStatus;
+
+  test_api(form()).SetFieldTypes({PASSPORT_NUMBER, NAME_FULL},
+                                 {PASSPORT_NUMBER, NO_SERVER_DATA});
+
+  // No entities exist in EntityDataManager.
+  EXPECT_THAT(GetFillableEntityInstances(client()), IsEmpty());
+
+  ON_CALL(access_manager, ServerHasSpiiPresenceSignal)
+      .WillByDefault(Return(false));
+  ON_CALL(access_manager, GetPrefetchStatusByEntityType)
+      .WillByDefault(Return(RequestStatus::kNotStarted));
+
+  // Server has data available and prefetch is pending for Passport.
+  ON_CALL(access_manager,
+          ServerHasSpiiPresenceSignal(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(true));
+  ON_CALL(access_manager,
+          GetPrefetchStatusByEntityType(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(RequestStatus::kPending));
+
+  // Even though there are no entity instances stored yet, fields belonging to
+  // the pending entity type are considered fillable.
+  EXPECT_THAT(GetFieldsFillableByAutofillAi(form(), client()),
+              ElementsAre(field(0), field(1)));
+}
+
+// Tests that WillFillSensitiveAttributes() correctly identifies whether a
+// section contains fields that would be filled with sensitive attributes.
+TEST_F(FieldFillingEntityUtilTest, WillFillSensitiveAttributes) {
+  EntityInstance passport = test::GetPassportEntityInstance();
+  // Case 1: Form contains a sensitive field (PASSPORT_NUMBER).
+  test_api(form()).SetFieldTypes({NAME_FULL, PASSPORT_NUMBER});
+  EXPECT_TRUE(WillFillSensitiveAttributes(
+      passport, form(), form().fields()[0]->section(), kAppLocaleUS));
+
+  // Case 2: Form only contains non-sensitive fields.
+  test_api(form()).SetFieldTypes({NAME_FULL, PASSPORT_ISSUE_DATE});
+  EXPECT_FALSE(WillFillSensitiveAttributes(
+      passport, form(), form().fields()[0]->section(), kAppLocaleUS));
+}
+
+// Tests that WillRequireServerFetch() correctly identifies whether
+// a server fetch is needed (sensitive field + masked entity).
+TEST_F(FieldFillingEntityUtilTest, WillRequireServerFetch) {
+  EntityInstance local_passport = test::GetPassportEntityInstance();
+  EntityInstance masked_server_passport =
+      test::MaskEntityInstance(test::GetPassportEntityInstance(
+          {.record_type = EntityInstance::RecordType::kServerWallet}));
+  EntityInstance masked_personal_context_passport =
+      test::MaskEntityInstance(test::GetPassportEntityInstance(
+          {.record_type = EntityInstance::RecordType::kPersonalContext}));
+
+  test_api(form()).SetFieldTypes({NAME_FULL, PASSPORT_NUMBER});
+
+  // 1. Neither feature enabled.
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/{features::kAutofillAmbientAutofill,
+                               features::kAutofillAiWalletPrivatePasses});
+    EXPECT_FALSE(WillRequireServerFetch(
+        local_passport, form(), form().fields()[0]->section(), kAppLocaleUS));
+    EXPECT_FALSE(WillRequireServerFetch(masked_server_passport, form(),
+                                        form().fields()[0]->section(),
+                                        kAppLocaleUS));
+    EXPECT_FALSE(WillRequireServerFetch(masked_personal_context_passport,
+                                        form(), form().fields()[0]->section(),
+                                        kAppLocaleUS));
+  }
+
+  // 2. Only kAutofillAmbientAutofill enabled.
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitWithFeatures(
+        /*enabled_features=*/{features::kAutofillAmbientAutofill},
+        /*disabled_features=*/{features::kAutofillAiWalletPrivatePasses});
+    EXPECT_FALSE(WillRequireServerFetch(
+        local_passport, form(), form().fields()[0]->section(), kAppLocaleUS));
+    EXPECT_FALSE(WillRequireServerFetch(masked_server_passport, form(),
+                                        form().fields()[0]->section(),
+                                        kAppLocaleUS));
+    EXPECT_TRUE(WillRequireServerFetch(masked_personal_context_passport, form(),
+                                       form().fields()[0]->section(),
+                                       kAppLocaleUS));
+  }
+
+  // 3. Only kAutofillAiWalletPrivatePasses enabled.
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitWithFeatures(
+        /*enabled_features=*/{features::kAutofillAiWalletPrivatePasses},
+        /*disabled_features=*/{features::kAutofillAmbientAutofill});
+    EXPECT_FALSE(WillRequireServerFetch(
+        local_passport, form(), form().fields()[0]->section(), kAppLocaleUS));
+    EXPECT_TRUE(WillRequireServerFetch(masked_server_passport, form(),
+                                       form().fields()[0]->section(),
+                                       kAppLocaleUS));
+    EXPECT_FALSE(WillRequireServerFetch(masked_personal_context_passport,
+                                        form(), form().fields()[0]->section(),
+                                        kAppLocaleUS));
+  }
+
+  // 4. Both enabled.
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitWithFeatures(
+        /*enabled_features=*/{features::kAutofillAmbientAutofill,
+                              features::kAutofillAiWalletPrivatePasses},
+        /*disabled_features=*/{});
+    EXPECT_FALSE(WillRequireServerFetch(
+        local_passport, form(), form().fields()[0]->section(), kAppLocaleUS));
+    EXPECT_TRUE(WillRequireServerFetch(masked_server_passport, form(),
+                                       form().fields()[0]->section(),
+                                       kAppLocaleUS));
+    EXPECT_TRUE(WillRequireServerFetch(masked_personal_context_passport, form(),
+                                       form().fields()[0]->section(),
+                                       kAppLocaleUS));
+  }
+
+  // Case where no sensitive fields are present.
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitWithFeatures(
+        /*enabled_features=*/{features::kAutofillAmbientAutofill,
+                              features::kAutofillAiWalletPrivatePasses},
+        /*disabled_features=*/{});
+    test_api(form()).SetFieldTypes({NAME_FULL, PASSPORT_ISSUE_DATE});
+    EXPECT_FALSE(WillRequireServerFetch(masked_server_passport, form(),
+                                        form().fields()[0]->section(),
+                                        kAppLocaleUS));
+    EXPECT_FALSE(WillRequireServerFetch(masked_personal_context_passport,
+                                        form(), form().fields()[0]->section(),
+                                        kAppLocaleUS));
+  }
+}
+
 class GetFillValueForEntityTest : public testing::Test {
+ public:
+  GetFillValueForEntityTest() {
+    feature_list_.InitWithFeatures(
+        /*enabled_features=*/{features::kAutofillAiWithDataSchema,
+                              features::kAutofillAiWalletPrivatePasses},
+        /*disabled_features=*/{});
+  }
+
  private:
-  base::test::ScopedFeatureList feature_list_{
-      features::kAutofillAiWithDataSchema};
+  base::test::ScopedFeatureList feature_list_;
   test::AutofillUnitTestEnvironment autofill_test_environment_;
 };
 
@@ -284,9 +506,28 @@ TEST_F(GetFillValueForEntityTest, ObfuscatedAttributes) {
   constexpr char16_t kNumber[] = u"12";
   EntityInstance passport =
       test::GetPassportEntityInstance({.number = kNumber});
+
   EXPECT_EQ(GetFillValueForEntity(passport, field,
                                   mojom::ActionPersistence::kPreview),
-            u"\u2022\u2060\u2006\u2060\u2022\u2060\u2006\u2060");
+            GetObfuscatedValue(kNumber));
+  EXPECT_EQ(
+      GetFillValueForEntity(passport, field, mojom::ActionPersistence::kFill),
+      kNumber);
+}
+
+// Tests that select element are not previewed with obfuscated attributes.
+TEST_F(GetFillValueForEntityTest, ObfuscatedSelectElement) {
+  constexpr char16_t kNumber[] = u"12";
+  auto field = std::make_unique<AutofillField>(
+      test::CreateTestSelectField({"11", "12", "13"}));
+  field->set_server_predictions({CreatePrediction(PASSPORT_NUMBER)});
+
+  EntityInstance passport =
+      test::GetPassportEntityInstance({.number = kNumber});
+
+  EXPECT_EQ(GetFillValueForEntity(passport, field,
+                                  mojom::ActionPersistence::kPreview),
+            u"");
   EXPECT_EQ(
       GetFillValueForEntity(passport, field, mojom::ActionPersistence::kFill),
       kNumber);
@@ -839,6 +1080,22 @@ TEST_F(GetFillValueForEntityTest_Date, MonthStringAbbreviations) {
       GetFillValueForEntity(passport(), field, mojom::ActionPersistence::kFill,
                             /*app_locale=*/""),
       u"Dec");
+}
+
+// Tests that `GetTargetFieldOrigin` returns the given origin if it is not
+// opaque, and falls back to the primary main frame origin when opaque.
+TEST_F(FieldFillingEntityUtilTest, GetTargetFieldOrigin) {
+  TestAutofillClient client;
+  client.set_last_committed_primary_main_frame_url(
+      GURL("https://primary-main-frame.com"));
+
+  url::Origin non_opaque_origin =
+      url::Origin::Create(GURL("https://field-origin.com"));
+  EXPECT_EQ(GetTargetFieldOrigin(non_opaque_origin, client), non_opaque_origin);
+
+  url::Origin opaque_origin;
+  EXPECT_EQ(GetTargetFieldOrigin(opaque_origin, client),
+            url::Origin::Create(GURL("https://primary-main-frame.com")));
 }
 
 }  // namespace

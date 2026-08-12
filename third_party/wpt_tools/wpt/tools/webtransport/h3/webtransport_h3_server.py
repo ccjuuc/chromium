@@ -191,6 +191,9 @@ class WebTransportH3Protocol(QuicConnectionProtocol):
         elif capsule.type == CapsuleType.CLOSE_WEBTRANSPORT_SESSION:
             self._set_close_info_and_may_close_session(
                 data=capsule.data, fin=fin)
+        elif capsule.type == CapsuleType.WT_DRAIN_SESSION:
+            # Ignore WT_DRAIN_SESSION - it's informational only
+            pass
         else:
             # Ignore unknown capsules.
             return
@@ -203,7 +206,8 @@ class WebTransportH3Protocol(QuicConnectionProtocol):
             raise ProtocolError(
                 f"Unimplemented capsule type: {capsule.type}")
         if capsule.type in {CapsuleType.REGISTER_DATAGRAM_NO_CONTEXT_DRAFT04,
-                            CapsuleType.CLOSE_WEBTRANSPORT_SESSION}:
+                            CapsuleType.CLOSE_WEBTRANSPORT_SESSION,
+                            CapsuleType.WT_DRAIN_SESSION}:
             # We'll handle this case below.
             pass
         else:
@@ -223,6 +227,9 @@ class WebTransportH3Protocol(QuicConnectionProtocol):
         elif capsule.type == CapsuleType.CLOSE_WEBTRANSPORT_SESSION:
             self._set_close_info_and_may_close_session(
                 data=capsule.data, fin=fin)
+        elif capsule.type == CapsuleType.WT_DRAIN_SESSION:
+            # Ignore WT_DRAIN_SESSION - it's informational only
+            pass
 
     def _set_close_info_and_may_close_session(
             self, data: bytes, fin: bool) -> None:
@@ -439,6 +446,18 @@ class WebTransportSession:
         """
         self._http._quic.reset_stream(stream_id, code)
 
+    def initiate_draining(self) -> None:
+        """
+        Initiate graceful session draining by sending a WT_DRAIN_SESSION capsule.
+        After calling this, the session remains usable and new streams can be opened,
+        but the client is notified that the session will be closed soon.
+        """
+        assert self._protocol._session_stream_id is not None
+        session_stream_id = self._protocol._session_stream_id
+        capsule = H3Capsule(CapsuleType.WT_DRAIN_SESSION, b'')
+        self._http.send_data(
+            session_stream_id, capsule.encode(), end_stream=False)
+
 
 class WebTransportEventHandler:
     def __init__(self, session: WebTransportSession,
@@ -601,7 +620,10 @@ def server_is_running(host: str, port: int, timeout: float) -> bool:
     Check the WebTransport over HTTP/3 server is running at the given `host` and
     `port`.
     """
-    loop = asyncio.get_event_loop()
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
     return loop.run_until_complete(_connect_server_with_timeout(host, port, timeout))
 
 

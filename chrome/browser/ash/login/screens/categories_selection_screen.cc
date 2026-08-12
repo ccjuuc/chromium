@@ -7,11 +7,11 @@
 #include <memory>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/constants/ash_pref_names.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/oobe_apps_service/oobe_apps_discovery_service.h"
 #include "chrome/browser/ash/login/oobe_apps_service/oobe_apps_discovery_service_factory.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
@@ -34,7 +34,7 @@ constexpr const int kMaxUseCasesCount = 20;
 
 bool HasBeenSelected(std::string category_id) {
   PrefService* prefs = ProfileManager::GetActiveUserProfile()->GetPrefs();
-  const base::Value::List& selected_categories =
+  const base::ListValue& selected_categories =
       prefs->GetList(prefs::kOobeCategoriesSelected);
   for (const auto& category : selected_categories) {
     if (category.GetString() == category_id) {
@@ -172,7 +172,7 @@ void CategoriesSelectionScreen::OnResponseReceived(
 
   use_case_id_to_order_.clear();
 
-  base::Value::List categories_list;
+  base::ListValue categories_list;
   for (OOBEDeviceUseCase category : categories) {
     // Disregard the category with order 0, as it relates to a general,
     // non-specific use case (oobe_otheres).
@@ -182,7 +182,7 @@ void CategoriesSelectionScreen::OnResponseReceived(
 
     use_case_id_to_order_[category.GetID()] = category.GetOrder();
 
-    base::Value::Dict category_dict;
+    base::DictValue category_dict;
     category_dict.Set("categoryId", base::Value(std::move(category.GetID())));
     category_dict.Set("title", base::Value(std::move(category.GetLabel())));
     category_dict.Set("subtitle",
@@ -200,7 +200,7 @@ void CategoriesSelectionScreen::OnResponseReceived(
 
   use_cases_total_count_ = categories_list.size();
 
-  base::Value::Dict data;
+  base::DictValue data;
   data.Set("categories", std::move(categories_list));
   if (view_) {
     view_->SetCategoriesData(std::move(data));
@@ -212,7 +212,7 @@ void CategoriesSelectionScreen::ExitScreenTimeout() {
 }
 
 void CategoriesSelectionScreen::OnSelect(
-    base::Value::List selected_use_cases_ids) {
+    base::ListValue selected_use_cases_ids) {
   int selected_use_cases_count =
       static_cast<int>(selected_use_cases_ids.size());
   RecordUmaSelectedUseCasesCount(selected_use_cases_count);
@@ -241,7 +241,7 @@ void CategoriesSelectionScreen::ShowOverviewStep() {
   }
 }
 
-void CategoriesSelectionScreen::OnUserAction(const base::Value::List& args) {
+void CategoriesSelectionScreen::OnUserAction(const base::ListValue& args) {
   if (is_hidden()) {
     return;
   }

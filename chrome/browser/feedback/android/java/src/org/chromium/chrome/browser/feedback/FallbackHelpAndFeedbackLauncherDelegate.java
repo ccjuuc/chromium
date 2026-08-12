@@ -8,6 +8,7 @@ import android.app.Activity;
 
 import org.chromium.base.Log;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 
 /**
  * Basic implementation for displaying help support for Chrome.
@@ -20,13 +21,18 @@ public class FallbackHelpAndFeedbackLauncherDelegate implements HelpAndFeedbackL
 
     @Override
     public void show(Activity activity, String helpContext, FeedbackCollector collector) {
-        Log.d(TAG, "Feedback data: " + collector.getBundle());
-        HelpAndFeedbackLauncherDelegate.launchFallbackSupportUri(activity);
+        Log.d(TAG, "Feedback data: %s", collector.getBundle());
+        if (ChromeFeatureList.isEnabled(ChromeFeatureList.USE_P_LINK_IN_HELP)) {
+            HelpAndFeedbackLauncherDelegate.launchFallbackSupportUri(
+                    activity, HelpAndFeedbackLauncherDelegate.getPLinkHelpUrl(helpContext));
+        } else {
+            HelpAndFeedbackLauncherDelegate.launchFallbackSupportUri(activity, /* url= */ null);
+        }
     }
 
     @Override
     public void showFeedback(Activity activity, FeedbackCollector collector) {
-        Log.d(TAG, "Feedback data: " + collector.getBundle());
-        HelpAndFeedbackLauncherDelegate.launchFallbackSupportUri(activity);
+        Log.d(TAG, "Feedback data: %s", collector.getBundle());
+        HelpAndFeedbackLauncherDelegate.launchFallbackSupportUri(activity, /* url= */ null);
     }
 }

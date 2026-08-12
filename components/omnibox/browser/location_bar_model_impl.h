@@ -36,6 +36,8 @@ class LocationBarModelImpl : public LocationBarModel {
   std::u16string GetFormattedFullURL() const override;
   std::u16string GetURLForDisplay() const override;
   GURL GetURL() const override;
+  bool IsContextualTasksPage() const override;
+  GURL GetContextualTasksInnerFrameURL() const override;
   security_state::SecurityLevel GetSecurityLevel() const override;
   net::CertStatus GetCertStatus() const override;
   metrics::OmniboxEventProto::PageClassification GetPageClassification(
@@ -52,6 +54,9 @@ class LocationBarModelImpl : public LocationBarModel {
  private:
   std::u16string GetFormattedURL(
       url_formatter::FormatUrlTypes format_types) const;
+
+  // Helper method for generating the "pretty" display URL for Contextual Tasks.
+  std::u16string GetContextualTasksDisplayURL() const;
 
   raw_ptr<LocationBarModelDelegate> delegate_;
   const size_t max_url_display_chars_;

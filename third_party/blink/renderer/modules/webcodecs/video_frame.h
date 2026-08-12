@@ -22,6 +22,7 @@
 #include "third_party/blink/renderer/modules/webcodecs/video_frame_handle.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/graphics/predefined_color_space.h"
+#include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/skia/include/core/SkImage.h"
@@ -55,13 +56,16 @@ class MODULES_EXPORT VideoFrame final : public ScriptWrappable,
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  // Creates a VideoFrame with a new VideoFrameHandle wrapping |frame|, and
-  // monitored using |monitoring_source_id|.
+  using CopyToPromise = ScriptPromise<IDLSequence<PlaneLayout>>;
+
+  // Creates a VideoFrame with a new VideoFrameHandle wrapping `frame`, and
+  // monitored using `monitoring_source_id`. If `timestamp` is provided, it
+  // will be used instead of `frame->timestamp()`.
   VideoFrame(scoped_refptr<media::VideoFrame> frame,
              ExecutionContext*,
              std::string monitoring_source_id = std::string(),
              sk_sp<SkImage> sk_image = nullptr,
-             bool use_capture_timestamp = false);
+             std::optional<base::TimeDelta> timestamp = std::nullopt);
 
   // Creates a VideoFrame from an existing handle.
   // All frames sharing |handle| will have their |handle_| invalidated if any of
@@ -103,11 +107,10 @@ class MODULES_EXPORT VideoFrame final : public ScriptWrappable,
 
   uint32_t allocationSize(VideoFrameCopyToOptions* options, ExceptionState&);
 
-  ScriptPromise<IDLSequence<PlaneLayout>> copyTo(
-      ScriptState* script_state,
-      const AllowSharedBufferSource* destination,
-      VideoFrameCopyToOptions* options,
-      ExceptionState& exception_state);
+  CopyToPromise copyTo(ScriptState* script_state,
+                       const AllowSharedBufferSource* destination,
+                       VideoFrameCopyToOptions* options,
+                       ExceptionState& exception_state);
 
   // Invalidates |handle_|, releasing underlying media::VideoFrame references.
   // This effectively "destroys" all frames sharing the same Handle.
@@ -128,6 +131,9 @@ class MODULES_EXPORT VideoFrame final : public ScriptWrappable,
   void Trace(Visitor*) const override;
 
  private:
+  scoped_refptr<StaticBitmapImage> CreateImageFromVideoFrame(
+      scoped_refptr<media::VideoFrame> frame);
+
   // CanvasImageSource implementation
   scoped_refptr<Image> GetSourceImageForCanvas(SourceImageStatus*,
                                                const gfx::SizeF&) override;
@@ -144,11 +150,11 @@ class MODULES_EXPORT VideoFrame final : public ScriptWrappable,
                            base::span<uint8_t> buffer,
                            PredefinedColorSpace target_color_space);
 
-  bool CopyToAsync(ScriptPromiseResolver<IDLSequence<PlaneLayout>>*,
-                   scoped_refptr<media::VideoFrame> frame,
-                   gfx::Rect src_rect,
-                   const AllowSharedBufferSource* destination,
-                   const VideoFrameLayout& dest_layout);
+  CopyToPromise CopyToAsync(ScriptState* script_state,
+                            scoped_refptr<media::VideoFrame> frame,
+                            gfx::Rect src_rect,
+                            const AllowSharedBufferSource* destination,
+                            const VideoFrameLayout& dest_layout);
 
   // ImageBitmapSource implementation
   static constexpr uint64_t kCpuEfficientFrameSize = 320u * 240u;

@@ -4,13 +4,21 @@
 
 #include "third_party/blink/renderer/core/trustedtypes/trusted_types_util.h"
 
+#include <optional>
+
 #include "base/compiler_specific.h"
+#include "base/notreached.h"
 #include "base/unguessable_token.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/reporting/reporting.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_sanitizer_config.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_set_html_options.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_set_html_unsafe_options.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_sanitizer_sanitizerconfig_sanitizerpresets.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_sethtmlunsafeoptions_trustedparseroptions.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_string_trustedhtml.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_string_trustedscript.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_stringlegacynulltoemptystring_trustedhtml.h"
@@ -19,18 +27,21 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_trustedscripturl_usvstring.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
+#include "third_party/blink/renderer/core/html/parser/fragment_parser.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/inspector/exception_metadata.h"
 #include "third_party/blink/renderer/core/inspector/identifiers_factory.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/core/script/script_element_base.h"
 #include "third_party/blink/renderer/core/trustedtypes/trusted_html.h"
+#include "third_party/blink/renderer/core/trustedtypes/trusted_parser_options.h"
 #include "third_party/blink/renderer/core/trustedtypes/trusted_script.h"
 #include "third_party/blink/renderer/core/trustedtypes/trusted_script_url.h"
 #include "third_party/blink/renderer/core/trustedtypes/trusted_type_policy.h"
 #include "third_party/blink/renderer/core/trustedtypes/trusted_type_policy_factory.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
@@ -54,6 +65,9 @@ enum TrustedTypeViolationKind {
   kNavigateToJavascriptURLAndDefaultPolicyCreatedInvalidURL,
   kScriptExecution,
   kScriptExecutionAndDefaultPolicyFailed,
+  kTrustedHTMLParserOptionsTransform,
+  kTrustedHTMLParserOptionsTransformAndNoDefaultPolicyExisted,
+  kTrustedHTMLParserOptionsTransformAndDefaultPolicyFailed,
 };
 
 // Strings to support building a sample, used in:
@@ -120,6 +134,17 @@ const char* GetMessage(TrustedTypeViolationKind kind) {
       return "This document requires 'TrustedScript' assignment. "
              "This script element was modified without use of TrustedScript "
              "assignment and the 'default' policy failed to execute.";
+    case kTrustedHTMLParserOptionsTransform:
+      CHECK(RuntimeEnabledFeatures::NewHTMLSettingMethodsEnabled());
+      return "This document requires 'TrustedParserOptions' assignment.";
+    case kTrustedHTMLParserOptionsTransformAndNoDefaultPolicyExisted:
+      CHECK(RuntimeEnabledFeatures::NewHTMLSettingMethodsEnabled());
+      return "The TrustedParserOptions parser options transform failed and no "
+             "'default' policy for 'TrustedParserOptions' has been defined.";
+    case kTrustedHTMLParserOptionsTransformAndDefaultPolicyFailed:
+      CHECK(RuntimeEnabledFeatures::NewHTMLSettingMethodsEnabled());
+      return "The TrustedParserOptions parser options transform failed and the "
+             "'default' policy failed to execute.";
   }
   NOTREACHED();
 }
@@ -134,12 +159,13 @@ String GetSamplePrefix(const AtomicString& interface_name,
   if (interface_name.empty()) {
     // No interface name? Then we have no prefix to use.
   } else if (interface_name == trusted_types_names::kEval) {
-    bool is_function = RuntimeEnabledFeatures::TrustedTypesHTMLEnabled()
-                           ? (value.StartsWith(kFunctionAnonymousPrefix) ||
-                              value.StartsWith(kAsyncFunctionAnonymousPrefix) ||
-                              value.StartsWith(kGeneratorAnonymousPrefix) ||
-                              value.StartsWith(kAsyncGeneratorAnonymousPrefix))
-                           : value.StartsWith(kFunctionAnonymousPrefix);
+    bool is_function =
+        RuntimeEnabledFeatures::TrustedTypesHTMLEnabled()
+            ? (value.starts_with(kFunctionAnonymousPrefix) ||
+               value.starts_with(kAsyncFunctionAnonymousPrefix) ||
+               value.starts_with(kGeneratorAnonymousPrefix) ||
+               value.starts_with(kAsyncGeneratorAnonymousPrefix))
+            : value.starts_with(kFunctionAnonymousPrefix);
     sample_prefix.Append(is_function ? trusted_types_names::kFunction
                                      : trusted_types_names::kEval);
   } else if ((interface_name == trusted_types_names::kWorker ||
@@ -194,28 +220,30 @@ bool TrustedTypeFail(TrustedTypeViolationKind kind,
                      const AtomicString& property_name,
                      ExceptionState& exception_state,
                      const String& value) {
-  if (!execution_context)
+  if (!execution_context) {
     return true;
+  }
 
   // Test case docs (Document::CreateForTest()) might not have a window
   // and hence no TrustedTypesPolicyFactory.
-  if (execution_context->GetTrustedTypes())
+  if (execution_context->GetTrustedTypes()) {
     execution_context->GetTrustedTypes()->CountTrustedTypeAssignmentError();
+  }
 
   String prefix = GetSamplePrefix(interface_name, property_name, value);
 
   // https://www.w3.org/TR/trusted-types/#should-block-sink-type-mismatch step 3
   size_t strip = 0;
   if (prefix == "Function") {
-    if (value.StartsWith(kFunctionAnonymousPrefix)) {
+    if (value.starts_with(kFunctionAnonymousPrefix)) {
       strip = strlen(kFunctionAnonymousPrefix);
-    } else if (value.StartsWith(kAsyncFunctionAnonymousPrefix)) {
+    } else if (value.starts_with(kAsyncFunctionAnonymousPrefix)) {
       strip = strlen(kAsyncFunctionAnonymousPrefix);
-    } else if (value.StartsWith(kGeneratorAnonymousPrefix)) {
+    } else if (value.starts_with(kGeneratorAnonymousPrefix)) {
       strip = strlen(kGeneratorAnonymousPrefix);
-    } else if (value.StartsWith(kAsyncGeneratorAnonymousPrefix)) {
+    } else if (value.starts_with(kAsyncGeneratorAnonymousPrefix)) {
       strip = strlen(kAsyncGeneratorAnonymousPrefix);
-    };
+    }
   }
 
   // This issue_id is used to generate a link in the DevTools front-end from
@@ -223,10 +251,12 @@ bool TrustedTypeFail(TrustedTypeViolationKind kind,
   // ContentSecurityPolicy::ReportViolation via the call to
   // AllowTrustedTypeAssignmentFailure below.
   base::UnguessableToken issue_id = base::UnguessableToken::Create();
-  bool allow = execution_context->GetContentSecurityPolicy()
-                   ->AllowTrustedTypeAssignmentFailure(
-                       GetMessage(kind), strip ? value.Substring(strip) : value,
-                       prefix, issue_id);
+  bool allow =
+      execution_context->GetContentSecurityPolicy()
+          ->AllowTrustedTypeAssignmentFailure(
+              GetMessage(kind),
+              strip ? value.substr(static_cast<wtf_size_t>(strip)) : value,
+              prefix, issue_id);
 
   // TODO(1087743): Add a console message for Trusted Type-related Function
   // constructor failures, to warn the developer of the outstanding issues
@@ -280,10 +310,12 @@ String GetStringFromScriptHelper(
     TrustedTypeViolationKind violation_kind,
     TrustedTypeViolationKind violation_kind_when_default_policy_failed,
     bool do_javascript_url_check) {
-  if (!context)
+  if (!context) {
     return script;
-  if (!RequireTrustedTypesCheck(context))
+  }
+  if (!RequireTrustedTypesCheck(context)) {
     return script;
+  }
 
   // Set up JS context & friends.
   //
@@ -528,34 +560,35 @@ String TrustedTypesCheckForScriptURL(const String& script_url,
   return result->toString();
 }
 
-String TrustedTypesCheckFor(SpecificTrustedType type,
-                            const V8TrustedType* trusted,
-                            const ExecutionContext* execution_context,
-                            const AtomicString& interface_name,
-                            const AtomicString& property_name,
-                            ExceptionState& exception_state) {
+AtomicString TrustedTypesCheckFor(SpecificTrustedType type,
+                                  const V8TrustedType* trusted,
+                                  const ExecutionContext* execution_context,
+                                  const AtomicString& interface_name,
+                                  const AtomicString& property_name,
+                                  ExceptionState& exception_state) {
   DCHECK(trusted);
 
   // Whatever happens below, we will need the string value:
-  String value;
+  AtomicString value;
   bool does_type_match = false;
   switch (trusted->GetContentType()) {
     case V8TrustedType::ContentType::kTrustedHTML:
-      value = trusted->GetAsTrustedHTML()->toString();
+      value = AtomicString(trusted->GetAsTrustedHTML()->toString());
       does_type_match = type == SpecificTrustedType::kHTML;
       break;
     case V8TrustedType::ContentType::kTrustedScript:
-      value = trusted->GetAsTrustedScript()->toString();
+      value = AtomicString(trusted->GetAsTrustedScript()->toString());
       does_type_match = type == SpecificTrustedType::kScript;
       break;
     case V8TrustedType::ContentType::kTrustedScriptURL:
-      value = trusted->GetAsTrustedScriptURL()->toString();
+      value = AtomicString(trusted->GetAsTrustedScriptURL()->toString());
       does_type_match = type == SpecificTrustedType::kScriptURL;
       break;
   }
 
-  if (type == SpecificTrustedType::kNone || does_type_match)
+  if (type == SpecificTrustedType::kNone || does_type_match) {
     return value;
+  }
 
   // In all other cases: run the full check against the string value.
   return TrustedTypesCheckFor(type, std::move(value), execution_context,
@@ -605,6 +638,148 @@ String TrustedTypesCheckForHTML(const V8UnionStringOrTrustedHTML* value,
       return value->GetAsTrustedHTML()->toString();
   }
   NOTREACHED();
+}
+
+[[nodiscard]] std::optional<FragmentParserOptions>
+TrustedTypesCheckForParserOptions(FragmentParserOptions options,
+                                  bool fail_if_default_policy_is_missing,
+                                  const ExecutionContext* execution_context,
+                                  const AtomicString& interface_name,
+                                  const AtomicString& property_name,
+                                  ExceptionState& exception_state) {
+  if (options.trust_mode() == FragmentParserOptions::TrustMode::kTrusted) {
+    return options;
+  }
+
+  if (!RequireTrustedTypesCheck(execution_context)) {
+    return options;
+  }
+
+  auto* default_policy = GetDefaultPolicy(execution_context);
+  if (!default_policy) {
+    if (fail_if_default_policy_is_missing &&
+        TrustedTypeFail(kTrustedHTMLParserOptionsTransform, execution_context,
+                        interface_name, property_name, exception_state,
+                        g_empty_string)) {
+      return std::nullopt;
+    }
+    return options;
+  }
+
+  if (!default_policy->HasCreateParserOptions()) {
+    if (fail_if_default_policy_is_missing &&
+        TrustedTypeFail(
+            kTrustedHTMLParserOptionsTransformAndNoDefaultPolicyExisted,
+            execution_context, interface_name, property_name, exception_state,
+            g_empty_string)) {
+      return std::nullopt;
+    }
+    return options;
+  }
+
+  TrustedParserOptions* result = nullptr;
+  {
+    TryRethrowScope rethrow_scope(execution_context->GetIsolate(),
+                                  exception_state);
+
+    SetHTMLUnsafeOptions* unsafe_options_for_policy =
+        SetHTMLUnsafeOptions::Create(execution_context->GetIsolate());
+    unsafe_options_for_policy->setRunScripts(
+        options.run_scripts() ==
+        FragmentParserOptions::RunScripts::kRunScripts);
+    auto* sanitizer = options.sanitizer_init();
+    if (sanitizer) {
+      if (sanitizer->IsSanitizer()) {
+        Sanitizer* clone = Sanitizer::CreateEmpty();
+        clone->setFrom(*sanitizer->GetAsSanitizer());
+        sanitizer->Set(clone);
+      }
+
+      unsafe_options_for_policy->setSanitizer(sanitizer);
+    }
+    result = default_policy->createParserOptions(
+        execution_context->GetIsolate(), unsafe_options_for_policy,
+        exception_state);
+  }
+
+  if (exception_state.HadException()) {
+    return std::nullopt;
+  }
+
+  if (!result) {
+    if (TrustedTypeFail(
+            kTrustedHTMLParserOptionsTransformAndDefaultPolicyFailed,
+            execution_context, interface_name, property_name, exception_state,
+            g_empty_string)) {
+      return std::nullopt;
+    }
+    return options;
+  }
+
+  return FragmentParserOptions(result);
+}
+
+String TrustedTypesCheckForFragment(const V8UnionStringOrTrustedHTML* html,
+                                    FragmentParserOptions& resolved_options,
+                                    const ExecutionContext* execution_context,
+                                    const AtomicString& interface_name,
+                                    const AtomicString& property_name,
+                                    ExceptionState& exception_state) {
+  String compliant_string = TrustedTypesCheckForHTML(
+      html, execution_context, interface_name, property_name, exception_state);
+  if (exception_state.HadException()) {
+    return String();
+  }
+
+  if (RuntimeEnabledFeatures::TrustedTypesCreateParserOptionsEnabled()) {
+    auto trusted_options = TrustedTypesCheckForParserOptions(
+        resolved_options, /*fail_if_default_policy_is_missing=*/false,
+        execution_context, interface_name, property_name, exception_state);
+    if (!trusted_options) {
+      return String();
+    }
+    resolved_options = *trusted_options;
+  }
+  return compliant_string;
+}
+
+std::tuple<String, FragmentParserOptions> TrustedTypesCheckForLegacyFragment(
+    const V8UnionStringLegacyNullToEmptyStringOrTrustedHTML* html,
+    const ExecutionContext* execution_context,
+    const AtomicString& interface_name,
+    const AtomicString& property_name,
+    ExceptionState& exception_state) {
+  String compliant_string = TrustedTypesCheckForHTML(
+      html, execution_context, interface_name, property_name, exception_state);
+  if (exception_state.HadException()) {
+    return {String(), FragmentParserOptions()};
+  }
+
+  if (!RuntimeEnabledFeatures::TrustedTypesCreateParserOptionsEnabled()) {
+    return {compliant_string, FragmentParserOptions()};
+  }
+
+  auto trusted_options = TrustedTypesCheckForParserOptions(
+      FragmentParserOptions(), /*fail_if_default_policy_is_missing=*/false,
+      execution_context, interface_name, property_name, exception_state);
+  if (exception_state.HadException()) {
+    return {String(), FragmentParserOptions()};
+  }
+
+  return {compliant_string, trusted_options.value_or(FragmentParserOptions())};
+}
+
+std::optional<FragmentParserOptions> TrustedTypesCheckForStreaming(
+    FragmentParserOptions options,
+    const ExecutionContext* execution_context,
+    const AtomicString& interface_name,
+    const AtomicString& property_name,
+    ExceptionState& exception_state) {
+  auto result = TrustedTypesCheckForParserOptions(
+      options, /*fail_if_default_policy_is_missing=*/true, execution_context,
+      interface_name, property_name, exception_state);
+  CHECK_EQ(result.has_value(), !exception_state.HadException());
+  return result;
 }
 
 String TrustedTypesCheckForScript(const V8UnionStringOrTrustedScript* value,
@@ -684,29 +859,29 @@ String TrustedTypesCheckForScriptURL(
   NOTREACHED();
 }
 
-String TrustedTypesCheckFor(SpecificTrustedType type,
-                            String trusted,
-                            const ExecutionContext* execution_context,
-                            const AtomicString& interface_name,
-                            const AtomicString& property_name,
-                            ExceptionState& exception_state) {
+AtomicString TrustedTypesCheckFor(SpecificTrustedType type,
+                                  AtomicString trusted,
+                                  const ExecutionContext* execution_context,
+                                  const AtomicString& interface_name,
+                                  const AtomicString& property_name,
+                                  ExceptionState& exception_state) {
   if (type == SpecificTrustedType::kNone) {
     return trusted;
   }
 
   switch (type) {
     case SpecificTrustedType::kHTML:
-      return TrustedTypesCheckForHTML(std::move(trusted), execution_context,
-                                      interface_name, property_name,
-                                      exception_state);
+      return AtomicString(TrustedTypesCheckForHTML(
+          std::move(trusted), execution_context, interface_name, property_name,
+          exception_state));
     case SpecificTrustedType::kScript:
-      return TrustedTypesCheckForScript(std::move(trusted), execution_context,
-                                        interface_name, property_name,
-                                        exception_state);
+      return AtomicString(TrustedTypesCheckForScript(
+          std::move(trusted), execution_context, interface_name, property_name,
+          exception_state));
     case SpecificTrustedType::kScriptURL:
-      return TrustedTypesCheckForScriptURL(std::move(trusted),
-                                           execution_context, interface_name,
-                                           property_name, exception_state);
+      return AtomicString(TrustedTypesCheckForScriptURL(
+          std::move(trusted), execution_context, interface_name, property_name,
+          exception_state));
     case SpecificTrustedType::kNone:
       NOTREACHED();  // This case is handled above.
   }

@@ -16,6 +16,7 @@ import android.content.Context;
 import android.view.View;
 import android.view.View.MeasureSpec;
 
+import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -25,9 +26,10 @@ import org.robolectric.annotation.Config;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.omnibox.suggestions.base.SuggestionLayout.LayoutParams.SuggestionViewType;
-import org.chromium.chrome.browser.omnibox.test.R;
+import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 
 /**
  * Tests for {@link SuggestionLayout}.
@@ -38,13 +40,24 @@ import org.chromium.chrome.browser.omnibox.test.R;
 @RunWith(BaseRobolectricTestRunner.class)
 public class SuggestionLayoutUnitTest {
 
-    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     private final Context mContext = ContextUtils.getApplicationContext();
     private final View mDecorationView = new View(mContext);
     private final View mActionButtonView = new View(mContext);
     private final View mContentView = new View(mContext);
     private SuggestionLayout mLayout = new SuggestionLayout(mContext);
+
+    @Before
+    public void setUp() {
+        var resourceProvider =
+                new OmniboxResourceProvider(mContext, BrandedColorScheme.APP_DEFAULT);
+        mLayout.setSuggestionDimensions(
+                resourceProvider.getSuggestionDecorationIconSizeWidth(),
+                resourceProvider.getSuggestionContentHeight(),
+                resourceProvider.getSuggestionCompactContentHeight(),
+                resourceProvider.getSuggestionContentVerticalPadding());
+    }
 
     @Test
     public void setRoundingEdges_redrawViewOnChange() {
@@ -196,7 +209,7 @@ public class SuggestionLayoutUnitTest {
                 MeasureSpec.makeMeasureSpec(48, MeasureSpec.AT_MOST));
         mLayout.layout(0, 0, 200, 48);
         assertEquals(
-                mContext.getResources().getDimensionPixelSize(R.dimen.omnibox_simple_card_leadin),
+                mContext.getResources().getDimensionPixelSize(R.dimen.omnibox_simple_card_lead_in),
                 mContentView.getLeft());
     }
 

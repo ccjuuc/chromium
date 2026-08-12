@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -20,6 +21,7 @@
 #include "chrome/browser/predictors/resource_prefetch_predictor.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/connection_allowlist_util.h"
 #include "content/public/browser/global_request_id.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/storage_partition.h"
@@ -27,6 +29,7 @@
 #include "extensions/buildflags/buildflags.h"
 #include "net/base/load_flags.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "services/network/public/cpp/constants.h"
 #include "services/network/public/cpp/empty_url_loader_client.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -39,10 +42,10 @@
 #include "third_party/blink/public/common/navigation/preloading_headers.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom-shared.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/browser/api/web_request/web_request_api.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 namespace predictors {
 
@@ -186,6 +189,26 @@ void PrefetchManager::Start(const GURL& url,
     return;
   }
 
+  // Enforce the frame's Connection Allowlist if needed. If the
+  // initiator_frame_id is null, the request is browser-initiated which is out
+  // of scope for enforcement. If the initiator_frame_id does not map to a live
+  // frame, then there is no allowlist for that frame to enforce.
+  std::erase_if(requests, [&](const PrefetchRequest& request) {
+    if (!request.initiator_frame_id) {
+      return false;
+    }
+    if (auto* rfh =
+            content::RenderFrameHost::FromID(request.initiator_frame_id)) {
+      return !content::FrameConnectionAllowlistAllowsRequestAndReportIfNeeded(
+          rfh, request.url, /*is_redirect=*/false);
+    }
+    return true;
+  });
+
+  if (requests.empty()) {
+    return;
+  }
+
   PrefetchInfo* info;
   if (prefetch_info_.find(url) == prefetch_info_.end()) {
     auto iterator_and_whether_inserted =
@@ -226,6 +249,13 @@ bool PrefetchManager::IsAvailableForPrefetch(
   return GetResourceTypeForPrefetch(destination).has_value();
 }
 
+// If `kPrefetchManagerUseNetworkContextPrefetch` feature is enabled,
+// `PrefetchManager` uses `NetworkContext::Prefetch`.
+// Else, it uses a URL loader factory for the browser process.
+//
+// Note that because the browser process URL loader factory is used, we cannot
+// enforce the Connection Allowlist in the network service. Enforcement instead
+// occurs in PrefetchManager::Start.
 void PrefetchManager::PrefetchUrl(
     std::unique_ptr<PrefetchJob> job,
     scoped_refptr<network::SharedURLLoaderFactory> factory) {
@@ -250,13 +280,8 @@ void PrefetchManager::PrefetchUrl(
   // conservative, all-blocking permissions policy.
   request.permissions_policy =
       *network::PermissionsPolicy::CreateFromParsedPolicy(
-          {}, {}, url::Origin::Create(request.url));
+          {}, url::Origin::Create(request.url));
 
-  if (!base::FeatureList::IsEnabled(
-          blink::features::kRemovePurposeHeaderForPrefetch)) {
-    request.headers.SetHeader(blink::kPurposeHeaderName,
-                              blink::kSecPurposePrefetchHeaderValue);
-  }
   request.headers.SetHeader(blink::kSecPurposeHeaderName,
                             blink::kSecPurposePrefetchHeaderValue);
 
@@ -281,7 +306,7 @@ void PrefetchManager::PrefetchUrl(
       net::IsolationInfo::RequestType::kOther, top_frame_origin, frame_origin,
       net::SiteForCookies::FromUrl(info.url));
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   network::URLLoaderFactoryBuilder factory_builder;
   auto* web_request_api =
       extensions::BrowserContextKeyedAPIFactory<extensions::WebRequestAPI>::Get(
@@ -296,7 +321,7 @@ void PrefetchManager::PrefetchUrl(
         /*request_initiator=*/url::Origin());
   }
   factory = std::move(factory_builder).Finish(factory);
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
   // Set up throttles. Use null values for frame/navigation-related params, for
   // now, since this is just the browser prefetching resources and the requests
@@ -315,8 +340,8 @@ void PrefetchManager::PrefetchUrl(
 
   ++inflight_jobs_count_;
 
-  // Since the CORS-RFC1918 check is skipped when the client security state is
-  // unknown, just block any local request to be safe for now.
+  // Since the Local Network Access check is skipped when the client security
+  // state is unknown, just block any local request to be safe for now.
   int options = base::CommandLine::ForCurrentProcess()->HasSwitch(
                     switches::kLoadingPredictorAllowLocalRequestForTesting)
                     ? network::mojom::kURLLoadOptionNone
@@ -364,18 +389,19 @@ void PrefetchManager::OnPrefetchFinished(
 
   // TODO(ricea): Remove these histograms in October 2024 and make a note of the
   // results in https://crbug.com/335524391.
-  if (status.error_code == net::OK && status.decoded_body_length > 0) {
+  if (status.error_code == net::OK &&
+      status.decoded_body_length.InBytes() > 0) {
     if (status.decoded_body_length > status.encoded_body_length) {
       // Assume it was compressed.
       base::UmaHistogramCounts10000(
           "Navigation.Prefetch.CompressedBodySize",
-          static_cast<int>(status.encoded_body_length / 1024));
+          static_cast<int>(status.encoded_body_length.InBytes() / 1024));
     } else {
       // The cast to int will overflow if we prefetch a resource over a terabyte
       // in size, but I'm hoping that will never happen.
       base::UmaHistogramCounts10000(
           "Navigation.Prefetch.UncompressedBodySize",
-          static_cast<int>(status.encoded_body_length / 1024));
+          static_cast<int>(status.encoded_body_length.InBytes() / 1024));
     }
   }
 
@@ -452,29 +478,29 @@ std::optional<blink::mojom::ResourceType> GetResourceTypeForPrefetch(
       return blink::mojom::ResourceType::kFontResource;
     case network::mojom::RequestDestination::kAudio:
     case network::mojom::RequestDestination::kAudioWorklet:
+    case network::mojom::RequestDestination::kCompressionDictionary:
     case network::mojom::RequestDestination::kDocument:
+    case network::mojom::RequestDestination::kEmailVerification:
     case network::mojom::RequestDestination::kEmbed:
+    case network::mojom::RequestDestination::kFencedframe:
     case network::mojom::RequestDestination::kFrame:
     case network::mojom::RequestDestination::kIframe:
     case network::mojom::RequestDestination::kImage:
+    case network::mojom::RequestDestination::kJson:
     case network::mojom::RequestDestination::kManifest:
     case network::mojom::RequestDestination::kObject:
     case network::mojom::RequestDestination::kPaintWorklet:
     case network::mojom::RequestDestination::kReport:
     case network::mojom::RequestDestination::kServiceWorker:
     case network::mojom::RequestDestination::kSharedWorker:
+    case network::mojom::RequestDestination::kSpeculationRules:
+    case network::mojom::RequestDestination::kText:
     case network::mojom::RequestDestination::kTrack:
     case network::mojom::RequestDestination::kVideo:
     case network::mojom::RequestDestination::kWebBundle:
+    case network::mojom::RequestDestination::kWebIdentity:
     case network::mojom::RequestDestination::kWorker:
     case network::mojom::RequestDestination::kXslt:
-    case network::mojom::RequestDestination::kFencedframe:
-    case network::mojom::RequestDestination::kWebIdentity:
-    case network::mojom::RequestDestination::kEmailVerification:
-    case network::mojom::RequestDestination::kDictionary:
-    case network::mojom::RequestDestination::kSpeculationRules:
-    case network::mojom::RequestDestination::kJson:
-    case network::mojom::RequestDestination::kSharedStorageWorklet:
       return std::nullopt;
   }
 }

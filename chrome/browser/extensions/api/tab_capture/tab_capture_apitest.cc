@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <memory>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
@@ -28,6 +28,7 @@
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/permissions/active_tab_permission_granter.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/switches.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
@@ -37,11 +38,13 @@
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/tabs/alert/tab_alert.h"
 #include "chrome/browser/ui/tabs/alert/tab_alert_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "components/tabs/public/tab_alert.h"
 #endif
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -95,17 +98,13 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, StartTabCapture) {
       << message_;
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 // Tests API behaviors, including info queries, and constraints violations.
-// TODO(crbug.com/427298135): Port to desktop Android when chrome.tabs is more
-// fully supported.
 IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, ApiTests) {
   AddExtensionToCommandLineAllowlist();
   ASSERT_TRUE(RunExtensionTest("tab_capture/api_tests",
                                {.extension_url = "api_tests.html"}))
       << message_;
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // Tests that tab capture video frames can be received in a VIDEO element.
 // TODO(crbug.com/216820236): This test is flaky.
@@ -203,7 +202,7 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, ActiveTabPermission) {
 // events to the onStatusChange listener.  The test loads a page that toggles
 // fullscreen mode, using the Fullscreen Javascript API, in response to mouse
 // clicks. The fullscreen API requires a user gesture.
-// TODO(crbug.com/427298135): Port to desktop Android. Currently times out
+// TODO(crbug.com/489494749): Port to desktop Android. Currently times out
 // without useful stack or logs.
 IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, FullscreenEvents) {
   AddExtensionToCommandLineAllowlist();
@@ -255,10 +254,7 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, GrantForChromePages) {
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 // Tests that a tab in incognito mode can be captured.
-// TODO(crbug.com/427298135): Port to desktop Android when incognito is better
-// supported in extensions tests.
 IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, CaptureInSplitIncognitoMode) {
   AddExtensionToCommandLineAllowlist();
   ASSERT_TRUE(RunExtensionTest(
@@ -267,7 +263,6 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, CaptureInSplitIncognitoMode) {
       {.allow_in_incognito = true}))
       << message_;
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, Constraints) {
   AddExtensionToCommandLineAllowlist();
@@ -293,7 +288,6 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, TabIndicator) {
     }
 
     void OnTabChangedAt(tabs::TabInterface* tab,
-                        int index,
                         TabChangeType change_type) override {
       std::move(on_tab_changed_).Run();
     }
@@ -321,8 +315,8 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, TabIndicator) {
   // Run the browser until the indicator turns on.
   const base::TimeTicks start_time = base::TimeTicks::Now();
   IndicatorChangeObserver observer(browser());
-  while (!base::Contains(GetTabAlertStatesForContents(contents),
-                         tabs::TabAlert::kTabCapturing)) {
+  while (!std::ranges::contains(GetTabAlertStatesForContents(contents),
+                                tabs::TabAlert::kTabCapturing)) {
     if (base::TimeTicks::Now() - start_time >
             TestTimeouts::action_max_timeout()) {
       EXPECT_THAT(GetTabAlertStatesForContents(contents),
@@ -381,7 +375,7 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MultipleExtensions) {
 
   perm_granter->GrantIfRequested(extension_b);
 
-  // To reproduce crbug.com/1370338, we have extension_b spam tab capture
+  // To reproduce crbug.com/40869705, we have extension_b spam tab capture
   // requests until one or the other extension successfully captures the tab.
   while (!extension_a_success.was_satisfied() &&
          !extension_b_success.was_satisfied()) {

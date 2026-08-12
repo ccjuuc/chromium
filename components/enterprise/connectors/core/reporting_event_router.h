@@ -5,10 +5,12 @@
 #ifndef COMPONENTS_ENTERPRISE_CONNECTORS_CORE_REPORTING_EVENT_ROUTER_H_
 #define COMPONENTS_ENTERPRISE_CONNECTORS_CORE_REPORTING_EVENT_ROUTER_H_
 
+#include "base/functional/callback_helpers.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "components/download/public/common/download_danger_type.h"
 #include "components/enterprise/buildflags/buildflags.h"
+#include "components/enterprise/connectors/core/common.h"
 #include "components/enterprise/connectors/core/realtime_reporting_client_base.h"
 #include "components/enterprise/data_controls/core/browser/clipboard_context.h"
 #include "components/keyed_service/core/keyed_service.h"
@@ -25,11 +27,13 @@ namespace enterprise_connectors {
 // An event router that collects safe browsing events and then sends
 // events to reporting server.
 class ReportingEventRouter : public KeyedService {
+ public:
   using ReferrerChain =
       google::protobuf::RepeatedPtrField<safe_browsing::ReferrerChainEntry>;
   using FrameUrlChain = google::protobuf::RepeatedPtrField<std::string>;
+  using RegisterOnGotHashCallback =
+      base::RepeatingCallback<void(OnGotHashCallback)>;
 
- public:
   explicit ReportingEventRouter(RealtimeReportingClientBase* reporting_client);
 
   ReportingEventRouter(const ReportingEventRouter&) = delete;
@@ -58,7 +62,8 @@ class ReportingEventRouter : public KeyedService {
   void OnPasswordReuse(const GURL& url,
                        const std::string& user_name,
                        bool is_phishing_url,
-                       bool warning_shown);
+                       bool warning_shown,
+                       const ReferrerChain& referrer_chain);
 
   // Notifies listeners that the user changed the password associated with
   // `user_name`
@@ -85,27 +90,66 @@ class ReportingEventRouter : public KeyedService {
                                    bool proceed_anyway_disabled,
                                    const ReferrerChain& referrer_chain);
 
+  void SendEventOnGotHash(const std::string& name,
+                          ReportingSettings reporting_settings,
+                          chrome::cros::reporting::proto::Event event,
+                          std::string hash);
+
+  void SendEventOnGotHashDeprecated(const std::string& name,
+                                    ReportingSettings reporting_settings,
+                                    base::DictValue event,
+                                    std::string hash);
+
   // Notifies listeners that deep scanning failed, for the given |reason|.
   void OnUnscannedFileEvent(const GURL& url,
                             const GURL& tab_url,
                             const std::string& source,
                             const std::string& destination,
                             const std::string& file_name,
-                            const std::string& download_digest_sha256,
+                            const HashCallbackVariant& sha256_or_cb,
                             const std::string& mime_type,
                             const std::string& trigger,
+                            const std::string& scan_id,
                             const std::string& reason,
                             const std::string& content_transfer_method,
                             const int64_t content_size,
+                            const ReferrerChain& referrer_chain,
                             EventResult event_result);
 
+  struct SensitiveDataEvent {
+    SensitiveDataEvent();
+    SensitiveDataEvent(const SensitiveDataEvent&);
+    ~SensitiveDataEvent();
+
+    GURL url;
+    GURL tab_url;
+    std::string source;
+    std::string destination;
+    std::string file_name;
+    enterprise_connectors::HashCallbackVariant sha256_or_cb;
+    std::string mime_type;
+    std::string trigger;
+    std::string scan_id;
+    std::string content_transfer_method;
+    std::string source_email;
+    std::string content_area_account_email;
+    std::optional<std::u16string> user_justification;
+    ContentAnalysisResponse::Result result;
+    int64_t content_size;
+    ReferrerChain referrer_chain;
+    FrameUrlChain frame_url_chain;
+    EventResult event_result;
+  };
+
   // Notifies listeners that the analysis connector detected a violation.
+  virtual void OnSensitiveDataEvent(const SensitiveDataEvent& event);
+
   void OnSensitiveDataEvent(const GURL& url,
                             const GURL& tab_url,
                             const std::string& source,
                             const std::string& destination,
                             const std::string& file_name,
-                            const std::string& download_digest_sha256,
+                            const HashCallbackVariant& sha256_or_cb,
                             const std::string& mime_type,
                             const std::string& trigger,
                             const std::string& scan_id,
@@ -127,7 +171,7 @@ class ReportingEventRouter : public KeyedService {
   void OnDangerousDownloadEvent(const GURL& url,
                                 const GURL& tab_url,
                                 const std::string& file_name,
-                                const std::string& download_digest_sha256,
+                                const HashCallbackVariant& sha256_or_cb,
                                 const download::DownloadDangerType danger_type,
                                 const std::string& mime_type,
                                 const std::string& trigger,
@@ -147,7 +191,7 @@ class ReportingEventRouter : public KeyedService {
                                 const std::string& source,
                                 const std::string& destination,
                                 const std::string& file_name,
-                                const std::string& download_digest_sha256,
+                                const HashCallbackVariant& sha256_or_cb,
                                 const std::string& threat_type,
                                 const std::string& mime_type,
                                 const std::string& trigger,
@@ -164,7 +208,7 @@ class ReportingEventRouter : public KeyedService {
                                  const std::string& source,
                                  const std::string& destination,
                                  const std::string& file_name,
-                                 const std::string& download_digest_sha256,
+                                 const HashCallbackVariant& sha256_or_cb,
                                  const std::string& mime_type,
                                  const std::string& trigger,
                                  const std::string& scan_id,
@@ -197,6 +241,11 @@ class ReportingEventRouter : public KeyedService {
   virtual void ReportPasteWarningBypassed(
       const data_controls::ClipboardContext& context,
       const data_controls::Verdict& verdict);
+  virtual void ReportPasteFromGemini(const GURL& destination_url,
+                                     const std::string& destination_active_user,
+                                     const data_controls::Verdict& verdict,
+                                     int64_t content_size,
+                                     bool bypassed);
 #endif  // BUILDFLAG(ENTERPRISE_DATA_CONTROLS)
 
  private:
@@ -237,6 +286,8 @@ class ReportingEventRouter : public KeyedService {
                                  const bool include_full_path);
 
   raw_ptr<RealtimeReportingClientBase> reporting_client_;
+
+  base::WeakPtrFactory<ReportingEventRouter> weak_ptr_factory_{this};
 };
 
 }  // namespace enterprise_connectors

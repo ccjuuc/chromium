@@ -50,9 +50,10 @@ class ExternallyConnectableHandler : public ManifestHandler {
 // The parsed form of the externally_connectable manifest entry.
 struct ExternallyConnectableInfo : public Extension::ManifestData {
  public:
+  static const char* kManifestDataKey;
   // Gets the ExternallyConnectableInfo for `extension`, or NULL if none was
   // specified.
-  static ExternallyConnectableInfo* Get(const Extension* extension);
+  static const ExternallyConnectableInfo* Get(const Extension* extension);
 
   // Tries to construct the info based on `value`, as it would have appeared in
   // the manifest. Sets `error` and returns an empty scoped_ptr on failure.
@@ -85,7 +86,7 @@ struct ExternallyConnectableInfo : public Extension::ManifestData {
   //
   // More convenient for callers than checking each individually, and it makes
   // use of the sortedness of `ids`.
-  bool IdCanConnect(const ExtensionId& id);
+  bool IdCanConnect(const ExtensionId& id) const;
 
   // Public only for testing. Use FromValue in production.
   ExternallyConnectableInfo(URLPatternSet matches,

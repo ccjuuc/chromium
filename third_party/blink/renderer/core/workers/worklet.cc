@@ -12,12 +12,14 @@
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/public/platform/web_url_request.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+#include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_worklet_options.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/fetch/request.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/loader/worker_resource_timing_notifier_impl.h"
 #include "third_party/blink/renderer/core/workers/worklet_pending_tasks.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_client_settings_object_snapshot.h"
@@ -40,6 +42,10 @@ Worklet::~Worklet() {
 void Worklet::Dispose() {
   for (const auto& proxy : proxies_)
     proxy->WorkletObjectDestroyed();
+
+  // Abort any pending tasks as a safeguard before pre-finalization.
+  // This ensures that HasPendingTasks() will be false in the destructor.
+  AbortPendingTasks();
 }
 
 // Implementation of the first half of the "addModule(moduleURL, options)"
@@ -100,8 +106,26 @@ ScriptPromise<IDLUndefined> Worklet::addModule(
 void Worklet::ContextDestroyed() {
   DCHECK(IsMainThread());
   module_responses_map_->Dispose();
+
+  // Abort any pending tasks when the context is destroyed. This is the primary
+  // cleanup path. This prevents the DCHECK in ~Worklet from firing if a module
+  // load is in flight during navigation.
+  AbortPendingTasks();
+
   for (const auto& proxy : proxies_)
     proxy->TerminateWorkletGlobalScope();
+}
+
+void Worklet::AbortPendingTasks() {
+  DCHECK(IsMainThread());
+  while (!pending_tasks_set_.empty()) {
+    auto it = pending_tasks_set_.begin();
+    WorkletPendingTasks* task = it->Get();
+    task->Abort(nullptr);
+    if (pending_tasks_set_.Contains(task)) {
+      pending_tasks_set_.erase(task);
+    }
+  }
 }
 
 bool Worklet::HasPendingTasks() const {
@@ -128,6 +152,10 @@ void Worklet::FetchAndInvokeScript(const KURL& module_url_record,
   DCHECK(IsMainThread());
   if (!GetExecutionContext())
     return;
+
+  if (!pending_tasks_set_.Contains(pending_tasks)) {
+    return;
+  }
 
   // Step 6: "Let credentialOptions be the credentials member of options."
   network::mojom::CredentialsMode credentials_mode =

@@ -34,6 +34,7 @@
 #include "content/browser/child_process_host_impl.h"
 #include "content/browser/metrics/histogram_shared_memory_config.h"
 #include "content/browser/renderer_host/spare_render_process_host_manager_impl.h"
+#include "content/browser/sandboxed_process_launcher_delegate.h"
 #include "content/browser/tracing/background_tracing_manager_impl.h"
 #include "content/public/browser/browser_child_process_host_delegate.h"
 #include "content/public/browser/browser_child_process_observer.h"
@@ -47,9 +48,9 @@
 #include "content/public/common/content_switches.h"
 #include "content/public/common/process_type.h"
 #include "content/public/common/result_codes.h"
-#include "content/public/common/sandboxed_process_launcher_delegate.h"
 #include "mojo/public/cpp/bindings/scoped_message_error_crash_key.h"
 #include "mojo/public/cpp/system/platform_handle.h"
+#include "services/network/public/mojom/network_service.mojom.h"
 #include "services/tracing/public/cpp/trace_startup.h"
 #include "services/tracing/public/cpp/trace_startup_config.h"
 
@@ -290,6 +291,7 @@ void BrowserChildProcessHostImpl::LaunchWithoutExtraCommandLineSwitches(
       switches::kDisableBestEffortTasks,
       switches::kIPCConnectionTimeout,
       switches::kLogBestEffortTasks,
+      switches::kPartitionAllocSchedulerLoopQuarantine,
       switches::kPerfettoDisableInterning,
   };
   cmd_line->CopySwitchesFrom(browser_command_line, kForwardSwitches);
@@ -400,15 +402,19 @@ void BrowserChildProcessHostImpl::OnProcessConnected() {
   }
 }
 
-void BrowserChildProcessHostImpl::OnBadMessageReceived() {
-  std::string log_message = "Bad message received of type: unknown";
-  TerminateOnBadMessageReceived(log_message);
-}
 
 void BrowserChildProcessHostImpl::BindChildHistogramFetcherFactory(
     mojo::PendingReceiver<metrics::mojom::ChildHistogramFetcherFactory>
         factory) {
   GetHost()->BindReceiver(std::move(factory));
+}
+
+bool BrowserChildProcessHostImpl::IsWebiumRenderer() const {
+  return false;
+}
+
+uint64_t BrowserChildProcessHostImpl::GetProcessIdForHistogram() const {
+  return data_.GetChildProcessId().value();
 }
 
 void BrowserChildProcessHostImpl::TerminateOnBadMessageReceived(
@@ -682,6 +688,9 @@ void BrowserChildProcessHostImpl::OnProcessLaunched() {
   child_process()->EnableSystemTracingService(
       system_tracing_service_->BindAndPassPendingRemote());
 #endif
+
+  memory_pressure_listener_registration_.emplace(
+      base::MemoryPressureListenerTag::kBrowserChildProcessHostImpl, this);
 }
 
 void BrowserChildProcessHostImpl::RegisterCoordinatorClient(
@@ -718,6 +727,21 @@ void BrowserChildProcessHostImpl::RegisterCoordinatorClient(
                   static_cast<ProcessType>(data_.process_type)),
               child_process_launcher_->GetProcess().Pid(),
               delegate_->GetServiceName()));
+}
+
+void BrowserChildProcessHostImpl::OnMemoryPressure(
+    base::MemoryPressureLevel memory_pressure_level) {
+  // Match the existing behavior of only sending the memory pressure level to
+  // select process types.
+  // TODO(pmonette): Enable for all child processes.
+#if BUILDFLAG(IS_ANDROID)
+  child_process()->OnMemoryPressure(memory_pressure_level);
+#else
+  if (data_.process_type == PROCESS_TYPE_GPU ||
+      delegate_->GetServiceName() == network::mojom::NetworkService::Name_) {
+    child_process()->OnMemoryPressure(memory_pressure_level);
+  }
+#endif
 }
 
 bool BrowserChildProcessHostImpl::IsProcessLaunched() const {

@@ -15,7 +15,7 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
@@ -55,11 +55,12 @@ class ArcInputOverlayManagerFactory
   static constexpr const char* kName = "ArcInputOverlayManagerFactory";
 
   static ArcInputOverlayManagerFactory* GetInstance() {
-    return base::Singleton<ArcInputOverlayManagerFactory>::get();
+    static base::NoDestructor<ArcInputOverlayManagerFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend struct base::DefaultSingletonTraits<ArcInputOverlayManagerFactory>;
+  friend base::NoDestructor<ArcInputOverlayManagerFactory>;
   ArcInputOverlayManagerFactory() = default;
   ~ArcInputOverlayManagerFactory() override = default;
 };
@@ -253,8 +254,11 @@ void ArcInputOverlayManager::OnWindowDestroying(aura::Window* window) {
 }
 
 void ArcInputOverlayManager::OnWindowAddedToRootWindow(aura::Window* window) {
-  if (!window ||
-      ash::window_util::GetFocusedWindow()->GetToplevelWindow() != window) {
+  if (!window) {
+    return;
+  }
+  aura::Window* focused_window = ash::window_util::GetFocusedWindow();
+  if (!focused_window || focused_window->GetToplevelWindow() != window) {
     return;
   }
   RegisterWindow(window);

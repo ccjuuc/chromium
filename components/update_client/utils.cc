@@ -16,10 +16,10 @@
 #include <vector>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/containers/heap_array.h"
 #include "base/containers/span.h"
 #include "base/files/file.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/memory_mapped_file.h"
@@ -52,17 +52,13 @@
 
 namespace update_client {
 
-const char kArchAmd64[] = "x86_64";
-const char kArchIntel[] = "x86";
-const char kArchArm64[] = "arm64";
-
 #if BUILDFLAG(IS_CHROMEOS)
 // In ChromeOS, /tmp is a ramfs drive that can be too small
 // for large downloads like Gemini Nano2v3. A larger tmpfiles.d
 // mount has been created (see https://crrev.com/c/6810025) as a
 // scratch space with access to the full stateful partition to
 // handle these larger downloads.
-const char kTempDir[] = "/var/lib/odml/chrome_component_updater";
+constexpr char kTempDir[] = "/var/lib/odml/chrome_component_updater";
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 bool IsHttpServerError(int status_code) {
@@ -98,19 +94,19 @@ std::string GetCrxIdFromPublicKeyHash(base::span<const uint8_t> pk_hash) {
 
 bool VerifyFileHash256(const base::FilePath& filepath,
                        const std::string& expected_hash_str) {
-  std::array<uint8_t, crypto::hash::kSha256Size> expected_hash;
+  std::array<uint8_t, crypto::hash::kSha256Size> expected_hash = {};
   if (!base::HexStringToSpan(expected_hash_str, expected_hash)) {
     return false;
   }
 
-  base::File file(filepath, base::File::FLAG_OPEN |
-                                base::File::FLAG_WIN_SEQUENTIAL_SCAN |
-                                base::File::FLAG_READ);
+  base::File file(filepath,
+                  base::File::FLAG_OPEN | base::File::FLAG_WIN_SEQUENTIAL_SCAN |
+                      base::File::FLAG_READ | base::File::FLAG_NO_FOLLOW);
   if (!file.IsValid()) {
     return false;
   }
 
-  std::array<uint8_t, crypto::hash::kSha256Size> hash;
+  std::array<uint8_t, crypto::hash::kSha256Size> hash = {};
   if (!crypto::hash::HashFile(crypto::hash::kSha256, &file, hash)) {
     return false;
   }
@@ -119,7 +115,7 @@ bool VerifyFileHash256(const base::FilePath& filepath,
 }
 
 bool IsValidBrand(const std::string& brand) {
-  const size_t kMaxBrandSize = 4;
+  static constexpr size_t kMaxBrandSize = 4;
   return brand.empty() ||
          (brand.size() == kMaxBrandSize &&
           std::ranges::all_of(brand, &base::IsAsciiAlpha<char>));
@@ -135,7 +131,7 @@ bool IsValidInstallerAttributePart(const std::string& part,
   return part.size() >= min_length && part.size() <= max_length &&
          std::ranges::all_of(part, [&special_chars](char ch) {
            return base::IsAsciiAlpha(ch) || base::IsAsciiDigit(ch) ||
-                  base::Contains(special_chars, ch);
+                  special_chars.contains(ch);
          });
 }
 
@@ -167,8 +163,7 @@ CrxInstaller::Result InstallFunctionWrapper(
                                   : InstallError::GENERIC_ERROR);
 }
 
-std::optional<base::Value::Dict> ReadManifest(
-    const base::FilePath& unpack_path) {
+std::optional<base::DictValue> ReadManifest(const base::FilePath& unpack_path) {
   base::FilePath manifest =
       unpack_path.Append(FILE_PATH_LITERAL("manifest.json"));
   if (!base::PathExists(manifest)) {
@@ -238,5 +233,23 @@ std::string StringTypeToUTF8(const base::FilePath::StringType& stringtype) {
   return base::WideToUTF8(stringtype);
 }
 #endif  // BUILDFLAG(IS_WIN)
+
+void CleanupDirectoriesOlderThan(const base::FilePath& dir,
+                                 const base::FilePath::StringType& matcher,
+                                 base::TimeDelta older_than) {
+  // Enumerate the directories matching `matcher`.
+  base::FileEnumerator(dir,
+                       /*recursive=*/false, base::FileEnumerator::DIRECTORIES,
+                       matcher)
+      .ForEach([&](const base::FilePath& dir) {
+        base::File::Info info;
+
+        // Delete the directories older than `older_than`.
+        if (base::GetFileInfo(dir, &info) &&
+            ((info.creation_time + older_than) < base::Time::Now())) {
+          RetryFileOperation(&base::DeletePathRecursively, dir);
+        }
+      });
+}
 
 }  // namespace update_client

@@ -10,10 +10,10 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.LinearLayout;
 
-import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 import java.util.List;
 
@@ -32,6 +32,10 @@ public class BottomSheetListContainerView extends LinearLayout implements ListCo
      */
     @Override
     public void renderAllListItems(ListContainerViewDelegate delegate) {
+        if (getChildCount() > 0) {
+            removeAllViews();
+        }
+
         List<Integer> types = delegate.getListItems();
         for (int i = 0; i < types.size(); i++) {
             Integer type = types.get(i);

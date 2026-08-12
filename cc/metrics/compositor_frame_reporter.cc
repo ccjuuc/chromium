@@ -38,7 +38,7 @@
 #include "cc/metrics/event_latency_tracker.h"
 #include "cc/metrics/event_metrics.h"
 #include "cc/metrics/frame_sequence_tracker.h"
-#include "cc/metrics/latency_ukm_reporter.h"
+#include "cc/metrics/frame_sequence_tracker_collection.h"
 #include "cc/metrics/submit_info.h"
 #include "services/tracing/public/cpp/perfetto/macros.h"
 #include "third_party/perfetto/protos/perfetto/trace/track_event/chrome_frame_reporter.pbzero.h"
@@ -412,8 +412,15 @@ void CompositorFrameReporter::ProcessedVizBreakdown::Iterator::
 
 CompositorFrameReporter::ProcessedVizBreakdown::ProcessedVizBreakdown(
     base::TimeTicks viz_start_time,
-    const viz::FrameTimingDetails& viz_breakdown) {
-  bool trees_in_viz_mode = base::FeatureList::IsEnabled(features::kTreesInViz);
+    const viz::FrameTimingDetails& viz_breakdown,
+    bool should_report_histograms) {
+  // Even if TreesInViz mode feature is enabled, take the old breakdown path if
+  // this reporter represents UI content (implied by should_report_histograms
+  // not being set)
+  bool trees_in_viz_mode =
+      (base::FeatureList::IsEnabled(features::kTreesInViz) &&
+       should_report_histograms);
+
   if (!trees_in_viz_mode && viz_start_time.is_null()) {
     return;
   }
@@ -1121,7 +1128,7 @@ void CompositorFrameReporter::TerminateReporter() {
         blink_start_time_, begin_main_frame_start_, blink_breakdown_);
   if (!processed_viz_breakdown_)
     processed_viz_breakdown_ = std::make_unique<ProcessedVizBreakdown>(
-        viz_start_time_, viz_breakdown_);
+        viz_start_time_, viz_breakdown_, should_report_histograms_);
 
   if (!processed_trees_in_viz_breakdown_) {
     // TODO(crbug.com/445500514): Should be possible to report breakdowns for
@@ -1172,8 +1179,7 @@ void CompositorFrameReporter::TerminateReporter() {
 
   // Only report compositor latency metrics if the frame was produced.
   if (report_types_.any() &&
-      (should_report_histograms_ || global_trackers_.latency_ukm_reporter ||
-       global_trackers_.event_latency_tracker)) {
+      (should_report_histograms_ || global_trackers_.event_latency_tracker)) {
     DCHECK(stage_history_.size());
     DCHECK_EQ(SumOfStageHistory(), stage_history_.back().end_time -
                                        stage_history_.front().start_time);
@@ -1213,13 +1219,6 @@ void CompositorFrameReporter::ReportCompositorLatencyMetrics() const {
   // Subsampling these metrics to reduce CPU utilization.
   if (!base::ShouldRecordSubsampledMetric(0.001)) {
     return;
-  }
-
-  if (global_trackers_.latency_ukm_reporter) {
-    global_trackers_.latency_ukm_reporter->ReportCompositorLatencyUkm(
-        report_types_, stage_history_, active_trackers_,
-        *processed_blink_breakdown_, *processed_viz_breakdown_,
-        *processed_trees_in_viz_breakdown_);
   }
 
   if (!should_report_histograms_)
@@ -1481,12 +1480,6 @@ void CompositorFrameReporter::ReportEventLatencyMetrics() const {
   DCHECK_EQ(StageType::kTotalLatency, total_latency_stage.stage_type);
   DCHECK(dropped_non_damaging_events_metrics_);
 
-  if (global_trackers_.latency_ukm_reporter) {
-    global_trackers_.latency_ukm_reporter->ReportEventLatencyUkm(
-        events_metrics_, stage_history_, *processed_blink_breakdown_,
-        *processed_viz_breakdown_);
-  }
-
   std::vector<EventLatencyTracker::LatencyData> latencies;
 
   for (const auto& event_metrics : events_metrics_) {
@@ -1636,7 +1629,8 @@ void CompositorFrameReporter::ReportCompositorLatencyTraceEvents(
   }
 
   const auto trace_track =
-      perfetto::Track(base::trace_event::GetNextGlobalTraceId());
+      perfetto::NamedTrack("PipelineReporter",
+                           base::trace_event::GetNextGlobalTraceId());
   TRACE_EVENT_BEGIN(
       kTraceCategory, "PipelineReporter", trace_track, args_.frame_time,
       [&](perfetto::EventContext context) {
@@ -1830,6 +1824,9 @@ void CompositorFrameReporter::ReportCompositorLatencyTraceEvents(
 }
 
 void CompositorFrameReporter::ReportScrollJankMetrics() {
+  if (!should_report_histograms_) {
+    return;
+  }
   ReportScrollJankV1Metrics();
   ReportScrollJankV4Metrics();
 }
@@ -1910,11 +1907,6 @@ void CompositorFrameReporter::ReportScrollJankV1Metrics() {
     if (global_trackers_.scroll_jank_dropped_frame_tracker) {
       global_trackers_.scroll_jank_dropped_frame_tracker->OnScrollStarted();
     }
-    if (global_trackers_.scroll_jank_ukm_reporter) {
-      global_trackers_.scroll_jank_ukm_reporter->EmitScrollJankUkm();
-      global_trackers_.scroll_jank_ukm_reporter->SetEarliestScrollEvent(
-          *latest_event);
-    }
   }
 
   TRACE_EVENT("input,input.scrolling", "PresentedFrameInformation",
@@ -1934,10 +1926,6 @@ void CompositorFrameReporter::ReportScrollJankV1Metrics() {
     global_trackers_.scroll_jank_dropped_frame_tracker
         ->ReportLatestPresentationData(*latest_event, last_coalesced_ts,
                                        end_timestamp, args_.interval);
-  }
-  if (global_trackers_.scroll_jank_ukm_reporter) {
-    global_trackers_.scroll_jank_ukm_reporter
-        ->UpdateLatestFrameAndEmitPredictorJank(end_timestamp);
   }
 }
 

@@ -13,13 +13,12 @@
 #include "build/build_config.h"
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/download/bubble/download_bubble_utils.h"
-#include "chrome/browser/download/download_crx_util.h"
 #include "chrome/browser/download/download_item_model.h"
 #include "chrome/browser/download/download_stats.h"
+#include "chrome/browser/ssl/chrome_security_state_util.h"
 #include "chrome/common/pref_names.h"
 #include "components/download/public/common/download_item.h"
 #include "components/prefs/pref_service.h"
-#include "components/security_state/content/security_state_tab_helper.h"
 #include "components/security_state/core/security_state.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/web_contents.h"
@@ -34,14 +33,13 @@
 #include "content/public/common/content_features.h"
 #else
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.h"
+#include "extensions/browser/extension_util.h"
 #endif
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
@@ -120,11 +118,12 @@ void DownloadBubbleUIControllerDelegate::OnNewDownloadReady(
     item->AddObserver(handler);
   }
 #endif
-  if (!DownloadItemModel(item).ShouldShowInBubble())
+  if (!DownloadItemModel(item).ShouldShowInBubble()) {
     return;
+  }
   // crx downloads are handled by the DownloadBubbleUpdateService.
   // TODO(chlily): Consolidate these code paths.
-  if (download_crx_util::IsExtensionDownload(*item)) {
+  if (extensions::util::IsExtensionDownload(*item)) {
     return;
   }
 
@@ -140,8 +139,7 @@ void DownloadBubbleUIControllerDelegate::OnButtonClicked() {
   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
       [](BrowserWindowInterface* browser_window_interface) {
         DownloadToolbarUIController* download_controller =
-            browser_window_interface->GetFeatures()
-                .download_toolbar_ui_controller();
+            DownloadToolbarUIController::From(browser_window_interface);
         DownloadBubbleUIController* bubble_ui_controller =
             download_controller ? download_controller->bubble_controller()
                                 : nullptr;
@@ -153,7 +151,7 @@ void DownloadBubbleUIControllerDelegate::OnButtonClicked() {
 }
 
 #endif
-} // namespace
+}  // namespace
 
 DownloadUIController::Delegate::~Delegate() = default;
 
@@ -163,8 +161,9 @@ DownloadUIController::DownloadUIController(content::DownloadManager* manager,
                                            std::unique_ptr<Delegate> delegate)
     : download_notifier_(manager, this), delegate_(std::move(delegate)) {
 #if BUILDFLAG(IS_ANDROID)
-  if (!delegate_)
+  if (!delegate_) {
     delegate_ = std::make_unique<AndroidUIControllerDelegate>();
+  }
 #else
   // The download bubble UI is used on desktop platforms besides ChromeOS,
   // which uses system notifications instead.
@@ -198,13 +197,10 @@ void DownloadUIController::OnDownloadCreated(content::DownloadManager* manager,
   if (web_contents && (item->IsSavePackageDownload() ||
                        (web_contents->GetURL() != item->GetOriginalUrl() &&
                         web_contents->GetURL() != item->GetURL()))) {
-    auto* security_state_tab_helper =
-        SecurityStateTabHelper::FromWebContents(web_contents);
-    if (security_state_tab_helper) {
-      UMA_HISTOGRAM_ENUMERATION("Security.SecurityLevel.DownloadStarted",
-                                security_state_tab_helper->GetSecurityLevel(),
-                                security_state::SECURITY_LEVEL_COUNT);
-    }
+    UMA_HISTOGRAM_ENUMERATION(
+        "Security.SecurityLevel.DownloadStarted",
+        chrome_security_state::GetSecurityLevel(web_contents),
+        security_state::SECURITY_LEVEL_COUNT);
   }
 
   if (web_contents) {
@@ -263,15 +259,17 @@ void DownloadUIController::OnDownloadUpdated(content::DownloadManager* manager,
       DownloadController::CloseTabIfEmpty(web_contents, item);
     }
 #else   // BUILDFLAG(IS_ANDROID)
-    Browser* browser = chrome::FindBrowserWithTab(web_contents);
+    BrowserWindowInterface* browser =
+        GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+            web_contents);
     // If the download occurs in a new tab, and it's not a save page
     // download (started before initial navigation completed) close it.
     // Avoid calling CloseContents if the tab is not in this browser's tab strip
     // model; this can happen if the download was initiated by something
     // internal to Chrome, such as by the app list.
     if (browser && web_contents->GetController().IsInitialNavigation() &&
-        browser->tab_strip_model()->count() > 1 &&
-        browser->tab_strip_model()->GetIndexOfWebContents(web_contents) !=
+        browser->GetTabStripModel()->count() > 1 &&
+        browser->GetTabStripModel()->GetIndexOfWebContents(web_contents) !=
             TabStripModel::kNoTab &&
         !item->IsSavePackageDownload()) {
       web_contents->Close();
@@ -279,8 +277,9 @@ void DownloadUIController::OnDownloadUpdated(content::DownloadManager* manager,
 #endif  // BUILDFLAG(IS_ANDROID)
   }
 
-  if (item->GetState() == download::DownloadItem::CANCELLED)
+  if (item->GetState() == download::DownloadItem::CANCELLED) {
     return;
+  }
 
   DownloadItemModel(item).SetWasUINotified(true);
   delegate_->OnNewDownloadReady(item);

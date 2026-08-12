@@ -4,6 +4,7 @@
 
 #include "components/contextual_tasks/public/contextual_task.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -15,11 +16,15 @@ namespace contextual_tasks {
 Thread::Thread(ThreadType type,
                const std::string& server_id,
                const std::string& title,
-               const std::string& conversation_turn_id)
+               int64_t last_turn_time_unix_epoch_millis,
+               std::optional<std::string> conversation_turn_id)
     : type(type),
       server_id(server_id),
       title(title),
-      conversation_turn_id(conversation_turn_id) {}
+      last_turn_time(base::Time::FromMillisecondsSinceUnixEpoch(
+          last_turn_time_unix_epoch_millis)),
+      conversation_turn_id(conversation_turn_id) {
+}
 Thread::Thread(const Thread& other) = default;
 Thread::~Thread() = default;
 
@@ -59,7 +64,8 @@ std::optional<Thread> ContextualTask::GetThread() const {
   return thread_;
 }
 
-UrlResource::UrlResource(const GURL& url) : url(url) {}
+UrlResource::UrlResource(const GURL& url, ResourceType resource_type)
+    : url(url), resource_type(resource_type) {}
 UrlResource::UrlResource(const base::Uuid& url_id, const GURL& url)
     : url_id(url_id), url(url) {}
 UrlResource::UrlResource(const UrlResource& other) = default;
@@ -79,6 +85,15 @@ bool ContextualTask::AddUrlResource(const UrlResource& url_resource) {
 
 void ContextualTask::SetUrlResourcesFromServer(
     std::vector<UrlResource> url_resources) {
+  // Sort tabs submitted from contextual tasks such that the most recently
+  // selected is the leftmost tab.
+  std::stable_sort(url_resources.begin(), url_resources.end(),
+                   [](const UrlResource& a, const UrlResource& b) {
+                     if (a.timestamp.has_value() && b.timestamp.has_value()) {
+                       return a.timestamp.value() < b.timestamp.value();
+                     }
+                     return b.timestamp.has_value();
+                   });
   url_resources_ = std::move(url_resources);
 }
 

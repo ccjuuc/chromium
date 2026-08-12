@@ -851,7 +851,11 @@ void AshNotificationView::ToggleExpand() {
         "Ash.NotificationView.InlineReply.FadeOut.AnimationSmoothness");
   }
 
+  auto weak_ptr = weak_factory_.GetWeakPtr();
   SetExpanded(target_expanded_state);
+  if (!weak_ptr) {
+    return;
+  }
 
   PerformExpandCollapseAnimation();
 
@@ -1009,8 +1013,7 @@ void AshNotificationView::RemoveGroupNotification(
         std::move(on_animation_aborted),
         /*delay_in_ms=*/0,
         /*duration_in_ms=*/kSlideOutGroupedNotificationAnimationDurationMs,
-        gfx::Tween::LINEAR,
-        "Ash.Notification.GroupNotification.SlideOut.AnimationSmoothness");
+        gfx::Tween::LINEAR);
   } else {
     std::move(on_notification_slid_out).Run();
   }
@@ -1381,12 +1384,10 @@ void AshNotificationView::OnThemeChanged() {
       message_center::MessageCenter::Get()->FindVisibleNotificationById(
           notification_id()));
 
-  // For unittests, `GetColorProvider()` could be nullptr.
-  if (inline_reply() && GetColorProvider()) {
-    inline_reply()->textfield()->SetTextColor(
-        GetColorProvider()->GetColor(cros_tokens::kCrosSysOnSurface));
-    inline_reply()->textfield()->set_placeholder_text_color(
-        GetColorProvider()->GetColor(cros_tokens::kCrosSysOnSurfaceVariant));
+  if (inline_reply()) {
+    inline_reply()->textfield()->SetTextColorId(cros_tokens::kCrosSysOnSurface);
+    inline_reply()->textfield()->SetPlaceholderTextColorId(
+        cros_tokens::kCrosSysOnSurfaceVariant);
   }
 
   if (icon_view() &&
@@ -1439,7 +1440,11 @@ void AshNotificationView::ToggleInlineSettings(const ui::Event& event) {
   bool should_show_inline_settings = !inline_settings_row()->GetVisible();
   PerformToggleInlineSettingsAnimation(should_show_inline_settings);
 
+  auto weak_ptr = weak_factory_.GetWeakPtr();
   NotificationViewBase::ToggleInlineSettings(event);
+  if (!weak_ptr) {
+    return;
+  }
 
   if (is_grouped_parent_view_) {
     if (shown_in_popup_) {
@@ -1468,7 +1473,11 @@ void AshNotificationView::ToggleSnoozeSettings(const ui::Event& event) {
 
   bool should_show_snooze_settings = !snooze_settings_row()->GetVisible();
 
+  auto weak_ptr = weak_factory_.GetWeakPtr();
   NotificationViewBase::ToggleSnoozeSettings(event);
+  if (!weak_ptr) {
+    return;
+  }
 
   left_content()->SetVisible(!should_show_snooze_settings);
   right_content()->SetVisible(!should_show_snooze_settings);

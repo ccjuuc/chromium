@@ -17,20 +17,26 @@ import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CallbackHelper;
+import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.R;
+import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.contextualsearch.ContextualSearchManager;
 import org.chromium.chrome.browser.ephemeraltab.EphemeralTabCoordinator;
 import org.chromium.chrome.browser.ephemeraltab.EphemeralTabObserver;
 import org.chromium.chrome.browser.ephemeraltab.EphemeralTabSheetContent;
 import org.chromium.chrome.browser.firstrun.DisableFirstRun;
+import org.chromium.chrome.browser.flags.ActivityType;
+import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabContextMenuItemDelegate;
 import org.chromium.chrome.browser.tabbed_mode.TabbedRootUiCoordinator;
 import org.chromium.chrome.browser.tabmodel.IncognitoTabHostUtils;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
@@ -38,17 +44,23 @@ import org.chromium.chrome.test.util.browser.contextmenu.ContextMenuUtils;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.SheetState;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetTestSupport;
+import org.chromium.content_public.browser.NavigationHandle;
+import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.test.util.DOMUtils;
+import org.chromium.content_public.browser.test.util.JavaScriptUtils;
+import org.chromium.content_public.common.ContentSwitches;
+import org.chromium.net.test.EmbeddedTestServer;
 import org.chromium.url.GURL;
 
 import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 
 /**
  * Tests the Preview Tab, also known as the Ephemeral Tab. Based on the
  * FocusedEditableTextFieldZoomTest and TabsTest.
  */
 @RunWith(ChromeJUnit4ClassRunner.class)
-@Restriction(Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE)
+@CommandLineFlags.Add(ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE)
 public class PreviewTabTest {
     @Rule
     public FreshCtaTransitTestRule mActivityTestRule =
@@ -73,14 +85,16 @@ public class PreviewTabTest {
         public final CallbackHelper onToolbarCreatedCallback = new CallbackHelper();
         public final CallbackHelper onNavigationStartedCallback = new CallbackHelper();
         public final CallbackHelper onTitleSetCallback = new CallbackHelper();
+        public ViewGroup mToolbarView;
 
         @Override
         public void onToolbarCreated(ViewGroup toolbarView) {
+            mToolbarView = toolbarView;
             onToolbarCreatedCallback.notifyCalled();
         }
 
         @Override
-        public void onNavigationStarted(GURL clickedUrl) {
+        public void onNavigationStarted(NavigationHandle navigation) {
             onNavigationStartedCallback.notifyCalled();
         }
 
@@ -126,6 +140,45 @@ public class PreviewTabTest {
         Assert.assertFalse(
                 "The Preview Tab should have closed but did not indicate closed",
                 mEphemeralTabCoordinator.isOpened());
+    }
+
+    private void openUrlInPreviewTab(String url) throws Exception {
+        CallbackHelper callbackHelper = new CallbackHelper();
+        int callCount = callbackHelper.getCallCount();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    ChromeTabbedActivity cta = mActivityTestRule.getActivity();
+                    var rootUiCoordinator = cta.getRootUiCoordinatorForTesting();
+                    var tab = cta.getActivityTab();
+                    var tabModelSelector = cta.getTabModelSelectorSupplier().get();
+                    var ephemeralTabCoordinatorSupplier =
+                            rootUiCoordinator.getEphemeralTabCoordinatorSupplier();
+                    Supplier<SnackbarManager> snackbarManagerSupplier =
+                            () -> cta.getSnackbarManager();
+                    Supplier<BottomSheetController> bottomSheetControllerSupplier =
+                            () -> rootUiCoordinator.getBottomSheetController();
+                    var contextMenu =
+                            new TabContextMenuItemDelegate(
+                                    cta,
+                                    ActivityType.TABBED,
+                                    tab,
+                                    tabModelSelector,
+                                    ephemeralTabCoordinatorSupplier,
+                                    () -> {},
+                                    snackbarManagerSupplier,
+                                    bottomSheetControllerSupplier);
+                    ephemeralTabCoordinatorSupplier
+                            .get()
+                            .addObserver(
+                                    new EphemeralTabObserver() {
+                                        @Override
+                                        public void onNavigationFinished(GURL clickedUrl) {
+                                            callbackHelper.notifyCalled();
+                                        }
+                                    });
+                    contextMenu.onOpenInEphemeralTab(new GURL(url), "Echo Cookie");
+                });
+        callbackHelper.waitForCallback(callCount);
     }
 
     /**
@@ -217,7 +270,10 @@ public class PreviewTabTest {
                                 null,
                                 "PreviewTab",
                                 mActivityTestRule.getProfile(false),
-                                /* canPromoteToNewTab= */ true));
+                                /* canPromoteToNewTab= */ true,
+                                /* shouldHaveContextMenu= */ true,
+                                /* initiatorOrigin= */ null,
+                                () -> {}));
         endAnimations();
         Assert.assertTrue("The Preview Tab did not open", mEphemeralTabCoordinator.isOpened());
         Assert.assertTrue("Contextual Search should be suppressed", csManager.isSuppressed());
@@ -230,7 +286,7 @@ public class PreviewTabTest {
     @Test
     @MediumTest
     @Feature({"PreviewTab"})
-    @DisabledTest(message = "https://crbug.com/1412050")
+    @DisabledTest(message = "https://crbug.com/40890672")
     public void testObserverMethods() throws TimeoutException {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> mEphemeralTabCoordinator.addObserver(mEphemeralTabObserver));
@@ -243,7 +299,10 @@ public class PreviewTabTest {
                                 null,
                                 "PreviewTab",
                                 mActivityTestRule.getProfile(false),
-                                /* canPromoteToNewTab= */ true));
+                                /* canPromoteToNewTab= */ true,
+                                /* shouldHaveContextMenu= */ true,
+                                /* initiatorOrigin= */ null,
+                                () -> {}));
         endAnimations();
 
         mEphemeralTabObserver.onToolbarCreatedCallback.waitForCallback(0, 1);
@@ -258,6 +317,91 @@ public class PreviewTabTest {
         mEphemeralTabObserver.onNavigationStartedCallback.waitForCallback(1, 1);
         mEphemeralTabObserver.onTitleSetCallback.waitForCallback(1, 1);
         Assert.assertEquals(1, mEphemeralTabObserver.onToolbarCreatedCallback.getCallCount());
+
+        closePreviewTab();
+    }
+
+    /**
+     * Test that SameSite=Strict cookies are not sent in the preview tab when it's considered a
+     * cross-site navigation from the main tab.
+     */
+    @Test
+    @MediumTest
+    @Feature({"PreviewTab"})
+    @CommandLineFlags.Add(ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1")
+    public void testSameSiteStrictCookie() throws Throwable {
+        EmbeddedTestServer testServer = mActivityTestRule.getTestServer();
+        String cookie = "secret_token=12345";
+        String setCookieUrl =
+                testServer.getURLWithHostName(
+                        "a.com", "/set-cookie?" + cookie + ";SameSite=Strict;Path=/");
+        mActivityTestRule.loadUrlInNewTab(setCookieUrl);
+        mActivityTestRule.loadUrl(testServer.getURLWithHostName("b.com", BASE_PAGE));
+
+        // Cross-site navigation (b.com -> a.com) to preview tab
+        String echoCookieUrl = testServer.getURLWithHostName("a.com", "/echoheader?Cookie");
+        openUrlInPreviewTab(echoCookieUrl);
+
+        WebContents webContents = mEphemeralTabCoordinator.getWebContentsForTesting();
+        String content =
+                JavaScriptUtils.executeJavaScriptAndWaitForResult(
+                        webContents, "document.body.textContent");
+        Assert.assertFalse("SameSite=Strict cookie should not be sent", content.contains(cookie));
+        closePreviewTab();
+    }
+
+    /** Test that the drag handlebar is focusable, clickable, and expands/collapses the sheet. */
+    @Test
+    @MediumTest
+    @Feature({"PreviewTab"})
+    public void testDragHandlebarFocusAndClick() throws Throwable {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> mEphemeralTabCoordinator.addObserver(mEphemeralTabObserver));
+
+        // Open Preview Tab.
+        ThreadUtils.runOnUiThreadBlocking(
+                () ->
+                        mEphemeralTabCoordinator.requestOpenSheet(
+                                new GURL(mActivityTestRule.getTestServer().getURL(PREVIEW_TAB)),
+                                null,
+                                "PreviewTab",
+                                mActivityTestRule.getProfile(false),
+                                /* canPromoteToNewTab= */ true,
+                                /* shouldHaveContextMenu= */ true,
+                                /* initiatorOrigin= */ null,
+                                () -> {}));
+        endAnimations();
+        mEphemeralTabObserver.onToolbarCreatedCallback.waitForCallback(0, 1);
+
+        ViewGroup toolbar = mEphemeralTabObserver.mToolbarView;
+        Assert.assertNotNull("Toolbar should not be null", toolbar);
+
+        android.view.View dragHandlebar = toolbar.findViewById(R.id.drag_handlebar);
+        Assert.assertNotNull("Drag handlebar should not be null", dragHandlebar);
+
+        // Verify focusability and clickability for keyboard/accessibility users
+        Assert.assertTrue("Drag handlebar should be focusable", dragHandlebar.isFocusable());
+        Assert.assertTrue("Drag handlebar should be clickable", dragHandlebar.isClickable());
+
+        BottomSheetController controller =
+                mActivityTestRule
+                        .getActivity()
+                        .getRootUiCoordinatorForTesting()
+                        .getBottomSheetController();
+
+        // Ephemeral Tab opens directly in FULL state as it does not support PEEK/HALF
+        CriteriaHelper.pollUiThread(
+                () -> controller.getSheetState() == SheetState.FULL,
+                "Preview Tab did not reach FULL state");
+
+        // Perform click on drag handlebar on the UI thread.
+        // It should be actionable (no crash) and remain in FULL state since collapse is not
+        // supported.
+        ThreadUtils.runOnUiThreadBlocking(() -> dragHandlebar.performClick());
+        endAnimations();
+        CriteriaHelper.pollUiThread(
+                () -> controller.getSheetState() == SheetState.FULL,
+                "Preview Tab did not remain in FULL state after handlebar click");
 
         closePreviewTab();
     }

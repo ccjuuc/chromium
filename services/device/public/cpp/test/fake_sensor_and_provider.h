@@ -17,9 +17,7 @@
 
 namespace device {
 
-template <class T>
-struct SensorReadingSharedBufferImpl;
-using SensorReadingSharedBuffer = SensorReadingSharedBufferImpl<void>;
+struct SensorReadingSharedBuffer;
 
 // This encapsulates the pattern of waiting for an event and returning whether
 // that event was received from `Wait`. This makes it easy to do the right thing
@@ -40,7 +38,10 @@ class WaiterHelper {
 
 class FakeSensor : public mojom::Sensor {
  public:
-  FakeSensor(mojom::SensorType sensor_type, SensorReadingSharedBuffer* buffer);
+  FakeSensor(mojom::SensorType sensor_type,
+             SensorReadingSharedBuffer* buffer,
+             mojo::PendingReceiver<mojom::SensorClientController> controller,
+             bool initially_suspended);
 
   FakeSensor(const FakeSensor&) = delete;
   FakeSensor& operator=(const FakeSensor&) = delete;
@@ -68,8 +69,17 @@ class FakeSensor : public mojom::Sensor {
   void SetReading(SensorReading reading);
 
   bool WaitForSuspend(bool suspend);
+  bool WaitForBrowserSuspend(bool suspend);
+  bool is_browser_suspended() const { return is_browser_suspended_; }
+
+  void OnBrowserSuspend();
+  void OnBrowserResume();
+
+  void SetControllerDisconnectCallback(base::OnceClosure callback);
 
  private:
+  class SensorClientControllerImpl;
+
   void SensorReadingChanged();
 
   mojom::SensorType sensor_type_;
@@ -79,7 +89,11 @@ class FakeSensor : public mojom::Sensor {
   SensorReading reading_;
   WaiterHelper suspend_waiter_;
   WaiterHelper resume_waiter_;
+  WaiterHelper browser_suspend_waiter_;
+  WaiterHelper browser_resume_waiter_;
+  bool is_browser_suspended_ = false;
   base::OnceCallback<void()> suspend_callback_;
+  std::unique_ptr<SensorClientControllerImpl> client_controller_;
 };
 
 class FakeSensorProvider : public mojom::SensorProvider {
@@ -91,8 +105,12 @@ class FakeSensorProvider : public mojom::SensorProvider {
 
   ~FakeSensorProvider() override;
 
-  // mojom::sensorProvider:
-  void GetSensor(mojom::SensorType type, GetSensorCallback callback) override;
+  // mojom::SensorProvider:
+  void GetSensor(
+      mojom::SensorType type,
+      mojo::PendingReceiver<mojom::SensorClientController> controller,
+      bool initially_suspended,
+      GetSensorCallback callback) override;
   void CreateVirtualSensor(
       mojom::SensorType type,
       mojom::VirtualSensorMetadataPtr metadata,
@@ -181,6 +199,8 @@ class FakeSensorProvider : public mojom::SensorProvider {
   bool WaitForLinearAccelerationSensorSuspend(bool suspend);
   bool WaitForGravitySensorSuspend(bool suspend);
   bool WaitForGyroscopeSuspend(bool suspend);
+
+  FakeSensor* accelerometer() const { return accelerometer_; }
 
  private:
   bool CreateSharedBufferIfNeeded();

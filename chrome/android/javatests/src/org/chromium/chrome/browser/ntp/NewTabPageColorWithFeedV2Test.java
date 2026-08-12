@@ -9,10 +9,10 @@ import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getO
 import android.content.Context;
 import android.graphics.Color;
 
-import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.test.filters.MediumTest;
 
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -20,6 +20,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Restriction;
@@ -28,10 +29,10 @@ import org.chromium.chrome.browser.feed.v2.TestFeedServer;
 import org.chromium.chrome.browser.firstrun.FirstRunUtils;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.ui.theme.ChromeSemanticColorUtils;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.util.NewTabPageTestUtils;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.browser_ui.widget.RecyclerViewTestUtils;
@@ -40,6 +41,7 @@ import org.chromium.ui.base.DeviceFormFactor;
 
 /** Tests for colors used in UI components in the native android New Tab Page. */
 @RunWith(ChromeJUnit4ClassRunner.class)
+@Batch(Batch.PER_CLASS)
 @CommandLineFlags.Add({
     ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
     "disable-features=IPH_FeedHeaderMenu"
@@ -48,8 +50,8 @@ public class NewTabPageColorWithFeedV2Test {
     private static final int MIN_ITEMS_AFTER_LOAD = 10;
 
     @Rule
-    public FreshCtaTransitTestRule mActivityTestRule =
-            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     private NewTabPage mNtp;
 
@@ -79,6 +81,13 @@ public class NewTabPageColorWithFeedV2Test {
         mNtp = (NewTabPage) tab.getNativePage();
     }
 
+    @After
+    public void tearDown() {
+        if (mFeedServer != null) {
+            mFeedServer.shutdown();
+        }
+    }
+
     @Test
     @MediumTest
     @Restriction(DeviceFormFactor.PHONE)
@@ -88,7 +97,7 @@ public class NewTabPageColorWithFeedV2Test {
 
         Context context = mActivityTestRule.getActivity();
         int expectedTextBoxBackground =
-                ContextCompat.getColor(context, R.color.home_surface_background_color);
+                ChromeSemanticColorUtils.getHomeSurfaceBackgroundColor(context);
         Assert.assertEquals(
                 expectedTextBoxBackground, mNtp.getToolbarTextBoxBackgroundColor(Color.BLACK));
 

@@ -14,10 +14,12 @@
 #include <vector>
 
 #include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
 #include "base/observer_list.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "base/types/expected.h"
+#include "google_apis/gaia/google_service_auth_error.h"
 #include "ios/chrome/browser/signin/model/capabilities_types.h"
 #include "ios/chrome/browser/signin/model/system_identity_manager_observer.h"
 
@@ -26,6 +28,24 @@ class GaiaId;
 @protocol SystemIdentity;
 @protocol SystemIdentityInteractionManager;
 class SystemIdentityManagerObserver;
+
+// Provider for building external privacy contexts, which requires a
+// UIViewController (e.g. to present system UI).
+@protocol ExternalPrivacyContextUIProvider <NSObject>
+
+// Returns the view controller to use for presenting UI during External Privacy
+// Context building.
+- (UIViewController*)viewControllerForExternalPrivacyContext;
+
+// Notifies the provider that an External Privacy Context build is requested.
+// The provider should block the UI during the build.
+- (void)blockUIForExternalPrivacyContextBuild;
+
+// Notifies the provider that the External Privacy Context build is done.
+// The provider should unblock the UI.
+- (void)unblockUIOnExternalPrivacyContextBuilt;
+
+@end
 
 // SystemIdentityManager is Chrome's interface to the iOS shared authentication
 // library: It provides access to accounts on the device and information about
@@ -88,8 +108,14 @@ class SystemIdentityManager {
   using ForgetIdentityCallback = base::OnceCallback<void(NSError*)>;
 
   // Callback invoked when the `GetAccessToken()` operation completes.
+  // TODO(crbug.com/502126003): Delete this callback when
+  // AccessTokenRequestCallback is used instead.
   using AccessTokenCallback =
       base::OnceCallback<void(std::optional<AccessTokenInfo>, NSError*)>;
+
+  // Callback invoked when the `GetAccessToken()` operation completes.
+  using AccessTokenRequestCallback = base::OnceCallback<void(
+      base::expected<AccessTokenInfo, GoogleServiceAuthError>)>;
 
   // Callback invoked when the `GetHostedDomain()` operation completes.
   using HostedDomainCallback = base::OnceCallback<void(NSString*, NSError*)>;
@@ -97,11 +123,21 @@ class SystemIdentityManager {
   // Callback invoked when the `FetchTokenAuthURL()` operation completes.
   using AuthenticatedURLCallback = base::OnceCallback<void(NSURL*, NSError*)>;
 
-  // Callback invoked when the `FetchCapabilitie()` operation completes.
+  // Callback invoked when the `FetchCapabilities()` operation completes.
   using FetchCapabilitiesCallback =
       base::OnceCallback<void(std::map<std::string, CapabilityResult>)>;
 
-  // Callback invoked when `HandleMDMNotification` completes. Is is invoked
+  // Callback invoked when the `FetchCapabilities()` operation completes for a
+  // subset of the capabilities. Can be called multiple times as capabilities
+  // are fetched.
+  using FetchPartialCapabilitiesCallback =
+      base::RepeatingCallback<void(std::map<std::string, CapabilityResult>)>;
+
+  // Callback invoked when the `FetchCapabilitiesWithPartial()` operation
+  // completes.
+  using FetchCapabilitiesCompletion = base::OnceClosure;
+
+  // Callback invoked when `HandleMDMNotification` completes. It is invoked
   // with a boolean indicating whether the device is blocked or not.
   using HandleMDMCallback = base::OnceCallback<void(bool)>;
 
@@ -173,7 +209,7 @@ class SystemIdentityManager {
   // Creates a new SystemIdentityInteractionManager instance.
   virtual id<SystemIdentityInteractionManager> CreateInteractionManager() = 0;
 
-  // Iterates over all known identities, sortted by the ordering used in
+  // Iterates over all known identities, sorted by the ordering used in
   // account manager, which is typically based on the keychain ordering
   // of the accounts.
   virtual void IterateOverIdentities(IdentityIteratorCallback callback) = 0;
@@ -182,6 +218,7 @@ class SystemIdentityManager {
   // is invoked on the calling sequence when the operation completes.
   virtual void ForgetIdentity(id<SystemIdentity> identity,
                               ForgetIdentityCallback callback) = 0;
+
   // Returns true if the identity was removed by calling `ForgetIdentity()`.
   // Returns false If the identity was not removed or disappeared without
   // calling `ForgetIdentity()`.
@@ -196,10 +233,30 @@ class SystemIdentityManager {
 
   // Asynchronously retrieves access tokens for `identity` with `scopes`. The
   // callback is invoked on the calling sequence when the operation completes.
+  // TODO(crbug.com/502126003): remove this method when the one with
+  // AccessTokenRequestCallback is used instead.
   virtual void GetAccessToken(id<SystemIdentity> identity,
                               const std::string& client_id,
                               const std::set<std::string>& scopes,
                               AccessTokenCallback callback) = 0;
+
+  // Asynchronously retrieves access tokens for `identity` with `scopes`. The
+  // callback is invoked on the calling sequence when the operation completes.
+  // TODO(crbug.com/502440730): make this method pure virtual after updating the
+  // internal implementation.
+  virtual void GetAccessToken(id<SystemIdentity> identity,
+                              const std::string& client_id,
+                              const std::set<std::string>& scopes,
+                              AccessTokenRequestCallback callback) {}
+
+  // Asynchronously retrieves access tokens for `identity` with `scopes`. The
+  // callback is invoked on the calling sequence when the operation completes.
+  // Uses the default client id and client secret.
+  // TODO(crbug.com/502440730): make this method pure virtual after updating the
+  // internal implementation.
+  virtual void GetAccessToken(id<SystemIdentity> identity,
+                              const std::set<std::string>& scopes,
+                              AccessTokenRequestCallback callback) {}
 
   // Asynchronously fetches the avatar for `identity` from the network and
   // store it in the cache. The image can be large to avoid pixelation on
@@ -224,14 +281,54 @@ class SystemIdentityManager {
       id<SystemIdentity> identity) = 0;
 
   // Asynchronously returns the capabilities for `identity`.
+  // TODO(crbug.com/517899430): remove this method once it's replaced by
+  // FetchCapabilitiesWithPartial.
   virtual void FetchCapabilities(id<SystemIdentity> identity,
                                  const std::vector<std::string>& names,
                                  FetchCapabilitiesCallback callback) = 0;
+
+  // Asynchronously returns the capabilities for `identity`.
+  // * `partial_callback` is called multiple times as a subset of capabilities
+  // in `names` are fetched.
+  // * `completion` is called once after all capabilities in `names` are fetched
+  // or the fetch has failed. No more calls to `partial_callback` are expected
+  // after `completion` is called.
+  // TODO(crbug.com/517899430): Have `completion` as the last parameter.
+  virtual void FetchCapabilitiesWithPartial(
+      id<SystemIdentity> identity,
+      const std::vector<std::string>& names,
+      FetchCapabilitiesCompletion completion,
+      FetchPartialCapabilitiesCallback partial_callback) = 0;
+
+  // Registers the provider for building external privacy context.
+  virtual void RegisterExternalPrivacyContextProvider(
+      id<ExternalPrivacyContextUIProvider> provider) = 0;
+
+  // Unregisters the provider for building external privacy context.
+  virtual void UnregisterExternalPrivacyContextProvider(
+      id<ExternalPrivacyContextUIProvider> provider) = 0;
+
+  // Called when a provider is ready for capabilities fetching.
+  // The `provider` must have been previously registered via
+  // `RegisterExternalPrivacyContextProvider`.
+  virtual void ExternalPrivacyContextProviderReady(
+      id<ExternalPrivacyContextUIProvider> provider) = 0;
+
+  // Asynchronously handles a potential MDM (Mobile Device Management) event.
+  // The callback is invoked on the calling sequence when the operation
+  // completes.
+  // Returns YES if the MDM notification display process is successfully
+  // initiated.
+  // Should not be called if the error is not an MDM error.
+  virtual bool DisplayMDMNotification(id<SystemIdentity> identity,
+                                      const GoogleServiceAuthError& error,
+                                      HandleMDMCallback callback) = 0;
 
   // Asynchronously handles a potential MDM (Mobile Device Management) event.
   // The callback is invoked on the calling sequence when the operation
   // completes.
   // Returns YES if the device status is blocked.
+  // This method will be removed during the MDM cleanup.
   virtual bool HandleMDMNotification(
       id<SystemIdentity> identity,
       NSArray<id<SystemIdentity>>* active_identities,
@@ -272,15 +369,17 @@ class SystemIdentityManager {
       const std::set<std::string>& scopes);
 
   // Presents a new Account Details view and returns a callback that can be
-  // used to dismiss the view (can be ignore if not needed).
+  // used to dismiss the view (can be ignored if not needed).
   virtual DismissViewCallback PresentAccountDetailsController(
       PresentDialogConfiguration configuration) = 0;
+
   // Presents a new Web and App Setting Details view and returns a callback
-  // that can be used to dismiss the view (can be ignore if not needed).
+  // that can be used to dismiss the view (can be ignored if not needed).
   virtual DismissViewCallback PresentWebAndAppSettingDetailsController(
       PresentDialogConfiguration configuration) = 0;
+
   // Presents a new Linked Services Settings Details view and returns a callback
-  // that can be used to dismiss the view (can be ignore if not needed).
+  // that can be used to dismiss the view (can be ignored if not needed).
   virtual DismissViewCallback PresentLinkedServicesSettingsDetailsController(
       PresentDialogConfiguration configuration) = 0;
 

@@ -12,10 +12,6 @@ import static org.chromium.base.test.util.CriteriaHelper.pollUiThread;
 import static org.chromium.base.test.util.Matchers.containsString;
 import static org.chromium.base.test.util.Matchers.is;
 import static org.chromium.chrome.browser.autofill.AutofillTestHelper.createCreditCard;
-import static org.chromium.chrome.test.R.id.first_line_label;
-import static org.chromium.chrome.test.R.id.main_text;
-import static org.chromium.chrome.test.R.id.minor_text;
-import static org.chromium.chrome.test.R.id.touch_to_fill_payment_method_home_screen;
 
 import android.view.View;
 import android.widget.TextView;
@@ -31,14 +27,16 @@ import org.junit.runner.RunWith;
 import org.chromium.base.FakeTimeTestRule;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.autofill.PersonalDataManager.CreditCard;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.password_manager.PasswordManagerTestUtilsBridge;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.SheetState;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerProvider;
@@ -50,6 +48,7 @@ import org.chromium.content_public.browser.test.util.DOMUtils;
 import org.chromium.content_public.browser.test.util.TestInputMethodManagerWrapper;
 import org.chromium.content_public.browser.test.util.WebContentsUtils;
 import org.chromium.net.test.EmbeddedTestServerRule;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.widget.ButtonCompat;
 
 import java.util.concurrent.TimeoutException;
@@ -60,8 +59,8 @@ import java.util.concurrent.TimeoutException;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE, "show-autofill-signatures"})
 public class TouchToFillCreditCardTest {
     @Rule
-    public FreshCtaTransitTestRule mActivityTestRule =
-            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     @Rule public FakeTimeTestRule mFakeTimeTestRule = new FakeTimeTestRule();
 
@@ -101,7 +100,7 @@ public class TouchToFillCreditCardTest {
         EmbeddedTestServerRule embeddedTestServerRule =
                 mActivityTestRule.getEmbeddedTestServerRule();
         embeddedTestServerRule.setServerUsesHttps(true);
-        mActivityTestRule.startOnTestServerUrl(FORM_URL);
+        mActivityTestRule.startOnWebPage(embeddedTestServerRule.getServer().getURL(FORM_URL));
         PasswordManagerTestUtilsBridge.disableServerPredictions();
         new AutofillTestHelper().setCreditCard(VISA);
 
@@ -122,6 +121,7 @@ public class TouchToFillCreditCardTest {
     @Test
     @MediumTest
     @DisableFeatures(ChromeFeatureList.AUTOFILL_ANDROID_KEYBOARD_ACCESSORY_DYNAMIC_POSITIONING)
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511288092
     public void testSelectingLocalCard() throws TimeoutException {
         // Focus the field to bring up the touch to fill for credit cards.
         DOMUtils.clickNode(mWebContents, CREDIT_CARD_NUMBER_FIELD_ID);
@@ -165,13 +165,13 @@ public class TouchToFillCreditCardTest {
     private RecyclerView getItemsList() {
         return mActivityTestRule
                 .getActivity()
-                .findViewById(touch_to_fill_payment_method_home_screen);
+                .findViewById(R.id.touch_to_fill_payment_method_home_screen);
     }
 
     private void verifyCardSuggestionIsCorrectlyDisplayed(View cardSuggestionItemLayout) {
-        TextView mainTextLayout = cardSuggestionItemLayout.findViewById(main_text);
-        TextView minorTextLayout = cardSuggestionItemLayout.findViewById(minor_text);
-        TextView cardDescLayout = cardSuggestionItemLayout.findViewById(first_line_label);
+        TextView mainTextLayout = cardSuggestionItemLayout.findViewById(R.id.main_text);
+        TextView minorTextLayout = cardSuggestionItemLayout.findViewById(R.id.minor_text);
+        TextView cardDescLayout = cardSuggestionItemLayout.findViewById(R.id.first_line_label);
         // Check that suggestion main text with the card name is displayed
         checkThat(mainTextLayout.getText().toString(), is(CARD_NAME));
         // Check that suggestion minor text with the last four digits of the card are displayed

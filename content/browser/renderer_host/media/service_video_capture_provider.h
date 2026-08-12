@@ -55,10 +55,21 @@ class CONTENT_EXPORT ServiceVideoCaptureProvider
       base::OnceCallback<void(DesktopMediaID::Id)> created_callback,
       base::OnceCallback<void(webrtc::DesktopCapturer::Source)> picker_callback,
       base::OnceCallback<void()> cancel_callback,
-      base::OnceCallback<void()> error_callback) override;
+      base::OnceCallback<void()> error_callback,
+      base::OnceCallback<void(DesktopMediaID::Id)> stop_audio_callback)
+      override;
   void CloseNativeScreenCapturePicker(DesktopMediaID device_id) override;
 
+#if BUILDFLAG(IS_MAC)
+  void GetApplicationAudioCaptureId(
+      DesktopMediaID::Id session_id,
+      base::OnceCallback<void(
+          const std::optional<desktop_capture::ApplicationAudioCaptureId>&)>
+          callback) override;
+#endif
+
   // content::GpuDataManagerObserver implementation.
+
   void OnGpuInfoUpdate() override;
 
  private:
@@ -99,12 +110,10 @@ class CONTENT_EXPORT ServiceVideoCaptureProvider
   base::TimeTicks time_of_last_uninitialize_;
 
   std::vector<GetDeviceInfosCallback> get_device_infos_pending_callbacks_;
-  bool get_device_infos_retried_ = false;
 
   // We own this but it must operate on the UI thread.
   class ServiceProcessObserver;
-  std::optional<base::SequenceBound<ServiceProcessObserver>>
-      service_process_observer_;
+  base::SequenceBound<ServiceProcessObserver> service_process_observer_;
 
   base::WeakPtrFactory<ServiceVideoCaptureProvider> weak_ptr_factory_{this};
 };

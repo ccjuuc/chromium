@@ -16,6 +16,7 @@ include_rules = [
   # directory basis. See //tools/chromeos/gen_deps.sh for details.
   "+chrome/browser/ash/accessibility",
   "+chrome/browser/ash/login",
+  "+chrome/browser/ash/login/lock",
   "+chrome/browser/ash/net",
   "+chrome/browser/ash/ownership",
   "+chrome/browser/ash/policy/core",
@@ -28,13 +29,11 @@ include_rules = [
   "+chrome/browser/browser_process.h",
   "+chrome/browser/browser_process_platform_part_ash.h",
   "+chrome/browser/browser_process_platform_part.h",
-  "+chrome/browser/lifetime",
   "+chrome/browser/profiles",
   "+chrome/browser/ui/ash/login",
   "+chrome/browser/ui/ash/session",
   "+chrome/browser/ui/webui/ash/login",
   "+chrome/common/chrome_switches.h",
-  "+chrome/common/pref_names.h",
   "+chrome/grit",
   "+chrome/test/base",
 ]

@@ -36,11 +36,8 @@ void MediaMultiChannelResampler::Resample(
 
   resampler_input_bus_wrapper_->set_frames(resampler_input_bus->length());
   for (unsigned int i = 0; i < resampler_input_bus->NumberOfChannels(); ++i) {
-    // TODO(crbug.com/375449662): Spanify `AudioChannel::MuteableData`.
     resampler_input_bus_wrapper_->SetChannelData(
-        i, UNSAFE_TODO(base::span(
-               resampler_input_bus->Channel(i)->MutableData(),
-               base::checked_cast<size_t>(resampler_input_bus->length()))));
+        i, resampler_input_bus->Channel(i)->MutableSpan());
   }
   ResampleInternal(frames, resampler_input_bus_wrapper_.get());
 }
@@ -59,10 +56,15 @@ void MediaMultiChannelResampler::ProvideResamplerInput(
 
   for (int i = 0; i < resampler_output_bus->channels(); ++i) {
     resampler_output_bus_wrapper_->SetChannelMemory(
-        i, resampler_output_bus->channel(i).data(),
-        resampler_output_bus->frames());
+        i, resampler_output_bus->channel(i).first(
+               base::checked_cast<size_t>(resampler_output_bus->frames())));
   }
   read_cb_.Run(resampler_frame_delay, resampler_output_bus_wrapper_.get());
+
+  for (unsigned i = 0; i < resampler_output_bus_wrapper_->NumberOfChannels();
+       ++i) {
+    resampler_output_bus_wrapper_->SetChannelMemory(i, base::span<float>());
+  }
 }
 
 }  // namespace blink

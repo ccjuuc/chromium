@@ -12,7 +12,8 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "components/permissions/features.h"
-#include "components/permissions/permission_uma_util.h"
+#include "components/permissions/permission_request_data.h"
+#include "components/permissions/permission_uma_constants.h"
 #include "components/permissions/prediction_service/permission_ui_selector.h"
 #include "components/permissions/resolvers/permission_prompt_options.h"
 #include "ui/gfx/geometry/rect.h"
@@ -29,6 +30,7 @@ class Event;
 namespace permissions {
 enum class PermissionPromptDisposition;
 
+class EmbeddedPermissionPromptFlowModel;
 class PermissionRequest;
 
 // This class is the platform-independent interface through which the permission
@@ -69,19 +71,21 @@ class PermissionPrompt {
     // associated with the requests.
     virtual GURL GetEmbeddingOrigin() const = 0;
 
-    virtual void Accept() = 0;
-    virtual void AcceptThisTime() = 0;
-    virtual void Deny() = 0;
-    virtual void Dismiss() = 0;
-    virtual void Ignore() = 0;
-
-    virtual void SetPromptOptions(PromptOptions prompt_options) = 0;
+    virtual void Accept(const PromptOptions& prompt_options) = 0;
+    virtual void AcceptThisTime(const PromptOptions& prompt_options) = 0;
+    virtual void Deny(const PromptOptions& prompt_options) = 0;
+    virtual void Dismiss(const PromptOptions& prompt_options) = 0;
+    virtual void Ignore(const PromptOptions& prompt_options) = 0;
+    virtual void SwitchToLoudPrompt() = 0;
 
     virtual GeolocationAccuracy GetInitialGeolocationAccuracySelection()
         const = 0;
 
-    // Called to explicitly finalize the request, if
-    // |ShouldFinalizeRequestAfterDecided| returns false.
+    // Returns the type of geolocation prompt that should be shown.
+    virtual std::optional<GeolocationPromptType> GetGeolocationPromptType()
+        const = 0;
+
+    // Called to explicitly finalize the current requests.
     virtual void FinalizeCurrentRequests() = 0;
 
     virtual void OpenHelpCenterLink(const ui::Event& event) = 0;
@@ -143,6 +147,13 @@ class PermissionPrompt {
     virtual bool RecreateView() = 0;
 
     virtual const PermissionPrompt* GetCurrentPrompt() const = 0;
+
+    virtual EmbeddedPermissionPromptFlowModel* GetEmbeddedPromptFlowModel()
+        const;
+
+    virtual void CalculateCurrentVariantForEmbeddedPrompt();
+
+    virtual void AdvanceOrFinalizeEmbeddedPromptFlow();
   };
 
   typedef base::RepeatingCallback<
@@ -153,6 +164,7 @@ class PermissionPrompt {
   static std::unique_ptr<PermissionPrompt> Create(
       content::WebContents* web_contents,
       Delegate* delegate);
+
   virtual ~PermissionPrompt() = default;
 
   // Updates where the prompt should be anchored. ex: fullscreen toggle.
@@ -174,11 +186,6 @@ class PermissionPrompt {
 
   // Get the prompt view bounds in screen coordinates.
   virtual std::optional<gfx::Rect> GetViewBoundsInScreen() const = 0;
-
-  // Get whether the permission request is allowed to be finalized as soon a
-  // decision is transmitted. If this returns `false` the delegate should wait
-  // for an explicit |Delegate::FinalizeCurrentRequests()| call to be made.
-  virtual bool ShouldFinalizeRequestAfterDecided() const = 0;
 
   // Return what variant of the secondary UI is shown for Page Embedded
   // Permission Element.

@@ -8,8 +8,10 @@
 #import "base/test/gmock_callback_support.h"
 #import "base/test/metrics/histogram_tester.h"
 #import "base/time/time.h"
+#import "components/enterprise/idle/action_type.h"
 #import "components/enterprise/idle/idle_pref_names.h"
 #import "components/enterprise/idle/metrics.h"
+#import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/enterprise/model/idle/action_runner.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
@@ -18,6 +20,8 @@
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "testing/gmock/include/gmock/gmock.h"
@@ -58,7 +62,7 @@ class IdleTimeoutServiceTest : public PlatformTest {
   IdleTimeoutServiceTest() = default;
 
   void SetIdleTimeoutPolicy(base::TimeDelta timeout) {
-    base::Value::List actions;
+    base::ListValue actions;
     actions.Append(
         static_cast<int>(enterprise_idle::ActionType::kClearBrowsingHistory));
     profile_->GetPrefs()->SetList(enterprise_idle::prefs::kIdleTimeoutActions,
@@ -93,15 +97,17 @@ class IdleTimeoutServiceTest : public PlatformTest {
             GetApplicationContext()->GetSystemIdentityManager());
     system_identity_manager->AddIdentity(identity);
     authentication_service_->SignIn(identity,
-                                    signin_metrics::AccessPoint::kUnknown);
+                                    signin_metrics::AccessPoint::kStartPage);
   }
 
   void SetUp() override {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
     profile_ = std::move(builder).Build();
     authentication_service_ =
         AuthenticationServiceFactory::GetForProfile(profile_.get());
@@ -377,7 +383,7 @@ TEST_F(IdleTimeoutServiceTest, NoActionsRunWhenNotNeeded_SignoutCase) {
   SetLastActiveTime(base::Time::Now() - base::Seconds(90));
   SetIdleTimeoutPolicy(base::Minutes(1));
   InitIdleService();
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(static_cast<int>(enterprise_idle::ActionType::kSignOut));
   profile_->GetPrefs()->SetList(enterprise_idle::prefs::kIdleTimeoutActions,
                                 std::move(actions));
@@ -392,7 +398,7 @@ TEST_F(IdleTimeoutServiceTest, NoActionsRunWhenNotNeeded_UnknownActionsCase) {
   SetLastActiveTime(base::Time::Now() - base::Seconds(90));
   SetIdleTimeoutPolicy(base::Minutes(1));
   InitIdleService();
-  base::Value::List actions;
+  base::ListValue actions;
   // This can be the case if a string value supported on desktop is the only
   // action that was set for the policy.
   profile_->GetPrefs()->SetList(enterprise_idle::prefs::kIdleTimeoutActions,
@@ -410,7 +416,7 @@ TEST_F(IdleTimeoutServiceTest, ActionsRunWhenNeeded_OnlySignoutSet) {
   SetIdleTimeoutPolicy(base::Minutes(1));
   InitIdleService();
   SignIn();
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(static_cast<int>(enterprise_idle::ActionType::kSignOut));
   profile_->GetPrefs()->SetList(enterprise_idle::prefs::kIdleTimeoutActions,
                                 std::move(actions));
@@ -426,7 +432,7 @@ TEST_F(IdleTimeoutServiceTest, ActionsRunWhenNeeded_OnlyActionSetIsNotSignOut) {
   SetLastActiveTime(base::Time::Now() - base::Seconds(90));
   SetIdleTimeoutPolicy(base::Minutes(1));
   InitIdleService();
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(
       static_cast<int>(enterprise_idle::ActionType::kClearBrowsingHistory));
   profile_->GetPrefs()->SetList(enterprise_idle::prefs::kIdleTimeoutActions,
@@ -444,7 +450,7 @@ TEST_F(IdleTimeoutServiceTest,
   SetLastActiveTime(base::Time::Now() - base::Seconds(90));
   SetIdleTimeoutPolicy(base::Minutes(1));
   InitIdleService();
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(
       static_cast<int>(enterprise_idle::ActionType::kClearBrowsingHistory));
   actions.Append(static_cast<int>(enterprise_idle::ActionType::kSignOut));

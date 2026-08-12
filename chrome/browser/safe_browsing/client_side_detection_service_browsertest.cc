@@ -19,8 +19,8 @@
 #include "chrome/test/base/platform_browser_test.h"
 #include "components/metrics/content/subprocess_metrics_provider.h"
 #include "components/prefs/pref_service.h"
-#include "components/safe_browsing/content/browser/client_side_phishing_model.h"
 #include "components/safe_browsing/content/common/safe_browsing.mojom.h"
+#include "components/safe_browsing/core/browser/client_side_phishing_model.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/proto/client_model.pb.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
@@ -206,6 +206,8 @@ IN_PROC_BROWSER_TEST_F(ClientSideDetectionServiceBrowserTest,
 
   // Case 1: ClientPhishingRequest's image embedding doesn't meet threshold.
   ClientPhishingRequest request = CreateMinimumClientPhishingRequest();
+  request.set_client_side_detection_type(
+      ClientSideDetectionType::IMAGE_EMBEDDING_MATCH);
 
   // Add an image_feature_embedding that will match.
   auto* features = request.mutable_image_feature_embedding();
@@ -221,6 +223,8 @@ IN_PROC_BROWSER_TEST_F(ClientSideDetectionServiceBrowserTest,
 
   // Case 2: Visual TFLite already flagged the page phishy.
   ClientPhishingRequest request2 = CreateMinimumClientPhishingRequest();
+  request2.set_client_side_detection_type(
+      ClientSideDetectionType::IMAGE_EMBEDDING_MATCH);
 
   // Add an image_feature_embedding that will match.
   auto* features2 = request2.mutable_image_feature_embedding();
@@ -251,6 +255,8 @@ IN_PROC_BROWSER_TEST_F(ClientSideDetectionServiceBrowserTest,
   LoadVisualTfLiteModel();
 
   ClientPhishingRequest request = CreateMinimumClientPhishingRequest();
+  request.set_client_side_detection_type(
+      ClientSideDetectionType::IMAGE_EMBEDDING_MATCH);
 
   // Setup TargetEmbeddings.
   float threshold = 0.95;
@@ -258,7 +264,6 @@ IN_PROC_BROWSER_TEST_F(ClientSideDetectionServiceBrowserTest,
   for (int i = 0; i < 64; ++i) {
     target_fv.add_value_float(0.1);
   }
-
   TargetEmbedding target(target_fv, threshold);
   std::vector<TargetEmbedding> test_targets;
   test_targets.push_back(std::move(target));
@@ -266,9 +271,10 @@ IN_PROC_BROWSER_TEST_F(ClientSideDetectionServiceBrowserTest,
 
   // Add an image_feature_embedding that will match.
   auto* features = request.mutable_image_feature_embedding();
-  for (int i = 0; i < 64; ++i) {
-    features->add_embedding_value(0.1);  // Perfect match.
+  for (int i = 0; i < 63; ++i) {
+    features->add_embedding_value(0.1);
   }
+  features->add_embedding_value(0.1000001);  // Near Perfect match.
 
   // Call the classification function.
   csd_service->ClassifyPhishingThroughThresholds(&request);

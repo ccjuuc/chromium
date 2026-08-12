@@ -141,6 +141,17 @@ NET_ERROR(BLOCKED_BY_FINGERPRINTING_PROTECTION, -34)
 // the domain administrator.
 NET_ERROR(BLOCKED_IN_INCOGNITO_BY_ADMINISTRATOR, -35)
 
+// The request was blocked because the local network permission is missing.
+// Note that this is different from BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS
+// which is specifically for a CORS error code.
+NET_ERROR(LOCAL_NETWORK_PERMISSION_MISSING, -36)
+
+// The request was blocked because ECH is strictly required, but:
+//  - The client could not obtain a valid ECH configuration.
+//  - The server rejected the ECH, and the client failed to establish a new ECH
+//    connection after retrying with retry_configs.
+NET_ERROR(STRICT_ECH_REQUIRED, -37)
+
 // A connection was closed (corresponding to a TCP FIN).
 NET_ERROR(CONNECTION_CLOSED, -100)
 
@@ -471,6 +482,14 @@ NET_ERROR(PROXY_UNABLE_TO_CONNECT_TO_DESTINATION, -186)
 NET_ERROR(PROXY_DELEGATE_CANCELED_CONNECT_REQUEST, -187)
 NET_ERROR(PROXY_DELEGATE_CANCELED_CONNECT_RESPONSE, -188)
 
+// The control message was too large for the transport. (for example a UDP
+// message control data exceeds size threshold).
+NET_ERROR(CONTROL_MSG_TOO_BIG, -189)
+
+// Direct Sockets attempted to connect to or send a packet to a multicast
+// address without 'direct-sockets-multicast' permissions policy.
+NET_ERROR(MULTICAST_NOT_ALLOWED, -190)
+
 // Certificate error codes
 //
 // The values of certificate error codes must be consecutive.
@@ -785,8 +804,9 @@ NET_ERROR(PROXY_HTTP_1_1_REQUIRED, -366)
 // The PAC script terminated fatally and must be reloaded.
 NET_ERROR(PAC_SCRIPT_TERMINATED, -367)
 
-// Signals that the request requires the IPP proxy.
-NET_ERROR(PROXY_REQUIRED, -368)
+// Obsolete. Support for CNAME record detection was never fully implemented and
+// is no longer needed since the IP Protection feature didn't launch.
+// NET_ERROR(PROXY_REQUIRED, -368)
 
 // Obsolete. Kept here to avoid reuse.
 // Request is throttled because of a Backoff header.
@@ -918,6 +938,9 @@ NET_ERROR(CACHE_DOOM_FAILURE, -412)
 
 // The disk cache is unable to open or create this entry.
 NET_ERROR(CACHE_OPEN_OR_CREATE_FAILURE, -413)
+
+// Zstd compression of a cache entry body failed.
+NET_ERROR(CACHE_COMPRESSION_FAILURE, -414)
 
 // The server's response was insecure (e.g. there was a cert error).
 NET_ERROR(INSECURE_RESPONSE, -501)
@@ -1101,6 +1124,10 @@ NET_ERROR(DNS_REFUSED, -819)
 // - NOTIMP
 // - REFUSED
 NET_ERROR(DNS_OTHER_FAILURE, -820)
+
+// Declined to call DNS for a direct_only request of a hostname whose traffic
+// would be routed through a proxy.
+NET_ERROR(DNS_DIRECT_ONLY, -821)
 
 // The following errors are for mapped from a subset of invalid
 // storage::BlobStatus.

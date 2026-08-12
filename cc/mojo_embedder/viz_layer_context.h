@@ -21,6 +21,7 @@
 #include "services/viz/public/mojom/compositing/animation.mojom.h"
 #include "services/viz/public/mojom/compositing/compositor_frame_sink.mojom.h"
 #include "services/viz/public/mojom/compositing/layer_context.mojom.h"
+#include "ui/latency/latency_info.h"
 
 namespace cc {
 
@@ -42,24 +43,36 @@ class CC_MOJO_EMBEDDER_EXPORT VizLayerContext
 
   // LayerContext:
   void SetVisible(bool visible) override;
+  void SetTargetLocalSurfaceId(
+      const viz::LocalSurfaceId& target_local_surface_id) override;
   base::TimeTicks UpdateDisplayTreeFrom(
       LayerTreeImpl& tree,
       viz::ClientResourceProvider& resource_provider,
       gpu::SharedImageInterface* shared_image_interface,
       const gfx::Rect& viewport_damage_rect,
-      const viz::LocalSurfaceId& target_local_surface_id,
-      bool frame_has_damage) override;
+      bool frame_has_damage,
+      bool is_flush,
+      std::vector<ui::LatencyInfo> latency_info,
+      viz::TrackedElementRects tracked_element_rects) override;
   void UpdateDisplayTile(PictureLayerImpl& layer,
                          const Tile& tile,
                          viz::ClientResourceProvider& resource_provider,
                          gpu::SharedImageInterface* shared_image_interface,
                          bool update_damage) override;
+  void SetUnboundedFrameSinkId(
+      const viz::FrameSinkId& frame_sink_id,
+      const viz::LocalSurfaceId& local_surface_id) override;
+  void SetUnboundedLocalSurfaceId(
+      const viz::LocalSurfaceId& local_surface_id) override;
+  void DismissUnboundedFrameSink() override;
 
   // viz::mojom::LayerContextClient:
   void OnRequestCommitForFrame(const viz::BeginFrameArgs& args) override;
   void OnTilingsReadyForCleanup(
       int32_t layer_id,
       const std::vector<float>& tiling_scales_to_clean_up) override;
+
+  void FlushReceiverForTesting();
 
  private:
   // Serializes any changes to animation state on `tree` since the last push to
@@ -90,7 +103,7 @@ class CC_MOJO_EMBEDDER_EXPORT VizLayerContext
   // to handle context loss and recreation of the layer context.
   bool needs_full_sync_ = true;
 
-  PropertyTrees last_committed_property_trees_{*host_impl_};
+  PropertyTrees last_committed_property_trees_;
 
   base::WeakPtrFactory<VizLayerContext> weak_factory_{this};
 };

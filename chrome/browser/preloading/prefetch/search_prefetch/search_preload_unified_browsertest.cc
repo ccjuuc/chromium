@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/path_service.h"
@@ -13,10 +13,13 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
 #include "base/timer/elapsed_timer.h"
+#include "build/android_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.h"
 #include "chrome/browser/browser_features.h"
+#include "chrome/browser/page_load_metrics/chrome_initiator_location.h"
 #include "chrome/browser/preloading/chrome_preloading.h"
 #include "chrome/browser/preloading/prefetch/search_prefetch/cache_alias_search_prefetch_url_loader.h"
 #include "chrome/browser/preloading/prefetch/search_prefetch/field_trial_settings.h"
@@ -26,7 +29,10 @@
 #include "chrome/browser/preloading/prefetch/search_prefetch/search_preload_test_response_utils.h"
 #include "chrome/browser/preloading/prefetch/search_prefetch/streaming_search_prefetch_url_loader.h"
 #include "chrome/browser/preloading/prerender/prerender_manager.h"
+#include "chrome/browser/preloading/prerender/search_prewarm_progress_service.h"
+#include "chrome/browser/preloading/prerender/search_prewarm_progress_service_factory.h"
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
+#include "chrome/browser/preloading/search_preload/search_preload_features.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/common/chrome_paths.h"
@@ -35,8 +41,10 @@
 #include "chrome/test/base/search_test_utils.h"
 #include "components/omnibox/browser/autocomplete_input.h"
 #include "components/omnibox/browser/autocomplete_result.h"
+#include "components/page_load_metrics/browser/navigation_handle_user_data.h"
 #include "components/search_engines/template_url_data.h"
 #include "components/search_engines/template_url_service.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/preloading.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
@@ -70,6 +78,38 @@
 #include "components/omnibox/browser/autocomplete_controller.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
+namespace page_load_metrics {
+
+class TestNavigationObserver : public content::WebContentsObserver {
+ public:
+  explicit TestNavigationObserver(content::WebContents* web_contents)
+      : content::WebContentsObserver(web_contents) {}
+  ~TestNavigationObserver() override = default;
+
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override {
+    if (navigation_handle->HasCommitted()) {
+      auto* user_data =
+          page_load_metrics::NavigationHandleUserData::GetForNavigationHandle(
+              *navigation_handle);
+      if (user_data) {
+        navigation_type_ = user_data->navigation_type();
+      }
+    }
+  }
+
+  std::optional<page_load_metrics::NavigationHandleUserData::InitiatorLocation>
+  navigation_type() const {
+    return navigation_type_;
+  }
+
+ private:
+  std::optional<page_load_metrics::NavigationHandleUserData::InitiatorLocation>
+      navigation_type_;
+};
+
+}  // namespace page_load_metrics
+
 namespace {
 
 using UkmEntry = ukm::TestUkmRecorder::HumanReadableUkmEntry;
@@ -100,7 +140,7 @@ class SearchPreloadUnifiedBrowserTest : public PlatformBrowserTest,
               {"cache_size", "1"},
               {"device_memory_threshold_MB", "0"}}},
         },
-        /*disabled_features=*/{});
+        /*disabled_features=*/{features::kDsePreload2});
   }
 
   void SetUp() override {
@@ -164,6 +204,16 @@ class SearchPreloadUnifiedBrowserTest : public PlatformBrowserTest,
       return nullptr;
     }
 
+    if (request.GetURL().path() == "/beacon") {
+      content::GetUIThreadTaskRunner({})->PostTask(
+          FROM_HERE,
+          base::BindOnce(&SearchPreloadUnifiedBrowserTest::OnBeaconReceived,
+                         base::Unretained(this)));
+      auto resp = std::make_unique<net::test_server::BasicHttpResponse>();
+      resp->set_code(net::HttpStatusCode::HTTP_OK);
+      return resp;
+    }
+
     std::string content = R"(
       <html><body>
       PRERENDER: HI PREFETCH! \o/
@@ -173,6 +223,9 @@ class SearchPreloadUnifiedBrowserTest : public PlatformBrowserTest,
         {"Content-Length", base::NumberToString(content.length())},
         {"content-type", "text/html"},
         {"No-Vary-Search", "params=(\"pf\" \"gs_lcrp\")"}};
+    if (request.GetURL().spec().find("q=beacon_test") != std::string::npos) {
+      headers.emplace_back("on-prefetch-activation", "/beacon");
+    }
     bool is_invalid_response_body =
         request.GetURL().spec().find("invalid_content") != std::string::npos;
 
@@ -312,7 +365,7 @@ class SearchPreloadUnifiedBrowserTest : public PlatformBrowserTest,
           search_prefetch_service()->GetSearchPrefetchStatusForTesting(
               canonical_search_url);
       if (current_status &&
-          base::Contains(acceptable_status, current_status.value())) {
+          std::ranges::contains(acceptable_status, current_status.value())) {
         break;
       }
       if (!current_status && acceptable_status.empty()) {
@@ -350,6 +403,26 @@ class SearchPreloadUnifiedBrowserTest : public PlatformBrowserTest,
     return search_prefetch_service_;
   }
 
+  void OnBeaconReceived() {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    beacon_received_ = true;
+    if (beacon_callback_) {
+      std::move(beacon_callback_).Run();
+    }
+  }
+
+  bool beacon_received() const { return beacon_received_; }
+
+  void WaitForActivationBeacon() {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    if (beacon_received_) {
+      return;
+    }
+    base::RunLoop run_loop;
+    beacon_callback_ = run_loop.QuitClosure();
+    run_loop.Run();
+  }
+
   void ShutDownSearchServer() {
     ASSERT_TRUE(search_engine_server_.ShutdownAndWaitUntilComplete());
   }
@@ -382,7 +455,7 @@ class SearchPreloadUnifiedBrowserTest : public PlatformBrowserTest,
     // Prepare some context.
     AutocompleteInput input(
         base::ASCIIToUTF16(prerender_query), metrics::OmniboxEventProto::BLANK,
-        ChromeAutocompleteSchemeClassifier(browser()->profile()));
+        ChromeAutocompleteSchemeClassifier(browser()->GetProfile()));
     AutocompleteController* autocomplete_controller =
         location_bar->GetOmniboxController()->autocomplete_controller();
 
@@ -452,6 +525,9 @@ class SearchPreloadUnifiedBrowserTest : public PlatformBrowserTest,
       prediction_entry_builder_;
 
   content::test::PrerenderTestHelper prerender_helper_;
+  bool beacon_received_ = false;
+  base::OnceClosure beacon_callback_;
+
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
@@ -518,7 +594,7 @@ IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest,
   prerender_observer.WaitForActivation();
   histogram_tester.ExpectUniqueSample(
       "Omnibox.SearchPrefetch.PrefetchFinalStatus.SuggestionPrefetch",
-      SearchPrefetchStatus::kComplete, 1);
+      SearchPrefetchStatus::kPrefetchServedForRealNavigation, 1);
 
   // On prerender activation, `URLLoaderRequestInterceptor` would not be called,
   // so no more sample should be recorded.
@@ -553,7 +629,7 @@ IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest,
             ukm_source_id, content::PreloadingType::kPrefetch,
             content::PreloadingEligibility::kEligible,
             content::PreloadingHoldbackStatus::kAllowed,
-            content::PreloadingTriggeringOutcome::kReady,
+            content::PreloadingTriggeringOutcome::kSuccess,
             content::PreloadingFailureReason::kUnspecified,
             /*accurate=*/true,
             /*ready_time=*/kMockElapsedTime),
@@ -646,7 +722,7 @@ IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest,
   prerender_observer.WaitForActivation();
   histogram_tester.ExpectUniqueSample(
       "Omnibox.SearchPrefetch.PrefetchFinalStatus.SuggestionPrefetch",
-      SearchPrefetchStatus::kComplete, 1);
+      SearchPrefetchStatus::kPrefetchServedForRealNavigation, 1);
   {
     ukm::SourceId ukm_source_id = activation_observer.next_page_ukm_source_id();
     auto ukm_entries = test_ukm_recorder()->GetEntries(
@@ -660,7 +736,7 @@ IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest,
             ukm_source_id, content::PreloadingType::kPrefetch,
             content::PreloadingEligibility::kEligible,
             content::PreloadingHoldbackStatus::kAllowed,
-            content::PreloadingTriggeringOutcome::kReady,
+            content::PreloadingTriggeringOutcome::kSuccess,
             content::PreloadingFailureReason::kUnspecified,
             /*accurate=*/true,
             /*ready_time=*/kMockElapsedTime),
@@ -729,8 +805,6 @@ IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest,
       GetCanonicalSearchURL(GetSearchUrl(prerender_query, UrlType::kPrerender)),
       {SearchPrefetchStatus::kRequestFailed});
 
-  histogram_tester.ExpectUniqueSample(
-      "Omnibox.SearchPrefetch.FetchResult.SuggestionPrefetch", false, 1);
   EXPECT_FALSE(prerender_manager()->HasSearchResultPagePrerendered());
 
   auto entries = GetMergedUkmEntries(PrerenderPageLoad::kEntryName);
@@ -1121,7 +1195,7 @@ class HoldbackSearchPreloadUnifiedBrowserTest
               {"cache_size", "4"},
               {"device_memory_threshold_MB", "0"}}},
         },
-        {});
+        {features::kDsePreload2});
     preloading_config_override_.SetHoldback(
         content::PreloadingType::kPrerender,
         chrome_preloading_predictor::kDefaultSearchEngine, true);
@@ -1233,7 +1307,8 @@ class HTTPCacheSearchPreloadUnifiedBrowserTest
          {{"max_attempts_per_caching_duration", "3"},
           {"cache_size", "4"},
           {"device_memory_threshold_MB", "0"}}}};
-    std::vector<base::test::FeatureRef> disabled_features = {};
+    std::vector<base::test::FeatureRef> disabled_features = {
+        features::kDsePreload2};
     if (GetParam()) {
       enabled_features.emplace_back(base::test::FeatureRefAndParams(
           kSearchPrefetchWithNoVarySearchDiskCache, {}));
@@ -1389,7 +1464,8 @@ IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest, TriggerAndActivate) {
       GetSearchUrl(prerender_query, UrlType::kPrefetch);
   GURL expected_prerender_url =
       GetSearchUrl(prerender_query, UrlType::kPrerender);
-  LocationBar* location_bar = browser()->window()->GetLocationBar();
+  LocationBar* location_bar =
+      BrowserWindow::FromBrowser(browser())->GetLocationBar();
   // 2. Prepare some context and trigger prerender/prefetch.
   PrepareAutocompleteContextAndTrigger(location_bar, prerender_query);
   ChangeAutocompleteResult(search_query_1, prerender_query,
@@ -1412,11 +1488,11 @@ IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest, TriggerAndActivate) {
   // 4. Click and activate.
   content::test::PrerenderHostObserver prerender_observer(
       *GetActiveWebContents(), expected_prerender_url);
-  location_bar->GetOmniboxController()->edit_model()->OpenSelectionForTesting();
+  location_bar->GetOmniboxController()->edit_model()->OpenCurrentSelection();
   prerender_observer.WaitForActivation();
   histogram_tester.ExpectUniqueSample(
       "Omnibox.SearchPrefetch.PrefetchFinalStatus.SuggestionPrefetch",
-      SearchPrefetchStatus::kComplete, 1);
+      SearchPrefetchStatus::kPrefetchServedForRealNavigation, 1);
   EXPECT_EQ(1, prerender_helper().GetRequestCount(expected_prefetch_url));
   EXPECT_EQ(0, prerender_helper().GetRequestCount(expected_prerender_url));
 }
@@ -1442,7 +1518,8 @@ IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest,
   GURL expected_prerender_url =
       GetSearchUrl(prerender_query, UrlType::kPrerender);
   GURL expected_real_url = GetSearchUrl(prerender_query, UrlType::kReal);
-  LocationBar* location_bar = browser()->window()->GetLocationBar();
+  LocationBar* location_bar =
+      BrowserWindow::FromBrowser(browser())->GetLocationBar();
   // 2. Prepare some context and trigger prerender/prefetch.
   PrepareAutocompleteContextAndTrigger(location_bar, prerender_query);
   ChangeAutocompleteResult(prerender_query, prerender_query,
@@ -1465,7 +1542,7 @@ IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest,
   // 4. Fail the prerender.
   content::test::PrerenderHostObserver prerender_observer(
       *GetActiveWebContents(), expected_prerender_url);
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_helper().GetHostForUrl(expected_prerender_url);
   ASSERT_TRUE(host_id);
   prerender_helper().CancelPrerenderedPage(host_id);
@@ -1476,7 +1553,7 @@ IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest,
   // 5. Click the result.
   content::TestNavigationObserver navigation_observer(GetActiveWebContents(),
                                                       1);
-  location_bar->GetOmniboxController()->edit_model()->OpenSelectionForTesting();
+  location_bar->GetOmniboxController()->edit_model()->OpenCurrentSelection();
   navigation_observer.Wait();
   histogram_tester.ExpectBucketCount(
       "Omnibox.SearchPrefetch.PrefetchServingReason2",
@@ -1553,7 +1630,7 @@ IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest,
             ukm_source_id, content::PreloadingType::kPrefetch,
             content::PreloadingEligibility::kEligible,
             content::PreloadingHoldbackStatus::kAllowed,
-            content::PreloadingTriggeringOutcome::kReady,
+            content::PreloadingTriggeringOutcome::kSuccess,
             content::PreloadingFailureReason::kUnspecified,
             /*accurate=*/true,
             /*ready_time=*/kMockElapsedTime),
@@ -1632,7 +1709,7 @@ IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest,
   EXPECT_EQ(prefetch_status.value(), SearchPrefetchStatus::kComplete);
 
   // 3. Cancel the prerenders
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_helper().GetHostForUrl(expected_prerender_url);
   content::test::PrerenderHostObserver prerender_observer(
       *GetActiveWebContents(), host_id);
@@ -1906,7 +1983,7 @@ IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest,
   // The suggestion service should hint `expected_prefetch_url`, and
   // prerendering for this url should start.
   registry_observer.WaitForTrigger(expected_prerender_url);
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_helper().GetHostForUrl(expected_prerender_url);
 
   // Ensure prerender has started to read response body.
@@ -1974,8 +2051,16 @@ IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest,
 
 // Edge case: when the prerendering navigation is still reading from the cache,
 // the loader would not be deleted until finishing reading.
+//  TODO(crbug.com/498955649): Flaky on Android device Pixel Tablet
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_ServingToPrerenderingUntilCompletion \
+  DISABLED_ServingToPrerenderingUntilCompletion
+#else
+#define MAYBE_ServingToPrerenderingUntilCompletion \
+  ServingToPrerenderingUntilCompletion
+#endif
 IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest,
-                       ServingToPrerenderingUntilCompletion) {
+                       MAYBE_ServingToPrerenderingUntilCompletion) {
   base::HistogramTester histogram_tester;
   set_service_deferral_type(
       SearchPreloadTestResponseDeferralType::kDeferChunkedResponseBody);
@@ -2085,7 +2170,7 @@ IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest,
 
   // 3. Turns to another prediction.
   {
-    content::FrameTreeNodeId host_id =
+    content::PrerenderHostId host_id =
         prerender_helper().GetHostForUrl(expected_prerender_url);
     content::test::PrerenderHostObserver prerender_observer(
         *GetActiveWebContents(), host_id);
@@ -2194,7 +2279,7 @@ class SearchPreloadServingTestURLLoader
   std::unique_ptr<mojo::DataPipeDrainer> pipe_drainer_;
 };
 
-// Regression test for https://crbug.com/1493229.
+// Regression test for https://crbug.com/40936560.
 IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest,
                        PrerenderHandlerExecutedAfterPrefetchHandler) {
   base::HistogramTester histogram_tester;
@@ -2357,11 +2442,11 @@ IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest,
   std::string inner_html = content::EvalJs(GetActiveWebContents(),
                                            "document.documentElement.innerHTML")
                                .ExtractString();
-  EXPECT_TRUE(base::Contains(inner_html, "PREFETCH"));
+  EXPECT_TRUE(inner_html.contains("PREFETCH"));
   std::string prefetch_inner_html =
       content::EvalJs(new_prefetch_tab, "document.documentElement.innerHTML")
           .ExtractString();
-  EXPECT_TRUE(base::Contains(prefetch_inner_html, "PREFETCH"));
+  EXPECT_TRUE(prefetch_inner_html.contains("PREFETCH"));
   EXPECT_EQ(0, prerender_helper().GetRequestCount(expected_prerender_url));
   EXPECT_EQ(2, prerender_helper().GetRequestCount(expected_prefetch_url));
 
@@ -2385,5 +2470,204 @@ IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest,
       StreamingSearchPrefetchURLLoader::ForwardingResult::kCompleted, 1);
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+class SearchPrefetchThrottleBrowserTest
+    : public SearchPreloadUnifiedBrowserTest {
+ public:
+  SearchPrefetchThrottleBrowserTest() = default;
+
+ protected:
+  test::ScopedPrewarmFeatureList scoped_prewarm_feature_list_{
+      test::ScopedPrewarmFeatureList::PrewarmState::kEnabledWithNoTrigger};
+};
+
+IN_PROC_BROWSER_TEST_F(SearchPrefetchThrottleBrowserTest,
+                       ThrottleSearchPrefetchRequest) {
+  const GURL kInitialUrl = embedded_test_server()->GetURL("/empty.html");
+  ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(), kInitialUrl));
+  SetUpContext();
+
+  GURL prewarm_url = GetSearchUrl("prewarm", UrlType::kReal);
+  prerender_manager()->SetPrewarmUrlForTesting(prewarm_url);
+
+  // Defer headers so prewarm hangs.
+  set_service_deferral_type(
+      SearchPreloadTestResponseDeferralType::kDeferHeader);
+
+  // Start Prewarm.
+  EXPECT_TRUE(prerender_manager()->MaybeStartPrewarmSearchResult());
+  auto* service = SearchPrewarmProgressServiceFactory::GetForProfile(
+      Profile::FromBrowserContext(GetActiveWebContents()->GetBrowserContext()));
+  EXPECT_TRUE(service && service->HasOnGoingSearchPrewarm());
+
+  // Trigger Prefetch.
+  std::string search_query = "pre";
+  std::string prerender_query = "prerender";
+  GURL expected_prefetch_url =
+      GetSearchUrl(prerender_query, UrlType::kPrefetch);
+
+  // Create prediction/prefetch attempt.
+  ChangeAutocompleteResult(search_query, prerender_query,
+                           PrerenderHint::kDisabled, PrefetchHint::kEnabled);
+
+  // Verify Prefetch is NOT started (throttled).
+  EXPECT_EQ(0, prerender_helper().GetRequestCount(expected_prefetch_url));
+
+  // Ensure Prewarm is still ongoing.
+  EXPECT_TRUE(service && service->HasOnGoingSearchPrewarm());
+
+  // Release Prewarm Headers.
+  DispatchDelayedResponseTask();
+
+  // Now Prewarm headers received.
+  // PrerenderManager should notify callback.
+  // SearchPrefetchRequest should resume.
+
+  // We need to wait for the prefetch request to arrive at the server.
+  // Since we also defer headers for prefetch (same handler), it will arrive and
+  // hang.
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return prerender_helper().GetRequestCount(expected_prefetch_url) > 0;
+  }));
+
+  EXPECT_EQ(1, prerender_helper().GetRequestCount(expected_prefetch_url));
+}
+
+class SearchPrefetchActivationBeaconBrowserTest
+    : public SearchPreloadUnifiedBrowserTest {
+ public:
+  SearchPrefetchActivationBeaconBrowserTest() {
+    feature_list_.InitAndEnableFeature(features::kPrefetchActivationBeacon);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(SearchPrefetchActivationBeaconBrowserTest,
+                       ActivationBeaconSent) {
+  const GURL kInitialUrl = embedded_test_server()->GetURL("/empty.html");
+  ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(), kInitialUrl));
+  SetUpContext();
+
+  // Trigger Prefetch.
+  std::string search_query = "beacon_test";
+  std::string prerender_query = "beacon_test";
+  GURL expected_prefetch_url =
+      GetSearchUrl(prerender_query, UrlType::kPrefetch);
+
+  ChangeAutocompleteResult(search_query, prerender_query,
+                           PrerenderHint::kDisabled, PrefetchHint::kEnabled);
+
+  // Wait for prefetch to complete.
+  std::optional<SearchPrefetchStatus> prefetch_status =
+      search_prefetch_service()->GetSearchPrefetchStatusForTesting(
+          GetCanonicalSearchURL(expected_prefetch_url));
+  EXPECT_TRUE(prefetch_status.has_value());
+  WaitUntilStatusChangesTo(GetCanonicalSearchURL(expected_prefetch_url),
+                           {SearchPrefetchStatus::kComplete});
+
+  // Navigate to the prefetched result.
+  NavigateToPrerenderedResult(expected_prefetch_url);
+
+  // Wait for the beacon request to be received by the server.
+  WaitForActivationBeacon();
+}
+
+// TODO(crbug.com/393195683): Same as the FetchPrerenderActivated test, the
+// user agent mismatch will cause the test to fail on Android desktop.
+#if BUILDFLAG(IS_DESKTOP_ANDROID)
+#define MAYBE_SearchPrefetchToPrerenderUpgradeActivationBeaconSent \
+  DISABLED_SearchPrefetchToPrerenderUpgradeActivationBeaconSent
+#else
+#define MAYBE_SearchPrefetchToPrerenderUpgradeActivationBeaconSent \
+  SearchPrefetchToPrerenderUpgradeActivationBeaconSent
+#endif
+IN_PROC_BROWSER_TEST_F(
+    SearchPrefetchActivationBeaconBrowserTest,
+    MAYBE_SearchPrefetchToPrerenderUpgradeActivationBeaconSent) {
+  const GURL kInitialUrl = embedded_test_server()->GetURL("/empty.html");
+  ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(), kInitialUrl));
+  SetUpContext();
+
+  // Trigger Prefetch and Prerender.
+  std::string search_query = "beacon_test";
+  std::string prerender_query = "beacon_test";
+  GURL expected_prefetch_url =
+      GetSearchUrl(prerender_query, UrlType::kPrefetch);
+  GURL expected_prerender_url =
+      GetSearchUrl(prerender_query, UrlType::kPrerender);
+
+  content::test::PrerenderHostRegistryObserver registry_observer(
+      *GetActiveWebContents());
+
+  ChangeAutocompleteResult(search_query, prerender_query,
+                           PrerenderHint::kEnabled, PrefetchHint::kEnabled);
+
+  // The suggestion service should hint expected_prerender_url, and prerendering
+  // for this url should start.
+  registry_observer.WaitForTrigger(expected_prerender_url);
+  prerender_helper().WaitForPrerenderLoadCompletion(*GetActiveWebContents(),
+                                                    expected_prerender_url);
+
+  // Prefetch should be triggered as well.
+  std::optional<SearchPrefetchStatus> prefetch_status =
+      search_prefetch_service()->GetSearchPrefetchStatusForTesting(
+          GetCanonicalSearchURL(expected_prefetch_url));
+  EXPECT_TRUE(prefetch_status.has_value());
+  WaitUntilStatusChangesTo(GetCanonicalSearchURL(expected_prefetch_url),
+                           {SearchPrefetchStatus::kComplete});
+
+  // No prerender requests went through network, so there should be only one
+  // request and it is with the prefetch flag attached.
+  EXPECT_EQ(1, prerender_helper().GetRequestCount(expected_prefetch_url));
+  EXPECT_EQ(0, prerender_helper().GetRequestCount(expected_prerender_url));
+
+  // The activation beacon should NOT be sent during prerendering.
+  EXPECT_FALSE(beacon_received());
+
+  // Navigate to the prerendered result.
+  content::test::PrerenderHostObserver prerender_observer(
+      *GetActiveWebContents(), expected_prerender_url);
+  NavigateToPrerenderedResult(expected_prerender_url);
+  prerender_observer.WaitForActivation();
+
+  // Wait for the beacon request to be received by the server.
+  WaitForActivationBeacon();
+}
+
+// Tests that the prerendering initial navigation has the correct
+// NavigationHandleUserData initiator location attached.
+IN_PROC_BROWSER_TEST_F(SearchPreloadUnifiedBrowserTest,
+                       PreloadingNavigationHandleUserData) {
+  const GURL kInitialUrl = embedded_test_server()->GetURL("/empty.html");
+  ASSERT_TRUE(GetActiveWebContents());
+  ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(), kInitialUrl));
+  SetUpContext();
+  content::test::PrerenderHostRegistryObserver registry_observer(
+      *GetActiveWebContents());
+
+  std::string search_query = "pre";
+  std::string prerender_query = "prerender";
+  GURL expected_prerender_url =
+      GetSearchUrl(prerender_query, UrlType::kPrerender);
+
+  page_load_metrics::TestNavigationObserver omnibox_observer(
+      GetActiveWebContents());
+
+  ChangeAutocompleteResult(search_query, prerender_query,
+                           PrerenderHint::kEnabled, PrefetchHint::kEnabled);
+
+  // The suggestion service should hint expected_prerender_url, and prerendering
+  // for this url should start.
+  registry_observer.WaitForTrigger(expected_prerender_url);
+  prerender_helper().WaitForPrerenderLoadCompletion(*GetActiveWebContents(),
+                                                    expected_prerender_url);
+
+  EXPECT_TRUE(omnibox_observer.navigation_type().has_value());
+  EXPECT_EQ(omnibox_observer.navigation_type().value(),
+            GetInitiatorLocation(
+                ChromeInitiatorLocation::kOmniboxDefaultSearchEngine));
+}
 
 }  // namespace

@@ -4,6 +4,7 @@
 
 #include "chromeos/ash/components/specialized_features/feature_access_checker.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/command_line.h"
@@ -108,7 +109,7 @@ FeatureAccessFailureSet FeatureAccessChecker::Check() const {
                  ->FindExtendedAccountInfoByAccountId(
                      identity_manager_->GetPrimaryAccountId(
                          signin::ConsentLevel::kSignin))
-                 .capabilities) != signin::Tribool::kTrue)) {
+                 .GetAccountCapabilities()) != signin::Tribool::kTrue)) {
       failures.Put(kAccountCapabilitiesCheckFailed);
     }
   }
@@ -119,8 +120,8 @@ FeatureAccessFailureSet FeatureAccessChecker::Check() const {
             ? nullptr
             : variations_service_callback_.Run();
     if (variations_service == nullptr ||
-        !base::Contains(config_.country_codes,
-                        variations_service->GetLatestCountry())) {
+        !std::ranges::contains(config_.country_codes,
+                               variations_service->GetLatestCountry())) {
       failures.Put(kCountryCheckFailed);
     }
   }

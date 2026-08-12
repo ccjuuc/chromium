@@ -60,8 +60,6 @@ std::u16string CreatePasswordDomainExamples(
 std::u16string CreateHistoryCounterString(
     const browsing_data::HistoryCounter::HistoryResult* history_result) {
   CHECK(history_result->source()->GetPrefName() ==
-            browsing_data::prefs::kDeleteBrowsingHistoryBasic ||
-        history_result->source()->GetPrefName() ==
             browsing_data::prefs::kDeleteBrowsingHistory);
 
   if (!history_result->Finished()) {
@@ -70,7 +68,7 @@ std::u16string CreateHistoryCounterString(
   }
 
   browsing_data::BrowsingDataCounter::ResultInt unique_domains_count =
-      history_result->unique_domains_result();
+      history_result->Value();
 
   if (unique_domains_count == 0) {
     if (history_result->has_synced_visits()) {
@@ -283,35 +281,10 @@ std::u16string GetCounterTextFromResult(
                                             count);
   }
 
-  if (pref_name == prefs::kDeleteBrowsingHistoryBasic) {
-    // The basic tab doesn't show history counter results.
-    NOTREACHED();
-  }
-
   if (pref_name == prefs::kDeleteBrowsingHistory) {
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
     // History counter.
     return CreateHistoryCounterString(
-        static_cast<const HistoryCounter::HistoryResult*>(result));
-#else   // !(BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS))
-    // History counter.
-    if (base::FeatureList::IsEnabled(features::kDbdRevampDesktop)) {
-      return CreateHistoryCounterString(
           static_cast<const HistoryCounter::HistoryResult*>(result));
-    }
-
-    // TODO(crbug.com/397187800): Clean up item count strings logic once
-    // kDbdRevampDesktop is launched.
-    const HistoryCounter::HistoryResult* history_result =
-        static_cast<const HistoryCounter::HistoryResult*>(result);
-    BrowsingDataCounter::ResultInt local_item_count = history_result->Value();
-    bool has_synced_visits = history_result->has_synced_visits();
-    return has_synced_visits
-               ? l10n_util::GetPluralStringFUTF16(
-                     IDS_DEL_BROWSING_HISTORY_COUNTER_SYNCED, local_item_count)
-               : l10n_util::GetPluralStringFUTF16(
-                     IDS_DEL_BROWSING_HISTORY_COUNTER, local_item_count);
-#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
   }
 
   if (pref_name == prefs::kDeleteFormData) {
@@ -362,8 +335,7 @@ std::u16string GetCounterTextFromResult(
 
     // TODO(crbug.com/40066949): Clean this up once Sync-the-feature is gone on
     // all platforms.
-    bool synced = !base::FeatureList::IsEnabled(
-                      syncer::kReplaceSyncPromosWithSignInPromos) &&
+    bool synced = !syncer::IsReplaceSyncPromosWithSignInPromosEnabled() &&
                   autofill_result->is_sync_enabled();
 
     // TODO(crbug.com/371539581): Exclude payment methods from this part,
@@ -407,37 +379,13 @@ std::u16string GetCounterTextFromResult(
   NOTREACHED();
 }
 
-const char* GetTimePeriodPreferenceName(
-    ClearBrowsingDataTab clear_browsing_data_tab) {
-  return clear_browsing_data_tab == ClearBrowsingDataTab::BASIC
-             ? prefs::kDeleteTimePeriodBasic
-             : prefs::kDeleteTimePeriod;
+const char* GetTimePeriodPreferenceName() {
+  return prefs::kDeleteTimePeriod;
 }
 
 bool GetDeletionPreferenceFromDataType(
     BrowsingDataType data_type,
-    ClearBrowsingDataTab clear_browsing_data_tab,
     std::string* out_pref) {
-  if (clear_browsing_data_tab == ClearBrowsingDataTab::BASIC) {
-    switch (data_type) {
-      case BrowsingDataType::HISTORY:
-        *out_pref = prefs::kDeleteBrowsingHistoryBasic;
-        return true;
-      case BrowsingDataType::CACHE:
-        *out_pref = prefs::kDeleteCacheBasic;
-        return true;
-      case BrowsingDataType::SITE_DATA:
-        *out_pref = prefs::kDeleteCookiesBasic;
-        return true;
-      case BrowsingDataType::PASSWORDS:
-      case BrowsingDataType::FORM_DATA:
-      case BrowsingDataType::SITE_SETTINGS:
-      case BrowsingDataType::DOWNLOADS:
-      case BrowsingDataType::HOSTED_APPS_DATA:
-      case BrowsingDataType::TABS:
-        return false;  // No corresponding preference on basic tab.
-    }
-  }
   switch (data_type) {
     case BrowsingDataType::HISTORY:
       *out_pref = prefs::kDeleteBrowsingHistory;
@@ -476,11 +424,8 @@ std::optional<BrowsingDataType> GetDataTypeFromDeletionPreference(
   static base::NoDestructor<DataTypeMap> preference_to_datatype(
       std::initializer_list<DataTypeMap::value_type>{
           {prefs::kDeleteBrowsingHistory, BrowsingDataType::HISTORY},
-          {prefs::kDeleteBrowsingHistoryBasic, BrowsingDataType::HISTORY},
           {prefs::kDeleteCache, BrowsingDataType::CACHE},
-          {prefs::kDeleteCacheBasic, BrowsingDataType::CACHE},
           {prefs::kDeleteCookies, BrowsingDataType::SITE_DATA},
-          {prefs::kDeleteCookiesBasic, BrowsingDataType::SITE_DATA},
           {prefs::kDeletePasswords, BrowsingDataType::PASSWORDS},
           {prefs::kDeleteFormData, BrowsingDataType::FORM_DATA},
           {prefs::kDeleteSiteSettings, BrowsingDataType::SITE_SETTINGS},

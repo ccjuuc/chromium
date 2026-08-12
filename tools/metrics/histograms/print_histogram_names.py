@@ -2,71 +2,19 @@
 # Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Prints all histogram names."""
 
 from __future__ import print_function
 
 import argparse
-import os
-import re
+import io
 import subprocess
 import sys
-import tempfile
-import io
-from typing import Iterable, Set
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'common'))
-import path_util
-import xml_utils
+import setup_modules  # pylint: disable=unused-import
 
-import extract_histograms
-import histogram_paths
-import merge_xml
-
-
-# Used in android_webview/java/res/raw/histograms_allowlist_check.py.
-def get_names(xml_files):
-  """Returns all histogram names generated from a list of xml files.
-
-  Args:
-    xml_files: A list of open file objects containing histogram definitions.
-  Returns:
-    The set of histogram names.
-  """
-  doc = merge_xml.MergeFiles(files=xml_files)
-  histograms, had_errors = extract_histograms.ExtractHistogramsFromDom(doc)
-  if had_errors:
-    raise ValueError("Error parsing inputs.")
-  return set(extract_histograms.ExtractNames(histograms))
-
-
-def get_names_from_contents(contents: Iterable[str]) -> Set[str]:
-  """Returns all histogram names from the given contents.
-
-  This function is different from get_names() in that it does not make
-  additional checks against the given contents. Note: it currently doesn't
-  handle go/patterned-histogram names.
-
-  Args:
-    contents: An iterable of strings from the raw histograms xml file.
-
-  Returns:
-    The set of histogram names.
-  """
-  # contents is an iterator, so convert to list to be able to reuse it.
-  contents_list = list(contents)
-  if not contents_list:
-    return set()
-
-  doc = merge_xml.MergeFiles(files=[io.StringIO('\n'.join(contents_list))])
-  xml_utils.NormalizeAllAttributeValues(doc)
-  histograms_tree = xml_utils.GetTagSubTree(doc, 'histograms', 2)
-  histogram_names = set()
-
-  for histogram in xml_utils.IterElementsWithTag(histograms_tree, 'histogram'):
-    histogram_names.add(histogram.getAttribute('name'))
-  return histogram_names
+import chromium_src.tools.metrics.histograms.histogram_paths as histogram_paths
+import chromium_src.tools.metrics.histograms.histogram_utils as histogram_utils
 
 
 def histogram_xml_files():
@@ -102,8 +50,8 @@ def get_histogram_diff(revision):
       # Paths might not exist in the provided revision.
       continue
 
-  current_histogram_names = get_names(histogram_xml_files())
-  prev_histogram_names = get_names(prev_files)
+  current_histogram_names = histogram_utils.get_names(histogram_xml_files())
+  prev_histogram_names = histogram_utils.get_names(prev_files)
 
   added_names = sorted(list(current_histogram_names - prev_histogram_names))
   removed_names = sorted(list(prev_histogram_names - current_histogram_names))
@@ -122,18 +70,18 @@ def _print_diff_names(revision):
 
 
 def main(argv):
-  parser = argparse.ArgumentParser(description='Print histogram names.')
-  parser.add_argument('--diff',
+  parser = argparse.ArgumentParser(description="Print histogram names.")
+  parser.add_argument("--diff",
                       type=str,
-                      help='Git revision to diff against (e.g. HEAD~)')
+                      help="Git revision to diff against (e.g. HEAD~)")
   args = parser.parse_args(argv[1:])
   if args.diff is not None:
     _print_diff_names(args.diff)
   else:
-    name_set = get_names(histogram_xml_files())
+    name_set = histogram_utils.get_names(histogram_xml_files())
     for name in sorted(list(name_set)):
       print(name)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
   main(sys.argv)

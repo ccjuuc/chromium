@@ -13,10 +13,12 @@
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "ash/public/cpp/login/login_utils.h"
 #include "ash/public/cpp/login_screen.h"
 #include "ash/public/cpp/login_screen_model.h"
 #include "ash/public/cpp/token_handle_store.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -47,8 +49,6 @@
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/ash/login/login_screen_client_impl.h"
 #include "chrome/browser/ui/webui/ash/login/l10n_util.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
@@ -61,6 +61,7 @@
 #include "chromeos/dbus/tpm_manager/tpm_manager.pb.h"
 #include "chromeos/dbus/tpm_manager/tpm_manager_client.h"
 #include "components/account_id/account_id.h"
+#include "components/application_locale_storage/application_locale_storage.h"
 #include "components/prefs/pref_service.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/signin/public/identity_manager/account_managed_status_finder.h"
@@ -94,11 +95,10 @@ const size_t kMaxUsers = 50;
 // Returns true if we have enterprise domain information.
 // `out_manager`:  Output value of the manager of the device's domain. Can be
 // either a domain (foo.com) or an email address (user@foo.com)
-bool GetDeviceManager(std::string* out_manager) {
-  policy::BrowserPolicyConnectorAsh* policy_connector =
-      g_browser_process->platform_part()->browser_policy_connector_ash();
-  if (policy_connector->IsCloudManaged()) {
-    *out_manager = policy_connector->GetEnterpriseDomainManager();
+bool GetDeviceManager(const policy::BrowserPolicyConnectorAsh& policy_connector,
+                      std::string* out_manager) {
+  if (policy_connector.IsCloudManaged()) {
+    *out_manager = policy_connector.GetEnterpriseDomainManager();
     return true;
   }
   return false;
@@ -111,7 +111,8 @@ bool GetDeviceManager(std::string* out_manager) {
 // `out_selected_locale`: Output value of the initially selected locale.
 // `out_multiple_locales`: Output value indicates whether we have multiple
 // recommended locales.
-base::Value::List GetPublicSessionLocales(
+base::ListValue GetPublicSessionLocales(
+    const std::string& application_locale,
     const std::vector<std::string>* public_session_recommended_locales,
     std::string* out_selected_locale,
     bool* out_multiple_locales) {
@@ -122,16 +123,14 @@ base::Value::List GetPublicSessionLocales(
 
   // Construct the list of available locales. This list consists of the
   // recommended locales, followed by all others.
-  // TODO(crbug.com/404133029): Remove g_browser_process usage.
-  auto available_locales = GetUILanguageList(
-      g_browser_process->GetApplicationLocale(), &recommended_locales,
-      std::string(), input_method::InputMethodManager::Get());
+  auto available_locales =
+      GetUILanguageList(application_locale, &recommended_locales, std::string(),
+                        input_method::InputMethodManager::Get());
 
   // Select the the first recommended locale that is actually available or the
   // current UI locale if none of them are available.
-  *out_selected_locale =
-      FindMostRelevantLocale(recommended_locales, available_locales,
-                             g_browser_process->GetApplicationLocale());
+  *out_selected_locale = FindMostRelevantLocale(
+      recommended_locales, available_locales, application_locale);
 
   *out_multiple_locales = recommended_locales.size() >= 2;
   return available_locales;
@@ -150,10 +149,10 @@ bool IsUserAllowedForARC(const AccountId& account_id) {
              user_manager::UserManager::Get()->FindUser(account_id));
 }
 
-AccountId GetOwnerAccountId() {
+AccountId GetOwnerAccountId(PrefService& local_state) {
   std::string owner_email;
   CrosSettings::Get()->GetString(kDeviceOwner, &owner_email);
-  user_manager::KnownUser known_user(g_browser_process->local_state());
+  user_manager::KnownUser known_user(&local_state);
   const AccountId owner = known_user.GetAccountId(
       owner_email, std::string() /* id */, AccountType::UNKNOWN);
   return owner;
@@ -164,7 +163,7 @@ bool IsSigninToAdd() {
          user_manager::UserManager::Get()->IsUserLoggedIn();
 }
 
-bool CanRemoveUser(const user_manager::User* user) {
+bool CanRemoveUser(PrefService& local_state, const user_manager::User* user) {
   const bool is_single_user =
       user_manager::UserManager::Get()->GetPersistedUsers().size() == 1;
 
@@ -177,7 +176,7 @@ bool CanRemoveUser(const user_manager::User* user) {
   if (!user->GetAccountId().is_valid()) {
     return false;
   }
-  if (user->GetAccountId() == GetOwnerAccountId()) {
+  if (user->GetAccountId() == GetOwnerAccountId(local_state)) {
     return false;
   }
   if (user->GetType() == user_manager::UserType::kPublicAccount ||
@@ -204,6 +203,7 @@ std::tuple<bool, user_manager::MultiUserSignInPolicy> GetMultiUserSignInPolicy(
 
 // Determines if user auth status requires online sign in.
 proximity_auth::mojom::AuthType GetInitialUserAuthType(
+    PrefService& local_state,
     const user_manager::User* user) {
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kSkipForceOnlineSignInForTesting)) {
@@ -233,7 +233,7 @@ proximity_auth::mojom::AuthType GetInitialUserAuthType(
   // this might be a leftover from an old version.
   if (has_gaia_account &&
       token_status == user_manager::User::OAUTH2_TOKEN_STATUS_INVALID) {
-    RecordReauthReason(user->GetAccountId(), ReauthReason::kOther);
+    RecordReauthReason(local_state, user->GetAccountId(), ReauthReason::kOther);
   }
 
   // We need to force an online signin if the user is marked as requiring it or
@@ -251,7 +251,7 @@ proximity_auth::mojom::AuthType GetInitialUserAuthType(
     return proximity_auth::mojom::AuthType::ONLINE_SIGN_IN;
   }
 
-  user_manager::KnownUser known_user(g_browser_process->local_state());
+  user_manager::KnownUser known_user(&local_state);
   const std::optional<base::TimeDelta> offline_signin_time_limit =
       known_user.GetOfflineSigninLimit(user->GetAccountId());
   if (!offline_signin_time_limit) {
@@ -342,7 +342,7 @@ class UserSelectionScreen::DircryptoMigrationChecker {
       std::optional<user_data_auth::NeedsDircryptoMigrationReply> reply) {
     if (!reply.has_value()) {
       LOG(ERROR) << "Failed to call cryptohome NeedsDircryptoMigration.";
-      // Hide the banner to avoid confusion in http://crbug.com/721948.
+      // Hide the banner to avoid confusion in http://crbug.com/41319246.
       // Cache is not updated so that cryptohome call will still be attempted.
       UpdateUI(account_id, false);
       return;
@@ -482,8 +482,19 @@ class UserSelectionScreen::TpmLockedChecker {
   base::WeakPtrFactory<TpmLockedChecker> weak_ptr_factory_{this};
 };
 
-UserSelectionScreen::UserSelectionScreen(DisplayedScreen display_type)
-    : display_type_(display_type) {
+UserSelectionScreen::UserSelectionScreen(
+    PrefService* local_state,
+    const ApplicationLocaleStorage* application_locale_storage,
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+    const policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
+    DisplayedScreen display_type)
+    : local_state_(CHECK_DEREF(local_state)),
+      application_locale_storage_(CHECK_DEREF(application_locale_storage)),
+      shared_url_loader_factory_(std::move(shared_url_loader_factory)),
+      browser_policy_connector_ash_(CHECK_DEREF(browser_policy_connector_ash)),
+      display_type_(display_type) {
+  CHECK(shared_url_loader_factory_);
+
   session_manager::SessionManager::Get()->AddObserver(this);
   if (display_type_ != DisplayedScreen::SIGN_IN_SCREEN) {
     return;
@@ -531,11 +542,13 @@ void UserSelectionScreen::Init(const user_manager::UserList& users) {
   // In-session (including the lock screen) is handled by
   // InSessionPasswordSyncManager.
   if (users.size() > 0 && display_type_ == DisplayedScreen::SIGN_IN_SCREEN) {
-    online_signin_notifier_ = std::make_unique<UserOnlineSigninNotifier>(users);
+    online_signin_notifier_ =
+        std::make_unique<UserOnlineSigninNotifier>(&local_state_.get(), users);
     scoped_observation_.Observe(online_signin_notifier_.get());
     online_signin_notifier_->CheckForPolicyEnforcedOnlineSignin();
     sync_token_checkers_ =
-        std::make_unique<PasswordSyncTokenCheckersCollection>();
+        std::make_unique<PasswordSyncTokenCheckersCollection>(
+            &local_state_.get(), shared_url_loader_factory_);
     sync_token_checkers_->StartPasswordSyncCheckers(users, this);
   } else {
     sync_token_checkers_.reset();
@@ -627,14 +640,14 @@ void UserSelectionScreen::HandleFocusPod(const AccountId& account_id) {
   }
   CheckUserStatus(account_id);
   lock_screen_utils::SetUserInputMethod(
-      account_id, ime_state_.get(),
+      local_state_.get(), account_id, ime_state_.get(),
       display_type_ ==
           DisplayedScreen::SIGN_IN_SCREEN /* honor_device_policy */);
-  lock_screen_utils::SetKeyboardSettings(account_id);
+  lock_screen_utils::SetKeyboardSettings(local_state_.get(), account_id);
 
-  user_manager::KnownUser known_user(g_browser_process->local_state());
+  user_manager::KnownUser known_user(&local_state_.get());
   std::optional<bool> use_24hour_clock =
-      known_user.FindBoolPath(account_id, ::prefs::kUse24HourClock);
+      known_user.FindBoolPath(account_id, ash::prefs::kUse24HourClock);
   if (!use_24hour_clock.has_value()) {
     focused_user_clock_type_.reset();
   } else {
@@ -664,7 +677,8 @@ void UserSelectionScreen::OnAllowedInputMethodsChanged() {
   DCHECK_EQ(display_type_, DisplayedScreen::SIGN_IN_SCREEN);
   if (focused_pod_account_id_.is_valid()) {
     std::string user_input_method_id =
-        lock_screen_utils::GetUserLastInputMethodId(focused_pod_account_id_);
+        lock_screen_utils::GetUserLastInputMethodId(local_state_.get(),
+                                                    focused_pod_account_id_);
     lock_screen_utils::EnforceDevicePolicyInputMethods(user_input_method_id);
   } else {
     lock_screen_utils::EnforceDevicePolicyInputMethods(std::string());
@@ -679,7 +693,8 @@ void UserSelectionScreen::OnUserStatusChecked(const AccountId& account_id,
                                               const std::string& token,
                                               bool reauth_required) {
   if (reauth_required) {
-    RecordReauthReason(account_id, ReauthReason::kInvalidTokenHandle);
+    RecordReauthReason(local_state_.get(), account_id,
+                       ReauthReason::kInvalidTokenHandle);
     SetAuthType(account_id, proximity_auth::mojom::AuthType::ONLINE_SIGN_IN,
                 std::u16string());
   }
@@ -768,7 +783,7 @@ void UserSelectionScreen::OnSessionStateChanged() {
 }
 
 void UserSelectionScreen::OnInvalidSyncToken(const AccountId& account_id) {
-  RecordReauthReason(account_id,
+  RecordReauthReason(local_state_.get(), account_id,
                      ReauthReason::kSamlPasswordSyncTokenValidationFailed);
   SetAuthType(account_id, proximity_auth::mojom::AuthType::ONLINE_SIGN_IN,
               std::u16string());
@@ -791,7 +806,7 @@ std::vector<LoginUserInfo>
 UserSelectionScreen::UpdateAndReturnUserListForAsh() {
   std::vector<LoginUserInfo> user_info_list;
 
-  const AccountId owner = GetOwnerAccountId();
+  const AccountId owner = GetOwnerAccountId(local_state_.get());
   const bool is_signin_to_add = IsSigninToAdd();
   users_to_send_ = PrepareUserListForSending(users_, owner, is_signin_to_add);
 
@@ -805,17 +820,17 @@ UserSelectionScreen::UpdateAndReturnUserListForAsh() {
     const proximity_auth::mojom::AuthType initial_auth_type =
         is_public_account
             ? proximity_auth::mojom::AuthType::EXPAND_THEN_USER_CLICK
-            : GetInitialUserAuthType(user);
+            : GetInitialUserAuthType(local_state_.get(), user);
     user_auth_type_map_[account_id] = initial_auth_type;
 
     LoginUserInfo user_info;
     user_info.basic_user_info.type = user->GetType();
     user_info.basic_user_info.account_id = user->GetAccountId();
 
-    user_manager::KnownUser known_user(g_browser_process->local_state());
+    user_manager::KnownUser known_user(&local_state_.get());
 
     user_info.use_24hour_clock =
-        known_user.FindBoolPath(account_id, ::prefs::kUse24HourClock)
+        known_user.FindBoolPath(account_id, ash::prefs::kUse24HourClock)
             .value_or(base::GetHourClockType() == base::k24HourClock);
 
     user_info.basic_user_info.display_name =
@@ -825,7 +840,7 @@ UserSelectionScreen::UpdateAndReturnUserListForAsh() {
     user_info.auth_type = initial_auth_type;
     user_info.is_signed_in = user->is_logged_in();
     user_info.is_device_owner = is_owner;
-    user_info.can_remove = CanRemoveUser(user);
+    user_info.can_remove = CanRemoveUser(local_state_.get(), user);
     user_info.fingerprint_state = quick_unlock::GetFingerprintStateForUser(
         user, quick_unlock::Purpose::kUnlock);
 
@@ -869,7 +884,7 @@ UserSelectionScreen::UpdateAndReturnUserListForAsh() {
     if (user->GetType() == user_manager::UserType::kPublicAccount) {
       std::string manager;
       user_info.public_account_info.emplace();
-      if (GetDeviceManager(&manager)) {
+      if (GetDeviceManager(browser_policy_connector_ash_.get(), &manager)) {
         user_info.public_account_info->device_enterprise_manager = manager;
       }
 
@@ -883,7 +898,8 @@ UserSelectionScreen::UpdateAndReturnUserListForAsh() {
       std::string selected_locale;
       bool has_multiple_locales;
       auto available_locales =
-          GetPublicSessionLocales(public_session_recommended_locales,
+          GetPublicSessionLocales(application_locale_storage_->Get(),
+                                  public_session_recommended_locales,
                                   &selected_locale, &has_multiple_locales);
       user_info.public_account_info->available_locales =
           lock_screen_utils::FromListValueToLocaleItem(
@@ -895,7 +911,7 @@ UserSelectionScreen::UpdateAndReturnUserListForAsh() {
           !ash::demo_mode::IsDeviceInDemoMode();
     }
 
-    user_info.can_remove = CanRemoveUser(user);
+    user_info.can_remove = CanRemoveUser(local_state_.get(), user);
 
     // Send a request to get keyboard layouts for default locale.
     if (is_public_account && LoginScreenClientImpl::HasInstance()) {

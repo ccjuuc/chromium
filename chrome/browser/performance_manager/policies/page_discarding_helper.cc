@@ -8,10 +8,12 @@
 #include <memory>
 #include <utility>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/feature_list.h"
+#include "base/logging.h"
+#include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_macros.h"
 #include "build/build_config.h"
 #include "chrome/browser/performance_manager/policies/policy_features.h"
@@ -42,7 +44,7 @@ const char kDescriberName[] = "PageDiscardingHelper";
 static const uint64_t kSwapFootprintDiscount = 4;
 #endif
 
-using NodeFootprintMap = base::flat_map<const PageNode*, base::ByteCount>;
+using NodeFootprintMap = base::flat_map<const PageNode*, base::ByteSize>;
 
 // Returns the mapping from page_node to its memory footprint estimation.
 NodeFootprintMap GetPageNodeFootprintEstimate(
@@ -52,7 +54,7 @@ NodeFootprintMap GetPageNodeFootprintEstimate(
   result_container.reserve(candidates.size());
   for (const auto& candidate : candidates) {
     result_container.emplace_back(candidate.page_node().get(),
-                                  base::ByteCount(0));
+                                  base::ByteSize(0));
   }
   NodeFootprintMap result(std::move(result_container));
 
@@ -77,7 +79,7 @@ NodeFootprintMap GetPageNodeFootprintEstimate(
     }
     // Get the footprint of the process and split it equally across its
     // frames.
-    base::ByteCount footprint = process_node->GetResidentSet();
+    base::ByteSize footprint = process_node->GetResidentSet();
 #if BUILDFLAG(IS_CHROMEOS)
     footprint += process_node->GetPrivateSwap() / kSwapFootprintDiscount;
 #endif
@@ -115,19 +117,22 @@ PageDiscardingHelper::~PageDiscardingHelper() = default;
 
 PageDiscardingHelper::DiscardResult PageDiscardingHelper::DiscardAPage(
     DiscardEligibilityPolicy::DiscardReason discard_reason,
-    base::TimeDelta minimum_time_in_background) {
+    bool ignore_recent_visibility,
+    std::optional<absl::flat_hash_set<base::UnguessableToken>>
+        allowed_browser_context_ids) {
   return DiscardMultiplePagesImpl(std::nullopt, false, discard_reason,
-                                  minimum_time_in_background);
+                                  ignore_recent_visibility,
+                                  std::move(allowed_browser_context_ids));
 }
 
 std::optional<base::TimeTicks> PageDiscardingHelper::DiscardMultiplePages(
     std::optional<memory_pressure::ReclaimTarget> reclaim_target,
     bool discard_protected_tabs,
     DiscardEligibilityPolicy::DiscardReason discard_reason,
-    base::TimeDelta minimum_time_in_background) {
-  auto result =
-      DiscardMultiplePagesImpl(reclaim_target, discard_protected_tabs,
-                               discard_reason, minimum_time_in_background);
+    bool ignore_recent_visibility) {
+  auto result = DiscardMultiplePagesImpl(
+      reclaim_target, discard_protected_tabs, discard_reason,
+      ignore_recent_visibility, std::nullopt);
   return result.first_discard_time;
 }
 
@@ -136,7 +141,9 @@ PageDiscardingHelper::DiscardMultiplePagesImpl(
     std::optional<memory_pressure::ReclaimTarget> reclaim_target,
     bool discard_protected_tabs,
     DiscardEligibilityPolicy::DiscardReason discard_reason,
-    base::TimeDelta minimum_time_in_background) {
+    bool ignore_recent_visibility,
+    std::optional<absl::flat_hash_set<base::UnguessableToken>>
+        allowed_browser_context_ids) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (reclaim_target) {
@@ -158,8 +165,14 @@ PageDiscardingHelper::DiscardMultiplePagesImpl(
 
   std::vector<PageNodeSortProxy> candidates;
   for (const PageNode* page_node : GetOwningGraph()->GetAllPageNodes()) {
+    if (allowed_browser_context_ids.has_value() &&
+        !allowed_browser_context_ids->contains(
+            page_node->GetBrowserContextID())) {
+      continue;
+    }
+
     CanDiscardResult can_discard_result = eligiblity_policy->CanDiscard(
-        page_node, discard_reason, minimum_time_in_background);
+        page_node, discard_reason, ignore_recent_visibility);
     if (can_discard_result == CanDiscardResult::kDisallowed) {
       continue;
     }
@@ -187,7 +200,7 @@ PageDiscardingHelper::DiscardMultiplePagesImpl(
     page_node_footprint = GetPageNodeFootprintEstimate(candidates);
   }
 
-  base::ByteCount total_reclaim;
+  base::ByteSize total_reclaim;
   DiscardResult result;
 
   // Note: If `reclaim_target->target` is zero, this loop is not entered.
@@ -203,7 +216,7 @@ PageDiscardingHelper::DiscardMultiplePagesImpl(
 
     const PageNode* node = candidate.page_node().get();
 
-    std::optional<base::ByteCount> node_reclaim;
+    std::optional<base::ByteSize> node_reclaim;
     if (reclaim_target) {
       // TODO(crbug.com/40755583): Use the `estimated_memory_freed` obtained
       // from `DiscardPageNode()` below to avoid the need to build
@@ -215,7 +228,7 @@ PageDiscardingHelper::DiscardMultiplePagesImpl(
       // the average Memory.Renderer.PrivateMemoryFootprint histogram value on
       // Windows in August 2021.
       node_reclaim = page_node_footprint[node].is_zero()
-                         ? base::MiB(80)
+                         ? base::MiBU(80)
                          : page_node_footprint[node];
 
       LOG(WARNING) << "Queueing discard attempt, type="
@@ -234,13 +247,13 @@ PageDiscardingHelper::DiscardMultiplePagesImpl(
 
     // PageNode may be replaced after discard. TabHandle is not replaced after
     // discard.
-    TabPageDecorator::TabHandle* tab_handle;
+    base::WeakPtr<TabPageDecorator::TabHandle> tab_handle;
     if (!result.first_discard_time.has_value()) {
-      tab_handle = TabPageDecorator::FromPageNode(node);
+      tab_handle = TabPageDecorator::WeakHandleFromPageNode(node);
     }
 
     // Do the discard.
-    std::optional<base::ByteCount> estimated_memory_freed =
+    std::optional<base::ByteSize> estimated_memory_freed =
         page_discarder_->DiscardPageNode(node, discard_reason);
 
     // If discard is successful:
@@ -284,14 +297,14 @@ PageDiscardingHelper::DiscardMultiplePagesImpl(
 bool PageDiscardingHelper::ImmediatelyDiscardMultiplePages(
     const std::vector<const PageNode*>& page_nodes,
     DiscardEligibilityPolicy::DiscardReason discard_reason,
-    base::TimeDelta minimum_time_in_background) {
+    bool ignore_recent_visibility) {
   DiscardEligibilityPolicy* eligibility_policy =
       DiscardEligibilityPolicy::GetFromGraph(GetOwningGraph());
   DCHECK(eligibility_policy);
   std::vector<base::WeakPtr<const PageNode>> eligible_nodes;
   for (const PageNode* node : page_nodes) {
     if (eligibility_policy->CanDiscard(node, discard_reason,
-                                       minimum_time_in_background) ==
+                                       ignore_recent_visibility) ==
         CanDiscardResult::kEligible) {
       eligible_nodes.emplace_back(node->GetWeakPtr());
     }
@@ -331,9 +344,9 @@ void PageDiscardingHelper::OnTakenFromGraph(Graph* graph) {
   graph->RemovePageNodeObserver(this);
 }
 
-base::Value::Dict PageDiscardingHelper::DescribePageNodeData(
+base::DictValue PageDiscardingHelper::DescribePageNodeData(
     const PageNode* node) const {
-  base::Value::Dict ret;
+  base::DictValue ret;
   TabPageDecorator::TabHandle* tab_handle =
       TabPageDecorator::FromPageNode(node);
   if (tab_handle) {

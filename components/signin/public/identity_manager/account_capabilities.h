@@ -55,15 +55,21 @@ class AccountCapabilities {
   const base::flat_map<std::string, bool>& ConvertToAccountCapabilitiesIOS();
 #endif
 
+  // Resets the cached list of supported account capability names.
+  // Useful for testing scenarios where feature flags change between tests.
+  static void ResetSupportedAccountCapabilityNamesForTesting();
+
   // clang-format off
-  // keep-sorted start newline_separated=yes sticky_prefixes=#if group_prefixes=#endif,can,has,is,must
+  // keep-sorted start newline_separated=yes sticky_prefixes=#if,BUILDFLAG group_prefixes=#endif,can,has,is,must
   // clang-format on
   // Chrome can fetch information related to the family
   // group for accounts with this capability.
   signin::Tribool can_fetch_family_member_info() const;
 
+#if !BUILDFLAG(IS_IOS)
   // Chrome can display the email address for accounts with this capability.
   signin::Tribool can_have_email_address_displayed() const;
+#endif
 
 #if !BUILDFLAG(IS_ANDROID)
   // The primary account type is suitable for choice screens. Signals that are
@@ -81,6 +87,18 @@ class AccountCapabilities {
   signin::Tribool
   can_show_history_sync_opt_ins_without_minor_mode_restrictions() const;
 
+#if BUILDFLAG(IS_IOS)
+  // Whether the user is allowed to sign in to Chrome.
+  signin::Tribool can_sign_in_to_chrome() const;
+#endif
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_IOS)
+  // Whether the account can submit feedback. For iOS, this is implemented by
+  // Aloha FeedbackKit. For Android, this is implemented by GMS Core.
+  signin::Tribool can_submit_feedback() const;
+#endif
+
 #if BUILDFLAG(IS_CHROMEOS)
   // Chrome can toggle auto updates with this capability.
   signin::Tribool can_toggle_auto_updates() const;
@@ -94,27 +112,28 @@ class AccountCapabilities {
   signin::Tribool can_use_chromeos_generative_ai() const;
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-  // The user account is able to use copyeditor feature.
-  signin::Tribool can_use_copyeditor_feature() const;
-
 #if !BUILDFLAG(IS_IOS)
   // The user account is able to use DevTools AI features.
   signin::Tribool can_use_devtools_generative_ai_features() const;
 #endif
 
+#if !BUILDFLAG(IS_IOS)
   // The user account is able to use edu features.
   signin::Tribool can_use_edu_features() const;
-
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-  // The user account is able to use Gemini in Chrome.
-  signin::Tribool can_use_gemini_in_chrome() const;
 #endif
 
+  // The user account is able to use Gemini in Chrome.
+  signin::Tribool can_use_gemini_in_chrome() const;
+
+#if BUILDFLAG(IS_CHROMEOS)
   // The user account is able to use generative AI in recorder app.
   signin::Tribool can_use_generative_ai_in_recorder_app() const;
+#endif
 
+#if BUILDFLAG(IS_CHROMEOS)
   // The user account is able to use generative AI photo editing.
   signin::Tribool can_use_generative_ai_photo_editing() const;
+#endif
 
   // The user account is able to use manta service.
   signin::Tribool can_use_manta_service() const;
@@ -151,6 +170,22 @@ class AccountCapabilities {
   // Chrome applies parental controls to accounts with this capability.
   signin::Tribool is_subject_to_parental_controls() const;
 
+  // Whether the user is subject to Universal Opt-Out.
+  signin::Tribool is_subject_to_universal_opt_out() const;
+
+#if BUILDFLAG(IS_IOS)
+  // Whether the client must fetch Apple's age range in Chrome.
+  signin::Tribool must_fetch_apple_age_range_in_chrome() const;
+#endif
+
+#if BUILDFLAG(IS_IOS)
+  // Whether the client must skip Apple's age range check in Chrome.
+  signin::Tribool must_skip_apple_age_range_in_chrome() const;
+#endif
+
+  // Whether the account may fill and save Wallet private passes in Autofill.
+  signin::Tribool supports_wallet_private_passes_in_autofill() const;
+
   // keep-sorted end
 
   // Whether at least one of the capabilities is not
@@ -168,25 +203,44 @@ class AccountCapabilities {
   bool operator==(const AccountCapabilities& other) const;
 
  private:
+  // Methods to override a specific capability. Passing std::nullopt clears the
+  // override.
+  void SetCapabilityOverride(std::string_view name,
+                             std::optional<signin::Tribool> value);
+
   // Returns the list of account capability service names supported in Chrome.
   static base::span<const std::string_view>
   GetSupportedAccountCapabilityNames();
+
+  // Returns a friendly display name for the given capability API name.
+  static std::string GetCapabilityDisplayName(std::string_view name);
+
+  // Returns the effective capability state using the service name.
+  signin::Tribool GetCapabilityByName(std::string_view name) const;
+
+  // Returns the capability state using the service name, without checking
+  // overrides.
+  signin::Tribool GetFetchedCapabilityByName(std::string_view name) const;
+
+  const base::flat_map<std::string, signin::Tribool>& GetCapabilityOverrides()
+      const;
 
   // Internal version of GetSupportedAccountCapabilityNames that calculates the
   // list on each call, rather than returning a cached value.
   static std::vector<std::string_view>
   GetSupportedAccountCapabilityNamesInternal();
 
-  // Returns the capability state using the service name.
-  signin::Tribool GetCapabilityByName(std::string_view name) const;
-
   friend std::optional<AccountCapabilities>
   signin::AccountCapabilitiesFromServerResponse(
-      const base::Value::Dict& account_capabilities);
-  friend base::Value::Dict signin::SerializeAccountCapabilities(
+      const base::DictValue& account_capabilities);
+  friend base::DictValue signin::SerializeAccountCapabilities(
+      const AccountCapabilities& account_capabilities);
+  friend base::DictValue signin::SerializeAccountCapabilityOverrides(
       const AccountCapabilities& account_capabilities);
   friend AccountCapabilities signin::DeserializeAccountCapabilities(
-      const base::Value::Dict& dict);
+      const base::DictValue& capabilities_dict,
+      const base::DictValue& overrides_dict);
+  friend class AboutSigninInternals;
   friend class AccountCapabilitiesFetcherGaia;
 #if BUILDFLAG(IS_IOS)
   friend base::span<const std::string_view>
@@ -195,14 +249,21 @@ class AccountCapabilities {
 #endif
   FRIEND_TEST_ALL_PREFIXES(AccountCapabilitiesTest,
                            GetSupportedAccountCapabilityNames);
+  FRIEND_TEST_ALL_PREFIXES(AccountCapabilitiesTest, CapabilityOverrides);
   FRIEND_TEST_ALL_PREFIXES(AccountCapabilitiesTest,
                            GetSupportedAccountCapabilityNames_FlagDisabled);
   FRIEND_TEST_ALL_PREFIXES(AccountCapabilitiesTest,
                            GetSupportedAccountCapabilityNames_FlagEnabled);
+  FRIEND_TEST_ALL_PREFIXES(AccountCapabilitiesTest,
+                           ConversionWithJNI_FlagGuardDisabled_JavaToCpp);
+  FRIEND_TEST_ALL_PREFIXES(AccountCapabilitiesTest,
+                           ConversionWithJNI_FlagGuardDisabled_CppToJava);
   friend class AccountCapabilitiesTestMutator;
+  friend class AccountTrackerService;
   friend class supervised_user::FamilyLinkUserCapabilitiesObserver;
 
   base::flat_map<std::string, bool> capabilities_map_;
+  base::flat_map<std::string, signin::Tribool> capabilities_overrides_;
 };
 
 #endif  // COMPONENTS_SIGNIN_PUBLIC_IDENTITY_MANAGER_ACCOUNT_CAPABILITIES_H_

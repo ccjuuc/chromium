@@ -32,19 +32,62 @@ chromium-metrics-reviews@google.com.
   <int value="0" label="ContextMenu"/>
   <int value="1" label="CopyPaste"/>
   <int value="2" label="DragAndDrop"/>
-  <int value="3" label="RecentTabChip"/>
+  <int value="3" label="CurrentTabChip"/>
 </enum>
 
 <!-- LINT.ThenChange(//ui/webui/resources/cr_components/search/constants.ts:ComposeboxContextAddedMethod) -->
 
-<!-- LINT.IfChange(AimToolState) -->
+<!-- LINT.IfChange(ContextType) -->
 
-<enum name="ContextualSearchAimToolState">
-  <int value="0" label="AIM Tool Disabled"/>
-  <int value="1" label="AIM Tool Enabled"/>
+<enum name="ContextType">
+  <int value="0" label="Tab"/>
+  <int value="1" label="File"/>
+  <int value="2" label="Image"/>
+  <int value="3" label="ImageGen"/>
+  <int value="4" label="DeepResearch"/>
+  <int value="5" label="Canvas"/>
+  <int value="6" label="AutoModel"/>
+  <int value="7" label="ThinkingModel"/>
+  <int value="8" label="RegularModel"/>
+  <int value="9" label="ProNoGenUiModel"/>
+  <int value="10" label="Unknown"/>
+  <int value="11" label="Drive"/>
 </enum>
 
-<!-- LINT.ThenChange(//components/contextual_search/contextual_search_types.h:AimToolState) -->
+<!-- LINT.ThenChange(//components/omnibox/common/omnibox_metrics_utils.h:ContextType, //ui/webui/resources/cr_components/composebox/common.ts:ContextType) -->
+
+<!-- LINT.IfChange(ContextualSearchAimInputType) -->
+
+<enum name="ContextualSearchAimInputType">
+  <int value="0" label="Unspecified"/>
+  <int value="1" label="LensImage"/>
+  <int value="2" label="LensFile"/>
+  <int value="3" label="BrowserTab"/>
+  <int value="4" label="Drive"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/omnibox/composebox/composebox_query.mojom:InputType) -->
+
+<!-- LINT.IfChange(ContextualSearchContextState) -->
+
+<enum name="ContextualSearchContextState">
+  <int value="0" label="WithoutContext"/>
+  <int value="1" label="WithTabContext"/>
+  <int value="2" label="WithNonTabContext"/>
+  <int value="3" label="WithContextNoText"/>
+  <int value="4" label="WithDriveContext"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/contextual_search/contextual_search_metrics_recorder.h:ContextualSearchContextState, //chrome/browser/resources/new_tab_page/ntp_searchbox.ts:ContextualSearchContextState) -->
+
+<!-- LINT.IfChange(ContextualSearchErrorPage) -->
+
+<enum name="ContextualSearchErrorPage">
+  <int value="0" label="Unknown"/>
+  <int value="1" label="Page context not eligible"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/contextual_search/contextual_search_types.h:ContextualSearchErrorPage) -->
 
 <!-- LINT.IfChange(FileValidationError) -->
 
@@ -55,7 +98,17 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="File size is too large"/>
 </enum>
 
-<!-- LINT.ThenChange(//ui/webui/resources/cr_components/composebox/contextual_entrypoint_and_carousel.ts:FileValidationError) -->
+<!-- LINT.ThenChange(//ui/webui/resources/cr_components/composebox/common.ts:FileValidationError) -->
+
+<!-- LINT.IfChange(ContextualSearchInputStateDeletionType) -->
+
+<enum name="ContextualSearchInputStateDeletionType">
+  <int value="0" label="File"/>
+  <int value="1" label="Tab"/>
+  <int value="2" label="Tool"/>
+</enum>
+
+<!-- LINT.ThenChange(//ui/webui/resources/cr_components/composebox/common.ts:ContextualSearchInputStateDeletionType) -->
 
 <enum name="ContextualSearchMultimodalState">
   <int value="0" label="Text Only"/>
@@ -63,15 +116,30 @@ chromium-metrics-reviews@google.com.
   <int value="2" label="Text and File"/>
 </enum>
 
-<!-- LINT.IfChange(SubmissionType) -->
+<!-- LINT.IfChange(ContextualSearchNoAcMatchState) -->
 
-<enum name="ContextualSearchSubmissionType">
-  <int value="0" label="Submission with no tools"/>
-  <int value="1" label="DeepSearch"/>
-  <int value="2" label="CreateImages"/>
+<enum name="ContextualSearchNoAcMatchState">
+  <int value="0" label="Only Context"/>
+  <int value="1" label="Only Text"/>
+  <int value="2" label="Text and Context"/>
+  <int value="3" label="No Text or Context"/>
+  <int value="4" label="AcMatch"/>
 </enum>
 
-<!-- LINT.ThenChange(//components/contextual_search/contextual_search_types.h:SubmissionType) -->
+<!-- LINT.ThenChange(//components/contextual_search/contextual_search_metrics_recorder.h:ContextualSearchNoAcMatchState) -->
+
+<!-- LINT.IfChange(ContextualSearchSource) -->
+
+<enum name="ContextualSearchSource">
+  <int value="0" label="Unknown"/>
+  <int value="1" label="NewTabPage"/>
+  <int value="2" label="Omnibox"/>
+  <int value="3" label="ContextualTasks"/>
+  <int value="4" label="Lens"/>
+  <int value="5" label="OmniboxEverywhere"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/contextual_search/contextual_search_metrics_recorder.h:ContextualSearchSource) -->
 
 </enums>
 

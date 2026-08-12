@@ -175,7 +175,7 @@ TEST_F(StatsEventSubscriberTest, Encode) {
   base::TimeTicks last_event_time;
   int total_size = 0;
   for (int i = 0; i < num_frames; i++) {
-    int size = 1000 + base::RandInt(-100, 100);
+    int size = 1000 + base::RandIntInclusive(-100, 100);
     total_size += size;
     std::unique_ptr<FrameEvent> encode_event(new FrameEvent());
     encode_event->timestamp = NowTicks();
@@ -212,19 +212,25 @@ TEST_F(StatsEventSubscriberTest, Encode) {
 
   EXPECT_DOUBLE_EQ(it->second, total_size / duration.InMillisecondsF() * 8);
 
+  // The subscriber maps event TimeTicks onto wall-clock time by anchoring both
+  // clocks to the current instant; mirror that here. The MOCK_TIME clocks do
+  // not advance between GetStatsInternal() and this point, so the values match.
+  const base::TimeTicks now_ticks = NowTicks();
+  const base::Time now = base::Time::Now();
+
   it = stats_map.find(StatsEventSubscriber::FIRST_EVENT_TIME_MS);
   ASSERT_TRUE(it != stats_map.end());
 
-  EXPECT_DOUBLE_EQ(
-      it->second,
-      (first_event_time - base::TimeTicks::UnixEpoch()).InMillisecondsF());
+  EXPECT_DOUBLE_EQ(it->second, (now - (now_ticks - first_event_time) -
+                                base::Time::UnixEpoch())
+                                   .InMillisecondsF());
 
   it = stats_map.find(StatsEventSubscriber::LAST_EVENT_TIME_MS);
   ASSERT_TRUE(it != stats_map.end());
 
-  EXPECT_DOUBLE_EQ(
-      it->second,
-      (last_event_time - base::TimeTicks::UnixEpoch()).InMillisecondsF());
+  EXPECT_DOUBLE_EQ(it->second, (now - (now_ticks - last_event_time) -
+                                base::Time::UnixEpoch())
+                                   .InMillisecondsF());
 }
 
 TEST_F(StatsEventSubscriberTest, Decode) {
@@ -310,11 +316,11 @@ TEST_F(StatsEventSubscriberTest, E2ELatency) {
     capture_begin_event->rtp_timestamp = rtp_timestamp;
     log_dispatcher().DispatchFrameEvent(std::move(capture_begin_event));
 
-    int latency_micros = 100000 + base::RandInt(-5000, 50000);
+    int latency_micros = 100000 + base::RandIntInclusive(-5000, 50000);
     base::TimeDelta latency = base::Microseconds(latency_micros);
     AdvanceClocks(latency);
 
-    int delay_micros = base::RandInt(-50000, 50000);
+    int delay_micros = base::RandIntInclusive(-50000, 50000);
     base::TimeDelta delay = base::Milliseconds(delay_micros);
     total_latency += latency;
 
@@ -370,7 +376,7 @@ TEST_F(StatsEventSubscriberTest, Packets) {
   // Every 4th packet will be retransmitted twice.
   // Every 8th packet will be retransmitted 3 times + 1 rejected retransmission.
   for (int i = 0; i < num_packets; i++) {
-    int size = 1000 + base::RandInt(-100, 100);
+    int size = 1000 + base::RandIntInclusive(-100, 100);
     total_size += size;
 
     std::unique_ptr<PacketEvent> send_event(new PacketEvent());
@@ -386,7 +392,7 @@ TEST_F(StatsEventSubscriberTest, Packets) {
 
     total_queueing_latency += NowTicks() - sender_encoded_time;
 
-    int latency_micros = 20000 + base::RandInt(-10000, 10000);
+    int latency_micros = 20000 + base::RandIntInclusive(-10000, 10000);
     base::TimeDelta latency = base::Microseconds(latency_micros);
     // Latency is only recorded for packets that aren't retransmitted.
     if (i % 2 != 0) {
@@ -537,13 +543,13 @@ TEST_F(StatsEventSubscriberTest, Packets) {
   EXPECT_DOUBLE_EQ(it->second, static_cast<double>(num_packets_rtx_rejected));
 }
 
-std::optional<int> GetBucketCount(const base::Value::List& values,
+std::optional<int> GetBucketCount(const base::ListValue& values,
                                   const std::string& bucket) {
   for (const base::Value& value : values) {
     if (!value.is_dict()) {
       continue;
     }
-    const base::Value::Dict& dict = value.GetDict();
+    const base::DictValue& dict = value.GetDict();
     if (!dict.contains(bucket)) {
       continue;
     }
@@ -642,7 +648,7 @@ TEST_F(StatsEventSubscriberTest, Histograms) {
   log_dispatcher().DispatchFrameEvent(std::move(playout_event));
 
   StatsEventSubscriber::SimpleHistogram* histogram;
-  base::Value::List values;
+  base::ListValue values;
 
   histogram = subscriber_->GetHistogramForTesting(
       StatsEventSubscriber::CAPTURE_LATENCY_MS_HISTO);

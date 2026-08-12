@@ -4,7 +4,8 @@
 
 #include "chrome/browser/lookalikes/lookalike_url_navigation_throttle.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/functional/bind.h"
 #include "base/path_service.h"
 #include "base/strings/pattern.h"
@@ -12,6 +13,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
 #include "build/build_config.h"
 #include "chrome/browser/history/history_service_factory.h"
@@ -25,6 +27,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -114,7 +117,7 @@ security_interstitials::SecurityInterstitialPage::TypeID GetInterstitialType(
 
 // Sets the absolute Site Engagement |score| for the testing origin.
 void SetEngagementScore(Browser* browser, const GURL& url, double score) {
-  site_engagement::SiteEngagementService::Get(browser->profile())
+  site_engagement::SiteEngagementService::Get(browser->GetProfile())
       ->ResetBaseScoreForURL(url, score);
 }
 
@@ -245,6 +248,15 @@ class LookalikeUrlNavigationThrottleBrowserTest : public InProcessBrowserTest {
       : https_server_(std::make_unique<net::EmbeddedTestServer>(
             net::EmbeddedTestServer::TYPE_HTTPS)) {}
 
+  void SetUp() override {
+    // TODO(b:507481593): Some tests are failing when enabling these features.
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features*/ {},
+        /*disabled_features*/ {omnibox::internal::kWebUIOmniboxPopup,
+                               omnibox::internal::kWebUIOmniboxAimPopup});
+    InProcessBrowserTest::SetUp();
+  }
+
   void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
     test_ukm_recorder_ = std::make_unique<ukm::TestAutoSetUkmRecorder>();
@@ -255,7 +267,7 @@ class LookalikeUrlNavigationThrottleBrowserTest : public InProcessBrowserTest {
     test_clock_.SetNow(kNow);
 
     LookalikeUrlService* lookalike_service =
-        LookalikeUrlServiceFactory::GetForProfile(browser()->profile());
+        LookalikeUrlServiceFactory::GetForProfile(browser()->GetProfile());
     lookalike_service->SetClockForTesting(&test_clock_);
 
     // Use HTTPS URLs in tests.
@@ -331,7 +343,7 @@ class LookalikeUrlNavigationThrottleBrowserTest : public InProcessBrowserTest {
       bool expect_signed_exchange = false) {
     history::HistoryService* const history_service =
         HistoryServiceFactory::GetForProfile(
-            browser->profile(), ServiceAccessType::EXPLICIT_ACCESS);
+            browser->GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
     ui_test_utils::WaitForHistoryToLoad(history_service);
 
     LoadAndCheckInterstitialAt(browser, navigated_url);
@@ -355,10 +367,10 @@ class LookalikeUrlNavigationThrottleBrowserTest : public InProcessBrowserTest {
 
     // Clicking the link in the interstitial should also remove the original
     // URL from history.
-    ui_test_utils::HistoryEnumerator enumerator(browser->profile());
-    EXPECT_FALSE(base::Contains(enumerator.urls(), navigated_url));
+    ui_test_utils::HistoryEnumerator enumerator(browser->GetProfile());
+    EXPECT_FALSE(std::ranges::contains(enumerator.urls(), navigated_url));
 
-    bool is_incognito = browser->profile()->IsIncognitoProfile();
+    bool is_incognito = browser->GetProfile()->IsIncognitoProfile();
     histograms.ExpectUniqueSample(kInterstitialHistogramName, expected_event,
                                   is_incognito ? 0 : 1);
     histograms.ExpectUniqueSample(kIncognitoInterstitialHistogramName,
@@ -385,7 +397,7 @@ class LookalikeUrlNavigationThrottleBrowserTest : public InProcessBrowserTest {
 
     history::HistoryService* const history_service =
         HistoryServiceFactory::GetForProfile(
-            browser->profile(), ServiceAccessType::EXPLICIT_ACCESS);
+            browser->GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
     ui_test_utils::WaitForHistoryToLoad(history_service);
 
     LoadAndCheckInterstitialAt(browser, navigated_url);
@@ -395,7 +407,7 @@ class LookalikeUrlNavigationThrottleBrowserTest : public InProcessBrowserTest {
                                 SecurityInterstitialCommand::CMD_DONT_PROCEED,
                                 /*punycode_interstitial=*/true);
     EXPECT_EQ(
-        GURL(chrome::kChromeUINewTabURL),
+        chrome::ChromeUINewTabURLAsGURL(),
         browser->tab_strip_model()->GetActiveWebContents()->GetVisibleURL());
 
     histograms.ExpectTotalCount(kInterstitialHistogramName, 1);
@@ -419,10 +431,9 @@ class LookalikeUrlNavigationThrottleBrowserTest : public InProcessBrowserTest {
       base::HistogramTester* histograms,
       const GURL& navigated_url,
       NavigationSuggestionEvent expected_event) {
-
     history::HistoryService* const history_service =
         HistoryServiceFactory::GetForProfile(
-            browser->profile(), ServiceAccessType::EXPLICIT_ACCESS);
+            browser->GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
     ui_test_utils::WaitForHistoryToLoad(history_service);
 
     LoadAndCheckInterstitialAt(browser, navigated_url);
@@ -436,8 +447,8 @@ class LookalikeUrlNavigationThrottleBrowserTest : public InProcessBrowserTest {
         browser->tab_strip_model()->GetActiveWebContents()->GetVisibleURL());
 
     // Clicking the link should cause the original URL to appear in history.
-    ui_test_utils::HistoryEnumerator enumerator(browser->profile());
-    EXPECT_TRUE(base::Contains(enumerator.urls(), navigated_url));
+    ui_test_utils::HistoryEnumerator enumerator(browser->GetProfile());
+    EXPECT_TRUE(std::ranges::contains(enumerator.urls(), navigated_url));
 
     histograms->ExpectTotalCount(kInterstitialHistogramName, 1);
     histograms->ExpectBucketCount(kInterstitialHistogramName, expected_event,
@@ -467,6 +478,7 @@ class LookalikeUrlNavigationThrottleBrowserTest : public InProcessBrowserTest {
   // existing tests run with the prewarm feature enabled.
   test::ScopedPrewarmFeatureList prewarm_feature_list_{
       test::ScopedPrewarmFeatureList::PrewarmState::kDisabled};
+  base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<ukm::TestAutoSetUkmRecorder> test_ukm_recorder_;
   std::unique_ptr<LookalikeTestHelper> test_helper_;
   std::unique_ptr<net::EmbeddedTestServer> https_server_;
@@ -612,7 +624,7 @@ IN_PROC_BROWSER_TEST_F(LookalikeUrlNavigationThrottleBrowserTest,
 
 // Same as TargetEmbedding_TopDomain_Match, but has a redirect where the first
 // and last URLs are both target embedding matches. Should only record
-// metrics for the first URL. Regression test for crbug.com/1136296.
+// metrics for the first URL. Regression test for crbug.com/40724132.
 IN_PROC_BROWSER_TEST_F(LookalikeUrlNavigationThrottleBrowserTest,
                        TargetEmbedding_TopDomain_Redirect_Match) {
   const GURL kNavigatedUrl = GetLongRedirect("google.com-test.com", "site.test",
@@ -663,7 +675,7 @@ IN_PROC_BROWSER_TEST_F(LookalikeUrlNavigationThrottleBrowserTest,
 }
 
 // Navigate to a domain target embedding a domain with no separators, but that
-// matches the target allowlist.  Regression test for crbug.com/1127450.
+// matches the target allowlist.  Regression test for crbug.com/40719063.
 IN_PROC_BROWSER_TEST_F(LookalikeUrlNavigationThrottleBrowserTest,
                        TargetEmbedding_TargetAllowlistWithNoSeparators) {
   const GURL kNavigatedUrl = GetURL("googlecom.example.com");
@@ -1150,8 +1162,8 @@ IN_PROC_BROWSER_TEST_F(LookalikeUrlNavigationThrottleBrowserTest,
 IN_PROC_BROWSER_TEST_F(LookalikeUrlNavigationThrottleBrowserTest,
                        AllowedByPolicy) {
   const GURL kNavigatedUrl = GetURL("xn--googl-fsa.com");
-  lookalikes::SetEnterpriseAllowlistForTesting(browser()->profile()->GetPrefs(),
-                                               {"xn--googl-fsa.com"});
+  lookalikes::SetEnterpriseAllowlistForTesting(
+      browser()->GetProfile()->GetPrefs(), {"xn--googl-fsa.com"});
   SetEngagementScore(browser(), kNavigatedUrl, kLowEngagement);
   TestInterstitialNotShown(browser(), kNavigatedUrl);
 
@@ -1216,7 +1228,7 @@ IN_PROC_BROWSER_TEST_F(LookalikeUrlNavigationThrottleBrowserTest,
   // Set high engagement scores in the main profile and low engagement scores
   // in incognito. Main profile should record metrics, incognito shouldn't.
   Browser* incognito = CreateIncognitoBrowser();
-  LookalikeUrlServiceFactory::GetForProfile(incognito->profile())
+  LookalikeUrlServiceFactory::GetForProfile(incognito->GetProfile())
       ->SetClockForTesting(test_clock());
   SetEngagementScore(browser(), kEngagedUrl, kHighEngagement);
   SetEngagementScore(incognito, kEngagedUrl, kLowEngagement);
@@ -1535,7 +1547,7 @@ IN_PROC_BROWSER_TEST_F(LookalikeUrlNavigationThrottleBrowserTest,
 }
 
 // Verify reloading the page does not result in dismissing an interstitial.
-// Regression test for crbug/941886.
+// Regression test for crbug.com/41446855.
 IN_PROC_BROWSER_TEST_F(LookalikeUrlNavigationThrottleBrowserTest,
                        RefreshDoesntDismiss) {
   // Verify it works when the lookalike domain is the first in the chain.
@@ -1875,7 +1887,7 @@ IN_PROC_BROWSER_TEST_F(LookalikeUrlNavigationThrottlePrerenderBrowserTest,
   LoadAndCheckInterstitialAt(browser(), kNavigateUrl);
   SendInterstitialCommandSync(browser(),
                               SecurityInterstitialCommand::CMD_PROCEED);
-  LookalikeUrlServiceFactory::GetForProfile(browser()->profile())
+  LookalikeUrlServiceFactory::GetForProfile(browser()->GetProfile())
       ->ResetWarningDismissedETLDPlusOnesForTesting();
 
   // Start a prerender.

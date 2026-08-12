@@ -4,13 +4,12 @@
 
 package org.chromium.chrome.browser.app.tab_activity_glue;
 
-import static org.chromium.base.test.util.Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE;
-
 import android.content.res.Configuration;
 
 import androidx.test.filters.MediumTest;
 
 import org.hamcrest.Matchers;
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -24,18 +23,19 @@ import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.DoNotBatch;
-import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.layouts.LayoutType;
 import org.chromium.chrome.browser.lifecycle.DestroyObserver;
 import org.chromium.chrome.browser.lifecycle.RecreateObserver;
-import org.chromium.chrome.browser.omnibox.OmniboxFocusReason;
 import org.chromium.chrome.browser.toolbar.ToolbarManager;
 import org.chromium.chrome.tab_ui.R;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
+import org.chromium.components.omnibox.AutocompleteInput;
+import org.chromium.components.omnibox.OmniboxFocusReason;
+import org.chromium.components.omnibox.TextSelection;
 import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.concurrent.TimeoutException;
@@ -44,7 +44,6 @@ import java.util.concurrent.TimeoutException;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @DoNotBatch(reason = "This class tests activity restart behavior and thus cannot be batched.")
-@Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE) // See crbug.com/1302618.
 public class TabletPhoneLayoutChangeTest {
     private static final long TIMEOUT_MS = 10000;
 
@@ -56,6 +55,13 @@ public class TabletPhoneLayoutChangeTest {
     public void setUp() {
         mActivityTestRule.startOnBlankPage();
         mActivityTestRule.waitForActivityCompletelyLoaded();
+    }
+
+    @After
+    public void tearDown() {
+        // TODO(crbug.com/483420501): Fix AssertionError: LayoutType is 2, expected BROWSING type on
+        // activity start.
+        mActivityTestRule.skipWindowAndTabStateCleanup();
     }
 
     @Test
@@ -103,8 +109,10 @@ public class TabletPhoneLayoutChangeTest {
 
         ThreadUtils.runOnUiThreadBlocking(
                 () ->
-                        toolbarManager.setUrlBarFocusAndText(
-                                true, OmniboxFocusReason.OMNIBOX_TAP, urlBarText));
+                        toolbarManager.beginFuseboxInput(
+                                new AutocompleteInput(OmniboxFocusReason.OMNIBOX_TAP)
+                                        .setUserText(urlBarText)
+                                        .setSelection(TextSelection.SELECT_ALL)));
 
         CriteriaHelper.pollUiThread(
                 () -> {
@@ -142,7 +150,7 @@ public class TabletPhoneLayoutChangeTest {
         CriteriaHelper.pollUiThread(
                 () -> {
                     boolean isTabSwitcherShown =
-                            cta.getLayoutManager().isLayoutVisible(LayoutType.TAB_SWITCHER);
+                            cta.getLayoutManager().isLayoutVisible(LayoutType.HUB);
                     Criteria.checkThat(isTabSwitcherShown, Matchers.is(true));
                 },
                 TIMEOUT_MS,
@@ -155,8 +163,7 @@ public class TabletPhoneLayoutChangeTest {
                     boolean isTabSwitcherShown =
                             newCta.getCompositorViewHolderSupplier().get() != null
                                     && newCta.getLayoutManager() != null
-                                    && newCta.getLayoutManager()
-                                            .isLayoutVisible(LayoutType.TAB_SWITCHER);
+                                    && newCta.getLayoutManager().isLayoutVisible(LayoutType.HUB);
                     Criteria.checkThat(isTabSwitcherShown, Matchers.is(true));
                 },
                 TIMEOUT_MS,

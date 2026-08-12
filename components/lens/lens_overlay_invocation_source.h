@@ -13,6 +13,8 @@ namespace lens {
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
 //
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.ui.lens
+//
 // LINT.IfChange(LensOverlayInvocationSource)
 enum class LensOverlayInvocationSource {
   // The Chrome app ("3-dot") menu entry.
@@ -79,7 +81,22 @@ enum class LensOverlayInvocationSource {
   // The composebox on the Contextual Tasks page.
   kContextualTasksComposebox = 18,
 
-  kMaxValue = kContextualTasksComposebox
+  // The cobrowse toolbar button.
+  kCobrowseToolbarButton = 19,
+
+  // The cobrowse pinned toolbar button.
+  kCobrowsePinnedToolbarButton = 20,
+
+  // Action chips shown on the new tab page.
+  kNtpActionChips = 21,
+
+  // The AIM button on the App Bar in Chrome iOS.
+  kAppBarAimButton = 22,
+
+  // The everywhere omnibox contextual composebox.
+  kOmniboxEverywhereComposebox = 23,
+
+  kMaxValue = kOmniboxEverywhereComposebox
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/lens/enums.xml:LensOverlayInvocationSource)
 // When adding a value here, also update:

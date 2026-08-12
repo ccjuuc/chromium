@@ -84,6 +84,16 @@ const char* GetJwkHmacAlgorithmName(blink::WebCryptoAlgorithmId hash) {
   }
 }
 
+// Synthesizes an import algorithm given a key algorithm, so that
+// deserialization can reuse the ImportKey*() methods.
+blink::WebCryptoAlgorithm SynthesizeImportAlgorithmForClone(
+    const blink::WebCryptoKeyAlgorithm& algorithm) {
+  const auto& params = *algorithm.HmacParams();
+  return blink::WebCryptoAlgorithm::AdoptParamsAndCreate(
+      algorithm.Id(), new blink::WebCryptoHmacImportParams(
+                          params.GetHash(), true, params.LengthBits()));
+}
+
 const blink::WebCryptoKeyUsageMask kAllKeyUsages =
     blink::kWebCryptoKeyUsageSign | blink::kWebCryptoKeyUsageVerify;
 
@@ -153,6 +163,7 @@ class HmacImplementation : public AlgorithmImplementation {
                    blink::WebCryptoKey* key) const override {
     switch (format) {
       case blink::kWebCryptoKeyFormatRaw:
+      case blink::kWebCryptoKeyFormatRawSecret:
         return ImportKeyRaw(key_data, algorithm, extractable, usages, key);
       case blink::kWebCryptoKeyFormatJwk:
         return ImportKeyJwk(key_data, algorithm, extractable, usages, key);
@@ -166,6 +177,7 @@ class HmacImplementation : public AlgorithmImplementation {
                    std::vector<uint8_t>* buffer) const override {
     switch (format) {
       case blink::kWebCryptoKeyFormatRaw:
+      case blink::kWebCryptoKeyFormatRawSecret:
         return ExportKeyRaw(key, buffer);
       case blink::kWebCryptoKeyFormatJwk:
         return ExportKeyJwk(key, buffer);
@@ -292,8 +304,8 @@ class HmacImplementation : public AlgorithmImplementation {
         type != blink::kWebCryptoKeyTypeSecret)
       return Status::ErrorUnexpected();
 
-    return CreateWebCryptoSecretKey(key_data, algorithm, extractable, usages,
-                                    key);
+    return ImportKeyRaw(key_data, SynthesizeImportAlgorithmForClone(algorithm),
+                        extractable, usages, key);
   }
 
   Status GetKeyLength(const blink::WebCryptoAlgorithm& key_length_algorithm,
@@ -316,6 +328,36 @@ class HmacImplementation : public AlgorithmImplementation {
     }
     *length_bits = block_size_bits;
     return Status::Success();
+  }
+
+  bool Supports(blink::WebCryptoOperation op,
+                const blink::WebCryptoAlgorithm& algorithm,
+                std::optional<unsigned int> length_bits) const override {
+    if (op == blink::kWebCryptoOperationGenerateKey) {
+      const blink::WebCryptoHmacKeyGenParams* params =
+          algorithm.HmacKeyGenParams();
+      // Zero-length HMAC keys are disallowed by the spec.
+      if (params->HasLengthBits() && params->OptionalLengthBits() == 0) {
+        return false;
+      } else {
+        // Hash algorithm name is already checked when params are parsed.
+        return true;
+      }
+    } else if (op == blink::kWebCryptoOperationImportKey) {
+      // Hash algorithm name is already checked when params are parsed, and the
+      // checks on params->OptionalLengthBits() in GetHmacImportKeyLengthBits
+      // can't be run without the actual key being imported.
+      return true;
+    } else if (op == blink::kWebCryptoOperationGetKeyLength) {
+      const blink::WebCryptoHmacImportParams* params =
+          algorithm.HmacImportParams();
+      // Hash algorithm name is already checked when the params are parsed, so
+      // we don't need to check this.
+      if (params->HasLengthBits() && params->OptionalLengthBits() == 0) {
+        return false;
+      }
+    }
+    return true;
   }
 };
 

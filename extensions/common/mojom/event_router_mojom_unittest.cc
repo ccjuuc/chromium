@@ -29,7 +29,8 @@ class TestEventRouterImpl : public mojom::EventRouter {
   void AddListenerForMainThread(
       mojom::EventListenerPtr event_listener) override {}
   void AddListenerForServiceWorker(
-      mojom::EventListenerPtr event_listener) override {}
+      mojom::EventListenerPtr event_listener,
+      mojom::ServiceWorkerContextPtr service_worker_context) override {}
   void AddLazyListenerForMainThread(const ExtensionId& extension_id,
                                     const std::string& name) override {}
   void AddLazyListenerForServiceWorker(const ExtensionId& extension_id,
@@ -38,18 +39,19 @@ class TestEventRouterImpl : public mojom::EventRouter {
   void AddFilteredListenerForMainThread(
       mojom::EventListenerOwnerPtr listener_owner,
       const std::string& name,
-      base::Value::Dict filter,
+      base::DictValue filter,
       bool add_lazy_listener) override {}
   void AddFilteredListenerForServiceWorker(
       const ExtensionId& extension_id,
       const std::string& name,
       mojom::ServiceWorkerContextPtr service_worker_context,
-      base::Value::Dict filter,
+      base::DictValue filter,
       bool add_lazy_listener) override {}
   void RemoveListenerForMainThread(
       mojom::EventListenerPtr event_listener) override {}
   void RemoveListenerForServiceWorker(
-      mojom::EventListenerPtr event_listener) override {}
+      mojom::EventListenerPtr event_listener,
+      mojom::ServiceWorkerContextPtr service_worker_context) override {}
   void RemoveLazyListenerForMainThread(const ExtensionId& extension_id,
                                        const std::string& name) override {}
   void RemoveLazyListenerForServiceWorker(const ExtensionId& extension_id,
@@ -58,13 +60,13 @@ class TestEventRouterImpl : public mojom::EventRouter {
   void RemoveFilteredListenerForMainThread(
       mojom::EventListenerOwnerPtr listener_owner,
       const std::string& name,
-      base::Value::Dict filter,
+      base::DictValue filter,
       bool remove_lazy_listener) override {}
   void RemoveFilteredListenerForServiceWorker(
       const ExtensionId& extension_id,
       const std::string& name,
       mojom::ServiceWorkerContextPtr service_worker_context,
-      base::Value::Dict filter,
+      base::DictValue filter,
       bool remove_lazy_listener) override {}
 
  private:
@@ -87,7 +89,7 @@ class EventRouterMojomExtensionIdTest : public testing::Test {
   void AddListenerForServiceWorker(const ExtensionId& extension_id) {
     auto event_listener = CreateEventListener(extension_id);
     event_router_remote_->AddListenerForServiceWorker(
-        std::move(event_listener));
+        std::move(event_listener), CreateServiceWorkerContext());
     event_router_remote_.FlushForTesting();
   }
 
@@ -107,7 +109,7 @@ class EventRouterMojomExtensionIdTest : public testing::Test {
     auto event_listener = CreateEventListener(extension_id);
     event_router_remote_->AddFilteredListenerForMainThread(
         std::move(event_listener->listener_owner), "test_event_name",
-        /*filter=*/base::Value::Dict(), /*add_lazy_listener=*/true);
+        /*filter=*/base::DictValue(), /*add_lazy_listener=*/true);
     event_router_remote_.FlushForTesting();
   }
 
@@ -121,7 +123,7 @@ class EventRouterMojomExtensionIdTest : public testing::Test {
   void RemoveListenerForServiceWorker(const ExtensionId& extension_id) {
     auto event_listener = CreateEventListener(extension_id);
     event_router_remote_->RemoveListenerForServiceWorker(
-        std::move(event_listener));
+        std::move(event_listener), CreateServiceWorkerContext());
     event_router_remote_.FlushForTesting();
   }
 
@@ -141,7 +143,7 @@ class EventRouterMojomExtensionIdTest : public testing::Test {
     auto event_listener = CreateEventListener(extension_id);
     event_router_remote_->RemoveFilteredListenerForMainThread(
         std::move(event_listener->listener_owner), "test_event_name",
-        /*filter=*/base::Value::Dict(), /*remove_lazy_listener=*/true);
+        /*filter=*/base::DictValue(), /*remove_lazy_listener=*/true);
     event_router_remote_.FlushForTesting();
   }
 
@@ -159,9 +161,12 @@ class EventRouterMojomExtensionIdTest : public testing::Test {
     return mojom::EventListenerPtr(mojom::EventListener::New(
         mojom::EventListenerOwner::NewExtensionId(extension_id),
         "test_event_name",
-        mojom::ServiceWorkerContext::New(GURL("test_worker_scope"),
-                                         /*version_id=*/0, /*thread_id=*/0),
         /*event_filter=*/std::nullopt));
+  }
+
+  mojom::ServiceWorkerContextPtr CreateServiceWorkerContext() {
+    return mojom::ServiceWorkerContext::New(GURL("test_worker_scope"),
+                                            /*version_id=*/0, /*thread_id=*/0);
   }
 
   base::test::SingleThreadTaskEnvironment task_environment;

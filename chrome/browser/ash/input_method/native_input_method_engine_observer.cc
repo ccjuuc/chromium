@@ -5,11 +5,13 @@
 #include "chrome/browser/ash/input_method/native_input_method_engine_observer.h"
 
 #include <algorithm>
+#include <string_view>
 #include <utility>
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/webui/settings/public/constants/routes.mojom.h"
+#include "base/check_deref.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/functional/callback.h"
@@ -32,16 +34,17 @@
 #include "chrome/browser/ash/input_method/input_method_settings.h"
 #include "chrome/browser/ash/input_method/suggestion_enums.h"
 #include "chrome/browser/ash/lobster/lobster_event_sink.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/input_method/input_method_menu_manager.h"
-#include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/browser/ui/webui/ash/settings/search/search_tag_registry.h"
-#include "chrome/common/pref_names.h"
+#include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
 #include "chromeos/ash/services/ime/public/cpp/autocorrect.h"
 #include "chromeos/ash/services/ime/public/mojom/input_method.mojom.h"
 #include "chromeos/ash/services/ime/public/mojom/japanese_settings.mojom.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/prefs/pref_service.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
+#include "components/user_manager/user_manager.h"
 #include "ui/base/ime/ash/extension_ime_util.h"
 #include "ui/base/ime/ash/ime_bridge.h"
 #include "ui/base/ime/ash/ime_keyboard.h"
@@ -61,25 +64,25 @@ struct InputFieldContext {
   bool multiword_allowed = false;
 };
 
-bool ShouldRouteToFirstPartyVietnameseInput(const std::string& engine_id) {
+bool ShouldRouteToFirstPartyVietnameseInput(std::string_view engine_id) {
   return engine_id == "vkd_vi_vni" || engine_id == "vkd_vi_telex";
 }
 
-bool IsRuleBasedEngine(const std::string& engine_id) {
+bool IsRuleBasedEngine(std::string_view engine_id) {
   return base::StartsWith(engine_id, "vkd_", base::CompareCase::SENSITIVE);
 }
 
-bool IsFstEngine(const std::string& engine_id) {
+bool IsFstEngine(std::string_view engine_id) {
   return base::StartsWith(engine_id, "xkb:", base::CompareCase::SENSITIVE) ||
          base::StartsWith(engine_id, "experimental_",
                           base::CompareCase::SENSITIVE);
 }
 
-bool IsKoreanEngine(const std::string& engine_id) {
+bool IsKoreanEngine(std::string_view engine_id) {
   return base::StartsWith(engine_id, "ko-", base::CompareCase::SENSITIVE);
 }
 
-bool IsChineseEngine(const std::string& engine_id) {
+bool IsChineseEngine(std::string_view engine_id) {
   return engine_id == "zh-t-i0-pinyin" || engine_id == "zh-hant-t-i0-pinyin" ||
          engine_id == "zh-hant-t-i0-cangjie-1987" ||
          engine_id == "zh-hant-t-i0-cangjie-1987-x-m0-simplified" ||
@@ -89,15 +92,15 @@ bool IsChineseEngine(const std::string& engine_id) {
          engine_id == "zh-hant-t-i0-und";
 }
 
-bool IsJapaneseEngine(const std::string& engine_id) {
+bool IsJapaneseEngine(std::string_view engine_id) {
   return engine_id == "nacl_mozc_jp" || engine_id == "nacl_mozc_us";
 }
 
-bool IsUsEnglishEngine(const std::string& engine_id) {
+bool IsUsEnglishEngine(std::string_view engine_id) {
   return engine_id == "xkb:us::eng";
 }
 
-bool IsTransliterationEngine(const std::string& engine_id) {
+bool IsTransliterationEngine(std::string_view engine_id) {
   return engine_id == "ar-t-i0-und" || engine_id == "el-t-i0-und" ||
          engine_id == "gu-t-i0-und" || engine_id == "he-t-i0-und" ||
          engine_id == "hi-t-i0-und" || engine_id == "kn-t-i0-und" ||
@@ -109,7 +112,7 @@ bool IsTransliterationEngine(const std::string& engine_id) {
 }
 
 bool IsPhysicalKeyboardAutocorrectEnabled(PrefService* prefs,
-                                          const std::string& engine_id) {
+                                          std::string_view engine_id) {
   if (base::StartsWith(engine_id, "experimental_",
                        base::CompareCase::SENSITIVE) ||
       base::FeatureList::IsEnabled(features::kAutocorrectParamsTuning)) {
@@ -123,22 +126,22 @@ bool IsPhysicalKeyboardAutocorrectEnabled(PrefService* prefs,
 }
 
 bool IsPredictiveWritingEnabled(PrefService* pref_service,
-                                const std::string& engine_id) {
+                                std::string_view engine_id) {
   return (IsPredictiveWritingPrefEnabled(*pref_service, engine_id) &&
           IsUsEnglishEngine(engine_id));
 }
 
-std::string NormalizeRuleBasedEngineId(const std::string& engine_id) {
+std::string NormalizeRuleBasedEngineId(std::string_view engine_id) {
   // For legacy reasons, |engine_id| starts with "vkd_" in the input method
   // manifest, but the InputEngineManager expects the prefix "m17n:".
   // TODO(https://crbug.com/1012490): Migrate to m17n prefix and remove this.
   if (base::StartsWith(engine_id, "vkd_", base::CompareCase::SENSITIVE)) {
-    return "m17n:" + engine_id.substr(4);
+    return base::StrCat({"m17n:", engine_id.substr(4)});
   }
-  return engine_id;
+  return std::string(engine_id);
 }
 
-std::string SettingToQueryString(std::string subpagePath,
+std::string SettingToQueryString(std::string_view subpagePath,
                                  chromeos::settings::mojom::Setting setting) {
   const std::string settingString =
       base::NumberToString(static_cast<int>(setting));
@@ -373,8 +376,7 @@ mojom::DomCode DomCodeToMojom(const ui::DomCode code) {
 }
 
 // Not using an EnumTraits here because the mapping is not 1:1.
-std::optional<mojom::NamedDomKey> NamedDomKeyToMojom(
-    const ui::DomKey::Base& key) {
+std::optional<mojom::NamedDomKey> NamedDomKeyToMojom(const ui::DomKey& key) {
   switch (key) {
     case ui::DomKey::ALT:
       return mojom::NamedDomKey::kAlt;
@@ -497,10 +499,10 @@ mojom::PhysicalKeyEventPtr CreatePhysicalKeyEventFromKeyEvent(
       ModifierStateFromEvent(event));
 }
 
-uint32_t Utf16ToCodepoint(const std::u16string& str) {
+uint32_t Utf16ToCodepoint(std::u16string_view str) {
   size_t index = 0;
   base_icu::UChar32 codepoint = 0;
-  base::ReadUnicodeCharacter(str.data(), str.length(), &index, &codepoint);
+  base::ReadUnicodeCharacter(str, &index, &codepoint);
 
   // Should only contain a single codepoint.
   DCHECK_EQ(index, str.length() - 1);
@@ -554,7 +556,7 @@ InputFieldContext CreateInputFieldContext(
 }
 
 mojom::TextPredictionMode GetTextPredictionMode(
-    const std::string& engine_id,
+    std::string_view engine_id,
     const InputFieldContext& context,
     PrefService* prefs) {
   return context.multiword_enabled && context.multiword_allowed &&
@@ -584,7 +586,7 @@ mojom::PersonalizationMode GetPersonalizationMode(PersonalizationMode mode) {
 }
 
 mojom::InputFieldInfoPtr CreateInputFieldInfo(
-    const std::string& engine_id,
+    std::string_view engine_id,
     const TextInputMethod::InputContext& context,
     const InputFieldContext& input_field_context,
     PrefService* prefs,
@@ -692,7 +694,7 @@ ime::mojom::InputMethodSettingsPtr WithAutocorrectOverride(
 
 }  // namespace
 
-bool CanRouteToNativeMojoEngine(const std::string& engine_id) {
+bool CanRouteToNativeMojoEngine(std::string_view engine_id) {
   // To avoid handling tricky cases where the user types with both the virtual
   // and the physical keyboard, only run the native code path if the virtual
   // keyboard is disabled. Otherwise, just let the extension handle any physical
@@ -730,12 +732,12 @@ NativeInputMethodEngineObserver::NativeInputMethodEngineObserver(
 NativeInputMethodEngineObserver::~NativeInputMethodEngineObserver() = default;
 
 bool NativeInputMethodEngineObserver::ShouldRouteToRuleBasedEngine(
-    const std::string& engine_id) const {
+    std::string_view engine_id) const {
   return use_ime_service_ && IsRuleBasedEngine(engine_id);
 }
 
 bool NativeInputMethodEngineObserver::ShouldRouteToNativeMojoEngine(
-    const std::string& engine_id) const {
+    std::string_view engine_id) const {
   return use_ime_service_ && CanRouteToNativeMojoEngine(engine_id);
 }
 
@@ -1121,34 +1123,58 @@ void NativeInputMethodEngineObserver::OnCandidateClicked(
 void NativeInputMethodEngineObserver::OnAssistiveWindowButtonClicked(
     const ui::ime::AssistiveWindowButton& button) {
   switch (button.id) {
-    case ui::ime::ButtonId::kSmartInputsSettingLink:
+    case ui::ime::ButtonId::kSmartInputsSettingLink: {
       base::RecordAction(base::UserMetricsAction(
           "ChromeOS.Settings.SmartInputs.PersonalInfoSuggestions.Open"));
-      chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
-          ProfileManager::GetActiveUserProfile(),
-          chromeos::settings::mojom::kInputSubpagePath);
+      auto* session =
+          session_manager::SessionManager::Get()->GetActiveSession();
+      if (session) {
+        // TODO(crbug.com/447287122): Revisit here to see if there's a case
+        // where no active session is there.
+        ash::SettingsAppManager::Get()->Open(
+            CHECK_DEREF(user_manager::UserManager::Get()->FindUser(
+                session->account_id())),
+            {.sub_page = chromeos::settings::mojom::kInputSubpagePath});
+      }
       break;
+    }
     case ui::ime::ButtonId::kLearnMore:
       if (button.window_type ==
           ash::ime::AssistiveWindowType::kLongpressDiacriticsSuggestion) {
-        chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
-            ProfileManager::GetActiveUserProfile(),
-            SettingToQueryString(
-                chromeos::settings::mojom::kPerDeviceKeyboardSubpagePath,
-                chromeos::settings::mojom::Setting::kShowDiacritic));
+        auto* session =
+            session_manager::SessionManager::Get()->GetActiveSession();
+        if (session) {
+          // TODO(crbug.com/447287122): Revisit here to see if there's a case
+          // where no active session is there.
+          ash::SettingsAppManager::Get()->Open(
+              CHECK_DEREF(user_manager::UserManager::Get()->FindUser(
+                  session->account_id())),
+              {.sub_page = SettingToQueryString(
+                   chromeos::settings::mojom::kPerDeviceKeyboardSubpagePath,
+                   chromeos::settings::mojom::Setting::kShowDiacritic)});
+        }
       }
       if (button.window_type == ash::ime::AssistiveWindowType::kLearnMore) {
         autocorrect_manager_->HideUndoWindow();
         base::RecordAction(base::UserMetricsAction(
             "ChromeOS.Settings.InputMethod.Autocorrect.Open"));
-        chromeos::settings::mojom::Setting setting =
-            ChromeKeyboardControllerClient::Get()->is_keyboard_visible()
-                ? chromeos::settings::mojom::Setting::kShowVKAutoCorrection
-                : chromeos::settings::mojom::Setting::kShowPKAutoCorrection;
-        std::string path = SettingToQueryString(
-            chromeos::settings::mojom::kInputMethodOptionsSubpagePath, setting);
-        chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
-            ProfileManager::GetActiveUserProfile(), path);
+        auto* session =
+            session_manager::SessionManager::Get()->GetActiveSession();
+        if (session) {
+          // TODO(crbug.com/447287122): Revisit here to see if there's a case
+          // where no active session is there.
+          chromeos::settings::mojom::Setting setting =
+              ChromeKeyboardControllerClient::Get()->is_keyboard_visible()
+                  ? chromeos::settings::mojom::Setting::kShowVKAutoCorrection
+                  : chromeos::settings::mojom::Setting::kShowPKAutoCorrection;
+          std::string path = SettingToQueryString(
+              chromeos::settings::mojom::kInputMethodOptionsSubpagePath,
+              setting);
+          ash::SettingsAppManager::Get()->Open(
+              CHECK_DEREF(user_manager::UserManager::Get()->FindUser(
+                  session->account_id())),
+              {.sub_page = path});
+        }
       }
       break;
     case ui::ime::ButtonId::kSuggestion:

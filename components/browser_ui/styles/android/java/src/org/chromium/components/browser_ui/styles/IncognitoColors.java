@@ -5,12 +5,12 @@
 package org.chromium.components.browser_ui.styles;
 
 import android.content.Context;
+import android.content.res.ColorStateList;
 
 import androidx.annotation.ColorInt;
 import androidx.annotation.StyleRes;
 
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.ui.util.ColorUtils;
 
 /**
  * Provides helper methods for fetching colors and text styles with a boolean param that will load
@@ -27,6 +27,13 @@ public class IncognitoColors {
                 : SemanticColorUtils.getColorSurface(context);
     }
 
+    /** {@see SemanticColorUtils#getColorSurfaceBright} */
+    public static @ColorInt int getColorSurfaceBright(Context context, boolean isIncognito) {
+        return isIncognito
+                ? context.getColor(R.color.gm3_baseline_surface_bright_dark)
+                : SemanticColorUtils.getColorSurfaceBright(context);
+    }
+
     /** {@see SemanticColorUtils#getColorSurfaceContainerHigh} */
     public static @ColorInt int getColorSurfaceContainerHigh(Context context, boolean isIncognito) {
         return isIncognito
@@ -34,11 +41,34 @@ public class IncognitoColors {
                 : SemanticColorUtils.getColorSurfaceContainerHigh(context);
     }
 
+    /** {@see SemanticColorUtils#getColorSurfaceContainerHighest} */
+    public static @ColorInt int getColorSurfaceContainerHighest(
+            Context context, boolean isIncognito) {
+        return isIncognito
+                ? context.getColor(R.color.gm3_baseline_surface_container_highest_dark)
+                : SemanticColorUtils.getColorSurfaceContainerHighest(context);
+    }
+
     /** {@see SemanticColorUtils#getColorSurfaceContainerLow} */
     public static @ColorInt int getColorSurfaceContainerLow(Context context, boolean isIncognito) {
         return isIncognito
                 ? context.getColor(R.color.gm3_baseline_surface_container_low_dark)
                 : SemanticColorUtils.getColorSurfaceContainerLow(context);
+    }
+
+    /** {@see SemanticColorUtils#getInteractableChipBgColor} */
+    public static @ColorInt int getInteractableChipBgColor(Context context, boolean isIncognito) {
+        return isIncognito
+                ? context.getColor(R.color.gm3_baseline_surface_container_high_dark)
+                : SemanticColorUtils.getInteractableChipBgColor(context);
+    }
+
+    /** Returns a color state list for the surface container color. */
+    public static ColorStateList getColorSurfaceContainerTintList(
+            Context context, boolean isIncognito) {
+        return isIncognito
+                ? context.getColorStateList(R.color.color_surface_container_incognito_tint_list)
+                : SemanticColorUtils.getColorSurfaceContainerTintList(context);
     }
 
     /** {@see SemanticColorUtils#getColorPrimaryContainer} */
@@ -76,12 +106,6 @@ public class IncognitoColors {
                 : SemanticColorUtils.getColorOnSurface(context);
     }
 
-    /** Returns colorOnSurface but with the alpha channel set to 16%. */
-    public static @ColorInt int getColorOnSurfaceWithAlpha16(Context context, boolean isIncognito) {
-        @ColorInt int colorOnSurface = getColorOnSurface(context, isIncognito);
-        return ColorUtils.setAlphaComponentWithFloat(colorOnSurface, /* alpha= */ 0.16f);
-    }
-
     /** {@see SemanticColorUtils#getDividerLineBgColor} */
     public static @ColorInt int getDividerLineBgColor(Context context, boolean isIncognito) {
         return isIncognito
@@ -103,24 +127,41 @@ public class IncognitoColors {
                 : R.style.TextAppearance_TextMedium_Primary;
     }
 
-    /** Returns the correct text appearance style res for TODO colored TODO text. */
+    /**
+     * Returns the correct text appearance style res for primary colored medium text on an accent 1
+     * container.
+     */
+    public static @StyleRes int getTextMediumPrimaryOnAccent1Container(boolean isIncognito) {
+        return isIncognito
+                ? R.style.TextAppearance_TextMedium_OnAccent1Container_Baseline_Light
+                : R.style.TextAppearance_TextMedium_OnAccent1Container;
+    }
+
+    /** Returns the correct text appearance style res for primary colored medium thick text. */
     public static @StyleRes int getTextMediumThickPrimary(boolean isIncognito) {
         return isIncognito
                 ? R.style.TextAppearance_TextMediumThick_Primary_Baseline_Light
                 : R.style.TextAppearance_TextMediumThick_Primary;
     }
 
-    /** Returns the correct text appearance style res for TODO colored TODO text. */
+    /** Returns the correct text appearance style res for accent 1 colored medium thick text. */
     public static @StyleRes int getTextMediumThickAccent1(boolean isIncognito) {
         return isIncognito
                 ? R.style.TextAppearance_TextMediumThick_Blue_Baseline_Light
                 : R.style.TextAppearance_TextMediumThick_Accent1;
     }
 
-    /** Returns the correct text appearance style res for TODO colored TODO text. */
+    /** Returns the correct text appearance style res for secondary colored medium thick text. */
     public static @StyleRes int getTextMediumThickSecondary(boolean isIncognito) {
         return isIncognito
                 ? R.style.TextAppearance_TextMediumThick_Secondary_Baseline_Light
                 : R.style.TextAppearance_TextMediumThick_Secondary;
+    }
+
+    /** Returns the correct text appearance style res for secondary colored small text. */
+    public static @StyleRes int getTextSmallSecondary(boolean isIncognito) {
+        return isIncognito
+                ? R.style.TextAppearance_TextSmall_Secondary_Baseline_Light
+                : R.style.TextAppearance_TextSmall_Secondary;
     }
 }

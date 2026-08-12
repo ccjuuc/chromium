@@ -6,26 +6,24 @@
 
 #include <stddef.h>
 
-#include <memory>
 #include <optional>
 #include <string>
 
-#include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/gmock_callback_support.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/mock_callback.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/media/prefs/capture_device_ranking.h"
-#include "chrome/browser/ui/views/frame/test_with_browser_view.h"
 #include "chrome/browser/ui/views/media_preview/media_preview_metrics.h"
-#include "chrome/grit/generated_resources.h"
+#include "chrome/test/base/testing_browser_process.h"
+#include "chrome/test/base/testing_profile.h"
+#include "chrome/test/base/testing_profile_manager.h"
+#include "chrome/test/views/chrome_views_test_base.h"
 #include "components/media_effects/test/fake_audio_service.h"
 #include "components/media_effects/test/fake_video_capture_service.h"
 #include "components/media_effects/test/scoped_media_device_info.h"
+#include "content/public/test/test_renderer_host.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/l10n/l10n_util.h"
 #include "ui/views/view.h"
 
 using testing::_;
@@ -70,10 +68,15 @@ MATCHER(VideoCaptureDeviceInfoEq, "") {
 
 }  // namespace
 
-class CameraCoordinatorTest : public TestWithBrowserView {
+class CameraCoordinatorTest : public ChromeViewsTestBase {
  protected:
   void SetUp() override {
-    TestWithBrowserView::SetUp();
+    ChromeViewsTestBase::SetUp();
+    profile_manager_ = std::make_unique<TestingProfileManager>(
+        TestingBrowserProcess::GetGlobal());
+    ASSERT_TRUE(profile_manager_->SetUp());
+    profile_ = profile_manager_->CreateTestingProfile("test_profile");
+
     fake_video_capture_service_.SetOnGetVideoSourceCallback(
         on_get_video_source_future_.GetRepeatingCallback());
     histogram_tester_.emplace();
@@ -85,8 +88,12 @@ class CameraCoordinatorTest : public TestWithBrowserView {
   void TearDown() override {
     coordinator_.reset();
     parent_view_.reset();
-    TestWithBrowserView::TearDown();
+    profile_ = nullptr;
+    profile_manager_.reset();
+    ChromeViewsTestBase::TearDown();
   }
+
+  Profile* profile() { return profile_; }
 
   void InitializeCoordinator(std::vector<std::string> eligible_camera_ids) {
     CHECK(profile()->GetPrefs());
@@ -132,6 +139,10 @@ class CameraCoordinatorTest : public TestWithBrowserView {
       const std::string&,
       mojo::PendingReceiver<video_capture::mojom::VideoSource>>
       on_get_video_source_future_;
+
+  content::RenderViewHostTestEnabler render_view_host_test_enabler_;
+  std::unique_ptr<TestingProfileManager> profile_manager_;
+  raw_ptr<TestingProfile> profile_;
 };
 
 TEST_F(CameraCoordinatorTest, RelevantVideoCaptureDeviceInfoExtraction) {

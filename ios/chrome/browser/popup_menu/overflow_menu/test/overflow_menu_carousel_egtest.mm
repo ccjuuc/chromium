@@ -4,12 +4,16 @@
 
 #import "components/feature_engagement/public/feature_constants.h"
 #import "components/signin/internal/identity_manager/account_capabilities_constants.h"
+#import "components/signin/public/base/signin_metrics.h"
+#import "ios/chrome/browser/authentication/account_menu/public/account_menu_constants.h"
+#import "ios/chrome/browser/authentication/test/expected_signin_histograms.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey_ui_test_util.h"
+#import "ios/chrome/browser/authentication/test/signin_matchers.h"
+#import "ios/chrome/browser/authentication/ui_bundled/signin/signin_constants.h"
 #import "ios/chrome/browser/metrics/model/metrics_app_interface.h"
-#import "ios/chrome/browser/popup_menu/overflow_menu/public/feature_flags.h"
 #import "ios/chrome/browser/popup_menu/public/popup_menu_constants.h"
-#import "ios/chrome/browser/settings/ui_bundled/google_services/manage_sync_settings_constants.h"
+#import "ios/chrome/browser/settings/manage_sync/public/manage_sync_settings_constants.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
@@ -25,9 +29,6 @@
 #import "ui/base/l10n/l10n_util.h"
 
 namespace {
-
-NSString* const kOverflowMenuSkipTestMessage =
-    @"Can only test Overflow Menu destinations where the feature is supported";
 
 NSString* const kPassphrase = @"hello";
 
@@ -130,10 +131,6 @@ void ResolvePassphraseErrorFromOverflowMenu() {
 // Emulates a passphrase error in the signed in account to trigger the identity
 // error indicators (in butter mode, no Sync).
 - (void)testSettingsDestinationWithIdentityErrorInButterMode {
-  if (![ChromeEarlGrey isNewOverflowMenuEnabled]) {
-    EARL_GREY_TEST_SKIPPED(kOverflowMenuSkipTestMessage)
-  }
-
   // Encrypt synced data with a passphrase to enable passphrase encryption for
   // the signed in account.
   [ChromeEarlGrey addSyncPassphrase:kPassphrase];
@@ -164,10 +161,6 @@ void ResolvePassphraseErrorFromOverflowMenu() {
 // Emulates a passphrase error in the synced account to trigger the error
 // indicator.
 - (void)testSettingsDestinationIdentityErrorBadgeWithSync {
-  if (![ChromeEarlGrey isNewOverflowMenuEnabled]) {
-    EARL_GREY_TEST_SKIPPED(kOverflowMenuSkipTestMessage)
-  }
-
   // Encrypt synced data with a passphrase to enable passphrase encryption for
   // the signed in account.
   [ChromeEarlGrey addSyncPassphrase:kPassphrase];
@@ -187,10 +180,6 @@ void ResolvePassphraseErrorFromOverflowMenu() {
 // TODO(crbug.com/40263342): This test is very flaky. Fails especially on
 // devices.
 - (void)FLAKY_testNonErrorDestinationHighlights {
-  if (![ChromeEarlGrey isNewOverflowMenuEnabled]) {
-    EARL_GREY_TEST_SKIPPED(kOverflowMenuSkipTestMessage)
-  }
-
   AppLaunchConfiguration config;
   // Enable Overflow Menu destinations highlight features.
   config.additional_args.push_back(
@@ -217,10 +206,6 @@ void ResolvePassphraseErrorFromOverflowMenu() {
 // link to more information about family accounts.
 // TODO(crbug.com/339689514): Failing on ios-simulator-noncq
 - (void)DISABLED_testOverflowMenuFooterFamilyLink {
-  if (![ChromeEarlGrey isNewOverflowMenuEnabled]) {
-    EARL_GREY_TEST_SKIPPED(kOverflowMenuSkipTestMessage)
-  }
-
   // Sign in and Sync account.
   FakeSystemIdentity* fakeIdentity = [FakeSystemIdentity fakeIdentity1];
   [SigninEarlGrey addFakeIdentity:fakeIdentity
@@ -242,8 +227,10 @@ void ResolvePassphraseErrorFromOverflowMenu() {
 }
 
 - (void)testOverflowMenuCustomizationIPH {
-  if (![ChromeEarlGrey isNewOverflowMenuEnabled]) {
-    EARL_GREY_TEST_SKIPPED(kOverflowMenuSkipTestMessage)
+  if ([ChromeEarlGrey isOverflowMenuNTPRefactorEnabled]) {
+    EARL_GREY_TEST_SKIPPED(
+        @"Customization IPH is disabled on NTP when OverflowMenuNTPRefactor is "
+        @"enabled.");
   }
 
   AppLaunchConfiguration config;
@@ -256,6 +243,55 @@ void ResolvePassphraseErrorFromOverflowMenu() {
   [ChromeEarlGrey
       waitForUIElementToAppearWithMatcher:grey_accessibilityID(
                                               @"BubbleViewLabelIdentifier")];
+}
+
+
+// Tests that tapping the identity button (when signed in) opens the Account
+// Menu and records the correct user action and access point UMA metric.
+- (void)testAccountMenuFromOverflowMenu {
+  AppLaunchConfiguration config;
+  config.additional_args.push_back("--enable-features=IdentityAwareness");
+  [[AppLaunchManager sharedManager] ensureAppLaunchedWithConfiguration:config];
+
+  FakeSystemIdentity* fakeIdentity = [FakeSystemIdentity fakeIdentity1];
+  [SigninEarlGrey signinWithFakeIdentity:fakeIdentity];
+
+  chrome_test_util::GREYAssertErrorNil(
+      [MetricsAppInterface setupHistogramTester]);
+
+  [ChromeEarlGreyUI openToolsMenu];
+
+  // Verify the identity button is visible.
+  id<GREYMatcher> identityButton = grey_accessibilityID(kToolsMenuIdentityId);
+  [[EarlGrey selectElementWithMatcher:identityButton]
+      assertWithMatcher:grey_sufficientlyVisible()];
+
+  GREYAssertNil([MetricsAppInterface setupUserActionTester],
+                @"Cannot setup user action tester.");
+
+  // Tap on the identity button in the overflow menu.
+  [[EarlGrey selectElementWithMatcher:identityButton] performAction:grey_tap()];
+
+  GREYAssertNil([MetricsAppInterface expectCount:1
+                                   forUserAction:@"MobileMenuIdentityMenu"],
+                @"MobileMenuIdentityMenu user action was not recorded.");
+
+  GREYAssertNil([MetricsAppInterface releaseUserActionTester],
+                @"Cannot release user action tester.");
+
+  // Verify the Account Menu is displayed.
+  [[EarlGrey
+      selectElementWithMatcher:grey_accessibilityID(kAccountMenuTableViewId)]
+      assertWithMatcher:grey_sufficientlyVisible()];
+
+  chrome_test_util::GREYAssertErrorNil([MetricsAppInterface
+      expectUniqueSampleWithCount:1
+                        forBucket:static_cast<int>(
+                                      AccountMenuAccessPoint::kOverflowMenu)
+                     forHistogram:@"Signin.IOSAccountMenu.Opened"]);
+
+  chrome_test_util::GREYAssertErrorNil(
+      [MetricsAppInterface releaseHistogramTester]);
 }
 
 @end

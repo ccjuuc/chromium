@@ -6,6 +6,7 @@
 
 #include <type_traits>
 
+#include "base/compiler_specific.h"
 #include "base/containers/adapters.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/html_area_element.h"
@@ -33,19 +34,7 @@ InlineItemsBuilderTemplate<MappingBuilder>::InlineItemsBuilderTemplate(
     : block_flow_(block_flow),
       items_(items),
       text_chunk_offsets_(chunk_offsets),
-      is_text_combine_(block_flow_->IsLayoutTextCombine()) {
-  const LayoutObject* child = block_flow->FirstChild();
-  if (!previous_text_content.IsNull() && child && child->NextSibling()) {
-    // 10 avoids reallocations in many cases of Speedometer3.
-    constexpr wtf_size_t kAdditionalSize = 10;
-    wtf_size_t capacity = previous_text_content.length() + kAdditionalSize;
-    if (previous_text_content.Is8Bit()) {
-      text_.ReserveCapacity(capacity);
-    } else {
-      text_.Reserve16BitCapacity(capacity);
-    }
-  }
-}
+      is_text_combine_(block_flow_->IsLayoutTextCombine()) {}
 
 // Returns true if items builder is used for other than offset mapping.
 template <typename MappingBuilder>
@@ -66,7 +55,7 @@ String InlineItemsBuilderTemplate<MappingBuilder>::ToString() {
 
 namespace {
 
-// TODO(curbug.com/324111880): We can't support forced-breaks in ruby-base boxes
+// TODO(crbug.com/324111880): We can't support forced-breaks in ruby-base boxes
 // until ruby-columns become actually line-breakable. So we replace
 // forced-breaks in ruby-base boxes with spaces for now. This flag should be
 // removed before shipping RubyLineBreakable.
@@ -117,7 +106,7 @@ bool ShouldRemoveNewlineSlow(const StringBuilder& before,
   }
   UChar32 next = 0;
   if (!after.empty()) {
-    next = after[0];
+    next = UNSAFE_BUFFERS(after[0]);
     if (next == uchar::kZeroWidthSpace) {
       return true;
     }
@@ -200,11 +189,11 @@ inline bool IsControlItemCharacter(UChar c) {
 inline bool MoveToEndOfCollapsibleSpaces(const StringView& string,
                                          unsigned* offset,
                                          UChar* c) {
-  DCHECK_EQ(*c, string[*offset]);
+  DCHECK_EQ(*c, UNSAFE_TODO(string[*offset]));
   DCHECK(Character::IsCollapsibleSpace(*c));
   bool space_run_has_newline = *c == uchar::kLineFeed;
   for ((*offset)++; *offset < string.length(); (*offset)++) {
-    *c = string[*offset];
+    *c = UNSAFE_TODO(string[*offset]);
     space_run_has_newline |= *c == uchar::kLineFeed;
     if (!Character::IsCollapsibleSpace(*c))
       break;
@@ -230,7 +219,8 @@ inline bool IsNonOrc16BitCharacter(UChar ch) {
 
 // text-transform: full-width collapses spaces into ideographic space (U+3000).
 inline UChar GetCollapsedSpaceChar(const ComputedStyle* style) {
-  return style && style->TextTransform() == ETextTransform::kFullWidth
+  return style && EnumHasFlags(style->TextTransform(),
+                               ETextTransform::kFullWidth)
              ? uchar::kIdeographicSpace
              : uchar::kSpace;
 }
@@ -361,6 +351,20 @@ bool InlineItemsBuilderTemplate<MappingBuilder>::AppendTextReusing(
   if (!old_item0.Length())
     return false;
 
+  // Abort reuse if the item was previously preceded by a block-in-inline.
+  // Removing a block-in-inline alters the whitespace collapsing context.
+  if (old_item0.Index() < original_data.items.size()) {
+    for (wtf_size_t i = old_item0.Index(); i > 0; --i) {
+      const InlineItem& prev_item = *original_data.items[i - 1];
+      if (prev_item.Length() > 0 || prev_item.Type() == InlineItem::kControl) {
+        break;
+      }
+      if (prev_item.Type() == InlineItem::kBlockInInline) [[unlikely]] {
+        return false;
+      }
+    }
+  }
+
   const String& original_string = original_data.text_content;
 
   // Don't reuse existing items if they might be affected by whitespace
@@ -382,6 +386,17 @@ bool InlineItemsBuilderTemplate<MappingBuilder>::AppendTextReusing(
               // If the original string starts with a collapsible space, it may
               // be collapsed.
               return false;
+            case uchar::kIdeographicSpace:
+              // Under `text-transform: full-width`, the collapsed space is
+              // U+3000. Bail out only when this layout would also emit
+              // U+3000 as the collapsed space.
+              if (RuntimeEnabledFeatures::
+                      OffsetMappingReuseFullWidthSpaceFixEnabled() &&
+                  GetCollapsedSpaceChar(&new_style) ==
+                      uchar::kIdeographicSpace) {
+                return false;
+              }
+              break;
             case uchar::kLineFeed:
               // Collapsible spaces immediately before a preserved newline
               // should be removed to be consistent with
@@ -459,9 +474,15 @@ bool InlineItemsBuilderTemplate<MappingBuilder>::AppendTextReusing(
     }
 
   } else if (collapse_spaces) {
-    // If the original string starts with a collapsible space, it may be
-    // collapsed because it is now a leading collapsible space.
-    if (original_string[old_item0.StartOffset()] == uchar::kSpace) {
+    // A leading collapsible space may be collapsed. Under
+    // `text-transform: full-width` that space is U+3000, so treat U+3000
+    // the same as U+0020 only when this layout emits U+3000.
+    const UChar leading_char = original_string[old_item0.StartOffset()];
+    const bool full_width_fix_applies =
+        RuntimeEnabledFeatures::OffsetMappingReuseFullWidthSpaceFixEnabled() &&
+        GetCollapsedSpaceChar(&new_style) == uchar::kIdeographicSpace;
+    if (leading_char == uchar::kSpace ||
+        (leading_char == uchar::kIdeographicSpace && full_width_fix_applies)) {
       return false;
     }
   }
@@ -471,7 +492,7 @@ bool InlineItemsBuilderTemplate<MappingBuilder>::AppendTextReusing(
     // must go through the full pipeline to ensure that we exit and enter the
     // correct bidi contexts the re-layout.
     if (bidi_context_.size() || layout_text->HasBidiControlInlineItems()) {
-      if (layout_text->TransformedText().Contains(uchar::kLineFeed)) {
+      if (layout_text->TransformedText().contains(uchar::kLineFeed)) {
         return false;
       }
     }
@@ -623,11 +644,8 @@ void InlineItemsBuilderTemplate<MappingBuilder>::AppendText(
   }
 
   const wtf_size_t estimated_length = text_.length() + string.length();
-  if (estimated_length > text_.Capacity()) {
-    // The reallocations may occur very frequently for large text such as log
-    // files. We use a more aggressive expansion strategy, the same as
-    // |Vector::ExpandCapacity| does for |Vector|s with inline storage.
-    // |ReserveCapacity| reserves only the requested size.
+  // Only grow an already-materialized buffer to preserve string sharing.
+  if (text_.Capacity() && estimated_length > text_.Capacity()) {
     const wtf_size_t new_capacity =
         std::max(estimated_length, text_.Capacity() * 2);
     if (string.Is8Bit())
@@ -786,7 +804,7 @@ void InlineItemsBuilderTemplate<MappingBuilder>::AppendCollapseWhitespace(
   unsigned start_offset;
   InlineItem::CollapseType end_collapse = InlineItem::kNotCollapsible;
   unsigned i = 0;
-  UChar c = string[i];
+  UChar c = UNSAFE_TODO(string[i]);
   bool space_run_has_newline = false;
   if (Character::IsCollapsibleSpace(c)) {
     // Find the end of the collapsible space run.
@@ -899,10 +917,11 @@ void InlineItemsBuilderTemplate<MappingBuilder>::AppendCollapseWhitespace(
     while (true) {
       // Append the non-space text until we find a collapsible space.
       // |string[i]| is guaranteed not to be a space.
-      DCHECK(!Character::IsCollapsibleSpace(string[i]));
+      DCHECK(!Character::IsCollapsibleSpace(UNSAFE_TODO(string[i])));
       unsigned start_of_non_space = i;
       for (i++; i < string.length(); i++) {
-        c = string[i];
+        // SAFETY: index checked against length in for-statement.
+        c = UNSAFE_BUFFERS(string[i]);
         if (Character::IsCollapsibleSpace(c))
           break;
       }
@@ -916,7 +935,7 @@ void InlineItemsBuilderTemplate<MappingBuilder>::AppendCollapseWhitespace(
       }
 
       // Process a collapsible space run. First, find the end of the run.
-      DCHECK_EQ(c, string[i]);
+      DCHECK_EQ(c, UNSAFE_TODO(string[i]));
       DCHECK(Character::IsCollapsibleSpace(c));
       unsigned start_of_spaces = i;
       space_run_has_newline = MoveToEndOfCollapsibleSpaces(string, &i, &c);
@@ -976,16 +995,19 @@ bool InlineItemsBuilderTemplate<MappingBuilder>::
     return false;
   }
   // Check if we are at a preserved space character and auto-wrap is enabled.
+  // SAFETY: index checked before use in ||-expression.
   if (style.ShouldCollapseWhiteSpaces() || !style.ShouldWrapLine() ||
       !string.length() || index >= string.length() ||
-      string[index] != uchar::kSpace) {
+      UNSAFE_BUFFERS(string[index]) != uchar::kSpace) {
     return false;
   }
 
   // Preserved leading spaces must be at the beginning of the first line or just
   // after a forced break.
-  if (index)
-    return string[index - 1] == uchar::kLineFeed;
+  if (index) {
+    // SAFETY: zero-length string or out-of-range index returned false above.
+    return UNSAFE_BUFFERS(string[index - 1]) == uchar::kLineFeed;
+  }
   return text_.empty() || text_[text_.length() - 1] == uchar::kLineFeed;
 }
 
@@ -1003,7 +1025,8 @@ void InlineItemsBuilderTemplate<MappingBuilder>::
     wtf_size_t end = *start;
     do {
       ++end;
-    } while (end < string.length() && string[end] == uchar::kSpace);
+    } while (end < string.length() &&
+             UNSAFE_BUFFERS(string[end]) == uchar::kSpace);
     AppendTextItem(transformed.Substring(*start, end - *start), layout_object);
     AppendGeneratedBreakOpportunity(layout_object);
     *start = end;
@@ -1056,7 +1079,7 @@ void InlineItemsBuilderTemplate<MappingBuilder>::AppendPreserveWhitespace(
       start = control;
     }
 
-    const UChar c = transformed_view[start];
+    const UChar c = UNSAFE_TODO(transformed_view[start]);
     switch (c) {
       case uchar::kLineFeed:
         if (is_text_combine_ || ruby_text_nesting_level_ > 0) [[unlikely]] {
@@ -1117,9 +1140,10 @@ void InlineItemsBuilderTemplate<MappingBuilder>::AppendPreserveNewline(
     const TransformedString& transformed,
     const ComputedStyle* style,
     LayoutText* layout_object) {
-  String string = transformed.View().ToString();
+  StringView string = transformed.View();
   for (unsigned start = 0; start < string.length();) {
-    if (string[start] == uchar::kLineFeed) {
+    // SAFETY: index checked against length in for-statement.
+    if (UNSAFE_BUFFERS(string[start]) == uchar::kLineFeed) {
       AppendForcedBreakCollapseWhitespace(layout_object);
       start++;
       continue;
@@ -1493,6 +1517,10 @@ void InlineItemsBuilderTemplate<MappingBuilder>::EnterBlock(
                      uchar::kPopDirectionalFormatting);
   }
 
+  if (style->GetTextEmphasisMark() != TextEmphasisMark::kNone) {
+    has_text_emphasis_ = true;
+  }
+
   if (style->IsDisplayListItem() && style->ListStyleType()) {
     is_block_level_ = false;
   }
@@ -1537,6 +1565,10 @@ void InlineItemsBuilderTemplate<MappingBuilder>::EnterInline(
                          uchar::kPopDirectionalFormatting);
         break;
     }
+  }
+
+  if (style->GetTextEmphasisMark() != TextEmphasisMark::kNone) {
+    has_text_emphasis_ = true;
   }
 
   has_ruby_ = has_ruby_ || node->IsInlineRubyText();
@@ -1716,6 +1748,7 @@ void InlineItemsBuilderTemplate<MappingBuilder>::DidFinishCollectInlines(
   data->has_out_of_flow_positioned_ = has_out_of_flow_positioned_;
   data->has_initial_letter_box_ = has_initial_letter_box_;
   data->has_ruby_ = has_ruby_;
+  data->has_text_emphasis_ = has_text_emphasis_;
   data->is_block_level_ = IsBlockLevel();
   data->changes_may_affect_earlier_lines_ = HasUnicodeBidiPlainText();
   data->is_bisect_line_break_disabled_ = is_bisect_line_break_disabled_;

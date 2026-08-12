@@ -59,8 +59,8 @@
       'use_lkgm': True,
     },
   },
-  'CROS_RELEASE_LKGM': {
-    'identifier': 'RELEASE_LKGM',
+  'CROS_LKGM': {
+    'identifier': 'LKGM',
     'skylab': {
       'use_lkgm': True,
     },
@@ -96,6 +96,7 @@
     ],
     'mixins': [
       'ios_runtime_cache_18_2',
+      'use-ios-simulator-cache',
     ],
   },
 }

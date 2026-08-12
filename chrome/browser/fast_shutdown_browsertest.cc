@@ -9,8 +9,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -39,7 +39,7 @@ class FastShutdown : public InProcessBrowserTest {
 
 // This tests for a previous error where uninstalling an onbeforeunload handler
 // would enable fast shutdown even if an onunload handler still existed.
-// Flaky on all platforms, http://crbug.com/89173
+// Flaky on all platforms, http://crbug.com/41418693
 // ChromeOS opens tabs instead of windows for popups.
 #if !BUILDFLAG(IS_CHROMEOS)
 IN_PROC_BROWSER_TEST_F(FastShutdown, DISABLED_SlowTermination) {
@@ -48,7 +48,7 @@ IN_PROC_BROWSER_TEST_F(FastShutdown, DISABLED_SlowTermination) {
   ASSERT_TRUE(embedded_test_server()->Start());
   // This page has an unload handler.
   GURL url = embedded_test_server()->GetURL("/fast_shutdown/on_unloader.html");
-  EXPECT_EQ("", content::GetCookies(browser()->profile(), url));
+  EXPECT_EQ("", content::GetCookies(browser()->GetProfile(), url));
 
   ui_test_utils::BrowserCreatedObserver browser_created_observer;
   ui_test_utils::NavigateToURLWithDisposition(
@@ -58,7 +58,7 @@ IN_PROC_BROWSER_TEST_F(FastShutdown, DISABLED_SlowTermination) {
   EXPECT_TRUE(second_browser);
 
   // Close the new window, removing the one and only beforeunload handler.
-  ASSERT_EQ(2u, chrome::GetTotalBrowserCount());
+  ASSERT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
   chrome::CloseWindow(second_browser);
 
   // Need to wait for the renderer process to shutdown to ensure that we got the
@@ -71,7 +71,8 @@ IN_PROC_BROWSER_TEST_F(FastShutdown, DISABLED_SlowTermination) {
   chrome::CloseTab(browser());
   renderer_shutdown_observer.Wait();
 
-  EXPECT_EQ("unloaded=ohyeah", content::GetCookies(browser()->profile(), url));
+  EXPECT_EQ("unloaded=ohyeah",
+            content::GetCookies(browser()->GetProfile(), url));
 }
 #endif
 
@@ -84,7 +85,7 @@ IN_PROC_BROWSER_TEST_F(FastShutdown, DISABLED_SlowTermination) {
 // though the test doesn't have any explicit dependencies on the //chrome layer.
 IN_PROC_BROWSER_TEST_F(FastShutdown, SpareRenderProcessHostDuringShutdown) {
   content::SpareRenderProcessHostManager::Get().WarmupSpare(
-      browser()->profile());
+      browser()->GetProfile());
 
   // The verification is that there are no DCHECKs anywhere during test tear
   // down (in particular that no DCHECKs are hit inside

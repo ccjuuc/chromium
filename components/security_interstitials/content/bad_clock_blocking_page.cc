@@ -34,7 +34,7 @@ const security_interstitials::SecurityInterstitialPage::TypeID
 // it leaks memory, so don't create it here.
 BadClockBlockingPage::BadClockBlockingPage(
     content::WebContents* web_contents,
-    int cert_error,
+    net::Error cert_error,
     const net::SSLInfo& ssl_info,
     const GURL& request_url,
     const base::Time& time_triggered,
@@ -66,7 +66,7 @@ BadClockBlockingPage::GetTypeForTesting() {
 }
 
 void BadClockBlockingPage::PopulateInterstitialStrings(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   bad_clock_ui_->PopulateStringsForHTML(load_time_data);
 
   PopulateEnhancedProtectionMessage(load_time_data);

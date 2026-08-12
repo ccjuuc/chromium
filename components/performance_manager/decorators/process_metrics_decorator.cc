@@ -7,7 +7,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/byte_count.h"
 #include "base/check.h"
 #include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
@@ -135,10 +134,10 @@ void ProcessMetricsDecorator::OnTakenFromGraph(Graph* graph) {
   graph->GetNodeDataDescriberRegistry()->UnregisterDescriber(this);
 }
 
-base::Value::Dict ProcessMetricsDecorator::DescribeSystemNodeData(
+base::DictValue ProcessMetricsDecorator::DescribeSystemNodeData(
     const SystemNode*) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::Value::Dict ret;
+  base::DictValue ret;
   ret.Set("interest_token_count",
           base::NumberToString(metrics_interest_token_count_));
   return ret;

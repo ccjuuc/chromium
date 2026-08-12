@@ -7,6 +7,7 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
+#include "base/containers/flat_map.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/page.h"
 #include "content/public/browser/web_contents.h"
@@ -30,7 +31,7 @@ NavigationHandleProxy::NavigationHandleProxy(
   JNIEnv* env = AttachCurrentThread();
 
   java_navigation_handle_ = Java_NavigationHandle_Constructor(
-      env, reinterpret_cast<jlong>(cpp_navigation_handle),
+      env, reinterpret_cast<int64_t>(cpp_navigation_handle),
       url::GURLAndroid::FromNativeGURL(env, cpp_navigation_handle_->GetURL()),
       cpp_navigation_handle_->IsRendererInitiated(),
       cpp_navigation_handle_->GetReloadType() != content::ReloadType::NONE,
@@ -51,6 +52,7 @@ void NavigationHandleProxy::DidStart() {
       env, java_navigation_handle_,
       url::GURLAndroid::FromNativeGURL(
           env, cpp_navigation_handle_->GetReferrer().url),
+      static_cast<jint>(cpp_navigation_handle_->GetReferrer().policy),
       url::GURLAndroid::FromNativeGURL(
           env, cpp_navigation_handle_->GetBaseURLForDataURL()),
       cpp_navigation_handle_->IsInPrimaryMainFrame(),
@@ -67,6 +69,7 @@ void NavigationHandleProxy::DidStart() {
       cpp_navigation_handle_->IsPageActivation(),
       cpp_navigation_handle_->IsPdf(),
       base::android::ConvertUTF8ToJavaString(env, GetMimeType()),
+      cpp_navigation_handle_->NavigationStart().ToUptimeMillis(),
       cpp_navigation_handle_->GetWebContents()->GetJavaWebContents());
 }
 
@@ -104,23 +107,44 @@ void NavigationHandleProxy::DidFinish() {
           ? cpp_navigation_handle_->GetSearchableFormURL().is_valid()
           : false;
 
+  bool is_same_origin = cpp_navigation_handle_->HasCommitted()
+                            ? cpp_navigation_handle_->IsSameOrigin()
+                            : false;
+
+  base::flat_map<std::string, std::string> response_headers;
+  if (cpp_navigation_handle_->GetResponseHeaders()) {
+    size_t headers_iterator = 0;
+    std::string header_name, header_value;
+    while (cpp_navigation_handle_->GetResponseHeaders()->EnumerateHeaderLines(
+        &headers_iterator, &header_name, &header_value)) {
+      auto it = response_headers.find(header_name);
+      if (it == response_headers.end()) {
+        response_headers[header_name] = header_value;
+      } else if (!header_value.empty()) {
+        if (!it->second.empty()) {
+          it->second += ", ";
+        }
+        it->second += header_value;
+      }
+    }
+  }
+
   Java_NavigationHandle_didFinish(
-      env, java_navigation_handle_, url::GURLAndroid::FromNativeGURL(env, gurl),
-      cpp_navigation_handle_->IsErrorPage(),
+      env, java_navigation_handle_, gurl, cpp_navigation_handle_->IsErrorPage(),
       cpp_navigation_handle_->HasCommitted(),
       is_primary_main_frame_fragment_navigation,
       cpp_navigation_handle_->IsDownload(), is_valid_search_form_url,
       cpp_navigation_handle_->GetPageTransition(),
       cpp_navigation_handle_->GetNetErrorCode(),
-      // TODO(shaktisahu): Change default status to -1 after fixing
-      // crbug/690041.
+      net::ErrorToString(cpp_navigation_handle_->GetNetErrorCode()),
       cpp_navigation_handle_->GetResponseHeaders()
           ? cpp_navigation_handle_->GetResponseHeaders()->response_code()
-          : 200,
+          : 0,
       cpp_navigation_handle_->IsExternalProtocol(),
-      cpp_navigation_handle_->IsPdf(),
-      base::android::ConvertUTF8ToJavaString(env, GetMimeType()),
-      cpp_navigation_handle_->GetWebContents()->GetPrimaryPage().GetJavaPage());
+      cpp_navigation_handle_->IsPdf(), GetMimeType(),
+      cpp_navigation_handle_->GetWebContents()->GetPrimaryPage().GetJavaPage(),
+      is_same_origin, response_headers,
+      cpp_navigation_handle_->GetIgnoredDuplicateNavigationCount());
 }
 
 NavigationHandleProxy::~NavigationHandleProxy() {

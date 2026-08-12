@@ -14,6 +14,8 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/thread_annotations.h"
+#include "base/threading/thread_checker.h"
 #include "components/component_updater/ash/component_manager_ash.h"
 #include "components/component_updater/component_installer.h"
 #include "components/component_updater/component_updater_service.h"
@@ -70,10 +72,10 @@ class CrOSComponentInstallerPolicy : public ComponentInstallerPolicy {
   bool SupportsGroupPolicyEnabledComponentUpdates() const override;
   bool RequiresNetworkEncryption() const override;
   update_client::CrxInstaller::Result OnCustomInstall(
-      const base::Value::Dict& manifest,
+      const base::DictValue& manifest,
       const base::FilePath& install_dir) override;
   void OnCustomUninstall() override;
-  bool VerifyInstallation(const base::Value::Dict& manifest,
+  bool VerifyInstallation(const base::DictValue& manifest,
                           const base::FilePath& install_dir) const override;
   base::FilePath GetRelativeInstallDir() const override;
   void GetHash(std::vector<uint8_t>* hash) const override;
@@ -103,7 +105,7 @@ class EnvVersionInstallerPolicy : public CrOSComponentInstallerPolicy {
   // ComponentInstallerPolicy:
   void ComponentReady(const base::Version& version,
                       const base::FilePath& path,
-                      base::Value::Dict manifest) override;
+                      base::DictValue manifest) override;
   update_client::InstallerAttributes GetInstallerAttributes() const override;
 
  private:
@@ -129,7 +131,7 @@ class DemoAppInstallerPolicy : public CrOSComponentInstallerPolicy {
   // ComponentInstallerPolicy:
   void ComponentReady(const base::Version& version,
                       const base::FilePath& path,
-                      base::Value::Dict manifest) override;
+                      base::DictValue manifest) override;
   update_client::InstallerAttributes GetInstallerAttributes() const override;
 };
 
@@ -150,7 +152,7 @@ class GrowthCampaignsInstallerPolicy : public CrOSComponentInstallerPolicy {
   // ComponentInstallerPolicy:
   void ComponentReady(const base::Version& version,
                       const base::FilePath& path,
-                      base::Value::Dict manifest) override;
+                      base::DictValue manifest) override;
   update_client::InstallerAttributes GetInstallerAttributes() const override;
 };
 
@@ -275,23 +277,30 @@ class CrOSComponentInstaller : public ComponentManagerAsh {
   void DispatchLoadCallback(LoadCallback callback,
                             base::FilePath path,
                             bool success);
+
   // Repeatedly calls DispatchLoadCallback with failure parameters.
   void DispatchFailedLoads(std::vector<LoadCallback> callbacks);
 
   // Maps from a compatible component name to its info.
-  base::flat_map<std::string, CompatibleComponentInfo> compatible_components_;
+  base::flat_map<std::string, CompatibleComponentInfo> compatible_components_
+      GUARDED_BY_CONTEXT(thread_checker_);
 
   // A weak pointer to a Delegate for emitting D-Bus signal.
-  raw_ptr<Delegate> delegate_ = nullptr;
+  raw_ptr<Delegate> delegate_ GUARDED_BY_CONTEXT(thread_checker_) = nullptr;
 
   // Table storing metadata (installs, usage, etc.).
-  std::unique_ptr<MetadataTable> metadata_table_;
+  std::unique_ptr<MetadataTable> metadata_table_
+      GUARDED_BY_CONTEXT(thread_checker_);
 
   // The load cache stores ongoing load requests, as well as the finished
   // results.
-  std::map<std::string, LoadInfo> load_cache_;
+  std::map<std::string, LoadInfo> load_cache_
+      GUARDED_BY_CONTEXT(thread_checker_);
 
-  const raw_ptr<ComponentUpdateService> component_updater_;
+  const raw_ptr<ComponentUpdateService> component_updater_
+      GUARDED_BY_CONTEXT(thread_checker_);
+
+  THREAD_CHECKER(thread_checker_);
 
   base::WeakPtrFactory<CrOSComponentInstaller> weak_factory_{this};
 };

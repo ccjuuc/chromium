@@ -14,10 +14,9 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
+#include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_ids.h"
 #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
-#include "chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.h"
-#include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_controller.h"
-#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/saved_tab_groups/public/saved_tab_group.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
@@ -54,8 +53,8 @@ void SharedTabGroupFeedbackController::TearDown() {
 
 void SharedTabGroupFeedbackController::UpdateFeedbackButtonVisibility(
     bool should_show_button) {
-  PinnedToolbarActionsController* controller =
-      browser_->GetFeatures().pinned_toolbar_actions_controller();
+  PinnedToolbarActions* controller =
+      browser_->GetFeatures().pinned_toolbar_actions();
   if (!controller) {
     // Can be null when dragging a tab / group into a new window.
     return;
@@ -69,16 +68,6 @@ void SharedTabGroupFeedbackController::UpdateFeedbackButtonVisibility(
 
   controller->ShowActionEphemerallyInToolbar(kActionSendSharedTabGroupFeedback,
                                              should_show_button);
-
-  if (should_show_button) {
-    PinnedActionToolbarButton* button =
-        controller->GetButtonFor(kActionSendSharedTabGroupFeedback);
-    CHECK(button);
-
-    // Add the ElementIdentifier so the IPH system can find the button.
-    button->SetProperty(views::kElementIdentifierKey,
-                        kSharedTabGroupFeedbackElementId);
-  }
 }
 
 void SharedTabGroupFeedbackController::MaybeShowFeedbackActionInToolbar() {

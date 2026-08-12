@@ -5,15 +5,15 @@
 package org.chromium.net.test.util;
 
 import android.util.Base64;
-import android.util.Log;
 import android.util.Pair;
 
 import org.chromium.base.ApiCompatibilityUtils;
+import org.chromium.base.Log;
 
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
-import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.text.SimpleDateFormat;
@@ -92,7 +92,7 @@ public class TestWebServer extends WebServer {
                 outputResponse(request, printStream);
             } catch (NoSuchAlgorithmException ignore) {
             } catch (IOException e) {
-                Log.w(TAG, e);
+                Log.w(TAG, "", e);
             } finally {
                 printStream.close();
             }
@@ -283,6 +283,25 @@ public class TestWebServer extends WebServer {
                 responseHeaders,
                 null,
                 RESPONSE_STATUS_NORMAL);
+    }
+
+    /**
+     * Sets a response to be returned when a particular request path is passed in (with the option
+     * to specify additional headers).
+     *
+     * @param requestPath The path to respond to.
+     * @param responseBytes The response body that will be returned. This method does not take a
+     *     copy of the data, so you should do this in the caller if you plan to modify the byte
+     *     array contents after calling.
+     * @param responseHeaders Any additional headers that should be returned along with the response
+     *     (null is acceptable).
+     * @return The full URL including the path that should be requested to get the expected
+     *     response.
+     */
+    public String setResponse(
+            String requestPath, byte[] responseBytes, List<Pair<String, String>> responseHeaders) {
+        return setResponseInternal(
+                requestPath, responseBytes, responseHeaders, null, RESPONSE_STATUS_NORMAL);
     }
 
     /**
@@ -543,8 +562,8 @@ public class TestWebServer extends WebServer {
 
     /** Return a response for WebSocket handshake challenge. */
     private static String computeWebSocketAccept(String keyString) throws NoSuchAlgorithmException {
-        byte[] key = keyString.getBytes(Charset.forName("US-ASCII"));
-        byte[] guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11".getBytes(Charset.forName("US-ASCII"));
+        byte[] key = keyString.getBytes(StandardCharsets.US_ASCII);
+        byte[] guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11".getBytes(StandardCharsets.US_ASCII);
 
         MessageDigest md = MessageDigest.getInstance("SHA");
         md.update(key);

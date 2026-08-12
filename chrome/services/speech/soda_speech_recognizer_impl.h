@@ -5,9 +5,6 @@
 #ifndef CHROME_SERVICES_SPEECH_SODA_SPEECH_RECOGNIZER_IMPL_H_
 #define CHROME_SERVICES_SPEECH_SODA_SPEECH_RECOGNIZER_IMPL_H_
 
-#include <memory>
-#include <string>
-
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/speech/endpointer/endpointer.h"
@@ -118,6 +115,7 @@ class SodaSpeechRecognizerImpl
   // Low-latency energy endpointer used to detect when speech starts and ends.
   Endpointer endpointer_;
 
+  const bool continuous_;
   int num_samples_recorded_ = 0;
   bool sound_started_ = false;
   bool waiting_for_final_result_ = false;

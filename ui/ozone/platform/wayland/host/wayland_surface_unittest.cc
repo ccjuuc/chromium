@@ -8,6 +8,7 @@
 #include <wayland-server-core.h>
 #include <wayland-server-protocol.h>
 
+#include "base/auto_reset.h"
 #include "base/posix/eintr_wrapper.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -76,6 +77,36 @@ INSTANTIATE_TEST_SUITE_P(XdgVersionStableTest,
 
 }  // namespace
 
+class WaylandSurfaceScaleTest : public WaylandTestSimple {
+ public:
+  WaylandSurfaceScaleTest() : WaylandTestSimple(wl::ServerConfig{}) {}
+};
+
+// Regression test for crbug.com/438038776: sub-1.0 fractional scale must not
+// be clamped to 1.0 when using viewporter, since wp_viewport handles the
+// scaling and wl_surface_set_buffer_scale is never called in that path.
+TEST_F(WaylandSurfaceScaleTest, GetWaylandScaleSubOne) {
+  // 90/120 = 0.75f, an example sub-1.0 scale sent by wp_fractional_scale_v1
+  // when display scaling is set below 100%.
+  constexpr float kSubOneScale = 90.f / 120.f;
+
+  WaylandSurface::State state;
+  state.buffer_scale_float = kSubOneScale;
+
+  // Without viewporter: sub-1.0 scale is ceiled and clamped to 1.0, because
+  // wl_surface_set_buffer_scale only accepts integers >= 1.
+  connection_->set_supports_viewporter_surface_scaling(false);
+  auto no_viewporter_surface =
+      std::make_unique<WaylandSurface>(connection_.get(), nullptr);
+  EXPECT_FLOAT_EQ(1.0f, no_viewporter_surface->GetWaylandScale(state));
+
+  // With viewporter: sub-1.0 scale passes through unchanged.
+  connection_->set_supports_viewporter_surface_scaling(true);
+  auto viewporter_surface =
+      std::make_unique<WaylandSurface>(connection_.get(), nullptr);
+  EXPECT_FLOAT_EQ(kSubOneScale, viewporter_surface->GetWaylandScale(state));
+}
+
 class WaylandSurfaceExplicitSyncTest : public WaylandTestSimple {
  public:
   WaylandSurfaceExplicitSyncTest()
@@ -104,7 +135,7 @@ class WaylandSurfaceExplicitSyncTest : public WaylandTestSimple {
                                const std::vector<uint32_t>& strides = {1},
                                const std::vector<uint32_t>& offsets = {2},
                                const std::vector<uint64_t>& modifiers = {3},
-                               uint32_t format = DRM_FORMAT_R8,
+                               uint32_t format = DRM_FORMAT_ABGR8888,
                                uint32_t planes_count = 1) {
     buffer_manager_gpu_->CreateDmabufBasedBuffer(
         GetFdFactory()->CreateFd(), kDefaultSize, strides, offsets, modifiers,

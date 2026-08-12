@@ -14,6 +14,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "chrome/browser/web_applications/commands/command_result.h"
+#include "chrome/browser/web_applications/jobs/compute_app_size_job.h"
 #include "components/webapps/common/web_app_id.h"
 #include "url/origin.h"
 
@@ -22,23 +23,21 @@ class Profile;
 namespace web_app {
 
 class ComputedAppSizeWithOrigin;
+class ComputeAppSizeJob;
 class WithAppResources;
 
 // Calculates the total on-disk storage size for a give installed isolated web
 // app, including both the web app's web platform storage as well as Chrome's
 // internal storage of things like icons etc., including bundle size.
-class GetIsolatedWebAppSizeJob {
+class GetIsolatedWebAppSizeJob : public ComputeAppSizeJob {
  public:
-  using ResultCallback =
-      base::OnceCallback<void(std::optional<ComputedAppSizeWithOrigin> result)>;
-
   GetIsolatedWebAppSizeJob(Profile* profile,
                            const webapps::AppId& app_id,
-                           base::Value::Dict& debug_value,
-                           ResultCallback result_callback);
-  ~GetIsolatedWebAppSizeJob();
+                           base::DictValue& debug_value);
+  ~GetIsolatedWebAppSizeJob() override;
 
-  void Start(WithAppResources* lock_with_app_resources);
+  void Start(WithAppResources* lock_with_app_resources,
+             ResultCallback callback) override;
 
  private:
   void OnGetIconStorageUsage(uint64_t size);
@@ -54,7 +53,7 @@ class GetIsolatedWebAppSizeJob {
   size_t icon_size_ = 0u;
   const raw_ptr<Profile> profile_;
   raw_ptr<WithAppResources> lock_with_app_resources_ = nullptr;
-  const raw_ref<base::Value::Dict> debug_value_;
+  const raw_ref<base::DictValue> debug_value_;
   ResultCallback result_callback_;
   base::WeakPtrFactory<GetIsolatedWebAppSizeJob> weak_factory_{this};
 };

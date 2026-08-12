@@ -8,6 +8,10 @@
 #import "base/test/metrics/histogram_tester.h"
 #import "base/test/task_environment.h"
 #import "components/commerce/core/mock_shopping_service.h"
+#import "components/sync/test/test_sync_service.h"
+#import "components/variations/scoped_variations_ids_provider.h"
+#import "ios/chrome/browser/aim/model/ios_chrome_aim_eligibility_service_factory.h"
+#import "ios/chrome/browser/aim/model/mock_ios_chrome_aim_eligibility_service.h"
 #import "ios/chrome/browser/bookmarks/model/bookmark_model_factory.h"
 #import "ios/chrome/browser/browser_view/model/browser_view_visibility_notifier_browser_agent.h"
 #import "ios/chrome/browser/commerce/model/shopping_service_factory.h"
@@ -20,6 +24,8 @@
 #import "ios/chrome/browser/discover_feed/model/discover_feed_visibility_browser_agent.h"
 #import "ios/chrome/browser/discover_feed/model/discover_feed_visibility_observer.h"
 #import "ios/chrome/browser/favicon/model/ios_chrome_large_icon_service_factory.h"
+#import "ios/chrome/browser/history/model/history_service_factory.h"
+#import "ios/chrome/browser/metrics/model/activity_reporter.h"
 #import "ios/chrome/browser/ntp/model/new_tab_page_tab_helper.h"
 #import "ios/chrome/browser/ntp/shared/metrics/home_metrics.h"
 #import "ios/chrome/browser/ntp/shared/metrics/new_tab_page_metrics_constants.h"
@@ -32,26 +38,28 @@
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_coordinator+Testing.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_header_view.h"
-#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_header_view_controller+Testing.h"
-#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_header_view_controller.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_mediator.h"
+#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_shortcuts_handler.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_view_controller.h"
 #import "ios/chrome/browser/safety_check/model/ios_chrome_safety_check_manager_factory.h"
 #import "ios/chrome/browser/saved_tab_groups/model/tab_group_sync_service_factory.h"
 #import "ios/chrome/browser/search_engines/model/template_url_service_factory.h"
 #import "ios/chrome/browser/segmentation_platform/model/segmentation_platform_service_factory.h"
+#import "ios/chrome/browser/shared/coordinator/layout_guide/layout_guide_scene_agent.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_manager_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_opener.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/help_commands.h"
 #import "ios/chrome/browser/shared/public/commands/lens_commands.h"
 #import "ios/chrome/browser/shared/public/commands/omnibox_commands.h"
+#import "ios/chrome/browser/shared/public/commands/popup_menu_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
@@ -60,6 +68,8 @@
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
 #import "ios/chrome/browser/start_surface/ui_bundled/start_surface_recent_tab_browser_agent.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/browser/tips_manager/model/tips_manager_ios_factory.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/fakebox_focuser.h"
 #import "ios/chrome/browser/url_loading/model/fake_url_loading_browser_agent.h"
@@ -78,6 +88,20 @@
 #import "third_party/ocmock/OCMock/OCMock.h"
 #import "third_party/ocmock/gtest_support.h"
 
+namespace {
+
+std::unique_ptr<KeyedService> BuildMockIOSChromeAimEligibilityService(
+    ProfileIOS* profile) {
+  return MockIOSChromeAimEligibilityService::CreateTestingProfileService(
+      profile);
+}
+
+}  // namespace
+
+@interface NewTabPageHeaderView (Testing)
+@property(nonatomic, readonly) UIButton* customizationMenuButton;
+@end
+
 // Test fixture for testing NewTabPageCoordinator class.
 class NewTabPageCoordinatorTest : public PlatformTest {
  protected:
@@ -92,7 +116,7 @@ class NewTabPageCoordinatorTest : public PlatformTest {
         IOSChromeLargeIconServiceFactory::GetDefaultFactory());
     test_profile_builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
     test_profile_builder.AddTestingFactory(
         commerce::ShoppingServiceFactory::GetInstance(),
@@ -100,6 +124,9 @@ class NewTabPageCoordinatorTest : public PlatformTest {
             [](ProfileIOS* profile) -> std::unique_ptr<KeyedService> {
               return std::make_unique<commerce::MockShoppingService>();
             }));
+    test_profile_builder.AddTestingFactory(
+        ios::HistoryServiceFactory::GetInstance(),
+        ios::HistoryServiceFactory::GetDefaultFactory());
     test_profile_builder.AddTestingFactory(
         segmentation_platform::SegmentationPlatformServiceFactory::
             GetInstance(),
@@ -117,6 +144,12 @@ class NewTabPageCoordinatorTest : public PlatformTest {
     test_profile_builder.AddTestingFactory(
         tab_groups::TabGroupSyncServiceFactory::GetInstance(),
         tab_groups::TabGroupSyncServiceFactory::GetDefaultFactory());
+    test_profile_builder.AddTestingFactory(
+        IOSChromeAimEligibilityServiceFactory::GetInstance(),
+        base::BindRepeating(&BuildMockIOSChromeAimEligibilityService));
+    test_profile_builder.AddTestingFactory(
+        SyncServiceFactory::GetInstance(),
+        base::BindRepeating(&CreateTestSyncService));
 
     profile_ =
         profile_manager_.AddProfileWithBuilder(std::move(test_profile_builder));
@@ -141,6 +174,7 @@ class NewTabPageCoordinatorTest : public PlatformTest {
     EXPECT_OCMOCK_VERIFY(fakebox_focuser_handler_mock_);
     EXPECT_OCMOCK_VERIFY(lens_handler_mock_);
     EXPECT_OCMOCK_VERIFY(browser_coordinator_handler_mock_);
+    EXPECT_OCMOCK_VERIFY(popup_menu_commands_handler_mock_);
     EXPECT_OCMOCK_VERIFY(component_factory_mock_);
   }
 
@@ -155,11 +189,16 @@ class NewTabPageCoordinatorTest : public PlatformTest {
   }
 
   void CreateCoordinator(bool off_the_record) {
+    scene_state_ = [[SceneState alloc] init];
+    LayoutGuideSceneAgent* layout_guide_scene_agent =
+        [[LayoutGuideSceneAgent alloc] init];
+    [scene_state_ addAgent:layout_guide_scene_agent];
+
     if (off_the_record) {
       ProfileIOS* otr_state = GetProfile()->GetOffTheRecordProfile();
-      browser_ = std::make_unique<TestBrowser>(otr_state);
+      browser_ = std::make_unique<TestBrowser>(otr_state, scene_state_);
     } else {
-      browser_ = std::make_unique<TestBrowser>(GetProfile());
+      browser_ = std::make_unique<TestBrowser>(GetProfile(), scene_state_);
       StartSurfaceRecentTabBrowserAgent::CreateForBrowser(browser_.get());
       BrowserViewVisibilityNotifierBrowserAgent::CreateForBrowser(
           browser_.get());
@@ -256,7 +295,7 @@ class NewTabPageCoordinatorTest : public PlatformTest {
   }
 
   void SetupCommandHandlerMocks() {
-    application_handler_mock_ = OCMProtocolMock(@protocol(ApplicationCommands));
+    application_handler_mock_ = OCMProtocolMock(@protocol(SceneCommands));
     help_commands_handler_mock_ = OCMProtocolMock(@protocol(HelpCommands));
     omnibox_commands_handler_mock_ =
         OCMProtocolMock(@protocol(OmniboxCommands));
@@ -266,9 +305,11 @@ class NewTabPageCoordinatorTest : public PlatformTest {
     lens_handler_mock_ = OCMProtocolMock(@protocol(LensCommands));
     browser_coordinator_handler_mock_ =
         OCMProtocolMock(@protocol(BrowserCoordinatorCommands));
+    popup_menu_commands_handler_mock_ =
+        OCMProtocolMock(@protocol(PopupMenuCommands));
     [browser_.get()->GetCommandDispatcher()
         startDispatchingToTarget:application_handler_mock_
-                     forProtocol:@protocol(ApplicationCommands)];
+                     forProtocol:@protocol(SceneCommands)];
     [browser_.get()->GetCommandDispatcher()
         startDispatchingToTarget:help_commands_handler_mock_
                      forProtocol:@protocol(HelpCommands)];
@@ -287,6 +328,9 @@ class NewTabPageCoordinatorTest : public PlatformTest {
     [browser_.get()->GetCommandDispatcher()
         startDispatchingToTarget:browser_coordinator_handler_mock_
                      forProtocol:@protocol(BrowserCoordinatorCommands)];
+    [browser_.get()->GetCommandDispatcher()
+        startDispatchingToTarget:popup_menu_commands_handler_mock_
+                     forProtocol:@protocol(PopupMenuCommands)];
   }
 
   // Dynamically calls a selector on an object.
@@ -330,10 +374,12 @@ class NewTabPageCoordinatorTest : public PlatformTest {
             GetApplicationContext()->GetSystemIdentityManager());
     system_identity_manager->AddIdentity(fake_identity);
     AuthenticationServiceFactory::GetForProfile(GetProfile())
-        ->SignIn(fake_identity, signin_metrics::AccessPoint::kUnknown);
+        ->SignIn(fake_identity, signin_metrics::AccessPoint::kStartPage);
   }
 
   web::WebTaskEnvironment task_environment_;
+  variations::test::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
+      variations::VariationsIdsProvider::Mode::kUseSignedInState};
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   TestProfileManagerIOS profile_manager_;
   raw_ptr<ProfileIOS> profile_;
@@ -341,6 +387,7 @@ class NewTabPageCoordinatorTest : public PlatformTest {
   id toolbar_delegate_;
   id delegate_;
   std::unique_ptr<Browser> browser_;
+  SceneState* scene_state_;
   UIViewController* fake_feed_view_controller_;
   NewTabPageCoordinator* coordinator_;
   NewTabPageMetricsRecorder* NTPMetricsRecorder_;
@@ -354,6 +401,7 @@ class NewTabPageCoordinatorTest : public PlatformTest {
   id fakebox_focuser_handler_mock_;
   id lens_handler_mock_;
   id browser_coordinator_handler_mock_;
+  id popup_menu_commands_handler_mock_;
   std::unique_ptr<base::HistogramTester> histogram_tester_;
 };
 
@@ -378,7 +426,7 @@ TEST_F(NewTabPageCoordinatorTest, StartOffTheRecord) {
 }
 
 // Tests that if the NTPCoordinator properly configures
-// NewTabPageHeaderViewController and NewTabPageTabHelper correctly for
+// NewTabPageHeaderView and NewTabPageTabHelper correctly for
 // Start depending on public lifecycle API calls.
 TEST_F(NewTabPageCoordinatorTest, StartIsStartShowing) {
   CreateCoordinator(/*off_the_record=*/false);
@@ -450,6 +498,7 @@ TEST_F(NewTabPageCoordinatorTest, ShortcutsStartMetricLogging) {
       ContentSuggestionsModuleType::kShortcuts, 0);
   histogram_tester_->ExpectTotalCount(kStartTimeSpentHistogram, 0);
   histogram_tester_->ExpectTotalCount(kStartImpressionHistogram, 1);
+  histogram_tester_->ExpectTotalCount(kHomeImpressionHistogram, 1);
 
   ShortcutsActionItem* item = [[ShortcutsActionItem alloc] init];
   item.title = @"Bookmarks 0";
@@ -475,6 +524,7 @@ TEST_F(NewTabPageCoordinatorTest, ShortcutsStartMetricLogging) {
       ContentSuggestionsModuleType::kShortcuts, 1);
   histogram_tester_->ExpectTotalCount(kStartTimeSpentHistogram, 1);
   histogram_tester_->ExpectTotalCount(kStartImpressionHistogram, 1);
+  histogram_tester_->ExpectTotalCount(kHomeImpressionHistogram, 1);
   EXPECT_FALSE(
       NewTabPageTabHelper::FromWebState(web_state_)->ShouldShowStartSurface());
   [coordinator_ stop];
@@ -524,6 +574,7 @@ TEST_F(NewTabPageCoordinatorTest, DidNavigateBetweenWebStates) {
     EXPECT_FALSE(coordinator_.visible);
     if (!off_the_record) {
       histogram_tester_->ExpectTotalCount(kNTPImpressionHistogram, 0);
+      histogram_tester_->ExpectTotalCount(kHomeImpressionHistogram, 0);
     }
 
     // Open an NTP in a new web state.
@@ -532,6 +583,7 @@ TEST_F(NewTabPageCoordinatorTest, DidNavigateBetweenWebStates) {
     if (!off_the_record) {
       histogram_tester_->ExpectTotalCount(kNTPTimeSpentHistogram, 0);
       histogram_tester_->ExpectTotalCount(kNTPImpressionHistogram, 1);
+      histogram_tester_->ExpectTotalCount(kHomeImpressionHistogram, 1);
     }
     EXPECT_TRUE(coordinator_.started);
     EXPECT_TRUE(coordinator_.visible);
@@ -542,6 +594,7 @@ TEST_F(NewTabPageCoordinatorTest, DidNavigateBetweenWebStates) {
     if (!off_the_record) {
       histogram_tester_->ExpectTotalCount(kNTPTimeSpentHistogram, 1);
       histogram_tester_->ExpectTotalCount(kNTPImpressionHistogram, 1);
+      histogram_tester_->ExpectTotalCount(kHomeImpressionHistogram, 1);
     }
     EXPECT_TRUE(coordinator_.started);
     EXPECT_FALSE(coordinator_.visible);
@@ -553,6 +606,7 @@ TEST_F(NewTabPageCoordinatorTest, DidNavigateBetweenWebStates) {
     if (!off_the_record) {
       histogram_tester_->ExpectTotalCount(kNTPTimeSpentHistogram, 1);
       histogram_tester_->ExpectTotalCount(kNTPImpressionHistogram, 2);
+      histogram_tester_->ExpectTotalCount(kHomeImpressionHistogram, 2);
     }
     EXPECT_TRUE(coordinator_.started);
     EXPECT_TRUE(coordinator_.visible);
@@ -565,6 +619,7 @@ TEST_F(NewTabPageCoordinatorTest, DidNavigateBetweenWebStates) {
     if (!off_the_record) {
       histogram_tester_->ExpectTotalCount(kNTPTimeSpentHistogram, 2);
       histogram_tester_->ExpectTotalCount(kNTPImpressionHistogram, 2);
+      histogram_tester_->ExpectTotalCount(kHomeImpressionHistogram, 2);
     }
     EXPECT_FALSE(coordinator_.visible);
     EXPECT_FALSE(coordinator_.started);
@@ -579,15 +634,13 @@ TEST_F(NewTabPageCoordinatorTest, ProxiesNTPViewControllerMethods) {
   [coordinator_ start];
   [coordinator_ didNavigateToNTPInWebState:web_state_];
 
-  ExpectMethodToProxyToVC(@selector(isScrolledToTop),
-                          @selector(isNTPScrolledToTop));
   ExpectMethodToProxyToVC(@selector(willUpdateSnapshot),
                           @selector(willUpdateSnapshot));
   if (!IsComposeboxIOSEnabled()) {
     ExpectMethodToProxyToVC(@selector(focusFakebox), @selector(focusOmnibox));
   }
   ExpectMethodToProxyToVC(@selector(locationBarDidResignFirstResponder),
-                          @selector(omniboxDidResignFirstResponder));
+                          @selector(omniboxDidEndEditing));
 
   [coordinator_ stop];
 }
@@ -603,7 +656,7 @@ TEST_F(NewTabPageCoordinatorTest, IsNTPCleanOnStop) {
   EXPECT_NE(nil, coordinator_.NTPViewController);
   EXPECT_NE(nil, coordinator_.contentSuggestionsCoordinator.viewController);
   EXPECT_NE(nil, coordinator_.contentSuggestionsCoordinator);
-  EXPECT_NE(nil, coordinator_.headerViewController);
+  EXPECT_NE(nil, coordinator_.headerView);
   EXPECT_NE(nil, coordinator_.NTPMediator);
   EXPECT_NE(nil, coordinator_.feedWrapperViewController);
   EXPECT_NE(nil, coordinator_.feedTopSectionCoordinator);
@@ -614,7 +667,7 @@ TEST_F(NewTabPageCoordinatorTest, IsNTPCleanOnStop) {
   EXPECT_EQ(nil, coordinator_.NTPViewController);
   EXPECT_EQ(nil, coordinator_.contentSuggestionsCoordinator.viewController);
   EXPECT_EQ(nil, coordinator_.contentSuggestionsCoordinator);
-  EXPECT_EQ(nil, coordinator_.headerViewController);
+  EXPECT_EQ(nil, coordinator_.headerView);
   EXPECT_EQ(nil, coordinator_.NTPMediator);
   EXPECT_EQ(nil, coordinator_.feedWrapperViewController);
   EXPECT_EQ(nil, coordinator_.feedTopSectionCoordinator);
@@ -693,7 +746,7 @@ TEST_F(NewTabPageCoordinatorTest,
 
   // Open the customization menu by tapping on the customization button.
   UIButton* customizationMenuButton =
-      coordinator_.headerViewController.headerView.customizationMenuButton;
+      coordinator_.headerView.customizationMenuButton;
   [customizationMenuButton
       sendActionsForControlEvents:UIControlEventTouchUpInside];
 
@@ -720,7 +773,7 @@ TEST_F(NewTabPageCoordinatorTest,
 
   // Open the customization menu by tapping on the customization button.
   UIButton* customizationMenuButton =
-      coordinator_.headerViewController.headerView.customizationMenuButton;
+      coordinator_.headerView.customizationMenuButton;
   [customizationMenuButton
       sendActionsForControlEvents:UIControlEventTouchUpInside];
 
@@ -732,4 +785,82 @@ TEST_F(NewTabPageCoordinatorTest,
 
   // Assert `dismissAllSnackbars` was called.
   EXPECT_OCMOCK_VERIFY(snackbar_commands_handler_mock_);
+}
+
+TEST_F(NewTabPageCoordinatorTest, NTPShortcutsMetricLogging) {
+  CreateCoordinator(/*off_the_record=*/false);
+  SetupCommandHandlerMocks();
+  [coordinator_ start];
+  [coordinator_ didNavigateToNTPInWebState:web_state_];
+
+  // Stub mock handlers to avoid unexpected call failures.
+  OCMStub([lens_handler_mock_ openLensInputSelection:[OCMArg any]]);
+  OCMStub([browser_coordinator_handler_mock_ startVoiceSearch]);
+  OCMStub([application_handler_mock_ openURLInNewTab:[OCMArg any]]);
+  OCMStub([browser_coordinator_handler_mock_ showMultimodalActionsMenu]);
+
+  id<NewTabPageShortcutsHandler> shortcutsHandler =
+      static_cast<id<NewTabPageShortcutsHandler>>(coordinator_);
+
+  // Test Lens Tap
+  [shortcutsHandler openLensViewFinder];
+  histogram_tester_->ExpectBucketCount("IOS.NTP.Click",
+                                       IOSHomeActionType::kLens, 1);
+  histogram_tester_->ExpectBucketCount("IOS.Home.Click",
+                                       IOSHomeActionType::kLens, 1);
+
+  // Test Mic Tap
+  [shortcutsHandler loadVoiceSearchFromView:[[UIView alloc] init]];
+  histogram_tester_->ExpectBucketCount("IOS.NTP.Click",
+                                       IOSHomeActionType::kVoiceSearch, 1);
+  histogram_tester_->ExpectBucketCount("IOS.Home.Click",
+                                       IOSHomeActionType::kVoiceSearch, 1);
+
+  // Test Incognito Tap
+  [shortcutsHandler openIncognitoSearch];
+  histogram_tester_->ExpectBucketCount(
+      "IOS.NTP.Click", IOSHomeActionType::kQuickActionIncognito, 1);
+  histogram_tester_->ExpectBucketCount(
+      "IOS.Home.Click", IOSHomeActionType::kQuickActionIncognito, 1);
+
+  // Test AIM Tap
+  [shortcutsHandler openAIM];
+  histogram_tester_->ExpectBucketCount("IOS.NTP.Click",
+                                       IOSHomeActionType::kQuickActionAIM, 1);
+  histogram_tester_->ExpectBucketCount("IOS.Home.Click",
+                                       IOSHomeActionType::kQuickActionAIM, 1);
+
+  // Test Plus Button Tap
+  [shortcutsHandler openMultimodalActionsMenu];
+  histogram_tester_->ExpectBucketCount("IOS.NTP.Click",
+                                       IOSHomeActionType::kPlusButton, 1);
+  histogram_tester_->ExpectBucketCount("IOS.Home.Click",
+                                       IOSHomeActionType::kPlusButton, 1);
+
+  [coordinator_ stop];
+}
+
+TEST_F(NewTabPageCoordinatorTest, ActivityReporting) {
+  CreateCoordinator(/*off_the_record=*/false);
+  SetupCommandHandlerMocks();
+
+  id mockInstance = OCMClassMock([ActivityReporterWithIncognito class]);
+  [coordinator_ setValue:mockInstance forKey:@"activityReporter"];
+
+  // Starting coordinator.
+  [coordinator_ start];
+
+  // Navigate to NTP -> reports active.
+  OCMExpect([mockInstance reportActiveWithIncognito:NO]);
+  [coordinator_ didNavigateToNTPInWebState:web_state_];
+  [mockInstance verify];
+
+  // Navigate away -> reports inactive.
+  OCMExpect([mockInstance reportInactive]);
+  [coordinator_ didNavigateAwayFromNTP];
+  [mockInstance verify];
+
+  [coordinator_ stop];
+  [coordinator_ setValue:nil forKey:@"activityReporter"];
+  [mockInstance stopMocking];
 }

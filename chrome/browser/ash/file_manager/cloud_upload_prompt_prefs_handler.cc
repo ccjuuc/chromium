@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "chrome/browser/chromeos/upload_office_to_cloud/upload_office_to_cloud.h"
@@ -14,7 +15,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_util.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_change_registrar.h"
@@ -37,29 +37,29 @@ struct PrefInfo {
 };
 
 const std::vector<PrefInfo> kCloudUploadPrefs = {
-    {prefs::kOfficeFilesAlwaysMoveToDrive,
-     prefs::kOfficeFilesAlwaysMoveToDriveSyncable,
+    {ash::prefs::kOfficeFilesAlwaysMoveToDrive,
+     ash::prefs::kOfficeFilesAlwaysMoveToDriveSyncable,
      ash::cloud_upload::CloudProvider::kGoogleDrive},
-    {prefs::kOfficeFilesAlwaysMoveToOneDrive,
-     prefs::kOfficeFilesAlwaysMoveToOneDriveSyncable,
+    {ash::prefs::kOfficeFilesAlwaysMoveToOneDrive,
+     ash::prefs::kOfficeFilesAlwaysMoveToOneDriveSyncable,
      ash::cloud_upload::CloudProvider::kOneDrive},
-    {prefs::kOfficeMoveConfirmationShownForDrive,
-     prefs::kOfficeMoveConfirmationShownForDriveSyncable,
+    {ash::prefs::kOfficeMoveConfirmationShownForDrive,
+     ash::prefs::kOfficeMoveConfirmationShownForDriveSyncable,
      ash::cloud_upload::CloudProvider::kGoogleDrive},
-    {prefs::kOfficeMoveConfirmationShownForLocalToDrive,
-     prefs::kOfficeMoveConfirmationShownForLocalToDriveSyncable,
+    {ash::prefs::kOfficeMoveConfirmationShownForLocalToDrive,
+     ash::prefs::kOfficeMoveConfirmationShownForLocalToDriveSyncable,
      ash::cloud_upload::CloudProvider::kGoogleDrive},
-    {prefs::kOfficeMoveConfirmationShownForCloudToDrive,
-     prefs::kOfficeMoveConfirmationShownForCloudToDriveSyncable,
+    {ash::prefs::kOfficeMoveConfirmationShownForCloudToDrive,
+     ash::prefs::kOfficeMoveConfirmationShownForCloudToDriveSyncable,
      ash::cloud_upload::CloudProvider::kGoogleDrive},
-    {prefs::kOfficeMoveConfirmationShownForOneDrive,
-     prefs::kOfficeMoveConfirmationShownForOneDriveSyncable,
+    {ash::prefs::kOfficeMoveConfirmationShownForOneDrive,
+     ash::prefs::kOfficeMoveConfirmationShownForOneDriveSyncable,
      ash::cloud_upload::CloudProvider::kOneDrive},
-    {prefs::kOfficeMoveConfirmationShownForLocalToOneDrive,
-     prefs::kOfficeMoveConfirmationShownForLocalToOneDriveSyncable,
+    {ash::prefs::kOfficeMoveConfirmationShownForLocalToOneDrive,
+     ash::prefs::kOfficeMoveConfirmationShownForLocalToOneDriveSyncable,
      ash::cloud_upload::CloudProvider::kOneDrive},
-    {prefs::kOfficeMoveConfirmationShownForCloudToOneDrive,
-     prefs::kOfficeMoveConfirmationShownForCloudToOneDriveSyncable,
+    {ash::prefs::kOfficeMoveConfirmationShownForCloudToOneDrive,
+     ash::prefs::kOfficeMoveConfirmationShownForCloudToOneDriveSyncable,
      ash::cloud_upload::CloudProvider::kOneDrive},
 };
 
@@ -202,12 +202,12 @@ CloudUploadPromptPrefsHandler::CloudUploadPromptPrefsHandler(Profile* profile)
   }
 
   pref_change_registrar_->Add(
-      prefs::kGoogleWorkspaceCloudUpload,
+      ash::prefs::kGoogleWorkspaceCloudUpload,
       base::BindRepeating(
           &CloudUploadPromptPrefsHandler::OnCloudUploadPrefChanged,
           base::Unretained(this)));
   pref_change_registrar_->Add(
-      prefs::kMicrosoftOfficeCloudUpload,
+      ash::prefs::kMicrosoftOfficeCloudUpload,
       base::BindRepeating(
           &CloudUploadPromptPrefsHandler::OnCloudUploadPrefChanged,
           base::Unretained(this)));

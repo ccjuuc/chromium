@@ -4,20 +4,26 @@
 
 package org.chromium.chrome.browser.omnibox.suggestions.clipboard;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
 import android.view.ContextThemeWrapper;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.test.filters.SmallTest;
 
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -30,28 +36,33 @@ import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
+import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.omnibox.UrlBarEditingTextStateProvider;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxDrawableState;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxImageSupplier;
+import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.omnibox.styles.SuggestionSpannable;
 import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteUIContext;
 import org.chromium.chrome.browser.omnibox.suggestions.SuggestionCommonProperties;
 import org.chromium.chrome.browser.omnibox.suggestions.SuggestionHost;
+import org.chromium.chrome.browser.omnibox.suggestions.base.BaseSuggestionView;
 import org.chromium.chrome.browser.omnibox.suggestions.base.BaseSuggestionViewProperties;
 import org.chromium.chrome.browser.omnibox.suggestions.basic.BasicSuggestionProcessor.BookmarkState;
 import org.chromium.chrome.browser.omnibox.suggestions.basic.SuggestionViewProperties;
 import org.chromium.chrome.browser.omnibox.suggestions.basic.SuggestionViewViewBinder;
-import org.chromium.chrome.browser.omnibox.test.R;
 import org.chromium.chrome.browser.share.ShareDelegate;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.components.omnibox.AutocompleteInput;
 import org.chromium.components.omnibox.AutocompleteMatch;
 import org.chromium.components.omnibox.AutocompleteMatchBuilder;
 import org.chromium.components.omnibox.OmniboxSuggestionType;
+import org.chromium.components.omnibox.action.OmniboxActionDelegate;
 import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.ui.test.util.MockitoHelper;
 import org.chromium.url.GURL;
 import org.chromium.url.JUnitTestGURLs;
 
@@ -64,15 +75,16 @@ import java.util.function.Supplier;
 public class ClipboardSuggestionProcessorUnitTest {
     private static final GURL TEST_URL = JUnitTestGURLs.EXAMPLE_URL;
 
-    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    private @Mock SuggestionHost mSuggestionHost;
-    private @Mock OmniboxImageSupplier mImageSupplier;
-    private @Mock UrlBarEditingTextStateProvider mTextProvider;
-    private @Mock Supplier<Tab> mTabSupplier;
-    private @Mock Supplier<ShareDelegate> mShareDelegateSupplier;
-    private @Mock BookmarkState mBookmarkState;
-    private @Mock AutocompleteInput mInput;
+    @Mock private SuggestionHost mSuggestionHost;
+    @Mock private OmniboxImageSupplier mImageSupplier;
+    @Mock private UrlBarEditingTextStateProvider mTextProvider;
+    @Mock private Supplier<Tab> mTabSupplier;
+    @Mock private Supplier<ShareDelegate> mShareDelegateSupplier;
+    @Mock private BookmarkState mBookmarkState;
+    @Mock private OmniboxActionDelegate mActionDelegate;
+    @Mock private AutocompleteInput mInput;
 
     private Context mContext;
     private ClipboardSuggestionProcessor mProcessor;
@@ -83,6 +95,9 @@ public class ClipboardSuggestionProcessorUnitTest {
     private TextView mTitleTextView;
     private TextView mContentTextView;
     private int mLastSetTextDirection = -1;
+    private OmniboxResourceProvider mResourceProvider;
+    private SuggestionViewViewBinder mBinder;
+    private BaseSuggestionView<View> mBaseView;
 
     @Before
     public void setUp() {
@@ -90,6 +105,7 @@ public class ClipboardSuggestionProcessorUnitTest {
                 new ContextThemeWrapper(
                         ContextUtils.getApplicationContext(), R.style.Theme_BrowserUI_DayNight);
         mBitmap = Bitmap.createBitmap(10, 5, Bitmap.Config.ARGB_8888);
+
         AutocompleteUIContext uiContext =
                 new AutocompleteUIContext(
                         mContext,
@@ -99,8 +115,10 @@ public class ClipboardSuggestionProcessorUnitTest {
                         mBookmarkState,
                         mTabSupplier,
                         mShareDelegateSupplier,
-                        new ObservableSupplierImpl<>(ControlsPosition.TOP));
+                        ObservableSuppliers.createNonNull(ControlsPosition.TOP),
+                        mActionDelegate);
         mProcessor = new ClipboardSuggestionProcessor(uiContext);
+
         mRootView = new LinearLayout(mContext);
         mTitleTextView = new TextView(mContext);
         mTitleTextView.setId(R.id.line_1);
@@ -115,6 +133,10 @@ public class ClipboardSuggestionProcessorUnitTest {
         mContentTextView.setId(R.id.line_2);
         mRootView.addView(mTitleTextView);
         mRootView.addView(mContentTextView);
+
+        mResourceProvider = new OmniboxResourceProvider(mContext, BrandedColorScheme.APP_DEFAULT);
+        mBinder = new SuggestionViewViewBinder();
+        mBaseView = new BaseSuggestionView<>(mRootView);
     }
 
     /** Create clipboard suggestion for test, and click the reveal button. */
@@ -149,91 +171,89 @@ public class ClipboardSuggestionProcessorUnitTest {
                         .build();
         mModel = mProcessor.createModel();
         mProcessor.populateModel(mInput, mSuggestion, mModel, 0);
-        SuggestionViewViewBinder.bind(mModel, mRootView, SuggestionViewProperties.TEXT_LINE_1_TEXT);
-        SuggestionViewViewBinder.bind(mModel, mRootView, SuggestionCommonProperties.COLOR_SCHEME);
-        SuggestionViewViewBinder.bind(
-                mModel, mRootView, SuggestionViewProperties.IS_SEARCH_SUGGESTION);
-        SuggestionViewViewBinder.bind(mModel, mRootView, SuggestionViewProperties.TEXT_LINE_2_TEXT);
+        mModel.set(SuggestionCommonProperties.RESOURCE_PROVIDER, mResourceProvider);
+        mBinder.bind(mModel, mBaseView, SuggestionViewProperties.TEXT_LINE_1_TEXT);
+        mBinder.bind(mModel, mBaseView, SuggestionCommonProperties.COLOR_SCHEME);
+        mBinder.bind(mModel, mBaseView, SuggestionViewProperties.IS_SEARCH_SUGGESTION);
+        mBinder.bind(mModel, mBaseView, SuggestionViewProperties.TEXT_LINE_2_TEXT);
     }
 
     @Test
     @SmallTest
     public void clipboardSuggestion_identifyUrlSuggestion() {
         createClipboardSuggestion(OmniboxSuggestionType.CLIPBOARD_URL, GURL.emptyGURL());
-        Assert.assertFalse(mModel.get(SuggestionViewProperties.IS_SEARCH_SUGGESTION));
+        assertFalse(mModel.get(SuggestionViewProperties.IS_SEARCH_SUGGESTION));
         createClipboardSuggestion(OmniboxSuggestionType.CLIPBOARD_TEXT, GURL.emptyGURL());
-        Assert.assertTrue(mModel.get(SuggestionViewProperties.IS_SEARCH_SUGGESTION));
+        assertTrue(mModel.get(SuggestionViewProperties.IS_SEARCH_SUGGESTION));
         createClipboardSuggestion(OmniboxSuggestionType.CLIPBOARD_IMAGE, GURL.emptyGURL());
-        Assert.assertTrue(mModel.get(SuggestionViewProperties.IS_SEARCH_SUGGESTION));
+        assertTrue(mModel.get(SuggestionViewProperties.IS_SEARCH_SUGGESTION));
     }
 
     @Test
     @SmallTest
     public void clipboardSuggestion_showsFaviconWhenAvailable() {
-        final ArgumentCaptor<Callback<Bitmap>> callback = ArgumentCaptor.forClass(Callback.class);
+        final ArgumentCaptor<Callback<Drawable>> callback = MockitoHelper.callbackCaptor();
         createClipboardSuggestionAndClickReveal(OmniboxSuggestionType.CLIPBOARD_URL, TEST_URL);
         OmniboxDrawableState icon1 = mModel.get(BaseSuggestionViewProperties.ICON);
-        Assert.assertNotNull(icon1);
+        assertNotNull(icon1);
 
         verify(mImageSupplier).fetchFavicon(eq(TEST_URL), callback.capture());
-        callback.getValue().onResult(mBitmap);
+        callback.getValue().onResult(new BitmapDrawable(mContext.getResources(), mBitmap));
         OmniboxDrawableState icon2 = mModel.get(BaseSuggestionViewProperties.ICON);
-        Assert.assertNotNull(icon2);
+        assertNotNull(icon2);
 
-        Assert.assertNotEquals(icon1, icon2);
-        Assert.assertEquals(mBitmap, ((BitmapDrawable) icon2.drawable).getBitmap());
+        assertNotEquals(icon1, icon2);
+        assertEquals(mBitmap, ((BitmapDrawable) icon2.drawable).getBitmap());
     }
 
     @Test
     @SmallTest
     public void clipboardSuggestion_showsFallbackIconWhenNoFaviconIsAvailable() {
-        final ArgumentCaptor<Callback<Bitmap>> callback = ArgumentCaptor.forClass(Callback.class);
+        final ArgumentCaptor<Callback<Drawable>> callback = MockitoHelper.callbackCaptor();
         createClipboardSuggestionAndClickReveal(OmniboxSuggestionType.CLIPBOARD_URL, TEST_URL);
         OmniboxDrawableState icon1 = mModel.get(BaseSuggestionViewProperties.ICON);
-        Assert.assertNotNull(icon1);
+        assertNotNull(icon1);
 
         verify(mImageSupplier).fetchFavicon(eq(TEST_URL), callback.capture());
         callback.getValue().onResult(null);
         OmniboxDrawableState icon2 = mModel.get(BaseSuggestionViewProperties.ICON);
-        Assert.assertNotNull(icon2);
+        assertNotNull(icon2);
 
-        Assert.assertEquals(icon1, icon2);
+        assertEquals(icon1, icon2);
     }
 
     @Test
     @SmallTest
     public void clipobardSuggestion_urlAndTextDirection() {
-        final ArgumentCaptor<Callback<Bitmap>> callback = ArgumentCaptor.forClass(Callback.class);
+        final ArgumentCaptor<Callback<Drawable>> callback = MockitoHelper.callbackCaptor();
         // URL
         createClipboardSuggestionAndClickReveal(OmniboxSuggestionType.CLIPBOARD_URL, TEST_URL);
-        Assert.assertFalse(mModel.get(SuggestionViewProperties.IS_SEARCH_SUGGESTION));
+        assertFalse(mModel.get(SuggestionViewProperties.IS_SEARCH_SUGGESTION));
         verify(mImageSupplier).fetchFavicon(eq(TEST_URL), callback.capture());
         callback.getValue().onResult(null);
-        Assert.assertEquals(TextView.TEXT_DIRECTION_LTR, mLastSetTextDirection);
+        assertEquals(TextView.TEXT_DIRECTION_LTR, mLastSetTextDirection);
 
         // Text
         createClipboardSuggestionAndClickReveal(
                 OmniboxSuggestionType.CLIPBOARD_TEXT, GURL.emptyGURL());
-        Assert.assertEquals(TextView.TEXT_DIRECTION_INHERIT, mLastSetTextDirection);
+        assertEquals(TextView.TEXT_DIRECTION_INHERIT, mLastSetTextDirection);
     }
 
     @Test
     @SmallTest
     public void clipboardSuggestion_showsThumbnailWhenAvailable() {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        Assert.assertTrue(mBitmap.compress(Bitmap.CompressFormat.PNG, 100, baos));
+        assertTrue(mBitmap.compress(Bitmap.CompressFormat.PNG, 100, baos));
         byte[] bitmapData = baos.toByteArray();
         createClipboardSuggestionAndClickReveal(
                 OmniboxSuggestionType.CLIPBOARD_IMAGE, GURL.emptyGURL(), bitmapData);
         OmniboxDrawableState icon = mModel.get(BaseSuggestionViewProperties.ICON);
-        Assert.assertNotNull(icon);
+        assertNotNull(icon);
 
         // Since |icon| is Bitmap -> PNG -> Bitmap, the image changed, we just check the size to
         // make sure they are same.
-        Assert.assertEquals(
-                mBitmap.getWidth(), ((BitmapDrawable) icon.drawable).getBitmap().getWidth());
-        Assert.assertEquals(
-                mBitmap.getHeight(), ((BitmapDrawable) icon.drawable).getBitmap().getHeight());
+        assertEquals(mBitmap.getWidth(), ((BitmapDrawable) icon.drawable).getBitmap().getWidth());
+        assertEquals(mBitmap.getHeight(), ((BitmapDrawable) icon.drawable).getBitmap().getHeight());
     }
 
     @Test
@@ -245,34 +265,34 @@ public class ClipboardSuggestionProcessorUnitTest {
 
         Bitmap largeBitmap = Bitmap.createBitmap(size * 2, size * 2, Bitmap.Config.ARGB_8888);
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        Assert.assertTrue(largeBitmap.compress(Bitmap.CompressFormat.PNG, 100, baos));
+        assertTrue(largeBitmap.compress(Bitmap.CompressFormat.PNG, 100, baos));
         byte[] bitmapData = baos.toByteArray();
         createClipboardSuggestionAndClickReveal(
                 OmniboxSuggestionType.CLIPBOARD_IMAGE, GURL.emptyGURL(), bitmapData);
         OmniboxDrawableState icon = mModel.get(BaseSuggestionViewProperties.ICON);
-        Assert.assertNotNull(icon);
+        assertNotNull(icon);
 
-        Assert.assertEquals(size, ((BitmapDrawable) icon.drawable).getBitmap().getWidth());
-        Assert.assertEquals(size, ((BitmapDrawable) icon.drawable).getBitmap().getHeight());
+        assertEquals(size, ((BitmapDrawable) icon.drawable).getBitmap().getWidth());
+        assertEquals(size, ((BitmapDrawable) icon.drawable).getBitmap().getHeight());
     }
 
     @Test
     @SmallTest
     public void clipboardSuggestion_revealButton() {
         createClipboardSuggestion(OmniboxSuggestionType.CLIPBOARD_URL, GURL.emptyGURL());
-        Assert.assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
+        assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
         mProcessor.revealButtonClickHandler(mSuggestion, mModel);
-        Assert.assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
+        assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
 
         createClipboardSuggestion(OmniboxSuggestionType.CLIPBOARD_TEXT, GURL.emptyGURL());
-        Assert.assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
+        assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
         mProcessor.revealButtonClickHandler(mSuggestion, mModel);
-        Assert.assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
+        assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
 
         createClipboardSuggestion(OmniboxSuggestionType.CLIPBOARD_IMAGE, GURL.emptyGURL());
-        Assert.assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
+        assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
         mProcessor.revealButtonClickHandler(mSuggestion, mModel);
-        Assert.assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
+        assertNotNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
     }
 
     @Test
@@ -280,15 +300,15 @@ public class ClipboardSuggestionProcessorUnitTest {
     public void clipboardSuggestion_noContentByDefault() {
         createClipboardSuggestion(OmniboxSuggestionType.CLIPBOARD_URL, GURL.emptyGURL());
         SuggestionSpannable textLine2 = mModel.get(SuggestionViewProperties.TEXT_LINE_2_TEXT);
-        Assert.assertEquals(0, textLine2.length());
+        assertEquals(0, textLine2.length());
 
         createClipboardSuggestion(OmniboxSuggestionType.CLIPBOARD_TEXT, GURL.emptyGURL());
         textLine2 = mModel.get(SuggestionViewProperties.TEXT_LINE_2_TEXT);
-        Assert.assertEquals(0, textLine2.length());
+        assertEquals(0, textLine2.length());
 
         createClipboardSuggestion(OmniboxSuggestionType.CLIPBOARD_IMAGE, GURL.emptyGURL());
         textLine2 = mModel.get(SuggestionViewProperties.TEXT_LINE_2_TEXT);
-        Assert.assertEquals(0, textLine2.length());
+        assertEquals(0, textLine2.length());
     }
 
     @Test
@@ -296,35 +316,35 @@ public class ClipboardSuggestionProcessorUnitTest {
     public void clipboardSuggestion_revealAndConcealButton() {
         createClipboardSuggestion(OmniboxSuggestionType.CLIPBOARD_URL, GURL.emptyGURL());
         SuggestionSpannable textLine2 = mModel.get(SuggestionViewProperties.TEXT_LINE_2_TEXT);
-        Assert.assertEquals(0, textLine2.length());
+        assertEquals(0, textLine2.length());
 
         // Click reveal button
         mProcessor.revealButtonClickHandler(mSuggestion, mModel);
         textLine2 = mModel.get(SuggestionViewProperties.TEXT_LINE_2_TEXT);
-        Assert.assertNotEquals(0, textLine2.length());
+        assertNotEquals(0, textLine2.length());
 
         // Click conceal button
         mProcessor.concealButtonClickHandler(mSuggestion, mModel);
         textLine2 = mModel.get(SuggestionViewProperties.TEXT_LINE_2_TEXT);
-        Assert.assertEquals(0, textLine2.length());
+        assertEquals(0, textLine2.length());
 
         createClipboardSuggestion(OmniboxSuggestionType.CLIPBOARD_TEXT, GURL.emptyGURL());
         textLine2 = mModel.get(SuggestionViewProperties.TEXT_LINE_2_TEXT);
-        Assert.assertEquals(0, textLine2.length());
+        assertEquals(0, textLine2.length());
 
         // Click reveal button
         mProcessor.revealButtonClickHandler(mSuggestion, mModel);
         textLine2 = mModel.get(SuggestionViewProperties.TEXT_LINE_2_TEXT);
-        Assert.assertNotEquals(0, textLine2.length());
+        assertNotEquals(0, textLine2.length());
 
         // Click conceal button
         mProcessor.concealButtonClickHandler(mSuggestion, mModel);
         textLine2 = mModel.get(SuggestionViewProperties.TEXT_LINE_2_TEXT);
-        Assert.assertEquals(0, textLine2.length());
+        assertEquals(0, textLine2.length());
 
         createClipboardSuggestion(OmniboxSuggestionType.CLIPBOARD_IMAGE, GURL.emptyGURL());
         textLine2 = mModel.get(SuggestionViewProperties.TEXT_LINE_2_TEXT);
-        Assert.assertEquals(0, textLine2.length());
+        assertEquals(0, textLine2.length());
         // Image suggestions never have content in the text line 2.
     }
 }

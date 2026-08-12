@@ -4,18 +4,21 @@
 
 #include "chrome/browser/ui/views/permissions/permission_prompt_base_view.h"
 
+#include <algorithm>
 #include <memory>
 
-#include "base/containers/contains.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_occlusion_tracker.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/permission_bubble/permission_bubble_test_util.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/permissions/test/mock_permission_request.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "media/base/media_switches.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -32,9 +35,9 @@ class TestPermissionPromptBaseView : public PermissionPromptBaseView {
  public:
   TestPermissionPromptBaseView(
       views::Widget* parent,
-      Browser* browser,
+      content::WebContents* web_contents,
       base::WeakPtr<permissions::PermissionPrompt::Delegate> delegate)
-      : PermissionPromptBaseView(browser, delegate) {
+      : PermissionPromptBaseView(web_contents, delegate) {
     set_parent_window(parent->GetNativeView());
   }
   TestPermissionPromptBaseView(const TestPermissionPromptBaseView&) = delete;
@@ -80,7 +83,8 @@ IN_PROC_BROWSER_TEST_F(PermissionPromptBaseViewBrowserTest,
 
   // Create the bubble.
   auto prompt_unique = std::make_unique<TestPermissionPromptBaseView>(
-      parent, browser(), delegate.GetWeakPtr());
+      parent, browser()->GetTabStripModel()->GetActiveWebContents(),
+      delegate.GetWeakPtr());
   PermissionPromptBaseView* prompt = prompt_unique.get();
   views::Widget* bubble =
       views::BubbleDialogDelegateView::CreateBubble(std::move(prompt_unique));
@@ -124,14 +128,18 @@ IN_PROC_BROWSER_TEST_F(PermissionPromptBaseViewBrowserTest,
       BrowserView::GetBrowserViewForBrowser(browser())->GetWidget();
 
   // Create a picture-in-picture browser window to request the permission.
-  Browser::CreateParams params(Browser::TYPE_PICTURE_IN_PICTURE, GetProfile(),
-                               true);
-  Browser* pip_browser = Browser::Create(params);
-  pip_browser->window()->Show();
+  BrowserWindowCreateParams params(
+      BrowserWindowInterface::TYPE_PICTURE_IN_PICTURE, GetProfile(),
+      /*from_user_gesture=*/true);
+  Browser* pip_browser =
+      CreateBrowserWindow(std::move(params))->GetBrowserForMigrationOnly();
+  chrome::AddTabAt(pip_browser, GURL(), -1, true);
+  pip_browser->GetWindow()->Show();
 
   // Create the bubble for a picture-in-picture-window.
   auto prompt_unique = std::make_unique<TestPermissionPromptBaseView>(
-      parent, pip_browser, delegate.GetWeakPtr());
+      parent, pip_browser->GetTabStripModel()->GetActiveWebContents(),
+      delegate.GetWeakPtr());
   views::Widget* bubble =
       views::BubbleDialogDelegateView::CreateBubble(std::move(prompt_unique));
   bubble->Show();
@@ -140,8 +148,8 @@ IN_PROC_BROWSER_TEST_F(PermissionPromptBaseViewBrowserTest,
   // always-on-top window that can occlude UI.
   PictureInPictureOcclusionTracker* tracker =
       PictureInPictureWindowManager::GetInstance()->GetOcclusionTracker();
-  EXPECT_TRUE(
-      base::Contains(tracker->GetPictureInPictureWidgetsForTesting(), bubble));
+  EXPECT_TRUE(std::ranges::contains(
+      tracker->GetPictureInPictureWidgetsForTesting(), bubble));
 
   bubble->CloseNow();
 }

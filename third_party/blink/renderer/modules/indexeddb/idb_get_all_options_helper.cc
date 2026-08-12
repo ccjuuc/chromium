@@ -11,7 +11,6 @@
 #include "third_party/blink/renderer/modules/indexeddb/idb_cursor.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 namespace {
@@ -21,11 +20,6 @@ namespace {
 IDBGetAllOptions* TryCreateGetAllOptions(ScriptState* script_state,
                                          v8::Local<v8::Value> range_or_options,
                                          ExceptionState& exception_state) {
-  if (!RuntimeEnabledFeatures::IndexedDbGetAllRecordsEnabled()) {
-    // `getAllRecords()` introduced the `IDBGetAllOptions` dictionary.
-    return nullptr;
-  }
-
   if (range_or_options->IsNullOrUndefined()) {
     return nullptr;
   }

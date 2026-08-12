@@ -6,13 +6,16 @@
 
 #include <d3d11_4.h>
 
+#include "base/check_is_test.h"
 #include "base/logging.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/win/scoped_handle.h"
 
 namespace media {
 
-D3D12Fence::D3D12Fence(ComD3D12Fence fence) : fence_(std::move(fence)) {}
+D3D12Fence::D3D12Fence(ComD3D12Fence fence) : fence_(std::move(fence)) {
+  CHECK(fence_);
+}
 
 // static
 scoped_refptr<D3D12Fence> D3D12Fence::Create(ID3D12Device* device,
@@ -27,6 +30,10 @@ scoped_refptr<D3D12Fence> D3D12Fence::Create(ID3D12Device* device,
   return base::MakeRefCounted<D3D12Fence>(std::move(d3d12_fence));
 }
 
+ID3D12Fence* D3D12Fence::Get() const {
+  return fence_.Get();
+}
+
 uint64_t D3D12Fence::Value() const {
   return fence_value_;
 }
@@ -37,11 +44,13 @@ uint64_t D3D12Fence::GetCompletedValue() const {
 
 D3D11Status::Or<uint64_t> D3D12Fence::Signal(
     ID3D12CommandQueue& command_queue) {
-  HRESULT hr = command_queue.Signal(fence_.Get(), ++fence_value_);
+  uint64_t next_value = fence_value_ + 1;
+  HRESULT hr = command_queue.Signal(fence_.Get(), next_value);
   if (FAILED(hr)) {
     return D3D11Status{D3D11StatusCode::kFenceSignalFailed,
                        "ID3D12CommandQueue failed to signal fence", hr};
   }
+  fence_value_ = next_value;
   return fence_value_;
 }
 
@@ -51,7 +60,7 @@ D3D11Status D3D12Fence::WaitCPU(uint64_t fence_value) const {
   }
   base::win::ScopedHandle fence_event{::CreateEvent(
       nullptr, /*bManualReset=*/TRUE, /*bInitialState=*/FALSE, nullptr)};
-  HRESULT hr = fence_->SetEventOnCompletion(fence_value_, fence_event.get());
+  HRESULT hr = fence_->SetEventOnCompletion(fence_value, fence_event.get());
   if (FAILED(hr)) {
     return D3D11Status{D3D11StatusCode::kWaitForFenceFailed,
                        "Failed to SetEventOnCompletion", hr};

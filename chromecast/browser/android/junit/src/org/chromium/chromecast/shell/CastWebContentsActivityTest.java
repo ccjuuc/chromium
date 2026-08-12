@@ -24,7 +24,6 @@ import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.Application;
 import android.app.PictureInPictureParams;
-import android.app.UiModeManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -60,15 +59,14 @@ import org.robolectric.android.controller.ActivityController;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
-import org.robolectric.annotation.LooperMode;
-import org.robolectric.annotation.LooperMode.Mode;
 import org.robolectric.shadow.api.Shadow;
 import org.robolectric.shadows.ShadowActivity;
 import org.robolectric.shadows.ShadowActivityManager;
+import org.robolectric.shadows.ShadowLooper;
 import org.robolectric.shadows.ShadowPackageManager;
-import org.robolectric.shadows.ShadowUIModeManager;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chromecast.base.Cell;
 import org.chromium.chromecast.base.Observer;
@@ -76,6 +74,7 @@ import org.chromium.chromecast.base.OwnedScope;
 import org.chromium.chromecast.base.Scope;
 import org.chromium.chromecast.base.Unit;
 import org.chromium.chromecast.shell.CastWebContentsActivity.MediaPlaying;
+import org.chromium.content_public.browser.JavaScriptCallback;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsObserver;
 
@@ -86,7 +85,6 @@ import org.chromium.content_public.browser.WebContentsObserver;
  */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
-@LooperMode(Mode.PAUSED)
 public class CastWebContentsActivityTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -143,6 +141,33 @@ public class CastWebContentsActivityTest {
         }
     }
 
+    /**
+     * A custom Resources wrapper that intentionally throws NotFoundException for back_pressed.js.
+     */
+    private static class BrokenResources extends android.content.res.Resources {
+        public BrokenResources(android.content.res.Resources res) {
+            super(res.getAssets(), res.getDisplayMetrics(), res.getConfiguration());
+        }
+
+        @Override
+        public java.io.InputStream openRawResource(int id)
+                throws android.content.res.Resources.NotFoundException {
+            if (id == R.raw.back_pressed) {
+                throw new android.content.res.Resources.NotFoundException(
+                        "Intentional failure for testing");
+            }
+            return super.openRawResource(id);
+        }
+    }
+
+    /** Activity test subclass that provides our BrokenResources. */
+    public static class CastWebContentsActivityWithBrokenResources extends CastWebContentsActivity {
+        @Override
+        public android.content.res.Resources getResources() {
+            return new BrokenResources(super.getResources());
+        }
+    }
+
     private interface ObservableWebContents extends WebContents, WebContentsObserver.Observable {}
 
     private final Cell<MediaPlaying> mMediaPlaying = new Cell<>(new MediaPlaying(false, false));
@@ -151,7 +176,6 @@ public class CastWebContentsActivityTest {
     private int mNextMediaId;
     private Application mApplication;
     private ShadowActivityManager mShadowActivityManager;
-    private ShadowUIModeManager mShadowUIModeManager;
     private ShadowPackageManager mShadowPackageManager;
     private ActivityController<CastWebContentsActivity> mActivityLifecycle;
     private CastWebContentsActivity mActivity;
@@ -176,11 +200,6 @@ public class CastWebContentsActivityTest {
                         (ActivityManager)
                                 RuntimeEnvironment.application.getSystemService(
                                         Context.ACTIVITY_SERVICE));
-        mShadowUIModeManager =
-                Shadows.shadowOf(
-                        (UiModeManager)
-                                RuntimeEnvironment.application.getSystemService(
-                                        Context.UI_MODE_SERVICE));
         mShadowPackageManager =
                 Shadows.shadowOf(RuntimeEnvironment.application.getPackageManager());
         mActivityLifecycle =
@@ -459,11 +478,11 @@ public class CastWebContentsActivityTest {
         assertTrue(mActivity.dispatchTouchEvent(event));
         assertEquals(shadowActivity.popLastTouchEvent(), event);
         mActivity.onUserLeaveHint();
-        mActivity.onPictureInPictureModeChanged(true, null);
+        mActivity.onPictureInPictureModeChanged(true, new Configuration());
         // Touch is disabled while in PiP mode.
         assertFalse(mActivity.dispatchTouchEvent(event));
         assertNull(shadowActivity.popLastTouchEvent());
-        mActivity.onPictureInPictureModeChanged(false, null);
+        mActivity.onPictureInPictureModeChanged(false, new Configuration());
         // Touch is re-enabled after leaving PiP mode.
         assertTrue(mActivity.dispatchTouchEvent(event));
     }
@@ -490,7 +509,7 @@ public class CastWebContentsActivityTest {
         mActivityLifecycle.create().start().resume();
         updateMediaState(true, true);
         mActivity.onUserLeaveHint();
-        mActivity.onPictureInPictureModeChanged(true, null);
+        mActivity.onPictureInPictureModeChanged(true, new Configuration());
         verifyBroadcastedIntent(
                 filterFor(CastWebContentsIntentUtils.ACTION_ACTIVITY_STOPPED),
                 () -> {
@@ -516,7 +535,7 @@ public class CastWebContentsActivityTest {
 
     @Test
     public void testStopWhileAudioIsPlayingOnNonTvDoesNotCloseActivity() {
-        mShadowUIModeManager.setCurrentModeType(Configuration.UI_MODE_TYPE_NORMAL);
+        DeviceInfo.setIsTVForTesting(false);
         mShadowActivityManager.setLockTaskModeState(ActivityManager.LOCK_TASK_MODE_NONE);
         mActivityLifecycle.create().start().resume();
         updateMediaState(true, false);
@@ -531,7 +550,7 @@ public class CastWebContentsActivityTest {
 
     @Test
     public void testStopWhileAudioIsPlayingOnTvClosesActivity() {
-        mShadowUIModeManager.setCurrentModeType(Configuration.UI_MODE_TYPE_TELEVISION);
+        DeviceInfo.setIsTVForTesting(true);
         mShadowActivityManager.setLockTaskModeState(ActivityManager.LOCK_TASK_MODE_NONE);
         mActivityLifecycle.create().start().resume();
         updateMediaState(true, false);
@@ -670,6 +689,7 @@ public class CastWebContentsActivityTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked") // mock(Observer.class) returns raw Observer.
     public void testSurfaceAvailable() {
         Observer<Unit> observer = mock(Observer.class);
         Scope scope = mock(Scope.class);
@@ -747,7 +767,7 @@ public class CastWebContentsActivityTest {
 
     @Test
     public void testKeepsScreenOnWhenAudioIsPlayingOnTv() {
-        mShadowUIModeManager.setCurrentModeType(Configuration.UI_MODE_TYPE_TELEVISION);
+        DeviceInfo.setIsTVForTesting(true);
         mActivityLifecycle =
                 Robolectric.buildActivity(
                         CastWebContentsActivity.class,
@@ -763,7 +783,7 @@ public class CastWebContentsActivityTest {
 
     @Test
     public void testDoesNotKeepScreenOnWhenAudioIsPlayingOnNonTv() {
-        mShadowUIModeManager.setCurrentModeType(Configuration.UI_MODE_TYPE_NORMAL);
+        DeviceInfo.setIsTVForTesting(false);
         mActivityLifecycle =
                 Robolectric.buildActivity(
                         CastWebContentsActivity.class,
@@ -775,6 +795,51 @@ public class CastWebContentsActivityTest {
         updateDockState(false);
         updateMediaState(true, false);
         assertWakeLockFlags(false, false);
+    }
+
+    @Test
+    public void testBroadcastActivityStartByCastCoreOnCreation() {
+        BroadcastReceiver mockReceiver = mock(BroadcastReceiver.class);
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(CastWebContentsIntentUtils.ACTION_ON_ACTIVITY_STARTED_BY_CAST_CORE);
+        LocalBroadcastManager.getInstance(RuntimeEnvironment.application)
+                .registerReceiver(mockReceiver, filter);
+        Intent intent = new Intent(RuntimeEnvironment.application, CastWebContentsActivity.class);
+        intent.putExtra(CastWebContentsIntentUtils.INTENT_EXTRA_FROM_CAST_CORE, true);
+        mActivityLifecycle = Robolectric.buildActivity(CastWebContentsActivity.class, intent);
+        mActivity = mActivityLifecycle.get();
+        mActivityLifecycle.create();
+        Shadows.shadowOf(getMainLooper()).idle();
+        verify(mockReceiver, times(1)).onReceive(any(Context.class), mIntentCaptor.capture());
+        Intent broadcastIntent = mIntentCaptor.getValue();
+        assertEquals(
+                CastWebContentsIntentUtils.ACTION_ON_ACTIVITY_STARTED_BY_CAST_CORE,
+                broadcastIntent.getAction());
+    }
+
+    @Test
+    public void testBroadcastActivityStartByCastCoreOnNewIntentFromCastCoreOnly() {
+        BroadcastReceiver mockReceiver = mock(BroadcastReceiver.class);
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(CastWebContentsIntentUtils.ACTION_ON_ACTIVITY_STARTED_BY_CAST_CORE);
+        LocalBroadcastManager.getInstance(RuntimeEnvironment.application)
+                .registerReceiver(mockReceiver, filter);
+        mActivityLifecycle.create().start().resume();
+
+        Intent defaultIntent = defaultIntentForCastWebContentsActivity(mWebContents);
+        mActivityLifecycle.newIntent(defaultIntent);
+        Shadows.shadowOf(getMainLooper()).idle();
+        verify(mockReceiver, times(0)).onReceive(any(Context.class), any(Intent.class));
+
+        Intent castCoreIntent =
+                new Intent(RuntimeEnvironment.application, CastWebContentsActivity.class);
+        castCoreIntent.putExtra(CastWebContentsIntentUtils.INTENT_EXTRA_FROM_CAST_CORE, true);
+        mActivityLifecycle.newIntent(castCoreIntent);
+        verify(mockReceiver, times(1)).onReceive(any(Context.class), mIntentCaptor.capture());
+        Intent broadcastIntent = mIntentCaptor.getValue();
+        assertEquals(
+                CastWebContentsIntentUtils.ACTION_ON_ACTIVITY_STARTED_BY_CAST_CORE,
+                broadcastIntent.getAction());
     }
 
     @Test
@@ -930,5 +995,103 @@ public class CastWebContentsActivityTest {
                 verify(receiver, times(0)).onReceive(any(Context.class), any(Intent.class));
             }
         }
+    }
+
+    @Test
+    public void testBackPressDelegatesToWebContentsAndPreventsDefault() {
+        mActivityLifecycle.create().start().resume();
+        doAnswer(
+                        invocation -> {
+                            JavaScriptCallback callback = invocation.getArgument(1);
+                            callback.handleJavaScriptResult("true");
+                            return null;
+                        })
+                .when(mWebContents)
+                .evaluateJavaScript(any(), any());
+
+        mActivity.getOnBackPressedDispatcher().onBackPressed();
+
+        Assert.assertFalse(mActivity.isFinishing());
+    }
+
+    @Test
+    public void testBackPressDelegatesToWebContentsAndDoesNotPreventDefault() {
+        mActivityLifecycle.create().start().resume();
+        doAnswer(
+                        invocation -> {
+                            JavaScriptCallback callback = invocation.getArgument(1);
+                            callback.handleJavaScriptResult("false");
+                            return null;
+                        })
+                .when(mWebContents)
+                .evaluateJavaScript(any(), any());
+
+        mActivity.getOnBackPressedDispatcher().onBackPressed();
+
+        Assert.assertTrue(mActivity.isFinishing());
+    }
+
+    @Test
+    public void testBackPressWithoutWebContentsFinishesActivity() {
+        Intent intent =
+                CastWebContentsIntentUtils.requestStartCastActivity(
+                        null, true, false, true, false, "0");
+        ActivityController<CastWebContentsActivity> lifecycle =
+                Robolectric.buildActivity(CastWebContentsActivity.class, intent);
+        CastWebContentsActivity activity = lifecycle.get();
+        activity.testingModeForTesting();
+        lifecycle.create().start().resume();
+
+        activity.getOnBackPressedDispatcher().onBackPressed();
+
+        Assert.assertTrue(activity.isFinishing());
+    }
+
+    @Test
+    public void testBackPressWhenJsFailsToLoadFinishesActivity() {
+        Intent intent =
+                CastWebContentsIntentUtils.requestStartCastActivity(
+                        mWebContents, true, false, true, false, "0");
+        ActivityController<CastWebContentsActivityWithBrokenResources> lifecycle =
+                Robolectric.buildActivity(CastWebContentsActivityWithBrokenResources.class, intent);
+        CastWebContentsActivityWithBrokenResources activity = lifecycle.get();
+        activity.testingModeForTesting();
+        lifecycle.create().start().resume();
+
+        activity.getOnBackPressedDispatcher().onBackPressed();
+
+        Assert.assertTrue(activity.isFinishing());
+    }
+
+    @Test
+    @Config(shadows = {ExtendedShadowActivity.class})
+    public void testPipDelayedExpansionOnNewIntent() {
+        mShadowPackageManager.setSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE, true);
+        mShadowActivityManager.setLockTaskModeState(ActivityManager.LOCK_TASK_MODE_NONE);
+        mActivityLifecycle.create().start().resume();
+        updateMediaState(true, true);
+        mActivity.onUserLeaveHint();
+        mActivity.onPictureInPictureModeChanged(true, new Configuration());
+
+        ExtendedShadowActivity shadowActivity = (ExtendedShadowActivity) Shadow.extract(mActivity);
+
+        Intent newIntent = new Intent(mActivity.getIntent());
+        mActivity.onNewIntent(newIntent);
+
+        // Initially, startActivity shouldn't have been called yet because of the 300ms delay.
+        assertNull(shadowActivity.getNextStartedActivity());
+
+        // Run delayed tasks.
+        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+
+        // Now startActivity should have been called to expand the Activity.
+        Intent startedIntent = shadowActivity.getNextStartedActivity();
+        assertNotNull(startedIntent);
+        assertEquals(
+                CastWebContentsActivity.class.getName(),
+                startedIntent.getComponent().getClassName());
+        assertTrue(
+                startedIntent.getBooleanExtra(
+                        "com.google.android.apps.castshell.extra.IS_DELAYED_EXPANSION", false));
     }
 }

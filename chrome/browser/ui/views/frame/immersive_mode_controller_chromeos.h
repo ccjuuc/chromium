@@ -7,12 +7,11 @@
 
 #include <memory>
 
+#include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
-#include "chrome/browser/ui/exclusive_access/fullscreen_observer.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
+#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "chromeos/ui/frame/immersive/immersive_fullscreen_controller.h"
 #include "chromeos/ui/frame/immersive/immersive_fullscreen_controller_delegate.h"
 #include "ui/aura/window.h"
@@ -22,10 +21,9 @@
 class ImmersiveModeControllerChromeos
     : public ImmersiveModeController,
       public chromeos::ImmersiveFullscreenControllerDelegate,
-      public FullscreenObserver,
       public aura::WindowObserver {
  public:
-  explicit ImmersiveModeControllerChromeos(BrowserWindowInterface* browser);
+  explicit ImmersiveModeControllerChromeos(ui::UnownedUserDataHost& host);
 
   ImmersiveModeControllerChromeos(const ImmersiveModeControllerChromeos&) =
       delete;
@@ -40,7 +38,6 @@ class ImmersiveModeControllerChromeos
   void Init(BrowserView* browser_view) override;
   void SetEnabled(bool enabled) override;
   bool IsEnabled() const override;
-  bool ShouldHideTopViews() const override;
   bool IsRevealed() const override;
   int GetTopContainerVerticalOffset(
       const gfx::Size& top_container_size) const override;
@@ -65,8 +62,9 @@ class ImmersiveModeControllerChromeos
   void SetVisibleFraction(double visible_fraction) override;
   std::vector<gfx::Rect> GetVisibleBoundsInScreen() const override;
 
-  // FullscreenObserver:
-  void OnFullscreenStateChanged() override;
+  // Called by `FullscreenController` when the browser's fullscreen state
+  // changes.
+  void OnFullscreenStateChanged();
 
   // aura::WindowObserver:
   void OnWindowPropertyChanged(aura::Window* window,
@@ -86,8 +84,7 @@ class ImmersiveModeControllerChromeos
   // the top-of-window views are not revealed.
   double visible_fraction_ = 1.0;
 
-  base::ScopedObservation<FullscreenController, FullscreenObserver>
-      fullscreen_observer_{this};
+  base::CallbackListSubscription fullscreen_subscription_;
 
   base::ScopedObservation<aura::Window, aura::WindowObserver>
       window_observation_{this};

@@ -27,6 +27,15 @@
 #include "base/test/task_environment.h"
 #include "base/version.h"
 #include "build/build_config.h"
+
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+
+#include <shlobj.h>
+
+#include "base/base_paths_win.h"
+#endif
+#include "chrome/updater/branded_constants.h"
 #include "chrome/updater/constants.h"
 #include "chrome/updater/tag.h"
 #include "chrome/updater/test/test_scope.h"
@@ -316,6 +325,62 @@ TEST(Util, EnumerateUpdateClientTempDirectories) {
 
   EXPECT_EQ(count, 3);
   EXPECT_TRUE(base::DeletePathRecursively(dir));
+}
+
+TEST(Util, IsValidAppId) {
+  for (const auto& valid_app_id :
+       {"COM.GOOGLE.CHROME", "{8A69F345-C564-463C-AFF1-A69D9E530F96}"}) {
+    EXPECT_TRUE(IsValidAppId(valid_app_id));
+    EXPECT_TRUE(IsValidAppId(base::UTF8ToWide(valid_app_id)));
+  }
+
+  for (const std::string& invalid_app_id : std::vector<std::string>{
+           "",
+           std::string(257, 'a'),
+           "a/b",
+           "a\\b",
+           "..",
+           ".",
+           "../a",
+           "a/../b",
+           "a\\..\\b",
+           "/",
+           "\\",
+           "/a",
+           "\\a",
+           "a\tb",
+           "a\nb",
+           "a\rb",
+           "a\x01"
+           "b",
+           "a\x7f"
+           "b",
+           "a\xc3\xa9"
+           "b",
+       }) {
+    EXPECT_FALSE(IsValidAppId(invalid_app_id));
+    EXPECT_FALSE(IsValidAppId(base::UTF8ToWide(invalid_app_id)));
+  }
+}
+
+TEST(Util, GetUpdaterTempDir) {
+  std::optional<base::FilePath> temp_dir = GetUpdaterTempDir();
+  ASSERT_TRUE(temp_dir);
+
+#if BUILDFLAG(IS_WIN)
+  base::FilePath expected_parent;
+  if (::IsUserAnAdmin()) {
+    ASSERT_TRUE(
+        base::PathService::Get(base::DIR_SYSTEM_TEMP, &expected_parent));
+  } else {
+    ASSERT_TRUE(base::GetTempDir(&expected_parent));
+  }
+  EXPECT_EQ(*temp_dir, expected_parent);
+#else
+  base::FilePath expected_parent;
+  ASSERT_TRUE(base::GetTempDir(&expected_parent));
+  EXPECT_EQ(*temp_dir, expected_parent);
+#endif
 }
 
 }  // namespace updater

@@ -6,6 +6,7 @@
 
 #include "base/barrier_closure.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
@@ -135,7 +136,6 @@ class InfobarUIChangeObserver : public TabStripModelObserver {
     }
   }
   void OnTabChangedAt(tabs::TabInterface* tab,
-                      int index,
                       TabChangeType change_type) override {
     if (observers_.find(tab->GetContents()) == observers_.end()) {
       observers_[tab->GetContents()] =
@@ -258,7 +258,7 @@ class WebRtcDesktopCaptureBrowserTest : public WebRtcTestBase {
         .expect_tabs = true,
         .picker_result = std::move(media_id_callback).Run(),
     };
-    picker_factory_.SetTestFlags(&test_flags, /*tests_count=*/1);
+    picker_factory_.SetTestFlags(base::span_from_ref(test_flags));
 
     std::string stream_id = GetDesktopMediaStream(first_tab);
     EXPECT_NE(stream_id, "");
@@ -287,7 +287,7 @@ class WebRtcDesktopCaptureBrowserTest : public WebRtcTestBase {
     StartDetectingVideo(first_tab, "remote-view");
     StartDetectingVideo(second_tab, "remote-view");
 #if !BUILDFLAG(IS_MAC)
-    // Video is choppy on Mac OS X. http://crbug.com/443542.
+    // Video is choppy on Mac OS X. http://crbug.com/40398907.
     WaitForVideoToPlay(first_tab);
     WaitForVideoToPlay(second_tab);
 #endif
@@ -316,9 +316,12 @@ class WebRtcDesktopCaptureBrowserTest : public WebRtcTestBase {
 // TODO(crbug.com/40915051): Fails on MAC.
 // TODO(crbug.com/40915051): Fails with MSAN. Determine if enabling the test for
 // MSAN is feasible or not.
+// TODO(crbug.com/479691925): Fails on Windows 11.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_TabCaptureProvidesMinFps DISABLED_TabCaptureProvidesMinFps
 #elif defined(MEMORY_SANITIZER)
+#define MAYBE_TabCaptureProvidesMinFps DISABLED_TabCaptureProvidesMinFps
+#elif BUILDFLAG(IS_WIN)
 #define MAYBE_TabCaptureProvidesMinFps DISABLED_TabCaptureProvidesMinFps
 #else
 #define MAYBE_TabCaptureProvidesMinFps TabCaptureProvidesMinFps

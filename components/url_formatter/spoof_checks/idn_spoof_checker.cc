@@ -4,12 +4,12 @@
 
 #include "components/url_formatter/spoof_checks/idn_spoof_checker.h"
 
+#include <algorithm>
 #include <bit>
 #include <cstdint>
 #include <string_view>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/numerics/safe_conversions.h"
@@ -156,7 +156,7 @@ const size_t kNumberOfLabelsToCheck = 4;
 
 // Allow these common words that are whole script confusables. They aren't
 // confusable with any words in Latin scripts.
-const char16_t* kAllowedWholeScriptConfusableWords[] = {
+constexpr std::u16string_view kAllowedWholeScriptConfusableWords[] = {
     u"секс",  u"как",     u"коса",     u"курс",  u"парк",  u"такий",
     u"укроп", u"сахарок", u"покраска", u"театр", u"астро", u"пхукет"};
 
@@ -429,7 +429,7 @@ IDNSpoofCheckerResult IDNSpoofChecker::SafeToDisplayAsUnicode(
       if (IsLabelWholeScriptConfusableForScript(*script, label_string) &&
           !IsWholeScriptConfusableAllowedForTLD(*script, top_level_domain,
                                                 top_level_domain_unicode) &&
-          !base::Contains(kAllowedWholeScriptConfusableWords, label)) {
+          !std::ranges::contains(kAllowedWholeScriptConfusableWords, label)) {
         return IDNSpoofCheckerResult::kWholeScriptConfusable;
       }
     }
@@ -503,9 +503,14 @@ IDNSpoofCheckerResult IDNSpoofChecker::SafeToDisplayAsUnicode(
             R"(^[\p{scx=hira}]+[\u30d8-\u30da][\p{scx=hira}]+$|)"
 
             // Disallow U+30FB (Katakana Middle Dot) and U+30FC (Hiragana-
-            // Katakana Prolonged Sound) used out-of-context.
+            // Katakana Prolonged Sound) used out-of-context. U+30FB is
+            // rejected when adjacent to any character not in Hiragana,
+            // Katakana, or Han, or at the end of a label, to prevent
+            // visual confusion with label separators.
             R"([^\p{scx=kana}\p{scx=hira}]\u30fc|^\u30fc|)"
-            R"([a-z]\u30fb|\u30fb[a-z]|)"
+            R"([^\p{scx=kana}\p{scx=hira}\p{scx=hani}]\u30fb|)"
+            R"(\u30fb[^\p{scx=kana}\p{scx=hira}\p{scx=hani}]|)"
+            R"(\u30fb$|)"
 
             // Disallow these CJK ideographs and Kangxi Radicals if they are
             // next to non-CJK characters. These characters can be used to spoof
@@ -803,7 +808,7 @@ bool IDNSpoofChecker::IsWholeScriptConfusableAllowedForTLD(
   if (script.all_letters->containsSome(tld_string)) {
     return true;
   }
-  return base::Contains(script.allowed_tlds, tld);
+  return std::ranges::contains(script.allowed_tlds, tld);
 }
 
 // static

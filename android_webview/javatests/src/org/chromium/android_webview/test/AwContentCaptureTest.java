@@ -324,10 +324,7 @@ public class AwContentCaptureTest extends AwParameterizedTest {
     }
 
     private void scrollToBottom() {
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    mContainerView.scrollTo(0, mContainerView.getHeight());
-                });
+        runScript("window.scrollTo(0, document.body.scrollHeight);");
     }
 
     private void changeContent(String id, String content) {
@@ -342,10 +339,7 @@ public class AwContentCaptureTest extends AwParameterizedTest {
     }
 
     private void scrollToTop() {
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    mContainerView.scrollTo(0, 0);
-                });
+        runScript("window.scrollTo(0, 0);");
     }
 
     private static void verifyFrame(
@@ -1242,6 +1236,7 @@ public class AwContentCaptureTest extends AwParameterizedTest {
     @Test
     @SmallTest
     @Feature({"AndroidWebView"})
+    @CommandLineFlags.Add({"enable-features=WebViewDownloadFavicons"})
     public void testFavicon() throws Throwable {
         final String response =
                 "<html><head><link rel=icon href=mac.icns sizes=\"128x128 512x512 8192x8192"

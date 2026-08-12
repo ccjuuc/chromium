@@ -47,6 +47,7 @@ from mojom.generate.generator import WriteFile
 
 _BUILTIN_GENERATORS = {
     "c++": "mojom_cpp_generator",
+    "fuzzilli": "mojom_fuzzilli_generator",
     "javascript": "mojom_js_generator",
     "java": "mojom_java_generator",
     "mojolpm": "mojom_mojolpm_generator",
@@ -57,7 +58,6 @@ _BUILTIN_GENERATORS = {
 _BUILTIN_CHECKS = {
     "attributes": "mojom_attributes_check",
     "definitions": "mojom_definitions_check",
-    "direct_receiver": "mojom_interface_direct_receiver_check",
     "features": "mojom_interface_feature_check",
     "restrictions": "mojom_restrictions_check",
 }
@@ -178,15 +178,29 @@ def LoadTypemaps(typemaps, langs):
 
   for filename in typemaps:
     with open(filename) as f:
-      typemaps = json.loads("".join(filter(no_comments, f.readlines())))
-      for language, typemap in typemaps.items():
-        # The _metadata field is additional information about the typemap
-        # configuration for a module and should not be treaded as a language.
-        if language == '_metadata':
-          continue
-        language_map = loaded_typemap.get(language, {})
-        language_map.update(typemap)
-        loaded_typemap[language] = language_map
+      typemaps_content = json.loads("".join(filter(no_comments, f.readlines())))
+      if isinstance(typemaps_content, list):
+        # Support list-based typemaps from GN (used by Rust).
+        language_map = loaded_typemap.get("rust", {})
+        for entry in typemaps_content:
+          traits_file = entry.get('traits_file')
+          for type_mapping in entry.get('types', []):
+            mojom_type = type_mapping.get('mojom')
+            rust_type = type_mapping.get('rust')
+            language_map[mojom_type] = {
+                'typename': rust_type,
+                'traits_file': traits_file
+            }
+        loaded_typemap["rust"] = language_map
+      else:
+        for language, typemap in typemaps_content.items():
+          # The _metadata field is additional information about the typemap
+          # configuration for a module and should not be treaded as a language.
+          if language == '_metadata':
+            continue
+          language_map = loaded_typemap.get(language, {})
+          language_map.update(typemap)
+          loaded_typemap[language] = language_map
 
       # Read the declared modules from the _metadata.
       if '_metadata' in typemaps:
@@ -363,7 +377,7 @@ def _Generate(args, remaining_args):
 
 
 def _Precompile(args, _):
-  generator_modules = LoadGenerators(",".join(_BUILTIN_GENERATORS.keys()))
+  generator_modules = LoadGenerators(args.generators_string)
 
   template_expander.PrecompileTemplates(generator_modules, args.output_dir)
   return 0
@@ -486,6 +500,12 @@ def main():
 
   precompile_parser = subparsers.add_parser("precompile",
       description="Precompile templates for the mojom bindings generator.")
+  precompile_parser.add_argument("-g",
+                                 "--generators",
+                                 dest="generators_string",
+                                 metavar="GENERATORS",
+                                 default=",".join(_BUILTIN_GENERATORS.keys()),
+                                 help="comma-separated list of generators")
   precompile_parser.set_defaults(func=_Precompile)
 
   args, remaining_args = parser.parse_known_args()

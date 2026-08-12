@@ -30,6 +30,7 @@
 #include "components/update_client/op_download.h"
 #include "components/update_client/op_install.h"
 #include "components/update_client/op_puffin.h"
+#include "components/update_client/op_space_check.h"
 #include "components/update_client/op_xz.h"
 #include "components/update_client/op_zucchini.h"
 #include "components/update_client/pipeline_util.h"
@@ -61,11 +62,11 @@ using Operation = base::OnceCallback<base::OnceClosure(
 
 constexpr CategorizedError kUnsupportedOperationError = CategorizedError(
     {.category = ErrorCategory::kUpdateCheck,
-     .code = static_cast<int>(ProtocolError::UNSUPPORTED_OPERATION)});
+     .code = std::to_underlying(ProtocolError::UNSUPPORTED_OPERATION)});
 
 constexpr CategorizedError kInvalidOperationAttributesError = CategorizedError(
     {.category = ErrorCategory::kUpdateCheck,
-     .code = static_cast<int>(ProtocolError::INVALID_OPERATION_ATTRIBUTES)});
+     .code = std::to_underlying(ProtocolError::INVALID_OPERATION_ATTRIBUTES)});
 
 // `Pipeline` manages the flow of operations, passing the output path of
 // each operation to the next one, short-circuiting on errors.
@@ -78,9 +79,7 @@ constexpr CategorizedError kInvalidOperationAttributesError = CategorizedError(
 // completion callback will keep it alive).
 class Pipeline : public base::RefCountedThreadSafe<Pipeline> {
  public:
-  Pipeline(
-      std::queue<Operation> operations,
-      scoped_refptr<Pipeline> fallback);
+  Pipeline(std::queue<Operation> operations, scoped_refptr<Pipeline> fallback);
   Pipeline(const Pipeline&) = delete;
   Pipeline& operator=(const Pipeline&) = delete;
 
@@ -143,7 +142,7 @@ void Pipeline::OpComplete(
     // Pipeline still running, but cancelled.
     std::move(callback_).Run(
         {.category = ErrorCategory::kService,
-         .code = static_cast<int>(ServiceError::CANCELLED)});
+         .code = std::to_underlying(ServiceError::CANCELLED)});
     return;
   }
   // Pipeline still running: start next operation.
@@ -159,7 +158,7 @@ base::OnceClosure RunOperation(
     scoped_refptr<CrxInstaller> installer,
     const std::string& file,
     const std::string& session_id,
-    base::RepeatingCallback<void(base::Value::Dict)> event_adder,
+    base::RepeatingCallback<void(base::DictValue)> event_adder,
     base::RepeatingCallback<void(ComponentState)> state_tracker,
     const base::FilePath& previous_operation_output,
     base::OnceCallback<void(base::expected<base::FilePath, CategorizedError>)>
@@ -215,12 +214,12 @@ Operation SkipIfCached(
 // Creates an operation queue to replace the existing queue that always fails
 // for cases where a pipeline is impossible to process.
 std::queue<Operation> MakeErrorOperations(
-    base::RepeatingCallback<void(base::Value::Dict)> event_adder,
+    base::RepeatingCallback<void(base::DictValue)> event_adder,
     CategorizedError error,
     const int event_type) {
   std::queue<Operation> error_ops;
   error_ops.push(base::BindOnce(
-      [](base::RepeatingCallback<void(base::Value::Dict)> event_adder,
+      [](base::RepeatingCallback<void(base::DictValue)> event_adder,
          CategorizedError error, const int event_type, const base::FilePath&,
          base::OnceCallback<void(
              base::expected<base::FilePath, CategorizedError>)> callback)
@@ -249,7 +248,7 @@ std::queue<Operation> MakeOperations(
     const std::string& install_data_index,
     scoped_refptr<CrxInstaller> installer,
     base::RepeatingCallback<void(ComponentState)> state_tracker,
-    base::RepeatingCallback<void(base::Value::Dict)> event_adder,
+    base::RepeatingCallback<void(base::DictValue)> event_adder,
     CrxDownloader::ProgressCallback download_progress_callback,
     CrxInstaller::ProgressCallback install_progress_callback,
     base::RepeatingCallback<void(const CrxInstaller::Result&)>
@@ -261,6 +260,9 @@ std::queue<Operation> MakeOperations(
              void(base::expected<base::FilePath, UnpackerError>)>)> cache_check,
     const std::string& install_data) {
   std::queue<Operation> ops;
+  ops.push(SkipIfCached(cache_check,
+                        base::BindOnce(&SpaceCheckOperation, pipeline,
+                                       get_available_space, event_adder)));
   for (const ProtocolParser::Operation& operation : pipeline.operations) {
     if (operation.type == "download") {
       // expects: `urls` (list of url objects), `size`, and `out` (hash object)
@@ -272,9 +274,9 @@ std::queue<Operation> MakeOperations(
       }
       ops.push(SkipIfCached(
           cache_check,
-          base::BindOnce(&DownloadOperation, config, id, get_available_space,
-                         is_foreground, operation.urls, operation.size,
-                         operation.sha256_out, event_adder, state_tracker,
+          base::BindOnce(&DownloadOperation, config, id, is_foreground,
+                         operation.urls, operation.size, operation.sha256_out,
+                         event_adder, state_tracker,
                          download_progress_callback)));
     } else if (operation.type == "puff") {
       // expects: `previous` (hash object) and `out` (hash object)
@@ -288,13 +290,13 @@ std::queue<Operation> MakeOperations(
           base::BindOnce(&PuffOperation, crx_cache,
                          config->GetPatcherFactory()->Create(), event_adder,
                          state_tracker, operation.sha256_previous,
-                         operation.sha256_out)));
+                         operation.sha256_out, is_foreground)));
     } else if (operation.type == "xz") {
       // expects no extra fields.
       ops.push(SkipIfCached(
           cache_check,
           base::BindOnce(&XzOperation, config->GetUnzipperFactory()->Create(),
-                         event_adder, state_tracker)));
+                         event_adder, state_tracker, is_foreground)));
     } else if (operation.type == "zucc") {
       // expects: `previous` (hash object) and `out` (hash object)
       if (operation.sha256_previous.empty() || operation.sha256_out.empty()) {
@@ -307,7 +309,7 @@ std::queue<Operation> MakeOperations(
           base::BindOnce(&ZucchiniOperation, crx_cache,
                          config->GetPatcherFactory()->Create(), event_adder,
                          state_tracker, operation.sha256_previous,
-                         operation.sha256_out)));
+                         operation.sha256_out, is_foreground)));
     } else if (operation.type == "crx3") {
       // expects: `in` (hash object)
       // Note: `path` and `arguments` fields are optional.
@@ -324,7 +326,7 @@ std::queue<Operation> MakeOperations(
               ? nullptr
               : std::make_unique<CrxInstaller::InstallParams>(
                     operation.path, operation.arguments, install_data),
-          event_adder, state_tracker, install_progress_callback,
+          is_foreground, event_adder, state_tracker, install_progress_callback,
           install_complete_callback));
     } else if (operation.type == "run") {
       // expects: `path`
@@ -364,7 +366,7 @@ void MakePipeline(
     const std::string& install_data_index,
     scoped_refptr<CrxInstaller> installer,
     base::RepeatingCallback<void(ComponentState)> state_tracker,
-    base::RepeatingCallback<void(base::Value::Dict)> event_adder,
+    base::RepeatingCallback<void(base::DictValue)> event_adder,
     CrxDownloader::ProgressCallback download_progress_callback,
     CrxInstaller::ProgressCallback install_progress_callback,
     base::RepeatingCallback<void(const CrxInstaller::Result&)>
@@ -434,8 +436,8 @@ void MakePipeline(
             crx_format, id, pk_hash, install_data_index, installer,
             state_tracker,
             base::BindRepeating(
-                [](base::RepeatingCallback<void(base::Value::Dict)> event_adder,
-                   const std::string& pipeline_id, base::Value::Dict event) {
+                [](base::RepeatingCallback<void(base::DictValue)> event_adder,
+                   const std::string& pipeline_id, base::DictValue event) {
                   event.Set("pipeline_id", pipeline_id);
                   event_adder.Run(std::move(event));
                 },

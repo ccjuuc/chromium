@@ -29,7 +29,9 @@ enum SelectionMode { "select", "start", "end", "preserve" };
 ] interface HTMLInputElement : HTMLElement {
     [HTMLConstructor] constructor();
     [CEReactions, Reflect] attribute DOMString accept;
+    [RuntimeEnabled=InputTypeColorEnhancements, CEReactions, Reflect] attribute boolean alpha;
     [CEReactions, Reflect] attribute DOMString alt;
+    [RuntimeEnabled=InputTypeColorEnhancements, CEReactions, Reflect, ReflectOnly=("limited-srgb","display-p3"), ReflectMissing="limited-srgb", ReflectInvalid="limited-srgb"] attribute DOMString colorSpace;
     [CEReactions, ImplementedAs=IDLExposedAutofillValue] attribute DOMString autocomplete;
     [CEReactions, Reflect=checked] attribute boolean defaultChecked;
     [ImplementedAs=checkedForBinding] attribute boolean checked;
@@ -64,7 +66,7 @@ enum SelectionMode { "select", "start", "end", "preserve" };
     [CEReactions, Reflect] attribute DOMString step;
     [CEReactions] attribute DOMString type;
     [CEReactions, Reflect=value] attribute DOMString defaultValue;
-    [CEReactions, ImplementedAs=valueForBinding, RaisesException=Setter] attribute [LegacyNullToEmptyString] DOMString value;
+    [LogActivity=GetterOnly, CEReactions, ImplementedAs=valueForBinding, RaisesException=Setter] attribute [LegacyNullToEmptyString] DOMString value;
     [CEReactions, RaisesException=Setter, CallWith=ScriptState] attribute object? valueAsDate;
     [RaisesException=Setter] attribute unrestricted double valueAsNumber;
     // Note: The spec has valueLow and valueHigh for two-valued range controls.
@@ -115,3 +117,4 @@ enum SelectionMode { "select", "start", "end", "preserve" };
 };
 
 HTMLInputElement includes PopoverTargetAttributes;
+HTMLInputElement includes OpaqueRangeCreation;

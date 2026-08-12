@@ -7,9 +7,9 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/affiliations/affiliation_service_factory.h"
 #include "chrome/browser/autofill/valuables_data_manager_factory.h"
-#include "chrome/browser/password_manager/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/password_manager/password_manager_test_util.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
 #include "chrome/browser/ui/hats/mock_hats_service.h"
 #include "chrome/browser/ui/hats/survey_config.h"
@@ -24,6 +24,7 @@
 #include "components/autofill/core/browser/test_utils/valuables_data_test_utils.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
 #include "components/webauthn/core/browser/test_passkey_model.h"
 #include "content/public/test/browser_task_environment.h"
@@ -116,11 +117,11 @@ TEST_F(SavedInfoHandlerTest, HandleGetPasswordCount) {
   form.username_value = u"username";
   form.password_value = u"password";
   form.in_store = PasswordForm::Store::kProfileStore;
-  profile_store()->AddLogin(form);
+  profile_store()->AddLogin(password_manager::FromPasswordForm(form));
   form.username_value = u"admin";
   form.password_value = u"hunter2";
   form.in_store = PasswordForm::Store::kProfileStore;
-  profile_store()->AddLogin(form);
+  profile_store()->AddLogin(password_manager::FromPasswordForm(form));
 
   // Add 1 passkey.
   sync_pb::WebauthnCredentialSpecifics passkey;
@@ -137,7 +138,7 @@ TEST_F(SavedInfoHandlerTest, HandleGetPasswordCount) {
 
   web_ui()->ClearTrackedCalls();
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append("test_callback_id");
   test_api(*handler).HandleGetPasswordCount(args);
 
@@ -147,7 +148,7 @@ TEST_F(SavedInfoHandlerTest, HandleGetPasswordCount) {
   EXPECT_EQ("test_callback_id", data.arg1()->GetString());
   EXPECT_TRUE(data.arg2()->GetBool());
 
-  const base::Value::Dict& dict = data.arg3()->GetDict();
+  const base::DictValue& dict = data.arg3()->GetDict();
   EXPECT_EQ(2, dict.FindInt("passwordCount"));
   EXPECT_EQ(1, dict.FindInt("passkeyCount"));
 }
@@ -167,7 +168,7 @@ TEST_F(SavedInfoHandlerTest, HandleGetLoyaltyCardsCount) {
 
   web_ui()->ClearTrackedCalls();
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append("test_callback_id");
   test_api(*handler).HandleGetLoyaltyCardsCount(args);
 
@@ -181,12 +182,8 @@ TEST_F(SavedInfoHandlerTest, HandleGetLoyaltyCardsCount) {
 }
 
 TEST_F(SavedInfoHandlerTest, RequestDataManagementSurvey) {
-  base::test::ScopedFeatureList features;
-  features.InitWithFeatures(
-      /*enabled_features=*/
-      {autofill::features::kManageYourSavedInfoPerceptionSurvey,
-       autofill::features::kYourSavedInfoSettingsPage},
-      /*disabled_features=*/{});
+  base::test::ScopedFeatureList features(
+      autofill::features::kManageYourSavedInfoPerceptionSurvey);
 
   auto handler = std::make_unique<SavedInfoHandler>(profile());
   test_api(*handler).set_web_ui(web_ui());
@@ -198,7 +195,7 @@ TEST_F(SavedInfoHandlerTest, RequestDataManagementSurvey) {
       LaunchDelayedSurvey(kHatsSurveyTriggerManageYourSavedInfoPerception,
                           10000, _, _));
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append(0);     // DataManagementSurvey::kYourSavedInfo
   args.Append(true);  // fromHomePage
   test_api(*handler).HandleRequestDataManagementSurvey(args);

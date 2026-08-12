@@ -1,7 +1,6 @@
 <?xml version="1.0" ?>
 <!DOCTYPE translationbundle>
 <translationbundle lang="sq">
-<translation id="1028699632127661925">Po dërgohet te <ph name="DEVICE_NAME" />...</translation>
 <translation id="111910763555783249">Cilësimet e njoftimit</translation>
 <translation id="1127811143501539442">{DAYS,plural, =1{1 ditë më parë}other{# ditë më parë}}</translation>
 <translation id="1156623771253174079">{SECONDS,plural, =1{1 minutë më parë}other{# minuta më parë}}</translation>
@@ -12,7 +11,6 @@
 <translation id="1253734725326687145">Objektivi i prekjes u lëviz në krye djathtas. Trokit këtu</translation>
 <translation id="1266864766717917324">Nuk mund të ndahet <ph name="CONTENT_TYPE" /></translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">Provo ta ndash tekstin në copëza më të vogla.</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">Nga e majta në të djathtë</translation>
 <translation id="1383876407941801731">Kërko</translation>
@@ -20,6 +18,7 @@
 <translation id="1432724887402139994">{SECONDS,plural, =1{1 minutë më parë}other{# minuta më parë}}</translation>
 <translation id="1450753235335490080">Nuk mund të ndahet <ph name="CONTENT_TYPE" /></translation>
 <translation id="1523230076022876491">{MONTHS,plural, =1{1 muaj më parë}other{# muaj më parë}}</translation>
+<translation id="1591017414891297549">VERSIONI PARAPRAK</translation>
 <translation id="1591184457164800433">{MINUTES,plural, =1{1 minutë dhe }other{# minuta dhe }}</translation>
 <translation id="1643823602425662293">Njoftimi</translation>
 <translation id="169515659049020177">Shift</translation>
@@ -44,7 +43,6 @@
 <translation id="2148716181193084225">Sot</translation>
 <translation id="2168039046890040389">Faqe lart</translation>
 <translation id="2190355936436201913">(bosh)</translation>
-<translation id="2192232475740621500">Përdor dendësi të ulët</translation>
 <translation id="2267918077332197517">Blloko të gjitha njoftimet nga ky sajt</translation>
 <translation id="2283117145434822734">F6</translation>
 <translation id="2289052229480071835">Trokit dhe prek objektivat në ekran.</translation>
@@ -56,7 +54,6 @@
 <translation id="2388990488038464401">Do ta telefonosh këtë numër nga telefoni yt?</translation>
 <translation id="2435457462613246316">Shfaq fjalëkalimin</translation>
 <translation id="24452542372838207">Zgjero njoftimin</translation>
-<translation id="2445449901874883781">Përdor dendësi të lartë</translation>
 <translation id="2448407890032181691">Objektivi i prekjes u lëviz në fund djathtas. Trokit këtu</translation>
 <translation id="2482878487686419369">Njoftimet</translation>
 <translation id="2497284189126895209">Të gjithë skedarët</translation>
@@ -69,7 +66,6 @@
 <translation id="2586657967955657006">Kujtesa e fragmenteve</translation>
 <translation id="2653844658857826081">E RE</translation>
 <translation id="2666092431469916601">I sipërm</translation>
-<translation id="2701330563083355633">Ndarë nga <ph name="DEVICE_NAME" /></translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{1 vit më parë}other{# vite më parë}}</translation>
 <translation id="2878511608894704031">Fshi të gjitha</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{në 1 ditë}other{në # ditë}}</translation>
@@ -88,7 +84,6 @@
 <translation id="3306688585798492231">Ekrani i integruar</translation>
 <translation id="335581015389089642">Ligjërimi</translation>
 <translation id="3372635229069101468">Kliko te <ph name="BEGIN_BOLD" />Detajet<ph name="END_BOLD" /></translation>
-<translation id="3389286852084373014">Teksti është tepër i madh</translation>
 <translation id="3406306243914553062">Përmbajtje HTML</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{1 ditë e mbetur}other{# ditë të mbetura}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" /> Skedar</translation>
@@ -109,6 +104,7 @@
 <translation id="4031910098617850788">F5</translation>
 <translation id="40579289237549812">{UNREAD_NOTIFICATIONS,plural, =1{1 njoftim i palexuar}other{# njoftime të palexuara}}</translation>
 <translation id="41501027364808384">{COUNT,plural, =1{Aktivizo shtesën e mëposhtme në modalitetin "e fshehtë":}other{Aktivizo shtesat e mëposhtme në modalitetin "e fshehtë":}}</translation>
+<translation id="4230098358142093034">Shtëpi</translation>
 <translation id="4266252015790371705">{MONTHS,plural, =1{1 muaj më parë}other{# muaj më parë}}</translation>
 <translation id="4277033906326892359">Kolona "<ph name="COLUMN_NAME" />" është renditur në rend ngjitës</translation>
 <translation id="4289300219472526559">Fillo të flasësh</translation>
@@ -190,7 +186,6 @@
 <translation id="6965382102122355670">Në rregull</translation>
 <translation id="6974053822202609517">Nga e djathta në të majtë</translation>
 <translation id="7052633198403197513">F1</translation>
-<translation id="7170202025028120564">Cilësimet e ekranit të aplikacionit tënd do të hyjnë në fuqi kur të riniset Linux herën tjetër.</translation>
 <translation id="7222373446505536781">F11</translation>
 <translation id="7238427729722629793">{MINUTES,plural, =1{1 min. e mbetur}other{# min. të mbetura}}</translation>
 <translation id="7252604552361840748">Gjej shtesën më sipër</translation>
@@ -200,6 +195,7 @@
 <translation id="7410957453383678442">{MINUTES,plural, =1{1 minutë e mbetur}other{# minuta të mbetura}}</translation>
 <translation id="7437971918971306061">Kolona "<ph name="COLUMN_NAME" />" nuk është renditur.</translation>
 <translation id="7460907917090416791"><ph name="QUANTITY" /> TB</translation>
+<translation id="7485236722522518129">F4</translation>
 <translation id="7507604095951736240">Emoji</translation>
 <translation id="7620655452534002301">U hoq.</translation>
 <translation id="7658239707568436148">Anulo</translation>
@@ -232,6 +228,7 @@
 <translation id="8677655579646609597"><ph name="QUANTITY" /> KB/s</translation>
 <translation id="8725488761726303204">+<ph name="NUMBER" /> të tjerë</translation>
 <translation id="8730621377337864115">U krye</translation>
+<translation id="8741385002816058621">Kjo është një veçori në versionin paraprak</translation>
 <translation id="8772073294905169192">{HOURS,plural, =1{1 o}other{# o}}</translation>
 <translation id="8798099450830957504">I parazgjedhur</translation>
 <translation id="8841375032071747811">Butoni "Prapa"</translation>
@@ -239,13 +236,12 @@
 <translation id="8876215549894133151">Formati:</translation>
 <translation id="8901569739625249689"><ph name="QUANTITY" /> KB</translation>
 <translation id="8927924178504495502">{HOURS,plural, =1{1 orë më parë}other{# orë më parë}}</translation>
-<translation id="8996630695507351249">Sigurohu që <ph name="TARGET_DEVICE_NAME" /> të jetë lidhur me internetin.</translation>
+<translation id="8996630695507351249">Sigurohu që pajisja (<ph name="TARGET_DEVICE_NAME" />) të jetë e lidhur me internetin.</translation>
 <translation id="9044832324875206639">{SECONDS,plural, =1{1 sek.}other{# sek.}}</translation>
 <translation id="9059834730836941392">Palos njoftimin</translation>
 <translation id="9170848237812810038">&amp;Zhbëj</translation>
 <translation id="9195990613383871904">Nesër</translation>
 <translation id="928628199082367701">Super</translation>
-<translation id="932327136139879170">Faqja kryesore</translation>
 <translation id="944069440740578670">Njoftime të palexuara</translation>
 <translation id="966963601246348639">{SECONDS,plural, =1{1 sekondë më parë}other{# sekonda më parë}}</translation>
 </translationbundle>

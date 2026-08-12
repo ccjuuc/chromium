@@ -69,7 +69,8 @@ void LayoutSVGModelObject::MapAncestorToLocal(
 void LayoutSVGModelObject::QuadsInAncestorInternal(
     Vector<gfx::QuadF>& quads,
     const LayoutBoxModelObject* ancestor,
-    MapCoordinatesFlags mode) const {
+    MapCoordinatesFlags mode,
+    BoxQuadType) const {
   NOT_DESTROYED();
   quads.push_back(
       LocalToAncestorQuad(gfx::QuadF(DecoratedBoundingBox()), ancestor, mode));
@@ -116,7 +117,7 @@ bool LayoutSVGModelObject::MapToVisualRectInAncestorSpaceInternal(
       transform_state.LastPlanarQuad().BoundingBox());
   // Apply other mappings on local SVG coordinates.
   bool retval = SVGLayoutSupport::MapToVisualRectInAncestorSpace(
-      *this, ancestor, gfx::RectF(rect), rect);
+      *this, ancestor, gfx::RectF(rect), rect, visual_rect_flags);
   transform_state.SetQuad(gfx::QuadF(gfx::RectF(rect)));
   return retval;
 }
@@ -148,12 +149,10 @@ void LayoutSVGModelObject::ImageChanged(WrappedImagePtr image,
     if (style_image && image == style_image->Data()) {
       SetShouldDoFullPaintInvalidationWithoutLayoutChange(
           PaintInvalidationReason::kImage);
-      if (style_image->IsMaskSource()) {
-        // Since an invalid <mask> reference does not yield a paint property on
-        // SVG content (see CSSMaskPainter), we need to update paint properties
-        // when such a reference changes.
-        SetNeedsPaintPropertyUpdate();
-      }
+      // Since an invalid <mask> reference does not yield a paint property on
+      // SVG content (see CSSMaskPainter), we need to update paint properties
+      // when such a reference changes.
+      SetNeedsPaintPropertyUpdate();
       break;
     }
   }
@@ -162,17 +161,19 @@ void LayoutSVGModelObject::ImageChanged(WrappedImagePtr image,
 void LayoutSVGModelObject::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutObject::StyleDidChange(diff, old_style, style_change_context);
+  LayoutObject::StyleDidChange(diff, old_style, new_style,
+                               style_change_context);
 
   if (diff.NeedsFullLayout()) {
-    if (diff.TransformChanged())
+    if (diff.transform_changed) {
       SetNeedsTransformUpdate();
+    }
   }
 
-  SetHasTransformRelatedProperty(
-      StyleRef().HasTransformRelatedPropertyForSVG());
+  SetHasTransformRelatedProperty(new_style.HasTransformRelatedPropertyForSVG());
 
   SVGResources::UpdateEffects(*this, diff, old_style);
 
@@ -180,17 +181,15 @@ void LayoutSVGModelObject::StyleDidChange(
     return;
 
   if (!IsSVGHiddenContainer()) {
-    if (diff.BlendModeChanged()) {
+    if (diff.blend_mode_changed) {
       DCHECK(IsBlendingAllowed());
       Parent()->DescendantIsolationRequirementsChanged(
-          StyleRef().HasBlendMode() ? kDescendantIsolationRequired
-                                    : kDescendantIsolationNeedsUpdate);
+          new_style.HasBlendMode() ? kDescendantIsolationRequired
+                                   : kDescendantIsolationNeedsUpdate);
     }
-    if ((StyleRef().HasCurrentTransformRelatedAnimation() &&
+    if ((new_style.HasCurrentTransformRelatedAnimation() &&
          !old_style->HasCurrentTransformRelatedAnimation()) ||
-        (RuntimeEnabledFeatures::
-             SvgAvoidCullingElementsWithTransformOperationsEnabled() &&
-         StyleRef().HasNonIdentityTransformOperation() &&
+        (new_style.HasNonIdentityTransformOperation() &&
          !old_style->HasNonIdentityTransformOperation())) {
       Parent()->SetSVGDescendantMayHaveTransformRelatedOperations();
     }

@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "base/trace_event/memory_dump_provider.h"
 #include "cc/paint/paint_cache.h"
@@ -151,7 +152,9 @@ class RASTER_EXPORT RasterImplementation : public RasterInterface,
                       const gfx::Vector2dF& post_scale,
                       bool requires_clear,
                       const ScrollOffsetMap* raster_inducing_scroll_offsets,
-                      size_t* max_op_size_hint) override;
+                      size_t* max_op_size_hint,
+                      base::RepeatingCallback<void(SkCanvas*, uint32_t)>
+                          custom_raster_callback) override;
   void ReadbackARGBPixelsAsync(
       const gpu::Mailbox& source_mailbox,
       GLenum source_target,
@@ -166,7 +169,7 @@ class RASTER_EXPORT RasterImplementation : public RasterInterface,
   void ReadbackYUVPixelsAsync(
       const gpu::Mailbox& source_mailbox,
       GLenum source_target,
-      const gfx::Size& source_size,
+      const gfx::Rect& source_rect,
       const gfx::Rect& output_rect,
       bool vertically_flip_texture,
       int y_plane_row_stride_bytes,
@@ -175,7 +178,6 @@ class RASTER_EXPORT RasterImplementation : public RasterInterface,
       base::span<uint8_t> u_plane_data,
       int v_plane_row_stride_bytes,
       base::span<uint8_t> v_plane_data,
-      const gfx::Point& paste_location,
       base::OnceCallback<void()> release_mailbox,
       base::OnceCallback<void(bool)> readback_done) override;
   bool ReadbackImagePixels(const gpu::Mailbox& source_mailbox,
@@ -261,9 +263,9 @@ class RASTER_EXPORT RasterImplementation : public RasterInterface,
                              GLenum value,
                              const char* label);
 
-  // Try to map a transfer buffer of |size|.  Will return a pointer to a
-  // buffer of |size_allocated|, which will be equal to or lesser than |size|.
-  void* MapRasterCHROMIUM(uint32_t size, uint32_t* size_allocated);
+  // Try to map a transfer buffer of `size`. Will return a span of up to `size`
+  // bytes. Returns an empty span on failure.
+  base::span<uint8_t> MapRasterCHROMIUM(uint32_t size);
 
   // |raster_written_size| is the size of buffer used by raster commands.
   // |total_written_size| is the total size of the buffer written to, including

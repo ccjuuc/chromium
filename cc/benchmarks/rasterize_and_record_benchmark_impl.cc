@@ -69,7 +69,6 @@ void RunBenchmark(const PictureLayerTiling& tiling,
       std::optional<PlaybackImageProvider::Settings> image_settings;
       image_settings.emplace();
       image_settings->images_to_skip = {};
-      image_settings->image_to_current_frame_index = {};
 
       PlaybackImageProvider image_provider(
           image_decode_cache, TargetColorParams(), std::move(image_settings));
@@ -167,7 +166,7 @@ void RasterizeAndRecordBenchmarkImpl::DidCompleteCommit(
     layer->RunMicroBenchmark(this);
   }
 
-  base::Value::Dict result;
+  base::DictValue result;
   result.Set("rasterize_time_ms",
              rasterize_results_.total_best_time.InMillisecondsF());
   result.Set("pixels_rasterized", rasterize_results_.pixels_rasterized);
@@ -182,7 +181,7 @@ void RasterizeAndRecordBenchmarkImpl::DidCompleteCommit(
   result.Set("total_picture_layers_off_screen",
              rasterize_results_.total_picture_layers_off_screen);
 
-  base::Value::Dict lcd_text_pixels;
+  base::DictValue lcd_text_pixels;
   for (size_t i = 0; i < kLCDTextDisallowedReasonCount; i++) {
     lcd_text_pixels.Set(
         LCDTextDisallowedReasonToString(

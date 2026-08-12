@@ -57,14 +57,16 @@ class SamplingHeapProfilerTest : public ::testing::Test {
   static int GetRunningSessionsCount() {
     SamplingHeapProfiler* p = SamplingHeapProfiler::Get();
     AutoLock lock(p->start_stop_mutex_);
-    return p->running_sessions_;
+    return p->sessions_.size();
   }
 
   static void RunStartStopLoop(SamplingHeapProfiler* profiler) {
     for (int i = 0; i < 100000; ++i) {
-      profiler->Start();
+      auto session = profiler->Start(
+          base::ByteSize(1024), SamplingHeapProfiler::Priority::kBackground);
+      ASSERT_TRUE(session.has_value());
       EXPECT_LE(1, GetRunningSessionsCount());
-      profiler->Stop();
+      profiler->Stop(*session);
     }
   }
 };
@@ -88,6 +90,7 @@ class SamplesCollector : public PoissonAllocationSampler::SamplesObserver {
   void SampleRemoved(void* address) override {
     if (address == sample_address_) {
       sample_removed = true;
+      sample_address_ = nullptr;
     }
   }
 
@@ -96,7 +99,7 @@ class SamplesCollector : public PoissonAllocationSampler::SamplesObserver {
 
  private:
   size_t watch_size_;
-  raw_ptr<void, DanglingUntriaged> sample_address_ = nullptr;
+  raw_ptr<void> sample_address_ = nullptr;
 };
 
 TEST_F(SamplingHeapProfilerTest, SampleObserver) {
@@ -191,16 +194,17 @@ class MyThread2 : public SimpleThread {
 void CheckAllocationPattern(void (*allocate_callback)()) {
   ASSERT_FALSE(ScopedSuppressRandomnessForTesting::IsSuppressed());
   auto* profiler = SamplingHeapProfiler::Get();
-  profiler->SetSamplingInterval(10240);
   base::TimeTicks t0 = base::TimeTicks::Now();
   std::map<size_t, size_t> sums;
   const int iterations = 40;
   for (int i = 0; i < iterations; ++i) {
-    uint32_t id = profiler->Start();
+    auto session = profiler->Start(base::ByteSize(10240),
+                                   SamplingHeapProfiler::Priority::kBackground);
+    ASSERT_TRUE(session.has_value());
     allocate_callback();
     std::vector<SamplingHeapProfiler::Sample> samples =
-        profiler->GetSamples(id);
-    profiler->Stop();
+        profiler->GetSamples(session);
+    profiler->Stop(*session);
     std::map<size_t, size_t> buckets;
     for (auto& sample : samples) {
       buckets[sample.size] += sample.total;
@@ -255,13 +259,9 @@ TEST_F(SamplingHeapProfilerTest, DISABLED_SequentialLargeSmallStats) {
 
 // Platform TLS: alloc+free[ns]: 22.184  alloc[ns]: 8.910  free[ns]: 13.274
 // thread_local: alloc+free[ns]: 18.353  alloc[ns]: 5.021  free[ns]: 13.331
-// TODO(crbug.com/40145097) Disabled on Mac
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_MANUAL_SamplerMicroBenchmark DISABLED_MANUAL_SamplerMicroBenchmark
-#else
-#define MAYBE_MANUAL_SamplerMicroBenchmark MANUAL_SamplerMicroBenchmark
-#endif
-TEST_F(SamplingHeapProfilerTest, MAYBE_MANUAL_SamplerMicroBenchmark) {
+// TODO(crbug.com/486038197) DISABLED_ because this is running on some builders
+// despite being marked MANUAL_.
+TEST_F(SamplingHeapProfilerTest, DISABLED_MANUAL_SamplerMicroBenchmark) {
   // With the sampling interval of 100KB it happens to record ~ every 450th
   // allocation in the browser process. We model this pattern here.
   constexpr size_t sampling_interval = 100000;
@@ -315,14 +315,44 @@ class StartStopThread : public SimpleThread {
 TEST_F(SamplingHeapProfilerTest, StartStop) {
   auto* profiler = SamplingHeapProfiler::Get();
   EXPECT_EQ(0, GetRunningSessionsCount());
-  profiler->Start();
+
+  // Start with 1024 (Background)
+  auto session1 = profiler->Start(base::ByteSize(1024),
+                                  SamplingHeapProfiler::Priority::kBackground);
+  ASSERT_TRUE(session1.has_value());
   EXPECT_EQ(1, GetRunningSessionsCount());
-  profiler->Start();
+  EXPECT_EQ(1024u, base::PoissonAllocationSampler::Get()->SamplingInterval());
+
+  // Start with 512 (Interactive) -> should override background
+  auto session2 = profiler->Start(base::ByteSize(512),
+                                  SamplingHeapProfiler::Priority::kInteractive);
+  ASSERT_TRUE(session2.has_value());
   EXPECT_EQ(2, GetRunningSessionsCount());
-  profiler->Stop();
+  EXPECT_EQ(512u, base::PoissonAllocationSampler::Get()->SamplingInterval());
+
+  // Start with 2048 (Interactive) -> 512 is still min interactive
+  auto session3 = profiler->Start(base::ByteSize(2048),
+                                  SamplingHeapProfiler::Priority::kInteractive);
+  ASSERT_TRUE(session3.has_value());
+  EXPECT_EQ(3, GetRunningSessionsCount());
+  EXPECT_EQ(512u, base::PoissonAllocationSampler::Get()->SamplingInterval());
+
+  // Stop session2 (512 Interactive) -> min interactive becomes 2048
+  profiler->Stop(*session2);
+  EXPECT_EQ(2, GetRunningSessionsCount());
+  EXPECT_EQ(2048u, base::PoissonAllocationSampler::Get()->SamplingInterval());
+
+  // Stop session3 (2048 Interactive) -> no interactive sessions, fallback to
+  // background (1024)
+  profiler->Stop(*session3);
   EXPECT_EQ(1, GetRunningSessionsCount());
-  profiler->Stop();
+  EXPECT_EQ(1024u, base::PoissonAllocationSampler::Get()->SamplingInterval());
+
+  // Stop session1 (1024 Background) -> no sessions, should reset to default
+  profiler->Stop(*session1);
   EXPECT_EQ(0, GetRunningSessionsCount());
+  EXPECT_EQ(PoissonAllocationSampler::kDefaultSamplingIntervalBytes,
+            base::PoissonAllocationSampler::Get()->SamplingInterval());
 }
 
 // TODO(crbug.com/40711998): Test is crashing on Mac.

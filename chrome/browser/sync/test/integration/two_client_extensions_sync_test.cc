@@ -8,6 +8,7 @@
 #include "chrome/browser/sync/test/integration/extensions_helper.h"
 #include "chrome/browser/sync/test/integration/sync_integration_test_util.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "components/sync/base/features.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/extension_registry.h"
@@ -32,18 +33,18 @@ void UploadAllLocalExtensions(Profile* profile) {
   }
 }
 
-// TODO(crbug.com/464239112): Clean up these tests. Many cover initial-merge
-// logic which might be redundant with batch upload. We probably just need one
-// test to cover batch upload.
 class TwoClientExtensionsSyncTest
     : public SyncTest,
       public testing::WithParamInterface<SyncTest::SetupSyncMode> {
  public:
   TwoClientExtensionsSyncTest() : SyncTest(TWO_CLIENT) {
+    std::vector<base::test::FeatureRef> enabled_features;
+    std::vector<base::test::FeatureRef> disabled_features = {
+        features::kExtensionsPinnedByDefault};
     if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
-      scoped_feature_list_.InitAndEnableFeature(
-          syncer::kReplaceSyncPromosWithSignInPromos);
+      enabled_features.push_back(syncer::kReplaceSyncPromosWithSignInPromos);
     }
+    scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
   }
   ~TwoClientExtensionsSyncTest() override = default;
 
@@ -65,41 +66,7 @@ INSTANTIATE_TEST_SUITE_P(,
                          GetSyncTestModes(),
                          testing::PrintToStringParamName());
 
-IN_PROC_BROWSER_TEST_P(TwoClientExtensionsSyncTest,
-                       E2E_ENABLED(StartWithNoExtensions)) {
-  ASSERT_TRUE(ResetSyncForPrimaryAccount());
-  ASSERT_TRUE(SetupSync());
-  ASSERT_TRUE(ExtensionsMatchChecker().Wait());
-}
-
-// Flaky on Mac: http://crbug.com/535996
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_StartWithSameExtensions DISABLED_StartWithSameExtensions
-#else
-#define MAYBE_StartWithSameExtensions StartWithSameExtensions
-#endif
-IN_PROC_BROWSER_TEST_P(TwoClientExtensionsSyncTest,
-                       E2E_ENABLED(MAYBE_StartWithSameExtensions)) {
-  ASSERT_TRUE(ResetSyncForPrimaryAccount());
-  ASSERT_TRUE(SetupClients());
-
-  const int kNumExtensions = 5;
-  for (int i = 0; i < kNumExtensions; ++i) {
-    InstallExtension(GetProfile(0), i);
-    InstallExtension(GetProfile(1), i);
-  }
-
-  ASSERT_TRUE(SetupSync());
-  if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
-    UploadAllLocalExtensions(GetProfile(0));
-    UploadAllLocalExtensions(GetProfile(1));
-  }
-  ASSERT_TRUE(ExtensionsMatchChecker().Wait());
-  EXPECT_EQ(kNumExtensions,
-            static_cast<int>(GetInstalledExtensions(GetProfile(0)).size()));
-}
-
-// Flaky on Mac: http://crbug.com/535996
+// Flaky on Mac: http://crbug.com/41204208
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_StartWithDifferentExtensions DISABLED_StartWithDifferentExtensions
 #else

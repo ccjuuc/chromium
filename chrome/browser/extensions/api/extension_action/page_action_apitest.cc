@@ -179,8 +179,8 @@ IN_PROC_BROWSER_TEST_P(PageActionApiTest, RemovePopup) {
       << "Page action popup should have been removed.";
 }
 
-// Test http://crbug.com/57333: that two page action extensions using the same
-// icon for the page action icon and the extension icon do not crash.
+// Test http://crbug.com/41231177: that two page action extensions using the
+// same icon for the page action icon and the extension icon do not crash.
 IN_PROC_BROWSER_TEST_P(PageActionApiTest, TestCrash57333) {
   // Load extension A.
   ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII("page_action")
@@ -214,7 +214,7 @@ IN_PROC_BROWSER_TEST_P(PageActionApiTest, TestTriggerPageAction) {
   // Page action icon is displayed when a tab is created.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL("/simple.html")));
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   browser()->tab_strip_model()->ActivateTabAt(
       0, TabStripUserGestureDetails(
              TabStripUserGestureDetails::GestureType::kOther));

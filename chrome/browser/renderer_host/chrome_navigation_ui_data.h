@@ -10,17 +10,14 @@
 #include <string>
 
 #include "build/build_config.h"
+#include "components/actor/core/task_id.h"
 #include "components/offline_pages/buildflags/buildflags.h"
 #include "components/offline_pages/core/request_header/offline_page_navigation_ui_data.h"
 #include "content/public/browser/navigation_ui_data.h"
 #include "extensions/buildflags/buildflags.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/browser/extension_navigation_ui_data.h"
-#endif
-
-#if !BUILDFLAG(IS_ANDROID)
-#include "chrome/common/actor/task_id.h"  // nogncheck
 #endif
 
 namespace content {
@@ -58,7 +55,7 @@ class ChromeNavigationUIData : public content::NavigationUIData {
   // reflected in the clone.  All owned data members are deep copied.
   std::unique_ptr<content::NavigationUIData> Clone() override;
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   void SetExtensionNavigationUIData(
       std::unique_ptr<extensions::ExtensionNavigationUIData> extension_data);
 
@@ -86,9 +83,16 @@ class ChromeNavigationUIData : public content::NavigationUIData {
   std::optional<int64_t> bookmark_id() { return bookmark_id_; }
   void set_bookmark_id(std::optional<int64_t> id) { bookmark_id_ = id; }
 
-#if !BUILDFLAG(IS_ANDROID)
-  actor::TaskId actor_task_id() { return actor_task_id_; }
+#if BUILDFLAG(IS_ANDROID)
+  // The token identifying the TWA launch associated with this navigation,
+  // used to match JNI launches with C++ navigations.
+  std::optional<int64_t> twa_launch_token() const { return twa_launch_token_; }
+  void set_twa_launch_token(std::optional<int64_t> token) {
+    twa_launch_token_ = token;
+  }
 #endif
+
+  actor::TaskId actor_task_id() { return actor_task_id_; }
 
   bool navigation_initiated_from_sync() {
     return navigation_initiated_from_sync_;
@@ -98,7 +102,7 @@ class ChromeNavigationUIData : public content::NavigationUIData {
   }
 
  private:
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // Manages the lifetime of optional ExtensionNavigationUIData information.
   std::unique_ptr<extensions::ExtensionNavigationUIData> extension_data_;
 #endif
@@ -126,7 +130,13 @@ class ChromeNavigationUIData : public content::NavigationUIData {
   bool force_no_https_upgrade_ = false;
 
   // Id of the bookmark which started this navigation.
-  std::optional<int64_t> bookmark_id_ = std::nullopt;
+  std::optional<int64_t> bookmark_id_;
+
+#if BUILDFLAG(IS_ANDROID)
+  // Unique token generated in Java to identify a TWA launch associated with
+  // this navigation.
+  std::optional<int64_t> twa_launch_token_;
+#endif
 
   // True if the navigation was initiated in response to a sync message. This is
   // used in tab group sync to identify the sync initiated navigations and
@@ -135,11 +145,9 @@ class ChromeNavigationUIData : public content::NavigationUIData {
   // navigation.
   bool navigation_initiated_from_sync_ = false;
 
-#if !BUILDFLAG(IS_ANDROID)
   // Id of the actor task active during this navigation. Set only if actor was
   // acting on the tab when the navigation started.
   actor::TaskId actor_task_id_;
-#endif
 };
 
 #endif  // CHROME_BROWSER_RENDERER_HOST_CHROME_NAVIGATION_UI_DATA_H_

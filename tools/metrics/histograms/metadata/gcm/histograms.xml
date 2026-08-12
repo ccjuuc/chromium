@@ -42,7 +42,7 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="GCM.ClientStartDelay" units="ms" expires_after="2026-04-19">
+<histogram name="GCM.ClientStartDelay" units="ms" expires_after="2027-04-19">
   <owner>rushans@google.com</owner>
   <owner>peter@chromium.org</owner>
   <summary>
@@ -52,7 +52,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="GCM.ConnectionHandlerNetCode" enum="NetErrorCodes"
-    expires_after="2026-03-23">
+    expires_after="2027-03-23">
   <owner>rushans@google.com</owner>
   <owner>peter@chromium.org</owner>
   <summary>
@@ -73,15 +73,6 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="GCM.Crypto.RemoveKeySuccessRate" enum="BooleanSuccess"
-    expires_after="M94">
-  <owner>peter@chromium.org</owner>
-  <owner>zea@chromium.org</owner>
-  <summary>
-    Success rate of removing keying material from the GCM key store.
-  </summary>
-</histogram>
-
 <histogram name="GCM.Database.Open" enum="LevelDBStatus" expires_after="never">
 <!-- expires-never: core storage metric; consumed in separate dashboard (go/chrome-storage-dashboard) -->
 
@@ -92,7 +83,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="GCM.DelayedTaskControlledReadyTime" units="ms"
-    expires_after="2026-04-05">
+    expires_after="2027-04-05">
   <owner>rushans@google.com</owner>
   <owner>peter@chromium.org</owner>
   <summary>
@@ -102,7 +93,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="GCM.DeliveredToAppHandler{AppHandler}" enum="BooleanDelivered"
-    expires_after="2026-05-24">
+    expires_after="2026-11-29">
   <owner>peter@chromium.org</owner>
   <owner>rushans@google.com</owner>
   <summary>
@@ -119,7 +110,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="GCM.MCSClientConnectionNetworkCode" enum="NetErrorCodes"
-    expires_after="2026-03-23">
+    expires_after="2027-03-23">
   <owner>rushans@google.com</owner>
   <owner>peter@chromium.org</owner>
   <summary>
@@ -168,7 +159,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="GCM.RegistrationRequestStatus"
-    enum="GCMRegistrationRequestStatus" expires_after="2026-06-07">
+    enum="GCMRegistrationRequestStatus" expires_after="2026-12-16">
   <owner>peter@chromium.org</owner>
   <summary>
     Status code of the outcome of a GCM registration request. The Unknown error

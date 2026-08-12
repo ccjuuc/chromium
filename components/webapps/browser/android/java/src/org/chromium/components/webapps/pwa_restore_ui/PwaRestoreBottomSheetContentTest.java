@@ -9,28 +9,23 @@ import android.app.Activity;
 import androidx.test.filters.MediumTest;
 
 import org.junit.Assert;
-import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.LooperMode;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.chrome.R;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
+import org.chromium.components.webapps.R;
 
 /** Unit tests for {@link PwaRestoreBottomSheetContent}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@LooperMode(LooperMode.Mode.PAUSED)
 public final class PwaRestoreBottomSheetContentTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     private Activity mActivity;
-
-    @Before
-    public void setUp() {
-        MockitoAnnotations.initMocks(this);
-    }
 
     @Test
     @MediumTest
@@ -48,7 +43,9 @@ public final class PwaRestoreBottomSheetContentTest {
                                 .defaultAnswer(Mockito.RETURNS_MOCKS));
         PwaRestoreBottomSheetContent pwaRestoreBottomSheetContent =
                 new PwaRestoreBottomSheetContent(
-                        (PwaRestoreBottomSheetView) mockedView, /* onOsBackButtonClicked= */ null);
+                        (PwaRestoreBottomSheetView) mockedView,
+                        /* onOsBackButtonClicked= */ () -> {},
+                        /* onDestroy= */ () -> {});
 
         Assert.assertTrue(pwaRestoreBottomSheetContent.getContentView() != null);
         Assert.assertTrue(pwaRestoreBottomSheetContent.getToolbarView() == null);

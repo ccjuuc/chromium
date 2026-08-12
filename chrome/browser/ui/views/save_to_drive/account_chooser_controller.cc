@@ -10,8 +10,10 @@
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/save_to_drive/account_chooser_util.h"
 #include "chrome/browser/ui/views/save_to_drive/account_chooser_view.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents_delegate.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/display/screen.h"
 
 namespace save_to_drive {
@@ -46,8 +48,8 @@ gfx::Rect ComputePopupWindowBounds(content::WebContents* source_window) {
 
 // Returns true if the account has full name, email, and account image.
 bool HasCriticalAccountInfo(const AccountInfo& account) {
-  return !account.full_name.empty() && !account.email.empty() &&
-         !account.account_image.IsEmpty();
+  return account.GetFullName().has_value() && !account.GetEmail().empty() &&
+         account.GetAvatarImage().has_value();
 }
 }  // namespace
 
@@ -88,9 +90,11 @@ class AccountChooserController::AddAccountPopupObserver
 
 AccountChooserController::AccountChooserController(
     content::WebContents* web_contents,
-    signin::IdentityManager* identity_manager)
+    signin::IdentityManager* identity_manager,
+    const std::u16string& upload_title)
     : tab_(tabs::TabInterface::MaybeGetFromContents(web_contents)),
       identity_manager_(identity_manager),
+      upload_title_(upload_title),
       add_account_popup_observer_(
           std::make_unique<AddAccountPopupObserver>(this)) {
   CHECK(identity_manager_);
@@ -168,7 +172,8 @@ void AccountChooserController::ShowAccountChooserDialog(
   }
   std::unique_ptr<AccountChooserView> account_chooser_view =
       std::make_unique<AccountChooserView>(this, profile_info.accounts,
-                                           profile_info.primary_account_id);
+                                           profile_info.primary_account_id,
+                                           upload_title_);
   account_chooser_view_ = account_chooser_view.get();
 
   account_chooser_dialog_delegate_ =
@@ -181,6 +186,15 @@ void AccountChooserController::ShowAccountChooserDialog(
   account_chooser_widget_->MakeCloseSynchronous(
       base::BindOnce(&AccountChooserController::OnWidgetCancelledFlow,
                      base::Unretained(this)));
+
+  // By default, the dialog may not have its initially focused view
+  // actually focused on some platforms (see crbug.com/490413832).
+  // Explicitly call RequestFocus() to ensure this happens.
+  views::View* focused_view =
+      account_chooser_dialog_delegate_.get()->GetInitiallyFocusedView();
+  if (focused_view) {
+    focused_view->RequestFocus();
+  }
 }
 
 void AccountChooserController::ShowAddAccountDialog() {
@@ -233,7 +247,7 @@ AccountChooserController::GetProfileInfo() {
   // Remove accounts that are not fully populated; they cannot be shown.
   std::erase_if(accounts, std::not_fn(&HasCriticalAccountInfo));
 
-  std::optional<CoreAccountId> primary_account_id = std::nullopt;
+  std::optional<CoreAccountId> primary_account_id;
   if (identity_manager_->HasPrimaryAccount(signin::ConsentLevel::kSignin)) {
     primary_account_id =
         identity_manager_->GetPrimaryAccountId(signin::ConsentLevel::kSignin);
@@ -250,7 +264,7 @@ AccountChooserController::GetProfileInfo() {
     // The primary account does not have a valid refresh token.  Remove primary
     // account id from list of accounts with valid refresh tokens, if it exists.
     std::erase_if(accounts, [&primary_account_id](const AccountInfo& account) {
-      return account.account_id == *primary_account_id;
+      return account.GetAccountId() == *primary_account_id;
     });
   }
 
@@ -281,9 +295,13 @@ AccountChooserController::CreateDialogDelegate(
       DISTANCE_HORIZONTAL_SEPARATOR_PADDING_PAGE_INFO_VIEW);
   dialog_delegate->set_margins(gfx::Insets::TLBR(dialog_margin, dialog_margin,
                                                  dialog_margin, dialog_margin));
+  dialog_delegate->SetTitle(l10n_util::GetStringUTF16(
+      IDS_ACCOUNT_CHOOSER_HEADER_ACCESSIBILITY_LABEL));
   dialog_delegate->SetShowTitle(false);
   dialog_delegate->SetShowCloseButton(false);
   dialog_delegate->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
+  dialog_delegate->SetInitiallyFocusedView(
+      account_chooser_view->GetInitiallyFocusedView());
   dialog_delegate->SetContentsView(std::move(account_chooser_view));
   return dialog_delegate;
 }

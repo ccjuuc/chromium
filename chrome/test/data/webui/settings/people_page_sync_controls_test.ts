@@ -17,15 +17,13 @@ import {eventToPromise, isVisible} from 'chrome://webui-test/test_util.js';
 import {getSyncAllPrefs, getSyncAllPrefsManaged} from './sync_test_util.js';
 import {TestSyncBrowserProxy} from './test_sync_browser_proxy.js';
 
-// <if expr="not is_chromeos">
 import {isChildVisible} from 'chrome://webui-test/test_util.js';
-import {PageStatus, routes, UserSelectableType, SettingsPluralStringProxyImpl} from 'chrome://settings/settings.js';
+import {PageStatus, routes, UserSelectableType, PluralStringProxyImpl} from 'chrome://settings/settings.js';
 import {waitAfterNextRender, flushTasks} from 'chrome://webui-test/polymer_test_util.js';
 import {BatchUploadPromoProxyImpl} from 'chrome://settings/lazy_load.js';
 import {TestPluralStringProxy} from 'chrome://webui-test/test_plural_string_proxy.js';
 
 import {TestBatchUploadPromoProxy} from './test_batch_upload_promo_browser_proxy.js';
-// </if>
 
 // clang-format on
 
@@ -176,6 +174,17 @@ suite('SyncControlsTest', function() {
     assertFalse(syncControls.hidden);
   });
 
+  test('BookmarkLimitError', function() {
+    syncControls.syncStatus = {
+      disabled: false,
+      hasError: true,
+      signedInState: SignedInState.SYNCING,
+      statusAction: StatusAction.SHOW_BOOKMARKS_LIMIT_HELP_ARTICLE,
+    };
+    // Controls are available when there is a bookmark limit error.
+    assertFalse(syncControls.hidden);
+  });
+
   // Regression test for crbug.com/467318495.
   test('SyncNotConfirmed', function() {
     syncControls.syncStatus = {
@@ -298,7 +307,6 @@ suite('SyncControlsSubpageTest', function() {
     assertEquals(router.getRoutes().SYNC.path, router.getCurrentRoute().path);
   });
 
-  // <if expr="not is_chromeos">
   test(
       'NavigateToAccountSettingsWhenReplacingWithSigninPromoAndNotSyncing',
       function() {
@@ -317,10 +325,8 @@ suite('SyncControlsSubpageTest', function() {
 
         assertEquals(routes.ACCOUNT, router.getCurrentRoute());
       });
-  // </if>
 });
 
-// <if expr="not is_chromeos">
 suite('SyncControlsAccountSettingsTest', function() {
   let syncControls: SettingsSyncControlsElement;
   let browserProxy: TestSyncBrowserProxy;
@@ -335,10 +341,12 @@ suite('SyncControlsAccountSettingsTest', function() {
     BatchUploadPromoProxyImpl.setInstance(batchUploadPromoProxy);
 
     pluralStringProxy = new TestPluralStringProxy();
-    SettingsPluralStringProxyImpl.setInstance(pluralStringProxy);
+    PluralStringProxyImpl.setInstance(pluralStringProxy);
 
-    loadTimeData.overrideValues(
-        {replaceSyncPromosWithSignInPromos: true, unoPhase2FollowUp: true});
+    loadTimeData.overrideValues({replaceSyncPromosWithSignInPromos: true});
+    // <if expr="not is_chromeos">
+    loadTimeData.overrideValues({unoPhase2FollowUp: true});
+    // </if>
     resetRouterForTesting();
 
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
@@ -393,8 +401,16 @@ suite('SyncControlsAccountSettingsTest', function() {
     assertTrue(policyIndicators.length > 0);
 
     // We expect the indicators of the toggles for history, tabs, and saved tab
-    // groups to be always hidden since they are merged into one toggle.
+    // groups to be always hidden since they are merged into one toggle. On
+    // ChromeOS, the Cookies Sync indicator (which is only compiled on ChromeOS)
+    // is also hidden by default in this test setup since cookies sync is
+    // disabled, resulting in 4 hidden indicators instead of 3.
+    // <if expr="is_chromeos">
+    const hiddenIndicators = shown ? 4 : policyIndicators.length;
+    // </if>
+    // <if expr="not is_chromeos">
     const hiddenIndicators = shown ? 3 : policyIndicators.length;
+    // </if>
     let countHiddenIndicators = 0;
     for (const indicator of policyIndicators) {
       if (!isVisible(indicator)) {
@@ -441,13 +457,42 @@ suite('SyncControlsAccountSettingsTest', function() {
     assertTrue(syncControls.hidden);
   });
 
+  test('SignedInBookmarkLimitError', function() {
+    // Controls are available by default.
+    assertFalse(syncControls.hidden);
+
+    syncControls.syncStatus = {
+      disabled: false,
+      hasError: true,
+      signedInState: SignedInState.SIGNED_IN,
+      statusAction: StatusAction.SHOW_BOOKMARKS_LIMIT_HELP_ARTICLE,
+    };
+    // Controls are not hidden when signed in and there is a bookmark limit
+    // error.
+    assertFalse(syncControls.hidden);
+  });
+
+  test('SignedInNeedsUpdate', function() {
+    // Controls are available by default.
+    assertFalse(syncControls.hidden);
+
+    syncControls.syncStatus = {
+      disabled: false,
+      hasError: true,
+      signedInState: SignedInState.SIGNED_IN,
+      statusAction: StatusAction.UPGRADE_CLIENT,
+    };
+    // Controls are not hidden when the user needs to update Chrome.
+    assertFalse(syncControls.hidden);
+  });
+
   test('SignedInPassphraseError', function() {
     // Controls are available by default.
     assertFalse(syncControls.hidden);
 
     syncControls.syncStatus = {
       disabled: false,
-      hasError: false,
+      hasError: true,
       signedInState: SignedInState.SIGNED_IN,
       statusAction: StatusAction.ENTER_PASSPHRASE,
     };
@@ -799,7 +844,6 @@ suite('SyncControlsAccountSettingsTest', function() {
             'onBatchUploadPromoClicked'));
   });
 });
-// </if>
 
 // Test to check that toggles are disabled when sync types are managed by
 // policy.

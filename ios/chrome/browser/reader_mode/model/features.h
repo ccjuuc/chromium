@@ -8,58 +8,21 @@
 #import "base/feature_list.h"
 #import "base/time/time.h"
 
-// Feature to enable Reader Mode UI and entry points.
-BASE_DECLARE_FEATURE(kEnableReaderMode);
+// Feature to enable Reader Mode omnibox entry point in the US country code.
+BASE_DECLARE_FEATURE(kEnableReaderModeOmniboxEntryPointInUS);
 
-// Feature to enable Reader Mode UI in the US country code.
-BASE_DECLARE_FEATURE(kEnableReaderModeInUS);
+// Feature to enable disabling links in Reading Mode from Content Settings.
+BASE_DECLARE_FEATURE(kEnableContentSettingsOptionForLinks);
 
-// Feature to enable Reader Mode omnibox entry point.
-BASE_DECLARE_FEATURE(kEnableReaderModeOmniboxEntryPoint);
-
-// Feature to enable Reader Mode translation.
-BASE_DECLARE_FEATURE(kEnableReaderModeTranslation);
-
-// Feature to enable Reader Mode translation with access to the translation
-// settings from the infobar framework.
-BASE_DECLARE_FEATURE(kEnableReaderModeTranslationWithInfobar);
-
-// Feature to enable Readability heuristic for page triggering eligibility.
-BASE_DECLARE_FEATURE(kEnableReadabilityHeuristic);
-
-// Feature to enable optimization guide eligibility check.
-BASE_DECLARE_FEATURE(kEnableReaderModeOptimizationGuideEligibility);
-
-// Feature to enable Reader Mode badge support in the omnibox.
-BASE_DECLARE_FEATURE(kEnableReaderModeBadgeSupport);
-
-// Name to configure the duration string for heuristic page load delay. See
-// `base::TimeDeltaFromString` for valid duration string configurations.
-extern const char kReaderModeHeuristicPageLoadDelayDurationStringName[];
-
-// Name to configure the duration string for distillation timeout. See
-// `base::TimeDeltaFromString` for valid duration string configurations.
-extern const char kReaderModeDistillationTimeoutDurationStringName[];
-
-// Returns the timeout for distilling Reader Mode.
-const base::TimeDelta ReaderModeDistillationTimeout();
-
-// Returns the delay time before triggering Reader Mode heuristic on page load.
-const base::TimeDelta ReaderModeHeuristicPageLoadDelay();
-
-// Returns whether the Reader Mode feature is available.
-bool IsReaderModeAvailable();
+// Feature to ignore the badge threshold.
+BASE_DECLARE_FEATURE(kReaderModeIgnoreBadgeThreshold);
 
 // Returns whether the omnibox entrypoint is enabled.
 bool IsReaderModeOmniboxEntryPointEnabled();
+// Returns whether option to disable links in Content Settings is enabled.
+bool IsReaderModeContentSettingsForLinkEnabled();
 
-// Returns whether translation is enabled while in Reading Mode.
-bool IsReaderModeTranslationAvailable();
-
-// Returns whether optimization guide eligibility check is enabled.
-bool IsReaderModeOptimizationGuideEligibilityAvailable();
-
-// Returns whether the Reader Mode badge support is enabled.
-bool IsReaderModeBadgeSupportEnabled();
+// Returns whether the badge threshold should be ignored.
+bool ShouldIgnoreReaderModeBadgeThreshold();
 
 #endif  // IOS_CHROME_BROWSER_READER_MODE_MODEL_FEATURES_H_

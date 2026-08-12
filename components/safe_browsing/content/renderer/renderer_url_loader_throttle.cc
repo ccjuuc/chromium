@@ -56,9 +56,11 @@ RendererURLLoaderThrottle::RendererURLLoaderThrottle(
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 RendererURLLoaderThrottle::~RendererURLLoaderThrottle() {
-  if (deferred_)
+  if (deferred_) {
     TRACE_EVENT_END("safe_browsing",
-                    /* Deferred */ perfetto::Track::FromPointer(this));
+                    /* Deferred */ perfetto::NamedTrack::FromPointer(
+                        "safe_browsing::RendererURLLoaderThrottle", this));
+  }
 }
 
 void RendererURLLoaderThrottle::DetachFromCurrentSequence() {
@@ -105,9 +107,7 @@ void RendererURLLoaderThrottle::WillRedirectRequest(
     net::RedirectInfo* redirect_info,
     const network::mojom::URLResponseHead& /* response_head */,
     bool* /* defer */,
-    std::vector<std::string>* /* to_be_removed_headers */,
-    net::HttpRequestHeaders* /* modified_headers */,
-    net::HttpRequestHeaders* /* modified_cors_exempt_headers */) {
+    network::HttpRequestHeadersUpdateParams* headers_update_params) {
   // If |blocked_| is true, the resource load has been canceled and there
   // shouldn't be such a notification.
   DCHECK(!blocked_);
@@ -160,8 +160,9 @@ void RendererURLLoaderThrottle::WillProcessResponse(
   deferred_ = true;
   *defer = true;
   TRACE_EVENT_BEGIN("safe_browsing", "Deferred",
-                    perfetto::Track::FromPointer(this), "original_url",
-                    original_url_.spec());
+                    perfetto::NamedTrack::FromPointer(
+                        "safe_browsing::RendererURLLoaderThrottle", this),
+                    "original_url", original_url_.spec());
 }
 
 const char* RendererURLLoaderThrottle::NameForLoggingWillProcessResponse() {
@@ -184,7 +185,8 @@ void RendererURLLoaderThrottle::OnCheckUrlResult(
     if (pending_checks_ == 0 && deferred_) {
       deferred_ = false;
       TRACE_EVENT_END("safe_browsing",
-                      /* Deferred */ perfetto::Track::FromPointer(this));
+                      /* Deferred */ perfetto::NamedTrack::FromPointer(
+                          "safe_browsing::RendererURLLoaderThrottle", this));
       delegate_->Resume();
     }
   } else {
@@ -211,7 +213,8 @@ void RendererURLLoaderThrottle::OnMojoDisconnect() {
   if (deferred_) {
     deferred_ = false;
     TRACE_EVENT_END("safe_browsing",
-                    /* Deferred */ perfetto::Track::FromPointer(this));
+                    /* Deferred */ perfetto::NamedTrack::FromPointer(
+                        "safe_browsing::RendererURLLoaderThrottle", this));
     delegate_->Resume();
   }
 }

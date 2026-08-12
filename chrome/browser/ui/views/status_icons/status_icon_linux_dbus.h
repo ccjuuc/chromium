@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_STATUS_ICONS_STATUS_ICON_LINUX_DBUS_H_
 #define CHROME_BROWSER_UI_VIEWS_STATUS_ICONS_STATUS_ICON_LINUX_DBUS_H_
 
+#include <map>
 #include <string>
 
 #include "base/files/file_path.h"
@@ -16,6 +17,7 @@
 #include "chrome/browser/ui/views/status_icons/concat_menu_model.h"
 #include "components/dbus/utils/call_method.h"
 #include "components/dbus/utils/export_method.h"
+#include "components/dbus/utils/variant.h"
 #include "dbus/bus.h"
 #include "dbus/exported_object.h"
 #include "dbus/message.h"
@@ -29,7 +31,6 @@ class ImageSkia;
 }  // namespace gfx
 
 class DbusMenu;
-class DbusProperties;
 
 // A status icon following the StatusNotifierItem specification.
 // https://www.freedesktop.org/wiki/Specifications/StatusNotifierItem/StatusNotifierItem/
@@ -52,8 +53,14 @@ class StatusIconLinuxDbus : public ui::StatusIconLinux,
   // ui::SimpleMenuModel::Delegate:
   void ExecuteCommand(int command_id, int event_flags) override;
 
+  static void ExportMultiplexerMethodsForTesting(dbus::Bus* bus);
+  static void UnexportMultiplexerMethodsForTesting(dbus::Bus* bus);
+
  private:
   friend class base::RefCounted<StatusIconLinuxDbus>;
+
+  class Multiplexer;
+  friend class Multiplexer;
 
   ~StatusIconLinuxDbus() override;
 
@@ -68,12 +75,8 @@ class StatusIconLinuxDbus : public ui::StatusIconLinux,
   // registered.
   void OnHostRegisteredResponse(dbus_utils::CallMethodResultSig<"v"> response);
 
-  // Step 3: export methods for the StatusNotifierItem and the properties
-  // interface.
-  void OnExported(const std::string& interface_name,
-                  const std::string& method_name,
-                  bool success);
   void OnInitialized(bool success);
+  void OnOwnershipAcquired(const std::string& service_name, bool success);
   void RegisterStatusNotifierItem();
 
   // Step 5: register the StatusNotifierItem with the StatusNotifierWatcher.
@@ -104,17 +107,39 @@ class StatusIconLinuxDbus : public ui::StatusIconLinux,
 
   void CleanupIconFile();
 
+  template <dbus_utils::SignatureLiteral Signature>
+  void SetProperty(const std::string& name,
+                   dbus_utils::internal::ParseDBusSignature<Signature> value,
+                   bool emit_signal = true) {
+    auto new_value = dbus_utils::Variant::Wrap<Signature>(std::move(value));
+    auto it = properties_.find(name);
+    bool value_changed = false;
+    if (it == properties_.end()) {
+      properties_.emplace(name, std::move(new_value));
+      value_changed = true;
+    } else if (it->second != new_value) {
+      it->second = std::move(new_value);
+      value_changed = true;
+    }
+    if (emit_signal && value_changed) {
+      PropertyUpdated(name);
+    }
+  }
+
+  void PropertyUpdated(const std::string& property_name);
+
   scoped_refptr<dbus::Bus> bus_;
 
   int service_id_ = 0;
+  std::string service_name_;
   raw_ptr<dbus::ObjectProxy, DanglingUntriaged> watcher_ = nullptr;
   raw_ptr<dbus::ExportedObject, DanglingUntriaged> item_ = nullptr;
 
   base::RepeatingCallback<void(bool)> barrier_;
 
-  std::unique_ptr<DbusProperties> properties_;
+  // A map of property names (e.g. "Category", "Id") to their values.
+  std::map<std::string, dbus_utils::Variant> properties_;
 
-  std::unique_ptr<DbusMenu> menu_;
   // A menu that contains the click action (if there is a click action) and a
   // separator (if there's a click action and delegate_->GetMenuModel() is
   // non-empty).
@@ -124,8 +149,11 @@ class StatusIconLinuxDbus : public ui::StatusIconLinux,
   std::unique_ptr<ui::SimpleMenuModel> empty_menu_;
   // A concatenation of |click_action_menu_| and either
   // delegate_->GetMenuModel() or |empty_menu_| if the delegate's menu is null.
-  // Appears after the other menus so that it gets destroyed first.
   std::unique_ptr<ConcatMenuModel> concat_menu_;
+
+  // Must be destroyed before the menus above, as it holds pointers to them.
+  std::unique_ptr<DbusMenu> menu_;
+
   // Used when the server doesn't support DBus menus and requests for us to use
   // our own menu.
   std::unique_ptr<views::MenuRunner> menu_runner_;

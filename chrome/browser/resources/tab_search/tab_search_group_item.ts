@@ -8,7 +8,7 @@ import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import {TabGroupData} from './tab_data.js';
-import {colorName} from './tab_group_color_helper.js';
+import {getTabGroupColorVar} from './tab_group_color_helper.js';
 import {Color} from './tab_group_types.mojom-webui.js';
 import {getCss} from './tab_search_group_item.css.js';
 import {getHtml} from './tab_search_group_item.html.js';
@@ -38,6 +38,7 @@ export class TabSearchGroupItemElement extends TabSearchGroupItemBase {
   static override get properties() {
     return {
       data: {type: Object},
+      tabGroupColorRefresh_: {type: Boolean},
     };
   }
 
@@ -51,13 +52,17 @@ export class TabSearchGroupItemElement extends TabSearchGroupItemBase {
     lastActiveElapsedText: '',
   });
 
+  protected accessor tabGroupColorRefresh_: boolean =
+      loadTimeData.getBoolean('useTabGroupColorRefresh');
+
   override willUpdate(changedProperties: PropertyValues<this>) {
     super.willUpdate(changedProperties);
 
     if (changedProperties.has('data')) {
       this.style.setProperty(
           '--group-dot-color',
-          `var(--tab-group-color-${colorName(this.data.tabGroup.color)})`);
+          getTabGroupColorVar(
+              this.data.tabGroup.color, this.tabGroupColorRefresh_));
     }
   }
 

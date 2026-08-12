@@ -54,7 +54,7 @@ public class ActivityTabProviderTest {
         }
 
         @Override
-        public void onObservingDifferentTab(Tab tab, boolean hint) {
+        public void onObservingDifferentTab(Tab tab) {
             mObservedTab = tab;
         }
 
@@ -98,7 +98,7 @@ public class ActivityTabProviderTest {
                     mProvider = mActivity.getActivityTabProvider();
                     mProvider
                             .asObservable()
-                            .addObserver(
+                            .addSyncObserverAndPostIfNonNull(
                                     tab -> {
                                         mActivityTab = tab;
                                         mActivityTabChangedHelper.notifyCalled();
@@ -130,7 +130,9 @@ public class ActivityTabProviderTest {
         CallbackHelper helper = new CallbackHelper();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mProvider.asObservable().addObserver(tab -> helper.notifyCalled());
+                    mProvider
+                            .asObservable()
+                            .addSyncObserverAndPostIfNonNull(tab -> helper.notifyCalled());
                 });
         helper.waitForCallback(0);
 
@@ -241,6 +243,34 @@ public class ActivityTabProviderTest {
                 callCount + 1,
                 mActivityTabChangedHelper.getCallCount());
         assertEquals("The activity's tab should be null.", null, mActivityTab);
+    }
+
+    /** Test that onActivityTabChanged is triggered when the last tab is removed. */
+    @Test
+    @SmallTest
+    @Feature({"ActivityTabObserver"})
+    @Restriction(DeviceFormFactor.PHONE)
+    public void testTriggerOnLastTabRemoved() throws TimeoutException {
+        TabModelSelector selector = mActivity.getTabModelSelector();
+        Tab tabToRemove = getModelSelectedTab();
+
+        int callCount = mActivityTabChangedHelper.getCallCount();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    selector.getCurrentModel()
+                            .getTabRemover()
+                            .removeTab(tabToRemove, /* allowDialog= */ false);
+                });
+        mActivityTabChangedHelper.waitForCallback(callCount);
+
+        assertEquals(
+                "Removing the last tab should have triggered the event once.",
+                callCount + 1,
+                mActivityTabChangedHelper.getCallCount());
+        assertEquals("The activity's tab should be null.", null, mActivityTab);
+
+        // Clean up the removed tab to prevent memory leaks.
+        ThreadUtils.runOnUiThreadBlocking(tabToRemove::destroy);
     }
 
     /**

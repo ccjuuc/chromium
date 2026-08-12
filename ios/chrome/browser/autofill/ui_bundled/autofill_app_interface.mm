@@ -11,12 +11,18 @@
 #import "base/strings/sys_string_conversions.h"
 #import "base/strings/utf_string_conversions.h"
 #import "base/test/ios/wait_util.h"
+#import "base/uuid.h"
 #import "components/application_locale_storage/application_locale_storage.h"
 #import "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
+#import "components/autofill/core/browser/data_manager/autofill_ai/entity_data_manager.h"
 #import "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #import "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #import "components/autofill/core/browser/data_model/addresses/autofill_profile_test_api.h"
+#import "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
+#import "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
+#import "components/autofill/core/browser/field_types.h"
 #import "components/autofill/core/browser/form_import/form_data_importer.h"
+#import "components/autofill/core/browser/form_import/payments/payments_form_data_importer.h"
 #import "components/autofill/core/browser/foundations/autofill_client.h"
 #import "components/autofill/core/browser/foundations/browser_autofill_manager_test_api.h"
 #import "components/autofill/core/browser/payments/credit_card_save_manager.h"
@@ -24,6 +30,7 @@
 #import "components/autofill/core/browser/payments/payments_network_interface.h"
 #import "components/autofill/core/browser/payments/virtual_card_enrollment_manager.h"
 #import "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#import "components/autofill/core/browser/test_utils/entity_data_test_utils.h"
 #import "components/autofill/core/common/autofill_prefs.h"
 #import "components/autofill/ios/browser/autofill_driver_ios.h"
 #import "components/autofill/ios/browser/autofill_java_script_feature.h"
@@ -32,14 +39,17 @@
 #import "components/autofill/ios/browser/ios_test_event_waiter.h"
 #import "components/keyed_service/core/service_access_type.h"
 #import "components/password_manager/core/browser/password_manager_util.h"
+#import "components/password_manager/core/browser/password_store/password_form_converters.h"
 #import "components/password_manager/core/browser/password_store/password_store_consumer.h"
 #import "components/password_manager/core/browser/password_store/password_store_interface.h"
+#import "ios/chrome/browser/autofill/atmemory/public/at_memory_commands.h"
 #import "ios/chrome/browser/autofill/model/personal_data_manager_factory.h"
 #import "ios/chrome/browser/autofill/ui_bundled/chrome_autofill_client_ios.h"
-#import "ios/chrome/browser/autofill/ui_bundled/scoped_autofill_payment_reauth_module_override.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_profile_password_store_factory.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
+#import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
+#import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/common/ui/reauthentication/mock_reauthentication_module.h"
 #import "ios/chrome/test/app/chrome_test_util.h"
 #import "ios/chrome/test/app/tab_test_util.h"
@@ -73,47 +83,40 @@ GetPasswordProfileStore() {
 // processing.
 class TestStoreConsumer : public password_manager::PasswordStoreConsumer {
  public:
-  void OnGetPasswordStoreResults(
-      std::vector<std::unique_ptr<password_manager::PasswordForm>> obtained)
-      override {
-    obtained_ = std::move(obtained);
+  void OnGetPasswordStoreResultsOrErrorFrom(
+      password_manager::PasswordStoreInterface* store,
+      password_manager::LoginsResultOrError results_or_error) override {
+    if (std::holds_alternative<password_manager::PasswordStoreBackendError>(
+            results_or_error)) {
+      obtained_ = std::vector<password_manager::PasswordForm>();
+    } else {
+      obtained_ = password_manager::ToPasswordForms(
+          std::get<password_manager::LoginsResult>(
+              std::move(results_or_error)));
+    }
   }
 
   const std::vector<password_manager::PasswordForm>& GetStoreResults() {
     results_.clear();
-    ResetObtained();
+    obtained_.reset();
     GetPasswordProfileStore()->GetAllLogins(weak_ptr_factory_.GetWeakPtr());
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-result"
     base::test::ios::WaitUntilConditionOrTimeout(
         base::test::ios::kWaitForFileOperationTimeout, ^bool {
-          return !AreObtainedReset();
+          return obtained_.has_value();
         });
 #pragma clang diagnostic pop
-    AppendObtainedToResults();
+    if (obtained_.has_value()) {
+      results_ = std::move(obtained_.value());
+      obtained_.reset();
+    }
     return results_;
   }
 
  private:
-  // Puts `obtained_` in a known state not corresponding to any PasswordStore
-  // state.
-  void ResetObtained() {
-    obtained_.clear();
-    obtained_.emplace_back(nullptr);
-  }
-
-  // Returns true if `obtained_` are in the reset state.
-  bool AreObtainedReset() { return obtained_.size() == 1 && !obtained_[0]; }
-
-  void AppendObtainedToResults() {
-    for (const auto& source : obtained_) {
-      results_.emplace_back(*source);
-    }
-    ResetObtained();
-  }
-
   // Temporary cache of obtained store results.
-  std::vector<std::unique_ptr<password_manager::PasswordForm>> obtained_;
+  std::optional<std::vector<password_manager::PasswordForm>> obtained_;
 
   // Combination of fillable and blocked credentials from the store.
   std::vector<password_manager::PasswordForm> results_;
@@ -124,7 +127,7 @@ class TestStoreConsumer : public password_manager::PasswordStoreConsumer {
 // Saves `form` to the profile password store and waits until the async
 // processing is done.
 void SaveToPasswordProfileStore(const password_manager::PasswordForm& form) {
-  GetPasswordProfileStore()->AddLogin(form);
+  GetPasswordProfileStore()->AddLogin(password_manager::FromPasswordForm(form));
   // When we retrieve the form from the store, `in_store` should be set.
   password_manager::PasswordForm expected_form = form;
   expected_form.in_store = password_manager::PasswordForm::Store::kProfileStore;
@@ -229,7 +232,8 @@ class FakeCreditCardServer : public CreditCardSaveManager::ObserverForTest {
   static CreditCardSaveManager* GetCreditCardSaveManager() {
     return GetAutofillClient()
         .GetFormDataImporter()
-        ->GetCreditCardSaveManager();
+        ->GetPaymentsFormDataImporter()
+        .GetCreditCardSaveManager();
   }
 
   // Access the VirtualCardEnrollmentManager.
@@ -387,9 +391,6 @@ class FakeCreditCardServer : public CreditCardSaveManager::ObserverForTest {
 }  // namespace autofill
 
 @implementation AutofillAppInterface
-
-static std::unique_ptr<ScopedAutofillPaymentReauthModuleOverride>
-    _scopedReauthModuleOverride;
 
 + (void)clearProfilePasswordStore {
   ClearProfilePasswordStore();
@@ -658,35 +659,6 @@ static std::unique_ptr<ScopedAutofillPaymentReauthModuleOverride>
   return ios::provider::GetRiskData();
 }
 
-+ (void)setUpMockReauthenticationModule {
-  MockReauthenticationModule* mock_reauthentication_module =
-      [[MockReauthenticationModule alloc] init];
-  _scopedReauthModuleOverride =
-      ScopedAutofillPaymentReauthModuleOverride::MakeAndArmForTesting(
-          mock_reauthentication_module);
-}
-
-+ (void)clearMockReauthenticationModule {
-  _scopedReauthModuleOverride = nullptr;
-}
-
-+ (void)mockReauthenticationModuleCanAttempt:(BOOL)canAttempt {
-  CHECK(_scopedReauthModuleOverride);
-  MockReauthenticationModule* mockModule =
-      base::apple::ObjCCastStrict<MockReauthenticationModule>(
-          _scopedReauthModuleOverride->module);
-  mockModule.canAttempt = canAttempt;
-}
-
-+ (void)mockReauthenticationModuleExpectedResult:
-    (ReauthenticationResult)expectedResult {
-  CHECK(_scopedReauthModuleOverride);
-  MockReauthenticationModule* mockModule =
-      base::apple::ObjCCastStrict<MockReauthenticationModule>(
-          _scopedReauthModuleOverride->module);
-  mockModule.expectedResult = expectedResult;
-}
-
 + (void)setMandatoryReauthEnabled:(BOOL)enabled {
   autofill::PersonalDataManager* personalDataManager =
       [self personalDataManager];
@@ -701,6 +673,101 @@ static std::unique_ptr<ScopedAutofillPaymentReauthModuleOverride>
       enabled);
 }
 
++ (NSString*)saveRedressNumberEntityWithName:(NSString*)name
+                                      number:(NSString*)number {
+  if (!name || !number) {
+    return nil;
+  }
+
+  autofill::EntityDataManager* entityDataManager = [self entityDataManager];
+  if (!entityDataManager) {
+    return nil;
+  }
+
+  autofill::test::RedressNumberOptions options = {};
+  std::u16string name_u16;
+  std::u16string number_u16;
+  base::Uuid uuid = base::Uuid::GenerateRandomV4();
+  name_u16 = base::SysNSStringToUTF16(name);
+  options.name = name_u16.c_str();
+  number_u16 = base::SysNSStringToUTF16(number);
+  options.number = number_u16.c_str();
+  std::string guid_str = uuid.AsLowercaseString();
+  options.guid = guid_str;
+  autofill::EntityInstance entity =
+      autofill::test::GetRedressNumberEntityInstance(options);
+  entityDataManager->AddOrUpdateEntityInstance(entity);
+  return base::SysUTF8ToNSString(guid_str);
+}
+
++ (void)removeEntityWithUUID:(NSString*)uuid {
+  autofill::EntityDataManager* entityDataManager = [self entityDataManager];
+  if (!entityDataManager) {
+    return;
+  }
+  entityDataManager->RemoveEntityInstance(
+      autofill::EntityInstance::EntityId(base::SysNSStringToUTF8(uuid)));
+}
+
++ (void)removeEntityModifiedSince:(NSDate*)time {
+  autofill::EntityDataManager* entityDataManager = [self entityDataManager];
+  if (!entityDataManager) {
+    return;
+  }
+  entityDataManager->RemoveEntityInstancesModifiedBetween(
+      base::Time::FromNSDate(time), base::Time::Now());
+}
+
++ (BOOL)savePassportEntity {
+  autofill::EntityDataManager* entityDataManager = [self entityDataManager];
+  if (!entityDataManager) {
+    return NO;
+  }
+
+  autofill::EntityInstance entity = autofill::test::GetPassportEntityInstance();
+  entityDataManager->AddOrUpdateEntityInstance(entity);
+  return YES;
+}
+
++ (NSString*)saveServerWalletPassportEntity {
+  autofill::EntityDataManager* entityDataManager = [self entityDataManager];
+  if (!entityDataManager) {
+    return nil;
+  }
+
+  autofill::test::PassportEntityOptions options = {};
+  base::Uuid uuid = base::Uuid::GenerateRandomV4();
+  std::string guid_str = uuid.AsLowercaseString();
+  options.guid = guid_str;
+  options.record_type = autofill::EntityInstance::RecordType::kServerWallet;
+
+  autofill::EntityInstance entity =
+      autofill::test::GetPassportEntityInstance(options);
+  autofill::EntityInstance masked_entity =
+      autofill::test::MaskEntityInstance(entity);
+  entityDataManager->AddOrUpdateEntityInstance(masked_entity);
+  return base::SysUTF8ToNSString(guid_str);
+}
+
++ (BOOL)saveVehicleEntity {
+  autofill::EntityDataManager* entityDataManager = [self entityDataManager];
+  if (!entityDataManager) {
+    return NO;
+  }
+
+  autofill::EntityInstance entity = autofill::test::GetVehicleEntityInstance();
+  size_t entity_count = entityDataManager->GetEntityInstances().size();
+  entityDataManager->AddOrUpdateEntityInstance(entity);
+
+  ConditionBlock conditionBlock = ^bool {
+    return entity_count < entityDataManager->GetEntityInstances().size();
+  };
+
+  CHECK(base::test::ios::WaitUntilConditionOrTimeout(
+      base::test::ios::kWaitForFileOperationTimeout, conditionBlock));
+  return YES;
+}
+
 #pragma mark - Private
 
 // The PersonalDataManager instance for the current profile.
@@ -710,6 +777,78 @@ static std::unique_ptr<ScopedAutofillPaymentReauthModuleOverride>
       autofill::PersonalDataManagerFactory::GetForProfile(profile);
   personalDataManager->payments_data_manager().SetSyncingForTest(true);
   return personalDataManager;
+}
+
++ (void)showAutofillAiSaveEntityBubble {
+  autofill::EntityInstance entity = autofill::test::GetVehicleEntityInstance();
+  autofill::ChromeAutofillClientIOS* client =
+      static_cast<autofill::ChromeAutofillClientIOS*>(
+          autofill::AutofillClientIOS::FromWebState(
+              chrome_test_util::GetCurrentWebState()));
+  if (client) {
+    client->ShowEntityImportBubble(std::move(entity), std::nullopt,
+                                   /*save_is_synchronous=*/true,
+                                   base::DoNothing());
+  }
+}
+
++ (void)showAtMemoryUI {
+  id<AtMemoryCommands> atMemoryHandler = HandlerForProtocol(
+      chrome_test_util::GetMainBrowser()->GetCommandDispatcher(),
+      AtMemoryCommands);
+  [atMemoryHandler showAtMemory];
+}
+
++ (autofill::EntityDataManager*)entityDataManager {
+  return autofill::FakeCreditCardServer::GetAutofillClient()
+      .GetEntityDataManager();
+}
+
+namespace {
+
+autofill::AutofillDriverIOS* GetMainFrameAutofillDriver() {
+  web::WebState* web_state = chrome_test_util::GetCurrentWebState();
+  if (!web_state) {
+    return nullptr;
+  }
+  web::WebFramesManager* frames_manager =
+      autofill::AutofillJavaScriptFeature::GetInstance()->GetWebFramesManager(
+          web_state);
+  if (!frames_manager) {
+    return nullptr;
+  }
+  web::WebFrame* main_frame = frames_manager->GetMainWebFrame();
+  if (!main_frame) {
+    return nullptr;
+  }
+  return autofill::AutofillDriverIOS::FromWebStateAndWebFrame(web_state,
+                                                              main_frame);
+}
+
+}  // namespace
+
++ (BOOL)isFormCachedInMainFrame {
+  autofill::AutofillDriverIOS* driver = GetMainFrameAutofillDriver();
+  if (!driver) {
+    return NO;
+  }
+  return !autofill::test_api(driver->GetAutofillManager())
+              .form_structures()
+              .empty();
+}
+
++ (BOOL)waitForFormToBeCachedInMainFrame {
+  if (![self isFormCachedInMainFrame]) {
+    if (autofill::AutofillDriverIOS* driver = GetMainFrameAutofillDriver()) {
+      driver->ScanForms(/*immediately=*/true);
+    }
+  }
+
+  ConditionBlock condition = ^BOOL {
+    return [self isFormCachedInMainFrame];
+  };
+  return base::test::ios::WaitUntilConditionOrTimeout(
+      base::test::ios::kWaitForPageLoadTimeout, condition);
 }
 
 @end

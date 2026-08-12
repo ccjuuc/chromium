@@ -56,6 +56,8 @@ message InferenceCalculatorOptions {
       // This option is valid for TFLite GPU delegate API2 only,
       // Choose any of available APIs to force running inference using it.
       enum Api {
+        reserved 8;
+
         ANY = 0;
         OPENGL = 1;
         OPENCL = 2;
@@ -157,6 +159,13 @@ message InferenceCalculatorOptions {
       // tensors (input and output tensors with identical TfLite tensor
       // indices).
       optional bool enable_zero_copy_tensor_io = 7;
+      // This flag indicates that XNNPACK should attempt to produce numerically
+      // consistent results from a specific build of XNNPACK. This causes
+      // XNNPACK to avoid using faster codepaths that are numerically
+      // inconsistent with any other codepath that could be used in the same
+      // compiled delegate.
+      // This may be useful in tests if you're running into flakiness!
+      optional bool slow_consistent_arithmetic = 8;
     }
 
     oneof delegate {

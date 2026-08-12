@@ -17,7 +17,7 @@ class BlockedInterceptionBlockingPage : public SSLBlockingPageBase {
 
   BlockedInterceptionBlockingPage(
       content::WebContents* web_contents,
-      int cert_error,
+      net::Error cert_error,
       const GURL& request_url,
       bool can_show_enhanced_protection_message,
       const net::SSLInfo& ssl_info,
@@ -39,7 +39,7 @@ class BlockedInterceptionBlockingPage : public SSLBlockingPageBase {
  protected:
   // SecurityInterstitialPage implementation:
   void CommandReceived(const std::string& command) override;
-  void PopulateInterstitialStrings(base::Value::Dict& load_time_data) override;
+  void PopulateInterstitialStrings(base::DictValue& load_time_data) override;
 
  private:
   const net::SSLInfo ssl_info_;

@@ -6,13 +6,17 @@
 
 #include <string_view>
 
+#include "base/check_op.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/containers/fixed_flat_set.h"
+#include "base/containers/span.h"
 #include "base/functional/callback.h"
 #include "base/i18n/timezone.h"
 #include "base/strings/string_util.h"
 #include "base/token.h"
 #include "build/build_config.h"
+#include "gpu/command_buffer/client/client_shared_image.h"
 #include "media/base/media_switches.h"
 #include "media/base/video_frame_metadata.h"
 #include "media/capture/mojom/video_capture_types.mojom.h"
@@ -24,6 +28,14 @@ CapturedExternalVideoBuffer::CapturedExternalVideoBuffer(
     VideoCaptureFormat format,
     gfx::ColorSpace color_space)
     : handle(std::move(handle)),
+      format(std::move(format)),
+      color_space(std::move(color_space)) {}
+
+CapturedExternalVideoBuffer::CapturedExternalVideoBuffer(
+    scoped_refptr<gpu::ClientSharedImage> shared_image,
+    VideoCaptureFormat format,
+    gfx::ColorSpace color_space)
+    : client_shared_image(std::move(shared_image)),
       format(std::move(format)),
       color_space(std::move(color_space)) {}
 
@@ -42,6 +54,7 @@ CapturedExternalVideoBuffer::CapturedExternalVideoBuffer(
 CapturedExternalVideoBuffer::CapturedExternalVideoBuffer(
     CapturedExternalVideoBuffer&& other)
     : handle(std::move(other.handle)),
+      client_shared_image(std::move(other.client_shared_image)),
       format(std::move(other.format)),
       color_space(std::move(other.color_space)) {
 #if BUILDFLAG(IS_WIN)
@@ -52,6 +65,7 @@ CapturedExternalVideoBuffer::CapturedExternalVideoBuffer(
 CapturedExternalVideoBuffer& CapturedExternalVideoBuffer::operator=(
     CapturedExternalVideoBuffer&& other) {
   handle = std::move(other.handle);
+  client_shared_image = std::move(other.client_shared_image);
   format = std::move(other.format);
   color_space = std::move(other.color_space);
 #if BUILDFLAG(IS_WIN)
@@ -83,8 +97,7 @@ VideoCaptureDevice::Client::Buffer& VideoCaptureDevice::Client::Buffer::
 operator=(VideoCaptureDevice::Client::Buffer&& other) = default;
 
 void VideoCaptureDevice::Client::OnIncomingCapturedData(
-    const uint8_t* data,
-    int length,
+    base::span<const uint8_t> data,
     const VideoCaptureFormat& frame_format,
     const gfx::ColorSpace& color_space,
     int clockwise_rotation,
@@ -93,8 +106,8 @@ void VideoCaptureDevice::Client::OnIncomingCapturedData(
     base::TimeDelta timestamp,
     std::optional<base::TimeTicks> capture_begin_timestamp,
     const std::optional<VideoFrameMetadata>& metadata) {
-  OnIncomingCapturedData(data, length, frame_format, color_space,
-                         clockwise_rotation, flip_y, reference_time, timestamp,
+  OnIncomingCapturedData(data, frame_format, color_space, clockwise_rotation,
+                         flip_y, reference_time, timestamp,
                          capture_begin_timestamp, metadata,
                          /*frame_feedback_id=*/0);
 }
@@ -106,10 +119,11 @@ void VideoCaptureDevice::Client::OnIncomingCapturedImage(
     base::TimeTicks reference_time,
     base::TimeDelta timestamp,
     std::optional<base::TimeTicks> capture_begin_timestamp,
+    const gfx::Size& natural_size,
     const std::optional<VideoFrameMetadata>& metadata) {
   OnIncomingCapturedImage(std::move(shared_image), frame_format,
                           clockwise_rotation, reference_time, timestamp,
-                          capture_begin_timestamp, metadata,
+                          capture_begin_timestamp, natural_size, metadata,
                           /*frame_feedback_id=*/0);
 }
 

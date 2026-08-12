@@ -7,8 +7,10 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <limits>
 
 #include "base/check_op.h"
+#include "base/logging.h"
 #include "cc/base/math_util.h"
 #include "cc/debug/debug_colors.h"
 #include "cc/layers/append_quads_context.h"
@@ -51,21 +53,23 @@ RenderSurfaceImpl::~RenderSurfaceImpl() = default;
 RenderSurfaceImpl* RenderSurfaceImpl::render_target() {
   EffectTree& effect_tree =
       layer_tree_impl_->property_trees()->effect_tree_mutable();
-  EffectNode* node = effect_tree.Node(EffectTreeIndex());
-  if (node->target_id != kRootPropertyNodeId)
-    return effect_tree.GetRenderSurface(node->target_id);
-  else
+  const EffectNode& node = effect_tree.Node(EffectTreeIndex());
+  if (node.target_id != kRootPropertyNodeId) {
+    return effect_tree.GetRenderSurface(node.target_id);
+  } else {
     return this;
+  }
 }
 
 const RenderSurfaceImpl* RenderSurfaceImpl::render_target() const {
   const EffectTree& effect_tree =
       layer_tree_impl_->property_trees()->effect_tree();
-  const EffectNode* node = effect_tree.Node(EffectTreeIndex());
-  if (node->target_id != kRootPropertyNodeId)
-    return effect_tree.GetRenderSurface(node->target_id);
-  else
+  const EffectNode& node = effect_tree.Node(EffectTreeIndex());
+  if (node.target_id != kRootPropertyNodeId) {
+    return effect_tree.GetRenderSurface(node.target_id);
+  } else {
     return this;
+  }
 }
 
 RenderSurfaceImpl::DrawProperties::DrawProperties() = default;
@@ -172,6 +176,15 @@ bool RenderSurfaceImpl::IsViewTransitionElement() const {
   return ViewTransitionElementResourceId().IsValid();
 }
 
+// Returns true if this render surface is for an unbounded element.
+bool RenderSurfaceImpl::IsUnbounded() const {
+  return layer_tree_impl_->settings().enable_unbounded_element &&
+         !layer_tree_impl_->settings().TreesInVizInClientProcess() &&
+         OwningEffectNode() &&
+         OwningEffectNode()->render_surface_reason ==
+             RenderSurfaceReason::kUnboundedElement;
+}
+
 const viz::ViewTransitionElementResourceId&
 RenderSurfaceImpl::ViewTransitionElementResourceId() const {
   return OwningEffectNode()->view_transition_element_resource_id;
@@ -190,12 +203,15 @@ int RenderSurfaceImpl::EffectTreeIndex() const {
 }
 
 const EffectNode* RenderSurfaceImpl::OwningEffectNode() const {
-  return layer_tree_impl_->property_trees()->effect_tree().Node(
+  if (EffectTreeIndex() == kInvalidPropertyNodeId) {
+    return nullptr;
+  }
+  return &layer_tree_impl_->property_trees()->effect_tree().Node(
       EffectTreeIndex());
 }
 
 EffectNode* RenderSurfaceImpl::OwningEffectNodeMutableForTest() const {
-  return layer_tree_impl_->property_trees()->effect_tree_mutable().Node(
+  return &layer_tree_impl_->property_trees()->effect_tree_mutable().MutableNode(
       EffectTreeIndex());
 }
 
@@ -269,8 +285,9 @@ gfx::Rect RenderSurfaceImpl::CalculateClippedAccumulatedContentRect() {
     return gfx::Rect();
 
   gfx::Rect clipped_accumulated_rect_in_local_space =
-      MathUtil::ProjectEnclosingClippedRect(
-          target_to_surface, clipped_accumulated_rect_in_target_space);
+      MathUtil::ProjectEnclosingClippedRectIgnoringError(
+          target_to_surface, clipped_accumulated_rect_in_target_space,
+          std::numeric_limits<float>::epsilon());
   // Bringing clipped accumulated rect back to local space may result
   // in inflation due to axis-alignment.
   clipped_accumulated_rect_in_local_space.Intersect(accumulated_content_rect());
@@ -368,6 +385,9 @@ void RenderSurfaceImpl::AccumulateContentRectFromContributingLayer(
       deferred_contributing_layers_.push_back(layer);
     }
   } else {
+    // TODO(508672616): Consider eliding contributions from unbounded surfaces
+    // to save memory, since the bounded render surface that would have
+    // contained the RPDQ can potentially be smaller.
     accumulated_content_rect_.Union(layer->visible_drawable_content_rect());
     view_transition_capture_content_rect_.Union(
         layer->visible_drawable_content_rect());
@@ -398,8 +418,9 @@ void RenderSurfaceImpl::AccumulateContentRectFromContributingRenderSurface(
   // The content rect of contributing surface is in its own space. Instead, we
   // will use contributing surface's DrawableContentRect which is in target
   // space (local space for this render surface) as required.
-  accumulated_content_rect_.Union(
-      gfx::ToEnclosedRect(contributing_surface->DrawableContentRect()));
+  accumulated_content_rect_.Union(gfx::ToEnclosingRectIgnoringError(
+      contributing_surface->DrawableContentRect(),
+      std::numeric_limits<float>::epsilon()));
 
   // Now if contributing surface is a *matching* view transition element,
   // meaning that we're doing a capture, then above we ensure that we can use
@@ -428,8 +449,8 @@ bool RenderSurfaceImpl::AncestorPropertyChanged() const {
   return ancestor_property_changed_ || property_trees->full_tree_damaged() ||
          property_trees->transform_tree()
              .Node(TransformTreeIndex())
-             ->transform_changed() ||
-         property_trees->effect_tree().Node(EffectTreeIndex())->effect_changed;
+             .transform_changed() ||
+         property_trees->effect_tree().Node(EffectTreeIndex()).effect_changed;
 }
 
 void RenderSurfaceImpl::NoteAncestorPropertyChanged() {
@@ -566,7 +587,7 @@ void RenderSurfaceImpl::AppendQuads(const AppendQuadsContext& context,
   const PropertyTrees* property_trees = layer_tree_impl_->property_trees();
   int sorting_context_id = property_trees->transform_tree()
                                .Node(TransformTreeIndex())
-                               ->sorting_context_id;
+                               .sorting_context_id;
   bool contents_opaque = false;
   viz::SharedQuadState* shared_quad_state =
       render_pass->CreateAndAppendSharedQuadState();
@@ -627,7 +648,6 @@ void RenderSurfaceImpl::AppendQuads(const AppendQuadsContext& context,
         mask_uv_size.height() / unclipped_mask_target_size.height());
   }
 
-  gfx::RectF tex_coord_rect(gfx::Rect(output_rect.size()));
   auto* quad =
       render_pass->CreateAndAppendDrawQuad<viz::CompositorRenderPassDrawQuad>();
   const auto& append_render_pass_id =
@@ -639,13 +659,13 @@ void RenderSurfaceImpl::AppendQuads(const AppendQuadsContext& context,
       shared_quad_state, output_rect, unoccluded_output_rect,
       /*needs_blending=*/true, append_render_pass_id, mask_resource_id,
       mask_uv_rect, mask_texture_size, surface_contents_scale, gfx::PointF(),
-      tex_coord_rect, !layer_tree_impl_->settings().enable_edge_anti_aliasing,
+      !layer_tree_impl_->settings().enable_edge_anti_aliasing,
       OwningEffectNode()->backdrop_filter_quality, intersects_damage_under_);
 }
 
 bool RenderSurfaceImpl::ShouldClip() const {
   return !HasCopyRequest() && !ShouldCacheRenderSurface() &&
-         !IsViewTransitionElement();
+         !IsViewTransitionElement() && !IsUnbounded();
 }
 
 }  // namespace cc

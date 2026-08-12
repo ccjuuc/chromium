@@ -7,7 +7,8 @@
 
 #include "base/time/time.h"
 #include "components/autofill/core/browser/form_structure.h"
-#include "components/autofill/core/browser/metrics/field_filling_stats_and_score_metrics.h"
+#include "components/autofill/core/browser/suggestions/suggestion_util.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 
 namespace autofill::autofill_metrics {
 
@@ -35,13 +36,15 @@ enum class AutofillAlternativeNameFieldValueCharacterSet {
 // `observed_submission` indicates whether this method is called as a result of
 // observing a submission event (otherwise, it may be that an upload was
 // triggered after a form was unfocused or a navigation occurred).
-void LogQualityMetrics(const FormStructure& form_structure,
-                       base::TimeTicks load_time,
-                       base::TimeTicks interaction_time,
-                       base::TimeTicks now,
-                       FormInteractionsUkmLogger& form_interactions_ukm_logger,
-                       ukm::SourceId source_id,
-                       bool observed_submission);
+void LogQualityMetrics(
+    const FormStructure& form_structure,
+    base::TimeTicks load_time,
+    base::TimeTicks interaction_time,
+    base::TimeTicks now,
+    FormInteractionsUkmLogger& form_interactions_ukm_logger,
+    ukm::SourceId source_id,
+    bool observed_submission,
+    AutocompleteUnrecognizedBehavior ac_unrecognized_behavior);
 
 // Log the quality of the heuristics and server predictions for the
 // `form_structure` structure, if autocomplete attributes are present on the

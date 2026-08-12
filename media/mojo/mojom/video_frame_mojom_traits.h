@@ -9,15 +9,12 @@
 
 #include "base/memory/scoped_refptr.h"
 #include "build/build_config.h"
-#include "gpu/ipc/common/mailbox_holder_mojom_traits.h"
-#include "gpu/ipc/common/vulkan_ycbcr_info_mojom_traits.h"
 #include "media/base/ipc/media_param_traits_macros.h"
 #include "media/base/video_frame.h"
 #include "media/mojo/mojom/media_types.mojom.h"
 #include "mojo/public/cpp/bindings/enum_traits.h"
 #include "mojo/public/cpp/bindings/struct_traits.h"
 #include "ui/gfx/geometry/mojom/geometry_mojom_traits.h"
-#include "ui/gfx/ipc/color/gfx_param_traits.h"
 
 namespace mojo {
 
@@ -83,13 +80,6 @@ struct StructTraits<media::mojom::VideoFrameDataView,
       const scoped_refptr<media::VideoFrame>& input) {
     return input->hdr_metadata();
   }
-
-#if BUILDFLAG(IS_ANDROID)
-  static const std::optional<gpu::VulkanYCbCrInfo>& ycbcr_info(
-      const scoped_refptr<media::VideoFrame>& input) {
-    return input->ycbcr_info();
-  }
-#endif
 
   static media::mojom::VideoFrameDataPtr data(
       const scoped_refptr<media::VideoFrame>& input);

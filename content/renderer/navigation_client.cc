@@ -68,8 +68,8 @@ void NavigationClient::CommitNavigation(
         fetch_later_loader_factory,
     const blink::DocumentToken& document_token,
     const base::UnguessableToken& devtools_navigation_token,
+    const base::UnguessableToken& initiator_state_token,
     const base::Uuid& base_auction_nonce,
-    const std::optional<network::ParsedPermissionsPolicy>& permissions_policy,
     blink::mojom::PolicyContainerPtr policy_container,
     mojo::PendingRemote<blink::mojom::CodeCacheHost> code_cache_host,
     mojo::PendingRemote<blink::mojom::CodeCacheHost>
@@ -94,7 +94,7 @@ void NavigationClient::CommitNavigation(
       std::move(subresource_proxying_loader_factory),
       std::move(keep_alive_loader_factory),
       std::move(fetch_later_loader_factory), document_token,
-      devtools_navigation_token, base_auction_nonce, permissions_policy,
+      devtools_navigation_token, initiator_state_token, base_auction_nonce,
       std::move(policy_container), std::move(code_cache_host),
       std::move(code_cache_host_for_background), std::move(cookie_manager_info),
       std::move(storage_info), std::move(callback));
@@ -111,6 +111,7 @@ void NavigationClient::CommitFailedNavigation(
     std::unique_ptr<blink::PendingURLLoaderFactoryBundle> subresource_loaders,
     const blink::DocumentToken& document_token,
     const base::UnguessableToken& devtools_navigation_token,
+    const base::UnguessableToken& initiator_state_token,
     blink::mojom::PolicyContainerPtr policy_container,
     mojom::AlternativeErrorPageOverrideInfoPtr alternative_error_page_info,
     CommitFailedNavigationCallback callback) {
@@ -120,8 +121,9 @@ void NavigationClient::CommitFailedNavigation(
       std::move(common_params), std::move(commit_params),
       has_stale_copy_in_cache, error_code, extended_error_code,
       resolve_error_info, error_page_content, std::move(subresource_loaders),
-      document_token, devtools_navigation_token, std::move(policy_container),
-      std::move(alternative_error_page_info), std::move(callback));
+      document_token, devtools_navigation_token, initiator_state_token,
+      std::move(policy_container), std::move(alternative_error_page_info),
+      std::move(callback));
 }
 
 void NavigationClient::Bind(
@@ -161,13 +163,19 @@ void NavigationClient::MoveOwnershipToCommitTargetIfNeeded(
 
 void NavigationClient::SetUpRendererInitiatedNavigation(
     mojo::PendingRemote<mojom::NavigationRendererCancellationListener>
-        renderer_cancellation_listener_remote) {
+        renderer_cancellation_listener_remote,
+    mojo::PendingRemote<mojom::NavigationRendererIgnoreDuplicateNavigationListener>
+        renderer_ignore_duplicate_navigation_listener_remote) {
   DCHECK(!was_initiated_in_this_frame_);
   was_initiated_in_this_frame_ = true;
   renderer_cancellation_listener_remote_.Bind(
       std::move(renderer_cancellation_listener_remote),
       render_frame_->GetTaskRunner(
           blink::TaskType::kInternalNavigationCancellation));
+  renderer_ignore_duplicate_navigation_listener_remote_.Bind(
+      std::move(renderer_ignore_duplicate_navigation_listener_remote),
+      render_frame_->GetTaskRunner(
+          blink::TaskType::kInternalNavigationAssociated));
 
   // Renderer-initiated navigations can be canceled from the JS task it was
   // initiated from. If we post a task here, the task will run after the JS task
@@ -203,6 +211,11 @@ void NavigationClient::ResetForAbort() {
       std::to_underlying(
           mojom::NavigationClientDisconnectReason::kResetForAbort),
       "");
+}
+
+void NavigationClient::DidIgnoreDuplicateNavigation() {
+  renderer_ignore_duplicate_navigation_listener_remote_
+      ->DidIgnoreDuplicateNavigation();
 }
 
 void NavigationClient::NotifyNavigationCancellationWindowEnded() {

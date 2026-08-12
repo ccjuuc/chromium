@@ -7,7 +7,12 @@ package org.chromium.chrome.browser.omnibox.suggestions;
 import android.content.Context;
 import android.view.View;
 
+import org.chromium.base.Callback;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxLayoutMode;
+import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
+import org.chromium.chrome.browser.omnibox.suggestions.SuggestionCommonProperties.RoundSides;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
@@ -23,17 +28,29 @@ import java.util.List;
 class DropdownItemViewInfoListManager {
     private final Context mContext;
     private final ModelList mManagedModel;
+    private final NonNullObservableSupplier<Integer> mRoundSidesSupplier;
+    private final Callback<@RoundSides Integer> mRoundSidesCallback = this::onRoundSidesChanged;
     private int mLayoutDirection;
     private @BrandedColorScheme int mBrandedColorScheme;
+    private @FuseboxLayoutMode int mFuseboxLayoutMode = FuseboxLayoutMode.TOOLBAR;
+    private boolean mApplySideSpacing = true;
+    private final OmniboxResourceProvider mResourceProvider;
     private List<DropdownItemViewInfo> mSourceViewInfoList;
 
-    DropdownItemViewInfoListManager(ModelList managedModel, Context context) {
+    DropdownItemViewInfoListManager(
+            ModelList managedModel,
+            Context context,
+            NonNullObservableSupplier<Integer> roundSidesSupplier,
+            OmniboxResourceProvider resourceProvider) {
         assert managedModel != null : "Must specify a non-null model.";
         mContext = context;
+        mResourceProvider = resourceProvider;
         mLayoutDirection = View.LAYOUT_DIRECTION_INHERIT;
         mBrandedColorScheme = BrandedColorScheme.LIGHT_BRANDED_THEME;
         mSourceViewInfoList = Collections.emptyList();
         mManagedModel = managedModel;
+        mRoundSidesSupplier = roundSidesSupplier;
+        mRoundSidesSupplier.addSyncObserver(mRoundSidesCallback);
     }
 
     /**
@@ -66,6 +83,17 @@ class DropdownItemViewInfoListManager {
         }
     }
 
+    void setFuseboxLayoutMode(@FuseboxLayoutMode int fuseboxLayoutMode) {
+        if (mFuseboxLayoutMode == fuseboxLayoutMode) return;
+        mFuseboxLayoutMode = fuseboxLayoutMode;
+        mApplySideSpacing = fuseboxLayoutMode != FuseboxLayoutMode.SUGGESTIONS_POPOVER;
+        for (int i = 0; i < mSourceViewInfoList.size(); i++) {
+            PropertyModel model = mSourceViewInfoList.get(i).model;
+            model.set(SuggestionCommonProperties.FUSEBOX_LAYOUT_MODE, fuseboxLayoutMode);
+            model.set(SuggestionCommonProperties.APPLY_SIDE_SPACING, mApplySideSpacing);
+        }
+    }
+
     /** Clear all DropdownItemViewInfo lists. */
     void clear() {
         mSourceViewInfoList.clear();
@@ -88,23 +116,30 @@ class DropdownItemViewInfoListManager {
                 DeviceFormFactor.isNonMultiDisplayContextOnTablet(mContext)
                         ? SuggestionCommonProperties.FormFactor.TABLET
                         : SuggestionCommonProperties.FormFactor.PHONE;
-        DropdownItemViewInfo previousItem = null;
-
         for (int i = 0; i < mSourceViewInfoList.size(); i++) {
             final DropdownItemViewInfo item = mSourceViewInfoList.get(i);
             final PropertyModel model = item.model;
+            model.set(SuggestionCommonProperties.RESOURCE_PROVIDER, mResourceProvider);
             model.set(SuggestionCommonProperties.LAYOUT_DIRECTION, mLayoutDirection);
+            model.set(SuggestionCommonProperties.APPLY_SIDE_SPACING, mApplySideSpacing);
             model.set(SuggestionCommonProperties.COLOR_SCHEME, mBrandedColorScheme);
+            model.set(SuggestionCommonProperties.FUSEBOX_LAYOUT_MODE, mFuseboxLayoutMode);
             model.set(SuggestionCommonProperties.DEVICE_FORM_FACTOR, deviceType);
-
+            model.set(SuggestionCommonProperties.BG_ROUND_SIDES, mRoundSidesSupplier.get());
             suggestionsList.add(item);
         }
 
-        // round the bottom corners of the last suggestion.
-        if (previousItem != null) {
-            previousItem.model.set(DropdownCommonProperties.BG_BOTTOM_CORNER_ROUNDED, true);
-        }
-
         mManagedModel.set(suggestionsList);
+    }
+
+    void destroy() {
+        mRoundSidesSupplier.removeObserver(mRoundSidesCallback);
+    }
+
+    private void onRoundSidesChanged(@RoundSides int roundSides) {
+        for (int i = 0; i < mSourceViewInfoList.size(); i++) {
+            PropertyModel model = mSourceViewInfoList.get(i).model;
+            model.set(SuggestionCommonProperties.BG_ROUND_SIDES, roundSides);
+        }
     }
 }

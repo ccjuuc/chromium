@@ -10,15 +10,13 @@
 #include <utility>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
+#include "components/payments/content/payment_manifest_downloader.h"
 #include "components/payments/content/utility/payment_manifest_parser.h"
 #include "components/payments/content/web_payments_web_data_service.h"
 #include "components/payments/core/method_strings.h"
-#include "components/payments/core/payment_manifest_downloader.h"
 #include "components/payments/core/url_util.h"
 #include "components/webdata/common/web_data_results.h"
 #include "content/public/browser/render_frame_host.h"
@@ -40,7 +38,7 @@ void EnableMethodManifestUrlForSupportedApps(
     std::map<GURL, std::set<GURL>>* prohibited_payment_methods) {
   for (auto app_id : app_ids) {
     auto* app = (*apps)[app_id].get();
-    app->has_explicitly_verified_methods = base::Contains(
+    app->has_explicitly_verified_methods = std::ranges::contains(
         supported_origin_strings,
         url::Origin::Create(app->scope.DeprecatedGetOriginAsURL()).Serialize());
     if (app->has_explicitly_verified_methods) {
@@ -214,17 +212,10 @@ void ManifestVerifier::OnPaymentMethodManifestDownloaded(
     return;
   }
 
+  std::vector<GURL> web_app_manifest_urls;
+  std::vector<url::Origin> supported_origins;
   parser_->ParsePaymentMethodManifest(
-      method_manifest_url, content,
-      base::BindOnce(&ManifestVerifier::OnPaymentMethodManifestParsed,
-                     weak_ptr_factory_.GetWeakPtr(), method_manifest_url));
-}
-
-void ManifestVerifier::OnPaymentMethodManifestParsed(
-    const GURL& method_manifest_url,
-    const std::vector<GURL>& default_applications,
-    const std::vector<url::Origin>& supported_origins) {
-  DCHECK_LT(0U, number_of_manifests_to_download_);
+      method_manifest_url, content, &web_app_manifest_urls, &supported_origins);
 
   std::vector<std::string> supported_origin_strings(supported_origins.size());
   std::ranges::transform(supported_origins, supported_origin_strings.begin(),

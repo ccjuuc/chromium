@@ -36,12 +36,6 @@ class ArcIntentHelperTest : public testing::Test {
     // OpenUrlDelegate:
     void OpenUrlFromArc(const GURL& url) override { last_opened_url_ = url; }
     void OpenWebAppFromArc(const GURL& url) override { last_opened_url_ = url; }
-    void OpenArcCustomTab(
-        const GURL& url,
-        int32_t task_id,
-        mojom::IntentHelperHost::OnOpenCustomTabCallback callback) override {
-      std::move(callback).Run(mojo::NullRemote());
-    }
     void OpenChromePageFromArc(mojom::ChromePage chrome_page) override {}
     void OpenAppWithIntent(const GURL& url,
                            mojom::LaunchIntentPtr intent) override {
@@ -281,6 +275,34 @@ TEST_F(ArcIntentHelperTest, TestOnOpenAppWithIntent) {
                                  mojom::LaunchIntent::New());
   EXPECT_FALSE(test_open_url_delegate_->TakeLastOpenedUrl().is_valid());
   EXPECT_TRUE(test_open_url_delegate_->TakeLastOpenedIntent().is_null());
+}
+
+// Tests that OnOpenAppWithIntent only forwards intent data URLs with allowed
+// schemes.
+TEST_F(ArcIntentHelperTest, TestOnOpenAppWithIntent_IntentDataScheme) {
+  const GURL start_url("https://www.google.com");
+
+  auto intent = mojom::LaunchIntent::New();
+  intent->action = arc::kIntentActionView;
+  intent->data = GURL("https://www.example.com");
+  instance_->OnOpenAppWithIntent(start_url, std::move(intent));
+  EXPECT_EQ(start_url, test_open_url_delegate_->TakeLastOpenedUrl());
+  EXPECT_EQ(GURL("https://www.example.com"),
+            test_open_url_delegate_->TakeLastOpenedIntent()->data);
+
+  intent = mojom::LaunchIntent::New();
+  intent->action = arc::kIntentActionView;
+  intent->data = GURL("chrome://settings");
+  instance_->OnOpenAppWithIntent(start_url, std::move(intent));
+  EXPECT_EQ(start_url, test_open_url_delegate_->TakeLastOpenedUrl());
+  EXPECT_FALSE(test_open_url_delegate_->TakeLastOpenedIntent()->data);
+
+  intent = mojom::LaunchIntent::New();
+  intent->action = arc::kIntentActionView;
+  intent->data = GURL("javascript:alert(1)");
+  instance_->OnOpenAppWithIntent(start_url, std::move(intent));
+  EXPECT_EQ(start_url, test_open_url_delegate_->TakeLastOpenedUrl());
+  EXPECT_FALSE(test_open_url_delegate_->TakeLastOpenedIntent()->data);
 }
 
 // Tests that AppendStringToIntentHelperPackageName works.

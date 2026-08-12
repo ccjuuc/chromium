@@ -9,12 +9,11 @@
 
 #include <string>
 #include <string_view>
-#include <unordered_map>
 
 #include "base/memory/ref_counted.h"
 #include "components/prefs/pref_value_map.h"
 #include "components/prefs/prefs_export.h"
-#include "components/prefs/transparent_unordered_string_map.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace base {
 class Value;
@@ -65,7 +64,7 @@ class COMPONENTS_PREFS_EXPORT PrefRegistry
   };
 
   using const_iterator = PrefValueMap::const_iterator;
-  using PrefRegistrationFlagsMap = TransparentUnorderedStringMap<uint32_t>;
+  using PrefRegistrationFlagsMap = absl::flat_hash_map<std::string, uint32_t>;
 
   PrefRegistry();
 
@@ -119,10 +118,14 @@ class COMPONENTS_PREFS_EXPORT PrefRegistry
   // A map of pref name to a bitmask of PrefRegistrationFlags.
   PrefRegistrationFlagsMap registration_flags_;
 
-  // A map of pref name to its registered type.
+  // A map of pref name to its non-default registered type. Entries that are
+  // not in the map are assumed to be of type `RegisteredPrefType::kOther`.
+  // This is shared between regular and incognito registries so late
+  // registrations propagate.
   using PrefRegistrationTypeMap =
-      TransparentUnorderedStringMap<RegisteredPrefType>;
-  PrefRegistrationTypeMap registration_types_;
+      absl::flat_hash_map<std::string, RegisteredPrefType>;
+  scoped_refptr<base::RefCountedData<PrefRegistrationTypeMap>>
+      registration_types_;
 };
 
 #endif  // COMPONENTS_PREFS_PREF_REGISTRY_H_

@@ -36,11 +36,10 @@ import type {Route} from '../router.js';
 import {Router, routes} from '../router.js';
 
 import {getTemplate} from './cursor_and_touchpad_page.html.js';
-import type {CursorAndTouchpadPageBrowserProxy} from './cursor_and_touchpad_page_browser_proxy.js';
-import {CursorAndTouchpadPageBrowserProxyImpl} from './cursor_and_touchpad_page_browser_proxy.js';
 import {DisableTouchpadMode} from './disable_touchpad_constants.js';
 
 const DEFAULT_BLACK_CURSOR_COLOR = 0;
+const INVERTED_CURSOR_COLOR = 1;
 interface Option {
   name: string;
   value: number;
@@ -138,7 +137,7 @@ export class SettingsCursorAndTouchpadPageElement extends
         readOnly: true,
         type: Array,
         value() {
-          return [
+          const options = [
             {
               value: DEFAULT_BLACK_CURSOR_COLOR,
               name: loadTimeData.getString('cursorColorBlack'),
@@ -171,8 +170,15 @@ export class SettingsCursorAndTouchpadPageElement extends
               value: 0xf50057,  // Pink A400
               name: loadTimeData.getString('cursorColorPink'),
             },
-
           ];
+          if (loadTimeData.getBoolean(
+                  'isAccessibilityInvertedMouseCursorEnabled')) {
+            options.push({
+              value: INVERTED_CURSOR_COLOR,
+              name: loadTimeData.getString('cursorColorInverted'),
+            });
+          }
+          return options;
         },
       },
 
@@ -308,33 +314,29 @@ export class SettingsCursorAndTouchpadPageElement extends
     Setting.kTabletNavigationButtons,
   ]);
 
-  private autoClickDelayOptions_: Option[];
-  private autoClickMovementThresholdOptions_: Option[];
-  private cursorAndTouchpadBrowserProxy_: CursorAndTouchpadPageBrowserProxy;
-  private cursorColorOptions_: Option[];
+  declare private autoClickDelayOptions_: Option[];
+  declare private autoClickMovementThresholdOptions_: Option[];
+  declare private cursorColorOptions_: Option[];
   private deviceBrowserProxy_: DevicePageBrowserProxy;
-  private disableTouchpadOptions_: Option[];
-  private readonly isKioskModeActive_: boolean;
-  private shelfNavigationButtonsImplicitlyEnabled_: boolean;
-  private shelfNavigationButtonsPref_:
+  declare private disableTouchpadOptions_: Option[];
+  declare private readonly isKioskModeActive_: boolean;
+  declare private shelfNavigationButtonsImplicitlyEnabled_: boolean;
+  declare private shelfNavigationButtonsPref_:
       chrome.settingsPrivate.PrefObject<boolean>;
-  private showFaceGazeRow_: boolean;
-  private showShelfNavigationButtonsSettings_: boolean;
-  private readonly isAccessibilityDisableTouchpadEnabled_: boolean;
-  private readonly isAccessibilityMouseKeysEnabled_: boolean;
+  declare private showFaceGazeRow_: boolean;
+  declare private showShelfNavigationButtonsSettings_: boolean;
+  declare private readonly isAccessibilityDisableTouchpadEnabled_: boolean;
+  declare private readonly isAccessibilityMouseKeysEnabled_: boolean;
   private readonly largeCursorMaxSize_: number;
-  private hasMouse_: boolean;
-  private hasTouchpad_: boolean;
-  private hasPointingStick_: boolean;
+  declare private hasMouse_: boolean;
+  declare private hasTouchpad_: boolean;
+  declare private hasPointingStick_: boolean;
 
   constructor() {
     super();
 
     /** RouteOriginMixin override */
     this.route = routes.A11Y_CURSOR_AND_TOUCHPAD;
-
-    this.cursorAndTouchpadBrowserProxy_ =
-        CursorAndTouchpadPageBrowserProxyImpl.getInstance();
 
     this.deviceBrowserProxy_ = DevicePageBrowserProxyImpl.getInstance();
   }
@@ -488,17 +490,17 @@ export class SettingsCursorAndTouchpadPageElement extends
                             '#shelfNavigationButtonsEnabledControl')!.checked;
     this.setPrefValue(
         'settings.a11y.tablet_mode_shelf_nav_buttons_enabled', enabled);
-    this.cursorAndTouchpadBrowserProxy_
-        .recordSelectedShowShelfNavigationButtonValue(enabled);
   }
 
   private onA11yCursorColorChange_(): void {
     // Custom cursor color is enabled when the color is not set to black.
-    const a11yCursorColorOn =
-        this.getPref<number>('settings.a11y.cursor_color').value !==
-        DEFAULT_BLACK_CURSOR_COLOR;
+    const color = this.getPref<number>('settings.a11y.cursor_color').value;
+    const a11yCursorColorOn = color !== DEFAULT_BLACK_CURSOR_COLOR;
     this.set(
         'prefs.settings.a11y.cursor_color_enabled.value', a11yCursorColorOn);
+
+    chrome.metricsPrivate.recordSparseValue(
+        'ChromeOS.Settings.Accessibility.CursorColor.Value', color);
   }
 
   private showTouchpadEnableMessage_(trackpadMode: number): boolean {

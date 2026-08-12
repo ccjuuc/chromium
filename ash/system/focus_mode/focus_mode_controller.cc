@@ -9,7 +9,7 @@
 #include "ash/accessibility/accessibility_controller.h"
 #include "ash/api/tasks/tasks_types.h"
 #include "ash/constants/ash_pref_names.h"
-#include "ash/constants/url_constants.h"
+#include "ash/constants/webui_url_constants.h"
 #include "ash/media/media_controller_impl.h"
 #include "ash/public/cpp/ash_web_view_factory.h"
 #include "ash/public/cpp/shell_window_ids.h"
@@ -42,6 +42,7 @@
 #include "components/prefs/pref_service.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/message_center/message_center.h"
+#include "ui/views/controls/image_view.h"
 #include "ui/views/widget/widget.h"
 
 namespace ash {
@@ -701,7 +702,7 @@ void FocusModeController::OnTimerTick() {
       return;
     case FocusModeSession::State::kEnding:
       timer_.Stop();
-      congratulatory_index_ = base::RandInt(
+      congratulatory_index_ = base::RandIntInclusive(
           /*min=*/0, /*max=*/focus_mode_util::kCongratulatoryTitleNum - 1);
 
       if (media_widget_) {
@@ -820,7 +821,7 @@ void FocusModeController::SaveSelectedTaskSettingsToUserPrefs(
     const std::optional<FocusModeTask>& task) {
   if (PrefService* active_user_prefs =
           Shell::Get()->session_controller()->GetActivePrefService()) {
-    base::Value::Dict selected_task_dict;
+    base::DictValue selected_task_dict;
 
     // If there is a selected task, we will save its `task_id.list_id` and
     // `task_id.id`; otherwise, we will store an empty dict.
@@ -914,7 +915,7 @@ bool FocusModeController::MaybeCreateMediaWidget() {
 
   focus_mode_media_view_ = media_widget_->SetContentsView(
       AshWebViewFactory::Get()->Create(web_view_params));
-  focus_mode_media_view_->Navigate(GURL(chrome::kChromeUIFocusModeMediaURL));
+  focus_mode_media_view_->Navigate(GURL(kChromeUIFocusModeMediaURL));
   return true;
 }
 

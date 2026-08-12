@@ -5,8 +5,6 @@
 // gpu/config/gpu_feature_info.h
 module gpu.mojom;
 
-import "ui/gfx/mojom/buffer_types.mojom";
-
 // gpu::GpuFeatureStatus
 enum GpuFeatureStatus {
   Enabled,
@@ -44,9 +42,4 @@ struct GpuFeatureInfo {
   // in the current platform. The entries are defined in
   // gpu/config/gpu_driver_bug_list.json.
   array<uint32> applied_gpu_driver_bug_list_entries;
-
-  // BufferFormats that can be allocated and then bound, if known and provided
-  // by the platform.
-  array<gfx.mojom.BufferFormat>
-      supported_buffer_formats_for_allocation_and_texturing;
 };

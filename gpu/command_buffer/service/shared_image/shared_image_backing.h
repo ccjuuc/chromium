@@ -11,7 +11,6 @@
 #include <optional>
 
 #include "base/memory/raw_ptr.h"
-#include "base/memory/raw_ptr_exclusion.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/stack_allocated.h"
 #include "base/synchronization/lock.h"
@@ -21,6 +20,7 @@
 #include "build/build_config.h"
 #include "components/viz/common/resources/shared_image_format.h"
 #include "gpu/command_buffer/common/mailbox.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/common/shared_image_pool_id.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/gpu_gles2_export.h"
@@ -60,6 +60,7 @@ namespace gpu {
 class SharedContextState;
 class SharedImageManager;
 class SharedImageRepresentation;
+struct VulkanYCbCrInfo;
 class GLTextureImageRepresentation;
 class GLTexturePassthroughImageRepresentation;
 class SkiaGaneshImageRepresentation;
@@ -75,6 +76,24 @@ class MemoryTracker;
 class VideoImageRepresentation;
 class MemoryTypeTracker;
 class WebNNTensorRepresentation;
+
+// Forward declaration for SharedImageAccessStream, which is defined in
+// gpu/command_buffer/common/shared_image_usage.h.
+enum class SharedImageAccessStream;
+
+// A struct to hold parameters for shared image access. This allows passing
+// context-specific information to backings so they can determine if they
+// can support a given access request.
+struct AccessParams {
+  AccessParams();
+  AccessParams(const AccessParams&);
+  AccessParams& operator=(const AccessParams&);
+  ~AccessParams();
+
+  scoped_refptr<SharedContextState> context_state = nullptr;
+  wgpu::Device wgpu_device = nullptr;
+  // Other context types can be added here in the future.
+};
 
 #if BUILDFLAG(ENABLE_VULKAN)
 class VulkanImageRepresentation;
@@ -120,13 +139,7 @@ class GPU_GLES2_EXPORT SharedImageBacking {
  public:
   SharedImageBacking(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label,
+      const SharedImageInfo& si_info,
       size_t estimated_size,
       bool is_thread_safe,
       std::optional<gfx::BufferUsage> buffer_usage = std::nullopt);
@@ -142,14 +155,14 @@ class GPU_GLES2_EXPORT SharedImageBacking {
   const Mailbox& mailbox() const { return mailbox_; }
   bool is_thread_safe() const { return !!lock_; }
   bool is_ref_counted() const { return is_ref_counted_; }
-  gfx::BufferUsage buffer_usage() const { return buffer_usage_.value(); }
+  std::optional<gfx::BufferUsage> buffer_usage() const { return buffer_usage_; }
   const std::string& debug_label() const { return debug_label_; }
 
-  void OnContextLost();
+  virtual void OnContextLost();
 
   // Creates SkImageInfo matching backing size, format, alpha and color space
   // for the specified `plane_index`.
-  SkImageInfo AsSkImageInfo(int plane_index = 0) const;
+  SkImageInfo AsSkImageInfo(size_t plane_index = 0) const;
 
   // Disables reference counting for backing. No references should be added,
   // either before or after this is called.
@@ -253,6 +266,12 @@ class GPU_GLES2_EXPORT SharedImageBacking {
   // Returns the GpuMemoryBufferHandle if present.
   virtual gfx::GpuMemoryBufferHandle GetGpuMemoryBufferHandle();
 
+#if BUILDFLAG(IS_ANDROID)
+  // Queries the Vulkan/Dawn YCbCr info for the backing.
+  virtual std::optional<VulkanYCbCrInfo> GetVkCbCrInfo(
+      SharedContextState* context_state);
+#endif
+
   // True for images in Ash that were imported from Exo clients.
   virtual bool IsImportedFromExo();
 
@@ -261,6 +280,12 @@ class GPU_GLES2_EXPORT SharedImageBacking {
 
   // Marks the entire image as cleared.
   void SetCleared() { SetClearedRect(gfx::Rect(size())); }
+
+  // New virtual method to check for access support based on stream and context.
+  // Backings can override this to implement context-aware selection logic.
+  // The default implementation returns true for backward compatibility.
+  virtual bool SupportsAccess(SharedImageAccessStream stream,
+                              const AccessParams& params) const;
 
  protected:
   // Used by SharedImageManager.
@@ -408,8 +433,9 @@ class GPU_GLES2_EXPORT SharedImageBacking {
   // A vector of SharedImageRepresentations which hold references to this
   // backing. The first reference is considered the owner, and the vector is
   // ordered by the order in which references were taken.
-  // RAW_PTR_EXCLUSION: Performance reasons (based on analysis of MotionMark).
-  RAW_PTR_EXCLUSION std::vector<SharedImageRepresentation*> refs_
+  // Uses UnprotectedInRelease for performance reasons (based on analysis of
+  // MotionMark).
+  std::vector<raw_ptr<SharedImageRepresentation, UnprotectedInRelease>> refs_
       GUARDED_BY(lock_);
 };
 
@@ -421,13 +447,7 @@ class GPU_GLES2_EXPORT ClearTrackingSharedImageBacking
  public:
   ClearTrackingSharedImageBacking(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label,
+      const SharedImageInfo& si_info,
       size_t estimated_size,
       bool is_thread_safe,
       std::optional<gfx::BufferUsage> buffer_usage = std::nullopt);

@@ -14,6 +14,7 @@
 #include "content/public/browser/global_routing_id.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/network_delegate.h"
+#include "net/cookies/site_for_cookies.h"
 #include "net/storage_access_api/status.h"
 #include "services/network/public/mojom/restricted_cookie_manager.mojom.h"
 
@@ -42,6 +43,7 @@ class AwProxyingRestrictedCookieManager
       bool is_service_worker,
       int process_id,
       int frame_id,
+      const net::SiteForCookies& site_for_cookies,
       mojo::PendingReceiver<network::mojom::RestrictedCookieManager> receiver,
       AwCookieAccessPolicy* aw_cookie_access_policy);
 
@@ -54,89 +56,98 @@ class AwProxyingRestrictedCookieManager
 
   // network::mojom::RestrictedCookieManager interface:
   void GetAllForUrl(const GURL& url,
-                    const net::SiteForCookies& site_for_cookies,
+                    const net::SiteForCookies& /*site_for_cookies*/,
                     const url::Origin& top_frame_origin,
-                    net::StorageAccessApiStatus storage_access_api_status,
+                    net::StorageAccessApiStatus /*storage_access_api_status*/,
                     network::mojom::CookieManagerGetOptionsPtr options,
                     bool is_ad_tagged,
                     bool apply_devtools_overrides,
                     bool force_disable_third_party_cookies,
                     GetAllForUrlCallback callback) override;
-  void SetCanonicalCookie(const net::CanonicalCookie& cookie,
-                          const GURL& url,
-                          const net::SiteForCookies& site_for_cookies,
-                          const url::Origin& top_frame_origin,
-                          net::StorageAccessApiStatus storage_access_api_status,
-                          net::CookieInclusionStatus status,
-                          bool is_ad_tagged,
-                          bool apply_devtools_overrides,
-                          SetCanonicalCookieCallback callback) override;
+  void SetCanonicalCookie(
+      network::mojom::RestrictedCanonicalCookieParamsPtr cookie_params,
+      const GURL& url,
+      const net::SiteForCookies& /*site_for_cookies*/,
+      const url::Origin& top_frame_origin,
+      net::StorageAccessApiStatus /*storage_access_api_status*/,
+      bool is_ad_tagged,
+      bool apply_devtools_overrides,
+      SetCanonicalCookieCallback callback) override;
   void AddChangeListener(
       const GURL& url,
-      const net::SiteForCookies& site_for_cookies,
+      const net::SiteForCookies& /*site_for_cookies*/,
       const url::Origin& top_frame_origin,
-      net::StorageAccessApiStatus storage_access_api_status,
+      net::StorageAccessApiStatus /*storage_access_api_status*/,
       mojo::PendingRemote<network::mojom::CookieChangeListener> listener,
       AddChangeListenerCallback callback) override;
 
   void SetCookieFromString(
       const GURL& url,
-      const net::SiteForCookies& site_for_cookies,
+      const net::SiteForCookies& /*site_for_cookies*/,
       const url::Origin& top_frame_origin,
-      net::StorageAccessApiStatus storage_access_api_status,
+      net::StorageAccessApiStatus /*storage_access_api_status*/,
+      bool is_ad_tagged,
+      bool apply_devtools_overrides,
+      const std::string& cookie) override;
+
+  void GetCookiesString(
+      const GURL& url,
+      const net::SiteForCookies& /*site_for_cookies*/,
+      const url::Origin& top_frame_origin,
+      net::StorageAccessApiStatus /*storage_access_api_status*/,
       bool get_version_shared_memory,
       bool is_ad_tagged,
       bool apply_devtools_overrides,
-      const std::string& cookie,
-      SetCookieFromStringCallback callback) override;
+      bool force_disable_third_party_cookies,
+      GetCookiesStringCallback callback) override;
 
-  void GetCookiesString(const GURL& url,
-                        const net::SiteForCookies& site_for_cookies,
-                        const url::Origin& top_frame_origin,
-                        net::StorageAccessApiStatus storage_access_api_status,
-                        bool get_version_shared_memory,
-                        bool is_ad_tagged,
-                        bool apply_devtools_overrides,
-                        bool force_disable_third_party_cookies,
-                        GetCookiesStringCallback callback) override;
-
-  void CookiesEnabledFor(const GURL& url,
-                         const net::SiteForCookies& site_for_cookies,
-                         const url::Origin& top_frame_origin,
-                         net::StorageAccessApiStatus storage_access_api_status,
-                         bool apply_devtools_overrides,
-                         CookiesEnabledForCallback callback) override;
+  void CookiesEnabledFor(
+      const GURL& url,
+      const net::SiteForCookies& /*site_for_cookies*/,
+      const url::Origin& top_frame_origin,
+      net::StorageAccessApiStatus /*storage_access_api_status*/,
+      bool apply_devtools_overrides,
+      CookiesEnabledForCallback callback) override;
 
   // This one is internal.
-  net::NetworkDelegate::PrivacySetting AllowCookies(
-      const GURL& url,
-      const net::SiteForCookies& site_for_cookies,
-      net::StorageAccessApiStatus storage_access_api_status) const;
+  net::NetworkDelegate::PrivacySetting AllowCookies(const GURL& url) const;
 
  private:
   AwProxyingRestrictedCookieManager(
       mojo::PendingRemote<network::mojom::RestrictedCookieManager>
           underlying_restricted_cookie_manager,
-      bool is_service_worker,
       const std::optional<const content::GlobalRenderFrameHostToken>&
           global_frame_token,
+      const net::SiteForCookies& site_for_cookies,
       AwCookieAccessPolicy* cookie_access_policy);
 
   static void CreateAndBindOnIoThread(
       mojo::PendingRemote<network::mojom::RestrictedCookieManager>
           underlying_rcm,
-      bool is_service_worker,
       const std::optional<const content::GlobalRenderFrameHostToken>&
           global_frame_token,
+      const net::SiteForCookies& site_for_cookies,
       mojo::PendingReceiver<network::mojom::RestrictedCookieManager> receiver,
       AwCookieAccessPolicy* cookie_access_policy);
 
   mojo::Remote<network::mojom::RestrictedCookieManager>
       underlying_restricted_cookie_manager_;
-  bool is_service_worker_;
   std::optional<const content::GlobalRenderFrameHostToken> global_frame_token_;
 
   raw_ref<AwCookieAccessPolicy> cookie_access_policy_;
+
+  // Latched cookie policy state (used when kWebViewLatchedCookiePolicy
+  // enabled). These values are captured at construction time and used
+  // throughout the RCM's lifetime to enable shared memory cookie versioning.
+  bool latched_accept_cookies_ = true;
+  bool latched_accept_third_party_ = false;
+
+  // We are storing the SiteForCookies we get from ContentBrowserClient here
+  // from the browser process. This is different from the site_for_cookies
+  // parameter that gets provided on method calls to the
+  // ProxyingRestrictedCookiManager because those parameters come from the
+  // renderer which we can't trust entirely.
+  const net::SiteForCookies site_for_cookies_;
 
   base::WeakPtrFactory<AwProxyingRestrictedCookieManager> weak_factory_{this};
 };

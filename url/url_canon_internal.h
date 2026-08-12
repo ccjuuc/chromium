@@ -209,7 +209,7 @@ extern const std::array<char, 8> kCharToHexLookup;
 
 // Assumes the input is a valid hex digit! Call IsHexChar before using this.
 inline int HexCharToValue(unsigned char c) {
-  return c - UNSAFE_TODO(kCharToHexLookup[c / 0x20]);
+  return c - kCharToHexLookup[c / 0x20];
 }
 
 // Indicates if the start of `spec` is a dot or dot equivalent, returning the
@@ -273,7 +273,7 @@ bool ReadUtfCharLossy(std::string_view str,
 // The char_value must have already been checked that it's a valid Unicode
 // character.
 template <class Output, void Appender(unsigned char, Output*)>
-inline void DoAppendUTF8(base_icu::UChar32 char_value, Output* output) {
+inline void DoAppendUtf8(base_icu::UChar32 char_value, Output* output) {
   DCHECK(char_value >= 0);
   DCHECK(char_value <= 0x10FFFF);
   if (char_value <= 0x7f) {
@@ -299,7 +299,7 @@ inline void DoAppendUTF8(base_icu::UChar32 char_value, Output* output) {
   }
 }
 
-// Helper used by AppendUTF8Value below. We use an unsigned parameter so there
+// Helper used by AppendUtf8Value below. We use an unsigned parameter so there
 // are no funny sign problems with the input, but then have to convert it to
 // a regular char for appending.
 inline void AppendCharToOutput(unsigned char ch, CanonOutput* output) {
@@ -309,17 +309,17 @@ inline void AppendCharToOutput(unsigned char ch, CanonOutput* output) {
 // Writes the given character to the output as UTF-8. This does NO checking
 // of the validity of the Unicode characters; the caller should ensure that
 // the value it is appending is valid to append.
-inline void AppendUTF8Value(base_icu::UChar32 char_value, CanonOutput* output) {
-  DoAppendUTF8<CanonOutput, AppendCharToOutput>(char_value, output);
+inline void AppendUtf8Value(base_icu::UChar32 char_value, CanonOutput* output) {
+  DoAppendUtf8<CanonOutput, AppendCharToOutput>(char_value, output);
 }
 
 // Writes the given character to the output as UTF-8, escaping ALL
 // characters (even when they are ASCII). This does NO checking of the
 // validity of the Unicode characters; the caller should ensure that the value
 // it is appending is valid to append.
-inline void AppendUTF8EscapedValue(base_icu::UChar32 char_value,
+inline void AppendUtf8EscapedValue(base_icu::UChar32 char_value,
                                    CanonOutput* output) {
-  DoAppendUTF8<CanonOutput, AppendEscapedChar>(char_value, output);
+  DoAppendUtf8<CanonOutput, AppendEscapedChar>(char_value, output);
 }
 
 // UTF-16 functions -----------------------------------------------------------
@@ -338,7 +338,7 @@ bool ReadUtfCharLossy(std::u16string_view str,
                       base_icu::UChar32* code_point_out);
 
 // Equivalent to U16_APPEND_UNSAFE in ICU but uses our output method.
-inline void AppendUTF16Value(base_icu::UChar32 code_point,
+inline void AppendUtf16Value(base_icu::UChar32 code_point,
                              CanonOutputT<char16_t>* output) {
   if (code_point > 0xffff) {
     output->push_back(static_cast<char16_t>((code_point >> 10) + 0xd7c0));
@@ -372,12 +372,12 @@ inline void AppendUTF16Value(base_icu::UChar32 code_point,
 inline bool AppendUtf8EscapedChar(std::u16string_view str,
                                   size_t* begin,
                                   CanonOutput* output) {
-  // UTF-16 input. ReadUTFCharLossy will handle invalid characters for us and
+  // UTF-16 input. ReadUtfCharLossy will handle invalid characters for us and
   // give us the kUnicodeReplacementCharacter, so we don't have to do special
   // checking after failure, just pass through the failure to the caller.
   base_icu::UChar32 char_value;
   bool success = ReadUtfCharLossy(str, begin, &char_value);
-  AppendUTF8EscapedValue(char_value, output);
+  AppendUtf8EscapedValue(char_value, output);
   return success;
 }
 
@@ -385,12 +385,12 @@ inline bool AppendUtf8EscapedChar(std::u16string_view str,
 inline bool AppendUtf8EscapedChar(std::string_view str,
                                   size_t* begin,
                                   CanonOutput* output) {
-  // ReadUTFCharLossy will handle invalid characters for us and give us the
+  // ReadUtfCharLossy will handle invalid characters for us and give us the
   // kUnicodeReplacementCharacter, so we don't have to do special checking
   // after failure, just pass through the failure to the caller.
   base_icu::UChar32 ch;
   bool success = ReadUtfCharLossy(str, begin, &ch);
-  AppendUTF8EscapedValue(ch, output);
+  AppendUtf8EscapedValue(ch, output);
   return success;
 }
 
@@ -462,16 +462,9 @@ void AppendInvalidNarrowString(std::u16string_view input, CanonOutput* output);
 // return false in the failure case, and the caller should not continue as
 // normal.
 COMPONENT_EXPORT(URL)
-bool ConvertUTF16ToUTF8(std::u16string_view input, CanonOutput* output);
+bool ConvertUtf16ToUtf8(std::u16string_view input, CanonOutput* output);
 COMPONENT_EXPORT(URL)
-bool ConvertUTF8ToUTF16(std::string_view input, CanonOutputT<char16_t>* output);
-
-// Converts from UTF-16 to 8-bit using the character set converter. If the
-// converter is NULL, this will use UTF-8.
-void ConvertUTF16ToQueryEncoding(const char16_t* input,
-                                 const Component& query,
-                                 CharsetConverter* converter,
-                                 CanonOutput* output);
+bool ConvertUtf8ToUtf16(std::string_view input, CanonOutputT<char16_t>* output);
 
 // Applies the replacements `repl` to the given component source `overridden`.
 // The component source should be pre-initialized to the "old" base. That is,
@@ -555,20 +548,6 @@ constexpr uint64_t StringToUint64WithBase(std::string_view str, uint8_t base) {
 
   return result;
 }
-
-#ifndef WIN32
-
-// Implementations of Windows' int-to-string conversions
-COMPONENT_EXPORT(URL)
-int _itoa_s(int value, char* buffer, size_t size_in_chars, int radix);
-
-// Secure template overloads for these functions
-template <size_t N>
-inline int _itoa_s(int value, char (&buffer)[N], int radix) {
-  return _itoa_s(value, buffer, N, radix);
-}
-
-#endif  // WIN32
 
 // The threshold we set to consider SIMD processing, in bytes; there is
 // no deep theory here, it's just set empirically to a value that seems

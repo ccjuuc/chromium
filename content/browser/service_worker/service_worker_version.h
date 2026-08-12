@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/cancelable_callback.h"
 #include "base/containers/id_map.h"
 #include "base/functional/callback.h"
@@ -30,7 +31,7 @@
 #include "base/timer/timer.h"
 #include "base/uuid.h"
 #include "components/services/storage/public/mojom/service_worker_storage_control.mojom.h"
-#include "content/browser/renderer_host/back_forward_cache_metrics.h"
+#include "content/browser/back_forward_cache/back_forward_cache_metrics.h"
 #include "content/browser/renderer_host/policy_container_host.h"
 #include "content/browser/service_worker/embedded_worker_instance.h"
 #include "content/browser/service_worker/service_worker_client_utils.h"
@@ -45,6 +46,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/service_worker_client_info.h"
+#include "content/public/common/child_process_id.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -102,6 +104,8 @@ FORWARD_DECLARE_TEST(ServiceWorkerVersionTest, StaleUpdate_FreshWorker);
 FORWARD_DECLARE_TEST(ServiceWorkerVersionTest, StaleUpdate_NonActiveWorker);
 FORWARD_DECLARE_TEST(ServiceWorkerVersionTest, StaleUpdate_RunningWorker);
 FORWARD_DECLARE_TEST(ServiceWorkerVersionTest, StaleUpdate_StartWorker);
+FORWARD_DECLARE_TEST(ServiceWorkerVersionTest,
+                     InstalledScriptsSenderResetOnStopping);
 FORWARD_DECLARE_TEST(ServiceWorkerVersionTest,
                      StallInStopping_DetachThenRestart);
 FORWARD_DECLARE_TEST(ServiceWorkerVersionTest, StallInStopping_DetachThenStart);
@@ -218,7 +222,11 @@ class CONTENT_EXPORT ServiceWorkerVersion
       int64_t version_id,
       mojo::PendingRemote<storage::mojom::ServiceWorkerLiveVersionRef>
           remote_reference,
-      base::WeakPtr<ServiceWorkerContextCore> context);
+      base::WeakPtr<ServiceWorkerContextCore> context,
+      const std::optional<base::UnguessableToken>&
+          creator_network_restrictions_id,
+      const std::optional<base::UnguessableToken>& network_restrictions_id,
+      const PolicyContainerPolicies& creator_policies);
 
   ServiceWorkerVersion(const ServiceWorkerVersion&) = delete;
   ServiceWorkerVersion& operator=(const ServiceWorkerVersion&) = delete;
@@ -239,6 +247,19 @@ class CONTENT_EXPORT ServiceWorkerVersion
     return reporting_source_;
   }
 
+  const base::UnguessableToken& network_restrictions_id() const {
+    return network_restrictions_id_;
+  }
+
+  const std::optional<base::UnguessableToken>& creator_network_restrictions_id()
+      const {
+    return creator_network_restrictions_id_;
+  }
+
+  const PolicyContainerPolicies& creator_policies() const {
+    return creator_policies_;
+  }
+
   // This status is set to EXISTS or DOES_NOT_EXIST when the install event has
   // been executed in a new version or when an installed version is loaded from
   // the storage. When a new version is not installed yet, it is UNKNOWN.
@@ -246,17 +267,6 @@ class CONTENT_EXPORT ServiceWorkerVersion
   // Returns the fetch handler type if set.  Otherwise, kNoHandler.
   FetchHandlerType fetch_handler_type() const;
   void set_fetch_handler_type(FetchHandlerType fetch_handler_type);
-
-  // Return the option indicating how the fetch handler should be bypassed.
-  // This is used to let the renderer know to bypass fetch handlers for
-  // subresources.
-  FetchHandlerBypassOption fetch_handler_bypass_option() {
-    return fetch_handler_bypass_option_;
-  }
-  void set_fetch_handler_bypass_option(
-      FetchHandlerBypassOption fetch_handler_bypass_option) {
-    fetch_handler_bypass_option_ = fetch_handler_bypass_option;
-  }
 
   bool has_hid_event_handlers() const { return has_hid_event_handlers_; }
   void set_has_hid_event_handlers(bool has_hid_event_handlers);
@@ -327,10 +337,34 @@ class CONTENT_EXPORT ServiceWorkerVersion
   // Returns true if the worker will be terminated and the worker should not
   // handle any events dispatched directly from clients (e.g. FetchEvents for
   // subresources).
-  bool OnRequestTermination();
+  bool OnRequestTermination(uint64_t observed_keepalive_sequence_number);
 
   // Schedules an update to be run 'soon'.
   void ScheduleUpdate();
+
+  // Implements the "Fire Functional Event" algorithm from the Service Worker
+  // specification. Starts the worker if needed, then runs |callback| with the
+  // result. On worker start failure, triggers a soft update check (spec step
+  // 5). Callers should use StartRequestForFunctionalEvent() (or
+  // StartRequestForFunctionalEventWithCustomTimeout()) to track the actual
+  // event dispatch; the completion soft-update (spec step 8) is handled
+  // automatically.
+  void RunAfterStartWorkerForFunctionalEvent(
+      ServiceWorkerMetrics::EventType purpose,
+      StatusCallback callback);
+
+  // Like StartRequest(), but marks the request for soft-update on completion.
+  int StartRequestForFunctionalEvent(
+      ServiceWorkerMetrics::EventType event_type,
+      StatusCallback error_callback);
+
+  // Like StartRequestWithCustomTimeout(), but marks the request for
+  // soft-update on completion.
+  int StartRequestForFunctionalEventWithCustomTimeout(
+      ServiceWorkerMetrics::EventType event_type,
+      StatusCallback error_callback,
+      const base::TimeDelta& timeout,
+      TimeoutBehavior timeout_behavior);
 
   // Starts an update now.
   void StartUpdate();
@@ -485,6 +519,10 @@ class CONTENT_EXPORT ServiceWorkerVersion
     return worker_host_.get();
   }
 
+  const std::optional<blink::ServiceWorkerToken>& start_worker_token() const {
+    return start_worker_token_;
+  }
+
   base::WeakPtr<ServiceWorkerContextCore> context() const { return context_; }
 
   // Adds and removes Observers.
@@ -534,6 +572,13 @@ class CONTENT_EXPORT ServiceWorkerVersion
         std::move(outside_fetch_client_settings_object);
   }
 
+  void set_network_restrictions_id(
+      const base::UnguessableToken& network_restrictions_id) {
+    network_restrictions_id_ = network_restrictions_id;
+  }
+
+  void MaybeRegisterNetworkRestrictions(base::OnceClosure callback);
+
   // Returns the reason the embedded worker failed to start, using internal
   // information that may not be available to the caller. Returns
   // |default_code| if it can't deduce a reason.
@@ -561,6 +606,11 @@ class CONTENT_EXPORT ServiceWorkerVersion
 
   // Sets the response information used to load the main script.
   void SetMainScriptResponse(std::unique_ptr<MainScriptResponse> response);
+
+  // Ensures that the response information for the main script is set. If it is
+  // not set yet, it starts fetching it.
+  void EnsureMainScriptResponseSet(base::OnceClosure callback);
+  bool main_script_fetched() const;
   const MainScriptResponse* GetMainScriptResponse();
 
   // Simulate ping timeout. Should be used for tests-only.
@@ -579,6 +629,11 @@ class CONTENT_EXPORT ServiceWorkerVersion
   // Returns the number of pending external request count of this worker.
   size_t GetExternalRequestCountForTest() const {
     return external_request_uuid_to_request_id_.size();
+  }
+
+  // Returns the latest browser keepalive sequence number for testing.
+  uint64_t GetLatestExternalKeepaliveSequenceNumberForTest() const {
+    return latest_external_keepalive_sequence_number_;
   }
 
   // Returns the amount of time left until the request with the latest
@@ -656,7 +711,7 @@ class CONTENT_EXPORT ServiceWorkerVersion
 
   // Called by the EmbeddedWorkerInstance to determine if its worker process
   // should be kept at foreground priority.
-  bool ShouldRequireForegroundPriority(int worker_process_id) const;
+  bool ShouldRequireForegroundPriority(ChildProcessId worker_process_id) const;
 
   // Called when a controlled client's state changes in a way that might effect
   // whether the service worker should be kept at foreground priority.
@@ -690,7 +745,7 @@ class CONTENT_EXPORT ServiceWorkerVersion
   void InitializeGlobalScope();
 
   // Returns true if |process_id| is a controllee process ID of this version.
-  bool IsControlleeProcessID(int process_id) const;
+  bool IsControlleeProcessID(ChildProcessId process_id) const;
 
   // Executes the given `script` in the associated worker. If `callback` is
   // non-empty, invokes `callback` with the result of the script after
@@ -749,6 +804,14 @@ class CONTENT_EXPORT ServiceWorkerVersion
   GetResponseHeadForSyntheticResponse() const {
     return synthetic_response_head_;
   }
+
+  void OnPaymentHandlerDisconnect();
+
+  struct RouterRulesForDevTools {
+    std::optional<std::string> legacy_rules;
+    std::vector<ServiceWorkerRouterRule> typed_rules;
+  };
+  RouterRulesForDevTools CalculateRouterRulesForDevTools() const;
 
   // Timeout for a request to be handled.
   static constexpr base::TimeDelta kRequestTimeout = base::Minutes(5);
@@ -814,6 +877,9 @@ class CONTENT_EXPORT ServiceWorkerVersion
   FRIEND_TEST_ALL_PREFIXES(
       service_worker_version_unittest::ServiceWorkerVersionTest,
       StallInStopping_DetachThenRestart);
+  FRIEND_TEST_ALL_PREFIXES(
+      service_worker_version_unittest::ServiceWorkerVersionTest,
+      InstalledScriptsSenderResetOnStopping);
   FRIEND_TEST_ALL_PREFIXES(
       service_worker_version_unittest::ServiceWorkerVersionTest,
       RequestNowTimeout);
@@ -886,8 +952,13 @@ class CONTENT_EXPORT ServiceWorkerVersion
     base::Time start_time;
     base::TimeTicks start_time_ticks;
     ServiceWorkerMetrics::EventType event_type;
-    // Points to this request's entry in |request_timeouts_|.
-    std::set<InflightRequestTimeoutInfo>::iterator timeout_iter;
+    // When true, FinishRequestWithFetchCount() will check for a stale
+    // registration and schedule a soft update (spec step 8).
+    bool soft_update_on_completion = false;
+    // Points to this request's entry in |request_timeouts_|. Please invalidate
+    // this when the corresponding entry is removed from `request_timeouts_`.
+    // TODO(crbug.com/499449324): Refactor this code by simplifying ownerships.
+    std::optional<std::set<InflightRequestTimeoutInfo>::iterator> timeout_iter;
   };
 
   // The timeout timer interval.
@@ -930,6 +1001,16 @@ class CONTENT_EXPORT ServiceWorkerVersion
                               const GURL& source_url) override;
 
   void OnStartSent(blink::ServiceWorkerStatusCode status);
+
+  // Returns true if the registration is stale (i.e. context is available,
+  // no installing version, and last update check exceeds the max cache age).
+  bool IsRegistrationStale();
+
+  // Callback for RunAfterStartWorker inside
+  // RunAfterStartWorkerForFunctionalEvent. On failure, triggers a soft update
+  // check (spec step 5) before forwarding status.
+  void DidStartWorkerForFunctionalEvent(StatusCallback callback,
+                                        blink::ServiceWorkerStatusCode status);
 
   // Implements blink::mojom::ServiceWorkerHost.
   void SetCachedMetadata(const GURL& url,
@@ -1067,6 +1148,31 @@ class CONTENT_EXPORT ServiceWorkerVersion
                                  GetClientCallback callback,
                                  bool success);
 
+  // Checks if there is an active and pending PAYMENT_REQUEST event
+  // for the current service worker version.
+  bool HasPendingPaymentRequestEvent();
+
+  // Checks if there is an active and pending event that allows the worker to
+  // open a new window or focus an existing one.
+  bool HasPendingWindowInteractionEvent();
+
+  void DidShowPaymentHandlerWindow(
+      const GURL& url,
+      const blink::StorageKey& key,
+      const base::WeakPtr<ServiceWorkerContextCore>& context,
+      blink::mojom::ServiceWorkerHost::OpenPaymentHandlerWindowCallback
+          callback,
+      bool success,
+      int render_process_id,
+      int render_frame_id);
+
+  // Called when the payment handler timeout timer fires.
+  void OnPaymentHandlerTimeout();
+
+  // Disconnects the payment handler and records UMA.
+  // |is_timeout| indicates whether the disconnect was due to a timeout.
+  void DisconnectPaymentHandler(bool is_timeout);
+
   const int64_t version_id_;
   const int64_t registration_id_;
   const GURL script_url_;
@@ -1119,11 +1225,6 @@ class CONTENT_EXPORT ServiceWorkerVersion
   // For service worker script updates, this is set by `PrepareForUpdate()` once
   // the updated script headers have been fetched.
   // For service workers loaded from disk, this is restored from disk.
-  //
-  // TODO(crbug.com/40056874): Set all of this, not just COEP, on script
-  // updates.
-  // TODO(crbug.com/40056874): Persist all of this to disk, not just the
-  // COEP field.
   network::mojom::ClientSecurityStatePtr client_security_state_;
 
   Status status_ = NEW;
@@ -1159,6 +1260,10 @@ class CONTENT_EXPORT ServiceWorkerVersion
   using RequestUUIDToRequestIDMap = std::map<base::Uuid, int>;
   RequestUUIDToRequestIDMap external_request_uuid_to_request_id_;
 
+  // Monotonically increases for accepted external requests in this worker run.
+  // Resets when the worker stops.
+  uint64_t latest_external_keepalive_sequence_number_ = 0;
+
   // External request infos that were issued before this worker reached RUNNING.
   // Info contains UUID and timeout type.
   std::map<base::Uuid, ServiceWorkerExternalRequestTimeoutType>
@@ -1177,6 +1282,9 @@ class CONTENT_EXPORT ServiceWorkerVersion
 
   std::unique_ptr<ServiceWorkerInstalledScriptsSender>
       installed_scripts_sender_;
+
+  base::OnceClosureList main_script_response_callbacks_;
+  bool main_script_fetched_ = false;
 
   std::vector<SkipWaitingCallback> pending_skip_waiting_requests_;
   base::TimeTicks skip_waiting_time_;
@@ -1198,6 +1306,10 @@ class CONTENT_EXPORT ServiceWorkerVersion
   // The host for this version's running service worker. |worker_host_| is
   // always valid as long as this version is running.
   std::unique_ptr<content::ServiceWorkerHost> worker_host_;
+
+  // A token that uniquely identifies this running instance of the Service
+  // Worker. It is valid from worker started until stopped.
+  std::optional<blink::ServiceWorkerToken> start_worker_token_;
 
   // |controllee_map_| and |bfcached_controllee_map_| should not share the same
   // controllee.  ServiceWorkerClient in the controllee maps should be
@@ -1279,6 +1391,13 @@ class CONTENT_EXPORT ServiceWorkerVersion
 
   bool is_stopping_warmed_up_worker_ = false;
 
+  bool payment_handler_connected_ = false;
+
+  // Timer for payment handler timeout. When payment_handler_connected_ is set
+  // to true, this timer starts. If it fires before OnPaymentHandlerDisconnect()
+  // is called, the payment handler connection is considered timed out.
+  base::OneShotTimer payment_handler_timeout_timer_;
+
   // This is the set of features that were used up until installation of this
   // version completed, or used during the lifetime of |this|.
   std::set<blink::mojom::WebFeature> used_features_;
@@ -1334,6 +1453,20 @@ class CONTENT_EXPORT ServiceWorkerVersion
   // browser initiated network response for SyntheticResponse. In subsequent
   // navigations, this will be used as the locally returned response header.
   network::mojom::URLResponseHeadPtr synthetic_response_head_;
+
+  // The network restriction ID of the creator (e.g., frame) from which this
+  // worker may inherit restrictions.
+  const std::optional<base::UnguessableToken> creator_network_restrictions_id_;
+  // The policy container policies (including connection allowlists) inherited
+  // from the creator.
+  const PolicyContainerPolicies creator_policies_;
+
+  // A unique token identifying this worker's network restrictions in the
+  // network service.
+  base::UnguessableToken network_restrictions_id_;
+  // Whether the network restrictions for this worker have been registered with
+  // the network service.
+  bool network_restrictions_registered_ = false;
 
   base::WeakPtrFactory<ServiceWorkerVersion> weak_factory_{this};
 };

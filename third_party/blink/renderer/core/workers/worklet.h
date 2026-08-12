@@ -11,6 +11,7 @@
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/core/workers/worklet_global_scope_proxy.h"
 #include "third_party/blink/renderer/core/workers/worklet_module_responses_map.h"
+#include "third_party/blink/renderer/core/workers/worklet_pending_tasks.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
@@ -67,6 +68,10 @@ class CORE_EXPORT Worklet : public ScriptWrappable,
   WorkletModuleResponsesMap* ModuleResponsesMap() const {
     return module_responses_map_.Get();
   }
+
+  // Aborts all pending module loading tasks. This should be called before
+  // terminating global scopes to prevent unresolved promises.
+  void AbortPendingTasks();
 
   // "A Worklet has a list of the worklet's WorkletGlobalScopes. Initially this
   // list is empty; it is populated when the user agent chooses to create its

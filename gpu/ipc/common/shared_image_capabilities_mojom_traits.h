@@ -41,18 +41,18 @@ struct GPU_IPC_COMMON_EXPORT StructTraits<
     return input.supports_r16_shared_images;
   }
 
-  static bool supports_native_nv12_mappable_shared_images(
+  static bool supports_ycbcr_nv12_sampling(
       const gpu::SharedImageCapabilities& input) {
-    return input.supports_native_nv12_mappable_shared_images;
+    return input.supports_ycbcr_nv12_sampling;
+  }
+
+  static bool supports_ycbcr_p010_sampling(
+      const gpu::SharedImageCapabilities& input) {
+    return input.supports_ycbcr_p010_sampling;
   }
 
   static bool is_r16f_supported(const gpu::SharedImageCapabilities& input) {
     return input.is_r16f_supported;
-  }
-
-  static bool disable_r8_shared_images(
-      const gpu::SharedImageCapabilities& input) {
-    return input.disable_r8_shared_images;
   }
 
   static bool disable_webgpu_shared_images(
@@ -69,10 +69,12 @@ struct GPU_IPC_COMMON_EXPORT StructTraits<
     return input.shared_image_d3d;
   }
 
+#if BUILDFLAG(IS_WIN)
   static bool shared_image_swap_chain(
       const gpu::SharedImageCapabilities& input) {
     return input.shared_image_swap_chain;
   }
+#endif
 
 #if BUILDFLAG(IS_MAC)
   static uint32_t texture_target_for_io_surfaces(

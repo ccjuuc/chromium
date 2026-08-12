@@ -4,6 +4,7 @@
 
 import '//resources/cr_elements/cr_button/cr_button.js';
 import '//resources/cr_elements/cr_icon/cr_icon.js';
+import '//resources/cr_elements/icons.html.js';
 
 import {getInstance as getAnnouncerInstance} from '//resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import {I18nMixinLit} from '//resources/cr_elements/i18n_mixin_lit.js';
@@ -33,52 +34,32 @@ export class ErrorScrimElement extends I18nMixinLit
       compactMode: {
         type: Boolean,
       },
-      showErrorScrim_: {
-        reflect: true,
-        type: Boolean,
-      },
-      errorMessage_: {
+      errorMessage: {
         type: String,
       },
     };
   }
 
   accessor compactMode: boolean = false;
-  protected accessor showErrorScrim_: boolean = false;
-  protected accessor errorMessage_: string = '';
+  accessor errorMessage: string = '';
 
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
-    const changedPrivateProperties =
-        changedProperties as Map<PropertyKey, unknown>;
-    if (changedPrivateProperties.has('showErrorScrim_')) {
-      if (this.showErrorScrim_) {
+    if (changedProperties.has('errorMessage')) {
+      if (this.errorMessage) {
         const announcer = getAnnouncerInstance();
-        announcer.announce(this.errorMessage_);
+        announcer.announce(this.errorMessage);
         const dismissErrorButton =
             this.shadowRoot.querySelector<HTMLElement>('#dismissErrorButton');
         if (dismissErrorButton) {
           dismissErrorButton.focus();
         }
       }
-      this.fire('error-scrim-visibility-changed', {
-        showErrorScrim: this.showErrorScrim_,
-      });
     }
   }
 
-  setErrorMessage(errorMessage: string) {
-    this.errorMessage_ = errorMessage;
-    this.showErrorScrim_ = true;
-  }
-
-  isErrorScrimShowing(): boolean {
-    return this.showErrorScrim_;
-  }
-
   protected onDismissErrorButtonClick_() {
-    this.errorMessage_ = '';
-    this.showErrorScrim_ = false;
+    this.fire('dismiss-error-scrim');
   }
 }
 

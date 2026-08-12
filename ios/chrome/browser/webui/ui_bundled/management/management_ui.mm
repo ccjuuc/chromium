@@ -16,7 +16,6 @@
 #import "components/policy/core/common/cloud/cloud_policy_store.h"
 #import "components/policy/proto/device_management_backend.pb.h"
 #import "components/prefs/pref_service.h"
-#import "components/signin/public/base/consent_level.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/enterprise/connectors/connectors_service.h"
 #import "ios/chrome/browser/enterprise/connectors/connectors_service_factory.h"
@@ -113,6 +112,13 @@ bool IsSecurityEventEnabled(ConnectorsService* connectors_service) {
   return !connectors_service->GetReportingServiceProviderNames().empty();
 }
 
+// Whether the "File is downloaded" event subsection under Chrome Enterprise
+// Connectors should be displayed. This subsection is visible if Enterprise File
+// Download connector is enabled.
+bool IsFileDownloadConnectorEnabled(ConnectorsService* connectors_service) {
+  return enterprise_connectors::IsDownloadConnectorEnabled(connectors_service);
+}
+
 // Returns the message explaining that Chrome Enterprise Connectors are turned
 // on.
 std::u16string GetConnectorsSectionDescription(
@@ -162,6 +168,17 @@ std::u16string GetSecurityEventTitle() {
 // Description for the Chrome Enterprise Connectors Security event subsection.
 std::u16string GetSecurityEventDescription() {
   return GetEventDescription(IDS_MANAGEMENT_ENTERPRISE_REPORTING_VISIBLE_DATA);
+}
+
+// Title for the Chrome Enterprise Connectors File Download event subsection.
+std::u16string GetFileDownloadEventTitle() {
+  return GetEventTitle(IDS_MANAGEMENT_FILE_DOWNLOADED_EVENT);
+}
+
+// Description for the Chrome Enterprise Connectors File Download event
+// subsection.
+std::u16string GetFileDownloadEventDescription() {
+  return GetEventDescription(IDS_MANAGEMENT_FILE_DOWNLOADED_VISIBLE_DATA);
 }
 
 // Creates the HTML source for the chrome://management page.
@@ -248,6 +265,11 @@ web::WebUIIOSDataSource* CreateManagementUIHTMLSource(web::WebUIIOS* web_ui) {
                      IsSecurityEventEnabled(connectors_service));
   source->AddString("securityEventTitle", GetSecurityEventTitle());
   source->AddString("securityEventData", GetSecurityEventDescription());
+
+  source->AddBoolean("fileDownloadEventEnabled",
+                     IsFileDownloadConnectorEnabled(connectors_service));
+  source->AddString("fileDownloadEventTitle", GetFileDownloadEventTitle());
+  source->AddString("fileDownloadEventData", GetFileDownloadEventDescription());
 
   source->UseStringsJs();
   source->AddResourcePaths(kManagementResources);

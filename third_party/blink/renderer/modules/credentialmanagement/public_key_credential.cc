@@ -69,8 +69,7 @@ void OnGetClientCapabilitiesComplete(
   // extension implemented by the client, formed by prefixing "extension:"
   // to the extension identifier.
   //
-  // Excluded extensions: cableAuthentication, uvm, remoteDesktopClientOverride,
-  // and supplementalPubKeys.
+  // Excluded extensions: uvm and remoteDesktopClientOverride.
   results.emplace_back("extension:appid", true);
   results.emplace_back("extension:appidExclude", true);
   results.emplace_back("extension:hmacCreateSecret", true);
@@ -85,6 +84,13 @@ void OnGetClientCapabilitiesComplete(
       "extension:payment",
       RuntimeEnabledFeatures::SecurePaymentConfirmationEnabled());
   results.emplace_back("extension:prf", true);
+  results.emplace_back(
+      "extension:cmtgKey",
+      RuntimeEnabledFeatures::WebAuthenticationCmtgKeyEnabled());
+  results.emplace_back(
+      "extension:crossDeviceFallbackUrl",
+      RuntimeEnabledFeatures::WebAuthenticationCrossDeviceFallbackUrlEnabled(
+          resolver->GetExecutionContext()));
 
   // Results should be sorted lexicographically based on the keys.
   std::sort(
@@ -93,12 +99,10 @@ void OnGetClientCapabilitiesComplete(
         return CodeUnitCompare(a.first, b.first) < 0;
       });
 
-  // TODO(crbug.com/393055190): Remove this when the feature is graduated from
-  // origin trials.
-  if (!RuntimeEnabledFeatures::WebAuthenticationImmediateGetEnabled(
+  if (!RuntimeEnabledFeatures::WebAuthenticationAmbientEnabled(
           resolver->GetExecutionContext())) {
     for (wtf_size_t i = 0; i < results.size(); ++i) {
-      if (results[i].first == "immediateGet") {
+      if (results[i].first == "ambientGet") {
         results.EraseAt(i);
         break;
       }
@@ -199,6 +203,7 @@ PublicKeyCredential::getClientExtensionResults() const {
 }
 
 // static
+// Credential:
 ScriptPromise<IDLBoolean> PublicKeyCredential::isConditionalMediationAvailable(
     ScriptState* script_state) {
   auto* resolver =
@@ -309,7 +314,7 @@ ScriptPromise<IDLUndefined> PublicKeyCredential::signalUnknownCredential(
   auto promise = resolver->Promise();
 
   Vector<uint8_t> decoded_cred_id;
-  if (!Base64UnpaddedURLDecode(options->credentialId(), decoded_cred_id)) {
+  if (!Base64UnpaddedUrlDecode(options->credentialId(), decoded_cred_id)) {
     resolver->RejectWithTypeError("Invalid base64url string for credentialId.");
     return promise;
   }
@@ -320,7 +325,9 @@ ScriptPromise<IDLUndefined> PublicKeyCredential::signalUnknownCredential(
   authenticator->Report(
       std::move(mojo_options),
       BindOnce(&OnSignalReportComplete,
-               std::make_unique<ScopedPromiseResolver>(resolver)));
+               std::make_unique<ScopedPromiseResolver>(
+                   resolver,
+                   ScopedPromiseResolver::ConnectionType::kAuthenticator)));
   return promise;
 }
 
@@ -341,14 +348,14 @@ ScriptPromise<IDLUndefined> PublicKeyCredential::signalAllAcceptedCredentials(
 
   for (String credential_id : options->allAcceptedCredentialIds()) {
     Vector<uint8_t> decoded_cred_id;
-    if (!Base64UnpaddedURLDecode(credential_id, decoded_cred_id)) {
+    if (!Base64UnpaddedUrlDecode(credential_id, decoded_cred_id)) {
       resolver->RejectWithTypeError(
           "Invalid base64url string for allAcceptedCredentialIds.");
       return promise;
     }
   }
   Vector<uint8_t> decoded_user_id;
-  if (!Base64UnpaddedURLDecode(options->userId(), decoded_user_id)) {
+  if (!Base64UnpaddedUrlDecode(options->userId(), decoded_user_id)) {
     resolver->RejectWithTypeError("Invalid base64url string for userId.");
     return promise;
   }
@@ -359,7 +366,9 @@ ScriptPromise<IDLUndefined> PublicKeyCredential::signalAllAcceptedCredentials(
   authenticator->Report(
       std::move(mojo_options),
       BindOnce(&OnSignalReportComplete,
-               std::make_unique<ScopedPromiseResolver>(resolver)));
+               std::make_unique<ScopedPromiseResolver>(
+                   resolver,
+                   ScopedPromiseResolver::ConnectionType::kAuthenticator)));
   return promise;
 }
 
@@ -379,7 +388,7 @@ ScriptPromise<IDLUndefined> PublicKeyCredential::signalCurrentUserDetails(
   auto promise = resolver->Promise();
 
   Vector<uint8_t> decoded_user_id;
-  if (!Base64UnpaddedURLDecode(options->userId(), decoded_user_id)) {
+  if (!Base64UnpaddedUrlDecode(options->userId(), decoded_user_id)) {
     resolver->RejectWithTypeError("Invalid base64url string for userId.");
     return promise;
   }
@@ -390,7 +399,9 @@ ScriptPromise<IDLUndefined> PublicKeyCredential::signalCurrentUserDetails(
   authenticator->Report(
       std::move(mojo_options),
       BindOnce(&OnSignalReportComplete,
-               std::make_unique<ScopedPromiseResolver>(resolver)));
+               std::make_unique<ScopedPromiseResolver>(
+                   resolver,
+                   ScopedPromiseResolver::ConnectionType::kAuthenticator)));
   return promise;
 }
 

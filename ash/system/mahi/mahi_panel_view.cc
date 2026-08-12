@@ -48,6 +48,7 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/color/color_id.h"
 #include "ui/compositor/layer.h"
@@ -536,13 +537,14 @@ MahiPanelView::MahiPanelView(MahiUiController* ui_controller)
         views::Builder<views::BoxLayoutView>()
             .SetMainAxisAlignment(views::LayoutAlignment::kEnd)
             .SetCrossAxisAlignment(views::LayoutAlignment::kEnd)
-            .AddChild(views::Builder<views::ImageView>()
-                          .SetID(mahi_constants::ViewId::kDragHandleIcon)
-                          .SetImage(ui::ImageModel::FromVectorIcon(
-                              kDragHandleIcon, cros_tokens::kCrosSysSecondary,
-                              kDragHandleIconSize))
-                          .SetBorder(
-                              views::CreateEmptyBorder(kDragHandleIconPadding)))
+            .AddChild(
+                views::Builder<views::ImageView>()
+                    .SetID(mahi_constants::ViewId::kDragHandleIcon)
+                    .SetImage(ui::ImageModel::FromVectorIcon(
+                        ash::kDragHandleIcon, cros_tokens::kCrosSysSecondary,
+                        kDragHandleIconSize))
+                    .SetBorder(
+                        views::CreateEmptyBorder(kDragHandleIconPadding)))
             .Build());
   }
 
@@ -722,7 +724,9 @@ MahiPanelView::MahiPanelView(MahiUiController* ui_controller)
           .SetViewId(mahi_constants::ViewId::kAskQuestionSendButton)
           .SetType(IconButton::Type::kSmallFloating)
           .SetBackgroundColor(cros_tokens::kCrosSysSystemOnBase1)
-          .SetVectorIcon(&vector_icons::kSendIcon)
+          .SetVectorIcon(&(::features::IsRoundedIconsEnabled()
+                               ? vector_icons::kSendIcon
+                               : vector_icons::kSendOldIcon))
           .SetCallback(base::BindRepeating(&MahiPanelView::OnSendButtonPressed,
                                            weak_ptr_factory_.GetWeakPtr()))
           .SetAccessibleName(l10n_util::GetStringUTF16(
@@ -732,10 +736,14 @@ MahiPanelView::MahiPanelView(MahiUiController* ui_controller)
 
   send_button_->SetImageModel(
       views::Button::STATE_NORMAL,
-      ui::ImageModel::FromVectorIcon(vector_icons::kSendIcon));
+      ui::ImageModel::FromVectorIcon(::features::IsRoundedIconsEnabled()
+                                         ? vector_icons::kSendIcon
+                                         : vector_icons::kSendOldIcon));
   send_button_->SetImageModel(
       views::Button::STATE_DISABLED,
-      ui::ImageModel::FromVectorIcon(vector_icons::kSendIcon,
+      ui::ImageModel::FromVectorIcon(::features::IsRoundedIconsEnabled()
+                                         ? vector_icons::kSendIcon
+                                         : vector_icons::kSendOldIcon,
                                      ui::kColorSysStateDisabled));
 
   question_textfield_->RemoveHoverEffect();
@@ -948,7 +956,7 @@ void MahiPanelView::OnCloseButtonPressed(const ui::Event& event) {
 
 void MahiPanelView::OnLearnMoreLinkClicked() {
   NewWindowDelegate::GetInstance()->OpenUrl(
-      GURL(chrome::kHelpMeReadWriteLearnMoreURL),
+      GURL(ash::external_urls::kHelpMeReadWriteLearnMoreURL),
       NewWindowDelegate::OpenUrlFrom::kUserInteraction,
       NewWindowDelegate::Disposition::kNewForegroundTab);
   base::UmaHistogramEnumeration(mahi_constants::kMahiButtonClickHistogramName,

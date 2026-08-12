@@ -9,7 +9,7 @@
 
 #include <d3d11.h>
 #include <d3d12.h>
-#include <dxgi1_2.h>
+#include <dxgi1_4.h>
 #include <wrl/client.h>
 
 #include <memory>
@@ -17,6 +17,7 @@
 
 #include "base/memory/scoped_refptr.h"
 #include "base/task/single_thread_task_runner.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_backing_factory.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_format_service_utils.h"
@@ -26,7 +27,6 @@
 
 namespace gfx {
 class Size;
-class ColorSpace;
 }  // namespace gfx
 
 namespace gpu {
@@ -76,7 +76,7 @@ class GPU_GLES2_EXPORT D3DImageBackingFactory
       DawnContextProvider* dawn_context_provider = nullptr);
 
   // Clears the current back buffer to |color| on the immediate context.
-  static bool ClearBackBufferToColor(IDXGISwapChain1* swap_chain,
+  static bool ClearBackBufferToColor(IDXGISwapChain3* swap_chain,
                                      const SkColor4f& color);
 
   struct GPU_GLES2_EXPORT SwapChainBackings {
@@ -96,35 +96,17 @@ class GPU_GLES2_EXPORT D3DImageBackingFactory
 
   std::unique_ptr<SharedImageBacking> CreateSharedImage(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
+      const SharedImageInfo& si_info,
       SurfaceHandle surface_handle,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label,
       bool is_thread_safe) override;
   std::unique_ptr<SharedImageBacking> CreateSharedImage(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label,
+      const SharedImageInfo& si_info,
       bool is_thread_safe,
       base::span<const uint8_t> pixel_data) override;
   std::unique_ptr<SharedImageBacking> CreateSharedImage(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label,
+      const SharedImageInfo& si_info,
       bool is_thread_safe,
       gfx::GpuMemoryBufferHandle handle) override;
 
@@ -149,15 +131,11 @@ class GPU_GLES2_EXPORT D3DImageBackingFactory
 
   std::unique_ptr<SharedImageBacking> CreateSharedBufferD3D12(
       const Mailbox& mailbox,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label);
+      const SharedImageInfo& si_info,
+      bool is_thread_safe);
 
   bool CreateSwapChainInternal(
-      Microsoft::WRL::ComPtr<IDXGISwapChain1>& swap_chain,
+      Microsoft::WRL::ComPtr<IDXGISwapChain3>& swap_chain,
       Microsoft::WRL::ComPtr<ID3D11Texture2D>& back_buffer_texture,
       Microsoft::WRL::ComPtr<ID3D11Texture2D>& front_buffer_texture,
       viz::SharedImageFormat format,

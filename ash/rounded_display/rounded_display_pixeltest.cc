@@ -81,12 +81,12 @@ class RoundedDisplayPixelTest
 
 // Verifies that mask textures are correctly drawn on the display.
 TEST_P(RoundedDisplayPixelTest, AlwaysOnTopMaskTextures) {
-  auto window = CreateTestWindow(gfx::Rect(500, 500));
+  auto window = CreateWindowWithAppType(chromeos::AppType::NON_APP, {500, 500});
   DecorateWindow(window.get(), u"Window", SK_ColorGREEN);
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
       "always_on_top_rounded_display_mask_textures",
-      /*revision_number=*/3, Shell::GetPrimaryRootWindow()));
+      /*revision_number=*/5, Shell::GetPrimaryRootWindow()));
 }
 
 INSTANTIATE_TEST_SUITE_P(

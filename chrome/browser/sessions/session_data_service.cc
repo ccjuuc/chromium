@@ -12,9 +12,11 @@
 #include "chrome/browser/sessions/exit_type_service.h"
 #include "chrome/browser/sessions/session_data_deleter.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/common/pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "storage/browser/quota/special_storage_policy.h"
@@ -29,6 +31,7 @@ void SessionDataService::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterIntegerPref(kSessionDataStatusPref,
                                 static_cast<int>(Status::kUninitialized));
+  registry->RegisterDictionaryPref(prefs::kPreSmartRestartSessionState);
 }
 
 SessionDataService::SessionDataService(
@@ -52,18 +55,15 @@ SessionDataService::SessionDataService(
     MaybeContinueDeletionFromLastSesssion(last_status);
   }
 
-  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-      [this](BrowserWindowInterface* browser) {
-        OnBrowserAdded(browser->GetBrowserForMigrationOnly());
-        return true;
-      });
-
-  BrowserList::AddObserver(this);
+  auto* browser_collection = GlobalBrowserCollection::GetInstance();
+  browser_collection_observation_.Observe(browser_collection);
+  browser_collection->ForEach([this](BrowserWindowInterface* browser) {
+    OnBrowserCreated(browser);
+    return true;
+  });
 }
 
-SessionDataService::~SessionDataService() {
-  BrowserList::RemoveObserver(this);
-}
+SessionDataService::~SessionDataService() = default;
 
 void SessionDataService::MaybeContinueDeletionFromLastSesssion(
     Status last_status) {
@@ -107,20 +107,20 @@ void SessionDataService::SetStatusPref(Status status) {
                                    static_cast<int>(status));
 }
 
-void SessionDataService::OnBrowserAdded(Browser* browser) {
-  if (browser->profile() != profile_)
+void SessionDataService::OnBrowserCreated(BrowserWindowInterface* browser) {
+  if (browser->GetProfile() != profile_) {
     return;
-
+  }
   // A window was opened. Ensure that we run another cleanup the next time
   // all windows are closed.
   SetStatusPref(Status::kInitialized);
   cleanup_started_ = false;
 }
 
-void SessionDataService::OnBrowserRemoved(Browser* browser) {
-  if (browser->profile() != profile_)
+void SessionDataService::OnBrowserClosed(BrowserWindowInterface* browser) {
+  if (browser->GetProfile() != profile_) {
     return;
-
+  }
   // Check for any open windows for the current profile.
   bool has_open_window = false;
   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(

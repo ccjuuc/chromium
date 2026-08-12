@@ -4,12 +4,14 @@
 
 package org.chromium.chrome.browser.keyboard_accessory.data;
 
-import android.graphics.drawable.Drawable;
 import android.view.ViewGroup;
 
+import androidx.annotation.DrawableRes;
 import androidx.annotation.LayoutRes;
 
 import org.chromium.base.Callback;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -29,12 +31,11 @@ public class KeyboardAccessoryData {
      */
     public static final class Tab {
         private final String mTitle;
-        private Drawable mIcon;
         private final String mContentDescription;
         private final int mTabLayout;
         private final @AccessoryTabType int mRecordingType;
         private final @Nullable Listener mListener;
-        private final Provider<Drawable> mIconProvider = new Provider<>();
+        private final SettableNonNullObservableSupplier<Integer> mIconIdSupplier;
 
         /** A Tab's Listener get's notified when e.g. the Tab was assigned a view. */
         public interface Listener {
@@ -51,31 +52,30 @@ public class KeyboardAccessoryData {
 
         public Tab(
                 String title,
-                Drawable icon,
+                @DrawableRes int icon,
                 String contentDescription,
                 @LayoutRes int tabLayout,
                 @AccessoryTabType int recordingType,
                 @Nullable Listener listener) {
             mTitle = title;
-            mIcon = icon;
+            mIconIdSupplier = ObservableSuppliers.createNonNull(icon);
             mContentDescription = contentDescription;
             mTabLayout = tabLayout;
             mListener = listener;
             mRecordingType = recordingType;
         }
 
-        public void setIcon(Drawable icon) {
-            mIcon = icon;
-            mIconProvider.notifyObservers(mIcon);
+        public void setIconId(@DrawableRes int iconId) {
+            mIconIdSupplier.set(iconId);
         }
 
         /**
          * Adds an observer to be notified of icon changes.
          *
-         * @param observer The observer that will be notified of the icon change.
+         * @param callback The observer that will be notified of the icon change.
          */
-        public void addIconObserver(Provider.Observer<Drawable> observer) {
-            mIconProvider.addObserver(observer);
+        public void addIconObserver(Callback<Integer> callback) {
+            mIconIdSupplier.addSyncObserverAndPostIfNonNull(callback);
         }
 
         /**
@@ -88,12 +88,12 @@ public class KeyboardAccessoryData {
         }
 
         /**
-         * Provides the icon that will be displayed in the KeyboardAccessoryCoordinator.
+         * Provides the id of icon that will be displayed in the Keyboard Accessory.
          *
-         * @return The small icon that identifies this tab uniquely.
+         * @return The id of a small icon that identifies this tab uniquely.
          */
-        public Drawable getIcon() {
-            return mIcon;
+        public @DrawableRes int getIconId() {
+            return mIconIdSupplier.get();
         }
 
         /**
@@ -186,6 +186,9 @@ public class KeyboardAccessoryData {
                 case AccessoryAction.RETRIEVE_TRUSTED_VAULT_KEY:
                     typeName = "RETRIEVE_TRUSTED_VAULT_KEY";
                     break;
+                case AccessoryAction.SHOW_AT_MEMORY_BOTTOMSHEET:
+                    typeName = "SHOW_AT_MEMORY_BOTTOMSHEET";
+                    break;
             }
             return typeName;
         }
@@ -227,41 +230,6 @@ public class KeyboardAccessoryData {
 
         public @AccessoryAction int getActionType() {
             return mType;
-        }
-    }
-
-    public static final class PlusAddressInfo {
-        private final String mOrigin;
-        private final UserInfoField mPlusAddressInfo;
-
-        public PlusAddressInfo(String origin, UserInfoField plusAddressInfo) {
-            mOrigin = origin;
-            mPlusAddressInfo = plusAddressInfo;
-        }
-
-        public String getOrigin() {
-            return mOrigin;
-        }
-
-        public UserInfoField getPlusAddress() {
-            return mPlusAddressInfo;
-        }
-    }
-
-    public static final class PlusAddressSection {
-        private final String mTitle;
-        private final List<PlusAddressInfo> mPlusAddressInfoList = new ArrayList<>();
-
-        public PlusAddressSection(String title) {
-            mTitle = title;
-        }
-
-        public String getTitle() {
-            return mTitle;
-        }
-
-        public List<PlusAddressInfo> getPlusAddressInfoList() {
-            return mPlusAddressInfoList;
         }
     }
 
@@ -380,7 +348,7 @@ public class KeyboardAccessoryData {
      */
     public static final class UserInfoSection {
         private final String mTitle;
-        private final List<UserInfo> mUserInfoList = new ArrayList();
+        private final List<UserInfo> mUserInfoList = new ArrayList<>();
 
         public UserInfoSection(String title) {
             mTitle = title;
@@ -496,7 +464,6 @@ public class KeyboardAccessoryData {
         private final String mWarning;
         private final @AccessoryTabType int mSheetType;
         private @Nullable OptionToggle mToggle;
-        private final PlusAddressSection mPlusAddressSection;
         private final UserInfoSection mUserInfoSection;
         private final List<PasskeySection> mPasskeySectionList = new ArrayList<>();
         private final List<PromoCodeInfo> mPromoCodeInfoList = new ArrayList<>();
@@ -510,19 +477,14 @@ public class KeyboardAccessoryData {
          * @param sheetType The type of the accessory manual filling sheet (addresses, credit cards,
          *     passwords).
          * @param userInfoTitle The user info title of accessory sheet tab.
-         * @param plusAddressTitle The plus address section title.
          * @param warning An optional warning to be displayed the beginning of the sheet.
          */
         public AccessorySheetData(
-                @AccessoryTabType int sheetType,
-                String userInfoTitle,
-                String plusAddressTitle,
-                String warning) {
+                @AccessoryTabType int sheetType, String userInfoTitle, String warning) {
             mWarning = warning;
             mSheetType = sheetType;
             mToggle = null;
             mUserInfoSection = new UserInfoSection(userInfoTitle);
-            mPlusAddressSection = new PlusAddressSection(plusAddressTitle);
         }
 
         public @AccessoryTabType int getSheetType() {
@@ -555,21 +517,6 @@ public class KeyboardAccessoryData {
         /** Returns the list of {@link UserInfo} to be shown on the accessory sheet. */
         public List<UserInfo> getUserInfoList() {
             return mUserInfoSection.getUserInfoList();
-        }
-
-        /**
-         * @return a possibly empty title for the plus address section to be shown on the accessory
-         *     sheet
-         */
-        public String getPlusAddressSectionTitle() {
-            return mPlusAddressSection.getTitle();
-        }
-
-        /**
-         * @return a list if {@link PlusAddressInfo} to be shown on the accessory sheet.
-         */
-        public List<PlusAddressInfo> getPlusAddressInfoList() {
-            return mPlusAddressSection.getPlusAddressInfoList();
         }
 
         /** Returns the list of {@link PasskeySection} to be shown on the accessory sheet. */

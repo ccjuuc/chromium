@@ -51,7 +51,13 @@
   raw_ptr<const bookmarks::BookmarkNode> _originalFolder;
   // Authentication service for this mediator.
   base::WeakPtr<AuthenticationService> _authenticationService;
+  // BookmarkNode to edit.
+  raw_ptr<const bookmarks::BookmarkNode> _bookmark;
+  // Parent of `_bookmark` if the user tap on "save".
+  raw_ptr<const bookmarks::BookmarkNode> _folder;
 }
+
+@synthesize UIDisabled = _UIDisabled;
 
 - (instancetype)
     initWithBookmarkModel:(bookmarks::BookmarkModel*)bookmarkModel
@@ -96,7 +102,7 @@
 }
 
 - (void)dealloc {
-  CHECK(!_bookmarkModel, base::NotFatalUntil::M152);
+  DUMP_WILL_BE_CHECK(!_bookmarkModel);
 }
 
 #pragma mark - Public
@@ -104,6 +110,18 @@
 - (void)manuallyChangeFolder:(const bookmarks::BookmarkNode*)folder {
   _manuallyChangedTheFolder = YES;
   [self changeFolder:folder];
+}
+
+- (const bookmarks::BookmarkNode*)bookmark {
+  return _bookmark;
+}
+
+- (const bookmarks::BookmarkNode*)folder {
+  return _folder;
+}
+
+- (void)setFolder:(const bookmarks::BookmarkNode*)folder {
+  _folder = folder;
 }
 
 #pragma mark - BookmarksEditorMutator
@@ -255,9 +273,10 @@
 }
 
 - (void)deleteBookmark {
-  if (!(self.bookmark && _bookmarkModel->loaded())) {
+  if (!(self.bookmark && _bookmarkModel->loaded()) || self.UIDisabled) {
     return;
   }
+  self.UIDisabled = YES;
   // To stop getting recursive events from committed bookmark editing changes
   // ignore bookmark model updates notifications.
   base::AutoReset<BOOL> autoReset(&self->_ignoresBookmarkModelChanges, YES);

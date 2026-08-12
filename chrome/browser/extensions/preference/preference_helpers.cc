@@ -85,7 +85,7 @@ const char* GetLevelOfControl(Profile* profile,
 void DispatchEventToExtensionsImpl(Profile* profile,
                                    events::HistogramValue histogram_value,
                                    const std::string& event_name,
-                                   base::Value::List args,
+                                   base::ListValue args,
                                    mojom::APIPermissionID permission,
                                    bool incognito,
                                    const std::string& browser_pref,
@@ -122,7 +122,7 @@ void DispatchEventToExtensionsImpl(Profile* profile,
           // Furthermore, avoid calling GetPrimaryOTRProfile() if the profile
           // does not exist. Unnecessarily creating off the record profile is
           // undesirable, and can lead to a crash if incognito is disallowed for
-          // the current profile (see https://crbug.com/796814).
+          // the current profile (see https://crbug.com/41361877).
           if (!profile->HasPrimaryOTRProfile())
             continue;
           restrict_to_profile =
@@ -137,7 +137,7 @@ void DispatchEventToExtensionsImpl(Profile* profile,
         }
       }
 
-      base::Value::List args_copy = args.Clone();
+      base::ListValue args_copy = args.Clone();
       auto event =
           std::make_unique<Event>(histogram_value, event_name,
                                   std::move(args_copy), restrict_to_profile);
@@ -149,7 +149,7 @@ void DispatchEventToExtensionsImpl(Profile* profile,
 void DispatchEventToExtensions(Profile* profile,
                                events::HistogramValue histogram_value,
                                const std::string& event_name,
-                               base::Value::List args,
+                               base::ListValue args,
                                mojom::APIPermissionID permission,
                                bool incognito,
                                const std::string& browser_pref) {

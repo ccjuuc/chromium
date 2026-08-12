@@ -8,7 +8,6 @@
 #include <set>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/notimplemented.h"
 #include "build/build_config.h"
 
@@ -18,6 +17,8 @@
 
 #include <optional>
 
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
@@ -239,12 +240,11 @@ class ExternalMojoBroker::ConnectorImpl : public mojom::ExternalConnector {
   void RegisterServiceInstance(
       const std::string& service_name,
       mojo::PendingRemote<mojom::ExternalService> service_remote) {
-    if (base::Contains(services_, service_name)) {
+    if (services_.contains(service_name)) {
       LOG(ERROR) << "Duplicate service " << service_name;
       return;
     }
-    TRACE_EVENT_INSTANT1("mojom", "RegisterService", TRACE_EVENT_SCOPE_THREAD,
-                         "service", service_name);
+    TRACE_EVENT_INSTANT("mojom", "RegisterService", "service", service_name);
     LOG(INFO) << "Register service " << service_name;
     mojo::Remote<mojom::ExternalService> service(std::move(service_remote));
     service.set_disconnect_handler(base::BindOnce(
@@ -280,8 +280,7 @@ class ExternalMojoBroker::ConnectorImpl : public mojom::ExternalConnector {
                      const std::string& interface_name,
                      mojo::ScopedMessagePipeHandle interface_pipe) override {
     LOG(INFO) << "Request for " << service_name << ":" << interface_name;
-    TRACE_EVENT_INSTANT1("mojom", "BindToService", TRACE_EVENT_SCOPE_THREAD,
-                         "service", service_name);
+    TRACE_EVENT_INSTANT("mojom", "BindToService", "service", service_name);
     auto it = services_.find(service_name);
     if (it != services_.end()) {
       LOG(INFO) << "Found externally-registered " << service_name;
@@ -358,8 +357,8 @@ class ExternalMojoBroker::ConnectorImpl : public mojom::ExternalConnector {
 
   void OnServiceLost(const std::string& service_name) {
     LOG(INFO) << service_name << " disconnected";
-    TRACE_EVENT_INSTANT1("mojom", "ServiceDisconnected",
-                         TRACE_EVENT_SCOPE_THREAD, "service", service_name);
+    TRACE_EVENT_INSTANT("mojom", "ServiceDisconnected", "service",
+                        service_name);
     services_.erase(service_name);
     services_info_[service_name].disconnect_time = base::TimeTicks::Now();
   }
@@ -438,6 +437,10 @@ ExternalMojoBroker::ExternalMojoBroker(const std::string& broker_path) {
 #endif  // BUILDFLAG(IS_ANDROID)
 
   LOG(INFO) << "Initializing external mojo broker at: " << broker_path;
+
+  if (!use_abstract_namespace) {
+    base::DeleteFile(base::FilePath(broker_path));
+  }
 
   mojo::NamedPlatformChannel::Options channel_options;
   channel_options.server_name = broker_path;

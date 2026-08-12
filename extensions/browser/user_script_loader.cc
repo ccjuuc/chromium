@@ -30,6 +30,10 @@
 #include "extensions/common/mojom/run_location.mojom-shared.h"
 #include "extensions/common/permissions/permissions_data.h"
 
+#if DCHECK_IS_ON()
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
+#endif
+
 #if BUILDFLAG(ENABLE_GUEST_VIEW)
 #include "extensions/browser/guest_view/web_view/web_view_renderer_state.h"
 #endif
@@ -53,12 +57,11 @@ const char kNoScriptChangesErrorMsg[] =
 
 #if DCHECK_IS_ON()
 bool AreScriptsUnique(const UserScriptList& scripts) {
-  std::set<std::string> script_ids;
+  absl::flat_hash_set<std::string> script_ids;
   for (const std::unique_ptr<UserScript>& script : scripts) {
-    if (script_ids.count(script->id())) {
+    if (!script_ids.insert(script->id()).second) {
       return false;
     }
-    script_ids.insert(script->id());
   }
   return true;
 }
@@ -242,9 +245,7 @@ void UserScriptLoader::AddScripts(UserScriptList scripts,
   for (std::unique_ptr<UserScript>& user_script : scripts) {
     const std::string& id = user_script->id();
     removed_script_ids_.erase(id);
-    if (added_scripts_map_.count(id) == 0) {
-      added_scripts_map_[id] = std::move(user_script);
-    }
+    added_scripts_map_.try_emplace(id, std::move(user_script));
   }
 
   AttemptLoad(std::move(callback));
@@ -402,12 +403,12 @@ base::ReadOnlySharedMemoryRegion UserScriptLoader::Serialize(
     for (const std::unique_ptr<UserScript::Content>& js_file :
          script->js_scripts()) {
       std::string_view contents = js_file->GetContent();
-      pickle.WriteData(contents.data(), contents.length());
+      pickle.WriteData(contents);
     }
     for (const std::unique_ptr<UserScript::Content>& css_file :
          script->css_scripts()) {
       std::string_view contents = css_file->GetContent();
-      pickle.WriteData(contents.data(), contents.length());
+      pickle.WriteData(contents);
     }
   }
 
@@ -524,6 +525,14 @@ UserScriptLoader::SendUpdateResult UserScriptLoader::SendUpdate(
     return SendUpdateResult::kNoActionTaken;
   }
 
+  // Never deliver user scripts (content scripts) to a privileged renderer
+  // process (see //chrome's PrivilegedWebContents), so extensions cannot inject
+  // into privileged content. Privileged content always gets its own dedicated
+  // process, so this is a clean per-process decision.
+  if (process->IsPrivileged()) {
+    return SendUpdateResult::kNoActionTaken;
+  }
+
   mojom::Renderer* renderer =
       RendererStartupHelperFactory::GetForBrowserContext(browser_context())
           ->GetRenderer(process);
@@ -533,11 +542,24 @@ UserScriptLoader::SendUpdateResult UserScriptLoader::SendUpdate(
     return SendUpdateResult::kNoActionTaken;
   }
 
-  base::ReadOnlySharedMemoryRegion region_for_process =
-      shared_memory.Duplicate();
-  if (!region_for_process.IsValid()) {
-    return SendUpdateResult::kNoActionTaken;
+  switch (host_id().type) {
+    case mojom::HostID::HostType::kExtensions:
+      break;
+    case mojom::HostID::HostType::kWebUi:
+    case mojom::HostID::HostType::kControlledFrameEmbedder:
+      // Embedder content scripts are only ever injected into the embedder's
+      // own guest views and never into ordinary web frames, so they only need
+      // to be sent to guest renderers.
+      if (!process->IsForGuestsOnly()) {
+        return SendUpdateResult::kNoActionTaken;
+      }
+      break;
+    default:
+      NOTREACHED();
   }
+
+  base::ReadOnlySharedMemoryRegion region_for_process;
+  bool use_custom_region = false;
 
 #if BUILDFLAG(ENABLE_GUEST_VIEW)
   // If the process only hosts guest frames, then those guest frames share the
@@ -584,10 +606,48 @@ UserScriptLoader::SendUpdateResult UserScriptLoader::SendUpdate(
         if (owner_host != host_id().id) {
           return SendUpdateResult::kNoActionTaken;
         }
+
+        if (host_id().type ==
+            mojom::HostID::HostType::kControlledFrameEmbedder) {
+          use_custom_region = true;
+          std::optional<std::set<std::string>> script_ids =
+              WebViewRendererState::GetInstance()
+                  ->GetContentScriptIDsForProcess(process->GetID());
+          if (!script_ids || script_ids->empty()) {
+            return SendUpdateResult::kNoActionTaken;
+          }
+          if (loaded_scripts_) {
+            UserScriptList filtered_scripts;
+            for (const std::unique_ptr<UserScript>& script : *loaded_scripts_) {
+              if (script_ids->count(script->id())) {
+                std::unique_ptr<UserScript> filtered_script =
+                    UserScript::CopyMetadataFrom(*script);
+                for (size_t i = 0; i < script->js_scripts().size(); ++i) {
+                  filtered_script->js_scripts()[i]->set_content(
+                      std::string(script->js_scripts()[i]->GetContent()));
+                }
+                for (size_t i = 0; i < script->css_scripts().size(); ++i) {
+                  filtered_script->css_scripts()[i]->set_content(
+                      std::string(script->css_scripts()[i]->GetContent()));
+                }
+                filtered_scripts.push_back(std::move(filtered_script));
+              }
+            }
+            region_for_process = Serialize(filtered_scripts);
+          }
+        }
         break;
     }
   }
 #endif
+
+  if (!use_custom_region) {
+    region_for_process = shared_memory.Duplicate();
+  }
+
+  if (!region_for_process.IsValid()) {
+    return SendUpdateResult::kNoActionTaken;
+  }
 
   renderer->UpdateUserScripts(std::move(region_for_process),
                               mojom::HostID::New(host_id().type, host_id().id));

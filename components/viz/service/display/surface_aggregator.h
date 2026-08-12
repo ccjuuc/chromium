@@ -23,6 +23,7 @@
 #include "components/viz/common/resources/transferable_resource.h"
 #include "components/viz/common/surfaces/surface_id.h"
 #include "components/viz/common/surfaces/surface_range.h"
+#include "components/viz/common/surfaces/tracked_element_rects.h"
 #include "components/viz/service/display/aggregated_frame.h"
 #include "components/viz/service/display/resolved_frame_data.h"
 #include "components/viz/service/surfaces/surface_observer.h"
@@ -131,14 +132,6 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
 
  private:
   struct PrewalkResult;
-
-  struct AggregateStatistics {
-    // True if the current frame contains a pixel-moving foreground filter
-    // render pass.
-    bool has_pixel_moving_filter = false;
-    // True if the current frame contains a unembedded render pass.
-    bool has_unembedded_pass = false;
-  };
 
   // SurfaceObserver implementation.
   void OnSurfaceDestroyed(const SurfaceId& surface_id) override;
@@ -297,7 +290,9 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
       ResolvedFrameData* resolved_frame,
       bool force_add_zero_damage_rect);
 
-  void AddRenderPassFilterDamageToDamageList(
+  // Updates the surface damage rect list and tracked element rects based on
+  // pixel moving filters in the render pass.
+  void ProcessPixelMovingFilters(
       const ResolvedFrameData& resolved_frame,
       const CompositorRenderPassDrawQuad* render_pass_quad,
       const gfx::Transform& parent_target_transform,
@@ -330,14 +325,19 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
   // Logs the surface information for debugging purposes.
   void DebugLogSurface(const Surface* surface, bool will_draw);
 
-  // Records UMA histograms and resets |stats_|.
-  void RecordStatHistograms();
-
   // Resets member variables that were used during Aggregate().
   void ResetAfterAggregate();
 
   void SetRenderPassDamageRect(AggregatedRenderPass* copy_pass,
                                ResolvedPassData& resolved_pass);
+
+  // Collects the TrackedElementRects from the given frame metadata and
+  // transforms their bounds to the coordinate space of the root render pass.
+  void CollectTrackedElementRects(
+      const CompositorFrameMetadata& frame_metadata,
+      const gfx::Transform& target_transform,
+      const gfx::Transform& transform_to_root_target,
+      const std::optional<gfx::Rect> root_target_clip_rect);
 
   const raw_ptr<SurfaceManager> manager_;
   const raw_ptr<DisplayResourceProvider> provider_;
@@ -389,8 +389,6 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
   SurfaceId root_surface_id_;
   gfx::Transform root_surface_transform_;
 
-  std::optional<AggregateStatistics> stats_;
-
   // For each Surface used in the last aggregation, gives the frame_index at
   // that time.
   base::flat_set<SurfaceId> previous_contained_surfaces_;
@@ -426,20 +424,12 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
   // This is valid during Aggregate after PrewalkSurface is called.
   bool has_copy_requests_ = false;
 
-  // True if any RenderPasses in the aggregated frame have a backdrop filter
-  // that moves pixels. This is valid during Aggregate after PrewalkSurface is
-  // called.
-  bool has_pixel_moving_backdrop_filter_ = false;
-
   // For each FrameSinkId, contains a vector of SurfaceRanges that will damage
   // the display if they're damaged.
   base::flat_map<FrameSinkId, std::vector<SurfaceRange>> damage_ranges_;
 
   // Used to annotate the aggregated frame for debugging.
   std::unique_ptr<FrameAnnotator> frame_annotator_;
-
-  // Used to avoid excessive UMA logging per frame.
-  base::MetricsSubSampler metrics_subsampler_;
 
   // Whether last frame had an extra render pass added to avoid readback from
   // root frame buffer.
@@ -476,6 +466,10 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
 
   // Flow ids for aggregated frames. Used for tracing.
   std::unordered_set<int64_t> flow_ids_for_resolved_frames_;
+
+  // The list of tracked elements from all surfaces in the aggregated frame.
+  // The bounds are transformed to the coordinate space of the root render pass.
+  TrackedElementRects tracked_element_rects_;
 };
 
 }  // namespace viz

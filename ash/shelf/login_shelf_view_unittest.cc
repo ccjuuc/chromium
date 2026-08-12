@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "ash/app_list/app_list_controller_impl.h"
@@ -93,6 +94,12 @@ class LoginShelfViewTest : public LoginTestBase {
     // Set initial states.
     NotifySessionStateChanged(SessionState::OOBE);
     NotifyShutdownPolicyChanged(false);
+  }
+
+  // LoginTestBase:
+  void TearDown() override {
+    login_shelf_view_ = nullptr;
+    LoginTestBase::TearDown();
   }
 
  protected:
@@ -183,8 +190,7 @@ class LoginShelfViewTest : public LoginTestBase {
     return shelf->login_shelf_widget();
   }
 
-  raw_ptr<LoginShelfView, DanglingUntriaged> login_shelf_view_ =
-      nullptr;  // Unowned.
+  raw_ptr<LoginShelfView> login_shelf_view_ = nullptr;  // Unowned.
 };
 
 // Checks the login shelf updates UI after session state changes.

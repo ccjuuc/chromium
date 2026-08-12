@@ -7,11 +7,13 @@
 #include <ostream>
 #include <variant>
 
+#include "base/containers/span.h"
 #include "base/strings/to_string.h"
 #include "chrome/browser/actor/tools/attempt_form_filling_tool.h"
 #include "chrome/browser/actor/tools/tool.h"
 #include "chrome/browser/actor/tools/tool_request_visitor_functor.h"
 #include "chrome/common/actor/action_result.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "components/tabs/public/tab_interface.h"
 #include "ui/gfx/geometry/point.h"
 
@@ -34,8 +36,11 @@ AttemptFormFillingToolRequest::FormFillingRequest::operator=(
 
 AttemptFormFillingToolRequest::AttemptFormFillingToolRequest(
     tabs::TabHandle tab_handle,
-    std::vector<FormFillingRequest> requests)
-    : TabToolRequest(tab_handle), requests_(std::move(requests)) {}
+    std::vector<FormFillingRequest> requests,
+    bool enqueued_click)
+    : TabToolRequest(tab_handle),
+      requests_(std::move(requests)),
+      enqueued_click_(enqueued_click) {}
 
 AttemptFormFillingToolRequest::AttemptFormFillingToolRequest(
     const AttemptFormFillingToolRequest&) = default;
@@ -54,9 +59,10 @@ ToolRequest::CreateToolResult AttemptFormFillingToolRequest::CreateTool(
                                          "The tab is no longer present.")};
   }
 
-  return {std::make_unique<AttemptFormFillingTool>(task_id, tool_delegate, *tab,
-                                                   std::move(requests_)),
-          MakeOkResult()};
+  return {
+      std::make_unique<AttemptFormFillingTool>(
+          task_id, tool_delegate, *tab, std::move(requests_), enqueued_click_),
+      MakeOkResult()};
 }
 
 std::string_view AttemptFormFillingToolRequest::Name() const {
@@ -70,7 +76,8 @@ void AttemptFormFillingToolRequest::Apply(ToolRequestVisitorFunctor& f) const {
 std::ostream& operator<<(
     std::ostream& out,
     const AttemptFormFillingToolRequest::FormFillingRequest& request) {
-  out << "Request(" << static_cast<int>(request.requested_data);
+  out << "Request(" << static_cast<int>(request.requested_data)
+      << ", section_label=" << request.section_label;
   for (const auto& field : request.trigger_fields) {
     if (std::holds_alternative<gfx::Point>(field)) {
       out << ", Point(" << field << ")";

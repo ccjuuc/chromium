@@ -107,13 +107,40 @@ TEST_F(CanOfferSigninTest, NoSigninCookies) {
   EXPECT_EQ(error, SigninUIError::SigninCookiesDisallowed("user@gmail.com"));
 }
 
+// Tests that cookie errors have lower priority than other errors.
+TEST_F(CanOfferSigninTest, UsernameNotAllowedAndNoSigninCookies) {
+  // Set a cookie error.
+  AllowSigninCookies(false);
+  SigninUIError error =
+      CanOfferSignin(profile(), GaiaId("12345"), "foo@gmail.com",
+                     /*allow_account_from_other_profile=*/false);
+  EXPECT_FALSE(error.IsOk());
+  EXPECT_EQ(error, SigninUIError::SigninCookiesDisallowed("foo@gmail.com"));
+
+  // Disallow the username and recompute the error: the cookie error is now
+  // masked by the username error.
+  SetAllowedUsernamePattern("*.google.com");
+  error = CanOfferSignin(profile(), GaiaId("12345"), "foo@gmail.com",
+                         /*allow_account_from_other_profile=*/false);
+  EXPECT_FALSE(error.IsOk());
+  EXPECT_EQ(error, SigninUIError::UsernameNotAllowedByPatternFromPrefs(
+                       "foo@gmail.com"));
+}
+
 class CanOfferSigninWithSigninToSyncFeatureTest
     : public base::test::WithFeatureOverride,
       public CanOfferSigninTest {
  public:
   CanOfferSigninWithSigninToSyncFeatureTest()
       : base::test::WithFeatureOverride(
-            syncer::kReplaceSyncPromosWithSignInPromos) {}
+            syncer::kReplaceSyncPromosWithSignInPromos) {
+    scoped_feature_list_.InitWithFeatureState(
+        syncer::kReplaceSyncPromosWithSigninPromosNewSignin,
+        IsParamFeatureEnabled());
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_P(CanOfferSigninWithSigninToSyncFeatureTest,

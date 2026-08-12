@@ -1,19 +1,5 @@
 [
   {
-    "os": [
-      "chromeos"
-    ],
-    "policy_pref_mapping_tests": [
-      {
-        "policies": {
-          "PluginVmUserId": "USER_ID"
-        },
-        "prefs": {
-          "plugin_vm.user_id": {
-            "value": "USER_ID"
-          }
-        }
-      }
-    ]
+    "reason_for_missing_test": "Policy was deprecated in M152."
   }
 ]

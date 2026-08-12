@@ -6,11 +6,11 @@
     "gtest_tests": [
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -28,7 +28,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -56,13 +55,13 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--test-launcher-filter-file=../../testing/buildbot/filters/android.emulator_10.android_browsertests.filter",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
         "ci_only": true,
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -80,7 +79,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -110,12 +108,12 @@
       {
         "args": [
           "--test-launcher-batch-limit=1",
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
         "ci_only": true,
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -133,7 +131,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -162,11 +159,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -184,7 +181,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -213,9 +209,9 @@
       {
         "args": [
           "-v",
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -227,7 +223,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -256,11 +251,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -278,7 +273,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -306,12 +300,12 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
         "ci_only": true,
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -329,7 +323,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -357,11 +350,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -379,7 +372,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -407,11 +399,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -429,7 +421,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -458,11 +449,11 @@
       {
         "args": [
           "--git-revision=${got_revision}",
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -485,7 +476,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -513,11 +503,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -535,7 +525,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -564,11 +553,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -586,7 +575,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -614,11 +602,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -636,7 +624,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -665,11 +652,11 @@
       {
         "args": [
           "--gtest_filter=-*UsingRealWebcam*",
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -687,7 +674,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -715,11 +701,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -737,7 +723,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -765,11 +750,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -787,7 +772,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -815,11 +799,60 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
+        "isolate_profile_data": true,
+        "merge": {
+          "args": [
+            "--bucket",
+            "chromium-result-details",
+            "--test-name",
+            "chrome_public_bundle_smoke_test"
+          ],
+          "script": "//build/android/pylib/results/presentation/test_results_presentation.py"
+        },
+        "module_name": "//chrome/android:chrome_public_bundle_smoke_test",
+        "module_scheme": "junit",
+        "name": "chrome_public_bundle_smoke_test",
+        "resultdb": {
+          "enable": true,
+          "has_native_resultdb_integration": true
+        },
+        "swarming": {
+          "dimensions": {
+            "cores": "4",
+            "cpu": "x86-64",
+            "device_os": null,
+            "device_type": null,
+            "os": "Ubuntu-22.04",
+            "pool": "chromium.tests.avd"
+          },
+          "named_caches": [
+            {
+              "name": "android_29_google_apis_x86",
+              "path": ".android_emulator/android_29_google_apis_x86"
+            }
+          ],
+          "optional_dimensions": {
+            "60": {
+              "caches": "android_29_google_apis_x86"
+            }
+          },
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+        },
+        "test": "chrome_public_bundle_smoke_test",
+        "test_id_prefix": "ninja://chrome/android:chrome_public_bundle_smoke_test/"
+      },
+      {
+        "args": [
+          "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
+          "--gs-results-bucket=chromium-result-details",
+          "--recover-devices"
+        ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -837,7 +870,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -866,12 +898,11 @@
       {
         "args": [
           "--git-revision=${got_revision}",
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
-          "--test-launcher-filter-file=../../testing/buildbot/filters/android.emulator_10.chrome_public_test_apk.filter",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -894,7 +925,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -924,11 +954,11 @@
       {
         "args": [
           "--git-revision=${got_revision}",
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -951,7 +981,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -980,11 +1009,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1002,7 +1031,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -1031,11 +1059,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1053,7 +1081,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -1082,12 +1109,12 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--test-launcher-filter-file=../../testing/buildbot/filters/android.emulator_10.content_browsertests.filter",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1105,7 +1132,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -1134,11 +1160,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1156,7 +1182,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -1185,12 +1210,12 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
         "ci_only": true,
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1208,7 +1233,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -1237,11 +1261,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1259,7 +1283,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -1287,11 +1310,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1309,7 +1332,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -1337,11 +1359,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1359,7 +1381,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -1387,11 +1408,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1409,7 +1430,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -1437,12 +1457,12 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
         "ci_only": true,
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1460,7 +1480,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -1488,11 +1507,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1510,7 +1529,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -1538,11 +1556,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1560,7 +1578,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -1588,11 +1605,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1610,7 +1627,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -1638,11 +1654,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1660,7 +1676,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -1688,11 +1703,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1710,7 +1725,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -1739,12 +1753,12 @@
       {
         "args": [
           "--use-cmd-decoder=validating",
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--test-launcher-filter-file=../../testing/buildbot/filters/android.emulator_10.gl_tests.filter",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1762,7 +1776,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -1790,11 +1803,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1812,7 +1825,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -1840,11 +1852,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1862,7 +1874,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -1890,11 +1901,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1912,7 +1923,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -1940,11 +1950,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1962,7 +1972,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -1990,11 +1999,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2012,7 +2021,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2040,11 +2048,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2062,7 +2070,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2090,12 +2097,12 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
         "ci_only": true,
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2113,7 +2120,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2141,11 +2147,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2163,7 +2169,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2191,11 +2196,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2213,7 +2218,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2241,13 +2245,13 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--test-launcher-filter-file=../../testing/buildbot/filters/android.emulator_10.media_unittests.filter",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
         "ci_only": true,
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2265,7 +2269,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2293,11 +2296,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2315,7 +2318,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2343,11 +2345,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2365,7 +2367,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2393,11 +2394,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2415,7 +2416,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2443,11 +2443,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2465,7 +2465,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2494,12 +2493,12 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gtest_filter=-ScopedDirTest.CloseOutOfScope",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2517,7 +2516,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2545,11 +2543,60 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
+        "isolate_profile_data": true,
+        "merge": {
+          "args": [
+            "--bucket",
+            "chromium-result-details",
+            "--test-name",
+            "puffin_unittests"
+          ],
+          "script": "//build/android/pylib/results/presentation/test_results_presentation.py"
+        },
+        "module_name": "//third_party/puffin:puffin_unittests",
+        "module_scheme": "gtest",
+        "name": "puffin_unittests",
+        "resultdb": {
+          "enable": true,
+          "has_native_resultdb_integration": true
+        },
+        "swarming": {
+          "dimensions": {
+            "cores": "4",
+            "cpu": "x86-64",
+            "device_os": null,
+            "device_type": null,
+            "os": "Ubuntu-22.04",
+            "pool": "chromium.tests.avd"
+          },
+          "named_caches": [
+            {
+              "name": "android_29_google_apis_x86",
+              "path": ".android_emulator/android_29_google_apis_x86"
+            }
+          ],
+          "optional_dimensions": {
+            "60": {
+              "caches": "android_29_google_apis_x86"
+            }
+          },
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+        },
+        "test": "puffin_unittests",
+        "test_id_prefix": "ninja://third_party/puffin:puffin_unittests/"
+      },
+      {
+        "args": [
+          "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
+          "--gs-results-bucket=chromium-result-details",
+          "--recover-devices"
+        ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2567,7 +2614,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2595,12 +2641,12 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
         "ci_only": true,
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2618,7 +2664,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2647,11 +2692,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2669,7 +2714,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2697,11 +2741,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2719,7 +2763,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2747,11 +2790,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2769,7 +2812,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2797,11 +2839,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2819,7 +2861,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2847,13 +2888,13 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gtest_filter=-org.chromium.webview_shell.test.WebViewLayoutTest.*",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
         "ci_only": true,
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2871,7 +2912,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2899,61 +2939,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
-        "isolate_profile_data": true,
-        "merge": {
-          "args": [
-            "--bucket",
-            "chromium-result-details",
-            "--test-name",
-            "trichrome_chrome_bundle_smoke_test"
-          ],
-          "script": "//build/android/pylib/results/presentation/test_results_presentation.py"
-        },
-        "module_name": "//chrome/android:trichrome_chrome_bundle_smoke_test",
-        "module_scheme": "junit",
-        "name": "trichrome_chrome_bundle_smoke_test",
-        "resultdb": {
-          "enable": true,
-          "has_native_resultdb_integration": true
-        },
-        "retry_only_failed_tests": true,
-        "swarming": {
-          "dimensions": {
-            "cores": "4",
-            "cpu": "x86-64",
-            "device_os": null,
-            "device_type": null,
-            "os": "Ubuntu-22.04",
-            "pool": "chromium.tests.avd"
-          },
-          "named_caches": [
-            {
-              "name": "android_29_google_apis_x86",
-              "path": ".android_emulator/android_29_google_apis_x86"
-            }
-          ],
-          "optional_dimensions": {
-            "60": {
-              "caches": "android_29_google_apis_x86"
-            }
-          },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
-        },
-        "test": "trichrome_chrome_bundle_smoke_test",
-        "test_id_prefix": "ninja://chrome/android:trichrome_chrome_bundle_smoke_test/"
-      },
-      {
-        "args": [
-          "--use-persistent-shell",
-          "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
-          "--gs-results-bucket=chromium-result-details",
-          "--recover-devices"
-        ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2971,7 +2961,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -2999,11 +2988,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -3021,7 +3010,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -3049,11 +3037,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -3071,7 +3059,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -3099,11 +3086,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -3121,7 +3108,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -3150,11 +3136,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -3172,7 +3158,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -3200,11 +3185,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -3222,7 +3207,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -3250,11 +3234,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -3272,7 +3256,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -3301,11 +3284,11 @@
       {
         "args": [
           "--store-tombstones",
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -3323,13 +3306,12 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "cipd_packages": [
             {
               "cipd_package": "chromium/android_webview/tools/cts_archive",
               "location": "android_webview/tools/cts_archive/cipd",
-              "revision": "8BpUBTnmt5bH3GiqPKpmTWTP-Ie2X1TuUgf4F0IsgVgC"
+              "revision": "oW6-jyOPGwPJeLlaldYwrxZoYqzXpjO1OZUdyF3Qq7sC"
             }
           ],
           "dimensions": {
@@ -3364,11 +3346,11 @@
           "--exclude-annotation",
           "AppModeFull",
           "--test-apk-as-instant",
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -3386,13 +3368,12 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "cipd_packages": [
             {
               "cipd_package": "chromium/android_webview/tools/cts_archive",
               "location": "android_webview/tools/cts_archive/cipd",
-              "revision": "8BpUBTnmt5bH3GiqPKpmTWTP-Ie2X1TuUgf4F0IsgVgC"
+              "revision": "oW6-jyOPGwPJeLlaldYwrxZoYqzXpjO1OZUdyF3Qq7sC"
             }
           ],
           "dimensions": {
@@ -3423,12 +3404,11 @@
       {
         "args": [
           "--webview-process-mode=multiple",
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
-          "--use-persistent-shell",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -3446,7 +3426,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -3476,13 +3455,12 @@
       {
         "args": [
           "--webview-process-mode=single",
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
-          "--use-persistent-shell",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
         "ci_only": true,
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -3500,7 +3478,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -3529,11 +3506,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -3551,7 +3528,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -3579,11 +3555,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -3601,7 +3577,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -3629,11 +3604,11 @@
       },
       {
         "args": [
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -3651,7 +3626,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -3680,9 +3654,6 @@
     ],
     "isolated_scripts": [
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -3694,7 +3665,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -3708,9 +3678,6 @@
         "test_id_prefix": "ninja://android_webview/test:android_webview_junit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -3722,7 +3689,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -3736,9 +3702,6 @@
         "test_id_prefix": "ninja://base:base_junit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -3750,7 +3713,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -3764,9 +3726,6 @@
         "test_id_prefix": "ninja://build/android:build_junit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -3778,7 +3737,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -3792,9 +3750,7 @@
         "test_id_prefix": "ninja://chrome/test/android:chrome_java_test_pagecontroller_junit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
+        "ci_only": true,
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -3806,7 +3762,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -3814,15 +3769,13 @@
             "os": "Ubuntu-22.04",
             "pool": "chromium.tests"
           },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
+          "shards": 10
         },
         "test": "chrome_junit_tests",
         "test_id_prefix": "ninja://chrome/android:chrome_junit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -3834,7 +3787,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -3850,9 +3802,9 @@
       {
         "args": [
           "--gtest-benchmark-name=components_perftests",
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb"
         ],
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -3867,7 +3819,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -3894,9 +3845,6 @@
         "test_id_prefix": "ninja://components:components_perftests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -3908,7 +3856,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -3922,9 +3869,6 @@
         "test_id_prefix": "ninja://content/public/android:content_junit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -3936,7 +3880,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -3950,9 +3893,6 @@
         "test_id_prefix": "ninja://device:device_junit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -3964,7 +3904,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -3978,9 +3917,6 @@
         "test_id_prefix": "ninja://testing/android/junit:junit_unit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -3992,7 +3928,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -4006,9 +3941,6 @@
         "test_id_prefix": "ninja://chrome/android/features/keyboard_accessory:keyboard_accessory_junit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -4020,7 +3952,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -4034,9 +3965,6 @@
         "test_id_prefix": "ninja://media/base/android:media_base_junit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -4048,7 +3976,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -4062,9 +3989,6 @@
         "test_id_prefix": "ninja://components/module_installer/android:module_installer_junit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -4076,7 +4000,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -4090,9 +4013,6 @@
         "test_id_prefix": "ninja://net/android:net_junit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -4104,7 +4024,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -4118,9 +4037,6 @@
         "test_id_prefix": "ninja://components/one_time_tokens/android/backend/sms:one_time_tokens_junit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -4132,7 +4048,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -4146,9 +4061,6 @@
         "test_id_prefix": "ninja://components/paint_preview/player/android:paint_preview_junit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -4160,7 +4072,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -4174,9 +4085,6 @@
         "test_id_prefix": "ninja://chrome/browser/password_manager/android:password_manager_junit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -4188,7 +4096,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -4208,10 +4115,10 @@
           "-v",
           "--passthrough",
           "--retry-limit=2",
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb"
         ],
         "ci_only": true,
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -4223,7 +4130,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -4252,11 +4158,11 @@
       {
         "args": [
           "--extra-browser-args=--enable-crashpad",
-          "--use-persistent-shell",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
           "--browser=android-chromium"
         ],
         "ci_only": true,
+        "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -4268,7 +4174,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "4",
@@ -4297,9 +4202,6 @@
         "test_id_prefix": "ninja://chrome/test:telemetry_perf_unittests_android_chrome/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -4311,7 +4213,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -4325,9 +4226,6 @@
         "test_id_prefix": "ninja://chrome/browser/touch_to_fill/password_manager/android:touch_to_fill_junit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -4339,7 +4237,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -4353,9 +4250,6 @@
         "test_id_prefix": "ninja://ui:ui_junit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -4367,7 +4261,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -4381,9 +4274,6 @@
         "test_id_prefix": "ninja://chrome/android/webapk/libs/client:webapk_client_junit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -4395,7 +4285,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -4409,9 +4298,6 @@
         "test_id_prefix": "ninja://chrome/android/webapk/shell_apk:webapk_shell_apk_h2o_junit_tests/"
       },
       {
-        "args": [
-          "--use-persistent-shell"
-        ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -4423,7 +4309,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",

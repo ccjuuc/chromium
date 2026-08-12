@@ -17,7 +17,6 @@
 #include "components/sync/base/data_type.h"
 #include "components/sync/model/client_tag_based_data_type_processor.h"
 #include "components/sync/model/entity_change.h"
-#include "components/sync/model/in_memory_metadata_change_list.h"
 #include "components/sync/model/mutable_data_batch.h"
 #include "components/sync/model/sync_metadata_store_change_list.h"
 #include "components/sync/protocol/entity_data.h"
@@ -55,11 +54,6 @@ PlusAddressSyncBridge::PlusAddressSyncBridge(
 
 PlusAddressSyncBridge::~PlusAddressSyncBridge() = default;
 
-std::unique_ptr<syncer::MetadataChangeList>
-PlusAddressSyncBridge::CreateMetadataChangeList() {
-  return std::make_unique<syncer::InMemoryMetadataChangeList>();
-}
-
 std::optional<syncer::ModelError> PlusAddressSyncBridge::MergeFullSyncData(
     std::unique_ptr<syncer::MetadataChangeList> metadata_change_list,
     syncer::EntityChangeList entity_data) {
@@ -78,6 +72,11 @@ PlusAddressSyncBridge::ApplyIncrementalSyncChanges(
     return syncer::ModelError(
         FROM_HERE, syncer::ModelError::Type::
                        kPlusAddressTransactionBeginFailedOnIncrementalSync);
+  }
+
+  if (std::optional<syncer::ModelError> error =
+          TransferMetadataChanges(std::move(metadata_change_list))) {
+    return error;
   }
 
   std::vector<PlusAddressDataChange> profile_changes;
@@ -119,10 +118,6 @@ PlusAddressSyncBridge::ApplyIncrementalSyncChanges(
         break;
       }
     }
-  }
-
-  if (auto error = TransferMetadataChanges(std::move(metadata_change_list))) {
-    return error;
   }
 
   if (!transaction.Commit()) {
@@ -185,6 +180,14 @@ PlusAddressSyncBridge::GetAllDataForDebugging() {
     batch->Put(storage_key, std::move(entity));
   }
   return batch;
+}
+
+sync_pb::EntitySpecifics
+PlusAddressSyncBridge::TrimAllSupportedFieldsFromRemoteSpecifics(
+    const sync_pb::EntitySpecifics& entity_specifics) const {
+  // Clears all fields by default to avoid the memory and I/O overhead of an
+  // additional copy of the data.
+  return sync_pb::EntitySpecifics();
 }
 
 bool PlusAddressSyncBridge::IsEntityDataValid(

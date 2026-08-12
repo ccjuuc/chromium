@@ -209,6 +209,12 @@ bool CSSPrimitiveValue::HasPercentage() const {
   return To<CSSMathFunctionValue>(this)->ExpressionNode()->HasPercentage();
 }
 
+bool CSSPrimitiveValue::HasUnresolvablePercentages() const {
+  return IsMathFunctionValue() && To<CSSMathFunctionValue>(this)
+                                      ->ExpressionNode()
+                                      ->HasUnresolvablePercentages();
+}
+
 bool CSSPrimitiveValue::InvolvesLayout() const {
   if (IsNumericLiteralValue()) {
     return To<CSSNumericLiteralValue>(this)->IsPercentage();
@@ -546,7 +552,7 @@ Length CSSPrimitiveValue::ConvertToLength(
   if (IsResolvableLength()) {
     return ComputeLength<Length>(length_resolver);
   }
-  if (IsPercentage()) {
+  if (IsPercentage() && !HasUnresolvablePercentages()) {
     if (IsNumericLiteralValue() ||
         !To<CSSMathFunctionValue>(this)->AllowsNegativePercentageReference()) {
       return Length::Percent(CSSValueClampingUtils::ClampLength(
@@ -1124,6 +1130,11 @@ CSSPrimitiveValue* CSSPrimitiveValue::ConvertLiteralsFromPercentageToNumber()
   return MakeGarbageCollected<CSSMathFunctionValue>(
       math_node->ConvertLiteralsFromPercentageToNumber(),
       CSSPrimitiveValue::ValueRange::kAll);
+}
+
+bool CSSPrimitiveValue::HasRandomFunctions() const {
+  return IsMathFunctionValue() &&
+         To<CSSMathFunctionValue>(this)->HasRandomFunctions();
 }
 
 }  // namespace blink

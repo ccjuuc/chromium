@@ -9,17 +9,19 @@ import './sections/get_page_context.js';
 import './sections/sizing.js';
 import './sections/permissions.js';
 import './sections/file.js';
+import './sections/fre.js';
 import './sections/action.js';
 import './sections/apc.js';
 import './sections/autofill_dialog.js';
 import './sections/multi_tab.js';
 import './sections/page_metadata.js';
-import './sections/view.js';
 import './sections/additional_context.js';
 import './sections/interaction.js';
+import './sections/skills.js';
+import './sections/stress.js';
 
 import type {OpenSettingsOptions} from '/glic/glic_api/glic_api.js';
-import {SettingsPageField, WebClientMode} from '/glic/glic_api/glic_api.js';
+import {SbThreatType, SettingsPageField, WebClientMode} from '/glic/glic_api/glic_api.js';
 
 import {createGlicHostRegistryOnLoad} from '../api_boot.js';
 
@@ -50,6 +52,8 @@ $.openGlicSettings.addEventListener('click', () => {
     options.highlightField = SettingsPageField.OS_HOTKEY;
   } else if (selectedHighlight === 'osEntrypointToggle') {
     options.highlightField = SettingsPageField.OS_ENTRYPOINT_TOGGLE;
+  } else if (selectedHighlight === 'locationPermission') {
+    options.highlightField = SettingsPageField.LOCATION_PERMISSION;
   }
   getBrowser()!.openGlicSettingsPage!(options);
 });
@@ -128,6 +132,29 @@ $.detachpanelbn.addEventListener('click', () => {
 });
 $.refreshbn.addEventListener('click', () => {
   location.reload();
+});
+$.processCounterAbuseVerdictTestEngageBtn.addEventListener('click', () => {
+  const tabId = client.getFocusedTabId();
+  if (!tabId) {
+    logMessage('Cannot process verdict: No focused tab');
+    return;
+  }
+  const showInterstitial = $.counterAbuseShowInterstitial.checked;
+  const selectedThreatType =
+      $.counterAbuseThreatType.value as keyof typeof SbThreatType;
+  const threatType = SbThreatType[selectedThreatType];
+  const url = $.focusedUrlV2.value || 'https://www.google.com';
+
+  logMessage(`Triggering processCounterAbuseVerdict (threatType: ${
+      selectedThreatType}, showInterstitial: ${showInterstitial}, url: ${
+      url})`);
+  getBrowser()!.processCounterAbuseVerdict!(tabId, {
+    sbVerdictResult: {
+      url: url,
+      threatType: threatType,
+      showInterstitial: showInterstitial,
+    },
+  });
 });
 $.navigateWebviewUrl.addEventListener('keyup', ({key}) => {
   if (key === 'Enter') {

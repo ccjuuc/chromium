@@ -4,11 +4,12 @@
 
 package org.chromium.net.impl;
 
+import android.annotation.SuppressLint;
 import android.content.Context;
-import android.util.Log;
 
 import androidx.annotation.NonNull;
 
+import org.chromium.base.Log;
 import org.chromium.base.metrics.ScopedSysTraceEvent;
 import org.chromium.net.BidirectionalStream;
 import org.chromium.net.ExperimentalBidirectionalStream;
@@ -134,6 +135,7 @@ public final class JavaCronetEngine extends CronetEngineBase {
     }
 
     @Override
+    @SuppressLint("ReferencesHidden")
     public ExperimentalUrlRequest createRequest(
             String url,
             UrlRequest.Callback callback,
@@ -180,6 +182,7 @@ public final class JavaCronetEngine extends CronetEngineBase {
     }
 
     @Override
+    @SuppressLint("ReferencesHidden")
     protected ExperimentalBidirectionalStream createBidirectionalStream(
             String url,
             BidirectionalStream.Callback callback,
@@ -199,6 +202,7 @@ public final class JavaCronetEngine extends CronetEngineBase {
     }
 
     @Override
+    @SuppressLint("ReferencesHidden")
     public ExperimentalBidirectionalStream.Builder newBidirectionalStreamBuilder(
             String url, BidirectionalStream.Callback callback, Executor executor) {
         throw new UnsupportedOperationException(

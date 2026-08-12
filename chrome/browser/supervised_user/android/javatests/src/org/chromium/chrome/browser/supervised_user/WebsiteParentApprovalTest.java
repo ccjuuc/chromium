@@ -11,6 +11,8 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 
+import static org.chromium.base.test.transit.ViewFinder.waitForNoView;
+
 import androidx.test.filters.MediumTest;
 
 import org.junit.Before;
@@ -43,7 +45,7 @@ import org.chromium.components.browser_ui.bottomsheet.BottomSheetTestSupport;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.net.test.EmbeddedTestServer;
 import org.chromium.ui.base.WindowAndroid;
-import org.chromium.ui.test.util.ViewUtils;
+import org.chromium.ui.test.util.MockitoHelper;
 import org.chromium.url.GURL;
 
 import java.util.concurrent.TimeoutException;
@@ -104,7 +106,7 @@ public class WebsiteParentApprovalTest {
         mSigninTestRule.addChildTestAccountThenWaitForSignin();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    SupervisedUserSettingsTestBridge.setFilteringBehavior(
+                    FamilyLinkSettingsTestBridge.setFilteringBehavior(
                             mTabbedActivityTestRule.getProfile(/* incognito= */ false),
                             FilteringBehavior.BLOCK);
                 });
@@ -125,7 +127,8 @@ public class WebsiteParentApprovalTest {
                             return null;
                         })
                 .when(mParentAuthDelegateMock)
-                .requestLocalAuth(any(WindowAndroid.class), any(GURL.class), any(Callback.class));
+                .requestLocalAuth(
+                        any(WindowAndroid.class), any(GURL.class), MockitoHelper.anyCallback());
     }
 
     private void checkParentApprovalScreenClosedAfterClick() {
@@ -134,9 +137,7 @@ public class WebsiteParentApprovalTest {
                 () -> {
                     mBottomSheetTestSupport.endAllAnimations();
                 });
-        ViewUtils.waitForViewCheckingState(
-                withId(R.id.local_parent_approval_layout),
-                ViewUtils.VIEW_INVISIBLE | ViewUtils.VIEW_GONE | ViewUtils.VIEW_NULL);
+        waitForNoView(withId(R.id.local_parent_approval_layout));
     }
 
     @Test
@@ -172,7 +173,7 @@ public class WebsiteParentApprovalTest {
         // Verify only histograms recorded in Java.
         var histogram =
                 HistogramWatcher.newSingleRecordWatcher(
-                        "FamilyLinkUser.LocalWebApprovalOutcome", /* value= */ 0);
+                        "FamilyLinkUser.LocalApprovalOutcome.Web", /* value= */ 0);
 
         WebsiteParentApprovalTestUtils.clickAskInPerson(mWebContents);
         WebsiteParentApprovalTestUtils.clickApprove(mBottomSheetTestSupport);
@@ -193,7 +194,7 @@ public class WebsiteParentApprovalTest {
         // Verify only histograms recorded in Java.
         var histogram =
                 HistogramWatcher.newSingleRecordWatcher(
-                        "FamilyLinkUser.LocalWebApprovalOutcome", /* value= */ 1);
+                        "FamilyLinkUser.LocalApprovalOutcome.Web", /* value= */ 1);
 
         WebsiteParentApprovalTestUtils.clickAskInPerson(mWebContents);
         WebsiteParentApprovalTestUtils.clickDoNotApprove(mBottomSheetTestSupport);

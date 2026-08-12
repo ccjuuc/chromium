@@ -26,7 +26,6 @@
 #include "third_party/blink/public/platform/web_url_request.h"
 #include "third_party/blink/public/web/blink.h"
 #include "third_party/blink/public/web/web_frame.h"
-#include "third_party/blink/public/web/web_script_controller.h"
 #include "third_party/blink/public/web/web_script_source.h"
 #include "third_party/blink/public/web/web_view.h"
 
@@ -44,6 +43,8 @@
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/common/chrome_features.h"
 #include "chrome/renderer/process_state.h"  // nogncheck
+#include "components/record_replay/content/renderer/record_replay_agent.h"
+#include "components/record_replay/core/common/record_replay_features.h"
 #endif
 
 using autofill::AutofillAgent;
@@ -52,7 +53,6 @@ using autofill::PasswordGenerationAgent;
 using blink::WebFrame;
 using blink::WebInputEvent;
 using blink::WebMouseEvent;
-using blink::WebScriptController;
 using blink::WebScriptSource;
 using blink::WebString;
 using blink::WebURLRequest;
@@ -101,9 +101,17 @@ void ChromeRenderViewTest::SetUp() {
   autofill_agent_ = new AutofillAgent(
       GetMainRenderFrame(), std::move(unique_password_autofill_agent),
       std::move(unique_password_generation), &associated_interfaces_);
+#if !BUILDFLAG(IS_ANDROID)
+  if (base::FeatureList::IsEnabled(
+          record_replay::features::kRecordReplayBase)) {
+    record_replay_agent_ = new record_replay::RecordReplayAgent(
+        GetMainRenderFrame(), &associated_interfaces_);
+  }
+#endif
 }
 
 void ChromeRenderViewTest::TearDown() {
+  record_replay_agent_ = nullptr;
   autofill_agent_ = nullptr;
   password_generation_ = nullptr;
   password_autofill_agent_ = nullptr;
@@ -112,7 +120,7 @@ void ChromeRenderViewTest::TearDown() {
 
 #if defined(LEAK_SANITIZER)
   // Do this before shutting down V8 in RenderViewTest::TearDown().
-  // http://crbug.com/328552
+  // http://crbug.com/40344974
   __lsan_do_leak_check();
 #endif
   content::RenderViewTest::TearDown();

@@ -66,6 +66,10 @@
 #include "ui/gfx/range/range.h"
 #include "ui/touch_selection/touch_selection_menu_runner.h"
 
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
+
 #if BUILDFLAG(IS_MAC)
 #include "ui/base/test/scoped_fake_nswindow_fullscreen.h"
 #endif
@@ -76,13 +80,6 @@ using guest_view::GuestViewBase;
 using guest_view::GuestViewManager;
 using guest_view::TestGuestViewManager;
 using guest_view::TestGuestViewManagerFactory;
-
-#if !BUILDFLAG(IS_OZONE_WAYLAND)
-// Some test helpers, like ui_test_utils::SendMouseMoveSync, don't work properly
-// on some platforms. Tests that require these helpers need to be skipped for
-// these cases.
-#define SUPPORTS_SYNC_MOUSE_UTILS
-#endif
 
 #if BUILDFLAG(IS_MAC)
 class PopupShowAttemptObserver : content::RenderWidgetHostViewCocoaObserver {
@@ -139,7 +136,7 @@ class WebViewInteractiveTest : public extensions::PlatformAppBrowserTest {
 
   TestGuestViewManager* GetGuestViewManager() {
     return factory_.GetOrCreateTestGuestViewManager(
-        browser()->profile(),
+        browser()->GetProfile(),
         ExtensionsAPIClient::Get()->CreateGuestViewManagerDelegate());
   }
 
@@ -170,7 +167,7 @@ class WebViewInteractiveTest : public extensions::PlatformAppBrowserTest {
 
   gfx::NativeWindow GetPlatformAppWindow() {
     const extensions::AppWindowRegistry::AppWindowList& app_windows =
-        extensions::AppWindowRegistry::Get(browser()->profile())->app_windows();
+        extensions::AppWindowRegistry::Get(browser()->GetProfile())->app_windows();
     return (*app_windows.begin())->GetNativeWindow();
   }
 
@@ -560,17 +557,23 @@ class WebViewPointerLockInteractiveTest : public WebViewInteractiveTest {};
 
 // The following class of tests do not work for OOPIF <webview>.
 // TODO(ekaramad): Make this tests work with OOPIF and replace the test classes
-// with WebViewInteractiveTest (see crbug.com/582562).
+// with WebViewInteractiveTest (see crbug.com/40454567).
 class DISABLED_WebViewPopupInteractiveTest : public WebViewInteractiveTest {};
 
-// Timeouts flakily: crbug.com/1003345
-#if defined(SUPPORTS_SYNC_MOUSE_UTILS) && !BUILDFLAG(IS_CHROMEOS) && \
-    !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_WIN) && defined(NDEBUG)
+// Timeouts flakily: crbug.com/40098536
+#if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_WIN) && \
+    defined(NDEBUG)
 #define MAYBE_PointerLock PointerLock
 #else
 #define MAYBE_PointerLock DISABLED_PointerLock
 #endif
 IN_PROC_BROWSER_TEST_F(WebViewPointerLockInteractiveTest, MAYBE_PointerLock) {
+#if BUILDFLAG(IS_OZONE)
+  // ui_test_utils::SendMouseMoveSync, don't work properly on Wayland.
+  if (::ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP() << "Wayland doesn't support Sync Mouse Utils";
+  }
+#endif
   SetupTest("web_view/pointer_lock");
 
   // Move the mouse over the Lock Pointer button.
@@ -632,15 +635,19 @@ IN_PROC_BROWSER_TEST_F(WebViewPointerLockInteractiveTest, MAYBE_PointerLock) {
   }
 }
 
-// flaky http://crbug.com/412086
-#if defined(SUPPORTS_SYNC_MOUSE_UTILS) && !BUILDFLAG(IS_CHROMEOS) && \
-    !BUILDFLAG(IS_MAC) && defined(NDEBUG)
+// flaky http://crbug.com/40383431
+#if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_MAC) && defined(NDEBUG)
 #define MAYBE_PointerLockFocus PointerLockFocus
 #else
 #define MAYBE_PointerLockFocus DISABLED_PointerLockFocus
 #endif
 IN_PROC_BROWSER_TEST_F(WebViewPointerLockInteractiveTest,
                        MAYBE_PointerLockFocus) {
+#if BUILDFLAG(IS_OZONE)
+  if (::ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP() << "Wayland doesn't support Sync Mouse Utils";
+  }
+#endif
   SetupTest("web_view/pointer_lock_focus");
 
   // Move the mouse over the Lock Pointer button.
@@ -708,13 +715,11 @@ IN_PROC_BROWSER_TEST_F(WebViewFocusInteractiveTest,
 
   // TAB back out to the embedder's input.
   next_step_listener.Reset();
-  content::SimulateKeyPress(embedder_web_contents(), ui::DomKey::TAB,
-                            ui::DomCode::TAB, ui::VKEY_TAB, false, false, false,
-                            false);
+  content::SimulateCharTyped(embedder_web_contents(), '\t');
   ASSERT_TRUE(next_step_listener.WaitUntilSatisfied());
 }
 
-// Flaky on Mac and Linux - https://crbug.com/707648
+// Flaky on Mac and Linux - https://crbug.com/40513691
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_Focus_FocusTracksEmbedder DISABLED_Focus_FocusTracksEmbedder
 #else
@@ -765,9 +770,7 @@ IN_PROC_BROWSER_TEST_F(WebViewFocusInteractiveTest, Focus_AdvanceFocus) {
 
     SimulateRWHMouseClick(guest_rfh->GetRenderWidgetHost(),
                           blink::WebMouseEvent::Button::kLeft, 200, 20);
-    content::SimulateKeyPress(embedder_web_contents, ui::DomKey::TAB,
-                              ui::DomCode::TAB, ui::VKEY_TAB, false, false,
-                              false, false);
+    content::SimulateCharTyped(embedder_web_contents, '\t');
     ASSERT_TRUE(listener.WaitUntilSatisfied());
   }
 
@@ -776,12 +779,8 @@ IN_PROC_BROWSER_TEST_F(WebViewFocusInteractiveTest, Focus_AdvanceFocus) {
     // move the focus to the next focusable element.
     ExtensionTestMessageListener listener("button1-advance-focus");
     listener.set_failure_message("TEST_FAILED");
-    content::SimulateKeyPress(embedder_web_contents, ui::DomKey::TAB,
-                              ui::DomCode::TAB, ui::VKEY_TAB, false, false,
-                              false, false);
-    content::SimulateKeyPress(embedder_web_contents, ui::DomKey::TAB,
-                              ui::DomCode::TAB, ui::VKEY_TAB, false, false,
-                              false, false);
+    content::SimulateCharTyped(embedder_web_contents, '\t');
+    content::SimulateCharTyped(embedder_web_contents, '\t');
     ASSERT_TRUE(listener.WaitUntilSatisfied());
   }
 }
@@ -901,7 +900,7 @@ IN_PROC_BROWSER_TEST_F(WebViewInteractiveTest, EditCommandsNoMenu) {
 // There is a problem of missing keyup events with the command key after
 // the NSEvent is sent to NSApplication in ui/base/test/ui_controls_mac.mm .
 // This test is disabled on only the Mac until the problem is resolved.
-// See http://crbug.com/425859 for more information.
+// See http://crbug.com/40390352 for more information.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_NewWindow_OpenInNewTab DISABLED_NewWindow_OpenInNewTab
 #else
@@ -941,7 +940,7 @@ IN_PROC_BROWSER_TEST_F(DISABLED_WebViewPopupInteractiveTest,
   // make sure we keep rendering popups correct in webview.
 }
 
-// Flaky on ChromeOS and Linux: http://crbug.com/526886
+// Flaky on ChromeOS and Linux: http://crbug.com/40433775
 // TODO(crbug.com/40560638): Flaky on Mac.
 // TODO(crbug.com/41369000): Flaky on Windows.
 // Tests that moving browser plugin (without resize/UpdateRects) correctly
@@ -1147,7 +1146,7 @@ IN_PROC_BROWSER_TEST_F(WebViewInteractiveTest, MAYBE_Focus_InputMethod) {
     ASSERT_TRUE(next_step_listener.WaitUntilSatisfied());
   }
 
-  // TODO(lazyboy): http://crbug.com/457007, Add a step or a separate test to
+  // TODO(lazyboy): http://crbug.com/40404982, Add a step or a separate test to
   // check the following, currently it turns this test to be flaky:
   // If we move the focus from the first <input> to the second one after we
   // have some composition text set but *not* committed (by calling
@@ -1156,7 +1155,7 @@ IN_PROC_BROWSER_TEST_F(WebViewInteractiveTest, MAYBE_Focus_InputMethod) {
   // <webview>, not the second one.
 
   // Tests ExtendSelectionAndDelete message works in <webview>.
-  // https://crbug.com/971985
+  // https://crbug.com/41463750
   {
     next_step_listener.Reset();
 
@@ -1310,8 +1309,8 @@ IN_PROC_BROWSER_TEST_F(WebViewInteractiveTest, WordLookupShadowDom) {
 }
 #endif
 
-// Flaky on Mac: http://crbug.com/811893
-// Flaky on Linux/ChromeOS/Windows: http://crbug.com/845638
+// Flaky on Mac: http://crbug.com/41370441
+// Flaky on Linux/ChromeOS/Windows: http://crbug.com/41390528
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
     BUILDFLAG(IS_WIN)
 #define MAYBE_FocusAndVisibility DISABLED_FocusAndVisibility
@@ -1334,7 +1333,7 @@ IN_PROC_BROWSER_TEST_F(WebViewFocusInteractiveTest, MAYBE_FocusAndVisibility) {
       "WebViewInteractiveTest.KeyUp");
 #if BUILDFLAG(IS_MAC)
   // On mac, the event listener seems one key event behind and deadlocks. Send
-  // an extra tab to get things unblocked. See http://crbug.com/685281 when
+  // an extra tab to get things unblocked. See http://crbug.com/41297477 when
   // fixed, this can be removed.
   SendKeyPressToPlatformApp(ui::VKEY_TAB);
 #endif
@@ -1377,9 +1376,9 @@ IN_PROC_BROWSER_TEST_F(WebViewFocusInteractiveTest, MAYBE_FocusAndVisibility) {
   EXPECT_TRUE(webview_button_not_focused_listener.WaitUntilSatisfied());
 }
 
-// Flaky timeouts on Linux. https://crbug.com/709202
-// Flaky timeouts on Win. https://crbug.com/846695
-// Flaky timeouts on Mac. https://crbug.com/1520415
+// Flaky timeouts on Linux. https://crbug.com/40514419
+// Flaky timeouts on Win. https://crbug.com/40577991
+// Flaky timeouts on Mac. https://crbug.com/41493388
 IN_PROC_BROWSER_TEST_F(WebViewInteractiveTest, DISABLED_KeyboardFocusSimple) {
   TestHelper("testKeyboardFocusSimple", "web_view/focus", NO_TEST_SERVER);
 
@@ -1416,10 +1415,10 @@ IN_PROC_BROWSER_TEST_F(WebViewInteractiveTest, DISABLED_KeyboardFocusSimple) {
 // Ensures that input is routed to the webview after the containing window loses
 // and regains focus. Additionally, the webview does not process keypresses sent
 // while another window is focused.
-// http://crbug.com/660044.
-// Flaky on MacOSX, crbug.com/817067.
-// Flaky on linux, crbug.com/706830.
-// Flaky on Windows, crbug.com/847201.
+// http://crbug.com/40490947.
+// Flaky on MacOSX, crbug.com/41373673.
+// Flaky on linux, crbug.com/40513300.
+// Flaky on Windows, crbug.com/40578243.
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
     BUILDFLAG(IS_WIN)
 #define MAYBE_KeyboardFocusWindowCycle DISABLED_KeyboardFocusWindowCycle
@@ -1491,8 +1490,8 @@ IN_PROC_BROWSER_TEST_F(WebViewInteractiveTest, MAYBE_KeyboardFocusWindowCycle) {
 
 // Ensure that destroying a <webview> with a pending mouse lock request doesn't
 // leave a stale mouse lock widget pointer in the embedder WebContents. See
-// https://crbug.com/1346245.
-// Flaky: crbug.com/1424552
+// https://crbug.com/40060350.
+// Flaky: crbug.com/40260478
 IN_PROC_BROWSER_TEST_F(WebViewInteractiveTest,
                        DISABLED_DestroyGuestWithPendingPointerLock) {
   LoadAndLaunchPlatformApp("web_view/pointer_lock_pending",
@@ -1663,7 +1662,7 @@ IN_PROC_BROWSER_TEST_F(WebViewFocusInteractiveTest,
 #endif
 
 // Check that when a focused <webview> navigates cross-process, the focus
-// is preserved in the new page. See https://crbug.com/1358210.
+// is preserved in the new page. See https://crbug.com/40236897.
 IN_PROC_BROWSER_TEST_F(WebViewInteractiveTest,
                        FocusPreservedAfterCrossProcessNavigation) {
   // Load and show a platform app with a <webview> on a data: URL.

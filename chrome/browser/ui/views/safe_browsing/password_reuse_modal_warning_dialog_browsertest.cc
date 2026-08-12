@@ -5,8 +5,6 @@
 #include "chrome/browser/ui/views/safe_browsing/password_reuse_modal_warning_dialog.h"
 
 #include "base/functional/bind.h"
-#include "base/memory/raw_ptr.h"
-#include "base/run_loop.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
@@ -14,16 +12,15 @@
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/constrained_window/constrained_window_views.h"
-#include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/safe_browsing/content/browser/password_protection/password_protection_service.h"
-#include "components/safe_browsing/core/common/features.h"
 #include "content/public/test/browser_test.h"
+#include "ui/views/view_tracker.h"
 
 namespace safe_browsing {
 
 class PasswordReuseModalWarningTest : public DialogBrowserTest {
  public:
-  PasswordReuseModalWarningTest() : dialog_(nullptr) {}
+  PasswordReuseModalWarningTest() = default;
 
   PasswordReuseModalWarningTest(const PasswordReuseModalWarningTest&) = delete;
   PasswordReuseModalWarningTest& operator=(
@@ -37,12 +34,13 @@ class PasswordReuseModalWarningTest : public DialogBrowserTest {
         browser()->tab_strip_model()->GetActiveWebContents();
     ReusedPasswordAccountType password_type;
     password_type.set_account_type(ReusedPasswordAccountType::GSUITE);
-    dialog_ = new PasswordReuseModalWarningDialog(
+    auto* dialog = new PasswordReuseModalWarningDialog(
         web_contents, nullptr, password_type,
         base::BindOnce(&PasswordReuseModalWarningTest::DialogCallback,
                        base::Unretained(this)));
+    dialog_tracker_.SetView(dialog);
     constrained_window::CreateBrowserModalDialogViews(
-        dialog_, web_contents->GetTopLevelNativeWindow())
+        dialog, web_contents->GetTopLevelNativeWindow())
         ->Show();
   }
 
@@ -56,9 +54,13 @@ class PasswordReuseModalWarningTest : public DialogBrowserTest {
 
   void DialogCallback(WarningAction action) { latest_user_action_ = action; }
 
+  PasswordReuseModalWarningDialog* dialog() {
+    return static_cast<PasswordReuseModalWarningDialog*>(
+        dialog_tracker_.view());
+  }
+
  protected:
-  raw_ptr<PasswordReuseModalWarningDialog, AcrossTasksDanglingUntriaged>
-      dialog_;
+  views::ViewTracker dialog_tracker_;
   WarningAction latest_user_action_ = WarningAction::SHOWN;
 };
 
@@ -72,13 +74,15 @@ IN_PROC_BROWSER_TEST_F(PasswordReuseModalWarningTest, TestBasicDialogBehavior) {
   // Simulating a click on ui::mojom::DialogButton::kOk button results in a
   // CHANGE_PASSWORD action.
   ShowUi(std::string());
-  dialog_->AcceptDialog();
+  ASSERT_TRUE(dialog());
+  dialog()->AcceptDialog();
   EXPECT_EQ(WarningAction::CHANGE_PASSWORD, latest_user_action_);
 
   // Simulating a click on ui::mojom::DialogButton::kCancel button results in an
   // IGNORE_WARNING action.
   ShowUi(std::string());
-  dialog_->CancelDialog();
+  ASSERT_TRUE(dialog());
+  dialog()->CancelDialog();
   EXPECT_EQ(WarningAction::IGNORE_WARNING, latest_user_action_);
 }
 

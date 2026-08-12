@@ -297,7 +297,7 @@ void BuildPayload(
     int64_t last_sequence_id,
     const base::flat_map<int64_t, std::unique_ptr<EncryptedRecord>>& records,
     ScopedReservation scoped_reservation,
-    base::OnceCallback<void(std::optional<base::Value::Dict> /*payload_result*/,
+    base::OnceCallback<void(std::optional<base::DictValue> /*payload_result*/,
                             ScopedReservation /*scoped_reservation*/,
                             int64_t /*last_sequence_id*/,
                             uint64_t /*events_to_send*/)> create_job_cb) {
@@ -347,7 +347,7 @@ void BuildPayload(
              ScopedReservation scoped_reservation, int64_t last_sequence_id,
              uint64_t events_to_send,
              base::OnceCallback<void(
-                 std::optional<base::Value::Dict> /*payload_result*/,
+                 std::optional<base::DictValue> /*payload_result*/,
                  ScopedReservation /*scoped_reservation*/,
                  int64_t /*last_sequence_id*/, uint64_t /*events_to_send*/)>
                  create_job_cb) {
@@ -450,7 +450,7 @@ class PayloadSizeComputationRateLimiterForUma {
 };
 
 // Gets the size of payload as a JSON string.
-static int GetPayloadSize(const base::Value::Dict& payload) {
+static int GetPayloadSize(const base::DictValue& payload) {
   std::string payload_json = base::WriteJson(payload).value_or("");
   return static_cast<int>(payload_json.size());
 }
@@ -484,7 +484,7 @@ bool EncryptedReportingClient::GenerationGuidIsRequired() {
 #endif
 }
 
-void EncryptedReportingClient::PresetUploads(base::Value::Dict context,
+void EncryptedReportingClient::PresetUploads(base::DictValue context,
                                              std::string dm_token,
                                              std::string client_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -628,7 +628,7 @@ void EncryptedReportingClient::CreateUploadJob(
     policy::EncryptedReportingJobConfiguration::UploadResponseCallback
         response_cb,
     ResponseCallback callback,
-    std::optional<base::Value::Dict> payload_result,
+    std::optional<base::DictValue> payload_result,
     ScopedReservation scoped_reservation,
     int64_t last_sequence_id,
     uint64_t events_to_send) {
@@ -719,7 +719,7 @@ void EncryptedReportingClient::OnReportUploadCompleted(
     policy::DeviceManagementService::Job* job,
     policy::DeviceManagementStatus status,
     int response_code,
-    std::optional<base::Value::Dict> response) {
+    std::optional<base::DictValue> response) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   auto* const state = GetState(priority, generation_id);
@@ -879,9 +879,7 @@ void EncryptedReportingClient::AccountForAllowedJob(Priority priority,
   auto* const state = GetState(priority, generation_id);
   // Update state to reflect `last_sequence_id` (we never allow upload with
   // lower sequence_id).
-  if (state->last_sequence_id < last_sequence_id) {
-    state->last_sequence_id = last_sequence_id;
-  }
+  state->last_sequence_id = std::max(state->last_sequence_id, last_sequence_id);
   // Calculate delay as exponential backoff (based on the retry_count).
   // Update backoff under assumption that this request fails.
   // If it is responded successfully, we will reset it.

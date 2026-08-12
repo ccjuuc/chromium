@@ -4,10 +4,10 @@
 
 #include "components/performance_manager/graph/page_node_impl.h"
 
+#include <algorithm>
 #include <optional>
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "components/performance_manager/graph/frame_node_impl.h"
@@ -82,7 +82,7 @@ TEST_F(PageNodeImplTest, RemoveFrame) {
   // Ensure correct page-frame relationship has been established.
   auto frame_nodes = GraphImplOperations::GetFrameNodes(page_node.get());
   EXPECT_EQ(1u, frame_nodes.size());
-  EXPECT_TRUE(base::Contains(frame_nodes, frame_node.get()));
+  EXPECT_TRUE(std::ranges::contains(frame_nodes, frame_node.get()));
   EXPECT_EQ(page_node.get(), frame_node->page_node());
 
   frame_node.reset();
@@ -126,7 +126,7 @@ TEST_F(PageNodeImplTest, GetTimeSinceLastAudibleChange) {
 
   // Test a page that's audible at creation.
   auto audible_page = CreateNode<PageNodeImpl>(
-      nullptr, /*browser_context_id=*/std::string(), GURL(),
+      nullptr, /*browser_context_id=*/base::UnguessableToken(), GURL(),
       PagePropertyFlags{PagePropertyFlag::kIsAudible});
   AdvanceClock(base::Seconds(56));
   EXPECT_EQ(base::Seconds(56), audible_page->GetTimeSinceLastAudibleChange());
@@ -184,8 +184,7 @@ TEST_F(PageNodeImplTest, GetTimeSinceLastNavigation) {
 }
 
 TEST_F(PageNodeImplTest, BrowserContextID) {
-  const std::string kTestBrowserContextId =
-      base::UnguessableToken::Create().ToString();
+  const auto kTestBrowserContextId = base::UnguessableToken::Create();
   auto page_node = CreateNode<PageNodeImpl>(nullptr, kTestBrowserContextId);
 
   EXPECT_EQ(page_node->GetBrowserContextID(), kTestBrowserContextId);
@@ -264,7 +263,7 @@ class MockObserver : public MockPageNodeObserver {
     // Node should be created without edges.
     EXPECT_FALSE(page_node->GetOpenerFrameNode());
     EXPECT_FALSE(page_node->GetEmbedderFrameNode());
-    EXPECT_FALSE(page_node->GetMainFrameNode());
+    EXPECT_FALSE(page_node->GetPrimaryMainFrameNode());
     EXPECT_TRUE(page_node->GetMainFrameNodes().empty());
   }
 
@@ -395,9 +394,13 @@ TEST_F(PageNodeImplTest, ObserverWorks) {
   page_node->OnTitleUpdated();
   EXPECT_EQ(raw_page_node, obs.TakeNotifiedPageNode());
 
-  EXPECT_CALL(obs, OnFaviconUpdated(_))
-      .WillOnce(Invoke(&obs, &MockObserver::SetNotifiedPageNode));
-  page_node->OnFaviconUpdated();
+  EXPECT_CALL(obs, OnFaviconUpdated(_, _))
+      .WillOnce(
+          [&obs](const PageNode* node, blink::mojom::FaviconUpdateReason) {
+            obs.SetNotifiedPageNode(node);
+          });
+  page_node->OnFaviconUpdated(
+      blink::mojom::FaviconUpdateReason::kLinkElementChange);
   EXPECT_EQ(raw_page_node, obs.TakeNotifiedPageNode());
 
   // Re-entrant iteration should work.
@@ -449,7 +452,8 @@ TEST_F(PageNodeImplTest, PublicInterface) {
   // Simply test that the public interface impls yield the same result as their
   // private counterpart.
 
-  EXPECT_EQ(page_node->main_frame_node(), public_page_node->GetMainFrameNode());
+  EXPECT_EQ(page_node->primary_main_frame_node(),
+            public_page_node->GetPrimaryMainFrameNode());
 }
 
 TEST_F(PageNodeImplTest, OpenerFrameNode) {

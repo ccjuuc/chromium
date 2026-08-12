@@ -10,7 +10,7 @@ import {NetworkType} from 'chrome://diagnostics/network_health_provider.mojom-we
 import type {RoutineGroup} from 'chrome://diagnostics/routine_group.js';
 import {RoutineType} from 'chrome://diagnostics/system_routine_controller.mojom-webui.js';
 import {assert} from 'chrome://resources/js/assert.js';
-import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chromeos/chai_assert.js';
+import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 
 suite('diagnosticsUtilsTestSuite', function() {
   test('ProperlyConvertsKibToGib', () => {
@@ -67,14 +67,14 @@ suite('diagnosticsUtilsTestSuite', function() {
     const routineGroups: RoutineGroup[] = getRoutineGroups(NetworkType.kWiFi);
     const [
       localNetworkGroup,
-       nameResolutionGroup,
-       wifiGroup,
-       internetConnectivityGroup,
-      ]
-      = routineGroups;
+      nameResolutionGroup,
+      wifiGroup,
+      internetConnectivityGroup,
+      googleServicesGroup,
+    ] = routineGroups;
 
     // All groups should be present.
-    assertEquals(routineGroups.length, 4);
+    assertEquals(routineGroups.length, 5);
 
     // WiFi group should exist and all three WiFi routines should be present.
     assert(wifiGroup);
@@ -90,14 +90,19 @@ suite('diagnosticsUtilsTestSuite', function() {
     assert(internetConnectivityGroup);
     assertTrue(
         internetConnectivityGroup.routines.includes(RoutineType.kArcHttp));
+
+    // Google Services group should be present.
+    assert(googleServicesGroup);
+    assertEquals(googleServicesGroup.groupName, 'googleServicesGroupLabel');
   });
 
   test('NetworkTypeIsNotWiFi', () => {
     const routineGroups = getRoutineGroups(NetworkType.kEthernet);
-    // WiFi group should be missing.
-    assertEquals(routineGroups.length, 3);
+    // WiFi group should be missing but Google Services group should be present.
+    assertEquals(routineGroups.length, 4);
     const groupNames = routineGroups.map(group => group.groupName);
     assertFalse(groupNames.includes('wifiGroupLabel'));
+    assertTrue(groupNames.includes('googleServicesGroupLabel'));
   });
 
   test('GetNetworkCardTitle', () => {

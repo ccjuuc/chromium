@@ -12,7 +12,6 @@
 #include "third_party/blink/renderer/core/editing/dom_selection.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
-#include "third_party/blink/renderer/core/fragment_directive/css_selector_directive.h"
 #include "third_party/blink/renderer/core/fragment_directive/text_directive.h"
 #include "third_party/blink/renderer/core/fragment_directive/text_fragment_selector_generator.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -31,23 +30,23 @@ FragmentDirective::~FragmentDirective() = default;
 KURL FragmentDirective::ConsumeFragmentDirective(const KURL& url) {
   // Strip the fragment directive from the URL fragment. E.g. "#id:~:text=a"
   // --> "#id". See https://github.com/WICG/scroll-to-text-fragment.
-  String fragment = url.FragmentIdentifier().ToString();
+  StringView fragment = url.FragmentIdentifier();
   wtf_size_t start_pos =
-      fragment.Find(shared_highlighting::kFragmentsUrlDelimiter);
+      fragment.find(shared_highlighting::kFragmentsUrlDelimiter);
 
   last_navigation_had_fragment_directive_ = start_pos != kNotFound;
   fragment_directive_string_length_ = 0;
   if (!last_navigation_had_fragment_directive_)
     return url;
 
-  KURL new_url = url;
-  String fragment_directive = fragment.Substring(
-      start_pos + shared_highlighting::kFragmentsUrlDelimiterLength);
+  StringView fragment_directive(
+      fragment, start_pos + shared_highlighting::kFragmentsUrlDelimiterLength);
 
+  KURL new_url = url;
   if (start_pos == 0)
     new_url.RemoveFragmentIdentifier();
   else
-    new_url.SetFragmentIdentifier(fragment.Substring(0, start_pos));
+    new_url.SetFragmentIdentifier(fragment.substr(0, start_pos).ToString());
 
   fragment_directive_string_length_ = fragment_directive.length();
   ParseDirectives(fragment_directive);
@@ -89,7 +88,7 @@ ScriptPromise<SelectorDirective> FragmentDirective::createSelectorDirective(
   bool is_content_type_selection =
       arg->GetContentType() == V8UnionRangeOrSelection::ContentType::kSelection;
   if (is_content_type_selection) {
-    DOMSelection* selection = arg->GetAsSelection();
+    DomSelection* selection = arg->GetAsSelection();
     if (selection->rangeCount() == 0) {
       resolver->RejectWithDOMException(DOMExceptionCode::kNotSupportedError,
                                        "Selection must contain a range");
@@ -166,29 +165,24 @@ ScriptPromise<SelectorDirective> FragmentDirective::createSelectorDirective(
   return promise;
 }
 
-void FragmentDirective::ParseDirectives(const String& fragment_directive) {
-  Vector<String> directive_strings;
-  fragment_directive.Split("&", /*allow_empty_entries=*/true,
-                           directive_strings);
+void FragmentDirective::ParseDirectives(const StringView& fragment_directive) {
+  Vector<StringView> directive_strings = fragment_directive.Split('&');
 
   HeapVector<Member<Directive>> new_directives;
   HashSet<String> text_directives;
-  for (String& directive_string : directive_strings) {
-    if (directive_string.StartsWith("text=")) {
-      String value = directive_string.Right(directive_string.length() - 5);
+  for (const auto& directive_string : directive_strings) {
+    if (directive_string.starts_with("text=")) {
+      String value = directive_string.substr(5).ToString();
       if (value.empty() ||
           (RuntimeEnabledFeatures::
                ScrollToTextFragmentUniqueFragmentsEnabled() &&
-           !text_directives.insert(value.LowerASCII()).is_new_entry)) {
+           !text_directives.insert(value.ToAsciiLower()).is_new_entry)) {
         continue;
       }
 
       if (TextDirective* text_directive = TextDirective::Create(value)) {
         new_directives.push_back(text_directive);
       }
-    } else if (auto* selector_directive =
-                   CssSelectorDirective::TryParse(directive_string)) {
-      new_directives.push_back(selector_directive);
     }
   }
 

@@ -9,9 +9,11 @@
 
 #include "base/logging.h"
 #include "base/notreached.h"
+#include "media/base/agtm.h"
 #include "media/base/limits.h"
 #include "media/base/media_switches.h"
 #include "media/base/video_types.h"
+#include "media/parsers/h26x_parser.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
 
 namespace media {
@@ -148,6 +150,12 @@ H265Decoder::~H265Decoder() = default;
 void H265Decoder::SetStream(int32_t id,
                             scoped_refptr<DecoderBuffer> decoder_buffer) {
   CHECK(decoder_buffer);
+  curr_nalu_.reset();
+  curr_slice_hdr_.reset();
+  last_slice_hdr_.reset();
+  // Keep the old buffer alive until the end of this function to ensure
+  // that any active spans in the parser are cleared before the memory is freed.
+  auto outgoing_decoder_buffer = std::move(decoder_buffer_);
   decoder_buffer_ = std::move(decoder_buffer);
   const DecryptConfig* decrypt_config = decoder_buffer_->decrypt_config();
 
@@ -194,8 +202,13 @@ void H265Decoder::Reset() {
   parser_.Reset();
   accelerator_->Reset();
 
+  active_sps_.reset();
   decoder_buffer_.reset();
   secure_handle_ = 0;
+
+#if BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
+  dolby_vision_metadata_.clear();
+#endif  // BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
 
   state_ = kAfterReset;
 }
@@ -299,6 +312,7 @@ H265Decoder::DecodeResult H265Decoder::Decode() {
             break;
           }
           case H265NALU::SPS_NUT: {
+            CHECK_ACCELERATOR_RESULT(FinishPrevFrameIfPresent());
             int sps_id;
             par_res = parser_.ParseSPS(&sps_id);
             if (par_res != H265Parser::kOk) {
@@ -308,6 +322,7 @@ H265Decoder::DecodeResult H265Decoder::Decode() {
             break;
           }
           case H265NALU::PPS_NUT: {
+            CHECK_ACCELERATOR_RESULT(FinishPrevFrameIfPresent());
             int pps_id;
             par_res = parser_.ParsePPS(*curr_nalu_, &pps_id);
             if (par_res != H265Parser::kOk) {
@@ -366,7 +381,13 @@ H265Decoder::DecodeResult H265Decoder::Decode() {
           }
 
           state_ = kTryPreprocessCurrentSlice;
-          if (curr_slice_hdr_->irap_pic) {
+        }
+
+        if (state_ == kTryPreprocessCurrentSlice) {
+          CHECK_ACCELERATOR_RESULT(PreprocessCurrentSlice());
+          state_ = kEnsurePicture;
+
+          if (curr_slice_hdr_->first_slice_segment_in_pic_flag) {
             bool need_new_buffers = false;
             if (!ProcessPPS(curr_slice_hdr_->slice_pic_parameter_set_id,
                             &need_new_buffers)) {
@@ -378,11 +399,6 @@ H265Decoder::DecodeResult H265Decoder::Decode() {
               return kConfigChange;
             }
           }
-        }
-
-        if (state_ == kTryPreprocessCurrentSlice) {
-          CHECK_ACCELERATOR_RESULT(PreprocessCurrentSlice());
-          state_ = kEnsurePicture;
         }
 
         if (state_ == kEnsurePicture) {
@@ -401,9 +417,8 @@ H265Decoder::DecodeResult H265Decoder::Decode() {
               return kRanOutOfSurfaces;
             if (current_decrypt_config_)
               curr_pic_->set_decrypt_config(current_decrypt_config_->Clone());
-            if (!hdr_metadata_.IsEmpty()) {
-              curr_pic_->set_hdr_metadata(hdr_metadata_);
-            }
+            curr_pic_->SetDynamicHdrMetadata(hdr_metadata_bitstream_,
+                                             decoder_buffer_.get());
 
             curr_pic_->first_picture_ = first_picture_;
             first_picture_ = false;
@@ -495,18 +510,16 @@ H265Decoder::DecodeResult H265Decoder::Decode() {
         for (const auto& sei_msg : sei.msgs) {
           std::visit(absl::Overload{
                          [](const H265SEIAlphaChannelInfo& info) {},
-                         [this](const H265SEIContentLightLevelInfo& info) {
-                           // HEVC HDR metadata may appears in the below
-                           // places:
-                           // 1. Container.
-                           // 2. Bitstream.
-                           // 3. Both container and bitstream.
-                           // Thus we should also extract HDR metadata here in
-                           // case we miss the information.
-                           hdr_metadata_.cta_861_3 = info.ToGfx();
+                         [this](const H26xSEIContentLightLevelInfo& info) {
+                           hdr_metadata_bitstream_.SetCLLI(info.ToSkHdr());
                          },
-                         [this](const H265SEIMasteringDisplayInfo& info) {
-                           hdr_metadata_.smpte_st_2086 = info.ToGfx();
+                         [this](const H26xSEIMasteringDisplayInfo& info) {
+                           hdr_metadata_bitstream_.SetMDCV(info.ToSkHdr());
+                         },
+                         [this](const H26xSEIUserDataRegisteredT35& info) {
+                           SetAgtmFromT35WithCountryCode(
+                               hdr_metadata_bitstream_, info.country_code,
+                               info.payload);
                          },
                          [](std::monostate) {},
                      },
@@ -514,6 +527,16 @@ H265Decoder::DecodeResult H265Decoder::Decode() {
         }
         break;
       }
+#if BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
+      case H265NALU::UNSPEC62: {
+        // Reference: Dolby's open-source `dlb_mp4base` HEVC parser treats
+        // `NAL_UNIT_UNSPECIFIED_62` as a Dolby Vision RPU NAL:
+        // https://github.com/DolbyLaboratories/dlb_mp4base/blob/8da6d4a8fc095a88349fbdac33e7e68fb3b93649/src/esparser/parser_hevc.c#L1233
+        dolby_vision_metadata_.push_back(DolbyVisionMetadata::FromH265(
+            curr_nalu_->data, decoder_buffer_->timestamp()));
+        break;
+      }
+#endif  // BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
       default:
         DVLOG(4) << "Skipping NALU type: " << curr_nalu_->nal_unit_type;
         break;
@@ -547,9 +570,6 @@ VideoChromaSampling H265Decoder::GetChromaSampling() const {
 VideoColorSpace H265Decoder::GetVideoColorSpace() const {
   return picture_color_space_;
 }
-gfx::HDRMetadata H265Decoder::GetHDRMetadata() const {
-  return hdr_metadata_;
-}
 
 size_t H265Decoder::GetRequiredNumOfPictures() const {
   constexpr size_t kPicsInPipeline = limits::kMaxVideoFrames + 1;
@@ -577,6 +597,10 @@ bool H265Decoder::ProcessPPS(int pps_id, bool* need_new_buffers) {
 
   gfx::Size new_pic_size = sps->GetCodedSize();
   gfx::Rect new_visible_rect = sps->GetVisibleRect();
+  // H265Parser::ParseSPS guarantees that the crop window (and VUI display
+  // window) parameters fit within the coded picture size and are non-empty.
+  CHECK(gfx::Rect(new_pic_size).Contains(new_visible_rect));
+  CHECK(!new_visible_rect.IsEmpty());
   if (visible_rect_ != new_visible_rect) {
     DVLOG(2) << "New visible rect: " << new_visible_rect.ToString();
     visible_rect_ = new_visible_rect;
@@ -616,7 +640,7 @@ bool H265Decoder::ProcessPPS(int pps_id, bool* need_new_buffers) {
     new_color_space = container_color_space_;
   }
 
-  if (new_color_space.matrix == VideoColorSpace::MatrixID::RGB &&
+  if (new_color_space.matrix() == VideoColorSpace::MatrixID::RGB &&
       new_chroma_sampling != VideoChromaSampling::k444) {
     // Some H.265 videos contain a VUI that specifies a color matrix of GBR,
     // when they are actually ordinary YUV. Default to BT.709 if the format is
@@ -631,11 +655,29 @@ bool H265Decoder::ProcessPPS(int pps_id, bool* need_new_buffers) {
                             new_color_space != picture_color_space_;
   }
 
-  if (pic_size_ != new_pic_size || dpb_.max_num_pics() != sps->max_dpb_size ||
-      profile_ != new_profile || bit_depth_ != new_bit_depth ||
-      chroma_sampling_ != new_chroma_sampling || is_color_space_change) {
-    if (!Flush())
+  bool is_config_change = false;
+  if (parser_.validate_extended_bitstream()) {
+    is_config_change = !active_sps_ || *active_sps_ != *sps;
+  } else {
+    is_config_change = pic_size_ != new_pic_size ||
+                       dpb_.max_num_pics() != sps->max_dpb_size ||
+                       profile_ != new_profile || bit_depth_ != new_bit_depth ||
+                       chroma_sampling_ != new_chroma_sampling;
+  }
+
+  if (is_config_change) {
+    // Only color space changes are allowed on non-IRAP pictures.
+    if (curr_slice_hdr_ && !curr_slice_hdr_->irap_pic && !first_picture_) {
+      DVLOG(1)
+          << "A configuration change on a non-IRAP picture is not allowed.";
       return false;
+    }
+  }
+
+  if (is_config_change || is_color_space_change) {
+    if (!Flush()) {
+      return false;
+    }
     DVLOG(1) << "Codec profile: " << GetProfileName(new_profile)
              << ", level(x30): " << sps->profile_tier_level.general_level_idc
              << ", DPB size: " << sps->max_dpb_size
@@ -645,6 +687,7 @@ bool H265Decoder::ProcessPPS(int pps_id, bool* need_new_buffers) {
              << VideoChromaSamplingToString(new_chroma_sampling);
     profile_ = new_profile;
     bit_depth_ = new_bit_depth;
+    active_sps_ = std::make_unique<H265SPS>(*sps);
     pic_size_ = new_pic_size;
     chroma_sampling_ = new_chroma_sampling;
     picture_color_space_ = new_color_space;
@@ -667,6 +710,10 @@ H265Decoder::H265Accelerator::Status H265Decoder::PreprocessCurrentSlice() {
       return result;
 
     DCHECK(!curr_pic_);
+  } else if (!curr_pic_) {
+    DVLOG(1) << "Received slice segment with first_slice_segment_in_pic_flag "
+             << "equal to 0 without an active picture";
+    return H265Accelerator::Status::kFail;
   }
 
   return H265Accelerator::Status::kOk;
@@ -1164,6 +1211,15 @@ bool H265Decoder::PerformDpbOperations(const H265SPS* sps) {
     return false;
   }
 
+  // Non-decodable RASL frames are not stored in the DPB because the picture
+  // is not actually decoded so it doesn't make sense to store it.
+  if (curr_pic_->no_rasl_output_flag_ &&
+      (curr_pic_->nal_unit_type_ == H265NALU::RASL_N ||
+       curr_pic_->nal_unit_type_ == H265NALU::RASL_R)) {
+    DVLOG(1) << "Skipping storing non-decodable RASL frame in DPB";
+    return true;
+  }
+
   // Put the current pic in the DPB.
   dpb_.StorePicture(curr_pic_, H265Picture::kShortTermFoll);
   return true;
@@ -1270,6 +1326,16 @@ H265Decoder::H265Accelerator::Status H265Decoder::DecodePicture() {
 bool H265Decoder::OutputPic(scoped_refptr<H265Picture> pic) {
   DCHECK(!pic->outputted_);
   pic->outputted_ = true;
+
+#if BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
+  // Downstream Dolby Vision processing consumes metadata in output order and
+  // maintains its own cache. Attach the currently accumulated metadata batch to
+  // this outputted picture so the downstream pipeline can continue consuming it
+  // in display order.
+  if (!dolby_vision_metadata_.empty()) {
+    pic->set_dolby_vision_metadata(std::exchange(dolby_vision_metadata_, {}));
+  }
+#endif  // BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
 
   DVLOG(4) << "Posting output task for POC: " << pic->pic_order_cnt_val_;
   return accelerator_->OutputPicture(std::move(pic));

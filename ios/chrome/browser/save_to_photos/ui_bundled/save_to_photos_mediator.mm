@@ -13,27 +13,34 @@
 #import "base/metrics/histogram_macros.h"
 #import "base/metrics/user_metrics.h"
 #import "base/metrics/user_metrics_action.h"
+#import "base/not_fatal_until.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/prefs/pref_service.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_metrics.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
+#import "components/signin/public/identity_manager/objc/identity_manager_observer_bridge.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/account_picker/ui_bundled/account_picker_configuration.h"
+#import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
 #import "ios/chrome/browser/google_one/shared/google_one_entry_point.h"
 #import "ios/chrome/browser/photos/model/photos_metrics.h"
 #import "ios/chrome/browser/photos/model/photos_service.h"
 #import "ios/chrome/browser/save_to_photos/ui_bundled/save_to_photos_mediator_delegate.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/google_one_commands.h"
 #import "ios/chrome/browser/shared/public/commands/manage_storage_alert_commands.h"
 #import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/buildflags.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
+#import "ios/chrome/browser/signin/model/authentication_service.h"
+#import "ios/chrome/browser/signin/model/authentication_service_observer_bridge.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
 #import "ios/chrome/browser/signin/model/system_identity.h"
 #import "ios/chrome/browser/web/model/image_fetch/image_fetch_tab_helper.h"
+#import "ios/chrome/common/string_util.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util_mac.h"
 
@@ -58,14 +65,19 @@ NSString* GetSizeString(NSUInteger sizeInBytes) {
                countStyle:NSByteCountFormatterCountStyleFile];
 }
 
-// Helper to call -[mediator startWithImageURL:referrer:webState:]
+// Helper to call -[mediator
+// startWithImageURL:referrer:webState:frameID:frameOrigin:]
 void StartMediatorHelper(__weak SaveToPhotosMediator* mediator,
                          const GURL& image_url,
                          const web::Referrer referrer,
-                         base::WeakPtr<web::WebState> web_state) {
+                         base::WeakPtr<web::WebState> web_state,
+                         const std::string& frame_id,
+                         const url::Origin& frame_origin) {
   [mediator startWithImageURL:image_url
                      referrer:referrer
-                     webState:web_state.get()];
+                     webState:web_state.get()
+                      frameID:frame_id
+                  frameOrigin:frame_origin];
 }
 
 }  // namespace
@@ -81,7 +93,8 @@ NSString* const kGooglePhotosRecentlyAddedURLString =
 
 NSString* const kGooglePhotosAppURLScheme = @"googlephotos";
 
-@interface SaveToPhotosMediator ()
+@interface SaveToPhotosMediator () <AuthenticationServiceObserving,
+                                    IdentityManagerObserving>
 
 // Identity used to perform an upload. Should be set when the user selects an
 // identity, right before starting to upload. If the upload fails, should be
@@ -95,8 +108,10 @@ NSString* const kGooglePhotosAppURLScheme = @"googlephotos";
   raw_ptr<PrefService> _prefService;
   raw_ptr<ChromeAccountManagerService> _accountManagerService;
   raw_ptr<signin::IdentityManager> _identityManager;
+  std::unique_ptr<signin::IdentityManagerObserverBridge>
+      _identityManagerObserver;
   id<ManageStorageAlertCommands> _manageStorageAlertHandler;
-  id<ApplicationCommands> _applicationHandler;
+  id<SceneCommands> _sceneHandler;
   id<GoogleOneCommands> _googleOneHandler;
   NSString* _imageName;
   NSData* _imageData;
@@ -105,6 +120,9 @@ NSString* const kGooglePhotosAppURLScheme = @"googlephotos";
   BOOL _successSnackbarAppeared;
   BOOL _successSnackbarDisappeared;
   BOOL _uploadCompletedSuccessfully;
+  raw_ptr<AuthenticationService> _authenticationService;
+  std::unique_ptr<AuthenticationServiceObserverBridge>
+      _authServiceObserverBridge;
 }
 
 #pragma mark - Initialization
@@ -113,11 +131,12 @@ NSString* const kGooglePhotosAppURLScheme = @"googlephotos";
                           prefService:(PrefService*)prefService
                 accountManagerService:
                     (ChromeAccountManagerService*)accountManagerService
+                authenticationService:
+                    (AuthenticationService*)authenticationService
                       identityManager:(signin::IdentityManager*)identityManager
             manageStorageAlertHandler:
                 (id<ManageStorageAlertCommands>)manageStorageAlertHandler
-                   applicationHandler:
-                       (id<ApplicationCommands>)applicationHandler
+                         sceneHandler:(id<SceneCommands>)sceneHandler
                      googleOneHandler:(id<GoogleOneCommands>)googleOneHandler {
   self = [super init];
   if (self) {
@@ -126,14 +145,26 @@ NSString* const kGooglePhotosAppURLScheme = @"googlephotos";
     CHECK(accountManagerService);
     CHECK(identityManager);
     CHECK(manageStorageAlertHandler);
-    CHECK(applicationHandler);
+    CHECK(sceneHandler);
     _photosService = photosService;
     _prefService = prefService;
     _accountManagerService = accountManagerService;
     _identityManager = identityManager;
     _manageStorageAlertHandler = manageStorageAlertHandler;
-    _applicationHandler = applicationHandler;
+    _sceneHandler = sceneHandler;
     _googleOneHandler = googleOneHandler;
+
+    CHECK(_identityManager->HasPrimaryAccount(signin::ConsentLevel::kSignin) ||
+              base::FeatureList::IsEnabled(kIOSSaveToPhotosSignedOut),
+          base::NotFatalUntil::M152);
+    _identityManagerObserver =
+        std::make_unique<signin::IdentityManagerObserverBridge>(
+            _identityManager, self);
+    _authenticationService = authenticationService;
+    _authServiceObserverBridge =
+        std::make_unique<AuthenticationServiceObserverBridge>(
+            authenticationService, self);
+    CHECK(authenticationService->SigninEnabled(), base::NotFatalUntil::M152);
   }
   return self;
 }
@@ -142,7 +173,9 @@ NSString* const kGooglePhotosAppURLScheme = @"googlephotos";
 
 - (void)startWithImageURL:(const GURL&)imageURL
                  referrer:(const web::Referrer&)referrer
-                 webState:(web::WebState*)webState {
+                 webState:(web::WebState*)webState
+                  frameID:(const std::string&)frameID
+              frameOrigin:(const url::Origin&)frameOrigin {
   // If the web state does not exist anymore (which can happen when the user
   // tries again), hide Save to Photos.
   if (!webState) {
@@ -159,20 +192,21 @@ NSString* const kGooglePhotosAppURLScheme = @"googlephotos";
   __weak __typeof(self) weakSelf = self;
   ProceduralBlock tryAgainBlock = base::CallbackToBlock(
       base::BindOnce(&StartMediatorHelper, weakSelf, imageURL, referrer,
-                     webState->GetWeakPtr()));
+                     webState->GetWeakPtr(), frameID, frameOrigin));
 
   _imageName = base::SysUTF8ToNSString(imageURL.ExtractFileName());
 
   ImageFetchTabHelper* imageFetcher =
       ImageFetchTabHelper::FromWebState(webState);
   CHECK(imageFetcher);
-  imageFetcher->GetImageData(imageURL, referrer, ^(NSData* imageData) {
-    if (imageData) {
-      [weakSelf continueSaveImageWithData:imageData];
-    } else {
-      [weakSelf showTryAgainOrCancelAlertWithTryAgainBlock:tryAgainBlock];
-    }
-  });
+  imageFetcher->GetImageData(
+      imageURL, referrer, frameID, frameOrigin, ^(NSData* imageData) {
+        if (imageData) {
+          [weakSelf continueSaveImageWithData:imageData];
+        } else {
+          [weakSelf showTryAgainOrCancelAlertWithTryAgainBlock:tryAgainBlock];
+        }
+      });
 }
 
 - (void)accountPickerDidSelectIdentity:(id<SystemIdentity>)identity
@@ -193,6 +227,12 @@ NSString* const kGooglePhotosAppURLScheme = @"googlephotos";
 
   [self.delegate startValidationSpinnerForAccountPicker];
   [self.delegate hideAccountPicker];
+  [self tryUploadImage];
+}
+
+- (void)userSignedInToSaveImageWithIdentity:(id<SystemIdentity>)identity {
+  CHECK(identity);
+  _identity = identity;
   [self tryUploadImage];
 }
 
@@ -233,9 +273,12 @@ NSString* const kGooglePhotosAppURLScheme = @"googlephotos";
 - (void)disconnect {
   self.delegate = nil;
   _photosService = nullptr;
+  _authenticationService = nil;
+  _authServiceObserverBridge = nullptr;
   _prefService = nullptr;
   _accountManagerService = nullptr;
   _identityManager = nullptr;
+  _identityManagerObserver.reset();
   _imageName = nil;
   _imageData = nil;
   _identity = nil;
@@ -262,19 +305,40 @@ NSString* const kGooglePhotosAppURLScheme = @"googlephotos";
   [self.delegate hideSaveToPhotos];
 }
 
+- (void)userIsReauth {
+  [self tryUploadImage];
+}
+
 #pragma mark - Private
 
 // Resume the process of saving the image once the data has been fetched.
 - (void)continueSaveImageWithData:(NSData*)imageData {
+  CHECK(_imageName, base::NotFatalUntil::M156);
   _imageData = imageData;
 
   // Although it is unlikely, the user could sign-out while the image data is
   // being fetched. Exit now if that happened.
   if (!_identityManager->HasPrimaryAccount(signin::ConsentLevel::kSignin)) {
-    base::UmaHistogramEnumeration(kSaveToPhotosActionsHistogram,
-                                  SaveToPhotosActions::kFailureUserSignedOut);
-    [self.delegate hideSaveToPhotos];
+    if (base::FeatureList::IsEnabled(kIOSSaveToPhotosSignedOut)) {
+      BOOL accountOnDevice =
+          [signin::GetIdentitiesOnDevice(_identityManager,
+                                         _accountManagerService) count] > 0;
+      base::UmaHistogramEnumeration(
+          kSaveToPhotosSignInStatusHistogram,
+          accountOnDevice
+              ? SaveToPhotosSignInStatus::kSignedOutWithAccountOnDevice
+              : SaveToPhotosSignInStatus::kSignedOutWithoutAccountOnDevice);
+      [self.delegate openSignIn];
+    } else {
+      base::UmaHistogramEnumeration(kSaveToPhotosActionsHistogram,
+                                    SaveToPhotosActions::kFailureUserSignedOut);
+      [self.delegate hideSaveToPhotos];
+    }
     return;
+  }
+  if (base::FeatureList::IsEnabled(kIOSSaveToPhotosSignedOut)) {
+    base::UmaHistogramEnumeration(kSaveToPhotosSignInStatusHistogram,
+                                  SaveToPhotosSignInStatus::kSignedIn);
   }
 
   const GaiaId defaultGaiaId(
@@ -305,7 +369,7 @@ NSString* const kGooglePhotosAppURLScheme = @"googlephotos";
       [[AccountPickerConfiguration alloc] init];
   configuration.useBrandedTitle = YES;
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
-  configuration.brandedSymbolName = kGoogleFullSymbol;
+  configuration.brandedSymbol = SymbolGoogleFull;
   configuration.titleText = l10n_util::GetNSString(
       IDS_IOS_SAVE_TO_PHOTOS_ACCOUNT_PICKER_GOOGLE_PHOTOS_TITLE);
 #else
@@ -313,9 +377,10 @@ NSString* const kGooglePhotosAppURLScheme = @"googlephotos";
       l10n_util::GetNSString(IDS_IOS_SETTINGS_DOWNLOADS_SAVE_TO_PHOTOS_HEADER);
 #endif
   NSString* imageSize = GetSizeString(_imageData.length);
+  NSString* sanitizedImageName = RemoveFormattingTags(_imageName);
   configuration.bodyText =
       l10n_util::GetNSStringF(IDS_IOS_SAVE_TO_PHOTOS_ACCOUNT_PICKER_BODY,
-                              base::SysNSStringToUTF16(_imageName),
+                              base::SysNSStringToUTF16(sanitizedImageName),
                               base::SysNSStringToUTF16(imageSize));
   configuration.submitButtonTitle =
       l10n_util::GetNSString(IDS_IOS_SAVE_TO_PHOTOS_ACCOUNT_PICKER_SUBMIT);
@@ -329,6 +394,14 @@ NSString* const kGooglePhotosAppURLScheme = @"googlephotos";
 // Once the destination account is known, tries to upload the image using the
 // Photos service.
 - (void)tryUploadImage {
+  CHECK(_imageName, base::NotFatalUntil::M156);
+  CHECK(_identity, base::NotFatalUntil::M156);
+  if (!_identity.hasValidAuth) {
+    // The account is on the device, but the user is not identified anymore.
+    // Let’s offer them to reauthentify first.
+    [self.delegate showReauthForIdentity:_identity];
+    return;
+  }
   __weak __typeof(self) weakSelf = self;
 
   // Reset part of the state in case this is not the first attempt.
@@ -540,6 +613,25 @@ NSString* const kGooglePhotosAppURLScheme = @"googlephotos";
   base::UmaHistogramEnumeration(kSaveToPhotosActionsHistogram,
                                 SaveToPhotosActions::kSuccessAndOpenPhotosApp);
   [self.delegate hideSaveToPhotos];
+}
+
+#pragma mark - IdentityManagerObserving
+
+- (void)primaryAccountDidChange:
+    (const signin::PrimaryAccountChangeEvent&)event {
+  if (event.GetEventTypeFor(signin::ConsentLevel::kSignin) ==
+      signin::PrimaryAccountChangeEvent::Type::kCleared) {
+    [self.delegate hideSaveToPhotos];
+  }
+}
+
+#pragma mark - AuthenticationServiceObserving
+
+- (void)onServiceStatusChanged {
+  if (!_authenticationService->SigninEnabled()) {
+    // Signin is now disabled, so Google Photo can’t be accessed anymore.
+    [self.delegate hideSaveToPhotos];
+  }
 }
 
 @end

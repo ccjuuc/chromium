@@ -52,6 +52,8 @@ embedder.setUp_ = function(config) {
       '/extensions/platform_apps/web_view/shim/mailto.html';
   embedder.safeBrowsingDangerousURL = 'http://evil.com:' +
       config.testServer.port + '/title1.html';
+  embedder.testWebSocketPort = config.testWebSocketPort;
+  embedder.testWebTransportPort = config.testWebTransportPort;
 };
 
 window.runTest = function(testName) {
@@ -211,30 +213,46 @@ function testAllowTransparencyAttribute() {
 
 // This test verifies that a lengthy page with autosize enabled will report
 // the correct height in the sizechanged event.
-function testAutosizeHeight() {
+function testAutosizeHeight(expectedWidths) {
   var webview = document.createElement('webview');
 
   webview.autosize = true;
   webview.minwidth = 200;
   webview.maxwidth = 210;
   webview.minheight = 40;
-  webview.maxheight = 200;
 
-  var step = 1;
-  var finalWidth = 200;
+  var initialMaxHeight = 200;
   var finalHeight = 50;
+  webview.maxheight = initialMaxHeight;
+  var loaded = false;
+  var completed = false;
+  webview.addEventListener('loadstop', function() {
+    loaded = true;
+    webview.maxheight = finalHeight;
+  });
+
   webview.addEventListener('sizechanged', function(e) {
+    if (completed) {
+      return;
+    }
+
     embedder.test.assertTrue(e.newHeight >= webview.minheight);
-    embedder.test.assertTrue(e.newHeight <= webview.maxheight);
+    embedder.test.assertTrue(e.newHeight <= initialMaxHeight);
     embedder.test.assertTrue(e.newWidth >= webview.minwidth);
     embedder.test.assertTrue(e.newWidth <= webview.maxwidth);
-    if (step == 1)
-      webview.maxheight = 50;
 
-    // We are done once the size settles on the final width and height.
-    if (e.newHeight == finalHeight && e.newWidth == finalWidth)
+    if (!loaded || e.newHeight != finalHeight) {
+      return;
+    }
+
+    completed = true;
+    if (expectedWidths.includes(e.newWidth)) {
       embedder.test.succeed();
-    ++step;
+      return;
+    }
+
+    console.error('Unexpected final width: ' + e.newWidth);
+    embedder.test.fail();
   });
 
   webview.src = 'data:text/html,' +
@@ -2364,7 +2382,7 @@ function testReloadAfterTerminate() {
 
   webview.addEventListener('exit', function(e) {
     // Trigger a focus state change of the guest to test for
-    // http://crbug.com/413874.
+    // http://crbug.com/40384313.
     webview.blur();
     webview.focus();
     setTimeout(function() { webview.reload(); }, 0);
@@ -2812,7 +2830,7 @@ function testFindAPI() {
 };
 
 // TODO(paulmeyer): Make sure this test is not still flaky. If it is, it is
-// likely because the search for "dog" compelted too quickly. crbug.com/710486.
+// likely because the search for "dog" compelted too quickly. crbug.com/40515060.
 function testFindAPI_findupdate() {
   var webview = new WebView();
   webview.src = testFindPage;
@@ -3066,7 +3084,7 @@ function testPerViewZoomMode() {
     // zoom did not affect |webview1|.
     // We need to verify that the page actually is zooming by comparing
     // |window.innerWidth| before and after the zoom to prevent regressions like
-    // https://crbug.com/860511.
+    // https://crbug.com/40583759.
     let webview1_original_width = await getWebviewInnerWidth(webview1);
     let webview2_original_width = await getWebviewInnerWidth(webview2);
 
@@ -3721,6 +3739,83 @@ function testInsertIntoDetachedIframe() {
   document.body.appendChild(iframe);
 }
 
+// Chrome Platform Apps have a strict Content Security Policy (CSP) that
+// prohibits loading external scripts directly from a server. To bypass this
+// restriction for testing purposes, this method fetches the script as a Blob
+// and execute it via a Blob URL.
+// See: https://developer.chrome.com/docs/apps/app_external#external
+async function loadScript(url) {
+  const blob = await (await fetch(url)).blob();
+  const blobUrl = URL.createObjectURL(blob);
+  return new Promise((resolve, reject) => {
+    let script = document.createElement('script');
+    script.src = blobUrl;
+    script.addEventListener('load', () => {
+      URL.revokeObjectURL(blobUrl);
+      resolve();
+    });
+    script.addEventListener('error', (e) => {
+      URL.revokeObjectURL(blobUrl);
+      reject(e);
+    });
+    document.body.appendChild(script);
+  });
+}
+
+
+// This test verifies that requests from a <webview> are intercepted by the
+// webview.request API. It loads request_interception_coverage.js and calls
+// run_tests().
+async function testRequestInterceptionCoverage() {
+  try {
+    await loadScript(
+        embedder.baseGuestURL + '/webview/request_interception_coverage.js');
+    const expectedFailures = [
+      {title: 'Service Worker script', event: 'onBeforeRequest'},
+      {title: 'Fetch from Shared Worker', event: 'onBeforeRequest'},
+      {title: 'Fetch from Service Worker', event: 'onBeforeRequest'},
+      {title: 'WebSocket in Shared Worker', event: 'onBeforeRequest'},
+      {title: 'WebSocket in Service Worker', event: 'onBeforeRequest'},
+      {title: 'WebTransport in Shared Worker', event: 'onBeforeRequest'},
+      {title: 'WebTransport in Service Worker', event: 'onBeforeRequest'},
+    ];
+
+    const result = await run_tests(
+        'webview', embedder.baseGuestURL + '/', embedder.testWebSocketPort,
+        embedder.testWebTransportPort, expectedFailures.map(f => f.title));
+    const kExpectedResult =
+        expectedFailures.map(f => `${f.title}: not observed by ${f.event}`)
+            .join('\n');
+
+    embedder.test.assertEq(kExpectedResult, result);
+    embedder.test.succeed();
+  } catch (e) {
+    embedder.test.fail('Unexpected failure: ' + e.message);
+  }
+}
+
+// Calling `documentPictureInPicture.requestWindow` from a webview shouldn't
+// crash.
+function testPictureInPictureRequestWindow() {
+  let webview = document.createElement('webview');
+  webview.src = embedder.emptyGuestURL;
+  webview.addEventListener('loadstop', async () => {
+    let requestPipWindow = async () => {
+      await window.documentPictureInPicture.requestWindow();
+    };
+
+    try {
+      await evalInWebView(webview, requestPipWindow, []);
+    } catch (ex) {
+      embedder.test.fail();
+    }
+
+    embedder.test.succeed();
+  });
+
+  document.body.appendChild(webview);
+}
+
 function testCannotRequestUsb() {
   let webview = document.createElement('webview');
   webview.src = embedder.emptyGuestURL;
@@ -3944,9 +4039,86 @@ function testCannotLockKeyboard() {
   document.body.appendChild(webview);
 }
 
+async function testWebRequestOnErrorOccurredNavigation() {
+  var webview = util.createWebViewTagInDOM();
+
+  // Helper promise to await the next loadstop event on the webview.
+  const waitForLoadStop = () => new Promise((resolve) => {
+    webview.addEventListener('loadstop', resolve, {once: true});
+  });
+
+  // Helper promise for chrome.test.sendMessage.
+  const sendMessage = (msg) => new Promise((resolve) => {
+    chrome.test.sendMessage(msg, resolve);
+  });
+
+  // Helper promise to await SW registration via postMessage.
+  const waitForSwRegistration = () => new Promise((resolve) => {
+    webview.addEventListener('loadstop', () => {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = (e) => {
+        if (e.data === 'SW_REGISTERED') {
+          resolve();
+        }
+      };
+      webview.contentWindow.postMessage(
+          'CHECK_SW_REGISTRATION', '*', [channel.port2]);
+    }, {once: true});
+  });
+
+  // Initial registration.
+  let swRegisteredPromise = waitForSwRegistration();
+  webview.src = embedder.baseGuestURL +
+      '/extensions/platform_apps/web_view/shim/sw_register.html';
+  await swRegisteredPromise;
+
+  // Step 1: Navigate to the page (SW installed)
+  let loadStopPromise1 = waitForLoadStop();
+  webview.src = embedder.baseGuestURL +
+      '/extensions/platform_apps/web_view/shim/sw/index.html';
+  await loadStopPromise1;
+
+  // Step 2: Navigate away and stop the SW.
+  let loadStopPromise2 = waitForLoadStop();
+  webview.src = embedder.emptyGuestURL;
+  await loadStopPromise2;
+
+  const reply = await sendMessage('SW_REGISTERED');
+  embedder.test.assertEq('SW_STOPPED', reply);
+
+  // SW is stopped. Now register WebRequest listener.
+  webview.request.onErrorOccurred.addListener(function(details) {
+    // This should NOT be called!
+    LOG('Unexpected onErrorOccurred: ' + details.error);
+    embedder.test.fail();
+  }, {urls: ['<all_urls>']});
+
+  // Step 3: Navigate to the page again using ?stream=1.
+  let loadStopPromise3 = waitForLoadStop();
+  webview.addEventListener('loadcommit', (e) => {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = (event) => {
+      if (event.data === 'SW_READY') {
+        channel.port1.postMessage('FINISH');
+      }
+    };
+    webview.contentWindow.postMessage('START', '*', [channel.port2]);
+  }, {once: true});
+
+  webview.src = embedder.baseGuestURL +
+      '/extensions/platform_apps/web_view/shim/sw/index.html?stream=1';
+  await loadStopPromise3;
+
+  // Step 4: Confirm that SWAutoPreload is not enabled (onErrorOccurred not
+  // called).
+  embedder.test.succeed();
+}
+
 embedder.test.testList = {
   'testAllowTransparencyAttribute': testAllowTransparencyAttribute,
-  'testAutosizeHeight': testAutosizeHeight,
+  // The final width depends on whether the scrollbar consumes layout space.
+  'testAutosizeHeightFeatureEnabled': () => testAutosizeHeight([200, 210]),
+  'testAutosizeHeightFeatureDisabled': () => testAutosizeHeight([200]),
   'testAutosizeAfterNavigation': testAutosizeAfterNavigation,
   'testAutosizeBeforeNavigation': testAutosizeBeforeNavigation,
   'testAutosizeRemoveAttributes': testAutosizeRemoveAttributes,
@@ -4093,6 +4265,10 @@ embedder.test.testList = {
   'testBluetoothDisabled': testBluetoothDisabled,
   'testFileSystemAccessAvailable': testFileSystemAccessAvailable,
   'testCannotLockKeyboard': testCannotLockKeyboard,
+  'testRequestInterceptionCoverage': testRequestInterceptionCoverage,
+  'testPictureInPictureRequestWindow': testPictureInPictureRequestWindow,
+  'testWebRequestOnErrorOccurredNavigation':
+      testWebRequestOnErrorOccurredNavigation,
 };
 
 onload = function() {

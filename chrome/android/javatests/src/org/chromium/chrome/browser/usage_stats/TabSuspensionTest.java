@@ -17,6 +17,7 @@ import androidx.test.core.app.ApplicationProvider;
 import androidx.test.filters.MediumTest;
 import androidx.test.platform.app.InstrumentationRegistry;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -32,6 +33,7 @@ import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.ChromeTabbedActivity2;
 import org.chromium.chrome.browser.MockSafeBrowsingApiHandler;
@@ -45,7 +47,6 @@ import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tab.TabTestUtils;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
@@ -138,6 +139,19 @@ public class TabSuspensionTest {
                 });
     }
 
+    @After
+    public void tearDown() {
+        // PageViewObserver no longer self-registers with the ActivityLifecycleDispatcher; the
+        // caller is responsible for destroying it. Doing so here also releases references to the
+        // owning Activity so it can be GC'd. See the leak path documented on the
+        // PageViewObserver fields.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    if (mPageViewObserver != null) mPageViewObserver.destroy();
+                    if (mPageViewObserver2 != null) mPageViewObserver2.destroy();
+                });
+    }
+
     @Test
     @MediumTest
     public void testNavigateToSuspended() {
@@ -201,7 +215,7 @@ public class TabSuspensionTest {
 
     @Test
     @MediumTest
-    @DisabledTest(message = "https://crbug.com/1345655")
+    @DisabledTest(message = "https://crbug.com/40232211")
     public void testEagerSuspension() {
         mActivityTestRule.loadUrl(mStartingUrl);
         CriteriaHelper.pollUiThread(() -> !mTab.isLoading());
@@ -219,7 +233,7 @@ public class TabSuspensionTest {
 
     @Test
     @MediumTest
-    @DisabledTest(message = "https://crbug.com/1036556")
+    @DisabledTest(message = "https://crbug.com/40112684")
     public void testMediaSuspension() throws TimeoutException {
         mActivityTestRule.loadUrl(
                 mTestServer.getURLWithHostName(STARTING_FQDN, MEDIA_FILE_TEST_PATH));
@@ -259,7 +273,7 @@ public class TabSuspensionTest {
 
     @Test
     @MediumTest
-    @DisabledTest(message = "https://crbug.com/1345655")
+    @DisabledTest(message = "https://crbug.com/40232211")
     public void testMultiWindow() {
         mActivityTestRule.loadUrl(mStartingUrl);
         Tab tab2 = mActivityTestRule.loadUrlInNewTab(mDifferentUrl);
@@ -309,7 +323,7 @@ public class TabSuspensionTest {
 
     @Test
     @MediumTest
-    @DisableIf.Build(sdk_is_greater_than = 30, message = "https://crbug.com/1036556")
+    @DisableIf.Build(sdk_is_greater_than = 30, message = "https://crbug.com/40112684")
     public void testTabAddedFromCustomTab() {
         Intent intent =
                 CustomTabsIntentTestUtils.createMinimalCustomTabIntent(
@@ -373,7 +387,7 @@ public class TabSuspensionTest {
 
     @Test
     @MediumTest
-    @DisabledTest(message = "https://crbug.com/1345655")
+    @DisabledTest(message = "https://crbug.com/40232211")
     public void testNavigationFromSuspendedTabToInterstitial() {
         doReturn(true).when(mSuspensionTracker).isWebsiteSuspended(STARTING_FQDN);
         startLoadingUrl(mTab, mStartingUrl);

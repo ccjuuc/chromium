@@ -4,6 +4,7 @@
 
 #include "chrome/browser/apps/link_capturing/chromeos_reimpl_navigation_capturing_throttle.h"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
@@ -24,23 +25,22 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/launch_utils.h"
-#include "chrome/browser/apps/link_capturing/link_capturing_navigation_throttle.h"
 #include "chrome/browser/apps/link_capturing/link_capturing_tab_data.h"
 #include "chrome/browser/apps/link_capturing/metrics/intent_handling_metrics.h"
-#include "chrome/browser/preloading/prefetch/no_state_prefetch/chrome_no_state_prefetch_contents_delegate.h"  // nogncheck https://crbug.com/1474116
-#include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"  // nogncheck https://crbug.com/1474116
-#include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"  // nogncheck https://crbug.com/1474116
+#include "chrome/browser/preloading/prefetch/no_state_prefetch/chrome_no_state_prefetch_contents_delegate.h"
+#include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"  // nogncheck https://crbug.com/40279225
+#include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"  // nogncheck https://crbug.com/40279225
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_finder.h"  // nogncheck https://crbug.com/1474984
 #include "chrome/browser/ui/web_applications/navigation_capturing_process.h"  // nogncheck https://crbug.com/377760841
 #include "chrome/browser/web_applications/chromeos_web_app_experiments.h"
 #include "chrome/browser/web_applications/link_capturing_features.h"
-#include "chrome/browser/web_applications/navigation_capturing_log.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_tab_helper.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
 #include "components/page_load_metrics/google/browser/google_url_util.h"
+#include "components/tabs/public/tab_interface.h"
+#include "components/webapps/browser/navigation_capturing_log.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/frame_type.h"
 #include "content/public/browser/navigation_handle.h"
@@ -132,38 +132,6 @@ IntentHandlingMetrics::Platform GetMetricsPlatform(AppType app_type) {
   }
 }
 
-bool IsNavigationUserInitiated(content::NavigationHandle* handle) {
-  switch (handle->GetNavigationInitiatorActivationAndAdStatus()) {
-    case blink::mojom::NavigationInitiatorActivationAndAdStatus::
-        kDidNotStartWithTransientActivation:
-      return false;
-    case blink::mojom::NavigationInitiatorActivationAndAdStatus::
-        kStartedWithTransientActivationFromNonAd:
-    case blink::mojom::NavigationInitiatorActivationAndAdStatus::
-        kStartedWithTransientActivationFromAd:
-      return true;
-  }
-}
-
-void LaunchApp(base::WeakPtr<AppServiceProxy> proxy,
-               const std::string& app_id,
-               int32_t event_flags,
-               GURL url,
-               LaunchSource launch_source,
-               WindowInfoPtr window_info,
-               AppType app_type,
-               base::OnceClosure callback) {
-  if (!proxy) {
-    return;
-  }
-
-  proxy->LaunchAppWithUrl(
-      app_id, event_flags, url, launch_source, std::move(window_info),
-      base::IgnoreArgs<LaunchResult&&>(std::move(callback)));
-
-  IntentHandlingMetrics::RecordPreferredAppLinkClickMetrics(
-      GetMetricsPlatform(app_type));
-}
 
 ui::PageTransition MaskOutPageTransition(ui::PageTransition page_transition,
                                          ui::PageTransition mask) {
@@ -288,7 +256,7 @@ bool ShouldThrottleCaptureNavigation(
     bool is_link_click,
     bool is_for_projector_swa,
     content::NavigationHandle* handle,
-    base::Value::Dict* debug_dict) {
+    base::DictValue* debug_dict) {
   content::WebContents* web_contents = handle->GetWebContents();
   CHECK(web_contents);
   CHECK(app_ids_to_launch.preferred);
@@ -300,9 +268,7 @@ bool ShouldThrottleCaptureNavigation(
           launch_app_id);
   debug_dict->Set("is_for_cros_experiment_app", is_for_cros_experiment_app);
   if (app_type == AppType::kWeb && !is_for_projector_swa) {
-    if (!base::FeatureList::IsEnabled(
-            features::kNavigationCapturingOnExistingFrames) &&
-        !is_for_cros_experiment_app) {
+    if (!is_for_cros_experiment_app) {
       debug_dict->Set("!result", "existing frame disabled");
       return false;
     }
@@ -362,7 +328,7 @@ bool ShouldThrottleCaptureNavigation(
 // static
 bool ChromeOsReimplNavigationCapturingThrottle::MaybeCreateAndAdd(
     content::NavigationThrottleRegistry& registry) {
-  if (!features::IsNavigationCapturingReimplEnabled()) {
+  if (!base::FeatureList::IsEnabled(::features::kPwaNavigationCapturing)) {
     return false;
   }
 
@@ -388,10 +354,11 @@ bool ChromeOsReimplNavigationCapturingThrottle::MaybeCreateAndAdd(
     return false;
   }
 
-  // If there is no browser attached to this web-contents yet, this was a
+  // If this web-contents is not yet inserted into a tab strip, this was a
   // middle-mouse-click action, which should not be captured.
   // TODO(crbug.com/40279479): Find a better way to detect middle-clicks.
-  if (chrome::FindBrowserWithTab(contents) == nullptr) {
+  tabs::TabInterface* tab = tabs::TabInterface::MaybeGetFromContents(contents);
+  if (!tab || !tab->GetParentCollection()) {
     return false;
   }
 
@@ -502,7 +469,7 @@ ThrottleCheckResult ChromeOsReimplNavigationCapturingThrottle::HandleRequest() {
   }
 
   bool is_for_prerender = handle->IsInPrerenderedMainFrame();
-  base::Value::Dict* debug_data = &debug_data_;
+  base::DictValue* debug_data = &debug_data_;
   if (is_for_prerender) {
     debug_data = debug_data_.EnsureDict("prerender");
   }
@@ -535,8 +502,8 @@ ThrottleCheckResult ChromeOsReimplNavigationCapturingThrottle::HandleRequest() {
     return content::NavigationThrottle::PROCEED;
   }
 
-  const bool is_for_projector_swa =
-      base::Contains(app_candidates, ash::kChromeUIUntrustedProjectorSwaAppId);
+  const bool is_for_projector_swa = std::ranges::contains(
+      app_candidates, ash::kChromeUIUntrustedProjectorSwaAppId);
 
   // Note: This is an unfortunate way to detect a link click. If there is a
   // better way to know all of navigation's original disposition, frame, etc,
@@ -581,7 +548,9 @@ ThrottleCheckResult ChromeOsReimplNavigationCapturingThrottle::HandleRequest() {
   // Close existing web contents if it is around.
   std::unique_ptr<ScopedKeepAlive> browser_keep_alive;
   std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive;
-  bool closed_web_contents = false;
+  bool closed_web_contents = IsEmptyDanglingWebContentsAfterLinkCapture();
+  debug_data->Set("closed_web_contents", closed_web_contents);
+  debug_data->Set("!result", "launched");
   if (IsEmptyDanglingWebContentsAfterLinkCapture()) {
     browser_keep_alive = std::make_unique<ScopedKeepAlive>(
         KeepAliveOrigin::APP_LAUNCH, KeepAliveRestartOption::ENABLED);
@@ -589,35 +558,23 @@ ThrottleCheckResult ChromeOsReimplNavigationCapturingThrottle::HandleRequest() {
       profile_keep_alive = std::make_unique<ScopedProfileKeepAlive>(
           &profile_.get(), ProfileKeepAliveOrigin::kAppWindow);
     }
+    auto weak_this = weak_ptr_factory_.GetWeakPtr();
     handle->GetWebContents()->ClosePage();
-    closed_web_contents = true;
+    if (!weak_this) {
+      return content::NavigationThrottle::CANCEL_AND_IGNORE;
+    }
   }
-  debug_data->Set("closed_web_contents", closed_web_contents);
-  base::OnceClosure launch_callback = base::BindOnce(
-      [](std::unique_ptr<ScopedKeepAlive> browser_keep_alive,
-         std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive,
-         bool closed_web_contents) {
-        // TODO(https://crbug.com/400473923): Move this to this class when we
-        // remove v1, as we'll still keep the tests that use this.
-        if (LinkCapturingNavigationThrottle::
-                GetLinkCaptureLaunchCallbackForTesting()) {  // IN-TEST
-          std::move(LinkCapturingNavigationThrottle::
-                        GetLinkCaptureLaunchCallbackForTesting())  // IN-TEST
-              .Run(closed_web_contents);
-        }
-      },
-      std::move(browser_keep_alive), std::move(profile_keep_alive),
-      closed_web_contents);
 
-  debug_data->Set("!result", "launched");
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE,
-      base::BindOnce(&LaunchApp, proxy->GetWeakPtr(), launch_app_id,
-                     GetEventFlags(WindowOpenDisposition::NEW_WINDOW,
-                                   /*prefer_container=*/true),
-                     redirected_url, launch_source,
-                     std::make_unique<WindowInfo>(display::kDefaultDisplayId),
-                     app_type, std::move(launch_callback)));
+  proxy->LaunchAppWithUrl(
+      launch_app_id,
+      GetEventFlags(WindowOpenDisposition::NEW_WINDOW,
+                    /*prefer_container=*/true),
+      redirected_url, launch_source,
+      std::make_unique<WindowInfo>(display::kDefaultDisplayId),
+      base::DoNothingWithBoundArgs(std::move(browser_keep_alive),
+                                   std::move(profile_keep_alive)));
+  IntentHandlingMetrics::RecordPreferredAppLinkClickMetrics(
+      GetMetricsPlatform(app_type));
 
   return content::NavigationThrottle::CANCEL_AND_IGNORE;
 }
@@ -634,7 +591,7 @@ bool ChromeOsReimplNavigationCapturingThrottle::
          // This can be used for user clicked buttons as well as redirects.
          // Check whether the action was in the context of a user activation to
          // distinguish redirects from click event handlers.
-         !IsNavigationUserInitiated(navigation_handle());
+         !navigation_handle()->StartedWithTransientActivation();
 }
 
 }  // namespace apps

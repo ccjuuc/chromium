@@ -6,6 +6,7 @@
 
 load("@builtin//encoding.star", "json")
 load("@builtin//lib/gn.star", "gn")
+load("@builtin//path.star", "path")
 load("@builtin//struct.star", "module")
 load("./config.star", "config")
 load("./gn_logs.star", "gn_logs")
@@ -40,7 +41,7 @@ def __filegroups(ctx):
     return fg
 
 def __step_config(ctx, step_config):
-    remote_run = True  # Turn this to False when you do file access trace.
+    remote_run = config.get(ctx, "googlechrome")  # Turn this to False when you do file access trace.
 
     # Run static analysis steps locally when build server is enabled.
     # android_static_analysis = "build_server" by default.
@@ -62,14 +63,12 @@ def __step_config(ctx, step_config):
             "command_prefix": "python3 ../../build/android/gyp/write_build_config.py",
             "handler": "android_write_build_config",
             "remote": remote_run,
-            "canonicalize_dir": True,
             "timeout": "2m",
         },
         {
             "name": "android/ijar",
             "command_prefix": "python3 ../../build/android/gyp/ijar.py",
             "remote": remote_run,
-            "canonicalize_dir": True,
             "timeout": "2m",
         },
         {
@@ -97,7 +96,6 @@ def __step_config(ctx, step_config):
             ],
             "remote": remote_run and not config.get(ctx, "no-remote-javac"),
             "platform_ref": "large",
-            "canonicalize_dir": True,
             "timeout": "2m",
         },
         {
@@ -115,7 +113,6 @@ def __step_config(ctx, step_config):
                 "*.sql",
             ],
             "remote": remote_run,
-            "canonicalize_dir": True,
             "timeout": "5m",
         },
         {
@@ -139,7 +136,6 @@ def __step_config(ctx, step_config):
             "ignore_extra_output_pattern": ".*srcjars.*\\.java",
             "remote": remote_run and not config.get(ctx, "no-remote-javac"),
             "platform_ref": "large",
-            "canonicalize_dir": True,
             "timeout": "2m",
         },
         {
@@ -158,7 +154,6 @@ def __step_config(ctx, step_config):
             ],
             "remote": remote_run_static_analysis and not config.get(ctx, "no-remote-javac"),
             "platform_ref": "large",
-            "canonicalize_dir": True,
             # obj/chrome/android/chrome_java__errorprone.stamp step takes too
             # long.
             "timeout": "6m",
@@ -184,17 +179,12 @@ def __step_config(ctx, step_config):
             "ignore_extra_output_pattern": ".*srcjars.*\\.java",
             "remote": remote_run,
             "platform_ref": "large",
-            "canonicalize_dir": True,
             "timeout": "2m",
         },
         {
             "name": "android/dex",
             "command_prefix": "python3 ../../build/android/gyp/dex.py",
             "handler": "android_dex",
-            # TODO(crbug.com/40270798): include only required jar, dex files in GN config.
-            "indirect_inputs": {
-                "includes": ["*.dex", "*.ijar.jar", "*.turbine.jar"],
-            },
             "exclude_input_patterns": [
                 "*.a",
                 "*.cc",
@@ -211,14 +201,12 @@ def __step_config(ctx, step_config):
             "ignore_extra_output_pattern": ".*\\.dex",
             "remote": remote_run,
             "platform_ref": "large",
-            "canonicalize_dir": True,
             "timeout": "2m",
         },
         {
             "name": "android/filter_zip",
             "command_prefix": "python3 ../../build/android/gyp/filter_zip.py",
             "remote": remote_run,
-            "canonicalize_dir": True,
             "timeout": "2m",
         },
         {
@@ -227,19 +215,14 @@ def __step_config(ctx, step_config):
             "indirect_inputs": {
                 "includes": ["*.o", "*.a"],
             },
-            # When remote linking without bytes enabled, .o, .a files don't
-            # exist on the local file system.
-            # This step also should run remortely to avoid downloading them.
-            "remote": config.get(ctx, "remote-link"),
-            "platform_ref": "large",
-            "canonicalize_dir": True,
-            "timeout": "2m",
+            # Downloading all .o, .a to remote worker is slower than doing that
+            # on the host machine.
+            "remote": False,
         },
         {
             "name": "android/trace_event_bytecode_rewriter",
             "command_prefix": "python3 ../../build/android/gyp/trace_event_bytecode_rewriter.py",
             "handler": "android_trace_event_bytecode_rewriter",
-            "canonicalize_dir": True,
             "remote": remote_run,
             "platform_ref": "large",
             "timeout": "10m",
@@ -268,7 +251,6 @@ def __step_config(ctx, step_config):
                 "*.pak",
                 "*.sql",
             ],
-            "canonicalize_dir": True,
             "remote": remote_run,
             "platform_ref": "large",
             "timeout": "10m",
@@ -287,17 +269,37 @@ def __step_config(ctx, step_config):
                 "*.pak",
                 "*.sql",
             ],
-            "canonicalize_dir": True,
             "remote": remote_run_static_analysis,
             "platform_ref": "large",
             "timeout": "10m",
         },
         {
-            "name": "android/partition_action",
-            "command_prefix": "python3 ../../build/extract_partition.py",
-            "remote": config.get(ctx, "remote-link") or config.get(ctx, "builder"),
+            "name": "android/apkbuilder",
+            "command_prefix": "python3 ../../build/android/gyp/apkbuilder.py",
+            "handler": "android_apkbuilder",
+            "remote": config.get(ctx, "remote-link") or config.get(ctx, "default-remote") or config.get(ctx, "builder"),
             "platform_ref": "large",
-            "timeout": "4m",
+            "timeout": "5m",
+            "exclude_input_patterns": [
+                "*.a",
+                "*.proto",
+                "*.o",
+            ],
+        },
+        {
+            "name": "android/create_size_info_files",
+            "command_prefix": "python3 ../../build/android/gyp/create_size_info_files.py",
+            "handler": "android_create_size_info_files",
+            "remote": remote_run,
+            "platform_ref": "large",
+            "exclude_input_patterns": [
+                "*.o",
+                "*.h",
+                "*.cc",
+                "*.a",
+                "*.inc",
+                "*.cpp",
+            ],
         },
     ])
     return step_config
@@ -416,7 +418,7 @@ def __android_dex_handler(ctx, cmd):
     for i, arg in enumerate(cmd.args):
         if arg == "--desugar-dependencies":
             outputs.append(ctx.fs.canonpath(cmd.args[i + 1]))
-        for k in ["--class-inputs=", "--bootclasspath=", "--classpath=", "--class-inputs-filearg=", "--dex-inputs-filearg="]:
+        for k in ["--class-inputs=", "--bootclasspath=", "--classpath=", "--class-inputs-filearg=", "--dex-inputs-filearg=", "--dex-inputs="]:
             if arg.startswith(k):
                 arg = arg.removeprefix(k)
                 _, v = __filearg(ctx, arg)
@@ -622,7 +624,79 @@ def __android_write_build_config_handler(ctx, cmd):
 
     ctx.actions.fix(inputs = cmd.inputs + inputs)
 
+def __android_apkbuilder_handler(ctx, cmd):
+    inputs = []
+    for i, arg in enumerate(cmd.args):
+        for k in ["--assets=", "--uncompressed-assets=", "--java-resources=", "--native-libs=", "--secondary-native-libs=", "--dex-file="]:
+            if arg.startswith(k):
+                arg = arg.removeprefix(k)
+                fn, v = __filearg(ctx, arg)
+                if fn:
+                    inputs.append(ctx.fs.canonpath(fn))
+                for f in v:
+                    f, _, _ = f.partition(":")
+                    inputs.append(ctx.fs.canonpath(f))
+                break
+
+    ctx.actions.fix(inputs = cmd.inputs + inputs)
+
+def __android_create_size_info_files_handler(ctx, cmd):
+    inputs = []
+    for i, arg in enumerate(cmd.args):
+        jar_files_val = ""
+        if arg.startswith("--jar-files="):
+            jar_files_val = arg.removeprefix("--jar-files=")
+        elif arg == "--jar-files":
+            jar_files_val = cmd.args[i + 1]
+
+        if jar_files_val:
+            jars = []
+            fn, v = __filearg(ctx, jar_files_val)
+            if fn:
+                inputs.append(ctx.fs.canonpath(fn))
+
+            for f in v:
+                f, _, _ = f.partition(":")
+                jars.append(f)
+            for jar in jars:
+                if jar.endswith(".jar"):
+                    if jar.endswith(".turbine.jar"):
+                        # Turbine jars are header jars used for compilation and do not have .info files.
+                        # They are lightweight enough to upload directly.
+                        inputs.append(ctx.fs.canonpath(jar))
+                    elif not jar.startswith("../"):
+                        # For generated jars, we use .jar.info files to reduce file transfer size.
+                        info_path = jar + ".info"
+                        inputs.append(ctx.fs.canonpath(info_path))
+                    else:
+                        # For prebuilts, no .jar.info exists, so we fall back to full .jar files.
+                        inputs.append(ctx.fs.canonpath(jar))
+
+                        # There is special handling for .jar files that come from .aar files. Find and
+                        # upload the android_aar_prebuild()'s source.info file for them.
+                        parent_path = path.dir(jar)
+                        if path.base(parent_path) == "libs":
+                            parent_path = path.dir(parent_path)
+                        source_info_path = ctx.fs.canonpath(path.join(parent_path, "source.info"))
+                        if ctx.fs.exists(source_info_path):
+                            inputs.append(source_info_path)
+
+        for k in ["--assets=", "--uncompressed-assets="]:
+            if arg.startswith(k):
+                arg = arg.removeprefix(k)
+                _, v = __filearg(ctx, arg)
+                if type(v) == "string":
+                    v = [v]
+                for f in v:
+                    f, _, _ = f.partition(":")
+                    if f.endswith(".pak"):
+                        inputs.append(ctx.fs.canonpath(f + ".info"))
+                break
+
+    ctx.actions.fix(inputs = cmd.inputs + inputs)
+
 __handlers = {
+    "android_apkbuilder": __android_apkbuilder_handler,
     "android_compile_java": __android_compile_java_handler,
     "android_compile_resources": __android_compile_resources_handler,
     "android_dex": __android_dex_handler,
@@ -631,6 +705,7 @@ __handlers = {
     "android_trace_references": __android_trace_references_handler,
     "android_turbine": __android_turbine_handler,
     "android_write_build_config": __android_write_build_config_handler,
+    "android_create_size_info_files": __android_create_size_info_files_handler,
 }
 
 android = module(

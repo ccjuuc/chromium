@@ -26,6 +26,7 @@ import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.components.dom_distiller.content.DistillablePageUtils;
 import org.chromium.components.dom_distiller.content.DistillablePageUtilsJni;
+import org.chromium.components.dom_distiller.core.DomDistillerUrlUtilsJni;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.url.GURL;
 
@@ -40,6 +41,7 @@ public class TabDistillabilityProviderTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private DistillablePageUtils.Natives mDistillablePageUtilsJni;
+    @Mock private DomDistillerUrlUtilsJni mDomDistillerUrlUtilsJni;
     @Mock private Tab mTab;
     @Mock private WebContents mWebContents;
     @Mock private Profile mProfile;
@@ -49,6 +51,7 @@ public class TabDistillabilityProviderTest {
     @Before
     public void setUp() {
         DistillablePageUtilsJni.setInstanceForTesting(mDistillablePageUtilsJni);
+        DomDistillerUrlUtilsJni.setInstanceForTesting(mDomDistillerUrlUtilsJni);
 
         when(mTab.getWebContents()).thenReturn(mWebContents);
         when(mTab.getProfile()).thenReturn(mProfile);
@@ -78,10 +81,10 @@ public class TabDistillabilityProviderTest {
 
     @Test
     public void finishNavigationWithSameUrlDifferentFragmentDoesNothing() {
-        GURL url_1_fragment = new GURL("http://www.test1.com#fragment");
+        GURL url1Fragment = new GURL("http://www.test1.com#fragment");
         // Setup the distillation result, and verify loading the same page is a no-op.
         mProvider.onIsPageDistillableResult(
-                /* url= */ url_1_fragment,
+                /* url= */ url1Fragment,
                 /* isDistillable= */ true,
                 /* isLast= */ true,
                 /* isLongArticle= */ false,
@@ -115,5 +118,57 @@ public class TabDistillabilityProviderTest {
         when(mTab.getUrl()).thenReturn(URL_2);
         mProvider.onDidFinishNavigationInPrimaryMainFrame(mTab, null);
         verify(mDistillablePageUtilsJni).setDelegate(any(), eq(mProvider));
+    }
+
+    @Test
+    public void testLazyInitialization() {
+        // Start with null WebContents (simulating frozen tab)
+        Mockito.reset(mDistillablePageUtilsJni);
+        when(mTab.getWebContents()).thenReturn(null);
+
+        mProvider = new TabDistillabilityProvider(mTab);
+
+        // Provider should exist, but delegate should not be set
+        verify(mDistillablePageUtilsJni, Mockito.never()).setDelegate(any(), any());
+
+        // Simulate WebContents being set (tab restored)
+        when(mTab.getWebContents()).thenReturn(mWebContents);
+        mProvider.onContentChanged(mTab);
+
+        // Delegate should now be set
+        verify(mDistillablePageUtilsJni).setDelegate(eq(mWebContents), eq(mProvider));
+    }
+
+    @Test
+    public void testCleanupOnFreeze() {
+        // Start with active WebContents
+        // (setUp already constructed mProvider and registered delegate)
+        Mockito.reset(mDistillablePageUtilsJni);
+
+        // Simulate WebContents being cleared (tab frozen)
+        when(mTab.getWebContents()).thenReturn(null);
+        mProvider.onContentChanged(mTab);
+
+        // Delegate should be cleared on the old WebContents
+        verify(mDistillablePageUtilsJni).setDelegate(eq(mWebContents), eq(null));
+    }
+
+    @Test
+    public void testNavigationToAndFromDistilledPagePreservesState() {
+        mProvider.onIsPageDistillableResult(
+                /* url= */ URL_1,
+                /* isDistillable= */ true,
+                /* isLast= */ true,
+                /* isLongArticle= */ false,
+                /* isMobileOptimized= */ true);
+        assertTrue(mProvider.isDistillabilityDetermined());
+
+        GURL distillerUrl = new GURL("chrome-distiller://www.test1.com");
+        when(mTab.getUrl()).thenReturn(distillerUrl);
+        when(mDomDistillerUrlUtilsJni.isDistilledPage(any())).thenReturn(true);
+        when(mDomDistillerUrlUtilsJni.getOriginalUrlFromDistillerUrl(any())).thenReturn(URL_1);
+
+        mProvider.onDidFinishNavigationInPrimaryMainFrame(mTab, null);
+        assertTrue(mProvider.isDistillabilityDetermined());
     }
 }

@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "base/i18n/rtl.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/values.h"
 #include "components/grit/components_resources.h"
 #include "components/prefs/pref_service.h"
@@ -73,7 +72,7 @@ SecurityInterstitialPage::TypeID SecurityInterstitialPage::GetTypeForTesting() {
 }
 
 std::string SecurityInterstitialPage::GetHTMLContents() {
-  base::Value::Dict load_time_data;
+  base::DictValue load_time_data;
   PopulateInterstitialStrings(load_time_data);
   webui::SetLoadTimeDataDefaults(controller()->GetApplicationLocale(),
                                  &load_time_data);

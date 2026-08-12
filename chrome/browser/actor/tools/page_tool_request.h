@@ -10,10 +10,10 @@
 #include <string>
 #include <variant>
 
-#include "chrome/browser/actor/shared_types.h"
 #include "chrome/browser/actor/tools/tool_request.h"
 #include "chrome/common/actor.mojom-forward.h"
-#include "chrome/common/actor/task_id.h"
+#include "components/actor/core/shared_types.h"
+#include "components/actor/core/task_id.h"
 #include "ui/gfx/geometry/point.h"
 #include "url/gurl.h"
 
@@ -46,12 +46,22 @@ class PageToolRequest : public TabToolRequest {
 
   virtual std::unique_ptr<PageToolRequest> Clone() const = 0;
 
+  // Returns the text content that will be sent to the renderer, if any.
+  // Used for enterprise policy content scanning.
+  virtual std::string GetTextContentSentToRenderer() const;
+
   // ToolRequest
   CreateToolResult CreateTool(TaskId task_id,
                               ToolDelegate& tool_delegate) const override;
 
   // Returns what in the page the tool should act upon.
   const PageTarget& GetTarget() const;
+
+  // Returns whether a non-root DOM target must appear in the last APC.
+  virtual bool RequiresTargetInLastApc() const;
+
+  // Returns whether the action may target a node outside the main frame.
+  virtual bool IsSubframeTargetingAllowed() const;
 
   // Called just before the tool action is sent to the renderer.
   // TODO(https://crbug.com/470325962): Implement this in all child classes and
@@ -60,6 +70,10 @@ class PageToolRequest : public TabToolRequest {
       content::RenderWidgetHost* render_widget_host) {}
 
  private:
+  // Returns whether the target is a non-root DOM node rather than a coordinate
+  // or the viewport.
+  bool HasApcNodeTarget() const;
+
   PageTarget target_;
 };
 

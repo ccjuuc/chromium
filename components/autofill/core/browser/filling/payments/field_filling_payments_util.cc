@@ -4,14 +4,28 @@
 
 #include "components/autofill/core/browser/filling/payments/field_filling_payments_util.h"
 
-#include <algorithm>
-#include <optional>
+#include <stddef.h>
+#include <stdint.h>
 
+#include <algorithm>
+#include <memory>
+#include <optional>
+#include <ranges>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/types/zip.h"
+#include "base/time/time.h"
 #include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/autofill_trigger_source.h"
 #include "components/autofill/core/browser/data_model/data_model_utils.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/data_quality/autofill_data_util.h"
@@ -21,12 +35,11 @@
 #include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/browser/filling/form_filler.h"
 #include "components/autofill/core/browser/form_parsing/credit_card_field_parser.h"
-#include "components/autofill/core/browser/form_structure.h"
+#include "components/autofill/core/browser/suggestions/suggestion_util.h"
 #include "components/autofill/core/common/autofill_features.h"
-#include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/autofill/core/common/credit_card_network_identifiers.h"
-#include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_field_data.h"
+#include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -37,7 +50,7 @@ namespace {
 // Gets the expiration month `value` inside the <select> `field`. Since `value`
 // is well defined but the website's `field` option values may not be, some
 // heuristics are run to cover all observed cases.
-std::u16string GetExpirationMonthSelectControlValue(
+std::optional<SelectOption> GetExpirationMonthSelectControlValue(
     const std::u16string& value,
     const std::string& app_locale,
     base::span<const SelectOption> field_options,
@@ -48,7 +61,7 @@ std::u16string GetExpirationMonthSelectControlValue(
     if (failure_to_fill) {
       *failure_to_fill += "Cannot parse month, or value is < 1 or >12. ";
     }
-    return {};
+    return std::nullopt;
   }
 
   // Trim the whitespace and specific prefixes used in AngularJS from the
@@ -57,7 +70,7 @@ std::u16string GetExpirationMonthSelectControlValue(
   static constexpr char16_t kNumberPrefix[] = u"number:";
   static constexpr char16_t kStringPrefix[] = u"string:";
   for (auto [field_option, trimmed_value] :
-       base::zip(field_options, trimmed_values)) {
+       std::views::zip(field_options, trimmed_values)) {
     base::TrimWhitespace(field_option.value, base::TRIM_ALL, &trimmed_value);
     base::ReplaceFirstSubstringAfterOffset(&trimmed_value, 0, kNumberPrefix,
                                            u"");
@@ -95,13 +108,13 @@ std::u16string GetExpirationMonthSelectControlValue(
 
   // Attempt to match the user's `month` with the field's value attributes.
   for (auto [field_option, trimmed_value] :
-       base::zip(field_options, trimmed_values)) {
+       std::views::zip(field_options, trimmed_values)) {
     // We use the trimmed value to match with `month`, but the original select
     // value to fill the field (otherwise filling wouldn't work).
     if (std::optional<int> parsed_month =
             data_util::ParseMonthFromString(trimmed_value, app_locale)) {
       if (month == *parsed_month) {
-        return field_option.value;
+        return field_option;
       }
     }
   }
@@ -111,16 +124,16 @@ std::u16string GetExpirationMonthSelectControlValue(
     if (std::optional<int> parsed_month =
             data_util::ParseMonthFromString(option.text, app_locale)) {
       if (month == *parsed_month) {
-        return option.value;
+        return option;
       }
     }
   }
-  if (std::optional<std::u16string> numeric_value =
-          GetNumericSelectControlValue(month, field_options, failure_to_fill)) {
-    return *numeric_value;
+  if (std::optional<SelectOption> numeric_option =
+          GetNumericSelectControlOption(month, field_options,
+                                        failure_to_fill)) {
+    return numeric_option;
   }
-  return GetSelectControlValue(value, field_options, failure_to_fill)
-      .value_or(u"");
+  return GetSelectControlOption(value, field_options, failure_to_fill);
 }
 
 // Returns true if the last two digits in `year` match those in `str`.
@@ -135,25 +148,25 @@ bool LastTwoDigitsMatch(const std::u16string& year,
 // Gets the year `value` in a select control to fill into the given `field` by
 // comparing the last two digits of the year to the field's options.
 // Returns an empty string if no value for filling was found.
-std::u16string GetYearSelectControlValue(
+std::optional<SelectOption> GetYearSelectControlValue(
     const std::u16string& value,
     base::span<const SelectOption> field_options,
     std::string* failure_to_fill) {
-  if (std::optional<std::u16string> select_control_value =
-          GetSelectControlValue(value, field_options, failure_to_fill)) {
-    return *select_control_value;
+  if (std::optional<SelectOption> select_control_option =
+          GetSelectControlOption(value, field_options, failure_to_fill)) {
+    return select_control_option;
   }
   if (value.size() != 2U && value.size() != 4U) {
     if (failure_to_fill) {
       *failure_to_fill += "Year to fill does not have length 2 or 4. ";
     }
-    return {};
+    return std::nullopt;
   }
 
   for (const SelectOption& option : field_options) {
     if (LastTwoDigitsMatch(value, option.value) ||
         LastTwoDigitsMatch(value, option.text)) {
-      return option.value;
+      return option;
     }
   }
 
@@ -161,39 +174,40 @@ std::u16string GetYearSelectControlValue(
     *failure_to_fill +=
         "Year to fill was not found in select control element. ";
   }
-  return {};
+  return std::nullopt;
 }
 
 // Gets the credit card type `value` (Visa, Mastercard, etc.) to fill into the
 // given `field`. We ignore whitespace when filling credit card types to
 // allow for cases such as "Master card".
 // Returns an empty string if no value for filling was found.
-std::u16string GetCreditCardTypeSelectControlValue(
+std::optional<SelectOption> GetCreditCardTypeSelectControlValue(
     const std::u16string& value,
     base::span<const SelectOption> field_options,
     std::string* failure_to_fill) {
-  if (std::optional<std::u16string> select_control_value =
-          GetSelectControlValue(value, field_options, failure_to_fill)) {
-    return *select_control_value;
+  if (std::optional<SelectOption> select_control_option =
+          GetSelectControlOption(value, field_options, failure_to_fill)) {
+    return select_control_option;
   }
-  if (std::optional<std::u16string> select_control_value =
-          GetSelectControlValueSubstringMatch(value, /*ignore_whitespace=*/true,
-                                              field_options, failure_to_fill)) {
-    return *select_control_value;
+  if (std::optional<SelectOption> select_control_option =
+          GetSelectControlOptionSubstringMatch(
+              value, /*ignore_whitespace=*/true, field_options,
+              failure_to_fill)) {
+    return select_control_option;
   }
   if (value == l10n_util::GetStringUTF16(IDS_AUTOFILL_CC_AMEX)) {
-    if (std::optional<std::u16string> select_control_value =
-            GetSelectControlValueSubstringMatch(
+    if (std::optional<SelectOption> select_control_option =
+            GetSelectControlOptionSubstringMatch(
                 u"AmEx",
                 /*ignore_whitespace=*/true, field_options, failure_to_fill)) {
-      return *select_control_value;
+      return select_control_option;
     }
   }
 
   if (failure_to_fill) {
     *failure_to_fill += "Failed to fill credit card type. ";
   }
-  return {};
+  return std::nullopt;
 }
 
 std::u16string TruncateCardNumberIfNecessary(size_t card_number_offset,
@@ -456,7 +470,7 @@ std::u16string GetValueForVirtualCardInputPreview(
   }
 }
 
-std::u16string GetFillingValueForCreditCardSelectControl(
+std::optional<SelectOption> GetFillingOptionForCreditCardSelectControl(
     const std::u16string& value,
     const std::string& app_locale,
     const AutofillField& field,
@@ -472,96 +486,87 @@ std::u16string GetFillingValueForCreditCardSelectControl(
       return GetCreditCardTypeSelectControlValue(value, field.options(),
                                                  failure_to_fill);
     default:
-      return GetSelectControlValue(value, field.options(), failure_to_fill)
-          .value_or(u"");
+      return GetSelectControlOption(value, field.options(), failure_to_fill);
   }
 }
 
 }  // namespace
 
-std::u16string GetFillingValueForCreditCard(
+FillingValueAndType GetFillingValueAndTypeForCreditCard(
     const CreditCard& credit_card,
     const std::string& app_locale,
     mojom::ActionPersistence action_persistence,
     const AutofillField& field,
     bool is_cvc_filling_supported,
     std::string* failure_to_fill) {
-  CHECK(field.Type().GetGroups().contains_any(
-      {FieldTypeGroup::kCreditCard, FieldTypeGroup::kStandaloneCvcField}));
-  std::u16string value =
+  if (field.Type().GetCreditCardType() == UNKNOWN_TYPE) {
+    return {};
+  }
+
+  FillingValueAndType filling_value_and_type(
       credit_card.record_type() == CreditCard::RecordType::kVirtualCard &&
               action_persistence == mojom::ActionPersistence::kPreview
           ? GetValueForVirtualCardInputPreview(credit_card, app_locale, field,
                                                failure_to_fill)
           : GetFillingValueForCreditCardForInput(
                 credit_card, app_locale, action_persistence, field,
-                is_cvc_filling_supported, failure_to_fill);
+                is_cvc_filling_supported, failure_to_fill),
+      field.Type().GetCreditCardType());
 
-  return field.IsSelectElement() && !value.empty()
-             ? GetFillingValueForCreditCardSelectControl(value, app_locale,
-                                                         field, failure_to_fill)
-             : value;
+  if (field.IsSelectElement() && !filling_value_and_type.value.empty()) {
+    std::optional<SelectOption> select_control_option =
+        GetFillingOptionForCreditCardSelectControl(
+            filling_value_and_type.value, app_locale, field, failure_to_fill);
+
+    filling_value_and_type.value =
+        select_control_option ? std::move(select_control_option->value) : u"";
+    filling_value_and_type.select_text =
+        select_control_option
+            ? std::optional(std::move(select_control_option->text))
+            : std::nullopt;
+  }
+
+  return filling_value_and_type;
 }
 
 bool WillFillCreditCardNumberOrCvc(
-    base::span<const FormFieldData> fields,
-    base::span<const std::unique_ptr<AutofillField>> autofill_fields,
-    const AutofillField& trigger_autofill_field,
-    bool card_has_cvc) {
-  if (fields.size() != autofill_fields.size()) {
-    return false;
-  }
+    base::span<const std::unique_ptr<AutofillField>> fields,
+    const AutofillField& trigger_field,
+    AutofillTriggerSource trigger_source,
+    bool card_has_cvc,
+    AutocompleteUnrecognizedBehavior ac_unrecognized_behavior) {
   FieldTypeSet fillable_field_types({CREDIT_CARD_NUMBER});
   // Add CVC field types to `fillable_field_types` if CVC storage is enabled and
   // the card to be filled has a CVC saved.
-  if (card_has_cvc && base::FeatureList::IsEnabled(
-                          features::kAutofillEnableCvcStorageAndFilling)) {
+  if (card_has_cvc) {
     fillable_field_types.insert(CREDIT_CARD_VERIFICATION_CODE);
     fillable_field_types.insert(CREDIT_CARD_STANDALONE_VERIFICATION_CODE);
   }
-  if (fillable_field_types.contains(
-          trigger_autofill_field.Type().GetCreditCardType())) {
+  if (fillable_field_types.contains(trigger_field.Type().GetCreditCardType())) {
     return true;
   }
 
-  // `fields` are received from the renderer and may be more up to date
-  // than the `autofill_fields` stored in the cache. Therefore, we need
-  // to validate for each `field` in the cache we try to fill whether it still
-  // exists in the renderer and whether it is fillable.
-  auto IsFillableField =
-      [&fields, &trigger_autofill_field](const AutofillField& autofill_field) {
-        auto field = std::ranges::find(fields, autofill_field.global_id(),
-                                       &FormFieldData::global_id);
-        if (field == fields.end()) {
-          return false;
-        }
-
+  auto is_fillable_credit_card_number_or_cvc_field =
+      [&](const std::unique_ptr<AutofillField>& field) {
         // Needed for FormFiller::GetFieldSkipReason() but unnecessary for this
         // case as only finding 1 fillable credit card or CVC field is needed.
         base::flat_map<FieldType, size_t> type_count;
 
         // TODO(crbug.com/328478565): Cover cases where filling is skipped due
         // to the iframe security policy.
-        return FormFiller::GetFillingSkipReasonsForField(
-                   *field, autofill_field, trigger_autofill_field,
-                   FormFiller::RefillOptions::NotRefill(), type_count,
-                   /*blocked_fields=*/{}, FillingProduct::kCreditCard)
-            .empty();
-      };
-
-  auto IsFillableCreditCardNumberOrCvcField =
-      [&trigger_autofill_field, &fillable_field_types,
-       &IsFillableField](const std::unique_ptr<AutofillField>& autofill_field) {
         return fillable_field_types.contains(
-                   autofill_field->Type().GetCreditCardType()) &&
-               autofill_field->section() == trigger_autofill_field.section() &&
-               IsFillableField(*autofill_field);
+                   field->Type().GetCreditCardType()) &&
+               field->section() == trigger_field.section() &&
+               FormFiller::GetFillingSkipReasonsForField(
+                   *field, trigger_field,
+                   FormFiller::RefillOptions::NotRefill(), type_count,
+                   /*blocked_fields=*/{}, trigger_source,
+                   ac_unrecognized_behavior)
+                   .empty();
       };
 
-  // This runs O(N^2) in the worst case, but usually there aren't too many
-  // credit card number or CVC fields in a form.
-  return std::ranges::any_of(autofill_fields,
-                             IsFillableCreditCardNumberOrCvcField);
+  return std::ranges::any_of(fields,
+                             is_fillable_credit_card_number_or_cvc_field);
 }
 
 }  // namespace autofill

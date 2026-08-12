@@ -4,8 +4,6 @@
 
 package org.chromium.android_webview;
 
-import androidx.annotation.NonNull;
-
 import org.chromium.build.annotations.NullMarked;
 
 import java.net.URISyntaxException;
@@ -41,9 +39,10 @@ public class WebAddressParser {
     // See android.util.Patterns.GOOD_IRI_CHAR.
     private static final String GOOD_IRI_CHAR = "a-zA-Z0-9\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF";
     private static final String SCHEME = "(?:(http|https|file)\\:\\/\\/)?";
-    // We replace the regex of AUTHORITY to fix crbug.com/1247395, this is the only functional
-    // change in this file comparing to the original WebAddress from Android framework.
-    private static final String AUTHORITY = "(?:([^/?#:]+(?::[^/?#]+)?)@)?";
+    // We replace the regex of AUTHORITY to fix crbug.com/1247395 and crbug.com/500311718, this is
+    // the only functional change in this file comparing to the original WebAddress from Android
+    // framework.
+    private static final String AUTHORITY = "(?:([^/?#:]+(?::[^/?#]*)?)@)?";
     private static final String HOST =
             "([" + GOOD_IRI_CHAR + "%_-][" + GOOD_IRI_CHAR + "%_\\.-]*|\\[[0-9a-fA-F:\\.]+\\])?";
     private static final String PORT = "(?:\\:([0-9]*))?";
@@ -78,12 +77,22 @@ public class WebAddressParser {
             t = m.group(MATCH_GROUP_HOST);
             if (t != null) mHost = t;
             t = m.group(MATCH_GROUP_PORT);
-            if (t != null && t.length() > 0) {
+            if (t != null) {
                 // The ':' character is not returned by the regex.
-                try {
-                    mPort = Integer.parseInt(t);
-                } catch (NumberFormatException ex) {
-                    throw new URISyntaxException(address, "Bad port");
+                if (t.length() == 0) {
+                    // PORT matched a bare ':' with no digits. If no scheme was
+                    // recognised, the ':' may have been a scheme delimiter and
+                    // mHost may not actually be the host, so reject the input
+                    // rather than risk emitting a URL with the wrong host.
+                    if (mScheme.isEmpty()) {
+                        throw new URISyntaxException(address, "Bad port");
+                    }
+                } else {
+                    try {
+                        mPort = Integer.parseInt(t);
+                    } catch (NumberFormatException ex) {
+                        throw new URISyntaxException(address, "Bad port");
+                    }
                 }
             }
             t = m.group(MATCH_GROUP_PATH);
@@ -115,7 +124,6 @@ public class WebAddressParser {
         if (mScheme.equals("")) mScheme = "http";
     }
 
-    @NonNull
     @Override
     public String toString() {
         String port = "";

@@ -23,16 +23,18 @@ import android.util.AttributeSet;
 import android.view.ActionMode;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.accessibility.AccessibilityEvent;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
+import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
-import androidx.core.view.accessibility.AccessibilityEventCompat;
 import androidx.core.view.inputmethod.EditorInfoCompat;
 
 import org.chromium.base.Callback;
@@ -44,6 +46,8 @@ import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
+import org.chromium.chrome.browser.browser_controls.BrowserControlsUtils;
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabObserver;
@@ -51,6 +55,7 @@ import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+import org.chromium.chrome.browser.ui.side_panel.AndroidSidePanelEnabledFn;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandler;
 import org.chromium.components.browser_ui.widget.text.VerticallyFixedEditText;
@@ -58,8 +63,10 @@ import org.chromium.components.find_in_page.FindInPageBridge;
 import org.chromium.components.find_in_page.FindMatchRectsDetails;
 import org.chromium.components.find_in_page.FindNotificationDetails;
 import org.chromium.components.find_in_page.FindResultBar;
+import org.chromium.ui.base.UiAndroidFeatureList;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.text.EmptyTextWatcher;
+import org.chromium.ui.util.MotionEventUtils;
 import org.chromium.url.GURL;
 
 import java.lang.annotation.Retention;
@@ -98,6 +105,8 @@ public class FindToolbar extends LinearLayout implements BackPressHandler {
     protected View mDivider;
 
     private @Nullable FindResultBar mResultBar;
+    private FrameLayout mSecondaryUiContainer;
+    private BrowserControlsStateProvider mBrowserControlsStateProvider;
 
     private TabModelSelector mTabModelSelector;
     private @Nullable Tab mCurrentTab;
@@ -147,6 +156,16 @@ public class FindToolbar extends LinearLayout implements BackPressHandler {
                 return true;
             }
             return super.onKeyDown(keyCode, event);
+        }
+
+        @Override
+        public boolean onKeyUp(int keyCode, KeyEvent event) {
+            // Consume Enter key up to prevent default TextView focus navigation to shift to other
+            // active UI components.
+            if (keyCode == KeyEvent.KEYCODE_ENTER) {
+                return true;
+            }
+            return super.onKeyUp(keyCode, event);
         }
 
         @Override
@@ -371,6 +390,18 @@ public class FindToolbar extends LinearLayout implements BackPressHandler {
         mWindowAndroid = windowAndroid;
     }
 
+    /** Sets the secondary UI container in which the find result bar will be shown. */
+    @Initializer
+    public void setSecondaryUiContainer(FrameLayout container) {
+        mSecondaryUiContainer = container;
+    }
+
+    /** Sets the BrowserControlsStateProvider. */
+    @Initializer
+    public void setBrowserControlsStateProvider(BrowserControlsStateProvider provider) {
+        mBrowserControlsStateProvider = provider;
+    }
+
     @Override
     public @BackPressResult int handleBackPress() {
         int result =
@@ -382,6 +413,15 @@ public class FindToolbar extends LinearLayout implements BackPressHandler {
     @Override
     public NonNullObservableSupplier<Boolean> getHandleBackPressChangedSupplier() {
         return mBackPressStateSupplier;
+    }
+
+    @Override
+    public boolean onGenericMotionEvent(MotionEvent event) {
+        if (UiAndroidFeatureList.sBlockMouseEventsOnView.isEnabled()
+                && MotionEventUtils.isPointerEvent(event)) {
+            return true;
+        }
+        return super.onGenericMotionEvent(event);
     }
 
     // Overridden by subclasses.
@@ -425,9 +465,9 @@ public class FindToolbar extends LinearLayout implements BackPressHandler {
                             // to a view, which is discouraged in general but reasonable in this
                             // case.
                             mFindQuery.sendAccessibilityEvent(
-                                    AccessibilityEventCompat.TYPE_VIEW_HOVER_ENTER);
+                                    AccessibilityEvent.TYPE_VIEW_HOVER_ENTER);
                             mFindQuery.sendAccessibilityEvent(
-                                    AccessibilityEventCompat.TYPE_VIEW_ACCESSIBILITY_FOCUSED);
+                                    AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED);
                         }
                     },
                     0);
@@ -582,7 +622,9 @@ public class FindToolbar extends LinearLayout implements BackPressHandler {
 
     /** Logic for handling the activation of the find toolbar. */
     protected void handleActivate() {
-        mTabModelSelector.getCurrentTabModelSupplier().addObserver(mCurrentTabModelObserver);
+        mTabModelSelector
+                .getCurrentTabModelSupplier()
+                .addSyncObserverAndPostIfNonNull(mCurrentTabModelObserver);
         mCurrentTabModel = mTabModelSelector.getCurrentModel();
         for (TabModel model : mTabModelSelector.getModels()) {
             model.addObserver(mTabModelObserver);
@@ -750,9 +792,20 @@ public class FindToolbar extends LinearLayout implements BackPressHandler {
             mResultBar =
                     new FindResultBar(
                             getContext(),
-                            assumeNonNull(mCurrentTab.getContentView()),
+                            AndroidSidePanelEnabledFn.isEnabled()
+                                    ? mSecondaryUiContainer
+                                    : assumeNonNull(mCurrentTab.getContentView()),
                             mWindowAndroid,
                             mFindInPageBridge);
+
+            if (AndroidSidePanelEnabledFn.isEnabled()) {
+                FrameLayout.LayoutParams lp =
+                        (FrameLayout.LayoutParams) mResultBar.getLayoutParams();
+                lp.topMargin = mBrowserControlsStateProvider.getContentOffset();
+                lp.bottomMargin =
+                        BrowserControlsUtils.getBottomContentOffset(mBrowserControlsStateProvider);
+                mResultBar.setLayoutParams(lp);
+            }
         } else if (!visibility) {
             if (mResultBar != null) {
                 mResultBar.dismiss();

@@ -30,7 +30,6 @@
 #include "chrome/browser/ash/policy/dlp/dlp_files_controller_ash.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager_factory.h"
 #include "chrome/browser/chromeos/policy/dlp/test/mock_dlp_rules_manager.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/file_manager/app_id.h"
 #include "components/prefs/scoped_user_pref_update.h"
@@ -182,24 +181,24 @@ class AppServiceFileTasksTest : public testing::Test {
   void AddChromeApp() {
     extensions::ExtensionBuilder baz_app;
     baz_app.SetManifest(
-        base::Value::Dict()
+        base::DictValue()
             .Set("name", "Baz")
             .Set("version", "1.0.0")
             .Set("manifest_version", 2)
-            .Set("app", base::Value::Dict().Set(
-                            "background",
-                            base::Value::Dict().Set(
-                                "scripts",
-                                base::Value::List().Append("background.js"))))
+            .Set("app",
+                 base::DictValue().Set(
+                     "background",
+                     base::DictValue().Set(
+                         "scripts", base::ListValue().Append("background.js"))))
             .Set("file_handlers",
-                 base::Value::Dict()
+                 base::DictValue()
                      .Set("any",
-                          base::Value::Dict().Set(
+                          base::DictValue().Set(
                               "extensions",
-                              base::Value::List().Append("*").Append("bar")))
-                     .Set("image", base::Value::Dict().Set(
-                                       "types", base::Value::List().Append(
-                                                    "image/*")))));
+                              base::ListValue().Append("*").Append("bar")))
+                     .Set("image",
+                          base::DictValue().Set(
+                              "types", base::ListValue().Append("image/*")))));
     baz_app.SetID(kChromeAppId);
     auto filters =
         apps_util::CreateIntentFiltersForChromeApp(baz_app.Build().get());
@@ -211,48 +210,48 @@ class AppServiceFileTasksTest : public testing::Test {
   void AddChromeAppWithVerbs() {
     extensions::ExtensionBuilder foo_app;
     foo_app.SetManifest(
-        base::Value::Dict()
+        base::DictValue()
             .Set("name", "Foo")
             .Set("version", "1.0.0")
             .Set("manifest_version", 2)
-            .Set("app", base::Value::Dict().Set(
-                            "background",
-                            base::Value::Dict().Set(
-                                "scripts",
-                                base::Value::List().Append("background.js"))))
+            .Set("app",
+                 base::DictValue().Set(
+                     "background",
+                     base::DictValue().Set(
+                         "scripts", base::ListValue().Append("background.js"))))
             .Set("file_handlers",
-                 base::Value::Dict()
+                 base::DictValue()
                      .Set("any_with_directories",
-                          base::Value::Dict()
+                          base::DictValue()
                               .Set("include_directories", true)
-                              .Set("types", base::Value::List().Append("*"))
+                              .Set("types", base::ListValue().Append("*"))
                               .Set("verb", "open_with"))
                      .Set("html_handler",
-                          base::Value::Dict()
+                          base::DictValue()
                               .Set("title", "Html")
                               .Set("types",
-                                   base::Value::List().Append("text/html"))
+                                   base::ListValue().Append("text/html"))
                               .Set("verb", "open_with"))
                      .Set("plain_text",
-                          base::Value::Dict()
+                          base::DictValue()
                               .Set("title", "Plain")
                               .Set("types",
-                                   base::Value::List().Append("text/plain")))
+                                   base::ListValue().Append("text/plain")))
                      .Set("share_plain_text",
-                          base::Value::Dict()
+                          base::DictValue()
                               .Set("title", "Share Plain")
                               .Set("types",
-                                   base::Value::List().Append("text/plain"))
+                                   base::ListValue().Append("text/plain"))
                               .Set("verb", "share_with"))
                      .Set("any_pack",
-                          base::Value::Dict()
-                              .Set("types", base::Value::List().Append("*"))
+                          base::DictValue()
+                              .Set("types", base::ListValue().Append("*"))
                               .Set("verb", "pack_with"))
                      .Set("plain_text_add_to",
-                          base::Value::Dict()
+                          base::DictValue()
                               .Set("title", "Plain")
                               .Set("types",
-                                   base::Value::List().Append("text/plain"))
+                                   base::ListValue().Append("text/plain"))
                               .Set("verb", "add_to"))));
     foo_app.SetID(kChromeAppWithVerbsId);
     auto filters =
@@ -266,19 +265,18 @@ class AppServiceFileTasksTest : public testing::Test {
   void AddExtension() {
     extensions::ExtensionBuilder fbh_app;
     fbh_app.SetManifest(
-        base::Value::Dict()
+        base::DictValue()
             .Set("name", "Fbh")
             .Set("version", "1.0.0")
             .Set("manifest_version", 2)
-            .Set("permissions",
-                 base::Value::List().Append("fileBrowserHandler"))
+            .Set("permissions", base::ListValue().Append("fileBrowserHandler"))
             .Set("file_browser_handlers",
-                 base::Value::List().Append(
-                     base::Value::Dict()
+                 base::ListValue().Append(
+                     base::DictValue()
                          .Set("id", "open")
                          .Set("default_title", "open title")
-                         .Set("file_filters", base::Value::List().Append(
-                                                  "filesystem:*.txt")))));
+                         .Set("file_filters",
+                              base::ListValue().Append("filesystem:*.txt")))));
     fbh_app.SetID(kExtensionId);
     auto filters =
         apps_util::CreateIntentFiltersForExtension(fbh_app.Build().get());
@@ -700,8 +698,8 @@ TEST_F(AppServiceFileTasksTest, FindAppServiceCrostiniApp) {
   EXPECT_FALSE(tasks[0].is_file_extension_match);
 }
 
-// Checks that we can detect when the file paths can/ can't be shared for
-// Crostini and PluginVm.
+// Checks that we can detect when file paths can or cannot be shared with
+// Crostini.
 TEST_F(AppServiceFileTasksTest, CheckPathsCanBeShared) {
   std::string file_name = "foo.txt";
   std::string text_app_id = "Text app";
@@ -770,86 +768,6 @@ TEST_F(AppServiceFileTasksTest, FindAppServiceCrostiniAppWithExtension) {
       FindAppServiceTasks({{file_name, "application/octet-stream"}});
   ASSERT_EQ(1U, tasks.size());
   EXPECT_EQ(app_id, tasks[0].task_descriptor.app_id);
-}
-
-TEST_F(AppServiceFileTasksTest, FindAppServicePluginVmApp) {
-  std::string file_ext = "txt";
-  std::string file_name = "foo." + file_ext;
-  std::string text_app_id = "Text app";
-  AddGuestOsAppWithIntentFilter(text_app_id, apps::AppType::kPluginVm,
-                                CreateExtensionTypeFileIntentFilter(
-                                    apps_util::kIntentActionView, file_ext));
-
-  // Check if the text PluginVm app is returned.
-  std::vector<FullTaskDescriptor> tasks = FindAppServiceTasks({{file_name}});
-  ASSERT_EQ(1U, tasks.size());
-  EXPECT_EQ(text_app_id, tasks[0].task_descriptor.app_id);
-  EXPECT_FALSE(tasks[0].is_generic_file_handler);
-  EXPECT_TRUE(tasks[0].is_file_extension_match);
-}
-
-TEST_F(AppServiceFileTasksTest, FindMultipleAppServicePluginVmApps) {
-  std::string file_ext = "txt";
-  std::string file_name = "foo." + file_ext;
-  std::string app_id_1 = "Text app 1";
-  std::string app_id_2 = "Text app 2";
-  AddGuestOsAppWithIntentFilter(app_id_1, apps::AppType::kPluginVm,
-                                CreateExtensionTypeFileIntentFilter(
-                                    apps_util::kIntentActionView, file_ext));
-  AddGuestOsAppWithIntentFilter(app_id_2, apps::AppType::kPluginVm,
-                                CreateExtensionTypeFileIntentFilter(
-                                    apps_util::kIntentActionView, file_ext));
-
-  // Check if both PluginVm apps are returned.
-  std::vector<FullTaskDescriptor> tasks = FindAppServiceTasks({{file_name}});
-  ASSERT_EQ(2U, tasks.size());
-
-  EXPECT_EQ(app_id_1, tasks[0].task_descriptor.app_id);
-  EXPECT_FALSE(tasks[0].is_generic_file_handler);
-  EXPECT_TRUE(tasks[0].is_file_extension_match);
-
-  EXPECT_EQ(app_id_2, tasks[1].task_descriptor.app_id);
-  EXPECT_FALSE(tasks[1].is_generic_file_handler);
-  EXPECT_TRUE(tasks[1].is_file_extension_match);
-}
-
-TEST_F(AppServiceFileTasksTest,
-       FindAppServicePluginVmApp_IgnoringExtensionCase) {
-  std::string file_ext = "Txt";
-  std::string file_name = "foo.txT";
-  std::string text_app_id = "Text app";
-  AddGuestOsAppWithIntentFilter(text_app_id, apps::AppType::kPluginVm,
-                                CreateExtensionTypeFileIntentFilter(
-                                    apps_util::kIntentActionView, file_ext));
-
-  // Check if the text PluginVm app is returned.
-  std::vector<FullTaskDescriptor> tasks = FindAppServiceTasks({{file_name}});
-  ASSERT_EQ(1U, tasks.size());
-  EXPECT_EQ(text_app_id, tasks[0].task_descriptor.app_id);
-  EXPECT_FALSE(tasks[0].is_generic_file_handler);
-  EXPECT_TRUE(tasks[0].is_file_extension_match);
-}
-
-TEST_F(AppServiceFileTasksTest, NoPluginVmAppsForFileSelection) {
-  std::string image_file_name = "foo.jpeg";
-  std::string image_app_id = "Image app";
-  std::string text_file_name = "foo.txt";
-  std::string text_app_id = "Text app";
-
-  // Add a text-only app and an image-only app.
-  AddGuestOsAppWithIntentFilter(
-      text_app_id, apps::AppType::kPluginVm,
-      CreateExtensionTypeFileIntentFilter(apps_util::kIntentActionView, "txt"));
-  AddGuestOsAppWithIntentFilter(image_app_id, apps::AppType::kPluginVm,
-                                CreateExtensionTypeFileIntentFilter(
-                                    apps_util::kIntentActionView, "jpeg"));
-
-  // Find an app that can open both the text and image file.
-  std::vector<FullTaskDescriptor> tasks =
-      FindAppServiceTasks({{text_file_name}, {image_file_name}});
-
-  // There shouldn't be any apps available.
-  ASSERT_EQ(0U, tasks.size());
 }
 
 TEST_F(AppServiceFileTasksTest, CrositiniTasksControlledByPolicy) {

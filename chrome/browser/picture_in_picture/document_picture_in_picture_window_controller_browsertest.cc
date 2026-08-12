@@ -24,11 +24,13 @@
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/picture_in_picture_browser_frame_view.h"
+#include "chrome/browser/ui/views/tabs/tab/tab_accessibility.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
@@ -180,9 +182,14 @@ class DocumentPictureInPictureWindowControllerBrowserTest
 
   void SetUp() override {
     scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/
         {blink::features::kDocumentPictureInPictureAPI,
          blink::features::kDocumentPictureInPicturePreferInitialPlacement},
-        /*disabled_features=*/{});
+        /*disabled_features=*/
+        // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox
+        // is enabled and then remove these two Features.
+        {omnibox::internal::kWebUIOmniboxPopup,
+         omnibox::internal::kWebUIOmniboxAimPopup});
     InProcessBrowserTest::SetUp();
   }
 
@@ -377,7 +384,7 @@ IN_PROC_BROWSER_TEST_F(DocumentPictureInPictureWindowControllerBrowserTest,
       window_controller()->GetChildWebContents()));
 }
 
-// Regression test for https://crbug.com/1296780 - opening a picture-in-picture
+// Regression test for https://crbug.com/40214901 - opening a picture-in-picture
 // window twice in a row should work, closing the old window before opening the
 // new one.
 IN_PROC_BROWSER_TEST_F(DocumentPictureInPictureWindowControllerBrowserTest,
@@ -467,7 +474,7 @@ IN_PROC_BROWSER_TEST_F(DocumentPictureInPictureWindowControllerBrowserTest,
 }
 
 // Explicitly navigating to about:blank should close the pip window.
-// Regression test for https://crbug.com/1413919.
+// Regression test for https://crbug.com/40062959.
 IN_PROC_BROWSER_TEST_F(DocumentPictureInPictureWindowControllerBrowserTest,
                        CloseOnPictureInPictureNavigatedToAboutBlank) {
   LoadTabAndEnterPictureInPicture(browser());
@@ -481,7 +488,7 @@ IN_PROC_BROWSER_TEST_F(DocumentPictureInPictureWindowControllerBrowserTest,
 }
 
 // Explicitly navigating to the empty string should close the pip window.
-// Regression test for https://crbug.com/1413919.
+// Regression test for https://crbug.com/40062959.
 IN_PROC_BROWSER_TEST_F(DocumentPictureInPictureWindowControllerBrowserTest,
                        CloseOnPictureInPictureNavigatedToEmptyString) {
   LoadTabAndEnterPictureInPicture(browser());
@@ -602,7 +609,8 @@ IN_PROC_BROWSER_TEST_F(DocumentPictureInPictureWindowControllerBrowserTest,
 // maximum size.
 IN_PROC_BROWSER_TEST_F(DocumentPictureInPictureWindowControllerBrowserTest,
                        MaximumWindowOuterBounds) {
-  const BrowserWindow* const browser_window = browser()->window();
+  const BrowserWindow* const browser_window =
+      BrowserWindow::FromBrowser(browser());
   const gfx::NativeWindow native_window = browser_window->GetNativeWindow();
   const display::Screen* const screen = display::Screen::Get();
   const display::Display display =
@@ -723,7 +731,7 @@ IN_PROC_BROWSER_TEST_F(DocumentPictureInPictureWindowControllerBrowserTest,
   // Ozone/wayland doesn't support getting/setting window position in global
   // screen coordinates. So this test is not applicable there as it essentially
   // validates that.
-  if (ui::OzonePlatform::GetPlatformNameForTest() == "wayland") {
+  if (ui::OzonePlatform::RunningOnWaylandForTest()) {
     GTEST_SKIP();
   }
 #endif
@@ -844,7 +852,8 @@ INSTANTIATE_TEST_SUITE_P(WindowSizes,
 // Test that the document PiP window margins are correct.
 IN_PROC_BROWSER_TEST_P(DocumentPictureInPictureWindowControllerBrowserTest,
                        MAYBE_VerifyWindowMargins) {
-  const BrowserWindow* const browser_window = browser()->window();
+  const BrowserWindow* const browser_window =
+      BrowserWindow::FromBrowser(browser());
   const gfx::NativeWindow native_window = browser_window->GetNativeWindow();
   const display::Screen* const screen = display::Screen::Get();
   const display::Display display =
@@ -922,7 +931,9 @@ IN_PROC_BROWSER_TEST_F(DocumentPictureInPictureWindowControllerBrowserTest,
   ASSERT_NE(nullptr, pip_web_contents);
   WaitForPageLoad(pip_web_contents);
 
-  auto* pip_browser = chrome::FindBrowserWithTab(pip_web_contents);
+  auto* pip_browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          pip_web_contents);
   auto* browser_view = BrowserView::GetBrowserViewForBrowser(pip_browser);
   EXPECT_EQ(size, browser_view->GetContentsSize());
 }
@@ -960,7 +971,8 @@ IN_PROC_BROWSER_TEST_F(DocumentPictureInPictureWindowControllerBrowserTest,
   auto* pip_web_contents = window_controller()->GetChildWebContents();
   ASSERT_NE(nullptr, pip_web_contents);
   WaitForPageLoad(pip_web_contents);
-  auto* browser_view = static_cast<BrowserView*>(
+
+  auto* pip_browser_view = static_cast<BrowserView*>(
       BrowserWindow::FindBrowserWindowWithWebContents(pip_web_contents));
 
   // Verify that the pip window page title is empty and, the opener window page
@@ -974,8 +986,9 @@ IN_PROC_BROWSER_TEST_F(DocumentPictureInPictureWindowControllerBrowserTest,
   // Verify that the accessible label returns the opener window page title, when
   // the pip window page title is not set.
   EXPECT_EQ(base::UTF8ToUTF16(window_page_title),
-            browser_view->GetAccessibleTabLabel(
-                browser()->tab_strip_model()->active_index()));
+            tabs::GetAccessibleTabLabel(
+                pip_browser_view->browser()->tab_strip_model()->GetActiveTab(),
+                /*is_for_tab=*/false));
 
   // Set the pip window page title and ensure that the pip and opener window
   // page titles are different.
@@ -988,8 +1001,9 @@ IN_PROC_BROWSER_TEST_F(DocumentPictureInPictureWindowControllerBrowserTest,
   // Verify that, although the pip window page title is set, the accessible
   // label returns the opener window page title.
   EXPECT_EQ(base::UTF8ToUTF16(window_page_title),
-            browser_view->GetAccessibleTabLabel(
-                browser()->tab_strip_model()->active_index()));
+            tabs::GetAccessibleTabLabel(
+                pip_browser_view->browser()->tab_strip_model()->GetActiveTab(),
+                /*is_for_tab=*/false));
 }
 
 // A dialog that checks if the picture-in-picture window is force-tucked

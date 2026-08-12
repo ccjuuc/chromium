@@ -6,11 +6,13 @@
 
 #include <iostream>
 
+#include "base/check.h"
 #include "base/compiler_specific.h"
 #include "base/json/json_writer.h"
 #include "base/strings/strcat.h"
 #include "content/browser/first_party_sets/first_party_set_parser.h"
 #include "content/browser/first_party_sets/test/related_website_sets.pb.h"
+#include "content/browser/first_party_sets/test/related_website_sets_fuzzable.pb.h"
 #include "net/first_party_sets/global_first_party_sets.h"
 #include "net/first_party_sets/local_set_declaration.h"
 #include "testing/libfuzzer/proto/lpm_interface.h"
@@ -56,8 +58,8 @@ std::string ConvertSite(const related_website_sets::proto::Site& site) {
   return out;
 }
 
-base::Value::Dict ConvertSet(const related_website_sets::proto::Set& set) {
-  base::Value::Dict json_set;
+base::DictValue ConvertSet(const related_website_sets::proto::Set& set) {
+  base::DictValue json_set;
   json_set.Set(kPrimary, ConvertSite(set.primary()));
   for (const auto& site : set.associated()) {
     json_set.EnsureList(kAssociated)->Append(ConvertSite(site));
@@ -85,9 +87,9 @@ std::string ConvertProto(
   return out;
 }
 
-base::Value::Dict ConvertProto(
+base::DictValue ConvertProto(
     const related_website_sets::proto::Policy& policy) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   for (const related_website_sets::proto::Set& set : policy.replacements()) {
     dict.EnsureList(kReplacements)->Append(ConvertSet(set));
   }
@@ -112,7 +114,7 @@ std::string ConvertProto(
 
 struct NativeInputs {
   std::string public_sets;
-  base::Value::Dict policy;
+  base::DictValue policy;
   std::string command_line_switch;
 };
 
@@ -126,7 +128,13 @@ NativeInputs ConvertProto(const related_website_sets::proto::AllInputs& input) {
 
 }  // namespace
 
-DEFINE_PROTO_FUZZER(const related_website_sets::proto::AllInputs& input) {
+DEFINE_PROTO_FUZZER(
+    const fuzzable::related_website_sets::proto::AllInputs& fuzzable_input) {
+  std::string serialized;
+  CHECK(fuzzable_input.SerializeToString(&serialized));
+  related_website_sets::proto::AllInputs input;
+  CHECK(input.ParseFromString(serialized));
+
   NativeInputs native_inputs = ConvertProto(input);
 
   if (getenv("LPM_DUMP_NATIVE_INPUT")) {
@@ -138,7 +146,7 @@ DEFINE_PROTO_FUZZER(const related_website_sets::proto::AllInputs& input) {
   std::istringstream stream(native_inputs.public_sets);
   net::GlobalFirstPartySets global_sets =
       FirstPartySetParser::ParseSetsFromStream(stream, base::Version("1.0"),
-                                               false, false);
+                                               false);
 
   auto [parsed_policy, warnings] =
       FirstPartySetParser::ParseSetsFromEnterprisePolicy(native_inputs.policy);

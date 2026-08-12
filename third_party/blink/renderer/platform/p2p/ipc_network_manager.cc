@@ -124,7 +124,7 @@ void IpcNetworkManager::OnNetworkListChanged(
     // If the adapter type is unknown, try to guess it using WebRTC's string
     // matching rules.
     if (adapter_type == webrtc::ADAPTER_TYPE_UNKNOWN) {
-      adapter_type = webrtc::GetAdapterTypeFromName(it->name.c_str());
+      adapter_type = webrtc::GetAdapterTypeFromName(it->name);
     }
     webrtc::AdapterType underlying_adapter_type = webrtc::ADAPTER_TYPE_UNKNOWN;
     if (it->mac_address.has_value() && IsVpnMacAddress(*it->mac_address)) {
@@ -215,16 +215,9 @@ void IpcNetworkManager::OnNetworkListChanged(
   }
 
   bool changed = false;
-  NetworkManager::Stats stats;
-  MergeNetworkList(std::move(networks), &changed, &stats);
+  MergeNetworkList(std::move(networks), &changed);
   if (changed)
     NotifyNetworksChanged();
-
-  // Send interface counts to UMA.
-  UMA_HISTOGRAM_COUNTS_100("WebRTC.PeerConnection.IPv4Interfaces",
-                           stats.ipv4_network_count);
-  UMA_HISTOGRAM_COUNTS_100("WebRTC.PeerConnection.IPv6Interfaces",
-                           stats.ipv6_network_count);
 }
 
 webrtc::MdnsResponderInterface* IpcNetworkManager::GetMdnsResponder() const {

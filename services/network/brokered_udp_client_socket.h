@@ -76,6 +76,12 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) BrokeredUdpClientSocket
   net::handles::NetworkHandle GetBoundNetwork() const override;
   void ApplySocketTag(const net::SocketTag& tag) override;
   void EnableRecvOptimization() override;
+  base::expected<net::DatagramsMetadata, net::Error> ReadMultiple(
+      net::IOBuffer* buf,
+      size_t buf_len,
+      size_t maximum_packet_size,
+      base::OnceCallback<void(base::expected<net::DatagramsMetadata,
+                                             net::Error>)> callback) override;
   int SetMulticastInterface(uint32_t interface_index) override;
   void SetIOSNetworkServiceType(int ios_network_service_type) override;
   net::DscpAndEcn GetLastTos() const override;
@@ -137,6 +143,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) BrokeredUdpClientSocket
   int DidCompleteCreate(bool should_broker,
                         const net::IPEndPoint& address,
                         net::CompletionOnceCallback callback,
+                        base::TimeTicks start_time,
                         network::TransferableSocket socket,
                         int result);
 

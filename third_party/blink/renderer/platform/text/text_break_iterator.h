@@ -61,12 +61,6 @@ AcquireLineBreakIterator(StringView, const AtomicString& locale);
 // Note: The returned iterator is good only until you get another iterator, with
 // the exception of acquireLineBreakIterator.
 
-// This is similar to character break iterator in most cases, but is subject to
-// platform UI conventions. One notable example where this can be different
-// from character break iterator is Thai prepend characters, see bug 24342.
-// Use this for insertion point and selection manipulations.
-PLATFORM_EXPORT TextBreakIterator* CursorMovementIteratorDeprecated(
-    base::span<const UChar>);
 PLATFORM_EXPORT TextBreakIterator* WordBreakIterator(const StringView&);
 PLATFORM_EXPORT TextBreakIterator* WordBreakIterator(base::span<const UChar>);
 PLATFORM_EXPORT std::unique_ptr<TextBreakIterator>
@@ -256,12 +250,10 @@ class PLATFORM_EXPORT LazyLineBreakIterator final {
 
   template <typename CharacterType, LineBreakType, BreakSpaceType>
   unsigned NextBreakablePosition(unsigned pos,
-                                 const CharacterType* str,
-                                 unsigned len) const;
+                                 base::span<const CharacterType> span) const;
   template <typename CharacterType, LineBreakType>
   unsigned NextBreakablePosition(unsigned pos,
-                                 const CharacterType* str,
-                                 unsigned len) const;
+                                 base::span<const CharacterType> span) const;
   template <LineBreakType>
   unsigned NextBreakablePosition(unsigned pos, unsigned len) const;
   unsigned NextBreakablePositionBreakCharacter(unsigned pos) const;

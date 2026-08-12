@@ -34,22 +34,35 @@ using ::testing::Optional;
 namespace safe_browsing {
 
 namespace {
-constexpr char kTestOhttpKey[] = "TestOhttpKey";
-constexpr char kEncodedTestOhttpKey[] = "VGVzdE9odHRwS2V5";
-constexpr char kTestOldOhttpKey[] = "OldOhttpKey";
-constexpr char kTestNewOhttpKey[] = "NewOhttpKey";
+std::string TestOhttpKey() {
+  // Use example from RFC 9458 Appendix A.
+  constexpr unsigned char kTestOhttpKeyBytes[] = {
+      0x01, 0x00, 0x20, 0x31, 0xe1, 0xf0, 0x5a, 0x74, 0x01, 0x02, 0x11, 0x52,
+      0x20, 0xe9, 0xaf, 0x91, 0x8f, 0x73, 0x86, 0x74, 0xae, 0xc9, 0x5f, 0x54,
+      0xdb, 0x6e, 0x04, 0xeb, 0x70, 0x5a, 0xae, 0x8e, 0x79, 0x81, 0x55, 0x00,
+      0x08, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x03};
+  return std::string(reinterpret_cast<const char*>(kTestOhttpKeyBytes),
+                     sizeof(kTestOhttpKeyBytes));
+}
+constexpr char kEncodedTestOhttpKey[] =
+    "AQAgMeHwWnQBAhFSIOmvkY9zhnSuyV9U224E63Baro55gVUACAABAAEAAQAD";
+std::string TestOldOhttpKey() {
+  // Take the valid key config and flip one bit in the public key.
+  std::string key = TestOhttpKey();
+  key.back() ^= 1;
+  return key;
+}
+std::string TestNewOhttpKey() {
+  // Take the valid key config and flip a different bit in the public key.
+  std::string key = TestOhttpKey();
+  key.back() ^= 2;
+  return key;
+}
+std::string TestInvalidOhttpKey() {
+  return "invalid_key";
+}
 constexpr char kExpectedKeyFetchServerUrl[] =
-    "https://safebrowsingohttpgateway.googleapis.com/v1/ohttp/hpkekeyconfig";
-
-scoped_refptr<net::HttpResponseHeaders> CreateSuccessHeaders() {
-  return net::HttpResponseHeaders::TryToCreate("HTTP/1.1 200 OK\r\n");
-}
-
-scoped_refptr<net::HttpResponseHeaders> CreateKeyRotatedHeaders() {
-  return net::HttpResponseHeaders::TryToCreate(
-      "HTTP/1.1 200 OK\r\n"
-      "X-OhttpPublickey-Rotated: yes\r\n");
-}
+    "https://www.gstatic.com/ohttp_gateway/hpke_public_keys/v1/sbc_prod";
 
 }  // namespace
 
@@ -106,7 +119,7 @@ class OhttpKeyServiceTest : public ::testing::Test {
               resource_request.headers.HasHeader("X-OhttpPublickey-Fst"));
         }));
     test_url_loader_factory_->AddResponse(GetExpectedKeyFetchServerUrl(),
-                                          kTestOhttpKey);
+                                          TestOhttpKey());
   }
 
   // Set the current old key in memory, and a pending new key in url_loader. So
@@ -115,9 +128,9 @@ class OhttpKeyServiceTest : public ::testing::Test {
     // Set the expiration time a little longer so the async workflow doesn't
     // update the key.
     ohttp_key_service_->set_ohttp_key_for_testing(
-        {kTestOldOhttpKey, base::Time::Now() + base::Days(6)});
+        {TestOldOhttpKey(), base::Time::Now() + base::Days(6)});
     test_url_loader_factory_->AddResponse(GetExpectedKeyFetchServerUrl(),
-                                          kTestNewOhttpKey);
+                                          TestNewOhttpKey());
   }
 
   void FastForwardAndVerifyKeyValue(const std::string& expected_key_value) {
@@ -159,7 +172,7 @@ class OhttpKeyServiceLocationDisabledTest : public OhttpKeyServiceTest {
 TEST_F(OhttpKeyServiceTest, GetOhttpKey_Success) {
   SetupSuccessResponse();
   base::MockCallback<OhttpKeyService::Callback> response_callback;
-  EXPECT_CALL(response_callback, Run(Optional(std::string(kTestOhttpKey))))
+  EXPECT_CALL(response_callback, Run(Optional(std::string(TestOhttpKey()))))
       .Times(1);
 
   ohttp_key_service_->GetOhttpKey(response_callback.Get());
@@ -167,9 +180,9 @@ TEST_F(OhttpKeyServiceTest, GetOhttpKey_Success) {
 
   std::optional<OhttpKeyService::OhttpKeyAndExpiration> ohttp_key =
       ohttp_key_service_->get_ohttp_key_for_testing();
-  EXPECT_TRUE(ohttp_key.has_value());
+  ASSERT_TRUE(ohttp_key.has_value());
   EXPECT_EQ(ohttp_key.value().expiration, base::Time::Now() + base::Days(3));
-  EXPECT_EQ(ohttp_key.value().key, kTestOhttpKey);
+  EXPECT_EQ(ohttp_key.value().key, TestOhttpKey());
   EXPECT_EQ(pref_service_.GetString(prefs::kSafeBrowsingHashRealTimeOhttpKey),
             kEncodedTestOhttpKey);
   EXPECT_EQ(pref_service_.GetTime(
@@ -183,11 +196,27 @@ TEST_F(OhttpKeyServiceTest, GetOhttpKey_Success) {
       "SafeBrowsing.HPRT.OhttpKeyService.FetchKeyTriggerReason",
       /*sample=*/OhttpKeyService::FetchTriggerReason::kDuringHashRealTimeLookup,
       /*expected_count=*/1);
+  histogram_tester_.ExpectBucketCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Outcome",
+      /*sample=*/OhttpKeyService::FetchOutcome::kSuccess,
+      /*expected_count=*/1);
+  histogram_tester_.ExpectBucketCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.NumKeys",
+      /*sample=*/1,
+      /*expected_count=*/1);
+  histogram_tester_.ExpectTotalCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Network.Time", 1);
+  histogram_tester_.ExpectTotalCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Network.Time2", 1);
+  histogram_tester_.ExpectTotalCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Network.Time.Success", 1);
+  histogram_tester_.ExpectTotalCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Network.Time2.Success", 1);
 }
 
-TEST_F(OhttpKeyServiceTest, GetOhttpKey_Failure) {
+TEST_F(OhttpKeyServiceTest, GetOhttpKey_NetworkFailure) {
   test_url_loader_factory_->AddResponse(GetExpectedKeyFetchServerUrl(),
-                                        kTestOhttpKey, net::HTTP_FORBIDDEN);
+                                        TestOhttpKey(), net::HTTP_FORBIDDEN);
   base::MockCallback<OhttpKeyService::Callback> response_callback;
   EXPECT_CALL(response_callback, Run(Eq(std::nullopt))).Times(1);
 
@@ -206,11 +235,93 @@ TEST_F(OhttpKeyServiceTest, GetOhttpKey_Failure) {
   EXPECT_EQ(
       pref_service_.GetString(prefs::kSafeBrowsingHashRealTimeOhttpKeyFetchUrl),
       "");
+  histogram_tester_.ExpectBucketCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Outcome",
+      /*sample=*/OhttpKeyService::FetchOutcome::kNetworkError,
+      /*expected_count=*/1);
+  histogram_tester_.ExpectTotalCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Network.Time", 1);
+  histogram_tester_.ExpectTotalCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Network.Time2", 1);
+  histogram_tester_.ExpectTotalCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Network.Time.Failure", 1);
+  histogram_tester_.ExpectTotalCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Network.Time2.Failure", 1);
+}
+
+TEST_F(OhttpKeyServiceTest, GetOhttpKey_EmptyResponse) {
+  test_url_loader_factory_->AddResponse(GetExpectedKeyFetchServerUrl(), "",
+                                        net::HTTP_OK);
+  base::MockCallback<OhttpKeyService::Callback> response_callback;
+  EXPECT_CALL(response_callback, Run(Eq(std::nullopt))).Times(1);
+
+  ohttp_key_service_->GetOhttpKey(response_callback.Get());
+  task_environment_.RunUntilIdle();
+
+  std::optional<OhttpKeyService::OhttpKeyAndExpiration> ohttp_key =
+      ohttp_key_service_->get_ohttp_key_for_testing();
+  // The empty key should not be cached.
+  EXPECT_FALSE(ohttp_key.has_value());
+  EXPECT_EQ(pref_service_.GetString(prefs::kSafeBrowsingHashRealTimeOhttpKey),
+            "");
+  EXPECT_EQ(pref_service_.GetTime(
+                prefs::kSafeBrowsingHashRealTimeOhttpExpirationTime),
+            base::Time());
+  EXPECT_EQ(
+      pref_service_.GetString(prefs::kSafeBrowsingHashRealTimeOhttpKeyFetchUrl),
+      "");
+  histogram_tester_.ExpectBucketCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Outcome",
+      /*sample=*/OhttpKeyService::FetchOutcome::kEmptyResponse,
+      /*expected_count=*/1);
+  histogram_tester_.ExpectTotalCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Network.Time", 1);
+  histogram_tester_.ExpectTotalCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Network.Time2", 1);
+  histogram_tester_.ExpectTotalCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Network.Time.Empty", 1);
+  histogram_tester_.ExpectTotalCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Network.Time2.Empty", 1);
+}
+
+TEST_F(OhttpKeyServiceTest, GetOhttpKey_InvalidResponse) {
+  test_url_loader_factory_->AddResponse(GetExpectedKeyFetchServerUrl(),
+                                        TestInvalidOhttpKey(), net::HTTP_OK);
+  base::MockCallback<OhttpKeyService::Callback> response_callback;
+  EXPECT_CALL(response_callback, Run(Eq(std::nullopt))).Times(1);
+
+  ohttp_key_service_->GetOhttpKey(response_callback.Get());
+  task_environment_.RunUntilIdle();
+
+  std::optional<OhttpKeyService::OhttpKeyAndExpiration> ohttp_key =
+      ohttp_key_service_->get_ohttp_key_for_testing();
+  // The invalid key should not be cached.
+  EXPECT_FALSE(ohttp_key.has_value());
+  EXPECT_EQ(pref_service_.GetString(prefs::kSafeBrowsingHashRealTimeOhttpKey),
+            "");
+  EXPECT_EQ(pref_service_.GetTime(
+                prefs::kSafeBrowsingHashRealTimeOhttpExpirationTime),
+            base::Time());
+  EXPECT_EQ(
+      pref_service_.GetString(prefs::kSafeBrowsingHashRealTimeOhttpKeyFetchUrl),
+      "");
+  histogram_tester_.ExpectBucketCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Outcome",
+      /*sample=*/OhttpKeyService::FetchOutcome::kInvalidResponse,
+      /*expected_count=*/1);
+  histogram_tester_.ExpectTotalCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Network.Time", 1);
+  histogram_tester_.ExpectTotalCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Network.Time2", 1);
+  histogram_tester_.ExpectTotalCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Network.Time.Invalid", 1);
+  histogram_tester_.ExpectTotalCount(
+      "SafeBrowsing.HPRT.OhttpKeyService.Network.Time2.Invalid", 1);
 }
 
 TEST_F(OhttpKeyServiceTest, GetOhttpKey_Backoff) {
   test_url_loader_factory_->AddResponse(GetExpectedKeyFetchServerUrl(),
-                                        kTestOhttpKey, net::HTTP_FORBIDDEN);
+                                        TestOhttpKey(), net::HTTP_FORBIDDEN);
   // Wait for 2 minutes so the async workflow triggers the backoff mode.
   task_environment_.FastForwardBy(base::Minutes(2));
   task_environment_.RunUntilIdle();
@@ -224,12 +335,74 @@ TEST_F(OhttpKeyServiceTest, GetOhttpKey_Backoff) {
   task_environment_.RunUntilIdle();
 }
 
+TEST_F(OhttpKeyServiceTest, GetOhttpKey_ApiTimeoutThenSuccess) {
+  // Ensure that the API timeout lets the network call continue.
+  base::MockCallback<OhttpKeyService::Callback> response_callback1;
+  base::MockCallback<OhttpKeyService::Callback> response_callback2;
+  EXPECT_CALL(response_callback1, Run(Eq(std::nullopt))).Times(1);
+  EXPECT_CALL(response_callback2, Run(Optional(std::string(TestOhttpKey()))))
+      .Times(1);
+  ohttp_key_service_->GetOhttpKey(response_callback1.Get());
+  task_environment_.FastForwardBy(base::Seconds(2));
+  task_environment_.RunUntilIdle();
+  ohttp_key_service_->GetOhttpKey(response_callback2.Get());
+  task_environment_.FastForwardBy(base::Seconds(2));
+  task_environment_.RunUntilIdle();
+  SetupSuccessResponse();
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(test_url_loader_factory_->total_requests(), 1u);
+}
+
+TEST_F(OhttpKeyServiceTest, GetOhttpKey_AsyncThenApiTimeout) {
+  // Ensure the API timeout is triggered even if there is an ongoing async call.
+  task_environment_.FastForwardBy(base::Seconds(10));
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(test_url_loader_factory_->total_requests(), 1u);
+  base::MockCallback<OhttpKeyService::Callback> response_callback1;
+  base::MockCallback<OhttpKeyService::Callback> response_callback2;
+  EXPECT_CALL(response_callback1, Run(Eq(std::nullopt))).Times(1);
+  EXPECT_CALL(response_callback2, Run(Optional(std::string(TestOhttpKey()))))
+      .Times(1);
+  ohttp_key_service_->GetOhttpKey(response_callback1.Get());
+  task_environment_.FastForwardBy(base::Seconds(2));
+  task_environment_.RunUntilIdle();
+  ohttp_key_service_->GetOhttpKey(response_callback2.Get());
+  task_environment_.FastForwardBy(base::Seconds(2));
+  task_environment_.RunUntilIdle();
+  SetupSuccessResponse();
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(test_url_loader_factory_->total_requests(), 1u);
+}
+
+TEST_F(OhttpKeyServiceTest, GetOhttpKey_MultipleTimeouts) {
+  base::MockCallback<OhttpKeyService::Callback> response_callback1;
+  base::MockCallback<OhttpKeyService::Callback> response_callback2;
+  base::MockCallback<OhttpKeyService::Callback> response_callback3;
+  ohttp_key_service_->GetOhttpKey(response_callback1.Get());
+  task_environment_.FastForwardBy(base::Seconds(1));
+  task_environment_.RunUntilIdle();
+  ohttp_key_service_->GetOhttpKey(response_callback2.Get());
+  task_environment_.FastForwardBy(base::Seconds(1));
+  task_environment_.RunUntilIdle();
+  ohttp_key_service_->GetOhttpKey(response_callback3.Get());
+  EXPECT_CALL(response_callback1, Run(Eq(std::nullopt))).Times(1);
+  task_environment_.FastForwardBy(base::Seconds(1));
+  task_environment_.RunUntilIdle();
+  EXPECT_CALL(response_callback2, Run(Eq(std::nullopt))).Times(1);
+  task_environment_.FastForwardBy(base::Seconds(1));
+  task_environment_.RunUntilIdle();
+  EXPECT_CALL(response_callback3, Run(Eq(std::nullopt))).Times(1);
+  task_environment_.FastForwardBy(base::Seconds(1));
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(test_url_loader_factory_->total_requests(), 1u);
+}
+
 TEST_F(OhttpKeyServiceTest, GetOhttpKey_MultipleRequests) {
   base::MockCallback<OhttpKeyService::Callback> response_callback1;
   base::MockCallback<OhttpKeyService::Callback> response_callback2;
-  EXPECT_CALL(response_callback1, Run(Optional(std::string(kTestOhttpKey))))
+  EXPECT_CALL(response_callback1, Run(Optional(std::string(TestOhttpKey()))))
       .Times(1);
-  EXPECT_CALL(response_callback2, Run(Optional(std::string(kTestOhttpKey))))
+  EXPECT_CALL(response_callback2, Run(Optional(std::string(TestOhttpKey()))))
       .Times(1);
 
   ohttp_key_service_->GetOhttpKey(response_callback1.Get());
@@ -245,11 +418,11 @@ TEST_F(OhttpKeyServiceTest, GetOhttpKey_MultipleRequests) {
 TEST_F(OhttpKeyServiceTest, GetOhttpKey_WithValidCache) {
   SetupSuccessResponse();
   ohttp_key_service_->set_ohttp_key_for_testing(
-      {kTestOldOhttpKey, base::Time::Now() + base::Hours(1)});
+      {TestOldOhttpKey(), base::Time::Now() + base::Hours(1)});
 
   base::MockCallback<OhttpKeyService::Callback> response_callback;
   // Should return the old key because it has not expired.
-  EXPECT_CALL(response_callback, Run(Optional(std::string(kTestOldOhttpKey))))
+  EXPECT_CALL(response_callback, Run(Optional(std::string(TestOldOhttpKey()))))
       .Times(1);
   ohttp_key_service_->GetOhttpKey(response_callback.Get());
   task_environment_.RunUntilIdle();
@@ -258,21 +431,21 @@ TEST_F(OhttpKeyServiceTest, GetOhttpKey_WithValidCache) {
 TEST_F(OhttpKeyServiceTest, GetOhttpKey_WithExpiredCache) {
   SetupSuccessResponse();
   ohttp_key_service_->set_ohttp_key_for_testing(
-      {kTestOldOhttpKey, base::Time::Now() - base::Hours(1)});
+      {TestOldOhttpKey(), base::Time::Now() - base::Hours(1)});
 
   base::MockCallback<OhttpKeyService::Callback> response_callback1;
   // The new key should be fetched because the old key has expired.
-  EXPECT_CALL(response_callback1, Run(Optional(std::string(kTestOhttpKey))))
+  EXPECT_CALL(response_callback1, Run(Optional(std::string(TestOhttpKey()))))
       .Times(1);
   ohttp_key_service_->GetOhttpKey(response_callback1.Get());
   task_environment_.RunUntilIdle();
 
   test_url_loader_factory_->AddResponse(GetExpectedKeyFetchServerUrl(),
-                                        kTestNewOhttpKey);
+                                        TestNewOhttpKey());
   task_environment_.FastForwardBy(base::Days(1));
   base::MockCallback<OhttpKeyService::Callback> response_callback2;
   // The new key should not be fetched because the old key has not expired.
-  EXPECT_CALL(response_callback2, Run(Optional(std::string(kTestOhttpKey))))
+  EXPECT_CALL(response_callback2, Run(Optional(std::string(TestOhttpKey()))))
       .Times(1);
   ohttp_key_service_->GetOhttpKey(response_callback2.Get());
   task_environment_.RunUntilIdle();
@@ -311,7 +484,7 @@ TEST_F(OhttpKeyServiceTest, GetOhttpKey_BackgroundLookupsAllowed) {
   SetupSuccessResponse();
   SetSafeBrowsingState(&pref_service_, SafeBrowsingState::ENHANCED_PROTECTION);
   base::MockCallback<OhttpKeyService::Callback> response_callback;
-  EXPECT_CALL(response_callback, Run(Optional(std::string(kTestOhttpKey))))
+  EXPECT_CALL(response_callback, Run(Optional(std::string(TestOhttpKey()))))
       .Times(1);
 
   ohttp_key_service_->GetOhttpKey(response_callback.Get());
@@ -352,9 +525,9 @@ TEST_F(OhttpKeyServiceTest, PopulateKeyFromPref_ValidKey) {
 
   std::optional<OhttpKeyService::OhttpKeyAndExpiration> ohttp_key =
       ohttp_key_service->get_ohttp_key_for_testing();
-  EXPECT_TRUE(ohttp_key.has_value());
+  ASSERT_TRUE(ohttp_key.has_value());
   EXPECT_EQ(ohttp_key.value().expiration, base::Time::Now() + base::Days(10));
-  EXPECT_EQ(ohttp_key.value().key, kTestOhttpKey);
+  EXPECT_EQ(ohttp_key.value().key, TestOhttpKey());
 
   pref_service_.SetTime(prefs::kSafeBrowsingHashRealTimeOhttpExpirationTime,
                         base::Time::Now() - base::Days(10));
@@ -403,8 +576,6 @@ TEST_F(OhttpKeyServiceTest, PopulateKeyFromPref_KeyFetchUrlChanged) {
 }
 
 TEST_F(OhttpKeyServiceTest, PopulateKeyFromPref_MissingKeyFetchUrlInPrefs) {
-  // TODO(crbug.com/461955661): Change this test to not expect a key once we
-  // remove kHardCodedKeyFetchUrl from OhttpKeyService::PopulateKeyFromPref().
   pref_service_.SetString(prefs::kSafeBrowsingHashRealTimeOhttpKey,
                           kEncodedTestOhttpKey);
   pref_service_.SetTime(prefs::kSafeBrowsingHashRealTimeOhttpExpirationTime,
@@ -418,9 +589,7 @@ TEST_F(OhttpKeyServiceTest, PopulateKeyFromPref_MissingKeyFetchUrlInPrefs) {
 
   std::optional<OhttpKeyService::OhttpKeyAndExpiration> ohttp_key =
       ohttp_key_service->get_ohttp_key_for_testing();
-  EXPECT_TRUE(ohttp_key.has_value());
-  EXPECT_EQ(ohttp_key.value().expiration, base::Time::Now() + base::Days(10));
-  EXPECT_EQ(ohttp_key.value().key, kTestOhttpKey);
+  EXPECT_FALSE(ohttp_key.has_value());
 }
 
 TEST_F(OhttpKeyServiceTest, AsyncFetch) {
@@ -600,7 +769,7 @@ TEST_F(OhttpKeyServiceTest, AsyncFetch_Backoff) {
   };
 
   test_url_loader_factory_->AddResponse(GetExpectedKeyFetchServerUrl(),
-                                        kTestOhttpKey, net::HTTP_FORBIDDEN);
+                                        TestOhttpKey(), net::HTTP_FORBIDDEN);
 
   // Try to fetch a new key three times in a row with the minimum wait time
   // before entering backoff mode.
@@ -617,19 +786,19 @@ TEST_F(OhttpKeyServiceTest, AsyncFetch_Backoff) {
 
   // Set up a successful response.
   test_url_loader_factory_->AddResponse(GetExpectedKeyFetchServerUrl(),
-                                        kTestOhttpKey);
+                                        TestOhttpKey());
   // Enter the backoff mode again with a longer duration.
   forward_and_check(base::Minutes(9), /*expected_key=*/std::nullopt);
-  // The key is succesfully fetched after exiting the backoff mode.
-  forward_and_check(base::Minutes(1), /*expected_key=*/kTestOhttpKey);
+  // The key is successfully fetched after exiting the backoff mode.
+  forward_and_check(base::Minutes(1), /*expected_key=*/TestOhttpKey());
 
   test_url_loader_factory_->AddResponse(GetExpectedKeyFetchServerUrl(),
-                                        kTestNewOhttpKey);
+                                        TestNewOhttpKey());
   // After exiting the backoff mode, a new key should be fetched based on the
   // key expiration date.
-  forward_and_check(base::Days(1), /*expected_key=*/kTestOhttpKey);
+  forward_and_check(base::Days(1), /*expected_key=*/TestOhttpKey());
   forward_and_check(base::Days(1),
-                    /*expected_key=*/kTestNewOhttpKey);
+                    /*expected_key=*/TestNewOhttpKey());
 }
 
 TEST_F(OhttpKeyServiceTest, AsyncFetch_RescheduledBasedOnBackoffRemainingTime) {
@@ -640,9 +809,9 @@ TEST_F(OhttpKeyServiceTest, AsyncFetch_RescheduledBasedOnBackoffRemainingTime) {
   task_environment_.FastForwardBy(base::Seconds(55 * 60 + 30));
   task_environment_.RunUntilIdle();
   ohttp_key_service_->set_ohttp_key_for_testing(
-      {kTestOldOhttpKey, base::Time::Now() - base::Hours(1)});
+      {TestOldOhttpKey(), base::Time::Now() - base::Hours(1)});
   test_url_loader_factory_->AddResponse(GetExpectedKeyFetchServerUrl(),
-                                        kTestOhttpKey, net::HTTP_FORBIDDEN);
+                                        TestOhttpKey(), net::HTTP_FORBIDDEN);
   base::MockCallback<OhttpKeyService::Callback> response_callback;
   EXPECT_CALL(response_callback, Run(Eq(std::nullopt))).Times(3);
   ohttp_key_service_->GetOhttpKey(response_callback.Get());
@@ -658,66 +827,31 @@ TEST_F(OhttpKeyServiceTest, AsyncFetch_RescheduledBasedOnBackoffRemainingTime) {
   task_environment_.FastForwardBy(base::Seconds(4 * 60 + 30));
   task_environment_.RunUntilIdle();
   EXPECT_EQ(ohttp_key_service_->get_ohttp_key_for_testing()->key,
-            kTestOldOhttpKey);
+            TestOldOhttpKey());
 
   // The service exits the backoff mode and a new key is fetched.
   task_environment_.FastForwardBy(base::Seconds(30));
   task_environment_.RunUntilIdle();
   EXPECT_EQ(ohttp_key_service_->get_ohttp_key_for_testing()->key,
-            kTestOhttpKey);
+            TestOhttpKey());
 }
 
 TEST_F(OhttpKeyServiceTest, NotifyLookupResponse_SuccessFetch) {
   SetupOldKeyAndPendingNewKey();
-  ohttp_key_service_->NotifyLookupResponse(kTestOldOhttpKey, net::HTTP_OK,
-                                           CreateSuccessHeaders());
-  FastForwardAndVerifyKeyValue(kTestOldOhttpKey);
-}
-
-TEST_F(OhttpKeyServiceTest, NotifyLookupResponse_HeaderHint) {
-  SetupOldKeyAndPendingNewKey();
-  ohttp_key_service_->NotifyLookupResponse(kTestOldOhttpKey, net::HTTP_OK,
-                                           CreateKeyRotatedHeaders());
-  // Header hint is soft failure, the key is not immediately cleared.
-  EXPECT_EQ(ohttp_key_service_->get_ohttp_key_for_testing()->key,
-            kTestOldOhttpKey);
-
-  FastForwardAndVerifyKeyValue(kTestNewOhttpKey);
-
-  histogram_tester_.ExpectBucketCount(
-      "SafeBrowsing.HPRT.OhttpKeyService.FetchKeyTriggerReason",
-      /*sample=*/OhttpKeyService::FetchTriggerReason::kKeyRotatedHeader,
-      /*expected_count=*/1);
-}
-
-TEST_F(OhttpKeyServiceTest, NotifyLookupResponse_HeaderHintOnDifferentKey) {
-  SetupOldKeyAndPendingNewKey();
-  ohttp_key_service_->NotifyLookupResponse(kTestOhttpKey, net::HTTP_OK,
-                                           CreateKeyRotatedHeaders());
-
-  // The key is not updated because the server hint is on a different key.
-  FastForwardAndVerifyKeyValue(kTestOldOhttpKey);
-}
-
-TEST_F(OhttpKeyServiceTest, NotifyLookupResponse_HeaderHintWithError) {
-  SetupOldKeyAndPendingNewKey();
-
-  ohttp_key_service_->NotifyLookupResponse(
-      kTestOldOhttpKey, net::HTTP_FORBIDDEN, CreateKeyRotatedHeaders());
-  // Header hint should only take effect when the response code is 200.
-  FastForwardAndVerifyKeyValue(kTestOldOhttpKey);
+  ohttp_key_service_->NotifyLookupResponse(TestOldOhttpKey(), net::HTTP_OK);
+  FastForwardAndVerifyKeyValue(TestOldOhttpKey());
 }
 
 TEST_F(OhttpKeyServiceTest, NotifyLookupResponse_KeyRelatedHttpFailure) {
   SetupOldKeyAndPendingNewKey();
   task_environment_.RunUntilIdle();
 
-  ohttp_key_service_->NotifyLookupResponse(
-      kTestOldOhttpKey, net::HTTP_UNPROCESSABLE_CONTENT, /*headers=*/nullptr);
+  ohttp_key_service_->NotifyLookupResponse(TestOldOhttpKey(),
+                                           net::HTTP_UNPROCESSABLE_CONTENT);
   // HTTP status error is a hard failure, the key should be cleared immediately.
   EXPECT_FALSE(ohttp_key_service_->get_ohttp_key_for_testing().has_value());
 
-  FastForwardAndVerifyKeyValue(kTestNewOhttpKey);
+  FastForwardAndVerifyKeyValue(TestNewOhttpKey());
 
   histogram_tester_.ExpectBucketCount(
       "SafeBrowsing.HPRT.OhttpKeyService.FetchKeyTriggerReason",
@@ -728,17 +862,24 @@ TEST_F(OhttpKeyServiceTest, NotifyLookupResponse_KeyRelatedHttpFailure) {
 // Regression test for https://crbug.com/1494853
 TEST_F(OhttpKeyServiceTest, NotifyLookupResponse_Backoff) {
   test_url_loader_factory_->AddResponse(GetExpectedKeyFetchServerUrl(),
-                                        kTestOhttpKey, net::HTTP_FORBIDDEN);
+                                        TestOhttpKey(), net::HTTP_FORBIDDEN);
   // Wait for 2 minutes so the async workflow triggers the backoff mode.
   task_environment_.FastForwardBy(base::Minutes(2));
   task_environment_.RunUntilIdle();
   SetupSuccessResponse();
   SetupOldKeyAndPendingNewKey();
-  ohttp_key_service_->NotifyLookupResponse(kTestOldOhttpKey, net::HTTP_OK,
-                                           CreateKeyRotatedHeaders());
+  ohttp_key_service_->NotifyLookupResponse(TestOldOhttpKey(),
+                                           net::HTTP_UNPROCESSABLE_CONTENT);
 
-  // Still returns old key because the service is in backoff mode.
-  FastForwardAndVerifyKeyValue(kTestOldOhttpKey);
+  // HTTP_UNPROCESSABLE_CONTENT is a hard failure, so the key is cleared
+  // immediately.
+  EXPECT_FALSE(ohttp_key_service_->get_ohttp_key_for_testing().has_value());
+
+  task_environment_.FastForwardBy(base::Minutes(1));
+  task_environment_.RunUntilIdle();
+
+  // Still empty because the service is in backoff mode and fetch fails.
+  EXPECT_FALSE(ohttp_key_service_->get_ohttp_key_for_testing().has_value());
 }
 
 TEST_F(OhttpKeyServiceTest,
@@ -748,22 +889,20 @@ TEST_F(OhttpKeyServiceTest,
   SetupOldKeyAndPendingNewKey();
   task_environment_.RunUntilIdle();
 
-  ohttp_key_service_->NotifyLookupResponse(
-      kTestOldOhttpKey, net::HTTP_UNPROCESSABLE_CONTENT, /*headers=*/nullptr);
+  ohttp_key_service_->NotifyLookupResponse(TestOldOhttpKey(),
+                                           net::HTTP_UNPROCESSABLE_CONTENT);
   // Histogram is not logged because it is not a new key.
   histogram_tester_.ExpectTotalCount(kFirstLookupHistogramName,
                                      /*expected_count=*/0);
 
-  FastForwardAndVerifyKeyValue(kTestNewOhttpKey);
+  FastForwardAndVerifyKeyValue(TestNewOhttpKey());
 
-  ohttp_key_service_->NotifyLookupResponse(kTestNewOhttpKey, net::HTTP_OK,
-                                           CreateSuccessHeaders());
+  ohttp_key_service_->NotifyLookupResponse(TestNewOhttpKey(), net::HTTP_OK);
   histogram_tester_.ExpectUniqueSample(kFirstLookupHistogramName,
                                        /*sample=*/net::HTTP_OK,
                                        /*expected_bucket_count=*/1);
 
-  ohttp_key_service_->NotifyLookupResponse(kTestNewOhttpKey, net::HTTP_OK,
-                                           CreateSuccessHeaders());
+  ohttp_key_service_->NotifyLookupResponse(TestNewOhttpKey(), net::HTTP_OK);
   // Histogram is not logged again because it is not the first lookup response
   // with this key.
   histogram_tester_.ExpectTotalCount(kFirstLookupHistogramName,

@@ -10,12 +10,11 @@
 #include <tuple>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "net/base/lookup_string_in_fixed_set.h"
+#include "net/base/registry_controlled_domain_constants.h"
 #include "url/gurl.h"
 #include "url/third_party/mozilla/url_parse.h"
 
@@ -43,16 +42,16 @@ constexpr char kGperfPreamble[] =
 }  // namespace
 
 int Rule::Serialize() const {
-  int type = 0;
+  DomainRuleTags type;
   if (exception) {
-    type = kDafsaExceptionRule;
+    type = {DomainRuleTag::kException};
   } else if (wildcard) {
-    type = kDafsaWildcardRule;
+    type = {DomainRuleTag::kWildcard};
   }
   if (is_private) {
-    type += kDafsaPrivateRule;
+    type.Put(DomainRuleTag::kPrivate);
   }
-  return type;
+  return type.ToEnumBitmask();
 }
 
 std::string RulesToGperf(const RuleMap& rules) {
@@ -98,7 +97,7 @@ std::tuple<NormalizeResult, std::string, Rule> NormalizeRule(std::string domain,
   }
 
   // Warn about additional '*.' or '!'.
-  if (base::Contains(domain, "*.") || base::Contains(domain, '!')) {
+  if (domain.contains("*.") || domain.contains('!')) {
     LOG(WARNING) << "Keeping probably invalid rule: " << domain;
     result = NormalizeResult::kWarning;
   }
@@ -166,8 +165,7 @@ std::pair<NormalizeResult, RuleMap> NormalizeDataToRuleMap(
     // wildcard for the same rule, or that the same domain is listed as both
     // private and not private. If we did, we'd have to update our
     // parsing code to handle this case.
-    CHECK(!base::Contains(rules, domain))
-        << "Duplicate rule found for " << domain;
+    CHECK(!rules.contains(domain)) << "Duplicate rule found for " << domain;
 
     rules[domain] = rule;
     // Add true TLD for multi-level rules.  We don't add them right now, in
@@ -193,7 +191,7 @@ std::pair<NormalizeResult, RuleMap> NormalizeDataToRuleMap(
 
   std::ranges::copy_if(extra_rules, std::inserter(rules, rules.end()),
                        [&](const auto& extra_rule) {
-                         return !base::Contains(rules, extra_rule.first);
+                         return !rules.contains(extra_rule.first);
                        });
 
   return std::make_pair(result, rules);

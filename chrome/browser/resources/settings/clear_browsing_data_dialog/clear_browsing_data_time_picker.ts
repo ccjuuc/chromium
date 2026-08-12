@@ -4,7 +4,7 @@
 
 /**
  * @fileoverview 'settings-clear-browsing-data-time-picker' is a control that
- * displays time period options for 'settings-clear-browsing-data-dialog-v2'.
+ * displays time period options for 'settings-clear-browsing-data-dialog'.
  */
 import 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.js';
 import 'chrome://resources/cr_elements/cr_chip/cr_chip.js';
@@ -144,7 +144,7 @@ export class SettingsClearBrowsingDataTimePicker extends
 
   private onTimePeriodPrefUpdated_() {
     const timePeriodValue =
-        this.getPref('browser.clear_data.time_period').value;
+        this.getPref<TimePeriod>('browser.clear_data.time_period').value;
 
     if (timePeriodValue in TimePeriod &&
         timePeriodValue !== this.selectedTimePeriod_) {

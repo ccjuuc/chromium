@@ -6,9 +6,11 @@
 #define CHROME_BROWSER_UI_WEBUI_SIDE_PANEL_BOOKMARKS_BOOKMARKS_PAGE_HANDLER_H_
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/bookmarks/bookmark_merged_surface_service_observer.h"
 #include "chrome/browser/ui/webui/side_panel/bookmarks/bookmarks.mojom.h"
+#include "chrome/browser/ui/webui/top_chrome/top_chrome_web_ui_controller.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -71,6 +73,9 @@ class BookmarksPageHandler : public side_panel::mojom::BookmarksPageHandler,
   void ExecuteContextMenuCommand(const std::vector<int64_t>& node_ids,
                                  side_panel::mojom::ActionSource source,
                                  int command_id);
+  void GetIncognitoAvailableCount(
+      const std::vector<std::string>& side_panel_ids,
+      GetIncognitoAvailableCountCallback callback) override;
   void OpenBookmark(int64_t node_id,
                     int32_t parent_folder_depth,
                     ui::mojom::ClickModifiersPtr click_modifiers,
@@ -107,9 +112,24 @@ class BookmarksPageHandler : public side_panel::mojom::BookmarksPageHandler,
   void BookmarkAllUserNodesRemoved() override {}
 
  private:
+  class BookmarkContextMenu;
+
   // Compute and sends all the bookmark through the input `callback`,
   // redirecting the values to the TS side.
   void SendAllBookmarks(GetAllBookmarksCallback callback);
+
+  void CreateContextMenuForNodes(
+      const std::vector<int64_t> node_ids,
+      base::WeakPtr<TopChromeWebUIController::Embedder> embedder,
+      side_panel::mojom::ActionSource source,
+      base::OnceCallback<void(std::unique_ptr<BookmarkContextMenu>)> callback);
+
+  void OnCanPasteFromClipboard(
+      const std::vector<int64_t> node_ids,
+      base::WeakPtr<TopChromeWebUIController::Embedder> embedder,
+      side_panel::mojom::ActionSource source,
+      base::OnceCallback<void(std::unique_ptr<BookmarkContextMenu>)> callback,
+      bool can_paste);
 
   mojo::Receiver<side_panel::mojom::BookmarksPageHandler> receiver_;
   mojo::Remote<side_panel::mojom::BookmarksPage> page_;
@@ -126,6 +146,8 @@ class BookmarksPageHandler : public side_panel::mojom::BookmarksPageHandler,
   base::ScopedObservation<BookmarkMergedSurfaceService,
                           BookmarkMergedSurfaceServiceObserver>
       scoped_bookmark_merged_service_observation_{this};
+
+  base::WeakPtrFactory<BookmarksPageHandler> weak_ptr_factory_{this};
 };
 
 std::string GetFolderSidePanelIDForTesting(const BookmarkParentFolder& folder);

@@ -4,14 +4,14 @@
 
 #include "chrome/browser/printing/web_api/web_printing_type_converters.h"
 
+#include <algorithm>
 #include <optional>
 
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/map_util.h"
 #include "base/containers/to_vector.h"
 #include "chrome/browser/printing/web_api/web_printing_utils.h"
-#include "chrome/common/printing/print_media_l10n.h"
+#include "components/printing/common/print_media_l10n.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "printing/backend/cups_ipp_constants.h"
 #include "printing/backend/print_backend.h"
@@ -75,7 +75,7 @@ bool ValidateDefaultAgainstSupported(const std::optional<T>& enum_default,
     return true;
   } else if (enum_default && !enum_supported.empty()) {
     // If both are non-empty, then the latter must contain the former.
-    return base::Contains(enum_supported, *enum_default);
+    return std::ranges::contains(enum_supported, *enum_default);
   } else {
     // If only one is populated, then there are some values that we don't
     // support.

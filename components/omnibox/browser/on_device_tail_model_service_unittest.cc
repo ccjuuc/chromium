@@ -4,16 +4,18 @@
 
 #include "components/omnibox/browser/on_device_tail_model_service.h"
 
-#include "base/containers/flat_set.h"
+#include <optional>
+#include <vector>
+
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
-#include "base/memory/memory_pressure_listener_registry.h"
+#include "base/memory_coordinator/test_memory_consumer_registry.h"
+#include "base/memory_coordinator/utils.h"
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/test/task_environment.h"
-#include "components/memory_pressure/fake_memory_pressure_monitor.h"
 #include "components/omnibox/browser/on_device_tail_model_executor.h"
-#include "components/optimization_guide/core/delivery/test_model_info_builder.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
 #include "components/optimization_guide/core/delivery/test_optimization_guide_model_provider.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -49,8 +51,8 @@ class OnDeviceTailModelServiceTest : public ::testing::Test {
     base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &test_data_dir);
     test_data_dir = test_data_dir.AppendASCII("components/test/data/omnibox");
 
-    base::flat_set<base::FilePath> additional_files;
-    additional_files.insert(test_data_dir.AppendASCII(kVocabFilename));
+    std::vector<base::FilePath> additional_files = {
+        test_data_dir.AppendASCII(kVocabFilename)};
 
     optimization_guide::proto::OnDeviceTailSuggestModelMetadata metadata;
     metadata.mutable_lstm_model_params()->set_num_layer(kNumLayer);
@@ -62,13 +64,12 @@ class OnDeviceTailModelServiceTest : public ::testing::Test {
         kProbabilityThreshold);
     metadata.SerializeToString(any_metadata.mutable_value());
 
-    model_info_ =
-        optimization_guide::TestModelInfoBuilder()
-            .SetModelFilePath(test_data_dir.AppendASCII(kTailModelFilename))
-            .SetAdditionalFiles(additional_files)
-            .SetVersion(123)
-            .SetModelMetadata(any_metadata)
-            .Build();
+    model_info_ = optimization_guide::ModelInfo{
+        .model_file_path = test_data_dir.AppendASCII(kTailModelFilename),
+        .additional_files = additional_files,
+        .version = 123,
+        .model_metadata = any_metadata,
+    };
 
     task_environment_.RunUntilIdle();
   }
@@ -82,19 +83,19 @@ class OnDeviceTailModelServiceTest : public ::testing::Test {
     return service_->tail_model_executor_->IsReady();
   }
 
-  base::MemoryPressureListenerRegistry memory_pressure_listener_registry_;
+  base::TestMemoryConsumerRegistry memory_consumer_registry_;
   base::test::TaskEnvironment task_environment_;
   std::unique_ptr<OnDeviceTailModelService> service_;
   std::unique_ptr<optimization_guide::TestOptimizationGuideModelProvider>
       test_model_provider_;
-  std::unique_ptr<optimization_guide::ModelInfo> model_info_;
+  std::optional<optimization_guide::ModelInfo> model_info_;
 };
 
 TEST_F(OnDeviceTailModelServiceTest, OnModelUpdated) {
   service_->OnModelUpdated(
       optimization_guide::proto::OptimizationTarget::
           OPTIMIZATION_TARGET_OMNIBOX_ON_DEVICE_TAIL_SUGGEST,
-      *model_info_);
+      model_info_);
   task_environment_.RunUntilIdle();
 
   EXPECT_TRUE(IsExecutorReady());
@@ -114,7 +115,7 @@ TEST_F(OnDeviceTailModelServiceTest, GetPredictionsForInput) {
   service_->OnModelUpdated(
       optimization_guide::proto::OptimizationTarget::
           OPTIMIZATION_TARGET_OMNIBOX_ON_DEVICE_TAIL_SUGGEST,
-      *model_info_);
+      model_info_);
   service_->GetPredictionsForInput(input, std::move(callback));
 
   task_environment_.RunUntilIdle();
@@ -128,7 +129,7 @@ TEST_F(OnDeviceTailModelServiceTest, NullModelUpdate) {
   service_->OnModelUpdated(
       optimization_guide::proto::OptimizationTarget::
           OPTIMIZATION_TARGET_OMNIBOX_ON_DEVICE_TAIL_SUGGEST,
-      *model_info_);
+      model_info_);
   task_environment_.RunUntilIdle();
   EXPECT_TRUE(IsExecutorReady());
 
@@ -145,13 +146,12 @@ TEST_F(OnDeviceTailModelServiceTest, MemoryPressureLevel) {
   service_->OnModelUpdated(
       optimization_guide::proto::OptimizationTarget::
           OPTIMIZATION_TARGET_OMNIBOX_ON_DEVICE_TAIL_SUGGEST,
-      *model_info_);
+      model_info_);
   task_environment_.RunUntilIdle();
   EXPECT_TRUE(IsExecutorReady());
 
   OnDeviceTailModelExecutor::ModelInput input("faceb", "", 5);
   std::vector<OnDeviceTailModelExecutor::Prediction> results;
-  memory_pressure::test::FakeMemoryPressureMonitor mem_pressure_monitor;
 
   // The executor should be unloaded from memory when memory pressure level is
   // critical.
@@ -162,8 +162,9 @@ TEST_F(OnDeviceTailModelServiceTest, MemoryPressureLevel) {
         *results = std::move(predictions);
       },
       &results_1);
-  mem_pressure_monitor.SetAndNotifyMemoryPressure(
-      base::MEMORY_PRESSURE_LEVEL_CRITICAL);
+  memory_consumer_registry_.NotifyUpdateMemoryLimit(
+      base::kCriticalMemoryPressureThreshold);
+  memory_consumer_registry_.NotifyReleaseMemory();
   service_->GetPredictionsForInput(input, std::move(callback_1));
   task_environment_.RunUntilIdle();
   EXPECT_FALSE(IsExecutorReady());
@@ -177,8 +178,9 @@ TEST_F(OnDeviceTailModelServiceTest, MemoryPressureLevel) {
         *results = std::move(predictions);
       },
       &results_2);
-  mem_pressure_monitor.SetAndNotifyMemoryPressure(
-      base::MEMORY_PRESSURE_LEVEL_MODERATE);
+  memory_consumer_registry_.NotifyUpdateMemoryLimit(
+      base::kModerateMemoryPressureThreshold);
+  memory_consumer_registry_.NotifyReleaseMemory();
   service_->GetPredictionsForInput(input, std::move(callback_2));
   task_environment_.RunUntilIdle();
   EXPECT_TRUE(IsExecutorReady());

@@ -42,6 +42,7 @@
 #include "third_party/blink/renderer/core/paint/embedded_content_painter.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/platform/geometry/physical_offset.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/transforms/affine_transform.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/point_f.h"
@@ -112,7 +113,7 @@ AffineTransform LayoutEmbeddedContent::EmbeddedContentTransform() const {
   NOT_DESTROYED();
   auto frozen_size = FrozenFrameSize();
   if (!frozen_size || frozen_size->IsEmpty()) {
-    const PhysicalOffset content_box_offset = PhysicalContentBoxOffset();
+    const PhysicalOffset content_box_offset = PhysicalContentBoxRect().offset;
     return AffineTransform().Translate(content_box_offset.left,
                                        content_box_offset.top);
   }
@@ -255,8 +256,7 @@ bool LayoutEmbeddedContent::NodeAtPoint(
 
     if (VisibleToHitTestRequest(result.GetHitTestRequest()) &&
         child_layout_view) {
-      PhysicalOffset content_offset(BorderLeft() + PaddingLeft(),
-                                    BorderTop() + PaddingTop());
+      const PhysicalOffset content_offset = PhysicalContentBoxRect().offset;
       HitTestLocation new_hit_test_location(
           hit_test_location, -accumulated_offset - content_offset);
       HitTestRequest new_hit_test_request(
@@ -309,10 +309,11 @@ bool LayoutEmbeddedContent::NodeAtPoint(
 void LayoutEmbeddedContent::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutReplaced::StyleDidChange(diff, old_style, style_change_context);
-  const ComputedStyle& new_style = StyleRef();
+  LayoutReplaced::StyleDidChange(diff, old_style, new_style,
+                                 style_change_context);
 
   if (Frame* frame = GetFrameOwnerElement()->ContentFrame())
     frame->UpdateInertIfPossible();
@@ -352,6 +353,7 @@ void LayoutEmbeddedContent::PaintReplaced(
   NOT_DESTROYED();
   if (ChildPaintBlockedByDisplayLock())
     return;
+  CountSvgFilterPaint();
   EmbeddedContentPainter(*this).PaintReplaced(paint_info, paint_offset);
 }
 
@@ -437,7 +439,7 @@ void LayoutEmbeddedContent::UpdateGeometry(
   TransformState transform_state(TransformState::kApplyTransformDirection,
                                  gfx::PointF(),
                                  gfx::QuadF(gfx::RectF(replaced_rect)));
-  MapLocalToAncestor(nullptr, transform_state, 0);
+  MapLocalToAncestor(nullptr, transform_state, {});
   transform_state.Flatten();
   PhysicalOffset absolute_location =
       PhysicalOffset::FromPointFRound(transform_state.LastPlanarPoint());
@@ -482,6 +484,27 @@ bool LayoutEmbeddedContent::IsThrottledFrameView() const {
   if (auto* local_frame_view = DynamicTo<LocalFrameView>(ChildFrameView()))
     return local_frame_view->ShouldThrottleRendering();
   return false;
+}
+
+void LayoutEmbeddedContent::CountSvgFilterPaint() const {
+  if (!GetEmbeddedContentView()) {
+    return;
+  }
+  // This is an iteration of all (local) parents on every paint, but embedded
+  // content is rare enough that we do not expect this to be a problem.
+  const LayoutObject* target = this;
+  while (target) {
+    if (target->StyleRef().HasReferenceFilter()) {
+      UseCounter::Count(GetDocument(),
+                        GetEmbeddedContentView()->SvgFilterPaintedCounter());
+      return;
+    }
+    if (IsA<LayoutView>(*target)) {
+      target = target->GetFrame()->OwnerLayoutObject();
+    } else {
+      target = target->Parent();
+    }
+  }
 }
 
 }  // namespace blink

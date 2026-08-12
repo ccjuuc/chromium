@@ -2,9 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import type {CrInfiniteListElement} from '//resources/cr_elements/cr_infinite_list/cr_infinite_list.js';
 import {html} from '//resources/lit/v3_0/lit.rollup.js';
 
 import type {HistoryClustersElement} from './clusters.js';
+import type {Cluster} from './history_cluster_types.mojom-webui.js';
+
+export interface TemplatizedDomNodes {
+  clusters: CrInfiniteListElement<Cluster>;
+}
 
 // clang-format off
 export function getHtml(this: HistoryClustersElement) {
@@ -18,7 +24,7 @@ export function getHtml(this: HistoryClustersElement) {
     @remove-visits="${this.onRemoveVisits_}"
     ?hidden="${!this.clusters_.length}" .scrollTarget="${this.scrollTarget}"
     .scrollOffset="${this.scrollOffset}"
-    .template="${(item: any, index: number, tabindex: number) => html`
+    .template="${(item: Cluster, index: number, tabindex: number) => html`
       <history-cluster .cluster="${item}" .index="${index}"
           .query="${this.resultQuery_}" tabindex="${tabindex}"
           @remove-cluster="${this.onRemoveCluster_}" ?is-first="${!index}"

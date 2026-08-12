@@ -9,15 +9,13 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import android.view.View;
 import android.view.View.OnClickListener;
 
-import androidx.annotation.NonNull;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Callback;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter.MergeNotificationType;
+import org.chromium.chrome.browser.tabmodel.TabGroupMergeNotificationType;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
@@ -36,29 +34,27 @@ import java.util.Locale;
 @NullMarked
 public class GroupSuggestionsPromotionMediator implements GroupSuggestionsService.Delegate {
 
-    private final @NonNull PropertyModel mModel;
-    private final @NonNull BottomSheetController mBottomSheetController;
-    private final @NonNull View mContainerView;
-    private final @NonNull GroupSuggestionsService mService;
-    private final @NonNull TabModel mTabModel;
-    private final @NonNull TabGroupModelFilter mTabGroupModelFilter;
-    private final @NonNull OnClickListener mOnAcceptClickListener;
-    private final @NonNull OnClickListener mOnRejectClickListener;
-    private final @NonNull EmptyBottomSheetObserver mBottomSheetObserver;
+    private final PropertyModel mModel;
+    private final BottomSheetController mBottomSheetController;
+    private final View mContainerView;
+    private final GroupSuggestionsService mService;
+    private final TabModel mTabModel;
+    private final OnClickListener mOnAcceptClickListener;
+    private final OnClickListener mOnRejectClickListener;
+    private final EmptyBottomSheetObserver mBottomSheetObserver;
 
     private @Nullable GroupSuggestionsBottomSheetContent mCurrentSheetContent;
 
     public GroupSuggestionsPromotionMediator(
-            @NonNull PropertyModel model,
+            PropertyModel model,
             GroupSuggestionsService service,
-            @NonNull BottomSheetController bottomSheetController,
-            @NonNull TabGroupModelFilter tabGroupModelFilter,
-            @NonNull View containerView) {
+            BottomSheetController bottomSheetController,
+            TabModel tabModel,
+            View containerView) {
         mModel = model;
         mService = service;
         mBottomSheetController = bottomSheetController;
-        mTabGroupModelFilter = tabGroupModelFilter;
-        mTabModel = mTabGroupModelFilter.getTabModel();
+        mTabModel = tabModel;
         mContainerView = containerView;
         mOnAcceptClickListener =
                 v -> {
@@ -77,8 +73,8 @@ public class GroupSuggestionsPromotionMediator implements GroupSuggestionsServic
                     Tab currentTab = mTabModel.getCurrentTabSupplier().get();
                     Tab rootTab =
                             tabs.contains(currentTab) ? assumeNonNull(currentTab) : tabs.get(0);
-                    mTabGroupModelFilter.mergeListOfTabsToGroup(
-                            tabs, rootTab, MergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
+                    mTabModel.mergeListOfTabsToGroup(
+                            tabs, rootTab, TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
                     mBottomSheetController.hideContent(mCurrentSheetContent, true);
                     mCurrentSheetContent
                             .getUserResponseCallback()

@@ -30,15 +30,13 @@ class PermissionDialog : public PermissionPromptAndroid {
   PermissionPromptDisposition GetPromptDisposition() const override;
 
   // PermissionPromptAndroid:
-  base::android::ScopedJavaLocalRef<jstring> GetPositiveButtonText(
-      JNIEnv* env,
+  std::u16string GetPositiveButtonText(bool is_one_time) const override;
+  std::u16string GetNegativeButtonText(bool is_one_time) const override;
+  std::u16string GetPositiveEphemeralButtonText(
       bool is_one_time) const override;
-  base::android::ScopedJavaLocalRef<jstring> GetNegativeButtonText(
-      JNIEnv* env,
-      bool is_one_time) const override;
-  base::android::ScopedJavaLocalRef<jstring> GetPositiveEphemeralButtonText(
-      JNIEnv* env,
-      bool is_one_time) const override;
+
+ private:
+  bool IsUpgradeToPrecise() const;
 };
 
 }  // namespace permissions

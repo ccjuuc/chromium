@@ -91,8 +91,7 @@ void InputHintChecker::SetView(JNIEnv* env,
     // j.l.reflect.Method via double-reflection.
     TransitionToState(InitState::kInProgress);
     view_class_ = ScopedJavaGlobalRef<jobject>(
-        env, ScopedJavaLocalRef<jobject>::Adopt(
-                 env, env->GetObjectClass(root_view.obj())));
+        env, jni_zero::AdoptRef(env, env->GetObjectClass(root_view.obj())));
     pthread_t new_thread;
     if (pthread_create(&new_thread, nullptr, OffThreadInitInvoker::Run,
                        nullptr) != 0) {
@@ -166,7 +165,7 @@ bool InputHintChecker::HasInputImplWithThrottlingForTesting(_JNIEnv* env) {
 }
 
 bool InputHintChecker::HasInputImpl(JNIEnv* env, jobject o) {
-  auto has_input_result = ScopedJavaLocalRef<jobject>::Adopt(
+  auto has_input_result = jni_zero::AdoptRef(
       env, env->CallObjectMethod(reflect_method_for_has_input_.obj(),
                                  invoke_id_, o, nullptr));
   if (ClearException(env)) {
@@ -239,8 +238,8 @@ void InputHintChecker::InitGlobalRefsAndMethodIds(JNIEnv* env) {
     return;
   }
   ScopedJavaLocalRef<jstring> has_input_string =
-      ConvertUTF8ToJavaString(env, "probablyHasInput");
-  auto method = ScopedJavaLocalRef<jobject>::Adopt(
+      jni_zero::NewAsciiString(env, "probablyHasInput");
+  ScopedJavaLocalRef<jobject> method = jni_zero::AdoptRef(
       env, env->CallObjectMethod(view_class_.obj(), get_method_id,
                                  has_input_string.obj(), nullptr));
   if (ClearException(env)) {
@@ -327,22 +326,21 @@ static void JNI_InputHintChecker_OnCompositorViewHolderTouchEvent(
   checker.set_is_after_input_yield(false);
 }
 
-static jboolean JNI_InputHintChecker_IsInitializedForTesting(_JNIEnv* env) {
+static bool JNI_InputHintChecker_IsInitializedForTesting(_JNIEnv* env) {
   return InputHintChecker::GetInstance().IsInitializedForTesting();  // IN-TEST
 }
 
-static jboolean JNI_InputHintChecker_FailedToInitializeForTesting(
-    _JNIEnv* env) {
+static bool JNI_InputHintChecker_FailedToInitializeForTesting(_JNIEnv* env) {
   return InputHintChecker::GetInstance()
       .FailedToInitializeForTesting();  // IN-TEST
 }
 
-static jboolean JNI_InputHintChecker_HasInputForTesting(_JNIEnv* env) {
+static bool JNI_InputHintChecker_HasInputForTesting(_JNIEnv* env) {
   InputHintChecker& checker = InputHintChecker::GetInstance();
   return checker.HasInputImplNoThrottlingForTesting(env);  // IN-TEST
 }
 
-static jboolean JNI_InputHintChecker_HasInputWithThrottlingForTesting(
+static bool JNI_InputHintChecker_HasInputWithThrottlingForTesting(
     _JNIEnv* env) {
   InputHintChecker& checker = InputHintChecker::GetInstance();
   return checker.HasInputImplWithThrottlingForTesting(env);  // IN-TEST
@@ -350,7 +348,7 @@ static jboolean JNI_InputHintChecker_HasInputWithThrottlingForTesting(
 
 static void JNI_InputHintChecker_SetIsAfterInputYieldForTesting(  // IN-TEST
     _JNIEnv* env,
-    jboolean after) {
+    bool after) {
   InputHintChecker::GetInstance().disable_metric_subsampling();
   InputHintChecker::GetInstance().set_is_after_input_yield(after);
 }

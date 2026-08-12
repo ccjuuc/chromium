@@ -17,9 +17,7 @@ import static org.hamcrest.CoreMatchers.allOf;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-import static org.chromium.base.test.transit.ViewElement.displayingAtLeastOption;
 import static org.chromium.base.test.transit.ViewFinder.waitForView;
-import static org.chromium.base.test.util.Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE;
 import static org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper.createTabs;
 import static org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper.enterTabSwitcher;
 import static org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper.getTabSwitcherAncestorId;
@@ -40,11 +38,11 @@ import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthManager;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
@@ -59,7 +57,7 @@ import org.chromium.ui.base.DeviceFormFactor;
  */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add(ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE)
-@Restriction({DeviceFormFactor.PHONE, RESTRICTION_TYPE_NON_LOW_END_DEVICE})
+@Restriction(DeviceFormFactor.PHONE)
 @DoNotBatch(reason = "Batching can cause message state to leak between tests.")
 public class TabGridIncognitoReauthPromoTest {
     @Rule
@@ -96,7 +94,7 @@ public class TabGridIncognitoReauthPromoTest {
 
         assertTrue(cta.getTabModelSelector().getCurrentModel().isIncognito());
         CriteriaHelper.pollUiThread(TabSwitcherMessageManager::hasAppendedMessagesForTesting);
-        waitForView(withId(R.id.large_message_card_item), displayingAtLeastOption(51));
+        waitForView(withId(R.id.large_message_card_item));
     }
 
     @Test
@@ -109,7 +107,7 @@ public class TabGridIncognitoReauthPromoTest {
 
         assertTrue(cta.getTabModelSelector().getCurrentModel().isIncognito());
         CriteriaHelper.pollUiThread(TabSwitcherMessageManager::hasAppendedMessagesForTesting);
-        waitForView(withId(R.id.large_message_card_item), displayingAtLeastOption(51));
+        waitForView(withId(R.id.large_message_card_item));
 
         onView(withText(R.string.incognito_reauth_lock_action_text)).perform(click());
         onView(withId(R.id.snackbar)).check(matches(isDisplayed()));
@@ -140,7 +138,7 @@ public class TabGridIncognitoReauthPromoTest {
 
         assertTrue(cta.getTabModelSelector().getCurrentModel().isIncognito());
         CriteriaHelper.pollUiThread(TabSwitcherMessageManager::hasAppendedMessagesForTesting);
-        waitForView(withId(R.id.large_message_card_item), displayingAtLeastOption(51));
+        waitForView(withId(R.id.large_message_card_item));
 
         switchTabModel(cta, false);
         assertFalse(cta.getTabModelSelector().getCurrentModel().isIncognito());
@@ -157,7 +155,7 @@ public class TabGridIncognitoReauthPromoTest {
 
         assertTrue(cta.getTabModelSelector().getCurrentModel().isIncognito());
         CriteriaHelper.pollUiThread(TabSwitcherMessageManager::hasAppendedMessagesForTesting);
-        waitForView(withId(R.id.large_message_card_item), displayingAtLeastOption(51));
+        waitForView(withId(R.id.large_message_card_item));
 
         // Scroll to the position of the promo so that it is completely showing for Espresso click.
         onViewWaiting(

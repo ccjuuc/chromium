@@ -4,15 +4,16 @@
 
 #include "chrome/browser/ui/webui/ash/settings/pages/internet/internet_section.h"
 
+#include <algorithm>
 #include <array>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/url_constants.h"
 #include "ash/public/cpp/hotspot_config_service.h"
 #include "ash/public/cpp/network_config_service.h"
 #include "ash/webui/network_ui/network_health_resource_provider.h"
 #include "ash/webui/network_ui/traffic_counters_resource_provider.h"
 #include "ash/webui/settings/public/constants/routes.mojom.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
@@ -22,9 +23,6 @@
 #include "chrome/browser/ui/webui/ash/settings/search/search_tag_registry.h"
 #include "chrome/browser/ui/webui/extension_control_handler.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/common/url_constants.h"
-#include "chrome/common/webui_url_constants.h"
-#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/dbus/hermes/hermes_manager_client.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
@@ -463,82 +461,62 @@ base::span<const SearchConcept> GetCellularMeteredSearchConcepts() {
 }
 
 base::span<const SearchConcept> GetInstantTetheringSearchConcepts() {
-  auto make_concepts = [](bool revamped) {
-    return std::to_array<SearchConcept>({
-        {IDS_OS_SETTINGS_TAG_INSTANT_MOBILE_NETWORKS,
-         mojom::kMobileDataNetworksSubpagePath,
-         mojom::SearchResultIcon::kInstantTethering,
-         mojom::SearchResultDefaultRank::kMedium,
-         mojom::SearchResultType::kSubpage,
-         {.subpage = mojom::Subpage::kMobileDataNetworks},
-         {revamped ? IDS_OS_SETTINGS_TAG_INSTANT_MOBILE_NETWORKS_ALT1
-                   : SearchConcept::kAltTagEnd,
-          SearchConcept::kAltTagEnd}},
-    });
-  };
-
-  static constexpr auto revamped_tags = make_concepts(true);
-  static constexpr auto original_tags = make_concepts(false);
-  return ash::features::IsInstantHotspotRebrandEnabled() ? revamped_tags
-                                                         : original_tags;
+  static constexpr auto tags = std::to_array<SearchConcept>({
+      {IDS_OS_SETTINGS_TAG_INSTANT_MOBILE_NETWORKS,
+       mojom::kMobileDataNetworksSubpagePath,
+       mojom::SearchResultIcon::kInstantTethering,
+       mojom::SearchResultDefaultRank::kMedium,
+       mojom::SearchResultType::kSubpage,
+       {.subpage = mojom::Subpage::kMobileDataNetworks},
+       {SearchConcept::kAltTagEnd, SearchConcept::kAltTagEnd}},
+  });
+  return tags;
 }
 
 base::span<const SearchConcept> GetInstantTetheringOnSearchConcepts() {
-  auto make_concepts = [](bool revamped) {
+  auto make_concepts = []() {
     return std::to_array<SearchConcept>({
-        {revamped ? IDS_OS_SETTINGS_TAG_INSTANT_TETHERING_TURN_OFF
-                  : IDS_OS_SETTINGS_TAG_INSTANT_TETHERING_TURN_OFF_LEGACY,
+        {IDS_OS_SETTINGS_TAG_INSTANT_TETHERING_TURN_OFF_LEGACY,
          mojom::kMobileDataNetworksSubpagePath,
          mojom::SearchResultIcon::kInstantTethering,
          mojom::SearchResultDefaultRank::kMedium,
          mojom::SearchResultType::kSetting,
          {.setting = mojom::Setting::kInstantTetheringOnOff},
-         {revamped ? IDS_OS_SETTINGS_TAG_INSTANT_TETHERING_TURN_OFF_ALT1
-                   : IDS_OS_SETTINGS_TAG_INSTANT_TETHERING_TURN_OFF_ALT1_LEGACY,
+         {IDS_OS_SETTINGS_TAG_INSTANT_TETHERING_TURN_OFF_ALT1_LEGACY,
           SearchConcept::kAltTagEnd}},
     });
   };
-
-  static constexpr auto revamped_tags = make_concepts(true);
-  static constexpr auto original_tags = make_concepts(false);
-  return ash::features::IsInstantHotspotRebrandEnabled() ? revamped_tags
-                                                         : original_tags;
+  static constexpr auto tags = make_concepts();
+  return tags;
 }
 
 base::span<const SearchConcept> GetInstantTetheringOffSearchConcepts() {
-  auto make_concepts = [](bool revamped) {
+  auto make_concepts = []() {
     return std::to_array<SearchConcept>({
-        {revamped ? IDS_OS_SETTINGS_TAG_INSTANT_TETHERING_TURN_ON
-                  : IDS_OS_SETTINGS_TAG_INSTANT_TETHERING_TURN_ON_LEGACY,
+        {IDS_OS_SETTINGS_TAG_INSTANT_TETHERING_TURN_ON_LEGACY,
          mojom::kMobileDataNetworksSubpagePath,
          mojom::SearchResultIcon::kInstantTethering,
          mojom::SearchResultDefaultRank::kMedium,
          mojom::SearchResultType::kSetting,
          {.setting = mojom::Setting::kInstantTetheringOnOff},
-         {revamped ? IDS_OS_SETTINGS_TAG_INSTANT_TETHERING_TURN_ON_ALT1
-                   : IDS_OS_SETTINGS_TAG_INSTANT_TETHERING_TURN_ON_ALT1_LEGACY,
+         {IDS_OS_SETTINGS_TAG_INSTANT_TETHERING_TURN_ON_ALT1_LEGACY,
           SearchConcept::kAltTagEnd}},
     });
   };
-
-  static constexpr auto revamped_tags = make_concepts(true);
-  static constexpr auto original_tags = make_concepts(false);
-  return ash::features::IsInstantHotspotRebrandEnabled() ? revamped_tags
-                                                         : original_tags;
+  static constexpr auto tags = make_concepts();
+  return tags;
 }
 
 base::span<const SearchConcept> GetInstantTetheringConnectedSearchConcepts() {
-  auto make_concepts = [](bool revamped) {
+  auto make_concepts = []() {
     return std::to_array<SearchConcept>({
-        {revamped ? IDS_OS_SETTINGS_TAG_INSTANT_TETHERING_DISCONNECT
-                  : IDS_OS_SETTINGS_TAG_INSTANT_TETHERING_DISCONNECT_LEGACY,
+        {IDS_OS_SETTINGS_TAG_INSTANT_TETHERING_DISCONNECT_LEGACY,
          mojom::kTetherDetailsSubpagePath,
          mojom::SearchResultIcon::kInstantTethering,
          mojom::SearchResultDefaultRank::kMedium,
          mojom::SearchResultType::kSetting,
          {.setting = mojom::Setting::kDisconnectTetherNetwork}},
-        {revamped ? IDS_OS_SETTINGS_TAG_INSTANT_TETHERING
-                  : IDS_OS_SETTINGS_TAG_INSTANT_TETHERING_LEGACY,
+        {IDS_OS_SETTINGS_TAG_INSTANT_TETHERING_LEGACY,
          mojom::kTetherDetailsSubpagePath,
          mojom::SearchResultIcon::kInstantTethering,
          mojom::SearchResultDefaultRank::kMedium,
@@ -546,11 +524,8 @@ base::span<const SearchConcept> GetInstantTetheringConnectedSearchConcepts() {
          {.subpage = mojom::Subpage::kTetherDetails}},
     });
   };
-
-  static constexpr auto revamped_tags = make_concepts(true);
-  static constexpr auto original_tags = make_concepts(false);
-  return ash::features::IsInstantHotspotRebrandEnabled() ? revamped_tags
-                                                         : original_tags;
+  static constexpr auto tags = make_concepts();
+  return tags;
 }
 
 base::span<const SearchConcept> GetVpnConnectedSearchConcepts() {
@@ -696,13 +671,13 @@ bool IsPartOfDetailsSubpage(mojom::SearchResultType type,
       const mojom::Setting& setting = id.setting;
       switch (details_subpage) {
         case mojom::Subpage::kEthernetDetails:
-          return base::Contains(GetEthernetDetailsSettings(), setting);
+          return std::ranges::contains(GetEthernetDetailsSettings(), setting);
         case mojom::Subpage::kWifiDetails:
-          return base::Contains(GetWifiDetailsSettings(), setting);
+          return std::ranges::contains(GetWifiDetailsSettings(), setting);
         case mojom::Subpage::kCellularDetails:
-          return base::Contains(GetCellularDetailsSettings(), setting);
+          return std::ranges::contains(GetCellularDetailsSettings(), setting);
         case mojom::Subpage::kTetherDetails:
-          return base::Contains(GetTetherDetailsSettings(), setting);
+          return std::ranges::contains(GetTetherDetailsSettings(), setting);
         default:
           return false;
       }
@@ -821,10 +796,7 @@ void InternetSection::AddLoadTimeData(content::WebUIDataSource* html_source) {
       {"internetTetherNotificationControlDescription",
        IDS_SETTINGS_INTERNET_TETHER_NOTIFICATION_CONTROL_DESCRIPTION},
       {"internetNoNetworks", IDS_SETTINGS_INTERNET_NO_NETWORKS},
-      {"internetNoTetherHosts", IDS_SETTINGS_INTERNET_NO_TETHER_HOSTS},
-      {"internetPageTitle", features::IsInstantHotspotRebrandEnabled()
-                                ? IDS_SETTINGS_INTERNET
-                                : IDS_SETTINGS_INTERNET_LEGACY},
+      {"internetPageTitle", IDS_SETTINGS_INTERNET_LEGACY},
       {"internetSummaryButtonA11yLabel",
        IDS_SETTINGS_INTERNET_SUMMARY_BUTTON_ACCESSIBILITY_LABEL},
       {"internetToggleTetherA11yLabel",
@@ -1149,43 +1121,43 @@ void InternetSection::AddLoadTimeData(content::WebUIDataSource* html_source) {
   html_source->AddBoolean(
       "trafficCountersForWifiTesting",
       ash::features::IsTrafficCountersForWiFiTestingEnabled());
-  html_source->AddBoolean("isInstantHotspotRebrandEnabled",
-                          ash::features::IsInstantHotspotRebrandEnabled());
 
   html_source->AddString("networkGoogleNameserversLearnMoreUrl",
-                         chrome::kGoogleNameserversLearnMoreURL);
+                         ash::external_urls::kGoogleNameserversLearnMoreURL);
 
   html_source->AddString("wifiHiddenNetworkLearnMoreUrl",
-                         chrome::kWifiHiddenNetworkURL);
+                         ash::external_urls::kWifiHiddenNetworkURL);
 
   html_source->AddString("wifiPasspointLearnMoreUrl",
-                         chrome::kWifiPasspointURL);
+                         ash::external_urls::kWifiPasspointURL);
 
   html_source->AddString(
       "networkNotSynced",
       l10n_util::GetStringFUTF16(
           IDS_SETTINGS_INTERNET_NETWORK_NOT_SYNCED,
-          GetHelpUrlWithBoard(chrome::kWifiSyncLearnMoreURL)));
+          GetHelpUrlWithBoard(ash::external_urls::kWifiSyncLearnMoreURL)));
   html_source->AddString(
       "networkSyncedUser",
       l10n_util::GetStringFUTF16(
           IDS_SETTINGS_INTERNET_NETWORK_SYNCED_USER,
-          GetHelpUrlWithBoard(chrome::kWifiSyncLearnMoreURL)));
+          GetHelpUrlWithBoard(ash::external_urls::kWifiSyncLearnMoreURL)));
   html_source->AddString(
       "networkSyncedDevice",
       l10n_util::GetStringFUTF16(
           IDS_SETTINGS_INTERNET_NETWORK_SYNCED_DEVICE,
-          GetHelpUrlWithBoard(chrome::kWifiSyncLearnMoreURL)));
+          GetHelpUrlWithBoard(ash::external_urls::kWifiSyncLearnMoreURL)));
   html_source->AddString(
       "internetNoNetworksMobileData",
       l10n_util::GetStringFUTF16(
           IDS_SETTINGS_INTERNET_LOOKING_FOR_MOBILE_NETWORK,
-          GetHelpUrlWithBoard(chrome::kInstantTetheringLearnMoreURL)));
+          GetHelpUrlWithBoard(
+              ash::external_urls::kInstantTetheringLearnMoreURL)));
   html_source->AddString(
       "tetherNetworkNotSetup",
       l10n_util::GetStringFUTF16(
           IDS_SETTINGS_INTERNET_TETHER_NOT_SETUP_WITH_LEARN_MORE_LINK,
-          GetHelpUrlWithBoard(chrome::kInstantTetheringLearnMoreURL)));
+          GetHelpUrlWithBoard(
+              ash::external_urls::kInstantTetheringLearnMoreURL)));
   // TODO(b/259623645): Replace learn more link with hotspot url once it is
   // ready.
   html_source->AddString(
@@ -1193,17 +1165,20 @@ void InternetSection::AddLoadTimeData(content::WebUIDataSource* html_source) {
       l10n_util::GetStringFUTF16(
           IDS_SETTINGS_INTERNET_HOTSPOT_SUBTITLE_WITH_LEARN_MORE_LINK,
           ui::GetChromeOSDeviceName(),
-          GetHelpUrlWithBoard(chrome::kChromebookHotspotLearnMoreURL)));
+          GetHelpUrlWithBoard(
+              ash::external_urls::kChromebookHotspotLearnMoreURL)));
   html_source->AddString(
       "hotspotMobileDataNotSupportedSublabelWithLink",
       l10n_util::GetStringFUTF16(
           IDS_SETTINGS_INTERNET_HOTSPOT_MOBILE_DATA_NOT_SUPPORTED_SUBLABEL_WITH_LEARN_MORE_LINK,
-          GetHelpUrlWithBoard(chrome::kChromebookHotspotLearnMoreURL)));
+          GetHelpUrlWithBoard(
+              ash::external_urls::kChromebookHotspotLearnMoreURL)));
   html_source->AddString(
       "hotspotNoMobileDataSublabelWithLink",
       l10n_util::GetStringFUTF16(
           IDS_SETTINGS_INTERNET_HOTSPOT_NO_MOBILE_DATA_SUBLABEL_WITH_LEARN_MORE_LINK,
-          GetHelpUrlWithBoard(chrome::kChromebookHotspotLearnMoreURL)));
+          GetHelpUrlWithBoard(
+              ash::external_urls::kChromebookHotspotLearnMoreURL)));
   html_source->AddString(
       "hotspotSettingsTitle",
       l10n_util::GetStringFUTF16(IDS_SETTINGS_INTERNET_HOTSPOT_SETTINGS_TITLE,
@@ -1213,19 +1188,22 @@ void InternetSection::AddLoadTimeData(content::WebUIDataSource* html_source) {
       l10n_util::GetStringFUTF16(
           IDS_SETTINGS_INTERNET_HOTSPOT_SETTINGS_SUBTITLE_WITH_LEARN_MORE_LINK,
           ui::GetChromeOSDeviceName(),
-          GetHelpUrlWithBoard(chrome::kChromebookHotspotLearnMoreURL)));
+          GetHelpUrlWithBoard(
+              ash::external_urls::kChromebookHotspotLearnMoreURL)));
 
   html_source->AddString(
       "cellularSubpageSubtitle",
       l10n_util::GetStringFUTF16(
           IDS_SETTINGS_INTERNET_CELLULAR_SUBTITLE_WITH_LEARN_MORE_LINK,
-          GetHelpUrlWithBoard(chrome::kCellularCarrierLockLearnMoreURL)));
+          GetHelpUrlWithBoard(
+              ash::external_urls::kCellularCarrierLockLearnMoreURL)));
 
   html_source->AddString(
       "networkCarrierLocked",
       l10n_util::GetStringFUTF16(
           IDS_SETTINGS_INTERNET_NETWORK_CARRIER_LOCKED_WITH_LEARN_MORE_LINK,
-          GetHelpUrlWithBoard(chrome::kCellularCarrierLockLearnMoreURL)));
+          GetHelpUrlWithBoard(
+              ash::external_urls::kCellularCarrierLockLearnMoreURL)));
 
   html_source->AddBoolean("isUserLoggedIn", IsUserLoggedIn());
 }
@@ -1236,9 +1214,7 @@ void InternetSection::AddHandlers(content::WebUI* web_ui) {
 }
 
 int InternetSection::GetSectionNameMessageId() const {
-  return features::IsInstantHotspotRebrandEnabled()
-             ? IDS_SETTINGS_INTERNET
-             : IDS_SETTINGS_INTERNET_LEGACY;
+  return IDS_SETTINGS_INTERNET_LEGACY;
 }
 
 mojom::Section InternetSection::GetSection() const {
@@ -1364,9 +1340,7 @@ void InternetSection::RegisterHierarchy(HierarchyGenerator* generator) const {
   // Instant Tethering. Although this is a multi-device feature, its UI resides
   // in the network section.
   generator->RegisterNestedSubpage(
-      features::IsInstantHotspotRebrandEnabled()
-          ? IDS_SETTINGS_INTERNET_INSTANT_TETHERING_DETAILS
-          : IDS_SETTINGS_INTERNET_INSTANT_TETHERING_DETAILS_LEGACY,
+      IDS_SETTINGS_INTERNET_INSTANT_TETHERING_DETAILS,
       mojom::Subpage::kTetherDetails, mojom::Subpage::kMobileDataNetworks,
       mojom::SearchResultIcon::kInstantTethering,
       mojom::SearchResultDefaultRank::kMedium,
@@ -1643,7 +1617,7 @@ void InternetSection::OnNetworkList(
   }
 
   // Edge case where Ethernet device is present but no network is connected,
-  // i.e. on Chromeboxes. http://crbug.com/1096768
+  // i.e. on Chromeboxes. http://crbug.com/40136347
   if (does_ethernet_device_exist_ && !connected_ethernet_guid_.has_value()) {
     updater.AddSearchTags(GetEthernetNotConnectedSearchConcepts());
   }

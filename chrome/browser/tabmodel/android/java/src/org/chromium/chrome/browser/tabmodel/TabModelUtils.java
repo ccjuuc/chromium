@@ -5,7 +5,7 @@
 package org.chromium.chrome.browser.tabmodel;
 
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.OneShotCallback;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.base.supplier.OneshotSupplierImpl;
@@ -43,15 +43,9 @@ public class TabModelUtils {
      * @return Specified {@link Tab} index or {@link TabList#INVALID_TAB_INDEX} if the {@link Tab}
      *     is not found
      */
-    public static int getTabIndexById(TabList model, int tabId) {
-        int index = 0;
-        for (Tab tab : model) {
-            assert tab != null : "getTabAt() shouldn't return a null Tab from TabModel.";
-            if (tab != null && tab.getId() == tabId) return index;
-            index++;
-        }
-
-        return TabModel.INVALID_TAB_INDEX;
+    public static int getTabIndexById(TabModel model, int tabId) {
+        Tab tab = model.getTabById(tabId);
+        return tab == null ? TabModel.INVALID_TAB_INDEX : model.indexOf(tab);
     }
 
     /**
@@ -226,7 +220,7 @@ public class TabModelUtils {
      * @return A oneshot supplier that will only be set when initialization is done.
      */
     public static OneshotSupplier<TabModelSelector> onInitializedTabModelSelector(
-            ObservableSupplier<TabModelSelector> tabModelSelectorSupplier) {
+            MonotonicObservableSupplier<TabModelSelector> tabModelSelectorSupplier) {
         OneshotSupplierImpl<TabModelSelector> delegate = new OneshotSupplierImpl<>();
         new OneShotCallback<>(
                 tabModelSelectorSupplier,
@@ -248,10 +242,10 @@ public class TabModelUtils {
     }
 
     /**
-     * @param tab The {@link Tab} to find the {@link TabGroupModelFilter} for.
-     * @return the associated {@link TabGroupModelFilter} if found or null.
+     * @param tab The {@link Tab} to find the {@link TabModel} for.
+     * @return the associated {@link TabModel} if found or null.
      */
-    public static @Nullable TabGroupModelFilter getTabGroupModelFilterByTab(Tab tab) {
+    public static @Nullable TabModel getTabModelByTab(Tab tab) {
         final WindowAndroid windowAndroid = tab.getWindowAndroid();
         if (windowAndroid == null) return null;
 
@@ -260,17 +254,17 @@ public class TabModelUtils {
                 ArchivedTabModelSelectorHolder.getInstance(tab.getProfile());
         if (archivedTabModelSelector != null
                 && archivedTabModelSelector.getTabById(tab.getId()) != null) {
-            return archivedTabModelSelector.getTabGroupModelFilter(/* isIncognito= */ false);
+            return archivedTabModelSelector.getModel(/* incognito= */ false);
         }
 
-        final ObservableSupplier<TabModelSelector> supplier =
+        final MonotonicObservableSupplier<TabModelSelector> supplier =
                 TabModelSelectorSupplier.from(windowAndroid);
         if (supplier == null) return null;
 
         final TabModelSelector selector = supplier.get();
         if (selector == null) return null;
 
-        return selector.getTabGroupModelFilter(tab.isIncognito());
+        return selector.getModel(tab.isIncognito());
     }
 
     /** Converts a {@link TabList} to a {@link List<Tab>}. */

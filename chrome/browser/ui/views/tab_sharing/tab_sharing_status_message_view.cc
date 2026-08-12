@@ -4,19 +4,22 @@
 
 #include "chrome/browser/ui/views/tab_sharing/tab_sharing_status_message_view.h"
 
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/grit/generated_resources.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "media/capture/capture_switches.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/controls/link.h"
 #include "ui/views/controls/separator.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/metadata/view_factory.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/view_utils.h"
 
 namespace {
 using EndpointInfo = ::TabSharingStatusMessageView::EndpointInfo;
@@ -24,9 +27,8 @@ using InteractionWithControls = ::GetDisplayMediaUserInteractionWithControls;
 using MessageInfo = ::TabSharingStatusMessageView::MessageInfo;
 using TabRole = ::TabSharingInfoBarDelegate::TabRole;
 
-constexpr auto kButtonInsets = gfx::Insets::VH(2, 8);
-constexpr auto kRefreshSeparatorInsets = gfx::Insets::TLBR(0, 12, 0, 12);
-constexpr auto kSeparatorInsets = gfx::Insets::TLBR(0, 16, 0, 0);
+constexpr auto kRefreshButtonInsets = gfx::Insets::VH(4, 8);
+constexpr auto kRefreshSeparatorInsets = gfx::Insets::TLBR(12, 12, 12, 0);
 std::vector<std::u16string> EndpointInfosToStrings(
     const std::vector<EndpointInfo>& endpoint_infos) {
   std::vector<std::u16string> res;
@@ -146,8 +148,7 @@ MessageInfo GetMessageInfoCapturing(TabRole role,
         {capturer_info}, role);
   }
 
-  if (base::FeatureList::IsEnabled(features::kTabCaptureInfobarLinks) &&
-      TabSharingInfoBarDelegate::IsCapturingTab(role)) {
+  if (TabSharingInfoBarDelegate::IsCapturingTab(role)) {
     return MessageInfo(
         IDS_TAB_SHARING_INFOBAR_SHARING_ANOTHER_TAB_TO_THIS_TAB_LABEL,
         {shared_tab_info}, role);
@@ -240,10 +241,7 @@ TabSharingStatusMessageView::TabSharingStatusMessageView(
     base::WeakPtr<ScreensharingControlsHistogramLogger> uma_logger)
     : uma_logger_(uma_logger) {
   SetupMessage(info);
-  const auto& separator_insets =
-      base::FeatureList::IsEnabled(features::kInfobarRefresh)
-          ? kRefreshSeparatorInsets
-          : kSeparatorInsets;
+  const auto& separator_insets = kRefreshSeparatorInsets;
   AddChildView(views::Builder<views::Separator>()
                    .SetProperty(views::kMarginsKey, separator_insets)
                    .SetProperty(views::kFlexBehaviorKey,
@@ -259,6 +257,22 @@ TabSharingStatusMessageView::~TabSharingStatusMessageView() = default;
 
 gfx::Size TabSharingStatusMessageView::GetMinimumSize() const {
   return gfx::Size();
+}
+
+void TabSharingStatusMessageView::OnThemeChanged() {
+  views::View::OnThemeChanged();
+  const auto* cp = GetColorProvider();
+  const SkColor text_color = cp->GetColor(kColorInfoBarForeground);
+  const SkColor background_color = cp->GetColor(kColorInfoBarBackground);
+
+  for (views::View* child : children()) {
+    auto* label = views::AsViewClass<views::Label>(child);
+    if (label && !views::IsViewClass<views::Link>(child)) {
+      label->SetEnabledColor(text_color);
+      label->SetBackgroundColor(background_color);
+      label->SetAutoColorReadabilityEnabled(false);
+    }
+  }
 }
 
 void TabSharingStatusMessageView::SetupMessage(MessageInfo info) {
@@ -343,20 +357,16 @@ void TabSharingStatusMessageView::AddButton(
 
   button->SetStyle(ui::ButtonStyle::kTonal);
 
-  if (base::FeatureList::IsEnabled(features::kInfobarRefresh)) {
-    button->SetCustomPadding(gfx::Insets::VH(4, 12));
-    button->SetProperty(views::kCrossAxisAlignmentKey,
-                        views::LayoutAlignment::kCenter);
-  } else {
-    button->SetCustomPadding(kButtonInsets);
-  }
+  button->SetCustomPadding(kRefreshButtonInsets);
+  button->SetProperty(views::kCrossAxisAlignmentKey,
+                      views::LayoutAlignment::kCenter);
+  button->SetBgColorIdOverride(ui::kColorSysBaseContainerElevated);
   button->SetTextColor(views::Button::ButtonState::STATE_NORMAL,
                        ui::kColorLinkForeground);
   button->SetTextColor(views::Button::ButtonState::STATE_HOVERED,
                        ui::kColorLinkForeground);
   button->SetTextColor(views::Button::ButtonState::STATE_PRESSED,
                        ui::kColorLinkForeground);
-  button->SetBgColorIdOverride(ui::kColorSysNeutralContainer);
   button->SetLabelStyle(views::style::STYLE_BODY_5_MEDIUM);
   button->SetProperty(
       views::kFlexBehaviorKey,

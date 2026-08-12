@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "base/functional/callback_forward.h"
 #include "media/mojo/mojom/speech_recognizer.mojom.h"
 
 namespace content {
@@ -22,7 +23,17 @@ namespace speech {
 // process.
 media::mojom::AvailabilityStatus GetOnDeviceSpeechRecognitionAvailabilityStatus(
     content::BrowserContext* context,
-    std::string_view language);
+    std::string_view language,
+    media::mojom::SpeechRecognitionQuality quality);
+
+// Asynchronously returns the on-device speech recognition availability status
+// for a given language code (i.e. "en-US") and quality. Similar to
+// `GetOnDeviceSpeechRecognitionAvailabilityStatus` but async.
+void GetOnDeviceSpeechRecognitionAvailabilityStatusAsync(
+    content::BrowserContext* context,
+    std::string_view language,
+    media::mojom::SpeechRecognitionQuality quality,
+    base::OnceCallback<void(media::mojom::AvailabilityStatus)> callback);
 
 }  // namespace speech
 

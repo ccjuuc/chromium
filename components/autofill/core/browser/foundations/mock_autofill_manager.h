@@ -30,6 +30,7 @@ class MockAutofillManager : public AutofillManager {
   ~MockAutofillManager() override;
 
   MOCK_METHOD(bool, ShouldClearPreviewedForm, (), (override));
+  MOCK_METHOD(void, ReparseKnownForms, (), (override));
   MOCK_METHOD(void, OnFocusOnNonFormFieldImpl, (), (override));
   MOCK_METHOD(void, OnDidAutofillFormImpl, (const FormData& form), (override));
   MOCK_METHOD(void,
@@ -49,6 +50,13 @@ class MockAutofillManager : public AutofillManager {
                const FieldGlobalId& field_id,
                const std::u16string& old_value),
               (override));
+  MOCK_METHOD(
+      void,
+      OnDidDetectJavaScriptAutofillImpl,
+      (const FormData& form,
+       const FieldGlobalId& trigger_field_id,
+       const std::vector<JavaScriptFieldModification>& field_modifications),
+      (override));
   MOCK_METHOD(void,
               OnLoadedServerPredictionsImpl,
               ((base::span<const raw_ref<FormStructure>>)),
@@ -56,6 +64,10 @@ class MockAutofillManager : public AutofillManager {
   MOCK_METHOD(void,
               OnFormSubmittedImpl,
               (const FormData& form, mojom::SubmissionSource source),
+              (override));
+  MOCK_METHOD(void,
+              OnFormWithEmailVerificationTokenSubmittedImpl,
+              (const FormData& form, const FieldGlobalId& field_id),
               (override));
   MOCK_METHOD(void,
               OnCaretMovedInFormFieldImpl,
@@ -91,13 +103,20 @@ class MockAutofillManager : public AutofillManager {
               (override));
   MOCK_METHOD(bool, ShouldParseForms, (), (override));
   MOCK_METHOD(void, OnBeforeProcessParsedForms, (), (override));
-  MOCK_METHOD(void,
-              OnFormProcessed,
-              (const FormData& form_data, const FormStructure& form_structure),
-              (override));
+  MOCK_METHOD(void, OnFormProcessed, (const FormStructure& form), (override));
   MOCK_METHOD(void,
               ReportAutofillWebOTPMetrics,
               (bool used_web_otp),
+              (override));
+  MOCK_METHOD(void,
+              FillOrPreviewField,
+              (mojom::ActionPersistence action_persistence,
+               mojom::FieldActionType action_type,
+               const FormGlobalId& form_id,
+               const FieldGlobalId& field_id,
+               const std::u16string& value,
+               FillingProduct filling_product,
+               std::optional<FieldType> field_type_used),
               (override));
   MOCK_METHOD(CreditCardAccessManager*,
               GetCreditCardAccessManager,

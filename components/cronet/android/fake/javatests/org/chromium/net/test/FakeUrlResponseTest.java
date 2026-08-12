@@ -16,7 +16,7 @@ import org.junit.runner.RunWith;
 import org.chromium.net.UrlResponseInfo;
 import org.chromium.net.impl.UrlResponseInfoImpl;
 
-import java.io.UnsupportedEncodingException;
+import java.nio.charset.StandardCharsets;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.List;
@@ -82,15 +82,12 @@ public class FakeUrlResponseTest {
     @Test
     @SmallTest
     public void testResponseBodyIsSame() {
-        try {
-            FakeUrlResponse responseWithBodySetAsBytes =
-                    mTestResponse.toBuilder().setResponseBody(TEST_BODY.getBytes("UTF-8")).build();
-            assertThat(mTestResponse.getResponseBody())
-                    .isEqualTo(responseWithBodySetAsBytes.getResponseBody());
-        } catch (UnsupportedEncodingException e) {
-            throw new RuntimeException(
-                    "Exception occurred while encoding response body: " + TEST_BODY);
-        }
+        FakeUrlResponse responseWithBodySetAsBytes =
+                mTestResponse.toBuilder()
+                        .setResponseBody(TEST_BODY.getBytes(StandardCharsets.UTF_8))
+                        .build();
+        assertThat(mTestResponse.getResponseBody())
+                .isEqualTo(responseWithBodySetAsBytes.getResponseBody());
     }
 
     @Test
@@ -167,7 +164,8 @@ public class FakeUrlResponseTest {
                         TEST_WAS_CACHED,
                         TEST_NEGOTIATED_PROTOCOL,
                         TEST_PROXY_SERVER,
-                        0);
+                        0,
+                        /* isProxied= */ false);
         FakeUrlResponse expectedResponse =
                 new FakeUrlResponse.Builder()
                         .setHttpStatusCode(TEST_HTTP_STATUS_CODE)
@@ -197,14 +195,15 @@ public class FakeUrlResponseTest {
         // UnmodifiableList cannot be null.
         UrlResponseInfo info =
                 new UrlResponseInfoImpl(
-                        /* UrlChain */ new ArrayList<>(),
+                        /* urlChain= */ new ArrayList<>(),
                         TEST_HTTP_STATUS_CODE,
                         null,
                         mTestHeaders,
                         TEST_WAS_CACHED,
                         null,
                         null,
-                        0);
+                        0,
+                        /* isProxied= */ false);
 
         FakeUrlResponse constructedResponse = new FakeUrlResponse(info);
 
@@ -236,7 +235,8 @@ public class FakeUrlResponseTest {
                         mTestResponse.getWasCached(),
                         mTestResponse.getNegotiatedProtocol(),
                         mTestResponse.getProxyServer(),
-                        mTestResponse.getResponseBody().length);
+                        mTestResponse.getResponseBody().length,
+                        /* isProxied= */ false);
 
         Map infoMap = info.getAllHeaders();
 

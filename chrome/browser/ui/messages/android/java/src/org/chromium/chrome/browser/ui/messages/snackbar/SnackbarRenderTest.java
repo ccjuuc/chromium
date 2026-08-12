@@ -26,8 +26,6 @@ import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.Features.EnableFeatures;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager.SnackbarController;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
@@ -85,7 +83,13 @@ public class SnackbarRenderTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mParent = mActivity.findViewById(android.R.id.content);
-                    mSnackbarManager = new SnackbarManager(mActivity, mParent, null);
+                    mSnackbarManager =
+                            new SnackbarManager(
+                                    mActivity,
+                                    mParent,
+                                    null,
+                                    null,
+                                    ((BlankUiTestActivity) mActivity).getModalDialogManager());
                     SnackbarManager.setDurationForTesting(10000);
                 });
         CriteriaHelper.pollUiThread(
@@ -97,7 +101,7 @@ public class SnackbarRenderTest {
     public void tearDown() {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mSnackbarManager.dismissAllSnackbars();
+                    mSnackbarManager.destroy();
                 });
         CriteriaHelper.pollUiThread(
                 () -> !mSnackbarManager.isShowing(), "Snackbar should have been dismissed.");
@@ -106,7 +110,6 @@ public class SnackbarRenderTest {
     @Test
     @SmallTest
     @Feature({"RenderTest"})
-    @EnableFeatures(ChromeFeatureList.FLOATING_SNACKBAR)
     public void testFloatingSnackbarTypeAction() throws IOException {
         testFloatingSnackBar(Snackbar.TYPE_ACTION, "floating_snackbar_action");
     }
@@ -114,7 +117,6 @@ public class SnackbarRenderTest {
     @Test
     @SmallTest
     @Feature({"RenderTest"})
-    @EnableFeatures(ChromeFeatureList.FLOATING_SNACKBAR)
     public void testFloatingSnackbarTypeNotification() throws IOException {
         testFloatingSnackBar(Snackbar.TYPE_NOTIFICATION, "floating_snackbar_notification");
     }
@@ -122,7 +124,6 @@ public class SnackbarRenderTest {
     @Test
     @SmallTest
     @Feature({"RenderTest"})
-    @EnableFeatures(ChromeFeatureList.FLOATING_SNACKBAR)
     public void testFloatingSnackbarTypePersistent() throws IOException {
         testFloatingSnackBar(Snackbar.TYPE_PERSISTENT, "floating_snackbar_persistent");
     }

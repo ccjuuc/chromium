@@ -23,6 +23,7 @@
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
+#include "url/gurl.h"
 
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
@@ -54,7 +55,7 @@ void SetListPref(PrefService* prefs,
                  const std::vector<std::string>& list) {
   if (pref_name.empty())
     return;
-  base::Value::List list_value;
+  base::ListValue list_value;
   for (const auto& str : list)
     list_value.Append(str);
   prefs->SetList(pref_name, std::move(list_value));
@@ -84,6 +85,22 @@ NoCopyUrl::NoCopyUrl(const GURL& original) : original_(original) {
   host_and_port_ = base::StrCat({original.GetHost(), port_suffix});
 }
 
+const GURL& NoCopyUrl::original() const {
+  return *original_;
+}
+
+std::string_view NoCopyUrl::host_and_port() const {
+  return host_and_port_;
+}
+
+std::string_view NoCopyUrl::spec() const {
+  return original_->spec();
+}
+
+std::string_view NoCopyUrl::spec_without_port() const {
+  return spec_without_port_;
+}
+
 Rule::Rule(std::string_view original_rule)
     : priority_(original_rule.size()),
       inverted_(base::StartsWith(original_rule, "!")) {}
@@ -101,11 +118,6 @@ RawRuleSet& RawRuleSet::operator=(RawRuleSet&& that) = default;
 RuleSet::RuleSet() = default;
 RuleSet::RuleSet(RuleSet&&) = default;
 RuleSet::~RuleSet() = default;
-
-BrowserSwitcherPrefs::BrowserSwitcherPrefs(Profile* profile)
-    : BrowserSwitcherPrefs(
-          profile->GetPrefs(),
-          profile->GetProfilePolicyConnector()->policy_service()) {}
 
 BrowserSwitcherPrefs::BrowserSwitcherPrefs(
     PrefService* prefs,
@@ -330,7 +342,7 @@ void BrowserSwitcherPrefs::AlternativeBrowserParametersChanged() {
   alt_browser_params_.clear();
   if (!prefs_->IsManagedPreference(prefs::kAlternativeBrowserParameters))
     return;
-  const base::Value::List& params =
+  const base::ListValue& params =
       prefs_->GetList(prefs::kAlternativeBrowserParameters);
   for (const auto& param : params) {
     std::string param_string = param.GetString();
@@ -386,7 +398,7 @@ void BrowserSwitcherPrefs::GreylistChanged() {
   if (!prefs_->IsManagedPreference(prefs::kUrlGreylist))
     return;
 
-  const base::Value::List& url_gray_list = prefs_->GetList(prefs::kUrlGreylist);
+  const base::ListValue& url_gray_list = prefs_->GetList(prefs::kUrlGreylist);
   UMA_HISTOGRAM_COUNTS_100000("BrowserSwitcher.GreylistSize",
                               url_gray_list.size());
 
@@ -421,7 +433,7 @@ void BrowserSwitcherPrefs::ChromeParametersChanged() {
   chrome_params_.clear();
   if (!prefs_->IsManagedPreference(prefs::kChromeParameters))
     return;
-  const base::Value::List& params = prefs_->GetList(prefs::kChromeParameters);
+  const base::ListValue& params = prefs_->GetList(prefs::kChromeParameters);
   for (const auto& param : params) {
     std::string param_string = param.GetString();
     chrome_params_.push_back(param_string);

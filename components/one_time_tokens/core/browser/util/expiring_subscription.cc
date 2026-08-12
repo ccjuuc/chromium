@@ -15,6 +15,8 @@ ExpiringSubscription::ExpiringSubscription(
     base::WeakPtr<ExpiringSubscriptionManagerBase> manager)
     : handle_(std::move(handle)), manager_(std::move(manager)) {}
 
+// This delegates to the assignment operator, which correctly handles the
+// cancellation of any active subscription.
 ExpiringSubscription::ExpiringSubscription(ExpiringSubscription&& other) {
   *this = std::move(other);
 }
@@ -41,6 +43,10 @@ void ExpiringSubscription::SetExpirationTime(base::Time new_expiration) {
   }
 }
 
+base::Time ExpiringSubscription::GetExpirationTime() const {
+  return manager_ ? manager_->GetExpirationTime(handle_) : base::Time();
+}
+
 ExpiringSubscription& ExpiringSubscription::operator=(
     ExpiringSubscription&& other) {
   if (manager_) {
@@ -48,6 +54,8 @@ ExpiringSubscription& ExpiringSubscription::operator=(
   }
   handle_ = std::move(other.handle_);
   manager_ = other.manager_;
+  // Prevent that destructor of other cancels the subscription.
+  other.manager_ = nullptr;
   return *this;
 }
 

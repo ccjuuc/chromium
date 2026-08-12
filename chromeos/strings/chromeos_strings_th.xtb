@@ -44,7 +44,6 @@
 <translation id="1155154308031262006">ป้อนพรอมต์</translation>
 <translation id="115705039208660697">สับปะรด</translation>
 <translation id="1164939766849482256">ภาพพักหน้าจอรุ่งเช้าจนถึงกลางคืน</translation>
-<translation id="1167755866710282443">เปิดเมนูเพื่อปรับแต่งคีย์ ลากเมนูเพื่อย้าย</translation>
 <translation id="1171349345463658120">ทะเลสาบที่เต็มไปด้วยทราย</translation>
 <translation id="1174073918202301297">เพิ่มทางลัดแล้ว</translation>
 <translation id="11743817593307477">ใช้ปุ่มลูกศรเพื่อย้ายตัวควบคุมนี้ไปยังการดำเนินการในเกมที่ต้องการ ใช้ปุ่ม Enter เพื่อวางตัวควบคุม ใช้ปุ่ม Escape เพื่อยกเลิก</translation>
@@ -167,6 +166,7 @@
 <translation id="1621067168122174824">ทดสอบการชาร์จแบตเตอรี่</translation>
 <translation id="1622402072367425417">ลูกโป่งเรืองแสง</translation>
 <translation id="1626590945318984973">แป้นพิมพ์ลัดไม่พร้อมใช้งาน กดแป้นพิมพ์ลัดใหม่โดยไม่ใช้ฟังก์ชันและแป้น<ph name="META_KEY" /></translation>
+<translation id="163774412591892664">ผู้ดูแลระบบปิดใช้อุปกรณ์ของคุณและเข้าถึงตำแหน่งของอุปกรณ์ได้</translation>
 <translation id="1639239467298939599">กำลังโหลด</translation>
 <translation id="1641857168437328880">ตัวป้อนเอกสาร (ด้านเดียว)</translation>
 <translation id="1642396894598555413">จักรยาน</translation>
@@ -272,7 +272,6 @@
 <translation id="200669432486043882">แทนที่ไฟล์</translation>
 <translation id="2006864819935886708">การเชื่อมต่อ</translation>
 <translation id="2008685064673031089">Prime Search</translation>
-<translation id="2011174342667534258">เวอร์ชันของ SDK:</translation>
 <translation id="2016697457005847575">ลองทำตามขั้นตอนการแก้ปัญหา</translation>
 <translation id="202500043506723828">EID</translation>
 <translation id="2045814230297767491">เครื่องใช้บนโต๊ะอาหาร</translation>
@@ -404,6 +403,7 @@
 <translation id="2618015542787108131">เนินทราย</translation>
 <translation id="2619761439309613843">รีเฟรชทุกวัน</translation>
 <translation id="2620436844016719705">ระบบ</translation>
+<translation id="2626848494898563581">เข้าถึงบริการของ Google ไม่ได้</translation>
 <translation id="2637303424821734920">ปิด - หากต้องการแสดงสภาพอากาศในพื้นที่ ให้<ph name="BEGIN_LINK" />เปิดการเข้าถึงตำแหน่งของระบบ<ph name="END_LINK" /></translation>
 <translation id="2638662041295312666">รูปภาพการลงชื่อเข้าใช้</translation>
 <translation id="2640549051766135490">เลือกอัลบั้ม <ph name="TITLE" /> <ph name="DESC" /> อยู่</translation>
@@ -507,7 +507,6 @@
 <translation id="3211671540163313381">D-pad การแมปคีย์</translation>
 <translation id="3217462202230355157">ตรวจสอบว่าไมค์เชื่อมต่ออยู่หรือลองรีสตาร์ท <ph name="DEVICE_TYPE" /></translation>
 <translation id="3226405216343213872">กำลังค้นหาเครื่องสแกน</translation>
-<translation id="3226657629376379887">เมนูการทำงานสำหรับเลย์เอาต์</translation>
 <translation id="3227186760713762082">นำค่า <ph name="CATEGORY_TEXT" /> มาหารด้วย <ph name="CONVERSION_RATE" /></translation>
 <translation id="3242622575335502454">ศิลปะดิจิทัล</translation>
 <translation id="3246869037381808805">ระบบจะนำงานพิมพ์ที่เก่ากว่า 1 วันออก</translation>
@@ -522,7 +521,6 @@
 <translation id="3291996639387199448">ทิศทางของคีย์</translation>
 <translation id="3294437725009624529">ผู้มาเยือน</translation>
 <translation id="3303855915957856445">ไม่พบผลการค้นหา</translation>
-<translation id="3305294846493618482">เพิ่มเติม</translation>
 <translation id="3310640316857623290">เวลาในการตอบสนอง DNS สูงกว่าเกณฑ์ที่ยอมรับได้อย่างมีนัยสำคัญ</translation>
 <translation id="3316495615885967552">ดาวน์โหลดโมเดลการสร้างชื่อและสรุปเสร็จสมบูรณ์</translation>
 <translation id="3321030238473337787">ความเร็วในการเล่น</translation>
@@ -581,6 +579,7 @@
 <translation id="3577473026931028326">เกิดข้อผิดพลาด ลองใหม่</translation>
 <translation id="357889014807611375">Wi-Fi ที่มีการวัดปริมาณอินเทอร์เน็ต</translation>
 <translation id="3583278742022654445">ความแรงสัญญาณไม่ดี ลองขยับไปใกล้ๆ แหล่งสัญญาณ Wi-Fi มากขึ้น</translation>
+<translation id="3586931643579894722">ซ่อนรายละเอียด</translation>
 <translation id="3588034708467091142">ตรวจสอบว่าคุณได้เชื่อมต่ออินเทอร์เน็ตแล้ว และลองอีกครั้ง</translation>
 <translation id="3594280220611906414"><ph name="USER_FRIENDLY_APN_NAME" /> คือชื่อที่เรียกง่ายของ <ph name="APN_NAME" /></translation>
 <translation id="3595596368722241419">แบตเตอรี่เต็ม</translation>
@@ -591,7 +590,7 @@
 <translation id="360565022852130722">เครือข่าย WiFi มีการรักษาความปลอดภัยด้วยโปรโตคอล WEP 802.1x ที่ไม่รัดกุม</translation>
 <translation id="3606583719724308068">เวลาในการตอบสนองไปยังเว็บไซต์ HTTPS สูง</translation>
 <translation id="3614639364827854748">ย้ายเมนูนี้ไปทางซ้าย</translation>
-<translation id="361575905210396100">ขอขอบคุณสำหรับความคิดเห็นของคุณ</translation>
+<translation id="361575905210396100">ขอบคุณที่แสดงความคิดเห็น</translation>
 <translation id="3621072146987826699">ช้าง</translation>
 <translation id="3628462041319107639">กำลังดาวน์โหลดโมเดลการถอดเสียงเป็นคำ…</translation>
 <translation id="3632040286124154621">คำแนะนำถูกใจ</translation>
@@ -701,7 +700,6 @@
 <translation id="4126551873361000548">กรอกลับ 10 วินาที</translation>
 <translation id="4128271910628504223">ป้อนพรอมต์ เช่น "วาดป่าที่ปกคลุมด้วยหมอก"</translation>
 <translation id="4130035430755296270">ลากเมาส์ไปเรื่อยๆ เพื่อดูตัวเลือกเลย์เอาต์เพิ่มเติม</translation>
-<translation id="4130750466177569591">ฉันยอมรับ</translation>
 <translation id="4131410914670010031">ขาวดำ</translation>
 <translation id="4137700675046373159">ในวันเสาร์</translation>
 <translation id="4139326893730851150">การอัปเดตเฟิร์มแวร์</translation>
@@ -727,6 +725,7 @@
 <translation id="4212169537710712814">ดาวน์โหลดโมเดลการถอดเสียงเป็นคำของภาษา<ph name="LANGUAGE_NAME" />เสร็จสมบูรณ์แล้ว</translation>
 <translation id="42126664696688958">ส่งออก</translation>
 <translation id="4213104098953699324">แป้นพิมพ์ USB</translation>
+<translation id="4217571870635786043">การพิมพ์ตามคำบอก</translation>
 <translation id="4227825898293920515">รหัสผ่านจะหมดอายุในอีก <ph name="TIME" /></translation>
 <translation id="4238516577297848345">ไม่มีงานที่กำลังพิมพ์</translation>
 <translation id="4239069858505860023">GPRS</translation>
@@ -1049,7 +1048,6 @@
 <translation id="5606865426897221650">Tab</translation>
 <translation id="5612205513582918357">เครื่องมือสำหรับชั้นเรียนกำลังแชร์หน้าจอของคุณกับ <ph name="RECEIVER_NAME" /></translation>
 <translation id="5613201299517339763">คุณออกจากระบบแล้ว</translation>
-<translation id="5620281292257375798">ภายในเท่านั้น</translation>
 <translation id="5628106863521633649">ภาษาที่พร้อมให้บริการ</translation>
 <translation id="5630438231335788050">สถาบันเบาเฮาส์</translation>
 <translation id="5631759159893697722">บทคัดย่อ</translation>
@@ -1165,6 +1163,7 @@
 <translation id="6136285399872347291">ลบถอยหลัง</translation>
 <translation id="6137614725462089991">ไซเบอร์พังก์</translation>
 <translation id="6137767437444130246">ใบรับรองของผู้ใช้</translation>
+<translation id="6140948187512243695">แสดงรายละเอียด</translation>
 <translation id="6146993107019042706">ป้อนรหัสผ่านใหม่เพื่อเปลี่ยนรหัสผ่านให้เสร็จ</translation>
 <translation id="6147514244879357420">PNG</translation>
 <translation id="6149015141270619212">เชื่อมต่ออินเทอร์เน็ตไม่ได้</translation>
@@ -1185,6 +1184,7 @@
 <translation id="6234024205316847054">แสดงโครงร่าง</translation>
 <translation id="6243280677745499710">วอลเปเปอร์ปัจจุบัน</translation>
 <translation id="6250316632541035980">เบคอนและไข่</translation>
+<translation id="6262413940100821797">ผู้รับที่ไม่รู้จัก</translation>
 <translation id="6265268291107409527">คีย์ที่เลือกคือ <ph name="KEYS" /> <ph name="ASSIGN_INSTRUCTION" /></translation>
 <translation id="6275224645089671689">ลูกศรขวา</translation>
 <translation id="6278428485366576908">ธีม</translation>
@@ -1410,11 +1410,8 @@
 <translation id="7177485034254901881"><ph name="DEVICE_TYPE" /> นี้ได้รับการจัดการโดย <ph name="MANAGER" /> ผู้ดูแลระบบอาจกำหนดค่าอุปกรณ์จากระยะไกล</translation>
 <translation id="7180611975245234373">รีเฟรช</translation>
 <translation id="7180865173735832675">กำหนดค่า</translation>
-<translation id="7182063559013288142">ฮอตสปอตด่วน</translation>
-<translation id="7184043045742675738">คลิกแป้นใดก็ได้เพื่อปรับแต่งปุ่ม เปลี่ยนตำแหน่งแป้นด้วยเมาส์หรือแป้นลูกศร</translation>
 <translation id="7187669805838282391">ในวันพุธ</translation>
 <translation id="7205318498545665455">เลือกไมค์</translation>
-<translation id="7206979415662233817">ข้อกำหนดในการให้บริการ</translation>
 <translation id="7210635925306941239">ฟ้าอมเขียว</translation>
 <translation id="7212547870105584639">จัดการการตั้งค่า APN ของเครือข่าย APN จะเริ่มการเชื่อมต่อระหว่างเครือข่ายมือถือกับอินเทอร์เน็ต <ph name="BEGIN_LINK_LEARN_MORE" />ดูข้อมูลเพิ่มเติม<ph name="END_LINK_LEARN_MORE" /></translation>
 <translation id="7212734716605298123">การอัปเดตเฟิร์มแวร์สำหรับอุปกรณ์ภายนอก</translation>
@@ -1445,11 +1442,6 @@
 <translation id="7319430975418800333">A3</translation>
 <translation id="7321055305895875150">เขียวและน้ำเงินอมเขียว</translation>
 <translation id="7328475450575141167">ปักษาสวรรค์</translation>
-<translation id="7331297744262591636">คุณต้องมีอายุไม่ต่ำกว่า 18 ปีและยอมรับว่าการใช้วอลเปเปอร์ AI ของคุณอยู่ภายใต้<ph name="GOOGLE_TERMS_OF_SERVICE_LINK" />ข้อกำหนดในการให้บริการของ Google<ph name="END_LINK_GOOGLE_TERMS_OF_SERVICE" /> และ<ph name="BEGIN_LINK_GEN_AI_TERMS_OF_SERVICE" />ข้อกำหนดในการให้บริการเพิ่มเติมของ Generative AI<ph name="END_LINK_GEN_AI_TERMS_OF_SERVICE" />
-          <ph name="LINE_BREAK" />
-          <ph name="LINE_BREAK" />
-          คุณสามารถสร้างวอลเปเปอร์ด้วย AI สำหรับการใช้งานส่วนบุคคลและไม่ใช่เชิงพาณิชย์เท่านั้น เมื่อคุณรับความช่วยเหลือเกี่ยวกับวอลเปเปอร์ ระบบจะส่งข้อความไปยังเซิร์ฟเวอร์ AI ของ Google เพื่อสร้างคำแนะนำเกี่ยวกับวอลเปเปอร์ โดยอยู่ภายใต้<ph name="BEGIN_LINK_GOOGLE_PRIVACY_POLICY" />นโยบายความเป็นส่วนตัวของ Google<ph name="END_LINK_GOOGLE_PRIVACY_POLICY" /> <ph name="BEGIN_LINK_LEARN_MORE" />ดูข้อมูลเพิ่มเติม<ph name="END_LINK_LEARN_MORE" /></translation>
-<translation id="7343581795491695942"><ph name="QUERY_TEXT" /> <ph name="RESULT_TEXT" /> กดแป้นค้นหากับแป้นเว้นวรรคเพื่อดูผลการค้นหาใน Google Search</translation>
 <translation id="7343649194310845056">อุปกรณ์เครือข่าย</translation>
 <translation id="7344788170842919262">เอิร์ธโทน</translation>
 <translation id="7346768383111016081">วางตัวควบคุมสำหรับการดำเนินการในเกมเพื่อเล่นด้วยแป้นพิมพ์</translation>
@@ -1506,7 +1498,6 @@
 <translation id="7590883480672980941">การตั้งค่าการป้อนข้อมูล</translation>
 <translation id="7595982850646262331">เหลือ <ph name="TIME_VALUE" /></translation>
 <translation id="7600430297804876776">ผู้ดูแลระบบ <ph name="MANAGER" /> ได้กำหนดเวลาที่จะใช้ <ph name="DEVICE_TYPE" /> เครื่องนี้ได้</translation>
-<translation id="7613724632293948900">เปลี่ยนตำแหน่งด้วยเมาส์หรือแป้นลูกศร</translation>
 <translation id="7618216277886673749">เลือก <ph name="LANGUAGE_NAME" /></translation>
 <translation id="7618774594543487847">ปานกลาง</translation>
 <translation id="7620771111601174153">ดูข้อมูลเพิ่มเติมในศูนย์ช่วยเหลือ</translation>
@@ -1640,6 +1631,7 @@
 <translation id="819278132617411009">ใช้ AI ของ Google เพื่อทำงานอย่างมีประสิทธิภาพมากขึ้น</translation>
 <translation id="8200772114523450471">ทำต่อ</translation>
 <translation id="8206859287963243715">โทรศัพท์มือถือ</translation>
+<translation id="8208043093301544621">หน้าแรก</translation>
 <translation id="8208861521865154048">สิทธิประโยชน์</translation>
 <translation id="8226628635270268143">เลือกรูปภาพและอัลบั้มที่ชื่นชอบ</translation>
 <translation id="8227119283605456246">แนบไฟล์</translation>
@@ -1686,6 +1678,7 @@
 <translation id="8420955526972171689">ทำการทดสอบและแก้ปัญหาเกี่ยวกับฮาร์ดแวร์</translation>
 <translation id="8422748173858722634">IMEI</translation>
 <translation id="8424039430705546751">ลง</translation>
+<translation id="8427213022735114808">การพิมพ์ตามคำบอกจะส่งเสียงของคุณไปยัง Google เพื่อให้พิมพ์ด้วยเสียงในช่องข้อความต่างๆ</translation>
 <translation id="8428213095426709021">การตั้งค่า</translation>
 <translation id="8431300646573772016">มีอะไรใหม่ใน Chrome OS</translation>
 <translation id="8433186206711564395">การตั้งค่าเครือข่าย</translation>
@@ -1724,6 +1717,7 @@
 <translation id="8584654835905316966">ต้องรีสตาร์ทเพื่อติดตั้งเฟิร์มแวร์สำหรับ <ph name="DEVICE_NAME" /> เป็นเวอร์ชัน <ph name="VERSION" /> ให้เสร็จสมบูรณ์ คอมพิวเตอร์อาจดูเหมือนรีบูตหลายครั้ง ลักษณะการทำงานนี้เป็นสิ่งที่คาดไว้อยู่แล้ว</translation>
 <translation id="8593058461203131755">หยุดสื่อชั่วคราว</translation>
 <translation id="8620617069779373398">สถานะการโรมมิ่ง</translation>
+<translation id="8624524972189162859">ผู้ดูแลระบบ <ph name="DOMAIN_NAME" /> ปิดใช้อุปกรณ์ของคุณและเข้าถึงตำแหน่งของอุปกรณ์ได้</translation>
 <translation id="8626489604350149811">การดำเนินการเพิ่มเติมสำหรับ <ph name="APN_NAME" /></translation>
 <translation id="86356131183441916">ม่วงอ่อน</translation>
 <translation id="8647595191512746911">การถอดเสียงเป็นคำ</translation>
@@ -1835,10 +1829,8 @@
 <translation id="9073281213608662541">PAP</translation>
 <translation id="9074739597929991885">บลูทูธ</translation>
 <translation id="9082718469794970195">ใช้วิดีโอนี้</translation>
-<translation id="9087578468327036362">โปรดรายงานการค้นหานี้</translation>
 <translation id="9088306295921699330">การใช้งานปัจจุบัน</translation>
 <translation id="9088994563996376283">ย่อความ</translation>
-<translation id="9095775724867566971">Pluginvm</translation>
 <translation id="909856219855259344">ข้อมูลเพิ่มเติมเกี่ยวกับวันที่รีเซ็ต</translation>
 <translation id="9100765901046053179">การตั้งค่าขั้นสูง</translation>
 <translation id="910415269708673980">รีเฟรชตั๋วสำหรับ <ph name="PRINCIPAL_NAME" /></translation>
@@ -1868,7 +1860,6 @@
 <translation id="921080052717160800">ตั้งรูปภาพเป็นพื้นหลังของกล้องแล้ว</translation>
 <translation id="9211490828691860325">เดสก์ทั้งหมด</translation>
 <translation id="9218016617214286986">แสดง APN ที่รู้จัก</translation>
-<translation id="932327136139879170">บ้าน</translation>
 <translation id="939519157834106403">SSID</translation>
 <translation id="945522503751344254">ส่งความคิดเห็น</translation>
 <translation id="950520315903467048">ไม่มีคีย์สำหรับ <ph name="DIRECTION" /> <ph name="ASSIGN_INSTRUCTION" /></translation>

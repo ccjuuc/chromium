@@ -17,9 +17,7 @@
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/screen_sharing_util.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/infobars/content/content_infobar_manager.h"
-#include "components/vector_icons/vector_icons.h"
 #include "extensions/common/constants.h"
 #include "media/capture/capture_switches.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -66,13 +64,11 @@ TabSharingInfoBar::TabSharingInfoBar(
       CreateStatusMessageView(shared_tab_id, capturer_id, shared_tab_name,
                               capturer_name, role, capture_type));
 
-  if (base::FeatureList::IsEnabled(features::kInfobarRefresh)) {
-    status_message_view_->SetProperty(
-        views::kFlexBehaviorKey,
-        views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToZero,
-                                 views::MaximumFlexSizeRule::kPreferred)
-            .WithWeight(1));
-  }
+  status_message_view_->SetProperty(
+      views::kFlexBehaviorKey,
+      views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToZero,
+                               views::MaximumFlexSizeRule::kPreferred)
+          .WithWeight(1));
 
   const int buttons = delegate_ptr->GetButtons();
   const auto create_button =
@@ -87,19 +83,10 @@ TabSharingInfoBar::TabSharingInfoBar(
                 delegate_ptr->GetButtonLabel(type), button_context,
                 use_text_color_for_icon));
 
-        if (base::FeatureList::IsEnabled(features::kInfobarRefresh)) {
-          button->SetCustomPadding(kRefreshButtonInsets);
+        button->SetCustomPadding(kRefreshButtonInsets);
 
-          button->SetProperty(views::kCrossAxisAlignmentKey,
-                              views::LayoutAlignment::kCenter);
-
-        } else {
-          button->SetProperty(
-              views::kMarginsKey,
-              gfx::Insets::VH(ChromeLayoutProvider::Get()->GetDistanceMetric(
-                                  DISTANCE_TOAST_CONTROL_VERTICAL),
-                              0));
-        }
+        button->SetProperty(views::kCrossAxisAlignmentKey,
+                            views::LayoutAlignment::kCenter);
         const bool is_default_button =
             type == buttons || type == TabSharingInfoBarDelegate::kStop;
         button->SetStyle(is_default_button ? ui::ButtonStyle::kProminent
@@ -114,6 +101,8 @@ TabSharingInfoBar::TabSharingInfoBar(
   if (buttons & TabSharingInfoBarDelegate::kStop) {
     stop_button_ = create_button(TabSharingInfoBarDelegate::kStop,
                                  &TabSharingInfoBar::StopButtonPressed);
+    stop_button_->SetProperty(views::kMarginsKey,
+                              gfx::Insets::TLBR(0, 12, 0, 0));
   }
 
   if (buttons & TabSharingInfoBarDelegate::kShareThisTabInstead) {
@@ -121,19 +110,10 @@ TabSharingInfoBar::TabSharingInfoBar(
         create_button(TabSharingInfoBarDelegate::kShareThisTabInstead,
                       &TabSharingInfoBar::ShareThisTabInsteadButtonPressed);
 
-    if (base::FeatureList::IsEnabled(features::kInfobarRefresh)) {
-      bool has_stop_button = (buttons & TabSharingInfoBarDelegate::kStop);
-      int left_margin = has_stop_button ? 8 : 0;
-      share_this_tab_instead_button_->SetProperty(
-          views::kMarginsKey, gfx::Insets::TLBR(0, left_margin, 0, 0));
-    }
-  }
-
-  if (buttons & TabSharingInfoBarDelegate::kQuickNav &&
-      !base::FeatureList::IsEnabled(features::kTabCaptureInfobarLinks)) {
-    quick_nav_button_ =
-        create_button(TabSharingInfoBarDelegate::kQuickNav,
-                      &TabSharingInfoBar::QuickNavButtonPressed);
+    bool has_stop_button = (buttons & TabSharingInfoBarDelegate::kStop);
+    int left_margin = has_stop_button ? 8 : 0;
+    share_this_tab_instead_button_->SetProperty(
+        views::kMarginsKey, gfx::Insets::TLBR(0, left_margin, 0, 0));
   }
 
   if (buttons & TabSharingInfoBarDelegate::kCapturedSurfaceControlIndicator) {
@@ -143,33 +123,70 @@ TabSharingInfoBar::TabSharingInfoBar(
         CONTEXT_OMNIBOX_PRIMARY);
     csc_indicator_button_->SetStyle(ui::ButtonStyle::kDefault);
     csc_indicator_button_->SetCornerRadius(
-        GetLayoutConstant(TOOLBAR_CORNER_RADIUS));
+        GetLayoutConstant(LayoutConstant::kToolbarCornerRadius));
     csc_indicator_button_->SetCustomPadding(
         kCapturedSurfaceControlIndicatorButtonInsets);
     csc_indicator_button_->SetTextColor(
         views::Button::ButtonState::STATE_NORMAL, ui::kColorSysOnSurface);
 
-    if (base::FeatureList::IsEnabled(features::kInfobarRefresh)) {
-      csc_indicator_button_->SetProperty(views::kCrossAxisAlignmentKey,
-                                         views::LayoutAlignment::kCenter);
-    }
+    csc_indicator_button_->SetProperty(views::kMarginsKey,
+                                       gfx::Insets::TLBR(0, 12, 0, 0));
+    csc_indicator_button_->SetProperty(views::kCrossAxisAlignmentKey,
+                                       views::LayoutAlignment::kCenter);
   }
 
   // TODO(crbug.com/378107817): It seems like link_ isn't always needed, but
   // it's added regardless. See about only adding when necessary.
   link_ = AddContentChildView(CreateLink(delegate_ptr->GetLinkText()));
+
+  // With FlexLayout, the order of buttons is determined by the order they
+  // are added as children. To ensure the button order matches the platform
+  // style , we may need to re-order the buttons in the content view.
+  std::vector<views::View*> order_of_buttons;
+  if (stop_button_) {
+    order_of_buttons.push_back(stop_button_);
+  }
+  if (share_this_tab_instead_button_) {
+    order_of_buttons.push_back(share_this_tab_instead_button_);
+  }
+  if (csc_indicator_button_) {
+    order_of_buttons.push_back(csc_indicator_button_);
+  }
+
+  if (order_of_buttons.empty()) {
+  } else if constexpr (!views::PlatformStyle::kIsOkButtonLeading) {
+    std::ranges::reverse(order_of_buttons);
+  }
+
+  if (!order_of_buttons.empty()) {
+    views::View* first_button_in_layout = nullptr;
+    if (stop_button_) {
+      first_button_in_layout = stop_button_;
+    } else if (share_this_tab_instead_button_) {
+      first_button_in_layout = share_this_tab_instead_button_;
+    } else if (csc_indicator_button_) {
+      first_button_in_layout = csc_indicator_button_;
+    }
+
+    if (first_button_in_layout) {
+      views::View* button_parent = first_button_in_layout->parent();
+      const auto& children = button_parent->children();
+      auto it =
+          std::find(children.begin(), children.end(), first_button_in_layout);
+      if (it != children.end()) {
+        int first_button_index = std::distance(children.begin(), it);
+        for (size_t i = 0; i < order_of_buttons.size(); ++i) {
+          button_parent->ReorderChildView(order_of_buttons[i],
+                                          first_button_index + i);
+        }
+      }
+    }
+  }
 }
 
 TabSharingInfoBar::~TabSharingInfoBar() = default;
 
 void TabSharingInfoBar::Layout(PassKey) {
-  // If Refresh is enabled, InfoBarView uses a FlexLayout that handles centering
-  // automatically.
-  if (base::FeatureList::IsEnabled(features::kInfobarRefresh)) {
-    LayoutSuperclass<InfoBarView>(this);
-    return;
-  }
-
   LayoutSuperclass<InfoBarView>(this);
 
   if (stop_button_) {
@@ -180,57 +197,9 @@ void TabSharingInfoBar::Layout(PassKey) {
     share_this_tab_instead_button_->SizeToPreferredSize();
   }
 
-  if (quick_nav_button_) {
-    quick_nav_button_->SizeToPreferredSize();
-  }
-
   if (csc_indicator_button_) {
     csc_indicator_button_->SizeToPreferredSize();
   }
-
-  int x = GetStartX();
-  Views views;
-  views.push_back(status_message_view_.get());
-  views.push_back(link_.get());
-  AssignWidths(&views, std::max(0, GetEndX() - x - NonLabelWidth()));
-
-  ChromeLayoutProvider* layout_provider = ChromeLayoutProvider::Get();
-
-  status_message_view_->SetPosition(
-      gfx::Point(x, OffsetY(status_message_view_)));
-  x = status_message_view_->bounds().right() +
-      layout_provider->GetDistanceMetric(
-          DISTANCE_INFOBAR_HORIZONTAL_ICON_LABEL_PADDING);
-
-  // Add buttons into a vector to be displayed in an ordered row.
-  // Depending on the PlatformStyle, reverse the vector so the stop button will
-  // be on the correct leading style.
-  std::vector<views::MdTextButton*> order_of_buttons;
-  if (stop_button_) {
-    order_of_buttons.push_back(stop_button_);
-  }
-  if (share_this_tab_instead_button_) {
-    order_of_buttons.push_back(share_this_tab_instead_button_);
-  }
-  if (quick_nav_button_) {
-    order_of_buttons.push_back(quick_nav_button_);
-  }
-  if (csc_indicator_button_) {
-    order_of_buttons.push_back(csc_indicator_button_);
-  }
-
-  if constexpr (!views::PlatformStyle::kIsOkButtonLeading) {
-    std::ranges::reverse(order_of_buttons);
-  }
-
-  for (views::MdTextButton* button : order_of_buttons) {
-    button->SetPosition(gfx::Point(x, OffsetY(button)));
-    x = button->bounds().right() +
-        layout_provider->GetDistanceMetric(
-            views::DISTANCE_RELATED_BUTTON_HORIZONTAL);
-  }
-
-  link_->SetPosition(gfx::Point(GetEndX() - link_->width(), OffsetY(link_)));
 }
 
 void TabSharingInfoBar::StopButtonPressed() {
@@ -257,13 +226,6 @@ void TabSharingInfoBar::ShareThisTabInsteadButtonPressed() {
   GetDelegate()->ShareThisTabInstead();
 }
 
-void TabSharingInfoBar::QuickNavButtonPressed() {
-  if (!owner()) {
-    return;  // We're closing; don't call anything, it might access the owner.
-  }
-  GetDelegate()->QuickNav();
-}
-
 void TabSharingInfoBar::OnCapturedSurfaceControlActivityIndicatorPressed() {
   if (!owner()) {
     return;  // We're closing; don't call anything, it might access the owner.
@@ -286,8 +248,7 @@ std::unique_ptr<views::View> TabSharingInfoBar::CreateStatusMessageView(
       capturer_name,
       TabSharingStatusMessageView::EndpointInfo::TargetType::kCapturingTab,
       capturer_id);
-  if (base::FeatureList::IsEnabled(features::kTabCaptureInfobarLinks) &&
-      GetOriginFromId(capturer_id).scheme() != extensions::kExtensionScheme) {
+  if (GetOriginFromId(capturer_id).scheme() != extensions::kExtensionScheme) {
     return TabSharingStatusMessageView::Create(capturer_id, shared_tab_info,
                                                capturer_info, capturer_name,
                                                role, capture_type, uma_logger_);
@@ -327,9 +288,9 @@ int TabSharingInfoBar::NonLabelWidth() const {
   const int button_spacing = layout_provider->GetDistanceMetric(
       views::DISTANCE_RELATED_BUTTON_HORIZONTAL);
 
-  const int button_count =
-      (stop_button_ ? 1 : 0) + (share_this_tab_instead_button_ ? 1 : 0) +
-      (quick_nav_button_ ? 1 : 0) + (csc_indicator_button_ ? 1 : 0);
+  const int button_count = (stop_button_ ? 1 : 0) +
+                           (share_this_tab_instead_button_ ? 1 : 0) +
+                           (csc_indicator_button_ ? 1 : 0);
 
   int width = (button_count == 0) ? 0 : label_spacing;
 
@@ -339,7 +300,6 @@ int TabSharingInfoBar::NonLabelWidth() const {
   width += share_this_tab_instead_button_
                ? share_this_tab_instead_button_->width()
                : 0;
-  width += quick_nav_button_ ? quick_nav_button_->width() : 0;
   width += csc_indicator_button_ ? csc_indicator_button_->width() : 0;
 
   return width + ((width && !link_->GetText().empty()) ? label_spacing : 0);

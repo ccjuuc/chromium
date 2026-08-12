@@ -13,6 +13,7 @@
 #include "base/barrier_closure.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/types/strong_alias.h"
 #include "components/affiliations/core/browser/affiliation_service.h"
 #include "components/password_manager/core/browser/password_form.h"
 
@@ -27,7 +28,7 @@ using AffiliatedRealms =
 using GroupedRealms =
     base::StrongAlias<class GroupedRealmsTag, std::vector<Facet>>;
 
-bool IsValidAndroidCredential(const PasswordForm& form) {
+bool IsValidAndroidCredential(const StoredCredential& form) {
   return form.scheme == PasswordForm::Scheme::kHtml &&
          affiliations::IsValidAndroidFacetURI(form.signon_realm);
 }
@@ -133,9 +134,9 @@ void AffiliatedMatchHelper::GetAffiliatedAndGroupedRealms(
 }
 
 void AffiliatedMatchHelper::InjectAffiliationAndBrandingInformation(
-    std::vector<PasswordForm> forms,
+    LoginsResult forms,
     base::OnceCallback<void(LoginsResultOrError)> result_callback) {
-  std::vector<PasswordForm*> android_credentials;
+  std::vector<StoredCredential*> android_credentials;
   for (auto& form : forms) {
     if (IsValidAndroidCredential(form)) {
       android_credentials.push_back(&form);
@@ -189,7 +190,7 @@ bool AffiliatedMatchHelper::IsValidWebCredential(
 }
 
 void AffiliatedMatchHelper::CompleteInjectAffiliationAndBrandingInformation(
-    PasswordForm* form,
+    StoredCredential* form,
     base::OnceClosure barrier_closure,
     const affiliations::AffiliatedFacets& results,
     bool success) {

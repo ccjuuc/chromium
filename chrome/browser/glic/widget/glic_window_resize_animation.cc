@@ -15,7 +15,6 @@
 #include "ui/views/widget/widget_delegate.h"
 
 #if BUILDFLAG(IS_WIN)
-#include "chrome/common/chrome_features.h"
 #include "ui/base/win/hwnd_metrics.h"
 #include "ui/views/win/hwnd_util.h"
 #endif
@@ -69,7 +68,8 @@ GlicWindowResizeAnimation::~GlicWindowResizeAnimation() {
 }
 
 void GlicWindowResizeAnimation::AnimateToState(double state) {
-  if (!widget_) {
+  if (!widget_ || widget_->is_dragging()) {
+    // Don't change bounds while the user is actively dragging the widget.
     return;
   }
   gfx::Rect bounds_to_animate = gfx::Tween::RectValueBetween(

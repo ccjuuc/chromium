@@ -1,4 +1,7 @@
 include_rules = [
+  "+ash/login/resources/grit",
+  "+ash/resources/vector_icons",
+  "+ash/strings",
   "+ash/style",
   "+ash/system",
 

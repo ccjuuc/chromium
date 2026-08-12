@@ -18,6 +18,7 @@ android_library("java") {
     "java/src/org/chromium/chrome/browser/download/home/empty/EmptyProperties.java",
     "java/src/org/chromium/chrome/browser/download/home/empty/EmptyView.java",
     "java/src/org/chromium/chrome/browser/download/home/empty/EmptyViewBinder.java",
+    "java/src/org/chromium/chrome/browser/download/home/filter/BlockedSensitiveOfflineItemFilter.java",
     "java/src/org/chromium/chrome/browser/download/home/filter/DangerousOfflineItemFilter.java",
     "java/src/org/chromium/chrome/browser/download/home/filter/DeleteUndoOfflineItemFilter.java",
     "java/src/org/chromium/chrome/browser/download/home/filter/FilterChipsProvider.java",
@@ -54,8 +55,10 @@ android_library("java") {
     "java/src/org/chromium/chrome/browser/download/home/list/holder/CardDividerTopViewHolder.java",
     "java/src/org/chromium/chrome/browser/download/home/list/holder/CardFooterViewHolder.java",
     "java/src/org/chromium/chrome/browser/download/home/list/holder/CardHeaderViewHolder.java",
+    "java/src/org/chromium/chrome/browser/download/home/list/holder/CompactViewImageViewHolder.java",
     "java/src/org/chromium/chrome/browser/download/home/list/holder/CustomViewHolder.java",
     "java/src/org/chromium/chrome/browser/download/home/list/holder/GenericViewHolder.java",
+    "java/src/org/chromium/chrome/browser/download/home/list/holder/ImageFullWidthViewHolder.java",
     "java/src/org/chromium/chrome/browser/download/home/list/holder/ImageViewHolder.java",
     "java/src/org/chromium/chrome/browser/download/home/list/holder/InProgressGenericViewHolder.java",
     "java/src/org/chromium/chrome/browser/download/home/list/holder/InProgressImageViewHolder.java",
@@ -166,12 +169,12 @@ android_resources("java_resources") {
     "java/res/drawable/circular_progress_bar_pause_tiny.xml",
     "java/res/drawable/circular_progress_bar_resume_tiny.xml",
     "java/res/drawable/circular_progress_bar_retry_tiny.xml",
+    "java/res/drawable/circular_progress_bar_scanning_tiny.xml",
     "java/res/drawable/circular_progress_bar_selector_large.xml",
     "java/res/drawable/circular_progress_bar_selector_small.xml",
     "java/res/drawable/download_interstitial_icon.xml",
     "java/res/drawable/download_manager_image_background.xml",
     "java/res/drawable/download_manager_item_background.xml",
-    "java/res/drawable/download_search_bar_background.xml",
     "java/res/drawable/downloading_fill_animation_24dp.xml",
     "java/res/drawable/downloads_empty_state_illustration.xml",
     "java/res/drawable/group_card_footer_curved_border.xml",
@@ -187,7 +190,9 @@ android_resources("java_resources") {
     "java/res/layout/download_manager_card_divider_top.xml",
     "java/res/layout/download_manager_card_footer.xml",
     "java/res/layout/download_manager_card_header.xml",
+    "java/res/layout/download_manager_compact_view_image_item.xml",
     "java/res/layout/download_manager_generic_item.xml",
+    "java/res/layout/download_manager_image_full_width_item.xml",
     "java/res/layout/download_manager_image_item.xml",
     "java/res/layout/download_manager_in_progress_image_item.xml",
     "java/res/layout/download_manager_in_progress_item.xml",
@@ -358,7 +363,10 @@ robolectric_library("junit") {
 }
 
 source_set("android") {
-  visibility = [ "//chrome/browser" ]
+  visibility = [
+    "//chrome/browser",
+    "//chrome/browser/android",
+  ]
 
   sources = [ "rename_utils.cc" ]
 

@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ui/views/extensions/extensions_menu_site_permissions_page_view.h"
 
-#include "base/feature_list.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_coordinator.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_delegate_desktop.h"
@@ -85,7 +84,8 @@ ExtensionsSitePermissionsPageViewUnitTest::
 
 void ExtensionsSitePermissionsPageViewUnitTest::ShowSitePermissionsPage(
     extensions::ExtensionId extension_id) {
-  menu_coordinator()->Show(extensions_button(), extensions_container());
+  menu_coordinator()->Show(views::BubbleAnchor(extensions_button()),
+                           extensions_container());
   menu_coordinator()->GetDelegateForTesting()->OpenSitePermissionsPage(
       extension_id);
 }
@@ -116,7 +116,10 @@ void ExtensionsSitePermissionsPageViewUnitTest::NavigateAndCommit(
 }
 
 void ExtensionsSitePermissionsPageViewUnitTest::LayoutMenuIfNecessary() {
-  menu_coordinator()->GetExtensionsMenuWidget()->LayoutRootViewIfNecessary();
+  if (views::Widget* menu_widget =
+          menu_coordinator()->GetExtensionsMenuWidget()) {
+    menu_widget->LayoutRootViewIfNecessary();
+  }
 }
 
 ExtensionsMenuMainPageView*
@@ -161,6 +164,10 @@ TEST_F(ExtensionsSitePermissionsPageViewUnitTest,
   // extension A.
   auto extensionB =
       InstallExtensionWithHostPermissions("B Extension", {"<all_urls>"});
+  // Add another extension to the menu, so that the menu doesn't close when
+  // both extension A and B are removed.
+  auto extensionC =
+      InstallExtensionWithHostPermissions("C Extension", {"<all_urls>"});
   EXPECT_TRUE(IsSitePermissionsPageOpened(extensionA->id()));
 
   // Removing extension B doesn't affect the opened site permissions page for
@@ -173,6 +180,23 @@ TEST_F(ExtensionsSitePermissionsPageViewUnitTest,
   UninstallExtension(extensionA->id());
   EXPECT_FALSE(IsSitePermissionsPageOpened(extensionA->id()));
   EXPECT_TRUE(IsMainPageOpened());
+}
+
+// Tests that removing the last extension while its site permissions page is
+// open closes the menu bubble.
+TEST_F(ExtensionsSitePermissionsPageViewUnitTest,
+       RemoveLastExtensionWhenSitePermissionsPageIsOpen) {
+  auto extension =
+      InstallExtensionWithHostPermissions("Extension", {"<all_urls>"});
+
+  NavigateAndCommit("http://www.url.com");
+  ShowSitePermissionsPage(extension->id());
+  EXPECT_TRUE(IsSitePermissionsPageOpened(extension->id()));
+
+  UninstallExtension(extension->id());
+  EXPECT_FALSE(IsSitePermissionsPageOpened(extension->id()));
+  EXPECT_FALSE(IsMainPageOpened());
+  EXPECT_FALSE(menu_coordinator()->IsShowing());
 }
 
 // Tests that the extension name is elided if it is too long.
@@ -197,6 +221,9 @@ TEST_F(ExtensionsSitePermissionsPageViewUnitTest, LongExtensionNameIsElided) {
 TEST_F(ExtensionsSitePermissionsPageViewUnitTest, DisableAndEnableExtension) {
   auto extension =
       InstallExtensionWithHostPermissions("Test Extension", {"<all_urls>"});
+  // Add another extension to the menu, so that the menu doesn't close when the
+  // only extension is disabled.
+  InstallExtensionWithHostPermissions("Other Extension", {"<all_urls>"});
 
   NavigateAndCommit("http://www.url.com");
   ShowSitePermissionsPage(extension->id());
@@ -213,6 +240,10 @@ TEST_F(ExtensionsSitePermissionsPageViewUnitTest, DisableAndEnableExtension) {
 // Tests that menu navigates back to the main page when an extension, whose site
 // permissions page is open, is reloaded.
 TEST_F(ExtensionsSitePermissionsPageViewUnitTest, ReloadExtension) {
+  // Add another extension to the menu, so that the menu doesn't close when the
+  // only extension is reloaded.
+  InstallExtensionWithHostPermissions("Other Extension", {"<all_urls>"});
+
   // The extension must have a manifest to be reloaded.
   extensions::TestExtensionDir extension_directory;
   constexpr char kManifest[] = R"({
@@ -315,7 +346,7 @@ TEST_F(ExtensionsSitePermissionsPageViewUnitTest,
   // Directly change the show access requests pref for extension, since it can
   // be changed when menu is open, and verify toggle is updated and extension is
   // not requesting access in the toolbar.
-  SitePermissionsHelper(browser()->profile())
+  SitePermissionsHelper(browser()->GetProfile())
       .SetShowAccessRequestsInToolbar(extension->id(), false);
   EXPECT_FALSE(
       site_permissions_page()->GetShowRequestsToggleForTesting()->GetIsOn());
@@ -351,7 +382,7 @@ TEST_F(ExtensionsSitePermissionsPageViewUnitTest, SiteAccessUpdated) {
   EXPECT_TRUE(on_all_sites_button->GetChecked());
 
   extensions::PermissionsManagerWaiter waiter(
-      PermissionsManager::Get(browser()->profile()));
+      PermissionsManager::Get(browser()->GetProfile()));
   ClickButton(on_click_button);
   waiter.WaitForExtensionPermissionsUpdate();
 
@@ -518,13 +549,59 @@ TEST_F(ExtensionsSitePermissionsPageViewUnitTest,
   // also have a site permissions page.
   NavigateAndCommit("http://www.b.com");
 
-  // Menu should stay open in site permissions page for `extension`.
-  EXPECT_FALSE(IsMainPageOpened());
+  // Menu should navigate back to main page.
+  EXPECT_TRUE(IsMainPageOpened());
+  EXPECT_FALSE(IsSitePermissionsPageOpened(extension->id()));
+}
+
+// Tests that the site access radio buttons are mutually exclusive, and focusing
+// a radio button does not result in multiple selected radio buttons.
+TEST_F(ExtensionsSitePermissionsPageViewUnitTest,
+       RadioButtonsAreMutuallyExclusive) {
+  auto extension =
+      InstallExtensionWithHostPermissions("Extension", {"<all_urls>"});
+
+  NavigateAndCommit("http://www.url.com");
+  ShowSitePermissionsPage(extension->id());
   EXPECT_TRUE(IsSitePermissionsPageOpened(extension->id()));
 
-  // Extension didn't request specific access to url B, but it has active tab
-  // access. Thus, user can only select "on click" access.
-  EXPECT_TRUE(on_click_button->GetEnabled());
-  EXPECT_FALSE(on_site_button->GetEnabled());
-  EXPECT_FALSE(on_all_sites_button->GetEnabled());
+  // Activate the widget so focus changes are processed.
+  auto* widget = site_permissions_page()->GetWidget();
+  ASSERT_TRUE(widget);
+  widget->Activate();
+
+  // RunScheduledLayout() is needed due to widget auto-resize.
+  views::test::RunScheduledLayout(site_permissions_page());
+
+  auto* on_click_button =
+      site_permissions_page()->GetSiteAccessButtonForTesting(
+          PermissionsManager::UserSiteAccess::kOnClick);
+  auto* on_site_button = site_permissions_page()->GetSiteAccessButtonForTesting(
+      PermissionsManager::UserSiteAccess::kOnSite);
+  auto* on_all_sites_button =
+      site_permissions_page()->GetSiteAccessButtonForTesting(
+          PermissionsManager::UserSiteAccess::kOnAllSites);
+
+  // By default, the "always on all sites" option is checked.
+  EXPECT_FALSE(on_click_button->GetChecked());
+  EXPECT_FALSE(on_site_button->GetChecked());
+  EXPECT_TRUE(on_all_sites_button->GetChecked());
+
+  // Focus the "always on site" button. Since `select_on_focus_` is true for
+  // RadioButton, focusing it checks the button.
+  on_site_button->OnFocus();
+
+  // Verify that only the focused button is checked, and the previously checked
+  // one is now unchecked.
+  EXPECT_FALSE(on_click_button->GetChecked());
+  EXPECT_TRUE(on_site_button->GetChecked());
+  EXPECT_FALSE(on_all_sites_button->GetChecked());
+
+  // Focus the "ask on every visit" button.
+  on_click_button->OnFocus();
+
+  // Verify that only the newly focused button is checked.
+  EXPECT_TRUE(on_click_button->GetChecked());
+  EXPECT_FALSE(on_site_button->GetChecked());
+  EXPECT_FALSE(on_all_sites_button->GetChecked());
 }

@@ -11,14 +11,12 @@
 #include "chrome/browser/ui/actions/chrome_actions.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_actions.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/side_panel/side_panel_registry.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_registry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_util.h"
 #include "chrome/common/extensions/api/side_panel.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/web_contents.h"
@@ -115,8 +113,8 @@ ExtensionSidePanelCoordinator::~ExtensionSidePanelCoordinator() {
   }
 }
 
-SidePanelEntry::PanelType ExtensionSidePanelCoordinator::GetPanelType() {
-  return SidePanelEntry::PanelType::kContent;
+SidePanelType ExtensionSidePanelCoordinator::GetPanelType() {
+  return SidePanelType::kContent;
 }
 
 content::WebContents*
@@ -185,7 +183,7 @@ void ExtensionSidePanelCoordinator::OnPanelOptionsChanged(
     CreateAndRegisterEntry();
   } else if (entry && previous_url != side_panel_url_) {
     // Handle changes to the side panel's url if an entry exists.
-    if (registry_->GetActiveEntryFor(GetPanelType()) == entry) {
+    if (registry_->GetActiveEntry() == entry) {
       // If this extension's entry is active, navigate the entry's view to the
       // updated URL.
       NavigateIfNecessary();
@@ -210,12 +208,30 @@ void ExtensionSidePanelCoordinator::OnViewDestroying() {
     is_panel_active_ = false;
   }
 
+  // Stop observing before destruction to prevent the DCHECK failure inside
+  // OnExtensionHostDestroyed when this class initiates the teardown.
+  scoped_host_observation_.Reset();
+
   // When the extension's view inside the side panel is destroyed, reset
   // the ExtensionViewHost so it cannot try to notify a view that no longer
   // exists when its event listeners are triggered. Otherwise, a use after free
-  // could occur as documented in crbug.com/1403168.
+  // could occur as documented in crbug.com/40062350.
   host_.reset();
   scoped_view_observation_.Reset();
+}
+
+void ExtensionSidePanelCoordinator::OnExtensionHostDestroyed(
+    ExtensionHost* host) {
+  DCHECK_EQ(host_.get(), host);
+  scoped_host_observation_.Reset();
+}
+
+void ExtensionSidePanelCoordinator::OnExtensionHostDidStopFirstLoad(
+    const ExtensionHost* host) {
+  DCHECK_EQ(host_.get(), host);
+  if (is_panel_active_) {
+    OnOpened();
+  }
 }
 
 void ExtensionSidePanelCoordinator::CreateAndRegisterEntry() {
@@ -261,6 +277,10 @@ std::unique_ptr<views::View> ExtensionSidePanelCoordinator::CreateView(
     return std::make_unique<views::WebView>(/*browser_context=*/nullptr);
   }
 
+  // Observe the host to dispatch onOpened after its initial load completes.
+  scoped_host_observation_.Reset();
+  scoped_host_observation_.Observe(host_.get());
+
   // Handle the containing view calling window.close();
   // The base::Unretained() below is safe because this object owns `host_`, so
   // the callback will never fire if `this` is deleted.
@@ -292,6 +312,11 @@ void ExtensionSidePanelCoordinator::OnEntryShown(SidePanelEntry* entry) {
   // Store the current `window_id_`. if the window later closes, the browser may
   // no longer be retrievable.
   window_id_ = ExtensionTabUtil::GetWindowId(GetBrowser());
+
+  // Focus on the host's view when the side panel is first shown.
+  if (host_ && host_->host_contents()) {
+    host_->host_contents()->Focus();
+  }
 }
 
 // There are three scenarios that trigger OnClosed():
@@ -316,6 +341,10 @@ void ExtensionSidePanelCoordinator::OnEntryWillHide(
 }
 
 void ExtensionSidePanelCoordinator::OnOpened() {
+  if (on_opened_dispatched_ || !host_ || !host_->has_loaded_once()) {
+    return;
+  }
+
   auto* service = SidePanelService::Get(profile_);
   const ExtensionId& extension_id = extension_->id();
 
@@ -330,9 +359,14 @@ void ExtensionSidePanelCoordinator::OnOpened() {
   service->DispatchOnOpenedEvent(extension_id,
                                  ExtensionTabUtil::GetWindowId(GetBrowser()),
                                  tab_id, side_panel_url_.GetPath());
+  on_opened_dispatched_ = true;
 }
 
 void ExtensionSidePanelCoordinator::OnClosed() {
+  if (!on_opened_dispatched_) {
+    return;
+  }
+
   auto* const service = SidePanelService::Get(profile_);
   const ExtensionId& extension_id = extension_->id();
 
@@ -346,6 +380,7 @@ void ExtensionSidePanelCoordinator::OnClosed() {
   // Dispatch all arguments to reach the router listener.
   service->DispatchOnClosedEvent(extension_id, window_id_.value(), tab_id,
                                  side_panel_url_.GetPath());
+  on_opened_dispatched_ = false;
 }
 
 void ExtensionSidePanelCoordinator::HandleCloseExtensionSidePanel(
@@ -362,7 +397,7 @@ void ExtensionSidePanelCoordinator::HandleCloseExtensionSidePanel(
   DCHECK(entry);
 
   if (side_panel_ui->IsSidePanelEntryShowing(entry->key(), for_tab_)) {
-    side_panel_ui->Close(entry->type());
+    side_panel_ui->Close();
   } else {
     entry->ClearCachedView();
   }
@@ -408,7 +443,7 @@ void ExtensionSidePanelCoordinator::UpdateActionItemIcon() {
   std::optional<actions::ActionId> extension_action_id =
       actions::ActionIdMap::StringToActionId(GetEntryKey().ToString());
   CHECK(extension_action_id.has_value());
-  BrowserActions* browser_actions = browser_->GetActions();
+  BrowserActions* browser_actions = BrowserActions::From(browser_);
   actions::ActionItem* action_item = actions::ActionManager::Get().FindAction(
       extension_action_id.value(), browser_actions->root_action_item());
   if (action_item) {

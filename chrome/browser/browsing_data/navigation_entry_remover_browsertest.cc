@@ -9,9 +9,8 @@
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/test/base/chrome_test_utils.h"
@@ -48,7 +47,7 @@ class NavigationEntryRemoverTest : public InProcessBrowserTest {
     about_blank_ = GURL("about:blank");
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   void AddNavigations(Browser* browser, const std::vector<GURL>& urls) {
     for (const GURL& url : urls) {
@@ -157,14 +156,14 @@ IN_PROC_BROWSER_TEST_F(NavigationEntryRemoverTest, AddTab) {
 }
 
 IN_PROC_BROWSER_TEST_F(NavigationEntryRemoverTest, AddWindow) {
-  EXPECT_EQ(1U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
 
   AddBrowser(browser(), {url_a_, url_b_});
-  EXPECT_EQ(2U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2U, GlobalBrowserCollection::GetInstance()->GetSize());
   ExpectEntries({url_a_, url_b_, about_blank_}, GetEntries());
 
   AddBrowser(browser(), {url_c_, url_d_});
-  EXPECT_EQ(3U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(3U, GlobalBrowserCollection::GetInstance()->GetSize());
   ExpectEntries({url_c_, url_d_, url_a_, url_b_, about_blank_}, GetEntries());
 }
 
@@ -196,7 +195,7 @@ IN_PROC_BROWSER_TEST_F(NavigationEntryRemoverTest, DeleteAfterNavigation) {
   browsing_data::RemoveNavigationEntries(
       profile(),
       DeletionInfo::ForUrls({history::URLResult(url_b_, base::Time())}, {}));
-  // The commited entry can't be removed.
+  // The committed entry can't be removed.
   ExpectEntries({about_blank_, url_a_, url_b_}, GetEntries());
 
   AddNavigations(browser(), {url_c_});
@@ -392,7 +391,7 @@ IN_PROC_BROWSER_TEST_F(NavigationEntryRemoverTest,
 
 // Checks that we do not attempt to delete SessionService data when processing a
 // foreign history delete.
-// Test for crbug.com/1424800.
+// Test for crbug.com/40063610.
 IN_PROC_BROWSER_TEST_F(NavigationEntryRemoverTest,
                        ForeignHistoryDeleteDoesNotDeleteSessionServiceData) {
   AddNavigations(browser(), {url_a_, url_b_, url_c_, url_d_});

@@ -11,6 +11,7 @@
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/android/permission_prompt/permission_prompt_android.h"
 #include "components/permissions/features.h"
+#include "components/permissions/permission_request_data.h"
 #include "components/permissions/permission_uma_util.h"
 #include "components/permissions/permission_util.h"
 #include "components/permissions/permissions_client.h"
@@ -21,8 +22,8 @@
 #include "ui/gfx/android/java_bitmap.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
-#include "components/permissions/android/jni_headers/PermissionDialogController_jni.h"
 #include "components/permissions/android/jni_headers/PermissionDialogDelegate_jni.h"
+#include "components/permissions/android/permission_prompt/permission_dialog_controller.h"
 
 using base::android::ConvertUTF16ToJavaString;
 
@@ -47,12 +48,11 @@ void PermissionDialogJavaDelegate::CreateJavaDelegate(
       permission_prompt_->GetContentSettingTypes(env),
       PermissionsClient::Get()->MapToJavaDrawableId(
           permission_prompt_->GetIconId()),
-      ConvertUTF16ToJavaString(
-          env, permission_prompt_->GetAnnotatedMessageText().text),
+      permission_prompt_->GetAnnotatedMessageText().text,
       permission_prompt_->GetBoldRanges(env),
-      permission_prompt_->GetPositiveButtonText(env, is_one_time),
-      permission_prompt_->GetNegativeButtonText(env, is_one_time),
-      permission_prompt_->GetPositiveEphemeralButtonText(env, is_one_time),
+      permission_prompt_->GetPositiveButtonText(is_one_time),
+      permission_prompt_->GetNegativeButtonText(is_one_time),
+      permission_prompt_->GetPositiveEphemeralButtonText(is_one_time),
       /*showPositiveNonEphemeralAsFirstButton=*/is_one_time,
       static_cast<int>(permission_prompt_->GetEmbeddedPromptVariant())));
 }
@@ -63,7 +63,7 @@ void PermissionDialogJavaDelegate::CreateDialog(
   // Send the Java delegate to the Java PermissionDialogController for display.
   // When the Java delegate is no longer needed it will in turn reset the native
   // java delegate (PermissionDialogJavaDelegate).
-  Java_PermissionDialogController_createDialog(env, j_delegate_);
+  PermissionDialogController::CreateDialog(env, j_delegate_);
 
   if (permission_prompt_->ShouldUseRequestingOriginFavicon()) {
     // In order to update the dialog, we need to make sure it has been created
@@ -128,12 +128,11 @@ void PermissionDialogJavaDelegate::UpdateDialog() {
       env, j_delegate_, permission_prompt_->GetContentSettingTypes(env),
       PermissionsClient::Get()->MapToJavaDrawableId(
           permission_prompt_->GetIconId()),
-      ConvertUTF16ToJavaString(
-          env, permission_prompt_->GetAnnotatedMessageText().text),
+      permission_prompt_->GetAnnotatedMessageText().text,
       permission_prompt_->GetBoldRanges(env),
-      permission_prompt_->GetPositiveButtonText(env, is_one_time),
-      permission_prompt_->GetNegativeButtonText(env, is_one_time),
-      permission_prompt_->GetPositiveEphemeralButtonText(env, is_one_time),
+      permission_prompt_->GetPositiveButtonText(is_one_time),
+      permission_prompt_->GetNegativeButtonText(is_one_time),
+      permission_prompt_->GetPositiveEphemeralButtonText(is_one_time),
       /*showPositiveNonEphemeralAsFirstButton=*/is_one_time,
       static_cast<int>(permission_prompt_->GetEmbeddedPromptVariant()));
 }
@@ -145,7 +144,7 @@ std::unique_ptr<PermissionDialogDelegate> PermissionDialogDelegate::Create(
   CHECK(web_contents);
   // If we don't have a window, just act as though the prompt was dismissed.
   if (!web_contents->GetTopLevelNativeWindow()) {
-    permission_prompt->Closing();
+    permission_prompt->Dismiss(/*prompt_options=*/std::monostate());
     return nullptr;
   }
   std::unique_ptr<PermissionDialogJavaDelegate> java_delegate(
@@ -166,22 +165,22 @@ PermissionDialogDelegate::CreateForTesting(
 
 void PermissionDialogDelegate::Accept(JNIEnv* env) {
   CHECK(permission_prompt_);
-  permission_prompt_->Accept();
+  permission_prompt_->Accept(prompt_options_);
 }
 
 void PermissionDialogDelegate::AcceptThisTime(JNIEnv* env) {
   CHECK(permission_prompt_);
-  permission_prompt_->AcceptThisTime();
+  permission_prompt_->AcceptThisTime(prompt_options_);
 }
 
 void PermissionDialogDelegate::Acknowledge(JNIEnv* env) {
   CHECK(permission_prompt_);
-  permission_prompt_->Acknowledge();
+  permission_prompt_->Acknowledge(prompt_options_);
 }
 
 void PermissionDialogDelegate::Deny(JNIEnv* env) {
   CHECK(permission_prompt_);
-  permission_prompt_->Deny();
+  permission_prompt_->Deny(prompt_options_);
 }
 
 void PermissionDialogDelegate::Resumed(JNIEnv* env) {
@@ -200,24 +199,12 @@ void PermissionDialogDelegate::SystemPermissionResolved(JNIEnv* env,
   permission_prompt_->SystemPermissionResolved(accepted);
 }
 
-void PermissionDialogDelegate::Dismissed(JNIEnv* env,
-                                         int dismissalType) {
+void PermissionDialogDelegate::Dismissed(JNIEnv* env, int dismissalType) {
   CHECK(permission_prompt_);
-  std::vector<ContentSettingsType> content_settings_types;
-  for (size_t i = 0; i < permission_prompt_->PermissionCount(); ++i) {
-    ContentSettingsType type = permission_prompt_->GetContentSettingType(i);
-    // Not all request types have an associated ContentSettingsType.
-    if (type == ContentSettingsType::DEFAULT) {
-      break;
-    }
-    content_settings_types.push_back(type);
-  }
-
-  if (content_settings_types.size() == permission_prompt_->PermissionCount()) {
-    PermissionUmaUtil::RecordDismissalType(
-        content_settings_types, permission_prompt_->GetPromptDisposition(),
-        static_cast<DismissalType>(dismissalType));
-  }
+  PermissionUmaUtil::RecordDismissalType(
+      permission_prompt_->Requests(),
+      permission_prompt_->GetPromptDisposition(),
+      static_cast<DismissalType>(dismissalType));
 
   if (!permission_prompt_->IsShowing()) {
     // This probably happens synchronously when creating the
@@ -227,13 +214,16 @@ void PermissionDialogDelegate::Dismissed(JNIEnv* env,
     // But, all the underlying data associated with it will get wiped.
     // So, we destroy the Java delegate and use the `IsJavaDelegateDestroyed`
     // signal as a way to tell if the `PermissionPrompt` creation failed.
-    DestroyJavaDelegate();
+
+    // Delete asynchronously to avoid re-entrancy issues.
+    base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(
+        FROM_HERE, std::move(java_delegate_));
   }
-  permission_prompt_->Closing();
+  permission_prompt_->Dismiss(prompt_options_);
 }
 
 void PermissionDialogDelegate::Destroy(JNIEnv* env) {
-  DestroyJavaDelegate();
+  java_delegate_.reset();
 }
 
 void PermissionDialogDelegate::NotifyPermissionAllowed() {
@@ -289,18 +279,17 @@ void PermissionDialogDelegate::WebContentsDestroyed() {
 }
 
 void PermissionDialogDelegate::OnGeolocationAccuracySelected(JNIEnv* env,
-                                                             jint accuracy) {
-  CHECK(permission_prompt_);
-
-  permission_prompt_->SetPromptOptions(GeolocationPromptOptions{
-      .selected_accuracy = static_cast<GeolocationAccuracy>(accuracy)});
+                                                             int32_t accuracy) {
+  prompt_options_ = GeolocationPromptOptions{
+      .selected_accuracy = static_cast<GeolocationAccuracy>(accuracy)};
 }
 
-static jint JNI_PermissionDialogDelegate_GetRequestTypeEnumSize(JNIEnv* env) {
+static int32_t JNI_PermissionDialogDelegate_GetRequestTypeEnumSize(
+    JNIEnv* env) {
   return static_cast<int>(RequestType::kMaxValue) + 1;
 }
 
-jint PermissionDialogDelegate::GetInitialGeolocationAccuracySelection(
+int32_t PermissionDialogDelegate::GetInitialGeolocationAccuracySelection(
     JNIEnv* env) const {
   CHECK(permission_prompt_);
   CHECK_EQ(permission_prompt_->PermissionCount(), 1u);
@@ -310,7 +299,15 @@ jint PermissionDialogDelegate::GetInitialGeolocationAccuracySelection(
       permission_prompt_->GetInitialGeolocationAccuracySelection());
 }
 
+int PermissionDialogDelegate::GetGeolocationPromptType(JNIEnv* env) const {
+  CHECK(permission_prompt_);
+  CHECK_EQ(permission_prompt_->PermissionCount(), 1u);
+  CHECK_EQ(permission_prompt_->GetContentSettingType(0),
+           ContentSettingsType::GEOLOCATION_WITH_OPTIONS);
+  return static_cast<int>(
+      permission_prompt_->GetGeolocationPromptType().value());
+}
+
 }  // namespace permissions
 
-DEFINE_JNI(PermissionDialogController)
 DEFINE_JNI(PermissionDialogDelegate)

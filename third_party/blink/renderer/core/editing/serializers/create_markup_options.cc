@@ -13,9 +13,8 @@ CreateMarkupOptions::Builder::SetConstrainingAncestor(const Node* node) {
 }
 
 CreateMarkupOptions::Builder&
-CreateMarkupOptions::Builder::SetShouldResolveURLs(
-    AbsoluteURLs should_resolve_urls) {
-  data_.should_resolve_urls_ = should_resolve_urls;
+CreateMarkupOptions::Builder::SetShouldResolveUrls(ResolveUrls resolve_urls) {
+  data_.should_resolve_urls_ = resolve_urls;
   return *this;
 }
 
@@ -41,7 +40,7 @@ CreateMarkupOptions::Builder::SetIsForMarkupSanitization(
 }
 
 CreateMarkupOptions::Builder&
-CreateMarkupOptions::Builder::SetIgnoresCSSTextTransformsForRenderedText(
+CreateMarkupOptions::Builder::SetIgnoresCssTextTransformsForRenderedText(
     bool ignores_text_transforms) {
   data_.ignores_css_text_transforms_for_rendered_text_ =
       ignores_text_transforms;

@@ -11,7 +11,7 @@
 #include <string>
 #include <string_view>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/supports_user_data.h"
 #include "content/common/buildflags.h"
 #include "content/common/content_export.h"
@@ -122,9 +122,6 @@ class CONTENT_EXPORT RenderFrame :
 
   // Gets WebKit related preferences associated with this frame.
   virtual const blink::web_pref::WebPreferences& GetBlinkPreferences() = 0;
-
-  // Issues a request to show the virtual keyboard.
-  virtual void ShowVirtualKeyboard() = 0;
 
   // Execute a string of JavaScript in this frame's context.
   virtual void ExecuteJavaScript(const std::u16string& javascript) = 0;
@@ -241,7 +238,7 @@ class CONTENT_EXPORT RenderFrame :
   using LoadFromMemoryCacheCallback =
       base::RepeatingCallback<void(const GURL& response_url,
                                    int request_id,
-                                   base::ByteCount encoded_body_length,
+                                   base::ByteSize encoded_body_length,
                                    const std::string& mime_type,
                                    bool from_archive)>;
   virtual void SetLoadFromMemoryCacheCallback(

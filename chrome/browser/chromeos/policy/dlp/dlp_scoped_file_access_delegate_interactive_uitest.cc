@@ -90,7 +90,7 @@ class DlpScopedFileAccessDelegateInteractiveUITest
 
     ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
     ASSERT_TRUE(ui_test_utils::ShowAndFocusNativeWindow(
-        browser()->window()->GetNativeWindow()));
+        browser()->GetWindow()->GetNativeWindow()));
   }
 
   void TearDownOnMainThread() override {
@@ -164,7 +164,7 @@ class DlpScopedFileAccessDelegateInteractiveUITest
     base::PlatformThread::Sleep(base::Seconds(1));
 
     // Click a few times to make sure the page has focus.
-    // See also https://crbug.com/59011 and https://crbug.com/35581.
+    // See also https://crbug.com/40458673 and https://crbug.com/40357432.
     ui_test_utils::ClickOnView(view);
     ui_test_utils::ClickOnView(view);
   }

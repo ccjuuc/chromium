@@ -32,15 +32,15 @@ import org.junit.runner.RunWith;
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.Callback;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
-import org.chromium.base.test.util.RequiresRestart;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisableIf;
+import org.chromium.base.test.util.RequiresRestart;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.base.test.util.UrlUtils;
-import org.chromium.base.test.util.Batch;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.ChromeTabbedActivity2;
 import org.chromium.chrome.browser.app.tabmodel.TabModelOrchestrator;
@@ -137,9 +137,8 @@ public class UndoTabModelTest {
         boolean shouldLeaveTabSwitcher =
                 ThreadUtils.runOnUiThreadBlocking(
                         () -> {
-                            return layoutManager.isLayoutVisible(LayoutType.TAB_SWITCHER)
-                                    && !layoutManager.isLayoutStartingToHide(
-                                            LayoutType.TAB_SWITCHER);
+                            return layoutManager.isLayoutVisible(LayoutType.HUB)
+                                    && !layoutManager.isLayoutStartingToHide(LayoutType.HUB);
                         });
         if (shouldLeaveTabSwitcher) {
             leaveTabSwitcher(cta);
@@ -324,7 +323,7 @@ public class UndoTabModelTest {
      */
     @Test
     @MediumTest
-    @Restriction(DeviceFormFactor.PHONE) // See crbug.com/633607
+    @Restriction(DeviceFormFactor.PHONE) // See crbug.com/40478864
     public void testSaveStateCommitsUndos() throws TimeoutException, ExecutionException {
         TabModelOrchestrator orchestrator =
                 ThreadUtils.runOnUiThreadBlocking(
@@ -405,7 +404,7 @@ public class UndoTabModelTest {
     @Test
     @MediumTest
     @DisableIf.Device(DeviceFormFactor.ONLY_TABLET) // https://crbug.com/338997949
-    @DisableIf.Build(sdk_is_greater_than = VERSION_CODES.R) // https://crbug.com/1297370
+    @DisableIf.Build(sdk_is_greater_than = VERSION_CODES.R) // https://crbug.com/40215137
     @CommandLineFlags.Add(ChromeSwitches.DISABLE_TAB_MERGING_FOR_TESTING)
     public void testOpenRecentlyClosedTabMultiWindow() throws TimeoutException {
         final ChromeTabbedActivity2 secondActivity =
@@ -509,7 +508,7 @@ public class UndoTabModelTest {
     @Test
     @MediumTest
     @DisableIf.Device(DeviceFormFactor.ONLY_TABLET) // https://crbug.com/338997949
-    @DisableIf.Build(sdk_is_greater_than = VERSION_CODES.R) // https://crbug.com/1297370
+    @DisableIf.Build(sdk_is_greater_than = VERSION_CODES.R) // https://crbug.com/40215137
     @CommandLineFlags.Add(ChromeSwitches.DISABLE_TAB_MERGING_FOR_TESTING)
     public void testOpenRecentlyClosedTabMultiWindowFallback() throws TimeoutException {
         final ChromeTabbedActivity2 secondActivity =
@@ -592,9 +591,7 @@ public class UndoTabModelTest {
     private void selectTab(final TabModel model, final Tab tab) {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    model.setIndex(
-                            TabModelUtils.getTabIndexById(model, tab.getId()),
-                            TabSelectionType.FROM_USER);
+                    model.setIndex(model.indexOf(tab), TabSelectionType.FROM_USER);
                 });
     }
 
@@ -1759,7 +1756,7 @@ public class UndoTabModelTest {
         // Note: Despite the "undoable=true" setup, incognito tabs won't support undo.
         closeMultipleTabs(model, Arrays.asList(tab2, tab4), /* undoable= */ true);
         fullList = new Tab[] {tab0, tab3};
-        checkState(model, fullList, tab0, EMPTY, fullList, tab0);
+        checkState(model, fullList, tab3, EMPTY, fullList, tab3);
         assertTrue(tab2.isClosing());
         assertTrue(tab4.isClosing());
         assertFalse(tab2.isInitialized());
@@ -1813,7 +1810,9 @@ public class UndoTabModelTest {
         final CallbackHelper tabSupplierObserver = new CallbackHelper();
         Callback<Tab> observer = (tab) -> tabSupplierObserver.notifyCalled();
         ThreadUtils.runOnUiThreadBlocking(
-                () -> model.getCurrentTabSupplier().addObserver(observer));
+                () -> {
+                    return model.getCurrentTabSupplier().addSyncObserverAndPostIfNonNull(observer);
+                });
 
         Tab[] fullList = new Tab[] {tab0};
 

@@ -20,20 +20,27 @@
 #include "build/build_config.h"
 #include "components/enterprise/browser/controller/browser_dm_token_storage.h"
 #include "components/enterprise/browser/controller/chrome_browser_cloud_management_helper.h"
-#include "components/enterprise/browser/device_trust/device_trust_key_manager.h"
 #include "components/enterprise/browser/enterprise_switches.h"
+#include "components/enterprise/browser/groups/enterprise_groups_handler.h"
+#include "components/enterprise/browser/reporting/browser_launch/browser_launch_event_controller.h"
 #include "components/enterprise/browser/reporting/real_time_report_controller.h"
 #include "components/enterprise/browser/reporting/report_scheduler.h"
 #include "components/enterprise/browser/reporting/reporting_delegate_factory.h"
+#include "components/enterprise/browser/reporting/reporting_features.h"
+#include "components/enterprise/browser/reporting/saas_usage/saas_usage_report_scheduler.h"
+#include "components/enterprise/browser/reporting/saas_usage/saas_usage_reporting_delegate_factory.h"
 #include "components/enterprise/client_certificates/core/certificate_provisioning_service.h"
+#include "components/enterprise/device_trust/core/device_trust_key_manager.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/cloud/client_data_delegate.h"
 #include "components/policy/core/common/cloud/cloud_external_data_manager.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
+#include "components/policy/core/common/cloud/cloud_policy_util.h"
 #include "components/policy/core/common/cloud/dm_token.h"
 #include "components/policy/core/common/cloud/machine_level_user_cloud_policy_manager.h"
 #include "components/policy/core/common/cloud/machine_level_user_cloud_policy_store.h"
 #include "components/policy/core/common/configuration_policy_provider.h"
+#include "components/policy/core/common/features.h"
 #include "components/policy/core/common/policy_logger.h"
 #include "components/prefs/pref_service.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -63,6 +70,16 @@ ChromeBrowserCloudManagementController::Delegate::
 
 void ChromeBrowserCloudManagementController::Delegate::DeferInitialization(
     base::OnceClosure callback) {
+  NOTREACHED();
+}
+
+void ChromeBrowserCloudManagementController::Delegate::
+    StartExtensionInstallPolicyInvalidator() {
+  NOTREACHED();
+}
+
+bool ChromeBrowserCloudManagementController::Delegate::
+    CanStartExtensionInstallPolicyInvalidator() const {
   NOTREACHED();
 }
 
@@ -144,14 +161,18 @@ ChromeBrowserCloudManagementController::CreatePolicyManager(
   std::unique_ptr<MachineLevelUserCloudPolicyStore> extension_install_store =
       nullptr;
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-  extension_install_store =
-      MachineLevelUserCloudPolicyStore::CreateForExtensionInstall(
-          dm_token, client_id, policy_dir,
-          base::ThreadPool::CreateSequencedTaskRunner(
-              {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
-               // Block shutdown to make sure the policy cache update is
-               // always finished.
-               base::TaskShutdownBehavior::BLOCK_SHUTDOWN}));
+  // This is not supported before M146. A feature flag check is not possible
+  // here because finch is not yet initialized.
+  if (IsExtensionInstallPolicySupportedOnThisVersion()) {
+    extension_install_store =
+        MachineLevelUserCloudPolicyStore::CreateForExtensionInstall(
+            dm_token, client_id, policy_dir,
+            base::ThreadPool::CreateSequencedTaskRunner(
+                {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+                 // Block shutdown to make sure the policy cache update is
+                 // always finished.
+                 base::TaskShutdownBehavior::BLOCK_SHUTDOWN}));
+  }
 #endif  // !BUILDFLAG(ENABLE_EXTENSIONS)
 
   return std::make_unique<MachineLevelUserCloudPolicyManager>(
@@ -203,12 +224,12 @@ void ChromeBrowserCloudManagementController::Init(
     std::move(create_cloud_policy_manager_callback_).Run();
   }
 
-  // Post the task of CreateReportScheduler to run on best effort after launch
+  // Post the task of InitializeReporting to run on best effort after launch
   // is completed.
   delegate_->GetBestEffortTaskRunner()->PostTask(
       FROM_HERE,
       base::BindOnce(
-          &ChromeBrowserCloudManagementController::CreateReportScheduler,
+          &ChromeBrowserCloudManagementController::InitializeReporting,
           weak_factory_.GetWeakPtr()));
 
   MachineLevelUserCloudPolicyManager* policy_manager =
@@ -221,6 +242,14 @@ void ChromeBrowserCloudManagementController::Init(
         << "No machine level policy manager exists.";
     return;
   }
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  if (policy_manager->extension_install_store() &&
+      !base::FeatureList::IsEnabled(
+          features::kEnableExtensionInstallPolicyFetching)) {
+    policy_manager->extension_install_store()->Clear();
+  }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
   // If there exists an enrollment token, then there are three states:
   //   1/ There also exists a valid DM token.  This machine is already
@@ -245,6 +274,10 @@ void ChromeBrowserCloudManagementController::Init(
         policy_manager, local_state, device_management_service,
         url_loader_factory);
     policy_fetcher_->AddClientObserver(this);
+    enterprise_groups_handler_ =
+        std::make_unique<EnterpriseGroupsBrowserHandler>(policy_manager->core(),
+                                                         local_state);
+    enterprise_groups_handler_->Init();
     return;
   }
 
@@ -266,6 +299,10 @@ void ChromeBrowserCloudManagementController::Init(
     delegate_->StartWatchingRegistration(this);
 
     enrollment_start_time_ = base::Time::Now();
+
+    enterprise_groups_handler_ =
+        std::make_unique<EnterpriseGroupsBrowserHandler>(policy_manager->core(),
+                                                         local_state);
 
     // Not registered already, so do it now.
     LOG_POLICY(INFO, CBCM_ENROLLMENT)
@@ -299,6 +336,13 @@ void ChromeBrowserCloudManagementController::MaybeInit(
     delegate_->DeferInitialization(base::BindOnce(
         &ChromeBrowserCloudManagementController::Init,
         weak_factory_.GetWeakPtr(), local_state, url_loader_factory));
+  }
+}
+
+void ChromeBrowserCloudManagementController::
+    MaybeStartExtensionInstallPolicyInvalidator() {
+  if (delegate_->CanStartExtensionInstallPolicyInvalidator()) {
+    delegate_->StartExtensionInstallPolicyInvalidator();
   }
 }
 
@@ -347,6 +391,11 @@ void ChromeBrowserCloudManagementController::InvalidatePolicies() {
     policy_fetcher_->Disconnect();
   }
 
+  if (enterprise_groups_handler_) {
+    enterprise_groups_handler_->ClearGroups();
+    enterprise_groups_handler_.reset();
+  }
+
   // This causes the scheduler to stop refreshing itself since the DM token is
   // no longer valid.
   if (report_scheduler_)
@@ -392,8 +441,9 @@ void ChromeBrowserCloudManagementController::OnServiceAccountSet(
 void ChromeBrowserCloudManagementController::ShutDown() {
   NotifyShutdown();
   delegate_->ShutDown();
-  if (report_scheduler_)
-    report_scheduler_.reset();
+  enterprise_groups_handler_.reset();
+  report_scheduler_.reset();
+  saas_usage_report_scheduler_.reset();
 }
 
 enterprise_connectors::DeviceTrustKeyManager*
@@ -508,11 +558,13 @@ void ChromeBrowserCloudManagementController::
   if (report_scheduler_) {
     report_scheduler_->OnDMTokenUpdated();
   }
-
+  if (enterprise_groups_handler_) {
+    enterprise_groups_handler_->Init();
+  }
   NotifyPolicyRegisterFinished(true);
 }
 
-void ChromeBrowserCloudManagementController::CreateReportScheduler() {
+void ChromeBrowserCloudManagementController::InitializeReporting() {
   cloud_policy_client_ = std::make_unique<policy::CloudPolicyClient>(
       delegate_->GetDeviceManagementService(),
       delegate_->GetSharedURLLoaderFactory(),
@@ -532,6 +584,24 @@ void ChromeBrowserCloudManagementController::CreateReportScheduler() {
 
   report_scheduler_ = std::make_unique<enterprise_reporting::ReportScheduler>(
       std::move(params));
+
+  if (base::FeatureList::IsEnabled(enterprise_reporting::kSaasUsageReporting)) {
+    if (auto saas_usage_reporting_delegate_factory =
+            delegate_->GetSaasUsageReportingDelegateFactory()) {
+      saas_usage_report_scheduler_ =
+          enterprise_reporting::SaasUsageReportScheduler::Create(
+              "browser", saas_usage_reporting_delegate_factory.get());
+    }
+  }
+
+  if (base::FeatureList::IsEnabled(
+          enterprise_reporting::kBrowserLaunchMetadataReporting)) {
+    browser_launch_controller_ =
+        delegate_->CreateBrowserLaunchEventController();
+    if (browser_launch_controller_) {
+      browser_launch_controller_->CollectAndUpload();
+    }
+  }
 
   NotifyCloudReportingLaunched();
 }

@@ -13,16 +13,15 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/read_only_shared_memory_region.h"
+#include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "chrome/browser/enterprise/connectors/analysis/content_analysis_info.h"
 #include "chrome/browser/enterprise/connectors/common.h"
 #include "components/enterprise/connectors/core/analysis_settings.h"
 #include "components/enterprise/connectors/core/common.h"
+#include "components/enterprise/connectors/core/content_analysis_data.h"
 #include "components/enterprise/connectors/core/content_analysis_delegate_base.h"
-#include "url/gurl.h"
-
-class Profile;
 
 namespace content {
 class WebContent;
@@ -38,7 +37,7 @@ namespace enterprise_connectors {
 class BinaryUploadService;
 class ClipboardRequestHandler;
 class ContentAnalysisDialogController;
-class FilesRequestHandler;
+class FilesRequestHandlerBase;
 class PagePrintRequestHandler;
 
 // A class that performs deep scans of data (for example malicious or sensitive
@@ -74,8 +73,10 @@ class ContentAnalysisDelegate : public ContentAnalysisDelegateBase,
  public:
   // Used as an input to CreateForWebContents() to describe what data needs
   // deeper scanning.  Any members can be empty.
-  struct Data {
+  struct Data : public enterprise_connectors::ContentAnalysisData {
     Data();
+    Data(const Data&) = delete;
+    Data& operator=(const Data&) = delete;
     Data(Data&& other);
     Data& operator=(Data&& other);
     ~Data();
@@ -84,48 +85,6 @@ class ContentAnalysisDelegate : public ContentAnalysisDelegateBase,
     // `content::ClipboardPasteData` object.
     void AddClipboardData(
         const content::ClipboardPasteData& clipboard_paste_data);
-
-    // URL of the page that is to receive sensitive data.
-    GURL url;
-
-    // UTF-8 encoded text data to scan, such as plain text, URLs, HTML, etc.
-    std::vector<std::string> text;
-
-    // Binary image data to scan, such as png, svg, etc (here we assume the data
-    // struct holds one image only).
-    std::string image;
-
-    // List of files to scan.
-    std::vector<base::FilePath> paths;
-
-    // Page to be printed to scan.
-    base::ReadOnlySharedMemoryRegion page;
-
-    // Printer name of the page being sent to, empty for non-print actions.
-    std::string printer_name;
-
-    // TODO(b/283108167): Delete or send printer type information to local
-    // service partner.
-    //  Printer type of the page being sent to, the default value is UNKNOWN.
-    ContentMetaData::PrintMetadata::PrinterType printer_type =
-        ContentMetaData::PrintMetadata::UNKNOWN;
-
-    // The reason the scanning should happen. This should be populated at the
-    // same time as fields like `text`, `paths`, `page`, etc. so that caller
-    // code can let enterprise code know the user action triggering content
-    // analysis.
-    ContentAnalysisRequest::Reason reason = ContentAnalysisRequest::UNKNOWN;
-
-    // The clipboard source of data being pasted into the browser. Empty for
-    // non-clipboard pastes, and clipboard pastes in special cases (ex. OTR).
-    ContentMetaData::CopiedTextSource clipboard_source;
-
-    // The email for the content area user of the source of clipboard data.
-    // Only populated for Workspace sites.
-    std::string source_content_area_email;
-
-    // The settings to use for the analysis of the data in this struct.
-    AnalysisSettings settings;
   };
 
   // Result of deep scanning.  Each Result contains the verdicts of deep scans
@@ -156,6 +115,11 @@ class ContentAnalysisDelegate : public ContentAnalysisDelegateBase,
     // can be printed, and a value of false means it shouldn't be allowed to
     // print.
     bool page_result;
+
+    // Whether the content is kept in managed Chrome for the copy access point.
+    // This is only used for the copy access point and it means the content is
+    // not allowed to be copied outside of managed Chrome.
+    bool is_kept_in_managed_chrome = false;
   };
 
   // Callback used with CreateForWebContents() that informs caller of verdict
@@ -178,13 +142,21 @@ class ContentAnalysisDelegate : public ContentAnalysisDelegateBase,
       base::RepeatingCallback<std::unique_ptr<ContentAnalysisDelegate>(
           content::WebContents*,
           Data,
-          CompletionCallback)>;
+          CompletionCallback,
+          DeepScanAccessPoint)>;
 
   ContentAnalysisDelegate(const ContentAnalysisDelegate&) = delete;
   ContentAnalysisDelegate& operator=(const ContentAnalysisDelegate&) = delete;
   ~ContentAnalysisDelegate() override;
 
   // ContentAnalysisDelegateBase:
+
+  // Deletes the content analysis delegate.
+  // This is used for the copy access point since it has a different flow than
+  // the other access points. It utilises a combination of Toast and Dialog for
+  // warning case. This should only be called for warning bypass and cancel
+  // cases of the copy trigger.
+  void Delete();
 
   // Called when the user decides to bypass the verdict they obtained from DLP.
   // This will allow the upload of files marked as DLP warnings.
@@ -213,6 +185,8 @@ class ContentAnalysisDelegate : public ContentAnalysisDelegateBase,
 
   std::optional<std::u16string> GetFilename() const override;
 
+  base::WeakPtr<ContentAnalysisDelegate> GetWeakPtr();
+
   // Returns true if the deep scanning feature is enabled in the upload
   // direction via enterprise policies.  If the appropriate enterprise policies
   // are not set this feature is not enabled.
@@ -228,7 +202,7 @@ class ContentAnalysisDelegate : public ContentAnalysisDelegateBase,
   // Entry point for starting a deep scan, with the callback being called once
   // all results are available.  When the UI is enabled, a tab-modal dialog
   // is shown while the scans proceed in the background.  When the UI is
-  // disabled, the callback will immedaitely inform the callers that all data
+  // disabled, the callback will immediately inform the callers that all data
   // has successfully passed the checks, even though the checks will proceed
   // in the background.
   //
@@ -300,25 +274,32 @@ class ContentAnalysisDelegate : public ContentAnalysisDelegateBase,
   void ImageRequestCallback(RequestHandlerResult result);
   void PageRequestCallback(RequestHandlerResult result);
 
-  // Callback called after all files are scanned by the FilesRequestHandler.
+  // Callback called after all files are scanned by `files_request_handler_`.
   void FilesRequestCallback(std::vector<RequestHandlerResult> results);
 
-  FilesRequestHandler* GetFilesRequestHandlerForTesting();
+  FilesRequestHandlerBase* GetFilesRequestHandlerForTesting();
 
   const Data& GetDataForTesting() { return data_; }
+  Result& GetResultForTesting() { return result_; }
+  void RunCallbackForTesting() { RunCallback(); }
 
   const std::map<std::string, ContentAnalysisAcknowledgement::FinalAction>&
   GetFinalActionsForTesting() {
     return final_actions_;
   }
 
-  // Methods to either show the final result in the analysis dialog and to
-  // cancel the dialog.  These methods are protected and virtual for testing.
-  // Returns false if the UI was not enabled to indicate no action was taken.
+  // Methods to either show the final result in the analysis dialog (or via
+  // non-blocking system toast notification for COPY access point) and to
+  // cancel the UI (in case of a dialog only). These methods are protected and
+  // virtual for testing. Returns false if the UI was not shown to indicate no
+  // action was taken.
+  // TODO(b/325455508) refactor to separate code paths between dialog and
+  // toast notification.
   virtual bool ShowFinalResultInDialog();
   virtual bool CancelDialog();
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(ContentAnalysisDelegateUpdateFinalResultTest, Precedence);
   // Enum representing the data uploading status.
   enum class UploadDataStatus {
     kNoLocalClientFound = 0,
@@ -462,9 +443,11 @@ class ContentAnalysisDelegate : public ContentAnalysisDelegateBase,
   // for every file/text. This is read to ensure `this` isn't deleted too early.
   bool data_uploaded_ = false;
 
+  base::WeakPtr<content::WebContents> web_contents_;
+
   // Responsible for opening and scanning multiple files on parallel threads.
   // Always nullptr for non-file content scanning.
-  std::unique_ptr<FilesRequestHandler> files_request_handler_;
+  std::unique_ptr<FilesRequestHandlerBase> files_request_handler_;
 
   // Responsible for managing the scan of printed pages.
   // Always nullptr for non-print content scanning.
@@ -509,12 +492,11 @@ class ContentAnalysisDelegate : public ContentAnalysisDelegateBase,
   std::string page_content_type_;
 
   base::TimeTicks upload_start_time_;
+  base::TimeTicks creation_time_;
 
   // Custom message for rule.
   ContentAnalysisResponse::Result::TriggeredRule::CustomRuleMessage
       custom_rule_message_;
-
-  base::WeakPtr<content::WebContents> web_contents_;
 
   base::WeakPtrFactory<ContentAnalysisDelegate> weak_ptr_factory_{this};
 };

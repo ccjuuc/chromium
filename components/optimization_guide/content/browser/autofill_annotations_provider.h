@@ -20,13 +20,16 @@ class ConvertAIPageContentToProtoSession;
 namespace optimization_guide {
 
 // Tracks reasons that Autofill thinks a given field should be redacted.
-enum class AutofillFieldRedactionReason {
+enum class AutofillFieldRedactionReason : int {
   // This field does not need to be redacted according to Autofill.
   kNoRedactionNeeded,
 
   // This field should be redacted as it could contain sensitive payments
   // information.
   kShouldRedactForPayments,
+
+  // This field should be redacted as it could contain one-time passcode data.
+  kShouldRedactForOtp,
 };
 
 // Represents information derived from Autofill for a given field.
@@ -100,6 +103,8 @@ class AutofillAnnotationsProvider : public base::SupportsUserData::Data {
   // The key for storing the `AutofillAnnotationsProvider` in a `WebContents`.
   static const void* UserDataKey();
 };
+
+std::ostream& operator<<(std::ostream& o, AutofillFieldRedactionReason reason);
 
 }  // namespace optimization_guide
 

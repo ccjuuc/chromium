@@ -20,9 +20,6 @@ extern const char kHistogramPrerenderActivationToLargestContentfulPaint2[];
 extern const char kHistogramPrerenderFirstInputDelay4[];
 extern const char kHistogramPrerenderCumulativeShiftScore[];
 extern const char kHistogramPrerenderCumulativeShiftScoreMainFrame[];
-extern const char
-    kHistogramPrerenderMaxCumulativeShiftScoreSessionWindowGap1000msMax5000ms2
-        [];
 
 // Responsiveness metrics.
 extern const char
@@ -68,6 +65,7 @@ class PrerenderPageLoadMetricsObserver
       const page_load_metrics::mojom::PageLoadTiming& timing) override;
   void OnFirstContentfulPaintInPage(
       const page_load_metrics::mojom::PageLoadTiming& timing) override;
+  void OnSoftNavigation() override;
   void OnFirstInputInPage(
       const page_load_metrics::mojom::PageLoadTiming& timing) override;
   void OnComplete(
@@ -86,6 +84,13 @@ class PrerenderPageLoadMetricsObserver
       const page_load_metrics::mojom::PageLoadTiming& main_frame_timing);
   // Records Interaction to Next Paint (INP) to UMA and UKM.
   void RecordNormalizedResponsivenessMetrics();
+
+  // Records LCP before the first soft navigation arrives.
+  void RecordLargestContentfulPaintBeforeSoftNavigation();
+  // Records INP before the first soft navigation arrives.
+  void RecordResponsivenessMetricsBeforeSoftNavigation();
+  // Records CLS before the first soft navigation arrives.
+  void RecordLayoutShiftBeforeSoftNavigation();
 
   // Records loading status for an activated and loaded page.
   void MaybeRecordMainResourceLoadStatus();
@@ -114,9 +119,10 @@ class PrerenderPageLoadMetricsObserver
 
   // The type to trigger prerendering.
   std::optional<content::PreloadingTriggerType> trigger_type_;
-  // The suffix of a prerender embedder. This value is valid only when
-  // PreloadingTriggerType is kEmbedder. Otherwise, it's an empty string.
-  std::string embedder_histogram_suffix_;
+  // The suffix for metrics. This value is valid when PreloadingTriggerType is
+  // kEmbedder or when Speculation Rules have specific variants.
+  std::string histogram_suffix_;
+  int64_t soft_navigation_count_ = 0;
 };
 
 #endif  // COMPONENTS_PAGE_LOAD_METRICS_BROWSER_OBSERVERS_PRERENDER_PAGE_LOAD_METRICS_OBSERVER_H_

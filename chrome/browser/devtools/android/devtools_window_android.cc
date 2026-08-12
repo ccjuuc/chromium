@@ -27,7 +27,7 @@ static void JNI_DevToolsWindowAndroid_OpenDevTools(
 #endif
 }
 
-static jboolean JNI_DevToolsWindowAndroid_IsDevToolsAllowedFor(
+static bool JNI_DevToolsWindowAndroid_IsDevToolsAllowedFor(
     JNIEnv* env,
     const jni_zero::JavaRef<jobject>& java_profile,
     const jni_zero::JavaRef<jobject>& java_web_contents) {
@@ -39,6 +39,22 @@ static jboolean JNI_DevToolsWindowAndroid_IsDevToolsAllowedFor(
                                                                  : JNI_FALSE;
 #else
   return JNI_FALSE;
+#endif
+}
+
+static void JNI_DevToolsWindowAndroid_AttachToBrowser(
+    JNIEnv* env,
+    const jni_zero::JavaRef<jobject>& java_web_contents,
+    int64_t nativeBrowserWindowPtr) {
+#if BUILDFLAG(ENABLE_DEVTOOLS_FRONTEND)
+  content::WebContents* web_contents =
+      content::WebContents::FromJavaWebContents(java_web_contents);
+  DevToolsWindow* window = DevToolsWindow::AsDevToolsWindow(web_contents);
+  if (!window) {
+    return;
+  }
+  window->AttachToBrowser(
+      reinterpret_cast<BrowserWindowInterface*>(nativeBrowserWindowPtr));
 #endif
 }
 

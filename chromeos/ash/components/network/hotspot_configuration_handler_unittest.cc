@@ -4,6 +4,7 @@
 
 #include "chromeos/ash/components/network/hotspot_configuration_handler.h"
 
+#include "base/containers/span.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -107,7 +108,7 @@ class HotspotConfigurationHandlerTest : public ::testing::Test {
 
   void SetHotspotStateInShill(const std::string& state) {
     auto status_dict =
-        base::Value::Dict().Set(shill::kTetheringStatusStateProperty, state);
+        base::DictValue().Set(shill::kTetheringStatusStateProperty, state);
     network_state_test_helper_.manager_test()->SetManagerProperty(
         shill::kTetheringStatusProperty, base::Value(std::move(status_dict)));
     base::RunLoop().RunUntilIdle();
@@ -144,9 +145,9 @@ TEST_F(HotspotConfigurationHandlerTest, UpdateHotspotConfigWhenProfileLoaded) {
   const char kLoadedPassphrase[] = "loaded_passphrase";
 
   auto config =
-      base::Value::Dict()
+      base::DictValue()
           .Set(shill::kTetheringConfSSIDProperty,
-               base::HexEncode(kInitialSSID, std::strlen(kInitialSSID)))
+               base::HexEncode(base::byte_span_from_cstring(kInitialSSID)))
           .Set(shill::kTetheringConfPassphraseProperty, kInitialPassphrase)
           .Set(shill::kTetheringConfAutoDisableProperty, true)
           .Set(shill::kTetheringConfBandProperty, shill::kBandAll)
@@ -164,7 +165,7 @@ TEST_F(HotspotConfigurationHandlerTest, UpdateHotspotConfigWhenProfileLoaded) {
 
   // Simulate shill load tethering config from user profile after login.
   config.Set(shill::kTetheringConfSSIDProperty,
-             base::HexEncode(kLoadedSSID, std::strlen(kLoadedSSID)));
+             base::HexEncode(base::byte_span_from_cstring(kLoadedSSID)));
   config.Set(shill::kTetheringConfPassphraseProperty, kLoadedPassphrase);
   network_state_test_helper_.manager_test()->SetManagerProperty(
       shill::kTetheringConfigProperty, base::Value(config.Clone()));

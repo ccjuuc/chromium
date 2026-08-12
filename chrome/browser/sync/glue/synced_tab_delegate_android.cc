@@ -76,8 +76,8 @@ SyncedTabDelegateAndroid::ReadPlaceholderTabSnapshotIfItShouldSync(
     // This is duplicating the navigation entry extraction, but it's still far
     // cheaper than creating an empty WebContents.
     bool success = WebContentsState::ExtractNavigationEntries(
-        web_contents_byte_buffer->backing_buffer,
-        web_contents_byte_buffer->state_version, &is_off_the_record,
+        web_contents_byte_buffer->GetBuffer(),
+        web_contents_byte_buffer->state_version(), &is_off_the_record,
         &current_entry_index, &navigations);
 
     if (!success || !ContainsURLThatShouldSync(navigations, sessions_client)) {
@@ -85,7 +85,7 @@ SyncedTabDelegateAndroid::ReadPlaceholderTabSnapshotIfItShouldSync(
     }
   }
 
-  const TabModel* tab_model = TabModelList::FindTabModelWithWindowSessionId(
+  TabModel* tab_model = TabModelList::FindTabModelWithWindowSessionId(
       tab_android_data_provider_->GetWindowId());
   DCHECK(tab_model);
   Profile* profile = tab_model->GetProfile();

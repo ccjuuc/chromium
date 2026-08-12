@@ -242,6 +242,7 @@
 <translation id="2497706219848005458">Kuning Hijau</translation>
 <translation id="2512979179176933762">tunjukkan tetingkap</translation>
 <translation id="2523609930580546572">Tutorial ChromeVox</translation>
+<translation id="2523760288355306549">Input braille belum tersedia.</translation>
 <translation id="2525706221823668172">Pintasan papan kekunci Chromebook</translation>
 <translation id="2553108862507765288">kesilapan tatabahasa</translation>
 <translation id="2556326187583116255">Ketik dengan 2 jari untuk menghentikan sebarang pertuturan semasa</translation>
@@ -915,7 +916,7 @@
 <translation id="6999752561504308105">Selamat datang ke tutorial ChromeVox. Untuk keluar daripada tutorial ini pada bila-bila masa, leret dari kanan ke kiri dengan dua jari. Untuk menghidupkan atau mematikan ChromeVox pada bila-bila masa, tekan dan tahan kedua-dua butang Kelantangan selama lima saat. Apabila anda sudah bersedia, ketik skrin dua kali dengan satu jari untuk beralih ke pelajaran seterusnya.</translation>
 <translation id="700202842116345659">Masukan bibliografi</translation>
 <translation id="7005146664810010831">Tiada URL dijumpai</translation>
-<translation id="7026338066939101231">Susutan</translation>
+<translation id="7026338066939101231">Penyusutan</translation>
 <translation id="7031651751836475482">lstitm</translation>
 <translation id="7032910411301673020">.input {$$COUNT :number} .match $$COUNT 1{{titik tumpu khas putih}} *{{{$$COUNT} titik tumpu khas putih}}</translation>
 <translation id="7037042857287298941">Senarai sebelumnya</translation>

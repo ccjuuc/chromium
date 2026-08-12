@@ -4,10 +4,18 @@
 
 #import "ios/chrome/browser/credential_exchange/coordinator/credential_import_mediator.h"
 
+#import "base/check.h"
 #import "base/functional/callback_helpers.h"
+#import "base/not_fatal_until.h"
 #import "base/task/bind_post_task.h"
 #import "components/password_manager/core/browser/import/import_results.h"
 #import "components/password_manager/core/browser/ui/saved_passwords_presenter.h"
+#import "components/password_manager/core/common/password_manager_pref_names.h"
+#import "components/prefs/pref_service.h"
+#import "components/signin/public/base/consent_level.h"
+#import "components/signin/public/identity_manager/account_info.h"
+#import "components/signin/public/identity_manager/identity_manager.h"
+#import "components/sync/service/sync_service.h"
 #import "components/webauthn/core/browser/passkey_model.h"
 #import "ios/chrome/browser/credential_exchange/model/credential_importer.h"
 #import "ios/chrome/browser/credential_exchange/public/credential_import_stage.h"
@@ -18,10 +26,26 @@
 #import "ios/chrome/browser/data_import/public/passkey_import_item.h"
 #import "ios/chrome/browser/data_import/public/password_import_item.h"
 #import "ios/chrome/browser/favicon/model/favicon_loader.h"
+#import "ios/chrome/browser/passwords/model/password_manager_util_ios.h"
 #import "ios/chrome/browser/shared/ui/util/url_with_title.h"
 #import "ios/chrome/common/ui/favicon/favicon_attributes.h"
+#import "ios/chrome/common/ui/favicon/favicon_constants.h"
 #import "ui/gfx/favicon_size.h"
 #import "url/gurl.h"
+
+namespace {
+
+using ::password_manager::prefs::kCredentialsEnablePasskeys;
+using ::password_manager::prefs::kCredentialsEnableService;
+
+// Returns true if an import is blocked by a policy with `pref_name`.
+bool ImportBlockedByPolicy(const PrefService* pref_service,
+                           const char* pref_name) {
+  return pref_service && pref_service->IsManagedPreference(pref_name) &&
+         !pref_service->GetBoolean(pref_name);
+}
+
+}  // namespace
 
 @interface CredentialImportMediator () <CredentialImporterDelegate,
                                         CredentialImportItemFaviconDataSource>
@@ -34,8 +58,8 @@
   // Delegate for this mediator.
   id<CredentialImportMediatorDelegate> _delegate;
 
-  // Email of the signed in user account.
-  std::string _userEmail;
+  // Used to provide information about the user's account.
+  raw_ptr<signin::IdentityManager> _identityManager;
 
   // Used by the `PasswordImporter` class. Needs to be kept alive during import.
   std::unique_ptr<password_manager::SavedPasswordsPresenter>
@@ -43,16 +67,24 @@
 
   // Fetches favicons for credentials items.
   raw_ptr<FaviconLoader> _faviconLoader;
+
+  // Used to check whether the user is syncing passwords.
+  raw_ptr<syncer::SyncService> _syncService;
+
+  // Used to check the state of user's policies.
+  raw_ptr<PrefService> _prefService;
 }
 
 - (instancetype)initWithUUID:(NSUUID*)UUID
                     delegate:(id<CredentialImportMediatorDelegate>)delegate
-                   userEmail:(std::string)userEmail
+             identityManager:(signin::IdentityManager*)identityManager
      savedPasswordsPresenter:
          (std::unique_ptr<password_manager::SavedPasswordsPresenter>)
              savedPasswordsPresenter
                 passkeyModel:(webauthn::PasskeyModel*)passkeyModel
-               faviconLoader:(FaviconLoader*)faviconLoader {
+               faviconLoader:(FaviconLoader*)faviconLoader
+                 syncService:(syncer::SyncService*)syncService
+                 prefService:(PrefService*)prefService {
   self = [super init];
   if (self) {
     _savedPasswordsPresenter = std::move(savedPasswordsPresenter);
@@ -63,8 +95,10 @@
                    passkeyModel:passkeyModel];
     [_credentialImporter prepareImport:UUID];
     _delegate = delegate;
-    _userEmail = std::move(userEmail);
+    _identityManager = identityManager;
     _faviconLoader = faviconLoader;
+    _syncService = syncService;
+    _prefService = prefService;
   }
   return self;
 }
@@ -75,17 +109,25 @@
   }
 
   _consumer = consumer;
-  [_consumer setUserEmail:_userEmail];
+
+  // Sign-in is required as a first step in the import flow.
+  CHECK(_identityManager->HasPrimaryAccount(signin::ConsentLevel::kSignin),
+        base::NotFatalUntil::M152);
+  [_consumer
+      setUserEmail:_identityManager
+                       ->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
+                       .email];
 }
 
 #pragma mark - Public
 
 - (void)startImportingCredentialsWithTrustedVaultKeys:
-    (NSArray<NSData*>*)trustedVaultKeys {
+    (webauthn::SharedKeyList)trustedVaultKeys {
+  [_consumer transitionToImportStage:CredentialImportStage::kImporting];
   self.importStage = CredentialImportStage::kImporting;
-  [_consumer transitionToImportStage:self.importStage];
   [_credentialImporter
-      startImportingCredentialsWithTrustedVaultKeys:trustedVaultKeys];
+      startImportingCredentialsWithTrustedVaultKeys:std::move(
+                                                        trustedVaultKeys)];
 }
 
 #pragma mark - CredentialImporterDelegate
@@ -95,6 +137,18 @@
                       exporterDisplayName:(NSString*)exporterDisplayName {
   if (passwordCount == 0 && passkeyCount == 0) {
     [_delegate showNothingImportedScreen];
+    return;
+  }
+
+  // Check blocking policies only if there are some credentials of given type.
+  BOOL passwordsBlockedByPolicy =
+      passwordCount > 0 &&
+      ImportBlockedByPolicy(_prefService, kCredentialsEnableService);
+  BOOL passkeysBlockedByPolicy =
+      passkeyCount > 0 &&
+      ImportBlockedByPolicy(_prefService, kCredentialsEnablePasskeys);
+  if (passwordsBlockedByPolicy && passkeysBlockedByPolicy) {
+    [_delegate showNothingImportedEnterpriseScreen];
     return;
   }
 
@@ -156,6 +210,10 @@
   [_consumer transitionToImportStage:self.importStage];
 }
 
+- (void)onImportError {
+  [_delegate showGenericError];
+}
+
 #pragma mark - DataImportCredentialConflictMutator
 
 - (void)continueToImportPasswords:(NSArray<NSNumber*>*)passwordIdentifiers
@@ -187,8 +245,14 @@
     faviconLoadCompletion();
   };
   if (item.url) {
-    _faviconLoader->FaviconForPageUrlOrHost(item.url.URL, gfx::kFaviconSize,
-                                            faviconLoadedBlock);
+    // Only fallback to Google server if the user is syncing passwords, ensuring
+    // privacy for non-syncing users.
+    bool fallbackToGoogleServer =
+        password_manager_util::IsSavingPasswordsToAccountWithNormalEncryption(
+            _syncService);
+    _faviconLoader->FaviconForPageUrl(item.url.URL, kDesiredSmallFaviconSizePt,
+                                      kMinFaviconSizePt, fallbackToGoogleServer,
+                                      faviconLoadedBlock);
   } else {
     // If the URL does not exist, return the monogram for the username.
     CHECK_GT(item.username.length, 0u);

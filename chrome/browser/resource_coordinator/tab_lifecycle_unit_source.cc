@@ -18,11 +18,8 @@
 #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
 #include "chrome/browser/resource_coordinator/tab_manager.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
-#include "chrome/browser/ui/recently_audible_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "components/performance_manager/public/graph/graph.h"
@@ -158,10 +155,21 @@ void TabLifecycleUnitSource::RemoveLifecycleObserver(
   lifecycle_unit_observers_.RemoveObserver(observer);
 }
 
-void TabLifecycleUnitSource::SetFocusedTabStripModelForTesting(
+base::ScopedClosureRunner
+TabLifecycleUnitSource::SetFocusedTabStripModelForTesting(
     TabStripModel* tab_strip) {
+  base::ScopedClosureRunner reset(base::BindOnce(
+      [](base::WeakPtr<TabLifecycleUnitSource> source) {
+        if (source) {
+          source->focused_tab_strip_model_for_testing_ = nullptr;
+          source->UpdateFocusedTab();
+        }
+      },
+      weak_factory_.GetWeakPtr()));
+
   focused_tab_strip_model_for_testing_ = tab_strip;
   UpdateFocusedTab();
+  return reset;
 }
 
 void TabLifecycleUnitSource::SetMemoryLimitEnterprisePolicyFlag(bool enabled) {
@@ -183,11 +191,12 @@ TabStripModel* TabLifecycleUnitSource::GetFocusedTabStripModel() const {
   if (focused_tab_strip_model_for_testing_) {
     return focused_tab_strip_model_for_testing_;
   }
-  Browser* const focused_browser = chrome::FindBrowserWithActiveWindow();
+  BrowserWindowInterface* const focused_browser =
+      GlobalBrowserCollection::GetInstance()->GetActiveBrowser();
   if (!focused_browser) {
     return nullptr;
   }
-  return focused_browser->tab_strip_model();
+  return focused_browser->GetTabStripModel();
 }
 
 void TabLifecycleUnitSource::UpdateFocusedTab(BrowserWindowInterface* browser) {
@@ -325,27 +334,10 @@ void TabLifecycleUnitSource::OnTabStripModelChanged(
   }
 }
 
-void TabLifecycleUnitSource::OnTabChangedAt(tabs::TabInterface* tab,
-                                            int index,
-                                            TabChangeType change_type) {
-  if (change_type != TabChangeType::kAll) {
-    return;
-  }
-  content::WebContents* contents = tab->GetContents();
-  TabLifecycleUnit* lifecycle_unit = GetTabLifecycleUnit(contents);
-  // This can be called before OnTabStripModelChanged() and |lifecycle_unit|
-  // will be null in that case. http://crbug.com/877940
-  if (!lifecycle_unit) {
-    return;
-  }
-
-  auto* audible_helper = RecentlyAudibleHelper::FromWebContents(contents);
-  lifecycle_unit->SetRecentlyAudible(audible_helper->WasRecentlyAudible());
-}
 
 void TabLifecycleUnitSource::OnBrowserClosed(BrowserWindowInterface* browser) {
   // An active browser may be removed without OnBrowserActivated() being
-  // invoked. crbug.com/1206458
+  // invoked. crbug.com/40055769
   UpdateFocusedTab();
 }
 
@@ -353,8 +345,8 @@ void TabLifecycleUnitSource::OnBrowserActivated(
     BrowserWindowInterface* browser) {
   // In this case, we know that `browser` is active. Pass it directly into
   // `UpdateFocusedTab` since during startup
-  // `chrome::FindBrowserWithActiveWindow()` sometimes fails to return the
-  // proper browser.
+  // `GlobalBrowserCollection::GetInstance()->GetActiveBrowser()` sometimes
+  // fails to return the proper browser.
   UpdateFocusedTab(browser);
 }
 

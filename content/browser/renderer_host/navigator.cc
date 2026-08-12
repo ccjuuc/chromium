@@ -4,23 +4,22 @@
 
 #include "content/browser/renderer_host/navigator.h"
 
+#include <tuple>
 #include <utility>
 
 #include "base/check_op.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "base/types/optional_util.h"
-#include "content/browser/child_process_security_policy_impl.h"
-#include "content/browser/interest_group/interest_group_features.h"
 #include "content/browser/process_lock.h"
 #include "content/browser/renderer_host/debug_urls.h"
 #include "content/browser/renderer_host/frame_tree.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
+#include "content/browser/renderer_host/initiator_navigation_state_impl.h"
 #include "content/browser/renderer_host/navigation_controller_impl.h"
 #include "content/browser/renderer_host/navigation_entry_impl.h"
 #include "content/browser/renderer_host/navigation_request.h"
@@ -30,15 +29,18 @@
 #include "content/browser/renderer_host/render_frame_host_delegate.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/site_info.h"
 #include "content/browser/site_instance_impl.h"
 #include "content/browser/web_package/prefetched_signed_exchange_cache.h"
 #include "content/browser/webui/web_ui_controller_factory_registry.h"
 #include "content/browser/webui/web_ui_impl.h"
+#include "content/common/content_navigation_policy.h"
 #include "content/common/features.h"
 #include "content/common/navigation_params_utils.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/content_browser_client.h"
+#include "content/public/browser/disallow_activation_reason.h"
 #include "content/public/browser/global_request_id.h"
 #include "content/public/browser/invalidate_type.h"
 #include "content/public/browser/navigation_controller.h"
@@ -46,6 +48,7 @@
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/restore_type.h"
+#include "content/public/browser/web_ui_controller.h"
 #include "content/public/common/bindings_policy.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_constants.h"
@@ -229,13 +232,6 @@ void RecordWebPlatformSecurityMetrics(RenderFrameHostImpl* rfh,
         "Navigation.AnonymousIframeIsSandboxed",
         rfh->active_sandbox_flags() != network::mojom::WebSandboxFlags::kNone);
   }
-
-  // Webview tag guests do not follow regular process model decisions. They
-  // always stay in their original SiteInstance, regardless of COOP. Assumption
-  // made below about COOP:same-origin and unsafe-none never being in the same
-  // BrowsingInstance does not hold. See https://crbug.com/1243711.
-  if (rfh->GetSiteInstance()->IsGuest())
-    return;
 
   // Check if the navigation resulted in having same-origin documents in pages
   // with different COOP status inside the browsing context group.
@@ -473,11 +469,13 @@ bool Navigator::StartHistoryNavigationInNewSubframe(
     RenderFrameHostImpl* render_frame_host,
     mojo::PendingAssociatedRemote<mojom::NavigationClient>* navigation_client,
     blink::LocalFrameToken initiator_frame_token,
-    int initiator_process_id,
+    ChildProcessId initiator_process_id,
+    scoped_refptr<InitiatorNavigationState> initiator_navigation_state,
     base::TimeTicks actual_navigation_start) {
   return controller_.StartHistoryNavigationInNewSubframe(
       render_frame_host, navigation_client, initiator_frame_token,
-      initiator_process_id, actual_navigation_start);
+      initiator_process_id, initiator_navigation_state,
+      actual_navigation_start);
 }
 
 void Navigator::DidNavigate(
@@ -532,8 +530,18 @@ void Navigator::DidNavigate(
   }
 #endif  // BUILDFLAG(IS_ANDROID)
 
+  // Run tasks that must execute just before the commit.
+  base::WeakPtr<RenderFrameHostImpl> weak_rfh = render_frame_host->GetWeakPtr();
+  delegate_->DidNavigateAnyFramePreCommit(navigation_request.get(),
+                                          was_within_same_document);
+
+  // NOTE: the pre commit tasks may result in the destruction of the render
+  // frame host, in which case we should exit this method early.
+  if (!weak_rfh) {
+    return;
+  }
+
   if (ui::PageTransitionIsMainFrame(params.transition)) {
-    // Run tasks that must execute just before the commit.
     delegate_->DidNavigateMainFramePreCommit(navigation_request.get(),
                                              was_within_same_document);
   }
@@ -556,8 +564,9 @@ void Navigator::DidNavigate(
   // Allow main frame paint holding in the following cases:
   //  - We don't have an animated transition. See crbug.com/360844863.
   //  - At least one of the following conditions is true:
-  //    - This is a navigation from the initial document. This part helps with
-  //      tests. See crbug.com/367623929.
+  //    - This is a navigation from the initial document (in cases where this is
+  //      a brand new tab that didn't inherit another origin from an opener).
+  //      This part helps with tests. See crbug.com/367623929.
   //    - This is a same origin navigation (or we're not limiting cross-origin
   //      paint holding)
   //    - There is a user activation. This means that the user interacted with
@@ -570,9 +579,12 @@ void Navigator::DidNavigate(
   // See https://issues.chromium.org/40942531 for reasons we limit paint
   // holding.
   ContentBrowserClient* client = GetContentClient()->browser();
+  const bool allow_paint_holding_for_initial_empty_document =
+      was_on_initial_empty_document && old_frame_origin.opaque() &&
+      !old_frame_origin.GetTupleOrPrecursorTupleIfOpaque().IsValid();
   const bool allow_main_frame_paint_holding =
       !navigation_request->was_initiated_by_animated_transition() &&
-      (was_on_initial_empty_document ||
+      (allow_paint_holding_for_initial_empty_document ||
        old_frame_origin.IsSameOriginWith(params.origin) ||
        old_frame_host->HasStickyUserActivation() ||
        client->AllowNonActivatedCrossOriginPaintHolding() ||
@@ -595,21 +607,18 @@ void Navigator::DidNavigate(
       view_transition_commit_info(
           navigation_request->GetViewTransitionResources(),
           navigation_request->HasViewTransitionDelayLayerTreeViewDeletion());
+  const bool is_backward_navigation =
+      navigation_request->GetNavigationEntryOffset() < 0;
   frame_tree_node->render_manager()->DidNavigateFrame(
-      render_frame_host, navigation_request->common_params().has_user_gesture,
+      render_frame_host,
+      navigation_request->common_params().has_possibly_filtered_user_gesture,
       was_within_same_document,
       navigation_request->browsing_context_group_swap()
           .ShouldClearProxiesOnCommit(),
       navigation_request->commit_params().frame_policy, allow_paint_holding,
-      view_transition_commit_info, navigation_request->GetURL());
+      view_transition_commit_info, navigation_request->GetURL(),
+      is_backward_navigation);
 
-  // Reset the old frame host's weak pointer to auction initiator page when it
-  // is a cross-document navigation and the frame does not go into bfcache.
-  if ((base::FeatureList::IsEnabled(features::kDetectInconsistentPageImpl)) &&
-      !was_within_same_document && old_frame_host &&
-      !old_frame_host->IsInBackForwardCache()) {
-    old_frame_host->set_auction_initiator_page(nullptr);
-  }
 
   // The main frame, same site, and cross-site navigation checks for user
   // activation mirror the checks in DocumentLoader::CommitNavigation() (note:
@@ -621,14 +630,17 @@ void Navigator::DidNavigate(
   // activation, and does not need to match the same-site checks used in the
   // process model. See: crbug.com/736415, and crbug.com/40228985 for the
   // specific regression that resulted in this requirement.
+  //
+  // Since we're only clearing or providing a new activation, we don't care if
+  // `UpdateUserActivationState` succeeds or not.
   if (!was_within_same_document) {
     if (!navigation_request->commit_params()
              .should_have_sticky_user_activation) {
-      frame_tree_node->UpdateUserActivationState(
+      std::ignore = frame_tree_node->UpdateUserActivationState(
           blink::mojom::UserActivationUpdateType::kClearActivation,
           blink::mojom::UserActivationNotificationType::kNone);
     } else {
-      frame_tree_node->UpdateUserActivationState(
+      std::ignore = frame_tree_node->UpdateUserActivationState(
           blink::mojom::UserActivationUpdateType::kNotifyActivationStickyOnly,
           blink::mojom::UserActivationNotificationType::kNone);
     }
@@ -829,16 +841,6 @@ void Navigator::DidNavigate(
   delegate_->DidNavigateAnyFramePostCommit(render_frame_host, details);
 }
 
-// LINT.IfChange(InputStartPresence)
-enum class InputStartPresence {
-  kNone = 0,
-  kOnlyOld = 1,
-  kOnlyNew = 2,
-  kBoth = 3,
-  kMaxValue = kBoth,
-};
-// LINT.ThenChange(//tools/metrics/histograms/metadata/navigation/enums.xml:InputStartPresence)
-
 void Navigator::Navigate(std::unique_ptr<NavigationRequest> request,
                          ReloadType reload_type) {
   TRACE_EVENT0("browser,navigation", "Navigator::Navigate");
@@ -866,22 +868,24 @@ void Navigator::Navigate(std::unique_ptr<NavigationRequest> request,
   NavigationRequest* ongoing_navigation_request =
       frame_tree_node->navigation_request();
   bool is_duplicate_navigation = false;
+  bool start_diff_under_threshold = false;
   base::TimeDelta nav_start_diff;
+  bool is_on_target_origin =
+      GetContentClient()->IsUrlInIgnoreDuplicateNavsOrigins(request->GetURL());
   if (ongoing_navigation_request &&
-      ongoing_navigation_request->HasCookieChangeListener() &&
-      !ongoing_navigation_request->DidCookiesChangeAfterStart(
-          /*exclude_http_only=*/false) &&
       ongoing_navigation_request->IsRendererInitiated() ==
           request->IsRendererInitiated() &&
       request->GetURL() == ongoing_navigation_request->GetURL() &&
+      request->GetURL().SchemeIsHTTPOrHTTPS() &&
       request->common_params().method == "GET" &&
       ongoing_navigation_request->common_params().method == "GET" &&
       request->GetInitiatorFrameToken() ==
           ongoing_navigation_request->GetInitiatorFrameToken() &&
       request->common_params().initiator_origin ==
           ongoing_navigation_request->common_params().initiator_origin &&
-      request->common_params().has_user_gesture ==
-          ongoing_navigation_request->common_params().has_user_gesture &&
+      request->common_params().has_possibly_filtered_user_gesture ==
+          ongoing_navigation_request->common_params()
+              .has_possibly_filtered_user_gesture &&
       request->common_params().should_replace_current_entry ==
           ongoing_navigation_request->common_params()
               .should_replace_current_entry &&
@@ -894,51 +898,98 @@ void Navigator::Navigate(std::unique_ptr<NavigationRequest> request,
           ongoing_navigation_request->common_params().referrer &&
       request->common_params().transition ==
           ongoing_navigation_request->common_params().transition) {
-    is_duplicate_navigation = true;
+    // Note: The browser-initiated duplicate navigation cookie check differs
+    // from the renderer-initiated check. Since browser-initiated navigations
+    // don't pose cross-site leak risks, we can check all cookie changes here
+    // (including HttpOnly cookie and cross-document).
+    DuplicateNavsCookieStatus cookie_status;
+    if (!ongoing_navigation_request->HasCookieChangeListener()) {
+      cookie_status = DuplicateNavsCookieStatus::kNoListener;
+      is_duplicate_navigation = true;
+    } else if (ongoing_navigation_request->DidCookiesChangeAfterStart(
+                   /*exclude_http_only=*/false)) {
+      cookie_status = DuplicateNavsCookieStatus::kCookiesChanged;
+    } else {
+      cookie_status = DuplicateNavsCookieStatus::kCookiesNotChanged;
+      is_duplicate_navigation = true;
+    }
+    base::UmaHistogramEnumeration(
+        "Navigation.BrowserInitiated.DuplicateNavCookieStatus", cookie_status);
     nav_start_diff =
         (request->common_params().navigation_start -
          ongoing_navigation_request->common_params().navigation_start);
+    start_diff_under_threshold =
+        nav_start_diff <= GetContentClient()->GetIgnoreDuplicateNavsThreshold();
+    if (start_diff_under_threshold) {
+      base::UmaHistogramEnumeration(
+          "Navigation.BrowserInitiated.DuplicateNavCookieStatus.UnderThreshold",
+          cookie_status);
+      if (is_on_target_origin) {
+        base::UmaHistogramEnumeration(
+            "Navigation.BrowserInitiated.DuplicateNavCookieStatus."
+            "UnderThreshold.OnTargetOrigins",
+            cookie_status);
+      }
+    }
   }
   base::UmaHistogramBoolean(
       "Navigation.BrowserInitiated.IsDuplicateWithoutThresholdCheck2",
       is_duplicate_navigation);
+  if (is_on_target_origin) {
+    base::UmaHistogramBoolean(
+        "Navigation.BrowserInitiated.IsDuplicateWithoutThresholdCheck2."
+        "OnTargetOrigins",
+        is_duplicate_navigation);
+  }
   if (is_duplicate_navigation) {
     // The navigation is similar to a previous navigation. Check if it's started
     // close enough to the start of the previous navigation, in which case we
     // can just ignore the new navigation and keep the previous navigation.
-    bool start_diff_under_threshold =
-        (nav_start_diff <= features::kDuplicateNavThreshold.Get());
     base::UmaHistogramBoolean(
         "Navigation.BrowserInitiated.DuplicateNavIsUnderThreshold2",
         start_diff_under_threshold);
     base::UmaHistogramTimes(
         "Navigation.BrowserInitiated.DuplicateNavStartTimeDiff2",
         nav_start_diff);
-    const auto& new_input_start = request->common_params().input_start;
-    const auto& old_input_start =
-        ongoing_navigation_request->common_params().input_start;
-    const std::string histogram_prefix = base::StrCat(
-        {"Navigation.", request->IsRendererInitiated() ? "Renderer" : "Browser",
-         "Initiated."});
-    InputStartPresence presence;
-    if (new_input_start.is_null() && old_input_start.is_null()) {
-      presence = InputStartPresence::kNone;
-    } else if (new_input_start.is_null()) {
-      presence = InputStartPresence::kOnlyOld;
-    } else if (old_input_start.is_null()) {
-      presence = InputStartPresence::kOnlyNew;
-    } else {
-      presence = InputStartPresence::kBoth;
-    }
-    base::UmaHistogramEnumeration(
-        base::StrCat(
-            {histogram_prefix, "DuplicateNavigationInputStartPresence"}),
-        presence);
-    if (presence == InputStartPresence::kBoth) {
-      const base::TimeDelta input_diff = new_input_start - old_input_start;
+    if (is_on_target_origin) {
+      base::UmaHistogramBoolean(
+          "Navigation.BrowserInitiated.DuplicateNavIsUnderThreshold2."
+          "OnTargetOrigins",
+          start_diff_under_threshold);
       base::UmaHistogramTimes(
-          base::StrCat({histogram_prefix, "DuplicateNavInputTimeDiff"}),
-          input_diff);
+          "Navigation.BrowserInitiated.DuplicateNavStartTimeDiff2."
+          "OnTargetOrigins",
+          nav_start_diff);
+    }
+    if (!request->IsRendererInitiated()) {
+      const auto& new_input_start = request->common_params().input_start;
+      const auto& old_input_start =
+          ongoing_navigation_request->common_params().input_start;
+      blink::InputStartPresence presence;
+      if (new_input_start.is_null() && old_input_start.is_null()) {
+        presence = blink::InputStartPresence::kNone;
+      } else if (new_input_start.is_null()) {
+        presence = blink::InputStartPresence::kOnlyOld;
+      } else if (old_input_start.is_null()) {
+        presence = blink::InputStartPresence::kOnlyNew;
+      } else {
+        presence = blink::InputStartPresence::kBoth;
+      }
+      base::UmaHistogramEnumeration(
+          "Navigation.BrowserInitiated.DuplicateNavigationInputStartPresence2",
+          presence);
+      if (presence == blink::InputStartPresence::kBoth) {
+        const base::TimeDelta input_diff = new_input_start - old_input_start;
+        base::UmaHistogramTimes(
+            "Navigation.BrowserInitiated.DuplicateNavInputTimeDiff2",
+            input_diff);
+        if (is_on_target_origin) {
+          base::UmaHistogramTimes(
+              "Navigation.BrowserInitiated.DuplicateNavInputTimeDiff2."
+              "OnTargetOrigins",
+              input_diff);
+        }
+      }
     }
     if (start_diff_under_threshold &&
         GetContentClient()->ShouldIgnoreDuplicateNavs(
@@ -948,7 +999,7 @@ void Navigator::Navigate(std::unique_ptr<NavigationRequest> request,
       DVLOG(0) << "Ignoring duplicate navigation to "
                << request->common_params().url
                << " due to the short interval since the previous one.";
-
+      ongoing_navigation_request->DidIgnoreDuplicateNavigation();
       return;
     } else {
       ongoing_navigation_request->set_navigation_discard_reason(
@@ -1025,6 +1076,7 @@ void Navigator::RequestOpenURL(
     int initiator_process_id,
     const std::optional<url::Origin>& initiator_origin,
     const std::optional<GURL>& initiator_base_url,
+    scoped_refptr<InitiatorNavigationState> initiator_navigation_state,
     const scoped_refptr<network::ResourceRequestBody>& post_body,
     const std::string& extra_headers,
     const Referrer& referrer,
@@ -1034,8 +1086,8 @@ void Navigator::RequestOpenURL(
     blink::mojom::TriggeringEventInfo triggering_event_info,
     const std::string& href_translate,
     scoped_refptr<network::SharedURLLoaderFactory> blob_url_loader_factory,
-    const std::optional<blink::Impression>& impression,
-    bool has_rel_opener) {
+    bool has_rel_opener,
+    bool started_by_ad) {
   // Note: This can be called for subframes (even when OOPIFs are not possible)
   // if the disposition calls for a different window.
 
@@ -1085,6 +1137,8 @@ void Navigator::RequestOpenURL(
   params.initiator_base_url = initiator_base_url;
   params.initiator_frame_token = base::OptionalFromPtr(initiator_frame_token);
   params.initiator_process_id = initiator_process_id;
+  params.initiator_navigation_state = initiator_navigation_state;
+  params.started_by_ad = started_by_ad;
 
   // RequestOpenURL is used only for local frames, so we can get here only if
   // the navigation is initiated by a frame in the same SiteInstance as this
@@ -1096,20 +1150,23 @@ void Navigator::RequestOpenURL(
   params.source_render_process_id =
       render_frame_host->GetProcess()->GetDeprecatedID();
 
-  if (render_frame_host->web_ui()) {
+  if (WebUI* web_ui = render_frame_host->web_ui()) {
     // Note that we hide the referrer for Web UI pages. We don't really want
     // web sites to see a referrer of "chrome://blah" (and some chrome: URLs
     // might have search terms or other stuff we don't want to send to the
     // site), so we send no referrer.
     params.referrer = Referrer();
 
-    // Navigations in Web UI pages count as browser-initiated navigations.
-    params.is_renderer_initiated = false;
+    // Navigations in trusted Web UI pages count as browser-initiated
+    // navigations.
+    if (web_ui->GetController()->GetTrustPolicy() ==
+        WebUIController::TrustPolicy::kTrusted) {
+      params.is_renderer_initiated = false;
+    }
   }
 
   params.blob_url_loader_factory = std::move(blob_url_loader_factory);
   params.href_translate = href_translate;
-  params.impression = impression;
   params.has_rel_opener = has_rel_opener;
 
   delegate_->OpenURL(params, /*navigation_handle_callback=*/{});
@@ -1119,10 +1176,10 @@ void Navigator::NavigateFromFrameProxy(
     RenderFrameHostImpl* render_frame_host,
     const GURL& url,
     const blink::LocalFrameToken* initiator_frame_token,
-    int initiator_process_id,
+    ChildProcessId initiator_process_id,
     const url::Origin& initiator_origin,
     const std::optional<GURL>& initiator_base_url,
-    SiteInstance* source_site_instance,
+    scoped_refptr<InitiatorNavigationState> initiator_navigation_state,
     const Referrer& referrer,
     ui::PageTransition page_transition,
     bool should_replace_current_entry,
@@ -1134,9 +1191,7 @@ void Navigator::NavigateFromFrameProxy(
     network::mojom::SourceLocationPtr source_location,
     bool has_user_gesture,
     bool is_form_submission,
-    const std::optional<blink::Impression>& impression,
-    blink::mojom::NavigationInitiatorActivationAndAdStatus
-        initiator_activation_and_ad_status,
+    bool started_by_ad,
     base::TimeTicks actual_navigation_start_time,
     base::TimeTicks navigation_start_time,
     bool is_embedder_initiated_fenced_frame_navigation,
@@ -1144,7 +1199,6 @@ void Navigator::NavigateFromFrameProxy(
     bool force_new_browsing_instance,
     bool is_container_initiated,
     bool has_rel_opener,
-    net::StorageAccessApiStatus storage_access_api_status,
     std::optional<std::u16string> embedder_shared_storage_context) {
   // |method != "POST"| should imply absence of |post_body|.
   if (method != "POST" && post_body) {
@@ -1155,22 +1209,27 @@ void Navigator::NavigateFromFrameProxy(
   // With MPArch there may be multiple main frames and so is_main_frame should
   // not be used to identify outermost main frames.
   if (!delegate_->ShouldAllowRendererInitiatedCrossProcessNavigation(
-          render_frame_host->IsOutermostMainFrame()))
+          render_frame_host, render_frame_host->IsOutermostMainFrame())) {
     return;
+  }
 
   // TODO(creis): Determine if this transfer started as a browser-initiated
   // navigation.  See https://crbug.com/495161.
   bool is_renderer_initiated = true;
   Referrer referrer_to_use(referrer);
-  if (render_frame_host->web_ui()) {
+  if (WebUI* web_ui = render_frame_host->web_ui()) {
     // Note that we hide the referrer for Web UI pages. We don't really want
     // web sites to see a referrer of "chrome://blah" (and some chrome: URLs
     // might have search terms or other stuff we don't want to send to the
     // site), so we send no referrer.
     referrer_to_use = Referrer();
 
-    // Navigations in Web UI pages count as browser-initiated navigations.
-    is_renderer_initiated = false;
+    // Navigations in trusted Web UI pages count as browser-initiated
+    // navigations.
+    if (web_ui->GetController()->GetTrustPolicy() ==
+        WebUIController::TrustPolicy::kTrusted) {
+      is_renderer_initiated = false;
+    }
   }
 
   if (is_renderer_initiated &&
@@ -1180,27 +1239,29 @@ void Navigator::NavigateFromFrameProxy(
     return;
   }
 
-  if (!will_navigate_from_frame_proxy_callback_for_testing_.is_null()) {
-    will_navigate_from_frame_proxy_callback_for_testing_.Run();
+  // Only active and prerendered documents are allowed to start navigation in
+  // their frame.
+  if (render_frame_host->lifecycle_state() !=
+      RenderFrameHostImpl::LifecycleStateImpl::kPrerendering) {
+    // If this is reached in case the RenderFrameHost is in BackForwardCache
+    // evict the document from BackForwardCache.
+    if (render_frame_host->IsInactiveAndDisallowActivation(
+            DisallowActivationReasonId::kBeginNavigation)) {
+      return;
+    }
   }
 
   controller_.NavigateFromFrameProxy(
       render_frame_host, url, initiator_frame_token, initiator_process_id,
       initiator_origin, initiator_base_url, is_renderer_initiated,
-      source_site_instance, referrer_to_use, page_transition,
+      initiator_navigation_state, referrer_to_use, page_transition,
       should_replace_current_entry, download_policy, method, post_body,
       extra_headers, std::move(source_location),
-      std::move(blob_url_loader_factory), is_form_submission, impression,
-      initiator_activation_and_ad_status, actual_navigation_start_time,
-      navigation_start_time, is_embedder_initiated_fenced_frame_navigation,
-      is_unfenced_top_navigation, force_new_browsing_instance,
-      is_container_initiated, has_rel_opener, storage_access_api_status,
+      std::move(blob_url_loader_factory), is_form_submission, has_user_gesture,
+      started_by_ad, actual_navigation_start_time, navigation_start_time,
+      is_embedder_initiated_fenced_frame_navigation, is_unfenced_top_navigation,
+      force_new_browsing_instance, is_container_initiated, has_rel_opener,
       embedder_shared_storage_context);
-}
-
-void Navigator::SetWillNavigateFromFrameProxyCallbackForTesting(
-    const base::RepeatingClosure& callback) {
-  will_navigate_from_frame_proxy_callback_for_testing_ = callback;
 }
 
 void Navigator::BeforeUnloadCompleted(FrameTreeNode* frame_tree_node,
@@ -1262,9 +1323,15 @@ void Navigator::OnBeginNavigation(
     mojo::PendingAssociatedRemote<mojom::NavigationClient> navigation_client,
     scoped_refptr<PrefetchedSignedExchangeCache>
         prefetched_signed_exchange_cache,
-    int initiator_process_id,
+    ChildProcessId initiator_process_id,
     mojo::PendingReceiver<mojom::NavigationRendererCancellationListener>
-        renderer_cancellation_listener) {
+        renderer_cancellation_listener,
+    mojo::PendingReceiver<
+        mojom::NavigationRendererIgnoreDuplicateNavigationListener>
+        renderer_ignore_duplicate_navigation_listener,
+    mojo::PendingReceiver<blink::mojom::NavigationResumeDeferredCommitListener>
+        deferred_commit_resume_listener,
+    scoped_refptr<InitiatorNavigationState> initiator_navigation_state) {
   TRACE_EVENT0("navigation", "Navigator::OnBeginNavigation");
 
   if (common_params->is_history_navigation_in_new_child_frame) {
@@ -1282,6 +1349,7 @@ void Navigator::OnBeginNavigation(
         frame_tree_node->navigator().StartHistoryNavigationInNewSubframe(
             frame_tree_node->current_frame_host(), &navigation_client,
             *begin_params->initiator_frame_token, initiator_process_id,
+            initiator_navigation_state,
             common_params->actual_navigation_start)) {
       return;
     }
@@ -1303,8 +1371,9 @@ void Navigator::OnBeginNavigation(
   }
 
   // Verify this navigation has precedence.
-  if (ShouldIgnoreIncomingRendererRequest(ongoing_navigation_request,
-                                          common_params->has_user_gesture)) {
+  if (ShouldIgnoreIncomingRendererRequest(
+          ongoing_navigation_request,
+          common_params->has_possibly_filtered_user_gesture)) {
     return;
   }
 
@@ -1324,7 +1393,10 @@ void Navigator::OnBeginNavigation(
           controller_.GetEntryCount(), override_user_agent,
           std::move(blob_url_loader_factory), std::move(navigation_client),
           std::move(prefetched_signed_exchange_cache),
-          std::move(renderer_cancellation_listener)));
+          std::move(renderer_cancellation_listener),
+          std::move(renderer_ignore_duplicate_navigation_listener),
+          std::move(deferred_commit_resume_listener),
+          initiator_navigation_state));
   NavigationRequest* navigation_request = frame_tree_node->navigation_request();
 
   metrics_data_ = std::make_unique<NavigationMetricsData>(
@@ -1452,23 +1524,23 @@ void Navigator::LogRendererInitiatedBeforeUnloadTime(
 
   if (!base::TimeTicks::IsConsistentAcrossProcesses()) {
     // These timestamps come directly from the renderer so they might need to be
-    // converted to local time stamps.
-    blink::InterProcessTimeTicksConverter converter(
-        blink::LocalTimeTicks::FromTimeTicks(base::TimeTicks()),
-        blink::LocalTimeTicks::FromTimeTicks(base::TimeTicks::Now()),
-        blink::RemoteTimeTicks::FromTimeTicks(
-            renderer_before_unload_start_time),
-        blink::RemoteTimeTicks::FromTimeTicks(renderer_before_unload_end_time));
-    blink::LocalTimeTicks converted_renderer_before_unload_start =
-        converter.ToLocalTimeTicks(blink::RemoteTimeTicks::FromTimeTicks(
-            renderer_before_unload_start_time));
-    blink::LocalTimeTicks converted_renderer_before_unload_end =
-        converter.ToLocalTimeTicks(blink::RemoteTimeTicks::FromTimeTicks(
-            renderer_before_unload_end_time));
+    // converted to local time stamps. However, since this is
+    // renderer-initiated, we don't have a browser-side `local_lower_bound`
+    // anchor for the start of the event.
+    //
+    // `InterProcessTimeTicksConverter` is not applicable here because it
+    // requires a two-point anchor (both start and end points on both local and
+    // remote processes) to decouple clock skew from communication latency.
+    // Without a start anchor (`local_lower_bound`), we cannot calculate the
+    // round-trip time or the scaling factor.
+    //
+    // We instead assume the event finished just before it was received and use
+    // the renderer's duration to establish the local timestamps.
+    base::TimeTicks now = base::TimeTicks::Now();
     metrics_data_->renderer_before_unload_start_ =
-        converted_renderer_before_unload_start.ToTimeTicks();
-    metrics_data_->renderer_before_unload_end_ =
-        converted_renderer_before_unload_end.ToTimeTicks();
+        now -
+        (renderer_before_unload_end_time - renderer_before_unload_start_time);
+    metrics_data_->renderer_before_unload_end_ = now;
   } else {
     metrics_data_->renderer_before_unload_start_ =
         renderer_before_unload_start_time;
@@ -1653,9 +1725,18 @@ Navigator::GetNavigationEntryForRendererInitiatedNavigation(
   entry->set_reload_type(NavigationRequest::NavigationTypeToReloadType(
       common_params.navigation_type));
   entry->SetIsOverridingUserAgent(override_user_agent);
-
   controller_.SetPendingEntry(std::move(entry));
-  delegate_->NotifyChangedNavigationState(content::INVALIDATE_TYPE_URL);
+
+  // If the embedder's OverrideNavigationParams flipped this entry's
+  // is_renderer_initiated bit to false (e.g., for an NTP navigation that
+  // gets overridden to look browser-initiated), the INVALIDATE_TYPE_URL
+  // notification in SetPendingEntry was skipped because it is gated on
+  // is_renderer_initiated(). Fire it here so the omnibox can reflect the
+  // destination URL during the pending navigation, rather than displaying
+  // stale text until commit.
+  if (!controller_.GetPendingEntry()->is_renderer_initiated()) {
+    delegate_->NotifyChangedNavigationState(INVALIDATE_TYPE_URL);
+  }
 
   return controller_.GetPendingEntry();
 }

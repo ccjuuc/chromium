@@ -17,12 +17,15 @@
 #include "chrome/browser/picture_in_picture/picture_in_picture_input_protector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/extensions/extension_permissions_view.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/grit/theme_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/page_navigator.h"
@@ -34,6 +37,7 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/bubble/bubble_frame_view.h"
@@ -49,13 +53,13 @@
 #include "ui/views/layout/table_layout.h"
 #include "ui/views/layout/table_layout_view.h"
 #include "ui/views/metadata/view_factory.h"
-#include "ui/views/metadata/view_factory_internal.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/window/dialog_delegate.h"
 
 using content::OpenURLParams;
 using content::Referrer;
+using extensions::InstallPromptData;
 
 namespace {
 
@@ -78,18 +82,20 @@ std::u16string GetRatingAccessibleName(double rating, int rating_count) {
 void ShowExtensionInstallDialogImpl(
     std::unique_ptr<ExtensionInstallPromptShowParams> show_params,
     ExtensionInstallPrompt::DoneCallback done_callback,
-    std::unique_ptr<ExtensionInstallPrompt::Prompt> prompt) {
+    std::unique_ptr<InstallPromptData> prompt) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   // If the dialog has to be parented to WebContents, force activate the
   // contents. See crbug.com/40059470.
   content::WebContents* web_contents = show_params->GetParentWebContents();
-  Browser* browser =
-      web_contents ? chrome::FindBrowserWithTab(web_contents) : nullptr;
+  BrowserWindowInterface* browser =
+      web_contents ? GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+                         web_contents)
+                   : nullptr;
 
   if (browser &&
-      browser->tab_strip_model()->GetActiveWebContents() != web_contents) {
-    browser->ActivateContents(web_contents);
+      browser->GetTabStripModel()->GetActiveWebContents() != web_contents) {
+    BrowserWebContentsDelegate::From(browser)->ActivateContents(web_contents);
   }
 
   gfx::NativeWindow parent_window = show_params->GetParentWindow();
@@ -234,7 +240,7 @@ END_METADATA
 ExtensionInstallDialogView::ExtensionInstallDialogView(
     std::unique_ptr<ExtensionInstallPromptShowParams> show_params,
     ExtensionInstallPrompt::DoneCallback done_callback,
-    std::unique_ptr<ExtensionInstallPrompt::Prompt> prompt)
+    std::unique_ptr<InstallPromptData> prompt)
     : profile_(show_params->profile()),
       show_params_(std::move(show_params)),
       done_callback_(std::move(done_callback)),
@@ -255,8 +261,7 @@ ExtensionInstallDialogView::ExtensionInstallDialogView(
 
   // If the prompt is related to requesting an extension, set the default button
   // to OK.
-  if (prompt_->type() ==
-      ExtensionInstallPrompt::PromptType::EXTENSION_REQUEST_PROMPT) {
+  if (prompt_->type() == InstallPromptData::EXTENSION_REQUEST_PROMPT) {
     default_button = static_cast<int>(ui::mojom::DialogButton::kOk);
   }
 
@@ -395,8 +400,7 @@ void ExtensionInstallDialogView::OnDialogAccepted() {
   extension_registry_observation_.Reset();
 
   bool expect_justification =
-      prompt_->type() ==
-      ExtensionInstallPrompt::PromptType::EXTENSION_REQUEST_PROMPT;
+      prompt_->type() == InstallPromptData::EXTENSION_REQUEST_PROMPT;
   DCHECK(expect_justification == !!justification_view_);
 
   prompt_->OnDialogAccepted();
@@ -452,7 +456,7 @@ void ExtensionInstallDialogView::OnExtensionUninstalled(
     content::BrowserContext* browser_context,
     const extensions::Extension* extension,
     extensions::UninstallReason reason) {
-  // Extra checks for https://crbug.com/1259043.
+  // Extra checks for https://crbug.com/40797383.
   // TODO(devlin): Remove these when we've validated there's no longer a crash.
   CHECK(extension);
   CHECK(prompt_);
@@ -487,7 +491,8 @@ void ExtensionInstallDialogView::LinkClicked() {
         params, /*navigation_handle_callback=*/{});
   } else {
     chrome::ScopedTabbedBrowserDisplayer displayer(profile_);
-    displayer.browser()->OpenURL(params, /*navigation_handle_callback=*/{});
+    displayer.browser_window_interface()->OpenURL(
+        params, /*navigation_handle_callback=*/{});
   }
   CloseDialog();
 }
@@ -497,8 +502,7 @@ void ExtensionInstallDialogView::CreateContents() {
 
   bool has_permissions = prompt_->GetPermissionCount() > 0;
   bool requires_justification =
-      prompt_->type() ==
-      ExtensionInstallPrompt::PromptType::EXTENSION_REQUEST_PROMPT;
+      prompt_->type() == InstallPromptData::EXTENSION_REQUEST_PROMPT;
 
   if (!has_permissions && !requires_justification) {
     // Use a smaller margin between the title area and buttons, since there
@@ -635,7 +639,27 @@ ExtensionInstallDialogView::CreateWebstoreDataBuilder() {
           .SetAccessibleRole(ax::mojom::Role::kStaticText)
           .SetAccessibleName(GetRatingAccessibleName(prompt_->average_rating(),
                                                      prompt_->rating_count()));
-  std::vector<const gfx::ImageSkia*> rating_stars = prompt_->GetRatingStars();
+
+  auto [full_stars, rating_fractional] = prompt_->GetRatingStars();
+
+  std::vector<const gfx::ImageSkia*> rating_stars;
+  ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
+  int i = 0;
+  while (i < full_stars) {
+    rating_stars.push_back(rb.GetImageSkiaNamed(IDR_EXTENSIONS_RATING_STAR_ON));
+    i++;
+  }
+  if (rating_fractional) {
+    rating_stars.push_back(
+        rb.GetImageSkiaNamed(IDR_EXTENSIONS_RATING_STAR_HALF_LEFT));
+    i++;
+  }
+  while (i < kMaxExtensionRating) {
+    rating_stars.push_back(
+        rb.GetImageSkiaNamed(IDR_EXTENSIONS_RATING_STAR_OFF));
+    i++;
+  }
+
   for (auto star : rating_stars) {
     rating_builder.AddChild(views::Builder<views::ImageView>()
                                 .SetImage(ui::ImageModel::FromImageSkia(*star))

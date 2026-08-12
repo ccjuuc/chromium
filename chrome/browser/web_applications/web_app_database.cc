@@ -11,9 +11,11 @@
 
 #include "base/base64.h"
 #include "base/check.h"
+#include "base/check_op.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/strings/to_string.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "chrome/browser/web_applications/proto/web_app.pb.h"
@@ -117,12 +119,10 @@ void WebAppDatabase::Write(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(opened_);
 
-  std::unique_ptr<syncer::DataTypeStore::WriteBatch> write_batch =
-      store_->CreateWriteBatch();
-
   // |update_data| can be empty here but we should write |metadata_change_list|
   // anyway.
-  write_batch->TakeMetadataChangesFrom(std::move(metadata_change_list));
+  std::unique_ptr<syncer::DataTypeStore::WriteBatch> write_batch =
+      store_->CreateWriteBatch(std::move(metadata_change_list));
 
   for (const std::unique_ptr<WebApp>& web_app : update_data.apps_to_create) {
     auto proto = WebAppToProto(*web_app);
@@ -146,7 +146,26 @@ void WebAppDatabase::Write(
 
 // static
 int WebAppDatabase::GetCurrentDatabaseVersion() {
-  return 5;
+  return 7;
+}
+
+void WebAppDatabase::SetDatabaseVersionForTesting(int version,
+                                                  base::OnceClosure callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(opened_);
+  std::unique_ptr<syncer::DataTypeStore::WriteBatch> write_batch =
+      store_->CreateWriteBatch();
+  proto::DatabaseMetadata metadata;
+  metadata.set_version(version);
+  write_batch->WriteData(std::string(kDatabaseMetadataKey),
+                         metadata.SerializeAsString());
+  store_->CommitWriteBatch(
+      std::move(write_batch),
+      base::BindOnce(
+          &WebAppDatabase::OnDataWritten, weak_ptr_factory_.GetWeakPtr(),
+          base::BindOnce(
+              [](base::OnceClosure cb, bool success) { std::move(cb).Run(); },
+              std::move(callback))));
 }
 
 WebAppDatabase::ProtobufState::ProtobufState() = default;
@@ -183,7 +202,8 @@ WebAppDatabase::ProtobufState WebAppDatabase::ParseProtobufs(
   return state;
 }
 
-void WebAppDatabase::MigrateDatabase(ProtobufState& state) {
+WebAppDatabase::MigrationResult WebAppDatabase::MigrateDatabase(
+    ProtobufState& state) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // Migration should happen when we have gotten a `store_`, but haven't
   // finished opening the database yet.
@@ -238,7 +258,35 @@ void WebAppDatabase::MigrateDatabase(ProtobufState& state) {
     did_change_metadata = true;
   }
 
-  CHECK_EQ(state.metadata.version(), GetCurrentDatabaseVersion());
+  // Upgrade from version 5 to version 6.
+  if (state.metadata.version() < 6 && GetCurrentDatabaseVersion() >= 6) {
+    MigrateDisplayModeOverrideToDisplayOverrides(state, changed_apps);
+    base::UmaHistogramSparse("WebApp.Database.VersionUpgradedTo", 6);
+    state.metadata.set_version(6);
+    did_change_metadata = true;
+  }
+
+  // Upgrade from version 6 to version 7.
+  bool declined_to_upgrade = false;
+  if (state.metadata.version() < 7 && GetCurrentDatabaseVersion() >= 7) {
+    if (base::FeatureList::IsEnabled(
+            features::kWebAppUpgradeToDatabaseVersion6)) {
+      MigrateScopeToStartUrlGetWithoutFilenameIfInvalid(state, changed_apps);
+      base::UmaHistogramSparse("WebApp.Database.VersionUpgradedTo", 7);
+      state.metadata.set_version(7);
+      did_change_metadata = true;
+    } else {
+      declined_to_upgrade = true;
+    }
+  }
+
+  int expected_version = declined_to_upgrade ? 6 : GetCurrentDatabaseVersion();
+  if (state.metadata.version() != expected_version) {
+    DLOG(ERROR) << "Mismatch between web app database state metadata version: "
+                << state.metadata.version()
+                << " and current version: " << expected_version;
+    return MigrationResult::kDowngradeDetected;
+  }
 
   if (did_change_metadata || !changed_apps.empty()) {
     std::unique_ptr<syncer::DataTypeStore::WriteBatch> write_batch =
@@ -256,6 +304,7 @@ void WebAppDatabase::MigrateDatabase(ProtobufState& state) {
         base::BindOnce(&WebAppDatabase::OnDataWritten,
                        weak_ptr_factory_.GetWeakPtr(), base::DoNothing()));
   }
+  return MigrationResult::kSuccess;
 }
 
 void WebAppDatabase::MigrateInstallSourceAddUserInstalled(
@@ -522,18 +571,18 @@ void WebAppDatabase::MigrateToRelativeManifestIdNoFragment(
     }
 
     // Calculate the expected manifest_id and relative path without fragment.
-    webapps::ManifestId expected_manifest_id;
+    std::optional<webapps::ManifestId> expected_manifest_id;
     if (sync_data->has_relative_manifest_id()) {
-      expected_manifest_id =
-          GenerateManifestId(sync_data->relative_manifest_id(), start_url);
+      expected_manifest_id = GenerateManifestIdUnsafe(
+          sync_data->relative_manifest_id(), start_url);
     } else {
-      expected_manifest_id = GenerateManifestIdFromStartUrlOnly(start_url);
+      expected_manifest_id = webapps::ManifestId::Create(start_url);
     }
-    if (!expected_manifest_id.is_valid()) {
+    if (!expected_manifest_id.has_value()) {
       continue;
     }
     std::string expected_relative_path =
-        RelativeManifestIdPath(expected_manifest_id);
+        RelativeManifestIdPath(*expected_manifest_id);
 
     bool changed = false;
     if (!sync_data->has_relative_manifest_id()) {
@@ -640,6 +689,74 @@ void WebAppDatabase::MigratePendingUpdateInfoClearIconMetadataIfCorrupted(
       corrupted_apps_count);
 }
 
+void WebAppDatabase::MigrateDisplayModeOverrideToDisplayOverrides(
+    ProtobufState& state,
+    std::set<webapps::AppId>& changed_apps) {
+  // Migrating from version 5 to version 6.
+  CHECK_LT(state.metadata.version(), 6);
+  int apps_migrated_count = 0;
+  for (auto& [app_id, app_proto] : state.apps) {
+    if (app_proto.display_mode_override_deprecated_size() == 0) {
+      // This app does not have the deprecated field, nothing to migrate.
+      continue;
+    }
+
+    // Ignore the deprecated field if the new field is set.
+    if (app_proto.display_overrides_size() == 0) {
+      for (int i = 0; i < app_proto.display_mode_override_deprecated_size();
+           ++i) {
+        auto old_mode = app_proto.display_mode_override_deprecated(i);
+        auto* new_item = app_proto.add_display_overrides();
+        new_item->set_display_mode(old_mode);
+      }
+    }
+
+    // At this point both fields are non-empty. Clear the deprecated field.
+    app_proto.clear_display_mode_override_deprecated();
+    changed_apps.insert(app_id);
+    apps_migrated_count++;
+  }
+  base::UmaHistogramCounts1000(
+      "WebApp.Migrations.DisplayModeOverrideToDisplayOverrides",
+      apps_migrated_count);
+}
+
+void WebAppDatabase::MigrateScopeToStartUrlGetWithoutFilenameIfInvalid(
+    ProtobufState& state,
+    std::set<webapps::AppId>& changed_apps) {
+  // Migrating from version 6 to version 7.
+  CHECK_LT(state.metadata.version(), 7);
+  int apps_migrated_count = 0;
+
+  for (auto& [app_id, app_proto] : state.apps) {
+    if (!app_proto.has_sync_data() || !app_proto.sync_data().has_start_url() ||
+        !app_proto.has_scope()) {
+      continue;
+    }
+
+    GURL start_url(app_proto.sync_data().start_url());
+    GURL scope(app_proto.scope());
+
+    if (!start_url.is_valid()) {
+      continue;
+    }
+
+    if (scope.is_valid() && base::StartsWith(start_url.spec(), scope.spec(),
+                                             base::CompareCase::SENSITIVE)) {
+      continue;
+    }
+
+    // If start_url is not within scope, update scope.
+    GURL new_scope = start_url.GetWithoutFilename();
+    app_proto.set_scope(new_scope.spec());
+    changed_apps.insert(app_id);
+    apps_migrated_count++;
+  }
+
+  base::UmaHistogramCounts1000("WebApp.Migrations.ScopeMismatchedWithStartUrl",
+                               apps_migrated_count);
+}
+
 void WebAppDatabase::OnDatabaseOpened(
     RegistryOpenedCallback callback,
     const std::optional<syncer::ModelError>& error,
@@ -649,7 +766,8 @@ void WebAppDatabase::OnDatabaseOpened(
     log_->Append(base::DictValue()
                      .Set("message", "WebApps LevelDB open error")
                      .Set("error", error->ToString()));
-    error_callback_.Run(*error);
+    std::move(callback).Run(Registry(), nullptr,
+                            WebAppDatabaseOpenResult::kOpenError, {});
     return;
   }
 
@@ -670,16 +788,42 @@ void WebAppDatabase::OnAllDataAndMetadataRead(
     log_->Append(base::DictValue()
                      .Set("message", "WebApps LevelDB read error")
                      .Set("error", error->ToString()));
+    // TODO(crbug.com/506131577): Handle read error properly (e.g. trigger
+    // recovery, revert to in-memory database, disable os integration).
     error_callback_.Run(*error);
     return;
   }
 
   ProtobufState state = ParseProtobufs(*data_records);
-  MigrateDatabase(state);
+
+  std::vector<std::pair<webapps::AppId, GURL>> salvaged_apps;
+  for (const auto& [app_id, app_proto] : state.apps) {
+    if (app_proto.has_sync_data() && app_proto.sync_data().has_start_url()) {
+      salvaged_apps.emplace_back(app_id,
+                                 GURL(app_proto.sync_data().start_url()));
+    }
+  }
+
+  MigrationResult migration_result = MigrateDatabase(state);
+  switch (migration_result) {
+    case MigrationResult::kSuccess:
+      break;
+    case MigrationResult::kDowngradeDetected:
+      // The recovery code will re-initialize a new data store object. While
+      // opening two WEB_APPS data stores simultaneously might have worked in
+      // tests and during initial manual testing, it is prudent to destroy this
+      // instance first. This ensures we only ever have one store open at a
+      // time, preventing potential violations of sync system invariants.
+      store_.reset();
+      std::move(callback).Run(Registry(), nullptr,
+                              WebAppDatabaseOpenResult::kDowngradeDetected,
+                              std::move(salvaged_apps));
+      return;
+  }
 
   Registry registry;
   for (const auto& [app_id, app_proto] : state.apps) {
-    std::unique_ptr<WebApp> web_app = ParseWebAppProto(app_proto);
+    std::unique_ptr<WebApp> web_app = ParseWebAppProto(app_proto, app_id);
     base::UmaHistogramBoolean("WebApp.Database.ValidProto", web_app != nullptr);
     if (!web_app) {
       // TODO(https://crbug.com/40224498): Have ParseWebAppProto return a string
@@ -691,25 +835,15 @@ void WebAppDatabase::OnAllDataAndMetadataRead(
       continue;
     }
 
-    // Record whether the derived app_id matches the database key.
-    bool mismatch = (web_app->app_id() != app_id);
-    base::UmaHistogramBoolean("WebApp.Database.AppIdMatch", !mismatch);
-
-    if (mismatch) {
-      log_->Append(base::DictValue()
-                       .Set("message", "App ID doesn't match storage key")
-                       .Set("expected_app_id", app_id)
-                       .Set("parsed_app_id", web_app->app_id())
-                       .Set("proto", proto::ToValue(app_proto)));
-      continue;
-    }
     registry.emplace(app_id, std::move(web_app));
   }
 
   opened_ = true;
   // This should be a tail call: a callback code may indirectly call |this|
   // methods, like WebAppDatabase::Write()
-  std::move(callback).Run(std::move(registry), std::move(metadata_batch));
+  std::move(callback).Run(std::move(registry), std::move(metadata_batch),
+                          WebAppDatabaseOpenResult::kSuccess,
+                          std::move(salvaged_apps));
 }
 
 void WebAppDatabase::OnDataWritten(

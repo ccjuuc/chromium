@@ -7,15 +7,13 @@
 #include <memory>
 #include <string_view>
 
-#include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/grit/generated_resources.h"
-#include "chrome/test/views/chrome_test_views_delegate.h"
 #include "chrome/test/views/chrome_views_test_base.h"
-#include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/views/accessibility/view_accessibility.h"
 
 namespace media_router {
 
@@ -70,6 +68,8 @@ TEST_F(CastDialogNoSinksViewTest, SwitchViews) {
   EXPECT_NE(initial_title, get_label_text());
   EXPECT_EQ(l10n_util::GetStringUTF16(IDS_MEDIA_ROUTER_NO_DEVICES_FOUND_BUTTON),
             get_icon()->GetAccessibleName());
+  EXPECT_EQ(ax::mojom::Role::kLink,
+            get_icon()->GetViewAccessibility().GetCachedRole());
 }
 
 class CastDialogNoSinksViewWithPermissionIssueTest
@@ -97,6 +97,31 @@ TEST_F(CastDialogNoSinksViewWithPermissionIssueTest, CreateView) {
   EXPECT_EQ(l10n_util::GetStringUTF16(
                 IDS_MEDIA_ROUTER_LOCAL_DISCOVERY_PERMISSION_REJECTED_BUTTON),
             get_icon()->GetAccessibleName());
+  EXPECT_EQ(ax::mojom::Role::kLink,
+            get_icon()->GetViewAccessibility().GetCachedRole());
+}
+
+TEST_F(CastDialogNoSinksViewTest, FocusIconShowsBubble) {
+  task_environment()->FastForwardBy(
+      media_router::CastDialogNoSinksView::kSearchWaitTime);
+  views::View* icon = const_cast<views::View*>(get_icon());
+  EXPECT_NE(icon, nullptr);
+
+  // We need a widget for FocusManager to work.
+  auto widget = std::make_unique<views::Widget>();
+  views::Widget::InitParams params =
+      CreateParams(views::Widget::InitParams::Ownership::CLIENT_OWNS_WIDGET,
+                   views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+  widget->Init(std::move(params));
+  widget->SetContentsView(std::move(no_sinks_view_));
+
+  views::FocusManager* focus_manager = widget->GetFocusManager();
+  focus_manager->SetFocusedViewWithReason(
+      icon, views::FocusManager::FocusChangeReason::kFocusTraversal);
+
+  // We cannot easily check if the bubble is shown without exposing internals,
+  // but we can verify it doesn't crash.
+  // TODO(crbug.com/478008776): Add verification for bubble visibility.
 }
 
 }  // namespace media_router

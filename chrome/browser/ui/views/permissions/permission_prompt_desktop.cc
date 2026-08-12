@@ -4,22 +4,33 @@
 
 #include "chrome/browser/ui/views/permissions/permission_prompt_desktop.h"
 
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+#include "chrome/browser/ui/webui/webui_embedding_context.h"
+#include "components/tabs/public/tab_interface.h"
 
 namespace {}  // namespace
 
 PermissionPromptDesktop::PermissionPromptDesktop(
-    Browser* browser,
     content::WebContents* web_contents,
     Delegate* delegate)
-    : web_contents_(web_contents), delegate_(delegate), browser_(browser) {}
+    : web_contents_(web_contents), delegate_(delegate) {
+  if (!browser_) {
+    UpdateBrowser();
+  }
+}
 
 PermissionPromptDesktop::~PermissionPromptDesktop() = default;
 
 bool PermissionPromptDesktop::UpdateBrowser() {
-  Browser* current_browser = chrome::FindBrowserWithTab(web_contents_);
+  tabs::TabInterface* tab =
+      web_contents_ ? tabs::TabInterface::MaybeGetFromContents(web_contents_)
+                    : nullptr;
+  BrowserWindowInterface* current_browser =
+      tab ? tab->GetBrowserWindowInterface() : nullptr;
+  if (!current_browser) {
+    current_browser = webui::GetBrowserWindowInterface(web_contents_);
+  }
   // Browser for |web_contents_| might change when for example the tab was
   // dragged to another window.
   bool was_browser_changed = false;
@@ -51,9 +62,6 @@ views::Widget* PermissionPromptDesktop::GetPromptBubbleWidgetForTesting() {
   return nullptr;
 }
 
-bool PermissionPromptDesktop::ShouldFinalizeRequestAfterDecided() const {
-  return true;
-}
 
 std::vector<permissions::ElementAnchoredBubbleVariant>
 PermissionPromptDesktop::GetPromptVariants() const {
@@ -69,7 +77,8 @@ bool PermissionPromptDesktop::IsAskPrompt() const {
   return true;
 }
 
-LocationBarView* PermissionPromptDesktop::GetLocationBarView() {
-  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
-  return browser_view ? browser_view->GetLocationBarView() : nullptr;
+LocationBar* PermissionPromptDesktop::GetLocationBar() {
+  BrowserWindow* browser_window =
+      browser_ ? BrowserWindow::FromBrowser(browser_) : nullptr;
+  return browser_window ? browser_window->GetLocationBar() : nullptr;
 }

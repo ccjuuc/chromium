@@ -63,7 +63,7 @@ class FooterContextMenuBrowserTest : public InProcessBrowserTest {
 
   base::HistogramTester* histogram_tester() { return histogram_tester_.get(); }
   FooterContextMenu* menu() { return menu_.get(); }
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
  private:
   std::unique_ptr<FooterContextMenu> menu_;
@@ -107,12 +107,6 @@ IN_PROC_BROWSER_TEST_F(FooterContextMenuBrowserTest, OpensCustomizeChrome) {
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 class FooterContextMenuEnterpriseTest : public FooterContextMenuBrowserTest {
  public:
-  void SetUp() override {
-    feature_list_.InitAndEnableFeature(
-        features::kEnterpriseBadgingForNtpFooter);
-    FooterContextMenuBrowserTest::SetUp();
-  }
-
   void SetUpOnMainThread() override {
     // Simulate browser management.
     scoped_browser_management_ =
@@ -130,7 +124,6 @@ class FooterContextMenuEnterpriseTest : public FooterContextMenuBrowserTest {
  private:
   std::unique_ptr<policy::ScopedManagementServiceOverrideForTesting>
       scoped_browser_management_;
-  base::test::ScopedFeatureList feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(FooterContextMenuEnterpriseTest,

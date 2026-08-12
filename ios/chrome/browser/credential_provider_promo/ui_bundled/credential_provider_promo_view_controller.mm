@@ -63,9 +63,8 @@ NSString* const kCredentialProviderPromoAccessibilityId =
   [self configureAlertScreen];
   [self layoutAlertScreen];
 
-  NSArray<UITrait>* traits = TraitCollectionSetForTraits(
-      @[ UITraitVerticalSizeClass.class, UITraitUserInterfaceStyle.class ]);
-  [self registerForTraitChanges:traits
+  [self registerForTraitChanges:
+            @[ UITraitVerticalSizeClass.class, UITraitUserInterfaceStyle.class ]
                      withAction:@selector(updateUIOnTraitChange)];
 }
 
@@ -179,7 +178,7 @@ NSString* const kCredentialProviderPromoAccessibilityId =
         constraintEqualToAnchor:self.view.centerYAnchor];
   } else {
     self.alertScreenTopAnchorConstraint = [self.alertScreen.view.topAnchor
-        constraintEqualToAnchor:self.view.topAnchor];
+        constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor];
   }
   self.alertScreenTopAnchorConstraint.active = YES;
 }
@@ -226,7 +225,7 @@ NSString* const kCredentialProviderPromoAccessibilityId =
     [wrapper.animationView.rightAnchor
         constraintEqualToAnchor:self.view.rightAnchor],
     [wrapper.animationView.topAnchor
-        constraintEqualToAnchor:self.view.topAnchor],
+        constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
     [wrapper.animationView.bottomAnchor
         constraintEqualToAnchor:self.view.centerYAnchor],
   ]];

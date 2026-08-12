@@ -10,12 +10,12 @@
 
 #include "base/auto_reset.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/containers/queue.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
@@ -33,6 +33,7 @@
 #include "extensions/browser/api/declarative_net_request/rule_counts.h"
 #include "extensions/browser/api/declarative_net_request/ruleset_manager.h"
 #include "extensions/browser/api/declarative_net_request/ruleset_matcher.h"
+#include "extensions/browser/api/declarative_net_request/utils.h"
 #include "extensions/browser/api/web_request/extension_web_request_event_router.h"
 #include "extensions/browser/api/web_request/permission_helper.h"
 #include "extensions/browser/api/web_request/web_request_event_router_factory.h"
@@ -52,6 +53,7 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_features.h"
 #include "extensions/common/extension_id.h"
+#include "extensions/common/manifest.h"
 #include "extensions/common/permissions/api_permission.h"
 #include "tools/json_schema_compiler/util.h"
 
@@ -455,9 +457,9 @@ void RulesMonitorService::GetDisabledRuleIds(
       std::move(callback));
 }
 
-const base::Value::List& RulesMonitorService::GetSessionRulesValue(
+const base::ListValue& RulesMonitorService::GetSessionRulesValue(
     const ExtensionId& extension_id) const {
-  static const base::NoDestructor<base::Value::List> empty_rules;
+  static const base::NoDestructor<base::ListValue> empty_rules;
   auto it = session_rules_.find(extension_id);
   return it == session_rules_.end() ? *empty_rules : it->second;
 }
@@ -517,6 +519,7 @@ RulesMonitorService::RulesMonitorService(
       action_tracker_(browser_context),
       global_rules_tracker_(prefs_, extension_registry_) {
   registry_observation_.Observe(extension_registry_.get());
+  prefs_observation_.Observe(prefs_);
 }
 
 RulesMonitorService::~RulesMonitorService() = default;
@@ -587,7 +590,7 @@ void RulesMonitorService::OnExtensionLoaded(
     bool ruleset_failed_to_load = false;
     for (auto& source : sources) {
       bool enabled = prefs_enabled_rulesets
-                         ? base::Contains(*prefs_enabled_rulesets, source.id())
+                         ? prefs_enabled_rulesets->contains(source.id())
                          : source.enabled_by_default();
 
       bool ignored = helper.ShouldIgnoreRuleset(extension->id(), source.id());
@@ -688,28 +691,60 @@ void RulesMonitorService::OnExtensionUninstalled(
 
   session_rules_.erase(extension->id());
 
+  // Record that this extension went through uninstall.
+  // ExtensionRegistrar::UninstallExtension fires OnExtensionUninstalled, then
+  // calls ExtensionPrefs::OnExtensionUninstalled which fires
+  // OnExtensionPrefsDeleted synchronously; that handler keys off this set so it
+  // doesn't re-release (or, on a reinstall, wrongly release) the allocation.
+  extensions_handled_by_uninstall_.insert(extension->id());
+
   // Skip if the extension will be reinstalled soon.
   if (reason == UNINSTALL_REASON_REINSTALL) {
     return;
   }
 
-  global_rules_tracker_.ClearExtensionAllocation(extension->id());
+  CleanUpRulesOnExtensionUninstall(extension->id());
+}
 
-  // Skip if the extension doesn't have a dynamic ruleset.
-  PrefsHelper helper(*prefs_);
-  int dynamic_checksum;
-  if (!helper.GetDynamicRulesetChecksum(extension->id(), dynamic_checksum)) {
+void RulesMonitorService::OnExtensionPrefsDeleted(
+    const ExtensionId& extension_id) {
+  // If this prefs deletion is the downstream effect of an uninstall we just
+  // handled, OnExtensionUninstalled already dealt with the allocation (released
+  // it for a normal uninstall, or deliberately preserved it for a reinstall);
+  // don't touch it again.
+  if (extensions_handled_by_uninstall_.erase(extension_id)) {
     return;
   }
 
-  // Cleanup the dynamic rules directory for the extension.
+  // Otherwise the prefs were erased with no uninstall event, e.g. when
+  // ExtensionGarbageCollector removes an unpacked extension whose source
+  // directory was deleted on disk while the browser was closed. Such extensions
+  // never load, so OnExtensionUnloaded and OnExtensionUninstalled never run.
+  // Release the global rule allocation the extension held so the budget isn't
+  // leaked, and clean up any on-disk dynamic rules. This runs before the pref
+  // dict is erased, so the allocation and dynamic ruleset checksum are still
+  // readable here.
+  CleanUpRulesOnExtensionUninstall(extension_id);
+}
+
+void RulesMonitorService::CleanUpRulesOnExtensionUninstall(
+    const ExtensionId& extension_id) {
+  global_rules_tracker_.ClearExtensionAllocation(extension_id);
+
+  int dynamic_checksum = 0;
+  if (!PrefsHelper(*prefs_).GetDynamicRulesetChecksum(extension_id,
+                                                      dynamic_checksum)) {
+    return;
+  }
+
   // TODO(karandeepb): It's possible that this task fails, e.g. during shutdown.
   // Make this more robust.
   FileBackedRulesetSource source =
-      FileBackedRulesetSource::CreateDynamic(browser_context, extension->id());
+      FileBackedRulesetSource::CreateDynamic(context_, extension_id);
   DCHECK_EQ(source.json_path().DirName(), source.indexed_path().DirName());
   GetExtensionFileTaskRunner()->PostTask(
-      FROM_HERE, base::GetDeleteFileCallback(source.json_path().DirName()));
+      FROM_HERE,
+      base::GetDeletePathRecursivelyCallback(source.json_path().DirName()));
 }
 
 void RulesMonitorService::UpdateDynamicRulesInternal(
@@ -774,7 +809,7 @@ void RulesMonitorService::UpdateSessionRulesInternal(
   std::set<int> ids_to_remove(rule_ids_to_remove.begin(),
                               rule_ids_to_remove.end());
   std::erase_if(new_rules, [&ids_to_remove](const dnr_api::Rule& rule) {
-    return base::Contains(ids_to_remove, rule.id);
+    return ids_to_remove.contains(rule.id);
   });
 
   new_rules.insert(new_rules.end(),
@@ -815,7 +850,7 @@ void RulesMonitorService::UpdateSessionRulesInternal(
     }
   }
 
-  base::Value::List new_rules_value =
+  base::ListValue new_rules_value =
       json_schema_compiler::util::CreateValueFromArray(new_rules);
 
   std::string error;
@@ -1091,18 +1126,18 @@ void RulesMonitorService::OnNewStaticRulesetsLoaded(
     for (const std::unique_ptr<RulesetMatcher>& ruleset_matcher :
          matcher->matchers()) {
       // Exclude since we are only including static rulesets.
-      if (ruleset_matcher->id() == kDynamicRulesetID) {
+      if (!IsRulesetStatic(ruleset_matcher->id())) {
         continue;
       }
 
       // Exclude since we'll be removing this |matcher|.
-      if (base::Contains(ids_to_disable, ruleset_matcher->id())) {
+      if (ids_to_disable.contains(ruleset_matcher->id())) {
         continue;
       }
 
       // Exclude to prevent double counting. This will be a part of
       // |new_matchers| below.
-      if (base::Contains(ids_to_enable, ruleset_matcher->id())) {
+      if (ids_to_enable.contains(ruleset_matcher->id())) {
         continue;
       }
 

@@ -23,7 +23,7 @@ chromium-metrics-reviews@google.com.
 <histograms>
 
 <histogram name="PaymentRequest.AddressEditorTrigerred"
-    enum="PaymentRequestAddressEditorMode" expires_after="2026-06-07">
+    enum="PaymentRequestAddressEditorMode" expires_after="2027-08-09">
   <owner>vykochko@chromium.org</owner>
   <owner>smcgruer@google.com</owner>
   <owner>payments-autofill-team@google.com</owner>
@@ -35,7 +35,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="PaymentRequest.CanMakePayment.CallAllowedByPref"
-    enum="Boolean" expires_after="2026-02-22">
+    enum="Boolean" expires_after="2026-10-06">
   <owner>smcgruer@chromium.org</owner>
   <owner>chrome-payments-eng@google.com</owner>
   <summary>
@@ -48,7 +48,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="PaymentRequest.CheckoutFunnel"
-    enum="PaymentRequestCheckoutFunnelSteps" expires_after="2026-05-24">
+    enum="PaymentRequestCheckoutFunnelSteps" expires_after="2027-01-31">
   <owner>smcgruer@chromium.org</owner>
   <owner>chrome-payments-eng@google.com</owner>
   <summary>
@@ -61,7 +61,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="PaymentRequest.Events2" units="bitfield value"
-    expires_after="2026-06-07">
+    expires_after="2026-12-16">
   <owner>smcgruer@chromium.org</owner>
   <owner>chrome-payments-eng@google.com</owner>
   <summary>
@@ -70,8 +70,26 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram
+    name="PaymentRequest.GetSecurePaymentConfirmationCapabilities.BrowserBoundKeyHardware"
+    enum="Boolean" expires_after="2027-03-01">
+  <owner>darwinyang@google.com</owner>
+  <owner>chrome-payments-eng@google.com</owner>
+  <summary>
+    Whether a hardware backed browser bound key is available for use when
+    getSecurePaymentConfirmationCapabilities() is called. Recorded at the end of
+    IsBrowserBoundKeyHardwareSupported() before it is returned and collected
+    into a map of capabilities that is returned to the caller. Note that this
+    does not record how often developers want to know if hardware backed browser
+    bound keys are available as this will always be called when
+    getSecurePaymentConfirmationCapabilities() is called. In addition, the
+    results of this metric can also be biased as this may be called multiple
+    times on the same client/device.
+  </summary>
+</histogram>
+
 <histogram name="PaymentRequest.HasEnrolledInstrument.CallAllowedByPref"
-    enum="Boolean" expires_after="2026-03-01">
+    enum="Boolean" expires_after="2026-10-06">
   <owner>smcgruer@chromium.org</owner>
   <owner>chrome-payments-eng@google.com</owner>
   <summary>
@@ -83,9 +101,32 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="PaymentRequest.InternalAppAvailability"
+    enum="InternalPaymentAppAvailability" expires_after="2027-01-14">
+  <owner>smcgruer@chromium.org</owner>
+  <owner>chrome-payments-eng@google.com</owner>
+  <summary>
+    Records whether an internal app was found to be available when a Payment
+    Request is created for a URL that is expected to have an internal app.
+    Recorded once per 'new PaymentRequest(..)' call, albeit asychronously (as
+    Payment Request creation is async). Only the first-encountered failure
+    reason is recorded for a given Payment Request construction, which may hide
+    other failure reasons that could occur later in the flow.
+
+    Note that the &quot;Not Applicable&quot; case of the
+    InternalPaymentAppAvailability enum is not recorded in practice, as it is
+    not relevant to record. It exists only for completeness in the internal
+    code.
+
+    This histogram is not recorded if the internal app factory is disabled or is
+    not available for a given platform (WebView, all other non-Android
+    platforms).
+  </summary>
+</histogram>
+
 <histogram
     name="PaymentRequest.IsCanMakePaymentAllowedByPref.PaymentRequestConstruction.Once"
-    enum="Boolean" expires_after="2026-04-06">
+    enum="Boolean" expires_after="2026-12-06">
   <owner>smcgruer@chromium.org</owner>
   <owner>chrome-payments-eng@google.com</owner>
   <summary>
@@ -104,7 +145,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="PaymentRequest.IsCanMakePaymentAllowedByPref.PaymentRequestConstruction.Once.DisabledReason"
-    enum="CanMakePaymentPreferenceSetter" expires_after="2026-02-22">
+    enum="CanMakePaymentPreferenceSetter" expires_after="2026-10-06">
   <owner>smcgruer@chromium.org</owner>
   <owner>chrome-payments-eng@google.com</owner>
   <summary>
@@ -122,7 +163,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="PaymentRequest.IsCanMakePaymentAllowedByPref.Startup"
-    enum="Boolean" expires_after="2026-02-22">
+    enum="Boolean" expires_after="2026-12-06">
   <owner>smcgruer@chromium.org</owner>
   <owner>chrome-payments-eng@google.com</owner>
   <summary>
@@ -134,7 +175,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="PaymentRequest.IsCanMakePaymentAllowedByPref.Startup.DisabledReason"
-    enum="CanMakePaymentPreferenceSetter" expires_after="2026-02-22">
+    enum="CanMakePaymentPreferenceSetter" expires_after="2026-10-06">
   <owner>smcgruer@chromium.org</owner>
   <owner>chrome-payments-eng@google.com</owner>
   <summary>
@@ -142,6 +183,82 @@ chromium-metrics-reviews@google.com.
     the reason why (e.g., by the user, an extension, etc). Recorded once per
     profile load/creation (approximately once per start-up for a normal browsing
     session).
+  </summary>
+</histogram>
+
+<histogram
+    name="PaymentRequest.MandatoryPaymentAppUi.LoadingViewShownDuration.{Outcome}"
+    units="ms" expires_after="2027-09-01">
+  <owner>xuehuichen@google.com</owner>
+  <owner>chrome-payments-eng@google.com</owner>
+  <summary>
+    Records the duration in milliseconds that the payment app loading view is
+    shown during payment handler invocation when {Outcome}.
+
+    When the payment app loads normally, RemoveLoadingView() is called upon
+    completion and records Completed. If the payment app loading takes too long
+    and the user manually closes the dialog window, or if the request is
+    aborted, the dialog is destructed without calling RemoveLoadingView(), which
+    records Aborted. Separating these variants prevents cancellation/abort
+    latencies from impacting normal loading view shown latencies.
+  </summary>
+  <token key="Outcome">
+    <variant name="Aborted"
+        summary="the loading process was interrupted. This includes the user
+                 canceling due to slow load times, the merchant script
+                 aborting the request, or the payment app process terminating
+                 prematurely"/>
+    <variant name="Completed"
+        summary="the loading view is hidden or removed after loading
+                 completes successfully"/>
+  </token>
+</histogram>
+
+<histogram
+    name="PaymentRequest.MandatoryPaymentAppUi.RespondWithRejectedBeforeOpenWindow"
+    enum="Boolean" expires_after="2027-09-01">
+  <owner>xuehuichen@google.com</owner>
+  <owner>chrome-payments-eng@google.com</owner>
+  <summary>
+    Records whether the promise passed to PaymentRequestEvent.respondWith() was
+    rejected before a call to PaymentRequestEvent.openWindow(). Recorded when
+    the respondWith() promise is rejected in a payment handler.
+  </summary>
+</histogram>
+
+<histogram
+    name="PaymentRequest.MandatoryPaymentAppUi.RespondWithRejectedBeforeUserGesture"
+    enum="Boolean" expires_after="2027-09-01">
+  <owner>xuehuichen@google.com</owner>
+  <owner>chrome-payments-eng@google.com</owner>
+  <summary>
+    Records whether the promise passed to PaymentRequestEvent.respondWith() was
+    rejected before a user gesture was captured in the payment app window.
+    Recorded when the respondWith() promise is rejected in a payment handler.
+  </summary>
+</histogram>
+
+<histogram
+    name="PaymentRequest.MandatoryPaymentAppUi.RespondWithResolvedBeforeOpenWindow"
+    enum="Boolean" expires_after="2027-09-01">
+  <owner>xuehuichen@google.com</owner>
+  <owner>chrome-payments-eng@google.com</owner>
+  <summary>
+    Records whether the promise passed to PaymentRequestEvent.respondWith() was
+    resolved before a call to PaymentRequestEvent.openWindow(). Recorded when
+    the respondWith() promise is resolved in a payment handler.
+  </summary>
+</histogram>
+
+<histogram
+    name="PaymentRequest.MandatoryPaymentAppUi.RespondWithResolvedBeforeUserGesture"
+    enum="Boolean" expires_after="2027-09-01">
+  <owner>xuehuichen@google.com</owner>
+  <owner>chrome-payments-eng@google.com</owner>
+  <summary>
+    Records whether the promise passed to PaymentRequestEvent.respondWith() was
+    resolved before a user gesture was captured in the payment app window.
+    Recorded when the respondWith() promise is resolved in a payment handler.
   </summary>
 </histogram>
 
@@ -154,9 +271,22 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="PaymentRequest.Outcome" enum="PaymentRequestOutcome"
+    expires_after="2027-06-01">
+  <owner>darwinyang@chromium.org</owner>
+  <owner>chrome-payments-eng@google.com</owner>
+  <summary>
+    Tracks the final outcome of every Payment Request call. This includes all
+    successful calls, all cases where the Payment Request could not be shown,
+    and all cases where the Payment Request was aborted with detailed abort
+    reasons. Recorded exactly once per Payment Request lifetime when a terminal
+    state is reached.
+  </summary>
+</histogram>
+
 <histogram
     name="PaymentRequest.PaymentDetailsUpdateService.ChangePaymentMethod"
-    enum="Boolean" expires_after="2026-03-22">
+    enum="Boolean" expires_after="2027-02-12">
   <owner>smcgruer@chromium.org</owner>
   <owner>chrome-payments-eng@google.com</owner>
   <summary>
@@ -177,7 +307,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="PaymentRequest.PaymentDetailsUpdateService.ChangeShippingAddress"
-    enum="Boolean" expires_after="2026-03-22">
+    enum="Boolean" expires_after="2027-02-12">
   <owner>smcgruer@chromium.org</owner>
   <owner>chrome-payments-eng@google.com</owner>
   <summary>
@@ -197,7 +327,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="PaymentRequest.PaymentDetailsUpdateService.ChangeShippingOption"
-    enum="Boolean" expires_after="2026-03-22">
+    enum="Boolean" expires_after="2027-02-12">
   <owner>smcgruer@chromium.org</owner>
   <owner>chrome-payments-eng@google.com</owner>
   <summary>
@@ -217,7 +347,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="PaymentRequest.PaymentHandlerInstallSuccess"
-    enum="BooleanSuccess" expires_after="2026-03-08">
+    enum="BooleanSuccess" expires_after="2027-03-08">
   <owner>smcgruer@chromium.org</owner>
   <owner>chrome-payments-eng@google.com</owner>
   <summary>
@@ -241,7 +371,7 @@ chromium-metrics-reviews@google.com.
 <histogram
     name="PaymentRequest.SecurePaymentConfirmation.BrowserBoundKeyInclusion"
     enum="SecurePaymentConfirmationBrowserBoundKeyInclusionResult"
-    expires_after="2026-11-01">
+    expires_after="2027-01-03">
   <owner>slobodan@chromium.org</owner>
   <owner>darwinyang@chromium.org</owner>
   <owner>chrome-payments-eng@google.com</owner>
@@ -278,6 +408,26 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram
+    name="PaymentRequest.SecurePaymentConfirmation.BrowserBoundKeyStore.DeviceSupportsHardwareKeysLatency.{DeviceSupportsHardwareKeysResult}"
+    units="ms" expires_after="2027-03-01">
+  <owner>darwinyang@google.com</owner>
+  <owner>chrome-payments-eng@google.com</owner>
+  <summary>
+    Records the latency of fetching whether the device has support for hardware
+    backed browser bound keys. This latency is measured from the moment the
+    check is started in the browser bound key store to when the result is
+    returned. Note that this is only recorded when the value is not cached,
+    which means that it is only recorded on the first check and is not recorded
+    at all if the value was already cached by the time the check is made.
+  </summary>
+  <token key="DeviceSupportsHardwareKeysResult">
+    <variant name="NotSupported"
+        summary="Labeled device does not support hardware keys"/>
+    <variant name="Supported" summary="Labeled device supports hardware keys"/>
+  </token>
+</histogram>
+
+<histogram
     name="PaymentRequest.SecurePaymentConfirmation.BrowserBoundKeyStore.GetKeyLatency.{GetKeyLatencyResult}"
     units="ms" expires_after="2026-11-01">
   <owner>darwinyang@chromium.org</owner>
@@ -298,7 +448,7 @@ chromium-metrics-reviews@google.com.
 <histogram
     name="PaymentRequest.SecurePaymentConfirmation.BrowserBoundKeyStoreCreate"
     enum="SecurePaymentConfirmationBrowserBoundKeyDeviceResult"
-    expires_after="2026-11-01">
+    expires_after="2027-01-03">
   <owner>slobodan@chromium.org</owner>
   <owner>darwinyang@chromium.org</owner>
   <owner>chrome-payments-eng@google.com</owner>
@@ -312,7 +462,7 @@ chromium-metrics-reviews@google.com.
 <histogram
     name="PaymentRequest.SecurePaymentConfirmation.BrowserBoundKeyStoreRetrieve"
     enum="SecurePaymentConfirmationBrowserBoundKeyDeviceResult"
-    expires_after="2026-11-01">
+    expires_after="2027-01-03">
   <owner>slobodan@chromium.org</owner>
   <owner>darwinyang@chromium.org</owner>
   <owner>chrome-payments-eng@google.com</owner>
@@ -323,8 +473,46 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram
+    name="PaymentRequest.SecurePaymentConfirmation.Fallback.NoAuthenticator"
+    enum="Boolean" expires_after="2027-07-01">
+  <owner>darwinyang@google.com</owner>
+  <owner>chrome-payments-eng@google.com</owner>
+  <summary>
+    Records whether the SPC fallback UX was triggered by a missing
+    authenticator. Recorded right before the SPC app is created with
+    `is_error_dialog` set to true.
+  </summary>
+</histogram>
+
+<histogram
+    name="PaymentRequest.SecurePaymentConfirmation.Fallback.NoCredential"
+    enum="Boolean" expires_after="2027-07-01">
+  <owner>darwinyang@google.com</owner>
+  <owner>chrome-payments-eng@google.com</owner>
+  <summary>
+    Records whether the SPC fallback UX was triggered by a missing credential.
+    Recorded right before the SPC app is created with `is_error_dialog` set to
+    true.
+  </summary>
+</histogram>
+
+<histogram
+    name="PaymentRequest.SecurePaymentConfirmation.UserVerifyingPlatformAuthenticatorAvailable"
+    enum="Boolean" expires_after="2027-07-01">
+  <owner>darwinyang@google.com</owner>
+  <owner>chrome-payments-eng@google.com</owner>
+  <summary>
+    Records whether a user verifying platform authenticator is available for
+    SPC. If the UVPA is not available, the SPC fallback UX will be triggered.
+    Recorded in the callback after checking if the authenticator is a UVPA. Note
+    that this does NOT get recorded if the internal authenticator could not be
+    created.
+  </summary>
+</histogram>
+
 <histogram name="PaymentRequest.Show.TryShowOutcome"
-    enum="PaymentRequestTryShowOutcome" expires_after="2026-06-21">
+    enum="PaymentRequestTryShowOutcome" expires_after="2026-12-27">
   <owner>smcgruer@chromium.org</owner>
   <owner>chrome-payments-eng@google.com</owner>
   <summary>
@@ -346,6 +534,44 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="PaymentRequest.TimeToCheckout.InitToCompleteSuccessfully"
+    units="ms" expires_after="2027-09-01">
+  <owner>xuehuichen@google.com</owner>
+  <owner>chrome-payments-eng@google.com</owner>
+  <summary>
+    Duration from PaymentRequest.Init() to successful transaction completion.
+    Recorded when a payment transaction completes successfully.
+
+    Note that this metrics is foucs on the happy path, failed transaction are
+    not counted.
+  </summary>
+</histogram>
+
+<histogram name="PaymentRequest.TimeToCheckout.ShowToCompleteSuccessfully"
+    units="ms" expires_after="2027-09-01">
+  <owner>xuehuichen@google.com</owner>
+  <owner>chrome-payments-eng@google.com</owner>
+  <summary>
+    Duration from PaymentRequest.show() to successful transaction completion.
+    Recorded when a payment transaction completes successfully.
+
+    Note that this metrics is foucs on the happy path, failed transaction are
+    not counted.
+  </summary>
+</histogram>
+
+<histogram name="PaymentRequest.WindowSizeCheckRejectionReason"
+    enum="PaymentRequestWindowSizeCheckRejectionReason"
+    expires_after="2026-12-16">
+  <owner>smcgruer@chromium.org</owner>
+  <owner>chrome-payments-eng@google.com</owner>
+  <summary>
+    Records the reason why a Payment Request or Payment Handler dialog was
+    rejected or closed due to the browser window being too small. This is only
+    recorded on desktop platforms.
+  </summary>
+</histogram>
+
 <histogram name="SecurePaymentRequest.Fallback.Outcome"
     enum="SecurePaymentRequestOutcome" expires_after="2026-11-01">
   <owner>darwinyang@google.com</owner>
@@ -363,7 +589,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SecurePaymentRequest.Transaction.Outcome"
-    enum="SecurePaymentRequestOutcome" expires_after="2026-11-01">
+    enum="SecurePaymentRequestOutcome" expires_after="2027-01-03">
   <owner>darwinyang@google.com</owner>
   <owner>chrome-payments-eng@google.com</owner>
   <summary>

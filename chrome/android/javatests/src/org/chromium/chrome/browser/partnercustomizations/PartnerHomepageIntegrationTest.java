@@ -24,7 +24,11 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.homepage.HomepageManager;
 import org.chromium.chrome.browser.homepage.settings.HomepageSettings;
@@ -38,8 +42,8 @@ import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.partnercustomizations.TestPartnerBrowserCustomizationsProvider;
+import org.chromium.chrome.test.util.BottomBarTestUtils;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
 import org.chromium.content_public.browser.test.util.TouchCommon;
@@ -52,6 +56,10 @@ import java.util.concurrent.TimeoutException;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @Batch(Batch.PER_CLASS)
+@DisableFeatures(ChromeFeatureList.DISABLE_PARTNER_HOMEPAGE_ANDROID)
+@EnableFeatures(
+        ChromeFeatureList.HOME_BUTTON_REMOVAL
+                + ":set_default_to_false_on_homepage_on_desktop/false")
 public class PartnerHomepageIntegrationTest {
     private final ChromeTabbedActivityTestRule mActivityTestRule =
             new ChromeTabbedActivityTestRule();
@@ -111,7 +119,9 @@ public class PartnerHomepageIntegrationTest {
                     @Override
                     public void run() {
                         View homeButton =
-                                mActivityTestRule.getActivity().findViewById(R.id.home_button);
+                                BottomBarTestUtils.findViewById(
+                                        mActivityTestRule.getActivity(), R.id.home_button);
+                        Assert.assertNotNull("Homepage button should not be null", homeButton);
                         Assert.assertEquals(
                                 "Homepage button is not shown",
                                 View.VISIBLE,
@@ -141,13 +151,13 @@ public class PartnerHomepageIntegrationTest {
         Assert.assertFalse(homepageManager.isHomepageEnabled());
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
+                    View homeButton =
+                            BottomBarTestUtils.findViewById(
+                                    mActivityTestRule.getActivity(), R.id.home_button);
                     Assert.assertEquals(
                             "Homepage button is shown",
                             View.GONE,
-                            mActivityTestRule
-                                    .getActivity()
-                                    .findViewById(R.id.home_button)
-                                    .getVisibility());
+                            homeButton != null ? homeButton.getVisibility() : View.GONE);
                 });
 
         // Enable homepage.
@@ -157,13 +167,12 @@ public class PartnerHomepageIntegrationTest {
         Assert.assertTrue(homepageManager.isHomepageEnabled());
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
+                    View homeButton =
+                            BottomBarTestUtils.findViewById(
+                                    mActivityTestRule.getActivity(), R.id.home_button);
+                    Assert.assertNotNull("Homepage button should not be null", homeButton);
                     Assert.assertEquals(
-                            "Homepage button is shown",
-                            View.VISIBLE,
-                            mActivityTestRule
-                                    .getActivity()
-                                    .findViewById(R.id.home_button)
-                                    .getVisibility());
+                            "Homepage button is shown", View.VISIBLE, homeButton.getVisibility());
                 });
     }
 

@@ -13,6 +13,8 @@
 #include "components/sync/base/collaboration_id.h"
 #include "url/gurl.h"
 
+class PrefService;
+
 namespace tab_groups {
 
 extern const char kChromeSavedTabGroupUnsupportedURL[];
@@ -30,6 +32,9 @@ std::optional<LocalTabGroupID> LocalTabGroupIDFromString(
 // group.
 bool IsURLValidForSavedTabGroups(const GURL& gurl);
 
+// Returns whether the tab's URL is viable for rendering in a local tab.
+bool IsURLValidForLocalTab(const GURL& gurl);
+
 // Returns a default URL and default title. Should be invoked when
 // IsURLValidForSavedTabGroups() returns false.
 std::pair<GURL, std::u16string> GetDefaultUrlAndTitle();
@@ -46,6 +51,16 @@ std::string TabGroupIdsToShortLogString(
     const std::string_view& prefix,
     base::Uuid group_id,
     const std::optional<syncer::CollaborationId> collaboration_id);
+
+// Returns whether SavedTabGroup's pinned_position has been migrated to
+// projects_position.
+bool IsTabGroupPinnedPositionToProjectsPositionMigrated(
+    PrefService* pref_service);
+
+// Records the migration of SavedTabGroup's pinned_position to
+// projects_position.
+void SetTabGroupPinnedPositionToProjectsPositionMigrated(
+    PrefService* pref_service);
 
 }  // namespace tab_groups
 

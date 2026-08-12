@@ -17,7 +17,6 @@ import org.chromium.base.supplier.NullableObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.cc.input.BrowserControlsState;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.toolbar.ConstraintsChecker;
 import org.chromium.chrome.browser.toolbar.R;
 import org.chromium.chrome.browser.toolbar.ToolbarCaptureType;
@@ -44,10 +43,18 @@ public class ScrollingBottomViewResourceFrameLayout extends ViewResourceFrameLay
     private @Nullable ConstraintsChecker mConstraintsChecker;
 
     private View mShadow;
+    private boolean mShowShadow = true;
 
     public ScrollingBottomViewResourceFrameLayout(Context context, AttributeSet attrs) {
         super(context, attrs);
         mTopShadowHeightPx = getResources().getDimensionPixelOffset(R.dimen.toolbar_shadow_height);
+    }
+
+    /**
+     * @param show Whether the shadow should be visible.
+     */
+    public void setShowShadow(boolean show) {
+        mShowShadow = show;
     }
 
     @Override
@@ -68,7 +75,10 @@ public class ScrollingBottomViewResourceFrameLayout extends ViewResourceFrameLay
                     return false;
                 }
 
-                if (mConstraintsChecker != null && mConstraintsChecker.areControlsLocked()) {
+                // Defer captures while locked, unless we have never captured a screenshot before.
+                if (mConstraintsChecker != null
+                        && mConstraintsChecker.areControlsLocked()
+                        && mLastCaptureSnapshotToken != null) {
                     mConstraintsChecker.scheduleRequestResourceOnUnlock();
                     return false;
                 }
@@ -78,8 +88,7 @@ public class ScrollingBottomViewResourceFrameLayout extends ViewResourceFrameLay
             }
 
             @Override
-            @SuppressWarnings("NullAway")
-            public void onCaptureStart(Canvas canvas, @Nullable Rect dirtyRect) {
+            public void onCaptureStart(Canvas canvas, Rect dirtyRect) {
                 // The android and composited views both have a shadow. The default state is to
                 // to show only the android shadow. When the bottom controls begin to scroll off,
                 // the android view is hidden, and the composited shadow is made visible. However,
@@ -87,9 +96,7 @@ public class ScrollingBottomViewResourceFrameLayout extends ViewResourceFrameLay
                 // with BCIV, so we change the default state to only show the composited shadow.
                 // Since the shadow is a UIResourceLayer, we need to make the android shadow
                 // visible for the capture so that the layer gets the correct resource.
-                if (ChromeFeatureList.sBcivBottomControls.isEnabled()) {
-                    mShadow.setVisibility(View.VISIBLE);
-                }
+                if (mShowShadow) mShadow.setVisibility(View.VISIBLE);
 
                 RecordHistogram.recordEnumeratedHistogram(
                         "Android.Toolbar.BitmapCapture",
@@ -110,15 +117,12 @@ public class ScrollingBottomViewResourceFrameLayout extends ViewResourceFrameLay
                     canvas.restore();
                 }
 
-                super.onCaptureStart(canvas, dirtyRect);
                 mLastCaptureSnapshotToken = mCurrentSnapshotToken;
             }
 
             @Override
             public void onCaptureEnd() {
-                if (ChromeFeatureList.sBcivBottomControls.isEnabled()) {
-                    mShadow.setVisibility(View.INVISIBLE);
-                }
+                mShadow.setVisibility(View.INVISIBLE);
             }
         };
     }
@@ -145,10 +149,12 @@ public class ScrollingBottomViewResourceFrameLayout extends ViewResourceFrameLay
      * @param constraintsSupplier Used to access current constraints of the browser controls.
      */
     public void setConstraintsSupplier(
-            NullableObservableSupplier<@BrowserControlsState Integer> constraintsSupplier) {
-        assert mConstraintsChecker == null;
+            @Nullable NullableObservableSupplier<@BrowserControlsState Integer>
+                    constraintsSupplier) {
         mConstraintsChecker =
-                new ConstraintsChecker(
-                        getResourceAdapter(), constraintsSupplier, Looper.getMainLooper());
+                constraintsSupplier == null
+                        ? null
+                        : new ConstraintsChecker(
+                                getResourceAdapter(), constraintsSupplier, Looper.getMainLooper());
     }
 }

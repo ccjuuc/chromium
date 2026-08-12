@@ -31,7 +31,7 @@
 <translation id="1175914831232945926">數字</translation>
 <translation id="1186712907912748007">拖曳中，<ph name="GESTURE" />即可結束這個動作。目前暫時無法使用其他表情。</translation>
 <translation id="1188858454923323853">補充</translation>
-<translation id="1189258430971676908">練習區：下拉式清單</translation>
+<translation id="1189258430971676908">練習區：下拉式選單</translation>
 <translation id="1193484659698721586">.input {$$COUNT :number} .match $$COUNT 1{{}} *{{巢狀結構層級 {$$COUNT}}}</translation>
 <translation id="1195238899008218998">後記</translation>
 <translation id="1197088940767939838">橘色</translation>
@@ -242,6 +242,7 @@
 <translation id="2497706219848005458">綠黃色</translation>
 <translation id="2512979179176933762">顯示視窗</translation>
 <translation id="2523609930580546572">ChromeVox 教學課程</translation>
+<translation id="2523760288355306549">尚未支援點字輸入功能。</translation>
 <translation id="2525706221823668172">Chromebook 鍵盤快速鍵</translation>
 <translation id="2553108862507765288">grammatical mistake</translation>
 <translation id="2556326187583116255">以雙指輕觸即可停止目前的任何朗讀</translation>
@@ -456,7 +457,7 @@
 <translation id="3806327402890551732">移至下一個或上一個項目</translation>
 <translation id="3810838688059735925">影片</translation>
 <translation id="3813387282697781382">淺珊瑚紅</translation>
-<translation id="3816633764618089385">下一個媒體元素</translation>
+<translation id="3816633764618089385">下一個媒體項目</translation>
 <translation id="3821689185319271077">沒有指標錨定標記</translation>
 <translation id="3840823741487267909">縮寫</translation>
 <translation id="385383972552776628">開啟選項頁面</translation>
@@ -915,7 +916,7 @@
 <translation id="6999752561504308105">歡迎體驗 ChromeVox 教學課程。如要結束此教學課程，可隨時用雙指由右往左滑動。你也能隨時開啟或關閉 ChromeVox，只要同時按住兩個音量按鈕五秒即可。準備就緒後，請用單指輕觸兩下螢幕，前往下一門課。</translation>
 <translation id="700202842116345659">參考書目</translation>
 <translation id="7005146664810010831">找不到網址</translation>
-<translation id="7026338066939101231">減少</translation>
+<translation id="7026338066939101231">遞減</translation>
 <translation id="7031651751836475482">清單項目</translation>
 <translation id="7032910411301673020">.input {$$COUNT :number} .match $$COUNT 1{{白色項目符號}} *{{{$$COUNT} 個白色項目符號}}</translation>
 <translation id="7037042857287298941">上一個清單</translation>
@@ -931,7 +932,7 @@
 <translation id="7090715360595433170">這種方式也可能會比向左/向右滑動單指更有效率。</translation>
 <translation id="7091296112653361280">那瓦霍白</translation>
 <translation id="7095834689119144465">編輯文字時僅限輸入數字</translation>
-<translation id="7096001299300236431">上一個媒體元素</translation>
+<translation id="7096001299300236431">上一個媒體項目</translation>
 <translation id="7096668131290451939">再次按下 Escape 鍵即可退出學習模式</translation>
 <translation id="7116595520562830928">multln</translation>
 <translation id="7125177678433853645"><ph name="MODIFIER_ONE" /> + <ph name="MODIFIER_TWO" /> + <ph name="MODIFIER_THREE" /> + <ph name="MODIFIER_FOUR" /> + <ph name="KEY" /> 鍵</translation>
@@ -1064,7 +1065,7 @@
 <translation id="7972507042926081808">巧克力色</translation>
 <translation id="7974390230414479278">選單項目</translation>
 <translation id="8004507136466386272">字詞</translation>
-<translation id="8004512796067398576">增加</translation>
+<translation id="8004512796067398576">遞增</translation>
 <translation id="8007540374018858731">第 3 階</translation>
 <translation id="8017588669690167134">關閉語音功能</translation>
 <translation id="801990297710781303">註腳</translation>
@@ -1158,7 +1159,7 @@
 <translation id="8651481478098336970">靜音</translation>
 <translation id="8653646212587894517">顯示連結清單</translation>
 <translation id="8656888282555543604">啟用點字記錄功能</translation>
-<translation id="8659501358298941449">下拉式清單</translation>
+<translation id="8659501358298941449">下拉式選單</translation>
 <translation id="8666733765751421568"><ph name="TYPE" />中已沒有其他項目</translation>
 <translation id="867187640362843212">標題 5</translation>
 <translation id="8693391540059827073">我最愛的季節</translation>
@@ -1171,7 +1172,7 @@
 <translation id="875769700429317857"><ph name="FILE_NAME" /> 下載完成</translation>
 <translation id="8767968232364267681">下一個第 4 階標題</translation>
 <translation id="8770473310765924354">離開結構化內容，例如表格</translation>
-<translation id="8775203254697638994">有時候，你會需要從下拉式清單中選取項目。方法如下：首先請按下搜尋鍵 + 空格鍵展開清單。然後使用上下方向鍵選取項目。最後再按下搜尋鍵 + 空格鍵收合清單。</translation>
+<translation id="8775203254697638994">有時候，你會需要從下拉式選單中選取項目。方法如下：首先請按下搜尋鍵 + 空格鍵展開清單。然後使用上下方向鍵選取項目。最後再按下搜尋鍵 + 空格鍵收合清單。</translation>
 <translation id="8779057862865475116">沒有上一個連結</translation>
 <translation id="8796411681063377102">下一個第 3 階標題</translation>
 <translation id="8821891849214789910">停止語音輸入</translation>

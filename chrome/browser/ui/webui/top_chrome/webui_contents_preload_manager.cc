@@ -4,15 +4,16 @@
 
 #include "chrome/browser/ui/webui/top_chrome/webui_contents_preload_manager.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
 
 #include "base/auto_reset.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
-#include "base/memory/memory_pressure_monitor.h"
 #include "base/memory/weak_ptr.h"
+#include "base/memory_coordinator/traits.h"
+#include "base/memory_coordinator/utils.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
@@ -22,8 +23,10 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/task_manager/web_contents_tags.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/prefs/prefs_tab_helper.h"
 #include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/webui/log_web_ui_url.h"
 #include "chrome/browser/ui/webui/top_chrome/per_profile_webui_tracker.h"
 #include "chrome/browser/ui/webui/top_chrome/preload_context.h"
@@ -34,11 +37,14 @@
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/crash/core/common/crash_key.h"
+#include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_widget_host_view.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "ui/base/models/menu_model.h"
+#include "ui/views/controls/webview/web_contents_set_background_color.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
 
@@ -71,10 +77,10 @@ class FixedCandidateSelector : public webui::PreloadCandidateSelector {
 
   // webui::PreloadCandidateSelector:
   void Init(const std::vector<GURL>& preloadable_urls) override {
-    DCHECK(base::Contains(preloadable_urls, webui_url_));
+    DCHECK(std::ranges::contains(preloadable_urls, webui_url_));
   }
   std::optional<GURL> GetURLToPreload(
-      const webui::PreloadContext& context) const override {
+      webui::PreloadContext context) const override {
     return IsUrlExcludedByFlag(webui_url_) ? std::nullopt
                                            : std::make_optional(webui_url_);
   }
@@ -119,8 +125,18 @@ content::WebUIController* GetWebUIController(
 }
 
 bool IsShowingErrorPage(content::WebContents* web_contents) {
-  return web_contents->GetSiteInstance()->GetSiteURL().SchemeIs(
+  return web_contents->GetSiteInstance()->GetSecurityPrincipal().SchemeIs(
       content::kChromeErrorScheme);
+}
+
+views::Widget* GetLastActiveBrowserWidget(
+    content::BrowserContext* browser_context) {
+  auto* collection = ProfileBrowserCollection::GetForProfile(
+      Profile::FromBrowserContext(browser_context));
+  auto* browser = collection ? collection->GetLastActiveBrowser() : nullptr;
+  auto* view =
+      browser ? BrowserView::GetBrowserViewForBrowser(browser) : nullptr;
+  return view ? view->GetWidget() : nullptr;
 }
 
 }  // namespace
@@ -251,7 +267,21 @@ RequestResult::~RequestResult() = default;
 RequestResult::RequestResult(RequestResult&&) = default;
 RequestResult& RequestResult::operator=(RequestResult&&) = default;
 
-WebUIContentsPreloadManager::WebUIContentsPreloadManager() {
+namespace {
+
+constexpr base::MemoryConsumerTraits kWebUIContentsPreloadManagerTraits(
+    base::MemoryConsumerTraits::ConsumerType::kPassive,
+    // Preloaded WebUI contents live in child renderer processes.
+    base::MemoryConsumerTraits::InProcess::kNo);
+
+}  // namespace
+
+WebUIContentsPreloadManager::WebUIContentsPreloadManager()
+    : memory_consumer_registration_(
+          /*consumer_name=*/"WebUIContentsPreloadManager",
+          kWebUIContentsPreloadManagerTraits,
+          this,
+          base::MemoryConsumerRegistration::CheckUnregister::kDisabled) {
   preload_mode_ =
       static_cast<PreloadMode>(features::kPreloadTopChromeWebUIMode.Get());
   webui_controller_embedder_stub_ =
@@ -283,7 +313,7 @@ WebUIContentsPreloadManager* WebUIContentsPreloadManager::GetInstance() {
 void WebUIContentsPreloadManager::WarmupForBrowser(Browser* browser) {
   // Most WebUIs, if not all, are hosted by a TYPE_NORMAL browser. This check
   // skips unnecessary preloading for the majority of WebUIs.
-  if (!browser->is_type_normal()) {
+  if (browser->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL) {
     return;
   }
 
@@ -295,10 +325,11 @@ void WebUIContentsPreloadManager::WarmupForBrowser(Browser* browser) {
 
   if (IsDelayPreloadEnabled()) {
     MaybePreloadForBrowserContextLater(
-        browser->profile(), browser->tab_strip_model()->GetActiveWebContents(),
+        browser->GetProfile(),
+        browser->tab_strip_model()->GetActiveWebContents(),
         PreloadReason::kBrowserWarmup);
   } else {
-    MaybePreloadForBrowserContext(browser->profile(),
+    MaybePreloadForBrowserContext(browser->GetProfile(),
                                   PreloadReason::kBrowserWarmup);
   }
 }
@@ -397,8 +428,10 @@ void WebUIContentsPreloadManager::SetPreloadedContents(
     webui_controller_embedder_stub_->AttachTo(preloaded_web_contents_.get());
     profile_observation_.Observe(Profile::FromBrowserContext(
         preloaded_web_contents_->GetBrowserContext()));
-    WebUIContentsPreloadState::FromWebContents(preloaded_web_contents_.get())
-        ->preloaded = true;
+    auto* preload_state = WebUIContentsPreloadState::FromWebContents(
+        preloaded_web_contents_.get());
+    preload_state->preloaded = true;
+    preload_state->pending_request = true;
   }
 }
 
@@ -456,9 +489,10 @@ RequestResult WebUIContentsPreloadManager::Request(
       WebUIContentsPreloadState::FromWebContents(web_contents_ret.get());
   CHECK(preload_state);
   preload_state->request_time = request_time;
+  preload_state->pending_request = false;
   // Non-preloaded WebUIs are logged by WebUIMainFrameObserver.
   if (preload_state->preloaded) {
-    webui::LogWebUIShown(web_contents_ret->GetSiteInstance()->GetSiteURL());
+    webui::LogWebUIShown(webui_url);
   }
 
   RequestResult result;
@@ -478,6 +512,16 @@ std::optional<base::TimeTicks> WebUIContentsPreloadManager::GetRequestTime(
   return preload_state->request_time;
 }
 
+void WebUIContentsPreloadManager::SetRequestTime(
+    content::WebContents* web_contents,
+    base::TimeTicks time) {
+  auto* preload_state =
+      WebUIContentsPreloadState::FromWebContents(web_contents);
+  if (preload_state) {
+    preload_state->request_time = time;
+  }
+}
+
 bool WebUIContentsPreloadManager::WasPreloaded(
     content::WebContents* web_contents) const {
   if (!web_contents) {
@@ -493,6 +537,10 @@ void WebUIContentsPreloadManager::DisableNavigationForTesting() {
   is_navigation_disabled_for_test_ = true;
 }
 
+void WebUIContentsPreloadManager::ReenableNavigationForTesting() {
+  is_navigation_disabled_for_test_ = false;
+}
+
 std::unique_ptr<content::WebContents>
 WebUIContentsPreloadManager::CreateNewContents(
     content::BrowserContext* browser_context,
@@ -501,9 +549,20 @@ WebUIContentsPreloadManager::CreateNewContents(
       content::WebContents::Create(
           GetWebContentsCreateParams(url, browser_context));
 
+  views::WebContentsSetBackgroundColor::CreateForWebContentsWithColor(
+      web_contents.get(), SK_ColorTRANSPARENT);
+
+  // Link to the last active browser to get the theme color provider during
+  // preload.
+  if (views::Widget* widget = GetLastActiveBrowserWidget(browser_context)) {
+    web_contents->SetColorProviderSource(widget);
+  }
+
   // Propagates user prefs to web contents.
   // This is needed by, for example, text selection color on ChromeOS.
   PrefsTabHelper::CreateForWebContents(web_contents.get());
+  web_modal::WebContentsModalDialogManager::CreateForWebContents(
+      web_contents.get());
   WebUIContentsPreloadState::CreateForWebContents(web_contents.get());
   task_manager::WebContentsTags::CreateForToolContents(
       web_contents.get(), IDS_TASK_MANAGER_PRELOADED_RENDERER_FOR_UI);
@@ -546,11 +605,7 @@ bool WebUIContentsPreloadManager::ShouldPreloadForBrowserContext(
   }
 
   // Don't preload if under heavy memory pressure.
-  const auto* memory_monitor = base::MemoryPressureMonitor::Get();
-  if (memory_monitor &&
-      memory_monitor->GetCurrentPressureLevel(
-          base::MemoryPressureMonitorTag::kWebUIContentsPreloadManager) >=
-          base::MEMORY_PRESSURE_LEVEL_MODERATE) {
+  if (memory_limit() <= base::kModerateMemoryPressureThreshold) {
     return false;
   }
 
@@ -604,8 +659,10 @@ void WebUIContentsPreloadManager::OnWebContentsPrimaryPageChanged(
     visible_url.Set(web_contents->GetVisibleURL().possibly_invalid_spec());
     static crash_reporter::CrashKeyString<1024> site_instance_url(
         "webui-preload-site-instance-url");
-    site_instance_url.Set(
-        web_contents->GetSiteInstance()->GetSiteURL().possibly_invalid_spec());
+    site_instance_url.Set(web_contents->GetSiteInstance()
+                              ->GetSecurityPrincipal()
+                              .GetDeprecatedSiteURL()
+                              .possibly_invalid_spec());
 
     const bool should_auto_reisze_host =
         TopChromeWebUIConfig::From(web_contents->GetBrowserContext(),

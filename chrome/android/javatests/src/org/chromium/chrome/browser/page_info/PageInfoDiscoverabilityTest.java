@@ -23,8 +23,9 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
+import org.chromium.base.CallbackUtils;
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplierImpl;
 import org.chromium.base.test.params.ParameterAnnotations;
 import org.chromium.base.test.params.ParameterProvider;
@@ -39,18 +40,22 @@ import org.chromium.chrome.browser.browsing_data.BrowsingDataType;
 import org.chromium.chrome.browser.browsing_data.TimePeriod;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
-import org.chromium.chrome.browser.omnibox.UrlBarEditingTextStateProvider;
+import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator;
 import org.chromium.chrome.browser.omnibox.status.PageInfoIphController;
 import org.chromium.chrome.browser.omnibox.status.PermissionStatusHandler;
 import org.chromium.chrome.browser.omnibox.status.StatusMediator;
 import org.chromium.chrome.browser.omnibox.status.StatusProperties;
+import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.permissions.PermissionTestRule;
 import org.chromium.chrome.browser.permissions.RuntimePermissionTestUtils;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
+import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
 import org.chromium.chrome.test.batch.BlankCTATabInitialStateRule;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.components.content_settings.ContentSetting;
 import org.chromium.components.content_settings.ContentSettingsType;
 import org.chromium.components.location.LocationUtils;
@@ -71,16 +76,20 @@ import java.util.List;
 // TODO(crbug.com/344672094): Failing when batched, batch this again.
 public class PageInfoDiscoverabilityTest {
     @ClassRule
-    public static final PermissionTestRule sPermissionTestRule = new PermissionTestRule();
+    public static final AutoResetCtaTransitTestRule sActivityTestRule =
+            ChromeTransitTestRules.autoResetCtaActivityRule();
+
+    @ClassRule
+    public static final PermissionTestRule sPermissionTestRule =
+            new PermissionTestRule(sActivityTestRule.getActivityTestRule());
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Rule
     public final BlankCTATabInitialStateRule mInitialStateRule =
-            new BlankCTATabInitialStateRule(sPermissionTestRule, false);
+            new BlankCTATabInitialStateRule(sActivityTestRule.getActivityTestRule(), false);
 
-    private static final String GEOLOCATION_TEST =
-            "/chrome/test/data/geolocation/geolocation_on_load.html";
+    private static final String GEOLOCATION_TEST = "/chrome/test/data/geolocation/geolocation.html";
 
     /**
      * Parameter provider for testing the different |RequestType|s that affect discoverability. The
@@ -122,7 +131,7 @@ public class PageInfoDiscoverabilityTest {
             parameters.add(
                     new ParameterSet()
                             .name("RequestType.kGeolocation")
-                            .value(ContentSettingsType.GEOLOCATION, true));
+                            .value(ContentSettingsType.GEOLOCATION_WITH_OPTIONS, true));
             parameters.add(
                     new ParameterSet()
                             .name("RequestType.kHandTracking")
@@ -138,10 +147,6 @@ public class PageInfoDiscoverabilityTest {
                                     ContentSettingsType
                                             .FEDERATED_IDENTITY_IDENTITY_PROVIDER_REGISTRATION,
                                     false));
-            parameters.add(
-                    new ParameterSet()
-                            .name("RequestType.kLocalNetworkAccess")
-                            .value(ContentSettingsType.LOCAL_NETWORK_ACCESS, true));
             parameters.add(
                     new ParameterSet()
                             .name("RequestType.kLocalNetwork")
@@ -175,6 +180,10 @@ public class PageInfoDiscoverabilityTest {
                     new ParameterSet()
                             .name("RequestType.kProtectedMediaIdentifier")
                             .value(ContentSettingsType.PROTECTED_MEDIA_IDENTIFIER, true));
+            parameters.add(
+                    new ParameterSet()
+                            .name("RequestType.kSensors")
+                            .value(ContentSettingsType.SENSORS, true));
             parameters.add(
                     new ParameterSet()
                             .name("RequestType.kStorageAccess")
@@ -220,7 +229,6 @@ public class PageInfoDiscoverabilityTest {
     }
 
     @Mock LocationBarDataProvider mLocationBarDataProvider;
-    @Mock UrlBarEditingTextStateProvider mUrlBarEditingTextStateProvider;
     @Mock Profile mProfile;
     @Mock TemplateUrlService mTemplateUrlService;
     @Mock PageInfoIphController mPageInfoIphController;
@@ -245,18 +253,23 @@ public class PageInfoDiscoverabilityTest {
                     TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
                     mMediator =
                             new StatusMediator(
+                                    new OmniboxResourceProvider(
+                                            mContext, BrandedColorScheme.APP_DEFAULT),
                                     mModel,
                                     mContext,
-                                    mUrlBarEditingTextStateProvider,
-                                    /* isTablet= */ false,
                                     mLocationBarDataProvider,
                                     mPermissionDialogController,
                                     mTemplateUrlServiceSupplier,
-                                    new ObservableSupplierImpl(mProfile),
+                                    ObservableSuppliers.createNonNull(mProfile),
                                     mPageInfoIphController,
                                     sPermissionTestRule.getActivity().getWindowAndroid(),
-                                    null);
-                    mPermissionStatusHandler = mMediator.getPermissionStatusHandler();
+                                    /* pageInfoAction= */ null,
+                                    ObservableSuppliers.createNonNull(
+                                            FuseboxCoordinator.FuseboxState.DISABLED),
+                                    ObservableSuppliers.createNonNull(
+                                            FuseboxCoordinator.FuseboxLayoutMode.TOOLBAR),
+                                    CallbackUtils.emptyRunnable());
+                    mPermissionStatusHandler = mMediator.getPermissionStatusHandlerForTesting();
                 });
     }
 
@@ -264,6 +277,16 @@ public class PageInfoDiscoverabilityTest {
     public void tearDown() throws Exception {
         LocationUtils.setFactory(null);
         LocationProviderOverrider.setLocationProviderImpl(null);
+
+        // Tear down the StatusMediator created in setUp so it removes its observers and
+        // cancels any pending Handler callbacks posted by PermissionStatusHandler (which
+        // would otherwise retain the destroyed Activity via mContext).
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    if (mMediator != null) {
+                        mMediator.destroy();
+                    }
+                });
 
         // Reset content settings.
         CallbackHelper helper = new CallbackHelper();
@@ -296,7 +319,7 @@ public class PageInfoDiscoverabilityTest {
                 new RuntimePermissionTestUtils.TestAndroidPermissionDelegate(
                         requestablePermission,
                         RuntimePermissionTestUtils.RuntimePromptResponse.GRANT);
-        RuntimePermissionTestUtils.runTest(
+        RuntimePermissionTestUtils.runTestForgiving(
                 sPermissionTestRule,
                 testAndroidPermissionDelegate,
                 GEOLOCATION_TEST,
@@ -304,7 +327,7 @@ public class PageInfoDiscoverabilityTest {
                 /* promptDecision= */ PermissionTestRule.PromptDecision.ALLOW,
                 /* waitForMissingPermissionPrompt= */ false,
                 /* waitForUpdater= */ true,
-                /* javascriptToExecute= */ null,
+                "initiate_geolocation()",
                 /* missingPermissionPromptTextId= */ 0);
 
         Assert.assertEquals(
@@ -331,7 +354,7 @@ public class PageInfoDiscoverabilityTest {
                 new RuntimePermissionTestUtils.TestAndroidPermissionDelegate(
                         requestablePermission,
                         RuntimePermissionTestUtils.RuntimePromptResponse.DENY);
-        RuntimePermissionTestUtils.runTest(
+        RuntimePermissionTestUtils.runTestForgiving(
                 sPermissionTestRule,
                 testAndroidPermissionDelegate,
                 GEOLOCATION_TEST,
@@ -339,7 +362,7 @@ public class PageInfoDiscoverabilityTest {
                 /* promptDecision= */ PermissionTestRule.PromptDecision.DENY,
                 /* waitForMissingPermissionPrompt= */ false,
                 /* waitForUpdater= */ true,
-                /* javascriptToExecute= */ null,
+                "initiate_geolocation()",
                 /* missingPermissionPromptTextId= */ 0);
 
         Assert.assertEquals(

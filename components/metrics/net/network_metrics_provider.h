@@ -11,7 +11,6 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/metrics/histogram_base.h"
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
@@ -79,7 +78,8 @@ class NetworkMetricsProvider
   void ProvideSystemProfileMetrics(SystemProfileProto* system_profile) override;
 
   // NetworkConnectionObserver:
-  void OnConnectionChanged(network::mojom::ConnectionType type) override;
+  void OnConnectionChanged(
+      net::NetworkChangeNotifier::ConnectionType type) override;
 
   SystemProfileProto::Network::ConnectionType GetConnectionType() const;
 
@@ -100,7 +100,7 @@ class NetworkMetricsProvider
   // True if |connection_type_| changed during the lifetime of the log.
   bool connection_type_is_ambiguous_;
   // The connection type according to network::NetworkConnectionTracker.
-  network::mojom::ConnectionType connection_type_;
+  net::NetworkChangeNotifier::ConnectionType connection_type_;
   // True if the network connection tracker has been initialized.
   bool network_connection_tracker_initialized_;
 

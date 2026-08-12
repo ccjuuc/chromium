@@ -62,7 +62,7 @@ by a child template that "extends" this file.
     <uses-permission-sdk-23 android:name="android.permission.BLUETOOTH_SCAN"
                             android:usesPermissionFlags="neverForLocation"/>
 
-    <uses-permission-sdk-23 android:name="android.permission.READ_CONTACTS"/>
+    <uses-permission-sdk-23 android:name="android.permission.READ_CONTACTS" android:maxSdkVersion="36"/>
     <uses-permission-sdk-23 android:name="android.permission.REORDER_TASKS"/>
 
     <!--  Needed for allowing downloaded APKs to be installed. -->
@@ -72,11 +72,8 @@ by a child template that "extends" this file.
     <uses-permission android:name="android.permission.CAPTURE_KEYBOARD" />
     <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    {% set is_desktop_android = is_desktop_android|default(0) %}
-    {% if is_desktop_android == "true" %}
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-    {% endif %}
     {% set enable_screen_capture = enable_screen_capture|default(0) %}
     {% if enable_screen_capture == "true" %}
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
@@ -97,14 +94,6 @@ by a child template that "extends" this file.
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
-    <uses-permission-sdk-23 android:name="android.permission.READ_MEDIA_AUDIO"/>
-
-    <!-- Needed for handling media-viewing Intents from other apps for images and video on low end
-         or managed devices (eg. crbug.com/40546519), monitoring of screenshots if permission has
-         been previously granted (doesn't request independently) (crbug.com/40520892), and
-         Chromium's custom photo picker used on Android S and below (crbug.com/40489056) -->
-    <uses-permission-sdk-23 android:name="android.permission.READ_MEDIA_IMAGES"/>
-    <uses-permission-sdk-23 android:name="android.permission.READ_MEDIA_VIDEO"/>
 
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
@@ -125,6 +114,15 @@ by a child template that "extends" this file.
     <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_QUERY_CANDIDATE_CREDENTIALS"/>
     <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_SET_ALLOWED_PROVIDERS"/>
     <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_SET_ORIGIN"/>
+
+    <!-- Permission for reading the Advanced Protection Mode status. -->
+    <uses-permission android:name="android.permission.QUERY_ADVANCED_PROTECTION_MODE"/>
+
+    <!-- Needed for allowing cross-app and cross-profile communication over the loopback interface. -->
+    <uses-permission android:name="android.permission.USE_LOOPBACK_INTERFACE"/>
+
+    <!-- Needed for checking local network connections. -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK"/>
 
     {% set enable_vr = enable_vr|default(0) %}
     {% if enable_vr == "true" %}
@@ -167,6 +165,9 @@ by a child template that "extends" this file.
     <uses-permission android:name="com.android.launcher.permission.INSTALL_SHORTCUT"/>
 
     <uses-permission android:name="com.google.android.apps.now.CURRENT_ACCOUNT_ACCESS" />
+
+    <!-- Permission for using pinned windowing layer for document picture-in-picture. -->
+    <uses-permission android:name="android.permission.USE_PINNED_WINDOWING_LAYER" />
 
     {% block extra_uses_permissions %}
     {% endblock %}
@@ -226,12 +227,9 @@ by a child template that "extends" this file.
         android:allowBackup="false"
         {% endif %}
         android:networkSecurityConfig="@xml/network_security_config"
-        android:allowAudioPlaybackCapture="false"
         android:appComponentFactory="org.chromium.chrome.browser.base.SplitCompatAppComponentFactory"
         android:enableOnBackInvokedCallback="true"
-        {% if javaless_renderers is defined %}
         android:zygotePreloadNativeLib="lib{{ library_name }}.so"
-        {% endif %}
         {% block extra_application_attributes %}{% endblock %}>
 
         {% if channel in ['canary', 'dev', 'default'] %}
@@ -294,13 +292,6 @@ by a child template that "extends" this file.
                 <data android:mimeType="text/html"/>
                 <data android:mimeType="text/plain"/>
                 <data android:mimeType="application/xhtml+xml"/>
-            </intent-filter>
-            <!-- PDF viewing support. -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="application/pdf" />
-                <data android:scheme="content" />
             </intent-filter>
             <!-- MHTML support, used for snapshots -->
             <intent-filter>
@@ -399,9 +390,37 @@ by a child template that "extends" this file.
             <intent-filter tools:ignore="AppLinkUrlError">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <!-- TODO(crbug.com/40557607): Limit these to supported MIME types. -->
-                <data android:mimeType="image/*" />
-                <data android:mimeType="video/*" />
+                <!-- TODO(crbug.com/501213257): Find a way to unify the declaration of codecs between here and the media stack -->
+                {% if enable_jxl_decoder == "true" %}
+                <data android:mimeType="image/jxl" />
+                {% endif %}
+                {% if enable_dav1d_decoder == "true" %}
+                <data android:mimeType="image/avif" />
+                {% endif %}
+                <data android:mimeType="image/webp" />
+                <data android:mimeType="image/apng" />
+                <data android:mimeType="image/svg+xml" />
+                <data android:mimeType="image/jpeg" />
+                <data android:mimeType="image/png" />
+                <data android:mimeType="image/gif" />
+                <data android:mimeType="image/x-icon" />
+                <data android:mimeType="image/bmp" />
+                <data android:mimeType="image/x-xbitmap" />
+                <data android:mimeType="image/vnd.microsoft.icon" />
+                <data android:mimeType="image/pjpeg" />
+                <data android:mimeType="image/jpg" />
+                <data android:mimeType="image/x-png" />
+
+                <data android:mimeType="video/webm" />
+                <data android:mimeType="video/ogg" />
+                <data android:mimeType="video/mp4" />
+                <data android:mimeType="video/matroska" />
+                <data android:mimeType="video/x-matroska" />
+                {% if use_proprietary_codecs == "true" %}
+                <data android:mimeType="video/x-m4v" />
+                <data android:mimeType="video/3gpp" />
+                {% endif %}
+
                 <data android:scheme="file" />
                 <data android:scheme="content" />
             </intent-filter>
@@ -413,7 +432,7 @@ by a child template that "extends" this file.
             android:theme="@style/Theme.Chromium.Activity"
             android:excludeFromRecents="true"
             android:configChanges=
-                       "screenSize|smallestScreenSize|screenLayout|orientation"
+                       "screenSize|smallestScreenSize|screenLayout|orientation|density|uiMode"
             {{ self.supports_video_persistence() }}
         >
         </activity>
@@ -439,8 +458,24 @@ by a child template that "extends" this file.
             <intent-filter tools:ignore="AppLinkUrlError">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <!-- TODO(crbug.com/40557607): Limit these to supported MIME types. -->
-                <data android:mimeType="audio/*" />
+                <!-- TODO(crbug.com/501213257): Find a way to unify the declaration of codecs between here and the media stack -->
+                <data android:mimeType="audio/wav" />
+                <data android:mimeType="audio/x-wav" />
+                <data android:mimeType="audio/webm" />
+                <data android:mimeType="audio/ogg" />
+                <data android:mimeType="audio/flac" />
+                <data android:mimeType="audio/mpeg" />
+                <data android:mimeType="audio/mp3" />
+                <data android:mimeType="audio/x-mp3" />
+                <data android:mimeType="audio/mp4" />
+                <data android:mimeType="audio/matroska" />
+                <data android:mimeType="audio/x-matroska" />
+                <data android:mimeType="application/ogg" />
+                {% if use_proprietary_codecs == "true" %}
+                <data android:mimeType="audio/aac" />
+                <data android:mimeType="audio/x-m4a" />
+                {% endif %}
+
                 <data android:scheme="file" />
                 <data android:scheme="content" />
             </intent-filter>
@@ -450,6 +485,7 @@ by a child template that "extends" this file.
             android:theme="@style/Theme.BrowserUI.NoDisplay"
             android:taskAffinity=""
             android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
             android:exported="false">
             <property android:name="android.window.PROPERTY_SUPPORTS_MULTI_INSTANCE_SYSTEM_UI"
                 android:value="true" />
@@ -530,6 +566,16 @@ by a child template that "extends" this file.
             </intent-filter>
         </receiver>
 
+        <!-- Actor related -->
+        <receiver android:name="org.chromium.chrome.browser.actor.ActorBroadcastReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.chromium.chrome.browser.actor.ACTION_PAUSE" />
+                <action android:name="org.chromium.chrome.browser.actor.ACTION_RESUME" />
+                <action android:name="org.chromium.chrome.browser.actor.ACTION_CANCEL" />
+            </intent-filter>
+        </receiver>
+
         <!-- Custom Tabs -->
         <activity android:name="org.chromium.chrome.browser.customtabs.CustomTabActivity"
             android:theme="@style/Theme.Chromium.Activity"
@@ -554,6 +600,9 @@ by a child template that "extends" this file.
             android:theme="@style/Theme.Chromium.TabbedMode"
             android:exported="true"
             android:launchMode="singleTask"
+            {% if is_desktop_android == "true" %}
+            android:persistableMode="persistAcrossReboots"
+            {% endif %}
             {# We can only use blocks once in Jinja, for future substitutions we use
             self.supports_video_persistence(). #}
             {% block supports_video_persistence %}
@@ -562,7 +611,7 @@ by a child template that "extends" this file.
             {% endblock %}
             {% block chrome_activity_common %}
             android:windowSoftInputMode="adjustResize"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode|navigation|density|touchscreen|colorMode"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode|navigation|density|touchscreen|colorMode|fontScale"
             android:hardwareAccelerated="false"
             {% endblock %}
         >
@@ -688,7 +737,7 @@ by a child template that "extends" this file.
         </activity>
         <activity
             android:name="org.chromium.chrome.browser.chrome_item_picker.ChromeItemPickerActivity"
-            android:theme="@style/Theme.Chromium.WithWindowAnimation"
+            android:theme="@style/Theme.Chromium.Activity.FakeTranslucent"
             android:exported="false"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode">
         </activity>
@@ -727,31 +776,6 @@ by a child template that "extends" this file.
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode">
         </activity>
 
-        <!-- Activities for feed. -->
-        <activity android:name="org.chromium.chrome.browser.app.feed.feedmanagement.FeedManagementActivity"
-            android:theme="@style/Theme.Chromium.Settings"
-            android:windowSoftInputMode="stateAlwaysHidden|adjustResize"
-            android:exported="false"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode">
-        </activity>
-        <activity android:name="org.chromium.chrome.browser.app.feed.followmanagement.FollowManagementActivity"
-            android:theme="@style/Theme.Chromium.Settings"
-            android:windowSoftInputMode="stateAlwaysHidden|adjustResize"
-            android:exported="false"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode">
-            <intent-filter>
-                <action android:name="org.chromium.chrome.browser.app.feed.followmanagement.FollowManagementActivity.ACTIVATE" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </activity>
-
-        <!-- Activities for creator. -->
-        <activity android:name="org.chromium.chrome.browser.app.creator.CreatorActivity"
-            android:theme="@style/Theme.Chromium.Activity.Fullscreen"
-            android:windowSoftInputMode="stateAlwaysHidden|adjustResize"
-            android:exported="false"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode">
-        </activity>
 
         <!-- Activities for history. -->
         <activity android:name="org.chromium.chrome.browser.history.HistoryActivity"
@@ -843,6 +867,14 @@ by a child template that "extends" this file.
             android:excludeFromRecents="true">
         </activity>
 
+        <activity android:name="org.chromium.chrome.browser.share.send_tab_to_self.SendTabToSelfShareTargetActivity"
+            android:theme="@style/Theme.BrowserUI.Translucent.NoTitleBar"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize">
+        </activity>
+
         <!-- This activity is used to restart the main Chrome process.  Should never be exported. -->
         <activity android:name="org.chromium.chrome.browser.BrowserRestartActivity"
             android:launchMode="singleInstance"
@@ -914,6 +946,26 @@ by a child template that "extends" this file.
             android:exported="false"
             android:isolatedProcess="true"
             android:process=":decoder_service" />
+
+        <!-- Actor foreground service -->
+        <!-- TODO: This service needs to verify the calling app and its certificates before
+             starting the actor service. Export this service in production channels once the
+             verification is handled correctly in the service. -->
+        {% if channel in ['default'] %}
+        <service android:name="org.chromium.chrome.browser.actor.ActorForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="true"
+            tools:ignore="ExportedService">
+            <intent-filter>
+                <action android:name="org.chromium.chrome.browser.actor.START_ACTOR_FOREGROUND_SERVICE" />
+            </intent-filter>
+        </service>
+        {% else %}
+        <service android:name="org.chromium.chrome.browser.actor.ActorForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false">
+        </service>
+        {% endif %}
 
         <!-- Download foreground service -->
         <service android:name="org.chromium.chrome.browser.download.DownloadForegroundService"
@@ -1116,11 +1168,11 @@ by a child template that "extends" this file.
 
         <activity
             android:name="org.chromium.chrome.browser.notifications.NotificationIntentInterceptor$TrampolineActivity"
+            android:taskAffinity=""
             android:theme="@style/Theme.BrowserUI.Translucent.NoTitleBar"
             android:exported="false"
             android:autoRemoveFromRecents="true"
             android:excludeFromRecents="true"
-            android:documentLaunchMode="always"
             android:noHistory="true"/>
 
         <activity
@@ -1129,7 +1181,6 @@ by a child template that "extends" this file.
             android:exported="false"
             android:autoRemoveFromRecents="true"
             android:excludeFromRecents="true"
-            android:documentLaunchMode="always"
             android:noHistory="true"/>
 
         <activity
@@ -1138,7 +1189,6 @@ by a child template that "extends" this file.
             android:exported="false"
             android:autoRemoveFromRecents="true"
             android:excludeFromRecents="true"
-            android:documentLaunchMode="always"
             android:noHistory="true"/>
 
         <!-- Activities for task manager. -->
@@ -1147,6 +1197,14 @@ by a child template that "extends" this file.
             android:exported="false"
             android:theme="@style/Theme.Chromium.Activity"
             android:launchMode="singleInstance">
+        </activity>
+
+        <activity
+            android:name="org.chromium.chrome.browser.devtools.DevToolsActivity"
+            android:theme="@style/Theme.Chromium.Activity"
+            android:exported="false"
+            {{ self.chrome_activity_common() }}>
+            {{ self.extra_web_rendering_activity_definitions() }}
         </activity>
 
         <receiver android:name="org.chromium.chrome.browser.notifications.scheduler.DisplayAgent$Receiver"
@@ -1158,8 +1216,6 @@ by a child template that "extends" this file.
         <receiver android:name="org.chromium.chrome.browser.customtabs.CustomTabsShareBroadcastReceiver"
             android:exported="false"/>
 
-        <receiver android:name="org.chromium.chrome.browser.sharing.click_to_call.ClickToCallMessageHandler$TapReceiver"
-            android:exported="false"/>
         <receiver android:name="org.chromium.chrome.browser.sharing.sms_fetcher.SmsFetcherMessageHandler$NotificationReceiver"
             android:exported="false"/>
 
@@ -1168,17 +1224,15 @@ by a child template that "extends" this file.
         <receiver android:name="org.chromium.chrome.browser.offlinepages.AutoFetchNotifier$InProgressCancelReceiver"
             android:exported="false"/>
 
-        <receiver android:name="org.chromium.chrome.browser.safety_hub.UnsubscribedNotificationsNotificationManager$NotificationReceiver"
-            android:exported="false"/>
-
         <service android:name="org.chromium.chrome.browser.media.MediaCaptureNotificationService"
-            {% if is_desktop_android == "true" and enable_screen_capture == "true" %}
+            {% if enable_screen_capture == "true" %}
             android:foregroundServiceType="camera|microphone|mediaProjection|mediaPlayback"
-            {% elif is_desktop_android == "true" %}
+            {% else %}
             android:foregroundServiceType="camera|microphone"
-            {% elif enable_screen_capture == "true" %}
-            android:foregroundServiceType="mediaProjection|mediaPlayback"
             {% endif %}
+            android:exported="false"/>
+        <service android:name="org.chromium.chrome.browser.GracefulShutdownService"
+            android:foregroundServiceType="shortService|dataSync"
             android:exported="false"/>
         <service android:name="org.chromium.chrome.browser.media.ui.ChromeMediaNotificationControllerServices$PlaybackListenerService"
             android:foregroundServiceType="mediaPlayback" android:exported="false">
@@ -1211,27 +1265,10 @@ by a child template that "extends" this file.
         <service android:name="org.chromium.chrome.browser.app.usb.UsbNotificationService"
             android:exported="false"/>
 
-        <service android:name="org.chromium.chrome.browser.data_import.DataImporterService"
-            android:exported="true" tools:ignore="ExportedService">
-          <intent-filter>
-            <action android:name="io.grpc.action.BIND" />
-            <data android:host=""
-                android:path="/com.google.osmigration.systemappapi.TargetService"
-                android:scheme="grpc" />
-          </intent-filter>
-        </service>
+
 
         <meta-data android:name="org.chromium.content.browser.SMART_CLIP_PROVIDER"
             android:value="org.chromium.content_public.browser.SmartClipProvider"/>
-
-        <activity
-            android:name="org.chromium.chrome.browser.test_dummy.TestDummyActivity"
-            android:excludeFromRecents="true"
-            android:exported="true"
-            android:noHistory="true"
-            android:theme="@style/Theme.Material3Expressive.DayNight"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize" >
-        </activity>
 
         <!-- This activity is Android P- only which is not supported by Chrome now. -->
         <activity
@@ -1284,6 +1321,10 @@ by a child template that "extends" this file.
 
       <!-- NOTE: If you change the value of "android:process" for the below services,
            you also need to update kHelperProcessExecutableName in chrome_constants.cc. -->
+      <!-- NOTE: num_sandboxed_services is simply the number of name slots available,
+           and not a limit on the number of sandboxed processes that can be created.
+           In practice, many fewer slots are used, and process names are often reused,
+           such as many processes named with the suffix ":sandboxed_process0". -->
       {% set num_sandboxed_services = 40 %}
       <meta-data android:name="org.chromium.content.browser.NUM_SANDBOXED_SERVICES"
           android:value="{{ num_sandboxed_services }}"/>
@@ -1293,41 +1334,28 @@ by a child template that "extends" this file.
           android:process=":sandboxed_process{{ i }}"
           android:permission="{{ manifest_package }}.permission.CHILD_SERVICE"
           android:isolatedProcess="true"
-          android:exported="{{sandboxed_service_exported|default(false)}}"
+          android:exported="false"
           {% if (i == 0) %}
           android:useAppZygote="true"
-          {% endif %}
-          {% if (sandboxed_service_exported|default(false)) == 'true' %}
-          android:externalService="true"
-          tools:ignore="ExportedService"
-          android:visibleToInstantApps="true"
           {% endif %} />
       {% endfor %}
-      {% if javaless_renderers is defined %}
       <!-- Restricting to just 2 native-only services, one for zygote and one for non-zygote. -->
       {% for i in range(2) %}
-      <!-- For now, the name of a native-only service must be prefixed with "NativeService". This is
-           only for the prototype, and once it actually lands in the Android tree, there will be a
-           better mechanism than this. -->
-      <service android:name="org.chromium.content.app.NativeServiceSandboxedProcessService{{ i }}"
+      <service android:name="org.chromium.content.app.NativeOnlySandboxedProcessService{{ i }}"
           android:nativeService="true"
           android:process=":sandboxed_process{{ i }}"
           android:permission="{{ manifest_package }}.permission.CHILD_SERVICE"
           android:isolatedProcess="true"
+          {% if (i == 0) %}
           android:useAppZygote="true"
-          android:exported="{{sandboxed_service_exported|default(false)}}"
-          {% if (sandboxed_service_exported|default(false)) == 'true' %}
-          android:externalService="true"
-          tools:ignore="ExportedService"
-          android:visibleToInstantApps="true"
-          {% endif %} >
+          {% endif %}
+          android:exported="false" >
           <property android:name="android.app.PROPERTY_NATIVE_SERVICE_LIBRARY_NAME"
               android:value="lib{{ library_name }}.so" />
           <property android:name="android.app.PROPERTY_NATIVE_SERVICE_FUNCTION_NAME"
               android:value="NativeChildProcessService_onCreate" />
       </service>
       {% endfor %}
-      {% endif %}
 
       {% set num_privileged_services = 10 %}
       <meta-data android:name="org.chromium.content.browser.NUM_PRIVILEGED_SERVICES"
@@ -1422,7 +1450,7 @@ by a child template that "extends" this file.
           android:grantUriPermissions="true">
       </provider>
 
-      <!-- Disables at startup init of Emoji2. See http://crbug.com/1205141 -->
+      <!-- Disables at startup init of Emoji2. See http://crbug.com/40764422 -->
       <provider
           android:name="androidx.startup.InitializationProvider"
           tools:node="remove">
@@ -1431,6 +1459,16 @@ by a child template that "extends" this file.
       <!-- We call FirebaseApp.initializeApp() explicitly rather than relying on this hook for better control over when it happens. -->
       <provider
           android:name="com.google.firebase.provider.FirebaseInitProvider"
+          tools:node="remove">
+      </provider>
+
+      <!-- MlKitInitProvider runs MLKit initialization synchronously on the main
+           thread during ContentProvider install, before Application.onCreate(),
+           on every cold start regardless of whether an AICore-backed feature is
+           ever used. Remove it and initialize MLKit lazily on first use instead
+           (see MlKitAiCoreFactoryImpl). -->
+      <provider
+          android:name="com.google.mlkit.common.internal.MlKitInitProvider"
           tools:node="remove">
       </provider>
 
@@ -1455,6 +1493,14 @@ by a child template that "extends" this file.
       <provider
             android:name="org.chromium.chrome.browser.provider.PageContentProvider"
             android:authorities="{{ manifest_package }}.PageContentProvider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+      </provider>
+
+      <!-- Provider for screenshot content. -->
+      <provider
+            android:name="org.chromium.chrome.browser.screenshotprovider.ScreenshotContentProvider"
+            android:authorities="{{ manifest_package }}.ScreenshotContentProvider"
             android:exported="false"
             android:grantUriPermissions="true">
       </provider>

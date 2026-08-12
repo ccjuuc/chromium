@@ -11,7 +11,6 @@
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/deletion_origin.h"
 #include "components/sync/model/data_type_local_change_processor.h"
-#include "components/sync/model/in_memory_metadata_change_list.h"
 #include "components/sync/model/metadata_batch.h"
 #include "components/sync/model/metadata_change_list.h"
 #include "components/sync/model/mutable_data_batch.h"
@@ -52,11 +51,6 @@ void IncomingPasswordSharingInvitationSyncBridge::OnSyncStarting(
   CHECK(password_receiver_service_);
 }
 
-std::unique_ptr<syncer::MetadataChangeList>
-IncomingPasswordSharingInvitationSyncBridge::CreateMetadataChangeList() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return std::make_unique<syncer::InMemoryMetadataChangeList>();
-}
 
 std::optional<syncer::ModelError>
 IncomingPasswordSharingInvitationSyncBridge::MergeFullSyncData(
@@ -77,7 +71,7 @@ IncomingPasswordSharingInvitationSyncBridge::ApplyIncrementalSyncChanges(
   CHECK(password_receiver_service_);
 
   std::unique_ptr<syncer::DataTypeStore::WriteBatch> batch =
-      sync_metadata_store_->CreateWriteBatch();
+      sync_metadata_store_->CreateWriteBatch(std::move(metadata_change_list));
 
   for (const std::unique_ptr<syncer::EntityChange>& change : entity_changes) {
     if (change->type() == syncer::EntityChange::ACTION_DELETE) {
@@ -93,10 +87,9 @@ IncomingPasswordSharingInvitationSyncBridge::ApplyIncrementalSyncChanges(
     // that no other client will process it.
     change_processor()->Delete(change->storage_key(),
                                syncer::DeletionOrigin::Unspecified(),
-                               metadata_change_list.get());
+                               batch->GetMetadataChangeList());
   }
 
-  batch->TakeMetadataChangesFrom(std::move(metadata_change_list));
   CommitSyncMetadata(std::move(batch));
   return std::nullopt;
 }
@@ -147,7 +140,16 @@ void IncomingPasswordSharingInvitationSyncBridge::ApplyDisableSyncChanges(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   CHECK(sync_metadata_store_);
-  sync_metadata_store_->DeleteAllDataAndMetadata(base::DoNothing());
+  sync_metadata_store_->DeleteAllDataAndMetadata(
+      std::move(delete_metadata_change_list), base::DoNothing());
+}
+
+sync_pb::EntitySpecifics IncomingPasswordSharingInvitationSyncBridge::
+    TrimAllSupportedFieldsFromRemoteSpecifics(
+        const sync_pb::EntitySpecifics& entity_specifics) const {
+  // Clears all fields by default to avoid the memory and I/O overhead of an
+  // additional copy of the data.
+  return sync_pb::EntitySpecifics();
 }
 
 bool IncomingPasswordSharingInvitationSyncBridge::IsEntityDataValid(

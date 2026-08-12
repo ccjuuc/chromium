@@ -18,6 +18,7 @@
 #include "components/optimization_guide/core/model_execution/on_device_capability.h"
 #include "components/optimization_guide/core/model_execution/on_device_context.h"
 #include "components/optimization_guide/core/model_execution/on_device_model_feature_adapter.h"
+#include "components/optimization_guide/core/model_execution/on_device_telemetry_logger.h"
 #include "components/optimization_guide/core/model_execution/repetition_checker.h"
 #include "components/optimization_guide/core/model_execution/safety_checker.h"
 #include "components/optimization_guide/core/model_execution/substitution.h"
@@ -106,7 +107,7 @@ class OnDeviceExecution final
       on_device_model::mojom::ResponseConstraintPtr constraint,
       std::unique_ptr<ResultLogger> logger,
       OptimizationGuideModelExecutionResultStreamingCallback callback,
-      base::OnceCallback<void(bool)> cleanup_callback);
+      base::OnceClosure cleanup_callback);
   ~OnDeviceExecution() final;
 
   // Begin processing the request.
@@ -139,11 +140,15 @@ class OnDeviceExecution final
   // on_device_model::mojom::StreamingResponder:
   void OnResponse(on_device_model::mojom::ResponseChunkPtr chunk) override;
   void OnComplete(on_device_model::mojom::ResponseSummaryPtr summary) override;
+  void OnToolCalls(
+      std::vector<on_device_model::mojom::ToolCallPtr> tool_calls) override;
 
   // on_device_model::mojom::ContextClient:
   void OnComplete(uint32_t tokens_processed) override;
 
-  void OnResponderDisconnect();
+  // Called on StreamingResponder mojo pipe disconnect.
+  void OnResponderDisconnect(uint32_t custom_reason,
+                             const std::string& description);
 
   // Evaluates raw output safety (leads to OnRawOutputSafetyResult).
   void RunRawOutputSafetyCheck(ResponseCompleteness completeness);
@@ -187,7 +192,7 @@ class OnDeviceExecution final
 
   // Called after terminating to release all held resources and notify owner
   // that this object is safe to destroy.
-  void Cleanup(bool healthy);
+  void Cleanup();
 
   const mojom::OnDeviceFeature feature_;
   const OnDeviceOptions opts_;
@@ -198,10 +203,8 @@ class OnDeviceExecution final
   MultimodalMessage last_message_;
   // A constraint defining structured output requirements for the response.
   on_device_model::mojom::ResponseConstraintPtr constraint_;
-  // Time ExecuteModel() was called.
-  base::TimeTicks start_;
-  // Time we receive the first token.
-  base::TimeTicks first_response_time_;
+  // Handles telemetry logging for the execution.
+  OnDeviceRequestTelemetryLogger telemetry_logger_;
   // Used to log the result of ExecuteModel().
   std::unique_ptr<ResultLogger> histogram_logger_;
   // Used to log execution information for the request.
@@ -242,8 +245,7 @@ class OnDeviceExecution final
 
   // Callback to notify the owning session that on-device execution has
   // terminated, and that this object is safe to destroy.
-  // Should pass true to indicate healthy completion, or false if unhealthy.
-  base::OnceCallback<void(bool)> cleanup_callback_;
+  base::OnceClosure cleanup_callback_;
 
   mojo::Receiver<on_device_model::mojom::StreamingResponder> receiver_{this};
   mojo::Receiver<on_device_model::mojom::ContextClient> context_receiver_{this};

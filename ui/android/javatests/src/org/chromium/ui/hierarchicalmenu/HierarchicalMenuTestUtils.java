@@ -14,6 +14,7 @@ import org.chromium.ui.modelutil.PropertyModel.WritableIntPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
 
 import java.util.List;
+import java.util.function.Supplier;
 
 /** A utility class for testing hierarchical menus. */
 public class HierarchicalMenuTestUtils {
@@ -34,8 +35,9 @@ public class HierarchicalMenuTestUtils {
     public static final WritableBooleanPropertyKey ENABLED = new WritableBooleanPropertyKey();
     public static final WritableBooleanPropertyKey IS_HIGHLIGHTED =
             new WritableBooleanPropertyKey();
+    public static final WritableBooleanPropertyKey IS_EXPANDED = new WritableBooleanPropertyKey();
     public static final WritableIntPropertyKey MENU_ITEM_ID = new WritableIntPropertyKey();
-    public static final WritableObjectPropertyKey<List<ListItem>> SUBMENU_ITEMS =
+    public static final WritableObjectPropertyKey<Supplier<List<ListItem>>> SUBMENU_PROVIDER =
             new WritableObjectPropertyKey<>();
 
     public static final PropertyKey[] ALL_MENU_ITEM_KEYS =
@@ -57,7 +59,8 @@ public class HierarchicalMenuTestUtils {
                 ENABLED,
                 IS_HIGHLIGHTED,
                 MENU_ITEM_ID,
-                SUBMENU_ITEMS,
+                SUBMENU_PROVIDER,
+                IS_EXPANDED,
                 KEY_LISTENER
             };
 
@@ -98,13 +101,18 @@ public class HierarchicalMenuTestUtils {
             }
 
             @Override
-            public WritableObjectPropertyKey<List<ListItem>> getSubmenuItemsKey() {
-                return SUBMENU_ITEMS;
+            public WritableObjectPropertyKey<Supplier<List<ListItem>>> getSubmenuProviderKey() {
+                return SUBMENU_PROVIDER;
             }
 
             @Override
             public WritableBooleanPropertyKey getIsHighlightedKey() {
                 return IS_HIGHLIGHTED;
+            }
+
+            @Override
+            public WritableBooleanPropertyKey getIsExpandedKey() {
+                return IS_EXPANDED;
             }
         };
     }

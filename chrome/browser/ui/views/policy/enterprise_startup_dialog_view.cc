@@ -19,12 +19,14 @@
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/theme_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
+#include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/native_ui_types.h"
@@ -105,7 +107,9 @@ END_METADATA
 class HeadlessEnterpriseStartupDialogImpl : public EnterpriseStartupDialog {
  public:
   explicit HeadlessEnterpriseStartupDialogImpl(DialogResultCallback callback)
-      : callback_(std::move(callback)) {}
+      : callback_(std::move(callback)) {
+    CHECK(callback_);
+  }
 
   HeadlessEnterpriseStartupDialogImpl(
       const HeadlessEnterpriseStartupDialogImpl&) = delete;
@@ -142,7 +146,9 @@ class HeadlessEnterpriseStartupDialogImpl : public EnterpriseStartupDialog {
     }
   }
 
-  bool IsShowing() override { return true; }
+  // It is important that `IsShowing()` returns false when it is called from
+  // within the callback.
+  bool IsShowing() override { return !callback_.is_null(); }
 
  private:
   DialogResultCallback callback_;
@@ -153,6 +159,7 @@ class HeadlessEnterpriseStartupDialogImpl : public EnterpriseStartupDialog {
 EnterpriseStartupDialogView::EnterpriseStartupDialogView(
     EnterpriseStartupDialog::DialogResultCallback callback)
     : callback_(std::move(callback)) {
+  CHECK(callback_);
   views::BoxLayout* layout =
       SetLayoutManager(std::make_unique<views::BoxLayout>());
   layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
@@ -208,7 +215,9 @@ void EnterpriseStartupDialogView::DisplayErrorMessage(
   std::unique_ptr<views::Label> text = CreateText(error_message);
   auto error_icon =
       std::make_unique<views::ImageView>(ui::ImageModel::FromVectorIcon(
-          kBrowserToolsErrorIcon, ui::kColorAlertHighSeverity, kIconSize));
+          features::IsRoundedIconsEnabled() ? vector_icons::kErrorFilledIcon
+                                            : kBrowserToolsErrorOldIcon,
+          ui::kColorAlertHighSeverity, kIconSize));
 
   AddContent(std::move(error_icon), std::move(text));
 }
@@ -225,6 +234,12 @@ void EnterpriseStartupDialogView::AddWidgetObserver(
 void EnterpriseStartupDialogView::RemoveWidgetObserver(
     views::WidgetObserver* observer) {
   GetWidget()->RemoveObserver(observer);
+}
+
+bool EnterpriseStartupDialogView::IsShowing() {
+  // It is important that `IsShowing()` returns false when it is called from
+  // within the callback.
+  return !callback_.is_null();
 }
 
 void EnterpriseStartupDialogView::StartModalDialog() {
@@ -326,7 +341,10 @@ void EnterpriseStartupDialogImpl::DisplayErrorMessage(
 }
 
 bool EnterpriseStartupDialogImpl::IsShowing() {
-  return dialog_view_;
+  // It is important that `IsShowing()` returns false when it is called from
+  // within the callback. Relying on the view being destroyed is not good
+  // enough, as widget destruction may be asynchronous on some platforms.
+  return dialog_view_ && dialog_view_->IsShowing();
 }
 
 // views::WidgetObserver:

@@ -25,11 +25,17 @@ class PrefRegistrySimple;
 class PrefService;
 class PrefValueMap;
 
+namespace os_crypt_async {
+class Encryptor;
+}  // namespace os_crypt_async
+
 namespace sync_pb {
 class TrustedVaultAutoUpgradeExperimentGroup;
 }  // namespace sync_pb
 
 namespace syncer {
+
+class CustomPassphraseBootstrapToken;
 
 class SyncPrefObserver : public base::CheckedObserver {
  public:
@@ -74,11 +80,6 @@ class SyncPrefs {
   // First-Setup-Complete is conceptually similar to the user's consent to
   // enable sync-the-feature.
   bool IsInitialSyncFeatureSetupComplete() const;
-
-  // Returns true if the user is considered explicitly signed in to the browser,
-  // which includes all sign-ins on mobile. Returns false if the user is signed
-  // out or (on desktop) implicilty signed in (through Dice).
-  bool IsExplicitBrowserSignin() const;
 
   // ChromeOS Ash, IsInitialSyncFeatureSetupComplete() always returns true.
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -223,10 +224,13 @@ class SyncPrefs {
   void ClearAllEncryptionBootstrapTokens();
   // The encryption bootstrap token per account. Used for explicit passphrase
   // users (usually custom passphrase) and represents a user-entered passphrase.
-  std::string GetEncryptionBootstrapTokenForAccount(
+  CustomPassphraseBootstrapToken GetEncryptionBootstrapTokenForAccount(
+      const os_crypt_async::Encryptor& encryptor,
       const GaiaId& gaia_id) const;
-  void SetEncryptionBootstrapTokenForAccount(const std::string& token,
-                                             const GaiaId& gaia_id);
+  void SetEncryptionBootstrapTokenForAccount(
+      const CustomPassphraseBootstrapToken& token,
+      const os_crypt_async::Encryptor& encryptor,
+      const GaiaId& gaia_id);
   void ClearEncryptionBootstrapTokenForAccount(const GaiaId& gaia_id);
 
   // Muting mechanism for passphrase prompts, used on Android.
@@ -261,26 +265,12 @@ class SyncPrefs {
   // temporary state from the above migration.
   void MarkPartialSyncToSigninMigrationFullyDone();
 
-  static void MigrateAutofillWalletImportEnabledPref(PrefService* pref_service);
-
   // Copies the global versions of the selected-types prefs (used for syncing
   // users) to the per-account prefs for the given `gaia_id` (used for signed-in
   // non-syncing users). To be used when an existing syncing user is migrated to
   // signed-in.
   static void MigrateGlobalDataTypePrefsToAccount(PrefService* pref_service,
                                                   const GaiaId& gaia_id);
-
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
-  // Performs a one-off migration which ensures that, for a user who...
-  // ...enabled sync-the-feature, then...
-  // ...disabled an autofill data type, then...
-  // ...disabled sync-the-feature, then...
-  // ...signed-in with the same account (without sync-the-feture), the autofill
-  // data type is disabled.
-  // Internally this works by reading the global passwords setting and writing
-  // it to the account setting for kGoogleServicesLastSyncingGaiaId.
-  static void MaybeMigrateAutofillToPerAccountPref(PrefService* pref_service);
-#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
   // Returns whether a UserSelectableType is enabled by default in transport
   // mode, that is, without an explicit value stored in prefs.
@@ -305,7 +295,12 @@ class SyncPrefs {
   // Never null.
   const raw_ptr<PrefService> pref_service_;
 
-  base::ObserverList<SyncPrefObserver> sync_pref_observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      SyncPrefObserver,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      sync_pref_observers_;
 
   // The preference that controls whether sync is under control by
   // configuration management (aka policy).

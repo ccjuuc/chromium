@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "components/exo/buffer.h"
 #include "components/exo/sub_surface.h"
@@ -149,9 +150,17 @@ void augmented_surface_set_background_color(wl_client* client,
   std::optional<SkColor4f> sk_color;
   // Empty data means no color.
   if (color_data->size) {
-    float* data = reinterpret_cast<float*>(color_data->data);
-    sk_color = {data[0], UNSAFE_TODO(data[1]), UNSAFE_TODO(data[2]),
-                UNSAFE_TODO(data[3])};
+    if (color_data->size != sizeof(float) * 4) {
+      wl_resource_post_error(resource, AUGMENTED_SURFACE_ERROR_INVALID_SIZE,
+                             "The color data must contain 4 %zu-byte floats "
+                             "(%zu bytes given)",
+                             sizeof(float), color_data->size);
+      return;
+    }
+    // SAFETY: color_data->size is guaranteed to be exactly sizeof(float) * 4.
+    auto data = UNSAFE_BUFFERS(
+        base::span(reinterpret_cast<float*>(color_data->data), 4u));
+    sk_color = {data[0], data[1], data[2], data[3]};
   }
 
   GetUserDataAs<AugmentedSurface>(resource)->SetBackgroundColor(sk_color);
@@ -309,16 +318,16 @@ void augmented_sub_surface_set_transform(wl_client* client,
   if (matrix_data->size == 6 * sizeof(float)) {
     // | a c x |
     // | b d y | -> float[6] { a b c d x y }
-    float* data = reinterpret_cast<float*>(matrix_data->data);
+    // SAFETY: matrix_data->size is guaranteed to be exactly 6 * sizeof(float).
+    auto data = UNSAFE_BUFFERS(
+        base::span(reinterpret_cast<float*>(matrix_data->data), 6u));
     // If b and c are 0, make a simplified transform using AxisTransform2d.
-    if (UNSAFE_TODO(data[1]) == 0 && UNSAFE_TODO(data[2]) == 0) {
+    if (data[1] == 0 && data[2] == 0) {
       transform = gfx::Transform(gfx::AxisTransform2d::FromScaleAndTranslation(
-          gfx::Vector2dF(data[0], UNSAFE_TODO(data[3])),
-          gfx::Vector2dF(UNSAFE_TODO(data[4]), UNSAFE_TODO(data[5]))));
+          gfx::Vector2dF(data[0], data[3]), gfx::Vector2dF(data[4], data[5])));
     } else {
-      transform = gfx::Transform::Affine(
-          data[0], UNSAFE_TODO(data[1]), UNSAFE_TODO(data[2]),
-          UNSAFE_TODO(data[3]), UNSAFE_TODO(data[4]), UNSAFE_TODO(data[5]));
+      transform = gfx::Transform::Affine(data[0], data[1], data[2], data[3],
+                                         data[4], data[5]);
     }
   } else if (matrix_data->size != 0) {
     wl_resource_post_error(resource, AUGMENTED_SUB_SURFACE_ERROR_INVALID_SIZE,
@@ -364,9 +373,17 @@ void augmenter_create_solid_color_buffer(wl_client* client,
                                          wl_array* color_data,
                                          int width,
                                          int height) {
-  float* data = reinterpret_cast<float*>(color_data->data);
-  SkColor4f color = {data[0], UNSAFE_TODO(data[1]), UNSAFE_TODO(data[2]),
-                     UNSAFE_TODO(data[3])};
+  if (color_data->size != sizeof(float) * 4) {
+    wl_resource_post_error(resource, SURFACE_AUGMENTER_ERROR_INVALID_SIZE,
+                           "The color data must contain 4 %zu-byte floats "
+                           "(%zu bytes given)",
+                           sizeof(float), color_data->size);
+    return;
+  }
+  // SAFETY: color_data->size is guaranteed to be exactly sizeof(float) * 4.
+  auto data = UNSAFE_BUFFERS(
+      base::span(reinterpret_cast<float*>(color_data->data), 4u));
+  SkColor4f color = {data[0], data[1], data[2], data[3]};
   std::unique_ptr<SolidColorBuffer> buffer =
       std::make_unique<SolidColorBuffer>(color, gfx::Size(width, height));
   wl_resource* buffer_resource = wl_resource_create(

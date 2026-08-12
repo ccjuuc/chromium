@@ -14,12 +14,13 @@
 #include "ash/wm/window_pin_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_test.h"
+#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view_chromeos.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/frame/immersive_mode_tester.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chromeos/ui/base/window_properties.h"
@@ -136,8 +137,8 @@ void ChromeOSBrowserUITest::EnterTabFullscreenMode(
     Browser* browser,
     content::WebContents* web_contents) {
   ui_test_utils::FullscreenWaiter waiter(browser, {.tab_fullscreen = true});
-  static_cast<content::WebContentsDelegate*>(browser)
-      ->EnterFullscreenModeForTab(web_contents->GetPrimaryMainFrame(), {});
+  BrowserWebContentsDelegate::From(browser)->EnterFullscreenModeForTab(
+      web_contents->GetPrimaryMainFrame(), {});
   waiter.Wait();
 }
 

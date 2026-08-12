@@ -18,8 +18,8 @@ CSSNumericSumValue::UnitMap MultiplyUnitMaps(
     const CSSNumericSumValue::UnitMap& b) {
   for (const auto& unit_exponent : b) {
     DCHECK_NE(unit_exponent.value, 0);
-    const auto old_value =
-        a.Contains(unit_exponent.key) ? a.at(unit_exponent.key) : 0;
+    const auto it = a.find(unit_exponent.key);
+    const auto old_value = it != a.end() ? it->value : 0;
 
     // Remove any zero entries
     if (old_value + unit_exponent.value == 0) {
@@ -42,23 +42,24 @@ CSSMathProduct* CSSMathProduct::Create(
     return nullptr;
   }
 
-  CSSMathProduct* result = Create(CSSNumberishesToNumericValues(args));
-  if (!result) {
-    exception_state.ThrowTypeError("Incompatible types");
-    return nullptr;
-  }
-
-  return result;
+  return Create(CSSNumberishesToNumericValues(args), exception_state);
 }
 
-CSSMathProduct* CSSMathProduct::Create(CSSNumericValueVector values) {
+CSSMathProduct* CSSMathProduct::Create(CSSNumericValueVector values,
+                                       ExceptionState& exception_state) {
   bool error = false;
   CSSNumericValueType final_type =
       CSSMathVariadic::TypeCheck(values, CSSNumericValueType::Multiply, error);
-  return error ? nullptr
-               : MakeGarbageCollected<CSSMathProduct>(
-                     MakeGarbageCollected<CSSNumericArray>(std::move(values)),
-                     final_type);
+  CSSMathProduct* result =
+      error ? nullptr
+            : MakeGarbageCollected<CSSMathProduct>(
+                  MakeGarbageCollected<CSSNumericArray>(std::move(values)),
+                  final_type);
+  if (!result) {
+    exception_state.ThrowTypeError("Incompatible types");
+  }
+
+  return result;
 }
 
 std::optional<CSSNumericSumValue> CSSMathProduct::SumValue() const {

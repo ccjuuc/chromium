@@ -20,6 +20,7 @@
 #include "components/optimization_guide/core/model_execution/test/mock_remote_model_executor.h"
 #include "components/optimization_guide/core/model_execution/test/substitution_builder.h"
 #include "components/optimization_guide/core/optimization_guide_proto_util.h"
+#include "components/safe_browsing/core/browser/intelligent_scan_delegate.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
@@ -38,9 +39,8 @@ using optimization_guide::proto::ModelExecutionFeature;
 using optimization_guide::proto::OnDeviceModelExecutionFeatureConfig;
 using ::testing::_;
 using ::testing::NiceMock;
-using IntelligentScanResult =
-    ClientSideDetectionHost::IntelligentScanDelegate::IntelligentScanResult;
-using ModelType = ClientSideDetectionHost::IntelligentScanDelegate::ModelType;
+using IntelligentScanResult = IntelligentScanDelegate::IntelligentScanResult;
+using ModelType = IntelligentScanDelegate::ModelType;
 using RemoteModelExecutionCallback = base::OnceCallback<void(
     optimization_guide::OptimizationGuideModelExecutionResult,
     std::unique_ptr<optimization_guide::ModelQualityLogEntry>)>;
@@ -129,9 +129,7 @@ class ClientSideDetectionIntelligentScanDelegateAndroidTest
  protected:
   ClientSideDetectionIntelligentScanDelegateAndroidTest() {
     feature_list_.InitWithFeaturesAndParameters(
-        {{kClientSideDetectionSendIntelligentScanInfoAndroid, {}},
-         {kClientSideDetectionShowScamVerdictWarningAndroid, {}},
-         {kClientSideDetectionImageEmbeddingMatch,
+        {{kClientSideDetectionImageEmbeddingMatch,
           {{"CsdImageEmbeddingMatchWithIntelligentScan", "true"}}},
          {kClientSideDetectionServerModelForScamDetectionAndroid,
           {{"MaxIntelligentScansPerDay", "3"}}}},
@@ -251,6 +249,13 @@ TEST_F(ClientSideDetectionIntelligentScanDelegateAndroidTest,
   EXPECT_TRUE(delegate_->ShouldShowScamWarning(
       IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_2));
   EXPECT_TRUE(delegate_->ShouldShowScamWarning(
+      IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_3));
+  EXPECT_TRUE(delegate_->ShouldShowScamWarning(
+      IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_4));
+  // Undefined verdict doesn't show warning.
+  EXPECT_FALSE(
+      delegate_->ShouldShowScamWarning(static_cast<IntelligentScanVerdict>(6)));
+  EXPECT_TRUE(delegate_->ShouldShowScamWarning(
       IntelligentScanVerdict::SCAM_EXPERIMENT_CATCH_ALL_ENFORCEMENT));
   // Do not show warnings if the enum value is unknown.
   EXPECT_FALSE(delegate_->ShouldShowScamWarning(
@@ -258,13 +263,15 @@ TEST_F(ClientSideDetectionIntelligentScanDelegateAndroidTest,
 }
 
 TEST_F(ClientSideDetectionIntelligentScanDelegateAndroidTest,
-       IsIntelligentScanAvailable) {
+       GetIntelligentScanModelType) {
   CreateDelegate(/*is_enhanced_protection_enabled=*/true);
-  EXPECT_TRUE(delegate_->IsIntelligentScanAvailable(
-      /*log_failed_eligibility_reason=*/false));
+  EXPECT_EQ(delegate_->GetIntelligentScanModelType(
+                /*log_failed_eligibility_reason=*/false),
+            ModelType::kServerSide);
   delegate_->Shutdown();
-  EXPECT_FALSE(delegate_->IsIntelligentScanAvailable(
-      /*log_failed_eligibility_reason=*/false));
+  EXPECT_EQ(delegate_->GetIntelligentScanModelType(
+                /*log_failed_eligibility_reason=*/false),
+            ModelType::kNotSupportedServerSide);
 }
 
 TEST_F(ClientSideDetectionIntelligentScanDelegateAndroidTest,
@@ -294,9 +301,12 @@ TEST_F(ClientSideDetectionIntelligentScanDelegateAndroidTest,
   delegate_->StartIntelligentScan("test rendered text", future.GetCallback());
 
   EXPECT_TRUE(future.Get().execution_success);
+  EXPECT_EQ(future.Get().model_version, 1000);
   EXPECT_EQ(future.Get().brand, "test_brand");
   EXPECT_EQ(future.Get().intent, "test_intent");
   EXPECT_EQ(future.Get().model_type, ModelType::kServerSide);
+  EXPECT_EQ(future.Get().no_info_reason,
+            IntelligentScanInfo::NO_INFO_REASON_UNSPECIFIED);
   EXPECT_EQ(delegate_->GetAliveInquiryCountForTesting(), 0);
 
   histogram_tester_.ExpectUniqueSample(
@@ -340,6 +350,8 @@ TEST_F(ClientSideDetectionIntelligentScanDelegateAndroidTest,
   EXPECT_EQ(future.Get().brand, "");
   EXPECT_EQ(future.Get().intent, "");
   EXPECT_EQ(future.Get().model_type, ModelType::kServerSide);
+  EXPECT_EQ(future.Get().no_info_reason,
+            IntelligentScanInfo::SERVER_SIDE_MODEL_OUTPUT_MISSING);
   histogram_tester_.ExpectUniqueSample(
       "SBClientPhishing.ServerSideModelExecutionSuccess", false, 1);
   histogram_tester_.ExpectUniqueSample(
@@ -360,7 +372,9 @@ TEST_F(ClientSideDetectionIntelligentScanDelegateAndroidTest,
   delegate_->StartIntelligentScan("test rendered text", future.GetCallback());
 
   EXPECT_FALSE(future.Get().execution_success);
-  EXPECT_EQ(future.Get().model_type, ModelType::kServerSide);
+  EXPECT_EQ(future.Get().model_type, ModelType::kNotSupportedServerSide);
+  EXPECT_EQ(future.Get().no_info_reason,
+            IntelligentScanInfo::SERVER_SIDE_MODEL_UNAVAILABLE);
 }
 
 TEST_F(ClientSideDetectionIntelligentScanDelegateAndroidTest,
@@ -410,6 +424,8 @@ TEST_F(ClientSideDetectionIntelligentScanDelegateAndroidTest,
     ASSERT_TRUE(future.IsReady());
     EXPECT_FALSE(future.Get().execution_success);
     EXPECT_EQ(future.Get().model_type, ModelType::kServerSide);
+    EXPECT_EQ(future.Get().no_info_reason,
+              IntelligentScanInfo::SERVER_SIDE_MODEL_EXCEED_QUOTA);
   }
   histogram_tester_.ExpectBucketCount(
       "SBClientPhishing.ServerSideModelHitQuotaAtInquiryTime", true, 1);
@@ -454,6 +470,8 @@ TEST_F(ClientSideDetectionIntelligentScanDelegateAndroidTest,
     delegate_->StartIntelligentScan("test", future.GetCallback());
     EXPECT_FALSE(future.Get().execution_success);
     EXPECT_EQ(future.Get().model_type, ModelType::kServerSide);
+    EXPECT_EQ(future.Get().no_info_reason,
+              IntelligentScanInfo::SERVER_SIDE_MODEL_OUTPUT_MISSING);
   }
 
   // Next scan should fail due to quota.
@@ -466,6 +484,8 @@ TEST_F(ClientSideDetectionIntelligentScanDelegateAndroidTest,
     ASSERT_TRUE(future.IsReady());
     EXPECT_FALSE(future.Get().execution_success);
     EXPECT_EQ(future.Get().model_type, ModelType::kServerSide);
+    EXPECT_EQ(future.Get().no_info_reason,
+              IntelligentScanInfo::SERVER_SIDE_MODEL_EXCEED_QUOTA);
   }
 }
 
@@ -487,6 +507,9 @@ TEST_F(ClientSideDetectionIntelligentScanDelegateAndroidTest,
 
   // A scam warning should refund one quota.
   delegate_->OnScamWarningShown();
+  histogram_tester_.ExpectUniqueSample(
+      "SBClientPhishing.ServerSideModelQuotaCountOnScamWarningShown",
+      kMaxScansPerDay, 1);
 
   // Now a scan should succeed.
   std::optional<base::UnguessableToken> token =
@@ -535,11 +558,57 @@ TEST_F(ClientSideDetectionIntelligentScanDelegateAndroidTest,
        DoNotStartOnDeviceModelDownload) {
   CreateDelegate(/*is_enhanced_protection_enabled=*/true);
   task_environment_.RunUntilIdle();
-  EXPECT_TRUE(delegate_->IsIntelligentScanAvailable(
-      /*log_failed_eligibility_reason=*/false));
+  EXPECT_EQ(delegate_->GetIntelligentScanModelType(
+                /*log_failed_eligibility_reason=*/false),
+            ModelType::kServerSide);
   // No on-device model download because the server model is enabled.
   histogram_tester_.ExpectTotalCount(
       "SBClientPhishing.OnDeviceModelDownloadSuccess", 0);
+}
+
+class ClientSideDetectionIntelligentScanDelegateAndroidServerModelRolloutTest
+    : public ClientSideDetectionIntelligentScanDelegateAndroidTestBase {
+ protected:
+  ClientSideDetectionIntelligentScanDelegateAndroidServerModelRolloutTest() {
+    feature_list_.InitWithFeaturesAndParameters(
+        {{kClientSideDetectionImageEmbeddingMatch,
+          {{"CsdImageEmbeddingMatchWithIntelligentScan", "true"}}},
+         {kClientSideDetectionServerModelForScamDetectionAndroid,
+          {{"MaxIntelligentScansPerDay", "3"}}},
+         {kClientSideDetectionServerModelRolloutAndroid,
+          {{"ModelVersion", "2000"}}}},
+        /*disabled_features=*/{kClientSideDetectionKillswitch});
+  }
+};
+
+TEST_F(ClientSideDetectionIntelligentScanDelegateAndroidServerModelRolloutTest,
+       UsesRolloutVersionWhenFlagIsEnabled) {
+  CreateDelegate(/*is_enhanced_protection_enabled=*/true);
+
+  optimization_guide::proto::ScamDetectionRequest expected_request;
+  *expected_request.mutable_rendered_text() = "test rendered text";
+  optimization_guide::ModelExecutionOptions expected_options{};
+
+  optimization_guide::proto::ScamDetectionResponse returned_response;
+  returned_response.set_brand("test_brand");
+  returned_response.set_intent("test_intent");
+
+  EXPECT_CALL(
+      remote_model_executor_,
+      ExecuteModel(optimization_guide::ModelBasedCapabilityKey::kScamDetection,
+                   EqualsProto(expected_request),
+                   ::testing::Eq(expected_options),
+                   ::testing::A<RemoteModelExecutionCallback>()))
+      .WillOnce(base::test::RunOnceCallback<3>(
+          optimization_guide::OptimizationGuideModelExecutionResult(
+              optimization_guide::AnyWrapProto(returned_response),
+              /*execution_info=*/nullptr),
+          /*log_entry=*/nullptr));
+  base::test::TestFuture<IntelligentScanResult> future;
+  delegate_->StartIntelligentScan("test rendered text", future.GetCallback());
+
+  EXPECT_TRUE(future.Get().execution_success);
+  EXPECT_EQ(future.Get().model_version, 2000);
 }
 
 class
@@ -548,8 +617,7 @@ class
  protected:
   ClientSideDetectionIntelligentScanDelegateAndroidTestWithServerModelDisabled() {
     feature_list_.InitWithFeatures(
-        {kClientSideDetectionSendIntelligentScanInfoAndroid,
-         kClientSideDetectionShowScamVerdictWarningAndroid},
+        {kClientSideDetectionOnDeviceModelLazyDownloadAndroid},
         {kClientSideDetectionKillswitch,
          kClientSideDetectionServerModelForScamDetectionAndroid});
   }
@@ -557,64 +625,15 @@ class
 
 TEST_F(
     ClientSideDetectionIntelligentScanDelegateAndroidTestWithServerModelDisabled,
-    IsIntelligentScanAvailable_ModelAvailable) {
+    GetIntelligentScanModelType_ModelAvailable) {
   CreateDelegate(/*is_enhanced_protection_enabled=*/true);
   task_environment_.RunUntilIdle();
-  EXPECT_TRUE(delegate_->IsIntelligentScanAvailable(
-      /*log_failed_eligibility_reason=*/false));
-  histogram_tester_.ExpectUniqueSample(
-      "SBClientPhishing.OnDeviceModelDownloadSuccess", true, 1);
-  histogram_tester_.ExpectTotalCount("SBClientPhishing.OnDeviceModelFetchTime",
-                                     1);
-}
-
-TEST_F(
-    ClientSideDetectionIntelligentScanDelegateAndroidTestWithServerModelDisabled,
-    IsIntelligentScanAvailable_FeatureNotAvailable) {
-  CreateDelegate(/*is_enhanced_protection_enabled=*/true,
-                 ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST);
-  task_environment_.RunUntilIdle();
-  EXPECT_FALSE(delegate_->IsIntelligentScanAvailable(
-      /*log_failed_eligibility_reason=*/false));
-  // Not logged because log_failed_eligibility_reason is false.
+  EXPECT_EQ(delegate_->GetIntelligentScanModelType(
+                /*log_failed_eligibility_reason=*/false),
+            ModelType::kOnDevice);
+  // No on-device model download because lazy download is enabled.
   histogram_tester_.ExpectTotalCount(
-      "SBClientPhishing.OnDeviceModelUnavailableReasonAtInquiry.Android", 0);
-}
-
-TEST_F(
-    ClientSideDetectionIntelligentScanDelegateAndroidTestWithServerModelDisabled,
-    IsIntelligentScanAvailable_LogsUnavailableReason) {
-  CreateDelegate(/*is_enhanced_protection_enabled=*/true,
-                 ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST);
-  task_environment_.RunUntilIdle();
-  EXPECT_FALSE(delegate_->IsIntelligentScanAvailable(
-      /*log_failed_eligibility_reason=*/true));
-  histogram_tester_.ExpectUniqueSample(
-      "SBClientPhishing.OnDeviceModelUnavailableReasonAtInquiry.Android",
-      optimization_guide::mojom::ModelUnavailableReason::kPendingAssets, 1);
-}
-
-TEST_F(
-    ClientSideDetectionIntelligentScanDelegateAndroidTestWithServerModelDisabled,
-    IsIntelligentScanAvailable_EnhancedProtectionDisabled) {
-  CreateDelegate(/*is_enhanced_protection_enabled=*/false);
-  task_environment_.RunUntilIdle();
-  EXPECT_FALSE(delegate_->IsIntelligentScanAvailable(
-      /*log_failed_eligibility_reason=*/false));
-}
-
-TEST_F(
-    ClientSideDetectionIntelligentScanDelegateAndroidTestWithServerModelDisabled,
-    IsIntelligentScanAvailable_EnhancedProtectionEnabledAfterStartup) {
-  CreateDelegate(/*is_enhanced_protection_enabled=*/false);
-  task_environment_.RunUntilIdle();
-  EXPECT_FALSE(delegate_->IsIntelligentScanAvailable(
-      /*log_failed_eligibility_reason=*/false));
-
-  SetEnhancedProtectionPrefForTests(&pref_service_, true);
-  task_environment_.RunUntilIdle();
-  EXPECT_TRUE(delegate_->IsIntelligentScanAvailable(
-      /*log_failed_eligibility_reason=*/false));
+      "SBClientPhishing.OnDeviceModelDownloadSuccess", 0);
 }
 
 TEST_F(
@@ -624,8 +643,6 @@ TEST_F(
       /*is_enhanced_protection_enabled=*/true,
       ModelExecutionFeature::MODEL_EXECUTION_FEATURE_SCAM_DETECTION,
       "{\"brand\": \"test_brand\", \"intent\": \"test_intent\"}");
-  // Wait for the model to be available.
-  task_environment_.RunUntilIdle();
   base::test::TestFuture<IntelligentScanResult> future;
   delegate_->StartIntelligentScan("test rendered text", future.GetCallback());
 
@@ -634,8 +651,12 @@ TEST_F(
   EXPECT_EQ(future.Get().brand, "test_brand");
   EXPECT_EQ(future.Get().intent, "test_intent");
   EXPECT_EQ(future.Get().model_type, ModelType::kOnDevice);
+  EXPECT_EQ(future.Get().no_info_reason,
+            IntelligentScanInfo::NO_INFO_REASON_UNSPECIFIED);
   // Inquiry should be reset after a successful response.
   EXPECT_EQ(delegate_->GetAliveInquiryCountForTesting(), 0);
+  histogram_tester_.ExpectUniqueSample(
+      "SBClientPhishing.IsOnDeviceModelAvailableOnSessionCreation", true, 1);
   histogram_tester_.ExpectTotalCount(
       "SBClientPhishing.OnDeviceModelSessionCreationTime", 1);
   histogram_tester_.ExpectUniqueSample(
@@ -646,6 +667,22 @@ TEST_F(
   // disabled.
   histogram_tester_.ExpectTotalCount(
       "SBClientPhishing.ServerSideModelHitQuotaAtInquiryTime", 0);
+
+  // Model availability check is now handled during inference, so
+  // GetIntelligentScanModelType will always return kOnDevice.
+  EXPECT_EQ(delegate_->GetIntelligentScanModelType(
+                /*log_failed_eligibility_reason=*/false),
+            ModelType::kOnDevice);
+  base::test::TestFuture<IntelligentScanResult> future2;
+  delegate_->StartIntelligentScan("test rendered text", future2.GetCallback());
+  EXPECT_TRUE(future2.Get().execution_success);
+
+  // Model download is now handled by the ModelBroker, so we no longer log
+  // the download histograms.
+  histogram_tester_.ExpectTotalCount(
+      "SBClientPhishing.OnDeviceModelDownloadSuccess", 0);
+  histogram_tester_.ExpectTotalCount("SBClientPhishing.OnDeviceModelFetchTime",
+                                     0);
 }
 
 TEST_F(
@@ -654,8 +691,6 @@ TEST_F(
   CreateDelegateWithOnDeviceModelResponse(
       /*is_enhanced_protection_enabled=*/true,
       ModelExecutionFeature::MODEL_EXECUTION_FEATURE_SCAM_DETECTION, "");
-  // Wait for the model to be available.
-  task_environment_.RunUntilIdle();
   base::test::TestFuture<IntelligentScanResult> future;
   delegate_->StartIntelligentScan("test rendered text", future.GetCallback());
   EXPECT_FALSE(future.Get().execution_success);
@@ -663,6 +698,10 @@ TEST_F(
   EXPECT_EQ(future.Get().brand, "");
   EXPECT_EQ(future.Get().intent, "");
   EXPECT_EQ(future.Get().model_type, ModelType::kOnDevice);
+  EXPECT_EQ(future.Get().no_info_reason,
+            IntelligentScanInfo::ON_DEVICE_MODEL_OUTPUT_MISSING);
+  histogram_tester_.ExpectUniqueSample(
+      "SBClientPhishing.IsOnDeviceModelAvailableOnSessionCreation", true, 1);
   histogram_tester_.ExpectTotalCount(
       "SBClientPhishing.OnDeviceModelSessionCreationTime", 1);
   histogram_tester_.ExpectUniqueSample(
@@ -674,15 +713,126 @@ TEST_F(
 TEST_F(
     ClientSideDetectionIntelligentScanDelegateAndroidTestWithServerModelDisabled,
     StartIntelligentScan_OnDeviceModelNotAvailable) {
-  CreateDelegate(/*is_enhanced_protection_enabled=*/false);
-  task_environment_.RunUntilIdle();
+  CreateDelegate(/*is_enhanced_protection_enabled=*/true,
+                 ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST);
+  // Model availability check is now handled during inference, so
+  // GetIntelligentScanModelType will always return kOnDevice.
+  EXPECT_EQ(delegate_->GetIntelligentScanModelType(
+                /*log_failed_eligibility_reason=*/false),
+            ModelType::kOnDevice);
   base::test::TestFuture<IntelligentScanResult> future;
   delegate_->StartIntelligentScan("test rendered text", future.GetCallback());
+  // Allow asynchronous Mojo IPC calls (RequestAssetsFor and Subscribe) to be
+  // processed so that OnDeviceModelAdaptationLoader registers its observer with
+  // ModelProviderRegistry before RemoveModel is called.
+  task_environment_.RunUntilIdle();
+  // Notify the subscriber that the model is not available.
+  fake_broker_->model_provider().RemoveModel(
+      optimization_guide::proto::
+          OPTIMIZATION_TARGET_MODEL_EXECUTION_FEATURE_SCAM_DETECTION);
   EXPECT_FALSE(future.Get().execution_success);
   EXPECT_EQ(future.Get().model_version, -1);
   EXPECT_EQ(future.Get().brand, "");
   EXPECT_EQ(future.Get().intent, "");
-  EXPECT_EQ(future.Get().model_type, ModelType::kOnDevice);
+  EXPECT_EQ(future.Get().model_type, ModelType::kNotSupportedOnDevice);
+  EXPECT_EQ(future.Get().no_info_reason,
+            IntelligentScanInfo::ON_DEVICE_MODEL_UNAVAILABLE);
+  histogram_tester_.ExpectUniqueSample(
+      "SBClientPhishing.IsOnDeviceModelAvailableOnSessionCreation", false, 1);
+
+  // Model availability check is now handled during inference, so
+  // GetIntelligentScanModelType will always return kOnDevice.
+  EXPECT_EQ(delegate_->GetIntelligentScanModelType(
+                /*log_failed_eligibility_reason=*/true),
+            ModelType::kOnDevice);
+  base::test::TestFuture<IntelligentScanResult> future2;
+  delegate_->StartIntelligentScan("test rendered text", future2.GetCallback());
+  EXPECT_FALSE(future2.Get().execution_success);
+  EXPECT_EQ(future.Get().model_type, ModelType::kNotSupportedOnDevice);
+
+  // Model download is now handled by the ModelBroker, so we no longer log
+  // the download histograms.
+  histogram_tester_.ExpectTotalCount(
+      "SBClientPhishing.OnDeviceModelDownloadSuccess", 0);
+  histogram_tester_.ExpectTotalCount("SBClientPhishing.OnDeviceModelFetchTime",
+                                     0);
+  histogram_tester_.ExpectTotalCount(
+      "SBClientPhishing.OnDeviceModelUnavailableReasonAtInquiry.Android", 0);
+}
+
+TEST_F(
+    ClientSideDetectionIntelligentScanDelegateAndroidTestWithServerModelDisabled,
+    StartIntelligentScan_SecondRequestsBeforeModelDownloadIsCompleted) {
+  // Create delegate without providing the model.
+  CreateDelegate(/*is_enhanced_protection_enabled=*/true,
+                 ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST);
+  fake_broker_->settings().set_execute_result(
+      {"{\"brand\": \"test_brand\", \"intent\": \"test_intent\"}"});
+
+  base::test::TestFuture<IntelligentScanResult> future1;
+  delegate_->StartIntelligentScan("test rendered text 1",
+                                  future1.GetCallback());
+  // The model is not available yet, so the inquiries are pending.
+  EXPECT_EQ(delegate_->GetAliveInquiryCountForTesting(), 1);
+  EXPECT_FALSE(future1.IsReady());
+
+  // The second inquiry will also wait for the model to be downloaded.
+  base::test::TestFuture<IntelligentScanResult> future2;
+  delegate_->StartIntelligentScan("test rendered text 2",
+                                  future2.GetCallback());
+  EXPECT_EQ(delegate_->GetAliveInquiryCountForTesting(), 2);
+  EXPECT_FALSE(future2.IsReady());
+
+  // Simulate model download completion.
+  fake_broker_->UpdateModelAdaptation(fake_asset_);
+  task_environment_.RunUntilIdle();
+
+  // The first inquiry should complete successfully.
+  EXPECT_TRUE(future1.Get().execution_success);
+  EXPECT_EQ(future1.Get().brand, "test_brand");
+  EXPECT_EQ(future1.Get().intent, "test_intent");
+  EXPECT_EQ(future1.Get().model_type, ModelType::kOnDevice);
+  // The second inquiry should complete successfully.
+  EXPECT_TRUE(future2.Get().execution_success);
+  EXPECT_EQ(future2.Get().brand, "test_brand");
+  EXPECT_EQ(future2.Get().intent, "test_intent");
+  EXPECT_EQ(future2.Get().model_type, ModelType::kOnDevice);
+}
+
+TEST_F(
+    ClientSideDetectionIntelligentScanDelegateAndroidTestWithServerModelDisabled,
+    StartIntelligentScan_SecondRequestsAfterModelDownloadIsCompleted) {
+  // Create delegate without providing the model.
+  CreateDelegate(/*is_enhanced_protection_enabled=*/true,
+                 ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST);
+  fake_broker_->settings().set_execute_result(
+      {"{\"brand\": \"test_brand\", \"intent\": \"test_intent\"}"});
+
+  base::test::TestFuture<IntelligentScanResult> future1;
+  delegate_->StartIntelligentScan("test rendered text 1",
+                                  future1.GetCallback());
+  // The model is not available yet, so the inquiries are pending.
+  EXPECT_EQ(delegate_->GetAliveInquiryCountForTesting(), 1);
+  EXPECT_FALSE(future1.IsReady());
+  // Simulate model download completion.
+  fake_broker_->UpdateModelAdaptation(fake_asset_);
+  task_environment_.RunUntilIdle();
+
+  // The first inquiry should complete successfully.
+  EXPECT_TRUE(future1.Get().execution_success);
+  EXPECT_EQ(future1.Get().brand, "test_brand");
+  EXPECT_EQ(future1.Get().intent, "test_intent");
+  EXPECT_EQ(future1.Get().model_type, ModelType::kOnDevice);
+
+  // The second inquiry comes in after the model is downloaded.
+  base::test::TestFuture<IntelligentScanResult> future2;
+  delegate_->StartIntelligentScan("test rendered text 2",
+                                  future2.GetCallback());
+
+  EXPECT_TRUE(future2.Get().execution_success);
+  EXPECT_EQ(future2.Get().brand, "test_brand");
+  EXPECT_EQ(future2.Get().intent, "test_intent");
+  EXPECT_EQ(future2.Get().model_type, ModelType::kOnDevice);
 }
 
 TEST_F(
@@ -692,9 +842,6 @@ TEST_F(
       /*is_enhanced_protection_enabled=*/true,
       ModelExecutionFeature::MODEL_EXECUTION_FEATURE_SCAM_DETECTION,
       "{\"brand\": \"test_brand\", \"intent\": \"test_intent\"}");
-  // Wait for the model to be available.
-  task_environment_.RunUntilIdle();
-
   // With server model disabled, quota should not be enforced. We can make
   // more than 5 calls (default quota).
   for (int i = 0; i < 10; ++i) {
@@ -705,135 +852,119 @@ TEST_F(
 }
 
 class
-    ClientSideDetectionIntelligentScanDelegateAndroidTestWithSendScanInfoDisabled
+    ClientSideDetectionIntelligentScanDelegateAndroidTestWithOnDeviceModelLazyDownloadDisabled
     : public ClientSideDetectionIntelligentScanDelegateAndroidTestBase {
  protected:
-  ClientSideDetectionIntelligentScanDelegateAndroidTestWithSendScanInfoDisabled() {
+  ClientSideDetectionIntelligentScanDelegateAndroidTestWithOnDeviceModelLazyDownloadDisabled() {
     feature_list_.InitWithFeatures(
-        {kClientSideDetectionServerModelForScamDetectionAndroid},
-        {kClientSideDetectionSendIntelligentScanInfoAndroid});
-  }
-};
-
-TEST_F(
-    ClientSideDetectionIntelligentScanDelegateAndroidTestWithSendScanInfoDisabled,
-    ShouldRequestIntelligentScan) {
-  CreateDelegate(/*is_enhanced_protection_enabled=*/true);
-  ClientPhishingRequest verdict;
-  verdict.set_client_side_detection_type(
-      ClientSideDetectionType::FORCE_REQUEST);
-  verdict.mutable_llama_forced_trigger_info()->set_intelligent_scan(true);
-  // Enabling the server model flag should be sufficient to request intelligent
-  // scan.
-  EXPECT_TRUE(delegate_->ShouldRequestIntelligentScan(&verdict));
-}
-
-TEST_F(
-    ClientSideDetectionIntelligentScanDelegateAndroidTestWithSendScanInfoDisabled,
-    IsIntelligentScanAvailable) {
-  CreateDelegate(/*is_enhanced_protection_enabled=*/true);
-  task_environment_.RunUntilIdle();
-  // Enabling the server model flag should be sufficient to request intelligent
-  // scan.
-  EXPECT_TRUE(delegate_->IsIntelligentScanAvailable(
-      /*log_failed_eligibility_reason=*/false));
-}
-
-class
-    ClientSideDetectionIntelligentScanDelegateAndroidTestWithSendScanInfoAndServerModelDisabled
-    : public ClientSideDetectionIntelligentScanDelegateAndroidTestBase {
- protected:
-  ClientSideDetectionIntelligentScanDelegateAndroidTestWithSendScanInfoAndServerModelDisabled() {
-    feature_list_.InitWithFeatures(
-        {}, {kClientSideDetectionSendIntelligentScanInfoAndroid,
+        {}, {kClientSideDetectionKillswitch,
              kClientSideDetectionServerModelForScamDetectionAndroid,
-             kClientSideDetectionImageEmbeddingMatch});
+             kClientSideDetectionOnDeviceModelLazyDownloadAndroid});
   }
 };
 
 TEST_F(
-    ClientSideDetectionIntelligentScanDelegateAndroidTestWithSendScanInfoAndServerModelDisabled,
-    ShouldNotRequestIntelligentScan) {
-  CreateDelegate(/*is_enhanced_protection_enabled=*/true);
-  ClientPhishingRequest verdict;
-  verdict.set_client_side_detection_type(
-      ClientSideDetectionType::FORCE_REQUEST);
-  verdict.mutable_llama_forced_trigger_info()->set_intelligent_scan(true);
-  EXPECT_FALSE(delegate_->ShouldRequestIntelligentScan(&verdict));
+    ClientSideDetectionIntelligentScanDelegateAndroidTestWithOnDeviceModelLazyDownloadDisabled,
+    GetIntelligentScanModelType_EnhancedProtectionDisabled) {
+  CreateDelegate(/*is_enhanced_protection_enabled=*/false);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(delegate_->GetIntelligentScanModelType(
+                /*log_failed_eligibility_reason=*/false),
+            ModelType::kNotSupportedOnDevice);
 }
 
 TEST_F(
-    ClientSideDetectionIntelligentScanDelegateAndroidTestWithSendScanInfoAndServerModelDisabled,
-    IsIntelligentScanAvailable) {
+    ClientSideDetectionIntelligentScanDelegateAndroidTestWithOnDeviceModelLazyDownloadDisabled,
+    GetIntelligentScanModelType_EnhancedProtectionEnabledAfterStartup) {
+  CreateDelegate(/*is_enhanced_protection_enabled=*/false);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(delegate_->GetIntelligentScanModelType(
+                /*log_failed_eligibility_reason=*/false),
+            ModelType::kNotSupportedOnDevice);
+
+  SetEnhancedProtectionPrefForTests(&pref_service_, true);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(delegate_->GetIntelligentScanModelType(
+                /*log_failed_eligibility_reason=*/false),
+            ModelType::kOnDevice);
+}
+
+TEST_F(
+    ClientSideDetectionIntelligentScanDelegateAndroidTestWithOnDeviceModelLazyDownloadDisabled,
+    GetIntelligentScanModelType_FeatureNotAvailable) {
+  CreateDelegate(/*is_enhanced_protection_enabled=*/true,
+                 ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(delegate_->GetIntelligentScanModelType(
+                /*log_failed_eligibility_reason=*/false),
+            ModelType::kNotSupportedOnDevice);
+  // Not logged because log_failed_eligibility_reason is false.
+  histogram_tester_.ExpectTotalCount(
+      "SBClientPhishing.OnDeviceModelUnavailableReasonAtInquiry.Android", 0);
+}
+
+TEST_F(
+    ClientSideDetectionIntelligentScanDelegateAndroidTestWithOnDeviceModelLazyDownloadDisabled,
+    GetIntelligentScanModelType_LogsUnavailableReason) {
+  CreateDelegate(/*is_enhanced_protection_enabled=*/true,
+                 ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(delegate_->GetIntelligentScanModelType(
+                /*log_failed_eligibility_reason=*/true),
+            ModelType::kNotSupportedOnDevice);
+  histogram_tester_.ExpectUniqueSample(
+      "SBClientPhishing.OnDeviceModelUnavailableReasonAtInquiry.Android",
+      optimization_guide::mojom::ModelUnavailableReason::kPendingAssets, 1);
+}
+
+TEST_F(
+    ClientSideDetectionIntelligentScanDelegateAndroidTestWithOnDeviceModelLazyDownloadDisabled,
+    GetIntelligentScanModelType_ModelAvailable) {
   CreateDelegate(/*is_enhanced_protection_enabled=*/true);
   task_environment_.RunUntilIdle();
-  EXPECT_FALSE(delegate_->IsIntelligentScanAvailable(
-      /*log_failed_eligibility_reason=*/false));
+  EXPECT_EQ(delegate_->GetIntelligentScanModelType(
+                /*log_failed_eligibility_reason=*/false),
+            ModelType::kOnDevice);
+  histogram_tester_.ExpectUniqueSample(
+      "SBClientPhishing.OnDeviceModelDownloadSuccess", true, 1);
+  histogram_tester_.ExpectTotalCount("SBClientPhishing.OnDeviceModelFetchTime",
+                                     1);
 }
-
-class ClientSideDetectionIntelligentScanDelegateAndroidTestWithWarningDisabled
-    : public ClientSideDetectionIntelligentScanDelegateAndroidTestBase {
- protected:
-  ClientSideDetectionIntelligentScanDelegateAndroidTestWithWarningDisabled() {
-    feature_list_.InitWithFeatures(
-        {kClientSideDetectionSendIntelligentScanInfoAndroid,
-         kClientSideDetectionServerModelForScamDetectionAndroid},
-        {kClientSideDetectionKillswitch,
-         kClientSideDetectionShowScamVerdictWarningAndroid});
-  }
-};
-
-TEST_F(ClientSideDetectionIntelligentScanDelegateAndroidTestWithWarningDisabled,
-       ShouldShowScamWarning) {
-  CreateDelegate(/*is_enhanced_protection_enabled=*/true);
-  // Enabling the server model flag should be sufficient to show scam warning.
-  EXPECT_TRUE(delegate_->ShouldShowScamWarning(
-      IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_1));
-  EXPECT_TRUE(delegate_->ShouldShowScamWarning(
-      IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_2));
-  EXPECT_TRUE(delegate_->ShouldShowScamWarning(
-      IntelligentScanVerdict::SCAM_EXPERIMENT_CATCH_ALL_ENFORCEMENT));
-}
-
-class
-    ClientSideDetectionIntelligentScanDelegateAndroidTestWithWarningAndServerModelDisabled
-    : public ClientSideDetectionIntelligentScanDelegateAndroidTestBase {
- protected:
-  ClientSideDetectionIntelligentScanDelegateAndroidTestWithWarningAndServerModelDisabled() {
-    feature_list_.InitWithFeatures(
-        {kClientSideDetectionSendIntelligentScanInfoAndroid},
-        {kClientSideDetectionKillswitch,
-         kClientSideDetectionShowScamVerdictWarningAndroid,
-         kClientSideDetectionServerModelForScamDetectionAndroid});
-  }
-};
 
 TEST_F(
-    ClientSideDetectionIntelligentScanDelegateAndroidTestWithWarningAndServerModelDisabled,
-    ShouldNotShowScamWarning) {
-  CreateDelegate(/*is_enhanced_protection_enabled=*/true);
-  EXPECT_FALSE(delegate_->ShouldShowScamWarning(
-      IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_1));
-  EXPECT_FALSE(delegate_->ShouldShowScamWarning(
-      IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_2));
-  EXPECT_FALSE(delegate_->ShouldShowScamWarning(
-      IntelligentScanVerdict::SCAM_EXPERIMENT_CATCH_ALL_ENFORCEMENT));
+    ClientSideDetectionIntelligentScanDelegateAndroidTestWithOnDeviceModelLazyDownloadDisabled,
+    StartIntelligentScan_OnDeviceModelNotAvailable) {
+  CreateDelegate(/*is_enhanced_protection_enabled=*/false);
+  task_environment_.RunUntilIdle();
+  base::test::TestFuture<IntelligentScanResult> future;
+  delegate_->StartIntelligentScan("test rendered text", future.GetCallback());
+  EXPECT_FALSE(future.Get().execution_success);
+  EXPECT_EQ(future.Get().model_version, -1);
+  EXPECT_EQ(future.Get().brand, "");
+  EXPECT_EQ(future.Get().intent, "");
+  EXPECT_EQ(future.Get().model_type, ModelType::kNotSupportedOnDevice);
+  EXPECT_EQ(future.Get().no_info_reason,
+            IntelligentScanInfo::ON_DEVICE_MODEL_UNAVAILABLE);
 }
 
 class ClientSideDetectionIntelligentScanDelegateAndroidTestWithKillSwitchEnabled
     : public ClientSideDetectionIntelligentScanDelegateAndroidTestBase {
  protected:
   ClientSideDetectionIntelligentScanDelegateAndroidTestWithKillSwitchEnabled() {
-    feature_list_.InitAndEnableFeature(kClientSideDetectionKillswitch);
+    feature_list_.InitWithFeatures(
+        {kClientSideDetectionKillswitch,
+         kClientSideDetectionServerModelForScamDetectionAndroid},
+        {});
   }
 };
 
 TEST_F(
     ClientSideDetectionIntelligentScanDelegateAndroidTestWithKillSwitchEnabled,
-    IsIntelligentScanAvailable) {
+    GetIntelligentScanModelType) {
   CreateDelegate(/*is_enhanced_protection_enabled=*/true);
-  EXPECT_FALSE(delegate_->IsIntelligentScanAvailable(
-      /*log_failed_eligibility_reason=*/false));
+  EXPECT_EQ(delegate_->GetIntelligentScanModelType(
+                /*log_failed_eligibility_reason=*/false),
+            ModelType::kNotSupportedServerSide);
 }
 
 class
@@ -842,8 +973,7 @@ class
  protected:
   ClientSideDetectionIntelligentScanDelegateAndroidTestWithImageEmbeddingDisabled() {
     feature_list_.InitWithFeaturesAndParameters(
-        {{kClientSideDetectionSendIntelligentScanInfoAndroid, {}},
-         {kClientSideDetectionImageEmbeddingMatch,
+        {{kClientSideDetectionImageEmbeddingMatch,
           {{"CsdImageEmbeddingMatchWithIntelligentScan", "false"}}}},
         /*disabled_features=*/{kClientSideDetectionKillswitch});
   }

@@ -16,10 +16,6 @@ namespace {
 
 const char kOomInterventionDecider[] = "oom_intervention.decider";
 
-// Deprecated: Replaced with `kBlocklist`.
-// TODO(crbug.com/40744119): Remove this after M92 once existing
-// clients have migrated to the new pref.
-const char kBlacklist[] = "oom_intervention.blacklist";
 // Pref path for blocklist. If a hostname is in the blocklist we never trigger
 // intervention on the host.
 const char kBlocklist[] = "oom_intervention.blocklist";
@@ -50,15 +46,12 @@ void OomInterventionDecider::RegisterProfilePrefs(
   registry->RegisterListPref(kBlocklist);
   registry->RegisterListPref(kDeclinedHostList);
   registry->RegisterListPref(kOomDetectedHostList);
-
-  // Continue to register the old preference to migrate its value.
-  registry->RegisterListPref(kBlacklist);
 }
 
 // static
 OomInterventionDecider* OomInterventionDecider::GetForBrowserContext(
     content::BrowserContext* context) {
-  // The OomIntervetnionDecider is disabled in incognito mode because it is
+  // The OomInterventionDecider is disabled in incognito mode because it is
   // written in such a way that hostnames would be persisted in preferences on
   // disk which is not acceptable for incognito mode.
   if (context->IsOffTheRecord())
@@ -136,17 +129,10 @@ void OomInterventionDecider::OnPrefInitialized(bool success) {
   if (!success)
     return;
 
-  // Migrate `kBlacklist` to `kBlocklist`.
-  const base::Value::List& old_pref_value = prefs_->GetList(kBlacklist);
-  if (!old_pref_value.empty()) {
-    prefs_->SetList(kBlocklist, old_pref_value.Clone());
-    prefs_->SetList(kBlacklist, base::Value::List());
-  }
-
   if (delegate_->WasLastShutdownClean())
     return;
 
-  const base::Value::List& declined_list = prefs_->GetList(kDeclinedHostList);
+  const base::ListValue& declined_list = prefs_->GetList(kDeclinedHostList);
   if (!declined_list.empty()) {
     const std::string& last_declined = declined_list.back().GetString();
     if (!IsInList(kBlocklist, last_declined))
@@ -175,7 +161,7 @@ void OomInterventionDecider::AddToList(const char* list_name,
   if (IsInList(list_name, host))
     return;
   ScopedListPrefUpdate update(prefs_, list_name);
-  base::Value::List& update_list = update.Get();
+  base::ListValue& update_list = update.Get();
   update_list.Append(host);
   if (update_list.size() > kMaxListSize)
     update_list.erase(update_list.begin());

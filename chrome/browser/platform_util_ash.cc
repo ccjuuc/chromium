@@ -11,13 +11,15 @@
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/platform_util_internal.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/simple_message_box.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/aura/window.h"
+#include "ui/base/base_window.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/chromeos/strings/grit/ui_chromeos_strings.h"
 #include "url/gurl.h"
@@ -58,9 +60,10 @@ void ShowWarningOnOpenOperationResult(Profile* profile,
       break;
   }
 
-  Browser* browser = chrome::FindTabbedBrowser(profile, false);
+  BrowserWindowInterface* browser =
+      ProfileBrowserCollection::GetForProfile(profile)->FindTabbedBrowser();
   chrome::ShowWarningMessageBoxAsync(
-      browser ? browser->window()->GetNativeWindow() : nullptr,
+      browser ? browser->GetWindow()->GetNativeWindow() : nullptr,
       path.BaseName().AsUTF16Unsafe(), l10n_util::GetStringUTF16(message_id));
 }
 
@@ -103,8 +106,11 @@ void OpenExternal(Profile* profile, const GURL& url) {
   }
 }
 
-bool IsBrowserLockedFullscreen(const Browser* browser) {
-  aura::Window* window = browser->window()->GetNativeWindow();
+bool IsBrowserLockedFullscreen(const BrowserWindowInterface* browser) {
+  if (!browser || !browser->GetWindow()) {
+    return false;
+  }
+  aura::Window* window = browser->GetWindow()->GetNativeWindow();
   // |window| can be nullptr inside of unit tests.
   if (!window)
     return false;

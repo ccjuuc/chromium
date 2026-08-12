@@ -8,7 +8,6 @@
 #include <iterator>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -75,6 +74,7 @@ PreferredAppsImpl::PreferredAppsImpl(
     base::OnceClosure read_completed_for_testing,
     base::OnceClosure write_completed_for_testing)
     : host_(host),
+      preferred_apps_list_(this),
       profile_dir_(profile_dir),
       task_runner_(base::ThreadPool::CreateSequencedTaskRunner(
           {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
@@ -87,6 +87,20 @@ PreferredAppsImpl::PreferredAppsImpl(
 
 PreferredAppsImpl::~PreferredAppsImpl() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+}
+
+bool PreferredAppsImpl::QueryConflict(const std::string& first_app_id,
+                                      const IntentFilterPtr& first_filter,
+                                      const std::string& second_app_id,
+                                      const IntentFilterPtr& second_filter) {
+  return host_->QueryConflict(first_app_id, first_filter, second_app_id,
+                              second_filter);
+}
+
+bool PreferredAppsImpl::IsWebAppInExtendedScope(
+    const GURL& url,
+    const std::string& app_id) const {
+  return host_->IsWebAppInExtendedScope(url, app_id);
 }
 
 void PreferredAppsImpl::RemovePreferredApp(const std::string& app_id) {
@@ -259,7 +273,7 @@ void PreferredAppsImpl::SetSupportedLinksPreferenceImpl(
     // can be notified correctly.
     for (auto& replaced_app_and_filters : replaced_apps) {
       const std::string& removed_app_id = replaced_app_and_filters.first;
-      bool first_removal_for_app = !base::Contains(removed, app_id);
+      bool first_removal_for_app = !removed.contains(app_id);
       bool did_replace_supported_link = std::ranges::any_of(
           replaced_app_and_filters.second,
           [&removed_app_id](const auto& filter) {

@@ -46,9 +46,6 @@ void FirstPartySetsLoader::SetManuallySpecifiedSet(
     return;
   }
   manually_specified_set_ = local_set;
-  UmaHistogramTimes(
-      "Cookie.FirstPartySets.InitializationDuration.ReadCommandLineSet2",
-      construction_timer_.Elapsed());
 
   MaybeFinishLoading();
 }
@@ -68,16 +65,8 @@ void FirstPartySetsLoader::SetComponentSets(base::Version version,
     return;
   }
 
-  // We may use USER_BLOCKING here since First-Party Set initialization may
-  // block network navigations at startup. Otherwise, initialization blocks
-  // resolution of promises from `document.requestStorageAccess()`, but those
-  // calls are unlikely to occur during startup.
-  base::TaskPriority priority =
-      base::FeatureList::IsEnabled(net::features::kWaitForFirstPartySetsInit)
-          ? base::TaskPriority::USER_BLOCKING
-          : base::TaskPriority::USER_VISIBLE;
   base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::MayBlock(), priority},
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
       base::BindOnce(&ReadSetsFile, std::move(sets_file)),
       base::BindOnce(&FirstPartySetsLoader::OnReadSetsFile,
                      weak_factory_.GetWeakPtr(), std::move(version)));
@@ -104,13 +93,9 @@ void FirstPartySetsLoader::OnReadSetsFile(base::Version version,
 
   std::istringstream stream(raw_sets);
   sets_ = FirstPartySetParser::ParseSetsFromStream(stream, std::move(version),
-                                                   /*emit_errors=*/false,
-                                                   /*emit_metrics=*/true);
+                                                   /*emit_errors=*/false);
 
   component_sets_parse_progress_ = Progress::kFinished;
-  UmaHistogramTimes(
-      "Cookie.FirstPartySets.InitializationDuration.ReadComponentSets2",
-      construction_timer_.Elapsed());
   MaybeFinishLoading();
 }
 

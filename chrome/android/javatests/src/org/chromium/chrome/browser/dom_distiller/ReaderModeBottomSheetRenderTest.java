@@ -15,6 +15,7 @@ import android.widget.FrameLayout;
 import androidx.annotation.ColorInt;
 import androidx.test.filters.MediumTest;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -29,6 +30,7 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.params.ParameterAnnotations;
 import org.chromium.base.test.params.ParameterSet;
 import org.chromium.base.test.params.ParameterizedRunner;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
@@ -50,6 +52,7 @@ import java.util.List;
 @RunWith(ParameterizedRunner.class)
 @ParameterAnnotations.UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@Batch(Batch.PER_CLASS)
 public class ReaderModeBottomSheetRenderTest {
     @Rule
     public FreshCtaTransitTestRule mActivityTestRule =
@@ -65,8 +68,8 @@ public class ReaderModeBottomSheetRenderTest {
     public final ChromeRenderTestRule mRenderTestRule =
             ChromeRenderTestRule.Builder.withPublicCorpus()
                     .setBugComponent(Component.UI_BROWSER_READER_MODE)
-                    .setRevision(7)
-                    .setDescription("Update font style button container to be scrollable")
+                    .setRevision(8)
+                    .setDescription("Adding toggle links UI to bottom sheet")
                     .build();
 
     private @Captor ArgumentCaptor<ThemeColorProvider.ThemeColorObserver> mThemeColorObserverCaptor;
@@ -116,6 +119,12 @@ public class ReaderModeBottomSheetRenderTest {
                             .addThemeColorObserver(mThemeColorObserverCaptor.capture());
                     verify(mThemeColorProvider).addTintObserver(mTintObserverCaptor.capture());
                 });
+    }
+
+    @After
+    public void tearDown() {
+        // Since setUp() calls setContentView() on the Activity, the clean up causes an exception.
+        mActivityTestRule.skipWindowAndTabStateCleanup();
     }
 
     @Test

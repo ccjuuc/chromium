@@ -23,7 +23,6 @@
 #include "components/supervised_user/core/browser/proto/families_common.pb.h"
 #include "components/supervised_user/core/browser/proto/kidsmanagement_messages.pb.h"
 #include "components/supervised_user/core/browser/proto_fetcher_status.h"
-#include "components/supervised_user/core/browser/supervised_user_url_filter.h"
 #include "components/supervised_user/core/browser/supervised_user_utils.h"
 #include "components/supervised_user/core/common/supervised_user_constants.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
@@ -234,8 +233,9 @@ class FamilyInfoFeedbackSourceTest
       base::WeakPtr<FamilyInfoFeedbackSource> feedback_source) {
     feedback_source->OnFailure(
         supervised_user::ProtoFetcherStatus::GoogleServiceAuthError(
-            GoogleServiceAuthError(
-                GoogleServiceAuthError::State::INVALID_GAIA_CREDENTIALS)));
+            GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+                GoogleServiceAuthError::InvalidGaiaCredentialsReason::
+                    UNKNOWN)));
   }
 
   // Creates a new instance of FamilyInfoFeedbackSource that is destroyed on

@@ -25,7 +25,6 @@
 #include "chrome/browser/ui/webui/ash/login/app_downloading_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/gaia_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/oobe_ui.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
@@ -100,7 +99,7 @@ IN_PROC_BROWSER_TEST_F(AppDownloadingScreenTest, SingleAppSelected) {
       ->defer_oobe_flow_finished_for_tests = true;
 
   Login();
-  base::Value::List apps;
+  base::ListValue apps;
   apps.Append("app.test.package.1");
 
   ProfileManager::GetActiveUserProfile()->GetPrefs()->SetList(
@@ -123,7 +122,7 @@ IN_PROC_BROWSER_TEST_F(AppDownloadingScreenTest, MultipleAppsSelected) {
       ->defer_oobe_flow_finished_for_tests = true;
 
   Login();
-  base::Value::List apps;
+  base::ListValue apps;
   apps.Append("app.test.package.1");
   apps.Append("app.test.package.2");
 

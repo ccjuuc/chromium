@@ -190,7 +190,7 @@ void FindInPage::StopFinding(mojom::StopFindAction action) {
   const bool clear_selection =
       action == mojom::StopFindAction::kStopFindActionClearSelection;
   if (clear_selection)
-    frame_->ExecuteCommand(WebString::FromUTF8("Unselect"));
+    frame_->ExecuteCommand(WebString("Unselect"));
 
   if (GetTextFinder()) {
     if (!clear_selection)
@@ -234,16 +234,16 @@ gfx::RectF FindInPage::ActiveFindMatchRect() {
 void FindInPage::ActivateNearestFindResult(int request_id,
                                            const gfx::PointF& point) {
   gfx::Rect active_match_rect;
-  const int ordinal =
+  std::optional<wtf_size_t> ordinal =
       EnsureTextFinder().SelectNearestFindMatch(point, &active_match_rect);
-  if (ordinal == -1) {
+  if (!ordinal) {
     // Something went wrong, so send a no-op reply (force the frame to report
     // the current match count) in case the host is waiting for a response due
     // to rate-limiting.
     EnsureTextFinder().IncreaseMatchCount(request_id, 0);
     return;
   }
-  ReportFindInPageSelection(request_id, ordinal, active_match_rect,
+  ReportFindInPageSelection(request_id, *ordinal, active_match_rect,
                             true /* final_update */);
 }
 
@@ -266,7 +266,7 @@ void FindInPage::FindMatchRects(int current_version,
 
 void FindInPage::ClearActiveFindMatch() {
   // TODO(rakina): Do collapse selection as this currently does nothing.
-  frame_->ExecuteCommand(WebString::FromUTF8("CollapseSelection"));
+  frame_->ExecuteCommand(WebString("CollapseSelection"));
   EnsureTextFinder().ClearActiveFindMatch();
 }
 

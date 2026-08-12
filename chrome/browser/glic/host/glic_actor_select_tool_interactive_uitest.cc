@@ -4,6 +4,7 @@
 
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/glic/host/glic_actor_interactive_uitest_common.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "components/optimization_guide/proto/features/actions_data.pb.h"
 #include "content/public/test/browser_test.h"
 #include "ui/gfx/geometry/rect.h"
@@ -41,8 +42,8 @@ GlicActorSelectToolUiTest::MultiStep GlicActorSelectToolUiTest::SelectAction(
         content::RenderFrameHost* frame =
             tab_handle_.Get()->GetContents()->GetPrimaryMainFrame();
 
-        Actions action = actor::MakeSelect(*frame, node_id, option_value);
-        action.set_task_id(task_id_.value());
+        Actions action =
+            actor::MakeSelect(*frame, node_id, option_value, task_id_);
         return EncodeActionProto(action);
       });
   return ExecuteAction(std::move(select_provider), std::move(expected_result));

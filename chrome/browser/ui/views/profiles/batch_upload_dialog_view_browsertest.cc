@@ -4,16 +4,12 @@
 
 #include "chrome/browser/ui/views/profiles/batch_upload_dialog_view.h"
 
-#include "base/functional/callback.h"
-#include "base/functional/callback_helpers.h"
-#include "base/memory/ptr_util.h"
 #include "base/strings/to_string.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/common/webui_url_constants.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -21,7 +17,6 @@
 #include "components/sync/base/data_type.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
-#include "content/public/test/browser_task_environment.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -123,14 +118,21 @@ class BatchUploadDialogViewBrowserTest : public InProcessBrowserTest {
   void Signout() { signin::ClearPrimaryAccount(GetIdentityManager()); }
 
   void TriggerSigninPending() {
-    signin::SetInvalidRefreshTokenForPrimaryAccount(GetIdentityManager());
+    signin::IdentityManager* identity_manager = GetIdentityManager();
+    CoreAccountId account_id =
+        identity_manager->GetPrimaryAccountId(signin::ConsentLevel::kSignin);
+    signin::UpdatePersistentErrorOfRefreshTokenForAccount(
+        identity_manager, account_id,
+        GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+            GoogleServiceAuthError::InvalidGaiaCredentialsReason::
+                CREDENTIALS_REJECTED_BY_SERVER));
   }
 
   base::HistogramTester& histogram_tester() { return histogram_tester_; }
 
  private:
   signin::IdentityManager* GetIdentityManager() {
-    return IdentityManagerFactory::GetForProfile(browser()->profile());
+    return IdentityManagerFactory::GetForProfile(browser()->GetProfile());
   }
 
   base::HistogramTester histogram_tester_;
@@ -147,9 +149,9 @@ IN_PROC_BROWSER_TEST_F(BatchUploadDialogViewBrowserTest,
   descriptions.push_back(GetFakeLocalData(type, 1));
   BatchUploadService::EntryPoint entry_point =
       BatchUploadService::EntryPoint::kPasswordManagerSettings;
-  BatchUploadDialogView* dialog_view =
-      CreateBatchUploadDialogView(browser()->profile(), std::move(descriptions),
-                                  entry_point, mock_callback.Get());
+  BatchUploadDialogView* dialog_view = CreateBatchUploadDialogView(
+      browser()->GetProfile(), std::move(descriptions), entry_point,
+      mock_callback.Get());
 
   EXPECT_CALL(mock_callback, Run(kEmptySelectedMap)).Times(1);
 
@@ -185,7 +187,7 @@ IN_PROC_BROWSER_TEST_F(BatchUploadDialogViewBrowserTest,
     std::vector<syncer::LocalDataDescription> descriptions;
     descriptions.push_back(GetFakeLocalData(input_type, 1));
     BatchUploadDialogView* dialog_view = CreateBatchUploadDialogView(
-        browser()->profile(), std::move(descriptions), entry_point,
+        browser()->GetProfile(), std::move(descriptions), entry_point,
         mock_callback.Get());
 
     // Simulate the widget closing without user action.
@@ -221,9 +223,9 @@ IN_PROC_BROWSER_TEST_F(BatchUploadDialogViewBrowserTest,
   descriptions.push_back(GetFakeLocalData(type, 1));
   BatchUploadService::EntryPoint entry_point =
       BatchUploadService::EntryPoint::kPasswordPromoCard;
-  BatchUploadDialogView* dialog_view =
-      CreateBatchUploadDialogView(browser()->profile(), std::move(descriptions),
-                                  entry_point, mock_callback.Get());
+  BatchUploadDialogView* dialog_view = CreateBatchUploadDialogView(
+      browser()->GetProfile(), std::move(descriptions), entry_point,
+      mock_callback.Get());
 
   // Pressing the escape key should dismiss the dialog and return empty result.
   EXPECT_CALL(mock_callback, Run(kEmptySelectedMap)).Times(1);
@@ -255,6 +257,7 @@ IN_PROC_BROWSER_TEST_F(BatchUploadDialogViewBrowserTest,
 #define MAYBE_OpenBatchUploadDialogViewClosesOnSignout \
   OpenBatchUploadDialogViewClosesOnSignout
 #endif
+#if !BUILDFLAG(IS_CHROMEOS)
 IN_PROC_BROWSER_TEST_F(BatchUploadDialogViewBrowserTest,
                        MAYBE_OpenBatchUploadDialogViewClosesOnSignout) {
   SigninWithFullInfo();
@@ -268,9 +271,9 @@ IN_PROC_BROWSER_TEST_F(BatchUploadDialogViewBrowserTest,
   descriptions.push_back(GetFakeLocalData(type, 1));
   BatchUploadService::EntryPoint entry_point =
       BatchUploadService::EntryPoint::kPasswordPromoCard;
-  BatchUploadDialogView* dialog_view =
-      CreateBatchUploadDialogView(browser()->profile(), std::move(descriptions),
-                                  entry_point, mock_callback.Get());
+  BatchUploadDialogView* dialog_view = CreateBatchUploadDialogView(
+      browser()->GetProfile(), std::move(descriptions), entry_point,
+      mock_callback.Get());
   ASSERT_TRUE(dialog_view->GetWidget()->IsVisible());
 
   // Signing out should close the dialog.
@@ -292,6 +295,7 @@ IN_PROC_BROWSER_TEST_F(BatchUploadDialogViewBrowserTest,
                                         BatchUploadDialogCloseReason::kSignout,
                                         1);
 }
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 // Fails on Mac only.  http://crbug.com/372194892
 #if BUILDFLAG(IS_MAC)
@@ -314,14 +318,17 @@ IN_PROC_BROWSER_TEST_F(BatchUploadDialogViewBrowserTest,
   descriptions.push_back(GetFakeLocalData(type, 1));
   BatchUploadService::EntryPoint entry_point =
       BatchUploadService::EntryPoint::kPasswordPromoCard;
-  BatchUploadDialogView* dialog_view =
-      CreateBatchUploadDialogView(browser()->profile(), std::move(descriptions),
-                                  entry_point, mock_callback.Get());
-  ASSERT_TRUE(dialog_view->GetWidget()->IsVisible());
+  BatchUploadDialogView* dialog_view = CreateBatchUploadDialogView(
+      browser()->GetProfile(), std::move(descriptions), entry_point,
+      mock_callback.Get());
+  views::Widget* widget = dialog_view->GetWidget();
+  ASSERT_TRUE(widget);
+  ASSERT_TRUE(widget->IsVisible());
+  views::test::WidgetDestroyedWaiter waiter(widget);
 
   // Signing out should close the dialog.
   TriggerSigninPending();
-  views::test::WidgetDestroyedWaiter(dialog_view->GetWidget()).Wait();
+  waiter.Wait();
 
   base::HistogramTester::CountsMap expected_histograms_count = {
       {"Sync.BatchUpload.Opened", 1},
@@ -354,9 +361,9 @@ IN_PROC_BROWSER_TEST_F(BatchUploadDialogViewBrowserTest,
   descriptions.push_back(GetFakeLocalData(type2, count2));
   BatchUploadService::EntryPoint entry_point =
       BatchUploadService::EntryPoint::kPasswordPromoCard;
-  BatchUploadDialogView* dialog_view =
-      CreateBatchUploadDialogView(browser()->profile(), std::move(descriptions),
-                                  entry_point, mock_callback.Get());
+  BatchUploadDialogView* dialog_view = CreateBatchUploadDialogView(
+      browser()->GetProfile(), std::move(descriptions), entry_point,
+      mock_callback.Get());
 
   std::map<syncer::DataType, std::vector<syncer::LocalDataItemModel::DataId>>
       result;
@@ -406,9 +413,9 @@ IN_PROC_BROWSER_TEST_F(BatchUploadDialogViewBrowserTest,
   descriptions.push_back(GetFakeLocalData(type2, count2));
   BatchUploadService::EntryPoint entry_point =
       BatchUploadService::EntryPoint::kPasswordPromoCard;
-  BatchUploadDialogView* dialog_view =
-      CreateBatchUploadDialogView(browser()->profile(), std::move(descriptions),
-                                  entry_point, mock_callback.Get());
+  BatchUploadDialogView* dialog_view = CreateBatchUploadDialogView(
+      browser()->GetProfile(), std::move(descriptions), entry_point,
+      mock_callback.Get());
 
   std::map<syncer::DataType, std::vector<syncer::LocalDataItemModel::DataId>>
       result;

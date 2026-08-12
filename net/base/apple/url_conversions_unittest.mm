@@ -2,10 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#import "net/base/apple/url_conversions.h"
+
 #import <Foundation/Foundation.h>
 
 #include "base/strings/sys_string_conversions.h"
-#import "net/base/apple/url_conversions.h"
+#include "base/test/scoped_feature_list.h"
+#include "net/base/features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/gtest_mac.h"
 #include "url/gurl.h"
@@ -232,6 +235,32 @@ TEST_F(URLConversionTest, TestNSURLWithGURLCanBeNil) {
   GURL url("https://{}");
   EXPECT_TRUE(url.is_valid());
   EXPECT_EQ(nil, NSURLWithGURL(url));
+}
+
+TEST_F(URLConversionTest, TestGURLWithNSURLFeatureEnabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      features::kUseNSURLDataForGURLConversion);
+
+  NSURL* url = [NSURL URLWithString:@"about:blank#hash"];
+  GURL gurl = GURLWithNSURL(url);
+  EXPECT_EQ("about:blank#hash", gurl.spec());
+}
+
+TEST_F(URLConversionTest, TestGURLWithNSURLFeatureDisabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      features::kUseNSURLDataForGURLConversion);
+
+  NSURL* url = [NSURL URLWithString:@"about:blank#hash"];
+  GURL gurl = GURLWithNSURL(url);
+
+  if (@available(anyAppleOS 27.0, *)) {
+    // If this test fails, it means Apple has broken the bug fix in iOS 27+.
+    EXPECT_EQ("about:blank#hash", gurl.spec());
+  } else {
+    EXPECT_EQ("about:blank%23hash", gurl.spec());
+  }
 }
 
 }  // namespace

@@ -76,9 +76,8 @@ public class SafeModeController {
         SafeModeActionName.DISABLE_ANDROID_AUTOFILL,
         SafeModeActionName.DISABLE_ORIGIN_TRIALS,
         SafeModeActionName.DISABLE_SAFE_BROWSING,
-        SafeModeActionName.RESET_COMPONENT_UPDATER,
         SafeModeActionName.DISABLE_SUPERVISION_CHECKS,
-        SafeModeActionName.DISABLE_STARTUP_TASKS_LOGIC
+        SafeModeActionName.DISABLE_CRASHY_CLASS
     })
     private @interface SafeModeActionName {
         int DELETE_VARIATIONS_SEED = 0;
@@ -88,10 +87,11 @@ public class SafeModeController {
         // int DISABLE_CHROME_AUTOCOMPLETE = 4;  // Autofill replaced Autocomplete since Android O.
         int DISABLE_ORIGIN_TRIALS = 5;
         int DISABLE_SAFE_BROWSING = 6;
-        int RESET_COMPONENT_UPDATER = 7;
+        // int RESET_COMPONENT_UPDATER = 7;  // Component updater has been removed.
         int DISABLE_SUPERVISION_CHECKS = 8;
-        int DISABLE_STARTUP_TASKS_LOGIC = 9;
-        int COUNT = 10;
+        // int DISABLE_STARTUP_TASKS_LOGIC = 9;
+        int DISABLE_CRASHY_CLASS = 10;
+        int COUNT = 11;
     }
 
     // Maps the SafeModeAction ID to its histogram enum
@@ -113,14 +113,9 @@ public class SafeModeController {
                 SafeModeActionIds.DISABLE_AW_SAFE_BROWSING,
                 SafeModeActionName.DISABLE_SAFE_BROWSING);
         map.put(
-                SafeModeActionIds.RESET_COMPONENT_UPDATER,
-                SafeModeActionName.RESET_COMPONENT_UPDATER);
-        map.put(
                 SafeModeActionIds.DISABLE_SUPERVISION_CHECKS,
                 SafeModeActionName.DISABLE_SUPERVISION_CHECKS);
-        map.put(
-                SafeModeActionIds.DISABLE_STARTUP_TASKS_LOGIC,
-                SafeModeActionName.DISABLE_STARTUP_TASKS_LOGIC);
+        map.put(SafeModeActionIds.DISABLE_CRASHY_CLASS, SafeModeActionName.DISABLE_CRASHY_CLASS);
         return map;
     }
 
@@ -170,11 +165,31 @@ public class SafeModeController {
         mRegisteredActions = null;
     }
 
+    public void enableAllRegisteredActionsForTesting() {
+        if (mRegisteredActions == null) {
+            throw new IllegalStateException(
+                    "enableAllRegisteredActionsForTesting called before registerActions");
+        }
+        for (SafeModeAction action : mRegisteredActions) {
+            action.enable();
+        }
+    }
+
+    /** Overload for queryActions which gets the Context from ContextUtils. */
+    public Set<String> queryActions(String webViewPackageName) {
+        final Context appContext = ContextUtils.getApplicationContext();
+        return queryActions(appContext, webViewPackageName);
+    }
+
     /**
      * Queries SafeModeContentProvider for the set of actions which should be applied. Returns the
      * empty set if SafeMode is disabled. This should only be called from embedded WebView contexts.
      */
-    public Set<String> queryActions(String webViewPackageName) {
+    public Set<String> queryActions(Context appContext, String webViewPackageName) {
+        if (mRegisteredActions == null) {
+            throw new IllegalStateException("Must registerActions() before calling queryActions()");
+        }
+
         Set<String> actions = new HashSet<>();
 
         Uri uri =
@@ -184,7 +199,6 @@ public class SafeModeController {
                         .path(SAFE_MODE_ACTIONS_URI_PATH)
                         .build();
 
-        final Context appContext = ContextUtils.getApplicationContext();
         try (Cursor cursor =
                 appContext
                         .getContentResolver()
@@ -206,6 +220,46 @@ public class SafeModeController {
 
         Log.i(TAG, "Received SafeModeActions: %s", actions);
         return actions;
+    }
+
+    /**
+     * Enables the SafeModeAction specified by id.
+     *
+     * @param id the SafeModeActionId of the action to enable.
+     */
+    public void enableAction(String id) {
+        if (mRegisteredActions == null) {
+            throw new IllegalStateException("Must registerActions() before calling enableAction()");
+        }
+        for (SafeModeAction action : mRegisteredActions) {
+            if (action.getId().equals(id)) {
+                Log.i(TAG, "Enabling %s.", action.getId());
+                action.enable();
+                return;
+            }
+        }
+    }
+
+    /**
+     * Helper method to return whether a given SafeModeAction is enabled. If it has not been
+     * registered, this method defaults to false and DOES NOT fail loudly. If this method is called
+     * before executeActions then it will return false. If a SafeModeAction is later executed, it
+     * will return true for the same action.
+     *
+     * @param id the SafeModeActionId of the action to query.
+     * @return if a SafeModeAction has been registered and has been enabled.
+     */
+    public boolean isActionEnabled(String id) {
+        if (mRegisteredActions == null) {
+            Log.w(TAG, "SafeModeAction enablement checked before registerActions was called");
+            return false;
+        }
+        for (SafeModeAction action : mRegisteredActions) {
+            if (id.equals(action.getId())) {
+                return action.isEnabled();
+            }
+        }
+        return false;
     }
 
     /**
@@ -234,7 +288,7 @@ public class SafeModeController {
                     // Allow SafeModeActions in general to perform disk reads and writes.
                     try (StrictModeContext ignored = StrictModeContext.allowDiskWrites()) {
                         Log.i(TAG, "Starting to execute %s", currentSafeModeActionName);
-                        if (action.execute()) {
+                        if (action.executeAtStartup()) {
                             Log.i(
                                     TAG,
                                     "Finished executing %s (%s)",
@@ -307,6 +361,18 @@ public class SafeModeController {
      */
     public boolean isSafeModeEnabled(String webViewPackageName) {
         final Context context = ContextUtils.getApplicationContext();
+        return isSafeModeEnabled(context, webViewPackageName);
+    }
+
+    /**
+     * Quickly determine whether SafeMode is enabled. SafeMode is off-by-default.
+     *
+     * @param context the WebView context. This overload is used by early startup before
+     *     ContextUtils has been initialized.
+     * @param webViewPackageName the package name of the WebView implementation to query about
+     *     SafeMode (generally this is the current WebView provider).
+     */
+    public boolean isSafeModeEnabled(Context context, String webViewPackageName) {
         ComponentName safeModeComponent =
                 new ComponentName(webViewPackageName, SAFE_MODE_STATE_COMPONENT);
         int enabledState =

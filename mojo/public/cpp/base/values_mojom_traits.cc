@@ -4,18 +4,16 @@
 
 #include "mojo/public/cpp/base/values_mojom_traits.h"
 
+#include <cmath>
 #include <memory>
 #include <utility>
 
-#include "base/compiler_specific.h"
 #include "base/features.h"
 
 namespace mojo {
 
-bool StructTraits<
-    mojo_base::mojom::DictionaryValueDataView,
-    base::Value::Dict>::Read(mojo_base::mojom::DictionaryValueDataView data,
-                             base::Value::Dict* out) {
+bool StructTraits<mojo_base::mojom::DictionaryValueDataView, base::DictValue>::
+    Read(mojo_base::mojom::DictionaryValueDataView data, base::DictValue* out) {
   mojo::MapDataView<mojo::StringDataView, mojo_base::mojom::ValueDataView> view;
   data.GetStorageDataView(&view);
 
@@ -38,9 +36,9 @@ bool StructTraits<
   return true;
 }
 
-bool StructTraits<mojo_base::mojom::ListValueDataView, base::Value::List>::Read(
+bool StructTraits<mojo_base::mojom::ListValueDataView, base::ListValue>::Read(
     mojo_base::mojom::ListValueDataView data,
-    base::Value::List* out) {
+    base::ListValue* out) {
   mojo::ArrayDataView<mojo_base::mojom::ValueDataView> view;
   data.GetStorageDataView(&view);
 
@@ -75,6 +73,9 @@ bool UnionTraits<mojo_base::mojom::ValueDataView, base::Value>::Read(
       return true;
     }
     case mojo_base::mojom::ValueDataView::Tag::kDoubleValue: {
+      if (!std::isfinite(data.double_value())) {
+        return false;
+      }
       *value_out = base::Value(data.double_value());
       return true;
     }
@@ -89,15 +90,12 @@ bool UnionTraits<mojo_base::mojom::ValueDataView, base::Value>::Read(
     case mojo_base::mojom::ValueDataView::Tag::kBinaryValue: {
       mojo::ArrayDataView<uint8_t> binary_data_view;
       data.GetBinaryValueDataView(&binary_data_view);
-      const char* data_pointer =
-          reinterpret_cast<const char*>(binary_data_view.data());
-      base::Value::BlobStorage blob_storage(
-          data_pointer, UNSAFE_TODO(data_pointer + binary_data_view.size()));
+      base::Value::BlobStorage blob_storage(std::from_range, binary_data_view);
       *value_out = base::Value(std::move(blob_storage));
       return true;
     }
     case mojo_base::mojom::ValueDataView::Tag::kDictionaryValue: {
-      base::Value::Dict dict;
+      base::DictValue dict;
       if (!data.ReadDictionaryValue(&dict)) {
         return false;
       }
@@ -105,7 +103,7 @@ bool UnionTraits<mojo_base::mojom::ValueDataView, base::Value>::Read(
       return true;
     }
     case mojo_base::mojom::ValueDataView::Tag::kListValue: {
-      base::Value::List list;
+      base::ListValue list;
       if (!data.ReadListValue(&list)) {
         return false;
       }

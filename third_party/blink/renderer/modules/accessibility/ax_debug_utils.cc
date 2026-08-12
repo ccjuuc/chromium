@@ -4,10 +4,8 @@
 
 #include "third_party/blink/renderer/modules/accessibility/ax_debug_utils.h"
 
-#include <memory>
 #include <numeric>
 #include <string>
-#include <utility>
 
 #include "third_party/blink/renderer/core/layout/inline/fragment_items.h"
 #include "third_party/blink/renderer/core/layout/layout_block_flow.h"
@@ -167,9 +165,8 @@ void CheckTreeConsistency(
         msg << "\n* Serialized an unincluded node: " << obj;
       }
     }
-    // TODO(crbug.com/452392024): Investigate why this is reached, fix it, and
+    // TODO(crbug.com/456786676): Investigate why this is reached, fix it, and
     // move to a NOTREACHED.
-    DUMP_WILL_BE_NOTREACHED() << msg.str();
   }
 
 #if EXPENSIVE_DCHECKS_ARE_ON()

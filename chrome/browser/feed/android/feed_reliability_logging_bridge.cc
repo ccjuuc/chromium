@@ -21,7 +21,7 @@ namespace feed {
 namespace android {
 namespace {
 
-jlong ConvertTimestamp(base::TimeTicks ticks) {
+int64_t ConvertTimestamp(base::TimeTicks ticks) {
   return ticks.since_origin().InNanoseconds();
 }
 
@@ -102,7 +102,7 @@ int CombinedNetworkStatusCodeToCanonicalStatus(
 
 }  // namespace
 
-static jlong JNI_FeedReliabilityLoggingBridge_Init(
+static int64_t JNI_FeedReliabilityLoggingBridge_Init(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& j_this) {
   return reinterpret_cast<intptr_t>(new FeedReliabilityLoggingBridge(j_this));
@@ -148,22 +148,6 @@ void FeedReliabilityLoggingBridge::LogActionsUploadRequestStart(
     NetworkRequestId id,
     base::TimeTicks timestamp) {
   Java_FeedReliabilityLoggingBridge_logActionsUploadRequestStart(
-      base::android::AttachCurrentThread(), java_ref_, id.GetUnsafeValue(),
-      ConvertTimestamp(timestamp));
-}
-
-void FeedReliabilityLoggingBridge::LogWebFeedRequestStart(
-    NetworkRequestId id,
-    base::TimeTicks timestamp) {
-  Java_FeedReliabilityLoggingBridge_logWebFeedRequestStart(
-      base::android::AttachCurrentThread(), java_ref_, id.GetUnsafeValue(),
-      ConvertTimestamp(timestamp));
-}
-
-void FeedReliabilityLoggingBridge::LogSingleWebFeedRequestStart(
-    NetworkRequestId id,
-    base::TimeTicks timestamp) {
-  Java_FeedReliabilityLoggingBridge_logSingleWebFeedRequestStart(
       base::android::AttachCurrentThread(), java_ref_, id.GetUnsafeValue(),
       ConvertTimestamp(timestamp));
 }

@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 import type {BookmarksPageState, FolderOpenState, NodeMap, SelectionState, SelectItemsAction} from 'chrome://bookmarks/bookmarks.js';
-import {ACCOUNT_HEADING_NODE_ID, changeFolderOpen, clearSearch, createBookmark, createEmptyState, deselectItems, editBookmark, getDisplayedList, isShowingSearch, LOCAL_HEADING_NODE_ID, moveBookmark, reduceAction, removeBookmark, reorderChildren, ROOT_NODE_ID, selectFolder, setSearchResults, setSearchTerm, updateAnchor, updateFolderOpenState, updateNodes, updateSelection} from 'chrome://bookmarks/bookmarks.js';
+import {ACCOUNT_HEADING_NODE_ID, changeFolderOpen, clearSearch, createBookmark, createEmptyState, deselectItems, editBookmark, getDisplayedList, isShowingSearch, LOCAL_HEADING_NODE_ID, moveBookmark, normalizeNode, reduceAction, refreshNodes, removeBookmark, reorderChildren, ROOT_NODE_ID, selectFolder, setSearchResults, setSearchTerm, updateAnchor, updateFolderOpenState, updateNodes, updateSelection} from 'chrome://bookmarks/bookmarks.js';
 import type {Action} from 'chrome://resources/js/store.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 
@@ -263,6 +263,41 @@ suite('selected folder', function() {
 
     assertEquals('1', state.selectedFolder);
   });
+
+  test('preserves selected folder on refresh if it still exists', function() {
+    action = selectFolder('3')!;
+    state = reduceAction(state, action);
+
+    const refreshedNodes = testTree(createFolder('1', [
+      createFolder(
+          '2',
+          [
+            createFolder('3', []),
+          ]),
+    ]));
+    action = refreshNodes(refreshedNodes);
+    state = reduceAction(state, action);
+
+    assertEquals('3', state.selectedFolder);
+  });
+
+  test(
+      'selects default folder on refresh if selected folder is missing',
+      function() {
+        action = selectFolder('3')!;
+        state = reduceAction(state, action);
+
+        const refreshedNodes = testTree(createFolder(
+            '1',
+            [
+              createFolder('2', []),
+            ],
+            {folderType: chrome.bookmarks.FolderType.BOOKMARKS_BAR}));
+        action = refreshNodes(refreshedNodes);
+        state = reduceAction(state, action);
+
+        assertEquals('1', state.selectedFolder);
+      });
 });
 
 
@@ -457,7 +492,8 @@ suite('node state', function() {
       parentId: '1',
       index: 2,
     };
-    action = createBookmark(folder.id, folder);
+    action =
+        createBookmark(folder.parentId, folder.index, normalizeNode(folder));
     nodes = updateNodes(nodes, action);
 
     assertEquals('1', nodes['6']!.parentId);
@@ -473,7 +509,7 @@ suite('node state', function() {
       url: 'https://www.example.com',
     };
 
-    action = createBookmark(item.id, item);
+    action = createBookmark(item.parentId, item.index, normalizeNode(item));
     nodes = updateNodes(nodes, action);
 
     assertEquals('6', nodes['7']!.parentId);

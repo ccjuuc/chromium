@@ -14,17 +14,31 @@
 #include "components/password_manager/core/browser/http_auth_manager.h"
 #include "components/password_manager/core/browser/leak_detection/leak_detection_request_utils.h"
 #include "components/password_manager/core/browser/password_form_manager_for_ui.h"
+#include "components/password_manager/core/browser/password_store/stored_credential.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/version_info/channel.h"
 #include "url/origin.h"
 
 namespace password_manager {
 
-bool PasswordManagerClient::IsSavingAndFillingEnabled(const GURL& url) const {
+bool PasswordManagerClient::IsSavingAndFillingEnabled(
+    const url::Origin& origin) const {
+  return IsSavingAndFillingEnabled(origin, std::nullopt);
+}
+
+bool PasswordManagerClient::IsSavingAndFillingEnabled(
+    const url::Origin& origin,
+    base::optional_ref<const GURL> url) const {
   return true;
 }
 
-bool PasswordManagerClient::IsFillingEnabled(const GURL& url) const {
+bool PasswordManagerClient::IsFillingEnabled(const url::Origin& origin) const {
+  return IsFillingEnabled(origin, std::nullopt);
+}
+
+bool PasswordManagerClient::IsFillingEnabled(
+    const url::Origin& origin,
+    base::optional_ref<const GURL> url) const {
   return true;
 }
 
@@ -68,9 +82,9 @@ void PasswordManagerClient::UpdateCredentialCache(
     std::optional<PasswordStoreBackendError> backend_error) {}
 
 void PasswordManagerClient::PasswordWasAutofilled(
-    base::span<const PasswordForm> best_matches,
+    base::span<const StoredCredential> best_matches,
     const url::Origin& origin,
-    base::span<const PasswordForm> federated_matches,
+    base::span<const StoredCredential> federated_matches,
     bool was_autofilled_on_pageload) {}
 
 void PasswordManagerClient::AutofillHttpAuth(
@@ -191,7 +205,8 @@ PasswordManagerClient::GetWebAuthnCredManDelegateForDriver(
   return nullptr;
 }
 
-void PasswordManagerClient::MarkSharedCredentialsAsNotified(const GURL& url) {}
+void PasswordManagerClient::MarkSharedCredentialsAsNotified(
+    const url::Origin& origin) {}
 
 #endif  // BUILDFLAG(IS_ANDROID)
 
@@ -211,10 +226,21 @@ PasswordManagerClient::GetUndoPasswordChangeController() {
   return nullptr;
 }
 
-#if !BUILDFLAG(IS_ANDROID)
 bool PasswordManagerClient::IsActorTaskActive() {
   return false;
 }
-#endif  // !BUILDFLAG(IS_ANDROID)
+
+void PasswordManagerClient::OnPasswordFilled(PasswordManagerDriver* driver,
+                                             const GURL& url,
+                                             PasswordFillTrigger trigger_type) {
+}
+
+bool PasswordManagerClient::IsChromeSigninPage() const {
+  return false;
+}
+
+ActionableError PasswordManagerClient::GetActionableError() const {
+  return ActionableError::kNoError;
+}
 
 }  // namespace password_manager

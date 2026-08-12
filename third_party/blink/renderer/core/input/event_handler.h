@@ -32,7 +32,6 @@
 #include "base/gtest_prod_util.h"
 #include "base/time/time.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
-#include "third_party/blink/public/common/input/web_menu_source_type.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/events/text_event_input_type.h"
@@ -46,6 +45,7 @@
 #include "third_party/blink/renderer/core/page/event_with_hit_test_results.h"
 #include "third_party/blink/renderer/core/page/touch_adjustment.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "ui/base/mojom/menu_source_type.mojom-blink-forward.h"
 
 namespace ui {
 class Cursor;
@@ -92,6 +92,10 @@ class CORE_EXPORT EventHandler final : public GarbageCollected<EventHandler> {
   void NodeWillBeRemoved(Node& node) {
     mouse_event_manager_->NodeWillBeRemoved(node);
     pointer_event_manager_->NodeWillBeRemoved(node);
+  }
+  void HandlePseudoElementRemoval(PseudoElement& pseudo) {
+    mouse_event_manager_->HandlePseudoElementRemoval(pseudo);
+    pointer_event_manager_->HandlePseudoElementRemoval(pseudo);
   }
 
   void UpdateSelectionForMouseDrag();
@@ -212,7 +216,8 @@ class CORE_EXPORT EventHandler final : public GarbageCollected<EventHandler> {
       Element* override_target_element = nullptr);
   WebInputEventResult ShowNonLocatedContextMenu(
       Element* override_target_element = nullptr,
-      WebMenuSourceType = kMenuSourceNone);
+      ui::mojom::blink::MenuSourceType =
+          ui::mojom::blink::MenuSourceType::kNone);
 
   // See PointerEventManager::AppendTouchIdForCanceledPointerDown().
   void AppendTouchIdForCanceledPointerDown(uint32_t unique_touch_event_id);
@@ -232,6 +237,7 @@ class CORE_EXPORT EventHandler final : public GarbageCollected<EventHandler> {
   bool HandleAccessKey(const WebKeyboardEvent&);
   WebInputEventResult KeyEvent(const WebKeyboardEvent&);
   void DefaultKeyboardEventHandler(KeyboardEvent*);
+  bool DefaultTabEventHandler(KeyboardEvent*);
 
   bool HandleTextInputEvent(const String& text,
                             Event* underlying_event = nullptr,
@@ -269,6 +275,10 @@ class CORE_EXPORT EventHandler final : public GarbageCollected<EventHandler> {
     return *keyboard_event_manager_;
   }
 
+  MouseWheelEventManager& GetMouseWheelEventManager() const {
+    return *mouse_wheel_event_manager_;
+  }
+
   void RecomputeMouseHoverStateIfNeeded();
 
   void MarkHoverStateDirty();
@@ -297,8 +307,6 @@ class CORE_EXPORT EventHandler final : public GarbageCollected<EventHandler> {
   void SetDelayedNavigationTaskHandle(TaskHandle task_handle);
 
   TaskHandle& GetDelayedNavigationTaskHandle();
-
-  base::debug::CrashKeyString* CrashKeyForBug1519197() const;
 
   // Testing helper: Returns the LocalFrame from a target node for drag/drop.
   // This exposes the logic of LocalFrameFromTargetNode for testing purposes.

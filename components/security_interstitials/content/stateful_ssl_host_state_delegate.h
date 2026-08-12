@@ -14,6 +14,7 @@
 #include "components/security_interstitials/core/https_only_mode_allowlist.h"
 #include "components/security_interstitials/core/https_only_mode_enforcelist.h"
 #include "content/public/browser/ssl_host_state_delegate.h"
+#include "net/base/net_errors.h"
 #include "url/gurl.h"
 
 class HostContentSettingsMap;
@@ -21,7 +22,7 @@ class PrefService;
 
 namespace base {
 class Clock;
-class Value;
+class DictValue;
 class FilePath;
 }  //  namespace base
 
@@ -49,14 +50,14 @@ class StatefulSSLHostStateDelegate : public content::SSLHostStateDelegate,
   // content::SSLHostStateDelegate overrides:
   void AllowCert(const std::string& host,
                  const net::X509Certificate& cert,
-                 int error,
+                 net::Error error,
                  content::StoragePartition* storage_partition) override;
   void Clear(
       base::RepeatingCallback<bool(const std::string&)> host_filter) override;
   CertJudgment QueryPolicy(
       const std::string& host,
       const net::X509Certificate& cert,
-      int error,
+      net::Error error,
       content::StoragePartition* storage_partition) override;
 
   void HostRanInsecureContent(const std::string& host,
@@ -132,9 +133,9 @@ class StatefulSSLHostStateDelegate : public content::SSLHostStateDelegate,
   // GetValidCertDecisionsDict will create a new set of entries within the
   // dictionary if they do not already exist. Otherwise will fail and return if
   // NULL if they do not exist.
-  base::Value::Dict* GetValidCertDecisionsDict(
+  base::DictValue* GetValidCertDecisionsDict(
       CreateDictionaryEntriesDisposition create_entries,
-      base::Value::Dict& dict);
+      base::DictValue& dict);
 
   bool HasCertAllowExceptionForAnyHost(
       content::StoragePartition* storage_partition);

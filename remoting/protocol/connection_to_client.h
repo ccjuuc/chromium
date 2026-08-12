@@ -8,9 +8,10 @@
 #include <stdint.h>
 
 #include <string>
+#include <string_view>
 
-#include "remoting/base/session_options.h"
-#include "remoting/base/session_policies.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/weak_ptr.h"
 #include "remoting/base/source_location.h"
 #include "remoting/protocol/message_pipe.h"
 #include "remoting/protocol/network_settings.h"
@@ -19,18 +20,20 @@
 
 namespace remoting {
 class DesktopCapturer;
+class FifoBufferWriter;
+struct SessionOptions;
 }  // namespace remoting
 
 namespace remoting::protocol {
 
 class AudioSource;
 class AudioStream;
+struct AudioSampleInfo;
 class ClientStub;
 class ClipboardStub;
 class HostStub;
 class InputStub;
 class PeerConnectionControls;
-class Session;
 class VideoStream;
 class WebrtcEventLogData;
 
@@ -40,15 +43,6 @@ class ConnectionToClient {
  public:
   class EventHandler {
    public:
-    // Called when the network connection is authenticating
-    virtual void OnConnectionAuthenticating() = 0;
-
-    // Called when the network connection is authenticated. `session_policies`
-    // is nullptr if no session policies are specified, in which case local
-    // policies should be used.
-    virtual void OnConnectionAuthenticated(
-        const SessionPolicies* session_policies) = 0;
-
     // Called to request creation of video streams. May be called before or
     // after OnConnectionChannelsConnected().
     virtual void CreateMediaStreams() = 0;
@@ -56,9 +50,6 @@ class ConnectionToClient {
     // Called when the network connection is authenticated and all
     // channels are connected.
     virtual void OnConnectionChannelsConnected() = 0;
-
-    // Called when the network connection is closed or failed.
-    virtual void OnConnectionClosed(ErrorCode error) = 0;
 
     // Called when the transport protocol (TCP/UDP) changes and all channels are
     // connected.
@@ -73,6 +64,16 @@ class ConnectionToClient {
     virtual void OnIncomingDataChannel(const std::string& channel_name,
                                        std::unique_ptr<MessagePipe> pipe) = 0;
 
+    // Called when the format of the incoming audio stream changes.
+    virtual void OnIncomingAudioFormatChanged(
+        const AudioSampleInfo& info,
+        base::OnceCallback<void(bool)> done) = 0;
+
+    // Called when the connection is closed or fails.
+    virtual void OnConnectionClosed(ErrorCode error,
+                                    std::string_view error_details,
+                                    const SourceLocation& error_location) = 0;
+
    protected:
     virtual ~EventHandler() = default;
   };
@@ -84,9 +85,11 @@ class ConnectionToClient {
   // object is created.
   virtual void SetEventHandler(EventHandler* event_handler) = 0;
 
-  // Returns the Session object for the connection.
-  // TODO(sergeyu): Remove this method.
-  virtual Session* session() = 0;
+  // Returns the Transport object for the connection.
+  virtual Transport* transport() = 0;
+
+  // Starts the client connection and media streams after authentication.
+  virtual void Start() = 0;
 
   // Disconnect the client connection.
   virtual void Disconnect(ErrorCode error,
@@ -104,6 +107,9 @@ class ConnectionToClient {
   // client.
   virtual std::unique_ptr<AudioStream> StartAudioStream(
       std::unique_ptr<AudioSource> audio_source) = 0;
+
+  // Sets the SPSC audio writer to inject low-latency playout PCM audio.
+  virtual void SetAudioWriter(std::unique_ptr<FifoBufferWriter> writer) = 0;
 
   // The client stubs used by the host to send control messages to the client.
   // The stub must not be accessed before OnConnectionAuthenticated(), or

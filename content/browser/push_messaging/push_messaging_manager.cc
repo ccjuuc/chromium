@@ -19,9 +19,9 @@
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "content/browser/bad_message.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/permissions/permission_controller_impl.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/service_worker/service_worker_context_core.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/public/browser/browser_context.h"
@@ -46,7 +46,7 @@ namespace {
 // Chrome currently does not support the Push API in incognito.
 const char kIncognitoPushUnsupportedMessage[] =
     "Chrome currently does not support the Push API in incognito mode "
-    "(https://crbug.com/401439). There is deliberately no way to "
+    "(https://crbug.com/41124656). There is deliberately no way to "
     "feature-detect this, since incognito mode needs to be undetectable by "
     "websites.";
 
@@ -157,6 +157,15 @@ void PushMessagingManager::AddPushMessagingReceiver(
   receivers_.Add(this, std::move(receiver));
 }
 
+bool PushMessagingManager::IsRequestFromFencedFrame() const {
+  if (!IsRequestFromDocument(render_frame_id_)) {
+    return false;
+  }
+  RenderFrameHostImpl* render_frame_host = RenderFrameHostImpl::FromID(
+      render_process_host_->GetDeprecatedID(), render_frame_id_);
+  return render_frame_host && render_frame_host->IsNestedWithinFencedFrame();
+}
+
 // Subscribe methods, merged in order of use.
 // -----------------------------------------------------------------------------
 
@@ -167,6 +176,15 @@ void PushMessagingManager::Subscribe(
     SubscribeCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(options);
+
+  // The renderer should have checked and disallowed the request for fenced
+  // frames and thrown an exception in blink::PushManager. Ignore the request
+  // and mark it as bad if it didn't happen for some reason.
+  if (IsRequestFromFencedFrame()) {
+    bad_message::ReceivedBadMessage(&*render_process_host_,
+                                    bad_message::PMM_SUBSCRIBE_IN_FENCED_FRAME);
+    return;
+  }
 
   RegisterData data;
 
@@ -186,9 +204,11 @@ void PushMessagingManager::Subscribe(
     return;
   }
 
-  // The renderer should have checked and disallowed the request for fenced
-  // frames and thrown an exception in blink::PushManager. Report a bad message
-  // if the renderer if the renderer side check didn't happen for some reason.
+  // Registrations created on behalf of a fenced frame may not have push
+  // subscriptions. Together with the IsRequestFromFencedFrame() check above
+  // this also catches requests from service workers running in such a frame
+  // (which use a worker-bound instance of this class) when they target their
+  // own registration.
   if (service_worker_registration->ancestor_frame_type() ==
       blink::mojom::AncestorFrameType::kFencedFrame) {
     bad_message::ReceivedBadMessage(render_process_host_->GetDeprecatedID(),
@@ -505,6 +525,13 @@ void PushMessagingManager::SendSubscriptionSuccess(
 void PushMessagingManager::Unsubscribe(int64_t service_worker_registration_id,
                                        UnsubscribeCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+
+  if (IsRequestFromFencedFrame()) {
+    bad_message::ReceivedBadMessage(
+        &*render_process_host_, bad_message::PMM_UNSUBSCRIBE_IN_FENCED_FRAME);
+    return;
+  }
+
   scoped_refptr<ServiceWorkerRegistration> service_worker_registration =
       service_worker_context_->GetLiveRegistration(
           service_worker_registration_id);
@@ -601,6 +628,13 @@ void PushMessagingManager::GetSubscription(
     GetSubscriptionCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
+  if (IsRequestFromFencedFrame()) {
+    bad_message::ReceivedBadMessage(
+        &*render_process_host_,
+        bad_message::PMM_GET_SUBSCRIPTION_IN_FENCED_FRAME);
+    return;
+  }
+
   scoped_refptr<ServiceWorkerRegistration> registration =
       service_worker_context_->GetLiveRegistration(
           service_worker_registration_id);
@@ -660,6 +694,18 @@ void PushMessagingManager::DidGetSubscription(
 
       const url::Origin& origin = registration->key().origin();
 
+      // Verify CanAccessDataForOrigin(), potentially a second time.
+      // GetSubscription() attempts this call earlier, but continues if
+      // registration is dormant. At this point it is required.
+      if (!ChildProcessSecurityPolicyImpl::GetInstance()
+               ->CanAccessDataForOrigin(render_process_host_->GetDeprecatedID(),
+                                        origin)) {
+        bad_message::ReceivedBadMessage(
+            &*render_process_host_,
+            bad_message::PMM_GET_SUBSCRIPTION_INVALID_ORIGIN);
+        return;
+      }
+
       GetSubscriptionInfo(
           origin, service_worker_registration_id, application_server_key,
           push_subscription_id,
@@ -716,6 +762,7 @@ void PushMessagingManager::GetSubscriptionDidGetInfo(
     int64_t service_worker_registration_id,
     const std::string& application_server_key,
     bool is_valid,
+    bool user_visible_only,
     const GURL& endpoint,
     const std::optional<base::Time>& expiration_time,
     const std::vector<uint8_t>& p256dh,
@@ -723,12 +770,7 @@ void PushMessagingManager::GetSubscriptionDidGetInfo(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   if (is_valid) {
     auto options = blink::mojom::PushSubscriptionOptions::New();
-
-    // Chrome rejects subscription requests with userVisibleOnly false, so it
-    // must have been true. TODO(harkness): If Chrome starts accepting silent
-    // push subscriptions with userVisibleOnly false, the bool will need to be
-    // stored.
-    options->user_visible_only = true;
+    options->user_visible_only = user_visible_only;
     options->application_server_key = std::vector<uint8_t>(
         application_server_key.begin(), application_server_key.end());
 
@@ -787,10 +829,13 @@ void PushMessagingManager::GetSubscriptionInfo(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   PushMessagingService* push_service = GetService();
   if (!push_service) {
-    std::move(callback).Run(false /* is_valid */, GURL() /* endpoint */,
-                            std::nullopt /* expiration_time */,
-                            std::vector<uint8_t>() /* p256dh */,
-                            std::vector<uint8_t>() /* auth */);
+    std::move(callback).Run(
+        /*is_valid=*/false,
+        /*user_visible_only=*/false,
+        /*endpoint=*/GURL(),
+        /*expiration_time=*/std::nullopt,
+        /*p256dh=*/std::vector<uint8_t>(),
+        /*auth=*/std::vector<uint8_t>());
     return;
   }
 

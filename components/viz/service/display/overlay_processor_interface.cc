@@ -216,9 +216,10 @@ OverlayCandidate OverlayProcessorInterface::CreatePrimaryPlane(
   overlay_plane.is_opaque = false;
 #endif
 
-#if BUILDFLAG(IS_OZONE)
   overlay_plane.format = params.si_format;
   overlay_plane.color_space = params.color_space;
+
+#if BUILDFLAG(IS_OZONE)
   overlay_plane.mailbox = params.overlay_testing_mailbox;
 #endif
 
@@ -231,23 +232,6 @@ OverlayCandidate OverlayProcessorInterface::CreatePrimaryPlane(
   }
 
   return overlay_plane;
-}
-
-void OverlayProcessorInterface::ProcessForOverlays(
-    DisplayResourceProvider* resource_provider,
-    AggregatedRenderPassList* render_passes,
-    const SkM44& output_color_matrix,
-    SurfaceDamageRectList surface_damage_rect_list,
-    const PrimaryPlaneParams& primary_plane_params,
-    CandidateList* overlay_candidates,
-    gfx::Rect* damage_rect,
-    std::vector<gfx::Rect>* content_bounds) {
-  // By default, call the other overload with empty filter maps.
-  ProcessForOverlays(resource_provider, render_passes, output_color_matrix,
-                     /*render_pass_filters=*/{},
-                     /*render_pass_backdrop_filters=*/{},
-                     surface_damage_rect_list, primary_plane_params,
-                     overlay_candidates, damage_rect, content_bounds);
 }
 
 void OverlayProcessorInterface::ScheduleOverlays(

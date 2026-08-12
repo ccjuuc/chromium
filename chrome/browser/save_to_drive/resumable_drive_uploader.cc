@@ -9,7 +9,7 @@
 #include <string>
 #include <utility>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
@@ -63,7 +63,7 @@ constexpr char kJsonContentType[] = "application/json; charset=UTF-8";
 // The maximum size of a chunk to upload at a time. This should be multiple
 // of 256KiB. See
 // https://developers.google.com/workspace/drive/api/guides/manage-uploads#resumable
-constexpr base::ByteCount kChunkSize = base::MiB(2);
+constexpr base::ByteSize kChunkSize = base::MiBU(2);
 
 }  // namespace
 
@@ -108,9 +108,9 @@ void ResumableDriveUploader::UploadFile() {
       GURL(kDriveUploadUrl), endpoint_fetcher::HttpMethod::kPost,
       kJsonContentType,
       *base::WriteJson(
-          base::Value::Dict()
+          base::DictValue()
               .Set("name", title_)
-              .Set("parents", base::Value::List().Append(parent_folder_->id))),
+              .Set("parents", base::ListValue().Append(parent_folder_->id))),
       request_headers, base::DoNothing());
 
   initiation_endpoint_fetcher_->Fetch(

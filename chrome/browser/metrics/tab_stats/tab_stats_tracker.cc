@@ -6,12 +6,12 @@
 
 #include <algorithm>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 
 #include "base/check.h"
 #include "base/check_deref.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/function_ref.h"
 #include "base/memory/raw_ptr.h"
@@ -26,7 +26,9 @@
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/buildflags.h"
@@ -48,25 +50,26 @@
 // We add nognchecks on some includes so that Android bots do not fail
 // dependency checks.
 #if BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/android/tab_android.h"
-#include "chrome/browser/ui/android/tab_model/tab_model.h"
-#include "chrome/browser/ui/android/tab_model/tab_model_list.h"
-#include "chrome/browser/ui/android/tab_model/tab_model_list_observer.h"
-#include "chrome/browser/ui/android/tab_model/tab_model_observer.h"
+#include "chrome/browser/android/tab_android.h"                  // nogncheck
+#include "chrome/browser/ui/android/tab_model/tab_model.h"       // nogncheck
+#include "chrome/browser/ui/android/tab_model/tab_model_list.h"  // nogncheck
+#include "chrome/browser/ui/android/tab_model/tab_model_list_observer.h"  // nogncheck
+#include "chrome/browser/ui/android/tab_model/tab_model_observer.h"  // nogncheck
 #else
 #include "chrome/browser/resource_coordinator/lifecycle_unit.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit_observer.h"
 #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_source.h"
 #include "chrome/browser/resource_coordinator/utils.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_list_observer.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"  // nogncheck
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"  // nogncheck
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"  // nogncheck
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
 #endif
 
 namespace metrics {
@@ -95,6 +98,26 @@ void UmaHistogramCounts10000WithBatteryStateVariant(const char* histogram_name,
 
   base::UmaHistogramCounts10000(base::StrCat({histogram_name, suffix}), value);
 }
+
+#if !BUILDFLAG(IS_ANDROID)
+void UmaHistogramCounts10000WithTabStripModeVariant(
+    const char* histogram_name,
+    const TabStatsTracker::TabStripInterface& tab_strip,
+    size_t value) {
+  // Guest mode and incognito should not count for the per-profile metrics
+  if (tab_strip.GetProfile()->IsOffTheRecord()) {
+    return;
+  }
+
+  auto* controller = tabs::VerticalTabStripStateController::From(
+      tab_strip.browser_window_interface());
+  const char* suffix = controller && controller->ShouldDisplayVerticalTabs()
+                           ? ".VerticalTabStrip"
+                           : ".HorizontalTabStrip";
+
+  base::UmaHistogramCounts10000(base::StrCat({histogram_name, suffix}), value);
+}
+#endif
 
 }  // namespace
 
@@ -129,7 +152,11 @@ content::WebContents* TabStatsTracker::TabStripInterface::GetWebContentsAt(
   return tab_model()->GetWebContentsAt(index);
 }
 
-Profile* TabStatsTracker::TabStripInterface::GetProfile() const {
+Profile* TabStatsTracker::TabStripInterface::GetProfile() {
+  return tab_model()->GetProfile();
+}
+
+const Profile* TabStatsTracker::TabStripInterface::GetProfile() const {
   return tab_model()->GetProfile();
 }
 
@@ -159,6 +186,20 @@ size_t TabStatsTracker::TabStripInterface::GetTabCount() const {
   return browser_window_interface()->GetTabStripModel()->count();
 }
 
+size_t TabStatsTracker::TabStripInterface::GetPinnedTabCount() const {
+  return browser_window_interface()
+      ->GetTabStripModel()
+      ->IndexOfFirstNonPinnedTab();
+}
+
+#if !BUILDFLAG(IS_ANDROID)
+// Returns the count of tabs within Split Views in this tab strip.
+size_t TabStatsTracker::TabStripInterface::GetSplitTabCount() const {
+  return browser_window_interface()->GetTabStripModel()->ListSplits().size() *
+         2;
+}
+#endif
+
 content::WebContents* TabStatsTracker::TabStripInterface::GetActiveWebContents()
     const {
   return browser_window_interface()->GetTabStripModel()->GetActiveWebContents();
@@ -170,8 +211,12 @@ content::WebContents* TabStatsTracker::TabStripInterface::GetWebContentsAt(
       index);
 }
 
-Profile* TabStatsTracker::TabStripInterface::GetProfile() const {
-  return const_cast<Profile*>(browser_window_interface()->GetProfile());
+Profile* TabStatsTracker::TabStripInterface::GetProfile() {
+  return browser_window_interface()->GetProfile();
+}
+
+const Profile* TabStatsTracker::TabStripInterface::GetProfile() const {
+  return browser_window_interface()->GetProfile();
 }
 
 bool TabStatsTracker::TabStripInterface::IsInNormalBrowser() const {
@@ -219,6 +264,19 @@ const char
 const char
     TabStatsTracker::UmaStatsReportingDelegate::kWindowWidthHistogramName[] =
         "Tabs.WindowWidth";
+const char TabStatsTracker::UmaStatsReportingDelegate::
+    kVerticalTabStripCollapseStateHistogramName[] =
+        "Tabs.VerticalTabs.CollapseState";
+const char TabStatsTracker::UmaStatsReportingDelegate::
+    kKeyboardTabSwitchModeHistogramName[] =
+        "TabStrip.Tab.KeyboardTabSwitchMode";
+const char TabStatsTracker::UmaStatsReportingDelegate::
+    kFocusModeIsActiveHistogramName[] = "Tabs.FocusMode.IsActive";
+const char
+    TabStatsTracker::UmaStatsReportingDelegate::kPinnedTabCountHistogramName[] =
+        "Tabs.PinnedTabCount";
+const char TabStatsTracker::UmaStatsReportingDelegate::
+    kTabSearchIsPinnedHistogramName[] = "Tabs.TabSearch.IsPinned";
 
 // Daily discard/reload histograms.
 const char TabStatsTracker::UmaStatsReportingDelegate::
@@ -304,6 +362,11 @@ class TabStatsTracker::TabWatcher final : public TabModelListObserver,
   }
 
   void OnTabModelRemoved(TabModel* tab_model) final {
+    for (int i = 0; i < tab_model->GetTabCount(); ++i) {
+      if (TabAndroid* tab = tab_model->GetTabAt(i)) {
+        TabRemoved(tab);
+      }
+    }
     tab_model_observations_.RemoveObservation(tab_model);
     tracker_->OnTabStripRemoved();
   }
@@ -317,6 +380,14 @@ class TabStatsTracker::TabWatcher final : public TabModelListObserver,
   }
 
   void TabRemoved(TabAndroid* tab) final {
+    // The tab was removed from the model, either because it closed or moved to
+    // a different model. Either way stop watching for the WebContents.
+    if (tab_android_observations_.IsObservingSource(tab)) {
+      tab_android_observations_.RemoveObservation(tab);
+    }
+  }
+
+  void DidRemoveTabForClosure(TabAndroid* tab) final {
     // The tab was removed from the model, either because it closed or moved to
     // a different model. Either way stop watching for the WebContents.
     if (tab_android_observations_.IsObservingSource(tab)) {
@@ -355,13 +426,16 @@ class TabStatsTracker::TabWatcher final : public TabModelListObserver,
 
 #else  // !BUILDFLAG(IS_ANDROID)
 
-class TabStatsTracker::TabWatcher final : public BrowserListObserver,
+class TabStatsTracker::TabWatcher final : public BrowserCollectionObserver,
                                           public TabStripModelObserver {
  public:
   explicit TabWatcher(TabStatsTracker& tracker) : tracker_(tracker) {
+    browser_collection_observation_.Observe(
+        GlobalBrowserCollection::GetInstance());
+
     ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
         [this](BrowserWindowInterface* browser) {
-          OnBrowserAdded(browser->GetBrowserForMigrationOnly());
+          OnBrowserCreated(browser);
           TabStripModel* const tab_strip_model = browser->GetTabStripModel();
           for (int i = 0; i < tab_strip_model->count(); ++i) {
             content::WebContents* const web_contents =
@@ -372,19 +446,18 @@ class TabStatsTracker::TabWatcher final : public BrowserListObserver,
           tracker_->OnTabStripNewTabCount(tab_strip_model->count());
           return true;
         });
-    browser_list_observation_.Observe(BrowserList::GetInstance());
   }
 
   ~TabWatcher() final = default;
 
-  // BrowserListObserver:
-  void OnBrowserAdded(Browser* browser) final {
+  // BrowserCollectionObserver:
+  void OnBrowserCreated(BrowserWindowInterface* browser) final {
     tracker_->OnTabStripAdded();
-    browser->tab_strip_model()->AddObserver(this);
+    // TODO(crbug.com/452120900): TabStripModel auto-unregistered by dtor
+    browser->GetTabStripModel()->AddObserver(this);
   }
 
-  void OnBrowserRemoved(Browser* browser) final {
-    browser->tab_strip_model()->RemoveObserver(this);
+  void OnBrowserClosed(BrowserWindowInterface* browser) final {
     tracker_->OnTabStripRemoved();
   }
 
@@ -405,8 +478,8 @@ class TabStatsTracker::TabWatcher final : public BrowserListObserver,
 
  private:
   raw_ref<TabStatsTracker> tracker_;
-  base::ScopedObservation<BrowserList, BrowserListObserver>
-      browser_list_observation_{this};
+  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
+      browser_collection_observation_{this};
 };
 
 #endif  // !BUILDFLAG(IS_ANDROID)
@@ -742,7 +815,7 @@ void TabStatsTracker::OnInitialOrInsertedTab(
   // If we already have a WebContentsObserver for this tab then it means that
   // it's already tracked and it's being dragged into a new window, there's
   // nothing to do here.
-  if (!base::Contains(web_contents_usage_observers_, web_contents)) {
+  if (!web_contents_usage_observers_.contains(web_contents)) {
     for (TabStatsObserver& tab_stats_observer : tab_stats_observers_) {
       tab_stats_observer.OnTabAdded(web_contents);
     }
@@ -767,7 +840,7 @@ void TabStatsTracker::OnTabReplaced(content::WebContents* old_contents,
 void TabStatsTracker::OnWebContentsDestroyed(
     content::WebContents* web_contents) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(base::Contains(web_contents_usage_observers_, web_contents));
+  DCHECK(web_contents_usage_observers_.contains(web_contents));
   web_contents_usage_observers_.erase(
       web_contents_usage_observers_.find(web_contents));
   for (TabStatsObserver& tab_stats_observer : tab_stats_observers_) {
@@ -837,30 +910,81 @@ void TabStatsTracker::UmaStatsReportingDelegate::ReportDailyMetrics(
   base::UmaHistogramCounts10000(
       kDailyReloadsFrozenWithGrowingMemoryHistogramName,
       tab_stats.tab_reload_counts[frozen_with_growing_memory_index]);
+
+#if !BUILDFLAG(IS_ANDROID)
+  std::set<const Profile*> profiles;
+  TabStripInterface::ForEach([&profiles](const TabStripInterface& tab_strip) {
+    profiles.insert(tab_strip.GetProfile());
+  });
+
+  for (const Profile* profile : profiles) {
+    if (profile->IsOffTheRecord()) {
+      continue;
+    }
+    // Record the keyboard tab switch mode for each profile.
+    bool mru_enabled = profile->GetPrefs()->GetBoolean(prefs::kCtrlTabMru);
+    base::UmaHistogramEnumeration(kKeyboardTabSwitchModeHistogramName,
+                                  mru_enabled
+                                      ? KeyboardTabSwitchMode::kMRU
+                                      : KeyboardTabSwitchMode::kStandard);
+
+    // Record tab search pinned state for each profile.
+    bool is_tab_search_pinned =
+        profile->GetPrefs()->GetBoolean(prefs::kTabSearchPinnedToTabstrip);
+    base::UmaHistogramBoolean(kTabSearchIsPinnedHistogramName,
+                              is_tab_search_pinned);
+  }
+#endif
 }
 
 void TabStatsTracker::UmaStatsReportingDelegate::ReportHeartbeatMetrics(
     const TabStatsDataStore::TabsStats& tab_stats) {
   // Don't report anything if Chrome is running in background with no visible
   // window.
-  if (IsChromeBackgroundedWithoutWindows())
+  if (IsChromeBackgroundedWithoutWindows()) {
     return;
+  }
 
   UmaHistogramCounts10000WithBatteryStateVariant(kTabCountHistogramName,
                                                  tab_stats.total_tab_count);
   UmaHistogramCounts10000WithBatteryStateVariant(kWindowCountHistogramName,
                                                  tab_stats.window_count);
+
   if (base::FeatureList::IsEnabled(features::kTabDuplicateMetrics)) {
     ReportTabDuplicateMetrics(true);
     ReportTabDuplicateMetrics(false);
   }
+
 #if !BUILDFLAG(IS_ANDROID)
-  // Record the width of all open browser windows with tabs.
+  ReportSplitTabMetrics();
+
   TabStripInterface::ForEach([&](const TabStripInterface& tab_strip) {
     if (!tab_strip.IsInNormalBrowser()) {
       return;
     }
 
+    UmaHistogramCounts10000WithTabStripModeVariant(
+        kTabCountHistogramName, tab_strip, tab_strip.GetTabCount());
+    UmaHistogramCounts10000WithTabStripModeVariant(
+        kPinnedTabCountHistogramName, tab_strip, tab_strip.GetPinnedTabCount());
+
+    const TabStripModel* tab_strip_model =
+        tab_strip.browser_window_interface()->GetTabStripModel();
+    const bool is_in_focus_mode =
+        tab_strip_model && tab_strip_model->GetFocusedGroup().has_value();
+    base::UmaHistogramBoolean(kFocusModeIsActiveHistogramName,
+                              is_in_focus_mode);
+
+    auto* controller = tabs::VerticalTabStripStateController::From(
+        tab_strip.browser_window_interface());
+    if (controller && controller->ShouldDisplayVerticalTabs()) {
+      base::UmaHistogramEnumeration(
+          kVerticalTabStripCollapseStateHistogramName,
+          controller->IsCollapsed() ? VerticalTabStripCollapseState::kCollapsed
+                                    : VerticalTabStripCollapseState::kExpanded);
+    }
+
+    // Record the width of all open browser windows with tabs.
     const ui::BaseWindow* window =
         tab_strip.browser_window_interface()->GetWindow();
 
@@ -890,13 +1014,13 @@ void TabStatsTracker::UmaStatsReportingDelegate::ReportHeartbeatMetrics(
 
 void TabStatsTracker::UmaStatsReportingDelegate::ReportTabDuplicateMetrics(
     bool exclude_fragments) {
-  std::map<Profile*, DuplicateData> duplicate_data_per_profile;
+  std::map<const Profile*, DuplicateData> duplicate_data_per_profile;
   TabStripInterface::ForEach([&](const TabStripInterface& tab_strip) {
     if (!tab_strip.IsInNormalBrowser()) {
       return;
     }
 
-    Profile* const profile = tab_strip.GetProfile();
+    const Profile* const profile = tab_strip.GetProfile();
     DuplicateData duplicate_data_multi_window =
         duplicate_data_per_profile[profile];
     DuplicateData duplicate_data_single_window = DuplicateData();
@@ -942,7 +1066,7 @@ void TabStatsTracker::UmaStatsReportingDelegate::ReportTabDuplicateMetrics(
 
   for (const auto& duplicate_data : duplicate_data_per_profile) {
     // Guest mode and incognito should not count for the per-profile metrics
-    Profile* const profile = duplicate_data.first;
+    const Profile* const profile = duplicate_data.first;
     if (profile->IsOffTheRecord()) {
       continue;
     }
@@ -962,6 +1086,22 @@ void TabStatsTracker::UmaStatsReportingDelegate::ReportTabDuplicateMetrics(
     }
   }
 }
+
+#if !BUILDFLAG(IS_ANDROID)
+void TabStatsTracker::UmaStatsReportingDelegate::ReportSplitTabMetrics() {
+  int split_tabs = 0;
+  TabStripInterface::ForEach([&](const TabStripInterface& tab_strip) {
+    if (!tab_strip.IsInNormalBrowser()) {
+      return;
+    }
+
+    split_tabs += tab_strip.GetSplitTabCount();
+  });
+
+  base::UmaHistogramCounts10000(
+      base::StrCat({kTabCountHistogramName, ".SplitTabs"}), split_tabs);
+}
+#endif
 
 bool TabStatsTracker::UmaStatsReportingDelegate::
     IsChromeBackgroundedWithoutWindows() {

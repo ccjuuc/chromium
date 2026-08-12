@@ -48,12 +48,15 @@ class FacilitatedPaymentsDriver {
   void DidNavigateToOrAwayFromPage() const;
 
   // Inform the `PixManager` about `copied_text` being copied to
-  // the clipboard. It is invoked only for the primary main frame.
-  virtual void OnTextCopiedToClipboard(
-      const GURL& render_frame_host_url,
-      const url::Origin& render_frame_host_origin,
-      const std::u16string& copied_text,
-      ukm::SourceId ukm_source_id);
+  // the clipboard.
+  // `is_same_origin` indicates whether the iframe from which the Pix code is
+  // copied has the same origin as the main frame.
+  virtual void OnTextCopiedToClipboard(const GURL& main_frame_url,
+                                       const std::optional<GURL>& iframe_url,
+                                       const url::Origin& main_frame_origin,
+                                       const std::u16string& copied_text,
+                                       ukm::SourceId ukm_source_id,
+                                       bool is_same_origin = false);
 
   // Inform the `PaymentLinkManager` to trigger the payment link push payment
   // flow. The payment information is included in the `payment_link_url`
@@ -65,6 +68,10 @@ class FacilitatedPaymentsDriver {
   virtual void SetPixManagerForTesting(std::unique_ptr<PixManager> pix_manager);
   virtual void SetPaymentLinkManagerForTesting(
       std::unique_ptr<PaymentLinkManager> payment_link_manager);
+
+ protected:
+  // Returns true if the current page context is secure for payments.
+  virtual bool IsSecureForPaymentHandling() const = 0;
 
  private:
   const raw_ref<FacilitatedPaymentsClient> facilitated_payments_client_;

@@ -2,15 +2,24 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+# This file was exported from google3, do not edit manually.
+# See README.chromium for details.
+
+import("//components/proto_extras/proto_extras.gni")
+import("//third_party/libprotobuf-mutator/fuzzable_proto_library.gni")
 import("//third_party/protobuf/proto_library.gni")
 
 _proto_files = [
+  "added_inputs.proto",
   "aim_communication.proto",
+  "aim_icon.proto",
   "aim_query.proto",
+  "aim_thumbnail.proto",
   "lens_overlay_client_context.proto",
   "lens_overlay_client_logs.proto",
   "lens_overlay_client_platform.proto",
   "lens_overlay_cluster_info.proto",
+  "lens_overlay_content_metadata.proto",
   "lens_overlay_contextual_inputs.proto",
   "lens_overlay_deep_gleam_data.proto",
   "lens_overlay_document.proto",
@@ -21,6 +30,7 @@ _proto_files = [
   "lens_overlay_interaction_request_metadata.proto",
   "lens_overlay_knowledge_intent_query.proto",
   "lens_overlay_knowledge_query.proto",
+  "lens_overlay_lens_file.proto",
   "lens_overlay_math_solver_query.proto",
   "lens_overlay_message_set.proto",
   "lens_overlay_overlay_object.proto",
@@ -44,9 +54,19 @@ _proto_files = [
   "lens_overlay_visual_input_type.proto",
   "lens_overlay_visual_search_interaction_data.proto",
   "lens_overlay_visual_search_interaction_log_data.proto",
+  "modality_chip_props.proto",
 ]
 
 proto_library("lens_overlay_proto") {
   sources = _proto_files
   proto_in_dir = "."
+  import_dirs = [
+    "//",
+    "//components/optimization_guide/proto/features",
+    "//third_party/omnibox_proto",
+  ]
+  deps = [
+    "//components/optimization_guide/proto:optimization_guide_proto",
+    "//third_party/omnibox_proto",
+  ]
 }

@@ -87,7 +87,8 @@ const openscreen::cast::EncodedFrame ToOpenscreenEncodedFrame(
       encoded_frame.frame_id, encoded_frame.referenced_frame_id,
       encoded_frame.rtp_timestamp,
       ToOpenscreenTimePoint(encoded_frame.reference_time),
-      std::chrono::milliseconds(encoded_frame.new_playout_delay_ms),
+      std::chrono::milliseconds(
+          encoded_frame.new_playout_delay.InMilliseconds()),
       ToOpenscreenTimePoint(encoded_frame.capture_begin_time),
       ToOpenscreenTimePoint(encoded_frame.capture_end_time),
       openscreen::ByteView(
@@ -170,11 +171,13 @@ openscreen::cast::AudioCaptureConfig ToOpenscreenAudioConfig(
   return openscreen::cast::AudioCaptureConfig{
       .codec = ToOpenscreenAudioCodec(config.audio_codec()),
       .channels = config.channels,
-      .bit_rate = config.max_bitrate,
+      .bit_rate = base::checked_cast<int>(config.max_bitrate),
       .sample_rate = config.rtp_timebase,
       .target_playout_delay =
           std::chrono::milliseconds(config.max_playout_delay.InMilliseconds()),
-      .codec_parameter = std::string()};
+      .codec_parameter = config.audio_codec_params
+                             ? config.audio_codec_params->codec_parameter
+                             : std::string()};
 }
 
 openscreen::cast::VideoCaptureConfig ToOpenscreenVideoConfig(
@@ -189,12 +192,14 @@ openscreen::cast::VideoCaptureConfig ToOpenscreenVideoConfig(
       .max_frame_rate =
           openscreen::SimpleFraction{static_cast<int>(config.max_frame_rate),
                                      1},
-      .max_bit_rate = config.max_bitrate,
+      .max_bit_rate = base::checked_cast<int>(config.max_bitrate),
       .resolutions =
           std::vector(std::begin(kResolutions), std::end(kResolutions)),
       .target_playout_delay =
           std::chrono::milliseconds(config.max_playout_delay.InMilliseconds()),
-      .codec_parameter = std::string()};
+      .codec_parameter = config.video_codec_params
+                             ? config.video_codec_params->codec_parameter
+                             : std::string()};
 }
 
 RemotingSinkAudioCapability ToRemotingAudioCapability(

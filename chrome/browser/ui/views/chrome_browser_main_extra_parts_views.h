@@ -44,9 +44,9 @@ class ChromeBrowserMainExtraPartsViews : public ChromeBrowserMainExtraParts {
 
   // Overridden from ChromeBrowserMainExtraParts:
   void ToolkitInitialized() override;
-  void PostCreateMainMessageLoop() override;
   void PreCreateThreads() override;
   void PreProfileInit() override;
+  void PostProfileInit(Profile* profile, bool is_initial_profile) override;
   void PostBrowserStart() override;
   void PostMainMessageLoopRun() override;
 
@@ -54,11 +54,6 @@ class ChromeBrowserMainExtraPartsViews : public ChromeBrowserMainExtraParts {
   // An owning pointer to the views delegate. This may be nullptr if another
   // class creates the global ViewsDelegate instance before us (test only).
   std::unique_ptr<views::ViewsDelegate> views_delegate_;
-  // A non-owning pointer to the views delegate. All dereferencing should be
-  // done through this `views_delegate_ptr_`. This should never be nullptr
-  // after `ToolkitInitialized()`.
-  raw_ptr<views::ViewsDelegate> views_delegate_ptr_ = nullptr;
-
   std::unique_ptr<views::LayoutProvider> layout_provider_;
 
 #if defined(USE_AURA)

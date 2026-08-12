@@ -37,7 +37,6 @@ include_rules = [
   "+chrome/browser/browser_process_platform_part_ash.h",
   "+chrome/browser/chromeos/reporting",
   "+chrome/browser/extensions/browsertest_util.h",
-  "+chrome/browser/lifetime",
   "+chrome/browser/policy",
   "+chrome/browser/prefs",
   "+chrome/browser/profiles",
@@ -54,6 +53,11 @@ include_rules = [
   "+chrome/browser/web_applications/test",
   "+chrome/browser/web_applications/user_display_mode.h",
   "+chrome/browser/web_applications/web_app_install_info.h",
-  "+chrome/common/pref_names.h",
   "+chrome/test/base",
 ]
+
+specific_include_rules = {
+  ".*unittest\\.cc": [
+    "+chrome/browser/global_features.h",
+  ],
+}

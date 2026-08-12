@@ -29,15 +29,15 @@ class ExtensionViewHost;
 // An instance of this C++ class is created when its Java counterpart
 // (ExtensionActionPopupContents.java) requests it via a JNI call (specifically,
 // JNI_ExtensionActionPopupContents_Create). The C++ object's lifetime is tied
-// to its Java peer. The Java object holds a native pointer (jlong) to this C++
-// instance. When the Java object is no longer needed (e.g. the popup is
+// to its Java peer. The Java object holds a native pointer (int64_t) to this
+// C++ instance. When the Java object is no longer needed (e.g. the popup is
 // closed), its `destroy()` method is called. This, in turn, calls the native
 // `Destroy()` method on this C++ object, which then calls `delete this`.
 class ExtensionActionPopupContents : public content::WebContentsObserver,
                                      public ExtensionView {
  public:
-  explicit ExtensionActionPopupContents(
-      std::unique_ptr<ExtensionViewHost> popup_host);
+  ExtensionActionPopupContents(std::unique_ptr<ExtensionViewHost> popup_host,
+                               bool inspect_with_devtools);
   ExtensionActionPopupContents(const ExtensionActionPopupContents&) = delete;
   ExtensionActionPopupContents& operator=(const ExtensionActionPopupContents&) =
       delete;
@@ -70,6 +70,7 @@ class ExtensionActionPopupContents : public content::WebContentsObserver,
   void HandleCloseExtensionHost(extensions::ExtensionHost* host);
 
   std::unique_ptr<ExtensionViewHost> host_;
+  const bool inspect_with_devtools_;
   base::android::ScopedJavaGlobalRef<jobject> java_object_;
 };
 

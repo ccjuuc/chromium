@@ -33,10 +33,6 @@ constexpr float kTabOverlayViewWidth = kBrowserWidth;
 constexpr float kPopupHeight = 100;
 constexpr float kPopupWidth = kPopupHeight;
 
-inline bool UsePermanentThinController() {
-  return base::mac::MacOSMajorVersion() >= 13;
-}
-
 void SetupWindow(NativeWidgetMacNSWindow* window,
                  CGFloat width,
                  CGFloat height) {
@@ -110,19 +106,17 @@ class CocoaImmersiveModeControllerTest : public ui::CocoaTest {
     overlay_ = CreateNativeWidgetMacOverlayNSWindow(kOverlayViewWidth,
                                                     kOverlayViewHeight);
     [browser_ addChildWindow:overlay_ ordered:NSWindowAbove];
-    EXPECT_EQ(overlay_.isVisible, YES);
+    EXPECT_EQ(overlay_.visible, YES);
 
     // Create a blank tab overlay window as a child of overlay window.
     tab_overlay_ = CreateNativeWidgetMacOverlayNSWindow(kTabOverlayViewWidth,
                                                         kTabOverlayViewHeight);
     [overlay_ addChildWindow:tab_overlay_ ordered:NSWindowAbove];
-    EXPECT_EQ(tab_overlay_.isVisible, YES);
+    EXPECT_EQ(tab_overlay_.visible, YES);
   }
 
   void TearDown() override {
-    unsigned int expected_controllers = UsePermanentThinController() ? 1u : 0u;
-    EXPECT_EQ(browser_.titlebarAccessoryViewControllers.count,
-              expected_controllers);
+    EXPECT_EQ(browser_.titlebarAccessoryViewControllers.count, 1u);
 
     [tab_overlay_ close];
     tab_overlay_ = nil;
@@ -241,8 +235,7 @@ TEST_F(CocoaImmersiveModeControllerTest, IsRevealed) {
 
 // Test ImmersiveModeController toolbar visibility.
 TEST_F(CocoaImmersiveModeControllerTest, ToolbarVisibility) {
-  unsigned int baseline_controllers = UsePermanentThinController() ? 1u : 0u;
-  ASSERT_EQ(controllers().count, baseline_controllers);
+  ASSERT_EQ(controllers().count, 1u);
   // Controller under test.
   auto immersive_mode_controller =
       std::make_unique<ImmersiveModeTabbedControllerCocoa>(browser(), overlay(),

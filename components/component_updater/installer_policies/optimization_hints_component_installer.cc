@@ -16,14 +16,18 @@
 #include "base/version.h"
 #include "components/component_updater/component_updater_paths.h"
 #include "components/optimization_guide/core/filters/optimization_hints_component_update_listener.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 
 namespace component_updater {
 
+const base::FilePath::CharType kUnindexedHintsFileName[] =
+    FILE_PATH_LITERAL("optimization-hints.pb");
+
 namespace {
 
 const char kDisableInstallerUpdate[] = "optimization-guide-disable-installer";
+
+const char kRulesetFormatVersionString[] = "1.0.0";
 
 // The extension id is: lmelglejhemejginpboagddgdfbepgmp
 const uint8_t kOptimizationHintsPublicKeySHA256[32] = {
@@ -42,8 +46,7 @@ const char
 
 OptimizationHintsComponentInstallerPolicy::
     OptimizationHintsComponentInstallerPolicy()
-    : ruleset_format_version_(
-          base::Version(optimization_guide::kRulesetFormatVersionString)) {
+    : ruleset_format_version_(base::Version(kRulesetFormatVersionString)) {
   DCHECK(ruleset_format_version_.IsValid());
 }
 
@@ -62,7 +65,7 @@ bool OptimizationHintsComponentInstallerPolicy::RequiresNetworkEncryption()
 
 update_client::CrxInstaller::Result
 OptimizationHintsComponentInstallerPolicy::OnCustomInstall(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(0);  // Nothing custom here.
 }
@@ -72,7 +75,7 @@ void OptimizationHintsComponentInstallerPolicy::OnCustomUninstall() {}
 void OptimizationHintsComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    base::Value::Dict manifest) {
+    base::DictValue manifest) {
   DCHECK(!install_dir.empty());
   DVLOG(1) << "Optimization Hints Version Ready: " << version.GetString();
   optimization_guide::OptimizationHintsComponentUpdateListener*
@@ -81,15 +84,14 @@ void OptimizationHintsComponentInstallerPolicy::ComponentReady(
   if (update_listener && !base::CommandLine::ForCurrentProcess()->HasSwitch(
                              kDisableInstallerUpdate)) {
     optimization_guide::HintsComponentInfo info(
-        version,
-        install_dir.Append(optimization_guide::kUnindexedHintsFileName));
+        version, install_dir.Append(kUnindexedHintsFileName));
     update_listener->MaybeUpdateHintsComponent(info);
   }
 }
 
 // Called during startup and installation before ComponentReady().
 bool OptimizationHintsComponentInstallerPolicy::VerifyInstallation(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
   return base::PathExists(install_dir);
 }

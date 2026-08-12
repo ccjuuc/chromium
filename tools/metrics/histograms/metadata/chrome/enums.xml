@@ -35,6 +35,16 @@ chromium-metrics-reviews@google.com.
   <int value="5" label="Blocklist disabled."/>
 </enum>
 
+<!-- LINT.IfChange(BrowserColorScheme) -->
+
+<enum name="BrowserColorScheme">
+  <int value="0" label="System"/>
+  <int value="1" label="Light"/>
+  <int value="2" label="Dark"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/themes/theme_service.h:BrowserColorScheme) -->
+
 <enum name="BuildStateUpdateType">
   <int value="0" label="No new version"/>
   <int value="1" label="Update available"/>
@@ -120,6 +130,7 @@ chromium-metrics-reviews@google.com.
   <int value="1" label="MatchFamilyNameCharacter"/>
   <int value="2" label="GetAllFamilyNames"/>
   <int value="3" label="LegacyMakeTypeface"/>
+  <int value="4" label="MatchLocalFont"/>
 </enum>
 
 <enum name="HeadlessChromeAction">
@@ -129,42 +140,6 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="DumpDom"/>
   <int value="4" label="Screenshot"/>
   <int value="5" label="PrintToPDF"/>
-</enum>
-
-<enum name="KAnonymityServiceJoinSetAction">
-  <int value="0" label="JoinSet"/>
-  <int value="1" label="JoinSetSuccess"/>
-  <int value="2" label="FetchJoinSetOHTTPKey"/>
-  <int value="3" label="FetchJoinSetOHTTPKeyFailed"/>
-  <int value="4" label="SendJoinSetRequest"/>
-  <int value="5" label="JoinSetRequestFailed"/>
-  <int value="6" label="JoinSetQueueFull"/>
-</enum>
-
-<enum name="KAnonymityServiceQuerySetAction">
-  <int value="0" label="QuerySet"/>
-  <int value="1" label="QuerySetsSuccess"/>
-  <int value="2" label="FetchQuerySetOHTTPKey"/>
-  <int value="3" label="FetchQuerySetOHTTPKeyFailed"/>
-  <int value="4" label="SendQuerySetRequest"/>
-  <int value="5" label="QuerySetRequestFailed"/>
-  <int value="6" label="QuerySetQueueFull"/>
-  <int value="7" label="QuerySetRequestParseError"/>
-</enum>
-
-<enum name="KAnonymityTrustTokenGetterAction">
-  <int value="0" label="TryGetTrustTokenAndKey"/>
-  <int value="1" label="GetTrustTokenSuccess"/>
-  <int value="2" label="RequestAccessToken"/>
-  <int value="3" label="AccessTokenRequestFailed"/>
-  <int value="4" label="FetchNonUniqueClientID"/>
-  <int value="5" label="FetchNonUniqueClientIDFailed"/>
-  <int value="6" label="FetchNonUniqueClientIDParseError"/>
-  <int value="7" label="FetchTrustTokenKey"/>
-  <int value="8" label="FetchTrustTokenKeyFailed"/>
-  <int value="9" label="FetchTrustTokenKeyParseError"/>
-  <int value="10" label="FetchTrustToken"/>
-  <int value="11" label="FetchTrustTokenFailed"/>
 </enum>
 
 <enum name="NetworkSandboxState">
@@ -187,23 +162,22 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="LOCK_ERROR"/>
 </enum>
 
-<enum name="NTSTATUS">
-  <int value="-1073741818" label="0xC0000006 - STATUS_IN_PAGE_ERROR"/>
-  <int value="-1073741810" label="0xC000000E - STATUS_NO_SUCH_DEVICE"/>
-  <int value="-1073741808" label="0xC0000010 - STATUS_INVALID_DEVICE_REQUEST"/>
-  <int value="-1073741803" label="0xC0000015 - STATUS_NONEXISTENT_SECTOR"/>
-  <int value="-1073741790" label="0xC0000022 - STATUS_ACCESS_DENIED"/>
-  <int value="-1073741764" label="0xC000003C - STATUS_DATA_OVERRUN"/>
-  <int value="-1073741697" label="0xC000007F - STATUS_DISK_FULL"/>
-  <int value="-1073741668" label="0xC000009C - STATUS_DEVICE_DATA_ERROR"/>
-  <int value="-1073741667" label="0xC000009D - STATUS_DEVICE_NOT_CONNECTED"/>
-  <int value="-1073741643" label="0xC00000B5 - STATUS_IO_TIMEOUT"/>
-  <int value="-1073741630" label="0xC00000C2 - STATUS_ADAPTER_HARDWARE_ERROR"/>
-  <int value="-1073741591" label="0xC00000E9 - STATUS_UNEXPECTED_IO_ERROR"/>
-  <int value="-1073741435" label="0xC0000185 - STATUS_IO_DEVICE_ERROR"/>
-  <int value="-1073740669" label="0xC0000483 - STATUS_DEVICE_HARDWARE_ERROR"/>
-  <int value="-1073740023" label="0xC0000709 - STATUS_HARDWARE_MEMORY_ERROR"/>
-  <int value="0" label="0x00000000 - STATUS_SUCCESS"/>
+<enum name="PageBlockingUpdate">
+  <int value="0" label="Unspecified"/>
+  <int value="1" label="chrome://"/>
+  <int value="2" label="New Tab Page"/>
+  <int value="3" label="about:blank"/>
+  <int value="4" label="chrome://whats-new"/>
+  <int value="5" label="Error - No Browser Object"/>
+  <int value="6" label="Error - No Tabs"/>
+</enum>
+
+<enum name="PendingUpdateState">
+  <int value="0" label="Unknown"/>
+  <int value="1" label="No update"/>
+  <int value="2" label="One window, one tab"/>
+  <int value="3" label="Multiple tabs or windows"/>
+  <int value="4" label="Backgrounded"/>
 </enum>
 
 <enum name="RemoteHungProcessTerminateReason">

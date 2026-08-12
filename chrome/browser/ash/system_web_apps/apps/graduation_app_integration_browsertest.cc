@@ -5,7 +5,6 @@
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/webui/graduation/url_constants.h"
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
@@ -17,6 +16,7 @@
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
@@ -47,7 +47,7 @@ class GraduationAppIntegrationTest : public ash::SystemWebAppIntegrationTest {
   void SetGraduationEnablement(bool is_enabled) {
     profile()->GetPrefs()->SetDict(
         ash::prefs::kGraduationEnablementStatus,
-        base::Value::Dict().Set("is_enabled", is_enabled));
+        base::DictValue().Set("is_enabled", is_enabled));
   }
 
   base::HistogramTester& histogram_tester() { return histogram_tester_; }

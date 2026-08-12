@@ -195,9 +195,7 @@ class AutomationEventWaiter
       const ui::AXScrollChange& details) override {}
   void DispatchTreeDestroyedEvent(ui::AXTreeID tree_id) override {}
   void DispatchActionResult(const ui::AXActionData& data,
-                            bool result,
-                            content::BrowserContext* browser_context) override {
-  }
+                            bool result) override {}
   void DispatchGetTextLocationDataResult(
       const ui::AXActionData& data,
       const std::optional<gfx::Rect>& rect) override {}
@@ -662,7 +660,7 @@ IN_PROC_BROWSER_TEST_F(AutomationManagerAuraBrowserTest, EventFromAction) {
 }
 
 // Verify that re-enabling AutomationManagerAura after disable will not cause
-// crash.  See https://crbug.com/1177042.
+// crash.  See https://crbug.com/40748249.
 IN_PROC_BROWSER_TEST_F(AutomationManagerAuraBrowserTest,
                        ReenableDoesNotCauseCrash) {
   AutomationManagerAura* manager = AutomationManagerAura::GetInstance();

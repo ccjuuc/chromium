@@ -6,27 +6,23 @@
 
 #include <memory>
 
-#include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/views/autofill/payments/dialog_view_ids.h"
 #include "chrome/browser/ui/views/autofill/payments/payments_view_util.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/grit/browser_resources.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/metrics/payments/virtual_card_enrollment_metrics.h"
 #include "components/autofill/core/browser/payments/legal_message_line.h"
 #include "components/autofill/core/browser/payments/payments_service_url.h"
 #include "components/autofill/core/browser/payments/virtual_card_enrollment_manager.h"
-#include "components/autofill/core/browser/ui/payments/payments_ui_closed_reasons.h"
 #include "components/autofill/core/browser/ui/payments/virtual_card_enroll_bubble_controller.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
-#include "components/grit/components_scaled_resources.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/bubble/bubble_frame_view.h"
-#include "ui/views/bubble/tooltip_icon.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/styled_label.h"
@@ -53,11 +49,10 @@ std::unique_ptr<views::Label> GetBadgeView() {
 }
 
 VirtualCardEnrollBubbleViews::VirtualCardEnrollBubbleViews(
-    views::View* anchor_view,
+    views::BubbleAnchor anchor,
     content::WebContents* web_contents,
     VirtualCardEnrollBubbleController* controller)
-    : AutofillLocationBarBubble(anchor_view, web_contents),
-      controller_(controller) {
+    : AutofillLocationBarBubble(anchor, web_contents), controller_(controller) {
   DCHECK(controller);
   SetButtonLabel(ui::mojom::DialogButton::kOk,
                  controller->GetUiModel().accept_action_text());
@@ -118,9 +113,17 @@ void VirtualCardEnrollBubbleViews::AddedToWidget() {
   header_view->AddChildView(std::move(image));
 
   GetBubbleFrameView()->SetHeaderView(std::move(header_view));
-  GetBubbleFrameView()->SetTitleView(
-      std::make_unique<TitleWithIconAfterLabelView>(
-          GetWindowTitle(), TitleWithIconAfterLabelView::Icon::GOOGLE_PAY));
+  if (base::FeatureList::IsEnabled(features::kAutofillEnableWalletBranding)) {
+    auto title_view = std::make_unique<views::Label>(
+        GetWindowTitle(), views::style::CONTEXT_DIALOG_TITLE);
+    title_view->SetHorizontalAlignment(gfx::ALIGN_TO_HEAD);
+    title_view->SetMultiLine(true);
+    GetBubbleFrameView()->SetTitleView(std::move(title_view));
+  } else {
+    GetBubbleFrameView()->SetTitleView(
+        std::make_unique<TitleWithIconAfterLabelView>(
+            GetWindowTitle(), TitleWithIconAfterLabelView::Icon::GOOGLE_PAY));
+  }
 }
 
 std::u16string VirtualCardEnrollBubbleViews::GetWindowTitle() const {
@@ -179,6 +182,8 @@ void VirtualCardEnrollBubbleViews::Init() {
       provider->GetDistanceMetric(views::DISTANCE_RELATED_CONTROL_HORIZONTAL));
   description_view->SetMainAxisAlignment(
       views::BoxLayout::MainAxisAlignment::kStart);
+  description_view->SetCrossAxisAlignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
 
   const VirtualCardEnrollmentFields virtual_card_enrollment_fields =
       controller_->GetUiModel().enrollment_fields();
@@ -305,7 +310,7 @@ void VirtualCardEnrollBubbleViews::LearnMoreLinkClicked() {
   if (controller()) {
     controller()->OnLinkClicked(
         VirtualCardEnrollmentLinkType::VIRTUAL_CARD_ENROLLMENT_LEARN_MORE_LINK,
-        autofill::payments::GetVirtualCardEnrollmentSupportUrl());
+        payments::GetVirtualCardEnrollmentSupportUrl());
   }
 }
 

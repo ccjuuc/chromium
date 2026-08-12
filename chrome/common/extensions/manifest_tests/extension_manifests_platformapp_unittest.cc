@@ -122,6 +122,8 @@ TEST_F(PlatformAppsManifestTest, PlatformAppContentSecurityPolicy) {
                                      "http://www.google.com", "default-src"));
 }
 
+#if BUILDFLAG(IS_CHROMEOS)
+// Platform apps are only available on ChromeOS.
 TEST_F(PlatformAppsManifestTest, CertainApisRequirePlatformApps) {
   // Put APIs here that should be restricted to platform apps, but that haven't
   // yet graduated from experimental.
@@ -136,14 +138,14 @@ TEST_F(PlatformAppsManifestTest, CertainApisRequirePlatformApps) {
   // testing. The requirements are that (1) it be a valid platform app, and (2)
   // it contain no permissions dictionary.
   std::string error;
-  std::optional<base::Value::Dict> platform_app_manifest =
+  std::optional<base::DictValue> platform_app_manifest =
       LoadManifest("init_valid_platform_app.json", &error);
   ASSERT_TRUE(platform_app_manifest);
 
   std::vector<ManifestData> manifests;
   // Create each manifest.
   for (const char* api_name : kPlatformAppExperimentalApis) {
-    base::Value::List permissions;
+    base::ListValue permissions;
     permissions.Append("experimental");
     permissions.Append(api_name);
     platform_app_manifest->Set("permissions", std::move(permissions));
@@ -164,5 +166,6 @@ TEST_F(PlatformAppsManifestTest, CertainApisRequirePlatformApps) {
     LoadAndExpectSuccess(manifest);
   }
 }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace extensions

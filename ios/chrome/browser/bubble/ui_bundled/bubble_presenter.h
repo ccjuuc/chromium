@@ -7,15 +7,19 @@
 
 #import <UIKit/UIKit.h>
 
+#import "base/feature_list.h"
 #import "base/memory/raw_ptr.h"
 
 @protocol BubblePresenterDelegate;
 @class BubbleViewControllerPresenter;
 @class FeedMetricsRecorder;
+@protocol FullscreenCommands;
 class FullscreenController;
+@protocol GeminiCommands;
 class HostContentSettingsMap;
 @class LayoutGuideCenter;
 class OverlayPresenter;
+@class SceneLayoutState;
 @protocol PageActionMenuEntryPointCommands;
 @protocol PopupMenuCommands;
 @protocol TabStripCommands;
@@ -43,6 +47,7 @@ class DeviceSwitcherResultDispatcher;
                      webStateList:(raw_ptr<WebStateList>)webStateList
              fullscreenController:
                  (raw_ptr<FullscreenController>)fullscreenController
+                      layoutState:(SceneLayoutState*)layoutState
     overlayPresenterForWebContent:
         (raw_ptr<OverlayPresenter>)webContentOverlayPresenter
                     infobarBanner:(raw_ptr<OverlayPresenter>)bannerPresenter
@@ -58,6 +63,12 @@ class DeviceSwitcherResultDispatcher;
 @property(nonatomic, weak) id<PageActionMenuEntryPointCommands>
     pageActionMenuEntryPointHandler;
 
+// Command handler for dispatching Fullscreen commands.
+@property(nonatomic, weak) id<FullscreenCommands> fullscreenHandler;
+
+// Command handler for dispatching Gemini commands.
+@property(nonatomic, weak) id<GeminiCommands> geminiHandler;
+
 // The view controller that presents the bubbles.
 @property(nonatomic, weak) UIViewController* rootViewController;
 
@@ -70,6 +81,14 @@ class DeviceSwitcherResultDispatcher;
 // menu's entrypoint. The eligibility can depend on the UI hierarchy at the
 // moment, the configuration and the display history of the bubble, etc.
 - (void)presentHomeCustomizationTipBubble;
+
+// Optionally presents a help bubble associated with the NTP customization
+// menu's entrypoint, including background customization. The eligibility can
+// depend on the UI hierarchy at the moment, the configuration and the display
+// history of the bubble, etc. Unlike other bubbles, this bubble should be
+// controlled by the Feature Engagement Tracker externally to this class. This
+// class does not check the FET for this bubble.
+- (void)presentHomeBackgroundCustomizationTipBubble;
 
 // Optionally presents a help bubble to let the user know that they can change
 // the default mode (Desktop/Mobile) of the websites. The eligibility can depend
@@ -112,6 +131,10 @@ class DeviceSwitcherResultDispatcher;
 // identity disc on the New Tab page to switch accounts.
 - (void)presentSwitchAccountsWithNTPAccountParticleDiscBubble;
 
+// Optionally presents a bubble informing the user that they can pin a custom
+// site to the most visited tiles.
+- (void)presentPinSiteToMostVisitedTilesBubble;
+
 // Optionally presents a gesture IPH associated with the pull-to-refresh
 // feature. The eligibility can depend on the UI hierarchy at the moment, the
 // configuration and the display history of the bubble, etc.
@@ -145,10 +168,18 @@ class DeviceSwitcherResultDispatcher;
 // Optionally present a bubble associated with the page action menu icon in the
 // Omnibox. The eligibility is based off if the BWG Promo was shown and
 // dismissed.
-- (void)presentPageActionMenuBubble;
+- (void)presentPageActionMenuBubbleForFeature:(const base::Feature&)feature;
 
 // Optionally presents a bubble associated with the reader mode options.
 - (void)presentReaderModeOptionsBubble;
+
+// Optionally presents a bubble associated with the Gemini image remix feature
+// (Page Action Menu entry point).
+- (void)presentGeminiImageRemixBubbleWithGeminiHandler:
+            (id<GeminiCommands>)geminiHandler
+                       pageActionMenuEntryPointHandler:
+                           (id<PageActionMenuEntryPointCommands>)
+                               pageActionMenuEntryPointHandler;
 
 // Delegate method to be invoked when the user has performed a swipe on the
 // toolbar to switch tabs. Remove `toolbarSwipeGestureIPH` if visible.

@@ -31,6 +31,17 @@ enum class ComputedTargetResult {
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/actor/enums.xml:ComputedTargetResult)
 
+// LINT.IfChange(RendererResolvedTargetResult)
+// These enum values are persisted to logs.  Do not renumber or reuse numeric
+// values.
+enum class RendererResolvedTargetResult {
+  kSuccess = 0,
+  kMissingActorTabData = 1,
+  kRendererResolvedTargetHasNoValue = 2,
+  kMaxValue = kRendererResolvedTargetHasNoValue,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/actor/enums.xml:RendererResolvedTargetResult)
+
 // LINT.IfChange(ModelPageTargetType)
 // These enum values are persisted to logs.  Do not renumber or reuse numeric
 // values.
@@ -40,6 +51,18 @@ enum class ModelPageTargetType {
   kMaxValue = kPoint,
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/actor/enums.xml:ModelPageTargetType)
+
+// LINT.IfChange(ActorUiTaskIconError)
+enum class ActorUiTaskIconError {
+  // Counts the number of times we try to create a task list bubble row for an
+  // invalid task id. Invalid meaning not in active or inactive task records.
+  kBubbleTaskDoesntExist = 0,
+  // Counts the number of times we try to create a task icon/nudge for an
+  // invalid task id. Invalid meaning not in active or inactive task records.
+  kNudgeTaskDoesntExist = 1,
+  kMaxValue = kNudgeTaskDoesntExist,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/actor/enums.xml:ActorUiTaskIconError)
 
 }  // namespace actor::ui
 

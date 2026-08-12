@@ -35,6 +35,8 @@ class ChromeSecurityDelegate : public exo::SecurityDelegate {
   bool CanSelfActivate(aura::Window* window) const override;
   bool CanLockPointer(aura::Window* window) const override;
   SetBoundsPolicy CanSetBounds(aura::Window* window) const override;
+  bool CanAccessRemoteShell() const override;
+  bool CanSetRestoreInfo() const override;
   std::vector<ui::FileInfo> GetFilenames(
       ui::EndpointType source,
       const std::vector<uint8_t>& data) const override;
@@ -46,6 +48,12 @@ class ChromeSecurityDelegate : public exo::SecurityDelegate {
                   SendDataCallback callback) override;
 
   virtual std::string GetVmName(ui::EndpointType target) const;
+
+ private:
+  // Many TAST tests do not have the setup to inject clicks to activate windows
+  // for tests. Nor do they have permissions set to allow `CanSelfActivate`.
+  // For these we validate the presence of test flags to allow them to activate.
+  bool self_activation_test_override_ = false;
 };
 
 }  // namespace ash

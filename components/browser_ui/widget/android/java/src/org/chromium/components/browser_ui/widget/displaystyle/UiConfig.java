@@ -26,16 +26,22 @@ public class UiConfig {
     private static final boolean DEBUG = false;
 
     private DisplayStyle mCurrentDisplayStyle;
+    private int mHorizontalInsetDp;
 
     private final List<DisplayStyleObserver> mObservers = new ArrayList<>();
     private final Context mContext;
+    private final View mView;
+    private final View.OnAttachStateChangeListener mOnAttachStateChangeListener;
 
-    /** @param referenceView the View we observe to deduce the configuration from. */
+    /**
+     * @param referenceView the View we observe to deduce the configuration from.
+     */
     public UiConfig(View referenceView) {
+        mView = referenceView;
         mContext = referenceView.getContext();
         mCurrentDisplayStyle = computeDisplayStyleForCurrentConfig();
 
-        referenceView.addOnAttachStateChangeListener(
+        mOnAttachStateChangeListener =
                 new View.OnAttachStateChangeListener() {
                     @Override
                     public void onViewAttachedToWindow(View v) {
@@ -44,7 +50,9 @@ public class UiConfig {
 
                     @Override
                     public void onViewDetachedFromWindow(View v) {}
-                });
+                };
+
+        mView.addOnAttachStateChangeListener(mOnAttachStateChangeListener);
     }
 
     /**
@@ -66,9 +74,28 @@ public class UiConfig {
         assert success;
     }
 
-    /** @return The context for the view associated with this UiConfig. */
+    public void destroy() {
+        mView.removeOnAttachStateChangeListener(mOnAttachStateChangeListener);
+        mObservers.clear();
+    }
+
+    /**
+     * @return The context for the view associated with this UiConfig.
+     */
     public Context getContext() {
         return mContext;
+    }
+
+    /**
+     * Sets the horizontal inset, which indicates that the reference view won't take up the full
+     * width of the window (e.g. native page shrinks to account for SideUI). Refreshes the display
+     * style, accordingly.
+     *
+     * @param horizontalInsetDp The new horizontal inset, in DP.
+     */
+    public void setHorizontalInset(int horizontalInsetDp) {
+        mHorizontalInsetDp = horizontalInsetDp;
+        updateDisplayStyle();
     }
 
     /** Refresh the display style, notify observers of changes. */
@@ -94,7 +121,7 @@ public class UiConfig {
     }
 
     private DisplayStyle computeDisplayStyleForCurrentConfig() {
-        int widthDp = mContext.getResources().getConfiguration().screenWidthDp;
+        int widthDp = mContext.getResources().getConfiguration().screenWidthDp - mHorizontalInsetDp;
         int heightDp = mContext.getResources().getConfiguration().screenHeightDp;
 
         @HorizontalDisplayStyle int newHorizontalDisplayStyle;

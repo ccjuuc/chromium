@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <atomic>
 #include <iterator>
 #include <map>
@@ -13,12 +14,12 @@
 #include <utility>
 
 #include "apps/launcher.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/constants/web_app_id_constants.h"
 #include "ash/public/cpp/stylus_utils.h"
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -37,7 +38,6 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_bridge.h"
 #include "chromeos/ash/experiences/arc/metrics/arc_metrics_constants.h"
 #include "chromeos/ash/experiences/arc/metrics/arc_metrics_service.h"
@@ -86,7 +86,7 @@ const char* const kDefaultAllowedAppIds[] = {
 };
 
 // Types of App Service apps that support note taking.
-// TODO (crbug.com/1336120): Add Android here.
+// TODO (crbug.com/40228788): Add Android here.
 const apps::AppType kNoteTakingAppTypes[] = {apps::AppType::kWeb,
                                              apps::AppType::kChromeApp};
 
@@ -96,7 +96,7 @@ bool LooksLikeAndroidPackageName(const std::string& app_id) {
   // Android package names are required to contain at least one period (see
   // validateName() in PackageParser.java), while Chrome extension IDs and web
   // app IDs contain only characters in [a-p].
-  return base::Contains(app_id, '.');
+  return app_id.contains('.');
 }
 
 bool IsInstalledApp(const std::string& app_id, Profile* profile) {
@@ -296,7 +296,7 @@ std::vector<NoteTakingAppInfo> NoteTakingHelper::GetAvailableApps(
 
   // Determine which app, if any, is selected as the preferred note taking app.
   const std::string pref_app_id =
-      profile->GetPrefs()->GetString(prefs::kNoteTakingAppId);
+      profile->GetPrefs()->GetString(ash::prefs::kNoteTakingAppId);
   for (auto& info : infos) {
     if (info.app_id == pref_app_id) {
       info.preferred = true;
@@ -308,7 +308,8 @@ std::vector<NoteTakingAppInfo> NoteTakingHelper::GetAvailableApps(
 }
 
 std::string NoteTakingHelper::GetPreferredAppId(Profile* profile) {
-  std::string app_id = profile->GetPrefs()->GetString(prefs::kNoteTakingAppId);
+  std::string app_id =
+      profile->GetPrefs()->GetString(ash::prefs::kNoteTakingAppId);
   if (IsInstalledApp(app_id, profile))
     return app_id;
   return std::string();
@@ -319,10 +320,11 @@ void NoteTakingHelper::SetPreferredApp(Profile* profile,
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(profile);
 
-  if (app_id == profile->GetPrefs()->GetString(prefs::kNoteTakingAppId))
+  if (app_id == profile->GetPrefs()->GetString(ash::prefs::kNoteTakingAppId)) {
     return;
+  }
 
-  profile->GetPrefs()->SetString(prefs::kNoteTakingAppId, app_id);
+  profile->GetPrefs()->SetString(ash::prefs::kNoteTakingAppId, app_id);
 
   for (Observer& observer : observers_)
     observer.OnPreferredNoteTakingAppUpdated(profile);
@@ -339,7 +341,8 @@ void NoteTakingHelper::LaunchAppForNewNote(Profile* profile) {
   DCHECK(profile);
 
   LaunchResult result = LaunchResult::NO_APP_SPECIFIED;
-  std::string app_id = profile->GetPrefs()->GetString(prefs::kNoteTakingAppId);
+  std::string app_id =
+      profile->GetPrefs()->GetString(ash::prefs::kNoteTakingAppId);
   if (!app_id.empty())
     result = LaunchAppInternal(profile, app_id);
   UMA_HISTOGRAM_ENUMERATION(kPreferredLaunchResultHistogramName,
@@ -433,49 +436,10 @@ NoteTakingHelper::NoteTakingHelper()
   // Track profiles so we can observe their app registries.
   profile_manager_observation_.Observe(g_browser_process->profile_manager());
   play_store_enabled_ = false;
-  for (Profile* profile :
-       g_browser_process->profile_manager()->GetLoadedProfiles()) {
-    if (apps::AppServiceProxyFactory::IsAppServiceAvailableForProfile(
-            profile)) {
-      auto& cache = apps::AppServiceProxyFactory::GetForProfile(profile)
-                        ->AppRegistryCache();
-      if (app_registry_observations_.IsObservingSource(&cache)) {
-        base::debug::DumpWithoutCrashing();
-      } else {
-        app_registry_observations_.AddObservation(&cache);
-      }
-    }
-
-    // Check if the profile has already enabled Google Play Store.
-    // IsArcPlayStoreEnabledForProfile() can return true only for the primary
-    // profile.
-    play_store_enabled_ |= arc::IsArcPlayStoreEnabledForProfile(profile);
-
-    // ArcIntentHelperBridge will notify us about changes to the list of
-    // available Android apps.
-    auto* bridge = arc::ArcIntentHelperBridge::GetForBrowserContext(profile);
-    if (bridge) {
-      if (arc_intent_helper_observations_.IsObservingSource(bridge)) {
-        base::debug::DumpWithoutCrashing();
-      } else {
-        arc_intent_helper_observations_.AddObservation(bridge);
-      }
-    }
-  }
 
   // Watch for changes of Google Play Store enabled state.
   auto* session_manager = arc::ArcSessionManager::Get();
   session_manager->AddObserver(this);
-
-  // If the ARC intent helper is ready, get the Android apps. Otherwise,
-  // UpdateAndroidApps() will be called when ArcServiceManager calls
-  // OnIntentFiltersUpdated().
-  if (play_store_enabled_ && arc::ArcServiceManager::Get()
-                                 ->arc_bridge_service()
-                                 ->intent_helper()
-                                 ->IsConnected()) {
-    UpdateAndroidApps();
-  }
 }
 
 NoteTakingHelper::~NoteTakingHelper() {
@@ -499,10 +463,10 @@ std::vector<std::string> NoteTakingHelper::GetNoteTakingAppIds(
     cache.ForOneApp(id, [&app_ids](const apps::AppUpdate& update) {
       if (!apps_util::IsInstalled(update.Readiness()))
         return;
-      if (!base::Contains(kNoteTakingAppTypes, update.AppType())) {
+      if (!std::ranges::contains(kNoteTakingAppTypes, update.AppType())) {
         return;
       }
-      DCHECK(!base::Contains(app_ids, update.AppId()));
+      DCHECK(!std::ranges::contains(app_ids, update.AppId()));
       app_ids.push_back(update.AppId());
     });
   }
@@ -510,10 +474,10 @@ std::vector<std::string> NoteTakingHelper::GetNoteTakingAppIds(
   cache.ForEachApp([&app_ids](const apps::AppUpdate& update) {
     if (!apps_util::IsInstalled(update.Readiness()))
       return;
-    if (base::Contains(app_ids, update.AppId())) {
+    if (std::ranges::contains(app_ids, update.AppId())) {
       return;
     }
-    if (!base::Contains(kNoteTakingAppTypes, update.AppType())) {
+    if (!std::ranges::contains(kNoteTakingAppTypes, update.AppType())) {
       return;
     }
     if (HasNoteTakingIntentFilter(update.IntentFilters())) {
@@ -641,13 +605,13 @@ NoteTakingHelper::LaunchResult NoteTakingHelper::LaunchAppInternal(
 }
 
 void NoteTakingHelper::OnAppUpdate(const apps::AppUpdate& update) {
-  if (!base::Contains(kNoteTakingAppTypes, update.AppType())) {
+  if (!std::ranges::contains(kNoteTakingAppTypes, update.AppType())) {
     return;
   }
   // App was added, removed, enabled, or disabled.
   if (!update.ReadinessChanged())
     return;
-  if (!base::Contains(force_allowed_app_ids_, update.AppId()) &&
+  if (!std::ranges::contains(force_allowed_app_ids_, update.AppId()) &&
       !HasNoteTakingIntentFilter(update.IntentFilters())) {
     return;
   }

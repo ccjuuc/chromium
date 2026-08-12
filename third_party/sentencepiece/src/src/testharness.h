@@ -20,13 +20,18 @@
 #include <sstream>
 #include <string>
 
+#include "common.h"
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
 #include "absl/strings/string_view.h"
-#include "common.h"
 
 ABSL_DECLARE_FLAG(std::string, test_tmpdir);
 ABSL_DECLARE_FLAG(std::string, test_srcdir);
+
+namespace testing {
+inline std::string TempDir() { return absl::GetFlag(FLAGS_test_tmpdir); }
+inline std::string SrcDir() { return absl::GetFlag(FLAGS_test_srcdir); }
+}  // namespace testing
 
 namespace sentencepiece {
 namespace test {
@@ -60,10 +65,7 @@ class Tester {
     return *this;
   }
 
-  Tester& IsNear(double val1,
-                 double val2,
-                 double abs_error,
-                 const char* msg1,
+  Tester& IsNear(double val1, double val2, double abs_error, const char* msg1,
                  const char* msg2) {
     const double diff = std::fabs(val1 - val2);
     if (diff > abs_error) {
@@ -131,15 +133,9 @@ class Tester {
   sentencepiece::test::Tester(__FILE__, __LINE__).IsLt((a), (b), #a, #b)
 #define EXPECT_NEAR(a, b, c) \
   sentencepiece::test::Tester(__FILE__, __LINE__).IsNear((a), (b), (c), #a, #b)
-#define EXPECT_OK(c) EXPECT_EQ(c, ::sentencepiece::util::OkStatus())
-#define EXPECT_NOT_OK(c) EXPECT_NE(c, ::sentencepiece::util::OkStatus())
-
-#define EXPECT_DEATH(statement, condition)   \
-  {                                          \
-    sentencepiece::error::SetTestCounter(1); \
-    statement;                               \
-    sentencepiece::error::SetTestCounter(0); \
-  };
+#define EXPECT_OK(c) EXPECT_TRUE((c).ok())
+#define EXPECT_NOT_OK(c) EXPECT_FALSE((c).ok())
+#define ASSERT_OK(c) ASSERT_TRUE((c).ok())
 
 #define ASSERT_TRUE EXPECT_TRUE
 #define ASSERT_FALSE EXPECT_FALSE
@@ -152,7 +148,6 @@ class Tester {
 #define ASSERT_LT EXPECT_LT
 #define ASSERT_NEAR EXPECT_NEAR
 #define ASSERT_NOT_OK EXPECT_NOT_OK
-#define ASSERT_DEATH ASSERT_DEATH
 
 template <typename T>
 class TestWithParam {
@@ -195,16 +190,12 @@ std::vector<T> ValuesIn(const std::vector<T>& v) {
   std::vector<base::ParamType> TCONCAT(base, _get_params_, base)(); \
   class TCONCAT(base, _Test_p_, name) : public base {               \
    public:                                                          \
-    const std::vector<ParamType> GetParams() const {                \
+    std::vector<ParamType> GetParams() const {                      \
       return TCONCAT(base, _get_params_, base)();                   \
     }                                                               \
     ParamType param_;                                               \
-    void SetParam(const ParamType& param) {                         \
-      param_ = param;                                               \
-    }                                                               \
-    const ParamType GetParam() {                                    \
-      return param_;                                                \
-    }                                                               \
+    void SetParam(const ParamType& param) { param_ = param; }       \
+    ParamType GetParam() const { return param_; }                   \
     void _Run();                                                    \
     static void _RunIt() {                                          \
       TCONCAT(base, _Test_p_, name) t;                              \

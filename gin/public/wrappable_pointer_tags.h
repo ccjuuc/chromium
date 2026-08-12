@@ -20,11 +20,17 @@ namespace gin {
 enum WrappablePointerTag : uint16_t {
   // The type tags for gin::Wrappable start at the end of the value range to
   // avoid overlaps with the type tags of blink::ScriptWrappable.
-  kFirstPointerTag = 1601,
+  // LINT.IfChange(LastGeneratedScriptWrappableTag)
+  kFirstPointerTag = 2101,
+  // LINT.ThenChange(third_party/blink/renderer/platform/bindings/wrapper_type_info.h)
+  // keep-sorted start case=no
   kAccessibilityControllerBindings,  // content::AccessibilityControllerBindings
   kAPIBindingBridge,                 // extensions::APIBindingBridge
   kAPIBindingJSUtil,                 // extensions::APIBindingJSUtil
   kAutomationPosition,               // ui::AutomationPosition
+  kBeijingPageApi,                   // beijing::JSBeijingApi
+  kBeijingRenderDllApi,              // beijing::JSRenderDllApi
+  kBenchmarkingBindings,             // BenchmarkingBindings
   kChromePluginPlaceholder,          // ChromePluginPlaceholder
   kChromeSetting,                    // extensions::ChromeSetting
   kContentSetting,                   // extensions::ContentSetting
@@ -37,11 +43,14 @@ enum WrappablePointerTag : uint16_t {
   kGinJavaBridgeObject,              // content::GinJavaBridgeObject
   kGinPort,                          // extensions::GinPort
   kGpuBenchmarking,                  // content::GpuBenchmarking
+  kIndigoContext,                    // indigo::IndigoContext
+  kIndigoOnboarding,                 // indigo::OnboardingContext
   kJsBinding,                        // js_injection::JsBinding
+  kJSHookInterface,                  // extensions::JSHookInterface
   kJsMessageEvent,                   // android_webview::JsMessageEvent
   kJsSandboxMessagePort,             // android_webview::JsSandboxMessagePort
-  kJSHookInterface,                  // extensions::JSHookInterface
   kLastErrorObject,                  // extensions::LastErrorObject
+  kLoadTimesBindings,                // LoadTimesBindings
   kLocalStorageArea,                 // extensions::LocalStorageArea
   kManagedStorageArea,               // extensions::ManagedStorageArea
   kMojo,                             // ax::Mojo
@@ -59,7 +68,6 @@ enum WrappablePointerTag : uint16_t {
   kSearchBoxBindings,            // SearchBoxBindings
   kSecurityInterstitialPageController,  // SecurityInterstitialPageController
   kSessionStorageArea,                  // extensions::SessionStorageArea
-  kSharedStorageMethod,                 // auction_worklet::SharedStorageMethod
   kSkiaBenchmarking,                    // content::SkiaBenchmarking
   kStatsCollectionController,           // content::StatsCollectionController
   kSupervisedUserErrorPageController,   // SupervisedUserErrorPageController
@@ -74,16 +82,24 @@ enum WrappablePointerTag : uint16_t {
   kTextInputControllerBindings,  // content::TextInputControllerBindings
   kWebAXObjectProxy,             // content::WebAXObjectProxy
   kWrappedExceptionHandler,      // extensions::WrappedExceptionHandler
+  kWrappedHandlerFunction,       // extensions::WrappedHandlerFunction
   kXenonPageApi,                 // xenon::JSXenonApi
-  kBeijingPageApi,               // beijing::JSBeijingApi
-  kBeijingRenderDllApi,          // beijing::JSRenderDllApi
-  kLastPointerTag = kBeijingRenderDllApi,
+  // keep-sorted end
+  kLastPointerTag,
 };
 
 static_assert(kLastPointerTag <
                   static_cast<uint16_t>(v8::CppHeapPointerTag::kZappedEntryTag),
               "The defined type tags exceed the range of allowed tags. Adjust "
               "the start value of this enum such that all values fit.");
+
+constexpr v8::CppHeapPointerTagRange kGinWrappableTagRange(
+    static_cast<v8::CppHeapPointerTag>(kFirstPointerTag),
+    static_cast<v8::CppHeapPointerTag>(kLastPointerTag));
+
+static_assert(
+    v8::kObjectWrappableTagRange.Contains(kGinWrappableTagRange),
+    "gin::Wrappable tag range must be within kObjectWrappableTagRange");
 
 }  // namespace gin
 

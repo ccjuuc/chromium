@@ -7,7 +7,6 @@
 
 #include <string>
 
-#include "base/byte_count.h"
 #include "base/byte_size.h"
 #include "base/component_export.h"
 
@@ -50,7 +49,7 @@ COMPONENT_EXPORT(UI_BASE) DataUnits GetByteDisplayUnits(base::ByteSize bytes);
 //
 // For example:
 //   FormatBytes(base::ByteSize(512), DataUnits::kKibibyte, true) => "0.5 kB"
-//   FormatBytes(base::KiB(10), DataUnits::kMebibyte, false) => "0.1"
+//   FormatBytes(base::KiBU(10), DataUnits::kMebibyte, false) => "0.1"
 COMPONENT_EXPORT(UI_BASE)
 std::u16string FormatBytesWithUnits(base::ByteSize bytes,
                                     DataUnits units,
@@ -60,26 +59,11 @@ std::u16string FormatBytesWithUnits(base::ByteSize bytes,
 //
 // For example:
 //   FormatSpeed(base::ByteSize(512), DataUnits::kKibibyte, true) => "0.5 kB/s"
-//   FormatSpeed(base::KiB(10), DataUnits::kMebibyte, false) => "0.1"
+//   FormatSpeed(base::KiBU(10), DataUnits::kMebibyte, false) => "0.1"
 COMPONENT_EXPORT(UI_BASE)
 std::u16string FormatSpeedWithUnits(base::ByteSize bytes,
                                     DataUnits units,
                                     bool show_units);
-
-// START DEPRECATED versions of the above for base::ByteCount.
-// TODO(https://crbug.com/448661443): Remove.
-COMPONENT_EXPORT(UI_BASE) std::u16string FormatBytes(base::ByteCount bytes);
-COMPONENT_EXPORT(UI_BASE) std::u16string FormatSpeed(base::ByteCount bytes);
-COMPONENT_EXPORT(UI_BASE) DataUnits GetByteDisplayUnits(base::ByteCount bytes);
-COMPONENT_EXPORT(UI_BASE)
-std::u16string FormatBytesWithUnits(base::ByteCount bytes,
-                                    DataUnits units,
-                                    bool show_units);
-COMPONENT_EXPORT(UI_BASE)
-std::u16string FormatSpeedWithUnits(base::ByteCount bytes,
-                                    DataUnits units,
-                                    bool show_units);
-// END DEPRECATED versions of the above for base::ByteCount.
 
 }  // namespace ui
 

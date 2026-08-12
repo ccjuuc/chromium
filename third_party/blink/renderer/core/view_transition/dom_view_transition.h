@@ -34,11 +34,11 @@ class CORE_EXPORT DOMViewTransition : public ScriptWrappable,
 
  public:
   // Constructor for navigation-initiated view transition.
-  explicit DOMViewTransition(ExecutionContext&, ViewTransition&);
+  explicit DOMViewTransition(ExecutionContext*, ViewTransition&);
 
   // Constructor for script-initiated view transition. Also delegated from the
   // navigation-initiated constructor.
-  explicit DOMViewTransition(ExecutionContext&,
+  explicit DOMViewTransition(ExecutionContext*,
                              ViewTransition&,
                              V8ViewTransitionCallback*);
 
@@ -60,7 +60,8 @@ class CORE_EXPORT DOMViewTransition : public ScriptWrappable,
 
   // Called from ViewTransition when the transition is skipped/aborted for any
   // reason.
-  void DidSkipTransition(ViewTransition::PromiseResponse);
+  void DidSkipTransition(ViewTransition::PromiseResponse,
+                         ViewTransitionSkipReason reason);
 
   // Called just after the associated ViewTransition advances into the
   // kAnimating state but before any animation frames have been produced.
@@ -79,8 +80,10 @@ class CORE_EXPORT DOMViewTransition : public ScriptWrappable,
   class WaitUntilPromiseSettledCallback;
 
   void AtMicrotask(ViewTransition::PromiseResponse response,
+                   ViewTransitionSkipReason reason,
                    PromiseProperty* resolver);
   void HandlePromise(ViewTransition::PromiseResponse response,
+                     ViewTransitionSkipReason reason,
                      PromiseProperty* property);
 
   friend class DOMChangeFinishedCallback;
@@ -97,6 +100,7 @@ class CORE_EXPORT DOMViewTransition : public ScriptWrappable,
   Member<PromiseProperty> finished_promise_property_;
   Member<PromiseProperty> ready_promise_property_;
   Member<PromiseProperty> dom_updated_promise_property_;
+  bool mark_promises_as_handled_ = false;
 
   // The task attribution task state to be restored for `update_dom_callback_`,
   // captured on startViewTransition() path.

@@ -205,6 +205,8 @@ used when committed.
 *   [Code Coverage](testing/code_coverage.md) - Code coverage for Chromium.
 *   [Code Coverage in Gerrit](testing/code_coverage_in_gerrit.md) - Per-CL code
     coverage in Gerrit to assist code reviews.
+*   [Chrome for Testing](chrome_for_testing/README.md) - The functional and behavioral differences of Chrome for Testing from standard Chrome.
+*   [Chrome for Testing configuration](chrome_for_testing/chrome_for_testing_configuration.md) - Customizing Chrome for Testing required components installation and UI behavior.
 
 ### Configuration Docs
 
@@ -213,6 +215,7 @@ used when committed.
 *   [Runtime Enabled Features](https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/platform/RuntimeEnabledFeatures.md)
 *   [Initialization of Blink runtime features in content layer](initialize_blink_features.md)
 *   [Integrating a feature with the origin trials framework](origin_trials_integration.md)
+*   [Custom Type Helpers for Origin-Trial-Controlled HTML Elements](custom_type_helpers_for_origin_trial_elements.md)
 
 ### GPU-related docs
 *   [GPU Pixel Wrangling](gpu/pixel_wrangling.md) - Instructions for GPU
@@ -441,6 +444,9 @@ used when committed.
 *   [Chrome Speed](speed/README.md) - Documentation for performance measurements and regressions in Chrome.
 *   [Chrome Speed Metrics](speed_metrics/README.md) - Documentation about user experience metrics on the web and their JavaScript APIs.
 
+### Stability
+*   [Overview of stability/crash metrics and reporting](stability.md) - Describes the different ways Chrome monitors stability and attempts to improve stability.
+
 ### UI
 *   [Chromium UI Platform](ui/index.md) - All things user interface
 
@@ -470,8 +476,8 @@ a video series of interviews with Chromium software engineers.
 *   [WebView Policies](webview_policies.md)
 *   [Linux Profiling](linux/profiling.md) - How to profile Chromium on Linux
 *   [Linux Graphics Pipeline](linux/graphics_pipeline.md)
-*   [Linux `SUID` Sandbox](linux/suid_sandbox.md) - Sandboxing renderers using a
-    SUID binary on Linux
+*   [Linux `SUID` Sandbox](../sandbox/linux/README.md) - Sandboxing renderers
+    using a SUID binary on Linux
 *   [Linux `SUID` Sandbox Development](linux/suid_sandbox_development.md) -
     Development on the above system.
 *   [Linux PID Namespace Support](linux/pid_namespace_support.md)

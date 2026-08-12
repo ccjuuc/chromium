@@ -10,6 +10,8 @@
 #include "ash/shell.h"
 #include "ash/system/privacy_hub/privacy_hub_controller.h"
 #include "ash/webui/settings/public/constants/routes.mojom-forward.h"
+#include "ash/webui/settings/public/constants/routes_util.h"
+#include "base/functional/bind.h"
 #include "base/notreached.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/test/device_state_mixin.h"
@@ -19,7 +21,6 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/login/user_adding_screen.h"
-#include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/privacy/privacy_hub_handler.h"
 #include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
@@ -296,17 +297,24 @@ IN_PROC_BROWSER_TEST_F(PrivacyHubGeolocationBrowsertestCheckSystemSettingsLink,
           ash::BrowserContextHelper::Get()->GetBrowserContextByAccountId(
               primary_user_)))
       ->InstallSystemAppsForTesting();
+
+  const GURL expected_url = chromeos::settings::GetOSSettingsUrl(
+      chromeos::settings::mojom::kPrivacyHubGeolocationSubpagePath);
+  auto settings_filter = base::BindRepeating(
+      [](const GURL& expected_url, content::WebContents* web_contents) {
+        return web_contents->GetLastCommittedURL() == expected_url;
+      },
+      expected_url);
+
   {
-    content::CreateAndLoadWebContentsObserver app_loaded_observer;
+    content::CreateAndLoadWebContentsObserver app_loaded_observer(
+        /*num_expected_contents=*/1, settings_filter);
     // Directly call the underlying method to simulate the link click.
     privacy_hub_util::OpenSystemSettings(
         privacy_hub_util::ContentType::GEOLOCATION);
     auto* web_contents = app_loaded_observer.Wait();
     ASSERT_TRUE(web_contents);
-    EXPECT_EQ(
-        web_contents->GetURL(),
-        chrome::GetOSSettingsUrl(
-            chromeos::settings::mojom::kPrivacyHubGeolocationSubpagePath));
+    EXPECT_EQ(web_contents->GetURL(), expected_url);
     EXPECT_EQ(primary_user_,
               *ash::AnnotatedAccountId::Get(web_contents->GetBrowserContext()));
   }
@@ -323,16 +331,14 @@ IN_PROC_BROWSER_TEST_F(PrivacyHubGeolocationBrowsertestCheckSystemSettingsLink,
       ->InstallSystemAppsForTesting();
 
   {
-    content::CreateAndLoadWebContentsObserver app_loaded_observer;
+    content::CreateAndLoadWebContentsObserver app_loaded_observer(
+        /*num_expected_contents=*/1, settings_filter);
     // Directly call the underlying method to simulate the link click.
     privacy_hub_util::OpenSystemSettings(
         privacy_hub_util::ContentType::GEOLOCATION);
     auto* web_contents = app_loaded_observer.Wait();
     ASSERT_TRUE(web_contents);
-    EXPECT_EQ(
-        web_contents->GetURL(),
-        chrome::GetOSSettingsUrl(
-            chromeos::settings::mojom::kPrivacyHubGeolocationSubpagePath));
+    EXPECT_EQ(web_contents->GetURL(), expected_url);
     EXPECT_EQ(secondary_user_,
               *ash::AnnotatedAccountId::Get(web_contents->GetBrowserContext()));
   }

@@ -22,7 +22,6 @@ import android.widget.TextView;
 
 import androidx.annotation.VisibleForTesting;
 import androidx.appcompat.app.AlertDialog;
-import androidx.appcompat.content.res.AppCompatResources;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceViewHolder;
 
@@ -92,8 +91,7 @@ public class AddExceptionPreference extends Preference
         setKey(key);
         Resources resources = context.getResources();
         mErrorColor = context.getColor(R.color.default_red);
-        ColorStateList textColorList =
-                AppCompatResources.getColorStateList(context, R.color.default_text_color_list);
+        ColorStateList textColorList = context.getColorStateList(R.color.default_text_color_list);
         mDefaultColor = textColorList.getDefaultColor();
 
         int enabledAccentColor = SemanticColorUtils.getDefaultControlColorActive(context);
@@ -145,21 +143,17 @@ public class AddExceptionPreference extends Preference
         }
 
         DialogInterface.OnClickListener onClickListener =
-                new DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(DialogInterface dialog, int button) {
-                        if (button == AlertDialog.BUTTON_POSITIVE) {
-                            int categoryType = mCategory.getType();
-                            boolean isChecked = checkBox.isChecked();
-                            String pattern = input.getText().toString().trim();
-                            pattern = updatePatternIfNeeded(pattern, categoryType, isChecked);
-                            String primary = getPrimaryPattern(pattern, categoryType, isChecked);
-                            String secondary =
-                                    getSecondaryPattern(pattern, categoryType, isChecked);
-                            mSiteAddedCallback.onAddSite(primary, secondary);
-                        } else {
-                            dialog.dismiss();
-                        }
+                (dialog, button) -> {
+                    if (button == AlertDialog.BUTTON_POSITIVE) {
+                        int categoryType = mCategory.getType();
+                        boolean isChecked = checkBox.isChecked();
+                        String pattern = input.getText().toString().trim();
+                        pattern = updatePatternIfNeeded(pattern, categoryType, isChecked);
+                        String primary = getPrimaryPattern(pattern, categoryType, isChecked);
+                        String secondary = getSecondaryPattern(pattern, categoryType, isChecked);
+                        mSiteAddedCallback.onAddSite(primary, secondary);
+                    } else {
+                        dialog.dismiss();
                     }
                 };
 
@@ -175,12 +169,7 @@ public class AddExceptionPreference extends Preference
                         .create();
         alertDialog.getDelegate().setHandleNativeActionModesEnabled(false);
         alertDialog.setOnShowListener(
-                new DialogInterface.OnShowListener() {
-                    @Override
-                    public void onShow(DialogInterface dialog) {
-                        KeyboardVisibilityDelegate.getInstance().showKeyboard(input);
-                    }
-                });
+                dialog -> KeyboardVisibilityDelegate.getInstance().showKeyboard(input));
         alertDialog.show();
         final Button okButton = alertDialog.getButton(AlertDialog.BUTTON_POSITIVE);
         okButton.setEnabled(false);

@@ -8,30 +8,28 @@
 #include <utility>
 #include <vector>
 
-#include "base/check_op.h"
-#include "base/run_loop.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ui/autofill/mock_autofill_popup_controller.h"
+#include "chrome/browser/ui/views/autofill/payments/bnpl_issuer_linked_pill.h"
 #include "chrome/browser/ui/views/autofill/popup/mock_accessibility_selection_delegate.h"
 #include "chrome/browser/ui/views/autofill/popup/mock_selection_delegate.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_row_content_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_row_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_row_with_button_view.h"
 #include "chrome/test/views/chrome_views_test_base.h"
+#include "components/autofill/core/browser/at_memory/at_memory_manager.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/browser/suggestions/suggestion_type.h"
-#include "components/autofill/core/common/autofill_features.h"
-#include "components/plus_addresses/core/browser/grit/plus_addresses_strings.h"
 #include "components/strings/grit/components_strings.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/events/base_event_utils.h"
+#include "ui/compositor/layer.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/image_button.h"
+#include "ui/views/controls/image_view.h"
 #include "ui/views/controls/throbber.h"
 #include "ui/views/view_utils.h"
 #include "ui/views/widget/widget_utils.h"
@@ -41,6 +39,26 @@ using ::testing::NotNull;
 using ::testing::Return;
 
 namespace autofill {
+
+namespace {
+constexpr float kDisabledBnplOpacity = 0.38f;
+
+// Helper function to recursively find a `views::Label` with matching text
+// inside `view`.
+views::Label* FindLabelWithText(views::View* view, const std::u16string& text) {
+  for (views::View* child : view->children()) {
+    if (auto* label = views::AsViewClass<views::Label>(child)) {
+      if (label->GetText() == text) {
+        return label;
+      }
+    }
+    if (auto* found = FindLabelWithText(child, text)) {
+      return found;
+    }
+  }
+  return nullptr;
+}
+}  // namespace
 
 class PopupRowFactoryUtilsTest : public ChromeViewsTestBase {
  public:
@@ -171,6 +189,134 @@ TEST_F(PasswordPopupRowViewTest, NonLoadingSuggestionDoesNotShowThrobber) {
 
   EXPECT_FALSE(views::IsViewClass<views::Throbber>(
       row_view().GetContentView().children().at(0)));
+}
+
+class BnplPopupRowViewTest : public PopupRowFactoryUtilsTest {
+ public:
+  BnplPopupRowViewTest() {
+    scoped_feature_list_.InitAndEnableFeature(
+        features::kAutofillEnablePayNowPayLaterTabs);
+  }
+  ~BnplPopupRowViewTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+TEST_F(BnplPopupRowViewTest, LinkedPill) {
+  Suggestion suggestion(u"Bnpl", SuggestionType::kBnplEntry);
+  BnplIssuer linked_issuer(/*instrument_id=*/1234,
+                           BnplIssuer::IssuerId::kBnplZip, {});
+  suggestion.payload = Suggestion::BnplIssuer(linked_issuer);
+
+  ShowSuggestion(suggestion);
+
+  views::View* pill = row_view().GetContentView().GetViewByElementId(
+      payments::BnplLinkedIssuerPill::kBnplLinkedPillElementId);
+  ASSERT_THAT(pill, NotNull());
+  EXPECT_TRUE(pill->GetEnabled());
+  EXPECT_FLOAT_EQ(1.0f, pill->layer()->opacity());
+}
+
+TEST_F(BnplPopupRowViewTest, LinkedPill_Deactivated) {
+  Suggestion suggestion(u"Bnpl", SuggestionType::kBnplEntry);
+  BnplIssuer linked_issuer(/*instrument_id=*/1234,
+                           BnplIssuer::IssuerId::kBnplZip, {});
+  suggestion.payload = Suggestion::BnplIssuer(linked_issuer);
+  suggestion.acceptability =
+      Suggestion::Acceptability::kUnselectableAndUnacceptable;
+
+  ShowSuggestion(suggestion);
+
+  views::View* pill = row_view().GetContentView().GetViewByElementId(
+      payments::BnplLinkedIssuerPill::kBnplLinkedPillElementId);
+  ASSERT_THAT(pill, NotNull());
+  EXPECT_FALSE(pill->GetEnabled());
+  EXPECT_FLOAT_EQ(kDisabledBnplOpacity, pill->layer()->opacity());
+}
+
+TEST_F(BnplPopupRowViewTest, Deactivated_IconOpacity) {
+  Suggestion suggestion(u"Bnpl", SuggestionType::kBnplEntry);
+  suggestion.icon = Suggestion::Icon::kBnplGeneric;
+  suggestion.acceptability =
+      Suggestion::Acceptability::kUnselectableAndUnacceptable;
+
+  ShowSuggestion(suggestion);
+
+  views::ImageView* icon_view = nullptr;
+  for (const auto& child : row_view().GetContentView().children()) {
+    if (auto* img = views::AsViewClass<views::ImageView>(child.get())) {
+      icon_view = img;
+      break;
+    }
+  }
+
+  ASSERT_THAT(icon_view, NotNull());
+  EXPECT_TRUE(icon_view->layer());
+  EXPECT_FLOAT_EQ(kDisabledBnplOpacity, icon_view->layer()->opacity());
+}
+
+TEST_F(BnplPopupRowViewTest, UnlinkedIssuer_NoLinkedPill) {
+  Suggestion suggestion(u"Bnpl", SuggestionType::kBnplEntry);
+  BnplIssuer unlinked_issuer(/*instrument_id=*/std::nullopt,
+                             BnplIssuer::IssuerId::kBnplZip, {});
+  suggestion.payload = Suggestion::BnplIssuer(unlinked_issuer);
+
+  ShowSuggestion(suggestion);
+
+  views::View* pill = row_view().GetContentView().GetViewByElementId(
+      payments::BnplLinkedIssuerPill::kBnplLinkedPillElementId);
+  EXPECT_THAT(pill, IsNull());
+}
+
+// Tests that AtMemory suggestions ignore filter match bolding even when a
+// filter match is provided to CreatePopupRowView.
+TEST_F(PopupRowFactoryUtilsTest, AtMemorySuggestionIgnoresFilterMatchBolding) {
+  Suggestion atmemory_suggestion(u"@memory query text search",
+                                 SuggestionType::kAtMemorySearchAffordance);
+  AutofillPopupController::SuggestionFilterMatch filter_match{
+      .main_text_match = gfx::Range(0, 25)};
+
+  // Create content view directly WITH filter_match applied (bolded).
+  std::unique_ptr<PopupRowContentView> content_view_with_bolding =
+      CreatePopupRowContentView(atmemory_suggestion,
+                                /*show_new_badge=*/std::nullopt,
+                                FillingProduct::kAtMemory, filter_match);
+  views::Label* bolded_label = FindLabelWithText(
+      content_view_with_bolding.get(), u"@memory query text search");
+  ASSERT_THAT(bolded_label, NotNull());
+  int bolded_width = bolded_label->GetPreferredSize().width();
+
+  // Populate controller suggestions so CreatePopupRowView can query index 0
+  // for the AtMemory suggestion when creating the row view with filter_match.
+  controller().set_suggestions({atmemory_suggestion});
+  auto row_view =
+      CreatePopupRowView(controller().GetWeakPtr(), a11y_selection_delegate(),
+                         selection_delegate(), 0, filter_match);
+  views::Label* atmemory_label = FindLabelWithText(
+      &row_view->GetContentView(), u"@memory query text search");
+  ASSERT_THAT(atmemory_label, NotNull());
+  int atmemory_label_width = atmemory_label->GetPreferredSize().width();
+
+  // Verify that AtMemory main text label is narrower than the bolded version
+  // because filter_match bolding was ignored.
+  EXPECT_LT(atmemory_label_width, bolded_width);
+}
+
+// Tests that kAtMemorySourceAttribution uses Body 4 text style and
+// onSurfaceSubtle text color.
+TEST_F(PopupRowFactoryUtilsTest, AtMemorySourceAttributionStyle) {
+  Suggestion suggestion = AtMemoryManager::CreateSourceAttributionSuggestion();
+  ShowSuggestion(suggestion);
+
+  std::u16string expected_text = l10n_util::GetStringUTF16(
+      IDS_AUTOFILL_AT_MEMORY_SOURCE_ATTRIBUTION_PERSONAL_INTELLIGENCE);
+  views::Label* label =
+      FindLabelWithText(&row_view().GetContentView(), expected_text);
+  ASSERT_THAT(label, NotNull());
+  EXPECT_EQ(label->GetTextStyle(), views::style::STYLE_BODY_4);
+  EXPECT_EQ(label->GetEnabledColor(), row_view().GetColorProvider()->GetColor(
+                                          ui::kColorSysOnSurfaceSubtle));
 }
 
 }  // namespace autofill

@@ -4,8 +4,9 @@
 
 #include "chromeos/ash/components/network/auto_connect_handler.h"
 
+#include <algorithm>
+
 #include "ash/constants/ash_features.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
@@ -105,25 +106,11 @@ std::string AutoConnectReasonsToString(int auto_connect_reasons) {
 
 }  // namespace
 
-AutoConnectHandler::AutoConnectHandler()
-    : client_cert_resolver_(nullptr),
-      request_best_connection_pending_(false),
-      device_policy_applied_(false),
-      user_policy_applied_(false),
-      client_certs_resolved_(false),
-      applied_autoconnect_policy_on_wifi(false),
-      applied_autoconnect_policy_on_cellular(false),
-      auto_connect_reasons_(0) {}
+AutoConnectHandler::AutoConnectHandler() = default;
 
 AutoConnectHandler::~AutoConnectHandler() {
   if (LoginState::IsInitialized())
     LoginState::Get()->RemoveObserver(this);
-  if (client_cert_resolver_)
-    client_cert_resolver_->RemoveObserver(this);
-  if (network_connection_handler_)
-    network_connection_handler_->RemoveObserver(this);
-  if (managed_configuration_handler_)
-    managed_configuration_handler_->RemoveObserver(this);
 }
 
 void AutoConnectHandler::Init(
@@ -135,12 +122,12 @@ void AutoConnectHandler::Init(
     LoginState::Get()->AddObserver(this);
 
   client_cert_resolver_ = client_cert_resolver;
-  if (client_cert_resolver_)
-    client_cert_resolver_->AddObserver(this);
+  client_cert_resolver_observer_.Observe(client_cert_resolver_);
 
   network_connection_handler_ = network_connection_handler;
-  if (network_connection_handler_)
-    network_connection_handler_->AddObserver(this);
+  if (network_connection_handler_) {
+    network_connection_handler_observer_.Observe(network_connection_handler_);
+  }
 
   network_state_handler_ = network_state_handler;
   if (network_state_handler_) {
@@ -150,7 +137,8 @@ void AutoConnectHandler::Init(
 
   managed_configuration_handler_ = managed_network_configuration_handler;
   if (managed_configuration_handler_)
-    managed_configuration_handler_->AddObserver(this);
+    managed_configuration_handler_observer_.Observe(
+        managed_configuration_handler_);
 
   if (LoginState::IsInitialized())
     LoggedInStateChanged();
@@ -428,8 +416,9 @@ void AutoConnectHandler::DisconnectAndRemoveConfigOrDisableAutoConnect(
       // managed network is out of range.)
       bool network_config_allowed =
           available_only &&
-          !base::Contains(managed_configuration_handler_->GetBlockedHexSSIDs(),
-                          network->GetHexSsid());
+          !std::ranges::contains(
+              managed_configuration_handler_->GetBlockedHexSSIDs(),
+              network->GetHexSsid());
       bool shouldRemoveWifiConfig =
           (HasTypeWifi(network) && network->IsInProfile()) &&
           !network_config_allowed;
@@ -474,7 +463,7 @@ void AutoConnectHandler::DisableAutoconnectForNetwork(
     const std::string& network_type) {
   NET_LOG(EVENT) << "Disable auto-connect forced by policy: "
                  << NetworkPathId(service_path);
-  base::Value::Dict properties;
+  base::DictValue properties;
 
   std::string autoconnect_path;
   if (network_type == ::onc::network_config::kWiFi) {

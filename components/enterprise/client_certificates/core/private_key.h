@@ -12,12 +12,18 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "components/enterprise/client_certificates/core/private_key_types.h"
 #include "components/enterprise/client_certificates/proto/client_certificates_database.pb.h"
 #include "crypto/signature_verifier.h"
 
+#if BUILDFLAG(IS_IOS)
+#include <Security/Security.h>
+#endif  // BUILDFLAG(IS_IOS)
+
 namespace net {
 class SSLPrivateKey;
+class X509Certificate;
 }  // namespace net
 
 namespace client_certificates {
@@ -44,7 +50,7 @@ class PrivateKey : public base::RefCountedThreadSafe<PrivateKey> {
 
   // Returns a dictionary representation of the current private key which can
   // be serialized and loaded again through the PrivateKeyFactory.
-  virtual base::Value::Dict ToDict() const = 0;
+  virtual base::DictValue ToDict() const = 0;
 
   // Returns the source from where the private key was created.
   PrivateKeySource GetSource() const;
@@ -53,12 +59,27 @@ class PrivateKey : public base::RefCountedThreadSafe<PrivateKey> {
   // May be nullptr if not supported.
   scoped_refptr<net::SSLPrivateKey> GetSSLPrivateKey();
 
+#if BUILDFLAG(IS_IOS)
+  // Returns Apple-specific reference to a Keychain key. This returns
+  // nullptr for all key types except unexportable keys on IOS, for
+  // which a Keychain-backed key reference is required for authentication.
+  virtual SecKeyRef GetSecKeyRef() const;
+#endif  // BUILDFLAG(IS_IOS)
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Returns the certificate bound to this key (matched by SubjectPublicKeyInfo
+  // when the key was loaded), or nullptr if no cert is bound yet. Lets the
+  // certificate store reuse the cert the key factory already located instead of
+  // listing Kcer's certs a second time. Non-Kcer keys return nullptr.
+  virtual scoped_refptr<net::X509Certificate> GetBoundCert() const;
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
  protected:
   PrivateKey(PrivateKeySource source,
              scoped_refptr<net::SSLPrivateKey> ssl_private_key);
 
   // Builds a dictionary representation of a `key`.
-  base::Value::Dict BuildSerializedPrivateKey(std::vector<uint8_t> key) const;
+  base::DictValue BuildSerializedPrivateKey(std::vector<uint8_t> key) const;
 
   virtual ~PrivateKey();
 

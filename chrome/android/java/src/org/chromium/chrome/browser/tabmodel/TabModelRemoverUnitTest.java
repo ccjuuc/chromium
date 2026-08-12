@@ -34,6 +34,8 @@ import org.robolectric.RuntimeEnvironment;
 import org.chromium.base.Callback;
 import org.chromium.base.Token;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.chrome.browser.actor.ActorKeyedService;
+import org.chromium.chrome.browser.actor.ActorKeyedServiceFactory;
 import org.chromium.chrome.browser.collaboration.CollaborationServiceFactory;
 import org.chromium.chrome.browser.data_sharing.DataSharingServiceFactory;
 import org.chromium.chrome.browser.data_sharing.DataSharingTabGroupUtils.GroupsPendingDestroy;
@@ -52,7 +54,6 @@ import org.chromium.components.browser_ui.widget.ActionConfirmationResult;
 import org.chromium.components.collaboration.CollaborationService;
 import org.chromium.components.data_sharing.DataSharingService;
 import org.chromium.components.data_sharing.member_role.MemberRole;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.test.util.TestAccounts;
 import org.chromium.components.tab_group_sync.LocalTabGroupId;
@@ -60,6 +61,7 @@ import org.chromium.components.tab_group_sync.SavedTabGroup;
 import org.chromium.components.tab_group_sync.TabGroupSyncService;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 
+import java.util.Collections;
 import java.util.List;
 
 /** Unit tests for {@link TabModelRemover}. */
@@ -77,13 +79,13 @@ public class TabModelRemoverUnitTest {
     @Mock private Profile mProfile;
     @Mock private IdentityServicesProvider mIdentityServicesProvider;
     @Mock private IdentityManager mIdentityManager;
-    @Mock private TabGroupModelFilterInternal mTabGroupModelFilter;
     @Mock private TabModelRemoverFlowHandler mHandler;
     @Mock private ModalDialogManager mModalDialogManager;
     @Mock private TabCreator mTabCreator;
     @Mock private DataSharingService mDataSharingService;
     @Mock private CollaborationService mCollaborationService;
     @Mock private TabGroupSyncService mTabGroupSyncService;
+    @Mock private ActorKeyedService mActorKeyedService;
     @Mock private TabGroupSyncFeatures.Natives mTabGroupSyncFeaturesJniMock;
     @Mock private Runnable mFinishBlocking;
 
@@ -106,12 +108,12 @@ public class TabModelRemoverUnitTest {
 
         IdentityServicesProvider.setInstanceForTests(mIdentityServicesProvider);
         when(mIdentityServicesProvider.getIdentityManager(mProfile)).thenReturn(mIdentityManager);
-        when(mIdentityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN))
-                .thenReturn(TestAccounts.ACCOUNT1);
+        when(mIdentityManager.getPrimaryAccountInfo()).thenReturn(TestAccounts.ACCOUNT1);
 
         DataSharingServiceFactory.setForTesting(mDataSharingService);
         CollaborationServiceFactory.setForTesting(mCollaborationService);
         TabGroupSyncServiceFactory.setForTesting(mTabGroupSyncService);
+        ActorKeyedServiceFactory.setForTesting(mActorKeyedService);
 
         mNextTabId = 0;
         when(mProfile.isOffTheRecord()).thenReturn(false);
@@ -120,10 +122,9 @@ public class TabModelRemoverUnitTest {
         mTabModel.setActive(true);
 
         when(mTabModel.isIncognitoBranded()).thenReturn(false);
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
-        when(mTabGroupModelFilter.tabGroupExists(TAB_GROUP_1.tabGroupId)).thenReturn(true);
-        when(mTabGroupModelFilter.tabGroupExists(TAB_GROUP_2.tabGroupId)).thenReturn(true);
-        when(mTabGroupModelFilter.getTabGroupTitle(any(Token.class))).thenReturn(TAB_GROUP_TITLE);
+        when(mTabModel.tabGroupExists(TAB_GROUP_1.tabGroupId)).thenReturn(true);
+        when(mTabModel.tabGroupExists(TAB_GROUP_2.tabGroupId)).thenReturn(true);
+        when(mTabModel.getTabGroupTitle(any(Token.class))).thenReturn(TAB_GROUP_TITLE);
 
         doAnswer(
                         invocation -> {
@@ -136,9 +137,7 @@ public class TabModelRemoverUnitTest {
 
         mTabModelRemover =
                 new TabModelRemover(
-                        RuntimeEnvironment.application,
-                        mModalDialogManager,
-                        () -> mTabGroupModelFilter);
+                        RuntimeEnvironment.application, mModalDialogManager, () -> mTabModel);
         mHandlerInOrder = inOrder(mHandler);
 
         mSavedTabGroup1 = new SavedTabGroup();
@@ -152,6 +151,7 @@ public class TabModelRemoverUnitTest {
         mSavedTabGroup2.title = TAB_GROUP_TITLE;
         mSavedTabGroup2.collaborationId = COLLABORATION_ID;
         when(mTabGroupSyncService.getGroup(TAB_GROUP_2)).thenReturn(mSavedTabGroup2);
+        when(mHandler.getOngoingActorTasks()).thenReturn(Collections.emptyList());
     }
 
     @Test
@@ -163,8 +163,8 @@ public class TabModelRemoverUnitTest {
     }
 
     @Test
-    public void testGetTabGroupModelFilter() {
-        assertEquals(mTabGroupModelFilter, mTabModelRemover.getTabGroupModelFilter());
+    public void testGetTabModelInternal() {
+        assertEquals(mTabModel, mTabModelRemover.getTabModelInternal());
     }
 
     @Test
@@ -185,6 +185,7 @@ public class TabModelRemoverUnitTest {
         mTabModelRemover.doTabRemovalFlow(mHandler, /* allowDialog= */ true);
 
         mHandlerInOrder.verify(mHandler).computeGroupsPendingDestroy();
+        mHandlerInOrder.verify(mHandler).getOngoingActorTasks();
 
         mHandlerInOrder
                 .verify(mHandler)
@@ -230,6 +231,7 @@ public class TabModelRemoverUnitTest {
         mTabModelRemover.doTabRemovalFlow(mHandler, /* allowDialog= */ true);
 
         mHandlerInOrder.verify(mHandler).computeGroupsPendingDestroy();
+        mHandlerInOrder.verify(mHandler).getOngoingActorTasks();
 
         mHandlerInOrder
                 .verify(mHandler)
@@ -275,6 +277,7 @@ public class TabModelRemoverUnitTest {
         mTabModelRemover.doTabRemovalFlow(mHandler, /* allowDialog= */ true);
 
         mHandlerInOrder.verify(mHandler).computeGroupsPendingDestroy();
+        mHandlerInOrder.verify(mHandler).getOngoingActorTasks();
 
         mHandlerInOrder
                 .verify(mHandler)
@@ -320,6 +323,7 @@ public class TabModelRemoverUnitTest {
         mTabModelRemover.doTabRemovalFlow(mHandler, /* allowDialog= */ true);
 
         mHandlerInOrder.verify(mHandler).computeGroupsPendingDestroy();
+        mHandlerInOrder.verify(mHandler).getOngoingActorTasks();
 
         mHandlerInOrder.verify(mHandler).onPlaceholderTabsCreated(mNewTabCreationCaptor.capture());
         assertEquals(
@@ -344,6 +348,7 @@ public class TabModelRemoverUnitTest {
         mTabModelRemover.doTabRemovalFlow(mHandler, /* allowDialog= */ false);
 
         mHandlerInOrder.verify(mHandler).computeGroupsPendingDestroy();
+        mHandlerInOrder.verify(mHandler).getOngoingActorTasks();
         mHandlerInOrder.verify(mHandler).onPlaceholderTabsCreated(mNewTabCreationCaptor.capture());
         assertEquals(
                 groupsPendingDestroy.collaborationGroupsDestroyed.size(),
@@ -364,6 +369,7 @@ public class TabModelRemoverUnitTest {
         mTabModelRemover.doTabRemovalFlow(mHandler, /* allowDialog= */ false);
 
         mHandlerInOrder.verify(mHandler).computeGroupsPendingDestroy();
+        mHandlerInOrder.verify(mHandler).getOngoingActorTasks();
         mHandlerInOrder.verify(mHandler).onPlaceholderTabsCreated(mNewTabCreationCaptor.capture());
         assertEquals(
                 groupsPendingDestroy.collaborationGroupsDestroyed.size(),
@@ -381,6 +387,7 @@ public class TabModelRemoverUnitTest {
         mTabModelRemover.doTabRemovalFlow(mHandler, /* allowDialog= */ true);
 
         mHandlerInOrder.verify(mHandler).computeGroupsPendingDestroy();
+        mHandlerInOrder.verify(mHandler).getOngoingActorTasks();
         mHandlerInOrder
                 .verify(mHandler)
                 .showTabGroupDeletionConfirmationDialog(mOnResultCaptor.capture());
@@ -401,6 +408,7 @@ public class TabModelRemoverUnitTest {
         mTabModelRemover.doTabRemovalFlow(mHandler, /* allowDialog= */ true);
 
         mHandlerInOrder.verify(mHandler).computeGroupsPendingDestroy();
+        mHandlerInOrder.verify(mHandler).getOngoingActorTasks();
         mHandlerInOrder
                 .verify(mHandler)
                 .showTabGroupDeletionConfirmationDialog(mOnResultCaptor.capture());
@@ -420,6 +428,7 @@ public class TabModelRemoverUnitTest {
         mTabModelRemover.doTabRemovalFlow(mHandler, /* allowDialog= */ true);
 
         mHandlerInOrder.verify(mHandler).computeGroupsPendingDestroy();
+        mHandlerInOrder.verify(mHandler).getOngoingActorTasks();
         mHandlerInOrder
                 .verify(mHandler)
                 .showTabGroupDeletionConfirmationDialog(mOnResultCaptor.capture());
@@ -437,6 +446,7 @@ public class TabModelRemoverUnitTest {
         mTabModelRemover.doTabRemovalFlow(mHandler, /* allowDialog= */ false);
 
         mHandlerInOrder.verify(mHandler).computeGroupsPendingDestroy();
+        mHandlerInOrder.verify(mHandler).getOngoingActorTasks();
         mHandlerInOrder.verify(mHandler).performAction();
         verifyNoMoreInteractions(mHandler);
     }
@@ -449,6 +459,42 @@ public class TabModelRemoverUnitTest {
         mTabModelRemover.doTabRemovalFlow(mHandler, /* allowDialog= */ true);
 
         mHandlerInOrder.verify(mHandler).computeGroupsPendingDestroy();
+        mHandlerInOrder.verify(mHandler).getOngoingActorTasks();
+        mHandlerInOrder.verify(mHandler).performAction();
+        verifyNoMoreInteractions(mHandler);
+    }
+
+    @Test
+    public void testTabRemovalFlow_WithActorTasks() {
+        GroupsPendingDestroy groupsPendingDestroy = new GroupsPendingDestroy();
+        when(mHandler.computeGroupsPendingDestroy()).thenReturn(groupsPendingDestroy);
+        when(mHandler.getOngoingActorTasks()).thenReturn(List.of(1));
+
+        mTabModelRemover.doTabRemovalFlow(mHandler, /* allowDialog= */ true);
+
+        mHandlerInOrder.verify(mHandler).computeGroupsPendingDestroy();
+        mHandlerInOrder.verify(mHandler).getOngoingActorTasks();
+        mHandlerInOrder.verify(mHandler).showActorTaskDeletionConfirmationDialog(any());
+        verifyNoMoreInteractions(mHandler);
+    }
+
+    @Test
+    public void testTabRemovalFlow_WithActorTasks_Confirm() {
+        GroupsPendingDestroy groupsPendingDestroy = new GroupsPendingDestroy();
+        when(mHandler.computeGroupsPendingDestroy()).thenReturn(groupsPendingDestroy);
+        when(mHandler.getOngoingActorTasks()).thenReturn(List.of(1));
+
+        mTabModelRemover.doTabRemovalFlow(mHandler, /* allowDialog= */ true);
+
+        mHandlerInOrder.verify(mHandler).computeGroupsPendingDestroy();
+        mHandlerInOrder.verify(mHandler).getOngoingActorTasks();
+        mHandlerInOrder
+                .verify(mHandler)
+                .showActorTaskDeletionConfirmationDialog(mOnResultCaptor.capture());
+
+        mOnResultCaptor.getValue().onResult(ActionConfirmationResult.CONFIRMATION_POSITIVE);
+
+        mHandlerInOrder.verify(mHandler).getOngoingActorTasks();
         mHandlerInOrder.verify(mHandler).performAction();
         verifyNoMoreInteractions(mHandler);
     }

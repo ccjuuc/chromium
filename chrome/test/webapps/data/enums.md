@@ -4,7 +4,7 @@ This file catalogs all of the actions that can be used to build critical user jo
 
 Existing documentation lives [here](/docs/webapps/integration-testing-framework.md).
 
-TODO(dmurph): Move more documentation here. https://crbug.com/1314822
+TODO(dmurph): Move more documentation here. https://crbug.com/40221544
 
 ## How this file is parsed
 
@@ -20,9 +20,9 @@ The tables in this file are parsed as action templates for critical user journey
 
 | #Enum Name | Values (* = default) |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Site | Standalone* | MinimalUi | Tabbed | NotPromotable | StandaloneNestedA | StandaloneNestedB | Wco | Isolated | FileHandler | NotInstalled | StandaloneNotStartUrl | Screenshots | HasSubApps | SubApp1 | SubApp2 | TabbedWithHomeTab | TabbedNestedA | TabbedNestedB | TabbedNestedC | ChromeUrl |
+| Site | Standalone* | MinimalUi | Tabbed | NotPromotable | StandaloneNestedA | StandaloneNestedB | Wco | Isolated | FileHandler | NotInstalled | StandaloneNotStartUrl | Screenshots | HasSubApps | SubApp1 | SubApp2 | TabbedWithHomeTab | TabbedNestedA | TabbedNestedB | TabbedNestedC | ChromeUrl | StandaloneMigratedSuggested | StandaloneMigratedForced |
 | InstallableSite | Standalone* | MinimalUi | Tabbed | StandaloneNestedA | StandaloneNestedB | Wco | NotInstalled | StandaloneNotStartUrl | Screenshots | HasSubApps | SubApp1 | SubApp2 | TabbedWithHomeTab | ChromeUrl |
-| Title | StandaloneOriginal | StandaloneUpdated |  |  |  |  |  |
+| Title | NotPromotableOriginal | NotPromotableUpdated | StandaloneOriginal | StandaloneUpdated | StandaloneMigratedSuggested | StandaloneMigratedForced |
 | Color | Red | Green | GreenSmallDiff |  |  |  |  |
 | ProfileClient | Client2* | Client1 |  |  |  |  |  |
 | UserDisplayPreference | Standalone | Browser |  |  |  |  |  |
@@ -38,7 +38,7 @@ The tables in this file are parsed as action templates for critical user journey
 | ShortcutOptions | WithShortcut | NoShortcut |
 | WindowOptions | Windowed | Browser |
 | InstallMode | WebApp* | WebShortcut |
-| UpdateDialogResponse | AcceptUpdate | CancelDialogAndUninstall | IgnoreDialog | | |
+| UpdateDialogResponse | AcceptUpdate | CancelDialogAndUninstall | CancelDialogAndCancelUninstall | IgnoreDialog | CloseDialog | |
 | SubAppInstallDialogOptions | UserAllow* | UserDeny | PolicyOverride |
 | ProfileName | Default | Profile2 |
 | MenuButtonState | ExpandedUpdateAvailable | NotExpanded |

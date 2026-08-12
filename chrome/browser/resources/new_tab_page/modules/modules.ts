@@ -89,6 +89,10 @@ export class ModulesElement extends CrLitElement {
     return getCss();
   }
 
+  override render() {
+    return getHtml.bind(this)();
+  }
+
   static override get properties() {
     return {
       modulesShownToUser: {
@@ -129,10 +133,6 @@ export class ModulesElement extends CrLitElement {
   // loading behavior.
   private modulesReloadable_: boolean =
       loadTimeData.getBoolean('modulesReloadable');
-
-  override render() {
-    return getHtml.bind(this)();
-  }
 
   override connectedCallback() {
     super.connectedCallback();
@@ -225,6 +225,14 @@ export class ModulesElement extends CrLitElement {
     this.eventTracker_.removeAll();
   }
 
+  override willUpdate(changedProperties: PropertyValues<this>) {
+    super.willUpdate(changedProperties);
+    if (changedProperties.has('moduleInstances_') ||
+        changedProperties.has('disabledModules_')) {
+      this.updateContainerAndChildrenStyles_(this.availableWidth_);
+    }
+  }
+
   override firstUpdated() {
     this.style.setProperty('--container-gap', `${CONTAINER_GAP_WIDTH}px`);
 
@@ -238,14 +246,6 @@ export class ModulesElement extends CrLitElement {
     super.updated(changedProperties);
     this.availableWidth_ = Math.min(
         document.body.clientWidth - 2 * MARGIN_WIDTH, this.containerMaxWidth_);
-  }
-
-  override willUpdate(changedProperties: PropertyValues<this>) {
-    super.willUpdate(changedProperties);
-    if (changedProperties.has('moduleInstances_') ||
-        changedProperties.has('disabledModules_')) {
-      this.updateContainerAndChildrenStyles_(this.availableWidth_);
-    }
   }
 
   get pageHandler_(): PageHandlerRemote {
@@ -337,6 +337,17 @@ export class ModulesElement extends CrLitElement {
     }
   }
 
+  private recordModuleAutoRemovalMetrics_(
+      moduleIds: string[], disabled: boolean) {
+    const histogramBase = disabled ? 'NewTabPage.Modules.AutoRemoval' :
+                                     'NewTabPage.Modules.AutoRemovalUndone';
+
+    recordOccurrence(histogramBase);
+    for (const moduleId of moduleIds) {
+      recordSparseValueWithPersistentHash(`${histogramBase}ModuleId`, moduleId);
+    }
+  }
+
   /**
    * Handles the the auto-removal of stale modules, which are defined as modules
    * that have not been interacted with by the user within a certain period of
@@ -359,11 +370,15 @@ export class ModulesElement extends CrLitElement {
           loadTimeData.getString('modulesInactivityRemovalMsg');
 
       this.pendingAutoRemovedModules_ = moduleIds;
-      this.pageHandler_.setModulesDisabled(moduleIds, /*disabled=*/ true);
+      this.pageHandler_.setModulesDisabled(
+          moduleIds, /*disabled=*/ true, /*is_user_action=*/ false);
+      this.recordModuleAutoRemovalMetrics_(moduleIds, /*disabled=*/ true);
       this.fire('modules-auto-removed', {
         message: undoToastMessage,
         undo: () => {
-          this.pageHandler_.setModulesDisabled(moduleIds, /*disabled=*/ false);
+          this.pageHandler_.setModulesDisabled(
+              moduleIds, /*disabled=*/ false, /*is_user_action=*/ true);
+          this.recordModuleAutoRemovalMetrics_(moduleIds, /*disabled=*/ false);
         },
       });
     }
@@ -501,14 +516,16 @@ export class ModulesElement extends CrLitElement {
         if (restoreCallback) {
           restoreCallback();
         }
-        this.pageHandler_.setModuleDisabled(id, false);
+        this.pageHandler_.setModulesDisabled(
+            [id], /*disabled=*/ false, /*is_user_action=*/ true);
         recordSparseValueWithPersistentHash('NewTabPage.Modules.Enabled', id);
         recordSparseValueWithPersistentHash(
             'NewTabPage.Modules.Enabled.Toast', id);
       },
     };
 
-    this.pageHandler_.setModuleDisabled(id, true);
+    this.pageHandler_.setModulesDisabled(
+        [id], /*disabled=*/ true, /*is_user_action=*/ true);
     this.$.undoToast.show();
     recordSparseValueWithPersistentHash(METRIC_NAME_MODULE_DISABLED, id);
     recordSparseValueWithPersistentHash(
@@ -584,6 +601,12 @@ export class ModulesElement extends CrLitElement {
     if (ctrlKeyPressed && e.key === 'z') {
       this.onUndoButtonClick_();
     }
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'ntp-modules': ModulesElement;
   }
 }
 

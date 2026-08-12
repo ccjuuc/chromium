@@ -15,7 +15,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -43,7 +42,6 @@
 #include "extensions/common/manifest_handlers/default_locale_handler.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
 #include "extensions/strings/grit/extensions_strings.h"
-#include "net/base/filename_util.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "url/gurl.h"
 
@@ -253,7 +251,7 @@ scoped_refptr<Extension> LoadExtension(
     std::u16string* error) {
   error->clear();
   std::string utf8_error;
-  std::optional<base::Value::Dict> manifest;
+  std::optional<base::DictValue> manifest;
   if (!manifest_file) {
     manifest = LoadManifest(extension_path, &utf8_error);
   } else {
@@ -292,13 +290,13 @@ scoped_refptr<Extension> LoadExtension(
 
 // TODO(crbug.com/41317803): Continue removing std::string errors and replacing
 // with std::u16string.
-std::optional<base::Value::Dict> LoadManifest(
+std::optional<base::DictValue> LoadManifest(
     const base::FilePath& extension_path,
     std::string* error) {
   return LoadManifest(extension_path, kManifestFilename, error);
 }
 
-std::optional<base::Value::Dict> LoadManifest(
+std::optional<base::DictValue> LoadManifest(
     const base::FilePath& extension_path,
     const base::FilePath::CharType* manifest_filename,
     std::string* error) {
@@ -453,7 +451,7 @@ bool CheckForWindowsReservedFilenames(const base::FilePath& extension_dir,
   for (base::FilePath current = traversal.Next(); !current.empty();
        current = traversal.Next()) {
     base::FilePath::StringType filename = current.BaseName().value();
-    bool is_reserved_filename = net::IsReservedNameOnWindows(filename);
+    bool is_reserved_filename = base::IsReservedNameOnWindows(filename);
     if (is_reserved_filename) {
       *error =
           base::StrCat({u"Cannot load extension with file or directory name ",
@@ -593,8 +591,7 @@ MessageBundle* LoadMessageBundle(
   extension_l10n_util::GetAllLocales(&chrome_locales);
 
   base::FilePath default_locale_path = locale_path.AppendASCII(default_locale);
-  if (default_locale.empty() ||
-      !base::Contains(chrome_locales, default_locale) ||
+  if (default_locale.empty() || !chrome_locales.contains(default_locale) ||
       !base::PathExists(default_locale_path)) {
     *error = l10n_util::GetStringUTF8(
         IDS_EXTENSION_LOCALES_NO_DEFAULT_LOCALE_SPECIFIED);

@@ -7,16 +7,14 @@
 
 #import <UIKit/UIKit.h>
 
-class UrlLoadingBrowserAgent;
+#import "ios/chrome/browser/shared/ui/util/ui_view_controller_with_display_tracing.h"
 
-@interface IncognitoViewController : UIViewController
+@protocol NewTabPageURLLoaderDelegate;
 
-// Init with the given loader object. `loader` may be nil, but isn't
-// retained so it must outlive this controller.
-// TODO(crbug.com/40228520): View controllers should not have access to
-// model-layer objects. Create a mediator to connect model-layer class
-// `UrlLoadingBrowserAgent` to the view controller.
-- (instancetype)initWithUrlLoader:(UrlLoadingBrowserAgent*)URLLoader;
+@interface IncognitoViewController : UIViewControllerWithDisplayTracing
+
+// Delegate to load URLs in the current tab.
+@property(nonatomic, weak) id<NewTabPageURLLoaderDelegate> URLLoaderDelegate;
 
 @end
 

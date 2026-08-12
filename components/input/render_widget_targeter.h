@@ -41,7 +41,7 @@ struct COMPONENT_EXPORT(INPUT) RenderWidgetTargetResult {
                            std::optional<gfx::PointF> location);
   ~RenderWidgetTargetResult();
 
-  raw_ptr<RenderWidgetHostViewInput, DanglingUntriaged> view = nullptr;
+  raw_ptr<RenderWidgetHostViewInput> view = nullptr;
   bool should_query_view = false;
   std::optional<gfx::PointF> target_location = std::nullopt;
 };
@@ -75,12 +75,15 @@ class RenderWidgetTargeter {
     virtual void SetEventsBeingFlushed(bool events_being_flushed) = 0;
 
     virtual RenderWidgetHostViewInput* FindViewFromFrameSinkId(
-        const viz::FrameSinkId& frame_sink_id) const = 0;
+        const viz::FrameSinkId& frame_sink_id,
+        RenderWidgetHostViewInput* ancestor_to_verify = nullptr) const = 0;
 
     // Returns true if a further asynchronous query should be sent to the
     // candidate RenderWidgetHostView.
     virtual bool ShouldContinueHitTesting(
         RenderWidgetHostViewInput* target_view) const = 0;
+
+    virtual void CancelAutoscroll(RenderWidgetHostViewInput* view) = 0;
   };
 
   enum class HitTestResultsMatch {
@@ -90,6 +93,8 @@ class RenderWidgetTargeter {
     kHitTestDataOutdated = 3,
     kMaxValue = kHitTestDataOutdated,
   };
+
+  enum class AutoscrollStatus { kProcessed, kDeferred, kFailed };
 
   // The delegate must outlive this targeter.
   explicit RenderWidgetTargeter(Delegate* delegate);
@@ -126,7 +131,8 @@ class RenderWidgetTargeter {
     return request_in_flight_.has_value();
   }
 
-  void SetIsAutoScrollInProgress(bool autoscroll_in_progress);
+  AutoscrollStatus SetIsAutoScrollInProgress(RenderWidgetHostViewInput* view,
+                                             bool is_autoscroll_in_progress);
 
   bool is_auto_scroll_in_progress() const { return is_autoscroll_in_progress_; }
 
@@ -214,9 +220,8 @@ class RenderWidgetTargeter {
       base::WeakPtr<RenderWidgetHostViewInput> last_request_target,
       const gfx::PointF& last_target_location);
 
-  void OnInputTargetDisconnect(
-      base::WeakPtr<RenderWidgetHostViewInput> target,
-      const gfx::PointF& location);
+  void OnInputTargetDisconnect(base::WeakPtr<RenderWidgetHostViewInput> target,
+                               const gfx::PointF& location);
 
   HitTestResultsMatch GetHitTestResultsMatchBucket(
       RenderWidgetHostViewInput* target,
@@ -230,14 +235,20 @@ class RenderWidgetTargeter {
   uint32_t last_request_id_ = 0;
   std::queue<TargetingRequest> requests_;
 
-  std::unordered_set<raw_ptr<RenderWidgetHostViewInput, CtnExperimental>>
-      unresponsive_views_;
+  std::unordered_set<raw_ptr<RenderWidgetHostViewInput>> unresponsive_views_;
 
   // Target to send events to if autoscroll is in progress
   RenderWidgetTargetResult middle_click_result_;
 
   // True when the user middle click's mouse for autoscroll
   bool is_autoscroll_in_progress_ = false;
+
+  // View that speculatively started autoscroll, pending async target
+  // resolution.
+  raw_ptr<RenderWidgetHostViewInput> pending_autoscroll_view_ = nullptr;
+
+  // True when a middle click event is pending async target resolution.
+  bool middle_click_targeting_pending_ = false;
 
   // This value limits how long to wait for a response from the renderer
   // process before giving up and resuming event processing.
@@ -247,7 +258,7 @@ class RenderWidgetTargeter {
 
   uint64_t trace_id_;
 
-  const raw_ptr<Delegate, DanglingUntriaged> delegate_;
+  const raw_ptr<Delegate> delegate_;
   base::WeakPtrFactory<RenderWidgetTargeter> weak_ptr_factory_{this};
 };
 

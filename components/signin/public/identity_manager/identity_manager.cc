@@ -25,6 +25,7 @@
 #include "components/signin/public/identity_manager/device_accounts_synchronizer.h"
 #include "components/signin/public/identity_manager/diagnostics_provider.h"
 #include "components/signin/public/identity_manager/primary_account_mutator.h"
+#include "google_apis/gaia/gaia_auth_util.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
@@ -66,9 +67,6 @@ IdentityManager::IdentityManager(IdentityManager::InitParameters&& parameters)
           std::move(parameters.accounts_cookie_mutator),
           std::move(parameters.device_accounts_synchronizer))),
       diagnostics_provider_(std::move(parameters.diagnostics_provider)),
-      account_consistency_(parameters.account_consistency),
-      require_sync_consent_for_scope_verification_(
-          parameters.require_sync_consent_for_scope_verification),
       weak_pointer_factory_(this) {
   DCHECK(account_fetcher_service_);
   DCHECK(diagnostics_provider_);
@@ -177,8 +175,7 @@ IdentityManager::CreateAccessTokenFetcherWithDynamicScopesForAccount(
       signin::GetOAuthConsumerForDynamicScopes(oauth_consumer_id, scopes);
   return std::make_unique<AccessTokenFetcher>(
       account_id, oauth_consumer_id, oauth_consumer, token_service_.get(),
-      primary_account_manager_.get(), std::move(callback), mode,
-      require_sync_consent_for_scope_verification_, token_source);
+      primary_account_manager_.get(), std::move(callback), mode, token_source);
 }
 
 std::unique_ptr<AccessTokenFetcher>
@@ -192,8 +189,7 @@ IdentityManager::CreateAccessTokenFetcherForAccount(
       signin_client_->GetOAuthConsumerFromId(oauth_consumer_id);
   return std::make_unique<AccessTokenFetcher>(
       account_id, oauth_consumer_id, oauth_consumer, token_service_.get(),
-      primary_account_manager_.get(), std::move(callback), mode,
-      require_sync_consent_for_scope_verification_, token_source);
+      primary_account_manager_.get(), std::move(callback), mode, token_source);
 }
 
 std::unique_ptr<AccessTokenFetcher>
@@ -208,7 +204,7 @@ IdentityManager::CreateAccessTokenFetcherForAccount(
   return std::make_unique<AccessTokenFetcher>(
       account_id, oauth_consumer_id, oauth_consumer, token_service_.get(),
       primary_account_manager_.get(), url_loader_factory, std::move(callback),
-      mode, require_sync_consent_for_scope_verification_);
+      mode);
 }
 
 void IdentityManager::RemoveAccessTokenFromCache(
@@ -281,9 +277,24 @@ bool IdentityManager::HasAccountWithRefreshTokenInPersistentErrorState(
 }
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
+bool IdentityManager::GenerateBindingKeyRegistrationToken(
+    base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
+        supported_algorithms,
+    std::string_view auth_code,
+    base::OnceCallback<void(
+        std::optional<signin::BindingKeyRegistrationTokenResult>)> callback) {
+  return token_service_->GenerateBindingKeyRegistrationToken(
+      supported_algorithms, auth_code, std::move(callback));
+}
+
 bool IdentityManager::HasAccountWithBoundRefreshToken(
     const CoreAccountId& account_id) const {
   return !token_service_->GetWrappedBindingKey(account_id).empty();
+}
+
+bool IdentityManager::HasAccountWithRefreshTokenBoundToMtls(
+    const CoreAccountId& account_id) const {
+  return token_service_->IsRefreshTokenBoundToMtls(account_id);
 }
 
 bool IdentityManager::AllBoundTokensShareSameBindingKey() const {
@@ -375,7 +386,36 @@ AccountInfo IdentityManager::FindExtendedAccountInfoByGaiaId(
 }
 
 AccountsInCookieJarInfo IdentityManager::GetAccountsInCookieJar() const {
-  return gaia_cookie_manager_service_->ListAccounts();
+  if (base::FeatureList::IsEnabled(
+          switches::kAvoidAutoTriggerListAccountsOnStale)) {
+    return gaia_cookie_manager_service_->GetCachedListAccounts();
+  } else {
+    return gaia_cookie_manager_service_->ListAccounts();
+  }
+}
+
+AccountsInCookieJarInfo IdentityManager::GetCachedAccountsInCookieJar() const {
+  return gaia_cookie_manager_service_->GetCachedListAccounts();
+}
+
+std::optional<size_t> IdentityManager::GetSessionIndexForPrimaryAccount()
+    const {
+  CoreAccountInfo primary_account_info =
+      GetPrimaryAccountInfo(ConsentLevel::kSignin);
+  if (primary_account_info.gaia.empty()) {
+    return std::nullopt;
+  }
+
+  AccountsInCookieJarInfo accounts_in_cookie_jar = GetAccountsInCookieJar();
+  const std::vector<gaia::ListedAccount>& accounts =
+      accounts_in_cookie_jar.GetAllAccounts();
+  for (size_t i = 0; i < accounts.size(); ++i) {
+    if (accounts[i].gaia_id == primary_account_info.gaia) {
+      return i;
+    }
+  }
+
+  return std::nullopt;
 }
 
 PrimaryAccountMutator* IdentityManager::GetPrimaryAccountMutator() {
@@ -400,6 +440,13 @@ std::vector<AccountInfo> IdentityManager::GetAccountsOnDevice() {
 }
 #endif
 
+void IdentityManager::SetCapabilityOverride(const CoreAccountId& account_id,
+                                            std::string_view capability_name,
+                                            std::optional<Tribool> override_value) {
+  account_tracker_service_->SetCapabilityOverride(account_id, capability_name,
+                                                  override_value);
+}
+
 void IdentityManager::AddDiagnosticsObserver(DiagnosticsObserver* observer) {
   diagnostics_observation_list_.AddObserver(observer);
 }
@@ -411,6 +458,12 @@ void IdentityManager::RemoveDiagnosticsObserver(DiagnosticsObserver* observer) {
 void IdentityManager::OnNetworkInitialized() {
   gaia_cookie_manager_service_->InitCookieListener();
   account_fetcher_service_->OnNetworkInitialized();
+  // Trigger ListAccounts once the network is initialized to ensure the accounts
+  // in cookie jar are up to date.
+  if (base::FeatureList::IsEnabled(
+          switches::kAvoidAutoTriggerListAccountsOnStale)) {
+    gaia_cookie_manager_service_->ListAccounts();
+  }
 }
 
 CoreAccountId IdentityManager::PickAccountIdForAccount(
@@ -479,18 +532,14 @@ void IdentityManager::RefreshAccountInfoIfStale(JNIEnv* env) {
 }
 
 base::android::ScopedJavaLocalRef<jobject>
-IdentityManager::GetPrimaryAccountInfo(JNIEnv* env, jint consent_level) const {
-  CoreAccountInfo account_info =
-      GetPrimaryAccountInfo(static_cast<ConsentLevel>(consent_level));
+IdentityManager::GetPrimaryAccountInfo(JNIEnv* env) const {
+  CoreAccountInfo account_info = GetPrimaryAccountInfo(ConsentLevel::kSignin);
   if (account_info.IsEmpty()) {
     return nullptr;
   }
-  // TODO(https://crbug.com/471185380): After M146 reaches Stable - change the
-  // return type for GetPrimaryAccountInfo to AccountInfo.
-  CHECK(!account_tracker_service_->GetAccountInfo(account_info.account_id)
-             .IsEmpty(),
-        base::NotFatalUntil::M146);
-  return ConvertToJavaCoreAccountInfo(env, account_info);
+  AccountInfo extended_info =
+      account_tracker_service_->GetAccountInfo(account_info.account_id);
+  return ConvertToJavaAccountInfo(env, extended_info);
 }
 
 base::android::ScopedJavaLocalRef<jobject>
@@ -517,27 +566,7 @@ IdentityManager::FindExtendedAccountInfoByEmailAddress(
   return ConvertToJavaAccountInfo(env, account_info);
 }
 
-base::android::ScopedJavaLocalRef<jobjectArray>
-IdentityManager::GetAccountsWithRefreshTokens(JNIEnv* env) const {
-  std::vector<CoreAccountInfo> accounts = GetAccountsWithRefreshTokens();
-
-  base::android::ScopedJavaLocalRef<jclass> coreaccountinfo_clazz =
-      base::android::GetClass(
-          env, "org/chromium/components/signin/base/CoreAccountInfo");
-  auto array = base::android::ScopedJavaLocalRef<jobjectArray>::Adopt(
-      env, env->NewObjectArray(accounts.size(), coreaccountinfo_clazz.obj(),
-                               nullptr));
-  base::android::CheckException(env);
-
-  for (size_t i = 0; i < accounts.size(); ++i) {
-    base::android::ScopedJavaLocalRef<jobject> item =
-        ConvertToJavaCoreAccountInfo(env, accounts[i]);
-    env->SetObjectArrayElement(array.obj(), i, item.obj());
-  }
-  return array;
-}
-
-jboolean IdentityManager::IsClearPrimaryAccountAllowed(JNIEnv* env) const {
+bool IdentityManager::IsClearPrimaryAccountAllowed(JNIEnv* env) const {
   return signin_client_->IsClearPrimaryAccountAllowed();
 }
 #endif
@@ -614,9 +643,12 @@ void IdentityManager::OnPrimaryAccountChanged(
 #if BUILDFLAG(IS_ANDROID)
   if (java_identity_manager_) {
     JNIEnv* env = base::android::AttachCurrentThread();
-    Java_IdentityManagerImpl_onPrimaryAccountChanged(
-        env, java_identity_manager_,
-        ConvertToJavaPrimaryAccountChangeEvent(env, event_details));
+    base::android::ScopedJavaLocalRef<jobject> event =
+        ConvertToJavaPrimaryAccountChangeEvent(env, event_details);
+    if (event) {
+      Java_IdentityManagerImpl_onPrimaryAccountChanged(
+          env, java_identity_manager_, event);
+    }
   }
 #endif
 #if BUILDFLAG(IS_IOS)
@@ -647,12 +679,26 @@ void IdentityManager::OnRefreshTokenRevoked(const CoreAccountId& account_id) {
   for (auto& observer : observer_list_) {
     observer.OnRefreshTokenRemovedForAccount(account_id);
   }
+#if BUILDFLAG(IS_ANDROID)
+  if (java_identity_manager_) {
+    JNIEnv* env = base::android::AttachCurrentThread();
+    Java_IdentityManagerImpl_onRefreshTokenRemovedForAccount(
+        env, java_identity_manager_,
+        ConvertToJavaCoreAccountId(env, account_id));
+  }
+#endif
 }
 
 void IdentityManager::OnRefreshTokensLoaded() {
   for (auto& observer : observer_list_) {
     observer.OnRefreshTokensLoaded();
   }
+#if BUILDFLAG(IS_ANDROID)
+  if (java_identity_manager_) {
+    Java_IdentityManagerImpl_onRefreshTokensLoaded(
+        base::android::AttachCurrentThread(), java_identity_manager_);
+  }
+#endif
 }
 
 void IdentityManager::OnEndBatchChanges() {

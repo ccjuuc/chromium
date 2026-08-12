@@ -45,27 +45,34 @@ export class UserEducationInternalsCardElement extends CrLitElement {
     };
   }
 
-  accessor promo: FeaturePromoDemoPageInfo|null = null;
+  accessor promo: FeaturePromoDemoPageInfo = {
+    displayTitle: '',
+    displayDescription: '',
+    internalName: '',
+    type: '',
+    addedMilestone: 0,
+    supportedPlatforms: [],
+    instructions: [],
+    followedByInternalName: '',
+    data: [],
+    requiredFeatures: [],
+  };
   accessor showAction: boolean = false;
   protected accessor instructionsExpanded_: boolean = false;
   protected accessor dataExpanded_: boolean = false;
 
-  protected launchPromo_() {
+  protected onLaunchPromoClick_() {
     assert(this.promo);
-    this.dispatchEvent(new CustomEvent(
-        PROMO_LAUNCH_EVENT,
-        {bubbles: true, composed: true, detail: this.promo.internalName}));
+    this.fire(PROMO_LAUNCH_EVENT, this.promo.internalName);
   }
 
-  protected clearData_() {
+  protected onClearDataClick_() {
     assert(this.promo);
     if (confirm(
             'Clear all data associated with this User Education journey?\n' +
             'Note: because of session tracking and event constraints, ' +
-            'Feature Engagement may still disallow some IPH.')) {
-      this.dispatchEvent(new CustomEvent(
-          CLEAR_PROMO_DATA_EVENT,
-          {bubbles: true, composed: true, detail: this.promo.internalName}));
+            'Feature Engagement may still disallow some promos.')) {
+      this.fire(CLEAR_PROMO_DATA_EVENT, this.promo.internalName);
     }
   }
 
@@ -77,6 +84,16 @@ export class UserEducationInternalsCardElement extends CrLitElement {
   protected showDescription_() {
     assert(this.promo);
     return this.promo.displayDescription !== '';
+  }
+
+  protected showType_() {
+    assert(this.promo);
+    return this.promo.type !== '';
+  }
+
+  protected showPlatforms_() {
+    assert(this.promo);
+    return this.promo.supportedPlatforms.length > 0;
   }
 
   protected formatPlatforms_() {
@@ -109,7 +126,7 @@ export class UserEducationInternalsCardElement extends CrLitElement {
     return this.promo.data.length;
   }
 
-  protected scrollToFollowedBy_() {
+  protected onScrollToFollowedByClick_() {
     assert(this.promo);
     const parent = this.parentElement;
     if (parent) {

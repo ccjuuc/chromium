@@ -8,7 +8,6 @@
 
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/strings/stringprintf.h"
@@ -191,26 +190,25 @@ void BluetoothGattDiscovererWinrt::StartGattDiscovery(
     return;
   }
 
-  ComPtr<IAsyncOperation<GattDeviceServicesResult*>> get_gatt_services_op;
   if (!allow_cache && base::FeatureList::IsEnabled(
                           features::kUncachedGattDiscoveryForGattConnection)) {
     if (service_uuid_.has_value()) {
       hr = ble_device_3->GetGattServicesForUuidWithCacheModeAsync(
           BluetoothUUID::GetCanonicalValueAsGUID(
               service_uuid_->canonical_value()),
-          BluetoothCacheMode_Uncached, &get_gatt_services_op);
+          BluetoothCacheMode_Uncached, &get_gatt_services_op_);
     } else {
       hr = ble_device_3->GetGattServicesWithCacheModeAsync(
-          BluetoothCacheMode_Uncached, &get_gatt_services_op);
+          BluetoothCacheMode_Uncached, &get_gatt_services_op_);
     }
   } else {
     if (service_uuid_.has_value()) {
       hr = ble_device_3->GetGattServicesForUuidAsync(
           BluetoothUUID::GetCanonicalValueAsGUID(
               service_uuid_->canonical_value()),
-          &get_gatt_services_op);
+          &get_gatt_services_op_);
     } else {
-      hr = ble_device_3->GetGattServicesAsync(&get_gatt_services_op);
+      hr = ble_device_3->GetGattServicesAsync(&get_gatt_services_op_);
     }
   }
   if (FAILED(hr)) {
@@ -220,14 +218,17 @@ void BluetoothGattDiscovererWinrt::StartGattDiscovery(
     return;
   }
 
-  hr = base::win::PostAsyncResults(
-      std::move(get_gatt_services_op),
+  hr = base::win::PostAsyncHandlers(
+      get_gatt_services_op_.Get(),
       base::BindOnce(&BluetoothGattDiscovererWinrt::OnGetGattServices,
+                     weak_ptr_factory_.GetWeakPtr()),
+      base::BindOnce(&BluetoothGattDiscovererWinrt::OnGetGattServicesError,
                      weak_ptr_factory_.GetWeakPtr()));
 
   if (FAILED(hr)) {
-    BLUETOOTH_LOG(DEBUG) << "PostAsyncResults failed: "
+    BLUETOOTH_LOG(DEBUG) << "PostAsyncHandlers failed: "
                          << logging::SystemErrorCodeToString(hr);
+    get_gatt_services_op_.Reset();
     std::move(callback_).Run(false);
   }
 }
@@ -254,8 +255,16 @@ BluetoothGattDiscovererWinrt::GetDescriptors(
                                                           : nullptr;
 }
 
+void BluetoothGattDiscovererWinrt::OnGetGattServicesError(HRESULT hr) {
+  BLUETOOTH_LOG(DEBUG) << "Getting GATT Services failed: "
+                       << logging::SystemErrorCodeToString(hr);
+  get_gatt_services_op_.Reset();
+  std::move(callback_).Run(false);
+}
+
 void BluetoothGattDiscovererWinrt::OnGetGattServices(
     ComPtr<IGattDeviceServicesResult> services_result) {
+  get_gatt_services_op_.Reset();
   if (!CheckCommunicationStatus(services_result.Get())) {
     BLUETOOTH_LOG(DEBUG) << "Failed to get GATT services.";
     std::move(callback_).Run(false);
@@ -303,6 +312,7 @@ void BluetoothGattDiscovererWinrt::OnGetGattServices(
       BLUETOOTH_LOG(DEBUG) << "GattDeviceService::OpenAsync() failed: "
                            << logging::SystemErrorCodeToString(hr);
       std::move(callback_).Run(false);
+      return;
     }
 
     hr = base::win::PostAsyncResults(
@@ -375,8 +385,7 @@ void BluetoothGattDiscovererWinrt::OnGetCharacteristics(
     return;
   }
 
-  DCHECK(!base::Contains(service_to_characteristics_map_,
-                         service_attribute_handle));
+  DCHECK(!service_to_characteristics_map_.contains(service_attribute_handle));
   auto& characteristics_list =
       service_to_characteristics_map_[service_attribute_handle];
   if (!GetAsVector(characteristics.Get(), &characteristics_list)) {
@@ -425,6 +434,7 @@ void BluetoothGattDiscovererWinrt::OnGetCharacteristics(
       BLUETOOTH_LOG(DEBUG) << "PostAsyncResults failed: "
                            << logging::SystemErrorCodeToString(hr);
       std::move(callback_).Run(false);
+      return;
     }
   }
 
@@ -450,8 +460,8 @@ void BluetoothGattDiscovererWinrt::OnGetDescriptors(
     return;
   }
 
-  DCHECK(!base::Contains(characteristic_to_descriptors_map_,
-                         characteristic_attribute_handle));
+  DCHECK(!characteristic_to_descriptors_map_.contains(
+      characteristic_attribute_handle));
   if (!GetAsVector(descriptors.Get(), &characteristic_to_descriptors_map_
                                           [characteristic_attribute_handle])) {
     std::move(callback_).Run(false);

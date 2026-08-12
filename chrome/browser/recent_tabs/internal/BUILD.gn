@@ -42,6 +42,7 @@ android_library("java") {
     "android/java/src/org/chromium/chrome/browser/recent_tabs/ui/RestoreTabsViewBinderHelper.java",
     "android/java/src/org/chromium/chrome/browser/recent_tabs/ui/TabItemProperties.java",
     "android/java/src/org/chromium/chrome/browser/recent_tabs/ui/TabItemViewBinder.java",
+    "android/java/src/org/chromium/chrome/browser/recent_tabs/ui/UnsharableRippleDrawable.java",
   ]
 
   deps = [
@@ -56,6 +57,7 @@ android_library("java") {
     "//chrome/browser/recent_tabs:java",
     "//chrome/browser/tab:java",
     "//chrome/browser/tabmodel:java",
+    "//chrome/browser/ui/android/actions:java",
     "//chrome/browser/ui/android/edge_to_edge:factory_java",
     "//chrome/browser/ui/android/edge_to_edge:java",
     "//chrome/browser/ui/android/favicon:java",
@@ -88,7 +90,6 @@ android_resources("java_resources") {
     "android/java/res/drawable/restore_tabs_detail_item_background_bottom.xml",
     "android/java/res/drawable/restore_tabs_detail_item_background_middle.xml",
     "android/java/res/drawable/restore_tabs_detail_item_background_top.xml",
-    "android/java/res/drawable/restore_tabs_expand_more.xml",
     "android/java/res/drawable/restore_tabs_fre_logo.xml",
     "android/java/res/drawable/restore_tabs_phone_icon.xml",
     "android/java/res/drawable/restore_tabs_single_item_background.xml",
@@ -173,10 +174,12 @@ robolectric_library("junit") {
 
 android_library("recent_tabs_javatests") {
   testonly = true
+  resources_package = "org.chromium.chrome.browser.recent_tabs"
   sources = [ "android/java/src/org/chromium/chrome/browser/recent_tabs/RestoreTabsTest.java" ]
 
   deps = [
     ":java",
+    ":java_resources",
     "//base:base_java_test_support",
     "//chrome/android:chrome_java",
     "//chrome/android/features/tab_ui:test_support_javalib",

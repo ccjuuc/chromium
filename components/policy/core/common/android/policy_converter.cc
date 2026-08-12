@@ -44,7 +44,7 @@ std::optional<base::Value> SplitCommaSeparatedList(
     const std::string& str_value) {
   DCHECK(!str_value.empty());
 
-  base::Value::List as_list;
+  base::ListValue as_list;
   std::vector<std::string> items_as_vector = base::SplitString(
       str_value, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
   std::ranges::for_each(items_as_vector, [&as_list](const std::string& item) {
@@ -80,14 +80,13 @@ base::android::ScopedJavaLocalRef<jobject> PolicyConverter::GetJavaObject() {
 
 void PolicyConverter::SetPolicyBoolean(JNIEnv* env,
                                        const JavaRef<jstring>& policyKey,
-                                       jboolean value) {
-  SetPolicyValue(ConvertJavaStringToUTF8(env, policyKey),
-                 base::Value(static_cast<bool>(value)));
+                                       bool value) {
+  SetPolicyValue(ConvertJavaStringToUTF8(env, policyKey), base::Value(value));
 }
 
 void PolicyConverter::SetPolicyInteger(JNIEnv* env,
                                        const JavaRef<jstring>& policyKey,
-                                       jint value) {
+                                       int32_t value) {
   SetPolicyValue(ConvertJavaStringToUTF8(env, policyKey),
                  base::Value(static_cast<int>(value)));
 }
@@ -99,25 +98,25 @@ void PolicyConverter::SetPolicyString(JNIEnv* env,
                  base::Value(ConvertJavaStringToUTF8(env, value)));
 }
 
-void PolicyConverter::SetPolicyStringArray(JNIEnv* env,
-                                           const JavaRef<jstring>& policyKey,
-                                           const JavaRef<jobjectArray>& array) {
+void PolicyConverter::SetPolicyStringArray(
+    JNIEnv* env,
+    const JavaRef<jstring>& policyKey,
+    const JavaRef<JArray<jstring>>& array) {
   SetPolicyValue(ConvertJavaStringToUTF8(env, policyKey),
                  base::Value(ConvertJavaStringArrayToListValue(env, array)));
 }
 
 // static
-base::Value::List PolicyConverter::ConvertJavaStringArrayToListValue(
+base::ListValue PolicyConverter::ConvertJavaStringArrayToListValue(
     JNIEnv* env,
-    const JavaRef<jobjectArray>& array) {
+    const JavaRef<JArray<jstring>>& array) {
   DCHECK(!array.is_null());
-  base::android::JavaObjectArrayReader<jstring> array_reader(array);
-  DCHECK_GE(array_reader.size(), 0)
-      << "Invalid array length: " << array_reader.size();
+  auto array_reader = array.CreateView(env);
 
-  base::Value::List list_value;
-  for (auto j_str : array_reader)
-    list_value.Append(ConvertJavaStringToUTF8(env, j_str));
+  base::ListValue list_value;
+  for (const auto& jstr : array_reader) {
+    list_value.Append(jstr.ConvertTo<std::string>(env));
+  }
 
   return list_value;
 }

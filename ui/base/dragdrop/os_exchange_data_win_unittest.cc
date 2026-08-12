@@ -6,19 +6,27 @@
 
 #include <objbase.h>
 
+#include <algorithm>
 #include <memory>
+#include <optional>
+#include <vector>
 
+#include "base/byte_size.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/sequence_checker.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/run_until.h"
 #include "base/test/task_environment.h"
+#include "base/threading/thread.h"
+#include "base/win/scoped_com_initializer.h"
 #include "base/win/scoped_hglobal.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -32,6 +40,16 @@
 namespace ui {
 
 namespace {
+
+// Creates a dummy `STGMEDIUM` containing 4 bytes of data ("AAAA").
+STGMEDIUM CreateHGlobalMedium() {
+  STGMEDIUM stgm = {};
+  stgm.tymed = TYMED_HGLOBAL;
+  stgm.hGlobal = GlobalAlloc(GPTR, 4);
+  base::win::ScopedHGlobal<std::array<char, 4>*> lock(stgm.hGlobal);
+  *lock.data() = {'A', 'A', 'A', 'A'};
+  return stgm;
+}
 
 const std::vector<DWORD> kStorageMediaTypesForVirtualFiles = {
     TYMED_ISTORAGE,
@@ -104,7 +122,14 @@ class RefCountMockStream : public IStream {
                              UnlockRegion,
                              HRESULT(ULARGE_INTEGER, ULARGE_INTEGER, DWORD));
 
-  MOCK_METHOD1_WITH_CALLTYPE(STDMETHODCALLTYPE, Clone, HRESULT(IStream**));
+  // Clone is not supported; returning E_NOTIMPL forces the production code to
+  // use the AddRef() fallback, keeping ref-count assertions meaningful.
+  IFACEMETHODIMP Clone(IStream** ppstm) override {
+    if (ppstm) {
+      *ppstm = nullptr;
+    }
+    return E_NOTIMPL;
+  }
 
   MOCK_METHOD3_WITH_CALLTYPE(STDMETHODCALLTYPE,
                              Seek,
@@ -210,7 +235,7 @@ TEST_F(OSExchangeDataWinTest, StringDataWritingViaCOM) {
   OSExchangeData data2(data.provider().Clone());
   EXPECT_TRUE(data2.HasURL(FilenameToURLPolicy::CONVERT_FILENAMES));
   std::vector<ui::ClipboardUrlInfo> url_infos =
-      data2.GetURLsAndTitles(FilenameToURLPolicy::CONVERT_FILENAMES);
+      data2.GetURLs(FilenameToURLPolicy::CONVERT_FILENAMES);
   ASSERT_FALSE(url_infos.empty());
   const ui::ClipboardUrlInfo& url_info = url_infos.front();
   GURL reference_url(base::AsStringPiece16(input));
@@ -258,7 +283,7 @@ TEST_F(OSExchangeDataWinTest, RemoveData) {
   OSExchangeData data2(data.provider().Clone());
   EXPECT_TRUE(data2.HasURL(FilenameToURLPolicy::CONVERT_FILENAMES));
   std::vector<ui::ClipboardUrlInfo> url_infos =
-      data2.GetURLsAndTitles(FilenameToURLPolicy::CONVERT_FILENAMES);
+      data2.GetURLs(FilenameToURLPolicy::CONVERT_FILENAMES);
   ASSERT_FALSE(url_infos.empty());
   EXPECT_EQ(GURL(base::AsStringPiece16(input2)), url_infos.front().url);
 }
@@ -413,7 +438,8 @@ TEST_F(OSExchangeDataWinTest, TestURLExchangeFormatsViaCOM) {
   std::u16string url_title = u"www.google.com";
   data.SetURL(url, url_title);
 
-  // File contents access via COM
+  // File contents access via COM. SetFileContents stores data as TYMED_ISTREAM
+  // (backed by SHCreateMemStream), so request TYMED_ISTREAM accordingly.
   Microsoft::WRL::ComPtr<IDataObject> com_data(
       OSExchangeDataProviderWin::GetIDataObject(data));
   {
@@ -421,13 +447,20 @@ TEST_F(OSExchangeDataWinTest, TestURLExchangeFormatsViaCOM) {
         RegisterClipboardFormat(CFSTR_FILECONTENTS);
     // format_etc.lindex value 0 used for file drop.
     FORMATETC format_etc = {cfstr_file_contents, nullptr, DVASPECT_CONTENT, 0,
-                            TYMED_HGLOBAL};
+                            TYMED_ISTREAM};
     EXPECT_EQ(S_OK, com_data->QueryGetData(&format_etc));
 
-    STGMEDIUM medium;
-    EXPECT_EQ(S_OK, com_data->GetData(&format_etc, &medium));
-    base::win::ScopedHGlobal<char*> glob(medium.hGlobal);
-    std::string output(glob.data(), glob.size());
+    STGMEDIUM medium = {};
+    ASSERT_EQ(S_OK, com_data->GetData(&format_etc, &medium));
+    ASSERT_EQ(TYMED_ISTREAM, medium.tymed);
+
+    std::string output;
+    char buf[4096];
+    ULONG nread = 0;
+    while (medium.pstm->Read(buf, sizeof(buf), &nread) == S_OK && nread > 0) {
+      output.append(buf, nread);
+    }
+
     std::string file_contents = "[InternetShortcut]\r\nURL=";
     file_contents += url_spec;
     file_contents += "\r\n";
@@ -438,7 +471,8 @@ TEST_F(OSExchangeDataWinTest, TestURLExchangeFormatsViaCOM) {
 
 TEST_F(OSExchangeDataWinTest, FileContents) {
   OSExchangeData data;
-  std::string file_contents("data\0with\0nulls", 15);
+  base::span<const uint8_t> file_contents =
+      base::byte_span_from_cstring("data\0with\0nulls");
   data.SetFileContents(base::FilePath(L"filename.txt"), file_contents);
 
   OSExchangeData copy(data.provider().Clone());
@@ -450,16 +484,16 @@ TEST_F(OSExchangeDataWinTest, FileContents) {
 }
 
 TEST_F(OSExchangeDataWinTest, VirtualFiles) {
-  const base::FilePath kPathPlaceholder(FILE_PATH_LITERAL("temp.tmp"));
+  const base::FilePath kPathPlaceholder(kVirtualFileTempPlaceholderPath);
 
-  const std::vector<std::pair<base::FilePath, std::string>>
+  const std::vector<std::pair<base::FilePath, base::span<const uint8_t>>>
       kTestFilenamesAndContents = {
           {base::FilePath(FILE_PATH_LITERAL("filename.txt")),
-           std::string("just some data")},
+           base::byte_span_from_cstring("just some data")},
           {base::FilePath(FILE_PATH_LITERAL("another filename.txt")),
-           std::string("just some data\0with\0nulls", 25)},
+           base::byte_span_from_cstring("just some data\0with\0nulls")},
           {base::FilePath(FILE_PATH_LITERAL("and another filename.txt")),
-           std::string("just some more data")},
+           base::byte_span_from_cstring("just some more data")},
       };
 
   for (const auto& tymed : kStorageMediaTypesForVirtualFiles) {
@@ -507,19 +541,153 @@ TEST_F(OSExchangeDataWinTest, VirtualFiles) {
           base::MakeLongFilePath(retrieved_virtual_files_[i].path.DirName()));
       EXPECT_EQ(kTestFilenamesAndContents[i].first.Extension(),
                 retrieved_virtual_files_[i].path.Extension());
-      std::string read_contents;
-      EXPECT_TRUE(base::ReadFileToString(retrieved_virtual_files_[i].path,
-                                         &read_contents));
+      std::optional<std::vector<uint8_t>> read_contents =
+          base::ReadFileToBytes(retrieved_virtual_files_[i].path);
+      ASSERT_TRUE(read_contents.has_value());
       if (tymed != TYMED_ISTORAGE) {
-        EXPECT_EQ(kTestFilenamesAndContents[i].second, read_contents);
+        EXPECT_EQ(kTestFilenamesAndContents[i].second, read_contents.value());
       } else {
         // IStorage uses compound files, so temp files won't be flat text files.
         // Just make sure the original contents appears in the compound files.
-        EXPECT_TRUE(
-            base::Contains(read_contents, kTestFilenamesAndContents[i].second));
+        EXPECT_FALSE(std::ranges::search(read_contents.value(),
+                                         kTestFilenamesAndContents[i].second)
+                         .empty());
       }
     }
   }
+}
+
+TEST_F(OSExchangeDataWinTest, VirtualFilesWithLeadingDirectoryEntry) {
+  // A descriptor whose first entry is a directory (as produced by dropping a
+  // folder out of a Windows ZIP "compressed folder"). The directory has no
+  // content stream and must be skipped without shifting the file entries that
+  // follow.
+  const std::vector<std::pair<base::FilePath, base::span<const uint8_t>>>
+      kTestFilenamesAndContents = {
+          {base::FilePath(FILE_PATH_LITERAL("folder")),
+           base::span<const uint8_t>()},
+          {base::FilePath(FILE_PATH_LITERAL("first.txt")),
+           base::byte_span_from_cstring("contents of first")},
+          {base::FilePath(FILE_PATH_LITERAL("second.txt")),
+           base::byte_span_from_cstring("contents of second")},
+      };
+  const std::vector<size_t> kDirectoryIndices = {0};
+
+  // Only the non-directory entries should be surfaced as files.
+  const std::vector<std::pair<base::FilePath, base::span<const uint8_t>>>
+      kExpectedFiles = {kTestFilenamesAndContents[1],
+                        kTestFilenamesAndContents[2]};
+
+  for (const auto& tymed : kStorageMediaTypesForVirtualFiles) {
+    OSExchangeData data;
+    static_cast<OSExchangeDataProviderWin*>(&data.provider())
+        ->SetVirtualFileContentsWithDirectoriesForTesting(
+            kTestFilenamesAndContents, kDirectoryIndices, tymed);
+
+    OSExchangeData copy(data.provider().Clone());
+    std::optional<std::vector<FileInfo>> file_infos =
+        copy.GetVirtualFilenames();
+    ASSERT_TRUE(file_infos.has_value());
+    EXPECT_EQ(kExpectedFiles.size(), file_infos.value().size());
+
+    auto callback =
+        base::BindOnce(&OSExchangeDataWinTest::OnGotVirtualFilesAsTempFiles,
+                       base::Unretained(this));
+    OnGotVirtualFilesAsTempFilesCalledChecker checker(this);
+    copy.GetVirtualFilesAsTempFiles(std::move(callback));
+    task_environment_.RunUntilIdle();
+
+    ASSERT_EQ(kExpectedFiles.size(), retrieved_virtual_files_.size());
+    for (size_t i = 0; i < retrieved_virtual_files_.size(); i++) {
+      EXPECT_EQ(kExpectedFiles[i].first,
+                retrieved_virtual_files_[i].display_name);
+      std::optional<std::vector<uint8_t>> read_contents =
+          base::ReadFileToBytes(retrieved_virtual_files_[i].path);
+      ASSERT_TRUE(read_contents.has_value());
+      if (tymed != TYMED_ISTORAGE) {
+        EXPECT_EQ(kExpectedFiles[i].second, read_contents.value());
+      } else {
+        EXPECT_FALSE(
+            std::ranges::search(read_contents.value(), kExpectedFiles[i].second)
+                .empty());
+      }
+    }
+  }
+}
+
+TEST_F(OSExchangeDataWinTest, VirtualFilesAsyncChunkedCopy) {
+  const base::FilePath kPathPlaceholder(kVirtualFileTempPlaceholderPath);
+
+  // Create a large file (50MB) to exercise the chunked copy code path.
+  // The chunk size is 16MB, so this will require multiple iterations.
+  constexpr base::ByteSize kLargeFileSizeBytes = base::MiBU(50);
+  const std::vector<uint8_t> large_content(kLargeFileSizeBytes.InBytes(), 'X');
+
+  const std::vector<std::pair<base::FilePath, base::span<const uint8_t>>>
+      kTestFilenamesAndContents = {
+          {base::FilePath(FILE_PATH_LITERAL("large_file.bin")), large_content},
+      };
+
+  OSExchangeData data;
+  data.provider().SetVirtualFileContentsForTesting(kTestFilenamesAndContents,
+                                                   TYMED_ISTREAM);
+
+  auto* provider = static_cast<OSExchangeDataProviderWin*>(&data.provider());
+  provider->async_operation()->SetAsyncMode(TRUE);
+
+  BOOL is_async = FALSE;
+  EXPECT_EQ(S_OK, provider->async_operation()->GetAsyncMode(&is_async));
+  EXPECT_TRUE(is_async);
+  // Track whether we observe InOperation() returning TRUE at any point,
+  // which verifies StartOperation() was called.
+  bool saw_in_operation_true = false;
+  BOOL in_operation = FALSE;
+
+  std::optional<std::vector<FileInfo>> file_infos = data.GetVirtualFilenames();
+  ASSERT_TRUE(file_infos.has_value());
+  EXPECT_EQ(1u, file_infos.value().size());
+  EXPECT_EQ(kTestFilenamesAndContents[0].first,
+            file_infos.value()[0].display_name);
+  EXPECT_EQ(kPathPlaceholder, file_infos.value()[0].path);
+
+  base::FilePath temp_dir;
+  EXPECT_TRUE(base::GetTempDir(&temp_dir));
+
+  auto callback =
+      base::BindOnce(&OSExchangeDataWinTest::OnGotVirtualFilesAsTempFiles,
+                     base::Unretained(this));
+  OnGotVirtualFilesAsTempFilesCalledChecker checker(this);
+  data.GetVirtualFilesAsTempFiles(std::move(callback));
+
+  // Wait for the async chunked copy to complete, checking InOperation on each
+  // iteration.
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    provider->async_operation()->InOperation(&in_operation);
+    if (in_operation) {
+      saw_in_operation_true = true;
+    }
+    return on_got_virtual_files_as_temp_files_called_;
+  }));
+  EXPECT_TRUE(saw_in_operation_true);
+
+  // After async extraction completes, assert EndOperation was called.
+  EXPECT_EQ(S_OK, provider->async_operation()->InOperation(&in_operation));
+  EXPECT_FALSE(in_operation);
+
+  ASSERT_EQ(1u, retrieved_virtual_files_.size());
+  EXPECT_EQ(kTestFilenamesAndContents[0].first,
+            retrieved_virtual_files_[0].display_name);
+  EXPECT_EQ(base::MakeLongFilePath(temp_dir),
+            base::MakeLongFilePath(retrieved_virtual_files_[0].path.DirName()));
+  EXPECT_EQ(kTestFilenamesAndContents[0].first.Extension(),
+            retrieved_virtual_files_[0].path.Extension());
+
+  // Verify the full content was copied correctly despite chunking.
+  std::optional<std::vector<uint8_t>> read_contents =
+      base::ReadFileToBytes(retrieved_virtual_files_[0].path);
+  ASSERT_TRUE(read_contents.has_value());
+  EXPECT_EQ(large_content.size(), read_contents->size());
+  EXPECT_EQ(large_content, read_contents.value());
 }
 
 TEST_F(OSExchangeDataWinTest, VirtualFilesRealFilesPreferred) {
@@ -531,14 +699,14 @@ TEST_F(OSExchangeDataWinTest, VirtualFilesRealFilesPreferred) {
        base::FilePath()},
   };
 
-  const std::vector<std::pair<base::FilePath, std::string>>
+  const std::vector<std::pair<base::FilePath, base::span<const uint8_t>>>
       kTestFilenamesAndContents = {
           {base::FilePath(FILE_PATH_LITERAL("filename.txt")),
-           std::string("just some data")},
+           base::byte_span_from_cstring("just some data")},
           {base::FilePath(FILE_PATH_LITERAL("another filename.txt")),
-           std::string("just some data\0with\0nulls", 25)},
+           base::byte_span_from_cstring("just some data\0with\0nulls")},
           {base::FilePath(FILE_PATH_LITERAL("and another filename.txt")),
-           std::string("just some more data")},
+           base::byte_span_from_cstring("just some more data")},
       };
 
   for (const auto& tymed : kStorageMediaTypesForVirtualFiles) {
@@ -575,16 +743,16 @@ TEST_F(OSExchangeDataWinTest, VirtualFilesRealFilesPreferred) {
 }
 
 TEST_F(OSExchangeDataWinTest, VirtualFilesDuplicateNames) {
-  const std::vector<std::pair<base::FilePath, std::string>>
+  const std::vector<std::pair<base::FilePath, base::span<const uint8_t>>>
       kTestFilenamesAndContents = {
           {base::FilePath(FILE_PATH_LITERAL("A (1) (2).txt")),
-           std::string("just some data")},
+           base::byte_span_from_cstring("just some data")},
           {base::FilePath(FILE_PATH_LITERAL("A.txt")),
-           std::string("just some more data")},
+           base::byte_span_from_cstring("just some more data")},
           {base::FilePath(FILE_PATH_LITERAL("A (1).txt")),
-           std::string("just some more more data")},
+           base::byte_span_from_cstring("just some more more data")},
           {base::FilePath(FILE_PATH_LITERAL("A.txt")),
-           std::string("just some more more more data")},
+           base::byte_span_from_cstring("just some more more more data")},
       };
 
   for (const auto& tymed : kStorageMediaTypesForVirtualFiles) {
@@ -646,30 +814,31 @@ TEST_F(OSExchangeDataWinTest, VirtualFilesDuplicateNames) {
           base::MakeLongFilePath(retrieved_virtual_files_[i].path.DirName()));
       EXPECT_EQ(kTestFilenamesAndContents[i].first.Extension(),
                 retrieved_virtual_files_[i].path.Extension());
-      std::string read_contents;
-      EXPECT_TRUE(base::ReadFileToString(retrieved_virtual_files_[i].path,
-                                         &read_contents));
+      std::optional<std::vector<uint8_t>> read_contents =
+          base::ReadFileToBytes(retrieved_virtual_files_[i].path);
+      ASSERT_TRUE(read_contents.has_value());
       if (tymed != TYMED_ISTORAGE) {
-        EXPECT_EQ(kTestFilenamesAndContents[i].second, read_contents);
+        EXPECT_EQ(kTestFilenamesAndContents[i].second, read_contents.value());
       } else {
         // IStorage uses compound files, so temp files won't be flat text files.
         // Just make sure the original contents appears in the compound files.
-        EXPECT_TRUE(
-            base::Contains(read_contents, kTestFilenamesAndContents[i].second));
+        EXPECT_FALSE(std::ranges::search(read_contents.value(),
+                                         kTestFilenamesAndContents[i].second)
+                         .empty());
       }
     }
   }
 }  // namespace ui
 
 TEST_F(OSExchangeDataWinTest, VirtualFilesDuplicateNamesCaseInsensitivity) {
-  const std::vector<std::pair<base::FilePath, std::string>>
+  const std::vector<std::pair<base::FilePath, base::span<const uint8_t>>>
       kTestFilenamesAndContents = {
           {base::FilePath(FILE_PATH_LITERAL("a.txt")),
-           std::string("just some data")},
+           base::byte_span_from_cstring("just some data")},
           {base::FilePath(FILE_PATH_LITERAL("B.txt")),
-           std::string("just some more data")},
+           base::byte_span_from_cstring("just some more data")},
           {base::FilePath(FILE_PATH_LITERAL("A.txt")),
-           std::string("just some more more data")},
+           base::byte_span_from_cstring("just some more more data")},
       };
 
   for (const auto& tymed : kStorageMediaTypesForVirtualFiles) {
@@ -731,16 +900,17 @@ TEST_F(OSExchangeDataWinTest, VirtualFilesDuplicateNamesCaseInsensitivity) {
           base::MakeLongFilePath(retrieved_virtual_files_[i].path.DirName()));
       EXPECT_EQ(kTestFilenamesAndContents[i].first.Extension(),
                 retrieved_virtual_files_[i].path.Extension());
-      std::string read_contents;
-      EXPECT_TRUE(base::ReadFileToString(retrieved_virtual_files_[i].path,
-                                         &read_contents));
+      std::optional<std::vector<uint8_t>> read_contents =
+          base::ReadFileToBytes(retrieved_virtual_files_[i].path);
+      ASSERT_TRUE(read_contents.has_value());
       if (tymed != TYMED_ISTORAGE) {
-        EXPECT_EQ(kTestFilenamesAndContents[i].second, read_contents);
+        EXPECT_EQ(kTestFilenamesAndContents[i].second, read_contents.value());
       } else {
         // IStorage uses compound files, so temp files won't be flat text files.
         // Just make sure the original contents appears in the compound files.
-        EXPECT_TRUE(
-            base::Contains(read_contents, kTestFilenamesAndContents[i].second));
+        EXPECT_FALSE(std::ranges::search(read_contents.value(),
+                                         kTestFilenamesAndContents[i].second)
+                         .empty());
       }
     }
   }
@@ -758,26 +928,28 @@ TEST_F(OSExchangeDataWinTest, VirtualFilesInvalidAndDuplicateNames) {
       base::FilePath(std::wstring(MAX_PATH - 5, L'a'))
           .AddExtension(FILE_PATH_LITERAL("txt"));
 
-  const std::vector<std::pair<base::FilePath, std::string>>
+  const std::vector<std::pair<base::FilePath, base::span<const uint8_t>>>
       kTestFilenamesAndContents = {
-          {kPathWithInvalidFileNameCharacters, std::string("just some data")},
           {kPathWithInvalidFileNameCharacters,
-           std::string("just some data\0with\0nulls", 25)},
+           base::byte_span_from_cstring("just some data")},
+          {kPathWithInvalidFileNameCharacters,
+           base::byte_span_from_cstring("just some data\0with\0nulls")},
           {// Test that still get a unique name if a previous uniquified
            // name is a duplicate of this one.
            kPathWithInvalidFileNameCharacters.InsertBeforeExtension(
                FILE_PATH_LITERAL(" (1)")),
-           std::string("just some more data")},
+           base::byte_span_from_cstring("just some more data")},
           // Expect a default display name to be generated ("download" if it
           // matters).
-          {kEmptyDisplayName, std::string("data for an empty display name")},
           {kEmptyDisplayName,
-           std::string("data for another empty display name")},
+           base::byte_span_from_cstring("data for an empty display name")},
+          {kEmptyDisplayName,
+           base::byte_span_from_cstring("data for another empty display name")},
           // Expect good behavior if the display name length exceeds MAX_PATH.
           {kMaxPathDisplayName,
-           std::string("data for a >MAX_PATH display name")},
-          {kMaxPathDisplayName,
-           std::string("data for another >MAX_PATH display name")},
+           base::byte_span_from_cstring("data for a >MAX_PATH display name")},
+          {kMaxPathDisplayName, base::byte_span_from_cstring(
+                                    "data for another >MAX_PATH display name")},
       };
 
   for (const auto& tymed : kStorageMediaTypesForVirtualFiles) {
@@ -851,29 +1023,30 @@ TEST_F(OSExchangeDataWinTest, VirtualFilesInvalidAndDuplicateNames) {
           base::MakeLongFilePath(retrieved_virtual_files_[i].path.DirName()));
       EXPECT_EQ(kTestFilenamesAndContents[i].first.Extension(),
                 retrieved_virtual_files_[i].path.Extension());
-      std::string read_contents;
       // Ability to read the contents implies a temp file was successfully
       // created on the file system even though the original suggested display
       // name had invalid filename characters.
-      EXPECT_TRUE(base::ReadFileToString(retrieved_virtual_files_[i].path,
-                                         &read_contents));
+      std::optional<std::vector<uint8_t>> read_contents =
+          base::ReadFileToBytes(retrieved_virtual_files_[i].path);
+      ASSERT_TRUE(read_contents.has_value());
       if (tymed != TYMED_ISTORAGE) {
-        EXPECT_EQ(kTestFilenamesAndContents[i].second, read_contents);
+        EXPECT_EQ(kTestFilenamesAndContents[i].second, read_contents.value());
       } else {
         // IStorage uses compound files, so temp files won't be flat text files.
         // Just make sure the original contents appears in the compound files.
-        EXPECT_TRUE(
-            base::Contains(read_contents, kTestFilenamesAndContents[i].second));
+        EXPECT_FALSE(std::ranges::search(read_contents.value(),
+                                         kTestFilenamesAndContents[i].second)
+                         .empty());
       }
     }
   }
 }
 
 TEST_F(OSExchangeDataWinTest, VirtualFilesEmptyContents) {
-  const std::vector<std::pair<base::FilePath, std::string>>
+  const std::vector<std::pair<base::FilePath, base::span<const uint8_t>>>
       kTestFilenamesAndContents = {
           {base::FilePath(FILE_PATH_LITERAL("file_with_no_contents.txt")),
-           std::string()},
+           std::vector<uint8_t>()},
       };
 
   for (const auto& tymed : kStorageMediaTypesForVirtualFiles) {
@@ -921,14 +1094,14 @@ TEST_F(OSExchangeDataWinTest, VirtualFilesEmptyContents) {
           base::MakeLongFilePath(retrieved_virtual_files_[i].path.DirName()));
       EXPECT_EQ(kTestFilenamesAndContents[i].first.Extension(),
                 retrieved_virtual_files_[i].path.Extension());
-      std::string read_contents;
-      EXPECT_TRUE(base::ReadFileToString(retrieved_virtual_files_[i].path,
-                                         &read_contents));
+      std::optional<std::vector<uint8_t>> read_contents =
+          base::ReadFileToBytes(retrieved_virtual_files_[i].path);
+      EXPECT_TRUE(read_contents.has_value());
       // IStorage uses compound files, so temp files won't be flat text files.
       // Just make sure the original contents appear in the compound files.
       if (tymed != TYMED_ISTORAGE) {
-        EXPECT_EQ(kTestFilenamesAndContents[i].second, read_contents);
-        EXPECT_EQ(static_cast<size_t>(0), read_contents.length());
+        EXPECT_EQ(kTestFilenamesAndContents[i].second, read_contents.value());
+        EXPECT_EQ(static_cast<size_t>(0), read_contents->size());
       }
     }
   }
@@ -975,7 +1148,7 @@ TEST_F(OSExchangeDataWinTest, ProvideURLForPlainTextURL) {
   OSExchangeData data2(data.provider().Clone());
   ASSERT_TRUE(data2.HasURL(FilenameToURLPolicy::CONVERT_FILENAMES));
   std::vector<ui::ClipboardUrlInfo> url_infos =
-      data2.GetURLsAndTitles(FilenameToURLPolicy::CONVERT_FILENAMES);
+      data2.GetURLs(FilenameToURLPolicy::CONVERT_FILENAMES);
   ASSERT_FALSE(url_infos.empty());
   EXPECT_EQ(GURL("http://google.com"), url_infos.front().url);
 }
@@ -1073,6 +1246,310 @@ TEST_F(OSExchangeDataWinTest, SetDataNoRelease) {
   // Reference count should be the same as before if |data_object| is
   // destroyed.
   EXPECT_EQ(stream.GetRefCount(), 0u);
+}
+
+// Verifies that calling `DataObjectImpl::SetData` with a `FORMATETC` containing
+// a target device (`ptd`) correctly performs a deep copy of the variable-length
+// `DVTARGETDEVICE` structure. This prevents Use-After-Free of the COM-stub
+// owned `ptd` pointer, and Out-of-Bounds heap read when the data object's
+// formats are later cloned and marshalled back to the caller.
+TEST_F(OSExchangeDataWinTest, SetDataTargetDeviceUAFAndOOB) {
+  base::win::ScopedCOMInitializer com_initializer;
+
+  // Create the data provider on the main thread and marshal the `IDataObject`
+  // pointer into a stream so it can be unmarshalled and accessed by a
+  // background thread.
+  OSExchangeDataProviderWin data_provider;
+  IDataObject* data_object = data_provider.data_object();
+
+  IStream* stream = nullptr;
+  ASSERT_EQ(CoMarshalInterThreadInterfaceInStream(IID_IDataObject, data_object,
+                                                  &stream),
+            S_OK);
+
+  base::RunLoop run_loop;
+
+  // Run a background thread representing the cross-process COM client.
+  base::Thread background_thread("UAFBackgroundThread");
+  background_thread.Start();
+
+  background_thread.task_runner()->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](uintptr_t stream_ptr_val, base::OnceClosure quit_closure) {
+            base::ScopedClosureRunner quit_runner(std::move(quit_closure));
+            {
+              base::win::ScopedCOMInitializer com_initializer;
+
+              // Unmarshal the data object proxy.
+              IStream* stream_ptr = reinterpret_cast<IStream*>(stream_ptr_val);
+              Microsoft::WRL::ComPtr<IDataObject> proxy;
+              ASSERT_EQ(CoGetInterfaceAndReleaseStream(stream_ptr,
+                                                       IID_PPV_ARGS(&proxy)),
+                        S_OK);
+
+              // Call `SetData` with a `FORMATETC` containing a target device.
+              const DWORD kTdSize = sizeof(DVTARGETDEVICE);
+              base::win::ScopedCoMem<DVTARGETDEVICE> dv;
+              dv.Reset(static_cast<DVTARGETDEVICE*>(CoTaskMemAlloc(kTdSize)));
+              ASSERT_NE(dv.get(), nullptr);
+
+              dv->tdSize = kTdSize;
+              dv->tdDriverNameOffset = 0;
+              dv->tdDeviceNameOffset = 0;
+              dv->tdPortNameOffset = 0;
+              dv->tdExtDevmodeOffset = 0;
+              dv->tdData[0] = 0;
+
+              FORMATETC fe =
+                  ClipboardFormatType(RegisterClipboardFormatW(L"ChromePtdPoC"),
+                                      -1, TYMED_HGLOBAL)
+                      .ToFormatEtc();
+              fe.ptd = dv.get();
+
+              STGMEDIUM stgm = CreateHGlobalMedium();
+              // `DataObjectImpl` takes ownership of `stgm.hGlobal` when calling
+              // `SetData` with `fRelease=TRUE`.
+              ASSERT_EQ(proxy->SetData(&fe, &stgm, TRUE), S_OK);
+
+              // Free the local target device buffer by resetting the
+              // `ScopedCoMem`. The COM stub on the main thread will also free
+              // its temporary buffer when `SetData` returns.
+              dv.Reset(nullptr);
+
+              // Call `EnumFormatEtc` and retrieve the cloned format. If Chrome
+              // shallow-copied `ptd`, it will read a dangling pointer,
+              // corrupting the `tdSize` value. During marshalling of `Next()`,
+              // COM will crash attempting to read an invalid `tdSize` out of
+              // bounds of the 16-byte header, causing `next_hr` to return
+              // `RPC_E_SERVERFAULT`. If Chrome correctly performs a deep copy
+              // of `ptd` during `SetData` and clones it with the correct size,
+              // `Next()` will succeed and return the duplicated `ptd`.
+              Microsoft::WRL::ComPtr<IEnumFORMATETC> enum_fmt;
+              ASSERT_EQ(proxy->EnumFormatEtc(DATADIR_GET, &enum_fmt), S_OK);
+              FORMATETC out_fe = {};
+              ULONG fetched = 0;
+              EXPECT_EQ(enum_fmt->Next(1, &out_fe, &fetched), S_OK);
+              EXPECT_EQ(fetched, 1ul);
+
+              base::win::ScopedCoMem<DVTARGETDEVICE> out_ptd;
+              out_ptd.Reset(out_fe.ptd);
+              ASSERT_NE(out_ptd.get(), nullptr);
+              EXPECT_EQ(out_ptd->tdSize, kTdSize);
+            }
+          },
+          reinterpret_cast<uintptr_t>(stream), run_loop.QuitClosure()));
+
+  run_loop.Run();
+}
+
+// Verifies that calling `DataObjectImpl::SetData` with a `FORMATETC` containing
+// a `null` target device (`ptd`) is handled safely.
+TEST_F(OSExchangeDataWinTest, SetDataTargetDeviceNull) {
+  base::win::ScopedCOMInitializer com_initializer;
+
+  OSExchangeDataProviderWin data_provider;
+  IDataObject* data_object = data_provider.data_object();
+
+  IStream* stream = nullptr;
+  ASSERT_EQ(CoMarshalInterThreadInterfaceInStream(IID_IDataObject, data_object,
+                                                  &stream),
+            S_OK);
+
+  base::RunLoop run_loop;
+
+  base::Thread background_thread("BackgroundThread");
+  background_thread.Start();
+
+  background_thread.task_runner()->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](uintptr_t stream_ptr_val, base::OnceClosure quit_closure) {
+            base::ScopedClosureRunner quit_runner(std::move(quit_closure));
+            {
+              base::win::ScopedCOMInitializer com_initializer;
+
+              IStream* stream_ptr = reinterpret_cast<IStream*>(stream_ptr_val);
+              Microsoft::WRL::ComPtr<IDataObject> proxy;
+              ASSERT_EQ(CoGetInterfaceAndReleaseStream(stream_ptr,
+                                                       IID_PPV_ARGS(&proxy)),
+                        S_OK);
+
+              FORMATETC fe = ClipboardFormatType(
+                                 RegisterClipboardFormatW(L"ChromePtdNull"), -1,
+                                 TYMED_HGLOBAL)
+                                 .ToFormatEtc();
+              fe.ptd = nullptr;
+
+              STGMEDIUM stgm = CreateHGlobalMedium();
+              // `DataObjectImpl` takes ownership of `stgm.hGlobal` when calling
+              // `SetData` with `fRelease=TRUE`.
+              ASSERT_EQ(proxy->SetData(&fe, &stgm, TRUE), S_OK);
+
+              Microsoft::WRL::ComPtr<IEnumFORMATETC> enum_fmt;
+              ASSERT_EQ(proxy->EnumFormatEtc(DATADIR_GET, &enum_fmt), S_OK);
+              FORMATETC out_fe = {};
+              ULONG fetched = 0;
+              EXPECT_EQ(enum_fmt->Next(1, &out_fe, &fetched), S_OK);
+              EXPECT_EQ(fetched, 1ul);
+              EXPECT_EQ(out_fe.ptd, nullptr);
+            }
+          },
+          reinterpret_cast<uintptr_t>(stream), run_loop.QuitClosure()));
+
+  run_loop.Run();
+}
+
+// Verifies that calling `DataObjectImpl::SetData` directly (in-process) with a
+// `FORMATETC` containing a target device of an abnormally small `tdSize`
+// (smaller than `sizeof(DVTARGETDEVICE)`) is handled safely without
+// out-of-bounds access.
+TEST_F(OSExchangeDataWinTest, SetDataTargetDeviceSmallSize) {
+  OSExchangeDataProviderWin data_provider;
+  IDataObject* data_object = data_provider.data_object();
+
+  // Call `SetData` directly on the main thread with a target device size of
+  // only 4 bytes (enough for `tdSize` itself, but smaller than
+  // `sizeof(DVTARGETDEVICE)`).
+  const DWORD kTdSize = 4;
+  base::win::ScopedCoMem<DVTARGETDEVICE> dv;
+  dv.Reset(static_cast<DVTARGETDEVICE*>(CoTaskMemAlloc(kTdSize)));
+  ASSERT_NE(dv.get(), nullptr);
+  dv->tdSize = kTdSize;
+
+  FORMATETC fe =
+      ClipboardFormatType(RegisterClipboardFormatW(L"ChromePtdSmall"), -1,
+                          TYMED_HGLOBAL)
+          .ToFormatEtc();
+  fe.ptd = dv.get();
+
+  STGMEDIUM stgm = CreateHGlobalMedium();
+  // `DataObjectImpl` takes ownership of `stgm.hGlobal` when calling `SetData`
+  // with `fRelease=TRUE`.
+  ASSERT_EQ(data_object->SetData(&fe, &stgm, TRUE), S_OK);
+  dv.Reset(nullptr);
+
+  Microsoft::WRL::ComPtr<IEnumFORMATETC> enum_fmt;
+  ASSERT_EQ(data_object->EnumFormatEtc(DATADIR_GET, &enum_fmt), S_OK);
+  FORMATETC out_fe = {};
+  ULONG fetched = 0;
+  EXPECT_EQ(enum_fmt->Next(1, &out_fe, &fetched), S_OK);
+  EXPECT_EQ(fetched, 1ul);
+
+  EXPECT_EQ(out_fe.ptd, nullptr);
+}
+
+TEST_F(OSExchangeDataWinTest, ScopedTargetDeviceLifecycle) {
+  ScopedTargetDevice empty;
+  EXPECT_EQ(empty.get(), nullptr);
+
+  const DWORD kTdSize = 64;
+  base::win::ScopedCoMem<DVTARGETDEVICE> raw;
+  raw.Reset(static_cast<DVTARGETDEVICE*>(CoTaskMemAlloc(kTdSize)));
+  ASSERT_NE(raw.get(), nullptr);
+  raw->tdSize = kTdSize;
+  raw->tdDriverNameOffset = 0;
+  raw->tdDeviceNameOffset = 0;
+  raw->tdPortNameOffset = 0;
+  raw->tdExtDevmodeOffset = 0;
+
+  ScopedTargetDevice device(raw.get());
+  EXPECT_NE(device.get(), nullptr);
+  EXPECT_NE(device.get(), raw.get());
+  EXPECT_EQ(device.get()->tdSize, kTdSize);
+
+  ScopedTargetDevice copy(device);
+  EXPECT_NE(copy.get(), nullptr);
+  EXPECT_NE(copy.get(), device.get());
+  EXPECT_EQ(copy.get()->tdSize, kTdSize);
+
+  DVTARGETDEVICE* copy_raw = copy.get();
+  ScopedTargetDevice moved(std::move(copy));
+  EXPECT_EQ(copy.get(), nullptr);
+  EXPECT_EQ(moved.get(), copy_raw);
+
+  ScopedTargetDevice assigned;
+  assigned = device;
+  EXPECT_NE(assigned.get(), nullptr);
+  EXPECT_NE(assigned.get(), device.get());
+  EXPECT_EQ(assigned.get()->tdSize, kTdSize);
+
+  ScopedTargetDevice moved_assigned;
+  DVTARGETDEVICE* moved_raw = moved.get();
+  moved_assigned = std::move(moved);
+  EXPECT_EQ(moved.get(), nullptr);
+  EXPECT_EQ(moved_assigned.get(), moved_raw);
+
+  base::win::ScopedCoMem<DVTARGETDEVICE> released;
+  released.Reset(moved_assigned.release());
+  EXPECT_EQ(moved_assigned.get(), nullptr);
+  EXPECT_EQ(released.get(), moved_raw);
+
+  // Test rejection of abnormally small target devices.
+  {
+    const DWORD kSmallTdSize = sizeof(DVTARGETDEVICE) - 1;
+    base::win::ScopedCoMem<DVTARGETDEVICE> small_raw;
+    small_raw.Reset(static_cast<DVTARGETDEVICE*>(CoTaskMemAlloc(kSmallTdSize)));
+    ASSERT_NE(small_raw.get(), nullptr);
+    small_raw->tdSize = kSmallTdSize;
+
+    ScopedTargetDevice small_device(small_raw.get());
+    EXPECT_EQ(small_device.get(), nullptr);
+  }
+}
+
+TEST_F(OSExchangeDataWinTest, ScopedFormatEtcLifecycle) {
+  ScopedFormatEtc empty;
+  EXPECT_EQ(empty.format_etc.ptd, nullptr);
+
+  const DWORD kTdSize = 64;
+  base::win::ScopedCoMem<DVTARGETDEVICE> raw_td;
+  raw_td.Reset(static_cast<DVTARGETDEVICE*>(CoTaskMemAlloc(kTdSize)));
+  ASSERT_NE(raw_td.get(), nullptr);
+  raw_td->tdSize = kTdSize;
+  raw_td->tdDriverNameOffset = 0;
+  raw_td->tdDeviceNameOffset = 0;
+  raw_td->tdPortNameOffset = 0;
+  raw_td->tdExtDevmodeOffset = 0;
+
+  FORMATETC raw_fe = {};
+  raw_fe.cfFormat = CF_TEXT;
+  raw_fe.dwAspect = DVASPECT_CONTENT;
+  raw_fe.lindex = -1;
+  raw_fe.tymed = TYMED_HGLOBAL;
+  raw_fe.ptd = raw_td.get();
+
+  ScopedFormatEtc format(raw_fe);
+  EXPECT_EQ(format->cfFormat, CF_TEXT);
+  EXPECT_NE(format.format_etc.ptd, nullptr);
+  EXPECT_NE(format.format_etc.ptd, raw_td.get());
+  EXPECT_EQ(format.format_etc.ptd, format.target_device.get());
+
+  ScopedFormatEtc copy(format);
+  EXPECT_EQ(copy->cfFormat, CF_TEXT);
+  EXPECT_NE(copy.format_etc.ptd, nullptr);
+  EXPECT_NE(copy.format_etc.ptd, format.format_etc.ptd);
+  EXPECT_EQ(copy.format_etc.ptd, copy.target_device.get());
+
+  DVTARGETDEVICE* copy_td_raw = copy.target_device.get();
+  ScopedFormatEtc moved(std::move(copy));
+  EXPECT_EQ(copy.format_etc.ptd, nullptr);
+  EXPECT_EQ(moved.format_etc.ptd, copy_td_raw);
+  EXPECT_EQ(moved.format_etc.ptd, moved.target_device.get());
+
+  ScopedFormatEtc assigned;
+  assigned = format;
+  EXPECT_EQ(assigned->cfFormat, CF_TEXT);
+  EXPECT_NE(assigned.format_etc.ptd, nullptr);
+  EXPECT_NE(assigned.format_etc.ptd, format.format_etc.ptd);
+  EXPECT_EQ(assigned.format_etc.ptd, assigned.target_device.get());
+
+  ScopedFormatEtc moved_assigned;
+  DVTARGETDEVICE* moved_td_raw = moved.target_device.get();
+  moved_assigned = std::move(moved);
+  EXPECT_EQ(moved.format_etc.ptd, nullptr);
+  EXPECT_EQ(moved_assigned.format_etc.ptd, moved_td_raw);
+  EXPECT_EQ(moved_assigned.format_etc.ptd, moved_assigned.target_device.get());
 }
 
 }  // namespace ui

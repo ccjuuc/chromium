@@ -4,6 +4,7 @@
 
 #include "components/printing/browser/headless/headless_print_manager.h"
 
+#include "base/logging.h"
 #include "components/printing/browser/print_to_pdf/pdf_print_result.h"
 #include "printing/mojom/print.mojom.h"
 #include "printing/printing_utils.h"
@@ -66,9 +67,8 @@ void HeadlessPrintManager::ScriptedPrint(
 }
 
 #if BUILDFLAG(ENABLE_PRINT_PREVIEW)
-void HeadlessPrintManager::UpdatePrintSettings(
-    base::Value::Dict job_settings,
-    UpdatePrintSettingsCallback callback) {
+void HeadlessPrintManager::GetPrintPreviewParams(
+    GetPrintPreviewParamsCallback callback) {
   mojo::ReportBadMessage(kUnexpectedPrintManagerCall);
 }
 
@@ -78,7 +78,7 @@ void HeadlessPrintManager::SetupScriptedPrintPreview(
   std::move(callback).Run();
 }
 
-void HeadlessPrintManager::ShowScriptedPrintPreview(bool source_is_modifiable) {
+void HeadlessPrintManager::ShowScriptedPrintPreview() {
   DLOG(ERROR) << "Scripted print preview is not supported";
 }
 
@@ -87,9 +87,10 @@ void HeadlessPrintManager::RequestPrintPreview(
   mojo::ReportBadMessage(kUnexpectedPrintManagerCall);
 }
 
-void HeadlessPrintManager::CheckForCancel(int32_t preview_ui_id,
-                                          int32_t request_id,
-                                          CheckForCancelCallback callback) {
+void HeadlessPrintManager::CheckForCancel(
+    const base::UnguessableToken& preview_ui_id,
+    int32_t request_id,
+    CheckForCancelCallback callback) {
   mojo::ReportBadMessage(kUnexpectedPrintManagerCall);
 }
 
@@ -101,6 +102,11 @@ void HeadlessPrintManager::SetAccessibilityTree(
 #endif  // BUILDFLAG(ENABLE_PRINT_PREVIEW)
 
 #if BUILDFLAG(IS_ANDROID)
+void HeadlessPrintManager::SetupScriptedPrintAndroid(
+    SetupScriptedPrintAndroidCallback callback) {
+  std::move(callback).Run();
+}
+
 void HeadlessPrintManager::PdfWritingDone(int page_count) {}
 #endif
 

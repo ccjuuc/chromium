@@ -12,6 +12,7 @@
 #include "base/test/gtest_util.h"
 #include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
+#include "components/metrics/profile_metrics_service.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/signin/internal/identity_manager/account_tracker_service.h"
 #include "components/signin/internal/identity_manager/fake_profile_oauth2_token_service.h"
@@ -27,6 +28,7 @@
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "google_apis/gaia/gaia_constants.h"
 #include "google_apis/gaia/gaia_id.h"
+#include "google_apis/gaia/google_service_auth_error.h"
 #include "google_apis/gaia/oauth2_access_token_consumer.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
@@ -59,7 +61,6 @@ constexpr char kIdTokenEmptyServices[] =
 
 class AccessTokenFetcherTest
     : public testing::Test,
-      public testing::WithParamInterface<bool>,
       public OAuth2AccessTokenManager::DiagnosticsObserver {
  public:
   using TestTokenCallback =
@@ -70,16 +71,17 @@ class AccessTokenFetcherTest
         token_service_(&pref_service_),
         access_token_info_("access token",
                            base::Time::Now() + base::Hours(1),
-                           std::string(kIdTokenEmptyServices)),
-        account_tracker_(CreateAccountTrackerService()) {
+                           std::string(kIdTokenEmptyServices)) {
     AccountTrackerService::RegisterPrefs(pref_service_.registry());
+    account_tracker_ = CreateAccountTrackerService();
+
     ProfileOAuth2TokenService::RegisterProfilePrefs(pref_service_.registry());
     PrimaryAccountManager::RegisterProfilePrefs(pref_service_.registry());
     SigninPrefs::RegisterProfilePrefs(pref_service_.registry());
 
-    account_tracker_->Initialize(&pref_service_, base::FilePath());
     primary_account_manager_ = std::make_unique<PrimaryAccountManager>(
-        &signin_client_, &token_service_, account_tracker_.get());
+        &signin_client_, &token_service_, account_tracker_.get(),
+        &profile_metrics_service_);
     token_service_.AddAccessTokenDiagnosticsObserver(this);
   }
 
@@ -88,11 +90,11 @@ class AccessTokenFetcherTest
   }
 
   CoreAccountId SetPrimaryAccount(const GaiaId& gaia_id,
-                                  const std::string& email,
-                                  ConsentLevel consent_level) {
+                                  const std::string& email) {
     CoreAccountInfo account_info = AddAccount(gaia_id, email);
     primary_account_manager_->SetPrimaryAccountInfo(
-        account_info, consent_level, signin_metrics::AccessPoint::kUnknown);
+        account_info, ConsentLevel::kSignin,
+        signin_metrics::AccessPoint::kStartPage);
 
     return account_info.account_id;
   }
@@ -161,8 +163,7 @@ class AccessTokenFetcherTest
       AccessTokenFetcher::Mode mode) {
     return std::make_unique<AccessTokenFetcher>(
         account_id, consumer_id, consumer, &token_service_,
-        primary_account_manager_.get(), std::move(callback), mode,
-        RequireSyncConsentForScopeVerification());
+        primary_account_manager_.get(), std::move(callback), mode);
   }
 
   std::unique_ptr<AccessTokenFetcher> CreateFetcherWithURLLoaderFactory(
@@ -175,7 +176,7 @@ class AccessTokenFetcherTest
         account_id, consumer_id,
         signin_client_.GetOAuthConsumerFromId(consumer_id), &token_service_,
         primary_account_manager_.get(), url_loader_factory, std::move(callback),
-        mode, RequireSyncConsentForScopeVerification());
+        mode);
   }
 
   AccountTrackerService* account_tracker() { return account_tracker_.get(); }
@@ -190,15 +191,6 @@ class AccessTokenFetcherTest
   // completing access token requests.
   AccessTokenInfo access_token_info() { return access_token_info_; }
 
-  bool RequireSyncConsentForScopeVerification() const { return GetParam(); }
-
-  ConsentLevel GetTargetConsentLevel() const {
-    // TODO(crbug.com/40067058): Delete this when ConsentLevel::kSync is
-    // deleted. See ConsentLevel::kSync documentation for details.
-    return RequireSyncConsentForScopeVerification() ? ConsentLevel::kSync
-                                                    : ConsentLevel::kSignin;
-  }
-
   const PrimaryAccountManager& primary_account_manager() {
     return *primary_account_manager_;
   }
@@ -212,7 +204,8 @@ class AccessTokenFetcherTest
 #if BUILDFLAG(IS_ANDROID)
     SetUpFakeAccountManagerFacade();
 #endif
-    return std::make_unique<AccountTrackerService>();
+    return std::make_unique<AccountTrackerService>(&pref_service_,
+                                                   base::FilePath());
   }
 
   // OAuth2AccessTokenManager::DiagnosticsObserver:
@@ -228,6 +221,7 @@ class AccessTokenFetcherTest
   base::test::TaskEnvironment task_environment_;
   TestingPrefServiceSyncable pref_service_;
   TestSigninClient signin_client_;
+  metrics::ProfileMetricsService profile_metrics_service_;
   FakeProfileOAuth2TokenService token_service_;
   AccessTokenInfo access_token_info_;
   std::unique_ptr<AccountTrackerService> account_tracker_;
@@ -235,9 +229,7 @@ class AccessTokenFetcherTest
   base::OnceClosure on_access_token_request_callback_;
 };
 
-INSTANTIATE_TEST_SUITE_P(All, AccessTokenFetcherTest, testing::Bool());
-
-TEST_P(AccessTokenFetcherTest, EmptyAccountFailsButDoesNotCrash) {
+TEST_F(AccessTokenFetcherTest, EmptyAccountFailsButDoesNotCrash) {
   TestTokenCallback callback;
 
   base::RunLoop run_loop;
@@ -248,23 +240,20 @@ TEST_P(AccessTokenFetcherTest, EmptyAccountFailsButDoesNotCrash) {
 
   // Fetching access tokens for an empty account id should respond with
   // ACCOUNT_NOT_FOUND error.
-  EXPECT_CALL(callback,
-              Run(GoogleServiceAuthError(
-                      GoogleServiceAuthError::State::ACCOUNT_NOT_FOUND),
-                  AccessTokenInfo()))
+  EXPECT_CALL(callback, Run(GoogleServiceAuthError::CreateAccountNotFound(),
+                            AccessTokenInfo()))
       .WillOnce(testing::InvokeWithoutArgs(&run_loop, &base::RunLoop::Quit));
 
   run_loop.Run();
 }
 
-TEST_P(AccessTokenFetcherTest, OneShotShouldCallBackOnFulfilledRequest) {
+TEST_F(AccessTokenFetcherTest, OneShotShouldCallBackOnFulfilledRequest) {
   TestTokenCallback callback;
 
   base::RunLoop run_loop;
   set_on_access_token_request_callback(run_loop.QuitClosure());
 
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, GetTargetConsentLevel());
+  CoreAccountId account_id = SetPrimaryAccount(kTestGaiaId, kTestEmail);
   token_service()->UpdateCredentials(account_id, "refresh token");
 
   // This should result in a request for an access token.
@@ -286,15 +275,14 @@ TEST_P(AccessTokenFetcherTest, OneShotShouldCallBackOnFulfilledRequest) {
                       .build());
 }
 
-TEST_P(AccessTokenFetcherTest,
+TEST_F(AccessTokenFetcherTest,
        WaitUntilAvailableShouldCallBackOnFulfilledRequest) {
   TestTokenCallback callback;
 
   base::RunLoop run_loop;
   set_on_access_token_request_callback(run_loop.QuitClosure());
 
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, GetTargetConsentLevel());
+  CoreAccountId account_id = SetPrimaryAccount(kTestGaiaId, kTestEmail);
   token_service()->UpdateCredentials(account_id, "refresh token");
 
   // Since the refresh token is already available, this should result in an
@@ -318,15 +306,14 @@ TEST_P(AccessTokenFetcherTest,
                       .build());
 }
 
-TEST_P(AccessTokenFetcherTest,
+TEST_F(AccessTokenFetcherTest,
        WaitUntilAvailableShouldCallBackOnFulfilledRequestAfterTokenAvailable) {
   TestTokenCallback callback;
 
   base::RunLoop run_loop;
   set_on_access_token_request_callback(run_loop.QuitClosure());
 
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, GetTargetConsentLevel());
+  CoreAccountId account_id = SetPrimaryAccount(kTestGaiaId, kTestEmail);
 
   // Since the refresh token is not available yet, this should just start
   // waiting for it.
@@ -366,15 +353,14 @@ TEST_P(AccessTokenFetcherTest,
   }
 }
 
-TEST_P(AccessTokenFetcherTest,
+TEST_F(AccessTokenFetcherTest,
        WaitUntilAvailableShouldIgnoreRefreshTokenForDifferentAccount) {
   TestTokenCallback callback;
 
   MockCallback<base::OnceClosure> access_token_request_callback;
   set_on_access_token_request_callback(access_token_request_callback.Get());
 
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, GetTargetConsentLevel());
+  CoreAccountId account_id = SetPrimaryAccount(kTestGaiaId, kTestEmail);
   CoreAccountId other_account_id =
       AddAccount(kTestGaiaId2, kTestEmail2).account_id;
 
@@ -392,14 +378,13 @@ TEST_P(AccessTokenFetcherTest,
   base::RunLoop().RunUntilIdle();
 }
 
-TEST_P(AccessTokenFetcherTest, ShouldNotReplyIfDestroyed) {
+TEST_F(AccessTokenFetcherTest, ShouldNotReplyIfDestroyed) {
   TestTokenCallback callback;
 
   base::RunLoop run_loop;
   set_on_access_token_request_callback(run_loop.QuitClosure());
 
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, GetTargetConsentLevel());
+  CoreAccountId account_id = SetPrimaryAccount(kTestGaiaId, kTestEmail);
   token_service()->UpdateCredentials(account_id, "refresh token");
 
   // This should result in a request for an access token.
@@ -420,35 +405,31 @@ TEST_P(AccessTokenFetcherTest, ShouldNotReplyIfDestroyed) {
                       .build());
 }
 
-TEST_P(AccessTokenFetcherTest, ReturnsErrorWhenAccountHasNoRefreshToken) {
+TEST_F(AccessTokenFetcherTest, ReturnsErrorWhenAccountHasNoRefreshToken) {
   TestTokenCallback callback;
 
   base::RunLoop run_loop;
 
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, GetTargetConsentLevel());
+  CoreAccountId account_id = SetPrimaryAccount(kTestGaiaId, kTestEmail);
 
   // Account has no refresh token -> we should get called back.
   auto fetcher = CreateFetcher(account_id, callback.Get(),
                                AccessTokenFetcher::Mode::kImmediate);
 
-  EXPECT_CALL(callback,
-              Run(GoogleServiceAuthError(
-                      GoogleServiceAuthError::State::ACCOUNT_NOT_FOUND),
-                  AccessTokenInfo()))
+  EXPECT_CALL(callback, Run(GoogleServiceAuthError::CreateAccountNotFound(),
+                            AccessTokenInfo()))
       .WillOnce(testing::InvokeWithoutArgs(&run_loop, &base::RunLoop::Quit));
 
   run_loop.Run();
 }
 
-TEST_P(AccessTokenFetcherTest, CanceledAccessTokenRequest) {
+TEST_F(AccessTokenFetcherTest, CanceledAccessTokenRequest) {
   TestTokenCallback callback;
 
   base::RunLoop run_loop;
   set_on_access_token_request_callback(run_loop.QuitClosure());
 
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, GetTargetConsentLevel());
+  CoreAccountId account_id = SetPrimaryAccount(kTestGaiaId, kTestEmail);
   token_service()->UpdateCredentials(account_id, "refresh token");
 
   // This should result in a request for an access token.
@@ -458,28 +439,23 @@ TEST_P(AccessTokenFetcherTest, CanceledAccessTokenRequest) {
   run_loop.Run();
 
   base::RunLoop run_loop2;
-  EXPECT_CALL(
-      callback,
-      Run(GoogleServiceAuthError(GoogleServiceAuthError::REQUEST_CANCELED),
-          AccessTokenInfo()))
+  auto error = GoogleServiceAuthError::CreateRequestCanceled();
+  EXPECT_CALL(callback, Run(error, AccessTokenInfo()))
       .WillOnce(testing::InvokeWithoutArgs(&run_loop2, &base::RunLoop::Quit));
 
   // A canceled access token request should result in a callback.
-  token_service()->IssueErrorForAllPendingRequestsForAccount(
-      account_id,
-      GoogleServiceAuthError(GoogleServiceAuthError::REQUEST_CANCELED));
+  token_service()->IssueErrorForAllPendingRequestsForAccount(account_id, error);
 
   run_loop2.Run();
 }
 
-TEST_P(AccessTokenFetcherTest, RefreshTokenRevoked) {
+TEST_F(AccessTokenFetcherTest, RefreshTokenRevoked) {
   base::RunLoop run_loop;
   set_on_access_token_request_callback(run_loop.QuitClosure());
 
   TestTokenCallback callback;
 
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, GetTargetConsentLevel());
+  CoreAccountId account_id = SetPrimaryAccount(kTestGaiaId, kTestEmail);
   token_service()->UpdateCredentials(account_id, "refresh token");
 
   // This should result in a request for an access token.
@@ -490,21 +466,18 @@ TEST_P(AccessTokenFetcherTest, RefreshTokenRevoked) {
 
   // Revoke the refresh token, which should cancel all pending requests. The
   // fetcher should *not* retry.
-  EXPECT_CALL(
-      callback,
-      Run(GoogleServiceAuthError(GoogleServiceAuthError::ACCOUNT_NOT_FOUND),
-          AccessTokenInfo()));
+  EXPECT_CALL(callback, Run(GoogleServiceAuthError::CreateAccountNotFound(),
+                            AccessTokenInfo()));
   token_service()->RevokeCredentials(account_id);
 }
 
-TEST_P(AccessTokenFetcherTest, FailedAccessTokenRequest) {
+TEST_F(AccessTokenFetcherTest, FailedAccessTokenRequest) {
   base::RunLoop run_loop;
   set_on_access_token_request_callback(run_loop.QuitClosure());
 
   TestTokenCallback callback;
 
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, GetTargetConsentLevel());
+  CoreAccountId account_id = SetPrimaryAccount(kTestGaiaId, kTestEmail);
   token_service()->UpdateCredentials(account_id, "refresh token");
 
   // Signed in and refresh token already exists, so this should result in a
@@ -515,23 +488,18 @@ TEST_P(AccessTokenFetcherTest, FailedAccessTokenRequest) {
   run_loop.Run();
 
   // We should immediately get called back with an empty access token.
-  EXPECT_CALL(
-      callback,
-      Run(GoogleServiceAuthError(GoogleServiceAuthError::SERVICE_UNAVAILABLE),
-          AccessTokenInfo()));
-  token_service()->IssueErrorForAllPendingRequestsForAccount(
-      account_id,
-      GoogleServiceAuthError(GoogleServiceAuthError::SERVICE_UNAVAILABLE));
+  auto error = GoogleServiceAuthError::FromServiceUnavailable("");
+  EXPECT_CALL(callback, Run(error, AccessTokenInfo()));
+  token_service()->IssueErrorForAllPendingRequestsForAccount(account_id, error);
 }
 
-TEST_P(AccessTokenFetcherTest, MultipleRequestsForSameAccountFulfilled) {
+TEST_F(AccessTokenFetcherTest, MultipleRequestsForSameAccountFulfilled) {
   TestTokenCallback callback;
 
   base::RunLoop run_loop;
   set_on_access_token_request_callback(run_loop.QuitClosure());
 
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, GetTargetConsentLevel());
+  CoreAccountId account_id = SetPrimaryAccount(kTestGaiaId, kTestEmail);
   token_service()->UpdateCredentials(account_id, "refresh token");
 
   // This should result in a request for an access token.
@@ -562,14 +530,13 @@ TEST_P(AccessTokenFetcherTest, MultipleRequestsForSameAccountFulfilled) {
                       .build());
 }
 
-TEST_P(AccessTokenFetcherTest, MultipleRequestsForDifferentAccountsFulfilled) {
+TEST_F(AccessTokenFetcherTest, MultipleRequestsForDifferentAccountsFulfilled) {
   TestTokenCallback callback;
 
   base::RunLoop run_loop;
   set_on_access_token_request_callback(run_loop.QuitClosure());
 
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, GetTargetConsentLevel());
+  CoreAccountId account_id = SetPrimaryAccount(kTestGaiaId, kTestEmail);
   token_service()->UpdateCredentials(account_id, "refresh token");
 
   // This should result in a request for an access token.
@@ -616,15 +583,14 @@ TEST_P(AccessTokenFetcherTest, MultipleRequestsForDifferentAccountsFulfilled) {
   }
 }
 
-TEST_P(AccessTokenFetcherTest,
+TEST_F(AccessTokenFetcherTest,
        MultipleRequestsForDifferentAccountsCanceledAndFulfilled) {
   TestTokenCallback callback;
 
   base::RunLoop run_loop;
   set_on_access_token_request_callback(run_loop.QuitClosure());
 
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, GetTargetConsentLevel());
+  CoreAccountId account_id = SetPrimaryAccount(kTestGaiaId, kTestEmail);
   token_service()->UpdateCredentials(account_id, "refresh token");
 
   // This should result in a request for an access token.
@@ -647,15 +613,11 @@ TEST_P(AccessTokenFetcherTest,
   // Cancel the first access token request: This should result in a callback
   // for the first fetcher.
   base::RunLoop run_loop3;
-  EXPECT_CALL(
-      callback,
-      Run(GoogleServiceAuthError(GoogleServiceAuthError::REQUEST_CANCELED),
-          AccessTokenInfo()))
+  auto error = GoogleServiceAuthError::CreateRequestCanceled();
+  EXPECT_CALL(callback, Run(error, AccessTokenInfo()))
       .WillOnce(testing::InvokeWithoutArgs(&run_loop3, &base::RunLoop::Quit));
 
-  token_service()->IssueErrorForAllPendingRequestsForAccount(
-      account_id,
-      GoogleServiceAuthError(GoogleServiceAuthError::REQUEST_CANCELED));
+  token_service()->IssueErrorForAllPendingRequestsForAccount(account_id, error);
 
   run_loop3.Run();
 
@@ -675,12 +637,11 @@ TEST_P(AccessTokenFetcherTest,
   run_loop4.Run();
 }
 
-TEST_P(AccessTokenFetcherTest, FetcherWithCustomURLLoaderFactory) {
+TEST_F(AccessTokenFetcherTest, FetcherWithCustomURLLoaderFactory) {
   base::RunLoop run_loop;
   set_on_access_token_request_callback(run_loop.QuitClosure());
 
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, GetTargetConsentLevel());
+  CoreAccountId account_id = SetPrimaryAccount(kTestGaiaId, kTestEmail);
   token_service()->UpdateCredentials(account_id, "refresh token");
 
   network::TestURLLoaderFactory test_url_loader_factory;
@@ -757,83 +718,97 @@ TEST_P(AccessTokenFetcherTest, FetcherWithCustomURLLoaderFactory) {
 
 // APIs consent tests.
 
-TEST_P(AccessTokenFetcherTest, FetcherWithUnrestrictedOAuth2Scope) {
+TEST_F(AccessTokenFetcherTest, FetcherWithUnrestrictedOAuth2Scope) {
   CoreAccountInfo account = AddAccount(kTestGaiaId, kTestEmail);
   EXPECT_FALSE(primary_account_manager().HasPrimaryAccount(
       signin::ConsentLevel::kSignin));
   VerifyScopeAccess(account.account_id, OAuthConsumerId::kProfileDownloader);
 }
 
-// Tests that a request with a consented client accessing an OAuth2 API
-// that requires sync consent is fulfilled.
-TEST_P(AccessTokenFetcherTest, FetcherWithConsentedClientAccessToConsentAPI) {
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, GetTargetConsentLevel());
+// Tests that a request with a signed-in client accessing an OAuth2 API
+// that requires sign-in is fulfilled.
+TEST_F(AccessTokenFetcherTest, FetcherWithSignedInClientAccessToConsentAPI) {
+  CoreAccountId account_id = SetPrimaryAccount(kTestGaiaId, kTestEmail);
   VerifyScopeAccess(account_id, OAuthConsumerId::kTokenHandleService);
-}
-
-// Tests that a request with a consented client accessing an OAuth2 API
-// that does not require sync consent is fulfilled.
-TEST_P(AccessTokenFetcherTest,
-       FetcherWithConsentedClientAccessToUnconsentedAPI) {
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, GetTargetConsentLevel());
-  VerifyScopeAccess(account_id, OAuthConsumerId::kSafeBrowsing);
 }
 
 // Tests that a request with a privileged client accessing a privileged OAuth2
 // API is fulfilled.
-TEST_P(AccessTokenFetcherTest,
+TEST_F(AccessTokenFetcherTest,
        FetcherWithPriviledgedClientAccessToPriveledgedAPI) {
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, ConsentLevel::kSignin);
+  CoreAccountId account_id = SetPrimaryAccount(kTestGaiaId, kTestEmail);
   VerifyScopeAccess(account_id, OAuthConsumerId::kExtensionsIdentityAPI);
 }
 
 // Tests that a request with a privileged client accessing an OAuth2 API
-// that requires sync consent is fulfilled.
-TEST_P(AccessTokenFetcherTest, FetcherWithPriveledgedClientAccessToConsentAPI) {
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, ConsentLevel::kSignin);
+// that requires sign-in is fulfilled.
+TEST_F(AccessTokenFetcherTest, FetcherWithPriveledgedClientAccessToConsentAPI) {
+  CoreAccountId account_id = SetPrimaryAccount(kTestGaiaId, kTestEmail);
   VerifyScopeAccess(
       account_id, OAuthConsumerId::kExtensionsIdentityAPI,
       GetOAuthConsumerFromId(OAuthConsumerId::kTokenHandleService));
 }
 
-// Tests that a request with a privileged client accessing an OAuth2 API
-// that does not require consent is fulfilled.
-TEST_P(AccessTokenFetcherTest,
-       FetcherWithPriveledgedClientAccessToUnconsentedAPI) {
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, ConsentLevel::kSignin);
-  VerifyScopeAccess(account_id, OAuthConsumerId::kExtensionsIdentityAPI,
-                    GetOAuthConsumerFromId(OAuthConsumerId::kSafeBrowsing));
-}
-
-// Tests that a request with an unconsented client accessing an OAuth2 API
-// that requires privileged access fails.
-TEST_P(AccessTokenFetcherTest,
-       FetcherWithUnconsentedClientAccessToPrivelegedAPI) {
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, ConsentLevel::kSignin);
-  EXPECT_CHECK_DEATH_WITH(
-      VerifyScopeAccess(
-          account_id, OAuthConsumerId::kSafeBrowsing,
-          GetOAuthConsumerFromId(OAuthConsumerId::kExtensionsIdentityAPI)),
-      "You are attempting to access a privileged scope");
-}
-
-// Tests that a request with a consented client accessing a privileged OAuth2
+// Tests that a request with a signed-in client accessing a privileged OAuth2
 // API fails.
-TEST_P(AccessTokenFetcherTest,
-       FetcherWithConsentedClientAccessToPrivilegedAPI) {
-  CoreAccountId account_id =
-      SetPrimaryAccount(kTestGaiaId, kTestEmail, GetTargetConsentLevel());
+TEST_F(AccessTokenFetcherTest, FetcherWithSignedInClientAccessToPrivilegedAPI) {
+  CoreAccountId account_id = SetPrimaryAccount(kTestGaiaId, kTestEmail);
   EXPECT_CHECK_DEATH_WITH(
       VerifyScopeAccess(
           account_id, OAuthConsumerId::kTokenHandleService,
           GetOAuthConsumerFromId(OAuthConsumerId::kExtensionsIdentityAPI)),
       "You are attempting to access a privileged scope");
+}
+
+// Tests that a request with an allowlisted consumer accessing an OAuth2 API
+// that requires sign-in is fulfilled even if the user is not signed in as
+// primary.
+TEST_F(AccessTokenFetcherTest,
+       FetcherWithAllowlistedConsumerAccessToSignedInAPI) {
+  CoreAccountInfo account = AddAccount(kTestGaiaId, kTestEmail);
+  ASSERT_FALSE(primary_account_manager().HasPrimaryAccount(
+      signin::ConsentLevel::kSignin));
+  VerifyScopeAccess(account.account_id,
+                    OAuthConsumerId::kSyncDeviceStatisticsMetrics);
+
+  EXPECT_CHECK_DEATH_WITH(
+      VerifyScopeAccess(account.account_id,
+                        OAuthConsumerId::kSyncDeviceStatisticsMetrics,
+                        OAuthConsumer("kSyncDeviceStatisticsMetrics",
+                                      {GaiaConstants::kOAuth1LoginScope})),
+      "requires user to be signed in to the browser");
+
+  EXPECT_CHECK_DEATH_WITH(
+      VerifyScopeAccess(account.account_id,
+                        OAuthConsumerId::kOptimizationGuideGetHints,
+                        GetOAuthConsumerFromId(
+                            OAuthConsumerId::kSyncDeviceStatisticsMetrics)),
+      "requires user to be signed in to the browser");
+}
+
+// Tests that a request with an allowlisted consumer accessing a mix of
+// allowlisted and unrestricted scopes is fulfilled, but failing if any
+// forbidden scope is requested.
+TEST_F(AccessTokenFetcherTest, FetcherWithMixedScopes) {
+  CoreAccountInfo account = AddAccount(kTestGaiaId, kTestEmail);
+  ASSERT_FALSE(primary_account_manager().HasPrimaryAccount(
+      signin::ConsentLevel::kSignin));
+
+  // Scenario 1: Allowlisted + Public scope. Should succeed.
+  VerifyScopeAccess(account.account_id,
+                    OAuthConsumerId::kSyncDeviceStatisticsMetrics,
+                    OAuthConsumer("kSyncDeviceStatisticsMetrics",
+                                  {GaiaConstants::kChromeSyncOAuth2Scope,
+                                   GaiaConstants::kGoogleUserInfoEmail}));
+
+  // Scenario 2: Allowlisted + Forbidden scope. Should fail/crash.
+  EXPECT_CHECK_DEATH_WITH(
+      VerifyScopeAccess(account.account_id,
+                        OAuthConsumerId::kSyncDeviceStatisticsMetrics,
+                        OAuthConsumer("kSyncDeviceStatisticsMetrics",
+                                      {GaiaConstants::kChromeSyncOAuth2Scope,
+                                       GaiaConstants::kOAuth1LoginScope})),
+      "requires user to be signed in to the browser");
 }
 
 }  // namespace signin

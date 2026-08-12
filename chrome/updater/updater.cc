@@ -7,18 +7,19 @@
 #include <algorithm>
 #include <iterator>
 #include <optional>
+#include <string>
 
 #include "base/at_exit.h"
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/process/memory.h"
 #include "base/process/process_handle.h"
-#include "base/strings/stringprintf.h"
 #include "base/system/sys_info.h"
 #include "base/task/single_thread_task_executor.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
@@ -43,24 +44,22 @@
 #include "chrome/updater/crash_client.h"
 #include "chrome/updater/crash_reporter.h"
 #include "chrome/updater/event_history.h"
+#include "chrome/updater/get_updater_scope.h"
 #include "chrome/updater/ipc/ipc_support.h"
 #include "chrome/updater/updater_branding.h"
-#include "chrome/updater/updater_scope.h"
 #include "chrome/updater/updater_version.h"
 #include "chrome/updater/usage_stats_permissions.h"
+#include "chrome/updater/util/path_util.h"
 #include "chrome/updater/util/util.h"
 #include "components/crash/core/common/crash_key.h"
 #include "components/crash/core/common/crash_keys.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "third_party/crashpad/crashpad/client/crash_report_database.h"
 #include "third_party/crashpad/crashpad/client/settings.h"
 
 #if BUILDFLAG(IS_WIN)
-#include <sysinfoapi.h>
-
-#include "base/cpu.h"
 #include "base/debug/alias.h"
 #include "base/strings/sys_string_conversions.h"
-#include "base/strings/to_string.h"
 #include "base/win/process_startup_helper.h"
 #include "base/win/scoped_com_initializer.h"
 #include "base/win/windows_version.h"
@@ -134,7 +133,7 @@ int HandleUpdaterCommands(UpdaterScope updater_scope,
     // in the pool can still run after shutdown to handle CONTINUE_ON_SHUTDOWN
     // tasks, for example. In Chrome, the thread pool is leaked for this reason
     // and there is no way to join its threads in production code. The updater
-    // has no such requirements (crbug.com/1484776).
+    // has no such requirements (crbug.com/40282367).
     base::ThreadPoolInstance* thread_pool = base::ThreadPoolInstance::Get();
     thread_pool->Shutdown();
     thread_pool->JoinForTesting();  // IN-TEST
@@ -294,11 +293,12 @@ std::string OperatingSystemVersion() {
 #if BUILDFLAG(IS_WIN)
   const base::win::OSInfo::VersionNumber v =
       base::win::OSInfo::GetInstance()->version_number();
-  return base::StringPrintf("%u.%u.%u.%u", v.major, v.minor, v.build, v.patch);
+  return absl::StrFormat("%u.%u.%u.%u", v.major, v.minor, v.build, v.patch);
 #else
   return base::SysInfo().OperatingSystemVersion();
 #endif
 }
+
 
 base::CommandLine::StringType GetCommandLineString() {
 #if BUILDFLAG(IS_WIN)
@@ -321,82 +321,6 @@ void EnableLoggingByDefault() {
                                    kLoggingModuleSwitchValue);
   }
 }
-
-#if BUILDFLAG(IS_WIN)
-std::string MemoryStatus() {
-  MEMORYSTATUSEX memory_status = {};
-  memory_status.dwLength = sizeof(memory_status);
-  return ::GlobalMemoryStatusEx(&memory_status)
-             ? base::StringPrintf("available: %dK, total: %dK",
-                                  memory_status.ullAvailPageFile / 1024,
-                                  memory_status.ullTotalPageFile / 1024)
-             : std::string("n/a");
-}
-
-// Assumes that 10MB of available memory is needed for the process to run.
-// Windows may extend its page file when the total memory commitment gets
-// close to the commit limit. Tries a large allocation, and keeps looping
-// if the memory allocator returns an error indicating that the page file
-// is too small.
-void EnsureEnoughMemory() {
-  VLOG(1) << MemoryStatus();
-
-  MEMORYSTATUSEX memory_status = {};
-  memory_status.dwLength = sizeof(memory_status);
-  if (!::GlobalMemoryStatusEx(&memory_status)) {
-    VLOG(1) << "Can't memory stat: " << std::hex << ::GetLastError();
-    return;
-  }
-  constexpr SIZE_T kMinMemoryNeeded = 10'000'000;  // 10MB.
-  if (memory_status.ullAvailPageFile >= kMinMemoryNeeded) {
-    return;
-  }
-  if (void* alloc = []() -> void* {
-        constexpr int kMaxTries = 25;
-        constexpr int kDelayMs = 50;
-        for (int tries = 0; tries < kMaxTries; ++tries) {
-          void* ret = ::VirtualAlloc(NULL, kMinMemoryNeeded,
-                                     MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-          if (ret || [] {
-                switch (::GetLastError()) {
-                  case ERROR_COMMITMENT_MINIMUM:
-                  case ERROR_COMMITMENT_LIMIT:
-                  case ERROR_NOT_ENOUGH_MEMORY:
-                  case ERROR_PAGEFILE_QUOTA:
-                    return false;  // Retry on page file related errors.
-                  default:
-                    return true;  // Don't retry.
-                }
-              }()) {
-            return ret;
-          }
-          ::Sleep(kDelayMs);
-        }
-        return nullptr;
-      }();
-      alloc) {
-    ::VirtualFree(alloc, 0, MEM_RELEASE);
-  } else {
-    VLOG(1) << "Allocation failed: " << kMinMemoryNeeded / 1024 << "K, "
-            << std::hex << ::GetLastError();
-  }
-
-  VLOG(1) << MemoryStatus();
-}
-
-void RecordCpuFeaturesForCrash() {
-#if defined(ARCH_CPU_X86_FAMILY)
-  base::CPU cpu;
-  static crash_reporter::CrashKeyString<6> crash_key_aesni("aesni");
-  crash_key_aesni.Set(base::ToString(cpu.has_aesni()));
-  static crash_reporter::CrashKeyString<6> crash_key_avx512f("avx512f");
-  crash_key_avx512f.Set(base::ToString(cpu.has_avx512_f()));
-  static crash_reporter::CrashKeyString<6> crash_key_in_vm("invm");
-  crash_key_in_vm.Set(base::ToString(cpu.is_running_in_vm()));
-#endif
-}
-
-#endif  // IS_WIN
 
 }  // namespace
 
@@ -428,13 +352,28 @@ int UpdaterMain(int argc, const char* const* argv) {
   InitHistoryLogging(updater_scope);
   const base::ProcessId parent_pid =
       base::GetParentProcessId(base::GetCurrentProcessHandle());
+  const std::optional<base::FilePath> install_dir =
+      GetInstallDirectory(updater_scope);
+  const std::optional<base::FilePath> temp_dir = GetUpdaterTempDir();
+  const std::optional<base::SysInfo::DiskSpaceInfo> install_dir_space =
+      install_dir.and_then(base::SysInfo::AmountOfDiskSpace);
+  const std::optional<base::SysInfo::DiskSpaceInfo> temp_dir_space =
+      temp_dir.and_then(base::SysInfo::AmountOfDiskSpace);
   VLOG(1) << "Version: " << kUpdaterVersion << ", " << BuildFlavor() << ", "
           << base::SysInfo::ProcessCPUArchitecture()
           << ", command line: " << GetCommandLineString();
   VLOG(1) << "OS version: " << OperatingSystemVersion()
+          << ", arch: " << base::SysInfo::OperatingSystemArchitecture()
           << ", System uptime (seconds): "
           << base::SysInfo::Uptime().InSeconds()
           << ", parent pid: " << parent_pid;
+  VLOG_IF(1, install_dir_space)
+      << "Available disk space in install directory (" << install_dir
+      << "): " << install_dir_space->available << " / "
+      << install_dir_space->total;
+  VLOG_IF(1, temp_dir_space)
+      << "Available disk space in temporary directory (" << temp_dir
+      << "): " << temp_dir_space->available << " / " << temp_dir_space->total;
 
 #if BUILDFLAG(IS_WIN)
   const HResultOr<std::wstring> cmd_line = GetCommandLineForPid(parent_pid);

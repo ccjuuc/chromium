@@ -9,9 +9,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/logging.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -41,7 +39,7 @@
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(PRINT_MEDIA_L10N_ENABLED)
-#include "chrome/common/printing/print_media_l10n.h"
+#include "components/printing/common/print_media_l10n.h"
 #endif  // BUILDFLAG(PRINT_MEDIA_L10N_ENABLED)
 
 namespace printing {
@@ -144,48 +142,47 @@ base::Value AssemblePrinterCapabilities(const std::string& device_name,
 }  // namespace
 
 #if BUILDFLAG(IS_WIN)
-std::string GetUserFriendlyName(const std::string& printer_name) {
+std::string GetUserFriendlyName(std::string_view printer_name) {
   // `printer_name` may be a UNC path like \\printserver\printername.
   if (!base::StartsWith(printer_name, "\\\\",
                         base::CompareCase::INSENSITIVE_ASCII)) {
-    return printer_name;
+    return std::string(printer_name);
   }
 
   // If it is a UNC path, split the "printserver\printername" portion and
   // generate a friendly name, like Windows does.
-  std::string printer_name_trimmed = printer_name.substr(2);
-  std::vector<std::string> tokens = base::SplitString(
+  std::string_view printer_name_trimmed = printer_name.substr(2);
+  std::vector<std::string_view> tokens = base::SplitStringPiece(
       printer_name_trimmed, "\\", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
   if (tokens.size() != 2 || tokens[0].empty() || tokens[1].empty())
-    return printer_name;
+    return std::string(printer_name);
   return l10n_util::GetStringFUTF8(
       IDS_PRINT_PREVIEW_FRIENDLY_WIN_NETWORK_PRINTER_NAME,
       base::UTF8ToUTF16(tokens[1]), base::UTF8ToUTF16(tokens[0]));
 }
 #endif
 
-base::Value::Dict AssemblePrinterSettings(
-    const std::string& device_name,
-    const PrinterBasicInfo& basic_info,
-    bool has_secure_protocol,
-    PrinterSemanticCapsAndDefaults* caps) {
-  base::Value::Dict printer_info;
+base::DictValue AssemblePrinterSettings(const std::string& device_name,
+                                        const PrinterBasicInfo& basic_info,
+                                        bool has_secure_protocol,
+                                        PrinterSemanticCapsAndDefaults* caps) {
+  base::DictValue printer_info;
   printer_info.Set(kSettingDeviceName, device_name);
   printer_info.Set(kSettingPrinterName, basic_info.display_name);
   printer_info.Set(kSettingPrinterDescription, basic_info.printer_description);
 
-  base::Value::Dict options;
+  base::DictValue options;
 
 #if BUILDFLAG(IS_CHROMEOS)
   printer_info.Set(
       kCUPSEnterprisePrinter,
-      base::Contains(basic_info.options, kCUPSEnterprisePrinter) &&
+      basic_info.options.contains(kCUPSEnterprisePrinter) &&
           basic_info.options.at(kCUPSEnterprisePrinter) == kValueTrue);
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   printer_info.Set(kSettingPrinterOptions, std::move(options));
 
-  base::Value::Dict printer_info_capabilities;
+  base::DictValue printer_info_capabilities;
   printer_info_capabilities.Set(kPrinter, std::move(printer_info));
   base::Value capabilities =
       AssemblePrinterCapabilities(device_name, has_secure_protocol, caps);
@@ -196,7 +193,7 @@ base::Value::Dict AssemblePrinterSettings(
   return printer_info_capabilities;
 }
 
-base::Value::Dict GetSettingsOnBlockingTaskRunner(
+base::DictValue GetSettingsOnBlockingTaskRunner(
     const std::string& device_name,
     const PrinterBasicInfo& basic_info,
     PrinterSemanticCapsAndDefaults::Papers user_defined_papers,

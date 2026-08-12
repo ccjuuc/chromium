@@ -11,7 +11,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/lazy_instance.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -34,7 +33,6 @@ namespace errors = manifest_errors;
 
 namespace {
 
-const char kSharedModule[] = "shared_module";
 const char kAllowlist[] = "allowlist";
 
 using ManifestKeys = api::shared_module::ManifestKeys;
@@ -43,8 +41,7 @@ static base::LazyInstance<SharedModuleInfo>::DestructorAtExit
     g_empty_shared_module_info = LAZY_INSTANCE_INITIALIZER;
 
 const SharedModuleInfo& GetSharedModuleInfo(const Extension* extension) {
-  SharedModuleInfo* info = static_cast<SharedModuleInfo*>(
-      extension->GetManifestData(kSharedModule));
+  const SharedModuleInfo* info = extension->GetManifestData<SharedModuleInfo>();
   if (!info) {
     return g_empty_shared_module_info.Get();
   }
@@ -52,6 +49,9 @@ const SharedModuleInfo& GetSharedModuleInfo(const Extension* extension) {
 }
 
 }  // namespace
+
+// static
+const char* SharedModuleInfo::kManifestDataKey = "shared_module";
 
 SharedModuleInfo::SharedModuleInfo() = default;
 SharedModuleInfo::~SharedModuleInfo() = default;
@@ -102,7 +102,7 @@ bool SharedModuleInfo::IsExportAllowedByAllowlist(const Extension* extension,
   if (info.export_allowlist_.empty()) {
     return true;
   }
-  return base::Contains(info.export_allowlist_, other_id);
+  return info.export_allowlist_.contains(other_id);
 }
 
 // static
@@ -142,7 +142,7 @@ bool SharedModuleHandler::Parse(Extension* extension, std::u16string* error) {
 
   bool has_import = !!manifest_keys.import;
   bool has_export = !!manifest_keys.export_;
-  DCHECK(has_import || has_export);
+  CHECK(has_import || has_export);
 
   auto info = std::make_unique<SharedModuleInfo>();
 
@@ -223,7 +223,7 @@ bool SharedModuleHandler::Parse(Extension* extension, std::u16string* error) {
     info->set_imports(std::move(imports));
   }
 
-  extension->SetManifestData(kSharedModule, std::move(info));
+  extension->SetManifestData(std::move(info));
   return true;
 }
 

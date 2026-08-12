@@ -25,7 +25,7 @@
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/widget/widget_observer.h"
 
-class Browser;
+class BrowserWindowInterface;
 
 namespace autofill {
 
@@ -61,7 +61,7 @@ class PopupBaseView : public PopupRowView::AccessibilitySelectionDelegate,
   void NotifyAXSelection(views::View& view) override;
 
   // Returns the browser in which this popup is shown.
-  Browser* GetBrowser();
+  BrowserWindowInterface* GetBrowser();
 
  protected:
   PopupBaseView(base::WeakPtr<AutofillPopupViewDelegate> delegate,
@@ -92,6 +92,10 @@ class PopupBaseView : public PopupRowView::AccessibilitySelectionDelegate,
   // popup, it hides and thus deletes |this| and returns false. (virtual for
   // testing).
   [[nodiscard]] virtual bool DoUpdateBoundsAndRedrawPopup();
+
+  // Checks whether the popup at `popup_bounds` overlaps with any open prompts,
+  // permission bubbles, or HTML form popups.
+  bool OverlapsWithAnotherPrompt(const gfx::Rect& popup_bounds) const;
 
   // Returns the optimal bounds to place the popup with `preferred_size` and
   // places an arrow on the popup border to point towards `element_bounds`

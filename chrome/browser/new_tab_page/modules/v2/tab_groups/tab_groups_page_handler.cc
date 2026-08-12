@@ -15,7 +15,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_command_controller.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/tabs/saved_tab_groups/tab_group_action_context_desktop.h"
+#include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/grit/generated_resources.h"
@@ -121,7 +121,8 @@ void TabGroupsPageHandler::CreateNewTabGroup() {
   auto* browser = webui::GetTabInterface(web_contents_)
                       ->GetBrowserWindowInterface()
                       ->GetBrowserForMigrationOnly();
-  browser->command_controller()->ExecuteCommand(IDC_CREATE_NEW_TAB_GROUP);
+  chrome::BrowserCommandController::From(browser)->ExecuteCommand(
+      IDC_CREATE_NEW_TAB_GROUP);
 }
 
 std::vector<const tab_groups::SavedTabGroup*>
@@ -340,11 +341,9 @@ void TabGroupsPageHandler::OpenTabGroup(const std::string& id) {
     return;
   }
 
-  auto* browser = webui::GetTabInterface(web_contents_)
-                      ->GetBrowserWindowInterface()
-                      ->GetBrowserForMigrationOnly();
-  tab_group_service_->OpenTabGroup(
-      group->saved_guid(),
-      std::make_unique<tab_groups::TabGroupActionContextDesktop>(
-          browser, tab_groups::OpeningSource::kOpenedFromRevisitUi));
+  auto* browser =
+      webui::GetTabInterface(web_contents_)->GetBrowserWindowInterface();
+  tab_groups::SavedTabGroupUtils::OpenSavedTabGroup(
+      browser, group->saved_guid(),
+      tab_groups::OpeningSource::kOpenedFromRevisitUi, tab_group_service_);
 }

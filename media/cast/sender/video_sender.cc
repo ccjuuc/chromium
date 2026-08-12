@@ -32,6 +32,10 @@ namespace media::cast {
 
 namespace {
 
+perfetto::NamedTrack GetTracingTrack(const media::VideoFrame* frame) {
+  return perfetto::NamedTrack::FromPointer("media::cast::VideoSender", frame);
+}
+
 // The following two constants are used to adjust the target
 // playout delay (when allowed). They were calculated using
 // a combination of cast_benchmark runs and manual testing.
@@ -147,10 +151,9 @@ void VideoSender::InsertRawVideoFrame(
                             rtp_timestamp);
 
   // Used by chrome/browser/media/cast_mirroring_performance_browsertest.cc
-  TRACE_EVENT_INSTANT2("cast_perf_test", "InsertRawVideoFrame",
-                       TRACE_EVENT_SCOPE_THREAD, "timestamp",
-                       (reference_time - base::TimeTicks()).InMicroseconds(),
-                       "rtp_timestamp", rtp_timestamp.lower_32_bits());
+  TRACE_EVENT_INSTANT("cast_perf_test", "InsertRawVideoFrame", "timestamp",
+                      (reference_time - base::TimeTicks()).InMicroseconds(),
+                      "rtp_timestamp", rtp_timestamp.lower_32_bits());
 
   {
     const bool new_low_latency_mode =
@@ -171,10 +174,9 @@ void VideoSender::InsertRawVideoFrame(
       (rtp_timestamp <= last_enqueued_frame_rtp_timestamp_ ||
        reference_time <= last_enqueued_frame_reference_time_)) {
     VLOG(1) << "Dropping video frame: RTP or reference time did not increase.";
-    TRACE_EVENT_INSTANT2("cast.stream", "Video Frame Drop",
-                         TRACE_EVENT_SCOPE_THREAD, "rtp_timestamp",
-                         rtp_timestamp.lower_32_bits(), "reason",
-                         "time did not increase");
+    TRACE_EVENT_INSTANT("cast.stream", "Video Frame Drop", "rtp_timestamp",
+                        rtp_timestamp.lower_32_bits(), "reason",
+                        "time did not increase");
     return;
   }
 
@@ -235,9 +237,9 @@ void VideoSender::InsertRawVideoFrame(
 
     number_of_frames_dropped_++;
     base::UmaHistogramEnumeration(kHistogramFrameDropped, reason);
-    TRACE_EVENT_INSTANT2("cast.stream", "Video Frame Drop (raw frame)",
-                         TRACE_EVENT_SCOPE_THREAD, "duration",
-                         duration_added_by_next_frame, "reason", reason);
+    TRACE_EVENT_INSTANT("cast.stream", "Video Frame Drop (raw frame)",
+                        "duration", duration_added_by_next_frame, "reason",
+                        reason);
     return;
   }
 
@@ -246,10 +248,20 @@ void VideoSender::InsertRawVideoFrame(
     return;
   }
 
-  const int bitrate = bitrate_suggester_->GetSuggestedBitrate();
-  if (bitrate != last_bitrate_) {
-    video_encoder_->SetBitRate(bitrate);
-    last_bitrate_ = bitrate;
+  const uint32_t suggested_bitrate = bitrate_suggester_->GetSuggestedBitrate();
+
+  // To avoid thrashing the encoder, which can cause dropped frames, only update
+  // the encoder if the suggested bitrate has changed by a significant amount.
+  // We use 5% as the threshold for this "bitrate hysteresis".
+  constexpr double kBitrateThreshold = 0.05;
+  const bool should_update_bitrate =
+      last_bitrate_ == 0 || std::abs(static_cast<int64_t>(suggested_bitrate) -
+                                     static_cast<int64_t>(last_bitrate_)) >
+                                (last_bitrate_ * kBitrateThreshold);
+
+  if (should_update_bitrate) {
+    video_encoder_->SetBitRate(suggested_bitrate);
+    last_bitrate_ = suggested_bitrate;
   }
 
   // Report the bitrate every 500 frames.
@@ -257,16 +269,18 @@ void VideoSender::InsertRawVideoFrame(
   frames_since_bitrate_reported_ =
       ++frames_since_bitrate_reported_ % kSampleInterval;
   if (frames_since_bitrate_reported_ == 0) {
-    base::UmaHistogramMemoryKB(kHistogramBitrate, bitrate / 1000);
+    base::UmaHistogramMemoryKB(kHistogramBitrate, suggested_bitrate / 1000);
   }
 
-  TRACE_COUNTER_ID1("cast.stream", "Video Target Bitrate", this, bitrate);
+  TRACE_COUNTER_ID1("cast.stream", "Video Target Bitrate", this,
+                    suggested_bitrate);
 
   if (base::FeatureList::IsEnabled(media::kCastStreamingPerformanceOverlay)) {
     video_frame = RenderPerformanceMetricsOverlay(
-        frame_sender_->GetTargetPlayoutDelay(), low_latency_mode_, bitrate,
-        frames_in_encoder_ + 1, last_reported_encoder_utilization_,
-        last_reported_lossiness_, std::move(video_frame));
+        frame_sender_->GetTargetPlayoutDelay(), low_latency_mode_,
+        suggested_bitrate, frames_in_encoder_ + 1,
+        last_reported_encoder_utilization_, last_reported_lossiness_,
+        std::move(video_frame));
   }
 
   if (video_encoder_->EncodeVideoFrame(
@@ -274,17 +288,16 @@ void VideoSender::InsertRawVideoFrame(
           base::BindOnce(&VideoSender::OnEncodedVideoFrame, AsWeakPtr(),
                          video_frame, reference_time))) {
     TRACE_EVENT_BEGIN("cast.stream", "Video Encode",
-                      perfetto::Track::FromPointer(video_frame.get()),
-                      "rtp_timestamp", rtp_timestamp.lower_32_bits());
+                      GetTracingTrack(video_frame.get()), "rtp_timestamp",
+                      rtp_timestamp.lower_32_bits());
     frames_in_encoder_++;
     duration_in_encoder_ += duration_added_by_next_frame;
     last_enqueued_frame_rtp_timestamp_ = rtp_timestamp;
     last_enqueued_frame_reference_time_ = reference_time;
   } else {
     VLOG(1) << "Encoder rejected a frame.  Skipping...";
-    TRACE_EVENT_INSTANT1("cast.stream", "Video Encode Reject",
-                         TRACE_EVENT_SCOPE_THREAD, "rtp_timestamp",
-                         rtp_timestamp.lower_32_bits());
+    TRACE_EVENT_INSTANT("cast.stream", "Video Encode Reject", "rtp_timestamp",
+                        rtp_timestamp.lower_32_bits());
   }
 }
 
@@ -295,6 +308,26 @@ void VideoSender::SetTargetPlayoutDelay(
 
 base::TimeDelta VideoSender::GetTargetPlayoutDelay() const {
   return frame_sender_->GetTargetPlayoutDelay();
+}
+
+uint32_t VideoSender::GetEncoderBitrate() const {
+  return last_bitrate_;
+}
+
+double VideoSender::GetEncoderUtilization() const {
+  return last_reported_encoder_utilization_;
+}
+
+double VideoSender::GetLossiness() const {
+  return last_reported_lossiness_;
+}
+
+int VideoSender::GetFramesInserted() const {
+  return number_of_frames_inserted_;
+}
+
+int VideoSender::GetFramesDropped() const {
+  return number_of_frames_dropped_;
 }
 
 base::WeakPtr<VideoSender> VideoSender::AsWeakPtr() {
@@ -324,8 +357,7 @@ void VideoSender::OnEncodedVideoFrame(
   // encoder as really slow.
   duration_in_encoder_ = last_enqueued_frame_reference_time_ - reference_time;
 
-  TRACE_EVENT_END("cast.stream",
-                  perfetto::Track::FromPointer(video_frame.get()),
+  TRACE_EVENT_END("cast.stream", GetTracingTrack(video_frame.get()),
                   "encoder_utilization", last_reported_encoder_utilization_,
                   "lossiness", last_reported_lossiness_);
   // The encoder drops a frame.
@@ -363,9 +395,9 @@ void VideoSender::OnEncodedVideoFrame(
     video_encoder_->GenerateKeyFrame();
 
     base::UmaHistogramEnumeration(kHistogramFrameDropped, reason);
-    TRACE_EVENT_INSTANT2("cast.stream", "Video Frame Drop (already encoded)",
-                         TRACE_EVENT_SCOPE_THREAD, "rtp_timestamp",
-                         rtp_timestamp.lower_32_bits(), "reason", reason);
+    TRACE_EVENT_INSTANT("cast.stream", "Video Frame Drop (already encoded)",
+                        "rtp_timestamp", rtp_timestamp.lower_32_bits(),
+                        "reason", reason);
   }
 }
 

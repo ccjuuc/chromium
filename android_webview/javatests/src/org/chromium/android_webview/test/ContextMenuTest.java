@@ -106,12 +106,14 @@ public class ContextMenuTest extends AwParameterizedTest {
     @Before
     public void setUp() throws Exception {
         mPageUrl = new GURL("http://www.example.com/page_url");
-        TestAwContentsClient mContentsClient = new TestAwContentsClient();
+        TestAwContentsClient contentsClient = new TestAwContentsClient();
         mTestContainerView =
                 mRule.createAwTestContainerViewOnMainSync(
-                        mContentsClient, false, new TestAwContentsClientTestDependencyFactory());
+                        contentsClient, false, new TestAwContentsClientTestDependencyFactory());
 
         mAwContents = (TestAwContents) mTestContainerView.getAwContents();
+        // fake onReceivedIcon overridden so that the favicon is
+        // sent when page is loaded
         mContext = mAwContents.getWebContents().getTopLevelNativeWindow().getContext().get();
         mHelper = new TestAwContextMenuHelper(mAwContents.getWebContents(), HYPERLINK_MENU_ITEMS);
         AwActivityTestRule.enableJavaScriptOnUiThread(mAwContents);

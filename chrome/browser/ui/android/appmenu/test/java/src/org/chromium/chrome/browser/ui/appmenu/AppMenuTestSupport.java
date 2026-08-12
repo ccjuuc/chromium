@@ -9,6 +9,7 @@ import android.view.View;
 import android.widget.ListView;
 
 import org.chromium.base.Callback;
+import org.chromium.base.ThreadUtils;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.util.motion.MotionEventInfo;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
@@ -51,7 +52,8 @@ public class AppMenuTestSupport {
             return null;
         }
 
-        return findModelInListRecursive(modelList::get, modelList::size, itemId);
+        return ThreadUtils.runOnUiThreadBlocking(
+                () -> findModelInListRecursive(modelList::get, modelList::size, itemId));
     }
 
     /**
@@ -84,9 +86,9 @@ public class AppMenuTestSupport {
                 }
             }
 
-            if (model.containsKey(AppMenuItemWithSubmenuProperties.SUBMENU_ITEMS)) {
+            if (model.containsKey(AppMenuItemWithSubmenuProperties.SUBMENU_PROVIDER)) {
                 List<ListItem> submenuItems =
-                        model.get(AppMenuItemWithSubmenuProperties.SUBMENU_ITEMS);
+                        model.get(AppMenuItemWithSubmenuProperties.SUBMENU_PROVIDER).get();
                 if (submenuItems != null) {
                     PropertyModel foundModel =
                             findModelInListRecursive(submenuItems::get, submenuItems::size, itemId);

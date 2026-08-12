@@ -891,6 +891,11 @@ IN_PROC_BROWSER_TEST_F(PrintPreviewDestinationListTest,
   RunTestCase("FireDestinationSelected");
 }
 
+IN_PROC_BROWSER_TEST_F(PrintPreviewDestinationListTest,
+                       ActiveItemHasTabindexZero) {
+  RunTestCase("ActiveItemHasTabindexZero");
+}
+
 class PrintPreviewPrintButtonTest : public PrintPreviewBrowserTest {
  protected:
   void RunTestCase(const std::string& testCase) {
@@ -985,7 +990,7 @@ IN_PROC_BROWSER_TEST_F(PrintPreviewDestinationSettingsTest,
   RunTestCase("RecentDestinations");
 }
 
-// Flaky on Mac and Linux, see https://crbug.com/1147205
+// Flaky on Mac and Linux, see https://crbug.com/40156519
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 #define MAYBE_RecentDestinationsMissing DISABLED_RecentDestinationsMissing
 #else
@@ -1022,7 +1027,7 @@ IN_PROC_BROWSER_TEST_F(PrintPreviewDestinationSettingsTest, DisabledSaveAsPdf) {
   RunTestCase("DisabledSaveAsPdf");
 }
 
-// Flaky on Mac, see https://crbug.com/1146513.
+// Flaky on Mac, see https://crbug.com/40730118.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_NoDestinations DISABLED_NoDestinations
 #else

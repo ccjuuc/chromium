@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 
+#include "base/containers/span.h"
 #include "base/notreached.h"
 #include "base/types/expected.h"
 #include "components/persistent_cache/backend.h"
@@ -18,12 +19,14 @@ namespace persistent_cache {
 // implementation to avoid littering the code with ifdefs.
 
 // static
-std::unique_ptr<PersistentCache> PersistentCache::Bind(
-    PendingBackend pending_backend) {
+base::expected<std::unique_ptr<PersistentCache>, TransactionError>
+PersistentCache::Bind(Client client, PendingBackend pending_backend) {
   NOTREACHED();
 }
 
-PersistentCache::PersistentCache(std::unique_ptr<Backend> backend) {
+PersistentCache::PersistentCache(Client client,
+                                 std::unique_ptr<Backend> backend)
+    : client_(client) {
   NOTREACHED();
 }
 
@@ -32,12 +35,13 @@ PersistentCache::~PersistentCache() {
 }
 
 base::expected<std::optional<EntryMetadata>, TransactionError>
-PersistentCache::Find(std::string_view key, BufferProvider buffer_provider) {
+PersistentCache::Find(base::span<const uint8_t> key,
+                      BufferProvider buffer_provider) {
   NOTREACHED();
 }
 
 base::expected<void, TransactionError> PersistentCache::Insert(
-    std::string_view key,
+    base::span<const uint8_t> key,
     base::span<const uint8_t> content,
     EntryMetadata metadata) {
   NOTREACHED();

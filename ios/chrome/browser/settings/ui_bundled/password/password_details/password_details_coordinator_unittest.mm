@@ -4,6 +4,7 @@
 
 #import "ios/chrome/browser/settings/ui_bundled/password/password_details/password_details_coordinator.h"
 
+#import "base/apple/foundation_util.h"
 #import "base/test/bind.h"
 #import "base/test/metrics/histogram_tester.h"
 #import "base/test/task_environment.h"
@@ -11,6 +12,9 @@
 #import "components/password_manager/core/browser/password_store/test_password_store.h"
 #import "components/password_manager/core/browser/ui/affiliated_group.h"
 #import "components/password_manager/core/browser/ui/credential_ui_entry.h"
+#import "ios/chrome/browser/device_reauth/model/fake_reauthentication_service_util.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service_factory.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_profile_password_store_factory.h"
 #import "ios/chrome/browser/passwords/model/metrics/ios_password_manager_metrics.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/password_details/password_details_handler.h"
@@ -18,8 +22,8 @@
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/sync/model/mock_sync_service_utils.h"
@@ -80,22 +84,28 @@ class PasswordDetailsCoordinatorTest : public PlatformTest {
     builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
                               base::BindRepeating(&CreateMockSyncService));
 
+    builder.AddTestingFactory(ReauthenticationServiceFactory::GetInstance(),
+                              base::BindOnce(&CreateFakeReauthService));
+
     // Create scene state for reauthentication coordinator.
-    scene_state_ = [[SceneState alloc] initWithAppState:nil];
+    scene_state_ = [[SceneState alloc] init];
     scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
     profile_ = std::move(builder).Build();
     browser_ = std::make_unique<TestBrowser>(profile_.get(), scene_state_);
 
     CommandDispatcher* dispatcher = browser_->GetCommandDispatcher();
-    // Mock ApplicationCommands and SettingsCommands
-    HandleCommand(@protocol(ApplicationCommands), dispatcher);
+    // Mock SceneCommands and SettingsCommands
+    HandleCommand(@protocol(SceneCommands), dispatcher);
     HandleCommand(@protocol(SettingsCommands), dispatcher);
 
     // Mock SnackbarCommands.
     HandleCommand(@protocol(SnackbarCommands), dispatcher);
 
-    mock_reauth_module_ = [[MockReauthenticationModule alloc] init];
+    mock_reauth_module_ =
+        base::apple::ObjCCastStrict<MockReauthenticationModule>(
+            ReauthenticationServiceFactory::GetForProfile(profile_.get())
+                ->GetReauthModule());
     // Delay auth result so auth doesn't pass right after requested by the
     // coordinator. Needed for verifying behavior when auth is required.
     mock_reauth_module_.shouldSkipReAuth = NO;
@@ -107,7 +117,6 @@ class PasswordDetailsCoordinatorTest : public PlatformTest {
         initWithBaseNavigationController:navigation_controller
                                  browser:browser_.get()
                          affiliatedGroup:GetTestAffiliatedGroup()
-                            reauthModule:mock_reauth_module_
                                  context:DetailsContext::kPasswordSettings];
 
     scoped_window_.Get().rootViewController = navigation_controller;

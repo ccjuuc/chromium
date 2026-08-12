@@ -414,9 +414,6 @@ bool SetDataSpaceTransfer(const gfx::ColorSpace& color_space,
                           float& extended_range_brightness_ratio) {
   extended_range_brightness_ratio = 1.f;
   switch (color_space.GetTransferID()) {
-    case gfx::ColorSpace::TransferID::SMPTE170M:
-      dataspace |= ADATASPACE_TRANSFER_SMPTE_170M;
-      return true;
     case gfx::ColorSpace::TransferID::LINEAR_HDR:
       dataspace |= ADATASPACE_TRANSFER_LINEAR;
       return true;
@@ -430,7 +427,9 @@ bool SetDataSpaceTransfer(const gfx::ColorSpace& color_space,
       dataspace |= ADATASPACE_TRANSFER_SRGB;
       return true;
     case gfx::ColorSpace::TransferID::BT709:
-      // We use SRGB for BT709. See |ColorSpace::GetTransferFunction()| for
+    case gfx::ColorSpace::TransferID::SMPTE170M:
+      // We use SRGB for BT709 and SMPTE170M. See
+      // |ColorSpace::GetTransferFunction()| and go/smpte170m-cursed for
       // details.
       dataspace |= ADATASPACE_TRANSFER_SRGB;
       return true;
@@ -551,8 +550,7 @@ void OnTransactionCompletedOnAnyThread(void* context,
 void OnTransactiOnCommittedOnAnyThread(void* context,
                                        ASurfaceTransactionStats* stats) {
   auto* ack_ctx = static_cast<TransactionAckCtx*>(context);
-  TRACE_EVENT_INSTANT0("gpu,benchmark", "SurfaceControlTransaction committed",
-                       TRACE_EVENT_SCOPE_THREAD);
+  TRACE_EVENT_INSTANT("gpu,benchmark", "SurfaceControlTransaction committed");
 
   std::move(ack_ctx->latch_callback).Run();
   delete ack_ctx;
@@ -569,11 +567,7 @@ bool SurfaceControl::IsSupported() {
     min_sdk_version = base::android::android_info::SDK_VERSION_R;
   }
 
-  if (base::android::android_info::sdk_int() < min_sdk_version) {
-    return false;
-  }
-
-  return true;
+  return base::android::android_info::sdk_int() >= min_sdk_version;
 }
 
 bool SurfaceControl::SupportsColorSpace(const gfx::ColorSpace& color_space) {
@@ -872,6 +866,8 @@ void SurfaceControl::Transaction::SetOpaque(const Surface& surface,
 
 void SurfaceControl::Transaction::SetDamageRect(const Surface& surface,
                                                 const gfx::Rect& rect) {
+  // SF will reject the transaction if the damage rect is empty.
+  CHECK(!rect.IsEmpty());
   auto a_rect = RectToARect(rect);
   SurfaceControlMethods::Get().ASurfaceTransaction_setDamageRegionFn(
       transaction_, surface.surface(), &a_rect, 1u);
@@ -907,26 +903,26 @@ void SurfaceControl::Transaction::SetColorSpace(const Surface& surface,
 
   // Set the HDR metadata for not extended SRGB case.
   if (!extended_range) {
-    if (const auto& gfx_cta_861_3 = metadata.cta_861_3) {
+    if (metadata.HasCLLI()) {
+      const auto& clli = metadata.GetCLLI();
       AHdrMetadata_cta861_3 cta861_3 = {
-          .maxContentLightLevel =
-              static_cast<float>(gfx_cta_861_3->max_content_light_level),
-          .maxFrameAverageLightLevel =
-              static_cast<float>(gfx_cta_861_3->max_frame_average_light_level)};
+          .maxContentLightLevel = clli.fMaxCLL,
+          .maxFrameAverageLightLevel = clli.fMaxFALL};
       SurfaceControlMethods::Get()
           .ASurfaceTransaction_setHdrMetadata_cta861_3Fn(
               transaction_, surface.surface(), &cta861_3);
     }
 
-    if (const auto& gfx_smpte_st_2086 = metadata.smpte_st_2086) {
-      const auto& primaries = gfx_smpte_st_2086->primaries;
+    if (metadata.HasMDCV()) {
+      const auto& mdcv = metadata.GetMDCV();
+      const auto& primaries = mdcv.fDisplayPrimaries;
       AHdrMetadata_smpte2086 smpte2086 = {
           .displayPrimaryRed = {.x = primaries.fRX, .y = primaries.fRY},
           .displayPrimaryGreen = {.x = primaries.fGX, .y = primaries.fGY},
           .displayPrimaryBlue = {.x = primaries.fBX, .y = primaries.fBY},
           .whitePoint = {.x = primaries.fWX, .y = primaries.fWY},
-          .maxLuminance = gfx_smpte_st_2086->luminance_max,
-          .minLuminance = gfx_smpte_st_2086->luminance_min};
+          .maxLuminance = mdcv.fMaximumDisplayMasteringLuminance,
+          .minLuminance = mdcv.fMinimumDisplayMasteringLuminance};
       SurfaceControlMethods::Get()
           .ASurfaceTransaction_setHdrMetadata_smpte2086Fn(
               transaction_, surface.surface(), &smpte2086);

@@ -34,7 +34,7 @@ enum class TaskIds {
   TEST = 0x00008378,
   // component: Internals>Installer
   // team_email: chrome-updates-dev@chromium.org
-  // owner: waffles@chromium.org
+  // owner: sorin@chromium.org
   OMAHA_JOB_ID = 0x00011684,
   // component: Services>CloudMessaging
   // team_email:
@@ -102,7 +102,7 @@ enum class TaskIds {
   FEED_REFRESH_JOB_ID = 22,
   // component: Internals>Installer>Components
   // team_email: chrome-updates-dev@chromium.org
-  // owner: waffles@chromium.org
+  // owner: sorin@chromium.org
   COMPONENT_UPDATE_JOB_ID = 2,
   // component: Blink>BackgroundSync
   // team_email: platform-capabilities@chromium.org
@@ -131,15 +131,11 @@ enum class TaskIds {
   // component: UI>Browser>ContentSuggestions>Feed
   // team_email: feed@chromium.org
   // owner: dewittj@chromium.org
-  WEBFEEDS_REFRESH_JOB_ID = 109,
+  //  WEBFEEDS_REFRESH_JOB_ID = 109,
   // component: Mobile>WebView
   // team_email: android-webview-dev@chromium.org
   // owner: ntfschr@chromium.org, torne@chromium.org
   WEBVIEW_COMPONENT_UPDATE_JOB_ID = 110,
-  // component: Internals>AttributionReporting
-  // team_email: privacy-sandbox-dev@chromium.org
-  // owner: csharrison@chromium.org
-  ATTRIBUTION_PROVIDER_FLUSH_JOB_ID = 111,
   // component: UI>Settings>Privacy
   // team_email: chrome-privacy-controls@google.com
   // owner: zalmashni@google.com, rubindl@chromium.org
@@ -152,6 +148,14 @@ enum class TaskIds {
   // team_email: cbe-device-trust-eng@google.com
   // owner:xzonghan@chromium.org
   CHROME_SIGNALS_REPORTING_JOB_ID = 114,
+  // component: Internals>Metrics
+  // team_email: chrome-metrics-team@google.com
+  // owner: asvitkine@google.com, rkaplow@google.com, lucnguyen@google.com
+  UMA_UPLOAD_JOB_ID = 115,
+  UKM_UPLOAD_JOB_ID = 116,
+  DWA_UPLOAD_JOB_ID = 117,
+  PUMA_UPLOAD_JOB_ID = 118,
+  STRUCTURED_METRICS_UPLOAD_JOB_ID = 119,
 };
 
 }  // namespace background_task

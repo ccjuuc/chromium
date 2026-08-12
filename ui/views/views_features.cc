@@ -11,9 +11,25 @@ namespace views::features {
 
 // Please keep alphabetized.
 
-// Used to enable additional a11y attributes when announcing text.
-BASE_FEATURE(kAnnounceTextAdditionalAttributes,
-             base::FEATURE_ENABLED_BY_DEFAULT);
+// When enabled, the screen capture exclusion feature (such as
+// SetExcludeFromScreenCapture) is allowed even when running inside a remote
+// session. By default, it is disabled to prevent excluded windows (such as
+// Picture-in-Picture) from being completely hidden from the remote user's
+// local view of that remote session.
+BASE_FEATURE(kAllowWindowCaptureExclusionInRemoteSessions,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Used to apply the initial URL to the WebContents in WebView. This is a kill
+// switch for this new logic, see crbug.com/456058558.
+// TODO(https://crbug.com/456058558): Remove this flag once the feature becomes
+// stable.
+BASE_FEATURE(kApplyInitialUrlToWebContents, base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Enables input protection by blocking interaction with views that are
+// currently or were recently obscured by always-on-top windows, and prevents
+// unintended events on security-sensitive UI that appears and activates
+// unexpectedly."
+BASE_FEATURE(kEnableInputProtection, base::FEATURE_DISABLED_BY_DEFAULT);
 
 // If mouse cursor is over different window Windows will not start a Drag
 // and drop. This feature moves the cursor to the location of a touch on
@@ -27,10 +43,7 @@ BASE_FEATURE(kEnableTouchDragCursorSync, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kKeyboardAccessibleTooltipInViews,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-// Used to apply the initial URL to the WebContents in WebView. This is a kill
-// switch for this new logic, see crbug.com/456058558.
-// TODO(https://crbug.com/456058558): Remove this flag once the feature becomes
-// stable.
-BASE_FEATURE(kApplyInitialUrlToWebContents, base::FEATURE_ENABLED_BY_DEFAULT);
+// If enabled, NativeViewHost controls the layers of the native view.
+BASE_FEATURE(kNativeViewHostManagesLayers, base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace views::features

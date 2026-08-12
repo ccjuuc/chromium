@@ -23,6 +23,7 @@
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
+#include "mojo/public/cpp/bindings/message.h"
 #include "net/base/net_errors.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "url/gurl.h"
@@ -51,6 +52,12 @@ namespace {
 
 static NetErrorTabHelper::TestingState testing_state_ =
     NetErrorTabHelper::TESTING_DEFAULT;
+
+bool IsValidEasterEggTarget(content::RenderFrameHost& target_frame) {
+  // Only the primary main-frame error document lives in the isolated
+  // error-page process; subframe error documents can be attacker-controlled.
+  return target_frame.IsErrorDocument() && target_frame.IsInPrimaryMainFrame();
+}
 
 }  // namespace
 
@@ -150,6 +157,10 @@ void NetErrorTabHelper::DownloadPageLater() {
   if (!entry || entry->GetPageType() != content::PAGE_TYPE_ERROR)
     return;
 
+  if (!net_error_page_support_.CurrentTargetFrame().IsInPrimaryMainFrame()) {
+    return;
+  }
+
   // Only download the page for HTTP/HTTPS URLs.
   GURL url(entry->GetVirtualURL());
   if (!url.SchemeIsHTTPOrHTTPS())
@@ -234,7 +245,7 @@ void NetErrorTabHelper::OnDnsProbeFinished(DnsProbeStatus result) {
 void NetErrorTabHelper::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* prefs) {
   // embedder_support::kAlternateErrorPagesEnabled is registered by
-  // NavigationCorrectionTabObserver.
+  // ProfileNetworkContextService.
 
   prefs->RegisterIntegerPref(prefs::kNetworkEasterEggHighScore, 0,
                              user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
@@ -291,8 +302,8 @@ void NetErrorTabHelper::RunNetworkDiagnosticsHelper(
   if (!CanShowNetworkDiagnosticsDialog(web_contents()))
     return;
 
-  if (!network_diagnostics_receivers_.GetCurrentTargetFrame()
-           ->IsInPrimaryMainFrame()) {
+  if (!network_diagnostics_receivers_.CurrentTargetFrame()
+           .IsInPrimaryMainFrame()) {
     return;
   }
 
@@ -308,17 +319,51 @@ void NetErrorTabHelper::DownloadPageLaterHelper(const GURL& page_url) {
 #endif  // BUILDFLAG(ENABLE_OFFLINE_PAGES)
 
 void NetErrorTabHelper::GetHighScore(GetHighScoreCallback callback) {
+  content::RenderFrameHost& target_frame =
+      network_easter_egg_receivers_.CurrentTargetFrame();
+  if (!IsValidEasterEggTarget(target_frame)) {
+    // IsInMessageDispatch() is checked to avoid calling ReportBadMessage()
+    // and crashing when unit tests invoke these methods directly.
+    if (mojo::IsInMessageDispatch()) {
+      network_easter_egg_receivers_.ReportBadMessage(
+          "Easter egg high score request from a non-error document");
+    }
+    std::move(callback).Run(0);
+    return;
+  }
   std::move(callback).Run(
       static_cast<uint32_t>(easter_egg_high_score_.GetValue()));
 }
 
 void NetErrorTabHelper::UpdateHighScore(uint32_t high_score) {
+  content::RenderFrameHost& target_frame =
+      network_easter_egg_receivers_.CurrentTargetFrame();
+  if (!IsValidEasterEggTarget(target_frame)) {
+    // IsInMessageDispatch() is checked to avoid calling ReportBadMessage()
+    // and crashing when unit tests invoke these methods directly.
+    if (mojo::IsInMessageDispatch()) {
+      network_easter_egg_receivers_.ReportBadMessage(
+          "Easter egg high score request from a non-error document");
+    }
+    return;
+  }
   if (high_score <= static_cast<uint32_t>(easter_egg_high_score_.GetValue()))
     return;
   easter_egg_high_score_.SetValue(static_cast<int>(high_score));
 }
 
 void NetErrorTabHelper::ResetHighScore() {
+  content::RenderFrameHost& target_frame =
+      network_easter_egg_receivers_.CurrentTargetFrame();
+  if (!IsValidEasterEggTarget(target_frame)) {
+    // IsInMessageDispatch() is checked to avoid calling ReportBadMessage()
+    // and crashing when unit tests invoke these methods directly.
+    if (mojo::IsInMessageDispatch()) {
+      network_easter_egg_receivers_.ReportBadMessage(
+          "Easter egg high score request from a non-error document");
+    }
+    return;
+  }
   easter_egg_high_score_.SetValue(0);
 }
 

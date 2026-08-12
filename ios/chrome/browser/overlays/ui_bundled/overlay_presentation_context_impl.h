@@ -7,6 +7,9 @@
 
 #import <UIKit/UIKit.h>
 
+#import <map>
+#import <memory>
+
 #import "base/memory/raw_ptr.h"
 #import "base/memory/weak_ptr.h"
 #import "base/observer_list.h"
@@ -161,7 +164,7 @@ class OverlayPresentationContextImpl : public OverlayPresentationContext,
 
     // OverlayUIDismissalDelegate:
     void OverlayUIDidFinishPresentation(OverlayRequest* request) override;
-    void OverlayUIDidFinishDismissal(OverlayRequest* request) override;
+    void OverlayUIDidFinishDismissal(OverlayRequestId request_id) override;
 
    private:
     raw_ptr<OverlayPresentationContextImpl> presentation_context_ = nullptr;

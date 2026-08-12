@@ -6,13 +6,20 @@
 #define CHROME_BROWSER_UI_LENS_TEST_LENS_SEARCH_CONTROLLER_H_
 
 #include "chrome/browser/ui/lens/lens_overlay_query_controller.h"
+#include "chrome/browser/ui/lens/lens_query_flow_router.h"
 #include "chrome/browser/ui/lens/lens_search_contextualization_controller.h"
 #include "chrome/browser/ui/lens/lens_search_controller.h"
+#include "components/contextual_search/contextual_search_context_controller.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace variations {
 class VariationsClient;
 }  // namespace variations
+
+namespace contextual_search {
+class MockContextualSearchSessionHandle;
+class MockContextualSearchContextController;
+}  // namespace contextual_search
 
 namespace lens {
 
@@ -35,6 +42,12 @@ class MockLensSearchController : public LensSearchController {
 
   MOCK_METHOD(bool, should_route_to_contextual_tasks, (), (const, override));
 
+  MOCK_METHOD(bool, IsActive, (), (override));
+  MOCK_METHOD(void,
+              CloseLensSync,
+              (lens::LensOverlayDismissalSource dismissal_source),
+              (override));
+
   MOCK_METHOD(lens::LensOverlayGen204Controller*,
               gen204_controller,
               (),
@@ -51,6 +64,30 @@ class MockLensSearchController : public LensSearchController {
               (override));
 };
 
+class FakeLensQueryFlowRouter : public LensQueryFlowRouter {
+ public:
+  explicit FakeLensQueryFlowRouter(
+      LensSearchController* lens_search_controller);
+  ~FakeLensQueryFlowRouter() override;
+
+  contextual_search::ContextualSearchSessionHandle*
+  GetContextualSearchSessionHandle() const override;
+
+ protected:
+  bool IsActiveTabContextEligible() const override;
+  TabContextualizationController* GetTabContextualizationController()
+      const override;
+
+ private:
+  std::unique_ptr<contextual_search::MockContextualSearchSessionHandle>
+      mock_handle_;
+  std::unique_ptr<contextual_search::MockContextualSearchContextController>
+      mock_context_controller_;
+  std::unique_ptr<tabs::TabInterface> fake_tab_interface_;
+  std::unique_ptr<TabContextualizationController> mock_tab_context_controller_;
+  std::unique_ptr<contextual_search::FileInfo> mock_file_info_;
+};
+
 class TestLensSearchController : public LensSearchController {
  public:
   explicit TestLensSearchController(tabs::TabInterface* tab)
@@ -59,10 +96,7 @@ class TestLensSearchController : public LensSearchController {
   std::unique_ptr<LensOverlayController> CreateLensOverlayController(
       tabs::TabInterface* tab,
       LensSearchController* lens_search_controller,
-      variations::VariationsClient* variations_client,
-      signin::IdentityManager* identity_manager,
       PrefService* pref_service,
-      syncer::SyncService* sync_service,
       ThemeService* theme_service) override;
 
   std::unique_ptr<lens::LensOverlayQueryController> CreateLensQueryController(
@@ -77,6 +111,9 @@ class TestLensSearchController : public LensSearchController {
       lens::LensOverlayInvocationSource invocation_source,
       bool use_dark_mode,
       lens::LensOverlayGen204Controller* gen204_controller) override;
+
+  std::unique_ptr<lens::LensQueryFlowRouter> CreateLensQueryFlowRouter()
+      override;
 
   std::unique_ptr<lens::LensSearchContextualizationController>
   CreateLensSearchContextualizationController() override;

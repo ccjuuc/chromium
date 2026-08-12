@@ -32,18 +32,16 @@ viz::mojom::LetterboxingBehavior EnumTraits<
 }
 
 // static
-bool EnumTraits<viz::mojom::LetterboxingBehavior, viz::LetterboxingBehavior>::
-    FromMojom(viz::mojom::LetterboxingBehavior input,
-              viz::LetterboxingBehavior* out) {
+viz::LetterboxingBehavior
+EnumTraits<viz::mojom::LetterboxingBehavior, viz::LetterboxingBehavior>::
+    FromMojom(viz::mojom::LetterboxingBehavior input) {
   switch (input) {
     case viz::mojom::LetterboxingBehavior::kDoNotLetterbox:
-      *out = viz::LetterboxingBehavior::kDoNotLetterbox;
-      return true;
+      return viz::LetterboxingBehavior::kDoNotLetterbox;
     case viz::mojom::LetterboxingBehavior::kLetterbox:
-      *out = viz::LetterboxingBehavior::kLetterbox;
-      return true;
+      return viz::LetterboxingBehavior::kLetterbox;
   }
-  return false;
+  NOTREACHED();
 }
 
 gpu::ExportedSharedImage
@@ -82,7 +80,7 @@ bool StructTraits<viz::mojom::BlitRequestDataView, viz::BlitRequest>::Read(
   *out = viz::BlitRequest(
       destination_region_offset, letterboxing_behavior,
       gpu::ClientSharedImage::ImportUnowned(std::move(exported_shared_image)),
-      sync_token, data.populates_gpu_memory_buffer());
+      sync_token, data.populates_mappable_shared_image());
 
   return true;
 }

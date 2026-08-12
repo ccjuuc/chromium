@@ -23,6 +23,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/global_routing_id.h"
+#include "content/public/browser/isolated_context_util.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
@@ -57,7 +58,7 @@ using ::blink::mojom::MediaStreamRequestResult;
 void BindMediaStreamDeviceObserverReceiver(
     GlobalRenderFrameHostId render_frame_host_id,
     mojo::PendingReceiver<blink::mojom::MediaStreamDeviceObserver> receiver) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M152);
 
   RenderFrameHost* render_frame_host =
       RenderFrameHost::FromID(render_frame_host_id);
@@ -69,7 +70,7 @@ void BindMediaStreamDeviceObserverReceiver(
 std::unique_ptr<MediaStreamWebContentsObserver, BrowserThread::DeleteOnUIThread>
 StartObservingWebContents(GlobalRenderFrameHostId render_frame_host_id,
                           base::RepeatingClosure focus_callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M152);
 
   WebContents* const web_contents = WebContents::FromRenderFrameHost(
       RenderFrameHost::FromID(render_frame_host_id));
@@ -92,7 +93,7 @@ bool MayApplySubCaptureTarget(GlobalRenderFrameHostId capturing_id,
                               GlobalRenderFrameHostId captured_id,
                               media::mojom::SubCaptureTargetType type,
                               const base::Token& target) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M152);
 
   WebContents* const capturing_wc =
       SubCaptureTargetIdWebContentsHelper::GetRelevantWebContents(capturing_id);
@@ -218,7 +219,7 @@ MediaStreamDispatcherHost::MediaStreamDispatcherHost(
       media_stream_manager_(media_stream_manager),
       get_salt_and_origin_cb_(
           base::BindRepeating(&GetMediaDeviceSaltAndOrigin)) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   // TODO(crbug.com/40203744): Register focus_callback only when needed.
   base::RepeatingClosure focus_callback =
@@ -233,7 +234,7 @@ MediaStreamDispatcherHost::MediaStreamDispatcherHost(
 }
 
 MediaStreamDispatcherHost::~MediaStreamDispatcherHost() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   web_contents_observer_.reset();
   CancelAllRequests();
@@ -243,7 +244,7 @@ void MediaStreamDispatcherHost::Create(
     GlobalRenderFrameHostId render_frame_host_id,
     MediaStreamManager* media_stream_manager,
     mojo::PendingReceiver<blink::mojom::MediaStreamDispatcherHost> receiver) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   media_stream_manager->RegisterDispatcherHost(
       std::make_unique<MediaStreamDispatcherHost>(render_frame_host_id,
@@ -254,7 +255,7 @@ void MediaStreamDispatcherHost::Create(
 void MediaStreamDispatcherHost::SetWebContentsObserver(
     std::unique_ptr<MediaStreamWebContentsObserver,
                     BrowserThread::DeleteOnUIThread> web_contents_observer) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   web_contents_observer_ = std::move(web_contents_observer);
 }
@@ -262,7 +263,7 @@ void MediaStreamDispatcherHost::SetWebContentsObserver(
 void MediaStreamDispatcherHost::OnDeviceStopped(
     const std::string& label,
     const blink::MediaStreamDevice& device) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   GetMediaStreamDeviceObserver()->OnDeviceStopped(label, device);
 }
@@ -271,7 +272,7 @@ void MediaStreamDispatcherHost::OnDeviceChanged(
     const std::string& label,
     const blink::MediaStreamDevice& old_device,
     const blink::MediaStreamDevice& new_device) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   GetMediaStreamDeviceObserver()->OnDeviceChanged(label, old_device,
                                                   new_device);
@@ -281,7 +282,7 @@ void MediaStreamDispatcherHost::OnDeviceRequestStateChange(
     const std::string& label,
     const blink::MediaStreamDevice& device,
     const blink::mojom::MediaStreamStateChange new_state) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   GetMediaStreamDeviceObserver()->OnDeviceRequestStateChange(label, device,
                                                              new_state);
@@ -290,7 +291,7 @@ void MediaStreamDispatcherHost::OnDeviceRequestStateChange(
 void MediaStreamDispatcherHost::OnDeviceCaptureConfigurationChange(
     const std::string& label,
     const blink::MediaStreamDevice& device) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   GetMediaStreamDeviceObserver()->OnDeviceCaptureConfigurationChange(label,
                                                                      device);
@@ -299,8 +300,8 @@ void MediaStreamDispatcherHost::OnDeviceCaptureConfigurationChange(
 void MediaStreamDispatcherHost::OnDeviceCaptureHandleChange(
     const std::string& label,
     const blink::MediaStreamDevice& device) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DCHECK(device.display_media_info);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
+  CHECK(device.display_media_info, base::NotFatalUntil::M152);
 
   GetMediaStreamDeviceObserver()->OnDeviceCaptureHandleChange(label, device);
 }
@@ -309,11 +310,10 @@ void MediaStreamDispatcherHost::OnZoomLevelChange(
     const std::string& label,
     const blink::MediaStreamDevice& device,
     int zoom_level) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DCHECK(device.display_media_info);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
+  CHECK(device.display_media_info, base::NotFatalUntil::M152);
 
-  if (!base::FeatureList::IsEnabled(
-          features::kCapturedSurfaceControlKillswitch)) {
+  if (!base::FeatureList::IsEnabled(blink::features::kCapturedSurfaceControl)) {
     return;
   }
 
@@ -321,7 +321,7 @@ void MediaStreamDispatcherHost::OnZoomLevelChange(
 }
 
 void MediaStreamDispatcherHost::OnWebContentsFocused() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   while (!pending_requests_.empty()) {
     std::unique_ptr<PendingAccessRequest> request =
@@ -358,14 +358,14 @@ void MediaStreamDispatcherHost::GenerateStreamsChecksOnUIThread(
         get_salt_and_origin_cb,
     base::OnceCallback<void(GenerateStreamsUIThreadCheckResult)>
         result_callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M152);
 
   RenderFrameHostImpl* const render_frame_host =
       RenderFrameHostImpl::FromID(render_frame_host_id);
   if (!render_frame_host || !render_frame_host->IsActive()) {
     std::move(result_callback)
-        .Run(
-            base::unexpected(MediaStreamRequestResult::FAILED_DUE_TO_SHUTDOWN));
+        .Run(base::unexpected(MediaStreamRequestResult::
+                                  FAILED_DUE_TO_SHUTDOWN_NO_RFH_IN_DISPATCHER));
     return;
   }
 
@@ -386,16 +386,17 @@ void MediaStreamDispatcherHost::CheckRequestAllScreensAllowed(
     base::OnceCallback<void(GenerateStreamsUIThreadCheckResult)>
         result_callback,
     RenderFrameHost* render_frame_host) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M152);
 
   if (!render_frame_host || !render_frame_host->IsActive()) {
     std::move(result_callback)
-        .Run(
-            base::unexpected(MediaStreamRequestResult::FAILED_DUE_TO_SHUTDOWN));
+        .Run(base::unexpected(MediaStreamRequestResult::
+                                  FAILED_DUE_TO_SHUTDOWN_NO_RFH_IN_DISPATCHER));
     return;
   }
 
-  if (GetContentClient()->browser()->IsMultiCaptureAllowed(render_frame_host)) {
+  if (HasIsolatedContextCapability(render_frame_host) &&
+      GetContentClient()->browser()->IsMultiCaptureAllowed(render_frame_host)) {
     CheckStreamsPermissionResultReceived(std::move(get_salt_and_origin_cb),
                                          std::move(result_callback));
   } else {
@@ -426,7 +427,7 @@ void MediaStreamDispatcherHost::CheckStreamsPermissionResultReceived(
 
 const mojo::Remote<blink::mojom::MediaStreamDeviceObserver>&
 MediaStreamDispatcherHost::GetMediaStreamDeviceObserver() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   if (media_stream_device_observer_) {
     return media_stream_device_observer_;
@@ -445,17 +446,18 @@ MediaStreamDispatcherHost::GetMediaStreamDeviceObserver() {
 }
 
 void MediaStreamDispatcherHost::OnMediaStreamDeviceObserverConnectionError() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   media_stream_device_observer_.reset();
 }
 
 void MediaStreamDispatcherHost::CancelAllRequests() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   for (auto& pending_request : pending_requests_) {
     std::move(pending_request->callback)
-        .Run(MediaStreamRequestResult::FAILED_DUE_TO_SHUTDOWN,
+        .Run(MediaStreamRequestResult::
+                 FAILED_DUE_TO_SHUTDOWN_NO_RFH_CANCELLED_REQUEST,
              /*label=*/std::string(),
              /*stream_devices_set=*/nullptr,
              /*pan_tilt_zoom_allowed=*/false);
@@ -471,7 +473,7 @@ void MediaStreamDispatcherHost::GenerateStreams(
     bool user_gesture,
     blink::mojom::StreamSelectionInfoPtr audio_stream_selection_info_ptr,
     GenerateStreamsCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   const std::optional<bad_message::BadMessageReason> bad_message =
       ValidateControlsForGenerateStreams(controls);
@@ -500,7 +502,7 @@ void MediaStreamDispatcherHost::DoGenerateStreams(
     blink::mojom::StreamSelectionInfoPtr audio_stream_selection_info_ptr,
     GenerateStreamsCallback callback,
     GenerateStreamsUIThreadCheckResult ui_check_result) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   if (!ui_check_result.has_value()) {
     std::move(callback).Run(ui_check_result.error(),
@@ -511,10 +513,8 @@ void MediaStreamDispatcherHost::DoGenerateStreams(
   }
 
   MediaDeviceSaltAndOrigin salt_and_origin = std::move(*ui_check_result);
-  // TODO(crbug.com/379869738) Remove GetUnsafeValue.
-  if (!MediaStreamManager::IsOriginAllowed(
-          render_frame_host_id_.child_id.GetUnsafeValue(),
-          salt_and_origin.origin())) {
+  if (!MediaStreamManager::IsOriginAllowed(render_frame_host_id_.child_id,
+                                           salt_and_origin.origin())) {
     std::move(callback).Run(MediaStreamRequestResult::INVALID_SECURITY_ORIGIN,
                             /*label=*/std::string(),
                             /*stream_devices_set=*/nullptr,
@@ -562,7 +562,7 @@ void MediaStreamDispatcherHost::DoGenerateStreams(
 }
 
 void MediaStreamDispatcherHost::CancelRequest(int page_request_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   media_stream_manager_->CancelRequest(render_frame_host_id_, requester_id_,
                                        page_request_id);
@@ -571,7 +571,7 @@ void MediaStreamDispatcherHost::CancelRequest(int page_request_id) {
 void MediaStreamDispatcherHost::StopStreamDevice(
     const std::string& device_id,
     const std::optional<base::UnguessableToken>& session_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   media_stream_manager_->StopStreamDevice(
       render_frame_host_id_, requester_id_, device_id,
@@ -582,7 +582,7 @@ void MediaStreamDispatcherHost::OpenDevice(int32_t page_request_id,
                                            const std::string& device_id,
                                            blink::mojom::MediaStreamType type,
                                            OpenDeviceCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   // OpenDevice is only supported for microphone or webcam capture.
   if (type != blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE &&
@@ -607,12 +607,10 @@ void MediaStreamDispatcherHost::DoOpenDevice(
     blink::mojom::MediaStreamType type,
     OpenDeviceCallback callback,
     const MediaDeviceSaltAndOrigin& salt_and_origin) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
-  // TODO(crbug.com/379869738) Remove GetUnsafeValue.
-  if (!MediaStreamManager::IsOriginAllowed(
-          render_frame_host_id_.child_id.GetUnsafeValue(),
-          salt_and_origin.origin())) {
+  if (!MediaStreamManager::IsOriginAllowed(render_frame_host_id_.child_id,
+                                           salt_and_origin.origin())) {
     std::move(callback).Run(false /* success */, std::string(),
                             blink::MediaStreamDevice());
     return;
@@ -626,7 +624,7 @@ void MediaStreamDispatcherHost::DoOpenDevice(
 }
 
 void MediaStreamDispatcherHost::CloseDevice(const std::string& label) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   media_stream_manager_->CancelRequest(label);
 }
@@ -635,7 +633,7 @@ void MediaStreamDispatcherHost::SetCapturingLinkSecured(
     const std::optional<base::UnguessableToken>& session_id,
     blink::mojom::MediaStreamType type,
     bool is_secure) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   // TODO(crbug.com/379869738) Remove GetUnsafeValue.
   media_stream_manager_->SetCapturingLinkSecured(
@@ -647,7 +645,7 @@ void MediaStreamDispatcherHost::KeepDeviceAliveForTransfer(
     const base::UnguessableToken& session_id,
     const base::UnguessableToken& transfer_id,
     KeepDeviceAliveForTransferCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   if (!base::FeatureList::IsEnabled(features::kMediaStreamTrackTransfer)) {
     ReceivedBadMessage(render_frame_host_id_.child_id,
@@ -662,7 +660,7 @@ void MediaStreamDispatcherHost::KeepDeviceAliveForTransfer(
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 void MediaStreamDispatcherHost::FocusCapturedSurface(const std::string& label,
                                                      bool focus) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   media_stream_manager_->SetCapturedDisplaySurfaceFocus(
       label, focus,
@@ -674,10 +672,9 @@ void MediaStreamDispatcherHost::FocusCapturedSurface(const std::string& label,
 void MediaStreamDispatcherHost::SendWheel(
     const base::UnguessableToken& device_id,
     blink::mojom::CapturedWheelActionPtr action) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
-  if (!base::FeatureList::IsEnabled(
-          features::kCapturedSurfaceControlKillswitch)) {
+  if (!base::FeatureList::IsEnabled(blink::features::kCapturedSurfaceControl)) {
     return;
   }
 
@@ -696,11 +693,11 @@ void MediaStreamDispatcherHost::UpdateZoomLevel(
     const base::UnguessableToken& device_id,
     blink::mojom::ZoomLevelAction action,
     UpdateZoomLevelCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
-  if (!base::FeatureList::IsEnabled(
-          features::kCapturedSurfaceControlKillswitch)) {
-    std::move(callback).Run(CapturedSurfaceControlResult::kUnknownError);
+  if (!base::FeatureList::IsEnabled(blink::features::kCapturedSurfaceControl)) {
+    std::move(callback).Run(
+        blink::mojom::CapturedSurfaceControlResult::kUnknownError);
     return;
   }
 
@@ -711,11 +708,11 @@ void MediaStreamDispatcherHost::UpdateZoomLevel(
 void MediaStreamDispatcherHost::RequestCapturedSurfaceControlPermission(
     const base::UnguessableToken& session_id,
     RequestCapturedSurfaceControlPermissionCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
-  if (!base::FeatureList::IsEnabled(
-          features::kCapturedSurfaceControlKillswitch)) {
-    std::move(callback).Run(CapturedSurfaceControlResult::kUnknownError);
+  if (!base::FeatureList::IsEnabled(blink::features::kCapturedSurfaceControl)) {
+    std::move(callback).Run(
+        blink::mojom::CapturedSurfaceControlResult::kUnknownError);
     return;
   }
 
@@ -731,7 +728,7 @@ void MediaStreamDispatcherHost::ApplySubCaptureTarget(
     const base::Token& sub_capture_target,
     uint32_t sub_capture_version,
     ApplySubCaptureTargetCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   const GlobalRenderFrameHostId captured_id =
       media_stream_manager_->video_capture_manager()
@@ -760,7 +757,7 @@ void MediaStreamDispatcherHost::OnSubCaptureTargetValidationComplete(
     uint32_t sub_capture_version,
     ApplySubCaptureTargetCallback callback,
     bool target_passed_validation) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
   CHECK(type == media::mojom::SubCaptureTargetType::kCropTarget ||
         type == media::mojom::SubCaptureTargetType::kRestrictionTarget);
 
@@ -780,7 +777,7 @@ void MediaStreamDispatcherHost::GetOpenDevice(
     const base::UnguessableToken& session_id,
     const base::UnguessableToken& transfer_id,
     GetOpenDeviceCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   if (!base::FeatureList::IsEnabled(features::kMediaStreamTrackTransfer)) {
     ReceivedBadMessage(render_frame_host_id_.child_id,
@@ -810,11 +807,9 @@ void MediaStreamDispatcherHost::DoGetOpenDevice(
     const base::UnguessableToken& transfer_id,
     GetOpenDeviceCallback callback,
     const MediaDeviceSaltAndOrigin& salt_and_origin) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  // TODO(crbug.com/379869738) Remove GetUnsafeValue.
-  if (!MediaStreamManager::IsOriginAllowed(
-          render_frame_host_id_.child_id.GetUnsafeValue(),
-          salt_and_origin.origin())) {
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
+  if (!MediaStreamManager::IsOriginAllowed(render_frame_host_id_.child_id,
+                                           salt_and_origin.origin())) {
     std::move(callback).Run(MediaStreamRequestResult::INVALID_SECURITY_ORIGIN,
                             nullptr);
     return;
@@ -843,7 +838,7 @@ void MediaStreamDispatcherHost::DoGetOpenDevice(
 std::optional<bad_message::BadMessageReason>
 MediaStreamDispatcherHost::ValidateControlsForGenerateStreams(
     const blink::StreamControls& controls) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   if (!AllowedStreamTypeCombination(controls.audio.stream_type,
                                     controls.video.stream_type)) {
@@ -854,10 +849,6 @@ MediaStreamDispatcherHost::ValidateControlsForGenerateStreams(
     if (controls.suppress_local_audio_playback) {
       return bad_message::
           MSDH_SUPPRESS_LOCAL_AUDIO_PLAYBACK_BUT_AUDIO_NOT_REQUESTED;
-    }
-
-    if (controls.hotword_enabled) {
-      return bad_message::MSDH_HOTWORD_ENABLED_BUT_AUDIO_NOT_REQUESTED;
     }
 
     if (controls.disable_local_echo) {
@@ -881,7 +872,7 @@ MediaStreamDispatcherHost::ValidateControlsForGenerateStreams(
 void MediaStreamDispatcherHost::ReceivedBadMessage(
     ChildProcessId render_process_id,
     bad_message::BadMessageReason reason) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
 
   if (bad_message_callback_for_testing_) {
     bad_message_callback_for_testing_.Run(render_process_id, reason);
@@ -893,8 +884,8 @@ void MediaStreamDispatcherHost::ReceivedBadMessage(
 void MediaStreamDispatcherHost::SetBadMessageCallbackForTesting(
     base::RepeatingCallback<void(ChildProcessId, bad_message::BadMessageReason)>
         callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DCHECK(!bad_message_callback_for_testing_);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
+  CHECK(!bad_message_callback_for_testing_, base::NotFatalUntil::M152);
   bad_message_callback_for_testing_ = std::move(callback);
 }
 

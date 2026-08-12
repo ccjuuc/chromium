@@ -148,7 +148,7 @@ enum class MessageIdentifier {
   CCT_ACCOUNT_MISMATCH_NOTICE = 58,
   // Removed: PROMPT_HATS_CLEAR_BROWSING_DATA = 59,
   OS_ADVANCED_PROTECTION_SETTING_CHANGED_MESSAGE = 60,
-  MULTI_INSTANCE_RESTORATION_ON_DOWNGRADED_LIMIT = 61,
+  // Removed: MULTI_INSTANCE_RESTORATION_ON_DOWNGRADED_LIMIT = 61,
   UPDATE_CHROME_FOR_TAB_GROUP_SHARE = 62,
   MODE_B_ROLLBACK_MESSAGE = 63,
   RELOAD_PAGE = 64,
@@ -156,10 +156,21 @@ enum class MessageIdentifier {
   PERMISSION_PROMPT_LOUD = 66,
   SAVE_UPDATE_ENTITY = 67,
   SIGNIN_SURVEY = 68,
+  EXTENSIONS_REQUEST_ACCESS = 69,
+  KNOWN_INTERCEPTION_DISCLOSURE = 70,
+  SEND_TAB_TO_SELF = 71,
+  GLIC_WINDOW_RESIZED = 72,
+  EXTENSION_DEV_TOOLS = 73,
+  PERSONAL_CONTEXT_FETCHING_FAILURE = 74,
+  PRIVATE_INFERENCE_NOTICE = 75,
+  CONTEXTUAL_TASKS_WINDOW_RESIZED = 76,
+  IMMERSIVE_PLAYBACK_CONFIRMATION = 77,
+  INTRANET_REDIRECT = 78,
   // Insert new values before this line.
   COUNT
 };
-// LINT.ThenChange(//tools/metrics/histograms/metadata/android/histograms.xml:MessageIdentifier)
+// LINT.ThenChange(//tools/metrics/histograms/metadata/android/histograms.xml:MessageIdentifier,
+// //components/messages/android/java/src/org/chromium/components/messages/MessagesMetrics.java:MessageIdentifierToHistogramSuffix)
 
 // The behavior the message should follow when the primary button is clicked,
 // after running the primary action callback.

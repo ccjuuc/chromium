@@ -10,7 +10,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/compiler_specific.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/memory/raw_ptr.h"
@@ -130,7 +129,9 @@ class VectorIconGallery : public View, public TextfieldController {
   void ContentsChanged(Textfield* sender,
                        const std::u16string& new_contents) override {
     if (sender == size_input_) {
-      if (base::StringToInt(new_contents, &size_) && (size_ > 0)) {
+      int new_size;
+      if (base::StringToInt(new_contents, &new_size) && (new_size > 0)) {
+        size_ = new_size;
         Update();
       } else {
         size_input_->SetText(std::u16string());
@@ -143,9 +144,10 @@ class VectorIconGallery : public View, public TextfieldController {
     if (new_contents.size() != 8u) {
       return;
     }
-    unsigned new_color = UNSAFE_TODO(
-        strtoul(base::UTF16ToASCII(new_contents).c_str(), nullptr, 16));
-    if (new_color <= 0xffffffff) {
+
+    uint32_t new_color = 0;
+    if (base::HexStringToUInt(base::UTF16ToASCII(new_contents), &new_color) &&
+        (new_color <= 0xffffffff)) {
       color_ = new_color;
       Update();
     }
@@ -247,43 +249,6 @@ class VectorIconGallery : public View, public TextfieldController {
     InvalidateLayout();
   }
 
-  std::string CleanUpContents(const std::string& file_content) {
-    // Skip over comments.
-    // This handles very basic cases of // and /*. More complicated edge
-    // cases such as /* /* */ */ are not handled.
-    std::string output = file_content;
-    for (size_t slashes = output.find("//"); slashes != std::string::npos;
-         slashes = output.find("//")) {
-      size_t eol = output.find("\n", slashes);
-      // Add 1 to erase the \n token at the end of the line.
-      output.erase(slashes, eol - slashes + 1);
-    }
-
-    for (size_t slashes = output.find("/*"); slashes != std::string::npos;
-         slashes = output.find("/*")) {
-      size_t eol = output.find("*/", slashes);
-      output.erase(slashes, eol - slashes + 2);
-    }
-
-    // CreateVectorIconFromSource does not work well if there are multiple icon
-    // sizes in the same file. Fetch the first icon source in the file.
-    std::string result = output;
-    size_t start = 0;
-    std::string token = "\n\n";
-    size_t end = output.find(token);
-    while (end != std::string::npos) {
-      std::string section = output.substr(start, end - start);
-      if (!section.empty() &&
-          section.find_first_not_of("\t\n\v\f\r") != std::string::npos) {
-        result = section;
-        break;
-      }
-      start = end;
-      end = output.find(token, end + token.length());
-    }
-    return result;
-  }
-
   // 36dp is one of the natural sizes for MD icons, and corresponds roughly to a
   // 32dp usable area.
   int size_ = 36;
@@ -302,6 +267,43 @@ BEGIN_METADATA(VectorIconGallery)
 END_METADATA
 
 }  // namespace
+
+std::string CleanUpContents(const std::string& file_content) {
+  // Skip over comments.
+  // This handles very basic cases of // and /*. More complicated edge
+  // cases such as /* /* */ */ are not handled.
+  std::string output = file_content;
+  for (size_t slashes = output.find("//"); slashes != std::string::npos;
+       slashes = output.find("//")) {
+    size_t eol = output.find("\n", slashes);
+    // Add 1 to erase the \n token at the end of the line.
+    output.erase(slashes, eol - slashes + 1);
+  }
+
+  for (size_t slashes = output.find("/*"); slashes != std::string::npos;
+       slashes = output.find("/*")) {
+    size_t eol = output.find("*/", slashes);
+    output.erase(slashes, eol - slashes + 2);
+  }
+
+  // CreateVectorIconFromSource does not work well if there are multiple icon
+  // sizes in the same file. Fetch the first icon source in the file.
+  std::string result = output;
+  size_t start = 0;
+  std::string token = "\n\n";
+  size_t end = output.find(token);
+  while (end != std::string::npos) {
+    std::string section = output.substr(start, end - start);
+    if (!section.empty() &&
+        section.find_first_not_of("\t\n\v\f\r") != std::string::npos) {
+      result = section;
+      break;
+    }
+    start = end;
+    end = output.find(token, end + token.length());
+  }
+  return result;
+}
 
 VectorExample::VectorExample()
     : ExampleBase(GetStringUTF8(IDS_VECTOR_SELECT_LABEL).c_str()) {}

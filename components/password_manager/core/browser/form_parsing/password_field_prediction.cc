@@ -90,7 +90,7 @@ PasswordFieldPrediction::PasswordFieldPrediction(
     bool is_override)
     : renderer_id(renderer_id),
       signature(signature),
-      type(ToSafeFieldType(type, FieldType::NO_SERVER_DATA)),
+      type(ToSafeFieldType(type).value_or(FieldType::NO_SERVER_DATA)),
       is_override(is_override) {}
 
 PasswordFieldPrediction::PasswordFieldPrediction(
@@ -111,7 +111,6 @@ FormPredictions& FormPredictions::operator=(FormPredictions&&) = default;
 FormPredictions::~FormPredictions() = default;
 
 FormPredictions ConvertToFormPredictions(
-    int driver_id,
     const autofill::FormData& form,
     const base::flat_map<FieldGlobalId, AutofillServerPrediction>&
         predictions) {
@@ -164,7 +163,6 @@ FormPredictions ConvertToFormPredictions(
   }
 
   FormPredictions result;
-  result.driver_id = driver_id;
   result.form_signature = CalculateFormSignature(form);
   result.fields = std::move(field_predictions);
   return result;

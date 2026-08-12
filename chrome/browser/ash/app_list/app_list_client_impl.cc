@@ -31,6 +31,7 @@
 #include "base/metrics/user_metrics.h"
 #include "base/strings/strcat.h"
 #include "base/trace_event/trace_event.h"
+#include "build/branding_buildflags.h"
 #include "build/buildflag.h"
 #include "chrome/browser/apps/app_service/metrics/app_service_metrics.h"
 #include "chrome/browser/ash/app_list/app_list_controller_delegate.h"
@@ -55,16 +56,18 @@
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller_util.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/services/assistant/public/cpp/assistant_browser_delegate.h"
+#include "components/constrained_window/modal_dialog_host_property.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/feature_engagement/public/tracker.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user_manager.h"
+#include "ui/aura/window.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
@@ -157,8 +160,10 @@ bool IsPrimaryProfile(user_manager::UserManager& user_manager,
 
 }  // namespace
 
-AppListClientImpl::AppListClientImpl(user_manager::UserManager* user_manager)
-    : user_manager_(CHECK_DEREF(user_manager)),
+AppListClientImpl::AppListClientImpl(PrefService* local_state,
+                                     user_manager::UserManager* user_manager)
+    : local_state_(CHECK_DEREF(local_state)),
+      user_manager_(CHECK_DEREF(user_manager)),
       app_list_controller_(ash::AppListController::Get()) {
   user_manager_observation_.Observe(user_manager);
 
@@ -174,6 +179,9 @@ AppListClientImpl::AppListClientImpl(user_manager::UserManager* user_manager)
 }
 
 AppListClientImpl::~AppListClientImpl() {
+  modal_dialog_host_observers_.Notify(
+      &web_modal::ModalDialogHostObserver::OnHostDestroying);
+
   SetProfile(nullptr);
 
   user_manager_->RemoveSessionStateObserver(this);
@@ -303,11 +311,6 @@ void AppListClientImpl::OpenSearchResult(int profile_id,
     RecordDefaultSearchResultOpenTypeHistogram(result->metrics_type());
   }
 
-  if (!last_query_length &&
-      launched_from == ash::AppListLaunchedFrom::kLaunchedFromSearchBox) {
-    RecordZeroStateSuggestionOpenTypeHistogram(result->metrics_type());
-  }
-
   if (launched_from == ash::AppListLaunchedFrom::kLaunchedFromSearchBox) {
     RecordOpenedResultFromSearchBox(result->metrics_type());
   }
@@ -432,6 +435,11 @@ void AppListClientImpl::MaybeRecalculateAppsGridDefaultOrder() {
 void AppListClientImpl::OnAppListVisibilityChanged(bool visible) {
   app_list_visible_ = visible;
   if (visible) {
+    aura::Window* window = GetAppListWindow();
+    if (window) {
+      window->SetProperty(constrained_window::kModalDialogHostKey,
+                          static_cast<web_modal::ModalDialogHost*>(this));
+    }
     RecordViewShown(
         ash::AppsCollectionsController::Get()->ShouldShowAppsCollection());
     if (survey_handler_) {
@@ -518,7 +526,7 @@ void AppListClientImpl::SetProfile(Profile* new_profile) {
   // If we are in guest mode, the new profile should be an OffTheRecord profile.
   // Otherwise, this may later hit a check (same condition as this one) in
   // Browser::Browser when opening links in a browser window (see
-  // http://crbug.com/460437).
+  // http://crbug.com/41158655).
   DCHECK(!profile_->IsGuestSession() || profile_->IsOffTheRecord())
       << "Guest mode must use OffTheRecord profile";
 
@@ -548,10 +556,11 @@ void AppListClientImpl::SetProfile(Profile* new_profile) {
 
 void AppListClientImpl::SetUpSearchUI() {
   search_controller_ = app_list::CreateSearchController(
-      profile_, current_model_updater_, this, GetNotifier());
+      &local_state_.get(), profile_, current_model_updater_, this,
+      GetNotifier());
 
   // Refresh the results used for the suggestion chips with empty query.
-  // This fixes crbug.com/999287.
+  // This fixes crbug.com/40642741.
   StartSearch(std::u16string());
 }
 
@@ -1003,4 +1012,60 @@ void AppListClientImpl::RecordAppsDefaultVisibility(
                     ash::AppsCollectionsController::Get()
                         ->GetUserExperimentalArmAsHistogramSuffix()}),
       apps_below_the_fold);
+}
+
+gfx::NativeView AppListClientImpl::GetHostView() const {
+  return app_list_controller_ ? app_list_controller_->GetWindow() : nullptr;
+}
+
+gfx::Point AppListClientImpl::GetDialogPosition(const gfx::Size& size) {
+  const aura::Window* window = GetAppListWindow();
+  if (!window) {
+    return gfx::Point();
+  }
+  gfx::Rect bounds = window->bounds();
+  // Calculate the (x, y) coordinates required to center the dialog
+  // inside the parent Launcher window bounds.
+  return gfx::Point((bounds.width() - size.width()) / 2,
+                    (bounds.height() - size.height()) / 2);
+}
+
+void AppListClientImpl::AddObserver(
+    web_modal::ModalDialogHostObserver* observer) {
+  modal_dialog_host_observers_.AddObserver(observer);
+  aura::Window* window = GetAppListWindow();
+  if (window && !app_list_window_observation_.IsObservingSource(window)) {
+    app_list_window_observation_.Reset();
+    app_list_window_observation_.Observe(window);
+    window->SetProperty(constrained_window::kModalDialogHostKey,
+                        static_cast<web_modal::ModalDialogHost*>(this));
+  }
+}
+
+void AppListClientImpl::RemoveObserver(
+    web_modal::ModalDialogHostObserver* observer) {
+  modal_dialog_host_observers_.RemoveObserver(observer);
+  if (modal_dialog_host_observers_.empty()) {
+    aura::Window* window = GetAppListWindow();
+    if (window) {
+      window->ClearProperty(constrained_window::kModalDialogHostKey);
+    }
+    app_list_window_observation_.Reset();
+  }
+}
+
+void AppListClientImpl::OnWindowBoundsChanged(
+    aura::Window* window,
+    const gfx::Rect& old_bounds,
+    const gfx::Rect& new_bounds,
+    ui::PropertyChangeReason /*reason*/) {
+  modal_dialog_host_observers_.Notify(
+      &web_modal::ModalDialogHostObserver::OnPositionRequiresUpdate);
+}
+
+void AppListClientImpl::OnWindowDestroying(aura::Window* window) {
+  window->ClearProperty(constrained_window::kModalDialogHostKey);
+  app_list_window_observation_.Reset();
+  modal_dialog_host_observers_.Notify(
+      &web_modal::ModalDialogHostObserver::OnHostDestroying);
 }

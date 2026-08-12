@@ -5,6 +5,7 @@
 package org.chromium.components.background_task_scheduler.internal;
 
 import android.app.job.JobInfo;
+import android.os.Build;
 import android.os.PersistableBundle;
 
 import org.junit.Assert;
@@ -154,7 +155,8 @@ public class BackgroundTaskSchedulerJobServiceTest {
         Assert.assertFalse(jobInfo.isPeriodic());
         Assert.assertEquals(NetworkType.ANY, jobInfo.getNetworkType());
         // Assert.assertTrue(jobInfo.isUserInitiated());
-        Assert.assertEquals(TIME_100_MIN_TO_MS, jobInfo.getMinLatencyMillis());
+        long expectedLatency = Build.VERSION.SDK_INT >= 34 ? 0 : TIME_100_MIN_TO_MS;
+        Assert.assertEquals(expectedLatency, jobInfo.getMinLatencyMillis());
     }
 
     @Test

@@ -11,11 +11,10 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback_helpers.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
@@ -23,6 +22,7 @@
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom-shared.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
+#include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
@@ -102,16 +102,13 @@ void WebAppProfileSwitcher::QueryProfileWebAppRegistryToOpenWebApp(
       /*on_complete=*/base::DoNothing());
 }
 
-// TODO(crbug.com/379136842): Verify the allowed states called within
-// IsInstallState() here.
+// TODO(crbug.com/379136842): Verify that the allowed states as part of
+// IsAppSurfaceableToUser() is correct.
 void WebAppProfileSwitcher::InstallOrOpenWebAppWindowForProfile(
     web_app::AppLock& new_profile_lock,
-    base::Value::Dict& debug_value) {
-  if (new_profile_lock.registrar().IsInstallState(
-          app_id_,
-          {web_app::proto::InstallState::SUGGESTED_FROM_ANOTHER_DEVICE,
-           web_app::proto::InstallState::INSTALLED_WITHOUT_OS_INTEGRATION,
-           web_app::proto::InstallState::INSTALLED_WITH_OS_INTEGRATION})) {
+    base::DictValue& debug_value) {
+  if (new_profile_lock.registrar().AppMatches(
+          app_id_, web_app::WebAppFilter::IsAppSurfaceableToUser())) {
     // The web app is already installed and can be launched, or foregrounded,
     // if it's already launched.
     BrowserWindowInterface* launched_app =
@@ -140,11 +137,10 @@ void WebAppProfileSwitcher::InstallAndLaunchWebApp(
     web_app::WebAppIconManager::WebAppBitmaps icon_bitmaps) {
   web_app::WebAppProvider* active_profile_provider =
       web_app::WebAppProvider::GetForWebApps(&active_profile_.get());
-  if (!active_profile_provider->registrar_unsafe().IsInstallState(
-          app_id_,
-          {web_app::proto::InstallState::SUGGESTED_FROM_ANOTHER_DEVICE,
-           web_app::proto::InstallState::INSTALLED_WITHOUT_OS_INTEGRATION,
-           web_app::proto::InstallState::INSTALLED_WITH_OS_INTEGRATION})) {
+  // TODO(crbug.com/379136842): This is likely too 'permissive' of a check, and
+  // different more restrictive filter should likely be used instead.
+  if (!active_profile_provider->registrar_unsafe().AppMatches(
+          app_id_, web_app::WebAppFilter::IsAppSurfaceableToUser())) {
     RunCompletionCallback();
     return;
   }
@@ -185,15 +181,16 @@ void WebAppProfileSwitcher::LaunchAppWithId(
 
   web_app::WebAppProvider::GetForWebApps(new_profile_)
       ->scheduler()
-      .LaunchApp(app_id, *base::CommandLine::ForCurrentProcess(),
-                 /*current_directory=*/base::FilePath(),
-                 /*protocol_handler_launch_url=*/std::nullopt,
-                 /*file_launch_url=*/std::nullopt, /*launch_files=*/{},
-                 base::IgnoreArgs<base::WeakPtr<Browser>,
-                                  base::WeakPtr<content::WebContents>,
-                                  apps::LaunchContainer>(base::BindOnce(
-                     &WebAppProfileSwitcher::RunCompletionCallback,
-                     weak_factory_.GetWeakPtr())));
+      .LaunchAppFromCommandLine(
+          app_id, *base::CommandLine::ForCurrentProcess(),
+          /*current_directory=*/base::FilePath(),
+          /*protocol_handler_launch_url=*/std::nullopt,
+          /*file_launch_url=*/std::nullopt, /*launch_files=*/{},
+          base::IgnoreArgs<base::WeakPtr<BrowserWindowInterface>,
+                           base::WeakPtr<content::WebContents>,
+                           apps::LaunchContainer>(
+              base::BindOnce(&WebAppProfileSwitcher::RunCompletionCallback,
+                             weak_factory_.GetWeakPtr())));
 }
 
 void WebAppProfileSwitcher::RunCompletionCallback() {

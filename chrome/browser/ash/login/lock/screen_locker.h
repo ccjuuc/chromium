@@ -15,6 +15,7 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_auto_reset.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/sequenced_task_runner_helpers.h"
 #include "base/time/time.h"
@@ -41,6 +42,7 @@ class PrefChangeRegistrar;
 namespace ash {
 
 class Authenticator;
+class ScreenLockerController;
 class ViewsScreenLocker;
 
 // ScreenLocker displays the lock UI and takes care of authenticating the user
@@ -87,19 +89,6 @@ class ScreenLocker
   // `users()`.
   user_manager::UserList GetUsersToShow() const;
 
-  // Allow a AuthStatusConsumer to listen for
-  // the same login events that ScreenLocker does.
-  void SetLoginStatusConsumer(AuthStatusConsumer* consumer);
-
-  // Initialize or uninitialize the ScreenLocker class. It observes
-  // SessionManager so that the screen locker accepts lock requests only after a
-  // user has logged in.
-  static void InitClass();
-  static void ShutDownClass();
-
-  // Handles a request from the session manager to show the lock screen.
-  static void HandleShowLockScreenRequest();
-
   // Show the screen locker.
   static void Show();
 
@@ -110,12 +99,23 @@ class ScreenLocker
   // user.
   bool IsAuthTemporarilyDisabledForUser(const AccountId& account_id);
 
+  // Change the authenticators; should only be used by tests.
+  [[nodiscard]] base::WeakAutoReset<ScreenLocker, scoped_refptr<Authenticator>>
+  SetAuthenticatorsForTesting(scoped_refptr<Authenticator> authenticator);
+
+  // Allow an AuthStatusConsumer to listen for the same login events that
+  // ScreenLocker does.
+  [[nodiscard]] base::WeakAutoReset<ScreenLocker, raw_ptr<AuthStatusConsumer>>
+  SetLoginStatusConsumerForTesting(AuthStatusConsumer* consumer);
+
   static void SetClocksForTesting(const base::Clock* clock,
                                   const base::TickClock* tick_clock);
 
  private:
   friend class base::DeleteHelper<ScreenLocker>;
-  friend class ScreenLockerTester;
+
+  // TODO(crbug.com/539761804): For `ScheduleDeletion`.
+  friend class ScreenLockerController;
 
   // Track the type of the authentication that the user used to unlock the lock
   // screen.
@@ -178,9 +178,6 @@ class ScreenLocker
   // TODO(b/271261286): we should probably not call it anymore
   void RefreshPinAndFingerprintTimeout();
 
-  // Change the authenticators; should only be used by tests.
-  void SetAuthenticatorsForTesting(scoped_refptr<Authenticator> authenticator);
-
   void OnFingerprintAuthFailure(const user_manager::User& user);
 
   void StartFingerprintAuthSession(const user_manager::User* primary_user);
@@ -189,6 +186,7 @@ class ScreenLocker
   void ScreenLockReady();
 
   // Called when screen locker is safe to delete.
+  // TODO(crbug.com/539761804): Make ScreenLockerController own this object.
   static void ScheduleDeletion();
 
   // Returns true if `account_id` is found among logged in users.
@@ -271,7 +269,9 @@ class ScreenLocker
 
   // Delegate to forward all login status events to.
   // Tests can use this to receive login status events.
-  raw_ptr<AuthStatusConsumer> auth_status_consumer_ = nullptr;
+  // TODO(crbug.com/543661933): Refactor ScreenLockerTester::UnlockWithPassword
+  // and remove this.
+  raw_ptr<AuthStatusConsumer> auth_status_consumer_for_testing_ = nullptr;
 
   // Number of bad login attempts in a row.
   int incorrect_passwords_count_ = 0;

@@ -15,6 +15,7 @@ import org.chromium.url.GURL;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * A {@link TabCreator} that doesn't create anything, always returning nulls. But it records and
@@ -59,6 +60,7 @@ public class AccumulatingTabCreator implements TabCreator {
 
     public final List<CreateNewTabArguments> createNewTabArgumentsList = new ArrayList<>();
     public final List<CreateFrozenTabArguments> createFrozenTabArgumentsList = new ArrayList<>();
+    private boolean mIsRecording = true;
 
     @Override
     public @Nullable Tab createNewTab(
@@ -82,14 +84,20 @@ public class AccumulatingTabCreator implements TabCreator {
             @TabLaunchType int type,
             @Nullable Tab parent,
             int position) {
-        createNewTabArgumentsList.add(
-                new CreateNewTabArguments(loadUrlParams, title, type, parent, position));
+        if (mIsRecording) {
+            createNewTabArgumentsList.add(
+                    new CreateNewTabArguments(loadUrlParams, title, type, parent, position));
+        }
         return null;
     }
 
     @Override
     public @Nullable Tab createFrozenTab(TabState state, int id, int index) {
-        createFrozenTabArgumentsList.add(new CreateFrozenTabArguments(state, id, index));
+        if (mIsRecording) {
+            createFrozenTabArgumentsList.add(new CreateFrozenTabArguments(state, id, index));
+        } else if (state.contentsState != null) {
+            state.contentsState.destroy();
+        }
         return null;
     }
 
@@ -108,7 +116,7 @@ public class AccumulatingTabCreator implements TabCreator {
             @TabLaunchType int type,
             GURL url,
             int index,
-            boolean addTabToModel) {
+            CompletableFuture<Boolean> addTabToModel) {
         // Should never be called.
         assert false;
         return null;
@@ -125,5 +133,10 @@ public class AccumulatingTabCreator implements TabCreator {
     public void launchNtp(@TabLaunchType int type) {
         // Should never be called.
         assert false;
+    }
+
+    /** Stops the tab creator from recording any more data. */
+    public void stopRecording() {
+        mIsRecording = false;
     }
 }

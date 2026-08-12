@@ -29,8 +29,13 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseActivityTestRule;
+import org.chromium.base.test.params.ParameterAnnotations;
+import org.chromium.base.test.params.ParameterAnnotations.UseMethodParameter;
+import org.chromium.base.test.params.ParameterProvider;
+import org.chromium.base.test.params.ParameterSet;
+import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
@@ -42,7 +47,7 @@ import org.chromium.chrome.browser.omnibox.status.StatusProperties.PermissionIco
 import org.chromium.chrome.browser.omnibox.status.StatusProperties.StatusIconResource;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.toolbar.LocationBarModel;
-import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
 import org.chromium.chrome.test.util.ToolbarUnitTestUtils;
 import org.chromium.components.browser_ui.site_settings.ContentSettingsResources;
@@ -55,13 +60,16 @@ import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 import org.chromium.ui.test.util.BlankUiTestActivity;
 
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.List;
 
 /** Render tests for {@link StatusView}. */
-@RunWith(ChromeJUnit4ClassRunner.class)
+@RunWith(ParameterizedRunner.class)
+@ParameterAnnotations.UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
 @Batch(Batch.PER_CLASS)
 public class StatusViewRenderTest {
     @ClassRule
-    public static BaseActivityTestRule<BlankUiTestActivity> sActivityTestRule =
+    public static final BaseActivityTestRule<BlankUiTestActivity> sActivityTestRule =
             new BaseActivityTestRule<>(BlankUiTestActivity.class);
 
     private static Activity sActivity;
@@ -71,13 +79,13 @@ public class StatusViewRenderTest {
     private static final int RENDER_TEST_REVISION = 2;
 
     @Rule
-    public ChromeRenderTestRule mRenderTestRule =
+    public final ChromeRenderTestRule mRenderTestRule =
             ChromeRenderTestRule.Builder.withPublicCorpus()
                     .setBugComponent(ChromeRenderTestRule.Component.UI_BROWSER_OMNIBOX)
                     .setRevision(RENDER_TEST_REVISION)
                     .build();
 
-    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private ChromeAutocompleteSchemeClassifier.Natives mChromeAutocompleteSchemeClassifierJni;
     @Mock private Profile mProfile;
@@ -123,7 +131,7 @@ public class StatusViewRenderTest {
                                     NewTabPageDelegate.EMPTY,
                                     url -> url.getSpec(),
                                     ToolbarUnitTestUtils.OFFLINE_STATUS,
-                                    new ObservableSupplierImpl(ControlsPosition.TOP));
+                                    ObservableSuppliers.createNonNull(ControlsPosition.TOP));
                     mLocationBarModel.setTab(null, mProfile);
                     mStatusModel = new PropertyModel.Builder(StatusProperties.ALL_KEYS).build();
                     PropertyModelChangeProcessor.create(
@@ -183,12 +191,10 @@ public class StatusViewRenderTest {
     public void testStatusViewWithIcon() throws IOException {
         runOnUiThreadBlocking(
                 () -> {
-                    mStatusModel.set(StatusProperties.STATUS_ICON_ALPHA, 1f);
                     mStatusModel.set(StatusProperties.STATUS_VIEW_BACKGROUND, mBackground);
                     mStatusModel.set(
                             StatusProperties.STATUS_VIEW_TOOLTIP_TEXT,
                             R.string.accessibility_menu_info);
-                    mStatusModel.set(StatusProperties.SHOW_STATUS_ICON, true);
                     mStatusModel.set(
                             StatusProperties.STATUS_ICON_RESOURCE,
                             new StatusIconResource(R.drawable.ic_search_24dp, 0));
@@ -196,27 +202,43 @@ public class StatusViewRenderTest {
         mRenderTestRule.render(mStatusView, "status_view_with_icon");
     }
 
+    public static class GeolocationContentSettingsParams implements ParameterProvider {
+        private static final List<ParameterSet> sGeolocationContentSettingsParams =
+                Arrays.asList(
+                        new ParameterSet()
+                                .value(ContentSettingsType.GEOLOCATION)
+                                .name("LegacyGeolocation"),
+                        new ParameterSet()
+                                .value(ContentSettingsType.GEOLOCATION_WITH_OPTIONS)
+                                .name("GeolocationWithOptions"));
+
+        @Override
+        public List<ParameterSet> getParameters() {
+            return sGeolocationContentSettingsParams;
+        }
+    }
+
+    @UseMethodParameter(GeolocationContentSettingsParams.class)
     @Test
     @MediumTest
     @Feature({"RenderTest"})
-    public void testStatusViewWithLocationPermissionIcon() throws IOException {
+    public void testStatusViewWithLocationPermissionIcon(
+            @ContentSettingsType.EnumType int geolocation) throws IOException {
         runOnUiThreadBlocking(
                 () -> {
                     Drawable locationIcon =
                             ContentSettingsResources.getIconForOmnibox(
                                     mStatusView.getContext(),
-                                    ContentSettingsType.GEOLOCATION,
+                                    geolocation,
                                     ContentSetting.ALLOW,
                                     false);
                     PermissionIconResource statusIcon =
                             new PermissionIconResource(locationIcon, false);
                     statusIcon.setTransitionType(StatusView.IconTransitionType.ROTATE);
-                    mStatusModel.set(StatusProperties.STATUS_ICON_ALPHA, 1f);
                     mStatusModel.set(StatusProperties.STATUS_VIEW_BACKGROUND, mBackground);
                     mStatusModel.set(
                             StatusProperties.STATUS_VIEW_TOOLTIP_TEXT,
                             R.string.accessibility_menu_info);
-                    mStatusModel.set(StatusProperties.SHOW_STATUS_ICON, true);
                     mStatusModel.set(StatusProperties.STATUS_ICON_RESOURCE, statusIcon);
                 });
         mRenderTestRule.render(mStatusView, "status_view_with_location_permission_icon");
@@ -236,12 +258,10 @@ public class StatusViewRenderTest {
                     StatusIconResource statusIcon =
                             new PermissionIconResource(storeIconDrawable, false);
                     statusIcon.setTransitionType(StatusView.IconTransitionType.ROTATE);
-                    mStatusModel.set(StatusProperties.STATUS_ICON_ALPHA, 1f);
                     mStatusModel.set(StatusProperties.STATUS_VIEW_BACKGROUND, mBackground);
                     mStatusModel.set(
                             StatusProperties.STATUS_VIEW_TOOLTIP_TEXT,
                             R.string.accessibility_menu_info);
-                    mStatusModel.set(StatusProperties.SHOW_STATUS_ICON, true);
                     mStatusModel.set(StatusProperties.STATUS_ICON_RESOURCE, statusIcon);
                 });
         mRenderTestRule.render(mStatusView, "status_view_with_store_icon");

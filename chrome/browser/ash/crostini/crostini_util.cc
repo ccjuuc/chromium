@@ -8,6 +8,7 @@
 #include <variant>
 
 #include "ash/constants/ash_features.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
@@ -40,9 +41,7 @@
 #include "chrome/browser/ui/ash/shelf/shelf_spinner_controller.h"
 #include "chrome/browser/ui/ash/shelf/shelf_spinner_item_controller.h"
 #include "chrome/browser/ui/views/crostini/crostini_recovery_view.h"
-#include "chrome/browser/ui/webui/ash/crostini_upgrader/crostini_upgrader_dialog.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/ui/base/app_types.h"
 #include "chromeos/ui/base/window_properties.h"
 #include "components/prefs/pref_service.h"
@@ -169,20 +168,6 @@ void LaunchApplication(
 
 }  // namespace
 
-bool IsUninstallable(Profile* profile, const std::string& app_id) {
-  if (!CrostiniFeatures::Get()->IsEnabled(profile)) {
-    return false;
-  }
-  auto* registry_service =
-      guest_os::GuestOsRegistryServiceFactory::GetForProfile(profile);
-  std::optional<guest_os::GuestOsRegistryService::Registration> registration =
-      registry_service->GetRegistration(app_id);
-  if (registration) {
-    return registration->CanUninstall();
-  }
-  return false;
-}
-
 bool IsCrostiniRunning(Profile* profile) {
   auto* manager = crostini::CrostiniManager::GetForProfile(profile);
   return manager && manager->IsVmRunning(kCrostiniDefaultVmName);
@@ -192,12 +177,6 @@ bool ShouldConfigureDefaultContainer(Profile* profile) {
   bool default_container_configured = profile->GetPrefs()->GetBoolean(
       prefs::kCrostiniDefaultContainerConfigured);
   return !default_container_configured;
-}
-
-bool ShouldAllowContainerUpgrade(Profile* profile) {
-  return CrostiniFeatures::Get()->IsContainerUpgradeUIAllowed(profile) &&
-         crostini::CrostiniManager::GetForProfile(profile)
-             ->IsContainerUpgradeable(DefaultContainerId());
 }
 
 void AddSpinner(crostini::CrostiniManager::RestartId restart_id,
@@ -300,15 +279,6 @@ void LaunchCrostiniAppWithIntent(Profile* profile,
         args, std::move(callback));
   }
 
-  if (crostini_manager->GetCrostiniDialogStatus(DialogType::UPGRADER)) {
-    // Reshow the existing dialog.
-    ash::CrostiniUpgraderDialog::Reshow();
-    VLOG(1) << "Reshowing upgrade dialog";
-    std::move(callback).Run(
-        false, "LaunchCrostiniApp called while upgrade dialog showing");
-    return;
-  }
-
   LaunchCrostiniAppImpl(profile, app_id, std::move(*registration), container_id,
                         display_id, args, std::move(callback));
 }
@@ -373,7 +343,7 @@ base::FilePath ContainerChromeOSBaseDirectory() {
 
 void AddNewLxdContainerToPrefs(Profile* profile,
                                const guest_os::GuestId& container_id) {
-  base::Value::Dict properties;
+  base::DictValue properties;
   properties.Set(guest_os::prefs::kContainerOsVersionKey,
                  static_cast<int>(ContainerOsVersion::kUnknown));
   properties.Set(guest_os::prefs::kContainerOsPrettyNameKey, "");

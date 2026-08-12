@@ -22,6 +22,19 @@ void TriedToRestoreCookieMetric(bool success) {
   base::UmaHistogramBoolean("Cookie.AndroidOTRRestore", success);
 }
 
+// Map legacy kUnknown (0) and other invalid values to kOther for backward
+// compatibility during restores.
+net::CookieSourceType ComputeSourceType(int32_t source_type) {
+  net::CookieSourceType value = static_cast<net::CookieSourceType>(source_type);
+  switch (value) {
+    case net::CookieSourceType::kHTTP:
+    case net::CookieSourceType::kScript:
+    case net::CookieSourceType::kOther:
+      return value;
+  }
+  return net::CookieSourceType::kOther;
+}
+
 }  // namespace
 
 // Returns the cookie service at the client end of the mojo pipe.
@@ -36,18 +49,18 @@ void CookiesFetcherRestoreCookiesImpl(JNIEnv* env,
                                       const std::string& value,
                                       const std::string& domain,
                                       const std::string& path,
-                                      jlong creation,
-                                      jlong expiration,
-                                      jlong last_access,
-                                      jlong last_update,
-                                      jboolean secure,
-                                      jboolean httponly,
-                                      jint same_site,
-                                      jint priority,
+                                      int64_t creation,
+                                      int64_t expiration,
+                                      int64_t last_access,
+                                      int64_t last_update,
+                                      bool secure,
+                                      bool httponly,
+                                      int32_t same_site,
+                                      int32_t priority,
                                       const std::string& partition_key,
-                                      jint source_scheme,
-                                      jint source_port,
-                                      jint source_type) {
+                                      int32_t source_scheme,
+                                      int32_t source_port,
+                                      int32_t source_type) {
   CHECK(profile->IsOffTheRecord());
 
   // TODO (crbug.com/326605834) Once ancestor chain bit changes are
@@ -74,7 +87,7 @@ void CookiesFetcherRestoreCookiesImpl(JNIEnv* env,
           static_cast<net::CookiePriority>(priority),
           serialized_cookie_partition_key.value(),
           static_cast<net::CookieSourceScheme>(source_scheme), source_port,
-          static_cast<net::CookieSourceType>(source_type),
+          ComputeSourceType(source_type),
           net::CanonicalCookieFromStorageCallSite::
               kAndroidCookiesFetcherRestoreUtil);
   // FromStorage() uses a less strict version of IsCanonical(), we need to check

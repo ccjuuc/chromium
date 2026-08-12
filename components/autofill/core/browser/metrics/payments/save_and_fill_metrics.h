@@ -7,6 +7,7 @@
 
 #include "base/time/time.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
 
 namespace autofill::autofill_metrics {
 
@@ -30,20 +31,29 @@ enum class SaveAndFillFormEvent {
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
 //
-// LINT.IfChange(SaveAndFillSuggestionNotShownReason)
-enum class SaveAndFillSuggestionNotShownReason {
-  // The user has at least one credit card saved.
-  kHasSavedCards = 0,
-  // The suggestion is blocked by the strike database (e.g., max strikes
-  // reached or required delay has not passed).
-  kBlockedByStrikeDatabase = 1,
-  // The user is in incognito mode.
-  kUserInIncognito = 2,
-  // The credit card form is not complete.
-  kIncompleteCreditCardForm = 3,
-  kMaxValue = kIncompleteCreditCardForm,
+// LINT.IfChange(SaveAndFillSuggestionEvent)
+enum class SaveAndFillSuggestionEvent {
+  // The Save and Fill suggestion was shown to the user.
+  kSuggestionShown = 0,
+  // The Save and Fill suggestion was not shown because the user was in
+  // incognito mode.
+  kSuggestionNotShownIncognitoMode = 1,
+  // The Save and Fill suggestion was not shown because the form was incomplete.
+  kSuggestionNotShownIncompleteForm = 2,
+  // The Save and Fill suggestion was not shown because the strike database
+  // cooldown delay was not met.
+  kSuggestionNotShownStrikeDbRequiredDelayNotMet = 3,
+  // The Save and Fill suggestion was not shown because the strike database max
+  // strike limit was reached.
+  kSuggestionNotShownStrikeDbMaxStrikeLimitReached = 4,
+  // The Save and Fill suggestion was not shown because the user already has
+  // cards saved.
+  kSuggestionNotShownHaveCardsOnFile = 5,
+  // The Save and Fill suggestion was accepted by the user.
+  kSuggestionAccepted = 6,
+  kMaxValue = kSuggestionAccepted,
 };
-// LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:SaveAndFillSuggestionNotShownReason)
+// LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:SaveAndFillSuggestionEvent)
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
@@ -81,11 +91,70 @@ enum class SaveAndFillDialogShown {
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:SaveAndFillDialogShown)
 
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(SaveAndFillPaymentsRequestResult)
+enum class SaveAndFillPaymentsRequestResult {
+  kSuccess = 0,
+  kFailure = 1,
+  kTimeout = 2,
+  kMaxValue = kTimeout,
+};
+// LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:SaveAndFillPaymentsRequestResult)
+
+enum class SaveAndFillServerRequestType {
+  kGetDetailsForCreateCard,
+  kCreateCard,
+};
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(SaveAndFillFunnelSucceededStage)
+enum class SaveAndFillFunnelSucceededStage {
+  // The card was saved (either locally or to the server).
+  kCardSaved = 0,
+  // The form was filled after Save and Fill finished.
+  kFormFilled = 1,
+  // The form was submitted after Save and Fill finished.
+  kFormSubmitted = 2,
+  kMaxValue = kFormSubmitted,
+};
+// LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:SaveAndFillFunnelSucceededStage)
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(SaveAndFillFunnelCanceledStage)
+enum class SaveAndFillFunnelCanceledStage {
+  // Suggestion was ignored by the user.
+  kSuggestionIgnored = 0,
+  // Dialog was canceled by the user.
+  kDialogCanceled = 1,
+  kMaxValue = kDialogCanceled,
+};
+// LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:SaveAndFillFunnelCanceledStage)
+
+enum class SaveAndFillFlowScenario {
+  // Value for uninitialized state.
+  kUnknown = 0,
+  // Local save because upload save was infeasible (e.g. sync disabled).
+  kLocalSaveUploadSaveInfeasible = 1,
+  // Local save because the preflight call failed.
+  kLocalSavePreflightCallFailed = 2,
+  // Local save fallback because the card BIN was not supported for upload save.
+  kLocalSaveBinRangeNotSupported = 3,
+  // Local save fallback because the create card request failed.
+  kLocalSaveUploadSaveFailed = 4,
+  // Successful server save.
+  kUploadSave = 5,
+};
+
 void LogSaveAndFillFormEvent(SaveAndFillFormEvent event);
 
-// Logs the reason why the Save and Fill suggestion was not shown.
-void LogSaveAndFillSuggestionNotShownReason(
-    SaveAndFillSuggestionNotShownReason reason);
+// Logs a suggestion event in the Save and Fill flow.
+void LogSaveAndFillSuggestionEvent(SaveAndFillSuggestionEvent event);
 
 // Logs the latency for the GetDetailsForCreateCard & CreateCard request. Logs
 // to parent histogram with no breakdown by result and child histograms with
@@ -113,6 +182,24 @@ void LogSaveAndFillDialogShown(bool is_upload);
 void LogSaveAndFillFunnelMetrics(bool succeeded,
                                  bool is_for_upload,
                                  SaveAndFillFormEvent event);
+
+// Logs the funnel metrics for successful Save and Fill attempts. Logs to the
+// parent aggregate histogram "Autofill.SaveAndFill.Funnel.Succeeded" as well as
+// the scenario-specific sub-histogram.
+void LogSaveAndFillFunnelSucceeded(SaveAndFillFlowScenario scenario,
+                                   SaveAndFillFunnelSucceededStage stage);
+
+// Logs the funnel metrics for canceled Save and Fill attempts. Logs to the
+// parent aggregate histogram "Autofill.SaveAndFill.Funnel.Canceled" as well as
+// the scenario-specific sub-histogram.
+void LogSaveAndFillFunnelCanceled(SaveAndFillFlowScenario scenario,
+                                  SaveAndFillFunnelCanceledStage stage);
+
+// Logs the result of GetDetailsForCreateCard and CreateCard requests when
+// initiated by the Save and Fill flow.
+void LogSaveAndFillPaymentsRequestResult(
+    SaveAndFillServerRequestType request_type,
+    payments::PaymentsAutofillClient::PaymentsRpcResult result);
 
 }  // namespace autofill::autofill_metrics
 

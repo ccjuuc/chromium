@@ -12,11 +12,13 @@
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/enterprise/client_certificates/certificate_provisioning_service_factory.h"
+#include "chrome/browser/enterprise/groups/enterprise_groups_handler_factory.h"
 #include "chrome/browser/enterprise/remote_commands/user_remote_commands_service.h"
 #include "chrome/browser/enterprise/remote_commands/user_remote_commands_service_factory.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
@@ -28,6 +30,7 @@
 #include "chrome/browser/signin/account_id_from_account_info.h"
 #include "chrome/common/chrome_content_client.h"
 #include "chrome/common/pref_names.h"
+#include "components/enterprise/browser/groups/enterprise_groups_handler.h"
 #include "components/enterprise/client_certificates/core/certificate_provisioning_service.h"
 #include "components/policy/core/browser/cloud/user_policy_signin_service_util.h"
 #include "components/policy/core/common/cloud/cloud_policy_client_registration_helper.h"
@@ -40,6 +43,7 @@
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/base/signin_switches.h"
+#include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/primary_account_change_event.h"
 #include "content/public/browser/storage_partition.h"
@@ -101,6 +105,12 @@ void UserPolicySigninService::ShutdownCloudPolicyManager() {
   if (remote_command_service) {
     remote_command_service->Shutdown();
   }
+  auto* enterprise_groups_handler =
+      enterprise_groups::EnterpriseGroupsProfileHandlerFactory::GetForProfile(
+          profile_);
+  if (enterprise_groups_handler) {
+    enterprise_groups_handler->ResetAndClearGroups();
+  }
   UserPolicySigninServiceBase::ShutdownCloudPolicyManager();
 }
 
@@ -121,6 +131,8 @@ void UserPolicySigninService::OnPrimaryAccountChanged(
     }
     return;
   }
+
+  has_logged_profile_can_be_managed_metric_ = false;
 
   if (ProfileManager* profile_manager = g_browser_process->profile_manager()) {
     // `ProfileManager` may be null in tests.
@@ -170,6 +182,7 @@ void UserPolicySigninService::OnProfileAttributesStorageDestroying() {
 
 void UserPolicySigninService::OnProfileUserManagementAcceptanceChanged(
     const base::FilePath& profile_path) {
+  has_logged_profile_can_be_managed_metric_ = false;
   VLOG_POLICY(1, POLICY_FETCHING)
       << "UserPolicySigninService::OnProfileUserManagementAcceptanceChanged - "
          "CanApplyPolicies: "
@@ -220,7 +233,7 @@ void UserPolicySigninService::InitializeOnProfileReady(Profile* profile) {
   // Shutdown the CloudPolicyManager when the user signs out. We start
   // observing the IdentityManager here because we don't want to get signout
   // notifications until after the profile has started initializing
-  // (http://crbug.com/316229).
+  // (http://crbug.com/40340335).
   identity_manager()->AddObserver(this);
 
   AccountId account_id = AccountIdFromAccountInfo(
@@ -252,6 +265,25 @@ bool UserPolicySigninService::CanApplyPolicies(bool check_for_refresh_token) {
   VLOG_POLICY(1, POLICY_FETCHING)
       << "UserPolicySigninService::CanApplyPolicies - for profile: "
       << profile_can_be_managed;
+
+  if (!has_logged_profile_can_be_managed_metric_) {
+    CoreAccountInfo primary_account_info =
+        identity_manager()->GetPrimaryAccountInfo(consent_level());
+    AccountInfo account_info =
+        identity_manager()->FindExtendedAccountInfo(primary_account_info);
+    signin::Tribool is_managed = account_info.IsManaged();
+    if (is_managed == signin::Tribool::kTrue) {
+      base::UmaHistogramBoolean(
+          "Enterprise.CloudPolicy.ProfileCanBeManagedForManagedUser",
+          profile_can_be_managed);
+      has_logged_profile_can_be_managed_metric_ = true;
+    } else if (is_managed == signin::Tribool::kFalse) {
+      has_logged_profile_can_be_managed_metric_ = true;
+    } else {
+      has_logged_profile_can_be_managed_metric_ = false;
+    }
+  }
+
   return profile_can_be_managed;
 }
 
@@ -266,6 +298,12 @@ void UserPolicySigninService::InitializeCloudPolicyManager(
           profile_);
   if (remote_command_service) {
     remote_command_service->Init();
+  }
+  auto* enterprise_groups_handler =
+      enterprise_groups::EnterpriseGroupsProfileHandlerFactory::GetForProfile(
+          profile_);
+  if (enterprise_groups_handler) {
+    enterprise_groups_handler->Init();
   }
 }
 

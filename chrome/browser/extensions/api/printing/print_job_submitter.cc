@@ -4,11 +4,11 @@
 
 #include "chrome/browser/extensions/api/printing/print_job_submitter.h"
 
+#include <algorithm>
 #include <cstring>
 #include <utility>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -16,14 +16,15 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/types/expected.h"
 #include "base/values.h"
+#include "chrome/browser/ash/printing/local_printer.h"
 #include "chrome/browser/extensions/api/printing/printing_api_utils.h"
 #include "chrome/browser/printing/pdf_blob_data_flattener.h"
 #include "chrome/browser/printing/print_job_controller.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/extensions/extensions_dialogs.h"
 #include "chrome/common/pref_names.h"
-#include "chromeos/crosapi/mojom/local_printer.mojom.h"
 #include "components/prefs/pref_service.h"
+#include "components/user_manager/user_manager.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/blob_reader.h"
@@ -70,13 +71,14 @@ bool g_skip_confirmation_dialog_for_testing = false;
 // Returns true if print job request dialog should be shown.
 bool IsUserConfirmationRequired(content::BrowserContext* browser_context,
                                 const std::string& extension_id) {
-  if (g_skip_confirmation_dialog_for_testing)
+  if (g_skip_confirmation_dialog_for_testing) {
     return false;
-  const base::Value::List& list =
+  }
+  const base::ListValue& list =
       Profile::FromBrowserContext(browser_context)
           ->GetPrefs()
           ->GetList(prefs::kPrintingAPIExtensionsAllowlist);
-  return !base::Contains(list, base::Value(extension_id));
+  return !std::ranges::contains(list, base::Value(extension_id));
 }
 
 }  // namespace
@@ -88,7 +90,7 @@ PrintJobSubmitter::PrintJobSubmitter(
     printing::PdfBlobDataFlattener* pdf_blob_data_flattener,
     scoped_refptr<const extensions::Extension> extension,
     api::printing::SubmitJobRequest request,
-    crosapi::mojom::LocalPrinter* local_printer,
+    ash::LocalPrinter* local_printer,
     SubmitJobCallback callback)
     : native_window_(native_window),
       browser_context_(browser_context),
@@ -99,8 +101,9 @@ PrintJobSubmitter::PrintJobSubmitter(
       local_printer_(local_printer),
       callback_(std::move(callback)) {
   DCHECK(extension);
-  if (native_window)
+  if (native_window) {
     native_window_tracker_ = ui::NativeWindowTracker::Create(native_window);
+  }
 }
 
 PrintJobSubmitter::~PrintJobSubmitter() = default;
@@ -135,8 +138,9 @@ bool PrintJobSubmitter::CheckContentType() const {
 
 bool PrintJobSubmitter::CheckPrintTicket() {
   settings_ = ParsePrintTicket(request_.job.ticket.ToValue());
-  if (!settings_)
+  if (!settings_) {
     return false;
+  }
   settings_->set_title(base::UTF8ToUTF16(request_.job.title));
   settings_->set_device_name(base::UTF8ToUTF16(request_.job.printer_id));
   return true;
@@ -145,24 +149,28 @@ bool PrintJobSubmitter::CheckPrintTicket() {
 void PrintJobSubmitter::CheckPrinter() {
   CHECK(local_printer_);
   local_printer_->GetCapability(
+      // TODO(crbug.com/354842935): Replace by ash::AnnotatedAccountId.
+      // TODO(crbug.com/479647640): Check if we should use current user than
+      // primary user.
+      user_manager::UserManager::Get()->GetPrimaryUser()->GetAccountId(),
       request_.job.printer_id,
       base::BindOnce(&PrintJobSubmitter::CheckCapabilitiesCompatibility,
                      weak_ptr_factory_.GetWeakPtr()));
 }
 
 void PrintJobSubmitter::CheckCapabilitiesCompatibility(
-    crosapi::mojom::CapabilitiesResponsePtr caps) {
-  if (!caps) {
+    base::optional_ref<const chromeos::Printer> printer,
+    const std::optional<::printing::PrinterSemanticCapsAndDefaults>& caps) {
+  if (!printer.has_value()) {
     FireErrorCallback(kInvalidPrinterId);
     return;
   }
-  printer_name_ = base::UTF8ToUTF16(caps->basic_info->name);
-  if (!caps->capabilities) {
+  printer_name_ = base::UTF8ToUTF16(printer->display_name());
+  if (!caps.has_value()) {
     FireErrorCallback(kPrinterUnavailable);
     return;
   }
-  if (!CheckSettingsAndCapabilitiesCompatibility(*settings_,
-                                                 *caps->capabilities)) {
+  if (!CheckSettingsAndCapabilitiesCompatibility(*settings_, *caps)) {
     FireErrorCallback(kUnsupportedTicket);
     return;
   }
@@ -282,8 +290,7 @@ void PrintJobSubmitter::StartPrintJob() {
   uint32_t page_count = flatten_pdf_result->page_count;
   print_job_controller_->CreatePrintJob(
       std::move(flatten_pdf_result->flattened_pdf), std::move(settings_),
-      page_count, crosapi::mojom::PrintJob::Source::kExtension,
-      extension_->id(),
+      page_count, printing::PrintJob::Source::kExtension, extension_->id(),
       base::BindOnce(&PrintJobSubmitter::OnPrintJobCreated,
                      weak_ptr_factory_.GetWeakPtr()));
 }

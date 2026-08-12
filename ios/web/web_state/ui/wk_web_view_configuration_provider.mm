@@ -19,10 +19,11 @@
 #import "base/strings/sys_string_conversions.h"
 #import "base/task/bind_post_task.h"
 #import "base/task/sequenced_task_runner.h"
+#import "base/trace_event/trace_event.h"
 #import "base/uuid.h"
 #import "components/safe_browsing/core/common/features.h"
+#import "ios/public/provider/web/cobalt_api.h"
 #import "ios/web/common/features.h"
-#import "ios/web/js_features/window_error/catch_gcrweb_script_errors_java_script_feature.h"
 #import "ios/web/js_messaging/java_script_feature_manager.h"
 #import "ios/web/js_messaging/java_script_feature_util_impl.h"
 #import "ios/web/js_messaging/web_frames_manager_java_script_feature.h"
@@ -140,6 +141,8 @@ void WKWebViewConfigurationProvider::Initialize() {
 
 void WKWebViewConfigurationProvider::ResetWithWebViewConfiguration(
     WKWebViewConfiguration* configuration) {
+  TRACE_EVENT("ui",
+              "WKWebViewConfigurationProvider::ResetWithWebViewConfiguration");
   DCHECK_CALLED_ON_VALID_SEQUENCE(_sequence_checker_);
   if (configuration_) {
     Purge();
@@ -201,6 +204,13 @@ void WKWebViewConfigurationProvider::ResetWithWebViewConfiguration(
   [[configuration_ preferences] setJavaScriptCanOpenWindowsAutomatically:YES];
   UpdateScripts();
 
+  if (web::features::IsCobaltEnabled()) {
+    web::CobaltController* controller =
+        GetWebClient()->GetCobaltController(browser_state_);
+    web::provider::InitializeCobaltInWKWebViewConfiguration(
+        configuration_, browser_state_->IsOffTheRecord(), controller);
+  }
+
   if (!scheme_handler_) {
     scoped_refptr<network::SharedURLLoaderFactory> shared_loader_factory =
         browser_state_->GetSharedURLLoaderFactory();
@@ -234,6 +244,7 @@ WKWebViewConfigurationProvider::GetWebViewConfiguration() {
 WKWebsiteDataStore* WKWebViewConfigurationProvider::GetWebsiteDataStore() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(_sequence_checker_);
   if (!website_data_store_) {
+    TRACE_EVENT("ui", "WKWebViewConfigurationProvider::GetWebsiteDataStore");
     if (browser_state_->IsOffTheRecord()) {
       // The data is stored in memory. A new non-persistent data store is
       // created for each incognito browser state.
@@ -272,6 +283,7 @@ WKWebsiteDataStore* WKWebViewConfigurationProvider::GetWebsiteDataStore() {
 }
 
 void WKWebViewConfigurationProvider::UpdateScripts() {
+  TRACE_EVENT("ui", "WKWebViewConfigurationProvider::UpdateScripts");
   DCHECK_CALLED_ON_VALID_SEQUENCE(_sequence_checker_);
   [configuration_.userContentController removeAllUserScripts];
 
@@ -286,13 +298,6 @@ void WKWebViewConfigurationProvider::UpdateScripts() {
   for (JavaScriptFeature* feature :
        GetWebClient()->GetJavaScriptFeatures(browser_state_)) {
     features.push_back(feature);
-  }
-  if (base::FeatureList::IsEnabled(features::kLogJavaScriptErrors)) {
-    // CatchGCrWebScriptErrorsJavaScriptFeature must be added last after all
-    // other scripts have setup their gCrWeb functions because this feature
-    // iterates over all such functions, wrapping them in
-    // `catchAndReportErrors`.
-    features.push_back(CatchGCrWebScriptErrorsJavaScriptFeature::GetInstance());
   }
   java_script_feature_manager->ConfigureFeatures(features);
 

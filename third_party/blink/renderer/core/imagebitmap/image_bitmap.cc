@@ -31,7 +31,6 @@
 #include "third_party/blink/renderer/core/svg/graphics/svg_image_for_container.h"
 #include "third_party/blink/renderer/platform/bindings/enumeration_base.h"
 #include "third_party/blink/renderer/platform/graphics/accelerated_static_bitmap_image.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_resource_provider.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context_types.h"
@@ -343,17 +342,13 @@ ImageBitmap::ImageBitmap(ImageElementBase* image,
 ImageBitmap::ImageBitmap(HTMLVideoElement* video,
                          std::optional<gfx::Rect> crop_rect,
                          const ImageBitmapOptions* options) {
-  // TODO(crbug.com/1181329): ImageBitmap resize test case failed when
-  // quality equals to "low" and "medium". Need further investigate to
-  // enable gpu backed imageBitmap with resize options.
-  const bool allow_accelerated_images =
-      !options->hasResizeWidth() && !options->hasResizeHeight();
   const bool reinterpret_as_srgb =
       (options->colorSpaceConversion() == V8ColorSpaceConversion::Enum::kNone);
-  auto input = video->CreateStaticBitmapImage(
-      allow_accelerated_images, /*size=*/std::nullopt, reinterpret_as_srgb);
-  if (!input)
+  auto input = video->CreateStaticBitmapImage(/*size=*/std::nullopt,
+                                              reinterpret_as_srgb);
+  if (!input) {
     return;
+  }
 
   ParsedOptions parsed_options = ParseOptions(options, crop_rect, input);
   if (DstBufferSizeHasOverflow(parsed_options)) {
@@ -376,9 +371,8 @@ ImageBitmap::ImageBitmap(HTMLCanvasElement* canvas,
       canvas->GetSourceImageForCanvas(&status, gfx::SizeF());
   if (status != kNormalSourceImageStatus)
     return;
-  DCHECK(IsA<StaticBitmapImage>(image_input.get()));
   scoped_refptr<StaticBitmapImage> input =
-      static_cast<StaticBitmapImage*>(image_input.get());
+      To<StaticBitmapImage>(image_input.get());
 
   const ParsedOptions parsed_options = ParseOptions(options, crop_rect, input);
   if (DstBufferSizeHasOverflow(parsed_options))
@@ -398,9 +392,8 @@ ImageBitmap::ImageBitmap(OffscreenCanvas* offscreen_canvas,
   SourceImageStatus status;
   scoped_refptr<Image> raw_input = offscreen_canvas->GetSourceImageForCanvas(
       &status, gfx::SizeF(offscreen_canvas->Size()));
-  DCHECK(IsA<StaticBitmapImage>(raw_input.get()));
   scoped_refptr<StaticBitmapImage> input =
-      static_cast<StaticBitmapImage*>(raw_input.get());
+      To<StaticBitmapImage>(raw_input.get());
   raw_input = nullptr;
 
   if (status != kNormalSourceImageStatus)
@@ -442,7 +435,7 @@ ImageBitmap::ImageBitmap(ImageData* data,
   // Create a StaticBitmapImage that directly references the ImageData pixels.
   SkPixmap pm = data->GetSkPixmap();
   auto sk_data = SkData::MakeWithoutCopy(pm.addr(), pm.computeByteSize());
-  auto image = StaticBitmapImage::Create(sk_data, pm.info(),
+  auto image = StaticBitmapImage::Create(sk_data, pm.info(), gfx::HDRMetadata(),
                                          ImageOrientationEnum::kOriginTopLeft);
 
   // Force a copy of the data during the transformation (so that we do not
@@ -500,10 +493,10 @@ scoped_refptr<StaticBitmapImage> ImageBitmap::Transfer() {
     // For it to be safe to transfer a StaticBitmapImage it must not be
     // referenced by any other object on this thread.
     // The first step is to attempt to release other references via
-    // NotifyWillTransfer
+    // NotifyImageBitmapWillTransfer.
     const auto content_id =
         image_->PaintImageForCurrentFrame().GetContentIdForFrame(0);
-    CanvasResourceProvider::NotifyWillTransfer(content_id);
+    NotifyImageBitmapWillTransfer(content_id);
 
     // If will still have other references, the last resort is to make a copy
     // of the bitmap.  This could happen, for example, if another ImageBitmap

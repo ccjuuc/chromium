@@ -19,6 +19,7 @@
 #include "base/containers/flat_set.h"
 #include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list_threadsafe.h"
 #include "base/sequence_checker.h"
 #include "base/synchronization/lock.h"
@@ -28,7 +29,10 @@
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/metrics/public/mojom/ukm_interface.mojom-forward.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "ukm_consent_state.h"
+#include "url/gurl.h"
 
 namespace metrics {
 class UkmBrowserTestBase;
@@ -88,6 +92,10 @@ class COMPONENT_EXPORT(UKM_RECORDER) UkmRecorderImpl : public UkmRecorder {
   // Disables recording without updating the consent state.
   void DisableRecording();
 
+  // Returns the reference to the global instance of the decode map.
+  // Virtual for testing.
+  virtual const builders::DecodeMap& GetDecodeMap() const;
+
   // Controls sampling for testing purposes. Sampling is 1-in-N (N==rate).
   void SetSamplingForTesting(int rate) override;
 
@@ -138,6 +146,9 @@ class COMPONENT_EXPORT(UKM_RECORDER) UkmRecorderImpl : public UkmRecorder {
   // Called when UKM consent state changed.
   void OnUkmAllowedStateChanged(UkmConsentState state);
 
+  // Called when UKM allowed state changes.
+  void OnUkmAllowedStateChanged(bool ukm_allowed);
+
   // Sets the sampling seed for testing purposes.
   void SetSamplingSeedForTesting(uint32_t seed) {
     // Normally the seed is set during object construction and remains
@@ -149,13 +160,16 @@ class COMPONENT_EXPORT(UKM_RECORDER) UkmRecorderImpl : public UkmRecorder {
 
   bool recording_enabled() const { return recording_enabled_; }
 
-  bool recording_enabled(ukm::UkmConsentType type) const {
-    return recording_state_.Has(type);
-  }
+  bool recording_enabled(ukm::UkmConsentType type) const;
 
   bool ShouldDropEntryForTesting(mojom::UkmEntry* entry);
 
  protected:
+  // Returns whether kRestructureMetricsConsentSettings feature is enabled.
+  // This is a pure virtual method to force subclasses to override this
+  // behavior.
+  virtual bool ShouldUseMetricsConsentRestructure() const = 0;
+
   // Calculates sampled in/out for a specific source/event based on internal
   // configuration. This function is guaranteed to always return the same
   // result over the life of this object for the same config & input parameters.
@@ -163,8 +177,6 @@ class COMPONENT_EXPORT(UKM_RECORDER) UkmRecorderImpl : public UkmRecorder {
 
   // Like above but uses a passed |sampling_rate| instead of internal config.
   bool IsSampledIn(int64_t source_id, uint64_t event_id, int sampling_rate);
-
-  void InitDecodeMap();
 
   // Writes recordings into a report proto, and clears recordings.
   void StoreRecordingsInReport(Report* report);
@@ -244,6 +256,15 @@ class COMPONENT_EXPORT(UKM_RECORDER) UkmRecorderImpl : public UkmRecorder {
                            ObserverNotifiedWhenNotRecording);
   FRIEND_TEST_ALL_PREFIXES(UkmRecorderImplTest, WebDXFeaturesConsent);
   FRIEND_TEST_ALL_PREFIXES(UkmRecorderImplTest, WebDXFeaturesSampling);
+  FRIEND_TEST_ALL_PREFIXES(UkmRecorderImplTest, GetDocumentToNavigationUrlsMap);
+  FRIEND_TEST_ALL_PREFIXES(
+      UkmRecorderImplTest,
+      GetDocumentToNavigationUrlsMap_MissingSubframeSource);
+  FRIEND_TEST_ALL_PREFIXES(UkmRecorderImplTest,
+                           GetDocumentToNavigationUrlsMap_Redirect);
+  FRIEND_TEST_ALL_PREFIXES(UkmRecorderImplTest, DocumentCreatedNotSerialized);
+  FRIEND_TEST_ALL_PREFIXES(UkmRecorderImplTest,
+                           StoreDownsamplingParametersInReport);
 
   struct MetricAggregate {
     uint64_t total_count = 0;
@@ -289,6 +310,12 @@ class COMPONENT_EXPORT(UKM_RECORDER) UkmRecorderImpl : public UkmRecorder {
   // Determines if an UkmEntry should be dropped and records reason if so.
   bool ShouldDropEntry(mojom::UkmEntry* entry);
 
+  // Returns a map from SourceIds of Blink Documents to the main-frame
+  // navigation URLs that created them.
+  absl::flat_hash_map<SourceId, std::vector<GURL>>
+  GetDocumentToNavigationUrlsMap(
+      const std::vector<mojom::UkmEntry*>& document_created_entries) const;
+
   // Loads sampling configurations from field-trial information.
   void LoadExperimentSamplingInfo();
 
@@ -297,10 +324,10 @@ class COMPONENT_EXPORT(UKM_RECORDER) UkmRecorderImpl : public UkmRecorder {
   void LoadExperimentSamplingParams(
       const std::map<std::string, std::string>& params);
 
-  // Stores the downsampling rate applied to web features in the report. At
+  // Stores the downsampling rates applied to events in the report. At
   // query time, this can be used as a multiplier to deduce the count of an
   // event type, as if it were not downsampled.
-  void StoreWebDXFeaturesDownsamplingParameter(Report* report);
+  void StoreDownsamplingParameters(Report* report);
 
   // Called to notify interested observers about a newly added UKM entry.
   void NotifyObserversWithNewEntry(const mojom::UkmEntry& entry);
@@ -328,9 +355,6 @@ class COMPONENT_EXPORT(UKM_RECORDER) UkmRecorderImpl : public UkmRecorder {
 
   // Callback for checking extension IDs.
   IsWebstoreExtensionCallback is_webstore_extension_callback_;
-
-  // Map from hashes to entry and metric names.
-  ukm::builders::DecodeMap decode_map_;
 
   // Sampling configurations, loaded from a field-trial.
   int default_sampling_rate_ = -1;  // -1 == not yet loaded

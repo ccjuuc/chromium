@@ -16,7 +16,6 @@
 #include "extensions/browser/guest_view/web_view/web_view_guest.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
-#include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 
 namespace controlled_frame {
@@ -184,10 +183,10 @@ void ControlledFrameMediaAccessHandler::HandleRequest(
   embedder_request.security_origin = embedder_request.url_origin.GetURL();
 
   if (!web_view->embedder_web_contents()->GetDelegate()) {
-    std::move(callback).Run(
-        blink::mojom::StreamDevicesSet(),
-        blink::mojom::MediaStreamRequestResult::FAILED_DUE_TO_SHUTDOWN,
-        std::unique_ptr<content::MediaStreamUI>());
+    std::move(callback).Run(blink::mojom::StreamDevicesSet(),
+                            blink::mojom::MediaStreamRequestResult::
+                                FAILED_DUE_TO_SHUTDOWN_NO_WEB_VIEW_DELEGATE,
+                            std::unique_ptr<content::MediaStreamUI>());
     return;
   }
   web_view->embedder_web_contents()

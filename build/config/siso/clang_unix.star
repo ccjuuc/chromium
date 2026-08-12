@@ -5,21 +5,22 @@
 """Siso configuration for clang/unix."""
 
 load("@builtin//path.star", "path")
+load("@builtin//runtime.star", "runtime")
 load("@builtin//struct.star", "module")
 load("./android.star", "android")
-load("./clang_code_coverage_wrapper.star", "clang_code_coverage_wrapper")
+load("./clang_all.star", "clang_all")
 load("./config.star", "config")
 load("./gn_logs.star", "gn_logs")
 load("./win_sdk.star", "win_sdk")
 
-def __clang_compile_coverage(ctx, cmd):
-    clang_command = clang_code_coverage_wrapper.run(ctx, list(cmd.args))
-    ctx.actions.fix(args = clang_command)
-
 def __clang_link(ctx, cmd):
-    if not config.get(ctx, "remote-link"):
+    if not (config.get(ctx, "remote-link") or config.get(ctx, "default-remote")):
         return
     inputs = []
+    outputs = []
+    reconcile_outputdirs = []
+    split_dwarf = False
+    use_lto = False
     sysroot = ""
     target = ""
     args = cmd.args
@@ -59,6 +60,10 @@ def __clang_link(ctx, cmd):
                 crl = ctx.fs.canonpath(crls[1])
                 if ctx.fs.exists(crl):
                     inputs.append(crl + ":link")
+        elif arg == "-gsplit-dwarf":
+            split_dwarf = True
+        elif arg.startswith("-flto"):
+            use_lto = True
         elif arg == "--":
             clang_base = ctx.fs.canonpath(path.dir(path.dir(cmd.args[i + 1])))
             inputs.append(clang_base + ":link")
@@ -71,28 +76,44 @@ def __clang_link(ctx, cmd):
             ])
             break
 
-    ctx.actions.fix(inputs = cmd.inputs + inputs)
+    outputs = cmd.outputs
+    reconcile_outputdirs = []
+    if split_dwarf and use_lto:
+        dwo_dir = cmd.outputs[0] + "-dwo/"
+        outputs = cmd.outputs + [dwo_dir]
+        reconcile_outputdirs = [dwo_dir]
 
-__handlers = {
-    "clang_compile_coverage": __clang_compile_coverage,
-    "clang_link": __clang_link,
-}
+    ctx.actions.fix(
+        inputs = cmd.inputs + inputs,
+        outputs = outputs,
+        reconcile_outputdirs = reconcile_outputdirs,
+    )
+
+__handlers = {}
+__handlers.update(clang_all.handlers)
+__handlers["clang_link"] = __clang_link
 
 def __rules(ctx):
     gn_logs_data = gn_logs.read(ctx)
     input_root_absolute_path = gn_logs_data.get("clang_need_input_root_absolute_path") == "true"
     input_root_absolute_path_for_objc = gn_logs_data.get("clang_need_input_root_absolute_path_for_objc") == "true"
 
-    canonicalize_dir = not input_root_absolute_path
-    canonicalize_dir_for_objc = not input_root_absolute_path_for_objc
-
+    # Remote linking with ThinLTO takes much longer.
+    # Linking browser_tests takes 50m locally. On remote with gVisor,
+    # it takes even more.
     use_thin_lto = gn_logs_data.get("use_thin_lto") == "true"
+    remote_link_timeout = "80m" if use_thin_lto else "10m"
+
+    remote_link = config.get(ctx, "remote-link") or config.get(ctx, "default-remote")
+    if runtime.os == "darwin":
+        remote_link = False
 
     rules = []
     if win_sdk.enabled(ctx):
         rules.extend([
             {
                 "name": "clang-cl/cxx",
+                "handler": "clang_compile",
                 "action": "(.*_)?cxx",
                 "command_prefix": "../../third_party/llvm-build/Release+Asserts/bin/clang-cl ",
                 "inputs": [
@@ -101,11 +122,11 @@ def __rules(ctx):
                 "exclude_input_patterns": ["*.stamp"],
                 "remote": True,
                 "input_root_absolute_path": input_root_absolute_path,
-                "canonicalize_dir": canonicalize_dir,
                 "timeout": "2m",
             },
             {
                 "name": "clang-cl/cc",
+                "handler": "clang_compile",
                 "action": "(.*_)?cc",
                 "command_prefix": "../../third_party/llvm-build/Release+Asserts/bin/clang-cl ",
                 "inputs": [
@@ -114,7 +135,6 @@ def __rules(ctx):
                 "exclude_input_patterns": ["*.stamp"],
                 "remote": True,
                 "input_root_absolute_path": input_root_absolute_path,
-                "canonicalize_dir": canonicalize_dir,
                 "timeout": "2m",
             },
             {
@@ -141,11 +161,10 @@ def __rules(ctx):
                     "*.pak",
                     "*.py",
                 ],
-                "remote": config.get(ctx, "remote-link"),
+                "remote": remote_link,
                 "platform_ref": "large",
                 "input_root_absolute_path": input_root_absolute_path,
-                "canonicalize_dir": canonicalize_dir,
-                "timeout": "2m",
+                "timeout": remote_link_timeout,
             },
             {
                 "name": "lld-link/solink_module",
@@ -163,11 +182,10 @@ def __rules(ctx):
                     "*.pak",
                     "*.py",
                 ],
-                "remote": config.get(ctx, "remote-link"),
+                "remote": remote_link,
                 "platform_ref": "large",
                 "input_root_absolute_path": input_root_absolute_path,
-                "canonicalize_dir": canonicalize_dir,
-                "timeout": "2m",
+                "timeout": remote_link_timeout,
             },
             {
                 "name": "lld-link/link",
@@ -185,17 +203,17 @@ def __rules(ctx):
                     "*.pak",
                     "*.py",
                 ],
-                "remote": config.get(ctx, "remote-link"),
+                "remote": remote_link,
                 "platform_ref": "large",
                 "input_root_absolute_path": input_root_absolute_path,
-                "canonicalize_dir": canonicalize_dir,
-                "timeout": "4m",
+                "timeout": remote_link_timeout,
             },
         ])
 
     rules.extend([
         {
             "name": "clang/cxx",
+            "handler": "clang_compile",
             "action": "(.*_)?cxx",
             "command_prefix": "../../third_party/llvm-build/Release+Asserts/bin/clang++ ",
             "inputs": [
@@ -204,11 +222,11 @@ def __rules(ctx):
             "exclude_input_patterns": ["*.stamp"],
             "remote": True,
             "input_root_absolute_path": input_root_absolute_path,
-            "canonicalize_dir": canonicalize_dir,
             "timeout": "2m",
         },
         {
             "name": "clang/cxx_module",
+            "handler": "clang_compile",
             "action": "(.*_)?cxx_module",
             "command_prefix": "../../third_party/llvm-build/Release+Asserts/bin/clang++ ",
             "inputs": [
@@ -217,11 +235,11 @@ def __rules(ctx):
             "exclude_input_patterns": ["*.stamp"],
             "remote": True,
             "input_root_absolute_path": input_root_absolute_path,
-            "canonicalize_dir": canonicalize_dir,
             "timeout": "2m",
         },
         {
             "name": "clang/cc",
+            "handler": "clang_compile",
             "action": "(.*_)?cc",
             "command_prefix": "../../third_party/llvm-build/Release+Asserts/bin/clang ",
             "inputs": [
@@ -230,11 +248,11 @@ def __rules(ctx):
             "exclude_input_patterns": ["*.stamp"],
             "remote": True,
             "input_root_absolute_path": input_root_absolute_path,
-            "canonicalize_dir": canonicalize_dir,
             "timeout": "2m",
         },
         {
             "name": "clang/objcxx",
+            "handler": "clang_compile",
             "action": "(.*_)?objcxx",
             "command_prefix": "../../third_party/llvm-build/Release+Asserts/bin/clang++",
             "inputs": [
@@ -244,10 +262,10 @@ def __rules(ctx):
             "remote": True,
             "timeout": "2m",
             "input_root_absolute_path": input_root_absolute_path_for_objc,
-            "canonicalize_dir": canonicalize_dir_for_objc,
         },
         {
             "name": "clang/objc",
+            "handler": "clang_compile",
             "action": "(.*_)?objc",
             "command_prefix": "../../third_party/llvm-build/Release+Asserts/bin/clang",
             "inputs": [
@@ -257,18 +275,20 @@ def __rules(ctx):
             "remote": True,
             "timeout": "2m",
             "input_root_absolute_path": input_root_absolute_path_for_objc,
-            "canonicalize_dir": canonicalize_dir_for_objc,
         },
         {
             "name": "clang/asm",
+            "handler": "clang_compile",
             "action": "(.*_)?asm",
             "command_prefix": "../../third_party/llvm-build/Release+Asserts/bin/clang",
             "inputs": [
                 "third_party/llvm-build/Release+Asserts/bin/clang",
             ],
-            "remote": config.get(ctx, "cog"),
+            # Remote assembly is typically much slower than local assembly.
+            # However, on Cog, local actions incur the overhead of fetching the
+            # toolchain and all inputs, making remote execution preferable.
+            "remote": config.get(ctx, "cog") or config.get(ctx, "default-remote"),
             "input_root_absolute_path": input_root_absolute_path,
-            "canonicalize_dir": canonicalize_dir,
             "timeout": "2m",
         },
         {
@@ -282,7 +302,6 @@ def __rules(ctx):
             "handler": "clang_compile_coverage",
             "remote": True,
             "input_root_absolute_path": input_root_absolute_path,
-            "canonicalize_dir": canonicalize_dir,
             "timeout": "2m",
         },
         {
@@ -296,7 +315,6 @@ def __rules(ctx):
             "handler": "clang_compile_coverage",
             "remote": True,
             "input_root_absolute_path": input_root_absolute_path,
-            "canonicalize_dir": canonicalize_dir,
             "timeout": "2m",
         },
         {
@@ -311,7 +329,6 @@ def __rules(ctx):
             "remote": True,
             "timeout": "2m",
             "input_root_absolute_path": input_root_absolute_path_for_objc,
-            "canonicalize_dir": canonicalize_dir_for_objc,
         },
         {
             "name": "clang-coverage/objc",
@@ -325,15 +342,10 @@ def __rules(ctx):
             "remote": True,
             "timeout": "2m",
             "input_root_absolute_path": input_root_absolute_path_for_objc,
-            "canonicalize_dir": canonicalize_dir_for_objc,
         },
         {
             "name": "clang/alink/llvm-ar",
             "action": "(.*_)?alink",
-            "inputs": [
-                # TODO: crbug.com/316267242 - Add inputs to GN config.
-                "third_party/llvm-build/Release+Asserts/bin/llvm-ar",
-            ],
             "exclude_input_patterns": [
                 "*.cc",
                 "*.h",
@@ -343,8 +355,7 @@ def __rules(ctx):
                 "*.stamp",
             ],
             "handler": "lld_thin_archive",
-            "remote": config.get(ctx, "remote-link"),
-            "canonicalize_dir": True,
+            "remote": remote_link,
             "timeout": "2m",
             "platform_ref": "large",
             "accumulate": True,
@@ -358,14 +369,12 @@ def __rules(ctx):
                 "*.h",
                 "*.js",
                 "*.pak",
-                "*.py",
                 "*.stamp",
             ],
-            "remote": config.get(ctx, "remote-link"),
+            "remote": remote_link,
             "restat_content": True,
-            "canonicalize_dir": True,
             "platform_ref": "large",
-            "timeout": "4m",
+            "timeout": remote_link_timeout,
         },
         {
             "name": "clang/solink_module",
@@ -376,13 +385,11 @@ def __rules(ctx):
                 "*.h",
                 "*.js",
                 "*.pak",
-                "*.py",
                 "*.stamp",
             ],
-            "remote": config.get(ctx, "remote-link"),
-            "canonicalize_dir": True,
+            "remote": remote_link,
             "platform_ref": "large",
-            "timeout": "4m",
+            "timeout": remote_link_timeout,
         },
         {
             "name": "clang/link",
@@ -394,22 +401,25 @@ def __rules(ctx):
                 "*.info",
                 "*.js",
                 "*.pak",
-                "*.py",
                 "*.stamp",
             ],
-            "remote": config.get(ctx, "remote-link"),
-            "canonicalize_dir": True,
+            "remote": remote_link,
             "platform_ref": "large",
-            # Remote linking with ThinLTO takes much longer.
-            # Linking browser_tests takes 50m locally. On remote with gVisor,
-            # it takes even more.
-            "timeout": "80m" if use_thin_lto else "10m",
+            "timeout": remote_link_timeout,
         },
     ])
     return rules
+
+def __filegroups(ctx):
+    return clang_all.filegroups(ctx)
+
+def __input_deps(ctx):
+    return clang_all.input_deps(ctx)
 
 clang_unix = module(
     "clang_unix",
     handlers = __handlers,
     rules = __rules,
+    filegroups = __filegroups,
+    input_deps = __input_deps,
 )

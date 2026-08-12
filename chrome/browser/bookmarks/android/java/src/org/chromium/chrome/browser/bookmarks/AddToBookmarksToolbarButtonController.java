@@ -6,7 +6,6 @@ package org.chromium.chrome.browser.bookmarks;
 
 import android.content.Context;
 import android.content.res.Configuration;
-import android.content.res.Resources;
 import android.view.View;
 
 import androidx.appcompat.content.res.AppCompatResources;
@@ -14,7 +13,6 @@ import androidx.appcompat.content.res.AppCompatResources;
 import org.chromium.base.Callback;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.supplier.NullableObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
@@ -39,9 +37,9 @@ import java.util.function.Supplier;
 public class AddToBookmarksToolbarButtonController extends BaseButtonDataProvider
         implements ConfigurationChangedObserver {
     private final ActivityLifecycleDispatcher mActivityLifecycleDispatcher;
-    private final Supplier<TabBookmarker> mTabBookmarkerSupplier;
+    private final Supplier<@Nullable TabBookmarker> mTabBookmarkerSupplier;
     private final Supplier<@Nullable Tracker> mTrackerSupplier;
-    private final ObservableSupplier<BookmarkModel> mBookmarkModelSupplier;
+    private final NullableObservableSupplier<BookmarkModel> mBookmarkModelSupplier;
     private final ButtonSpec mFilledButtonSpec;
     private final ButtonSpec mEmptyButtonSpec;
     private final Context mContext;
@@ -49,10 +47,10 @@ public class AddToBookmarksToolbarButtonController extends BaseButtonDataProvide
     private CurrentTabObserver mCurrentTabObserver;
     private boolean mIsTablet;
 
-    private final Callback<BookmarkModel> mBookmarkModelSupplierObserver =
+    private final Callback<@Nullable BookmarkModel> mBookmarkModelSupplierObserver =
             new Callback<>() {
                 @Override
-                public void onResult(BookmarkModel result) {
+                public void onResult(@Nullable BookmarkModel result) {
                     if (mObservedBookmarkModel != null) {
                         mObservedBookmarkModel.removeObserver(mBookmarkModelObserver);
                     }
@@ -86,20 +84,19 @@ public class AddToBookmarksToolbarButtonController extends BaseButtonDataProvide
             NullableObservableSupplier<Tab> activeTabSupplier,
             Context context,
             ActivityLifecycleDispatcher activityLifecycleDispatcher,
-            Supplier<TabBookmarker> tabBookmarkerSupplier,
+            Supplier<@Nullable TabBookmarker> tabBookmarkerSupplier,
             Supplier<@Nullable Tracker> trackerSupplier,
-            ObservableSupplier<BookmarkModel> bookmarkModelSupplier) {
+            NullableObservableSupplier<BookmarkModel> bookmarkModelSupplier) {
         // By default use the empty star drawable with an "Add to bookmarks" description.
         super(
                 activeTabSupplier,
                 /* modalDialogManager= */ null,
-                AppCompatResources.getDrawable(context, R.drawable.ic_star_24dp),
-                context.getString(R.string.accessibility_menu_bookmark),
-                /* actionChipLabelResId= */ Resources.ID_NULL,
-                /* supportsTinting= */ true,
-                /* iphCommandBuilder= */ null,
-                AdaptiveToolbarButtonVariant.ADD_TO_BOOKMARKS,
-                /* tooltipTextResId= */ Resources.ID_NULL);
+                new ButtonSpec.Builder(
+                                AppCompatResources.getDrawable(context, R.drawable.ic_star_24dp),
+                                context.getString(R.string.accessibility_menu_bookmark),
+                                /* supportsTinting= */ true)
+                        .setButtonVariant(AdaptiveToolbarButtonVariant.ADD_TO_BOOKMARKS)
+                        .build());
         mActivityLifecycleDispatcher = activityLifecycleDispatcher;
         mTabBookmarkerSupplier = tabBookmarkerSupplier;
         mTrackerSupplier = trackerSupplier;
@@ -107,7 +104,7 @@ public class AddToBookmarksToolbarButtonController extends BaseButtonDataProvide
 
         mBookmarkModelSupplier = bookmarkModelSupplier;
         mActivityLifecycleDispatcher.register(this);
-        mBookmarkModelSupplier.addObserver(mBookmarkModelSupplierObserver);
+        mBookmarkModelSupplier.addSyncObserverAndPostIfNonNull(mBookmarkModelSupplierObserver);
         mCurrentTabObserver =
                 new CurrentTabObserver(
                         activeTabSupplier,
@@ -122,17 +119,14 @@ public class AddToBookmarksToolbarButtonController extends BaseButtonDataProvide
         mEmptyButtonSpec = mButtonData.getButtonSpec();
         // Create another ButtonSpec with a filled star icon and a "Edit bookmark" description.
         mFilledButtonSpec =
-                new ButtonSpec(
-                        AppCompatResources.getDrawable(context, R.drawable.ic_star_filled_24dp),
-                        this,
-                        null,
-                        context.getString(R.string.menu_edit_bookmark),
-                        true,
-                        /* iphCommandBuilder= */ null,
-                        AdaptiveToolbarButtonVariant.ADD_TO_BOOKMARKS,
-                        /* actionChipLabelResId= */ Resources.ID_NULL,
-                        /* tooltipTextResId= */ Resources.ID_NULL,
-                        /* hasErrorBadge= */ false);
+                new ButtonSpec.Builder(
+                                AppCompatResources.getDrawable(
+                                        context, R.drawable.ic_star_filled_24dp),
+                                context.getString(R.string.menu_edit_bookmark),
+                                /* supportsTinting= */ true)
+                        .setOnClickListener(this)
+                        .setButtonVariant(AdaptiveToolbarButtonVariant.ADD_TO_BOOKMARKS)
+                        .build();
 
         mIsTablet = DeviceFormFactor.isNonMultiDisplayContextOnTablet(mContext);
     }
@@ -196,7 +190,7 @@ public class AddToBookmarksToolbarButtonController extends BaseButtonDataProvide
 
         RecordUserAction.record("MobileTopToolbarAddToBookmarksButton");
         // mActiveTabSupplier.hasValue() is true, so .get() should be non-null
-        mTabBookmarkerSupplier.get().addOrEditBookmark(activeTab);
+        tabBookmarker.addOrEditBookmark(activeTab);
     }
 
     @Override
@@ -207,9 +201,7 @@ public class AddToBookmarksToolbarButtonController extends BaseButtonDataProvide
             mObservedBookmarkModel = null;
         }
 
-        if (mBookmarkModelSupplier != null) {
-            mBookmarkModelSupplier.removeObserver(mBookmarkModelSupplierObserver);
-        }
+        mBookmarkModelSupplier.removeObserver(mBookmarkModelSupplierObserver);
 
         if (mCurrentTabObserver != null) {
             mCurrentTabObserver.destroy();

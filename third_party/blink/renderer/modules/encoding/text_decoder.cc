@@ -48,7 +48,7 @@ TextDecoder* TextDecoder::Create(const String& label,
   // The replacement encoding is not valid, but the Encoding API also
   // rejects aliases of the replacement encoding.
   if (!encoding.IsValid() ||
-      EqualIgnoringASCIICase(encoding.GetName(), "replacement")) {
+      EqualIgnoringAsciiCase(encoding.GetName(), "replacement")) {
     exception_state.ThrowRangeError(
         StrCat({"The encoding label provided ('", label, "') is invalid."}));
     return nullptr;
@@ -69,7 +69,7 @@ TextDecoder::TextDecoder(const TextEncoding& encoding,
 TextDecoder::~TextDecoder() = default;
 
 String TextDecoder::encoding() const {
-  String name = encoding_.GetName().GetString().DeprecatedLower();
+  String name = encoding_.GetName().GetString().ToAsciiLower();
   // Where possible, encoding aliases should be handled by changes to Chromium's
   // ICU or Blink's WTF.  The same codec is used, but WTF maintains a different
   // name/identity for these.
@@ -106,6 +106,7 @@ String TextDecoder::Decode(base::span<const uint8_t> input,
       // behavior.
       // https://encoding.spec.whatwg.org/#dom-textdecoder-decode
       codec_ = NewTextCodec(encoding_);
+      CHECK(codec_) << encoding_.GetName();
     }
     bom_seen_ = false;
   }
@@ -113,7 +114,7 @@ String TextDecoder::Decode(base::span<const uint8_t> input,
   DCHECK(codec_);
   do_not_flush_ = options->stream();
   FlushBehavior flush =
-      do_not_flush_ ? FlushBehavior::kDoNotFlush : FlushBehavior::kDataEOF;
+      do_not_flush_ ? FlushBehavior::kDoNotFlush : FlushBehavior::kDataEof;
 
   bool saw_error = false;
   String s = codec_->Decode(input, flush, fatal_, saw_error);
@@ -132,7 +133,7 @@ String TextDecoder::Decode(base::span<const uint8_t> input,
     if (s[0] == 0xFEFF) {
       const AtomicString& name = encoding_.GetName();
       if ((name == "UTF-8" || name == "UTF-16LE" || name == "UTF-16BE")) {
-        s.Remove(0);
+        s.erase(0, 1);
       }
     }
   }

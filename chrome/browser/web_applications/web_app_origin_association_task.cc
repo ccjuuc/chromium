@@ -12,8 +12,10 @@
 #include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/webapps/services/web_app_origin_association/web_app_origin_association_fetcher.h"
 #include "components/webapps/services/web_app_origin_association/web_app_origin_association_parser.h"
+#include "content/public/browser/storage_partition.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -37,18 +39,28 @@ WebAppOriginAssociationManager::Task::Task(
       unique_origins.insert(scope_extension.origin);
     }
   }
-  for (const proto::WebAppMigrationSource& migration_source :
-       migration_sources_input_) {
+  for (const MigrationSource& migration_source : migration_sources_input_) {
     url::Origin origin =
-        url::Origin::Create(GURL(migration_source.manifest_id()));
-    if (!origin.opaque()) {
-      unique_origins.insert(origin);
+        url::Origin::Create(migration_source.manifest_id().value());
+    CHECK(!origin.opaque());
+    // Same origin migration is allowed without checking a .well-known file, so
+    // no need to do origin validation for that source.
+    if (origin.IsSameOriginWith(web_app_identity_)) {
+      continue;
     }
+    unique_origins.insert(origin);
   }
   pending_origins_.assign(unique_origins.begin(), unique_origins.end());
 }
 
-WebAppOriginAssociationManager::Task::~Task() = default;
+WebAppOriginAssociationManager::Task::~Task() {
+  if (callback_) {
+    // Run the callback with empty results so callers are not left hanging.
+    // Note: Do NOT call `owner_->OnTaskCompleted()` here, as starting the next
+    // task during destruction would cause re-entrancy issues into the manager.
+    std::move(callback_).Run(OriginAssociations());
+  }
+}
 
 void WebAppOriginAssociationManager::Task::Start() {
   MaybeStartNextStep();
@@ -57,7 +69,7 @@ void WebAppOriginAssociationManager::Task::Start() {
 void WebAppOriginAssociationManager::Task::FetchAssociationFile(
     const url::Origin& origin) {
   owner_->GetFetcher().FetchWebAppOriginAssociationFile(
-      origin, g_browser_process->shared_url_loader_factory(),
+      origin,
       base::BindOnce(
           &WebAppOriginAssociationManager::Task::OnAssociationFileFetched,
           weak_ptr_factory_.GetWeakPtr(), origin));
@@ -116,11 +128,15 @@ void WebAppOriginAssociationManager::Task::Finalize() {
     result_.scope_extensions.insert(scope_extension);
   }
 
-  for (const proto::WebAppMigrationSource& migration_source :
-       migration_sources_input_) {
+  for (const MigrationSource& migration_source : migration_sources_input_) {
     url::Origin origin_to_check =
-        url::Origin::Create(GURL(migration_source.manifest_id()));
+        url::Origin::Create(migration_source.manifest_id().value());
     if (origin_to_check.opaque()) {
+      continue;
+    }
+
+    if (origin_to_check.IsSameOriginWith(web_app_identity_)) {
+      result_.migration_sources.push_back(migration_source);
       continue;
     }
 

@@ -30,8 +30,9 @@ class TestSyncUserSettings : public SyncUserSettings {
   bool IsInitialSyncFeatureSetupComplete() const override;
 
 #if !BUILDFLAG(IS_CHROMEOS)
-  void SetInitialSyncFeatureSetupComplete(
-      SyncFirstSetupCompleteSource source) override;
+  void SetInitialSyncFeatureSetupComplete() override;
+#else   // BUILDFLAG(IS_CHROMEOS)
+  void SetInitialSyncFeatureSetupComplete();
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
   bool IsSyncEverythingEnabled() const override;
@@ -69,6 +70,7 @@ class TestSyncUserSettings : public SyncUserSettings {
   bool IsPassphrasePromptMutedForCurrentProductVersion() const override;
   void MarkPassphrasePromptMutedForCurrentProductVersion() override;
   bool IsTrustedVaultKeyRequired() const override;
+  bool IsKeystoreKeyRequiredForTesting() const override;
   bool IsTrustedVaultKeyRequiredForPreferredDataTypes() const override;
   bool IsTrustedVaultRecoverabilityDegraded() const override;
   bool IsUsingExplicitPassphrase() const override;
@@ -79,7 +81,6 @@ class TestSyncUserSettings : public SyncUserSettings {
   bool SetDecryptionPassphrase(const std::string& passphrase) override;
 
   void SetRegisteredSelectableTypes(UserSelectableTypeSet types);
-  void SetInitialSyncFeatureSetupComplete();
   void ClearInitialSyncFeatureSetupComplete();
   void SetTypeIsManagedByPolicy(UserSelectableType type, bool managed);
   void SetTypeIsManagedByCustodian(UserSelectableType type, bool managed);

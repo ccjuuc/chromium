@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "base/check.h"
+#include "base/check_deref.h"
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
@@ -19,13 +20,11 @@
 #include "chrome/browser/ash/login/screens/base_screen.h"
 #include "chrome/browser/ash/login/screens/osauth/base_osauth_setup_screen.h"
 #include "chrome/browser/ash/login/wizard_context.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/ui/webui/ash/login/osauth/apply_online_password_screen_handler.h"
 #include "chromeos/ash/components/cryptohome/auth_factor.h"
 #include "chromeos/ash/components/login/auth/public/user_context.h"
 #include "chromeos/ash/components/osauth/public/common_types.h"
 #include "chromeos/ash/services/auth_factor_config/in_process_instances.h"
-#include "chromeos/ash/services/auth_factor_config/public/mojom/auth_factor_config.mojom-shared.h"
 #include "chromeos/ash/services/auth_factor_config/public/mojom/auth_factor_config.mojom.h"
 
 namespace ash {
@@ -45,10 +44,12 @@ std::string ApplyOnlinePasswordScreen::GetResultString(Result result) {
 }
 
 ApplyOnlinePasswordScreen::ApplyOnlinePasswordScreen(
+    PrefService* local_state,
     base::WeakPtr<ApplyOnlinePasswordScreenView> view,
     ScreenExitCallback exit_callback)
     : BaseOSAuthSetupScreen(ApplyOnlinePasswordScreenView::kScreenId,
                             OobeScreenPriority::DEFAULT),
+      local_state_(CHECK_DEREF(local_state)),
       view_(std::move(view)),
       exit_callback_(std::move(exit_callback)) {}
 
@@ -95,8 +96,7 @@ void ApplyOnlinePasswordScreen::SetOnlinePassword() {
   }
   auth::mojom::PasswordFactorEditor& password_factor_editor =
       auth::GetPasswordFactorEditor(
-          quick_unlock::QuickUnlockFactory::GetDelegate(),
-          g_browser_process->local_state());
+          quick_unlock::QuickUnlockFactory::GetDelegate(), &local_state_.get());
 
   if (context()->knowledge_factor_setup.auth_setup_flow ==
       WizardContext::AuthChangeFlow::kInitialSetup) {

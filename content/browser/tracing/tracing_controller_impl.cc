@@ -33,7 +33,6 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_config.h"
-#include "base/trace_event/trace_log.h"
 #include "base/tracing/protos/grit/tracing_proto_resources.h"
 #include "base/values.h"
 #include "base/version_info/version_info.h"
@@ -42,7 +41,6 @@
 #include "components/variations/active_field_trials.h"
 #include "content/browser/gpu/compositor_util.h"
 #include "content/browser/gpu/gpu_data_manager_impl.h"
-#include "content/browser/tracing/file_tracing_provider_impl.h"
 #include "content/browser/tracing/tracing_ui.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
@@ -90,7 +88,6 @@
 #if BUILDFLAG(IS_ANDROID)
 #include <sys/time.h>
 #include "content/browser/android/tracing_controller_android.h"
-#include "services/tracing/public/cpp/perfetto/java_heap_profiler/java_heap_profiler_android.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
 namespace content {
@@ -149,8 +146,6 @@ TracingControllerImpl::TracingControllerImpl()
   DCHECK(!g_tracing_controller);
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   CHECK(delegate_);
-  // Deliberately leaked, like this class.
-  base::FileTracing::SetProvider(new FileTracingProviderImpl);
   InitializeDataSources();
   g_tracing_controller = this;
 
@@ -177,7 +172,8 @@ void TracingControllerImpl::InitializeDataSources() {
       base::SequencedTaskRunner::GetCurrentDefault(),
       {tracing_delegate()->CreateSystemProfileMetadataRecorder(),
        base::BindRepeating(&TracingControllerImpl::RecorderMetadataToBundle)},
-      {base::BindRepeating(&TracingControllerImpl::GenerateMetadataPacket)});
+      {base::BindRepeating(&TracingControllerImpl::GenerateMetadataPacket)},
+      tracing_delegate()->CreateChromeMetadataPacketRecorder());
 
 #if BUILDFLAG(IS_CHROMEOS)
   RegisterCrOSTracingDataSource();
@@ -236,7 +232,9 @@ bool TracingControllerImpl::GetCategories(GetCategoriesDoneCallback callback) {
 
   AddCategoriesToSet(base::perfetto_track_event::internal::kCategoryRegistry,
                      category_set);
+#ifdef V8_USE_PERFETTO
   AddCategoriesToSet(v8::GetTrackEventCategoryRegistry(), category_set);
+#endif  // V8_USE_PERFETTO
   AddCategoriesToSet(GetWebRtcTrackEventCategoryRegistry(), category_set);
 
   std::move(callback).Run(category_set);
@@ -247,14 +245,17 @@ std::vector<uint8_t> TracingControllerImpl::GetTrackEventDescriptor() {
   perfetto::protos::gen::TrackEventDescriptor track_event;
   AddCategoriesToDescriptor(
       base::perfetto_track_event::internal::kCategoryRegistry, track_event);
+#ifdef V8_USE_PERFETTO
   AddCategoriesToDescriptor(v8::GetTrackEventCategoryRegistry(), track_event);
+#endif  // V8_USE_PERFETTO
   AddCategoriesToDescriptor(GetWebRtcTrackEventCategoryRegistry(), track_event);
   return track_event.SerializeAsArray();
 }
 
-bool TracingControllerImpl::StartTracing(
+bool TracingControllerImpl::StartTracingImpl(
     const base::trace_event::TraceConfig& trace_config,
-    StartTracingDoneCallback callback) {
+    StartTracingDoneCallback callback,
+    bool privacy_filtering_enabled) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   // TODO(chiniforooshan): The actual value should be received by callback and
   // this function should return void.
@@ -282,8 +283,7 @@ bool TracingControllerImpl::StartTracing(
   ConnectToServiceIfNeeded();
 
   perfetto::TraceConfig perfetto_config =
-      tracing::GetDefaultPerfettoConfig(trace_config,
-                                        /*privacy_filtering_enabled=*/false,
+      tracing::GetDefaultPerfettoConfig(trace_config, privacy_filtering_enabled,
                                         /*convert_to_legacy_json=*/true);
 
   consumer_host_->EnableTracing(
@@ -309,20 +309,10 @@ bool TracingControllerImpl::StopTracing(
 
 bool TracingControllerImpl::StopTracing(
     const scoped_refptr<TraceDataEndpoint>& trace_data_endpoint,
-    const std::string& agent_label,
-    bool privacy_filtering_enabled) {
+    const std::string& agent_label) {
   if (!IsTracing() || drainer_ || !tracing_session_host_)
     return false;
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-
-  // Setting the argument filter is no longer supported just in the TraceConfig;
-  // clients of the TracingController that need filtering need to pass that
-  // option to StopTracing directly as an argument. This is due to Perfetto-
-  // based tracing requiring this filtering to be done during serialization
-  // time and not during tracing time.
-  // TODO(oysteine): Remove the config option once the legacy IPC layer is
-  // removed.
-  CHECK(privacy_filtering_enabled || !trace_config_->IsArgumentFilterEnabled());
 
   trace_data_endpoint_ = std::move(trace_data_endpoint);
   is_data_complete_ = false;
@@ -341,7 +331,7 @@ bool TracingControllerImpl::StopTracing(
       std::make_unique<mojo::DataPipeDrainer>(this, std::move(consumer_handle));
 
   tracing_session_host_->DisableTracingAndEmitJson(
-      agent_label, std::move(producer_handle), privacy_filtering_enabled,
+      agent_label, std::move(producer_handle),
       base::BindOnce(&TracingControllerImpl::OnReadBuffersComplete,
                      base::Unretained(this)));
 

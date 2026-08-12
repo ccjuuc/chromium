@@ -21,7 +21,6 @@
 #import "base/test/ios/wait_util.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #import "ios/chrome/browser/policy/model/policy_earl_grey_utils.h"
-#import "ios/chrome/browser/web/model/features.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
@@ -132,6 +131,9 @@ bool IsAppInAllowedCrashState() {
 }
 
 bool IsMockAuthenticationSetUp() {
+  if (![[AppLaunchManager sharedManager] appIsLaunched]) {
+    return false;
+  }
   // `SetUpMockAuthentication` enables the fake sync server so checking
   // `isFakeSyncServerSetUp` here is sufficient to determine mock authentication
   // state.
@@ -375,6 +377,15 @@ void ResetAuthentication() {
   return gStartupTest;
 }
 
+- (void)backgroundAndForegroundApp {
+  // Dismiss the keyboard.
+  NSError* keyboardError = nil;
+  [EarlGrey dismissKeyboardWithError:&keyboardError];
+
+  // Close the tab we opened, returning the browser to its previous state.
+  [[AppLaunchManager sharedManager] backgroundAndForegroundApp];
+}
+
 #pragma mark - Private methods
 
 + (void)disableMockAuthentication {
@@ -495,10 +506,10 @@ void ResetAuthentication() {
 // running. The name is extracted from the string for the test's name property,
 // e.g. "-[DemographicsTestCase testSomething]".
 - (NSString*)currentTestMethodName {
-  int testNameStart = [self.name rangeOfString:@"test"].location;
-  return [self.name
-      substringWithRange:NSMakeRange(testNameStart,
-                                     self.name.length - testNameStart - 1)];
+  NSCharacterSet* set =
+      [NSCharacterSet characterSetWithCharactersInString:@" ]"];
+  NSArray* parts = [self.name componentsSeparatedByCharactersInSet:set];
+  return (parts.count >= 2) ? parts[1] : self.name;
 }
 
 #pragma mark - Handling system alerts

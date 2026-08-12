@@ -7,9 +7,13 @@
 #include <string>
 #include <utility>
 
-#include "base/byte_count.h"
+#include "ash/constants/url_constants.h"
+#include "ash/constants/webui_url_constants.h"
+#include "ash/strings/grit/ash_strings.h"
+#include "base/byte_size.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
 #include "chrome/browser/ash/crostini/crostini_disk.h"
@@ -17,12 +21,9 @@
 #include "chrome/browser/ash/crostini/crostini_installer_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/ash/crostini_installer/crostini_installer_page_handler.h"
-#include "chrome/common/url_constants.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
 #include "chrome/grit/crostini_installer_resources.h"
 #include "chrome/grit/crostini_installer_resources_map.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_data_source.h"
@@ -103,8 +104,8 @@ void AddStringResources(content::WebUIDataSource* source) {
                                 crostini::disk::kDownloadSizeBytes)),
                             ui::DataUnits::kMebibyte, /*show_units=*/true)));
   source->AddString("learnMoreUrl",
-                    std::string{chrome::kLinuxAppsLearnMoreURL} +
-                        "&b=" + base::SysInfo::GetLsbReleaseBoard());
+                    base::StrCat({ash::external_urls::kLinuxAppsLearnMoreURL,
+                                  "&b=", base::SysInfo::GetLsbReleaseBoard()}));
 
   source->AddString(
       "minimumFreeSpaceUnmetError",
@@ -143,7 +144,7 @@ CrostiniInstallerUI::CrostiniInstallerUI(content::WebUI* web_ui)
     : ui::MojoWebDialogUI{web_ui} {
   auto* profile = Profile::FromWebUI(web_ui);
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
-      profile, chrome::kChromeUICrostiniInstallerHost);
+      profile, ash::kChromeUICrostiniInstallerHost);
   AddStringResources(source);
   source->AddString("defaultContainerUsername",
                     crostini::DefaultContainerUserNameForProfile(profile));
@@ -207,7 +208,7 @@ void CrostiniInstallerUI::OnPageClosed() {
   page_closed_ = true;
   // CloseDialog() is a no-op if we are not in a dialog (e.g. user
   // access the page using the URL directly, which is not supported).
-  ui::MojoWebDialogUI::CloseDialog(base::Value::List());
+  ui::MojoWebDialogUI::CloseDialog(base::ListValue());
 }
 
 WEB_UI_CONTROLLER_TYPE_IMPL(CrostiniInstallerUI)

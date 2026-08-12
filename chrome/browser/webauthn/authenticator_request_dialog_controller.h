@@ -21,7 +21,6 @@
 #include "chrome/browser/webauthn/authenticator_reference.h"
 #include "chrome/browser/webauthn/authenticator_request_dialog_model.h"
 #include "chrome/browser/webauthn/authenticator_transport.h"
-#include "chrome/browser/webauthn/observable_authenticator_list.h"
 #include "chrome/browser/webauthn/password_credential_fetcher.h"
 #include "components/webauthn/core/browser/passkey_model.h"
 #include "components/webauthn/core/browser/passkey_model_change.h"
@@ -31,7 +30,6 @@
 #include "third_party/blink/public/mojom/credentialmanagement/credential_type_flags.mojom.h"
 #include "url/gurl.h"
 
-class ChallengeUrlFetcher;
 class PasskeyUpgradeRequestController;
 class Profile;
 
@@ -50,8 +48,6 @@ class AuthenticatorRequestDialogController
   using RequestCallback = device::FidoRequestHandlerBase::RequestCallback;
   using BlePermissionCallback = base::RepeatingCallback<void(
       device::FidoRequestHandlerBase::BlePermissionCallback)>;
-  using EnclaveRequestCallback = base::RepeatingCallback<void(
-      std::unique_ptr<device::enclave::CredentialRequest>)>;
 
   AuthenticatorRequestDialogController(
       AuthenticatorRequestDialogModel* model,
@@ -67,19 +63,19 @@ class AuthenticatorRequestDialogController
   AuthenticatorRequestDialogModel* model() const;
 
   // AuthenticatorRequestDialogModel::Observer:
-  void OnModelDestroyed(AuthenticatorRequestDialogModel* model) override;
   void StartOver() override;
-  void OnCreatePasskeyAccepted() override;
-  void OnRecoverSecurityDomainClosed() override;
+  void OnChromeProfileCreatePasskeyAccepted() override;
+  void OnGPMRecoverSecurityDomainClosed() override;
   void ContinueWithFlowAfterBleAdapterPowered() override;
   void PowerOnBleAdapter() override;
   void OpenBlePreferences() override;
+  void OpenGpmSettings() override;
   void OnOffTheRecordInterstitialAccepted() override;
   void CancelAuthenticatorRequest() override;
   void OnRequestComplete() override;
   void OnResidentCredentialConfirmed() override;
   void OnHavePIN(std::u16string pin) override;
-  void EnclaveEnabledStatusChanged(EnclaveEnabledStatus status) override;
+  void OnGPMEnclaveEnabledStatusChanged(EnclaveEnabledStatus status) override;
   void OnAccountSelected(size_t index) override;
   void OnAccountPreselectedIndex(size_t index) override;
   void OnBioEnrollmentDone() override;
@@ -222,18 +218,11 @@ class AuthenticatorRequestDialogController
   // was handled.
   bool OnHybridTransportError();
 
-  // To be called when an enclave transaction fails. Returns true if the event
-  // was handled.
-  bool OnEnclaveError();
-
   // To be called when there are no passkeys from an internal authenticator.
   // This is a rare case but can happen when the user grants passkeys permission
   // on macOS as part of a request flow and then Chromium realises that the
   // request should never have been sent to iCloud Keychain in the first place.
   bool OnNoPasskeys();
-
-  // To be called when fetching a challenge from a provided URL failed.
-  void OnChallengeUrlFailure();
 
   // To be called when the Bluetooth adapter status changes.
   void BluetoothAdapterStatusChanged(
@@ -292,8 +281,7 @@ class AuthenticatorRequestDialogController
   transport_availability_for_testing() {
     return transport_availability_;
   }
-
-  ObservableAuthenticatorList& saved_authenticators() {
+  std::vector<AuthenticatorReference>& saved_authenticators() {
     return ephemeral_state_.saved_authenticators_;
   }
 
@@ -321,7 +309,6 @@ class AuthenticatorRequestDialogController
   }
 
   void set_cable_transport_info(
-      std::optional<bool> extension_is_v2,
       const std::optional<std::string>& cable_qr_string);
 
   bool win_native_api_enabled() const {
@@ -346,13 +333,9 @@ class AuthenticatorRequestDialogController
   void SetUIPresentation(
       content::AuthenticatorRequestClientDelegate::UIPresentation modality);
 
-  void ProvideChallengeUrl(
-      const GURL& url,
-      base::OnceCallback<void(std::optional<base::span<const uint8_t>>)>
-          callback);
-
-  void InitializeEnclaveRequestCallback(
-      device::FidoDiscoveryFactory* discovery_factory);
+  void ConfigureEnclaveForUpgrade(
+      device::FidoDiscoveryFactory* discovery_factory,
+      bool cmtg_key_requested);
 
   base::WeakPtr<AuthenticatorRequestDialogController> GetWeakPtr();
 
@@ -372,7 +355,7 @@ class AuthenticatorRequestDialogController
     // be dispatched dispatched after some UI interaction. This is useful for
     // platform authenticators (and Windows) where dispatch to the authenticator
     // immediately results in modal UI to appear.
-    ObservableAuthenticatorList saved_authenticators_;
+    std::vector<AuthenticatorReference> saved_authenticators_;
 
     // responses_ contains possible responses to select between after an
     // authenticator has responded to a request.
@@ -440,26 +423,17 @@ class AuthenticatorRequestDialogController
   std::optional<size_t> IndexOfImmediateGetPriorityMechanism();
   std::optional<size_t> IndexOfMakeCredentialPriorityMechanism();
 
-  // Sets correct step for entering GPM pin based on `gpm_pin_is_arbitrary_`.
-  void PromptForGPMPin();
-
   // Returns true if this request could pick the enclave authenticator by
   // default. This only makes sense for a create() call.
   bool CanDefaultToEnclave(Profile* profile);
 
-  // Returns the render frame host associated with this request. The render
-  // frame host indirectly owns the controller, and so it should outlive it.
-  content::RenderFrameHost* GetRenderFrameHost() const;
-
-  // Lazy creation accessor.
-  ChallengeUrlFetcher* GetChallengeUrlFetcher();
-
-  void MaybeStartChallengeFetch();
-  void OnChallengeFetched();
+  // Returns the render frame host associated with this request. May return
+  // nullptr if the initiating frame or tab has been destroyed or detached.
+  content::RenderFrameHost* MaybeGetRenderFrameHost() const;
 
   void PopulatePasswords();
 
-  raw_ptr<AuthenticatorRequestDialogModel> model_;
+  scoped_refptr<AuthenticatorRequestDialogModel> model_;
 
   // Identifier for the RenderFrameHost of the frame that initiated the current
   // request.
@@ -558,21 +532,12 @@ class AuthenticatorRequestDialogController
   int credential_types_ =
       static_cast<int>(blink::mojom::CredentialTypeFlags::kNone);
 
-  // ChallengeUrl support. The URL is the destination to fetch the challenge
-  // and the callback is invoked when the challenge is received.
-  GURL challenge_url_;
-  base::OnceCallback<void(std::optional<base::span<const uint8_t>>)>
-      challenge_callback_;
-
-  std::unique_ptr<ChallengeUrlFetcher> challenge_url_fetcher_;
-
   const content::GlobalRenderFrameHostId frame_host_id_;
 
   base::ScopedObservation<webauthn::PasskeyModel,
                           webauthn::PasskeyModel::Observer>
       passkey_model_observation_{this};
 
-  EnclaveRequestCallback enclave_request_callback_;
   std::unique_ptr<PasskeyUpgradeRequestController>
       passkey_upgrade_request_controller_;
 

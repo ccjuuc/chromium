@@ -18,7 +18,7 @@
 #include "components/segmentation_platform/public/segmentation_platform_service.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
-#include "chrome/browser/ui/android/toolbar/jni_headers/AdaptiveToolbarBridge_jni.h"
+#include "chrome/browser/ui/android/toolbar/adaptive_jni_headers/AdaptiveToolbarBridge_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::JavaRef;
@@ -201,9 +201,9 @@ void RunJavaCallbackWithRankedButtons(
 static void JNI_AdaptiveToolbarBridge_GetRankedSessionVariantButtons(
     JNIEnv* env,
     Profile* profile,
-    jboolean j_use_raw_results,
+    bool j_use_raw_results,
     const JavaRef<jobject>& j_callback) {
-  bool use_raw_results = static_cast<bool>(j_use_raw_results);
+  bool use_raw_results = j_use_raw_results;
   base::OnceCallback<void(bool, std::vector<int>)> wrapped_callback =
       base::BindOnce(&RunJavaCallbackWithRankedButtons,
                      base::android::ScopedJavaGlobalRef<jobject>(j_callback));

@@ -4,6 +4,7 @@
 
 #include "ash/capture_mode/capture_mode_controller.h"
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -47,6 +48,7 @@
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/system/notification_center/message_view_factory.h"
 #include "ash/system/toast/anchored_nudge_manager_impl.h"
+#include "ash/system/video_conference/video_conference_common.h"
 #include "ash/system/video_conference/video_conference_tray_controller.h"
 #include "ash/wm/mru_window_tracker.h"
 #include "ash/wm/screen_pinning_controller.h"
@@ -58,7 +60,6 @@
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/i18n/time_formatting.h"
 #include "base/location.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
@@ -88,6 +89,7 @@
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/layer.h"
 #include "ui/display/screen.h"
@@ -364,9 +366,9 @@ void ShowDisabledNotification(CaptureAllowance allowance) {
       GetDisabledNotificationMessageId(allowance, /*for_title=*/false),
       /*optional_fields=*/{}, /*delegate=*/nullptr,
       message_center::SystemNotificationWarningLevel::CRITICAL_WARNING,
-      allowance == CaptureAllowance::kDisallowedByHdcp
-          ? kCaptureModeIcon
-          : vector_icons::kBusinessIcon);
+      allowance == CaptureAllowance::kDisallowedByHdcp ? kCaptureModeIcon
+      : ::features::IsRoundedIconsEnabled() ? vector_icons::kDomainIcon
+                                            : vector_icons::kBusinessOldIcon);
 }
 
 // Shows a notification informing the user that video recording was stopped due
@@ -1397,27 +1399,26 @@ void CaptureModeController::MaybeUpdateVcPanel() {
   const bool is_recording_audio = IsAudioRecordingInProgress();
   const bool has_media_app = is_camera_used || is_recording_audio;
 
-  delegate_->UpdateVideoConferenceManager(
-      crosapi::mojom::VideoConferenceMediaUsageStatus::New(
-          /*client_id=*/vc_client_id_,
-          /*has_media_app=*/has_media_app,
-          /*has_camera_permission=*/has_media_app,
-          /*has_microphone_permission=*/has_media_app,
-          /*is_capturing_camera=*/is_camera_used,
-          /*is_capturing_microphone=*/is_recording_audio,
-          /*is_capturing_screen=*/false));
+  VideoConferenceMediaUsageStatus usage_status(vc_client_id_);
+  usage_status.state.has_media_app = has_media_app;
+  usage_status.state.has_camera_permission = has_media_app;
+  usage_status.state.has_microphone_permission = has_media_app;
+  usage_status.state.is_capturing_camera = is_camera_used;
+  usage_status.state.is_capturing_microphone = is_recording_audio;
+  usage_status.state.is_capturing_screen = false;
+  delegate_->UpdateVideoConferenceManager(std::move(usage_status));
 
   // If the camera is being recorded while disabled (e.g. privacy switch is
   // turned on), or the microphone is being recorded while mic input is muted,
   // we need to notify the user through the video conference manager.
   if (is_camera_used && is_camera_muted_) {
     delegate_->NotifyDeviceUsedWhileDisabled(
-        crosapi::mojom::VideoConferenceMediaDevice::kCamera);
+        VideoConferenceMediaDevice::kCamera);
   }
 
   if (is_recording_audio && is_microphone_muted_) {
     delegate_->NotifyDeviceUsedWhileDisabled(
-        crosapi::mojom::VideoConferenceMediaDevice::kMicrophone);
+        VideoConferenceMediaDevice::kMicrophone);
   }
 }
 
@@ -1498,63 +1499,51 @@ void CaptureModeController::SuspendImminent(
   EndSessionOrRecording(EndRecordingReason::kImminentSuspend);
 }
 
-void CaptureModeController::GetMediaApps(GetMediaAppsCallback callback) {
-  std::vector<crosapi::mojom::VideoConferenceMediaAppInfoPtr> apps;
+VideoConferenceManagerClient::MediaApps CaptureModeController::GetMediaApps() {
+  MediaApps apps;
 
   if (is_recording_in_progress()) {
-    apps.push_back(crosapi::mojom::VideoConferenceMediaAppInfo::New(
-        /*id=*/capture_mode_media_app_id_,
-        /*last_activity_time=*/base::Time::Now(),
-        /*is_capturing_camera=*/IsShowingCameraPreview(),
-        /*is_capturing_microphone=*/IsAudioRecordingInProgress(),
-        /*is_capturing_screen=*/false,
-        /*title=*/
-        l10n_util::GetStringUTF16(IDS_ASH_SCREEN_CAPTURE_DISPLAY_SOURCE),
-        /*url=*/std::nullopt,
-        /*app_type=*/crosapi::mojom::VideoConferenceAppType::kAshCaptureMode));
+    VideoConferenceMediaAppInfo app;
+    app.id = capture_mode_media_app_id_;
+    app.last_activity_time = base::Time::Now();
+    app.is_capturing_camera = IsShowingCameraPreview();
+    app.is_capturing_microphone = IsAudioRecordingInProgress();
+    app.title =
+        l10n_util::GetStringUTF16(IDS_ASH_SCREEN_CAPTURE_DISPLAY_SOURCE);
+    app.app_type = VideoConferenceAppType::kAshCaptureMode;
+    apps.push_back(std::move(app));
   }
 
-  std::move(callback).Run(std::move(apps));
+  return apps;
 }
 
-void CaptureModeController::ReturnToApp(const base::UnguessableToken& token,
-                                        ReturnToAppCallback callback) {
+bool CaptureModeController::ReturnToApp(const base::UnguessableToken& token) {
   // The return-to-app feature is only available when recording an app window
   // (rather than the fullscreen or region). In this case, it simply "returns"
   // to that window by activating it.
-  bool success = false;
   if (video_recording_watcher_ &&
       !video_recording_watcher_->is_shutting_down() &&
       video_recording_watcher_->recording_source() ==
           CaptureModeSource::kWindow) {
     wm::ActivateWindow(video_recording_watcher_->window_being_recorded());
-    success = true;
+    return true;
   }
-  std::move(callback).Run(success);
+  return false;
 }
 
-void CaptureModeController::SetSystemMediaDeviceStatus(
-    crosapi::mojom::VideoConferenceMediaDevice device,
-    bool enabled,
-    SetSystemMediaDeviceStatusCallback callback) {
+bool CaptureModeController::SetSystemMediaDeviceStatus(
+    VideoConferenceMediaDevice device,
+    bool enabled) {
   switch (device) {
-    case crosapi::mojom::VideoConferenceMediaDevice::kCamera:
+    case VideoConferenceMediaDevice::kCamera:
       is_camera_muted_ = !enabled;
-      std::move(callback).Run(true);
-      return;
-    case crosapi::mojom::VideoConferenceMediaDevice::kMicrophone:
+      return true;
+    case VideoConferenceMediaDevice::kMicrophone:
       is_microphone_muted_ = !enabled;
-      std::move(callback).Run(true);
-      return;
-    case crosapi::mojom::VideoConferenceMediaDevice::kUnusedDefault:
-      std::move(callback).Run(false);
-      return;
+      return true;
   }
-}
 
-void CaptureModeController::StopAllScreenShare() {
-  // Our screen recordings are not considered screen shares, and we already have
-  // the stop recording button, so this does nothing.
+  NOTREACHED();
 }
 
 void CaptureModeController::OnPinnedStateChanged(aura::Window* pinned_window) {
@@ -2192,7 +2181,9 @@ void CaptureModeController::AddCopyTextButton(std::string_view detected_text) {
                      weak_ptr_factory_.GetWeakPtr(),
                      base::UTF8ToUTF16(detected_text)),
       l10n_util::GetStringUTF16(IDS_ASH_SCREEN_CAPTURE_COPY_TEXT_BUTTON_LABEL),
-      &vector_icons::kContentCopyIcon,
+      &(::features::IsRoundedIconsEnabled()
+            ? vector_icons::kContentCopyIcon
+            : vector_icons::kContentCopyOldIcon),
       ActionButtonRank{ActionButtonType::kCopyText, /*weight=*/0},
       ActionButtonViewID::kCopyTextButton);
 }
@@ -2508,11 +2499,27 @@ base::FilePath CaptureModeController::BuildImagePathForDisplay(
 base::FilePath CaptureModeController::BuildPathNoExtension(
     std::string_view base_name,
     base::Time timestamp) const {
-  return GetCurrentCaptureFolder().path.AppendASCII(base::StrCat(
-      {base_name, base::UnlocalizedTimeFormatWithPattern(timestamp, " y-MM-dd"),
-       base::UnlocalizedTimeFormatWithPattern(
-           timestamp,
-           delegate_->Uses24HourFormat() ? " HH.mm.ss" : " h.mm.ss a")}));
+  base::Time::Exploded exploded;
+  timestamp.LocalExplode(&exploded);
+
+  std::string time_str;
+  if (delegate_->Uses24HourFormat()) {
+    time_str = base::StringPrintf(
+        "%04d-%02d-%02d %02d.%02d.%02d", exploded.year, exploded.month,
+        exploded.day_of_month, exploded.hour, exploded.minute, exploded.second);
+  } else {
+    int hour = exploded.hour % 12;
+    if (hour == 0) {
+      hour = 12;
+    }
+    const char* am_pm = exploded.hour >= 12 ? "PM" : "AM";
+    time_str = base::StringPrintf(
+        "%04d-%02d-%02d %d.%02d.%02d %s", exploded.year, exploded.month,
+        exploded.day_of_month, hour, exploded.minute, exploded.second, am_pm);
+  }
+
+  return GetCurrentCaptureFolder().path.AppendASCII(
+      base::StrCat({base_name, " ", time_str}));
 }
 
 base::FilePath CaptureModeController::GetFallbackFilePathFromFile(

@@ -56,8 +56,6 @@ bool StructTraits<blink::mojom::WebPreferencesDataView,
   out->minimum_font_size = data.minimum_font_size();
   out->minimum_logical_font_size = data.minimum_logical_font_size();
   out->context_menu_on_mouse_up = data.context_menu_on_mouse_up();
-  out->always_show_context_menu_on_touch =
-      data.always_show_context_menu_on_touch();
   out->javascript_enabled = data.javascript_enabled();
   out->web_security_enabled = data.web_security_enabled();
   out->loads_images_automatically = data.loads_images_automatically();
@@ -68,12 +66,13 @@ bool StructTraits<blink::mojom::WebPreferencesDataView,
       data.shrinks_standalone_images_to_fit();
   out->text_areas_are_resizable = data.text_areas_are_resizable();
   out->allow_scripts_to_close_windows = data.allow_scripts_to_close_windows();
-  out->allow_window_focus_without_user_gesture =
-      data.allow_window_focus_without_user_gesture();
+  out->allow_unrestricted_window_focus = data.allow_unrestricted_window_focus();
   out->remote_fonts_enabled = data.remote_fonts_enabled();
   out->javascript_can_access_clipboard = data.javascript_can_access_clipboard();
   out->dns_prefetching_enabled = data.dns_prefetching_enabled();
   out->data_saver_enabled = data.data_saver_enabled();
+  out->battery_saver_enabled = data.battery_saver_enabled();
+  out->preloading_disabled = data.preloading_disabled();
   out->local_storage_enabled = data.local_storage_enabled();
   out->tabs_to_links = data.tabs_to_links();
   out->disable_ipc_flooding_protection = data.disable_ipc_flooding_protection();
@@ -101,13 +100,12 @@ bool StructTraits<blink::mojom::WebPreferencesDataView,
   out->allow_running_insecure_content = data.allow_running_insecure_content();
   out->disable_reading_from_canvas = data.disable_reading_from_canvas();
   out->strict_mixed_content_checking = data.strict_mixed_content_checking();
-  out->strict_powerful_feature_restrictions =
-      data.strict_powerful_feature_restrictions();
   out->allow_geolocation_on_insecure_origins =
       data.allow_geolocation_on_insecure_origins();
   out->strictly_block_blockable_mixed_content =
       data.strictly_block_blockable_mixed_content();
   out->block_mixed_plugin_content = data.block_mixed_plugin_content();
+  out->highlight_ads = data.highlight_ads();
   out->password_echo_enabled_physical = data.password_echo_enabled_physical();
   out->password_echo_enabled_touch = data.password_echo_enabled_touch();
   out->disable_reading_from_canvas = data.disable_reading_from_canvas();
@@ -159,14 +157,16 @@ bool StructTraits<blink::mojom::WebPreferencesDataView,
   out->text_tracks_enabled = data.text_tracks_enabled();
   out->text_track_margin_percentage = data.text_track_margin_percentage();
   out->immersive_mode_enabled = data.immersive_mode_enabled();
+  out->immersive_video_playback_enabled =
+      data.immersive_video_playback_enabled();
   out->double_tap_to_zoom_enabled = data.double_tap_to_zoom_enabled();
   out->fullscreen_supported = data.fullscreen_supported();
-  out->text_autosizing_enabled = data.text_autosizing_enabled();
+  out->is_initial_profile = data.is_initial_profile();
+  out->text_size_adjust_enabled = data.text_size_adjust_enabled();
 #if BUILDFLAG(IS_ANDROID)
   out->font_scale_factor = data.font_scale_factor();
   out->font_weight_adjustment = data.font_weight_adjustment();
   out->text_size_contrast_factor = data.text_size_contrast_factor();
-  out->device_scale_adjustment = data.device_scale_adjustment();
   out->force_enable_zoom = data.force_enable_zoom();
   out->support_deprecated_target_density_dpi =
       data.support_deprecated_target_density_dpi();
@@ -198,6 +198,8 @@ bool StructTraits<blink::mojom::WebPreferencesDataView,
   out->disable_accelerated_small_canvases =
       data.disable_accelerated_small_canvases();
   out->long_press_link_select_text = data.long_press_link_select_text();
+  out->scale_all_fonts_if_no_meta_text_scale_tag =
+      data.scale_all_fonts_if_no_meta_text_scale_tag();
   out->dynamic_safe_area_insets_enabled =
       data.dynamic_safe_area_insets_enabled();
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -238,10 +240,8 @@ bool StructTraits<blink::mojom::WebPreferencesDataView,
   out->renderer_wide_named_frame_lookup =
       data.renderer_wide_named_frame_lookup();
   out->modal_context_menu = data.modal_context_menu();
-  out->subapps_apis_require_user_gesture_and_authorization =
-      data.require_transient_activation_and_user_confirmation_for_subapps_api();
   out->payment_request_enabled = data.payment_request_enabled();
-  out->ai_prompt_api_enabled = data.ai_prompt_api_enabled();
+  out->ai_ot_apis_enabled = data.ai_ot_apis_enabled();
 
 #if BUILDFLAG(IS_MAC)
   out->should_disable_external_popups = data.should_disable_external_popups();
@@ -251,6 +251,8 @@ bool StructTraits<blink::mojom::WebPreferencesDataView,
   out->should_screenshot_on_mainframe_same_doc_navigation =
       data.should_screenshot_on_mainframe_same_doc_navigation();
 #endif  // BUILDFLAG(IS_ANDROID)
+
+  out->is_indigo_onboarding = data.is_indigo_onboarding();
 
   return true;
 }

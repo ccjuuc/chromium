@@ -19,10 +19,10 @@
 
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/debug/leak_annotations.h"
 #include "base/environment.h"
+#include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/nix/mime_util_xdg.h"
@@ -91,13 +91,13 @@
 #include "ui/shell_dialogs/select_file_policy.h"
 #include "ui/views/window/window_button_order_provider.h"
 
-#if BUILDFLAG(IS_OZONE_WAYLAND)
+#if BUILDFLAG(SUPPORTS_OZONE_WAYLAND)
 #include "ui/gtk/wayland/gtk_ui_platform_wayland.h"
-#endif  // BUILDFLAG(IS_OZONE_WAYLAND)
+#endif  // BUILDFLAG(SUPPORTS_OZONE_WAYLAND)
 
-#if BUILDFLAG(IS_OZONE_X11)
+#if BUILDFLAG(SUPPORTS_OZONE_X11)
 #include "ui/gtk/x/gtk_ui_platform_x11.h"
-#endif  // BUILDFLAG(IS_OZONE_X11)
+#endif  // BUILDFLAG(SUPPORTS_OZONE_X11)
 
 namespace gtk {
 
@@ -162,14 +162,14 @@ std::unique_ptr<GtkUiPlatform> CreateGtkUiPlatform(ui::LinuxUiBackend backend) {
   switch (backend) {
     case ui::LinuxUiBackend::kStub:
       return std::make_unique<GtkUiPlatformStub>();
-#if BUILDFLAG(IS_OZONE_X11)
+#if BUILDFLAG(SUPPORTS_OZONE_X11)
     case ui::LinuxUiBackend::kX11:
       return std::make_unique<GtkUiPlatformX11>();
-#endif  // BUILDFLAG(IS_OZONE_X11)
-#if BUILDFLAG(IS_OZONE_WAYLAND)
+#endif  // BUILDFLAG(SUPPORTS_OZONE_X11)
+#if BUILDFLAG(SUPPORTS_OZONE_WAYLAND)
     case ui::LinuxUiBackend::kWayland:
       return std::make_unique<GtkUiPlatformWayland>();
-#endif  // BUILDFLAG(IS_OZONE_WAYLAND)
+#endif  // BUILDFLAG(SUPPORTS_OZONE_WAYLAND)
     default:
       NOTREACHED();
   }
@@ -289,6 +289,25 @@ bool IsValidSchema(ui::LinuxUiBackend backend) {
   return true;
 }
 
+std::string GetSettingsStringProperty(const char* property_name) {
+  gchar* prop_value = nullptr;
+  g_object_get(gtk_settings_get_default(), property_name, &prop_value, nullptr);
+  std::string prop_string;
+  if (prop_value) {
+    prop_string = prop_value;
+    g_free(prop_value);
+  }
+  return prop_string;
+}
+
+std::string GetIconThemeName() {
+  return GetSettingsStringProperty("gtk-icon-theme-name");
+}
+
+std::string GetThemeName() {
+  return GetSettingsStringProperty("gtk-theme-name");
+}
+
 }  // namespace
 
 GtkUi::GtkUi() : window_frame_actions_() {}
@@ -346,6 +365,15 @@ bool GtkUi::Initialize() {
   };
 
   GtkSettings* settings = gtk_settings_get_default();
+  SanitizeIconThemeName();
+  SanitizeThemeName();
+  InstallGtkSettingsInterceptor();
+
+  if (!GtkCheckVersion(4)) {
+    SanitizeKeyThemeName();
+    connect(settings, "notify::gtk-key-theme-name",
+            &GtkUi::OnKeyThemeNameChanged);
+  }
   connect(settings, "notify::gtk-theme-name", &GtkUi::OnThemeChanged);
   connect(settings, "notify::gtk-icon-theme-name", &GtkUi::OnThemeChanged);
   connect(settings, "notify::gtk-application-prefer-dark-theme",
@@ -496,6 +524,11 @@ void GtkUi::GetInactiveSelectionFgColor(SkColor* color) const {
 gfx::Image GtkUi::GetIconForContentType(const std::string& content_type,
                                         int dip_size,
                                         float scale) const {
+  if (!IsValidThemeName(ThemeProperty::kIconThemeName,
+                        GetIconThemeName().c_str())) {
+    return gfx::Image();
+  }
+
   // This call doesn't take a reference.
   GtkIconTheme* theme = GetDefaultIconTheme();
 
@@ -658,9 +691,20 @@ void GtkUi::SetDarkTheme(bool dark) {
   // notify::gtk-application-prefer-dark-theme handler to update the colors.
 }
 
+void GtkUi::SetColorScheme(std::optional<bool> prefer_dark) {
+  // Route the color scheme through the OS settings provider, which sources the
+  // web `NativeTheme::preferred_color_scheme()` via
+  // `UpdateVariablesForToolkitSettings()`.
+  os_settings_provider_->SetColorScheme(prefer_dark);
+}
+
 void GtkUi::SetAccentColor(std::optional<SkColor> accent_color) {
   accent_color_ = accent_color;
-  native_theme_->NotifyOnNativeThemeUpdated();
+  // Route the accent color through the OS settings provider. This updates
+  // `NativeTheme::user_color()` (via `UpdateVariablesForToolkitSettings()`) and
+  // notifies all observing native themes, which re-runs the native color mixer
+  // using the freshly-set `accent_color_`.
+  os_settings_provider_->SetAccentColor(accent_color);
 }
 
 bool GtkUi::AnimationsEnabled() const {
@@ -680,17 +724,20 @@ void GtkUi::RemoveWindowButtonOrderObserver(
   window_button_order_observer_list_.RemoveObserver(observer);
 }
 
-std::unique_ptr<ui::NavButtonProvider> GtkUi::CreateNavButtonProvider() {
-  return std::make_unique<gtk::NavButtonProviderGtk>();
+std::unique_ptr<ui::NavButtonProvider> GtkUi::CreateNavButtonProvider(
+    ui::FrameType type) {
+  return std::make_unique<gtk::NavButtonProviderGtk>(type);
 }
 
-ui::WindowFrameProvider* GtkUi::GetWindowFrameProvider(bool solid_frame,
+ui::WindowFrameProvider* GtkUi::GetWindowFrameProvider(ui::FrameType type,
+                                                       bool solid_frame,
                                                        bool tiled,
                                                        bool maximized) {
-  auto& provider = frame_providers_[solid_frame][tiled][maximized];
+  auto& provider =
+      frame_providers_[static_cast<int>(type)][solid_frame][tiled][maximized];
   if (!provider) {
-    provider = std::make_unique<gtk::WindowFrameProviderGtk>(solid_frame, tiled,
-                                                             maximized);
+    provider = std::make_unique<gtk::WindowFrameProviderGtk>(type, solid_frame,
+                                                             tiled, maximized);
   }
   return provider.get();
 }
@@ -770,6 +817,47 @@ std::string GtkUi::GetCursorThemeName() {
   return theme_string;
 }
 
+bool GtkUi::SanitizeIconThemeName() {
+  std::string theme = GetIconThemeName();
+  if (!IsValidThemeName(ThemeProperty::kIconThemeName, theme.c_str())) {
+    g_object_set(gtk_settings_get_default(), "gtk-icon-theme-name", "hicolor",
+                 nullptr);
+    return true;
+  }
+  return false;
+}
+
+bool GtkUi::SanitizeThemeName() {
+  std::string theme = GetThemeName();
+  if (!IsValidThemeName(ThemeProperty::kThemeName, theme.c_str())) {
+    g_object_set(gtk_settings_get_default(), "gtk-theme-name", "Adwaita",
+                 nullptr);
+    return true;
+  }
+  return false;
+}
+
+bool GtkUi::SanitizeKeyThemeName() {
+  gchar* name = nullptr;
+  g_object_get(gtk_settings_get_default(), "gtk-key-theme-name", &name,
+               nullptr);
+  std::string name_str;
+  if (name) {
+    name_str = name;
+    g_free(name);
+  }
+  if (!IsValidThemeName(ThemeProperty::kKeyThemeName, name_str.c_str())) {
+    g_object_set(gtk_settings_get_default(), "gtk-key-theme-name", nullptr,
+                 nullptr);
+    return true;
+  }
+  return false;
+}
+
+void GtkUi::OnKeyThemeNameChanged(GtkSettings* settings, GtkParamSpec* param) {
+  SanitizeKeyThemeName();
+}
+
 int GtkUi::GetCursorThemeSize() {
   gint size = 0;
   g_object_get(gtk_settings_get_default(), "gtk-cursor-theme-size", &size,
@@ -820,6 +908,9 @@ gfx::Size GtkUi::GetPdfPaperSize(printing::PrintingContextLinux* context) {
 #endif
 
 void GtkUi::OnThemeChanged(GtkSettings* settings, GtkParamSpec* param) {
+  if (SanitizeIconThemeName() || SanitizeThemeName()) {
+    return;  // Exit early; modifying the setting re-triggered this function
+  }
   colors_.clear();
   custom_frame_colors_.clear();
   native_frame_colors_.clear();
@@ -851,7 +942,7 @@ void GtkUi::OnCursorThemeSizeChanged(GtkSettings* settings,
 
 void GtkUi::OnEnableAnimationsChanged(GtkSettings* settings,
                                       GtkParamSpec* param) {
-  gfx::Animation::UpdatePrefersReducedMotion();
+  NotifyAnimationsEnabledChanged();
 }
 
 void GtkUi::OnPrimaryPasteChanged(GtkSettings* settings, GtkParamSpec* param) {
@@ -889,13 +980,13 @@ void GtkUi::OnMonitorsChanged(GListModel* list,
   std::unordered_set<GdkMonitor*> monitors;
   for (size_t i = 0; i < n_monitors; ++i) {
     auto* monitor = static_cast<GdkMonitor*>(g_list_model_get_item(list, i));
-    if (!base::Contains(monitor_signals_, monitor)) {
+    if (!monitor_signals_.contains(monitor)) {
       TrackMonitor(monitor);
     }
     monitors.insert(monitor);
   }
   std::erase_if(monitor_signals_, [&](const auto& pair) {
-    return !base::Contains(monitors, pair.first);
+    return !monitors.contains(pair.first);
   });
   UpdateDeviceScaleFactor();
 }

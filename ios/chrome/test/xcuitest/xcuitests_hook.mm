@@ -67,9 +67,11 @@ bool NeverPurgeDiscardedSessionsData() {
   return true;
 }
 
-bool LoadMinimalAppUI() {
+bool ShouldLoadMinimalAppUI() {
   return false;
 }
+
+void LoadMinimalAppUI(UIWindow* window) {}
 
 std::unique_ptr<ProfileOAuth2TokenService> GetOverriddenTokenService(
     PrefService* user_prefs,
@@ -116,11 +118,6 @@ std::unique_ptr<ShareKitService> CreateShareKitService(
 
 std::unique_ptr<password_manager::BulkLeakCheckServiceInterface>
 GetOverriddenBulkLeakCheckService() {
-  return nullptr;
-}
-
-std::unique_ptr<plus_addresses::PlusAddressService>
-GetOverriddenPlusAddressService() {
   return nullptr;
 }
 
@@ -178,6 +175,19 @@ UIImage* GetPHPickerViewControllerImage() {
 std::unique_ptr<AimEligibilityService> CreateAimEligibilityService(
     ProfileIOS* profile) {
   return nullptr;
+}
+
+std::unique_ptr<contextual_search::ContextualSearchService>
+CreateContextualSearchService(ProfileIOS* profile) {
+  return nullptr;
+}
+
+void InjectFakeTabsInBrowser(Browser* browser) {
+  // No-op for XCUITest.
+}
+
+id<ReauthenticationProtocol> GetFakeReauthenticationModule() {
+  return nil;
 }
 
 }  // namespace tests_hook

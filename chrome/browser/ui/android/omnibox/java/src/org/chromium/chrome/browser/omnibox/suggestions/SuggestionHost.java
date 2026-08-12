@@ -25,16 +25,18 @@ public interface SuggestionHost {
      * @param suggestion User-selected Suggestion.
      * @param position The position of the suggestion on the list.
      * @param url The specific URL associated with the suggestion to navigate to.
+     * @param modifiers The modifier keys pressed during click/activation (metaState).
      */
-    void onSuggestionClicked(AutocompleteMatch suggestion, int position, GURL url);
+    void onSuggestionClicked(AutocompleteMatch suggestion, int position, GURL url, int modifiers);
 
     /**
      * Triggered when the user touches down on a suggestion. Only called for search suggestions.
      *
      * @param suggestion Touch-downed Suggestion.
      * @param position The position of the suggestion on the list.
+     * @param eventTime Uptime of the touch down event in milliseconds.
      */
-    void onSuggestionTouchDown(AutocompleteMatch suggestion, int position);
+    void onSuggestionTouchDown(AutocompleteMatch suggestion, int position, long eventTime);
 
     /**
      * Triggered when the user clicks one of the OmniboxActions attached to Suggestion.
@@ -83,6 +85,13 @@ public interface SuggestionHost {
      * @param text The text to be displayed in the Omnibox.
      */
     void setOmniboxEditingText(String text);
+
+    /**
+     * Triggered when the user focuses the omnibox suggestion via keyboard.
+     *
+     * @param suggestion Focused Suggestion.
+     */
+    void onSuggestionFocused(AutocompleteMatch suggestion);
 
     /** Clear focus, close the suggestions list and complete the interaction with the Omnibox. */
     void finishInteraction();

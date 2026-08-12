@@ -23,6 +23,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/support_tool/data_collector.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "components/account_id/account_id.h"
 #include "components/feedback/redaction_tool/pii_types.h"
@@ -39,7 +40,7 @@ const std::set<redaction::PIIType> kExpectedPIITypes = {
     redaction::PIIType::kEmail, redaction::PIIType::kURL,
     redaction::PIIType::kGaiaID};
 
-void ReadExportedFile(base::Value::Dict* signin, base::FilePath file_path) {
+void ReadExportedFile(base::DictValue* signin, base::FilePath file_path) {
   base::ScopedAllowBlockingForTesting allow_blocking;
   std::string file_contents;
   ASSERT_TRUE(base::ReadFileToString(file_path, &file_contents));
@@ -69,7 +70,7 @@ class SigninDataCollectorBrowserTestAsh
         base::ThreadPool::CreateSequencedTaskRunner({});
     redaction_tool_container_ =
         base::MakeRefCounted<redaction::RedactionToolContainer>(
-            task_runner_for_redaction_tool_, nullptr);
+            task_runner_for_redaction_tool_);
 
     logged_in_user_mixin_.LogInUser();
   }
@@ -136,19 +137,22 @@ IN_PROC_BROWSER_TEST_F(SigninDataCollectorBrowserTestAsh, CollectSigninStatus) {
   EXPECT_EQ(error, std::nullopt);
 
   // Review the file contents.
-  base::Value::Dict json_result;
+  base::DictValue json_result;
   ASSERT_NO_FATAL_FAILURE(ReadExportedFile(&json_result, output_file));
   EXPECT_FALSE(json_result.empty());
 }
 
 IN_PROC_BROWSER_TEST_F(SigninDataCollectorBrowserTestAsh, FailInIncognitoMode) {
   // Create incognito browser for testing.
-  Browser* incognito_browser = Browser::Create(Browser::CreateParams(
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
-      true));
+  Browser* incognito_browser =
+      CreateBrowserWindow(BrowserWindowCreateParams(
+                              browser()->GetProfile()->GetPrimaryOTRProfile(
+                                  /*create_if_needed=*/true),
+                              /*from_user_gesture=*/true))
+          ->GetBrowserForMigrationOnly();
 
   // `SigninDataCollector` for testing.
-  SigninDataCollector data_collector(incognito_browser->profile());
+  SigninDataCollector data_collector(incognito_browser->GetProfile());
 
   // Attempt to collect sign-in data and verify that an error is returned.
   base::test::TestFuture<std::optional<SupportToolError>>

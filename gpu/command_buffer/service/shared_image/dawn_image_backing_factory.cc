@@ -22,19 +22,11 @@ DawnImageBackingFactory::~DawnImageBackingFactory() = default;
 
 std::unique_ptr<SharedImageBacking> DawnImageBackingFactory::CreateSharedImage(
     const Mailbox& mailbox,
-    viz::SharedImageFormat format,
+    const SharedImageInfo& si_info,
     SurfaceHandle surface_handle,
-    const gfx::Size& size,
-    const gfx::ColorSpace& color_space,
-    GrSurfaceOrigin surface_origin,
-    SkAlphaType alpha_type,
-    SharedImageUsageSet usage,
-    std::string debug_label,
     bool is_thread_safe) {
   DCHECK(!is_thread_safe);
-  return std::make_unique<DawnImageBacking>(mailbox, format, size, color_space,
-                                            surface_origin, alpha_type, usage,
-                                            std::move(debug_label));
+  return std::make_unique<DawnImageBacking>(mailbox, si_info);
 }
 
 bool DawnImageBackingFactory::IsSupported(
@@ -54,6 +46,15 @@ bool DawnImageBackingFactory::IsSupported(
 
 SharedImageBackingType DawnImageBackingFactory::GetBackingType() {
   return SharedImageBackingType::kDawn;
+}
+
+bool DawnImageBackingFactory::IsSupportedForAccessStream(
+    SharedImageAccessStream stream,
+    viz::SharedImageFormat format,
+    const AccessParams* params) const {
+  AccessParams default_params;
+  return DawnImageBacking::CheckSupportForAccessStream(
+      stream, params ? *params : default_params, /*backing_device=*/{});
 }
 
 }  // namespace gpu

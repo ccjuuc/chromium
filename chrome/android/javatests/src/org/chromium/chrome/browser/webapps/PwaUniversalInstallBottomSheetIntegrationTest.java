@@ -34,8 +34,11 @@ import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
@@ -46,8 +49,10 @@ import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerProvider;
 import org.chromium.components.webapps.AppType;
 import org.chromium.components.webapps.R;
+import org.chromium.components.webapps.WebappsFeatureMap;
 import org.chromium.components.webapps.pwa_universal_install.PwaUniversalInstallBottomSheetCoordinator;
 import org.chromium.net.test.EmbeddedTestServer;
+import org.chromium.ui.base.DeviceFormFactor;
 
 /** Test the showing of the PWA Universal Install Bottom Sheet dialog. */
 @RunWith(ChromeJUnit4ClassRunner.class)
@@ -414,6 +419,7 @@ public class PwaUniversalInstallBottomSheetIntegrationTest {
     @Feature({"PwaUniversalInstall"})
     // This test makes sure that clicking the install arrow (or the install text) does not trigger
     // an install for a site that doesn't support install (but creating a shortcut works).
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287863
     public void testCallbackDisabledIfInstallDisabledAfterTimeout() throws Exception {
         HistogramWatcher watcher =
                 HistogramWatcher.newBuilder()
@@ -447,13 +453,42 @@ public class PwaUniversalInstallBottomSheetIntegrationTest {
     @Test
     @SmallTest
     @Feature({"PwaUniversalInstall"})
+    @DisableFeatures({WebappsFeatureMap.ALWAYS_SHOW_INSTALL_DISAMBIGUATION_DIALOG})
     // Test that our dialog does not show if web app type of Shortcut becomes known before opening.
     public void testTypeShortcutSkipsDialog() throws Exception {
         HistogramWatcher watcher =
                 HistogramWatcher.newBuilder()
                         .expectNoRecords(HISTOGRAM_TIMOUT_WITH_APP_TYPE)
                         .expectNoRecords(HISTOGRAM_DIALOG_TYPE)
-                        .expectIntRecord(HISTOGRAM_DIALOG_ACTION, 7) // Redirect to Create Shortcut.
+                        .expectIntRecord(
+                                HISTOGRAM_DIALOG_ACTION, 7) // Redirect to shortcut creation.
+                        .expectAnyRecord(HISTOGRAM_FETCH_TIME_SHORTCUT)
+                        .build();
+
+        int currentCallCount = mOnAddShortcutCallback.getCallCount();
+        showPwaUniversalInstallBottomSheet(
+                /* showBeforeAppTypeKnown= */ false, /* webAppAlreadyInstalled= */ false);
+        assertDialogShowing(false);
+
+        Pair<Bitmap, Boolean> testIcon = constructTestIconData();
+        simulateAppCheckComplete(AppType.SHORTCUT, testIcon.first, testIcon.second);
+        assertDialogShowing(false);
+        mOnAddShortcutCallback.waitForCallback("Shortcut event not signaled", currentCallCount);
+
+        watcher.assertExpected();
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"PwaUniversalInstall"})
+    @EnableFeatures({WebappsFeatureMap.ALWAYS_SHOW_INSTALL_DISAMBIGUATION_DIALOG})
+    // Test that our dialog does show if web app type of Shortcut becomes known before opening.
+    public void testTypeShortcutShowsDialog_flagEnabled() throws Exception {
+        HistogramWatcher watcher =
+                HistogramWatcher.newBuilder()
+                        .expectNoRecords(HISTOGRAM_TIMOUT_WITH_APP_TYPE)
+                        .expectIntRecord(HISTOGRAM_DIALOG_TYPE, AppType.SHORTCUT)
+                        .expectIntRecord(HISTOGRAM_DIALOG_ACTION, 0) // Dialog shown.
                         .expectAnyRecord(HISTOGRAM_FETCH_TIME_SHORTCUT)
                         .build();
 
@@ -461,11 +496,9 @@ public class PwaUniversalInstallBottomSheetIntegrationTest {
                 /* showBeforeAppTypeKnown= */ false, /* webAppAlreadyInstalled= */ false);
         assertDialogShowing(false);
 
-        int currentCallCount = mOnOpenAppCallback.getCallCount();
         Pair<Bitmap, Boolean> testIcon = constructTestIconData();
         simulateAppCheckComplete(AppType.SHORTCUT, testIcon.first, testIcon.second);
-        mOnAddShortcutCallback.waitForCallback("Add Shortcut event not signaled", currentCallCount);
-        assertDialogShowing(false);
+        assertDialogShowing(true);
 
         watcher.assertExpected();
     }
@@ -521,14 +554,48 @@ public class PwaUniversalInstallBottomSheetIntegrationTest {
     @Test
     @SmallTest
     @Feature({"PwaUniversalInstall"})
-    // Test that our dialog does not show if web app type of WebApk becomes known before opening
-    // when we are on the root of the domain.
+    @DisableFeatures({WebappsFeatureMap.ALWAYS_SHOW_INSTALL_DISAMBIGUATION_DIALOG})
+    // Test that our dialog does not show for WebApk when on the root of the domain when flag is
+    // disabled.
     public void testTypeCraftedWebAppSkipsDialogOnRoot() throws Exception {
         HistogramWatcher watcher =
                 HistogramWatcher.newBuilder()
                         .expectNoRecords(HISTOGRAM_TIMOUT_WITH_APP_TYPE)
                         .expectNoRecords(HISTOGRAM_DIALOG_TYPE)
-                        .expectIntRecord(HISTOGRAM_DIALOG_ACTION, 8) // Redirect to Install App.
+                        .expectIntRecord(HISTOGRAM_DIALOG_ACTION, 8) // Redirect to install app.
+                        .expectAnyRecord(HISTOGRAM_FETCH_TIME_WEBAPK)
+                        .build();
+
+        // Navigate to the root of the test server.
+        EmbeddedTestServer testServer =
+                EmbeddedTestServer.createAndStartServer(
+                        ApplicationProvider.getApplicationContext());
+        mActivityTestRule.loadUrl(testServer.getURL("/"));
+
+        int currentCallCount = mOnInstallCallback.getCallCount();
+        showPwaUniversalInstallBottomSheet(
+                /* showBeforeAppTypeKnown= */ false, /* webAppAlreadyInstalled= */ false);
+        assertDialogShowing(false);
+
+        Pair<Bitmap, Boolean> testIcon = constructTestIconData();
+        simulateAppCheckComplete(AppType.WEBAPK, testIcon.first, testIcon.second);
+        assertDialogShowing(false);
+        mOnInstallCallback.waitForCallback("Install event not signaled", currentCallCount);
+
+        watcher.assertExpected();
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"PwaUniversalInstall"})
+    @EnableFeatures({WebappsFeatureMap.ALWAYS_SHOW_INSTALL_DISAMBIGUATION_DIALOG})
+    // Test that our dialog does show for WebApk even when on the root of the domain.
+    public void testTypeCraftedWebAppShowsDialogOnRoot() throws Exception {
+        HistogramWatcher watcher =
+                HistogramWatcher.newBuilder()
+                        .expectNoRecords(HISTOGRAM_TIMOUT_WITH_APP_TYPE)
+                        .expectIntRecord(HISTOGRAM_DIALOG_TYPE, AppType.WEBAPK)
+                        .expectIntRecord(HISTOGRAM_DIALOG_ACTION, 0) // Dialog shown.
                         .expectAnyRecord(HISTOGRAM_FETCH_TIME_WEBAPK)
                         .build();
 
@@ -542,11 +609,9 @@ public class PwaUniversalInstallBottomSheetIntegrationTest {
                 /* showBeforeAppTypeKnown= */ false, /* webAppAlreadyInstalled= */ false);
         assertDialogShowing(false);
 
-        int currentCallCount = mOnOpenAppCallback.getCallCount();
         Pair<Bitmap, Boolean> testIcon = constructTestIconData();
         simulateAppCheckComplete(AppType.WEBAPK, testIcon.first, testIcon.second);
-        mOnInstallCallback.waitForCallback("Install App event not signaled", currentCallCount);
-        assertDialogShowing(false);
+        assertDialogShowing(true);
 
         watcher.assertExpected();
     }
@@ -554,14 +619,48 @@ public class PwaUniversalInstallBottomSheetIntegrationTest {
     @Test
     @SmallTest
     @Feature({"PwaUniversalInstall"})
-    // Test that our dialog does not show if web app type of homebrew webapp becomes known before
-    // opening, when we are on the root of the domain.
+    @DisableFeatures({WebappsFeatureMap.ALWAYS_SHOW_INSTALL_DISAMBIGUATION_DIALOG})
+    // Test that our dialog does not show for homebrew webapp when on the root of the domain when
+    // flag is disabled.
     public void testTypeHomebrewWebAppSkipsDialogOnRoot() throws Exception {
         HistogramWatcher watcher =
                 HistogramWatcher.newBuilder()
                         .expectNoRecords(HISTOGRAM_TIMOUT_WITH_APP_TYPE)
                         .expectNoRecords(HISTOGRAM_DIALOG_TYPE)
-                        .expectIntRecord(HISTOGRAM_DIALOG_ACTION, 9) // Redirect (homebrew app).
+                        .expectIntRecord(HISTOGRAM_DIALOG_ACTION, 9) // Redirect to install DIY app.
+                        .expectAnyRecord(HISTOGRAM_FETCH_TIME_HOMEBREW)
+                        .build();
+
+        // Navigate to the root of the test server.
+        EmbeddedTestServer testServer =
+                EmbeddedTestServer.createAndStartServer(
+                        ApplicationProvider.getApplicationContext());
+        mActivityTestRule.loadUrl(testServer.getURL("/"));
+
+        int currentCallCount = mOnInstallCallback.getCallCount();
+        showPwaUniversalInstallBottomSheet(
+                /* showBeforeAppTypeKnown= */ false, /* webAppAlreadyInstalled= */ false);
+        assertDialogShowing(false);
+
+        Pair<Bitmap, Boolean> testIcon = constructTestIconData();
+        simulateAppCheckComplete(AppType.WEBAPK_DIY, testIcon.first, testIcon.second);
+        assertDialogShowing(false);
+        mOnInstallCallback.waitForCallback("Install event not signaled", currentCallCount);
+
+        watcher.assertExpected();
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"PwaUniversalInstall"})
+    @EnableFeatures({WebappsFeatureMap.ALWAYS_SHOW_INSTALL_DISAMBIGUATION_DIALOG})
+    // Test that our dialog does show for homebrew webapp even when on the root of the domain.
+    public void testTypeHomebrewWebAppShowsDialogOnRoot() throws Exception {
+        HistogramWatcher watcher =
+                HistogramWatcher.newBuilder()
+                        .expectNoRecords(HISTOGRAM_TIMOUT_WITH_APP_TYPE)
+                        .expectIntRecord(HISTOGRAM_DIALOG_TYPE, AppType.WEBAPK_DIY)
+                        .expectIntRecord(HISTOGRAM_DIALOG_ACTION, 0) // Dialog shown.
                         .expectAnyRecord(HISTOGRAM_FETCH_TIME_HOMEBREW)
                         .build();
 
@@ -575,20 +674,19 @@ public class PwaUniversalInstallBottomSheetIntegrationTest {
                 /* showBeforeAppTypeKnown= */ false, /* webAppAlreadyInstalled= */ false);
         assertDialogShowing(false);
 
-        int currentCallCount = mOnOpenAppCallback.getCallCount();
         Pair<Bitmap, Boolean> testIcon = constructTestIconData();
         simulateAppCheckComplete(AppType.WEBAPK_DIY, testIcon.first, testIcon.second);
-        mOnInstallCallback.waitForCallback("Install App event not signaled", currentCallCount);
-        assertDialogShowing(false);
+        assertDialogShowing(true);
 
         watcher.assertExpected();
     }
 
     private void assertDialogShowing(boolean expectShowing) {
+        String dialogTitle = "Install and create shortcut";
         if (expectShowing) {
-            onViewWaiting(withText("Add to home screen")).check(matches(isDisplayed()));
+            onViewWaiting(withText(dialogTitle)).check(matches(isDisplayed()));
         } else {
-            onView(withText("Add to home screen")).check(doesNotExist());
+            onView(withText(dialogTitle)).check(doesNotExist());
         }
     }
 }

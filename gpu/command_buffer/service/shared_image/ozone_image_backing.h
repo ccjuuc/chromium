@@ -14,6 +14,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/common/mailbox.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/memory_tracking.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
@@ -41,13 +42,7 @@ class GPU_GLES2_EXPORT OzoneImageBacking final
  public:
   OzoneImageBacking(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label,
+      const SharedImageInfo& si_info,
       scoped_refptr<SharedContextState> context_state,
       scoped_refptr<gfx::NativePixmap> pixmap,
       const GpuDriverBugWorkarounds& workarounds,
@@ -62,6 +57,7 @@ class GPU_GLES2_EXPORT OzoneImageBacking final
   SharedImageBackingType GetType() const override;
   void Update(std::unique_ptr<gfx::GpuFence> in_fence) override;
   bool UploadFromMemory(const std::vector<SkPixmap>& pixmaps) override;
+  bool ReadbackToMemory(const std::vector<SkPixmap>& pixmaps) override;
   scoped_refptr<gfx::NativePixmap> GetNativePixmap() override;
   gfx::GpuMemoryBufferHandle GetGpuMemoryBufferHandle() override;
   bool IsImportedFromExo() override;
@@ -151,6 +147,7 @@ class GPU_GLES2_EXPORT OzoneImageBacking final
 
 #if BUILDFLAG(USE_DAWN)
   bool UploadFromMemoryGraphite(const std::vector<SkPixmap>& pixmaps);
+  bool ReadbackToMemoryGraphite(const std::vector<SkPixmap>& pixmaps);
 #endif  // BUILDFLAG(USE_DAWN)
 
   uint32_t reads_in_progress_ = 0;

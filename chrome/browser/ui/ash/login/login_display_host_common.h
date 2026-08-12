@@ -11,7 +11,8 @@
 #include <vector>
 
 #include "ash/public/cpp/login_accelerators.h"
-#include "base/callback_list.h"
+#include "base/memory/raw_ref.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ash/browser_delegate/browser_controller.h"
 #include "chrome/browser/ash/login/oobe_quick_start/target_device_bootstrap_controller.h"
@@ -20,10 +21,21 @@
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/ash/login/login_ui_pref_controller.h"
 #include "chrome/browser/ui/ash/login/signin_ui.h"
+#include "chromeos/ash/components/login/session/session_termination_manager.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
 #include "components/user_manager/user_type.h"
 
 class AccountId;
+class ApplicationLocaleStorage;
+class PrefService;
+
+namespace network {
+class SharedURLLoaderFactory;
+}  // namespace network
+
+namespace policy {
+class BrowserPolicyConnectorAsh;
+}  // namespace policy
 
 namespace ash {
 
@@ -36,9 +48,18 @@ class OobeCrosEventsMetrics;
 // LoginDisplayHostMojo and LoginDisplayHostWebUI.
 class LoginDisplayHostCommon : public LoginDisplayHost,
                                public BrowserController::Observer,
-                               public SigninUI {
+                               public SigninUI,
+                               public ash::SessionTerminationManager::Observer {
  public:
-  explicit LoginDisplayHostCommon(bool update_geolocation_usage_allowed);
+  // `local_state`, `application_locale_storage` and
+  // `browser_policy_connector_ash` must be non-null and must outlive `this`.
+  // `shared_url_loader_factory` must be non-null.
+  LoginDisplayHostCommon(
+      PrefService* local_state,
+      ApplicationLocaleStorage* application_locale_storage,
+      scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+      policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
+      bool update_geolocation_usage_allowed);
 
   LoginDisplayHostCommon(const LoginDisplayHostCommon&) = delete;
   LoginDisplayHostCommon& operator=(const LoginDisplayHostCommon&) = delete;
@@ -87,17 +108,22 @@ class LoginDisplayHostCommon : public LoginDisplayHost,
   void ShowSigninError(SigninError error, const std::string& details) final;
   void ShowOobeNotCompletedError() final;
 
+  // TODO: b/481969867 - Remove after managed local pin and password flag is
+  // enabled.
   void SAMLConfirmPassword(::login::StringList scraped_passwords,
                            std::unique_ptr<UserContext> user_context) final;
+  void ShowSamlConfirmPassword(std::unique_ptr<UserContext> user_context) final;
   void ShowPasswordSelectionScreen() final;
+  void ShowRemoveLocalAuthFactorsScreen() final;
   WizardContext* GetWizardContextForTesting() final;
 
   // BrowserController::Observer:
   void OnBrowserCreated(BrowserDelegate* browser) override;
-
   WizardContext* GetWizardContext() override;
-
   OobeMetricsHelper* GetOobeMetricsHelper() override;
+
+  // ash::SessionTerminationManager::Observer:
+  void OnAppTerminating() override;
 
  protected:
   virtual void OnStartSignInScreen() = 0;
@@ -122,6 +148,13 @@ class LoginDisplayHostCommon : public LoginDisplayHost,
   // Triggers |on_wizard_controller_created_for_tests_| callback.
   void NotifyWizardCreated();
 
+  const raw_ref<PrefService> local_state_;
+  const raw_ref<ApplicationLocaleStorage> application_locale_storage_;
+  const scoped_refptr<network::SharedURLLoaderFactory>
+      shared_url_loader_factory_;
+  const raw_ref<policy::BrowserPolicyConnectorAsh>
+      browser_policy_connector_ash_;
+
  private:
   void Cleanup();
   // Set screen, from which WC flow will continue after attempt to show
@@ -132,14 +165,13 @@ class LoginDisplayHostCommon : public LoginDisplayHost,
       bool is_reset_allowed,
       std::optional<tpm_firmware_update::Mode> tpm_firmware_update_mode);
 
-  void OnAppTerminating();
-
   // True if session start is in progress.
   bool session_starting_ = false;
 
   // Has ShutdownDisplayHost() already been called?  Used to avoid posting our
   // own deletion to the message loop twice if the user logs out while we're
-  // still in the process of cleaning up after login (http://crbug.com/134463).
+  // still in the process of cleaning up after login
+  // (http://crbug.com/40853076).
   bool shutting_down_ = false;
 
   // Used to make sure Finalize() is not called twice.
@@ -162,14 +194,16 @@ class LoginDisplayHostCommon : public LoginDisplayHost,
   std::unique_ptr<ash::quick_start::TargetDeviceBootstrapController>
       bootstrap_controller_;
 
-  base::CallbackListSubscription app_terminating_subscription_;
-
   std::unique_ptr<OobeMetricsHelper> oobe_metrics_helper_;
 
   std::unique_ptr<OobeCrosEventsMetrics> oobe_cros_events_metrics_;
 
   base::ScopedObservation<BrowserController, BrowserController::Observer>
       browser_controller_observation_{this};
+
+  base::ScopedObservation<ash::SessionTerminationManager,
+                          ash::SessionTerminationManager::Observer>
+      session_termination_observation_{this};
 
   base::WeakPtrFactory<LoginDisplayHostCommon> weak_factory_{this};
 };

@@ -11,7 +11,7 @@
 
 #include "base/base64.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/hash/hash.h"
 #include "base/logging.h"
@@ -220,7 +220,7 @@ bool OnDeviceTailModelExecutor::Init() {
 
 bool OnDeviceTailModelExecutor::Init(
     const base::FilePath& model_filepath,
-    const base::flat_set<base::FilePath>& additional_files,
+    const std::vector<base::FilePath>& additional_files,
     const ModelMetadata& metadata) {
   base::FilePath vocab_filepath, badword_hashes_filepath,
       bad_substrings_filepath;
@@ -228,12 +228,11 @@ bool OnDeviceTailModelExecutor::Init(
     if (!file_path.empty()) {
       std::string file_path_str =
           optimization_guide::FilePathToString(file_path);
-      if (base::Contains(file_path_str, kVocabFileNameKeyword)) {
+      if (file_path_str.contains(kVocabFileNameKeyword)) {
         vocab_filepath = file_path;
-      } else if (base::Contains(file_path_str, kBadwordHashesFileNameKeyword)) {
+      } else if (file_path_str.contains(kBadwordHashesFileNameKeyword)) {
         badword_hashes_filepath = file_path;
-      } else if (base::Contains(file_path_str,
-                                kBadSubstringDenyListFileNameKeyword)) {
+      } else if (file_path_str.contains(kBadSubstringDenyListFileNameKeyword)) {
         bad_substrings_filepath = file_path;
       }
     }
@@ -270,10 +269,10 @@ bool OnDeviceTailModelExecutor::InitModelInterpreter(
   }
   model_fb_ = std::move(model_fb);
 
+  const base::span<const uint8_t> model_data = model_fb_->bytes();
   std::unique_ptr<tflite::FlatBufferModel> model =
       tflite::FlatBufferModel::VerifyAndBuildFromBuffer(
-          reinterpret_cast<const char*>(model_fb_->data()),
-          model_fb_->length());
+          reinterpret_cast<const char*>(model_data.data()), model_data.size());
 
   if (model == nullptr) {
     DVLOG(1) << "Could not create flat buffer model for file "
@@ -426,7 +425,7 @@ bool OnDeviceTailModelExecutor::IsSuggestionBad(const std::string& suggestion) {
   }
 
   for (const std::string& substring : bad_substrings_) {
-    if (base::Contains(suggestion, substring)) {
+    if (suggestion.contains(substring)) {
       return true;
     }
   }
@@ -438,7 +437,7 @@ bool OnDeviceTailModelExecutor::IsSuggestionBad(const std::string& suggestion) {
 
     for (const std::string& word : words) {
       auto hash_value = base::PersistentHash(word);
-      if (base::Contains(badword_hashes_, hash_value)) {
+      if (badword_hashes_.contains(hash_value)) {
         return true;
       }
     }

@@ -4,36 +4,38 @@
 
 package org.chromium.chrome.browser.media.ui;
 
-import static org.chromium.base.test.util.Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE;
-
 import android.content.Context;
 import android.media.AudioManager;
 
 import androidx.test.filters.SmallTest;
 
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
-import org.chromium.base.test.util.Restriction;
+import org.chromium.base.test.util.DisableIf;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.components.browser_ui.media.MediaNotificationManager;
 import org.chromium.content_public.browser.test.util.DOMUtils;
 import org.chromium.content_public.browser.test.util.JavaScriptUtils;
+import org.chromium.ui.base.DeviceFormFactor;
 
 /**
  * Integration test that checks that autoplay muted doesn't show a notification nor take audio focus
  */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@Batch(Batch.PER_CLASS)
 public class AutoplayMutedNotificationTest {
     @Rule
     public FreshCtaTransitTestRule mActivityTestRule =
@@ -54,7 +56,9 @@ public class AutoplayMutedNotificationTest {
     }
 
     private boolean isMediaNotificationVisible() {
-        return MediaNotificationManager.getController(R.id.media_playback_notification) != null;
+        return MediaNotificationManager.getActiveOrFallbackControllerByMediaTypeId(
+                        R.id.media_playback_notification)
+                != null;
     }
 
     private class MockAudioFocusChangeListener implements AudioManager.OnAudioFocusChangeListener {
@@ -88,9 +92,16 @@ public class AutoplayMutedNotificationTest {
         mActivityTestRule.startOnTestServerUrl(TEST_PATH);
     }
 
+    @After
+    public void tearDown() {
+        if (mAudioFocusChangeListener != null) {
+            getAudioManager().abandonAudioFocus(mAudioFocusChangeListener);
+        }
+        MediaNotificationManager.resetForTesting();
+    }
+
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testBasic() throws Exception {
         Tab tab = mActivityTestRule.getActivityTab();
 
@@ -115,7 +126,6 @@ public class AutoplayMutedNotificationTest {
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testDoesNotReactToAudioFocus() throws Exception {
         Tab tab = mActivityTestRule.getActivityTab();
 
@@ -141,7 +151,6 @@ public class AutoplayMutedNotificationTest {
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testAutoplayMutedThenUnmute() throws Exception {
         Tab tab = mActivityTestRule.getActivityTab();
 
@@ -182,7 +191,7 @@ public class AutoplayMutedNotificationTest {
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/481443731
     public void testMutedPlaybackDoesNotTakeAudioFocus() throws Exception {
         Tab tab = mActivityTestRule.getActivityTab();
 
@@ -202,7 +211,7 @@ public class AutoplayMutedNotificationTest {
         DOMUtils.pauseMedia(tab.getWebContents(), VIDEO_ID);
 
         // Restart the video with a gesture: no longer "muted autoplay".
-        DOMUtils.clickNode(tab.getWebContents(), PLAY_BUTTON_ID);
+        DOMUtils.clickNodeWithJavaScript(tab.getWebContents(), PLAY_BUTTON_ID);
         DOMUtils.waitForMediaPlay(tab.getWebContents(), VIDEO_ID);
 
         // Audio focus was not taken and no notification is visible.
@@ -213,7 +222,7 @@ public class AutoplayMutedNotificationTest {
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/481443731
     public void testUnmutedPlaybackTakesAudioFocus() throws Exception {
         Tab tab = mActivityTestRule.getActivityTab();
 
@@ -231,7 +240,7 @@ public class AutoplayMutedNotificationTest {
         Thread.sleep(AUDIO_FOCUS_CHANGE_TIMEOUT);
 
         // Restart the video with a gesture: no longer "muted autoplay".
-        DOMUtils.clickNode(tab.getWebContents(), UNMUTE_BUTTON_ID);
+        DOMUtils.clickNodeWithJavaScript(tab.getWebContents(), UNMUTE_BUTTON_ID);
         Assert.assertFalse(DOMUtils.isMediaPaused(tab.getWebContents(), VIDEO_ID));
 
         Thread.sleep(AUDIO_FOCUS_CHANGE_TIMEOUT);

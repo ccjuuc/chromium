@@ -12,6 +12,7 @@ import '/strings.m.js';
 import './command_manager.js';
 import './toolbar.js';
 
+import {ColorChangeUpdater, COLORS_CSS_SELECTOR} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
 import {getInstance as getAnnouncerInstance} from 'chrome://resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import type {CrSplitterElement} from 'chrome://resources/cr_elements/cr_splitter/cr_splitter.js';
 import {FindShortcutMixinLit} from 'chrome://resources/cr_elements/find_shortcut_mixin_lit.js';
@@ -26,13 +27,13 @@ import {destroy as destroyApiListener, init as initApiListener} from './api_list
 import {getCss} from './app.css.js';
 import {getHtml} from './app.html.js';
 import {BookmarksApiProxyImpl} from './bookmarks_api_proxy.js';
-import {ACCOUNT_HEADING_NODE_ID, LOCAL_STORAGE_FOLDER_STATE_KEY, LOCAL_STORAGE_TREE_WIDTH_KEY, ROOT_NODE_ID} from './constants.js';
+import {LOCAL_STORAGE_FOLDER_STATE_KEY, LOCAL_STORAGE_TREE_WIDTH_KEY} from './constants.js';
 import {DndManager} from './dnd_manager.js';
 import {BookmarksRouter} from './router.js';
 import {Store} from './store.js';
 import {StoreClientMixinLit} from './store_client_mixin_lit.js';
 import type {BookmarksPageState, FolderOpenState} from './types.js';
-import {createEmptyState, normalizeNodes} from './util.js';
+import {createEmptyState, getDefaultSelectedFolder} from './util.js';
 
 export const HIDE_FOCUS_RING_ATTRIBUTE = 'hide-focus-ring';
 
@@ -95,6 +96,12 @@ export class BookmarksAppElement extends BookmarksAppElementBase {
   override connectedCallback() {
     super.connectedCallback();
 
+    const enableWebuiRefresh2026 =
+        loadTimeData.getString('webuiRefresh2026') !== '';
+    if (enableWebuiRefresh2026) {
+      this.addThemedColors_();
+      ColorChangeUpdater.forDocument().start();
+    }
     document.documentElement.classList.remove('loading');
 
     // These events are added to the document because capture doesn't work
@@ -111,25 +118,11 @@ export class BookmarksAppElement extends BookmarksAppElementBase {
 
     this.updateFromStore();
 
-    BookmarksApiProxyImpl.getInstance().getTree().then((results) => {
-      const nodeMap = normalizeNodes(results[0]!);
+    BookmarksApiProxyImpl.getInstance().getTree().then((nodeMap) => {
       const initialState = createEmptyState();
       initialState.nodes = nodeMap;
 
-      // Select the account bookmarks bar if it exists. If not, do not set the
-      // initial state so that the default is selected instead.
-      const selectedFolderParent =
-          nodeMap[ACCOUNT_HEADING_NODE_ID] || nodeMap[ROOT_NODE_ID];
-      assert(selectedFolderParent && selectedFolderParent.children);
-
-      for (const id of selectedFolderParent.children) {
-        if (nodeMap[id]!.folderType! ===
-                chrome.bookmarks.FolderType.BOOKMARKS_BAR &&
-            nodeMap[id]!.syncing) {
-          initialState.selectedFolder = id;
-          break;
-        }
-      }
+      initialState.selectedFolder = getDefaultSelectedFolder(nodeMap);
 
       const folderStateString =
           window.localStorage[LOCAL_STORAGE_FOLDER_STATE_KEY];
@@ -281,6 +274,14 @@ export class BookmarksAppElement extends BookmarksAppElementBase {
 
   getDndManagerForTesting(): DndManager|null {
     return this.dndManager_;
+  }
+
+  private addThemedColors_() {
+    assert(document.body.querySelector(COLORS_CSS_SELECTOR) === null);
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'chrome://theme/colors.css?sets=ui,chrome';
+    document.body.appendChild(link);
   }
 }
 

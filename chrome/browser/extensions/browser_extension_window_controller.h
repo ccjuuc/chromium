@@ -17,10 +17,6 @@ class BrowserWindowInterface;
 class GURL;
 class TabListInterface;
 
-#if !BUILDFLAG(IS_ANDROID)
-class BrowserWindow;
-#endif  // !BUILDFLAG(IS_ANDROID)
-
 namespace extensions {
 class Extension;
 namespace api::tabs {
@@ -51,37 +47,30 @@ class BrowserExtensionWindowController : public WindowController {
   std::string GetWindowTypeText() const override;
   void SetFullscreenMode(bool is_fullscreen,
                          const GURL& extension_url) const override;
-  bool CanClose(Reason* reason) const override;
   BrowserWindowInterface* GetBrowserWindowInterface() override;
 #if !BUILDFLAG(IS_ANDROID)
   Browser* GetBrowser() const override;
 #endif
-  bool IsDeleteScheduled() const override;
   content::WebContents* GetActiveTab() const override;
-  bool HasEditableTabStrip() const override;
   int GetTabCount() const override;
   content::WebContents* GetWebContentsAt(int i) const override;
   bool IsVisibleToTabsAPIForExtension(
       const Extension* extension,
       bool allow_dev_tools_windows) const override;
-  base::Value::Dict CreateWindowValueForExtension(
+  base::DictValue CreateWindowValueForExtension(
       const Extension* extension,
       PopulateTabBehavior populate_tab_behavior,
       mojom::ContextType context) const override;
-  base::Value::List CreateTabList(const Extension* extension,
-                                  mojom::ContextType context) const override;
+  base::ListValue CreateTabList(const Extension* extension,
+                                mojom::ContextType context) const override;
   bool OpenOptionsPage(const Extension* extension,
                        const GURL& url,
                        bool open_in_tab) override;
-  bool SupportsTabs() override;
 
  private:
   const raw_ref<BrowserWindowInterface> browser_;
   // TODO(https://crbug.com/423725749): Migrate these to cross-platform
   // concepts.
-#if !BUILDFLAG(IS_ANDROID)
-  const raw_ref<BrowserWindow> window_;
-#endif
   const raw_ref<TabListInterface> tab_list_;
   const SessionID session_id_;
   const api::tabs::WindowType window_type_;

@@ -8,6 +8,7 @@
 #include <optional>
 #include <set>
 
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "net/base/connection_endpoint_metadata.h"
@@ -29,6 +30,7 @@
 #include "net/quic/quic_endpoint.h"
 #include "net/quic/quic_session_alias_key.h"
 #include "net/quic/quic_session_attempt_request.h"
+#include "net/quic/quic_session_pool_peer.h"
 #include "net/quic/quic_session_pool_test_base.h"
 #include "net/socket/socket_tag.h"
 #include "net/socket/socket_test_util.h"
@@ -81,12 +83,14 @@ class SessionRequester {
                        proxy_chain_, session_usage_, socket_tag_,
                        network_anonymization_key_, secure_dns_policy_,
                        require_dns_https_alpn_,
-                       disable_cert_verification_network_fetches_));
+                       disable_cert_verification_network_fetches_,
+                       handles::kInvalidNetworkHandle));
     request_ = manager_->CreateRequest(key);
     int rv = request_->RequestSession(
         endpoint_, cert_verify_flags_, dns_resolution_start_time_,
-        dns_resolution_end_time_, /*use_dns_aliases=*/true, dns_aliases_,
-        session_creation_initiator_, connection_management_config_, net_log_,
+        dns_resolution_end_time_, /*dns_resolution_details=*/std::nullopt,
+        /*use_dns_aliases=*/true, dns_aliases_, session_creation_initiator_,
+        connection_management_config_, net_log_,
         base::BindOnce(&SessionRequester::OnComplete, base::Unretained(this)));
     if (rv != ERR_IO_PENDING) {
       OnComplete(rv);
@@ -416,11 +420,73 @@ TEST_P(QuicSessionAttemptManagerTest, MultipleEndpointsAllSuccess) {
   EXPECT_EQ(requester1.session(), requester2.session());
 }
 
+TEST_P(QuicSessionAttemptManagerTest, CancelDuringHandshakeClosesSession) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(net::features::kAsyncQuicSession);
+
+  InitializeWithDefaultProofVerifyDetails();
+  crypto_client_stream_factory_.set_handshake_mode(
+      MockCryptoClientStream::COLD_START);
+
+  MockQuicData socket_data(version_);
+  socket_data.AddReadPauseForever();
+  socket_data.AddSocketDataToFactory(socket_factory_.get());
+
+  SessionRequester requester = CreateRequester();
+  EXPECT_THAT(requester.Request(), IsError(ERR_IO_PENDING));
+  EXPECT_EQ(1u, QuicSessionPoolPeer::GetNumLiveSessions(pool_.get()));
+
+  requester.ResetRequest();
+
+  EXPECT_EQ(0u, QuicSessionPoolPeer::GetNumLiveSessions(pool_.get()));
+}
+
+TEST_P(QuicSessionAttemptManagerTest,
+       CancelDuringAsyncSessionCreationClosesCreatedSession) {
+  InitializeWithDefaultProofVerifyDetails();
+
+  MockConnectCompleter connect_completer;
+  MockQuicData socket_data(version_);
+  socket_data.AddConnect(&connect_completer);
+  socket_data.AddSocketDataToFactory(socket_factory_.get());
+
+  SessionRequester requester = CreateRequester();
+  EXPECT_THAT(requester.Request(), IsError(ERR_IO_PENDING));
+  EXPECT_EQ(0u, QuicSessionPoolPeer::GetNumLiveSessions(pool_.get()));
+
+  requester.ResetRequest();
+  connect_completer.Complete(OK);
+  EXPECT_TRUE(base::test::RunUntil([&] {
+    return QuicSessionPoolPeer::GetNumLiveSessions(pool_.get()) == 0u;
+  }));
+}
+
+TEST_P(QuicSessionAttemptManagerTest, DestroyPoolDuringHandshakeClosesSession) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(net::features::kAsyncQuicSession);
+
+  InitializeWithDefaultProofVerifyDetails();
+  crypto_client_stream_factory_.set_handshake_mode(
+      MockCryptoClientStream::COLD_START);
+
+  MockQuicData socket_data(version_);
+  socket_data.AddReadPauseForever();
+  socket_data.AddSocketDataToFactory(socket_factory_.get());
+
+  SessionRequester requester = CreateRequester();
+  EXPECT_THAT(requester.Request(), IsError(ERR_IO_PENDING));
+  EXPECT_EQ(1u, QuicSessionPoolPeer::GetNumLiveSessions(pool_.get()));
+
+  pool_.reset();
+
+  EXPECT_THAT(requester.WaitForResult(), IsError(ERR_ABORTED));
+}
+
 TEST_P(QuicSessionAttemptManagerTest, JobCompletesWhenAllRequestsCancelled) {
   InitializeWithDefaultProofVerifyDetails();
 
   MockQuicData socket_data(version_);
-  socket_data.AddConnect(ASYNC, ERR_IO_PENDING);
+  socket_data.AddConnect(SYNCHRONOUS, ERR_IO_PENDING);
   socket_data.AddSocketDataToFactory(socket_factory_.get());
 
   // Create multiple pending requests.
@@ -507,7 +573,7 @@ TEST_P(QuicSessionAttemptManagerTest, OnOriginFrame) {
 
   // 1. Make a request for `kDefaultServerHostName` that will be pending.
   MockQuicData socket_data1(version_);
-  socket_data1.AddConnect(ASYNC, ERR_IO_PENDING);
+  socket_data1.AddConnect(SYNCHRONOUS, ERR_IO_PENDING);
   socket_data1.AddSocketDataToFactory(socket_factory_.get());
 
   SessionRequester requester1 = CreateRequester();

@@ -2,13 +2,13 @@
   "Win10 x64 Release (NVIDIA)": {
     "gtest_tests": [
       {
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
         "module_name": "//third_party/angle/src/tests:angle_unittests",
         "module_scheme": "gtest",
         "name": "angle_unittests",
-        "retry_only_failed_tests": true,
         "swarming": {
           "containment_type": "AUTO",
           "dimensions": {
@@ -32,13 +32,13 @@
           "--use-gl=angle",
           "--use-gpu-in-tests"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
         },
         "module_name": "//gpu:gl_tests",
         "module_scheme": "gtest",
         "name": "gl_tests_passthrough",
-        "retry_only_failed_tests": true,
         "swarming": {
           "containment_type": "AUTO",
           "dimensions": {
@@ -61,6 +61,7 @@
           "--use-gpu-in-tests",
           "--git-revision=${got_revision}"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
         },
@@ -72,7 +73,6 @@
           "--gerrit-patchset=${patch_set}",
           "--buildbucket-id=${buildbucket_build_id}"
         ],
-        "retry_only_failed_tests": true,
         "swarming": {
           "containment_type": "AUTO",
           "dimensions": {
@@ -91,45 +91,15 @@
       },
       {
         "args": [
-          "--enable-gpu",
-          "--test-launcher-bot-mode",
-          "--test-launcher-jobs=1",
-          "--gtest_filter=TabCaptureApiPixelTest.EndToEnd*"
-        ],
-        "merge": {
-          "script": "//testing/merge_scripts/standard_gtest_merge.py"
-        },
-        "module_name": "//chrome/test:browser_tests",
-        "module_scheme": "gtest",
-        "name": "tab_capture_end2end_tests",
-        "retry_only_failed_tests": true,
-        "swarming": {
-          "containment_type": "AUTO",
-          "dimensions": {
-            "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
-            "pool": "chromium.tests.gpu",
-            "puppet_env": "production"
-          },
-          "hard_timeout": 1800,
-          "io_timeout": 1800,
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
-        },
-        "test": "browser_tests",
-        "test_id_prefix": "ninja://chrome/test:browser_tests/"
-      },
-      {
-        "args": [
           "--ignore-runtime-requirements=*"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
         },
         "module_name": "//chrome/test:xr_browser_tests",
         "module_scheme": "gtest",
         "name": "xr_browser_tests",
-        "retry_only_failed_tests": true,
         "swarming": {
           "containment_type": "AUTO",
           "dimensions": {
@@ -160,6 +130,7 @@
           "--enforce-browser-version",
           "--jobs=4"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -170,7 +141,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "containment_type": "AUTO",
           "dimensions": {
@@ -204,6 +174,7 @@
           "${buildername}",
           "--jobs=4"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -219,7 +190,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "containment_type": "AUTO",
           "dimensions": {
@@ -249,6 +219,7 @@
           "--enforce-browser-version",
           "--jobs=4"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -259,7 +230,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "containment_type": "AUTO",
           "dimensions": {
@@ -289,6 +259,7 @@
           "--enforce-browser-version",
           "--jobs=4"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -299,7 +270,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "containment_type": "AUTO",
           "dimensions": {
@@ -333,6 +303,7 @@
           "2184",
           "--jobs=4"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -343,7 +314,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "containment_type": "AUTO",
           "dimensions": {
@@ -377,6 +347,7 @@
           "${buildername}",
           "--jobs=1"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -392,7 +363,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "containment_type": "AUTO",
           "dimensions": {
@@ -423,6 +393,7 @@
           "--dont-restore-color-profile-after-test",
           "--jobs=4"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -433,7 +404,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "containment_type": "AUTO",
           "dimensions": {
@@ -463,6 +433,7 @@
           "--enforce-browser-version",
           "--jobs=1"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -473,7 +444,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "containment_type": "AUTO",
           "dimensions": {
@@ -505,6 +475,7 @@
           "--read-abbreviated-json-results-from=../../content/test/data/gpu/webgl1_conformance_win_runtimes.json",
           "--jobs=4"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -515,7 +486,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "containment_type": "AUTO",
           "dimensions": {

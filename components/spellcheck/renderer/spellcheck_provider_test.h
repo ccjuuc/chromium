@@ -12,6 +12,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
+#include "components/spellcheck/common/spelling_marker.h"
 #include "components/spellcheck/renderer/empty_local_interface_provider.h"
 #include "components/spellcheck/renderer/spellcheck.h"
 #include "components/spellcheck/renderer/spellcheck_provider.h"
@@ -21,7 +22,6 @@
 #include "third_party/blink/public/web/web_text_check_client.h"
 #include "third_party/blink/public/web/web_text_checking_completion.h"
 #include "third_party/blink/public/web/web_text_checking_result.h"
-#include "ui/gfx/range/range.h"
 
 struct FakeTextCheckingResult {
   size_t completion_count_ = 0;
@@ -67,6 +67,8 @@ class FakeSpellCheck : public SpellCheck {
   // Returns the current number of spell check languages with enabled engines.
   size_t EnabledLanguageCount() override;
 
+  void InitializeSpellCheckWithLanguage();
+
  private:
   bool use_fake_counts_ = false;
   size_t language_count_ = 0;
@@ -86,7 +88,7 @@ class TestingSpellCheckProvider : public SpellCheckProvider,
 
   void RequestTextChecking(
       const std::u16string& text,
-      const std::vector<gfx::Range>& spelling_markers,
+      const std::vector<spellcheck::SpellingMarker>& spelling_markers,
       blink::WebTextCheckClient::ShouldForceRefreshTextCheckService
           should_force_refresh,
       std::unique_ptr<blink::WebTextCheckingCompletion> completion);
@@ -109,14 +111,24 @@ class TestingSpellCheckProvider : public SpellCheckProvider,
 #if BUILDFLAG(USE_RENDERER_SPELLCHECKER)
   void ResetResult();
 
+  int AddCompletionForTest(
+      std::unique_ptr<FakeTextCheckingCompletion> completion);
+
+  void OnRespondSpellingService(int identifier,
+                                const std::u16string& text,
+                                bool success,
+                                const std::vector<SpellCheckResult>& results);
+
   // Variables logging CallSpellingService() mojo calls.
   std::u16string text_;
   size_t spelling_service_call_count_ = 0;
 #endif  // BUILDFLAG(USE_RENDERER_SPELLCHECKER)
 
 #if BUILDFLAG(USE_BROWSER_SPELLCHECKER)
-  using RequestTextCheckParams = std::
-      tuple<std::u16string, std::vector<gfx::Range>, RequestTextCheckCallback>;
+  using RequestTextCheckParams =
+      std::tuple<std::u16string,
+                 std::vector<spellcheck::SpellingMarker>,
+                 RequestTextCheckCallback>;
 
   // Variables logging RequestTextCheck() mojo calls.
   std::vector<RequestTextCheckParams> text_check_requests_;
@@ -140,9 +152,10 @@ class TestingSpellCheckProvider : public SpellCheckProvider,
 #endif
 
 #if BUILDFLAG(USE_BROWSER_SPELLCHECKER)
-  void RequestTextCheck(const std::u16string&,
-                        const std::vector<gfx::Range>& spelling_markers,
-                        RequestTextCheckCallback) override;
+  void RequestTextCheck(
+      const std::u16string&,
+      const std::vector<spellcheck::SpellingMarker>& spelling_markers,
+      RequestTextCheckCallback) override;
 #if BUILDFLAG(ENABLE_SPELLING_SERVICE)
   using SpellCheckProvider::CheckSpelling;
   void CheckSpelling(const std::u16string&,
@@ -170,9 +183,15 @@ class SpellCheckProviderTest : public testing::Test {
   ~SpellCheckProviderTest() override;
 
  protected:
+  void SetUp() override;
+  void TearDown() override;
+
   base::test::SingleThreadTaskEnvironment task_environment_;
   spellcheck::EmptyLocalInterfaceProvider embedder_provider_;
   TestingSpellCheckProvider provider_;
+
+  // The SpellCheckCustomDictionaryAPI feature value captured in SetUp().
+  bool custom_dictionary_api_enabled_ = false;
 };
 
 #endif  // COMPONENTS_SPELLCHECK_RENDERER_SPELLCHECK_PROVIDER_TEST_H_

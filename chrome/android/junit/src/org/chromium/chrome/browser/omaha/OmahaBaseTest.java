@@ -20,7 +20,6 @@ import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.FakeTimeTestRule;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.omaha.MockRequestGenerator.DeviceType;
 
@@ -39,13 +38,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Tests for the {@link OmahaClient}.
- * Tests override the original OmahaClient's functions with the MockOmahaClient, which
- * provides a way to hook into functions to return values that would normally be provided by the
- * system, such as whether Chrome was installed through the system image.
+ * Tests for the {@link OmahaClient}. Tests override the original OmahaClient's functions with the
+ * MockOmahaClient, which provides a way to hook into functions to return values that would normally
+ * be provided by the system, such as whether Chrome was installed through the system image.
  */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.UNIT_TESTS)
 @Config(manifest = Config.NONE)
 @SuppressWarnings("UnusedMethod")
 public class OmahaBaseTest {
@@ -75,7 +72,7 @@ public class OmahaBaseTest {
         private TimestampPair mTimestampsOnRegisterNewRequest;
         private TimestampPair mTimestampsOnSaveState;
 
-        MockOmahaDelegate(DeviceType deviceType, @InstallSource int installSource) {
+        MockOmahaDelegate(@DeviceType int deviceType, @InstallSource int installSource) {
             mIsOnTablet = deviceType == DeviceType.TABLET;
             mIsInForeground = true;
             mIsInSystemImage = installSource == InstallSource.SYSTEM_IMAGE;
@@ -184,7 +181,9 @@ public class OmahaBaseTest {
     }
 
     private MockOmahaBase createOmahaBase(
-            @ServerResponse int response, @ConnectionStatus int status, DeviceType deviceType) {
+            @ServerResponse int response,
+            @ConnectionStatus int status,
+            @DeviceType int deviceType) {
         MockOmahaBase omahaClient = new MockOmahaBase(mDelegate, response, status, deviceType);
         return omahaClient;
     }
@@ -213,7 +212,7 @@ public class OmahaBaseTest {
                 OmahaDelegate delegate,
                 @ServerResponse int serverResponse,
                 @ConnectionStatus int connectionStatus,
-                DeviceType deviceType) {
+                @DeviceType int deviceType) {
             super(delegate);
             mSendValidResponse = serverResponse == ServerResponse.SUCCESS;
             mConnectionTimesOut = connectionStatus == ConnectionStatus.TIMES_OUT;
@@ -781,10 +780,12 @@ public class OmahaBaseTest {
                 response += "<urls><url codebase=\"" + MARKET_URL + "\"/></urls>";
                 response += "<manifest version=\"" + mUpdateVersion + "\">";
                 response += "<packages>";
-                response += "<package hash=\"0\" name=\"dummy.apk\" required=\"true\" size=\"0\"/>";
+                response +=
+                        "<package hash=\"0\" name=\"placeholder.apk\" required=\"true\""
+                                + " size=\"0\"/>";
                 response += "</packages>";
                 response += "<actions>";
-                response += "<action event=\"install\" run=\"dummy.apk\"/>";
+                response += "<action event=\"install\" run=\"placeholder.apk\"/>";
                 response += "<action event=\"postinstall\"/>";
                 response += "</actions>";
                 response += "</manifest>";

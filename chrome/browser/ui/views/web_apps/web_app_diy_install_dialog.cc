@@ -12,7 +12,8 @@
 #include "chrome/browser/feature_engagement/tracker_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/url_identity.h"
 #include "chrome/browser/ui/views/controls/site_icon_text_and_origin_view.h"
 #include "chrome/browser/ui/views/web_apps/web_app_icon_name_and_origin_view.h"
@@ -22,7 +23,6 @@
 #include "chrome/browser/ui/web_applications/web_app_info_image_source.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/feature_engagement/public/tracker.h"
@@ -56,8 +56,6 @@
 
 namespace {
 
-bool g_auto_accept_diy_dialog_for_testing = false;
-
 #if BUILDFLAG(IS_CHROMEOS)
 namespace cros_events = metrics::structured::events::v2::cr_os_events;
 #endif
@@ -73,7 +71,8 @@ void ShowDiyAppInstallDialog(
     AppInstallationAcceptanceCallback callback,
     PwaInProductHelpState iph_state) {
   CHECK(web_app_info->is_diy_app);
-  Browser* browser = chrome::FindBrowserWithTab(web_contents);
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
   if (!browser) {
     std::move(callback).Run(false, nullptr);
     return;
@@ -102,8 +101,11 @@ void ShowDiyAppInstallDialog(
   feature_engagement::Tracker* tracker =
       feature_engagement::TrackerFactory::GetForBrowserContext(browser_context);
 
+  web_app::UnorderedSizeToBitmap dialog_icons(
+      web_app_info->icon_bitmaps.any.begin(),
+      web_app_info->icon_bitmaps.any.end());
   gfx::ImageSkia icon_image(std::make_unique<WebAppInfoImageSource>(
-                                kIconSize, web_app_info->icon_bitmaps.any),
+                                kIconSize, std::move(dialog_icons)),
                             gfx::Size(kIconSize, kIconSize));
   GURL start_url = web_app_info->start_url();
 
@@ -169,20 +171,34 @@ void ShowDiyAppInstallDialog(
   views::Widget* diy_dialog_widget =
       constrained_window::ShowWebModalDialogViews(dialog.release(),
                                                   web_contents);
-  if (IsWidgetCurrentSizeSmallerThanPreferredSize(diy_dialog_widget)) {
+  if (IsWidgetCurrentSizeSmallerThanPreferredSize(diy_dialog_widget,
+                                                  kDiyMaxShrinkage)) {
     delegate_weak_ptr->CloseDialogAsIgnored();
     return;
   }
   delegate_weak_ptr->OnWidgetShownStartTracking(diy_dialog_widget);
 
   base::RecordAction(base::UserMetricsAction("WebAppDiyInstallShown"));
-  if (g_auto_accept_diy_dialog_for_testing) {
+  InstallDialogTestResponse auto_response =
+      GetPwaInstallationDialogAutoResponseForTesting();  // IN-TEST
+  if (auto_response != InstallDialogTestResponse::kNone) {
     dialog_delegate->AcceptDialog();
   }
 }
 
-void SetAutoAcceptDiyAppsInstallDialogForTesting(bool auto_accept) {
-  g_auto_accept_diy_dialog_for_testing = auto_accept;
+// Creates a view for the DIY install dialog that contains the
+// input dialog.
+std::unique_ptr<views::View> CreateDiyInstallDialogView(
+    gfx::ImageSkia icon_image,
+    const std::u16string& title,
+    const GURL& start_url,
+    content::WebContents* web_contents,
+    base::RepeatingCallback<void(const std::u16string&)>
+        on_textfield_changed_callback) {
+  return std::make_unique<SiteIconTextAndOriginView>(
+      icon_image, title,
+      l10n_util::GetStringUTF16(IDS_DIY_APP_AX_BUBBLE_NAME_LABEL), start_url,
+      web_contents, std::move(on_textfield_changed_callback));
 }
 
 }  // namespace web_app

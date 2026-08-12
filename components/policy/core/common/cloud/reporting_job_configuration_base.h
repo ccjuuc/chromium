@@ -19,6 +19,7 @@
 namespace chrome::cros::reporting::proto {
 class Browser;
 class Device;
+class UploadEventsRequest;
 }  // namespace chrome::cros::reporting::proto
 
 namespace policy {
@@ -46,11 +47,19 @@ class POLICY_EXPORT ReportingJobConfigurationBase
     : public JobConfigurationBase {
  public:
   // Callback used once the job is complete.
-  using UploadCompleteCallback =
+  using UploadCompleteCallback = base::OnceCallback<void(
+      DeviceManagementService::Job* job,
+      DeviceManagementStatus status,
+      int response_code,
+      std::optional<base::DictValue>,
+      const ::chrome::cros::reporting::proto::UploadEventsRequest&)>;
+
+  // DEPRECATED: Callback used once the job is complete (JSON format).
+  using UploadCompleteCallbackDeprecated =
       base::OnceCallback<void(DeviceManagementService::Job* job,
                               DeviceManagementStatus status,
                               int response_code,
-                              std::optional<base::Value::Dict>)>;
+                              std::optional<base::DictValue>)>;
 
   // Builds a Device dictionary for uploading information about the device to
   // the server.
@@ -59,9 +68,8 @@ class POLICY_EXPORT ReportingJobConfigurationBase
     // Dictionary Key Name
     static const char kDeviceKey[];
 
-    static base::Value::Dict BuildDeviceDictionary(
-        const std::string& dm_token,
-        const std::string& client_id);
+    static base::DictValue BuildDeviceDictionary(const std::string& dm_token,
+                                                 const std::string& client_id);
     static ::chrome::cros::reporting::proto::Device BuildDeviceProto(
         const std::string& dm_token,
         const std::string& client_id);
@@ -94,7 +102,7 @@ class POLICY_EXPORT ReportingJobConfigurationBase
     // Dictionary Key Name
     static const char kBrowserKey[];
 
-    static base::Value::Dict BuildBrowserDictionary(bool include_device_info);
+    static base::DictValue BuildBrowserDictionary(bool include_device_info);
 
     static ::chrome::cros::reporting::proto::Browser BuildBrowserProto(
         bool include_device_info);
@@ -140,7 +148,7 @@ class POLICY_EXPORT ReportingJobConfigurationBase
       scoped_refptr<network::SharedURLLoaderFactory> factory,
       DMAuth auth_data,
       const std::string& server_url,
-      UploadCompleteCallback callback);
+      UploadCompleteCallbackDeprecated callback);
   ~ReportingJobConfigurationBase() override;
 
   // Allows children to determine if a retry should be done.
@@ -168,15 +176,15 @@ class POLICY_EXPORT ReportingJobConfigurationBase
   // fields.
   void InitializePayloadWithoutDeviceInfo();
 
-  base::Value::Dict payload_;
+  base::DictValue payload_;
 
   // Available to set additional fields by the child. An example of a context
   // being generated can be seen with the ::reporting::GetContext function. Once
   // |GetPayload| is called, |context_| will be merged into the payload and
   // reset.
-  std::optional<base::Value::Dict> context_;
+  std::optional<base::DictValue> context_;
 
-  UploadCompleteCallback callback_;
+  UploadCompleteCallbackDeprecated callback_;
 
  private:
   // Initializes request payload except for the "device" field. If

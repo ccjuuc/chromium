@@ -140,14 +140,14 @@ class GLOzoneEGLX11 : public GLOzoneEGL {
   std::unique_ptr<NativePixmapGLBinding> ImportNativePixmap(
       scoped_refptr<gfx::NativePixmap> pixmap,
       viz::SharedImageFormat plane_format,
-      gfx::BufferPlane plane,
+      std::optional<int> plane_index,
       gfx::Size plane_size,
       const gfx::ColorSpace& color_space,
       GLenum target,
       GLuint texture_id) override {
     switch (GetNativePixmapSupportType()) {
       case NativePixmapSupportType::kDMABuf: {
-        return NativePixmapEGLBinding::Create(pixmap, plane_format, plane,
+        return NativePixmapEGLBinding::Create(pixmap, plane_format, plane_index,
                                               plane_size, color_space, target,
                                               texture_id);
       }
@@ -259,17 +259,9 @@ X11SurfaceFactory::CreateNativePixmapFromHandle(
   return pixmap;
 }
 
-std::vector<gfx::BufferFormat>
-X11SurfaceFactory::GetSupportedFormatsForTexturing() const {
-  std::vector<gfx::BufferFormat> supported_buffer_formats;
-  for (int j = 0; j <= static_cast<int>(gfx::BufferFormat::LAST); ++j) {
-    const gfx::BufferFormat buffer_format = static_cast<gfx::BufferFormat>(j);
-    auto format = viz::GetSharedImageFormat(buffer_format);
-    if (ui::GBMSupportX11::GetInstance()->CanCreateBufferForFormat(format)) {
-      supported_buffer_formats.push_back(buffer_format);
-    }
-  }
-  return supported_buffer_formats;
+bool X11SurfaceFactory::IsFormatSupportedForTexturing(
+    viz::SharedImageFormat format) const {
+  return ui::GBMSupportX11::GetInstance()->CanCreateBufferForFormat(format);
 }
 
 }  // namespace ui

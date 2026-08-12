@@ -95,7 +95,16 @@ class DataTypeStore : public DataTypeStoreBase {
       CallbackWithResult completion_on_frontend_sequence_callback) = 0;
 
   // Creates write batch for write operations.
+  // Deprecated: use CreateWriteBatch with metadata changes instead where
+  // possible.
+  // TODO(crbug.com/469455164): remove this method once all callers are
+  // migrated.
   virtual std::unique_ptr<WriteBatch> CreateWriteBatch() = 0;
+
+  // Creates write batch for write operations with metadata changes. If
+  // `metadata_change_list` is null, an empty metadata change list is created.
+  virtual std::unique_ptr<WriteBatch> CreateWriteBatch(
+      std::unique_ptr<MetadataChangeList> metadata_change_list) = 0;
 
   // Commits write operations accumulated in write batch. If write operation
   // fails result is UNSPECIFIED_ERROR and write operations will not be
@@ -104,7 +113,15 @@ class DataTypeStore : public DataTypeStoreBase {
                                 CallbackWithResult callback) = 0;
 
   // Deletion of everything, usually exercised during DisableSync().
-  virtual void DeleteAllDataAndMetadata(CallbackWithResult callback) = 0;
+  // If `metadata_change_list` is present, it is cleared and all changes are
+  // dropped. Having it in this function is a simple way to make sure that the
+  // metadata changes are cleared before `metadata_change_list` is destroyed. It
+  // is normally needed during ApplyDisableSyncChanges() in sync bridges.
+  // `metadata_change_list` must support DropAllChanges(), usually it is
+  // InMemoryMetadataChangeList.
+  virtual void DeleteAllDataAndMetadata(
+      std::unique_ptr<MetadataChangeList> metadata_change_list,
+      CallbackWithResult callback) = 0;
 };
 
 // Typedef for a store factory that has all params bound except InitCallback.

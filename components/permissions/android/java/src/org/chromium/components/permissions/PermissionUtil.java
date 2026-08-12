@@ -10,8 +10,10 @@ import android.Manifest;
 import android.os.Build;
 
 import org.jni_zero.CalledByNative;
+import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.content_settings.ContentSetting;
 import org.chromium.components.content_settings.ContentSettingsType;
@@ -22,6 +24,7 @@ import org.chromium.device.vr.XrFeatureStatus;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.permissions.ContextualNotificationPermissionRequester;
 import org.chromium.ui.permissions.PermissionCallback;
+import org.chromium.url.GURL;
 
 import java.util.Arrays;
 
@@ -72,6 +75,13 @@ public class PermissionUtil {
         ANDROID_PERMISSION_SCENE_UNDERSTANDING_FINE
     };
 
+    public static final String ANDROID_PERMISSION_ACCESS_LOCAL_NETWORK =
+            "android.permission.ACCESS_LOCAL_NETWORK";
+
+    private static final String[] LOCAL_NETWORK_PERMISSIONS = {
+        ANDROID_PERMISSION_ACCESS_LOCAL_NETWORK
+    };
+
     private static final String[] HAND_TRACKING_PERMISSIONS = {ANDROID_PERMISSION_HAND_TRACKING};
 
     /** Signifies there are no permissions associated. */
@@ -110,6 +120,7 @@ public class PermissionUtil {
      *     returned for different content setting types are disjunct.
      */
     @CalledByNative
+    @JniType("std::vector<std::string>")
     public static String[] getRequiredAndroidPermissionsForContentSetting(int contentSettingType) {
         switch (contentSettingType) {
             case ContentSettingsType.GEOLOCATION, ContentSettingsType.GEOLOCATION_WITH_OPTIONS:
@@ -146,6 +157,12 @@ public class PermissionUtil {
                             NOTIFICATION_PERMISSIONS_POST_T.length);
                 }
                 return EMPTY_PERMISSIONS;
+            case ContentSettingsType.LOCAL_NETWORK_ACCESS, ContentSettingsType.LOCAL_NETWORK:
+                if (Build.VERSION.SDK_INT >= 37) {
+                    return Arrays.copyOf(
+                            LOCAL_NETWORK_PERMISSIONS, LOCAL_NETWORK_PERMISSIONS.length);
+                }
+                return EMPTY_PERMISSIONS;
             default:
                 return EMPTY_PERMISSIONS;
         }
@@ -161,6 +178,7 @@ public class PermissionUtil {
      *     returned for different content setting types are disjunct.
      */
     @CalledByNative
+    @JniType("std::vector<std::string>")
     public static String[] getOptionalAndroidPermissionsForContentSetting(int contentSettingType) {
         switch (contentSettingType) {
             case ContentSettingsType.GEOLOCATION, ContentSettingsType.GEOLOCATION_WITH_OPTIONS:
@@ -191,7 +209,7 @@ public class PermissionUtil {
 
     @CalledByNative
     public static boolean canRequestSystemPermission(
-            int contentSettingType, WindowAndroid windowAndroid) {
+            int contentSettingType, @JniType("ui::WindowAndroid*") WindowAndroid windowAndroid) {
         String[] permissions = getRequiredAndroidPermissionsForContentSetting(contentSettingType);
         for (String permission : permissions) {
             if (!windowAndroid.canRequestPermission(permission)) {
@@ -202,13 +220,15 @@ public class PermissionUtil {
     }
 
     @CalledByNative
-    public static boolean needsLocationPermissionForBluetooth(WindowAndroid windowAndroid) {
+    public static boolean needsLocationPermissionForBluetooth(
+            @JniType("ui::WindowAndroid*") WindowAndroid windowAndroid) {
         return Build.VERSION.SDK_INT < Build.VERSION_CODES.S
                 && !windowAndroid.hasPermission(Manifest.permission.ACCESS_FINE_LOCATION);
     }
 
     @CalledByNative
-    public static boolean needsNearbyDevicesPermissionForBluetooth(WindowAndroid windowAndroid) {
+    public static boolean needsNearbyDevicesPermissionForBluetooth(
+            @JniType("ui::WindowAndroid*") WindowAndroid windowAndroid) {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
                 && (!windowAndroid.hasPermission(Manifest.permission.BLUETOOTH_SCAN)
                         || !windowAndroid.hasPermission(Manifest.permission.BLUETOOTH_CONNECT));
@@ -224,7 +244,8 @@ public class PermissionUtil {
     }
 
     @CalledByNative
-    public static boolean canRequestSystemPermissionsForBluetooth(WindowAndroid windowAndroid) {
+    public static boolean canRequestSystemPermissionsForBluetooth(
+            @JniType("ui::WindowAndroid*") WindowAndroid windowAndroid) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             return windowAndroid.canRequestPermission(Manifest.permission.BLUETOOTH_SCAN)
                     && windowAndroid.canRequestPermission(Manifest.permission.BLUETOOTH_CONNECT);
@@ -235,7 +256,8 @@ public class PermissionUtil {
 
     @CalledByNative
     public static void requestSystemPermissionsForBluetooth(
-            WindowAndroid windowAndroid, PermissionCallback callback) {
+            @JniType("ui::WindowAndroid*") WindowAndroid windowAndroid,
+            PermissionCallback callback) {
         String[] requiredPermissions;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             requiredPermissions =
@@ -253,7 +275,8 @@ public class PermissionUtil {
     }
 
     @CalledByNative
-    public static void requestLocationServices(WindowAndroid windowAndroid) {
+    public static void requestLocationServices(
+            @JniType("ui::WindowAndroid*") WindowAndroid windowAndroid) {
         assumeNonNull(windowAndroid.getActivity().get())
                 .startActivity(LocationUtils.getInstance().getSystemLocationSettingsIntent());
     }
@@ -268,24 +291,141 @@ public class PermissionUtil {
     }
 
     /**
-     * Grants a permission if it is requested.
+     * Handles the "Allow" action from a permission prompt (e.g. Message UI). Requests Android
+     * permission if needed, then resolves the site permission.
      *
-     * This method is called when the user clicks on the "Subscribe" button in the notifications
+     * @param window The WindowAndroid.
+     * @param webContents The WebContents.
+     * @param contentSettingsType The ContentSettingsType.
+     */
+    @CalledByNative
+    public static void handlePermissionPromptAllow(
+            @JniType("ui::WindowAndroid*") WindowAndroid window,
+            @JniType("content::WebContents*") WebContents webContents,
+            @JniType("GURL") GURL requestingOrigin,
+            @ContentSettingsType.EnumType int contentSettingsType) {
+        requestAndResolveNotificationsPermissionRequest(
+                window,
+                webContents,
+                requestingOrigin,
+                () -> {
+                    boolean granted = window.hasPermission(Manifest.permission.POST_NOTIFICATIONS);
+                    PermissionDialogController.showLoudClapperDialogResultIcon(
+                            window, granted ? ContentSetting.ALLOW : ContentSetting.BLOCK);
+                });
+    }
+
+    /**
+     * If necessary, requests a Android OS level notification permission and resolves the pending
+     * request based on the result.
+     *
+     * <p>This is used by the Clapper Loud code in the "Subscribe" button (PageInfo). If the Android
+     * permission was not granted on OS level, this method will asynchronously request the OS level
+     * permission using a dialog and run the callback when the user has made a decision. In case the
+     * OS level permission was already granted before, it accepts the notifications permission.
+     *
+     * @param window The WindowAndroid.
+     * @param webContents The WebContents.
+     * @param requestingOrigin The GURL of the requesting origin.
+     * @param onResolved Callback runnable executed when the OS level permission is resolved
+     *     (granted or denied).
+     */
+    public static void requestAndResolveNotificationsPermissionRequest(
+            WindowAndroid window,
+            WebContents webContents,
+            GURL requestingOrigin,
+            Runnable onResolved) {
+        // Either returns directly in case the OS level notifications permission was already
+        // granted or asks for it asynchronously before granting/denying the request.
+        boolean requestSent =
+                AndroidPermissionRequester.requestAndroidPermissions(
+                        window,
+                        new int[] {ContentSettingsType.NOTIFICATIONS},
+                        new AndroidPermissionRequester.RequestDelegate() {
+                            @Override
+                            public void onAndroidPermissionAccepted() {
+                                RecordHistogram.recordBooleanHistogram(
+                                        "Permissions.ClapperLoud.PageInfo.OsPromptResolved", true);
+                                PermissionUtilJni.get()
+                                        .resolveNotificationsPermissionRequest(
+                                                webContents,
+                                                requestingOrigin,
+                                                ContentSetting.ALLOW);
+                                onResolved.run();
+                            }
+
+                            @Override
+                            public void onAndroidPermissionCanceled() {
+                                RecordHistogram.recordBooleanHistogram(
+                                        "Permissions.ClapperLoud.PageInfo.OsPromptResolved", false);
+                                PermissionUtilJni.get()
+                                        .dismissNotificationsPermissionRequest(
+                                                webContents, requestingOrigin);
+                                onResolved.run();
+                            }
+                        });
+        // The OS level permission for notifications was already granted; therefore, the
+        // permission request can be allowed.
+        if (!requestSent) {
+            PermissionUtilJni.get()
+                    .resolveNotificationsPermissionRequest(
+                            webContents, requestingOrigin, ContentSetting.ALLOW);
+            onResolved.run();
+        }
+    }
+
+    /**
+     * Grants a notifications permission if it is requested. Returns false if no ongoing
+     * notification permission request is found.
+     *
+     * <p>This method is called when the user clicks on the "Subscribe" button in the notifications
      * permission row in PageInfo.
      */
-    public static void resolvePermissionRequest(
-            WebContents webContents,
-            @ContentSettingsType.EnumType int contentSettingsType,
-            @ContentSetting int contentSetting) {
+    public static boolean resolveNotificationsPermissionRequest(
+            WebContents webContents, GURL requestingOrigin, @ContentSetting int contentSetting) {
+        return PermissionUtilJni.get()
+                .resolveNotificationsPermissionRequest(
+                        webContents, requestingOrigin, contentSetting);
+    }
+
+    /**
+     * Dismisses a notifications permission request.
+     *
+     * <p>This method is called when the user clicks on the "Subscribe" button in the notifications
+     * permission row in PageInfo but did not grant the Android OS level permission prompt. Despite
+     * the user granted the site-level permission, we still need to dismiss the permission request
+     * as Chrome doesn't have the Android OS level permission and hence the permission request is no
+     * longer valid.
+     */
+    public static void dismissNotificationsPermissionRequest(
+            WebContents webContents, GURL requestingOrigin) {
         PermissionUtilJni.get()
-                .resolvePermissionRequest(webContents, contentSettingsType, contentSetting);
+                .dismissNotificationsPermissionRequest(webContents, requestingOrigin);
     }
 
     @NativeMethods
     public interface Natives {
-        void resolvePermissionRequest(
-                WebContents webContents,
-                @ContentSettingsType.EnumType int contentSettingsType,
+        boolean resolveNotificationsPermissionRequest(
+                @JniType("content::WebContents*") WebContents webContents,
+                @JniType("GURL") GURL requestingOrigin,
                 @ContentSetting int contentSetting);
+
+        void dismissNotificationsPermissionRequest(
+                @JniType("content::WebContents*") WebContents webContents,
+                @JniType("GURL") GURL requestingOrigin);
+
+        void notifyQuietIconDismissed(@JniType("content::WebContents*") WebContents webContents);
+    }
+
+    /**
+     * Notifies the native side that the quiet permission icon has been dismissed (e.g. by timeout).
+     *
+     * <p>TODO(crbug.com/463333225): Clean this provisional function name up if Clapper is launched
+     * or removed.
+     *
+     * @param webContents The {@link WebContents} associated with the dismissed icon.
+     */
+    public static void notifyQuietIconDismissed(WebContents webContents) {
+        PermissionUtilJni.get().notifyQuietIconDismissed(webContents);
     }
 }

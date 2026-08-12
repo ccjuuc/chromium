@@ -67,7 +67,7 @@ CGFloat Spacing(id<NSCollectionLayoutEnvironment> layout_environment) {
           layout_environment.traitCollection.preferredContentSizeCategory) +
       1;
   // Compute the theoretical size of the spacing, rounded to the nearest pixel.
-  const CGFloat spacing = AlignValueToPixel(total_spacing / spaces_count);
+  const CGFloat spacing = AlignValueToLowerPixel(total_spacing / spaces_count);
   // Cap to a minimum spacing.
   return MAX(spacing, kMinimumSpacing);
 }
@@ -193,7 +193,7 @@ NSCollectionLayoutSection* InactiveTabButtonSection(
         (width - spacing * (columns_count - 1) - 2 * section_horizontal_inset) /
         columns_count;
     const CGFloat button_width =
-        AlignValueToPixel(2 * tab_width + number_of_spacing * spacing);
+        AlignValueToLowerPixel(2 * tab_width + number_of_spacing * spacing);
     groupHorizontalInset =
         (width - button_width - 2 * section_horizontal_inset) / 2;
   }
@@ -218,7 +218,8 @@ NSCollectionLayoutSection* InactiveTabButtonSection(
 NSCollectionLayoutSection* TabsSection(
     id<NSCollectionLayoutEnvironment> layout_environment,
     TabsSectionHeaderType tabs_section_header_type,
-    NSDirectionalEdgeInsets section_insets) {
+    NSDirectionalEdgeInsets section_insets,
+    UIWindowScene* window_scene) {
   // Determine the number of columns.
   NSInteger count = TabGridColumnsCount(
       layout_environment.container.effectiveContentSize,
@@ -227,8 +228,8 @@ NSCollectionLayoutSection* TabsSection(
   // Configure the layout item.
   NSCollectionLayoutDimension* item_width_dimension =
       FractionalWidth(1. / count);
-  const CGFloat item_aspect_ratio =
-      TabGridItemAspectRatio(layout_environment.container.effectiveContentSize);
+  const CGFloat item_aspect_ratio = TabGridItemAspectRatio(
+      layout_environment.container.effectiveContentSize, window_scene);
   NSCollectionLayoutDimension* item_height_dimension =
       FractionalWidth(item_aspect_ratio / count);
   NSCollectionLayoutSize* item_size =
@@ -467,8 +468,7 @@ NSCollectionLayoutSection* SuggestedActionsSection(
     return attributes;
   }
 
-  if (IsTabGridDragAndDropEnabled() &&
-      self.dragAndDropGroupIndexPath == itemIndexPath) {
+  if (self.dragAndDropGroupIndexPath == itemIndexPath) {
     attributes.alpha = 1.0;
     attributes.transform = CGAffineTransformScale(
         attributes.transform, /*sx=*/kGridCellHighlightScaleTransform,
@@ -514,7 +514,8 @@ NSCollectionLayoutSection* SuggestedActionsSection(
   } else if ([sectionIdentifier
                  isEqualToString:kGridOpenTabsSectionIdentifier]) {
     return TabsSection(layoutEnvironment, self.tabsSectionHeaderType,
-                       self.sectionInsets);
+                       self.sectionInsets,
+                       self.collectionView.window.windowScene);
   } else if ([sectionIdentifier
                  isEqualToString:kSuggestedActionsSectionIdentifier]) {
     return SuggestedActionsSection(layoutEnvironment, self.sectionInsets);

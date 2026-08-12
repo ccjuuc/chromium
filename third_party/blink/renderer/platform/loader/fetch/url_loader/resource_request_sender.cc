@@ -294,7 +294,7 @@ int ResourceRequestSender::SendAsync(
   auto url_loader_client = std::make_unique<MojoURLLoaderClient>(
       this, loading_task_runner, url_loader_factory->BypassRedirectChecks(),
       request->url, std::move(evict_from_bfcache_callback),
-      std::move(did_buffer_load_while_in_bfcache_callback));
+      std::move(did_buffer_load_while_in_bfcache_callback), request->keepalive);
 
   std::vector<std::string> std_cors_exempt_header_list =
       base::ToVector(cors_exempt_header_list,
@@ -342,7 +342,7 @@ void ResourceRequestSender::Freeze(LoaderFreezeMode mode) {
     loading_task_runner_->PostTask(
         FROM_HERE, base::BindOnce(&ResourceRequestSender::MaybeRunPendingTasks,
                                   weak_factory_.GetWeakPtr()));
-    FollowPendingRedirect(request_info_.get());
+    FollowPendingRedirect();
   }
 }
 
@@ -401,27 +401,28 @@ ResourceRequestSender::PendingRequestInfo::PendingRequestInfo(
 
 ResourceRequestSender::PendingRequestInfo::~PendingRequestInfo() = default;
 
-void ResourceRequestSender::FollowPendingRedirect(
-    PendingRequestInfo* request_info) {
-  if (request_info->has_pending_redirect) {
-    request_info->has_pending_redirect = false;
+void ResourceRequestSender::FollowPendingRedirect() {
+  if (request_info_->has_pending_redirect) {
+    request_info_->has_pending_redirect = false;
     // net::URLRequest clears its request_start on redirect, so should we.
-    request_info->local_request_start = base::TimeTicks::Now();
+    request_info_->local_request_start = base::TimeTicks::Now();
     // Redirect URL may not be handled by the network service, so force a
     // restart in case another URLLoaderFactory should handle the URL.
-    if (request_info->redirect_requires_loader_restart) {
-      request_info->modified_headers.Clear();
-      request_info->url_loader->FollowRedirectForcingRestart();
+    if (request_info_->redirect_requires_loader_restart) {
+      request_info_->headers_update_params.Clear();
+      request_info_->url_loader->FollowRedirectForcingRestart();
     } else {
-      request_info->url_loader->FollowRedirect(
-          request_info_->removed_headers, request_info->modified_headers,
-          {} /* modified_cors_exempt_headers */);
-      request_info->modified_headers.Clear();
+      network::HttpRequestHeadersUpdateParams headers_update_params =
+          std::move(request_info_->headers_update_params);
+      request_info_->headers_update_params.Clear();
+      request_info_->url_loader->FollowRedirect(
+          std::move(headers_update_params));
     }
   }
 }
 
-void ResourceRequestSender::OnTransferSizeUpdated(int32_t transfer_size_diff) {
+void ResourceRequestSender::OnTransferSizeUpdated(
+    base::ByteSize transfer_size_diff) {
   if (ShouldDeferTask()) {
     pending_tasks_.emplace_back(
         blink::BindOnce(&ResourceRequestSender::OnTransferSizeUpdated,
@@ -429,13 +430,11 @@ void ResourceRequestSender::OnTransferSizeUpdated(int32_t transfer_size_diff) {
     return;
   }
 
-  DCHECK_GT(transfer_size_diff, 0);
+  DCHECK(transfer_size_diff.is_positive());
   if (!request_info_) {
     return;
   }
 
-  // TODO(yhirano): Consider using int64_t in
-  // ResourceRequestClient::OnTransferSizeUpdated.
   request_info_->client->OnTransferSizeUpdated(transfer_size_diff);
   if (!request_info_) {
     return;
@@ -574,15 +573,18 @@ void ResourceRequestSender::OnFollowRedirectCallback(
     return;
   }
 
-  request_info_->removed_headers = std::move(removed_headers);
+  CHECK(!request_info_->has_pending_redirect);
+  request_info_->headers_update_params.removed_headers =
+      std::move(removed_headers);
   request_info_->response_url = KURL(redirect_info.new_url);
   request_info_->has_pending_redirect = true;
   request_info_->resource_load_info_notifier_wrapper
       ->NotifyResourceRedirectReceived(redirect_info, std::move(response_head));
-  request_info_->modified_headers.MergeFrom(modified_headers);
+  request_info_->headers_update_params.modified_headers =
+      std::move(modified_headers);
 
   if (request_info_->freeze_mode == LoaderFreezeMode::kNone) {
-    FollowPendingRedirect(request_info_.get());
+    FollowPendingRedirect();
   }
 }
 

@@ -4,15 +4,16 @@
 
 #include "chrome/common/controlled_frame/controlled_frame.h"
 
+#include <algorithm>
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/initialize_extensions_client.h"
 #include "components/version_info/version_info.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/features/feature.h"
 #include "extensions/common/features/feature_channel.h"
@@ -25,6 +26,11 @@
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
         // BUILDFLAG(IS_CHROMEOS)
 
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
+namespace controlled_frame {
+namespace {
+
 base::span<const char* const> GetControlledFrameFeatureList() {
   static constexpr const char* feature_list[] = {
       // LINT.IfChange
@@ -35,7 +41,7 @@ base::span<const char* const> GetControlledFrameFeatureList() {
   return base::span(feature_list);
 }
 
-namespace controlled_frame {
+}  // namespace
 
 // |AvailabilityCheck()| inspects the current environment to determine whether
 // ControlledFrame or its dependencies should be made available to that
@@ -97,7 +103,7 @@ bool AvailabilityCheck(const std::string& api_full_name,
   return (extension == nullptr) && url.SchemeIs(webapps::kIsolatedAppScheme) &&
          context == extensions::mojom::ContextType::kWebPage &&
          context_data.HasControlledFrameCapability() &&
-         base::Contains(GetControlledFrameFeatureList(), api_full_name);
+         std::ranges::contains(GetControlledFrameFeatureList(), api_full_name);
 #else   // !(BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
         // BUILDFLAG(IS_CHROMEOS))
   return false;

@@ -5,7 +5,6 @@
 interface Bar {
   setDarkMode(matches: boolean): void;
   setBackgroundColor(bgColor: string): void;
-  setForegroundStyle(style: number): void;
 }
 
 interface AsyncBar {
@@ -19,12 +18,11 @@ interface Gbar {
 
 interface Task {
   fnName: string;
-  args: any[];
+  args: unknown[];
 }
 
 export interface OneGoogleBarApi {
-  setForegroundLight: (enabled: boolean) => void;
-  trackDarkModeChanges: () => Promise<void>;
+  setDarkMode: (enabled: boolean) => void;
   processTaskQueue: () => Promise<void>;
 }
 
@@ -62,42 +60,22 @@ export function createOneGoogleBarApi(abp: boolean): OneGoogleBarApi {
       name: 'bar',
       apiName: 'bf',
       fns: [
-        ['setForegroundStyle', 'pc'],
         ['setBackgroundColor', 'pd'],
         ['setDarkMode', 'pp'],
       ],
     } as Definition,
   ].reduce((topLevelApi, def) => {
-    (topLevelApi as Record<string, any>)[def.name] =
-        def.fns.reduce((apiPart, [name, fnName]) => {
-          apiPart[name] = callApi.bind(null, def.apiName, fnName);
-          return apiPart;
-        }, {} as IndexableApi);
+    topLevelApi[def.name] = def.fns.reduce((apiPart, [name, fnName]) => {
+      apiPart[name] = callApi.bind(null, def.apiName, fnName);
+      return apiPart;
+    }, {} as IndexableApi);
     return topLevelApi;
-  }, {} as {bar: Bar});
+  }, {} as Record<string, IndexableApi>) as unknown as {bar: Bar};
 
-  const asyncBar: AsyncBar =
-      [['setDarkMode', 'pp']].reduce((bar: any, [name, fnName]) => {
-        bar[name!] = callAsyncBarApi.bind(null, fnName!);
-        return bar;
-      }, {} as Bar);
+  const asyncBar: AsyncBar = {
+    setDarkMode: callAsyncBarApi.bind(null, 'pp'),
+  };
 
-  async function updateDarkMode(): Promise<void> {
-    if (abp) {
-      await asyncBar.setDarkMode(
-          window.matchMedia('(prefers-color-scheme: dark)').matches);
-    } else {
-      await api.bar.setDarkMode(
-          window.matchMedia('(prefers-color-scheme: dark)').matches);
-      // |setDarkMode(toggle)| updates the background color and foreground
-      // style. The background color should always be 'transparent'.
-      api.bar.setBackgroundColor('transparent');
-      // The foreground style is set based on NTP theme and not dark mode.
-      api.bar.setForegroundStyle(foregroundLight ? 1 : 0);
-    }
-  }
-
-  let foregroundLight: boolean = false;
   let queuedTask: Task|null = null;
 
   return {
@@ -105,24 +83,12 @@ export function createOneGoogleBarApi(abp: boolean): OneGoogleBarApi {
      * Updates the foreground on the OneGoogleBar to provide contrast against
      * the background.
      */
-    setForegroundLight: (enabled: boolean) => {
+    setDarkMode: (enabled: boolean) => {
       if (abp) {
         asyncBar.setDarkMode(enabled);
-      } else if (foregroundLight !== enabled) {
-        foregroundLight = enabled;
-        api.bar.setForegroundStyle(foregroundLight ? 1 : 0);
+      } else {
+        api.bar.setDarkMode(enabled);
       }
-    },
-
-    /**
-     * Updates the OneGoogleBar dark mode when called as well as any time dark
-     * mode is updated.
-     */
-    trackDarkModeChanges: async () => {
-      window.matchMedia('(prefers-color-scheme: dark)').addListener(() => {
-        updateDarkMode();
-      });
-      await updateDarkMode();
     },
 
     /* Process any pending OGB API call that may have been queued before the

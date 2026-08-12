@@ -47,7 +47,8 @@ GbmSurfaceless::GbmSurfaceless(GbmSurfaceFactory* surface_factory,
       display_(display) {
   surface_factory_->RegisterSurface(window_->widget(), this);
   supports_plane_gpu_fences_ = window_->SupportsGpuFences();
-  unsubmitted_frames_.push_back(std::make_unique<PendingFrame>());
+  unsubmitted_frames_.push_back(
+      std::make_unique<PendingFrame>(next_frame_id()));
 }
 
 void GbmSurfaceless::QueueOverlayPlane(DrmOverlayPlane plane) {
@@ -99,7 +100,8 @@ void GbmSurfaceless::Present(SwapCompletionCallback completion_callback,
   PendingFrame* frame = unsubmitted_frames_.back().get();
   frame->completion_callback = std::move(completion_callback);
   frame->presentation_callback = std::move(presentation_callback);
-  unsubmitted_frames_.push_back(std::make_unique<PendingFrame>());
+  unsubmitted_frames_.push_back(
+      std::make_unique<PendingFrame>(next_frame_id()));
 
   // TODO(dcastagna): Remove the following workaround once we get explicit sync
   // on all Intel boards, currently we don't have it on legacy KMS.
@@ -125,8 +127,9 @@ void GbmSurfaceless::Present(SwapCompletionCallback completion_callback,
   base::OnceClosure fence_wait_task =
       base::BindOnce(&WaitForFence, GetEGLDisplay(), fence);
 
-  base::OnceClosure fence_retired_callback = base::BindOnce(
-      &GbmSurfaceless::FenceRetired, weak_factory_.GetWeakPtr(), frame);
+  base::OnceClosure fence_retired_callback =
+      base::BindOnce(&GbmSurfaceless::FenceRetired, weak_factory_.GetWeakPtr(),
+                     frame->frame_id);
 
   base::ThreadPool::PostTaskAndReply(
       FROM_HERE,
@@ -138,15 +141,12 @@ void GbmSurfaceless::SetRelyOnImplicitSync() {
   use_egl_fence_sync_ = false;
 }
 
-void GbmSurfaceless::SetNotifyNonSimpleOverlayFailure() {
-  notify_non_simple_overlay_failure_ = true;
-}
-
 GbmSurfaceless::~GbmSurfaceless() {
   surface_factory_->UnregisterSurface(window_->widget());
 }
 
-GbmSurfaceless::PendingFrame::PendingFrame() = default;
+GbmSurfaceless::PendingFrame::PendingFrame(uint32_t frame_id)
+    : frame_id(frame_id) {}
 
 GbmSurfaceless::PendingFrame::~PendingFrame() = default;
 
@@ -162,43 +162,30 @@ void GbmSurfaceless::SubmitFrame() {
   DCHECK(!unsubmitted_frames_.empty());
 
   if (unsubmitted_frames_.front()->ready && !submitted_frame_) {
-    bool should_handle_non_simple_overlay_failure = false;
     for (auto& overlay : unsubmitted_frames_.front()->overlays) {
       if (overlay.z_order() == 0 && overlay.gpu_fence()) {
         submitted_frame_gpu_fence_ = std::make_unique<gfx::GpuFence>(
             overlay.gpu_fence()->GetGpuFenceHandle().Clone());
       }
-
-      // At the moment, only fullscreen overlays are treated in a special way.
-      // if other types of overlays also need special handling, then also
-      // update the DrmOverlayManager, which handles that.
-      if (overlay.overlay_type() == gfx::OverlayType::kFullScreen &&
-          should_handle_non_simple_overlay_failure) {
-        should_handle_non_simple_overlay_failure = true;
-        break;
-      }
     }
     submitted_frame_ = std::move(unsubmitted_frames_.front());
-    unsubmitted_frames_.erase(unsubmitted_frames_.begin());
+    unsubmitted_frames_.pop_front();
 
     bool schedule_planes_succeeded =
         submitted_frame_->ScheduleOverlayPlanes(widget_);
 
     if (!schedule_planes_succeeded) {
-      OnSubmission(should_handle_non_simple_overlay_failure,
-                   gfx::SwapResult::SWAP_FAILED,
+      OnSubmission(gfx::SwapResult::SWAP_FAILED,
                    /*release_fence=*/gfx::GpuFenceHandle());
       OnPresentation(gfx::PresentationFeedback::Failure());
       return;
     }
 
-    window_->SchedulePageFlip(
-        std::move(planes_),
-        base::BindOnce(&GbmSurfaceless::OnSubmission,
-                       weak_factory_.GetWeakPtr(),
-                       should_handle_non_simple_overlay_failure),
-        base::BindOnce(&GbmSurfaceless::OnPresentation,
-                       weak_factory_.GetWeakPtr()));
+    window_->SchedulePageFlip(std::move(planes_),
+                              base::BindOnce(&GbmSurfaceless::OnSubmission,
+                                             weak_factory_.GetWeakPtr()),
+                              base::BindOnce(&GbmSurfaceless::OnPresentation,
+                                             weak_factory_.GetWeakPtr()));
     planes_.clear();
   }
 }
@@ -222,22 +209,32 @@ EGLSyncKHR GbmSurfaceless::InsertFence() {
                           use_implicit_external_sync ? attrib_list : nullptr);
 }
 
-void GbmSurfaceless::FenceRetired(PendingFrame* frame) {
-  frame->ready = true;
-  SubmitFrame();
+// Note: This O(1) lookup relies on frame IDs being monotonically increasing
+// and contiguous within unsubmitted_frames_. The unsigned 32-bit math correctly
+// handles UINT32_MAX wrap-around as long as the queue size is smaller than
+// 2^32.
+void GbmSurfaceless::FenceRetired(uint32_t frame_id) {
+  if (unsubmitted_frames_.empty()) {
+    return;
+  }
+
+  uint32_t first_frame_id = unsubmitted_frames_.front()->frame_id;
+  uint32_t index = frame_id - first_frame_id;
+  if (index < unsubmitted_frames_.size()) {
+    auto& frame = unsubmitted_frames_[index];
+    DCHECK_EQ(frame->frame_id, frame_id);
+    // If the frame doesn't have a completion callback yet, it means it hasn't
+    // been presented yet (it's the sentinel frame at the back).
+    if (!frame->completion_callback) {
+      return;
+    }
+    frame->ready = true;
+    SubmitFrame();
+  }
 }
 
-void GbmSurfaceless::OnSubmission(bool should_handle_fullscreen_overlay_failure,
-                                  gfx::SwapResult result,
+void GbmSurfaceless::OnSubmission(gfx::SwapResult result,
                                   gfx::GpuFenceHandle release_fence) {
-  // Handling fullscreen overlays' failures means usage of the
-  // gfx::SwapResult::SWAP_NON_SIMPLE_OVERLAYS_FAILED. That way, viz is able to
-  // recover from the error. The gpu watchdog will reset as viz will either
-  // reschedule the same frame or it'll send a new one if it's already queued.
-  if (should_handle_fullscreen_overlay_failure &&
-      result == gfx::SwapResult::SWAP_FAILED) {
-    result = gfx::SwapResult::SWAP_NON_SIMPLE_OVERLAYS_FAILED;
-  }
   submitted_frame_->swap_result = result;
   if (!release_fence.is_null()) {
     std::move(submitted_frame_->completion_callback)

@@ -25,7 +25,6 @@
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
-#include "chrome/common/chrome_features.h"
 #include "components/webapps/browser/features.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "components/webapps/common/web_app_id.h"
@@ -34,7 +33,7 @@ namespace web_app {
 
 RewriteDiyIconsCommand::RewriteDiyIconsCommand(
     const webapps::AppId& app_id,
-    base::OnceCallback<void(RewriteIconResult)> callback)
+    RewriteIconResultCallback callback)
     : WebAppCommand("RewriteDiyIconsCommand",
                     AppLockDescription({app_id}),
                     base::BindOnce([](RewriteIconResult result) {

@@ -20,6 +20,7 @@ import org.chromium.chrome.browser.browsing_data.TimePeriodUtils;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.layouts.LayoutManager;
 import org.chromium.chrome.browser.layouts.LayoutType;
+import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab_ui.TabSwitcherUtils;
@@ -49,7 +50,7 @@ public class QuickDeleteController {
     // Null when declutter is disabled.
     private final @Nullable QuickDeleteTabsFilter mDeleteArchivedTabsFilter;
     private final SnackbarManager mSnackbarManager;
-    private final LayoutManager mLayoutManager;
+    private final @Nullable LayoutManager mLayoutManager;
     private final Profile mProfile;
     private final TabModel mTabModel;
     private final QuickDeleteMediator mQuickDeleteMediator;
@@ -73,7 +74,7 @@ public class QuickDeleteController {
             QuickDeleteDelegate delegate,
             ModalDialogManager modalDialogManager,
             SnackbarManager snackbarManager,
-            LayoutManager layoutManager,
+            @Nullable LayoutManager layoutManager,
             TabModelSelector tabModelSelector,
             @Nullable TabModelSelector archivedTabModelSelector) {
         mContext = context;
@@ -83,15 +84,11 @@ public class QuickDeleteController {
 
         mTabModel = tabModelSelector.getModel(/* incognito= */ false);
         mDeleteRegularTabsFilter =
-                new QuickDeleteTabsFilter(
-                        assumeNonNull(
-                                tabModelSelector.getTabGroupModelFilter(/* isIncognito= */ false)));
+                new QuickDeleteTabsFilter(tabModelSelector.getModel(/* incognito= */ false));
         if (archivedTabModelSelector != null) {
             mDeleteArchivedTabsFilter =
                     new QuickDeleteTabsFilter(
-                            assumeNonNull(
-                                    archivedTabModelSelector.getTabGroupModelFilter(
-                                            /* isIncognito= */ false)));
+                            archivedTabModelSelector.getModel(/* incognito= */ false));
         } else {
             mDeleteArchivedTabsFilter = null;
         }
@@ -106,6 +103,9 @@ public class QuickDeleteController {
                         .with(
                                 QuickDeleteProperties.HAS_MULTI_WINDOWS,
                                 delegate.isInMultiWindowMode())
+                        .with(
+                                QuickDeleteProperties.IS_HISTORY_DELETION_ALLOWED,
+                                UserPrefs.get(mProfile).getBoolean(Pref.ALLOW_DELETING_BROWSER_HISTORY))
                         .build();
         mPropertyModelChangeProcessor =
                 PropertyModelChangeProcessor.create(
@@ -198,7 +198,7 @@ public class QuickDeleteController {
         boolean isTabModelEmpty = mTabModel.getCount() == 0;
         // If the tab switcher is not displayed, skip the animation.
         boolean isTabSwitcherVisible =
-                mLayoutManager != null && mLayoutManager.isLayoutVisible(LayoutType.TAB_SWITCHER);
+                mLayoutManager != null && mLayoutManager.isLayoutVisible(LayoutType.HUB);
 
         if (!isTabModelEmpty && isTabSwitcherVisible) {
             List<Tab> tabs =
@@ -225,8 +225,9 @@ public class QuickDeleteController {
         triggerHapticFeedback();
         showSnackbar(timePeriod);
 
-        if (trackerLock == null) return;
-        trackerLock.release();
+        if (trackerLock != null) {
+            trackerLock.release();
+        }
 
         destroy();
     }

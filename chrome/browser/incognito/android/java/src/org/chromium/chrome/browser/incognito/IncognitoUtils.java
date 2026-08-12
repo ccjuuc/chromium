@@ -6,15 +6,17 @@ package org.chromium.chrome.browser.incognito;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
 
-import android.app.Activity;
-import android.content.Context;
+import android.os.Build;
 
 import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
-import org.chromium.base.ContextUtils;
 import org.chromium.base.DeviceInfo;
+import org.chromium.base.FeatureList;
+import org.chromium.base.FeatureOverrides;
 import org.chromium.base.ResettersForTesting;
+import org.chromium.base.ThreadUtils;
+import org.chromium.build.BuildConfig;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -23,13 +25,19 @@ import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileKey;
 import org.chromium.chrome.browser.profiles.ProfileKeyUtil;
 import org.chromium.chrome.browser.profiles.ProfileManager;
-import org.chromium.ui.base.DeviceFormFactor;
+import org.chromium.chrome.browser.util.MultiInstanceUtils;
+import org.chromium.ui.display.DisplayUtil;
 
 /** Utilities for working with incognito tabs spread across multiple activities. */
 @NullMarked
 public class IncognitoUtils {
+    private static final double LARGE_DIAGONAL_DISPLAY_THRESHOLD_INCHES = 8.0;
+    private static final double RESTRICTED_LARGE_DIAGONAL_DISPLAY_THRESHOLD_INCHES = 10.0;
+    // Test emulators run as ~8" or ~9" tablets. We need a lower threshold of 8.0" to allow tests to
+    // execute incognito multi-window flows without being blocked by the 10.0" production limit.
+    private static final double LARGE_DIAGONAL_DISPLAY_THRESHOLD_INCHES_FOR_TEST = 8.0;
     private static @Nullable Boolean sIsEnabledForTesting;
-    private static @Nullable Boolean sIsEligibleTablet;
+    private static @Nullable Boolean sShouldOpenIncognitoAsWindowForTesting;
 
     private IncognitoUtils() {}
 
@@ -42,6 +50,23 @@ public class IncognitoUtils {
             return sIsEnabledForTesting;
         }
         return IncognitoUtilsJni.get().getIncognitoModeEnabled(profile);
+    }
+
+    /**
+     * @param profile The {@link Profile} used to determine incognito status.
+     * @return Whether incognito mode is forced by policy.
+     */
+    public static boolean isIncognitoModeForced(Profile profile) {
+        // TODO(b/509871328): Remove feature flag and combine with isIncognitoModeEnabled.
+        if (!FeatureList.isNativeInitialized()
+                && !FeatureOverrides.hasTestFeature(
+                        ChromeFeatureList.INCOGNITO_MODE_FORCED_ANDROID)) {
+            return false;
+        }
+        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.INCOGNITO_MODE_FORCED_ANDROID)) {
+            return false;
+        }
+        return IncognitoUtilsJni.get().getIncognitoModeForced(profile);
     }
 
     /**
@@ -82,25 +107,56 @@ public class IncognitoUtils {
         if (!ChromeFeatureList.sAndroidOpenIncognitoAsWindow.isEnabled()) {
             return false;
         }
-        // TODO(crbug.com/467768341): Clean up the desktop and tablet form factor check once the bug
-        // is fixed.
-        if (DeviceInfo.isDesktop()) {
-            return true;
+        // Honor test override first. This is needed by Unit Test.
+        if (sShouldOpenIncognitoAsWindowForTesting != null) {
+            return sShouldOpenIncognitoAsWindowForTesting;
         }
         // Automotive is currently restricted to a single window.
-        if (DeviceInfo.isAutomotive()) {
+        // The form factor check must happen before the display size check; because Automotive and
+        // Foldable could also be tablet-sized.
+        if (DeviceInfo.isAutomotive() || DeviceInfo.isFoldable()) {
             return false;
         }
-
-        boolean isTablet;
-        if (sIsEligibleTablet != null) {
-            isTablet = sIsEligibleTablet;
-        } else {
-            isTablet =
-                    DeviceFormFactor.isNonMultiDisplayContextOnTablet(
-                            ContextUtils.getApplicationContext());
+        if (BuildConfig.IS_FOR_TEST) {
+            // This helper method is called from non-UI thread from tests.
+            sShouldOpenIncognitoAsWindowForTesting =
+                    ThreadUtils.runOnUiThreadBlocking(
+                            () ->
+                                    DisplayUtil.isGlobalDefaultDisplayWithMinDiagonal(
+                                            LARGE_DIAGONAL_DISPLAY_THRESHOLD_INCHES_FOR_TEST));
+            return sShouldOpenIncognitoAsWindowForTesting;
         }
-        return isTablet;
+
+        // Simplified check based on MultiWindowUtils#isMultiInstanceApi31Enabled. Skips the
+        // Manifest launchMode check due to dependency restrictions on ChromeTabbedActivity.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S_V2) {
+            return false;
+        }
+        if (ChromeFeatureList.sAndroidOpenIncognitoAsWindowRestrictions.isEnabled()) {
+            return !MultiInstanceUtils.isLowMemoryDevice()
+                    && DisplayUtil.isGlobalDefaultDisplayWithMinDiagonal(
+                            RESTRICTED_LARGE_DIAGONAL_DISPLAY_THRESHOLD_INCHES);
+        }
+        return DisplayUtil.isGlobalDefaultDisplayWithMinDiagonal(
+                LARGE_DIAGONAL_DISPLAY_THRESHOLD_INCHES);
+    }
+
+    /**
+     * @return Whether different model windows should open in full-screen.
+     */
+    public static boolean isIncognitoAsWindowFullScreenEnabled() {
+        return ChromeFeatureList.isEnabled(ChromeFeatureList.INCOGNITO_AS_WINDOW_FULL_SCREEN)
+                && shouldOpenIncognitoAsWindow();
+    }
+
+    /**
+     * Sets the value returned by {@link #shouldOpenIncognitoAsWindow()} for testing.
+     *
+     * @param enabled The value to force, or null to revert to default behavior.
+     */
+    public static void setShouldOpenIncognitoAsWindowForTesting(Boolean enabled) {
+        sShouldOpenIncognitoAsWindowForTesting = enabled;
+        ResettersForTesting.register(() -> sShouldOpenIncognitoAsWindowForTesting = null);
     }
 
     /**
@@ -110,30 +166,11 @@ public class IncognitoUtils {
         return ChromeFeatureList.sIncognitoThemeOverlayTesting.isEnabled();
     }
 
-    /**
-     * Initialize {@code sIsEligibleTablet} status if not already.
-     *
-     * @param context {@link Activity} context used to determine if the display is tablet size.
-     * @param isMultiInstanceApi31Enabled Whether the new launch mode 'singleInstancePerTask' is
-     *     configured to allow multiple instantiation of Chrome instance. The device is not eligible
-     *     tablet if multiple instantiation of Chrome instance is not allowed.
-     */
-    public static void initializeEligibleTabletStatus(
-            Context context, boolean isMultiInstanceApi31Enabled) {
-        if (sIsEligibleTablet != null) {
-            return;
-        }
-        if (!isMultiInstanceApi31Enabled
-                || !ChromeFeatureList.sAndroidOpenIncognitoAsWindow.isEnabled()) {
-            sIsEligibleTablet = false;
-        } else {
-            sIsEligibleTablet = DeviceFormFactor.isNonMultiDisplayContextOnTablet(context);
-        }
-    }
-
     @NativeMethods
     public interface Natives {
         boolean getIncognitoModeEnabled(@JniType("Profile*") Profile profile);
+
+        boolean getIncognitoModeForced(@JniType("Profile*") Profile profile);
 
         boolean getIncognitoModeManaged(@JniType("Profile*") Profile profile);
     }

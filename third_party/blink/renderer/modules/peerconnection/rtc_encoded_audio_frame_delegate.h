@@ -9,6 +9,7 @@
 
 #include <memory>
 
+#include "base/containers/span.h"
 #include "base/synchronization/lock.h"
 #include "base/thread_annotations.h"
 #include "base/time/time.h"
@@ -34,10 +35,10 @@ class RTCEncodedAudioFrameDelegate
  public:
   explicit RTCEncodedAudioFrameDelegate(
       std::unique_ptr<webrtc::TransformableAudioFrameInterface> webrtc_frame,
-      webrtc::ArrayView<const unsigned int> contributing_sources,
+      base::span<const unsigned int> contributing_sources,
       std::optional<uint16_t> sequence_number);
 
-  uint32_t RtpTimestamp() const;
+  std::optional<uint32_t> RtpTimestamp() const;
   DOMArrayBuffer* CreateDataBuffer(v8::Isolate* isolate) const;
   void SetData(const DOMArrayBuffer* data);
 
@@ -82,7 +83,7 @@ class RTCEncodedAudioFrameDelegate
     std::optional<CaptureTimeInfo> capture_time_info;
     std::optional<base::TimeDelta> sender_capture_time_offset;
     std::optional<double> audio_level;
-    uint32_t rtp_timestamp = 0;
+    std::optional<webrtc::RtpTimestampInfo> rtp_timestamp_info;
   };
   // This field is set after the frame is neutered (e.g., written to a stream or
   // transferred).
@@ -92,7 +93,7 @@ class RTCEncodedAudioFrameDelegate
 class MODULES_EXPORT RTCEncodedAudioFramesAttachment
     : public SerializedScriptValue::Attachment {
  public:
-  static const void* kAttachmentKey;
+  static const void* const kAttachmentKey;
   RTCEncodedAudioFramesAttachment() = default;
   ~RTCEncodedAudioFramesAttachment() override = default;
 

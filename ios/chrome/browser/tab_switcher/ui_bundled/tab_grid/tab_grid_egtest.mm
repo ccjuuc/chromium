@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#import "base/containers/contains.h"
 #import "base/format_macros.h"
 #import "base/i18n/message_formatter.h"
 #import "base/ios/ios_util.h"
@@ -39,15 +38,15 @@
 #import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
+#import "ios/chrome/test/earl_grey/chrome_test_case.h"
 #import "ios/chrome/test/earl_grey/chrome_xcui_actions.h"
-#import "ios/chrome/test/earl_grey/web_http_server_chrome_test_case.h"
 #import "ios/testing/earl_grey/app_launch_configuration.h"
 #import "ios/testing/earl_grey/app_launch_manager.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
-#import "ios/web/public/test/http_server/data_response_provider.h"
-#import "ios/web/public/test/http_server/http_server.h"
-#import "ios/web/public/test/http_server/http_server_util.h"
 #import "net/base/apple/url_conversions.h"
+#import "net/test/embedded_test_server/embedded_test_server.h"
+#import "net/test/embedded_test_server/http_request.h"
+#import "net/test/embedded_test_server/http_response.h"
 #import "ui/base/device_form_factor.h"
 #import "ui/base/l10n/l10n_util.h"
 
@@ -60,31 +59,32 @@ using chrome_test_util::LongPressCellAndDragToEdge;
 using chrome_test_util::LongPressCellAndDragToOffsetOf;
 using chrome_test_util::RegularTabGrid;
 using chrome_test_util::TabGridCellAtIndex;
-using chrome_test_util::TabGridEditMenuCloseAllButton;
 using chrome_test_util::TabGridInactiveTabsButton;
 using chrome_test_util::TabGridIncognitoTabsPanelButton;
 using chrome_test_util::TabGridNewIncognitoTabButton;
 using chrome_test_util::TabGridNormalModePageControl;
 using chrome_test_util::TabGridOpenTabsPanelButton;
 using chrome_test_util::TabGridOtherDevicesPanelButton;
+using chrome_test_util::TabGridOverflowMenuButton;
+using chrome_test_util::TabGridOverflowMenuCloseAllButton;
+using chrome_test_util::TabGridOverflowMenuSelectTabsButton;
 using chrome_test_util::TabGridSearchBar;
 using chrome_test_util::TabGridSearchCancelButton;
 using chrome_test_util::TabGridSearchModeToolbar;
 using chrome_test_util::TabGridSearchTabsButton;
-using chrome_test_util::TabGridSelectTabsMenuButton;
 using chrome_test_util::TabGridTabGroupsPanelButton;
 using chrome_test_util::TapAtOffsetOf;
 using chrome_test_util::WindowWithNumber;
 
 namespace {
-const char kSearchEngineURL[] = "http://searchengine/?q={searchTerms}";
+const char kSearchEngineURL[] = "/searchengine/?q={searchTerms}";
 const char kSearchEngineHost[] = "searchengine";
 
 char kCountryCode[] = "us";
-char kURL1[] = "http://firstURL";
-char kURL2[] = "http://secondURL";
-char kURL3[] = "http://thirdURL";
-char kURL4[] = "http://fourthURL";
+char kURL1[] = "/firstURL";
+char kURL2[] = "/secondURL";
+char kURL3[] = "/thirdURL";
+char kURL4[] = "/fourthURL";
 NSString* const kTitle1 = @"Page one";
 NSString* const kTitle2 = @"Page two";
 NSString* const kTitle4 = @"Page four";
@@ -100,6 +100,9 @@ const int64_t kOfferId = 50;
 const char kCurrencyCode[] = "USD";
 NSString* const kExpectedCurrentPrice = @"$5.00";
 NSString* const kExpectedPreviousPrice = @"$10";
+
+// Key string for Escape in keyboard simulation.
+NSString* const kEscapeKey = @"escape";
 
 // Identifier for cell at given `index` in the tab grid.
 NSString* IdentifierForCellAtIndex(unsigned int index) {
@@ -118,10 +121,6 @@ id<GREYMatcher> SelectAllButton() {
                     grey_userInteractionEnabled(), nullptr);
 }
 
-id<GREYMatcher> VisibleTabGridEditButton() {
-  return grey_allOf(chrome_test_util::TabGridEditButton(),
-                    grey_sufficientlyVisible(), nil);
-}
 
 // Returns a matcher for the scrim view on the tab search.
 id<GREYMatcher> VisibleSearchScrim() {
@@ -231,87 +230,65 @@ void PerformTabGridSearch(NSString* text) {
   [ChromeEarlGrey simulatePhysicalKeyboardEvent:@"\n" flags:0];
 }
 
-// Taps the edit button on the tab grid.
-void TapVisibleTabGridEditButton() {
-  [[EarlGrey selectElementWithMatcher:VisibleTabGridEditButton()]
-      performAction:grey_tap()];
+// Handles requests to `/searchengine` by echoing the URL in the response body.
+std::unique_ptr<net::test_server::HttpResponse> HandleSearchEngineRequest(
+    const net::test_server::HttpRequest& request) {
+  if (!base::StartsWith(request.relative_url, "/searchengine")) {
+    return nullptr;
+  }
+  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+  response->set_code(net::HTTP_OK);
+  response->set_content_type("text/html");
+  std::string url_string = base::ToLowerASCII(request.relative_url);
+  response->set_content(
+      base::StringPrintf("<html><body>%s</body></html>", url_string.c_str()));
+  return response;
 }
 
-// Taps the overflow menu button on the tab grid.
-void TapTabGridOverflowMenuButton() {
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridOverflowMenuButton()]
-      performAction:grey_tap()];
+// Handles requests by looking up the relative URL in the provided response map.
+std::unique_ptr<net::test_server::HttpResponse> HandleMappedResponseRequest(
+    const std::map<std::string, std::string>* responses,
+    const net::test_server::HttpRequest& request) {
+  auto it = responses->find(request.relative_url);
+  if (it == responses->end()) {
+    return nullptr;
+  }
+  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+  response->set_code(net::HTTP_OK);
+  response->set_content_type("text/html");
+  response->set_content(it->second);
+  return response;
 }
 
-#pragma mark - TestResponseProvider
-
-// A ResponseProvider that provides html responses of the requested URL for
-// requests to `kSearchEngineHost`.
-class EchoURLDefaultSearchEngineResponseProvider
-    : public web::DataResponseProvider {
- public:
-  bool CanHandleRequest(const Request& request) override;
-  void GetResponseHeadersAndBody(
-      const Request& request,
-      scoped_refptr<net::HttpResponseHeaders>* headers,
-      std::string* response_body) override;
-};
-
-bool EchoURLDefaultSearchEngineResponseProvider::CanHandleRequest(
-    const Request& request) {
-  return base::Contains(request.url.spec(), kSearchEngineHost);
-}
-
-void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
-    const Request& request,
-    scoped_refptr<net::HttpResponseHeaders>* headers,
-    std::string* response_body) {
-  const GURL& url = request.url;
-  *headers = web::ResponseProvider::GetDefaultResponseHeaders();
-  std::string url_string = base::ToLowerASCII(url.spec());
-  *response_body =
-      base::StringPrintf("<html><body>%s</body></html>", url_string.c_str());
+// Main request handler that delegates to specific handlers.
+std::unique_ptr<net::test_server::HttpResponse> HandleRequest(
+    const std::map<std::string, std::string>* responses,
+    const net::test_server::HttpRequest& request) {
+  if (auto response = HandleSearchEngineRequest(request)) {
+    return response;
+  }
+  return HandleMappedResponseRequest(responses, request);
 }
 
 }  // namespace
 
-@interface TabGridTestCase : WebHttpServerChromeTestCase {
+@interface TabGridTestCase : ChromeTestCase {
   GURL _URL1;
   GURL _URL2;
   GURL _URL3;
   GURL _URL4;
+  std::map<std::string, std::string> _responses;
 }
 @end
 
 @implementation TabGridTestCase
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
-  AppLaunchConfiguration config;
-  if ([self isRunningTest:@selector(testDragAndDropCreatesGroup)]) {
-    config.features_enabled.push_back(kTabGridDragAndDrop);
-  }
-
-  if ([self isRunningTest:@selector(testCloseOtherTabsUsingEditMenu)] ||
-      [self isRunningTest:@selector(testCloseOtherTabsUsingContextMenu)] ||
-      [self isRunningTest:@selector(testCloseOtherTabsUnavailableInEditMenu)] ||
-      [self isRunningTest:@selector
-            (testCloseOtherTabsUnavailableInContextMenu)]) {
-    config.features_enabled.push_back(kCloseOtherTabs);
-    config.features_disabled.push_back(kTabSwitcherOverflowMenu);
-  }
-
-  if ([self isRunningTest:@selector(testCloseAllAndUndoCloseAll)] ||
-      [self isRunningTest:@selector
-            (testCloseAllAndUndoCloseAllWithInactiveTabs)] ||
-      [self isRunningTest:@selector
-            (testCloseAllAndUndoCloseAllForIncognitoGrid)] ||
-      [self isRunningTest:@selector
-            (testUndoCloseAllNotAvailableAfterNewTabCreation)] ||
-      [self isRunningTest:@selector(testTabGroupsDoneButtonAndRegularTabs)]) {
-    config.features_disabled.push_back(kTabSwitcherOverflowMenu);
+  AppLaunchConfiguration config = [super appConfigurationForTestCase];
+  if ([self isRunningTest:@selector(testTapOnSearchScrimExitsSearchMode)]) {
+    config.features_disabled.push_back(kChromeNextIa);
   } else {
-    config.features_enabled.push_back(kTabSwitcherOverflowMenu);
+    config.features_enabled.push_back(kChromeNextIa);
   }
 
   return config;
@@ -320,22 +297,24 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
 - (void)setUp {
   [super setUp];
 
-  _URL1 = web::test::HttpServer::MakeUrl(kURL1);
-  _URL2 = web::test::HttpServer::MakeUrl(kURL2);
-  _URL3 = web::test::HttpServer::MakeUrl(kURL3);
-  _URL4 = web::test::HttpServer::MakeUrl(kURL4);
+  self.testServer->RegisterRequestHandler(
+      base::BindRepeating(&HandleRequest, base::Unretained(&_responses)));
 
-  std::map<GURL, std::string> responses;
+  GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
+
+  _URL1 = self.testServer->GetURL(kURL1);
+  _URL2 = self.testServer->GetURL(kURL2);
+  _URL3 = self.testServer->GetURL(kURL3);
+  _URL4 = self.testServer->GetURL(kURL4);
+
   const char kPageFormat[] = "<head><title>%s</title></head><body>%s</body>";
-  responses[_URL1] = base::StringPrintf(
+  _responses[kURL1] = base::StringPrintf(
       kPageFormat, base::SysNSStringToUTF8(kTitle1).c_str(), kResponse1);
-  responses[_URL2] = base::StringPrintf(
+  _responses[kURL2] = base::StringPrintf(
       kPageFormat, base::SysNSStringToUTF8(kTitle2).c_str(), kResponse2);
-  // Page 3 does not have <title> tag, so URL will be its title.
-  responses[_URL3] = kResponse3;
-  responses[_URL4] = base::StringPrintf(
+  _responses[kURL3] = kResponse3;
+  _responses[kURL4] = base::StringPrintf(
       kPageFormat, base::SysNSStringToUTF8(kTitle4).c_str(), kResponse4);
-  web::test::SetUpSimpleHttpServer(responses);
 }
 
 - (void)tearDownHelper {
@@ -358,6 +337,8 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
   // See https://crbug.com/1419875.
   [ChromeEarlGrey killWebKitNetworkProcess];
 
+  [ChromeEarlGrey removeUserDefaultsObjectForKey:@"InactiveTabsTestMode"];
+
   [super tearDownHelper];
 }
 
@@ -366,6 +347,34 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
   [ChromeEarlGreyUI openTabGrid];
   [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridDoneButton()]
       performAction:grey_tap()];
+}
+
+// Tests entering the tab grid using the button and leaving it using the Escape
+// keyboard shortcut.
+- (void)testEnteringAndLeavingTabGridWithEscape {
+  [ChromeEarlGreyUI openTabGrid];
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridDoneButton()]
+      assertWithMatcher:grey_sufficientlyVisible()];
+  [ChromeEarlGrey simulatePhysicalKeyboardEvent:kEscapeKey flags:0];
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::ShowTabsButton()]
+      assertWithMatcher:grey_sufficientlyVisible()];
+}
+
+// Tests that pressing a TabGrid keyboard shortcut (such as Cmd+1 to switch to
+// the Incognito panel) when the tab grid is not visible does not trigger the
+// TabGrid page change.
+- (void)testShortcutIgnoredWhenTabGridNotVisible {
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::ShowTabsButton()]
+      assertWithMatcher:grey_sufficientlyVisible()];
+
+  // Send Cmd+1 (which is the shortcut for TabGridPageIncognitoTabs).
+  [ChromeEarlGrey simulatePhysicalKeyboardEvent:@"1"
+                                          flags:UIKeyModifierCommand];
+
+  // Open the TabGrid and verify it opened to the Regular Tabs panel.
+  [ChromeEarlGreyUI openTabGrid];
+  [[EarlGrey selectElementWithMatcher:TabGridOpenTabsPanelButton()]
+      assertWithMatcher:grey_sufficientlyVisible()];
 }
 
 // Tests that tapping on the first cell shows that tab.
@@ -390,11 +399,9 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
       assertWithMatcher:grey_notNil()];
 }
 
-// Tests that tapping Close All shows no tabs, shows Undo button, and displays
-// the empty state, and ensures that it doesn't affect the other tab grid. Then
-// tests tapping Undo shows Close All button again. Validates this case when Tab
-// Grid Bulk Actions feature is enabled.
-- (void)testCloseAllAndUndoCloseAll {
+// Tests that tapping Close All shows no tabs and displays the empty state,
+// and ensures that it doesn't affect the other tab grid.
+- (void)testCloseAll {
   // Also add a tab in incognito.
   [ChromeEarlGrey openNewIncognitoTab];
   [ChromeEarlGrey waitForIncognitoTabCount:1];
@@ -405,9 +412,15 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
       performAction:grey_tap()];
 
   // Close all tabs.
-  TapVisibleTabGridEditButton();
+  OpenTabGridOverflowMenu();
   [[EarlGrey selectElementWithMatcher:chrome_test_util::
-                                          TabGridEditMenuCloseAllButton()]
+                                          TabGridOverflowMenuCloseAllButton()]
+      performAction:grey_tap()];
+
+  // Confirm in action sheet.
+  [[EarlGrey selectElementWithMatcher:
+                 chrome_test_util::ActionSheetItemWithAccessibilityLabelId(
+                     IDS_IOS_CONTENT_CONTEXT_CLOSEALLTABSANDGROUPS)]
       performAction:grey_tap()];
 
   // Ensure normal tabs were closed.
@@ -419,32 +432,13 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
                   @"Expected that the \"Close All Tabs\" button should not "
                   @"close tabs in other pages.");
 
-  // Ensure undo button is visible and edit button is not enabled.
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridUndoCloseAllButton()]
-      assertWithMatcher:grey_sufficientlyVisible()];
-    [[EarlGrey selectElementWithMatcher:VisibleTabGridEditButton()]
-        assertWithMatcher:grey_nil()];
-
   [[EarlGrey selectElementWithMatcher:chrome_test_util::
                                           TabGridRegularTabsEmptyStateView()]
       assertWithMatcher:grey_notNil()];
-
-  // Tap Undo button.
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridUndoCloseAllButton()]
-      performAction:grey_tap()];
-
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridCellAtIndex(0)]
-      assertWithMatcher:grey_sufficientlyVisible()];
-  [[EarlGrey selectElementWithMatcher:VisibleTabGridEditButton()]
-      assertWithMatcher:grey_sufficientlyVisible()];
 }
 
-// Tests that tapping Close All also closes inactive tabs. Ensures it is
-// correctly recovered when pressing undo and there is no selection mode when
-// there are inactive tabs but no regular tabs.
-- (void)testCloseAllAndUndoCloseAllWithInactiveTabs {
+// Tests that Close All closes both regular and inactive tabs.
+- (void)testCloseAllWithInactiveTabs {
   [self loadTestURLsInNewTabs];
   [self relaunchAppWithInactiveTabsTestMode];
 
@@ -459,15 +453,16 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
   [[EarlGrey selectElementWithMatcher:TabGridInactiveTabsButton()]
       assertWithMatcher:grey_notNil()];
 
-  // Ensure the edit button is visible.
-  [[EarlGrey selectElementWithMatcher:VisibleTabGridEditButton()]
-      assertWithMatcher:grey_sufficientlyVisible()];
-
   // Close all tabs.
-  [[EarlGrey selectElementWithMatcher:VisibleTabGridEditButton()]
-      performAction:grey_tap()];
+  OpenTabGridOverflowMenu();
   [[EarlGrey selectElementWithMatcher:chrome_test_util::
-                                          TabGridEditMenuCloseAllButton()]
+                                          TabGridOverflowMenuCloseAllButton()]
+      performAction:grey_tap()];
+
+  // Confirm in action sheet.
+  [[EarlGrey selectElementWithMatcher:
+                 chrome_test_util::ActionSheetItemWithAccessibilityLabelId(
+                     IDS_IOS_CONTENT_CONTEXT_CLOSEALLTABSANDGROUPS)]
       performAction:grey_tap()];
 
   // Ensure regular and inactive tabs were closed.
@@ -482,62 +477,6 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
   // Verify that the Inactive Tabs button is not showing.
   [[EarlGrey selectElementWithMatcher:TabGridInactiveTabsButton()]
       assertWithMatcher:grey_nil()];
-
-  // Tap Undo button.
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridUndoCloseAllButton()]
-      performAction:grey_tap()];
-  GREYAssertEqual(1UL, [ChromeEarlGrey mainTabCount],
-                  @"Expected only one tab (NTP), all other tabs should have "
-                  @"been in inactive tab grid.");
-  GREYAssertEqual(4UL, [ChromeEarlGrey inactiveTabCount],
-                  @"Expected 4 inactive tabs.");
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridCellAtIndex(0)]
-      assertWithMatcher:grey_sufficientlyVisible()];
-
-  // Verify that the Inactive Tabs button is showing again.
-  [[EarlGrey selectElementWithMatcher:TabGridInactiveTabsButton()]
-      assertWithMatcher:grey_notNil()];
-
-  // Closing the only tab in the regular tab grid and verify there is an empty
-  // grid.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::
-                                          TabGridCloseButtonForCellAtIndex(0)]
-      performAction:grey_tap()];
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::
-                                          TabGridRegularTabsEmptyStateView()]
-      assertWithMatcher:grey_notNil()];
-  GREYAssertEqual(0UL, [ChromeEarlGrey mainTabCount],
-                  @"Expected no tab in regular tab grid.");
-  GREYAssertEqual(4UL, [ChromeEarlGrey inactiveTabCount],
-                  @"Expected 4 inactive tabs.");
-
-  // Ensure there is no selection mode available when there is no tab in regular
-  // tab grid.
-  [[EarlGrey selectElementWithMatcher:VisibleTabGridEditButton()]
-      assertWithMatcher:grey_sufficientlyVisible()];
-  TapVisibleTabGridEditButton();
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridSelectTabsMenuButton()]
-      assertWithMatcher:grey_nil()];
-
-  // Close all.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::
-                                          TabGridEditMenuCloseAllButton()]
-      performAction:grey_tap()];
-  GREYAssertEqual(0UL, [ChromeEarlGrey mainTabCount],
-                  @"Expected all regular tab to be closed.");
-  GREYAssertEqual(0UL, [ChromeEarlGrey inactiveTabCount],
-                  @"Expected all inactive tab to be closed.");
-
-  // Tap on Undo button.
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridUndoCloseAllButton()]
-      performAction:grey_tap()];
-  GREYAssertEqual(0UL, [ChromeEarlGrey mainTabCount],
-                  @"Expected no tab in regular tab grid.");
-  GREYAssertEqual(4UL, [ChromeEarlGrey inactiveTabCount],
-                  @"Expected 4 inactive tabs.");
 }
 
 - (void)testPriceDrops {
@@ -596,9 +535,9 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
 }
 
 // Tests that tapping Close All from the incognito grid shows no tabs and does
-// not shows Undo button. Also ensure that it close the expected tabs to avoid
+// not show Undo button. Also ensure that it closes the expected tabs to avoid
 // crbug.com/1475005.
-- (void)testCloseAllAndUndoCloseAllForIncognitoGrid {
+- (void)testCloseAllForIncognitoGrid {
   // Opens 3 incognito tabs and 1 regular.
   [ChromeEarlGrey openNewIncognitoTab];
   [ChromeEarlGrey openNewIncognitoTab];
@@ -619,29 +558,43 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
       performAction:grey_scrollToContentEdge(kGREYContentEdgeLeft)];
 
   // Close all incognito tabs
-  TapVisibleTabGridEditButton();
+  OpenTabGridOverflowMenu();
   [[EarlGrey selectElementWithMatcher:chrome_test_util::
-                                          TabGridEditMenuCloseAllButton()]
+                                          TabGridOverflowMenuCloseAllButton()]
+      performAction:grey_tap()];
+
+  // Confirm in action sheet.
+  [[EarlGrey selectElementWithMatcher:
+                 chrome_test_util::ActionSheetItemWithAccessibilityLabelId(
+                     IDS_IOS_CONTENT_CONTEXT_CLOSEALLTABSANDGROUPS)]
       performAction:grey_tap()];
 
   // Ensure only incognito tabs were closed
   [ChromeEarlGrey waitForMainTabCount:2];
   [ChromeEarlGrey waitForIncognitoTabCount:0];
-
-  // Ensure undo button is not visible.
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridUndoCloseAllButton()]
-      assertWithMatcher:grey_nil()];
-  // Ensure the edit button not interactable.
-  [[EarlGrey selectElementWithMatcher:VisibleTabGridEditButton()]
-      assertWithMatcher:grey_allOf(grey_notNil(),
-                                   grey_accessibilityTrait(
-                                       UIAccessibilityTraitNotEnabled),
-                                   nil)];
 }
 
-// Tests "Close Other Tabs" functionality from the Edit menu.
-- (void)testCloseOtherTabsUsingEditMenu {
+// Tests opening an incognito tabs after closing all incognito tabs with Chrome
+// Next IA flag enabled. This is to prevent regression during development.
+- (void)testIncognitoTabOperationsWithChromeNextIa {
+  // Opens an incognito tab.
+  [ChromeEarlGrey openNewIncognitoTab];
+  [ChromeEarlGrey waitForIncognitoTabCount:1];
+
+  [ChromeEarlGreyUI openTabGrid];
+
+  [ChromeEarlGrey closeAllIncognitoTabs];
+  [ChromeEarlGrey waitForIncognitoTabCount:0];
+
+  [[EarlGrey
+      selectElementWithMatcher:chrome_test_util::TabGridNewIncognitoTabButton()]
+      performAction:grey_tap()];
+
+  [ChromeEarlGrey waitForIncognitoTabCount:1];
+}
+
+// Tests "Close Other Tabs" functionality from the Overflow menu.
+- (void)testCloseOtherTabsUsingOverflowMenu {
   // Load 3 tabs with distinct content.
   [ChromeEarlGrey loadURL:_URL1];
   [ChromeEarlGrey waitForWebStateContainingText:kResponse1];
@@ -654,10 +607,10 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
   [ChromeEarlGrey waitForMainTabCount:3];
   [ChromeEarlGreyUI openTabGrid];
 
-  // Tap Edit button to enter selection mode.
-  TapVisibleTabGridEditButton();
+  // Open Overflow Menu.
+  OpenTabGridOverflowMenu();
 
-  // Tap "Close Other Tabs" in the Edit menu.
+  // Tap "Close Other Tabs" in the Overflow menu.
   [[EarlGrey selectElementWithMatcher:CloseOtherTabsButton()]
       performAction:grey_tap()];
   GREYWaitForAppToIdle(@"App failed to idle");
@@ -702,17 +655,17 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
   [ChromeEarlGrey waitForUIElementToAppearWithMatcher:TabWithTitle(kTitle2)];
 }
 
-// Tests that "Close Other Tabs" is not available in the Edit Menu when there is
-// only one tab.
-- (void)testCloseOtherTabsUnavailableInEditMenu {
+// Tests that "Close Other Tabs" is not available in the Overflow Menu when
+// there is only one tab.
+- (void)testCloseOtherTabsUnavailableInOverflowMenu {
   [ChromeEarlGrey waitForMainTabCount:1];
   [ChromeEarlGreyUI openTabGrid];
 
-  // Open Edit Menu.
-  TapVisibleTabGridEditButton();
+  // Open Overflow Menu.
+  OpenTabGridOverflowMenu();
 
   // Verify the menu is open by checking for "Close All Tabs".
-  [[EarlGrey selectElementWithMatcher:TabGridEditMenuCloseAllButton()]
+  [[EarlGrey selectElementWithMatcher:TabGridOverflowMenuCloseAllButton()]
       assertWithMatcher:grey_sufficientlyVisible()];
 
   // Verify "Close Other Tabs" is NOT present.
@@ -738,33 +691,6 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
   // Verify "Close Other Tabs" is NOT present.
   [[EarlGrey selectElementWithMatcher:CloseOtherTabsButton()]
       assertWithMatcher:grey_nil()];
-}
-
-// Tests that the Undo button is no longer available after tapping Close All,
-// then creating a new tab, then coming back to the tab grid.
-// Validates this case when Tab Grid Bulk Actions feature is enabled.
-- (void)testUndoCloseAllNotAvailableAfterNewTabCreation {
-  [ChromeEarlGreyUI openTabGrid];
-
-  TapVisibleTabGridEditButton();
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::
-                                          TabGridEditMenuCloseAllButton()]
-      performAction:grey_tap()];
-
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridUndoCloseAllButton()]
-      assertWithMatcher:grey_sufficientlyVisible()];
-  // Create a new tab then come back to tab grid.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridNewTabButton()]
-      performAction:grey_tap()];
-
-  [ChromeEarlGreyUI openTabGrid];
-  // Undo is no longer available.
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridUndoCloseAllButton()]
-      assertWithMatcher:grey_nil()];
-  [[EarlGrey selectElementWithMatcher:VisibleTabGridEditButton()]
-      assertWithMatcher:grey_sufficientlyVisible()];
 }
 
 // Tests simulating a swipe with Voice Over from the tab groups page, making
@@ -822,8 +748,7 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
 - (void)testIncognitoButtons {
   [ChromeEarlGrey openNewIncognitoTab];
   [ChromeEarlGreyUI openTabGrid];
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridOverflowMenuButton()]
+  [[EarlGrey selectElementWithMatcher:TabGridOverflowMenuButton()]
       assertWithMatcher:grey_interactable()];
   [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridDoneButton()]
       performAction:grey_tap()];
@@ -859,8 +784,12 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
       assertWithMatcher:grey_sufficientlyVisible()];
 
   // Close the only regular tab.
-  TapVisibleTabGridEditButton();
-  [[EarlGrey selectElementWithMatcher:TabGridEditMenuCloseAllButton()]
+  OpenTabGridOverflowMenu();
+  [[EarlGrey selectElementWithMatcher:TabGridOverflowMenuCloseAllButton()]
+      performAction:grey_tap()];
+  [[EarlGrey selectElementWithMatcher:
+                 chrome_test_util::ActionSheetItemWithAccessibilityLabelId(
+                     IDS_IOS_CONTENT_CONTEXT_CLOSEALLTABSANDGROUPS)]
       performAction:grey_tap()];
   [ChromeEarlGrey waitForMainTabCount:0];
   [ChromeEarlGrey waitForIncognitoTabCount:0];
@@ -868,10 +797,15 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
   // Go to the Tab Groups panel.
   [[EarlGrey selectElementWithMatcher:TabGridTabGroupsPanelButton()]
       performAction:grey_tap()];
-  // Ensure the Done button is disabled.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridDoneButton()]
-      assertWithMatcher:grey_accessibilityTrait(
-                            UIAccessibilityTraitNotEnabled)];
+  // Ensure the Done button is disabled (or enabled in Chrome Next IA).
+  if ([ChromeEarlGrey isChromeNextEnabled] && ![ChromeEarlGrey isIPadIdiom]) {
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridDoneButton()]
+        assertWithMatcher:grey_enabled()];
+  } else {
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridDoneButton()]
+        assertWithMatcher:grey_accessibilityTrait(
+                              UIAccessibilityTraitNotEnabled)];
+  }
 }
 
 #pragma mark - Tab Grid Item Context Menu
@@ -1086,7 +1020,7 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
   if (![ChromeEarlGrey areMultipleWindowsSupported]) {
     EARL_GREY_TEST_SKIPPED(@"Multiple windows can't be opened.");
   }
-  if (@available(iOS 19.0, *)) {
+  if (@available(iOS 26.0, *)) {
     // TODO(crbug.com/427699033): Re-enable test on iOS 26.
     // Drag creates new window, but test fails to interact with it.
     EARL_GREY_TEST_DISABLED(@"Test disabled on iOS 26.");
@@ -1179,9 +1113,8 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
   GREYWaitForAppToIdle(@"App failed to idle");
 
   [EarlGrey setRootMatcherForSubsequentInteractions:WindowWithNumber(0)];
-  TapTabGridOverflowMenuButton();
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridSelectTabsMenuButton()]
+  OpenTabGridOverflowMenu();
+  [[EarlGrey selectElementWithMatcher:TabGridOverflowMenuSelectTabsButton()]
       performAction:grey_tap()];
   [[EarlGrey
       selectElementWithMatcher:chrome_test_util::TabGridEditSelectAllButton()]
@@ -1417,9 +1350,8 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
 
   [ChromeEarlGreyUI openTabGrid];
 
-  TapTabGridOverflowMenuButton();
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridSelectTabsMenuButton()]
+  OpenTabGridOverflowMenu();
+  [[EarlGrey selectElementWithMatcher:TabGridOverflowMenuSelectTabsButton()]
       performAction:grey_tap()];
 
   // Tap tab to select.
@@ -1448,8 +1380,7 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
       assertWithMatcher:grey_notNil()];
 
   // Verify edit mode is exited.
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridOverflowMenuButton()]
+  [[EarlGrey selectElementWithMatcher:TabGridOverflowMenuButton()]
       assertWithMatcher:grey_notNil()];
 }
 
@@ -1469,9 +1400,8 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
 
   [ChromeEarlGreyUI openTabGrid];
 
-  TapTabGridOverflowMenuButton();
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridSelectTabsMenuButton()]
+  OpenTabGridOverflowMenu();
+  [[EarlGrey selectElementWithMatcher:TabGridOverflowMenuSelectTabsButton()]
       performAction:grey_tap()];
 
   // Tap "Select all" and close selected tabs.
@@ -1493,8 +1423,7 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
   [ChromeEarlGrey waitForMainTabCount:0 inWindowWithNumber:0];
 
   // Verify edit mode is exited.
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridOverflowMenuButton()]
+  [[EarlGrey selectElementWithMatcher:TabGridOverflowMenuButton()]
       assertWithMatcher:grey_notNil()];
 }
 
@@ -1514,9 +1443,8 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
 
   [ChromeEarlGreyUI openTabGrid];
 
-  TapTabGridOverflowMenuButton();
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridSelectTabsMenuButton()]
+  OpenTabGridOverflowMenu();
+  [[EarlGrey selectElementWithMatcher:TabGridOverflowMenuSelectTabsButton()]
       performAction:grey_tap()];
 
   // Ensure button label is "Select All" and select all items.
@@ -1570,10 +1498,9 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
   [BookmarkEarlGrey waitForBookmarkModelLoaded];
   [ChromeEarlGreyUI openTabGrid];
 
-  TapTabGridOverflowMenuButton();
+  OpenTabGridOverflowMenu();
 
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridSelectTabsMenuButton()]
+  [[EarlGrey selectElementWithMatcher:TabGridOverflowMenuSelectTabsButton()]
       performAction:grey_tap()];
 
   // Select the first and last items.
@@ -1639,10 +1566,9 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
 
   [ChromeEarlGreyUI openTabGrid];
 
-  TapVisibleTabGridEditButton();
+  OpenTabGridOverflowMenu();
 
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridSelectTabsMenuButton()]
+  [[EarlGrey selectElementWithMatcher:TabGridOverflowMenuSelectTabsButton()]
       performAction:grey_tap()];
 
   // Select the first and last items.
@@ -1682,10 +1608,9 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
 
   [ChromeEarlGreyUI openTabGrid];
 
-  TapTabGridOverflowMenuButton();
+  OpenTabGridOverflowMenu();
 
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridSelectTabsMenuButton()]
+  [[EarlGrey selectElementWithMatcher:TabGridOverflowMenuSelectTabsButton()]
       performAction:grey_tap()];
 
   // Select the first and last items.
@@ -2293,9 +2218,7 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
 // returns to the tab grid.
 - (void)testSearchOnWebSuggestedActionInRegularTabsSearch {
   // Configure a testing search engine to prevent real external url requests.
-  web::test::AddResponseProvider(
-      std::make_unique<EchoURLDefaultSearchEngineResponseProvider>());
-  GURL searchEngineURL = web::test::HttpServer::MakeUrl(kSearchEngineURL);
+  GURL searchEngineURL = self.testServer->GetURL(kSearchEngineURL);
   NSString* searchEngineURLString =
       base::SysUTF8ToNSString(searchEngineURL.spec());
   [SettingsAppInterface overrideSearchEngineWithURL:searchEngineURLString];
@@ -2509,10 +2432,15 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
   [ChromeEarlGrey closeCurrentTab];
   [self verifyVisibleTabsCount:0];
 
-  // Verify the Done button is disabled.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridDoneButton()]
-      assertWithMatcher:grey_accessibilityTrait(
-                            UIAccessibilityTraitNotEnabled)];
+  // Verify the Done button is disabled (or enabled in Chrome Next IA).
+  if ([ChromeEarlGrey isChromeNextEnabled] && ![ChromeEarlGrey isIPadIdiom]) {
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridDoneButton()]
+        assertWithMatcher:grey_enabled()];
+  } else {
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridDoneButton()]
+        assertWithMatcher:grey_accessibilityTrait(
+                              UIAccessibilityTraitNotEnabled)];
+  }
 
   [ChromeEarlGrey openNewIncognitoTab];
   [ChromeEarlGrey waitForIncognitoTabCount:1];
@@ -2777,16 +2705,10 @@ void EchoURLDefaultSearchEngineResponseProvider::GetResponseHeadersAndBody(
 // Relaunches the app with Inactive Tabs in test mode (i.e. considers tabs as
 // inactive immediately).
 - (void)relaunchAppWithInactiveTabsTestMode {
-  AppLaunchConfiguration config;
+  AppLaunchConfiguration config = [self appConfigurationForTestCase];
   config.relaunch_policy = ForceRelaunchByCleanShutdown;
   config.additional_args.push_back("-InactiveTabsTestMode");
   config.additional_args.push_back("true");
-  if ([self isRunningTest:@selector
-            (testCloseAllAndUndoCloseAllWithInactiveTabs)]) {
-    config.features_disabled.push_back(kTabSwitcherOverflowMenu);
-  } else {
-    config.features_enabled.push_back(kTabSwitcherOverflowMenu);
-  }
   [[AppLaunchManager sharedManager] ensureAppLaunchedWithConfiguration:config];
 }
 

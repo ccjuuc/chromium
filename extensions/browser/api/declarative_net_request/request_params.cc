@@ -22,8 +22,8 @@
 #include "extensions/browser/api/declarative_net_request/flat/extension_ruleset_generated.h"
 #include "extensions/browser/api/declarative_net_request/utils.h"
 #include "extensions/browser/api/web_request/web_request_info.h"
-#include "extensions/browser/api/web_request/web_request_resource_type.h"
 #include "extensions/browser/extensions_browser_client.h"
+#include "extensions/common/api/web_request/web_request_resource_type.h"
 #include "extensions/common/constants.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/http/http_response_headers.h"
@@ -287,7 +287,7 @@ RequestParams::RequestParams(
     // Note the discrepancy with the WebRequestInfo constructor. For a
     // navigation request, we'd use the request initiator as the
     // `first_party_origin`. But here we use the origin of the parent frame.
-    // This is the same as crbug.com/996998.
+    // This is the same as crbug.com/40641791.
     first_party_origin =
         host->GetParentOrOuterDocument()->GetLastCommittedOrigin();
     element_type = url_pattern_index::flat::ElementType_SUBDOCUMENT;

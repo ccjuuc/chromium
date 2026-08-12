@@ -25,6 +25,7 @@
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager_test_api.h"
 #include "components/autofill/core/browser/data_manager/test_personal_data_manager.h"
+#include "components/autofill/core/browser/form_import/addresses/address_form_data_importer_test_api.h"
 #include "components/autofill/core/browser/form_import/form_data_importer.h"
 #include "components/autofill/core/browser/form_import/form_data_importer_test_api.h"
 #include "components/autofill/core/browser/form_parsing/determine_regex_types.h"
@@ -101,9 +102,9 @@ const std::vector<base::FilePath> GetTestFiles() {
 std::unique_ptr<FormStructure> ConstructFormStructureFromFormData(
     const FormData& form) {
   auto form_structure = std::make_unique<FormStructure>(form);
-  const RegexPredictions regex_predictions =
-      DetermineRegexTypes(GeoIpCountryCode(""), LanguageCode(""),
-                          form_structure->ToFormData(), nullptr);
+  const RegexPredictions regex_predictions = DetermineRegexTypes(
+      GeoIpCountryCode(""), LanguageCode(""), form_structure->ToFormData(),
+      nullptr, /*ignore_small_forms=*/true);
   regex_predictions.ApplyTo(form_structure->fields());
   form_structure->RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                LanguageCode(""), nullptr);
@@ -252,7 +253,7 @@ void AutofillMergeTest::MergeProfiles(const std::string& profiles,
               .ExtractFormData(*form_structure,
                                /*profile_autofill_enabled=*/true,
                                /*payment_methods_autofill_enabled=*/true);
-      test_api(*form_data_importer_)
+      test_api(form_data_importer_->GetAddressFormDataImporter())
           .ProcessExtractedAddressProfiles(
               extracted_data.extracted_address_profiles,
               /*allow_prompt=*/true, ukm_source_id());

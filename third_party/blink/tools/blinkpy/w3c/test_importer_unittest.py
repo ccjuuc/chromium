@@ -40,6 +40,8 @@ MOCK_WEB_TESTS = '/mock-checkout/' + RELATIVE_WEB_TESTS
 MANIFEST_INSTALL_CMD = [
     'python3',
     '/mock-checkout/third_party/wpt_tools/wpt/wpt',
+    '--venv=/mock-checkout/third_party/wpt_tools/wpt/_venv3',
+    '--skip-venv-setup',
     'manifest',
     '-v',
     '--no-download',
@@ -64,7 +66,7 @@ class TestImporterTest(LoggingTestCase):
             },
             'cq-builder-b': {
                 'main': 'tryserver.blink',
-                'port_name': 'mac-mac12',
+                'port_name': 'mac-mac15',
                 'specifiers': ['Mac12', 'Release'],
                 'steps': {
                     'blink_web_tests': {},
@@ -396,7 +398,7 @@ class TestImporterTest(LoggingTestCase):
                               '--- a/css/css-ui-3/outline-004.html\n'
                               '+++ b/css/css-ui-3/outline-004.html\n'
                               '@@ -20,7 +20,7 @@\n'
-                              '...'),
+                              '...').encode(),
                     'cwd':
                     '/tmp/wpt',
                     'env':
@@ -691,6 +693,31 @@ class TestImporterTest(LoggingTestCase):
         self.assertEqual(host.executive.calls, [MANIFEST_INSTALL_CMD] * 2)
         self.assertEqual(importer.project_git.added_paths,
                          {MOCK_WEB_TESTS + 'external/' + BASE_MANIFEST_NAME})
+
+    def test_regenerate_gtest_filelists(self):
+        host = self.mock_host()
+        importer = self._get_test_importer(host)
+        importer.regenerate_gtest_filelists()
+        self.assertLog([
+            'INFO: Regenerating `blink_platform_unittests_bundle_data.filelist`\n',
+        ])
+        self.assertEqual(host.executive.calls, [
+            MANIFEST_INSTALL_CMD,
+            [
+                'vpython3',
+                '/mock-checkout/build/ios/update_bundle_filelist.py',
+                '/mock-checkout/third_party/blink/renderer/platform/'
+                'blink_platform_unittests_bundle_data.filelist',
+                '/mock-checkout/third_party/blink/renderer/platform/'
+                'blink_platform_unittests_bundle_data.globlist',
+                '/mock-checkout/third_party/blink/renderer/platform',
+            ],
+        ])
+        self.assertEqual(
+            importer.project_git.added_paths, {
+                '/mock-checkout/third_party/blink/renderer/platform/'
+                'blink_platform_unittests_bundle_data.filelist',
+            })
 
     def test_has_wpt_changes(self):
         host = self.mock_host()

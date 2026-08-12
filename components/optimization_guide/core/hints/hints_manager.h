@@ -62,11 +62,8 @@ class TopHostProvider;
 BASE_DECLARE_FEATURE(kHintsBatchUpdateForActiveTabsAndTopHosts);
 
 // The max number of concurrent fetches to the remote Optimization Guide
-// Service that should be allowed for batch updates
-// TODO: crbug.com/421924837 - This is only a param because some tests are
-// hardcoded to a assume a value that doesn't match the real one. Fix that and
-// remove this.
-BASE_DECLARE_FEATURE_PARAM(size_t, kHintsMaxConcurrentBatchUpdateFetches);
+// Service that should be allowed for batch updates.
+inline constexpr size_t kMaxConcurrentBatchUpdateFetches = 20;
 
 // The max number of concurrent fetches to the remote Optimization Guide
 // Service that should be allowed for navigations
@@ -74,6 +71,11 @@ BASE_DECLARE_FEATURE_PARAM(size_t, kHintsMaxConcurrentBatchUpdateFetches);
 // hardcoded to a assume a value that doesn't match the real one. Fix that and
 // remove this.
 BASE_DECLARE_FEATURE_PARAM(size_t, kHintsMaxConcurrentNavigationFetches);
+
+extern const char kOptimizationGuideServiceGetHintsDefaultURL[];
+// The local histogram used to record that the component hints are stored in
+// the cache and are ready for use.
+extern const char kLoadedHintLocalHistogramString[];
 
 class HintsManager : public OptimizationHintsComponentObserver,
                      public PushNotificationManager::Delegate {
@@ -243,6 +245,15 @@ class HintsManager : public OptimizationHintsComponentObserver,
       const GURL& url,
       const std::vector<optimization_guide::proto::OptimizationType>&
           optimization_types);
+
+  // Add hints to the cache for the provided optimization types and metadata.
+  // For testing only.
+  void AddHintWithMultipleOptimizationsForTesting(
+      const GURL& url,
+      const std::vector<
+          std::pair<optimization_guide::proto::OptimizationType,
+                    std::optional<optimization_guide::OptimizationMetadata>>>&
+          optimization_types_and_metadata);
 
   // Add hints to be returned for on-demand hints requests.
   void AddOnDemandHintForTesting(
@@ -640,6 +651,35 @@ class HintsManager : public OptimizationHintsComponentObserver,
       HintsFetchedCallback hints_fetched_callback,
       const std::string& access_token);
 };
+
+// Overrides the Hints Protobuf that would come from the component updater. If
+// the value of this switch is invalid, regular hint processing is used.
+// The value of this switch should be a base64 encoding of a binary
+// Configuration message, found in optimization_guide's hints.proto. Providing a
+// valid value to this switch causes Chrome startup to block on hints parsing.
+inline constexpr char kHintsProtoOverrideSwitch[] =
+    "optimization_guide_hints_override";
+
+// Overrides the hints fetch scheduling and delay, causing a hints fetch
+// immediately on start up using the TopHostProvider. This is meant for testing.
+inline constexpr char kFetchHintsOverrideTimerSwitch[] =
+    "optimization-guide-fetch-hints-override-timer";
+
+// Purges the store of all hints before loading any new hints on start up.
+inline constexpr char kPurgeHintsStoreSwitch[] =
+    "purge-optimization-guide-store";
+
+// Disables fetching of hints in real-time at the time of navigation start.
+// Meant for testing only.
+inline constexpr char
+    kDisableFetchingHintsAtNavigationStartForTestingSwitch[] =
+        "disable-fetching-hints-at-navigation-start";
+
+// Attempts to parse a base64 encoded Optimization Guide Configuration proto
+// from the command line. If no proto is given or if it is encoded incorrectly,
+// nullptr is returned.
+std::unique_ptr<proto::Configuration>
+ParseComponentConfigFromCommandLine();
 
 }  // namespace optimization_guide
 

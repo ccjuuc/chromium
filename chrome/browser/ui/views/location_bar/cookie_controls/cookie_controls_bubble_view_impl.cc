@@ -7,17 +7,13 @@
 #include <string>
 
 #include "base/metrics/user_metrics.h"
-#include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/accessibility/non_accessible_image_view.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/location_bar/cookie_controls/cookie_controls_content_view.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/javascript_dialogs/app_modal_dialog_queue.h"
-#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
-#include "ui/views/controls/button/md_text_button_with_spinner.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/view_utils.h"
@@ -29,10 +25,10 @@ constexpr int kMaxBubbleWidth = 1000;
 }  // namespace
 
 CookieControlsBubbleViewImpl::CookieControlsBubbleViewImpl(
-    views::View* anchor_view,
+    views::BubbleAnchor anchor,
     content::WebContents* web_contents,
     OnCloseBubbleCallback callback)
-    : LocationBarBubbleDelegateView(anchor_view, web_contents, true),
+    : LocationBarBubbleDelegateView(anchor, web_contents, true),
       callback_(std::move(callback)) {
   SetShowCloseButton(true);
   SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));

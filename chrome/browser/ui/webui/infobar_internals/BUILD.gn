@@ -2,6 +2,9 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//build/config/chrome_build.gni")
+import("//content/public/common/features.gni")
+import("//extensions/buildflags/buildflags.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
 
 mojom("mojo_bindings") {
@@ -10,8 +13,18 @@ mojom("mojo_bindings") {
 
   public_deps = [ "//mojo/public/mojom/base" ]
 
+  enabled_features = []
+  if (enable_extensions) {
+    enabled_features += [ "enable_extensions" ]
+  }
+  if (enable_plugins) {
+    enabled_features += [ "enable_plugins" ]
+  }
   if (is_win && is_chrome_branded) {
-    enabled_features = [ "is_win_and_chrome_branded" ]
+    enabled_features += [ "is_win_and_chrome_branded" ]
+  }
+  if (is_chrome_for_testing) {
+    enabled_features += [ "is_chrome_for_testing" ]
   }
 }
 
@@ -43,10 +56,19 @@ source_set("impl") {
     ":infobar_internals",
     ":mojo_bindings",
     "//chrome/browser:browser_process",
+    "//chrome/browser:buildflags",
     "//chrome/browser:global_features",
+    "//chrome/browser/devtools",
+    "//chrome/browser/infobars",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/resources/infobar_internals:resources",
+    "//chrome/browser/ui",
+    "//chrome/browser/ui:collected_cookies_infobar_delegate",
+    "//chrome/browser/ui:ui_features",
     "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/page_info",
+    "//chrome/browser/ui/views/site_data",
+    "//components/infobars/content",
     "//content/public/browser",
   ]
 
@@ -61,5 +83,35 @@ source_set("impl") {
       "//chrome/browser/ui/startup/default_browser_prompt",
       "//chrome/browser/ui/views/session_restore_infobar",
     ]
+  }
+
+  if (is_win || is_mac) {
+    deps += [ "//chrome/browser/ui/pdf/infobar" ]
+  }
+
+  if (is_win) {
+    deps += [
+      "//chrome/browser/startup",
+      "//chrome/browser/ui/startup",
+    ]
+  }
+
+  if (is_mac) {
+    deps += [ "//chrome/browser/ui/cocoa" ]
+  }
+
+  if (enable_extensions) {
+    deps += [
+      "//chrome/browser/extensions",
+      "//chrome/browser/extensions/api/debugger",
+      "//chrome/browser/extensions/api/messaging",
+      "//chrome/browser/themes",
+      "//extensions/browser",
+      "//extensions/common",
+    ]
+  }
+
+  if (is_chrome_for_testing) {
+    deps += [ "//chrome/browser/ui/startup" ]
   }
 }

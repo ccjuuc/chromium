@@ -4,21 +4,22 @@
 
 #include "chrome/browser/ui/performance_controls/performance_intervention_button_controller.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/feature_engagement/non_iph_promo.h"
 #include "chrome/browser/feature_engagement/tracker_factory.h"
 #include "chrome/browser/performance_manager/public/user_tuning/performance_detection_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/performance_controls/performance_controls_metrics.h"
 #include "chrome/browser/ui/performance_controls/performance_intervention_button_controller_delegate.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -41,7 +42,7 @@ const base::TimeDelta kInterventionButtonTimeout = base::Seconds(10);
 // Erase the oldest entries if the history size exceeds
 // the max acceptance window.
 void TrimAcceptHistory(PrefService* pref_service) {
-  const base::Value::List& historical_acceptance = pref_service->GetList(
+  const base::ListValue& historical_acceptance = pref_service->GetList(
       performance_manager::user_tuning::prefs::
           kPerformanceInterventionNotificationAcceptHistory);
   const size_t current_size = historical_acceptance.size();
@@ -49,7 +50,7 @@ void TrimAcceptHistory(PrefService* pref_service) {
       performance_manager::features::kAcceptanceRateWindowSize.Get());
   if (current_size > max_acceptance) {
     const size_t difference = current_size - max_acceptance;
-    base::Value::List updated_acceptance = historical_acceptance.Clone();
+    base::ListValue updated_acceptance = historical_acceptance.Clone();
     updated_acceptance.erase(updated_acceptance.begin(),
                              updated_acceptance.begin() + difference);
     pref_service->SetList(performance_manager::user_tuning::prefs::
@@ -62,7 +63,7 @@ void TrimAcceptHistory(PrefService* pref_service) {
 PerformanceInterventionButtonController::
     PerformanceInterventionButtonController(
         PerformanceInterventionButtonControllerDelegate* delegate,
-        Browser* browser)
+        BrowserWindowInterface* browser)
     : delegate_(delegate), browser_(browser) {
   // The `PerformanceDetectionManager` is undefined in unit tests because it
   // is constructed in `ChromeContentBrowserClient::CreateBrowserMainParts`.
@@ -71,7 +72,7 @@ PerformanceInterventionButtonController::
         PerformanceDetectionManager::ResourceType::kCpu};
     PerformanceDetectionManager::GetInstance()->AddActionableTabsObserver(
         resource_types, this);
-    browser->tab_strip_model()->AddObserver(this);
+    browser->GetTabStripModel()->AddObserver(this);
   }
 
   if (base::FeatureList::IsEnabled(
@@ -87,14 +88,14 @@ PerformanceInterventionButtonController::
     PerformanceDetectionManager* const detection_manager =
         PerformanceDetectionManager::GetInstance();
     detection_manager->RemoveActionableTabsObserver(this);
-    browser_->tab_strip_model()->RemoveObserver(this);
+    browser_->GetTabStripModel()->RemoveObserver(this);
   }
 }
 
 // static
 int PerformanceInterventionButtonController::GetAcceptancePercentage() {
   PrefService* const pref_service = g_browser_process->local_state();
-  const base::Value::List& historical_acceptance = pref_service->GetList(
+  const base::ListValue& historical_acceptance = pref_service->GetList(
       performance_manager::user_tuning::prefs::
           kPerformanceInterventionNotificationAcceptHistory);
 
@@ -149,7 +150,8 @@ void PerformanceInterventionButtonController::OnTabStripModelChanged(
     // Invalidate the actionable tab list since one of the actionable tabs is no
     // longer eligible and taking action on the remaining tabs no longer improve
     // resource health.
-    if (base::Contains(actionable_cpu_tabs_, current_page_context.value())) {
+    if (std::ranges::contains(actionable_cpu_tabs_,
+                              current_page_context.value())) {
       actionable_cpu_tabs_.clear();
       HideToolbarButton(false);
       return;
@@ -258,11 +260,11 @@ void PerformanceInterventionButtonController::HideToolbarButton(
               kPerformanceInterventionNotificationImprovements) &&
       was_showing) {
     PrefService* const pref_service = g_browser_process->local_state();
-    const base::Value::List& historical_acceptance = pref_service->GetList(
+    const base::ListValue& historical_acceptance = pref_service->GetList(
         performance_manager::user_tuning::prefs::
             kPerformanceInterventionNotificationAcceptHistory);
 
-    base::Value::List updated_acceptance = historical_acceptance.Clone();
+    base::ListValue updated_acceptance = historical_acceptance.Clone();
     updated_acceptance.Append(accept_intervention);
 
     if (updated_acceptance.size() >
@@ -284,17 +286,15 @@ void PerformanceInterventionButtonController::MaybeShowUi(
   CHECK(pref_service);
   // Only trigger performance detection UI for the active window and if we are
   // not already showing the UI.
-  if (browser_ != chrome::FindLastActive() || delegate_->IsButtonShowing() ||
+  if (browser_ !=
+          GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser() ||
+      delegate_->IsButtonShowing() ||
       !performance_manager::user_tuning::prefs::
           ShouldShowPerformanceInterventionNotification(pref_service)) {
     return;
   }
 
-  Profile* const profile = browser_->profile();
-  auto* const tracker =
-      feature_engagement::TrackerFactory::GetForBrowserContext(profile);
-  CHECK(tracker);
-
+  Profile* const profile = browser_->GetProfile();
   InterventionMessageTriggerResult trigger_result =
       InterventionMessageTriggerResult::kShown;
 
@@ -304,15 +304,12 @@ void PerformanceInterventionButtonController::MaybeShowUi(
                  performance_manager::features::
                      kPerformanceInterventionDemoMode)) {
     trigger_result = InterventionMessageTriggerResult::kShown;
-  } else if (ShouldShowNotification(tracker) &&
-             tracker->ShouldTriggerHelpUI(
-                 feature_engagement::
-                     kIPHPerformanceInterventionDialogFeature)) {
-    // Immediately dismiss the feature engagement tracker because the
-    // performance intervention UI shouldn't prevent other promos from
-    // showing.
-    tracker->Dismissed(
-        feature_engagement::kIPHPerformanceInterventionDialogFeature);
+  } else if (ShouldShowNotification(
+                 feature_engagement::TrackerFactory::GetForBrowserContext(
+                     profile)) &&
+             feature_engagement::NonIphPromo::RequestPermissionToShow(
+                 profile, feature_engagement::
+                              kIPHPerformanceInterventionDialogFeature)) {
     trigger_result = InterventionMessageTriggerResult::kShown;
     RecordInterventionMessageCount(type, pref_service);
   } else {
@@ -336,7 +333,9 @@ void PerformanceInterventionButtonController::MaybeShowUi(
 
 bool PerformanceInterventionButtonController::ContainsNonLastActiveProfile(
     const PerformanceDetectionManager::ActionableTabsResult& result) {
-  Profile* const profile = chrome::FindLastActive()->profile();
+  Profile* const profile = GlobalBrowserCollection::GetInstance()
+                               ->GetLastActiveBrowser()
+                               ->GetProfile();
   for (const resource_attribution::PageContext& context : result) {
     content::WebContents* const web_content = context.GetWebContents();
     if (!web_content) {

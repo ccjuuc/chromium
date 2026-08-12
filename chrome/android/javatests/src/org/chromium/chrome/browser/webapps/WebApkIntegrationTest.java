@@ -4,8 +4,13 @@
 
 package org.chromium.chrome.browser.webapps;
 
+import static androidx.test.espresso.Espresso.onView;
+import static androidx.test.espresso.action.ViewActions.click;
+import static androidx.test.espresso.matcher.ViewMatchers.withId;
+
 import static org.junit.Assert.assertEquals;
 
+import android.app.Activity;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -13,10 +18,12 @@ import android.content.res.Resources;
 import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
+import android.view.View;
 
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.filters.LargeTest;
 
+import org.hamcrest.Matchers;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -24,18 +31,23 @@ import org.junit.Test;
 import org.junit.rules.RuleChain;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.ApplicationStatus;
 import org.chromium.base.CommandLine;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.Criteria;
+import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.MinAndroidSdkLevel;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.document.ChromeLauncherActivity;
 import org.chromium.chrome.browser.flags.ActivityType;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
+import org.chromium.chrome.browser.open_in_app.OpenInAppUtils;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.test.MockCertVerifierRuleAndroid;
 import org.chromium.chrome.test.ChromeActivityTestRule;
@@ -98,7 +110,7 @@ public class WebApkIntegrationTest {
 
     /**
      * Tests that Chrome will trampoline out to WebAPKs if they exist but are not verified. See
-     * https://crbug.com/1232514
+     * https://crbug.com/40191153
      */
     @Test
     @LargeTest
@@ -123,6 +135,23 @@ public class WebApkIntegrationTest {
 
         targetContext.startActivity(intent);
 
+        if (OpenInAppUtils.isOpenInAppAvailable()) {
+            CriteriaHelper.pollUiThread(
+                    () -> {
+                        Activity activity = ApplicationStatus.getLastTrackedFocusedActivity();
+                        Criteria.checkThat("No active activity", activity, Matchers.notNullValue());
+                        View view = activity.findViewById(R.id.omnibox_chip_full);
+                        Criteria.checkThat("Omnibox chip not found", view, Matchers.notNullValue());
+                        Criteria.checkThat(
+                                "Omnibox chip not visible",
+                                view.getVisibility(),
+                                Matchers.is(View.VISIBLE));
+                    },
+                    STARTUP_TIMEOUT,
+                    CriteriaHelper.DEFAULT_POLLING_INTERVAL);
+            onView(withId(R.id.omnibox_chip_full)).perform(click());
+        }
+
         // Check we end up in the WebAPK.
         ChromeActivityTestRule.waitFor(WebappActivity.class, STARTUP_TIMEOUT);
     }
@@ -131,7 +160,7 @@ public class WebApkIntegrationTest {
     @Test
     @LargeTest
     @Feature({"Webapps"})
-    @DisabledTest(message = "https://crbug.com/1112352")
+    @DisabledTest(message = "https://crbug.com/40709668")
     public void testShare() throws TimeoutException {
         final String sharedSubject = "Fun tea parties";
         final String sharedText = "Boston";
@@ -165,7 +194,7 @@ public class WebApkIntegrationTest {
     @Test
     @LargeTest
     @Feature({"Webapps"})
-    @DisableIf.Device(DeviceFormFactor.ONLY_TABLET) // crbug.com/362218524
+    @DisableIf.Device(DeviceFormFactor.TABLET_OR_DESKTOP) // crbug.com/362218524
     public void testWebApkServiceIntegration() throws Exception {
         Context context = ApplicationProvider.getApplicationContext();
 

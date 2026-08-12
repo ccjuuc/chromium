@@ -30,7 +30,6 @@ static_library("config") {
     "//ash/webui/mall",
     "//ash/webui/os_feedback_ui",
     "//ash/webui/print_management",
-    "//ash/webui/print_preview_cros",
     "//ash/webui/sanitize_ui",
     "//ash/webui/scanner_feedback_ui",
     "//ash/webui/scanning",
@@ -41,6 +40,8 @@ static_library("config") {
     "//chrome/browser/ash/annotator",
     "//chrome/browser/ash/app_mode",
     "//chrome/browser/ash/boca/receiver",
+    "//chrome/browser/ash/borealis",
+    "//chrome/browser/ash/diagnostics",
     "//chrome/browser/ash/eche_app",
     "//chrome/browser/ash/login/demo_mode",
     "//chrome/browser/ash/mall",
@@ -63,7 +64,7 @@ static_library("config") {
     "//chrome/browser/ash/system_web_apps/apps/vc_background_ui",
     "//chrome/browser/ui",
     "//chrome/browser/ui/ash/holding_space",
-    "//chrome/browser/ui/views/borealis",
+    "//chrome/browser/ui/select_file_policy",
     "//chrome/browser/ui/webui/about",
     "//chrome/browser/ui/webui/ash/account_manager",
     "//chrome/browser/ui/webui/ash/add_supervision",
@@ -71,11 +72,9 @@ static_library("config") {
     "//chrome/browser/ui/webui/ash/arc_overview_tracing",
     "//chrome/browser/ui/webui/ash/arc_power_control",
     "//chrome/browser/ui/webui/ash/bluetooth",
-    "//chrome/browser/ui/webui/ash/borealis_installer",
     "//chrome/browser/ui/webui/ash/cellular_setup",
     "//chrome/browser/ui/webui/ash/cloud_upload",
     "//chrome/browser/ui/webui/ash/crostini_installer",
-    "//chrome/browser/ui/webui/ash/crostini_upgrader",
     "//chrome/browser/ui/webui/ash/cryptohome",
     "//chrome/browser/ui/webui/ash/curtain_ui",
     "//chrome/browser/ui/webui/ash/drive_internals",
@@ -106,7 +105,8 @@ static_library("config") {
     "//chrome/browser/ui/webui/ash/slow",
     "//chrome/browser/ui/webui/ash/smb_shares",
     "//chrome/browser/ui/webui/ash/sys_internals",
-    "//chrome/browser/ui/webui/ash/vm",
+    "//chrome/browser/ui/webui/chromeos/chrome_url_disabled",
+    "//chrome/browser/ui/webui/nearby_internals",
     "//chrome/browser/ui/webui/nearby_share",
     "//chromeos/ash/components/boca/receiver",
     "//chromeos/ash/experiences/guest_os/borealis/motd",
@@ -116,8 +116,5 @@ static_library("config") {
 
   if (!is_official_build) {
     deps += [ "//ash/webui/sample_system_web_app_ui" ]
-    if (!use_real_dbus_clients) {
-      deps += [ "//chrome/browser/ui/webui/ash/emulator" ]
-    }
   }
 }

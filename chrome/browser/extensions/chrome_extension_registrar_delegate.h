@@ -62,10 +62,12 @@ class ChromeExtensionRegistrarDelegate : public ExtensionRegistrar::Delegate {
   bool CanDisableExtension(const Extension* extension) override;
   void GrantActivePermissions(const Extension* extension) override;
   void UpdateExternalExtensionAlert() override;
+  base::flat_set<int> GetDisableReasonsOnInstalled(const Extension* extension,
+                                                   int install_flags) override;
   void OnExtensionInstalled(const Extension* extension,
                             const syncer::StringOrdinal& page_ordinal,
                             int install_flags,
-                            base::Value::Dict ruleset_install_prefs) override;
+                            base::DictValue ruleset_install_prefs) override;
 
   Profile* profile() { return profile_; }
 
@@ -73,7 +75,7 @@ class ChromeExtensionRegistrarDelegate : public ExtensionRegistrar::Delegate {
   // Disables the extension if the privilege level has increased
   // (e.g., due to an upgrade).
   void CheckPermissionsIncrease(const Extension* extension,
-                                bool is_extension_loaded);
+                                bool is_extension_installed);
 
   // Given an extension ID and/or path, loads that extension as a reload.
   void DoLoadExtensionForReload(const ExtensionId& extension_id,

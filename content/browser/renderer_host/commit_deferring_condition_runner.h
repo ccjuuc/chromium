@@ -11,8 +11,9 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
-#include "content/browser/preloading/prerender/prerender_commit_deferring_condition.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/commit_deferring_condition.h"
+#include "content/public/browser/frame_tree_node_id.h"
 
 namespace content {
 
@@ -122,9 +123,9 @@ class CONTENT_EXPORT CommitDeferringConditionRunner {
       CommitDeferringCondition::NavigationType navigation_type,
       std::optional<FrameTreeNodeId> candidate_prerender_frame_tree_node_id);
 
-  // Called asynchronously to resume iterating through
-  // CommitDeferringConditions after one has been deferred. A callback for this
-  // method is passed into each condition when WillCommitNavigation is called.
+  // Resume iterating through CommitDeferringConditions after one has been
+  // deferred. A callback for this method is passed into each condition when
+  // WillCommitNavigation is called.
   void ResumeProcessing();
 
   void ProcessConditions();
@@ -152,6 +153,13 @@ class CONTENT_EXPORT CommitDeferringConditionRunner {
 
   // True when we're blocked waiting on a call to ResumeProcessing.
   bool is_deferred_ = false;
+
+  // True while the runner is calling WillCommitNavigation on a condition.
+  bool is_in_will_commit_navigation_ = false;
+
+  // True if ResumeProcessing was called synchronously while
+  // `is_in_will_commit_navigation_` is true.
+  bool was_resumed_synchronously_ = false;
 
   base::WeakPtrFactory<CommitDeferringConditionRunner> weak_factory_{this};
 };

@@ -14,14 +14,20 @@ namespace policy::local_auth_factors {
 constexpr char kFactorsOptionAll[] = "ALL";
 
 void RegisterProfilePrefs(PrefRegistrySimple* registry) {
-  auto local_auth_factors_default =
-      base::Value::List().Append(kFactorsOptionAll);
-
   registry->RegisterIntegerPref(
       ash::prefs::kLocalAuthFactorsComplexity,
       static_cast<int>(ash::LocalAuthFactorsComplexity::kNone));
-  registry->RegisterListPref(ash::prefs::kLocalAuthFactors,
-                             std::move(local_auth_factors_default));
+
+  registry->RegisterIntegerPref(
+      ash::prefs::kLocalPasswordVerifiedComplexity,
+      static_cast<int>(ash::LocalAuthFactorsComplexity::kNone));
+
+  registry->RegisterIntegerPref(
+      ash::prefs::kLocalPinVerifiedComplexity,
+      static_cast<int>(ash::LocalAuthFactorsComplexity::kNone));
+
+  registry->RegisterListPref(ash::prefs::kAllowedLocalAuthFactors,
+                             base::ListValue().Append(kFactorsOptionAll));
 }
 
 }  // namespace policy::local_auth_factors

@@ -104,19 +104,9 @@ class FakeUpdateService : public UpdateService {
       base::OnceCallback<void(const UpdaterState&)> callback) override {
     std::move(callback).Run(UpdaterState());
   }
-  void GetUpdaterPolicies(
-      base::OnceCallback<void(const base::flat_map<std::string, PolicyValue>&)>
-          callback) override {
-    std::move(callback).Run(base::flat_map<std::string, PolicyValue>());
-  }
-  void GetAppPolicies(
-      base::OnceCallback<
-          void(const base::flat_map<std::string,
-                                    base::flat_map<std::string, PolicyValue>>&)>
-          callback) override {
-    std::move(callback).Run(
-        base::flat_map<std::string,
-                       base::flat_map<std::string, PolicyValue>>());
+  void GetPoliciesJson(
+      base::OnceCallback<void(const std::string&)> callback) override {
+    std::move(callback).Run("");
   }
 
  private:
@@ -133,9 +123,9 @@ base::RepeatingCallback<scoped_refptr<UpdateService>()> MakeFakeService(
     const std::vector<UpdateService::AppState>& states) {
   return base::BindRepeating(
       [](UpdateService::Result result,
-         const std::vector<UpdateService::AppState>& states) {
-        return static_cast<scoped_refptr<UpdateService>>(
-            base::MakeRefCounted<FakeUpdateService>(result, states));
+         const std::vector<UpdateService::AppState>& states)
+          -> scoped_refptr<UpdateService> {
+        return base::MakeRefCounted<FakeUpdateService>(result, states);
       },
       result, states);
 }

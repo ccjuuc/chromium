@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 
+#include "base/byte_size.h"
 #include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
@@ -21,6 +22,7 @@
 #include "content/public/browser/frame_tree_node_id.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/storage_partition_config.h"
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "net/base/net_errors.h"
@@ -130,9 +132,10 @@ void CompleteWithGeneratedResponse(
   }
 
   network::URLLoaderCompletionStatus status(net::OK);
-  status.encoded_data_length = headers.size() + content_length;
-  status.encoded_body_length = content_length;
-  status.decoded_body_length = content_length;
+  status.encoded_data_length =
+      base::ByteSize(headers.size()) + base::ByteSize(content_length);
+  status.encoded_body_length = base::ByteSize(content_length);
+  status.decoded_body_length = base::ByteSize(content_length);
   loader_client->OnComplete(status);
 }
 
@@ -168,11 +171,12 @@ void LogErrorMessageToConsole(
 void LogErrorAndFail(
     const std::string& error_message,
     const std::optional<content::FrameTreeNodeId>& frame_tree_node_id,
-    mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
+    mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+    net::Error err) {
   LogErrorMessageToConsole(frame_tree_node_id, error_message);
 
   mojo::Remote<network::mojom::URLLoaderClient>(std::move(client))
-      ->OnComplete(network::URLLoaderCompletionStatus(net::ERR_FAILED));
+      ->OnComplete(network::URLLoaderCompletionStatus(err));
 }
 
 void HandleProxy(
@@ -187,7 +191,10 @@ void HandleProxy(
   DCHECK(!proxy.proxy_url().opaque());
   content::StoragePartition* storage_partition =
       browser_context->GetStoragePartition(
-          IwaOrigin(web_bundle_id).storage_partition_config(browser_context),
+          content::StoragePartitionConfig::Create(
+              browser_context, IwaOrigin(web_bundle_id).GetPartitionDomain(),
+              /*partition_name=*/"",
+              /*in_memory=*/false),
           /*can_create=*/false);
   if (!storage_partition) {
     LogErrorAndFail("Storage not found for Isolated Web App: " +

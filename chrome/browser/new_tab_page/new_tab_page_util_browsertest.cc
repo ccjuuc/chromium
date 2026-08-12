@@ -7,20 +7,21 @@
 #include <memory>
 #include <string>
 
+#include "base/hash/hash.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/time/time_override.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/new_tab_page/modules/modules_constants.h"
+#include "chrome/browser/new_tab_page/prefs/ntp_pref_names.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/signin_browser_test_base.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/webui/new_tab_page/ntp_pref_names.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/scoped_browser_locale.h"
 #include "chrome/test/base/testing_profile.h"
@@ -46,7 +47,6 @@ namespace {
 
 using ::base::Time;
 using ::base::TimeDelta;
-using ::base::Value;
 
 std::unique_ptr<KeyedService> CreateTestSyncService(
     content::BrowserContext* context) {
@@ -55,12 +55,12 @@ std::unique_ptr<KeyedService> CreateTestSyncService(
 
 const char kSampleUserEmail[] = "user@gmail.com";
 
-base::Value::List CreatePolicyList(const std::string& name,
-                                   const std::string& url) {
-  base::Value::Dict shortcut_item;
+base::ListValue CreatePolicyList(const std::string& name,
+                                 const std::string& url) {
+  base::DictValue shortcut_item;
   shortcut_item.Set("name", name);
   shortcut_item.Set("url", url);
-  base::Value::List policy_list;
+  base::ListValue policy_list;
   policy_list.Append(std::move(shortcut_item));
   return policy_list;
 }
@@ -334,123 +334,43 @@ IN_PROC_BROWSER_TEST_P(NewTabPageUtilEnableFlagBrowserTest,
                     " disabled: disabled by policy");
 }
 
-class NewTabPageUtilTileTypesEnterpriseShortcutsDisabledBrowserTest
+class NewTabPageUtilTileTypesEnterpriseShortcutsBrowserTest
     : public NewTabPageUtilBrowserTest {
  public:
-  NewTabPageUtilTileTypesEnterpriseShortcutsDisabledBrowserTest() {
-    features().InitWithFeatures({}, {ntp_tiles::kNtpEnterpriseShortcuts});
-  }
+  NewTabPageUtilTileTypesEnterpriseShortcutsBrowserTest() = default;
 };
 
-IN_PROC_BROWSER_TEST_P(
-    NewTabPageUtilTileTypesEnterpriseShortcutsDisabledBrowserTest,
-    GetEnabledTileTypes) {
-  // By default, Custom Links should be enabled.
-  EXPECT_EQ(GetEnabledTileTypes(browser()->profile()),
-            std::set<ntp_tiles::TileType>({ntp_tiles::TileType::kCustomLinks}));
-
-  // Set enterprise shortcuts policy.
-  browser()->profile()->GetPrefs()->SetList(
-      ntp_tiles::prefs::kEnterpriseShortcutsPolicyList,
-      CreatePolicyList("work name", "https://work.com/"));
-
-  // If custom links are explicitly disabled, it falls back to Top Sites.
-  browser()->profile()->GetPrefs()->SetBoolean(
-      ntp_prefs::kNtpCustomLinksVisible, false);
-  EXPECT_EQ(GetEnabledTileTypes(browser()->profile()),
-            std::set<ntp_tiles::TileType>({ntp_tiles::TileType::kTopSites}));
-
-  // Edge case: If enterprise shortcuts are visible (pref=true) but the
-  // feature is disabled, code forces Custom Links back on.
-  browser()->profile()->GetPrefs()->SetBoolean(
-      ntp_prefs::kNtpEnterpriseShortcutsVisible, true);
-  EXPECT_EQ(GetEnabledTileTypes(browser()->profile()),
-            std::set<ntp_tiles::TileType>({ntp_tiles::TileType::kCustomLinks}));
-}
-
-class NewTabPageUtilTileTypesEnterpriseShortcutsEnabledNoMixingBrowserTest
-    : public NewTabPageUtilBrowserTest {
- public:
-  NewTabPageUtilTileTypesEnterpriseShortcutsEnabledNoMixingBrowserTest() {
-    features().InitWithFeaturesAndParameters(
-        {{ntp_tiles::kNtpEnterpriseShortcuts,
-          {{ntp_tiles::kNtpEnterpriseShortcutsAllowMixingParam.name,
-            "false"}}}},
-        {});
-  }
-};
-
-IN_PROC_BROWSER_TEST_P(
-    NewTabPageUtilTileTypesEnterpriseShortcutsEnabledNoMixingBrowserTest,
-    GetEnabledTileTypes) {
+IN_PROC_BROWSER_TEST_P(NewTabPageUtilTileTypesEnterpriseShortcutsBrowserTest,
+                       GetEnabledTileTypes) {
   // By default, personal shortcuts are visible (Custom Links).
-  EXPECT_EQ(GetEnabledTileTypes(browser()->profile()),
+  EXPECT_EQ(GetEnabledTileTypes(browser()->GetProfile()),
             std::set<ntp_tiles::TileType>({ntp_tiles::TileType::kCustomLinks}));
 
   // Set enterprise shortcuts policy.
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       ntp_tiles::prefs::kEnterpriseShortcutsPolicyList,
       CreatePolicyList("work name", "https://work.com/"));
 
-  // If enterprise shortcuts are enabled and mixing is DISABLED,
-  // personal shortcuts (Custom Links) should disappear.
-  browser()->profile()->GetPrefs()->SetBoolean(
+  // If enterprise shortcuts are also visible, both should be enabled.
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       ntp_prefs::kNtpEnterpriseShortcutsVisible, true);
-  EXPECT_EQ(GetEnabledTileTypes(browser()->profile()),
-            std::set<ntp_tiles::TileType>(
-                {ntp_tiles::TileType::kEnterpriseShortcuts}));
-
-  // Remove enterprise shortcuts policy, personal shortcuts should be visible.
-  browser()->profile()->GetPrefs()->SetList(
-      ntp_tiles::prefs::kEnterpriseShortcutsPolicyList, base::Value::List());
-  EXPECT_EQ(GetEnabledTileTypes(browser()->profile()),
-            std::set<ntp_tiles::TileType>({ntp_tiles::TileType::kCustomLinks}));
-}
-
-class NewTabPageUtilTileTypesEnterpriseShortcutsEnabledAllowMixingBrowserTest
-    : public NewTabPageUtilBrowserTest {
- public:
-  NewTabPageUtilTileTypesEnterpriseShortcutsEnabledAllowMixingBrowserTest() {
-    features().InitWithFeaturesAndParameters(
-        {{ntp_tiles::kNtpEnterpriseShortcuts,
-          {{ntp_tiles::kNtpEnterpriseShortcutsAllowMixingParam.name, "true"}}}},
-        {});
-  }
-};
-
-IN_PROC_BROWSER_TEST_P(
-    NewTabPageUtilTileTypesEnterpriseShortcutsEnabledAllowMixingBrowserTest,
-    GetEnabledTileTypes) {
-  // By default, personal shortcuts are visible (Custom Links).
-  EXPECT_EQ(GetEnabledTileTypes(browser()->profile()),
-            std::set<ntp_tiles::TileType>({ntp_tiles::TileType::kCustomLinks}));
-
-  // Set enterprise shortcuts policy.
-  browser()->profile()->GetPrefs()->SetList(
-      ntp_tiles::prefs::kEnterpriseShortcutsPolicyList,
-      CreatePolicyList("work name", "https://work.com/"));
-
-  // If enterprise shortcuts are also visible AND mixing is ALLOWED,
-  // both should be enabled.
-  browser()->profile()->GetPrefs()->SetBoolean(
-      ntp_prefs::kNtpEnterpriseShortcutsVisible, true);
-  EXPECT_EQ(GetEnabledTileTypes(browser()->profile()),
+  EXPECT_EQ(GetEnabledTileTypes(browser()->GetProfile()),
             std::set<ntp_tiles::TileType>(
                 {ntp_tiles::TileType::kCustomLinks,
                  ntp_tiles::TileType::kEnterpriseShortcuts}));
 
   // If personal shortcuts are explicitly hidden by the user,
   // only enterprise should remain.
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       ntp_prefs::kNtpPersonalShortcutsVisible, false);
-  EXPECT_EQ(GetEnabledTileTypes(browser()->profile()),
+  EXPECT_EQ(GetEnabledTileTypes(browser()->GetProfile()),
             std::set<ntp_tiles::TileType>(
                 {ntp_tiles::TileType::kEnterpriseShortcuts}));
 
   // Remove enterprise shortcuts policy, personal shortcuts should be visible.
-  browser()->profile()->GetPrefs()->SetList(
-      ntp_tiles::prefs::kEnterpriseShortcutsPolicyList, base::Value::List());
-  EXPECT_EQ(GetEnabledTileTypes(browser()->profile()),
+  browser()->GetProfile()->GetPrefs()->SetList(
+      ntp_tiles::prefs::kEnterpriseShortcutsPolicyList, base::ListValue());
+  EXPECT_EQ(GetEnabledTileTypes(browser()->GetProfile()),
             std::set<ntp_tiles::TileType>({ntp_tiles::TileType::kCustomLinks}));
 }
 
@@ -470,17 +390,37 @@ IN_PROC_BROWSER_TEST_P(
   const std::string module_id = ntp_modules::kGoogleCalendarModuleId;
 
   // Act.
-  DisableModuleAutoRemoval(browser()->profile(), module_id);
+  DisableModuleAutoRemoval(browser()->GetProfile(), module_id);
 
   // Assert.
   const bool actual_value =
       browser()
-          ->profile()
+          ->GetProfile()
           ->GetPrefs()
           ->GetDict(ntp_prefs::kNtpModulesAutoRemovalDisabledDict)
           .FindBool(module_id)
           .value_or(false);
   EXPECT_TRUE(actual_value);
+}
+
+IN_PROC_BROWSER_TEST_P(NewTabPageUtilFeatureOptimizationModuleRemovalTest,
+                       DisableModuleListAutoRemoval) {
+  // Arrange.
+  const std::vector<std::string> module_ids = {
+      ntp_modules::kGoogleCalendarModuleId,
+      ntp_modules::kOutlookCalendarModuleId,
+      ntp_modules::kDriveModuleId,
+  };
+
+  // Act.
+  DisableModuleListAutoRemoval(browser()->GetProfile(), module_ids);
+
+  // Assert.
+  const auto& dict_pref = browser()->GetProfile()->GetPrefs()->GetDict(
+      ntp_prefs::kNtpModulesAutoRemovalDisabledDict);
+  for (const auto& module_id : module_ids) {
+    EXPECT_TRUE(dict_pref.FindBool(module_id).value_or(false));
+  }
 }
 
 class NewTabPageUtilStalenessUpdateBrowserTest
@@ -502,7 +442,7 @@ class NewTabPageUtilStalenessUpdateBrowserTest
     GetProfile()->GetPrefs()->SetTime(ntp_prefs::kNtpLastModuleStalenessUpdate,
                                       Time::Now());
     GetProfile()->GetPrefs()->SetDict(ntp_prefs::kNtpModuleStalenessCountDict,
-                                      Value::Dict());
+                                      base::DictValue());
   }
 
   void InitMockShortcutsPrefs() {
@@ -526,6 +466,9 @@ class NewTabPageUtilStalenessUpdateBrowserTest
   std::vector<std::string> GetModules() { return loaded_modules; }
 
   static Time Now() { return current_time_; }
+
+ protected:
+  base::HistogramTester histogram_tester_;
 
  private:
   static Time current_time_;
@@ -555,7 +498,8 @@ IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
 
   const Time expected_time = initial_time + time_delta;
   const int expected_staleness_count = is_null_timestamp ? 0 : 1;
-  const int expected_dict_size = is_null_timestamp ? 0 : GetModules().size();
+  const size_t expected_dict_size =
+      is_null_timestamp ? 0u : GetModules().size();
 
   // Act.
   FastForwardBy(time_delta);
@@ -570,7 +514,7 @@ IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
     EXPECT_EQ(updated_time, expected_time);
   }
 
-  const Value::Dict& updated_dict = GetProfile()->GetPrefs()->GetDict(
+  const base::DictValue& updated_dict = GetProfile()->GetPrefs()->GetDict(
       ntp_prefs::kNtpModuleStalenessCountDict);
   EXPECT_EQ(updated_dict.size(), expected_dict_size);
   for (const auto& module_id : GetModules()) {
@@ -598,8 +542,9 @@ IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
   const Time expected_time =
       is_above_update_threshold ? initial_time + time_delta : initial_time;
   const int expected_staleness_count = is_above_update_threshold ? 1 : 0;
-  const int expected_dict_size =
-      is_above_update_threshold ? GetModules().size() : 0;
+  const size_t expected_dict_size =
+      is_above_update_threshold ? GetModules().size() : 0u;
+  const int expected_histogram_count = is_above_update_threshold ? 1 : 0;
 
   // Act.
   FastForwardBy(time_delta);
@@ -610,12 +555,15 @@ IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
       ntp_prefs::kNtpLastModuleStalenessUpdate);
   EXPECT_EQ(updated_time, expected_time);
 
-  const Value::Dict& updated_dict = GetProfile()->GetPrefs()->GetDict(
+  const base::DictValue& updated_dict = GetProfile()->GetPrefs()->GetDict(
       ntp_prefs::kNtpModuleStalenessCountDict);
   EXPECT_EQ(updated_dict.size(), expected_dict_size);
   for (const auto& module_id : GetModules()) {
     std::optional<int> updated_count = updated_dict.FindInt(module_id);
     EXPECT_EQ(updated_count.value_or(0), expected_staleness_count);
+    histogram_tester_.ExpectBucketCount(
+        "NewTabPage.Modules.AutoRemovalSkipped.StaleDaysCount",
+        base::PersistentHash(module_id), expected_histogram_count);
   }
 }
 
@@ -641,8 +589,9 @@ IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
   const Time expected_time =
       is_force_disabled_all_modules ? initial_time : initial_time + time_delta;
   const int expected_staleness_count = is_force_disabled_all_modules ? 0 : 1;
-  const int expected_dict_size =
-      is_force_disabled_all_modules ? 0 : GetModules().size();
+  const size_t expected_dict_size =
+      is_force_disabled_all_modules ? 0u : GetModules().size();
+  const int expected_histogram_count = is_force_disabled_all_modules ? 1 : 0;
 
   // Act.
   FastForwardBy(time_delta);
@@ -653,12 +602,15 @@ IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
       ntp_prefs::kNtpLastModuleStalenessUpdate);
   EXPECT_EQ(updated_time, expected_time);
 
-  const Value::Dict& updated_dict = GetProfile()->GetPrefs()->GetDict(
+  const base::DictValue& updated_dict = GetProfile()->GetPrefs()->GetDict(
       ntp_prefs::kNtpModuleStalenessCountDict);
   EXPECT_EQ(updated_dict.size(), expected_dict_size);
   for (const auto& module_id : GetModules()) {
     std::optional<int> updated_count = updated_dict.FindInt(module_id);
     EXPECT_EQ(updated_count.value_or(0), expected_staleness_count);
+    histogram_tester_.ExpectBucketCount(
+        "NewTabPage.Modules.AutoRemovalSkipped.DisabledAllModules",
+        base::PersistentHash(module_id), expected_histogram_count);
   }
 }
 
@@ -684,8 +636,10 @@ IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
   const Time expected_time = initial_time + time_delta;
   const int expected_google_calendar_staleness_count =
       is_force_disabled_google_calendar ? 0 : 1;
-  const int expected_dict_size =
-      is_force_disabled_google_calendar ? 1 : GetModules().size();
+  const size_t expected_dict_size =
+      is_force_disabled_google_calendar ? 1u : GetModules().size();
+  const int expected_histogram_count =
+      is_force_disabled_google_calendar ? 1 : 0;
 
   // Act.
   FastForwardBy(time_delta);
@@ -696,7 +650,7 @@ IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
       ntp_prefs::kNtpLastModuleStalenessUpdate);
   EXPECT_EQ(updated_time, expected_time);
 
-  const Value::Dict& updated_dict = GetProfile()->GetPrefs()->GetDict(
+  const base::DictValue& updated_dict = GetProfile()->GetPrefs()->GetDict(
       ntp_prefs::kNtpModuleStalenessCountDict);
   EXPECT_EQ(updated_dict.size(), expected_dict_size);
 
@@ -708,6 +662,95 @@ IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
   std::optional<int> updated_outlook_calendar_staleness_count =
       updated_dict.FindInt(ntp_modules::kOutlookCalendarModuleId);
   EXPECT_EQ(updated_outlook_calendar_staleness_count.value_or(0), 1);
+
+  histogram_tester_.ExpectBucketCount(
+      "NewTabPage.Modules.AutoRemovalSkipped.Disabled",
+      base::PersistentHash(ntp_modules::kGoogleCalendarModuleId),
+      expected_histogram_count);
+}
+
+// Parameterized to test for modules with managed preferences.
+IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
+                       ShouldUpdateModuleStalenessWithManagedPreference) {
+  // Arrange.
+  InitMockPrefs();
+  InitMockModules();
+  const bool is_managed_preference = GetParam();
+  if (is_managed_preference) {
+    policy::PolicyMap policies;
+    policies.Set(policy::key::kNTPCardsVisible, policy::POLICY_LEVEL_MANDATORY,
+                 policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_PLATFORM,
+                 base::Value(true), nullptr);
+    policy_provider().UpdateChromePolicy(policies);
+  }
+
+  const TimeDelta staleness_threshold =
+      ntp_features::kModuleMinStalenessUpdateTimeInterval.Get();
+  const TimeDelta time_delta = staleness_threshold + base::Seconds(1);
+  const Time initial_time = GetProfile()->GetPrefs()->GetTime(
+      ntp_prefs::kNtpLastModuleStalenessUpdate);
+
+  const Time expected_time = initial_time + time_delta;
+  const int expected_histogram_count = is_managed_preference ? 1 : 0;
+
+  // Act.
+  FastForwardBy(time_delta);
+  UpdateModulesStaleness(GetProfile(), GetModules());
+
+  // Assert.
+  const Time updated_time = GetProfile()->GetPrefs()->GetTime(
+      ntp_prefs::kNtpLastModuleStalenessUpdate);
+  EXPECT_EQ(updated_time, expected_time);
+
+  for (const auto& module_id : GetModules()) {
+    histogram_tester_.ExpectBucketCount(
+        "NewTabPage.Modules.AutoRemovalSkipped.ManagedPreference",
+        base::PersistentHash(module_id), expected_histogram_count);
+  }
+}
+
+// Parameterized to test for logging the module staleness count metric.
+// In either case, the module staleness count is always logged.
+IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
+                       ShouldLogModuleStalenessCountMetric) {
+  // Arrange.
+  InitMockPrefs();
+  InitMockModules();
+  const bool is_above_staleness_count = GetParam();
+  const int google_calendar_staleness_count = is_above_staleness_count ? 10 : 0;
+  const int outlook_calendar_staleness_count = is_above_staleness_count ? 5 : 0;
+  if (is_above_staleness_count) {
+    ScopedDictPrefUpdate update(GetProfile()->GetPrefs(),
+                                ntp_prefs::kNtpModuleStalenessCountDict);
+    update->Set(ntp_modules::kGoogleCalendarModuleId,
+                google_calendar_staleness_count);
+    update->Set(ntp_modules::kOutlookCalendarModuleId,
+                outlook_calendar_staleness_count);
+  }
+
+  const TimeDelta staleness_threshold =
+      ntp_features::kModuleMinStalenessUpdateTimeInterval.Get();
+  const TimeDelta time_delta = staleness_threshold + base::Seconds(1);
+  const Time initial_time = GetProfile()->GetPrefs()->GetTime(
+      ntp_prefs::kNtpLastModuleStalenessUpdate);
+
+  const Time expected_time = initial_time + time_delta;
+
+  // Act.
+  FastForwardBy(time_delta);
+  UpdateModulesStaleness(GetProfile(), GetModules());
+
+  // Assert.
+  const Time updated_time = GetProfile()->GetPrefs()->GetTime(
+      ntp_prefs::kNtpLastModuleStalenessUpdate);
+  EXPECT_EQ(updated_time, expected_time);
+
+  histogram_tester_.ExpectUniqueSample(
+      "NewTabPage.Modules.AutoRemovalStaleDays.google_calendar",
+      google_calendar_staleness_count, 1);
+  histogram_tester_.ExpectUniqueSample(
+      "NewTabPage.Modules.AutoRemovalStaleDays.outlook_calendar",
+      outlook_calendar_staleness_count, 1);
 }
 
 IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
@@ -758,6 +801,11 @@ IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
 
   EXPECT_EQ(updated_time, is_above_update_threshold ? Now() : initial_time);
   EXPECT_EQ(updated_count, is_above_update_threshold ? 1 : 0);
+
+  histogram_tester_.ExpectBucketCount(
+      "NewTabPage.MostVisited.AutoRemovalSkipped",
+      NtpShortcutsAutoRemovalReason::kStaleDaysCount,
+      is_above_update_threshold ? 1 : 0);
 }
 
 IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
@@ -783,6 +831,11 @@ IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
 
   EXPECT_EQ(updated_time, is_auto_removal_disabled ? initial_time : Now());
   EXPECT_EQ(updated_count, is_auto_removal_disabled ? 0 : 1);
+
+  histogram_tester_.ExpectBucketCount(
+      "NewTabPage.MostVisited.AutoRemovalSkipped",
+      NtpShortcutsAutoRemovalReason::kDisabled,
+      is_auto_removal_disabled ? 1 : 0);
 }
 
 IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
@@ -808,6 +861,69 @@ IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
 
   EXPECT_EQ(updated_time, are_shortcuts_hidden ? initial_time : Now());
   EXPECT_EQ(updated_count, are_shortcuts_hidden ? 0 : 1);
+
+  histogram_tester_.ExpectBucketCount(
+      "NewTabPage.MostVisited.AutoRemovalSkipped",
+      NtpShortcutsAutoRemovalReason::kNotVisible, are_shortcuts_hidden ? 1 : 0);
+}
+
+// Parameterized to test for shortcuts with managed preference.
+IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
+                       ShouldUpdateShortcutsStalenessWithManagedPreference) {
+  // Arrange.
+  InitMockShortcutsPrefs();
+  const bool is_managed_preference = GetParam();
+  if (is_managed_preference) {
+    GetProfile()->GetPrefs()->SetList(
+        ntp_tiles::prefs::kEnterpriseShortcutsPolicyList,
+        CreatePolicyList("work name", "https://work.com/"));
+    GetProfile()->GetPrefs()->SetBoolean(
+        ntp_prefs::kNtpEnterpriseShortcutsVisible, true);
+  }
+
+  const TimeDelta staleness_threshold =
+      ntp_features::kShortcutsMinStalenessUpdateTimeInterval.Get();
+  const TimeDelta time_delta = staleness_threshold + base::Seconds(1);
+
+  // Act.
+  FastForwardBy(time_delta);
+  UpdateShortcutsStaleness(GetProfile());
+
+  // Assert.
+  histogram_tester_.ExpectBucketCount(
+      "NewTabPage.MostVisited.AutoRemovalSkipped",
+      NtpShortcutsAutoRemovalReason::kManagedPreference,
+      is_managed_preference ? 1 : 0);
+}
+
+// Parameterized to test for logging the shortcuts staleness count metric.
+IN_PROC_BROWSER_TEST_P(NewTabPageUtilStalenessUpdateBrowserTest,
+                       ShouldLogShortcutsStalenessCountMetric) {
+  // Arrange.
+  InitMockShortcutsPrefs();
+  const bool is_above_staleness_count = GetParam();
+  const int shortcuts_staleness_count = is_above_staleness_count ? 15 : 0;
+  if (is_above_staleness_count) {
+    GetProfile()->GetPrefs()->SetInteger(ntp_prefs::kNtpShortcutsStalenessCount,
+                                         shortcuts_staleness_count);
+  }
+
+  const TimeDelta staleness_threshold =
+      ntp_features::kShortcutsMinStalenessUpdateTimeInterval.Get();
+  const TimeDelta time_delta = staleness_threshold + base::Seconds(1);
+
+  // Act.
+  FastForwardBy(time_delta);
+  UpdateShortcutsStaleness(GetProfile());
+
+  // Assert.
+  EXPECT_EQ(GetProfile()->GetPrefs()->GetInteger(
+                ntp_prefs::kNtpShortcutsStalenessCount),
+            shortcuts_staleness_count + 1);
+
+  histogram_tester_.ExpectUniqueSample(
+      "NewTabPage.MostVisited.AutoRemovalStaleDays", shortcuts_staleness_count,
+      1);
 }
 
 INSTANTIATE_TEST_SUITE_P(All, NewTabPageUtilBrowserTest, testing::Bool());
@@ -820,20 +936,9 @@ INSTANTIATE_TEST_SUITE_P(All,
                          NewTabPageUtilDisableFlagBrowserTest,
                          testing::Bool());
 
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    NewTabPageUtilTileTypesEnterpriseShortcutsDisabledBrowserTest,
-    testing::Bool());
-
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    NewTabPageUtilTileTypesEnterpriseShortcutsEnabledNoMixingBrowserTest,
-    testing::Bool());
-
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    NewTabPageUtilTileTypesEnterpriseShortcutsEnabledAllowMixingBrowserTest,
-    testing::Bool());
+INSTANTIATE_TEST_SUITE_P(All,
+                         NewTabPageUtilTileTypesEnterpriseShortcutsBrowserTest,
+                         testing::Bool());
 
 INSTANTIATE_TEST_SUITE_P(All,
                          NewTabPageUtilFeatureOptimizationModuleRemovalTest,

@@ -18,9 +18,14 @@ include_rules = [
   "+chrome/browser/ui/browser_window/public",
   "+chrome/browser/ui/web_applications",
   "+chrome/browser/ui/webui/ash/system_web_dialog",
-  "+chrome/browser/ui/webui/sanitized_image_source.h",
+  "+chrome/browser/ui/webui/sanitized_image/sanitized_image_source.h",
   "+chrome/browser/web_applications",
-  "+chrome/common",
   "+chrome/grit",
   "+chrome/test/base",
 ]
+
+specific_include_rules = {
+  "app_install_ui\\.cc": [
+    "+chrome/browser/ui/webui/theme_source.h",
+  ],
+}

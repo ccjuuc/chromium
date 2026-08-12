@@ -8,9 +8,9 @@
 #include <stdint.h>
 
 #include <optional>
-#include <string_view>
 
 #include "base/containers/heap_array.h"
+#include "base/containers/span.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/types/expected.h"
 #include "components/persistent_cache/entry_metadata.h"
@@ -39,14 +39,14 @@ struct Entry {
 // metadata and content for `key`.
 base::expected<std::optional<Entry>, TransactionError> FindEntry(
     PersistentCache& cache,
-    std::string_view key);
+    base::span<const uint8_t> key);
 
 // As described in PersistentCacheCollection::Find, but returning an Entry
 // holding the metadata and content for `key`.
 base::expected<std::optional<Entry>, TransactionError> FindEntry(
     PersistentCacheCollection& collection,
     const std::string& cache_id,
-    std::string_view key);
+    base::span<const uint8_t> key);
 
 }  // namespace persistent_cache
 

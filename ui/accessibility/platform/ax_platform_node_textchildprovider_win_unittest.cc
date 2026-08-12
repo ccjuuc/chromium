@@ -4,7 +4,6 @@
 
 #include "ui/accessibility/platform/ax_platform_node_textchildprovider_win.h"
 
-#include "base/compiler_specific.h"
 #include "base/win/scoped_bstr.h"
 #include "ui/accessibility/platform/ax_fragment_root_win.h"
 #include "ui/accessibility/platform/ax_platform_node_textprovider_win.h"
@@ -108,12 +107,8 @@ class AXPlatformNodeTextChildProviderTest : public AXPlatformNodeWinTest {
 
   void SetOwner(AXPlatformNodeWin* owner,
                 ITextRangeProvider* destination_range) {
-    ComPtr<ITextRangeProvider> destination_provider = destination_range;
-    ComPtr<AXPlatformNodeTextRangeProviderWin> destination_provider_interal;
-
-    destination_provider->QueryInterface(
-        IID_PPV_ARGS(&destination_provider_interal));
-    destination_provider_interal->SetOwnerForTesting(owner);
+    static_cast<AXPlatformNodeTextRangeProviderWin*>(destination_range)
+        ->SetOwnerForTesting(owner);
   }
 
   ComPtr<IRawElementProviderSimple> root_provider_raw_;
@@ -288,8 +283,7 @@ TEST_F(AXPlatformNodeTextChildProviderTest,
   base::win::ScopedBstr text_content;
   EXPECT_HRESULT_SUCCEEDED(
       text_range_provider->GetText(-1, text_content.Receive()));
-  EXPECT_EQ(0, UNSAFE_TODO(wcscmp(text_content.Get(), L"text child of text.")));
-
+  EXPECT_STREQ(text_content.Get(), L"text child of text.");
   ComPtr<IRawElementProviderSimple> enclosing_element;
   text_range_provider->GetEnclosingElement(&enclosing_element);
   EXPECT_EQ(text_child_of_root_text_provider_raw_.Get(),
@@ -335,8 +329,7 @@ TEST_F(AXPlatformNodeTextChildProviderTest,
   base::win::ScopedBstr text_content;
   EXPECT_HRESULT_SUCCEEDED(
       text_range_provider->GetText(-1, text_content.Receive()));
-  EXPECT_EQ(0,
-            UNSAFE_TODO(wcscmp(text_content.Get(), L"text child of nontext.")));
+  EXPECT_STREQ(text_content.Get(), L"text child of nontext.");
 
   ComPtr<IRawElementProviderSimple> enclosing_element;
   text_range_provider->GetEnclosingElement(&enclosing_element);
@@ -359,8 +352,7 @@ TEST_F(AXPlatformNodeTextChildProviderTest,
   base::win::ScopedBstr text_content;
   EXPECT_HRESULT_SUCCEEDED(
       text_range_provider->GetText(-1, text_content.Receive()));
-  EXPECT_EQ(0, UNSAFE_TODO(wcscmp(text_content.Get(), L"text child of text.")));
-
+  EXPECT_STREQ(text_content.Get(), L"text child of text.");
   ComPtr<IRawElementProviderSimple> enclosing_element;
   text_range_provider->GetEnclosingElement(&enclosing_element);
   EXPECT_EQ(text_child_of_root_text_provider_raw_.Get(),

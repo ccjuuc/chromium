@@ -10,14 +10,15 @@ import android.text.TextUtils;
 import androidx.annotation.MainThread;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.chrome.browser.signin.services.DisplayableProfileData;
 import org.chromium.chrome.browser.signin.services.ProfileDataCache;
 import org.chromium.chrome.browser.ui.signin.account_picker.AccountPickerProperties.AddAccountRowProperties;
 import org.chromium.chrome.browser.ui.signin.account_picker.AccountPickerProperties.ExistingAccountRowProperties;
 import org.chromium.chrome.browser.ui.signin.account_picker.AccountPickerProperties.ItemType;
-import org.chromium.components.signin.AccountManagerFacade;
 import org.chromium.components.signin.AccountManagerFacadeProvider;
 import org.chromium.components.signin.AccountUtils;
-import org.chromium.components.signin.AccountsChangeObserver;
+import org.chromium.components.signin.SigninFeatureMap;
+import org.chromium.components.signin.SigninFeatures;
 import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.base.CoreAccountInfo;
 import org.chromium.components.signin.identitymanager.IdentityManager;
@@ -33,11 +34,11 @@ import java.util.List;
  * This class has no visibility of the account picker view.
  */
 @NullMarked
-class AccountPickerMediator implements AccountsChangeObserver, ProfileDataCache.Observer {
+class AccountPickerMediator implements ProfileDataCache.Observer {
     private final MVCListAdapter.ModelList mListModel;
     private final AccountPickerCoordinator.Listener mAccountPickerListener;
     private final ProfileDataCache mProfileDataCache;
-    private final AccountManagerFacade mAccountManagerFacade;
+    private final IdentityManager mIdentityManager;
 
     @MainThread
     AccountPickerMediator(
@@ -47,37 +48,32 @@ class AccountPickerMediator implements AccountsChangeObserver, ProfileDataCache.
             IdentityManager identityManager) {
         mListModel = listModel;
         mAccountPickerListener = listener;
+        mIdentityManager = identityManager;
         mProfileDataCache =
                 ProfileDataCache.createWithDefaultImageSizeAndNoBadge(context, identityManager);
-        mAccountManagerFacade = AccountManagerFacadeProvider.getInstance();
-
-        mAccountManagerFacade.addObserver(this);
         mProfileDataCache.addObserver(this);
-        updateAccounts(
-                AccountUtils.getAccountsIfFulfilledOrEmpty(mAccountManagerFacade.getAccounts()));
-    }
-
-    /** Implements {@link AccountsChangeObserver}. */
-    @Override
-    public void onCoreAccountInfosChanged() {
-        mAccountManagerFacade.getAccounts().then(this::updateAccounts);
+        updateAccounts(getAccounts());
     }
 
     /** Implements {@link ProfileDataCache.Observer}. */
     @Override
-    public void onProfileDataUpdated(String accountEmail) {
+    public void onAccountsUpdated(List<DisplayableProfileData> accounts) {
+        updateAccounts(getAccounts());
+    }
+
+    /** Implements {@link ProfileDataCache.Observer}. */
+    @Override
+    public void onProfileDataUpdated(DisplayableProfileData profileData) {
         for (MVCListAdapter.ListItem item : mListModel) {
             if (item.type == AccountPickerProperties.ItemType.EXISTING_ACCOUNT_ROW) {
                 PropertyModel model = item.model;
                 boolean isProfileDataUpdated =
                         TextUtils.equals(
-                                accountEmail,
+                                profileData.getAccountEmail(),
                                 model.get(ExistingAccountRowProperties.PROFILE_DATA)
                                         .getAccountEmail());
                 if (isProfileDataUpdated) {
-                    model.set(
-                            ExistingAccountRowProperties.PROFILE_DATA,
-                            mProfileDataCache.getProfileDataOrDefault(accountEmail));
+                    model.set(ExistingAccountRowProperties.PROFILE_DATA, profileData);
                     break;
                 }
             }
@@ -88,7 +84,14 @@ class AccountPickerMediator implements AccountsChangeObserver, ProfileDataCache.
     @MainThread
     void destroy() {
         mProfileDataCache.removeObserver(this);
-        mAccountManagerFacade.removeObserver(this);
+    }
+
+    private List<AccountInfo> getAccounts() {
+        if (SigninFeatureMap.isEnabled(SigninFeatures.MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS)) {
+            return mIdentityManager.getExtendedAccountInfoForAccountsWithRefreshToken();
+        }
+        return AccountUtils.getAccountsIfFulfilledOrEmpty(
+                AccountManagerFacadeProvider.getInstance().getAccounts());
     }
 
     private void updateAccounts(List<AccountInfo> accounts) {
@@ -98,7 +101,7 @@ class AccountPickerMediator implements AccountsChangeObserver, ProfileDataCache.
         for (CoreAccountInfo account : accounts) {
             PropertyModel model =
                     ExistingAccountRowProperties.createModel(
-                            mProfileDataCache.getProfileDataOrDefault(account.getEmail()),
+                            mProfileDataCache.getById(account.getId()),
                             /* isCurrentlySelected= */ false,
                             () -> mAccountPickerListener.onAccountSelected(account));
             mListModel.add(new MVCListAdapter.ListItem(ItemType.EXISTING_ACCOUNT_ROW, model));

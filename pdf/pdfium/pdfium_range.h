@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include <ostream>
 #include <string>
 #include <vector>
 
@@ -43,6 +44,7 @@ class PDFiumRange {
 
   // Shorthand for the 3-params ctor, with `char_index` set to 0 and
   // `char_count` set to the number of characters in `page`.
+  // Returns an empty range if the page has errors.
   static PDFiumRange AllTextOnPage(PDFiumPage* page);
 
   // Like the constructor below, but the range must be specified in the forward
@@ -88,7 +90,7 @@ class PDFiumRange {
   std::u16string GetText() const;
 
  private:
-  PDFiumPage::ScopedUnloadPreventer page_unload_preventer_;
+  PDFiumPage::ScopedPageUnloadPreventer page_unload_preventer_;
 
   // The page containing the range. Must outlive `this`.
   raw_ptr<PDFiumPage> page_;
@@ -105,6 +107,8 @@ class PDFiumRange {
   mutable gfx::Point cached_screen_rects_point_;
   mutable double cached_screen_rects_zoom_ = 0;
 };
+
+std::ostream& operator<<(std::ostream& os, const PDFiumRange& range);
 
 }  // namespace chrome_pdf
 

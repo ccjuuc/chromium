@@ -182,10 +182,10 @@ gfx::AcceleratedWidget X11ScreenOzone::GetLocalProcessWidgetAtPoint(
   } else {
     gfx::Point point_in_pixels =
         gfx::ToFlooredPoint(PointDipToPx(GetAllDisplays(), point));
-    base::flat_set<x11::Window> ignore_windows;
-    for (auto ignore_widget : ignore) {
-      ignore_windows.insert(static_cast<x11::Window>(ignore_widget));
-    }
+    auto ignore_windows = base::MakeFlatSet<x11::Window>(
+        ignore, /*comp=*/{}, [&](auto ignore_widget) {
+          return static_cast<x11::Window>(ignore_widget);
+        });
     widget = static_cast<gfx::AcceleratedWidget>(
         x11::GetWindowAtPoint(point_in_pixels, &ignore_windows));
   }
@@ -256,7 +256,7 @@ std::string X11ScreenOzone::GetCurrentWorkspace() {
   return x11_display_manager_->GetCurrentWorkspace();
 }
 
-base::Value::List X11ScreenOzone::GetGpuExtraInfo(
+base::ListValue X11ScreenOzone::GetGpuExtraInfo(
     const gfx::GpuExtraInfo& gpu_extra_info) {
   auto result = GetDesktopEnvironmentInfo();
   StorePlatformNameIntoListOfValues(result, "x11");

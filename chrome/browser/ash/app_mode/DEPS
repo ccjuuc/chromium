@@ -20,6 +20,7 @@ include_rules = [
   "+chrome/browser/ash/app_list/arc",
   "+chrome/browser/ash/arc/policy",
   "+chrome/browser/ash/arc/session",
+  "+chrome/browser/ash/browser_delegate",
   "+chrome/browser/ash/extensions",
   "+chrome/browser/ash/login",
   "+chrome/browser/ash/notifications",
@@ -31,7 +32,6 @@ include_rules = [
   "+chrome/browser/ash/system",
   "+chrome/browser/chromeos/app_mode",
   "+chrome/browser/devtools",
-  "+chrome/browser/extensions/cws_item_service.pb.h",
   "+chrome/browser/extensions/extension_service.h",
   "+chrome/browser/extensions/extension_special_storage_policy.h",
   "+chrome/browser/extensions/external_loader.h",
@@ -39,18 +39,12 @@ include_rules = [
   "+chrome/browser/extensions/install_tracker_factory.h",
   "+chrome/browser/extensions/updater/extension_updater.h",
   "+chrome/browser/extensions/updater/extension_updater_factory.h",
-  "+chrome/browser/extensions/webstore_data_fetcher_delegate.h",
-  "+chrome/browser/extensions/webstore_data_fetcher.h",
-  "+chrome/browser/extensions/webstore_install_helper.h",
-  "+chrome/browser/lifetime",
   "+chrome/browser/net",
-  "+chrome/browser/policy",
   "+chrome/browser/profiles",
   "+chrome/browser/ui/apps",
   "+chrome/browser/ui/ash/login",
   "+chrome/browser/ui/ash/multi_user",
   "+chrome/browser/ui/browser.h",
-  "+chrome/browser/ui/browser_list.h",
   "+chrome/browser/ui/browser_window.h",
   "+chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h",
   "+chrome/browser/ui/tabs/tab_strip_model.h",
@@ -66,18 +60,9 @@ include_rules = [
   "+chrome/browser/web_applications/web_app_ui_manager.h",
   "+chrome/common/chrome_paths.h",
   "+chrome/common/chrome_switches.h",
-  "+chrome/common/initialize_extensions_client.h",
-  "+chrome/common/pref_names.h",
-  "+chrome/grit",
 ]
 
 specific_include_rules = {
-  # Allow ProfileKeyedServiceFactory to depend on browser_process for now.
-  "kiosk_app_update_service_factory\\.cc": [
-    "+chrome/browser/browser_process.h",
-    "+chrome/browser/browser_process_platform_part.h",
-  ],
-
   ".*(fake|test|mixin)(_.*)?\\.(cc|h)": [
     "+chrome/browser/browser_process.h",
     "+chrome/browser/browser_process_platform_part.h",
@@ -85,12 +70,21 @@ specific_include_rules = {
     "+chrome/browser/web_applications/test",
     "+chrome/test/base",
   ],
+  # Allow ProfileKeyedServiceFactory to depend on browser_process for now.
+  "kiosk_app_update_service_factory\\.cc": [
+    "+chrome/browser/browser_process.h",
+    "+chrome/browser/browser_process_platform_part.h",
+  ],
+  "kiosk_crash_restore_browsertest\\.cc": [
+    "+chrome/browser/lifetime/termination_notification.h",
+  ],
   "kiosk_guest_view_browsertest\\.cc": [
     "+chrome/browser/ui/browser_window/public",
   ],
   "kiosk_troubleshooting_tools_browsertest\\.cc": [
-    "+chrome/browser/ui/browser_finder.h",
+    "+chrome/browser/ui/browser_init_state.h",
     "+chrome/browser/ui/browser_window/public",
     "+chrome/browser/ui/views/task_manager_view.h",
+    "+chrome/common/pref_names.h",
   ],
 }

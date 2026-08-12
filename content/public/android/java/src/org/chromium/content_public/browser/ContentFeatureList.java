@@ -6,6 +6,7 @@ package org.chromium.content_public.browser;
 
 import android.os.Build;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.MutableBooleanParamWithSafeDefault;
 import org.chromium.base.MutableFlagWithSafeDefault;
 import org.chromium.base.MutableIntParamWithSafeDefault;
@@ -14,6 +15,7 @@ import org.chromium.components.cached_flags.CachedFlag;
 import org.chromium.content.common.ContentInternalFeatures;
 import org.chromium.content_public.common.ContentFeatures;
 import org.chromium.ui.accessibility.AccessibilityFeatures;
+import org.chromium.ui.base.DeviceInput;
 
 import java.util.List;
 
@@ -26,10 +28,15 @@ public class ContentFeatureList {
     // Features files, then remove the constants below.
 
     // Alphabetical:
+    public static final String ACCESSIBILITY_ATOMIC_LIVE_REGIONS = "AccessibilityAtomicLiveRegions";
+
     public static final String ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE =
             "AccessibilityDeprecateTypeAnnounce";
 
     public static final String ACCESSIBILITY_EXTENDED_SELECTION = "AccessibilityExtendedSelection";
+
+    public static final String ACCESSIBILITY_IME_GET_FORMATTED_TEXT =
+            "AccessibilityImeGetFormattedText";
 
     public static final String ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE =
             "AccessibilityImproveLiveRegionAnnounce";
@@ -48,27 +55,42 @@ public class ContentFeatureList {
     public static final String ACCESSIBILITY_MANAGE_BROADCAST_RECEIVER_ON_BACKGROUND =
             "AccessibilityManageBroadcastReceiverOnBackground";
 
+    public static final String ALLOW_DELAYED_AUDIO_FOCUS_GAIN_ANDROID =
+            "AllowDelayedAudioFocusGainAndroid";
+
+    public static final String ANDROID_ENABLE_BACKGROUND_MEDIA_CAPTURING =
+            "AndroidEnableBackgroundMediaCapturing";
+
     public static final String ANDROID_CAPTURE_KEY_EVENTS = "AndroidCaptureKeyEvents";
-    public static final String ANDROID_CARET_BROWSING = "AndroidCaretBrowsing";
 
     public static final String ANDROID_DEV_TOOLS_FRONTEND = "AndroidDevToolsFrontend";
+    public static final String ANDROID_FORCE_TEXT_INPUT_STATE_UPDATE_UPON_FOCUS =
+            "AndroidForceTextInputStateUpdateUponFocus";
 
     public static final String ANDROID_MEDIA_INSERTION = "AndroidMediaInsertion";
 
     public static final String ANDROID_PK_AUTOCORRECT_UNDERLINE = "AndroidPkAutocorrectUnderline";
 
-    public static final String ANDROID_SPELLING_UNDERLINE_IN_COMPOSITION_MODE =
-            "AndroidSpellingUnderlineInCompositionMode";
+    public static final String ANDROID_PK_AUTOCORRECT_UNDERLINE_V2 =
+            "AndroidPkAutocorrectUnderlineV2";
+
+    public static final String ANDROID_SPELLCHECK_FULL_API_BLINK = "AndroidSpellcheckFullApiBlink";
+
+    public static final String ANDROID_BLOCK_MISSPELLING_SUGGESTION_SPAN_IN_COMPOSITION_MODE =
+            "AndroidBlockMisspellingSuggestionSpanInCompositionMode";
+
+    public static final String ANDROID_BLOCK_GRAMMAR_SUGGESTION_SPAN_IN_COMPOSITION_MODE =
+            "AndroidBlockGrammarSuggestionSpanInCompositionMode";
 
     public static final String HIDE_PASTE_POPUP_ON_GSB = "HidePastePopupOnGSB";
-
-    public static final String JAVALESS_RENDERERS = "JavalessRenderers";
 
     public static final String INPUT_ON_VIZ = "InputOnViz";
 
     public static final String ONE_TIME_PERMISSION = "OneTimePermission";
 
     public static final String CONTINUE_GESTURE_ON_LOSING_FOCUS = "ContinueGestureOnLosingFocus";
+
+    public static final String PREFETCH_OFF_THE_MAIN_THREAD = "PrefetchOffTheMainThread";
 
     public static final String SMART_ZOOM = "SmartZoom";
 
@@ -79,6 +101,8 @@ public class ContentFeatureList {
 
     public static final String WEB_IDENTITY_DIGITAL_CREDENTIALS_CREATION =
             "WebIdentityDigitalCredentialsCreation";
+
+    public static final String TEXT_CLASSIFIER_TIMEOUT = "TextClassifierTimeout";
 
     public static final String DIPS_TTL = "DIPSTtl";
 
@@ -111,26 +135,45 @@ public class ContentFeatureList {
             sAccessibilityDeprecateJavaNodeCacheDisableCache =
                     sAccessibilityDeprecateJavaNodeCache.newBooleanParam("disable_cache", false);
 
-    public static final MutableFlagWithSafeDefault sAccessibilityMagnificationFollowsFocus =
+    public static final MutableFlagWithSafeDefault
+            sAccessibilityMagnificationFollowsFocusKeyboardAttached =
+                    new MutableFlagWithSafeDefault(
+                            ContentFeatureMap.getInstance(),
+                            AccessibilityFeatures
+                                    .ACCESSIBILITY_MAGNIFICATION_FOLLOWS_FOCUS_KEYBOARD_ATTACHED,
+                            true);
+
+    public static final MutableFlagWithSafeDefault
+            sAccessibilityMagnificationFollowsFocusNoKeyboard =
+                    new MutableFlagWithSafeDefault(
+                            ContentFeatureMap.getInstance(),
+                            AccessibilityFeatures
+                                    .ACCESSIBILITY_MAGNIFICATION_FOLLOWS_FOCUS_NO_KEYBOARD,
+                            true);
+
+    public static boolean isAccessibilityMagnificationFollowsFocusEnabled() {
+        if (DeviceInput.supportsKeyboard(ContextUtils.getApplicationContext())) {
+            return sAccessibilityMagnificationFollowsFocusKeyboardAttached.isEnabled();
+        }
+        return sAccessibilityMagnificationFollowsFocusNoKeyboard.isEnabled();
+    }
+
+    public static final MutableFlagWithSafeDefault sAccessibilityRequestScopedContentChangedEvents =
             new MutableFlagWithSafeDefault(
                     ContentFeatureMap.getInstance(),
-                    AccessibilityFeatures.ACCESSIBILITY_MAGNIFICATION_FOLLOWS_FOCUS,
-                    true);
-
-    public static final MutableFlagWithSafeDefault sAndroidCaretBrowsing =
-            new MutableFlagWithSafeDefault(
-                    ContentFeatureMap.getInstance(), ContentFeatures.ANDROID_CARET_BROWSING, false);
+                    ContentFeatures.ACCESSIBILITY_REQUEST_SCOPED_CONTENT_CHANGED_EVENTS,
+                    false);
 
     public static final MutableFlagWithSafeDefault sStrictHighRankProcessLRU =
             new MutableFlagWithSafeDefault(
                     ContentFeatureMap.getInstance(),
                     ContentInternalFeatures.STRICT_HIGH_RANK_PROCESS_LRU,
-                    false);
+                    true);
 
-    public static final MutableFlagWithSafeDefault sRemoveCachedProcessFromBindingManager =
+    public static final MutableFlagWithSafeDefault sEarlyTopAppForSandboxedRenderer =
             new MutableFlagWithSafeDefault(
                     ContentFeatureMap.getInstance(),
-                    ContentInternalFeatures.REMOVE_CACHED_PROCESS_FROM_BINDING_MANAGER,
+                    ContentInternalFeatures.EARLY_TOP_APP_FOR_SANDBOXED_RENDERER,
                     false);
 
     public static final MutableFlagWithSafeDefault sSpareRendererProcessPriority =
@@ -152,22 +195,34 @@ public class ContentFeatureList {
     public static final MutableBooleanParamWithSafeDefault sSpareRendererRemoveBindingNoTimeout =
             sSpareRendererProcessPriority.newBooleanParam("remove-binding-no-timeout", false);
 
-    // Use a CachedFlag as this is often checked before native is loaded, and must stay consistent
-    // once decided upon.
-    public static final CachedFlag sJavalessRenderers =
-            new CachedFlag(ContentFeatureMap.getInstance(), JAVALESS_RENDERERS, false, false);
+    public static final MutableFlagWithSafeDefault sTextClassifierTimeout =
+            new MutableFlagWithSafeDefault(
+                    ContentFeatureMap.getInstance(),
+                    ContentFeatures.TEXT_CLASSIFIER_TIMEOUT,
+                    false);
+
+    public static final MutableIntParamWithSafeDefault sTextClassifierTimeoutMs =
+            sTextClassifierTimeout.newIntParam("timeout_ms", 200);
 
     public static final MutableFlagWithSafeDefault sAndroidDesktopZoomScaling =
             new MutableFlagWithSafeDefault(
                     ContentFeatureMap.getInstance(),
                     ContentFeatures.ANDROID_DESKTOP_ZOOM_SCALING,
-                    false);
+                    true);
 
     public static final MutableIntParamWithSafeDefault sAndroidDesktopZoomScalingFactor =
-            sAndroidDesktopZoomScaling.newIntParam("desktop-zoom-scaling-factor", 100);
+            sAndroidDesktopZoomScaling.newIntParam("desktop-zoom-scaling-factor", 109);
 
     public static final MutableIntParamWithSafeDefault sAndroidMonitorZoomScalingFactor =
-            sAndroidDesktopZoomScaling.newIntParam("monitor-zoom-scaling-factor", 100);
+            sAndroidDesktopZoomScaling.newIntParam("monitor-zoom-scaling-factor", 120);
 
-    public static final List<CachedFlag> sCachedFlags = List.of(sJavalessRenderers);
+    public static final CachedFlag sSandboxedProcessServiceLimitOnAndroid =
+            new CachedFlag(
+                    ContentFeatureMap.getInstance(),
+                    ContentInternalFeatures.SANDBOXED_PROCESS_SERVICE_LIMIT_ON_ANDROID,
+                    /* defaultValue= */ false,
+                    /* defaultValueInTests= */ true);
+
+    public static final List<CachedFlag> sCachedFlags =
+            List.of(sSandboxedProcessServiceLimitOnAndroid);
 }

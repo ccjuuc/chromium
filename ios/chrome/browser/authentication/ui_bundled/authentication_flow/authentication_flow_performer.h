@@ -9,6 +9,7 @@
 
 #import "components/policy/core/browser/signin/profile_separation_policies.h"
 #import "ios/chrome/browser/authentication/ui_bundled/authentication_flow/authentication_flow_performer_base.h"
+#import "ios/chrome/browser/authentication/ui_bundled/signin/signin_constants.h"
 #import "ios/chrome/browser/signin/model/constants.h"
 
 @protocol AuthenticationFlowDelegate;
@@ -17,6 +18,9 @@ namespace signin_metrics {
 enum class AccessPoint;
 }
 enum class SignedInUserState;
+namespace signin {
+enum class ManagedAccountSigninMode;
+}  // namespace signin
 @protocol SystemIdentity;
 namespace syncer {
 class SyncService;
@@ -28,6 +32,12 @@ class SyncService;
 
 // Cancels any outstanding work and dismisses an alert view (if shown).
 - (void)interrupt;
+
+// Starts the reauthentication flow for `identity`.
+- (void)reauthIdentity:(id<SystemIdentity>)identity
+               browser:(Browser*)browser
+        viewController:(UIViewController*)viewController
+           accessPoint:(signin_metrics::AccessPoint)accessPoint;
 
 // Fetches the list of data types with unsync data in the primary account.
 // `-[id<AuthenticationFlowPerformerDelegate>
@@ -59,6 +69,15 @@ class SyncService;
 - (void)fetchManagedStatus:(ProfileIOS*)profile
                forIdentity:(id<SystemIdentity>)identity;
 
+// Starts fetching capability to determine if the user can sign in to Chrome.
+- (void)fetchCanSignInToChromeCapability:(id<SystemIdentity>)identity
+                                 profile:(ProfileIOS*)profile;
+
+// Shows the Age Mismatch dialog.
+- (void)showAgeMismatchDialogForIdentity:(id<SystemIdentity>)identity
+                          viewController:(UIViewController*)viewController
+                                 browser:(Browser*)browser;
+
 // Fetches the profile separation policies for the account linked to `identity`.
 - (void)fetchProfileSeparationPolicies:(ProfileIOS*)profile
                            forIdentity:(id<SystemIdentity>)identity;
@@ -85,10 +104,15 @@ class SyncService;
                                       identity:(id<SystemIdentity>)identity
                                 viewController:(UIViewController*)viewController
                                        browser:(Browser*)browser
-                     skipBrowsingDataMigration:(BOOL)skipBrowsingDataMigration
-                    mergeBrowsingDataByDefault:(BOOL)mergeBrowsingDataByDefault
-         browsingDataMigrationDisabledByPolicy:
-             (BOOL)browsingDataMigrationDisabledByPolicy;
+                    managedProfileCreationMode:
+                        (signin::ManagedAccountSigninMode)mode;
+
+// Checks whether the user wants to switch to `identity` in a new profile with
+// `confirmChangeProfile` and transmits the answer to
+// `didConfirmChangeProfileCanProceed`.
+- (void)confirmChangeProfile:
+            (SigninChangeProfileConfirmationBlock)confirmChangeProfile
+                 forIdentity:(id<SystemIdentity>)identity;
 
 @end
 

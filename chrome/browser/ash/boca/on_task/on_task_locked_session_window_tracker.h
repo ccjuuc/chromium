@@ -15,8 +15,9 @@
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ash/browser_delegate/browser_controller.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
 #include "chromeos/ash/components/boca/on_task/on_task_blocklist.h"
 #include "chromeos/ash/components/boca/on_task/on_task_notifications_manager.h"
 #include "components/keyed_service/core/keyed_service.h"
@@ -27,8 +28,11 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
-class Browser;
 class BrowserWindowInterface;
+
+namespace content::webid {
+class IdentityCredentialSource;
+}
 
 namespace ash {
 class BrowserDelegate;
@@ -51,7 +55,6 @@ class BocaWindowObserver;
 class LockedSessionWindowTracker : public KeyedService,
                                    public TabStripModelObserver,
                                    public ash::BrowserController::Observer,
-                                   public ImmersiveModeController::Observer,
                                    public content::WebContentsObserver {
  public:
   LockedSessionWindowTracker(std::unique_ptr<OnTaskBlocklist> on_task_blocklist,
@@ -97,22 +100,23 @@ class LockedSessionWindowTracker : public KeyedService,
   virtual void set_can_start_navigation_throttle(bool is_ready);
 
   bool oauth_in_progress() { return oauth_in_progress_; }
-  void set_oauth_in_progress(bool in_progress) {
-    oauth_in_progress_ = in_progress;
-  }
-
-  void SetNotificationManagerForTesting(
-      std::unique_ptr<ash::boca::OnTaskNotificationsManager>
-          notification_manager);
+  void set_oauth_in_progress(bool in_progress, ash::BrowserDelegate* browser);
 
   ash::OnTaskPodController* on_task_pod_controller();
   OnTaskBlocklist* on_task_blocklist();
-  Browser* browser();
+  BrowserWindowInterface* browser();
+
+  // Test helpers:
+  void SetNotificationManagerForTesting(
+      std::unique_ptr<ash::boca::OnTaskNotificationsManager>
+          notification_manager);
+  void SetIdentityCredentialSourceForTesting(
+      content::webid::IdentityCredentialSource* source);
+  void TriggerFedCmFederatedLoginCompletionForTesting(bool success);
 
  private:
   // TabStripModelObserver Impl
   void OnTabChangedAt(tabs::TabInterface* tab,
-                      int index,
                       TabChangeType change_type) override;
   void OnTabStripModelChanged(
       TabStripModel* tab_strip_model,
@@ -129,10 +133,9 @@ class LockedSessionWindowTracker : public KeyedService,
   // content::WebContentsObserver Impl
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override;
-
-  // ImmersiveModeController::Observer:
-  void OnImmersiveRevealStarted() override;
-  void OnImmersiveModeControllerDestroyed() override;
+  void DidFinishLoad(content::RenderFrameHost* render_frame_host,
+                     const GURL& validated_url) override;
+  void OnFedCmFederatedLogin(bool success) override;
 
   // Callback for browser closed events.
   void OnBrowserDidClose(BrowserWindowInterface* browser_window_interface);
@@ -140,6 +143,9 @@ class LockedSessionWindowTracker : public KeyedService,
   void MaybeCloseWebContents(base::WeakPtr<content::WebContents> weak_tab_ptr);
   void MaybeCloseBrowser(ash::BrowserDelegate* browser);
   void EnsureMaybeCloseBrowserTaskPosted(ash::BrowserDelegate* browser);
+
+  content::webid::IdentityCredentialSource* GetIdentityCredentialSource(
+      content::Page& page);
 
   void CleanupWindowTracker();
 
@@ -151,8 +157,9 @@ class LockedSessionWindowTracker : public KeyedService,
   std::unique_ptr<ash::boca::OnTaskNotificationsManager> notifications_manager_;
   std::unique_ptr<ash::OnTaskPodController> on_task_pod_controller_;
   raw_ptr<ash::BrowserDelegate> browser_ = nullptr;
-  base::ScopedObservation<ImmersiveModeController, LockedSessionWindowTracker>
-      immersive_mode_controller_observation_{this};
+  raw_ptr<ash::BrowserDelegate> authorized_oauth_browser_ = nullptr;
+  raw_ptr<content::webid::IdentityCredentialSource>
+      identity_credential_source_for_testing_ = nullptr;
   base::ScopedObservation<ash::BrowserController,
                           ash::BrowserController::Observer>
       browser_controller_observation_{this};

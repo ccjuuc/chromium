@@ -88,7 +88,7 @@ constexpr std::array<uint8_t, 32> kZxcvbnDataPublicKeySha256 = {
 }  // namespace
 
 bool ZxcvbnDataComponentInstallerPolicy::VerifyInstallation(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
   const std::string* version_string = manifest.FindString("version");
   if (!version_string) {
@@ -120,7 +120,7 @@ bool ZxcvbnDataComponentInstallerPolicy::VerifyInstallation(
 
   // Perform a minimal check that the file has not been corrupted - otherwise
   // the client will run into a failing CHECK when using the library.
-  // See (crbug.com/1505352) for instances where this occurred.
+  // See (crbug.com/40945968) for instances where this occurred.
   char local_buffer[kNumMarkerBytes] = {};
   if (base::ReadFile(combined_ranked_dicts_path, local_buffer,
                      /*max_size=*/kNumMarkerBytes) != kNumMarkerBytes) {
@@ -140,7 +140,7 @@ bool ZxcvbnDataComponentInstallerPolicy::RequiresNetworkEncryption() const {
 
 update_client::CrxInstaller::Result
 ZxcvbnDataComponentInstallerPolicy::OnCustomInstall(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(update_client::InstallError::NONE);
 }
@@ -150,7 +150,7 @@ void ZxcvbnDataComponentInstallerPolicy::OnCustomUninstall() {}
 void ZxcvbnDataComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    base::Value::Dict manifest) {
+    base::DictValue manifest) {
   DVLOG(1) << "Zxcvbn Data Component ready, version " << version.GetString()
            << " in " << install_dir;
 

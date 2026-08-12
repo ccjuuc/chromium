@@ -4,7 +4,6 @@
 
 package org.chromium.chrome.browser.logo;
 
-import android.graphics.Bitmap;
 import android.graphics.drawable.Drawable;
 
 import org.chromium.base.Callback;
@@ -19,12 +18,15 @@ import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
 /** The properties required to build the logo on start surface or ntp. */
 @NullMarked
 interface LogoProperties {
+
     // TODO(crbug.com/40881870): It doesn't really make sense for those
     //  WritableObjectPropertyKey<Boolean> with skipEquality equals to true property keys;
     //  if we're not going to read the value out of this in the ViewBinder.
     WritableFloatPropertyKey ALPHA = new WritableFloatPropertyKey();
     WritableIntPropertyKey LOGO_TOP_MARGIN = new WritableIntPropertyKey();
+    WritableIntPropertyKey LOGO_TOP_PADDING = new WritableIntPropertyKey();
     WritableIntPropertyKey LOGO_BOTTOM_MARGIN = new WritableIntPropertyKey();
+    WritableIntPropertyKey LOGO_HEIGHT = new WritableIntPropertyKey();
     WritableObjectPropertyKey<Boolean> SET_END_FADE_ANIMATION =
             new WritableObjectPropertyKey<>(/* skipEquality= */ true);
     // TODO(crbug.com/40881870): Change the VISIBILITY properties to some sort of state
@@ -39,7 +41,6 @@ interface LogoProperties {
     //  into one property that takes an object generic/powerful enough to represent all three of
     //  these if possible.
     WritableObjectPropertyKey<LogoBridge.Logo> LOGO = new WritableObjectPropertyKey<>();
-    WritableObjectPropertyKey<Bitmap> DEFAULT_GOOGLE_LOGO = new WritableObjectPropertyKey<>();
     WritableObjectPropertyKey<Drawable> DEFAULT_GOOGLE_LOGO_DRAWABLE =
             new WritableObjectPropertyKey<>();
     WritableObjectPropertyKey<Boolean> SHOW_LOADING_VIEW =
@@ -52,24 +53,27 @@ interface LogoProperties {
     WritableIntPropertyKey DOODLE_SIZE = new WritableIntPropertyKey();
     WritableObjectPropertyKey<Boolean> SHOW_DEFAULT_GOOGLE_LOGO =
             new WritableObjectPropertyKey<>(/* skipEquality= */ true);
+    WritableBooleanPropertyKey IS_NIGHT_MODE = new WritableBooleanPropertyKey();
 
     PropertyKey[] ALL_KEYS =
             new PropertyKey[] {
                 ALPHA,
                 LOGO_TOP_MARGIN,
+                LOGO_TOP_PADDING,
                 LOGO_BOTTOM_MARGIN,
+                LOGO_HEIGHT,
                 SET_END_FADE_ANIMATION,
                 VISIBILITY,
                 ANIMATION_ENABLED,
                 LOGO_CLICK_HANDLER,
                 SHOW_SEARCH_PROVIDER_INITIAL_VIEW,
                 LOGO,
-                DEFAULT_GOOGLE_LOGO,
                 DEFAULT_GOOGLE_LOGO_DRAWABLE,
                 SHOW_LOADING_VIEW,
                 ANIMATED_LOGO,
                 LOGO_AVAILABLE_CALLBACK,
                 DOODLE_SIZE,
-                SHOW_DEFAULT_GOOGLE_LOGO
+                SHOW_DEFAULT_GOOGLE_LOGO,
+                IS_NIGHT_MODE
             };
 }

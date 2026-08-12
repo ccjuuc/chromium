@@ -18,6 +18,23 @@ constexpr bool kIsDesktop = !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS);
 
 constexpr size_t OmniboxPopupSelection::kNoMatch = static_cast<size_t>(-1);
 
+#if DCHECK_ALWAYS_ON
+std::ostream& operator<<(std::ostream& os, const OmniboxPopupSelection& s) {
+  os << '{' << s.line << ',' << s.state << ',' << s.action_index << '}';
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os,
+                         const std::vector<OmniboxPopupSelection>& ss) {
+  os << '[';
+  for (const OmniboxPopupSelection& s : ss) {
+    os << s;
+  }
+  os << ']';
+  return os;
+}
+#endif
+
 bool OmniboxPopupSelection::IsChangeToKeyword(
     OmniboxPopupSelection from) const {
   return state == KEYWORD_MODE && from.state != KEYWORD_MODE;
@@ -40,9 +57,13 @@ bool OmniboxPopupSelection::IsControlPresentOnMatch(
   const auto& match = result.match_at(line);
 
   switch (state) {
-    case NORMAL:
-      // `NULL_RESULT_MESSAGE` cannot be focused.
-      return match.type != AutocompleteMatchType::NULL_RESULT_MESSAGE;
+    case NORMAL: {
+      // `NULL_RESULT_MESSAGE` cannot be focused, except for IPH suggestions
+      // that contain links (such as the disclaimer or setting promo) which
+      // need to be navigable by screen readers.
+      return match.type != AutocompleteMatchType::NULL_RESULT_MESSAGE ||
+             (match.IsIphSuggestion() && !match.iph_link_url.is_empty());
+    }
     case KEYWORD_MODE:
       return !match.associated_keyword.empty();
     case FOCUSED_BUTTON_ACTION: {
@@ -56,6 +77,8 @@ bool OmniboxPopupSelection::IsControlPresentOnMatch(
       return match.SupportsDeletion();
     case FOCUSED_IPH_LINK:
       return match.IsIphSuggestion() && !match.iph_link_url.is_empty();
+    case CTRL_ENTER:
+      return false;
     default:
       break;
   }
@@ -85,7 +108,6 @@ OmniboxPopupSelection OmniboxPopupSelection::GetNextSelection(
   std::vector<OmniboxPopupSelection> all_available_selections =
       GetAllAvailableSelectionsSorted(input, result, template_url_service,
                                       aim_button_visible, step);
-
   if (all_available_selections.empty()) {
     return *this;
   }
@@ -203,15 +225,19 @@ OmniboxPopupSelection::GetAllAvailableSelectionsSorted(
         //   memory e.g. '@gemini<tab>'. Don't have to similarly consider
         //   non-instant keywords since same-line `KEYWORD_MODE` is ordered
         //   before `FOCUSED_BUTTON_AIM`.
+        // - The 2nd match has a takeover action to avoid disrupting muscle
+        //   memory e.g. 'create doc<tab>'.
         // - The input is not ZeroSuggest (i.e., the user has typed something).
-        bool second_match_has_instant_keyword =
+        bool second_match_has_instant_keyword_or_takeover_action =
             result.size() >= 2 &&
-            result.match_at(1).HasInstantKeyword(template_url_service);
+            (result.match_at(1).HasInstantKeyword(template_url_service) ||
+             result.match_at(1).takeover_action);
         if (aim_button_visible && line_number == 0 &&
             !result.match_at(0).from_keyword &&
             result.match_at(0).associated_keyword.empty() &&
             result.match_at(0).actions.size() == 0 &&
-            !second_match_has_instant_keyword && !input.IsZeroSuggest()) {
+            !second_match_has_instant_keyword_or_takeover_action &&
+            !input.IsZeroSuggest()) {
           available_selections.emplace_back(line_number, line_state);
         }
       } else if (line_state == FOCUSED_BUTTON_ACTION) {

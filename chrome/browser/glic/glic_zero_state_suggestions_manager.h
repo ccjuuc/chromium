@@ -11,28 +11,28 @@
 #include <vector>
 
 #include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/glic/host/context/glic_tab_data.h"
-
-namespace contextual_cueing {
-class ContextualCueingService;
-class CachingZeroStateSuggestionsManager;
-}  // namespace contextual_cueing
+#include "chrome/browser/glic/host/glic.mojom.h"
+#include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/bindings/remote.h"
 
 namespace glic {
-class GlicSharingManager;
-class GlicInstance;
+class CachingZeroStateSuggestionsManager;
+class ContextualCueingService;
+class GlicSharingManagerInternal;
+class GlicInstanceImpl;
 class Host;
 
-#if !BUILDFLAG(IS_ANDROID)
-
 // A class for managing sending zero state suggestions through the mojo api.
-class GlicZeroStateSuggestionsManager {
+class GlicZeroStateSuggestionsManager
+    : public mojom::ZeroStateSuggestionsHandler {
  public:
   GlicZeroStateSuggestionsManager(
-      GlicSharingManager* sharing_manager,
-      GlicInstance* glic_instance,
-      contextual_cueing::ContextualCueingService* contextual_cueing_service);
-  virtual ~GlicZeroStateSuggestionsManager();
+      GlicSharingManagerInternal* sharing_manager,
+      GlicInstanceImpl* glic_instance,
+      ContextualCueingService* contextual_cueing_service);
+  ~GlicZeroStateSuggestionsManager() override;
 
   // Callback to send zero state suggestions to the webui on tab changes.
   void NotifyZeroStateSuggestionsOnFocusedTabDataChanged(
@@ -44,7 +44,7 @@ class GlicZeroStateSuggestionsManager {
   void NotifyZeroStateSuggestionsOnPinnedTabChanged(
       bool is_first_run,
       const std::vector<std::string>& supported_tools,
-      const std::vector<content::WebContents*>& pinned_tab_data);
+      const std::vector<tabs::TabInterface*>& pinned_tabs);
 
   // Callback to send zero state suggestions to the webui when pinned tab data
   // changes.
@@ -53,27 +53,25 @@ class GlicZeroStateSuggestionsManager {
       const std::vector<std::string>& supported_tools,
       const TabDataChange& data);
 
-  // This handles calls from the webui to return a suggestion, and begin to
-  // notify the webui of changes to the zero state suggestsions.
-  void ObserveZeroStateSuggestions(
-      bool is_notifying,
-      bool is_first_run,
-      const std::vector<std::string>& supported_tools,
-      glic::mojom::WebClientHandler::GetZeroStateSuggestionsAndSubscribeCallback
-          callback);
+  void Bind(mojo::PendingReceiver<mojom::ZeroStateSuggestionsHandler> receiver);
+
+  // mojom::ZeroStateSuggestionsHandler implementation.
+  void GetZeroStateSuggestionsAndSubscribe(
+      mojo::PendingRemote<mojom::ZeroStateSuggestionsClient> client,
+      mojom::ZeroStateSuggestionsOptionsPtr options,
+      mojom::ZeroStateSuggestionsHandler::
+          GetZeroStateSuggestionsAndSubscribeCallback callback) override;
 
   void Reset();
 
  private:
-  void FilterTabs(std::vector<content::WebContents*>& tabs);
+  void FilterTabs(std::vector<raw_ptr<content::WebContents>>& tabs);
 
   // A helper function to route GetZeroStateSuggestionsForFocusedTabCallback
   // callbacks.
   void OnZeroStateSuggestionsFetched(
-      mojom::WebClientHandler::GetZeroStateSuggestionsAndSubscribeCallback
-          callback,
+      GetZeroStateSuggestionsAndSubscribeCallback callback,
       std::vector<std::string> returned_suggestions);
-
   // A helper function to route NotifyZeroStateSuggestions callbacks.
   void OnZeroStateSuggestionsNotify(
       bool is_first_run,
@@ -85,19 +83,18 @@ class GlicZeroStateSuggestionsManager {
   Host& host();
 
   // Owned by the glic_keyed_service.
-  raw_ptr<GlicSharingManager> sharing_manager_;
-  raw_ptr<GlicInstance> glic_instance_;
+  raw_ptr<GlicSharingManagerInternal> sharing_manager_;
+  raw_ptr<GlicInstanceImpl> glic_instance_;
   raw_ptr<Host> host_;
 
   // A caching wrapper around `contextual_cueing_service_`. Set only when
   // kCacheZeroStateSuggestions is enabled. Should always be used if present,
   // instead of `contextual_cueing_service_`.
-  std::unique_ptr<contextual_cueing::CachingZeroStateSuggestionsManager>
+  std::unique_ptr<CachingZeroStateSuggestionsManager>
       caching_zero_state_manager_;
 
   // This passed by the glic_keyed_service.
-  raw_ptr<contextual_cueing::ContextualCueingService>
-      contextual_cueing_service_;
+  raw_ptr<ContextualCueingService> contextual_cueing_service_;
 
   mojom::ZeroStateSuggestionsOptions current_zero_state_suggestions_options_;
   base::CallbackListSubscription
@@ -111,22 +108,11 @@ class GlicZeroStateSuggestionsManager {
 
   bool pause_pinned_subscription_updates_ = false;
 
+  mojo::Receiver<mojom::ZeroStateSuggestionsHandler> receiver_{this};
+  mojo::Remote<mojom::ZeroStateSuggestionsClient> client_remote_;
+
   base::WeakPtrFactory<GlicZeroStateSuggestionsManager> weak_ptr_factory_{this};
 };
-#else
-
-// Not yet implemented on Android. This always returns an empty list.
-class GlicZeroStateSuggestionsManager {
- public:
-  void ObserveZeroStateSuggestions(
-      bool is_notifying,
-      bool is_first_run,
-      const std::vector<std::string>& supported_tools,
-      glic::mojom::WebClientHandler::GetZeroStateSuggestionsAndSubscribeCallback
-          callback);
-};
-
-#endif
 
 }  // namespace glic
 

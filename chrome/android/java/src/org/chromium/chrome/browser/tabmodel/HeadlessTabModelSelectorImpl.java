@@ -45,11 +45,13 @@ public class HeadlessTabModelSelectorImpl extends TabModelSelectorImpl {
                 wrapProfile(profile),
                 tabCreatorManager,
                 () -> NextTabPolicy.LOCATIONAL,
-                /* multiInstanceManager= */ null,
                 AsyncTabParamsManagerFactory.createAsyncTabParamsManager(),
                 /* supportUndo= */ false,
                 ActivityType.TABBED,
-                /* startIncognito= */ false);
+                /* customTabProfileType= */ null,
+                TabModelType.HEADLESS,
+                /* startIncognito= */ false,
+                SupportedProfileType.MIXED);
     }
 
     @Override

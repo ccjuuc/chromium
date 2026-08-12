@@ -11,8 +11,6 @@ import androidx.annotation.ColorInt;
 import androidx.annotation.IntDef;
 
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.theme.ThemeModuleUtils;
 import org.chromium.chrome.browser.ui.theme.ChromeSemanticColorUtils;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 
@@ -29,7 +27,8 @@ public class NewTabAnimationUtils {
         RectStart.TOP_TOOLBAR,
         RectStart.BOTTOM,
         RectStart.BOTTOM_TOOLBAR,
-        RectStart.CENTER
+        RectStart.CENTER,
+        RectStart.BOTTOM_CENTER
     })
     @Target(ElementType.TYPE_USE)
     @Retention(RetentionPolicy.SOURCE)
@@ -39,16 +38,11 @@ public class NewTabAnimationUtils {
         int BOTTOM = 2;
         int BOTTOM_TOOLBAR = 3;
         int CENTER = 4;
+        int BOTTOM_CENTER = 5;
     }
 
     private static final float INITIAL_SCALE = 0.2f;
     private static final float FINAL_SCALE = 1.1f;
-
-    /** Returns whether to use new tab animations. */
-    public static boolean isNewTabAnimationEnabled() {
-        return ThemeModuleUtils.isForceEnableDependencies()
-                || ChromeFeatureList.sShowNewTabAnimations.isEnabled();
-    }
 
     /**
      * Returns the tab color for the new tab foreground animation.
@@ -58,7 +52,7 @@ public class NewTabAnimationUtils {
      * @return The {@link ColorInt} for the new tab animation background.
      */
     public static @ColorInt int getBackgroundColor(Context context, boolean isIncognito) {
-        // See crbug.com/1507124 for Home Surface Background Color.
+        // See crbug.com/40947813 for Home Surface Background Color.
         return isIncognito
                 ? ChromeColors.getPrimaryBackgroundColor(context, isIncognito)
                 : ChromeSemanticColorUtils.getHomeSurfaceBackgroundColor(context);
@@ -88,6 +82,17 @@ public class NewTabAnimationUtils {
             Point center = new Point(finalRect.centerX(), finalRect.centerY());
             updateCenterRect(center, initialWidth, initialHeight, initialRect);
             updateCenterRect(center, finalWidth, finalHeight, finalRect);
+        } else if (rectStart == RectStart.BOTTOM_CENTER) {
+            int centerX = finalRect.centerX();
+            initialRect.left = centerX - initialWidth / 2;
+            initialRect.right = initialRect.left + initialWidth;
+            finalRect.left = centerX - finalWidth / 2;
+            finalRect.right = finalRect.left + finalWidth;
+
+            int y = finalRect.bottom;
+            initialRect.top = y - initialHeight;
+            initialRect.bottom = y;
+            finalRect.top = y - finalHeight;
         } else {
             int x;
             if (isRtl) {

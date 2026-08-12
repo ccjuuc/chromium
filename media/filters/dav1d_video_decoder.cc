@@ -106,7 +106,7 @@ static void ReleaseDecoderBuffer(const uint8_t* buffer, void* opaque) {
 }
 
 static void LogDav1dMessage(void* cookie, const char* format, va_list ap) {
-  auto log = base::StringPrintV(format, ap);
+  auto log = UNSAFE_TODO(base::StringPrintV(format, ap));
   if (log.empty())
     return;
 
@@ -230,16 +230,6 @@ class RefCountedUV16Data : public base::RefCountedMemory {
   std::vector<uint16_t> uv_data_;
 };
 
-// static
-SupportedVideoDecoderConfigs Dav1dVideoDecoder::SupportedConfigs() {
-  return {{/*profile_min=*/AV1PROFILE_PROFILE_MAIN,
-           /*profile_max=*/AV1PROFILE_PROFILE_HIGH,
-           /*coded_size_min=*/kDefaultSwDecodeSizeMin,
-           /*coded_size_max=*/kDefaultSwDecodeSizeMax,
-           /*allow_encrypted=*/false,
-           /*require_encrypted=*/false}};
-}
-
 Dav1dVideoDecoder::Dav1dVideoDecoder(std::unique_ptr<MediaLog> media_log,
                                      OffloadState offload_state)
     : media_log_(std::move(media_log)),
@@ -285,7 +275,8 @@ void Dav1dVideoDecoder::Initialize(const VideoDecoderConfig& config,
   }
 
   if (!frame_pool_) {
-    frame_pool_ = base::MakeRefCounted<FrameBufferPool>();
+    frame_pool_ =
+        base::MakeRefCounted<FrameBufferPool>(/*zero_initialize_memory=*/true);
   }
 
   // Clear any previously initialized decoder.
@@ -376,6 +367,7 @@ void Dav1dVideoDecoder::Reset(base::OnceClosure reset_cb) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   state_ = DecoderState::kNormal;
   dav1d_flush(dav1d_decoder_.get());
+  hdr_metadata_reordering_map_.Clear();
   error_status_ = DecoderStatus::Codes::kFailed;
 
   if (bind_callbacks_)
@@ -404,6 +396,7 @@ void Dav1dVideoDecoder::Dav1dContextDeleter::operator()(Dav1dContext* ptr) {
 void Dav1dVideoDecoder::CloseDecoder() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   dav1d_decoder_.reset();
+  hdr_metadata_reordering_map_.Clear();
 }
 
 bool Dav1dVideoDecoder::DecodeBuffer(scoped_refptr<DecoderBuffer> buffer) {
@@ -412,6 +405,8 @@ bool Dav1dVideoDecoder::DecodeBuffer(scoped_refptr<DecoderBuffer> buffer) {
   using ScopedPtrDav1dData = std::unique_ptr<Dav1dData, ScopedDav1dDataFree>;
   ScopedPtrDav1dData input_buffer;
   if (!buffer->end_of_stream()) {
+    hdr_metadata_reordering_map_.Insert(*buffer);
+
     auto buffer_span = base::span(*buffer);
     input_buffer.reset(new Dav1dData{});
     const int res = dav1d_data_wrap(input_buffer.get(), buffer_span.data(),
@@ -472,6 +467,7 @@ bool Dav1dVideoDecoder::DecodeBuffer(scoped_refptr<DecoderBuffer> buffer) {
       continue;
     }
 
+    gfx::HDRMetadata hdr_metadata = config_.hdr_metadata();
     if (p->itut_t35) {
       // SAFETY: The best we can do is trust the size provided by Dav1d.
       auto t35s = UNSAFE_BUFFERS(
@@ -480,15 +476,12 @@ bool Dav1dVideoDecoder::DecodeBuffer(scoped_refptr<DecoderBuffer> buffer) {
         // SAFETY: The best we can do is trust the size provided by Dav1d.
         auto t35_payload_span = UNSAFE_BUFFERS(
             base::span<const uint8_t>(t35.payload, t35.payload_size));
-        if (auto agtm =
-                GetSerializedAgtmItutT35(t35.country_code, t35_payload_span)) {
-          gfx::HDRMetadata hdr_metadata = config_.hdr_metadata();
-          // Overwrite existing AGTM metadata if any.
-          hdr_metadata.setSerializedAgtm(agtm);
-          config_.set_hdr_metadata(hdr_metadata);
-        }
+        SetAgtmFromT35WithCountryCode(hdr_metadata, t35.country_code,
+                                      t35_payload_span);
       }
     }
+    hdr_metadata_reordering_map_.MergeAndEraseMetadataForTimestamp(
+        base::Microseconds(p->m.timestamp), hdr_metadata);
 
     auto frame = BindImageToVideoFrame(p.get());
     if (!frame) {
@@ -512,7 +505,7 @@ bool Dav1dVideoDecoder::DecodeBuffer(scoped_refptr<DecoderBuffer> buffer) {
 
     frame->set_color_space(gfx_cs);
     frame->metadata().power_efficient = false;
-    frame->set_hdr_metadata(config_.hdr_metadata());
+    frame->set_hdr_metadata(hdr_metadata);
 
     FrameBufferData* opaque_data =
         static_cast<FrameBufferData*>(p->allocator_data);

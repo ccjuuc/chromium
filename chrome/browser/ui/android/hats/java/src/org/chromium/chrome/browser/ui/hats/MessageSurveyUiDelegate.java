@@ -19,7 +19,6 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabHidingType;
 import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-import org.chromium.chrome.browser.tabmodel.TabModelSelectorObserver;
 import org.chromium.components.messages.DismissReason;
 import org.chromium.components.messages.MessageBannerProperties;
 import org.chromium.components.messages.MessageDispatcher;
@@ -99,7 +98,7 @@ public class MessageSurveyUiDelegate implements SurveyUiDelegate {
     private final PropertyModel mMessageModel;
     private final MessageDispatcher mMessageDispatcher;
     private final TabModelSelector mTabModelSelector;
-    private final Supplier<@Nullable Boolean> mCrashUploadPermissionSupplier;
+    private final Supplier<Boolean> mCrashUploadPermissionSupplier;
 
     private @State int mState;
 
@@ -114,7 +113,7 @@ public class MessageSurveyUiDelegate implements SurveyUiDelegate {
 
     private @Nullable Tab mSurveyPromptTab;
     private @Nullable Tab mLoadingTab;
-    private @Nullable TabModelSelectorObserver mTabModelSelectorObserver;
+    private @Nullable Callback<@Nullable Tab> mCurrentTabObserver;
     private @Nullable TabObserver mDismissMessageTabObserver;
     private @Nullable TabObserver mLoadingTabObserver;
 
@@ -133,12 +132,11 @@ public class MessageSurveyUiDelegate implements SurveyUiDelegate {
             PropertyModel customModel,
             MessageDispatcher messageDispatcher,
             TabModelSelector modelSelector,
-            Supplier<@Nullable Boolean> crashUploadPermissionSupplier) {
+            Supplier<Boolean> crashUploadPermissionSupplier) {
         mMessageModel = customModel;
         mTabModelSelector = modelSelector;
         mMessageDispatcher = messageDispatcher;
         mCrashUploadPermissionSupplier = crashUploadPermissionSupplier;
-
         mState = State.NOT_STARTED;
     }
 
@@ -213,11 +211,11 @@ public class MessageSurveyUiDelegate implements SurveyUiDelegate {
      * @return Whether survey can be shown in the current session.
      */
     private boolean canShowSurveyPrompt() {
-        return Boolean.TRUE.equals(mCrashUploadPermissionSupplier.get());
+        return mCrashUploadPermissionSupplier.get();
     }
 
     private void showSurveyIfReady() {
-        assert mTabModelSelectorObserver == null;
+        assert mCurrentTabObserver == null;
         assert mLoadingTabObserver == null;
         assert mState < State.ENQUEUED;
 
@@ -229,16 +227,19 @@ public class MessageSurveyUiDelegate implements SurveyUiDelegate {
         // Wait until tab model has an active tab.
         if (mTabModelSelector.getCurrentTab() == null) {
             removeLoadingTabReferences();
-            mTabModelSelectorObserver =
-                    new TabModelSelectorObserver() {
-                        @Override
-                        public void onChange() {
-                            mTabModelSelector.removeObserver(this);
-                            mTabModelSelectorObserver = null;
+            mCurrentTabObserver =
+                    tab -> {
+                        if (tab != null) {
+                            if (mCurrentTabObserver != null) {
+                                mTabModelSelector
+                                        .getCurrentTabSupplier()
+                                        .removeObserver(mCurrentTabObserver);
+                                mCurrentTabObserver = null;
+                            }
                             showSurveyIfReady();
                         }
                     };
-            mTabModelSelector.addObserver(mTabModelSelectorObserver);
+            mTabModelSelector.getCurrentTabSupplier().addSyncObserver(mCurrentTabObserver);
             return;
         }
 
@@ -263,7 +264,7 @@ public class MessageSurveyUiDelegate implements SurveyUiDelegate {
                     mState = State.ACCEPTED;
                     runIfNotNull(mOnSurveyAccepted);
                     if (wrappedOnAcceptAction != null) {
-                        var unused = wrappedOnAcceptAction.get();
+                        var _ = wrappedOnAcceptAction.get();
                     }
                     destroy();
                     return PrimaryActionClickBehavior.DISMISS_IMMEDIATELY;
@@ -285,7 +286,7 @@ public class MessageSurveyUiDelegate implements SurveyUiDelegate {
 
         // Dismiss the message when the original tab in which the message is shown is
         // hidden. This prevents the prompt from being shown if the tab is opened after being
-        // hidden for a duration in which the survey expired. See crbug.com/1249055 for details.
+        // hidden for a duration in which the survey expired. See crbug.com/40790974 for details.
         mDismissMessageTabObserver =
                 new EmptyTabObserver() {
                     @Override
@@ -358,10 +359,10 @@ public class MessageSurveyUiDelegate implements SurveyUiDelegate {
         if (mLoadingTab != null && mLoadingTabObserver != null) {
             mLoadingTab.removeObserver(mLoadingTabObserver);
         }
-        if (mTabModelSelectorObserver != null) {
-            mTabModelSelector.removeObserver(mTabModelSelectorObserver);
+        if (mCurrentTabObserver != null) {
+            mTabModelSelector.getCurrentTabSupplier().removeObserver(mCurrentTabObserver);
+            mCurrentTabObserver = null;
         }
-        mTabModelSelectorObserver = null;
         mLoadingTab = null;
         mLoadingTabObserver = null;
         mSurveyPromptTab = null;

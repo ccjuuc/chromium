@@ -24,12 +24,21 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, App) {
   RunTest("password_manager/password_manager_app_test.js", "mocha.run()");
 }
 
+IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, WebuiRefresh2026) {
+  RunTest("password_manager/password_manager_app_test.js",
+          "runMochaSuite('WebuiRefresh2026')");
+}
+
 IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, CheckupSection) {
   RunTest("password_manager/checkup_section_test.js", "mocha.run()");
 }
 
 IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, CheckupDetailsSection) {
   RunTest("password_manager/checkup_details_section_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, CheckupListItem) {
+  RunTest("password_manager/checkup_list_item_test.js", "mocha.run()");
 }
 
 IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, CredentialField) {
@@ -56,8 +65,16 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, FullDataReset) {
   RunTest("password_manager/full_data_reset_test.js", "mocha.run()");
 }
 
+IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, MovePasswordsDialog) {
+  RunTest("password_manager/move_passwords_dialog_test.js", "mocha.run()");
+}
+
 IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, PasskeyDetailsCard) {
   RunTest("password_manager/passkey_details_card_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, PasswordChangeDetails) {
+  RunTest("password_manager/password_change_details_test.js", "mocha.run()");
 }
 
 IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, PasswordDetailsCard) {
@@ -139,8 +156,16 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, SiteFavicon) {
   RunTest("password_manager/site_favicon_test.js", "mocha.run()");
 }
 
+IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, TrustedVaultErrorDialog) {
+  RunTest("password_manager/trusted_vault_error_dialog_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, UserUtilsMixin) {
+  RunTest("password_manager/user_utils_mixin_test.js", "mocha.run()");
+}
+
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, PromoCards) {
-  RunTest("password_manager/promo_cards_test.js", "mocha.run()");
+IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, NotificationCards) {
+  RunTest("password_manager/notification_cards_test.js", "mocha.run()");
 }
 #endif

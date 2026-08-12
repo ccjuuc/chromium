@@ -4,9 +4,6 @@
 
 package org.chromium.components.messages;
 
-import androidx.annotation.IntDef;
-
-import org.chromium.base.Log;
 import org.chromium.base.TimeUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
@@ -17,76 +14,16 @@ import org.chromium.build.annotations.NullMarked;
  */
 @NullMarked
 public class MessagesMetrics {
-    private static final String TAG = "MessagesMetrics";
     private static final String ENQUEUED_HISTOGRAM_NAME = "Android.Messages.Enqueued";
-    private static final String ENQUEUED_SUSPEND_HISTOGRAM_NAME =
-            "Android.Messages.Enqueued.Suspended";
-    private static final String ENQUEUED_RESUME_HISTOGRAM_NAME =
-            "Android.Messages.Enqueued.Resumed";
-    private static final String ENQUEUED_SCOPE_ACTIVE_HISTOGRAM_NAME =
-            "Android.Messages.Enqueued.ScopeActive";
-    private static final String ENQUEUED_SCOPE_INACTIVE_HISTOGRAM_NAME =
-            "Android.Messages.Enqueued.ScopeInactive";
+    private static final String ENQUEUED_HIDDEN_HISTOGRAM_NAME = "Android.Messages.Enqueued.Hidden";
     private static final String ENQUEUED_VISIBLE_HISTOGRAM_NAME =
             "Android.Messages.Enqueued.Visible";
-    private static final String ENQUEUED_HIDDEN_HISTOGRAM_NAME = "Android.Messages.Enqueued.Hidden";
-    private static final String ENQUEUED_HIDING_HISTOGRAM_NAME = "Android.Messages.Enqueued.Hiding";
     private static final String FULLY_VISIBLE_NAME = "Android.Messages.FullyVisible";
     private static final String DISMISSED_WITHOUT_FULLY_VISIBLE =
             "Android.Messages.DismissedWithoutFullyVisible";
     private static final String DISMISSED_HISTOGRAM_PREFIX = "Android.Messages.Dismissed.";
     private static final String TIME_TO_ACTION_HISTOGRAM_PREFIX = "Android.Messages.TimeToAction.";
-    private static final String TIME_TO_ACTION_DISMISS_HISTOGRAM_PREFIX =
-            "Android.Messages.TimeToAction.Dismiss.";
-    static final String STACKING_HISTOGRAM_NAME = "Android.Messages.Stacking";
-    static final String STACKING_HIDDEN_NAME = "Android.Messages.Stacking.Hidden";
-    static final String STACKING_HIDING_NAME = "Android.Messages.Stacking.Hiding";
-    static final String STACKING_REQUEST_TO_SHOW_NAME =
-            "Android.Messages.Stacking.RequestToFullyShow";
     static final String STACKING_TIME_TO_FULLY_SHOW_PREFIX = "Android.Messages.TimeToFullyShow.";
-    static final String STACKING_ACTION_HISTOGRAM_PREFIX = "Android.Messages.Stacking.";
-
-    @IntDef({
-        StackingAnimationType.SHOW_ALL,
-        StackingAnimationType.SHOW_FRONT_ONLY,
-        StackingAnimationType.REMOVE_FRONT_AND_SHOW_BACK,
-        StackingAnimationType.REMOVE_ALL,
-        StackingAnimationType.REMOVE_FRONT_ONLY,
-        StackingAnimationType.REMOVE_BACK_ONLY,
-        StackingAnimationType.SHOW_BACK_ONLY,
-        StackingAnimationType.INSERT_AT_FRONT,
-        StackingAnimationType.MAX_VALUE
-    })
-    public @interface StackingAnimationType {
-        int SHOW_ALL = 0;
-        int SHOW_FRONT_ONLY = 1;
-        int REMOVE_FRONT_AND_SHOW_BACK = 2;
-        int REMOVE_ALL = 3;
-        int REMOVE_FRONT_ONLY = 4;
-        int REMOVE_BACK_ONLY = 5;
-        int SHOW_BACK_ONLY = 6;
-        int INSERT_AT_FRONT = 7;
-        int MAX_VALUE = 8;
-    }
-
-    @IntDef({
-        StackingAnimationAction.INSERT_AT_FRONT,
-        StackingAnimationAction.INSERT_AT_BACK,
-        StackingAnimationAction.PUSH_TO_FRONT,
-        StackingAnimationAction.PUSH_TO_BACK,
-        StackingAnimationAction.REMOVE_FRONT,
-        StackingAnimationAction.REMOVE_BACK,
-        StackingAnimationAction.MAX_VALUE
-    })
-    public @interface StackingAnimationAction {
-        int INSERT_AT_FRONT = 0;
-        int INSERT_AT_BACK = 1;
-        int PUSH_TO_FRONT = 2;
-        int PUSH_TO_BACK = 3;
-        int REMOVE_FRONT = 4;
-        int REMOVE_BACK = 5;
-        int MAX_VALUE = 6;
-    }
 
     /** Records metrics when a message is being enqueued. */
     static void recordMessageEnqueued(@MessageIdentifier int messageIdentifier) {
@@ -94,38 +31,16 @@ public class MessagesMetrics {
                 ENQUEUED_HISTOGRAM_NAME, messageIdentifier, MessageIdentifier.COUNT);
     }
 
-    static void recordMessageEnqueuedScopeActive(
-            @MessageIdentifier int messageIdentifier, boolean active) {
-        String histogram =
-                active
-                        ? ENQUEUED_SCOPE_ACTIVE_HISTOGRAM_NAME
-                        : ENQUEUED_SCOPE_INACTIVE_HISTOGRAM_NAME;
+    /** Records metrics when a message is hidden after being enqueued. */
+    static void recordMessageEnqueuedHidden(@MessageIdentifier int enqueuedMessage) {
         RecordHistogram.recordEnumeratedHistogram(
-                histogram, messageIdentifier, MessageIdentifier.COUNT);
-    }
-
-    static void recordMessageEnqueuedQueueSuspended(
-            @MessageIdentifier int messageIdentifier, boolean suspended) {
-        String histogram =
-                suspended ? ENQUEUED_SUSPEND_HISTOGRAM_NAME : ENQUEUED_RESUME_HISTOGRAM_NAME;
-        RecordHistogram.recordEnumeratedHistogram(
-                histogram, messageIdentifier, MessageIdentifier.COUNT);
+                ENQUEUED_HIDDEN_HISTOGRAM_NAME, enqueuedMessage, MessageIdentifier.COUNT);
     }
 
     /** Records metrics when a message is visible after being enqueued. */
     static void recordMessageEnqueuedVisible(@MessageIdentifier int messageIdentifier) {
         RecordHistogram.recordEnumeratedHistogram(
                 ENQUEUED_VISIBLE_HISTOGRAM_NAME, messageIdentifier, MessageIdentifier.COUNT);
-    }
-
-    /** Records metrics when a message is hidden after being enqueued.*/
-    static void recordMessageEnqueuedHidden(
-            @MessageIdentifier int enqueuedMessage,
-            @MessageIdentifier int currentDisplayedMessage) {
-        RecordHistogram.recordEnumeratedHistogram(
-                ENQUEUED_HIDDEN_HISTOGRAM_NAME, enqueuedMessage, MessageIdentifier.COUNT);
-        RecordHistogram.recordEnumeratedHistogram(
-                ENQUEUED_HIDING_HISTOGRAM_NAME, currentDisplayedMessage, MessageIdentifier.COUNT);
     }
 
     /** Records metrics when a message is dismissed. */
@@ -141,66 +56,22 @@ public class MessagesMetrics {
      * Records metrics with duration of time a message was visible before it was dismissed by a user
      * action.
      */
-    static void recordTimeToAction(
-            @MessageIdentifier int messageIdentifier,
-            boolean messageDismissedByGesture,
-            long durationMs) {
+    static void recordTimeToAction(@MessageIdentifier int messageIdentifier, long durationMs) {
         String histogramSuffix = messageIdentifierToHistogramSuffix(messageIdentifier);
         RecordHistogram.deprecatedRecordMediumTimesHistogram(
                 TIME_TO_ACTION_HISTOGRAM_PREFIX + histogramSuffix, durationMs);
-        if (messageDismissedByGesture) {
-            RecordHistogram.deprecatedRecordMediumTimesHistogram(
-                    TIME_TO_ACTION_DISMISS_HISTOGRAM_PREFIX + histogramSuffix, durationMs);
-        }
     }
 
     /**
-     * Record the id of candidate which will be displayed in the foreground.
+     * Record the id of candidate which will be fully visible.
      *
      * @param messageIdentifier The id of the next front message.
+     * @param durationMs The time (in ms) taken to fully show the message.
      */
-    static void recordRequestToFullyShow(@MessageIdentifier int messageIdentifier) {
-        RecordHistogram.recordEnumeratedHistogram(
-                STACKING_REQUEST_TO_SHOW_NAME, messageIdentifier, MessageIdentifier.COUNT);
-    }
-
     static void recordTimeToFullyShow(@MessageIdentifier int messageIdentifier, long durationMs) {
         String histogramSuffix = messageIdentifierToHistogramSuffix(messageIdentifier);
         RecordHistogram.deprecatedRecordMediumTimesHistogram(
                 STACKING_TIME_TO_FULLY_SHOW_PREFIX + histogramSuffix, durationMs);
-    }
-
-    /**
-     * Record the id of background message when it is stacked.
-     * @param messageIdentifier The id of the background message.
-     */
-    static void recordStackingHidden(@MessageIdentifier int messageIdentifier) {
-        RecordHistogram.recordEnumeratedHistogram(
-                STACKING_HIDDEN_NAME, messageIdentifier, MessageIdentifier.COUNT);
-    }
-
-    /**
-     * Record the id of the front message when there is a background message.
-     * @param messageIdentifier The id of the foreground message.
-     */
-    static void recordStackingHiding(@MessageIdentifier int messageIdentifier) {
-        RecordHistogram.recordEnumeratedHistogram(
-                STACKING_HIDING_NAME, messageIdentifier, MessageIdentifier.COUNT);
-    }
-
-    static void recordStackingAnimationType(@StackingAnimationType int type) {
-        Log.i(TAG, "Triggered message stacking animation type %s.", type);
-        RecordHistogram.recordEnumeratedHistogram(
-                STACKING_HISTOGRAM_NAME, type, StackingAnimationType.MAX_VALUE);
-    }
-
-    static void recordStackingAnimationAction(
-            @StackingAnimationAction int action, @MessageIdentifier int messageIdentifier) {
-        String suffix = stackingAnimationActionToHistogramSuffix(action);
-        RecordHistogram.recordEnumeratedHistogram(
-                STACKING_ACTION_HISTOGRAM_PREFIX + suffix,
-                messageIdentifier,
-                MessageIdentifier.COUNT);
     }
 
     /** Record the message has been fully visible. */
@@ -223,28 +94,11 @@ public class MessagesMetrics {
         return TimeUtils.uptimeMillis();
     }
 
-    private static String stackingAnimationActionToHistogramSuffix(
-            @StackingAnimationAction int action) {
-        if (action == StackingAnimationAction.INSERT_AT_FRONT) {
-            return "InsertAtFront";
-        } else if (action == StackingAnimationAction.INSERT_AT_BACK) {
-            return "InsertAtBack";
-        } else if (action == StackingAnimationAction.PUSH_TO_FRONT) {
-            return "PushToFront";
-        } else if (action == StackingAnimationAction.PUSH_TO_BACK) {
-            return "PushToBack";
-        } else if (action == StackingAnimationAction.REMOVE_FRONT) {
-            return "RemoveFront";
-        } else {
-            return "RemoveBack";
-        }
-    }
-
     /**
      * Returns a histogram suffix string that corresponds to message identifier of the current
-     * message.
-     * Update this function when adding a new message identifier.
+     * message. Update this function when adding a new message identifier.
      */
+    // LINT.IfChange(MessageIdentifierToHistogramSuffix)
     public static String messageIdentifierToHistogramSuffix(
             @MessageIdentifier int messageIdentifier) {
         switch (messageIdentifier) {
@@ -350,8 +204,6 @@ public class MessagesMetrics {
                 return "CctAccountMismatchNotice";
             case MessageIdentifier.OS_ADVANCED_PROTECTION_SETTING_CHANGED_MESSAGE:
                 return "OsAdvancedProtectionSettingChangedMessage";
-            case MessageIdentifier.MULTI_INSTANCE_RESTORATION_ON_DOWNGRADED_LIMIT:
-                return "MultiInstanceRestorationOnDowngradedLimit";
             case MessageIdentifier.UPDATE_CHROME_FOR_TAB_GROUP_SHARE:
                 return "UpdateChromeForTabGroupShare";
             case MessageIdentifier.MODE_B_ROLLBACK_MESSAGE:
@@ -366,10 +218,30 @@ public class MessagesMetrics {
                 return "SaveUpdateEntity";
             case MessageIdentifier.SIGNIN_SURVEY:
                 return "SigninSurvey";
+            case MessageIdentifier.EXTENSIONS_REQUEST_ACCESS:
+                return "ExtensionsRequestAccess";
+            case MessageIdentifier.KNOWN_INTERCEPTION_DISCLOSURE:
+                return "KnownInterceptionDisclosure";
+            case MessageIdentifier.GLIC_WINDOW_RESIZED:
+                return "GlicWindowResized";
+            case MessageIdentifier.EXTENSION_DEV_TOOLS:
+                return "ExtensionDevTools";
+            case MessageIdentifier.PERSONAL_CONTEXT_FETCHING_FAILURE:
+                return "PersonalContextFetchingFailure";
+            case MessageIdentifier.PRIVATE_INFERENCE_NOTICE:
+                return "PrivateInferenceNotice";
+            case MessageIdentifier.CONTEXTUAL_TASKS_WINDOW_RESIZED:
+                return "ContextualTasksWindowResized";
+            case MessageIdentifier.IMMERSIVE_PLAYBACK_CONFIRMATION:
+                return "ImmersivePlaybackConfirmation";
+            case MessageIdentifier.INTRANET_REDIRECT:
+                return "IntranetRedirect";
             default:
                 return "Unknown";
         }
     }
+
+    // LINT.ThenChange(//components/messages/android/message_enums.h:MessageIdentifier)
 
     static String getEnqueuedHistogramNameForTesting() {
         return ENQUEUED_HISTOGRAM_NAME;

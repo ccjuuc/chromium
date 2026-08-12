@@ -46,6 +46,9 @@ static_library("sync_sessions") {
   public_deps = [
     "//components/sessions",
     "//components/sync",
+
+    # TODO(crbug.com/525218330): Remove this dependency by moving DeviceType and
+    # FormFactor enums from DeviceInfo to components/sync/base.
     "//components/sync_device_info",
   ]
 
@@ -70,6 +73,12 @@ static_library("sync_sessions") {
 static_library("test_support") {
   testonly = true
   sources = [
+    "fake_open_tabs_ui_delegate.cc",
+    "fake_open_tabs_ui_delegate.h",
+    "mock_open_tabs_ui_delegate.cc",
+    "mock_open_tabs_ui_delegate.h",
+    "mock_session_sync_service.cc",
+    "mock_session_sync_service.h",
     "mock_sync_sessions_client.cc",
     "mock_sync_sessions_client.h",
     "session_sync_test_helper.cc",

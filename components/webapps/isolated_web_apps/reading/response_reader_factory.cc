@@ -40,18 +40,17 @@ IsolatedWebAppResponseReaderFactory::~IsolatedWebAppResponseReaderFactory() {
 void IsolatedWebAppResponseReaderFactory::CreateResponseReader(
     const base::FilePath& web_bundle_path,
     const web_package::SignedWebBundleId& web_bundle_id,
-    Flags flags,
+    bool verify_signatures,
     Callback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!web_bundle_id.is_for_proxy_mode());
 
   auto create_reader = base::BindOnce(
       &SignedWebBundleReader::Create, web_bundle_path,
-      IwaOrigin(web_bundle_id).origin().GetURL(),
-      /*verify_signatures=*/!flags.Has(Flag::kSkipSignatureVerification),
+      IwaOrigin(web_bundle_id).origin().GetURL(), verify_signatures,
       base::BindOnce(&IsolatedWebAppResponseReaderFactory::OnReaderCreated,
                      weak_ptr_factory_.GetWeakPtr(), web_bundle_path,
-                     web_bundle_id, flags, std::move(callback)));
+                     web_bundle_id, std::move(callback)));
 
   if (auto* provider = IwaClient::GetInstance()->GetRuntimeDataProvider()) {
     provider->OnBestEffortRuntimeDataReady().Post(FROM_HERE,
@@ -64,7 +63,6 @@ void IsolatedWebAppResponseReaderFactory::CreateResponseReader(
 void IsolatedWebAppResponseReaderFactory::OnReaderCreated(
     const base::FilePath& web_bundle_path,
     const web_package::SignedWebBundleId& web_bundle_id,
-    Flags flags,
     Callback callback,
     base::expected<std::unique_ptr<SignedWebBundleReader>,
                    UnusableSwbnFileError> status) {
@@ -80,7 +78,7 @@ void IsolatedWebAppResponseReaderFactory::OnReaderCreated(
       IsolatedWebAppValidator::ValidateIntegrityBlockAndMetadata(
           &browser_context_.get(), web_bundle_id, reader->GetIntegrityBlock(),
           reader->GetPrimaryURL(), reader->GetEntries(),
-          flags.Has(Flag::kDevModeBundle)),
+          /*allow_soft_key_rotation=*/true),
       [&](const auto& error) {
         UmaLogExpectedStatus<UnusableSwbnFileError>(
             "WebApp.Isolated.SwbnFileUsability", base::unexpected(error));
@@ -104,8 +102,7 @@ void IsolatedWebAppResponseReaderFactory::OnReaderCreated(
       "WebApp.Isolated.SwbnFileUsability", base::ok());
 
   std::move(callback).Run(std::make_unique<IsolatedWebAppResponseReaderImpl>(
-      std::move(reader), &browser_context_.get(), web_bundle_id,
-      flags.Has(Flag::kDevModeBundle)));
+      std::move(reader), &browser_context_.get()));
 }
 
 }  // namespace web_app

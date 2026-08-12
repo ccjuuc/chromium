@@ -29,6 +29,7 @@
 
 #include "third_party/blink/renderer/core/layout/hit_test_location.h"
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
+#include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/layout/pointer_events_hit_rules.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_resource_paint_server.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_root.h"
@@ -41,8 +42,10 @@
 #include "third_party/blink/renderer/core/paint/svg_shape_painter.h"
 #include "third_party/blink/renderer/core/svg/svg_geometry_element.h"
 #include "third_party/blink/renderer/core/svg/svg_length_functions.h"
+#include "third_party/blink/renderer/core/svg/svg_zoom_migration.h"
 #include "third_party/blink/renderer/platform/geometry/path_builder.h"
 #include "third_party/blink/renderer/platform/geometry/stroke_data.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "ui/gfx/geometry/point_f.h"
 
@@ -66,38 +69,27 @@ bool ComputeStrokeHasRelativeLengths(const ComputedStyle& style) {
 }  // namespace
 
 LayoutSVGShape::LayoutSVGShape(SVGGeometryElement* node)
-    : LayoutSVGModelObject(node),
-      // A description (classification) of what geometric shape is represented -
-      // used for computing stroke bounds more efficiently, fast-paths for
-      // painting and determining if a shape is "empty".
-      geometry_type_(GeometryType::kEmpty),
-      // Default is false, the cached rects are empty from the beginning.
-      needs_boundaries_update_(false),
-      // Default is true, so we grab a Path object once from SVGGeometryElement.
-      needs_shape_update_(true),
-      // Default is true, so we grab a AffineTransform object once from
-      // SVGGeometryElement.
-      needs_transform_update_(true),
-      transform_uses_reference_box_(false) {}
+    : LayoutSVGModelObject(node) {}
 
 LayoutSVGShape::~LayoutSVGShape() = default;
 
 void LayoutSVGShape::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutSVGModelObject::StyleDidChange(diff, old_style, style_change_context);
+  LayoutSVGModelObject::StyleDidChange(diff, old_style, new_style,
+                                       style_change_context);
 
   if (diff.NeedsFullLayout()) {
     SetNeedsBoundariesUpdate();
   }
 
-  const ComputedStyle& style = StyleRef();
-
   TransformHelper::UpdateOffsetPath(*GetElement(), old_style);
-  transform_uses_reference_box_ = TransformHelper::DependsOnReferenceBox(style);
-  SVGResources::UpdatePaints(*this, old_style, style);
+  transform_uses_reference_box_ =
+      TransformHelper::DependsOnReferenceBox(new_style);
+  SVGResources::UpdatePaints(*this, old_style, new_style);
 
   if (old_style) {
     // Most of the stroke attributes (caps, joins, miters, width, etc.) will
@@ -105,22 +97,39 @@ void LayoutSVGShape::StyleDidChange(
     // are a couple of additional properties that *won't* cause a layout, but
     // are significant enough to require invalidating the cache.
     if (!diff.NeedsFullLayout() && stroke_path_cache_) {
-      if (old_style->StrokeDashOffset() != style.StrokeDashOffset() ||
-          base::ValuesEquivalent(old_style->StrokeDashArray(),
-                                 style.StrokeDashArray())) {
+      if (old_style->StrokeDashOffset() != new_style.StrokeDashOffset() ||
+          old_style->PathLength() != new_style.PathLength() ||
+          !base::ValuesEquivalent(old_style->StrokeDashArray(),
+                                  new_style.StrokeDashArray())) {
         stroke_path_cache_.reset();
       }
     }
 
     if (transform_uses_reference_box_ && !needs_transform_update_) {
-      if (TransformHelper::CheckReferenceBoxDependencies(*old_style, style)) {
+      if (TransformHelper::CheckReferenceBoxDependencies(*old_style,
+                                                         new_style)) {
         SetNeedsTransformUpdate();
         SetNeedsPaintPropertyUpdate();
       }
     }
+
+    // Under SvgNewZoom, geometry resolution (ValueForLength, AsPath, etc.) is
+    // scaled by EffectiveZoom, so the cached `path_` and `fill_bounding_box_`
+    // become stale when the zoom changes. Per-subclass
+    // GeometryPropertiesChanged helpers only inspect Length-valued properties,
+    // which are zoom-independent, so they would not otherwise notice. Force a
+    // shape update here.
+    if (RuntimeEnabledFeatures::SvgNewZoomEnabled() &&
+        old_style->EffectiveZoom() != new_style.EffectiveZoom()) {
+      SetNeedsShapeUpdate();
+    }
   }
 
-  SetTransformAffectsVectorEffect(HasNonScalingStroke());
+  const bool has_non_scaling_stroke = HasNonScalingStroke();
+  SetTransformAffectsVectorEffect(has_non_scaling_stroke);
+  if (has_non_scaling_stroke) {
+    View()->SetContainsNonScalingStroke();
+  }
 }
 
 void LayoutSVGShape::WillBeDestroyed() {
@@ -256,11 +265,14 @@ bool LayoutSVGShape::ShapeDependentStrokeContains(
 
     AffineTransform root_transform;
     if (HasNonScalingStroke()) {
-      // Un-scale to get back to the root-transform (cheaper than re-computing
-      // the root transform from scratch).
-      root_transform.Scale(StyleRef().EffectiveZoom())
-          .PreConcat(NonScalingStrokeTransform());
-
+      if (RuntimeEnabledFeatures::SvgNewZoomEnabled()) {
+        root_transform = NonScalingStrokeTransform();
+      } else {
+        // Un-scale to get back to the root-transform (cheaper than re-computing
+        // the root transform from scratch).
+        root_transform.Scale(StyleRef().EffectiveZoom())
+            .PreConcat(NonScalingStrokeTransform());
+      }
       path = &NonScalingStrokePath();
     } else {
       root_transform = ComputeRootTransform();
@@ -447,8 +459,20 @@ AffineTransform LayoutSVGShape::ComputeRootTransform() const {
   const LayoutObject* root = this;
   while (root && !root->IsSVGRoot())
     root = root->Parent();
-  return AffineTransform::FromTransform(
-      LocalToAncestorTransform(To<LayoutSVGRoot>(root)));
+  auto* layout_svg_root = To<LayoutSVGRoot>(root);
+  AffineTransform transform =
+      AffineTransform::FromTransform(LocalToAncestorTransform(layout_svg_root));
+  // When this SVG is rendered via SVGImage (e.g. <image> or <img>), the
+  // container may apply a non-uniform scale (e.g. for
+  // preserveAspectRatio="none"). Include that scale so non-scaling-stroke
+  // accounts for the full CTM to the host coordinate space.
+  if (RuntimeEnabledFeatures::SvgImageNonUniformScalingFixEnabled()) {
+    const gfx::Vector2dF& scale = layout_svg_root->GetContainerScale();
+    if (scale.x() != 1.f || scale.y() != 1.f) {
+      transform.ScaleNonUniform(scale.x(), scale.y());
+    }
+  }
+  return transform;
 }
 
 AffineTransform LayoutSVGShape::ComputeNonScalingStrokeTransform(
@@ -460,8 +484,12 @@ AffineTransform LayoutSVGShape::ComputeNonScalingStrokeTransform(
   // unpleasant ways (see crbug.com/747708 for an example.) Maybe it would be
   // better to apply this effect during rasterization?
   AffineTransform host_transform;
-  host_transform.Scale(1 / StyleRef().EffectiveZoom())
-      .PreConcat(ComputeRootTransform());
+  if (!RuntimeEnabledFeatures::SvgNewZoomEnabled()) {
+    host_transform.Scale(1 / StyleRef().EffectiveZoom())
+        .PreConcat(ComputeRootTransform());
+  } else {
+    host_transform = ComputeRootTransform();
+  }
 
   if (mode == NonScalingStrokeTransformMode::kClearTranslation) {
     // Width of non-scaling stroke is independent of translation, so zero it out
@@ -477,12 +505,8 @@ void LayoutSVGShape::UpdateNonScalingStrokeData() {
   NOT_DESTROYED();
   DCHECK(HasNonScalingStroke());
 
-  const NonScalingStrokeTransformMode mode =
-      RuntimeEnabledFeatures::SvgNonScalingStrokePrecisionFixEnabled()
-          ? NonScalingStrokeTransformMode::kPreserveTranslation
-          : NonScalingStrokeTransformMode::kClearTranslation;
-
-  const AffineTransform transform = ComputeNonScalingStrokeTransform(mode);
+  const AffineTransform transform = ComputeNonScalingStrokeTransform(
+      NonScalingStrokeTransformMode::kPreserveTranslation);
   auto& rare_data = EnsureRareData();
   if (rare_data.non_scaling_stroke_transform_ != transform) {
     SetShouldDoFullPaintInvalidation();
@@ -546,9 +570,21 @@ bool LayoutSVGShape::HitTestShape(const HitTestRequest& request,
                                   const HitTestLocation& local_location,
                                   PointerEventsHitRules hit_rules) {
   NOT_DESTROYED();
-  if (hit_rules.can_hit_bounding_box &&
-      local_location.Intersects(ObjectBoundingBox()))
+  bool is_visual_overflow = request.IsHitTestVisualOverflow();
+
+  if (is_visual_overflow) [[unlikely]] {
+    gfx::RectF bounds =
+        SVGLayoutSupport::ApplyFiltersToRect(*this, DecoratedBoundingBox());
+    if (!local_location.Intersects(bounds)) {
+      return false;
+    }
     return true;
+  }
+
+  if (hit_rules.can_hit_bounding_box &&
+      local_location.Intersects(ObjectBoundingBox())) {
+    return true;
+  }
 
   // TODO(chrishtr): support rect-based intersections in the cases below.
   const ComputedStyle& style = StyleRef();
@@ -596,7 +632,8 @@ gfx::RectF LayoutSVGShape::CalculateNonScalingStrokeBoundingBox() const {
 float LayoutSVGShape::StrokeWidth() const {
   NOT_DESTROYED();
   const SVGViewportResolver viewport_resolver(*this);
-  return ValueForLength(StyleRef().StrokeWidth(), viewport_resolver);
+  return ValueForLength(StyleRef().StrokeWidth(), viewport_resolver,
+                        StyleRef().EffectiveZoom());
 }
 
 float LayoutSVGShape::StrokeWidthForMarkerUnits() const {
@@ -611,8 +648,10 @@ float LayoutSVGShape::StrokeWidthForMarkerUnits() const {
                              non_scaling_transform.YScaleSquared()) /
                             2));
     stroke_width /= scale_factor;
+    return stroke_width;
   }
-  return stroke_width;
+
+  return NoopWillBeInvScaleScalar(stroke_width, StyleRef().EffectiveZoom());
 }
 
 LayoutSVGShapeRareData& LayoutSVGShape::EnsureRareData() const {

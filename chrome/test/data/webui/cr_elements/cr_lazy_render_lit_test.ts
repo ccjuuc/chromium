@@ -15,20 +15,10 @@ import {microtasksFinished} from 'chrome://webui-test/test_util.js';
 
 suite('cr-lazy-render', function() {
   // Test parent element.
-  class TestElement extends CrLitElement {
+  class TestDummyElement extends CrLitElement {
     static get is() {
-      return 'test-element';
+      return 'test-dummy';
     }
-
-    static override get properties() {
-      return {
-        name: {type: String},
-        checked: {type: Boolean},
-      };
-    }
-
-    accessor name: string = '';
-    accessor checked: boolean = false;
 
     override render() {
       return html`
@@ -41,19 +31,29 @@ suite('cr-lazy-render', function() {
         `}></cr-lazy-render-lit>`;
     }
 
+    static override get properties() {
+      return {
+        name: {type: String},
+        checked: {type: Boolean},
+      };
+    }
+
+    accessor name: string = '';
+    accessor checked: boolean = false;
+
     private onCheckedChanged_(e: CustomEvent<{value: boolean}>) {
       this.checked = e.detail.value;
     }
   }
 
-  customElements.define(TestElement.is, TestElement);
+  customElements.define(TestDummyElement.is, TestDummyElement);
 
   let lazy: CrLazyRenderLitElement<HTMLElement>;
-  let parent: TestElement;
+  let parent: TestDummyElement;
 
   setup(function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
-    parent = document.createElement('test-element') as TestElement;
+    parent = document.createElement('test-dummy') as TestDummyElement;
     document.body.appendChild(parent);
     lazy = parent.shadowRoot.querySelector('cr-lazy-render-lit')!;
   });

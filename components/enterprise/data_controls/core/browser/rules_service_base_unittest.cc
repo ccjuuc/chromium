@@ -4,9 +4,11 @@
 
 #include "components/enterprise/data_controls/core/browser/rules_service_base.h"
 
+#include "base/test/metrics/histogram_tester.h"
 #include "components/enterprise/data_controls/core/browser/prefs.h"
 #include "components/enterprise/data_controls/core/browser/test_utils.h"
 #include "components/prefs/testing_pref_service.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace data_controls {
@@ -19,26 +21,26 @@ GURL google_url() {
   return GURL("https://google.com");
 }
 
-void ExpectBlockVerdict(Verdict verdict, bool expect_machine_source = true) {
+void ExpectBlockVerdict(Verdict verdict, bool expect_machine_scope = true) {
   ASSERT_EQ(verdict.level(), Rule::Level::kBlock);
   EXPECT_EQ(verdict.triggered_rules().size(), 1u);
 
   auto index = Verdict::TriggeredRuleKey{
       .index = kFirstRuleIndex,
-      .machine_scope = expect_machine_source,
+      .machine_scope = expect_machine_scope,
   };
   EXPECT_TRUE(verdict.triggered_rules().count(index));
   EXPECT_EQ(verdict.triggered_rules().at(index).rule_name, "block");
   EXPECT_EQ(verdict.triggered_rules().at(index).rule_id, kFirstRuleID);
 }
 
-void ExpectWarnVerdict(Verdict verdict, bool expect_machine_source = true) {
+void ExpectWarnVerdict(Verdict verdict, bool expect_machine_scope = true) {
   ASSERT_EQ(verdict.level(), Rule::Level::kWarn);
   EXPECT_EQ(verdict.triggered_rules().size(), 1u);
 
   auto index = Verdict::TriggeredRuleKey{
       .index = kFirstRuleIndex,
-      .machine_scope = expect_machine_source,
+      .machine_scope = expect_machine_scope,
   };
   EXPECT_TRUE(verdict.triggered_rules().count(index));
   EXPECT_EQ(verdict.triggered_rules().at(index).rule_name, "warn");
@@ -80,6 +82,11 @@ class RulesServiceBaseTest : public testing::Test {
   TestingPrefServiceSimple prefs_;
   std::unique_ptr<TestRulesServiceBase> service_;
   std::unique_ptr<TestRulesServiceBase> incognito_service_;
+};
+
+class MockRulesServiceObserver : public RulesServiceBase::Observer {
+ public:
+  MOCK_METHOD(void, OnRulesUpdated, (), (override));
 };
 
 }  // namespace
@@ -261,6 +268,61 @@ TEST_F(RulesServiceBaseTest, WarnOSClipboardCopy) {
       incognito_service_->GetCopyToOSClipboardVerdict(google_url()));
 }
 
+TEST_F(RulesServiceBaseTest, BlockPasteFromGeminiInChrome) {
+  SetDataControls(&prefs_, {R"({
+                    "name": "block",
+                    "rule_id": "1234",
+                    "sources": {
+                      "gemini_in_chrome": true
+                    },
+                    "restrictions": [
+                      {"class": "CLIPBOARD", "level": "BLOCK"}
+                    ]
+                  })"});
+  ExpectBlockVerdict(service_->GetPasteFromGeminiInChromeVerdict(google_url()));
+  ExpectBlockVerdict(
+      incognito_service_->GetPasteFromGeminiInChromeVerdict(google_url()));
+}
+
+TEST_F(RulesServiceBaseTest, WarnPasteFromGeminiInChrome) {
+  SetDataControls(&prefs_, {R"({
+                    "name": "warn",
+                    "rule_id": "1234",
+                    "sources": {
+                      "gemini_in_chrome": true
+                    },
+                    "restrictions": [
+                      {"class": "CLIPBOARD", "level": "WARN"}
+                    ]
+                  })"});
+  ExpectWarnVerdict(service_->GetPasteFromGeminiInChromeVerdict(google_url()));
+  ExpectWarnVerdict(
+      incognito_service_->GetPasteFromGeminiInChromeVerdict(google_url()));
+}
+
+TEST_F(RulesServiceBaseTest, BlockPasteFromGeminiInChromeToUrl) {
+  SetDataControls(&prefs_, {R"({
+                    "name": "block",
+                    "rule_id": "1234",
+                    "sources": {
+                      "gemini_in_chrome": true
+                    },
+                    "destinations": {
+                      "urls": ["google.com"]
+                    },
+                    "restrictions": [
+                      {"class": "CLIPBOARD", "level": "BLOCK"}
+                    ]
+                  })"});
+  ExpectBlockVerdict(service_->GetPasteFromGeminiInChromeVerdict(google_url()));
+  ExpectBlockVerdict(
+      incognito_service_->GetPasteFromGeminiInChromeVerdict(google_url()));
+  ExpectNoVerdict(
+      service_->GetPasteFromGeminiInChromeVerdict(GURL("https://example.com")));
+  ExpectNoVerdict(incognito_service_->GetPasteFromGeminiInChromeVerdict(
+      GURL("https://example.com")));
+}
+
 TEST_F(RulesServiceBaseTest, RuleWithoutRestrictionsForCopy) {
   SetDataControls(&prefs_, {R"({
                     "name": "block",
@@ -278,6 +340,160 @@ TEST_F(RulesServiceBaseTest, RuleWithoutRestrictionsForCopy) {
   ExpectNoVerdict(service_->GetCopyToOSClipboardVerdict(google_url()));
   ExpectNoVerdict(
       incognito_service_->GetCopyToOSClipboardVerdict(google_url()));
+}
+
+TEST_F(RulesServiceBaseTest, HasBlockingScreenshotRule_NoRules) {
+  EXPECT_FALSE(service_->HasBlockingScreenshotRule());
+}
+
+TEST_F(RulesServiceBaseTest, HasBlockingScreenshotRule_NoScreenshotRule) {
+  SetDataControls(&prefs_, {
+                               R"({
+        "name": "rule",
+        "rule_id": "1",
+        "sources": { "urls": ["*"] },
+        "restrictions": [
+          {"class": "CLIPBOARD", "level": "BLOCK"}
+        ]
+      })",
+                           });
+  EXPECT_FALSE(service_->HasBlockingScreenshotRule());
+}
+
+TEST_F(RulesServiceBaseTest, HasBlockingScreenshotRule_WarnScreenshotRule) {
+  // Only BLOCK screenshot rules activate HasBlockingScreenshotRule
+  SetDataControls(&prefs_, {
+                               R"({
+        "name": "rule",
+        "rule_id": "1",
+        "sources": { "urls": ["*"] },
+        "restrictions": [
+          {"class": "SCREENSHOT", "level": "WARN"}
+        ]
+      })",
+                           });
+  EXPECT_FALSE(service_->HasBlockingScreenshotRule());
+}
+
+TEST_F(RulesServiceBaseTest, HasBlockingScreenshotRule_BlockScreenshotRule) {
+  SetDataControls(&prefs_, {
+                               R"({
+        "name": "rule",
+        "rule_id": "1",
+        "sources": { "urls": ["*"] },
+        "restrictions": [
+          {"class": "SCREENSHOT", "level": "BLOCK"}
+        ]
+      })",
+                           });
+  EXPECT_TRUE(service_->HasBlockingScreenshotRule());
+}
+
+TEST_F(RulesServiceBaseTest, BlockScreenshots_NoRules) {
+  EXPECT_FALSE(service_->BlockScreenshots(google_url()));
+  EXPECT_FALSE(incognito_service_->BlockScreenshots(google_url()));
+}
+
+TEST_F(RulesServiceBaseTest, BlockScreenshots_BlockedBySourceUrl) {
+  SetDataControls(&prefs_, {R"({
+                    "name": "block",
+                    "rule_id": "1234",
+                    "sources": {
+                      "urls": ["google.com"]
+                    },
+                    "restrictions": [
+                      {"class": "SCREENSHOT", "level": "BLOCK"}
+                    ]
+                  })"});
+  EXPECT_TRUE(service_->BlockScreenshots(google_url()));
+  EXPECT_TRUE(incognito_service_->BlockScreenshots(google_url()));
+}
+
+TEST_F(RulesServiceBaseTest, BlockScreenshots_NotBlockedByWarn) {
+  // Only BLOCK level is supported for screenshots in
+  // RulesServiceBase::BlockScreenshots
+  SetDataControls(&prefs_, {R"({
+                    "name": "warn",
+                    "rule_id": "1234",
+                    "sources": {
+                      "urls": ["google.com"]
+                    },
+                    "restrictions": [
+                      {"class": "SCREENSHOT", "level": "WARN"}
+                    ]
+                  })"});
+  EXPECT_FALSE(service_->BlockScreenshots(google_url()));
+  EXPECT_FALSE(incognito_service_->BlockScreenshots(google_url()));
+}
+
+TEST_F(RulesServiceBaseTest, BlockScreenshots_Allowed) {
+  SetDataControls(&prefs_, {R"({
+                    "name": "allow",
+                    "rule_id": "1234",
+                    "sources": {
+                      "urls": ["google.com"]
+                    },
+                    "restrictions": [
+                      {"class": "SCREENSHOT", "level": "ALLOW"}
+                    ]
+                  })"});
+  EXPECT_FALSE(service_->BlockScreenshots(google_url()));
+  EXPECT_FALSE(incognito_service_->BlockScreenshots(google_url()));
+}
+
+TEST_F(RulesServiceBaseTest, BlockScreenshots_BlockedByIncognito) {
+  SetDataControls(&prefs_, {R"({
+                    "name": "block",
+                    "rule_id": "1234",
+                    "sources": {
+                      "incognito": true
+                    },
+                    "restrictions": [
+                      {"class": "SCREENSHOT", "level": "BLOCK"}
+                    ]
+                  })"});
+  EXPECT_FALSE(service_->BlockScreenshots(google_url()));
+  EXPECT_TRUE(incognito_service_->BlockScreenshots(google_url()));
+}
+
+TEST_F(RulesServiceBaseTest, ObserverNotifiedOnUpdate) {
+  MockRulesServiceObserver observer;
+  service_->AddObserver(&observer);
+
+  // Before the update, there should be no rules applied.
+  ExpectNoVerdict(service_->GetCopyRestrictedBySourceVerdict(google_url()));
+
+  // The observer should be notified exactly once when the rules are updated.
+  EXPECT_CALL(observer, OnRulesUpdated()).Times(1);
+
+  SetDataControls(&prefs_, {R"({
+                    "name": "block",
+                    "rule_id": "1234",
+                    "sources": { "urls": ["google.com"] },
+                    "restrictions": [
+                      {"class": "CLIPBOARD", "level": "BLOCK"}
+                    ]
+                  })"});
+
+  // After the update, the rule should be applied.
+  ExpectBlockVerdict(service_->GetCopyRestrictedBySourceVerdict(google_url()));
+
+  service_->RemoveObserver(&observer);
+}
+
+TEST_F(RulesServiceBaseTest, ScreenshotLatencyHistogramLogged) {
+  base::HistogramTester histogram_tester;
+  SetDataControls(&prefs_, {R"({
+    "name": "Block screenshot rule",
+    "rule_id": "1234",
+    "sources": { "urls": ["google.com"] },
+    "restrictions": [ {"class": "SCREENSHOT", "level": "BLOCK"} ]
+  })"});
+
+  service_->BlockScreenshots(google_url());
+
+  histogram_tester.ExpectTotalCount(
+      "Enterprise.DataControls.Screenshot.EvaluationLatency", 1);
 }
 
 }  // namespace data_controls

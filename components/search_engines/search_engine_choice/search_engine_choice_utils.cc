@@ -4,6 +4,7 @@
 
 #include "components/search_engines/search_engine_choice/search_engine_choice_utils.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -12,12 +13,10 @@
 #include "base/check_is_test.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/puma_histogram_functions.h"
 #include "base/metrics/user_metrics.h"
 #include "base/not_fatal_until.h"
 #include "base/strings/stringprintf.h"
@@ -27,6 +26,8 @@
 #include "base/version_info/version_info.h"
 #include "build/branding_buildflags.h"
 #include "components/country_codes/country_codes.h"
+#include "components/metrics/private_metrics/puma_histogram_functions.h"
+#include "components/metrics/profile_metrics_service.h"
 #include "components/policy/core/common/policy_service.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
@@ -94,16 +95,16 @@ ChoiceScreenDisplayState::ChoiceScreenDisplayState(
 
 ChoiceScreenDisplayState::~ChoiceScreenDisplayState() = default;
 
-base::Value::Dict ChoiceScreenDisplayState::ToDict() const {
+base::DictValue ChoiceScreenDisplayState::ToDict() const {
   // TODO(crbug.com/454023518): Non-regional set engine support is not currently
   // expected to result in uploading nor locally caching display metrics.
   CHECK(!includes_non_regional_set_engine);
 
-  auto dict = base::Value::Dict();
+  auto dict = base::DictValue();
 
   dict.Set(kDisplayStateCountryIdKey, country_id.Serialize());
 
-  base::Value::List* search_engines_array =
+  base::ListValue* search_engines_array =
       dict.EnsureList(kDisplayStateSearchEnginesKey);
   for (SearchEngineType search_engine_type : search_engines) {
     search_engines_array->Append(static_cast<int>(search_engine_type));
@@ -119,27 +120,17 @@ base::Value::Dict ChoiceScreenDisplayState::ToDict() const {
 
 // static
 std::optional<ChoiceScreenDisplayState> ChoiceScreenDisplayState::FromDict(
-    const base::Value::Dict& dict) {
+    const base::DictValue& dict) {
   std::optional<int> parsed_country_code =
       dict.FindInt(kDisplayStateCountryIdKey);
   std::optional<CountryId> parsed_country_id;
   if (parsed_country_code.has_value()) {
     parsed_country_id = CountryId::Deserialize(parsed_country_code.value());
   }
-  const base::Value::List* parsed_search_engines =
+  const base::ListValue* parsed_search_engines =
       dict.FindList(kDisplayStateSearchEnginesKey);
   std::optional<int> parsed_selected_engine_index =
       dict.FindInt(kDisplayStateSelectedEngineIndexKey);
-
-  if (dict.FindBool("list_is_modified_by_current_default").value_or(false)) {
-    // We stopped writing this field, as we totally stopped including the
-    // current default in the list. If we find old persisted data where
-    // this is `true`, just consider it invalid, as we wouldn't log anything
-    // for it anyway.
-    // TODO(crbug.com/343915066): Entries older than 14 days are considered
-    // expired, we can remove this code branch and the dictionary key in M130+
-    return std::nullopt;
-  }
 
   if (!parsed_country_id.has_value() || !parsed_search_engines) {
     return std::nullopt;
@@ -180,29 +171,31 @@ ChoiceScreenData::ChoiceScreenData(
           current_default_to_highlight != nullptr,
           /*includes_non_regional_set_engine=*/
           current_default_to_highlight != nullptr &&
-              !base::Contains(search_engines_,
-                              current_default_to_highlight,
-                              &std::unique_ptr<TemplateURL>::get))),
+              !std::ranges::contains(search_engines_,
+                                     current_default_to_highlight,
+                                     &std::unique_ptr<TemplateURL>::get))),
       current_default_to_highlight_(current_default_to_highlight) {}
 
 ChoiceScreenData::~ChoiceScreenData() = default;
 
 void RecordChoiceScreenDefaultSearchProviderType(
     SearchEngineType engine_type,
-    ChoiceMadeLocation choice_location) {
-  base::UmaHistogramEnumeration(
+    ChoiceMadeLocation choice_location,
+    metrics::ProfileMetricsService& profile_metrics_service) {
+  profile_metrics_service.UmaHistogramEnumeration(
       kSearchEngineChoiceScreenDefaultSearchEngineTypeHistogram, engine_type,
       SEARCH_ENGINE_MAX);
-  base::PumaHistogramEnumeration(
-      base::PumaType::kRc,
+  metrics::private_metrics::PumaHistogramEnumeration(
+      metrics::private_metrics::PumaType::kRc,
       kPumaSearchEngineChoiceScreenDefaultSearchEngineTypeHistogram,
       engine_type, SEARCH_ENGINE_MAX);
-  if (choice_location == ChoiceMadeLocation::kChoiceScreen) {
-    base::UmaHistogramEnumeration(
+  if (choice_location == ChoiceMadeLocation::kChoiceScreen ||
+      choice_location == ChoiceMadeLocation::kDeviceChoiceImport) {
+    profile_metrics_service.UmaHistogramEnumeration(
         kSearchEngineChoiceScreenDefaultSearchEngineType2Histogram, engine_type,
         SEARCH_ENGINE_MAX);
-    base::PumaHistogramEnumeration(
-        base::PumaType::kRc,
+    metrics::private_metrics::PumaHistogramEnumeration(
+        metrics::private_metrics::PumaType::kRc,
         kPumaSearchEngineChoiceScreenDefaultSearchEngineType2Histogram,
         engine_type, SEARCH_ENGINE_MAX);
   }
@@ -213,8 +206,9 @@ void RecordChoiceScreenSelectedIndex(int selected_engine_index) {
       kSearchEngineChoiceScreenSelectedEngineIndexHistogram,
       selected_engine_index,
       TemplateURLPrepopulateData::kMaxEeaPrepopulatedEngines);
-  base::PumaHistogramExactLinear(
-      base::PumaType::kRc, kPumaSearchChoiceScreenSelectedEngineIndexHistogram,
+  metrics::private_metrics::PumaHistogramExactLinear(
+      metrics::private_metrics::PumaType::kRc,
+      kPumaSearchChoiceScreenSelectedEngineIndexHistogram,
       selected_engine_index,
       TemplateURLPrepopulateData::kMaxEeaPrepopulatedEngines);
 }
@@ -226,12 +220,13 @@ void RecordChoiceScreenPositionsCountryMismatch(bool has_mismatch) {
 }
 
 void RecordChoiceScreenPositions(
-    const std::vector<SearchEngineType>& displayed_search_engines) {
+    const std::vector<SearchEngineType>& displayed_search_engines,
+    metrics::ProfileMetricsService& profile_metrics_service) {
   for (int i = 0; i < static_cast<int>(displayed_search_engines.size()); ++i) {
     // Using `UmaHistogramSparse()` instead of `UmaHistogramEnumeration()` as
     // it is more space efficient when logging just one value (in most cases)
     // for each index.
-    base::UmaHistogramSparse(
+    profile_metrics_service.UmaHistogramSparse(
         base::StringPrintf(
             kSearchEngineChoiceScreenShowedEngineAtHistogramPattern, i),
         displayed_search_engines[i]);

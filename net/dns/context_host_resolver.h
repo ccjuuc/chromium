@@ -56,16 +56,19 @@ class NET_EXPORT ContextHostResolver : public HostResolver {
   std::unique_ptr<ResolveHostRequest> CreateRequest(
       url::SchemeHostPort host,
       NetworkAnonymizationKey network_anonymization_key,
+      handles::NetworkHandle target_network,
       NetLogWithSource net_log,
       std::optional<ResolveHostParameters> optional_parameters) override;
   std::unique_ptr<ResolveHostRequest> CreateRequest(
       const HostPortPair& host,
       const NetworkAnonymizationKey& network_anonymization_key,
+      handles::NetworkHandle target_network,
       const NetLogWithSource& net_log,
       const std::optional<ResolveHostParameters>& optional_parameters) override;
   std::unique_ptr<ServiceEndpointRequest> CreateServiceEndpointRequest(
       Host host,
       NetworkAnonymizationKey network_anonymization_key,
+      handles::NetworkHandle target_network,
       NetLogWithSource net_log,
       ResolveHostParameters parameters) override;
   std::unique_ptr<ProbeRequest> CreateDohProbeRequest() override;
@@ -73,7 +76,7 @@ class NET_EXPORT ContextHostResolver : public HostResolver {
       const HostPortPair& host,
       DnsQueryType query_type) override;
   HostCache* GetHostCache() override;
-  base::Value::Dict GetDnsConfigAsValue() const override;
+  base::DictValue GetDnsConfigAsValue() const override;
   void SetRequestContext(URLRequestContext* request_context) override;
   bool IsHappyEyeballsV3Enabled() const override;
   HostResolverManager* GetManagerForTesting() override;
@@ -97,6 +100,7 @@ class NET_EXPORT ContextHostResolver : public HostResolver {
   std::unique_ptr<ResolveHostRequest> CreateRequestInternal(
       HostResolver::Host host,
       NetworkAnonymizationKey network_anonymization_key,
+      handles::NetworkHandle target_network,
       NetLogWithSource net_log,
       std::optional<ResolveHostParameters> optional_parameters);
 
@@ -111,6 +115,8 @@ class NET_EXPORT ContextHostResolver : public HostResolver {
   bool shutting_down_ = false;
 
   SEQUENCE_CHECKER(sequence_checker_);
+
+  base::WeakPtrFactory<ContextHostResolver> weak_ptr_factory_{this};
 };
 
 }  // namespace net

@@ -2,16 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-var group;
-var h1;
-var p1;
-var link;
-var main;
-var p2;
-var p3;
-var img;
-var okButton;
-var cancelButton;
+let group;
+let h1;
+let p1;
+let link;
+let main;
+let p2;
+let p3;
+let img;
+let okButton;
+let cancelButton;
 
 function initializeNodes(rootNode) {
   group = rootNode.firstChild;
@@ -53,7 +53,7 @@ function initializeNodes(rootNode) {
   assertEq(undefined, cancelButton.restriction);
 }
 
-var allTests = [
+const allTests = [
   function testFindByRole() {
     initializeNodes(rootNode);
 
@@ -97,22 +97,22 @@ var allTests = [
     // Find disabled buttons.
     assertEq(
         okButton,
-        rootNode.find({role: RoleType.BUTTON,
-            attributes: {restriction: 'disabled'}}));
+        rootNode.find(
+            {role: RoleType.BUTTON, attributes: {restriction: 'disabled'}}));
     assertEq(
         [okButton],
-        rootNode.findAll({role: RoleType.BUTTON,
-            attributes: {restriction: 'disabled'}}));
+        rootNode.findAll(
+            {role: RoleType.BUTTON, attributes: {restriction: 'disabled'}}));
 
     // Find enabled buttons.
     assertEq(
         cancelButton,
-        rootNode.find({role: RoleType.BUTTON,
-            attributes: {restriction: undefined }}));
+        rootNode.find(
+            {role: RoleType.BUTTON, attributes: {restriction: undefined}}));
     assertEq(
         [cancelButton],
-        rootNode.findAll({role: RoleType.BUTTON,
-            attributes: {restriction: undefined }}));
+        rootNode.findAll(
+            {role: RoleType.BUTTON, attributes: {restriction: undefined}}));
     chrome.test.succeed();
   },
 
@@ -128,16 +128,18 @@ var allTests = [
     assertEq(null, rootNode.find({attributes: {name: 'ok'}}));
 
     // Find by value attribute - regexp.
-    var query = {attributes: {name: /relationship/}};
+    const query = {attributes: {name: /relationship/}};
     assertEq(strong, rootNode.find(query).parent);
 
     // Find by role and hierarchicalLevel attribute.
     assertEq(
-        h1, rootNode.find(
-                {role: RoleType.HEADING, attributes: {hierarchicalLevel: 1}}));
+        h1,
+        rootNode.find(
+            {role: RoleType.HEADING, attributes: {hierarchicalLevel: 1}}));
     assertEq(
-        [], rootNode.findAll(
-                {role: RoleType.HEADING, attributes: {hierarchicalLevel: 2}}));
+        [],
+        rootNode.findAll(
+            {role: RoleType.HEADING, attributes: {hierarchicalLevel: 2}}));
 
     // Searching for an attribute which no element has fails.
     assertEq(null, rootNode.find({attributes: {charisma: 12}}));
@@ -165,18 +167,18 @@ var allTests = [
         h1.matches({
           role: RoleType.HEADING,
           state: {focusable: true},
-          attributes: {hierarchicalLevel: 1}
+          attributes: {hierarchicalLevel: 1},
         }),
         'h1 should not match focusable: true');
     assertTrue(
         h1.matches({
           role: RoleType.HEADING,
           state: {focusable: false},
-          attributes: {hierarchicalLevel: 1}
+          attributes: {hierarchicalLevel: 1},
         }),
         'h1 should match focusable: false');
 
-    var p2StaticText = strong.firstChild;
+    const p2StaticText = strong.firstChild;
     assertTrue(
         p2StaticText.matches(
             {role: RoleType.STATIC_TEXT, attributes: {name: /relationship/}}),
@@ -187,7 +189,7 @@ var allTests = [
         'p2 should not match name: \'relationship');
 
     chrome.test.succeed();
-  }
+  },
 ];
 
 setUpAndRunTabsTests(allTests, 'complex.html');

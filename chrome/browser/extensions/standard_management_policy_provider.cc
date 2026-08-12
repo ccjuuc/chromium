@@ -9,9 +9,9 @@
 #include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/extension_management.h"
-#include "chrome/browser/extensions/managed_installation_mode.h"
-#include "chrome/browser/extensions/manifest_v2_experiment_manager.h"
 #include "chrome/grit/generated_resources.h"
+#include "extensions/browser/managed_installation_mode.h"
+#include "extensions/browser/manifest_v2_handler.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
@@ -122,23 +122,27 @@ bool StandardManagementPolicyProvider::UserMayLoad(
   // a branch to the second block and add a line to the definition of
   // kAllowedTypesMap in extension_management_constants.h.
   switch (extension->GetType()) {
-    case Manifest::TYPE_UNKNOWN:
+    case Manifest::Type::kUnknown:
       break;
-    case Manifest::TYPE_EXTENSION:
-    case Manifest::TYPE_THEME:
-    case Manifest::TYPE_USER_SCRIPT:
-    case Manifest::TYPE_HOSTED_APP:
-    case Manifest::TYPE_LEGACY_PACKAGED_APP:
-    case Manifest::TYPE_PLATFORM_APP:
-    case Manifest::TYPE_SHARED_MODULE:
-    case Manifest::TYPE_LOGIN_SCREEN_EXTENSION:
-    case Manifest::TYPE_CHROMEOS_SYSTEM_EXTENSION: {
+    case Manifest::Type::kExtension:
+    case Manifest::Type::kTheme:
+    case Manifest::Type::kUserScript:
+    case Manifest::Type::kHostedApp:
+    case Manifest::Type::kLegacyPackagedApp:
+    case Manifest::Type::kPlatformApp:
+    case Manifest::Type::kSharedModule:
+    case Manifest::Type::kLoginScreenExtension:
+    case Manifest::Type::kChromeOSSystemExtension: {
       if (!settings_->IsAllowedManifestType(extension->GetType(),
-                                            extension->id()))
-        return ReturnLoadError(extension, error);
+                                            extension->id())) {
+        if (error) {
+          *error = GetLoadErrorMessage(extension);
+        }
+        return false;
+      }
       break;
     }
-    case Manifest::NUM_LOAD_TYPES:
+    case Manifest::Type::kNumLoadTypes:
       NOTREACHED();
   }
 
@@ -146,14 +150,8 @@ bool StandardManagementPolicyProvider::UserMayLoad(
       settings_->GetInstallationMode(extension);
   if (installation_mode == ManagedInstallationMode::kBlocked ||
       installation_mode == ManagedInstallationMode::kRemoved) {
-    return ReturnLoadError(extension, error);
-  }
-
-  if (!settings_->IsAllowedManifestVersion(extension)) {
     if (error) {
-      *error = l10n_util::GetStringFUTF16(
-          IDS_EXTENSION_MANIFEST_VERSION_NOT_SUPPORTED,
-          base::UTF8ToUTF16(extension->name()));
+      *error = GetLoadErrorMessage(extension);
     }
     return false;
   }
@@ -161,29 +159,34 @@ bool StandardManagementPolicyProvider::UserMayLoad(
   return true;
 }
 
-bool StandardManagementPolicyProvider::UserMayInstall(
-    const Extension* extension,
-    std::u16string* error) const {
+void StandardManagementPolicyProvider::UserMayInstall(
+    scoped_refptr<const Extension> extension,
+    base::OnceCallback<void(ManagementPolicy::Decision)> callback) const {
+  std::u16string error;
+
   ManagedInstallationMode installation_mode =
-      settings_->GetInstallationMode(extension);
+      settings_->GetInstallationMode(extension.get());
 
   // Force-installed extensions cannot be overwritten manually.
   if (!Manifest::IsPolicyLocation(extension->location()) &&
       installation_mode == ManagedInstallationMode::kForced) {
-    return ReturnLoadError(extension, error);
+    error = GetLoadErrorMessage(extension.get());
+    std::move(callback).Run({false, error});
+    return;
   }
 
   // Check if the extension would be force-disabled once it's installed. If it
   // would, block the new installation.
-  auto* mv2_experiment_manager = ManifestV2ExperimentManager::Get(profile_);
-  if (mv2_experiment_manager &&
-      mv2_experiment_manager->ShouldBlockExtensionEnable(*extension)) {
-    *error =
+  auto* mv2_handler = ManifestV2Handler::Get(profile_);
+  if (mv2_handler && mv2_handler->ShouldBlockExtensionEnable(*extension)) {
+    error =
         l10n_util::GetStringUTF16(IDS_EXTENSIONS_CANT_INSTALL_MV2_EXTENSION);
-    return false;
+    std::move(callback).Run({false, error});
+    return;
   }
 
-  return UserMayLoad(extension, error);
+  bool may_load = UserMayLoad(extension.get(), &error);
+  std::move(callback).Run({may_load, error});
 }
 
 bool StandardManagementPolicyProvider::UserMayModifySettings(
@@ -237,12 +240,11 @@ bool StandardManagementPolicyProvider::MustRemainDisabled(
     return true;
   }
 
-  // Note: `mv2_experiment_manager` may be null for certain types of profiles
+  // Note: `mv2_handler` may be null for certain types of profiles
   // (such as the sign-in profile). We can ignore this check in this case, since
   // users can't install extensions in these profiles.
-  auto* mv2_experiment_manager = ManifestV2ExperimentManager::Get(profile_);
-  if (mv2_experiment_manager &&
-      mv2_experiment_manager->ShouldBlockExtensionEnable(*extension)) {
+  auto* mv2_handler = ManifestV2Handler::Get(profile_);
+  if (mv2_handler && mv2_handler->ShouldBlockExtensionEnable(*extension)) {
     if (reason) {
       *reason = disable_reason::DISABLE_UNSUPPORTED_MANIFEST_VERSION;
     }
@@ -284,17 +286,12 @@ bool StandardManagementPolicyProvider::ShouldForceUninstall(
   return false;
 }
 
-bool StandardManagementPolicyProvider::ReturnLoadError(
-    const extensions::Extension* extension,
-    std::u16string* error) const {
-  if (error) {
-    *error = l10n_util::GetStringFUTF16(
-        IDS_EXTENSION_CANT_INSTALL_POLICY_BLOCKED,
-        base::UTF8ToUTF16(extension->name()),
-        base::UTF8ToUTF16(extension->id()),
-        base::UTF8ToUTF16(settings_->BlockedInstallMessage(extension->id())));
-  }
-  return false;
+std::u16string StandardManagementPolicyProvider::GetLoadErrorMessage(
+    const extensions::Extension* extension) const {
+  return l10n_util::GetStringFUTF16(
+      IDS_EXTENSION_CANT_INSTALL_POLICY_BLOCKED,
+      base::UTF8ToUTF16(extension->name()), base::UTF8ToUTF16(extension->id()),
+      base::UTF8ToUTF16(settings_->BlockedInstallMessage(extension->id())));
 }
 
 }  // namespace extensions

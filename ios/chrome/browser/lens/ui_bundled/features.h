@@ -25,9 +25,6 @@ extern const char kLensTranslateToggleMode[];
 // Integer that maps to the translate toggle mode enum.
 int LensTranslateToggleMode();
 
-// Whether to enable the Lens web page load optimization.
-BASE_DECLARE_FEATURE(kLensWebPageLoadOptimizationEnabled);
-
 // Whether to use unary APIs with HTTP transport.
 BASE_DECLARE_FEATURE(kLensUnaryApisWithHttpTransportEnabled);
 
@@ -81,5 +78,11 @@ BASE_DECLARE_FEATURE(kLensOmnientShaderV2Enabled);
 
 // Whether to enable the stream service web channel transport.
 BASE_DECLARE_FEATURE(kLensStreamServiceWebChannelTransportEnabled);
+
+// Whether to enable the filter toggle in the Lens overlay.
+BASE_DECLARE_FEATURE(kLensFilterToggleEnabled);
+
+// Whether to enable followups full height in the Lens overlay.
+BASE_DECLARE_FEATURE(kLensFollowupsFullHeightEnabled);
 
 #endif  // IOS_CHROME_BROWSER_LENS_UI_BUNDLED_FEATURES_H_

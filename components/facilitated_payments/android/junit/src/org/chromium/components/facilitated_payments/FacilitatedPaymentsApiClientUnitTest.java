@@ -12,13 +12,13 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.components.signin.base.CoreAccountInfo;
 import org.chromium.content_public.browser.RenderFrameHost;
 
+import java.util.Collections;
+
 /** Tests for the facilitated payment API client. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.UNIT_TESTS)
 @SmallTest
 public class FacilitatedPaymentsApiClientUnitTest {
     private static final byte[] TEST_CLIENT_TOKEN = new byte[] {'C', 'l', 'i', 'e', 'n', 't'};
@@ -99,7 +99,8 @@ public class FacilitatedPaymentsApiClientUnitTest {
 
         apiClient.invokePurchaseAction(
                 /* primaryAccount= */ null,
-                SecurePayload.create(new byte[] {'A', 'c', 't', 'i', 'o', 'n'}, new SecureData[0]));
+                SecurePayload.create(
+                        new byte[] {'A', 'c', 't', 'i', 'o', 'n'}, Collections.emptyList()));
 
         Assert.assertTrue(delegate.mIsPurchaseActionInvoked);
         Assert.assertEquals(PurchaseActionResult.COULD_NOT_INVOKE, delegate.mPurchaseActionResult);
@@ -188,7 +189,8 @@ public class FacilitatedPaymentsApiClientUnitTest {
 
         apiClient.invokePurchaseAction(
                 /* primaryAccount= */ null,
-                SecurePayload.create(new byte[] {'A', 'c', 't', 'i', 'o', 'n'}, new SecureData[0]));
+                SecurePayload.create(
+                        new byte[] {'A', 'c', 't', 'i', 'o', 'n'}, Collections.emptyList()));
 
         Assert.assertTrue(delegate.mIsPurchaseActionInvoked);
         Assert.assertEquals(PurchaseActionResult.RESULT_OK, delegate.mPurchaseActionResult);

@@ -31,7 +31,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/memory/ptr_util.h"
 #include "third_party/blink/public/resources/grit/blink_resources.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 
@@ -122,7 +121,7 @@ void HRTFDatabase::GetKernelsFromAzimuthElevation(double azimuth_blend,
                                                   double& frame_delay_r) const {
   unsigned elevation_index = IndexFromElevationAngle(elevation_angle);
   SECURITY_DCHECK(elevation_index < elevations_.size());
-  SECURITY_DCHECK(elevations_.size() > 0);
+  SECURITY_DCHECK(!elevations_.empty());
 
   if (elevation_index > elevations_.size() - 1) {
     elevation_index = elevations_.size() - 1;

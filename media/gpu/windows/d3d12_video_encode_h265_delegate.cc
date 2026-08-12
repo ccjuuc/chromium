@@ -8,7 +8,9 @@
 
 #include "base/bits.h"
 #include "base/containers/fixed_flat_map.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "media/base/video_color_space.h"
 #include "media/gpu/gpu_video_encode_accelerator_helpers.h"
 #include "media/gpu/h264_rate_control_util.h"
 #include "media/gpu/h265_builder.h"
@@ -52,6 +54,52 @@ constexpr auto kVideoCodecProfileToD3D12Profile =
 uint8_t D3D12VideoEncoderLevelsHevcToH265LevelIDC(
     D3D12_VIDEO_ENCODER_LEVELS_HEVC level) {
   return kD3D12H265LevelToH265LevelIDCMap.at(level);
+}
+
+// Convert the mastering display colour volume metadata from `gfx::HDRMetadata`
+// into the SEI representation. This is the inverse of
+// `H26xSEIMasteringDisplayInfo::ToSkHdr()`: chromaticity coordinates are in
+// units of 0.00002 (1 / 50000) and luminance is in units of 0.0001 (1 / 10000).
+std::optional<H26xSEIMasteringDisplayInfo> ToMasteringDisplayInfo(
+    const gfx::HDRMetadata& hdr_metadata) {
+  if (!hdr_metadata.HasMDCV()) {
+    return std::nullopt;
+  }
+  constexpr float kChromaScale = 50000.0f;
+  constexpr float kLumaScale = 10000.0f;
+  const skhdr::MasteringDisplayColorVolume& mdcv = hdr_metadata.GetMDCV();
+  const SkColorSpacePrimaries& primaries = mdcv.fDisplayPrimaries;
+  auto to_chroma = [](float v) {
+    return base::ClampRound<uint16_t>(v * kChromaScale);
+  };
+  H26xSEIMasteringDisplayInfo info;
+  // Display primaries are stored in G/B/R order in the MDCV SEI message.
+  info.display_primaries[0] = {to_chroma(primaries.fGX),
+                               to_chroma(primaries.fGY)};
+  info.display_primaries[1] = {to_chroma(primaries.fBX),
+                               to_chroma(primaries.fBY)};
+  info.display_primaries[2] = {to_chroma(primaries.fRX),
+                               to_chroma(primaries.fRY)};
+  info.white_points = {to_chroma(primaries.fWX), to_chroma(primaries.fWY)};
+  info.max_luminance = base::ClampRound<uint32_t>(
+      mdcv.fMaximumDisplayMasteringLuminance * kLumaScale);
+  info.min_luminance = base::ClampRound<uint32_t>(
+      mdcv.fMinimumDisplayMasteringLuminance * kLumaScale);
+  return info;
+}
+
+// Convert the content light level metadata from `gfx::HDRMetadata` into the SEI
+// representation.
+std::optional<H26xSEIContentLightLevelInfo> ToContentLightLevelInfo(
+    const gfx::HDRMetadata& hdr_metadata) {
+  if (!hdr_metadata.HasCLLI()) {
+    return std::nullopt;
+  }
+  const skhdr::ContentLightLevelInformation& clli = hdr_metadata.GetCLLI();
+  H26xSEIContentLightLevelInfo info;
+  info.max_content_light_level = clli.getUint16MaxCLL();
+  info.max_picture_average_light_level = clli.getUint16MaxFALL();
+  return info;
 }
 
 }  // namespace
@@ -195,9 +243,6 @@ size_t D3D12VideoEncodeH265Delegate::GetMaxNumOfRefFrames() const {
 }
 
 size_t D3D12VideoEncodeH265Delegate::GetMaxNumOfManualRefBuffers() const {
-  // We should have initialized.
-  CHECK_GT(max_num_ref_frames_, 0u);
-
   // TODO(https://crbug.com/440117473): remove the limitation of 2.
   // Some IHV driver reports MaxDPBCapacity as 16 regardless of current level
   // used. Decoder will check the `vps|sps_max_dec_pic_buffering_minus1` value
@@ -279,7 +324,8 @@ EncoderStatus D3D12VideoEncodeH265Delegate::EncodeImpl(
     ID3D12Resource* input_frame,
     UINT input_frame_subresource,
     const VideoEncoder::EncodeOptions& options,
-    const gfx::ColorSpace& input_color_space) {
+    const gfx::ColorSpace& input_color_space,
+    const gfx::HDRMetadata& input_hdr_metadata) {
   // Filling the |input_arguments_| according to
   // https://github.com/microsoft/DirectX-Specs/blob/master/d3d/D3D12VideoEncoding.md#6120-struct-d3d12_video_encoder_input_arguments
 
@@ -319,6 +365,11 @@ EncoderStatus D3D12VideoEncodeH265Delegate::EncodeImpl(
       destroy_buffer = 1;
     }
   } else {
+    if (options.reference_buffers.size() > list0_reference_frames_.size()) {
+      return {EncoderStatus::Codes::kBadReferenceBuffer,
+              "Number of manual reference buffers exceeds that is supported by "
+              "encoder"};
+    }
     reference_buffers = options.reference_buffers;
     update_buffer = options.update_buffer;
   }
@@ -346,17 +397,21 @@ EncoderStatus D3D12VideoEncodeH265Delegate::EncodeImpl(
     vps.vps_max_dec_pic_buffering_minus1[0] =
         svc_layers_ ? max_num_ref_frames_ : GetMaxNumOfManualRefBuffers();
     H265SPS sps = ToSPS(vps);
-    // Values specified here equals to that in T-REC H.273 Table 3.
-    if (IsRec601(input_color_space)) {
-      sps.vui_parameters.colour_primaries = 6;          // SMPTE170M
-      sps.vui_parameters.transfer_characteristics = 6;  // SMPTE170M
-      sps.vui_parameters.matrix_coeffs = 6;             // SMPTE170M
-      sps.vui_parameters.colour_description_present_flag = true;
-      sps.vui_parameters_present_flag = true;
-    } else if (IsRec709(input_color_space)) {
-      sps.vui_parameters.colour_primaries = 1;          // BT709
-      sps.vui_parameters.transfer_characteristics = 1;  // BT709
-      sps.vui_parameters.matrix_coeffs = 1;             // BT709
+    // The VideoColorSpace enums use the same numeric code points as T-REC H.273
+    // (equivalently the HEVC VUI colour description fields), so they can be
+    // written directly. This covers SDR (Rec.601/Rec.709) as well as HDR
+    // BT.2020 PQ/HLG signalling for the main10 profile.
+    VideoColorSpace video_color_space =
+        VideoColorSpace::FromGfxColorSpace(input_color_space);
+    if (video_color_space.primaries() != VideoColorSpace::PrimaryID::INVALID &&
+        video_color_space.primaries() !=
+            VideoColorSpace::PrimaryID::UNSPECIFIED) {
+      sps.vui_parameters.colour_primaries =
+          static_cast<int>(video_color_space.primaries());
+      sps.vui_parameters.transfer_characteristics =
+          static_cast<int>(video_color_space.transfer());
+      sps.vui_parameters.matrix_coeffs =
+          static_cast<int>(video_color_space.matrix());
       sps.vui_parameters.colour_description_present_flag = true;
       sps.vui_parameters_present_flag = true;
     }
@@ -367,6 +422,15 @@ EncoderStatus D3D12VideoEncodeH265Delegate::EncodeImpl(
     BuildPackedH265VPS(packed_header_, vps);
     BuildPackedH265SPS(packed_header_, sps);
     BuildPackedH265PPS(packed_header_, pps);
+    // Emit HDR10 static metadata SEI (mastering display colour volume and
+    // content light level) for HDR (PQ/HLG) main10 streams, when the input
+    // frame carries the metadata.
+    if (h265_profile_ == D3D12_VIDEO_ENCODER_PROFILE_HEVC_MAIN10 &&
+        video_color_space.IsHDR()) {
+      BuildPackedH265SEI(packed_header_,
+                         ToMasteringDisplayInfo(input_hdr_metadata),
+                         ToContentLightLevelInfo(input_hdr_metadata));
+    }
 
     input_arguments_.PictureControlDesc.ReferenceFrames = {};
     pic_params_.FrameType = D3D12_VIDEO_ENCODER_FRAME_TYPE_HEVC_IDR_FRAME;
@@ -376,7 +440,6 @@ EncoderStatus D3D12VideoEncodeH265Delegate::EncodeImpl(
     pic_params_.pList0ReferenceFrames = nullptr;
   } else {
     pic_params_.FrameType = D3D12_VIDEO_ENCODER_FRAME_TYPE_HEVC_P_FRAME;
-    CHECK_LE(reference_buffers.size(), list0_reference_frames_.size());
     for (size_t i = 0; i < reference_buffers.size(); i++) {
       std::optional<uint32_t> descriptor_index =
           reference_frame_manager_.GetReferenceFrameId(reference_buffers[i]);
@@ -402,18 +465,18 @@ EncoderStatus D3D12VideoEncodeH265Delegate::EncodeImpl(
   // Rate control.
   int qp = -1;
   if (software_rate_controller_) {
-    software_rate_controller_
-        ->temporal_layers(metadata_.svc_generic->temporal_idx)
+    size_t temporal_idx =
+        metadata_.svc_generic ? metadata_.svc_generic->temporal_idx : 0;
+    software_rate_controller_->temporal_layers(temporal_idx)
         .ShrinkHRDBuffer(rate_controller_timestamp_);
     if (is_keyframe) {
       software_rate_controller_->EstimateIntraFrameQP(
           rate_controller_timestamp_);
     } else {
       software_rate_controller_->EstimateInterFrameQP(
-          metadata_.svc_generic->temporal_idx, rate_controller_timestamp_);
+          temporal_idx, rate_controller_timestamp_);
     }
-    qp = software_rate_controller_
-             ->temporal_layers(metadata_.svc_generic->temporal_idx)
+    qp = software_rate_controller_->temporal_layers(temporal_idx)
              .curr_frame_qp();
   } else if (options.quantizer.has_value()) {
     qp = options.quantizer.value();
@@ -509,7 +572,9 @@ EncoderStatus D3D12VideoEncodeH265Delegate::InitializeVideoEncoder(
                   max_num_ref_frames_)};
     }
   } else {
-    max_num_ref_frames_ = picture_control_support_h265.MaxDPBCapacity;
+    max_num_ref_frames_ =
+        std::min<uint32_t>(picture_control_support_h265.MaxDPBCapacity,
+                           picture_control_support_h265.MaxL0ReferencesForP);
   }
 
   if ((config.bitrate.mode() == Bitrate::Mode::kConstant ||
@@ -645,6 +710,14 @@ EncoderStatus D3D12VideoEncodeH265Delegate::InitializeVideoEncoder(
   if (!status.is_ok()) {
     return status;
   }
+  if (!std::has_single_bit(
+          resolution_support_limits_.SubregionBlockPixelsSize)) {
+    return {
+        EncoderStatus::Codes::kEncoderUnsupportedConfig,
+        base::StringPrintf(
+            "D3D12VideoEncoder reported invalid SubregionBlockPixelsSize %u",
+            resolution_support_limits_.SubregionBlockPixelsSize)};
+  }
   encoder_support_flags_ = support.SupportFlags;
 
   h265_level_ = suggested_level;
@@ -765,6 +838,12 @@ H265SPS D3D12VideoEncodeH265Delegate::ToSPS(const H265VPS& vps) const {
   sps.profile_tier_level = vps.profile_tier_level;
   sps.sps_seq_parameter_set_id = 0;
   sps.chroma_format_idc = 1;
+  // Main10 encodes 10-bit luma and chroma; Main encodes 8-bit. The profile is
+  // reflected in the profile_tier_level, so the SPS bit depth must match.
+  if (h265_profile_ == D3D12_VIDEO_ENCODER_PROFILE_HEVC_MAIN10) {
+    sps.bit_depth_luma_minus8 = 2;
+    sps.bit_depth_chroma_minus8 = 2;
+  }
   sps.pic_width_in_luma_samples = base::bits::AlignUp(
       input_size_.Width, resolution_support_limits_.SubregionBlockPixelsSize);
   sps.pic_height_in_luma_samples = base::bits::AlignUp(

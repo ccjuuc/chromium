@@ -6,12 +6,16 @@
 
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/metrics/statistics_recorder.h"
 #include "base/path_service.h"
+#include "base/run_loop.h"
+#include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/timer/elapsed_timer.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_features.h"
+#include "chrome/browser/page_load_metrics/chrome_initiator_location.h"
 #include "chrome/browser/preloading/chrome_preloading.h"
 #include "chrome/browser/preloading/new_tab_page_preload/new_tab_page_preload_pipeline_manager.h"
 #include "chrome/browser/preloading/preloading_prefs.h"
@@ -31,10 +35,11 @@
 #include "content/public/test/prefetch_test_util.h"
 #include "content/public/test/preloading_test_util.h"
 #include "content/public/test/prerender_test_util.h"
+#include "net/base/url_util.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/http/http_status_code.h"
-#include "net/test/embedded_test_server/controllable_http_response.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "net/test/embedded_test_server/expectation_handler.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
 
@@ -52,6 +57,7 @@ constexpr int kPrerenderFailedDuringPrefetch = 86;
 // Following definitions are equal to `content::PrefetchStatus`.
 constexpr int kPrefetchFailedNon2XX = 12;
 constexpr int kPrefetchResponseUsed = 42;
+constexpr int kPrefetchFailedInvalidRedirect = 43;
 
 class NewTabPagePreloadBrowserTest : public PlatformBrowserTest {
  public:
@@ -110,8 +116,7 @@ class NewTabPagePreloadBrowserTest : public PlatformBrowserTest {
             url, content::Referrer(), WindowOpenDisposition::CURRENT_TAB,
             ui::PageTransitionFromInt(ui::PAGE_TRANSITION_AUTO_BOOKMARK),
             /*is_renderer_initiated=*/false),
-        base::BindRepeating(&page_load_metrics::NavigationHandleUserData::
-                                AttachNewTabPageNavigationHandleUserData));
+        base::BindRepeating(&AttachNewTabPageNavigationHandleUserData));
   }
 
  private:
@@ -155,8 +160,9 @@ IN_PROC_BROWSER_TEST_F(NewTabPagePreloadBrowserTest,
 IN_PROC_BROWSER_TEST_F(NewTabPagePreloadBrowserTest,
                        PrefetchResponseFailureAndPrerenderFailure) {
   base::HistogramTester histogram_tester;
-  net::test_server::ControllableHttpResponse prefetch_response(
-      &embedded_https_test_server(), "/simple.html");
+  net::test_server::ExpectationHandler handler(&embedded_https_test_server());
+  handler.OnRequest("/simple.html")
+      .RespondWith(net::HTTP_INTERNAL_SERVER_ERROR, "text/html", "");
 
   StartServer();
   // Navigate to an initial page.
@@ -165,9 +171,6 @@ IN_PROC_BROWSER_TEST_F(NewTabPagePreloadBrowserTest,
       content::NavigateToURL(GetActiveWebContents(), GetUrl("/empty.html")));
 
   GetNewTabPagePreloadPipelineManager()->StartPrefetch(preload_url);
-  prefetch_response.WaitForRequest();
-  prefetch_response.Send(net::HTTP_INTERNAL_SERVER_ERROR);
-  prefetch_response.Done();
 
   GetNewTabPagePreloadPipelineManager()->StartPrerender(
       preload_url, chrome_preloading_predictor::kPointerDownOnNewTabPage);
@@ -183,6 +186,43 @@ IN_PROC_BROWSER_TEST_F(NewTabPagePreloadBrowserTest,
   histogram_tester.ExpectUniqueSample(
       "Prerender.Experimental.PrerenderHostFinalStatus.Embedder_NewTabPage",
       kPrerenderFailedDuringPrefetch, 1);
+}
+
+// Test a scenario which prefetch fails when a search related url in the
+// redirect chain.
+IN_PROC_BROWSER_TEST_F(NewTabPagePreloadBrowserTest,
+                       PreventSearchRelatedRedirect) {
+  base::HistogramTester histogram_tester;
+  StartServer();
+
+  // Navigate to an initial page.
+  ASSERT_TRUE(
+      content::NavigateToURL(GetActiveWebContents(), GetUrl("/empty.html")));
+
+  GURL preload_url =
+      GetUrl("/server-redirect?" +
+             base::EscapeQueryParamValue(
+                 "https://www.google.co.jp/search?q=123", /*use_plus=*/true));
+  {
+    // Wait for the prefetch's terminal status (recorded exactly once): the
+    // redirect response arrives over the network, so RunUntilIdle() could
+    // return while the prefetch is still in flight and the navigation below
+    // would cancel it instead of letting it fail on the invalid redirect.
+    base::RunLoop run_loop;
+    base::StatisticsRecorder::ScopedHistogramSampleObserver observer(
+        "Preloading.Prefetch.PrefetchStatus",
+        base::BindLambdaForTesting(
+            [&run_loop](std::string_view, uint64_t,
+                        base::HistogramBase::Sample32) { run_loop.Quit(); }));
+    GetNewTabPagePreloadPipelineManager()->StartPrefetch(preload_url);
+    run_loop.Run();
+  }
+
+  // Simulate the navigation and flush the metrics.
+  ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(),
+                                     GetUrl("/empty.html?histogram_flush")));
+  histogram_tester.ExpectUniqueSample("Preloading.Prefetch.PrefetchStatus",
+                                      kPrefetchFailedInvalidRedirect, 1);
 }
 
 }  // namespace

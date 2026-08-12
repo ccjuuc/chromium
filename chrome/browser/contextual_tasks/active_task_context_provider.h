@@ -12,6 +12,9 @@
 #include "base/observer_list_types.h"
 #include "base/uuid.h"
 #include "components/tabs/public/tab_interface.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
+
+class BrowserWindowInterface;
 
 namespace contextual_search {
 class ContextualSearchSessionHandle;
@@ -19,41 +22,52 @@ class ContextualSearchSessionHandle;
 
 namespace contextual_tasks {
 
-// Callback to obtain currently showing task's task ID and session handle.
-using TaskAndSessionHandle =
-    std::pair<std::optional<base::Uuid>,
-              contextual_search::ContextualSearchSessionHandle*>;
-using SessionHandleGetter = base::RepeatingCallback<TaskAndSessionHandle()>;
+class ContextualTasksPanelController;
 
 // A per-window context provider class that tracks the task associated with the
 // active tab. It's responsible for providing info about which tabs are
 // currently included in the context of the active tab's context and notifies
-// the observers when the active tab is switched. Mainly used for underlining
-// the tabs that are part of the active task.
+// the observers when the active tab is switched. Explicitly used for
+// underlining the tabs that are part of the active task.
 class ActiveTaskContextProvider {
  public:
+  DECLARE_USER_DATA(ActiveTaskContextProvider);
+
   class Observer : public base::CheckedObserver {
    public:
     // Called when the set of tabs that are part of the active context changes.
     virtual void OnContextTabsChanged(
         const std::set<tabs::TabHandle>& context_tabs) = 0;
+
+    // Called when the provider is being destroyed.
+    virtual void OnActiveTaskContextProviderDestroyed() {}
   };
+
+  static ActiveTaskContextProvider* From(BrowserWindowInterface* window);
 
   virtual void AddObserver(Observer* observer) = 0;
   virtual void RemoveObserver(Observer* observer) = 0;
 
-  // Called to notify the state of side panel on the active tab.
-  // On receiving this signal, the provider is supposed to recompute the
-  // context.
-  // 1. After every tab switch with the correct state of side panel.
-  // 2. Whenever the side panel is opened or closed, e.g. due to user action.
-  // 3. Whenever the auto suggested tab context suggestion is disabled.
-  virtual void OnSidePanelStateUpdated() = 0;
+  // Must be invoked on startup to complete the dependency injection. Required
+  // to be able to access current task, session handle and auto suggested chip
+  // info.
+  virtual void SetContextualTasksPanelController(
+      ContextualTasksPanelController* contextual_tasks_panel_controller) = 0;
 
-  // Sets the callback to be invoked to obtain the current task ID and session
-  // handle. Must be invoked on startup.
-  virtual void SetSessionHandleGetter(
-      SessionHandleGetter session_handle_getter) = 0;
+  virtual void AddLocalTabUnderline(tabs::TabHandle tab_handle) = 0;
+  virtual void RemoveLocalTabUnderline(tabs::TabHandle tab_handle) = 0;
+  // Clears all local client side tab underlines, not tabs highlighted by
+  // backend server state. If this is called, since this is the owner of all
+  // local tab underlines, it will clear all local tab underlines across sources
+  // (NTP, cobrowse, etc.).
+  virtual void ClearAllLocalTabUnderlines() = 0;
+
+  // Central method called to recompute tab underlines based on the active task.
+  // Called by various external callers (e.g. composebox, panel controller
+  // etc). This is also the same method that gets invoked internally by the
+  // implementation class in response to various observed events such as tab
+  // switch, navigation, context update, tab association update etc.
+  virtual void RefreshContext() = 0;
 
   virtual ~ActiveTaskContextProvider() = default;
 };

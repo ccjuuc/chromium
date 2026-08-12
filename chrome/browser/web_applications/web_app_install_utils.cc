@@ -4,8 +4,8 @@
 
 #include "chrome/browser/web_applications/web_app_install_utils.h"
 
+#include <algorithm>
 #include <cstddef>
-#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -16,30 +16,31 @@
 
 #include "base/check.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
-#include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/histogram_base.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
 #include "chrome/browser/favicon/favicon_utils.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/shortcuts/shortcut_icon_generator.h"
 #include "chrome/browser/ssl/chrome_security_state_tab_helper.h"
 #include "chrome/browser/sync/sync_service_factory.h"
+#include "chrome/browser/web_applications/jobs/finalize_install_or_update_job.h"
+#include "chrome/browser/web_applications/model/display_override.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
-#include "chrome/browser/web_applications/os_integration/web_app_file_handler_manager.h"
 #include "chrome/browser/web_applications/policy/pre_redirection_url_observer.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_chromeos_data.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_icon_generator.h"
-#include "chrome/browser/web_applications/web_app_install_finalizer.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_install_params.h"
 #include "chrome/browser/web_applications/web_app_management_type.h"
@@ -59,7 +60,7 @@
 #include "content/public/common/content_features.h"
 #include "mojo/public/cpp/bindings/struct_ptr.h"
 #include "net/http/http_util.h"
-#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/manifest/manifest.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -115,23 +116,24 @@ void AddSquareIconsFromMapMatchingIconInfos(
 }
 
 // Append non-empty square icons from |bitmaps| onto the |square_icons| list.
-void AddSquareIconsFromBitmaps(
-    std::vector<SkBitmap>* square_icons,
-    const std::map<SquareSizePx, SkBitmap>& bitmaps) {
-  for (const std::pair<const SquareSizePx, SkBitmap>& icon : bitmaps) {
-    DCHECK_EQ(icon.first, icon.second.width());
-    DCHECK_EQ(icon.first, icon.second.height());
-    if (!icon.second.empty())
-      square_icons->push_back(icon.second);
+void AddSquareIconsFromBitmaps(std::vector<SkBitmap>* square_icons,
+                               const OrderedSizeToBitmap& bitmaps) {
+  for (const auto& [size, icon] : bitmaps) {
+    DCHECK_EQ(size, icon.width());
+    DCHECK_EQ(size, icon.height());
+    if (!icon.empty()) {
+      square_icons->push_back(icon);
+    }
   }
 }
 
 std::vector<SquareSizePx> GetSquareSizePxs(
-    const std::map<SquareSizePx, SkBitmap>& icon_bitmaps) {
+    const OrderedSizeToBitmap& icon_bitmaps) {
   std::vector<SquareSizePx> sizes;
   sizes.reserve(icon_bitmaps.size());
-  for (const std::pair<const SquareSizePx, SkBitmap>& item : icon_bitmaps)
-    sizes.push_back(item.first);
+  for (const auto& [size, icon] : icon_bitmaps) {
+    sizes.push_back(size);
+  }
   return sizes;
 }
 
@@ -154,7 +156,7 @@ std::vector<WebAppShortcutsMenuItemInfo> GetShortcutsMenuInfoWithIconSizes(
     const std::vector<WebAppShortcutsMenuItemInfo>& shortcuts_menu_items,
     const ShortcutsMenuIconBitmaps& shortcuts_menu_icon_bitmaps) {
   // Due to the bitmaps possibly being not populated (see
-  // https://crbug.com/1427444), we create empty bitmaps in that case. We
+  // https://crbug.com/40899887), we create empty bitmaps in that case. We
   // continue to check to make sure that there aren't MORE bitmaps than
   // items.
   CHECK_LE(shortcuts_menu_icon_bitmaps.size(), shortcuts_menu_items.size());
@@ -187,7 +189,7 @@ void PopulateShortcutItemIcons(WebAppInstallInfo* web_app_info,
     IconBitmaps shortcut_icon_bitmaps;
 
     for (IconPurpose purpose : kIconPurposes) {
-      std::map<SquareSizePx, SkBitmap> bitmaps;
+      OrderedSizeToBitmap bitmaps;
       for (const auto& icon :
            shortcut.GetShortcutIconInfosForPurpose(purpose)) {
         auto it = icons_map.find(icon.url);
@@ -199,7 +201,7 @@ void PopulateShortcutItemIcons(WebAppInstallInfo* web_app_info,
           if (icon.square_size_px != 0) {
             std::set<SquareSizePx> sizes_to_generate;
             sizes_to_generate.emplace(icon.square_size_px);
-            SizeToBitmap resized_bitmaps(
+            OrderedSizeToBitmap resized_bitmaps(
                 ConstrainBitmapsToSizes(it->second, sizes_to_generate));
 
             // Don't overwrite as a shortcut item could have multiple icon urls.
@@ -223,53 +225,6 @@ void PopulateShortcutItemIcons(WebAppInstallInfo* web_app_info,
   }
   CHECK_EQ(web_app_info->shortcuts_menu_icon_bitmaps.size(),
            web_app_info->shortcuts_menu_item_infos.size());
-}
-
-// Reconcile the file handling icons that were specified in the manifest with
-// the icons we were successfully able to download. Store the actual bitmaps and
-// update the icon metadata in `web_app_info`.
-void PopulateFileHandlingIcons(WebAppInstallInfo* web_app_info,
-                               const IconsMap& icons_map,
-                               IconsMap& other_icon_bitmaps) {
-  // Before starting, each `apps::IconInfo` in `web_app_info` has a source URL
-  // and a purpose, but no size. Replace with structs that copy the URL and
-  // purpose and set the size based on what is found in `icons_map`.
-  for (auto& file_handler : web_app_info->file_handlers) {
-    if (!WebAppFileHandlerManager::IconsEnabled()) {
-      DCHECK(file_handler.downloaded_icons.empty());
-      continue;
-    }
-
-    std::vector<apps::IconInfo> manifest_icons;
-
-    for (const auto& icon_info_without_size : file_handler.downloaded_icons) {
-      const GURL& src = icon_info_without_size.url;
-      // Only store bitmaps for this URL if it's the first time we've seen it.
-      bool bitmaps_already_saved_for_url =
-          other_icon_bitmaps.find(src) != other_icon_bitmaps.end();
-      const auto& downloaded_bitmaps_for_url = icons_map.find(src);
-      if (downloaded_bitmaps_for_url == icons_map.end())
-        continue;
-
-      for (const SkBitmap& bitmap : downloaded_bitmaps_for_url->second) {
-        // Filter out bitmaps that are empty, non-square or are too large.
-        if (bitmap.empty() || bitmap.width() != bitmap.height() ||
-            bitmap.width() > kMaxIconSize) {
-          continue;
-        }
-
-        // Add the size to the FileHandler icon metadata.
-        apps::IconInfo icon_info_with_size(icon_info_without_size);
-        icon_info_with_size.square_size_px = bitmap.width();
-        manifest_icons.push_back(std::move(icon_info_with_size));
-
-        // Add the bitmap to `other_icon_bitmaps`.
-        if (!bitmaps_already_saved_for_url)
-          other_icon_bitmaps[src].push_back(bitmap);
-      }
-    }
-    file_handler.downloaded_icons = std::move(manifest_icons);
-  }
 }
 
 // Reconcile the home tab icons that were specified in the manifest with
@@ -329,7 +284,7 @@ apps::FileHandler::LaunchType ToFileHandlerLaunchType(
 void PopulateTrustedIconsFromDownloadedBitmapsAndMetadata(
     const IconsMap& icons_downloaded,
     const std::vector<apps::IconInfo>& icon_metadata,
-    std::map<SquareSizePx, SkBitmap>& output_size_to_bitmaps) {
+    OrderedSizeToBitmap& output_size_to_bitmaps) {
   CHECK(output_size_to_bitmaps.empty());
   std::vector<SkBitmap> square_icons_matching_infos;
   // First, choose all bitmaps from `icons_downloaded` that share the same url
@@ -345,12 +300,10 @@ void PopulateTrustedIconsFromDownloadedBitmapsAndMetadata(
 
   // Third, resize existing icons if any and populate `output_size_to_bitmaps`
   // with the bitmaps whose sizes are not populated previously.
-  SizeToBitmap sizes_to_icons = ConstrainBitmapsToSizes(
+  OrderedSizeToBitmap sizes_to_icons = ConstrainBitmapsToSizes(
       square_icons_matching_infos, web_app::SizesToGenerate());
   for (auto& [size, icon] : sizes_to_icons) {
-    if (!base::Contains(output_size_to_bitmaps, size)) {
-      output_size_to_bitmaps[size] = std::move(icon);
-    }
+    output_size_to_bitmaps.try_emplace(size, std::move(icon));
   }
 }
 
@@ -381,39 +334,6 @@ void PopulateFileHandlerInfoFromManifest(
       web_app_file_handler.accept.push_back(std::move(web_app_accept_entry));
     }
 
-    if (WebAppFileHandlerManager::IconsEnabled()) {
-      for (const auto& image_resource : manifest_file_handler->icons) {
-        for (const auto manifest_purpose : image_resource.purpose) {
-          apps::IconInfo icon_info;
-          icon_info.url = image_resource.src;
-          icon_info.purpose =
-              ManifestPurposeToIconInfoPurpose(manifest_purpose);
-          if (base::Contains(image_resource.sizes, gfx::Size()) &&
-              image_resource.src.spec().find(".svg") != std::string::npos) {
-            web_app_info->icons_with_size_any
-                .file_handling_icons[manifest_purpose] = image_resource.src;
-          }
-
-          web_app_file_handler.downloaded_icons.push_back(std::move(icon_info));
-          // The list will be pruned and the sizes will be filled in when images
-          // are actually downloaded.
-        }
-
-        // Keep track of the sizes passed in via the manifest which will be
-        // later used to compute how many SVG icons of size:any we need to
-        // download.
-        if (!web_app_info->icons_with_size_any.file_handling_icons.empty()) {
-          for (const auto& icon_size : image_resource.sizes) {
-            if (icon_size == gfx::Size()) {
-              continue;
-            }
-            web_app_info->icons_with_size_any.file_handling_icon_provided_sizes
-                .emplace(icon_size);
-          }
-        }
-      }
-    }
-
     web_app_file_handlers.push_back(std::move(web_app_file_handler));
   }
 
@@ -425,7 +345,6 @@ void PopulateOtherIcons(WebAppInstallInfo* web_app_info,
   IconsMap& other_icon_bitmaps = web_app_info->other_icon_bitmaps;
   other_icon_bitmaps.clear();
   PopulateShortcutItemIcons(web_app_info, icons_map);
-  PopulateFileHandlingIcons(web_app_info, icons_map, other_icon_bitmaps);
   PopulateHomeTabIcons(web_app_info, icons_map, other_icon_bitmaps);
 }
 
@@ -466,15 +385,13 @@ void PopulateProductIcons(WebAppInstallInfo* web_app_info,
 
   // Retain any bitmaps provided as input to the installation.
   for (auto& icon : square_icons_maskable) {
-    if (!base::Contains(web_app_info->icon_bitmaps.maskable, icon.width())) {
-      web_app_info->icon_bitmaps.maskable[icon.width()] = std::move(icon);
-    }
+    web_app_info->icon_bitmaps.maskable.try_emplace(icon.width(),
+                                                    std::move(icon));
   }
 
   for (auto& icon : square_icons_monochrome) {
-    if (!base::Contains(web_app_info->icon_bitmaps.monochrome, icon.width())) {
-      web_app_info->icon_bitmaps.monochrome[icon.width()] = std::move(icon);
-    }
+    web_app_info->icon_bitmaps.monochrome.try_emplace(icon.width(),
+                                                      std::move(icon));
   }
 
   std::u16string icon_letter =
@@ -488,14 +405,14 @@ void PopulateProductIcons(WebAppInstallInfo* web_app_info,
   // contain links to icons that are not actually created and linked on disk.
   // TODO(crbug.com/40661228): Don't resize before writing to disk, it's
   // not necessary and would simplify this code path to remove.
-  SizeToBitmap size_to_icons = ResizeIconsAndGenerateMissing(
+  OrderedSizeToBitmap size_to_icons = ResizeIconsAndGenerateMissing(
       square_icons_any, SizesToGenerate(), icon_letter,
       &web_app_info->is_generated_icon);
 
   for (auto& item : size_to_icons) {
     // Retain any bitmaps provided as input to the installation.
-    if (web_app_info->icon_bitmaps.any.count(item.first) == 0)
-      web_app_info->icon_bitmaps.any[item.first] = std::move(item.second);
+    web_app_info->icon_bitmaps.any.try_emplace(item.first,
+                                               std::move(item.second));
   }
 }
 
@@ -663,6 +580,7 @@ WebAppManagement::Type ConvertInstallSurfaceToWebAppSource(
     case webapps::WebappInstallSource::OOBE_APP_RECOMMENDATIONS:
     case webapps::WebappInstallSource::WEB_INSTALL:
     case webapps::WebappInstallSource::CHROMEOS_HELP_APP:
+    case webapps::WebappInstallSource::MIGRATION:
       return WebAppManagement::kUserInstalled;
 
     case webapps::WebappInstallSource::IWA_GRAPHICAL_INSTALLER:
@@ -717,29 +635,32 @@ void CreateWebAppInstallTabHelpers(content::WebContents* web_contents) {
 void SetWebAppManifestFields(const WebAppInstallInfo& web_app_info,
                              WebApp& web_app,
                              bool skip_icons_on_download_failure) {
-  // TODO(crbug.com/344718166): ManifestId should already be set the same,
-  // otherwise setting it here would be changing the app's ID. This should be a
-  // CHECK_EQ instead of a set.
-  web_app.SetManifestId(web_app_info.manifest_id());
+  // Ensuring WebAppInstallInfo's manifest_id matches the one used to create the
+  // WebApp.
+  CHECK_EQ(web_app_info.manifest_id(), web_app.manifest_id());
 
   DCHECK(!web_app_info.title.empty());
   web_app.SetName(base::UTF16ToUTF8(web_app_info.title.value()));
 
-  web_app.SetStartUrl(web_app_info.start_url());
+  const GURL& start_url = web_app_info.start_url();
+  CHECK(start_url.is_valid());
+
+  // TODO(crbug.com/384536509): Enforce this with a CHECK after verifying this
+  // doesn't happen in the codebase.
+  const GURL& scope =
+      base::StartsWith(start_url.spec(), web_app_info.scope.spec(),
+                       base::CompareCase::SENSITIVE)
+          ? web_app_info.scope
+          : start_url.GetWithoutFilename();
+
+  web_app.SetStartUrlAndScope(start_url, scope);
+  CHECK(web_app.scope().is_valid());
 
   web_app.SetDisplayMode(web_app_info.display_mode);
   web_app.SetDisplayModeOverride(web_app_info.display_override);
 
-  web_app.SetBorderlessUrlPatterns(web_app_info.borderless_url_patterns);
-
-  web_app.SetDescription(base::UTF16ToUTF8(web_app_info.description));
+  web_app.SetDescription(base::UTF16ToUTF8(web_app_info.description.value()));
   web_app.SetLaunchQueryParams(web_app_info.launch_query_params);
-  if (web_app_info.scope.is_valid()) {
-    web_app.SetScope(web_app_info.scope);
-  } else {
-    web_app.SetScope(web_app_info.start_url().GetWithoutFilename());
-  }
-  CHECK(!web_app.scope().is_empty());
 
   DCHECK(!web_app_info.theme_color.has_value() ||
          SkColorGetA(*web_app_info.theme_color) == SK_AlphaOPAQUE);
@@ -758,30 +679,6 @@ void SetWebAppManifestFields(const WebAppInstallInfo& web_app_info,
              SK_AlphaOPAQUE);
   web_app.SetDarkModeBackgroundColor(web_app_info.dark_mode_background_color);
 
-  sync_pb::WebAppSpecifics sync_proto = web_app.sync_proto();
-  // Sync proto has already been initialized by setting the start_url and/or
-  // manifest_id above.
-  CHECK(sync_proto.has_start_url());
-  CHECK(sync_proto.has_relative_manifest_id());
-  sync_proto.set_name(base::UTF16ToUTF8(web_app_info.title.value()));
-  sync_proto.clear_theme_color();
-  if (web_app_info.theme_color.has_value()) {
-    sync_proto.set_theme_color(web_app_info.theme_color.value());
-  }
-  sync_proto.clear_scope();
-  if (web_app_info.scope.is_valid()) {
-    sync_proto.set_scope(web_app_info.scope.spec());
-  }
-  sync_proto.clear_icon_infos();
-  for (const apps::IconInfo& icon_info : web_app_info.manifest_icons) {
-    *(sync_proto.add_icon_infos()) = AppIconInfoToSyncProto(icon_info);
-  }
-  sync_proto.clear_trusted_icons();
-  for (const apps::IconInfo& trusted_icon : web_app_info.trusted_icons) {
-    *(sync_proto.add_trusted_icons()) = AppIconInfoToSyncProto(trusted_icon);
-  }
-  web_app.SetSyncProto(std::move(sync_proto));
-
   if (!skip_icons_on_download_failure) {
     SetWebAppProductIconFields(web_app_info, web_app);
     web_app.SetShortcutsMenuInfo(GetShortcutsMenuInfoWithIconSizes(
@@ -789,13 +686,6 @@ void SetWebAppManifestFields(const WebAppInstallInfo& web_app_info,
         web_app_info.shortcuts_menu_icon_bitmaps));
   }
 
-  web_app.SetPermissionsPolicy(web_app_info.permissions_policy);
-
-  if (web_app.file_handler_approval_state() == ApiApprovalState::kAllowed &&
-      !AreNewFileHandlersASubsetOfOld(web_app.file_handlers(),
-                                      web_app_info.file_handlers)) {
-    web_app.SetFileHandlerApprovalState(ApiApprovalState::kRequiresPrompt);
-  }
   web_app.SetFileHandlers(web_app_info.file_handlers);
   web_app.SetShareTarget(web_app_info.share_target);
   web_app.SetProtocolHandlers(web_app_info.protocol_handlers);
@@ -815,6 +705,10 @@ void SetWebAppManifestFields(const WebAppInstallInfo& web_app_info,
   if (web_app_info.validated_scope_extensions.has_value()) {
     web_app.SetValidatedScopeExtensions(
         web_app_info.validated_scope_extensions.value());
+  }
+
+  if (base::FeatureList::IsEnabled(blink::features::kWebAppMigrationApi)) {
+    web_app.SetUnvalidatedMigrationSources(web_app_info.migration_sources);
   }
 
   web_app.SetIsDiyApp(web_app_info.is_diy_app);
@@ -862,9 +756,8 @@ void ApplyParamsToWebAppInstallInfo(const WebAppInstallParams& install_params,
     web_app_info.install_url = install_params.install_url;
 }
 
-void ApplyParamsToFinalizeOptions(
-    const WebAppInstallParams& install_params,
-    WebAppInstallFinalizer::FinalizeOptions& options) {
+void ApplyParamsToFinalizeOptions(const WebAppInstallParams& install_params,
+                                  FinalizeJobOptions& options) {
   if (IsChromeOsDataMandatory()) {
     options.chromeos_data.emplace();
     options.chromeos_data->show_in_launcher =

@@ -8,6 +8,14 @@
 #include <string.h>
 #include <sys/types.h>
 
+// strlcpy looks useful, but not part of POSIX libc. BSD-inspired libc may
+// have it, but (as of 2025-Oct-2) Mozilla's build environment for
+// libdmg-hfsplus doesn't.
+#ifdef strlcpy
+#undef strlcpy
+#endif
+#pragma GCC poison strlcpy
+
 #ifdef WIN32
 #include <unistd.h>
 #define fseeko fseeko64
@@ -22,7 +30,21 @@
 #define TRUE 1
 #define FALSE 0
 
+// Convert a field from host endianness to big-endian or big-endian to host
+// endianness. HFS+ and DMG use big-endian representations for most fields.
+// If the host is big-endian, this is a no-op.
+//
+// The argument to this macro should always be a field inside an HFS+ or DMG
+// structure, to ensure the size of the field is correct.
 #define FLIPENDIAN(x) flipEndian((unsigned char *)(&(x)), sizeof(x))
+
+// Convert a field from host endianness to little-endian or little-endian to
+// host endianness. This is less common in this library, since DMG and HFS+ use
+// big-endian representations for most fields. If the host is little-endian
+// (like x86-64 and ARM64), this is a no-op.
+//
+// The argument to this macro should always be a field inside an HFS+ or DMG
+// structure, to ensure the size of the field is correct.
 #define FLIPENDIANLE(x) flipEndianLE((unsigned char *)(&(x)), sizeof(x))
 
 #define IS_BIG_ENDIAN      0
@@ -32,12 +54,12 @@
 #define APPLE_TO_UNIX_TIME(x) ((x) - TIME_OFFSET_FROM_UNIX)
 #define UNIX_TO_APPLE_TIME(x) ((x) + TIME_OFFSET_FROM_UNIX)
 
-#define ASSERT(x, m) if(!(x)) { assertPrint(m); }
+#define ASSERT(x, m) if(!(x)) { assertPrint(__func__, __FILE__, __LINE__, m); }
 
-static inline void assertPrint(const char *msg) {
+static inline void assertPrint(const char *func, const char* file, int line, const char *msg) {
 	int errsave = errno;
 	fflush(stdout);
-	fprintf(stderr, "error: %s\n", msg);
+	fprintf(stderr, "error in %s (%s, %d): %s\n", func, file, line, msg);
 	if (errsave != 0)
 		fprintf(stderr, "system error: %s\n", strerror(errsave));
 	fflush(stderr);

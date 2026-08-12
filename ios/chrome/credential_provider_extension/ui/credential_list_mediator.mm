@@ -7,6 +7,7 @@
 #import <AuthenticationServices/AuthenticationServices.h>
 
 #import "ios/chrome/common/credential_provider/credential_store.h"
+#import "ios/chrome/common/credential_provider/net_util.h"
 #import "ios/chrome/credential_provider_extension/ui/credential_list_consumer.h"
 #import "ios/chrome/credential_provider_extension/ui/credential_list_ui_handler.h"
 #import "ios/chrome/credential_provider_extension/ui/credential_response_handler.h"
@@ -212,21 +213,41 @@
   return filteredCredentials;
 }
 
+// Returns `YES` if the password credential's registry controlled domain
+// matches the provided `requestedHost`.
+- (BOOL)passwordCredential:(id<Credential>)credential
+    matchesRegistryControlledDomain:(NSString*)requestedHost {
+  if (credential.registryControlledDomain.length == 0) {
+    return NO;
+  }
+  return credential_provider::SecureHostsMatch(
+      requestedHost, credential.registryControlledDomain);
+}
+
 // Returns `YES` if the provided `credential` matches at least one of the
 // `serviceIdentifiers`.
 - (BOOL)passwordCredential:(id<Credential>)credential
     matchesServiceIdentifiers:
         (NSArray<ASCredentialServiceIdentifier*>*)serviceIdentifiers {
-  for (ASCredentialServiceIdentifier* identifier in serviceIdentifiers) {
-    BOOL serviceNameMatches =
-        credential.serviceName &&
-        [identifier.identifier
-            localizedStandardContainsString:credential.serviceName];
-    BOOL serviceIdentifierMatches =
-        credential.serviceIdentifier &&
-        [identifier.identifier
-            localizedStandardContainsString:credential.serviceIdentifier];
-    if (serviceNameMatches || serviceIdentifierMatches) {
+  for (ASCredentialServiceIdentifier* serviceIdentifier in serviceIdentifiers) {
+    NSString* requestedHost =
+        credential_provider::HostForIdentifier(serviceIdentifier.identifier);
+    if (!requestedHost) {
+      continue;
+    }
+
+    // Try matching with registryControlledDomain if available.
+    if ([self passwordCredential:credential
+            matchesRegistryControlledDomain:requestedHost]) {
+      return YES;
+    }
+
+    // Fallback to matching the parsed host of the credential's
+    // serviceIdentifier.
+    NSString* credHost =
+        credential_provider::HostForIdentifier(credential.serviceIdentifier);
+
+    if (credential_provider::SecureHostsMatch(requestedHost, credHost)) {
       return YES;
     }
   }

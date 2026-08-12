@@ -8,7 +8,6 @@
 #import <stddef.h>
 
 #import "base/check_op.h"
-#import "base/containers/contains.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/time/time.h"
 #import "ios/net/ios_net_buildflags.h"
@@ -55,11 +54,10 @@ CookieCreationTimeManager::CookieCreationTimeManager() : weak_factory_(this) {
 
 CookieCreationTimeManager::~CookieCreationTimeManager() {}
 
-void CookieCreationTimeManager::SetCreationTime(
-    NSHTTPCookie* cookie,
-    const base::Time& creation_time) {
+void CookieCreationTimeManager::SetCreationTime(NSHTTPCookie* cookie,
+                                                base::Time creation_time) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  DCHECK(!base::Contains(unique_times_, creation_time));
+  DCHECK(!unique_times_.contains(creation_time));
 
   // If the cookie overrides an existing cookie, remove its creation time.
   auto it = creation_times_.find(GetCookieUniqueID(cookie));
@@ -73,7 +71,7 @@ void CookieCreationTimeManager::SetCreationTime(
 }
 
 base::Time CookieCreationTimeManager::MakeUniqueCreationTime(
-    const base::Time& creation_time) {
+    base::Time creation_time) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   auto it = unique_times_.find(creation_time);
 

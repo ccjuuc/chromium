@@ -56,6 +56,10 @@ component("printing_base") {
     ]
   }
 
+  if (is_chromeos) {
+    sources += [ "cups_printer_status_reason_ash.h" ]
+  }
+
   if (use_cups) {
     public_configs = [ ":cups" ]
     sources += [
@@ -90,7 +94,10 @@ component("settings") {
     "print_settings.h",
   ]
 
-  public_deps = [ ":printing_base" ]
+  public_deps = [
+    ":printing_base",
+    "//printing/mojom",
+  ]
 
   deps = [
     "//base",
@@ -98,10 +105,6 @@ component("settings") {
   ]
 
   defines = [ "IS_PRINTING_SETTINGS_IMPL" ]
-
-  if (is_chromeos) {
-    deps += [ "//chromeos/crosapi/mojom" ]
-  }
 }
 
 if (enable_oop_printing && (is_linux || is_chromeos)) {
@@ -304,10 +307,7 @@ component("printing") {
       "print_settings_conversion_chromeos.h",
     ]
 
-    deps += [
-      "//chromeos/crosapi/mojom",
-      "//third_party/re2",
-    ]
+    deps += [ "//third_party/re2" ]
   }
 
   if (use_cups) {
@@ -424,7 +424,6 @@ test("printing_unittests") {
     sources += [
       "backend/print_backend_win_unittest.cc",
       "backend/win_helper_unittest.cc",
-      "backend/xps_utils_win_unittest.cc",
       "emf_win_unittest.cc",
       "printed_page_win_unittest.cc",
       "printing_context_win_unittest.cc",
@@ -497,6 +496,7 @@ if (is_android) {
   android_library("printing_java") {
     deps = [
       "//base:base_java",
+      "//base:unowned_user_data_java",
       "//build/android:build_java",
       "//third_party/androidx:androidx_annotation_annotation_java",
       "//third_party/jni_zero:jni_zero_java",

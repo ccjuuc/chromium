@@ -9,6 +9,8 @@
 #include <string>
 
 #include "base/functional/callback.h"
+#include "base/time/time.h"
+#include "base/types/strong_alias.h"
 #include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/payments/card_unmask_challenge_option.h"
@@ -132,7 +134,7 @@ class PaymentsWindowManager {
     ~BnplContext();
 
     // The ID of the issuer for the BNPL flow.
-    autofill::BnplIssuer::IssuerId issuer_id;
+    BnplIssuer::IssuerId issuer_id;
     // The starting location of the BNPL flow, which is an initial URL to
     // open inside of the pop-up.
     GURL initial_url;

@@ -38,7 +38,8 @@
 *HistogramSignalHandlerTest.*
 *HistoryDelegateImplTest.*
 *HistorySyncPromoTest.*
-*HomeModulesCardRegistryTest.*
+*HomeModulesCardRegistryAndroidTest.*
+*HomeModulesCardRegistryIOSTest.*
 *InputContextAndroidTest.*
 *IntentionalUserModelTest.*
 *IosModuleRankerTest.*
@@ -51,6 +52,7 @@
 *ModelManagerTest.*
 *ModelProviderFactoryImplTest.*
 *MostVisitedTilesUserTest.*
+*NtpThemePromoTest.*
 *OptimizationGuideSegmentationModelProviderTest.*
 *OptimizationTargetSegmentationDummyTest.*
 *PasswordManagerUserModelTest.*
@@ -70,6 +72,7 @@
 *SegmentInfoCacheTest.*
 *SegmentInfoDatabaseTest.*
 *SegmentResultProviderTest.*
+*SegmentResultProviderThreadingTest.*
 *SegmentScoreProviderTest.*
 *SegmentSelectorTest.*
 *SegmentationModelExecutorTest.*
@@ -99,7 +102,6 @@
 *TabSessionSourceTest.*
 *TabletProductivityUserModelTest.*
 *TipsManagerTest.*
-*TipsNotificationsPromoTest.*
 *TipsNotificationsRankerTest.*
 *TrainingDataCacheTest.*
 *TrainingDataCollectorImplTest.*

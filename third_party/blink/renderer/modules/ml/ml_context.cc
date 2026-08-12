@@ -24,6 +24,7 @@
 #include "services/webnn/public/mojom/webnn_context_provider.mojom-blink.h"
 #include "services/webnn/public/mojom/webnn_graph_builder.mojom-blink.h"
 #include "services/webnn/public/mojom/webnn_tensor.mojom-blink.h"
+#include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
@@ -64,6 +65,9 @@
 #include "third_party/blink/renderer/platform/bindings/exception_code.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 #if BUILDFLAG(IS_MAC)
 #include "gpu/command_buffer/common/capabilities.h"
@@ -157,12 +161,10 @@ base::expected<viz::SharedImageFormat, String>
 OperandDataTypeToSharedImageFormat(webnn::OperandDataType data_type) {
 // TODO(crbug.com/427252761): Support other data types in CoreML backend.
 #if BUILDFLAG(IS_MAC)
-  if (data_type != webnn::OperandDataType::kFloat16) {
-    return base::unexpected(String::Format(
-        "Invalid operand data type: %s", ToBlinkDataType(data_type).AsCStr()));
-  }
   // The only format supported by CoreML `MLMultiArray::initWithPixelBuffer`.
-  return viz::SinglePlaneFormat::kR_F16;
+  if (data_type == webnn::OperandDataType::kFloat16) {
+    return viz::SinglePlaneFormat::kR_F16;
+  }
 #else
   // Maps data_type to equivalent element size.
   switch (data_type) {
@@ -183,11 +185,11 @@ OperandDataTypeToSharedImageFormat(webnn::OperandDataType data_type) {
       return viz::SinglePlaneFormat::kRGBA_8888;
     // Default case is for new format types added to MLTensor.
     default:
-      return base::unexpected(
-          String::Format("Invalid operand data type: %s",
-                         ToBlinkDataType(data_type).AsCStr()));
+      break;
   }
 #endif  // BUILDFLAG(IS_MAC)
+  return base::unexpected(StrCat({"Invalid operand data type: ",
+                                  ToBlinkDataType(data_type).AsStringView()}));
 }
 
 gpu::SharedImageUsageSet OperandUsageToSharedImageUsageSet(
@@ -201,7 +203,9 @@ gpu::SharedImageUsageSet OperandUsageToSharedImageUsageSet(
     shared_image_usage_set |= gpu::SHARED_IMAGE_USAGE_WEBNN_SHARED_TENSOR_WRITE;
   }
   if (usage.Has(webnn::MLTensorUsageFlags::kWebGpuInterop)) {
-    shared_image_usage_set |= gpu::SHARED_IMAGE_USAGE_WEBGPU_SHARED_BUFFER;
+    shared_image_usage_set |= gpu::SHARED_IMAGE_USAGE_WEBGPU_READ |
+                              gpu::SHARED_IMAGE_USAGE_WEBGPU_WRITE |
+                              gpu::SHARED_IMAGE_USAGE_WEBGPU_SHARED_BUFFER;
   }
   return shared_image_usage_set;
 }
@@ -219,7 +223,8 @@ base::expected<void, std::string> IsValidTensorSize(
       return base::unexpected("Tensor size is too large.");
     }
     if (descriptor.Rank() > 1) {
-      int height = descriptor.NumberOfElements() / width;
+      int height =
+          base::checked_cast<int>(descriptor.NumberOfElements() / width);
       if (height > max_texture_size) {
         return base::unexpected("Tensor size is too large.");
       }
@@ -228,6 +233,89 @@ base::expected<void, std::string> IsValidTensorSize(
   return base::ok();
 }
 #endif  // BUILDFLAG(IS_MAC)
+
+#define THROW_AND_RETURN_IF_ERROR(func, msg)                      \
+  RETURN_IF_ERROR(func, [&exception_state](const String& error) { \
+    exception_state.ThrowTypeError(StrCat({msg, error}));         \
+    return;                                                       \
+  });
+
+template <typename T>
+void AppendVectorOfNumbers(const std::vector<T>& vector,
+                           StringBuilder& builder) {
+  builder.AppendRange(vector, ", ");
+}
+
+base::expected<void, String> ValidateNamedMLTensors(
+    const MLContext* context,
+    const MLNamedTensors& named_tensors,
+    const MLGraph::NamedOperandDescriptors& expected_named_descriptors) {
+  if (named_tensors.size() !=
+      base::checked_cast<wtf_size_t>(expected_named_descriptors.size())) {
+    return base::unexpected(String::Format(
+        "The number (%u) of MLTensor(s) doesn't match the "
+        "expectation (%u).",
+        named_tensors.size(), expected_named_descriptors.size()));
+  }
+  for (const auto& [name, tensor] : named_tensors) {
+    if (!expected_named_descriptors.Contains(name)) {
+      return base::unexpected(
+          StrCat({"The name \"", name, "\" isn't part of the graph."}));
+    }
+    const auto& info = expected_named_descriptors.at(name);
+    if (tensor->DataType() != info->data_type()) {
+      return base::unexpected(
+          StrCat({"The data type \"", tensor->dataType().AsStringView(),
+                  "\", of the MLTensor with name \"", name,
+                  "\" doesn't match the expected data type (",
+                  V8MLOperandDataType(ToBlinkDataType(info->data_type()))
+                      .AsStringView(),
+                  ")."}));
+    }
+    if (tensor->Shape() != info->shape()) {
+      StringBuilder message;
+      message.Append("The shape [");
+      AppendVectorOfNumbers(tensor->Shape(), message);
+      message.Append("], of the MLTensor with name \"");
+      message.Append(name);
+      message.Append("\" doesn't match the expected shape: [");
+      AppendVectorOfNumbers(info->shape(), message);
+      message.Append("]");
+      return base::unexpected(message.ToString());
+    }
+    if (tensor->context() != context) {
+      return base::unexpected(
+          StrCat({"The context of MLGraph doesn't match the context of the "
+                  "MLTensor with name \"",
+                  name, "\"."}));
+    }
+  }
+  return base::ok();
+}
+
+base::expected<void, String> ValidateMLTensorUsage(
+    const MLNamedTensors& named_inputs,
+    const MLNamedTensors& named_outputs) {
+  // Validate that output tensors are unique.
+  HeapHashSet<Member<MLTensor>> output_tensors;
+  for (const auto& named_output : named_outputs) {
+    output_tensors.insert(named_output.second);
+  }
+
+  if (output_tensors.size() != named_outputs.size()) {
+    return base::unexpected(
+        "The same MLTensor cannot be used more than once as output.");
+  }
+
+  // Validate tensors used for input and output are unique.
+  for (const auto& named_input : named_inputs) {
+    if (output_tensors.Contains(named_input.second)) {
+      return base::unexpected(
+          "The same MLTensor cannot be used as input and output.");
+    }
+  }
+  return base::ok();
+}
 
 }  // namespace
 
@@ -240,17 +328,32 @@ MLContext::MLContext(
       power_preference_(power_preference),
       lost_property_(MakeGarbageCollected<LostProperty>(execution_context)),
       context_remote_(execution_context),
+      compiler_context_remote_(execution_context),
       properties_(std::move(create_context_success->context_properties)),
       write_tensor_producer_(
           std::move(create_context_success->write_tensor_producer)),
       read_tensor_consumer_(
           std::move(create_context_success->read_tensor_consumer)),
-      webnn_handle_(std::move(create_context_success->context_handle)) {
-  context_remote_.Bind(
-      std::move(create_context_success->context_remote),
-      execution_context->GetTaskRunner(TaskType::kMachineLearning));
+      webnn_handle_(std::move(create_context_success->context_handle)),
+      command_buffer_id_(gpu::CommandBufferId::FromUnsafeValue(
+          create_context_success->command_buffer_id)),
+      task_runner_(
+          execution_context->GetTaskRunner(TaskType::kMachineLearning)) {
+  context_remote_.Bind(std::move(create_context_success->context_remote),
+                       task_runner_);
   context_remote_.set_disconnect_with_reason_handler(
       BindOnce(&MLContext::OnLost, WrapWeakPersistent(this)));
+
+  if (create_context_success->compiler_context_remote) {
+    // The GPU returned a Compiler remote, so this backend uses a Compiler
+    // process. Record it for reconnect; the renderer never decides this.
+    backend_uses_compiler_process_ = true;
+    compiler_context_remote_.Bind(
+        std::move(create_context_success->compiler_context_remote),
+        task_runner_);
+    compiler_context_remote_.set_disconnect_handler(BindOnce(
+        &MLContext::OnCompilerContextDisconnected, WrapWeakPersistent(this)));
+  }
 }
 
 MLContext::~MLContext() = default;
@@ -266,6 +369,7 @@ V8MLPowerPreference MLContext::GetPowerPreference() const {
 void MLContext::Trace(Visitor* visitor) const {
   visitor->Trace(lost_property_);
   visitor->Trace(context_remote_);
+  visitor->Trace(compiler_context_remote_);
   visitor->Trace(pending_resolvers_);
   visitor->Trace(graphs_);
   visitor->Trace(graph_builders_);
@@ -312,10 +416,29 @@ MLGraphBuilder* MLContext::CreateWebNNGraphBuilder(
     return nullptr;
   }
 
-  mojo::PendingAssociatedRemote<webnn::mojom::blink::WebNNGraphBuilder>
-      pending_remote;
-  context_remote_->CreateGraphBuilder(
-      pending_remote.InitWithNewEndpointAndPassReceiver());
+  // The GPU/browser side decides whether a Compiler process is used; the
+  // branches below only route the receiver per that decision.
+  mojo::PendingRemote<webnn::mojom::blink::WebNNGraphBuilder> pending_remote;
+  if (compiler_context_remote_.is_bound()) {
+    compiler_context_remote_->CreateGraphBuilder(
+        pending_remote.InitWithNewPipeAndPassReceiver());
+  } else if (backend_uses_compiler_process_) {
+    // Compiler context is disconnected (e.g. after a Compiler process crash
+    // or idle shutdown). Reconnect by creating a new CompilerContext pipe pair:
+    // bind the remote end locally and send the receiver to the GPU process
+    // (which forwards it to the Browser → Compiler process). Mojo buffers all
+    // messages sent on the remote until the receiver is bound in the Compiler
+    // process, so we can call CreateGraphBuilder immediately below.
+    context_remote_->RequestCompilerContext(
+        compiler_context_remote_.BindNewPipeAndPassReceiver(task_runner_));
+    compiler_context_remote_.set_disconnect_handler(BindOnce(
+        &MLContext::OnCompilerContextDisconnected, WrapWeakPersistent(this)));
+    compiler_context_remote_->CreateGraphBuilder(
+        pending_remote.InitWithNewPipeAndPassReceiver());
+  } else {
+    context_remote_->CreateGraphBuilder(
+        pending_remote.InitWithNewPipeAndPassReceiver());
+  }
 
   auto* graph_builder = MakeGarbageCollected<MLGraphBuilder>(
       ExecutionContext::From(script_state), this, std::move(pending_remote));
@@ -324,15 +447,25 @@ MLGraphBuilder* MLContext::CreateWebNNGraphBuilder(
   return graph_builder;
 }
 
+void MLContext::OnCompilerContextDisconnected() {
+  // Do not eagerly reconnect. The next CreateWebNNGraphBuilder() call will
+  // trigger a reconnect on demand. This is a prerequisite for future idle
+  // shutdown enhancements (crbug.com/516844138) where the Compiler process
+  // may proactively disconnect contexts with no active graph builders;
+  // eager reconnection would cause an infinite reconnect loop in that case.
+  compiler_context_remote_.reset();
+}
+
 void MLContext::OnLost(uint32_t custom_reason, const std::string& description) {
   context_remote_.reset();
+  compiler_context_remote_.reset();
 
   auto* context_lost_info = MLContextLostInfo::Create();
   if (description.empty()) {
     context_lost_info->setMessage(
         "WebNN context is lost due to connection error.");
   } else {
-    context_lost_info->setMessage(String::FromUTF8(description));
+    context_lost_info->setMessage(String::FromUtf8(description));
   }
 
   CHECK_EQ(lost_property_->GetState(), LostProperty::kPending);
@@ -343,6 +476,15 @@ void MLContext::OnLost(uint32_t custom_reason, const std::string& description) {
                                      "Context is lost.");
   }
   pending_resolvers_.clear();
+}
+
+gpu::SyncToken MLContext::GenerateVerifiedReleaseToken() {
+  gpu::SyncToken token(gpu::CommandBufferNamespace::WEBNN_CONTEXT_INTERFACE,
+                       command_buffer_id_, ++last_sync_token_release_id_);
+  // Verify the sync token since it will be passed to WebGPU which requires
+  // verification.
+  token.SetVerifyFlush();
+  return token;
 }
 
 const MLOpSupportLimits* MLContext::opSupportLimits(ScriptState* script_state) {
@@ -447,7 +589,7 @@ const MLOpSupportLimits* MLContext::opSupportLimits(ScriptState* script_state) {
   dequantize_linear->setScale(SupportedTensorLimitsToTensorLimits(
       data_type_limits.dequantize_linear_scale));
   dequantize_linear->setZeroPoint(SupportedTensorLimitsToTensorLimits(
-      data_type_limits.dequantize_linear_zero_point));
+      data_type_limits.dequantize_linear_input));
   dequantize_linear->setOutput(SupportedTensorLimitsToTensorLimits(
       data_type_limits.dequantize_linear_scale));
   op_support_limits->setDequantizeLinear(dequantize_linear);
@@ -1143,6 +1285,12 @@ void MLContext::OnGraphCreated(MLGraph* graph) {
   graphs_.insert(graph);
 }
 
+void MLContext::DestroyGraph(const blink::WebNNGraphToken& graph_token) {
+  if (context_remote_.is_bound()) {
+    context_remote_->DestroyGraph(graph_token);
+  }
+}
+
 ScriptPromise<MLTensor> MLContext::createTensor(
     ScriptState* script_state,
     const MLTensorDescriptor* descriptor,
@@ -1191,7 +1339,7 @@ ScriptPromise<MLTensor> MLContext::createTensor(
   //
   // This assertion protects against the usage flags changing without updating
   // this mapping.
-  static_assert(std::to_underlying(webnn::MLTensorUsageFlags::kMaxValue) == 3);
+  static_assert(std::to_underlying(webnn::MLTensorUsageFlags::kMaxValue) == 2);
   webnn::MLTensorUsage usage;
   if (descriptor->readable()) {
     usage.Put(webnn::MLTensorUsageFlags::kRead);
@@ -1199,8 +1347,6 @@ ScriptPromise<MLTensor> MLContext::createTensor(
   if (descriptor->writable()) {
     usage.Put(webnn::MLTensorUsageFlags::kWrite);
   }
-  // MLTensorUsageFlags::kGraphConstant is only assigned for
-  // createConstantTensor().
 
   // MLTensorUsageFlags::kWebGpuInterop is only assigned for
   // createExportableTensor().
@@ -1214,7 +1360,7 @@ ScriptPromise<MLTensor> MLContext::createTensor(
 
   // Use `WebNNContext` to create `WebNNTensor` message pipe.
   context_remote_->CreateTensor(
-      std::move(tensor_info), mojo_base::BigBuffer(0),
+      std::move(tensor_info),
       blink::BindOnce(&MLContext::DidCreateWebNNTensor, WrapPersistent(this),
                       std::move(scoped_trace), WrapPersistent(resolver),
                       std::move(validated_descriptor), usage,
@@ -1278,7 +1424,7 @@ ScriptPromise<MLTensor> MLContext::createExportableTensor(
   //
   // This assertion protects against the usage flags changing without updating
   // this mapping.
-  static_assert(std::to_underlying(webnn::MLTensorUsageFlags::kMaxValue) == 3);
+  static_assert(std::to_underlying(webnn::MLTensorUsageFlags::kMaxValue) == 2);
   webnn::MLTensorUsage usage;
   usage.Put(webnn::MLTensorUsageFlags::kWebGpuInterop);
   if (descriptor->readable()) {
@@ -1287,9 +1433,6 @@ ScriptPromise<MLTensor> MLContext::createExportableTensor(
   if (descriptor->writable()) {
     usage.Put(webnn::MLTensorUsageFlags::kWrite);
   }
-
-  // MLTensorUsageFlags::kGraphConstant is only assigned for
-  // createConstantTensor().
 
   scoped_refptr<gpu::ClientSharedImage> shared_image;
   gpu::SyncToken shared_image_create_finished_token;
@@ -1345,7 +1488,8 @@ ScriptPromise<MLTensor> MLContext::createExportableTensor(
       OperandUsageToSharedImageUsageSet(usage));
   CHECK(shared_image);
 
-  shared_image_create_finished_token = sii->GenVerifiedSyncToken();
+  shared_image_create_finished_token = shared_image->creation_sync_token();
+  sii->VerifySyncToken(shared_image_create_finished_token);
 
   auto tensor_info =
       webnn::mojom::blink::TensorInfo::New(validated_descriptor, usage);
@@ -1371,75 +1515,11 @@ ScriptPromise<MLTensor> MLContext::createConstantTensor(
     const MLOperandDescriptor* descriptor,
     AllowSharedBufferSource* src_data,
     ExceptionState& exception_state) {
-  webnn::ScopedTrace scoped_trace("MLContext::createConstantTensor");
-  if (!script_state->ContextIsValid()) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                      "Invalid script state");
-    return EmptyPromise();
-  }
-
-  if (!base::FeatureList::IsEnabled(
-          webnn::mojom::features::kWebMachineLearningNeuralNetwork)) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
-                                      "Not implemented");
-    return EmptyPromise();
-  }
-
-  if (!context_remote_.is_bound()) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                      "Context is lost.");
-    return EmptyPromise();
-  }
-
-  ASSIGN_OR_RETURN(
-      webnn::OperandDescriptor validated_descriptor,
-      webnn::OperandDescriptor::Create(
-          properties_, FromBlinkDataType(descriptor->dataType().AsEnum()),
-          descriptor->shape(), "constant_tensor"),
-      [&exception_state](std::string error) {
-        exception_state.ThrowTypeError(String(error));
-        return ScriptPromise<MLTensor>();
-      });
-
-  RETURN_IF_ERROR(webnn::ValidateTensor(properties_, validated_descriptor),
-                  [&exception_state](std::string error) {
-                    exception_state.ThrowTypeError(String(error));
-                    return ScriptPromise<MLTensor>();
-                  });
-
-  base::span<const uint8_t> bytes = AsByteSpan(*src_data);
-  if (validated_descriptor.PackedByteLength() != bytes.size()) {
-    exception_state.ThrowTypeError(
-        String::Format("The source data byte length (%zu) doesn't match the "
-                       "expected byte length (%zu).",
-                       bytes.size(), validated_descriptor.PackedByteLength()));
-    return ScriptPromise<MLTensor>();
-  }
-
-  if (!properties_.data_type_limits.constant.Supports(validated_descriptor)) {
-    exception_state.ThrowTypeError(String(webnn::NotSupportedConstantError(
-        validated_descriptor, properties_.data_type_limits.constant)));
-    return ScriptPromise<MLTensor>();
-  }
-
-  webnn::MLTensorUsage usage =
-      webnn::MLTensorUsage{webnn::MLTensorUsageFlags::kGraphConstant};
-  auto tensor_info =
-      webnn::mojom::blink::TensorInfo::New(validated_descriptor, usage);
-
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<MLTensor>>(
-      script_state, exception_state.GetContext());
-  pending_resolvers_.insert(resolver);
-
-  // Use `WebNNContext` to create `WebNNTensor` message pipe.
-  context_remote_->CreateTensor(
-      std::move(tensor_info), bytes,
-      blink::BindOnce(&MLContext::DidCreateWebNNTensor, WrapPersistent(this),
-                      std::move(scoped_trace), WrapPersistent(resolver),
-                      std::move(validated_descriptor), usage,
-                      /*shared_image=*/nullptr, /*gpu_device=*/nullptr));
-
-  return resolver->Promise();
+  // TODO(crbug.com/516844144): No backend currently supports constant tensors.
+  // Reject early until support is added.
+  exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
+                                    "Constant tensors are not supported.");
+  return EmptyPromise();
 }
 
 void MLContext::writeTensor(ScriptState* script_state,
@@ -1523,6 +1603,12 @@ ScriptPromise<IDLUndefined> MLContext::readTensor(
     return EmptyPromise();
   }
 
+  if (!src_tensor->Usage().Has(webnn::MLTensorUsageFlags::kRead)) {
+    exception_state.ThrowTypeError(
+        "The source tensor doesn't have read access.");
+    return EmptyPromise();
+  }
+
   // TODO(crbug.com/378604909): When `dst_data` is an ArrayBufferView, check its
   // element type being compatible with the MLTensor data type.
 
@@ -1542,14 +1628,71 @@ void MLContext::dispatch(ScriptState* script_state,
     return;
   }
 
-  if (graph->Context() != this) {
-    exception_state.ThrowTypeError(
-        "The graph isn't built within this context.");
+  if (!context_remote_.is_bound()) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      "Context is lost.");
     return;
   }
 
-  return graph->Dispatch(std::move(scoped_trace), inputs, outputs,
-                         exception_state);
+  if (graph->Context() != this) {
+    exception_state.ThrowTypeError("The graph wasn't built with this context.");
+    return;
+  }
+
+  if (graph->IsDestroyed()) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      "Graph has been destroyed.");
+    return;
+  }
+
+  // Validate the MLNamedTensors.
+  THROW_AND_RETURN_IF_ERROR(
+      ValidateNamedMLTensors(this, inputs, graph->GetInputConstraints()),
+      "Invalid inputs: ");
+  THROW_AND_RETURN_IF_ERROR(
+      ValidateNamedMLTensors(this, outputs, graph->GetOutputConstraints()),
+      "Invalid outputs: ");
+  THROW_AND_RETURN_IF_ERROR(ValidateMLTensorUsage(inputs, outputs),
+                            "Invalid dispatch: ");
+
+  // The inputs and outputs were already verified so we can pass the tensor
+  // directly with the input and output tensors.
+  HashMap<String, blink::WebNNTensorToken> mojo_inputs;
+  for (const auto& [name, input_tensor] : inputs) {
+    if (!input_tensor->IsValid()) {
+      exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                        "Invalid input tensor state");
+      return;
+    }
+
+    if (input_tensor->is_exported_to_webgpu()) {
+      exception_state.ThrowTypeError(
+          "Input tensor has been exported to WebGPU");
+      return;
+    }
+
+    mojo_inputs.insert(name, input_tensor->handle());
+  }
+
+  HashMap<String, blink::WebNNTensorToken> mojo_outputs;
+  for (const auto& [name, output_tensor] : outputs) {
+    if (!output_tensor->IsValid()) {
+      exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                        "Invalid output tensor state");
+      return;
+    }
+
+    if (output_tensor->is_exported_to_webgpu()) {
+      exception_state.ThrowTypeError(
+          "Output tensor has been exported to WebGPU");
+      return;
+    }
+
+    mojo_outputs.insert(name, output_tensor->handle());
+  }
+
+  context_remote_->Dispatch(graph->graph_token(), std::move(mojo_inputs),
+                            std::move(mojo_outputs));
 }
 
 void MLContext::DidCreateWebNNTensor(
@@ -1584,25 +1727,24 @@ void MLContext::DidCreateWebNNTensor(
   resolver->Resolve(tensor);
 }
 
-ScriptPromise<GPUBuffer> MLContext::exportToGPU(
-    ScriptState* script_state,
-    MLTensor* tensor,
-    ExceptionState& exception_state) {
+GPUBuffer* MLContext::exportToGPU(ScriptState* script_state,
+                                  MLTensor* tensor,
+                                  ExceptionState& exception_state) {
   webnn::ScopedTrace scoped_trace("MLContext::exportToGPU");
   if (!script_state->ContextIsValid()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "Invalid script state");
-    return EmptyPromise();
+    return nullptr;
   }
   if (!context_remote_.is_bound()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "Context is lost.");
-    return EmptyPromise();
+    return nullptr;
   }
   if (tensor->context() != this) {
     exception_state.ThrowTypeError(
         "The source tensor was not created by this context.");
-    return EmptyPromise();
+    return nullptr;
   }
 
   return tensor->ExportToGPUImpl(std::move(scoped_trace), script_state,

@@ -184,6 +184,12 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
   // DidFinishNavigation is recommended).
   virtual void PrimaryPageChanged(Page& page) {}
 
+  // This method is invoked when the primary page of a WebContents is about to
+  // be deactivated. This happens when the primary page is being replaced by
+  // another page (due to a commit of a navigation). Note that this will not be
+  // called if the WebContents is being destroyed.
+  virtual void PrimaryPageWillBeDeactivated(Page& page) {}
+
   // This method is invoked when a frame is destroyed. A subframe is destroyed
   // when its parent detaches it or navigates to a different document. A main
   // frame is destroyed when the whole WebContents is going away, or, with
@@ -502,9 +508,15 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
   // This method is invoked when a resource associate with the frame
   // |render_frame_host| has been loaded, successfully or not. |request_id| will
   // only be populated for main frame resources.
+  // |original_url| is the unsanitized original URL of the resource request
+  // tracked by the browser process. |resource_load_info| comes directly from
+  // the renderer process. When `kSanitizeOriginalUrlDuringNavigation` is
+  // enabled, |resource_load_info.original_url| may be sanitized to be just the
+  // origin, while |original_url| is always the full URL.
   virtual void ResourceLoadComplete(
       RenderFrameHost* render_frame_host,
       const GlobalRequestID& request_id,
+      const GURL& original_url,
       const blink::mojom::ResourceLoadInfo& resource_load_info) {}
 
   // Called when document reads or sets a cookie (either via document.cookie or
@@ -667,6 +679,9 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
   virtual void WebAuthnAssertionRequestSucceeded(
       RenderFrameHost* render_frame_host) {}
 
+  // Invoked when a federated login request completes.
+  virtual void OnFedCmFederatedLogin(bool success) {}
+
   // Invoked when the display state of the frame changes.
   virtual void FrameDisplayStateChanged(RenderFrameHost* render_frame_host,
                                         bool is_display_none) {}
@@ -706,6 +721,26 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
   virtual void InnerWebContentsAttached(WebContents* inner_web_contents,
                                         RenderFrameHost* render_frame_host) {}
 
+  // Called when a SurfaceEmbed child WebContents is attached to its embedder.
+  // `inner_web_contents` is the child WebContents. `embedder_render_frame_host`
+  // is the outer document's RenderFrameHost that embeds it.
+  //
+  // NOTE: This API is intended only for a very specific, narrow use-case.
+  // Very few observers should need this. Do not use this unless you are
+  // specifically managing SurfaceEmbed relationships.
+  virtual void SurfaceEmbedChildWebContentsAttached(
+      WebContents* inner_web_contents,
+      RenderFrameHost* embedder_render_frame_host) {}
+
+  // Called when a SurfaceEmbed child WebContents is detached from its parent.
+  // `inner_web_contents` is the child WebContents.
+  //
+  // NOTE: This API is intended only for a very specific, narrow use-case.
+  // Very few observers should need this. Do not use this unless you are
+  // specifically managing SurfaceEmbed relationships.
+  virtual void SurfaceEmbedChildWebContentsDetached(
+      WebContents* inner_web_contents) {}
+
   // Invoked when WebContents::Clone() was used to clone a WebContents.
   virtual void DidCloneToNewWebContents(WebContents* old_web_contents,
                                         WebContents* new_web_contents) {}
@@ -730,9 +765,12 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
   // it is recommended to call WebContents::GetFaviconURLs() to get the current
   // list as this callback will not be executed unless there is an update.
   // `render_frame_host` is the main RenderFrameHost for the primary page.
+  // `reason` is the reason for the favicon list update, which can be used to
+  // filter irrelevant updates.
   virtual void DidUpdateFaviconURL(
       RenderFrameHost* render_frame_host,
-      const std::vector<blink::mojom::FaviconURLPtr>& candidates) {}
+      const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+      blink::mojom::FaviconUpdateReason reason) {}
 
   // Called when an audio change occurs to this WebContents. If |audible| is
   // true then one or more frames or child contents are emitting audio; if
@@ -913,6 +951,10 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
   virtual void OnTextCopiedToClipboard(RenderFrameHost* render_frame_host,
                                        const std::u16string& copied_text) {}
 
+  // Called when text selection is changed.
+  virtual void OnTextSelectionChanged(RenderFrameHost* render_frame_host,
+                                      std::u16string_view selected_text) {}
+
   // Notification that the |render_widget_host| for this WebContents has gained
   // focus.
   virtual void OnWebContentsFocused(RenderWidgetHost* render_widget_host) {}
@@ -984,7 +1026,18 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
   virtual void VibrationRequested() {}
 
   // Called when a first contentful paint happened in the primary main frame.
-  virtual void OnFirstContentfulPaintInPrimaryMainFrame() {}
+  // `presentation_time` is the renderer-side presentation timestamp of the
+  // paint.
+  virtual void OnFirstContentfulPaintInPrimaryMainFrame(
+      base::TimeTicks presentation_time) {}
+
+  // Called when the largest contentful paint candidate changed in the primary
+  // main frame. May be called multiple times as larger elements paint; the
+  // last call (before user input freezes the metric) reflects the page's
+  // largest contentful paint. `presentation_time` is the renderer-side
+  // presentation timestamp of the current candidate.
+  virtual void OnLargestContentfulPaintInPrimaryMainFrame(
+      base::TimeTicks presentation_time) {}
 
   // Invoked when a fetch keepalive request is created in this WebContents.
   //

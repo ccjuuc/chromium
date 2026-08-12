@@ -6,8 +6,11 @@ package org.chromium.chrome.browser.omnibox.suggestions;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 
 import android.content.Context;
 import android.view.ContextThemeWrapper;
@@ -24,24 +27,13 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
-import org.chromium.base.Callback;
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
-import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
-import org.chromium.chrome.browser.omnibox.DeferredIMEWindowInsetApplicationCallback;
-import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
-import org.chromium.chrome.browser.omnibox.UrlBarEditingTextStateProvider;
-import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator;
-import org.chromium.chrome.browser.omnibox.suggestions.basic.BasicSuggestionProcessor;
-import org.chromium.chrome.browser.omnibox.test.R;
+import org.chromium.chrome.browser.omnibox.LocationBarEmbedder;
+import org.chromium.chrome.browser.omnibox.R;
+import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.share.ShareDelegate;
-import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.components.omnibox.AutocompleteRequestType;
-import org.chromium.components.omnibox.action.OmniboxActionDelegate;
-import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 
 import java.util.function.Supplier;
@@ -49,71 +41,36 @@ import java.util.function.Supplier;
 /** Unit tests for {@link AutocompleteCoordinator}. */
 @RunWith(BaseRobolectricTestRunner.class)
 public class AutocompleteCoordinatorUnitTest {
-    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    private Context mContext;
     private AutocompleteCoordinator mAutocompleteCoordinator;
-    private final ObservableSupplierImpl<@ControlsPosition Integer> mControlsPositionSupplier =
-            new ObservableSupplierImpl<>(ControlsPosition.TOP);
-    private final ObservableSupplierImpl<@AutocompleteRequestType Integer>
-            mAutocompleteRequestTypeSupplier =
-                    new ObservableSupplierImpl<>(AutocompleteRequestType.SEARCH);
+    private final MonotonicObservableSupplier<Profile> mProfileObservableSupplier =
+            ObservableSuppliers.alwaysNull();
 
-    @Mock private AutocompleteDelegate mAutocompleteDelegate;
-    @Mock private OmniboxSuggestionsDropdownEmbedder mDropdownEmbedder;
-    @Mock private UrlBarEditingTextStateProvider mUrlBarEditingTextProvider;
+    @Mock private AutocompleteMediator mAutocompleteMediator;
     @Mock private Supplier<ModalDialogManager> mModalDialogManagerSupplier;
-    @Mock private Supplier<Tab> mActivityTabSupplier;
-    @Mock private Supplier<ShareDelegate> mShareDelegateSupplier;
-    @Mock private LocationBarDataProvider mLocationBarDataProvider;
-    @Mock private ObservableSupplier<Profile> mProfileObservableSupplier;
-    @Mock private Callback<String> mBringToForegroundCallback;
-    @Mock private BasicSuggestionProcessor.BookmarkState mBookmarkState;
-    @Mock private OmniboxActionDelegate mOmniboxActionDelegate;
-    @Mock private ActivityLifecycleDispatcher mLifecycleDispatcher;
-    @Mock private WindowAndroid mWindowAndroid;
-    @Mock private DeferredIMEWindowInsetApplicationCallback mDeferredImeInsetCb;
-    @Mock private FuseboxCoordinator mFuseboxCoordinator;
+    @Mock private LocationBarEmbedder mLocationBarEmbedder;
     @Mock private OmniboxSuggestionsContainer mSuggestionsContainer;
     @Mock private ViewGroup mParentView;
+    @Mock private OmniboxResourceProvider mResourceProvider;
 
     @Before
     public void setUp() {
-        mContext =
+        Context context =
                 new ContextThemeWrapper(
                         ApplicationProvider.getApplicationContext(),
                         R.style.Theme_BrowserUI_DayNight);
 
-        lenient().when(mParentView.getContext()).thenReturn(mContext);
-        lenient()
-                .when(mLocationBarDataProvider.getToolbarPositionSupplier())
-                .thenReturn(mControlsPositionSupplier);
-
-        lenient()
-                .doReturn(mAutocompleteRequestTypeSupplier)
-                .when(mFuseboxCoordinator)
-                .getAutocompleteRequestTypeSupplier();
+        lenient().when(mParentView.getContext()).thenReturn(context);
 
         mAutocompleteCoordinator =
                 new AutocompleteCoordinator(
                         mParentView,
-                        mAutocompleteDelegate,
-                        mDropdownEmbedder,
-                        mUrlBarEditingTextProvider,
-                        mModalDialogManagerSupplier,
-                        mActivityTabSupplier,
-                        mShareDelegateSupplier,
-                        mLocationBarDataProvider,
+                        mAutocompleteMediator,
                         mProfileObservableSupplier,
-                        mBringToForegroundCallback,
-                        mBookmarkState,
-                        mOmniboxActionDelegate,
-                        null,
-                        mLifecycleDispatcher,
-                        false,
-                        mWindowAndroid,
-                        mDeferredImeInsetCb,
-                        mFuseboxCoordinator);
+                        mLocationBarEmbedder,
+                        mModalDialogManagerSupplier,
+                        mResourceProvider);
 
         mAutocompleteCoordinator.setSuggestionsContainerForTest(mSuggestionsContainer);
     }
@@ -122,47 +79,55 @@ public class AutocompleteCoordinatorUnitTest {
     public void testHandleKeyEvent() {
         // Suggestions are shown.
         doReturn(true).when(mSuggestionsContainer).isShown();
+        doReturn(true)
+                .when(mSuggestionsContainer)
+                .onKeyDown(eq(KeyEvent.KEYCODE_TAB), any(KeyEvent.class));
 
         // Tab navigation is handled.
-        assertTrue(
-                mAutocompleteCoordinator.handleKeyEvent(
-                        KeyEvent.KEYCODE_TAB,
-                        new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_TAB)));
+        assertTrue(sendKeyDownEvent(KeyEvent.KEYCODE_TAB, 0));
 
         // Shift+Tab navigation is handled.
-        assertTrue(
-                mAutocompleteCoordinator.handleKeyEvent(
-                        KeyEvent.KEYCODE_TAB,
-                        new KeyEvent(
-                                0,
-                                0,
-                                KeyEvent.ACTION_DOWN,
-                                KeyEvent.KEYCODE_TAB,
-                                0,
-                                KeyEvent.META_SHIFT_ON)));
+        assertTrue(sendKeyDownEvent(KeyEvent.KEYCODE_TAB, KeyEvent.META_SHIFT_ON));
 
         // Ctrl+Tab is not handled.
-        assertFalse(
-                mAutocompleteCoordinator.handleKeyEvent(
-                        KeyEvent.KEYCODE_TAB,
-                        new KeyEvent(
-                                0,
-                                0,
-                                KeyEvent.ACTION_DOWN,
-                                KeyEvent.KEYCODE_TAB,
-                                0,
-                                KeyEvent.META_CTRL_ON)));
+        assertFalse(sendKeyDownEvent(KeyEvent.KEYCODE_TAB, KeyEvent.META_CTRL_ON));
 
         // Alt+Tab is not handled.
-        assertFalse(
-                mAutocompleteCoordinator.handleKeyEvent(
-                        KeyEvent.KEYCODE_TAB,
-                        new KeyEvent(
-                                0,
-                                0,
-                                KeyEvent.ACTION_DOWN,
-                                KeyEvent.KEYCODE_TAB,
-                                0,
-                                KeyEvent.META_ALT_ON)));
+        assertFalse(sendKeyDownEvent(KeyEvent.KEYCODE_TAB, KeyEvent.META_ALT_ON));
+    }
+
+    @Test
+    public void testHandleKeyEvent_enter_delegatesToContainer() {
+        doReturn(true).when(mSuggestionsContainer).isShown();
+
+        // Container handles Enter.
+        doReturn(true).when(mSuggestionsContainer).onKeyDown(eq(KeyEvent.KEYCODE_ENTER), any());
+        assertTrue(sendKeyDownEvent(KeyEvent.KEYCODE_ENTER, 0));
+        verify(mSuggestionsContainer).onKeyDown(eq(KeyEvent.KEYCODE_ENTER), any());
+
+        // Container does not handle Enter.
+        doReturn(false).when(mSuggestionsContainer).onKeyDown(eq(KeyEvent.KEYCODE_ENTER), any());
+        assertFalse(sendKeyDownEvent(KeyEvent.KEYCODE_ENTER, 0));
+    }
+
+    @Test
+    public void testHandleKeyEvent_altEnter_delegatesToContainer() {
+        doReturn(true).when(mSuggestionsContainer).isShown();
+        doReturn(true).when(mSuggestionsContainer).onKeyDown(eq(KeyEvent.KEYCODE_ENTER), any());
+        assertTrue(sendKeyDownEvent(KeyEvent.KEYCODE_ENTER, KeyEvent.META_ALT_ON));
+        verify(mSuggestionsContainer).onKeyDown(eq(KeyEvent.KEYCODE_ENTER), any());
+    }
+
+    @Test
+    public void testHandleKeyEvent_shiftEnter_delegatesToContainer() {
+        doReturn(true).when(mSuggestionsContainer).isShown();
+        doReturn(false).when(mSuggestionsContainer).onKeyDown(eq(KeyEvent.KEYCODE_ENTER), any());
+        assertFalse(sendKeyDownEvent(KeyEvent.KEYCODE_ENTER, KeyEvent.META_SHIFT_ON));
+        verify(mSuggestionsContainer).onKeyDown(eq(KeyEvent.KEYCODE_ENTER), any());
+    }
+
+    private boolean sendKeyDownEvent(int keyCode, int metaState) {
+        return mAutocompleteCoordinator.handleKeyEvent(
+                keyCode, new KeyEvent(0, 0, KeyEvent.ACTION_DOWN, keyCode, 0, metaState));
     }
 }

@@ -10,7 +10,9 @@
 
 class WebViewSafeBrowsingClient : public SafeBrowsingClient {
  public:
-  explicit WebViewSafeBrowsingClient(PrefService* prefs);
+  WebViewSafeBrowsingClient(
+      PrefService* prefs,
+      safe_browsing::V5GetHashProtocolManager* v5_get_hash_protocol_manager);
 
   ~WebViewSafeBrowsingClient() override;
 
@@ -21,15 +23,23 @@ class WebViewSafeBrowsingClient : public SafeBrowsingClient {
   safe_browsing::RealTimeUrlLookupServiceBase* GetRealTimeUrlLookupService()
       override;
   safe_browsing::HashRealTimeService* GetHashRealTimeService() override;
+  safe_browsing::V5GetHashProtocolManager* GetV5GetHashProtocolManager()
+      override;
   variations::VariationsService* GetVariationsService() override;
   bool ShouldBlockUnsafeResource(
       const security_interstitials::UnsafeResource& resource) const override;
   bool OnMainFrameUrlQueryCancellationDecided(web::WebState* web_state,
                                               const GURL& url) override;
   bool ShouldForceSyncRealTimeUrlChecks() const override;
+  void OnSecurityInterstitialShown(
+      web::WebState* web_state,
+      const security_interstitials::UnsafeResource& resource) override;
 
  private:
   raw_ptr<PrefService> prefs_;
+  // Protocol manager for Safe Browsing v5 get hash requests.
+  raw_ptr<safe_browsing::V5GetHashProtocolManager>
+      v5_get_hash_protocol_manager_;
 
   // Must be last.
   base::WeakPtrFactory<WebViewSafeBrowsingClient> weak_factory_{this};

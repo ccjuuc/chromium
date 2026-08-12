@@ -4,12 +4,56 @@
 # found in the LICENSE file.
 """Shared utility functions for iOS test runners."""
 
+import uuid
 import dataclasses
+import glob
 import json
+import os
 import re
 import subprocess
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 import shlex
+
+
+def _load_env() -> None:
+    """Loads environment variables from a .env file if it exists."""
+    tools_dir = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.abspath(os.path.join(tools_dir, '..', '..'))
+
+    paths_to_try = [
+        os.path.join(os.getcwd(), '.env'),
+        os.path.join(repo_root, '.env'),
+    ]
+
+    loaded = set()
+    for path in paths_to_try:
+        path = os.path.abspath(path)
+        if path in loaded or not os.path.exists(path):
+            continue
+        loaded.add(path)
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    if '=' not in line:
+                        continue
+                    key, val = line.split('=', 1)
+                    key = key.strip()
+                    val = val.strip()
+                    if ((val.startswith('"') and val.endswith('"')) or
+                            (val.startswith("'") and val.endswith("'"))):
+                        val = val[1:-1]
+                    if key not in os.environ:
+                        os.environ[key] = val
+        except Exception as e:
+            print(f"Warning: Failed to read .env file at {path}: {e}")
+
+
+# Automatically load environment variables from .env files on import.
+_load_env()
 
 
 @dataclasses.dataclass
@@ -78,15 +122,17 @@ class SimulatorManager:
                 # Only process iOS runtimes.
                 if 'iOS' not in runtime:
                     continue
-                os_version = runtime.split('iOS-')[-1].replace('-', '.')
+                os_version_full = runtime.split('iOS-')[-1].replace('-', '.')
+                # Use only major.minor version for xcodebuild compatibility.
+                os_version = '.'.join(os_version_full.split('.')[:2])
                 for device in devices:
                     self.simulators.append(
                         Simulator(name=device.get('name', ''),
                                   udid=device.get('udid', ''),
                                   os_version=os_version,
                                   state=device.get('state', ''),
-                                  is_available=device.get('isAvailable',
-                                                          False)))
+                                  is_available=device.get(
+                                      'isAvailable', False)))
         except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
             print(f"Error fetching simulator list: {e}")
 
@@ -100,14 +146,15 @@ class SimulatorManager:
     def find_specific_device(self, identifier: str) -> Optional[Simulator]:
         """Finds a specific device by name or UDID."""
         for sim in self.simulators:
-            if sim.name.lower() == identifier.lower() or sim.udid == identifier:
+            if sim.name.lower() == identifier.lower(
+            ) or sim.udid == identifier:
                 return sim
         return None
 
     def find_best_available_device(self) -> Optional[Simulator]:
         """Finds the best available iPhone simulator to use as a default."""
         best_candidate = None
-        best_sdk_version = (0,)
+        best_sdk_version = (0, )
         best_iphone_version = 0
 
         for sim in self.simulators:
@@ -134,14 +181,16 @@ class SimulatorManager:
             os_version: Optional[str] = None) -> Optional[Simulator]:
         """Finds a device that matches a specific type and OS version."""
         best_candidate = None
-        best_sdk_version = (0,)
+        best_sdk_version = (0, )
 
         for sim in self.simulators:
             if not sim.is_available or sim.name.lower() != device_type.lower():
                 continue
 
             if os_version:
-                if sim.os_version == os_version:
+                # Truncate input os_version to major.minor for comparison.
+                os_version_truncated = '.'.join(os_version.split('.')[:2])
+                if sim.os_version == os_version_truncated:
                     return sim
             else:
                 current_sdk_version = sim.parsed_os_version
@@ -163,6 +212,16 @@ def find_and_boot_simulator(device_type: Optional[str],
         A Simulator object for the selected device, or None on failure.
     """
     print_header("--- Selecting Simulator ---")
+
+    env_device = os.environ.get('IOS_SIMULATOR_DEFAULT_DEVICE')
+    env_os = os.environ.get('IOS_SIMULATOR_DEFAULT_OS')
+
+    if not device_type and env_device:
+        device_type = env_device
+        print(f"Using default simulator device from environment: {device_type}")
+    if not os_version and env_os:
+        os_version = env_os
+        print(f"Using default simulator OS from environment: {os_version}")
     sim_manager = SimulatorManager()
     if not sim_manager.simulators:
         return None
@@ -171,13 +230,29 @@ def find_and_boot_simulator(device_type: Optional[str],
 
     # 1. If a specific device is requested, try to find it.
     if device_type:
-        simulator_to_use = sim_manager.find_device_by_type_and_version(
-            device_type, os_version)
-        if not simulator_to_use:
-            print(f"Could not find a simulator for device '{device_type}' "
-                  f"and OS '{os_version}'.")
-            sim_manager.list_available_simulators()
-            return None
+        is_udid = False
+        try:
+            uuid.UUID(device_type)
+            is_udid = True
+        except ValueError:
+            pass
+
+        if is_udid:
+            for sim in sim_manager.simulators:
+                if sim.udid.lower() == device_type.lower():
+                    simulator_to_use = sim
+                    break
+            if not simulator_to_use:
+                print(f"Could not find a simulator with UDID '{device_type}'.")
+                return None
+        else:
+            simulator_to_use = sim_manager.find_device_by_type_and_version(
+                device_type, os_version)
+            if not simulator_to_use:
+                print(f"Could not find a simulator for device '{device_type}' "
+                      f"and OS '{os_version}'.")
+                sim_manager.list_available_simulators()
+                return None
 
     # 2. If no device was specified, look for an already booted one.
     if not simulator_to_use:
@@ -197,7 +272,8 @@ def find_and_boot_simulator(device_type: Optional[str],
             return None
 
     print(
-        f"{Colors.BLUE}Device: {simulator_to_use.display_string}{Colors.RESET}")
+        f"{Colors.BLUE}Device: {simulator_to_use.display_string}{Colors.RESET}"
+    )
 
     # Boot the selected device if it's not already running.
     if not simulator_to_use.booted:
@@ -211,3 +287,87 @@ def find_and_boot_simulator(device_type: Optional[str],
             print(f"Error booting simulator: {e}")
             return None
     return simulator_to_use
+
+
+class SimulatorLogStreamer:
+    """Streams logs from the simulator in the background."""
+
+    def __init__(self,
+                 simulator_udid: str,
+                 out_dir: str,
+                 scheme: str,
+                 predicate: str,
+                 show_in_stdout: bool = False):
+        self.simulator_udid = simulator_udid
+        self.out_dir = out_dir
+        self.scheme = scheme
+        self.predicate = predicate
+        self.show_in_stdout = show_in_stdout
+        self.proc = None
+        self.safe_scheme = re.sub(r'[^a-zA-Z0-9_]', '_', scheme)
+        self.log_file_path = os.path.join(
+            out_dir, f'app_logs_{self.safe_scheme}_{os.getpid()}.log')
+        self.thread = None
+        self.log_file = None
+
+    def start(self):
+        os.makedirs(self.out_dir, exist_ok=True)
+
+        # Keep only the 5 most recent log files for this scheme to limit
+        # disk usage.
+        try:
+            pattern = os.path.join(self.out_dir,
+                                   f'app_logs_{self.safe_scheme}_*.log')
+            existing_logs = glob.glob(pattern)
+            if len(existing_logs) >= 5:
+                existing_logs.sort(key=os.path.getmtime)
+                for old_log in existing_logs[:-4]:
+                    os.remove(old_log)
+        except Exception:
+            pass
+
+        cmd = [
+            'xcrun', 'simctl', 'spawn', self.simulator_udid, 'log', 'stream',
+            '--level', 'debug', '--style', 'syslog', '--predicate',
+            self.predicate
+        ]
+
+        self.log_file = open(self.log_file_path,
+                             'w',
+                             encoding='utf-8',
+                             errors='replace')
+
+        self.proc = subprocess.Popen(cmd,
+                                     stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT,
+                                     encoding='utf-8',
+                                     errors='replace')
+
+        def read_loop():
+            for line in self.proc.stdout:
+                self.log_file.write(line)
+                self.log_file.flush()
+                if self.show_in_stdout:
+                    print(f"{Colors.CYAN}[AppLog]{Colors.RESET} {line.strip()}")
+
+        self.thread = threading.Thread(target=read_loop, daemon=True)
+        self.thread.start()
+        print(
+            f"{Colors.BLUE}Streaming app logs to: "
+            f"{self.log_file_path}{Colors.RESET}"
+        )
+
+    def stop(self):
+        if self.proc:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait()
+
+        if self.thread:
+            self.thread.join()
+
+        if self.log_file:
+            self.log_file.close()

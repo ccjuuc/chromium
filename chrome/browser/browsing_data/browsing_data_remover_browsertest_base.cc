@@ -9,18 +9,20 @@
 #include <utility>
 #include <vector>
 
+#include "base/base64.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
+#include "base/strings/strcat.h"
 #include "base/test/bind.h"
+#include "base/test/run_until.h"
 #include "base/test/test_future.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/browsing_data/browsing_data_file_system_util.h"
 #include "chrome/browser/browsing_data/chrome_browsing_data_model_delegate.h"
 #include "chrome/browser/browsing_data/counters/site_data_counting_helper.h"
 #include "chrome/browser/net/system_network_context_manager.h"
@@ -30,6 +32,7 @@
 #include "chrome/test/base/chrome_test_utils.h"
 #include "components/browsing_data/content/browsing_data_model.h"
 #include "components/browsing_data/content/browsing_data_test_util.h"
+#include "components/services/storage/public/cpp/filesystem/filesystem_impl.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/storage_partition.h"
@@ -100,16 +103,6 @@ class DownloadManagerWaiter : public content::DownloadManager::Observer {
   bool initialized_;
   raw_ptr<content::DownloadManager> download_manager_;
 };
-
-// Check if |file| matches any regex in |ignore_file_patterns|.
-bool ShouldIgnoreFile(const std::string& file,
-                      const std::vector<std::string>& ignore_file_patterns) {
-  for (const std::string& pattern : ignore_file_patterns) {
-    if (RE2::PartialMatch(file, pattern))
-      return true;
-  }
-  return false;
-}
 
 }  // namespace
 
@@ -239,6 +232,13 @@ int BrowsingDataRemoverBrowserTestBase::GetSiteDataCount(
   return count;
 }
 
+bool BrowsingDataRemoverBrowserTestBase::WaitForSiteDataCount(
+    int expected_count,
+    content::WebContents* web_contents) {
+  return base::test::RunUntil(
+      [&]() { return GetSiteDataCount(web_contents) == expected_count; });
+}
+
 network::mojom::NetworkContext*
 BrowsingDataRemoverBrowserTestBase::network_context() {
   return GetProfile()->GetDefaultStoragePartition()->GetNetworkContext();
@@ -266,21 +266,24 @@ Profile* BrowsingDataRemoverBrowserTestBase::GetProfile() {
 #if BUILDFLAG(IS_ANDROID)
   return chrome_test_utils::GetProfile(this);
 #else
-  return GetBrowser()->profile();
+  return GetBrowser()->GetProfile();
 #endif
 }
 
-bool BrowsingDataRemoverBrowserTestBase::CheckUserDirectoryForString(
+// static
+void BrowsingDataRemoverBrowserTestBase::CheckUserDirectoryForString(
     const std::string& hostname,
     const std::vector<std::string>& ignore_file_patterns,
-    bool check_leveldb_content) {
-  base::FilePath user_data_dir =
-      g_browser_process->profile_manager()->user_data_dir();
+    bool check_leveldb_content,
+    bool strict_checking,
+    base::FilePath user_data_dir) {
+  if (user_data_dir.empty()) {
+    user_data_dir = g_browser_process->profile_manager()->user_data_dir();
+  }
   base::ScopedAllowBlockingForTesting allow_blocking;
   base::FileEnumerator enumerator(
       user_data_dir, true /* recursive */,
       base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES);
-  int found = 0;
   for (base::FilePath path = enumerator.Next(); !path.empty();
        path = enumerator.Next()) {
     // Remove |user_data_dir| part from path.
@@ -288,14 +291,26 @@ bool BrowsingDataRemoverBrowserTestBase::CheckUserDirectoryForString(
         path.NormalizePathSeparatorsTo('/').AsUTF8Unsafe().substr(
             user_data_dir.AsUTF8Unsafe().length());
 
+    // Ignore LevelDB LOCK files in strict checking mode. These don't contain
+    // data anyway. In non-strict mode, the output when failing to read these
+    // files is just advisory, so they needn't be skipped.
+    auto ignore_file_patterns_copy = ignore_file_patterns;
+    if (strict_checking) {
+      ignore_file_patterns_copy.push_back("LOCK");
+    }
+    if (std::any_of(ignore_file_patterns_copy.begin(),
+                    ignore_file_patterns_copy.end(),
+                    [&file](const std::string& pattern) {
+                      return RE2::PartialMatch(file, pattern);
+                    })) {
+      LOG(INFO) << "Ignored: " << file;
+      continue;
+    }
+
     // Check file name.
     if (file.find(hostname) != std::string::npos) {
-      if (ShouldIgnoreFile(file, ignore_file_patterns)) {
-        LOG(INFO) << "Ignored: " << file;
-      } else {
-        found++;
-        LOG(WARNING) << "Found file name: " << file;
-      }
+      ADD_FAILURE() << "Found file name: " << file << " containing "
+                    << hostname;
     }
 
     // Check leveldb content.
@@ -308,6 +323,25 @@ bool BrowsingDataRemoverBrowserTestBase::CheckUserDirectoryForString(
       std::unique_ptr<leveldb::DB> db;
       std::string db_file = path.DirName().AsUTF8Unsafe();
       auto status = leveldb_env::OpenDB(leveldb_env::Options(), db_file, &db);
+
+      // The database may still be locked. In particular this happens when a
+      // DB is not closed on shutdown (some tasks are skipped for the sake of
+      // performance). Move the LOCK file so that we can open the database,
+      // clear the bookkeeping in `FilesystemImpl`, and try again to open it.
+      // Unfortunately this hack doesn't work on Windows where an open file
+      // can't be moved.
+      bool break_leveldb_locks = strict_checking;
+#if BUILDFLAG(IS_WIN)
+      break_leveldb_locks = false;
+#endif
+      if (!status.ok() && break_leveldb_locks) {
+        base::FilePath lock_file = path.DirName().AppendASCII("LOCK");
+        storage::FilesystemImpl::UnlockFileLocal(lock_file);
+        EXPECT_TRUE(base::ReplaceFile(
+            lock_file, lock_file.AddExtensionASCII("old"), nullptr))
+            << "Failed to move lock file: " << lock_file;
+        status = leveldb_env::OpenDB(leveldb_env::Options(), db_file, &db);
+      }
       if (status.ok()) {
         std::unique_ptr<leveldb::Iterator> it(
             db->NewIterator(leveldb::ReadOptions()));
@@ -315,14 +349,19 @@ bool BrowsingDataRemoverBrowserTestBase::CheckUserDirectoryForString(
           std::string entry =
               it->key().ToString() + ":" + it->value().ToString();
           if (entry.find(hostname) != std::string::npos) {
-            LOG(WARNING) << "Found leveldb entry: " << file << " " << entry;
-            found++;
+            ADD_FAILURE() << "Found leveldb entry: " << file << " " << entry;
           }
         }
       } else {
-        // TODO(crbug.com/40784064): Most databases are already open and
-        // the LOCK prevents us from accessing them.
-        LOG(INFO) << "Could not open: " << file << " " << status.ToString();
+        std::string output = base::StrCat(
+            {"Could not open leveldb file: ", file, " - ", status.ToString()});
+        if (break_leveldb_locks) {
+          ADD_FAILURE() << output;
+        } else {
+          // TODO(crbug.com/40784064): Most databases are already open and
+          // the LOCK prevents us from accessing them.
+          LOG(INFO) << output;
+        }
       }
     }
 
@@ -334,25 +373,25 @@ bool BrowsingDataRemoverBrowserTestBase::CheckUserDirectoryForString(
       continue;
     std::string content;
     if (!base::ReadFileToString(path, &content)) {
-      LOG(INFO) << "Could not read: " << file;
+      if (strict_checking) {
+        ADD_FAILURE() << "Could not read: " << file;
+      } else {
+        LOG(INFO) << "Could not read: " << file;
+      }
       continue;
     }
     size_t pos = content.find(hostname);
     if (pos != std::string::npos) {
-      if (ShouldIgnoreFile(file, ignore_file_patterns)) {
-        LOG(INFO) << "Ignored: " << file;
-        continue;
-      }
-      found++;
       // Print surrounding text of the match.
-      std::string partial_content = content.substr(
-          pos < 30 ? 0 : pos - 30,
-          std::min(content.size() - 1, pos + hostname.size() + 30));
-      LOG(WARNING) << "Found file content: " << file << "\n"
-                   << partial_content << "\n" << found;
+      size_t start = pos < 30 ? 0 : pos - 30;
+      size_t end = std::min(content.size(), pos + hostname.size() + 30);
+      std::string partial_content_b64 =
+          base::Base64Encode(content.substr(start, end - start));
+      ADD_FAILURE() << "Found file content: " << file << "\n"
+                    << "  which had partial_content (base64 encoded): "
+                    << partial_content_b64;
     }
   }
-  return found;
 }
 
 std::unique_ptr<BrowsingDataModel>
@@ -373,7 +412,7 @@ bool BrowsingDataRemoverBrowserTestBase::SetGaiaCookieForProfile(
       "SAPISID", std::string(), "." + google_url.GetHost(), "/", base::Time(),
       base::Time(), base::Time(), base::Time(), /*secure=*/true,
       /*httponly=*/false, net::CookieSameSite::NO_RESTRICTION,
-      net::COOKIE_PRIORITY_DEFAULT);
+      net::COOKIE_PRIORITY_DEFAULT, net::CookieSourceType::kOther);
   bool success = false;
   base::RunLoop loop;
   base::OnceCallback<void(net::CookieAccessResult)> callback =

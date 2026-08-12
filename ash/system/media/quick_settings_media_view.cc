@@ -111,23 +111,27 @@ END_METADATA
 
 QuickSettingsMediaView::QuickSettingsMediaView(
     QuickSettingsMediaViewController* controller)
-    : controller_(controller) {
+    : controller_(controller) {}
+
+QuickSettingsMediaView::~QuickSettingsMediaView() = default;
+
+void QuickSettingsMediaView::Init() {
+  CHECK(controller_->pagination_model());
   // All the views need to paint to layer so that the pagination view can be
   // placed floating above the media scroll view.
-  media_scroll_view_ =
-      AddChildView(std::make_unique<MediaScrollView>(this, &pagination_model_));
+  media_scroll_view_ = AddChildView(
+      std::make_unique<MediaScrollView>(this, controller_->pagination_model()));
 
-  pagination_view_ =
-      AddChildView(std::make_unique<PaginationView>(&pagination_model_));
+  pagination_view_ = AddChildView(
+      std::make_unique<PaginationView>(controller_->pagination_model()));
   pagination_view_->SetPaintToLayer();
   pagination_view_->layer()->SetFillsBoundsOpaquely(false);
 
   pagination_controller_ = std::make_unique<PaginationController>(
-      &pagination_model_, PaginationController::SCROLL_AXIS_HORIZONTAL,
+      controller_->pagination_model(),
+      PaginationController::SCROLL_AXIS_HORIZONTAL,
       base::BindRepeating([](ui::EventType) {}));
 }
-
-QuickSettingsMediaView::~QuickSettingsMediaView() = default;
 
 ///////////////////////////////////////////////////////////////////////////////
 // views::View implementations:
@@ -172,26 +176,26 @@ void QuickSettingsMediaView::OnGestureEvent(ui::GestureEvent* event) {
 void QuickSettingsMediaView::ShowItem(
     const std::string& id,
     std::unique_ptr<global_media_controls::MediaItemUIView> item) {
-  DCHECK(!base::Contains(items_, id));
+  DCHECK(!items_.contains(id));
   items_[id] = media_scroll_view_->contents()->AddChildView(std::move(item));
 
   // Set the updated size of the media item based on the number of media items.
   items_[id]->SetPreferredSize(
       gfx::Size(kMediaViewWidth, GetMediaViewHeight()));
 
-  pagination_model_.SetTotalPages(items_.size());
+  controller_->pagination_model()->SetTotalPages(items_.size());
   PreferredSizeChanged();
   controller_->SetShowMediaView(true);
 }
 
 void QuickSettingsMediaView::HideItem(const std::string& id) {
-  if (!base::Contains(items_, id)) {
+  if (!items_.contains(id)) {
     return;
   }
   media_scroll_view_->contents()->RemoveChildViewT(items_[id]);
   items_.erase(id);
 
-  pagination_model_.SetTotalPages(items_.size());
+  controller_->pagination_model()->SetTotalPages(items_.size());
   PreferredSizeChanged();
   controller_->SetShowMediaView(!items_.empty());
 }

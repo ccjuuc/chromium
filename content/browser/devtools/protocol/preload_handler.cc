@@ -19,6 +19,8 @@
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/prefetch_service_delegate.h"
+#include "net/http/http_request_headers.h"
+#include "services/network/public/cpp/headers_matcher.h"
 
 namespace content::protocol {
 
@@ -193,6 +195,10 @@ Preload::PrerenderFinalStatus PrerenderFinalStatusToProtocol(
       return Preload::PrerenderFinalStatusEnum::BrowsingDataRemoved;
     case PrerenderFinalStatus::kPrerenderHostReused:
       return Preload::PrerenderFinalStatusEnum::PrerenderHostReused;
+    case PrerenderFinalStatus::kFormSubmitWhenPrerendering:
+      return Preload::PrerenderFinalStatusEnum::FormSubmitWhenPrerendering;
+    case PrerenderFinalStatus::kCrossDocumentRestart:
+      return Preload::PrerenderFinalStatusEnum::CrossDocumentRestart;
   }
 }
 
@@ -293,6 +299,11 @@ Preload::PrefetchStatus PrefetchStatusToProtocol(PrefetchStatus status) {
     case PrefetchStatus::kPrefetchEvictedAfterBrowsingDataRemoved:
       return Preload::PrefetchStatusEnum::
           PrefetchEvictedAfterBrowsingDataRemoved;
+    case PrefetchStatus::kPrefetchCancelledOnUserNavigation:
+      return Preload::PrefetchStatusEnum::PrefetchCancelledOnUserNavigation;
+    case PrefetchStatus::kPrefetchIneligibleBlockedByConnectionAllowlist:
+      return Preload::PrefetchStatusEnum::
+          PrefetchNotEligibleBlockedByConnectionAllowlist;
   }
 }
 
@@ -410,12 +421,14 @@ void PreloadHandler::DidUpdatePrerenderStatus(
     const base::UnguessableToken& initiator_devtools_navigation_token,
     blink::mojom::SpeculationAction action,
     const GURL& prerender_url,
+    bool form_submission,
     std::optional<blink::mojom::SpeculationTargetHint> target_hint,
     const base::UnguessableToken& preload_pipeline_id,
     PreloadingTriggeringOutcome status,
     std::optional<PrerenderFinalStatus> prerender_status,
     std::optional<std::string> disallowed_mojo_interface,
-    const std::vector<PrerenderMismatchedHeaders>* mismatched_headers) {
+    const std::vector<network::MismatchedHttpRequestHeader>*
+        mismatched_headers) {
   if (!enabled_) {
     return;
   }
@@ -426,6 +439,9 @@ void PreloadHandler::DidUpdatePrerenderStatus(
           .SetAction(SpeculationActionToProtocol(action))
           .SetUrl(prerender_url.spec())
           .Build();
+  if (form_submission) {
+    preloading_attempt_key->SetFormSubmission(true);
+  }
   std::optional<protocol::Preload::SpeculationTargetHint> protocol_target_hint =
       GetProtocolSpeculationTargetHint(target_hint);
   if (protocol_target_hint.has_value()) {
@@ -449,15 +465,15 @@ void PreloadHandler::DidUpdatePrerenderStatus(
     for (const auto& mismatched_headers_it : *mismatched_headers) {
       auto protocol_mismatched_headers =
           protocol::Preload::PrerenderMismatchedHeaders::Create()
-              .SetHeaderName(mismatched_headers_it.header_name)
+              .SetHeaderName(mismatched_headers_it.lowered_key)
               .Build();
-      if (mismatched_headers_it.initial_value) {
+      if (mismatched_headers_it.expected_value) {
         protocol_mismatched_headers->SetInitialValue(
-            mismatched_headers_it.initial_value.value());
+            mismatched_headers_it.expected_value.value());
       }
-      if (mismatched_headers_it.activation_value) {
+      if (mismatched_headers_it.actual_value) {
         protocol_mismatched_headers->SetActivationValue(
-            mismatched_headers_it.activation_value.value());
+            mismatched_headers_it.actual_value.value());
       }
       mismatched_headers_internal->push_back(
           std::move(protocol_mismatched_headers));
@@ -576,10 +592,9 @@ void PreloadHandler::SendCurrentPreloadStatus() {
     for (const auto& [key, data] : preload_storage->prerender_data_map()) {
       DidUpdatePrerenderStatus(
           initiator_devtools_navigation_token,
-          blink::mojom::SpeculationAction::kPrerender,
-          /*prerender_url=*/key.first,
-          /*target_hint=*/key.second, data.preload_pipeline_id, data.outcome,
-          data.status, data.disallowed_mojo_interface,
+          blink::mojom::SpeculationAction::kPrerender, key.prerender_url,
+          key.form_submission, key.target_hint, data.preload_pipeline_id,
+          data.outcome, data.status, data.disallowed_mojo_interface,
           data.mismatched_headers.empty() ? nullptr : &data.mismatched_headers);
     }
     for (const auto& [key, data] :
@@ -587,9 +602,9 @@ void PreloadHandler::SendCurrentPreloadStatus() {
       DidUpdatePrerenderStatus(
           initiator_devtools_navigation_token,
           blink::mojom::SpeculationAction::kPrerenderUntilScript,
-          /*prerender_url=*/key.first,
-          /*target_hint=*/key.second, data.preload_pipeline_id, data.outcome,
-          data.status, data.disallowed_mojo_interface,
+          key.prerender_url, key.form_submission, key.target_hint,
+          data.preload_pipeline_id, data.outcome, data.status,
+          data.disallowed_mojo_interface,
           data.mismatched_headers.empty() ? nullptr : &data.mismatched_headers);
     }
   }

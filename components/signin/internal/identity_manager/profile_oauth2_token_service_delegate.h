@@ -17,10 +17,13 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/observer_list.h"
+#include "base/timer/elapsed_timer.h"
 #include "build/build_config.h"
 #include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/load_credentials_state.h"
+#include "components/signin/public/identity_manager/token_binding_info.h"
+#include "crypto/signature_verifier.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "google_apis/gaia/oauth2_access_token_manager.h"
@@ -32,6 +35,7 @@
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
 #include "components/signin/internal/identity_manager/token_binding_helper.h"
+#include "components/signin/public/base/binding_key_registration_token_result.h"
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
 #if BUILDFLAG(IS_IOS)
@@ -47,6 +51,7 @@ class OAuth2AccessTokenFetcher;
 class OAuth2AccessTokenConsumer;
 class ProfileOAuth2TokenServiceObserver;
 class ProfileOAuth2TokenService;
+class FakeProfileOAuth2TokenServiceDelegate;
 
 // Abstract base class to fetch and maintain refresh tokens from various
 // entities. Concrete subclasses should implement RefreshTokenIsAvailable and
@@ -109,15 +114,36 @@ class ProfileOAuth2TokenServiceDelegate {
                                bool fire_auth_error_changed = true);
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  // Asynchronously generates a registration token for binding a refresh token
+  // to a shared binding key.
+  // `supported_algorithms` is a list of acceptable signature algorithms. This
+  // parameter may be ignored if an existing binding key is reused instead of
+  // generating a new one.
+  // Returns false if the generation cannot be started. In that case, `callback`
+  // will not be invoked.
+  virtual bool GenerateBindingKeyRegistrationToken(
+      base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
+          supported_algorithms,
+      std::string_view auth_code,
+      base::OnceCallback<
+          void(std::optional<signin::BindingKeyRegistrationTokenResult>)>
+          callback) = 0;
+
   // Returns true iff (a) a refresh token exists for `account_id`, and (b) the
   // refresh token is bound to a device.
-  virtual bool IsRefreshTokenBound(const CoreAccountId& account_id) const = 0;
+  virtual bool IsRefreshTokenBoundToKey(
+      const CoreAccountId& account_id) const = 0;
 
   // Returns the wrapped binding key of a refresh token associated with
   // `account_id`, if any.
   // Returns a non-empty vector iff (a) a refresh token exists for `account_id`,
   // and (b) the refresh token is bound to a device.
   virtual std::vector<uint8_t> GetWrappedBindingKey(
+      const CoreAccountId& account_id) const = 0;
+
+  // Returns true if a refresh token exists for `account_id` and it is bound to
+  // an mTLS certificate.
+  virtual bool IsRefreshTokenBoundToMtls(
       const CoreAccountId& account_id) const = 0;
 
   // Returns whether all bound refresh tokens share the same binding key.
@@ -198,6 +224,10 @@ class ProfileOAuth2TokenServiceDelegate {
   // (`use_backoff` was true in the constructor), or a nullptr otherwise.
   virtual const net::BackoffEntry* BackoffEntry() const;
 
+  // Returns `this` if this delegate is a fake, nullptr otherwise.
+  virtual FakeProfileOAuth2TokenServiceDelegate*
+  AsFakeProfileOAuth2TokenServiceDelegateForTesting();
+
   // -----------------------------------------------------------------------
   // Methods that are only used by ProfileOAuth2TokenService.
   // -----------------------------------------------------------------------
@@ -209,7 +239,7 @@ class ProfileOAuth2TokenServiceDelegate {
       const std::string& refresh_token,
       signin_metrics::SourceForRefreshTokenOperation source =
           signin_metrics::SourceForRefreshTokenOperation::kUnknown,
-      const std::vector<uint8_t>& wrapped_binding_key = std::vector<uint8_t>());
+      const signin::TokenBindingInfo& token_binding_info = {});
 
   // Redirects to `RevokeCredentialsInternal()` which can be overridden by
   // subclasses. Sets the source for the refresh token operation.
@@ -353,7 +383,7 @@ class ProfileOAuth2TokenServiceDelegate {
   virtual void UpdateCredentialsInternal(
       const CoreAccountId& account_id,
       const std::string& refresh_token,
-      const std::vector<uint8_t>& wrapped_binding_key) {}
+      const signin::TokenBindingInfo& token_binding_info) {}
 
   virtual void RevokeCredentialsInternal(const CoreAccountId& account_id) {}
 
@@ -365,11 +395,20 @@ class ProfileOAuth2TokenServiceDelegate {
 
   // List of observers to notify when refresh token availability changes.
   // Makes sure list is empty on destruction.
-  base::ObserverList<ProfileOAuth2TokenServiceObserver, true> observer_list_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      ProfileOAuth2TokenServiceObserver,
+      /*check_empty=*/true,
+      /*allow_reentrancy=*/
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observer_list_;
 
   // The state of the load credentials operation.
   signin::LoadCredentialsState load_credentials_state_ =
       signin::LoadCredentialsState::LOAD_CREDENTIALS_NOT_STARTED;
+
+  // The timer measuring the duration of the load credentials operation.
+  std::optional<base::ElapsedTimer> load_credentials_timer_;
 
   void StartBatchChanges();
   void EndBatchChanges();

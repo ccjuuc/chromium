@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <vector>
 
 #include "ash/constants/ash_features.h"
@@ -10,7 +11,6 @@
 #include "base/barrier_closure.h"
 #include "base/check_deref.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/enum_set.h"
 #include "base/notreached.h"
 #include "base/test/bind.h"
@@ -26,8 +26,8 @@
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chromeos/constants/pref_names.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/keyed_service/core/dependency_graph.h"
 #include "components/keyed_service/core/keyed_service_base_factory.h"
@@ -129,9 +129,9 @@ bool SetCookie(network::mojom::CookieManager* cookie_manager,
                const GURL& url,
                const std::string& cookie_line) {
   auto cookie = net::CanonicalCookie::CreateForTesting(
-      url, cookie_line, base::Time::Now(),
+      url, cookie_line, base::Time::Now(), net::CookieSourceType::kHTTP,
       /*server_time=*/std::nullopt,
-      /*cookie_partition_key=*/std::nullopt, net::CookieSourceType::kHTTP);
+      /*cookie_partition_key=*/std::nullopt);
 
   return SetCookie(cookie_manager, url, *cookie);
 }
@@ -194,7 +194,7 @@ class FloatingSsoTest : public policy::PolicyTest {
   }
 
   void SetFloatingSsoDomainBlocklistPolicy(const std::string& domain) {
-    base::Value::List domains;
+    base::ListValue domains;
     domains.Append(domain);
     policy::PolicyTest::SetPolicy(&policies_,
                                   policy::key::kFloatingSsoDomainBlocklist,
@@ -204,7 +204,7 @@ class FloatingSsoTest : public policy::PolicyTest {
 
   void SetFloatingSsoDomainBlocklistExceptionsPolicy(
       const std::string& domain) {
-    base::Value::List domains;
+    base::ListValue domains;
     if (!domain.empty()) {
       domains.Append(domain);
     }
@@ -233,7 +233,7 @@ class FloatingSsoTest : public policy::PolicyTest {
                              ->GetDependencyGraphForTesting()
                              .GetConstructionOrder(&nodes);
     EXPECT_TRUE(success);
-    return base::Contains(
+    return std::ranges::contains(
         nodes, "FloatingSsoService",
         [](const DependencyNode* node) -> std::string_view {
           return static_cast<const KeyedServiceBaseFactory*>(node)->name();
@@ -243,12 +243,12 @@ class FloatingSsoTest : public policy::PolicyTest {
   bool IsFloatingSsoSessionCookiesIncludedPolicyManaged() {
     const PrefService::Preference* floating_sso_session_cookies_pref =
         profile()->GetPrefs()->FindPreference(
-            ::prefs::kFloatingSsoSessionCookiesIncluded);
+            chromeos::prefs::kFloatingSsoSessionCookiesIncluded);
 
     return CHECK_DEREF(floating_sso_session_cookies_pref).IsManaged();
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   FloatingSsoService& floating_sso_service() {
     return CHECK_DEREF(FloatingSsoServiceFactory::GetForProfile(profile()));
@@ -611,7 +611,7 @@ IN_PROC_BROWSER_TEST_F(FloatingSsoTest, FiltersOutCookiesWithNonHttpSource) {
   // cookie with such source type to the browser, and verify that it's not being
   // synced.
   for (net::CookieSourceType source :
-       base::EnumSet<net::CookieSourceType, net::CookieSourceType::kUnknown,
+       base::EnumSet<net::CookieSourceType, net::CookieSourceType::kHTTP,
                      net::CookieSourceType::kMaxValue>::All()) {
     if (source == net::CookieSourceType::kHTTP) {
       continue;
@@ -619,9 +619,9 @@ IN_PROC_BROWSER_TEST_F(FloatingSsoTest, FiltersOutCookiesWithNonHttpSource) {
     const GURL url("https://example.com");
     std::unique_ptr<net::CanonicalCookie> cookie =
         net::CanonicalCookie::CreateForTesting(
-            url, kPersistentCookieLine, base::Time::Now(),
+            url, kPersistentCookieLine, base::Time::Now(), source,
             /*server_time=*/std::nullopt,
-            /*cookie_partition_key=*/std::nullopt, source);
+            /*cookie_partition_key=*/std::nullopt);
     ASSERT_TRUE(SetCookie(cookie_manager(), url, *cookie));
     // Verify that nothing is added to Sync store.
     EXPECT_EQ(store_entries.size(), 0u);

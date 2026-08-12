@@ -12,7 +12,6 @@
 #import "base/notreached.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/elements/form_input_accessory_view_text_data.h"
-#import "ios/chrome/common/ui/elements/gradient_view.h"
 #import "ios/chrome/common/ui/util/background_util.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 
@@ -132,6 +131,9 @@ const CGFloat kLargeKeyboardAccessoryHeight = 59;
 NSString* const kFormInputAccessoryViewAccessibilityID =
     @"kFormInputAccessoryViewAccessibilityID";
 
+NSString* const kFormInputAccessoryViewAtMemoryButtonAccessibilityIdentifier =
+    @"kFormInputAccessoryViewAtMemoryButtonAccessibilityIdentifier";
+
 NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
     @"kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID";
 
@@ -152,6 +154,8 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
 
 @property(nonatomic, weak) UIButton* addressManualFillButton;
 
+@property(nonatomic, weak) UIButton* atMemoryManualFillButton;
+
 @property(nonatomic, weak) UIView* leadingView;
 
 @property(nonatomic, weak) UIView* trailingView;
@@ -163,6 +167,8 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
 @property(nonatomic, strong) UIImage* creditCardManualFillSymbol;
 
 @property(nonatomic, strong) UIImage* addressManualFillSymbol;
+
+@property(nonatomic, strong) UIImage* atMemoryManualFillSymbol;
 
 @property(nonatomic, strong) UIImage* closeButtonSymbol;
 
@@ -185,6 +191,8 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
   UIView* _backgroundView;
   // Whether we are using the large accessory view.
   BOOL _largeAccessoryViewEnabled;
+  // Whether the AtMemory button is hidden.
+  BOOL _atMemoryButtonHidden;
   // Whether we are using the small width accessory view.
   BOOL _smallWidthAccessoryViewEnabled;
   // Whether the current form factor is a tablet.
@@ -206,12 +214,13 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
   NSLayoutConstraint* _splitViewSpacingConstraint;
   // Trailing constraint in compact mode (tablet only).
   NSLayoutConstraint* _compactTrailingConstraint;
-  // Whether split view is enabled.
-  BOOL _splitViewEnabled;
+
   // The close button for closing the keyboard accessory.
   UIButton* _closeButton;
   // Current subitem group that is visible.
   FormInputAccessoryViewSubitemGroup _currentGroup;
+  // Container view for the close button when split view is enabled.
+  UIView* _closeButtonContainerView;
 }
 
 #pragma mark - Public
@@ -231,6 +240,7 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
         passwordManualFillSymbol:nil
       creditCardManualFillSymbol:nil
          addressManualFillSymbol:nil
+        atMemoryManualFillSymbol:nil
                closeButtonSymbol:nil];
 }
 
@@ -240,13 +250,12 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
       passwordManualFillSymbol:(UIImage*)passwordManualFillSymbol
     creditCardManualFillSymbol:(UIImage*)creditCardManualFillSymbol
        addressManualFillSymbol:(UIImage*)addressManualFillSymbol
+      atMemoryManualFillSymbol:(UIImage*)atMemoryManualFillSymbol
              closeButtonSymbol:(UIImage*)closeButtonSymbol
-              splitViewEnabled:(BOOL)splitViewEnabled
             isTabletFormFactor:(BOOL)isTabletFormFactor {
   DCHECK(manualFillSymbol);
   _largeAccessoryViewEnabled = YES;
   _isTabletFormFactor = isTabletFormFactor;
-  _splitViewEnabled = splitViewEnabled;
   [self setUpWithLeadingView:leadingView
               customTrailingView:nil
               navigationDelegate:delegate
@@ -254,6 +263,7 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
         passwordManualFillSymbol:passwordManualFillSymbol
       creditCardManualFillSymbol:creditCardManualFillSymbol
          addressManualFillSymbol:addressManualFillSymbol
+        atMemoryManualFillSymbol:atMemoryManualFillSymbol
                closeButtonSymbol:closeButtonSymbol];
 }
 
@@ -261,6 +271,20 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
   _omniboxTypingShieldHeightConstraint.constant = typingShieldHeight;
   if (self.window) {
     [self layoutIfNeeded];
+  }
+}
+
+- (void)setAtMemoryButtonHidden:(BOOL)atMemoryButtonHidden {
+  if (_atMemoryButtonHidden == atMemoryButtonHidden) {
+    return;
+  }
+  _atMemoryButtonHidden = atMemoryButtonHidden;
+  if (self.atMemoryManualFillButton) {
+    BOOL hideManualFillByCategoryButtons =
+        (_currentGroup !=
+         FormInputAccessoryViewSubitemGroup::kManualFillButtons);
+    self.atMemoryManualFillButton.hidden =
+        hideManualFillByCategoryButtons || _atMemoryButtonHidden;
   }
 }
 
@@ -290,46 +314,24 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
   self.passwordManualFillButton.hidden = hideManualFillByCategoryButtons;
   self.creditCardManualFillButton.hidden = hideManualFillByCategoryButtons;
   self.addressManualFillButton.hidden = hideManualFillByCategoryButtons;
+  self.atMemoryManualFillButton.hidden =
+      hideManualFillByCategoryButtons || self.atMemoryButtonHidden;
 
   BOOL hideManualFillButton =
       (group != FormInputAccessoryViewSubitemGroup::kExpandButton);
   self.manualFillButton.hidden = hideManualFillButton;
 
-  if ([self isSplitViewActive]) {
-    BOOL fixedSpacing = !hideManualFillButton;
-    if (_isTabletFormFactor) {
-      // iPad:
-      // The close button is hidden for iPad. The spacing constraint isn't
-      // needed.
-      _splitViewSpacingConstraint.active = NO;
-
-      // In `kDetailedButtons` mode, the effect view's constraint that aligns to
-      // the leading edge of the keyboard accessary has to be disabled. The
-      // `_trailingViewCenteringConstraint` then centers the manual fill buttons
-      // to the center of the keyboard accessory.
-      _effectViewLeadingConstraint.active = fixedSpacing;
-      _trailingViewCenteringConstraint.active = !fixedSpacing;
-      _trailingConstraint.active = fixedSpacing;
-    } else {
-      // iPhone:
-      // The effect view is always aligned to the leading anchor of the keyboard
-      // accessory. `trailingView`, does not need to be centered or aligned to
-      // the trailing anchor of the keyboard accessory.
-      _effectViewLeadingConstraint.active = YES;
-      _trailingViewCenteringConstraint.active = NO;
-      _trailingConstraint.active = NO;
-
-      // In `kExpandButtonOnly` mode:
-      // A fixed space between `trailingView` and the close button is needed.
-      // In `kDetailedButtons` mode:
-      // The space between `trailingView` and the close button is flexible.
-      _splitViewSpacingConstraint.active = fixedSpacing;
-    }
-  }
+  [self updateSplitViewConstraints];
 }
 
 - (FormInputAccessoryViewSubitemGroup)currentGroup {
   return _currentGroup;
+}
+
+- (void)setSubviewsOverrideUserInterfaceStyle:(UIUserInterfaceStyle)style {
+  self.trailingView.overrideUserInterfaceStyle = style;
+  _closeButtonContainerView.overrideUserInterfaceStyle = style;
+  _closeButton.overrideUserInterfaceStyle = style;
 }
 
 #pragma mark - UIInputViewAudioFeedback
@@ -353,7 +355,43 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
 
 // Whether split view is in use.
 - (BOOL)isSplitViewActive {
-  return [self isLiquidGlassEffectEnabled] && _splitViewEnabled;
+  return [self isLiquidGlassEffectEnabled];
+}
+
+// Updates constraints for the split view.
+- (void)updateSplitViewConstraints {
+  if (![self isSplitViewActive]) {
+    return;
+  }
+  BOOL fixedSpacing = !self.manualFillButton.hidden;
+  if (_isTabletFormFactor) {
+    // iPad:
+    // The close button is hidden for iPad. The spacing constraint isn't
+    // needed.
+    _splitViewSpacingConstraint.active = NO;
+
+    // In `kDetailedButtons` mode, the effect view's constraint that aligns to
+    // the leading edge of the keyboard accessary has to be disabled. The
+    // `_trailingViewCenteringConstraint` then centers the manual fill buttons
+    // to the center of the keyboard accessory.
+    _effectViewLeadingConstraint.active = fixedSpacing;
+    _trailingViewCenteringConstraint.active = !fixedSpacing;
+    _trailingConstraint.active = fixedSpacing;
+  } else {
+    // iPhone:
+    // The effect view is always aligned to the leading anchor of the keyboard
+    // accessory. `trailingView`, does not need to be centered or aligned to
+    // the trailing anchor of the keyboard accessory.
+    _effectViewLeadingConstraint.active = YES;
+    _trailingViewCenteringConstraint.active = NO;
+    _trailingConstraint.active = NO;
+
+    // In `kExpandButtonOnly` mode:
+    // A fixed space between `trailingView` and the close button is needed.
+    // In `kDetailedButtons` mode:
+    // The space between `trailingView` and the close button is flexible.
+    _splitViewSpacingConstraint.active = fixedSpacing;
+  }
 }
 
 // Sets up split view.
@@ -372,9 +410,13 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
   AddSameConstraints(effectView, _closeButton);
 
   [self addSubview:effectView];
+
+  _closeButtonContainerView = effectView;
+
   [NSLayoutConstraint activateConstraints:@[
-    [_closeButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor
-                                                constant:-kSurroundingPadding],
+    [_closeButton.trailingAnchor
+        constraintEqualToAnchor:self.safeAreaLayoutGuide.trailingAnchor
+                       constant:-kSurroundingPadding],
     [_closeButton.widthAnchor
         constraintEqualToConstant:kManualFillCloseButtonWidth],
     [_closeButton.heightAnchor
@@ -420,6 +462,10 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
   [self.delegate formInputAccessoryViewDidTapAddressManualFillButton:self];
 }
 
+- (void)atMemoryManualFillButtonTapped {
+  [self.delegate formInputAccessoryViewDidTapAtMemoryManualFillButton:self];
+}
+
 - (void)omniboxTypingShieldTapped {
   [self.delegate fromInputAccessoryViewDidTapOmniboxTypingShield:self];
 }
@@ -436,6 +482,7 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
       passwordManualFillSymbol:(UIImage*)passwordManualFillSymbol
     creditCardManualFillSymbol:(UIImage*)creditCardManualFillSymbol
        addressManualFillSymbol:(UIImage*)addressManualFillSymbol
+      atMemoryManualFillSymbol:(UIImage*)atMemoryManualFillSymbol
              closeButtonSymbol:(UIImage*)closeButtonSymbol {
   DCHECK(!self.subviews.count);  // This should only be called once.
 
@@ -447,6 +494,7 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
   self.passwordManualFillSymbol = passwordManualFillSymbol;
   self.creditCardManualFillSymbol = creditCardManualFillSymbol;
   self.addressManualFillSymbol = addressManualFillSymbol;
+  self.atMemoryManualFillSymbol = atMemoryManualFillSymbol;
   self.closeButtonSymbol = closeButtonSymbol;
 
   // Attempt to set up the liquid glass effect, otherwise, use the non liquid
@@ -683,6 +731,11 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
     addressManualFillButton.hidden = YES;
     self.addressManualFillButton = addressManualFillButton;
 
+    UIButton* atMemoryManualFillButton =
+        [self createAtMemoryManualFillButtonWithText:textData];
+    atMemoryManualFillButton.hidden = YES;
+    self.atMemoryManualFillButton = atMemoryManualFillButton;
+
     if (_isTabletFormFactor) {
       _closeButton.hidden = YES;
     }
@@ -696,9 +749,9 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
     self.nextButton = nextButton;
 
     navigationView = [[UIStackView alloc] initWithArrangedSubviews:@[
-      previousButton, nextButton, passwordManualFillButton,
-      creditCardManualFillButton, addressManualFillButton, manualFillButton,
-      _closeButton
+      previousButton, nextButton, atMemoryManualFillButton,
+      passwordManualFillButton, creditCardManualFillButton,
+      addressManualFillButton, manualFillButton, _closeButton
     ]];
   } else {
     UIButton* previousButton = [self createPreviousButtonWithText:textData];
@@ -819,8 +872,7 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
 // active.
 - (UIImage*)applySymbolTintForCloseButton:(UIImage*)image {
   if ([self isSplitViewActive]) {
-    return [image imageWithTintColor:[UIColor colorNamed:kStaticBlueColor]
-                       renderingMode:UIImageRenderingModeAlwaysOriginal];
+    return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
   } else {
     return [self applySymbolTint:image];
   }
@@ -864,6 +916,19 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
        createImageButton:self.addressManualFillSymbol
                   action:@selector(addressManualFillButtonTapped)
       accessibilityLabel:textData.addressManualFillButtonAccessibilityLabel];
+}
+
+// Create the AtMemory manual fill button.
+- (UIButton*)createAtMemoryManualFillButtonWithText:
+    (FormInputAccessoryViewTextData*)textData {
+  // TODO(crbug.com/522326512): Verify this button action and accessibility.
+  UIButton* button = [self
+       createImageButton:self.atMemoryManualFillSymbol
+                  action:@selector(atMemoryManualFillButtonTapped)
+      accessibilityLabel:textData.atMemoryManualFillButtonAccessibilityLabel];
+  button.accessibilityIdentifier =
+      kFormInputAccessoryViewAtMemoryButtonAccessibilityIdentifier;
+  return button;
 }
 
 // Create the previous button.
@@ -916,7 +981,13 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
   }
 
   if ([self isSplitViewActive]) {
-    buttonConfiguration.contentInsets = NSDirectionalEdgeInsetsZero;
+    // When the close button symbol is supplied, presumably it is a keyboard
+    // icon. The icon isn't aligned with the icon of the expand button. Extra
+    // inset has to be added to align the icon with the expand button.
+    buttonConfiguration.contentInsets =
+        self.closeButtonSymbol ? NSDirectionalEdgeInsetsMake(
+                                     0, 0, ManualFillCloseButtonBottomInset, 0)
+                               : NSDirectionalEdgeInsetsZero;
     closeButton.translatesAutoresizingMaskIntoConstraints = NO;
   } else {
     buttonConfiguration.contentInsets = NSDirectionalEdgeInsetsMake(
@@ -989,8 +1060,9 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
                                       constant:kSurroundingPadding]
           .active = YES;
       if (![self isSplitViewActive]) {
-        [self.trailingAnchor constraintEqualToAnchor:effectView.trailingAnchor
-                                            constant:kSurroundingPadding]
+        [self.safeAreaLayoutGuide.trailingAnchor
+            constraintEqualToAnchor:effectView.trailingAnchor
+                           constant:kSurroundingPadding]
             .active = YES;
       }
 
@@ -1000,9 +1072,9 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
         [effectView.widthAnchor constraintEqualToConstant:kSmallAccessoryWidth]
             .active = YES;
       } else {
-        _effectViewLeadingConstraint =
-            [self.leadingAnchor constraintEqualToAnchor:effectView.leadingAnchor
-                                               constant:-kSurroundingPadding];
+        _effectViewLeadingConstraint = [self.safeAreaLayoutGuide.leadingAnchor
+            constraintEqualToAnchor:effectView.leadingAnchor
+                           constant:-kSurroundingPadding];
         _effectViewLeadingConstraint.active = YES;
       }
 
@@ -1064,6 +1136,36 @@ NSString* const kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID =
   _omniboxTypingShieldHiddenBottomConstraint.active = hidden;
 
   [self layoutIfNeeded];
+}
+
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent*)event {
+  if (!self.passThroughTouchesEnabled) {
+    return [super pointInside:point withEvent:event];
+  }
+
+  // Check if the point is inside the omnibox typing shield.
+  if (_omniboxTypingShield && !_omniboxTypingShield.hidden) {
+    if ([_omniboxTypingShield
+            pointInside:[self convertPoint:point toView:_omniboxTypingShield]
+              withEvent:event]) {
+      return YES;
+    }
+  }
+
+  // Only receive touches for subviews and let the others go through.
+  for (UIView* subview in self.subviews) {
+    if (subview == _omniboxTypingShield) {
+      continue;
+    }
+    if (subview.hidden || subview.alpha < 0.01) {
+      continue;
+    }
+    if ([subview pointInside:[self convertPoint:point toView:subview]
+                   withEvent:event]) {
+      return YES;
+    }
+  }
+  return NO;
 }
 
 @end

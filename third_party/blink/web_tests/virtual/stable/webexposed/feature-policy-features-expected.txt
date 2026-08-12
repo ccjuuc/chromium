@@ -3,7 +3,6 @@ All changes to this list should go through Blink's feature review process: http:
 
 accelerometer
 aria-notify
-attribution-reporting
 autoplay
 browsing-topics
 camera
@@ -52,8 +51,11 @@ interest-cohort
 join-ad-interest-group
 keyboard-map
 language-detector
+language-model
 local-fonts
+local-network
 local-network-access
+loopback-network
 magnetometer
 microphone
 midi
@@ -69,8 +71,6 @@ publickey-credentials-get
 run-ad-auction
 screen-wake-lock
 serial
-shared-storage
-shared-storage-select-url
 storage-access
 summarizer
 sync-xhr

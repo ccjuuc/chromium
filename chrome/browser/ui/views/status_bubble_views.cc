@@ -608,7 +608,7 @@ DEFINE_ENUM_CONVERTERS(StatusView::BubbleStyle,
                         u"kStandardRight"})
 
 BEGIN_METADATA(StatusView)
-ADD_PROPERTY_METADATA(std::u16string_view, Text)
+ADD_PROPERTY_METADATA(std::u16string, Text)
 ADD_READONLY_PROPERTY_METADATA(StatusView::BubbleState, State)
 ADD_PROPERTY_METADATA(StatusView::BubbleStyle, Style)
 END_METADATA
@@ -760,7 +760,7 @@ void StatusBubbleViews::InitPopup() {
 #if BUILDFLAG(IS_WIN)
     // On Windows use the software compositor to ensure that we don't block
     // the UI thread blocking issue during command buffer creation. We can
-    // revert this change once http://crbug.com/125248 is fixed.
+    // revert this change once http://crbug.com/40198772 is fixed.
     params.force_software_compositing = true;
 #endif
     params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;

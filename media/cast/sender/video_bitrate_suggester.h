@@ -5,13 +5,17 @@
 #ifndef MEDIA_CAST_SENDER_VIDEO_BITRATE_SUGGESTER_H_
 #define MEDIA_CAST_SENDER_VIDEO_BITRATE_SUGGESTER_H_
 
+#include "base/functional/callback.h"
 #include "media/cast/cast_config.h"
 
 namespace media::cast {
 
+// This class is responsible for suggesting a video bitrate based on both the
+// current network conditions and the performance of the encoder (monitored
+// via frame drops).
 class VideoBitrateSuggester {
  public:
-  using GetVideoNetworkBandwidthCB = base::RepeatingCallback<int()>;
+  using GetVideoNetworkBandwidthCB = base::RepeatingCallback<uint32_t()>;
 
   VideoBitrateSuggester(const FrameSenderConfig& config,
                         GetVideoNetworkBandwidthCB get_bitrate_cb);
@@ -23,7 +27,7 @@ class VideoBitrateSuggester {
 
   void RecordShouldDropNextFrame(bool should_drop);
 
-  int GetSuggestedBitrate();
+  uint32_t GetSuggestedBitrate();
 
  private:
   // NOTE: the exponential algorithm is currently undergoing an experiment
@@ -37,11 +41,12 @@ class VideoBitrateSuggester {
   GetVideoNetworkBandwidthCB get_bandwidth_cb_;
 
   // The minimum and maximum bitrates set from the config.
-  const int min_bitrate_ = 0;
-  const int max_bitrate_ = 0;
+  const uint32_t min_bitrate_ = 0;
+  const uint32_t max_bitrate_ = 0;
+  const double max_frame_rate_ = 0;
 
   // The suggested bitrate, factoring in frame drops.
-  int suggested_bitrate_ = 0;
+  uint32_t suggested_bitrate_ = 0;
 
   // We keep track of how many frames get dropped in order to lower the video
   // bitrate when appropriate.

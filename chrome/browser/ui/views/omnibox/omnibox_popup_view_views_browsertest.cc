@@ -4,50 +4,44 @@
 
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_view_views.h"
 
-#include <memory>
-
-#include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/themes/test/theme_service_changed_waiter.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
-#include "chrome/browser/ui/color/chrome_color_id.h"
+#include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/omnibox/omnibox_controller.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_header_view.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_view_views_test.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_popup_view_webui.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_result_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
 #include "chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/chrome_test_utils.h"
-#include "chrome/test/base/search_test_utils.h"
+#include "chrome/test/base/ui_test_utils.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/omnibox/browser/actions/tab_switch_action.h"
 #include "components/omnibox/browser/autocomplete_enums.h"
 #include "components/omnibox/browser/autocomplete_result.h"
 #include "components/omnibox/browser/fake_autocomplete_provider.h"
-#include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/omnibox/browser/omnibox_popup_selection.h"
 #include "components/omnibox/browser/omnibox_prefs.h"
-#include "components/omnibox/browser/omnibox_triggered_feature_service.h"
 #include "components/omnibox/browser/suggestion_group_util.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "content/public/test/test_utils.h"
-#include "net/test/embedded_test_server/embedded_test_server.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/theme_provider.h"
-#include "ui/base/ui_base_features.h"
-#include "ui/color/color_provider_utils.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
 #include "ui/events/test/event_generator.h"
@@ -60,6 +54,10 @@
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
 
 #if defined(USE_AURA)
 #include "ui/aura/window.h"
@@ -192,10 +190,102 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest, PopupAlignment) {
   EXPECT_EQ(popup_rect.right(), alignment_rect.right());
 }
 
+IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest, ResultToContentReadyPerShow) {
+#if BUILDFLAG(IS_OZONE)
+  // TODO(crbug.com/505910277): This is flaky on Wayland because presentation
+  // feedback can be dropped if it arrives before the submission ACK (race
+  // condition in GbmSurfacelessWayland).
+  if (ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP()
+        << "Flaky on Wayland due to presentation feedback race condition.";
+  }
+#endif
+  if (omnibox::IsWebUIOmniboxPopupEnabled()) {
+    GTEST_SKIP() << "Skipping for WebUI popup.";
+  }
+
+  base::HistogramTester histogram_tester;
+
+  // Set the start time in the model.
+  controller()->edit_model()->UpdateInput(false);
+
+  CreatePopupForTestQuery();
+
+  popup_view()->UpdatePopupAppearance();
+
+  // Wait for the asynchronous presentation callback to fire.
+  base::RunLoop run_loop;
+  GetPopupWidget()
+      ->GetCompositor()
+      ->RequestSuccessfulPresentationTimeForNextFrame(
+          base::BindOnce(base::IgnoreArgs<const viz::FrameTimingDetails&>(
+              run_loop.QuitClosure())));
+  run_loop.Run();
+
+  histogram_tester.ExpectTotalCount("Omnibox.Popup.ResultToContentReadyPerShow",
+                                    1);
+}
+
+IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest,
+                       ResultToContentReadyOnFirstShow) {
+#if BUILDFLAG(IS_OZONE)
+  // TODO(crbug.com/505910277): This is flaky on Wayland because presentation
+  // feedback can be dropped if it arrives before the submission ACK (race
+  // condition in GbmSurfacelessWayland).
+  if (ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP()
+        << "Flaky on Wayland due to presentation feedback race condition.";
+  }
+#endif
+  if (omnibox::IsWebUIOmniboxPopupEnabled()) {
+    GTEST_SKIP() << "Skipping for WebUI popup.";
+  }
+
+  base::HistogramTester histogram_tester;
+
+  // Set the start time in the model.
+  controller()->edit_model()->UpdateInput(false);
+
+  CreatePopupForTestQuery();
+
+  popup_view()->UpdatePopupAppearance();
+
+  // Wait for the asynchronous presentation callback to fire.
+  {
+    base::RunLoop run_loop;
+    GetPopupWidget()
+        ->GetCompositor()
+        ->RequestSuccessfulPresentationTimeForNextFrame(
+            base::BindOnce(base::IgnoreArgs<const viz::FrameTimingDetails&>(
+                run_loop.QuitClosure())));
+    run_loop.Run();
+  }
+
+  histogram_tester.ExpectTotalCount(
+      "Omnibox.Popup.ResultToContentReadyOnFirstShow", 1);
+
+  // Trigger another presentation by updating appearance again.
+  popup_view()->UpdatePopupAppearance();
+
+  {
+    base::RunLoop run_loop;
+    GetPopupWidget()
+        ->GetCompositor()
+        ->RequestSuccessfulPresentationTimeForNextFrame(
+            base::BindOnce(base::IgnoreArgs<const viz::FrameTimingDetails&>(
+                run_loop.QuitClosure())));
+    run_loop.Run();
+  }
+
+  // It should still be 1.
+  histogram_tester.ExpectTotalCount(
+      "Omnibox.Popup.ResultToContentReadyOnFirstShow", 1);
+}
+
 // Integration test for omnibox popup theming in regular.
 IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest, ThemeIntegration) {
   ThemeService* theme_service =
-      ThemeServiceFactory::GetForProfile(browser()->profile());
+      ThemeServiceFactory::GetForProfile(browser()->GetProfile());
   UseDefaultTheme();
   SetUseDeviceTheme(false);
 
@@ -218,7 +308,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest, ThemeIntegration) {
   EXPECT_EQ(selection_color_light, GetSelectedColor(browser()));
 
   // Install a theme (in both browsers, since it's the same profile).
-  extensions::ChromeTestExtensionLoader loader(browser()->profile());
+  extensions::ChromeTestExtensionLoader loader(browser()->GetProfile());
   {
     ThemeChangeWaiter wait(theme_service);
     base::FilePath path = chrome_test_utils::GetTestFilePath(
@@ -246,7 +336,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest, ThemeIntegration) {
 
 IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest, ThemeIntegrationInIncognito) {
   ThemeService* theme_service =
-      ThemeServiceFactory::GetForProfile(browser()->profile());
+      ThemeServiceFactory::GetForProfile(browser()->GetProfile());
   UseDefaultTheme();
   SetUseDeviceTheme(false);
 
@@ -261,7 +351,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest, ThemeIntegrationInIncognito) {
   SetIsGrayscale(false);
 
   // Install a theme (in both browsers, since it's the same profile).
-  extensions::ChromeTestExtensionLoader loader(browser()->profile());
+  extensions::ChromeTestExtensionLoader loader(browser()->GetProfile());
   {
     ThemeChangeWaiter wait(theme_service);
     base::FilePath path = chrome_test_utils::GetTestFilePath(
@@ -283,7 +373,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest, ThemeIntegrationInIncognito) {
   EXPECT_EQ(selection_color_dark, GetSelectedColor(incognito_browser));
 }
 
-// TODO(tapted): https://crbug.com/905508 Fix and enable on Mac.
+// TODO(tapted): https://crbug.com/40602507 Fix and enable on Mac.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_ClickOmnibox DISABLED_ClickOmnibox
 #else
@@ -299,7 +389,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest, MAYBE_ClickOmnibox) {
 
   CreatePopupForTestQuery();
 
-  gfx::NativeWindow event_window = browser()->window()->GetNativeWindow();
+  gfx::NativeWindow event_window = browser()->GetWindow()->GetNativeWindow();
 #if defined(USE_AURA)
   event_window = event_window->GetRootWindow();
 #endif
@@ -358,7 +448,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest, MAYBE_ClickOmnibox) {
   EXPECT_TRUE(GetPopupWidget()->IsClosed());
 }
 
-// Flaky on Mac: https://crbug.com/1140153.
+// Flaky on Mac: https://crbug.com/40726476.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_EmitAccessibilityEvents DISABLED_EmitAccessibilityEvents
 #else
@@ -392,7 +482,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest,
   EXPECT_EQ(observer.text_changed_on_listboxoption_count(), 0);
 
   edit_model()->SetUserText(u"bar");
-  edit_model()->StartAutocomplete(false, false);
+  edit_model()->StartAutocomplete(false);
   popup_view()->UpdatePopupAppearance();
   EXPECT_EQ(observer.text_changed_on_listboxoption_count(), 1);
   EXPECT_EQ(observer.selected_children_changed_count(), 1);
@@ -401,8 +491,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest,
   EXPECT_EQ(observer.value_changed_count(), 2);
 
   edit_model()->SetPopupSelection(OmniboxPopupSelection(1));
-  EXPECT_EQ(observer.selected_children_changed_count(), 2);
-  EXPECT_EQ(observer.selection_changed_count(), 2);
+  EXPECT_EQ(observer.selected_children_changed_count(), 3);
+  EXPECT_EQ(observer.selection_changed_count(), 3);
   EXPECT_EQ(observer.active_descendant_changed_count(), 2);
   EXPECT_EQ(observer.value_changed_count(), 3);
   EXPECT_TRUE(contains(observer.omnibox_value(), "2 of 3"));
@@ -421,8 +511,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest,
   EXPECT_TRUE(contains(ax_name, "location from history"));
 
   edit_model()->SetPopupSelection(OmniboxPopupSelection(2));
-  EXPECT_EQ(observer.selected_children_changed_count(), 3);
-  EXPECT_EQ(observer.selection_changed_count(), 3);
+  EXPECT_EQ(observer.selected_children_changed_count(), 5);
+  EXPECT_EQ(observer.selection_changed_count(), 5);
   EXPECT_EQ(observer.active_descendant_changed_count(), 3);
   EXPECT_EQ(observer.value_changed_count(), 4);
   EXPECT_TRUE(contains(observer.omnibox_value(), "3 of 3"));
@@ -479,7 +569,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest,
       matches);
   popup_view()->UpdatePopupAppearance();
   edit_model()->SetUserText(u"bar");
-  edit_model()->StartAutocomplete(false, false);
+  edit_model()->StartAutocomplete(false);
   popup_view()->UpdatePopupAppearance();
 
   edit_model()->SetPopupSelection(OmniboxPopupSelection(1));
@@ -512,7 +602,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest,
             u"FooBarBazCom https://foobarbaz.com location from history");
 }
 
-// Flaky on Mac: https://crbug.com/1146627.
+// Flaky on Mac: https://crbug.com/40730186.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_EmitAccessibilityEventsOnButtonFocusHint \
   DISABLED_EmitAccessibilityEventsOnButtonFocusHint
@@ -539,8 +629,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest,
   popup_view()->UpdatePopupAppearance();
 
   edit_model()->SetPopupSelection(OmniboxPopupSelection(1));
-  EXPECT_EQ(observer.selected_children_changed_count(), 2);
-  EXPECT_EQ(observer.selection_changed_count(), 2);
+  EXPECT_EQ(observer.selected_children_changed_count(), 3);
+  EXPECT_EQ(observer.selection_changed_count(), 3);
   EXPECT_EQ(observer.active_descendant_changed_count(), 2);
   EXPECT_EQ(observer.value_changed_count(), 2);
   EXPECT_TRUE(contains(observer.omnibox_value(), "The Foo Of All Bars"));
@@ -560,8 +650,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest,
   edit_model()->SetPopupSelection(
       OmniboxPopupSelection(1, OmniboxPopupSelection::FOCUSED_BUTTON_ACTION));
   EXPECT_TRUE(contains(observer.omnibox_value(), "Tab switch button"));
-  EXPECT_EQ(observer.selected_children_changed_count(), 3);
-  EXPECT_EQ(observer.selection_changed_count(), 3);
+  EXPECT_EQ(observer.selected_children_changed_count(), 6);
+  EXPECT_EQ(observer.selection_changed_count(), 5);
   EXPECT_EQ(observer.value_changed_count(), 3);
   EXPECT_TRUE(contains(observer.omnibox_value(), "press Enter to switch"));
   EXPECT_FALSE(contains(observer.omnibox_value(), "2 of 2"));
@@ -577,8 +667,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest,
   edit_model()->SetPopupSelection(
       OmniboxPopupSelection(1, OmniboxPopupSelection::NORMAL));
   EXPECT_TRUE(contains(observer.omnibox_value(), "The Foo Of All Bars"));
-  EXPECT_EQ(observer.selected_children_changed_count(), 4);
-  EXPECT_EQ(observer.selection_changed_count(), 4);
+  EXPECT_EQ(observer.selected_children_changed_count(), 8);
+  EXPECT_EQ(observer.selection_changed_count(), 7);
   EXPECT_EQ(observer.value_changed_count(), 4);
   EXPECT_TRUE(contains(observer.omnibox_value(), "press Tab then Enter"));
   EXPECT_TRUE(contains(observer.omnibox_value(), "2 of 2"));
@@ -602,7 +692,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest,
   edit_model()->SetUserText(u"foo");
   AutocompleteInput input(
       u"foo", metrics::OmniboxEventProto::BLANK,
-      ChromeAutocompleteSchemeClassifier(browser()->profile()));
+      ChromeAutocompleteSchemeClassifier(browser()->GetProfile()));
   input.set_omit_asynchronous_matches(true);
   controller()->autocomplete_controller()->Start(input);
 
@@ -636,15 +726,15 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest,
 
   // This is equivalent of the user arrowing down in the omnibox.
   edit_model()->SetPopupSelection(OmniboxPopupSelection(1));
-  EXPECT_EQ(observer.selected_children_changed_count(), 1);
-  EXPECT_EQ(observer.selection_changed_count(), 1);
+  EXPECT_EQ(observer.selected_children_changed_count(), 2);
+  EXPECT_EQ(observer.selection_changed_count(), 2);
   EXPECT_EQ(observer.value_changed_count(), 1);
   EXPECT_EQ(observer.active_descendant_changed_count(), 1);
 
   // This is equivalent of the user arrowing up in the omnibox.
   edit_model()->SetPopupSelection(OmniboxPopupSelection(0));
-  EXPECT_EQ(observer.selected_children_changed_count(), 2);
-  EXPECT_EQ(observer.selection_changed_count(), 2);
+  EXPECT_EQ(observer.selected_children_changed_count(), 4);
+  EXPECT_EQ(observer.selection_changed_count(), 4);
   EXPECT_EQ(observer.value_changed_count(), 2);
   EXPECT_EQ(observer.active_descendant_changed_count(), 2);
 
@@ -721,7 +811,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest, AccessibleResultName) {
       matches);
   popup_view()->UpdatePopupAppearance();
   edit_model()->SetUserText(u"bar");
-  edit_model()->StartAutocomplete(false, false);
+  edit_model()->StartAutocomplete(false);
   popup_view()->UpdatePopupAppearance();
 
   edit_model()->SetPopupSelection(OmniboxPopupSelection(1));
@@ -776,7 +866,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest, DeleteSuggestion) {
   edit_model()->SetUserText(u"foo");
   AutocompleteInput input(
       u"foo", metrics::OmniboxEventProto::BLANK,
-      ChromeAutocompleteSchemeClassifier(browser()->profile()));
+      ChromeAutocompleteSchemeClassifier(browser()->GetProfile()));
   input.set_omit_asynchronous_matches(true);
   controller()->autocomplete_controller()->Start(input);
   ASSERT_TRUE(controller()->IsPopupOpen());
@@ -819,7 +909,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest, DeleteSuggestion) {
   EXPECT_EQ(OmniboxPopupSelection(1), edit_model()->GetPopupSelection());
 }
 
-// Flaky on Mac: https://crbug.com/1511356
+// Flaky on Mac: https://crbug.com/41483942
 // Flaky on Win and Linux: https://crbug.com/365250293
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
 #define MAYBE_SpaceEntersKeywordMode DISABLED_SpaceEntersKeywordMode
@@ -834,7 +924,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest,
   location_bar()->GetOmniboxController()->client()->GetPrefs()->SetBoolean(
       omnibox::kKeywordSpaceTriggeringEnabled, true);
   omnibox_view()->SetUserText(u"@bookmarks");
-  edit_model()->StartAutocomplete(false, false);
+  edit_model()->StartAutocomplete(false);
   popup_view()->UpdatePopupAppearance();
 
   EXPECT_FALSE(edit_model()->is_keyword_selected());
@@ -844,7 +934,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest,
 }
 
 IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest,
-                       AccesibilityAttributePopupForId) {
+                       AccessibilityAttributePopupForId) {
   CreatePopupForTestQuery();
   popup_view()->UpdatePopupAppearance();
   edit_model()->SetPopupSelection(OmniboxPopupSelection(0));
@@ -891,7 +981,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest,
 
   // Check accessibility when popup is open.
   ax_node_data_omnibox = ui::AXNodeData();
-  edit_model()->StartAutocomplete(false, false);
+  edit_model()->StartAutocomplete(false);
   omnibox_view()->GetViewAccessibility().GetAccessibleNodeData(
       &ax_node_data_omnibox);
   EXPECT_TRUE(controller()->IsPopupOpen());
@@ -933,7 +1023,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest, AccessibleControlIds) {
 
   // Check accessibility when popup is open.
   ax_node_data_omnibox = ui::AXNodeData();
-  edit_model()->StartAutocomplete(false, false);
+  edit_model()->StartAutocomplete(false);
   omnibox_view()->GetViewAccessibility().GetAccessibleNodeData(
       &ax_node_data_omnibox);
   EXPECT_TRUE(controller()->IsPopupOpen());
@@ -952,6 +1042,25 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest, AccessibleControlIds) {
   EXPECT_FALSE(controller()->IsPopupOpen());
   EXPECT_FALSE(ax_node_data_omnibox.HasIntListAttribute(
       ax::mojom::IntListAttribute::kControlsIds));
+}
+
+IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest,
+                       InvalidatesMetricsCallbacksOnHide) {
+  CreatePopupForTestQuery();
+  EXPECT_TRUE(controller()->IsPopupOpen());
+
+  // Get a weak pointer using the metrics factory to simulate a pending
+  // callback.
+  auto weak_ptr = GetMetricsWeakPtr();
+  EXPECT_TRUE(weak_ptr);
+
+  // Close the popup view, which should invalidate the pending metrics callback.
+  controller()->autocomplete_controller()->Stop(
+      AutocompleteStopReason::kClobbered);
+  popup_view()->UpdatePopupAppearance();
+
+  EXPECT_FALSE(controller()->IsPopupOpen());
+  EXPECT_FALSE(weak_ptr);
 }
 
 IN_PROC_BROWSER_TEST_F(OmniboxPopupSuggestionGroupHeadersTest,
@@ -1019,7 +1128,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupSuggestionGroupHeadersTest,
     AutocompleteInput input(
         u"foo",
         metrics::OmniboxEventProto::INSTANT_NTP_WITH_OMNIBOX_AS_STARTING_FOCUS,
-        ChromeAutocompleteSchemeClassifier(browser()->profile()));
+        ChromeAutocompleteSchemeClassifier(browser()->GetProfile()));
     input.set_omit_asynchronous_matches(true);
     controller()->autocomplete_controller()->Start(input);
     ASSERT_TRUE(controller()->IsPopupOpen());
@@ -1052,7 +1161,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupSuggestionGroupHeadersTest,
         u"foo",
         metrics::OmniboxEventProto::
             SEARCH_RESULT_PAGE_NO_SEARCH_TERM_REPLACEMENT,
-        ChromeAutocompleteSchemeClassifier(browser()->profile()));
+        ChromeAutocompleteSchemeClassifier(browser()->GetProfile()));
     input.set_omit_asynchronous_matches(true);
     controller()->autocomplete_controller()->Start(input);
     ASSERT_TRUE(controller()->IsPopupOpen());
@@ -1080,7 +1189,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupSuggestionGroupHeadersTest,
     edit_model()->SetUserText(u"foo");
     AutocompleteInput input(
         u"foo", metrics::OmniboxEventProto::OTHER,
-        ChromeAutocompleteSchemeClassifier(browser()->profile()));
+        ChromeAutocompleteSchemeClassifier(browser()->GetProfile()));
     input.set_omit_asynchronous_matches(true);
     controller()->autocomplete_controller()->Start(input);
     ASSERT_TRUE(controller()->IsPopupOpen());
@@ -1102,4 +1211,184 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupSuggestionGroupHeadersTest,
     EXPECT_FALSE(popup_view()->header_view_at(2)->GetVisible());
     EXPECT_TRUE(popup_view()->result_view_at(2)->GetVisible());
   }
+}
+
+// Verifies that the TopChromeUI metrics are recorded for native UI.
+IN_PROC_BROWSER_TEST_F(OmniboxPopupViewViewsTest,
+                       EmitTopChromeWebUIMetricsNative) {
+#if BUILDFLAG(IS_OZONE)
+  // TODO(crbug.com/491337216): This is flaky on Wayland because presentation
+  // feedback can be dropped if it arrives before the submission ACK (race
+  // condition in GbmSurfacelessWayland).
+  if (ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP()
+        << "Flaky on Wayland due to presentation feedback race condition.";
+  }
+#endif
+  base::HistogramTester histogram_tester;
+
+  CreatePopupForTestQuery();
+  popup_view()->UpdatePopupAppearance();
+
+  // For native popup, metrics are recorded via a presentation callback.
+  // Wait for the presentation to be processed.
+  base::RunLoop run_loop;
+  GetPopupWidget()
+      ->GetCompositor()
+      ->RequestSuccessfulPresentationTimeForNextFrame(
+          base::BindOnce(base::IgnoreArgs<const viz::FrameTimingDetails&>(
+              run_loop.QuitClosure())));
+  run_loop.Run();
+
+  // Check consolidated metric.
+  histogram_tester.ExpectTotalCount(
+      "TopChromeUI.OmniboxPopup.RequestToFirstContentfulPaint", 1);
+}
+
+class WidgetBoundsWaiter : public views::WidgetObserver {
+ public:
+  explicit WidgetBoundsWaiter(views::Widget* widget) {
+    observation_.Observe(widget);
+  }
+  WidgetBoundsWaiter(const WidgetBoundsWaiter&) = delete;
+  WidgetBoundsWaiter& operator=(const WidgetBoundsWaiter&) = delete;
+  ~WidgetBoundsWaiter() override = default;
+
+  void Wait() { run_loop_.Run(); }
+
+  // views::WidgetObserver:
+  void OnWidgetBoundsChanged(views::Widget* widget,
+                             const gfx::Rect& new_bounds) override {
+    run_loop_.Quit();
+  }
+
+ private:
+  base::RunLoop run_loop_;
+  base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{
+      this};
+};
+
+class OmniboxPopupPermissionBrowserTest : public InProcessBrowserTest {
+ public:
+  OmniboxPopupPermissionBrowserTest() {
+    feature_list_.InitAndEnableFeature(omnibox::internal::kWebUIOmniboxPopup);
+  }
+
+  views::Widget* GetPopupWidget() {
+    auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+    auto* location_bar_view = browser_view->toolbar()->location_bar_view();
+    auto* popup_view = static_cast<OmniboxPopupViewWebUI*>(
+        location_bar_view->GetOmniboxPopupView());
+    if (!popup_view || !popup_view->presenter()) {
+      return nullptr;
+    }
+    popup_view->presenter()->Show();
+    location_bar_view->GetOmniboxController()
+        ->popup_state_manager()
+        ->SetPopupState(OmniboxPopupState::kClassic);
+    return popup_view->presenter()->get_widget_for_testing();
+  }
+
+  void SetBrowserBounds(views::Widget* popup_widget, const gfx::Rect& bounds) {
+    views::Widget* browser_widget = views::Widget::GetWidgetForNativeWindow(
+        browser()->GetWindow()->GetNativeWindow());
+    WidgetBoundsWaiter browser_waiter(browser_widget);
+    WidgetBoundsWaiter popup_waiter(popup_widget);
+    browser()->GetWindow()->SetBounds(bounds);
+    browser_waiter.Wait();
+    popup_waiter.Wait();
+  }
+
+  void SimulateFrontendMojoMessage(bool is_showing,
+                                   const gfx::Size& prompt_size) {
+    auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+    auto* location_bar_view = browser_view->toolbar()->location_bar_view();
+    auto* popup_view = static_cast<OmniboxPopupViewWebUI*>(
+        location_bar_view->GetOmniboxPopupView());
+    if (popup_view && popup_view->presenter()) {
+      views::Widget* popup_widget =
+          popup_view->presenter()->get_widget_for_testing();
+      std::optional<WidgetBoundsWaiter> waiter;
+      if (popup_widget) {
+        waiter.emplace(popup_widget);
+      }
+      popup_view->presenter()->OnEmbeddedPermissionDialogChanged(is_showing,
+                                                                 prompt_size);
+      if (waiter) {
+        waiter->Wait();
+      }
+    }
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+// Open Large -> Shrink, Open Small -> Grow
+IN_PROC_BROWSER_TEST_F(OmniboxPopupPermissionBrowserTest,
+                       DynamicWindowResizing) {
+  BrowserWindow::FromBrowser(browser())
+      ->GetLocationBar()
+      ->GetOmniboxView()
+      ->SetUserText(u"test");
+  views::Widget* popup_widget = GetPopupWidget();
+  ASSERT_TRUE(popup_widget);
+
+  // Force browser window to be small.
+  SetBrowserBounds(popup_widget, gfx::Rect(0, 0, 400, 600));
+
+  // Open PEPC prompt requesting 500px.
+  SimulateFrontendMojoMessage(true, gfx::Size(500, 400));
+
+  // PEPC prompt forced omnibox popup to grow to 500px.
+  EXPECT_GE(popup_widget->GetRestoredBounds().width(), 500);
+
+  // User manually drags browser window to be big.
+  SetBrowserBounds(popup_widget, gfx::Rect(0, 0, 1000, 600));
+
+  // Popup should adjust to the window size.
+  EXPECT_GE(popup_widget->GetRestoredBounds().width(), 800);
+
+  // User manually drags browser window back to small.
+  SetBrowserBounds(popup_widget, gfx::Rect(0, 0, 300, 600));
+
+  // Width of popup should adjust.
+  const int expected_width =
+      500 + RoundedOmniboxResultsFrame::GetShadowInsets().width();
+  EXPECT_EQ(popup_widget->GetRestoredBounds().width(), expected_width);
+}
+
+IN_PROC_BROWSER_TEST_F(OmniboxPopupPermissionBrowserTest,
+                       ResetsOnAllFrontendClosureActions) {
+  BrowserWindow::FromBrowser(browser())
+      ->GetLocationBar()
+      ->GetOmniboxView()
+      ->SetUserText(u"test");
+  views::Widget* popup_widget = GetPopupWidget();
+
+  // Small browser width.
+  SetBrowserBounds(popup_widget, gfx::Rect(0, 0, 400, 600));
+
+  auto test_frontend_closure = [&](const std::string& action_name) {
+    // Open the PEPC prompt.
+    SimulateFrontendMojoMessage(true, gfx::Size(500, 400));
+    EXPECT_GE(popup_widget->GetRestoredBounds().width(), 500)
+        << "Failed to expand for " << action_name;
+
+    // Simulate the user triggering the specific UI action that closes the
+    // prompt. In the frontend, clicking 'Allow', 'Deny', 'Allow Always', or
+    // blurring out all result in the UI sending [false, 0, 0] to the C++
+    // backend.
+    SimulateFrontendMojoMessage(false, gfx::Size());
+
+    // Assert the physical OS window actually shrunk back down to standard
+    // size.
+    EXPECT_LT(popup_widget->GetRestoredBounds().width(), 500)
+        << "Physical window failed to shrink after action: " << action_name;
+  };
+
+  test_frontend_closure("Allow");
+  test_frontend_closure("Deny/Close");
+  test_frontend_closure("Out of Focus (Blur)");
+  test_frontend_closure("Allow Always");
 }

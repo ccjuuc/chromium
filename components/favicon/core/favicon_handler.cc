@@ -9,13 +9,11 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "build/build_config.h"
 #include "components/favicon/core/core_favicon_service.h"
 #include "components/favicon_base/favicon_util.h"
@@ -69,7 +67,7 @@ bool HasExpiredOrIncompleteResult(
   for (float favicon_scale : favicon_scales) {
     int edge_size_in_pixel = std::ceil(desired_size_in_dip * favicon_scale);
     gfx::Size value(edge_size_in_pixel, edge_size_in_pixel);
-    if (!base::Contains(favicon_sizes, value)) {
+    if (!std::ranges::contains(favicon_sizes, value)) {
       return true;
     }
   }
@@ -394,9 +392,15 @@ void FaviconHandler::OnFaviconDataForManifestFromFaviconService(
   DCHECK(got_favicon_from_history_);
 
   bool has_valid_result = HasValidResult(favicon_bitmap_results);
+  // For off-the-record profiles pretend that favicons from FaviconService are
+  // expired so websites don't know if a site was previously visited in regular
+  // mode. Note however that any cached favicon may still be displayed in the
+  // UI, as there is no privacy downside in showing favicons fetched while the
+  // user was browsing in non-incognito mode.
   bool has_expired_or_incomplete_result =
-      !has_valid_result || HasExpiredOrIncompleteResult(preferred_icon_size(),
-                                                        favicon_bitmap_results);
+      !has_valid_result || delegate_->IsOffTheRecord() ||
+      HasExpiredOrIncompleteResult(preferred_icon_size(),
+                                   favicon_bitmap_results);
 
   if (has_valid_result &&
       (notification_icon_url_ != manifest_url_ ||
@@ -602,7 +606,9 @@ void FaviconHandler::OnFaviconDataForInitialURLFromFaviconService(
   bool has_valid_result = HasValidResult(favicon_bitmap_results);
   // For off-the-record profiles pretend that favicons from FaviconService are
   // expired so websites don't know if a site was previously visited in regular
-  // mode.
+  // mode. Note however that any cached favicon may still be displayed in the
+  // UI, as there is no privacy downside in showing favicons fetched while the
+  // user was browsing in non-incognito mode.
   initial_history_result_expired_or_incomplete_ =
       !has_valid_result || delegate_->IsOffTheRecord() ||
       HasExpiredOrIncompleteResult(preferred_icon_size(),

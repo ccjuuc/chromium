@@ -64,13 +64,6 @@ class MEDIA_EXPORT AudioToolboxAudioDecoder : public AudioDecoder {
   // "Converter" for turning encoded samples into raw audio.
   ScopedAudioConverterRef decoder_;
 
-  // Actual channel count and layout from decoder, may be different than config.
-  uint32_t channel_count_ = 0u;
-  ChannelLayout channel_layout_ = CHANNEL_LAYOUT_UNSUPPORTED;
-
-  // Actual sample rate from the decoder, may be different than config.
-  uint32_t sample_rate_ = 0u;
-
   // Callback that delivers output frames.
   OutputCB output_cb_;
 
@@ -81,6 +74,10 @@ class MEDIA_EXPORT AudioToolboxAudioDecoder : public AudioDecoder {
   // Staging structures for receiving decoded data.
   std::unique_ptr<AudioBus> output_bus_;
   std::unique_ptr<AudioBufferList, base::FreeDeleter> output_buffer_list_;
+
+  // Keeps track of the last input timestamp to use for output generated during
+  // flush (EOS).
+  base::TimeDelta last_input_timestamp_ = kNoTimestamp;
 };
 
 }  // namespace media

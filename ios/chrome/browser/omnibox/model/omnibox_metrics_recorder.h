@@ -9,13 +9,14 @@
 
 #import <string>
 
+#import "base/time/time.h"
 #import "ui/base/window_open_disposition.h"
 
 class AutocompleteController;
 struct AutocompleteMatch;
 class GURL;
 @class OmniboxAutocompleteController;
-class OmniboxClient;
+class OmniboxClientIOS;
 struct OmniboxPopupSelection;
 struct OmniboxTextModel;
 
@@ -26,7 +27,7 @@ struct OmniboxTextModel;
     OmniboxAutocompleteController* omniboxAutocompleteController;
 
 /// Creates an instance with the dependency used for state retrieval.
-- (instancetype)initWithClient:(OmniboxClient*)omniboxClient
+- (instancetype)initWithClient:(OmniboxClientIOS*)omniboxClient
                      textModel:(const OmniboxTextModel*)omniboxTextModel
     NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
@@ -46,6 +47,11 @@ struct OmniboxTextModel;
     windowOpenDisposition:(WindowOpenDisposition)disposition
                  isAction:(BOOL)isAction
              isPastedText:(BOOL)isPastedText;
+
+/// Returns the elapsed time since the user first modified the omnibox.
+/// Returns kDefaultTimeDelta if the input is zero suggest or pasted text.
+- (base::TimeDelta)elapsedTimeSinceUserFirstModifiedOmniboxWithPastedText:
+    (BOOL)isPastedText;
 
 // Records the number of lines in the omnibox text view.
 - (void)setNumberOfLines:(NSInteger)numberOfLines;

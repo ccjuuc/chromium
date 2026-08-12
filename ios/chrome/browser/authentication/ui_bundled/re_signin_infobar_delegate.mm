@@ -12,6 +12,7 @@
 #import "base/logging.h"
 #import "base/memory/ptr_util.h"
 #import "components/infobars/core/infobar_manager.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_metrics.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin_presenter.h"
@@ -59,6 +60,7 @@ ReSignInInfoBarDelegate::ReSignInInfoBarDelegate(
     : authentication_service_(authentication_service),
       resignin_presenter_(resignin_presenter) {
   identity_manager_observer_.Observe(identity_manager);
+  auth_service_observation_.Observe(authentication_service);
   CHECK(authentication_service_);
   CHECK(resignin_presenter_);
 }
@@ -97,7 +99,7 @@ std::u16string ReSignInInfoBarDelegate::GetButtonLabel(
 
 ui::ImageModel ReSignInInfoBarDelegate::GetIcon() const {
   return ui::ImageModel::FromImage(gfx::Image(
-      DefaultSymbolWithPointSize(kWarningFillSymbol, kInfobarSymbolPointSize)));
+      SymbolWithPointSize(SymbolWarningFill, kInfobarSymbolPointSize)));
 }
 
 bool ReSignInInfoBarDelegate::Accept() {
@@ -108,6 +110,7 @@ bool ReSignInInfoBarDelegate::Accept() {
   // Stop displaying the infobar once user interacted with it.
   authentication_service_->ResetReauthPromptForSignInAndSync();
   identity_manager_observer_.Reset();
+  auth_service_observation_.Reset();
   return true;
 }
 
@@ -115,6 +118,7 @@ void ReSignInInfoBarDelegate::InfoBarDismissed() {
   // Stop displaying the infobar once user interacted with it.
   authentication_service_->ResetReauthPromptForSignInAndSync();
   identity_manager_observer_.Reset();
+  auth_service_observation_.Reset();
 }
 
 void ReSignInInfoBarDelegate::OnPrimaryAccountChanged(
@@ -122,6 +126,7 @@ void ReSignInInfoBarDelegate::OnPrimaryAccountChanged(
   switch (event.GetEventTypeFor(signin::ConsentLevel::kSignin)) {
     case signin::PrimaryAccountChangeEvent::Type::kSet:
       identity_manager_observer_.Reset();
+      auth_service_observation_.Reset();
       infobar()->RemoveSelf();
       break;
     case signin::PrimaryAccountChangeEvent::Type::kCleared:
@@ -133,4 +138,12 @@ void ReSignInInfoBarDelegate::OnPrimaryAccountChanged(
 void ReSignInInfoBarDelegate::OnIdentityManagerShutdown(
     signin::IdentityManager* identity_manager) {
   identity_manager_observer_.Reset();
+}
+
+void ReSignInInfoBarDelegate::OnServiceStatusChanged() {
+  if (!authentication_service_->SigninEnabled()) {
+    auth_service_observation_.Reset();
+    identity_manager_observer_.Reset();
+    infobar()->RemoveSelf();
+  }
 }

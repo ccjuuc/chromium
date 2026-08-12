@@ -42,16 +42,15 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.Callback;
 import org.chromium.base.Token;
 import org.chromium.base.UnownedUserDataHost;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tabmodel.TabCreator;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.components.collaboration.messaging.CollaborationEvent;
 import org.chromium.components.collaboration.messaging.InstantMessage;
@@ -103,7 +102,6 @@ public class InstantMessageDelegateImplUnitTest {
     @Mock private DataSharingUIDelegate mDataSharingUiDelegate;
     @Mock private ManagedMessageDispatcher mManagedMessageDispatcher;
     @Mock private WindowAndroid mWindowAndroid;
-    @Mock private TabGroupModelFilter mTabGroupModelFilter;
     @Mock private TabModel mTabModel;
     @Mock private TabCreator mTabCreator;
     @Mock private Callback<Boolean> mSuccessCallback;
@@ -140,9 +138,8 @@ public class InstantMessageDelegateImplUnitTest {
         MessagesFactory.attachMessageDispatcher(mWindowAndroid, mManagedMessageDispatcher);
 
         when(mWindowAndroid.getActivity()).thenReturn(new WeakReference<>(activity));
-        when(mTabGroupModelFilter.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
-        when(mTabGroupModelFilter.getGroupLastShownTabId(TAB_GROUP_ID)).thenReturn(TAB_ID);
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
+        when(mTabModel.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
+        when(mTabModel.getGroupLastShownTabId(TAB_GROUP_ID)).thenReturn(TAB_ID);
         when(mTabModel.getTabCreator()).thenReturn(mTabCreator);
         when(mIsActiveWindowSupplier.get()).thenReturn(false);
 
@@ -156,7 +153,7 @@ public class InstantMessageDelegateImplUnitTest {
                         mMessagingBackendService, mDataSharingService, mTabGroupSyncService);
         mDelegate.attachWindow(
                 mWindowAndroid,
-                mTabGroupModelFilter,
+                mTabModel,
                 mDataSharingNotificationManager,
                 mDataSharingTabManager,
                 mIsActiveWindowSupplier);
@@ -189,7 +186,7 @@ public class InstantMessageDelegateImplUnitTest {
 
     @Test
     public void testDisplayInstantaneousMessage_NotInTabModel() {
-        when(mTabGroupModelFilter.tabGroupExists(any())).thenReturn(false);
+        when(mTabModel.tabGroupExists(any())).thenReturn(false);
         mDelegate.displayInstantaneousMessage(
                 newInstantMessage(CollaborationEvent.TAB_REMOVED), mSuccessCallback);
         verify(mManagedMessageDispatcher, never()).enqueueWindowScopedMessage(any(), anyBoolean());
@@ -212,8 +209,7 @@ public class InstantMessageDelegateImplUnitTest {
         propertyModel.get(ON_FULLY_VISIBLE).onResult(true);
         verify(mSuccessCallback).onResult(true);
 
-        when(mTabGroupModelFilter.getRelatedTabList(anyInt()))
-                .thenReturn(Arrays.asList(mTab1, mTab2));
+        when(mTabModel.getRelatedTabList(anyInt())).thenReturn(Arrays.asList(mTab1, mTab2));
         assertEquals(DISMISS_IMMEDIATELY, propertyModel.get(ON_PRIMARY_ACTION).get().intValue());
         ArgumentMatcher<LoadUrlParams> matcher =
                 (LoadUrlParams params) ->
@@ -232,14 +228,30 @@ public class InstantMessageDelegateImplUnitTest {
                 .enqueueWindowScopedMessage(mPropertyModelCaptor.capture(), anyBoolean());
         PropertyModel propertyModel = mPropertyModelCaptor.getValue();
 
-        when(mTabGroupModelFilter.getRelatedTabList(anyInt()))
-                .thenReturn(Arrays.asList(mTab1, mTab2));
+        when(mTabModel.getRelatedTabList(anyInt())).thenReturn(Arrays.asList(mTab1, mTab2));
         assertEquals(DISMISS_IMMEDIATELY, propertyModel.get(ON_PRIMARY_ACTION).get().intValue());
         ArgumentMatcher<LoadUrlParams> matcher =
                 (LoadUrlParams params) ->
                         TextUtils.equals(params.getUrl(), getOriginalNativeNtpUrl());
         verify(mTabCreator)
                 .createNewTab(argThat(matcher), eq(TabLaunchType.FROM_TAB_GROUP_UI), eq(mTab2));
+    }
+
+    @Test
+    public void testTabRemoved_InvalidUrl() {
+        InstantMessage message = newInstantMessage(CollaborationEvent.TAB_REMOVED);
+        message.attributions.get(0).tabMetadata.lastKnownUrl = "chrome://flags";
+        mDelegate.displayInstantaneousMessage(message, mSuccessCallback);
+
+        verify(mManagedMessageDispatcher)
+                .enqueueWindowScopedMessage(mPropertyModelCaptor.capture(), anyBoolean());
+        PropertyModel propertyModel = mPropertyModelCaptor.getValue();
+
+        when(mTabModel.getRelatedTabList(anyInt())).thenReturn(Arrays.asList(mTab1, mTab2));
+        assertEquals(DISMISS_IMMEDIATELY, propertyModel.get(ON_PRIMARY_ACTION).get().intValue());
+
+        // Should not trigger any navigation.
+        verify(mTabCreator, never()).createNewTab(any(), anyInt(), any());
     }
 
     @Test
@@ -284,7 +296,7 @@ public class InstantMessageDelegateImplUnitTest {
         // Chrome is backgrounded. Although, it's not technically to reshow the message since after
         // http://crrev.com/c/6388437 the message is dismissed after being hidden.
         propertyModel.get(ON_FULLY_VISIBLE).onResult(false);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mManagedMessageDispatcher)
                 .dismissMessage(any(), eq(DismissReason.DISMISSED_BY_FEATURE));
 
@@ -353,7 +365,7 @@ public class InstantMessageDelegateImplUnitTest {
 
     @Test
     public void testCollaborationRemoved_NoLastFocusedWindow() {
-        when(mTabGroupModelFilter.tabGroupExists(TAB_GROUP_ID)).thenReturn(false);
+        when(mTabModel.tabGroupExists(TAB_GROUP_ID)).thenReturn(false);
         mDelegate.displayInstantaneousMessage(
                 newInstantMessage(CollaborationEvent.TAB_GROUP_REMOVED), mSuccessCallback);
 
@@ -362,7 +374,7 @@ public class InstantMessageDelegateImplUnitTest {
 
     @Test
     public void testCollaborationRemoved_LastFocusedWindow() {
-        when(mTabGroupModelFilter.tabGroupExists(TAB_GROUP_ID)).thenReturn(false);
+        when(mTabModel.tabGroupExists(TAB_GROUP_ID)).thenReturn(false);
         when(mIsActiveWindowSupplier.get()).thenReturn(true);
         mDelegate.displayInstantaneousMessage(
                 newInstantMessage(CollaborationEvent.TAB_GROUP_REMOVED), mSuccessCallback);
@@ -406,7 +418,7 @@ public class InstantMessageDelegateImplUnitTest {
         Set<String> idsToHide = new HashSet<>();
         idsToHide.add(messageIdToHide);
         mDelegate.hideInstantaneousMessage(idsToHide);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mManagedMessageDispatcher)
                 .dismissMessage(displayedModel, DismissReason.DISMISSED_BY_FEATURE);
@@ -423,7 +435,7 @@ public class InstantMessageDelegateImplUnitTest {
         Set<String> idsToHide = new HashSet<>();
         idsToHide.add("2");
         mDelegate.hideInstantaneousMessage(idsToHide);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         // This should have noop-ed.
         verify(mManagedMessageDispatcher, never()).dismissMessage(any(), anyInt());

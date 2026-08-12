@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//chrome/test/base/ash/js2gtest.gni")
-
 assert(is_chromeos, "Personalization App is ChromeOS only")
 
 static_library("personalization_app") {
@@ -36,10 +34,10 @@ static_library("personalization_app") {
     "//ash/webui/personalization_app/proto",
     "//ash/webui/personalization_app/resources",
     "//ash/webui/system_apps/public:system_web_app_config",
-    "//ash/webui/system_apps/public:system_web_app_type",
     "//chromeos/ash/components/local_search_service",
     "//chromeos/ash/components/local_search_service/public/cpp",
     "//chromeos/ash/components/local_search_service/public/mojom",
+    "//chromeos/ash/components/system_web_apps:system_web_app_type",
     "//chromeos/strings",
     "//components/keyed_service/content",
     "//components/keyed_service/core",

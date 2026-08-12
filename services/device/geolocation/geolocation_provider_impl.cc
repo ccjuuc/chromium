@@ -124,9 +124,16 @@ GeolocationProviderImpl::AddLocationUpdateCallback(
   OnClientsChanged();
   if (base::FeatureList::IsEnabled(
           content_settings::features::kApproximateGeolocationPermission)) {
-    if (enable_high_accuracy && high_accuracy_result_) {
-      callback.Run(*high_accuracy_result_);
-    } else if (!enable_high_accuracy && low_accuracy_result_) {
+    if (enable_high_accuracy) {
+      // If high accuracy is requested, we prefer to return a cached
+      // high-accuracy result. If one is not available, we fall back to a
+      // cached low-accuracy result.
+      if (high_accuracy_result_) {
+        callback.Run(*high_accuracy_result_);
+      } else if (low_accuracy_result_) {
+        callback.Run(*low_accuracy_result_);
+      }
+    } else if (low_accuracy_result_) {
       callback.Run(*low_accuracy_result_);
     }
   } else {
@@ -135,6 +142,22 @@ GeolocationProviderImpl::AddLocationUpdateCallback(
     }
   }
   return subscription;
+}
+
+mojom::GeopositionResultPtr GeolocationProviderImpl::GetCachedPosition() {
+  DCHECK(main_task_runner_->BelongsToCurrentThread());
+  if (base::FeatureList::IsEnabled(
+          content_settings::features::kApproximateGeolocationPermission)) {
+    if (low_accuracy_result_) {
+      return low_accuracy_result_.Clone();
+    }
+    if (high_accuracy_result_) {
+      return high_accuracy_result_.Clone();
+    }
+  } else if (result_) {
+    return result_.Clone();
+  }
+  return nullptr;
 }
 
 void GeolocationProviderImpl::OverrideLocationForTesting(
@@ -149,8 +172,9 @@ void GeolocationProviderImpl::OnLocationUpdate(
     mojom::GeopositionResultPtr result) {
   DCHECK(OnGeolocationThread());
   // Will be true only in testing.
-  if (ignore_location_updates_)
+  if (ignore_location_updates_) {
     return;
+  }
   main_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&GeolocationProviderImpl::NotifyClients,
                                 base::Unretained(this), std::move(result)));
@@ -159,6 +183,12 @@ void GeolocationProviderImpl::OnLocationUpdate(
 // static
 GeolocationProviderImpl* GeolocationProviderImpl::GetInstance() {
   return base::Singleton<GeolocationProviderImpl>::get();
+}
+
+// static
+GeolocationProviderImpl*
+GeolocationProviderImpl::GetInstanceIfExistsForTesting() {
+  return base::Singleton<GeolocationProviderImpl>::GetIfExists();
 }
 
 void GeolocationProviderImpl::BindGeolocationControlReceiver(
@@ -181,8 +211,9 @@ void GeolocationProviderImpl::UserDidOptIntoLocationServices() {
   DCHECK(main_task_runner_->BelongsToCurrentThread());
   bool was_permission_granted = user_did_opt_into_location_services_;
   user_did_opt_into_location_services_ = true;
-  if (IsRunning() && !was_permission_granted)
+  if (IsRunning() && !was_permission_granted) {
     InformProvidersPermissionGranted();
+  }
 }
 
 GeolocationProviderImpl::GeolocationProviderImpl()
@@ -235,8 +266,12 @@ void GeolocationProviderImpl::OnClientsChanged() {
     if (!ignore_location_updates_) {
       // We have no more observers, so we clear the cached geoposition so that
       // when the next observer is added we will not provide a stale position.
+      // We do not clear `low_accuracy_result_` and
+      // `last_low_accuracy_result_time_` so that the anti-exploitation
+      // throttle for approximate location persists across client churn.
+      // This prevents malicious sites from collecting enough approximate
+      // positions to reconstruct a precise location.
       result_.reset();
-      low_accuracy_result_.reset();
       high_accuracy_result_.reset();
     }
     task_runner()->PostTask(
@@ -249,8 +284,9 @@ void GeolocationProviderImpl::OnClientsChanged() {
       options.message_pump_type = base::MessagePumpType::NS_RUNLOOP;
 #endif
       StartWithOptions(std::move(options));
-      if (user_did_opt_into_location_services_)
+      if (user_did_opt_into_location_services_) {
         InformProvidersPermissionGranted();
+      }
     }
 #if BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
     // Handle system permission states:
@@ -380,17 +416,28 @@ void GeolocationProviderImpl::NotifyClients(
       // When the `kApproximateGeolocationPermission` feature is enabled,
       // location updates are dispatched to the appropriate callbacks based on
       // the `is_precise` flag.
-      if (result->get_position()->is_precise) {
+      bool is_precise = result->get_position()->is_precise;
+      if (is_precise) {
         high_accuracy_result_ = std::move(result);
         high_accuracy_callbacks_.Notify(*high_accuracy_result_);
       } else {
-        low_accuracy_result_ = std::move(result);
-        low_accuracy_callbacks_.Notify(*low_accuracy_result_);
-        // When in concurrent mode, we also forward approximate location to
-        // precise request client.
-        if (!high_accuracy_callbacks_.empty()) {
-          high_accuracy_result_ = low_accuracy_result_.Clone();
-          high_accuracy_callbacks_.Notify(*high_accuracy_result_);
+        base::TimeTicks now = base::TimeTicks::Now();
+        // Approximate location updates are throttled to a 15-minute window.
+        // This prevents malicious sites from collecting enough approximate
+        // positions to reconstruct a precise location, significantly
+        // increasing the difficulty of such attacks.
+        if (!low_accuracy_result_ || !low_accuracy_result_->is_position() ||
+            now - last_low_accuracy_result_time_ >=
+                kApproximateGeolocationUpdateInterval) {
+          low_accuracy_result_ = std::move(result);
+          last_low_accuracy_result_time_ = now;
+          low_accuracy_callbacks_.Notify(*low_accuracy_result_);
+          // When in concurrent mode, we also forward approximate location to
+          // precise request client.
+          if (!high_accuracy_callbacks_.empty()) {
+            high_accuracy_result_ = low_accuracy_result_.Clone();
+            high_accuracy_callbacks_.Notify(*high_accuracy_result_);
+          }
         }
       }
     } else {
@@ -581,5 +628,14 @@ void GeolocationProviderImpl::DoStartProvidersOnGeolocationThread() {
 }  // namespace device
 
 #if BUILDFLAG(IS_ANDROID)
+static void
+JNI_LocationProviderFactory_ClearCachedGeopositionsForTesting(  // IN-TEST
+    JNIEnv* env) {
+  auto* provider = device::GeolocationProviderImpl::
+      GetInstanceIfExistsForTesting();  // IN-TEST
+  if (provider) {
+    provider->clear_cached_positions_for_testing();  // IN-TEST
+  }
+}
 DEFINE_JNI(LocationProviderFactory)
 #endif

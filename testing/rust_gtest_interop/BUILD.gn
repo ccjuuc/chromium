@@ -15,6 +15,10 @@ if (enable_rust) {
       ":rust_gtest_interop_cpp",
       ":rust_gtest_interop_rust",
     ]
+
+    # TODO(crbug.com/462501862): This is needed to disable the tests if ASAN
+    # is enabled on macs. It can be removed once that's fixed.
+    public_configs = [ "//base:sanitizer_buildflags_rust_cfg" ]
   }
 
   static_library("rust_gtest_interop_cpp") {
@@ -65,6 +69,16 @@ if (enable_rust) {
     visibility = [ ":*" ]
   }
 
+  rust_static_library("unittests") {
+    testonly = true
+    is_gtest_unittests = true
+    crate_root = "rust_gtest_interop_unittest.rs"
+    sources = [ crate_root ]
+    deps = [ "//testing/rust_gtest_interop" ]
+  }
+
+  # TODO(https://crbug.com/532647976): Remove this test executable after
+  # decommissioning Rust FYI bots.
   test("rust_gtest_interop_unittests") {
     sources = [
       "rust_gtest_interop_unittest.rs",

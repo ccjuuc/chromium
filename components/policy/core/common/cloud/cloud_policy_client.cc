@@ -9,13 +9,13 @@
 #include <variant>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/observer_list.h"
 #include "base/strings/strcat.h"
@@ -42,6 +42,7 @@
 #include "google_apis/gaia/gaia_urls.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
+#include "ui/base/device_form_factor.h"
 
 namespace em = enterprise_management;
 
@@ -49,6 +50,8 @@ namespace em = enterprise_management;
 using PsmExecutionResult = em::DeviceRegisterRequest::PsmExecutionResult;
 
 namespace policy {
+
+using ::chrome::cros::reporting::proto::UploadEventsRequest;
 
 BASE_FEATURE(kPolicyFetchWithSha256, base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -160,6 +163,8 @@ em::DevicePolicyRequest::Reason TranslateFetchReason(PolicyFetchReason reason) {
       return Request::UNNECESSARY_DISCONNECT;
     case PolicyFetchReason::kExtensionInstall:
       return Request::EXTENSION_INSTALL;
+    case PolicyFetchReason::kExtensionInstallInitialization:
+      return Request::EXTENSION_INSTALL_INITIALIZATION;
   }
   NOTREACHED();
 }
@@ -282,6 +287,44 @@ std::string FormatMacAddress(const CloudPolicyClient::MacAddress& mac_address) {
   return mac_address_string;
 }
 
+// Returns a string representation of the given `type_to_fetch`, for logging.
+// Does not include the `extension_ids_and_version` field.
+std::string TypeToFetchToDebugString(const PolicyTypeToFetch& type_to_fetch) {
+  std::string result = "{ policy_type: '";
+  result += type_to_fetch.policy_type();
+  result += "'";
+  if (!type_to_fetch.settings_entity_id().empty()) {
+    result += ", settings_entity_id: '";
+    result += type_to_fetch.settings_entity_id();
+    result += "'";
+  }
+  result += " }";
+  return result;
+}
+
+// Returns a string representation of the given `extension_ids_and_versions`,
+// for logging.
+std::string JoinExtensionIdsAndVersions(
+    const std::set<ExtensionIdAndVersion>& extension_ids_and_versions) {
+  std::string result;
+  if (extension_ids_and_versions.empty()) {
+    return result;
+  }
+
+  auto it = extension_ids_and_versions.begin();
+  CHECK(it != extension_ids_and_versions.end());
+  result += base::StringPrintf("'%s@%s'", it->extension_id.c_str(),
+                               it->extension_version.c_str());
+  ++it;
+
+  for (; it != extension_ids_and_versions.end(); ++it) {
+    result += ", ";
+    result += base::StringPrintf("'%s@%s'", it->extension_id.c_str(),
+                                 it->extension_version.c_str());
+  }
+  return result;
+}
+
 // Returns the histogram variant for the corresponding `type`. Returns nullopt
 // if there is no variant for the type.
 std::optional<std::string_view> HistogramVariantForType(std::string_view type) {
@@ -295,6 +338,18 @@ std::optional<std::string_view> HistogramVariantForType(std::string_view type) {
   return std::nullopt;
 }
 
+class SingleExtensionProvider : public PolicyTypeToFetch::ExtensionsProvider {
+ public:
+  explicit SingleExtensionProvider(const ExtensionIdAndVersion& extension)
+      : extension_(extension) {}
+  std::set<ExtensionIdAndVersion> GetExtensions() override {
+    return {extension_.get()};
+  }
+
+ private:
+  const raw_ref<const ExtensionIdAndVersion> extension_;
+};
+
 }  // namespace
 
 CloudPolicyClient::RegistrationParameters::RegistrationParameters(
@@ -306,27 +361,95 @@ CloudPolicyClient::RegistrationParameters::~RegistrationParameters() = default;
 
 CloudPolicyClient::Observer::~Observer() = default;
 
+namespace {
+
+std::unique_ptr<UploadEventsRequest> CopyReq(
+    const std::unique_ptr<UploadEventsRequest>& req) {
+  return req ? std::make_unique<UploadEventsRequest>(*req) : nullptr;
+}
+
+}  // namespace
+
 CloudPolicyClient::Result::Result(DeviceManagementStatus status)
     : result_(status) {}
 CloudPolicyClient::Result::Result(DeviceManagementStatus status, int net_error)
     : result_(status), net_error_(net_error) {}
 CloudPolicyClient::Result::Result(DeviceManagementStatus status,
                                   int net_error,
-                                  base::Value::Dict response)
+                                  base::DictValue response)
     : result_(status), net_error_(net_error), response_(std::move(response)) {}
+// static
+CloudPolicyClient::Result CloudPolicyClient::Result::CreateForRealtimeUpload(
+    DeviceManagementStatus status,
+    int response_code,
+    base::DictValue response,
+    UploadEventsRequest upload_request) {
+  Result result(status);
+  result.response_code_ = response_code;
+  result.response_ = std::move(response);
+  result.upload_events_request_ =
+      std::make_unique<UploadEventsRequest>(std::move(upload_request));
+  return result;
+}
+
+// static
+CloudPolicyClient::Result CloudPolicyClient::Result::CreateForRealtimeUpload(
+    DeviceManagementStatus status,
+    int response_code,
+    UploadEventsRequest upload_request) {
+  return CreateForRealtimeUpload(status, response_code, base::DictValue(),
+                                 std::move(upload_request));
+}
+
+// static
+CloudPolicyClient::Result CloudPolicyClient::Result::CreateForRealtimeUpload(
+    NotRegistered not_registered,
+    UploadEventsRequest upload_request) {
+  Result result(not_registered);
+  result.upload_events_request_ =
+      std::make_unique<UploadEventsRequest>(std::move(upload_request));
+  return result;
+}
+
 CloudPolicyClient::Result::Result(NotRegistered) : result_(NotRegistered()) {}
 
 CloudPolicyClient::Result::Result(const Result& other)
     : result_(other.result_),
       net_error_(other.net_error_),
-      response_(other.response_.Clone()) {}
+      response_code_(other.response_code_),
+      response_(other.response_.Clone()),
+      upload_events_request_(CopyReq(other.upload_events_request_)) {}
 
 CloudPolicyClient::Result& CloudPolicyClient::Result::operator=(
     const Result& other) {
-  result_ = other.result_;
-  net_error_ = other.net_error_;
-  response_ = other.response_.Clone();
+  if (this != &other) {
+    result_ = other.result_;
+    net_error_ = other.net_error_;
+    response_code_ = other.response_code_;
+    response_ = other.response_.Clone();
+    upload_events_request_ = CopyReq(other.upload_events_request_);
+  }
   return *this;
+}
+
+CloudPolicyClient::Result::Result(Result&&) = default;
+CloudPolicyClient::Result& CloudPolicyClient::Result::operator=(Result&&) =
+    default;
+
+CloudPolicyClient::Result::~Result() = default;
+
+bool CloudPolicyClient::Result::operator==(const Result& other) const {
+  return result_ == other.result_ && net_error_ == other.net_error_ &&
+         response_code_ == other.response_code_ &&
+         response_ == other.response_ &&
+         upload_events_request().SerializeAsString() ==
+             other.upload_events_request().SerializeAsString();
+}
+
+const UploadEventsRequest& CloudPolicyClient::Result::upload_events_request()
+    const {
+  static const base::NoDestructor<UploadEventsRequest> empty_request;
+  return upload_events_request_ ? *upload_events_request_ : *empty_request;
 }
 
 bool CloudPolicyClient::Result::IsSuccess() const {
@@ -351,7 +474,11 @@ int CloudPolicyClient::Result::GetNetError() const {
   return net_error_;
 }
 
-const base::Value::Dict& CloudPolicyClient::Result::GetResponse() const {
+int CloudPolicyClient::Result::GetResponseCode() const {
+  return response_code_;
+}
+
+const base::DictValue& CloudPolicyClient::Result::GetResponse() const {
   return response_;
 }
 
@@ -426,7 +553,6 @@ void CloudPolicyClient::SetupRegistration(
   dm_token_ = dm_token;
   client_id_ = client_id;
   request_jobs_.clear();
-  app_install_report_request_job_ = nullptr;
   extension_install_report_request_job_ = nullptr;
   unique_request_job_.reset();
   last_policy_fetch_responses_.clear();
@@ -709,19 +835,25 @@ CloudPolicyClient::GetPolicyFetchRequestSignatureType() {
 
 em::PolicyFetchRequest* CloudPolicyClient::AddPolicyFetchRequest(
     em::DevicePolicyRequest* policy_request,
-    const CloudPolicyClientTypeParams& type_to_fetch) {
+    const PolicyTypeToFetch& type_to_fetch) {
   em::PolicyFetchRequest* fetch_request = policy_request->add_requests();
   fetch_request->set_policy_type(type_to_fetch.policy_type());
   VLOG_POLICY(2, POLICY_FETCHING)
-      << "Fetching policy type: " << type_to_fetch.policy_type() << " -> "
-      << type_to_fetch.settings_entity_id();
+      << "Fetching policy: " << TypeToFetchToDebugString(type_to_fetch);
 
   if (!type_to_fetch.settings_entity_id().empty()) {
     fetch_request->set_settings_entity_id(type_to_fetch.settings_entity_id());
   }
 
+  std::set<ExtensionIdAndVersion> extension_ids_and_version =
+      type_to_fetch.extension_ids_and_version();
+  if (!extension_ids_and_version.empty()) {
+    VLOG_POLICY(2, POLICY_FETCHING)
+        << "extension_ids_and_version = ["
+        << JoinExtensionIdsAndVersions(extension_ids_and_version) << "]";
+  }
   for (const auto& [extension_id, extension_version] :
-       type_to_fetch.extension_ids_and_version()) {
+       extension_ids_and_version) {
     if (!extension_id.empty()) {
       em::ExtensionIdAndVersion* extension_id_and_version =
           fetch_request->add_extension_ids_and_version();
@@ -737,6 +869,8 @@ em::PolicyFetchRequest* CloudPolicyClient::AddPolicyFetchRequest(
   }
 
   fetch_request->set_verification_key_hash(kPolicyVerificationKeyHash);
+
+  fetch_request->mutable_device_info()->set_form_factor(GetFormFactor());
 
   // These fields are included only in requests for chrome policy.
   if (IsChromePolicy(type_to_fetch.policy_type())) {
@@ -757,7 +891,7 @@ em::PolicyFetchRequest* CloudPolicyClient::AddPolicyFetchRequest(
 
 void CloudPolicyClient::FetchPolicyInternal(
     PolicyFetchReason reason,
-    const CloudPolicyClientTypeParamsSet& types_to_fetch,
+    const PolicyTypeToFetchSet& types_to_fetch,
     base::OnceCallback<void(DMServerJobResult)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
@@ -847,9 +981,9 @@ void CloudPolicyClient::FetchPolicyInternal(
   }
 #endif  // BUILDFLAG(IS_WIN)
   if (reason == PolicyFetchReason::kExtensionInstall) {
-    unique_request_job_ = service_->CreateJob(std::move(config));
-  } else {
     request_jobs_.push_back(service_->CreateJob(std::move(config)));
+  } else {
+    unique_request_job_ = service_->CreateJob(std::move(config));
   }
 }
 
@@ -858,10 +992,9 @@ void CloudPolicyClient::FetchExtensionInstallPolicy(
     PolicyFetchReason reason,
     const ExtensionIdAndVersion& extension_id_and_version,
     base::OnceCallback<void(DMServerJobResult)> callback) {
-  FetchPolicyInternal(
-      reason,
-      {CloudPolicyClientTypeParams(policy_type, extension_id_and_version)},
-      std::move(callback));
+  SingleExtensionProvider provider(extension_id_and_version);
+  FetchPolicyInternal(reason, {PolicyTypeToFetch(policy_type, &provider)},
+                      std::move(callback));
 }
 
 void CloudPolicyClient::FetchPolicy(PolicyFetchReason reason) {
@@ -893,6 +1026,28 @@ void CloudPolicyClient::DeterminePromotionEligibility(
   config->request()->mutable_determine_promotion_eligibility_request();
 
   // Execute job
+  request_jobs_.push_back(service_->CreateJob(std::move(config)));
+}
+
+void CloudPolicyClient::GenerateChromeProfileChallenge(
+    GenerateChromeProfileChallengeCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(service_);
+  CHECK(is_registered());
+
+  auto params = DMServerJobConfiguration::CreateParams::WithClient(
+      DeviceManagementService::JobConfiguration::
+          TYPE_GENERATE_CHROME_PROFILE_CHALLENGE,
+      this);
+  params.auth_data = DMAuth::FromDMToken(dm_token_);
+  params.profile_id = profile_id_;
+  params.callback = base::BindOnce(
+      &CloudPolicyClient::OnGenerateChromeProfileChallengeCompleted,
+      weak_ptr_factory_.GetWeakPtr(), std::move(callback));
+  auto config = std::make_unique<DMServerJobConfiguration>(std::move(params));
+
+  config->request()->mutable_generate_chrome_profile_challenge_request();
+
   request_jobs_.push_back(service_->CreateJob(std::move(config)));
 }
 
@@ -1131,17 +1286,17 @@ void CloudPolicyClient::UploadChromeProfileReport(
   request_jobs_.push_back(service_->CreateJob(std::move(config)));
 }
 
-void CloudPolicyClient::UploadSecurityEvent(
-    bool include_device_info,
-    ::chrome::cros::reporting::proto::UploadEventsRequest request,
-    ResultCallback callback) {
+void CloudPolicyClient::UploadSecurityEvent(bool include_device_info,
+                                            UploadEventsRequest request,
+                                            ResultCallback callback) {
   DCHECK(base::FeatureList::IsEnabled(
       policy::kUploadRealtimeReportingEventsUsingProto));
 
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (!is_registered()) {
-    std::move(callback).Run(CloudPolicyClient::Result(NotRegistered()));
+  if (!is_registered() || !service() || !service()->configuration()) {
+    std::move(callback).Run(CloudPolicyClient::Result::CreateForRealtimeUpload(
+        NotRegistered(), std::move(request)));
     return;
   }
 
@@ -1151,15 +1306,14 @@ void CloudPolicyClient::UploadSecurityEvent(
       include_device_info, std::move(callback));
 }
 
+// TODO(crbug.com/478929452): Delete this method after the proto-based reporting
+// launch.
 void CloudPolicyClient::UploadSecurityEventReport(bool include_device_info,
-                                                  base::Value::Dict report,
+                                                  base::DictValue report,
                                                   ResultCallback callback) {
-  DCHECK(!base::FeatureList::IsEnabled(
-      policy::kUploadRealtimeReportingEventsUsingProto));
-
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (!is_registered()) {
+  if (!is_registered() || !service() || !service()->configuration()) {
     std::move(callback).Run(CloudPolicyClient::Result(NotRegistered()));
     return;
   }
@@ -1170,31 +1324,6 @@ void CloudPolicyClient::UploadSecurityEventReport(bool include_device_info,
       include_device_info, std::move(callback));
 }
 
-void CloudPolicyClient::UploadAppInstallReport(base::Value::Dict report,
-                                               ResultCallback callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  if (!is_registered()) {
-    std::move(callback).Run(CloudPolicyClient::Result(NotRegistered()));
-    return;
-  }
-
-  CancelAppInstallReportUpload();
-  app_install_report_request_job_ = CreateNewRealtimeReportingJobDeprecated(
-      std::move(report),
-      service()->configuration()->GetRealtimeReportingServerUrl(),
-      /* include_device_info */ true, std::move(callback));
-  DCHECK(app_install_report_request_job_);
-}
-
-void CloudPolicyClient::CancelAppInstallReportUpload() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  if (app_install_report_request_job_) {
-    RemoveJob(app_install_report_request_job_);
-    DCHECK_EQ(app_install_report_request_job_, nullptr);
-  }
-}
 
 void CloudPolicyClient::FetchRemoteCommands(
     std::unique_ptr<RemoteCommandJob::UniqueIDType> last_command_id,
@@ -1239,7 +1368,7 @@ void CloudPolicyClient::FetchRemoteCommands(
 }
 
 DeviceManagementService::Job* CloudPolicyClient::CreateNewRealtimeReportingJob(
-    ::chrome::cros::reporting::proto::UploadEventsRequest request,
+    UploadEventsRequest request,
     const std::string& server_url,
     bool include_device_info,
     ResultCallback callback) {
@@ -1256,15 +1385,16 @@ DeviceManagementService::Job* CloudPolicyClient::CreateNewRealtimeReportingJob(
 
 DeviceManagementService::Job*
 CloudPolicyClient::CreateNewRealtimeReportingJobDeprecated(
-    base::Value::Dict report,
+    base::DictValue report,
     const std::string& server_url,
     bool include_device_info,
     ResultCallback callback) {
   std::unique_ptr<RealtimeReportingJobConfiguration> config =
       std::make_unique<RealtimeReportingJobConfiguration>(
           this, server_url, include_device_info,
-          base::BindOnce(&CloudPolicyClient::OnRealtimeReportUploadCompleted,
-                         weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+          base::BindOnce(
+              &CloudPolicyClient::OnRealtimeReportUploadCompletedDeprecated,
+              weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 
   config->AddReportDeprecated(std::move(report));
   request_jobs_.push_back(service_->CreateJob(std::move(config)));
@@ -1285,7 +1415,7 @@ void CloudPolicyClient::GetDeviceAttributeUpdatePermission(
   if (auth.has_oauth_token()) {
     params.oauth_token = auth.oauth_token();
   } else {
-    params.auth_data = auth.Clone();
+    params.auth_data = std::move(auth);
     params.oauth_token = std::string();
   }
   params.callback = base::BindOnce(
@@ -1313,7 +1443,7 @@ void CloudPolicyClient::UpdateDeviceAttributes(
   if (auth.has_oauth_token()) {
     params.oauth_token = auth.oauth_token();
   } else {
-    params.auth_data = auth.Clone();
+    params.auth_data = std::move(auth);
     params.oauth_token = std::string();
   }
   params.callback =
@@ -1476,12 +1606,10 @@ void CloudPolicyClient::AddPolicyTypeToFetch(
     const std::string& settings_entity_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  AddPolicyTypeToFetch(
-      CloudPolicyClientTypeParams(policy_type, settings_entity_id));
+  AddPolicyTypeToFetch(PolicyTypeToFetch(policy_type, settings_entity_id));
 }
 
-void CloudPolicyClient::AddPolicyTypeToFetch(
-    const CloudPolicyClientTypeParams& params) {
+void CloudPolicyClient::AddPolicyTypeToFetch(const PolicyTypeToFetch& params) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   types_to_fetch_.insert(params);
 }
@@ -1490,12 +1618,11 @@ void CloudPolicyClient::RemovePolicyTypeToFetch(
     const std::string& policy_type,
     const std::string& settings_entity_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  RemovePolicyTypeToFetch(
-      CloudPolicyClientTypeParams(policy_type, settings_entity_id));
+  RemovePolicyTypeToFetch(PolicyTypeToFetch(policy_type, settings_entity_id));
 }
 
 void CloudPolicyClient::RemovePolicyTypeToFetch(
-    const CloudPolicyClientTypeParams& params) {
+    const PolicyTypeToFetch& params) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   types_to_fetch_.erase(params);
 }
@@ -1513,7 +1640,7 @@ const em::PolicyFetchResponse* CloudPolicyClient::GetPolicyFor(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   auto it = last_policy_fetch_responses_.find(
-      CloudPolicyClientTypeParams(policy_type, settings_entity_id));
+      PolicyTypeToFetch(policy_type, settings_entity_id));
   return it == last_policy_fetch_responses_.end() ? nullptr : &it->second;
 }
 
@@ -1648,7 +1775,7 @@ void CloudPolicyClient::ProcessDeviceRegisterResponse(
         response.configuration_seed(),
         base::JSONParserOptions::JSON_ALLOW_TRAILING_COMMAS);
     if (configuration_seed && configuration_seed->is_dict()) {
-      configuration_seed_ = std::make_unique<base::Value::Dict>(
+      configuration_seed_ = std::make_unique<base::DictValue>(
           std::move(*configuration_seed).TakeDict());
     } else {
       configuration_seed_.reset();
@@ -1770,8 +1897,8 @@ void CloudPolicyClient::OnPolicyFetchCompleted(base::Time start_time,
       if (policy_data.has_settings_entity_id()) {
         entity_id = policy_data.settings_entity_id();
       }
-      CloudPolicyClientTypeParams key(type, entity_id);
-      if (base::Contains(last_policy_fetch_responses_, key)) {
+      PolicyTypeToFetch key(type, entity_id);
+      if (last_policy_fetch_responses_.contains(key)) {
         LOG_POLICY(WARNING, CBCM_ENROLLMENT)
             << "Duplicate PolicyFetchResponse for type: " << type
             << ", entity: " << entity_id << ", ignoring";
@@ -1872,9 +1999,7 @@ void CloudPolicyClient::OnDeviceAttributeUpdated(
 }
 
 void CloudPolicyClient::RemoveJob(const DeviceManagementService::Job* job) {
-  if (app_install_report_request_job_ == job) {
-    app_install_report_request_job_ = nullptr;
-  } else if (extension_install_report_request_job_ == job) {
+  if (extension_install_report_request_job_ == job) {
     extension_install_report_request_job_ = nullptr;
   }
   for (auto it = request_jobs_.begin(); it != request_jobs_.end(); ++it) {
@@ -1903,8 +2028,31 @@ void CloudPolicyClient::OnRealtimeReportUploadCompleted(
     ResultCallback callback,
     DeviceManagementService::Job* job,
     DeviceManagementStatus status,
-    int reponse_code,
-    std::optional<base::Value::Dict> response) {
+    int response_code,
+    std::optional<base::DictValue> response,
+    const UploadEventsRequest& upload_request) {
+  last_dm_status_ = status;
+  if (status != DM_STATUS_SUCCESS) {
+    NotifyClientError();
+  }
+
+  if (response.has_value()) {
+    std::move(callback).Run(CloudPolicyClient::Result::CreateForRealtimeUpload(
+        status, response_code, std::move(response.value()), upload_request));
+  } else {
+    std::move(callback).Run(CloudPolicyClient::Result::CreateForRealtimeUpload(
+        status, response_code, upload_request));
+  }
+
+  RemoveJob(job);
+}
+
+void CloudPolicyClient::OnRealtimeReportUploadCompletedDeprecated(
+    ResultCallback callback,
+    DeviceManagementService::Job* job,
+    DeviceManagementStatus status,
+    int response_code,
+    std::optional<base::DictValue> response) {
   last_dm_status_ = status;
   if (status != DM_STATUS_SUCCESS) {
     NotifyClientError();
@@ -1912,9 +2060,9 @@ void CloudPolicyClient::OnRealtimeReportUploadCompleted(
 
   if (response.has_value()) {
     std::move(callback).Run(CloudPolicyClient::Result(
-        status, reponse_code, std::move(response.value())));
+        status, response_code, std::move(response.value())));
   } else {
-    std::move(callback).Run(CloudPolicyClient::Result(status, reponse_code));
+    std::move(callback).Run(CloudPolicyClient::Result(status, response_code));
   }
 
   RemoveJob(job);
@@ -1971,6 +2119,29 @@ void CloudPolicyClient::OnPromotionEligibilityDetermined(
 
   std::move(callback).Run(
       result.response.get_user_eligible_promotions_response());
+}
+
+void CloudPolicyClient::OnGenerateChromeProfileChallengeCompleted(
+    GenerateChromeProfileChallengeCallback callback,
+    DMServerJobResult result) {
+  if (result.dm_status == DM_STATUS_SUCCESS &&
+      !result.response.has_generate_chrome_profile_challenge_response()) {
+    result.dm_status = DM_STATUS_RESPONSE_DECODING_ERROR;
+  }
+
+  base::UmaHistogramSparse("Enterprise.GenerateChromeProfileChallenge.Status",
+                           result.dm_status);
+
+  last_dm_status_ = result.dm_status;
+  if (last_dm_status_ != DM_STATUS_SUCCESS) {
+    NotifyClientError();
+  }
+
+  RemoveJob(result.job);
+
+  std::move(callback).Run(
+      last_dm_status_,
+      result.response.generate_chrome_profile_challenge_response());
 }
 
 void CloudPolicyClient::NotifyPolicyFetched() {
@@ -2063,11 +2234,29 @@ void CloudPolicyClient::CreateDeviceRegisterRequest(
   if (!params.oidc_state.empty()) {
     request->set_oidc_profile_enrollment_state(params.oidc_state);
   }
+  request->mutable_device_info()->set_form_factor(GetFormFactor());
 }
 
 void CloudPolicyClient::CreateUniqueRequestJob(
     std::unique_ptr<RegistrationJobConfiguration> config) {
   unique_request_job_ = service_->CreateJob(std::move(config));
+}
+
+em::FormFactor GetFormFactor() {
+  switch (ui::GetDeviceFormFactor()) {
+    case ui::DEVICE_FORM_FACTOR_DESKTOP:
+      return em::FORM_FACTOR_DESKTOP;
+    case ui::DEVICE_FORM_FACTOR_PHONE:
+      return em::FORM_FACTOR_PHONE;
+    case ui::DEVICE_FORM_FACTOR_TABLET:
+      return em::FORM_FACTOR_TABLET;
+    case ui::DEVICE_FORM_FACTOR_TV:
+      return em::FORM_FACTOR_TV;
+    case ui::DEVICE_FORM_FACTOR_AUTOMOTIVE:
+      return em::FORM_FACTOR_AUTOMOTIVE;
+    default:
+      return em::FORM_FACTOR_UNSPECIFIED;
+  }
 }
 
 }  // namespace policy

@@ -13,6 +13,7 @@
 
 #include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
+#include "base/rand_util.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
 #include "net/base/ip_address.h"
@@ -128,6 +129,13 @@ class NET_EXPORT NetworkErrorLoggingService {
     GURL referrer;
     std::string user_agent;
     IPAddress server_ip;
+    // Addresses other than `server_ip` that were also contacted while
+    // establishing the connection (e.g., earlier addresses in the resolved
+    // address list that the socket layer attempted before falling back). Not
+    // included in the uploaded report. Used when deciding whether to downgrade
+    // the report: the report is downgraded if any of these differ from the
+    // policy's `received_ip_address`.
+    std::vector<IPAddress> other_server_ips;
     std::string protocol;
     std::string method;
     int status_code;

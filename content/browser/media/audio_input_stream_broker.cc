@@ -11,7 +11,6 @@
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "content/browser/browser_main_loop.h"
@@ -22,12 +21,21 @@
 #include "media/audio/audio_logging.h"
 #include "media/base/media_switches.h"
 #include "media/mojo/mojom/audio_processing.mojom.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace content {
 
 using DisconnectReason =
     media::mojom::AudioInputStreamObserver::DisconnectReason;
 using InputStreamErrorCode = media::mojom::InputStreamErrorCode;
+
+namespace {
+
+perfetto::NamedTrack GetTracingTrack(const AudioInputStreamBroker* broker) {
+  return perfetto::NamedTrack::FromPointer("AudioInputStreamBroker", broker);
+}
+
+}  // namespace
 
 AudioInputStreamBroker::AudioInputStreamBroker(
     int render_process_id,
@@ -53,8 +61,7 @@ AudioInputStreamBroker::AudioInputStreamBroker(
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   DCHECK(renderer_factory_client_);
   DCHECK(deleter_);
-  TRACE_EVENT_BEGIN("audio", "AudioInputStreamBroker",
-                    perfetto::Track::FromPointer(this));
+  TRACE_EVENT_BEGIN("audio", "AudioInputStreamBroker", GetTracingTrack(this));
 
   // Unretained is safe because |this| owns |renderer_factory_client_|.
   renderer_factory_client_.set_disconnect_handler(base::BindOnce(
@@ -79,12 +86,11 @@ AudioInputStreamBroker::~AudioInputStreamBroker() {
 
   if (awaiting_created_) {
     // End "CreateStream" trace event.
-    TRACE_EVENT_END("audio", perfetto::Track::FromPointer(this), "success",
+    TRACE_EVENT_END("audio", GetTracingTrack(this), "success",
                     "failed or cancelled");
   }
   // End "AudioInputStreamBroker" trace event.
-  TRACE_EVENT_END("audio", perfetto::Track::FromPointer(this),
-                  "disconnect reason",
+  TRACE_EVENT_END("audio", GetTracingTrack(this), "disconnect reason",
                   static_cast<uint32_t>(disconnect_reason_));
 }
 
@@ -93,8 +99,8 @@ void AudioInputStreamBroker::CreateStream(
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   DCHECK(!observer_receiver_.is_bound());
   DCHECK(!pending_client_receiver_);
-  TRACE_EVENT_BEGIN("audio", "CreateStream", perfetto::Track::FromPointer(this),
-                    "device id", device_id_);
+  TRACE_EVENT_BEGIN("audio", "CreateStream", GetTracingTrack(this), "device id",
+                    device_id_);
   awaiting_created_ = true;
 
   mojo::PendingRemote<media::mojom::AudioInputStreamClient> client;
@@ -139,8 +145,7 @@ void AudioInputStreamBroker::StreamCreated(
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   awaiting_created_ = false;
   // End "CreateStream" trace event.
-  TRACE_EVENT_END("audio", perfetto::Track::FromPointer(this), "success",
-                  !!data_pipe);
+  TRACE_EVENT_END("audio", GetTracingTrack(this), "success", !!data_pipe);
 
   if (!data_pipe) {
     disconnect_reason_ = DisconnectReason::kStreamCreationFailed;
@@ -161,6 +166,8 @@ InputStreamErrorCode MapDisconnectReasonToErrorCode(DisconnectReason reason) {
       return InputStreamErrorCode::kSystemPermissions;
     case DisconnectReason::kDeviceInUse:
       return InputStreamErrorCode::kDeviceInUse;
+    case DisconnectReason::kDeviceRemoved:
+      return InputStreamErrorCode::kDeviceRemoved;
     case DisconnectReason::kDefault:
     case DisconnectReason::kPlatformError:
     case DisconnectReason::kTerminatedByClient:

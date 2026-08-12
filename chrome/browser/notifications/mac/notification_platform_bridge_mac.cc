@@ -11,6 +11,7 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/metrics/histogram_functions.h"
 #include "chrome/browser/notifications/mac/mac_notification_provider_factory.h"
 #include "chrome/browser/notifications/mac/notification_dispatcher_mojo.h"
 #include "chrome/browser/notifications/mac/notification_utils.h"
@@ -23,7 +24,6 @@
 #include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
-#include "chrome/common/chrome_features.h"
 #include "third_party/blink/public/common/notifications/notification_constants.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_types.h"
@@ -77,12 +77,24 @@ void NotificationPlatformBridgeMac::Display(
     std::unique_ptr<NotificationCommon::Metadata> metadata) {
   NotificationDispatcherMac* dispatcher = nullptr;
 
-  if (web_app::UseNotificationAttributionForWebAppShims() &&
-      notification.notifier_id().web_app_id.has_value() &&
-      AppShimRegistry::Get()->IsAppInstalledInProfile(
-          *notification.notifier_id().web_app_id, profile->GetPath())) {
-    dispatcher =
-        GetOrCreateDispatcherForWebApp(*notification.notifier_id().web_app_id);
+  if (notification.notifier_id().web_app_id.has_value()) {
+    bool attribution_enabled =
+        web_app::UseNotificationAttributionForWebAppShims();
+    bool is_installed = AppShimRegistry::Get()->IsAppInstalledInProfile(
+        *notification.notifier_id().web_app_id, profile->GetPath());
+
+    MacNotificationAttributionOutcome outcome;
+    if (!attribution_enabled) {
+      outcome = MacNotificationAttributionOutcome::kFallbackFeatureDisabled;
+    } else if (!is_installed) {
+      outcome = MacNotificationAttributionOutcome::kFallbackNoAppShim;
+    } else {
+      outcome = MacNotificationAttributionOutcome::kAttributed;
+      dispatcher = GetOrCreateDispatcherForWebApp(
+          *notification.notifier_id().web_app_id);
+    }
+    base::UmaHistogramEnumeration("Notifications.macOS.AttributionOutcome",
+                                  outcome);
   }
 
   if (!dispatcher) {
@@ -176,15 +188,10 @@ void NotificationPlatformBridgeMac::GetDisplayedForOrigin(
 
   std::vector<webapps::AppId> web_app_ids;
   if (web_app::UseNotificationAttributionForWebAppShims()) {
-    if (auto* web_app_provider =
-            web_app::WebAppProvider::GetForWebApps(profile)) {
-      web_app::WebAppRegistrar& registrar =
-          web_app_provider->registrar_unsafe();
-      for (const webapps::AppId& app_id : registrar.GetAppIds()) {
-        if (!registrar.IsInstallState(
-                app_id, {web_app::proto::INSTALLED_WITH_OS_INTEGRATION})) {
-          continue;
-        }
+    if (auto* provider = web_app::WebAppProvider::GetForWebApps(profile)) {
+      web_app::WebAppRegistrar& registrar = provider->registrar_unsafe();
+      for (const webapps::AppId& app_id : registrar.GetAppIds(
+               web_app::WebAppFilter::SupportsOsNotifications())) {
         if (!url::IsSameOriginWith(registrar.GetAppScope(app_id), origin)) {
           continue;
         }

@@ -15,6 +15,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "components/certificate_matching/certificate_principal_pattern.h"
 #include "components/device_signals/core/browser/signals_aggregator.h"
 #include "components/device_signals/core/common/signals_features.h"
 #include "components/enterprise/browser/reporting/os_report_generator.h"
@@ -110,16 +111,11 @@ void ChromeProfileRequestGenerator::Generate(
 
   bool is_signals_only = generation_config.security_signals_mode ==
                          SecuritySignalsMode::kSignalsOnly;
-  bool policies_enabled =
-      enterprise_signals::features::IsPolicyDataCollectionEnabled();
 
-  // Early Exit since it's a Signals-Only report with no policies.
-  if (is_signals_only && !policies_enabled) {
-    return OnBaseReportsReady(std::move(request), std::move(callback),
-                              generation_config,
-                              std::make_unique<em::BrowserReport>(),
-                              std::make_unique<em::ChromeUserProfileInfo>());
-  }
+  profile_report_generator_.set_policies_enabled(
+      is_signals_only
+          ? enterprise_signals::features::IsPolicyDataCollectionEnabled()
+          : true);
 
   auto barrier_callback = base::BarrierCallback<
       std::variant<std::unique_ptr<em::BrowserReport>,
@@ -167,6 +163,23 @@ void ChromeProfileRequestGenerator::OnBaseReportsReady(
     ReportGenerationConfig generation_config,
     std::unique_ptr<em::BrowserReport> browser_report,
     std::unique_ptr<em::ChromeUserProfileInfo> profile_report) {
+  // Safely abort if the base reports are empty.
+  if (!profile_report) {
+    VLOG_POLICY(1, REPORTING)
+        << "Aborting report generation: profile report is empty.";
+    std::move(callback).Run(
+        base::unexpected(ReportGenerationError::kProfileEmptyReport));
+    return;
+  }
+
+  if (!browser_report) {
+    VLOG_POLICY(1, REPORTING)
+        << "Aborting report generation: browser report is empty.";
+    std::move(callback).Run(
+        base::unexpected(ReportGenerationError::kBrowserEmptyReport));
+    return;
+  }
+
   if (generation_config.security_signals_mode ==
           SecuritySignalsMode::kNoSignals ||
       !signals_aggregator_) {
@@ -196,6 +209,41 @@ void ChromeProfileRequestGenerator::OnBaseReportsReady(
   signals_request.signal_names.emplace(device_signals::SignalName::kAntiVirus);
   signals_request.signal_names.emplace(device_signals::SignalName::kHotfixes);
 #endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  if (enterprise_signals::features::IsCertificateCollectionEnabled() &&
+      generation_config.challenge.has_value() &&
+      !generation_config.challenge.value().empty()) {
+    signals_request.signal_names.emplace(
+        device_signals::SignalName::kCertificates);
+
+    if (generation_config.client_certificates_selectors.empty()) {
+      device_signals::GetCertificateOptions cert_option;
+      cert_option.challenge = generation_config.challenge.value();
+      signals_request.certificate_signal_parameters.push_back(
+          std::move(cert_option));
+    } else {
+      for (const auto& entry :
+           generation_config.client_certificates_selectors) {
+        const base::DictValue* selector_dict = entry.GetIfDict();
+        if (!selector_dict) {
+          continue;
+        }
+        device_signals::GetCertificateOptions cert_option;
+        cert_option.challenge = generation_config.challenge.value();
+        cert_option.issuer_pattern = certificate_matching::
+            CertificatePrincipalPattern::ParseFromOptionalDict(
+                selector_dict->FindDict("ISSUER"), "CN", "L", "O", "OU");
+        cert_option.subject_pattern = certificate_matching::
+            CertificatePrincipalPattern::ParseFromOptionalDict(
+                selector_dict->FindDict("SUBJECT"), "CN", "L", "O", "OU");
+        signals_request.certificate_signal_parameters.push_back(
+            std::move(cert_option));
+      }
+    }
+  }
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+
   signals_request.trigger = device_signals::Trigger::kSignalsReport;
 
   signals_aggregator_->GetSignals(
@@ -292,6 +340,13 @@ void ChromeProfileRequestGenerator::OnAggregatedSignalsReceived(
     }
 #endif  // BUILDFLAG(IS_ANDROID)
 
+#if BUILDFLAG(IS_IOS)
+    if (os_signals.vendor_id) {
+      auto* ios_attributes = os_report->mutable_ios_specific_attributes();
+      ios_attributes->set_vendor_id(os_signals.vendor_id.value());
+    }
+#endif  // BUILDFLAG(IS_IOS)
+
     browser_report->set_browser_version(os_signals.browser_version);
   }
 
@@ -368,6 +423,26 @@ void ChromeProfileRequestGenerator::OnAggregatedSignalsReceived(
   }
 #endif  // BUILDFLAG(IS_WIN)
 
+  if (response.certificate_signals_response) {
+    const auto& cert_signals = response.certificate_signals_response.value();
+    VLOG_POLICY(1, REPORTING)
+        << "Retrieved " << cert_signals.serialized_caa_responses.size()
+        << " certificate signals (truncated: "
+        << cert_signals.truncated_certificates << ")";
+    profile_report->set_certificates_were_truncated(
+        cert_signals.truncated_certificates);
+    for (const std::string& serialized_cert :
+         cert_signals.serialized_caa_responses) {
+      em::SignedCertificateDetails cert_details;
+      if (cert_details.ParseFromString(serialized_cert)) {
+        *profile_report->add_certificates() = std::move(cert_details);
+      } else {
+        LOG_POLICY(ERROR, REPORTING)
+            << "Failed to parse SignedCertificateDetails";
+      }
+    }
+  }
+
   request->GetChromeProfileReportRequest()
       .set_allocated_browser_device_identifier(device_identifier.release());
 
@@ -384,10 +459,14 @@ void ChromeProfileRequestGenerator::OnAggregatedSignalsReceived(
   std::string report_timestamp =
       base::NumberToString(base::Time::Now().InMillisecondsFSinceUnixEpoch());
   std::string report_nonce = CreateNonce();
-  auto signals_string =
+
+  std::string signals_string =
       GetSecuritySignalsInReport(request->GetChromeProfileReportRequest());
+
+  auto* request_ptr = request.get();
   device_attestation_service_->GetAttestationResponse(
-      kAttestationFlowName, signals_string, report_timestamp, report_nonce,
+      kAttestationFlowName, request_ptr->GetChromeProfileReportRequest(),
+      signals_string, report_timestamp, report_nonce,
       base::BindOnce(&ChromeProfileRequestGenerator::OnAttestationResultReady,
                      weak_ptr_factory_.GetWeakPtr(), report_timestamp,
                      report_nonce, std::move(callback), std::move(request)));
@@ -398,14 +477,19 @@ void ChromeProfileRequestGenerator::OnAttestationResultReady(
     std::string_view nonce,
     ReportCallback callback,
     std::unique_ptr<ReportRequest> request,
-    const enterprise::BlobGenerationResult& attestation_result) {
+    const enterprise::AttestationResult& attestation_result) {
   auto attestation_payload = std::make_unique<em::AttestationPayload>();
   attestation_payload->set_timestamp(timestamp);
   attestation_payload->set_nonce(nonce);
+  if (attestation_result.content_binding_version > 0) {
+    attestation_payload->set_content_binding_version(
+        attestation_result.content_binding_version);
+  }
 
   attestation_payload->set_attestation_blob(
-      attestation_result.attestation_blob);
-  attestation_payload->set_attestation_error(attestation_result.error_message);
+      attestation_result.blob_generation_result.attestation_blob);
+  attestation_payload->set_attestation_error(
+      attestation_result.blob_generation_result.error_message);
   request->GetChromeProfileReportRequest().set_allocated_attestation_payload(
       attestation_payload.release());
   VLOG_POLICY(2, REPORTING)

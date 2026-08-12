@@ -49,15 +49,14 @@
 #include "components/enterprise/encryption/cache/utils.h"
 #include "components/net_log/net_export_file_writer.h"
 #include "components/net_log/net_log_proxy_source.h"
-#include "components/os_crypt/sync/os_crypt.h"
 #include "components/policy/core/common/policy_namespace.h"
 #include "components/policy/core/common/policy_service.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
-#include "components/variations/net/omnibox_autofocus_http_headers.h"
 #include "components/variations/net/variations_http_headers.h"
 #include "components/variations/variations_associated_data.h"
+#include "components/variations/variations_ids_provider.h"
 #include "components/version_info/version_info.h"
 #include "content/public/browser/browser_child_process_observer.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -94,22 +93,21 @@
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
-#include "chrome/browser/net/network_annotation_monitor.h"
+#include "ash/constants/ash_pref_names.h"
 #include "chrome/browser/ash/net/dhcp_wpad_url_client.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/browser_process_platform_part.h"
+#include "chrome/browser/net/network_annotation_monitor.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
-
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "extensions/common/constants.h"
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 #if BUILDFLAG(IS_WIN)
 #include "chrome/browser/net/chrome_mojo_proxy_resolver_win.h"
-#endif  // BUILDFLAG(IS_WIN)
+#elif BUILDFLAG(IS_MAC)
+#include "chrome/browser/net/chrome_mojo_proxy_resolver_mac.h"
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 
 #if BUILDFLAG(ENABLE_REQUEST_HEADER_INTEGRITY)
-#include "chrome/common/request_header_integrity/request_header_integrity_url_loader_throttle.h"  // nogncheck crbug.com/1125897
+#include "chrome/common/request_header_integrity/request_header_integrity_url_loader_throttle.h"  // nogncheck crbug.com/40147906
 #endif
 
 namespace {
@@ -148,7 +146,7 @@ bool g_network_service_will_allow_gssapi_library_load = false;
 
 const char* kGssapiDesiredPref =
 #if BUILDFLAG(IS_CHROMEOS)
-    prefs::kKerberosEnabled;
+    ash::prefs::kKerberosEnabled;
 #elif BUILDFLAG(IS_LINUX)
     prefs::kReceivedHttpAuthNegotiateHeader;
 #endif
@@ -366,13 +364,13 @@ BASE_FEATURE(kPersistFailedLaunchState, base::FEATURE_ENABLED_BY_DEFAULT);
 
 class SystemNetworkContextManager::NetworkProcessLaunchWatcher
     : public content::BrowserChildProcessObserver,
-      public content::ServiceProcessHost::Observer {
+      public content::NetworkServiceProcessObserver {
  public:
   explicit NetworkProcessLaunchWatcher(PrefService* prefs) : prefs_(prefs) {
     if (!base::FeatureList::IsEnabled(features::kPersistFailedLaunchState)) {
       prefs->ClearPref(prefs::kNetworkServiceFailedLaunchMajorVersion);
     }
-    content::ServiceProcessHost::AddObserver(this);
+    content::AddNetworkServiceProcessObserver(this);
     BrowserChildProcessObserver::Add(this);
   }
 
@@ -382,7 +380,7 @@ class SystemNetworkContextManager::NetworkProcessLaunchWatcher
 
   ~NetworkProcessLaunchWatcher() override {
     BrowserChildProcessObserver::Remove(this);
-    content::ServiceProcessHost::RemoveObserver(this);
+    content::RemoveNetworkServiceProcessObserver(this);
   }
 
   static void RegisterPrefs(PrefRegistrySimple* registry) {
@@ -431,10 +429,8 @@ class SystemNetworkContextManager::NetworkProcessLaunchWatcher
     }
   }
 
-  void OnServiceProcessCrashed(
-      const content::ServiceProcessInfo& info) override {
-    if (info.IsService<network::mojom::NetworkService>() &&
-        *info.crashed_pre_ipc()) {
+  void OnServiceCrashed(const content::ServiceProcessInfo& info) override {
+    if (*info.crashed_pre_ipc()) {
       base::UmaHistogramBoolean(
           "Chrome.SystemNetworkContextManager.NetworkSandboxEarlyLaunchCrashed",
           true);
@@ -475,8 +471,9 @@ class SystemNetworkContextManager::URLLoaderFactoryForSystem
       const net::MutableNetworkTrafficAnnotationTag& traffic_annotation)
       override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    if (!manager_)
+    if (!manager_) {
       return;
+    }
     manager_->GetURLLoaderFactory()->CreateLoaderAndStart(
         std::move(receiver), request_id, options, url_request,
         std::move(client), traffic_annotation);
@@ -484,8 +481,9 @@ class SystemNetworkContextManager::URLLoaderFactoryForSystem
 
   void Clone(mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver)
       override {
-    if (!manager_)
+    if (!manager_) {
       return;
+    }
     manager_->GetURLLoaderFactory()->Clone(std::move(receiver));
   }
 
@@ -530,7 +528,7 @@ SystemNetworkContextManager::GetURLLoaderFactory() {
 
   network::mojom::URLLoaderFactoryParamsPtr params =
       network::mojom::URLLoaderFactoryParams::New();
-  params->process_id = network::mojom::kBrowserProcessId;
+  params->process_id = network::OriginatingProcessId::browser();
   params->is_orb_enabled = false;
   params->is_trusted = true;
 
@@ -626,8 +624,9 @@ SystemNetworkContextManager::SystemNetworkContextManager(
           ->GetPolicies(policy::PolicyNamespace(policy::POLICY_DOMAIN_CHROME,
                                                 std::string()))
           .GetValue(policy::key::kQuicAllowed, base::Value::Type::BOOLEAN);
-  if (value)
+  if (value) {
     is_quic_allowed_ = value->GetBool();
+  }
 #endif  // !BUILDFLAG(IS_ANDROID)
   shared_url_loader_factory_ = new URLLoaderFactoryForSystem(this);
 
@@ -758,6 +757,11 @@ void SystemNetworkContextManager::RegisterPrefs(PrefRegistrySimple* registry) {
 
   registry->RegisterIntegerPref(prefs::kMaxConnectionsPerProxy, -1);
 
+  registry->RegisterIntegerPref(prefs::kMaxConnectionsPerProxyForWebSocket, -1);
+
+  registry->RegisterBooleanPref(
+      prefs::kAllowSocketPoolSizeRandomizationForProxies, true);
+
   registry->RegisterListPref(prefs::kExplicitlyAllowedNetworkPorts);
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
@@ -777,8 +781,9 @@ void SystemNetworkContextManager::RegisterPrefs(PrefRegistrySimple* registry) {
 // static
 StubResolverConfigReader*
 SystemNetworkContextManager::GetStubResolverConfigReader() {
-  if (stub_resolver_config_reader_for_testing_)
+  if (stub_resolver_config_reader_for_testing_) {
     return stub_resolver_config_reader_for_testing_;
+  }
 
   return &GetInstance()->stub_resolver_config_reader_;
 }
@@ -791,12 +796,13 @@ void SystemNetworkContextManager::OnNetworkServiceCreated(
   // will then get disconnected later). Resetting the Remote is a no-op for the
   // initial creation of the network service, but for restarts this guarantees
   // that GetURLLoaderFactory() works as expected.
-  // (See crbug.com/1131803 for a motivating example and investigation.)
+  // (See crbug.com/40721586 for a motivating example and investigation.)
   url_loader_factory_.reset();
 
   // Disable QUIC globally, if needed.
-  if (!is_quic_allowed_)
+  if (!is_quic_allowed_) {
     network_service->DisableQuic();
+  }
 
   if (content::IsOutOfProcessNetworkService()) {
     mojo::PendingRemote<network::mojom::NetLogProxySource> proxy_source_remote;
@@ -807,8 +813,9 @@ void SystemNetworkContextManager::OnNetworkServiceCreated(
     network_service->AttachNetLogProxy(
         std::move(proxy_source_remote),
         proxy_sink_remote.BindNewPipeAndPassReceiver());
-    if (net_log_proxy_source_)
+    if (net_log_proxy_source_) {
       net_log_proxy_source_->ShutDown();
+    }
     net_log_proxy_source_ = std::make_unique<net_log::NetLogProxySource>(
         std::move(proxy_source_receiver), std::move(proxy_sink_remote));
   }
@@ -833,12 +840,24 @@ void SystemNetworkContextManager::OnNetworkServiceCreated(
                                      base::DoNothing());
   }
 
-  int max_connections_per_proxy =
+  int max_connections_normal =
       local_state_->GetInteger(prefs::kMaxConnectionsPerProxy);
-  if (max_connections_per_proxy >= 0) {
-    network_service->SetMaxConnectionsPerProxyChain(
-        base::saturated_cast<uint32_t>(max_connections_per_proxy));
-  }
+  int max_connections_websocket =
+      local_state_->GetInteger(prefs::kMaxConnectionsPerProxyForWebSocket);
+  std::optional<uint32_t> max_connections_normal_clamp =
+      max_connections_normal >= 0
+          ? std::optional<uint32_t>(
+                base::saturated_cast<uint32_t>(max_connections_normal))
+          : std::nullopt;
+  std::optional<uint32_t> max_connections_websocket_clamp =
+      max_connections_websocket >= 0
+          ? std::optional<uint32_t>(
+                base::saturated_cast<uint32_t>(max_connections_websocket))
+          : std::nullopt;
+  network_service->SetMaxConnectionsPerProxyChain(
+      max_connections_normal_clamp, max_connections_websocket_clamp,
+      local_state_->GetBoolean(
+          prefs::kAllowSocketPoolSizeRandomizationForProxies));
 
   network_service_network_context_.reset();
   content::CreateNetworkContextInNetworkService(
@@ -855,17 +874,6 @@ void SystemNetworkContextManager::OnNetworkServiceCreated(
   // NetworkContext is created, but before anything has the chance to use it.
   stub_resolver_config_reader_.UpdateNetworkService(true /* record_metrics */);
 
-  // The OSCrypt keys are process bound, so if network service is out of
-  // process, send it the required key.
-  if (content::IsOutOfProcessNetworkService()) {
-    // On Windows, OSCrypt Async manages the encryption key via the DPAPI key
-    // provider, and there is no need to send the key separately to OSCrypt
-    // sync.
-#if !BUILDFLAG(IS_WIN)
-    network_service->SetEncryptionKey(OSCrypt::GetRawEncryptionKey());
-#endif  // !BUILDFLAG(IS_WIN)
-  }
-
   // Configure SCT Auditing in the NetworkService.
   SCTReportingService::ReconfigureAfterNetworkRestart();
 
@@ -875,6 +883,8 @@ void SystemNetworkContextManager::OnNetworkServiceCreated(
   UpdateExplicitlyAllowedNetworkPorts();
 
   UpdateIPv6ReachabilityOverrideEnabled();
+
+  UpdateTLS13EarlyDataEnabled();
 
 #if BUILDFLAG(IS_CHROMEOS)
   if (base::FeatureList::IsEnabled(features::kNetworkAnnotationMonitoring)) {
@@ -926,23 +936,6 @@ void SystemNetworkContextManager::
       cookie_encryption_provider_->BindNewRemote();
 }
 
-void SystemNetworkContextManager::
-    AddCacheEncryptionProviderToNetworkContextParams(
-        network::mojom::NetworkContextParams* network_context_params) {
-  if (!cache_encryption_provider_) {
-    cache_encryption_provider_ =
-        std::make_unique<enterprise_encryption::CacheEncryptionProviderImpl>(
-            g_browser_process->os_crypt_async());
-  }
-
-  mojo::PendingRemote<network::mojom::CacheEncryptionProvider>
-      cache_encryption_provider_remote =
-          cache_encryption_provider_->BindNewRemote();
-
-  network_context_params->encryption_provider =
-      std::move(cache_encryption_provider_remote);
-}
-
 void SystemNetworkContextManager::AddSSLConfigToNetworkContextParams(
     network::mojom::NetworkContextParams* network_context_params) {
   ssl_config_service_manager_.AddToNetworkContextParams(network_context_params);
@@ -951,7 +944,12 @@ void SystemNetworkContextManager::AddSSLConfigToNetworkContextParams(
 void SystemNetworkContextManager::ConfigureDefaultNetworkContextParams(
     network::mojom::NetworkContextParams* network_context_params) {
   variations::UpdateCorsExemptHeaderForVariations(network_context_params);
-  variations::UpdateCorsExemptHeaderForOmniboxAutofocus(network_context_params);
+
+  if (auto* variations_ids_provider =
+          variations::VariationsIdsProvider::GetInstance()) {
+    network_context_params->initial_variations_headers =
+        variations_ids_provider->GetClientDataHeaders(false);
+  }
   GoogleURLLoaderThrottle::UpdateCorsExemptHeader(network_context_params);
 #if BUILDFLAG(ENABLE_REQUEST_HEADER_INTEGRITY)
   request_header_integrity::RequestHeaderIntegrityURLLoaderThrottle::
@@ -974,7 +972,7 @@ void SystemNetworkContextManager::ConfigureDefaultNetworkContextParams(
   // TODO(eroman): Figure out why this doesn't work in single-process mode,
   // or if it does work, now.
   // Should be possible now that a private isolate is used.
-  // http://crbug.com/474654
+  // http://crbug.com/41166927
   if (!command_line.HasSwitch(switches::kWinHttpProxyResolver)) {
     if (command_line.HasSwitch(switches::kSingleProcess)) {
       LOG(ERROR) << "Cannot use V8 Proxy resolver in single process mode.";
@@ -989,12 +987,17 @@ void SystemNetworkContextManager::ConfigureDefaultNetworkContextParams(
     }
   }
 
-#if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   if (command_line.HasSwitch(switches::kUseSystemProxyResolver)) {
+#if BUILDFLAG(IS_WIN)
     network_context_params->system_proxy_resolver =
         ChromeMojoProxyResolverWin::CreateWithSelfOwnedReceiver();
+#elif BUILDFLAG(IS_MAC)
+    network_context_params->system_proxy_resolver =
+        ChromeMojoProxyResolverMac::CreateWithSelfOwnedReceiver();
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   }
-#endif  // BUILDFLAG(IS_WIN)
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 
   network_context_params->pac_quick_check_enabled =
       local_state_->GetBoolean(prefs::kQuickCheckEnabled);
@@ -1037,9 +1040,11 @@ SystemNetworkContextManager::GetNetExportFileWriter() {
 
 void SystemNetworkContextManager::UpdateTrustAnchorIDs(
     std::vector<std::vector<uint8_t>> trust_anchor_ids,
-    std::vector<std::vector<uint8_t>> mtc_trust_anchor_ids) {
+    std::vector<std::vector<uint8_t>> mtc_trust_anchor_ids,
+    int64_t mtc_update_time_seconds) {
   ssl_config_service_manager_.UpdateTrustAnchorIDs(
-      std::move(trust_anchor_ids), std::move(mtc_trust_anchor_ids));
+      std::move(trust_anchor_ids), std::move(mtc_trust_anchor_ids),
+      mtc_update_time_seconds);
 }
 
 // static
@@ -1091,8 +1096,9 @@ void SystemNetworkContextManager::FlushProxyConfigMonitorForTesting() {
 void SystemNetworkContextManager::FlushNetworkInterfaceForTesting() {
   DCHECK(network_service_network_context_);
   network_service_network_context_.FlushForTesting();
-  if (url_loader_factory_)
+  if (url_loader_factory_) {
     url_loader_factory_.FlushForTesting();
+  }
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -1124,8 +1130,9 @@ void SystemNetworkContextManager::SetCTLogListTimelyForTesting() {
 }
 
 bool SystemNetworkContextManager::IsCertificateTransparencyEnabled() {
-  if (certificate_transparency_enabled_for_testing_.has_value())
+  if (certificate_transparency_enabled_for_testing_.has_value()) {
     return certificate_transparency_enabled_for_testing_.value();
+  }
   // Certificate Transparency is enabled:
   //   - by default for Chrome-branded builds
   //   - on an opt-in basis for other builds and embedders, controlled with the

@@ -15,6 +15,10 @@ namespace enterprise_connectors {
 #if BUILDFLAG(ENTERPRISE_CACHE_ENCRYPTION)
 // Pref that maps to the "CacheEncryptionEnabled" policy.
 extern const char kCacheEncryptionEnabledPref[];
+
+// Pref that for storing the primary key used for encrypting the HTTP cache.
+// This key is stored in the user's profile preferences and is itself encrypted.
+extern const char kEncryptedCachePrimaryKey[];
 #endif
 
 // Pref that maps to the "OnFileAttachedEnterpriseConnector" policy.
@@ -28,6 +32,12 @@ extern const char kOnBulkDataEntryPref[];
 
 // Pref that maps to the "OnPrintEnterpriseConnector" policy.
 extern const char kOnPrintPref[];
+
+// Pref that maps to the "OnDataCopiedEnterpriseConnector" policy.
+extern const char kOnDataCopiedPref[];
+
+// Pref that maps to the "OnNetworkRequestEnterpriseConnector" policy.
+extern const char kOnNetworkRequestPref[];
 
 #if BUILDFLAG(IS_CHROMEOS)
 // Pref that maps to the "OnFileTransferEnterpriseConnector" policy.
@@ -49,6 +59,8 @@ extern const char kOnFileAttachedScopePref[];
 extern const char kOnFileDownloadedScopePref[];
 extern const char kOnBulkDataEntryScopePref[];
 extern const char kOnPrintScopePref[];
+extern const char kOnDataCopiedScopePref[];
+extern const char kOnNetworkRequestScopePref[];
 #if BUILDFLAG(IS_CHROMEOS)
 extern const char kOnFileTransferScopePref[];
 #endif
@@ -59,14 +71,26 @@ inline constexpr const char kWatermarkStyleOutlineOpacityPref[] =
     "policy.watermark_style.outline_opacity";
 inline constexpr const char kWatermarkStyleFontSizePref[] =
     "policy.watermark_style.font_size";
+inline constexpr const char kWatermarkStyleTimestampTimezonePref[] =
+    "policy.watermark_style.timestamp_timezone";
 inline constexpr const char kWatermarkStyleFillOpacityFieldName[] =
     "fill_opacity";
 inline constexpr const char kWatermarkStyleOutlineOpacityFieldName[] =
     "outline_opacity";
 inline constexpr const char kWatermarkStyleFontSizeFieldName[] = "font_size";
-inline constexpr int kWatermarkStyleFillOpacityDefault = 4;
-inline constexpr int kWatermarkStyleOutlineOpacityDefault = 6;
-inline constexpr int kWatermarkStyleFontSizeDefault = 24;
+inline constexpr const char kWatermarkStyleTimestampTimezoneFieldName[] =
+    "timestamp_timezone";
+
+// Different tuned default values are set for mobiles and Desktops based on
+// their screen sizes, screen resolutions etc.
+inline constexpr int kWatermarkStyleFillOpacityDefault =
+    BUILDFLAG(IS_IOS) ? 10 : 4;
+inline constexpr int kWatermarkStyleOutlineOpacityDefault =
+    BUILDFLAG(IS_IOS) ? 15 : 6;
+inline constexpr int kWatermarkStyleFontSizeDefault =
+    BUILDFLAG(IS_IOS) ? 16 : 24;
+inline constexpr const char kWatermarkStyleTimestampTimezoneDefault[] =
+    "user_device";
 
 inline constexpr char kEnterpriseRealTimeUrlCheckScope[] =
     "safebrowsing.enterprise_real_time_url_check_scope";

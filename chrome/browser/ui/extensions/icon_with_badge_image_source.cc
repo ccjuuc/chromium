@@ -49,7 +49,7 @@ gfx::ImageSkiaRep ScaleImageSkiaRep(const gfx::ImageSkiaRep& rep,
       target_scale);
 }
 
-// Make sure the background color is opaque. See http://crbug.com/619499
+// Make sure the background color is opaque. See http://crbug.com/40472744
 // TODO(crbug.com/441643015): Remove ui color deps and use Android color system
 SkColor GetBadgeBackgroundColor(IconWithBadgeImageSource::Badge* badge,
                                 const ui::ColorProvider* color_provider) {
@@ -128,7 +128,8 @@ void IconWithBadgeImageSource::SetBadge(std::unique_ptr<Badge> badge) {
   const gfx::Rect icon_area = GetIconAreaRect();
 
   // Force the pixel width of badge to be either odd (if the icon width is odd)
-  // or even otherwise. If there is a mismatch you get http://crbug.com/26400.
+  // or even otherwise. If there is a mismatch you get
+  // http://crbug.com/41028811.
   if (icon_area.width() != 0 && (badge_width % 2 != icon_area.width() % 2)) {
     badge_width += 1;
   }

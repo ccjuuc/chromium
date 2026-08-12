@@ -13,9 +13,11 @@
 #include "chrome/browser/metrics/chrome_feature_list_creator.h"
 #include "chrome/browser/prefs/profile_pref_store_manager.h"
 #include "chrome/common/channel_info.h"
+#include "components/metrics/cpu_metrics_provider.h"
 #include "components/metrics/delegating_provider.h"
 #include "components/metrics/entropy_state_provider.h"
 #include "components/metrics/field_trials_provider.h"
+#include "components/metrics/install_date_provider.h"
 #include "components/metrics/metrics_log.h"
 #include "components/metrics/persistent_system_profile.h"
 #include "components/metrics/version_utils.h"
@@ -100,10 +102,18 @@ void StartupData::RecordCoreSystemProfile() {
       std::make_unique<metrics::EntropyStateProvider>(
           chrome_feature_list_creator()->local_state()));
 
+  // Register CPUMetricsProvider for hardware details.
+  delegating_provider.RegisterMetricsProvider(
+      std::make_unique<metrics::CPUMetricsProvider>());
+
+  // Register InstallDateProvider.
+  delegating_provider.RegisterMetricsProvider(
+      std::make_unique<metrics::InstallDateProvider>(
+          chrome_feature_list_creator()->local_state()));
+
   delegating_provider.ProvideSystemProfileMetricsWithLogCreationTime(
       base::TimeTicks(), &system_profile);
 
-  // TODO(crbug.com/374999988): Records information from other providers.
   metrics::GlobalPersistentSystemProfile::GetInstance()->SetSystemProfile(
       system_profile, /* complete */ false);
 }
@@ -184,7 +194,7 @@ void StartupData::PreProfilePrefServiceInit() {
 
   const base::FilePath& path = key_->GetPath();
   if (!base::PathExists(path)) {
-    // TODO(rogerta): http://crbug/160553 - Bad things happen if we can't
+    // TODO(rogerta): http://crbug.com/40293891 - Bad things happen if we can't
     // write to the profile directory.  We should eventually be able to run in
     // this situation.
     if (!base::CreateDirectory(path)) {
@@ -244,7 +254,8 @@ void StartupData::CreateServicesInternal() {
       pref_registry_, nullptr /* extension_pref_store */,
       profile_policy_connector_->policy_service(), browser_policy_connector,
       std::move(pref_validation_delegate), io_task_runner, key_.get(), path,
-      false /* async_prefs*/, g_browser_process->os_crypt_async());
+      false /* async_prefs*/, g_browser_process->os_crypt_async(),
+      g_browser_process->device_parental_controls());
 }
 #endif
 

@@ -5,9 +5,9 @@
 # Primary
 bashi@chromium.org
 ricea@chromium.org
+horo@chromium.org
 
 # Secondary
-horo@chromium.org
 dschinazi@chromium.org
 ericorth@chromium.org
 kinuko@chromium.org
@@ -23,7 +23,6 @@ per-file network_sandbox_hook_linux.*=set noparent
 per-file network_sandbox_hook_linux.*=file://sandbox/linux/OWNERS
 
 per-file BUILD.gn=file://services/network/resource_scheduler/OWNERS
-per-file BUILD.gn=file://services/network/scheduler/OWNERS
 per-file BUILD.gn=file://services/network/sct_auditing/OWNERS
 
 # Cookies
@@ -32,7 +31,7 @@ per-file *cookie*=file://net/cookies/OWNERS
 # Web-facing security features
 per-file content_security_policy*=file://third_party/blink/SECURITY_OWNERS
 per-file cross_origin_read_blocking*=file://third_party/blink/SECURITY_OWNERS
-per-file private_network_access*=file://third_party/blink/SECURITY_OWNERS
+per-file local_network_access*=file://third_party/blink/SECURITY_OWNERS
 per-file sec_header_helpers*=file://third_party/blink/SECURITY_OWNERS
 
 # WebTransport

@@ -8,6 +8,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
@@ -16,11 +17,12 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static org.mockito.MockitoAnnotations.openMocks;
 
 import android.content.Context;
 import android.os.Build;
 import android.util.SparseArray;
+import android.view.DragEvent;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.PointerIcon;
 import android.view.View;
@@ -30,15 +32,19 @@ import android.view.autofill.AutofillValue;
 import androidx.test.filters.SmallTest;
 import androidx.test.platform.app.InstrumentationRegistry;
 
-import org.chromium.base.DeviceInfo;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.content_public.browser.GestureListenerManager;
+import org.chromium.content_public.browser.ViewFocusChangeSuppression;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.EventForwarder;
 import org.chromium.ui.base.MotionEventTestUtils;
@@ -51,17 +57,29 @@ import org.chromium.ui.base.ViewAndroidDelegate;
  */
 @RunWith(BaseRobolectricTestRunner.class)
 public class ContentViewTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private WebContents mWebContents;
     @Mock private ViewAndroidDelegate mViewDelegate;
+    private ViewFocusChangeSuppression mSuppression;
 
     private Context mContext;
     private ContentView mContentView;
 
     @Before
     public void setUp() {
-        openMocks(this);
         mContext = InstrumentationRegistry.getInstrumentation().getTargetContext();
         mContentView = new ContentView(mContext, mWebContents);
+
+        when(mWebContents.getOrSetUserData(eq(ViewFocusChangeSuppression.class), any()))
+                .thenAnswer(
+                        invocation -> {
+                            if (mSuppression == null) {
+                                WebContents.UserDataFactory<ViewFocusChangeSuppression> factory =
+                                        invocation.getArgument(1);
+                                mSuppression = factory.create(mWebContents);
+                            }
+                            return mSuppression;
+                        });
     }
 
     @Test
@@ -100,7 +118,7 @@ public class ContentViewTest {
     public void testForwardsAutofillDataToDelegate() {
         when(mWebContents.getViewAndroidDelegate()).thenReturn(mViewDelegate);
         when(mViewDelegate.providesAutofillStructure()).thenReturn(true);
-        SparseArray<AutofillValue> values = new SparseArray();
+        SparseArray<AutofillValue> values = new SparseArray<>();
         mContentView.autofill(values);
         verify(mViewDelegate).autofill(values);
     }
@@ -168,5 +186,26 @@ public class ContentViewTest {
                         forwarder,
                         gestureManager));
         verify(forwarder, times(2)).onTouchEvent(any());
+    }
+
+    @Test
+    @SmallTest
+    public void testInputSuppression() {
+        // Enable suppression
+        ViewFocusChangeSuppression.from(mWebContents).setSuppressed(true);
+
+        // Verify events are suppressed (return false)
+        MotionEvent motionEvent = mock(MotionEvent.class);
+        assertFalse(mContentView.onTouchEvent(motionEvent));
+        assertFalse(mContentView.onHoverEvent(motionEvent));
+        assertFalse(mContentView.onGenericMotionEvent(motionEvent));
+        assertFalse(mContentView.onCapturedPointerEvent(motionEvent));
+
+        KeyEvent keyEvent = mock(KeyEvent.class);
+        assertFalse(mContentView.dispatchKeyEvent(keyEvent));
+        assertFalse(mContentView.onKeyPreIme(0, keyEvent));
+
+        DragEvent dragEvent = mock(DragEvent.class);
+        assertFalse(mContentView.onDragEvent(dragEvent));
     }
 }

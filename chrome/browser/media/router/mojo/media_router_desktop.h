@@ -34,6 +34,7 @@
 #include "components/media_router/common/mojom/media_router.mojom.h"
 #include "components/media_router/common/route_request_result.h"
 #include "content/public/browser/browser_thread.h"
+#include "media/media_buildflags.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
@@ -55,6 +56,7 @@ namespace media_router {
 
 class CastMediaRouteProvider;
 class DualMediaSinkService;
+class RedirectionMediaRouteProvider;
 class WiredDisplayMediaRouteProvider;
 
 // MediaRouter implementation that uses the desktop MediaRouteProviders.
@@ -103,7 +105,7 @@ class MediaRouterDesktop : public MediaRouterBase, public mojom::MediaRouter {
       mojo::PendingReceiver<mojom::MediaController> controller,
       mojo::PendingRemote<mojom::MediaStatusObserver> observer) final;
   base::Value GetLogs() const final;
-  base::Value::Dict GetState() const override;
+  base::DictValue GetState() const override;
   void GetProviderState(
       mojom::MediaRouteProviderId provider_id,
       mojom::MediaRouteProvider::GetStateCallback callback) const override;
@@ -193,6 +195,7 @@ class MediaRouterDesktop : public MediaRouterBase, public mojom::MediaRouter {
   void InitializeWiredDisplayMediaRouteProvider();
   void InitializeCastMediaRouteProvider();
   void InitializeDialMediaRouteProvider();
+  void InitializeRedirectionMediaRouteProvider();
 
 #if BUILDFLAG(IS_WIN)
   // Ensures that mDNS discovery is enabled in the Cast MRP. This can be
@@ -279,6 +282,11 @@ class MediaRouterDesktop : public MediaRouterBase, public mojom::MediaRouter {
   // JoinRoute().
   bool HasJoinableRoute() const;
 
+  // Returns true if the join request should be blocked because it attempts to
+  // upgrade a non-desktop session to a desktop session.
+  bool IsDesktopCaptureEscalation(const MediaSource& new_source,
+                                  const std::string& presentation_id) const;
+
   // Returns true if the default MRPs should be initialized.
   bool ShouldInitializeMediaRouteProviders() const;
 
@@ -293,7 +301,6 @@ class MediaRouterDesktop : public MediaRouterBase, public mojom::MediaRouter {
   friend class MediaRouterMojoTest;
   friend class MediaRouterIntegrationBrowserTest;
   friend class MediaRouterNativeIntegrationBrowserTest;
-  FRIEND_TEST_ALL_PREFIXES(MediaRouterDesktopTest, JoinRouteTimedOutFails);
   FRIEND_TEST_ALL_PREFIXES(MediaRouterDesktopTest, HandleIssue);
   FRIEND_TEST_ALL_PREFIXES(MediaRouterDesktopTest, HandlePermissionIssue);
   FRIEND_TEST_ALL_PREFIXES(MediaRouterDesktopTest,
@@ -306,7 +313,6 @@ class MediaRouterDesktop : public MediaRouterBase, public mojom::MediaRouter {
   FRIEND_TEST_ALL_PREFIXES(MediaRouterDesktopTest, CreateRouteFails);
   FRIEND_TEST_ALL_PREFIXES(MediaRouterDesktopTest,
                            CreateRouteIncognitoMismatchFails);
-  FRIEND_TEST_ALL_PREFIXES(MediaRouterDesktopTest, JoinRouteNotFoundFails);
   FRIEND_TEST_ALL_PREFIXES(MediaRouterDesktopTest, TerminateRouteFails);
   FRIEND_TEST_ALL_PREFIXES(MediaRouterDesktopTest, GetMediaController);
   FRIEND_TEST_ALL_PREFIXES(MediaRouterDesktopTest,
@@ -464,6 +470,11 @@ class MediaRouterDesktop : public MediaRouterBase, public mojom::MediaRouter {
 
   // MediaRouteProvider for casting to local screens.
   std::unique_ptr<WiredDisplayMediaRouteProvider> wired_display_provider_;
+
+#if BUILDFLAG(ENABLE_MEDIA_REMOTING_REDIRECTION)
+  // MediaRouteProvider for redirection (MMR) sinks.
+  std::unique_ptr<RedirectionMediaRouteProvider> redirection_provider_;
+#endif  // BUILDFLAG(ENABLE_MEDIA_REMOTING_REDIRECTION)
 
   // MediaRouteProvider for casting to Cast devices.
   std::unique_ptr<CastMediaRouteProvider, base::OnTaskRunnerDeleter>

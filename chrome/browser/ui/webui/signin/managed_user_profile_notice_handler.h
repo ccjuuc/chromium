@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 
+#include "base/callback_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
@@ -16,15 +17,15 @@
 #include "base/scoped_observation.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
-#include "chrome/browser/ui/browser_list_observer.h"
 #include "chrome/browser/ui/webui/signin/managed_user_profile_notice_ui.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "google_apis/gaia/core_account_id.h"
 
-class Browser;
+class BrowserWindowInterface;
 class Profile;
 struct AccountInfo;
 
@@ -37,7 +38,6 @@ class FilePath;
 class ManagedUserProfileNoticeHandler
     : public content::WebUIMessageHandler,
       public ProfileAttributesStorage::Observer,
-      public BrowserListObserver,
       public signin::IdentityManager::Observer {
  public:
   enum State {
@@ -48,9 +48,10 @@ class ManagedUserProfileNoticeHandler
     kError = 4,
     kValueProposition = 5,
     kUserDataHandling = 6,
+    kSignalsDisclaimer = 7,
   };
   ManagedUserProfileNoticeHandler(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       ManagedUserProfileNoticeUI::ScreenType type,
       std::unique_ptr<signin::EnterpriseProfileCreationDialogParams>
           create_param);
@@ -74,16 +75,20 @@ class ManagedUserProfileNoticeHandler
       const base::FilePath& profile_path) override;
   void OnProfileIsManagedChanged(const base::FilePath& profile_path) override;
 
-  // BrowserListObserver:
-  void OnBrowserRemoved(Browser* browser) override;
-
   // signin::IdentityManager::Observer:
   void OnExtendedAccountInfoUpdated(const AccountInfo& info) override;
+  void OnExtendedAccountInfoRemoved(const AccountInfo& info) override;
+  void OnIdentityManagerShutdown(signin::IdentityManager* identity_manager) override;
+
+  void OnBrowserDidClose(BrowserWindowInterface* browser);
 
   // Access to construction parameters for tests.
   ManagedUserProfileNoticeUI::ScreenType GetTypeForTesting();
   void CallProceedCallbackForTesting(signin::SigninChoice choice);
   void set_web_ui_for_test(content::WebUI* web_ui) { set_web_ui(web_ui); }
+  void SetJavaScriptAllowedCallbackForTesting(base::OnceClosure callback) {
+    javascript_allowed_callback_ = std::move(callback);
+  }
 
  private:
   FRIEND_TEST_ALL_PREFIXES(
@@ -96,13 +101,19 @@ class ManagedUserProfileNoticeHandler
       ManagedUserProfileNoticeHandlerTest,
       GetManagedAccountTitleWithEmailInterceptionEnforcedByInterceptedAccount);
 
-  void HandleInitialized(const base::Value::List& args);
+  void HandleInitialized(const base::ListValue& args);
   // Handles the web ui message sent when the html content is done being laid
   // out and it's time to resize the native view hosting it to fit. |args| is
   // a single integer value for the height the native view should resize to.
-  void HandleInitializedWithSize(const base::Value::List& args);
-  void HandleProceed(const base::Value::List& args);
-  void HandleCancel(const base::Value::List& args);
+  void HandleInitializedWithSize(const base::ListValue& args);
+  void HandleProceed(const base::ListValue& args);
+  void HandleCancel(const base::ListValue& args);
+  void HandleLearnMoreClicked(const base::ListValue& args);
+
+#if BUILDFLAG(CHROME_FOR_TESTING)
+  // Processes the enterprise-signin-dialog-behavior command line switch.
+  void ProcessAutoApprove();
+#endif
 
   void OnLongProcessingTime();
 
@@ -119,7 +130,7 @@ class ManagedUserProfileNoticeHandler
       const std::u16string& email);
 
   // Computes the profile info (avatar and strings) to be sent to the WebUI.
-  base::Value::Dict GetProfileInfoValue();
+  base::DictValue GetProfileInfoValue();
 
   // Returns the ProfilesAttributesEntry associated with the current profile.
   ProfileAttributesEntry* GetProfileEntry() const;
@@ -142,9 +153,11 @@ class ManagedUserProfileNoticeHandler
 
   base::OneShotTimer processing_timer_;
 
-  raw_ptr<Browser> browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface> browser_ = nullptr;
+  base::CallbackListSubscription browser_did_close_subscription_;
   const ManagedUserProfileNoticeUI::ScreenType type_;
   const bool profile_creation_required_by_policy_;
+  const bool is_modal_dialog_;
 #if !BUILDFLAG(IS_CHROMEOS)
   const bool show_link_data_option_;
 #endif
@@ -153,9 +166,11 @@ class ManagedUserProfileNoticeHandler
   const CoreAccountId account_id_;
   signin::SigninChoiceWithConfirmAndRetryCallback
       process_user_choice_with_confirmation_callback_;
+  signin::DeviceSignalsDisclaimerCallback device_signals_disclaimer_callback_;
   base::OnceClosure done_callback_;
   base::RepeatingClosure retry_callback_;
   bool canceling_ = false;
+  base::OnceClosure javascript_allowed_callback_;
   base::WeakPtrFactory<ManagedUserProfileNoticeHandler> weak_ptr_factory_{this};
 };
 

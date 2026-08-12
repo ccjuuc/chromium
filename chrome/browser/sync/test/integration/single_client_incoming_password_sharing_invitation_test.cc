@@ -26,8 +26,8 @@
 #include "components/signin/public/base/signin_switches.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/user_selectable_type.h"
-#include "components/sync/engine/nigori/cross_user_sharing_public_key.h"
-#include "components/sync/engine/nigori/cross_user_sharing_public_private_key_pair.h"
+#include "components/sync/nigori/cross_user_sharing_public_key.h"
+#include "components/sync/nigori/cross_user_sharing_public_private_key_pair.h"
 #include "components/sync/protocol/nigori_specifics.pb.h"
 #include "components/sync/protocol/password_sharing_invitation_specifics.pb.h"
 #include "components/sync/protocol/sync_entity.pb.h"
@@ -194,28 +194,6 @@ class SingleClientIncomingPasswordSharingInvitationTest
             /*client_tag=*/
             specifics.incoming_password_sharing_invitation().guid(), specifics,
             /*creation_time=*/0, /*last_modified_time=*/0));
-  }
-
-  bool SetupSyncTransportWithoutPasswordAccountStorage() {
-    if (!SetupClients()) {
-      return false;
-    }
-    if (!GetClient(0)->SignInPrimaryAccount()) {
-      return false;
-    }
-    if (!GetClient(0)->AwaitSyncTransportActive()) {
-      return false;
-    }
-
-#if !BUILDFLAG(IS_ANDROID)
-    // Explicitly opt out of account storage when signin is explicit.
-    // TODO(crbug.com/375024026): Revisit.
-    GetSyncService(0)->GetUserSettings()->SetSelectedType(
-        syncer::UserSelectableType::kPasswords, false);
-
-#endif
-
-    return true;
   }
 
  private:
@@ -442,7 +420,14 @@ IN_PROC_BROWSER_TEST_P(
 // stopped when the Password data type is opted out in the transport mode.
 IN_PROC_BROWSER_TEST_P(SingleClientIncomingPasswordSharingInvitationTest,
                        ShouldStopReceivingPasswordsWhenPasswordsOptedOut) {
-  ASSERT_TRUE(SetupSyncTransportWithoutPasswordAccountStorage());
+  ASSERT_TRUE(SignIn());
+
+  // Explicitly opt out of account storage when signin is explicit.
+  // TODO(crbug.com/375024026): Revisit.
+  GetSyncService(0)->GetUserSettings()->SetSelectedType(
+      syncer::UserSelectableType::kPasswords, false);
+
+  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
   ASSERT_FALSE(GetSyncService(0)->IsSyncFeatureEnabled());
 
   // Passwords and hence password sharing invitations should be disabled by

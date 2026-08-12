@@ -53,7 +53,7 @@ JNI_OfflineItemBridge_createOfflineItemAndMaybeAddToList(
       ConvertUTF8ToJavaString(env, item.id.id),
       ConvertUTF8ToJavaString(env, item.title),
       ConvertUTF8ToJavaString(env, item.description),
-      static_cast<jint>(item.filter), item.is_transient, item.is_suggested,
+      static_cast<int32_t>(item.filter), item.is_transient, item.is_suggested,
       item.is_accelerated, item.promote_origin, item.total_size_bytes,
       item.externally_removed,
       item.creation_time.InMillisecondsSinceUnixEpoch(),
@@ -65,13 +65,13 @@ JNI_OfflineItemBridge_createOfflineItemAndMaybeAddToList(
       url::GURLAndroid::FromNativeGURL(env, original_url),
       item.is_off_the_record, ConvertUTF8ToJavaString(env, item.otr_profile_id),
       url::GURLAndroid::FromNativeGURL(env, item.referrer_url),
-      item.has_user_gesture, static_cast<jint>(item.state),
-      static_cast<jint>(item.fail_state), static_cast<jint>(item.pending_state),
-      item.is_resumable, item.allow_metered, item.received_bytes,
-      item.progress.value, item.progress.max.value_or(-1),
-      static_cast<jint>(item.progress.unit), item.time_remaining_ms,
-      item.danger_type, item.is_dangerous, item.can_rename, item.ignore_visuals,
-      item.content_quality_score);
+      item.has_user_gesture, static_cast<int32_t>(item.state),
+      static_cast<int32_t>(item.fail_state),
+      static_cast<int32_t>(item.pending_state), item.is_resumable,
+      item.allow_metered, item.received_bytes, item.progress.value,
+      item.progress.max.value_or(-1), static_cast<int32_t>(item.progress.unit),
+      item.time_remaining_ms, item.danger_type, item.is_dangerous,
+      item.can_rename, item.ignore_visuals, item.content_quality_score);
 }
 
 }  // namespace
@@ -90,8 +90,23 @@ ScopedJavaLocalRef<jobject> OfflineItemBridge::CreateOfflineItemList(
     const std::vector<OfflineItem>& items) {
   ScopedJavaLocalRef<jobject> jlist =
       Java_OfflineItemBridge_createArrayList(env);
-  for (const auto& item : items)
-    JNI_OfflineItemBridge_createOfflineItemAndMaybeAddToList(env, jlist, item);
+
+  size_t loaded_count = 0;
+  for (const auto& item : items) {
+    ScopedJavaLocalRef<jobject> j_item =
+        JNI_OfflineItemBridge_createOfflineItemAndMaybeAddToList(env, jlist,
+                                                                  item);
+    // If OOM occurred, Java returns null. Stop creating more items and return
+    // what we have so far.
+    if (j_item.is_null()) {
+      Java_OfflineItemBridge_onItemsTruncated(env,
+                                               static_cast<int>(loaded_count),
+                                               static_cast<int>(items.size()));
+      break;
+    }
+    ++loaded_count;
+  }
+
   return jlist;
 }
 

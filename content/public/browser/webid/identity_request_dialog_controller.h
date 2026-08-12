@@ -14,13 +14,17 @@
 #include "base/memory/ref_counted.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/webid/identity_request_account.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom-forward.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom-forward.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
 namespace content {
 class WebContents;
+
+namespace webid {
+enum class FederatedLoginResult;
+}  // namespace webid
 
 // The client metadata that will be used to display a FedCM dialog. This data is
 // extracted from the client metadata endpoint from the FedCM API, where
@@ -173,8 +177,16 @@ class CONTENT_EXPORT IdentityRequestDialogController {
   // GENERATED_JAVA_CLASS_NAME_OVERRIDE: IdentityRequestDialogLinkType
   enum class LinkType { PRIVACY_POLICY, TERMS_OF_SERVICE };
 
-  using ShouldShowAccountsPassiveDialogCallback =
-      base::OnceCallback<void(bool)>;
+  // The volume of the dialog to show when in passive mode.
+  enum class PassiveDialogVolume {
+    // The standard volume UI (e.g. widget on desktop, bottom sheet on Android).
+    kDefault,
+    // The quieter volume UI (e.g. omnibox chip).
+    kAmbient,
+  };
+
+  using GetPassiveDialogVolumeCallback =
+      base::OnceCallback<void(PassiveDialogVolume)>;
   using AccountSelectionCallback =
       base::OnceCallback<void(const GURL& idp_config_url,
                               const std::string& /*account_id*/,
@@ -188,6 +200,8 @@ class CONTENT_EXPORT IdentityRequestDialogController {
                                    GURL /*idp_login_url*/)>;
   using MoreDetailsCallback = base::OnceCallback<void()>;
   using AccountsDisplayedCallback = base::OnceCallback<void()>;
+  using ShownModalAsyncCallback =
+      base::OnceCallback<void(content::WebContents*)>;
 
   IdentityRequestDialogController() = default;
 
@@ -209,11 +223,9 @@ class CONTENT_EXPORT IdentityRequestDialogController {
   // When this is true, the dialog should not be immediately auto-accepted.
   virtual void SetIsInterceptionEnabled(bool enabled);
 
-  // Computes whether to show the dialog. Will be called before
-  // ShowAccountsDialog, but only in passive mode. If false is passed to the
-  // callback, the request will be cancelled.
-  virtual void ShouldShowAccountsPassiveDialog(
-      ShouldShowAccountsPassiveDialogCallback cb);
+  // Computes the passive dialog volume to show. Will be called before
+  // ShowAccountsDialog, but only in passive mode.
+  virtual void GetPassiveDialogVolume(GetPassiveDialogVolumeCallback cb);
 
   // Shows and accounts selections for the given IDP. The `on_selected` callback
   // is called with the selected account id or empty string otherwise. Accounts
@@ -223,11 +235,15 @@ class CONTENT_EXPORT IdentityRequestDialogController {
   // Returns true if the method successfully showed UI. When false, the caller
   // should assume that the API invocation was terminated and the cleanup
   // methods invoked. `rp_data` may be modified by this method, such as by
-  // setting the RP icon.
+  // setting the RP icon. `accounts` are the accounts which are displayed, while
+  // `filtered_accounts` are the accounts that are not available for selection
+  // due to filters such as login hint.
   virtual bool ShowAccountsDialog(
       RelyingPartyData rp_data,
       const std::vector<scoped_refptr<IdentityProviderData>>& idp_list,
       const std::vector<scoped_refptr<IdentityRequestAccount>>& accounts,
+      const std::vector<scoped_refptr<IdentityRequestAccount>>&
+          filtered_accounts,
       blink::mojom::RpMode rp_mode,
       AccountSelectionCallback on_selected,
       LoginToIdPCallback on_add_account,
@@ -237,16 +253,21 @@ class CONTENT_EXPORT IdentityRequestDialogController {
   // Shows a failure UI when the accounts fetch is failed such that it is
   // observable by users. This could happen when an IDP claims that the user is
   // signed in but not respond with any user account during browser fetches.
-  // Returns true if the method successfully showed UI. When false, the caller
-  // should assume that the API invocation was terminated and the cleanup
-  // methods invoked.
-  virtual bool ShowFailureDialog(const RelyingPartyData& rp_data,
-                                 const std::string& idp_for_display,
-                                 blink::mojom::RpContext rp_context,
-                                 blink::mojom::RpMode rp_mode,
-                                 const IdentityProviderMetadata& idp_metadata,
-                                 DismissCallback dismiss_callback,
-                                 LoginToIdPCallback login_callback);
+  // Returns true if the method successfully showed UI. It could also occur when
+  // there are logged in accounts but none are available due to filters such as
+  // login hint. When false, the caller should assume that the API invocation
+  // was terminated and the cleanup methods invoked. `filtered_accounts` are the
+  // accounts that are not available for selection due to filters.
+  virtual bool ShowFailureDialog(
+      const RelyingPartyData& rp_data,
+      const std::string& idp_for_display,
+      blink::mojom::RpContext rp_context,
+      blink::mojom::RpMode rp_mode,
+      const IdentityProviderMetadata& idp_metadata,
+      const std::vector<scoped_refptr<IdentityRequestAccount>>&
+          filtered_accounts,
+      DismissCallback dismiss_callback,
+      LoginToIdPCallback login_callback);
 
   // Shows an error UI when the user's sign-in attempt failed. Returns true if
   // the method successfully showed UI. When false, the caller should assume
@@ -293,9 +314,15 @@ class CONTENT_EXPORT IdentityRequestDialogController {
   virtual void ShowUrl(LinkType type, const GURL& url);
 
   // Show a modal dialog that loads content from the IdP.
+  // `dismiss_callback` is called when the dialog is dismissed or closed without
+  // completing. `on_shown_async` is called when the modal WebContents surface
+  // is created asynchronously. `token_callback` is called when a native
+  // application completes the flow directly and returns an identity token.
   virtual WebContents* ShowModalDialog(const GURL& url,
                                        blink::mojom::RpMode rp_mode,
-                                       DismissCallback dismiss_callback);
+                                       DismissCallback dismiss_callback,
+                                       ShownModalAsyncCallback on_shown_async,
+                                       TokenCallback token_callback);
 
   // Closes the modal dialog.
   virtual void CloseModalDialog();
@@ -313,9 +340,6 @@ class CONTENT_EXPORT IdentityRequestDialogController {
 
   // Notifies when the autofill data source is ready to be queried.
   virtual void NotifyAutofillSourceReadyForTesting();
-
-  // Whether UI has been shown or not.
-  virtual bool DidShowUi() const;
 
  protected:
   bool is_interception_enabled_{false};

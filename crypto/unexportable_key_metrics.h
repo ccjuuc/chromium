@@ -12,6 +12,7 @@
 
 namespace crypto {
 
+// LINT.IfChange(TPMOperation)
 enum class TPMOperation {
   // An operation to sign data with a TPM key.
   kMessageSigning,
@@ -25,7 +26,20 @@ enum class TPMOperation {
   // An operation to export a wrapped key (or a similar representation
   // identifying a TPM key) from an existing TPM key.
   kWrappedKeyExport,
+  // An operation to select a signature algorithm supported by the TPM.
+  kSelectAlgorithm,
+  // An operation to delete a TPM-protected key.
+  kKeyDeletion,
+  // An operation to certify a key with an attestation key.
+  kKeyCertification,
+  // An operation to create a new TPM-protected attestation key.
+  kNewAttestationKeyCreation,
+  // An operation to create an attestation key from a wrapped key.
+  kWrappedAttestationKeyCreation,
+  // An operation to export a wrapped attestation key.
+  kWrappedAttestationKeyExport,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/net/histograms.xml:TpmOperation)
 
 // Converts the given `operation` to a string representation.
 CRYPTO_EXPORT std::string OperationToString(TPMOperation operation);

@@ -2,10 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
 
 #include "media/base/android/media_drm_bridge.h"
 
@@ -19,6 +15,8 @@
 #include "base/android/android_info.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
+#include "base/compiler_specific.h"
+#include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -28,6 +26,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/system/sys_info.h"
 #include "base/task/single_thread_task_runner.h"
@@ -50,7 +49,6 @@ using base::android::ConvertJavaStringToUTF8;
 using base::android::ConvertUTF8ToJavaString;
 using base::android::JavaByteArrayToByteVector;
 using base::android::JavaByteArrayToString;
-using base::android::JavaObjectArrayReader;
 using base::android::JavaRef;
 using base::android::ScopedJavaGlobalRef;
 using base::android::ScopedJavaLocalRef;
@@ -141,15 +139,9 @@ CdmKeyInformation::KeyStatus ConvertKeyStatus(KeyStatus key_status,
     case KeyStatus::KEY_STATUS_OUTPUT_NOT_ALLOWED:
       return CdmKeyInformation::OUTPUT_RESTRICTED;
     case KeyStatus::KEY_STATUS_PENDING:
-      // On pre-Q versions of Android, 'status-pending' really means "usable in
-      // the future". Starting with Android Q, 'status-pending' means what you
-      // expect. See crbug.com/889272 for explanation.
       // TODO(jrummell): "KEY_STATUS_PENDING" should probably be renamed to
       // "STATUS_PENDING".
-      return (base::android::android_info::sdk_int() <=
-              base::android::android_info::SDK_VERSION_P)
-                 ? CdmKeyInformation::USABLE_IN_FUTURE
-                 : CdmKeyInformation::KEY_STATUS_PENDING;
+      return CdmKeyInformation::KEY_STATUS_PENDING;
     case KeyStatus::KEY_STATUS_INTERNAL_ERROR:
       return CdmKeyInformation::INTERNAL_ERROR;
     case KeyStatus::KEY_STATUS_USABLE_IN_FUTURE:
@@ -180,12 +172,11 @@ class KeySystemManager {
 
 KeySystemManager::KeySystemManager() {
   // Widevine is always supported in Android.
-  key_system_uuid_map_[kWidevineKeySystem] =
-      UUID(kWidevineUuid, kWidevineUuid + std::size(kWidevineUuid));
+  key_system_uuid_map_[kWidevineKeySystem] = base::ToVector(kWidevineUuid);
   // External Clear Key is supported only for testing.
   if (base::FeatureList::IsEnabled(kExternalClearKeyForTesting)) {
     key_system_uuid_map_[kExternalClearKeyKeySystem] =
-        UUID(kClearKeyUuid, kClearKeyUuid + std::size(kClearKeyUuid));
+        base::ToVector(kClearKeyUuid);
   }
   MediaDrmBridgeClient* client = GetMediaDrmBridgeClient();
   if (client) {
@@ -203,11 +194,10 @@ UUID KeySystemManager::GetUUID(const std::string& key_system) {
 
 std::vector<std::string> KeySystemManager::GetPlatformKeySystemNames() {
   std::vector<std::string> key_systems;
-  for (KeySystemUuidMap::iterator it = key_system_uuid_map_.begin();
-       it != key_system_uuid_map_.end(); ++it) {
+  for (auto& it : key_system_uuid_map_) {
     // Rule out the key system handled by Chrome explicitly.
-    if (it->first != kWidevineKeySystem) {
-      key_systems.push_back(it->first);
+    if (it.first != kWidevineKeySystem) {
+      key_systems.push_back(it.first);
     }
   }
   return key_systems;
@@ -235,7 +225,7 @@ bool IsKeySystemSupportedWithTypeImpl(const std::string& key_system,
 
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jbyteArray> j_scheme_uuid =
-      base::android::ToJavaByteArray(env, &scheme_uuid[0], scheme_uuid.size());
+      base::android::ToJavaByteArray(env, scheme_uuid);
   ScopedJavaLocalRef<jstring> j_container_mime_type =
       ConvertUTF8ToJavaString(env, container_mime_type);
   bool supported = Java_MediaDrmBridge_isCryptoSchemeSupported(
@@ -322,13 +312,6 @@ std::string GetSecurityLevelString(
   return "";
 }
 
-int GetFirstApiLevel() {
-  JNIEnv* env = AttachCurrentThread();
-  int first_api_level = Java_MediaDrmBridge_getFirstApiLevel(env);
-  base::UmaHistogramSparse("Media.EME.MediaDrm.FirstApiLevel", first_api_level);
-  return first_api_level;
-}
-
 CreateCdmTypedStatus ConvertMediaDrmCreateError(
     MediaDrmBridge::MediaDrmCreateError error,
     MediaDrmBridge::SecurityLevel security_level) {
@@ -360,6 +343,21 @@ CreateCdmTypedStatus ConvertMediaDrmCreateError(
   return CreateCdmTypedStatus::Codes::kUnknownError;
 }
 
+CdmSessionClosedReason ToCdmSessionClosedReason(
+    MediaDrmBridge::MediaDrmCdmSessionClosedReason reason) {
+  switch (reason) {
+    case MediaDrmBridge::MediaDrmCdmSessionClosedReason::CLOSE:
+      return CdmSessionClosedReason::kClose;
+    case MediaDrmBridge::MediaDrmCdmSessionClosedReason::SESSION_RECLAIMED:
+      return CdmSessionClosedReason::kResourceEvicted;
+    case MediaDrmBridge::MediaDrmCdmSessionClosedReason::SESSION_LOST:
+      return CdmSessionClosedReason::kHardwareContextReset;
+  }
+
+  // Default return a generic close.
+  return CdmSessionClosedReason::kClose;
+}
+
 }  // namespace
 
 // static
@@ -373,7 +371,9 @@ bool MediaDrmBridge::IsPerApplicationProvisioningSupported() {
   // If it is non-zero, then it is the API level.
   // Checking FirstApiLevel is known to be expensive (see crbug.com/1366106),
   // and thus is cached.
-  static int first_api_level = GetFirstApiLevel();
+  static int first_api_level;
+  base::StringToInt(base::SysInfo::GetAndroidFirstApiLevel(), &first_api_level);
+  base::UmaHistogramSparse("Media.EME.MediaDrm.FirstApiLevel", first_api_level);
   DVLOG(1) << "first_api_level = " << first_api_level;
   if (first_api_level >= base::android::android_info::SDK_VERSION_OREO) {
     return true;
@@ -410,6 +410,33 @@ bool MediaDrmBridge::IsKeySystemSupportedWithType(
 }
 
 // static
+MediaDrmBridge::SupportedContainers MediaDrmBridge::GetSupportedContainers(
+    const std::string& key_system) {
+  CHECK(!key_system.empty());
+
+  UUID scheme_uuid = GetKeySystemManager()->GetUUID(key_system);
+  if (scheme_uuid.empty()) {
+    DVLOG(1) << "Cannot get UUID for key system " << key_system;
+    return {};
+  }
+
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jbyteArray> j_scheme_uuid =
+      base::android::ToJavaByteArray(env, scheme_uuid);
+
+  base::android::ScopedJavaLocalRef<jobjectArray> j_containers =
+      Java_MediaDrmBridge_getSupportedContainers(env, j_scheme_uuid);
+
+  std::vector<std::string> containers;
+  if (!j_containers.is_null()) {
+    base::android::AppendJavaStringArrayToStringVector(env, j_containers,
+                                                       &containers);
+  }
+
+  return MediaDrmBridge::SupportedContainers(std::move(containers));
+}
+
+// static
 std::vector<std::string> MediaDrmBridge::GetPlatformKeySystemNames() {
   return GetKeySystemManager()->GetPlatformKeySystemNames();
 }
@@ -420,7 +447,22 @@ std::vector<uint8_t> MediaDrmBridge::GetUUID(const std::string& key_system) {
 }
 
 // static
-MediaDrmBridge::GetVersionResult MediaDrmBridge::GetVersion(
+base::Version MediaDrmBridge::MaybeParseCdmVersion(
+    std::string_view version_str) {
+  // Some systems return an empty string for version.
+  if (version_str.empty()) {
+    return base::Version();
+  }
+
+  // Anything past the '@' is not related to the CDM version, and is related to
+  // Android builds, which we can safely ignore. If the split version cannot be
+  // parsed, we use the whole version string.
+  auto split_version = base::SplitStringOnce(version_str, '@');
+  return base::Version(split_version ? split_version->first : version_str);
+}
+
+// static
+MediaDrmBridge::GetVersionResult MediaDrmBridge::MaybeGetVersion(
     const std::string& key_system,
     MediaDrmBridge::SecurityLevel security_level) {
   auto media_drm_bridge = MediaDrmBridge::CreateWithoutSessionSupport(
@@ -429,17 +471,12 @@ MediaDrmBridge::GetVersionResult MediaDrmBridge::GetVersion(
   if (!media_drm_bridge.has_value()) {
     DVLOG(1) << "Unable to create MediaDrmBridge for " << key_system
              << ", CreateCdmStatus: "
-             << (media::StatusCodeType)media_drm_bridge.code();
+             << static_cast<media::StatusCodeType>(media_drm_bridge.code());
     return base::unexpected(media_drm_bridge.code());
   }
 
   std::string version_str = media_drm_bridge->GetVersionInternal();
-
-  // Some devices return the version with an additional level (e.g. 18.0.0@1),
-  // so simply replace any '@'.
-  base::ReplaceChars(version_str, "@", ".", &version_str);
-
-  auto version = base::Version(version_str);
+  auto version = MaybeParseCdmVersion(version_str);
   DVLOG_IF(1, !version.IsValid()) << "Unable to convert " << version_str;
   return version;
 }
@@ -850,8 +887,7 @@ void MediaDrmBridge::OnProvisioningComplete(
       FROM_HERE, base::BindOnce(std::move(provisioning_complete_cb_), success));
 }
 
-void MediaDrmBridge::OnPromiseResolved(JNIEnv* env,
-                                       jint j_promise_id) {
+void MediaDrmBridge::OnPromiseResolved(JNIEnv* env, int32_t j_promise_id) {
   task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&MediaDrmBridge::ResolvePromise,
                                 weak_factory_.GetWeakPtr(), j_promise_id));
@@ -859,7 +895,7 @@ void MediaDrmBridge::OnPromiseResolved(JNIEnv* env,
 
 void MediaDrmBridge::OnPromiseResolvedWithSession(
     JNIEnv* env,
-    jint j_promise_id,
+    int32_t j_promise_id,
     const JavaRef<jbyteArray>& j_session_id) {
   std::string session_id;
   JavaByteArrayToString(env, j_session_id, &session_id);
@@ -871,11 +907,11 @@ void MediaDrmBridge::OnPromiseResolvedWithSession(
 
 void MediaDrmBridge::OnPromiseRejected(
     JNIEnv* env,
-    jint j_promise_id,
-    jint j_system_code,
+    int32_t j_promise_id,
+    int32_t j_system_code,
     const JavaRef<jstring>& j_error_message) {
-  CHECK(j_system_code >= static_cast<jint>(MediaDrmSystemCode::MIN_VALUE) &&
-        j_system_code <= static_cast<jint>(MediaDrmSystemCode::MAX_VALUE));
+  CHECK(j_system_code >= static_cast<int32_t>(MediaDrmSystemCode::MIN_VALUE) &&
+        j_system_code <= static_cast<int32_t>(MediaDrmSystemCode::MAX_VALUE));
   task_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(&MediaDrmBridge::RejectPromise, weak_factory_.GetWeakPtr(),
@@ -886,7 +922,7 @@ void MediaDrmBridge::OnPromiseRejected(
 
 void MediaDrmBridge::OnSessionMessage(JNIEnv* env,
                                       const JavaRef<jbyteArray>& j_session_id,
-                                      jint j_message_type,
+                                      int32_t j_message_type,
                                       const JavaRef<jbyteArray>& j_message) {
   DVLOG(2) << __func__;
 
@@ -903,14 +939,17 @@ void MediaDrmBridge::OnSessionMessage(JNIEnv* env,
 }
 
 void MediaDrmBridge::OnSessionClosed(JNIEnv* env,
-                                     const JavaRef<jbyteArray>& j_session_id) {
+                                     const JavaRef<jbyteArray>& j_session_id,
+                                     int32_t j_reason) {
   DVLOG(2) << __func__;
   std::string session_id;
   JavaByteArrayToString(env, j_session_id, &session_id);
-  // TODO(crbug.com/40181810): Support other closed reasons.
   task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(session_closed_cb_, std::move(session_id),
-                                CdmSessionClosedReason::kClose));
+      FROM_HERE,
+      base::BindOnce(
+          session_closed_cb_, std::move(session_id),
+          ToCdmSessionClosedReason(
+              static_cast<MediaDrmCdmSessionClosedReason>(j_reason))));
 }
 
 void MediaDrmBridge::OnSessionKeysChange(
@@ -923,8 +962,8 @@ void MediaDrmBridge::OnSessionKeysChange(
 
   CdmKeysInfo cdm_keys_info;
 
-  JavaObjectArrayReader<jobject> j_keys_info_array(j_keys_info);
-  DCHECK_GT(j_keys_info_array.size(), 0);
+  jni_zero::JArrayView<jobject> j_keys_info_array = j_keys_info.CreateView(env);
+  DCHECK_GT(j_keys_info_array.length(), 0);
 
   for (auto j_key_status : j_keys_info_array) {
     ScopedJavaLocalRef<jbyteArray> j_key_id =
@@ -933,11 +972,11 @@ void MediaDrmBridge::OnSessionKeysChange(
     JavaByteArrayToByteVector(env, j_key_id, &key_id);
     DCHECK(!key_id.empty());
 
-    jint j_status_code = Java_KeyStatus_getStatusCode(env, j_key_status);
+    int32_t j_status_code = Java_KeyStatus_getStatusCode(env, j_key_status);
     CdmKeyInformation::KeyStatus key_status =
         ConvertKeyStatus(static_cast<KeyStatus>(j_status_code), is_key_release);
 
-    DVLOG(2) << __func__ << "Key status change: " << base::HexEncode(key_id)
+    DVLOG(2) << __func__ << " Key status change: " << base::HexEncode(key_id)
              << ", " << key_status;
 
     cdm_keys_info.push_back(
@@ -972,7 +1011,7 @@ void MediaDrmBridge::OnSessionKeysChange(
 void MediaDrmBridge::OnSessionExpirationUpdate(
     JNIEnv* env,
     const JavaRef<jbyteArray>& j_session_id,
-    jlong expiry_time_ms) {
+    int64_t expiry_time_ms) {
   DVLOG(2) << __func__ << ": " << expiry_time_ms << " ms";
   std::string session_id;
   JavaByteArrayToString(env, j_session_id, &session_id);
@@ -983,9 +1022,9 @@ void MediaDrmBridge::OnSessionExpirationUpdate(
           base::Time::FromMillisecondsSinceUnixEpoch(expiry_time_ms)));
 }
 
-void MediaDrmBridge::OnCreateError(JNIEnv* env, jint j_error_code) {
-  CHECK(j_error_code >= static_cast<jint>(MediaDrmCreateError::MIN_VALUE) &&
-        j_error_code <= static_cast<jint>(MediaDrmCreateError::MAX_VALUE));
+void MediaDrmBridge::OnCreateError(JNIEnv* env, int32_t j_error_code) {
+  CHECK(j_error_code >= static_cast<int32_t>(MediaDrmCreateError::MIN_VALUE) &&
+        j_error_code <= static_cast<int32_t>(MediaDrmCreateError::MAX_VALUE));
 
   last_create_error_ = static_cast<MediaDrmCreateError>(j_error_code);
 }
@@ -1021,7 +1060,7 @@ MediaDrmBridge::MediaDrmBridge(
   CHECK(env);
 
   ScopedJavaLocalRef<jbyteArray> j_scheme_uuid =
-      base::android::ToJavaByteArray(env, &scheme_uuid[0], scheme_uuid.size());
+      base::android::ToJavaByteArray(env, scheme_uuid);
 
   std::string security_level_str = GetSecurityLevelString(security_level);
   ScopedJavaLocalRef<jstring> j_security_level =

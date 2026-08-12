@@ -165,7 +165,7 @@ class SystemProxyManagerBrowserTest : public InProcessBrowserTest {
 
   void SetUpOnMainThread() override {
     GetSystemProxyManager()->StartObservingPrimaryProfilePrefs(
-        browser()->profile());
+        browser()->GetProfile());
     GetSystemProxyManager()->SetSystemProxyEnabledForTest(true);
   }
 
@@ -404,7 +404,7 @@ class SystemProxyManagerPolicyCredentialsBrowserTest
   }
 
   void SetProxyConfigForNetworkService(const std::string& service_path,
-                                       base::Value::Dict proxy_config) {
+                                       base::DictValue proxy_config) {
     ProxyConfigDictionary proxy_config_dict(std::move(proxy_config));
     DCHECK(NetworkHandler::IsInitialized());
     const NetworkState* network =
@@ -550,11 +550,11 @@ IN_PROC_BROWSER_TEST_F(SystemProxyManagerPolicyCredentialsBrowserTest,
   ExpectSystemCredentialsSent("", "");
 
   // Configure a proxy via user policy.
-  auto proxy_config = base::Value::Dict()
+  auto proxy_config = base::DictValue()
                           .Set("mode", ProxyPrefs::kPacScriptProxyModeName)
                           .Set("pac_url", "http://proxy");
-  browser()->profile()->GetPrefs()->SetDict(::proxy_config::prefs::kProxy,
-                                            std::move(proxy_config));
+  browser()->GetProfile()->GetPrefs()->SetDict(::proxy_config::prefs::kProxy,
+                                               std::move(proxy_config));
   RunUntilIdle();
   EXPECT_EQ(++set_auth_details_call_count,
             client_test_interface()->GetSetAuthenticationDetailsCallCount());
@@ -566,7 +566,7 @@ IN_PROC_BROWSER_TEST_F(SystemProxyManagerPolicyCredentialsBrowserTest,
 IN_PROC_BROWSER_TEST_F(SystemProxyManagerPolicyCredentialsBrowserTest,
                        UserSetProxy) {
   SetPolicyCredentials(kUsername, kPassword);
-  auto proxy_config = base::Value::Dict()
+  auto proxy_config = base::DictValue()
                           .Set("mode", ProxyPrefs::kFixedServersProxyModeName)
                           .Set("server", "proxy:8080");
   SetProxyConfigForNetworkService(kDefaultServicePath, std::move(proxy_config));
@@ -646,11 +646,11 @@ class SystemProxyCredentialsReuseBrowserTest
   void SetManagedProxy() {
     // Configure a proxy via user policy.
     auto proxy_config =
-        base::Value::Dict()
+        base::DictValue()
             .Set("mode", ProxyPrefs::kFixedServersProxyModeName)
             .Set("server", proxy_server_.host_port_pair().ToString());
-    browser()->profile()->GetPrefs()->SetDict(::proxy_config::prefs::kProxy,
-                                              std::move(proxy_config));
+    browser()->GetProfile()->GetPrefs()->SetDict(::proxy_config::prefs::kProxy,
+                                                 std::move(proxy_config));
     RunUntilIdle();
   }
 
@@ -676,7 +676,10 @@ class SystemProxyCredentialsReuseBrowserTest
                                  const std::string& expected_username,
                                  const std::string& expected_password) {
     network::mojom::NetworkContext* network_context =
-        browser()->profile()->GetDefaultStoragePartition()->GetNetworkContext();
+        browser()
+            ->GetProfile()
+            ->GetDefaultStoragePartition()
+            ->GetNetworkContext();
     std::string username;
     std::string password;
     base::RunLoop loop;

@@ -19,7 +19,8 @@
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_account_storage_move_dialog_delegate.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/common/webui_url_constants.h"
@@ -81,7 +82,7 @@ void RecordDialogShown(BookmarkAccountStorageMoveDialogType type,
 }
 
 void ShowDialogOnRegularProfile(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     const bookmarks::BookmarkNode* node,
     const bookmarks::BookmarkNode* target_folder,
     size_t index,
@@ -218,7 +219,7 @@ void OpenDialogInOriginalProfileBookmarksManager(
                              std::move(closed_callback));
 }
 
-void ShowDialog(Browser* browser,
+void ShowDialog(BrowserWindowInterface* browser,
                 const bookmarks::BookmarkNode* node,
                 const bookmarks::BookmarkNode* target_folder,
                 size_t index,
@@ -255,7 +256,7 @@ DEFINE_ELEMENT_IDENTIFIER_VALUE(kBookmarkAccountStorageMoveDialogOkButton);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kBookmarkAccountStorageMoveDialogCancelButton);
 
 void ShowBookmarkAccountStorageMoveDialog(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     const bookmarks::BookmarkNode* node,
     const bookmarks::BookmarkNode* target_folder,
     size_t index,
@@ -265,11 +266,11 @@ void ShowBookmarkAccountStorageMoveDialog(
              std::move(closed_callback));
 }
 
-void ShowBookmarkAccountStorageUploadDialog(Browser* browser,
+void ShowBookmarkAccountStorageUploadDialog(BrowserWindowInterface* browser,
                                             const bookmarks::BookmarkNode* node,
                                             base::OnceClosure closed_callback) {
   bookmarks::BookmarkModel* model =
-      BookmarkModelFactory::GetForBrowserContext(browser->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser->GetProfile());
   const bookmarks::BookmarkPermanentNode* target = nullptr;
   if (node->HasAncestor(model->other_node())) {
     target = model->account_other_node();

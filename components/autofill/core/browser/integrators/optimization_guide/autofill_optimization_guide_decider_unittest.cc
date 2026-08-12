@@ -46,6 +46,8 @@ using ::optimization_guide::OptimizationGuideDecision;
 using test::CreateTestCreditCardFormData;
 using test::CreateTestIbanFormData;
 using ::testing::_;
+using ::testing::AnyNumber;
+using ::testing::AnyOf;
 using ::testing::Contains;
 using ::testing::ElementsAre;
 using ::testing::Eq;
@@ -53,8 +55,8 @@ using ::testing::IsEmpty;
 using ::testing::IsSupersetOf;
 using ::testing::Matcher;
 using ::testing::NiceMock;
+using ::testing::Not;
 using ::testing::Return;
-using ::testing::UnorderedElementsAre;
 using ::testing::WithArg;
 
 }  // namespace
@@ -68,6 +70,11 @@ class AutofillOptimizationGuideDeciderTest : public testing::Test {
     payments_data_manager_.SetSyncServiceForTest(&sync_service_);
     test_api(payments_data_manager_)
         .SetAutofillOptimizationGuideDecider(&autofill_optimization_guide_);
+
+    // Some tests cover 'negative' scenarios to make sure that certain
+    // optimization types are not registered. Those tests shouldn't have to care
+    // about any other types being registered, so this 'catch all' handles them.
+    EXPECT_CALL(decider(), RegisterOptimizationTypes).Times(AnyNumber());
   }
 
   CreditCard GetVcnEnrolledCard(
@@ -153,16 +160,17 @@ TEST_F(AutofillOptimizationGuideDeciderTest,
                                    /*use_month_type=*/true)};
   const RegexPredictions regex_predictions = DetermineRegexTypes(
       GeoIpCountryCode(""), LanguageCode(""), form_structure.ToFormData(),
-      /*log_manager=*/nullptr);
+      /*log_manager=*/nullptr, /*ignore_small_forms=*/true);
   regex_predictions.ApplyTo(form_structure.fields());
   form_structure.RationalizeAndAssignSections(
       GeoIpCountryCode(""), LanguageCode(""), /*log_manager=*/nullptr);
 
-  EXPECT_CALL(decider(),
-              RegisterOptimizationTypes(ElementsAre(
-                  optimization_guide::proto::VCN_MERCHANT_OPT_OUT_VISA,
-                  optimization_guide::proto::VCN_MERCHANT_OPT_OUT_DISCOVER,
-                  optimization_guide::proto::VCN_MERCHANT_OPT_OUT_MASTERCARD)));
+  EXPECT_CALL(
+      decider(),
+      RegisterOptimizationTypes(IsSupersetOf(
+          {optimization_guide::proto::VCN_MERCHANT_OPT_OUT_VISA,
+           optimization_guide::proto::VCN_MERCHANT_OPT_OUT_DISCOVER,
+           optimization_guide::proto::VCN_MERCHANT_OPT_OUT_MASTERCARD})));
 
   guide().OnDidParseForm(form_structure, payments_data_manager());
 }
@@ -179,12 +187,15 @@ TEST_F(AutofillOptimizationGuideDeciderTest,
                                    /*use_month_type=*/true)};
   const RegexPredictions regex_predictions = DetermineRegexTypes(
       GeoIpCountryCode(""), LanguageCode(""), form_structure.ToFormData(),
-      /*log_manager=*/nullptr);
+      /*log_manager=*/nullptr, /*ignore_small_forms=*/true);
   regex_predictions.ApplyTo(form_structure.fields());
   form_structure.RationalizeAndAssignSections(
       GeoIpCountryCode(""), LanguageCode(""), /*log_manager=*/nullptr);
 
-  EXPECT_CALL(decider(), RegisterOptimizationTypes).Times(0);
+  EXPECT_CALL(decider(),
+              RegisterOptimizationTypes(Contains(
+                  optimization_guide::proto::VCN_MERCHANT_OPT_OUT_VISA)))
+      .Times(0);
 
   guide().OnDidParseForm(form_structure, payments_data_manager());
 }
@@ -204,12 +215,15 @@ TEST_F(AutofillOptimizationGuideDeciderTest,
                                    /*use_month_type=*/true)};
   const RegexPredictions regex_predictions = DetermineRegexTypes(
       GeoIpCountryCode(""), LanguageCode(""), form_structure.ToFormData(),
-      /*log_manager=*/nullptr);
+      /*log_manager=*/nullptr, /*ignore_small_forms=*/true);
   regex_predictions.ApplyTo(form_structure.fields());
   form_structure.RationalizeAndAssignSections(
       GeoIpCountryCode(""), LanguageCode(""), /*log_manager=*/nullptr);
 
-  EXPECT_CALL(decider(), RegisterOptimizationTypes).Times(0);
+  EXPECT_CALL(decider(),
+              RegisterOptimizationTypes(Contains(
+                  optimization_guide::proto::VCN_MERCHANT_OPT_OUT_VISA)))
+      .Times(0);
 
   guide().OnDidParseForm(form_structure, payments_data_manager());
 }
@@ -226,12 +240,15 @@ TEST_F(AutofillOptimizationGuideDeciderTest,
                                    /*use_month_type=*/true)};
   const RegexPredictions regex_predictions = DetermineRegexTypes(
       GeoIpCountryCode(""), LanguageCode(""), form_structure.ToFormData(),
-      /*log_manager=*/nullptr);
+      /*log_manager=*/nullptr, /*ignore_small_forms=*/true);
   regex_predictions.ApplyTo(form_structure.fields());
   form_structure.RationalizeAndAssignSections(
       GeoIpCountryCode(""), LanguageCode(""), /*log_manager=*/nullptr);
 
-  EXPECT_CALL(decider(), RegisterOptimizationTypes).Times(0);
+  EXPECT_CALL(decider(),
+              RegisterOptimizationTypes(Contains(
+                  optimization_guide::proto::VCN_MERCHANT_OPT_OUT_VISA)))
+      .Times(0);
 
   guide().OnDidParseForm(form_structure, payments_data_manager());
 }
@@ -269,9 +286,9 @@ TEST_F(AutofillOptimizationGuideDeciderTest,
   payments_data_manager().AddServerCreditCard(GetVcnEnrolledCard());
 
   EXPECT_CALL(decider(),
-              RegisterOptimizationTypes(ElementsAre(
-                  optimization_guide::proto::IBAN_AUTOFILL_BLOCKED,
-                  optimization_guide::proto::VCN_MERCHANT_OPT_OUT_VISA)));
+              RegisterOptimizationTypes(IsSupersetOf(
+                  {optimization_guide::proto::IBAN_AUTOFILL_BLOCKED,
+                   optimization_guide::proto::VCN_MERCHANT_OPT_OUT_VISA})));
 
   guide().OnDidParseForm(form_structure, payments_data_manager());
 }
@@ -330,6 +347,51 @@ TEST_F(
 
   EXPECT_FALSE(
       guide().ShouldBlockSingleFieldSuggestions(url, form_structure.field(0)));
+}
+
+// Test that Autofill AtMemory is blocked when the `OptimizationGuideDecider`
+// denotes that the optimization is not allowed (decision is `kFalse`) for the
+// `AUTOFILL_AT_MEMORY_BLOCKED` optimization type.
+TEST_F(AutofillOptimizationGuideDeciderTest, ShouldBlockAtMemory_Blocked) {
+  GURL url("https://example.com/");
+  ON_CALL(
+      decider(),
+      CanApplyOptimization(
+          Eq(url), Eq(optimization_guide::proto::AUTOFILL_AT_MEMORY_BLOCKED),
+          Matcher<optimization_guide::OptimizationMetadata*>(Eq(nullptr))))
+      .WillByDefault(Return(OptimizationGuideDecision::kFalse));
+
+  EXPECT_TRUE(guide().ShouldBlockAtMemory(url));
+}
+
+// Test that Autofill AtMemory is not blocked when the
+// `OptimizationGuideDecider` denotes that the optimization is allowed (decision
+// is `kTrue`) for the `AUTOFILL_AT_MEMORY_BLOCKED` optimization type.
+TEST_F(AutofillOptimizationGuideDeciderTest, ShouldBlockAtMemory_Allowed) {
+  GURL url("https://example.com/");
+  ON_CALL(
+      decider(),
+      CanApplyOptimization(
+          Eq(url), Eq(optimization_guide::proto::AUTOFILL_AT_MEMORY_BLOCKED),
+          Matcher<optimization_guide::OptimizationMetadata*>(Eq(nullptr))))
+      .WillByDefault(Return(OptimizationGuideDecision::kTrue));
+
+  EXPECT_FALSE(guide().ShouldBlockAtMemory(url));
+}
+
+// Test that Autofill AtMemory is not blocked when the
+// `OptimizationGuideDecider` returns `kUnknown` for the
+// `AUTOFILL_AT_MEMORY_BLOCKED` optimization type.
+TEST_F(AutofillOptimizationGuideDeciderTest, ShouldBlockAtMemory_Unknown) {
+  GURL url("https://example.com/");
+  ON_CALL(
+      decider(),
+      CanApplyOptimization(
+          Eq(url), Eq(optimization_guide::proto::AUTOFILL_AT_MEMORY_BLOCKED),
+          Matcher<optimization_guide::OptimizationMetadata*>(Eq(nullptr))))
+      .WillByDefault(Return(OptimizationGuideDecision::kUnknown));
+
+  EXPECT_FALSE(guide().ShouldBlockAtMemory(url));
 }
 
 // Test that blocking a virtual card suggestion works correctly in the VCN
@@ -502,11 +564,11 @@ TEST_F(AutofillOptimizationGuideDeciderTest,
       /*benefit_source=*/kAmexCardBenefitSource));
 
   EXPECT_CALL(decider(),
-              RegisterOptimizationTypes(UnorderedElementsAre(
-                  optimization_guide::proto::
-                      AMERICAN_EXPRESS_CREDIT_CARD_FLIGHT_BENEFITS,
-                  optimization_guide::proto::
-                      AMERICAN_EXPRESS_CREDIT_CARD_SUBSCRIPTION_BENEFITS)));
+              RegisterOptimizationTypes(IsSupersetOf(
+                  {optimization_guide::proto::
+                       AMERICAN_EXPRESS_CREDIT_CARD_FLIGHT_BENEFITS,
+                   optimization_guide::proto::
+                       AMERICAN_EXPRESS_CREDIT_CARD_SUBSCRIPTION_BENEFITS})));
 
   guide().OnDidParseForm(form_structure, payments_data_manager());
 }
@@ -541,7 +603,7 @@ TEST_F(
       std::move(flat_rate_benefit));
 
   EXPECT_CALL(decider(),
-              RegisterOptimizationTypes(UnorderedElementsAre(
+              RegisterOptimizationTypes(Contains(
                   optimization_guide::proto::
                       SHARED_CREDIT_CARD_FLAT_RATE_BENEFITS_BLOCKLIST)));
 
@@ -570,7 +632,11 @@ TEST_F(
 
   // The flat rate blocklist optimization type will not be registered if the
   // no card has a flat rate benefit.
-  EXPECT_CALL(decider(), RegisterOptimizationTypes).Times(0);
+  EXPECT_CALL(decider(),
+              RegisterOptimizationTypes(Contains(
+                  optimization_guide::proto::
+                      SHARED_CREDIT_CARD_FLAT_RATE_BENEFITS_BLOCKLIST)))
+      .Times(0);
 
   guide().OnDidParseForm(form_structure, payments_data_manager());
 }
@@ -604,7 +670,11 @@ TEST_F(
 
   // The flat rate blocklist optimization type will not be registered if the
   // blocklist flag is disabled.
-  EXPECT_CALL(decider(), RegisterOptimizationTypes).Times(0);
+  EXPECT_CALL(decider(),
+              RegisterOptimizationTypes(Contains(
+                  optimization_guide::proto::
+                      SHARED_CREDIT_CARD_FLAT_RATE_BENEFITS_BLOCKLIST)))
+      .Times(0);
 
   guide().OnDidParseForm(form_structure, payments_data_manager());
 }
@@ -631,19 +701,56 @@ TEST_F(AutofillOptimizationGuideDeciderTest,
 
   EXPECT_CALL(
       decider(),
-      RegisterOptimizationTypes(UnorderedElementsAre(
-          optimization_guide::proto::BMO_CREDIT_CARD_AIR_MILES_PARTNER_BENEFITS,
-          optimization_guide::proto::BMO_CREDIT_CARD_ALCOHOL_STORE_BENEFITS,
-          optimization_guide::proto::BMO_CREDIT_CARD_DINING_BENEFITS,
-          optimization_guide::proto::BMO_CREDIT_CARD_DRUGSTORE_BENEFITS,
-          optimization_guide::proto::BMO_CREDIT_CARD_ENTERTAINMENT_BENEFITS,
-          optimization_guide::proto::BMO_CREDIT_CARD_GROCERY_BENEFITS,
-          optimization_guide::proto::BMO_CREDIT_CARD_OFFICE_SUPPLY_BENEFITS,
-          optimization_guide::proto::BMO_CREDIT_CARD_RECURRING_BILL_BENEFITS,
-          optimization_guide::proto::BMO_CREDIT_CARD_TRANSIT_BENEFITS,
-          optimization_guide::proto::BMO_CREDIT_CARD_TRAVEL_BENEFITS,
-          optimization_guide::proto::BMO_CREDIT_CARD_WHOLESALE_CLUB_BENEFITS,
-          optimization_guide::proto::VCN_MERCHANT_OPT_OUT_MASTERCARD)));
+      RegisterOptimizationTypes(IsSupersetOf(
+          {optimization_guide::proto::
+               BMO_CREDIT_CARD_AIR_MILES_PARTNER_BENEFITS,
+           optimization_guide::proto::BMO_CREDIT_CARD_ALCOHOL_STORE_BENEFITS,
+           optimization_guide::proto::BMO_CREDIT_CARD_DINING_BENEFITS,
+           optimization_guide::proto::BMO_CREDIT_CARD_DRUGSTORE_BENEFITS,
+           optimization_guide::proto::BMO_CREDIT_CARD_ENTERTAINMENT_BENEFITS,
+           optimization_guide::proto::BMO_CREDIT_CARD_GROCERY_BENEFITS,
+           optimization_guide::proto::BMO_CREDIT_CARD_OFFICE_SUPPLY_BENEFITS,
+           optimization_guide::proto::BMO_CREDIT_CARD_RECURRING_BILL_BENEFITS,
+           optimization_guide::proto::BMO_CREDIT_CARD_TRANSIT_BENEFITS,
+           optimization_guide::proto::BMO_CREDIT_CARD_TRAVEL_BENEFITS,
+           optimization_guide::proto::BMO_CREDIT_CARD_WHOLESALE_CLUB_BENEFITS,
+           optimization_guide::proto::VCN_MERCHANT_OPT_OUT_MASTERCARD})));
+
+  guide().OnDidParseForm(form_structure, payments_data_manager());
+}
+
+// Test that the Curinos category-benefit optimization types are registered when
+// a credit card form is present and the user has a card with benefits from
+// Curinos.
+TEST_F(AutofillOptimizationGuideDeciderTest,
+       CreditCardFormFound_CurinosCategoryBenefits) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/
+      {features::kAutofillEnableCardBenefitsSync,
+       features::kAutofillEnableTravelCategoryAndMerchantBenefitsFromCurinos},
+      /*disabled_features=*/{});
+
+  FormStructure form_structure{
+      CreateTestCreditCardFormData(/*is_https=*/true,
+                                   /*use_month_type=*/true)};
+  test_api(form_structure)
+      .SetFieldTypes({CREDIT_CARD_NAME_FULL, CREDIT_CARD_NUMBER,
+                      CREDIT_CARD_EXP_MONTH, CREDIT_CARD_VERIFICATION_CODE});
+  payments_data_manager().AddServerCreditCard(GetVcnEnrolledCard(
+      /*network=*/kMasterCard,
+      /*virtual_card_enrollment_type=*/
+      CreditCard::VirtualCardEnrollmentType::kNetwork,
+      /*issuer_id=*/kDiscoverCardIssuerId,
+      /*benefit_source=*/kCurinosCardBenefitSource));
+
+  EXPECT_CALL(
+      decider(),
+      RegisterOptimizationTypes(IsSupersetOf(
+          {optimization_guide::proto::CURINOS_CREDIT_CARD_FLIGHT_BENEFITS,
+           optimization_guide::proto::CURINOS_CREDIT_CARD_HOTEL_BENEFITS,
+           optimization_guide::proto::
+               CURINOS_CREDIT_CARD_CAR_RENTAL_BENEFITS})));
 
   guide().OnDidParseForm(form_structure, payments_data_manager());
 }
@@ -669,12 +776,49 @@ TEST_F(AutofillOptimizationGuideDeciderTest,
       /*benefit_source=*/kAmexCardBenefitSource));
 
   EXPECT_CALL(decider(),
-              RegisterOptimizationTypes(UnorderedElementsAre(
-                  optimization_guide::proto::
-                      AMERICAN_EXPRESS_CREDIT_CARD_FLIGHT_BENEFITS,
-                  optimization_guide::proto::
-                      AMERICAN_EXPRESS_CREDIT_CARD_SUBSCRIPTION_BENEFITS)))
+              RegisterOptimizationTypes(IsSupersetOf(
+                  {optimization_guide::proto::
+                       AMERICAN_EXPRESS_CREDIT_CARD_FLIGHT_BENEFITS,
+                   optimization_guide::proto::
+                       AMERICAN_EXPRESS_CREDIT_CARD_SUBSCRIPTION_BENEFITS})))
       .Times(0);
+
+  guide().OnDidParseForm(form_structure, payments_data_manager());
+}
+
+// Test that the Curinos category-benefit optimization types are not registered
+// when the `kAutofillEnableTravelCategoryAndMerchantBenefitsFromCurinos`
+// experiment is disabled.
+TEST_F(AutofillOptimizationGuideDeciderTest,
+       CreditCardFormFound_CurinosCategoryBenefits_ExperimentDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/
+      {features::kAutofillEnableCardBenefitsSync},
+      /*disabled_features=*/{
+          features::
+              kAutofillEnableTravelCategoryAndMerchantBenefitsFromCurinos});
+
+  FormStructure form_structure{
+      CreateTestCreditCardFormData(/*is_https=*/true,
+                                   /*use_month_type=*/true)};
+  test_api(form_structure)
+      .SetFieldTypes({CREDIT_CARD_NAME_FULL, CREDIT_CARD_NUMBER,
+                      CREDIT_CARD_EXP_MONTH, CREDIT_CARD_VERIFICATION_CODE});
+  payments_data_manager().AddServerCreditCard(GetVcnEnrolledCard(
+      /*network=*/kMasterCard,
+      /*virtual_card_enrollment_type=*/
+      CreditCard::VirtualCardEnrollmentType::kNetwork,
+      /*issuer_id=*/kDiscoverCardIssuerId,
+      /*benefit_source=*/kCurinosCardBenefitSource));
+
+  EXPECT_CALL(
+      decider(),
+      RegisterOptimizationTypes(Not(Contains(
+          AnyOf(optimization_guide::proto::CURINOS_CREDIT_CARD_FLIGHT_BENEFITS,
+                optimization_guide::proto::CURINOS_CREDIT_CARD_HOTEL_BENEFITS,
+                optimization_guide::proto::
+                    CURINOS_CREDIT_CARD_CAR_RENTAL_BENEFITS)))));
 
   guide().OnDidParseForm(form_structure, payments_data_manager());
 }
@@ -694,39 +838,43 @@ class BuyNowPayLaterAutofillOptimizationGuideDeciderTest
  protected:
   optimization_guide::proto::OptimizationType GetAffirmOptimizationType()
       const {
-    if (IsBlocklistFlagEnabled()) {
-      return optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_AFFIRM;
-    }
+    return IsBlocklistFlagEnabled()
 #if BUILDFLAG(IS_ANDROID)
-    return optimization_guide::proto::
-        BUY_NOW_PAY_LATER_ALLOWLIST_AFFIRM_ANDROID;
+               ? optimization_guide::proto::
+                     BUY_NOW_PAY_LATER_BLOCKLIST_AFFIRM_ANDROID
+               : optimization_guide::proto::
+                     BUY_NOW_PAY_LATER_ALLOWLIST_AFFIRM_ANDROID;
 #else
-    return optimization_guide::proto::BUY_NOW_PAY_LATER_ALLOWLIST_AFFIRM;
-#endif
+               ? optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_AFFIRM
+               : optimization_guide::proto::BUY_NOW_PAY_LATER_ALLOWLIST_AFFIRM;
+#endif  // BUILDFLAG(IS_ANDROID)
   }
 
   optimization_guide::proto::OptimizationType GetZipOptimizationType() const {
-    if (IsBlocklistFlagEnabled()) {
-      return optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_ZIP;
-    }
+    return IsBlocklistFlagEnabled()
 #if BUILDFLAG(IS_ANDROID)
-    return optimization_guide::proto::BUY_NOW_PAY_LATER_ALLOWLIST_ZIP_ANDROID;
+               ? optimization_guide::proto::
+                     BUY_NOW_PAY_LATER_BLOCKLIST_ZIP_ANDROID
+               : optimization_guide::proto::
+                     BUY_NOW_PAY_LATER_ALLOWLIST_ZIP_ANDROID;
 #else
-    return optimization_guide::proto::BUY_NOW_PAY_LATER_ALLOWLIST_ZIP;
-#endif
+               ? optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_ZIP
+               : optimization_guide::proto::BUY_NOW_PAY_LATER_ALLOWLIST_ZIP;
+#endif  // BUILDFLAG(IS_ANDROID)
   }
 
   optimization_guide::proto::OptimizationType GetKlarnaOptimizationType()
       const {
-    if (IsBlocklistFlagEnabled()) {
-      return optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_KLARNA;
-    }
+    return IsBlocklistFlagEnabled()
 #if BUILDFLAG(IS_ANDROID)
-    return optimization_guide::proto::
-        BUY_NOW_PAY_LATER_ALLOWLIST_KLARNA_ANDROID;
+               ? optimization_guide::proto::
+                     BUY_NOW_PAY_LATER_BLOCKLIST_KLARNA_ANDROID
+               : optimization_guide::proto::
+                     BUY_NOW_PAY_LATER_ALLOWLIST_KLARNA_ANDROID;
 #else
-    return optimization_guide::proto::BUY_NOW_PAY_LATER_ALLOWLIST_KLARNA;
-#endif
+               ? optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_KLARNA
+               : optimization_guide::proto::BUY_NOW_PAY_LATER_ALLOWLIST_KLARNA;
+#endif  // BUILDFLAG(IS_ANDROID)
   }
 };
 
@@ -740,16 +888,10 @@ INSTANTIATE_TEST_SUITE_P(,
 TEST_P(BuyNowPayLaterAutofillOptimizationGuideDeciderTest,
        OnPaymentsDataLoaded_BuyNowPayLaterProviderAffirm) {
   base::test::ScopedFeatureList feature_list;
-
-  std::vector<base::test::FeatureRef> enabled_features = {
-      features::kAutofillEnableBuyNowPayLaterSyncing};
-
-  if (IsBlocklistFlagEnabled()) {
-    enabled_features.push_back(
-        features::kAutofillPreferBuyNowPayLaterBlocklists);
-  }
-
-  feature_list.InitWithFeatures(enabled_features, {});
+  feature_list.InitWithFeatureStates(
+      {{features::kAutofillEnableBuyNowPayLaterSyncing, true},
+       {features::kAutofillPreferBuyNowPayLaterBlocklists,
+        IsBlocklistFlagEnabled()}});
 
   payments_data_manager().AddBnplIssuer(
       test::GetTestLinkedBnplIssuer(BnplIssuer::IssuerId::kBnplAffirm));
@@ -767,16 +909,10 @@ TEST_P(BuyNowPayLaterAutofillOptimizationGuideDeciderTest,
 TEST_P(BuyNowPayLaterAutofillOptimizationGuideDeciderTest,
        OnPaymentsDataLoaded_BuyNowPayLaterProviderZip) {
   base::test::ScopedFeatureList feature_list;
-
-  std::vector<base::test::FeatureRef> enabled_features = {
-      features::kAutofillEnableBuyNowPayLaterSyncing};
-
-  if (IsBlocklistFlagEnabled()) {
-    enabled_features.push_back(
-        features::kAutofillPreferBuyNowPayLaterBlocklists);
-  }
-
-  feature_list.InitWithFeatures(enabled_features, {});
+  feature_list.InitWithFeatureStates(
+      {{features::kAutofillEnableBuyNowPayLaterSyncing, true},
+       {features::kAutofillPreferBuyNowPayLaterBlocklists,
+        IsBlocklistFlagEnabled()}});
 
   payments_data_manager().AddBnplIssuer(
       test::GetTestLinkedBnplIssuer(BnplIssuer::IssuerId::kBnplZip));
@@ -794,16 +930,10 @@ TEST_P(BuyNowPayLaterAutofillOptimizationGuideDeciderTest,
 TEST_P(BuyNowPayLaterAutofillOptimizationGuideDeciderTest,
        OnPaymentsDataLoaded_BuyNowPayLaterProviderKlarna) {
   base::test::ScopedFeatureList feature_list;
-
-  std::vector<base::test::FeatureRef> enabled_features = {
-      features::kAutofillEnableBuyNowPayLaterSyncing};
-
-  if (IsBlocklistFlagEnabled()) {
-    enabled_features.push_back(
-        features::kAutofillPreferBuyNowPayLaterBlocklists);
-  }
-
-  feature_list.InitWithFeatures(enabled_features, {});
+  feature_list.InitWithFeatureStates(
+      {{features::kAutofillEnableBuyNowPayLaterSyncing, true},
+       {features::kAutofillPreferBuyNowPayLaterBlocklists,
+        IsBlocklistFlagEnabled()}});
 
   payments_data_manager().AddBnplIssuer(
       test::GetTestLinkedBnplIssuer(BnplIssuer::IssuerId::kBnplKlarna));
@@ -820,16 +950,11 @@ TEST_P(BuyNowPayLaterAutofillOptimizationGuideDeciderTest,
 TEST_P(BuyNowPayLaterAutofillOptimizationGuideDeciderTest,
        CreditCardFormFound_BuyNowPayLaterProviderAffirm) {
   base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatureStates(
+      {{features::kAutofillEnableBuyNowPayLaterSyncing, true},
+       {features::kAutofillPreferBuyNowPayLaterBlocklists,
+        IsBlocklistFlagEnabled()}});
 
-  std::vector<base::test::FeatureRef> enabled_features = {
-      features::kAutofillEnableBuyNowPayLaterSyncing};
-
-  if (IsBlocklistFlagEnabled()) {
-    enabled_features.push_back(
-        features::kAutofillPreferBuyNowPayLaterBlocklists);
-  }
-
-  feature_list.InitWithFeatures(enabled_features, {});
   FormStructure form_structure{CreateTestCreditCardFormData(
       /*is_https=*/true, /*use_month_type=*/true)};
   test_api(form_structure)
@@ -849,16 +974,10 @@ TEST_P(BuyNowPayLaterAutofillOptimizationGuideDeciderTest,
 TEST_P(BuyNowPayLaterAutofillOptimizationGuideDeciderTest,
        CreditCardFormFound_BuyNowPayLaterProviderZip) {
   base::test::ScopedFeatureList feature_list;
-
-  std::vector<base::test::FeatureRef> enabled_features = {
-      features::kAutofillEnableBuyNowPayLaterSyncing};
-
-  if (IsBlocklistFlagEnabled()) {
-    enabled_features.push_back(
-        features::kAutofillPreferBuyNowPayLaterBlocklists);
-  }
-
-  feature_list.InitWithFeatures(enabled_features, {});
+  feature_list.InitWithFeatureStates(
+      {{features::kAutofillEnableBuyNowPayLaterSyncing, true},
+       {features::kAutofillPreferBuyNowPayLaterBlocklists,
+        IsBlocklistFlagEnabled()}});
 
   FormStructure form_structure{CreateTestCreditCardFormData(
       /*is_https=*/true, /*use_month_type=*/true)};
@@ -880,16 +999,10 @@ TEST_P(BuyNowPayLaterAutofillOptimizationGuideDeciderTest,
 TEST_P(BuyNowPayLaterAutofillOptimizationGuideDeciderTest,
        CreditCardFormFound_BuyNowPayLaterProviderKlarna) {
   base::test::ScopedFeatureList feature_list;
-
-  std::vector<base::test::FeatureRef> enabled_features = {
-      features::kAutofillEnableBuyNowPayLaterSyncing};
-
-  if (IsBlocklistFlagEnabled()) {
-    enabled_features.push_back(
-        features::kAutofillPreferBuyNowPayLaterBlocklists);
-  }
-
-  feature_list.InitWithFeatures(enabled_features, {});
+  feature_list.InitWithFeatureStates(
+      {{features::kAutofillEnableBuyNowPayLaterSyncing, true},
+       {features::kAutofillPreferBuyNowPayLaterBlocklists,
+        IsBlocklistFlagEnabled()}});
 
   FormStructure form_structure{CreateTestCreditCardFormData(
       /*is_https=*/true, /*use_month_type=*/true)};
@@ -929,7 +1042,11 @@ TEST_P(BuyNowPayLaterAutofillOptimizationGuideDeciderTest,
                       CREDIT_CARD_EXP_MONTH, CREDIT_CARD_VERIFICATION_CODE});
 
   // RegisterOptimizationTypes shouldn't be called.
-  EXPECT_CALL(decider(), RegisterOptimizationTypes).Times(0);
+  EXPECT_CALL(decider(),
+              RegisterOptimizationTypes(Contains(AnyOf(
+                  optimization_guide::proto::BUY_NOW_PAY_LATER_ALLOWLIST_AFFIRM,
+                  optimization_guide::proto::BUY_NOW_PAY_LATER_ALLOWLIST_ZIP))))
+      .Times(0);
 
   guide().OnDidParseForm(form_structure, payments_data_manager());
 }
@@ -1230,6 +1347,212 @@ TEST_F(AutofillOptimizationGuideDeciderTest, IsIframeUrlAllowlistedForActor) {
       guide().IsIframeUrlAllowlistedForActor(GURL("http://www.example.com")));
 }
 
+// Test that the `AUTOFILL_ACTOR_IFRAME_ORIGIN_ALLOWLIST` optimization type is
+// registered when payments data is loaded and the actor rewrite feature is on.
+TEST_F(AutofillOptimizationGuideDeciderTest,
+       OnPaymentsDataLoaded_AutofillActorIframeOriginAllowlist) {
+  base::test::ScopedFeatureList feature;
+  feature.InitAndEnableFeature(
+      features::kAutofillActorRewriteCreditCardTriggerField);
+
+  EXPECT_CALL(
+      decider(),
+      RegisterOptimizationTypes(Contains(
+          optimization_guide::proto::AUTOFILL_ACTOR_IFRAME_ORIGIN_ALLOWLIST)));
+
+  guide().OnPaymentsDataLoaded(payments_data_manager());
+}
+
+// Test that the `AUTOFILL_ACTOR_IFRAME_ORIGIN_ALLOWLIST` optimization type is
+// not registered when payments data is loaded if the actor rewrite feature is
+// disabled.
+TEST_F(
+    AutofillOptimizationGuideDeciderTest,
+    OnPaymentsDataLoaded_AutofillActorIframeOriginAllowlist_FeatureDisabled) {
+  base::test::ScopedFeatureList feature;
+  feature.InitAndDisableFeature(
+      features::kAutofillActorRewriteCreditCardTriggerField);
+
+  EXPECT_CALL(
+      decider(),
+      RegisterOptimizationTypes(Contains(
+          optimization_guide::proto::AUTOFILL_ACTOR_IFRAME_ORIGIN_ALLOWLIST)))
+      .Times(0);
+
+  guide().OnPaymentsDataLoaded(payments_data_manager());
+}
+
+// Test that the `AUTOFILL_AT_MEMORY_BLOCKED` optimization type is registered
+// when payments data is loaded and the AtMemory feature is enabled.
+TEST_F(AutofillOptimizationGuideDeciderTest,
+       OnPaymentsDataLoaded_AutofillAtMemoryBlocked) {
+  base::test::ScopedFeatureList feature;
+  feature.InitAndEnableFeature(features::kAutofillAtMemory);
+
+  EXPECT_CALL(decider(),
+              RegisterOptimizationTypes(Contains(
+                  optimization_guide::proto::AUTOFILL_AT_MEMORY_BLOCKED)));
+
+  guide().OnPaymentsDataLoaded(payments_data_manager());
+}
+
+// Test that the `AUTOFILL_AT_MEMORY_BLOCKED` optimization type is not
+// registered when payments data is loaded and the AtMemory feature is disabled.
+TEST_F(AutofillOptimizationGuideDeciderTest,
+       OnPaymentsDataLoaded_AutofillAtMemoryBlocked_FeatureDisabled) {
+  base::test::ScopedFeatureList feature;
+  feature.InitAndDisableFeature(features::kAutofillAtMemory);
+
+  EXPECT_CALL(decider(),
+              RegisterOptimizationTypes(Contains(
+                  optimization_guide::proto::AUTOFILL_AT_MEMORY_BLOCKED)))
+      .Times(0);
+
+  guide().OnPaymentsDataLoaded(payments_data_manager());
+}
+
+// Test that the `AUTOFILL_ACTOR_IFRAME_ORIGIN_ALLOWLIST` optimization type is
+// registered when a credit card form is seen and the actor rewrite feature is
+// on.
+TEST_F(AutofillOptimizationGuideDeciderTest,
+       CreditCardFormFound_AutofillActorIframeOriginAllowlist) {
+  base::test::ScopedFeatureList feature;
+  feature.InitAndEnableFeature(
+      features::kAutofillActorRewriteCreditCardTriggerField);
+
+  FormStructure form_structure{
+      CreateTestCreditCardFormData(/*is_https=*/true,
+                                   /*use_month_type=*/true)};
+  test_api(form_structure)
+      .SetFieldTypes({CREDIT_CARD_NAME_FULL, CREDIT_CARD_NUMBER,
+                      CREDIT_CARD_EXP_MONTH, CREDIT_CARD_VERIFICATION_CODE});
+
+  EXPECT_CALL(
+      decider(),
+      RegisterOptimizationTypes(Contains(
+          optimization_guide::proto::AUTOFILL_ACTOR_IFRAME_ORIGIN_ALLOWLIST)));
+
+  guide().OnDidParseForm(form_structure, payments_data_manager());
+}
+
+// Test that the `AUTOFILL_ACTOR_IFRAME_ORIGIN_ALLOWLIST` optimization type is
+// not registered when the actor rewrite feature is disabled.
+TEST_F(AutofillOptimizationGuideDeciderTest,
+       CreditCardFormFound_AutofillActorIframeOriginAllowlist_FeatureDisabled) {
+  base::test::ScopedFeatureList feature;
+  feature.InitAndDisableFeature(
+      features::kAutofillActorRewriteCreditCardTriggerField);
+
+  FormStructure form_structure{
+      CreateTestCreditCardFormData(/*is_https=*/true,
+                                   /*use_month_type=*/true)};
+  test_api(form_structure)
+      .SetFieldTypes({CREDIT_CARD_NAME_FULL, CREDIT_CARD_NUMBER,
+                      CREDIT_CARD_EXP_MONTH, CREDIT_CARD_VERIFICATION_CODE});
+
+  EXPECT_CALL(
+      decider(),
+      RegisterOptimizationTypes(Contains(
+          optimization_guide::proto::AUTOFILL_ACTOR_IFRAME_ORIGIN_ALLOWLIST)))
+      .Times(0);
+
+  guide().OnDidParseForm(form_structure, payments_data_manager());
+}
+
+// Test that the `AUTOFILL_ACTOR_IFRAME_ORIGIN_ALLOWLIST` optimization type is
+// not registered when there is no credit card form, even if the actor rewrite
+// feature is on.
+TEST_F(AutofillOptimizationGuideDeciderTest,
+       NoCreditCardFormFound_AutofillActorIframeOriginAllowlist) {
+  base::test::ScopedFeatureList feature;
+  feature.InitAndEnableFeature(
+      features::kAutofillActorRewriteCreditCardTriggerField);
+
+  FormStructure form_structure{CreateTestIbanFormData()};
+
+  EXPECT_CALL(
+      decider(),
+      RegisterOptimizationTypes(Contains(
+          optimization_guide::proto::AUTOFILL_ACTOR_IFRAME_ORIGIN_ALLOWLIST)))
+      .Times(0);
+
+  guide().OnDidParseForm(form_structure, payments_data_manager());
+}
+
+// Test that the `OMNIBOX_AUTOFILL_IFRAME_ALLOWLIST` optimization type is
+// registered when payments data is loaded.
+TEST_F(AutofillOptimizationGuideDeciderTest,
+       OmniboxAutofillAllowlistRegistered) {
+  base::test::ScopedFeatureList feature{
+      features::kAutofillEnableOmniboxAutofill};
+
+  EXPECT_CALL(
+      decider(),
+      RegisterOptimizationTypes(Contains(
+          optimization_guide::proto::OMNIBOX_AUTOFILL_IFRAME_ALLOWLIST)));
+
+  guide().OnPaymentsDataLoaded(payments_data_manager());
+}
+
+// Test that the `OMNIBOX_AUTOFILL_IFRAME_ALLOWLIST` optimization type is
+// not registered when payments data is loaded if the feature is disabled.
+TEST_F(AutofillOptimizationGuideDeciderTest,
+       OmniboxAutofillAllowlistNotRegistered_FlagOff) {
+  base::test::ScopedFeatureList feature;
+  feature.InitAndDisableFeature(features::kAutofillEnableOmniboxAutofill);
+
+  EXPECT_CALL(
+      decider(),
+      RegisterOptimizationTypes(Contains(
+          optimization_guide::proto::OMNIBOX_AUTOFILL_IFRAME_ALLOWLIST)))
+      .Times(0);
+
+  guide().OnPaymentsDataLoaded(payments_data_manager());
+}
+
+// Tests that the optimization guide decision on whether a URL is allowlisted
+// for iframe fill triggering via omnibox autofill is queried correctly.
+TEST_F(AutofillOptimizationGuideDeciderTest, IsUrlEligibleForOmniboxAutofill) {
+  base::test::ScopedFeatureList feature{
+      features::kAutofillEnableOmniboxAutofill};
+
+  ON_CALL(
+      decider(),
+      CanApplyOptimization(
+          _, Eq(optimization_guide::proto::OMNIBOX_AUTOFILL_IFRAME_ALLOWLIST),
+          Matcher<optimization_guide::OptimizationMetadata*>(Eq(nullptr))))
+      .WillByDefault(WithArg<0>([](const GURL& url) {
+        return url.host() == "www.example.com"
+                   ? OptimizationGuideDecision::kTrue
+                   : OptimizationGuideDecision::kFalse;
+      }));
+
+  EXPECT_TRUE(
+      guide().IsUrlEligibleForOmniboxAutofill(GURL("https://www.example.com")));
+  EXPECT_FALSE(guide().IsUrlEligibleForOmniboxAutofill(
+      GURL("https://www.othersite.com")));
+}
+
+// Tests that the optimization guide decision on whether a URL is allowlisted
+// for iframe fill triggering via omnibox autofill always returns false if the
+// feature is disabled.
+TEST_F(AutofillOptimizationGuideDeciderTest,
+       IsUrlEligibleForOmniboxAutofill_FlagOff) {
+  base::test::ScopedFeatureList feature;
+  feature.InitAndDisableFeature(features::kAutofillEnableOmniboxAutofill);
+
+  ON_CALL(
+      decider(),
+      CanApplyOptimization(
+          _, Eq(optimization_guide::proto::OMNIBOX_AUTOFILL_IFRAME_ALLOWLIST),
+          Matcher<optimization_guide::OptimizationMetadata*>(Eq(nullptr))))
+      .WillByDefault(WithArg<0>(
+          [](const GURL& url) { return OptimizationGuideDecision::kTrue; }));
+
+  EXPECT_FALSE(
+      guide().IsUrlEligibleForOmniboxAutofill(GURL("https://www.example.com")));
+}
+
 struct BenefitOptimizationToBenefitCategoryTestCase {
   const std::string benefit_source;
   const optimization_guide::proto::OptimizationType optimization_type;
@@ -1264,6 +1587,8 @@ class BenefitOptimizationToBenefitCategoryTest
 
  private:
   CreditCard card_;
+  base::test::ScopedFeatureList scoped_feature_list_{
+      features::kAutofillEnableTravelCategoryAndMerchantBenefitsFromCurinos};
 };
 
 // Tests that the correct benefit category is returned when a benefit
@@ -1336,6 +1661,18 @@ INSTANTIATE_TEST_SUITE_P(
         BenefitOptimizationToBenefitCategoryTestCase{
             "bmo",
             optimization_guide::proto::BMO_CREDIT_CARD_WHOLESALE_CLUB_BENEFITS,
-            CreditCardCategoryBenefit::BenefitCategory::kWholesaleClubs}));
+            CreditCardCategoryBenefit::BenefitCategory::kWholesaleClubs},
+        BenefitOptimizationToBenefitCategoryTestCase{
+            "curinos",
+            optimization_guide::proto::CURINOS_CREDIT_CARD_FLIGHT_BENEFITS,
+            CreditCardCategoryBenefit::BenefitCategory::kFlights},
+        BenefitOptimizationToBenefitCategoryTestCase{
+            "curinos",
+            optimization_guide::proto::CURINOS_CREDIT_CARD_HOTEL_BENEFITS,
+            CreditCardCategoryBenefit::BenefitCategory::kHotels},
+        BenefitOptimizationToBenefitCategoryTestCase{
+            "curinos",
+            optimization_guide::proto::CURINOS_CREDIT_CARD_CAR_RENTAL_BENEFITS,
+            CreditCardCategoryBenefit::BenefitCategory::kCarRentals}));
 
 }  // namespace autofill

@@ -12,6 +12,10 @@
 #include "components/password_manager/core/browser/password_store/password_store_change.h"
 #include "components/sync/model/sync_metadata_store.h"
 
+namespace sql {
+class Transaction;
+}  // namespace sql
+
 namespace syncer {
 class MetadataBatch;
 }
@@ -105,20 +109,6 @@ class PasswordStoreSync {
     // Deletes all the stored sync metadata for |data_type|. This is currently
     // used only for passwords.
     virtual void DeleteAllSyncMetadata(syncer::DataType data_type) = 0;
-
-    // Registers a callback that will be invoked whenever all pending (unsynced)
-    // deletions are gone. If they were committed to the server (or, rarely, the
-    // entity was undeleted), the |callback| will be run with "true". If the
-    // deletions are gone because Sync was permanently turned off, it'll be run
-    // with "false" instead.
-    // Note that there can be only one such callback; if one was already
-    // registered, it'll be overridden by the new |callback|.
-    virtual void SetPasswordDeletionsHaveSyncedCallback(
-        base::RepeatingCallback<void(bool)> callback) = 0;
-
-    // Returns whether there are any pending deletions that have not been sent
-    // to the Sync server yet.
-    virtual bool HasUnsyncedPasswordDeletions() = 0;
   };
 
   PasswordStoreSync();
@@ -153,20 +143,9 @@ class PasswordStoreSync {
   virtual void NotifyCredentialsChanged(
       const PasswordStoreChangeList& changes) = 0;
 
-  // Notifies any waiting callback that all pending deletions have been
-  // committed to the Sync server now, or that Sync definitely won't commit
-  // them (because Sync was turned off permanently).
-  virtual void NotifyDeletionsHaveSynced(bool success) = 0;
-
-  // The methods below adds transaction support to the password store that's
-  // required by sync to guarantee atomic writes of data and sync metadata.
-  // TODO(crbug.com/40601175): The introduction of the three functions below
-  // question the existence of NotifyCredentialsChanged() above and all the
-  // round trips with PasswordStoreChangeList in the earlier functions. Instead,
-  // observers could be notified inside CommitTransaction().
-  virtual bool BeginTransaction() = 0;
-  virtual void RollbackTransaction() = 0;
-  virtual bool CommitTransaction() = 0;
+  // Creates a `Transaction` in the password store, required by sync to
+  // guarantee atomic writes of data and sync metadata.
+  virtual std::unique_ptr<sql::Transaction> CreateTransaction() = 0;
 
   // Returns a SyncMetadataStore that sync machinery would use to persist the
   // sync metadata.

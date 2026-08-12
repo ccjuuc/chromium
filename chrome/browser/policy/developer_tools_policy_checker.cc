@@ -4,6 +4,7 @@
 
 #include "chrome/browser/policy/developer_tools_policy_checker.h"
 
+#include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
 #include "chrome/common/pref_names.h"
@@ -16,7 +17,8 @@ namespace policy {
 
 DeveloperToolsPolicyChecker::DeveloperToolsPolicyChecker(
     PrefService* pref_service)
-    : url_blocklist_manager_(pref_service,
+    : pref_service_(pref_service),
+      url_blocklist_manager_(pref_service,
                              prefs::kDeveloperToolsAvailabilityBlocklist,
                              prefs::kDeveloperToolsAvailabilityAllowlist) {}
 DeveloperToolsPolicyChecker::~DeveloperToolsPolicyChecker() = default;
@@ -34,18 +36,28 @@ base::CallbackListSubscription DeveloperToolsPolicyChecker::AddObserver(
   return url_blocklist_manager_.AddObserver(std::move(callback));
 }
 
-std::optional<bool>
-DeveloperToolsPolicyChecker::CheckDevToolsAvailabilityForUrl(
+DeveloperToolsPolicyChecker::DevToolsAvailability
+DeveloperToolsPolicyChecker::GetDevToolsAvailabilityForUrl(
     const GURL& url) const {
   URLBlocklist::URLBlocklistState url_state =
       url_blocklist_manager_.GetURLBlocklistState(url);
   if (url_state == URLBlocklist::URLBlocklistState::URL_IN_ALLOWLIST) {
-    return true;
+    return DevToolsAvailability::kAllowed;
   }
+
+#if !BUILDFLAG(IS_ANDROID)
+  if (!pref_service_->GetList(prefs::kDeveloperToolsAvailabilityAllowlist)
+           .empty() &&
+      pref_service_->GetList(prefs::kDeveloperToolsAvailabilityBlocklist)
+          .empty()) {
+    return DevToolsAvailability::kDisallowed;
+  }
+#endif
+
   if (url_state == URLBlocklist::URLBlocklistState::URL_IN_BLOCKLIST) {
-    return false;
+    return DevToolsAvailability::kDisallowed;
   }
-  return std::nullopt;
+  return DevToolsAvailability::kNotSet;
 }
 
 }  // namespace policy

@@ -11,9 +11,10 @@
 #include <utility>
 #include <vector>
 
-#include "base/compiler_specific.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/metrics/user_action_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/with_feature_override.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -24,6 +25,7 @@
 #include "chrome/browser/bookmarks/bookmark_test_helpers.h"
 #include "chrome/browser/bookmarks/managed_bookmark_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/bookmarks/bookmark_context_menu_controller.h"
 #include "chrome/browser/ui/bookmarks/bookmark_utils_desktop.h"
 #include "chrome/browser/ui/bookmarks/test_bookmark_navigation_wrapper.h"
 #include "chrome/common/webui_url_constants.h"
@@ -31,20 +33,25 @@
 #include "chrome/test/base/testing_profile.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node.h"
+#include "components/bookmarks/common/bookmark_bar_visibility_state.h"
 #include "components/bookmarks/common/bookmark_pref_names.h"
 #include "components/bookmarks/managed/managed_bookmark_service.h"
 #include "components/bookmarks/test/bookmark_test_helpers.h"
 #include "components/prefs/pref_service.h"
+#include "components/search/ntp_features.h"
 #include "components/signin/public/base/signin_switches.h"
+#include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/test/test_clipboard.h"
-#include "ui/events/platform/platform_event_source.h"
-#include "ui/gfx/native_ui_types.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
+#include "ui/views/controls/image_view.h"
 #include "ui/views/controls/menu/menu_item_view.h"
+#include "ui/views/controls/menu/test_menu_item_view.h"
 #include "ui/views/test/scoped_views_test_helper.h"
+#include "ui/views/widget/widget.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
@@ -58,12 +65,28 @@ using content::OpenURLParams;
 using content::PageNavigator;
 using content::WebContents;
 
+namespace {
+
+base::test::ScopedFeatureList CreateFeatureList(
+    bool enable_ntp_simplification) {
+  base::test::ScopedFeatureList feature_list;
+  if (enable_ntp_simplification) {
+    feature_list.InitAndEnableFeature(
+        ntp_features::kNtpSimplificationBookmarkBar);
+  }
+  return feature_list;
+}
+
+}  // namespace
+
 class BookmarkContextMenuTest : public testing::Test,
                                 public base::test::WithFeatureOverride {
  public:
-  BookmarkContextMenuTest()
+  explicit BookmarkContextMenuTest(bool enable_ntp_simplification = false)
       : base::test::WithFeatureOverride(
-            switches::kSyncEnableBookmarksInTransportMode) {}
+            switches::kSyncEnableBookmarksInTransportMode),
+        ntp_simplification_feature_list_(
+            CreateFeatureList(enable_ntp_simplification)) {}
 
   void SetUp() override {
     TestingProfile::Builder profile_builder;
@@ -106,6 +129,9 @@ class BookmarkContextMenuTest : public testing::Test,
     return IsParamFeatureEnabled();
   }
 
+  // Must be declared before `task_environment_` so feature overrides are set
+  // before background threads start.
+  base::test::ScopedFeatureList ntp_simplification_feature_list_;
   content::BrowserTaskEnvironment task_environment_;
   views::ScopedViewsTestHelper views_test_helper_;
   std::unique_ptr<TestingProfile> profile_;
@@ -168,7 +194,8 @@ TEST_P(BookmarkContextMenuTest, DeleteURL) {
   std::vector<raw_ptr<const BookmarkNode, VectorExperimental>> nodes = {
       node_to_delete};
   BookmarkContextMenu controller(nullptr, nullptr, profile_.get(),
-                                 BookmarkLaunchLocation::kNone, nodes, false);
+                                 BookmarkLaunchLocation::kNone, nodes, false,
+                                 false);
   GURL url = node_to_delete->url();
   ASSERT_TRUE(controller.IsCommandEnabled(IDC_BOOKMARK_BAR_REMOVE));
   // Delete the URL.
@@ -207,7 +234,8 @@ TEST_P(BookmarkContextMenuTest, SingleURL) {
       model_->bookmark_bar_node()->children().front().get(),
   };
   BookmarkContextMenu controller(nullptr, nullptr, profile_.get(),
-                                 BookmarkLaunchLocation::kNone, nodes, false);
+                                 BookmarkLaunchLocation::kNone, nodes, false,
+                                 false);
   EXPECT_TRUE(controller.IsCommandEnabled(IDC_BOOKMARK_BAR_OPEN_ALL));
   EXPECT_TRUE(
       controller.IsCommandEnabled(IDC_BOOKMARK_BAR_OPEN_ALL_NEW_WINDOW));
@@ -227,7 +255,8 @@ TEST_P(BookmarkContextMenuTest, MultipleURLs) {
       model_->bookmark_bar_node()->children()[1]->children()[0].get(),
   };
   BookmarkContextMenu controller(nullptr, nullptr, profile_.get(),
-                                 BookmarkLaunchLocation::kNone, nodes, false);
+                                 BookmarkLaunchLocation::kNone, nodes, false,
+                                 false);
   EXPECT_TRUE(controller.IsCommandEnabled(IDC_BOOKMARK_BAR_OPEN_ALL));
   EXPECT_TRUE(
       controller.IsCommandEnabled(IDC_BOOKMARK_BAR_OPEN_ALL_NEW_WINDOW));
@@ -244,7 +273,8 @@ TEST_P(BookmarkContextMenuTest, SingleFolder) {
       model_->bookmark_bar_node()->children()[2].get(),
   };
   BookmarkContextMenu controller(nullptr, nullptr, profile_.get(),
-                                 BookmarkLaunchLocation::kNone, nodes, false);
+                                 BookmarkLaunchLocation::kNone, nodes, false,
+                                 false);
   EXPECT_FALSE(controller.IsCommandEnabled(IDC_BOOKMARK_BAR_OPEN_ALL));
   EXPECT_FALSE(
       controller.IsCommandEnabled(IDC_BOOKMARK_BAR_OPEN_ALL_NEW_WINDOW));
@@ -264,7 +294,8 @@ TEST_P(BookmarkContextMenuTest, MultipleEmptyFolders) {
       model_->bookmark_bar_node()->children()[3].get(),
   };
   BookmarkContextMenu controller(nullptr, nullptr, profile_.get(),
-                                 BookmarkLaunchLocation::kNone, nodes, false);
+                                 BookmarkLaunchLocation::kNone, nodes, false,
+                                 false);
   EXPECT_FALSE(controller.IsCommandEnabled(IDC_BOOKMARK_BAR_OPEN_ALL));
   EXPECT_FALSE(
       controller.IsCommandEnabled(IDC_BOOKMARK_BAR_OPEN_ALL_NEW_WINDOW));
@@ -283,7 +314,8 @@ TEST_P(BookmarkContextMenuTest, MultipleFoldersWithURLs) {
       model_->bookmark_bar_node()->children()[4].get(),
   };
   BookmarkContextMenu controller(nullptr, nullptr, profile_.get(),
-                                 BookmarkLaunchLocation::kNone, nodes, false);
+                                 BookmarkLaunchLocation::kNone, nodes, false,
+                                 false);
   EXPECT_TRUE(controller.IsCommandEnabled(IDC_BOOKMARK_BAR_OPEN_ALL));
   EXPECT_TRUE(
       controller.IsCommandEnabled(IDC_BOOKMARK_BAR_OPEN_ALL_NEW_WINDOW));
@@ -301,7 +333,8 @@ TEST_P(BookmarkContextMenuTest, DisableIncognito) {
   Profile* incognito =
       profile_->GetPrimaryOTRProfile(/*create_if_needed=*/true);
   BookmarkContextMenu controller(nullptr, nullptr, incognito,
-                                 BookmarkLaunchLocation::kNone, nodes, false);
+                                 BookmarkLaunchLocation::kNone, nodes, false,
+                                 false);
   EXPECT_FALSE(controller.IsCommandEnabled(IDC_BOOKMARK_BAR_OPEN_INCOGNITO));
   EXPECT_FALSE(
       controller.IsCommandEnabled(IDC_BOOKMARK_BAR_OPEN_ALL_INCOGNITO));
@@ -312,7 +345,8 @@ TEST_P(BookmarkContextMenuTest, DisabledItemsWithOtherNode) {
   std::vector<raw_ptr<const BookmarkNode, VectorExperimental>> nodes = {
       model_->other_node()};
   BookmarkContextMenu controller(nullptr, nullptr, profile_.get(),
-                                 BookmarkLaunchLocation::kNone, nodes, false);
+                                 BookmarkLaunchLocation::kNone, nodes, false,
+                                 false);
   EXPECT_FALSE(controller.IsCommandEnabled(IDC_BOOKMARK_BAR_EDIT));
   EXPECT_FALSE(controller.IsCommandEnabled(IDC_BOOKMARK_BAR_REMOVE));
 }
@@ -336,7 +370,7 @@ TEST_P(BookmarkContextMenuTest, CutCopyPasteNodeWithoutAccountNodes) {
   {
     BookmarkContextMenu controller(nullptr, nullptr, profile_.get(),
                                    BookmarkLaunchLocation::kNone,
-                                   selected_nodes, false);
+                                   selected_nodes, false, false);
 
     ASSERT_TRUE(controller.IsCommandEnabled(IDC_COPY));
     controller.ExecuteCommand(IDC_COPY, 0);
@@ -349,7 +383,7 @@ TEST_P(BookmarkContextMenuTest, CutCopyPasteNodeWithoutAccountNodes) {
   {
     BookmarkContextMenu controller(nullptr, nullptr, profile_.get(),
                                    BookmarkLaunchLocation::kNone,
-                                   selected_nodes, false);
+                                   selected_nodes, false, /*can_paste=*/true);
 
     ASSERT_TRUE(controller.IsCommandEnabled(IDC_PASTE));
     controller.ExecuteCommand(IDC_PASTE, 0);
@@ -364,7 +398,7 @@ TEST_P(BookmarkContextMenuTest, CutCopyPasteNodeWithoutAccountNodes) {
   {
     BookmarkContextMenu controller(nullptr, nullptr, profile_.get(),
                                    BookmarkLaunchLocation::kNone,
-                                   selected_nodes, false);
+                                   selected_nodes, false, false);
 
     ASSERT_TRUE(controller.IsCommandEnabled(IDC_CUT));
     controller.ExecuteCommand(IDC_CUT, 0);
@@ -396,7 +430,7 @@ TEST_P(BookmarkContextMenuTest, CutCopyPasteNodeWithAccountNodes) {
         selected_nodes = {bb_node->children()[0].get()};
     BookmarkContextMenu controller(nullptr, nullptr, profile_.get(),
                                    BookmarkLaunchLocation::kNone,
-                                   selected_nodes, false);
+                                   selected_nodes, false, false);
 
     ASSERT_TRUE(controller.IsCommandEnabled(IDC_COPY));
     controller.ExecuteCommand(IDC_COPY, 0);
@@ -412,9 +446,10 @@ TEST_P(BookmarkContextMenuTest, CutCopyPasteNodeWithAccountNodes) {
     const BookmarkNode* local_bookmark_to_copy = bb_node->children()[0].get();
     std::vector<raw_ptr<const BookmarkNode, VectorExperimental>>
         selected_nodes = {local_bookmark_to_copy};
+
     BookmarkContextMenu controller(nullptr, nullptr, profile_.get(),
                                    BookmarkLaunchLocation::kNone,
-                                   selected_nodes, false);
+                                   selected_nodes, false, /*can_paste=*/true);
 
     ASSERT_TRUE(controller.IsCommandEnabled(IDC_PASTE));
     controller.ExecuteCommand(IDC_PASTE, 0);
@@ -437,7 +472,7 @@ TEST_P(BookmarkContextMenuTest, CutCopyPasteNodeWithAccountNodes) {
         selected_nodes = {account_bb_node->children()[0].get()};
     BookmarkContextMenu controller(nullptr, nullptr, profile_.get(),
                                    BookmarkLaunchLocation::kNone,
-                                   selected_nodes, false);
+                                   selected_nodes, false, false);
 
     ASSERT_TRUE(controller.IsCommandEnabled(IDC_CUT));
     controller.ExecuteCommand(IDC_CUT, 0);
@@ -456,9 +491,9 @@ TEST_P(BookmarkContextMenuTest, ShowManagedBookmarks) {
   std::vector<raw_ptr<const BookmarkNode, VectorExperimental>> nodes = {
       bb_node->children().front().get(),
   };
-  std::unique_ptr<BookmarkContextMenu> controller(
-      new BookmarkContextMenu(nullptr, nullptr, profile_.get(),
-                              BookmarkLaunchLocation::kNone, nodes, false));
+  std::unique_ptr<BookmarkContextMenu> controller(new BookmarkContextMenu(
+      nullptr, nullptr, profile_.get(), BookmarkLaunchLocation::kNone, nodes,
+      false, false));
 
   // Verify that there are no managed nodes yet.
   bookmarks::ManagedBookmarkService* managed =
@@ -477,10 +512,10 @@ TEST_P(BookmarkContextMenuTest, ShowManagedBookmarks) {
   EXPECT_TRUE(menu->GetMenuItemByID(IDC_BOOKMARK_BAR_NEW_FOLDER)->GetVisible());
 
   // Now set the managed bookmarks policy.
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("name", "Google");
   dict.Set("url", "http://google.com");
-  base::Value::List list;
+  base::ListValue list;
   list.Append(std::move(dict));
   EXPECT_TRUE(managed->managed_node()->children().empty());
   profile_->GetPrefs()->Set(bookmarks::prefs::kManagedBookmarks,
@@ -489,8 +524,9 @@ TEST_P(BookmarkContextMenuTest, ShowManagedBookmarks) {
 
   // New context menus now show the "Show managed bookmarks" option.
   controller = std::make_unique<BookmarkContextMenu>(
-      nullptr, nullptr, profile_.get(), BookmarkLaunchLocation::kNone, nodes,
-      false);
+      nullptr, nullptr, profile_.get(), BookmarkLaunchLocation::kAttachedBar,
+      nodes, false, false);
+
   EXPECT_TRUE(controller->IsCommandVisible(IDC_BOOKMARK_BAR_NEW_FOLDER));
   EXPECT_TRUE(
       controller->IsCommandVisible(IDC_BOOKMARK_BAR_SHOW_MANAGED_BOOKMARKS));
@@ -500,4 +536,187 @@ TEST_P(BookmarkContextMenuTest, ShowManagedBookmarks) {
                   ->GetVisible());
 }
 
+// Regression test: parent widget destroyed before BookmarkContextMenu should
+// not cause a dangling pointer crash.
+TEST_P(BookmarkContextMenuTest, ParentWidgetDestroyedBeforeMenu) {
+  views::Widget::InitParams params(
+      views::Widget::InitParams::CLIENT_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
+  params.context = views_test_helper_.GetContext();
+  auto widget = std::make_unique<views::Widget>();
+  widget->Init(std::move(params));
+
+  const BookmarkNode* bb_node = model_->bookmark_bar_node();
+  std::vector<raw_ptr<const BookmarkNode, VectorExperimental>> nodes = {
+      bb_node->children().front().get(),
+  };
+
+  auto controller = std::make_unique<BookmarkContextMenu>(
+      widget.get(), nullptr, profile_.get(),
+      BookmarkLaunchLocation::kAttachedBar, nodes, false, false);
+
+  // Destroy the widget first, then verify RunMenuAt and destruction are safe.
+  widget->CloseNow();
+  widget.reset();
+
+  controller->RunMenuAt(gfx::Point(), ui::mojom::MenuSourceType::kNone);
+  controller.reset();
+}
+
+class BookmarkContextMenuUpdateSubMenuStateTest
+    : public BookmarkContextMenuTest {
+ public:
+  BookmarkContextMenuUpdateSubMenuStateTest()
+      : BookmarkContextMenuTest(/*enable_ntp_simplification=*/true) {}
+};
+
+// Tests that the submenu items checked state is updated.
+TEST_P(BookmarkContextMenuUpdateSubMenuStateTest, UpdateSubMenuState) {
+  const BookmarkNode* bb_node = model_->bookmark_bar_node();
+  std::vector<raw_ptr<const BookmarkNode, VectorExperimental>> nodes = {
+      bb_node->children().front().get(),
+  };
+
+  BookmarkContextMenu controller(nullptr, nullptr, profile_.get(),
+                                 BookmarkLaunchLocation::kNone, nodes, false,
+                                 false);
+
+  views::MenuItemView* menu = controller.menu();
+  views::MenuItemView* always_show_item =
+      menu->GetMenuItemByID(IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_SHOW);
+  views::MenuItemView* always_hide_item =
+      menu->GetMenuItemByID(IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_HIDE);
+  views::MenuItemView* only_on_ntp_item =
+      menu->GetMenuItemByID(IDC_BOOKMARK_BAR_SUBMENU_ONLY_ON_NTP);
+
+  ASSERT_TRUE(always_show_item);
+  ASSERT_TRUE(always_hide_item);
+  ASSERT_TRUE(only_on_ntp_item);
+
+  // Helper function to check checkmark visibility.
+  auto is_checked = [](views::MenuItemView* item) {
+    views::ImageView* check_icon =
+        views::TestMenuItemView::radio_check_image_view(item);
+    return check_icon && check_icon->GetVisible();
+  };
+
+  profile_->GetPrefs()->SetInteger(
+      bookmarks::prefs::kBookmarkBarVisibilityState,
+      static_cast<int>(bookmarks::BookmarkBarVisibilityState::kAlwaysShow));
+  controller.UpdateSubMenuState();
+
+  EXPECT_TRUE(is_checked(always_show_item));
+  EXPECT_FALSE(is_checked(always_hide_item));
+  EXPECT_FALSE(is_checked(only_on_ntp_item));
+
+  profile_->GetPrefs()->SetInteger(
+      bookmarks::prefs::kBookmarkBarVisibilityState,
+      static_cast<int>(bookmarks::BookmarkBarVisibilityState::kAlwaysHide));
+  controller.UpdateSubMenuState();
+
+  EXPECT_FALSE(is_checked(always_show_item));
+  EXPECT_TRUE(is_checked(always_hide_item));
+  EXPECT_FALSE(is_checked(only_on_ntp_item));
+
+  profile_->GetPrefs()->SetInteger(
+      bookmarks::prefs::kBookmarkBarVisibilityState,
+      static_cast<int>(bookmarks::BookmarkBarVisibilityState::kOnlyShowOnNtp));
+  controller.UpdateSubMenuState();
+
+  EXPECT_FALSE(is_checked(always_show_item));
+  EXPECT_FALSE(is_checked(always_hide_item));
+  EXPECT_TRUE(is_checked(only_on_ntp_item));
+}
+
+// Tests that the submenu items are disabled when kBookmarkBarVisibilityState is
+// managed.
+TEST_P(BookmarkContextMenuUpdateSubMenuStateTest, ManagedVisibilityState) {
+  const BookmarkNode* bb_node = model_->bookmark_bar_node();
+  std::vector<raw_ptr<const BookmarkNode, VectorExperimental>> nodes = {
+      bb_node->children().front().get(),
+  };
+
+  BookmarkContextMenu controller(nullptr, nullptr, profile_.get(),
+                                 BookmarkLaunchLocation::kNone, nodes, false,
+                                 false);
+
+  EXPECT_TRUE(
+      controller.IsCommandEnabled(IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_SHOW));
+  EXPECT_TRUE(
+      controller.IsCommandEnabled(IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_HIDE));
+  EXPECT_TRUE(
+      controller.IsCommandEnabled(IDC_BOOKMARK_BAR_SUBMENU_ONLY_ON_NTP));
+
+  profile_->GetTestingPrefService()->SetManagedPref(
+      bookmarks::prefs::kBookmarkBarVisibilityState,
+      base::Value(static_cast<int>(
+          bookmarks::BookmarkBarVisibilityState::kAlwaysShow)));
+
+  EXPECT_FALSE(
+      controller.IsCommandEnabled(IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_SHOW));
+  EXPECT_FALSE(
+      controller.IsCommandEnabled(IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_HIDE));
+  EXPECT_FALSE(
+      controller.IsCommandEnabled(IDC_BOOKMARK_BAR_SUBMENU_ONLY_ON_NTP));
+}
+
+TEST_P(BookmarkContextMenuUpdateSubMenuStateTest,
+       UpdateBookmarkBarVisibilityOnUserAction) {
+  const BookmarkNode* bb_node = model_->bookmark_bar_node();
+  std::vector<raw_ptr<const BookmarkNode, VectorExperimental>> nodes = {
+      bb_node->children().front().get(),
+  };
+
+  BookmarkContextMenu controller(nullptr, nullptr, profile_.get(),
+                                 BookmarkLaunchLocation::kAttachedBar, nodes,
+                                 false, false);
+
+  EXPECT_TRUE(
+      profile_->GetPrefs()
+          ->FindPreference(bookmarks::prefs::kBookmarkBarVisibilityState)
+          ->IsDefaultValue());
+
+  controller.ExecuteCommand(IDC_BOOKMARK_BAR_REMOVE, 0);
+
+  EXPECT_FALSE(
+      profile_->GetPrefs()
+          ->FindPreference(bookmarks::prefs::kBookmarkBarVisibilityState)
+          ->IsDefaultValue());
+}
+
+// Tests that changing bookmark bar visibility from the context menu logs the
+// correct user action metrics.
+TEST_P(BookmarkContextMenuUpdateSubMenuStateTest, LogsUserActions) {
+  const BookmarkNode* bb_node = model_->bookmark_bar_node();
+  std::vector<raw_ptr<const BookmarkNode, VectorExperimental>> nodes = {
+      bb_node->children().front().get(),
+  };
+
+  BookmarkContextMenu controller(nullptr, nullptr, profile_.get(),
+                                 BookmarkLaunchLocation::kNone, nodes, false,
+                                 false);
+
+  base::UserActionTester user_action_tester;
+
+  EXPECT_EQ(0, user_action_tester.GetActionCount(
+                   "BookmarkBar_ContextMenu_AlwaysShow"));
+  controller.ExecuteCommand(IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_SHOW, 0);
+  EXPECT_EQ(1, user_action_tester.GetActionCount(
+                   "BookmarkBar_ContextMenu_AlwaysShow"));
+
+  EXPECT_EQ(0, user_action_tester.GetActionCount(
+                   "BookmarkBar_ContextMenu_AlwaysHide"));
+  controller.ExecuteCommand(IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_HIDE, 0);
+  EXPECT_EQ(1, user_action_tester.GetActionCount(
+                   "BookmarkBar_ContextMenu_AlwaysHide"));
+
+  EXPECT_EQ(0, user_action_tester.GetActionCount(
+                   "BookmarkBar_ContextMenu_OnlyShowOnNtp"));
+  controller.ExecuteCommand(IDC_BOOKMARK_BAR_SUBMENU_ONLY_ON_NTP, 0);
+  EXPECT_EQ(1, user_action_tester.GetActionCount(
+                   "BookmarkBar_ContextMenu_OnlyShowOnNtp"));
+}
+
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(BookmarkContextMenuTest);
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(
+    BookmarkContextMenuUpdateSubMenuStateTest);

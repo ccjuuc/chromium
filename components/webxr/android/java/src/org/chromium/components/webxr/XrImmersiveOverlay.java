@@ -16,6 +16,9 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 
+import androidx.core.graphics.Insets;
+import androidx.core.view.WindowInsetsCompat;
+
 import org.chromium.base.Log;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
@@ -24,7 +27,9 @@ import org.chromium.content_public.browser.ScreenOrientationDelegate;
 import org.chromium.content_public.browser.ScreenOrientationProvider;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsObserver;
+import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.display.DisplayAndroid;
+import org.chromium.ui.insets.InsetObserver;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -35,7 +40,10 @@ import java.util.Map;
  */
 @NullMarked
 public class XrImmersiveOverlay
-        implements SurfaceHolder.Callback2, View.OnTouchListener, ScreenOrientationDelegate {
+        implements SurfaceHolder.Callback2,
+                View.OnTouchListener,
+                ScreenOrientationDelegate,
+                InsetObserver.WindowInsetsConsumer {
     /**
      * Abstraction layer for runtime-specific configuration that needs to happen when setting up a
      * SurfaceView.
@@ -135,6 +143,16 @@ public class XrImmersiveOverlay
         // Choose a concrete implementation to create a drawable Surface and make it fullscreen.
         // It forwards SurfaceHolder callbacks and touch events to this XrImmersiveOverlay object.
         mXrSurfaceView = new XrSurfaceView();
+
+        // Register as an Insets consumer so that we can ensure we are probably rendered.
+        WindowAndroid windowAndroid = mWebContents.getTopLevelNativeWindow();
+        if (windowAndroid != null && windowAndroid.getInsetObserver() != null) {
+            windowAndroid
+                    .getInsetObserver()
+                    .addInsetsConsumer(
+                            this,
+                            InsetObserver.WindowInsetsConsumer.InsetConsumerSource.WEBXR_OVERLAY);
+        }
     }
 
     private static class PointerData {
@@ -606,6 +624,33 @@ public class XrImmersiveOverlay
         ScreenOrientationProvider.getInstance().setOrientationDelegate(null);
         if (mRestoreOrientation != null) mActivity.setRequestedOrientation(mRestoreOrientation);
         mRestoreOrientation = null;
+
+        if (!mWebContents.isDestroyed()) {
+            WindowAndroid windowAndroid = mWebContents.getTopLevelNativeWindow();
+            if (windowAndroid != null && windowAndroid.getInsetObserver() != null) {
+                windowAndroid.getInsetObserver().removeInsetsConsumer(this);
+            }
+        }
+    }
+
+    @Override // InsetObserver.WindowInsetsConsumer
+    public WindowInsetsCompat onApplyWindowInsets(View view, WindowInsetsCompat insets) {
+        // On devices with three button navigation enabled, something about the raw camera access
+        // feature can cause our layout to get "squished" because it ends up blocking out space for
+        // the status bar, which doesn't happen when gesture navigation is enabled. This ensures
+        // that we properly take up the entire screen, as we expect we do in the `surfaceChanged`
+        // callback.
+        // We also consume IME (keyboard) insets here. In 3-button navigation mode, showing the
+        // keyboard forces the navigation bar to become visible for safety/accessibility. This
+        // temporarily exits the immersive fullscreen layout state, triggering Android's fallback
+        // 'adjustResize' behavior which shrinks the View (and squishes the WebGL canvas).
+        // Consuming the IME insets here forces the View to ignore the keyboard size and maintain
+        // its size, preserving the layout viewport. In gesture mode, this is less of an issue as
+        // the immersive state is preserved without navigation buttons to restore.
+        return new WindowInsetsCompat.Builder(insets)
+                .setInsets(WindowInsetsCompat.Type.statusBars(), Insets.NONE)
+                .setInsets(WindowInsetsCompat.Type.ime(), Insets.NONE)
+                .build();
     }
 
     /**

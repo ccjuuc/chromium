@@ -9,6 +9,7 @@
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/fonts/shaping/harfbuzz_shaper.h"
 #include "third_party/blink/renderer/platform/fonts/shaping/run_segmenter.h"
+#include "third_party/blink/renderer/platform/wtf/text/text_offset_map.h"
 
 namespace blink {
 
@@ -96,10 +97,10 @@ RunSegmenter::RunSegmenterRange InlineItemSegment::ToRunSegmenterRange(
                            segment_data_);
 }
 
-std::unique_ptr<InlineItemSegments> InlineItemSegments::Clone() const {
-  auto new_segments = std::make_unique<InlineItemSegments>();
-  new_segments->segments_.AppendVector(segments_);
-  new_segments->items_to_segments_.AppendVector(items_to_segments_);
+InlineItemSegments* InlineItemSegments::Clone() const {
+  auto* new_segments = MakeGarbageCollected<InlineItemSegments>();
+  new_segments->segments_.append_range(segments_);
+  new_segments->items_to_segments_.append_range(items_to_segments_);
   return new_segments;
 }
 
@@ -155,7 +156,7 @@ InlineItemSegments::Iterator InlineItemSegments::Ranges(
       &InlineItemSegment::EndOffset);
   CheckOffset(start_offset, base::to_address(iter));
   return Iterator(start_offset, end_offset, span,
-                  std::distance(segments_.data(), base::to_address(iter)));
+                  CheckedDistance(segments_.data(), base::to_address(iter)));
 }
 
 void InlineItemSegments::ComputeSegments(
@@ -228,6 +229,12 @@ void InlineItemSegments::Split(unsigned index, unsigned offset) {
   segment.end_offset_ = offset;
   segments_.insert(index + 1,
                    InlineItemSegment(end_offset, segment.segment_data_));
+}
+
+void InlineItemSegments::AdjustOffsets(const TextOffsetMap& offset_map) {
+  for (auto& segment : segments_) {
+    segment.end_offset_ = offset_map.MapOffset(segment.end_offset_);
+  }
 }
 
 void InlineItemSegments::ComputeItemIndex(const InlineItems& items) {

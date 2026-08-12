@@ -14,6 +14,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "chromeos/ash/components/kcer/attributes.pb.h"
 #include "chromeos/ash/components/kcer/cert_cache.h"
 #include "chromeos/ash/components/kcer/chaps/high_level_chaps_client.h"
@@ -99,6 +100,9 @@ class COMPONENT_EXPORT(KCER) KcerTokenImpl
   void GetCertProvisioningProfileId(
       PrivateKeyHandle key,
       Kcer::GetCertProvisioningProfileIdCallback callback) override;
+  void GetBrowserEnterpriseClientCertTag(
+      PrivateKeyHandle key,
+      Kcer::GetBrowserEnterpriseClientCertTagCallback callback) override;
   void SetKeyNickname(PrivateKeyHandle key,
                       std::string nickname,
                       Kcer::StatusCallback callback) override;
@@ -108,6 +112,9 @@ class COMPONENT_EXPORT(KCER) KcerTokenImpl
   void SetCertProvisioningProfileId(PrivateKeyHandle key,
                                     std::string profile_id,
                                     Kcer::StatusCallback callback) override;
+  void SetBrowserEnterpriseClientCertTag(
+      PrivateKeyHandle key,
+      Kcer::StatusCallback callback) override;
 
   // Public for tests.
   static constexpr int kDefaultAttempts = 5;
@@ -398,6 +405,26 @@ class COMPONENT_EXPORT(KCER) KcerTokenImpl
                                            chaps::AttributeList attributes,
                                            uint32_t result_code);
 
+  struct GetBrowserEnterpriseClientCertTagTask {
+    GetBrowserEnterpriseClientCertTagTask(
+        PrivateKeyHandle in_key,
+        Kcer::GetBrowserEnterpriseClientCertTagCallback in_callback);
+    GetBrowserEnterpriseClientCertTagTask(
+        GetBrowserEnterpriseClientCertTagTask&& other);
+    ~GetBrowserEnterpriseClientCertTagTask();
+
+    const PrivateKeyHandle key;
+    Kcer::GetBrowserEnterpriseClientCertTagCallback callback;
+    int attempts_left = kDefaultAttempts;
+  };
+  void GetBrowserEnterpriseClientCertTagImpl(
+      GetBrowserEnterpriseClientCertTagTask task);
+  void GetBrowserEnterpriseClientCertTagWithAttributes(
+      GetBrowserEnterpriseClientCertTagTask task,
+      std::optional<Error> kcer_error,
+      chaps::AttributeList attributes,
+      uint32_t result_code);
+
   struct SetKeyAttributeTask {
     SetKeyAttributeTask(PrivateKeyHandle in_key,
                         HighLevelChapsClient::AttributeId in_attribute_id,
@@ -492,6 +519,10 @@ class COMPONENT_EXPORT(KCER) KcerTokenImpl
 
   const raw_ptr<HighLevelChapsClient> chaps_client_;
   KcerTokenUtils kcer_utils_;
+
+  base::ScopedObservation<net::CertDatabase, net::CertDatabase::Observer>
+      cert_database_observation_{this};
+
   base::WeakPtrFactory<KcerTokenImpl> weak_factory_{this};
 };
 

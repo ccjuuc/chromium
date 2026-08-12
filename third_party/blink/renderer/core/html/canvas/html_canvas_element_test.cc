@@ -22,7 +22,7 @@
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/script/classic_script.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
-#include "third_party/blink/renderer/platform/graphics/test/gpu_memory_buffer_test_platform.h"
+#include "third_party/blink/renderer/platform/graphics/test/gpu_compositing_test_platform.h"
 #include "third_party/blink/renderer/platform/graphics/test/gpu_test_utils.h"
 #include "third_party/blink/renderer/platform/testing/paint_test_configurations.h"
 
@@ -74,7 +74,7 @@ TEST_P(HTMLCanvasElementTest, CleanCanvasResizeDoesntClearFrameBuffer) {
 
   cc::PaintFlags fill_flags = FillFlags();
   fill_flags.setColor(SkColors::kBlue);
-  EXPECT_THAT(canvas->RenderingContext()->GetLastRecordingForCanvas2D(),
+  EXPECT_THAT(canvas->RenderingContext()->GetLastRecording(),
               Optional(RecordedOpsAre(PaintOpEq<DrawRectOp>(
                   SkRect::MakeXYWH(0, 0, 5, 5), fill_flags))));
 }
@@ -107,7 +107,7 @@ TEST_P(HTMLCanvasElementTest, CanvasResizeClearsFrameBuffer) {
   cc::PaintFlags fill_flags = FillFlags();
   fill_flags.setColor(SkColors::kBlue);
   EXPECT_THAT(
-      canvas->RenderingContext()->GetLastRecordingForCanvas2D(),
+      canvas->RenderingContext()->GetLastRecording(),
       Optional(RecordedOpsAre(
           PaintOpEq<DrawRectOp>(SkRect::MakeXYWH(0, 0, 10, 20),
                                 ClearRectFlags()),
@@ -173,9 +173,8 @@ TEST_P(HTMLCanvasElementTest, CanvasMemoryUsageGpuAccelerated) {
   GetDocument().GetSettings()->SetScriptEnabled(true);
 
   auto raster_context_provider = viz::TestContextProvider::CreateRaster();
-  InitializeSharedGpuContextRaster(raster_context_provider.get());
-  ScopedTestingPlatformSupport<GpuMemoryBufferTestPlatform>
-      accelerated_platform;
+  InitializeSharedGpuContext(raster_context_provider.get());
+  ScopedTestingPlatformSupport<GpuCompositingTestPlatform> accelerated_platform;
   GetDocument().GetSettings()->SetAcceleratedCompositingEnabled(true);
 
   SetBodyInnerHTML("<canvas id='canvas' width='10px' height='10px'></canvas>");
@@ -283,6 +282,162 @@ TEST_P(HTMLCanvasElementTest, CanvasNotInvalidatedOnFirstPaint) {
       GetDocument().GetPage()->Animator().has_canvas_invalidation_for_test());
 }
 
+TEST_P(HTMLCanvasElementTest, IsCanvasOrInCanvasSubtreeInIframe) {
+  SetBodyInnerHTML(R"HTML(
+    <div id="div"></div>
+    <canvas id="canvas">
+      <iframe id="iframe"></iframe>
+    </canvas>
+  )HTML");
+  SetChildFrameHTML(R"HTML(
+    <div id="inner_div"></div>
+    <canvas id="inner_canvas"></canvas>
+  )HTML");
+  auto* div = GetDocument().getElementById(AtomicString("div"));
+  auto* canvas = GetDocument().getElementById(AtomicString("canvas"));
+  auto* iframe = GetDocument().getElementById(AtomicString("iframe"));
+  auto* inner_div = ChildDocument().getElementById(AtomicString("inner_div"));
+  auto* inner_canvas =
+      ChildDocument().getElementById(AtomicString("inner_canvas"));
+
+  EXPECT_TRUE(iframe->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(inner_div->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(inner_div->IsInCanvasSubtree());
+  EXPECT_TRUE(inner_canvas->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(inner_canvas->IsInCanvasSubtree());
+
+  GetDocument().SetStatePreservingAtomicMoveInProgress(true);
+  div->AppendChild(iframe);
+  GetDocument().SetStatePreservingAtomicMoveInProgress(false);
+  EXPECT_FALSE(iframe->IsCanvasOrInCanvasSubtree());
+  EXPECT_FALSE(inner_div->IsCanvasOrInCanvasSubtree());
+  EXPECT_FALSE(inner_div->IsInCanvasSubtree());
+  EXPECT_TRUE(inner_canvas->IsCanvasOrInCanvasSubtree());
+  EXPECT_FALSE(inner_canvas->IsInCanvasSubtree());
+
+  GetDocument().SetStatePreservingAtomicMoveInProgress(true);
+  canvas->AppendChild(iframe);
+  GetDocument().SetStatePreservingAtomicMoveInProgress(false);
+  EXPECT_TRUE(iframe->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(inner_div->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(inner_div->IsInCanvasSubtree());
+  EXPECT_TRUE(inner_canvas->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(inner_canvas->IsInCanvasSubtree());
+
+  auto* detached_div = ChildDocument().CreateRawElement(html_names::kDivTag);
+  EXPECT_FALSE(detached_div->IsInCanvasSubtree());
+
+  auto* fragment = ChildDocument().createDocumentFragment();
+  auto* fragment_div = ChildDocument().CreateRawElement(html_names::kDivTag);
+  fragment->AppendChild(fragment_div);
+  EXPECT_FALSE(fragment_div->IsCanvasOrInCanvasSubtree());
+}
+
+TEST_P(HTMLCanvasElementTest, IsCanvasOrInCanvasSubtreeInShadowInIframe) {
+  SetBodyInnerHTML(R"HTML(
+    <div id="div"></div>
+    <canvas id="canvas">
+      <iframe id="iframe"></iframe>
+    </canvas>
+  )HTML");
+  SetChildFrameHTML(R"HTML(
+    <div id="host"></div>
+  )HTML");
+  auto* div = GetDocument().getElementById(AtomicString("div"));
+  auto* canvas = GetDocument().getElementById(AtomicString("canvas"));
+  auto* iframe = GetDocument().getElementById(AtomicString("iframe"));
+  auto* host = ChildDocument().getElementById(AtomicString("host"));
+  ShadowRoot& shadow_root =
+      host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
+  shadow_root.SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <div id="inner_div"></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+
+  auto* inner_div = shadow_root.getElementById(AtomicString("inner_div"));
+
+  EXPECT_TRUE(iframe->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(host->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(host->IsInCanvasSubtree());
+  EXPECT_TRUE(inner_div->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(inner_div->IsInCanvasSubtree());
+
+  // Move iframe out of canvas.
+  GetDocument().SetStatePreservingAtomicMoveInProgress(true);
+  div->AppendChild(iframe);
+  GetDocument().SetStatePreservingAtomicMoveInProgress(false);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_FALSE(iframe->IsCanvasOrInCanvasSubtree());
+  EXPECT_FALSE(host->IsCanvasOrInCanvasSubtree());
+  EXPECT_FALSE(host->IsInCanvasSubtree());
+  EXPECT_FALSE(inner_div->IsCanvasOrInCanvasSubtree());
+  EXPECT_FALSE(inner_div->IsInCanvasSubtree());
+
+  // Move iframe back into canvas.
+  GetDocument().SetStatePreservingAtomicMoveInProgress(true);
+  canvas->AppendChild(iframe);
+  GetDocument().SetStatePreservingAtomicMoveInProgress(false);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_TRUE(iframe->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(host->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(host->IsInCanvasSubtree());
+  EXPECT_TRUE(inner_div->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(inner_div->IsInCanvasSubtree());
+}
+
+TEST_P(HTMLCanvasElementTest, IsCanvasOrInCanvasSubtreeInNestedShadowInIframe) {
+  SetBodyInnerHTML(R"HTML(
+    <div id="div"></div>
+    <canvas id="canvas">
+      <iframe id="iframe"></iframe>
+    </canvas>
+  )HTML");
+  SetChildFrameHTML(R"HTML(
+    <div id="host1"></div>
+  )HTML");
+  auto* div = GetDocument().getElementById(AtomicString("div"));
+  auto* canvas = GetDocument().getElementById(AtomicString("canvas"));
+  auto* iframe = GetDocument().getElementById(AtomicString("iframe"));
+  auto* host1 = ChildDocument().getElementById(AtomicString("host1"));
+
+  ShadowRoot& shadow_root1 =
+      host1->AttachShadowRootForTesting(ShadowRootMode::kOpen);
+  auto* host2 = ChildDocument().CreateRawElement(html_names::kDivTag);
+  shadow_root1.AppendChild(host2);
+
+  ShadowRoot& shadow_root2 =
+      host2->AttachShadowRootForTesting(ShadowRootMode::kOpen);
+  auto* inner_div = ChildDocument().CreateRawElement(html_names::kDivTag);
+  shadow_root2.AppendChild(inner_div);
+
+  UpdateAllLifecyclePhasesForTest();
+
+  EXPECT_TRUE(iframe->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(host1->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(host2->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(inner_div->IsCanvasOrInCanvasSubtree());
+
+  // Move iframe out of canvas.
+  GetDocument().SetStatePreservingAtomicMoveInProgress(true);
+  div->AppendChild(iframe);
+  GetDocument().SetStatePreservingAtomicMoveInProgress(false);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_FALSE(iframe->IsCanvasOrInCanvasSubtree());
+  EXPECT_FALSE(host1->IsCanvasOrInCanvasSubtree());
+  EXPECT_FALSE(host2->IsCanvasOrInCanvasSubtree());
+  EXPECT_FALSE(inner_div->IsCanvasOrInCanvasSubtree());
+
+  // Move iframe back into canvas.
+  GetDocument().SetStatePreservingAtomicMoveInProgress(true);
+  canvas->AppendChild(iframe);
+  GetDocument().SetStatePreservingAtomicMoveInProgress(false);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_TRUE(iframe->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(host1->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(host2->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(inner_div->IsCanvasOrInCanvasSubtree());
+}
+
 TEST_P(HTMLCanvasElementTest, CanvasInvalidationInFrame) {
   SetBodyInnerHTML(R"HTML(
     <iframe id='iframe'></iframe>
@@ -345,7 +500,7 @@ TEST_P(HTMLCanvasElementTest, IsCanvasOrInCanvasSubtree) {
     <div id=div></div>
     <canvas id=canvas>
       <div id=nested_div></div>
-      <canvas id=nested_canvas></canvas>
+        <canvas id=nested_canvas></canvas>
       <input id=nested_input>
     </canvas>
   )HTML");
@@ -379,6 +534,10 @@ TEST_P(HTMLCanvasElementTest, IsCanvasOrInCanvasSubtree) {
   div->appendChild(nested_canvas);
   EXPECT_TRUE(nested_canvas->IsCanvasOrInCanvasSubtree());
   EXPECT_FALSE(nested_canvas->IsInCanvasSubtree());
+  EXPECT_TRUE(nested_input->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(nested_input->IsInCanvasSubtree());
+  EXPECT_TRUE(nested_input_shadow->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(nested_input_shadow->IsInCanvasSubtree());
   div->appendChild(nested_input);
   EXPECT_FALSE(nested_input->IsCanvasOrInCanvasSubtree());
   EXPECT_FALSE(nested_input->IsInCanvasSubtree());
@@ -396,6 +555,86 @@ TEST_P(HTMLCanvasElementTest, IsCanvasOrInCanvasSubtree) {
   EXPECT_TRUE(nested_input->IsInCanvasSubtree());
   EXPECT_TRUE(nested_input_shadow->IsCanvasOrInCanvasSubtree());
   EXPECT_TRUE(nested_input_shadow->IsInCanvasSubtree());
+}
+
+TEST_P(HTMLCanvasElementTest, IsCanvasOrInCanvasSubtreeSlotted) {
+  GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"(
+    <div id=slotHost>
+      <template shadowrootmode=open>
+        <canvas layoutsubtree>
+          <slot name="slot1"></slot>
+        </canvas>
+      </template>
+      <div id=slotted slot="slot1">
+        <p id=slotchild>Hello</p>
+      </div>
+    </div>
+  )");
+  UpdateAllLifecyclePhasesForTest();
+
+  auto* slotted = GetDocument().getElementById(AtomicString("slotted"));
+  EXPECT_TRUE(slotted->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(slotted->IsInCanvasSubtree());
+
+  auto* slotted_child = GetDocument().getElementById(AtomicString("slotchild"));
+  EXPECT_TRUE(slotted_child->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(slotted_child->IsInCanvasSubtree());
+}
+
+TEST_P(HTMLCanvasElementTest, LayoutsubtreeInvalidation) {
+  SetBodyInnerHTML(R"HTML(<canvas id=canvas></canvas>)HTML");
+  auto* canvas = GetDocument().getElementById(AtomicString("canvas"));
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_FALSE(canvas->NeedsStyleRecalc());
+
+  // Adding layoutsubtree should cause a style recalc.
+  canvas->setAttribute(html_names::kLayoutsubtreeAttr, AtomicString("true"));
+  EXPECT_TRUE(canvas->NeedsStyleRecalc());
+
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_FALSE(canvas->NeedsStyleRecalc());
+
+  // Setting layoutsubtree to the same value should not cause a style recalc.
+  canvas->setAttribute(html_names::kLayoutsubtreeAttr, AtomicString("true"));
+  EXPECT_FALSE(canvas->NeedsStyleRecalc());
+
+  // Setting layoutsubtree to any other value should not cause a style recalc.
+  canvas->setAttribute(html_names::kLayoutsubtreeAttr, AtomicString(""));
+  EXPECT_FALSE(canvas->NeedsStyleRecalc());
+
+  // Removing layoutsubtree should cause a style recalc.
+  canvas->removeAttribute(html_names::kLayoutsubtreeAttr);
+  EXPECT_TRUE(canvas->NeedsStyleRecalc());
+
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_FALSE(canvas->NeedsStyleRecalc());
+
+  // Adding layoutsubtree back should cause a style recalc.
+  canvas->setAttribute(html_names::kLayoutsubtreeAttr, AtomicString(""));
+  EXPECT_TRUE(canvas->NeedsStyleRecalc());
+}
+
+TEST_P(HTMLCanvasElementTest, HTMLInCanvasUseCounter) {
+  ScopedCanvasDrawElementForTest forced_canvas_draw_element_feature(true);
+  GetDocument().GetSettings()->SetScriptEnabled(true);
+
+  SetBodyInnerHTML(R"HTML(
+    <canvas id=cvs layoutsubtree>
+      <div id=target>hello world</div>
+    </canvas>
+  )HTML");
+  RunDocumentLifecycle();
+
+  // Metrics should not be recorded until the feature is actually used.
+  EXPECT_FALSE(GetDocument().IsUseCounted(WebFeature::kHTMLInCanvas));
+
+  Element* script = GetDocument().CreateRawElement(html_names::kScriptTag);
+  script->setTextContent(R"JS(
+    cvs.getContext('2d').drawElementImage(target, 0, 0);
+  )JS");
+  GetDocument().body()->appendChild(script);
+  RunDocumentLifecycle();
+  EXPECT_TRUE(GetDocument().IsUseCounted(WebFeature::kHTMLInCanvas));
 }
 
 }  // namespace blink

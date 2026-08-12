@@ -4,9 +4,9 @@
 
 #include "net/base/mime_util.h"
 
+#include <algorithm>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
@@ -49,6 +49,7 @@ TEST(MimeUtilTest, GetWellKnownMimeTypeFromExtension) {
       {FILE_PATH_LITERAL("csv"), "text/csv"},
       {FILE_PATH_LITERAL("mkv"), "video/matroska"},
       {FILE_PATH_LITERAL("mka"), "audio/matroska"},
+      {FILE_PATH_LITERAL("md"), "text/markdown"},
       {FILE_PATH_LITERAL("not an extension / for sure"), nullptr},
       {containsNullByte, nullptr}};
 
@@ -110,6 +111,13 @@ TEST(MimeUtilTest, ExtensionTest) {
       {FILE_PATH_LITERAL("csv"), {"text/csv"}},
       {FILE_PATH_LITERAL("mkv"), {"video/matroska"}},
       {FILE_PATH_LITERAL("mka"), {"audio/matroska"}},
+      {FILE_PATH_LITERAL("md"),
+       {
+           "text/markdown",
+#if BUILDFLAG(IS_IOS)
+           "text/x-markdown",  // System override for iOS.
+#endif
+       }},
       {FILE_PATH_LITERAL("not an extension / for sure"), {}},
       {containsNullByte, {}}};
 
@@ -587,7 +595,7 @@ TEST(MimeUtilTest, TestGetExtensionsForMimeType) {
     }
 
     if (test.contained_result) {
-      bool found = base::Contains(
+      bool found = std::ranges::contains(
           extensions, base::FilePath::FromASCII(test.contained_result).value());
 
       ASSERT_TRUE(found) << "Must find at least the contained result within "

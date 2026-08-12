@@ -58,7 +58,7 @@ BrowserSignalsDecorator::BrowserSignalsDecorator(
 
 BrowserSignalsDecorator::~BrowserSignalsDecorator() = default;
 
-void BrowserSignalsDecorator::Decorate(base::Value::Dict& signals,
+void BrowserSignalsDecorator::Decorate(base::DictValue& signals,
                                        base::OnceClosure done_closure) {
   auto start_time = base::TimeTicks::Now();
 
@@ -101,9 +101,8 @@ void BrowserSignalsDecorator::Decorate(base::Value::Dict& signals,
     request.agent_signal_parameters.emplace(
         device_signals::AgentSignalCollectionType::kCrowdstrikeIdentifiers);
 
-    if (IsDTCAntivirusSignalEnabled()) {
-      request.signal_names.emplace(device_signals::SignalName::kAntiVirus);
-    }
+    request.signal_names.emplace(device_signals::SignalName::kAntiVirus);
+
     signals_aggregator_->GetSignals(
         request,
         base::BindOnce(&BrowserSignalsDecorator::OnAggregatedSignalsReceived,
@@ -113,7 +112,7 @@ void BrowserSignalsDecorator::Decorate(base::Value::Dict& signals,
 }
 
 void BrowserSignalsDecorator::OnDeviceInfoFetched(
-    base::Value::Dict& signals,
+    base::DictValue& signals,
     base::OnceClosure done_closure,
     const enterprise_signals::DeviceInfo& device_info) {
   signals.Set(device_signals::names::kSerialNumber, device_info.serial_number);
@@ -145,7 +144,7 @@ void BrowserSignalsDecorator::OnDeviceInfoFetched(
 }
 
 void BrowserSignalsDecorator::OnAggregatedSignalsReceived(
-    base::Value::Dict& signals,
+    base::DictValue& signals,
     base::OnceClosure done_closure,
     device_signals::SignalsAggregationResponse response) {
   if (response.agent_signals_response &&
@@ -159,15 +158,13 @@ void BrowserSignalsDecorator::OnAggregatedSignalsReceived(
   }
 
 #if BUILDFLAG(IS_WIN)
-  if (IsDTCAntivirusSignalEnabled()) {
-    device_signals::InstalledAntivirusState antivirus_state{
-        device_signals::InstalledAntivirusState::kNone};
-    if (response.av_signal_response) {
-      antivirus_state = response.av_signal_response->antivirus_state;
-    }
-    signals.Set(device_signals::names::kAntivirusState,
-                static_cast<int>(antivirus_state));
+  device_signals::InstalledAntivirusState antivirus_state{
+      device_signals::InstalledAntivirusState::kNone};
+  if (response.av_signal_response) {
+    antivirus_state = response.av_signal_response->antivirus_state;
   }
+  signals.Set(device_signals::names::kAntivirusState,
+              static_cast<int>(antivirus_state));
 #endif
 
   std::move(done_closure).Run();

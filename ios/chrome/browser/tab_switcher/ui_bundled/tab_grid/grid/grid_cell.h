@@ -11,11 +11,11 @@
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/grid_constants.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/grid_theme.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_context_menu/tab_cell.h"
-#import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/transitions/legacy_grid_to_tab_transition_view.h"
 
 @class GridCell;
 typedef NS_ENUM(NSInteger, EmptyThumbnailLayoutType);
 @class LayoutGuideCenter;
+@class TabGroupColorPalette;
 
 // Informs the receiver of actions on the cell.
 @protocol GridCellDelegate
@@ -36,6 +36,8 @@ typedef NS_ENUM(NSInteger, EmptyThumbnailLayoutType);
 @property(nonatomic, weak) UIImage* icon;
 @property(nonatomic, weak) UIImage* snapshot;
 @property(nonatomic, copy) NSString* title;
+// The color palette for surfaces.
+@property(nonatomic, copy) TabGroupColorPalette* tabGroupColorPalette;
 // Sets to update and keep cell alpha in sync.
 @property(nonatomic, assign) CGFloat opacity;
 // The current state which the cell should display.
@@ -84,14 +86,6 @@ typedef NS_ENUM(NSInteger, EmptyThumbnailLayoutType);
 
 // Highlights or resets the highlighting of the cell.
 - (void)setHighlightForGrouping:(BOOL)highlight;
-
-@end
-
-@interface GridTransitionCell : GridCell <LegacyGridToTabTransitionView>
-
-// Returns a cell with the same theme, icon, snapshot, title, and frame as
-// `cell` (but no delegate or identifier) for use in animated transitions.
-+ (instancetype)transitionCellFromCell:(GridCell*)cell;
 
 @end
 

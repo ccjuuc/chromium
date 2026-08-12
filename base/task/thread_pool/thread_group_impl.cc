@@ -4,14 +4,18 @@
 
 #include "base/task/thread_pool/thread_group_impl.h"
 
+#include <algorithm>
 #include <optional>
 #include <string_view>
 
-#include "base/metrics/histogram_macros.h"
+#include "base/metrics/histogram.h"
 #include "base/profiler/thread_group_profiler.h"
 #include "base/sequence_token.h"
+#include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
+#include "base/synchronization/lock_metrics_recorder.h"
 #include "base/task/common/checked_lock.h"
+#include "base/task/task_features.h"
 #include "base/task/thread_pool/worker_thread.h"
 #include "base/threading/platform_thread_metrics.h"
 #include "base/threading/scoped_blocking_call.h"
@@ -22,6 +26,35 @@
 #include "third_party/abseil-cpp/absl/container/inlined_vector.h"
 
 namespace base::internal {
+
+namespace {
+
+// In a background thread group:
+// - Blocking calls take more time than in a foreground thread group.
+// - We want to minimize impact on foreground work, not maximize execution
+//   throughput.
+// For these reasons, the timeout to increase the maximum number of concurrent
+// tasks when there is a MAY_BLOCK ScopedBlockingCall is *long*. It is not
+// infinite because execution throughput should not be reduced forever if a task
+// blocks forever.
+//
+// TODO(fdoray): On platforms without background thread groups, blocking in a
+// BEST_EFFORT task should:
+// 1. Increment the maximum number of concurrent tasks after a *short* timeout,
+//    to allow scheduling of USER_VISIBLE/USER_BLOCKING tasks.
+// 2. Increment the maximum number of concurrent BEST_EFFORT tasks after a
+//    *long* timeout, because we only want to allow more BEST_EFFORT tasks to be
+//    be scheduled concurrently when we believe that a BEST_EFFORT task is
+//    blocked forever.
+// Currently, only 1. is true as the configuration is per thread group.
+// TODO(crbug.com/40612168): Fix racy condition when MayBlockThreshold ==
+// BlockedWorkersPoll.
+constexpr TimeDelta kBackgroundMayBlockThreshold = Seconds(10);
+constexpr TimeDelta kBackgroundBlockedWorkersPoll = Seconds(12);
+
+constexpr std::string_view kForegroundThreadGroupLabel = "Foreground";
+constexpr std::string_view kBackgroundThreadGroupLabel = "Background";
+}  // namespace
 
 // Upon destruction, executes actions that control the number of active workers.
 // Useful to satisfy locking requirements of these actions.
@@ -88,11 +121,6 @@ class ThreadGroupImpl::WorkerDelegate : public WorkerThread::Delegate,
   // Increments max [best effort] tasks.
   void IncrementMaxTasksLockRequired() EXCLUSIVE_LOCKS_REQUIRED(outer_->lock_);
 
-  TaskPriority current_task_priority_lock_required() const
-      EXCLUSIVE_LOCKS_REQUIRED(outer_->lock_) {
-    return *read_any().current_task_priority;
-  }
-
   // Exposed for AnnotateAcquiredLockAlias.
   const CheckedLock& lock() const LOCK_RETURNED(outer_->lock_) {
     return outer_->lock_;
@@ -152,7 +180,7 @@ class ThreadGroupImpl::WorkerDelegate : public WorkerThread::Delegate,
   // thread, protected by |outer_->lock_| when not on the worker thread.
   struct WriteWorkerReadAny {
     // The priority of the task the worker is currently running if any.
-    std::optional<TaskPriority> current_task_priority;
+    std::optional<ThreadType> current_thread_type;
     // The shutdown behavior of the task the worker is currently running if any.
     std::optional<TaskShutdownBehavior> current_shutdown_behavior;
 
@@ -207,13 +235,15 @@ class ThreadGroupImpl::WorkerDelegate : public WorkerThread::Delegate,
   THREAD_CHECKER(worker_thread_checker_);
 };
 
-ThreadGroupImpl::ThreadGroupImpl(std::string_view histogram_label,
-                                 std::string_view thread_group_label,
-                                 ThreadType thread_type_hint,
-                                 int64_t thread_group_type,
-                                 TrackedRef<TaskTracker> task_tracker,
-                                 TrackedRef<Delegate> delegate,
-                                 bool monitor_worker_thread_priorities)
+ThreadGroupImpl::ThreadGroupImpl(
+    std::string_view histogram_label,
+    std::string_view thread_group_label,
+    ThreadType thread_type_hint,
+    int64_t thread_group_type,
+    TrackedRef<TaskTracker> task_tracker,
+    TrackedRef<Delegate> delegate,
+    bool monitor_worker_thread_priorities,
+    ThreadPoolInstance::RecordLockContention record_lock_contention)
     : ThreadGroup(histogram_label,
                   thread_group_label,
                   thread_type_hint,
@@ -221,7 +251,9 @@ ThreadGroupImpl::ThreadGroupImpl(std::string_view histogram_label,
                   std::move(delegate)),
       thread_group_type_(thread_group_type),
       tracked_ref_factory_(this),
-      monitor_worker_thread_priorities_(monitor_worker_thread_priorities) {
+      monitor_worker_thread_priorities_(monitor_worker_thread_priorities),
+      record_lock_contention_(record_lock_contention),
+      histogram_label_(histogram_label) {
   DCHECK(!thread_group_label_.empty());
 }
 
@@ -233,11 +265,24 @@ void ThreadGroupImpl::Start(
     WorkerThreadObserver* worker_thread_observer,
     WorkerEnvironment worker_environment,
     bool synchronous_thread_start_for_testing,
-    std::optional<TimeDelta> may_block_threshold) {
+    std::optional<TimeDelta> may_block_threshold_for_testing) {
 #if DCHECK_IS_ON()
   DCHECK(!in_start().start_called);
   in_start().start_called = true;
 #endif
+
+  TimeDelta may_block_threshold =
+      may_block_threshold_for_testing
+          ? may_block_threshold_for_testing.value()
+          : (thread_type_hint_ != ThreadType::kBackground
+                 ? kThreadPoolForegroundMayBlockThresholdParam.Get()
+                 : kBackgroundMayBlockThreshold);
+
+  TimeDelta blocked_workers_poll_period =
+      thread_type_hint_ != ThreadType::kBackground
+          ? kThreadPoolForegroundBlockedWorkersPollParam.Get()
+          : kBackgroundBlockedWorkersPoll;
+
   {
     ScopedCommandsExecutor executor(this);
     CheckedAutoLock auto_lock(lock_);
@@ -245,7 +290,8 @@ void ThreadGroupImpl::Start(
     ThreadGroup::StartImplLockRequired(
         max_tasks, max_best_effort_tasks, suggested_reclaim_time,
         service_thread_task_runner, worker_thread_observer, worker_environment,
-        synchronous_thread_start_for_testing, may_block_threshold);
+        may_block_threshold, blocked_workers_poll_period,
+        synchronous_thread_start_for_testing);
 
     DCHECK(workers_.empty());
     EnsureEnoughWorkersLockRequired(&executor);
@@ -344,6 +390,17 @@ void ThreadGroupImpl::WorkerDelegate::OnMainEntry(WorkerThread* worker) {
   std::string thread_name =
       StringPrintf("ThreadPool%sWorker", outer_->thread_group_label_.c_str());
   PlatformThread::SetName(thread_name);
+
+  if (outer_->record_lock_contention_ ==
+          ThreadPoolInstance::RecordLockContention::kEnabled &&
+      (outer_->thread_group_label_ == kForegroundThreadGroupLabel ||
+       outer_->thread_group_label_ == kBackgroundThreadGroupLabel)) {
+    const std::string threadpool_histogram_suffix =
+        StrCat({outer_->histogram_label_, "Worker"});
+    base::LockMetricsRecorder::EnableRecordingOnCurrentThread(
+        threadpool_histogram_suffix);
+  }
+
 #if BUILDFLAG(IS_ANDROID)
   if (outer_->monitor_worker_thread_priorities_) {
     PlatformThreadPriorityMonitor::Get().RegisterCurrentThread(thread_name);
@@ -442,7 +499,7 @@ bool ThreadGroupImpl::WorkerDelegate::CanGetWorkLockRequired(
 RegisteredTaskSource ThreadGroupImpl::WorkerDelegate::GetWork(
     WorkerThread* worker) {
   DCHECK_CALLED_ON_VALID_THREAD(worker_thread_checker_);
-  DCHECK(!read_worker().current_task_priority);
+  DCHECK(!read_worker().current_thread_type);
   DCHECK(!read_worker().current_shutdown_behavior);
 
   ScopedCommandsExecutor executor(outer_.get());
@@ -475,13 +532,13 @@ RegisteredTaskSource ThreadGroupImpl::WorkerDelegate::GetWorkLockRequired(
   }
 
   RegisteredTaskSource task_source;
-  TaskPriority priority;
+  ThreadType thread_type;
   while (!task_source && !outer_->priority_queue_.IsEmpty()) {
     // Enforce the CanRunPolicy and that no more than |max_best_effort_tasks_|
     // BEST_EFFORT tasks run concurrently.
-    priority = outer_->priority_queue_.PeekSortKey().priority();
-    if (!outer_->task_tracker_->CanRunPriority(priority) ||
-        (priority == TaskPriority::BEST_EFFORT &&
+    thread_type = outer_->priority_queue_.PeekSortKey().thread_type();
+    if (!outer_->task_tracker_->CanRunThreadType(thread_type) ||
+        (thread_type == ThreadType::kBackground &&
          outer_->num_running_best_effort_tasks_ >=
              outer_->max_best_effort_tasks_)) {
       break;
@@ -495,9 +552,9 @@ RegisteredTaskSource ThreadGroupImpl::WorkerDelegate::GetWorkLockRequired(
   }
 
   // Running task bookkeeping.
-  outer_->IncrementTasksRunningLockRequired(priority);
+  outer_->IncrementTasksRunningLockRequired(thread_type);
 
-  write_worker().current_task_priority = priority;
+  write_worker().current_thread_type = thread_type;
   write_worker().current_shutdown_behavior = task_source->shutdown_behavior();
 
   // Subtle: This must be after the call to WillRunTask() inside
@@ -524,7 +581,7 @@ RegisteredTaskSource ThreadGroupImpl::WorkerDelegate::SwapProcessedTask(
     RegisteredTaskSource task_source,
     WorkerThread* worker) {
   DCHECK_CALLED_ON_VALID_THREAD(worker_thread_checker_);
-  DCHECK(read_worker().current_task_priority);
+  DCHECK(read_worker().current_thread_type);
   DCHECK(read_worker().current_shutdown_behavior);
 
   // A transaction to the TaskSource to reenqueue, if any. Instantiated here as
@@ -556,7 +613,7 @@ RegisteredTaskSource ThreadGroupImpl::WorkerDelegate::SwapProcessedTask(
     if (incremented_max_tasks_for_shutdown_) {
       DCHECK(outer_->shutdown_started_);
       outer_->DecrementMaxTasksLockRequired();
-      if (*read_worker().current_task_priority == TaskPriority::BEST_EFFORT) {
+      if (*read_worker().current_thread_type == ThreadType::kBackground) {
         outer_->DecrementMaxBestEffortTasksLockRequired();
       }
       incremented_max_tasks_since_blocked_ = false;
@@ -570,9 +627,9 @@ RegisteredTaskSource ThreadGroupImpl::WorkerDelegate::SwapProcessedTask(
 
     // Running task bookkeeping.
     outer_->DecrementTasksRunningLockRequired(
-        *read_worker().current_task_priority);
+        *read_worker().current_thread_type);
     write_worker().current_shutdown_behavior = std::nullopt;
-    write_worker().current_task_priority = std::nullopt;
+    write_worker().current_thread_type = std::nullopt;
 
     if (transaction_with_task_source) {
       outer_->ReEnqueueTaskSourceLockRequired(
@@ -584,7 +641,7 @@ RegisteredTaskSource ThreadGroupImpl::WorkerDelegate::SwapProcessedTask(
                                            static_cast<WorkerThread*>(worker));
   }
   // Must be called without holding a lock.
-  if (outer_->thread_group_profiler_ && !task_source) {
+  if (outer_->thread_group_profiler_ && !next_task_source) {
     outer_->thread_group_profiler_->OnWorkerThreadIdle(worker);
   }
   return next_task_source;
@@ -658,11 +715,11 @@ void ThreadGroupImpl::WorkerDelegate::BlockingStarted(
   DCHECK_CALLED_ON_VALID_THREAD(worker_thread_checker_);
   DCHECK(worker_only().worker_thread_);
   // Skip if this blocking scope happened outside of a RunTask.
-  if (!read_worker().current_task_priority) {
+  if (!read_worker().current_thread_type) {
     return;
   }
 
-  worker_only().worker_thread_->MaybeUpdateThreadType();
+  worker_only().worker_thread_->MaybeBoostPriorityForShutdown();
 
   // WillBlock is always used when time overrides is active. crbug.com/1038867
   if (base::subtle::ScopedTimeClockOverrides::overrides_active()) {
@@ -681,7 +738,7 @@ void ThreadGroupImpl::WorkerDelegate::BlockingStarted(
     return;
   }
 
-  if (*read_any().current_task_priority == TaskPriority::BEST_EFFORT) {
+  if (*read_any().current_thread_type == ThreadType::kBackground) {
     ++outer_->num_unresolved_best_effort_may_block_;
   }
 
@@ -699,7 +756,7 @@ void ThreadGroupImpl::WorkerDelegate::BlockingStarted(
 void ThreadGroupImpl::WorkerDelegate::BlockingTypeUpgraded() {
   DCHECK_CALLED_ON_VALID_THREAD(worker_thread_checker_);
   // Skip if this blocking scope happened outside of a RunTask.
-  if (!read_worker().current_task_priority) {
+  if (!read_worker().current_thread_type) {
     return;
   }
 
@@ -730,7 +787,7 @@ void ThreadGroupImpl::WorkerDelegate::BlockingTypeUpgraded() {
 void ThreadGroupImpl::WorkerDelegate::BlockingEnded() {
   DCHECK_CALLED_ON_VALID_THREAD(worker_thread_checker_);
   // Skip if this blocking scope happened outside of a RunTask.
-  if (!read_worker().current_task_priority) {
+  if (!read_worker().current_thread_type) {
     return;
   }
 
@@ -744,7 +801,7 @@ void ThreadGroupImpl::WorkerDelegate::BlockingEnded() {
       --outer_->num_unresolved_may_block_;
     }
 
-    if (*read_worker().current_task_priority == TaskPriority::BEST_EFFORT) {
+    if (*read_worker().current_thread_type == ThreadType::kBackground) {
       if (incremented_max_best_effort_tasks_since_blocked_) {
         outer_->DecrementMaxBestEffortTasksLockRequired();
       } else {
@@ -798,7 +855,7 @@ void ThreadGroupImpl::WorkerDelegate::IncrementMaxTasksLockRequired()
       --outer_->num_unresolved_may_block_;
     }
   }
-  if (*read_any().current_task_priority == TaskPriority::BEST_EFFORT &&
+  if (*read_any().current_thread_type == ThreadType::kBackground &&
       !incremented_max_best_effort_tasks_since_blocked_) {
     outer_->IncrementMaxBestEffortTasksLockRequired();
     // Update state for an unresolved ScopedBlockingCall.
@@ -1023,6 +1080,17 @@ void ThreadGroupImpl::AdjustMaxTasks() {
   // Wake up workers according to the updated |max_tasks_|. This will also
   // reschedule AdjustMaxTasks() if necessary.
   EnsureEnoughWorkersLockRequired(&executor);
+}
+
+void ThreadGroupImpl::CleanUpFailedWorker(const WorkerThread* worker) {
+  CheckedAutoLock auto_lock(lock_);
+  auto worker_iter = std::find(workers_.begin(), workers_.end(), worker);
+  if (worker_iter != workers_.end()) {
+    workers_.erase(worker_iter);
+  }
+  if (idle_workers_set_.Contains(worker)) {
+    idle_workers_set_.Remove(worker);
+  }
 }
 
 }  // namespace base::internal

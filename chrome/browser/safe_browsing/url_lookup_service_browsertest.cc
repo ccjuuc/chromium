@@ -4,7 +4,6 @@
 
 #include "components/safe_browsing/core/browser/realtime/url_lookup_service.h"
 
-#include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/url_lookup_service_factory.h"
@@ -47,7 +46,7 @@ class SafeBrowsingUrlLookupServiceTest : public InProcessBrowserTest {
     host_resolver()->AddRule("*", "127.0.0.1");
     identity_test_env_adaptor_ =
         std::make_unique<IdentityTestEnvironmentProfileAdaptor>(
-            browser()->profile());
+            browser()->GetProfile());
   }
 
   void SetUpInProcessBrowserTestFixture() override {
@@ -99,10 +98,10 @@ class SafeBrowsingUrlLookupServiceTest : public InProcessBrowserTest {
 IN_PROC_BROWSER_TEST_F(SafeBrowsingUrlLookupServiceTest,
                        ServiceRespectsLocationChanges) {
   safe_browsing::SetSafeBrowsingState(
-      browser()->profile()->GetPrefs(),
+      browser()->GetProfile()->GetPrefs(),
       safe_browsing::SafeBrowsingState::ENHANCED_PROTECTION);
   auto* url_lookup_service =
-      RealTimeUrlLookupServiceFactory::GetForProfile(browser()->profile());
+      RealTimeUrlLookupServiceFactory::GetForProfile(browser()->GetProfile());
 
   // By default for ESB, full URL lookups should be enabled.
   EXPECT_TRUE(url_lookup_service->CanPerformFullURLLookup());
@@ -128,13 +127,12 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingUrlLookupServiceTest, LookupWithToken) {
       secure_embedded_test_server()->GetURL(kRealtimeEndpoint));
 
   safe_browsing::SetSafeBrowsingState(
-      browser()->profile()->GetPrefs(),
+      browser()->GetProfile()->GetPrefs(),
       safe_browsing::SafeBrowsingState::ENHANCED_PROTECTION);
   auto* url_lookup_service =
-      RealTimeUrlLookupServiceFactory::GetForProfile(browser()->profile());
+      RealTimeUrlLookupServiceFactory::GetForProfile(browser()->GetProfile());
 
   base::RunLoop run_loop;
-  base::HistogramTester histogram_tester;
   url_lookup_service->StartLookup(
       secure_embedded_test_server()->GetURL("/"),
       base::IgnoreArgs<bool, bool, std::unique_ptr<RTLookupResponse>>(
@@ -143,12 +141,8 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingUrlLookupServiceTest, LookupWithToken) {
       /*referring_app_info=*/std::nullopt);
   run_loop.Run();
 
-  EXPECT_TRUE(base::Contains(last_realtime_request().headers,
-                             net::HttpRequestHeaders::kAuthorization));
-
-  histogram_tester.ExpectUniqueSample(
-      "SafeBrowsing.AuthenticatedCookieResetEndpoint",
-      SafeBrowsingAuthenticatedEndpoint::kRealtimeUrlLookup, 1);
+  EXPECT_TRUE(last_realtime_request().headers.contains(
+      net::HttpRequestHeaders::kAuthorization));
 }
 
 IN_PROC_BROWSER_TEST_F(SafeBrowsingUrlLookupServiceTest, LookupWithoutToken) {
@@ -156,13 +150,12 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingUrlLookupServiceTest, LookupWithoutToken) {
       secure_embedded_test_server()->GetURL(kRealtimeEndpoint));
 
   safe_browsing::SetSafeBrowsingState(
-      browser()->profile()->GetPrefs(),
+      browser()->GetProfile()->GetPrefs(),
       safe_browsing::SafeBrowsingState::ENHANCED_PROTECTION);
   auto* url_lookup_service =
-      RealTimeUrlLookupServiceFactory::GetForProfile(browser()->profile());
+      RealTimeUrlLookupServiceFactory::GetForProfile(browser()->GetProfile());
 
   base::RunLoop run_loop;
-  base::HistogramTester histogram_tester;
   url_lookup_service->StartLookup(
       secure_embedded_test_server()->GetURL("/"),
       base::IgnoreArgs<bool, bool, std::unique_ptr<RTLookupResponse>>(
@@ -171,12 +164,8 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingUrlLookupServiceTest, LookupWithoutToken) {
       /*referring_app_info=*/std::nullopt);
   run_loop.Run();
 
-  EXPECT_FALSE(base::Contains(last_realtime_request().headers,
-                              net::HttpRequestHeaders::kAuthorization));
-
-  histogram_tester.ExpectUniqueSample(
-      "SafeBrowsing.AuthenticatedCookieResetEndpoint",
-      SafeBrowsingAuthenticatedEndpoint::kRealtimeUrlLookup, 0);
+  EXPECT_FALSE(last_realtime_request().headers.contains(
+      net::HttpRequestHeaders::kAuthorization));
 }
 
 }  // namespace

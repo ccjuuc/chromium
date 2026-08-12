@@ -163,7 +163,7 @@ void WebUIMochaBrowserTest::SetUpOnMainThread() {
     base::FilePath devtools_code_coverage_dir =
         command_line->GetSwitchValuePath(switches::kDevtoolsCodeCoverage);
     coverage_handler_ = std::make_unique<DevToolsAgentCoverageObserver>(
-        devtools_code_coverage_dir);
+        devtools_code_coverage_dir, base::NullCallback(), test_loader_host_);
   }
 #endif
 }
@@ -183,13 +183,11 @@ void WebUIMochaBrowserTest::RunTest(const std::string& file,
                                     const std::string& trigger,
                                     const bool& skip_test_loader) {
   // Construct URL to load the test module file.
-  GURL url(
-      skip_test_loader
-          ? std::string(test_loader_scheme_ + "://" + test_loader_host_)
-          : std::string(
-                test_loader_scheme_ + "://" + test_loader_host_ +
-                "/test_loader.html?adapter=mocha_adapter_simple.js&module=") +
-                file);
+  GURL url(skip_test_loader
+               ? std::string(test_loader_scheme_ + "://" + test_loader_host_)
+               : std::string(test_loader_scheme_ + "://" + test_loader_host_ +
+                             "/test_loader.html?module=") +
+                     file);
 
 #if BUILDFLAG(IS_ANDROID)
   android_ui_test_utils::OpenUrlInNewTab(

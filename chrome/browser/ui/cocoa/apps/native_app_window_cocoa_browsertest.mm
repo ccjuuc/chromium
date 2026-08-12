@@ -10,7 +10,6 @@
 #import "base/apple/scoped_cftyperef.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_shim/app_shim_host_bootstrap_mac.h"
 #include "chrome/browser/apps/app_shim/app_shim_host_mac.h"
 #include "chrome/browser/apps/app_shim/app_shim_manager_mac.h"
@@ -21,6 +20,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/extensions/launch.h"
 #include "chrome/common/chrome_switches.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
@@ -34,7 +34,7 @@
 #import "ui/base/test/scoped_fake_nswindow_focus.h"
 #include "ui/base/test/scoped_fake_nswindow_fullscreen.h"
 #import "ui/base/test/windowed_nsnotification_observer.h"
-#include "ui/views/widget/widget_interactive_uitest_utils.h"
+#include "ui/views/test/views_test_utils.h"
 
 using extensions::AppWindow;
 using extensions::PlatformAppBrowserTest;
@@ -522,7 +522,7 @@ IN_PROC_BROWSER_TEST_F(NativeAppWindowCocoaBrowserTest, Frameless) {
   // Windows created with NSWindowStyleMaskBorderless by default don't have
   // shadow, but packaged apps should always have one. This specific check is
   // disabled because shadows are disabled on the bots - see
-  // https://crbug.com/899286. EXPECT_TRUE([ns_window hasShadow]);
+  // https://crbug.com/41422882. EXPECT_TRUE([ns_window hasShadow]);
 
   // Since the window has no constraints, it should have all of the following
   // style mask bits.
@@ -543,7 +543,7 @@ void TestControls(AppWindow* app_window) {
   // The window is resizable.
   EXPECT_TRUE([ns_window styleMask] & NSWindowStyleMaskResizable);
 
-  // Due to this bug: http://crbug.com/362039, which manifests on the Cocoa
+  // Due to this bug: http://crbug.com/41100603, which manifests on the Cocoa
   // implementation but not the views one, frameless windows should have
   // fullscreen controls disabled.
   BOOL can_fullscreen =
@@ -626,7 +626,7 @@ NSBitmapImageRep* ScreenshotNSWindow(NSWindow* window) {
 }  // namespace
 
 // Test that the colored frames have the correct color when active and inactive.
-// Disabled; https://crbug.com/1322741.
+// Disabled; https://crbug.com/40838186.
 IN_PROC_BROWSER_TEST_F(NativeAppWindowCocoaBrowserTest, DISABLED_FrameColor) {
   EXPECT_EQ(NSApp.activationPolicy, NSApplicationActivationPolicyAccessory);
 

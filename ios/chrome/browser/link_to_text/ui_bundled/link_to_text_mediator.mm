@@ -8,7 +8,7 @@
 #import "base/metrics/user_metrics.h"
 #import "base/metrics/user_metrics_action.h"
 #import "components/shared_highlighting/core/common/shared_highlighting_metrics.h"
-#import "ios/chrome/browser/browser_container/ui_bundled/edit_menu_alert_delegate.h"
+#import "ios/chrome/browser/browser_content/ui_bundled/edit_menu_alert_delegate.h"
 #import "ios/chrome/browser/link_to_text/model/link_to_text_payload.h"
 #import "ios/chrome/browser/link_to_text/model/link_to_text_response.h"
 #import "ios/chrome/browser/link_to_text/model/link_to_text_tab_helper.h"
@@ -115,7 +115,8 @@ typedef void (^ProceduralBlockWithBlockWithItemArray)(
                  action:^{
                    base::RecordAction(base::UserMetricsAction(
                        "SharedHighlights.LinkGenerated.Error.SharePage"));
-                   [weakSelf.activityServiceHandler showShareSheet];
+                   [weakSelf.activityServiceHandler
+                       showShareSheetFromShareButton:nil];
                  }
                   style:UIAlertActionStyleDefault
               preferred:NO];
@@ -145,8 +146,8 @@ typedef void (^ProceduralBlockWithBlockWithItemArray)(
   NSString* linkToTextId = @"chromecommand.linktotext";
   UIAction* action = [UIAction
       actionWithTitle:title
-                image:DefaultSymbolWithPointSize(kHighlighterSymbol,
-                                                 kSymbolActionPointSize)
+                image:SymbolWithPointSize(SymbolHighlighter,
+                                          kSymbolActionPointSize)
            identifier:linkToTextId
               handler:^(UIAction* a) {
                 [weakSelf

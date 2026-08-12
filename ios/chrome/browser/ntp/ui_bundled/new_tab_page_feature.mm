@@ -16,30 +16,26 @@
 
 #pragma mark - Feature declarations
 
-BASE_FEATURE(kEnableNTPViewHierarchyRepair,
-             "NTPViewHierarchyRepair",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 BASE_FEATURE(kOverrideFeedSettings, base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kWebFeedFeedbackReroute, base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kNTPHeaderUseTransformsForAnimations,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kFeedSwipeInProductHelp, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kUseFeedEligibilityService, base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kMostVisitedTilesCustomizationIOS,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kEnableNTPBackgroundImageCache, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kConsistentLogoDoodleHeight, base::FEATURE_DISABLED_BY_DEFAULT);
 
+BASE_FEATURE(kNewTabPageRedesign, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kMVTInBottomSheet, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kNewTabPagePaddingUpdate, base::FEATURE_DISABLED_BY_DEFAULT);
+
 #pragma mark - Feature parameters
-
-const char kDiscoverFeedSRSReconstructedTemplatesEnabled[] =
-    "DiscoverFeedSRSReconstructedTemplatesEnabled";
-
-const char kDiscoverFeedSRSPreloadTemplatesEnabled[] =
-    "DiscoverFeedSRSPreloadTemplatesEnabled";
 
 // Feature parameters for `kOverrideFeedSettings`.
 const char kFeedSettingRefreshThresholdInSeconds[] =
@@ -55,10 +51,25 @@ const char kFeedSettingDiscoverReferrerParameter[] =
 
 const char kFeedSwipeInProductHelpArmParam[] = "feed-swipe-in-product-help-arm";
 
+BASE_FEATURE_PARAM(int,
+                   kFeedSwipeInProductHelpArmParamFeature,
+                   &kFeedSwipeInProductHelp,
+                   kFeedSwipeInProductHelpArmParam,
+                   static_cast<int>(FeedSwipeIPHVariation::kStaticAfterFRE));
+
+const char kNewTabPagePaddingUpdateArmParam[] =
+    "new-tab-page-padding-update-arm";
+
+BASE_FEATURE_PARAM(int,
+                   kNewTabPagePaddingUpdateArmParamFeature,
+                   &kNewTabPagePaddingUpdate,
+                   kNewTabPagePaddingUpdateArmParam,
+                   static_cast<int>(NTPPaddingUpdateVariation::kTightPadding));
+
 #pragma mark - Helpers
 
-bool IsNTPViewHierarchyRepairEnabled() {
-  return base::FeatureList::IsEnabled(kEnableNTPViewHierarchyRepair);
+bool IsMVTInBottomSheetEnabled() {
+  return base::FeatureList::IsEnabled(kMVTInBottomSheet);
 }
 
 bool IsDiscoverFeedTopSyncPromoEnabled() {
@@ -75,17 +86,10 @@ bool IsContentSuggestionsForSupervisedUserEnabled(PrefService* pref_service) {
       prefs::kNTPContentSuggestionsForSupervisedUserEnabled);
 }
 
-bool IsWebFeedFeedbackRerouteEnabled() {
-  return base::FeatureList::IsEnabled(kWebFeedFeedbackReroute);
-}
-
 FeedSwipeIPHVariation GetFeedSwipeIPHVariation() {
   if (base::FeatureList::IsEnabled(kFeedSwipeInProductHelp)) {
     return static_cast<FeedSwipeIPHVariation>(
-        base::GetFieldTrialParamByFeatureAsInt(
-            kFeedSwipeInProductHelp,
-            kFeedSwipeInProductHelpArmParam, /*default_value=*/
-            static_cast<int>(FeedSwipeIPHVariation::kStaticAfterFRE)));
+        kFeedSwipeInProductHelpArmParamFeature.Get());
   }
   return FeedSwipeIPHVariation::kDisabled;
 }
@@ -94,58 +98,36 @@ bool UseFeedEligibilityService() {
   return base::FeatureList::IsEnabled(kUseFeedEligibilityService);
 }
 
-NTPMIAEntrypointVariation GetNTPMIAEntrypointVariation() {
-  std::string feature_param = base::GetFieldTrialParamValueByFeature(
-      kNTPMIAEntrypoint, kNTPMIAEntrypointParam);
-  if (feature_param == kNTPMIAEntrypointParamOmniboxContainedSingleButton) {
-    return NTPMIAEntrypointVariation::kOmniboxContainedSingleButton;
-  } else if (feature_param == kNTPMIAEntrypointParamOmniboxContainedInline) {
-    return NTPMIAEntrypointVariation::kOmniboxContainedInline;
-  } else if (feature_param ==
-             kNTPMIAEntrypointParamOmniboxContainedEnlargedFakebox) {
-    return NTPMIAEntrypointVariation::kOmniboxContainedEnlargedFakebox;
-  } else if (feature_param ==
-             kNTPMIAEntrypointParamEnlargedFakeboxNoIncognito) {
-    return NTPMIAEntrypointVariation::kEnlargedFakeboxNoIncognito;
-  } else if (feature_param == kNTPMIAEntrypointParamAIMInQuickActions) {
-    return NTPMIAEntrypointVariation::kAIMInQuickAction;
-  } else {
-    // Disabled on iPad.
-    if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
-      return NTPMIAEntrypointVariation::kDisabled;
-    }
-    // Default value.
-    return NTPMIAEntrypointVariation::kAIMInQuickAction;
+bool IsAimEnabledInNtp() {
+  if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET &&
+      !base::FeatureList::IsEnabled(kAIMNTPEntrypointTablet)) {
+    return NO;
   }
+
+  return YES;
 }
 
-bool ShowOnlyMIAEntrypointInNTPFakebox() {
-  NTPMIAEntrypointVariation variation = GetNTPMIAEntrypointVariation();
-  return variation ==
-             NTPMIAEntrypointVariation::kOmniboxContainedSingleButton ||
-         variation ==
-             NTPMIAEntrypointVariation::kOmniboxContainedEnlargedFakebox ||
-         variation == NTPMIAEntrypointVariation::kEnlargedFakeboxNoIncognito;
-}
-
-bool ShouldShowQuickActionsRow() {
-  NTPMIAEntrypointVariation variation = GetNTPMIAEntrypointVariation();
-  return ShowOnlyMIAEntrypointInNTPFakebox() ||
-         variation == NTPMIAEntrypointVariation::kAIMInQuickAction;
-}
-
-bool ShouldEnlargeNTPFakeboxForMIA() {
-  NTPMIAEntrypointVariation variation = GetNTPMIAEntrypointVariation();
-  return variation ==
-             NTPMIAEntrypointVariation::kOmniboxContainedEnlargedFakebox ||
-         variation == NTPMIAEntrypointVariation::kEnlargedFakeboxNoIncognito ||
-         variation == NTPMIAEntrypointVariation::kAIMInQuickAction;
-}
-
-bool IsContentSuggestionsCustomizable() {
-  return base::FeatureList::IsEnabled(kMostVisitedTilesCustomizationIOS);
+bool IsNTPBackgroundImageCacheEnabled() {
+  return base::FeatureList::IsEnabled(kEnableNTPBackgroundImageCache);
 }
 
 bool IsConsistentLogoDoodleHeightEnabled() {
   return base::FeatureList::IsEnabled(kConsistentLogoDoodleHeight);
+}
+
+bool IsNTPHeaderTransformsForAnimationsEnabled() {
+  return base::FeatureList::IsEnabled(kNTPHeaderUseTransformsForAnimations);
+}
+
+bool IsNTPRedesignEnabled() {
+  return base::FeatureList::IsEnabled(kNewTabPageRedesign) &&
+         ui::GetDeviceFormFactor() != ui::DEVICE_FORM_FACTOR_TABLET;
+}
+
+NTPPaddingUpdateVariation GetNTPPaddingUpdateVariation() {
+  if (base::FeatureList::IsEnabled(kNewTabPagePaddingUpdate)) {
+    return static_cast<NTPPaddingUpdateVariation>(
+        kNewTabPagePaddingUpdateArmParamFeature.Get());
+  }
+  return NTPPaddingUpdateVariation::kDisabled;
 }

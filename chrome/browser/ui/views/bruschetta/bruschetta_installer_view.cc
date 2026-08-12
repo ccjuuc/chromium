@@ -10,6 +10,7 @@
 #include "ash/public/cpp/ash_typography.h"
 #include "ash/public/cpp/new_window_delegate.h"
 #include "ash/public/cpp/style/dark_light_mode_controller.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_installer.h"
@@ -18,7 +19,6 @@
 #include "chrome/browser/ash/bruschetta/bruschetta_service.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_service_factory.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_util.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/prefs/pref_service.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/browser_thread.h"
@@ -158,7 +158,7 @@ BruschettaInstallerView::BruschettaInstallerView(Profile* profile,
                                                  PrefService& local_state,
                                                  guest_os::GuestId guest_id)
     : profile_(profile), observation_(this), guest_id_(guest_id) {
-  // Layout constants from the spec used for the plugin vm installer.
+  // Layout constants for the installer dialog.
   constexpr auto kDialogInsets = gfx::Insets::TLBR(60, 64, 0, 64);
   const int kPrimaryMessageHeight =
       ash::GetLineHeight(ash::CONTEXT_HEADLINE).value();
@@ -195,6 +195,10 @@ BruschettaInstallerView::BruschettaInstallerView(Profile* profile,
       views::kMarginsKey, gfx::Insets::TLBR(kPrimaryMessageHeight, 0, 0, 0));
   primary_message_label_->SetMultiLine(false);
   primary_message_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+  primary_message_label_->GetViewAccessibility().SetLiveRegionContainer(
+      views::ViewAccessibility::LiveRegionStatus::kPolite,
+      views::ViewAccessibility::kLiveRegionRelevantDefault,
+      /*atomic=*/true);
   upper_container_view->AddChildViewRaw(primary_message_label_.get());
 
   views::View* secondary_message_container_view =
@@ -302,8 +306,6 @@ bool BruschettaInstallerView::Accept() {
     RemoveChildViewT(radio_button_container_.get());
     radio_button_container_ = nullptr;
     radio_buttons_.clear();
-    NotifyAccessibilityEventDeprecated(ax::mojom::Event::kChildrenChanged,
-                                       true);
   }
 
   observation_.Reset();
@@ -503,14 +505,9 @@ void BruschettaInstallerView::OnStateUpdated() {
   if (progress_bar_visible) {
     progress_bar_->GetViewAccessibility().SetDescription(
         *secondary_message_label_);
-    progress_bar_->NotifyAccessibilityEventDeprecated(
-        ax::mojom::Event::kTextChanged, true);
   }
 
   DialogModelChanged();
-  primary_message_label_->NotifyAccessibilityEventDeprecated(
-      ax::mojom::Event::kLiveRegionChanged,
-      /* send_native_event = */ true);
 }
 
 void BruschettaInstallerView::AddedToWidget() {
@@ -526,15 +523,11 @@ void BruschettaInstallerView::OnColorModeChanged(bool dark_mode_enabled) {
 void BruschettaInstallerView::SetPrimaryMessageLabel() {
   primary_message_label_->SetText(GetPrimaryMessage());
   primary_message_label_->SetVisible(true);
-  primary_message_label_->NotifyAccessibilityEventDeprecated(
-      ax::mojom::Event::kTextChanged, true);
 }
 
 void BruschettaInstallerView::SetSecondaryMessageLabel() {
   secondary_message_label_->SetText(GetSecondaryMessage());
   secondary_message_label_->SetVisible(true);
-  secondary_message_label_->NotifyAccessibilityEventDeprecated(
-      ax::mojom::Event::kTextChanged, true);
 }
 
 void BruschettaInstallerView::CleanupPartialInstall() {

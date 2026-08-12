@@ -35,7 +35,6 @@
 #include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/unicode_utilities.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_names.h"
 #include "third_party/blink/renderer/platform/wtf/text/unicode.h"
@@ -48,8 +47,7 @@ const LayoutBlockFlow* GetInlineFormattingContext(const Node& node) {
   const LayoutBlockFlow* block_flow =
       OffsetMapping::GetInlineFormattingContextOf(*node.GetLayoutObject());
   // For <textarea>, ignore internal anonymous IFCs for backward compatibility.
-  if (RuntimeEnabledFeatures::FindAcrossParagraphsInTextareaEnabled() &&
-      block_flow && block_flow->IsAnonymous() &&
+  if (block_flow && block_flow->IsAnonymous() &&
       node.IsInUserAgentShadowRoot()) {
     for (const LayoutBlock* parent = block_flow->ContainingBlock(); parent;
          parent = parent->ContainingBlock()) {
@@ -237,18 +235,18 @@ FindBuffer::FindBuffer(const EphemeralRangeInFlatTree& range,
   CollectTextUntilBlockBoundary(range, ruby_support);
 }
 
-bool FindBuffer::IsInvalidMatch(MatchResultICU match) const {
+bool FindBuffer::IsInvalidMatch(MatchResultIcu match) const {
   // Invalid matches are a result of accidentally matching elements that are
   // replaced with the kNonCharacter, and may lead to crashes. To avoid
   // crashing, we should skip the matches that are invalid - they would have
   // either an empty position or a non-offset-in-anchor position.
-  const unsigned start_index = match.start;
+  const wtf_size_t start_index = match.start;
   PositionInFlatTree start_position =
       PositionAtStartOfCharacterAtIndex(start_index);
   if (start_position.IsNull() || !start_position.IsOffsetInAnchor())
     return true;
 
-  const unsigned end_index = match.start + match.length;
+  const wtf_size_t end_index = match.start + match.length;
   DCHECK_LE(start_index, end_index);
   PositionInFlatTree end_position =
       PositionAtEndOfCharacterAtIndex(end_index - 1);
@@ -306,11 +304,11 @@ EphemeralRangeInFlatTree FindBuffer::FindMatchInRange(
     FindResults match_results = buffer.FindMatches(search_text, options);
     if (!match_results.IsEmpty()) {
       if (!options.IsBackwards()) {
-        MatchResultICU match = match_results.front();
+        MatchResultIcu match = match_results.front();
         return buffer.RangeFromBufferIndex(match.start,
                                            match.start + match.length);
       }
-      MatchResultICU match = match_results.back();
+      MatchResultIcu match = match_results.back();
       last_match_range =
           buffer.RangeFromBufferIndex(match.start, match.start + match.length);
     }
@@ -330,8 +328,7 @@ const Node& FindBuffer::GetFirstBlockLevelAncestorInclusive(const Node& node) {
   for (const Node& ancestor : FlatTreeTraversal::InclusiveAncestorsOf(node)) {
     if (!ancestor.GetLayoutObject())
       continue;
-    if (RuntimeEnabledFeatures::FindAcrossParagraphsInTextareaEnabled() &&
-        ancestor.GetLayoutObject()->IsAnonymous() &&
+    if (ancestor.GetLayoutObject()->IsAnonymous() &&
         node.IsInUserAgentShadowRoot()) {
       continue;
     }
@@ -540,8 +537,8 @@ void FindBuffer::ReplaceNodeWithCharConstants(const Node& node,
 }
 
 EphemeralRangeInFlatTree FindBuffer::RangeFromBufferIndex(
-    unsigned start_index,
-    unsigned end_index) const {
+    wtf_size_t start_index,
+    wtf_size_t end_index) const {
   DCHECK_LE(start_index, end_index);
   PositionInFlatTree start_position =
       PositionAtStartOfCharacterAtIndex(start_index);
@@ -551,12 +548,12 @@ EphemeralRangeInFlatTree FindBuffer::RangeFromBufferIndex(
 }
 
 const FindBuffer::BufferNodeMapping* FindBuffer::MappingForIndex(
-    unsigned index) const {
+    wtf_size_t index) const {
   // Get the first entry that starts at a position higher than offset, and
   // move back one entry.
   auto it = std::upper_bound(
       buffer_node_mappings_.begin(), buffer_node_mappings_.end(), index,
-      [](const unsigned offset, const BufferNodeMapping& entry) {
+      [](const wtf_size_t offset, const BufferNodeMapping& entry) {
         return offset < entry.offset_in_buffer;
       });
   if (it == buffer_node_mappings_.begin())
@@ -566,7 +563,7 @@ const FindBuffer::BufferNodeMapping* FindBuffer::MappingForIndex(
 }
 
 PositionInFlatTree FindBuffer::PositionAtStartOfCharacterAtIndex(
-    unsigned index) const {
+    wtf_size_t index) const {
   DCHECK_LT(index, buffer_.size());
   DCHECK(offset_mapping_);
   const BufferNodeMapping* entry = MappingForIndex(index);
@@ -577,7 +574,7 @@ PositionInFlatTree FindBuffer::PositionAtStartOfCharacterAtIndex(
 }
 
 PositionInFlatTree FindBuffer::PositionAtEndOfCharacterAtIndex(
-    unsigned index) const {
+    wtf_size_t index) const {
   DCHECK_LT(index, buffer_.size());
   DCHECK(offset_mapping_);
   const BufferNodeMapping* entry = MappingForIndex(index);
@@ -628,9 +625,7 @@ void FindBuffer::AddTextToBuffer(const Text& text_node,
                                  HeapVector<BufferNodeMapping>* mappings) {
   LayoutBlockFlow& block_flow = *OffsetMapping::GetInlineFormattingContextOf(
       *text_node.GetLayoutObject());
-  if (!offset_mapping_ ||
-      (RuntimeEnabledFeatures::FindAcrossParagraphsInTextareaEnabled() &&
-       text_node.IsInUserAgentShadowRoot())) {
+  if (!offset_mapping_ || text_node.IsInUserAgentShadowRoot()) {
     offset_mapping_ = InlineNode::GetOffsetMapping(&block_flow);
 
     if (!offset_mapping_) [[unlikely]] {
@@ -643,13 +638,13 @@ void FindBuffer::AddTextToBuffer(const Text& text_node,
 
   Position node_start =
       (&text_node == range.StartPosition().ComputeContainerNode())
-          ? ToPositionInDOMTree(range.StartPosition().ToOffsetInAnchor())
+          ? ToPositionInDomTree(range.StartPosition().ToOffsetInAnchor())
           : Position::FirstPositionInNode(text_node);
   Position node_end =
       (&text_node == range.EndPosition().ComputeContainerNode())
-          ? ToPositionInDOMTree(range.EndPosition().ToOffsetInAnchor())
+          ? ToPositionInDomTree(range.EndPosition().ToOffsetInAnchor())
           : Position::LastPositionInNode(text_node);
-  unsigned last_unit_end = 0;
+  wtf_size_t last_unit_end = 0;
   bool first_unit = true;
   const String mapped_text = offset_mapping_->GetText();
   for (const OffsetMappingUnit& unit :
@@ -665,10 +660,10 @@ void FindBuffer::AddTextToBuffer(const Text& text_node,
       first_unit = false;
     }
     String text_for_unit =
-        mapped_text.Substring(unit.TextContentStart(),
-                              unit.TextContentEnd() - unit.TextContentStart());
+        mapped_text.substr(unit.TextContentStart(),
+                           unit.TextContentEnd() - unit.TextContentStart());
     text_for_unit.Ensure16Bit();
-    buffer.AppendSpan(text_for_unit.Span16());
+    buffer.append_range(text_for_unit.Span16());
     last_unit_end = unit.TextContentEnd();
   }
 }

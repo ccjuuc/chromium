@@ -4,11 +4,12 @@
 
 import {assert} from '//resources/js/assert.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
+import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 
 import {getCss} from './content_region.css.js';
 import {TabWebviewElement} from './webview.js';
 
-export class ContentRegion extends CrLitElement {
+export class ContentRegionElement extends CrLitElement {
   static get is() {
     return 'content-region';
   }
@@ -26,7 +27,7 @@ export class ContentRegion extends CrLitElement {
   override render() {
     return '';
   }
-  override shouldUpdate(_: Map<string, any>) {
+  override shouldUpdate(_changedProperties: PropertyValues<this>) {
     return false;
   }
 
@@ -68,6 +69,9 @@ export class ContentRegion extends CrLitElement {
   removeTab(tabId: string) {
     const webview = this.webviews.get(tabId);
     assert(webview);
+    if (this.activeWebview === webview) {
+      this.activeWebview = undefined;
+    }
     this.webviews.delete(tabId);
     webview.remove();
     this.requestUpdate();
@@ -76,8 +80,8 @@ export class ContentRegion extends CrLitElement {
 
 declare global {
   interface HTMLElementTagNameMap {
-    'content-region': ContentRegion;
+    'content-region': ContentRegionElement;
   }
 }
 
-customElements.define(ContentRegion.is, ContentRegion);
+customElements.define(ContentRegionElement.is, ContentRegionElement);

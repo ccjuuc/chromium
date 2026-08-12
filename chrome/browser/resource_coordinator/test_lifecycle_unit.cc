@@ -4,7 +4,8 @@
 
 #include "chrome/browser/resource_coordinator/test_lifecycle_unit.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "chrome/browser/performance_manager/policies/discard_eligibility_policy.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit_source.h"
 #include "components/performance_manager/public/graph/page_node.h"
@@ -76,8 +77,8 @@ CanDiscardResult CanDiscardHelper(
       page_node->GetBrowserContextID(), {});
 
   CanDiscardResult result = eligiblity_policy->CanDiscard(
-      page_node.get(), discard_reason,
-      /*minimum_time_in_background*/ base::TimeDelta(), cannot_discard_reasons);
+      page_node.get(), discard_reason, /*ignore_recent_visibility=*/true,
+      cannot_discard_reasons);
   return result;
 }
 
@@ -106,7 +107,7 @@ void ExpectCanDiscardFalse(
   CanDiscardResult result =
       CanDiscardHelper(tab_lifecycle_unit, discard_reason, &failure_reasons);
   EXPECT_TRUE(result == kDisallowed || result == kProtected);
-  EXPECT_TRUE(base::Contains(failure_reasons, failure_reason));
+  EXPECT_TRUE(std::ranges::contains(failure_reasons, failure_reason));
 }
 
 void ExpectCanDiscardFalseAllReasons(

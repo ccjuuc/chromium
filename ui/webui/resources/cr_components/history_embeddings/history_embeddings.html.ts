@@ -12,7 +12,10 @@ export function getHtml(this: HistoryEmbeddingsElement) {
 ${!this.enableAnswers_ ? html`
   <div id="cardWithoutAnswers" class="card">
     <h2 class="heading results-heading">
-      <cr-icon icon="history-embeddings:heading"></cr-icon>
+      <cr-icon
+          icon="${this.webuiRoundedIconsEnabled_
+              ? 'history-embeddings:astrophotography-mode'
+              : 'history-embeddings:heading-old'}"></cr-icon>
       ${this.getHeadingText_()}
     </h2>
 
@@ -32,10 +35,12 @@ ${!this.enableAnswers_ ? html`
       <div>
         <div class="result-items">
           ${this.searchResult_?.items.map((item, index) => html`
-            <cr-url-list-item url="${item.url.url}" title="${item.title}"
+            <cr-url-list-item url="${item.url}" title="${item.title}"
                 description="${item.urlForDisplay}"
-                @click="${this.onResultClick_}" @auxclick="${this.onResultClick_}"
-                data-index="${index}" @contextmenu="${this.onResultContextMenu_}"
+                @click="${this.onResultClick_}"
+                @auxclick="${this.onResultAuxclick_}"
+                data-index="${index}"
+                @contextmenu="${this.onResultContextmenu_}"
                 as-anchor as-anchor-target="_blank" always-show-suffix>
               <span class="time" slot="suffix">${this.getDateTime_(item)}</span>
               <cr-icon-button slot="suffix" iron-icon="cr:more-vert"
@@ -93,8 +98,8 @@ ${this.enableAnswers_ ? html`
             <a class="answer-link"
                 href="${this.getAnswerSourceUrl_()}" target="_blank"
                 @click="${this.onAnswerLinkClick_}"
-                @auxclick="${this.onAnswerLinkClick_}"
-                @contextmenu="${this.onAnswerLinkContextMenu_}">
+                @auxclick="${this.onAnswerLinkAuxclick_}"
+                @contextmenu="${this.onAnswerLinkContextmenu_}">
               <div class="favicon"
                   .style="background-image: ${this.getFavicon_(this.answerSource_)}"></div>
               <div class="result-url">${this.answerSource_.urlForDisplay}</div>
@@ -123,9 +128,9 @@ ${this.enableAnswers_ ? html`
       <div class="result-items">
         ${this.searchResult_?.items.map((item, index) => html`
           ${this.enableImages_ ? html`
-            <a class="result-item" href="${item.url.url}" target="_blank"
-                @click="${this.onResultClick_}" @auxclick="${this.onResultClick_}"
-                data-index="${index}" @contextmenu="${this.onResultContextMenu_}">
+            <a class="result-item" href="${item.url}" target="_blank"
+                @click="${this.onResultClick_}" @auxclick="${this.onResultAuxclick_}"
+                data-index="${index}" @contextmenu="${this.onResultContextmenu_}">
               <div class="result-image">
                 <cr-history-embeddings-result-image
                     ?in-side-panel="${this.inSidePanel}"
@@ -150,10 +155,10 @@ ${this.enableAnswers_ ? html`
               </cr-icon-button>
             </a>
           ` : html`
-            <cr-url-list-item url="${item.url.url}" title="${item.title}"
+            <cr-url-list-item url="${item.url}" title="${item.title}"
                 description="${item.urlForDisplay}"
-                @click="${this.onResultClick_}" @auxclick="${this.onResultClick_}"
-                @contextmenu="${this.onResultContextMenu_}"
+                @click="${this.onResultClick_}" @auxclick="${this.onResultAuxclick_}"
+                @contextmenu="${this.onResultContextmenu_}"
                 data-index="${index}"
                 as-anchor as-anchor-target="_blank" always-show-suffix>
               <span class="time" slot="suffix">${this.getDateTime_(item)}</span>

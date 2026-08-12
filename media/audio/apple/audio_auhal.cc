@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/audio/apple/audio_auhal.h"
 
 #include <CoreServices/CoreServices.h>
@@ -18,12 +13,14 @@
 #include <utility>
 
 #include "base/apple/osstatus_logging.h"
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "base/trace_event/typed_macros.h"
@@ -52,7 +49,8 @@ void WrapBufferList(AudioBufferList* buffer_list, AudioBus* bus, int frames) {
   // Copy pointers from AudioBufferList.
   for (int i = 0; i < channels; ++i) {
     // The byte data size should always be a multiple of sizeof(float).
-    const size_t data_size_in_bytes = buffer_list->mBuffers[i].mDataByteSize;
+    const size_t data_size_in_bytes =
+        UNSAFE_TODO(buffer_list->mBuffers[i]).mDataByteSize;
     CHECK_EQ(data_size_in_bytes % sizeof(float), 0U);
 
     // SAFETY: We don't have much choice here... We have to trust that the
@@ -116,7 +114,7 @@ void MaybeMapRearSurroundChannelToSurroundChannel(
   bool maybe_need_mapping = false;
   for (UInt32 i = 0; i < audio_layout->mNumberChannelDescriptions; i++) {
     AudioChannelLabel label =
-        audio_layout->mChannelDescriptions[i].mChannelLabel;
+        UNSAFE_TODO(audio_layout->mChannelDescriptions[i]).mChannelLabel;
     // If audio already has Ls or Rs channel, skip.
     if (label == kAudioChannelLabel_LeftSurround ||
         label == kAudioChannelLabel_RightSurround) {
@@ -144,7 +142,7 @@ void MaybeMapRearSurroundChannelToSurroundChannel(
   // Rls or Rrs channel do not exist.
   for (UInt32 i = 0; i < device_layout->mNumberChannelDescriptions; ++i) {
     AudioChannelLabel label =
-        device_layout->mChannelDescriptions[i].mChannelLabel;
+        UNSAFE_TODO(device_layout->mChannelDescriptions[i]).mChannelLabel;
     if (label == kAudioChannelLabel_RearSurroundLeft ||
         label == kAudioChannelLabel_RearSurroundRight) {
       return;
@@ -154,12 +152,12 @@ void MaybeMapRearSurroundChannelToSurroundChannel(
   // Map Rls to Ls, Rrs to Rs.
   for (UInt32 i = 0; i < audio_layout->mNumberChannelDescriptions; i++) {
     AudioChannelLabel label =
-        audio_layout->mChannelDescriptions[i].mChannelLabel;
+        UNSAFE_TODO(audio_layout->mChannelDescriptions[i]).mChannelLabel;
     if (label == kAudioChannelLabel_RearSurroundLeft) {
-      audio_layout->mChannelDescriptions[i].mChannelLabel =
+      UNSAFE_TODO(audio_layout->mChannelDescriptions[i]).mChannelLabel =
           kAudioChannelLabel_LeftSurround;
     } else if (label == kAudioChannelLabel_RearSurroundRight) {
-      audio_layout->mChannelDescriptions[i].mChannelLabel =
+      UNSAFE_TODO(audio_layout->mChannelDescriptions[i]).mChannelLabel =
           kAudioChannelLabel_RightSurround;
     }
   }
@@ -167,15 +165,18 @@ void MaybeMapRearSurroundChannelToSurroundChannel(
 
 // Converts |channel_layout| into CoreAudio format and sets up the AUHAL with
 // our layout information so it knows how to remap the channels.
-void SetAudioChannelLayout(int channels,
-                           ChannelLayout channel_layout,
+void SetAudioChannelLayout(const ChannelLayoutConfig& channel_layout_config,
                            AudioUnit audio_unit) {
   DCHECK(audio_unit);
-  DCHECK_GT(channels, 0);
-  DCHECK_GT(channel_layout, CHANNEL_LAYOUT_UNSUPPORTED);
+  DCHECK_GT(channel_layout_config.channels(), 0);
+  DCHECK_GT(channel_layout_config.channel_layout(), CHANNEL_LAYOUT_UNSUPPORTED);
 
   auto coreaudio_layout =
-      ChannelLayoutToAudioChannelLayout(channel_layout, channels);
+      ChannelLayoutToAudioChannelLayout(channel_layout_config);
+  if (!coreaudio_layout) {
+    DLOG(ERROR) << "Failed to create audio channel layout.";
+    return;
+  }
 
   MaybeMapRearSurroundChannelToSurroundChannel(audio_unit,
                                                coreaudio_layout->layout());
@@ -227,6 +228,13 @@ AUHALStream::~AUHALStream() {
   CHECK(!audio_unit_);
 }
 
+void AUHALStream::SendLogMessage(const std::string& message) {
+  if (!log_callback_.is_null()) {
+    log_callback_.Run(
+        base::StringPrintf("AUHAL[%p]::%s", this, message.c_str()));
+  }
+}
+
 bool AUHALStream::Open() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(!output_bus_);
@@ -241,7 +249,7 @@ bool AUHALStream::Open() {
     DCHECK(audio_unit_);
     DCHECK(audio_unit_->is_valid());
 #if BUILDFLAG(IS_MAC)
-    hardware_latency_ = core_audio_mac::GetHardwareLatency(
+    hardware_latency_ = CoreAudioUtilMac::GetHardwareLatency(
         audio_unit_->audio_unit(), device_, kAudioObjectPropertyScopeOutput,
         params_.sample_rate(), /*is_input=*/false);
 #else
@@ -330,6 +338,8 @@ void AUHALStream::Start(AudioSourceCallback* callback) {
 
   Stop();
   OSSTATUS_DLOG(ERROR, result) << "AudioOutputUnitStart() failed.";
+  SendLogMessage(base::StrCat({"AudioOutputUnitStart() failed. Error: ",
+                               logging::DescriptionFromOSStatus(result)}));
   callback->OnError(AudioSourceCallback::ErrorType::kUnknown);
 }
 
@@ -351,8 +361,11 @@ void AUHALStream::Stop() {
 
   {
     base::AutoLock al(lock_);
-    if (result != noErr)
+    if (result != noErr) {
+      SendLogMessage(base::StrCat({"AudioOutputUnitStop() failed. Error: ",
+                                   logging::DescriptionFromOSStatus(result)}));
       source_->OnError(AudioSourceCallback::ErrorType::kUnknown);
+    }
     source_ = nullptr;
 
     if (last_sample_time_) {  // Report stats if the stream has been active.
@@ -637,7 +650,7 @@ bool AUHALStream::ConfigureAUHAL() {
   if (result != noErr)
     return false;
 
-  SetAudioChannelLayout(params_.channels(), params_.channel_layout(),
+  SetAudioChannelLayout(params_.channel_layout_config(),
                         local_audio_unit->audio_unit());
 
   result = AudioUnitInitialize(local_audio_unit->audio_unit());

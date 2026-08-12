@@ -28,6 +28,8 @@
 #import "ios/chrome/browser/data_import/ui/data_import_import_stage_transition_handler.h"
 #import "ios/chrome/browser/data_import/ui/data_import_invalid_credentials_view_controller.h"
 #import "ios/chrome/browser/data_import/ui/import_data_item_table_view.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service_factory.h"
 #import "ios/chrome/browser/favicon/model/ios_chrome_favicon_loader_factory.h"
 #import "ios/chrome/browser/history/model/history_service_factory.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_account_password_store_factory.h"
@@ -38,6 +40,7 @@
 #import "ios/chrome/browser/safari_data_import/public/metrics.h"
 #import "ios/chrome/browser/safari_data_import/public/safari_data_import_stage.h"
 #import "ios/chrome/browser/safari_data_import/ui/safari_data_import_import_view_controller.h"
+#import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
@@ -54,9 +57,9 @@ constexpr NSInteger kExpectedItemsCount = 4;
 }  // namespace
 
 @interface SafariDataImportImportCoordinator () <
-    PromoStyleViewControllerDelegate,
     DataImportCredentialConflictResolutionViewControllerDelegate,
     DataImportImportStageTransitionHandler,
+    PromoStyleViewControllerDelegate,
     UITableViewDelegate>
 
 /// The mediator handling the interaction with the model. Lazily loaded with
@@ -147,6 +150,7 @@ constexpr NSInteger kExpectedItemsCount = 4;
     syncer::SyncService* syncService =
         SyncServiceFactory::GetForProfile(profile);
     PrefService* prefService = profile->GetPrefs();
+    PrefService* localState = GetApplicationContext()->GetLocalState();
     FaviconLoader* faviconLoader =
         IOSChromeFaviconLoaderFactory::GetForProfile(profile);
     /// Initialize mediator.
@@ -159,6 +163,7 @@ constexpr NSInteger kExpectedItemsCount = 4;
                        readingListModel:readingListModel
                             syncService:syncService
                             prefService:prefService
+                             localState:localState
                           faviconLoader:faviconLoader];
     _mediator.importStageTransitionHandler = self;
     _mediator.itemConsumer = _tableView;
@@ -217,6 +222,7 @@ constexpr NSInteger kExpectedItemsCount = 4;
       NOTREACHED() << "button should be disabled";
     case SafariDataImportStage::kImported:
       [self presentViewController:self.fileDeletionAlert];
+      [self.mediator markSetUpListItemAsComplete];
       break;
     default:
       break;
@@ -239,12 +245,10 @@ constexpr NSInteger kExpectedItemsCount = 4;
 }
 
 - (void)resetToInitialImportStage:(DataImportResetReason)reason {
-  SafariDataImportStage currentStage = self.importStage;
-  CHECK_EQ(currentStage, SafariDataImportStage::kFileLoading)
-      << "Not supported for stage: " << static_cast<int>(currentStage);
-
+  if (self.importStage == SafariDataImportStage::kNotStarted) {
+    return;
+  }
   UIAlertController* alert = nil;
-
   switch (reason) {
     case DataImportResetReason::kUserInitiated:
       break;
@@ -346,6 +350,9 @@ constexpr NSInteger kExpectedItemsCount = 4;
                        passkeyConflicts:[NSArray array]];
   conflictResolutionViewController.mutator = self.mediator;
   conflictResolutionViewController.delegate = self;
+  conflictResolutionViewController.reauthModule =
+      ReauthenticationServiceFactory::GetForProfile(self.profile)
+          ->GetReauthModule();
   UINavigationController* wrapper = [[UINavigationController alloc]
       initWithRootViewController:conflictResolutionViewController];
   wrapper.toolbarHidden = NO;

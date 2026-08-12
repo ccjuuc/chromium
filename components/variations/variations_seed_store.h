@@ -135,6 +135,7 @@ class COMPONENT_EXPORT(VARIATIONS) VariationsSeedStore {
       std::string data,
       std::string base64_seed_signature,
       std::string country_code,
+      std::string geo_level1,
       base::Time date_fetched,
       bool is_delta_compressed,
       bool is_gzip_compressed,
@@ -235,6 +236,10 @@ class COMPONENT_EXPORT(VARIATIONS) VariationsSeedStore {
   // Returns the latest country code that was received from the server.
   std::string GetLatestCountry();
 
+  // Returns the latest administrative area code that was received from the
+  // server.
+  std::string GetLatestGeoLevel1();
+
   // Returns the first country code returned by the variations server after the
   // client upgraded to the version returned by
   // GetPermanentConsistencyVersion().
@@ -306,6 +311,7 @@ class COMPONENT_EXPORT(VARIATIONS) VariationsSeedStore {
     std::string data;
     std::string base64_seed_signature;
     std::string country_code;
+    std::string geo_level1;
     base::Time date_fetched;
     bool is_gzip_compressed = false;
     bool is_delta_compressed = false;
@@ -409,6 +415,7 @@ class COMPONENT_EXPORT(VARIATIONS) VariationsSeedStore {
       base::OnceCallback<void(bool, VariationsSeed)> done_callback,
       ValidatedSeed seed,
       std::string country_code,
+      std::string geo_level1,
       base::Time date_fetched,
       bool require_synchronous,
       SeedReaderWriter::ReadSeedDataResult read_result);

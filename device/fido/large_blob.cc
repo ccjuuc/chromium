@@ -9,13 +9,13 @@
 
 #include "base/containers/map_util.h"
 #include "base/containers/span.h"
+#include "base/containers/to_vector.h"
 #include "base/numerics/byte_conversions.h"
 #include "components/cbor/reader.h"
 #include "components/cbor/writer.h"
 #include "crypto/aead.h"
 #include "crypto/random.h"
 #include "crypto/sha2.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/pin.h"
 
 namespace device {
@@ -223,11 +223,10 @@ LargeBlobData::LargeBlobData(
 }
 LargeBlobData::LargeBlobData(LargeBlobKey key, LargeBlob large_blob)
     : orig_size_(large_blob.original_size) {
-  crypto::Aead aead(crypto::Aead::AeadAlgorithm::AES_256_GCM);
-  aead.Init(key);
   crypto::RandBytes(nonce_);
-  ciphertext_ = aead.Seal(large_blob.compressed_data, nonce_,
-                          GenerateLargeBlobAdditionalData(orig_size_));
+  ciphertext_ = crypto::aead::Seal(crypto::aead::AES_256_GCM, key,
+                                   large_blob.compressed_data, nonce_,
+                                   GenerateLargeBlobAdditionalData(orig_size_));
 }
 LargeBlobData::LargeBlobData(LargeBlobData&&) = default;
 LargeBlobData& LargeBlobData::operator=(LargeBlobData&&) = default;
@@ -239,10 +238,9 @@ bool LargeBlobData::operator==(const LargeBlobData& other) const {
 }
 
 std::optional<LargeBlob> LargeBlobData::Decrypt(LargeBlobKey key) const {
-  crypto::Aead aead(crypto::Aead::AeadAlgorithm::AES_256_GCM);
-  aead.Init(key);
-  std::optional<std::vector<uint8_t>> compressed_data = aead.Open(
-      ciphertext_, nonce_, GenerateLargeBlobAdditionalData(orig_size_));
+  std::optional<std::vector<uint8_t>> compressed_data =
+      crypto::aead::Open(crypto::aead::AES_256_GCM, key, ciphertext_, nonce_,
+                         GenerateLargeBlobAdditionalData(orig_size_));
   if (!compressed_data) {
     return std::nullopt;
   }
@@ -303,9 +301,7 @@ LargeBlobArrayFragment LargeBlobArrayWriter::Pop(size_t length) {
   length = std::min(length, bytes_.size() - offset_);
 
   LargeBlobArrayFragment fragment{
-      fido_parsing_utils::Materialize(
-          base::span(bytes_).subspan(offset_, length)),
-      offset_};
+      base::ToVector(base::span(bytes_).subspan(offset_, length)), offset_};
   offset_ += length;
   return fragment;
 }

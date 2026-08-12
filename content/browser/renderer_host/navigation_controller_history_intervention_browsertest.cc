@@ -63,10 +63,6 @@ class NavigationControllerHistoryInterventionBrowserTest
                      bool /* enable_back_forward_cache*/>> {
  public:
   NavigationControllerHistoryInterventionBrowserTest() {
-    feature_list_.InitWithFeaturesAndParameters(
-        {{features::kQueueNavigationsWhileWaitingForCommit,
-          {{"queueing_level", "full"}}}},
-        {});
     InitAndEnableRenderDocumentFeature(&feature_list_for_render_document_,
                                        std::get<0>(GetParam()));
     InitBackForwardCacheFeature(&feature_list_for_back_forward_cache_,
@@ -1169,9 +1165,9 @@ IN_PROC_BROWSER_TEST_P(NavigationControllerHistoryInterventionBrowserTest,
       controller.GetLastCommittedEntry()->should_skip_on_back_forward_ui());
 
   // Simulate a user gesture.
-  root->UpdateUserActivationState(
+  EXPECT_TRUE(root->UpdateUserActivationState(
       blink::mojom::UserActivationUpdateType::kNotifyActivation,
-      blink::mojom::UserActivationNotificationType::kTest);
+      blink::mojom::UserActivationNotificationType::kTest));
 
   // Since the last navigations refer to a different document, a user gesture
   // here should not reset the skippable bit in the previous entries.
@@ -1403,22 +1399,40 @@ IN_PROC_BROWSER_TEST_P(NavigationControllerHistoryInterventionBrowserTest,
   EXPECT_FALSE(controller.GetEntryAtIndex(6)->should_skip_on_back_forward_ui());
 
   // Test backward helper.
-  EXPECT_EQ(3, controller.GetIndexForGoBackWithSkipping(6));
-  EXPECT_EQ(3, controller.GetIndexForGoBackWithSkipping(5));
-  EXPECT_EQ(3, controller.GetIndexForGoBackWithSkipping(4));
-  EXPECT_EQ(0, controller.GetIndexForGoBackWithSkipping(3));
-  EXPECT_EQ(0, controller.GetIndexForGoBackWithSkipping(2));
-  EXPECT_EQ(0, controller.GetIndexForGoBackWithSkipping(1));
-  EXPECT_FALSE(controller.GetIndexForGoBackWithSkipping(0).has_value());
+  EXPECT_EQ(3, controller.GetIndexForGoBackWithSkipping(
+                   6, /*performing_navigation=*/false));
+  EXPECT_EQ(3, controller.GetIndexForGoBackWithSkipping(
+                   5, /*performing_navigation=*/false));
+  EXPECT_EQ(3, controller.GetIndexForGoBackWithSkipping(
+                   4, /*performing_navigation=*/false));
+  EXPECT_EQ(0, controller.GetIndexForGoBackWithSkipping(
+                   3, /*performing_navigation=*/false));
+  EXPECT_EQ(0, controller.GetIndexForGoBackWithSkipping(
+                   2, /*performing_navigation=*/false));
+  EXPECT_EQ(0, controller.GetIndexForGoBackWithSkipping(
+                   1, /*performing_navigation=*/false));
+  EXPECT_FALSE(
+      controller
+          .GetIndexForGoBackWithSkipping(0, /*performing_navigation=*/false)
+          .has_value());
 
   // Test forward helper.
-  EXPECT_EQ(3, controller.GetIndexForGoForwardWithSkipping(0));
-  EXPECT_EQ(3, controller.GetIndexForGoForwardWithSkipping(1));
-  EXPECT_EQ(3, controller.GetIndexForGoForwardWithSkipping(2));
-  EXPECT_EQ(6, controller.GetIndexForGoForwardWithSkipping(3));
-  EXPECT_EQ(6, controller.GetIndexForGoForwardWithSkipping(4));
-  EXPECT_EQ(6, controller.GetIndexForGoForwardWithSkipping(5));
-  EXPECT_FALSE(controller.GetIndexForGoForwardWithSkipping(6).has_value());
+  EXPECT_EQ(3, controller.GetIndexForGoForwardWithSkipping(
+                   0, /*performing_navigation=*/false));
+  EXPECT_EQ(3, controller.GetIndexForGoForwardWithSkipping(
+                   1, /*performing_navigation=*/false));
+  EXPECT_EQ(3, controller.GetIndexForGoForwardWithSkipping(
+                   2, /*performing_navigation=*/false));
+  EXPECT_EQ(6, controller.GetIndexForGoForwardWithSkipping(
+                   3, /*performing_navigation=*/false));
+  EXPECT_EQ(6, controller.GetIndexForGoForwardWithSkipping(
+                   4, /*performing_navigation=*/false));
+  EXPECT_EQ(6, controller.GetIndexForGoForwardWithSkipping(
+                   5, /*performing_navigation=*/false));
+  EXPECT_FALSE(
+      controller
+          .GetIndexForGoForwardWithSkipping(6, /*performing_navigation=*/false)
+          .has_value());
 }
 
 // Tests that the navigation entry that is marked as skippable on back/forward
@@ -1791,9 +1805,9 @@ IN_PROC_BROWSER_TEST_P(NavigationControllerHistoryInterventionBrowserTest,
 
   // A user gesture in the main frame now will lead to all same document
   // entries to be marked as non-skippable.
-  root->UpdateUserActivationState(
+  EXPECT_TRUE(root->UpdateUserActivationState(
       blink::mojom::UserActivationUpdateType::kNotifyActivation,
-      blink::mojom::UserActivationNotificationType::kTest);
+      blink::mojom::UserActivationNotificationType::kTest));
   EXPECT_TRUE(root->HasStickyUserActivation());
   EXPECT_TRUE(root->HasTransientUserActivation());
   EXPECT_FALSE(controller.GetEntryAtIndex(0)->should_skip_on_back_forward_ui());
@@ -1825,9 +1839,9 @@ IN_PROC_BROWSER_TEST_P(
   // Simulate user gesture in the main frame. Subframes creating entries without
   // user gesture will not lead to the last committed entry being marked as
   // skippable.
-  root->UpdateUserActivationState(
+  EXPECT_TRUE(root->UpdateUserActivationState(
       blink::mojom::UserActivationUpdateType::kNotifyActivation,
-      blink::mojom::UserActivationNotificationType::kTest);
+      blink::mojom::UserActivationNotificationType::kTest));
   EXPECT_TRUE(root->HasStickyUserActivation());
   EXPECT_TRUE(root->HasTransientUserActivation());
 

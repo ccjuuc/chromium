@@ -10,6 +10,7 @@
 #import "base/functional/callback_helpers.h"
 #import "base/no_destructor.h"
 #import "base/path_service.h"
+#import "components/activity_reporter/activity_reporter.h"
 #import "components/autofill/core/common/autofill_features.h"
 #import "components/component_updater/component_updater_service.h"
 #import "components/component_updater/timer_update_scheduler.h"
@@ -35,7 +36,6 @@
 #import "ios/web_view/internal/cwv_flags_internal.h"
 #import "mojo/public/cpp/bindings/pending_receiver.h"
 #import "net/log/net_log.h"
-#import "net/socket/client_socket_pool_manager.h"
 #import "services/network/network_change_manager.h"
 #import "services/network/public/cpp/network_connection_tracker.h"
 #import "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
@@ -145,14 +145,6 @@ PrefService* ApplicationContext::GetLocalState() {
     local_state_ = factory.Create(pref_registry.get());
 
     sessions::SessionIdGenerator::GetInstance()->Init(local_state_.get());
-
-    size_t max_normal_socket_pool_count =
-        net::ClientSocketPoolManager::max_sockets_per_group(
-            net::HttpNetworkSession::NORMAL_SOCKET_POOL);
-    size_t socket_count = std::max<size_t>(net::kDefaultMaxSocketsPerProxyChain,
-                                           max_normal_socket_pool_count);
-    net::ClientSocketPoolManager::set_max_sockets_per_proxy_chain(
-        net::HttpNetworkSession::NORMAL_SOCKET_POOL, socket_count);
   }
   return local_state_.get();
 }
@@ -167,7 +159,8 @@ ApplicationContext::GetSharedURLLoaderFactory() {
   if (!url_loader_factory_) {
     auto url_loader_factory_params =
         network::mojom::URLLoaderFactoryParams::New();
-    url_loader_factory_params->process_id = network::mojom::kBrowserProcessId;
+    url_loader_factory_params->process_id =
+        network::OriginatingProcessId::browser();
     url_loader_factory_params->is_orb_enabled = false;
     GetSystemNetworkContext()->CreateURLLoaderFactory(
         url_loader_factory_.BindNewPipeAndPassReceiver(),
@@ -216,6 +209,14 @@ const std::string& ApplicationContext::GetApplicationLocale() {
 net::NetLog* ApplicationContext::GetNetLog() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return net::NetLog::Get();
+}
+
+activity_reporter::ActivityReporter* ApplicationContext::GetActivityReporter() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!activity_reporter_) {
+    activity_reporter_ = activity_reporter::CreateActivityReporterDisabled();
+  }
+  return activity_reporter_.get();
 }
 
 component_updater::ComponentUpdateService*

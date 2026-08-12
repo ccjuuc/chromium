@@ -19,7 +19,7 @@ DevToolsDispatchHttpRequestParams& DevToolsDispatchHttpRequestParams::operator=(
 
 // static
 std::optional<DevToolsDispatchHttpRequestParams>
-DevToolsDispatchHttpRequestParams::FromDict(const base::Value::Dict& dict) {
+DevToolsDispatchHttpRequestParams::FromDict(const base::DictValue& dict) {
   const std::string* service = dict.FindString("service");
   if (!service) {
     return std::nullopt;
@@ -44,22 +44,22 @@ DevToolsDispatchHttpRequestParams::FromDict(const base::Value::Dict& dict) {
     params.body = *body;
   }
 
-  const base::Value::Dict* query_params_dict = dict.FindDict("queryParams");
+  const base::DictValue* query_params_dict = dict.FindDict("queryParams");
+
   if (query_params_dict) {
-    for (auto it : *query_params_dict) {
-      const std::string& key = it.first;
-      const base::Value& value = it.second;
-      if (value.is_string()) {
-        params.query_params[key].push_back(value.GetString());
-      } else if (value.is_list()) {
-        for (const auto& item : value.GetList()) {
-          if (item.is_string()) {
-            params.query_params[key].push_back(item.GetString());
+    for (auto [key, value] : *query_params_dict) {
+      if (const std::string* str = value.GetIfString()) {
+        params.query_params[key].push_back(*str);
+      } else if (const base::ListValue* list = value.GetIfList()) {
+        for (const auto& item : *list) {
+          if (const std::string* item_str = item.GetIfString()) {
+            params.query_params[key].push_back(*item_str);
           }
         }
       }
     }
   }
 
+  params.stream_id = dict.FindInt("streamId");
   return params;
 }

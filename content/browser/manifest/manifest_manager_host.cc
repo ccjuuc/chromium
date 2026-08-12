@@ -6,21 +6,30 @@
 
 #include <stdint.h>
 
+#include "base/check_is_test.h"
 #include "base/functional/bind.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/types/expected.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/public/common/content_client.h"
 #include "mojo/public/cpp/bindings/message.h"
+#include "net/base/schemeful_site.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
+#include "third_party/blink/public/common/custom_handlers/protocol_handler_utils.h"
 #include "third_party/blink/public/common/manifest/manifest_util.h"
-#include "third_party/blink/public/mojom/manifest/manifest.mojom-data-view.h"
-#include "third_party/blink/public/mojom/manifest/manifest.mojom-forward.h"
+#include "third_party/blink/public/common/scheme_registry.h"
+#include "third_party/blink/public/common/security/protocol_handler_security_level.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
 #include "third_party/blink/public/mojom/manifest/manifest_manager.mojom.h"
+#include "third_party/icu/source/common/unicode/uchar.h"
+#include "third_party/icu/source/common/unicode/utf16.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace content {
 
@@ -37,7 +46,8 @@ void DispatchManifestNotFound(
 
 std::optional<std::string> MaybeGetBadMessageStringForManifest(
     blink::mojom::ManifestRequestResult result,
-    const blink::mojom::Manifest& manifest) {
+    const blink::mojom::Manifest& manifest,
+    const url::Origin& document_origin) {
   if (result == blink::mojom::ManifestRequestResult::kSuccess &&
       blink::IsEmptyManifest(manifest)) {
     return "RequestManifest reported success but didn't return a manifest";
@@ -60,6 +70,124 @@ std::optional<std::string> MaybeGetBadMessageStringForManifest(
            valid_to_string(start_url_valid), "), id (",
            valid_to_string(id_valid), "), and scope (",
            valid_to_string(scope_valid), ")."});
+    }
+
+    if (!document_origin.IsSameOriginWith(manifest.start_url)) {
+      return base::StrCat({"Manifest start_url (" + manifest.start_url.spec() +
+                           ") must be same-origin with the document (" +
+                           document_origin.Serialize() + ")."});
+    }
+
+    if (!document_origin.IsSameOriginWith(manifest.id)) {
+      return "Manifest id must be same-origin with the document.";
+    }
+
+    if (!document_origin.IsSameOriginWith(manifest.scope)) {
+      return "Manifest scope must be same-origin with the document.";
+    }
+
+    if (manifest.share_target &&
+        !document_origin.IsSameOriginWith(manifest.share_target->action)) {
+      return "Manifest share_target must be same-origin with the document.";
+    }
+
+    for (const auto& file_handler : manifest.file_handlers) {
+      if (!document_origin.IsSameOriginWith(file_handler->action)) {
+        return "Manifest file_handlers must be same-origin with the document.";
+      }
+      for (const auto& [mime_type, extensions] : file_handler->accept) {
+        for (const auto& extension : extensions) {
+          for (size_t i = 0; i < extension.length();) {
+            UChar32 c;
+            U16_NEXT(extension, i, extension.length(), c);
+            // TODO(crbug.com/530303003): This check for control and format
+            // characters is duplicated across manifest parsing, IPC validation,
+            // and PWA display. Consider consolidating it into a shared helper
+            // in //base/strings/string_util.h.
+            if (base::IsUnicodeControl(c) || u_charType(c) == U_FORMAT_CHAR) {
+              return "Manifest file_handlers accept extension contains invalid "
+                     "control or format characters.";
+            }
+          }
+        }
+      }
+    }
+
+    for (const auto& protocol_handler : manifest.protocol_handlers) {
+      if (!document_origin.IsSameOriginWith(protocol_handler->url)) {
+        return "Manifest protocol_handlers must be same-origin with the "
+               "document.";
+      }
+
+      blink::ProtocolHandlerSecurityLevel security_level =
+          blink::CommonSchemeRegistry::IsIsolatedAppScheme(
+              document_origin.scheme())
+              ? blink::ProtocolHandlerSecurityLevel::kIsolatedAppFeatures
+              : blink::ProtocolHandlerSecurityLevel::kStrict;
+      if (!blink::IsValidCustomHandlerScheme(
+              base::UTF16ToUTF8(protocol_handler->protocol), security_level)) {
+        return "Manifest protocol_handlers protocol is invalid or restricted "
+               "for security level:" +
+               base::ToString(security_level);
+      }
+    }
+
+    if (manifest.note_taking && manifest.note_taking->new_note_url.is_valid() &&
+        !document_origin.IsSameOriginWith(manifest.note_taking->new_note_url)) {
+      return "Manifest note_taking new_note_url must be same-origin with the "
+             "document.";
+    }
+
+    if (manifest.lock_screen && manifest.lock_screen->start_url.is_valid() &&
+        !document_origin.IsSameOriginWith(manifest.lock_screen->start_url)) {
+      return "Manifest lock_screen start_url must be same-origin with the "
+             "document.";
+    }
+
+    net::SchemefulSite document_site(document_origin);
+    for (const auto& migrate_from : manifest.migrate_from) {
+      if (!document_site.IsSameSiteWith(migrate_from->id)) {
+        return "Manifest migrate_from id must be the same site as the "
+               "document.";
+      }
+      if (migrate_from->install_url && migrate_from->install_url->is_valid() &&
+          !document_site.IsSameSiteWith(*migrate_from->install_url)) {
+        return "Manifest migrate_from install_url must be the same site as the "
+               "document.";
+      }
+    }
+
+    if (manifest.migrate_to) {
+      if (!document_site.IsSameSiteWith(manifest.migrate_to->id)) {
+        return "Manifest migrate_to id must be the same site as the document.";
+      }
+      if (manifest.migrate_to->install_url.is_valid() &&
+          !document_site.IsSameSiteWith(manifest.migrate_to->install_url)) {
+        return "Manifest migrate_to install_url must be the same site as the "
+               "document.";
+      }
+    }
+
+    for (const auto& shortcut : manifest.shortcuts) {
+      if (!shortcut.url.is_valid()) {
+        return "Manifest shortcut urls must be valid.";
+      }
+      if (!(url::IsSameOriginWith(manifest.scope, shortcut.url) &&
+            base::StartsWith(shortcut.url.path(), manifest.scope.path(),
+                             base::CompareCase::SENSITIVE))) {
+        return "Manifest shortcut urls must be within scope.";
+      }
+    }
+
+    for (const auto& icon : manifest.icons) {
+      if (!icon.src.is_valid()) {
+        return "Manifest icon urls must be valid.";
+      }
+      if (!icon.src.SchemeIsHTTPOrHTTPS() && !icon.src.SchemeIs("data") &&
+          !icon.src.SchemeIs(document_origin.scheme())) {
+        return "Manifest icon urls must be http, https, data, or match the "
+               "document scheme.";
+      }
     }
   }
   return std::nullopt;
@@ -94,6 +222,15 @@ void ManifestManagerHost::BindObserver(
 
 void ManifestManagerHost::GetManifest(GetManifestCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  if (page().GetMainDocument().GetLastCommittedURL().SchemeIs(
+          url::kAboutScheme)) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback),
+                       blink::mojom::ManifestRequestResult::kNoManifestAllowed,
+                       GURL(), blink::mojom::Manifest::New()));
+    return;
+  }
   auto& manifest_manager = GetManifestManager();
   int request_id = callbacks_.Add(
       std::make_unique<GetManifestCallback>(std::move(callback)));
@@ -108,8 +245,20 @@ base::CallbackListSubscription ManifestManagerHost::GetSpecifiedManifest(
   if (last_manifest_success_result_.has_value()) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
-        base::BindOnce(&ManifestManagerHost::NotifySubscriptionsIfSuccessCached,
-                       weak_factory_.GetWeakPtr()));
+        base::BindOnce(
+            &ManifestManagerHost::NotifyOnceSubscriptionsIfSuccessCached,
+            weak_factory_.GetWeakPtr()));
+  } else {
+    MaybeFetchManifestForSubscriptions();
+  }
+  return result;
+}
+
+base::CallbackListSubscription ManifestManagerHost::GetAllSpecifiedManifests(
+    AllManifestsCallbackList::CallbackType callback) {
+  auto result = all_manifests_callback_list_.Add(callback);
+  if (last_manifest_success_result_.has_value()) {
+    callback.Run(base::ok(last_manifest_success_result_->Clone()));
   } else {
     MaybeFetchManifestForSubscriptions();
   }
@@ -118,6 +267,14 @@ base::CallbackListSubscription ManifestManagerHost::GetSpecifiedManifest(
 
 void ManifestManagerHost::RequestManifestDebugInfo(
     blink::mojom::ManifestManager::RequestManifestDebugInfoCallback callback) {
+  if (page().GetMainDocument().GetLastCommittedURL().SchemeIs(
+          url::kAboutScheme)) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), GURL(),
+                                  blink::mojom::Manifest::New(),
+                                  blink::mojom::ManifestDebugInfo::New()));
+    return;
+  }
   GetManifestManager().RequestManifestDebugInfo(std::move(callback));
 }
 
@@ -136,8 +293,20 @@ blink::mojom::ManifestPtr ManifestManagerHost::ValidateAndMaybeOverrideManifest(
     blink::mojom::ManifestPtr manifest) {
   // Mojo bindings guarantee that `manifest` isn't null.
   CHECK(manifest);
+
+  auto& document_origin = page().GetMainDocument().GetLastCommittedOrigin();
+  if (!blink::IsEmptyManifest(manifest) && document_origin.opaque()) {
+    // We should never get a manifest for an opaque origin, unless perhaps due
+    // to a race condition. Override to empty and log.
+    base::UmaHistogramBoolean("WebApp.Manifest.ForOpaqueOrigin", true);
+    DVLOG(1) << "Manifest received for opaque origin with start_url"
+             << manifest->start_url.spec();
+    return blink::mojom::Manifest::New();
+  }
+
   if (std::optional<std::string> bad_message_error =
-          MaybeGetBadMessageStringForManifest(result, *manifest);
+          MaybeGetBadMessageStringForManifest(result, *manifest,
+                                              document_origin);
       bad_message_error.has_value()) {
     mojo::ReportBadMessage(*bad_message_error);
     return blink::mojom::Manifest::New();
@@ -149,6 +318,14 @@ blink::mojom::ManifestPtr ManifestManagerHost::ValidateAndMaybeOverrideManifest(
         &page().GetMainDocument(), manifest);
   }
   return manifest;
+}
+
+void ManifestManagerHost::
+    ValidateAndMaybeOverrideManifestForTesting(  // IN-TEST
+        blink::mojom::ManifestRequestResult result,
+        blink::mojom::ManifestPtr manifest) {
+  CHECK_IS_TEST();
+  ValidateAndMaybeOverrideManifest(result, std::move(manifest));
 }
 
 std::vector<ManifestManagerHost::GetManifestCallback>
@@ -183,9 +360,20 @@ void ManifestManagerHost::OnRequestManifestResponse(
 }
 
 void ManifestManagerHost::OnRequestManifestAndErrors(
+    const GURL& manifest_url_for_fetch,
     base::expected<blink::mojom::ManifestPtr,
                    blink::mojom::RequestManifestErrorPtr> result) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  // Reset the information for the current manifest url being fetched if it
+  // matches the request that was sent to the ManifestManager, and only process
+  // requests for the latest manifest url on the page.
+  // This helps filter out stale manifest fetches if the manifest url on the
+  // page has changed dynamically.
+  if (current_fetching_manifest_url_ != manifest_url_for_fetch) {
+    return;
+  }
+
+  current_fetching_manifest_url_.reset();
   if (result.has_value()) {
     result = ValidateAndMaybeOverrideManifest(
         blink::mojom::ManifestRequestResult::kSuccess, std::move(*result));
@@ -214,33 +402,44 @@ void ManifestManagerHost::OnRequestManifestAndErrors(
     }
   }
   if (result.has_value()) {
-    last_manifest_success_result_ = std::move(result.value());
-    NotifySubscriptionsIfSuccessCached();
-  } else {
-    developer_manifest_callback_list_.Notify(result);
+    // This Clone COULD be avoided if we cached the full expected result.
+    // However - that gets really confusing if we also have it be optional.
+    // Since we only care about caching success, it is simpler to clone here,
+    // and just cache the success results as an optional.
+    last_manifest_success_result_ = result->Clone();
   }
+  developer_manifest_callback_list_.Notify(result);
+  all_manifests_callback_list_.Notify(result);
 }
 
 void ManifestManagerHost::ManifestUrlChanged(const GURL& manifest_url) {
   last_manifest_success_result_ = std::nullopt;
   static_cast<PageImpl&>(page()).UpdateManifestUrl(manifest_url);
-  if (!developer_manifest_callback_list_.empty()) {
+  if (HasManifestSubscriptions()) {
     MaybeFetchManifestForSubscriptions();
   }
 }
 
 void ManifestManagerHost::MaybeFetchManifestForSubscriptions() {
-  if (!page().GetManifestUrl().has_value() ||
-      !page().GetManifestUrl()->is_valid()) {
+  if (page().GetMainDocument().GetLastCommittedURL().SchemeIs(
+          url::kAboutScheme)) {
     return;
   }
+  bool is_manifest_fetch_in_progress =
+      current_fetching_manifest_url_.has_value() &&
+      current_fetching_manifest_url_ == page().GetManifestUrl();
+  if (!page().GetManifestUrl().has_value() ||
+      !page().GetManifestUrl()->is_valid() || is_manifest_fetch_in_progress) {
+    return;
+  }
+  current_fetching_manifest_url_ = page().GetManifestUrl();
   auto& manifest_manager = GetManifestManager();
-  manifest_manager.RequestManifestAndErrors(
-      base::BindOnce(&ManifestManagerHost::OnRequestManifestAndErrors,
-                     weak_factory_.GetWeakPtr()));
+  manifest_manager.RequestManifestAndErrors(base::BindOnce(
+      &ManifestManagerHost::OnRequestManifestAndErrors,
+      weak_factory_.GetWeakPtr(), *current_fetching_manifest_url_));
 }
 
-void ManifestManagerHost::NotifySubscriptionsIfSuccessCached() {
+void ManifestManagerHost::NotifyOnceSubscriptionsIfSuccessCached() {
   if (last_manifest_success_result_.has_value()) {
     // This Clone COULD be avoided if we cached the full expected result.
     // However - that gets really confusing if we also have it be optional.
@@ -251,6 +450,11 @@ void ManifestManagerHost::NotifySubscriptionsIfSuccessCached() {
         result = base::ok(last_manifest_success_result_->Clone());
     developer_manifest_callback_list_.Notify(result);
   }
+}
+
+bool ManifestManagerHost::HasManifestSubscriptions() const {
+  return !developer_manifest_callback_list_.empty() ||
+         !all_manifests_callback_list_.empty();
 }
 
 PAGE_USER_DATA_KEY_IMPL(ManifestManagerHost);

@@ -14,8 +14,6 @@ const char kDisableThirdPartyKeyboardWorkaround[] =
 const char kEnableIOSHandoffToOtherDevices[] =
     "enable-ios-handoff-to-other-devices";
 
-const char kEnableSpotlightActions[] = "enable-spotlight-actions";
-
 const char kEnableThirdPartyKeyboardWorkaround[] =
     "enable-third-party-keyboard-workaround";
 
@@ -31,5 +29,8 @@ const char kForceShopperExperience[] = "force-shopper-experience";
 const char kUserAgent[] = "user-agent";
 
 const char kForceFeedSigninPromo[] = "force-feed-signin-promo";
+
+const char kForceReaderModeDistillationTimeout[] =
+    "force-reader-mode-distillation-timeout";
 
 }  // namespace switches

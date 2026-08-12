@@ -1,5 +1,7 @@
 include_rules = [
+  "+chromeos/dbus/constants",
   "+components/enterprise/connectors/core",
+  "+components/certificate_matching",
   "+components/keyed_service/core",
   "+components/signin/public",
   "+components/policy/core",
@@ -10,7 +12,7 @@ include_rules = [
   "+components/version_info",
   "+content/public/browser",
   "+content/public/test",
-  "+services/data_decoder/public/cpp",
   "+net",
   "+mojo/public/cpp/bindings",
+  "+third_party/boringssl/src/include",
 ]

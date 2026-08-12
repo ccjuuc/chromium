@@ -227,7 +227,7 @@ void ServiceWorkerContextWatcher::OnStarting(int64_t version_id) {
 void ServiceWorkerContextWatcher::OnStarted(
     int64_t version_id,
     const GURL& scope,
-    int process_id,
+    ChildProcessId process_id,
     const GURL& script_url,
     const blink::ServiceWorkerToken& token,
     const blink::StorageKey& key) {
@@ -262,20 +262,21 @@ void ServiceWorkerContextWatcher::OnVersionStateChanged(
 
 void ServiceWorkerContextWatcher::OnVersionRouterRulesChanged(
     int64_t version_id,
-    const std::string& router_rules) {
+    const ServiceWorkerVersion::RouterRulesForDevTools& router_rules) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   auto it = version_info_map_.find(version_id);
   if (it == version_info_map_.end()) {
     return;
   }
   ServiceWorkerVersionInfo* version = it->second.get();
-  version->router_rules = router_rules;
+  version->router_rules = router_rules.legacy_rules;
+  version->typed_router_rules = router_rules.typed_rules;
   SendVersionInfo(*version);
 }
 
 void ServiceWorkerContextWatcher::OnVersionDevToolsRoutingIdChanged(
     int64_t version_id,
-    int process_id,
+    ChildProcessId process_id,
     int devtools_agent_route_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   auto it = version_info_map_.find(version_id);

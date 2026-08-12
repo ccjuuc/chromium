@@ -70,7 +70,7 @@ public class AppThemeColorProvider extends ThemeColorProvider
      * @param desktopWindowStateManager The {@link DesktopWindowStateManager} for the current
      *     activity. {@code null} if desktop window state observation is not required.
      */
-    AppThemeColorProvider(
+    public AppThemeColorProvider(
             Context context,
             @Nullable ActivityLifecycleDispatcher activityLifecycleDispatcher,
             @Nullable DesktopWindowStateManager desktopWindowStateManager) {
@@ -86,14 +86,14 @@ public class AppThemeColorProvider extends ThemeColorProvider
                 new LayoutStateProvider.LayoutStateObserver() {
                     @Override
                     public void onStartedShowing(@LayoutType int layoutType) {
-                        if (layoutType == LayoutType.TAB_SWITCHER) {
+                        if (layoutType == LayoutType.HUB) {
                             updateTheme();
                         }
                     }
 
                     @Override
                     public void onStartedHiding(@LayoutType int layoutType) {
-                        if (layoutType == LayoutType.TAB_SWITCHER) {
+                        if (layoutType == LayoutType.HUB) {
                             updateTheme();
                         }
                     }

@@ -10,6 +10,7 @@
 
 #include "ash/app_list/model/app_list_item.h"
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/web_app_id_constants.h"
 #include "ash/public/cpp/app_list/app_list_config.h"
 #include "base/containers/to_vector.h"
@@ -32,7 +33,6 @@
 #include "chrome/browser/ash/app_list/test/app_list_syncable_service_test_base.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
-#include "chrome/common/pref_names.h"
 #include "components/app_constants/constants.h"
 #include "components/crx_file/id_util.h"
 #include "components/sync/protocol/app_list_specifics.pb.h"
@@ -221,7 +221,7 @@ class AppListSyncableServiceTest : public test::AppListSyncableServiceTestBase {
   // Returns the app list order stored as preference.
   ash::AppListSortOrder GetSortOrderFromPrefs() {
     return static_cast<ash::AppListSortOrder>(
-        profile()->GetPrefs()->GetInteger(prefs::kAppListPreferredOrder));
+        profile()->GetPrefs()->GetInteger(ash::prefs::kAppListPreferredOrder));
   }
 
   ash::AppListItem* FindItemForApp(extensions::Extension* app) {
@@ -594,6 +594,48 @@ TEST_F(AppListSyncableServiceTest, NonOEMItemIgnoreSyncToOEMFolder) {
   content::RunAllTasksUntilIdle();
 
   // Parent folder is not changed.
+  EXPECT_EQ(std::string(), app_item->folder_id());
+}
+
+// Verifies that an item is not moved to a parent that is not a folder by sync.
+TEST_F(AppListSyncableServiceTest, ItemIgnoreSyncToNonFolderParent) {
+  // Create an app.
+  const std::string app_id = CreateNextAppId(extensions::kWebStoreAppId);
+  scoped_refptr<extensions::Extension> app = MakeApp(
+      kSomeAppName, app_id, extensions::Extension::WAS_INSTALLED_BY_DEFAULT);
+  InstallExtension(app.get());
+
+  // Create another app that will be the "fake" parent (not a folder).
+  const std::string fake_parent_id = CreateNextAppId(app_id);
+  scoped_refptr<extensions::Extension> fake_parent =
+      MakeApp("Fake Parent", fake_parent_id,
+              extensions::Extension::WAS_INSTALLED_BY_DEFAULT);
+  InstallExtension(fake_parent.get());
+
+  ChromeAppListItem* app_item = GetModelUpdater()->FindItem(app_id);
+  ASSERT_TRUE(app_item);
+  // It is in the top list.
+  EXPECT_EQ(std::string(), app_item->folder_id());
+
+  // Send sync that this app is parented by the other app (which is not a
+  // folder).
+  syncer::SyncDataList sync_list;
+  sync_list.push_back(
+      CreateAppRemoteData(app_id, kSomeAppName, fake_parent_id,
+                          app_item->position().ToInternalValue(),
+                          std::string() /* item_pin_ordinal */));
+  // Include the fake parent in sync data as an app, not a folder.
+  sync_list.push_back(CreateAppRemoteData(
+      fake_parent_id, "Fake Parent", std::string(),
+      GetModelUpdater()->FindItem(fake_parent_id)->position().ToInternalValue(),
+      std::string(), sync_pb::AppListSpecifics_AppListItemType_TYPE_APP));
+
+  app_list_syncable_service()->MergeDataAndStartSyncing(
+      syncer::APP_LIST, sync_list,
+      std::make_unique<syncer::FakeSyncChangeProcessor>());
+  content::RunAllTasksUntilIdle();
+
+  // Parent folder should not be changed to the non-folder item.
   EXPECT_EQ(std::string(), app_item->folder_id());
 }
 
@@ -1037,7 +1079,7 @@ TEST_F(AppListSyncableServiceTest,
 }
 
 // Simulates and verifies the fix of the single item folder issue of
-// crbug.com/1082530. Here is the repro of the bug.
+// crbug.com/40691980. Here is the repro of the bug.
 // When user signs in on a new device for the first time, a folder contains two
 // app items, one is installed before another. After the first app is installed,
 // user sees a single item folder with the first app. User moves the app out of
@@ -1203,7 +1245,7 @@ TEST_F(AppListSyncableServiceTest, PruneRedundantPageBreakItems) {
 // This test simulates that device 2 gets the sync changes from device 1, and
 // applies the changes in model updater and the apps should have the same layout
 // as the ones on the device 1. It verifies the fix for the repro issue
-// described in http://crbug.com/938098#c15.
+// described in http://crbug.com/40616548#comment16.
 TEST_F(AppListSyncableServiceTest, PageBreakWithOverflowItem) {
   RemoveAllExistingItems();
 
@@ -1508,10 +1550,10 @@ TEST_F(AppListSyncableServiceTest, EphemeralAppsNotSynced) {
   EXPECT_TRUE(sync_item->is_ephemeral);
 
   // Ephemeral sync items are not added to the local storage.
-  const base::Value::Dict& local_items =
-      profile()->GetPrefs()->GetDict(prefs::kAppListLocalState);
+  const base::DictValue& local_items =
+      profile()->GetPrefs()->GetDict(ash::prefs::kAppListLocalState);
 
-  const base::Value::Dict* dict_item = local_items.FindDict(ephemeral_app_id);
+  const base::DictValue* dict_item = local_items.FindDict(ephemeral_app_id);
   EXPECT_FALSE(dict_item);
 
   // Ephemeral sync items are not uploaded to sync data.
@@ -1559,10 +1601,9 @@ TEST_F(AppListSyncableServiceTest, EphemeralFoldersNotSynced) {
   EXPECT_TRUE(sync_item->is_ephemeral);
 
   // Ephemeral sync items are not added to the local storage.
-  const base::Value::Dict& local_items =
-      profile()->GetPrefs()->GetDict(prefs::kAppListLocalState);
-  const base::Value::Dict* dict_item =
-      local_items.FindDict(ephemeral_folder_id);
+  const base::DictValue& local_items =
+      profile()->GetPrefs()->GetDict(ash::prefs::kAppListLocalState);
+  const base::DictValue* dict_item = local_items.FindDict(ephemeral_folder_id);
   EXPECT_FALSE(dict_item);
 
   // Ephemeral sync items are not uploaded to sync data.

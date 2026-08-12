@@ -9,13 +9,13 @@
 
 namespace contextual_cueing {
 
-class ContextualCueingNudgeCapTracker : public testing::Test {
+class NudgeCapTrackerTest : public testing::Test {
  protected:
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 };
 
-TEST_F(ContextualCueingNudgeCapTracker, NoRestriction) {
+TEST_F(NudgeCapTrackerTest, NoRestriction) {
   NudgeCapTracker tracker(0, base::TimeDelta());
   EXPECT_TRUE(tracker.CanShowNudge());
   task_environment_.FastForwardBy(base::Minutes(1));
@@ -27,7 +27,7 @@ TEST_F(ContextualCueingNudgeCapTracker, NoRestriction) {
   EXPECT_TRUE(tracker.CanShowNudge());
 }
 
-TEST_F(ContextualCueingNudgeCapTracker, Basic) {
+TEST_F(NudgeCapTrackerTest, Basic) {
   NudgeCapTracker tracker(3, base::Hours(24));
 
   for (int i = 0; i < 3; i++) {
@@ -41,7 +41,7 @@ TEST_F(ContextualCueingNudgeCapTracker, Basic) {
   EXPECT_TRUE(tracker.CanShowNudge());
 }
 
-TEST_F(ContextualCueingNudgeCapTracker, GetMostRecentTime) {
+TEST_F(NudgeCapTrackerTest, GetMostRecentTime) {
   NudgeCapTracker tracker(3, base::Hours(24));
   EXPECT_EQ(tracker.GetMostRecentNudgeTime(), std::nullopt);
 

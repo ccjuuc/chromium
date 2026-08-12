@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/metrics/histogram_functions.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "net/base/load_flags.h"
 #include "services/network/public/cpp/record_ontransfersizeupdate_utils.h"
@@ -42,20 +43,17 @@ class URLLoaderRelay : public network::mojom::URLLoaderClient,
 
   // network::mojom::URLLoader implementation:
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_request_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_request_headers,
+      network::HttpRequestHeadersUpdateParams headers_update_params,
       const std::optional<GURL>& new_url) override {
-    DCHECK(removed_headers.empty() && modified_request_headers.IsEmpty() &&
-           modified_cors_exempt_request_headers.IsEmpty())
+    DCHECK(headers_update_params.removed_headers.empty() &&
+           headers_update_params.modified_headers.IsEmpty() &&
+           headers_update_params.modified_cors_exempt_headers.IsEmpty())
         << "Redirect with removed or modified headers was not supported yet. "
            "crbug.com/845683";
     DCHECK(!new_url.has_value())
         << "Redirect with modified URL was not supported yet. "
            "crbug.com/845683";
-    loader_sink_->FollowRedirect(
-        {} /* removed_headers */, {} /* modified_headers */,
-        {} /* modified_cors_exempt_headers */, std::nullopt /* new_url */);
+    loader_sink_->FollowRedirect({}, std::nullopt);
   }
 
   void SetPriority(net::RequestPriority priority,
@@ -220,28 +218,16 @@ void ChildURLLoaderFactoryBundle::CreateLoaderAndStart(
     return;
   }
 
-  // Prefetch is disjoint with browsing_topics, ad_auction_headers, and
-  // keepalive.
-  // TODO(https://crbug.com/1441113): keepalive is disjoint with browsing_topics
-  // and ad_auction_headers in our implementation, but the fetch API does not
-  // enforce this, so `subresource_proxying_loader_factory_` (that handles
-  // browsing_topics and ad_auction_headers) wins and keepalive is ignored.
-  // Either allow them simultaneously or make them mutually exclusive in the
-  // fetch API.
+  // Prefetch is disjoint with keepalive.
   const bool request_is_prefetch = request.load_flags & net::LOAD_PREFETCH;
-  CHECK(!(request_is_prefetch && request.browsing_topics));
-  CHECK(!(request_is_prefetch && request.ad_auction_headers));
   CHECK(!(request_is_prefetch && request.keepalive));
 
-  // Use |subresource_proxying_loader_factory_| for prefetch, browsing_topics,
-  // and ad_auction_headers requests to send the requests to
-  // `SubresourceProxyingURLLoaderService` in the browser process and trigger
-  // the special handling.
+  // Use |subresource_proxying_loader_factory_| for prefetch requests to send
+  // the requests to `SubresourceProxyingURLLoaderService` in the browser
+  // process and trigger the special handling.
   // TODO(horo): Move this routing logic to network service, when we will have
   // the special prefetch handling in network service.
-  if ((request_is_prefetch || request.browsing_topics ||
-       request.ad_auction_headers) &&
-      subresource_proxying_loader_factory_) {
+  if (request_is_prefetch && subresource_proxying_loader_factory_) {
     // For prefetch, this is no-state prefetch (see
     // WebURLRequest::GetLoadFlagsForWebUrlRequest).
     subresource_proxying_loader_factory_->CreateLoaderAndStart(
@@ -274,6 +260,9 @@ void ChildURLLoaderFactoryBundle::CreateLoaderAndStart(
 
 std::unique_ptr<network::PendingSharedURLLoaderFactory>
 ChildURLLoaderFactoryBundle::Clone() {
+  base::ScopedUmaHistogramTimer timer(
+      "Blink.ChildURLLoaderFactoryBundle.CloneTime",
+      base::ScopedUmaHistogramTimer::ScopedHistogramTiming::kMicrosecondTimes);
   mojo::PendingRemote<network::mojom::URLLoaderFactory>
       default_factory_pending_remote;
   if (default_factory_) {

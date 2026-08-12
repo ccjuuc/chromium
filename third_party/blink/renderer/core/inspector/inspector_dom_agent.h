@@ -41,6 +41,7 @@
 #include "third_party/blink/renderer/platform/bindings/source_location.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/loader/fetch/ad_tagging_utils.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
@@ -87,9 +88,7 @@ class CORE_EXPORT InspectorDOMAgent final
       Document*);
   static ShadowRoot* UserAgentShadowRoot(Node*);
 
-  InspectorDOMAgent(v8::Isolate*,
-                    InspectedFrames*,
-                    v8_inspector::V8InspectorSession*);
+  InspectorDOMAgent(v8::Isolate*, InspectedFrames*);
   InspectorDOMAgent(const InspectorDOMAgent&) = delete;
   InspectorDOMAgent& operator=(const InspectorDOMAgent&) = delete;
   ~InspectorDOMAgent() override;
@@ -277,8 +276,13 @@ class CORE_EXPORT InspectorDOMAgent final
   protocol::Response forceShowPopover(
       int node_id,
       bool enable,
+      std::optional<int> invoker_node_id,
       std::unique_ptr<protocol::Array<int>>* out_nodeIds) override;
   void WillHidePopover(HTMLElement* element, bool* force_open);
+
+  protocol::Response forceShowInterest(int node_id, bool enable) override;
+  void WillLoseInterest(Element* element, bool* force_interest);
+  void ReleaseForcedInterestInvokers();
 
   bool Enabled() const;
   IncludeWhitespaceEnum IncludeWhitespace() const;
@@ -301,7 +305,7 @@ class CORE_EXPORT InspectorDOMAgent final
   void DidModifyAdoptedStyleSheets(Node*);
   void AdoptedStyleSheetsInvalidated(Node*);
   void CharacterDataModified(CharacterData*);
-  void DidInvalidateStyleAttr(Node*);
+  void DidInvalidateStyleAttr(Element*);
   void DidPushShadowRoot(Element* host, ShadowRoot*);
   void WillPopShadowRoot(Element* host, ShadowRoot*);
   void DidPerformSlotDistribution(HTMLSlotElement*);
@@ -312,6 +316,8 @@ class CORE_EXPORT InspectorDOMAgent final
   void PseudoElementDestroyed(PseudoElement*);
   void NodeCreated(Node* node);
   void UpdateScrollableFlag(Node* node, std::optional<bool>);
+  void UpdateAdRelatedState(Node& node,
+                            std::optional<AdProvenance> ad_provenance);
   void UpdateAffectedByStartingStylesFlag(Node* node, std::optional<bool>);
 
   Node* NodeForId(int node_id) const;
@@ -365,6 +371,7 @@ class CORE_EXPORT InspectorDOMAgent final
   void NotifyDidAddDocument(Document*);
   void NotifyWillRemoveDOMNode(Node*);
   void NotifyDidModifyDOMAttr(Element*);
+  void ForEachDOMListener(base::FunctionRef<void(const Member<DOMListener>&)>);
 
   // Node-related methods.
   using NodeToIdMap = GCedHeapHashMap<Member<Node>, int>;
@@ -420,7 +427,6 @@ class CORE_EXPORT InspectorDOMAgent final
 
   v8::Isolate* isolate_;  // null after Dispose().
   Member<InspectedFrames> inspected_frames_;
-  v8_inspector::V8InspectorSession* v8_session_;  // null after Dispose().
   HeapHashSet<Member<DOMListener>> dom_listeners_;
   Member<NodeToIdMap> document_node_to_id_map_;
   // Owns node mappings for dangling nodes.
@@ -433,6 +439,7 @@ class CORE_EXPORT InspectorDOMAgent final
   HashSet<int> distributed_nodes_requested_;
   HashMap<int, int> cached_child_count_;
   HeapHashSet<WeakMember<Node>> forced_popovers_;
+  HeapHashSet<WeakMember<Node>> forced_interest_invokers_;
   int last_node_id_;
   Member<Document> document_;
   using SearchResults =

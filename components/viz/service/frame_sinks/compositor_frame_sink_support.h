@@ -27,6 +27,7 @@
 #include "components/viz/common/surfaces/surface_range.h"
 #include "components/viz/common/surfaces/video_capture_target.h"
 #include "components/viz/service/frame_sinks/begin_frame_tracker.h"
+#include "components/viz/service/frame_sinks/frame_sink_throttler.h"
 #include "components/viz/service/frame_sinks/surface_resource_holder.h"
 #include "components/viz/service/frame_sinks/surface_resource_holder_client.h"
 #include "components/viz/service/frame_sinks/video_capture/capturable_frame_sink.h"
@@ -49,8 +50,8 @@ class Surface;
 class SurfaceManager;
 
 // Possible outcomes of MaybeSubmitCompositorFrame().
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
+// These values were previously persisted to logs. Entries should not be
+// renumbered and numeric values should never be reused.
 enum class SubmitResult {
   ACCEPTED = 0,
   COPY_OUTPUT_REQUESTS_NOT_ALLOWED = 1,
@@ -58,8 +59,12 @@ enum class SubmitResult {
   SIZE_MISMATCH = 3,
   SURFACE_ID_DECREASED = 4,
   SURFACE_OWNED_BY_ANOTHER_CLIENT = 5,
+  HIT_TEST_DATA_INVALID = 6,
+  INVALID_FRAME = 7,
+  INVALID_DISPLAY_TRANSFORM = 8,
+  INVALID_BEGIN_FRAME_ACK = 9,
   // Magic constant used by the histogram macros.
-  kMaxValue = SURFACE_OWNED_BY_ANOTHER_CLIENT,
+  kMaxValue = INVALID_BEGIN_FRAME_ACK,
 };
 
 class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
@@ -110,6 +115,17 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
   FrameSinkManagerImpl* frame_sink_manager() { return frame_sink_manager_; }
   BeginFrameSource* begin_frame_source() { return begin_frame_source_; }
 
+  void set_resource_return_delegate(LayerContextImpl* delegate) {
+    resource_return_delegate_ = delegate;
+  }
+  LayerContextImpl* resource_return_delegate() const {
+    return resource_return_delegate_;
+  }
+
+  base::WeakPtr<CompositorFrameSinkSupport> GetWeakPtr() {
+    return weak_factory_.GetWeakPtr();
+  }
+
   const FrameTimingDetailsMap& timing_details() {
     return frame_timing_details_;
   }
@@ -142,15 +158,22 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
   void SetThreads(bool from_untrusted_client,
                   std::vector<Thread> unverified_threads);
 
-  // Throttles the BeginFrames to send at |interval| if |interval| is greater
-  // than zero, or clears previously set throttle if zero.
-  // If |simple_cadence_only| is true, then it will further check if the
-  // |interval| is a simple cadence and apply only if that is true. Returns true
-  // if we should throttle, otherwise false.
-  bool ThrottleBeginFrame(base::TimeDelta interval,
-                          bool simple_cadence_only = false);
+  FrameSinkThrottler& GetThrottlerForTesting() { return throttler_; }
+  const FrameSinkThrottler& GetThrottlerForTesting() const {
+    return throttler_;
+  }
 
-  void SetLastKnownVsync(base::TimeDelta vsync_interval);
+  // Sets a throttling interval to be used. If |interval| is zero, any
+  // previously set interval is cleared. Note that the frame sink may still be
+  // throttled by other signals (e.g. cadence) unless SetAllowThrottling(false)
+  // is called.
+  void SetThrottleInterval(base::TimeDelta interval);
+
+  // If |allowed| is false, the begin frame interval will be base::TimeDelta()
+  // regardless of any other throttling.
+  void SetAllowThrottling(bool allowed);
+
+  // If other clients are interactive, reduce frame cadence if `throttled`.
 
   // SurfaceClient implementation.
   void OnSurfaceCommitted(Surface* surface) override;
@@ -165,7 +188,7 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
       const std::vector<TransferableResource>& resources) override;
   // Takes the CopyOutputRequests that were requested for a surface with at
   // most |local_surface_id|.
-  std::vector<PendingCopyOutputRequest> TakeCopyOutputRequests(
+  std::vector<std::unique_ptr<PendingCopyOutputRequest>> TakeCopyOutputRequests(
       const LocalSurfaceId& local_surface_id) override;
   void OnFrameTokenChanged(uint32_t frame_token) override;
   void SendCompositorFrameAck() override;
@@ -187,7 +210,7 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
   void SetWantsAnimateOnlyBeginFrames();
   void SetAutoNeedsBeginFrame();
   void SetNoCompositorFrameAcks();
-  void DidNotProduceFrame(const BeginFrameAck& ack);
+  bool DidNotProduceFrame(const BeginFrameAck& ack);
   void SubmitCompositorFrame(
       const LocalSurfaceId& local_surface_id,
       CompositorFrame frame,
@@ -233,8 +256,8 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
       const VideoCaptureSubTarget& sub_target) const override;
   void OnClientCaptureStarted() override;
   void OnClientCaptureStopped() override;
-  void RequestCopyOfOutput(
-      PendingCopyOutputRequest pending_copy_output_request) override;
+  void RequestCopyOfOutput(std::unique_ptr<PendingCopyOutputRequest>
+                               pending_copy_output_request) override;
   const CompositorFrameMetadata* GetLastActivatedFrameMetadata() override;
 
   HitTestAggregator* GetHitTestAggregator();
@@ -251,7 +274,7 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
   // string.
   static const char* GetSubmitResultAsString(SubmitResult result);
 
-  const std::vector<PendingCopyOutputRequest>&
+  const std::vector<std::unique_ptr<PendingCopyOutputRequest>>&
   copy_output_requests_for_testing() const {
     return copy_output_requests_;
   }
@@ -266,6 +289,8 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
   const RegionCaptureBounds& current_capture_bounds() const {
     return current_capture_bounds_;
   }
+
+  LayerContextImpl* layer_context_for_testing() { return layer_context_.get(); }
 
   void SetExternalReservedResourceDelegate(ReservedResourceDelegate* delegate);
 
@@ -347,10 +372,14 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
 
   void DoReturnResources(std::vector<ReturnedResource> resources);
 
+  base::TimeDelta begin_frame_interval() const;
+
   const raw_ptr<mojom::CompositorFrameSinkClient> client_;
 
   const raw_ptr<FrameSinkManagerImpl> frame_sink_manager_;
   const raw_ptr<SurfaceManager> surface_manager_;
+
+  raw_ptr<LayerContextImpl> resource_return_delegate_ = nullptr;
 
   const FrameSinkId frame_sink_id_;
   SurfaceId last_activated_surface_id_;
@@ -430,7 +459,7 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
   // PendingCopyOutputRequest::local_surface_id will not. Note that if the
   // PendingCopyOutputRequest::local_surface_id is default initialized, then the
   // next surface will take it regardless of its LocalSurfaceId.
-  std::vector<PendingCopyOutputRequest> copy_output_requests_;
+  std::vector<std::unique_ptr<PendingCopyOutputRequest>> copy_output_requests_;
 
   bool callback_received_begin_frame_ = true;
   bool callback_received_receive_ack_ = true;
@@ -511,16 +540,11 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
 
   // Initialize |last_drawn_frame_index_| as though the frame before the first
   // has been drawn.
-  static_assert(kFrameIndexStart > 1,
-                "|last_drawn_frame_index| relies on kFrameIndexStart > 1");
+  static_assert(kFrameIndexStart >= 1,
+                "|last_drawn_frame_index| relies on kFrameIndexStart >= 1");
   uint32_t last_drawn_frame_index_ = kFrameIndexStart - 1;
 
-  // This value represents throttling on sending a BeginFrame. If non-zero, it
-  // represents the duration of time in between sending two consecutive frames.
-  // If zero, no throttling would be applied.
-  base::TimeDelta begin_frame_interval_;
-
-  base::TimeDelta last_known_vsync_interval_;
+  FrameSinkThrottler throttler_;
 
   // The set of surfaces owned by this frame sink that have pending frame.
   base::flat_set<raw_ptr<Surface, CtnExperimental>> pending_surfaces_;
@@ -558,6 +582,8 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
   // If exists, then we need to notify this callback when we have a
   // SurfaceAnimationManager.
   base::OnceCallback<void()> surface_animation_manager_callback_;
+
+
 
   base::WeakPtrFactory<CompositorFrameSinkSupport> weak_factory_{this};
 };

@@ -39,7 +39,6 @@
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
 #import "ios/chrome/test/earl_grey/chrome_test_case.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
-#import "ios/web/public/test/http_server/http_server.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "ui/base/l10n/l10n_util.h"
@@ -63,7 +62,7 @@ constexpr char kFormElementSubmit[] = "submit_profile";
 constexpr base::TimeDelta kTypingCoolDownPeriod = base::Milliseconds(50);
 
 // Email value used by the tests.
-constexpr std::string_view kEmail = "foo1@gmail.com";
+constexpr std::string_view kEmail = "missing_names@gmail.com";
 
 struct FullAddressFormPageParams {
   // True if the submission should be default prevented.
@@ -233,11 +232,6 @@ void TypeTextInXframeField(NSString* fieldID, NSString* text) {
     config.features_enabled.push_back(kAutofillFixXhrForXframe);
   }
 
-  if ([self isRunningTest:@selector(testUserData_LocalUpdate)]) {
-    config.features_enabled.push_back(
-        autofill::features::kAutofillEnableSupportForHomeAndWork);
-  }
-
   // TODO(crbug.com/428189566): Re-enable after the test is fixed for
   // ios-fieldtrial-rel.
   if ([self isRunningTest:@selector
@@ -261,6 +255,11 @@ void TypeTextInXframeField(NSString* fieldID, NSString* text) {
   // Ensure there are no saved profiles.
   GREYAssertEqual(0U, [AutofillAppInterface profilesCount],
                   @"There should be no saved profile.");
+
+  [ChromeEarlGrey waitForWebStateContainingText:"Profile Autofill"];
+
+  GREYAssertTrue([AutofillAppInterface waitForFormToBeCachedInMainFrame],
+                 @"Forms were not parsed and cached.");
 
   [ChromeEarlGrey tapWebStateElementWithID:@"fill_profile_president"];
   [ChromeEarlGrey tapWebStateElementWithID:@"submit_profile"];
@@ -350,12 +349,9 @@ void TypeTextInXframeField(NSString* fieldID, NSString* text) {
 
   // Load the URL and wait for its content to be loaded.
   [ChromeEarlGrey loadURL:fullURL];
-
-  // Wait until the expected content is loaded in the DOM. If the page is in an
-  // error state this verification will fail.
-  NSString* wait_content_script =
-      @"document.body.innerText.includes('Address Form Test Page')";
-  [ChromeEarlGrey waitForJavaScriptCondition:wait_content_script];
+  [ChromeEarlGrey waitForWebStateContainingText:"Address Form Test Page"];
+  GREYAssertTrue([AutofillAppInterface waitForFormToBeCachedInMainFrame],
+                 @"Forms were not parsed and cached.");
 
   // Call the helper function embedded in the page content to fill the form.
   [ChromeEarlGrey evaluateJavaScriptForSideEffect:@"FillForm();"];
@@ -455,7 +451,8 @@ void TypeTextInXframeField(NSString* fieldID, NSString* text) {
 
 // Ensures that the profile is saved to Account after submitting the form.
 - (void)testUserData_AccountSave {
-  [SigninEarlGrey signinWithFakeIdentity:[FakeSystemIdentity fakeIdentity1]];
+  [SigninEarlGrey
+      signinWithFakeIdentity:[FakeSystemIdentity fakeIdentityWithMissingNames]];
 
   [self fillPresidentProfileAndShowSaveModal];
 
@@ -488,7 +485,8 @@ void TypeTextInXframeField(NSString* fieldID, NSString* text) {
 // iframes is enabled.
 - (void)testUserData_AccountSave_AutofillAcrossIframe_XHR {
   // Sign-in so the profile can be saved into the account.
-  [SigninEarlGrey signinWithFakeIdentity:[FakeSystemIdentity fakeIdentity1]];
+  [SigninEarlGrey
+      signinWithFakeIdentity:[FakeSystemIdentity fakeIdentityWithMissingNames]];
 
   // Trigger the save infobar via XHR submission in the child frame.
   [self triggerSaveInfobarViaXHRSubmission];
@@ -512,7 +510,8 @@ void TypeTextInXframeField(NSString* fieldID, NSString* text) {
 // Ensures that the profile is saved to Account after submitting and editing the
 // form.
 - (void)testUserData_AccountEdit {
-  [SigninEarlGrey signinWithFakeIdentity:[FakeSystemIdentity fakeIdentity1]];
+  [SigninEarlGrey
+      signinWithFakeIdentity:[FakeSystemIdentity fakeIdentityWithMissingNames]];
 
   [self fillPresidentProfileAndShowSaveModal];
 
@@ -531,8 +530,9 @@ void TypeTextInXframeField(NSString* fieldID, NSString* text) {
       assertWithMatcher:grey_sufficientlyVisible()];
 
   // Save the profile.
-  [[EarlGrey selectElementWithMatcher:ModalButtonMatcher()]
-      performAction:grey_tap()];
+  [[[EarlGrey selectElementWithMatcher:ModalButtonMatcher()]
+         usingSearchAction:grey_scrollInDirection(kGREYDirectionDown, 200)
+      onElementWithMatcher:EditProfileBottomSheet()] performAction:grey_tap()];
 
   // Ensure profile is saved locally.
   GREYAssertEqual(1U, [AutofillAppInterface profilesCount],
@@ -543,13 +543,15 @@ void TypeTextInXframeField(NSString* fieldID, NSString* text) {
 
 // Ensures that if a local profile is filled in a form and submitted, the user
 // is asked for a migration prompt and the profile is moved to the Account.
-- (void)testUserData_MigrationToAccount {
+// TODO(crbug.com/520302619): Flaky on waterfall.
+- (void)FLAKY_testUserData_MigrationToAccount {
   [AutofillAppInterface clearProfilesStore];
 
   // Store one local address.
   [AutofillAppInterface saveExampleProfile];
 
-  [SigninEarlGrey signinWithFakeIdentity:[FakeSystemIdentity fakeIdentity1]];
+  [SigninEarlGrey
+      signinWithFakeIdentity:[FakeSystemIdentity fakeIdentityWithMissingNames]];
 
   GREYAssertTrue(self.testServer->Start(), @"Server did not start.");
   [ChromeEarlGrey loadURL:self.testServer->GetURL(kProfileForm)];
@@ -673,7 +675,8 @@ void TypeTextInXframeField(NSString* fieldID, NSString* text) {
 // Tests that the save address flow is still working correctly when the address
 // badge is removed.
 - (void)FLAKY_testSaveWithoutBadge {
-  [SigninEarlGrey signinWithFakeIdentity:[FakeSystemIdentity fakeIdentity1]];
+  [SigninEarlGrey
+      signinWithFakeIdentity:[FakeSystemIdentity fakeIdentityWithMissingNames]];
 
   [self fillPresidentProfileAndShowSaveModal];
 
@@ -807,7 +810,8 @@ void TypeTextInXframeField(NSString* fieldID, NSString* text) {
 // TODO(crbug.com/407573862): Re-enable after the test is fixed for
 // ios-fieldtrial-rel.
 - (void)DISABLED_testSaveButtonEnabledStateDependingOnRequiredFields {
-  [SigninEarlGreyUI signinWithFakeIdentity:[FakeSystemIdentity fakeIdentity1]];
+  [SigninEarlGreyUI
+      signinWithFakeIdentity:[FakeSystemIdentity fakeIdentityWithMissingNames]];
   [ChromeEarlGrey waitForSyncTransportStateActiveWithTimeout:base::Seconds(10)];
 
   // Fill and submit the form.
@@ -854,7 +858,8 @@ void TypeTextInXframeField(NSString* fieldID, NSString* text) {
 // corresponding feature allows it.
 - (void)testSubmissionDetection_defaultPrevented_whenAllowed {
   // Sign-in so the profile can be saved into the account.
-  [SigninEarlGrey signinWithFakeIdentity:[FakeSystemIdentity fakeIdentity1]];
+  [SigninEarlGrey
+      signinWithFakeIdentity:[FakeSystemIdentity fakeIdentityWithMissingNames]];
 
   // Submit the form with `defaultPrevented` not considered.
   FullAddressFormPageParams params{.default_prevented = true, .redirect = true};

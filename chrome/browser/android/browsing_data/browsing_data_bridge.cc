@@ -16,7 +16,6 @@
 #include "base/android/jni_weak_ref.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
 #include "chrome/browser/browsing_data/browsing_data_important_sites_util.h"
@@ -27,7 +26,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/common/channel_info.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/browsing_data/content/android/browsing_data_model_android.h"
 #include "components/browsing_data/content/browsing_data_model.h"
 #include "components/browsing_data/core/browsing_data_utils.h"
@@ -42,7 +40,7 @@
 #include "ui/base/l10n/l10n_util.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
-#include "chrome/android/chrome_jni_headers/BrowsingDataBridge_jni.h"
+#include "chrome/browser/browsing_data/android/jni_headers/BrowsingDataBridge_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::JavaRef;
@@ -81,12 +79,10 @@ static void JNI_BrowsingDataBridge_ClearBrowsingData(
     JNIEnv* env,
     Profile* profile,
     const JavaRef<jobject>& jcallback,
-    std::vector<int>& data_types_vector,
-    jint time_period,
-    std::vector<std::string>& excluding_domains,
-    std::vector<int32_t>& excluding_domain_reasons,
-    std::vector<std::string>& ignoring_domains,
-    std::vector<int32_t>& ignoring_domain_reasons) {
+    const std::vector<int>& data_types_vector,
+    int32_t time_period,
+    const std::vector<std::string>& excluding_domains,
+    const std::vector<std::string>& ignoring_domains) {
   TRACE_EVENT0("browsing_data", "BrowsingDataBridge_ClearBrowsingData");
 
   BrowsingDataRemover* browsing_data_remover =
@@ -133,8 +129,7 @@ static void JNI_BrowsingDataBridge_ClearBrowsingData(
 
   if (!excluding_domains.empty() || !ignoring_domains.empty()) {
     site_engagement::ImportantSitesUtil::RecordExcludedAndIgnoredImportantSites(
-        profile, excluding_domains, excluding_domain_reasons, ignoring_domains,
-        ignoring_domain_reasons);
+        profile, excluding_domains, ignoring_domains);
   }
 
   base::OnceCallback<void(uint64_t)> callback = base::BindOnce(
@@ -201,24 +196,24 @@ static void JNI_BrowsingDataBridge_FetchImportantSites(
 }
 
 // This value should not change during a sessions, as it's used for UMA metrics.
-static jint JNI_BrowsingDataBridge_GetMaxImportantSites(JNIEnv* env) {
+static int32_t JNI_BrowsingDataBridge_GetMaxImportantSites(JNIEnv* env) {
   return site_engagement::ImportantSitesUtil::kMaxImportantSites;
 }
 
 static void JNI_BrowsingDataBridge_MarkOriginAsImportantForTesting(
     JNIEnv* env,
     Profile* profile,
-    std::string& jorigin) {
+    const std::string& jorigin) {
   GURL origin(jorigin);
   CHECK(origin.is_valid());
   site_engagement::ImportantSitesUtil::MarkOriginAsImportantForTesting(profile,
                                                                        origin);
 }
 
-static jboolean JNI_BrowsingDataBridge_GetBrowsingDataDeletionPreference(
+static bool JNI_BrowsingDataBridge_GetBrowsingDataDeletionPreference(
     JNIEnv* env,
     Profile* profile,
-    jint data_type) {
+    int32_t data_type) {
   DCHECK_GE(data_type, 0);
   DCHECK_LE(data_type,
             static_cast<int>(browsing_data::BrowsingDataType::MAX_VALUE));
@@ -229,8 +224,7 @@ static jboolean JNI_BrowsingDataBridge_GetBrowsingDataDeletionPreference(
   // data types for consistency.
   std::string pref;
   if (!browsing_data::GetDeletionPreferenceFromDataType(
-          static_cast<browsing_data::BrowsingDataType>(data_type),
-          browsing_data::ClearBrowsingDataTab::ADVANCED, &pref)) {
+          static_cast<browsing_data::BrowsingDataType>(data_type), &pref)) {
     return false;
   }
 
@@ -240,39 +234,36 @@ static jboolean JNI_BrowsingDataBridge_GetBrowsingDataDeletionPreference(
 static void JNI_BrowsingDataBridge_SetBrowsingDataDeletionPreference(
     JNIEnv* env,
     Profile* profile,
-    jint data_type,
-    jboolean value) {
+    int32_t data_type,
+    bool value) {
   DCHECK_GE(data_type, 0);
   DCHECK_LE(data_type,
             static_cast<int>(browsing_data::BrowsingDataType::MAX_VALUE));
 
   std::string pref;
   if (!browsing_data::GetDeletionPreferenceFromDataType(
-          static_cast<browsing_data::BrowsingDataType>(data_type),
-          browsing_data::ClearBrowsingDataTab::ADVANCED, &pref)) {
+          static_cast<browsing_data::BrowsingDataType>(data_type), &pref)) {
     return;
   }
 
   GetPrefService(profile)->SetBoolean(pref, value);
 }
 
-static jint JNI_BrowsingDataBridge_GetBrowsingDataDeletionTimePeriod(
+static int32_t JNI_BrowsingDataBridge_GetBrowsingDataDeletionTimePeriod(
     JNIEnv* env,
     Profile* profile) {
   return GetPrefService(profile)->GetInteger(
-      browsing_data::GetTimePeriodPreferenceName(
-          browsing_data::ClearBrowsingDataTab::ADVANCED));
+      browsing_data::GetTimePeriodPreferenceName());
 }
 
 static void JNI_BrowsingDataBridge_SetBrowsingDataDeletionTimePeriod(
     JNIEnv* env,
     Profile* profile,
-    jint time_period) {
+    int32_t time_period) {
   DCHECK_GE(time_period, 0);
   DCHECK_LE(time_period,
             static_cast<int>(browsing_data::TimePeriod::TIME_PERIOD_LAST));
-  const char* pref_name = browsing_data::GetTimePeriodPreferenceName(
-      browsing_data::ClearBrowsingDataTab::ADVANCED);
+  const char* pref_name = browsing_data::GetTimePeriodPreferenceName();
   PrefService* prefs = GetPrefService(profile);
   int previous_value = prefs->GetInteger(pref_name);
   if (time_period != previous_value) {

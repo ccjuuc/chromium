@@ -16,11 +16,8 @@
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/external_install_manager.h"
 #include "chrome/browser/extensions/external_provider_manager.h"
-#include "chrome/browser/extensions/webstore_data_fetcher.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/global_error/global_error_waiter.h"
-#include "chrome/grit/branded_strings.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
@@ -29,6 +26,7 @@
 #include "extensions/browser/mock_external_provider.h"
 #include "extensions/browser/pref_names.h"
 #include "extensions/browser/test_extension_registry_observer.h"
+#include "extensions/browser/webstore_data_fetcher.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/re2/src/re2/re2.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -101,7 +99,7 @@ class ExternalInstallErrorTest : public ExtensionBrowserTest {
   }
 };
 
-// Test that global errors don't crash on shutdown. See crbug.com/720081.
+// Test that global errors don't crash on shutdown. See crbug.com/40519666.
 IN_PROC_BROWSER_TEST_F(ExternalInstallErrorTest,
                        TestShutdownWithWebstoreExtension) {
   // This relies on prompting for external extensions.
@@ -120,8 +118,7 @@ IN_PROC_BROWSER_TEST_F(ExternalInstallErrorTest,
   ASSERT_EQ(1u, errors.size());
   EXPECT_EQ(kId, errors[0]->extension_id());
 
-  ExtensionInstallPrompt::Prompt* alert_prompt =
-      errors[0]->GetPromptForTesting();
+  InstallPromptData* alert_prompt = errors[0]->GetPromptForTesting();
   ASSERT_TRUE(alert_prompt);
 
   // Validate that the alert prompt's data corresponds to what is returned from
@@ -152,8 +149,7 @@ IN_PROC_BROWSER_TEST_F(ExternalInstallErrorTest,
   ASSERT_EQ(1u, errors.size());
   EXPECT_EQ(kId, errors[0]->extension_id());
 
-  ExtensionInstallPrompt::Prompt* alert_prompt =
-      errors[0]->GetPromptForTesting();
+  InstallPromptData* alert_prompt = errors[0]->GetPromptForTesting();
   ASSERT_TRUE(alert_prompt);
 
   // Validate that the alert prompt's data corresponds to what is returned from
@@ -171,7 +167,7 @@ IN_PROC_BROWSER_TEST_F(ExternalInstallErrorTest,
   constexpr char kId[] = "akjooamlhcgeopfifcmlggaebeocgokj";
   PrefService* prefs = profile()->GetPrefs();
   {
-    base::Value::List ids;
+    base::ListValue ids;
     ids.Append(kId);
     prefs->SetList(pref_names::kInitialInstallList, std::move(ids));
     prefs->SetString(pref_names::kInitialInstallProviderName, kProvider);
@@ -187,8 +183,7 @@ IN_PROC_BROWSER_TEST_F(ExternalInstallErrorTest,
       ExternalInstallManager::Get(profile())->GetErrorsForTesting();
   ASSERT_EQ(1u, errors.size());
   EXPECT_EQ(kId, errors[0]->extension_id());
-  ExtensionInstallPrompt::Prompt* alert_prompt =
-      errors[0]->GetPromptForTesting();
+  InstallPromptData* alert_prompt = errors[0]->GetPromptForTesting();
   ASSERT_TRUE(alert_prompt);
 
   // Expect the provider-aware initial-install title.
@@ -209,7 +204,7 @@ IN_PROC_BROWSER_TEST_F(ExternalInstallErrorTest,
   constexpr char kId[] = "ldnnhddmnhbkjipkidpdiheffobcpfmf";
   PrefService* prefs = profile()->GetPrefs();
   {
-    base::Value::List ids;
+    base::ListValue ids;
     // NOTE: Intentionally NOT appending kId here.
     ids.Append("oooooooooooooooooooooooooooooooo");
     prefs->SetList(pref_names::kInitialInstallList, std::move(ids));
@@ -226,8 +221,7 @@ IN_PROC_BROWSER_TEST_F(ExternalInstallErrorTest,
       ExternalInstallManager::Get(profile())->GetErrorsForTesting();
   ASSERT_EQ(1u, errors.size());
   EXPECT_EQ(kId, errors[0]->extension_id());
-  ExtensionInstallPrompt::Prompt* alert_prompt =
-      errors[0]->GetPromptForTesting();
+  InstallPromptData* alert_prompt = errors[0]->GetPromptForTesting();
   ASSERT_TRUE(alert_prompt);
 
   const Extension* extension = alert_prompt->extension();

@@ -13,9 +13,9 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -216,6 +216,8 @@ class BubbleDialogDelegate::AnchorViewObserver : public ViewObserver {
   AnchorViewObserver(BubbleDialogDelegate* parent, View* anchor_view)
       : parent_(parent), anchor_view_(anchor_view) {
     anchor_view_->AddObserver(this);
+    scoped_notify_ = std::make_unique<
+        views::View::ScopedNotifyObserversOnVisibleBoundsChanged>(*anchor_view);
     AddToAnchorVector();
   }
 
@@ -229,20 +231,30 @@ class BubbleDialogDelegate::AnchorViewObserver : public ViewObserver {
 
   View* anchor_view() const { return anchor_view_; }
 
+  void UpdateBubbleVisibility(bool visible) {
+    bubble_widget_visible_ = visible;
+    if (visible && update_bounds_when_visible_) {
+      parent_->OnAnchorBoundsChanged();
+      update_bounds_when_visible_ = false;
+    }
+  }
+
   // ViewObserver:
   void OnViewIsDeleting(View* observed_view) override {
     // The anchor is being deleted, make sure the parent bubble no longer
     // observes it.
     DCHECK_EQ(anchor_view_, observed_view);
+    scoped_notify_ = nullptr;
     parent_->SetAnchorView(nullptr);
   }
 
-  void OnViewBoundsChanged(View* observed_view) override {
-    // This code really wants to know the anchor bounds in screen coordinates
-    // have changed. There isn't a good way to detect this outside of the view.
-    // Observing View bounds changing catches some cases but not all of them.
+  void OnViewVisibleBoundsChanged(View* observed_view) override {
     DCHECK_EQ(anchor_view_, observed_view);
-    parent_->OnAnchorBoundsChanged();
+    if (bubble_widget_visible_) {
+      parent_->OnAnchorBoundsChanged();
+    } else {
+      update_bounds_when_visible_ = true;
+    }
   }
 
   // TODO(pbos): Consider observing View visibility changes and only updating
@@ -251,7 +263,7 @@ class BubbleDialogDelegate::AnchorViewObserver : public ViewObserver {
  private:
   void AddToAnchorVector() {
     auto& vector = GetAnchorVector(anchor_view_);
-    DCHECK(!base::Contains(vector, parent_));
+    DCHECK(!std::ranges::contains(vector, parent_));
     vector.push_back(parent_);
   }
 
@@ -273,8 +285,12 @@ class BubbleDialogDelegate::AnchorViewObserver : public ViewObserver {
     }
   }
 
+  std::unique_ptr<views::View::ScopedNotifyObserversOnVisibleBoundsChanged>
+      scoped_notify_;
   const raw_ptr<BubbleDialogDelegate> parent_;
   const raw_ptr<View> anchor_view_;
+  bool bubble_widget_visible_ = true;
+  bool update_bounds_when_visible_ = false;
 };
 
 // This class is responsible for observing events on a BubbleDialogDelegate's
@@ -496,44 +512,71 @@ BubbleDialogDelegate::BubbleDialogDelegate(BubbleAnchor anchor,
       base::Unretained(this), *bubble_created_time_));
 }
 
+BubbleDialogDelegate::BubbleDialogDelegate(View* anchor_view,
+                                           BubbleBorder::Arrow arrow,
+                                           BubbleBorder::Shadow shadow,
+                                           bool autosize)
+    : BubbleDialogDelegate(BubbleAnchor(anchor_view), arrow, shadow, autosize) {
+}
+
 BubbleDialogDelegate::~BubbleDialogDelegate() {
   SetAnchorView(nullptr);
 }
 
 // static
-Widget* BubbleDialogDelegate::CreateBubble(
-    BubbleDialogDelegate* bubble_delegate,
-    Widget::InitParams::Ownership ownership) {
-  // On Mac, MODAL_TYPE_WINDOW is implemented using sheets, which can't be
+Widget* BubbleDialogDelegate::CreateBubbleInternal(
+    BubbleDialogDelegate* delegate,
+    Widget::InitParams::Ownership ownership,
+    Widget::ClosedCallback on_close) {
+  // On Mac, ModalType::kWindow is implemented using sheets, which can't be
   // anchored at a specific point - they are always placed near the top center
   // of the window. To avoid unpleasant surprises, disallow setting an anchor
   // view or rectangle on these types of bubbles.
-  if (bubble_delegate->GetModalType() == ui::mojom::ModalType::kWindow) {
-    DCHECK(!bubble_delegate->GetAnchorView());
-    DCHECK_EQ(bubble_delegate->GetAnchorRect(), gfx::Rect());
+  if (delegate->GetModalType() == ui::mojom::ModalType::kWindow) {
+    DCHECK(!delegate->GetAnchorView());
+    DCHECK_EQ(delegate->GetAnchorRect(), gfx::Rect());
   }
 
-  bubble_delegate->Init();
+  delegate->Init();
   // Get the latest anchor widget from the anchor view at bubble creation time.
-  if (auto* anchor_view = bubble_delegate->GetAnchorView()) {
-    bubble_delegate->SetAnchorView(anchor_view);
+  if (auto* anchor_view = delegate->GetAnchorView()) {
+    delegate->SetAnchorView(anchor_view);
   }
-  Widget* const bubble_widget = CreateBubbleWidget(bubble_delegate, ownership);
 
-  bubble_delegate->set_adjust_if_offscreen(
-      PlatformStyle::kAdjustBubbleIfOffscreen);
+  Widget* const bubble_widget = CreateBubbleWidget(delegate, ownership);
 
-  bubble_delegate->SizeToContents();
-  bubble_delegate->bubble_widget_observer_ =
-      std::make_unique<BubbleWidgetObserver>(bubble_delegate, bubble_widget);
+  delegate->set_adjust_if_offscreen(PlatformStyle::kAdjustBubbleIfOffscreen);
+  delegate->SizeToContents();
+  delegate->bubble_widget_observer_ =
+      std::make_unique<BubbleWidgetObserver>(delegate, bubble_widget);
+
+  if (on_close) {
+    bubble_widget->MakeCloseSynchronous(std::move(on_close));
+  }
+
   return bubble_widget;
 }
 
 // static
-Widget* BubbleDialogDelegate::CreateBubble(
+Widget* BubbleDialogDelegate::CreateBubbleDeprecated(
+    BubbleDialogDelegate* bubble_delegate,
+    Widget::InitParams::Ownership ownership) {
+  return CreateBubbleInternal(bubble_delegate, ownership);
+}
+
+// static
+Widget* BubbleDialogDelegate::CreateBubbleDeprecated(
     std::unique_ptr<BubbleDialogDelegate> bubble_delegate_unique,
     Widget::InitParams::Ownership ownership) {
-  return CreateBubble(bubble_delegate_unique.release(), ownership);
+  return CreateBubbleDeprecated(bubble_delegate_unique.release(), ownership);
+}
+
+// static
+std::unique_ptr<Widget> BubbleDialogDelegate::CreateBubble(
+    BubbleDialogDelegate* delegate,
+    base::OnceCallback<void(Widget::ClosedReason)> on_close) {
+  return base::WrapUnique(CreateBubbleInternal(
+      delegate, Widget::InitParams::CLIENT_OWNS_WIDGET, std::move(on_close)));
 }
 
 // static
@@ -573,10 +616,15 @@ BubbleDialogDelegate* BubbleDialogDelegate::AsBubbleDialogDelegate() {
 std::unique_ptr<FrameView> BubbleDialogDelegate::CreateFrameView(
     Widget* widget) {
   const FrameMargins& margin = frame_margins();
-  auto frame = std::make_unique<BubbleDialogFrameView>(margin.title.value());
+  auto frame = std::make_unique<BubbleDialogFrameView>(margin.title);
 
-  frame->SetFootnoteMargins(margin.footnote.value());
+  frame->SetFootnoteMargins(margin.footnote);
   frame->SetFootnoteView(DisownFootnoteView());
+  frame->set_use_anchor_window_bounds(use_anchor_window_bounds_);
+  if (available_screen_bounds_callback_) {
+    frame->set_available_screen_bounds_callback(
+        available_screen_bounds_callback_);
+  }
 
   std::unique_ptr<BubbleBorder> border =
       std::make_unique<BubbleBorder>(arrow(), GetShadow());
@@ -706,14 +754,31 @@ BubbleDialogDelegate::PreventCloseOnDeactivate() {
       new CloseOnDeactivatePin(close_on_deactivate_pins_->GetWeakPtr()));
 }
 
-void BubbleDialogDelegate::SetHighlightedButton(Button* highlighted_button) {
+void BubbleDialogDelegate::SetHighlightedElement(ui::ElementIdentifier id) {
+  auto* element_tracker = ui::ElementTracker::GetElementTracker();
+
+  auto* parent_widget =
+      anchor_widget() ? anchor_widget()
+                      : views::Widget::GetWidgetForNativeView(parent_window());
+  auto context = views::ElementTrackerViews::GetContextForWidget(parent_widget);
+
+  // `highlighted_button_tracker_` will deal with the hiding part.
+  // Unretained is safe because `highlighted_element_shown_subscription_` owns
+  // the callback subscription.
+  highlighted_element_shown_subscription_ =
+      element_tracker->AddElementShownCallback(
+          id, context,
+          base::BindRepeating(
+              &BubbleDialogDelegate::SetResolvedHighlightedElement,
+              base::Unretained(this)));
+  SetResolvedHighlightedElement(element_tracker->GetUniqueElement(id, context));
+}
+
+void BubbleDialogDelegate::SetResolvedHighlightedElement(
+    ui::TrackedElement* highlighted_element) {
   bool visible = GetWidget() && GetWidget()->IsVisible();
-  // If the Widget is visible, ensure the old highlight (if any) is removed
-  // when the highlighted view changes.
-  if (visible && highlighted_button != highlighted_button_tracker_.view()) {
-    UpdateHighlightedButton(false);
-  }
-  highlighted_button_tracker_.SetView(highlighted_button);
+  highlighted_element_tracker_ = highlighted_element;
+
   if (visible) {
     UpdateHighlightedButton(true);
   }
@@ -821,10 +886,12 @@ gfx::Size BubbleDialogDelegate::GetMaxAvailableScreenSpaceToPlaceBubble(
 #endif
 
   gfx::Rect anchor_rect;
-  if (std::holds_alternative<View*>(anchor)) {
-    anchor_rect = std::get<View*>(anchor)->GetAnchorBoundsInScreen();
+  if (View* view = anchor.GetIfView()) {
+    anchor_rect = view->GetAnchorBoundsInScreen();
   } else {
-    anchor_rect = std::get<ui::TrackedElement*>(anchor)->GetScreenBounds();
+    ui::TrackedElement* element = anchor.GetIfElement();
+    CHECK(element);
+    anchor_rect = element->GetScreenBounds();
   }
   gfx::Rect screen_rect =
       display::Screen::Get()
@@ -918,7 +985,7 @@ BubbleDialogDelegate::BubbleUmaLogger::GetBubbleName() const {
 
 template <typename Value>
 void BubbleDialogDelegate::BubbleUmaLogger::LogMetric(
-    void (*uma_func)(std::string_view, Value),
+    void (*uma_func)(const std::string&, Value),
     std::string_view histogram_name,
     Value value) const {
   if (!base::FeatureList::IsEnabled(::features::kBubbleMetricsApi)) {
@@ -933,8 +1000,8 @@ void BubbleDialogDelegate::BubbleUmaLogger::LogMetric(
   }
 
   if (allowed_class_names_for_testing_.has_value()) {
-    if (!base::Contains(allowed_class_names_for_testing_.value(),
-                        bubble_name.value())) {
+    if (!std::ranges::contains(allowed_class_names_for_testing_.value(),
+                               bubble_name.value())) {
       return;
     }
   } else if (!views_metrics::IsValidBubbleName(bubble_name.value())) {
@@ -947,7 +1014,7 @@ void BubbleDialogDelegate::BubbleUmaLogger::LogMetric(
 
 // Instantiate template function to be able to use in views_unittests.
 template VIEWS_EXPORT void BubbleDialogDelegate::BubbleUmaLogger::LogMetric<
-    base::TimeDelta>(void (*uma_func)(std::string_view, base::TimeDelta),
+    base::TimeDelta>(void (*uma_func)(const std::string&, base::TimeDelta),
                      std::string_view histogram_name,
                      base::TimeDelta value) const;
 
@@ -1062,19 +1129,12 @@ void BubbleDialogDelegate::SetAnchorView(View* anchor_view) {
   // change as well.
   if (!anchor_view || anchor_widget() != anchor_view->GetWidget()) {
     if (anchor_widget()) {
-      if (GetWidget() && GetWidget()->IsVisible()) {
-        UpdateHighlightedButton(false);
-      }
       anchor_widget_ = nullptr;
     }
     if (anchor_view) {
       anchor_widget_ = anchor_view->GetProperty(kWidgetForAnchoringKey);
       if (!anchor_widget_) {
         anchor_widget_ = anchor_view->GetWidget();
-      }
-      if (anchor_widget_) {
-        const bool visible = GetWidget() && GetWidget()->IsVisible();
-        UpdateHighlightedButton(visible);
       }
     }
   }
@@ -1091,6 +1151,9 @@ void BubbleDialogDelegate::SetAnchorView(View* anchor_view) {
 
     SetAnchoredDialogKey();
   }
+
+  const bool visible = GetWidget() && GetWidget()->IsVisible();
+  UpdateHighlightedButton(visible);
 }
 
 void BubbleDialogDelegate::SetAnchorRect(const gfx::Rect& rect) {
@@ -1101,11 +1164,9 @@ void BubbleDialogDelegate::SetAnchorRect(const gfx::Rect& rect) {
 }
 
 void BubbleDialogDelegate::SetAnchor(BubbleAnchor anchor) {
-  if (std::holds_alternative<View*>(anchor)) {
-    SetAnchorView(std::get<View*>(anchor));
-  } else if (std::holds_alternative<ui::TrackedElement*>(anchor)) {
-    auto* tracked_element = std::get<ui::TrackedElement*>(anchor);
-    CHECK(tracked_element);
+  if (View* view = anchor.GetIfView()) {
+    SetAnchorView(view);
+  } else if (ui::TrackedElement* tracked_element = anchor.GetIfElement()) {
     if (auto* element_views = tracked_element->AsA<TrackedElementViews>()) {
       SetAnchorView(element_views->view());
     } else {
@@ -1120,7 +1181,8 @@ void BubbleDialogDelegate::SetAnchor(BubbleAnchor anchor) {
       SetAnchorWidget(widget);
     }
   } else {
-    CHECK(std::holds_alternative<std::nullptr_t>(anchor));
+    CHECK(anchor.IsNull());
+    anchor_tracked_element_ = nullptr;
     SetAnchorView(nullptr);
     SetAnchorRect(gfx::Rect());
   }
@@ -1128,16 +1190,45 @@ void BubbleDialogDelegate::SetAnchor(BubbleAnchor anchor) {
 
 BubbleAnchor BubbleDialogDelegate::GetAnchor() const {
   if (GetAnchorView()) {
-    return GetAnchorView();
+    return BubbleAnchor(GetAnchorView());
   }
   if (anchor_tracked_element_) {
-    return anchor_tracked_element_;
+    return BubbleAnchor(anchor_tracked_element_);
   }
-  return nullptr;
+  return BubbleAnchor();
+}
+
+bool BubbleDialogDelegate::IsSameAnchor(BubbleAnchor anchor) const {
+  // Normalize `anchor` similar to how SetAnchor would.
+  if (ui::TrackedElement* tracked_element = anchor.GetIfElement()) {
+    if (auto* element_views = tracked_element->AsA<TrackedElementViews>()) {
+      anchor = BubbleAnchor(element_views->view());
+    }
+  }
+
+  BubbleAnchor lhs = GetAnchor();
+
+  if (ui::TrackedElement* rhs_element = anchor.GetIfElement()) {
+    return rhs_element == lhs.GetIfElement();
+  } else if (views::View* rhs_view = anchor.GetIfView()) {
+    return rhs_view == lhs.GetIfView();
+  } else {
+    DCHECK(anchor.IsNull());
+    return lhs.IsNull();
+  }
+}
+
+void BubbleDialogDelegate::SetUseAnchorWindowBounds(bool use_anchor_bounds) {
+  use_anchor_window_bounds_ = use_anchor_bounds;
+  if (auto* frame_view = GetBubbleFrameView()) {
+    frame_view->set_use_anchor_window_bounds(use_anchor_bounds);
+  }
 }
 
 void BubbleDialogDelegate::SizeToContents() {
-  GetWidget()->SetBounds(GetDesiredWidgetBounds());
+  if (GetWidget() && !GetWidget()->IsClosed()) {
+    GetWidget()->SetBounds(GetDesiredWidgetBounds());
+  }
 }
 
 std::u16string BubbleDialogDelegate::GetSubtitle() const {
@@ -1228,6 +1319,10 @@ void BubbleDialogDelegate::OnBubbleWidgetVisibilityChanged(bool visible) {
     }
   }
 
+  if (anchor_view_observer_) {
+    anchor_view_observer_->UpdateBubbleVisibility(visible);
+  }
+
   UpdateHighlightedButton(visible);
 
   // Fire ax::mojom::Event::kAlert for bubbles marked as
@@ -1272,13 +1367,28 @@ void BubbleDialogDelegate::SetAnchoredDialogKey() {
 }
 
 void BubbleDialogDelegate::UpdateHighlightedButton(bool highlighted) {
-  Button* button = Button::AsButton(highlighted_button_tracker_.view());
-  button = button ? button : Button::AsButton(GetAnchorView());
-  if (button && highlight_button_when_shown_) {
-    if (highlighted) {
-      button_anchor_highlight_ = button->AddAnchorHighlight();
+  Button* button = nullptr;
+  ui::TrackedElement* element = highlighted_element_tracker_.get();
+  // Prioritize explicitly set highlights.
+  if (!element) {
+    button = Button::AsButton(GetAnchorView());
+    element = anchor_tracked_element_.get();
+  }
+
+  if (highlight_button_when_shown_) {
+    if (highlighted && (button || element)) {
+      if (button) {
+        button_anchor_highlight_ = button->AddAnchorHighlight();
+        element_anchor_highlight_.reset();
+      } else {
+        element_anchor_highlight_ =
+            ui::ElementHighlighter::GetElementHighlighter()->AddHighlight(
+                element);
+        button_anchor_highlight_.reset();
+      }
     } else {
       button_anchor_highlight_.reset();
+      element_anchor_highlight_.reset();
     }
   }
 }

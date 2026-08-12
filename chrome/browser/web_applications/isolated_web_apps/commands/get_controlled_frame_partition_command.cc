@@ -12,8 +12,8 @@
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolation_data.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
+#include "chrome/browser/web_applications/model/isolation_data.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
@@ -27,7 +27,7 @@ GetControlledFramePartitionWithLock(Profile* profile,
                                     const std::string& partition_name,
                                     bool in_memory,
                                     AppLock& lock,
-                                    base::Value::Dict& debug_info) {
+                                    base::DictValue& debug_info) {
   debug_info.Set("app_id", url_info.app_id());
   debug_info.Set("partition_name", partition_name);
   debug_info.Set("in_memory", in_memory);

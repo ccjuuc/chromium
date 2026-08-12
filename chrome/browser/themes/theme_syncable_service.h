@@ -15,6 +15,7 @@
 #include "chrome/browser/themes/theme_local_data_batch_uploader.h"
 #include "chrome/browser/themes/theme_service_observer.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "components/sync/base/data_type_histogram.h"
 #include "components/sync/model/sync_change.h"
 #include "components/sync/model/sync_data.h"
 #include "components/sync/model/syncable_service.h"
@@ -52,7 +53,9 @@ class ThemeSyncableService final : public syncer::SyncableService,
     // The remote theme has been applied locally or the other way around (or
     // there was no change to apply).
     kApplied,
-    // Remote theme failed to apply locally.
+    // Remote theme failed to apply locally, or no remote theme exists.
+    // TODO(crbug.com/328400930): Consider renaming this to
+    // kFailedOrNoAccountTheme or similar.
     kFailed,
     // Remote theme is an extension theme that is not installed locally, yet.
     // Theme sync triggered the installation that may not be applied yet (as
@@ -107,6 +110,10 @@ class ThemeSyncableService final : public syncer::SyncableService,
   std::string GetClientTag(
       const syncer::EntityData& entity_data) const override;
 
+  // Returns the extension ID of the saved local theme if it's an extension
+  // theme, or an empty string otherwise.
+  std::string GetSavedLocalThemeExtensionID() const;
+
   // Returns a ThemeSpecifics based on the currently applied theme.
   sync_pb::ThemeSpecifics GetThemeSpecificsFromCurrentThemeForTesting() const;
 
@@ -148,6 +155,9 @@ class ThemeSyncableService final : public syncer::SyncableService,
       const sync_pb::ThemeSpecifics& theme_specifics);
 
   void NotifyOnSyncStarted(ThemeSyncState startup_state);
+
+  syncer::SyncToSigninMigrationThemeOutcome
+  DeduplicateLocalThemeIfSameAsAccountTheme();
 
   const raw_ptr<Profile> profile_;
   const raw_ptr<ThemeService> theme_service_;

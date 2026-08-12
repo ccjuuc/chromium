@@ -41,13 +41,14 @@ enum MenuScenarioHistogram {
   kMenuScenarioHistogramSortDriveItemsEntry = 28,
   kMenuScenarioHistogramSelectDriveIdentityEntry = 29,
   kMenuScenarioHistogramTabGroupIndicatorEntry = 30,
-  kMenuScenarioHistogramAutofillManualFallbackPlusAddressEntry = 31,
+  kMenuScenarioHistogramAutofillManualFallbackPlusAddressEntry =
+      31,  // Obsolete
   kMenuScenarioHistogramTabGroupIndicatorNTPEntry = 32,
   kMenuScenarioHistogramLastVisitedHistoryEntry = 33,
   kMenuScenarioHistogramReaderModeContextMenuImage = 34,
   kMenuScenarioHistogramReaderModeContextMenuImageLink = 35,
   kMenuScenarioHistogramReaderModeContextMenuLink = 36,
-  kMenuScenarioHistogramTabGroupOverflowMenu = 37,
+  kMenuScenarioHistogramTabGroupOverflowMenu = 37,  // Obsolete
   kMenuScenarioHistogramSadTab = 38,
   kMenuScenarioHistogramCount,
 };

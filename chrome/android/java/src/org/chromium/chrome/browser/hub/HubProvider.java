@@ -12,8 +12,9 @@ import org.chromium.base.Callback;
 import org.chromium.base.CallbackController;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.supplier.LazyOneshotSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.NullableObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplier;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -22,9 +23,11 @@ import org.chromium.chrome.browser.profiles.ProfileProvider;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.toolbar.menu_button.MenuButtonCoordinator;
+import org.chromium.chrome.browser.ui.bottombar.BottomBarHostManager;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityClient;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.widget.MenuOrKeyboardActionController;
 
 import java.util.function.Supplier;
@@ -68,11 +71,13 @@ public class HubProvider {
             BackPressManager backPressManager,
             MenuOrKeyboardActionController menuOrKeyboardActionController,
             Supplier<SnackbarManager> snackbarManagerSupplier,
+            Supplier<BottomSheetController> bottomSheetControllerSupplier,
+            @Nullable BottomBarHostManager bottomBarHostManager,
             Supplier<TabModelSelector> tabModelSelectorSupplier,
             Supplier<MenuButtonCoordinator> menuButtonCoordinatorSupplier,
-            ObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier,
+            MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier,
             SearchActivityClient searchActivityClient,
-            @Nullable ObservableSupplier<Boolean> xrSpaceModeObservableSupplier,
+            NonNullObservableSupplier<Boolean> xrSpaceModeObservableSupplier,
             @PaneId int defaultPaneId) {
         mPaneListBuilder = new PaneListBuilder(orderController);
         mTabModelSelectorSupplier = tabModelSelectorSupplier;
@@ -87,6 +92,9 @@ public class HubProvider {
 
                             SnackbarManager snackbarManager = snackbarManagerSupplier.get();
                             assert snackbarManager != null;
+                            BottomSheetController bottomSheetController =
+                                    bottomSheetControllerSupplier.get();
+                            assert bottomSheetController != null;
                             return HubManagerFactory.createHubManager(
                                     activity,
                                     profileProviderSupplier,
@@ -94,6 +102,8 @@ public class HubProvider {
                                     backPressManager,
                                     menuOrKeyboardActionController,
                                     snackbarManager,
+                                    bottomSheetController,
+                                    bottomBarHostManager,
                                     tabSupplier,
                                     menuButtonCoordinatorSupplier.get(),
                                     mHubShowPaneHelper,
@@ -165,7 +175,7 @@ public class HubProvider {
 
     private void onHubManagerAvailable(HubManager hubManager) {
         var focusedPaneSupplier = hubManager.getPaneManager().getFocusedPaneSupplier();
-        focusedPaneSupplier.addObserver(mOnPaneFocused);
+        focusedPaneSupplier.addSyncObserverAndPostIfNonNull(mOnPaneFocused);
         mHubTabSwitcherMetricsRecorder =
                 new HubTabSwitcherMetricsRecorder(
                         mTabModelSelectorSupplier.get(),

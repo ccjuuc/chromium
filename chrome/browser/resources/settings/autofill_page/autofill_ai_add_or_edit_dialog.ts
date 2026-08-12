@@ -12,15 +12,20 @@ import 'chrome://resources/cr_elements/cr_dialog/cr_dialog.js';
 import 'chrome://resources/cr_elements/cr_input/cr_input.js';
 import 'chrome://resources/cr_elements/cr_shared_style.css.js';
 import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
+import 'chrome://resources/cr_elements/cr_spinner_style.css.js';
 import 'chrome://resources/cr_elements/md_select.css.js';
 import '../settings_shared.css.js';
 import './passwords_shared.css.js';
 
+import {getInstance as getAnnouncerInstance} from 'chrome://resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import type {CrDialogElement} from 'chrome://resources/cr_elements/cr_dialog/cr_dialog.js';
 import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
 import {assert} from 'chrome://resources/js/assert.js';
+import {sanitizeInnerHtml} from 'chrome://resources/js/parse_html_subset.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import type {DomRepeatEvent} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+
+import {loadTimeData} from '../i18n_setup.js';
 
 import {getTemplate} from './autofill_ai_add_or_edit_dialog.html.js';
 import type {CountryDetailManagerProxy} from './country_detail_manager_proxy.js';
@@ -30,11 +35,11 @@ import {EntityDataManagerProxyImpl} from './entity_data_manager_proxy.js';
 
 type AttributeInstance = chrome.autofillPrivate.AttributeInstance;
 type AttributeType = chrome.autofillPrivate.AttributeType;
-const AttributeTypeDataType = chrome.autofillPrivate.AttributeTypeDataType;
 type AttributeTypeDataType = chrome.autofillPrivate.AttributeTypeDataType;
 type CountryEntry = chrome.autofillPrivate.CountryEntry;
 type DateValue = chrome.autofillPrivate.DateValue;
 type EntityInstance = chrome.autofillPrivate.EntityInstance;
+type EntityType = chrome.autofillPrivate.EntityType;
 
 export interface SettingsAutofillAiAddOrEditDialogElement {
   $: {
@@ -42,10 +47,10 @@ export interface SettingsAutofillAiAddOrEditDialogElement {
   };
 }
 
-const SettingsAutofillAiSectionElementBase = I18nMixin(PolymerElement);
+const SettingsAutofillAiAddOrEditDialogElementBase = I18nMixin(PolymerElement);
 
 export class SettingsAutofillAiAddOrEditDialogElement extends
-    SettingsAutofillAiSectionElementBase {
+    SettingsAutofillAiAddOrEditDialogElementBase {
   static get is() {
     return 'settings-autofill-ai-add-or-edit-dialog';
   }
@@ -72,7 +77,7 @@ export class SettingsAutofillAiAddOrEditDialogElement extends
 
       attributeTypeDataTypeEnum_: {
         type: Object,
-        value: AttributeTypeDataType,
+        value: () => chrome.autofillPrivate.AttributeTypeDataType,
       },
 
       /**
@@ -105,6 +110,24 @@ export class SettingsAutofillAiAddOrEditDialogElement extends
       },
 
       /**
+       *  User email associated with the account.
+       */
+      userEmail_: {
+        type: String,
+        value: '',
+      },
+
+      /**
+       * Footer text shown in the view, represented as a TrustedHTML object,
+       * since the footer text can contain a link. If the object represents an
+       * empty TrustedHTML, no footer text is shown.
+       */
+      footerText_: {
+        type: Object,
+        computed: 'computeFooterText_(entityInstance.*, userEmail_)',
+      },
+
+      /**
          True if all fields are empty. The first validation occurs when the user
          clicks the "Save" button for the first time. Subsequent validations
          occur any time an input field is changed. If true, the "Save" button
@@ -129,6 +152,15 @@ export class SettingsAutofillAiAddOrEditDialogElement extends
       userClickedSaveButton_: {
         type: Boolean,
         value: false,
+      },
+
+
+      /**
+         Holds the error to display (or empty string if valid).
+       */
+      validationError_: {
+        type: String,
+        value: '',
       },
 
       months_: {
@@ -159,6 +191,26 @@ export class SettingsAutofillAiAddOrEditDialogElement extends
               .map(String);
         },
       },
+
+      enableSavePrivatePassesToWallet_: {
+        type: Boolean,
+        value: () =>
+            loadTimeData.getBoolean('enableAutofillAiWalletPrivatePasses'),
+      },
+
+      isWalletPassBranding2026Enabled_: {
+        type: Boolean,
+        value: () =>
+            loadTimeData.getBoolean('isAutofillAiWalletPassBranding2026Enabled'),
+      },
+
+      /**
+       * True while waiting for the backend to respond from Wallet API call.
+       */
+      saveInProgress_: {
+        type: Boolean,
+        value: false,
+      },
     };
   }
 
@@ -170,10 +222,17 @@ export class SettingsAutofillAiAddOrEditDialogElement extends
   declare private allFieldsAreEmpty_: boolean;
   declare private canSave_: boolean;
   declare private userClickedSaveButton_: boolean;
+  declare private validationError_: string;
   declare private months_: string[];
   declare private days_: string[];
   declare private years_: string[];
+  declare private userEmail_: string;
+  declare private footerText_: TrustedHTML;
+  declare private enableSavePrivatePassesToWallet_: boolean;
+  declare private isWalletPassBranding2026Enabled_: boolean;
+  declare private saveInProgress_: boolean;
 
+  private requiredAttributeTypes_: AttributeType[] = [];
   private entityDataManager_: EntityDataManagerProxy =
       EntityDataManagerProxyImpl.getInstance();
   private countryDetailManager_: CountryDetailManagerProxy =
@@ -181,14 +240,25 @@ export class SettingsAutofillAiAddOrEditDialogElement extends
 
   override async connectedCallback(): Promise<void> {
     super.connectedCallback();
+    assert(this.entityInstance);
 
     this.countryList_ = await this.countryDetailManager_.getCountryList(
         /*forAccountStorage=*/ false);
 
-    assert(this.entityInstance);
-    this.completeAttributeTypesList_ =
-        await this.entityDataManager_.getAllAttributeTypesForEntityTypeName(
-            this.entityInstance.type.typeName);
+    const [attributeTypes, requiredAttributes] = await Promise.all([
+      this.entityDataManager_.getAllAttributeTypesForEntityTypeName(
+          this.entityInstance.type.typeName),
+      this.entityDataManager_.getRequiredAttributeTypesForEntityTypeName(
+          this.entityInstance.type.typeName),
+    ]);
+
+    this.completeAttributeTypesList_ = attributeTypes;
+    this.requiredAttributeTypes_ = requiredAttributes;
+
+    const accountInfo = await chrome.autofillPrivate.getAccountInfo();
+    if (accountInfo && accountInfo.email) {
+      this.userEmail_ = accountInfo.email;
+    }
 
     // TODO(crbug.com/407794687): Decide whether the code should show a spinner
     // instead of delaying the display of the dialog. Keep this decision
@@ -196,6 +266,19 @@ export class SettingsAutofillAiAddOrEditDialogElement extends
     // etc.).
     // Open the modal only after all the properties are computed.
     this.$.dialog.showModal();
+  }
+
+  private checkRequiredFields_(): boolean {
+    if (this.requiredAttributeTypes_.length === 0) {
+      return true;
+    }
+
+    // At least one of the attributes in the list must be non-empty.
+    return this.requiredAttributeTypes_.some(req => {
+      const attribute = this.completeAttributeInstanceList_.find(
+          attr => attr.type.typeName === req.typeName);
+      return attribute && this.isAttributeInstanceNotEmpty(attribute);
+    });
   }
 
   private computeCompleteAttributeInstanceList_(): AttributeInstance[] {
@@ -216,12 +299,14 @@ export class SettingsAutofillAiAddOrEditDialogElement extends
       return {
         type: attributeType,
         value: existingAttributeInstance?.value ||
-            (attributeType.dataType === AttributeTypeDataType.DATE ? {
-                 month: '',
-                 day: '',
-                 year: '',
-               } :
-                                                                     ''),
+            (attributeType.dataType ===
+                     chrome.autofillPrivate.AttributeTypeDataType.DATE ?
+                 {
+                   month: '',
+                   day: '',
+                   year: '',
+                 } :
+                 ''),
       };
     });
   }
@@ -239,7 +324,8 @@ export class SettingsAutofillAiAddOrEditDialogElement extends
     // This logic exists because of a trade-off in the C++ autofill private API,
     // that has to call `EntityInstance::GetCompleteInfo()`, instead of
     // `EntityInstance::GetRawInfo()`.
-    if (attributeInstance.type.dataType === AttributeTypeDataType.COUNTRY) {
+    if (attributeInstance.type.dataType ===
+        chrome.autofillPrivate.AttributeTypeDataType.COUNTRY) {
       // TODO(crbug.com/403312087): Remove comment and exclamation marks once
       // the <hr> TODO below is solved.
       // The find operation will always find a match. Currently, the only entry
@@ -316,7 +402,6 @@ export class SettingsAutofillAiAddOrEditDialogElement extends
     return (attributeInstance.value as DateValue).year === year;
   }
 
-
   private onCountrySelectChange_(e: DomRepeatEvent<AttributeInstance>): void {
     this.completeAttributeInstanceList_[e.model.index].value =
         (e.target as HTMLSelectElement).value;
@@ -347,7 +432,74 @@ export class SettingsAutofillAiAddOrEditDialogElement extends
     this.onAttributeInstanceFieldInput_(e);
   }
 
+  /**
+   * Returns '*' if the field is required.
+   */
+  private getRequiredIndicator_(attributeInstance: AttributeInstance): string {
+    const isRequired = this.requiredAttributeTypes_.some(
+        req => req.typeName === attributeInstance.type.typeName);
+    return isRequired ? '*' : '';
+  }
 
+  /**
+   * Computes the label for cr-input fields.
+   * Appends '*' to the label text if required.
+   */
+  private computeInputLabel_(attributeInstance: AttributeInstance): string {
+    return attributeInstance.type.typeNameAsString +
+        this.getRequiredIndicator_(attributeInstance);
+  }
+
+  private walletManageYourInfoUrl_(entityType: EntityType): string {
+    assert(entityType.passType);
+    return entityType.passType ===
+            chrome.autofillPrivate.EntityPassType.PUBLIC_PASS ?
+        loadTimeData.getString('managePublicPassesUrl') :
+        loadTimeData.getString('managePrivatePassesUrl');
+  }
+
+  private shouldHideFooterText_(footer: TrustedHTML): boolean {
+    return footer.toString() === '';
+  }
+
+  // When saving a Wallet private pass a consent is recorded that includes the
+  // notice string. Ensure that the correct string ID is referenced in the
+  // backend code.
+  // LINT.IfChange
+  private computeFooterText_(): TrustedHTML {
+    if (!this.entityInstance || !this.userEmail_) {
+      return sanitizeInnerHtml('');
+    }
+
+    if (!this.entityInstance.type.supportsWalletStorage ||
+        this.entityInstance.guid) {
+      return sanitizeInnerHtml(
+          this.i18n('autofillAiSaveOrUpdateLocalEntitySourceNotice'));
+    }
+
+    const walletTitle = this.i18n('googleWalletTitle');
+    if (loadTimeData.getBoolean('enableAutofillAiWalletPrivatePasses')) {
+      // Show footer only when it is a new entity and type supports Wallet
+      // storage. This is sufficient because the entities stored in Wallet are
+      // not editable from the settings.
+      const manageYourInfoLink = `<a target=_blank href=${
+          this.walletManageYourInfoUrl_(this.entityInstance.type)}>${
+          this.i18n('autofillAiManageYourInfo')}</a>`;
+      return this.i18nAdvanced('saveInfoToWalletSettingsAccountNotice', {
+        substitutions:
+            [walletTitle, manageYourInfoLink, walletTitle, this.userEmail_],
+        tags: ['a'],
+        attrs: ['href', 'target'],
+      });
+    }
+
+    // Show footer only when it is a new entity and type supports Wallet
+    // storage. This is sufficient because the entities stored in Wallet are not
+    // editable from the settings.
+    return sanitizeInnerHtml(this.i18n(
+        'saveInfoToWalletAccountNotice', walletTitle, this.userEmail_));
+  }
+  // LINT.ThenChange(//chrome/browser/extensions/api/autofill_private/autofill_private_api.cc)
 
   private isExistingYearOutOfBounds_(
       attributeInstance: AttributeInstance, years: string[]): boolean {
@@ -357,6 +509,14 @@ export class SettingsAutofillAiAddOrEditDialogElement extends
 
   private getExistingYear_(attributeInstance: AttributeInstance): string {
     return (attributeInstance.value as DateValue).year;
+  }
+
+  /**
+   * This function returns a string that can be used in a srcset to scale
+   * the provided `url` based on the user's screen resolution.
+   */
+  private getScaledSrcSet_(url: string): string {
+    return `${url} 1x, ${url}@2x 2x`;
   }
 
   /**
@@ -370,10 +530,16 @@ export class SettingsAutofillAiAddOrEditDialogElement extends
    * first time. Subsequent validations occur any time a field is changed.
    */
   private isDateInvalid_(attributeInstance: AttributeInstance): boolean {
-    if (attributeInstance.type.dataType !== AttributeTypeDataType.DATE ||
+    if (attributeInstance.type.dataType !==
+            chrome.autofillPrivate.AttributeTypeDataType.DATE ||
         !this.userClickedSaveButton_) {
       return false;
     }
+
+    if (this.isFieldInvalid_(attributeInstance, this.validationError_)) {
+      return true;
+    }
+
     const value: DateValue = attributeInstance.value as DateValue;
     const month = value.month;
     const day = value.day;
@@ -404,6 +570,36 @@ export class SettingsAutofillAiAddOrEditDialogElement extends
   }
 
   /**
+   * Returns true if the field should be highlighted as invalid due to
+   * missing requirements.
+   */
+  private isFieldInvalid_(
+      attributeInstance: AttributeInstance, validationError: string): boolean {
+    // Don't show errors before the user tries to save.
+    if (!this.userClickedSaveButton_ || !validationError) {
+      return false;
+    }
+
+
+    // Check if this specific field is one of the required candidates.
+    const isRequiredCandidate = this.requiredAttributeTypes_.some(
+        req => req.typeName === attributeInstance.type.typeName);
+
+    return isRequiredCandidate &&
+        !this.isAttributeInstanceNotEmpty(attributeInstance);
+  }
+
+  private shouldShowWalletBranding_(): boolean {
+    if (!this.entityInstance) {
+      return false;
+    }
+
+    // Wallet entities are non-editable in settings.
+    return !this.entityInstance.guid &&
+        this.entityInstance.type.supportsWalletStorage;
+  }
+
+  /**
    * Returns true if the value is not empty and it is not made out only of
    * whitespaces.
    * For dates, at least one of month, day and year has to be not empty. An
@@ -411,7 +607,8 @@ export class SettingsAutofillAiAddOrEditDialogElement extends
    */
   private isAttributeInstanceNotEmpty(attributeInstance: AttributeInstance):
       boolean {
-    if (attributeInstance.type.dataType === AttributeTypeDataType.DATE) {
+    if (attributeInstance.type.dataType ===
+        chrome.autofillPrivate.AttributeTypeDataType.DATE) {
       const value: DateValue = attributeInstance.value as DateValue;
       return value.month.trim().length > 0 || value.day.trim().length > 0 ||
           value.year.trim().length > 0;
@@ -429,31 +626,101 @@ export class SettingsAutofillAiAddOrEditDialogElement extends
     this.allFieldsAreEmpty_ = !this.completeAttributeInstanceList_.some(
         attributeInstance =>
             this.isAttributeInstanceNotEmpty(attributeInstance));
+
     const invalidDateExists = this.completeAttributeInstanceList_.some(
         attributeInstance => this.isDateInvalid_(attributeInstance));
-    this.canSave_ = !this.allFieldsAreEmpty_ && !invalidDateExists;
+
+    const requiredFieldsMet = this.checkRequiredFields_();
+
+    if (!requiredFieldsMet) {
+      const requiredFieldNames =
+          this.requiredAttributeTypes_.map(type => type.typeNameAsString);
+
+      const formatter = new Intl.ListFormat(document.documentElement.lang, {
+        style: 'long',
+        type: 'disjunction',
+      });
+
+      const formattedList = formatter.format(requiredFieldNames);
+      this.validationError_ = this.i18n(
+          'autofillAiAddOrEditDialogRequiredFieldError', formattedList);
+    } else if (this.allFieldsAreEmpty_) {
+      this.validationError_ =
+          this.i18n('autofillAiAddOrEditDialogValidationError');
+    } else {
+      this.validationError_ = '';
+    }
+
+    this.canSave_ =
+        !this.allFieldsAreEmpty_ && !invalidDateExists && requiredFieldsMet;
+  }
+
+  /**
+   * Helper to determine if the spinner should be visible.
+   */
+  private shouldShowSpinner_(saving: boolean): boolean {
+    return this.enableSavePrivatePassesToWallet_ && saving;
   }
 
   private onCancelClick_(): void {
+    if (this.saveInProgress_) {
+      // Prevent canceling while a save is in progress to avoid state
+      // inconsistencies.
+      return;
+    }
     this.$.dialog.cancel();
   }
 
-  private onConfirmClick_(): void {
+  private onDialogCancel_(e: Event): void {
+    if (this.saveInProgress_) {
+      e.preventDefault();
+    }
+  }
+
+  private async onConfirmClick_(): Promise<void> {
+    if (this.saveInProgress_) {
+      return;
+    }
     this.userClickedSaveButton_ = true;
     this.validateForm_();
-    if (this.canSave_) {
-      this.dispatchEvent(new CustomEvent('autofill-ai-add-or-edit-done', {
-        bubbles: true,
-        composed: true,
-        detail: {
-          ...this.entityInstance,
-          attributeInstances: this.completeAttributeInstanceList_.filter(
-              attributeInstance =>
-                  this.isAttributeInstanceNotEmpty(attributeInstance)),
-        },
-      }));
-      this.$.dialog.close();
+    if (!this.canSave_) {
+      return;
     }
+
+    const entityToSave = {...this.entityInstance!};
+
+    entityToSave.attributeInstances =
+        this.completeAttributeInstanceList_.filter(
+            attributeInstance =>
+                this.isAttributeInstanceNotEmpty(attributeInstance));
+
+    // If the type supports Wallet storage, we default to saving to Wallet but
+    // only for new entities.
+    if (!entityToSave.guid && entityToSave.type.supportsWalletStorage) {
+      entityToSave.storedInWallet = true;
+    }
+
+    if (this.enableSavePrivatePassesToWallet_) {
+      this.saveInProgress_ = true;
+      getAnnouncerInstance().announce(
+          this.i18n('saveToWalletLoadingStateA11y'));
+
+      try {
+        await this.entityDataManager_.addOrUpdateEntityInstance(entityToSave);
+        this.saveInProgress_ = false;
+      } catch (e) {
+        this.saveInProgress_ = false;
+        return;
+      }
+    }
+
+    this.dispatchEvent(new CustomEvent('autofill-ai-add-or-edit-done', {
+      bubbles: true,
+      composed: true,
+      detail: entityToSave,
+    }));
+
+    this.$.dialog.close();
   }
 }
 

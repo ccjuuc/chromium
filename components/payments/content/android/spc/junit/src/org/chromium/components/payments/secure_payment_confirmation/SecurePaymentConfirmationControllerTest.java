@@ -28,6 +28,8 @@ import android.graphics.drawable.Drawable;
 import android.text.SpannableString;
 import android.text.style.ClickableSpan;
 
+import androidx.core.graphics.drawable.RoundedBitmapDrawable;
+
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -37,8 +39,6 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.Implementation;
-import org.robolectric.annotation.Implements;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -75,11 +75,7 @@ import java.util.Locale;
 
 /** Unit tests for {@link SecurePaymentConfirmationController} */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {
-            SecurePaymentConfirmationControllerTest.ShadowBottomSheetControllerProvider.class
-        })
+@Config(manifest = Config.NONE)
 public class SecurePaymentConfirmationControllerTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -122,21 +118,6 @@ public class SecurePaymentConfirmationControllerTest {
     private String mRelyingPartyId;
     private SecurePaymentConfirmationController mController;
 
-    /** The shadow of BottomSheetControllerProvider. Not to be used outside the test. */
-    @Implements(BottomSheetControllerProvider.class)
-    /* package */ static class ShadowBottomSheetControllerProvider {
-        private static BottomSheetController sBottomSheetController;
-
-        @Implementation
-        public static BottomSheetController from(WindowAndroid windowAndroid) {
-            return sBottomSheetController;
-        }
-
-        private static void setBottomSheetController(BottomSheetController controller) {
-            sBottomSheetController = controller;
-        }
-    }
-
     @Before
     public void setUp() {
         doReturn(new WeakReference<>(RuntimeEnvironment.getApplication()))
@@ -147,7 +128,7 @@ public class SecurePaymentConfirmationControllerTest {
         doReturn(true)
                 .when(mBottomSheetController)
                 .requestShowContent(any(BottomSheetContent.class), anyBoolean());
-        ShadowBottomSheetControllerProvider.setBottomSheetController(mBottomSheetController);
+        BottomSheetControllerProvider.setInstanceForTesting(mBottomSheetController);
 
         CurrencyFormatter.Natives currencyFormatter = mock(CurrencyFormatter.Natives.class);
         CurrencyFormatterJni.setInstanceForTesting(currencyFormatter);
@@ -221,7 +202,7 @@ public class SecurePaymentConfirmationControllerTest {
 
     @Test
     public void testInit_whenBottomSheetControllerNull_throwsAssertError() {
-        ShadowBottomSheetControllerProvider.setBottomSheetController(null);
+        BottomSheetControllerProvider.setInstanceForTesting(null);
         assertThrows(
                 AssertionError.class,
                 () -> createController(/* showOptOut= */ false, /* informOnly= */ false));
@@ -236,18 +217,14 @@ public class SecurePaymentConfirmationControllerTest {
         assertSame(
                 mPaymentEntityLogos, model.get(SecurePaymentConfirmationProperties.HEADER_LOGOS));
         assertEquals(
-                context.getString(
-                        org.chromium.components.payments.R.string
-                                .secure_payment_confirmation_title),
+                context.getString(R.string.secure_payment_confirmation_title),
                 model.get(SecurePaymentConfirmationProperties.TITLE));
         ModelList itemList =
                 model.get(SecurePaymentConfirmationProperties.ITEM_LIST_ADAPTER).getModelList();
         assertEquals(3, itemList.size());
         ListItem storeItem = itemList.get(0);
         assertEquals(
-                context.getString(
-                        org.chromium.components.payments.R.string
-                                .secure_payment_confirmation_store_label),
+                context.getString(R.string.secure_payment_confirmation_store_label),
                 storeItem.model.get(ItemProperties.ICON_LABEL));
         assertEquals(mPayeeName, storeItem.model.get(ItemProperties.PRIMARY_TEXT));
         assertEquals(
@@ -255,7 +232,9 @@ public class SecurePaymentConfirmationControllerTest {
                         mPayeeOrigin, SchemeDisplay.OMIT_HTTP_AND_HTTPS),
                 storeItem.model.get(ItemProperties.SECONDARY_TEXT));
         ListItem paymentItem = itemList.get(1);
-        assertEquals(mPaymentIcon, paymentItem.model.get(ItemProperties.ICON));
+        assertEquals(
+                ((BitmapDrawable) mPaymentIcon).getBitmap(),
+                ((RoundedBitmapDrawable) paymentItem.model.get(ItemProperties.ICON)).getBitmap());
         assertEquals(
                 mPaymentInstrumentLabelPrimary, paymentItem.model.get(ItemProperties.PRIMARY_TEXT));
         assertEquals(
@@ -263,9 +242,7 @@ public class SecurePaymentConfirmationControllerTest {
                 paymentItem.model.get(ItemProperties.SECONDARY_TEXT));
         ListItem totalItem = itemList.get(2);
         assertEquals(
-                context.getString(
-                        org.chromium.components.payments.R.string
-                                .secure_payment_confirmation_total_label),
+                context.getString(R.string.secure_payment_confirmation_total_label),
                 totalItem.model.get(ItemProperties.ICON_LABEL));
         CurrencyFormatter formatter =
                 new CurrencyFormatter(mTotal.amount.currency, Locale.getDefault());
@@ -277,15 +254,11 @@ public class SecurePaymentConfirmationControllerTest {
         assertNull(model.get(SecurePaymentConfirmationProperties.OPT_OUT_TEXT));
         assertSpannableStringsEqual(
                 SpanApplier.applySpans(
-                        context.getString(
-                                org.chromium.components.payments.R.string
-                                        .secure_payment_confirmation_footnote),
+                        context.getString(R.string.secure_payment_confirmation_footnote),
                         new SpanInfo("BEGIN_LINK", "END_LINK")),
                 model.get(SecurePaymentConfirmationProperties.FOOTNOTE));
         assertEquals(
-                context.getString(
-                        org.chromium.components.payments.R.string
-                                .secure_payment_confirmation_verify_button_label),
+                context.getString(R.string.secure_payment_confirmation_verify_button_label),
                 model.get(SecurePaymentConfirmationProperties.CONTINUE_BUTTON_LABEL));
     }
 
@@ -297,16 +270,13 @@ public class SecurePaymentConfirmationControllerTest {
         String deviceString =
                 context.getString(
                         DeviceFormFactor.isNonMultiDisplayContextOnTablet(context)
-                                ? org.chromium.components.payments.R.string
-                                        .secure_payment_confirmation_this_tablet_label
-                                : org.chromium.components.payments.R.string
-                                        .secure_payment_confirmation_this_phone_label);
+                                ? R.string.secure_payment_confirmation_this_tablet_label
+                                : R.string.secure_payment_confirmation_this_phone_label);
 
         assertSpannableStringsEqual(
                 SpanApplier.applySpans(
                         context.getString(
-                                org.chromium.components.payments.R.string
-                                        .secure_payment_confirmation_opt_out_label,
+                                R.string.secure_payment_confirmation_opt_out_label,
                                 deviceString,
                                 mRelyingPartyId),
                         new SpanInfo("BEGIN_LINK", "END_LINK")),
@@ -322,14 +292,11 @@ public class SecurePaymentConfirmationControllerTest {
         PropertyModel model = mController.getModelForTesting();
 
         assertEquals(
-                context.getString(
-                        org.chromium.components.payments.R.string
-                                .secure_payment_confirmation_inform_only_title),
+                context.getString(R.string.secure_payment_confirmation_inform_only_title),
                 model.get(SecurePaymentConfirmationProperties.TITLE));
         assertNull(model.get(SecurePaymentConfirmationProperties.FOOTNOTE));
         assertEquals(
-                context.getString(
-                        org.chromium.components.payments.R.string.payments_confirm_button),
+                context.getString(R.string.payments_confirm_button),
                 model.get(SecurePaymentConfirmationProperties.CONTINUE_BUTTON_LABEL));
     }
 

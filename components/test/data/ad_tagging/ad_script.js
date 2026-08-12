@@ -56,6 +56,18 @@ function windowOpenFromAdScript(url) {
   window.open(url);
 }
 
+function clickDownloadLinkFromAdScript(url) {
+  const a = document.createElement('a');
+  a.setAttribute('href', url);
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+}
+
+function navigatePopupFromAdScript(url) {
+  window.my_popup.location.href = url;
+}
+
 function navigateIframeFromAdScript(name, url) {
   document.getElementsByName(name)[0].src = url;
 }
@@ -129,4 +141,12 @@ function createAdFrameWithWindowStopAbortedLoad(name) {
     top.document.title = name;
   };
   frame.contentDocument.head.appendChild(script3);
+}
+
+function createCSSBackgroundImageFromAdScript(url) {
+  const div = document.createElement('div');
+  div.style.width = '100px';
+  div.style.height = '100px';
+  div.style.backgroundImage = 'url("' + url + '")';
+  document.body.appendChild(div);
 }

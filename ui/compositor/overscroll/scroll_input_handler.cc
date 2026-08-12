@@ -70,11 +70,11 @@ bool ScrollInputHandler::OnScrollEvent(const ScrollEvent& event,
 
   // Falling back to the main thread should never be required when an explicit
   // ElementId is provided.
-  DCHECK(!result.main_thread_hit_test_reasons);
+  DCHECK(result.main_thread_hit_test_reasons.empty());
 
   input_handler_weak_ptr_->ScrollUpdate(CreateScrollState(event, false),
                                         base::TimeDelta());
-  input_handler_weak_ptr_->ScrollEnd(/*should_snap=*/false);
+  input_handler_weak_ptr_->ScrollEnd(/*should_snap=*/false, std::nullopt);
 
   return true;
 }

@@ -984,27 +984,42 @@ TEST_F(TouchSelectionControllerImplTest, SelectCommands) {
   // Select all and select word options should be enabled after initial tap.
   ui::TouchSelectionMenuClient* menu_client = GetSelectionController();
   ASSERT_TRUE(menu_client);
-  EXPECT_TRUE(menu_client->IsCommandIdEnabled(ui::TouchEditable::kSelectAll));
-  EXPECT_TRUE(menu_client->IsCommandIdEnabled(ui::TouchEditable::kSelectWord));
+  EXPECT_TRUE(menu_client->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll),
+      /*can_paste=*/true));
+  EXPECT_TRUE(menu_client->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectWord),
+      /*can_paste=*/true));
 
   // Select word at current position. Select word command should now be disabled
   // since there is already a selection.
-  menu_client->ExecuteCommand(ui::TouchEditable::kSelectWord,
-                              ui::EF_FROM_TOUCH);
+  menu_client->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectWord),
+      ui::EF_FROM_TOUCH);
   EXPECT_EQ("some", UTF16ToUTF8(textfield_->GetSelectedText()));
   menu_client = GetSelectionController();
   ASSERT_TRUE(menu_client);
-  EXPECT_TRUE(menu_client->IsCommandIdEnabled(ui::TouchEditable::kSelectAll));
-  EXPECT_FALSE(menu_client->IsCommandIdEnabled(ui::TouchEditable::kSelectWord));
+  EXPECT_TRUE(menu_client->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll),
+      /*can_paste=*/true));
+  EXPECT_FALSE(menu_client->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectWord),
+      /*can_paste=*/true));
 
   // Select all text. Select all and select word commands should now be
   // disabled.
-  menu_client->ExecuteCommand(ui::TouchEditable::kSelectAll, ui::EF_FROM_TOUCH);
+  menu_client->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll),
+      ui::EF_FROM_TOUCH);
   EXPECT_EQ("some text", UTF16ToUTF8(textfield_->GetSelectedText()));
   menu_client = GetSelectionController();
   ASSERT_TRUE(menu_client);
-  EXPECT_FALSE(menu_client->IsCommandIdEnabled(ui::TouchEditable::kSelectAll));
-  EXPECT_FALSE(menu_client->IsCommandIdEnabled(ui::TouchEditable::kSelectWord));
+  EXPECT_FALSE(menu_client->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll),
+      /*can_paste=*/true));
+  EXPECT_FALSE(menu_client->IsCommandIdEnabled(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kSelectWord),
+      /*can_paste=*/true));
 }
 
 TEST_F(TouchSelectionControllerImplTest, CursorHandleDraggingMetrics) {
@@ -1126,6 +1141,9 @@ class TestTouchEditable : public ui::TouchEditable {
   }
   void OpenContextMenu(const gfx::Point& anchor) override { NOTREACHED(); }
   void DestroyTouchSelection() override { NOTREACHED(); }
+  bool IsCommandIdEnabled(int command_id, bool can_paste) const override {
+    NOTREACHED();
+  }
 
   // Overridden from ui::SimpleMenuModel::Delegate.
   bool IsCommandIdChecked(int command_id) const override { NOTREACHED(); }

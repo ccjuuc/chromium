@@ -6,6 +6,7 @@
 #define COMPONENTS_SYNC_TEST_FAKE_SYNC_ENGINE_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -14,11 +15,14 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/sync/engine/configure_reason.h"
+#include "components/sync/engine/sync_credentials.h"
 #include "components/sync/engine/sync_engine.h"
 #include "components/sync/engine/sync_status.h"
 #include "google_apis/gaia/core_account_id.h"
 
 namespace syncer {
+
+class CustomPassphraseBootstrapToken;
 
 // A fake of the SyncEngine.
 //
@@ -37,6 +41,10 @@ class FakeSyncEngine final : public SyncEngine {
 
   CoreAccountId authenticated_account_id() const {
     return authenticated_account_id_;
+  }
+
+  const std::optional<SyncCredentials>& last_credentials() const {
+    return last_credentials_;
   }
 
   ConfigureReason last_configure_reason() const {
@@ -78,11 +86,12 @@ class FakeSyncEngine final : public SyncEngine {
 
   void StartSyncingWithServer() override;
 
-  void SetEncryptionPassphrase(
-      const std::string& passphrase,
-      const KeyDerivationParams& key_derivation_params) override;
+  void SetEncryptionPassphrase(const std::string& passphrase) override;
 
-  void SetExplicitPassphraseDecryptionKey(std::unique_ptr<Nigori> key) override;
+  void SetDecryptionPassphrase(const std::string& passphrase) override;
+
+  void SetDecryptionBootstrapToken(
+      const CustomPassphraseBootstrapToken& bootstrap_token) override;
 
   void AddTrustedVaultDecryptionKeys(
       const std::vector<std::vector<uint8_t>>& keys,
@@ -132,6 +141,7 @@ class FakeSyncEngine final : public SyncEngine {
   bool started_handling_invalidations_ = false;
   bool is_next_poll_time_in_the_past_ = false;
   ConfigureReason last_configure_reason_ = ConfigureReason::kUnknown;
+  std::optional<SyncCredentials> last_credentials_;
   base::WeakPtrFactory<FakeSyncEngine> weak_ptr_factory_{this};
 };
 

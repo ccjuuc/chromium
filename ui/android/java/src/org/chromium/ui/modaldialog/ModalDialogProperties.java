@@ -190,13 +190,18 @@ public class ModalDialogProperties {
             new ReadableObjectPropertyKey<>();
 
     /** The title of the dialog. */
-    public static final WritableObjectPropertyKey<String> TITLE = new WritableObjectPropertyKey<>();
+    public static final WritableObjectPropertyKey<CharSequence> TITLE =
+            new WritableObjectPropertyKey<>();
 
     /** The maximum number of lines that the title can take. */
     public static final WritableIntPropertyKey TITLE_MAX_LINES = new WritableIntPropertyKey();
 
     /** The title icon of the dialog. */
     public static final WritableObjectPropertyKey<Drawable> TITLE_ICON =
+            new WritableObjectPropertyKey<>();
+
+    /** The dialog icon displayed at the end of the title. */
+    public static final WritableObjectPropertyKey<Drawable> TITLE_END_ICON =
             new WritableObjectPropertyKey<>();
 
     /** Deprecated for MESSAGE_PARAGRAPHS. The only paragraph of the dialog. */
@@ -308,6 +313,14 @@ public class ModalDialogProperties {
     public static final WritableBooleanPropertyKey TITLE_BACK_BUTTON_VISIBLE =
             new WritableBooleanPropertyKey();
 
+    /** The click listener for the 'close' button in the title. */
+    public static final WritableObjectPropertyKey<View.OnClickListener>
+            TITLE_CLOSE_BUTTON_CLICK_LISTENER = new WritableObjectPropertyKey<>();
+
+    /** Whether the 'close' button in the title is visible. */
+    public static final WritableBooleanPropertyKey TITLE_CLOSE_BUTTON_VISIBLE =
+            new WritableBooleanPropertyKey();
+
     /**
      * Whether the custom view should be wrapped in a ScrollView. The custom view must not be a
      * ScrollView itself if this is set.
@@ -321,15 +334,12 @@ public class ModalDialogProperties {
     /** Whether the dialog should follow {@link DialogStyles}. */
     public static final ReadableIntPropertyKey DIALOG_STYLES = new ReadableIntPropertyKey();
 
-    /** Whether the dialog should be focused for accessibility. */
-    public static final WritableBooleanPropertyKey FOCUS_DIALOG = new WritableBooleanPropertyKey();
-
     /**
      * The handler for back presses done on a {@ModalDialogType.APP}. By default, a back press
      * dismisses the dialog.
      */
     public static final WritableObjectPropertyKey<OnBackPressedCallback>
-            APP_MODAL_DIALOG_BACK_PRESS_HANDLER = new WritableObjectPropertyKey();
+            APP_MODAL_DIALOG_BACK_PRESS_HANDLER = new WritableObjectPropertyKey<>();
 
     /**
      * Duration of initial tap protection period after dialog is displayed to user. During this
@@ -362,7 +372,7 @@ public class ModalDialogProperties {
     public static final WritableIntPropertyKey MAX_HEIGHT = new WritableIntPropertyKey();
 
     /** The padding used by the dialog content view. */
-    public static final WritableObjectPropertyKey<Rect> PADDING = new WritableObjectPropertyKey();
+    public static final WritableObjectPropertyKey<Rect> PADDING = new WritableObjectPropertyKey<>();
 
     /**
      * Block all inputs on the rest of the dialog view. Note that this does not override any
@@ -381,6 +391,7 @@ public class ModalDialogProperties {
                 TITLE,
                 TITLE_MAX_LINES,
                 TITLE_ICON,
+                TITLE_END_ICON,
                 MESSAGE_PARAGRAPH_1,
                 MESSAGE_PARAGRAPHS,
                 MENU_ITEMS,
@@ -406,9 +417,10 @@ public class ModalDialogProperties {
                 TITLE_MORE_BUTTON_VISIBLE,
                 TITLE_BACK_BUTTON_CLICK_LISTENER,
                 TITLE_BACK_BUTTON_VISIBLE,
+                TITLE_CLOSE_BUTTON_CLICK_LISTENER,
+                TITLE_CLOSE_BUTTON_VISIBLE,
                 BUTTON_STYLES,
                 DIALOG_STYLES,
-                FOCUS_DIALOG,
                 APP_MODAL_DIALOG_BACK_PRESS_HANDLER,
                 BUTTON_TAP_PROTECTION_PERIOD_MS,
                 TAB_MODAL_DIALOG_CANCEL_ON_ESCAPE,

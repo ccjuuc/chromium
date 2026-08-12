@@ -31,16 +31,16 @@ class ContentAnalysisInfo : public ContentAnalysisInfoBase {
   // service. Connector-specific fields need to be added to the request
   // separately.
   void InitializeRequest(BinaryUploadRequest* request,
-                         bool include_enterprise_only_fields = true);
+                         bool include_enterprise_only_fields) override;
 
   // Returns email of the active Gaia user based on the values provided by
   // `tab_url()` and `identity_manager()`. Only returns a value for Workspace
   // sites.
-  std::string GetContentAreaAccountEmail() const;
+  std::string GetContentAreaAccountEmail() const override;
 };
 
 // Simple implementation of `ContentAnalysisInfo` meant to obtain the value
-// returned by `GetContentAreaAccountEmail`. This class shouldn't expose
+// returned by `content_area_account_email`. This class shouldn't expose
 // non-static methods unless every other override required to support it are
 // implemented.
 class ContentAreaUserProvider : public ContentAnalysisInfo {
@@ -50,7 +50,7 @@ class ContentAreaUserProvider : public ContentAnalysisInfo {
                              const GURL& tab_url);
   static std::string GetUser(const content::ClipboardEndpoint& endpoint);
 
-  ~ContentAreaUserProvider();
+  ~ContentAreaUserProvider() override;
 
  private:
   const AnalysisSettings& settings() const override;
@@ -86,7 +86,7 @@ class DownloadContentAreaUserProvider : public ContentAnalysisInfo {
  public:
   explicit DownloadContentAreaUserProvider(
       download::DownloadItem& download_item);
-  ~DownloadContentAreaUserProvider();
+  ~DownloadContentAreaUserProvider() override;
 
   // ContentAnalysisInfo:
   const GURL& url() const override;

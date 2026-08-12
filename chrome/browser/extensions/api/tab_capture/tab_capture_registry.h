@@ -20,6 +20,9 @@
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace content {
 class BrowserContext;
@@ -47,7 +50,7 @@ class TabCaptureRegistry : public BrowserContextKeyedAPI,
 
   // List all pending, active and stopped capture requests.
   void GetCapturedTabs(const std::string& extension_id,
-                       base::Value::List* capture_info_list) const;
+                       base::ListValue* capture_info_list) const;
 
   // Add a tab capture request to the registry when a stream is requested
   // through the API and create a randomly generated device id after user

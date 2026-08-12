@@ -40,8 +40,8 @@ import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.Feature;
+import org.chromium.chrome.R;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
-import org.chromium.chrome.test.R;
 import org.chromium.components.browser_ui.modaldialog.ModalDialogTestUtils;
 import org.chromium.components.browser_ui.modaldialog.ModalDialogView;
 import org.chromium.ui.UiUtils;
@@ -71,8 +71,6 @@ public class ModalDialogViewRenderTest {
     public static BaseActivityTestRule<BlankUiTestActivity> sActivityTestRule =
             new BaseActivityTestRule<>(BlankUiTestActivity.class);
 
-    private static Activity sActivity;
-
     private final @ColorInt int mFakeBgColor;
 
     private Resources mResources;
@@ -101,7 +99,7 @@ public class ModalDialogViewRenderTest {
 
     @BeforeClass
     public static void setupSuite() {
-        sActivity = sActivityTestRule.launchActivity(null);
+        sActivityTestRule.launchActivity(null);
     }
 
     // This helper function waits until the view is rendered trying to prevent flakiness.
@@ -121,7 +119,7 @@ public class ModalDialogViewRenderTest {
     private void setUpViews(int style, boolean forceWrapContentHeight) {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    Activity activity = sActivity;
+                    Activity activity = sActivityTestRule.getActivity();
                     mResources = activity.getResources();
                     mModelBuilder = new PropertyModel.Builder(ModalDialogProperties.ALL_KEYS);
 
@@ -167,12 +165,33 @@ public class ModalDialogViewRenderTest {
                 /* forceWrapContentHeight= */ true);
         final Drawable icon =
                 UiUtils.getTintedDrawable(
-                        sActivity, R.drawable.ic_add_24dp, R.color.default_icon_color_tint_list);
+                        sActivityTestRule.getActivity(),
+                        R.drawable.ic_add_24dp,
+                        R.color.default_icon_color_tint_list);
         createModel(
                 mModelBuilder
                         .with(ModalDialogProperties.TITLE, mResources, R.string.title)
                         .with(ModalDialogProperties.TITLE_ICON, icon));
         mRenderTestRule.render(mModalDialogView, "title_and_title_icon");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"ModalDialog", "RenderTest"})
+    public void testRender_TitleAndTitleEndIcon() throws IOException {
+        setUpViews(
+                R.style.ThemeOverlay_BrowserUI_ModalDialog_TextPrimaryButton,
+                /* forceWrapContentHeight= */ true);
+        final Drawable icon =
+                UiUtils.getTintedDrawable(
+                        sActivityTestRule.getActivity(),
+                        R.drawable.ic_add_24dp,
+                        R.color.default_icon_color_tint_list);
+        createModel(
+                mModelBuilder
+                        .with(ModalDialogProperties.TITLE, mResources, R.string.title)
+                        .with(ModalDialogProperties.TITLE_END_ICON, icon));
+        mRenderTestRule.render(mModalDialogView, "title_and_title_end_icon");
     }
 
     @Test
@@ -192,7 +211,9 @@ public class ModalDialogViewRenderTest {
         // Load the title icon
         final Drawable icon =
                 UiUtils.getTintedDrawable(
-                        sActivity, R.drawable.ic_add_24dp, R.color.default_icon_color_tint_list);
+                        sActivityTestRule.getActivity(),
+                        R.drawable.ic_add_24dp,
+                        R.color.default_icon_color_tint_list);
 
         createModel(
                 mModelBuilder
@@ -214,7 +235,7 @@ public class ModalDialogViewRenderTest {
         setUpViews(
                 R.style.ThemeOverlay_BrowserUI_ModalDialog_TextPrimaryButton,
                 /* forceWrapContentHeight= */ true);
-        final var paragraphs = new java.util.ArrayList<CharSequence>();
+        final var paragraphs = new ArrayList<CharSequence>();
         paragraphs.add(TextUtils.join("\n", Collections.nCopies(100, "Message")));
         createModel(
                 mModelBuilder
@@ -242,7 +263,7 @@ public class ModalDialogViewRenderTest {
         setUpViews(
                 R.style.ThemeOverlay_BrowserUI_ModalDialog_TextPrimaryButton,
                 /* forceWrapContentHeight= */ true);
-        final var paragraphs = new java.util.ArrayList<CharSequence>();
+        final var paragraphs = new ArrayList<CharSequence>();
         paragraphs.add(paragraph1);
         paragraphs.add(paragraph2);
         createModel(
@@ -466,13 +487,19 @@ public class ModalDialogViewRenderTest {
 
         final Drawable icon1 =
                 UiUtils.getTintedDrawable(
-                        sActivity, R.drawable.ic_add_24dp, R.color.default_icon_color_tint_list);
+                        sActivityTestRule.getActivity(),
+                        R.drawable.ic_add_24dp,
+                        R.color.default_icon_color_tint_list);
         final Drawable icon2 =
                 UiUtils.getTintedDrawable(
-                        sActivity, R.drawable.ic_globe_24dp, R.color.default_icon_color_tint_list);
+                        sActivityTestRule.getActivity(),
+                        R.drawable.ic_globe_24dp,
+                        R.color.default_icon_color_tint_list);
         final Drawable icon3 =
                 UiUtils.getTintedDrawable(
-                        sActivity, R.drawable.ic_info_24dp, R.color.default_icon_color_tint_list);
+                        sActivityTestRule.getActivity(),
+                        R.drawable.ic_info_24dp,
+                        R.color.default_icon_color_tint_list);
 
         final var menuItems = new ArrayList<ModalDialogProperties.ModalDialogMenuItem>();
         menuItems.add(new ModalDialogProperties.ModalDialogMenuItem(icon1, "First menu item"));
@@ -624,7 +651,7 @@ public class ModalDialogViewRenderTest {
         setUpViews(
                 R.style.ThemeOverlay_BrowserUI_ModalDialog_TextPrimaryButton,
                 /* forceWrapContentHeight= */ true);
-        final var paragraphs = new java.util.ArrayList<CharSequence>();
+        final var paragraphs = new ArrayList<CharSequence>();
         paragraphs.add(TextUtils.join("\n", Collections.nCopies(10, "Message")));
         createModel(
                 mModelBuilder
@@ -648,7 +675,7 @@ public class ModalDialogViewRenderTest {
         setUpViews(
                 R.style.ThemeOverlay_BrowserUI_ModalDialog_TextPrimaryButton,
                 /* forceWrapContentHeight= */ false);
-        final var paragraphs = new java.util.ArrayList<CharSequence>();
+        final var paragraphs = new ArrayList<CharSequence>();
         paragraphs.add(TextUtils.join("\n", Collections.nCopies(50, "Message")));
         createModel(
                 mModelBuilder

@@ -8,6 +8,7 @@
 
 #include "base/check.h"
 #include "base/check_op.h"
+#include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/trace_event/trace_event.h"
 #include "components/viz/common/resources/shared_image_format_utils.h"
@@ -33,17 +34,23 @@
 
 namespace {
 
+// TODO(crbug.com/524822746): Killswitch for extra validation, remove after M152
+// stable.
+BASE_FEATURE(kValidatePromiseImageFormat, base::FEATURE_ENABLED_BY_DEFAULT);
+
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
+// LINT.IfChange(CreateFallbackImageResult)
 enum class CreateFallbackImageResult {
   kSuccess = 0,
   kFailedPrefersExternalSampler = 1,
   kFailedYcbcrMismatch = 2,
-  kFailedExternalTexture = 3,
+  kFailedYCbCrTextureCreationFailure = 3,
   kFailedInvalidTextureInfo = 4,
   kFailedCreateTexture = 5,
   kMaxValue = kFailedCreateTexture
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/gpu/enums.xml:CreateFallbackImageResult)
 
 const char* CreateFallbackImageResultToString(
     CreateFallbackImageResult result) {
@@ -54,8 +61,8 @@ const char* CreateFallbackImageResultToString(
       return "FailedPrefersExternalSampler";
     case CreateFallbackImageResult::kFailedYcbcrMismatch:
       return "FailedYcbcrMismatch";
-    case CreateFallbackImageResult::kFailedExternalTexture:
-      return "FailedExternalTexture";
+    case CreateFallbackImageResult::kFailedYCbCrTextureCreationFailure:
+      return "FailedYCbCrTextureCreationFailure";
     case CreateFallbackImageResult::kFailedInvalidTextureInfo:
       return "FailedInvalidTextureInfo";
     case CreateFallbackImageResult::kFailedCreateTexture:
@@ -230,10 +237,11 @@ void ImageContextImpl::CreateFallbackImage(
     skgpu::graphite::DawnTextureInfo dawn_info;
     bool success = skgpu::graphite::TextureInfos::GetDawnTextureInfo(
         tex_infos[0], &dawn_info);
-    if (success && dawn_info.fFormat == wgpu::TextureFormat::External) {
+    if (success &&
+        dawn_info.fFormat == wgpu::TextureFormat::OpaqueYCbCrAndroid) {
       // Skia can't allocate a fallback texture since the original texture was
       // externally allocated.
-      result = CreateFallbackImageResult::kFailedExternalTexture;
+      result = CreateFallbackImageResult::kFailedYCbCrTextureCreationFailure;
       return;
     }
 #endif
@@ -293,7 +301,7 @@ void ImageContextImpl::CreateFallbackImage(
   // and leave it null.
   const auto& formats = backend_formats();
   if (formats.empty() || formats[0].textureType() == GrTextureType::kExternal) {
-    result = CreateFallbackImageResult::kFailedExternalTexture;
+    result = CreateFallbackImageResult::kFailedYCbCrTextureCreationFailure;
     return;
   }
 
@@ -392,17 +400,12 @@ bool ImageContextImpl::BeginAccessIfNecessaryInternal(
   }
 
   if (!representation_) {
-    auto representation =
-        representation_factory->ProduceSkia(mailbox(), context_state);
+    auto representation = representation_factory->ProduceSkia(
+        mailbox(), context_state,
+        /*required_usages=*/{gpu::SHARED_IMAGE_USAGE_DISPLAY_READ});
     if (!representation) {
       DLOG(ERROR) << "Failed to fulfill the promise texture - SharedImage "
                      "mailbox not found in SharedImageManager.";
-      return false;
-    }
-
-    if (!(representation->usage().Has(gpu::SHARED_IMAGE_USAGE_DISPLAY_READ))) {
-      DLOG(ERROR) << "Failed to fulfill the promise texture - SharedImage "
-                     "was not created with DISPLAY_READ usage.";
       return false;
     }
 
@@ -411,6 +414,17 @@ bool ImageContextImpl::BeginAccessIfNecessaryInternal(
                      "size does not match TransferableResource size: "
                   << representation->size().ToString() << " vs "
                   << size().ToString();
+      return false;
+    }
+
+    if ((representation->format() != format() ||
+         representation->format().PrefersExternalSampler() !=
+             format().PrefersExternalSampler()) &&
+        base::FeatureList::IsEnabled(kValidatePromiseImageFormat)) {
+      DLOG(ERROR) << "Failed to fulfill the promise texture - SharedImage "
+                     "format does not match TransferableResource format: "
+                  << representation->format().ToString() << " vs "
+                  << format().ToString();
       return false;
     }
 

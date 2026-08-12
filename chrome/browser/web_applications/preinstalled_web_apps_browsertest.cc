@@ -74,7 +74,7 @@ IN_PROC_BROWSER_TEST_F(PreinstalledWebAppsBrowserTest, CheckInstalledFields) {
   base::AutoReset<bool> scope =
       SetPreinstalledAppInstallFeatureAlwaysEnabledForTesting();
 
-  auto& provider = *WebAppProvider::GetForTest(browser()->profile());
+  auto& provider = *WebAppProvider::GetForTest(browser()->GetProfile());
   struct OfflineOnlyExpectation {
     webapps::AppId app_id;
     std::string_view install_url;
@@ -98,6 +98,11 @@ IN_PROC_BROWSER_TEST_F(PreinstalledWebAppsBrowserTest, CheckInstalledFields) {
           ash::kNotebookLmAppId,
           "https://notebooklm.google.com/install",
           "https://notebooklm.google.com/",
+      },
+      {
+          ash::kVidsAppId,
+          "https://docs.google.com/videos/installwebapp?usp=chrome_default",
+          "https://docs.google.com/videos/?usp=installed_webapp",
       },
 #endif  // BUILDFLAG(IS_CHROMEOS)
       {
@@ -265,7 +270,7 @@ class PreinstalledChatWebAppBrowserTest
   }
 
   WebAppProvider& provider() const {
-    return *WebAppProvider::GetForTest(browser()->profile());
+    return *WebAppProvider::GetForTest(browser()->GetProfile());
   }
 
   const WebAppRegistrar& registrar() const {
@@ -273,10 +278,10 @@ class PreinstalledChatWebAppBrowserTest
   }
 
  protected:
-  const webapps::AppId old_app_id_ =
-      GenerateAppIdFromManifestId(GURL("https://mail.google.com/chat/"));
-  const webapps::AppId new_app_id_ =
-      GenerateAppIdFromManifestId(GURL("https://chat.google.com/"));
+  const webapps::AppId old_app_id_ = GenerateAppIdFromManifestId(
+      webapps::ManifestId(GURL("https://mail.google.com/chat/")));
+  const webapps::AppId new_app_id_ = GenerateAppIdFromManifestId(
+      webapps::ManifestId(GURL("https://chat.google.com/")));
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
@@ -289,14 +294,14 @@ IN_PROC_BROWSER_TEST_F(PreinstalledChatWebAppBrowserTest,
   ASSERT_TRUE(registrar().IsInstallState(
       old_app_id_, {ExpectedPreinstalledAppInstallState()}));
   EXPECT_TRUE(registrar().GetAppById(old_app_id_)->IsPreinstalledApp());
-  EXPECT_FALSE(registrar().IsInRegistrar(new_app_id_));
+  EXPECT_FALSE(registrar().GetInstallState(new_app_id_).has_value());
 }
 
 IN_PROC_BROWSER_TEST_F(PreinstalledChatWebAppBrowserTest,
                        PreinstalledOnlyMigrates) {
   InstallDefaultApps();
 
-  EXPECT_FALSE(registrar().IsInRegistrar(old_app_id_));
+  EXPECT_FALSE(registrar().GetInstallState(old_app_id_).has_value());
   ASSERT_TRUE(registrar().IsInstallState(
       new_app_id_, {ExpectedPreinstalledAppInstallState()}));
   EXPECT_TRUE(registrar().GetAppById(new_app_id_)->IsPreinstalledApp());
@@ -324,7 +329,8 @@ class PreinstalledWebAppMigrationTest : public PreinstalledWebAppsBrowserTest {
               is_standalone ? DisplayMode::kStandalone : DisplayMode::kBrowser;
           return info;
         },
-        app_options.install_url, app_options.install_url, is_standalone);
+        webapps::ManifestId(app_options.install_url), app_options.install_url,
+        is_standalone);
     if (!install_old_app) {
       app_options.SetOnlyUninstallAndReplaceWhenCompatible(
           old_app_id_, ExternalInstallOptions::
@@ -346,7 +352,7 @@ class PreinstalledWebAppMigrationTest : public PreinstalledWebAppsBrowserTest {
   }
 
   WebAppProvider& provider() const {
-    return *WebAppProvider::GetForTest(browser()->profile());
+    return *WebAppProvider::GetForTest(browser()->GetProfile());
   }
 
   const WebAppRegistrar& registrar() const {
@@ -356,8 +362,10 @@ class PreinstalledWebAppMigrationTest : public PreinstalledWebAppsBrowserTest {
  protected:
   GURL old_app_url_ = GURL("https://old.example.com/index.html");
   GURL new_app_url_ = GURL("https://new.example.com/index.html");
-  webapps::AppId old_app_id_ = GenerateAppIdFromManifestId(old_app_url_);
-  webapps::AppId new_app_id_ = GenerateAppIdFromManifestId(new_app_url_);
+  webapps::AppId old_app_id_ =
+      GenerateAppIdFromManifestId(webapps::ManifestId(old_app_url_));
+  webapps::AppId new_app_id_ =
+      GenerateAppIdFromManifestId(webapps::ManifestId(new_app_url_));
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
@@ -368,18 +376,18 @@ IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
                        PRE_PreinstalledOnlyMigrates) {
   InstallDefaultApps(/*install_old_app=*/true);
 
-  EXPECT_TRUE(registrar().IsInRegistrar(old_app_id_));
+  EXPECT_TRUE(registrar().GetInstallState(old_app_id_).has_value());
   ASSERT_TRUE(registrar().IsInstallState(
       old_app_id_, {ExpectedPreinstalledAppInstallState()}));
   EXPECT_TRUE(registrar().GetAppById(old_app_id_)->IsPreinstalledApp());
-  EXPECT_FALSE(registrar().IsInRegistrar(new_app_id_));
+  EXPECT_FALSE(registrar().GetInstallState(new_app_id_).has_value());
 }
 
 IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
                        PreinstalledOnlyMigrates) {
   InstallDefaultApps(/*install_old_app=*/false);
 
-  EXPECT_FALSE(registrar().IsInRegistrar(old_app_id_));
+  EXPECT_FALSE(registrar().GetInstallState(old_app_id_).has_value());
   ASSERT_TRUE(registrar().IsInstallState(
       new_app_id_, {ExpectedPreinstalledAppInstallState()}));
   EXPECT_TRUE(registrar().GetAppById(new_app_id_)->IsPreinstalledApp());
@@ -389,7 +397,7 @@ IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
                        NewProfileGetsMigratedApp) {
   InstallDefaultApps(/*install_old_app=*/false);
 
-  EXPECT_FALSE(registrar().IsInRegistrar(old_app_id_));
+  EXPECT_FALSE(registrar().GetInstallState(old_app_id_).has_value());
   ASSERT_TRUE(registrar().IsInstallState(
       new_app_id_, {ExpectedPreinstalledAppInstallState()}));
   EXPECT_TRUE(registrar().GetAppById(new_app_id_)->IsPreinstalledApp());
@@ -399,21 +407,21 @@ IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
                        PRE_UserInstalledDoesntMigrate) {
   InstallDefaultApps(/*install_old_app=*/true);
 
-  EXPECT_TRUE(registrar().IsInRegistrar(old_app_id_));
+  EXPECT_TRUE(registrar().GetInstallState(old_app_id_).has_value());
   EXPECT_TRUE(registrar().IsInstallState(
       old_app_id_, {ExpectedPreinstalledAppInstallState()}));
 
   // User install the same app.
   auto web_app_info =
       web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(old_app_url_);
-  EXPECT_EQ(old_app_id_, web_app::test::InstallWebApp(browser()->profile(),
+  EXPECT_EQ(old_app_id_, web_app::test::InstallWebApp(browser()->GetProfile(),
                                                       std::move(web_app_info)));
 
   ASSERT_TRUE(registrar().IsInstallState(
       old_app_id_,
       {web_app::proto::InstallState::INSTALLED_WITH_OS_INTEGRATION}));
   EXPECT_TRUE(registrar().GetAppById(old_app_id_)->IsPreinstalledApp());
-  EXPECT_FALSE(registrar().IsInRegistrar(new_app_id_));
+  EXPECT_FALSE(registrar().GetInstallState(new_app_id_).has_value());
 }
 
 IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
@@ -424,14 +432,14 @@ IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
       old_app_id_,
       {web_app::proto::InstallState::INSTALLED_WITH_OS_INTEGRATION}));
   EXPECT_TRUE(registrar().GetAppById(old_app_id_)->IsPreinstalledApp());
-  EXPECT_FALSE(registrar().IsInRegistrar(new_app_id_));
+  EXPECT_FALSE(registrar().GetInstallState(new_app_id_).has_value());
 }
 
 IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
                        PRE_OpenStandaloneDoesntMigrate) {
   InstallDefaultApps(/*install_old_app=*/true);
 
-  EXPECT_TRUE(registrar().IsInRegistrar(old_app_id_));
+  EXPECT_TRUE(registrar().GetInstallState(old_app_id_).has_value());
   EXPECT_TRUE(registrar().IsInstallState(
       old_app_id_, {ExpectedPreinstalledAppInstallState()}));
 
@@ -445,7 +453,7 @@ IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
       old_app_id_,
       {web_app::proto::InstallState::INSTALLED_WITH_OS_INTEGRATION}));
   EXPECT_TRUE(registrar().GetAppById(old_app_id_)->IsPreinstalledApp());
-  EXPECT_FALSE(registrar().IsInRegistrar(new_app_id_));
+  EXPECT_FALSE(registrar().GetInstallState(new_app_id_).has_value());
 }
 
 IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
@@ -456,7 +464,7 @@ IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
       old_app_id_,
       {web_app::proto::InstallState::INSTALLED_WITH_OS_INTEGRATION}));
   EXPECT_TRUE(registrar().GetAppById(old_app_id_)->IsPreinstalledApp());
-  EXPECT_FALSE(registrar().IsInRegistrar(new_app_id_));
+  EXPECT_FALSE(registrar().GetInstallState(new_app_id_).has_value());
 }
 
 IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
@@ -465,17 +473,17 @@ IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
   // migration works for that case as well.
   InstallDefaultApps(/*install_old_app=*/true, /*is_standalone=*/true);
 
-  EXPECT_TRUE(registrar().IsInRegistrar(old_app_id_));
+  EXPECT_TRUE(registrar().GetInstallState(old_app_id_).has_value());
   EXPECT_TRUE(registrar().IsInstallState(
       old_app_id_, {ExpectedPreinstalledAppInstallState()}));
-  EXPECT_FALSE(registrar().IsInRegistrar(new_app_id_));
+  EXPECT_FALSE(registrar().GetInstallState(new_app_id_).has_value());
 }
 
 IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
                        PreinstallAsStandaloneMigrates) {
   InstallDefaultApps(/*install_old_app=*/false, /*is_standalone=*/true);
 
-  EXPECT_FALSE(registrar().IsInRegistrar(old_app_id_));
+  EXPECT_FALSE(registrar().GetInstallState(old_app_id_).has_value());
   ASSERT_TRUE(registrar().IsInstallState(
       new_app_id_, {ExpectedPreinstalledAppInstallState()}));
   EXPECT_TRUE(registrar().GetAppById(new_app_id_)->IsPreinstalledApp());
@@ -488,7 +496,7 @@ IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
   ASSERT_TRUE(registrar().IsInstallState(
       old_app_id_, {ExpectedPreinstalledAppInstallState()}));
   EXPECT_TRUE(registrar().GetAppById(old_app_id_)->IsPreinstalledApp());
-  EXPECT_FALSE(registrar().IsInRegistrar(new_app_id_));
+  EXPECT_FALSE(registrar().GetInstallState(new_app_id_).has_value());
 
   // Have the user uninstall the pre-installed app.
   base::test::TestFuture<webapps::UninstallResultCode> uninstall_result;
@@ -496,23 +504,23 @@ IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
       old_app_id_, webapps::WebappUninstallSource::kAppsPage,
       uninstall_result.GetCallback());
   EXPECT_EQ(webapps::UninstallResultCode::kAppRemoved, uninstall_result.Get());
-  EXPECT_FALSE(registrar().IsInRegistrar(old_app_id_));
+  EXPECT_FALSE(registrar().GetInstallState(old_app_id_).has_value());
 }
 
 IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
                        PRE_NoMigrationIfUninstalled) {
   InstallDefaultApps(/*install_old_app=*/false);
 
-  EXPECT_FALSE(registrar().IsInRegistrar(old_app_id_));
-  EXPECT_FALSE(registrar().IsInRegistrar(new_app_id_));
+  EXPECT_FALSE(registrar().GetInstallState(old_app_id_).has_value());
+  EXPECT_FALSE(registrar().GetInstallState(new_app_id_).has_value());
 }
 
 IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
                        NoMigrationIfUninstalled) {
   InstallDefaultApps(/*install_old_app=*/false);
 
-  EXPECT_FALSE(registrar().IsInRegistrar(old_app_id_));
-  EXPECT_FALSE(registrar().IsInRegistrar(new_app_id_));
+  EXPECT_FALSE(registrar().GetInstallState(old_app_id_).has_value());
+  EXPECT_FALSE(registrar().GetInstallState(new_app_id_).has_value());
 }
 
 // This next test is mostly a sanity check to make sure things aren't entirely
@@ -520,17 +528,17 @@ IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
 IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest, PRE_ReverseMigration) {
   InstallDefaultApps(/*install_old_app=*/false);
 
-  EXPECT_TRUE(registrar().IsInRegistrar(new_app_id_));
+  EXPECT_TRUE(registrar().GetInstallState(new_app_id_).has_value());
   ASSERT_TRUE(registrar().IsInstallState(
       new_app_id_, {ExpectedPreinstalledAppInstallState()}));
   EXPECT_TRUE(registrar().GetAppById(new_app_id_)->IsPreinstalledApp());
-  EXPECT_FALSE(registrar().IsInRegistrar(old_app_id_));
+  EXPECT_FALSE(registrar().GetInstallState(old_app_id_).has_value());
 }
 
 IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest, ReverseMigration) {
   InstallDefaultApps(/*install_old_app=*/true);
 
-  EXPECT_FALSE(registrar().IsInRegistrar(new_app_id_));
+  EXPECT_FALSE(registrar().GetInstallState(new_app_id_).has_value());
   ASSERT_TRUE(registrar().IsInstallState(
       old_app_id_, {ExpectedPreinstalledAppInstallState()}));
   EXPECT_TRUE(registrar().GetAppById(old_app_id_)->IsPreinstalledApp());

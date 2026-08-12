@@ -14,11 +14,11 @@ import org.json.JSONObject;
 import org.junit.Assert;
 
 import org.chromium.chrome.browser.app.ChromeActivity;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanelContent;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanelContentDelegate;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanelContentFactory;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanelContentProgressObserver;
-import org.chromium.chrome.browser.compositor.bottombar.contextualsearch.ContextualSearchPanel;
+import org.chromium.chrome.browser.compositor.overlay_panel.OverlayPanelContent;
+import org.chromium.chrome.browser.compositor.overlay_panel.OverlayPanelContentDelegate;
+import org.chromium.chrome.browser.compositor.overlay_panel.OverlayPanelContentFactory;
+import org.chromium.chrome.browser.compositor.overlay_panel.OverlayPanelContentProgressObserver;
+import org.chromium.chrome.browser.compositor.overlay_panel.contextualsearch.ContextualSearchPanel;
 import org.chromium.chrome.browser.profiles.ProfileProvider;
 import org.chromium.content_public.browser.Visibility;
 import org.chromium.content_public.browser.WebContents;
@@ -88,21 +88,21 @@ class ContextualSearchFakeServer
          *
          * @param text The string to wait for the selection to become.
          */
-        void waitForSelectionToBe(final String text);
+        void waitForSelectionToBe(String text);
 
         /**
          * Waits for the Search Term Resolution to become ready.
          *
          * @param search A given FakeResolveSearch.
          */
-        void waitForSearchTermResolutionToStart(final FakeResolveSearch search);
+        void waitForSearchTermResolutionToStart(FakeResolveSearch search);
 
         /**
          * Waits for the Search Term Resolution to finish.
          *
          * @param search A given FakeResolveSearch.
          */
-        void waitForSearchTermResolutionToFinish(final FakeResolveSearch search);
+        void waitForSearchTermResolutionToFinish(FakeResolveSearch search);
 
         /**
          * @return The {@link ContextualSearchPanel}.

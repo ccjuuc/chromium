@@ -73,13 +73,13 @@ export class LocalImagesElement extends WithPersonalizationStore {
   }
 
   private wallpaperProvider_: WallpaperProviderInterface;
-  private images_: Array<FilePath|DefaultImageSymbol>|null;
-  private imageData_: Record<FilePath['path']|DefaultImageSymbol, Url>;
-  private imageDataLoading_:
+  declare private images_: Array<FilePath|DefaultImageSymbol>|null;
+  declare private imageData_: Record<FilePath['path']|DefaultImageSymbol, Url>;
+  declare private imageDataLoading_:
       Record<FilePath['path']|DefaultImageSymbol, boolean>;
-  private currentSelected_: CurrentWallpaper|null;
-  private pendingSelected_: DisplayableImage|null;
-  private imagesToDisplay_: Array<FilePath|DefaultImageSymbol>;
+  declare private currentSelected_: CurrentWallpaper|null;
+  declare private pendingSelected_: DisplayableImage|null;
+  declare private imagesToDisplay_: Array<FilePath|DefaultImageSymbol>;
 
   constructor() {
     super();
@@ -203,7 +203,7 @@ export class LocalImagesElement extends WithPersonalizationStore {
     const data = imageData[getPathOrSymbol(image)];
     // Return a "fail" url that will not load.
     if (!isUrl(data) || !isImageDataUrl(data)) {
-      return {url: ''};
+      return '';
     }
     return data;
   }

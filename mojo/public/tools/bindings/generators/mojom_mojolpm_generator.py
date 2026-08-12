@@ -7,7 +7,7 @@ import sys
 from functools import partial
 from generators.mojom_cpp_generator import _NameFormatter as CppNameFormatter
 from generators.mojom_cpp_generator import Generator as CppGenerator
-from generators.mojom_cpp_generator import IsNativeOnlyKind, NamespaceToArray
+from generators.mojom_cpp_generator import IsNativeOnlyKind, NamespaceToArray, UseCustomSerializer
 import mojom.generate.generator as generator
 import mojom.generate.module as mojom
 import mojom.generate.pack as pack
@@ -125,6 +125,13 @@ class Generator(CppGenerator):
 
     for kind in self.module.enums + self.module.structs + self.module.unions:
       AddKind(kind)
+
+    parameters = (param for interface in self.module.interfaces
+                  for method in interface.methods
+                  for param in (method.parameters +
+                                (method.response_parameters or [])))
+    for parameter in parameters:
+      AddKind(parameter.kind)
 
     return all_typemaps
 
@@ -265,7 +272,8 @@ class Generator(CppGenerator):
         "is_typemapped_kind": self._IsTypemappedKind,
         "is_union_kind": mojom.IsUnionKind,
         "to_unnullable_kind": self._ToUnnullableKind,
-        "under_to_camel": partial(self._UnderToCamel, digits_split=True)
+        "under_to_camel": partial(self._UnderToCamel, digits_split=True),
+        "use_custom_serializer": UseCustomSerializer,
     }
     return cpp_filters
 
@@ -396,7 +404,7 @@ class Generator(CppGenerator):
       raise Exception("Unrecognized kind %s" % kind.spec)
     return _kind_to_cpp_proto_type[kind]
 
-  def _GetProtoFieldType(self, kind, quantified=True):
+  def _GetProtoFieldType(self, kind, quantified=True, field=None):
     # TODO(markbrand): This will not handle array<array> or array<map>
     # TODO(markbrand): This also will not handle array<x, 10>
     unquantified = ''
@@ -431,7 +439,8 @@ class Generator(CppGenerator):
     else:
       unquantified = _kind_to_proto_type[kind]
 
-    if quantified and mojom.IsNullableKind(kind):
+    if quantified and (mojom.IsNullableKind(kind) or
+                       (field and field.default is not None)):
       return 'optional %s' % unquantified
     elif quantified:
       return 'required %s' % unquantified

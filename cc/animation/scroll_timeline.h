@@ -84,13 +84,13 @@ class CC_ANIMATION_EXPORT ScrollTimeline : public AnimationTimeline {
   static constexpr double kScrollTimelineMicrosecondsPerPixel = 16;
 
   ScrollTimeline(std::optional<ElementId> scroller_id,
-                 ScrollDirection direction,
+                 std::optional<ScrollDirection> direction,
                  std::optional<ScrollOffsets> scroll_offsets,
                  int animation_timeline_id);
 
   static scoped_refptr<ScrollTimeline> Create(
       std::optional<ElementId> scroller_id,
-      ScrollDirection direction,
+      std::optional<ScrollDirection> direction,
       std::optional<ScrollOffsets> scroll_offsets);
 
   // Create a copy of this ScrollTimeline intended for the impl thread in the
@@ -115,6 +115,7 @@ class CC_ANIMATION_EXPORT ScrollTimeline : public AnimationTimeline {
 
   void UpdateScrollerIdAndScrollOffsets(
       std::optional<ElementId> scroller_id,
+      std::optional<ScrollDirection> direction,
       std::optional<ScrollOffsets> scroll_offsets);
 
   void PushPropertiesTo(AnimationTimeline* impl_timeline) override;
@@ -127,7 +128,9 @@ class CC_ANIMATION_EXPORT ScrollTimeline : public AnimationTimeline {
 
   std::optional<ElementId> GetActiveIdForTest() const { return active_id(); }
   std::optional<ElementId> GetPendingIdForTest() const { return pending_id(); }
-  ScrollDirection GetDirectionForTest() const { return direction(); }
+  std::optional<ScrollDirection> GetDirectionForTest() const {
+    return pending_direction();
+  }
   std::optional<double> GetStartScrollOffsetForTest() const {
     std::optional<ScrollOffsets> offsets = pending_offsets();
     if (offsets) {
@@ -146,10 +149,6 @@ class CC_ANIMATION_EXPORT ScrollTimeline : public AnimationTimeline {
   bool IsScrollTimeline() const override;
   bool IsLinkedToScroller(ElementId scroller) const override;
 
- protected:
-  ~ScrollTimeline() override;
-
- private:
   const std::optional<ElementId>& active_id() const {
     return active_id_.Read(*this);
   }
@@ -158,14 +157,23 @@ class CC_ANIMATION_EXPORT ScrollTimeline : public AnimationTimeline {
     return pending_id_.Read(*this);
   }
 
-  const ScrollDirection& direction() const { return direction_.Read(*this); }
-
   const std::optional<ScrollOffsets>& active_offsets() const {
     return active_offsets_.Read(*this);
   }
 
   const std::optional<ScrollOffsets>& pending_offsets() const {
     return pending_offsets_.Read(*this);
+  }
+
+ protected:
+  ~ScrollTimeline() override;
+
+ private:
+  const std::optional<ScrollDirection>& active_direction() const {
+    return active_direction_.Read(*this);
+  }
+  const std::optional<ScrollDirection>& pending_direction() const {
+    return pending_direction_.Read(*this);
   }
 
   // The scroller which this ScrollTimeline is based on. The same underlying
@@ -178,10 +186,16 @@ class CC_ANIMATION_EXPORT ScrollTimeline : public AnimationTimeline {
 
   // The direction of the ScrollTimeline indicates which axis of the scroller
   // it should base its current time on, and where the origin point is.
-  ProtectedSequenceReadable<ScrollDirection> direction_;
+  ProtectedSequenceForbidden<std::optional<ScrollDirection>> active_direction_;
+  ProtectedSequenceWritable<std::optional<ScrollDirection>> pending_direction_;
 
   ProtectedSequenceForbidden<std::optional<ScrollOffsets>> active_offsets_;
   ProtectedSequenceWritable<std::optional<ScrollOffsets>> pending_offsets_;
+
+  // Current time from the last active-tree tick, used to detect an unchanged
+  // scroll offset between frames (so an idle page avoids redundant ticks).
+  // Reset on (re)activation and property push, as the scroller may change.
+  ProtectedSequenceForbidden<std::optional<base::TimeTicks>> last_tick_time_;
 };
 
 inline ScrollTimeline* ToScrollTimeline(AnimationTimeline* timeline) {

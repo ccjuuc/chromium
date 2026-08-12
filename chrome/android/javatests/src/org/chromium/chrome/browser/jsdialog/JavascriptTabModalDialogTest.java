@@ -20,6 +20,7 @@ import static org.hamcrest.Matchers.not;
 import static org.chromium.ui.test.util.ViewUtils.onViewWaiting;
 
 import android.content.pm.ActivityInfo;
+import android.view.View;
 
 import androidx.test.espresso.Espresso;
 import androidx.test.filters.MediumTest;
@@ -39,14 +40,15 @@ import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.base.test.util.UrlUtils;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.page.WebPageStation;
+import org.chromium.chrome.test.util.BottomBarTestUtils;
 import org.chromium.components.javascript_dialogs.JavascriptTabModalDialog;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.test.util.TestCallbackHelperContainer.OnEvaluateJavaScriptResultHelper;
@@ -266,7 +268,8 @@ public class JavascriptTabModalDialogTest {
     public void testDialogDismissedAfterToggleOverview() {
         executeJavaScriptAndWaitForDialog("alert('Android')");
 
-        onViewWaiting(withId(R.id.tab_switcher_button)).perform(click());
+        View tabSwitcherBtn = BottomBarTestUtils.findViewById(mActivity, R.id.tab_switcher_button);
+        onViewWaiting(is(tabSwitcherBtn)).perform(click());
 
         // Entering tab switcher should have dismissed the dialog.
         checkDialogShowing(

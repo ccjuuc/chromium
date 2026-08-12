@@ -14,6 +14,7 @@
 namespace autofill {
 
 namespace {
+
 using ::base::android::ConvertJavaStringToUTF8;
 using ::base::android::ConvertUTF8ToJavaString;
 using ::base::android::JavaRef;
@@ -46,7 +47,7 @@ std::string FormatPhoneNumber(
     ::i18n::phonenumbers::PhoneNumberUtil::PhoneNumberFormat format) {
   return FormatPhoneNumberWithCountryCode(
       phone_number,
-      autofill::AutofillCountry::CountryCodeForLocale(
+      AutofillCountry::CountryCodeForLocale(
           g_browser_process->GetApplicationLocale()),
       format);
 }
@@ -59,7 +60,7 @@ std::string FormatPhoneNumber(
 // by using i18n::phonenumbers::PhoneNumberUtil::Format.
 static std::string JNI_PhoneNumberUtil_FormatForDisplay(
     JNIEnv* env,
-    std::string& phone_number,
+    const std::string& phone_number,
     const JavaRef<jstring>& jcountry_code) {
   return jcountry_code.is_null()
              ? FormatPhoneNumber(phone_number,
@@ -78,7 +79,7 @@ static std::string JNI_PhoneNumberUtil_FormatForDisplay(
 // (https://w3c.github.io/browser-payment-api/#paymentrequest-updated-algorithm)
 static std::string JNI_PhoneNumberUtil_FormatForResponse(
     JNIEnv* env,
-    std::string& phone_number) {
+    const std::string& phone_number) {
   return FormatPhoneNumber(
       phone_number,
       ::i18n::phonenumbers::PhoneNumberUtil::PhoneNumberFormat::E164);
@@ -87,12 +88,12 @@ static std::string JNI_PhoneNumberUtil_FormatForResponse(
 // Checks whether the given number `phone_number` is a possible number for a
 // given country `jcountry_code` by using
 // i18n::phonenumbers::PhoneNumberUtil::IsPossibleNumberForString.
-static jboolean JNI_PhoneNumberUtil_IsPossibleNumber(
+static bool JNI_PhoneNumberUtil_IsPossibleNumber(
     JNIEnv* env,
-    std::string& phone_number,
+    const std::string& phone_number,
     const JavaRef<jstring>& jcountry_code) {
   const std::string country_code =
-      jcountry_code.is_null() ? autofill::AutofillCountry::CountryCodeForLocale(
+      jcountry_code.is_null() ? AutofillCountry::CountryCodeForLocale(
                                     g_browser_process->GetApplicationLocale())
                               : ConvertJavaStringToUTF8(env, jcountry_code);
 

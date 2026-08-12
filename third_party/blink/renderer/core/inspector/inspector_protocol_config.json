@@ -23,6 +23,9 @@
                 "async": ["requestCacheNames", "requestEntries", "deleteCache", "deleteEntry", "requestCachedResponse"]
             },
             {
+                "domain": "CrashReportContext"
+            },
+            {
                 "domain": "CSS",
                 "async": ["enable", "takeComputedStyleUpdates"]
             },
@@ -85,7 +88,11 @@
             {
                 "domain": "Page",
                 "exclude": ["getNavigationHistory", "navigateToHistoryEntry", "resetNavigationHistory", "captureScreenshot", "screencastFrameAck", "handleJavaScriptDialog", "setColorPickerEnabled",
-                            "getAppManifest", "getAnnotatedPageContent", "setControlNavigations", "processNavigation", "printToPDF", "bringToFront", "setDownloadBehavior", "navigate", "crash", "close", "setWebLifecycleState", "captureSnapshot", "getInstallabilityErrors", "getManifestIcons", "getAppId", "setSPCTransactionMode", "setRPHRegistrationMode", "setPrerenderingAllowed"],
+                            "getAppManifest", "getAnnotatedPageContent", "setControlNavigations", "processNavigation", "printToPDF", "bringToFront", "setDownloadBehavior", "navigate", "crash", "close", "setWebLifecycleState", "captureSnapshot", "getInstallabilityErrors", "getManifestIcons", "getAppId", "setSPCTransactionMode", "setRPHRegistrationMode", "setPrerenderingAllowed", "startScreenRecording", "stopScreenRecording"],
+                "pass_associated_data": [
+                    "addScriptToEvaluateOnNewDocument",
+                    "addScriptToEvaluateOnLoad"
+                ],
                 "async": ["getResourceContent", "searchInResource", "createIsolatedWorld"],
                 "exclude_events": ["screencastFrame", "screencastVisibilityChanged", "colorPicked", "interstitialShown", "interstitialHidden",
                                    "javascriptDialogOpening", "javascriptDialogClosed", "navigationRequested", "frameStartedLoading", "frameStoppedLoading"]
@@ -114,10 +121,16 @@
                             "getSecurityIsolationStatus",
                             "loadNetworkResource",
                             "enableReportingApi",
-                            "setCookieControls",
-                            "configureDurableMessages"
+                            "enableDeviceBoundSessions",
+                            "deleteDeviceBoundSession",
+                            "fetchSchemefulSite",
+                            "setCookieControls"
                           ],
                 "async": ["getResponseBody", "getRequestPostData"]
+            },
+            {
+                "domain": "WebMCP",
+                "exclude": ["invokeTool"]
             },
             {
                 "domain": "WebAudio"

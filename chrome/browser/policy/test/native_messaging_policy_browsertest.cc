@@ -30,7 +30,7 @@ extensions::MessagingDelegate::PolicyPermission IsNativeMessagingHostAllowed(
 }  // namespace
 
 IN_PROC_BROWSER_TEST_F(PolicyTest, NativeMessagingBlocklistSelective) {
-  base::Value::List blocklist;
+  base::ListValue blocklist;
   blocklist.Append("host.name");
   PolicyMap policies;
   policies.Set(key::kNativeMessagingBlocklist, POLICY_LEVEL_MANDATORY,
@@ -39,14 +39,14 @@ IN_PROC_BROWSER_TEST_F(PolicyTest, NativeMessagingBlocklistSelective) {
   UpdateProviderPolicy(policies);
 
   EXPECT_EQ(extensions::MessagingDelegate::PolicyPermission::DISALLOW,
-            IsNativeMessagingHostAllowed(browser()->profile(), "host.name"));
+            IsNativeMessagingHostAllowed(browser()->GetProfile(), "host.name"));
   EXPECT_EQ(
       extensions::MessagingDelegate::PolicyPermission::ALLOW_ALL,
-      IsNativeMessagingHostAllowed(browser()->profile(), "other.host.name"));
+      IsNativeMessagingHostAllowed(browser()->GetProfile(), "other.host.name"));
 }
 
 IN_PROC_BROWSER_TEST_F(PolicyTest, NativeMessagingBlocklistWildcard) {
-  base::Value::List blocklist;
+  base::ListValue blocklist;
   blocklist.Append("*");
   PolicyMap policies;
   policies.Set(key::kNativeMessagingBlocklist, POLICY_LEVEL_MANDATORY,
@@ -55,16 +55,16 @@ IN_PROC_BROWSER_TEST_F(PolicyTest, NativeMessagingBlocklistWildcard) {
   UpdateProviderPolicy(policies);
 
   EXPECT_EQ(extensions::MessagingDelegate::PolicyPermission::DISALLOW,
-            IsNativeMessagingHostAllowed(browser()->profile(), "host.name"));
+            IsNativeMessagingHostAllowed(browser()->GetProfile(), "host.name"));
   EXPECT_EQ(
       extensions::MessagingDelegate::PolicyPermission::DISALLOW,
-      IsNativeMessagingHostAllowed(browser()->profile(), "other.host.name"));
+      IsNativeMessagingHostAllowed(browser()->GetProfile(), "other.host.name"));
 }
 
 IN_PROC_BROWSER_TEST_F(PolicyTest, NativeMessagingAllowlist) {
-  base::Value::List blocklist;
+  base::ListValue blocklist;
   blocklist.Append("*");
-  base::Value::List allowlist;
+  base::ListValue allowlist;
   allowlist.Append("host.name");
   PolicyMap policies;
   policies.Set(key::kNativeMessagingBlocklist, POLICY_LEVEL_MANDATORY,
@@ -76,10 +76,10 @@ IN_PROC_BROWSER_TEST_F(PolicyTest, NativeMessagingAllowlist) {
   UpdateProviderPolicy(policies);
 
   EXPECT_EQ(extensions::MessagingDelegate::PolicyPermission::ALLOW_ALL,
-            IsNativeMessagingHostAllowed(browser()->profile(), "host.name"));
+            IsNativeMessagingHostAllowed(browser()->GetProfile(), "host.name"));
   EXPECT_EQ(
       extensions::MessagingDelegate::PolicyPermission::DISALLOW,
-      IsNativeMessagingHostAllowed(browser()->profile(), "other.host.name"));
+      IsNativeMessagingHostAllowed(browser()->GetProfile(), "other.host.name"));
 }
 
 }  // namespace policy

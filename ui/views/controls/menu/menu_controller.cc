@@ -104,6 +104,13 @@ DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(std::vector<views::ViewTracker>,
 
 #if BUILDFLAG(IS_MAC)
 bool AcceleratorShouldCancelMenu(const ui::Accelerator& accelerator) {
+  // Only trigger menu cancellation on key press, not on key release.
+  // This prevents menus from closing when users release modifier keys after
+  // opening the menu with a keyboard shortcut.
+  if (accelerator.key_state() == ui::Accelerator::KeyState::RELEASED) {
+    return false;
+  }
+
   // Since AcceleratorShouldCancelMenu() is called quite early in key
   // event handling, it is actually invoked for modifier keys themselves
   // changing. In that case, the key code reflects that the modifier key is
@@ -405,8 +412,48 @@ static void RepostEventImpl(const ui::LocatedEvent* event,
     WPARAM target = client_area ? event->native_event().wParam
                                 : static_cast<WPARAM>(nc_hit_result);
     LPARAM window_coords = MAKELPARAM(window_x, window_y);
-    PostMessage(target_window, event->native_event().message, target,
-                window_coords);
+    UINT message_type = event->native_event().message;
+    if (!client_area) {
+      switch (message_type) {
+        case WM_LBUTTONDOWN:
+          message_type = WM_NCLBUTTONDOWN;
+          break;
+        case WM_RBUTTONDOWN:
+          message_type = WM_NCRBUTTONDOWN;
+          break;
+        case WM_MBUTTONDOWN:
+          message_type = WM_NCMBUTTONDOWN;
+          break;
+        case WM_XBUTTONDOWN:
+          message_type = WM_NCXBUTTONDOWN;
+          break;
+        case WM_LBUTTONUP:
+          message_type = WM_NCLBUTTONUP;
+          break;
+        case WM_RBUTTONUP:
+          message_type = WM_NCRBUTTONUP;
+          break;
+        case WM_MBUTTONUP:
+          message_type = WM_NCMBUTTONUP;
+          break;
+        case WM_XBUTTONUP:
+          message_type = WM_NCXBUTTONUP;
+          break;
+        case WM_LBUTTONDBLCLK:
+          message_type = WM_NCLBUTTONDBLCLK;
+          break;
+        case WM_RBUTTONDBLCLK:
+          message_type = WM_NCRBUTTONDBLCLK;
+          break;
+        case WM_MBUTTONDBLCLK:
+          message_type = WM_NCMBUTTONDBLCLK;
+          break;
+        case WM_XBUTTONDBLCLK:
+          message_type = WM_NCXBUTTONDBLCLK;
+          break;
+      }
+    }
+    PostMessage(target_window, message_type, target, window_coords);
     return;
   }
 
@@ -817,7 +864,14 @@ bool MenuController::IsContextMenu() const {
 
 void MenuController::SelectItemAndOpenSubmenu(MenuItemView* item) {
   DCHECK(item);
+  auto this_ref = AsWeakPtr();
   SetSelection(item, SELECTION_OPEN_SUBMENU | SELECTION_UPDATE_IMMEDIATELY);
+
+  // Accessibility events fired as a result of the selection changing may have
+  // closed the menu and deleted `this`. Guard against that.
+  if (!this_ref) {
+    return;
+  }
 
   // If `item` has not a submenu, hot track `item`'s initial focusable button
   // if any.
@@ -860,13 +914,17 @@ bool MenuController::OnMousePressed(SubmenuView* source,
     View* view =
         forward_to_root->GetEventHandlerForPoint(event_for_root.location());
     Button* button = Button::AsButton(view);
+    auto this_ref = AsWeakPtr();
     if (hot_button_ != button) {
       SetHotTrackedButton(button);
     }
 
+    if (!this_ref) {
+      return true;
+    }
+
     // Empty menu items are always handled by the menu controller.
     if (!IsViewClass<EmptyMenuMenuItem>(view)) {
-      base::WeakPtr<MenuController> this_ref = AsWeakPtr();
       bool processed = forward_to_root->ProcessMousePressed(event_for_root);
       // This object may be destroyed as a result of a mouse press event (some
       // item may close the menu).
@@ -913,6 +971,9 @@ bool MenuController::OnMouseDragged(SubmenuView* source,
     }
     return true;
   }
+  // Changing the selection or showing a sibling menu can cause `this` to be
+  // deleted as a side effect of accessibility notifications.
+  auto this_ref = AsWeakPtr();
   MenuItemView* mouse_menu = nullptr;
   if (part.type == MenuPartType::kMenuItem) {
     // If there is no menu target, but a submenu target, then we are interacting
@@ -940,6 +1001,9 @@ bool MenuController::OnMouseDragged(SubmenuView* source,
       }
     }
   }
+  if (!this_ref) {
+    return false;
+  }
   UpdateActiveMouseView(source, event, mouse_menu);
 
   return true;
@@ -948,6 +1012,8 @@ bool MenuController::OnMouseDragged(SubmenuView* source,
 void MenuController::OnMouseReleased(SubmenuView* source,
                                      const ui::MouseEvent& event) {
   current_mouse_pressed_state_ &= ~event.changed_button_flags();
+
+  auto this_ref = AsWeakPtr();
 
   if (current_mouse_event_target_) {
     // If this was the final mouse button, then remove the forwarding target.
@@ -1024,6 +1090,12 @@ void MenuController::OnMouseReleased(SubmenuView* source,
     // User either clicked on empty space, or a menu that has children.
     SetSelection(part.menu ? part.menu.get() : state_.item.get(),
                  SELECTION_OPEN_SUBMENU | SELECTION_UPDATE_IMMEDIATELY);
+    // On the rare, off chance that an accessibility event is fired as a result
+    // of the selection changing *and* the Accessibility tool causes the menu to
+    // be closed, `this` will be otherwise dangling. Guard against that.
+    if (!this_ref) {
+      return;
+    }
   }
   SendMouseCaptureLostToActiveView();
   MaybeForwardToAnnotation(source, event);
@@ -1062,7 +1134,13 @@ void MenuController::OnMouseMoved(SubmenuView* source,
     new_hot_tracked_button = Button::AsButton(view);
   }
 
+  // `HandleMouseLocation()` may change the selection, which can cause `this` to
+  // be deleted as a side effect of accessibility notifications.
+  auto this_ref = AsWeakPtr();
   HandleMouseLocation(source, event.location());
+  if (!this_ref) {
+    return;
+  }
 
   // Updating the hot tracked button should be after `HandleMouseLocation()`
   // which may reset the current hot tracked button.
@@ -1277,6 +1355,7 @@ int MenuController::OnDragUpdated(SubmenuView* source,
   }
   MenuDelegate::DropPosition drop_position = MenuDelegate::DropPosition::kNone;
   int drop_operation = ui::DragDropTypes::DRAG_NONE;
+  auto this_ref = AsWeakPtr();
   if (menu_item) {
     gfx::Point menu_item_loc(event.location());
     View::ConvertPointToTarget(source, menu_item, &menu_item_loc);
@@ -1312,6 +1391,11 @@ int MenuController::OnDragUpdated(SubmenuView* source,
   } else {
     SetSelection(source->GetMenuItem(), SELECTION_OPEN_SUBMENU);
   }
+  // Accessibility events fired as a result of the selection changing may have
+  // closed the menu and deleted `this`. Guard against that.
+  if (!this_ref) {
+    return drop_operation;
+  }
   SetDropMenuItem(menu_item, drop_position);
   last_drop_operation_ = drop_operation;
   return drop_operation;
@@ -1320,7 +1404,7 @@ int MenuController::OnDragUpdated(SubmenuView* source,
 void MenuController::OnDragExited(SubmenuView* source) {
   StartCancelAllTimer();
 
-  if (drop_target_) {
+  if (drop_target_tracker_.view()) {
     StopShowTimer();
     SetDropMenuItem(nullptr, MenuDelegate::DropPosition::kNone);
   }
@@ -1329,17 +1413,18 @@ void MenuController::OnDragExited(SubmenuView* source) {
 views::View::DropCallback MenuController::GetDropCallback(
     SubmenuView* source,
     const ui::DropTargetEvent& event) {
-  DCHECK(drop_target_);
+  MenuItemView* drop_target =
+      static_cast<MenuItemView*>(drop_target_tracker_.view());
+  DCHECK(drop_target);
 
   MenuItemView* item = state_.item;
   DCHECK(item);
 
   // If over an empty menu item, drop occurs on the parent.
-  if (IsViewClass<EmptyMenuMenuItem>(drop_target_)) {
-    drop_target_ = drop_target_->GetParentMenuItem();
+  if (IsViewClass<EmptyMenuMenuItem>(drop_target)) {
+    drop_target = drop_target->GetParentMenuItem();
+    drop_target_tracker_.SetView(drop_target);
   }
-
-  MenuItemView* drop_target = drop_target_;
   MenuDelegate::DropPosition drop_position = drop_position_;
 
   if (for_drop_) {
@@ -1381,12 +1466,12 @@ void MenuController::OnDragExitedScrollButton(SubmenuView* source) {
   StopScrollingViaButton();
 }
 
-void MenuController::OnDragWillStart() {
+void MenuController::OnDragDropWillStart() {
   DCHECK(!drag_in_progress_);
   drag_in_progress_ = true;
 }
 
-void MenuController::OnDragComplete(bool should_close) {
+void MenuController::OnDragDropCompleted(bool should_close) {
   DCHECK(drag_in_progress_);
   drag_in_progress_ = false;
   // During a drag, mouse events are processed directly by the widget, and not
@@ -1400,7 +1485,7 @@ void MenuController::OnDragComplete(bool should_close) {
   // is not updated when the mouse button is released to end a drag. Therefore,
   // all subsequent mouse movements will be delivered as "MouseDragged" events.
   // Until this is fixed, the menu should be closed.
-#if BUILDFLAG(IS_OZONE_X11)
+#if BUILDFLAG(SUPPORTS_OZONE_X11)
   should_close = true;
 #endif
 
@@ -1742,15 +1827,15 @@ void MenuController::SetSelection(MenuItemView* menu_item,
   }
 
   if (should_notify_selected_child_changed) {
-    // Notify an accessibility selected children changed event on the parent
-    // submenu.
+    // Update the active descendant on the containing SubmenuView to point to
+    // the selected menu item, unless a hot button has focus (in which case
+    // the hot button is the active descendant).
     if (menu_item->GetParentMenuItem() &&
         menu_item->GetParentMenuItem()->GetSubmenu()) {
-      menu_item->GetParentMenuItem()
-          ->GetSubmenu()
-          ->NotifyAccessibilityEventDeprecated(
-              ax::mojom::Event::kSelectedChildrenChanged,
-              /*send_native_event=*/true);
+      SubmenuView* submenu = menu_item->GetParentMenuItem()->GetSubmenu();
+      if (!hot_button_) {
+        submenu->GetViewAccessibility().SetActiveDescendant(*menu_item);
+      }
     }
   }
 }
@@ -1812,8 +1897,13 @@ void MenuController::SetSelectionOnPointerDown(SubmenuView* source,
   SetSelection(part.menu, selection_types);
 }
 
-void MenuController::StartDrag(SubmenuView* source,
+void MenuController::StartDrag(SubmenuView* source_raw,
                                const gfx::Point& location) {
+  // TODO(crbug.com/497736679): Intended to keep `source_raw` quarantined inside
+  // StartDrag(). Since `source_raw` might be destroyed while RunDrawDropLoop(),
+  // `source` will be sometimes dangling pointer. So detecting
+  // `source` is dangling is expected.
+  raw_ptr<SubmenuView, DisableDanglingPtrDetection> source(source_raw);
   MenuItemView* item = state_.item;
   DCHECK(item);
   // Points are in the coordinates of the submenu, need to map to that of
@@ -1839,8 +1929,9 @@ void MenuController::StartDrag(SubmenuView* source,
   bool had_capture = source->host()->HasCapture();
   base::WeakPtr<MenuController> this_ref = AsWeakPtr();
   // TODO(varunjain): Properly determine and send DragEventSource below.
-  item->GetWidget()->RunShellDrag(nullptr, std::move(data), widget_loc,
-                                  drag_ops, ui::mojom::DragEventSource::kMouse);
+  item->GetWidget()->RunDragDropLoop(nullptr, std::move(data), widget_loc,
+                                     drag_ops,
+                                     ui::mojom::DragEventSource::kMouse);
   if (!this_ref) {
     return;
   }
@@ -2028,7 +2119,6 @@ MenuController::MenuController(bool for_drop,
                                internal::MenuControllerDelegate* delegate)
     : for_drop_(for_drop),
       result_(nullptr),
-      drop_target_(nullptr),
       active_mouse_view_tracker_(std::make_unique<ViewTracker>()),
       delegate_(delegate),
       alert_animation_(this) {
@@ -2514,7 +2604,14 @@ void MenuController::OpenMenuImpl(MenuItemView* item, bool show) {
     } else {
       params.context = owner_;
     }
+    auto weak_this = AsWeakPtr();
     item->GetSubmenu()->ShowAt(params);
+    // It is possible that the ShowAt() above can synchronously re-enter and
+    // destroy `this` and the entire MenuItemView tree. We do a CHECK() here
+    // instead of a early return. There are still other things up the stack that
+    // would require additional guarding. It is also unknown what state things
+    // would be left in should it be allowed to continue.
+    CHECK(weak_this);
 
     // Figure out if the mouse is under the menu; if so, remember the mouse
     // location so we can ignore the first mouse move event(s) with that
@@ -2567,8 +2664,12 @@ void MenuController::MenuChildrenChanged(MenuItemView* item) {
       return;
     }
   }
+  // Setting the selection can indirectly destroy this object via accessibility
+  // system callbacks and activation changes. This should be rare but must be
+  // protected against.
+  const auto weak_this = AsWeakPtr();
   SetSelection(item, SELECTION_OPEN_SUBMENU | SELECTION_UPDATE_IMMEDIATELY);
-  if (item->HasSubmenu()) {
+  if (weak_this && item->HasSubmenu()) {
     OpenMenuImpl(item, false);
   }
 }
@@ -3216,7 +3317,14 @@ void MenuController::OpenSubmenuChangeSelectionIfCan() {
   }
 
   // Show the sub-menu.
+  auto this_ref = AsWeakPtr();
   SetSelection(item, SELECTION_OPEN_SUBMENU | SELECTION_UPDATE_IMMEDIATELY);
+
+  // Accessibility events fired as a result of the selection changing may have
+  // closed the menu and deleted `this`. Guard against that.
+  if (!this_ref) {
+    return;
+  }
 
   MenuItemView* to_select = nullptr;
   if (!item->GetSubmenu()->GetMenuItems().empty()) {
@@ -3416,19 +3524,21 @@ void MenuController::RepostEventAndCancel(SubmenuView* source,
 
 void MenuController::SetDropMenuItem(MenuItemView* new_target,
                                      MenuDelegate::DropPosition new_position) {
-  if (new_target == drop_target_ && new_position == drop_position_) {
+  MenuItemView* drop_target =
+      static_cast<MenuItemView*>(drop_target_tracker_.view());
+  if (new_target == drop_target && new_position == drop_position_) {
     return;
   }
 
-  if (drop_target_) {
-    drop_target_->GetParentMenuItem()->GetSubmenu()->SetDropMenuItem(
+  if (drop_target) {
+    drop_target->GetParentMenuItem()->GetSubmenu()->SetDropMenuItem(
         nullptr, MenuDelegate::DropPosition::kNone);
   }
-  drop_target_ = new_target;
+  drop_target_tracker_.SetView(new_target);
   drop_position_ = new_position;
-  if (drop_target_) {
-    drop_target_->GetParentMenuItem()->GetSubmenu()->SetDropMenuItem(
-        drop_target_, drop_position_);
+  if (new_target) {
+    new_target->GetParentMenuItem()->GetSubmenu()->SetDropMenuItem(
+        new_target, drop_position_);
   }
 }
 
@@ -3533,17 +3643,23 @@ void MenuController::ExitMenu() {
   // ExitTopMostMenu unwinds nested delegates
   internal::MenuControllerDelegate* delegate = delegate_;
   int accept_event_flags = accept_event_flags_;
+  // Since |delegate| may delete this, get a weak pointer first, and ensure
+  // |result| is safe from deletion (it can be freed but will be quarantined).
   base::WeakPtr<MenuController> this_ref = AsWeakPtr();
-  MenuItemView* result = ExitTopMostMenu();
+  // Dangling since a lot of tests in `views_unittests` and
+  // `interactive_ui_tests` detect this (likely correctly) as a dangling
+  // pointer.
+  raw_ptr<MenuItemView, DanglingUntriaged> result =
+      ExitTopMostMenu().ExtractAsDangling();
   delegate->OnMenuClosed(internal::MenuControllerDelegate::NOTIFY_DELEGATE,
-                         result, accept_event_flags);
+                         result.get(), accept_event_flags);
   // |delegate| may have deleted this.
   if (this_ref && nested && exit_type_ == ExitType::kAll) {
     ExitMenu();
   }
 }
 
-MenuItemView* MenuController::ExitTopMostMenu() {
+raw_ptr<MenuItemView> MenuController::ExitTopMostMenu() {
   // Release the lock which prevents Chrome from shutting down while the menu is
   // showing.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -3599,8 +3715,9 @@ MenuItemView* MenuController::ExitTopMostMenu() {
     did_capture_ = false;
   }
 
-  MenuItemView* result = result_;
-  // In case we're nested, reset |result_|.
+  // In case we're nested, reset |result_|, but use a raw_ptr to ensure we keep
+  // UaF protection.
+  raw_ptr<MenuItemView> result = result_;
   result_ = nullptr;
 
   if (exit_type_ == ExitType::kOutermost) {
@@ -3671,7 +3788,14 @@ void MenuController::SetInitialHotTrackedView(
   if (!item) {
     return;
   }
+  auto this_ref = AsWeakPtr();
   SetSelection(item, SELECTION_DEFAULT);
+
+  // Accessibility events fired as a result of the selection changing may have
+  // closed the menu and deleted `this`. Guard against that.
+  if (!this_ref) {
+    return;
+  }
   View* hot_view =
       GetInitialFocusableView(item, direction == INCREMENT_SELECTION_DOWN);
   SetHotTrackedButton(Button::AsButton(hot_view));
@@ -3733,8 +3857,30 @@ void MenuController::SetHotTrackedButton(Button* new_hot_button) {
   if (hot_button_) {
     hot_button_->GetViewAccessibility().SetPopupFocusOverride();
     hot_button_->SetHotTracked(true);
+
+    // Update the active descendant on the containing SubmenuView to point to
+    // the hot button. This informs assistive technologies which element is
+    // currently active within the menu.
+    if (pending_state_.item && pending_state_.item->GetParentMenuItem()) {
+      if (SubmenuView* submenu =
+              pending_state_.item->GetParentMenuItem()->GetSubmenu()) {
+        submenu->GetViewAccessibility().SetActiveDescendant(*hot_button_);
+      }
+    }
+
+    // TODO(crbug.com/40672441): Handle this manually fired event for ViewsAX.
     hot_button_->NotifyAccessibilityEventDeprecated(
         ax::mojom::Event::kSelection, true);
+  } else {
+    // When clearing the hot button, restore active descendant to the selected
+    // menu item if one exists.
+    if (pending_state_.item && pending_state_.item->GetParentMenuItem()) {
+      if (SubmenuView* submenu =
+              pending_state_.item->GetParentMenuItem()->GetSubmenu()) {
+        submenu->GetViewAccessibility().SetActiveDescendant(
+            *pending_state_.item);
+      }
+    }
   }
 }
 

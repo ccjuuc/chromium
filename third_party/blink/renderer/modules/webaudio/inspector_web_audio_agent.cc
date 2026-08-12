@@ -19,13 +19,13 @@ namespace blink {
 
 namespace {
 
-String GetContextTypeEnum(BaseAudioContext* context) {
+const char* GetContextTypeEnum(BaseAudioContext* context) {
   return context->HasRealtimeConstraint()
       ? protocol::WebAudio::ContextTypeEnum::Realtime
       : protocol::WebAudio::ContextTypeEnum::Offline;
 }
 
-String GetContextStateEnum(BaseAudioContext* context) {
+const char* GetContextStateEnum(BaseAudioContext* context) {
   switch (context->ContextState()) {
     case V8AudioContextState::Enum::kSuspended:
       return protocol::WebAudio::ContextStateEnum::Suspended;
@@ -42,15 +42,14 @@ String GetContextStateEnum(BaseAudioContext* context) {
 // Strips "Node" from the node name string. For example, "GainNode" will return
 // "Gain".
 String StripNodeSuffix(const String& nodeName) {
-  return nodeName.EndsWith("Node") ? nodeName.Left(nodeName.length() - 4)
-                                   : "Unknown";
+  return nodeName.ends_with("Node") ? nodeName.substr(0, nodeName.length() - 4)
+                                    : "Unknown";
 }
 
 // Strips out the prefix and returns the actual parameter name. If the name
 // does not match `NodeName.ParamName` pattern, returns "Unknown" instead.
 String StripParamPrefix(const String& paramName) {
-  Vector<String> name_tokens;
-  paramName.Split('.', name_tokens);
+  Vector<String> name_tokens = paramName.SplitSkippingEmpty('.');
   return name_tokens.size() == 2 ? name_tokens.at(1) : "Unknown";
 }
 

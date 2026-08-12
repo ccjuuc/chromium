@@ -6,15 +6,20 @@
 
 #include <utility>
 
+#include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/memory/ref_counted_delete_on_sequence.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "build/build_config.h"
-#include "gpu/ipc/client/client_shared_image_interface.h"
+#include "gpu/config/gpu_driver_bug_workarounds.h"
+#include "gpu/ipc/client/gpu_channel_observer.h"
+#include "media/capture/capture_switches.h"
 #include "media/capture/video/create_video_capture_device_factory.h"
-#include "media/capture/video/fake_video_capture_device_factory.h"
 #include "media/capture/video/video_capture_buffer_pool.h"
 #include "media/capture/video/video_capture_buffer_tracker.h"
 #include "media/capture/video/video_capture_system_impl.h"
@@ -34,9 +39,9 @@
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
+#include "base/task/bind_post_task.h"
 #include "media/capture/capture_switches.h"
 #include "media/capture/video/video_capture_gpu_channel_host.h"
-#include "services/viz/public/cpp/gpu/context_provider_command_buffer.h"
 #endif  // BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
 
 namespace video_capture {
@@ -101,113 +106,176 @@ class VideoCaptureServiceImpl::GpuDependenciesContext {
 };
 
 #if BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
-// Intended usage of this class is to create viz::Gpu in utility process and
-// connect to viz::GpuClient of browser process, which will call to Gpu service.
-// Also, this class holds the viz::ContextProvider to listen and monitor Gpu
-// context lost event. The viz::Gpu and viz::ContextProvider need be created in
-// the main thread of utility process. The |main_task_runner_| is initialized as
-// the default single thread task runner of main thread. The
-// viz::ContextProvider will call BindToCurrentSequence on |main_task_runner_|
-// sequence of main thread. Then, the gpu context lost event will be called in
-// the |main_task_runner_| sequence, which will be notified to the
-// media::VideoCaptureGpuChannelHost.
-class VideoCaptureServiceImpl::VizGpuContextProvider
-    : public viz::ContextLostObserver {
+// Class managing GpuChannelHost and SharedImageInterface for media capture.
+// Operates on ui_task_runner_.
+class VideoCaptureServiceImpl::GpuChannelHostProvider final
+    : public gpu::GpuChannelLostObserver {
  public:
-  VizGpuContextProvider(std::unique_ptr<viz::Gpu> viz_gpu)
-      : main_task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()),
-        viz_gpu_(std::move(viz_gpu)) {
-    StartContextProviderIfNeeded();
+  GpuChannelHostProvider(
+      scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
+      scoped_refptr<gpu::GpuChannelHost> gpu_channel_host,
+      GpuChannelHostBinder binder,
+      std::unique_ptr<viz::Gpu> viz_gpu = nullptr)
+      : ui_task_runner_(std::move(ui_task_runner)),
+        gpu_channel_host_(std::move(gpu_channel_host)),
+        gpu_channel_host_binder_(std::move(binder)),
+        viz_gpu_(std::move(viz_gpu)),
+        gpu_driver_bug_workarounds_(
+            gpu_channel_host_
+                ? gpu::GpuDriverBugWorkarounds(
+                      gpu_channel_host_->gpu_feature_info()
+                          .enabled_gpu_driver_bug_workarounds)
+                : (viz_gpu_ && viz_gpu_->GetGpuChannel()
+                       ? gpu::GpuDriverBugWorkarounds(
+                             viz_gpu_->GetGpuChannel()
+                                 ->gpu_feature_info()
+                                 .enabled_gpu_driver_bug_workarounds)
+                       : gpu::GpuDriverBugWorkarounds())) {
+    StartGpuChannelHostIfNeeded();
   }
 
-  ~VizGpuContextProvider() override {
-    // Ensure destroy context provider and not receive callbacks before clear up
-    // |viz_gpu_|.
-    if (context_provider_) {
-      // Ensure there are no dangling pointers.
+  ~GpuChannelHostProvider() {
+    DCHECK(ui_task_runner_->BelongsToCurrentThread());
+    if (gpu_channel_host_) {
+      gpu_channel_host_->RemoveObserver(this);
+      gpu_channel_host_ = nullptr;
+    }
+    media::VideoCaptureGpuChannelHost::GetInstance().SetSharedImageInterface(
+        nullptr);
+    media::VideoCaptureGpuChannelHost::GetInstance().SetGpuChannel(nullptr);
+#if BUILDFLAG(IS_CHROMEOS)
+    media::VideoCaptureDeviceFactoryChromeOS::SetGpuChannelHost(nullptr);
+    media::VideoCaptureDeviceFactoryChromeOS::SetSharedImageInterface(nullptr);
+#endif  // BUILDFLAG(IS_CHROMEOS)
+  }
+
+  gpu::GpuDriverBugWorkarounds GetGpuDriverBugWorkarounds() const {
+    return gpu_driver_bug_workarounds_;
+  }
+
+  // gpu::GpuChannelLostObserver implementation.
+  void OnGpuChannelLost() override {
+    ui_task_runner_->PostTask(
+        FROM_HERE,
+        base::BindOnce(&GpuChannelHostProvider::OnGpuChannelLostOnUIThread,
+                       weak_ptr_factory_.GetWeakPtr()));
+  }
+
+ private:
+  static constexpr int kMaxRetryCount = 3;
+
+  void OnGpuChannelLostOnUIThread() {
+    DCHECK(ui_task_runner_->BelongsToCurrentThread());
+    if (gpu_channel_host_) {
+      gpu_channel_host_->RemoveObserver(this);
+      gpu_channel_host_ = nullptr;
+    }
+
+    consecutive_retry_count_ = 0;
+    StartGpuChannelHostIfNeeded();
+  }
+
+  void StartGpuChannelHostIfNeeded() {
+    if (!ui_task_runner_->BelongsToCurrentThread()) {
+      ui_task_runner_->PostTask(
+          FROM_HERE,
+          base::BindOnce(&GpuChannelHostProvider::StartGpuChannelHostIfNeeded,
+                         weak_ptr_factory_.GetWeakPtr()));
+      return;
+    }
+
+    media::VideoCaptureGpuChannelHost::GetInstance().SetSharedImageInterface(
+        nullptr);
+    media::VideoCaptureGpuChannelHost::GetInstance().SetGpuChannel(nullptr);
+#if BUILDFLAG(IS_CHROMEOS)
+    media::VideoCaptureDeviceFactoryChromeOS::SetGpuChannelHost(nullptr);
+    media::VideoCaptureDeviceFactoryChromeOS::SetSharedImageInterface(nullptr);
+#endif  // BUILDFLAG(IS_CHROMEOS)
+    media::VideoCaptureGpuChannelHost::GetInstance().OnContextLost();
+
+    if (gpu_channel_host_ && !gpu_channel_host_->IsLost()) {
+      OnGpuChannelEstablished(gpu_channel_host_);
+      return;
+    }
+
+    if (gpu_channel_host_binder_) {
+      gpu_channel_host_binder_.Run(
+          base::BindOnce(&GpuChannelHostProvider::OnGpuChannelEstablished,
+                         weak_ptr_factory_.GetWeakPtr()));
+    }
+  }
+
+  void OnGpuChannelEstablished(
+      scoped_refptr<gpu::GpuChannelHost> gpu_channel_host) {
+    DCHECK(ui_task_runner_->BelongsToCurrentThread());
+
+    gpu_channel_host_ = std::move(gpu_channel_host);
+    if (gpu_channel_host_) {
+      if (!gpu_channel_host_->AddObserverIfNotAlreadyLost(this)) {
+        gpu_channel_host_ = nullptr;
+        media::VideoCaptureGpuChannelHost::GetInstance()
+            .SetSharedImageInterface(nullptr);
+        media::VideoCaptureGpuChannelHost::GetInstance().SetGpuChannel(nullptr);
+#if BUILDFLAG(IS_CHROMEOS)
+        media::VideoCaptureDeviceFactoryChromeOS::SetGpuChannelHost(nullptr);
+        media::VideoCaptureDeviceFactoryChromeOS::SetSharedImageInterface(
+            nullptr);
+#endif  // BUILDFLAG(IS_CHROMEOS)
+        media::VideoCaptureGpuChannelHost::GetInstance().OnContextLost();
+        RetryOrAbandon();
+        return;
+      }
+      consecutive_retry_count_ = 0;
+      scoped_refptr<gpu::SharedImageInterface> sii =
+          gpu_channel_host_->CreateClientSharedImageInterface();
+      media::VideoCaptureGpuChannelHost::GetInstance().SetSharedImageInterface(
+          sii);
+      media::VideoCaptureGpuChannelHost::GetInstance().SetGpuChannel(
+          gpu_channel_host_);
+#if BUILDFLAG(IS_CHROMEOS)
+      media::VideoCaptureDeviceFactoryChromeOS::SetGpuChannelHost(
+          gpu_channel_host_);
+      media::VideoCaptureDeviceFactoryChromeOS::SetSharedImageInterface(sii);
+#endif  // BUILDFLAG(IS_CHROMEOS)
+    } else {
       media::VideoCaptureGpuChannelHost::GetInstance().SetSharedImageInterface(
           nullptr);
+      media::VideoCaptureGpuChannelHost::GetInstance().SetGpuChannel(nullptr);
 #if BUILDFLAG(IS_CHROMEOS)
       media::VideoCaptureDeviceFactoryChromeOS::SetGpuChannelHost(nullptr);
       media::VideoCaptureDeviceFactoryChromeOS::SetSharedImageInterface(
           nullptr);
 #endif  // BUILDFLAG(IS_CHROMEOS)
-      context_provider_.reset();
+      RetryOrAbandon();
     }
-  }
 
-  // viz::ContextLostObserver implementation.
-  void OnContextLost() override {
-    context_provider_->RemoveObserver(this);
-    context_provider_.reset();
-    StartContextProviderIfNeeded();
-
-    // Notify context lost after new context ready.
     media::VideoCaptureGpuChannelHost::GetInstance().OnContextLost();
   }
 
- private:
-  void StartContextProviderIfNeeded() {
-    DCHECK_EQ(context_provider_, nullptr);
-    DCHECK(main_task_runner_->BelongsToCurrentThread());
+  void RetryOrAbandon() {
+    DCHECK(ui_task_runner_->BelongsToCurrentThread());
 
-    // Reset GpuChannelHost and related objects to begin
-    // with. Set it back when GpuChannelHost is created/re-created successfully.
-    media::VideoCaptureGpuChannelHost::GetInstance().SetSharedImageInterface(
-        nullptr);
-#if BUILDFLAG(IS_CHROMEOS)
-    media::VideoCaptureDeviceFactoryChromeOS::SetGpuChannelHost(nullptr);
-    media::VideoCaptureDeviceFactoryChromeOS::SetSharedImageInterface(nullptr);
-#endif  // BUILDFLAG(IS_CHROMEOS)
-
-    if (!viz_gpu_) {
+    if (consecutive_retry_count_ >= kMaxRetryCount) {
+      LOG(WARNING) << "Failed to establish GPU channel after " << kMaxRetryCount
+                   << " retries. Abandoning retries.";
       return;
     }
 
-    scoped_refptr<gpu::GpuChannelHost> gpu_channel_host =
-        viz_gpu_->GetGpuChannel();
-    if (!gpu_channel_host || gpu_channel_host->IsLost()) {
-      gpu_channel_host = viz_gpu_->EstablishGpuChannelSync();
-    }
-
-    if (!gpu_channel_host) {
-      return;
-    }
-
-    scoped_refptr<viz::ContextProvider> context_provider =
-        viz::ContextProviderCommandBuffer::CreateForGL(
-            std::move(gpu_channel_host), 0 /* stream ID */,
-            gpu::SchedulingPriority::kNormal,
-            GURL(std::string("chrome://gpu/VideoCapture")),
-            viz::command_buffer_metrics::ContextType::VIDEO_CAPTURE);
-
-    const gpu::ContextResult context_result =
-        context_provider->BindToCurrentSequence();
-    if (context_result != gpu::ContextResult::kSuccess) {
-      LOG(ERROR) << "Bind context provider failed.";
-      return;
-    }
-
-    context_provider->AddObserver(this);
-    context_provider_ = std::move(context_provider);
-
-    media::VideoCaptureGpuChannelHost::GetInstance().SetSharedImageInterface(
-        viz_gpu_->GetGpuChannel()->CreateClientSharedImageInterface());
-#if BUILDFLAG(IS_CHROMEOS)
-    media::VideoCaptureDeviceFactoryChromeOS::SetGpuChannelHost(
-        viz_gpu_->GetGpuChannel());
-    media::VideoCaptureDeviceFactoryChromeOS::SetSharedImageInterface(
-        viz_gpu_->GetGpuChannel()->CreateClientSharedImageInterface());
-#endif  // BUILDFLAG(IS_CHROMEOS)
+    consecutive_retry_count_++;
+    ui_task_runner_->PostDelayedTask(
+        FROM_HERE,
+        base::BindOnce(&GpuChannelHostProvider::StartGpuChannelHostIfNeeded,
+                       weak_ptr_factory_.GetWeakPtr()),
+        base::Milliseconds(20));
   }
 
-  // Task runner for operating |viz_gpu_| and
-  // |context_provider_| on. This must be the main service thread as the
-  // |viz_gpu_| required.
-  scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
+  scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner_;
+  scoped_refptr<gpu::GpuChannelHost> gpu_channel_host_;
+  GpuChannelHostBinder gpu_channel_host_binder_;
   std::unique_ptr<viz::Gpu> viz_gpu_;
-  scoped_refptr<viz::ContextProvider> context_provider_;
-  base::WeakPtrFactory<VizGpuContextProvider> weak_ptr_factory_{this};
+  gpu::GpuDriverBugWorkarounds gpu_driver_bug_workarounds_;
+  int consecutive_retry_count_ = 0;
+  base::WeakPtrFactory<GpuChannelHostProvider> weak_ptr_factory_{this};
 };
 #endif  // BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
 
@@ -237,16 +305,19 @@ VideoCaptureServiceImpl::VideoCaptureServiceImpl(
 }
 
 VideoCaptureServiceImpl::~VideoCaptureServiceImpl() {
-#if BUILDFLAG(IS_CHROMEOS)
-  factory_receivers_ash_.Clear();
-  device_factory_ash_adapter_.reset();
-#endif  // BUILDFLAG(IS_CHROMEOS)
   device_factory_.reset();
 
   if (gpu_dependencies_context_) {
     gpu_dependencies_context_->GetTaskRunner()->DeleteSoon(
         FROM_HERE, std::move(gpu_dependencies_context_));
   }
+
+#if BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
+  if (gpu_channel_host_provider_) {
+    ui_task_runner_->DeleteSoon(FROM_HERE,
+                                std::move(gpu_channel_host_provider_));
+  }
+#endif
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -264,13 +335,6 @@ void VideoCaptureServiceImpl::ConnectToCameraAppDeviceBridge(
   LazyInitializeDeviceFactory();
   media::CameraAppDeviceBridgeImpl::GetInstance()->BindReceiver(
       std::move(receiver));
-}
-
-void VideoCaptureServiceImpl::BindVideoCaptureDeviceFactory(
-    mojo::PendingReceiver<crosapi::mojom::VideoCaptureDeviceFactory> receiver) {
-  LazyInitializeDeviceFactory();
-  factory_receivers_ash_.Add(device_factory_ash_adapter_.get(),
-                             std::move(receiver));
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
@@ -291,14 +355,6 @@ void VideoCaptureServiceImpl::LazyInitializeGpuDependenciesContext() {
 
   if (!gpu_dependencies_context_)
     gpu_dependencies_context_ = std::make_unique<GpuDependenciesContext>();
-
-    // Gpu channel is enabled on all platforms except Lacros.
-#if BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
-    if (!viz_gpu_context_provider_) {
-      viz_gpu_context_provider_ =
-          std::make_unique<VizGpuContextProvider>(std::move(viz_gpu_));
-    }
-#endif  // BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
 }
 
 void VideoCaptureServiceImpl::LazyInitializeDeviceFactory() {
@@ -307,14 +363,31 @@ void VideoCaptureServiceImpl::LazyInitializeDeviceFactory() {
   if (device_factory_)
     return;
 
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kVideoCaptureUseVirtualDevicesOnly)) {
+    device_factory_ =
+        std::make_unique<VirtualDeviceEnabledDeviceFactory>(nullptr);
+    return;
+  }
+
   LazyInitializeGpuDependenciesContext();
 
   // Create the platform-specific device factory.
   // The task runner passed to CreateFactory is used for things that need to
   // happen on a "UI thread equivalent", e.g. obtaining screen rotation on
   // Chrome OS.
+  gpu::GpuDriverBugWorkarounds* gpu_workarounds_ptr = nullptr;
+#if BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
+  gpu::GpuDriverBugWorkarounds gpu_workarounds;
+  if (gpu_channel_host_provider_) {
+    gpu_workarounds = gpu_channel_host_provider_->GetGpuDriverBugWorkarounds();
+  }
+  gpu_workarounds_ptr = &gpu_workarounds;
+#endif  // BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
+
   std::unique_ptr<media::VideoCaptureDeviceFactory> media_device_factory =
-      media::CreateVideoCaptureDeviceFactory(ui_task_runner_);
+      media::CreateVideoCaptureDeviceFactory(ui_task_runner_,
+                                             gpu_workarounds_ptr);
 
   auto video_capture_system = std::make_unique<media::VideoCaptureSystemImpl>(
       std::move(media_device_factory));
@@ -327,9 +400,6 @@ void VideoCaptureServiceImpl::LazyInitializeDeviceFactory() {
               &GpuDependenciesContext::CreateJpegDecodeAccelerator,
               gpu_dependencies_context_->GetWeakPtr()),
           gpu_dependencies_context_->GetTaskRunner()));
-  device_factory_ash_adapter_ =
-      std::make_unique<crosapi::VideoCaptureDeviceFactoryAsh>(
-          device_factory_.get());
 #else
   device_factory_ = std::make_unique<VirtualDeviceEnabledDeviceFactory>(
       std::make_unique<DeviceFactoryImpl>(std::move(video_capture_system)));
@@ -385,7 +455,35 @@ void VideoCaptureServiceImpl::OnGpuInfoUpdate(const CHROME_LUID& luid) {
 
 #if BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
 void VideoCaptureServiceImpl::SetVizGpu(std::unique_ptr<viz::Gpu> viz_gpu) {
-  viz_gpu_ = std::move(viz_gpu);
+  if (gpu_channel_host_provider_) {
+    ui_task_runner_->DeleteSoon(FROM_HERE,
+                                std::move(gpu_channel_host_provider_));
+  }
+  viz::Gpu* viz_gpu_ptr = viz_gpu.get();
+  gpu_channel_host_provider_ = std::make_unique<GpuChannelHostProvider>(
+      ui_task_runner_,
+      viz_gpu_ptr ? viz_gpu_ptr->EstablishGpuChannelSync() : nullptr,
+      base::BindRepeating(
+          [](viz::Gpu* viz_gpu, gpu::GpuChannelEstablishedCallback callback) {
+            if (viz_gpu) {
+              viz_gpu->EstablishGpuChannel(std::move(callback));
+            } else {
+              std::move(callback).Run(nullptr);
+            }
+          },
+          viz_gpu_ptr),
+      std::move(viz_gpu));
+}
+
+void VideoCaptureServiceImpl::SetGpuChannelHost(
+    scoped_refptr<gpu::GpuChannelHost> gpu_channel_host,
+    GpuChannelHostBinder binder) {
+  if (gpu_channel_host_provider_) {
+    ui_task_runner_->DeleteSoon(FROM_HERE,
+                                std::move(gpu_channel_host_provider_));
+  }
+  gpu_channel_host_provider_ = std::make_unique<GpuChannelHostProvider>(
+      ui_task_runner_, std::move(gpu_channel_host), std::move(binder));
 }
 #endif  // BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
 

@@ -47,9 +47,9 @@ class COMPONENT_EXPORT(USERDATAAUTH_CLIENT) FakeUserDataAuthClient
     kListAuthFactors,
     kStartMigrateToDircrypto,
     kRemove,
-    kGetRecoverableKeyStores,
     kLockFactorUntilReboot,
     kGenerateFreshRecoveryId,
+    kRemoveAuthFactor,
   };
 
   // The method by which a user's home directory can be encrypted.
@@ -146,11 +146,17 @@ class COMPONENT_EXPORT(USERDATAAUTH_CLIENT) FakeUserDataAuthClient
     void AddAuthFactor(const cryptohome::AccountIdentifier& account_id,
                        const user_data_auth::AuthFactor& factor,
                        const user_data_auth::AuthInput& input);
+    // Clears all existing fake auth factors for the given existing user.
+    void ClearAuthFactors(const cryptohome::AccountIdentifier& account_id);
 
     void AddRecoveryFactor(const cryptohome::AccountIdentifier& account_id);
     bool HasRecoveryFactor(const cryptohome::AccountIdentifier& account_id);
 
     bool HasPinFactor(const cryptohome::AccountIdentifier& account_id);
+
+    bool HasGaiaPasswordFactor(const cryptohome::AccountIdentifier& account_id);
+    bool HasLocalPasswordFactor(
+        const cryptohome::AccountIdentifier& account_id);
 
     // Returns {authsession_id, broadcast_id} pair.
     std::pair<std::string, std::string> AddSession(
@@ -316,9 +322,6 @@ class COMPONENT_EXPORT(USERDATAAUTH_CLIENT) FakeUserDataAuthClient
   void GetArcDiskFeatures(
       const ::user_data_auth::GetArcDiskFeaturesRequest& request,
       GetArcDiskFeaturesCallback callback) override;
-  void GetRecoverableKeyStores(
-      const ::user_data_auth::GetRecoverableKeyStoresRequest& request,
-      GetRecoverableKeyStoresCallback) override;
   void SetUserDataStorageWriteEnabled(
       const ::user_data_auth::SetUserDataStorageWriteEnabledRequest& request,
       SetUserDataStorageWriteEnabledCallback callback) override;
@@ -359,11 +362,10 @@ class COMPONENT_EXPORT(USERDATAAUTH_CLIENT) FakeUserDataAuthClient
   FUDAC_OPERATION_TYPES(kStartMigrateToDircrypto,
                         StartMigrateToDircryptoRequest);
   FUDAC_OPERATION_TYPES(kRemove, RemoveRequest);
-  FUDAC_OPERATION_TYPES(kGetRecoverableKeyStores,
-                        GetRecoverableKeyStoresRequest);
   FUDAC_OPERATION_TYPES(kLockFactorUntilReboot, LockFactorUntilRebootRequest);
   FUDAC_OPERATION_TYPES(kGenerateFreshRecoveryId,
                         GenerateFreshRecoveryIdRequest);
+  FUDAC_OPERATION_TYPES(kRemoveAuthFactor, RemoveAuthFactorRequest);
 
 #undef FUDAC_OPERATION_TYPES
 

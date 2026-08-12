@@ -13,6 +13,7 @@
 #include "base/debug/crash_logging.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
 #include "components/android_autofill/browser/android_autofill_bridge_factory.h"
 #include "components/android_autofill/browser/android_autofill_features.h"
 #include "components/android_autofill/browser/android_autofill_manager.h"
@@ -35,6 +36,7 @@
 #include "components/webauthn/android/webauthn_cred_man_delegate_factory.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/android/window_android.h"
 #include "ui/gfx/geometry/rect_f.h"
@@ -70,11 +72,8 @@ std::unique_ptr<PasswordForm> ParseToPasswordForm(
                                   AutofillServerPrediction(*field));
           });
   password_manager::FormDataParser parser;
-  // The driver id is irrelevant here because it would only be used by password
-  // manager logic that handles the `PasswordForm` returned by the parser.
-  // Therefore we pass a dummy a value.
   parser.set_server_predictions(password_manager::ConvertToFormPredictions(
-      /*driver_id=*/0, form_data, autofill_predictions));
+      form_data, autofill_predictions));
   // On Chrome, the parser can use stored usernames to identify a filled
   // username field by the value it contains. Since we do not have access to
   // credentials, we leave it empty.
@@ -97,20 +96,26 @@ content::RenderFrameHost* GetRenderFrameHost(AutofillManager* manager) {
       .render_frame_host();
 }
 
+content::RenderFrameHost* GetRenderFrameHost(
+    AutofillManager* manager,
+    const LocalFrameToken& frame_token) {
+  content::RenderFrameHost* result = nullptr;
+  GetRenderFrameHost(manager)->ForEachRenderFrameHost(
+      [&result, &frame_token](content::RenderFrameHost* rfh) {
+        if (LocalFrameToken(rfh->GetFrameToken().value()) == frame_token) {
+          result = rfh;
+        }
+      });
+  return result;
+}
+
 WebAuthnCredManDelegate* GetCredManDelegate(content::RenderFrameHost* rfh) {
   return WebAuthnCredManDelegateFactory::GetFactory(
              content::WebContents::FromRenderFrameHost(rfh))
       ->GetRequestDelegate(rfh);
 }
 
-WebAuthnCredManDelegate* GetCredManDelegate(AutofillManager* manager) {
-  return GetCredManDelegate(GetRenderFrameHost(manager));
-}
-
 bool AllowCredManOnField(const FormFieldData& field) {
-  // TODO(crbug.com/380405846): Carefully clean up this check when the feature
-  // is launched such that it doesn't accidentally get launched for WebView.
-
   return field.parsed_autocomplete() && field.parsed_autocomplete()->webauthn;
 }
 
@@ -162,6 +167,12 @@ void AndroidAutofillProvider::RenderFrameDeleted(
     OnHidePopup(session_state_->manager.get());
     session_state_->last_queried_field_rfh_id = {};
   }
+  if (credman_sheet_rfh_id_ == rfh->GetGlobalId()) {
+    // `WebAuthnCredManDelegateFactory` takes care of cleaning up
+    // `GetCredManDelegate(rfh)`.
+    credman_sheet_status_ = CredManBottomSheetLifecycle::kNotShown;
+    credman_sheet_rfh_id_ = {};
+  }
 }
 
 void AndroidAutofillProvider::DidFinishNavigation(
@@ -172,7 +183,23 @@ void AndroidAutofillProvider::DidFinishNavigation(
       !navigation_handle->IsSameDocument()) {
     OnHidePopup(session_state_->manager.get());
     session_state_->last_queried_field_rfh_id = {};
+  }
+
+  if (credman_sheet_rfh_id_ ==
+          navigation_handle->GetPreviousRenderFrameHostId() &&
+      !navigation_handle->IsSameDocument()) {
+    if (content::RenderFrameHost* rfh =
+            content::RenderFrameHost::FromID(credman_sheet_rfh_id_)) {
+      if (WebAuthnCredManDelegate* delegate = GetCredManDelegate(rfh)) {
+        // Clear the callback to prevent a race condition where the platform UI
+        // dismissal (triggered by navigation) calls back and overwrites the
+        // `credman_sheet_status_` to `kClosed` after we reset it to
+        // `kNotShown`.
+        delegate->SetRequestCompletionCallback(base::DoNothing());
+      }
+    }
     credman_sheet_status_ = CredManBottomSheetLifecycle::kNotShown;
+    credman_sheet_rfh_id_ = {};
   }
 }
 
@@ -194,6 +221,16 @@ void AndroidAutofillProvider::OnAskForValuesToFill(
   // in response, see OnAutofillAvailable.
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
+  if (credman_sheet_status_ == CredManBottomSheetLifecycle::kIsShowing) {
+    // While CredMan is active, the user cannot legitimately interact with the
+    // page. We ignore this request to prevent a compromised renderer from
+    // spoofing the session origin (overwriting `current_field`) in the
+    // background. We preserve the session state that triggered CredMan so that
+    // the subsequent fill goes to the correct frame. If the user dismisses
+    // CredMan, a new session will be started on the next focus event.
+    return;
+  }
+
   // We need to create session state here outside of StartNewSession because
   // StartNewSession is called when the form is focused or the field value is
   // changed, and we need to set the current_field and last_queried_field_rfh_id
@@ -202,22 +239,12 @@ void AndroidAutofillProvider::OnAskForValuesToFill(
     session_state_.emplace();
   }
 
-  GetRenderFrameHost(manager)->ForEachRenderFrameHost(
-      [this, &field](content::RenderFrameHost* rfh) {
-        LocalFrameToken frame_token(rfh->GetFrameToken().value());
-        if (frame_token == field.host_frame()) {
-          session_state_->last_queried_field_rfh_id = rfh->GetGlobalId();
-        }
-      });
-
-  session_state_->current_field = {field.global_id(),
-                                   manager->ComputeFieldTypeGroupForField(
-                                       form.global_id(), field.global_id()),
-                                   field.origin()};
-
-  if (credman_sheet_status_ == CredManBottomSheetLifecycle::kIsShowing) {
-    return;  // CredMan prevents 3P autofill UI. Start the session on refocus!
+  if (content::RenderFrameHost* rfh =
+          GetRenderFrameHost(manager, field.host_frame())) {
+    session_state_->last_queried_field_rfh_id = rfh->GetGlobalId();
   }
+
+  UpdateCurrentField(manager, form, field);
 
   // Focus or field value change will also trigger the query, so it should be
   // ignored if the form is same.
@@ -277,14 +304,10 @@ void AndroidAutofillProvider::StartNewSession(AndroidAutofillManager* manager,
   // - The cached form is similar to the current form.
   const bool use_cached_form =
       is_similar_to_cached_form && !has_used_cached_form_;
+
+  // Note that beyond this point `form == session_state_->form.form()`.
   session_state_->form = std::make_unique<FormDataAndroid>(
       form, use_cached_form ? cached_form->session_id() : CreateSessionId());
-  FieldInfo field_info;
-  if (!session_state_->form->GetFieldIndex(field, &field_info.index)) {
-    Reset();
-    return;
-  }
-
   session_state_->manager = manager->GetWeakPtrToLeafClass();
 
   // Set the field type predictions in `session_state_->form`.
@@ -298,6 +321,18 @@ void AndroidAutofillProvider::StartNewSession(AndroidAutofillManager* manager,
           cached_data_->password_parser_overrides.ToFieldTypeMap());
     }
   }
+
+  FieldInfo field_info;
+  field_info.index = [&] {
+    for (size_t i = 0; i < form.fields().size(); ++i) {
+      if (field.global_id() == form.fields()[i].global_id()) {
+        return i;
+      }
+    }
+    NOTREACHED() << "It is assumed in this function that `field` belongs to "
+                    "`form`. Not finding `field`'s index in the list of fields "
+                    "in `form` means that this assumption was violated.";
+  }();
   field_info.bounds = ToClientAreaBound(field.bounds());
 
   [&] {
@@ -346,6 +381,21 @@ void AndroidAutofillProvider::StartNewSession(AndroidAutofillManager* manager,
   bridge_->StartAutofillSession(
       *session_state_->form, field_info,
       manager->has_server_prediction(form.global_id()));
+}
+
+void AndroidAutofillProvider::UpdateCurrentField(
+    AndroidAutofillManager* manager,
+    const FormData& form,
+    const FormFieldData& field) {
+  if (!session_state_) {
+    session_state_.emplace();
+  }
+  session_state_->current_field = {
+      field.global_id(),
+      manager ? manager->ComputeFieldTypeGroupForField(form.global_id(),
+                                                       field.global_id())
+              : FieldTypeGroup::kNoGroup,
+      field.origin()};
 }
 
 void AndroidAutofillProvider::OnAutofillAvailable() {
@@ -408,22 +458,34 @@ void AndroidAutofillProvider::OnShowBottomSheetResult(
 }
 
 bool AndroidAutofillProvider::HasPasskeyRequest() {
-  if (!session_state_ || !session_state_->manager || !session_state_->form ||
-      !GetCredManDelegate(GetRenderFrameHost(session_state_->manager.get()))) {
+  if (!session_state_ || !session_state_->manager || !session_state_->form) {
     return false;
   }
+
   const FormFieldData* field = session_state_->form->form().FindFieldByGlobalId(
       session_state_->current_field.id);
-  return field && AllowCredManOnField(*field);
+  if (!field || !AllowCredManOnField(*field)) {
+    return false;
+  }
+
+  content::RenderFrameHost* rfh =
+      GetRenderFrameHost(session_state_->manager.get(), field->host_frame());
+  return rfh && GetCredManDelegate(rfh);
 }
 
 void AndroidAutofillProvider::OnTriggerPasskeyRequest() {
-  if (session_state_ && session_state_->manager) {
-    if (content::RenderFrameHost* rfh =
-            GetRenderFrameHost(session_state_->manager.get())) {
-      if (WebAuthnCredManDelegate* delegate = GetCredManDelegate(rfh)) {
-        delegate->TriggerCredManUi(RequestPasswords(false));
-      }
+  if (!session_state_ || !session_state_->manager || !session_state_->form) {
+    return;
+  }
+  const FormFieldData* field = session_state_->form->form().FindFieldByGlobalId(
+      session_state_->current_field.id);
+  if (!field) {
+    return;
+  }
+  if (content::RenderFrameHost* rfh = GetRenderFrameHost(
+          session_state_->manager.get(), field->host_frame())) {
+    if (WebAuthnCredManDelegate* delegate = GetCredManDelegate(rfh)) {
+      delegate->TriggerCredManUi(RequestPasswords(false));
     }
   }
 }
@@ -447,14 +509,10 @@ void AndroidAutofillProvider::OnTextFieldDidScroll(
   }
   CHECK(session_state_ && session_state_->form);
 
-  // IsLinkedForm ensures session_state_ and session_state_->form exist.
-  if (!session_state_->form->GetSimilarFieldIndex(field, &field_info.index)) {
+  // `IsLinkedForm()` ensures session_state_ and session_state_->form exist.
+  if (!session_state_->form->GetFieldByGlobalId(field, &field_info.index)) {
     return;
   }
-
-  // TODO(crbug.com/40929724): Investigate whether the update of the value
-  // is needed - why would it have changed?
-  session_state_->form->OnFormFieldDidChange(field_info.index, field.value());
 
   field_info.bounds = ToClientAreaBound(field.bounds());
   bridge_->OnTextFieldDidScroll(field_info);
@@ -464,6 +522,17 @@ void AndroidAutofillProvider::OnSelectControlSelectionChanged(
     AndroidAutofillManager* manager,
     const FormData& form,
     const FormFieldData& field) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  if (credman_sheet_status_ == CredManBottomSheetLifecycle::kIsShowing) {
+    // Ignore selection changes while CredMan is showing to prevent a
+    // compromised renderer from spoofing the session origin (see
+    // crbug.com/518115316).
+    return;
+  }
+  if (base::FeatureList::IsEnabled(
+          features::kAndroidAutofillFieldsUpdatedOnSelect)) {
+    UpdateCurrentField(manager, form, field);
+  }
   if (!IsLinkedForm(form)) {
     StartNewSession(manager, form, field);
     // TODO(crbug.com/40929724): Return early at this point?
@@ -481,6 +550,12 @@ void AndroidAutofillProvider::OnFormSubmitted(AndroidAutofillManager* manager,
                                               const FormData& form,
                                               SubmissionSource source) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  if (credman_sheet_status_ == CredManBottomSheetLifecycle::kIsShowing) {
+    // Ignore form submissions while CredMan is showing to prevent a compromised
+    // renderer from resetting session state and spoofing the origin (see
+    // crbug.com/534856303).
+    return;
+  }
   if (!IsLinkedManager(manager)) {
     return;
   }
@@ -523,10 +598,27 @@ void AndroidAutofillProvider::OnFocusOnFormField(
     const FormData& form,
     const FormFieldData& field) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  if (credman_sheet_status_ == CredManBottomSheetLifecycle::kIsShowing) {
+    // While CredMan is active, the user cannot legitimately interact with the
+    // page. We ignore this request to prevent a compromised renderer from
+    // spoofing the session origin (overwriting `current_field`) in the
+    // background. We preserve the session state that triggered CredMan so that
+    // the subsequent fill goes to the correct frame. If the user dismisses
+    // CredMan, a new session will be started on the next focus event.
+    return;
+  }
   std::optional<FieldInfo> field_to_focus = StartFocusChange(form, field);
-  if (ShouldShowCredManForField(field, GetRenderFrameHost(manager)) &&
-      ShowCredManSheet(GetRenderFrameHost(manager), form.global_id(),
-                       field_to_focus)) {
+  if (content::RenderFrameHost* rfh =
+          GetRenderFrameHost(manager, field.host_frame());
+      ShouldShowCredManForField(field, rfh) &&
+      ShowCredManSheet(rfh, form.global_id(), field_to_focus)) {
+    // Proactively update the current field and its origin. Because the
+    // subsequent `OnAskForValuesToFill()` IPC will be ignored while CredMan is
+    // showing (to block spoofing), we must set the correct origin now before
+    // the block takes effect, otherwise the session will retain a stale origin.
+    if (field_to_focus) {
+      UpdateCurrentField(manager, form, field);
+    }
     return;  // The focus event will be completed after CredMan closes.
   }
   if (field_to_focus) {
@@ -542,8 +634,7 @@ std::optional<FieldInfo> AndroidAutofillProvider::StartFocusChange(
   }
   CHECK(session_state_ && session_state_->form);
   FieldInfo field_to_focus;
-  if (!session_state_->form->GetSimilarFieldIndex(field,
-                                                  &field_to_focus.index)) {
+  if (!session_state_->form->GetFieldByGlobalId(field, &field_to_focus.index)) {
     return std::nullopt;
   }
   field_to_focus.bounds = ToClientAreaBound(field.bounds());
@@ -565,7 +656,7 @@ void AndroidAutofillProvider::MaybeFireFormFieldDidChange(
     return;
   }
   CHECK(session_state_ && session_state_->form);
-  if (!session_state_->form->GetSimilarFieldIndex(field, &field_info.index)) {
+  if (!session_state_->form->GetFieldByGlobalId(field, &field_info.index)) {
     return;
   }
   // Propagate the changed values to Java.
@@ -625,10 +716,12 @@ void AndroidAutofillProvider::OnManagerResetOrDestroyed(
 
 bool AndroidAutofillProvider::GetCachedIsAutofilled(
     const FormFieldData& field) const {
-  size_t field_index = 0u;
-  return session_state_ && session_state_->form &&
-         session_state_->form->GetFieldIndex(field, &field_index) &&
-         session_state_->form->form().fields()[field_index].is_autofilled();
+  if (!session_state_ || !session_state_->form) {
+    return false;
+  }
+  const FormFieldData* cached_field =
+      session_state_->form->form().FindFieldByGlobalId(field.global_id());
+  return cached_field && cached_field->is_autofilled_according_to_renderer();
 }
 
 bool AndroidAutofillProvider::IntendsToShowBottomSheet(
@@ -639,7 +732,9 @@ bool AndroidAutofillProvider::IntendsToShowBottomSheet(
   const FormFieldData* found_field = form_data.FindFieldByGlobalId(field);
   const bool intends_to_show_credman =
       found_field &&
-      IntendsToShowCredMan(*found_field, GetRenderFrameHost(&manager));
+      IntendsToShowCredMan(
+          *found_field,
+          GetRenderFrameHost(&manager, found_field->host_frame()));
   return intends_to_show_credman ||
          (ArePrefillRequestsSupported() && !has_used_cached_form_ &&
           cached_data_ && cached_data_->cached_form &&
@@ -666,10 +761,6 @@ void AndroidAutofillProvider::SetBottomSheetShownOff() {
 bool MayOfferUsefulPasskeyOptions(WebAuthnCredManDelegate* delegate) {
   if (!delegate) {
     return false;  // Needs delegate to trigger CredMan:
-  }
-  if (!base::FeatureList::IsEnabled(
-          features::kAutofillVirtualViewStructureAndroidPasskeyLongPress)) {
-    return true;  // Assume that hybrid entry point is enough reason to show.
   }
   // Needs *more* than the hybrid option for passkeys. With a request in flux,
   // the remaining chance is hope enough. This needs to be checked on focus.
@@ -709,6 +800,7 @@ bool AndroidAutofillProvider::ShowCredManSheet(
   CHECK_EQ(credman_sheet_status_, CredManBottomSheetLifecycle::kNotShown);
   if (WebAuthnCredManDelegate* delegate = GetCredManDelegate(rfh)) {
     credman_sheet_status_ = CredManBottomSheetLifecycle::kIsShowing;
+    credman_sheet_rfh_id_ = rfh->GetGlobalId();
     delegate->SetRequestCompletionCallback(base::BindRepeating(
         &AndroidAutofillProvider::OnCredManUiClosed,
         weak_ptr_factory_.GetWeakPtr(), std::move(form_id),
@@ -751,11 +843,14 @@ gfx::RectF AndroidAutofillProvider::ToClientAreaBound(
 }
 
 void AndroidAutofillProvider::Reset() {
-  if (session_state_ && session_state_->manager) {
-    if (WebAuthnCredManDelegate* delegate =
-            GetCredManDelegate(session_state_->manager.get())) {
-      delegate->SetRequestCompletionCallback(base::DoNothing());
+  if (credman_sheet_rfh_id_) {
+    if (content::RenderFrameHost* rfh =
+            content::RenderFrameHost::FromID(credman_sheet_rfh_id_)) {
+      if (WebAuthnCredManDelegate* delegate = GetCredManDelegate(rfh)) {
+        delegate->SetRequestCompletionCallback(base::DoNothing());
+      }
     }
+    credman_sheet_rfh_id_ = {};
   }
 
   // Clear all session-specific state.
@@ -894,6 +989,7 @@ void AndroidAutofillProvider::OnCredManUiClosed(
     WebAuthnCredManDelegate::State has_passkeys,
     bool success) {
   credman_sheet_status_ = CredManBottomSheetLifecycle::kClosed;
+  credman_sheet_rfh_id_ = {};
   if (keyboard_suppressor_) {
     keyboard_suppressor_->Unsuppress();
   }

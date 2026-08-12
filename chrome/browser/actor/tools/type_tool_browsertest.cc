@@ -4,16 +4,18 @@
 
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <tuple>
 
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
-#include "chrome/browser/actor/actor_features.h"
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/actor/tools/tool_request.h"
 #include "chrome/browser/actor/tools/tools_test_util.h"
 #include "chrome/common/actor.mojom.h"
 #include "chrome/common/chrome_features.h"
+#include "components/actor/core/actor_features.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -37,13 +39,35 @@ namespace {
 // UI tests in the chrome/browser/glic/host/ directory.
 class ActorTypeToolBrowserTest : public ActorToolsTest {
  public:
-  ActorTypeToolBrowserTest() = default;
+  ActorTypeToolBrowserTest() {
+    feature_list_.InitAndEnableFeature(
+        features::kGlicActorRejectInteractionDisallowedTargets);
+  }
   ~ActorTypeToolBrowserTest() override = default;
 
   void SetUpOnMainThread() override {
     ActorToolsTest::SetUpOnMainThread();
     ASSERT_TRUE(embedded_test_server()->Start());
   }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+class ActorTypeToolToctouBrowserTest : public ActorToolsTest {
+ public:
+  ActorTypeToolToctouBrowserTest() {
+    feature_list_.InitAndEnableFeature(features::kGlicActorToctouValidation);
+  }
+  ~ActorTypeToolToctouBrowserTest() override = default;
+
+  void SetUpOnMainThread() override {
+    ActorToolsTest::SetUpOnMainThread();
+    ASSERT_TRUE(embedded_test_server()->Start());
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
 };
 
 // Basic test of the TypeTool - ensure typed string containing composition
@@ -108,6 +132,9 @@ IN_PROC_BROWSER_TEST_F(ActorTypeToolBrowserTest,
 IN_PROC_BROWSER_TEST_F(ActorTypeToolBrowserTest, TypeTool_TextInput) {
   const GURL url = embedded_test_server()->GetURL("/actor/input.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+
+  ASSERT_TRUE(ExecJs(web_contents(),
+                     "document.getElementById('input').ariaDisabled = true"));
 
   std::string typed_string = "test";
   std::optional<int> input_id = GetDOMNodeId(*main_frame(), "#input");
@@ -238,7 +265,7 @@ IN_PROC_BROWSER_TEST_F(ActorTypeToolBrowserTest, TypeTool_DisabledInput) {
                         /*follow_by_enter=*/true);
     ActResultFuture result;
     actor_task().Act(ToRequestList(action), result.GetCallback());
-    ExpectErrorResult(result, mojom::ActionResultCode::kElementDisabled);
+    ExpectElementDisabledResultWithReason(result, "disabled");
     EXPECT_EQ("",
               EvalJs(web_contents(), "document.getElementById('input').value"));
   }
@@ -261,6 +288,36 @@ IN_PROC_BROWSER_TEST_F(ActorTypeToolBrowserTest, TypeTool_DisabledInput) {
     EXPECT_EQ("",
               EvalJs(web_contents(), "document.getElementById('input').value"));
   }
+}
+
+IN_PROC_BROWSER_TEST_F(ActorTypeToolToctouBrowserTest,
+                       TypeTool_RequiresTargetInLastApc) {
+  // Type rejects a target added after APC was saved.
+  const GURL url = embedded_test_server()->GetURL("/actor/input.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+
+  // Save APC before adding the input.
+  GetPageApc();
+
+  // Add a live input that is missing from the saved APC.
+  ASSERT_TRUE(ExecJs(web_contents(), R"JS(
+    const late_input = document.createElement('input');
+    late_input.id = 'late-input';
+    document.body.appendChild(late_input);
+  )JS"));
+
+  std::optional<int> input_id = GetDOMNodeId(*main_frame(), "#late-input");
+  ASSERT_TRUE(input_id);
+
+  std::unique_ptr<ToolRequest> action =
+      MakeTypeRequest(*main_frame(), input_id.value(), "late text",
+                      /*follow_by_enter=*/true);
+  ActResultFuture result;
+  actor_task().Act(ToRequestList(action), result.GetCallback());
+
+  ExpectErrorResult(result, mojom::ActionResultCode::kInvalidDomNodeId);
+  EXPECT_EQ("", EvalJs(web_contents(),
+                       "document.getElementById('late-input').value"));
 }
 
 // Ensure type tool sends the expected events to an input box.
@@ -531,8 +588,11 @@ IN_PROC_BROWSER_TEST_F(ActorTypeToolBrowserTest,
       embedded_test_server()->GetURL("/actor/type_input_coordinate.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
+  ASSERT_TRUE(ExecJs(web_contents(),
+                     "document.getElementById('input').ariaDisabled = true"));
+
   std::string typed_string = "test";
-  // Type into coordinate of input box.
+  // Coordinate type targets skip ARIA checks on the normal DOM-event path.
   {
     gfx::Point type_point = gfx::ToFlooredPoint(
         GetCenterCoordinatesOfElementWithId(web_contents(), "input"));
@@ -759,7 +819,7 @@ IN_PROC_BROWSER_TEST_F(ActorTypeToolBrowserTest, TypeTool_IncrementalTyping) {
       "keydown,input,keyup",  // t
       EvalJs(web_contents(), "getStableEventLog()"));
 
-  base::Value::List timestamps =
+  base::ListValue timestamps =
       EvalJs(web_contents(), "getStableEventLogTimes()").TakeValue().TakeList();
 
   // There are 3 events per character (keydown, input, keyup).
@@ -819,7 +879,8 @@ class ActorTypeToolBrowserTestWithLongDelay : public ActorTypeToolBrowserTest {
   ActorTypeToolBrowserTestWithLongDelay() {
     feature_list_.InitAndEnableFeatureWithParameters(
         ::features::kGlicActor,
-        {{::features::kGlicActorKeyDownDuration.name, "10s"}});
+        {{::features::kGlicActorKeyDownDuration.name, "10s"},
+         {features::kGlicActorPolicyControlExemption.name, "true"}});
   }
 
  private:
@@ -880,7 +941,7 @@ IN_PROC_BROWSER_TEST_F(ActorTypeToolBrowserTest, TypeTool_FollowByEnterDelay) {
       "keydown,click,keyup",  // <enter>
       EvalJs(web_contents(), "getStableEventLog()"));
 
-  base::Value::List timestamps =
+  base::ListValue timestamps =
       EvalJs(web_contents(), "getStableEventLogTimes()").TakeValue().TakeList();
 
   // 3 events for the 'x' char and 3 events for the <enter>.

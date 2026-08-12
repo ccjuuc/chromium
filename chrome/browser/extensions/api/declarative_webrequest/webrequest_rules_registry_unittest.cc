@@ -12,7 +12,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/run_loop.h"
 #include "base/test/values_test_util.h"
 #include "base/values.h"
@@ -29,10 +28,13 @@
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/rules_registry_ids.h"
+#include "extensions/buildflags/buildflags.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest-message.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace helpers = extension_web_request_api_helpers;
 namespace keys = extensions::declarative_webrequest_constants;
@@ -71,9 +73,8 @@ class TestWebRequestRulesRegistry : public WebRequestRulesRegistry {
  public:
   explicit TestWebRequestRulesRegistry(content::BrowserContext* context)
       : WebRequestRulesRegistry(context,
-                                nullptr /* cache_delegate */,
-                                rules_registry_ids::kDefaultRulesRegistryID),
-        num_clear_cache_calls_(0) {}
+                                /*cache_delegate=*/nullptr,
+                                rules_registry_ids::kDefaultRulesRegistryID) {}
 
   // Returns how often the in-memory caches of the renderers were instructed
   // to be cleared.
@@ -91,7 +92,7 @@ class TestWebRequestRulesRegistry : public WebRequestRulesRegistry {
   void ClearCacheOnNavigation() override { ++num_clear_cache_calls_; }
 
  private:
-  int num_clear_cache_calls_;
+  int num_clear_cache_calls_ = 0;
 };
 
 class WebRequestRulesRegistryTest : public testing::Test {
@@ -106,27 +107,27 @@ class WebRequestRulesRegistryTest : public testing::Test {
   // Returns a rule that roughly matches http://*.example.com and
   // https://www.example.com and cancels it
   api::events::Rule CreateRule1() {
-    base::Value::List scheme_http;
+    base::ListValue scheme_http;
     scheme_http.Append("http");
-    base::Value::Dict http_condition_dict;
+    base::DictValue http_condition_dict;
     http_condition_dict.Set(keys2::kHostSuffixKey, "example.com");
-    base::Value::Dict http_condition_url_filter;
+    base::DictValue http_condition_url_filter;
     http_condition_url_filter.Set(keys::kInstanceTypeKey,
                                   keys::kRequestMatcherType);
 
     scheme_http.Append("https");
-    base::Value::Dict https_condition_dict;
-    https_condition_dict.Set(keys2::kSchemesKey, base::Value::List());
+    base::DictValue https_condition_dict;
+    https_condition_dict.Set(keys2::kSchemesKey, base::ListValue());
     https_condition_dict.Set(keys2::kHostSuffixKey, "example.com");
     https_condition_dict.Set(keys2::kHostPrefixKey, "www");
 
-    base::Value::Dict https_condition_url_filter;
+    base::DictValue https_condition_url_filter;
     https_condition_url_filter.Set(keys::kUrlKey,
                                    std::move(https_condition_dict));
     https_condition_url_filter.Set(keys::kInstanceTypeKey,
                                    keys::kRequestMatcherType);
 
-    base::Value::Dict action_dict;
+    base::DictValue action_dict;
     action_dict.Set(keys::kInstanceTypeKey, keys::kCancelRequestType);
 
     api::events::Rule rule;
@@ -143,10 +144,10 @@ class WebRequestRulesRegistryTest : public testing::Test {
 
   // Returns a rule that matches anything and cancels it.
   api::events::Rule CreateRule2() {
-    base::Value::Dict condition_dict;
+    base::DictValue condition_dict;
     condition_dict.Set(keys::kInstanceTypeKey, keys::kRequestMatcherType);
 
-    base::Value::Dict action_dict;
+    base::DictValue action_dict;
     action_dict.Set(keys::kInstanceTypeKey, keys::kCancelRequestType);
 
     api::events::Rule rule;
@@ -158,10 +159,10 @@ class WebRequestRulesRegistryTest : public testing::Test {
   }
 
   api::events::Rule CreateRedirectRule(const std::string& destination) {
-    base::Value::Dict condition_dict;
+    base::DictValue condition_dict;
     condition_dict.Set(keys::kInstanceTypeKey, keys::kRequestMatcherType);
 
-    base::Value::Dict action_dict;
+    base::DictValue action_dict;
     action_dict.Set(keys::kInstanceTypeKey, keys::kRedirectRequestType);
     action_dict.Set(keys::kRedirectUrlKey, destination);
 
@@ -176,13 +177,13 @@ class WebRequestRulesRegistryTest : public testing::Test {
   // Create a rule to ignore all other rules for a destination that
   // contains index.html.
   api::events::Rule CreateIgnoreRule() {
-    base::Value::Dict condition_dict;
-    base::Value::Dict http_condition_dict;
+    base::DictValue condition_dict;
+    base::DictValue http_condition_dict;
     http_condition_dict.Set(keys2::kPathContainsKey, "index.html");
     condition_dict.Set(keys::kInstanceTypeKey, keys::kRequestMatcherType);
     condition_dict.Set(keys::kUrlKey, std::move(http_condition_dict));
 
-    base::Value::Dict action_dict;
+    base::DictValue action_dict;
     action_dict.Set(keys::kInstanceTypeKey, keys::kIgnoreRulesType);
     action_dict.Set(keys::kLowerPriorityThanKey, 150);
 
@@ -212,15 +213,16 @@ class WebRequestRulesRegistryTest : public testing::Test {
   api::events::Rule CreateCancellingRule(
       const char* rule_id,
       const std::vector<const std::string*>& attributes) {
-    base::Value::Dict action_dict;
+    base::DictValue action_dict;
     action_dict.Set(keys::kInstanceTypeKey, keys::kCancelRequestType);
 
     api::events::Rule rule;
     rule.id = rule_id;
     rule.priority = 1;
     rule.actions.Append(std::move(action_dict));
-    for (auto* attribute : attributes)
+    for (auto* attribute : attributes) {
       rule.conditions.Append(CreateCondition(*attribute));
+    }
     return rule;
   }
 
@@ -260,8 +262,8 @@ void WebRequestRulesRegistryTest::SetUp() {
 
 
 TEST_F(WebRequestRulesRegistryTest, AddRulesImpl) {
-  scoped_refptr<TestWebRequestRulesRegistry> registry(
-      new TestWebRequestRulesRegistry(&profile_));
+  scoped_refptr<TestWebRequestRulesRegistry> registry =
+      base::MakeRefCounted<TestWebRequestRulesRegistry>(&profile_);
   std::string error;
 
   {
@@ -283,12 +285,11 @@ TEST_F(WebRequestRulesRegistryTest, AddRulesImpl) {
   EXPECT_EQ(2u, matches.size());
 
   std::set<WebRequestRule::GlobalRuleId> matches_ids;
-  for (const auto* match : matches)
+  for (const auto* match : matches) {
     matches_ids.insert(match->id());
-  EXPECT_TRUE(
-      base::Contains(matches_ids, std::make_pair(kExtensionId, kRuleId1)));
-  EXPECT_TRUE(
-      base::Contains(matches_ids, std::make_pair(kExtensionId, kRuleId2)));
+  }
+  EXPECT_TRUE(matches_ids.contains(std::make_pair(kExtensionId, kRuleId1)));
+  EXPECT_TRUE(matches_ids.contains(std::make_pair(kExtensionId, kRuleId2)));
 
   GURL foobar_url("http://www.foobar.com");
   WebRequestInfo foobar_request_info(CreateRequestParams(foobar_url));
@@ -301,8 +302,8 @@ TEST_F(WebRequestRulesRegistryTest, AddRulesImpl) {
 }
 
 TEST_F(WebRequestRulesRegistryTest, RemoveRulesImpl) {
-  scoped_refptr<TestWebRequestRulesRegistry> registry(
-      new TestWebRequestRulesRegistry(&profile_));
+  scoped_refptr<TestWebRequestRulesRegistry> registry =
+      base::MakeRefCounted<TestWebRequestRulesRegistry>(&profile_);
   std::string error;
 
   // Setup RulesRegistry to contain two rules.
@@ -351,8 +352,8 @@ TEST_F(WebRequestRulesRegistryTest, RemoveRulesImpl) {
 }
 
 TEST_F(WebRequestRulesRegistryTest, RemoveAllRulesImpl) {
-  scoped_refptr<TestWebRequestRulesRegistry> registry(
-      new TestWebRequestRulesRegistry(&profile_));
+  scoped_refptr<TestWebRequestRulesRegistry> registry =
+      base::MakeRefCounted<TestWebRequestRulesRegistry>(&profile_);
   std::string error;
 
   {
@@ -408,8 +409,8 @@ TEST_F(WebRequestRulesRegistryTest, RemoveAllRulesImpl) {
 
 // Test precedences between extensions.
 TEST_F(WebRequestRulesRegistryTest, Precedences) {
-  scoped_refptr<WebRequestRulesRegistry> registry(
-      new TestWebRequestRulesRegistry(&profile_));
+  scoped_refptr<WebRequestRulesRegistry> registry =
+      base::MakeRefCounted<TestWebRequestRulesRegistry>(&profile_);
   std::string error;
 
   {
@@ -450,8 +451,8 @@ TEST_F(WebRequestRulesRegistryTest, Precedences) {
 
 // Test priorities of rules within one extension.
 TEST_F(WebRequestRulesRegistryTest, Priorities) {
-  scoped_refptr<WebRequestRulesRegistry> registry(
-      new TestWebRequestRulesRegistry(&profile_));
+  scoped_refptr<WebRequestRulesRegistry> registry =
+      base::MakeRefCounted<TestWebRequestRulesRegistry>(&profile_);
   std::string error;
 
   {
@@ -528,8 +529,8 @@ TEST_F(WebRequestRulesRegistryTest, IgnoreRulesByTag) {
       "  \"priority\": 300                                               \n"
       "}                                                                 ";
 
-  base::Value::Dict value1 = base::test::ParseJsonDict(kRule1);
-  base::Value::Dict value2 = base::test::ParseJsonDict(kRule2);
+  base::DictValue value1 = base::test::ParseJsonDict(kRule1);
+  base::DictValue value2 = base::test::ParseJsonDict(kRule2);
 
   std::optional<api::events::Rule> rule1 = api::events::Rule::FromValue(value1);
   std::optional<api::events::Rule> rule2 = api::events::Rule::FromValue(value2);
@@ -538,8 +539,8 @@ TEST_F(WebRequestRulesRegistryTest, IgnoreRulesByTag) {
   std::vector<const api::events::Rule*> rules = {&rule1.value(),
                                                  &rule2.value()};
 
-  scoped_refptr<WebRequestRulesRegistry> registry(
-      new TestWebRequestRulesRegistry(&profile_));
+  scoped_refptr<WebRequestRulesRegistry> registry =
+      base::MakeRefCounted<TestWebRequestRulesRegistry>(&profile_);
   std::string error = registry->AddRulesImpl(kExtensionId, rules);
   EXPECT_EQ("", error);
   EXPECT_FALSE(registry->IsEmpty());
@@ -559,8 +560,8 @@ TEST_F(WebRequestRulesRegistryTest, IgnoreRulesByTag) {
 // Test that rules failing IsFulfilled on their conditions are never returned by
 // GetMatches.
 TEST_F(WebRequestRulesRegistryTest, GetMatchesCheckFulfilled) {
-  scoped_refptr<TestWebRequestRulesRegistry> registry(
-      new TestWebRequestRulesRegistry(&profile_));
+  scoped_refptr<TestWebRequestRulesRegistry> registry =
+      base::MakeRefCounted<TestWebRequestRulesRegistry>(&profile_);
   const std::string kMatchingUrlAttribute(
       "\"url\": { \"pathContains\": \"\" }, \n");
   const std::string kNonMatchingNonUrlAttribute(
@@ -606,8 +607,8 @@ TEST_F(WebRequestRulesRegistryTest, GetMatchesCheckFulfilled) {
 
 // Test different URL patterns.
 TEST_F(WebRequestRulesRegistryTest, GetMatchesDifferentUrls) {
-  scoped_refptr<TestWebRequestRulesRegistry> registry(
-      new TestWebRequestRulesRegistry(&profile_));
+  scoped_refptr<TestWebRequestRulesRegistry> registry =
+      base::MakeRefCounted<TestWebRequestRulesRegistry>(&profile_);
   const std::string kUrlAttribute(
       "\"url\": { \"hostContains\": \"url\" }, \n");
   const std::string kUrlAttribute2(
@@ -686,7 +687,7 @@ TEST(WebRequestRulesRegistrySimpleTest, StageChecker) {
       "  \"priority\": 200                                                \n"
       "}                                                                  ";
 
-  base::Value::Dict value = base::test::ParseJsonDict(kRule);
+  base::DictValue value = base::test::ParseJsonDict(kRule);
 
   std::optional<api::events::Rule> rule = api::events::Rule::FromValue(value);
   ASSERT_TRUE(rule);
@@ -720,7 +721,7 @@ TEST(WebRequestRulesRegistrySimpleTest, HostPermissionsChecker) {
       "}                                                             ";
   base::Value action_value = base::test::ParseJson(kAction);
 
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(std::move(action_value));
 
   std::string error;
@@ -772,14 +773,14 @@ TEST_F(WebRequestRulesRegistryTest, CheckOriginAndPathRegEx) {
       "  \"priority\": 200                                               \n"
       "}                                                                 ";
 
-  base::Value::Dict value = base::test::ParseJsonDict(kRule);
+  base::DictValue value = base::test::ParseJsonDict(kRule);
 
   std::optional<api::events::Rule> rule = api::events::Rule::FromValue(value);
   ASSERT_TRUE(rule);
   std::vector<const api::events::Rule*> rules = {&rule.value()};
 
-  scoped_refptr<WebRequestRulesRegistry> registry(
-      new TestWebRequestRulesRegistry(&profile_));
+  scoped_refptr<WebRequestRulesRegistry> registry =
+      base::MakeRefCounted<TestWebRequestRulesRegistry>(&profile_);
 
   URLMatcher matcher;
   std::string error = registry->AddRulesImpl(kExtensionId, rules);

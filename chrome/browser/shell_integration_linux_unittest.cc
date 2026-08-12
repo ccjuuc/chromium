@@ -16,13 +16,13 @@
 
 #include "base/base_paths.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/environment.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/ptr_util.h"
 #include "base/path_service.h"
+#include "base/scoped_environment_variable_override.h"
 #include "base/strings/cstring_view.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
@@ -65,7 +65,7 @@ class MockEnvironment : public base::Environment {
   }
 
   std::optional<std::string> GetVar(base::cstring_view variable_name) override {
-    if (!base::Contains(variables_, std::string(variable_name))) {
+    if (!variables_.contains(std::string(variable_name))) {
       return std::nullopt;
     }
     return variables_[std::string(variable_name)];
@@ -286,7 +286,6 @@ TEST(ShellIntegrationTest, GetDesktopFileContents) {
       // Real-world case.
       {"http://gmail.com", "GMail", "chrome-http__gmail.com", "", "", false,
 
-       "#!/usr/bin/env xdg-open\n"
        "[Desktop Entry]\n"
        "Version=1.0\n"
        "Terminal=false\n"
@@ -299,7 +298,6 @@ TEST(ShellIntegrationTest, GetDesktopFileContents) {
       // Make sure that empty icons are replaced by the chrome icon.
       {"http://gmail.com", "GMail", "", "", "", false,
 
-       "#!/usr/bin/env xdg-open\n"
        "[Desktop Entry]\n"
        "Version=1.0\n"
        "Terminal=false\n"
@@ -317,7 +315,6 @@ TEST(ShellIntegrationTest, GetDesktopFileContents) {
       {"http://gmail.com", "GMail", "chrome-http__gmail.com",
        "Graphics;Education;", "", true,
 
-       "#!/usr/bin/env xdg-open\n"
        "[Desktop Entry]\n"
        "Version=1.0\n"
        "Terminal=false\n"
@@ -333,46 +330,43 @@ TEST(ShellIntegrationTest, GetDesktopFileContents) {
       {"http://evil.com/evil --join-the-b0tnet", "Ownz0red\nExec=rm -rf /",
        "chrome-http__evil.com_evil", "", "", false,
 
-       "#!/usr/bin/env xdg-open\n"
        "[Desktop Entry]\n"
        "Version=1.0\n"
        "Terminal=false\n"
        "Type=Application\n"
        "Name=http://evil.com/evil%20--join-the-b0tnet\n"
        "Exec=/opt/google/chrome/google-chrome "
-       "--app=http://evil.com/evil%20--join-the-b0tnet\n"
+       "--app=http://evil.com/evil%%20--join-the-b0tnet\n"
        "Icon=chrome-http__evil.com_evil\n"
        "StartupWMClass=evil.com__evil%20--join-the-b0tnet\n"},
       {"http://evil.com/evil; rm -rf /; \"; rm -rf $HOME >ownz0red",
        "Innocent Title", "chrome-http__evil.com_evil", "", "", false,
 
-       "#!/usr/bin/env xdg-open\n"
        "[Desktop Entry]\n"
        "Version=1.0\n"
        "Terminal=false\n"
        "Type=Application\n"
        "Name=Innocent Title\n"
        "Exec=/opt/google/chrome/google-chrome "
-       "\"--app=http://evil.com/evil;%20rm%20-rf%20/;%20%22;%20rm%20"
+       "\"--app=http://evil.com/evil;%%20rm%%20-rf%%20/;%%20%%22;%%20rm%%20"
        // Note: $ is escaped as \$ within an arg to Exec, and then
        // the \ is escaped as \\ as all strings in a Desktop file should
        // be; finally, \\ becomes \\\\ when represented in a C++ string!
-       "-rf%20\\\\$HOME%20%3Eownz0red\"\n"
+       "-rf%%20\\\\$HOME%%20%%3Eownz0red\"\n"
        "Icon=chrome-http__evil.com_evil\n"
        "StartupWMClass=evil.com__evil;%20rm%20-rf%20_;%20%22;%20"
        "rm%20-rf%20$HOME%20%3Eownz0red\n"},
       {"http://evil.com/evil | cat `echo ownz0red` >/dev/null",
        "Innocent Title", "chrome-http__evil.com_evil", "", "", false,
 
-       "#!/usr/bin/env xdg-open\n"
        "[Desktop Entry]\n"
        "Version=1.0\n"
        "Terminal=false\n"
        "Type=Application\n"
        "Name=Innocent Title\n"
        "Exec=/opt/google/chrome/google-chrome "
-       "--app=http://evil.com/evil%20%7C%20cat%20%60echo%20ownz0red"
-       "%60%20%3E/dev/null\n"
+       "--app=http://evil.com/evil%%20%%7C%%20cat%%20%%60echo%%20ownz0red"
+       "%%60%%20%%3E/dev/null\n"
        "Icon=chrome-http__evil.com_evil\n"
        "StartupWMClass=evil.com__evil%20%7C%20cat%20%60echo%20ownz0red"
        "%60%20%3E_dev_null\n"},
@@ -380,24 +374,23 @@ TEST(ShellIntegrationTest, GetDesktopFileContents) {
       {"https://paint.app", "Paint", "chrome-https__paint.app", "Image",
        "image/png;image/jpg", false,
 
-       "#!/usr/bin/env xdg-open\n"
        "[Desktop Entry]\n"
        "Version=1.0\n"
        "Terminal=false\n"
        "Type=Application\n"
        "Name=Paint\n"
        "MimeType=image/png;image/jpg;" +
-           shell_integration_linux::GetDirectLaunchMimeTypeHandler() + "\n"
-       "Exec=/opt/google/chrome/google-chrome --app=https://paint.app/ %U\n"
-       "Icon=chrome-https__paint.app\n"
-       "Categories=Image\n"
-       "StartupWMClass=paint.app\n"},
+           shell_integration_linux::GetDirectLaunchMimeTypeHandler() +
+           "\n"
+           "Exec=/opt/google/chrome/google-chrome --app=https://paint.app/ %U\n"
+           "Icon=chrome-https__paint.app\n"
+           "Categories=Image\n"
+           "StartupWMClass=paint.app\n"},
 
       // Test evil mime type.
       {"https://paint.app", "Evil Paint", "chrome-https__paint.app", "Image",
        "image/png\nExec=rm -rf /", false,
 
-       "#!/usr/bin/env xdg-open\n"
        "[Desktop Entry]\n"
        "Version=1.0\n"
        "Terminal=false\n"
@@ -412,18 +405,18 @@ TEST(ShellIntegrationTest, GetDesktopFileContents) {
       {"https://test.app", "Test App", "chrome-https__test.app", "App",
        "image/png;image/jpeg", false,
 
-       "#!/usr/bin/env xdg-open\n"
        "[Desktop Entry]\n"
        "Version=1.0\n"
        "Terminal=false\n"
        "Type=Application\n"
        "Name=Test App\n"
        "MimeType=image/png;image/jpeg;" +
-           shell_integration_linux::GetDirectLaunchMimeTypeHandler() + "\n"
-       "Exec=/opt/google/chrome/google-chrome --app=https://test.app/ %U\n"
-       "Icon=chrome-https__test.app\n"
-       "Categories=App\n"
-       "StartupWMClass=test.app\n"},
+           shell_integration_linux::GetDirectLaunchMimeTypeHandler() +
+           "\n"
+           "Exec=/opt/google/chrome/google-chrome --app=https://test.app/ %U\n"
+           "Icon=chrome-https__test.app\n"
+           "Categories=App\n"
+           "StartupWMClass=test.app\n"},
   });
 
   for (size_t i = 0; i < std::size(test_cases); i++) {
@@ -469,7 +462,6 @@ TEST(ShellIntegrationTest, GetDesktopFileContentsForApps) {
                                       GURL("https://example.com/action%205")),
        },
 
-       "#!/usr/bin/env xdg-open\n"
        "[Desktop Entry]\n"
        "Version=1.0\n"
        "Terminal=false\n"
@@ -669,7 +661,6 @@ TEST(ShellIntegrationTest, WmClass) {
 
 TEST(ShellIntegrationTest, GetDesktopEntryStringValueFromFromDesktopFile) {
   const char* const kDesktopFileContents =
-      "#!/usr/bin/env xdg-open\n"
       "[Desktop Entry]\n"
       "Version=1.0\n"
       "Terminal=false\n"
@@ -710,6 +701,55 @@ TEST(ShellIntegrationTest, GetDesktopEntryStringValueFromFromDesktopFile) {
   EXPECT_EQ("", shell_integration_linux::internal::
                     GetDesktopEntryStringValueFromFromDesktopFileForTest(
                         "Action1", kDesktopFileContents));
+}
+
+TEST(ShellIntegrationTest, GetXdgAppIdForWebApp) {
+  base::ScopedEnvironmentVariableOverride scoped_override(
+      "CHROME_WEB_APP_DESKTOP_ID_PREFIX");
+
+  EXPECT_EQ("chrome-extensionid-Profile_1",
+            GetXdgAppIdForWebApp("_crx_extensionid",
+                                 base::FilePath("/tmp/Profile 1")));
+}
+
+TEST(ShellIntegrationTest, GetXdgAppIdForWebAppWithDesktopIdPrefix) {
+  base::ScopedEnvironmentVariableOverride scoped_override(
+      "CHROME_WEB_APP_DESKTOP_ID_PREFIX", "org.example.Browser.");
+
+  EXPECT_EQ("org.example.Browser.chrome-extensionid-Profile_1",
+            GetXdgAppIdForWebApp("_crx_extensionid",
+                                 base::FilePath("/tmp/Profile 1")));
+}
+
+TEST(ShellIntegrationLinuxTest,
+     GetDesktopFileContentsForUrlShortcutEscapesPercent) {
+  std::string title = "A\" --gpu-launcher=\"xcalc\" \"B";
+  GURL url("https://evil.example/?q=%c");
+  base::FilePath icon_path("/tmp/icon.png");
+  base::FilePath profile_path("/tmp/profile");
+
+  std::string contents =
+      GetDesktopFileContentsForUrlShortcut(title, url, icon_path, profile_path);
+
+  // The URL in Exec should have % escaped as %%.
+  EXPECT_TRUE(contents.find("Exec=") != std::string::npos);
+  EXPECT_TRUE(contents.find("https://evil.example/?q=%%c") != std::string::npos)
+      << "Contents: " << contents;
+}
+
+TEST(ShellIntegrationLinuxTest, GetDesktopFileContentsEscapesPercent) {
+  const base::FilePath kChromeExePath("/opt/google/chrome/google-chrome");
+  GURL url("https://evil.example/?q=%c");
+  std::u16string title = u"Evil App";
+  std::string icon_name = "icon";
+
+  std::string contents = GetDesktopFileContents(
+      kChromeExePath, "evil-app", url, std::string(), title, icon_name,
+      base::FilePath(), "", "", false, "", {});
+
+  EXPECT_TRUE(contents.find("Exec=") != std::string::npos);
+  EXPECT_TRUE(contents.find("https://evil.example/?q=%%c") != std::string::npos)
+      << "Contents: " << contents;
 }
 
 }  // namespace shell_integration_linux

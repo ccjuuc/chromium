@@ -2,16 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
-#pragma allow_unsafe_libc_calls
-#endif
-
 #include "base/memory/safety_checks.h"
 
 #include "base/allocator/partition_alloc_features.h"
+#include "base/compiler_specific.h"
+#include "base/containers/flat_map.h"
 #include "base/feature_list.h"
 #include "partition_alloc/partition_address_space.h"
+#include "partition_alloc/partition_root.h"
+#include "partition_alloc/partition_stats.h"
+#include "partition_alloc/scheduler_loop_quarantine.h"
 #include "partition_alloc/shim/allocator_shim_default_dispatch_to_partition_alloc.h"
 #include "partition_alloc/tagging.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -167,12 +167,15 @@ TEST(MemorySafetyCheckTest, AllocatorFunctions) {
 #if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 
 TEST(MemorySafetyCheckTest, SchedulerLoopQuarantine) {
-  // The check is performed only if `kPartitionAllocSchedulerLoopQuarantine` is
-  // enabled. `base::ScopedFeatureList` does not work here because the default
-  // `PartitionRoot` is configured before running this test.
-  if (!base::FeatureList::IsEnabled(
-          base::features::kPartitionAllocSchedulerLoopQuarantine)) {
-    return;
+  auto* root = allocator_shim::internal::PartitionAllocMalloc::Allocator();
+  auto& branch =
+      root->scheduler_loop_quarantine_for_advanced_memory_safety_checks_;
+
+  // Skip if AMSC quarantine is not configured. `base::ScopedFeatureList` does
+  // not work here because the default `PartitionRoot` is configured before
+  // running this test.
+  if (!branch.GetConfigurationForTesting().enable_quarantine) {
+    GTEST_SKIP();
   }
 
   static_assert(
@@ -182,20 +185,16 @@ TEST(MemorySafetyCheckTest, SchedulerLoopQuarantine) {
       is_memory_safety_checked<AdvancedChecks,
                                MemorySafetyCheck::kSchedulerLoopQuarantine>);
 
-  auto* root = allocator_shim::internal::PartitionAllocMalloc::Allocator();
-  partition_alloc::internal::
-      ScopedSchedulerLoopQuarantineBranchAccessorForTesting branch(root);
-
   auto* ptr1 = new DefaultChecks();
   ASSERT_NE(ptr1, nullptr);
   delete ptr1;
-  EXPECT_FALSE(branch.IsQuarantined(ptr1));
+  EXPECT_FALSE(branch.IsQuarantinedForTesting(ptr1));
 
   auto* ptr2 = new AdvancedChecks();
   ASSERT_NE(ptr2, nullptr);
-  memset(ptr2->data, 'A', sizeof(ptr2->data));
+  UNSAFE_TODO(memset(ptr2->data, 'A', sizeof(ptr2->data)));
   delete ptr2;
-  EXPECT_TRUE(branch.IsQuarantined(ptr2));
+  EXPECT_TRUE(branch.IsQuarantinedForTesting(ptr2));
 
   // Dereferencing `ptr` is still undefined behavior, but we can say it is
   // somewhat defined as this test is gated behind
@@ -206,6 +205,119 @@ TEST(MemorySafetyCheckTest, SchedulerLoopQuarantine) {
   EXPECT_NE(ptr2->data[15], 'A');
 
   branch.Purge();
+}
+
+class LeakedSanitizedObjectTest : public testing::Test {
+ public:
+  LeakedSanitizedObjectTest() = default;
+
+  void TearDown() override {
+    partition_alloc::PartitionRoot::ClearIntendedLeakStatsForTesting();
+  }
+};
+
+class TestClass1 {
+  LEAKED_SANITIZED_OBJECT();
+
+ public:
+  TestClass1() = default;
+
+ private:
+  uintptr_t value1_ = 0u;
+  uintptr_t value2_ = 1u;
+
+  FRIEND_TEST_ALL_PREFIXES(LeakedSanitizedObjectTest, InfiniteQuarantine);
+  FRIEND_TEST_ALL_PREFIXES(LeakedSanitizedObjectTest, DumpLeakStats);
+};
+
+class TestClass2 {
+  LEAKED_SANITIZED_OBJECT();
+
+ public:
+  TestClass2() = default;
+
+ private:
+  uintptr_t value1_ = 0u;
+  uintptr_t value2_ = 1u;
+
+  FRIEND_TEST_ALL_PREFIXES(LeakedSanitizedObjectTest, InfiniteQuarantine);
+};
+
+TEST_F(LeakedSanitizedObjectTest, InfiniteQuarantine) {
+  TestClass1* obj1 = new TestClass1;
+  ASSERT_NE(obj1, nullptr);
+  // Firstly confirm that the `obj1` was allocated by PartitionAllocator
+  // RegularPool. Not BRPPool.
+  EXPECT_TRUE(partition_alloc::IsManagedByPartitionAllocRegularPool(
+      reinterpret_cast<uintptr_t>(partition_alloc::UntagPtr(obj1))));
+  delete obj1;
+
+  auto* root = partition_alloc::PartitionRoot::GetRootFromAddress(obj1);
+  ASSERT_NE(root, nullptr);
+  EXPECT_EQ(root, base::internal::LeakedSecurityObjectAllocator());
+  partition_alloc::internal::
+      ScopedSchedulerLoopQuarantineBranchAccessorForTesting branch(root);
+  EXPECT_FALSE(branch.IsQuarantined(obj1));
+  // Compare between TestClass1::kZapValue and the obj1's zap value.
+  EXPECT_EQ((*(uint64_t*)obj1 >> 8) & 0xFFFFFFFFu,
+            TestClass1::kPartitionAllocSanitizedObjectTypeId);
+  // TestClass1 and TestClass2 must have different zap values.
+  EXPECT_NE(TestClass1::kPartitionAllocSanitizedObjectTypeId,
+            TestClass2::kPartitionAllocSanitizedObjectTypeId);
+}
+
+class TestPartitionStatsDumper final
+    : public partition_alloc::PartitionStatsDumper {
+ public:
+  void PartitionDumpTotals(
+      const char* partition_name,
+      const partition_alloc::PartitionMemoryStats*) override {}
+  void PartitionsDumpBucketStats(
+      const char* partition_name,
+      const partition_alloc::PartitionBucketMemoryStats*) override {}
+  void DumpIntendedLeak(uint32_t type_id, size_t size) override {
+    intended_leaks_.insert(std::make_pair(type_id, size));
+  }
+
+  const base::flat_map<uint32_t, size_t>& intended_leaks() const {
+    return intended_leaks_;
+  }
+
+ private:
+  base::flat_map<uint32_t, size_t> intended_leaks_;
+};
+
+// Need to check whether MallocDumpProvider reports leaked objects or not.
+TEST_F(LeakedSanitizedObjectTest, DumpLeakStats) {
+  TestClass1* obj1 = new TestClass1;
+  ASSERT_NE(obj1, nullptr);
+  // Firstly confirm that the `obj1` was allocated by PartitionAllocator
+  // RegularPool. Not BRPPool.
+  EXPECT_TRUE(partition_alloc::IsManagedByPartitionAllocRegularPool(
+      reinterpret_cast<uintptr_t>(partition_alloc::UntagPtr(obj1))));
+  delete obj1;
+
+  TestPartitionStatsDumper dumper;
+  // PartitionRoot::DumpStats() should invoke this stats? Or
+  // ReportPartitionMemoryDump() should invoke this function?
+  // (but original/malloc allocator is different from the root)
+  partition_alloc::PartitionRoot::DumpIntendedLeakStats(&dumper);
+
+  const auto& reported_leaks = dumper.intended_leaks();
+  EXPECT_EQ(1u, reported_leaks.size());
+
+  const auto& iterator_test_class1 =
+      reported_leaks.find(TestClass1::kPartitionAllocSanitizedObjectTypeId);
+  ASSERT_NE(reported_leaks.cend(), iterator_test_class1);
+
+  const auto* root = base::internal::LeakedSecurityObjectAllocator();
+  // Reported size is bucket's slot_size. Not equal to requested size.
+  // Need to obtain bucket's slot_size and compare.
+  // If FreeWithSize(), i.e. Free<kSizeHint>() is available, we know requested
+  // size at free().
+  size_t slot_size =
+      root->GetSlotSizeFromRequestedSizeForTesting(sizeof(TestClass1));
+  EXPECT_EQ(slot_size, iterator_test_class1->second);
 }
 
 #endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)

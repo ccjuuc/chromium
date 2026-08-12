@@ -9,6 +9,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
@@ -19,7 +20,7 @@
 #include "chrome/browser/ui/views/bookmarks/saved_tab_groups/saved_tab_group_everything_menu.h"
 #include "components/saved_tab_groups/public/saved_tab_group.h"
 #include "ui/base/models/menu_model.h"
-#include "ui/base/mojom/menu_source_type.mojom-forward.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/views/controls/menu/menu_delegate.h"
 
 class BookmarkMenuDelegate;
@@ -38,16 +39,26 @@ class AppMenu final : public views::MenuDelegate,
                       public BookmarkMergedSurfaceServiceObserver,
                       public GlobalErrorObserver {
  public:
-  AppMenu(Browser* browser, ui::MenuModel* model, int run_types);
+  AppMenu(Browser* browser,
+          ui::MenuModel* model,
+          int run_types,
+          base::RepeatingClosure on_menu_closed_callback);
   AppMenu(const AppMenu&) = delete;
   AppMenu& operator=(const AppMenu&) = delete;
   ~AppMenu() override;
 
   // Shows the menu relative to the specified controller's button.
-  void RunMenu(views::MenuButtonController* host);
+  // TODO(crbug.com/543867698): Specify a reasonable source type instead of
+  // defaulting to kNone.
+  void RunMenu(
+      views::MenuButtonController* host,
+      ui::mojom::MenuSourceType source_type = ui::mojom::MenuSourceType::kNone);
 
   // Shows the menu with an anchor in the parent widget given its bounds.
-  void RunMenu(views::Widget* parent, const gfx::Rect& anchor_screen_bounds);
+  void RunMenu(
+      views::Widget* parent,
+      const gfx::Rect& anchor_screen_bounds,
+      ui::mojom::MenuSourceType source_type = ui::mojom::MenuSourceType::kNone);
 
   // Closes the menu if it is open, otherwise does nothing.
   void CloseMenu();
@@ -101,7 +112,7 @@ class AppMenu final : public views::MenuDelegate,
                       ui::Accelerator* accelerator) const override;
   void WillShowMenu(views::MenuItemView* menu) override;
   void WillHideMenu(views::MenuItemView* menu) override;
-  bool ShouldCloseOnDragComplete() override;
+  bool ShouldCloseOnDragDropCompleted() override;
   void OnMenuClosed(views::MenuItemView* menu) override;
   bool ShouldExecuteCommandWithoutClosingMenu(int command_id,
                                               const ui::Event& event) override;
@@ -225,6 +236,8 @@ class AppMenu final : public views::MenuDelegate,
 
   // Records the time from when menu opens to when the user selects a menu item.
   base::ElapsedTimer menu_opened_timer_;
+
+  base::RepeatingClosure on_menu_closed_callback_;
 
   base::WeakPtrFactory<AppMenu> weak_ptr_factory_{this};
 };

@@ -98,7 +98,7 @@ class OmahaService {
 
   // Returns debug information about the omaha service.
   static void GetDebugInformation(
-      base::OnceCallback<void(base::Value::Dict)> callback);
+      base::OnceCallback<void(base::DictValue)> callback);
 
  private:
   // For tests:
@@ -193,7 +193,7 @@ class OmahaService {
                              const std::string& sessionId,
                              const std::string& versionName,
                              const std::string& channelName,
-                             const base::Time& installationTime,
+                             base::Time installationTime,
                              PingContent pingContent);
 
   // Returns the xml representation of the ping message to send to the Omaha
@@ -206,7 +206,7 @@ class OmahaService {
 
   // Computes debugging information and fill `result`.
   void GetDebugInformationOnIOThread(
-      base::OnceCallback<void(base::Value::Dict)> callback);
+      base::OnceCallback<void(base::DictValue)> callback);
 
   // Returns whether the next ping to send must a an install/update ping. If
   // `true`, the next ping must use `GetInstallRetryRequestId` as identifier

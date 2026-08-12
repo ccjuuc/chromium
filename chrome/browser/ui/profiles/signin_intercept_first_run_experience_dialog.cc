@@ -20,9 +20,9 @@
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/profiles/profile_customization_synced_theme_waiter.h"
 #include "chrome/browser/ui/views/profiles/profile_management_types.h"
 #include "chrome/browser/ui/webui/signin/history_sync_optin/history_sync_optin_ui.h"
@@ -73,6 +73,8 @@ class SigninInterceptFirstRunExperienceDialog::
       signin::SigninChoiceCallback on_account_management_screen_closed)
       override;
   void FinishFlowWithoutHistorySyncOptin() override;
+  void ShowSignInCelebration(
+      base::OnceClosure celebration_finished) override;
 
   HistorySyncOptinHelper::FlowCompletedCallback
   MoveHistorySyncOptinCompletionCallback();
@@ -100,8 +102,7 @@ SigninInterceptFirstRunExperienceDialog::
         InterceptHistorySyncOptinHelperDelegate(
             base::WeakPtr<SigninInterceptFirstRunExperienceDialog> dialog)
     : dialog_(std::move(dialog)) {
-  CHECK(
-      base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos));
+  CHECK(syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
   CHECK(base::FeatureList::IsEnabled(syncer::kUnoPhase2FollowUp));
 }
 
@@ -114,6 +115,14 @@ void SigninInterceptFirstRunExperienceDialog::
         signin::SigninChoiceCallback on_account_management_screen_closed) {
   // This flow marks the management as approved and does not invoke this
   // method.
+  NOTREACHED();
+}
+
+void SigninInterceptFirstRunExperienceDialog::
+    InterceptHistorySyncOptinHelperDelegate::ShowSignInCelebration(
+        base::OnceClosure celebration_finished) {
+  // The celebration screen is not available for the sign-in intercept access
+  // point.
   NOTREACHED();
 }
 
@@ -275,8 +284,7 @@ SigninInterceptFirstRunExperienceDialog::InterceptTurnSyncOnHelperDelegate::
     InterceptTurnSyncOnHelperDelegate(
         base::WeakPtr<SigninInterceptFirstRunExperienceDialog> dialog)
     : dialog_(std::move(dialog)), browser_(dialog_->browser_->AsWeakPtr()) {
-  CHECK(!base::FeatureList::IsEnabled(
-      syncer::kReplaceSyncPromosWithSignInPromos));
+  CHECK(!syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
 }
 
 SigninInterceptFirstRunExperienceDialog::InterceptTurnSyncOnHelperDelegate::
@@ -332,7 +340,7 @@ void SigninInterceptFirstRunExperienceDialog::
   }
 
   scoped_login_ui_service_observation_.Observe(
-      LoginUIServiceFactory::GetForProfile(browser_->profile()));
+      LoginUIServiceFactory::GetForProfile(browser_->GetProfile()));
   DCHECK(!sync_confirmation_callback_);
   sync_confirmation_callback_ = std::move(callback);
   dialog_->DoNextStep(Step::kTurnOnSync, Step::kSyncConfirmation);
@@ -422,21 +430,20 @@ SigninInterceptFirstRunExperienceDialog::
       browser_(browser),
       account_id_(account_id),
       is_forced_intercept_(is_forced_intercept) {
-  if (base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos)) {
+  if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     // This is a brand new profile. There should be enterprise confirmation
     // screens offering the option to create another profile. This class handles
     // management.
     auto_accept_management_ = enterprise_util::
         EnabledAutomaticManagementDisclaimerAcceptanceUntilReset(
-            browser_->profile());
+            browser_->GetProfile());
 
     if (!base::FeatureList::IsEnabled(switches::kEnforceManagementDisclaimer)) {
       // Trigger the disclaimer service is to auto-approve the management and
       // fetch the applicable policies.
       auto* profile_management_disclaimer_service =
           ProfileManagementDisclaimerServiceFactory::GetForProfile(
-              browser_->profile());
+              browser_->GetProfile());
       CHECK(profile_management_disclaimer_service);
       const CoreAccountId account_id_of_ongoing_management_flow =
           profile_management_disclaimer_service
@@ -459,8 +466,7 @@ SigninInterceptFirstRunExperienceDialog::
 void SigninInterceptFirstRunExperienceDialog::Show() {
   RecordDialogEvent(DialogEvent::kStart);
   Step next_step =
-      base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos) &&
+      syncer::IsReplaceSyncPromosWithSignInPromosEnabled() &&
               base::FeatureList::IsEnabled(syncer::kUnoPhase2FollowUp)
           ? Step::kStartHistorySyncOptin
           : Step::kTurnOnSync;
@@ -509,8 +515,7 @@ void SigninInterceptFirstRunExperienceDialog::DoNextStep(
     case Step::kStart:
       NOTREACHED();
     case Step::kTurnOnSync:
-      if (base::FeatureList::IsEnabled(
-              syncer::kReplaceSyncPromosWithSignInPromos)) {
+      if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
         // TODO(crbug.com/418143300): Until we implement the proper flow
         // (flag `kUnoPhase2FollowUp`) for the History Sync optin screen,
         // skip entirely the replaced steps
@@ -521,8 +526,7 @@ void SigninInterceptFirstRunExperienceDialog::DoNextStep(
       DoTurnOnSync();
       return;
     case Step::kSyncConfirmation:
-      if (base::FeatureList::IsEnabled(
-              syncer::kReplaceSyncPromosWithSignInPromos)) {
+      if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
         // TODO(crbug.com/418143300): Until we implement the proper flow for the
         // History Sync optin screen, skip entirely the replaced steps
         // Step::kTurnOnSync and Step::kSyncConfirmation.
@@ -532,8 +536,7 @@ void SigninInterceptFirstRunExperienceDialog::DoNextStep(
       return;
     case Step::kStartHistorySyncOptin:
       CHECK(base::FeatureList::IsEnabled(syncer::kUnoPhase2FollowUp));
-      CHECK(base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos));
+      CHECK(syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
       DoStartHistorySync();
       return;
     case Step::kShowHistorySyncScreen:
@@ -561,7 +564,7 @@ void SigninInterceptFirstRunExperienceDialog::DoTurnOnSync() {
   signin_metrics::RecordSigninUserActionForAccessPoint(access_point);
 
   // TurnSyncOnHelper deletes itself once done.
-  new TurnSyncOnHelper(browser_->profile(), access_point, promo_action,
+  new TurnSyncOnHelper(browser_->GetProfile(), access_point, promo_action,
                        account_id_,
                        TurnSyncOnHelper::SigninAbortedMode::KEEP_ACCOUNT,
                        std::make_unique<InterceptTurnSyncOnHelperDelegate>(
@@ -579,10 +582,9 @@ void SigninInterceptFirstRunExperienceDialog::DoSyncConfirmation() {
 }
 
 void SigninInterceptFirstRunExperienceDialog::DoStartHistorySync() {
-  CHECK(
-      base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos));
+  CHECK(syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
   signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(browser_->profile());
+      IdentityManagerFactory::GetForProfile(browser_->GetProfile());
   CHECK(identity_manager);
   auto extended_account_info =
       identity_manager->FindExtendedAccountInfoByAccountId(account_id_);
@@ -591,7 +593,7 @@ void SigninInterceptFirstRunExperienceDialog::DoStartHistorySync() {
           weak_ptr_factory_.GetWeakPtr());
   history_sync_optin_delegate_ = history_sync_optin_delegate->GetWeakPtr();
   auto* history_sync_optin_service =
-      HistorySyncOptinServiceFactory::GetForProfile(browser_->profile());
+      HistorySyncOptinServiceFactory::GetForProfile(browser_->GetProfile());
   CHECK(history_sync_optin_service);
   history_sync_optin_service->StartHistorySyncOptinFlow(
       extended_account_info, std::move(history_sync_optin_delegate),
@@ -613,8 +615,8 @@ void SigninInterceptFirstRunExperienceDialog::DoShowHistorySyncOptin() {
 void SigninInterceptFirstRunExperienceDialog::DoWaitForSyncedTheme() {
   synced_theme_waiter_ =
       std::make_unique<ProfileCustomizationSyncedThemeWaiter>(
-          SyncServiceFactory::GetForProfile(browser_->profile()),
-          ThemeServiceFactory::GetForProfile(browser_->profile()),
+          SyncServiceFactory::GetForProfile(browser_->GetProfile()),
+          ThemeServiceFactory::GetForProfile(browser_->GetProfile()),
           base::BindOnce(
               &SigninInterceptFirstRunExperienceDialog::OnSyncedThemeReady,
               // Unretained() is fine because `this` owns `synced_theme_waiter_`
@@ -624,7 +626,7 @@ void SigninInterceptFirstRunExperienceDialog::DoWaitForSyncedTheme() {
 
 void SigninInterceptFirstRunExperienceDialog::DoProfileCustomization() {
   // Don't show the customization bubble if a valid policy theme is set.
-  if (ThemeServiceFactory::GetForProfile(browser_->profile())
+  if (ThemeServiceFactory::GetForProfile(browser_->GetProfile())
           ->UsingPolicyTheme()) {
     // Show the profile switch IPH that is normally shown after the
     // customization bubble.
@@ -658,7 +660,7 @@ void SigninInterceptFirstRunExperienceDialog::DoProfileCustomization() {
 
 void SigninInterceptFirstRunExperienceDialog::
     DoProfileSwitchIPHAndCloseModal() {
-  browser_->window()->MaybeShowProfileSwitchIPH();
+  BrowserWindow::FromBrowser(browser_)->MaybeShowProfileSwitchIPH();
   CloseModalDialog();
 }
 
@@ -673,8 +675,8 @@ void SigninInterceptFirstRunExperienceDialog::SetDialogDelegate(
 void SigninInterceptFirstRunExperienceDialog::PreloadProfileCustomizationUI() {
   profile_customization_preloaded_contents_ =
       content::WebContents::Create(content::WebContents::CreateParams(
-          browser_->profile(),
-          content::SiteInstance::Create(browser_->profile())));
+          browser_->GetProfile(),
+          content::SiteInstance::Create(browser_->GetProfile())));
   profile_customization_preloaded_contents_->GetController().LoadURL(
       GURL(chrome::kChromeUIProfileCustomizationURL), content::Referrer(),
       ui::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());

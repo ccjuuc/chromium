@@ -892,7 +892,7 @@ TEST_F(HistoryURLProviderTest, IntranetURLsWithPaths) {
       RunTest(ASCIIToUTF16(test_cases[i].input), std::string(), false, {});
     } else {
       const UrlAndLegalDefault output[] = {
-          {url_formatter::FixupURL(test_cases[i].input, std::string()).spec(),
+          {url_formatter::FixupURL(test_cases[i].input).spec(),
            test_cases[i].allowed_to_be_default_match}};
       ASSERT_NO_FATAL_FAILURE(RunTest(ASCIIToUTF16(test_cases[i].input),
                                       std::string(), false, output));
@@ -1144,16 +1144,16 @@ TEST_F(HistoryURLProviderTest, SuggestExactInput) {
     EXPECT_EQ(ASCIIToUTF16(test_cases[i].contents), match.contents);
     for (size_t match_index = 0; match_index < match.contents_class.size();
          ++match_index) {
-      UNSAFE_TODO(EXPECT_EQ(test_cases[i].offsets[match_index],
-                            match.contents_class[match_index].offset));
+      EXPECT_EQ(test_cases[i].offsets[match_index],
+                match.contents_class[match_index].offset);
       EXPECT_EQ(ACMatchClassification::URL |
                     (match_index == test_cases[i].match_classification_index
                          ? ACMatchClassification::MATCH
                          : 0),
                 match.contents_class[match_index].style);
     }
-    UNSAFE_TODO(
-        EXPECT_EQ(npos, test_cases[i].offsets[match.contents_class.size()]));
+
+    EXPECT_EQ(npos, test_cases[i].offsets[match.contents_class.size()]);
   }
 }
 
@@ -1243,13 +1243,11 @@ TEST_F(HistoryURLProviderTest, HUPScoringExperiment) {
     std::array<UrlAndLegalDefault, kProviderMaxMatches> output;
     size_t max_matches;
     for (max_matches = 0; max_matches < kProviderMaxMatches; ++max_matches) {
-      if (UNSAFE_TODO(test_cases[i].matches[max_matches]).url == nullptr) {
+      if (test_cases[i].matches[max_matches].url == nullptr) {
         break;
       }
       output[max_matches].url =
-          url_formatter::FixupURL(
-              UNSAFE_TODO(test_cases[i].matches[max_matches]).url,
-              std::string())
+          url_formatter::FixupURL(test_cases[i].matches[max_matches].url)
               .spec();
       output[max_matches].allowed_to_be_default_match = true;
     }
@@ -1260,8 +1258,8 @@ TEST_F(HistoryURLProviderTest, HUPScoringExperiment) {
                                     std::string(), false,
                                     base::span(output).first(max_matches)));
     for (size_t j = 0; j < max_matches; ++j) {
-      UNSAFE_TODO(EXPECT_EQ(test_cases[i].matches[j].experiment_relevance,
-                            matches_[j].relevance));
+      EXPECT_EQ(test_cases[i].matches[j].experiment_relevance,
+                matches_[j].relevance);
     }
   }
 }
@@ -1368,13 +1366,11 @@ TEST_F(HistoryURLProviderTest, DoTrimHttpsScheme) {
 // the keyword, i.e. "@history google" should only match "google".
 TEST_F(HistoryURLProviderTest, KeywordModeExtractUserInput) {
   const auto test = [&](std::u16string input_text,
-                        bool input_prefer_keyword_mode = false) {
+                        bool input_in_keyword_mode = false) {
     AutocompleteInput input(input_text, metrics::OmniboxEventProto::OTHER,
                             TestSchemeClassifier());
-    if (input_prefer_keyword_mode) {
-      input.set_prefer_keyword(true);
-      input.set_keyword_mode_entry_method(
-          metrics::OmniboxEventProto_KeywordModeEntryMethod_TAB);
+    if (input_in_keyword_mode) {
+      input.set_in_keyword_mode(true);
     }
 
     provider_->Stop(AutocompleteStopReason::kClobbered);
@@ -1441,9 +1437,7 @@ TEST_F(HistoryURLProviderTest, MaxMatches) {
   EXPECT_EQ(matches_.size(), provider_->provider_max_matches());
 
   // Turn keyword mode on. we should be able to get more matches now.
-  input.set_keyword_mode_entry_method(
-      metrics::OmniboxEventProto_KeywordModeEntryMethod_TAB);
-  input.set_prefer_keyword(true);
+  input.set_in_keyword_mode(true);
   provider_->Start(input, false);
   if (!provider_->done()) {
     base::RunLoop loop{base::RunLoop::Type::kNestableTasksAllowed};

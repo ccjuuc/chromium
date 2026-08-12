@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.ui.edge_to_edge;
 
 import android.app.Activity;
 import android.content.Context;
+import android.os.Build;
 import android.os.Build.VERSION_CODES;
 import android.view.Window;
 
@@ -45,13 +46,16 @@ import java.util.function.Supplier;
 public class EdgeToEdgeUtils {
     private static final String TAG = "E2E_Utils";
     private static @Nullable Boolean sIsTargetSdkEnforceEdgeToEdge;
-    private static boolean sObservedTappableNavigationBar;
     private static boolean sAlwaysDrawWebEdgeToEdgeForTesting;
     private static @Nullable Boolean sHas3ButtonNavBarForTesting;
 
-    private static final String ELIGIBLE_HISTOGRAM = "Android.EdgeToEdge.Eligible";
+    private static final String ELIGIBLE_HISTOGRAM = "Android.EdgeToEdge.Eligible2";
     private static final String INELIGIBLE_REASON_HISTOGRAM =
-            "Android.EdgeToEdge.IneligibilityReason";
+            "Android.EdgeToEdge.IneligibilityReason2";
+    private static final String ELIGIBLE_ON_CREATE_HISTOGRAM =
+            "Android.EdgeToEdge.Eligible2.OnCreateController";
+    private static final String INELIGIBLE_REASON_ON_CREATE_HISTOGRAM =
+            "Android.EdgeToEdge.IneligibilityReason2.OnCreateController";
     private static final String MISSING_NAVBAR_INSETS_HISTOGRAM =
             "Android.EdgeToEdge.MissingNavbarInsets2";
 
@@ -95,16 +99,6 @@ public class EdgeToEdgeUtils {
         int NUM_ENTRIES = 5;
     }
 
-    /**
-     * Whether the edge-to-edge bottom chin is enabled.
-     *
-     * <p>When enabled, Chrome will replace the OS navigation bar with a thin "Chin" layer in the
-     * browser controls and can be scrolled off the screen on web pages.
-     */
-    public static boolean isBottomChinFeatureEnabled() {
-        return ChromeFeatureList.sEdgeToEdgeBottomChin.isEnabled();
-    }
-
     /** Whether it is allowed to use other insets as a backup for missing navigation bar insets. */
     public static boolean isUseBackupNavbarInsetsEnabled() {
         return ChromeFeatureList.sEdgeToEdgeUseBackupNavbarInsets.isEnabled();
@@ -136,7 +130,6 @@ public class EdgeToEdgeUtils {
             return false;
         }
 
-        if (!isBottomChinFeatureEnabled()) return false;
         return !DeviceInfo.isAutomotive() && !hasTappableNavigationBar(activity.getWindow());
     }
 
@@ -212,27 +205,43 @@ public class EdgeToEdgeUtils {
     }
 
     /**
-     * Whether reporting the page's safe area constraint to the bottom chin. Required when {@link
-     * isEdgeToEdgeBottomChinEnabled}.
-     */
-    public static boolean isSafeAreaConstraintEnabled() {
-        return isBottomChinFeatureEnabled();
-    }
-
-    /**
      * Record if the current activity is eligible for edge to edge. If not, also record the reason
-     * why it is ineligible.
+     * why it is ineligible. This is for the general "for all users" check at startup.
      *
      * @param activity The current active activity.
      * @return Whether the activity is eligible for edge to edge based on device configuration.
      */
-    public static boolean recordEligibility(Activity activity) {
+    public static boolean recordEligibilityForEveryStart(Activity activity) {
+        return recordEligibility(activity, ELIGIBLE_HISTOGRAM, INELIGIBLE_REASON_HISTOGRAM);
+    }
+
+    /**
+     * Record if the current activity is eligible for edge to edge when the controller is created.
+     *
+     * @param activity The current active activity.
+     * @return Whether the activity is eligible for edge to edge based on device configuration.
+     */
+    public static boolean recordEligibilityOnCreate(Activity activity) {
+        return recordEligibility(
+                activity, ELIGIBLE_ON_CREATE_HISTOGRAM, INELIGIBLE_REASON_ON_CREATE_HISTOGRAM);
+    }
+
+    /**
+     * Checks if the current activity is eligible for edge to edge.
+     *
+     * @param activity The current active activity.
+     * @param eligibleName The name of the histogram to record eligibility.
+     * @param ineligibleName The name of the histogram to record ineligibility reasons.
+     * @return Whether the activity is eligible for edge to edge based on device configuration.
+     */
+    private static boolean recordEligibility(
+            Activity activity, String eligibleName, String ineligibleName) {
         boolean eligible = true;
 
         if (hasTappableNavigationBar(activity.getWindow())) {
             eligible = false;
             RecordHistogram.recordEnumeratedHistogram(
-                    INELIGIBLE_REASON_HISTOGRAM,
+                    ineligibleName,
                     IneligibilityReason.NAVIGATION_MODE,
                     IneligibilityReason.NUM_TYPES);
         }
@@ -242,27 +251,22 @@ public class EdgeToEdgeUtils {
                 && (!isEdgeToEdgeTabletEnabled() || !EdgeToEdgeUtils.isSupportedTablet(activity))) {
             eligible = false;
             RecordHistogram.recordEnumeratedHistogram(
-                    INELIGIBLE_REASON_HISTOGRAM,
-                    IneligibilityReason.FORM_FACTOR,
-                    IneligibilityReason.NUM_TYPES);
+                    ineligibleName, IneligibilityReason.FORM_FACTOR, IneligibilityReason.NUM_TYPES);
         }
 
-        if (android.os.Build.VERSION.SDK_INT < VERSION_CODES.R) {
+        if (Build.VERSION.SDK_INT < VERSION_CODES.R) {
             eligible = false;
             RecordHistogram.recordEnumeratedHistogram(
-                    INELIGIBLE_REASON_HISTOGRAM,
-                    IneligibilityReason.OS_VERSION,
-                    IneligibilityReason.NUM_TYPES);
+                    ineligibleName, IneligibilityReason.OS_VERSION, IneligibilityReason.NUM_TYPES);
         }
 
         if (DeviceInfo.isAutomotive()) {
             eligible = false;
             RecordHistogram.recordEnumeratedHistogram(
-                    INELIGIBLE_REASON_HISTOGRAM,
-                    IneligibilityReason.DEVICE_TYPE,
-                    IneligibilityReason.NUM_TYPES);
+                    ineligibleName, IneligibilityReason.DEVICE_TYPE, IneligibilityReason.NUM_TYPES);
         }
-        RecordHistogram.recordBooleanHistogram(ELIGIBLE_HISTOGRAM, eligible);
+
+        RecordHistogram.recordBooleanHistogram(eligibleName, eligible);
 
         return eligible;
     }
@@ -287,8 +291,8 @@ public class EdgeToEdgeUtils {
     static boolean shouldDrawToEdge(
             boolean isPageOptedIntoEdgeToEdge, @LayoutType int layoutType, int bottomInset) {
         return isPageOptedIntoEdgeToEdge
-                || (isBottomChinFeatureEnabled() && isBottomChinAllowed(layoutType, bottomInset))
-                || (layoutType == LayoutType.TAB_SWITCHER);
+                || isBottomChinAllowed(layoutType, bottomInset)
+                || (layoutType == LayoutType.HUB);
     }
 
     /**
@@ -381,21 +385,14 @@ public class EdgeToEdgeUtils {
             return sHas3ButtonNavBarForTesting;
         }
 
-        if (sObservedTappableNavigationBar
-                && ChromeFeatureList.sEdgeToEdgeMonitorConfigurations.isEnabled()) {
-            return true;
-        }
-
         var rootInsets = insetsSupplier.get();
         assert rootInsets != null;
 
-        boolean hasTappableNavBar = hasTappableNavigationBarFromInsets(rootInsets);
-        sObservedTappableNavigationBar |= hasTappableNavBar;
-        return hasTappableNavBar;
+        return hasTappableNavigationBarFromInsets(rootInsets);
     }
 
     /** Returns whether the given window's insets contains a tappable navigation bar. */
-    static boolean hasTappableNavigationBarFromInsets(WindowInsetsCompat insets) {
+    public static boolean hasTappableNavigationBarFromInsets(WindowInsetsCompat insets) {
         Insets navigationBarInsets = insets.getInsets(WindowInsetsCompat.Type.navigationBars());
         Insets tappableElementInsets = insets.getInsets(WindowInsetsCompat.Type.tappableElement());
         // Return whether there is any overlap in navigation bar and tappable element insets.
@@ -445,11 +442,6 @@ public class EdgeToEdgeUtils {
     public static void setAlwaysDrawWebEdgeToEdgeForTesting(boolean drawWebEdgeToEdge) {
         sAlwaysDrawWebEdgeToEdgeForTesting = drawWebEdgeToEdge;
         ResettersForTesting.register(() -> sAlwaysDrawWebEdgeToEdgeForTesting = false);
-    }
-
-    public static void setObservedTappableNavigationBarForTesting(boolean observed) {
-        sObservedTappableNavigationBar = observed;
-        ResettersForTesting.register(() -> sObservedTappableNavigationBar = false);
     }
 
     public static void setHas3ButtonNavBarForTesting(Boolean has3ButtonNavBar) {

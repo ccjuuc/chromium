@@ -4,12 +4,22 @@
 
 #include "ui/events/gesture_event_details.h"
 
+#include <algorithm>
 #include <ostream>
 #include <utility>
 
 #include "base/check_op.h"
-#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/notreached.h"
+
+// Since ui::GestureEventDetails::Details is a union structure that corresponds
+// to only one EventType, allow conversion to a byte span to avoid using memset
+// and memcmp.
+namespace base {
+template <>
+inline constexpr bool
+    kCanSafelyConvertToByteSpan<ui::GestureEventDetails::Details> = true;
+}
 
 namespace ui {
 
@@ -45,7 +55,15 @@ GestureEventDetails::GestureEventDetails(ui::EventType type,
     case ui::EventType::kGestureScrollUpdate:
       data_.scroll_update.x = delta_x;
       data_.scroll_update.y = delta_y;
+      data_.scroll_update.x_unconstrained = delta_x;
+      data_.scroll_update.y_unconstrained = delta_y;
       data_.scroll_update.delta_units = units;
+      break;
+
+    case ui::EventType::kGestureScrollEnd:
+      data_.scroll_end.x_compensated = delta_x;
+      data_.scroll_end.y_compensated = delta_y;
+      data_.scroll_end.delta_units = units;
       break;
 
     case ui::EventType::kScrollFlingStart:
@@ -69,6 +87,15 @@ GestureEventDetails::GestureEventDetails(ui::EventType type,
       NOTREACHED() << "Invalid event type for constructor: "
                    << std::to_underlying(type);
   }
+}
+
+bool GestureEventDetails::operator==(const GestureEventDetails& other) const {
+  return type_ == other.type_ &&
+         base::byte_span_from_ref(data_) ==
+             base::byte_span_from_ref(other.data_) &&
+         device_type_ == other.device_type_ &&
+         touch_points_ == other.touch_points_ &&
+         bounding_box_ == other.bounding_box_;
 }
 
 GestureEventDetails::GestureEventDetails(ui::EventType type,
@@ -104,7 +131,7 @@ GestureEventDetails::GestureEventDetails(ui::EventType type,
 }
 
 GestureEventDetails::Details::Details() {
-  UNSAFE_TODO(memset(this, 0, sizeof(Details)));
+  std::ranges::fill(base::byte_span_from_ref(*this), 0);
 }
 
 }  // namespace ui

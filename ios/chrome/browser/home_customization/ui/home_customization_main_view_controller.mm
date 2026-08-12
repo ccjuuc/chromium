@@ -22,6 +22,7 @@
 #import "ios/chrome/browser/home_customization/ui/home_customization_toggle_cell.h"
 #import "ios/chrome/browser/home_customization/ui/home_customization_view_controller_protocol.h"
 #import "ios/chrome/browser/home_customization/utils/home_customization_constants.h"
+#import "ios/chrome/browser/keyboard/ui_bundled/UIKeyCommand+Chrome.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_color_palette.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_image_background_trait.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_trait.h"
@@ -194,8 +195,7 @@
              cell.mutator = weakSelf.mutator;
            }];
 
-  if (IsNTPBackgroundCustomizationEnabled() &&
-      !self.customizationDisabledByPolicy) {
+  if (!self.customizationDisabledByPolicy) {
     _backgroundCellRegistration = [UICollectionViewCellRegistration
         registrationWithCellClass:[HomeCustomizationBackgroundCell class]
              configurationHandler:^(HomeCustomizationBackgroundCell* cell,
@@ -218,8 +218,7 @@
              }];
   }
 
-  if (IsNTPBackgroundCustomizationEnabled() &&
-      self.customizationDisabledByPolicy) {
+  if (self.customizationDisabledByPolicy) {
     _enterprisePolicyCellRegistration = [UICollectionViewCellRegistration
         registrationWithCellClass:[HomeCustomizationEnterprisePolicyCell class]
              configurationHandler:^(HomeCustomizationEnterprisePolicyCell* cell,
@@ -236,8 +235,7 @@
   NSDiffableDataSourceSnapshot<CustomizationSection*, NSString*>* snapshot =
       [[NSDiffableDataSourceSnapshot alloc] init];
 
-  if (IsNTPBackgroundCustomizationEnabled() &&
-      !self.customizationDisabledByPolicy) {
+  if (!self.customizationDisabledByPolicy) {
     // Create background customization section and add items to it.
     [snapshot
         appendSectionsWithIdentifiers:@[ kCustomizationSectionBackground ]];
@@ -252,8 +250,7 @@
       appendItemsWithIdentifiers:[self identifiersForToggleMap:self.toggleMap]
        intoSectionWithIdentifier:kCustomizationSectionMainToggles];
 
-  if (IsNTPBackgroundCustomizationEnabled() &&
-      self.customizationDisabledByPolicy) {
+  if (self.customizationDisabledByPolicy) {
     // Create an enterprise section with a message to users.
     [snapshot
         appendSectionsWithIdentifiers:@[ kCustomizationSectionEnterprise ]];
@@ -287,7 +284,6 @@
     return [_collectionConfigurator
         verticalListSectionForLayoutEnvironment:layoutEnvironment];
   } else if (sectionIndex == backgroundCustomizationIdentifier) {
-    CHECK(IsNTPBackgroundCustomizationEnabled());
     CGSize windowSize = self.view.window.bounds.size;
     return [_collectionConfigurator
         backgroundCellSectionForLayoutEnvironment:layoutEnvironment
@@ -375,8 +371,8 @@
       actionWithTitle:
           l10n_util::GetNSString(
               IDS_IOS_HOME_CUSTOMIZATION_CONTEXT_MENU_DELETE_RECENT_BACKGROUND_TITLE)
-                image:DefaultSymbolWithPointSize(
-                          kTrashSymbol,
+                image:SymbolWithPointSize(
+                          SymbolTrash,
                           [[UIFont
                               preferredFontForTextStyle:UIFontTextStyleBody]
                               pointSize])
@@ -508,22 +504,26 @@
     HomeCustomizationFramingCoordinates* framingCoordinates =
         backgroundConfiguration.userUploadedFramingCoordinates;
     __weak __typeof(self) weakSelf = self;
-    void (^imageHandler)(UIImage*, UserUploadedImageError) = ^(
-        UIImage* image, UserUploadedImageError error) {
-      [weakSelf handleLoadedUserUploadedImage:image
-                           framingCoordinates:framingCoordinates
-                               backgroundCell:backgroundCell
-                                    imagePath:imagePath];
-      if (!image) {
-        base::UmaHistogramEnumeration(
-            "IOS.HomeCustomization.Background.RecentlyUsed."
-            "ImageUserUploadedFetchError",
-            error);
-      }
-    };
+    void (^imageHandler)(UIImage*, CGSize, UserUploadedImageError) =
+        ^(UIImage* image, CGSize originalImageSize,
+          UserUploadedImageError error) {
+          [weakSelf handleLoadedUserUploadedImage:image
+                               framingCoordinates:framingCoordinates
+                                originalImageSize:originalImageSize
+                                   backgroundCell:backgroundCell
+                                        imagePath:imagePath];
+          if (!image) {
+            base::UmaHistogramEnumeration(
+                "IOS.HomeCustomization.Background.RecentlyUsed."
+                "ImageUserUploadedFetchError",
+                error);
+          }
+        };
     [self.customizationMutator
         fetchBackgroundCustomizationUserUploadedImage:backgroundConfiguration
                                                           .userUploadedImagePath
+                                          targetSize:self.view.window.windowScene
+                                                         .screen.bounds.size
                                            completion:imageHandler];
   }
 }
@@ -719,15 +719,36 @@
 }
 
 // Handles a loaded user-uploaded image, including optimizations for displaying
-// large images in the small menu thumbnails.
+// large images in the small menu thumbnails. `originalImageSize` is the size
+// of the image before any downsampling (in points), used to correctly scale
+// framing coordinates when the loaded image has been downsampled.
 - (void)handleLoadedUserUploadedImage:(UIImage*)image
                    framingCoordinates:
                        (HomeCustomizationFramingCoordinates*)framingCoordinates
+                    originalImageSize:(CGSize)originalImageSize
                        backgroundCell:
                            (HomeCustomizationBackgroundCell*)backgroundCell
                             imagePath:(NSString*)imagePath {
   UIImage* imageToPrepare = image;
+
+  CGImageRef cgImage = image.CGImage;
+  if (!cgImage) {
+    return;
+  }
+
+  // visibleRect is in the original image's point coordinate space.
+  // CGImageCreateWithImageInRect operates in pixel coordinates.
+  // Scale visibleRect to the current image's pixel space.
+  CGSize imagePixelSize =
+      CGSizeMake(CGImageGetWidth(cgImage), CGImageGetHeight(cgImage));
   CGRect visibleRect = framingCoordinates.visibleRect;
+  if (originalImageSize.width > 0 && originalImageSize.height > 0) {
+    CGFloat xRatio = imagePixelSize.width / originalImageSize.width;
+    CGFloat yRatio = imagePixelSize.height / originalImageSize.height;
+    visibleRect = CGRectMake(
+        visibleRect.origin.x * xRatio, visibleRect.origin.y * yRatio,
+        visibleRect.size.width * xRatio, visibleRect.size.height * yRatio);
+  }
 
   // Crop to a square centered on the visible rect to avoid losing data on
   // rotation.
@@ -739,12 +760,8 @@
   // `CGImageCreateWithImageInRect` has undefined behavior if the crop rect
   // extends beyond the image bounds. To be safe, intersect the desired crop
   // rect with the image's bounds.
-  CGImageRef cgImage = image.CGImage;
-  if (!cgImage) {
-    return;
-  }
   CGRect imagePixelBounds =
-      CGRectMake(0, 0, CGImageGetWidth(cgImage), CGImageGetHeight(cgImage));
+      CGRectMake(0, 0, imagePixelSize.width, imagePixelSize.height);
   CGRect cropPixelRect = CGRectIntersection(squareCropRect, imagePixelBounds);
 
   UIImage* croppedImage = [self cropImage:image toPixelRect:cropPixelRect];
@@ -758,7 +775,7 @@
                              visibleRect.size.width, visibleRect.size.height);
   }
 
-  CGFloat screenScale = [UIScreen mainScreen].scale;
+  CGFloat screenScale = self.traitCollection.displayScale;
   // Calculate the maximum pixel dimension needed for the cell's display.
   CGFloat thumbnailDimension =
       MAX(backgroundCell.bounds.size.width, backgroundCell.bounds.size.height) *
@@ -773,9 +790,12 @@
       }
 
       // Calculate the new framing rect for the user's selection within the
-      // prepared square thumbnail so the preview accurately represent the
-      // user's selection.
-      CGFloat scale = preparedImage.size.width / cropPixelRect.size.width;
+      // prepared square thumbnail so the preview accurately represents the
+      // user's selection. Use pixel dimensions since visibleRect and
+      // cropPixelRect are in pixel coordinates.
+      CGFloat preparedPixelWidth =
+          preparedImage.size.width * preparedImage.scale;
+      CGFloat scale = preparedPixelWidth / cropPixelRect.size.width;
       CGRect finalVisibleRect = CGRectMake(
           visibleRect.origin.x * scale, visibleRect.origin.y * scale,
           visibleRect.size.width * scale, visibleRect.size.height * scale);
@@ -840,6 +860,23 @@
   dispatch_async(dispatch_get_main_queue(), ^{
     [self.snackbarCommandHandler showSnackbarMessage:message];
   });
+}
+
+#pragma mark - UIResponder
+
+// To always be able to register key commands via -keyCommands, the VC must be
+// able to become first responder.
+- (BOOL)canBecomeFirstResponder {
+  return YES;
+}
+
+- (NSArray<UIKeyCommand*>*)keyCommands {
+  return @[ UIKeyCommand.cr_close ];
+}
+
+- (void)keyCommand_close {
+  base::RecordAction(base::UserMetricsAction(kMobileKeyCommandClose));
+  [self dismissCustomizationMenuPage];
 }
 
 #pragma mark - Private

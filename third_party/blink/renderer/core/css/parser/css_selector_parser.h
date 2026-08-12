@@ -83,7 +83,8 @@ class CORE_EXPORT CSSSelectorParser {
   CSSSelectorList* ConsumeNthChildOfSelectors(CSSParserTokenStream&);
 
   static bool SupportsComplexSelector(CSSParserTokenStream&,
-                                      const CSSParserContext*);
+                                      const CSSParserContext*,
+                                      StyleSheetContents*);
 
   static CSSSelector::PseudoType ParsePseudoType(const AtomicString&,
                                                  bool has_arguments,
@@ -178,7 +179,6 @@ class CORE_EXPORT CSSSelectorParser {
   base::span<CSSSelector> ConsumeComplexSelector(
       CSSParserTokenStream& stream,
       CSSNestingType,
-      bool first_in_complex_selector_list,
       ResultFlags&);
 
   // ConsumePartialComplexSelector() method provides the common logic of
@@ -241,6 +241,9 @@ class CORE_EXPORT CSSSelectorParser {
       base::span<CSSSelector> selectors);
 
   void SetInSupportsParsing() { in_supports_parsing_ = true; }
+
+  void PushUnparsedComplexSelector(CSSNestingType nesting_type,
+                                   AtomicString invalid_selector_text);
 
   const CSSParserContext* context_;
   // The parent rule pointed to by the nesting selector (&).
@@ -331,7 +334,8 @@ class CORE_EXPORT CSSSelectorParser {
       DCHECK_GE(vector_.size(), initial_size_);
       // SAFETY: Performance sensitive. Depends upon the invariant
       // that initial_size_ is always in range.
-      return UNSAFE_BUFFERS({vector_.begin() + initial_size_, vector_.end()});
+      return UNSAFE_BUFFERS(
+          {base::unchecked, vector_.begin() + initial_size_, vector_.end()});
     }
 
     // Make sure the added elements are left on the vector after

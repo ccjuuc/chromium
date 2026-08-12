@@ -10,7 +10,6 @@
 #include "build/build_config.h"
 #include "content/browser/devtools/protocol/devtools_protocol_test_support.h"
 #include "content/browser/web_contents/web_contents_impl.h"
-#include "content/common/features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test_utils.h"
@@ -94,7 +93,6 @@ class FontUniqueNameBrowserTest : public DevToolsProtocolTest {
  public:
   void SetUpCommandLine(base::CommandLine* command_line) override {
     DevToolsProtocolTest::SetUpCommandLine(command_line);
-    feature_list_.InitAndEnableFeature(features::kFontSrcLocalMatching);
   }
 
   void LoadAndWait(const std::string& url) {
@@ -128,29 +126,29 @@ IN_PROC_BROWSER_TEST_F(FontUniqueNameBrowserTest,
       static_cast<size_t>(EvalJs(shell(), "addTestNodes()").ExtractInt());
   ASSERT_EQ(num_added_nodes, std::size(kExpectedFontFamilyNames));
 
-  base::Value::Dict get_doc_params;
+  base::DictValue get_doc_params;
   get_doc_params.Set("depth", 0);
-  const base::Value::Dict* result =
+  const base::DictValue* result =
       SendCommand("DOM.getDocument", std::move(get_doc_params));
   int node_id = *result->FindIntByDottedPath("root.nodeId");
 
-  base::Value::Dict query_params;
+  base::DictValue query_params;
   query_params.Set("nodeId", node_id);
   query_params.Set("selector", ".testnode");
   result = SendCommand("DOM.querySelectorAll", std::move(query_params));
   // This needs a Clone() because the node list otherwise gets invalid after the
   // next SendCommand call.
-  const base::Value::List nodes = result->FindList("nodeIds")->Clone();
+  const base::ListValue nodes = result->FindList("nodeIds")->Clone();
   ASSERT_EQ(nodes.size(), num_added_nodes);
   ASSERT_EQ(nodes.size(), std::size(kExpectedFontFamilyNames));
   for (size_t i = 0; i < nodes.size(); ++i) {
     const base::Value& node = nodes[i];
-    base::Value::Dict get_fonts_params;
+    base::DictValue get_fonts_params;
     get_fonts_params.Set("nodeId", node.GetInt());
-    const base::Value::Dict* font_info =
+    const base::DictValue* font_info =
         SendCommand("CSS.getPlatformFontsForNode", std::move(get_fonts_params));
     ASSERT_TRUE(font_info);
-    const base::Value::List* font_list = font_info->FindList("fonts");
+    const base::ListValue* font_list = font_info->FindList("fonts");
     ASSERT_TRUE(font_list);
     ASSERT_TRUE(font_list->size());
     const base::Value& first_font_info = font_list->front();

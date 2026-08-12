@@ -86,16 +86,12 @@
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/shared_memory_mapping.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/metrics/persistent_memory_allocator.h"
 #include "base/synchronization/lock.h"
 #include "base/types/pass_key.h"
 #include "build/blink_buildflags.h"
 #include "build/build_config.h"
-
-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
-#include "base/files/platform_file.h"
-#include "base/posix/global_descriptors.h"
-#endif
 
 namespace base {
 
@@ -113,6 +109,7 @@ struct LaunchOptions;
 #if BUILDFLAG(USE_BLINK)
 namespace shared_memory {
 enum class SharedMemoryError;
+struct SharedMemorySwitch;
 }  // namespace shared_memory
 #endif
 
@@ -230,7 +227,7 @@ class BASE_EXPORT FieldTrial : public RefCounted<FieldTrial> {
   // Note: Using this function will not register the field trial globally in the
   // running process - for that, use FieldTrialList::FactoryGetFieldTrial().
   //
-  // The ownership of the returned FieldTrial is transfered to the caller which
+  // The ownership of the returned FieldTrial is transferred to the caller which
   // is responsible for deref'ing it (e.g. by using scoped_refptr<FieldTrial>).
   static FieldTrial* CreateSimulatedFieldTrial(
       std::string_view trial_name,
@@ -508,13 +505,17 @@ class BASE_EXPORT FieldTrialList {
   // Fills in the supplied vector |active_groups| (which must be empty when
   // called) with a snapshot of all registered FieldTrials for which the group
   // has been chosen and externally observed (via |group()|) and which have
-  // not been disabled.
+  // not been disabled. If |include_runtime_overrides| is true, the returned
+  // groups will include the runtime FieldTrial overrides (see
+  // RuntimeFieldTrialOverrides class), and the trials that are overridden by
+  // them will be excluded from the output. Note that if setting this to true,
+  // this must be called on the main sequence.
   //
   // This does not return low anonymity field trials. Callers who need access to
   // low anonymity field trials should use
   // |FieldTrialListIncludingLowAnonymity.GetActiveFieldTrialGroups()|.
-  static void GetActiveFieldTrialGroups(
-      FieldTrial::ActiveGroups* active_groups);
+  static void GetActiveFieldTrialGroups(FieldTrial::ActiveGroups* active_groups,
+                                        bool include_runtime_overrides = false);
 
   // Returns the names of field trials that are active in the parent process.
   // If this process is not a child process with inherited field trials passed
@@ -552,10 +553,7 @@ class BASE_EXPORT FieldTrialList {
   // line arguments necessary for a child process to inherit the shared-memory
   // object containing the FieldTrial configuration.
   static void PopulateLaunchOptionsWithFieldTrialState(
-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
-      GlobalDescriptors::Key descriptor_key,
-      ScopedFD& descriptor_to_share,
-#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
+      shared_memory::SharedMemorySwitch* shared_memory_switch,
       CommandLine* command_line,
       LaunchOptions* launch_options);
 #endif  // !BUILDFLAG(USE_BLINK)
@@ -609,9 +607,8 @@ class BASE_EXPORT FieldTrialList {
   // Gets the parameters for |field_trial| from shared memory and stores them in
   // |params|. This is only exposed for use by FieldTrialParamAssociator and
   // shouldn't be used by anything else.
-  static bool GetParamsFromSharedMemory(
-      FieldTrial* field_trial,
-      std::map<std::string, std::string>* params);
+  static bool GetParamsFromSharedMemory(FieldTrial* field_trial,
+                                        FieldTrialParams* params);
 
   // Clears all the params in the allocator.
   static void ClearParamsFromSharedMemoryForTesting();
@@ -669,6 +666,8 @@ class BASE_EXPORT FieldTrialList {
                            SerializeSharedMemoryRegionMetadata);
   friend int SerializeSharedMemoryRegionMetadata();
   FRIEND_TEST_ALL_PREFIXES(FieldTrialListTest, CheckReadOnlySharedMemoryRegion);
+  FRIEND_TEST_ALL_PREFIXES(FieldTrialListTest,
+                           GetActiveFieldTrialGroups_RuntimeOverrides);
   FRIEND_TEST_ALL_PREFIXES(TestFeatureVisitor, FeatureHasParams);
 
   // Required so that |FieldTrialListIncludingLowAnonymity| can expose APIs from
@@ -752,12 +751,17 @@ class BASE_EXPORT FieldTrialList {
       const std::vector<FieldTrial::State>& entries);
 
   // The same as |GetActiveFieldTrialGroups| but also gives access to low
-  // anonymity field trials.
+  // anonymity field trials. If |include_runtime_overrides| is true, the
+  // returned groups will include the runtime FieldTrial overrides (see
+  // RuntimeFieldTrialOverrides class), and the trials that are overridden by
+  // them will be excluded from the output. Note that if setting this to true,
+  // this must be called on the main sequence.
   // Restricted to specifically allowed friends - access via
   // |FieldTrialListIncludingLowAnonymity::GetActiveFieldTrialGroups|.
   static void GetActiveFieldTrialGroupsInternal(
       FieldTrial::ActiveGroups* active_groups,
-      bool include_low_anonymity);
+      bool include_low_anonymity,
+      bool include_runtime_overrides = false);
 
   // The same as |AddObserver| but is notified for low anonymity field trials
   // too.

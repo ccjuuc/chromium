@@ -117,8 +117,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) RestrictedCookieManager
     origin_ = new_origin;
   }
 
-  // This spins the event loop, since the cookie partition key may be computed
-  // asynchronously.
   void OverrideIsolationInfoForTesting(
       const net::IsolationInfo& new_isolation_info);
 
@@ -134,15 +132,15 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) RestrictedCookieManager
                     bool force_disable_third_party_cookies,
                     GetAllForUrlCallback callback) override;
 
-  void SetCanonicalCookie(const net::CanonicalCookie& cookie,
-                          const GURL& url,
-                          const net::SiteForCookies& site_for_cookies,
-                          const url::Origin& top_frame_origin,
-                          net::StorageAccessApiStatus storage_access_api_status,
-                          net::CookieInclusionStatus status,
-                          bool is_ad_tagged,
-                          bool apply_devtools_overrides,
-                          SetCanonicalCookieCallback callback) override;
+  void SetCanonicalCookie(
+      mojom::RestrictedCanonicalCookieParamsPtr cookie_params,
+      const GURL& url,
+      const net::SiteForCookies& site_for_cookies,
+      const url::Origin& top_frame_origin,
+      net::StorageAccessApiStatus storage_access_api_status,
+      bool is_ad_tagged,
+      bool apply_devtools_overrides,
+      SetCanonicalCookieCallback callback) override;
 
   void AddChangeListener(
       const GURL& url,
@@ -157,11 +155,9 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) RestrictedCookieManager
       const net::SiteForCookies& site_for_cookies,
       const url::Origin& top_frame_origin,
       net::StorageAccessApiStatus storage_access_api_status,
-      bool get_version_shared_memory,
       bool is_ad_tagged,
       bool apply_devtools_overrides,
-      const std::string& cookie,
-      SetCookieFromStringCallback callback) override;
+      const std::string& cookie) override;
 
   void GetCookiesString(const GURL& url,
                         const net::SiteForCookies& site_for_cookies,
@@ -187,13 +183,10 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) RestrictedCookieManager
 
   // Computes the First-Party Set metadata corresponding to the given `origin`,
   // `cookie_store`, and `isolation_info`.
-  //
-  // May invoke `callback` either synchronously or asynchronously.
-  static void ComputeFirstPartySetMetadata(
+  static net::FirstPartySetMetadata ComputeFirstPartySetMetadata(
       const url::Origin& origin,
       const net::CookieStore* cookie_store,
-      const net::IsolationInfo& isolation_info,
-      base::OnceCallback<void(net::FirstPartySetMetadata)> callback);
+      const net::IsolationInfo& isolation_info);
 
   // The owner of this class has context into cookie settings changes. Calling
   // this function makes sure the appropriate state is updated internally to
@@ -238,6 +231,19 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) RestrictedCookieManager
   void UpdateSharedMemoryVersionInvalidationTimer(
       const std::vector<net::CookieWithAccessResult>& cookies);
 
+  // Callers must ensure that `status.IsInclude()` returns true; and that
+  // `cookie` is either unpartitioned or is partitioned with the appropriate
+  // key.
+  void SetCanonicalCookie(const net::CanonicalCookie& cookie,
+                          const GURL& url,
+                          const net::SiteForCookies& site_for_cookies,
+                          const url::Origin& top_frame_origin,
+                          net::StorageAccessApiStatus storage_access_api_status,
+                          net::CookieInclusionStatus status,
+                          bool is_ad_tagged,
+                          bool apply_devtools_overrides,
+                          SetCanonicalCookieCallback callback);
+
   // Reports the result of setting the cookie to |network_context_client_|, and
   // invokes the user callback.
   void SetCanonicalCookieResult(
@@ -258,16 +264,14 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) RestrictedCookieManager
   // Returns true if the access should be allowed, or false if it should be
   // blocked.
   //
-  // |cookie_being_set| should be non-nullptr if setting a cookie, and should be
-  // nullptr otherwise (getting cookies, subscribing to cookie changes).
-  //
   // If the access would not be allowed, this helper calls
   // mojo::ReportBadMessage(), which closes the pipe.
-  bool ValidateAccessToCookiesAt(
-      const GURL& url,
-      const net::SiteForCookies& site_for_cookies,
-      const url::Origin& top_frame_origin,
-      const net::CanonicalCookie* cookie_being_set = nullptr);
+  //
+  // If `record_metrics` is true, this helper may emit UMA metrics.
+  bool ValidateAccessToCookiesAt(const GURL& url,
+                                 const net::SiteForCookies& site_for_cookies,
+                                 const url::Origin& top_frame_origin,
+                                 bool record_metrics = true);
 
   const net::SiteForCookies& BoundSiteForCookies() const {
     return isolation_info_.site_for_cookies();
@@ -287,27 +291,12 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) RestrictedCookieManager
       CookieAccesses* cookie_accesses,
       const net::CookieWithAccessResult& cookie_item);
 
-  // Called while overriding the cookie_partition_key during testing.
-  void OnGotFirstPartySetMetadataForTesting(
-      base::OnceClosure done_closure,
-      net::FirstPartySetMetadata first_party_set_metadata);
-
   // Computes the CookieSettingOverrides to be used by this instance.
   net::CookieSettingOverrides GetCookieSettingOverrides(
       net::StorageAccessApiStatus storage_access_api_status,
       bool is_ad_tagged,
       bool apply_devtools_overrides,
       bool force_disable_third_party_cookies) const;
-
-  void GetCookiesAfterSet(const GURL& url,
-                          const net::SiteForCookies& site_for_cookies,
-                          const url::Origin& top_frame_origin,
-                          net::StorageAccessApiStatus storage_access_api_status,
-                          bool is_ad_tagged,
-                          bool apply_devtools_overrides,
-                          SetCookieFromStringCallback callback,
-                          base::ReadOnlySharedMemoryRegion shared_memory_region,
-                          bool succeeded);
 
   void OnCookiesAccessed(network::mojom::CookieAccessDetailsPtr details);
 
@@ -376,8 +365,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) RestrictedCookieManager
 
   mojo::SharedMemoryVersionController shared_memory_version_controller_;
   base::OneShotTimer shared_memory_invalidation_timer_;
-
-  base::MetricsSubSampler metrics_subsampler_;
 
   base::WeakPtrFactory<RestrictedCookieManager> weak_ptr_factory_{this};
 };

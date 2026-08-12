@@ -57,11 +57,12 @@ bool WebInputMethodControllerImpl::SetComposition(
     const std::vector<ui::ImeTextSpan>& ime_text_spans,
     const WebRange& replacement_range,
     int selection_start,
-    int selection_end) {
+    int selection_end,
+    mojom::blink::ImeState ime_state) {
   if (IsEditContextActive()) {
     return GetInputMethodController().GetActiveEditContext()->SetComposition(
-        text, ime_text_spans, replacement_range, selection_start,
-        selection_end);
+        text, ime_text_spans, replacement_range, selection_start, selection_end,
+        ime_state);
   }
 
   if (WebPlugin* plugin = FocusedPluginIfInputMethodSupported()) {
@@ -96,15 +97,28 @@ bool WebInputMethodControllerImpl::SetComposition(
       return false;
   }
 
-  LocalFrame::NotifyUserActivation(
-      GetFrame(), mojom::blink::UserActivationNotificationType::kInteraction);
+  if (!text.IsEmpty()) {
+    LocalFrame::NotifyUserActivation(
+        GetFrame(), mojom::blink::UserActivationNotificationType::kInteraction);
+  }
 
   GetInputMethodController().SetComposition(
       String(text), ImeTextSpanVectorBuilder::Build(ime_text_spans),
-      selection_start, selection_end);
+      selection_start, selection_end, ime_state);
 
   return text.IsEmpty() ||
          (GetFrame() && GetInputMethodController().HasComposition());
+}
+
+bool WebInputMethodControllerImpl::SetComposition(
+    const WebString& text,
+    const std::vector<ui::ImeTextSpan>& ime_text_spans,
+    const WebRange& replacement_range,
+    int selection_start,
+    int selection_end) {
+  return SetComposition(text, ime_text_spans, replacement_range,
+                        selection_start, selection_end,
+                        mojom::blink::ImeState::kNone);
 }
 
 bool WebInputMethodControllerImpl::FinishComposingText(
@@ -140,8 +154,10 @@ bool WebInputMethodControllerImpl::CommitText(
     const std::vector<ui::ImeTextSpan>& ime_text_spans,
     const WebRange& replacement_range,
     int relative_caret_position) {
-  LocalFrame::NotifyUserActivation(
-      GetFrame(), mojom::blink::UserActivationNotificationType::kInteraction);
+  if (!text.IsEmpty()) {
+    LocalFrame::NotifyUserActivation(
+        GetFrame(), mojom::blink::UserActivationNotificationType::kInteraction);
+  }
 
   if (IsEditContextActive()) {
     return GetInputMethodController().GetActiveEditContext()->CommitText(
@@ -159,8 +175,9 @@ bool WebInputMethodControllerImpl::CommitText(
 
   if (!replacement_range.IsNull()) {
     return GetInputMethodController().ReplaceTextAndKeepSelection(
-        text, PlainTextRange(replacement_range.StartOffset(),
-                             replacement_range.EndOffset()));
+        text, ImeTextSpanVectorBuilder::Build(ime_text_spans),
+        PlainTextRange(replacement_range.StartOffset(),
+                       replacement_range.EndOffset()));
   }
 
   return GetInputMethodController().CommitText(

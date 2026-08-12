@@ -10,13 +10,15 @@
 #include <utility>
 #include <vector>
 
+#include "base/debug/crash_logging.h"
 #include "base/feature_list.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/not_fatal_until.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/signin/signin_manager.h"
 #include "chrome/browser/supervised_user/child_accounts/child_account_service_factory.h"
 #include "chrome/browser/supervised_user/supervised_user_browser_utils.h"
 #include "chrome/browser/supervised_user/supervised_user_navigation_observer.h"
@@ -28,7 +30,6 @@
 #include "components/supervised_user/core/browser/family_link_user_capabilities.h"
 #include "components/supervised_user/core/browser/supervised_user_interstitial.h"
 #include "components/supervised_user/core/browser/supervised_user_service.h"
-#include "components/supervised_user/core/browser/supervised_user_url_filter.h"
 #include "components/supervised_user/core/browser/supervised_user_url_filtering_service.h"
 #include "components/supervised_user/core/browser/supervised_user_utils.h"
 #include "components/supervised_user/core/common/features.h"
@@ -39,7 +40,6 @@
 #include "url/gurl.h"
 
 namespace supervised_user {
-
 namespace {
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
@@ -52,6 +52,15 @@ bool ShouldShowReAuthInterstitial(
   return SupervisedUserVerificationPage::ShouldShowPage(*child_account_service);
 }
 #endif
+
+WebFilterMetricsOptions GetWebFilterMetricsOptions(
+    content::NavigationHandle& navigation_handle) {
+  return {
+      .transition_type = navigation_handle.GetPageTransition(),
+      .filtering_context = FilteringContext::kNavigationThrottle,
+  };
+}
+
 }  // namespace
 
 ClassifyUrlNavigationThrottle::ThrottleCheckResult
@@ -114,27 +123,25 @@ void ClassifyUrlNavigationThrottle::CheckURL() {
   ClassifyUrlCheckList::Key key = list_.NewCheck();
 
   if (navigation_handle()->IsInPrimaryMainFrame()) {
-    url_filter()->GetFilteringBehaviorWithAsyncChecks(
+    url_filtering_service()->GetFilteringBehavior(
         url,
-        base::BindOnce(&ClassifyUrlNavigationThrottle::OnURLCheckDone,
-                       weak_ptr_factory_.GetWeakPtr(), key),
         ShouldContentSkipParentAllowlistFiltering(
             navigation_handle()->GetWebContents()->GetOutermostWebContents()),
-        FilteringContext::kNavigationThrottle,
-        navigation_handle()->GetPageTransition());
+        base::BindOnce(&ClassifyUrlNavigationThrottle::OnURLCheckDone,
+                       weak_ptr_factory_.GetWeakPtr(), key),
+        GetWebFilterMetricsOptions(*navigation_handle()));
   } else {
-    url_filter()->GetFilteringBehaviorForSubFrameWithAsyncChecks(
+    url_filtering_service()->GetFilteringBehaviorForSubFrame(
         url, navigation_handle()->GetWebContents()->GetVisibleURL(),
         base::BindOnce(&ClassifyUrlNavigationThrottle::OnURLCheckDone,
                        weak_ptr_factory_.GetWeakPtr(), key),
-        FilteringContext::kNavigationThrottle,
-        navigation_handle()->GetPageTransition());
+        GetWebFilterMetricsOptions(*navigation_handle()));
   }
 }
 
 void ClassifyUrlNavigationThrottle::OnURLCheckDone(
     ClassifyUrlCheckList::Key key,
-    SupervisedUserURLFilter::Result filtering_result) {
+    WebFilteringResult filtering_result) {
   if (list_.IsDecided()) {
     // If the verdict is already determined there's no point in processing the
     // check. This will reduce noise in metrics, but side-effects might apply
@@ -175,7 +182,7 @@ void ClassifyUrlNavigationThrottle::OnURLCheckDone(
 }
 
 void ClassifyUrlNavigationThrottle::ScheduleInterstitial(
-    SupervisedUserURLFilter::Result result) {
+    WebFilteringResult result) {
   // Don't show interstitial synchronously - it doesn't seem like a good idea to
   // show an interstitial right in the middle of a call into a
   // NavigationThrottle. This also lets OnInterstitialResult to be invoked
@@ -188,9 +195,9 @@ void ClassifyUrlNavigationThrottle::ScheduleInterstitial(
 }
 
 void ClassifyUrlNavigationThrottle::ShowInterstitial(
-    SupervisedUserURLFilter::Result result) {
+    WebFilteringResult result) {
   SupervisedUserNavigationObserver::OnRequestBlocked(
-      navigation_handle()->GetWebContents(), result.url, result.reason,
+      navigation_handle()->GetWebContents(), result,
       navigation_handle()->GetNavigationId(),
       navigation_handle()->GetFrameTreeNodeId(),
       base::BindRepeating(&ClassifyUrlNavigationThrottle::OnInterstitialResult,
@@ -198,7 +205,7 @@ void ClassifyUrlNavigationThrottle::ShowInterstitial(
 }
 
 void ClassifyUrlNavigationThrottle::OnInterstitialResult(
-    SupervisedUserURLFilter::Result result,
+    WebFilteringResult result,
     InterstitialResultCallbackActions action,
     bool already_sent_request,
     bool is_main_frame) {
@@ -219,7 +226,7 @@ void ClassifyUrlNavigationThrottle::OnInterstitialResult(
             content::NavigationThrottle::ThrottleCheckResult(
                 CANCEL, net::ERR_BLOCKED_BY_CLIENT,
                 CreateReauthenticationInterstitialForBlockedSites(
-                    *navigation_handle(), result.reason)));
+                    *navigation_handle())));
         return;
       }
 #endif
@@ -233,16 +240,30 @@ void ClassifyUrlNavigationThrottle::OnInterstitialResult(
 }
 
 std::string ClassifyUrlNavigationThrottle::GetInterstitialHTML(
-    SupervisedUserURLFilter::Result result,
+    WebFilteringResult result,
     bool already_sent_request,
     bool is_main_frame) const {
 #if BUILDFLAG(IS_ANDROID)
-  if (supervised_user_service()->IsLocalBrowserFilteringEnabled() &&
-      UseInterstitialForLocalSupervision()) {
-    return SupervisedUserInterstitial::GetHTMLContentsWithoutApprovals(
-        result.url, g_browser_process->GetApplicationLocale());
+  switch (result.interstitial_mode) {
+    case InterstitialMode::kLearnMoreInterstitial:
+      return SupervisedUserInterstitial::GetHTMLContentsWithoutApprovals(
+          result.url, g_browser_process->GetApplicationLocale());
+    case InterstitialMode::kParentalReviewInterstitial:
+      return SupervisedUserInterstitial::GetHTMLContentsWithApprovals(
+          supervised_user_service(), result.reason, already_sent_request,
+          is_main_frame, g_browser_process->GetApplicationLocale());
+    default:
+      NOTREACHED();
   }
 #endif
+  SCOPED_CRASH_KEY_BOOL(
+      "SupervisedUser", "dpc_web_filter_enabled",
+      g_browser_process->device_parental_controls().IsWebFilteringEnabled());
+  CHECK(
+      result.interstitial_mode == InterstitialMode::kParentalReviewInterstitial,
+      base::NotFatalUntil::M155)
+      << "Non-android platforms should not produce other interstitials than "
+         "parental review.";
   return SupervisedUserInterstitial::GetHTMLContentsWithApprovals(
       supervised_user_service(), result.reason, already_sent_request,
       is_main_frame, g_browser_process->GetApplicationLocale());
@@ -252,13 +273,16 @@ const GURL& ClassifyUrlNavigationThrottle::currently_navigated_url() const {
   return navigation_handle()->GetURL();
 }
 
-SupervisedUserURLFilter* ClassifyUrlNavigationThrottle::url_filter() const {
-  return supervised_user_service()->GetURLFilter();
-}
-
 SupervisedUserService* ClassifyUrlNavigationThrottle::supervised_user_service()
     const {
   return SupervisedUserServiceFactory::GetForProfile(
+      Profile::FromBrowserContext(
+          navigation_handle()->GetWebContents()->GetBrowserContext()));
+}
+
+SupervisedUserUrlFilteringService*
+ClassifyUrlNavigationThrottle::url_filtering_service() const {
+  return SupervisedUserUrlFilteringServiceFactory::GetForProfile(
       Profile::FromBrowserContext(
           navigation_handle()->GetWebContents()->GetBrowserContext()));
 }
@@ -287,7 +311,7 @@ void ClassifyUrlNavigationThrottle::MaybeCreateAndAdd(
 
 ClassifyUrlNavigationThrottle::ThrottleCheckResult
 ClassifyUrlNavigationThrottle::DeferAndScheduleInterstitial(
-    SupervisedUserURLFilter::Result result) {
+    WebFilteringResult result) {
   ScheduleInterstitial(result);
   deferred_ = true;
   return DEFER;
@@ -329,7 +353,7 @@ ClassifyUrlNavigationThrottle::ClassifyUrlCheckList::NewCheck() {
 
 void ClassifyUrlNavigationThrottle::ClassifyUrlCheckList::UpdateCheck(
     Key key,
-    SupervisedUserURLFilter::Result result) {
+    WebFilteringResult result) {
   // Every time a check is completed update the timer, so that it only measures
   // elapsed time from the last meaningful check to when the verdict was needed.
   elapsed_.emplace();
@@ -342,7 +366,7 @@ ClassifyUrlNavigationThrottle::ClassifyUrlCheckList::ElapsedSinceDecided()
   return elapsed_->Elapsed();
 }
 
-std::optional<SupervisedUserURLFilter::Result>
+std::optional<WebFilteringResult>
 ClassifyUrlNavigationThrottle::ClassifyUrlCheckList::GetBlockingResult() const {
   for (const auto& result : results_) {
     if (!result.has_value()) {

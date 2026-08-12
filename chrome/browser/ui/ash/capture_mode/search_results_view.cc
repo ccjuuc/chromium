@@ -10,8 +10,8 @@
 #include "ash/public/cpp/capture_mode/capture_mode_api.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/web_view/ash_web_view_impl.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/window_open_disposition.h"
@@ -70,6 +70,7 @@ content::WebContents* SearchResultsView::OpenURLFromTab(
     case WindowOpenDisposition::IGNORE_ACTION:
     case WindowOpenDisposition::SWITCH_TO_TAB:
     case WindowOpenDisposition::NEW_PICTURE_IN_PICTURE:
+    case WindowOpenDisposition::NEW_SPLIT_VIEW:
       // These other dispositions will open new windows / tabs, so use these
       // dispositions as-is.
       new_tab_params.disposition = params.disposition;

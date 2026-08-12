@@ -6,11 +6,18 @@
 
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
+#include "third_party/blink/renderer/core/dom/text.h"
+#include "third_party/blink/renderer/core/layout/inline/inline_item.h"
+#include "third_party/blink/renderer/core/layout/inline/inline_node.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_node_data.h"
+#include "third_party/blink/renderer/core/layout/inline/offset_mapping.h"
+#include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 #include "third_party/blink/renderer/core/layout/layout_inline.h"
 #include "third_party/blink/renderer/core/layout/layout_text.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
+#include "third_party/blink/renderer/platform/wtf/text/character_names.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
 
@@ -32,7 +39,7 @@ class InlineItemsBuilderTest : public RenderingTest {
   void SetUp() override {
     RenderingTest::SetUp();
     style_ = &GetDocument().GetStyleResolver().InitialStyle();
-    block_flow_ = LayoutBlockFlow::CreateAnonymous(&GetDocument(), style_);
+    block_flow_ = LayoutBlockFlow::CreateAnonymous(GetDocument(), *style_);
     items_ = MakeGarbageCollected<InlineItemsHolder>();
     anonymous_objects_ =
         MakeGarbageCollected<GCedHeapVector<Member<LayoutObject>>>();
@@ -76,14 +83,14 @@ class InlineItemsBuilderTest : public RenderingTest {
 
   void AppendAtomicInline(InlineItemsBuilder* builder) {
     LayoutBlockFlow* layout_block_flow =
-        LayoutBlockFlow::CreateAnonymous(&GetDocument(), style_);
+        LayoutBlockFlow::CreateAnonymous(GetDocument(), *style_);
     anonymous_objects_->push_back(layout_block_flow);
     builder->AppendAtomicInline(layout_block_flow);
   }
 
   void AppendBlockInInline(InlineItemsBuilder* builder) {
     LayoutBlockFlow* layout_block_flow =
-        LayoutBlockFlow::CreateAnonymous(&GetDocument(), style_);
+        LayoutBlockFlow::CreateAnonymous(GetDocument(), *style_);
     anonymous_objects_->push_back(layout_block_flow);
     builder->AppendBlockInInline(layout_block_flow);
   }
@@ -480,10 +487,10 @@ TEST_F(InlineItemsBuilderTest, BidiBlockOverride) {
 }
 
 static LayoutInline* CreateLayoutInline(
-    Document* document,
+    Document& document,
     void (*initialize_style)(ComputedStyleBuilder&)) {
   ComputedStyleBuilder builder =
-      document->GetStyleResolver().CreateComputedStyleBuilder();
+      document.GetStyleResolver().CreateComputedStyleBuilder();
   initialize_style(builder);
   LayoutInline* const node = LayoutInline::CreateAnonymous(document);
   node->SetStyle(builder.TakeStyle(), LayoutObject::ApplyStyleChanges::kNo);
@@ -496,7 +503,7 @@ TEST_F(InlineItemsBuilderTest, BidiIsolate) {
   InlineItemsBuilder builder(GetLayoutBlockFlow(), &items);
   AppendText("Hello ", &builder);
   LayoutInline* const isolate_rtl =
-      CreateLayoutInline(&GetDocument(), [](ComputedStyleBuilder& builder) {
+      CreateLayoutInline(GetDocument(), [](ComputedStyleBuilder& builder) {
         builder.SetUnicodeBidi(UnicodeBidi::kIsolate);
         builder.SetDirection(TextDirection::kRtl);
       });
@@ -521,7 +528,7 @@ TEST_F(InlineItemsBuilderTest, BidiIsolateOverride) {
   InlineItemsBuilder builder(GetLayoutBlockFlow(), &items);
   AppendText("Hello ", &builder);
   LayoutInline* const isolate_override_rtl =
-      CreateLayoutInline(&GetDocument(), [](ComputedStyleBuilder& builder) {
+      CreateLayoutInline(GetDocument(), [](ComputedStyleBuilder& builder) {
         builder.SetUnicodeBidi(UnicodeBidi::kIsolateOverride);
         builder.SetDirection(TextDirection::kRtl);
       });
@@ -554,17 +561,17 @@ TEST_F(InlineItemsBuilderTest, BlockInInline) {
 TEST_F(InlineItemsBuilderTest, OpenCloseRubyColumns) {
   GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kInStyleRecalc);
   LayoutInline* ruby =
-      CreateLayoutInline(&GetDocument(), [](ComputedStyleBuilder& builder) {
+      CreateLayoutInline(GetDocument(), [](ComputedStyleBuilder& builder) {
         builder.SetDisplay(EDisplay::kRuby);
       });
   LayoutInline* rt =
-      CreateLayoutInline(&GetDocument(), [](ComputedStyleBuilder& builder) {
+      CreateLayoutInline(GetDocument(), [](ComputedStyleBuilder& builder) {
         builder.SetDisplay(EDisplay::kRubyText);
       });
   ruby->AddChild(rt);
   GetLayoutBlockFlow()->AddChild(ruby);
   LayoutInline* orphan_rt =
-      CreateLayoutInline(&GetDocument(), [](ComputedStyleBuilder& builder) {
+      CreateLayoutInline(GetDocument(), [](ComputedStyleBuilder& builder) {
         builder.SetDisplay(EDisplay::kRubyText);
       });
   GetLayoutBlockFlow()->AddChild(orphan_rt);
@@ -626,6 +633,34 @@ TEST_F(InlineItemsBuilderTest, OpenCloseRubyColumns) {
   orphan_rt->Destroy();
   rt->Destroy();
   ruby->Destroy();
+}
+
+TEST_F(InlineItemsBuilderTest,
+       OffsetMappingStaysConsistentUnderFullWidthTransform) {
+  // Under `text-transform: full-width`, the layout pass and the on-demand
+  // OffsetMapping pass must produce the same `text_content`. The fast
+  // reuse path used to keep a leading U+3000 that the slow path then
+  // collapsed, yielding a null mapping.
+  SetBodyInnerHTML(R"HTML(
+    <div id="container" style="text-transform: full-width"><span id="prefix">x</span><span id="target"> foo</span></div>
+  )HTML");
+
+  Element* prefix = GetElementById("prefix");
+  Element* container = GetElementById("container");
+  ASSERT_TRUE(prefix);
+  ASSERT_TRUE(container);
+
+  UpdateAllLifecyclePhasesForTest();
+
+  // Invalidate prefix only; target's items stay valid, so the next
+  // layout reaches `AppendTextReusing` for target with a cached
+  // text_content that starts with U+3000.
+  To<Text>(prefix->firstChild())->setData("x ");
+  UpdateAllLifecyclePhasesForTest();
+
+  auto* block = To<LayoutBlockFlow>(container->GetLayoutObject());
+  ASSERT_TRUE(block);
+  EXPECT_NE(nullptr, InlineNode(block).ComputeOffsetMappingIfNeeded());
 }
 
 }  // namespace blink

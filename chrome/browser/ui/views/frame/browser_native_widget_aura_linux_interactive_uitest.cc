@@ -2,11 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/frame/browser_native_widget_aura_linux.h"
+
 #include "base/test/bind.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
-#include "chrome/browser/ui/views/frame/browser_native_widget_aura_linux.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -35,9 +37,9 @@ gfx::Size GetWindowSize(Browser* browser) {
   return bounds.size();
 }
 
-void VerifyColorsForFrameType(const Browser* browser, bool use_custom_frame) {
+void VerifyColorsForFrameType(Browser* browser, bool use_custom_frame) {
   ThemeService* theme_service =
-      ThemeServiceFactory::GetForProfile(browser->profile());
+      ThemeServiceFactory::GetForProfile(browser->GetProfile());
   EXPECT_EQ(use_custom_frame, theme_service->ShouldUseCustomFrame());
 
   ui::ColorProviderManager::ResetForTesting();
@@ -62,14 +64,15 @@ void VerifyColorsForFrameType(const Browser* browser, bool use_custom_frame) {
 // Tests that BrowserNativeWidgetAuraLinux::UseCustomFrame() returns the correct
 // value that respects 1) the current value of the user preference and
 // 2) capabilities of the platform.
-// Also tests the regressions found in crbug.com/1243937 and crbug.com/1329756.
+// Also tests the regressions found in crbug.com/40195646 and
+// crbug.com/40842778.
 IN_PROC_BROWSER_TEST_F(BrowserNativeWidgetAuraLinuxTest, UseCustomFrame) {
   const BrowserView* const browser_view =
       BrowserView::GetBrowserViewForBrowser(browser());
   const BrowserNativeWidgetAuraLinux* const native_widget =
       static_cast<BrowserNativeWidgetAuraLinux*>(
           browser_view->browser_widget()->browser_native_widget());
-  auto* pref_service = browser_view->browser()->profile()->GetPrefs();
+  auto* pref_service = browser()->GetProfile()->GetPrefs();
 
   // Try overriding the runtime platform property that indicates whether the
   // platform supports server-side window decorations.  For each variant,
@@ -114,14 +117,15 @@ IN_PROC_BROWSER_TEST_F(BrowserNativeWidgetAuraLinuxTest, UseCustomFrame) {
 
 // Tests that the new browser window restores the bounds properly: its size must
 // be the same as the already existing window has.
-// The regression was found in https://crbug.com/1287212.
+// The regression was found in https://crbug.com/40816088.
 IN_PROC_BROWSER_TEST_F(BrowserNativeWidgetAuraLinuxTest, NewWindowSize) {
   // Ensure the first window is active before creating the second one.
   ui_test_utils::BrowserActivationWaiter(browser()).WaitForActivation();
-  Profile* profile = browser()->profile();
-  Browser::CreateParams params(profile, true /* user_gesture */);
-  Browser* browser2 = Browser::Create(params);
-  browser2->window()->Show();
+  Profile* profile = browser()->GetProfile();
+  BrowserWindowCreateParams params(profile, /*from_user_gesture=*/true);
+  Browser* browser2 =
+      CreateBrowserWindow(std::move(params))->GetBrowserForMigrationOnly();
+  browser2->GetWindow()->Show();
 
   // The first window saves its placement on losing the active state, then the
   // second window needs to go through the initialisation, update its size and

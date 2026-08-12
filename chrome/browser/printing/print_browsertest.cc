@@ -13,7 +13,6 @@
 #include "base/auto_reset.h"
 #include "base/base64.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -31,7 +30,6 @@
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/printing/browser_printing_context_factory_for_test.h"
-#include "chrome/browser/printing/print_compositor_util.h"
 #include "chrome/browser/printing/print_error_dialog.h"
 #include "chrome/browser/printing/print_job.h"
 #include "chrome/browser/printing/print_job_manager.h"
@@ -516,14 +514,14 @@ void PrintBrowserTest::AddPrinter(const std::string& printer_name) {
       printer_name,
       /*display_name=*/"test printer",
       /*printer_description=*/"A printer for testing.",
-      test::kPrintInfoOptions);
+      test::GetPrintInfoOptions());
 
   auto default_caps = std::make_unique<PrinterSemanticCapsAndDefaults>();
   default_caps->copies_max = kTestPrinterCapabilitiesMaxCopies;
-  default_caps->dpis = test::kPrinterCapabilitiesDefaultDpis;
+  default_caps->dpis = test::GetPrinterCapabilitiesDefaultDpis();
   default_caps->default_dpi = test::kPrinterCapabilitiesDpi;
-  default_caps->papers.push_back(test::kPaperLetter);
-  default_caps->papers.push_back(test::kPaperLegal);
+  default_caps->papers.push_back(test::GetPaperLetter());
+  default_caps->papers.push_back(test::GetPaperLegal());
   test_print_backend_->AddValidPrinter(
       printer_name, std::move(default_caps),
       std::make_unique<PrinterBasicInfo>(printer_info));
@@ -556,6 +554,14 @@ void PrintBrowserTest::SetUserSettingsPageRangesForSubsequentContext(
 void PrintBrowserTest::SetNewDocumentJobId(int job_id) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   test_printing_context_factory_.SetJobIdOnNewDocument(job_id);
+}
+
+void PrintBrowserTest::StartEmbeddedTestServerAndNavigate(
+    std::string_view relative_url) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  ASSERT_TRUE(embedded_test_server()->Started());
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL(relative_url)));
 }
 
 void PrintBrowserTest::PrintAndWaitUntilPreviewIsReady() {
@@ -870,22 +876,20 @@ class SitePerProcessPrintExtensionBrowserTest
 // Printing only a selection containing iframes is partially supported.
 // Iframes aren't currently displayed. This test passes whenever the print
 // preview is rendered (i.e. no timeout in the test).
-// This test shouldn't crash. See https://crbug.com/732780.
+// This test shouldn't crash. See https://crbug.com/41325095.
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, SelectionContainsIframe) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/selection_iframe.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/selection_iframe.html"));
 
   const PrintParams kParams{.print_only_selection = true};
   PrintAndWaitUntilPreviewIsReady(kParams);
 }
 
-// https://crbug.com/1125972
-// https://crbug.com/1131598
+// https://crbug.com/40147936
+// https://crbug.com/40150272
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, NoScrolling) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/with-scrollable.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/with-scrollable.html"));
 
   auto* contents = browser()->tab_strip_model()->GetActiveWebContents();
   const char kExpression1[] = "iframe.contentWindow.scrollY";
@@ -911,11 +915,10 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, NoScrolling) {
   EXPECT_EQ(old_scroll3, new_scroll3);
 }
 
-// https://crbug.com/1131598
+// https://crbug.com/40150272
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, DISABLED_NoScrollingFrameset) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/frameset.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/frameset.html"));
 
   auto* contents = browser()->tab_strip_model()->GetActiveWebContents();
   const char kExpression[] =
@@ -930,11 +933,10 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, DISABLED_NoScrollingFrameset) {
   EXPECT_EQ(old_scroll, new_scroll);
 }
 
-// https://crbug.com/1125972
+// https://crbug.com/40147936
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, NoScrollingVerticalRl) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/vertical-rl.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/vertical-rl.html"));
   PrintAndWaitUntilPreviewIsReady();
 
   // Test that entering print preview didn't mess up the scroll position.
@@ -943,12 +945,10 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, NoScrollingVerticalRl) {
                          "window.scrollX"));
 }
 
-// https://crbug.com/1285208
+// https://crbug.com/40814851
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, LegacyLayoutEngineFallback) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL(
+  ASSERT_NO_FATAL_FAILURE(StartEmbeddedTestServerAndNavigate(
       "/printing/legacy-layout-engine-known-bug.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   auto* contents = browser()->tab_strip_model()->GetActiveWebContents();
   const char kExpression[] = "target.offsetHeight";
@@ -974,10 +974,8 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, LegacyLayoutEngineFallback) {
 }
 
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, LazyLoadedImagesFetched) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL(
+  ASSERT_NO_FATAL_FAILURE(StartEmbeddedTestServerAndNavigate(
       "/printing/lazy-loaded-image-offscreen.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   auto* contents = browser()->tab_strip_model()->GetActiveWebContents();
   const char kExpression[] = "target.offsetHeight";
@@ -993,10 +991,8 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, LazyLoadedImagesFetched) {
 }
 
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, LazyLoadedIframeFetched) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL(
+  ASSERT_NO_FATAL_FAILURE(StartEmbeddedTestServerAndNavigate(
       "/printing/lazy-loaded-iframe-offscreen.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   auto* contents = browser()->tab_strip_model()->GetActiveWebContents();
   const char kExpression[] =
@@ -1014,10 +1010,8 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, LazyLoadedIframeFetched) {
 // TODO(crbug.com/40826924)  Reenable after flakes have been resolved.
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest,
                        DISABLED_LazyLoadedIframeFetchedCrossOrigin) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL(
+  ASSERT_NO_FATAL_FAILURE(StartEmbeddedTestServerAndNavigate(
       "/printing/lazy-loaded-iframe-offscreen-cross-origin.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   auto* contents = browser()->tab_strip_model()->GetActiveWebContents();
   const char kExpression[] = "document.documentElement.clientHeight";
@@ -1041,10 +1035,8 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest,
 // resources.
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest,
                        DISABLED_LazyLoadedImagesFetchedScriptedPrint) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL(
+  ASSERT_NO_FATAL_FAILURE(StartEmbeddedTestServerAndNavigate(
       "/printing/lazy-loaded-image-offscreen.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   auto* contents = browser()->tab_strip_model()->GetActiveWebContents();
   const char kExpression[] = "target.offsetHeight";
@@ -1073,9 +1065,8 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest,
 // finished, the page scale factor is still the same, and that it hasn't been
 // messed up by printing.
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, ResetPageScaleAfterPrintPreview) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/test1.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/test1.html"));
 
   auto* contents = browser()->tab_strip_model()->GetActiveWebContents();
   constexpr double kScaleFactor = 1.5;
@@ -1093,9 +1084,8 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, ResetPageScaleAfterPrintPreview) {
 // This test passes when the printed result is sent back and checked in
 // TestPrintRenderFrame::OnDidPrintFrameContent().
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, PrintFrameContent) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/test1.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/test1.html"));
 
   content::WebContents* original_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -1113,10 +1103,8 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, PrintFrameContent) {
 // This test passes when the iframe responds to the print message.
 // The response is checked in TestPrintRenderFrame::OnDidPrintFrameContent().
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, PrintSubframeContent) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(
-      embedded_test_server()->GetURL("/printing/content_with_iframe.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/content_with_iframe.html"));
 
   content::WebContents* original_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -1138,10 +1126,8 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, PrintSubframeContent) {
 // responses which are checked in
 // TestPrintRenderFrame::OnDidPrintFrameContent().
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, PrintSubframeChain) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL(
+  ASSERT_NO_FATAL_FAILURE(StartEmbeddedTestServerAndNavigate(
       "/printing/content_with_iframe_chain.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   content::WebContents* original_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   // Create composite client so subframe print message can be forwarded.
@@ -1231,10 +1217,8 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, PrintSubframeABA) {
 // created.
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest,
                        PrintSubframeContentBeforeCompositeClientCreation) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(
-      embedded_test_server()->GetURL("/printing/content_with_iframe.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/content_with_iframe.html"));
 
   // When OOPIF is not enabled, CompositorClient is not used.
   if (!IsOopifEnabled())
@@ -1278,10 +1262,10 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest,
 
   // Creates mojom::PrintCompositor.
   client->CompositeDocument(
-      kDefaultDocumentCookie, main_frame,
+      kDefaultDocumentCookie, *main_frame,
       *TestPrintRenderFrame::GetDefaultDidPrintContentParams(),
-      ui::AXTreeUpdate(), mojom::GenerateDocumentOutline::kNone,
-      GetCompositorDocumentType(), base::DoNothing());
+      /*is_pdf=*/false, ui::AXTreeUpdate(),
+      mojom::GenerateDocumentOutline::kNone, base::DoNothing());
   ASSERT_TRUE(client->GetCompositeRequest(kDefaultDocumentCookie));
   // `requested_subframes_` should be empty.
   ASSERT_TRUE(client->requested_subframes_.empty());
@@ -1293,9 +1277,18 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest,
 // most obvious ones would be font access outage or web sandbox support being
 // absent because we explicitly check these when pdf compositor service starts.
 IN_PROC_BROWSER_TEST_F(SitePerProcessPrintBrowserTest, BasicPrint) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/test1.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/test1.html"));
+
+  PrintAndWaitUntilPreviewIsReady();
+}
+
+// Printing preview a PDF file when site per process is enabled.
+// Test that PrintPreviewUI can properly route the PDF to the print compositor
+// and it doesn't cause a crash or timeout.
+IN_PROC_BROWSER_TEST_F(SitePerProcessPrintBrowserTest, BasicPdfPrint) {
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/pdf/test.pdf"));
 
   PrintAndWaitUntilPreviewIsReady();
 }
@@ -1305,10 +1298,8 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessPrintBrowserTest, BasicPrint) {
 // a timed out test which indicates the print preview hung.
 IN_PROC_BROWSER_TEST_F(SitePerProcessPrintBrowserTest,
                        SubframeUnavailableBeforePrint) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(
-      embedded_test_server()->GetURL("/printing/content_with_iframe.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/content_with_iframe.html"));
 
   content::WebContents* original_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -1332,10 +1323,8 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessPrintBrowserTest,
 // a timed out test which indicates the print preview hung.
 IN_PROC_BROWSER_TEST_F(SitePerProcessPrintBrowserTest,
                        SubframeUnavailableDuringPrint) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(
-      embedded_test_server()->GetURL("/printing/content_with_iframe.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/content_with_iframe.html"));
 
   content::WebContents* original_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -1364,13 +1353,11 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessPrintBrowserTest,
 // This test passes whenever the print preview is rendered. This should not be
 // a timed out test which indicates the print preview hung or crash.
 IN_PROC_BROWSER_TEST_F(IsolateOriginsPrintBrowserTest, PrintIsolatedSubframe) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL(
+  ASSERT_NO_FATAL_FAILURE(StartEmbeddedTestServerAndNavigate(
       "/printing/content_with_same_site_iframe.html"));
+
   GURL isolated_url(
       embedded_test_server()->GetURL(kIsolatedSite, "/printing/test1.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
-
   content::WebContents* original_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   EXPECT_TRUE(NavigateIframeToURL(original_contents, "iframe", isolated_url));
@@ -1386,9 +1373,8 @@ IN_PROC_BROWSER_TEST_F(IsolateOriginsPrintBrowserTest, PrintIsolatedSubframe) {
 // Test that we use oopif printing by default when full site isolation is
 // enabled.
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, RegularPrinting) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/test1.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/test1.html"));
 
   EXPECT_EQ(content::AreAllSitesIsolatedForTesting(), IsOopifEnabled());
 }
@@ -1397,9 +1383,8 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, RegularPrinting) {
 // Test that if user allows printing after being shown a warning due to DLP
 // restrictions, the print preview is rendered.
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, DLPWarnAllowed) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/test1.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/test1.html"));
 
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -1421,9 +1406,8 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, DLPWarnAllowed) {
 // Test that if user cancels printing after being shown a warning due to DLP
 // restrictions, the print preview is not rendered.
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, DLPWarnCanceled) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/test1.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/test1.html"));
 
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -1445,9 +1429,8 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, DLPWarnCanceled) {
 // Test that if printing is blocked due to DLP restrictions, the print preview
 // is not rendered.
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, DLPBlocked) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/test1.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/test1.html"));
 
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -1468,9 +1451,8 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, DLPBlocked) {
 // Test that if user allows printing after being shown a warning due to DLP
 // restrictions, the print preview is rendered when initiated by window.print().
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, DLPWarnAllowedWithWindowDotPrint) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/test1.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/test1.html"));
 
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -1495,9 +1477,8 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, DLPWarnAllowedWithWindowDotPrint) {
 // restrictions, the print preview is not rendered when initiated by
 // window.print().
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, DLPWarnCanceledWithWindowDotPrint) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/test1.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/test1.html"));
 
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -1521,9 +1502,8 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, DLPWarnCanceledWithWindowDotPrint) {
 // Test that if printing is blocked due to DLP restrictions, the print preview
 // is not rendered when initiated by window.print().
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, DLPBlockedWithWindowDotPrint) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/test1.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/test1.html"));
 
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -1547,9 +1527,8 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, DLPBlockedWithWindowDotPrint) {
 // Printing preview a webpage with isolate-origins enabled.
 // Test that we will use oopif printing for this case.
 IN_PROC_BROWSER_TEST_F(IsolateOriginsPrintBrowserTest, OopifPrinting) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/test1.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/test1.html"));
 
   EXPECT_TRUE(IsOopifEnabled());
 }
@@ -1615,13 +1594,13 @@ IN_PROC_BROWSER_TEST_F(PrintExtensionBrowserTest,
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   ASSERT_TRUE(web_contents);
-  TestPrintViewManager print_view_manager(web_contents);
-  PrintViewManager::SetReceiverImplForTesting(&print_view_manager);
+  TestPrintViewManager* print_view_manager =
+      TestPrintViewManager::CreateForWebContents(web_contents);
 
   PrintAndWaitUntilPreviewIsReady();
 
   const mojom::PrintPagesParamsPtr& snooped_params =
-      print_view_manager.snooped_params();
+      print_view_manager->snooped_params();
   ASSERT_TRUE(snooped_params);
   EXPECT_EQ(gfx::Size(kDefaultPdfDpi, kDefaultPdfDpi),
             snooped_params->params->dpi);
@@ -1662,13 +1641,13 @@ IN_PROC_BROWSER_TEST_F(
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   ASSERT_TRUE(web_contents);
-  TestPrintViewManager print_view_manager(web_contents);
-  PrintViewManager::SetReceiverImplForTesting(&print_view_manager);
+  TestPrintViewManager* print_view_manager =
+      TestPrintViewManager::CreateForWebContents(web_contents);
 
   PrintAndWaitUntilPreviewIsReady();
 
   const mojom::PrintPagesParamsPtr& snooped_params =
-      print_view_manager.snooped_params();
+      print_view_manager->snooped_params();
   ASSERT_TRUE(snooped_params);
   EXPECT_EQ(gfx::Size(kDefaultPdfDpi, kDefaultPdfDpi),
             snooped_params->params->dpi);
@@ -1688,24 +1667,20 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessPrintExtensionBrowserTest,
 }
 
 // Printing frame content for the main frame of a generic webpage with N-up
-// printing. This is a regression test for https://crbug.com/937247
+// printing. This is a regression test for https://crbug.com/41444375
 // TODO(crbug.com/40870686): Fix flakiness and re-enable.
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, DISABLED_PrintNup) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/7_pages.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/7_pages.html"));
 
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   ASSERT_TRUE(web_contents);
-  TestPrintViewManager print_view_manager(web_contents);
-  PrintViewManager::SetReceiverImplForTesting(&print_view_manager);
+  TestPrintViewManager::CreateForWebContents(web_contents);
 
   // Override print parameters to do N-up, specify 4 pages per sheet.
   const PrintParams kParams{.pages_per_sheet = 4};
   PrintAndWaitUntilPreviewIsReady(kParams);
-
-  PrintViewManager::SetReceiverImplForTesting(nullptr);
 
   // With 4 pages per sheet requested by `GetPrintParams()`, a 7 page input
   // will result in 2 pages in the print preview.
@@ -1715,21 +1690,17 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, DISABLED_PrintNup) {
 // Site per process version of PrintBrowserTest.PrintNup.
 // TODO(crbug.com/40870686): Fix flakiness and re-enable.
 IN_PROC_BROWSER_TEST_F(SitePerProcessPrintBrowserTest, DISABLED_PrintNup) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/7_pages.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/7_pages.html"));
 
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   ASSERT_TRUE(web_contents);
-  TestPrintViewManager print_view_manager(web_contents);
-  PrintViewManager::SetReceiverImplForTesting(&print_view_manager);
+  TestPrintViewManager::CreateForWebContents(web_contents);
 
   // Override print parameters to do N-up, specify 4 pages per sheet.
   const PrintParams kParams{.pages_per_sheet = 4};
   PrintAndWaitUntilPreviewIsReady(kParams);
-
-  PrintViewManager::SetReceiverImplForTesting(nullptr);
 
   // With 4 pages per sheet requested by `GetPrintParams()`, a 7 page input
   // will result in 2 pages in the print preview.
@@ -1737,9 +1708,8 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessPrintBrowserTest, DISABLED_PrintNup) {
 }
 
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest, MultipagePrint) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/3_pages.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/3_pages.html"));
 
   PrintAndWaitUntilPreviewIsReadyAndLoaded();
 
@@ -1747,21 +1717,19 @@ IN_PROC_BROWSER_TEST_F(PrintBrowserTest, MultipagePrint) {
 }
 
 IN_PROC_BROWSER_TEST_F(SitePerProcessPrintBrowserTest, MultipagePrint) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/3_pages.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/3_pages.html"));
 
   PrintAndWaitUntilPreviewIsReadyAndLoaded();
 
   EXPECT_EQ(rendered_page_count(), 3u);
 }
 
-// Disabled due to flakiness: crbug.com/1311998
+// Disabled due to flakiness: crbug.com/40831392
 IN_PROC_BROWSER_TEST_F(PrintBrowserTest,
                        DISABLED_PDFPluginNotKeyboardFocusable) {
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/printing/3_pages.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_NO_FATAL_FAILURE(
+      StartEmbeddedTestServerAndNavigate("/printing/3_pages.html"));
 
   TestPrintPreviewObserver print_preview_observer(/*wait_for_loaded=*/true);
   test::StartPrint(browser()->tab_strip_model()->GetActiveWebContents());
@@ -2023,10 +1991,10 @@ IN_PROC_BROWSER_TEST_P(PrintPrerenderBrowserTest, QuietBlockWithWindowPrint) {
   GURL prerender_url =
       embedded_test_server()->GetURL("/printing/prerendering.html");
 
-  content::FrameTreeNodeId prerender_id = prerender_helper_.AddPrerender(
+  content::PrerenderHostId prerender_id = prerender_helper_.AddPrerender(
       prerender_url, /*eagerness=*/std::nullopt, GetTargetHint());
   auto* prerender_web_contents =
-      content::WebContents::FromFrameTreeNodeId(prerender_id);
+      prerender_helper_.GetPrerenderWebContents(prerender_id);
   content::RenderFrameHost* prerender_host =
       content::test::PrerenderTestHelper::GetPrerenderedMainFrameHost(
           *prerender_web_contents, prerender_id);
@@ -2056,10 +2024,10 @@ IN_PROC_BROWSER_TEST_P(PrintPrerenderBrowserTest,
   GURL prerender_url =
       embedded_test_server()->GetURL("/printing/prerendering.html");
 
-  content::FrameTreeNodeId prerender_id = prerender_helper_.AddPrerender(
+  content::PrerenderHostId prerender_id = prerender_helper_.AddPrerender(
       prerender_url, /*eagerness=*/std::nullopt, GetTargetHint());
   auto* prerender_web_contents =
-      content::WebContents::FromFrameTreeNodeId(prerender_id);
+      prerender_helper_.GetPrerenderWebContents(prerender_id);
   content::RenderFrameHost* prerender_host =
       content::test::PrerenderTestHelper::GetPrerenderedMainFrameHost(
           *prerender_web_contents, prerender_id);
@@ -2105,8 +2073,9 @@ class PrintFencedFrameBrowserTest : public PrintBrowserTest {
   content::RenderFrameHost* CreateFencedFrame(
       content::RenderFrameHost* fenced_frame_parent,
       const GURL& url) {
-    if (fenced_frame_helper_)
+    if (fenced_frame_helper_) {
       return fenced_frame_helper_->CreateFencedFrame(fenced_frame_parent, url);
+    }
 
     // FencedFrameTestHelper only supports the MPArch version of fenced frames.
     // So need to maually create a fenced frame for the ShadowDOM version.
@@ -2120,12 +2089,10 @@ class PrintFencedFrameBrowserTest : public PrintBrowserTest {
                        content::JsReplace(kAddFencedFrameScript, url)));
     EXPECT_TRUE(navigation.WaitForNavigationFinished());
 
-    content::RenderFrameHost* new_frame = ChildFrameAt(fenced_frame_parent, 0);
-
-    return new_frame;
+    return ChildFrameAt(fenced_frame_parent, 0);
   }
 
-  void RunPrintTest(const std::string& print_command) {
+  void RunScriptedPrintTest(const std::string& print_command) {
     // Navigate to an initial page.
     const GURL url(https_server_.GetURL("/empty.html"));
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
@@ -2157,9 +2124,9 @@ class PrintFencedFrameBrowserTest : public PrintBrowserTest {
       )";
     const std::string test_script =
         base::StringPrintf(kAddListenersScript, print_command.c_str());
-
     EXPECT_EQ("beforeprint: false, afterprint: false",
               content::EvalJs(fenced_frame_host, test_script));
+
     ASSERT_TRUE(console_observer.Wait());
     ASSERT_EQ(1u, console_observer.messages().size());
     EXPECT_EQ(
@@ -2167,92 +2134,44 @@ class PrintFencedFrameBrowserTest : public PrintBrowserTest {
         console_observer.GetMessageAt(0));
   }
 
+  void RunPrintTest() {
+    // Navigate to an initial page.
+    const GURL url(https_server_.GetURL("/empty.html"));
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+
+    // Load a fenced frame.
+    GURL fenced_frame_url = https_server_.GetURL("/fenced_frames/title1.html");
+    content::WebContents* web_contents =
+        browser()->tab_strip_model()->GetActiveWebContents();
+    content::RenderFrameHost* fenced_frame_host = CreateFencedFrame(
+        web_contents->GetPrimaryMainFrame(), fenced_frame_url);
+    ASSERT_TRUE(fenced_frame_host);
+
+    // `PrintViewManager` should refuse to print.
+    auto* print_view_manager = PrintViewManager::FromWebContents(web_contents);
+    ASSERT_TRUE(print_view_manager);
+    EXPECT_FALSE(print_view_manager->PrintPreviewNow(fenced_frame_host,
+                                                     /*has_selection=*/false));
+  }
+
  private:
-  base::test::ScopedFeatureList feature_list_;
   std::unique_ptr<content::test::FencedFrameTestHelper> fenced_frame_helper_;
   net::EmbeddedTestServer https_server_{net::EmbeddedTestServer::TYPE_HTTPS};
 };
 
 IN_PROC_BROWSER_TEST_F(PrintFencedFrameBrowserTest, ScriptedPrint) {
-  RunPrintTest("window.print();");
+  RunScriptedPrintTest("window.print();");
 }
 
 IN_PROC_BROWSER_TEST_F(PrintFencedFrameBrowserTest, DocumentExecCommand) {
-  RunPrintTest("document.execCommand('print');");
+  RunScriptedPrintTest("document.execCommand('print');");
+}
+
+IN_PROC_BROWSER_TEST_F(PrintFencedFrameBrowserTest, BrowserPrint) {
+  RunPrintTest();
 }
 
 #if BUILDFLAG(IS_WIN)
-std::string GetDocumentDataTypeTestSuffix(
-    const testing::TestParamInfo<DocumentDataType>& info) {
-  switch (info.param) {
-    case DocumentDataType::kUnknown:
-      NOTREACHED();
-    case DocumentDataType::kPdf:
-      return "Pdf";
-    case DocumentDataType::kXps:
-      return "Xps";
-  }
-}
-
-class PrintCompositorDocumentDataTypeBrowserTest
-    : public PrintBrowserTest,
-      public testing::WithParamInterface<DocumentDataType> {
- public:
-  PrintCompositorDocumentDataTypeBrowserTest() = default;
-  ~PrintCompositorDocumentDataTypeBrowserTest() override = default;
-
-  void SetUp() override {
-    std::vector<base::test::FeatureRefAndParams> enabled_features;
-    std::vector<base::test::FeatureRef> disabled_features;
-
-    // Force use of out-of-process print drivers, since it is required for
-    // printing with XPS.
-    enabled_features.push_back(
-        {features::kEnableOopPrintDrivers,
-         {{features::kEnableOopPrintDriversJobPrint.name, "true"}}});
-    if (GetParam() == DocumentDataType::kXps) {
-      enabled_features.push_back({features::kUseXpsForPrinting, {}});
-
-      // Use of XPS printing requires using LPAC for the sandbox, otherwise
-      // the permissions for token-based sandboxing have to be significantly
-      // relaxed.
-      enabled_features.push_back(
-          {sandbox::policy::features::kPrintCompositorLPAC, {}});
-    } else {
-      disabled_features.push_back(features::kUseXpsForPrinting);
-    }
-
-    scoped_feature_list_.InitWithFeaturesAndParameters(enabled_features,
-                                                       disabled_features);
-    PrintBrowserTest::SetUp();
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-INSTANTIATE_TEST_SUITE_P(All,
-                         PrintCompositorDocumentDataTypeBrowserTest,
-                         testing::Values(DocumentDataType::kPdf,
-                                         DocumentDataType::kXps),
-                         GetDocumentDataTypeTestSuffix);
-
-// Demonstrate that the Print Compositor is plumbed to generate the different
-// document types.
-IN_PROC_BROWSER_TEST_P(PrintCompositorDocumentDataTypeBrowserTest,
-                       WindowDotPrint) {
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-
-  TestPrintPreviewObserver print_preview_observer(/*wait_for_loaded=*/true);
-  content::ExecuteScriptAsync(web_contents->GetPrimaryMainFrame(),
-                              "window.print();");
-  print_preview_observer.WaitUntilPreviewIsReady();
-
-  EXPECT_THAT(print_preview_observer.last_document_composite_data_type(),
-              testing::Optional(GetParam()));
-}
-
 // Demonstrate that the Print Compositor still works using the legacy sandbox
 // method, should the `kPrintCompositorLPAC` flag be disabled.
 // TODO(crbug.com/40283514):  Remove once LPAC sandboxing has been proven to
@@ -2263,7 +2182,6 @@ class PrintCompositorLegacySandboxBrowserTest : public PrintBrowserTest {
 
     disabled_features.push_back(
         sandbox::policy::features::kPrintCompositorLPAC);
-    disabled_features.push_back(features::kUseXpsForPrinting);
 
     scoped_feature_list_.InitWithFeatures(/*enabled_features=*/{},
                                           disabled_features);
@@ -2284,8 +2202,7 @@ IN_PROC_BROWSER_TEST_F(PrintCompositorLegacySandboxBrowserTest,
                               "window.print();");
   print_preview_observer.WaitUntilPreviewIsReady();
 
-  EXPECT_THAT(print_preview_observer.last_document_composite_data_type(),
-              testing::Optional(DocumentDataType::kPdf));
+  EXPECT_TRUE(print_preview_observer.did_composite_pdf_document());
 }
 #endif  // BUILDFLAG(IS_WIN)
 

@@ -20,13 +20,13 @@
 #include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
 #include "build/chromeos_buildflags.h"
-#include "chrome/browser/extensions/cws_info_service.h"
 #include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/extensions/extension_telemetry_service_verdict_handler.h"
 #include "chrome/browser/extensions/forced_extensions/force_installed_metrics.h"
 #include "chrome/browser/extensions/forced_extensions/force_installed_tracker.h"
 #include "chrome/browser/extensions/omaha_attributes_handler.h"
 #include "chrome/browser/extensions/safe_browsing_verdict_handler.h"
+#include "chrome/browser/policy/cloud/extension_install_policy_service.h"
 #include "chrome/browser/profiles/profile_manager_observer.h"
 #include "chrome/browser/upgrade_detector/upgrade_observer.h"
 #include "components/sync/model/string_ordinal.h"
@@ -34,6 +34,7 @@
 #include "content/public/browser/render_process_host_creation_observer.h"
 #include "extensions/browser/blocklist.h"
 #include "extensions/browser/crx_file_info.h"
+#include "extensions/browser/cws_info_service.h"
 #include "extensions/browser/delayed_install_manager.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_host_registry.h"
@@ -123,6 +124,7 @@ class ExtensionService : public ExtensionServiceInterface,
                          public Blocklist::Observer,
                          public CWSInfoService::Observer,
                          public ExtensionManagement::Observer,
+                         public policy::ExtensionInstallPolicyService::Observer,
                          public UpgradeObserver,
                          public ExtensionHostRegistry::Observer,
                          public ProfileManagerObserver {
@@ -158,6 +160,9 @@ class ExtensionService : public ExtensionServiceInterface,
   // ExtensionManagement::Observer implementation:
   void OnExtensionManagementSettingsChanged() override;
 
+  // policy::ExtensionInstallPolicyService::Observer implementation:
+  void OnExtensionInstallPolicyUpdated() override;
+
   // Initialize and start all installed extensions.
   void Init();
 
@@ -167,7 +172,7 @@ class ExtensionService : public ExtensionServiceInterface,
 
   // Performs action based on Omaha attributes for the extension.
   void PerformActionBasedOnOmahaAttributes(const std::string& extension_id,
-                                           const base::Value::Dict& attributes);
+                                           const base::DictValue& attributes);
 
   // Performs action based on verdicts received from the Extension Telemetry
   // server. Currently, these verdicts are limited to off-store extensions.
@@ -233,6 +238,8 @@ class ExtensionService : public ExtensionServiceInterface,
   void ProfileMarkedForPermanentDeletionForTest() {
     OnProfileMarkedForPermanentDeletion(profile_);
   }
+
+  void OnInstalledExtensionsLoadedForTest() { OnInstalledExtensionsLoaded(); }
 #endif
 
   // Load Extension Flags.
@@ -404,6 +411,10 @@ class ExtensionService : public ExtensionServiceInterface,
 
   base::ScopedObservation<CWSInfoService, CWSInfoService::Observer>
       cws_info_service_observation_{this};
+
+  base::ScopedObservation<policy::ExtensionInstallPolicyService,
+                          policy::ExtensionInstallPolicyService::Observer>
+      extension_install_policy_observation_{this};
 
   raw_ptr<DelayedInstallManager> delayed_install_manager_;
 

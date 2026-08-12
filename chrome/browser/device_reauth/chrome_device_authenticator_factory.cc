@@ -4,10 +4,8 @@
 
 #include "chrome/browser/device_reauth/chrome_device_authenticator_factory.h"
 
-#include "base/memory/ptr_util.h"
-#include "base/notreached.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/device_reauth/device_authenticator_common.h"
-#include "content/public/browser/network_service_instance.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/device_reauth/android/device_authenticator_android.h"
@@ -50,27 +48,15 @@ ChromeDeviceAuthenticatorFactory::GetForProfile(
     Profile* profile,
     const gfx::NativeWindow window,
     const device_reauth::DeviceAuthParams& params) {
+#if BUILDFLAG(IS_ANDROID)
   DeviceAuthenticatorProxy* proxy = static_cast<DeviceAuthenticatorProxy*>(
       GetInstance()->GetServiceForBrowserContext(profile, true));
-
   CHECK(proxy);
-
-#if BUILDFLAG(IS_ANDROID)
-  auto device_authenticator = std::make_unique<DeviceAuthenticatorAndroid>(
+  return std::make_unique<DeviceAuthenticatorAndroid>(
       std::make_unique<DeviceAuthenticatorBridgeImpl>(window), proxy, params);
-#elif BUILDFLAG(IS_MAC)
-  auto device_authenticator = std::make_unique<DeviceAuthenticatorMac>(
-      std::make_unique<AuthenticatorMac>(), proxy, params);
-#elif BUILDFLAG(IS_WIN)
-  auto device_authenticator = std::make_unique<DeviceAuthenticatorWin>(
-      std::make_unique<AuthenticatorWin>(), proxy, params);
-#elif BUILDFLAG(IS_CHROMEOS)
-  auto device_authenticator = std::make_unique<DeviceAuthenticatorChromeOS>(
-      std::make_unique<AuthenticatorChromeOS>(), proxy, params);
 #else
-  static_assert(false);
+  return ChromeDeviceAuthenticatorFactory::GetForProfile(profile, params);
 #endif
-  return std::move(device_authenticator);
 }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -88,6 +74,31 @@ ChromeDeviceAuthenticatorFactory::GetForProfile(
   return std::make_unique<DeviceAuthenticatorAndroid>(
       std::make_unique<DeviceAuthenticatorBridgeImpl>(activity), proxy, params);
 }
+#else
+// static
+std::unique_ptr<DeviceAuthenticator>
+ChromeDeviceAuthenticatorFactory::GetForProfile(
+    Profile* profile,
+    const device_reauth::DeviceAuthParams& params) {
+  DeviceAuthenticatorProxy* proxy = static_cast<DeviceAuthenticatorProxy*>(
+      GetInstance()->GetServiceForBrowserContext(profile, true));
+
+  CHECK(proxy);
+
+#if BUILDFLAG(IS_MAC)
+  auto device_authenticator = std::make_unique<DeviceAuthenticatorMac>(
+      std::make_unique<AuthenticatorMac>(), proxy, params);
+#elif BUILDFLAG(IS_WIN)
+  auto device_authenticator = std::make_unique<DeviceAuthenticatorWin>(
+      std::make_unique<AuthenticatorWin>(), proxy, params);
+#elif BUILDFLAG(IS_CHROMEOS)
+  auto device_authenticator = std::make_unique<DeviceAuthenticatorChromeOS>(
+      std::make_unique<AuthenticatorChromeOS>(), proxy, params);
+#else
+  static_assert(false);
+#endif
+  return std::move(device_authenticator);
+}
 #endif
 
 std::unique_ptr<KeyedService>
@@ -101,5 +112,11 @@ ChromeDeviceAuthenticatorFactory::BuildServiceInstanceForBrowserContext(
       std::make_unique<AuthenticatorWin>().get());
 #endif
 
+#if BUILDFLAG(IS_CHROMEOS)
+  // Asynchronously check for PIN availability and cache the result in a local
+  // state preference.
+  DeviceAuthenticatorChromeOS::CacheIfPinIsAvailable(
+      std::make_unique<AuthenticatorChromeOS>().get());
+#endif
   return std::make_unique<DeviceAuthenticatorProxy>();
 }

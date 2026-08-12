@@ -17,10 +17,12 @@ class StubRenderWidgetHostOwnerDelegate : public RenderWidgetHostOwnerDelegate {
       const blink::WebMouseEvent& mouse_event) override {}
   bool MayRenderWidgetForwardKeyboardEvent(
       const input::NativeWebKeyboardEvent& key_event) override;
-  bool ShouldContributePriorityToProcess() override;
   void SetBackgroundOpaque(bool opaque) override {}
   bool IsMainFrameActive() override;
   blink::web_pref::WebPreferences GetWebkitPreferencesForWidget() override;
+  void ZoomToFindInPageRect(const gfx::Rect& rect_to_zoom) override {}
+  void AnimateDoubleTapZoom(const gfx::Point& point,
+                            const gfx::Rect& rect) override {}
 };
 
 }  // namespace content

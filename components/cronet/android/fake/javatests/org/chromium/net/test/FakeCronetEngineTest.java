@@ -20,12 +20,14 @@ import org.junit.runner.RunWith;
 
 import org.chromium.base.test.util.Batch;
 import org.chromium.net.CronetException;
+import org.chromium.net.ExperimentalUrlRequest;
 import org.chromium.net.RequestFinishedInfo;
 import org.chromium.net.TestRequestFinishedListener;
 import org.chromium.net.UrlRequest;
 import org.chromium.net.UrlResponseInfo;
 import org.chromium.net.impl.ImplVersion;
 
+import java.lang.reflect.Field;
 import java.net.Proxy;
 import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutorService;
@@ -78,13 +80,9 @@ public class FakeCronetEngineTest {
     public void testShutdownEngineThrowsExceptionWhenApiCalled() {
         mFakeCronetEngine.shutdown();
 
-        IllegalStateException e =
-                assertThrows(
-                        IllegalStateException.class,
-                        () ->
-                                mFakeCronetEngine
-                                        .newUrlRequestBuilder("", mCallback, mExecutor)
-                                        .build());
+        ExperimentalUrlRequest.Builder builder =
+                mFakeCronetEngine.newUrlRequestBuilder("", mCallback, mExecutor);
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> builder.build());
         assertThat(e)
                 .hasMessageThat()
                 .isEqualTo(
@@ -376,5 +374,60 @@ public class FakeCronetEngineTest {
                 .isEqualTo(
                         "This instance of CronetEngine was shutdown. All requests must have been "
                                 + "complete.");
+    }
+
+    @Test
+    @SmallTest
+    public void testShutdownDoesNotCloseCustomExecutor() {
+        ExecutorService customExecutor = Executors.newSingleThreadExecutor();
+        FakeCronetController controller = new FakeCronetController();
+        FakeCronetEngine engine =
+                (FakeCronetEngine)
+                        controller.newFakeCronetEngineBuilder(mContext, customExecutor).build();
+
+        engine.shutdown();
+
+        // The custom executor should remain active
+        assertThat(customExecutor.isShutdown()).isFalse();
+        customExecutor.shutdown();
+    }
+
+    @Test
+    @SmallTest
+    public void testShutdownClosesInternalExecutor() throws Exception {
+        FakeCronetController controller = new FakeCronetController();
+        FakeCronetEngine engine =
+                (FakeCronetEngine) controller.newFakeCronetEngineBuilder(mContext).build();
+
+        // Access the internal executor via reflection for verification
+        Field field = engine.getClass().getDeclaredField("mExecutorService");
+        field.setAccessible(true);
+        ExecutorService internalExecutor = (ExecutorService) field.get(engine);
+
+        engine.shutdown();
+
+        // The internally created executor must be shut down
+        assertThat(internalExecutor.isShutdown()).isTrue();
+    }
+
+    @Test
+    @SmallTest
+    public void testProvidingNullExecutorUsesInternalOne() throws Exception {
+        FakeCronetController controller = new FakeCronetController();
+        FakeCronetEngine engine =
+                (FakeCronetEngine) controller.newFakeCronetEngineBuilder(mContext, null).build();
+
+        // Access the internal executor via reflection for verification
+        Field field = engine.getClass().getDeclaredField("mExecutorService");
+        field.setAccessible(true);
+        ExecutorService internalExecutor = (ExecutorService) field.get(engine);
+
+        assertThat(internalExecutor).isNotNull();
+
+        engine.shutdown();
+
+        // Because null was provided, the engine should recognize it owns the internal
+        // executor and shut it down.
+        assertThat(internalExecutor.isShutdown()).isTrue();
     }
 }

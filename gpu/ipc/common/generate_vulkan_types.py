@@ -334,11 +334,17 @@ bool StructTraits<gpu::mojom::%sDataView, %s>::Read(
       read_method = "Read%s" % (NormalizedCamelCase(field_name))
       traits_source_file.write(
 """
-  std::string_view %s;
-  if (!data.%s(&%s))
+  std::string_view {0};
+  if (!data.{1}(&{0})) {{
     return false;
-  %s.copy(out->%s, sizeof(out->%s));
-""" % (field_name, read_method, field_name, field_name, field_name, field_name))
+  }}
+  // There should be space for NUL.
+  if ({0}.size() >= sizeof(out->{0})) {{
+    return false;
+  }}
+  // Mojo zero-initializes `out` so it is guaranteed to be NUL-terminated.
+  {0}.copy(out->{0}, sizeof(out->{0}));
+  """.format(field_name, read_method))
     elif array_len:
       read_method = "Read%s" % (NormalizedCamelCase(field_name))
       traits_source_file.write(
@@ -393,7 +399,7 @@ struct EnumTraits<gpu::mojom::%s, %s> {
     }
   }
 
-  static bool FromMojom(gpu::mojom::%s input, %s* out) {
+  static %s FromMojom(gpu::mojom::%s input) {
     switch (input) {
 """ % (name, name))
 
@@ -401,14 +407,12 @@ struct EnumTraits<gpu::mojom::%s, %s> {
     traits_header_file.write(
 """
      case gpu::mojom::%s::%s:
-       *out = %s::%s;
-       return true;""" % (name, mojom_value_name, name, value_name))
+       return %s::%s;""" % (name, mojom_value_name, name, value_name))
 
   traits_header_file.write(
 """
       case gpu::mojom::%s::INVALID_VALUE:
         NOTREACHED();
-
     }
     NOTREACHED();
   }

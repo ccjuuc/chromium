@@ -96,6 +96,18 @@ AutoPictureInPictureTabModelObserverHelper::GetActiveWebContents() const {
   return observed_tab_model_->GetActiveWebContents();
 }
 
+bool AutoPictureInPictureTabModelObserverHelper::IsTabActivated() {
+  // If we're currently observing the tab model, then `is_tab_activated_` is
+  // current so we can just return it.
+  if (is_observing_) {
+    return is_tab_activated_;
+  }
+
+  // Otherwise, calculate it now.
+  ReevaluateObservedModelAndState();
+  return is_tab_activated_;
+}
+
 void AutoPictureInPictureTabModelObserverHelper::DidSelectTab(
     TabAndroid* tab,
     TabModel::TabSelectionType type) {
@@ -120,13 +132,6 @@ void AutoPictureInPictureTabModelObserverHelper::WillCloseTab(TabAndroid* tab) {
   // skip checking the activation status, effectively freezing the state until
   // the tab is destroyed. It's required because when closing a tab via
   // WillCloseTab, Clank doesn't immediately remove the tab from the TabModel.
-
-  // TODO(crbug.com/469150172): The `check_tab_activation` flag alone is
-  // insufficient to fully resolve the Auto-PiP on tab closure issue due to
-  // TabModelObserver behavior quirks. This is benign for video Auto-PiP as
-  // Android's native PiP likely performs additional checks on the WebContents'
-  // existence. For document Auto-PiP, we must either fix TabModelObserver or
-  // implement a similar check in DocumentPictureInPictureActivity.
   ReevaluateObservedModelAndState(false);
 }
 
@@ -159,6 +164,7 @@ void AutoPictureInPictureTabModelObserverHelper::
     UpdateIsTabActivated();
   }
 }
+
 void AutoPictureInPictureTabModelObserverHelper::UpdateIsTabActivated() {
   if (observed_tab_model_) {
     bool was_active = is_tab_activated_;
@@ -167,7 +173,7 @@ void AutoPictureInPictureTabModelObserverHelper::UpdateIsTabActivated() {
     // WebContents is the currently active one in that model.
     is_tab_activated_ = GetActiveWebContents() == GetObservedWebContents();
 
-    if (is_tab_activated_ != was_active) {
+    if (is_tab_activated_ != was_active && is_observing_) {
       RunCallback(is_tab_activated_);
     }
   }

@@ -17,21 +17,21 @@ namespace ui {
 std::unique_ptr<MotionEventAndroid> MotionEventAndroidFactory::CreateFromJava(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& event,
-    jfloat pix_to_dip,
-    jfloat ticks_x,
-    jfloat ticks_y,
-    jfloat tick_multiplier,
+    float pix_to_dip,
+    float ticks_x,
+    float ticks_y,
+    float tick_multiplier,
     base::TimeTicks oldest_event_time,
-    jint android_action,
-    jint pointer_count,
-    jint history_size,
-    jint action_index,
-    jint android_action_button,
-    jint android_gesture_classification,
-    jint android_button_state,
-    jfloat raw_offset_x_pixels,
-    jfloat raw_offset_y_pixels,
-    jboolean for_touch_handle,
+    int32_t android_action,
+    int32_t pointer_count,
+    int32_t history_size,
+    int32_t action_index,
+    int32_t android_action_button,
+    int32_t android_gesture_classification,
+    int32_t android_button_state,
+    float raw_offset_x_pixels,
+    float raw_offset_y_pixels,
+    bool for_touch_handle,
     const MotionEventAndroid::Pointer* const pointer0,
     const MotionEventAndroid::Pointer* const pointer1) {
   return CreateFromJava(
@@ -48,23 +48,23 @@ std::unique_ptr<MotionEventAndroid> MotionEventAndroidFactory::CreateFromJava(
 std::unique_ptr<MotionEventAndroid> MotionEventAndroidFactory::CreateFromJava(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& event,
-    jfloat pix_to_dip,
-    jfloat ticks_x,
-    jfloat ticks_y,
-    jfloat tick_multiplier,
+    float pix_to_dip,
+    float ticks_x,
+    float ticks_y,
+    float tick_multiplier,
     base::TimeTicks oldest_event_time,
     base::TimeTicks latest_event_time,
     base::TimeTicks down_time_ms,
-    jint android_action,
-    jint pointer_count,
-    jint history_size,
-    jint action_index,
-    jint android_action_button,
-    jint android_gesture_classification,
-    jint android_button_state,
-    jfloat raw_offset_x_pixels,
-    jfloat raw_offset_y_pixels,
-    jboolean for_touch_handle,
+    int32_t android_action,
+    int32_t pointer_count,
+    int32_t history_size,
+    int32_t action_index,
+    int32_t android_action_button,
+    int32_t android_gesture_classification,
+    int32_t android_button_state,
+    float raw_offset_x_pixels,
+    float raw_offset_y_pixels,
+    bool for_touch_handle,
     const MotionEventAndroid::Pointer* const pointer0,
     const MotionEventAndroid::Pointer* const pointer1,
     bool is_latest_event_time_resampled) {
@@ -84,7 +84,7 @@ std::unique_ptr<MotionEventAndroid> MotionEventAndroidFactory::CreateFromJava(
 std::unique_ptr<MotionEventAndroid> MotionEventAndroidFactory::CreateFromNative(
     base::android::ScopedInputEvent input_event,
     float pix_to_dip,
-    float y_offset_pix,
+    gfx::PointF offset,
     std::optional<MotionEventAndroid::EventTimes> event_times) {
   const AInputEvent* event = input_event.a_input_event();
 
@@ -105,7 +105,7 @@ std::unique_ptr<MotionEventAndroid> MotionEventAndroidFactory::CreateFromNative(
                   AMotionEvent_getHistoricalEventTime(event,
                                                       /*history_index=*/0));
   }
-  const jlong down_time_ms =
+  const int64_t down_time_ms =
       base::TimeTicks::FromJavaNanoTime(AMotionEvent_getDownTime(event))
           .ToUptimeMillis();
   // Native side doesn't have MotionEvent.getActionMasked() or
@@ -120,8 +120,8 @@ std::unique_ptr<MotionEventAndroid> MotionEventAndroidFactory::CreateFromNative(
   const std::unique_ptr<ui::MotionEventAndroid::Pointer> pointer0 =
       std::make_unique<ui::MotionEventAndroid::Pointer>(
           /*id=*/AMotionEvent_getPointerId(event, 0),
-          /*pos_x_pixels=*/AMotionEvent_getX(event, 0),
-          /*pos_y_pixels=*/AMotionEvent_getY(event, 0) + y_offset_pix,
+          /*pos_x_pixels=*/AMotionEvent_getX(event, 0) + offset.x(),
+          /*pos_y_pixels=*/AMotionEvent_getY(event, 0) + offset.y(),
           /*touch_major_pixels=*/AMotionEvent_getTouchMajor(event, 0),
           /*touch_minor_pixels=*/AMotionEvent_getTouchMinor(event, 0),
           /*pressure=*/AMotionEvent_getPressure(event, 0),
@@ -134,8 +134,8 @@ std::unique_ptr<MotionEventAndroid> MotionEventAndroidFactory::CreateFromNative(
   if (pointer_count > 1) {
     pointer1 = std::make_unique<ui::MotionEventAndroid::Pointer>(
         /*id=*/AMotionEvent_getPointerId(event, 1),
-        /*pos_x_pixels=*/AMotionEvent_getX(event, 1),
-        /*pos_y_pixels=*/AMotionEvent_getY(event, 1) + y_offset_pix,
+        /*pos_x_pixels=*/AMotionEvent_getX(event, 1) + offset.x(),
+        /*pos_y_pixels=*/AMotionEvent_getY(event, 1) + offset.y(),
         /*touch_major_pixels=*/AMotionEvent_getTouchMajor(event, 1),
         /*touch_minor_pixels=*/AMotionEvent_getTouchMinor(event, 1),
         /*pressure=*/AMotionEvent_getPressure(event, 1),
@@ -158,7 +158,7 @@ std::unique_ptr<MotionEventAndroid> MotionEventAndroidFactory::CreateFromNative(
   }
 
   auto source = std::make_unique<MotionEventAndroidSourceNative>(
-      std::move(input_event), y_offset_pix);
+      std::move(input_event), offset);
 
   return base::WrapUnique<MotionEventAndroid>(new MotionEventAndroid(
       pix_to_dip,

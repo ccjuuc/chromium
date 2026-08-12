@@ -3,48 +3,35 @@
 // found in the LICENSE file.
 
 import type {App, PageHandlerInterface, PageRemote, Permission, RunOnOsLoginMode, WindowMode} from 'chrome://resources/cr_components/app_management/app_management.mojom-webui.js';
-import {PageCallbackRouter} from 'chrome://resources/cr_components/app_management/app_management.mojom-webui.js';
-import type {BrowserProxy} from 'chrome://resources/cr_components/app_management/browser_proxy.js';
 import {assert} from 'chrome://resources/js/assert.js';
-import {PromiseResolver} from 'chrome://resources/js/promise_resolver.js';
+import {TestBrowserProxy} from 'chrome://webui-test/test_browser_proxy.js';
 
-export class FakePageHandler implements PageHandlerInterface {
+export class FakePageHandler extends TestBrowserProxy implements
+    PageHandlerInterface {
   private app_: App;
-  private page_: PageRemote;
-  private overlappingApps_: string[];
-  private apps_: App[];
-  private defaultAppAssociationsShown_: boolean;
-  private resolverMap_: Map<string, PromiseResolver<void>>;
+  private page_: PageRemote|null = null;
+  private overlappingApps_: string[] = [];
+  private apps_: App[] = [];
+  private defaultAppAssociationsShown_: boolean = false;
 
-  constructor(page: PageRemote, app: App) {
+  constructor(app: App) {
+    super([
+      'setPreferredApp',
+      'getOverlappingPreferredApps',
+      'checkForIsolatedWebAppUpdate',
+      'applyIsolatedWebAppUpdate',
+      'getNumWindowsForApp',
+    ]);
+
     this.app_ = app;
+  }
+
+  setPage(page: PageRemote) {
     this.page_ = page;
-    this.overlappingApps_ = [];
-    this.apps_ = [];
-
-    this.defaultAppAssociationsShown_ = false;
-    this.resolverMap_ = new Map();
-    this.resolverMap_.set('setPreferredApp', new PromiseResolver());
-    this.resolverMap_.set('getOverlappingPreferredApps', new PromiseResolver());
-  }
-
-  private getResolver_(methodName: string): PromiseResolver<void> {
-    const method = this.resolverMap_.get(methodName);
-    assert(method, `Method '${methodName}' not found.`);
-    return method;
-  }
-
-  methodCalled(methodName: string): void {
-    this.getResolver_(methodName).resolve();
-  }
-
-  async whenCalled(methodName: string): Promise<void> {
-    await this.getResolver_(methodName).promise;
-    this.resolverMap_.set(methodName, new PromiseResolver());
   }
 
   async flushPipesForTesting() {
-    await this.page_.$.flushForTesting();
+    await this.page_!.$.flushForTesting();
   }
 
   setOverlappingAppsForTesting(ids: string[]) {
@@ -56,7 +43,7 @@ export class FakePageHandler implements PageHandlerInterface {
   setApp(app: App) {
     this.app_ = app;
     this.apps_.push(app);
-    this.page_.onAppChanged(this.app_);
+    this.page_!.onAppChanged(this.app_);
   }
 
   // This is used to mimic the addition of more apps, which can
@@ -64,7 +51,7 @@ export class FakePageHandler implements PageHandlerInterface {
   // supported links item.
   addApp(app: App) {
     this.apps_.push(app);
-    this.page_.onAppChanged(app);
+    this.page_!.onAppChanged(app);
   }
 
   getApps() {
@@ -87,7 +74,7 @@ export class FakePageHandler implements PageHandlerInterface {
 
   setPermission(_appId: string, permission: Permission) {
     this.app_.permissions[permission.permissionType] = permission;
-    this.page_.onAppChanged(this.app_);
+    this.page_!.onAppChanged(this.app_);
   }
 
   setResizeLocked(_appId: string, _locked: boolean) {}
@@ -100,19 +87,19 @@ export class FakePageHandler implements PageHandlerInterface {
 
   setWindowMode(_appId: string, windowMode: WindowMode) {
     this.app_.windowMode = windowMode;
-    this.page_.onAppChanged(this.app_);
+    this.page_!.onAppChanged(this.app_);
   }
 
   setAppLocale(_appId: string, _localeTag: string): void {}
 
   setRunOnOsLoginMode(_appId: string, loginMode: RunOnOsLoginMode) {
     this.app_.runOnOsLogin!.loginMode = loginMode;
-    this.page_.onAppChanged(this.app_);
+    this.page_!.onAppChanged(this.app_);
   }
 
   setFileHandlingEnabled(_appId: string, fileHandlingEnabled: boolean) {
     this.app_.fileHandlingState!.enabled = fileHandlingEnabled;
-    this.page_.onAppChanged(this.app_);
+    this.page_!.onAppChanged(this.app_);
   }
 
   setPreferredApp(appId: string, isPreferredApp: boolean): void {
@@ -120,7 +107,7 @@ export class FakePageHandler implements PageHandlerInterface {
     assert(app);
 
     this.app_ = {...app, isPreferredApp};
-    this.page_.onAppChanged(this.app_);
+    this.page_!.onAppChanged(this.app_);
     this.methodCalled('setPreferredApp');
   }
 
@@ -143,25 +130,20 @@ export class FakePageHandler implements PageHandlerInterface {
   openStorePage(_appId: string) {}
 
   openSystemNotificationSettings(_appId: string) {}
-}
 
-export class TestAppManagementBrowserProxy implements BrowserProxy {
-  callbackRouter: PageCallbackRouter;
-  callbackRouterRemote: PageRemote;
-  handler: PageHandlerInterface;
-  fakeHandler: FakePageHandler;
-
-  constructor(app: App) {
-    this.callbackRouter = new PageCallbackRouter();
-
-    this.callbackRouterRemote =
-        this.callbackRouter.$.bindNewPipeAndPassRemote();
-
-    this.fakeHandler = new FakePageHandler(this.callbackRouterRemote, app);
-    this.handler = this.fakeHandler;
+  checkForIsolatedWebAppUpdate(_appId: string):
+      Promise<{updateVersion: {components: number[]} | null}> {
+    this.methodCalled('checkForIsolatedWebAppUpdate');
+    return Promise.resolve({updateVersion: null});
   }
 
-  recordEnumerationValue(metricName: string, value: number, enumSize: number) {
-    chrome.metricsPrivate.recordEnumerationValue(metricName, value, enumSize);
+  applyIsolatedWebAppUpdate(_appId: string): Promise<{success: boolean}> {
+    this.methodCalled('applyIsolatedWebAppUpdate');
+    return Promise.resolve({success: true});
+  }
+
+  getNumWindowsForApp(_appId: string): Promise<{numWindows: number}> {
+    this.methodCalled('getNumWindowsForApp');
+    return Promise.resolve({numWindows: 0});
   }
 }

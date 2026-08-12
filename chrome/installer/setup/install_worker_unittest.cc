@@ -68,11 +68,9 @@ class MockWorkItemList : public WorkItemList {
  public:
   MockWorkItemList() = default;
 
-  MOCK_METHOD5(AddCopyTreeWorkItem,
+  MOCK_METHOD3(AddCopyTreeWorkItem,
                WorkItem*(const base::FilePath&,
                          const base::FilePath&,
-                         const base::FilePath&,
-                         CopyOverWriteOption,
                          const base::FilePath&));
   MOCK_METHOD1(AddCreateDirWorkItem, WorkItem*(const base::FilePath&));
   MOCK_METHOD3(AddCreateRegKeyWorkItem,
@@ -88,7 +86,7 @@ class MockWorkItemList : public WorkItemList {
                WorkItem*(const base::FilePath&,
                          const base::FilePath&,
                          const base::FilePath&,
-                         MoveTreeOption));
+                         MoveTreeOptions));
   // Workaround for gmock problems with disambiguating between string pointers
   // and DWORD.
   WorkItem* AddSetRegValueWorkItem(HKEY a1,
@@ -304,8 +302,7 @@ TEST_F(InstallWorkerTest, TestInstallChromeSystem) {
 
   // Set up some expectations.
   // TODO(robertshield): Set up some real expectations.
-  EXPECT_CALL(work_item_list, AddCopyTreeWorkItem(_, _, _, _, _))
-      .Times(AtLeast(1));
+  EXPECT_CALL(work_item_list, AddCopyTreeWorkItem(_, _, _)).Times(AtLeast(1));
   EXPECT_CALL(work_item_list, AddCreateRegKeyWorkItem(_, _, _))
       .WillRepeatedly(Return(create_reg_key_work_item.get()));
   EXPECT_CALL(work_item_list, AddSetRegStringValueWorkItem(_, _, _, _, _, _))
@@ -319,10 +316,10 @@ TEST_F(InstallWorkerTest, TestInstallChromeSystem) {
 
   const base::Version current_version(
       installer_state->GetCurrentVersion(*installation_state));
+  static const uint32_t kEstimatedSizeKb = 1234;
   installer::InstallParams install_params = {
       *installer_state, *installation_state, setup_path_,   current_version,
-      src_path_,        temp_dir_,           *new_version_,
-  };
+      src_path_,        temp_dir_,           *new_version_, kEstimatedSizeKb};
 
   // Set up expectations for setup.exe's on-os-upgrade handler.
   const std::wstring update_handler_command_key =
@@ -332,11 +329,12 @@ TEST_F(InstallWorkerTest, TestInstallChromeSystem) {
               AddCreateRegKeyWorkItem(kRegRoot, update_handler_command_key,
                                       KEY_WOW64_32KEY))
       .WillOnce(Return(create_reg_key_work_item.get()));
-  const std::wstring command_line =
-      base::StrCat({L"\"", installer_state->target_path().value(), L"\\",
-                    base::ASCIIToWide(new_version_->GetString()),
-                    L"\\Installer\\setup.exe\" --on-os-upgrade --system-level "
-                    L"--verbose-logging %1"});
+  const std::wstring command_line = base::StrCat(
+      {L"\"", installer_state->target_path().value(), L"\\",
+       base::ASCIIToWide(new_version_->GetString()),
+       L"\\Installer\\setup.exe\" --on-os-upgrade --system-level "
+       L"--verbose-logging --",
+       base::ASCIIToWide(installer::switches::kOsUpgradeVersions), L"=%1"});
   EXPECT_CALL(work_item_list,
               AddSetRegStringValueWorkItem(
                   kRegRoot, update_handler_command_key, KEY_WOW64_32KEY,
@@ -348,6 +346,16 @@ TEST_F(InstallWorkerTest, TestInstallChromeSystem) {
       AddSetRegDwordValueWorkItem(
           kRegRoot, update_handler_command_key, KEY_WOW64_32KEY,
           std::wstring(google_update::kRegAutoRunOnOSUpgradeField), 1, true))
+      .WillOnce(Return(set_reg_value_work_item.get()));
+
+  EXPECT_CALL(work_item_list, AddSetRegStringValueWorkItem(
+                                  _, _, _, std::wstring(L"InstallDate"),
+                                  InstallUtil::GetCurrentDate(), true))
+      .WillOnce(Return(set_reg_value_work_item.get()));
+
+  EXPECT_CALL(work_item_list, AddSetRegDwordValueWorkItem(
+                                  _, _, _, std::wstring(L"EstimatedSize"),
+                                  kEstimatedSizeKb, true))
       .WillOnce(Return(set_reg_value_work_item.get()));
 
   AddInstallWorkItems(install_params, &work_item_list);

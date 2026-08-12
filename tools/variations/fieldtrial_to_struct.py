@@ -22,20 +22,10 @@ try:
 finally:
   sys.path.pop(0)
 
-sys.path.insert(
-    0,
-    os.path.normpath(_script_path + "/../../../components/variations/service"))
-try:
-  import generate_ui_string_overrider
-finally:
-  sys.path.pop(0)
-
 _platforms = [
     'android',
-    'android_weblayer',
     'android_webview',
     'chromeos',
-    'chromeos_lacros',
     'fuchsia',
     'ios',
     'linux',
@@ -71,17 +61,6 @@ def _LoadFieldTrialConfig(filename, platforms):
   used by json_to_struct.
   """
   return _FieldTrialConfigToDescription(_Load(filename), platforms)
-
-
-def _ConvertOverrideUIStrings(override_ui_strings):
-  """Converts override_ui_strings to formatted dicts."""
-  overrides = []
-  for ui_string, override in override_ui_strings.items():
-    overrides.append({
-        'name_hash': generate_ui_string_overrider.HashName(ui_string),
-        'value': override
-    })
-  return overrides
 
 
 def _CreateExperiment(experiment_data, platforms, form_factors,
@@ -123,6 +102,14 @@ def _CreateExperiment(experiment_data, platforms, form_factors,
       'exclude_hardware_classes')
   if exclude_hardware_classes_data:
     experiment['exclude_hardware_classes'] = exclude_hardware_classes_data
+  hardware_manufacturers_data = experiment_data.get('hardware_manufacturers')
+  if hardware_manufacturers_data:
+    experiment['hardware_manufacturers'] = hardware_manufacturers_data
+  exclude_hardware_manufacturers_data = experiment_data.get(
+      'exclude_hardware_manufacturers')
+  if exclude_hardware_manufacturers_data:
+    experiment[
+        'exclude_hardware_manufacturers'] = exclude_hardware_manufacturers_data
   params_data = experiment_data.get('params')
   if (params_data):
     experiment['params'] = [{'key': param, 'value': params_data[param]}
@@ -133,10 +120,6 @@ def _CreateExperiment(experiment_data, platforms, form_factors,
   disable_features_data = experiment_data.get('disable_features')
   if disable_features_data:
     experiment['disable_features'] = disable_features_data
-  override_ui_strings = experiment_data.get('override_ui_strings')
-  if override_ui_strings:
-    experiment['override_ui_string'] = _ConvertOverrideUIStrings(
-        override_ui_strings)
   return experiment
 
 

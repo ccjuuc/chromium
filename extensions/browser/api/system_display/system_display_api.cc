@@ -6,18 +6,24 @@
 
 #include <map>
 #include <memory>
-#include <set>
 #include <string>
 
+#include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
+#include "base/lazy_instance.h"
+#include "base/memory/raw_ptr.h"
+#include "base/no_destructor.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "content/public/browser/browser_context.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "extensions/browser/api/system_display/display_info_provider.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/mojom/context_type.mojom.h"
 #include "extensions/common/permissions/permissions_data.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "extensions/common/manifest_handlers/kiosk_mode_info.h"
@@ -110,7 +116,7 @@ class OverscanTracker::OverscanWebObserver
   }
 
  private:
-  std::set<std::string> display_ids_;
+  absl::flat_hash_set<std::string> display_ids_;
 };
 
 static OverscanTracker* g_overscan_tracker = nullptr;
@@ -168,6 +174,78 @@ bool HasAutotestPrivate(const ExtensionFunction& function) {
          function.extension()->permissions_data()->HasAPIPermission(
              mojom::APIPermissionID::kAutoTestPrivate);
 }
+
+#if BUILDFLAG(IS_ANDROID)
+class SystemDisplayEventRouter {
+ public:
+  static SystemDisplayEventRouter* GetInstance();
+
+  SystemDisplayEventRouter() = default;
+  SystemDisplayEventRouter(const SystemDisplayEventRouter&) = delete;
+  SystemDisplayEventRouter& operator=(const SystemDisplayEventRouter&) = delete;
+  ~SystemDisplayEventRouter() = default;
+
+  void CheckForDisplayListeners(content::BrowserContext* context);
+  void ShutdownForContext(content::BrowserContext* context);
+
+ private:
+  void StartOrStopDisplayEventDispatcherIfNecessary();
+
+  bool is_dispatching_display_events_ = false;
+  base::flat_set<raw_ptr<content::BrowserContext>>
+      contexts_with_display_listeners_;
+};
+
+// static
+SystemDisplayEventRouter* SystemDisplayEventRouter::GetInstance() {
+  static base::NoDestructor<SystemDisplayEventRouter> instance;
+  return instance.get();
+}
+
+void SystemDisplayEventRouter::CheckForDisplayListeners(
+    content::BrowserContext* context) {
+  if (EventRouter::Get(context)->HasEventListener(
+          display::OnDisplayChanged::kEventName)) {
+    contexts_with_display_listeners_.insert(context);
+  } else {
+    contexts_with_display_listeners_.erase(context);
+  }
+
+  StartOrStopDisplayEventDispatcherIfNecessary();
+}
+
+void SystemDisplayEventRouter::ShutdownForContext(
+    content::BrowserContext* context) {
+  contexts_with_display_listeners_.erase(context);
+  StartOrStopDisplayEventDispatcherIfNecessary();
+}
+
+void SystemDisplayEventRouter::StartOrStopDisplayEventDispatcherIfNecessary() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  const bool should_dispatch = !contexts_with_display_listeners_.empty();
+  DisplayInfoProvider* provider = DisplayInfoProvider::Get();
+
+  if (!provider || should_dispatch == is_dispatching_display_events_) {
+    return;
+  }
+
+  if (should_dispatch) {
+    provider->StartObserving();
+  } else {
+    provider->StopObserving();
+  }
+
+  is_dispatching_display_events_ = should_dispatch;
+}
+
+void HandleDisplayListenerAddedOrRemoved(content::BrowserContext* context,
+                                         const std::string& event_name) {
+  if (event_name == display::OnDisplayChanged::kEventName) {
+    SystemDisplayEventRouter::GetInstance()->CheckForDisplayListeners(context);
+  }
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_CHROMEOS)
 // |edid| is available only to Chrome OS kiosk mode applications.
@@ -248,15 +326,8 @@ void SystemDisplayGetInfoFunction::Response(
 ExtensionFunction::ResponseAction SystemDisplayGetDisplayLayoutFunction::Run() {
   DisplayInfoProvider* provider = DisplayInfoProvider::Get();
   DCHECK(provider);
-  provider->GetDisplayLayout(
-      base::BindOnce(&SystemDisplayGetDisplayLayoutFunction::Response, this));
-  return RespondLater();
-}
-
-void SystemDisplayGetDisplayLayoutFunction::Response(
-    std::vector<api::system_display::DisplayLayout> display_layout) {
-  return Respond(
-      ArgumentList(display::GetDisplayLayout::Results::Create(display_layout)));
+  return RespondNow(ArgumentList(display::GetDisplayLayout::Results::Create(
+      provider->GetDisplayLayout())));
 }
 
 bool SystemDisplayGetDisplayLayoutFunction::ShouldRestrictToKioskAndWebUI() {
@@ -286,15 +357,9 @@ ExtensionFunction::ResponseAction SystemDisplaySetDisplayLayoutFunction::Run() {
       display::SetDisplayLayout::Params::Create(args());
   DisplayInfoProvider* provider = DisplayInfoProvider::Get();
   DCHECK(provider);
-  provider->SetDisplayLayout(
-      params->layouts,
-      base::BindOnce(&SystemDisplaySetDisplayLayoutFunction::Response, this));
-  return RespondLater();
-}
-
-void SystemDisplaySetDisplayLayoutFunction::Response(
-    std::optional<std::string> error) {
-  Respond(error ? Error(*error) : NoArguments());
+  base::expected<void, std::string> result =
+      provider->SetDisplayLayout(params->layouts);
+  return RespondNow(result.has_value() ? NoArguments() : Error(result.error()));
 }
 
 ExtensionFunction::ResponseAction
@@ -433,5 +498,40 @@ void SystemDisplaySetMirrorModeFunction::Response(
     std::optional<std::string> error) {
   Respond(error ? Error(*error) : NoArguments());
 }
+
+#if BUILDFLAG(IS_ANDROID)
+namespace {
+static base::LazyInstance<BrowserContextKeyedAPIFactory<SystemDisplayAPI>>::
+    DestructorAtExit g_factory = LAZY_INSTANCE_INITIALIZER;
+}  // namespace
+
+// static
+BrowserContextKeyedAPIFactory<SystemDisplayAPI>*
+SystemDisplayAPI::GetFactoryInstance() {
+  return g_factory.Pointer();
+}
+
+SystemDisplayAPI::SystemDisplayAPI(content::BrowserContext* context)
+    : browser_context_(context) {
+  EventRouter* router = EventRouter::Get(browser_context_);
+  router->RegisterObserver(this, display::OnDisplayChanged::kEventName);
+  SystemDisplayEventRouter::GetInstance()->CheckForDisplayListeners(context);
+}
+
+SystemDisplayAPI::~SystemDisplayAPI() = default;
+
+void SystemDisplayAPI::Shutdown() {
+  EventRouter::Get(browser_context_)->UnregisterObserver(this);
+  SystemDisplayEventRouter::GetInstance()->ShutdownForContext(browser_context_);
+}
+
+void SystemDisplayAPI::OnListenerAdded(const EventListenerInfo& details) {
+  HandleDisplayListenerAddedOrRemoved(browser_context_, details.event_name);
+}
+
+void SystemDisplayAPI::OnListenerRemoved(const EventListenerInfo& details) {
+  HandleDisplayListenerAddedOrRemoved(browser_context_, details.event_name);
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace extensions

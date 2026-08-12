@@ -21,6 +21,12 @@
 #include "components/policy/core/common/policy_service.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
+#else
+#include "components/policy/core/common/cloud/user_cloud_policy_manager.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 class ProfileAttributesStorage;
 class ProfileManager;
 class TestingBrowserProcess;
@@ -86,13 +92,28 @@ class TestingProfileManager : public ProfileObserver {
       std::optional<std::unique_ptr<policy::PolicyService>> policy_service =
           std::nullopt,
       scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory =
+          nullptr,
+#if BUILDFLAG(IS_CHROMEOS)
+      std::unique_ptr<policy::UserCloudPolicyManagerAsh> user_cloud_policy_manager =
           nullptr);
+#else
+      std::unique_ptr<policy::UserCloudPolicyManager>
+          user_cloud_policy_manager = nullptr);
+#endif  // BUILDFLAG(IS_CHROMEOS)
   // Small helpers for creating testing profiles. Just forward to above.
   TestingProfile* CreateTestingProfile(
       const std::string& name,
       TestingProfile::TestingFactories testing_factories = {},
       scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory =
           nullptr);
+
+  // Creates a testing profile with the given parameters of Builder.
+  // Note that the path set to the `builder` will be ignored, and instead
+  // the path based on the name under the directory managed by this manager
+  // will be used.
+  TestingProfile* CreateTestingProfile(TestingProfile::Builder builder,
+                                       const std::u16string& user_name,
+                                       int avatar_id);
 
   // Creates a new guest TestingProfile whose data lives in the guest profile
   // test environment directory, as specified by the profile manager. If the

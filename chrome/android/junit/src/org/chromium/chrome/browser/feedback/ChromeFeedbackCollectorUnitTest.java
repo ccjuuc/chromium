@@ -10,13 +10,13 @@ import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
+import android.accounts.Account;
 import android.app.Activity;
 import android.graphics.Bitmap;
 import android.os.Bundle;
@@ -35,16 +35,18 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
+import org.chromium.components.signin.AccountUtils;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.test.util.TestAccounts;
 
@@ -56,11 +58,11 @@ import java.util.Map;
 /** Test for {@link ChromeFeedbackCollector}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
-@LooperMode(LooperMode.Mode.LEGACY)
 public class ChromeFeedbackCollectorUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private Activity mActivity;
     @Mock private Profile mProfile;
+    @Mock private FeedbackPolicyManager mFeedbackPolicyManager;
 
     // Test constants.
     private static final String CATEGORY_TAG = "category_tag";
@@ -276,12 +278,13 @@ public class ChromeFeedbackCollectorUnitTest {
 
     @Before
     public void setUp() {
+        FeedbackPolicyManager.setInstanceForTesting(mFeedbackPolicyManager);
+        when(mFeedbackPolicyManager.isUserFeedbackAllowed()).thenReturn(true);
+
         IdentityServicesProvider.setInstanceForTests(mock(IdentityServicesProvider.class));
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mock(IdentityManager.class));
-        when(IdentityServicesProvider.get()
-                        .getIdentityManager(any())
-                        .getPrimaryAccountInfo(anyInt()))
+        when(IdentityServicesProvider.get().getIdentityManager(any()).getPrimaryAccountInfo())
                 .thenReturn(TestAccounts.ACCOUNT1);
     }
 
@@ -303,7 +306,7 @@ public class ChromeFeedbackCollectorUnitTest {
                         null,
                         (result) -> callback.onResult(result));
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(callback, times(1)).onResult(any());
 
         assertEquals(
@@ -330,7 +333,7 @@ public class ChromeFeedbackCollectorUnitTest {
                         null,
                         (result) -> callback.onResult(result));
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(callback, times(1)).onResult(any());
 
         ThreadUtils.runOnUiThreadBlocking(
@@ -367,7 +370,7 @@ public class ChromeFeedbackCollectorUnitTest {
                     }
                 };
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(callback, times(1)).onResult(collector);
 
         ThreadUtils.runOnUiThreadBlocking(
@@ -381,7 +384,11 @@ public class ChromeFeedbackCollectorUnitTest {
                     assertEquals(CATEGORY_TAG, collector.getCategoryTag());
                     assertEquals(DESCRIPTION, collector.getDescription());
                     assertNull(collector.getScreenshot());
-                    assertEquals(TestAccounts.ACCOUNT1.getEmail(), collector.getAccountInUse());
+                    assertEquals(
+                            TestAccounts.ACCOUNT1.getEmail(), collector.getAccountEmailInUse());
+                    Account expectedAccount =
+                            AccountUtils.createAccountFromEmail(TestAccounts.ACCOUNT1.getEmail());
+                    assertEquals(expectedAccount, collector.getAccountInUse());
                 });
     }
 
@@ -412,12 +419,13 @@ public class ChromeFeedbackCollectorUnitTest {
                     }
                 };
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(callback, times(1)).onResult(collector);
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    assertEquals(null, collector.getAccountInUse());
+                    assertNull(collector.getAccountEmailInUse());
+                    assertNull(collector.getAccountInUse());
                 });
     }
 
@@ -450,7 +458,7 @@ public class ChromeFeedbackCollectorUnitTest {
                     }
                 };
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(callback, times(1)).onResult(collector);
 
         ThreadUtils.runOnUiThreadBlocking(
@@ -499,7 +507,7 @@ public class ChromeFeedbackCollectorUnitTest {
                 };
 
         sources.forEach(source -> ((MockAsyncFeedbackSource) source).triggerDone());
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(callback, times(1)).onResult(collector);
 
         ThreadUtils.runOnUiThreadBlocking(
@@ -544,7 +552,7 @@ public class ChromeFeedbackCollectorUnitTest {
                 };
 
         sources.forEach(source -> ((MockAsyncFeedbackSource) source).triggerDone());
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(callback, times(1)).onResult(collector);
 
         ThreadUtils.runOnUiThreadBlocking(
@@ -587,7 +595,7 @@ public class ChromeFeedbackCollectorUnitTest {
 
         // Do not trigger done.  The collector should respond back anyway and still try to build the
         // logs and feedback report.
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(callback, times(1)).onResult(collector);
 
         ThreadUtils.runOnUiThreadBlocking(
@@ -623,7 +631,7 @@ public class ChromeFeedbackCollectorUnitTest {
         Bitmap bitmap = createBitmap();
         mockScreenshotSource.triggerDone(bitmap);
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(callback, times(1)).onResult(collector);
 
         ThreadUtils.runOnUiThreadBlocking(
@@ -657,7 +665,7 @@ public class ChromeFeedbackCollectorUnitTest {
                         mockScreenshotSource,
                         (result) -> callback.onResult(result));
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         // We should not get a callback until the screenshot task finishes, even if that extends
         // beyond our internal timeouts.
         verify(callback, times(0)).onResult(collector);
@@ -665,7 +673,7 @@ public class ChromeFeedbackCollectorUnitTest {
         Bitmap bitmap = createBitmap();
         mockScreenshotSource.triggerDone(bitmap);
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(callback, times(1)).onResult(collector);
 
         ThreadUtils.runOnUiThreadBlocking(
@@ -698,7 +706,7 @@ public class ChromeFeedbackCollectorUnitTest {
                         new MockScreenshotSource(),
                         (result) -> callback.onResult(result));
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
 
         // We should not get a callback until the screenshot task finishes, even if that extends
         // beyond our internal timeouts.
@@ -707,7 +715,7 @@ public class ChromeFeedbackCollectorUnitTest {
         ThreadUtils.runOnUiThreadBlocking(() -> assertNull(collector.getScreenshot()));
         ThreadUtils.runOnUiThreadBlocking(() -> collector.setScreenshot(null));
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(callback, times(1)).onResult(collector);
 
         ThreadUtils.runOnUiThreadBlocking(() -> assertNull(collector.getScreenshot()));
@@ -734,7 +742,7 @@ public class ChromeFeedbackCollectorUnitTest {
                         mockScreenshotSource,
                         (result) -> callback.onResult(result));
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
 
         // We should not get a callback until the screenshot task finishes, even if that extends
         // beyond our internal timeouts.
@@ -745,7 +753,7 @@ public class ChromeFeedbackCollectorUnitTest {
         ThreadUtils.runOnUiThreadBlocking(() -> collector.setScreenshot(bitmap));
 
         mockScreenshotSource.triggerDone(null);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(callback, times(1)).onResult(collector);
 
         ThreadUtils.runOnUiThreadBlocking(() -> assertEquals(bitmap, collector.getScreenshot()));
@@ -774,7 +782,7 @@ public class ChromeFeedbackCollectorUnitTest {
         Bitmap bitmap = createBitmap();
         ThreadUtils.runOnUiThreadBlocking(() -> collector.setScreenshot(bitmap));
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
 
         verify(callback, times(1)).onResult(collector);
         ThreadUtils.runOnUiThreadBlocking(() -> assertEquals(bitmap, collector.getScreenshot()));
@@ -803,7 +811,7 @@ public class ChromeFeedbackCollectorUnitTest {
 
         {
             mockScreenshotSource.triggerDone(null);
-            ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+            RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
 
             verify(callback, times(1)).onResult(collector);
         }
@@ -817,7 +825,7 @@ public class ChromeFeedbackCollectorUnitTest {
                     assertEquals(bitmap, collector.getScreenshot());
                 });
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         ThreadUtils.runOnUiThreadBlocking(() -> assertEquals(bitmap, collector.getScreenshot()));
 
         // If we have already gotten a callback, we should not get another one.
@@ -846,7 +854,7 @@ public class ChromeFeedbackCollectorUnitTest {
                         mockScreenshotSource,
                         (result) -> callback.onResult(result));
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
 
         // We should not get a callback until the screenshot task finishes, even if that extends
         // beyond our internal timeouts.
@@ -858,9 +866,52 @@ public class ChromeFeedbackCollectorUnitTest {
 
         Bitmap bitmap2 = createBitmap();
         mockScreenshotSource.triggerDone(bitmap2);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(callback, times(1)).onResult(collector);
 
         ThreadUtils.runOnUiThreadBlocking(() -> assertEquals(bitmap, collector.getScreenshot()));
+    }
+
+    @Test
+    @Feature({"Feedback"})
+    @DisableFeatures(ChromeFeatureList.DARKEN_WEBSITES_CHECKBOX_IN_THEMES_SETTING)
+    public void testFeedbackAllowed() {
+        when(mFeedbackPolicyManager.isUserFeedbackAllowed()).thenReturn(true);
+
+        ChromeFeedbackCollector collector = mock(ChromeFeedbackCollector.class);
+        when(collector.buildSynchronousFeedbackSources(any(), any())).thenCallRealMethod();
+        when(collector.buildAsynchronousFeedbackSources(any())).thenCallRealMethod();
+
+        ChromeFeedbackCollector.InitParams initParams =
+                new ChromeFeedbackCollector.InitParams(mProfile, "http://example.com", null);
+
+        List<FeedbackSource> syncSources =
+                collector.buildSynchronousFeedbackSources(mActivity, initParams);
+        assertFalse(syncSources.isEmpty());
+
+        List<AsyncFeedbackSource> asyncSources =
+                collector.buildAsynchronousFeedbackSources(initParams);
+        assertFalse(asyncSources.isEmpty());
+    }
+
+    @Test
+    @Feature({"Feedback"})
+    public void testFeedbackDisallowed() {
+        when(mFeedbackPolicyManager.isUserFeedbackAllowed()).thenReturn(false);
+
+        ChromeFeedbackCollector collector = mock(ChromeFeedbackCollector.class);
+        when(collector.buildSynchronousFeedbackSources(any(), any())).thenCallRealMethod();
+        when(collector.buildAsynchronousFeedbackSources(any())).thenCallRealMethod();
+
+        ChromeFeedbackCollector.InitParams initParams =
+                new ChromeFeedbackCollector.InitParams(mProfile, null, null);
+
+        List<FeedbackSource> syncSources =
+                collector.buildSynchronousFeedbackSources(mActivity, initParams);
+        assertTrue(syncSources.isEmpty());
+
+        List<AsyncFeedbackSource> asyncSources =
+                collector.buildAsynchronousFeedbackSources(initParams);
+        assertTrue(asyncSources.isEmpty());
     }
 }

@@ -14,6 +14,8 @@
 #import "components/signin/public/base/signin_switches.h"
 #import "components/strings/grit/components_strings.h"
 #import "components/sync/base/user_selectable_type.h"
+#import "google_apis/gaia/core_account_id.h"
+#import "google_apis/gaia/gaia_id.h"
 #import "ios/chrome/browser/authentication/test/expected_signin_histograms.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey_ui_test_util.h"
@@ -31,7 +33,7 @@
 #import "ios/chrome/browser/reading_list/ui_bundled/reading_list_constants.h"
 #import "ios/chrome/browser/reading_list/ui_bundled/reading_list_egtest_utils.h"
 #import "ios/chrome/browser/recent_tabs/public/recent_tabs_constants.h"
-#import "ios/chrome/browser/settings/ui_bundled/google_services/manage_sync_settings_constants.h"
+#import "ios/chrome/browser/settings/manage_sync/public/manage_sync_settings_constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_table_view_controller_constants.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -44,7 +46,6 @@
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
 #import "ios/chrome/test/earl_grey/chrome_test_case.h"
-#import "ios/chrome/test/earl_grey/web_http_server_chrome_test_case.h"
 #import "ios/testing/earl_grey/app_launch_configuration.h"
 #import "ios/testing/earl_grey/app_launch_manager.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
@@ -118,10 +119,16 @@ void SetSigninEnterprisePolicyValue(BrowserSigninMode signinMode) {
 
 // Sign-in interaction tests that work both with Unified Consent enabled or
 // disabled.
-@interface SigninCoordinatorTestCase : WebHttpServerChromeTestCase
+@interface SigninCoordinatorTestCase : ChromeTestCase
 @end
 
 @implementation SigninCoordinatorTestCase
+
+- (AppLaunchConfiguration)appConfigurationForTestCase {
+  AppLaunchConfiguration config;
+  config.features_disabled.push_back(kAuthenticationFlowReauthFirstKillswitch);
+  return config;
+}
 
 - (void)setUp {
   [super setUp];
@@ -153,6 +160,37 @@ void SetSigninEnterprisePolicyValue(BrowserSigninMode signinMode) {
   // Check `fakeIdentity` is signed-in.
   [SigninEarlGrey verifySignedInWithFakeIdentity:fakeIdentity];
   ExpectSigninConsentHistogram(signin_metrics::SigninAccountType::kRegular);
+}
+
+// Tests that opening the sign-in screen from the Settings and signing in works
+// correctly when there is an account that requires reauthentication on the
+// device.
+- (void)testSignInOneUserNeedsReauth {
+  // Set up a fake identity needing reauthentication.
+  FakeSystemIdentity* fakeIdentity = [FakeSystemIdentity fakeIdentity1];
+  [SigninEarlGrey addFakeIdentity:fakeIdentity];
+  [SigninEarlGrey setPersistentAuthErrorForAccount:CoreAccountId::FromGaiaId(
+                                                       fakeIdentity.gaiaId)];
+
+  [ChromeEarlGreyUI openSettingsMenu];
+  [ChromeEarlGreyUI tapSettingsMenuButton:SettingsSignInRowMatcher()];
+
+  [ChromeEarlGreyUI waitForAppToIdle];
+  [ChromeEarlGrey
+      waitForMatcher:chrome_test_util::ConsistencySigninPrimaryButtonMatcher()];
+  [[EarlGrey selectElementWithMatcher:
+                 chrome_test_util::ConsistencySigninPrimaryButtonMatcher()]
+      performAction:grey_tap()];
+
+  // Confirm the fake reauthentication dialog.
+  [[EarlGrey
+      selectElementWithMatcher:grey_allOf(
+                                   grey_accessibilityID(
+                                       kFakeAuthAddAccountButtonIdentifier),
+                                   grey_sufficientlyVisible(), nil)]
+      performAction:grey_tap()];
+
+  [SigninEarlGrey verifySignedInWithFakeIdentity:fakeIdentity];
 }
 
 // Tests that opening the sign-in screen from the Settings and signing in works
@@ -265,74 +303,6 @@ void SetSigninEnterprisePolicyValue(BrowserSigninMode signinMode) {
   [SigninEarlGreyUI signinWithFakeIdentity:fakeIdentity];
 
   [SigninEarlGreyUI signOut];
-}
-
-// Tests that signing out of a managed account from the Settings works
-// correctly.
-// TODO(crbug.com/369617405): Disabled due to flakiness.
-- (void)
-    DISABLED_testSignInDisconnectFromChromeManaged_ClearDataFeatureDisabled {
-  // Sign-in with a managed account.
-  FakeSystemIdentity* fakeIdentity = [FakeSystemIdentity fakeManagedIdentity];
-  [SigninEarlGreyUI signinWithFakeIdentity:fakeIdentity];
-
-  // Check `fakeIdentity` is signed-in.
-  [SigninEarlGrey verifySignedInWithFakeIdentity:fakeIdentity];
-  ExpectSigninConsentHistogram(signin_metrics::SigninAccountType::kManaged);
-
-  [SigninEarlGreyUI signOut];
-}
-
-// TODO(crbug.com/368595150): Disabled due to flakiness.
-- (void)DISABLED_testSignInDisconnectFromChromeManaged_ClearDataFeatureEnabled {
-  // Sign-in with a managed account.
-  FakeSystemIdentity* fakeIdentity = [FakeSystemIdentity fakeManagedIdentity];
-  [SigninEarlGreyUI signinWithFakeIdentity:fakeIdentity];
-
-  // Check `fakeIdentity` is signed-in.
-  [SigninEarlGrey verifySignedInWithFakeIdentity:fakeIdentity];
-  ExpectSigninConsentHistogram(signin_metrics::SigninAccountType::kManaged);
-
-  [ChromeEarlGreyUI openSettingsMenu];
-
-  // Open the "Account Settings" view.
-  [ChromeEarlGreyUI
-      tapSettingsMenuButton:chrome_test_util::SettingsAccountButton()];
-
-  // We're now in the "manage sync" view, and the signout button is at the very
-  // bottom. Scroll there.
-  id<GREYMatcher> scrollViewMatcher =
-      grey_accessibilityID(kManageSyncTableViewAccessibilityIdentifier);
-  [[EarlGrey selectElementWithMatcher:scrollViewMatcher]
-      performAction:grey_scrollToContentEdge(kGREYContentEdgeBottom)];
-
-  // Tap the "Sign out" button.
-  [[EarlGrey selectElementWithMatcher:
-                 grey_text(l10n_util::GetNSString(
-                     IDS_IOS_GOOGLE_ACCOUNT_SETTINGS_SIGN_OUT_ITEM))]
-      performAction:grey_tap()];
-
-  // Click on signout in the dialog.
-  [[EarlGrey
-      selectElementWithMatcher:
-          grey_allOf(chrome_test_util::AlertAction(l10n_util::GetNSString(
-                         IDS_IOS_SIGNOUT_DIALOG_SIGN_OUT_BUTTON)),
-                     grey_sufficientlyVisible(), nil)]
-      performAction:grey_tap()];
-
-  // Close the snackbar, so that it can't obstruct other UI items.
-  [SigninEarlGreyUI dismissSignoutSnackbar];
-
-  // Wait until the user is signed out. Use a longer timeout for cases where
-  // sign out also triggers a clear browsing data.
-  [ChromeEarlGrey
-      waitForUIElementToAppearWithMatcher:SettingsDoneButton()
-                                  timeout:base::test::ios::
-                                              kWaitForClearBrowsingDataTimeout];
-
-  [[EarlGrey selectElementWithMatcher:SettingsDoneButton()]
-      performAction:grey_tap()];
-  [SigninEarlGrey verifySignedOut];
 }
 
 // Opens the sign in screen and then cancel it by opening a new tab. Ensures
@@ -514,6 +484,11 @@ void SetSigninEnterprisePolicyValue(BrowserSigninMode signinMode) {
 // Opens the add account screen and then cancels it by opening a new tab.
 // Ensures that the add account screen is correctly dismissed. crbug.com/462200
 - (void)testSignInCancelAddAccount {
+  // TODO(crbug.com/429403548): Re-enable this flaky test on iOS below 26.
+  if (!base::ios::IsRunningOnIOS26OrLater()) {
+    EARL_GREY_TEST_DISABLED(@"Flaky on iOS below 26.");
+  }
+
   // Add an identity to avoid arriving on the Add Account screen when opening
   // sign-in.
   FakeSystemIdentity* fakeIdentity = [FakeSystemIdentity fakeIdentity1];
@@ -530,7 +505,8 @@ void SetSigninEnterprisePolicyValue(BrowserSigninMode signinMode) {
           IDS_IOS_ACCOUNT_IDENTITY_CHOOSER_ADD_ACCOUNT);
   [[EarlGrey selectElementWithMatcher:add_account_matcher]
       performAction:grey_tap()];
-  [ChromeEarlGreyUI waitForAppToIdle];
+  [ChromeEarlGrey waitForSufficientlyVisibleElementWithMatcher:
+                      grey_accessibilityID(kFakeAuthActivityViewIdentifier)];
 
   // Open new tab to cancel sign-in.
   GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
@@ -955,6 +931,12 @@ void SetSigninEnterprisePolicyValue(BrowserSigninMode signinMode) {
   // Tap the snackbar to make it disappear.
   [[EarlGrey selectElementWithMatcher:snackbarMatcher]
       performAction:grey_tap()];
+
+  // Wait for History Sync screen to be visible.
+  [ChromeEarlGrey
+      waitForSufficientlyVisibleElementWithMatcher:
+          grey_accessibilityID(kHistorySyncViewAccessibilityIdentifier)];
+
   [[EarlGrey
       selectElementWithMatcher:chrome_test_util::ButtonStackSecondaryButton()]
       performAction:grey_tap()];
@@ -989,9 +971,7 @@ void SetSigninEnterprisePolicyValue(BrowserSigninMode signinMode) {
       waitForSufficientlyVisibleElementWithMatcher:SettingsDoneButton()];
   [[EarlGrey selectElementWithMatcher:SettingsDoneButton()]
       performAction:grey_tap()];
-  [ChromeEarlGreyUI openSettingsMenu];
-
-  [ChromeEarlGreyUI tapSettingsMenuButton:SettingsAccountButton()];
+  [SigninEarlGreyUI openSyncSettings];
 
   // Check the user is not invited to enter the passphrase
   [[EarlGrey

@@ -7,7 +7,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/lens/lens_search_controller.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
 #include "content/public/browser/web_contents.h"
 
 class Profile;
@@ -32,7 +32,7 @@ class LensResultsPanelRouter {
   bool IsEntryShowing();
 
   // Returns the panel type of the results panel.
-  SidePanelEntry::PanelType GetPanelType() const;
+  SidePanelType GetPanelType() const;
 
   // Focuses the searchbox in the results panel.
   void FocusSearchbox();

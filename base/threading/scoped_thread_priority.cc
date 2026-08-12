@@ -35,37 +35,95 @@ PlatformThreadHandle PortableCurrentThreadHandle() {
 #endif
 }
 
+constinit thread_local internal::ScopedBoostPriorityBase* current_boost_scope =
+    nullptr;
+
 }  // namespace
 
-ScopedBoostPriority::ScopedBoostPriority(ThreadType target_thread_type) {
-  CHECK_LT(target_thread_type, ThreadType::kRealtimeAudio);
-  const ThreadType original_thread_type =
-      PlatformThread::GetCurrentThreadType();
-  const bool should_boost = original_thread_type < target_thread_type &&
-                            PlatformThread::CanChangeThreadType(
-                                original_thread_type, target_thread_type) &&
-                            PlatformThread::CanChangeThreadType(
-                                target_thread_type, original_thread_type);
-  if (should_boost) {
-    original_thread_type_.emplace(original_thread_type);
-    // Do not change the affinity, this is meant to make sure the thread runs,
-    // not that it changes which core can it can run on.
-    PlatformThread::SetCurrentThreadType(target_thread_type,
-                                         /* may_change_affinity = */ false);
+namespace internal {
+
+ScopedBoostPriorityBase::ScopedBoostPriorityBase(
+    PlatformThreadHandle thread_handle)
+    : initial_thread_type_(current_boost_scope &&
+                                   current_boost_scope->target_thread_type_
+                               ? *current_boost_scope->target_thread_type_
+                               : PlatformThread::GetCurrentThreadType()),
+      thread_handle_(thread_handle) {
+  previous_boost_scope_ = std::exchange(current_boost_scope, this);
+}
+
+ScopedBoostPriorityBase::~ScopedBoostPriorityBase() {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  if (current_boost_scope != nullptr) {
+    DCHECK_EQ(current_boost_scope, this);
+    current_boost_scope = previous_boost_scope_;
+  }
+  Reset();
+}
+
+PlatformThread::RaiseThreadTypeLease ScopedBoostPriorityBase::AdoptAsLease(
+    ThreadType lease_thread_type) && {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+
+  // Un-set `current_boost_scope` on the current thread while the priority
+  // override is still active on current thread.
+  DCHECK_EQ(current_boost_scope, this);
+  DCHECK_EQ(previous_boost_scope_, nullptr);
+  current_boost_scope = nullptr;
+
+  // Acquire standard lease, which expects that no ScopedBoostPriorityBase
+  // is active.
+  PlatformThread::RaiseThreadTypeLease lease(lease_thread_type);
+
+  // Remove OS priority override, which may noop if the priority is the same.
+  Reset();
+  return lease;
+}
+
+void ScopedBoostPriorityBase::Reset() {
+  if (thread_handle_.is_null()) {
+    return;
+  }
+  if (target_thread_type_) {
+    internal::RemoveThreadTypeOverride(
+        thread_handle_, priority_override_handle_,
+        previous_boost_scope_ && previous_boost_scope_->target_thread_type_
+            ? *previous_boost_scope_->target_thread_type_
+            : initial_thread_type_);
+    target_thread_type_ = std::nullopt;
   }
 }
 
-ScopedBoostPriority::~ScopedBoostPriority() {
-  if (original_thread_type_.has_value()) {
-    // See above, do not change the affinity.
-    PlatformThread::SetCurrentThreadType(original_thread_type_.value(),
-                                         /* may_change_affinity = */ false);
+bool ScopedBoostPriorityBase::ShouldBoostTo(
+    ThreadType target_thread_type) const {
+  return initial_thread_type_ < target_thread_type &&
+         PlatformThread::CanChangeThreadType(initial_thread_type_,
+                                             target_thread_type) &&
+         PlatformThread::CanChangeThreadType(target_thread_type,
+                                             initial_thread_type_);
+}
+
+bool ScopedBoostPriorityBase::CurrentThreadHasScope() {
+  return current_boost_scope != nullptr;
+}
+
+}  // namespace internal
+
+ScopedBoostPriority::ScopedBoostPriority(ThreadType target_thread_type)
+    : ScopedBoostPriorityBase(PlatformThread::CurrentHandle()) {
+  CHECK_LT(target_thread_type, ThreadType::kRealtimeAudio);
+  const bool should_boost = ShouldBoostTo(target_thread_type);
+  if (should_boost) {
+    target_thread_type_ = target_thread_type;
+    priority_override_handle_ =
+        internal::SetThreadTypeOverride(thread_handle_, target_thread_type);
   }
 }
+
+ScopedBoostPriority::~ScopedBoostPriority() = default;
 
 ScopedBoostablePriority::ScopedBoostablePriority()
-    : initial_thread_type_(PlatformThread::GetCurrentThreadType()),
-      thread_handle_(PortableCurrentThreadHandle())
+    : ScopedBoostPriorityBase(PortableCurrentThreadHandle())
 #if BUILDFLAG(IS_WIN)
       ,
       scoped_handle_(thread_handle_.platform_handle())
@@ -74,68 +132,27 @@ ScopedBoostablePriority::ScopedBoostablePriority()
 }
 
 ScopedBoostablePriority::~ScopedBoostablePriority() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  // Reset before `scoped_handle_` is destroyed.
   Reset();
 }
 
 bool ScopedBoostablePriority::BoostPriority(ThreadType target_thread_type) {
   CHECK_LT(target_thread_type, ThreadType::kRealtimeAudio);
-  if (thread_handle_.is_null()) {
+  if (thread_handle_.is_null() || target_thread_type_) {
     return false;
   }
-  const bool should_boost = target_thread_type > initial_thread_type_ &&
-                            PlatformThread::CanChangeThreadType(
-                                initial_thread_type_, target_thread_type) &&
-                            PlatformThread::CanChangeThreadType(
-                                target_thread_type, initial_thread_type_);
+  const bool should_boost = ShouldBoostTo(target_thread_type);
   if (!should_boost) {
     return false;
   }
-  if (did_override_priority_) {
-    return false;
-  }
-  did_override_priority_ = true;
+  target_thread_type_ = target_thread_type;
   priority_override_handle_ =
       internal::SetThreadTypeOverride(thread_handle_, target_thread_type);
   return priority_override_handle_;
 }
 
 void ScopedBoostablePriority::Reset() {
-  if (thread_handle_.is_null()) {
-    return;
-  }
-  if (did_override_priority_) {
-    internal::RemoveThreadTypeOverride(
-        thread_handle_, priority_override_handle_, initial_thread_type_);
-    did_override_priority_ = false;
-  }
-}
-
-TaskMonitoringScopedBoostPriority::TaskMonitoringScopedBoostPriority(
-    ThreadType target_thread_type,
-    RepeatingCallback<bool()> should_boost_callback)
-    : target_thread_type_(target_thread_type),
-      should_boost_callback_(std::move(should_boost_callback)) {
-  CHECK(should_boost_callback_);
-}
-
-TaskMonitoringScopedBoostPriority::~TaskMonitoringScopedBoostPriority() {
-  scoped_boost_priority_.reset();
-}
-
-void TaskMonitoringScopedBoostPriority::WillProcessTask(
-    const PendingTask& pending_task,
-    bool was_blocked_or_low_priority) {
-  bool should_boost = should_boost_callback_.Run();
-  if (scoped_boost_priority_.has_value() == should_boost) {
-    return;
-  }
-
-  if (should_boost) {
-    scoped_boost_priority_.emplace(target_thread_type_);
-  } else {
-    scoped_boost_priority_.reset();
-  }
+  ScopedBoostPriorityBase::Reset();
 }
 
 namespace internal {
@@ -159,35 +176,20 @@ ScopedMayLoadLibraryAtBackgroundPriority::
     return;
   }
 
-  const base::ThreadType thread_type = PlatformThread::GetCurrentThreadType();
-  if (thread_type == base::ThreadType::kBackground) {
-    original_thread_type_ = thread_type;
-    PlatformThread::SetCurrentThreadType(base::ThreadType::kDefault);
-
-    TRACE_EVENT_BEGIN0(
-        "base",
-        "ScopedMayLoadLibraryAtBackgroundPriority : Priority Increased");
-  }
+  boost_priority_.emplace(base::ThreadType::kDefault);
 #endif  // BUILDFLAG(IS_WIN)
 }
 
 ScopedMayLoadLibraryAtBackgroundPriority::
     ~ScopedMayLoadLibraryAtBackgroundPriority() {
-  // Trace events must be closed in reverse order of opening so that they nest
-  // correctly.
 #if BUILDFLAG(IS_WIN)
-  if (original_thread_type_) {
-    TRACE_EVENT_END0(
-        "base",
-        "ScopedMayLoadLibraryAtBackgroundPriority : Priority Increased");
-    PlatformThread::SetCurrentThreadType(original_thread_type_.value());
-  }
+  boost_priority_.reset();
 
   if (already_loaded_) {
     already_loaded_->store(true, std::memory_order_relaxed);
   }
 #endif  // BUILDFLAG(IS_WIN)
-  TRACE_EVENT_END0("base", "ScopedMayLoadLibraryAtBackgroundPriority");
+  TRACE_EVENT_END("base");
 }
 
 }  // namespace internal

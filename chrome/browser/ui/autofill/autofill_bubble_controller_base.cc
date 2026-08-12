@@ -6,15 +6,16 @@
 
 #include "chrome/browser/ui/autofill/autofill_bubble_base.h"
 #include "chrome/browser/ui/autofill/bubble_manager.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
-#include "chrome/browser/ui/views/page_action/page_action_controller.h"
-#include "chrome/browser/ui/views/page_action/page_action_properties_provider.h"
 #include "components/autofill/core/common/autofill_clock.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
+#include "chrome/browser/ui/page_action/page_action_properties_provider.h"
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 namespace autofill {
@@ -40,6 +41,10 @@ void AutofillBubbleControllerBase::OnVisibilityChanged(
   if (visibility == content::Visibility::HIDDEN) {
     HideBubble(/*initiated_by_bubble_manager=*/false);
   }
+}
+
+bool AutofillBubbleControllerBase::ShouldReshowOnTabVisible() const {
+  return false;
 }
 
 std::optional<PageActionIconType>
@@ -94,12 +99,7 @@ void AutofillBubbleControllerBase::UpdatePageActionIcon() {
 
   std::optional<actions::ActionId> action_id = GetActionIdForPageAction();
 
-  // Legacy path for unmigrated page actions or when migration disabled by
-  // feature flag.
-  if (!action_id.has_value() || !IsPageActionMigrated(*icon_type)) {
-    if (Browser* browser = chrome::FindBrowserWithTab(web_contents())) {
-      browser->window()->UpdatePageActionIcon(*icon_type);
-    }
+  if (!action_id.has_value()) {
     return;
   }
 
@@ -167,25 +167,27 @@ bool AutofillBubbleControllerBase::IsMouseHovered() const {
   return IsShowingBubble() && bubble_view_->IsMouseHovered();
 }
 
+bool AutofillBubbleControllerBase::IsBubbleManagerEnabled() const {
+#if BUILDFLAG(IS_ANDROID)
+  return false;
+#else
+  return BubbleManager::GetForWebContents(web_contents()) != nullptr;
+#endif
+}
+
 bool AutofillBubbleControllerBase::MaySetUpBubble() {
 #if BUILDFLAG(IS_ANDROID)
   return true;
 #else  // BUILDFLAG(IS_ANDROID)
-  if (!IsBubbleManagerEnabled()) {
-    return true;
-  }
-
   auto* manager = BubbleManager::GetForWebContents(web_contents());
-  return manager && !manager->HasConflictingPendingBubble(GetBubbleType());
+  return !manager || !manager->HasConflictingPendingBubble(GetBubbleType());
 #endif
 }
 
 void AutofillBubbleControllerBase::QueueOrShowBubble(bool force_show) {
 #if !BUILDFLAG(IS_ANDROID)
-  if (IsBubbleManagerEnabled()) {
-    if (auto* manager = BubbleManager::GetForWebContents(web_contents())) {
-      manager->RequestShowController(*this, force_show);
-    }
+  if (auto* manager = BubbleManager::GetForWebContents(web_contents())) {
+    manager->RequestShowController(*this, force_show);
     return;
   }
 #endif
@@ -206,8 +208,7 @@ void AutofillBubbleControllerBase::ResetBubbleViewAndInformBubbleManager() {
   bubble_view_ = nullptr;
 
 #if !BUILDFLAG(IS_ANDROID)
-  if (was_showing && base::FeatureList::IsEnabled(
-                         features::kAutofillShowBubblesBasedOnPriorities)) {
+  if (was_showing) {
     if (auto* manager = BubbleManager::GetForWebContents(web_contents())) {
       manager->OnBubbleHiddenByController(*this,
                                           allow_bubble_manager_to_show_next_);

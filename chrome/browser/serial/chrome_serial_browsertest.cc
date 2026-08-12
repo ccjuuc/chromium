@@ -13,8 +13,8 @@
 #include "chrome/browser/serial/serial_chooser_context.h"
 #include "chrome/browser/serial/serial_chooser_context_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/chooser_bubble_testapi.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -43,7 +43,8 @@ class SerialTest : public InProcessBrowserTest {
 
     mojo::PendingRemote<device::mojom::SerialPortManager> port_manager;
     port_manager_.AddReceiver(port_manager.InitWithNewPipeAndPassReceiver());
-    context_ = SerialChooserContextFactory::GetForProfile(browser()->profile());
+    context_ =
+        SerialChooserContextFactory::GetForProfile(browser()->GetProfile());
     context_->SetPortManagerForTesting(std::move(port_manager));
 
     GURL url = embedded_test_server()->GetURL("localhost", "/simple_page.html");

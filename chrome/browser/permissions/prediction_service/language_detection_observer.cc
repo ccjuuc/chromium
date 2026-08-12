@@ -4,6 +4,7 @@
 //
 #include "chrome/browser/permissions/prediction_service/language_detection_observer.h"
 
+#include "base/logging.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "components/permissions/permission_uma_util.h"
 #include "components/translate/core/browser/language_state.h"
@@ -76,9 +77,10 @@ void LanguageDetectionObserver::RemoveAsObserver() {
 void LanguageDetectionObserver::OnTimeout() {
   VLOG(1) << "[PermissionsAIv4] LanguageDetectionObserver::OnTimeout";
   RecordLanguageDetectionStatus(LanguageDetectionStatus::kNoResultDueToTimeout);
-  if (on_english_detected_callback_) {
+  if (fallback_callback_) {
     std::move(fallback_callback_).Run();
   }
+  on_english_detected_callback_.Reset();
   RemoveAsObserver();
 }
 
@@ -95,6 +97,7 @@ void LanguageDetectionObserver::OnLanguageDetermined(
            "English";
     RecordLanguageDetectionStatus(
         LanguageDetectionStatus::kDelayedDetectedEnglish);
+    fallback_callback_.Reset();
     std::move(on_english_detected_callback_).Run();
   } else if (on_english_detected_callback_) {
     VLOG(1)
@@ -102,6 +105,7 @@ void LanguageDetectionObserver::OnLanguageDetermined(
            "NOT English";
     RecordLanguageDetectionStatus(
         LanguageDetectionStatus::kDelayedDetectedNotEnglish);
+    on_english_detected_callback_.Reset();
     std::move(fallback_callback_).Run();
   }
   timeout_timer_.Stop();

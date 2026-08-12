@@ -30,21 +30,24 @@
 #include "chrome/browser/devtools/aida_client.h"
 #include "chrome/browser/devtools/devtools_availability_checker.h"
 #include "chrome/browser/devtools/devtools_eye_dropper.h"
-#if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/devtools/devtools_policy_dialog.h"
-#endif
 #include "chrome/browser/devtools/features.h"
 #include "chrome/browser/devtools/process_sharing_infobar_delegate.h"
 #include "chrome/browser/file_select_helper.h"
 #include "chrome/browser/infobars/confirm_infobar_creator.h"
+#include "chrome/browser/policy/chrome_policy_blocklist_service_factory.h"
 #include "chrome/browser/policy/developer_tools_policy_checker.h"
 #include "chrome/browser/policy/developer_tools_policy_checker_factory.h"
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
+#if BUILDFLAG(IS_MAC)
+#include "chrome/browser/renderer_host/chrome_render_widget_host_view_mac_history_swiping_control.h"
+#endif
 #include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/task_manager/web_contents_tags.h"
-#include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/prefs/prefs_tab_helper.h"
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
 #include "chrome/browser/ui/tabs/tab_group_deletion_dialog_controller.h"
@@ -64,7 +67,6 @@
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/sync_preferences/pref_service_syncable.h"
-#include "components/vector_icons/vector_icons.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "components/zoom/page_zoom.h"
 #include "components/zoom/zoom_controller.h"
@@ -83,6 +85,7 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host_view.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_features.h"
@@ -92,8 +95,6 @@
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
-#include "third_party/blink/public/common/input/web_gesture_event.h"
-#include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 #include "third_party/blink/public/public_buildflags.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -109,14 +110,16 @@
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/android/tab_model/tab_model.h"
-#include "chrome/browser/ui/android/tab_model/tab_model_list.h"
+#include "chrome/android/chrome_jni_headers/DevToolsActivity_jni.h"
 #else
+#include "chrome/browser/devtools/devtools_policy_dialog.h"
+#include "chrome/browser/devtools/devtools_ui_controller.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck crbug.com/40147906
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"  // nogncheck crbug.com/40147906
+#include "chrome/browser/ui/web_modal/browser_window_modal_dialog_delegate.h"  // nogncheck crbug.com/40147906
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
 #endif
@@ -124,6 +127,7 @@
 using blink::WebInputEvent;
 using content::BrowserThread;
 using content::DevToolsAgentHost;
+using content::GlobalRenderFrameHostId;
 using content::WebContents;
 
 namespace {
@@ -155,7 +159,7 @@ static const char kFallbackFrontendURL[] =
     "devtools://devtools/bundled/inspector.html";
 
 void SetPreferencesFromJson(Profile* profile, const std::string& json) {
-  std::optional<base::Value::Dict> parsed =
+  std::optional<base::DictValue> parsed =
       base::JSONReader::ReadDict(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!parsed) {
     return;
@@ -248,7 +252,7 @@ bool DevToolsToolboxDelegate::HandleKeyboardEvent(
   return false;
 #else
   if (event.windows_key_code == 0x08) {
-    // Do not navigate back in history on Windows (http://crbug.com/74156).
+    // Do not navigate back in history on Windows (http://crbug.com/40529649).
     return false;
   }
   BrowserWindow* window = GetInspectedBrowserWindow();
@@ -265,8 +269,10 @@ BrowserWindow* DevToolsToolboxDelegate::GetInspectedBrowserWindow() {
   if (!inspected_web_contents_) {
     return nullptr;
   }
-  Browser* browser = chrome::FindBrowserWithTab(inspected_web_contents_.get());
-  return browser ? browser->window() : nullptr;
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          inspected_web_contents_.get());
+  return browser ? BrowserWindow::FromBrowser(browser) : nullptr;
 }
 #endif
 
@@ -368,10 +374,10 @@ bool DevToolsEventForwarder::ForwardEvent(
     return false;
   }
 
-  base::Value::Dict event_data;
+  base::DictValue event_data;
   event_data.Set("type", event_type);
   event_data.Set("key", ui::KeycodeConverter::DomKeyToKeyString(
-                            static_cast<ui::DomKey>(event.dom_key)));
+                            ui::DomKey(event.dom_key)));
   event_data.Set("code", ui::KeycodeConverter::DomCodeToCodeString(
                              static_cast<ui::DomCode>(event.dom_code)));
   event_data.Set("keyCode", key_code);
@@ -517,8 +523,21 @@ DevToolsWindow::~DevToolsWindow() {
   capture_handle_.RunAndReset();
   owned_toolbox_web_contents_.reset();
 #if !BUILDFLAG(IS_ANDROID)
-  browser_list_observation_.Reset();
+  browser_collection_observation_.Reset();
 #endif
+
+#if BUILDFLAG(IS_MAC)
+  // Activate the inspected browser when undocked DevTools closes, so focus
+  // returns to the window that opened DevTools (e.g., a PWA window).
+  if (!is_docked_ && inspected_browser_session_id_.is_valid()) {
+    BrowserWindowInterface* const browser =
+        GlobalBrowserCollection::GetInstance()->FindBrowserWithID(
+            inspected_browser_session_id_);
+    if (browser && browser->GetWindow()) {
+      browser->GetWindow()->Activate();
+    }
+  }
+#endif  // BUILDFLAG(IS_MAC)
 
   DevToolsWindows& instances = GetDevToolsWindowInstances();
   auto it = std::ranges::find(instances, this);
@@ -530,7 +549,7 @@ DevToolsWindow::~DevToolsWindow() {
   }
   // Defer deletion of the main web contents, since we could get here
   // via RenderFrameHostImpl method that expects WebContents to live
-  // for some time. See http://crbug.com/997299 for details.
+  // for some time. See http://crbug.com/41477969 for details.
   if (owned_main_web_contents_) {
     base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(
         FROM_HERE, std::move(owned_main_web_contents_));
@@ -712,8 +731,7 @@ void DevToolsWindow::OpenDevToolsWindow(
   std::string type = agent_host->GetType();
 
   bool is_worker = type == DevToolsAgentHost::kTypeServiceWorker ||
-                   type == DevToolsAgentHost::kTypeSharedWorker ||
-                   type == DevToolsAgentHost::kTypeSharedStorageWorklet;
+                   type == DevToolsAgentHost::kTypeSharedWorker;
 
   if (!agent_host->GetFrontendURL().empty()) {
     DevToolsWindow::OpenExternalFrontend(profile, agent_host->GetFrontendURL(),
@@ -787,8 +805,7 @@ void DevToolsWindow::OpenExternalFrontend(
                     /* browser_connection */ false, opened_by);
   } else {
     bool is_worker = type == DevToolsAgentHost::kTypeServiceWorker ||
-                     type == DevToolsAgentHost::kTypeSharedWorker ||
-                     type == DevToolsAgentHost::kTypeSharedStorageWorklet;
+                     type == DevToolsAgentHost::kTypeSharedWorker;
 
     FrontendType frontend_type =
         is_worker ? kFrontendRemoteWorker
@@ -1020,41 +1037,32 @@ void DevToolsWindow::Show(const DevToolsToggleAction& action) {
   }
 
 #if BUILDFLAG(IS_ANDROID)
-  if (TabModelList::models().empty()) {
+  if (!owned_main_web_contents_ || launched_activity_) {
     return;
   }
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_DevToolsActivity_launchDevToolsActivity(
+      env, main_web_contents_->GetJavaWebContents());
 
-  TabModel* tab_model = TabModelList::models()[0];
-  if (!tab_model) {
-    return;
-  }
+  launched_activity_ = true;
 
-  if (!owned_main_web_contents_) {
-    return;
-  }
-  // TODO(crbug.com/406406862): Show it in a web app window instead of a tab.
-  tab_model->CreateTab(
-      nullptr,
-      OwnedMainWebContents::TakeWebContents(std::move(owned_main_web_contents_))
-          .release(),
-      TabModel::kInvalidIndex,
-      TabModel::TabLaunchType::FROM_RECENT_TABS_FOREGROUND,
-      /*should_pin=*/false);
   OverrideAndSyncDevToolsRendererPrefs();
 #else
   if (is_docked_) {
     DCHECK(can_dock_);
     content::WebContents* inspected_web_contents = GetInspectedWebContents();
     DCHECK(inspected_web_contents);
-    Browser* inspected_browser =
-        chrome::FindBrowserWithTab(inspected_web_contents);
+    BrowserWindowInterface* inspected_browser =
+        GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+            inspected_web_contents);
     DCHECK(inspected_browser);
 
     RegisterModalDialogManager(inspected_browser);
 
     // Tell inspected browser to update splitter and switch to inspected panel.
-    BrowserWindow* inspected_window = inspected_browser->window();
+    ui::BaseWindow* inspected_window = inspected_browser->GetWindow();
     main_web_contents_->SetDelegate(this);
+    main_web_contents_->SetIgnoreZoomGestures(true);
 
     // Inspected tab needs to be activated, however, this cannot be done from
     // here because TabStripModel does not allow reentrancy for its public
@@ -1063,7 +1071,10 @@ void DevToolsWindow::Show(const DevToolsToggleAction& action) {
         FROM_HERE, base::BindOnce(&DevToolsWindow::ActivateInspectedTab,
                                   weak_factory_.GetWeakPtr()));
 
-    inspected_window->UpdateDevTools(inspected_web_contents);
+    if (auto* devtools_ui_controller =
+            DevtoolsUIController::From(inspected_browser)) {
+      devtools_ui_controller->UpdateDevtools(inspected_web_contents);
+    }
     main_web_contents_->SetInitialFocus();
     inspected_window->Show();
     // On Aura, focusing once is not enough. Do it again.
@@ -1115,13 +1126,14 @@ void DevToolsWindow::ActivateInspectedTab() {
     return;
   }
 
-  Browser* inspected_browser =
-      chrome::FindBrowserWithTab(inspected_web_contents);
+  BrowserWindowInterface* inspected_browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          inspected_web_contents);
   if (!inspected_browser) {
     return;
   }
 
-  TabStripModel* tab_strip_model = inspected_browser->tab_strip_model();
+  TabStripModel* tab_strip_model = inspected_browser->GetTabStripModel();
   if (tab_strip_model->GetActiveWebContents() != inspected_web_contents) {
     int inspected_tab_index =
         tab_strip_model->GetIndexOfWebContents(inspected_web_contents);
@@ -1195,13 +1207,15 @@ void DevToolsWindow::OnPageCloseCanceled(WebContents* contents) {
   DevToolsWindow::OnPageCloseCanceled(window->main_web_contents_);
 }
 
-DevToolsWindow::DevToolsWindow(FrontendType frontend_type,
-                               Profile* profile,
-                               std::unique_ptr<WebContents> main_web_contents,
-                               DevToolsUIBindings* bindings,
-                               WebContents* inspected_web_contents,
-                               bool can_dock,
-                               DevToolsOpenedByAction opened_by)
+DevToolsWindow::DevToolsWindow(
+    FrontendType frontend_type,
+    Profile* profile,
+    std::unique_ptr<WebContents> main_web_contents,
+    DevToolsUIBindings* bindings,
+    WebContents* inspected_web_contents,
+    bool can_dock,
+    DevToolsOpenedByAction opened_by,
+    [[maybe_unused]] SessionID inspected_browser_session_id)
     : frontend_type_(frontend_type),
       profile_(profile),
       main_web_contents_(main_web_contents.get()),
@@ -1222,6 +1236,9 @@ DevToolsWindow::DevToolsWindow(FrontendType frontend_type,
       ready_for_test_(false),
       opened_by_(opened_by),
       closed_by_(DevToolsClosedByAction::kUnknown) {
+#if BUILDFLAG(IS_MAC)
+  inspected_browser_session_id_ = inspected_browser_session_id;
+#endif  // BUILDFLAG(IS_MAC)
   // Set up delegate, so we get fully-functional window immediately.
   // It will not appear in UI though until |life_stage_ == kLoadCompleted|.
   main_web_contents_->SetDelegate(this);
@@ -1260,6 +1277,11 @@ DevToolsWindow::DevToolsWindow(FrontendType frontend_type,
   // Tag the DevTools main WebContents with its TaskManager specific UserData
   // so that it shows up in the task manager.
   task_manager::WebContentsTags::CreateForDevToolsContents(main_web_contents_);
+
+#if BUILDFLAG(IS_MAC)
+  history_swiper::HistorySwipingControl::CreateForWebContents(
+      main_web_contents_, base::BindRepeating([] { return false; }));
+#endif
 
   std::vector<base::RepeatingCallback<void(DevToolsWindow*)>> copy(
       GetCreationCallbacks());
@@ -1312,10 +1334,20 @@ void DevToolsWindow::OnPolicyUpdated(const policy::PolicyNamespace& ns,
 bool DevToolsWindow::AllowDevToolsFor(Profile* profile,
                                       content::WebContents* web_contents) {
   // Don't allow DevTools UI in kiosk mode, because the DevTools UI would be
-  // broken there. See https://crbug.com/514551 for context.
+  // broken there. See https://crbug.com/41191065 for context.
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kKioskMode)) {
     return false;
   }
+
+  PolicyBlocklistService* blocklist_service =
+      ChromePolicyBlocklistServiceFactory::GetForProfile(profile);
+  if (blocklist_service &&
+      blocklist_service->GetURLBlocklistState(
+          GURL(chrome::kChromeUIDevToolsURL)) ==
+          policy::URLBlocklist::URLBlocklistState::URL_IN_BLOCKLIST) {
+    return false;
+  }
+
   return IsInspectionAllowed(profile, web_contents);
 }
 
@@ -1335,18 +1367,28 @@ DevToolsWindow* DevToolsWindow::Create(
     return nullptr;
   }
 
+  SessionID inspected_browser_session_id = SessionID::InvalidValue();
 #if BUILDFLAG(IS_ANDROID)
   // Docking is not supported yet.
   can_dock = false;
 #else
   if (inspected_web_contents) {
     // Check for a place to dock.
-    Browser* browser = chrome::FindBrowserWithTab(inspected_web_contents);
-    if (!browser || !browser->window()->CanDockDevTools()) {
+    BrowserWindowInterface* browser =
+        GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+            inspected_web_contents);
+#if BUILDFLAG(IS_MAC)
+    if (browser) {
+      inspected_browser_session_id = browser->GetSessionID();
+    }
+#endif  // BUILDFLAG(IS_MAC)
+    DevtoolsUIController* devtools_ui_controller =
+        browser ? DevtoolsUIController::From(browser) : nullptr;
+    if (!devtools_ui_controller || !devtools_ui_controller->CanDockDevtools()) {
       can_dock = false;
     }
   }
-#endif
+#endif  // !BUILDFLAG(IS_ANDROID)
 
   // Create WebContents with devtools.
   GURL url(GetDevToolsURL(profile, frontend_type, frontend_url, can_dock, panel,
@@ -1367,7 +1409,8 @@ DevToolsWindow* DevToolsWindow::Create(
   }
   return new DevToolsWindow(frontend_type, profile,
                             std::move(main_web_contents), bindings,
-                            inspected_web_contents, can_dock, opened_by);
+                            inspected_web_contents, can_dock, opened_by,
+                            inspected_browser_session_id);
 }
 
 // static
@@ -1548,12 +1591,12 @@ WebContents* DevToolsWindow::AddNewContents(
   return nullptr;
 }
 
-void DevToolsWindow::WebContentsCreated(WebContents* source_contents,
-                                        int opener_render_process_id,
-                                        int opener_render_frame_id,
-                                        const std::string& frame_name,
-                                        const GURL& target_url,
-                                        WebContents* new_contents) {
+void DevToolsWindow::WebContentsCreated(
+    WebContents* source_contents,
+    const GlobalRenderFrameHostId& opener_id,
+    const std::string& frame_name,
+    const GURL& target_url,
+    WebContents* new_contents) {
   if (target_url.SchemeIs(content::kChromeDevToolsScheme) &&
       target_url.GetPath().rfind("device_mode_emulation_frame.html") !=
           std::string::npos) {
@@ -1571,11 +1614,17 @@ void DevToolsWindow::WebContentsCreated(WebContents* source_contents,
     task_manager::WebContentsTags::CreateForDevToolsContents(
         toolbox_web_contents_);
 
+#if BUILDFLAG(IS_MAC)
+    history_swiper::HistorySwipingControl::CreateForWebContents(
+        toolbox_web_contents_, base::BindRepeating([] { return false; }));
+#endif
+
     // The toolbox holds a placeholder for the inspected WebContents. When the
     // placeholder is resized, a frame is requested. The inspected WebContents
     // is resized when the frame is rendered. Force rendering of the toolbox at
     // all times, to make sure that a frame can be rendered even when the
-    // inspected WebContents fully covers the toolbox. https://crbug.com/828307
+    // inspected WebContents fully covers the toolbox.
+    // https://crbug.com/41380417
     capture_handle_ = toolbox_web_contents_->IncrementCapturerCount(
         gfx::Size(),
         /*stay_hidden=*/false,
@@ -1638,13 +1687,6 @@ void DevToolsWindow::RunFileChooser(
                                    params);
 }
 
-bool DevToolsWindow::PreHandleGestureEvent(
-    WebContents* source,
-    const blink::WebGestureEvent& event) {
-  // Disable pinch zooming.
-  return blink::WebInputEvent::IsPinchGestureEventType(event.GetType());
-}
-
 void DevToolsWindow::ActivateWindow() {
   if (life_stage_ != kLoadCompleted) {
     return;
@@ -1682,7 +1724,12 @@ void DevToolsWindow::Inspect(scoped_refptr<content::DevToolsAgentHost> host) {
 }
 
 void DevToolsWindow::SetInspectedPageBounds(const gfx::Rect& rect) {
-  DevToolsContentsResizingStrategy strategy(rect);
+  devtools::DockSide dock_side = devtools::DockSide::kNone;
+  if (is_docked_) {
+    dock_side = DevToolsSettings::GetDockSide(profile_);
+  }
+
+  DevToolsContentsResizingStrategy strategy(dock_side, rect);
   if (contents_resizing_strategy_.Equals(strategy)) {
     return;
   }
@@ -1764,14 +1811,16 @@ int DevToolsWindow::GetDockStateForLogging() {
     return kUndocked;
   }
 
-  gfx::Rect inspected_page_bounds = contents_resizing_strategy_.bounds();
-  if (inspected_page_bounds.x() > 0) {
-    return kLeft;
+  switch (contents_resizing_strategy_.dock_side()) {
+    case devtools::DockSide::kLeft:
+      return kLeft;
+    case devtools::DockSide::kBottom:
+      return kBottom;
+    case devtools::DockSide::kRight:
+      return kRight;
+    case devtools::DockSide::kNone:
+      return kUndocked;
   }
-  gfx::Rect devtools_bounds =
-      main_web_contents_->GetRenderWidgetHostView()->GetViewBounds();
-  return inspected_page_bounds.width() == devtools_bounds.width() ? kBottom
-                                                                  : kRight;
 }
 
 int DevToolsWindow::GetOpenedByForLogging() {
@@ -1809,8 +1858,8 @@ void DevToolsWindow::OpenInNewTab(const GURL& url) {
     NOTIMPLEMENTED();
 #else
     chrome::ScopedTabbedBrowserDisplayer displayer(profile_);
-    chrome::AddSelectedTabWithURL(displayer.browser(), fixed_url,
-                                  ui::PAGE_TRANSITION_LINK);
+    chrome::AddSelectedTabWithURL(displayer.browser_window_interface(),
+                                  fixed_url, ui::PAGE_TRANSITION_LINK);
 #endif
   }
 }
@@ -1848,7 +1897,7 @@ void DevToolsWindow::SetEyeDropperActive(bool active) {
 }
 
 void DevToolsWindow::ColorPickedInEyeDropper(int r, int g, int b, int a) {
-  base::Value::Dict color;
+  base::DictValue color;
   color.Set("r", r);
   color.Set("g", g);
   color.Set("b", b);
@@ -1877,7 +1926,7 @@ infobars::ContentInfoBarManager* DevToolsWindow::GetInfoBarManager() {
 void DevToolsWindow::RenderProcessGone(bool crashed) {
   // Docked DevToolsWindow owns its main_web_contents_ and must delete it.
   // Undocked main_web_contents_ are owned and handled by browser.
-  // see crbug.com/369932
+  // see crbug.com/40363970
   if (is_docked_) {
     CloseContents(main_web_contents_);
   } else {
@@ -1917,11 +1966,13 @@ void DevToolsWindow::ShowCertificateViewer(const std::string& cert_chain) {
 #if BUILDFLAG(IS_ANDROID)
   NOTIMPLEMENTED();
 #else
-  Browser* browser = chrome::FindBrowserWithTab(inspected_contents);
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          inspected_contents);
   if (!browser) {
     return;
   }
-  gfx::NativeWindow parent = browser->window()->GetNativeWindow();
+  gfx::NativeWindow parent = browser->GetWindow()->GetNativeWindow();
   ::ShowCertificateViewer(inspected_contents, parent, cert.get());
 #endif
 }
@@ -1980,7 +2031,7 @@ void DevToolsWindow::CreateDevToolsBrowser() {
     resetPrefs = true;
   } else {
     // Reset to default if stored window size is too small.
-    const base::Value::Dict& devtoolsPlacement =
+    const base::DictValue& devtoolsPlacement =
         prefs->GetDict(prefs::kAppWindowPlacement)
             .Find(kDevToolsApp)
             ->GetDict();
@@ -1993,8 +2044,8 @@ void DevToolsWindow::CreateDevToolsBrowser() {
   }
   if (resetPrefs) {
     ScopedDictPrefUpdate update(prefs, prefs::kAppWindowPlacement);
-    base::Value::Dict& wp_prefs = update.Get();
-    base::Value::Dict dev_tools_defaults;
+    base::DictValue& wp_prefs = update.Get();
+    base::DictValue dev_tools_defaults;
     dev_tools_defaults.Set("left", 100);
     dev_tools_defaults.Set("top", 100);
     dev_tools_defaults.Set("right", 740);
@@ -2007,12 +2058,13 @@ void DevToolsWindow::CreateDevToolsBrowser() {
 #if BUILDFLAG(IS_ANDROID)
   NOTIMPLEMENTED();
 #else
-  if (Browser::GetCreationStatusForProfile(profile_) !=
-      Browser::CreationStatus::kOk) {
+  if (GetBrowserWindowCreationStatusForProfile(*profile_) !=
+      BrowserWindowInterface::CreationStatus::kOk) {
     return;
   }
-  browser_ =
-      Browser::Create(Browser::CreateParams::CreateForDevTools(profile_));
+  browser_ = CreateBrowserWindow(
+                 BrowserWindowCreateParams::CreateForDevTools(profile_))
+                 ->GetBrowserForMigrationOnly();
   browser_->GetTabStripModel()->AddWebContents(
       OwnedMainWebContents::TakeWebContents(
           std::move(owned_main_web_contents_)),
@@ -2120,12 +2172,13 @@ void DevToolsWindow::MaybeShowSharedProcessInfobar() {
     return;
   }
 
-  content::SiteInstance* site_instance =
-      inspected_web_contents->GetPrimaryMainFrame()->GetSiteInstance();
-  const GURL& site_url = site_instance->GetSiteURL();
-  if (site_url.SchemeIs(extensions::kExtensionScheme) ||
-      site_url.SchemeIs(content::kChromeDevToolsScheme) ||
-      site_url.SchemeIs(content::kChromeUIScheme)) {
+  const content::SecurityPrincipal& security_principal =
+      inspected_web_contents->GetPrimaryMainFrame()
+          ->GetSiteInstance()
+          ->GetSecurityPrincipal();
+  if (security_principal.SchemeIs(extensions::kExtensionScheme) ||
+      security_principal.SchemeIs(content::kChromeDevToolsScheme) ||
+      security_principal.SchemeIs(content::kChromeUIScheme)) {
     return;
   }
 
@@ -2159,13 +2212,14 @@ void DevToolsWindow::MaybeShowSharedProcessInfobar() {
 }
 
 #if !BUILDFLAG(IS_ANDROID)
-void DevToolsWindow::OnBrowserRemoved(Browser* browser) {
+void DevToolsWindow::OnBrowserClosed(BrowserWindowInterface* browser) {
   // If the modal dialog manager has this browser as its delegate, clear the
-  // reference.
+  // reference before it becomes dangling.
   web_modal::WebContentsModalDialogManager* dialog_manager =
       web_modal::WebContentsModalDialogManager::FromWebContents(
           main_web_contents_);
-  if (dialog_manager && dialog_manager->delegate() == browser) {
+  if (dialog_manager && dialog_manager->delegate() ==
+                            BrowserWindowModalDialogDelegate::From(browser)) {
     dialog_manager->SetDelegate(nullptr);
   }
 }
@@ -2182,11 +2236,9 @@ void DevToolsWindow::OnInfoBarRemoved(infobars::InfoBar* infobar,
 void DevToolsWindow::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
   if (!navigation_handle->HasCommitted() ||
-      navigation_handle->IsSameDocument() ||
-      !navigation_handle->IsInPrimaryMainFrame()) {
+      navigation_handle->IsSameDocument()) {
     return;
   }
-
   if (!AllowDevToolsFor(profile_, web_contents())) {
     main_web_contents_->ClosePage();
   }
@@ -2210,4 +2262,22 @@ void DevToolsWindow::MainWebContentRenderFrameHostChanged(
 
 raw_ptr<content::WebContents> DevToolsWindow::GetDevToolsWebContents() {
   return main_web_contents_;
+}
+
+void DevToolsWindow::AttachToBrowser(BrowserWindowInterface* browser) {
+  if (!owned_main_web_contents_) {
+    return;
+  }
+  std::unique_ptr<content::WebContents> owned_web_contents =
+      OwnedMainWebContents::TakeWebContents(
+          std::move(owned_main_web_contents_));
+  if (!owned_web_contents) {
+    return;
+  }
+  auto* tab_list = TabListInterface::From(browser);
+  if (!tab_list) {
+    return;
+  }
+  tab_list->InsertWebContentsAt(0, std::move(owned_web_contents), false,
+                                std::nullopt);
 }

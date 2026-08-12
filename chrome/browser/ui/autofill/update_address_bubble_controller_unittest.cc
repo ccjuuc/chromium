@@ -18,6 +18,7 @@
 #include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
 #include "components/autofill/core/browser/ui/addresses/autofill_address_util.h"
+#include "components/autofill/core/common/autofill_features.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
@@ -96,9 +97,9 @@ TEST_F(UpdateAddressBubbleControllerTest, UpdatingNonAccountAddress) {
   original_profile.SetInfo(EMAIL_ADDRESS, u"", GetLocale());
   auto controller = CreateController(profile, original_profile);
 
-  EXPECT_EQ(
-      controller->GetWindowTitle(/*has_empty_original_values=*/true),
-      l10n_util::GetStringUTF16(IDS_AUTOFILL_UPDATE_ADDRESS_PROMPT_TITLE));
+  EXPECT_EQ(controller->GetWindowTitle(/*has_empty_original_values=*/true),
+            l10n_util::GetStringUTF16(
+                IDS_AUTOFILL_ADD_NEW_INFO_ADDRESS_PROMPT_TITLE));
   EXPECT_TRUE(controller->GetFooterMessage().empty());
 }
 
@@ -115,9 +116,9 @@ TEST_F(UpdateAddressBubbleControllerTest, UpdatingAccountAddress) {
                             ->email);
   auto controller = CreateController(profile, original_profile);
 
-  EXPECT_EQ(
-      controller->GetWindowTitle(/*has_empty_original_values=*/true),
-      l10n_util::GetStringUTF16(IDS_AUTOFILL_UPDATE_ADDRESS_PROMPT_TITLE));
+  EXPECT_EQ(controller->GetWindowTitle(/*has_empty_original_values=*/true),
+            l10n_util::GetStringUTF16(
+                IDS_AUTOFILL_ADD_NEW_INFO_ADDRESS_PROMPT_TITLE));
   EXPECT_EQ(
       controller->GetFooterMessage(),
       l10n_util::GetStringFUTF16(
@@ -125,8 +126,6 @@ TEST_F(UpdateAddressBubbleControllerTest, UpdatingAccountAddress) {
 }
 
 TEST_F(UpdateAddressBubbleControllerTest, UpdatingAccountHomeAddress) {
-  base::test::ScopedFeatureList scoped_feature_list(
-      features::kAutofillEnableSupportForHomeAndWork);
   AutofillProfile profile = test::GetFullProfile();
   test_api(profile).set_record_type(AutofillProfile::RecordType::kAccount);
   AutofillProfile original_profile = test::GetFullProfile();
@@ -156,8 +155,6 @@ TEST_F(UpdateAddressBubbleControllerTest, UpdatingAccountHomeAddress) {
 }
 
 TEST_F(UpdateAddressBubbleControllerTest, UpdatingAccountWorkAddress) {
-  base::test::ScopedFeatureList scoped_feature_list(
-      features::kAutofillEnableSupportForHomeAndWork);
   AutofillProfile profile = test::GetFullProfile();
   test_api(profile).set_record_type(AutofillProfile::RecordType::kAccount);
   AutofillProfile original_profile = test::GetFullProfile();
@@ -187,8 +184,6 @@ TEST_F(UpdateAddressBubbleControllerTest, UpdatingAccountWorkAddress) {
 }
 
 TEST_F(UpdateAddressBubbleControllerTest, AddNewInfoToAccount) {
-  base::test::ScopedFeatureList scoped_feature_list(
-      features::kAutofillEnableSupportForHomeAndWork);
   AutofillProfile profile = test::GetFullProfile();
   test_api(profile).set_record_type(AutofillProfile::RecordType::kAccount);
   AutofillProfile original_profile = test::GetFullProfile();

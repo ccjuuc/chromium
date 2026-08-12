@@ -7,12 +7,12 @@
 #include "base/functional/bind.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/lens/lens_features.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
@@ -73,7 +73,7 @@ void LensRegionSearchInstructionsView::Init() {
 
   // Add the leading drag selection icon.
   auto selection_icon_view = std::make_unique<views::ImageView>(
-      ui::ImageModel::FromVectorIcon(views::kDragGeneralSelectionIcon,
+      ui::ImageModel::FromVectorIcon(views::kDragGeneralSelectionCustomIcon,
                                      kColorFeatureLensPromoBubbleForeground,
                                      layout_params_.vector_icon_size));
   AddChildView(std::move(selection_icon_view));
@@ -97,6 +97,8 @@ void LensRegionSearchInstructionsView::Init() {
           0, layout_params_.label_horizontal_distance, 0,
           layout_params_.label_horizontal_distance - kCloseButtonExtraMargin));
   label_ = AddChildView(std::move(label));
+  label_->SetBackgroundColor(kColorFeatureLensPromoBubbleBackground);
+  label_->SetEnabledColor(kColorFeatureLensPromoBubbleForeground);
 
   close_button_->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
   close_button_->SetProperty(
@@ -105,21 +107,13 @@ void LensRegionSearchInstructionsView::Init() {
   // rounded square.
   views::InstallCircleHighlightPathGenerator(close_button_.get());
   constructed_close_button_ = AddChildView(std::move(close_button_));
-}
-
-void LensRegionSearchInstructionsView::OnThemeChanged() {
-  BubbleDialogDelegateView::OnThemeChanged();
-  const auto* const color_provider = GetColorProvider();
-  auto foreground_color =
-      color_provider->GetColor(kColorFeatureLensPromoBubbleForeground);
-  auto background_color =
-      color_provider->GetColor(kColorFeatureLensPromoBubbleBackground);
-
-  label_->SetBackgroundColor(background_color);
-  label_->SetEnabledColor(foreground_color);
-  views::SetImageFromVectorIconWithColor(constructed_close_button_,
-                                         views::kIcCloseIcon, kCloseButtonSize,
-                                         foreground_color, foreground_color);
+  views::SetImageFromVectorIconWithColor(
+      constructed_close_button_,
+      ::features::IsRoundedIconsEnabled() ? views::kCloseIcon
+                                          : views::kIcCloseOldIcon,
+      kCloseButtonSize,
+      {kColorFeatureLensPromoBubbleForeground,
+       kColorFeatureLensPromoBubbleForeground});
 }
 
 gfx::Rect LensRegionSearchInstructionsView::GetBubbleBounds() {

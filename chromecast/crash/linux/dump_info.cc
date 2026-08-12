@@ -11,9 +11,9 @@
 #include <string_view>
 
 #include "base/compiler_specific.h"
-#include "base/i18n/time_formatting.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "base/values.h"
 
@@ -54,10 +54,10 @@ const char kPreviousLogFileKey[] = "previous_logfile";
 const char kBackgroundAppsKey[] = "background_apps";
 const char kServerUrl[] = "server_url";
 
-// Convenience wrapper around Value::Dict::FindString(), for easier use in if
-// statements. If `key` is a string in `dict`, writes it to `out` and returns
+// Convenience wrapper around base::DictValue::FindString(), for easier use in
+// if statements. If `key` is a string in `dict`, writes it to `out` and returns
 // true. Leaves `out` alone and returns false otherwise.
-bool FindString(const base::Value::Dict& dict,
+bool FindString(const base::DictValue& dict,
                 std::string_view key,
                 std::string& out) {
   const std::string* value = dict.FindString(key);
@@ -89,17 +89,22 @@ DumpInfo::DumpInfo(const std::string& crashed_process_dump,
 DumpInfo::~DumpInfo() {}
 
 base::Value DumpInfo::GetAsValue() const {
-  base::Value::Dict result;
+  base::DictValue result;
 
-  result.Set(kDumpTimeKey, base::UnlocalizedTimeFormatWithPattern(
-                               dump_time_, "yyyy-MM-dd HH:mm:ss"));
+  base::Time::Exploded exploded;
+  dump_time_.LocalExplode(&exploded);
+  result.Set(
+      kDumpTimeKey,
+      base::StringPrintf("%04d-%02d-%02d %02d:%02d:%02d", exploded.year,
+                         exploded.month, exploded.day_of_month, exploded.hour,
+                         exploded.minute, exploded.second));
 
   result.Set(kDumpKey, crashed_process_dump_);
   std::string uptime = base::NumberToString(params_.process_uptime);
   result.Set(kUptimeKey, uptime);
   result.Set(kLogfileKey, logfile_);
 
-  base::Value::List attachments_list;
+  base::ListValue attachments_list;
   for (const auto& attachment : attachments_) {
     attachments_list.Append(attachment);
   }
@@ -136,7 +141,7 @@ bool DumpInfo::ParseEntry(const base::Value* entry) {
   if (!entry)
     return false;
 
-  const base::Value::Dict* dict = entry->GetIfDict();
+  const base::DictValue* dict = entry->GetIfDict();
   if (!dict)
     return false;
 
@@ -163,7 +168,7 @@ bool DumpInfo::ParseEntry(const base::Value* entry) {
   size_t num_params = kNumRequiredParams;
 
   // Extract all other optional fields.
-  const base::Value::List* attachments_list = dict->FindList(kAttachmentsKey);
+  const base::ListValue* attachments_list = dict->FindList(kAttachmentsKey);
   if (attachments_list) {
     ++num_params;
     for (const auto& attachment : *attachments_list) {

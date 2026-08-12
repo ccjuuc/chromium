@@ -9,6 +9,8 @@
 #include <string>
 
 #include "base/functional/callback.h"
+#include "base/time/time.h"
+#include "base/values.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/payments_request_details.h"
 #include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
@@ -40,7 +42,7 @@ class UpdateVirtualCardEnrollmentRequest : public PaymentsRequest {
   std::string GetRequestUrlPath() override;
   std::string GetRequestContentType() override;
   std::string GetRequestContent() override;
-  void ParseResponse(const base::Value::Dict& response) override;
+  void ParseResponse(const base::DictValue& response) override;
   bool IsResponseComplete() override;
   void RespondToDelegate(
       PaymentsAutofillClient::PaymentsRpcResult result) override;
@@ -52,11 +54,11 @@ class UpdateVirtualCardEnrollmentRequest : public PaymentsRequest {
 
   // Modifies the base::Value that |request_dict| points to by setting all of
   // the fields needed for an Enroll request.
-  void BuildEnrollRequestDictionary(base::Value::Dict* request_dict);
+  void BuildEnrollRequestDictionary(base::DictValue* request_dict);
 
   // Modifies the base::Value that |request_dict| points to by setting all of
   // the fields needed for an Unenroll request.
-  void BuildUnenrollRequestDictionary(base::Value::Dict* request_dict);
+  void BuildUnenrollRequestDictionary(base::DictValue* request_dict);
 
   UpdateVirtualCardEnrollmentRequestDetails request_details_;
   base::OnceCallback<void(PaymentsAutofillClient::PaymentsRpcResult)> callback_;

@@ -7,8 +7,6 @@
 
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
-#include "chrome/browser/ui/views/digital_credentials/digital_identity_bluetooth_manual_dialog_controller.h"
-#include "chrome/browser/ui/views/digital_credentials/digital_identity_multi_step_dialog.h"
 #include "content/public/browser/cross_device_request_info.h"
 #include "content/public/browser/digital_credentials_cross_device.h"
 #include "content/public/browser/digital_identity_provider.h"
@@ -21,6 +19,9 @@ class RenderFrameHost;
 namespace device::cablev2 {
 enum class Event;
 }
+
+class DigitalIdentityBluetoothManualDialogController;
+class DigitalIdentityMultiStepDialog;
 
 // Desktop-specific implementation of `DigitalIdentityProvider`. Uses FIDO
 // hybrid flow to retrieve credentials stored on a mobile device.
@@ -48,7 +49,7 @@ class DigitalIdentityProviderDesktop : public content::DigitalIdentityProvider {
               base::ValueView request,
               DigitalIdentityCallback callback) override;
 
- private:
+ protected:
   // Shared implementation between `Request()` and `Create()` above.
   void Transact(content::WebContents* web_contents,
                 RequestInfo::RequestType request_type,
@@ -56,6 +57,31 @@ class DigitalIdentityProviderDesktop : public content::DigitalIdentityProvider {
                 base::ValueView request,
                 DigitalIdentityCallback callback);
 
+  // Shows dialog with QR code.
+  void ShowQrCodeDialog(const std::string& qr_url,
+                        RequestInfo::RequestType request_type);
+
+  void set_web_contents_for_testing(
+      base::WeakPtr<content::WebContents> web_contents) {
+    web_contents_ = web_contents;
+  }
+
+  void set_rp_origin_for_testing(const url::Origin& rp_origin) {
+    rp_origin_ = rp_origin;
+  }
+
+  void set_callback_for_testing(DigitalIdentityCallback callback) {
+    callback_ = std::move(callback);
+  }
+
+  // Ensures `dialog_` is initialized and returns it.
+  DigitalIdentityMultiStepDialog* EnsureDialogCreated();
+
+  // Called to end the request with an error.
+  void EndRequestWithError(
+      content::DigitalIdentityProvider::RequestStatusForMetrics);
+
+ private:
   // Called whenever some significant event occurs during the transaction.
   void OnEvent(const std::string& qr_url,
                RequestInfo::RequestType request_type,
@@ -71,12 +97,6 @@ class DigitalIdentityProviderDesktop : public content::DigitalIdentityProvider {
       base::expected<content::digital_credentials::cross_device::Response,
                      content::digital_credentials::cross_device::Error>);
 
-  // Ensures `dialog_` is initialized and returns it.
-  DigitalIdentityMultiStepDialog* EnsureDialogCreated();
-
-  // Shows dialog with QR code.
-  void ShowQrCodeDialog(const std::string& qr_url,
-                        RequestInfo::RequestType request_type);
 
   // Shows dialog which prompts user to manually turn on bluetooth.
   void ShowBluetoothManualTurnOnDialog();
@@ -100,9 +120,6 @@ class DigitalIdentityProviderDesktop : public content::DigitalIdentityProvider {
   // canceling the dialog.
   void OnCanceled();
 
-  // Called to end the request with an error.
-  void EndRequestWithError(
-      content::DigitalIdentityProvider::RequestStatusForMetrics);
 
   // The web contents to which the dialog is modal to.
   base::WeakPtr<content::WebContents> web_contents_;

@@ -38,6 +38,15 @@ TEST(GetKioskReceiverRequestTest, RelativeUrlWithoutConnectionId) {
   EXPECT_EQ(request.GetRelativeUrl(), "/v1/receivers/receiver_id");
 }
 
+TEST(GetKioskReceiverRequestTest, RelativeUrlWithEscapedReceiverId) {
+  GetKioskReceiverRequest request("../teachers/111/sessions/222:updateConfig?",
+                                  /*connection_id=*/std::nullopt,
+                                  base::DoNothing());
+  EXPECT_EQ(
+      request.GetRelativeUrl(),
+      "/v1/receivers/..%2Fteachers%2F111%2Fsessions%2F222%3AupdateConfig%3F");
+}
+
 TEST(GetKioskReceiverRequestTest, OnSuccess) {
   std::optional<::boca::KioskReceiver> response_body;
   GetKioskReceiverRequest request(
@@ -46,7 +55,7 @@ TEST(GetKioskReceiverRequestTest, OnSuccess) {
           [&response_body](std::optional<::boca::KioskReceiver> response) {
             response_body = std::move(response);
           }));
-  base::Value::Dict response_dict;
+  base::DictValue response_dict;
   response_dict.Set(boca::kRobotEmail, kRobotEmail);
   response_dict.Set(boca::kReceiverConnectionState, kReceiverState);
   request.OnSuccess(std::make_unique<base::Value>(std::move(response_dict)));

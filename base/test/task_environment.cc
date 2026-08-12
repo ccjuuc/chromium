@@ -165,7 +165,8 @@ class TaskEnvironment::TestTaskTracker
   // internal::ThreadPoolImpl::TaskTrackerImpl:
   void RunTask(internal::Task task,
                internal::TaskSource* sequence,
-               const TaskTraits& traits) override;
+               const TaskTraits& traits,
+               ThreadType thread_type) override;
   void BeginCompleteShutdown(base::WaitableEvent& shutdown_event) override;
   void AssertFlushForTestingAllowed() override;
 
@@ -478,10 +479,7 @@ TaskEnvironment::TaskEnvironment(
         sequence_manager_->CreateTaskQueue(sequence_manager::TaskQueue::Spec(
             sequence_manager::QueueName::TASK_ENVIRONMENT_DEFAULT_TQ));
     task_runner_ = task_queue_->task_runner();
-    sequence_manager_->SetDefaultTaskRunner(task_runner_);
-    if (mock_time_domain_) {
-      sequence_manager_->SetTimeDomain(mock_time_domain_.get());
-    }
+    sequence_manager_->SetDefaultTaskQueue(task_queue_.get());
     CHECK(base::SingleThreadTaskRunner::HasCurrentDefault())
         << "SingleThreadTaskRunner::CurrentDefaultHandle should've been set "
            "now.";
@@ -516,7 +514,8 @@ TaskEnvironment::TestTaskTracker* TaskEnvironment::CreateThreadPool() {
   auto thread_pool = std::make_unique<internal::ThreadPoolImpl>(
       std::string(), std::move(task_tracker),
       /*use_background_threads=*/false,
-      /*monitor_worker_thread_priorities=*/false);
+      /*monitor_worker_thread_priorities=*/false,
+      ThreadPoolInstance::RecordLockContention::kDisabled);
   ThreadPoolInstance::Set(std::move(thread_pool));
   DCHECK(!g_task_tracker);
   g_task_tracker = raw_task_tracker;
@@ -548,6 +547,10 @@ void TaskEnvironment::InitializeThreadPool() {
 
 void TaskEnvironment::CompleteInitialization() {
   DCHECK_CALLED_ON_VALID_THREAD(main_thread_checker_);
+
+  if (mock_time_domain_) {
+    sequence_manager_->SetTimeDomain(mock_time_domain_.get());
+  }
 
 #if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
   if (main_thread_type() == MainThreadType::IO) {
@@ -644,11 +647,13 @@ sequence_manager::SequenceManager* TaskEnvironment::sequence_manager() const {
 }
 
 void TaskEnvironment::DeferredInitFromSubclass(
-    scoped_refptr<base::SingleThreadTaskRunner> task_runner) {
+    sequence_manager::TaskQueue* task_queue) {
   DCHECK_CALLED_ON_VALID_THREAD(main_thread_checker_);
 
-  task_runner_ = std::move(task_runner);
-  sequence_manager_->SetDefaultTaskRunner(task_runner_);
+  if (task_queue) {
+    task_runner_ = task_queue->task_runner();
+    sequence_manager_->SetDefaultTaskQueue(task_queue);
+  }
   CompleteInitialization();
 }
 
@@ -685,14 +690,16 @@ void TaskEnvironment::RunUntilQuit() {
   DCHECK(run_until_quit_loop_)
       << "QuitClosure() not called before RunUntilQuit()";
 
-  const bool could_run_tasks = task_tracker_->AllowRunTasks();
+  // `task_tracker_` is only set if a ThreadPool exists.
+  const bool could_run_thread_pool_tasks =
+      task_tracker_ && task_tracker_->AllowRunTasks();
 
   run_until_quit_loop_->Run();
   // Make the next call to RunUntilQuit() use a new RunLoop. This also
   // invalidates all existing quit closures.
   run_until_quit_loop_.reset();
 
-  if (!could_run_tasks) {
+  if (task_tracker_ && !could_run_thread_pool_tasks) {
     EXPECT_TRUE(
         task_tracker_->DisallowRunTasks(TestTimeouts::action_max_timeout()))
         << "Could not bring ThreadPool back to ThreadPoolExecutionMode::QUEUED "
@@ -898,7 +905,9 @@ bool TaskEnvironment::NextTaskIsDelayed() const {
 
 void TaskEnvironment::DescribeCurrentTasks() const {
   DCHECK_CALLED_ON_VALID_THREAD(main_thread_checker_);
-  LOG(INFO) << task_tracker_->DescribeRunningTasks();
+  if (task_tracker_) {
+    LOG(INFO) << task_tracker_->DescribeRunningTasks();
+  }
   LOG(INFO) << sequence_manager_->DescribeAllPendingTasks();
 }
 
@@ -1016,7 +1025,8 @@ bool TaskEnvironment::TestTaskTracker::DisallowRunTasks(TimeDelta timeout) {
 
 void TaskEnvironment::TestTaskTracker::RunTask(internal::Task task,
                                                internal::TaskSource* sequence,
-                                               const TaskTraits& traits) {
+                                               const TaskTraits& traits,
+                                               ThreadType thread_type) {
   const Location posted_from = task.posted_from;
   int task_number;
   {
@@ -1037,7 +1047,7 @@ void TaskEnvironment::TestTaskTracker::RunTask(internal::Task task,
   // test suites to run slowly.
   base::TimeTicks before = base::subtle::TimeTicksNowIgnoringOverride();
   internal::ThreadPoolImpl::TaskTrackerImpl::RunTask(std::move(task), sequence,
-                                                     traits);
+                                                     traits, thread_type);
   base::TimeTicks after = base::subtle::TimeTicksNowIgnoringOverride();
 
   const TimeDelta kTimeout = TestTimeouts::action_max_timeout();
@@ -1113,14 +1123,26 @@ TaskEnvironmentWithMainThreadPriorities::GetMainThreadTaskRunnerWithPriority(
 // static
 sequence_manager::SequenceManager::PrioritySettings
 TaskEnvironmentWithMainThreadPriorities::CreateBaseTaskPrioritySettings() {
-  return sequence_manager::SequenceManager::PrioritySettings(
+  auto settings = sequence_manager::SequenceManager::PrioritySettings(
       kMaxPriority + 1, GetDefaultQueuePriority());
+  settings.SetThreadTypeMapping(&TaskPriorityToThreadType);
+  return settings;
 }
 
 // static
 constexpr sequence_manager::TaskQueue::QueuePriority
 TaskEnvironmentWithMainThreadPriorities::GetDefaultQueuePriority() {
   return BaseTaskPriorityToQueuePriority(TaskPriority::USER_BLOCKING);
+}
+
+// static
+constexpr ThreadType
+TaskEnvironmentWithMainThreadPriorities::TaskPriorityToThreadType(
+    QueuePriority priority) {
+  if (priority == BaseTaskPriorityToQueuePriority(TaskPriority::BEST_EFFORT)) {
+    return ThreadType::kBackground;
+  }
+  return ThreadType::kDefault;
 }
 
 // static
@@ -1139,10 +1161,6 @@ TaskEnvironmentWithMainThreadPriorities::BaseTaskPriorityToQueuePriority(
 }
 
 void TaskEnvironmentWithMainThreadPriorities::InitTaskQueues() {
-  if (GetMockTimeDomain()) {
-    sequence_manager()->SetTimeDomain(GetMockTimeDomain());
-  }
-
   static_assert(BaseTaskPriorityToQueuePriority(TaskPriority::HIGHEST) == 0u,
                 "TaskPriority::HIGHEST should map to smallest QueuePriority.");
   static_assert(
@@ -1174,8 +1192,7 @@ void TaskEnvironmentWithMainThreadPriorities::InitTaskQueues() {
         sequence_manager::TaskQueue::Spec(queue_name));
     task_queues_[queue_priority]->SetQueuePriority(queue_priority);
   }
-  DeferredInitFromSubclass(
-      task_queues_[GetDefaultQueuePriority()]->task_runner());
+  DeferredInitFromSubclass(task_queues_[GetDefaultQueuePriority()].get());
 }
 
 }  // namespace base::test

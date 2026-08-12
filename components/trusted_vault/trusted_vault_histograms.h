@@ -21,7 +21,7 @@ enum class TrustedVaultHintDegradedRecoverabilityChangedReasonForUMA {
   kPersistentAuthErrorResolved = 1,
   kMaxValue = kPersistentAuthErrorResolved,
 };
-// LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:TrustedVaultHintDegradedRecoverabilityChangedReason)
+// LINT.ThenChange(/tools/metrics/histograms/metadata/trusted_vault/enums.xml:TrustedVaultHintDegradedRecoverabilityChangedReason)
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
@@ -39,10 +39,6 @@ enum class TrustedVaultRecoveryFactorRegistrationStateForUMA {
   kRegistrationWithConstantKeyNotSupported = 7,
   kMaxValue = kRegistrationWithConstantKeyNotSupported,
 };
-// TODO(crbug.com/369980730): this is used in internals, replace usages with the
-// version above and delete this alias.
-using TrustedVaultDeviceRegistrationStateForUMA =
-    TrustedVaultRecoveryFactorRegistrationStateForUMA;
 // LINT.ThenChange(/tools/metrics/histograms/metadata/trusted_vault/enums.xml:TrustedVaultRecoveryFactorRegistrationState)
 
 // These values are persisted to logs. Entries should not be renumbered and
@@ -72,6 +68,8 @@ enum class TrustedVaultURLFetchReasonForUMA {
   kDownloadAuthenticationFactorsRegistrationState,
   kRegisterGpmPin,
   kRegisterICloudKeychain,
+  kDownloadGaiaPasswordPublicKey,
+  kRotateSharedKey,
 };
 
 // Used to provide UMA metric breakdowns.
@@ -156,14 +154,22 @@ enum class TrustedVaultListSecurityDomainMembersPinStatus {
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/trusted_vault/enums.xml:TrustedVaultListSecurityDomainMembersPinStatus)
 
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(TrustedVaultRecoveryFlowEndpoint)
+enum class TrustedVaultRecoveryFlowEndpoint {
+  kDesktop = 0,
+  kDesktopEmbedded = 1,
+  kMaxValue = kDesktopEmbedded,
+};
+// LINT.ThenChange(/tools/metrics/histograms/metadata/trusted_vault/enums.xml:TrustedVaultRecoveryFlowEndpoint)
+
+void RecordTrustedVaultRecoveryFlowTriggeredEndpoint(
+    TrustedVaultRecoveryFlowEndpoint endpoint);
+
 void RecordTrustedVaultHintDegradedRecoverabilityChangedReason(
     TrustedVaultHintDegradedRecoverabilityChangedReasonForUMA
         hint_degraded_recoverability_changed_reason);
-
-// TODO(crbug.com/369980730): this is used in internals, replace usages with the
-// version below and delete this one.
-void RecordTrustedVaultDeviceRegistrationState(
-    TrustedVaultDeviceRegistrationStateForUMA registration_state);
 
 void RecordTrustedVaultRecoveryFactorRegistrationState(
     LocalRecoveryFactorType local_recovery_factor_type,

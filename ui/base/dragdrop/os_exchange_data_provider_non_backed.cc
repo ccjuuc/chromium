@@ -10,7 +10,7 @@
 #include <string_view>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
+#include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/strings/utf_string_conversions.h"
@@ -71,13 +71,17 @@ void OSExchangeDataProviderNonBacked::SetString(std::u16string_view data) {
   formats_ |= OSExchangeData::STRING;
 }
 
-void OSExchangeDataProviderNonBacked::SetURL(const GURL& url,
-                                             std::u16string_view title) {
-  url_ = url;
-  title_ = title;
+void OSExchangeDataProviderNonBacked::SetURLs(
+    base::span<const ClipboardUrlInfo> url_infos) {
+  if (url_infos.empty()) {
+    return;
+  }
+  const auto& url_info = url_infos.front();
+  url_ = url_info.url;
+  title_ = url_info.title;
   formats_ |= OSExchangeData::URL;
 
-  SetString(base::UTF8ToUTF16(url.spec()));
+  SetString(base::UTF8ToUTF16(url_.spec()));
 }
 
 void OSExchangeDataProviderNonBacked::SetFilename(const base::FilePath& path) {
@@ -115,52 +119,33 @@ std::optional<std::u16string> OSExchangeDataProviderNonBacked::GetString()
   return string_;
 }
 
-std::optional<OSExchangeDataProvider::UrlInfo>
-OSExchangeDataProviderNonBacked::GetURLAndTitle(
+std::vector<ClipboardUrlInfo> OSExchangeDataProviderNonBacked::GetURLs(
     FilenameToURLPolicy policy) const {
+  std::vector<ClipboardUrlInfo> url_infos;
   if ((formats_ & OSExchangeData::URL) == 0) {
     if (std::optional<GURL> plaintext_url = GetPlainTextURL();
         plaintext_url.has_value()) {
       DCHECK(plaintext_url->is_valid());
-      return UrlInfo{std::move(plaintext_url).value(), std::u16string()};
-    } else if (GURL url; policy == FilenameToURLPolicy::CONVERT_FILENAMES &&
-                         GetFileURL(&url)) {
-      DCHECK(url.is_valid());
-      return UrlInfo{std::move(url), std::u16string()};
+      url_infos.push_back(
+          ClipboardUrlInfo{plaintext_url.value(), std::u16string()});
     }
-    return std::nullopt;
-  }
-
-  if (!url_.is_valid()) {
-    return std::nullopt;
-  }
-
-  return UrlInfo{url_, title_};
-}
-
-std::optional<std::vector<GURL>> OSExchangeDataProviderNonBacked::GetURLs(
-    FilenameToURLPolicy policy) const {
-  std::vector<GURL> local_urls;
-
-  if (std::optional<UrlInfo> url_info =
-          GetURLAndTitle(FilenameToURLPolicy::DO_NOT_CONVERT_FILENAMES);
-      url_info.has_value()) {
-    local_urls.push_back(url_info->url);
+  } else {
+    if (url_.is_valid()) {
+      url_infos.push_back(ClipboardUrlInfo{url_, title_});
+    }
   }
 
   if (policy == FilenameToURLPolicy::CONVERT_FILENAMES) {
     if (std::optional<std::vector<FileInfo>> fileinfos = GetFilenames();
         fileinfos.has_value()) {
       for (const auto& fileinfo : fileinfos.value()) {
-        local_urls.push_back(net::FilePathToFileURL(fileinfo.path));
+        url_infos.push_back(
+            ClipboardUrlInfo{net::FilePathToFileURL(fileinfo.path), u""});
       }
     }
   }
 
-  if (local_urls.size()) {
-    return local_urls;
-  }
-  return std::nullopt;
+  return url_infos;
 }
 
 std::optional<std::vector<FileInfo>>
@@ -201,14 +186,14 @@ bool OSExchangeDataProviderNonBacked::HasFile() const {
 
 bool OSExchangeDataProviderNonBacked::HasCustomFormat(
     const ClipboardFormatType& format) const {
-  return base::Contains(pickle_data_, format);
+  return pickle_data_.contains(format);
 }
 
 void OSExchangeDataProviderNonBacked::SetFileContents(
     const base::FilePath& filename,
-    const std::string& file_contents) {
+    base::span<const uint8_t> file_contents) {
   file_contents_filename_ = filename;
-  file_contents_ = file_contents;
+  file_contents_ = base::ToVector(file_contents);
 }
 
 std::optional<OSExchangeDataProvider::FileContentsInfo>
@@ -323,6 +308,8 @@ void OSExchangeDataProviderNonBacked::CopyData(
               : nullptr;
   provider->tainted_by_renderer_origin_ = tainted_by_renderer_origin_;
   provider->is_from_privileged_ = is_from_privileged_;
+  provider->drag_image_ = drag_image_;
+  provider->drag_image_offset_ = drag_image_offset_;
 }
 
 }  // namespace ui

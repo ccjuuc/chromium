@@ -27,7 +27,6 @@
 #include "ui/accessibility/platform/browser_accessibility_manager_win.h"
 #include "ui/accessibility/platform/test_ax_node_id_delegate.h"
 #include "ui/accessibility/platform/test_ax_platform_tree_manager_delegate.h"
-#include "ui/base/win/atl_module.h"
 
 namespace ui {
 
@@ -119,7 +118,6 @@ BrowserAccessibilityWinTest::BrowserAccessibilityWinTest() {}
 BrowserAccessibilityWinTest::~BrowserAccessibilityWinTest() {}
 
 void BrowserAccessibilityWinTest::SetUp() {
-  win::CreateATLModuleIfNeeded();
   test_browser_accessibility_delegate_ =
       std::make_unique<TestAXPlatformTreeManagerDelegate>();
 }
@@ -623,8 +621,225 @@ TEST_F(BrowserAccessibilityWinTest, TestTextBoundaries) {
                                            text.Receive()));
   EXPECT_EQ(text_value, base::WideToUTF8(std::wstring(text.Get())));
 
+  EXPECT_IA2_TEXT_AT_OFFSET(text_field_obj, 14, IA2_TEXT_BOUNDARY_WORD,
+                            /*expected_hr=*/S_OK, /*start=*/14, /*end=*/15,
+                            /*text=*/L"\n");
+
+  EXPECT_IA2_TEXT_AT_OFFSET(text_field_obj, 29, IA2_TEXT_BOUNDARY_WORD,
+                            /*expected_hr=*/S_OK, /*start=*/29, /*end=*/30,
+                            /*text=*/L"\n");
+
   // Delete the manager and test that all BrowserAccessibility instances are
   // deleted.
+  manager.reset();
+}
+
+TEST_F(BrowserAccessibilityWinTest, TestWordBoundariesWithNewline) {
+  // This test verifies that newline characters are treated as word boundaries
+  // in IA2_TEXT_BOUNDARY_WORD. It's based on the following accessibility tree
+  // dump from a textarea containing "Hi, how are you?\nHow's life?":
+  //
+  // Key nodes and attributes relevant to word boundaries:
+  //
+  // textField:
+  //   - value: 'Hi, how are you?<newline>How's life?'
+  //   - wordStarts: [0,4,8,12,17,23]
+  //   - wordEnds: [2,7,11,15,22,27]
+  //   - lineStarts: [0,17]
+  //   - lineEnds: [17,28]
+  //
+  // First line staticText:
+  //   - name: 'Hi, how are you?'
+  //   - wordStarts: [0,4,8,12]
+  //   - wordEnds: [2,7,11,15]
+  //
+  // First line inlineTextBox:
+  //   - name: 'Hi, how are you?'
+  //   - wordStarts: [0,2,4,8,12,15]
+  //   - wordEnds: [2,3,7,11,15,16]
+  //
+  // lineBreak:
+  //   - name: '<newline>'
+  //   - previousOnLineId: inlineTextBox:"Hi, how are you?"
+  //
+  // Second line staticText:
+  //   - name: 'How's life?'
+  //   - wordStarts: [0,6]
+  //   - wordEnds: [5,10]
+  //
+  // Second line inlineTextBox:
+  //   - name: 'How's life?'
+  //   - wordStarts: [0,6,10]
+  //   - wordEnds: [5,10,11]
+
+  std::string line1 = "Hi, how are you?";
+  std::string line2 = "How's life?";
+  std::string text_value = line1 + '\n' + line2;
+
+  AXNodeData root;
+  root.id = 1;
+  AXNodeData text_field;
+  text_field.id = 2;
+  AXNodeData generic_container;
+  generic_container.id = 3;
+  AXNodeData static_text1;
+  static_text1.id = 4;
+  AXNodeData inline_box1;
+  inline_box1.id = 5;
+  AXNodeData line_break;
+  line_break.id = 6;
+  AXNodeData static_text2;
+  static_text2.id = 7;
+  AXNodeData inline_box2;
+  inline_box2.id = 8;
+
+  root.role = ax::mojom::Role::kRootWebArea;
+  root.child_ids = {text_field.id};
+
+  text_field.role = ax::mojom::Role::kTextField;
+  text_field.AddState(ax::mojom::State::kEditable);
+  text_field.AddStringAttribute(ax::mojom::StringAttribute::kHtmlTag,
+                                "textarea");
+  text_field.SetValue(text_value);
+  text_field.AddState(ax::mojom::State::kMultiline);
+
+  text_field.AddIntListAttribute(ax::mojom::IntListAttribute::kLineStarts,
+                                 {0, 17});
+  text_field.AddIntListAttribute(ax::mojom::IntListAttribute::kWordStarts,
+                                 {0, 4, 8, 12, 17, 23});
+  text_field.AddIntListAttribute(ax::mojom::IntListAttribute::kWordEnds,
+                                 {2, 7, 11, 15, 22, 27});
+  text_field.AddIntListAttribute(ax::mojom::IntListAttribute::kLineEnds,
+                                 {17, 28});
+
+  text_field.child_ids = {generic_container.id};
+
+  generic_container.role = ax::mojom::Role::kGenericContainer;
+  generic_container.AddState(ax::mojom::State::kIgnored);
+  generic_container.child_ids = {static_text1.id, line_break.id,
+                                 static_text2.id};
+
+  static_text1.role = ax::mojom::Role::kStaticText;
+  static_text1.AddState(ax::mojom::State::kEditable);
+  static_text1.SetName(line1);
+  static_text1.child_ids = {inline_box1.id};
+
+  static_text1.AddIntListAttribute(ax::mojom::IntListAttribute::kWordStarts,
+                                   {0, 4, 8, 12});
+  static_text1.AddIntListAttribute(ax::mojom::IntListAttribute::kWordEnds,
+                                   {2, 7, 11, 15});
+
+  inline_box1.role = ax::mojom::Role::kInlineTextBox;
+  inline_box1.AddState(ax::mojom::State::kEditable);
+  inline_box1.SetName(line1);
+
+  inline_box1.AddIntListAttribute(ax::mojom::IntListAttribute::kWordStarts,
+                                  {0, 2, 4, 8, 12, 15});
+  inline_box1.AddIntListAttribute(ax::mojom::IntListAttribute::kWordEnds,
+                                  {2, 3, 7, 11, 15, 16});
+
+  inline_box1.AddIntAttribute(ax::mojom::IntAttribute::kNextOnLineId,
+                              line_break.id);
+
+  line_break.role = ax::mojom::Role::kLineBreak;
+  line_break.AddState(ax::mojom::State::kEditable);
+  line_break.SetName("\n");
+  line_break.AddBoolAttribute(ax::mojom::BoolAttribute::kIsLineBreakingObject,
+                              true);
+  line_break.AddIntAttribute(ax::mojom::IntAttribute::kPreviousOnLineId,
+                             inline_box1.id);
+
+  static_text2.role = ax::mojom::Role::kStaticText;
+  static_text2.AddState(ax::mojom::State::kEditable);
+  static_text2.SetName(line2);
+  static_text2.child_ids = {inline_box2.id};
+
+  static_text2.AddIntListAttribute(ax::mojom::IntListAttribute::kWordStarts,
+                                   {0, 6});
+  static_text2.AddIntListAttribute(ax::mojom::IntListAttribute::kWordEnds,
+                                   {5, 10});
+
+  inline_box2.role = ax::mojom::Role::kInlineTextBox;
+  inline_box2.AddState(ax::mojom::State::kEditable);
+  inline_box2.SetName(line2);
+
+  inline_box2.AddIntListAttribute(ax::mojom::IntListAttribute::kWordStarts,
+                                  {0, 6, 10});
+  inline_box2.AddIntListAttribute(ax::mojom::IntListAttribute::kWordEnds,
+                                  {5, 10, 11});
+
+  std::unique_ptr<BrowserAccessibilityManager> manager(
+      BrowserAccessibilityManager::Create(
+          MakeAXTreeUpdateForTesting(root, text_field, generic_container,
+                                     static_text1, inline_box1, line_break,
+                                     static_text2, inline_box2),
+          node_id_delegate_, test_browser_accessibility_delegate_.get()));
+
+  BrowserAccessibilityWin* root_obj =
+      ToBrowserAccessibilityWin(manager->GetBrowserAccessibilityRoot());
+  ASSERT_NE(nullptr, root_obj);
+  ASSERT_EQ(1U, root_obj->PlatformChildCount());
+
+  BrowserAccessibilityComWin* text_field_obj =
+      ToBrowserAccessibilityComWin(root_obj->PlatformGetChild(0));
+  ASSERT_NE(nullptr, text_field_obj);
+
+  LONG text_len;
+  EXPECT_EQ(S_OK, text_field_obj->get_nCharacters(&text_len));
+  EXPECT_EQ(28, text_len);
+
+  base::win::ScopedBstr text;
+  EXPECT_EQ(S_OK, text_field_obj->get_text(0, text_len, text.Receive()));
+  EXPECT_EQ(text_value, base::WideToUTF8(std::wstring(text.Get())));
+  text.Reset();
+
+  EXPECT_IA2_TEXT_AT_OFFSET(text_field_obj, 0, IA2_TEXT_BOUNDARY_WORD, S_OK, 0,
+                            2, L"Hi");
+
+  EXPECT_IA2_TEXT_AT_OFFSET(text_field_obj, 2, IA2_TEXT_BOUNDARY_WORD, S_OK, 2,
+                            4, L", ");
+
+  EXPECT_IA2_TEXT_AT_OFFSET(text_field_obj, 4, IA2_TEXT_BOUNDARY_WORD, S_OK, 4,
+                            8, L"how ");
+
+  EXPECT_IA2_TEXT_AT_OFFSET(text_field_obj, 8, IA2_TEXT_BOUNDARY_WORD, S_OK, 8,
+                            12, L"are ");
+
+  EXPECT_IA2_TEXT_AT_OFFSET(text_field_obj, 12, IA2_TEXT_BOUNDARY_WORD, S_OK,
+                            12, 15, L"you");
+
+  EXPECT_IA2_TEXT_AT_OFFSET(text_field_obj, 15, IA2_TEXT_BOUNDARY_WORD, S_OK,
+                            15, 17, L"?\n");
+
+  EXPECT_IA2_TEXT_BEFORE_OFFSET(text_field_obj, 16, IA2_TEXT_BOUNDARY_WORD,
+                                S_OK, 15, 16, L"?");
+
+  EXPECT_IA2_TEXT_AT_OFFSET(text_field_obj, 16, IA2_TEXT_BOUNDARY_WORD, S_OK,
+                            16, 17, L"\n");
+
+  EXPECT_IA2_TEXT_BEFORE_OFFSET(text_field_obj, 17, IA2_TEXT_BOUNDARY_WORD,
+                                S_OK, 16, 17, L"\n");
+
+  EXPECT_IA2_TEXT_AFTER_OFFSET(text_field_obj, 16, IA2_TEXT_BOUNDARY_WORD, S_OK,
+                               17, 23, L"How's ");
+
+  EXPECT_IA2_TEXT_AT_OFFSET(text_field_obj, 17, IA2_TEXT_BOUNDARY_WORD, S_OK,
+                            17, 23, L"How's ");
+
+  EXPECT_IA2_TEXT_AT_OFFSET(text_field_obj, 23, IA2_TEXT_BOUNDARY_WORD, S_OK,
+                            23, 27, L"life");
+
+  EXPECT_IA2_TEXT_AT_OFFSET(text_field_obj, 27, IA2_TEXT_BOUNDARY_WORD, S_OK,
+                            27, 28, L"?");
+
+  EXPECT_IA2_TEXT_AT_OFFSET(text_field_obj, -1, IA2_TEXT_BOUNDARY_WORD,
+                            E_INVALIDARG, 0, 0, nullptr);
+  EXPECT_IA2_TEXT_AT_OFFSET(text_field_obj, 28, IA2_TEXT_BOUNDARY_WORD,
+                            E_INVALIDARG, 0, 0, nullptr);
+
+  EXPECT_IA2_TEXT_AT_OFFSET(text_field_obj, 17, IA2_TEXT_BOUNDARY_WORD, S_OK,
+                            17, 23, L"How's ");
+
   manager.reset();
 }
 
@@ -3365,7 +3580,6 @@ TEST_F(BrowserAccessibilityWinTest, DISABLED_TestIAccessible2Relations) {
 }
 
 TEST_F(BrowserAccessibilityWinTest, UIACreateExtraAnnouncementNodesFails) {
-  AXPlatform::GetInstance().SetUiaProviderEnabled(true);
   AXNodeData root_data;
   root_data.id = 1;
   root_data.role = ax::mojom::Role::kGenericContainer;
@@ -3399,7 +3613,7 @@ TEST_F(BrowserAccessibilityWinTest, UIACreateExtraAnnouncementNodesFails) {
 }
 
 TEST_F(BrowserAccessibilityWinTest, CreateExtraAnnouncementNodes) {
-  AXPlatform::GetInstance().SetUiaProviderEnabled(false);
+  AXPlatform::GetInstance().DisableActiveUiaProvider();
 
   // Create AXNodeData objects for a simple document tree.
   AXNodeData root_data;
@@ -3523,7 +3737,7 @@ TEST_F(BrowserAccessibilityWinTest, CreateExtraAnnouncementNodes) {
 }
 
 TEST_F(BrowserAccessibilityWinTest, GetExtraAnnouncementNodes) {
-  AXPlatform::GetInstance().SetUiaProviderEnabled(false);
+  AXPlatform::GetInstance().DisableActiveUiaProvider();
   AXNodeData root_data;
   root_data.id = 1;
   root_data.role = ax::mojom::Role::kGenericContainer;
@@ -3555,7 +3769,7 @@ TEST_F(BrowserAccessibilityWinTest, GetExtraAnnouncementNodes) {
 }
 
 TEST_F(BrowserAccessibilityWinTest, IA2AriaNotifyFallback) {
-  AXPlatform::GetInstance().SetUiaProviderEnabled(false);
+  AXPlatform::GetInstance().DisableActiveUiaProvider();
   AXNodeData root_data;
   root_data.id = 1;
   root_data.role = ax::mojom::Role::kGenericContainer;
@@ -3583,7 +3797,7 @@ TEST_F(BrowserAccessibilityWinTest, IA2AriaNotifyFallback) {
 }
 
 TEST_F(BrowserAccessibilityWinTest, PlatformGetChild) {
-  AXPlatform::GetInstance().SetUiaProviderEnabled(false);
+  AXPlatform::GetInstance().DisableActiveUiaProvider();
   AXNodeData root_data;
   root_data.id = 1;
   root_data.role = ax::mojom::Role::kGenericContainer;
@@ -3630,7 +3844,7 @@ TEST_F(BrowserAccessibilityWinTest, PlatformGetChild) {
 }
 
 TEST_F(BrowserAccessibilityWinTest, PlatformGetLastChild) {
-  AXPlatform::GetInstance().SetUiaProviderEnabled(false);
+  AXPlatform::GetInstance().DisableActiveUiaProvider();
   AXNodeData root_data;
   root_data.id = 1;
   root_data.role = ax::mojom::Role::kGenericContainer;
@@ -3668,7 +3882,7 @@ TEST_F(BrowserAccessibilityWinTest, PlatformGetLastChild) {
 }
 
 TEST_F(BrowserAccessibilityWinTest, PlatformGetSiblings) {
-  AXPlatform::GetInstance().SetUiaProviderEnabled(false);
+  AXPlatform::GetInstance().DisableActiveUiaProvider();
   AXNodeData root_data;
   root_data.id = 1;
   root_data.role = ax::mojom::Role::kGenericContainer;
@@ -3786,6 +4000,132 @@ TEST_F(BrowserAccessibilityWinTest, OnExtendedPropertiesUsedAfterDestruction) {
   EXPECT_HRESULT_FAILED(text_field_node->nActions(&n_actions));
 
   text_field_node->SetDelegateForTesting(pre_delegate);
+}
+
+// Regression test for type confusion fix: verify get_hyperlink uses
+// QueryInterface and returns correct results for valid hyperlinks.
+TEST_F(BrowserAccessibilityWinTest, TestHyperlinkSafeTypeCheck) {
+  AXNodeData root;
+  root.id = 1;
+  root.role = ax::mojom::Role::kRootWebArea;
+  root.AddState(ax::mojom::State::kFocusable);
+
+  AXNodeData text;
+  text.id = 2;
+  text.role = ax::mojom::Role::kStaticText;
+  text.SetName("Hello ");
+
+  AXNodeData link;
+  link.id = 3;
+  link.role = ax::mojom::Role::kLink;
+  link.AddState(ax::mojom::State::kFocusable);
+  link.AddState(ax::mojom::State::kLinked);
+  link.SetName("world");
+  link.SetNameFrom(ax::mojom::NameFrom::kContents);
+
+  root.child_ids = {text.id, link.id};
+
+  std::unique_ptr<BrowserAccessibilityManager> manager(
+      BrowserAccessibilityManager::Create(
+          MakeAXTreeUpdateForTesting(root, text, link), node_id_delegate_,
+          test_browser_accessibility_delegate_.get()));
+
+  BrowserAccessibilityComWin* root_obj =
+      ToBrowserAccessibilityWin(manager->GetBrowserAccessibilityRoot())
+          ->GetCOM();
+
+  LONG hyperlink_count = -1;
+  EXPECT_EQ(S_OK, root_obj->get_nHyperlinks(&hyperlink_count));
+  EXPECT_EQ(1, hyperlink_count);
+
+  Microsoft::WRL::ComPtr<IAccessibleHyperlink> hyperlink;
+  EXPECT_EQ(S_OK, root_obj->get_hyperlink(0, &hyperlink));
+  EXPECT_NE(nullptr, hyperlink.Get());
+  hyperlink.Reset();
+
+  EXPECT_EQ(E_INVALIDARG, root_obj->get_hyperlink(1, &hyperlink));
+  EXPECT_EQ(E_INVALIDARG, root_obj->get_hyperlink(-1, &hyperlink));
+
+  manager.reset();
+}
+
+TEST_F(BrowserAccessibilityWinTest, TestAriaActionStaleIdref) {
+  // Create a tree where kActionsIds references both a valid node (id=2) and
+  // a non-existent node (id=99). This simulates a stale IDREF where the
+  // target element was removed between accessibility tree snapshots.
+  AXNodeData root;
+  root.id = 1;
+  root.role = ax::mojom::Role::kGenericContainer;
+  root.AddAction(ax::mojom::Action::kDoDefault);
+  root.AddIntListAttribute(ax::mojom::IntListAttribute::kActionsIds, {2, 99});
+  root.child_ids.push_back(2);
+
+  AXNodeData child;
+  child.id = 2;
+  child.role = ax::mojom::Role::kButton;
+  child.SetName("Edit");
+  child.AddStringAttribute(ax::mojom::StringAttribute::kHtmlId, "edit");
+
+  std::unique_ptr<BrowserAccessibilityManager> manager(
+      BrowserAccessibilityManager::Create(
+          MakeAXTreeUpdateForTesting(root, child), node_id_delegate_,
+          test_browser_accessibility_delegate_.get()));
+
+  BrowserAccessibilityComWin* root_obj =
+      ToBrowserAccessibilityWin(manager->GetBrowserAccessibilityRoot())
+          ->GetCOM();
+  ASSERT_NE(nullptr, root_obj);
+
+  Microsoft::WRL::ComPtr<IAccessibleAction> action;
+  ASSERT_HRESULT_SUCCEEDED(root_obj->QueryInterface(IID_PPV_ARGS(&action)));
+
+  // nActions includes both blink actions and aria-actions (even stale ones),
+  // since the count is based on the serialized kActionsIds list.
+  LONG n_actions = 0;
+  EXPECT_EQ(S_OK, action->nActions(&n_actions));
+  ASSERT_GE(n_actions, 2);  // At least 2 aria-actions exist.
+
+  // The last two indices are our aria-actions (valid id=2, stale id=99).
+  LONG valid_aria_index = n_actions - 2;
+  LONG stale_aria_index = n_actions - 1;
+
+  // Valid aria-action target (id=2) should work normally.
+  base::win::ScopedBstr name;
+  EXPECT_EQ(S_OK, action->get_name(valid_aria_index, name.Receive()));
+  EXPECT_NE(nullptr, name.Get());
+  name.Release();
+
+  base::win::ScopedBstr localized_name;
+  EXPECT_EQ(S_OK, action->get_localizedName(valid_aria_index,
+                                            localized_name.Receive()));
+  EXPECT_NE(nullptr, localized_name.Get());
+  localized_name.Release();
+
+  // Stale aria-action target (id=99) — GetFromID returns null.
+  // Methods should return E_FAIL instead of crashing.
+  EXPECT_EQ(E_FAIL, action->get_name(stale_aria_index, name.Receive()));
+  EXPECT_EQ(nullptr, name.Get());
+
+  EXPECT_EQ(E_FAIL, action->get_localizedName(stale_aria_index,
+                                              localized_name.Receive()));
+  EXPECT_EQ(nullptr, localized_name.Get());
+
+  EXPECT_EQ(E_FAIL, action->doAction(stale_aria_index));
+
+  // get_description and get_keyBinding don't dereference GetFromID, so they
+  // should still return S_FALSE for valid-range indices.
+  base::win::ScopedBstr description;
+  EXPECT_EQ(S_FALSE,
+            action->get_description(stale_aria_index, description.Receive()));
+  EXPECT_EQ(nullptr, description.Get());
+
+  BSTR* key_bindings = nullptr;
+  LONG n_bindings = 0;
+  EXPECT_EQ(S_FALSE, action->get_keyBinding(stale_aria_index, 100,
+                                            &key_bindings, &n_bindings));
+  EXPECT_EQ(0, n_bindings);
+
+  manager.reset();
 }
 
 }  // namespace ui

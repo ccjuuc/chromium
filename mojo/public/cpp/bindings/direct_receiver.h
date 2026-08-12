@@ -21,6 +21,7 @@
 #include "base/types/pass_key.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/system/handle.h"
 #include "mojo/public/cpp/system/message_pipe.h"
@@ -28,21 +29,24 @@
 
 namespace blink {
 class WidgetInputHandlerImpl;
-}
+}  // namespace blink
 
 namespace cc::mojo_embedder {
 class AsyncLayerTreeFrameSink;
-}
+}  // namespace cc::mojo_embedder
 
 namespace cc::slim {
 class FrameSinkImpl;
-}
+}  // namespace cc::slim
 
 namespace viz {
 class CompositorFrameSinkImpl;
 class FrameSinkManagerImpl;
-class ExternalBeginFrameSourceMojoMac;
 }  // namespace viz
+
+namespace network {
+class NetworkContext;
+}  // namespace network
 
 namespace mojo {
 
@@ -139,7 +143,7 @@ class DirectReceiverKey {
   friend class blink::WidgetInputHandlerImpl;
   friend class viz::CompositorFrameSinkImpl;
   friend class viz::FrameSinkManagerImpl;
-  friend class viz::ExternalBeginFrameSourceMojoMac;
+  friend class network::NetworkContext;
 };
 
 // DirectReceiver is a wrapper around the standard Receiver<T> type that always
@@ -173,10 +177,6 @@ class DirectReceiverKey {
 // DirectReceiver, passing pipes to your DirectReceiver is likely a BAD IDEA.
 template <typename T>
 class DirectReceiver {
-  static_assert(
-      T::kSupportsDirectReceiver,
-      "This interface must be marked with the [DirectReceiver] attribute.");
-
  public:
   // Creates a DirectReceiver bound to the current thread.
   DirectReceiver(DirectReceiverKey, T* impl) : receiver_(impl) {}
@@ -200,6 +200,18 @@ class DirectReceiver {
                                        : std::move(receiver));
   }
 
+  // Binds this as a DirectReceiver, connecting it to a new PendingRemote which
+  // is returned for transmission elsewhere.
+  //
+  // The DirectReceiver will schedule incoming |impl| method calls and
+  // disconnection notifications on the default SequencedTaskRunner.
+  [[nodiscard]] PendingRemote<T> BindNewPipeAndPassRemote() {
+    DCHECK(!is_bound());
+    PendingRemote<T> remote;
+    Bind(remote.InitWithNewPipeAndPassReceiver());
+    return remote;
+  }
+
   void ResetWithReason(uint32_t custom_reason_code,
                        std::string_view description) {
     receiver_.ResetWithReason(custom_reason_code, description);
@@ -216,6 +228,12 @@ class DirectReceiver {
 
 // Indicates whether DirectReceiver can be supported in the calling process.
 COMPONENT_EXPORT(MOJO_CPP_BINDINGS) bool IsDirectReceiverSupported();
+
+// Indicates whether the current thread can receive async IO either because it's
+// an IO thread or because an IOWatcher is exposed. Used for cases where
+// DirectReceiver is used on threads that can run on different message pumps on
+// different platforms (e.g. IO on Windows, but UI on Android).
+COMPONENT_EXPORT(MOJO_CPP_BINDINGS) bool IsAsyncIOSupported();
 
 #if BUILDFLAG(IS_WIN)
 

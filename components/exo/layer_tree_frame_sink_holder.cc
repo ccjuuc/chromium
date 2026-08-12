@@ -4,7 +4,8 @@
 
 #include "components/exo/layer_tree_frame_sink_holder.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/typed_macros.h"
 #include "cc/mojo_embedder/async_layer_tree_frame_sink.h"
@@ -69,8 +70,6 @@ void LayerTreeFrameSinkHolder::DeleteWhenLastResourceHasBeenReclaimed(
   viz::CompositorFrame frame;
   frame.metadata.begin_frame_ack =
       viz::BeginFrameAck::CreateManualAckWithDamage();
-  frame.metadata.frame_token =
-      holder->surface_tree_host_->GenerateNextFrameToken();
   frame.metadata.device_scale_factor =
       holder->frame_sink_->last_submitted_device_scale_factor();
   auto pass = viz::CompositorRenderPass::Create();
@@ -79,7 +78,7 @@ void LayerTreeFrameSinkHolder::DeleteWhenLastResourceHasBeenReclaimed(
                gfx::Rect(holder->frame_sink_->last_submitted_size_in_pixels()),
                gfx::Transform());
   frame.render_pass_list.push_back(std::move(pass));
-  holder->SubmitCompositorFrameToRemote(&frame);
+  holder->SubmitCompositorFrameToRemote(&frame, PresentationCallbacks());
 
   // Delete sink holder immediately if not waiting for resources to be
   // reclaimed.
@@ -98,18 +97,21 @@ void LayerTreeFrameSinkHolder::DeleteWhenLastResourceHasBeenReclaimed(
   lifetime_manager->AddObserver(holder.release());
 }
 
-void LayerTreeFrameSinkHolder::SubmitCompositorFrame(viz::CompositorFrame frame,
-                                                     bool submit_now) {
+void LayerTreeFrameSinkHolder::SubmitCompositorFrame(
+    viz::CompositorFrame frame,
+    PresentationCallbacks callbacks,
+    bool submit_now) {
   DiscardCachedFrame(&frame);
   ObserveBeginFrameSource(true);
 
   if (!ShouldSubmitFrameNow() && !submit_now) {
     cached_frame_ = std::move(frame);
+    cached_presentation_callbacks_ = std::move(callbacks);
     return;
   }
 
   ProcessFirstPendingBeginFrame(&frame);
-  SubmitCompositorFrameToRemote(&frame);
+  SubmitCompositorFrameToRemote(&frame, std::move(callbacks));
   UpdateSubmitFrameTimer();
 }
 
@@ -162,17 +164,17 @@ void LayerTreeFrameSinkHolder::ReclaimResources(
     // TODO(crbug.com/40269434): if viz reclaims the resources b/c the
     // viz::Surface never gets embedded, this prevents clients from receiving
     // release callbacks. This needs to be addressed.
-    if (base::Contains(last_frame_resources_, resource.id)) {
+    if (std::ranges::contains(last_frame_resources_, resource.id)) {
       continue;
     }
     in_use_resources_.erase(resource.id);
 
     // Skip resources that are also in the cached frame.
     if (cached_frame_ &&
-        base::Contains(cached_frame_->resource_list, resource.id,
-                       [](const viz::TransferableResource& resource) {
-                         return resource.id;
-                       })) {
+        std::ranges::contains(cached_frame_->resource_list, resource.id,
+                              [](const viz::TransferableResource& resource) {
+                                return resource.id;
+                              })) {
       continue;
     }
 
@@ -193,14 +195,15 @@ void LayerTreeFrameSinkHolder::DidReceiveCompositorFrameAck() {
   if (pending_submit_frames_ == 0) {
     while (!pending_discarded_frame_notifications_.empty()) {
       SendDiscardedFrameNotifications(
-          pending_discarded_frame_notifications_.front());
+          std::move(pending_discarded_frame_notifications_.front()));
       pending_discarded_frame_notifications_.pop();
     }
   }
 
   if (cached_frame_ && ShouldSubmitFrameNow()) {
     ProcessFirstPendingBeginFrame(&cached_frame_.value());
-    SubmitCompositorFrameToRemote(&cached_frame_.value());
+    SubmitCompositorFrameToRemote(&cached_frame_.value(),
+                                  std::move(cached_presentation_callbacks_));
     cached_frame_.reset();
     UpdateSubmitFrameTimer();
   }
@@ -214,9 +217,12 @@ void LayerTreeFrameSinkHolder::DidPresentCompositorFrame(
         frame_token, details.received_compositor_frame_timestamp);
   }
 
-  if (surface_tree_host_) {
-    surface_tree_host_->DidPresentCompositorFrame(
-        frame_token, details.presentation_feedback);
+  auto it = active_presentation_callbacks_.find(frame_token);
+  if (it != active_presentation_callbacks_.end()) {
+    for (auto& callback : it->second) {
+      callback.Run(details.presentation_feedback);
+    }
+    active_presentation_callbacks_.erase(it);
   }
 }
 
@@ -230,6 +236,14 @@ void LayerTreeFrameSinkHolder::DidLoseLayerTreeFrameSink() {
   last_frame_resources_.clear();
   in_use_resources_.clear();
   resource_manager_.ClearAllCallbacks();
+
+  for (auto& entry : active_presentation_callbacks_) {
+    for (auto& callback : entry.second) {
+      callback.Run(gfx::PresentationFeedback::Failure());
+    }
+  }
+  active_presentation_callbacks_.clear();
+
   is_lost_ = true;
 
   if (surface_tree_host_) {
@@ -246,6 +260,15 @@ void LayerTreeFrameSinkHolder::ClearPendingBeginFramesForTesting() {
   while (!pending_begin_frames_.empty()) {
     OnSendDeadlineExpired(/*update_timer=*/false);
   };
+}
+
+void LayerTreeFrameSinkHolder::ClearPendingCallbacks() {
+  for (auto& entry : active_presentation_callbacks_) {
+    for (auto& callback : entry.second) {
+      callback.Run(gfx::PresentationFeedback());
+    }
+  }
+  active_presentation_callbacks_.clear();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -292,7 +315,8 @@ bool LayerTreeFrameSinkHolder::OnBeginFrameDerivedImpl(
 
   if (cached_frame_ && ShouldSubmitFrameNow()) {
     ProcessFirstPendingBeginFrame(&cached_frame_.value());
-    SubmitCompositorFrameToRemote(&cached_frame_.value());
+    SubmitCompositorFrameToRemote(&cached_frame_.value(),
+                                  std::move(cached_presentation_callbacks_));
     cached_frame_.reset();
 
     DCHECK(!submit_frame_timer_.IsRunning());
@@ -306,8 +330,13 @@ bool LayerTreeFrameSinkHolder::OnBeginFrameDerivedImpl(
 void LayerTreeFrameSinkHolder::OnBeginFrameSourcePausedChanged(bool paused) {}
 
 void LayerTreeFrameSinkHolder::SubmitCompositorFrameToRemote(
-    viz::CompositorFrame* frame) {
+    viz::CompositorFrame* frame,
+    PresentationCallbacks callbacks) {
   DCHECK(!is_lost_);
+
+  frame->metadata.frame_token = GenerateNextFrameToken();
+  active_presentation_callbacks_[frame->metadata.frame_token] =
+      std::move(callbacks);
 
   if (frame_timing_history_) {
     frame_timing_history_->FrameSubmitted(
@@ -343,17 +372,17 @@ void LayerTreeFrameSinkHolder::DiscardCachedFrame(
 
     // Skip if the resource is also in `new_frame`.
     if (new_frame &&
-        base::Contains(new_frame->resource_list, resource.id,
-                       [](const viz::TransferableResource& resource) {
-                         return resource.id;
-                       })) {
+        std::ranges::contains(new_frame->resource_list, resource.id,
+                              [](const viz::TransferableResource& resource) {
+                                return resource.id;
+                              })) {
       continue;
     }
     resource_manager_.ReclaimResource(resource.ToReturnedResource());
   }
 
   if (pending_submit_frames_ == 0) {
-    SendDiscardedFrameNotifications(cached_frame_->metadata.frame_token);
+    SendDiscardedFrameNotifications(std::move(cached_presentation_callbacks_));
   } else {
     // If a frame (frame_1) sent to the remote side hasn't received ack, we
     // should hold off sending back ack to `surface_tree_host_` for the
@@ -361,7 +390,7 @@ void LayerTreeFrameSinkHolder::DiscardCachedFrame(
     // with frame tokens. Sending back an ack here for frame_2 will be
     // indistinguishable from an ack for frame_1.
     pending_discarded_frame_notifications_.push(
-        cached_frame_->metadata.frame_token);
+        std::move(cached_presentation_callbacks_));
   }
 
   const int64_t client_frame_trace_id =
@@ -382,14 +411,15 @@ void LayerTreeFrameSinkHolder::DiscardCachedFrame(
 }
 
 void LayerTreeFrameSinkHolder::SendDiscardedFrameNotifications(
-    uint32_t frame_token) {
+    PresentationCallbacks callbacks) {
   if (!surface_tree_host_) {
     return;
   }
 
   surface_tree_host_->DidReceiveCompositorFrameAck();
-  surface_tree_host_->DidPresentCompositorFrame(
-      frame_token, gfx::PresentationFeedback::Failure());
+  for (auto& callback : callbacks) {
+    callback.Run(gfx::PresentationFeedback::Failure());
+  }
 }
 
 void LayerTreeFrameSinkHolder::StopProcessingPendingFrames() {
@@ -407,7 +437,8 @@ void LayerTreeFrameSinkHolder::OnSendDeadlineExpired(bool update_timer) {
 
   if (cached_frame_) {
     ProcessFirstPendingBeginFrame(&cached_frame_.value());
-    SubmitCompositorFrameToRemote(&cached_frame_.value());
+    SubmitCompositorFrameToRemote(&cached_frame_.value(),
+                                  std::move(cached_presentation_callbacks_));
     cached_frame_.reset();
   } else {
     auto& pending_begin_frame = pending_begin_frames_.front();

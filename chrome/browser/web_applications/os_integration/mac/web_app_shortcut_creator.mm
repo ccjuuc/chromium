@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #import "chrome/browser/web_applications/os_integration/mac/web_app_shortcut_creator.h"
 
 #import <Cocoa/Cocoa.h>
@@ -20,9 +15,13 @@
 #include "base/apple/bridging.h"
 #include "base/apple/bundle_locations.h"
 #include "base/apple/foundation_util.h"
+#include "base/base_switches.h"
 #include "base/check.h"
 #include "base/check_is_test.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/safe_base_name.h"
@@ -32,6 +31,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/mac/mac_util.h"
+#include "base/memory/shared_memory_switch.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/process/launch.h"
 #include "base/strings/string_util.h"
@@ -39,6 +39,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
 #include "base/version_info/version_info.h"
+#include "build/buildflag.h"
 #include "chrome/browser/shortcuts/platform_util_mac.h"
 #include "chrome/browser/web_applications/mojom/web_app_shortcut_copier.mojom.h"
 #include "chrome/browser/web_applications/os_integration/mac/bundle_info_plist.h"
@@ -47,9 +48,12 @@
 #include "chrome/browser/web_applications/os_integration/mac/web_app_auto_login_util.h"
 #include "chrome/browser/web_applications/os_integration/mac/web_app_shortcut_mac.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_test_override.h"
+#include "chrome/common/chrome_features.h"
 #import "chrome/common/mac/app_mode_common.h"
 #include "components/variations/active_field_trials.h"
+#include "components/variations/variations_switches.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/common/content_descriptors.h"
 #include "content/public/common/content_switches.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/sync_call_restrictions.h"
@@ -211,7 +215,7 @@ bool AddPathToRPath(const base::FilePath& executable_path,
       LOG(ERROR) << "Reached end of commands before getting all commands";
       return false;
     }
-    memcpy(&cmd, &*commands_it, sizeof cmd);
+    UNSAFE_TODO(memcpy(&cmd, &*commands_it, sizeof cmd));
     if (commands.end() - commands_it < cmd.cmdsize) {
       LOG(ERROR) << "Command ends past the end of the load commands";
       return false;
@@ -221,9 +225,11 @@ bool AddPathToRPath(const base::FilePath& executable_path,
     if (cmd.cmd == LC_RPATH) {
       // Insert the new command, padding the extra space with `0` bytes.
       auto it = commands.insert(commands_it, new_rpath_command.cmdsize, 0);
-      memcpy(&*it, &new_rpath_command, sizeof new_rpath_command);
-      memcpy(&*it + sizeof new_rpath_command, new_rpath.value().data(),
-             new_rpath.value().size());
+      UNSAFE_TODO({
+        memcpy(&*it, &new_rpath_command, sizeof new_rpath_command);
+        memcpy(&*it + sizeof new_rpath_command, new_rpath.value().data(),
+               new_rpath.value().size());
+      });
 
       header.ncmds++;
       header.sizeofcmds += new_rpath_command.cmdsize;
@@ -258,7 +264,7 @@ bool AddPathToRPath(const base::FilePath& executable_path,
 #endif
 
 // Returns a reference to the static UpdateShortcuts lock.
-// See https://crbug.com/1090548 for more info.
+// See https://crbug.com/40133807 for more info.
 base::Lock& GetUpdateShortcutsLock() {
   static base::NoDestructor<base::Lock> lock;
   return *lock;
@@ -295,7 +301,10 @@ bool CopyStagingBundleToDestination(bool use_ad_hoc_signing_for_web_app_shims,
   channel.PrepareToPassRemoteEndpoint(&options, &command_line);
 
   // Ensure that the helper tool sees the same feature state as the browser.
-  variations::PopulateLaunchOptionsWithVariationsInfo(&command_line, &options);
+  base::shared_memory::SharedMemorySwitch shared_memory_switch(
+      switches::kFieldTrialHandle, 'fldt', kFieldTrialDescriptor);
+  variations::PopulateLaunchOptionsWithVariationsInfo(
+      &shared_memory_switch, &command_line, &options);
 
   base::Process copier_process = base::LaunchProcess(command_line, options);
   if (!copier_process.IsValid()) {
@@ -420,7 +429,8 @@ NSData* AppShimEntitlements() {
   // The magic constant and length are expected to be big endian.
   uint32_t* entitlement_header = reinterpret_cast<uint32_t*>(entitlement_bytes);
   entitlement_header[0] = CFSwapInt32HostToBig(kSecCodeMagicEntitlement);
-  entitlement_header[1] = CFSwapInt32HostToBig(sizeof(entitlement_bytes) - 1);
+  UNSAFE_TODO(entitlement_header[1] =
+                  CFSwapInt32HostToBig(sizeof(entitlement_bytes) - 1));
 
   return [NSData dataWithBytes:static_cast<void*>(entitlement_bytes)
                         length:sizeof(entitlement_bytes) - 1];
@@ -546,7 +556,8 @@ bool WebAppShortcutCreator::CreateShortcuts(
     WebAppAutoLoginUtil::GetInstance()->AddToLoginItems(updated_app_paths[0],
                                                         false);
   }
-  if (creation_reason == SHORTCUT_CREATION_BY_USER) {
+  if (creation_reason == SHORTCUT_CREATION_BY_USER &&
+      !base::FeatureList::IsEnabled(features::kWebAppInstallDialog)) {
     RevealAppShimInFinder(updated_app_paths[0]);
   }
   RecordCreateShortcut(CreateShortcutResult::kSuccess);
@@ -572,7 +583,7 @@ bool WebAppShortcutCreator::UpdateShortcuts(
   // UpdateShortcuts call at a time will run at once past here.  Not
   // protecting against that can result in multiple CreateShortcutsAt()
   // calls deleting and creating the app shim folder at once.
-  // See https://crbug.com/1090548 for more info.
+  // See https://crbug.com/40133807 for more info.
   base::AutoLock auto_lock(GetUpdateShortcutsLock());
 
   // Get the list of paths to (re)create by bundle id (wherever it was moved
@@ -611,7 +622,7 @@ void WebAppShortcutCreator::RevealAppShimInFinder(
       app_path);
   // Perform the call to NSWorkspace on the UI thread. Calling it on the IO
   // thread appears to cause crashes.
-  // https://crbug.com/1067367
+  // https://crbug.com/40124995
   content::GetUIThreadTaskRunner({})->PostTask(FROM_HERE, std::move(closure));
 }
 
@@ -760,7 +771,7 @@ void WebAppShortcutCreator::CreateShortcutsAt(
   // we must guarantee that no more than one CreateShortcutsAt() call will
   // ever run at a time.  We have an UpdateShortcuts lock for this purpose,
   // so check that lock has been acquired on this thread before proceeding.
-  // See https://crbug.com/1090548 for more info.
+  // See https://crbug.com/40133807 for more info.
   GetUpdateShortcutsLock().AssertAcquired();
 
   base::ScopedTempDir scoped_temp_dir;
@@ -1002,7 +1013,7 @@ bool WebAppShortcutCreator::UpdatePlist(const base::FilePath& app_path) const {
   // changes, instead of relying on localization, then this will need to change
   // to use GetShortcutBaseName, most likely only for non-legacy-apps
   // (in other words, revert to what the code looked like before on these
-  // lines). See also crbug.com/1021804.
+  // lines). See also crbug.com/40657267.
   base::FilePath app_name = app_path.BaseName().RemoveFinalExtension();
   plist[base::apple::CFToNSPtrCast(kCFBundleNameKey)] =
       base::apple::FilePathToNSString(app_name);

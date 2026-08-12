@@ -7,6 +7,7 @@
 
 #include "base/containers/queue.h"
 #include "base/functional/callback_forward.h"
+#include "base/memory/advanced_memory_safety_checks.h"
 #include "base/memory/raw_ptr.h"
 #include "content/browser/service_worker/service_worker_installed_script_reader.h"
 #include "content/common/content_export.h"
@@ -36,6 +37,8 @@ class ServiceWorkerVersion;
 class CONTENT_EXPORT ServiceWorkerInstalledScriptsSender
     : public blink::mojom::ServiceWorkerInstalledScriptsManagerHost,
       public ServiceWorkerInstalledScriptReader::Client {
+  ADVANCED_MEMORY_SAFETY_CHECKS();
+
  public:
   // |owner| must be an installed service worker.
   explicit ServiceWorkerInstalledScriptsSender(ServiceWorkerVersion* owner);
@@ -112,6 +115,11 @@ class CONTENT_EXPORT ServiceWorkerInstalledScriptsSender
 
   GURL current_sending_url_;
   base::queue<std::pair<int64_t /* resource_id */, GURL>> pending_scripts_;
+  // Queues script infos that are read from the disk cache before the connection
+  // to the renderer-side manager is established (i.e., before
+  // `CreateInfoAndBind()` is called). They will be transferred to the renderer
+  // immediately after the connection is established.
+  std::vector<blink::mojom::ServiceWorkerScriptInfoPtr> queued_script_infos_;
 };
 
 }  // namespace content

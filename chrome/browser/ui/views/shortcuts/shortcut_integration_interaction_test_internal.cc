@@ -8,7 +8,6 @@
 #include <set>
 
 #include "base/base_paths.h"
-#include "base/containers/contains.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path_watcher.h"
 #include "base/files/file_util.h"
@@ -89,7 +88,7 @@ class TrackedShortcut : public ui::TrackedElement {
     ui::ElementTracker::GetFrameworkDelegate()->NotifyElementShown(this);
   }
 
-  DECLARE_FRAMEWORK_SPECIFIC_METADATA()
+  DECLARE_SAFE_CAST_TARGET()
  private:
   void ContentChanged(const base::FilePath& path, bool error) {
     EXPECT_FALSE(error);
@@ -107,11 +106,11 @@ class TrackedShortcut : public ui::TrackedElement {
   base::WeakPtrFactory<TrackedShortcut> weak_ptr_factory_{this};
 };
 
-DEFINE_FRAMEWORK_SPECIFIC_METADATA(TrackedShortcut)
+DEFINE_SAFE_CAST_TARGET(TrackedShortcut)
 
 }  // namespace
 
-DEFINE_FRAMEWORK_SPECIFIC_METADATA(ShortcutIntegrationInteractionTestPrivate)
+DEFINE_SAFE_CAST_TARGET(ShortcutIntegrationInteractionTestPrivate)
 
 // This class monitors a specified directory, creating (and destroying)
 // `TrackedShortcut` instances for any files created and removed from the
@@ -171,7 +170,7 @@ class ShortcutIntegrationInteractionTestPrivate::ShortcutTracker {
     // `TrackedShortcut` instance.
     std::vector<TrackedShortcut*> new_shortcuts;
     for (const base::FilePath& path : current_paths) {
-      if (base::Contains(shortcuts_, path)) {
+      if (shortcuts_.contains(path)) {
         continue;
       }
       std::unique_ptr<TrackedShortcut> shortcut;
@@ -193,7 +192,7 @@ class ShortcutIntegrationInteractionTestPrivate::ShortcutTracker {
     // Remove any paths from `shortcuts_` that no longer exist, notifying
     // `ElementTracker` of any that were tracked.
     std::erase_if(shortcuts_, [&](const auto& item) {
-      bool should_erase = !base::Contains(current_paths, item.first);
+      bool should_erase = !current_paths.contains(item.first);
       if (should_erase) {
         ui::ElementTracker::GetFrameworkDelegate()->NotifyElementHidden(
             item.second.get());

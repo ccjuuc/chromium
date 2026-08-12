@@ -7,6 +7,8 @@
 #import "base/apple/bundle_locations.h"
 #import "base/apple/foundation_util.h"
 #import "base/ios/ios_util.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/incognito_state.h"
 
 @interface IncognitoBlockerSceneAgent () <SceneStateObserver>
 
@@ -27,7 +29,7 @@
   if (!_overlayView) {
     // Cover the largest area potentially shown in the app switcher, in case
     // the screenshot is reused in a different orientation or size class.
-    CGRect screenBounds = [[UIScreen mainScreen] bounds];
+    CGRect screenBounds = self.sceneState.window.bounds;
     CGFloat maxDimension =
         std::max(CGRectGetWidth(screenBounds), CGRectGetHeight(screenBounds));
     _overlayView = [[UIView alloc]
@@ -55,7 +57,8 @@
 - (void)sceneState:(SceneState*)sceneState
     transitionedToActivationLevel:(SceneActivationLevel)level {
   if (level == SceneActivationLevelBackground &&
-      (sceneState.incognitoContentVisible || sceneState.QRScannerVisible)) {
+      (sceneState.incognitoState.incognitoContentVisible ||
+       sceneState.QRScannerVisible)) {
     // If the current BVC is incognito, or if we are in the tab switcher and
     // there are incognito tabs visible, place a full screen view containing
     // the switcher background to hide any incognito content.

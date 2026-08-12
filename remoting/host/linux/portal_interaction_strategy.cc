@@ -14,10 +14,10 @@
 #include "remoting/host/action_executor.h"
 #include "remoting/host/audio_capturer.h"
 #include "remoting/host/delegating_desktop_display_info_monitor.h"
-#include "remoting/host/desktop_capturer_proxy.h"
 #include "remoting/host/linux/clipboard_portal.h"
 #include "remoting/host/linux/ei_input_injector.h"
 #include "remoting/host/linux/ei_keyboard_layout_monitor.h"
+#include "remoting/host/linux/lock_state_tracker.h"
 #include "remoting/host/linux/pipewire_desktop_capturer.h"
 #include "remoting/host/linux/pipewire_local_input_monitor.h"
 #include "remoting/host/linux/pipewire_mouse_cursor_monitor.h"
@@ -25,6 +25,7 @@
 #include "remoting/host/linux/portal_desktop_resizer.h"
 #include "remoting/host/linux/portal_display_info_loader.h"
 #include "remoting/host/linux/portal_remote_desktop_session.h"
+#include "remoting/protocol/desktop_capturer_proxy.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capturer.h"
 
 namespace remoting {
@@ -52,7 +53,8 @@ PortalInteractionStrategy::CreateInputInjector() {
   auto result = std::make_unique<EiInputInjector>(
       remote_desktop_->ei_session(),
       remote_desktop_->capture_stream_manager()->GetWeakPtr(),
-      std::make_unique<ClipboardPortal>());
+      std::make_unique<ClipboardPortal>(),
+      /*lock_state_tracker=*/nullptr);
   remote_desktop_->ei_session()->SetInputInjector(result->GetWeakPtr());
   return result;
 }
@@ -73,8 +75,6 @@ std::unique_ptr<DesktopCapturer> PortalInteractionStrategy::CreateVideoCapturer(
   HOST_LOG << "Creating desktop capturer for stream ID " << id;
   auto proxy = std::make_unique<DesktopCapturerProxy>(
       base::SequencedTaskRunner::GetCurrentDefault());
-  proxy->set_supports_frame_callbacks(
-      PipewireDesktopCapturer::kSupportsFrameCallbacks);
   proxy->set_capturer(std::make_unique<PipewireDesktopCapturer>(stream));
   return proxy;
 }
@@ -96,6 +96,7 @@ PortalInteractionStrategy::CreateActiveDisplayMonitor(
     base::RepeatingCallback<void(webrtc::ScreenId)> callback) {
   return nullptr;
 }
+
 std::unique_ptr<DesktopDisplayInfoMonitor>
 PortalInteractionStrategy::CreateDisplayInfoMonitor() {
   return std::make_unique<DelegatingDesktopDisplayInfoMonitor>(

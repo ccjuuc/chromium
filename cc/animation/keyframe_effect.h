@@ -18,7 +18,7 @@
 #include "cc/animation/element_animations.h"
 #include "cc/animation/keyframe_model.h"
 #include "cc/paint/element_id.h"
-#include "cc/trees/mutator_host_client.h"
+#include "cc/trees/mutator_host_delegate.h"
 #include "cc/trees/target_property.h"
 #include "ui/gfx/animation/keyframe/keyframe_effect.h"
 #include "ui/gfx/geometry/point_f.h"
@@ -26,7 +26,7 @@
 namespace cc {
 
 class Animation;
-enum class PauseCondition { kUnconditional, kAfterStart };
+
 struct PropertyAnimationState;
 
 // Specially designed for a custom property animation on a paint worklet
@@ -98,12 +98,18 @@ class CC_ANIMATION_EXPORT KeyframeEffect : public gfx::KeyframeEffect {
   void UpdateState(bool start_ready_keyframe_models, AnimationEvents* events);
   void UpdateTickingState();
 
-  void Pause(base::TimeTicks timeline_time,
-             PauseCondition = PauseCondition::kUnconditional);
+  // Sets the hold_time of each KeyframeModel to the specified value and
+  // clears the start time.
+  void Pause(base::TimeDelta hold_time,
+             gfx::KeyframeModel::RunState pause_run_state =
+                 gfx::KeyframeModel::RunState::PAUSED);
 
   void AddKeyframeModel(
       std::unique_ptr<gfx::KeyframeModel> keyframe_model) override;
-  void PauseKeyframeModel(int keyframe_model_id, base::TimeDelta time_offset);
+  // TODO(crbug.com/497867796): We don't need a per-keyframe Pause method.
+  // Delete this method.
+  void PauseKeyframeModelForTesting(int keyframe_model_id,
+                                    base::TimeDelta hold_time);
   void AbortKeyframeModel(int keyframe_model_id);
   void AbortKeyframeModelsWithProperty(TargetProperty::Type target_property,
                                        bool needs_completion);
@@ -114,7 +120,8 @@ class CC_ANIMATION_EXPORT KeyframeEffect : public gfx::KeyframeEffect {
 
   // Dispatches animation event to a keyframe model specified as part of the
   // event. Returns true if the event is dispatched, false otherwise.
-  bool DispatchAnimationEventToKeyframeModel(const AnimationEvent& event);
+  bool DispatchAnimationEventToKeyframeModel(
+      const AnimationPlaybackEvent& event);
 
   // Returns true if there are any KeyframeModels that have neither finished
   // nor aborted.
@@ -170,6 +177,10 @@ class CC_ANIMATION_EXPORT KeyframeEffect : public gfx::KeyframeEffect {
     replaced_group_ = replaced_group;
   }
 
+  std::optional<base::TimeTicks> last_tick_time() const {
+    return last_tick_time_;
+  }
+
  protected:
   // We override this because we have additional bookkeeping (eg, noting if
   // we've aborted a scroll animation, updating ticking state, sending updates
@@ -189,7 +200,7 @@ class CC_ANIMATION_EXPORT KeyframeEffect : public gfx::KeyframeEffect {
   std::optional<gfx::PointF> ScrollOffsetForAnimation() const;
   void GenerateEvent(AnimationEvents* events,
                      const KeyframeModel& keyframe_model,
-                     AnimationEvent::Type type,
+                     AnimationPlaybackEvent::Type type,
                      base::TimeTicks monotonic_time);
   void GenerateTakeoverEventForScrollAnimation(
       AnimationEvents* events,

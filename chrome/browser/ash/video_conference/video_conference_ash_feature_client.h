@@ -17,7 +17,7 @@ class VideoConferenceManagerAsh;
 // VideoConferenceAshFeatureClient is a client class for CrOS
 // videoconferencing.
 // It covers the individual features that are not covered by the browser or the
-// AppService. This includes: Vms (Crostini, PluginVm, Borealis), screen
+// AppService. This includes: VMs (Crostini and Borealis), screen
 // capturer, diction etc.
 class VideoConferenceAshFeatureClient : public VideoConferenceClientBase {
  public:
@@ -32,8 +32,7 @@ class VideoConferenceAshFeatureClient : public VideoConferenceClientBase {
 
   ~VideoConferenceAshFeatureClient() override;
 
-  void ReturnToApp(const base::UnguessableToken& token,
-                   ReturnToAppCallback callback) override;
+  bool ReturnToApp(const base::UnguessableToken& token) override;
 
   // Called when VmCameraMicManager change Camera/Mic accessing state.
   void OnVmDeviceUpdated(VmCameraMicManager::VmType vm_type,

@@ -18,17 +18,6 @@ using security_state::SecurityStateClient;
 
 namespace security_state::internal {
 
-SecurityStateModelDelegate* CreateSecurityStateModelDelegate() {
-  SecurityStateClient* security_state_client = GetSecurityStateClient();
-  if (!security_state_client) {
-    return nullptr;
-  }
-  // Transfer ownership to caller which should manage memory for the created
-  // security state client.
-  return security_state_client->MaybeCreateSecurityStateModelDelegate()
-      .release();
-}
-
 // This function is testable from the unit test file.
 MaliciousContentStatus GetMaliciousContentStatusForWebContentsInternal(
     content::WebContents* web_contents,
@@ -59,36 +48,40 @@ SecurityLevel GetSecurityLevelForWebContentsInternal(
   return delegate->GetSecurityLevel(web_contents);
 }
 
-// Provides thread-safe, on-demand access to the SecurityStateModelDelegate
-// instance. Returns nullptr if the delegate cannot be created.
-SecurityStateModelDelegate* GetSecurityStateModelDelegate() {
-  // Function-local static pointer initialized exactly once (thread-safe since
-  // C++11). This pointer once initialized is maintained in memory till the
-  // process terminates.
-  static SecurityStateModelDelegate* const delegate =
-      CreateSecurityStateModelDelegate();
-
-  return delegate;
-}
-
 }  // namespace security_state::internal
 
 // The actual JNI function, now a thin wrapper.
-static jint JNI_SecurityStateModel_GetMaliciousContentStatusForWebContents(
+static int32_t JNI_SecurityStateModel_GetMaliciousContentStatusForWebContents(
     JNIEnv* env,
     content::WebContents* web_contents) {
   return security_state::internal::
       GetMaliciousContentStatusForWebContentsInternal(
-          web_contents,
-          security_state::internal::GetSecurityStateModelDelegate());
+          web_contents, security_state::GetSecurityStateModelDelegate());
 }
 
 // The actual JNI function, now a thin wrapper.
-static jint JNI_SecurityStateModel_GetSecurityLevelForWebContents(
+static int32_t JNI_SecurityStateModel_GetSecurityLevelForWebContents(
     JNIEnv* env,
     content::WebContents* web_contents) {
   return security_state::internal::GetSecurityLevelForWebContentsInternal(
-      web_contents, security_state::internal::GetSecurityStateModelDelegate());
+      web_contents, security_state::GetSecurityStateModelDelegate());
+}
+
+static bool JNI_SecurityStateModel_IsHttpsOnlyModeUpgradedForWebContents(
+    JNIEnv* env,
+    content::WebContents* web_contents) {
+  if (!web_contents) {
+    return false;
+  }
+  SecurityStateModelDelegate* delegate =
+      security_state::GetSecurityStateModelDelegate();
+  if (!delegate) {
+    // Embedders without a delegate (e.g. WebView) never upgrade navigations
+    // via HTTPS-Only Mode.
+    return false;
+  }
+  return delegate->GetVisibleSecurityState(web_contents)
+      ->is_https_only_mode_upgraded;
 }
 
 DEFINE_JNI(SecurityStateModel)

@@ -10,7 +10,7 @@ import type {SwipeDirection} from './swipe_detector.js';
 import {SwipeDetector} from './swipe_detector.js';
 
 interface InProcessPdfPluginElement extends HTMLEmbedElement {
-  postMessage(message: any): void;
+  postMessage(message: unknown): void;
 }
 
 const channel = new MessageChannel();
@@ -56,6 +56,10 @@ plugin.addEventListener('message', e => {
 let isPresentationMode = false;
 channel.port1.onmessage = e => {
   switch (e.data.type) {
+    case 'focus':
+      plugin.focus();
+      return;
+
     case 'setPresentationMode':
       isPresentationMode = e.data.enablePresentationMode;
 
@@ -65,9 +69,6 @@ channel.port1.onmessage = e => {
         document.documentElement.className = 'fullscreen';
       } else {
         document.documentElement.className = '';
-
-        // Ensure that directional keys still work after exiting.
-        plugin.focus();
       }
       break;
 
@@ -295,5 +296,5 @@ function hasCtrlModifierOnly(e: KeyboardEvent): boolean {
 
 // TODO(crbug.com/40792950): Load from chrome://resources/js/util.js instead.
 function hasKeyModifiers(e: KeyboardEvent): boolean {
-  return !!(e.altKey || e.ctrlKey || e.metaKey || e.shiftKey);
+  return e.altKey || e.ctrlKey || e.metaKey || e.shiftKey;
 }

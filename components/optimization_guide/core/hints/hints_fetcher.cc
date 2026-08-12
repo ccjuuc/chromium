@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/command_line.h"
@@ -18,7 +19,6 @@
 #include "components/optimization_guide/core/hints/hints_processing_util.h"
 #include "components/optimization_guide/core/hints/store_update_data.h"
 #include "components/optimization_guide/core/optimization_guide_common.mojom.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_logger.h"
 #include "components/optimization_guide/core/optimization_guide_prefs.h"
@@ -40,6 +40,9 @@
 
 namespace optimization_guide {
 
+const char kOptimizationGuideLanguageOverrideHeaderKey[] =
+    "x-optimization-guide-language-override";
+
 namespace {
 
 // Returns the string that can be used to record histograms for the request
@@ -47,7 +50,7 @@ namespace {
 //
 // Keep in sync with RequestContext variant list in
 // //tools/metrics/histograms/metadata/optimization/histograms.xml.
-std::string GetStringNameForRequestContext(
+std::string_view GetStringNameForRequestContext(
     proto::RequestContext request_context) {
   switch (request_context) {
     case proto::RequestContext::CONTEXT_UNSPECIFIED:
@@ -75,6 +78,8 @@ std::string GetStringNameForRequestContext(
       return "ShopCard";
     case proto::RequestContext::CONTEXT_GLIC_ZERO_STATE_SUGGESTIONS:
       return "GlicZeroStateSuggestions";
+    case proto::RequestContext::CONTEXT_FILTER_EXECUTION:
+      return "FilterExecution";
   }
   NOTREACHED();
 }
@@ -83,8 +88,9 @@ void RecordRequestStatusHistogram(proto::RequestContext request_context,
                                   FetcherRequestStatus status) {
   DCHECK_NE(status, FetcherRequestStatus::kDeprecatedNetworkOffline);
   base::UmaHistogramEnumeration(
-      "OptimizationGuide.HintsFetcher.GetHintsRequest.RequestStatus." +
-          GetStringNameForRequestContext(request_context),
+      base::StrCat(
+          {"OptimizationGuide.HintsFetcher.GetHintsRequest.RequestStatus.",
+           GetStringNameForRequestContext(request_context)}),
       status);
 }
 
@@ -139,7 +145,7 @@ HintsFetcher::~HintsFetcher() {
 // static
 void HintsFetcher::ClearHostsSuccessfullyFetched(PrefService* pref_service) {
   pref_service->SetDict(prefs::kHintsFetcherHostsSuccessfullyFetched,
-                        base::Value::Dict());
+                        base::DictValue());
 }
 
 void HintsFetcher::SetTimeClockForTesting(const base::Clock* time_clock) {
@@ -336,13 +342,13 @@ bool HintsFetcher::FetchOptimizationGuideServiceHints(
   // Record histogram variants based on request context.
   // Histogram macro doesn't allow dynamic string. Use function.
   base::UmaHistogramCounts100(
-      "OptimizationGuide.HintsFetcher.GetHintsRequest.HostCount." +
-          GetStringNameForRequestContext(request_context_),
+      base::StrCat({"OptimizationGuide.HintsFetcher.GetHintsRequest.HostCount.",
+                    GetStringNameForRequestContext(request_context_)}),
       filtered_hosts.size());
 
   base::UmaHistogramCounts100(
-      "OptimizationGuide.HintsFetcher.GetHintsRequest.UrlCount." +
-          GetStringNameForRequestContext(request_context_),
+      base::StrCat({"OptimizationGuide.HintsFetcher.GetHintsRequest.UrlCount.",
+                    GetStringNameForRequestContext(request_context_)}),
       valid_urls.size());
 
   // It's safe to use |base::Unretained(this)| here because |this| owns
@@ -382,8 +388,9 @@ void HintsFetcher::HandleResponse(const std::string& get_hints_response_data,
         "OptimizationGuide.HintsFetcher.GetHintsRequest.HintCount",
         get_hints_response->hints_size());
     base::UmaHistogramMediumTimes(
-        "OptimizationGuide.HintsFetcher.GetHintsRequest.FetchLatency." +
-            GetStringNameForRequestContext(request_context_),
+        base::StrCat(
+            {"OptimizationGuide.HintsFetcher.GetHintsRequest.FetchLatency.",
+             GetStringNameForRequestContext(request_context_)}),
         base::TimeTicks::Now() - hints_fetch_start_time_);
     if (skip_cache) {
       RecordRequestStatusHistogram(request_context_,
@@ -494,8 +501,9 @@ std::vector<GURL> HintsFetcher::GetSizeLimitedURLsForFetching(
   for (size_t i = 0; i < urls.size(); i++) {
     if (valid_urls.size() >= kMaxUrls) {
       base::UmaHistogramCounts100(
-          "OptimizationGuide.HintsFetcher.GetHintsRequest.DroppedUrls." +
-              GetStringNameForRequestContext(request_context_),
+          base::StrCat(
+              {"OptimizationGuide.HintsFetcher.GetHintsRequest.DroppedUrls.",
+               GetStringNameForRequestContext(request_context_)}),
           urls.size() - i);
       OPTIMIZATION_GUIDE_LOG(
           optimization_guide_common::mojom::LogSource::HINTS,
@@ -524,7 +532,7 @@ std::vector<std::string> HintsFetcher::GetSizeLimitedHostsDueForHintsRefresh(
     bool skip_cache) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  const base::Value::Dict& hosts_fetched =
+  const base::DictValue& hosts_fetched =
       pref_service_->GetDict(prefs::kHintsFetcherHostsSuccessfullyFetched);
 
   std::vector<std::string> target_hosts;
@@ -533,8 +541,9 @@ std::vector<std::string> HintsFetcher::GetSizeLimitedHostsDueForHintsRefresh(
   for (size_t i = 0; i < hosts.size(); i++) {
     if (target_hosts.size() >= kMaxHosts) {
       base::UmaHistogramCounts100(
-          "OptimizationGuide.HintsFetcher.GetHintsRequest.DroppedHosts." +
-              GetStringNameForRequestContext(request_context_),
+          base::StrCat(
+              {"OptimizationGuide.HintsFetcher.GetHintsRequest.DroppedHosts.",
+               GetStringNameForRequestContext(request_context_)}),
           hosts.size() - i);
       break;
     }

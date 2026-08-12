@@ -21,11 +21,11 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.transit.Facility;
 import org.chromium.base.test.transit.ViewElement;
 import org.chromium.base.test.transit.ViewSpec;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.collaboration.CollaborationServiceFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeActivityTabModelBoundStation;
 import org.chromium.chrome.test.transit.ntp.IncognitoNewTabPageStation;
 import org.chromium.chrome.test.transit.ntp.RegularNewTabPageStation;
@@ -96,6 +96,8 @@ public class TabGroupDialogFacility<
                 declareView(toolbarElement.descendant(withId(R.id.toolbar_new_tab_button)));
         backButtonElement =
                 declareView(toolbarElement.descendant(withId(R.id.toolbar_back_button)));
+        listMenuButtonElement =
+                declareView(toolbarElement.descendant(withId(R.id.toolbar_menu_button)));
     }
 
     @Override
@@ -114,15 +116,6 @@ public class TabGroupDialogFacility<
                                             toolbarElement.descendant(withId(R.id.share_button)));
                         }
                     });
-
-            // Data sharing layout causes the menu button to be hidden due to the rounded corner.
-            listMenuButtonElement =
-                    declareView(
-                            toolbarElement.descendant(withId(R.id.toolbar_menu_button)),
-                            ViewElement.displayingAtLeastOption(51));
-        } else {
-            listMenuButtonElement =
-                    declareView(toolbarElement.descendant(withId(R.id.toolbar_menu_button)));
         }
     }
 

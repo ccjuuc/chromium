@@ -13,7 +13,6 @@
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/views/controls/styled_label.h"
-#include "ui/views/layout/layout_provider.h"
 #include "ui/views/style/typography.h"
 
 namespace file_system_access_ui_helper {
@@ -59,7 +58,7 @@ std::unique_ptr<views::View> CreateOriginPathLabel(
     int text_context,
     bool show_emphasis) {
   std::u16string formatted_path =
-      GetPathForDisplayAsParagraph(content::PathInfo(path));
+      GetElidedPathForDisplayAsTitle(content::PathInfo(path));
 
   Profile* profile =
       web_contents

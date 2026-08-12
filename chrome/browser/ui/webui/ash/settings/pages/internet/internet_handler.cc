@@ -14,10 +14,10 @@
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/tether/tether_service.h"
 #include "chrome/browser/chromeos/extensions/vpn_provider/vpn_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/network/network_connect.h"
 #include "chromeos/ash/components/network/network_event_log.h"
 #include "chromeos/ash/components/network/network_state.h"
@@ -48,8 +48,9 @@ const char kSendGmsCoreNotificationsDisabledDeviceNames[] =
     "sendGmsCoreNotificationsDisabledDeviceNames";
 
 Profile* GetProfileForPrimaryUser() {
-  return ProfileHelper::Get()->GetProfileByUser(
-      user_manager::UserManager::Get()->GetPrimaryUser());
+  return Profile::FromBrowserContext(
+      BrowserContextHelper::Get()->GetBrowserContextByUser(
+          user_manager::UserManager::Get()->GetPrimaryUser()));
 }
 
 bool IsVpnConfigAllowed() {
@@ -113,7 +114,7 @@ void InternetHandler::OnGmsCoreNotificationStateChanged() {
   SetGmsCoreNotificationsDisabledDeviceNames();
 }
 
-void InternetHandler::AddThirdPartyVpn(const base::Value::List& args) {
+void InternetHandler::AddThirdPartyVpn(const base::ListValue& args) {
   if (args.size() < 1 || !args[0].is_string()) {
     NOTREACHED() << "Invalid args for: " << kAddThirdPartyVpnMessage;
   }
@@ -148,7 +149,7 @@ void InternetHandler::AddThirdPartyVpn(const base::Value::List& args) {
       ->SendShowAddDialogToExtension(app_id);
 }
 
-void InternetHandler::ConfigureThirdPartyVpn(const base::Value::List& args) {
+void InternetHandler::ConfigureThirdPartyVpn(const base::ListValue& args) {
   if (args.size() < 1 || !args[0].is_string()) {
     NOTREACHED() << "Invalid args for: " << kConfigureThirdPartyVpnMessage;
   }
@@ -202,12 +203,12 @@ void InternetHandler::ConfigureThirdPartyVpn(const base::Value::List& args) {
 }
 
 void InternetHandler::RequestGmsCoreNotificationsDisabledDeviceNames(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   SetGmsCoreNotificationsDisabledDeviceNames();
 }
 
-void InternetHandler::ShowCarrierAccountDetail(const base::Value::List& args) {
+void InternetHandler::ShowCarrierAccountDetail(const base::ListValue& args) {
   if (args.size() < 1 || !args[0].is_string()) {
     NOTREACHED() << "Invalid args for: " << kShowCarrierAccountDetail;
   }
@@ -215,7 +216,7 @@ void InternetHandler::ShowCarrierAccountDetail(const base::Value::List& args) {
   NetworkConnect::Get()->ShowCarrierAccountDetail(guid);
 }
 
-void InternetHandler::ShowPortalSignin(const base::Value::List& args) {
+void InternetHandler::ShowPortalSignin(const base::ListValue& args) {
   if (args.size() < 1 || !args[0].is_string()) {
     NOTREACHED() << "Invalid args for: " << kShowPortalSignin;
   }
@@ -224,7 +225,7 @@ void InternetHandler::ShowPortalSignin(const base::Value::List& args) {
                                           NetworkConnect::Source::kSettings);
 }
 
-void InternetHandler::ShowCellularSetupUI(const base::Value::List& args) {
+void InternetHandler::ShowCellularSetupUI(const base::ListValue& args) {
   if (args.size() < 1 || !args[0].is_string()) {
     NOTREACHED() << "Invalid args for: " << kConfigureThirdPartyVpnMessage;
   }
@@ -256,7 +257,7 @@ void InternetHandler::SendGmsCoreNotificationsDisabledDeviceNames() {
     return;
   }
 
-  base::Value::List device_names_value;
+  base::ListValue device_names_value;
   for (const auto& device_name : device_names_without_notifications_) {
     device_names_value.Append(device_name.Clone());
   }

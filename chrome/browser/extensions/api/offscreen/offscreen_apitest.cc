@@ -239,7 +239,7 @@ IN_PROC_BROWSER_TEST_F(OffscreenApiTest, MAYBE_BasicDocumentManagement) {
 
 // Tests opening and immediately closing an offscreen document (so that the
 // close happens before it's fully loaded). Regression test for
-// https://crbug.com/1450784.
+// https://crbug.com/40065191.
 IN_PROC_BROWSER_TEST_F(OffscreenApiTest, OpenAndImmediatelyCloseDocument) {
   static constexpr char kManifest[] =
       R"({
@@ -324,10 +324,8 @@ IN_PROC_BROWSER_TEST_F(OffscreenApiTestWithoutCommandLineFlag,
 
 // Tests creating, querying, and closing offscreen documents in an incognito
 // spanning mode extension.
-// TODO(crbug.com/40282331): Disabled on ASAN due to leak caused by renderer gin
-// objects which are intended to be leaked.
 // TODO(crbug.com/345326424): Flaky on Mac builds.
-#if defined(ADDRESS_SANITIZER) || BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_MAC)
 #define MAYBE_IncognitoModeHandling_SpanningMode \
   DISABLED_IncognitoModeHandling_SpanningMode
 #else
@@ -396,10 +394,8 @@ IN_PROC_BROWSER_TEST_F(OffscreenApiTest,
 
 // Tests creating, querying, and closing offscreen documents in an incognito
 // split mode extension.
-// TODO(crbug.com/40282331): Disabled on ASAN due to leak caused by renderer gin
-// objects which are intended to be leaked.
 // TODO(crbug.com/345326424): Flaky on Mac builds.
-#if defined(ADDRESS_SANITIZER) || BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_MAC)
 #define MAYBE_IncognitoModeHandling_SplitMode \
   DISABLED_IncognitoModeHandling_SplitMode
 #else
@@ -497,12 +493,14 @@ IN_PROC_BROWSER_TEST_F(OffscreenApiTest, LifetimeEnforcement) {
          }
 
          chrome.runtime.onMessage.addListener((msg) => {
-           if (msg == 'play')
+           if (msg == 'play') {
              playAudio();
+           }
            else if (msg == 'stop')
              stopAudio();
-           else
+           else {
              console.error('Unexpected message: ' + msg);
+           }
          }))";
   TestExtensionDir test_dir;
   test_dir.WriteManifest(kManifest);

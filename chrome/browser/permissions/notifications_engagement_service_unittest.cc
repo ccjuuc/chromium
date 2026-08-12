@@ -14,6 +14,10 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
+#if BUILDFLAG(IS_MAC)
+#include "base/mac/mac_util.h"
+#endif
+
 namespace permissions {
 constexpr char kEngagementKey[] = "click_count";
 constexpr char kDisplayedKey[] = "display_count";
@@ -100,10 +104,10 @@ TEST_F(NotificationsEngagementServiceTest,
 
   // Verify the contents of the |notifications_engagement_setting| for
   // hosts[0].
-  base::Value::Dict engagement_dict1;
-  base::Value::Dict dict1_entry1;
+  base::DictValue engagement_dict1;
+  base::DictValue dict1_entry1;
   dict1_entry1.Set(kDisplayedKey, 2);
-  base::Value::Dict dict1_entry2;
+  base::DictValue dict1_entry2;
   dict1_entry2.Set(kDisplayedKey, 1);
   dict1_entry2.Set(kEngagementKey, 1);
   engagement_dict1.Set(displayedDate, std::move(dict1_entry1));
@@ -119,8 +123,8 @@ TEST_F(NotificationsEngagementServiceTest,
 
   // Verify the contents of the |notifications_engagement_setting| for
   // hosts[1].
-  base::Value::Dict engagement_dict2;
-  base::Value::Dict dict2_entry1;
+  base::DictValue engagement_dict2;
+  base::DictValue dict2_entry1;
   dict2_entry1.Set(kDisplayedKey, 1);
   engagement_dict2.Set(displayedDateLater, std::move(dict2_entry1));
   base::Value engagement_dict_value2 = base::Value(std::move(engagement_dict2));
@@ -151,7 +155,7 @@ TEST_F(NotificationsEngagementServiceTest,
       host_content_settings_map->GetWebsiteSetting(
           url1, GURL(), ContentSettingsType::NOTIFICATION_INTERACTIONS);
   ASSERT_TRUE(website_engagement_value1.is_dict());
-  base::Value::Dict& website_engagement_dict1 =
+  base::DictValue& website_engagement_dict1 =
       website_engagement_value1.GetDict();
 
   ASSERT_EQ(1U, website_engagement_dict1.size());
@@ -169,7 +173,7 @@ TEST_F(NotificationsEngagementServiceTest,
       host_content_settings_map->GetWebsiteSetting(
           url2, GURL(), ContentSettingsType::NOTIFICATION_INTERACTIONS);
   ASSERT_TRUE(website_engagement_value2.is_dict());
-  base::Value::Dict& website_engagement_dict2 =
+  base::DictValue& website_engagement_dict2 =
       website_engagement_value2.GetDict();
 
   ASSERT_EQ(3U, website_engagement_dict2.size());
@@ -186,7 +190,7 @@ TEST_F(NotificationsEngagementServiceTest,
       host_content_settings_map->GetWebsiteSetting(
           url3, GURL(), ContentSettingsType::NOTIFICATION_INTERACTIONS);
   ASSERT_TRUE(website_engagement_value3.is_dict());
-  base::Value::Dict& website_engagement_dict3 =
+  base::DictValue& website_engagement_dict3 =
       website_engagement_value3.GetDict();
 
   std::string displayedDate = service()->GetBucketLabel(base::Time::Now());
@@ -228,7 +232,7 @@ TEST_F(NotificationsEngagementServiceTest, RecordNotificationSuspicious) {
       host_content_settings_map->GetWebsiteSetting(
           url1, GURL(), ContentSettingsType::NOTIFICATION_INTERACTIONS);
   ASSERT_TRUE(url1_notification_interaction.is_dict());
-  base::Value::Dict& url1_notification_interaction_dict =
+  base::DictValue& url1_notification_interaction_dict =
       url1_notification_interaction.GetDict();
   ASSERT_EQ(3U, url1_notification_interaction_dict.size());
   base::Value* url1_date0_entry =
@@ -246,7 +250,7 @@ TEST_F(NotificationsEngagementServiceTest, RecordNotificationSuspicious) {
       host_content_settings_map->GetWebsiteSetting(
           url2, GURL(), ContentSettingsType::NOTIFICATION_INTERACTIONS);
   ASSERT_TRUE(url2_notification_interaction.is_dict());
-  base::Value::Dict& url2_notification_interaction_dict =
+  base::DictValue& url2_notification_interaction_dict =
       url2_notification_interaction.GetDict();
   ASSERT_EQ(1U, url2_notification_interaction_dict.size());
   base::Value* url2_date2_entry =
@@ -338,6 +342,13 @@ TEST_F(NotificationsEngagementServiceTest,
 }
 
 TEST_F(NotificationsEngagementServiceTest, EraseStaleEntries) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
   GURL url("https://www.google.com/");
 
   // Test that only entries older than 30 days are deleted.
@@ -352,7 +363,7 @@ TEST_F(NotificationsEngagementServiceTest, EraseStaleEntries) {
   HostContentSettingsMap* host_content_settings_map =
       HostContentSettingsMapFactory::GetForProfile(profile());
 
-  base::Value::Dict website_engagement =
+  base::DictValue website_engagement =
       host_content_settings_map
           ->GetWebsiteSetting(url, GURL(),
                               ContentSettingsType::NOTIFICATION_INTERACTIONS)
@@ -391,8 +402,7 @@ TEST_F(NotificationsEngagementServiceTest,
       host_content_settings_map->GetWebsiteSetting(
           url, GURL(), ContentSettingsType::NOTIFICATION_INTERACTIONS);
   ASSERT_TRUE(website_engagement_value.is_dict());
-  base::Value::Dict& website_engagement_dict =
-      website_engagement_value.GetDict();
+  base::DictValue& website_engagement_dict = website_engagement_value.GetDict();
 
   // No lookback period.
   EXPECT_EQ(

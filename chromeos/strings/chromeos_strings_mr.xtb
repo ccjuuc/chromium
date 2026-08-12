@@ -44,7 +44,6 @@
 <translation id="1155154308031262006">प्रॉम्प्ट एंटर करा</translation>
 <translation id="115705039208660697">अननस</translation>
 <translation id="1164939766849482256">डॉन टू डार्क स्क्रीन सेव्हर</translation>
-<translation id="1167755866710282443">की कस्टमाइझ करण्यासाठी मेनू उघडा. हलवण्यासाठी मेनू ड्रॅग करा.</translation>
 <translation id="1171349345463658120">वाळूचे सरोवर</translation>
 <translation id="1174073918202301297">शॉर्टकट जोडला</translation>
 <translation id="11743817593307477">हे नियंत्रण तुम्हाला हव्या असलेल्या गेम कृतीवर हलवण्यासाठी अ‍ॅरो की वापरा. नियंत्रण ठेवण्यासाठी एंटर की वापरा. रद्द करण्यासाठी एस्केप की वापरा.</translation>
@@ -167,6 +166,7 @@
 <translation id="1621067168122174824">चार्ज चाचणी रन करा</translation>
 <translation id="1622402072367425417">चमकणारे बुडबुडे</translation>
 <translation id="1626590945318984973">शॉर्टकट उपलब्ध नाही. फंक्शन आणि <ph name="META_KEY" /> की न वापरता नवीन शॉर्टकट प्रेस करा.</translation>
+<translation id="163774412591892664">तुमच्या अ‍ॅडमिनिस्ट्रेटरने तुमचे डिव्हाइस बंद केले आहे आणि ते त्याचे स्थान अ‍ॅक्सेस करू शकतात.</translation>
 <translation id="1639239467298939599">लोड करत आहे</translation>
 <translation id="1641857168437328880">दस्तऐवज फीडर (एक बाजू असलेले)</translation>
 <translation id="1642396894598555413">सायकल</translation>
@@ -272,7 +272,6 @@
 <translation id="200669432486043882">फाईल बदला</translation>
 <translation id="2006864819935886708">कनेक्टिव्हिटी</translation>
 <translation id="2008685064673031089">प्राइम शोध</translation>
-<translation id="2011174342667534258">SDK आवृत्ती:</translation>
 <translation id="2016697457005847575">ट्रबलशूटिंगच्या पायऱ्या वापरून पहा</translation>
 <translation id="202500043506723828">EID</translation>
 <translation id="2045814230297767491">कटलरी</translation>
@@ -404,6 +403,7 @@
 <translation id="2618015542787108131">वाळूची टेकडी</translation>
 <translation id="2619761439309613843">दैनिक रिफ्रेश</translation>
 <translation id="2620436844016719705">सिस्टीम</translation>
+<translation id="2626848494898563581">Google सेवांपर्यंत पोहोचू शकत नाही</translation>
 <translation id="2637303424821734920">बंद - स्थानिक हवामान प्रदर्शित करण्यासाठी <ph name="BEGIN_LINK" />सिस्टीम स्थान अ‍ॅक्सेस सुरू करणे <ph name="END_LINK" /> हे करा</translation>
 <translation id="2638662041295312666">साइन इन इमेज</translation>
 <translation id="2640549051766135490">अल्‍बम <ph name="TITLE" /> <ph name="DESC" /> निवडला</translation>
@@ -507,7 +507,6 @@
 <translation id="3211671540163313381">कीमॅपिंग D-pad</translation>
 <translation id="3217462202230355157">तुमचा माइक कनेक्ट केलेला असल्याची खात्री करा किंवा तुमचे <ph name="DEVICE_TYPE" /> रीस्टार्ट करून पहा</translation>
 <translation id="3226405216343213872">स्कॅनर शोधत आहे</translation>
-<translation id="3226657629376379887">लेआउट अ‍ॅक्‍शन मेनू</translation>
 <translation id="3227186760713762082"><ph name="CONVERSION_RATE" /> ने <ph name="CATEGORY_TEXT" /> मूल्याचा भागाकार करा</translation>
 <translation id="3242622575335502454">डिजिटल आर्ट</translation>
 <translation id="3246869037381808805">एक दिवसापेक्षा जुने प्रिंट जॉब काढून टाकले जातील</translation>
@@ -522,7 +521,6 @@
 <translation id="3291996639387199448">कीची दिशा</translation>
 <translation id="3294437725009624529">अतिथी</translation>
 <translation id="3303855915957856445">कोणतेही शोध परिणाम आढळले नाहीत</translation>
-<translation id="3305294846493618482">आणखी</translation>
 <translation id="3310640316857623290">DNS लेटन्सी अनुमती असलेल्या सीमेपेक्षा लक्षणीयरीत्या जास्त आहे</translation>
 <translation id="3316495615885967552">सारांश आणि शीर्षक तयार करण्यासंबंधित मॉडेल डाउनलोड केले आहे</translation>
 <translation id="3321030238473337787">प्लेबॅकचा वेग</translation>
@@ -581,6 +579,7 @@
 <translation id="3577473026931028326">काहीतरी चूक झाली. पुन्हा प्रयत्न करा.</translation>
 <translation id="357889014807611375">मर्यादित वाय-फाय</translation>
 <translation id="3583278742022654445">सिग्नलची क्षमता कमकुवत आहे. वाय-फाय सिग्नल स्रोताच्या जवळ जाण्याचा प्रयत्न करा.</translation>
+<translation id="3586931643579894722">तपशील लपवा</translation>
 <translation id="3588034708467091142">तुम्ही इंटरनेटशी कनेक्ट केलेले असल्याची खात्री करा आणि पुन्हा प्रयत्न करा.</translation>
 <translation id="3594280220611906414"><ph name="USER_FRIENDLY_APN_NAME" /> हे <ph name="APN_NAME" /> चे वापरकर्त्यासाठी अनुकूल नाव आहे.</translation>
 <translation id="3595596368722241419">बॅटरी पूर्ण चार्ज</translation>
@@ -701,7 +700,6 @@
 <translation id="4126551873361000548">१० सेकंद मागे जा</translation>
 <translation id="4128271910628504223">"धुके असलेले जंगल ड्रॉ करा" यासारखा प्रॉम्प्ट एंटर करा</translation>
 <translation id="4130035430755296270">आणखी लेआउट पर्यायांसाठी फिरवत रहा</translation>
-<translation id="4130750466177569591">मला मान्य आहे</translation>
 <translation id="4131410914670010031">कृष्ण धवल</translation>
 <translation id="4137700675046373159">शनिवारी</translation>
 <translation id="4139326893730851150">फर्मवेअर अपडेट</translation>
@@ -727,6 +725,7 @@
 <translation id="4212169537710712814"><ph name="LANGUAGE_NAME" /> ट्रान्स्क्रिप्शन मॉडेल डाउनलोड करणे पूर्ण झाले आहे</translation>
 <translation id="42126664696688958">एक्सपोर्ट</translation>
 <translation id="4213104098953699324">USB कीबोर्ड</translation>
+<translation id="4217571870635786043">डिक्टेशन</translation>
 <translation id="4227825898293920515"><ph name="TIME" /> मध्ये पासवर्ड एक्स्पायर होईल</translation>
 <translation id="4238516577297848345">कोणतेही प्रिंट जॉब प्रगतीपथावर नाहीत</translation>
 <translation id="4239069858505860023">GPRS</translation>
@@ -1049,7 +1048,6 @@
 <translation id="5606865426897221650">टॅब</translation>
 <translation id="5612205513582918357">क्लास टूल <ph name="RECEIVER_NAME" /> सोबत तुमची स्क्रीन शेअर करत आहे</translation>
 <translation id="5613201299517339763">तुम्हाला साइन आउट केले गेले आहे</translation>
-<translation id="5620281292257375798">फक्त अंतर्गत</translation>
 <translation id="5628106863521633649">उपलब्ध भाषा</translation>
 <translation id="5630438231335788050">बावहाउस</translation>
 <translation id="5631759159893697722">अमूर्त</translation>
@@ -1165,6 +1163,7 @@
 <translation id="6136285399872347291">backspace</translation>
 <translation id="6137614725462089991">सायबरपंक</translation>
 <translation id="6137767437444130246">वापरकर्ता सर्टिफिकेट</translation>
+<translation id="6140948187512243695">तपशील दर्शवा</translation>
 <translation id="6146993107019042706">पूर्ण करण्यासाठी, तुमचा नवीन पासवर्ड एंटर करा</translation>
 <translation id="6147514244879357420">PNG</translation>
 <translation id="6149015141270619212">इंटरनेटशी कनेक्ट करू शकत नाही</translation>
@@ -1185,6 +1184,7 @@
 <translation id="6234024205316847054">आउटलाइन दाखवा</translation>
 <translation id="6243280677745499710">सध्या सेट केला आहे</translation>
 <translation id="6250316632541035980">बेकन आणि अंडी</translation>
+<translation id="6262413940100821797">अज्ञात मिळवणारा</translation>
 <translation id="6265268291107409527"><ph name="KEYS" /> की निवडलेली आहे. <ph name="ASSIGN_INSTRUCTION" /></translation>
 <translation id="6275224645089671689">राइट अ‍ॅरो</translation>
 <translation id="6278428485366576908">थीम</translation>
@@ -1410,11 +1410,8 @@
 <translation id="7177485034254901881">हे <ph name="DEVICE_TYPE" /> <ph name="MANAGER" /> द्वारे व्यवस्थापित केले आहे. अ‍ॅडमिनिस्ट्रेटर रिमोट पद्धतीने डिव्हाइस काँफिगर करू शकतात.</translation>
 <translation id="7180611975245234373">रिफ्रेश करा</translation>
 <translation id="7180865173735832675">कस्टमाइझ करा</translation>
-<translation id="7182063559013288142">इंस्टंट हॉटस्पॉट</translation>
-<translation id="7184043045742675738">तुमचे बटण कस्टमाइझ करण्यासाठी कोणत्याही कीवर क्लिक करा. माउस आणि अ‍ॅरो की वापरून कीची स्थिती पुन्हा बदला.</translation>
 <translation id="7187669805838282391">बुधवारी</translation>
 <translation id="7205318498545665455">तुमचा माइक निवडा</translation>
-<translation id="7206979415662233817">सेवा अटी</translation>
 <translation id="7210635925306941239">निळसर</translation>
 <translation id="7212547870105584639">नेटवर्क APN सेटिंग्ज व्यवस्थापित करा. APNs ही मोबाइल नेटवर्क आणि इंटरनेटदरम्यान कनेक्शन तयार करतात. <ph name="BEGIN_LINK_LEARN_MORE" />अधिक जाणून घ्या<ph name="END_LINK_LEARN_MORE" /></translation>
 <translation id="7212734716605298123">बाह्य डिव्हाइससाठी फर्मवेअर अपडेट</translation>
@@ -1445,11 +1442,6 @@
 <translation id="7319430975418800333">A3</translation>
 <translation id="7321055305895875150">हिरवा आणि टील</translation>
 <translation id="7328475450575141167">बर्ड ऑफ पॅराडाइज</translation>
-<translation id="7331297744262591636">तुमचे वय किमान १८ वर्षे असणे आणि तुमचा AI वॉलपेपरचा वापर हा <ph name="GOOGLE_TERMS_OF_SERVICE_LINK" />Google सेवा अटी<ph name="END_LINK_GOOGLE_TERMS_OF_SERVICE" /> व <ph name="BEGIN_LINK_GEN_AI_TERMS_OF_SERVICE" />जनरेटिव्ह AI अतिरिक्त सेवा अटी<ph name="END_LINK_GEN_AI_TERMS_OF_SERVICE" /> यांच्या अधीन असल्याची सहमती दर्शवणे आवश्यक आहे.
-          <ph name="LINE_BREAK" />
-          <ph name="LINE_BREAK" />
-          तुम्ही फक्त वैयक्तिक आणि अव्यावसायिक वापरासाठी AI सह वॉलपेपर तयार करू शकता. तुम्ही वॉलपेपरसंबंधित मदत मिळवता, तेव्हा <ph name="BEGIN_LINK_GOOGLE_PRIVACY_POLICY" />Google चे गोपनीयता धोरण<ph name="END_LINK_GOOGLE_PRIVACY_POLICY" /> याच्या अधीन वॉलपेपर सूचना जनरेट करण्यासाठी Google AI सर्व्हरना मजकूर पाठवला जातो. <ph name="BEGIN_LINK_LEARN_MORE" />अधिक जाणून घ्या<ph name="END_LINK_LEARN_MORE" /></translation>
-<translation id="7343581795491695942"><ph name="QUERY_TEXT" />; <ph name="RESULT_TEXT" />; Google Search मध्ये परिणाम पाहण्यासाठी सर्च आणि स्पेस प्रेस करा.</translation>
 <translation id="7343649194310845056">नेटवर्क डिव्हाइस</translation>
 <translation id="7344788170842919262">मातकट</translation>
 <translation id="7346768383111016081">तुमचा कीबोर्ड वापरून खेळण्यासाठी गेमसंबंधित कृतीला नियंत्रण लागू करा</translation>
@@ -1506,7 +1498,6 @@
 <translation id="7590883480672980941">इनपुट सेटिंग्ज</translation>
 <translation id="7595982850646262331"><ph name="TIME_VALUE" /> शिल्लक</translation>
 <translation id="7600430297804876776">हे <ph name="DEVICE_TYPE" /> कधी वापरले जाऊ शकते ते <ph name="MANAGER" /> च्या अ‍ॅडमिनिस्ट्रेटरने सेट केले आहे.</translation>
-<translation id="7613724632293948900">माउस आणि अ‍ॅरो की वापरून स्थिती पुन्हा बदला.</translation>
 <translation id="7618216277886673749"><ph name="LANGUAGE_NAME" /> निवडा</translation>
 <translation id="7618774594543487847">न्यूट्रल</translation>
 <translation id="7620771111601174153">मदत केंद्र मध्ये अधिक जाणून घ्या</translation>
@@ -1640,6 +1631,7 @@
 <translation id="819278132617411009">आणखी उत्पादनक्षम होण्यासाठी Google AI वापरा</translation>
 <translation id="8200772114523450471">रेझ्युमे</translation>
 <translation id="8206859287963243715">सेल्यूलर</translation>
+<translation id="8208043093301544621">होम</translation>
 <translation id="8208861521865154048">लाभ</translation>
 <translation id="8226628635270268143">तुमचे आवडते फोटो आणि अल्बम निवडा</translation>
 <translation id="8227119283605456246">फाइल अटॅच करा</translation>
@@ -1686,6 +1678,7 @@
 <translation id="8420955526972171689">हार्डवेअरशी संबंधित समस्यांसाठी चाचण्या आणि ट्रबलशूटिंग रन करा</translation>
 <translation id="8422748173858722634">IMEI</translation>
 <translation id="8424039430705546751">खाली</translation>
+<translation id="8427213022735114808">कोणत्याही मजकूर फील्डमध्ये व्हॉइस टायपिंगची अनुमती देण्यासाठी डिक्टेशन तुमचा व्हॉइस Google ला पाठवेल.</translation>
 <translation id="8428213095426709021">सेटिंग्ज</translation>
 <translation id="8431300646573772016">ChromeOS मध्ये नवीन</translation>
 <translation id="8433186206711564395">नेटवर्क सेटिंग्ज</translation>
@@ -1724,6 +1717,7 @@
 <translation id="8584654835905316966"><ph name="DEVICE_NAME" /> साठी <ph name="VERSION" /> आवृत्तीवर फर्मवेअरचे इंस्टॉलेशन पूर्ण करण्यासाठी रीस्‍टार्टची आवश्‍यकता आहे. तुमचा काँप्युटर अनेक वेळा रीबूट होताना दिसेल. हे वर्तन अपेक्षित आहे.</translation>
 <translation id="8593058461203131755">मीडिया थांबवा</translation>
 <translation id="8620617069779373398">रोमिंग स्थिती</translation>
+<translation id="8624524972189162859">तुमच्या <ph name="DOMAIN_NAME" /> ॲडमिनिस्ट्रेटरने तुमचे डिव्हाइस बंद केले आहे आणि ते त्याचे स्थान ॲक्सेस करू शकतात.</translation>
 <translation id="8626489604350149811"><ph name="APN_NAME" /> साठी आणखी कृती</translation>
 <translation id="86356131183441916">फिकट जांभळा</translation>
 <translation id="8647595191512746911">ऑडिओ ट्रान्स्क्रिप्शन</translation>
@@ -1835,10 +1829,8 @@
 <translation id="9073281213608662541">PAP</translation>
 <translation id="9074739597929991885">ब्लूटूथ</translation>
 <translation id="9082718469794970195">हा व्हिडिओ वापरा</translation>
-<translation id="9087578468327036362">या क्वेरीची तक्रार करा</translation>
 <translation id="9088306295921699330">सद्य वापर</translation>
 <translation id="9088994563996376283">सोपे करा</translation>
-<translation id="9095775724867566971">Pluginvm</translation>
 <translation id="909856219855259344">तारीख रीसेट करण्याशी संबंधित अधिक माहिती</translation>
 <translation id="9100765901046053179">प्रगत सेटिंग्ज</translation>
 <translation id="910415269708673980"><ph name="PRINCIPAL_NAME" /> चे तिकीट रिफ्रेश करा</translation>
@@ -1868,7 +1860,6 @@
 <translation id="921080052717160800">इमेज ही कॅमेरा बॅकग्राउंड म्हणून सेट केली आहे</translation>
 <translation id="9211490828691860325">सर्व डेस्क</translation>
 <translation id="9218016617214286986">माहीत असलेली APNs दाखवा</translation>
-<translation id="932327136139879170">होम</translation>
 <translation id="939519157834106403">SSID</translation>
 <translation id="945522503751344254">अभिप्राय पाठवा</translation>
 <translation id="950520315903467048"><ph name="DIRECTION" /> साठी की उपलब्ध नाही. <ph name="ASSIGN_INSTRUCTION" /></translation>

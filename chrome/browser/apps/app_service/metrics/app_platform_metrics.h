@@ -28,6 +28,10 @@
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 
+namespace base {
+class TickClock;
+}
+
 class Profile;
 
 namespace apps {
@@ -151,19 +155,22 @@ class AppPlatformMetrics : public apps::AppRegistryCache::Observer,
     // reset, ideally after the corresponding snapshot has been reported.
     base::TimeDelta reporting_usage_time;
 
-    // Converts the struct UsageTime to base::Value::Dict, e.g.:
+    // Converts the struct UsageTime to base::DictValue, e.g.:
     // {
     //    "app_id": "hhsosodfjlsjdflkjsdlfksdf",
     //    "app_type": "SystemWebApp",
     //    "time": 3600,
     //    "reporting_usage_time": 1800,
     // }
-    base::Value::Dict ConvertToDict() const;
+    base::DictValue ConvertToDict() const;
   };
 
-  explicit AppPlatformMetrics(Profile* profile,
-                              apps::AppRegistryCache& app_registry_cache,
-                              InstanceRegistry& instance_registry);
+  // `tick_clock` is used to control recurring event timers. It must
+  // outlive `this`.
+  AppPlatformMetrics(Profile* profile,
+                     apps::AppRegistryCache& app_registry_cache,
+                     InstanceRegistry& instance_registry,
+                     const base::TickClock* tick_clock);
   AppPlatformMetrics(const AppPlatformMetrics&) = delete;
   AppPlatformMetrics& operator=(const AppPlatformMetrics&) = delete;
   ~AppPlatformMetrics() override;
@@ -392,6 +399,8 @@ class AppPlatformMetrics : public apps::AppRegistryCache::Observer,
   // Observes `UkmRecorder` only in Managed Guest Session.
   base::ScopedObservation<ukm::UkmRecorder, ukm::UkmRecorder::Observer>
       ukm_recorder_observer_{this};
+
+  const raw_ref<const base::TickClock> tick_clock_;
 };
 
 }  // namespace apps

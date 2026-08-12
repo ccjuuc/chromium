@@ -10,7 +10,6 @@
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/paint/timing/container_timing.h"
 #include "third_party/blink/renderer/core/timing/window_performance.h"
-#include "third_party/blink/renderer/platform/supplementable.h"
 #include "third_party/blink/renderer/platform/wtf/deque.h"
 
 namespace gfx {
@@ -21,23 +20,18 @@ class RectF;
 namespace blink {
 
 class LayoutObject;
-class LocalFrameView;
 class PropertyTreeStateOrAlias;
 class TextRecord;
 
 // TextElementTiming is responsible for tracking the paint timings for groups of
 // text nodes associated with elements of a given window.
 class CORE_EXPORT TextElementTiming final
-    : public GarbageCollected<TextElementTiming>,
-      public Supplement<LocalDOMWindow> {
+    : public GarbageCollected<TextElementTiming> {
  public:
-  static const char kSupplementName[];
-
   explicit TextElementTiming(LocalDOMWindow&);
+
   TextElementTiming(const TextElementTiming&) = delete;
   TextElementTiming& operator=(const TextElementTiming&) = delete;
-
-  static TextElementTiming& From(LocalDOMWindow&);
 
   static inline bool NeededForTiming(Node& node) {
     auto* element = DynamicTo<Element>(node);
@@ -49,20 +43,22 @@ class CORE_EXPORT TextElementTiming final
   static gfx::RectF ComputeIntersectionRect(
       const LayoutObject&,
       const gfx::Rect& aggregated_visual_rect,
-      const PropertyTreeStateOrAlias&,
-      const LocalFrameView*);
+      const PropertyTreeStateOrAlias&);
 
   bool CanReportToElementTiming() const;
   bool CanReportToContainerTiming();
   bool CanReportElements();
 
-  // Called when the swap promise queued by TextPaintTimingDetector has been
-  // resolved. Dispatches PerformanceElementTiming entries to WindowPerformance.
-  void OnTextObjectPainted(const TextRecord&, const DOMPaintTimingInfo&);
+  // Dispatches PerformanceElementTiming entries to WindowPerformance for any of
+  // the given records, if needed. Called on the main thread when the
+  // presentation time callback for a given frame runs.
+  void OnFramePresented(const HeapVector<Member<TextRecord>>&);
 
-  void Trace(Visitor* visitor) const override;
+  void Trace(Visitor* visitor) const;
 
  private:
+  void OnTextNodePresented(const TextRecord&);
+
   void EnsureContainerTiming();
 
   Member<WindowPerformance> performance_;

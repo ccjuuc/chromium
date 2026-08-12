@@ -11,7 +11,6 @@
 #include "device/fido/attestation_statement_formats.h"
 #include "device/fido/attested_credential_data.h"
 #include "device/fido/authenticator_data.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/large_blob.h"
 #include "device/fido/p256_public_key.h"
 #include "device/fido/public/fido_constants.h"
@@ -131,6 +130,11 @@ std::vector<uint8_t> AsCTAPStyleCBORBytes(
     large_blob_ext.emplace(kExtensionLargeBlobSupported, true);
     unsigned_extension_outputs.emplace(kExtensionLargeBlob,
                                        std::move(large_blob_ext));
+  }
+  if (response.cmtg_key) {
+    unsigned_extension_outputs.emplace(
+        cbor::Value(device::kExtensionCmtgKey),
+        cbor::Value(response.cmtg_key->signature));
   }
   if (!unsigned_extension_outputs.empty()) {
     map.emplace(6, std::move(unsigned_extension_outputs));

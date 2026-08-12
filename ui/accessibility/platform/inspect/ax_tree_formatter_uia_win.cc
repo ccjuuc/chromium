@@ -15,7 +15,7 @@
 #include <string>
 #include <utility>
 
-#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
@@ -65,53 +65,35 @@ void GetUIARuntimeId(IUIAutomationElement* first_child,
     // GetRuntimeId.
     base::win::ScopedSafearray start_fragment_runtime_id;
     start_fragment->GetRuntimeId(start_fragment_runtime_id.Receive());
-    LONG lower_bound = 0;
-    HRESULT hr =
-        ::SafeArrayGetLBound(start_fragment_runtime_id.Get(), 1, &lower_bound);
-    CHECK(SUCCEEDED(hr));
-    LONG upper_bound = 0;
-    hr = ::SafeArrayGetUBound(start_fragment_runtime_id.Get(), 1, &upper_bound);
-    CHECK(SUCCEEDED(hr));
-    CHECK(lower_bound >= 0);
-    LONG fragment_id_length = (upper_bound - lower_bound) + 1;
-    CHECK(fragment_id_length == 4);
-
-    int32_t* fragment_id_array = nullptr;
-    ::SafeArrayAccessData(start_fragment_runtime_id.Get(),
-                          reinterpret_cast<void**>(&fragment_id_array));
-    CHECK(fragment_id_array);
+    auto locked_fragment_ids =
+        start_fragment_runtime_id.CreateLockScope<VT_I4>();
+    CHECK(locked_fragment_ids.has_value());
+    const auto fragment_id_span = base::span(*locked_fragment_ids);
+    CHECK_EQ(fragment_id_span.size(), 4U);
     // Grab out the last three ints from the internal runtime id. This should
     // correspond with the frame tree id and DOM id.
-    internal_id = {UNSAFE_TODO(fragment_id_array[1]),
-                   UNSAFE_TODO(fragment_id_array[2]),
-                   UNSAFE_TODO(fragment_id_array[3])};
-
-    ::SafeArrayUnaccessData(start_fragment_runtime_id.Get());
+    internal_id = {fragment_id_span[1], fragment_id_span[2],
+                   fragment_id_span[3]};
   }
 
   base::win::ScopedSafearray runtime_id;
   first_child->GetRuntimeId(runtime_id.Receive());
   CHECK(runtime_id.Get());
-  LONG lower_bound = 0;
-  HRESULT hr = ::SafeArrayGetLBound(runtime_id.Get(), 1, &lower_bound);
-  CHECK(SUCCEEDED(hr));
   LONG upper_bound = 0;
-  hr = ::SafeArrayGetUBound(runtime_id.Get(), 1, &upper_bound);
+  HRESULT hr = ::SafeArrayGetUBound(runtime_id.Get(), 1, &upper_bound);
   CHECK(SUCCEEDED(hr));
-  LONG runtime_id_length = upper_bound - lower_bound + 1;
-  CHECK(runtime_id_length >= 4);
   {
-    int32_t* runtime_id_array = nullptr;
-    ::SafeArrayAccessData(runtime_id.Get(),
-                          reinterpret_cast<void**>(&runtime_id_array));
-    CHECK(runtime_id_array);
+    auto locked_runtime_ids = runtime_id.CreateLockScope<VT_I4>();
+    CHECK(locked_runtime_ids.has_value());
 
+    // SAFETY: Trust SafeArray functions returned the correct bounds.
+    auto runtime_id_span = base::span(*locked_runtime_ids);
+    CHECK_GE(runtime_id_span.size(), 4U);
     // Stuff the internal id values in the last three spots in the grabbed
     // UIA-based runtime id.
-    UNSAFE_TODO(runtime_id_array[upper_bound - 2]) = internal_id[0];
-    UNSAFE_TODO(runtime_id_array[upper_bound - 1]) = internal_id[1];
-    UNSAFE_TODO(runtime_id_array[upper_bound]) = internal_id[2];
-    ::SafeArrayUnaccessData(runtime_id.Get());
+    runtime_id_span[upper_bound - 2] = internal_id[0];
+    runtime_id_span[upper_bound - 1] = internal_id[1];
+    runtime_id_span[upper_bound] = internal_id[2];
   }
 
   *runtime_id_out = runtime_id.Release();
@@ -464,21 +446,14 @@ void AXTreeFormatterUia::AddDefaultFilters(
                     AXPropertyFilter::DENY);
   // UIA_WindowPatternId
   AddPropertyFilter(property_filters, "Window.IsModal=*");
-
-  // Custom properties.
-  AddPropertyFilter(
-      property_filters,
-      GetPropertyName(
-          UiaRegistrarWin::GetInstance().GetVirtualContentPropertyId()) +
-          "=*");
 }
 
-base::Value::Dict AXTreeFormatterUia::BuildTree(
+base::DictValue AXTreeFormatterUia::BuildTree(
     AXPlatformNodeDelegate* start) const {
   Microsoft::WRL::ComPtr<IUIAutomationElement> start_element;
   GetUIAElementFromDelegate(start, uia_.Get(), &start_element);
 
-  base::Value::Dict tree;
+  base::DictValue tree;
   if (!start_element) {
     return tree;
   }
@@ -514,11 +489,11 @@ base::Value::Dict AXTreeFormatterUia::BuildTree(
   return tree;
 }
 
-base::Value::Dict AXTreeFormatterUia::BuildTreeForSelector(
+base::DictValue AXTreeFormatterUia::BuildTreeForSelector(
     const AXTreeSelector& selector) const {
   HWND hwnd = GetHWNDBySelector(selector);
 
-  base::Value::Dict tree;
+  base::DictValue tree;
   if (hwnd) {
     Microsoft::WRL::ComPtr<IUIAutomationElement> root;
     uia_->ElementFromHandle(hwnd, &root);
@@ -533,7 +508,7 @@ base::Value::Dict AXTreeFormatterUia::BuildTreeForSelector(
   return tree;
 }
 
-base::Value::Dict AXTreeFormatterUia::BuildNode(
+base::DictValue AXTreeFormatterUia::BuildNode(
     AXPlatformNodeDelegate* node) const {
   Microsoft::WRL::ComPtr<IUIAutomationElement> uia_element;
   GetUIAElementFromDelegate(node, uia_.Get(), &uia_element);
@@ -545,7 +520,7 @@ base::Value::Dict AXTreeFormatterUia::BuildNode(
   CHECK(uia_element.Get());
 
   RECT root_bounds = GetUIARootBounds(node, uia_.Get());
-  base::Value::Dict tree;
+  base::DictValue tree;
   AddProperties(uia_element.Get(), root_bounds.left, root_bounds.top, &tree);
   return tree;
 }
@@ -553,7 +528,7 @@ base::Value::Dict AXTreeFormatterUia::BuildNode(
 void AXTreeFormatterUia::RecursiveBuildTree(IUIAutomationElement* uncached_node,
                                             int root_x,
                                             int root_y,
-                                            base::Value::Dict* dict) const {
+                                            base::DictValue* dict) const {
   // Process this node.
   AddProperties(uncached_node, root_x, root_y, dict);
 
@@ -565,12 +540,12 @@ void AXTreeFormatterUia::RecursiveBuildTree(IUIAutomationElement* uncached_node,
   if (!SUCCEEDED(parent->GetCachedChildren(&children)) || !children)
     return;
   // Process children.
-  base::Value::List child_list;
+  base::ListValue child_list;
   int child_count;
   children->get_Length(&child_count);
   for (int i = 0; i < child_count; i++) {
     Microsoft::WRL::ComPtr<IUIAutomationElement> child;
-    base::Value::Dict child_dict;
+    base::DictValue child_dict;
     if (SUCCEEDED(children->GetElement(i, &child))) {
       RecursiveBuildTree(child.Get(), root_x, root_y, &child_dict);
     } else {
@@ -584,7 +559,7 @@ void AXTreeFormatterUia::RecursiveBuildTree(IUIAutomationElement* uncached_node,
 void AXTreeFormatterUia::AddProperties(IUIAutomationElement* uncached_node,
                                        int root_x,
                                        int root_y,
-                                       base::Value::Dict* dict) const {
+                                       base::DictValue* dict) const {
   // Update the cache for this node's information.
   Microsoft::WRL::ComPtr<IUIAutomationElement> node;
   uncached_node->BuildUpdatedCache(element_cache_request_.Get(), &node);
@@ -613,9 +588,8 @@ void AXTreeFormatterUia::AddProperties(IUIAutomationElement* uncached_node,
   AddCustomProperties(node.Get(), dict);
 }
 
-void AXTreeFormatterUia::AddAnnotationProperties(
-    IUIAutomationElement* node,
-    base::Value::Dict* dict) const {
+void AXTreeFormatterUia::AddAnnotationProperties(IUIAutomationElement* node,
+                                                 base::DictValue* dict) const {
   Microsoft::WRL::ComPtr<IUIAutomationAnnotationPattern> annotation_pattern;
   if (SUCCEEDED(node->GetCachedPatternAs(UIA_AnnotationPatternId,
                                          IID_PPV_ARGS(&annotation_pattern))) &&
@@ -654,7 +628,7 @@ void AXTreeFormatterUia::AddAnnotationProperties(
 
 void AXTreeFormatterUia::AddExpandCollapseProperties(
     IUIAutomationElement* node,
-    base::Value::Dict* dict) const {
+    base::DictValue* dict) const {
   Microsoft::WRL::ComPtr<IUIAutomationExpandCollapsePattern>
       expand_collapse_pattern;
   if (SUCCEEDED(
@@ -685,7 +659,7 @@ void AXTreeFormatterUia::AddExpandCollapseProperties(
 }
 
 void AXTreeFormatterUia::AddGridProperties(IUIAutomationElement* node,
-                                           base::Value::Dict* dict) const {
+                                           base::DictValue* dict) const {
   Microsoft::WRL::ComPtr<IUIAutomationGridPattern> grid_pattern;
   if (SUCCEEDED(node->GetCachedPatternAs(UIA_GridPatternId,
                                          IID_PPV_ARGS(&grid_pattern))) &&
@@ -702,7 +676,7 @@ void AXTreeFormatterUia::AddGridProperties(IUIAutomationElement* node,
 }
 
 void AXTreeFormatterUia::AddGridItemProperties(IUIAutomationElement* node,
-                                               base::Value::Dict* dict) const {
+                                               base::DictValue* dict) const {
   Microsoft::WRL::ComPtr<IUIAutomationGridItemPattern> grid_item_pattern;
   if (SUCCEEDED(node->GetCachedPatternAs(UIA_GridItemPatternId,
                                          IID_PPV_ARGS(&grid_item_pattern))) &&
@@ -732,9 +706,8 @@ void AXTreeFormatterUia::AddGridItemProperties(IUIAutomationElement* node,
   }
 }
 
-void AXTreeFormatterUia::AddRangeValueProperties(
-    IUIAutomationElement* node,
-    base::Value::Dict* dict) const {
+void AXTreeFormatterUia::AddRangeValueProperties(IUIAutomationElement* node,
+                                                 base::DictValue* dict) const {
   Microsoft::WRL::ComPtr<IUIAutomationRangeValuePattern> range_value_pattern;
   if (SUCCEEDED(node->GetCachedPatternAs(UIA_RangeValuePatternId,
                                          IID_PPV_ARGS(&range_value_pattern))) &&
@@ -767,7 +740,7 @@ void AXTreeFormatterUia::AddRangeValueProperties(
 }
 
 void AXTreeFormatterUia::AddScrollProperties(IUIAutomationElement* node,
-                                             base::Value::Dict* dict) const {
+                                             base::DictValue* dict) const {
   Microsoft::WRL::ComPtr<IUIAutomationScrollPattern> scroll_pattern;
   if (SUCCEEDED(node->GetCachedPatternAs(UIA_ScrollPatternId,
                                          IID_PPV_ARGS(&scroll_pattern))) &&
@@ -813,7 +786,7 @@ void AXTreeFormatterUia::AddScrollProperties(IUIAutomationElement* node,
 }
 
 void AXTreeFormatterUia::AddSelectionProperties(IUIAutomationElement* node,
-                                                base::Value::Dict* dict) const {
+                                                base::DictValue* dict) const {
   Microsoft::WRL::ComPtr<IUIAutomationSelectionPattern> selection_pattern;
   if (SUCCEEDED(node->GetCachedPatternAs(UIA_SelectionPatternId,
                                          IID_PPV_ARGS(&selection_pattern))) &&
@@ -835,7 +808,7 @@ void AXTreeFormatterUia::AddSelectionProperties(IUIAutomationElement* node,
 
 void AXTreeFormatterUia::AddSelectionItemProperties(
     IUIAutomationElement* node,
-    base::Value::Dict* dict) const {
+    base::DictValue* dict) const {
   Microsoft::WRL::ComPtr<IUIAutomationSelectionItemPattern>
       selection_item_pattern;
   if (SUCCEEDED(node->GetCachedPatternAs(
@@ -855,7 +828,7 @@ void AXTreeFormatterUia::AddSelectionItemProperties(
 }
 
 void AXTreeFormatterUia::AddTableProperties(IUIAutomationElement* node,
-                                            base::Value::Dict* dict) const {
+                                            base::DictValue* dict) const {
   Microsoft::WRL::ComPtr<IUIAutomationTablePattern> table_pattern;
   if (SUCCEEDED(node->GetCachedPatternAs(UIA_TablePatternId,
                                          IID_PPV_ARGS(&table_pattern))) &&
@@ -881,7 +854,7 @@ void AXTreeFormatterUia::AddTableProperties(IUIAutomationElement* node,
 }
 
 void AXTreeFormatterUia::AddToggleProperties(IUIAutomationElement* node,
-                                             base::Value::Dict* dict) const {
+                                             base::DictValue* dict) const {
   Microsoft::WRL::ComPtr<IUIAutomationTogglePattern> toggle_pattern;
   if (SUCCEEDED(node->GetCachedPatternAs(UIA_TogglePatternId,
                                          IID_PPV_ARGS(&toggle_pattern))) &&
@@ -906,7 +879,7 @@ void AXTreeFormatterUia::AddToggleProperties(IUIAutomationElement* node,
 }
 
 void AXTreeFormatterUia::AddValueProperties(IUIAutomationElement* node,
-                                            base::Value::Dict* dict) const {
+                                            base::DictValue* dict) const {
   Microsoft::WRL::ComPtr<IUIAutomationValuePattern> value_pattern;
   if (SUCCEEDED(node->GetCachedPatternAs(UIA_ValuePatternId,
                                          IID_PPV_ARGS(&value_pattern))) &&
@@ -923,7 +896,7 @@ void AXTreeFormatterUia::AddValueProperties(IUIAutomationElement* node,
 }
 
 void AXTreeFormatterUia::AddWindowProperties(IUIAutomationElement* node,
-                                             base::Value::Dict* dict) const {
+                                             base::DictValue* dict) const {
   Microsoft::WRL::ComPtr<IUIAutomationWindowPattern> window_pattern;
   if (SUCCEEDED(node->GetCachedPatternAs(UIA_WindowPatternId,
                                          IID_PPV_ARGS(&window_pattern))) &&
@@ -942,12 +915,13 @@ std::map<long, std::string>& AXTreeFormatterUia::GetCustomPropertiesMap()
 }
 
 void AXTreeFormatterUia::AddCustomProperties(IUIAutomationElement* node,
-                                             base::Value::Dict* dict) const {
+                                             base::DictValue* dict) const {
   // Custom properties need to be added separately.
   for (const auto& property : GetCustomPropertiesMap()) {
     base::win::ScopedVariant variant;
-    if (SUCCEEDED(
-            node->GetCurrentPropertyValue(property.first, variant.Receive()))) {
+    HRESULT hr =
+        node->GetCurrentPropertyValue(property.first, variant.Receive());
+    if (SUCCEEDED(hr)) {
       WriteProperty(property.first, variant, dict);
     }
   }
@@ -965,7 +939,7 @@ std::string AXTreeFormatterUia::GetPropertyName(long property_id) const {
 
 void AXTreeFormatterUia::WriteProperty(long propertyId,
                                        const base::win::ScopedVariant& var,
-                                       base::Value::Dict* dict,
+                                       base::DictValue* dict,
                                        int root_x,
                                        int root_y) const {
   switch (var.type()) {
@@ -1008,6 +982,9 @@ void AXTreeFormatterUia::WriteProperty(long propertyId,
     case VT_UNKNOWN:
       WriteUnknownProperty(propertyId, var.ptr()->punkVal, dict);
       break;
+    case VT_ARRAY | VT_UNKNOWN:
+      WriteRawElementArray(propertyId, var.ptr()->parray, dict);
+      break;
     default:
       switch (propertyId) {
         case UIA_BoundingRectanglePropertyId:
@@ -1022,7 +999,7 @@ void AXTreeFormatterUia::WriteProperty(long propertyId,
 
 void AXTreeFormatterUia::WriteI4Property(long propertyId,
                                          long lval,
-                                         base::Value::Dict* dict) const {
+                                         base::DictValue* dict) const {
   switch (propertyId) {
     case UIA_ControlTypePropertyId:
       dict->SetByDottedPath(GetPropertyName(propertyId),
@@ -1043,9 +1020,70 @@ void AXTreeFormatterUia::WriteI4Property(long propertyId,
   }
 }
 
+void AXTreeFormatterUia::WriteRawElementArray(long propertyId,
+                                              SAFEARRAY* sa,
+                                              base::DictValue* dict) const {
+  // UIA may return custom UIAutomationType_ElementArray properties as a
+  // raw SAFEARRAY of IUnknown rather than wrapping them in an
+  // IUIAutomationElementArray. Handle that case by iterating the array
+  // and extracting element names directly.
+  if (!sa) {
+    return;
+  }
+  LONG lower_bound = 0;
+  LONG upper_bound = -1;
+  if (FAILED(SafeArrayGetLBound(sa, 1, &lower_bound)) ||
+      FAILED(SafeArrayGetUBound(sa, 1, &upper_bound))) {
+    return;
+  }
+  std::u16string element_list;
+  for (LONG i = lower_bound; i <= upper_bound; i++) {
+    IUnknown* raw_element = nullptr;
+    if (FAILED(SafeArrayGetElement(sa, &i, &raw_element)) || !raw_element) {
+      continue;
+    }
+    Microsoft::WRL::ComPtr<IUnknown> element;
+    element.Attach(raw_element);
+
+    std::u16string name;
+    // Try client-side IUIAutomationElement first.
+    Microsoft::WRL::ComPtr<IUIAutomationElement> uia_element;
+    if (SUCCEEDED(element.As(&uia_element))) {
+      name = GetNodeName(uia_element.Get());
+      if (name.empty()) {
+        base::win::ScopedBstr role;
+        uia_element->get_CurrentAriaRole(role.Receive());
+        if (role.Get()) {
+          name = u"{" + base::WideToUTF16(role.Get()) + u"}";
+        }
+      }
+    } else {
+      // Fall back to provider-side IRawElementProviderSimple.
+      Microsoft::WRL::ComPtr<IRawElementProviderSimple> provider;
+      if (SUCCEEDED(element.As(&provider))) {
+        base::win::ScopedVariant name_var;
+        if (SUCCEEDED(provider->GetPropertyValue(UIA_NamePropertyId,
+                                                 name_var.Receive())) &&
+            name_var.type() == VT_BSTR && name_var.ptr()->bstrVal) {
+          name = base::WideToUTF16(name_var.ptr()->bstrVal);
+        }
+      }
+    }
+    if (!name.empty()) {
+      if (!element_list.empty()) {
+        element_list += u", ";
+      }
+      element_list += name;
+    }
+  }
+  if (!element_list.empty()) {
+    dict->SetByDottedPath(GetPropertyName(propertyId), element_list);
+  }
+}
+
 void AXTreeFormatterUia::WriteUnknownProperty(long propertyId,
                                               IUnknown* unk,
-                                              base::Value::Dict* dict) const {
+                                              base::DictValue* dict) const {
   switch (propertyId) {
     case UIA_ControllerForPropertyId:
     case UIA_DescribedByPropertyId:
@@ -1065,6 +1103,14 @@ void AXTreeFormatterUia::WriteUnknownProperty(long propertyId,
       break;
     }
     default:
+      // Custom properties use dynamic IDs that can't appear in case labels.
+      if (propertyId ==
+          UiaRegistrarWin::GetInstance().GetAriaActionsPropertyId()) {
+        Microsoft::WRL::ComPtr<IUIAutomationElementArray> array;
+        if (unk && SUCCEEDED(unk->QueryInterface(IID_PPV_ARGS(&array)))) {
+          WriteElementArray(propertyId, array.Get(), dict);
+        }
+      }
       break;
   }
 }
@@ -1073,25 +1119,30 @@ void AXTreeFormatterUia::WriteRectangleProperty(long propertyId,
                                                 const VARIANT& value,
                                                 int root_x,
                                                 int root_y,
-                                                base::Value::Dict* dict) const {
+                                                base::DictValue* dict) const {
   CHECK(value.vt == (VT_ARRAY | VT_R8));
 
-  double* data = nullptr;
-  SafeArrayAccessData(value.parray, reinterpret_cast<void**>(&data));
+  // Note that `value` owns `parray`, so call `Release` on `safe_array` before
+  // it goes out of scope.
+  base::win::ScopedSafearray safe_array(value.parray);
 
-  base::Value::Dict rectangle;
-  rectangle.Set("left", static_cast<int>(data[0] - root_x));
-  rectangle.Set("top", static_cast<int>(UNSAFE_TODO(data[1] - root_y)));
-  rectangle.Set("width", static_cast<int>(UNSAFE_TODO(data[2])));
-  rectangle.Set("height", static_cast<int>(UNSAFE_TODO(data[3])));
+  auto lock_data = safe_array.CreateLockScope<VT_R8>();
+  CHECK(lock_data.has_value());
+  const auto data_span = base::span(*lock_data);
+  base::DictValue rectangle;
+  rectangle.Set("left", static_cast<int>(data_span[0] - root_x));
+  rectangle.Set("top", static_cast<int>(data_span[1] - root_y));
+  rectangle.Set("width", static_cast<int>(data_span[2]));
+  rectangle.Set("height", static_cast<int>(data_span[3]));
+
+  safe_array.Release();
+
   dict->SetByDottedPath(GetPropertyName(propertyId), std::move(rectangle));
-
-  SafeArrayUnaccessData(value.parray);
 }
 
 void AXTreeFormatterUia::WriteElementArray(long propertyId,
                                            IUIAutomationElementArray* array,
-                                           base::Value::Dict* dict) const {
+                                           base::DictValue* dict) const {
   int count;
   array->get_Length(&count);
   std::u16string element_list;
@@ -1120,9 +1171,12 @@ std::u16string AXTreeFormatterUia::GetNodeName(
   // Update the cache for this node.
   if (uncached_node) {
     Microsoft::WRL::ComPtr<IUIAutomationElement> node;
-    uncached_node->BuildUpdatedCache(element_cache_request_.Get(), &node);
+    if (FAILED(uncached_node->BuildUpdatedCache(element_cache_request_.Get(),
+                                                &node)) ||
+        !node) {
+      return std::u16string();
+    }
 
-    base::win::ScopedBstr name;
     base::win::ScopedVariant variant;
     if (SUCCEEDED(node->GetCachedPropertyValue(UIA_NamePropertyId,
                                                variant.Receive())) &&
@@ -1171,12 +1225,14 @@ void AXTreeFormatterUia::BuildCacheRequests() {
 
 void AXTreeFormatterUia::BuildCustomPropertiesMap() {
   GetCustomPropertiesMap().insert(
-      {UiaRegistrarWin::GetInstance().GetVirtualContentPropertyId(),
-       "VirtualContent"});
+      {UiaRegistrarWin::GetInstance().GetMathMLPropertyId(), "MathML"});
+  GetCustomPropertiesMap().insert(
+      {UiaRegistrarWin::GetInstance().GetAriaActionsPropertyId(),
+       "AccessibleActions"});
 }
 
 std::string AXTreeFormatterUia::ProcessTreeForOutput(
-    const base::Value::Dict& dict) const {
+    const base::DictValue& dict) const {
   std::string line;
 
   // Always show control type, and show it first.
@@ -1237,7 +1293,7 @@ std::string AXTreeFormatterUia::ProcessTreeForOutput(
 
 void AXTreeFormatterUia::ProcessPropertyForOutput(
     const std::string& property_name,
-    const base::Value::Dict& dict,
+    const base::DictValue& dict,
     std::string& line) const {
   const base::Value* value = dict.FindByDottedPath(property_name);
   if (value) {

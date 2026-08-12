@@ -26,7 +26,6 @@
 using chrome_test_util::BackButton;
 using chrome_test_util::ForwardButton;
 using chrome_test_util::NTPCollectionView;
-using chrome_test_util::OmniboxText;
 using chrome_test_util::ShowTabsButton;
 using chrome_test_util::ToolsMenuButton;
 
@@ -89,18 +88,6 @@ std::unique_ptr<net::test_server::HttpResponse> CountResponse(
   return std::move(http_response);
 }
 
-// Returns true when omnibox contains `text`, otherwise returns false after
-// after a timeout.
-[[nodiscard]] bool WaitForOmniboxContaining(std::string text) {
-  return base::test::ios::WaitUntilConditionOrTimeout(
-      base::test::ios::kWaitForUIElementTimeout, ^bool {
-        NSError* error = nil;
-        [[EarlGrey selectElementWithMatcher:OmniboxText(text)]
-            assertWithMatcher:grey_notNil()
-                        error:&error];
-        return error == nil;
-      });
-}
 }  // namespace
 
 // Integration tests for restoring session history.
@@ -170,13 +157,7 @@ std::unique_ptr<net::test_server::HttpResponse> CountResponse(
 
 // Navigates to a set of cross-domains, chrome URLs and error pages, and then
 // tests that they are properly restored in airplane mode.
-// TODO(crbug.com/435144099): Reenable test.
-#if TARGET_OS_SIMULATOR
-#define MAYBE_testRestoreNoNetwork testRestoreNoNetwork
-#else
-#define MAYBE_testRestoreNoNetwork FLAKY_testRestoreNoNetwork
-#endif
-- (void)MAYBE_testRestoreNoNetwork {
+- (void)testRestoreNoNetwork {
   [self setUpRestoreServers];
   [self loadTestPages];
   self.serverRespondsWithContent = false;
@@ -201,8 +182,7 @@ std::unique_ptr<net::test_server::HttpResponse> CountResponse(
 
   // Trigger a restore and confirm the background page is not reloaded.
   [self triggerRestore];
-  [[EarlGrey selectElementWithMatcher:OmniboxText(echoPage.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [ChromeEarlGrey waitForWebStateVisibleURL:echoPage];
   [ChromeEarlGrey waitForWebStateContainingText:"Echo"];
   GREYAssertEqual(1, visitCounter, @"The page should not reload");
 }
@@ -232,8 +212,7 @@ std::unique_ptr<net::test_server::HttpResponse> CountResponse(
       disabled:{}
       relaunchPolicy:ForceRelaunchByKilling];
   // Restore after crash and confirm the background page is not reloaded.
-  [[EarlGrey selectElementWithMatcher:OmniboxText(echoPage.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [ChromeEarlGrey waitForWebStateVisibleURL:echoPage];
   [ChromeEarlGrey waitForWebStateContainingText:"Echo"];
   GREYAssertEqual(1, visitCounter, @"The page should not reload");
 }
@@ -286,8 +265,7 @@ std::unique_ptr<net::test_server::HttpResponse> CountResponse(
 
   // Restore page2
   [self triggerRestore];
-  [[EarlGrey selectElementWithMatcher:OmniboxText(pageTwo.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [ChromeEarlGrey waitForWebStateVisibleURL:pageTwo];
   if (checkServerData) {
     [ChromeEarlGrey waitForWebStateContainingText:kPageTwoContent];
   }
@@ -306,34 +284,25 @@ std::unique_ptr<net::test_server::HttpResponse> CountResponse(
 
   // Go back to error page.
   [[EarlGrey selectElementWithMatcher:BackButton()] performAction:grey_tap()];
-  GREYAssert(
-      WaitForOmniboxContaining("invalid."),
-      @"Timeout while waiting for  omnibox text to become \"invalid.\".");
+  [ChromeEarlGrey waitForWebStateVisibleURL:GURL("http://invalid.")];
   [ChromeEarlGrey waitForWebStateContainingText:"ERR_"];
   [ChromeEarlGreyUI waitForAppToIdle];
   [self triggerRestore];
-  GREYAssert(
-      WaitForOmniboxContaining("invalid."),
-      @"Timeout while waiting for  omnibox text to become \"invalid.\".");
+  [ChromeEarlGrey waitForWebStateVisibleURL:GURL("http://invalid.")];
   [ChromeEarlGrey waitForWebStateContainingText:"ERR_"];
   [ChromeEarlGreyUI waitForAppToIdle];
 
   // Go back to chrome url.
   [[EarlGrey selectElementWithMatcher:BackButton()] performAction:grey_tap()];
-  GREYAssert(WaitForOmniboxContaining("chrome://chrome-urls"),
-             @"Timeout while waiting for  omnibox text to become "
-             @"\"chrome://chrome-urls\".");
+  [ChromeEarlGrey waitForWebStateVisibleURL:GURL("chrome://chrome-urls/")];
   [ChromeEarlGrey waitForWebStateContainingText:"List of Chrome"];
   [self triggerRestore];
-  GREYAssert(WaitForOmniboxContaining("chrome://chrome-urls"),
-             @"Timeout while waiting for  omnibox text to become "
-             @"\"chrome://chrome-urls\".");
+  [ChromeEarlGrey waitForWebStateVisibleURL:GURL("chrome://chrome-urls/")];
   [ChromeEarlGrey waitForWebStateContainingText:"List of Chrome"];
 
   // Go back to page1 and confirm page2 is still in the forward history.
   [[EarlGrey selectElementWithMatcher:BackButton()] performAction:grey_tap()];
-  [[EarlGrey selectElementWithMatcher:OmniboxText(pageOne.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [ChromeEarlGrey waitForWebStateVisibleURL:pageOne];
   if (checkServerData) {
     [ChromeEarlGrey waitForWebStateContainingText:kPageOneContent];
     [[EarlGrey selectElementWithMatcher:ForwardButton()]
@@ -348,8 +317,7 @@ std::unique_ptr<net::test_server::HttpResponse> CountResponse(
         performAction:grey_tap()];
   }
   [self triggerRestore];
-  [[EarlGrey selectElementWithMatcher:OmniboxText(pageOne.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [ChromeEarlGrey waitForWebStateVisibleURL:pageOne];
   if (checkServerData) {
     [ChromeEarlGrey waitForWebStateContainingText:kPageOneContent];
     [[EarlGrey selectElementWithMatcher:ForwardButton()]
@@ -362,6 +330,14 @@ std::unique_ptr<net::test_server::HttpResponse> CountResponse(
 
     [[EarlGrey selectElementWithMatcher:ToolsMenuButton()]
         performAction:grey_tap()];
+  }
+  // TODO(crbug.com/530841942): On iOS 27 beta 2 and 3 frequently failed without
+  // loadURL waits.  Beta 4 seems to fixed most, but introduced this one.  This
+  // is a temporary fix until we find a better solution. It's possible this is a
+  // iOS 27 beta bug, or that we need a different wait, but so far this wait is
+  // the best approach we've found.
+  if (@available(iOS 27, *)) {
+    base::test::ios::SpinRunLoopWithMinDelay(base::Seconds(1));
   }
   [[EarlGrey selectElementWithMatcher:BackButton()] performAction:grey_tap()];
   [ChromeEarlGrey waitForPageToFinishLoading];
@@ -384,7 +360,7 @@ std::unique_ptr<net::test_server::HttpResponse> CountResponse(
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config = [super appConfigurationForTestCase];
-  config.features_disabled.push_back(
+  config.features_enabled.push_back(
       web::features::kForceSynthesizedRestoreSession);
   return config;
 }

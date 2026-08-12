@@ -68,14 +68,19 @@ namespace net {
 // cookie partition keyed using that nonce. Keep this in mind when using a
 // nonced IsolationInfo for credentialed requests.
 //
-// In addition to the sharding described above, `IsolationInfo::nonce()` is also
-// used to check if a given network request should be disallowed because the
-// initiating fenced frame has revoked network access. More context on
-// network revocation is in network_context.mojom in the comment for
-// `NetworkContext::RevokeNetworkForNonces()`. Not providing the correct
-// `nonce` will therefore lead to sending network requests that should
-// have been blocked. See `RenderFrameHostImpl::ComputeNonce()` which
-// computes the correct nonce for a given frame.
+// There are also several special cases of IsolationInfos. Specifically:
+//  - Transient: Created by `IsolationInfo::CreateTransient()`, used for
+//    requests that should not be persisted to disk or send cookies, and that
+//    should have corresponding network state in it's own partition (not shared
+//    with state from other contexts).
+//  - Empty: Created by the default constructor, can be used by requests for
+//    which cookies should not be sent, corresponding responses should not be
+//    persisted to disk, and for which corresponding network state should can be
+//    shared with that of other requests using an empty IsolationInfo (i.e. no
+//    partitioning between these requests is required). Note that although
+//    responses for requests using an empty IsolationInfo are not persisted to
+//    disk, other metadata that is keyed off of the NetworkAnonymizationKey
+//    (such as HttpServerProperties) might be.
 class NET_EXPORT IsolationInfo {
  public:
   // The update-on-redirect patterns.
@@ -175,6 +180,10 @@ class NET_EXPORT IsolationInfo {
   // transient IsolationInfo with no nonce.
   static IsolationInfo CreateTransient(
       std::optional<base::UnguessableToken> nonce);
+
+  // Creates an empty IsolationInfo with the provided NetworkIsolationPartition.
+  static IsolationInfo CreateEmptyWithPartition(
+      NetworkIsolationPartition network_isolation_partition);
 
   // Creates an IsolationInfo from the serialized contents. Returns a nullopt
   // if deserialization fails or if data is inconsistent.

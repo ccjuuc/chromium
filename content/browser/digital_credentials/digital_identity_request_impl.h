@@ -6,11 +6,13 @@
 #define CONTENT_BROWSER_DIGITAL_CREDENTIALS_DIGITAL_IDENTITY_REQUEST_IMPL_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/memory/weak_ptr.h"
 #include "base/types/expected.h"
+#include "content/browser/digital_credentials/virtual_wallet.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/digital_identity_provider.h"
 #include "content/public/browser/document_service.h"
@@ -69,6 +71,13 @@ class CONTENT_EXPORT DigitalIdentityRequestImpl
       RenderFrameHost&,
       mojo::PendingReceiver<blink::mojom::DigitalIdentityRequest>);
 
+  // Returns the active virtual wallet action for this frame, or
+  // std::nullopt if none is configured (request should proceed normally).
+  std::optional<VirtualWallet::Action> GetVirtualWalletAction();
+
+  // Returns true if the request was handled by the virtual wallet.
+  bool HandleVirtualWalletAction();
+
   // Called when the create request JSON has been parsed.
   void OnCreateRequestJsonParsed(
       std::string protocol,
@@ -85,15 +94,13 @@ class CONTENT_EXPORT DigitalIdentityRequestImpl
   // Called when the user has fulfilled the interstitial requirement. Will be
   // called immediately after OnGetRequestJsonParsed() if no interstitial is
   // needed.
-  void OnInterstitialDone(std::optional<std::string> protocol,
-                          base::Value request_to_send,
+  void OnInterstitialDone(base::Value request_to_send,
                           DigitalIdentityProvider::RequestStatusForMetrics
                               status_after_interstitial);
 
   // Infers blink::mojom::RequestDigitalIdentityStatus based on
   // `status_for_metrics`.
   void CompleteRequest(
-      std::optional<std::string> protocol,
       base::expected<DigitalIdentityProvider::DigitalCredential,
                      DigitalIdentityProvider::RequestStatusForMetrics>
           status_for_metrics);
@@ -102,11 +109,8 @@ class CONTENT_EXPORT DigitalIdentityRequestImpl
       DigitalIdentityProvider::RequestStatusForMetrics status_for_metrics);
 
   void CompleteRequestWithStatus(
-      std::optional<std::string> protocol,
       blink::mojom::RequestDigitalIdentityStatus status,
-      base::expected<DigitalIdentityProvider::DigitalCredential,
-                     DigitalIdentityProvider::RequestStatusForMetrics>
-          response);
+      std::optional<DigitalIdentityProvider::DigitalCredential> response);
 
   std::unique_ptr<DigitalIdentityProvider> provider_;
   GetCallback callback_;

@@ -14,7 +14,7 @@
 #include "components/content_settings/core/browser/content_settings_rule.h"
 
 namespace supervised_user {
-class SupervisedUserSettingsService;
+class FamilyLinkSettingsService;
 
 // SupervisedUserContentSettingsProvider that provides content-settings managed
 // by the custodian of a supervised user.
@@ -22,8 +22,7 @@ class SupervisedUserContentSettingsProvider
     : public content_settings::ObservableProvider {
  public:
   explicit SupervisedUserContentSettingsProvider(
-      supervised_user::SupervisedUserSettingsService*
-          supervised_user_settings_service);
+      supervised_user::FamilyLinkSettingsService* family_link_settings_service);
 
   SupervisedUserContentSettingsProvider(
       const SupervisedUserContentSettingsProvider&) = delete;
@@ -46,7 +45,7 @@ class SupervisedUserContentSettingsProvider
       const ContentSettingsPattern& primary_pattern,
       const ContentSettingsPattern& secondary_pattern,
       ContentSettingsType content_type,
-      base::Value&& value,
+      const base::Value& value,
       const content_settings::ContentSettingConstraints& constraints) override;
 
   void ClearAllContentSettingsRules(ContentSettingsType content_type) override;
@@ -55,7 +54,7 @@ class SupervisedUserContentSettingsProvider
 
  private:
   // Callback on receiving settings from the supervised user settings service.
-  void OnSupervisedSettingsAvailable(const base::Value::Dict& settings);
+  void OnSupervisedSettingsAvailable(const base::DictValue& settings);
 
   content_settings::GlobalValueMap value_map_;
 

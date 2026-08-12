@@ -14,7 +14,7 @@ UIWindow* GetAnyKeyWindow() {
         base::apple::ObjCCastStrict<UIWindowScene>(scene);
     // Find a key window if it exists.
     for (UIWindow* window in windowScene.windows) {
-      if (window.isKeyWindow) {
+      if (window.keyWindow) {
         return window;
       }
     }
@@ -24,5 +24,9 @@ UIWindow* GetAnyKeyWindow() {
 }
 
 UIInterfaceOrientation GetInterfaceOrientation() {
-  return GetAnyKeyWindow().windowScene.interfaceOrientation;
+  if (@available(iOS 16.0, *)) {
+    return GetAnyKeyWindow().windowScene.effectiveGeometry.interfaceOrientation;
+  } else {
+    return GetAnyKeyWindow().windowScene.interfaceOrientation;
+  }
 }

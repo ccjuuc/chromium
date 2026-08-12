@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/containers/heap_array.h"
 #include "base/containers/span.h"
@@ -22,6 +22,7 @@
 #include "base/functional/bind.h"
 #include "base/i18n/unicodestring.h"
 #include "base/memory/raw_ptr.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/rand_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_view_util.h"
@@ -43,8 +44,8 @@
 #include "content/public/test/test_utils.h"
 #include "content/shell/browser/shell.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "net/base/directory_listing.h"
 #include "net/base/mime_util.h"
+#include "net/base/module/directory_listing.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/http/http_util.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
@@ -385,9 +386,10 @@ class FileSystemURLLoaderFactoryTest
     EXPECT_EQ(icu::UnicodeString(is_directory ? "1" : "0"),
               match.group(3, status));
     if (size >= 0) {
-      icu::UnicodeString size_string(
-          net::GetSizeStringForTesting(base::ByteCount(size)).c_str());
-      EXPECT_EQ(size_string, match.group(5, status));
+      const std::string size_string =
+          net::GetSizeStringForTesting(base::ByteSize(base::as_unsigned(size)));
+      EXPECT_EQ(icu::UnicodeString(size_string.c_str()),
+                match.group(5, status));
     }
 
     icu::UnicodeString date_ustr(match.group(7, status));
@@ -845,8 +847,16 @@ IN_PROC_BROWSER_TEST_P(FileSystemURLLoaderFactoryTest,
   EXPECT_TRUE(partial_buffer == base::as_byte_span(response_text));
 }
 
+// TODO(crbug.com/516040951): Fix flakiness and re-enable.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_FileTestMultipleRangesNotSupported \
+  DISABLED_FileTestMultipleRangesNotSupported
+#else
+#define MAYBE_FileTestMultipleRangesNotSupported \
+  FileTestMultipleRangesNotSupported
+#endif
 IN_PROC_BROWSER_TEST_P(FileSystemURLLoaderFactoryTest,
-                       FileTestMultipleRangesNotSupported) {
+                       MAYBE_FileTestMultipleRangesNotSupported) {
   base::ScopedAllowBlockingForTesting allow_blocking;
   WriteFile(
       "file1.dat",
@@ -854,6 +864,17 @@ IN_PROC_BROWSER_TEST_P(FileSystemURLLoaderFactoryTest,
   net::HttpRequestHeaders headers;
   headers.SetHeader(net::HttpRequestHeaders::kRange,
                     "bytes=0-5,10-200,200-300");
+  auto client = TestLoadWithHeaders(CreateFileSystemURL("file1.dat"), &headers);
+  EXPECT_FALSE(client->has_received_response());
+  EXPECT_TRUE(client->has_received_completion());
+  EXPECT_EQ(net::ERR_REQUEST_RANGE_NOT_SATISFIABLE,
+            client->completion_status().error_code);
+}
+
+IN_PROC_BROWSER_TEST_P(FileSystemURLLoaderFactoryTest, FileTestMalformedRange) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  net::HttpRequestHeaders headers;
+  headers.SetHeader(net::HttpRequestHeaders::kRange, "bytes=invalid");
   auto client = TestLoadWithHeaders(CreateFileSystemURL("file1.dat"), &headers);
   EXPECT_FALSE(client->has_received_response());
   EXPECT_TRUE(client->has_received_completion());

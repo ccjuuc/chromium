@@ -4,17 +4,26 @@
 
 #include "cc/test/test_layer_context.h"
 
+#include <vector>
+
+#include "ui/latency/latency_info.h"
+
 namespace cc {
 
 void TestLayerContext::SetVisible(bool visible) {}
+
+void TestLayerContext::SetTargetLocalSurfaceId(
+    const viz::LocalSurfaceId& target_local_surface_id) {}
 
 base::TimeTicks TestLayerContext::UpdateDisplayTreeFrom(
     LayerTreeImpl& tree,
     viz::ClientResourceProvider& resource_provider,
     gpu::SharedImageInterface* shared_image_interface,
     const gfx::Rect& viewport_damage_rect,
-    const viz::LocalSurfaceId& target_local_surface_id,
-    bool frame_has_damage) {
+    bool frame_has_damage,
+    bool is_flush,
+    std::vector<ui::LatencyInfo> latency_info,
+    viz::TrackedElementRects tracked_element_rects) {
   return base::TimeTicks::Now();
 }
 

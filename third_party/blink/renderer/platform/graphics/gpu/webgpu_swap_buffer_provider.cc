@@ -55,7 +55,7 @@ WebGPUSwapBufferProvider::WebGPUSwapBufferProvider(
       surface_origin_(surface_origin) {
   wgpu::Limits limits = {};
   auto get_limits_succeeded = device_.GetLimits(&limits);
-  CHECK(get_limits_succeeded);
+  CHECK(get_limits_succeeded == wgpu::Status::Success);
 
   max_texture_size_ = limits.maxTextureDimension2D;
 }
@@ -66,6 +66,17 @@ WebGPUSwapBufferProvider::~WebGPUSwapBufferProvider() {
 
 viz::SharedImageFormat WebGPUSwapBufferProvider::Format() const {
   return shared_image_format_;
+}
+
+base::ByteSize WebGPUSwapBufferProvider::EstimatedSizeInBytes() const {
+  base::ByteSize result;
+  if (swap_buffer_pool_) {
+    result += swap_buffer_pool_->EstimatedSizeInBytes();
+  }
+  if (current_swap_buffer_) {
+    result += current_swap_buffer_->GetSharedImage()->EstimatedSizeInBytes();
+  }
+  return result;
 }
 
 gfx::Size WebGPUSwapBufferProvider::Size() const {
@@ -174,12 +185,14 @@ scoped_refptr<WebGPUMailboxTexture> WebGPUSwapBufferProvider::GetNewTexture(
 
   // These SharedImages are read and written by WebGPU clients and can then be
   // sent off to the display compositor. They can also be read over raster
-  // interface as part of video frame.
+  // interface as part of video frame. These textures can also be copied
+  // directly to a WebGL texture over canvas.
   gpu::SharedImageUsageSet usage =
       gpu::SHARED_IMAGE_USAGE_WEBGPU_READ |
       gpu::SHARED_IMAGE_USAGE_WEBGPU_WRITE |
       gpu::SHARED_IMAGE_USAGE_WEBGPU_SWAP_CHAIN_TEXTURE |
-      gpu::SHARED_IMAGE_USAGE_RASTER_READ | GetSharedImageUsagesForDisplay();
+      gpu::SHARED_IMAGE_USAGE_GLES2_READ | gpu::SHARED_IMAGE_USAGE_RASTER_READ |
+      GetSharedImageUsagesForDisplay();
   if (usage_ & wgpu::TextureUsage::StorageBinding) {
     usage |= gpu::SHARED_IMAGE_USAGE_WEBGPU_STORAGE_TEXTURE;
   }
@@ -220,22 +233,25 @@ scoped_refptr<WebGPUMailboxTexture> WebGPUSwapBufferProvider::GetNewTexture(
   // NOTE: Passing WEBGPU_MAILBOX_DISCARD to request clearing requires passing a
   // usage that supports clearing. Swapbuffer textures will always be
   // renderable, so we can pass RenderAttachment.
-  current_swap_buffer_->mailbox_texture =
-      WebGPUMailboxTexture::FromExistingSharedImage(
-          dawn_control_client_, device_, desc,
-          current_swap_buffer_->GetSharedImage(),
-          // Wait on the last usage of this swap buffer.
-          current_swap_buffer_->GetSyncToken(),
-          gpu::webgpu::WEBGPU_MAILBOX_DISCARD,
-          wgpu::TextureUsage::RenderAttachment,
-          // When the mailbox texture is dissociated, set the access finished
-          // token back on the swap buffer for the next time it is used.
-          base::BindOnce(
-              [](scoped_refptr<SwapBuffer> swap_buffer,
-                 const gpu::SyncToken& access_finished_token) {
-                swap_buffer->SetReleaseSyncToken(access_finished_token);
-              },
-              current_swap_buffer_));
+  current_swap_buffer_
+      ->mailbox_texture = WebGPUMailboxTexture::FromExistingSharedImage(
+      dawn_control_client_, device_, desc,
+      current_swap_buffer_->GetSharedImage(),
+      // Wait on the last usage of this swap buffer.
+      current_swap_buffer_->GetSyncToken(), gpu::webgpu::WEBGPU_MAILBOX_DISCARD,
+      wgpu::TextureUsage::RenderAttachment,
+      base::BindOnce(
+          [](scoped_refptr<SwapBuffer> swap_buffer,
+             std::unique_ptr<gpu::WebGPUTextureScopedAccess> scoped_access) {
+            gpu::SyncToken access_finished_token;
+            if (scoped_access) {
+              access_finished_token = gpu::WebGPUTextureScopedAccess::EndAccess(
+                  std::move(scoped_access));
+            }
+            swap_buffer->SetReleaseSyncToken(access_finished_token);
+            return access_finished_token;
+          },
+          current_swap_buffer_));
 
   if (!layer_) {
     // Create a layer that will be used by the canvas and will ask for a
@@ -305,9 +321,6 @@ WebGPUSwapBufferProvider::ExportCurrentSharedImage(
 bool WebGPUSwapBufferProvider::PrepareTransferableResource(
     viz::TransferableResource* out_resource,
     viz::ReleaseCallback* out_release_callback) {
-  front_buffer_shared_image_ = nullptr;
-  front_buffer_sync_token_ = gpu::SyncToken();
-
   gpu::SyncToken sync_token;
 
   scoped_refptr<gpu::ClientSharedImage> shared_image =
@@ -377,6 +390,14 @@ void WebGPUSwapBufferProvider::MailboxReleased(
     scoped_refptr<SwapBuffer> swap_buffer,
     const gpu::SyncToken& sync_token,
     bool lost_resource) {
+  if (provider &&
+      swap_buffer->GetSharedImage() == provider->front_buffer_shared_image_) {
+    // If the swap buffer has been returned by the compositor then it is no
+    // longer being presented, and so is no longer the front buffer.
+    provider->front_buffer_shared_image_ = nullptr;
+    provider->front_buffer_sync_token_ = gpu::SyncToken();
+  }
+
   // Update the SyncToken to ensure that we will wait for it even if we
   // immediately destroy this buffer.
   swap_buffer->SetReleaseSyncToken(sync_token);

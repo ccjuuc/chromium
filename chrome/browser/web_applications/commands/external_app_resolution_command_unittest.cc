@@ -9,7 +9,6 @@
 #include <string>
 #include <tuple>
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/to_vector.h"
 #include "base/functional/callback_helpers.h"
@@ -34,6 +33,7 @@
 #include "chrome/browser/web_applications/test/web_app_test.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
+#include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_icon_generator.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
@@ -95,8 +95,6 @@ class ExternalAppResolutionCommandTest : public WebAppTest {
   const GURL kWebAppManifestUrl =
       GURL("https://example.com/path/manifest.json");
 
-  using BitmapData = std::map<SquareSizePx, SkBitmap>;
-
   ExternallyManagedAppManager::InstallResult InstallAndWait(
       const ExternalInstallOptions& install_options,
       std::unique_ptr<WebAppDataRetriever> data_retriever = nullptr) {
@@ -126,7 +124,7 @@ class ExternalAppResolutionCommandTest : public WebAppTest {
     manifest->name = u"Example App";
     manifest->short_name = u"App";
     manifest->start_url = kWebAppUrl;
-    manifest->id = GenerateManifestIdFromStartUrlOnly(kWebAppUrl);
+    manifest->id = GenerateManifestIdFromStartUrlOnly(kWebAppUrl).value();
     manifest->display = blink::mojom::DisplayMode::kStandalone;
     return manifest;
   }
@@ -176,7 +174,7 @@ class ExternalAppResolutionCommandTest : public WebAppTest {
 
   void LoadIconsFromDB(const webapps::AppId& app_id,
                        const std::vector<SquareSizePx>& sizes_px) {
-    BitmapData icon_bitmaps;
+    OrderedSizeToBitmap icon_bitmaps;
     WebAppIconManager& icon_manager = provider()->icon_manager();
 
     // We can use this to test if icons of a specific size do not exist in the
@@ -197,14 +195,14 @@ class ExternalAppResolutionCommandTest : public WebAppTest {
   }
 
   std::vector<SquareSizePx> GetIconSizesForApp(const webapps::AppId& app_id) {
-    DCHECK(base::Contains(app_to_icons_data_, app_id));
+    DCHECK(app_to_icons_data_.contains(app_id));
     return base::ToVector(
         app_to_icons_data_[app_id],
         [](const auto& icon_data) { return icon_data.first; });
   }
 
   std::vector<SkColor> GetIconColorsForApp(const webapps::AppId& app_id) {
-    DCHECK(base::Contains(app_to_icons_data_, app_id));
+    DCHECK(app_to_icons_data_.contains(app_id));
     return base::ToVector(
         app_to_icons_data_[app_id],
         [](const auto& icon_data) { return icon_data.second.getColor(0, 0); });
@@ -221,7 +219,7 @@ class ExternalAppResolutionCommandTest : public WebAppTest {
       state.manifest_before_default_processing->id = *mock_options.manifest_id;
     } else {
       state.manifest_before_default_processing->id =
-          GenerateManifestIdFromStartUrlOnly(options.install_url);
+          GenerateManifestIdFromStartUrlOnly(options.install_url).value();
     }
 
     state.manifest_before_default_processing->name = u"Manifest Name";
@@ -263,7 +261,7 @@ class ExternalAppResolutionCommandTest : public WebAppTest {
   }
 
  private:
-  base::flat_map<webapps::AppId, BitmapData> app_to_icons_data_;
+  base::flat_map<webapps::AppId, OrderedSizeToBitmap> app_to_icons_data_;
   raw_ptr<MockWebAppUiManager> ui_manager_ = nullptr;
 };
 
@@ -278,8 +276,8 @@ TEST_F(ExternalAppResolutionCommandTest, SuccessInternalDefault) {
   auto result = InstallAndWait(install_options);
   EXPECT_EQ(result.code, webapps::InstallResultCode::kSuccessNewInstall);
   ASSERT_TRUE(result.app_id.has_value());
-  EXPECT_EQ(proto::INSTALLED_WITH_OS_INTEGRATION,
-            registrar().GetInstallState(*result.app_id));
+  EXPECT_TRUE(registrar().AppMatches(
+      *result.app_id, WebAppFilter::InstalledInOperatingSystemForTesting()));
   EXPECT_FALSE(IsPlaceholderAppUrl(kWebAppUrl));
   std::optional<webapps::AppId> id =
       registrar().LookupExternalAppId(kWebAppUrl);
@@ -304,8 +302,8 @@ TEST_F(ExternalAppResolutionCommandTest, SuccessAppFromPolicy) {
   auto result = InstallAndWait(install_options);
   EXPECT_EQ(result.code, webapps::InstallResultCode::kSuccessNewInstall);
   ASSERT_TRUE(result.app_id.has_value());
-  EXPECT_EQ(proto::INSTALLED_WITH_OS_INTEGRATION,
-            registrar().GetInstallState(*result.app_id));
+  EXPECT_TRUE(registrar().AppMatches(
+      *result.app_id, WebAppFilter::InstalledInOperatingSystemForTesting()));
   EXPECT_FALSE(IsPlaceholderAppUrl(kWebAppUrl));
   std::optional<webapps::AppId> id =
       registrar().LookupExternalAppId(kWebAppUrl);
@@ -495,7 +493,8 @@ TEST_F(ExternalAppResolutionCommandTest,
   }
 
   // Replace the placeholder with a real app.
-  const webapps::AppId final_app_id = GenerateAppIdFromManifestId(kManifestId);
+  const webapps::AppId final_app_id =
+      GenerateAppIdFromManifestId(webapps::ManifestId(kManifestId));
   options.placeholder_resolution_behavior =
       PlaceholderResolutionBehavior::kCloseAndRelaunch;
   SetPageState(options, {.manifest_id = kManifestId});
@@ -566,7 +565,8 @@ TEST_F(ExternalAppResolutionCommandTest,
   }
 
   // Replace the placeholder with a real app.
-  const webapps::AppId final_app_id = GenerateAppIdFromManifestId(kManifestId);
+  const webapps::AppId final_app_id =
+      GenerateAppIdFromManifestId(webapps::ManifestId(kManifestId));
   options.placeholder_resolution_behavior =
       PlaceholderResolutionBehavior::kCloseAndRelaunch;
   SetPageState(options, {.manifest_id = kManifestId});
@@ -627,8 +627,9 @@ TEST_F(ExternalAppResolutionCommandTest,
                     .GetAppById(placeholder_app_id)
                     ->HasOnlySource(WebAppManagement::Type::kPolicy));
     EXPECT_TRUE(IsPlaceholderAppId(placeholder_app_id));
-    EXPECT_EQ(proto::InstallState::INSTALLED_WITH_OS_INTEGRATION,
-              registrar().GetInstallState(placeholder_app_id));
+    EXPECT_TRUE(registrar().AppMatches(
+        placeholder_app_id,
+        WebAppFilter::InstalledInOperatingSystemForTesting()));
   }
 
   // Replace the placeholder with a real app.
@@ -820,8 +821,8 @@ TEST_F(ExternalAppResolutionCommandTest, SucessInstallForcedContainerWindow) {
   auto result = InstallAndWait(install_options);
   EXPECT_EQ(result.code, webapps::InstallResultCode::kSuccessNewInstall);
   ASSERT_TRUE(result.app_id.has_value());
-  EXPECT_EQ(proto::INSTALLED_WITH_OS_INTEGRATION,
-            registrar().GetInstallState(*result.app_id));
+  EXPECT_TRUE(registrar().AppMatches(
+      *result.app_id, WebAppFilter::InstalledInOperatingSystemForTesting()));
   EXPECT_FALSE(IsPlaceholderAppUrl(kWebAppUrl));
   std::optional<webapps::AppId> id =
       registrar().LookupExternalAppId(kWebAppUrl);
@@ -848,7 +849,7 @@ TEST_F(ExternalAppResolutionCommandTest, GetWebAppInstallInfoFailed) {
   EXPECT_EQ(result.code,
             webapps::InstallResultCode::kGetWebAppInstallInfoFailed);
   ASSERT_FALSE(result.app_id.has_value());
-  EXPECT_FALSE(registrar().IsInRegistrar(kWebAppId));
+  EXPECT_FALSE(registrar().GetInstallState(kWebAppId).has_value());
 }
 
 TEST_F(ExternalAppResolutionCommandTest, UpgradeLock) {
@@ -868,7 +869,7 @@ TEST_F(ExternalAppResolutionCommandTest, UpgradeLock) {
   auto callback_command = std::make_unique<internal::CallbackCommand<AppLock>>(
       "", AppLockDescription(app_ids),
       base::BindLambdaForTesting(
-          [&](AppLock&, base::Value::Dict&) { callback_command_run = true; }),
+          [&](AppLock&, base::DictValue&) { callback_command_run = true; }),
       /*completion_callback=*/base::DoNothing());
 
   bool callback_command_2_run = false;
@@ -876,7 +877,7 @@ TEST_F(ExternalAppResolutionCommandTest, UpgradeLock) {
   auto callback_command_2 =
       std::make_unique<internal::CallbackCommand<AppLock>>(
           "", AppLockDescription(app_ids),
-          base::BindLambdaForTesting([&](AppLock&, base::Value::Dict&) {
+          base::BindLambdaForTesting([&](AppLock&, base::DictValue&) {
             callback_command_2_run = true;
           }),
           /*completion_callback=*/callback_runloop.QuitClosure());
@@ -916,8 +917,8 @@ TEST_F(ExternalAppResolutionCommandTest, UpgradeLock) {
 
   EXPECT_EQ(result.code, webapps::InstallResultCode::kSuccessNewInstall);
   ASSERT_TRUE(result.app_id.has_value());
-  EXPECT_EQ(proto::INSTALLED_WITH_OS_INTEGRATION,
-            registrar().GetInstallState(*result.app_id));
+  EXPECT_TRUE(registrar().AppMatches(
+      *result.app_id, WebAppFilter::InstalledInOperatingSystemForTesting()));
 
   EXPECT_TRUE(callback_command_run);
 
@@ -1222,8 +1223,8 @@ TEST_F(ExternalAppResolutionCommandTest, SuccessWithUninstallAndReplace) {
   auto result = InstallAndWait(install_options, std::move(data_retriever));
   EXPECT_EQ(result.code, webapps::InstallResultCode::kSuccessNewInstall);
   ASSERT_TRUE(result.app_id.has_value());
-  EXPECT_EQ(proto::INSTALLED_WITH_OS_INTEGRATION,
-            registrar().GetInstallState(*result.app_id));
+  EXPECT_TRUE(registrar().AppMatches(
+      *result.app_id, WebAppFilter::InstalledInOperatingSystemForTesting()));
 
   std::optional<proto::os_state::WebAppOsIntegration> os_state =
       registrar().GetAppCurrentOsIntegrationState(*result.app_id);

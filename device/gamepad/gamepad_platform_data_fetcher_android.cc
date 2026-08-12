@@ -10,7 +10,10 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/containers/flat_map.h"
+#include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -115,7 +118,7 @@ void GamepadPlatformDataFetcherAndroid::OnAddedToProvider() {
 
 void GamepadPlatformDataFetcherAndroid::SetDualRumbleVibrationActuator(
     int source_id) {
-  DCHECK(!base::Contains(vibration_actuators_, source_id));
+  DCHECK(!vibration_actuators_.contains(source_id));
   vibration_actuators_.emplace(
       source_id, std::make_unique<HapticGamepadAndroid>(source_id));
 }
@@ -197,18 +200,18 @@ void GamepadPlatformDataFetcherAndroid::ResetVibration(
 }
 
 static void JNI_GamepadList_SetGamepadData(JNIEnv* env,
-                                           jlong data_fetcher,
-                                           jint index,
-                                           jboolean mapping,
-                                           jboolean connected,
+                                           int64_t data_fetcher,
+                                           int32_t index,
+                                           bool mapping,
+                                           bool connected,
                                            const JavaRef<jstring>& devicename,
-                                           jint vendor_id,
-                                           jint product_id,
-                                           jlong timestamp,
+                                           int32_t vendor_id,
+                                           int32_t product_id,
+                                           int64_t timestamp,
                                            const JavaRef<jfloatArray>& jaxes,
                                            const JavaRef<jfloatArray>& jbuttons,
-                                           jint buttons_length,
-                                           jboolean supports_dual_rumble) {
+                                           int32_t buttons_length,
+                                           bool supports_dual_rumble) {
   DCHECK(data_fetcher);
   GamepadPlatformDataFetcherAndroid* fetcher =
       reinterpret_cast<GamepadPlatformDataFetcherAndroid*>(data_fetcher);
@@ -282,6 +285,7 @@ static void JNI_GamepadList_SetGamepadData(JNIEnv* env,
 
   // Copy buttons state to the Gamepad buttons[].
   for (unsigned int j = 0; j < pad.buttons_length; j++) {
+    pad.buttons[j].used = true;
     pad.buttons[j].pressed =
         buttons[j] > GamepadButton::kDefaultButtonPressedThreshold;
     pad.buttons[j].touched = buttons[j] > 0.0f;

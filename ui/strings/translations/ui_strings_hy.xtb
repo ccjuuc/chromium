@@ -1,7 +1,6 @@
 <?xml version="1.0" ?>
 <!DOCTYPE translationbundle>
 <translationbundle lang="hy">
-<translation id="1028699632127661925">Ուղարկվում է <ph name="DEVICE_NAME" /> սարքին...</translation>
 <translation id="111910763555783249">Ծանուցման կարգավորումներ</translation>
 <translation id="1127811143501539442">{DAYS,plural, =1{1 օր առաջ}one{# օր առաջ}other{# օր առաջ}}</translation>
 <translation id="1156623771253174079">{SECONDS,plural, =1{1 րոպե առաջ}one{# րոպե առաջ}other{# րոպե առաջ}}</translation>
@@ -12,7 +11,6 @@
 <translation id="1253734725326687145">Հպման թիրախը տեղափոխվեց վերևի աջ անկյուն։ Հպեք այստեղ։</translation>
 <translation id="1266864766717917324">Չհաջողվեց ուղարկել բովանդակությունը (<ph name="CONTENT_TYPE" />)</translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">Փորձեք ուղարկել տեքստը մաս-մաս։</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">Ձախից աջ</translation>
 <translation id="1383876407941801731">Որոնում</translation>
@@ -20,6 +18,7 @@
 <translation id="1432724887402139994">{SECONDS,plural, =1{1 րոպե առաջ}one{# րոպե առաջ}other{# րոպե առաջ}}</translation>
 <translation id="1450753235335490080">Չհաջողվեց ուղարկել բովանդակությունը (<ph name="CONTENT_TYPE" />)</translation>
 <translation id="1523230076022876491">{MONTHS,plural, =1{1 ամիս առաջ}one{# ամիս առաջ}other{# ամիս առաջ}}</translation>
+<translation id="1591017414891297549">ՆԱԽԱԴԻՏՈՒՄ</translation>
 <translation id="1591184457164800433">{MINUTES,plural, =1{1 րոպե }one{# րոպե }other{# րոպե }}</translation>
 <translation id="1643823602425662293">Ծանուցում</translation>
 <translation id="169515659049020177">Shift</translation>
@@ -44,7 +43,6 @@
 <translation id="2148716181193084225">Այսօր</translation>
 <translation id="2168039046890040389">Էջը վեր</translation>
 <translation id="2190355936436201913">(դատարկ)</translation>
-<translation id="2192232475740621500">Ցույց տալ ավելի քիչ պատուհաններ</translation>
 <translation id="2267918077332197517">Արգելափակել այս կայքի բոլոր ծանուցումները</translation>
 <translation id="2283117145434822734">F6</translation>
 <translation id="2289052229480071835">Ձեր էկրանին հպեք ինտերակտիվ տարրերին:</translation>
@@ -56,7 +54,6 @@
 <translation id="2388990488038464401">Զանգե՞լ այս համարին ձեր հեռախոսից</translation>
 <translation id="2435457462613246316">Ցույց տալ գաղտնաբառը</translation>
 <translation id="24452542372838207">Ընդարձակել</translation>
-<translation id="2445449901874883781">Ցույց տալ ավելի շատ պատուհաններ</translation>
 <translation id="2448407890032181691">Հպման թիրախը տեղափոխվեց ներքևի աջ անկյուն։ Հպեք այստեղ։</translation>
 <translation id="2482878487686419369">Ծանուցումներ</translation>
 <translation id="2497284189126895209">Բոլոր ֆայլերը</translation>
@@ -69,7 +66,6 @@
 <translation id="2586657967955657006">Սեղմատախտակ</translation>
 <translation id="2653844658857826081">ՆՈՐՈՒՅԹ</translation>
 <translation id="2666092431469916601">Վերին</translation>
-<translation id="2701330563083355633">Ուղարկվել է <ph name="DEVICE_NAME" />-ի միջոցով</translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{1 տարի առաջ}one{# տարի առաջ}other{# տարի առաջ}}</translation>
 <translation id="2878511608894704031">Ջնջել բոլորը</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{1 օրից}one{# օրից}other{# օրից}}</translation>
@@ -85,10 +81,9 @@
 <translation id="3240426699337459095">Հղումը պատճենվեց</translation>
 <translation id="3291688615589870984">{DAYS,plural, =1{1 օր}one{# օր}other{# օր}}</translation>
 <translation id="3295886253693811851">Զանգել հավելվածից</translation>
-<translation id="3306688585798492231">Ներկառուցված էկրան</translation>
+<translation id="3306688585798492231">Ներ­կա­­ռուց­ված էկրան</translation>
 <translation id="335581015389089642">Speech</translation>
 <translation id="3372635229069101468">Սեղմեք <ph name="BEGIN_BOLD" />Մանրամասներ<ph name="END_BOLD" /></translation>
-<translation id="3389286852084373014">Տեքստը չափազանց մեծ է</translation>
 <translation id="3406306243914553062">HTML բովանդակություն</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{Մնացել է 1 օր}one{Մնացել է # օր}other{Մնացել է # օր}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" /> Ֆայլ</translation>
@@ -109,6 +104,7 @@
 <translation id="4031910098617850788">F5</translation>
 <translation id="40579289237549812">{UNREAD_NOTIFICATIONS,plural, =1{1 չկարդացված ծանուցում}one{# չկարդացված ծանուցում}other{# չկարդացված ծանուցում}}</translation>
 <translation id="41501027364808384">{COUNT,plural, =1{Միացրեք հետևյալ ընդլայնումը ինկոգնիտո ռեժիմում՝}one{Միացրեք հետևյալ ընդլայնումը ինկոգնիտո ռեժիմում՝}other{Միացրեք հետևյալ ընդլայնումները ինկոգնիտո ռեժիմում՝}}</translation>
+<translation id="4230098358142093034">Գլխավոր էջ</translation>
 <translation id="4266252015790371705">{MONTHS,plural, =1{1 ամիս առաջ}one{# ամիս առաջ}other{# ամիս առաջ}}</translation>
 <translation id="4277033906326892359">«<ph name="COLUMN_NAME" />» սյունակի արժեքները դասավորված են աճման կարգով</translation>
 <translation id="4289300219472526559">Start Speaking</translation>
@@ -190,7 +186,6 @@
 <translation id="6965382102122355670">Եղավ</translation>
 <translation id="6974053822202609517">Աջից ձախ</translation>
 <translation id="7052633198403197513">F1</translation>
-<translation id="7170202025028120564">Հավելվածի էկրանի ձեր կարգավորումները կկիրառվեն, երբ հաջորդ անգան վերագործարկեք այն։</translation>
 <translation id="7222373446505536781">F11</translation>
 <translation id="7238427729722629793">{MINUTES,plural, =1{Մնացել է 1 րոպե}one{Մնացել է # րոպե}other{Մնացել է # րոպե}}</translation>
 <translation id="7252604552361840748">Գտեք վերևում նշված ընդլայնումը</translation>
@@ -200,6 +195,7 @@
 <translation id="7410957453383678442">{MINUTES,plural, =1{Մնացել է 1 րոպե}one{Մնացել է # րոպե}other{Մնացել է # րոպե}}</translation>
 <translation id="7437971918971306061">«<ph name="COLUMN_NAME" />» սյունակի արժեքները դասավորված չեն։</translation>
 <translation id="7460907917090416791"><ph name="QUANTITY" /> ՏԲ</translation>
+<translation id="7485236722522518129">F4</translation>
 <translation id="7507604095951736240">Էմոջիներ</translation>
 <translation id="7620655452534002301">Հեռացվեց։</translation>
 <translation id="7658239707568436148">Չեղարկել</translation>
@@ -232,6 +228,7 @@
 <translation id="8677655579646609597"><ph name="QUANTITY" /> ԿԲ/վ</translation>
 <translation id="8725488761726303204">ևս <ph name="NUMBER" /> տարր</translation>
 <translation id="8730621377337864115">Պատրաստ է</translation>
+<translation id="8741385002816058621">Սա նախնական տարբերակ է</translation>
 <translation id="8772073294905169192">{HOURS,plural, =1{1 ժ}one{# ժ}other{# ժ}}</translation>
 <translation id="8798099450830957504">Կանխադրված</translation>
 <translation id="8841375032071747811">«Հետ» կոճակ</translation>
@@ -245,7 +242,6 @@
 <translation id="9170848237812810038">&amp;Հետարկել</translation>
 <translation id="9195990613383871904">Վաղը</translation>
 <translation id="928628199082367701">Super</translation>
-<translation id="932327136139879170">Գլխավոր էջ</translation>
 <translation id="944069440740578670">Չկարդացված ծանուցումներ</translation>
 <translation id="966963601246348639">{SECONDS,plural, =1{1 վայրկյան առաջ}one{# վայրկյան առաջ}other{# վայրկյան առաջ}}</translation>
 </translationbundle>

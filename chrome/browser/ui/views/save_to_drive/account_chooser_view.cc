@@ -34,10 +34,12 @@ namespace save_to_drive {
 AccountChooserView::AccountChooserView(
     AccountChooserViewDelegate* parent_dialog,
     const std::vector<AccountInfo>& accounts,
-    std::optional<CoreAccountId> primary_account_id)
-    : parent_dialog_(parent_dialog) {
+    std::optional<CoreAccountId> primary_account_id,
+    const std::u16string& upload_title)
+    : upload_title_(upload_title), parent_dialog_(parent_dialog) {
   SetProperty(views::kElementIdentifierKey, kTopViewId);
   SetOrientation(views::LayoutOrientation::kVertical);
+  is_single_account_ = IsSingleAccount(accounts);
   header_view_ = AddChildView(CreateHeaderView(accounts));
   body_view_ = AddChildView(CreateBodyView(accounts, primary_account_id));
   footer_view_ = AddChildView(CreateFooterView());
@@ -47,8 +49,18 @@ AccountChooserView::~AccountChooserView() = default;
 void AccountChooserView::UpdateView(
     const std::vector<AccountInfo>& accounts,
     std::optional<CoreAccountId> primary_account_id) {
+  is_single_account_ = IsSingleAccount(accounts);
   UpdateHeaderView(accounts);
   UpdateBodyView(accounts, primary_account_id);
+}
+
+views::View* AccountChooserView::GetInitiallyFocusedView() {
+  if (is_single_account_) {
+    return footer_view_->GetViewByElementId(kAddAccountButtonId);
+  } else {
+    return body_view_->GetViewByElementId(
+        AccountChooserRadioGroupView::kFirstAccountRadioButtonId);
+  }
 }
 
 std::unique_ptr<views::View> AccountChooserView::CreateBodyMultiAccount(
@@ -93,7 +105,8 @@ std::unique_ptr<views::View> AccountChooserView::CreateBodySingleAccount(
           .Build();
   single_account_row->GetViewAccessibility().SetRole(ax::mojom::Role::kRow);
   single_account_row->GetViewAccessibility().SetName(
-      base::StrCat({account.full_name, " ", account.email}));
+      base::UTF8ToUTF16(base::StrCat(
+          {account.GetFullName().value_or(""), " ", account.GetEmail()})));
   return single_account_row;
 }
 
@@ -103,7 +116,7 @@ std::unique_ptr<views::View> AccountChooserView::CreateBodyView(
   CHECK(IsSingleAccount(accounts) || IsMultiAccount(accounts))
       << "Account chooser view should "
          "only be used if there are one or more accounts.";
-  if (IsSingleAccount(accounts)) {
+  if (is_single_account_) {
     parent_dialog_->OnAccountSelected(accounts.front());
     return CreateBodySingleAccount(accounts.front());
   } else {
@@ -240,8 +253,8 @@ std::unique_ptr<views::Label> AccountChooserView::CreateTitleLabel(
       views::style::STYLE_HEADLINE_4);
   title_label->SetEnabledColor(ui::kColorSysOnSurface);
   SetLabelProperties(title_label.get());
-  title_label->GetViewAccessibility().SetName(l10n_util::GetStringUTF16(
-      IDS_ACCOUNT_CHOOSER_HEADER_ACCESSIBILITY_LABEL));
+  title_label->GetViewAccessibility().SetRole(ax::mojom::Role::kHeading);
+  title_label->GetViewAccessibility().SetHierarchicalLevel(2);
   return title_label;
 }
 
@@ -259,13 +272,19 @@ std::unique_ptr<views::StyledLabel> AccountChooserView::CreateSubtitleLabel() {
   std::vector<size_t> offsets;
   std::u16string text = base::ReplaceStringPlaceholders(
       l10n_util::GetStringUTF16(IDS_ACCOUNT_CHOOSER_SUBTITLE),
-      {saved_from_chrome}, &offsets);
+      {upload_title_, saved_from_chrome}, &offsets);
   subtitle_label->SetText(text);
   subtitle_label->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT);
-  gfx::Range saved_from_chrome_range(offsets[0],
-                                     offsets[0] + saved_from_chrome.length());
+
+  CHECK_EQ(offsets.size(), 2u);
   views::StyledLabel::RangeStyleInfo style_info;
   style_info.text_style = views::style::STYLE_BODY_3_MEDIUM;
+
+  gfx::Range title_range(offsets[0], offsets[0] + upload_title_.length());
+  subtitle_label->AddStyleRange(title_range, style_info);
+
+  gfx::Range saved_from_chrome_range(offsets[1],
+                                     offsets[1] + saved_from_chrome.length());
   subtitle_label->AddStyleRange(saved_from_chrome_range, style_info);
   return subtitle_label;
 }
@@ -274,9 +293,6 @@ std::unique_ptr<views::View> AccountChooserView::CreateTitleView(
     const std::vector<AccountInfo>& accounts) {
   auto title_view = std::make_unique<views::FlexLayoutView>();
   title_view->SetCrossAxisAlignment(views::LayoutAlignment::kCenter);
-  title_view->GetViewAccessibility().SetRole(ax::mojom::Role::kRegion);
-  title_view->GetViewAccessibility().SetName(l10n_util::GetStringUTF16(
-      IDS_ACCOUNT_CHOOSER_HEADER_ACCESSIBILITY_LABEL));
 
   auto title_container = std::make_unique<views::FlexLayoutView>();
   title_container->SetProperty(

@@ -7,10 +7,8 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_util.h"
-#include "base/strings/to_string.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/delete_profile_helper.h"
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
@@ -26,9 +24,8 @@
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/trusted_vault/trusted_vault_encryption_keys_tab_helper.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/views/profiles/profile_management_types.h"
+#include "chrome/browser/ui/views/profiles/profile_picker_utils.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_view.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_web_contents_host.h"
 #include "chrome/browser/ui/webui/signin/signin_ui_error.h"
@@ -95,13 +92,17 @@ BASE_FEATURE(kProfilePickerGaiaBlankContinueUrl,
 
 ProfilePickerSignInProvider::ProfilePickerSignInProvider(
     ProfilePickerWebContentsHost* host,
+    ProfilePickerSignInProviderDelegate* delegate,
     signin_metrics::AccessPoint signin_access_point,
     const std::string& initial_email,
+    SignInStepFinishedCallback signin_finished_callback,
     base::FilePath profile_path)
     : host_(host),
+      delegate_(delegate),
       signin_access_point_(signin_access_point),
       initial_email_(initial_email),
-      profile_path_(profile_path) {}
+      profile_path_(profile_path),
+      callback_(std::move(signin_finished_callback)) {}
 
 ProfilePickerSignInProvider::~ProfilePickerSignInProvider() {
   // Handle unfinished signed-in profile creation (i.e. when callback was not
@@ -117,14 +118,9 @@ ProfilePickerSignInProvider::~ProfilePickerSignInProvider() {
 }
 
 void ProfilePickerSignInProvider::SwitchToSignIn(
-    StepSwitchFinishedCallback switch_finished_callback,
-    SignedInCallback signin_finished_callback) {
+    StepSwitchFinishedCallback switch_finished_callback) {
   base::UmaHistogramEnumeration(kProfilePickerSignInProviderStepHistogram,
                                 SigninProviderStep::kSwitchToSignin);
-
-  // Update the callback even if the profile is already initialized (to respect
-  // that the callback may be different).
-  callback_ = std::move(signin_finished_callback);
 
   if (IsInitialized()) {
     // Do not load any url because the desired sign-in screen is still loaded in
@@ -132,7 +128,7 @@ void ProfilePickerSignInProvider::SwitchToSignIn(
     host_->ShowScreen(
         contents(), GURL(),
         base::BindOnce(std::move(switch_finished_callback.value()), true));
-    host_->SetNativeToolbarVisible(true);
+    host_->SetNativeToolbarSigninButtonsVisible(true);
     return;
   }
 
@@ -176,7 +172,7 @@ void ProfilePickerSignInProvider::NavigateBack() {
   // Do not load any url because the desired screen is still loaded in the
   // picker contents.
   host_->ShowScreenInPickerContents(GURL(), base::OnceClosure());
-  host_->SetNativeToolbarVisible(false);
+  host_->SetNativeToolbarSigninButtonsVisible(false);
 }
 
 bool ProfilePickerSignInProvider::HandleContextMenu(
@@ -206,12 +202,9 @@ content::WebContents* ProfilePickerSignInProvider::AddNewContents(
     return nullptr;
   }
 
-  NavigateParams params(profile_, target_url, ui::PAGE_TRANSITION_LINK);
-  // Open all links as new popups.
-  params.disposition = WindowOpenDisposition::NEW_POPUP;
-  params.contents_to_insert = std::move(new_contents);
-  params.window_features = window_features;
-  Navigate(&params);
+  OpenLearnMorePopup(profile_, std::move(new_contents), target_url,
+                     window_features);
+
   return nullptr;
 }
 
@@ -227,6 +220,12 @@ void ProfilePickerSignInProvider::NavigationStateChanged(
   if (source != contents_.get()) {
     return;
   }
+
+  // The first Gaia screen has no back history. If CanGoBack() is `false`, we
+  // are on the first screen and the "Don't sign in" button (if exists) should
+  // be visible.
+  host_->SetNativeToolbarDontSignInButtonVisible(
+      !contents_->GetController().CanGoBack());
 
   const GURL& visible_url = contents_->GetVisibleURL();
   auto primary_account =
@@ -297,14 +296,7 @@ void ProfilePickerSignInProvider::OnProfileInitialized(
       content::WebContents::CreateParams(profile_));
   contents()->SetDelegate(this);
 
-  // Create a manager that supports modal dialogs, such as for webauthn.
-  web_modal::WebContentsModalDialogManager::CreateForWebContents(contents());
-  web_modal::WebContentsModalDialogManager::FromWebContents(contents())
-      ->SetDelegate(this);
-
-  // To allow passing encryption keys during interactions with the page,
-  // instantiate TrustedVaultEncryptionKeysTabHelper.
-  TrustedVaultEncryptionKeysTabHelper::CreateForWebContents(contents());
+  AddCommonSigninWebContentUserData(contents(), this);
 
   // Record that the sign in process starts. Its end is recorded automatically
   // when the primary account is set.
@@ -327,18 +319,16 @@ void ProfilePickerSignInProvider::OnProfileInitialized(
       contents(), host_->GetPreferredBackgroundColor());
 
   base::OnceClosure navigation_finished_closure =
-      base::BindOnce(&ProfilePickerWebContentsHost::SetNativeToolbarVisible,
-                     // Unretained is enough as the callback is called by the
-                     // host itself.
-                     base::Unretained(host_), /*visible=*/true)
+      base::BindOnce(
+          &ProfilePickerWebContentsHost::SetNativeToolbarSigninButtonsVisible,
+          // Unretained is enough as the callback is called by the
+          // host itself.
+          base::Unretained(host_), /*visible=*/true)
           .Then(base::BindOnce(std::move(switch_finished_callback.value()),
                                true));
   host_->ShowScreen(contents(), BuildSigninURL(),
                     std::move(navigation_finished_closure));
-#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
-  ChromePasswordReuseDetectionManagerClient::CreateForProfilePickerWebContents(
-      contents());
-#endif
+
   // Attach a `DiceTabHelper` to the `WebContents` to trigger the completion
   // of the step.
   DiceTabHelper::CreateForWebContents(contents());
@@ -354,10 +344,10 @@ bool ProfilePickerSignInProvider::IsInitialized() const {
 void ProfilePickerSignInProvider::FinishFlow(
     const CoreAccountInfo& account_info) {
   DCHECK(IsInitialized());
-  host_->SetNativeToolbarVisible(false);
+  host_->SetNativeToolbarSigninButtonsVisible(false);
   ResetWebContentsDelegates();
   std::move(callback_).Run(profile_.get(), account_info, std::move(contents_),
-                           SigninUIError::Ok());
+                           StepSwitchFinishedCallback());
 }
 
 void ProfilePickerSignInProvider::FinishFlowInPickerWithSyncConfirmation(
@@ -388,37 +378,10 @@ void ProfilePickerSignInProvider::ShowSigninError(
     Profile* profile,
     content::WebContents* contents,
     const SigninUIError& error) {
-  if (!base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos)) {
+  if (!syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     return;
   }
-
-  if (signin_util::IsForceSigninEnabled() &&
-      error.type() ==
-          SigninUIError::Type::kUsernameNotAllowedByPatternFromPrefs) {
-    host_->Reset(StepSwitchFinishedCallback(base::BindOnce(
-        &ProfilePickerWebContentsHost::ShowForceSigninErrorDialog,
-        base::Unretained(host_),
-        ForceSigninUIError::SigninPatternNotMatching(
-            base::UTF16ToUTF8(error.email())))));
-    return;
-  }
-
-  if (error.type() ==
-      SigninUIError::Type::kAccountAlreadyUsedByAnotherProfile) {
-    GURL profile_switch_url(chrome::kChromeUIProfilePickerUrl);
-    profile_switch_url = profile_switch_url.Resolve("profile-switch");
-    // Appends the `profile_path` to be retrieved in the web page.
-    profile_switch_url =
-        net::AppendQueryParameter(profile_switch_url, "profileSwitchPath",
-                                  base::ToString(error.another_profile_path()));
-
-    host_->ShowScreenInPickerContents(profile_switch_url, base::OnceClosure());
-    return;
-  }
-
-  std::move(callback_).Run(profile_.get(), CoreAccountInfo(),
-                           std::move(contents_), error);
+  delegate_->ShowSigninError(profile, error);
 }
 
 void ProfilePickerSignInProvider::ResetWebContentsDelegates() {
@@ -488,7 +451,25 @@ void ProfilePickerSignInProvider::InitializeOrUpdateDiceTabHelper(
           DiceTabHelper::GetHistorySyncOptinCallbackForBrowser());
       helper.UpdateSigninErrorCallback(
           DiceTabHelper::GetShowSigninErrorCallbackForBrowser());
-      helper.UpdateRedirectUrl(GURL(chrome::kChromeUINewTabURL));
+      helper.UpdateRedirectUrl(chrome::ChromeUINewTabURLAsGURL());
       return;
   }
+}
+
+void AddCommonSigninWebContentUserData(
+    content::WebContents* web_contents,
+    web_modal::WebContentsModalDialogManagerDelegate* delegate) {
+  // Create a manager that supports modal dialogs, such as for webauthn.
+  web_modal::WebContentsModalDialogManager::CreateForWebContents(web_contents);
+  web_modal::WebContentsModalDialogManager::FromWebContents(web_contents)
+      ->SetDelegate(delegate);
+
+  // To allow passing encryption keys during interactions with the page,
+  // instantiate TrustedVaultEncryptionKeysTabHelper.
+  TrustedVaultEncryptionKeysTabHelper::CreateForWebContents(web_contents);
+
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+  ChromePasswordReuseDetectionManagerClient::CreateForProfilePickerWebContents(
+      web_contents);
+#endif
 }

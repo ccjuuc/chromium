@@ -28,8 +28,6 @@
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_trust_checker.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
-#include "chrome/browser/web_applications/isolated_web_apps/policy/isolated_web_app_policy_constants.h"
-#include "chrome/browser/web_applications/isolated_web_apps/runtime_data/chrome_iwa_runtime_data_provider.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/fake_iwa_runtime_data_provider_mixin.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_test_update_server.h"
@@ -44,6 +42,7 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/pref_service.h"
 #include "components/webapps/common/web_app_id.h"
+#include "components/webapps/isolated_web_apps/public/iwa_runtime_data_provider.h"
 #include "components/webapps/isolated_web_apps/test_support/signing_keys.h"
 #include "content/public/test/browser_test.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -91,7 +90,7 @@ using WebAppsChromeOsBrowserTest = web_app::WebAppBrowserTestBase;
 
 IN_PROC_BROWSER_TEST_F(WebAppsChromeOsBrowserTest, ShortcutIcons) {
   const GURL app_url =
-      https_server()->GetURL("/web_app_shortcuts/shortcuts.html");
+      embedded_https_test_server().GetURL("/web_app_shortcuts/shortcuts.html");
   const webapps::AppId app_id =
       web_app::InstallWebAppFromPage(browser(), app_url);
   LaunchWebAppBrowser(app_id);
@@ -139,7 +138,8 @@ IN_PROC_BROWSER_TEST_F(WebAppsChromeOsBrowserTest, ShortcutIcons) {
 
   const int command_id = ash::LAUNCH_APP_SHORTCUT_FIRST + 3;
   ui_test_utils::UrlLoadObserver url_observer(
-      https_server()->GetURL("/web_app_shortcuts/shortcuts.html#four"));
+      embedded_https_test_server().GetURL(
+          "/web_app_shortcuts/shortcuts.html#four"));
   menu_model->ActivatedAt(menu_model->GetIndexOfCommandId(command_id).value(),
                           ui::EF_LEFT_MOUSE_BUTTON);
   url_observer.Wait();
@@ -200,8 +200,8 @@ class WebAppsPreventCloseChromeOsBrowserTest
         installed_app_url_ = kCalculatorAppUrl;
         profile()->GetPrefs()->SetList(
             prefs::kWebAppInstallForceList,
-            base::Value::List().Append(
-                base::Value::Dict()
+            base::ListValue().Append(
+                base::DictValue()
                     .Set(web_app::kUrlKey, kCalculatorAppUrl)
                     .Set(web_app::kDefaultLaunchContainerKey,
                          web_app::kDefaultLaunchContainerWindowValue)));
@@ -243,9 +243,9 @@ class WebAppsPreventCloseChromeOsBrowserTest
   }
 
   void ResetPolicies() {
-    profile()->GetPrefs()->SetList(prefs::kWebAppSettings, base::Value::List());
+    profile()->GetPrefs()->SetList(prefs::kWebAppSettings, base::ListValue());
     profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
-                                   base::Value::List());
+                                   base::ListValue());
     web_app::WebAppProvider::GetForTest(profile())
         ->command_manager()
         .AwaitAllCommandsCompleteForTesting();
@@ -267,8 +267,8 @@ IN_PROC_BROWSER_TEST_P(WebAppsPreventCloseChromeOsBrowserTest, CheckMenuModel) {
   InstallApp();
   profile()->GetPrefs()->SetList(
       prefs::kWebAppSettings,
-      base::Value::List().Append(
-          base::Value::Dict()
+      base::ListValue().Append(
+          base::DictValue()
               .Set(web_app::kManifestId, *installed_app_url_)
               .Set(web_app::kRunOnOsLogin, web_app::kRunWindowed)
               .Set(web_app::kPreventClose, IsPreventCloseEnabled())));
@@ -332,8 +332,8 @@ IN_PROC_BROWSER_TEST_P(WebAppsPreventCloseChromeOsBrowserTest,
 
   profile()->GetPrefs()->SetList(
       prefs::kWebAppSettings,
-      base::Value::List().Append(
-          base::Value::Dict()
+      base::ListValue().Append(
+          base::DictValue()
               .Set(web_app::kManifestId, *installed_app_url_)
               .Set(web_app::kRunOnOsLogin, web_app::kRunWindowed)
               .Set(web_app::kPreventClose, IsPreventCloseEnabled())));
@@ -361,8 +361,8 @@ IN_PROC_BROWSER_TEST_P(WebAppsPreventCloseChromeOsBrowserTest,
 
   profile()->GetPrefs()->SetList(
       prefs::kWebAppSettings,
-      base::Value::List().Append(
-          base::Value::Dict()
+      base::ListValue().Append(
+          base::DictValue()
               .Set(web_app::kManifestId, *installed_app_url_)
               .Set(web_app::kRunOnOsLogin, web_app::kRunWindowed)
               .Set(web_app::kPreventClose, IsPreventCloseEnabled())));
@@ -415,7 +415,7 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppChromeOsBrowserTest,
                        ContextMenuOnlyHasLaunchNew) {
   app()->TrustSigningKey();
   web_app::IsolatedWebAppUrlInfo url_info =
-      app()->InstallChecked(browser()->profile());
+      app()->InstallChecked(browser()->GetProfile());
 
   PinAppWithIDToShelf(url_info.app_id());
 

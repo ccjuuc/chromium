@@ -10,7 +10,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
-        "description": "Run with android_35_google_apis_tablet_x64",
+        "description": "Run with android_35_google_apis_tablet_x64_tablet_landscape",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -28,7 +28,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -50,7 +49,7 @@
             }
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 36
+          "shards": 50
         },
         "test": "android_browsertests",
         "test_id_prefix": "ninja://chrome/test:android_browsertests/"
@@ -61,12 +60,11 @@
           "--force-desktop-android",
           "--timeout-scale=2.0",
           "--avd-config=../../tools/android/avd/proto/android_35_google_apis_tablet_x64_tablet_landscape.textpb",
-          "--test-launcher-filter-file=../../testing/buildbot/filters/android.desktop.chrome_public_test_apk_desktop.filter;../../testing/buildbot/filters/android.desktop.emulator_15.chrome_public_test_apk.filter",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
         "ci_only": true,
-        "description": "Run with android_35_google_apis_tablet_x64",
+        "description": "Run with android_35_google_apis_tablet_x64_tablet_landscape",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -89,7 +87,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -123,11 +120,10 @@
           "--force-desktop-android",
           "--timeout-scale=2.0",
           "--avd-config=../../tools/android/avd/proto/android_35_google_apis_tablet_x64_tablet_landscape.textpb",
-          "--test-launcher-filter-file=../../testing/buildbot/filters/android.desktop.chrome_public_test_apk_desktop.filter",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
-        "description": "Run with android_35_google_apis_tablet_x64",
+        "description": "Run with android_35_google_apis_tablet_x64_tablet_landscape",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -150,7 +146,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -187,7 +182,7 @@
           "--recover-devices"
         ],
         "ci_only": true,
-        "description": "Run with android_35_google_apis_tablet_x64",
+        "description": "Run with android_35_google_apis_tablet_x64_tablet_landscape",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -210,7 +205,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -244,7 +238,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
-        "description": "Run with android_35_google_apis_tablet_x64",
+        "description": "Run with android_35_google_apis_tablet_x64_tablet_landscape",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -262,7 +256,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -296,7 +289,7 @@
           "--recover-devices"
         ],
         "ci_only": true,
-        "description": "Run with android_35_google_apis_tablet_x64",
+        "description": "Run with android_35_google_apis_tablet_x64_tablet_landscape",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -314,7 +307,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -348,7 +340,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
-        "description": "Run with android_35_google_apis_tablet_x64",
+        "description": "Run with android_35_google_apis_tablet_x64_tablet_landscape",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -366,7 +358,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -400,7 +391,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
-        "description": "Run with android_35_google_apis_tablet_x64",
+        "description": "Run with android_35_google_apis_tablet_x64_tablet_landscape",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -418,7 +409,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -459,7 +449,7 @@
           "--avd-config=../../tools/android/avd/proto/android_35_google_apis_tablet_x64_tablet_landscape.textpb"
         ],
         "ci_only": true,
-        "description": "Run with android_35_google_apis_tablet_x64",
+        "description": "Run with android_35_google_apis_tablet_x64_tablet_landscape",
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -475,7 +465,6 @@
           "has_native_resultdb_integration": true
         },
         "results_handler": "layout tests",
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -514,7 +503,6 @@
           "enable": true,
           "has_native_resultdb_integration": true
         },
-        "retry_only_failed_tests": true,
         "swarming": {
           "dimensions": {
             "cores": "8",
@@ -522,7 +510,8 @@
             "os": "Ubuntu-22.04",
             "pool": "chromium.tests"
           },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
+          "shards": 10
         },
         "test": "chrome_junit_tests",
         "test_id_prefix": "ninja://chrome/android:chrome_junit_tests/"

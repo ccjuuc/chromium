@@ -4,9 +4,6 @@
 
 package org.chromium.base;
 
-import static android.content.Context.UI_MODE_SERVICE;
-
-import android.app.UiModeManager;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
@@ -21,6 +18,7 @@ import android.provider.Settings;
 import android.util.DisplayMetrics;
 
 import androidx.annotation.GuardedBy;
+import androidx.annotation.IntDef;
 
 import org.jni_zero.CalledByNative;
 import org.jni_zero.CalledByNativeForTesting;
@@ -33,6 +31,9 @@ import org.chromium.build.NativeLibraries;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
 /**
  * Caches device info during app start-up. For values that might change during the lifetime of the
  * app, refer to @see org.chromium.ui.base.DeviceFormFactor.java
@@ -44,9 +45,12 @@ public final class DeviceInfo {
 
     private static @Nullable String sGmsVersionCodeForTesting;
     private static @Nullable Boolean sIsAutomotiveForTesting;
+    private static @Nullable Boolean sIsTVForTesting;
     private static boolean sInitialized;
     private static @Nullable Boolean sIsXrForTesting;
     private static @Nullable Boolean sIsRetailDemoModeForTesting;
+    private static @Nullable Boolean sIsDesktopForTesting;
+    private static @Nullable Boolean sIsFoldableForTesting;
     private final IDeviceInfo mIDeviceInfo;
     private @Nullable Boolean mIsRetailDemoMode;
     private @Nullable ApplicationInfo mGmsAppInfo;
@@ -58,6 +62,15 @@ public final class DeviceInfo {
     private static @Nullable DeviceInfo sInstance;
 
     private static final Object CREATION_LOCK = new Object();
+
+    @IntDef({FormFactor.TV, FormFactor.AUTOMOTIVE, FormFactor.DESKTOP, FormFactor.XR})
+    @Retention(RetentionPolicy.SOURCE)
+    private @interface FormFactor {
+        int TV = 0;
+        int AUTOMOTIVE = 1;
+        int DESKTOP = 2;
+        int XR = 3;
+    }
 
     private static boolean sIsNativeLoaded;
 
@@ -78,8 +91,12 @@ public final class DeviceInfo {
                         /* gmsVersionCode= */ info.gmsVersionCode,
                         /* isTV= */ info.isTv,
                         /* isAutomotive= */ info.isAutomotive,
-                        /* isFoldable= */ info.isFoldable,
-                        /* isDesktop= */ info.isDesktop,
+                        /* isFoldable= */ (sIsFoldableForTesting != null)
+                                ? sIsFoldableForTesting
+                                : info.isFoldable,
+                        /* isDesktop= */ (sIsDesktopForTesting != null)
+                                ? sIsDesktopForTesting
+                                : info.isDesktop,
                         /* vulkanDeqpLevel= */ info.vulkanDeqpLevel,
                         /* isXr= */ (sIsXrForTesting != null) ? sIsXrForTesting : info.isXr,
                         /* wasLaunchedOnLargeDisplay= */ info.wasLaunchedOnLargeDisplay);
@@ -111,6 +128,20 @@ public final class DeviceInfo {
     public static void setIsAutomotiveForTesting(boolean isAutomotive) {
         sIsAutomotiveForTesting = isAutomotive;
         ResettersForTesting.register(() -> sIsAutomotiveForTesting = null);
+        if (isAutomotive) {
+            setExclusiveFormFactorForTesting(FormFactor.AUTOMOTIVE);
+        }
+        if (sIsNativeLoaded) {
+            sendToNative(getInstance().mIDeviceInfo);
+        }
+    }
+
+    public static void setIsTVForTesting(boolean isTV) {
+        sIsTVForTesting = isTV;
+        ResettersForTesting.register(() -> sIsTVForTesting = null);
+        if (isTV) {
+            setExclusiveFormFactorForTesting(FormFactor.TV);
+        }
         if (sIsNativeLoaded) {
             sendToNative(getInstance().mIDeviceInfo);
         }
@@ -124,12 +155,30 @@ public final class DeviceInfo {
         return getInstance().mIDeviceInfo.isAutomotive;
     }
 
+    /**
+     * Checks whether the current device is a foldable device.
+     *
+     * <p><b>Limitation:</b> This implementation relies entirely on the presence of the {@code
+     * PackageManager.FEATURE_SENSOR_HINGE_ANGLE} system feature to identify foldables. Because this
+     * feature was officially introduced in Android 11 (API level 30), early foldable devices that
+     * launched on Android 9 or 10 (such as the original Samsung Galaxy Fold, Z Fold2, and Z Flip)
+     * use proprietary implementations instead of the standard AOSP hinge sensor feature.
+     * Consequently, this method will incorrectly return {@code false} for those specific legacy
+     * devices.
+     *
+     * @return {@code true} if the device is recognized by the OS as having a hinge angle sensor,
+     *     {@code false} otherwise (including on legacy Samsung foldables).
+     */
     public static boolean isFoldable() {
-        return getInstance().mIDeviceInfo.isFoldable;
+        return (sIsFoldableForTesting != null)
+                ? sIsFoldableForTesting
+                : getInstance().mIDeviceInfo.isFoldable;
     }
 
     public static boolean isDesktop() {
-        return getInstance().mIDeviceInfo.isDesktop;
+        return (sIsDesktopForTesting != null)
+                ? sIsDesktopForTesting
+                : getInstance().mIDeviceInfo.isDesktop;
     }
 
     public static int getVulkanDeqpLevel() {
@@ -175,6 +224,9 @@ public final class DeviceInfo {
     public static void setIsXrForTesting(boolean value) {
         sIsXrForTesting = value;
         ResettersForTesting.register(() -> sIsXrForTesting = null);
+        if (value) {
+            setExclusiveFormFactorForTesting(FormFactor.XR);
+        }
         if (sIsNativeLoaded) {
             sendToNative(getInstance().mIDeviceInfo);
         }
@@ -188,6 +240,40 @@ public final class DeviceInfo {
     public static void setIsRetailDemoModeForTesting(boolean value) {
         sIsRetailDemoModeForTesting = value;
         ResettersForTesting.register(() -> sIsRetailDemoModeForTesting = null);
+    }
+
+    @CalledByNativeForTesting
+    public static void setIsDesktopForTesting(boolean isDesktop) {
+        sIsDesktopForTesting = isDesktop;
+        ResettersForTesting.register(() -> sIsDesktopForTesting = null);
+        if (isDesktop) {
+            setExclusiveFormFactorForTesting(FormFactor.DESKTOP);
+        }
+        if (sIsNativeLoaded) {
+            sendToNative(getInstance().mIDeviceInfo);
+        }
+    }
+
+    @CalledByNativeForTesting
+    public static void resetIsDesktopForTesting() {
+        sIsDesktopForTesting = null;
+        if (sIsNativeLoaded) {
+            sendToNative(getInstance().mIDeviceInfo);
+        }
+    }
+
+    @CalledByNativeForTesting
+    public static void setIsFoldableForTesting(boolean value) {
+        sIsFoldableForTesting = value;
+        ResettersForTesting.register(() -> sIsFoldableForTesting = null);
+        if (sIsNativeLoaded) {
+            sendToNative(getInstance().mIDeviceInfo);
+        }
+    }
+
+    @CalledByNativeForTesting
+    public static void resetIsFoldableForTesting() {
+        sIsFoldableForTesting = null;
     }
 
     private static DeviceInfo getInstance() {
@@ -259,11 +345,12 @@ public final class DeviceInfo {
         Context appContext = ContextUtils.getApplicationContext();
         PackageManager pm = appContext.getPackageManager();
         // See https://developer.android.com/training/tv/start/hardware.html#runtime-check.
-        UiModeManager uiModeManager = (UiModeManager) appContext.getSystemService(UI_MODE_SERVICE);
+        int uiMode = appContext.getResources().getConfiguration().uiMode;
         mIDeviceInfo.isTv =
-                uiModeManager != null
-                        && uiModeManager.getCurrentModeType()
-                                == Configuration.UI_MODE_TYPE_TELEVISION;
+                (uiMode & Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION;
+        if (sIsTVForTesting != null) {
+            mIDeviceInfo.isTv = sIsTVForTesting;
+        }
 
         boolean isAutomotive;
         try {
@@ -283,14 +370,21 @@ public final class DeviceInfo {
         }
 
         mIDeviceInfo.isDesktop =
-                (BuildConfig.IS_DESKTOP_ANDROID && pm.hasSystemFeature(PackageManager.FEATURE_PC))
-                        || CommandLine.getInstance().hasSwitch(BaseSwitches.FORCE_DESKTOP_ANDROID);
+                (sIsDesktopForTesting != null)
+                        ? sIsDesktopForTesting
+                        : (BuildConfig.IS_DESKTOP_ANDROID
+                                        && pm.hasSystemFeature(PackageManager.FEATURE_PC))
+                                || CommandLine.getInstance()
+                                        .hasSwitch(BaseSwitches.FORCE_DESKTOP_ANDROID);
 
         // Detect whether device is foldable.
         mIDeviceInfo.isFoldable =
                 !mIDeviceInfo.isDesktop
                         && Build.VERSION.SDK_INT >= VERSION_CODES.R
                         && pm.hasSystemFeature(PackageManager.FEATURE_SENSOR_HINGE_ANGLE);
+        if (sIsFoldableForTesting != null) {
+            mIDeviceInfo.isFoldable = sIsFoldableForTesting;
+        }
 
         int vulkanLevel = 0;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -310,6 +404,28 @@ public final class DeviceInfo {
                 getDeviceWidthInDp() >= LARGE_DISPLAY_MIN_SCREEN_WIDTH_600_DP;
 
         mIDeviceInfo.isXr = pm.hasSystemFeature("android.software.xr.api.openxr");
+        if (sIsXrForTesting != null) {
+            mIDeviceInfo.isXr = sIsXrForTesting;
+        }
+    }
+
+    private static void setExclusiveFormFactorForTesting(@FormFactor int activeFormFactor) {
+        if (activeFormFactor != FormFactor.TV) {
+            sIsTVForTesting = false;
+            ResettersForTesting.register(() -> sIsTVForTesting = null);
+        }
+        if (activeFormFactor != FormFactor.AUTOMOTIVE) {
+            sIsAutomotiveForTesting = false;
+            ResettersForTesting.register(() -> sIsAutomotiveForTesting = null);
+        }
+        if (activeFormFactor != FormFactor.DESKTOP) {
+            sIsDesktopForTesting = false;
+            ResettersForTesting.register(() -> sIsDesktopForTesting = null);
+        }
+        if (activeFormFactor != FormFactor.XR) {
+            sIsXrForTesting = false;
+            ResettersForTesting.register(() -> sIsXrForTesting = null);
+        }
     }
 
     @NativeMethods

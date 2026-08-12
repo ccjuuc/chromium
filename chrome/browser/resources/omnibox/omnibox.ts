@@ -140,14 +140,14 @@ class BrowserProxy {
   makeRequest(
       inputText: string, resetAutocompleteController: boolean,
       cursorPosition: number, zeroSuggest: boolean,
-      preventInlineAutocomplete: boolean, preferKeyword: boolean,
+      preventInlineAutocomplete: boolean, inKeywordMode: boolean,
       currentUrl: string, pageClassification: number,
       display: boolean): Promise<OmniboxResponse> {
     return new Promise(resolve => {
       this.lastRequest = {inputText, callback: resolve, display};
       this.handler_.startOmniboxQuery(
           inputText, resetAutocompleteController, cursorPosition, zeroSuggest,
-          preventInlineAutocomplete, preferKeyword, currentUrl,
+          preventInlineAutocomplete, inKeywordMode, currentUrl,
           pageClassification);
     });
   }
@@ -173,7 +173,7 @@ document.addEventListener('DOMContentLoaded', () => {
     browserProxy.makeRequest(
         e.detail.inputText, e.detail.resetAutocompleteController,
         e.detail.cursorPosition, e.detail.zeroSuggest,
-        e.detail.preventInlineAutocomplete, e.detail.preferKeyword,
+        e.detail.preventInlineAutocomplete, e.detail.inKeywordMode,
         e.detail.currentUrl, e.detail.pageClassification, true);
   });
   omniboxInput.addEventListener(
@@ -235,7 +235,7 @@ class ExportDelegate {
       const omniboxResponse = await browserProxy.makeRequest(
           queryInputs.inputText, queryInputs.resetAutocompleteController,
           queryInputs.cursorPosition, queryInputs.zeroSuggest,
-          queryInputs.preventInlineAutocomplete, queryInputs.preferKeyword,
+          queryInputs.preventInlineAutocomplete, queryInputs.inKeywordMode,
           queryInputs.currentUrl, queryInputs.pageClassification, false);
       const exportData = {
         queryInputs,
@@ -291,7 +291,7 @@ class ExportDelegate {
           cursorLock: false,
           zeroSuggest: false,
           preventInlineAutocomplete: false,
-          preferKeyword: false,
+          inKeywordMode: false,
           currentUrl: '',
           pageClassification: '4',
         }],
@@ -352,16 +352,15 @@ class ExportDelegate {
     const loadTimeDataKeys = ['cl', 'command_line', 'executable_path',
       'language', 'official', 'os_type', 'profile_path', 'useragent',
       'version', 'version_processor_variation', 'version_modifier'];
-    return Object.fromEntries(
-        loadTimeDataKeys.map(key => {
-          let valueOrError;
-          try {
-            valueOrError = loadTimeData.getValue(key);
-          } catch (e) {
-            valueOrError = (e as Error).toString();
-          }
-          return [key, valueOrError];
-        }));
+    return Object.fromEntries(loadTimeDataKeys.map(key => {
+      let valueOrError: string = '';
+      try {
+        valueOrError = loadTimeData.getString(key);
+      } catch (e) {
+        valueOrError = (e as Error).toString();
+      }
+      return [key, valueOrError];
+    }));
   }
 }
 

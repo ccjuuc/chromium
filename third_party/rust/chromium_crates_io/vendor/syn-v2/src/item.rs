@@ -13,9 +13,11 @@ use crate::restriction::Visibility;
 use crate::stmt::Block;
 use crate::token;
 use crate::ty::{Abi, ReturnType, Type};
-use proc_macro2::TokenStream;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 #[cfg(feature = "parsing")]
-use std::mem;
+use core::mem;
+use proc_macro2::TokenStream;
 
 ast_enum_of_structs! {
     /// Things that can appear directly inside of a module or scope.
@@ -66,13 +68,13 @@ ast_enum_of_structs! {
         /// A trait alias: `pub trait SharableIterator = Iterator + Sync`.
         TraitAlias(ItemTraitAlias),
 
-        /// A type alias: `type Result<T> = std::result::Result<T, MyError>`.
+        /// A type alias: `type Result<T> = core::result::Result<T, MyError>`.
         Type(ItemType),
 
         /// A union definition: `union Foo<A, B> { x: A, y: B }`.
         Union(ItemUnion),
 
-        /// A use declaration: `use std::collections::HashMap`.
+        /// A use declaration: `use alloc::collections::HashMap`.
         Use(ItemUse),
 
         /// Tokens forming an item not interpreted by Syn.
@@ -277,7 +279,7 @@ ast_struct! {
 }
 
 ast_struct! {
-    /// A type alias: `type Result<T> = std::result::Result<T, MyError>`.
+    /// A type alias: `type Result<T> = core::result::Result<T, MyError>`.
     #[cfg_attr(docsrs, doc(cfg(feature = "full")))]
     pub struct ItemType {
         pub attrs: Vec<Attribute>,
@@ -305,7 +307,7 @@ ast_struct! {
 }
 
 ast_struct! {
-    /// A use declaration: `use std::collections::HashMap`.
+    /// A use declaration: `use alloc::collections::HashMap`.
     #[cfg_attr(docsrs, doc(cfg(feature = "full")))]
     pub struct ItemUse {
         pub attrs: Vec<Attribute>,
@@ -413,10 +415,7 @@ impl From<ItemUnion> for DeriveInput {
             vis: input.vis,
             ident: input.ident,
             generics: input.generics,
-            data: Data::Union(DataUnion {
-                union_token: input.union_token,
-                fields: input.fields,
-            }),
+            data: Data::Union(DataUnion { union_token: input.union_token, fields: input.fields }),
         }
     }
 }
@@ -431,7 +430,7 @@ ast_enum_of_structs! {
     /// [syntax tree enum]: crate::expr::Expr#syntax-tree-enums
     #[cfg_attr(docsrs, doc(cfg(feature = "full")))]
     pub enum UseTree {
-        /// A path prefix of imports in a `use` item: `std::...`.
+        /// A path prefix of imports in a `use` item: `core::...`.
         Path(UsePath),
 
         /// An identifier imported by a `use` item: `HashMap`.
@@ -449,7 +448,7 @@ ast_enum_of_structs! {
 }
 
 ast_struct! {
-    /// A path prefix of imports in a `use` item: `std::...`.
+    /// A path prefix of imports in a `use` item: `core::...`.
     #[cfg_attr(docsrs, doc(cfg(feature = "full")))]
     pub struct UsePath {
         pub ident: Ident,
@@ -905,6 +904,7 @@ ast_enum! {
 #[cfg(feature = "parsing")]
 pub(crate) mod parsing {
     use crate::attr::{self, Attribute};
+    use crate::buffer::Cursor;
     use crate::derive;
     use crate::error::{Error, Result};
     use crate::expr::Expr;
@@ -923,7 +923,7 @@ pub(crate) mod parsing {
     use crate::lit::LitStr;
     use crate::mac::{self, Macro};
     use crate::parse::discouraged::Speculative as _;
-    use crate::parse::{Parse, ParseBuffer, ParseStream};
+    use crate::parse::{Parse, ParseStream};
     use crate::pat::{Pat, PatType, PatWild};
     use crate::path::Path;
     use crate::punctuated::Punctuated;
@@ -932,19 +932,21 @@ pub(crate) mod parsing {
     use crate::token;
     use crate::ty::{Abi, ReturnType, Type, TypePath, TypeReference};
     use crate::verbatim;
+    use alloc::boxed::Box;
+    use alloc::vec::Vec;
     use proc_macro2::TokenStream;
 
     #[cfg_attr(docsrs, doc(cfg(feature = "parsing")))]
     impl Parse for Item {
         fn parse(input: ParseStream) -> Result<Self> {
-            let begin = input.fork();
+            let begin = input.cursor();
             let attrs = input.call(Attribute::parse_outer)?;
             parse_rest_of_item(begin, attrs, input)
         }
     }
 
     pub(crate) fn parse_rest_of_item(
-        begin: ParseBuffer,
+        begin: Cursor,
         mut attrs: Vec<Attribute>,
         input: ParseStream,
     ) -> Result<Item> {
@@ -958,7 +960,7 @@ pub(crate) mod parsing {
             let sig: Signature = input.parse()?;
             if input.peek(Token![;]) {
                 input.parse::<Token![;]>()?;
-                Ok(Item::Verbatim(verbatim::between(&begin, input)))
+                Ok(Item::Verbatim(verbatim::between(begin, input.cursor())))
             } else {
                 parse_rest_of_fn(input, Vec::new(), vis, sig).map(Item::Fn)
             }
@@ -984,7 +986,7 @@ pub(crate) mod parsing {
             let allow_crate_root_in_path = true;
             match parse_item_use(input, allow_crate_root_in_path)? {
                 Some(item_use) => Ok(Item::Use(item_use)),
-                None => Ok(Item::Verbatim(verbatim::between(&begin, input))),
+                None => Ok(Item::Verbatim(verbatim::between(begin, input.cursor()))),
             }
         } else if lookahead.peek(Token![static]) {
             let vis = input.parse()?;
@@ -995,13 +997,13 @@ pub(crate) mod parsing {
                 input.parse::<Token![=]>()?;
                 input.parse::<Expr>()?;
                 input.parse::<Token![;]>()?;
-                Ok(Item::Verbatim(verbatim::between(&begin, input)))
+                Ok(Item::Verbatim(verbatim::between(begin, input.cursor())))
             } else {
                 let colon_token = input.parse()?;
                 let ty = input.parse()?;
                 if input.peek(Token![;]) {
                     input.parse::<Token![;]>()?;
-                    Ok(Item::Verbatim(verbatim::between(&begin, input)))
+                    Ok(Item::Verbatim(verbatim::between(begin, input.cursor())))
                 } else {
                     Ok(Item::Static(ItemStatic {
                         attrs: Vec::new(),
@@ -1054,7 +1056,7 @@ pub(crate) mod parsing {
                         semi_token,
                     }))
                 }
-                _ => Ok(Item::Verbatim(verbatim::between(&begin, input))),
+                _ => Ok(Item::Verbatim(verbatim::between(begin, input.cursor()))),
             }
         } else if lookahead.peek(Token![unsafe]) {
             ahead.parse::<Token![unsafe]>()?;
@@ -1068,7 +1070,7 @@ pub(crate) mod parsing {
                 if let Some(item) = parse_impl(input, allow_verbatim_impl)? {
                     Ok(Item::Impl(item))
                 } else {
-                    Ok(Item::Verbatim(verbatim::between(&begin, input)))
+                    Ok(Item::Verbatim(verbatim::between(begin, input.cursor())))
                 }
             } else if lookahead.peek(Token![extern]) {
                 input.parse().map(Item::ForeignMod)
@@ -1098,7 +1100,7 @@ pub(crate) mod parsing {
             if let Some(item) = parse_impl(input, allow_verbatim_impl)? {
                 Ok(Item::Impl(item))
             } else {
-                Ok(Item::Verbatim(verbatim::between(&begin, input)))
+                Ok(Item::Verbatim(verbatim::between(begin, input.cursor())))
             }
         } else if lookahead.peek(Token![macro]) {
             input.advance_to(&ahead);
@@ -1244,26 +1246,18 @@ pub(crate) mod parsing {
                 input.parse()
             }?;
             let (delimiter, tokens) = input.call(mac::parse_delimiter)?;
-            let semi_token: Option<Token![;]> = if !delimiter.is_brace() {
-                Some(input.parse()?)
-            } else {
-                None
-            };
+            let semi_token: Option<Token![;]> =
+                if !delimiter.is_brace() { Some(input.parse()?) } else { None };
             Ok(ItemMacro {
                 attrs,
                 ident,
-                mac: Macro {
-                    path,
-                    bang_token,
-                    delimiter,
-                    tokens,
-                },
+                mac: Macro { path, bang_token, delimiter, tokens },
                 semi_token,
             })
         }
     }
 
-    fn parse_macro2(begin: ParseBuffer, _vis: Visibility, input: ParseStream) -> Result<Item> {
+    fn parse_macro2(begin: Cursor, _vis: Visibility, input: ParseStream) -> Result<Item> {
         input.parse::<Token![macro]>()?;
         input.parse::<Ident>()?;
 
@@ -1283,7 +1277,7 @@ pub(crate) mod parsing {
             return Err(lookahead.error());
         }
 
-        Ok(Item::Verbatim(verbatim::between(&begin, input)))
+        Ok(Item::Verbatim(verbatim::between(begin, input.cursor())))
     }
 
     #[cfg_attr(docsrs, doc(cfg(feature = "parsing")))]
@@ -1343,14 +1337,7 @@ pub(crate) mod parsing {
             None => return Ok(None),
         };
 
-        Ok(Some(ItemUse {
-            attrs,
-            vis,
-            use_token,
-            leading_colon,
-            tree,
-            semi_token,
-        }))
+        Ok(Some(ItemUse { attrs, vis, use_token, leading_colon, tree, semi_token }))
     }
 
     #[cfg_attr(docsrs, doc(cfg(feature = "parsing")))]
@@ -1397,9 +1384,7 @@ pub(crate) mod parsing {
                 Ok(Some(UseTree::Name(UseName { ident })))
             }
         } else if lookahead.peek(Token![*]) {
-            Ok(Some(UseTree::Glob(UseGlob {
-                star_token: input.parse()?,
-            })))
+            Ok(Some(UseTree::Glob(UseGlob { star_token: input.parse()? })))
         } else if lookahead.peek(token::Brace) {
             let content;
             let brace_token = braced!(content in input);
@@ -1572,12 +1557,7 @@ pub(crate) mod parsing {
         attr::parsing::parse_inner(&content, &mut attrs)?;
         let stmts = content.call(Block::parse_within)?;
 
-        Ok(ItemFn {
-            attrs,
-            vis,
-            sig,
-            block: Box::new(Block { brace_token, stmts }),
-        })
+        Ok(ItemFn { attrs, vis, sig, block: Box::new(Block { brace_token, stmts }) })
     }
 
     #[cfg_attr(docsrs, doc(cfg(feature = "parsing")))]
@@ -1603,8 +1583,9 @@ pub(crate) mod parsing {
         allow_variadic: bool,
     ) -> Result<FnArgOrVariadic> {
         let ahead = input.fork();
-        if let Ok(mut receiver) = ahead.parse::<Receiver>() {
+        if let Ok((reference, mutability, self_token)) = parse_receiver_begin(&ahead) {
             input.advance_to(&ahead);
+            let mut receiver = parse_rest_of_receiver(reference, mutability, self_token, input)?;
             receiver.attrs = attrs;
             return Ok(FnArgOrVariadic::FnArg(FnArg::Receiver(receiver)));
         }
@@ -1650,46 +1631,62 @@ pub(crate) mod parsing {
     #[cfg_attr(docsrs, doc(cfg(feature = "parsing")))]
     impl Parse for Receiver {
         fn parse(input: ParseStream) -> Result<Self> {
-            let reference = if input.peek(Token![&]) {
-                let ampersand: Token![&] = input.parse()?;
-                let lifetime: Option<Lifetime> = input.parse()?;
-                Some((ampersand, lifetime))
-            } else {
-                None
-            };
-            let mutability: Option<Token![mut]> = input.parse()?;
-            let self_token: Token![self] = input.parse()?;
-            let colon_token: Option<Token![:]> = if reference.is_some() {
-                None
-            } else {
-                input.parse()?
-            };
-            let ty: Type = if colon_token.is_some() {
-                input.parse()?
-            } else {
-                let mut ty = Type::Path(TypePath {
-                    qself: None,
-                    path: Path::from(Ident::new("Self", self_token.span)),
-                });
-                if let Some((ampersand, lifetime)) = reference.as_ref() {
-                    ty = Type::Reference(TypeReference {
-                        and_token: Token![&](ampersand.span),
-                        lifetime: lifetime.clone(),
-                        mutability: mutability.as_ref().map(|m| Token![mut](m.span)),
-                        elem: Box::new(ty),
-                    });
-                }
-                ty
-            };
-            Ok(Receiver {
-                attrs: Vec::new(),
-                reference,
-                mutability,
-                self_token,
-                colon_token,
-                ty: Box::new(ty),
-            })
+            let (reference, mutability, self_token) = parse_receiver_begin(input)?;
+            parse_rest_of_receiver(reference, mutability, self_token, input)
         }
+    }
+
+    fn parse_receiver_begin(
+        input: ParseStream,
+    ) -> Result<(Option<(Token![&], Option<Lifetime>)>, Option<Token![mut]>, Token![self])> {
+        let reference = if input.peek(Token![&]) {
+            let ampersand: Token![&] = input.parse()?;
+            let lifetime: Option<Lifetime> = input.parse()?;
+            Some((ampersand, lifetime))
+        } else {
+            None
+        };
+        let mutability: Option<Token![mut]> = input.parse()?;
+        let self_token: Token![self] = input.parse()?;
+        if input.peek(Token![::]) {
+            return Err(input.error("expected `:`"));
+        }
+        Ok((reference, mutability, self_token))
+    }
+
+    fn parse_rest_of_receiver(
+        reference: Option<(Token![&], Option<Lifetime>)>,
+        mutability: Option<Token![mut]>,
+        self_token: Token![self],
+        input: ParseStream,
+    ) -> Result<Receiver> {
+        let colon_token: Option<Token![:]> =
+            if reference.is_some() { None } else { input.parse()? };
+        let ty: Type = if colon_token.is_some() {
+            input.parse()?
+        } else {
+            let mut ty = Type::Path(TypePath {
+                qself: None,
+                path: Path::from(Ident::new("Self", self_token.span)),
+            });
+            if let Some((ampersand, lifetime)) = reference.as_ref() {
+                ty = Type::Reference(TypeReference {
+                    and_token: Token![&](ampersand.span),
+                    lifetime: lifetime.clone(),
+                    mutability: mutability.as_ref().map(|m| Token![mut](m.span)),
+                    elem: Box::new(ty),
+                });
+            }
+            ty
+        };
+        Ok(Receiver {
+            attrs: Vec::new(),
+            reference,
+            mutability,
+            self_token,
+            colon_token,
+            ty: Box::new(ty),
+        })
     }
 
     fn parse_fn_args(
@@ -1707,11 +1704,7 @@ pub(crate) mod parsing {
                     attrs,
                     pat: None,
                     dots,
-                    comma: if input.is_empty() {
-                        None
-                    } else {
-                        Some(input.parse()?)
-                    },
+                    comma: if input.is_empty() { None } else { Some(input.parse()?) },
                 });
                 break;
             }
@@ -1721,11 +1714,7 @@ pub(crate) mod parsing {
                 FnArgOrVariadic::FnArg(arg) => arg,
                 FnArgOrVariadic::Variadic(arg) => {
                     variadic = Some(Variadic {
-                        comma: if input.is_empty() {
-                            None
-                        } else {
-                            Some(input.parse()?)
-                        },
+                        comma: if input.is_empty() { None } else { Some(input.parse()?) },
                         ..arg
                     });
                     break;
@@ -1740,10 +1729,7 @@ pub(crate) mod parsing {
                     ));
                 }
                 FnArg::Receiver(receiver) if !args.is_empty() => {
-                    return Err(Error::new(
-                        receiver.self_token.span,
-                        "unexpected method receiver",
-                    ));
+                    return Err(Error::new(receiver.self_token.span, "unexpected method receiver"));
                 }
                 FnArg::Receiver(_) => has_receiver = true,
                 FnArg::Typed(_) => {}
@@ -1768,11 +1754,8 @@ pub(crate) mod parsing {
             let vis: Visibility = input.parse()?;
             let unsafety: Option<Token![unsafe]> = input.parse()?;
             let mod_token: Token![mod] = input.parse()?;
-            let ident: Ident = if input.peek(Token![try]) {
-                input.call(Ident::parse_any)
-            } else {
-                input.parse()
-            }?;
+            let ident: Ident =
+                if input.peek(Token![try]) { input.call(Ident::parse_any) } else { input.parse() }?;
 
             let lookahead = input.lookahead1();
             if lookahead.peek(Token![;]) {
@@ -1825,20 +1808,14 @@ pub(crate) mod parsing {
                 items.push(content.parse()?);
             }
 
-            Ok(ItemForeignMod {
-                attrs,
-                unsafety,
-                abi,
-                brace_token,
-                items,
-            })
+            Ok(ItemForeignMod { attrs, unsafety, abi, brace_token, items })
         }
     }
 
     #[cfg_attr(docsrs, doc(cfg(feature = "parsing")))]
     impl Parse for ForeignItem {
         fn parse(input: ParseStream) -> Result<Self> {
-            let begin = input.fork();
+            let begin = input.cursor();
             let mut attrs = input.call(Attribute::parse_outer)?;
             let ahead = input.fork();
             let vis: Visibility = ahead.parse()?;
@@ -1860,7 +1837,7 @@ pub(crate) mod parsing {
                     Some(input.parse()?)
                 };
                 if has_safe || has_body {
-                    Ok(ForeignItem::Verbatim(verbatim::between(&begin, input)))
+                    Ok(ForeignItem::Verbatim(verbatim::between(begin, input.cursor())))
                 } else {
                     Ok(ForeignItem::Fn(ForeignItemFn {
                         attrs: Vec::new(),
@@ -1893,7 +1870,7 @@ pub(crate) mod parsing {
                 }
                 let semi_token: Token![;] = input.parse()?;
                 if unsafety.is_some() || safe || has_value {
-                    Ok(ForeignItem::Verbatim(verbatim::between(&begin, input)))
+                    Ok(ForeignItem::Verbatim(verbatim::between(begin, input.cursor())))
                 } else {
                     Ok(ForeignItem::Static(ForeignItemStatic {
                         attrs: Vec::new(),
@@ -1941,12 +1918,7 @@ pub(crate) mod parsing {
             let vis: Visibility = input.parse()?;
             let sig: Signature = input.parse()?;
             let semi_token: Token![;] = input.parse()?;
-            Ok(ForeignItemFn {
-                attrs,
-                vis,
-                sig,
-                semi_token,
-            })
+            Ok(ForeignItemFn { attrs, vis, sig, semi_token })
         }
     }
 
@@ -1984,7 +1956,7 @@ pub(crate) mod parsing {
         }
     }
 
-    fn parse_foreign_item_type(begin: ParseBuffer, input: ParseStream) -> Result<ForeignItem> {
+    fn parse_foreign_item_type(begin: Cursor, input: ParseStream) -> Result<ForeignItem> {
         let FlexibleItemType {
             vis,
             defaultness: _,
@@ -1995,14 +1967,10 @@ pub(crate) mod parsing {
             bounds: _,
             ty,
             semi_token,
-        } = FlexibleItemType::parse(
-            input,
-            TypeDefaultness::Disallowed,
-            WhereClauseLocation::Both,
-        )?;
+        } = FlexibleItemType::parse(input, TypeDefaultness::Disallowed, WhereClauseLocation::Both)?;
 
         if colon_token.is_some() || ty.is_some() {
-            Ok(ForeignItem::Verbatim(verbatim::between(&begin, input)))
+            Ok(ForeignItem::Verbatim(verbatim::between(begin, input.cursor())))
         } else {
             Ok(ForeignItem::Type(ForeignItemType {
                 attrs: Vec::new(),
@@ -2020,16 +1988,9 @@ pub(crate) mod parsing {
         fn parse(input: ParseStream) -> Result<Self> {
             let attrs = input.call(Attribute::parse_outer)?;
             let mac: Macro = input.parse()?;
-            let semi_token: Option<Token![;]> = if mac.delimiter.is_brace() {
-                None
-            } else {
-                Some(input.parse()?)
-            };
-            Ok(ForeignItemMacro {
-                attrs,
-                mac,
-                semi_token,
-            })
+            let semi_token: Option<Token![;]> =
+                if mac.delimiter.is_brace() { None } else { Some(input.parse()?) };
+            Ok(ForeignItemMacro { attrs, mac, semi_token })
         }
     }
 
@@ -2053,7 +2014,7 @@ pub(crate) mod parsing {
         }
     }
 
-    fn parse_item_type(begin: ParseBuffer, input: ParseStream) -> Result<Item> {
+    fn parse_item_type(begin: Cursor, input: ParseStream) -> Result<Item> {
         let FlexibleItemType {
             vis,
             defaultness: _,
@@ -2072,7 +2033,7 @@ pub(crate) mod parsing {
 
         let (eq_token, ty) = match ty {
             Some(ty) if colon_token.is_none() => ty,
-            _ => return Ok(Item::Verbatim(verbatim::between(&begin, input))),
+            _ => return Ok(Item::Verbatim(verbatim::between(begin, input.cursor()))),
         };
 
         Ok(Item::Type(ItemType {
@@ -2101,10 +2062,7 @@ pub(crate) mod parsing {
                 vis,
                 struct_token,
                 ident,
-                generics: Generics {
-                    where_clause,
-                    ..generics
-                },
+                generics: Generics { where_clause, ..generics },
                 fields,
                 semi_token,
             })
@@ -2125,10 +2083,7 @@ pub(crate) mod parsing {
                 vis,
                 enum_token,
                 ident,
-                generics: Generics {
-                    where_clause,
-                    ..generics
-                },
+                generics: Generics { where_clause, ..generics },
                 brace_token,
                 variants,
             })
@@ -2149,10 +2104,7 @@ pub(crate) mod parsing {
                 vis,
                 union_token,
                 ident,
-                generics: Generics {
-                    where_clause,
-                    ..generics
-                },
+                generics: Generics { where_clause, ..generics },
                 fields,
             })
         }
@@ -2328,7 +2280,7 @@ pub(crate) mod parsing {
     #[cfg_attr(docsrs, doc(cfg(feature = "parsing")))]
     impl Parse for TraitItem {
         fn parse(input: ParseStream) -> Result<Self> {
-            let begin = input.fork();
+            let begin = input.cursor();
             let mut attrs = input.call(Attribute::parse_outer)?;
             let vis: Visibility = input.parse()?;
             let defaultness: Option<Token![default]> = input.parse()?;
@@ -2367,7 +2319,7 @@ pub(crate) mod parsing {
                             semi_token,
                         }))
                     } else {
-                        return Ok(TraitItem::Verbatim(verbatim::between(&begin, input)));
+                        return Ok(TraitItem::Verbatim(verbatim::between(begin, input.cursor())));
                     }
                 } else if lookahead.peek(Token![async])
                     || lookahead.peek(Token![unsafe])
@@ -2379,7 +2331,7 @@ pub(crate) mod parsing {
                     Err(lookahead.error())
                 }
             } else if lookahead.peek(Token![type]) {
-                parse_trait_item_type(begin.fork(), input)
+                parse_trait_item_type(begin, input)
             } else if vis.is_inherited()
                 && defaultness.is_none()
                 && (lookahead.peek(Ident)
@@ -2395,7 +2347,7 @@ pub(crate) mod parsing {
 
             match (vis, defaultness) {
                 (Visibility::Inherited, None) => {}
-                _ => return Ok(TraitItem::Verbatim(verbatim::between(&begin, input))),
+                _ => return Ok(TraitItem::Verbatim(verbatim::between(begin, input.cursor()))),
             }
 
             let item_attrs = match &mut item {
@@ -2501,7 +2453,7 @@ pub(crate) mod parsing {
         }
     }
 
-    fn parse_trait_item_type(begin: ParseBuffer, input: ParseStream) -> Result<TraitItem> {
+    fn parse_trait_item_type(begin: Cursor, input: ParseStream) -> Result<TraitItem> {
         let FlexibleItemType {
             vis,
             defaultness: _,
@@ -2519,7 +2471,7 @@ pub(crate) mod parsing {
         )?;
 
         if vis.is_some() {
-            Ok(TraitItem::Verbatim(verbatim::between(&begin, input)))
+            Ok(TraitItem::Verbatim(verbatim::between(begin, input.cursor())))
         } else {
             Ok(TraitItem::Type(TraitItemType {
                 attrs: Vec::new(),
@@ -2539,16 +2491,9 @@ pub(crate) mod parsing {
         fn parse(input: ParseStream) -> Result<Self> {
             let attrs = input.call(Attribute::parse_outer)?;
             let mac: Macro = input.parse()?;
-            let semi_token: Option<Token![;]> = if mac.delimiter.is_brace() {
-                None
-            } else {
-                Some(input.parse()?)
-            };
-            Ok(TraitItemMacro {
-                attrs,
-                mac,
-                semi_token,
-            })
+            let semi_token: Option<Token![;]> =
+                if mac.delimiter.is_brace() { None } else { Some(input.parse()?) };
+            Ok(TraitItemMacro { attrs, mac, semi_token })
         }
     }
 
@@ -2568,11 +2513,8 @@ pub(crate) mod parsing {
         let impl_token: Token![impl] = input.parse()?;
 
         let has_generics = generics::parsing::choose_generics_over_qpath(input);
-        let mut generics: Generics = if has_generics {
-            input.parse()?
-        } else {
-            Generics::default()
-        };
+        let mut generics: Generics =
+            if has_generics { input.parse()? } else { Generics::default() };
 
         let is_const_impl = allow_verbatim_impl
             && (input.peek(Token![const]) || input.peek(Token![?]) && input.peek2(Token![const]));
@@ -2619,10 +2561,7 @@ pub(crate) mod parsing {
             }
             self_ty = input.parse()?;
         } else if let Some(polarity) = polarity {
-            return Err(Error::new(
-                polarity.span,
-                "inherent impls cannot be negative",
-            ));
+            return Err(Error::new(polarity.span, "inherent impls cannot be negative"));
         } else {
             trait_ = None;
             self_ty = first_ty;
@@ -2659,7 +2598,7 @@ pub(crate) mod parsing {
     #[cfg_attr(docsrs, doc(cfg(feature = "parsing")))]
     impl Parse for ImplItem {
         fn parse(input: ParseStream) -> Result<Self> {
-            let begin = input.fork();
+            let begin = input.cursor();
             let mut attrs = input.call(Attribute::parse_outer)?;
             let ahead = input.fork();
             let vis: Visibility = ahead.parse()?;
@@ -2679,7 +2618,7 @@ pub(crate) mod parsing {
                 if let Some(item) = parse_impl_item_fn(input, allow_omitted_body)? {
                     Ok(ImplItem::Fn(item))
                 } else {
-                    Ok(ImplItem::Verbatim(verbatim::between(&begin, input)))
+                    Ok(ImplItem::Verbatim(verbatim::between(begin, input.cursor())))
                 }
             } else if lookahead.peek(Token![const]) {
                 input.advance_to(&ahead);
@@ -2719,7 +2658,7 @@ pub(crate) mod parsing {
                             semi_token,
                         }))
                     }
-                    _ => Ok(ImplItem::Verbatim(verbatim::between(&begin, input))),
+                    _ => Ok(ImplItem::Verbatim(verbatim::between(begin, input.cursor()))),
                 };
             } else if lookahead.peek(Token![type]) {
                 parse_impl_item_type(begin, input)
@@ -2816,18 +2755,9 @@ pub(crate) mod parsing {
         let content;
         let brace_token = braced!(content in input);
         attrs.extend(content.call(Attribute::parse_inner)?);
-        let block = Block {
-            brace_token,
-            stmts: content.call(Block::parse_within)?,
-        };
+        let block = Block { brace_token, stmts: content.call(Block::parse_within)? };
 
-        Ok(Some(ImplItemFn {
-            attrs,
-            vis,
-            defaultness,
-            sig,
-            block,
-        }))
+        Ok(Some(ImplItemFn { attrs, vis, defaultness, sig, block }))
     }
 
     #[cfg_attr(docsrs, doc(cfg(feature = "parsing")))]
@@ -2857,7 +2787,7 @@ pub(crate) mod parsing {
         }
     }
 
-    fn parse_impl_item_type(begin: ParseBuffer, input: ParseStream) -> Result<ImplItem> {
+    fn parse_impl_item_type(begin: Cursor, input: ParseStream) -> Result<ImplItem> {
         let FlexibleItemType {
             vis,
             defaultness,
@@ -2876,7 +2806,7 @@ pub(crate) mod parsing {
 
         let (eq_token, ty) = match ty {
             Some(ty) if colon_token.is_none() => ty,
-            _ => return Ok(ImplItem::Verbatim(verbatim::between(&begin, input))),
+            _ => return Ok(ImplItem::Verbatim(verbatim::between(begin, input.cursor()))),
         };
 
         Ok(ImplItem::Type(ImplItemType {
@@ -2897,16 +2827,9 @@ pub(crate) mod parsing {
         fn parse(input: ParseStream) -> Result<Self> {
             let attrs = input.call(Attribute::parse_outer)?;
             let mac: Macro = input.parse()?;
-            let semi_token: Option<Token![;]> = if mac.delimiter.is_brace() {
-                None
-            } else {
-                Some(input.parse()?)
-            };
-            Ok(ImplItemMacro {
-                attrs,
-                mac,
-                semi_token,
-            })
+            let semi_token: Option<Token![;]> =
+                if mac.delimiter.is_brace() { None } else { Some(input.parse()?) };
+            Ok(ImplItemMacro { attrs, mac, semi_token })
         }
     }
 

@@ -15,6 +15,7 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted_memory.h"
+#include "base/memory/self_deleting.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_view_util.h"
@@ -174,8 +175,12 @@ void StartURLLoader(
   resource_response->parsed_headers = network::PopulateParsedHeaders(
       resource_response->headers.get(), request.url);
   resource_response->mime_type = source->source()->GetMimeType(request.url);
-  // TODO: fill all the time related field i.e. request_time response_time
-  // request_start response_start
+  auto now_time = base::Time::Now();
+  auto now_ticks = base::TimeTicks::Now();
+  resource_response->request_time = now_time;
+  resource_response->request_start = now_ticks;
+  resource_response->load_timing.request_start_time = now_time;
+  resource_response->load_timing.request_start = now_ticks;
 
   WebContents::Getter wc_getter;
 
@@ -194,7 +199,7 @@ void StartURLLoader(
   const ui::TemplateReplacements* replacements = nullptr;
   const std::string mime_type = source->source()->GetMimeType(request.url);
   if (mime_type == "text/html" || mime_type == "text/css" || replace_in_js)
-    replacements = source->source()->GetReplacements();
+    replacements = source->GetReplacements();
 
   // To keep the same behavior as the old WebUI code, we call the source to get
   // the value for |replacements| on the IO thread. Since |replacements| is
@@ -226,27 +231,36 @@ class WebUIURLLoaderFactory : public network::SelfDeletingURLLoaderFactory {
     // The WebUIURLLoaderFactory will delete itself when there are no more
     // receivers - see the
     // network::SelfDeletingURLLoaderFactory::OnDisconnect method.
-    new WebUIURLLoaderFactory(ftn->current_frame_host()->GetBrowserContext(),
-                              ftn->frame_tree_node_id(), scheme,
-                              std::move(allowed_hosts),
-                              pending_remote.InitWithNewPipeAndPassReceiver());
+    base::MakeSelfDeleting<WebUIURLLoaderFactory>(
+        ftn->current_frame_host()->GetBrowserContext(),
+        ftn->frame_tree_node_id(), scheme, std::move(allowed_hosts),
+        pending_remote.InitWithNewPipeAndPassReceiver());
     return pending_remote;
   }
 
-  static mojo::PendingRemote<network::mojom::URLLoaderFactory>
-  CreateForServiceWorker(BrowserContext* browser_context,
-                         const std::string& scheme,
-                         base::flat_set<std::string> allowed_hosts) {
+  static mojo::PendingRemote<network::mojom::URLLoaderFactory> CreateForWorker(
+      BrowserContext* browser_context,
+      const std::string& scheme,
+      base::flat_set<std::string> allowed_hosts) {
     mojo::PendingRemote<network::mojom::URLLoaderFactory> pending_remote;
-
-    // The WebUIURLLoaderFactory will delete itself when there are no more
-    // receivers - see the
-    // network::SelfDeletingURLLoaderFactory::OnDisconnect method.
-    new WebUIURLLoaderFactory(browser_context, FrameTreeNodeId(), scheme,
-                              std::move(allowed_hosts),
-                              pending_remote.InitWithNewPipeAndPassReceiver());
+    base::MakeSelfDeleting<WebUIURLLoaderFactory>(
+        browser_context, FrameTreeNodeId(), scheme, std::move(allowed_hosts),
+        pending_remote.InitWithNewPipeAndPassReceiver());
     return pending_remote;
   }
+
+  WebUIURLLoaderFactory(
+      BrowserContext* browser_context,
+      FrameTreeNodeId frame_tree_node_id,
+      const std::string& scheme,
+      base::flat_set<std::string> allowed_hosts,
+      mojo::PendingReceiver<network::mojom::URLLoaderFactory> factory_receiver,
+      base::SelfDeletingPassKey key)
+      : network::SelfDeletingURLLoaderFactory(std::move(factory_receiver), key),
+        browser_context_(browser_context->GetWeakPtr()),
+        frame_tree_node_id_(frame_tree_node_id),
+        scheme_(scheme),
+        allowed_hosts_(std::move(allowed_hosts)) {}
 
   WebUIURLLoaderFactory(const WebUIURLLoaderFactory&) = delete;
   WebUIURLLoaderFactory& operator=(const WebUIURLLoaderFactory&) = delete;
@@ -299,7 +313,8 @@ class WebUIURLLoaderFactory : public network::SelfDeletingURLLoaderFactory {
            allowed_hosts_.find(request.url.GetHost()) != allowed_hosts_.end()))
         << "Incorrect host: " << request.url.GetHost();
 
-    if (request.url.host() == kChromeUIBlobInternalsHost) {
+    if (request.url.scheme() == kChromeUIScheme &&
+        request.url.host() == kChromeUIBlobInternalsHost) {
       GetIOThreadTaskRunner({})->PostTask(
           FROM_HERE,
           base::BindOnce(
@@ -312,8 +327,9 @@ class WebUIURLLoaderFactory : public network::SelfDeletingURLLoaderFactory {
     // This path is entered on user-trigger navigations (e.g. from omnibox or
     // links) to chrome://network-error or chrome://dino. Actual network error
     // does not trigger this path.
-    if (request.url.host() == kChromeUINetworkErrorHost ||
-        request.url.host() == kChromeUIDinoHost) {
+    if (request.url.scheme() == kChromeUIScheme &&
+        (request.url.host() == kChromeUINetworkErrorHost ||
+         request.url.host() == kChromeUIDinoHost)) {
       // Simulate a network error.
       StartNetworkErrorsURLLoader(request, std::move(client));
       // Logs WebUI usage. These WebUIs don't create a WebUI object.
@@ -335,18 +351,6 @@ class WebUIURLLoaderFactory : public network::SelfDeletingURLLoaderFactory {
 
   const std::string& scheme() const { return scheme_; }
 
-  WebUIURLLoaderFactory(
-      BrowserContext* browser_context,
-      FrameTreeNodeId frame_tree_node_id,
-      const std::string& scheme,
-      base::flat_set<std::string> allowed_hosts,
-      mojo::PendingReceiver<network::mojom::URLLoaderFactory> factory_receiver)
-      : network::SelfDeletingURLLoaderFactory(std::move(factory_receiver)),
-        browser_context_(browser_context->GetWeakPtr()),
-        frame_tree_node_id_(frame_tree_node_id),
-        scheme_(scheme),
-        allowed_hosts_(std::move(allowed_hosts)) {}
-
   base::WeakPtr<BrowserContext> browser_context_;
   const FrameTreeNodeId frame_tree_node_id_;
   const std::string scheme_;
@@ -364,12 +368,12 @@ CreateWebUIURLLoaderFactory(RenderFrameHost* render_frame_host,
 }
 
 mojo::PendingRemote<network::mojom::URLLoaderFactory>
-CreateWebUIServiceWorkerLoaderFactory(
+CreateWebUIURLLoaderFactoryForWorker(
     BrowserContext* browser_context,
     const std::string& scheme,
     base::flat_set<std::string> allowed_hosts) {
-  return WebUIURLLoaderFactory::CreateForServiceWorker(
-      browser_context, scheme, std::move(allowed_hosts));
+  return WebUIURLLoaderFactory::CreateForWorker(browser_context, scheme,
+                                                std::move(allowed_hosts));
 }
 
 }  // namespace content

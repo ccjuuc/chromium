@@ -64,6 +64,10 @@ class SyncHandlerTest : public ChromeRenderViewHostTestHarness {
 
   void TearDown() override {
     static_cast<content::WebUIMessageHandler*>(handler_)->DisallowJavascript();
+    handler_ = nullptr;
+    // Explicitly clear handlers to destroy them before the Profile is destroyed
+    // in ChromeRenderViewHostTestHarness::TearDown().
+    web_ui_.GetHandlersForTesting()->clear();
     mock_sync_service_ = nullptr;
     identity_test_env_adaptor_.reset();
     ChromeRenderViewHostTestHarness::TearDown();
@@ -142,7 +146,7 @@ TEST_F(SyncHandlerTest, HandleTrustedVaultBannerStateNotShown) {
   ON_CALL(*sync_service(), GetTransportState())
       .WillByDefault(Return(syncer::SyncService::TransportState::PAUSED));
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append(kTestCallbackId);
   web_ui()->ProcessWebUIMessage(GURL(), "GetSyncTrustedVaultBannerState",
                                 std::move(args));
@@ -153,7 +157,7 @@ TEST_F(SyncHandlerTest, HandleTrustedVaultBannerStateOptedIn) {
   ON_CALL(*sync_service()->GetMockUserSettings(), GetPassphraseType())
       .WillByDefault(Return(syncer::PassphraseType::kTrustedVaultPassphrase));
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append(kTestCallbackId);
   web_ui()->ProcessWebUIMessage(GURL(), "GetSyncTrustedVaultBannerState",
                                 std::move(args));
@@ -174,7 +178,7 @@ TEST_F(SyncHandlerTest, HandleTrustedVaultBannerStateOfferOptIn) {
   ASSERT_TRUE(syncer::ShouldOfferTrustedVaultOptIn(
       static_cast<syncer::SyncService*>(sync_service())));
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append(kTestCallbackId);
   web_ui()->ProcessWebUIMessage(GURL(), "GetSyncTrustedVaultBannerState",
                                 std::move(args));
@@ -200,7 +204,7 @@ TEST_F(SyncHandlerTest, TrustedVaultBannerStateChange) {
 TEST_F(SyncHandlerTest, GetSyncInfo) {
   CreateTestSyncAccount();
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append(kTestCallbackId);
   web_ui()->ProcessWebUIMessage(GURL(), "GetSyncInfo", std::move(args));
 
@@ -221,14 +225,14 @@ TEST_F(SyncHandlerTest, GetSyncInfoOnSyncStateChange) {
 }
 
 TEST_F(SyncHandlerTest, AccountInfo) {
-  base::Value::List args;
+  base::ListValue args;
   args.Append(kTestCallbackId);
   web_ui()->ProcessWebUIMessage(GURL(), "GetAccountInfo", std::move(args));
   auto& data = *web_ui()->call_data().back();
   ASSERT_TRUE(CallbackReturnedSuccessfully(data));
 
   // Expect no accounts initially.
-  base::Value::List expected_accounts;
+  base::ListValue expected_accounts;
   ASSERT_TRUE(data.arg3()->is_dict());
   EXPECT_EQ("", *data.arg3()->GetDict().FindString("email"));
 
@@ -255,7 +259,7 @@ TEST_F(SyncHandlerTest, NotEligibleForAccountStorageWhenSetupNotComplete) {
           IsInitialSyncFeatureSetupComplete())
       .WillByDefault(Return(false));
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append(kTestCallbackId);
   web_ui()->ProcessWebUIMessage(GURL(), "GetSyncInfo", std::move(args));
 
@@ -283,7 +287,7 @@ TEST_F(SyncHandlerTest, GetLocalPasswordCount) {
             std::move(callback).Run({{syncer::PASSWORDS, description}});
           });
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append(kTestCallbackId);
   web_ui()->ProcessWebUIMessage(GURL(), "GetLocalPasswordCount",
                                 std::move(args));
@@ -297,7 +301,7 @@ TEST_F(SyncHandlerTest, GetLocalPasswordCount) {
 TEST_F(SyncHandlerTest, GetLocalPasswordCountWithNoSyncService) {
   DestroySyncService();
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append(kTestCallbackId);
   web_ui()->ProcessWebUIMessage(GURL(), "GetLocalPasswordCount",
                                 std::move(args));

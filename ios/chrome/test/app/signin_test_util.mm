@@ -9,6 +9,7 @@
 #import "base/test/ios/wait_util.h"
 #import "components/policy/core/browser/signin/profile_separation_policies.h"
 #import "components/prefs/pref_service.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_metrics.h"
 #import "components/signin/public/base/signin_pref_names.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
@@ -106,9 +107,9 @@ void ClearPreferences() {
   ProfileIOS* profile = GetOriginalProfile();
   CHECK(profile);
   // Clear last signed in user preference.
-  profile->GetPrefs()->ClearPref(prefs::kGoogleServicesLastSyncingGaiaId);
   profile->GetPrefs()->ClearPref(prefs::kGoogleServicesLastSignedInUsername);
-  profile->GetPrefs()->ClearPref(prefs::kGoogleServicesLastSyncingUsername);
+  profile->GetPrefs()->ClearPref(
+      prefs::kGoogleServicesSyncingGaiaIdMigratedToSignedIn);
 
   // `SignOutAndClearIdentities()` is called during shutdown. Commit all pref
   // changes to ensure that clearing the last signed in account is saved on
@@ -152,8 +153,8 @@ void SignOutAndClearIdentities(ProceduralBlock completion) {
       ChangeProfileContinuation continuation =
           CreateChangeProfileSignoutContinuation(
               signout_source, /*force_snackbar_over_toolbar=*/false,
-              /*should_record_metrics=*/false, /*snackbar_message =*/nil,
-              std::move(switch_callback));
+              /*should_record_metrics=*/false,
+              /*snackbar_message_builder=*/{}, std::move(switch_callback));
       SceneState* scene_state = chrome_test_util::GetForegroundActiveScene();
       signin::SwitchToPersonalProfile(
           scene_state, ChangeProfileReason::kManagedAccountSignOut,
@@ -196,6 +197,10 @@ void ResetSigninPromoPreferences() {
   prefs->SetBoolean(prefs::kIosNtpFeedTopPromoAlreadySeen, false);
   prefs->SetInteger(prefs::kIosReadingListSigninPromoDisplayedCount, 0);
   prefs->SetBoolean(prefs::kIosReadingListPromoAlreadySeen, false);
+  prefs->SetInteger(
+      prefs::kIosSettingsAutofillAndPasswordsSigninPromoDisplayedCount, 0);
+  prefs->SetBoolean(prefs::kIosSettingsAutofillAndPasswordsPromoAlreadySeen,
+                    false);
   prefs->SetBoolean(prefs::kSigninShouldPromptForSigninAgain, false);
 }
 
@@ -205,7 +210,7 @@ void SignIn(id<SystemIdentity> identity) {
   __block AuthenticationFlow* authenticationFlow = [[AuthenticationFlow alloc]
                initWithBrowser:browser
                       identity:identity
-                   accessPoint:signin_metrics::AccessPoint::kUnknown
+                   accessPoint:signin_metrics::AccessPoint::kStartPage
           precedingHistorySync:NO
              postSignInActions:PostSignInActionSet()
       presentingViewController:viewController

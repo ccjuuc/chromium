@@ -2,13 +2,14 @@
 <manifest
     xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.android.webview"
-    platformBuildVersionCode="36"
-    platformBuildVersionName="16"
+    platformBuildVersionCode="37"
+    platformBuildVersionName="17"
     android:isolatedSplits="true"
     android:versionCode="OFFSET=34"
     android:versionName="#.#.#.#">
   <uses-feature android:glEsVersion="0x00030000"/>
   <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
+  <uses-feature android:name="android.hardware.type.automotive" android:required="false"/>
   <uses-feature android:name="android.software.leanback" android:required="false"/>
   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
@@ -113,12 +114,6 @@
         android:process=":js_sandboxed_process0"
         android:visibleToInstantApps="true">
     </service>  # DIFF-ANCHOR: 1d3bf514
-    <service  # DIFF-ANCHOR: b9ec52c4
-        android:name="org.chromium.android_webview.nonembedded.AwComponentUpdateService"
-        android:exported="false"
-        android:permission="android.permission.BIND_JOB_SERVICE"
-        android:process=":webview_apk">
-    </service>  # DIFF-ANCHOR: b9ec52c4
     <service  # DIFF-ANCHOR: 3cd6d713
         android:name="org.chromium.android_webview.services.AwMinidumpUploadJobService"
         android:exported="true"
@@ -136,12 +131,6 @@
         android:permission="android.permission.BIND_JOB_SERVICE"
         android:process=":webview_service">
     </service>  # DIFF-ANCHOR: 65cddb26
-    <service  # DIFF-ANCHOR: c756cf8d
-        android:name="org.chromium.android_webview.services.ComponentsProviderService"
-        android:exported="true"
-        android:process=":webview_service"
-        android:visibleToInstantApps="true">
-    </service>  # DIFF-ANCHOR: c756cf8d
     <service  # DIFF-ANCHOR: 5cda9608
         android:name="org.chromium.android_webview.services.CrashReceiverService"
         android:exported="true"
@@ -187,6 +176,17 @@
         android:exported="true"
         android:process=":webview_service">
     </service>  # DIFF-ANCHOR: dc926e35
+    <service  # DIFF-ANCHOR: 55f101d6
+        android:name="org.chromium.content.app.NativeOnlySandboxedProcessService0"
+        android:exported="true"
+        android:externalService="true"
+        android:isolatedProcess="true"
+        android:nativeService="true"
+        android:process=":sandboxed_process0"
+        android:visibleToInstantApps="true">
+      <property android:name="android.app.PROPERTY_NATIVE_SERVICE_FUNCTION_NAME" android:value="NativeChildProcessService_onCreate"/>
+      <property android:name="android.app.PROPERTY_NATIVE_SERVICE_LIBRARY_NAME" android:value="libmonochrome_64.so"/>
+    </service>  # DIFF-ANCHOR: 55f101d6
     <service  # DIFF-ANCHOR: b1e3e8bd
         android:name="org.chromium.content.app.SandboxedProcessService0"
         android:exported="true"

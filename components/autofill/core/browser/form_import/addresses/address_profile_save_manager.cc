@@ -4,15 +4,25 @@
 
 #include "components/autofill/core/browser/form_import/addresses/address_profile_save_manager.h"
 
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+
+#include "base/check.h"
 #include "base/check_deref.h"
+#include "base/functional/bind.h"
+#include "base/notreached.h"
+#include "base/types/optional_ref.h"
 #include "base/types/optional_util.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/form_import/addresses/autofill_profile_import_process.h"
 #include "components/autofill/core/browser/form_import/form_data_importer.h"
+#include "components/autofill/core/browser/form_import/form_data_importer_utils.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
-#include "components/autofill/core/common/autofill_features.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 
 namespace autofill {
 
@@ -23,10 +33,19 @@ namespace {
 // with additional optional information.
 // This function adds the imported profile as a candidate. This is only done
 // after the user decision to incorporate manual edits.
-void AddMultiStepComplementCandidate(FormDataImporter* form_data_importer,
-                                     const AutofillProfile& profile,
-                                     const url::Origin& origin) {
+void MaybeAddMultiStepComplementCandidate(FormDataImporter* form_data_importer,
+                                          const AutofillProfile& profile,
+                                          const url::Origin& origin) {
   if (!form_data_importer) {
+    return;
+  }
+  MultiStepImportMerger& import_merger =
+      form_data_importer->GetAddressFormDataImporter()
+          .multi_step_import_merger();
+  // Avoid adding profiles that don't match the currently tracked origin. It is
+  // possible that the user has navigated away since the import prompt was shown
+  // and submitted an (incomplete) address on the new origin in the meantime.
+  if (import_merger.origin().has_value() && import_merger.origin() != origin) {
     return;
   }
   // Metrics depending on `import_process.import_metadata()` are collected
@@ -36,8 +55,8 @@ void AddMultiStepComplementCandidate(FormDataImporter* form_data_importer,
   // The `import_metadata` is thus initialized to a neutral element.
   ProfileImportMetadata import_metadata;
   import_metadata.origin = origin;
-  form_data_importer->AddMultiStepImportCandidate(profile, import_metadata,
-                                                  /*is_imported=*/true);
+  import_merger.AddMultiStepImportCandidate(profile, import_metadata,
+                                            /*is_imported=*/true);
 }
 
 AutofillClient::SaveAddressBubbleType AutofillProfileImportTypeToBubbleType(
@@ -145,9 +164,9 @@ void AddressProfileSaveManager::FinalizeProfileImport(
     const std::optional<AutofillProfile>& confirmed_import_candidate =
         import_process->confirmed_import_candidate();
     DCHECK(confirmed_import_candidate);
-    AddMultiStepComplementCandidate(client_->GetFormDataImporter(),
-                                    *confirmed_import_candidate,
-                                    import_process->import_metadata().origin);
+    MaybeAddMultiStepComplementCandidate(
+        client_->GetFormDataImporter(), *confirmed_import_candidate,
+        import_process->import_metadata().origin);
   }
 
   ClearPendingImport(std::move(import_process));

@@ -21,6 +21,7 @@
 #include "content/browser/service_worker/service_worker_metrics.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/content_browser_client.h"
+#include "content/public/common/child_process_id.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -39,9 +40,7 @@
 #include "third_party/blink/public/mojom/worker/subresource_loader_updater.mojom.h"
 #include "url/gurl.h"
 
-#if !BUILDFLAG(IS_ANDROID)
 #include "third_party/blink/public/mojom/hid/hid.mojom-forward.h"
-#endif
 
 namespace content {
 
@@ -185,7 +184,7 @@ class CONTENT_EXPORT EmbeddedWorkerInstance
   }
   void SetPauseInitializingGlobalScope();
   void ResumeInitializingGlobalScope();
-  int process_id() const;
+  ChildProcessId process_id() const;
   int thread_id() const { return thread_id_; }
   int worker_devtools_agent_route_id() const;
   base::UnguessableToken WorkerDevtoolsId() const;
@@ -245,10 +244,8 @@ class CONTENT_EXPORT EmbeddedWorkerInstance
       mojo::PendingReceiver<blink::mojom::CacheStorage> receiver,
       const storage::BucketLocator& bucket_locator);
 
-#if !BUILDFLAG(IS_ANDROID)
   void BindHidService(const url::Origin& origin,
                       mojo::PendingReceiver<blink::mojom::HidService> receiver);
-#endif  // !BUILDFLAG(IS_ANDROID)
 
   void BindUsbService(
       const url::Origin& origin,
@@ -261,6 +258,9 @@ class CONTENT_EXPORT EmbeddedWorkerInstance
   //
   // `client_security_state` may be nullptr, in which case a default value is
   // set in the bundle.
+  // `network_restrictions_id`: The unique token identifying this worker's
+  // network restrictions in the network service. Used to restrict subresource
+  // fetches by this worker.
   static std::unique_ptr<blink::PendingURLLoaderFactoryBundle>
   CreateFactoryBundle(
       RenderProcessHost* rph,
@@ -272,7 +272,8 @@ class CONTENT_EXPORT EmbeddedWorkerInstance
       mojo::PendingRemote<network::mojom::DocumentIsolationPolicyReporter>
           dip_reporter,
       ContentBrowserClient::URLLoaderFactoryType factory_type,
-      const std::string& devtools_worker_token);
+      const std::string& devtools_worker_token,
+      const base::UnguessableToken& network_restrictions_id);
 
   mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>
   GetCoepReporter();
@@ -281,7 +282,13 @@ class CONTENT_EXPORT EmbeddedWorkerInstance
   GetDipReporter();
 
  private:
-  typedef base::ObserverList<Listener>::Unchecked ListenerList;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  typedef base::ObserverList<
+      Listener,
+      /*check_empty=*/false,
+      /*reentrancy=*/
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>::Unchecked
+      ListenerList;
   struct StartInfo;
   class WorkerProcessHandle;
   friend class EmbeddedWorkerInstanceTestHarness;
@@ -300,7 +307,8 @@ class CONTENT_EXPORT EmbeddedWorkerInstance
   void SendStartWorker(blink::mojom::EmbeddedWorkerStartParamsPtr params);
 
   // Implements blink::mojom::EmbeddedWorkerInstanceHost.
-  void RequestTermination(RequestTerminationCallback callback) override;
+  void RequestTermination(uint64_t observed_keepalive_sequence_number,
+                          RequestTerminationCallback callback) override;
   void CountFeature(blink::mojom::WebFeature feature) override;
   void OnReadyForInspection(
       mojo::PendingRemote<blink::mojom::DevToolsAgent>,

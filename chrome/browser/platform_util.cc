@@ -66,8 +66,5 @@ void OpenItem(Profile*,
                      std::move(callback)));
 }
 
-bool IsBrowserLockedFullscreen(const Browser* browser) {
-  return false;
-}
 
 }  // namespace platform_util

@@ -29,6 +29,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/values_test_util.h"
+#include "base/unguessable_token.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/printing/print_preview_dialog_controller.h"
@@ -77,15 +78,12 @@
 #endif  // BUILDFLAG(ENTERPRISE_LOCAL_CONTENT_ANALYSIS)
 #endif  // BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
 
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
 #include "chrome/test/base/testing_profile_manager.h"
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
-#include "chrome/browser/ash/crosapi/crosapi_manager.h"
-#include "chrome/browser/ash/crosapi/test_local_printer_ash.h"
-#include "chromeos/ash/components/login/login_state/login_state.h"
-#include "chromeos/crosapi/mojom/local_printer.mojom.h"
+#include "ash/constants/ash_pref_names.h"
 #endif
 
 namespace printing {
@@ -119,8 +117,8 @@ constexpr std::array kFetchableTypes{mojom::PrinterType::kExtension,
 struct PrinterInfo {
   std::string id;
   bool is_default;
-  base::Value::Dict basic_info;
-  base::Value::Dict capabilities;
+  base::DictValue basic_info;
+  base::DictValue capabilities;
 };
 
 PrinterInfo GetSimplePrinterInfo(const std::string& name, bool is_default) {
@@ -130,8 +128,8 @@ PrinterInfo GetSimplePrinterInfo(const std::string& name, bool is_default) {
   simple_printer.basic_info.Set("printer_name", simple_printer.id);
   simple_printer.basic_info.Set("printer_description", "Printer for test");
   simple_printer.basic_info.Set("printer_status", 1);
-  base::Value::Dict cdd;
-  base::Value::Dict capabilities;
+  base::DictValue cdd;
+  base::DictValue capabilities;
   simple_printer.capabilities.Set("printer", simple_printer.basic_info.Clone());
   simple_printer.capabilities.Set("capabilities", cdd.Clone());
   return simple_printer;
@@ -149,8 +147,8 @@ PrinterInfo GetEmptyPrinterInfo() {
   return empty_printer;
 }
 
-base::Value::Dict GetPrintPreviewTicket() {
-  base::Value::Dict print_ticket =
+base::DictValue GetPrintPreviewTicket() {
+  base::DictValue print_ticket =
       test::GetPrintTicket(mojom::PrinterType::kLocal);
 
   // Make some modifications to match a preview print ticket.
@@ -165,9 +163,9 @@ base::Value::Dict GetPrintPreviewTicket() {
   return print_ticket;
 }
 
-base::Value::List ConstructPreviewArgs(std::string_view callback_id,
-                                       const base::Value::Dict& print_ticket) {
-  base::Value::List args;
+base::ListValue ConstructPreviewArgs(std::string_view callback_id,
+                                     const base::DictValue& print_ticket) {
+  base::ListValue args;
   args.Append(callback_id);
   args.Append(base::WriteJson(print_ticket).value_or(""));
   return args;
@@ -246,7 +244,7 @@ class TestPrinterHandler : public PrinterHandler {
                                GetPrinterInfoCallback callback) override {}
 
   void StartPrint(const std::u16string& job_title,
-                  base::Value::Dict settings,
+                  base::DictValue settings,
                   scoped_refptr<base::RefCountedMemory> print_data,
                   PrintCallback callback) override {
     std::move(callback).Run(base::Value());
@@ -265,8 +263,8 @@ class TestPrinterHandler : public PrinterHandler {
 
  private:
   std::string default_printer_;
-  base::Value::List printers_;
-  std::map<std::string, base::Value::Dict> printer_capabilities_;
+  base::ListValue printers_;
+  std::map<std::string, base::DictValue> printer_capabilities_;
 };
 
 class FakePrintPreviewUI : public PrintPreviewUI {
@@ -301,7 +299,7 @@ class TestPrintPreviewPrintRenderFrame final : public FakePrintRenderFrame {
       const TestPrintPreviewPrintRenderFrame&) = delete;
   ~TestPrintPreviewPrintRenderFrame() override = default;
 
-  const base::Value::Dict& GetSettings() { return settings_; }
+  const base::DictValue& GetSettings() { return settings_; }
 
   void SetCompletionClosure(base::OnceClosure closure) {
     closure_ = std::move(closure);
@@ -309,13 +307,13 @@ class TestPrintPreviewPrintRenderFrame final : public FakePrintRenderFrame {
 
  private:
   // FakePrintRenderFrame:
-  void PrintPreview(base::Value::Dict settings) override {
+  void PrintPreview(base::DictValue settings) override {
     settings_ = std::move(settings);
     std::move(closure_).Run();
   }
 
   base::OnceClosure closure_;
-  base::Value::Dict settings_;
+  base::DictValue settings_;
 };
 
 class TestPrintPreviewHandler : public PrintPreviewHandler {
@@ -370,7 +368,7 @@ class TestPrintPreviewHandlerForContentAnalysis
 
  private:
   void FinishHandleDoPrint(UserActionBuckets user_action,
-                           base::Value::Dict settings,
+                           base::DictValue settings,
                            scoped_refptr<base::RefCountedMemory> data,
                            const std::string& callback_id) override {
     ASSERT_EQ(base::as_string_view(*data), kTestData);
@@ -416,13 +414,8 @@ class PrintPreviewHandlerTest : public testing::Test {
           test_remote_, test_print_backend_, /*sandboxed=*/true);
     }
 #endif
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
     ASSERT_TRUE(testing_profile_manager_.SetUp());
-#endif
-#if BUILDFLAG(IS_CHROMEOS)
-    local_printer_ = std::make_unique<TestLocalPrinterAsh>(&profile_, nullptr);
-    ash::LoginState::Initialize();
-    manager_ = std::make_unique<crosapi::CrosapiManager>();
 #endif
 
     // Create the initiator.
@@ -450,9 +443,6 @@ class PrintPreviewHandlerTest : public testing::Test {
     auto preview_handler = CreateHandler(std::move(printer_handler), initiator);
     handler_ = preview_handler.get();
     handler_->set_web_ui(web_ui());
-#if BUILDFLAG(IS_CHROMEOS)
-    handler_->local_printer_ = local_printer_.get();
-#endif
 
     auto preview_ui = std::make_unique<FakePrintPreviewUI>(
         web_ui(), std::move(preview_handler));
@@ -461,10 +451,6 @@ class PrintPreviewHandlerTest : public testing::Test {
   }
 
   void TearDown() override {
-#if BUILDFLAG(IS_CHROMEOS)
-    manager_.reset();
-    ash::LoginState::Shutdown();
-#endif
     PrintViewManager::FromWebContents(initiator_web_contents_.get())
         ->PrintPreviewDone();
 
@@ -475,10 +461,6 @@ class PrintPreviewHandlerTest : public testing::Test {
 
     PrintBackend::SetPrintBackendForTesting(/*print_backend=*/nullptr);
   }
-
-#if BUILDFLAG(IS_CHROMEOS)
-  void DisableAshChrome() { handler_->local_printer_ = nullptr; }
-#endif
 
   virtual std::unique_ptr<TestPrinterHandler> CreatePrinterHandler(
       const std::vector<PrinterInfo>& printers) {
@@ -499,7 +481,7 @@ class PrintPreviewHandlerTest : public testing::Test {
       bool enable_silent_printing_pref) {
     // Sending this message will enable javascript, so it must always be called
     // before any other messages are sent.
-    base::Value::List args;
+    base::ListValue args;
     args.Append("test-callback-id-0");
 
     auto* browser_process = TestingBrowserProcess::GetGlobal();
@@ -581,7 +563,7 @@ class PrintPreviewHandlerTest : public testing::Test {
       const std::string& decimal_delimiter,
       bool kiosk_auto_print_mode) {
     CheckWebUIResponse(data, "test-callback-id-0", true);
-    const base::Value::Dict& settings = data.arg3()->GetDict();
+    const base::DictValue& settings = data.arg3()->GetDict();
     auto actual_kiosk_auto_print_mode =
         settings.FindBool("isInKioskAutoPrintMode");
     ASSERT_TRUE(actual_kiosk_auto_print_mode.has_value());
@@ -616,10 +598,10 @@ class PrintPreviewHandlerTest : public testing::Test {
   }
 
   // Returns |policy_name| entry from initial settings policies.
-  const base::Value::Dict* GetInitialSettingsPolicy(
-      const base::Value::Dict& settings,
+  const base::DictValue* GetInitialSettingsPolicy(
+      const base::DictValue& settings,
       const std::string& policy_name) {
-    const base::Value::Dict* policies = settings.FindDict("policies");
+    const base::DictValue* policies = settings.FindDict("policies");
     if (!policies) {
       return nullptr;
     }
@@ -635,9 +617,9 @@ class PrintPreviewHandlerTest : public testing::Test {
       const std::string& policy_name,
       std::optional<base::Value> expected_policy_value) {
     CheckWebUIResponse(data, "test-callback-id-0", true);
-    const base::Value::Dict& settings = data.arg3()->GetDict();
+    const base::DictValue& settings = data.arg3()->GetDict();
 
-    const base::Value::Dict* policy =
+    const base::DictValue* policy =
         GetInitialSettingsPolicy(settings, policy_name);
     const base::Value* policy_value = policy ? policy->Find("value") : nullptr;
 
@@ -657,9 +639,9 @@ class PrintPreviewHandlerTest : public testing::Test {
       std::optional<base::Value> expected_allowed_mode,
       std::optional<base::Value> expected_default_mode) {
     CheckWebUIResponse(data, "test-callback-id-0", true);
-    const base::Value::Dict& settings = data.arg3()->GetDict();
+    const base::DictValue& settings = data.arg3()->GetDict();
 
-    const base::Value::Dict* policy =
+    const base::DictValue* policy =
         GetInitialSettingsPolicy(settings, policy_name);
     const base::Value* allowed_mode =
         policy ? policy->Find("allowedMode") : nullptr;
@@ -681,7 +663,7 @@ class PrintPreviewHandlerTest : public testing::Test {
   // making the call to the handler.
   void SendGetPrinters(mojom::PrinterType type,
                        const std::string& callback_id_in) {
-    base::Value::List args;
+    base::ListValue args;
     args.Append(callback_id_in);
     args.Append(static_cast<int>(type));
     handler()->HandleGetPrinters(args);
@@ -700,7 +682,7 @@ class PrintPreviewHandlerTest : public testing::Test {
         static_cast<mojom::PrinterType>(add_data.arg2()->GetInt());
     EXPECT_EQ(expected_type, type);
     ASSERT_TRUE(add_data.arg3());
-    const base::Value::List& printer_list = add_data.arg3()->GetList();
+    const base::ListValue& printer_list = add_data.arg3()->GetList();
     ASSERT_EQ(printer_list.size(), 1u);
     EXPECT_TRUE(printer_list[0].GetDict().FindString("printer_name"));
   }
@@ -710,7 +692,7 @@ class PrintPreviewHandlerTest : public testing::Test {
   void SendGetPrinterCapabilities(mojom::PrinterType type,
                                   const std::string& callback_id_in,
                                   const std::string& printer_name) {
-    base::Value::List args;
+    base::ListValue args;
     args.Append(callback_id_in);
     args.Append(printer_name);
     args.Append(static_cast<int>(type));
@@ -724,7 +706,7 @@ class PrintPreviewHandlerTest : public testing::Test {
     CheckWebUIResponse(data, callback_id_in, expect_resolved);
     if (expect_resolved) {
       ASSERT_TRUE(data.arg3());
-      const base::Value::Dict& settings = data.arg3()->GetDict();
+      const base::DictValue& settings = data.arg3()->GetDict();
       EXPECT_TRUE(settings.FindDict(kSettingCapabilities));
     }
   }
@@ -743,7 +725,7 @@ class PrintPreviewHandlerTest : public testing::Test {
   TestingProfile* profile() { return &profile_; }
   TestPrinterHandler* printer_handler() { return printer_handler_; }
   std::vector<PrinterInfo>& printers() { return printers_; }
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
   TestingProfileManager* testing_profile_manager() {
     return &testing_profile_manager_;
   }
@@ -751,14 +733,11 @@ class PrintPreviewHandlerTest : public testing::Test {
 
  private:
   content::BrowserTaskEnvironment task_environment_;
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
   TestingProfileManager testing_profile_manager_{
       TestingBrowserProcess::GetGlobal()};
 #endif
-#if BUILDFLAG(IS_CHROMEOS)
-  std::unique_ptr<TestLocalPrinterAsh> local_printer_;
-  std::unique_ptr<crosapi::CrosapiManager> manager_;
-#endif
+
   TestingProfile profile_;
   scoped_refptr<TestPrintBackend> test_print_backend_;
 #if BUILDFLAG(ENABLE_OOP_PRINTING)
@@ -827,27 +806,6 @@ TEST_F(PrintPreviewHandlerTest, InitialSettingsSilentPrinting) {
       "en", ",", ".",
       /*kiosk_auto_print_mode=*/true);
 }
-
-#if BUILDFLAG(IS_CHROMEOS)
-TEST_F(PrintPreviewHandlerTest, InitialSettingsNoAsh) {
-  DisableAshChrome();
-  Initialize();
-  // Verify initial settings were sent.
-  ValidateInitialSettings(*web_ui()->call_data().back(), test::kPrinterName,
-                          kDummyInitiatorName);
-  // Verify policy settings are empty.
-  ValidateInitialSettingsAllowedDefaultModePolicy(*web_ui()->call_data().back(),
-                                                  "headerFooter", std::nullopt,
-                                                  std::nullopt);
-  ValidateInitialSettingsAllowedDefaultModePolicy(*web_ui()->call_data().back(),
-                                                  "cssBackground", std::nullopt,
-                                                  std::nullopt);
-  ValidateInitialSettingsAllowedDefaultModePolicy(
-      *web_ui()->call_data().back(), "mediaSize", std::nullopt, std::nullopt);
-  ValidateInitialSettingsValuePolicy(*web_ui()->call_data().back(), "sheets",
-                                     std::nullopt);
-}
-#endif
 
 TEST_F(PrintPreviewHandlerTest, InitialSettingsRestrictHeaderFooterEnabled) {
   // Set a pref with allowed value.
@@ -973,15 +931,29 @@ TEST_F(PrintPreviewHandlerTest, InitialSettingsDefaultPaperSizeCustomSize) {
 
 #if BUILDFLAG(IS_CHROMEOS)
 TEST_F(PrintPreviewHandlerTest, InitialSettingsMaxSheetsAllowedPolicy) {
-  prefs()->SetInteger(prefs::kPrintingMaxSheetsAllowed, 2);
+  prefs()->SetInteger(ash::prefs::kPrintingMaxSheetsAllowed, 2);
   Initialize();
   ValidateInitialSettingsValuePolicy(*web_ui()->call_data().back(), "sheets",
                                      base::Value(2));
 }
 
+TEST_F(PrintPreviewHandlerTest, InitialSettingsZeroSheetsAllowedPolicy) {
+  prefs()->SetInteger(ash::prefs::kPrintingMaxSheetsAllowed, 0);
+  Initialize();
+  ValidateInitialSettingsValuePolicy(*web_ui()->call_data().back(), "sheets",
+                                     base::Value(0));
+}
+
+TEST_F(PrintPreviewHandlerTest, InitialSettingsNegativeMaxSheetsPolicy) {
+  prefs()->SetInteger(ash::prefs::kPrintingMaxSheetsAllowed, -1);
+  Initialize();
+  ValidateInitialSettingsValuePolicy(*web_ui()->call_data().back(), "sheets",
+                                     std::nullopt);
+}
+
 TEST_F(PrintPreviewHandlerTest, InitialSettingsEnableColorAndMonochrome) {
   // Set a pref that should take priority over StickySettings.
-  prefs()->SetInteger(prefs::kPrintingAllowedColorModes, 3);
+  prefs()->SetInteger(ash::prefs::kPrintingAllowedColorModes, 3);
   Initialize();
   ValidateInitialSettingsAllowedDefaultModePolicy(
       *web_ui()->call_data().back(), "color", base::Value(3), std::nullopt);
@@ -989,7 +961,7 @@ TEST_F(PrintPreviewHandlerTest, InitialSettingsEnableColorAndMonochrome) {
 
 TEST_F(PrintPreviewHandlerTest, InitialSettingsDefaultColor) {
   // Set a pref that should take priority over StickySettings.
-  prefs()->SetInteger(prefs::kPrintingColorDefault, 2);
+  prefs()->SetInteger(ash::prefs::kPrintingColorDefault, 2);
   Initialize();
   ValidateInitialSettingsAllowedDefaultModePolicy(
       *web_ui()->call_data().back(), "color", std::nullopt, base::Value(2));
@@ -997,7 +969,7 @@ TEST_F(PrintPreviewHandlerTest, InitialSettingsDefaultColor) {
 
 TEST_F(PrintPreviewHandlerTest, InitialSettingsEnableSimplexAndDuplex) {
   // Set a pref that should take priority over StickySettings.
-  prefs()->SetInteger(prefs::kPrintingAllowedDuplexModes, 7);
+  prefs()->SetInteger(ash::prefs::kPrintingAllowedDuplexModes, 7);
   Initialize();
   ValidateInitialSettingsAllowedDefaultModePolicy(
       *web_ui()->call_data().back(), "duplex", base::Value(7), std::nullopt);
@@ -1005,7 +977,7 @@ TEST_F(PrintPreviewHandlerTest, InitialSettingsEnableSimplexAndDuplex) {
 
 TEST_F(PrintPreviewHandlerTest, InitialSettingsDefaultSimplex) {
   // Set a pref that should take priority over StickySettings.
-  prefs()->SetInteger(prefs::kPrintingDuplexDefault, 1);
+  prefs()->SetInteger(ash::prefs::kPrintingDuplexDefault, 1);
   Initialize();
   ValidateInitialSettingsAllowedDefaultModePolicy(
       *web_ui()->call_data().back(), "duplex", std::nullopt, base::Value(1));
@@ -1013,7 +985,7 @@ TEST_F(PrintPreviewHandlerTest, InitialSettingsDefaultSimplex) {
 
 TEST_F(PrintPreviewHandlerTest, InitialSettingsRestrictPin) {
   // Set a pref that should take priority over StickySettings.
-  prefs()->SetInteger(prefs::kPrintingAllowedPinModes, 1);
+  prefs()->SetInteger(ash::prefs::kPrintingAllowedPinModes, 1);
   Initialize();
   ValidateInitialSettingsAllowedDefaultModePolicy(
       *web_ui()->call_data().back(), "pin", base::Value(1), std::nullopt);
@@ -1021,7 +993,7 @@ TEST_F(PrintPreviewHandlerTest, InitialSettingsRestrictPin) {
 
 TEST_F(PrintPreviewHandlerTest, InitialSettingsDefaultNoPin) {
   // Set a pref that should take priority over StickySettings.
-  prefs()->SetInteger(prefs::kPrintingPinDefault, 2);
+  prefs()->SetInteger(ash::prefs::kPrintingPinDefault, 2);
   Initialize();
   ValidateInitialSettingsAllowedDefaultModePolicy(
       *web_ui()->call_data().back(), "pin", std::nullopt, base::Value(2));
@@ -1063,7 +1035,7 @@ TEST_F(PrintPreviewHandlerTest, GetPrinters) {
 // then called both fetchable printer types; only local printers should
 // be successfully fetched.
 TEST_F(PrintPreviewHandlerTest, GetNoDenyListPrinters) {
-  base::Value::List deny_list;
+  base::ListValue deny_list;
   deny_list.Append("extension");
   prefs()->SetList(prefs::kPrinterTypeDenyList, std::move(deny_list));
   Initialize();
@@ -1146,7 +1118,7 @@ TEST_F(PrintPreviewHandlerTest, GetPrinterCapabilities) {
 // is then called for all supported printer types; only extension
 // printer capabilities should be successfully fetched.
 TEST_F(PrintPreviewHandlerTest, GetNoDenyListPrinterCapabilities) {
-  base::Value::List deny_list;
+  base::ListValue deny_list;
   deny_list.Append("local");
   deny_list.Append("pdf");
   prefs()->SetList(prefs::kPrinterTypeDenyList, std::move(deny_list));
@@ -1176,34 +1148,34 @@ TEST_F(PrintPreviewHandlerTest, GetPrinterCapabilitiesContinuousMedia) {
   // Add two media sizes to our printer - one with discrete sizes and one with
   // continuous feed.  The continuous feed media should get filtered out when
   // the capabilities are retrieved.
-  base::Value::Dict media_1;
+  base::DictValue media_1;
   media_1.Set("width_microns", 100);
   media_1.Set("height_microns", 200);
-  base::Value::Dict media_2;
+  base::DictValue media_2;
   media_2.Set("width_microns", 300);
   media_2.Set("is_continuous_feed", true);
   // After filtering, the expected media will just have the discrete media.
-  base::Value::List expected_media;
+  base::ListValue expected_media;
   expected_media.Append(media_1.Clone());
 
-  base::Value::List option_list;
+  base::ListValue option_list;
   option_list.Append(std::move(media_1));
   option_list.Append(std::move(media_2));
-  base::Value::Dict media_size;
+  base::DictValue media_size;
   media_size.Set("option", std::move(option_list));
-  base::Value::Dict printer;
+  base::DictValue printer;
   printer.Set("media_size", std::move(media_size));
-  base::Value::Dict cdd;
+  base::DictValue cdd;
   cdd.Set("printer", std::move(printer));
 
   ASSERT_EQ(1u, printers().size());
   printers()[0].capabilities.Set(kSettingCapabilities, std::move(cdd));
   printer_handler()->SetPrinters(printers());
 
-  const base::Value::Dict* capabilities =
+  const base::DictValue* capabilities =
       printers()[0].capabilities.FindDict(kSettingCapabilities);
   ASSERT_TRUE(capabilities);
-  const base::Value::List* options = GetMediaSizeOptionsFromCdd(*capabilities);
+  const base::ListValue* options = GetMediaSizeOptionsFromCdd(*capabilities);
 
   ASSERT_TRUE(options);
   EXPECT_EQ(2u, options->size());
@@ -1222,7 +1194,7 @@ TEST_F(PrintPreviewHandlerTest, GetPrinterCapabilitiesContinuousMedia) {
   const content::TestWebUI::CallData& data = *web_ui()->call_data().back();
   CheckWebUIResponse(data, callback_id_in, true);
   ASSERT_TRUE(data.arg3()->is_dict());
-  const base::Value::Dict& settings = data.arg3()->GetDict();
+  const base::DictValue& settings = data.arg3()->GetDict();
   capabilities = settings.FindDict(kSettingCapabilities);
   ASSERT_TRUE(capabilities);
   options = GetMediaSizeOptionsFromCdd(*capabilities);
@@ -1239,17 +1211,17 @@ TEST_F(PrintPreviewHandlerTest, Print) {
     handler()->reset_calls();
 
     // Send print preview request.
-    base::Value::Dict preview_ticket = GetPrintPreviewTicket();
+    base::DictValue preview_ticket = GetPrintPreviewTicket();
     preview_ticket.Set(kPreviewRequestID, static_cast<int>(i));
     std::string preview_callback_id =
         "test-callback-id-" + base::NumberToString(2 * i + 1);
-    base::Value::List preview_list_args =
+    base::ListValue preview_list_args =
         ConstructPreviewArgs(preview_callback_id, preview_ticket);
     handler()->HandleGetPreview(preview_list_args);
 
     // Send printing request.
     mojom::PrinterType type = kAllTypes[i];
-    base::Value::List print_args;
+    base::ListValue print_args;
     std::string print_callback_id =
         "test-callback-id-" + base::NumberToString(2 * (i + 1));
     print_args.Append(print_callback_id);
@@ -1276,15 +1248,15 @@ TEST_F(PrintPreviewHandlerTest, GetPreview) {
       GetInitiatorAssociatedInterfaceProvider());
   print_render_frame.SetCompletionClosure(run_loop.QuitClosure());
 
-  base::Value::Dict print_ticket = GetPrintPreviewTicket();
-  base::Value::List list_args =
+  base::DictValue print_ticket = GetPrintPreviewTicket();
+  base::ListValue list_args =
       ConstructPreviewArgs("test-callback-id-1", print_ticket);
   handler()->HandleGetPreview(list_args);
   run_loop.Run();
 
   // Verify that the preview was requested from the renderer with the
   // appropriate settings.
-  const base::Value::Dict& preview_params = print_render_frame.GetSettings();
+  const base::DictValue& preview_params = print_render_frame.GetSettings();
   bool preview_id_found = false;
   for (auto it : preview_params) {
     if (it.first == kPreviewUIID) {  // This is added by the handler.
@@ -1307,25 +1279,82 @@ TEST_F(PrintPreviewHandlerTest, SendPreviewUpdates) {
   print_render_frame.SetCompletionClosure(run_loop.QuitClosure());
 
   const char callback_id_in[] = "test-callback-id-1";
-  base::Value::Dict print_ticket = GetPrintPreviewTicket();
-  base::Value::List list_args =
+  base::DictValue print_ticket = GetPrintPreviewTicket();
+  base::ListValue list_args =
       ConstructPreviewArgs(callback_id_in, print_ticket);
   handler()->HandleGetPreview(list_args);
   run_loop.Run();
-  const base::Value::Dict& preview_params = print_render_frame.GetSettings();
+  const base::DictValue& preview_params = print_render_frame.GetSettings();
 
   // Read the preview UI ID and request ID
   std::optional<int> request_value = preview_params.FindInt(kPreviewRequestID);
   ASSERT_TRUE(request_value.has_value());
   int preview_request_id = request_value.value();
 
-  std::optional<int> ui_value = preview_params.FindInt(kPreviewUIID);
-  ASSERT_TRUE(ui_value.has_value());
-  int preview_ui_id = ui_value.value();
+  const std::string* ui_value = preview_params.FindString(kPreviewUIID);
+  ASSERT_TRUE(ui_value);
+  std::optional<base::UnguessableToken> preview_ui_id =
+      base::UnguessableToken::DeserializeFromString(*ui_value);
+  ASSERT_TRUE(preview_ui_id.has_value());
+
+  auto create_page_layout = [](double margin_bottom, double content_width,
+                               double content_height) {
+    return mojom::PageSizeMargins::New(content_width, content_height,
+                                       /*margin_top=*/0, /*margin_right=*/0,
+                                       margin_bottom, /*margin_left=*/0);
+  };
+
+  // The event is fired for zero margins and a positive content area.
+  size_t message_count_before_layout = web_ui()->call_data().size();
+  handler()->print_preview_ui()->DidGetDefaultPageLayout(
+      create_page_layout(/*margin_bottom=*/0, /*content_width=*/315,
+                         /*content_height=*/663),
+      gfx::RectF(0, 0, 315, 663),
+      /*all_pages_have_custom_size=*/false,
+      /*all_pages_have_custom_orientation=*/false, preview_request_id);
+  ASSERT_EQ(message_count_before_layout + 1, web_ui()->call_data().size());
+  AssertWebUIEventFired(*web_ui()->call_data().back(), "page-layout-ready");
+
+  // The event is also fired for negative margins and a positive content area.
+  message_count_before_layout = web_ui()->call_data().size();
+  handler()->print_preview_ui()->DidGetDefaultPageLayout(
+      create_page_layout(/*margin_bottom=*/-2, /*content_width=*/315,
+                         /*content_height=*/665),
+      gfx::RectF(0, 0, 315, 663),
+      /*all_pages_have_custom_size=*/true,
+      /*all_pages_have_custom_orientation=*/false, preview_request_id);
+
+  ASSERT_EQ(message_count_before_layout + 1, web_ui()->call_data().size());
+  const content::TestWebUI::CallData& page_layout_data =
+      *web_ui()->call_data().back();
+  AssertWebUIEventFired(page_layout_data, "page-layout-ready");
+  ASSERT_TRUE(page_layout_data.arg2()->is_dict());
+  const base::DictValue& negative_margin_layout =
+      page_layout_data.arg2()->GetDict();
+  EXPECT_EQ(-2,
+            negative_margin_layout.FindDouble(kSettingMarginBottom).value());
+  EXPECT_EQ(315,
+            negative_margin_layout.FindDouble(kSettingContentWidth).value());
+  EXPECT_EQ(665,
+            negative_margin_layout.FindDouble(kSettingContentHeight).value());
+  ASSERT_TRUE(page_layout_data.arg3()->is_bool());
+  EXPECT_TRUE(page_layout_data.arg3()->GetBool());
+  ASSERT_TRUE(page_layout_data.arg4()->is_bool());
+  EXPECT_FALSE(page_layout_data.arg4()->GetBool());
+
+  // The event is not fired for a negative content area.
+  message_count_before_layout = web_ui()->call_data().size();
+  handler()->print_preview_ui()->DidGetDefaultPageLayout(
+      create_page_layout(/*margin_bottom=*/0, /*content_width=*/-1,
+                         /*content_height=*/663),
+      gfx::RectF(0, 0, 315, 663),
+      /*all_pages_have_custom_size=*/false,
+      /*all_pages_have_custom_orientation=*/false, preview_request_id);
+  EXPECT_EQ(message_count_before_layout, web_ui()->call_data().size());
 
   // Simulate renderer responses: PageLayoutReady, PageCountReady,
   // PagePreviewReady, and OnPrintPreviewReady will be called in that order.
-  base::Value::Dict layout;
+  base::DictValue layout;
   layout.Set(kSettingMarginTop, 34.0);
   layout.Set(kSettingMarginLeft, 34.0);
   layout.Set(kSettingMarginBottom, 34.0);
@@ -1349,11 +1378,11 @@ TEST_F(PrintPreviewHandlerTest, SendPreviewUpdates) {
   AssertWebUIEventFired(*web_ui()->call_data().back(), "page-count-ready");
 
   // Page at index 0 is ready.
-  handler()->SendPagePreviewReady(0, preview_ui_id, preview_request_id);
+  handler()->SendPagePreviewReady(0, preview_ui_id.value(), preview_request_id);
   AssertWebUIEventFired(*web_ui()->call_data().back(), "page-preview-ready");
 
   // Print preview is ready.
-  handler()->OnPrintPreviewReady(preview_ui_id, preview_request_id);
+  handler()->OnPrintPreviewReady(preview_ui_id.value(), preview_request_id);
   CheckWebUIResponse(*web_ui()->call_data().back(), callback_id_in, true);
 
   // Renderer responses have been as expected.
@@ -1362,14 +1391,14 @@ TEST_F(PrintPreviewHandlerTest, SendPreviewUpdates) {
   // None of these should work since there has been no new preview request.
   // Check that there are no new web UI messages sent.
   size_t message_count = web_ui()->call_data().size();
-  handler()->SendPageLayoutReady(base::Value::Dict(),
+  handler()->SendPageLayoutReady(base::DictValue(),
                                  /*all_pages_have_custom_size,=*/false,
                                  /*all_pages_have_custom_orientation,=*/false,
                                  preview_request_id);
   EXPECT_EQ(message_count, web_ui()->call_data().size());
   handler()->SendPageCountReady(1, -1, 0);
   EXPECT_EQ(message_count, web_ui()->call_data().size());
-  handler()->OnPrintPreviewReady(0, 0);
+  handler()->OnPrintPreviewReady(base::UnguessableToken(), 0);
   EXPECT_EQ(message_count, web_ui()->call_data().size());
 
   // Handler should have tried to kill the renderer for each of these.
@@ -1387,7 +1416,7 @@ class FailingTestPrinterHandler : public TestPrinterHandler {
 
   void StartGetCapability(const std::string& destination_id,
                           GetCapabilityCallback callback) override {
-    std::move(callback).Run(base::Value::Dict());
+    std::move(callback).Run(base::DictValue());
   }
 };
 
@@ -1423,7 +1452,7 @@ TEST_F(PrintPreviewHandlerFailingTest, GetPrinterCapabilities) {
   for (size_t i = 0; i < std::size(kAllSupportedTypes); i++) {
     mojom::PrinterType type = kAllSupportedTypes[i];
     handler()->reset_calls();
-    base::Value::List args;
+    base::ListValue args;
     std::string callback_id_in =
         "test-callback-id-" + base::NumberToString(i + 1);
     args.Append(callback_id_in);
@@ -1523,7 +1552,7 @@ TEST_P(ContentAnalysisPrintPreviewHandlerTest, LocalScanBeforePrinting) {
   SetProfileForInitialSettings(main_profile);
   Initialize();
 
-  base::Value::List print_args;
+  base::ListValue print_args;
   print_args.Append(kCallbackId);
   base::Value print_ticket(test::GetPrintTicket(kAllTypes[0]));
   print_args.Append(base::WriteJson(print_ticket).value_or(""));

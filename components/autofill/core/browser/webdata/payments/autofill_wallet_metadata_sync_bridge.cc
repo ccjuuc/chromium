@@ -4,24 +4,35 @@
 
 #include "components/autofill/core/browser/webdata/payments/autofill_wallet_metadata_sync_bridge.h"
 
+#include <stdint.h>
+
+#include <algorithm>
+#include <concepts>
 #include <map>
+#include <memory>
 #include <optional>
-#include <unordered_set>
+#include <ranges>
+#include <set>
+#include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "base/base64.h"
+#include "base/check.h"
 #include "base/check_op.h"
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/location.h"
 #include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/pickle.h"
+#include "base/sequence_checker.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/time/time.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/data_model/payments/payments_metadata.h"
+#include "components/autofill/core/browser/webdata/autofill_change.h"
 #include "components/autofill/core/browser/webdata/autofill_sync_metadata_table.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "components/autofill/core/browser/webdata/payments/payments_autofill_table.h"
@@ -31,10 +42,18 @@
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/deletion_origin.h"
 #include "components/sync/model/client_tag_based_data_type_processor.h"
+#include "components/sync/model/data_batch.h"
+#include "components/sync/model/data_type_local_change_processor.h"
+#include "components/sync/model/data_type_sync_bridge.h"
+#include "components/sync/model/entity_change.h"
+#include "components/sync/model/metadata_change_list.h"
+#include "components/sync/model/model_error.h"
 #include "components/sync/model/mutable_data_batch.h"
 #include "components/sync/model/sync_metadata_store_change_list.h"
+#include "components/sync/protocol/autofill_specifics.pb.h"
 #include "components/sync/protocol/entity_data.h"
 #include "components/webdata/common/web_database.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace autofill {
 
@@ -98,9 +117,8 @@ struct TypeAndMetadataId {
 
 TypeAndMetadataId ParseWalletMetadataStorageKey(
     const std::string& storage_key) {
-  base::Pickle pickle =
-      base::Pickle::WithUnownedBuffer(base::as_byte_span(storage_key));
-  base::PickleIterator iterator(pickle);
+  base::PickleIterator iterator =
+      base::PickleIterator::WithData(base::as_byte_span(storage_key));
   int type_int;
   std::string specifics_id;
   if (!iterator.ReadInt(&type_int) || !iterator.ReadString(&specifics_id)) {
@@ -380,8 +398,8 @@ std::unique_ptr<syncer::DataBatch>
 AutofillWalletMetadataSyncBridge::GetDataForCommit(
     StorageKeyList storage_keys) {
   // Build a set out of the list to allow quick lookup.
-  std::unordered_set<std::string> storage_keys_set(storage_keys.begin(),
-                                                   storage_keys.end());
+  absl::flat_hash_set<std::string> storage_keys_set(std::from_range,
+                                                    storage_keys);
   return GetDataImpl(std::move(storage_keys_set));
 }
 
@@ -406,6 +424,14 @@ std::string AutofillWalletMetadataSyncBridge::GetStorageKey(
   return GetStorageKeyForWalletMetadataTypeAndSpecificsId(
       entity_data.specifics.wallet_metadata().type(),
       entity_data.specifics.wallet_metadata().id());
+}
+
+sync_pb::EntitySpecifics
+AutofillWalletMetadataSyncBridge::TrimAllSupportedFieldsFromRemoteSpecifics(
+    const sync_pb::EntitySpecifics& entity_specifics) const {
+  // Clears all fields by default to avoid the memory and I/O overhead of an
+  // additional copy of the data.
+  return sync_pb::EntitySpecifics();
 }
 
 bool AutofillWalletMetadataSyncBridge::IsEntityDataValid(
@@ -530,7 +556,7 @@ void AutofillWalletMetadataSyncBridge::DeleteOldOrphanMetadata() {
   auto transaction = web_data_backend_->GetDatabase()->AcquireTransaction();
 
   // Load up (metadata) ids for which data exists; we do not delete those.
-  std::unordered_set<std::string> non_orphan_ids;
+  absl::flat_hash_set<std::string> non_orphan_ids;
   std::vector<std::unique_ptr<CreditCard>> cards;
   std::vector<std::unique_ptr<Iban>> ibans;
   if (!GetAutofillTable()->GetServerCreditCards(cards) ||
@@ -549,7 +575,7 @@ void AutofillWalletMetadataSyncBridge::DeleteOldOrphanMetadata() {
 
   // Identify storage keys of old orphans (we delete them below to avoid
   // modifying |cache_| while iterating).
-  std::unordered_set<std::string> old_orphan_keys;
+  absl::flat_hash_set<std::string> old_orphan_keys;
   for (const auto& [storage_key, metadata] : cache_) {
     if (metadata.IsDeletable() && !non_orphan_ids.contains(metadata.id)) {
       old_orphan_keys.insert(storage_key);
@@ -592,7 +618,7 @@ void AutofillWalletMetadataSyncBridge::DeleteOldOrphanMetadata() {
 
 std::unique_ptr<syncer::DataBatch>
 AutofillWalletMetadataSyncBridge::GetDataImpl(
-    std::optional<std::unordered_set<std::string>> storage_keys_set) {
+    std::optional<absl::flat_hash_set<std::string>> storage_keys_set) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   auto batch = std::make_unique<syncer::MutableDataBatch>();

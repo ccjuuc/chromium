@@ -4,42 +4,49 @@
 
 #include "components/sync_device_info/fake_local_device_info_provider.h"
 
+#include <optional>
+
 #include "base/notimplemented.h"
 #include "base/time/time.h"
 #include "components/sync/base/data_type.h"
-#include "components/sync/protocol/sync_enums.pb.h"
 #include "components/sync_device_info/device_info.h"
 #include "components/sync_device_info/device_info_util.h"
 
 namespace syncer {
 
 FakeLocalDeviceInfoProvider::FakeLocalDeviceInfoProvider()
-    : device_info_(
-          "id",
-          "name",
-          "chrome_version",
-          "user_agent",
-          sync_pb::SyncEnums_DeviceType_TYPE_LINUX,
-          DeviceInfo::OsType::kLinux,
-          DeviceInfo::FormFactor::kDesktop,
-          "device_id",
-          "fake_manufacturer",
-          "fake_model",
-          "fake_full_hardware_class",
-          /*last_updated_timestamp=*/base::Time::Now(),
-          DeviceInfoUtil::GetPulseInterval(),
-          /*send_tab_to_self_receiving_enabled=*/
-          false,
-          /*send_tab_to_self_receiving_type=*/
-          sync_pb::
-              SyncEnums_SendTabReceivingType_SEND_TAB_RECEIVING_TYPE_CHROME_OR_UNSPECIFIED,
-          /*sharing_info=*/std::nullopt,
-          /*paask_info=*/std::nullopt,
-          /*fcm_registration_token=*/std::string(),
-          /*interested_data_types=*/DataTypeSet(),
-          /*auto_sign_out_last_signin_timestamp=*/
-          std::nullopt, /*desktop_to_ios_promo_receiving_enabled=*/
-          false) {}
+    : device_info_("id",
+                   "name",
+                   "chrome_version",
+                   "user_agent",
+                   DeviceInfo::DeviceType::kLinux,
+                   DeviceInfo::OsType::kLinux,
+                   DeviceInfo::FormFactor::kDesktop,
+                   "device_id",
+                   "fake_manufacturer",
+                   "fake_model",
+                   /*server_determined_model_name=*/std::nullopt,
+                   "fake_full_hardware_class",
+                   /*last_updated_timestamp=*/base::Time::Now(),
+                   DeviceInfoUtil::GetPulseInterval(),
+                   /*send_tab_to_self_receiving_enabled=*/
+                   false,
+                   /*send_tab_to_self_receiving_type=*/
+                   DeviceInfo::SendTabReceivingType::kChromeOrUnspecified,
+                   /*sharing_info=*/std::nullopt,
+                   /*paask_info=*/std::nullopt,
+                   /*fcm_registration_token=*/std::string(),
+                   /*interested_data_types=*/DataTypeSet(),
+                   /*auto_sign_out_last_signin_timestamp=*/
+                   std::nullopt,
+                   /*desktop_to_ios_promo_receiving_enabled=*/false,
+                   /*desktop_to_ios_promo_receiving_types=*/
+                   MobilePromoOnDesktopPromoTypeSet{},
+                   /*glic_experimental_triggering_state=*/
+                   DeviceInfo::GlicExperimentalTriggeringState::kUnavailable,
+                   /*glic_experimental_triggering_version=*/
+                   std::nullopt,
+                   /*android_os_build_fingerprint_prefix=*/std::nullopt) {}
 
 FakeLocalDeviceInfoProvider::~FakeLocalDeviceInfoProvider() = default;
 
@@ -64,6 +71,7 @@ void FakeLocalDeviceInfoProvider::Initialize(
     const std::string& manufacturer_name,
     const std::string& model_name,
     const std::string& full_hardware_class,
+    std::optional<std::string> android_os_build_fingerprint_prefix,
     const DeviceInfo* device_info_restored_from_store) {}
 
 void FakeLocalDeviceInfoProvider::Clear() {}

@@ -4,18 +4,25 @@
 
 package org.chromium.components.browser_ui.accessibility;
 
+import static org.hamcrest.Matchers.closeTo;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.hamcrest.MockitoHamcrest.doubleThat;
 
 import androidx.test.filters.SmallTest;
 
+import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.DisableFeatures;
@@ -25,9 +32,12 @@ import org.chromium.content_public.browser.BrowserContextHandle;
 import org.chromium.content_public.browser.ContentFeatureMap;
 import org.chromium.content_public.browser.ContentFeatureMapJni;
 import org.chromium.content_public.browser.HostZoomMap;
+import org.chromium.content_public.browser.NavigationController;
+import org.chromium.content_public.browser.NavigationEntry;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.common.ContentFeatures;
 import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.url.GURL;
 
 /** Unit tests for {@link PageZoomManager}. */
 @SmallTest
@@ -41,6 +51,7 @@ public class PageZoomManagerUnitTest {
             "Failure in decrease zoom method. Expected 1 JNI call but none occurred.";
     private static final String INCREASE_ZOOM_FAILURE_NO_JNI =
             "Failure in increase zoom method. Expected 1 JNI call but none occurred.";
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private HostZoomMapImpl.Natives mHostZoomMapMock;
     @Mock private ContentFeatureMap.Natives mContentFeatureListMapMock;
@@ -53,7 +64,6 @@ public class PageZoomManagerUnitTest {
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
         HostZoomMapImplJni.setInstanceForTesting(mHostZoomMapMock);
         ContentFeatureMapJni.setInstanceForTesting(mContentFeatureListMapMock);
 
@@ -70,7 +80,10 @@ public class PageZoomManagerUnitTest {
         when(mHostZoomMapMock.getZoomLevel(any())).thenReturn(2.22);
         mManager.decrementZoomLevel();
         verify(mHostZoomMapMock, times(1).description(DECREASE_ZOOM_FAILURE_NO_JNI))
-                .setZoomLevel(mWebContentsMock, 1.56, 1.56);
+                .setZoomLevel(
+                        eq(mWebContentsMock),
+                        doubleThat(closeTo(1.56, 0.01)),
+                        doubleThat(closeTo(1.56, 0.01)));
     }
 
     @Test
@@ -81,7 +94,10 @@ public class PageZoomManagerUnitTest {
         when(mHostZoomMapMock.getZoomLevel(any())).thenReturn(2.22);
         mManager.decrementZoomLevel();
         verify(mHostZoomMapMock, times(1).description(DECREASE_ZOOM_FAILURE_NO_JNI))
-                .setZoomLevel(mWebContentsMock, 3.07, 2.18);
+                .setZoomLevel(
+                        eq(mWebContentsMock),
+                        doubleThat(closeTo(3.07, 0.01)),
+                        doubleThat(closeTo(2.18, 0.01)));
     }
 
     @Test
@@ -90,7 +106,10 @@ public class PageZoomManagerUnitTest {
         when(mHostZoomMapMock.getZoomLevel(any())).thenReturn(2.22);
         mManager.incrementZoomLevel();
         verify(mHostZoomMapMock, times(1).description(INCREASE_ZOOM_FAILURE_NO_JNI))
-                .setZoomLevel(mWebContentsMock, 3.07, 3.07);
+                .setZoomLevel(
+                        eq(mWebContentsMock),
+                        doubleThat(closeTo(3.07, 0.01)),
+                        doubleThat(closeTo(3.07, 0.01)));
     }
 
     @Test
@@ -101,7 +120,10 @@ public class PageZoomManagerUnitTest {
         when(mHostZoomMapMock.getZoomLevel(any())).thenReturn(2.22);
         mManager.incrementZoomLevel();
         verify(mHostZoomMapMock, times(1).description(INCREASE_ZOOM_FAILURE_NO_JNI))
-                .setZoomLevel(mWebContentsMock, 1.22, 2.66);
+                .setZoomLevel(
+                        eq(mWebContentsMock),
+                        doubleThat(closeTo(1.22, 0.01)),
+                        doubleThat(closeTo(2.66, 0.01)));
     }
 
     @Test
@@ -122,6 +144,64 @@ public class PageZoomManagerUnitTest {
         // ~ 330% (zoom factor ~ 6.54).
         mManager.incrementZoomLevel();
         verify(mHostZoomMapMock, times(1).description(INCREASE_ZOOM_FAILURE_NO_JNI))
-                .setZoomLevel(mWebContentsMock, 2.22, 6.54);
+                .setZoomLevel(
+                        eq(mWebContentsMock),
+                        doubleThat(closeTo(2.22, 0.01)),
+                        doubleThat(closeTo(6.54, 0.01)));
+    }
+
+    @Test
+    public void testCanShowPopupWindow_NullWebContents() {
+        when(mPageZoomManagerDelegateMock.canShowPopupWindow()).thenReturn(true);
+        when(mPageZoomManagerDelegateMock.getWebContents()).thenReturn(null);
+        Assert.assertFalse(mManager.canShowPopupWindow("example.com"));
+    }
+
+    @Test
+    public void testCanShowPopupWindow_MatchesCurrentHost() {
+        when(mPageZoomManagerDelegateMock.canShowPopupWindow()).thenReturn(true);
+
+        NavigationController navControllerMock = mock(NavigationController.class);
+        when(mWebContentsMock.getNavigationController()).thenReturn(navControllerMock);
+        when(navControllerMock.getPendingEntry()).thenReturn(null);
+
+        GURL currentGurl = new GURL("https://example.com");
+        when(mWebContentsMock.getLastCommittedUrl()).thenReturn(currentGurl);
+
+        Assert.assertTrue(mManager.canShowPopupWindow("example.com"));
+    }
+
+    @Test
+    public void testCanShowPopupWindow_MismatchedCurrentHost() {
+        when(mPageZoomManagerDelegateMock.canShowPopupWindow()).thenReturn(true);
+
+        NavigationController navControllerMock = mock(NavigationController.class);
+        when(mWebContentsMock.getNavigationController()).thenReturn(navControllerMock);
+        when(navControllerMock.getPendingEntry()).thenReturn(null);
+
+        GURL currentGurl = new GURL("https://other.com");
+        when(mWebContentsMock.getLastCommittedUrl()).thenReturn(currentGurl);
+
+        Assert.assertFalse(mManager.canShowPopupWindow("example.com"));
+    }
+
+    @Test
+    public void testCanShowPopupWindow_MatchesPendingHost() {
+        when(mPageZoomManagerDelegateMock.canShowPopupWindow()).thenReturn(true);
+
+        NavigationController navControllerMock = mock(NavigationController.class);
+        when(mWebContentsMock.getNavigationController()).thenReturn(navControllerMock);
+
+        NavigationEntry pendingEntryMock = mock(NavigationEntry.class);
+        GURL pendingGurl = new GURL("https://pending.com");
+        when(pendingEntryMock.getUrl()).thenReturn(pendingGurl);
+        when(navControllerMock.getPendingEntry()).thenReturn(pendingEntryMock);
+
+        // Even if the current host is different, we respect the pending host when navigating.
+        GURL currentGurl = new GURL("https://example.com");
+        when(mWebContentsMock.getLastCommittedUrl()).thenReturn(currentGurl);
+
+        Assert.assertTrue(mManager.canShowPopupWindow("pending.com"));
+        Assert.assertFalse(mManager.canShowPopupWindow("example.com"));
     }
 }

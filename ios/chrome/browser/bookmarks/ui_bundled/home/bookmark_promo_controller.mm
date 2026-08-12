@@ -8,6 +8,7 @@
 
 #import "components/bookmarks/common/bookmark_features.h"
 #import "components/prefs/pref_service.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_pref_names.h"
 #import "components/signin/public/identity_manager/account_info.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
@@ -29,7 +30,7 @@
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 
 @interface BookmarkPromoController () <AuthenticationServiceObserving,
-                                       IdentityManagerObserverBridgeDelegate,
+                                       IdentityManagerObserving,
                                        SigninPromoViewConsumer>
 
 @end
@@ -45,6 +46,7 @@
   // Observer for auth service status changes.
   std::unique_ptr<AuthenticationServiceObserverBridge>
       _authServiceObserverBridge;
+  BOOL _isShutdown;
 }
 
 - (instancetype)initWithBrowser:(Browser*)browser
@@ -55,8 +57,8 @@
         (id<SigninPromoViewMediatorDelegate>)signinPromoViewMediatorDelegate
            accountSettingsPresenter:
                (id<AccountSettingsPresenter>)accountSettingsPresenter {
-  CHECK(browser, base::NotFatalUntil::M145);
-  CHECK(syncService, base::NotFatalUntil::M145);
+  CHECK(browser);
+  CHECK(syncService);
   self = [super init];
   if (self) {
     _delegate = delegate;
@@ -95,10 +97,14 @@
 }
 
 - (void)dealloc {
-  CHECK(!_authServiceObserverBridge, base::NotFatalUntil::M145);
+  [self shutdown];
 }
 
 - (void)shutdown {
+  if (_isShutdown) {
+    return;
+  }
+  _isShutdown = YES;
   [_signinPromoViewMediator disconnect];
   _signinPromoViewMediator = nil;
   _browser = nullptr;
@@ -176,24 +182,21 @@
   [self updateShouldShowSigninPromo];
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
 // Called when a user changes the syncing state.
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
-  // The account storage promo is not shown if the user is signed-in, so
-  // events with sign-in consent level should be captured and handled.
-  [self handlePrimaryAccountChange:event
-                      consentLevel:signin::ConsentLevel::kSignin];
+  // The account storage promo is not shown if the user is signed-in, so sign-in
+  // events should be captured and handled.
+  [self handlePrimaryAccountChange:event];
 }
 
 #pragma mark - SigninPromoViewConsumer
 
 - (void)configureSigninPromoWithConfigurator:
-            (SigninPromoViewConfigurator*)configurator
-                             identityChanged:(BOOL)identityChanged {
-  [self.delegate configureSigninPromoWithConfigurator:configurator
-                                      identityChanged:identityChanged];
+    (SigninPromoViewConfigurator*)configurator {
+  [self.delegate configureSigninPromoWithConfigurator:configurator];
 }
 
 - (void)promoProgressStateDidChange {
@@ -207,11 +210,10 @@
 
 #pragma mark - Private methods
 
-// Handles the given primary account change event for the given consent level.
+// Handles the given primary account change event.
 - (void)handlePrimaryAccountChange:
-            (const signin::PrimaryAccountChangeEvent&)event
-                      consentLevel:(signin::ConsentLevel)consentLevel {
-  switch (event.GetEventTypeFor(consentLevel)) {
+    (const signin::PrimaryAccountChangeEvent&)event {
+  switch (event.GetEventTypeFor(signin::ConsentLevel::kSignin)) {
     case signin::PrimaryAccountChangeEvent::Type::kSet:
       if (!self.signinPromoViewMediator.showSpinner) {
         self.shouldShowSigninPromo = NO;

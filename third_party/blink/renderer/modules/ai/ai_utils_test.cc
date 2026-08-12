@@ -11,6 +11,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
 #include "third_party/blink/renderer/modules/ai/ai_features.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 
 namespace blink {
 
@@ -45,24 +46,32 @@ class AIUtilsTest : public PageTestBase,
   }
 };
 
-TEST(ResolveSamplingParamsOptionTest, NoOptions) {
-  auto result = ResolveSamplingParamsOption(nullptr);
+class ResolveSamplingParamsOptionTest : public PageTestBase {
+ public:
+  ResolveSamplingParamsOptionTest() = default;
+
+ private:
+  ScopedAIPromptAPILegacyParamsForTest scoped_legacy_params_{true};
+};
+
+TEST_F(ResolveSamplingParamsOptionTest, NoOptions) {
+  auto result = ResolveSamplingParamsOption(nullptr, GetFrame().DomWindow());
   ASSERT_TRUE(result.has_value());
   ASSERT_FALSE(result.value());
 }
 
-TEST(ResolveSamplingParamsOptionTest, NoSamplingParams) {
+TEST_F(ResolveSamplingParamsOptionTest, NoSamplingParams) {
   auto* options = MakeGarbageCollected<LanguageModelCreateCoreOptions>();
-  auto result = ResolveSamplingParamsOption(options);
+  auto result = ResolveSamplingParamsOption(options, GetFrame().DomWindow());
   ASSERT_TRUE(result.has_value());
   ASSERT_FALSE(result.value());
 }
 
-TEST(ResolveSamplingParamsOptionTest, ValidOptions) {
+TEST_F(ResolveSamplingParamsOptionTest, ValidOptions) {
   auto* options = MakeGarbageCollected<LanguageModelCreateCoreOptions>();
   options->setTopK(1);
   options->setTemperature(0.5);
-  auto result = ResolveSamplingParamsOption(options);
+  auto result = ResolveSamplingParamsOption(options, GetFrame().DomWindow());
   ASSERT_TRUE(result.has_value());
   ASSERT_EQ(result.value()->top_k, 1u);
   ASSERT_EQ(result.value()->temperature, 0.5);
@@ -70,7 +79,7 @@ TEST(ResolveSamplingParamsOptionTest, ValidOptions) {
   auto* options2 = MakeGarbageCollected<LanguageModelCreateCoreOptions>();
   options2->setTopK(10);
   options2->setTemperature(0.5);
-  auto result2 = ResolveSamplingParamsOption(options2);
+  auto result2 = ResolveSamplingParamsOption(options2, GetFrame().DomWindow());
   ASSERT_TRUE(result2.has_value());
   ASSERT_EQ(result2.value()->top_k, 10u);
   ASSERT_EQ(result2.value()->temperature, 0.5);
@@ -78,49 +87,49 @@ TEST(ResolveSamplingParamsOptionTest, ValidOptions) {
   auto* options3 = MakeGarbageCollected<LanguageModelCreateCoreOptions>();
   options3->setTopK(10);
   options3->setTemperature(0);
-  auto result3 = ResolveSamplingParamsOption(options3);
+  auto result3 = ResolveSamplingParamsOption(options3, GetFrame().DomWindow());
   ASSERT_TRUE(result3.has_value());
   ASSERT_EQ(result3.value()->top_k, 10u);
   ASSERT_EQ(result3.value()->temperature, 0);
 }
 
-TEST(ResolveSamplingParamsOptionTest, OnlyOneOfTopKAndTemperatureIsProvided) {
+TEST_F(ResolveSamplingParamsOptionTest, OnlyOneOfTopKAndTemperatureIsProvided) {
   auto* options = MakeGarbageCollected<LanguageModelCreateCoreOptions>();
   options->setTopK(10);
-  auto result = ResolveSamplingParamsOption(options);
+  auto result = ResolveSamplingParamsOption(options, GetFrame().DomWindow());
   ASSERT_FALSE(result.has_value());
   ASSERT_EQ(result.error(),
             SamplingParamsOptionError::kOnlyOneOfTopKAndTemperatureIsProvided);
 
   auto* options2 = MakeGarbageCollected<LanguageModelCreateCoreOptions>();
   options2->setTemperature(0.5);
-  auto result2 = ResolveSamplingParamsOption(options2);
+  auto result2 = ResolveSamplingParamsOption(options2, GetFrame().DomWindow());
   ASSERT_FALSE(result2.has_value());
   ASSERT_EQ(result2.error(),
             SamplingParamsOptionError::kOnlyOneOfTopKAndTemperatureIsProvided);
 }
 
-TEST(ResolveSamplingParamsOptionTest, InvalidTopK) {
+TEST_F(ResolveSamplingParamsOptionTest, InvalidTopK) {
   auto* options = MakeGarbageCollected<LanguageModelCreateCoreOptions>();
   options->setTopK(0.5);
   options->setTemperature(0.5);
-  auto result = ResolveSamplingParamsOption(options);
+  auto result = ResolveSamplingParamsOption(options, GetFrame().DomWindow());
   ASSERT_FALSE(result.has_value());
   ASSERT_EQ(result.error(), SamplingParamsOptionError::kInvalidTopK);
 
   auto* options2 = MakeGarbageCollected<LanguageModelCreateCoreOptions>();
   options2->setTopK(-1);
   options2->setTemperature(0.5);
-  auto result2 = ResolveSamplingParamsOption(options2);
+  auto result2 = ResolveSamplingParamsOption(options2, GetFrame().DomWindow());
   ASSERT_FALSE(result2.has_value());
   ASSERT_EQ(result2.error(), SamplingParamsOptionError::kInvalidTopK);
 }
 
-TEST(ResolveSamplingParamsOptionTest, InvalidTemperature) {
+TEST_F(ResolveSamplingParamsOptionTest, InvalidTemperature) {
   auto* options = MakeGarbageCollected<LanguageModelCreateCoreOptions>();
   options->setTopK(10);
   options->setTemperature(-0.5);
-  auto result = ResolveSamplingParamsOption(options);
+  auto result = ResolveSamplingParamsOption(options, GetFrame().DomWindow());
   ASSERT_FALSE(result.has_value());
   ASSERT_EQ(result.error(), SamplingParamsOptionError::kInvalidTemperature);
 }

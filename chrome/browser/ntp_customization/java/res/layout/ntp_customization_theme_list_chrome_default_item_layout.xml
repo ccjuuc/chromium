@@ -21,7 +21,7 @@ found in the LICENSE file.
       android:layout_height="@dimen/ntp_customization_theme_collections_list_item_leading_icon_size"
       android:scaleType="centerCrop"
       android:importantForAccessibility="no"
-      android:src="@drawable/chrome_colors_icon_for_theme_bottom_sheet"
+      android:src="@drawable/default_theme_icon"
       app:shapeAppearanceOverlay="@style/RoundedImageCornerOverlay" />
 
   <TextView
@@ -38,9 +38,9 @@ found in the LICENSE file.
       android:id="@+id/trailing_icon"
       android:layout_width="@dimen/ntp_customization_bottom_sheet_list_item_icon_size"
       android:layout_height="@dimen/ntp_customization_bottom_sheet_list_item_icon_size"
-      android:importantForAccessibility="no"
-      app:tint="@color/default_icon_color_tint_list"
+      app:tint="@macro/default_icon_color_accent1"
       android:src="@drawable/ic_check_googblue_24dp"
+      android:contentDescription="@string/selected"
       android:visibility="invisible"/>
 
 </org.chromium.chrome.browser.ntp_customization.theme.NtpThemeListItemView>

@@ -89,7 +89,7 @@ TEST_F(FirstRunServiceTest, ShouldOpenFirstRun) {
   EXPECT_FALSE(ShouldOpenFirstRun(profile));
 }
 
-// Regression test for crbug.com/1450709.
+// Regression test for crbug.com/40065181.
 TEST_F(FirstRunServiceTest, ShouldPopulateProfileNameFromPrimaryAccount) {
   signin::IdentityTestEnvironment identity_test_env;
   TestingProfileManager testing_profile_manager{
@@ -101,7 +101,7 @@ TEST_F(FirstRunServiceTest, ShouldPopulateProfileNameFromPrimaryAccount) {
 
   AccountInfo primary_account_info = identity_test_env.MakeAccountAvailable(
       "primary@gmail.com",
-      {.primary_account_consent_level = signin::ConsentLevel::kSync});
+      {.primary_account_consent_level = signin::ConsentLevel::kSignin});
   AccountInfo secondary_account_info =
       identity_test_env.MakeAccountAvailable("secondary@gmail.com");
 

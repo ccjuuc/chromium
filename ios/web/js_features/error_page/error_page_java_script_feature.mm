@@ -54,11 +54,12 @@ void ErrorPageJavaScriptFeature::ScriptMessageReceived(
     return;
   }
 
-  if (!script_message.body() || !script_message.body()->is_dict()) {
+  if (!script_message.legacy_body() ||
+      !script_message.legacy_body()->is_dict()) {
     return;
   }
 
-  const base::Value::Dict& dict = script_message.body()->GetDict();
+  const base::DictValue& dict = script_message.legacy_body()->GetDict();
 
   const std::string* command = dict.FindString("command");
   if (!command) {
@@ -88,7 +89,7 @@ void ErrorPageJavaScriptFeature::ScriptMessageReceived(
     int high_score = [[NSUserDefaults standardUserDefaults]
         integerForKey:kEasterEggHighScore];
 
-    auto parameters = base::Value::List().Append(high_score);
+    auto parameters = base::ListValue().Append(high_score);
     frame->CallJavaScriptFunction(
         "errorPageController.initializeEasterEggHighScore", parameters);
   }

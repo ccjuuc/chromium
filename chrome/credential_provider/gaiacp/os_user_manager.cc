@@ -2,17 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "chrome/credential_provider/gaiacp/os_user_manager.h"
 
 #include <windows.h>
 
-#include <atlcomcli.h>  // For CComBSTR
-#include <atlconv.h>
 #include <lm.h>
 #include <malloc.h>
 #include <memory.h>
@@ -24,6 +17,7 @@
 #include <iomanip>
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/scoped_native_library.h"
@@ -31,6 +25,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/win/registry.h"
+#include "base/win/scoped_bstr.h"
 #include "base/win/win_util.h"
 #include "chrome/credential_provider/common/gcp_strings.h"
 #include "chrome/credential_provider/gaiacp/gcp_utils.h"
@@ -47,7 +42,7 @@ HRESULT GetDomainControllerServerForDomain(const wchar_t* domain,
   DCHECK(domain);
   std::wstring local_domain = OSUserManager::GetLocalDomain();
   // If the domain is the local domain, then there is no domain controller.
-  if (wcsicmp(local_domain.c_str(), domain) == 0) {
+  if (UNSAFE_TODO(wcsicmp(local_domain.c_str(), domain) == 0)) {
     return S_OK;
   }
 
@@ -149,9 +144,9 @@ HRESULT OSUserManager::GenerateRandomPassword(wchar_t* password, int length) {
         return hr;
       }
 
-      unsigned char c =
-          kValidPasswordChars[r % (std::size(kValidPasswordChars) - 1)];
-      *p++ = c;
+      unsigned char c = UNSAFE_TODO(
+          kValidPasswordChars[r % (std::size(kValidPasswordChars) - 1)]);
+      UNSAFE_TODO(*p++ = c);
       ++cur_length;
       --remaining_length;
 
@@ -296,7 +291,7 @@ HRESULT OSUserManager::AddUser(const wchar_t* username,
     const USER_INFO_4* user_info = reinterpret_cast<const USER_INFO_4*>(buffer);
     wchar_t* sidstr = nullptr;
     if (::ConvertSidToStringSid(user_info->usri4_user_sid, &sidstr)) {
-      *sid = SysAllocString(T2COLE(sidstr));
+      *sid = ::SysAllocString(sidstr);
       LOGFN(VERBOSE) << "sid=" << sidstr;
       ::LocalFree(sidstr);
     } else {
@@ -345,7 +340,8 @@ HRESULT OSUserManager::CreateNewUser(const wchar_t* base_username,
   LOGFN(VERBOSE) << "Creating a new user: " << base_username;
 
   wchar_t new_username[kWindowsUsernameBufferLength];
-  errno_t err = wcscpy_s(new_username, std::size(new_username), base_username);
+  errno_t err = UNSAFE_TODO(
+      wcscpy_s(new_username, std::size(new_username), base_username));
   if (err != 0) {
     LOGFN(ERROR) << "wcscpy_s errno=" << err;
     return E_FAIL;
@@ -354,10 +350,10 @@ HRESULT OSUserManager::CreateNewUser(const wchar_t* base_username,
   // Keep trying to create the user account until an unused username can be
   // found or |max_attempts| has been reached.
   for (int i = 0; i < max_attempts; ++i) {
-    CComBSTR new_sid;
+    base::win::ScopedBstr new_sid;
     DWORD error;
     HRESULT hr = AddUser(new_username, password, fullname, comment,
-                         add_to_users_group, &new_sid, &error);
+                         add_to_users_group, new_sid.Receive(), &error);
     if (hr == HRESULT_FROM_WIN32(NERR_UserExists)) {
       std::wstring next_username = base_username;
       std::wstring next_username_suffix =
@@ -375,8 +371,8 @@ HRESULT OSUserManager::CreateNewUser(const wchar_t* base_username,
       LOGFN(VERBOSE) << "Username '" << new_username
                      << "' already exists. Trying '" << next_username << "'";
 
-      err = wcscpy_s(new_username, std::size(new_username),
-                     next_username.c_str());
+      err = UNSAFE_TODO(wcscpy_s(new_username, std::size(new_username),
+                                 next_username.c_str()));
       if (err != 0) {
         LOGFN(ERROR) << "wcscpy_s errno=" << err;
         return E_FAIL;
@@ -388,7 +384,7 @@ HRESULT OSUserManager::CreateNewUser(const wchar_t* base_username,
       return hr;
     }
 
-    *sid = ::SysAllocString(new_sid);
+    *sid = new_sid.Release();
     *final_username = ::SysAllocString(new_username);
     return S_OK;
   }
@@ -649,7 +645,7 @@ HRESULT OSUserManager::GetUserSID(const wchar_t* domain,
 
   // Check that the domain of the user found with LookupAccountName matches what
   // is requested.
-  if (wcsicmp(domain, user_domain_buffer) != 0) {
+  if (UNSAFE_TODO(wcsicmp(domain, user_domain_buffer) != 0)) {
     LOGFN(ERROR) << "Domain mismatch " << domain << " " << user_domain_buffer;
 
     return HRESULT_FROM_WIN32(ERROR_NONE_MAPPED);
@@ -692,7 +688,7 @@ HRESULT OSUserManager::FindUserBySID(const wchar_t* sid,
   if (domain_size) {
     if (domain_size <= domain_length)
       return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
-    wcscpy_s(domain, domain_size, local_domain_buffer);
+    UNSAFE_TODO(wcscpy_s(domain, domain_size, local_domain_buffer));
   }
 
   std::wstring username_str = (username == nullptr) ? L"" : username;
@@ -773,7 +769,7 @@ HRESULT OSUserManager::RemoveUser(const wchar_t* username,
   if (SUCCEEDED(hr)) {
     // Get the gaia user's profile directory so that it can be deleted.
     DWORD length = std::size(profiledir) - 1;
-    if (!::GetUserProfileDirectory(token.Get(), profiledir, &length)) {
+    if (!::GetUserProfileDirectory(token.get(), profiledir, &length)) {
       hr = HRESULT_FROM_WIN32(::GetLastError());
       if (hr != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND))
         LOGFN(ERROR) << "GetUserProfileDirectory hr=" << putHR(hr);
@@ -799,7 +795,7 @@ HRESULT OSUserManager::ModifyUserAccessWithLogonHours(const wchar_t* domain,
                                                       const wchar_t* username,
                                                       bool allow) {
   BYTE buffer[21] = {0x0};
-  memset(buffer, allow ? 0xff : 0x0, sizeof(buffer));
+  UNSAFE_TODO(memset(buffer, allow ? 0xff : 0x0, sizeof(buffer)));
   USER_INFO_1020 user_info{UNITS_PER_WEEK, buffer};
 
   NET_API_STATUS nsts = ::NetUserSetInfo(

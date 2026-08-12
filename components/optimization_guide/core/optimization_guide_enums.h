@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// TODO: crbug.com/514743962 - All of these enums should be moved to more
+// specific files and out of this file.  Do not add anything here.
+
 #ifndef COMPONENTS_OPTIMIZATION_GUIDE_CORE_OPTIMIZATION_GUIDE_ENUMS_H_
 #define COMPONENTS_OPTIMIZATION_GUIDE_CORE_OPTIMIZATION_GUIDE_ENUMS_H_
 
@@ -288,30 +291,7 @@ enum class OnDeviceModelPerformanceClass : int {
   kMaxValue = kFailedToLoadLibrary,
 };
 
-// The validity of the model metadata packaged with the text safety model.
-//
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-enum class TextSafetyModelMetadataValidity {
-  kUnknown = 0,
 
-  // No metadata packaged with model.
-  kNoMetadata = 1,
-
-  // Metadata packaged with model is of the wrong type.
-  kMetadataWrongType = 2,
-
-  // Metadata packaged with model has no feature configs.
-  kNoFeatureConfigs = 3,
-
-  // Metadata was valid.
-  kValid = 4,
-
-  // This must be kept in sync with TextSafetyModelMetadataValidity in
-  // optimization/enums.xml.
-
-  kMaxValue = kValid,
-};
 
 // Whether a response is complete or not.
 enum class ResponseCompleteness {

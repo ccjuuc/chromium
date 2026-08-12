@@ -6,13 +6,15 @@
 
 #include <atomic>
 
-#include "base/containers/variant_map.h"
 #include "base/debug/stack_trace.h"
 #include "base/files/file_path.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/synchronization/lock.h"
 #include "base/task/sequence_manager/sequence_manager_impl.h"
 #include "base/task/thread_pool/job_task_source.h"
 #include "base/threading/platform_thread.h"
 #include "build/blink_buildflags.h"
+#include "build/build_config.h"
 #include "build/buildflag.h"
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
@@ -52,11 +54,6 @@ std::atomic_bool g_is_reduce_ppms_enabled{false};
 
 // Alphabetical:
 
-// When enabled, the compositor threads (including GPU) will be boosted to
-// kInteractive when not in input or loading scenarios.
-BASE_FEATURE(kBoostCompositorThreadsPriorityWhenIdle,
-             FEATURE_DISABLED_BY_DEFAULT);
-
 // Controls caching within BASE_FEATURE_PARAM(). This is feature-controlled
 // so that ScopedFeatureList can disable it to turn off caching.
 BASE_FEATURE(kFeatureParamWithCache, FEATURE_ENABLED_BY_DEFAULT);
@@ -83,10 +80,18 @@ BASE_FEATURE(kLowEndMemoryExperiment, FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE_PARAM(int,
                    kLowMemoryDeviceThresholdMB,
                    &kLowEndMemoryExperiment,
-                   "LowMemoryDeviceThresholdMB",
                    LOW_MEMORY_DEVICE_THRESHOLD_MB);
 
-BASE_FEATURE(kReducePPMs, FEATURE_DISABLED_BY_DEFAULT);
+// Controls whether lock acquisition times are recorded and reported by a
+// given thread.
+BASE_FEATURE(kRecordLockAcquisitionTime, FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE_PARAM(std::string,
+                   kRecordLockAcquisitionTimeAllowedThreads,
+                   &kRecordLockAcquisitionTime,
+                   "RecordLockAcquisitionTimeAllowedThreads",
+                   "CrBrowserMain,CrRendererMain");
+
+BASE_FEATURE(kReducePPMs, FEATURE_ENABLED_BY_DEFAULT);
 
 // Apply base::ScopedBestEffortExecutionFence to registered task queues as well
 // as the thread pool.
@@ -144,11 +149,6 @@ BASE_FEATURE(kPartialLowEndModeOnMidRangeDevices,
 // Enable not perceptible binding without cpu priority boosting.
 BASE_FEATURE(kBackgroundNotPerceptibleBinding, FEATURE_ENABLED_BY_DEFAULT);
 
-// Whether to use effective binding state to manage child process bindings.
-// ChildProcessConnection will binds at most 2 service connections only,
-// the connection for the effective binding state and waived binding.
-BASE_FEATURE(kEffectiveBindingState, FEATURE_DISABLED_BY_DEFAULT);
-
 // If enabled, post registering PowerMonitor broadcast receiver to a background
 // thread,
 BASE_FEATURE(kPostPowerMonitorBroadcastReceiverInitToBackground,
@@ -164,17 +164,24 @@ BASE_FEATURE(kRebindingChildServiceConnectionController,
 // Use a batch API to rebind service connections.
 BASE_FEATURE(kRebindServiceBatchApi, FEATURE_DISABLED_BY_DEFAULT);
 
-// Use ChildServiceConnectionController.isUnbound() instead of isConnected() to
-// check the connection state in ChildProcessConnection.
-BASE_FEATURE(kUseIsUnboundCheck, FEATURE_DISABLED_BY_DEFAULT);
-
 // Use shared service connection to rebind a service binding to update the LRU
 // in the ProcessList of OomAdjuster.
 BASE_FEATURE(kUseSharedRebindServiceConnection, FEATURE_ENABLED_BY_DEFAULT);
 
+// Kill switch for Android VirtualKeyboard API geometry and inset fixes.
+BASE_FEATURE(kVirtualKeyboardGeometryAndInsetFixes, FEATURE_ENABLED_BY_DEFAULT);
+
 // Use madvise MADV_WILLNEED to prefetch the native library. This replaces the
 // default mechanism of pre-reading the memory from a forked process.
 BASE_FEATURE(kLibraryPrefetcherMadvise, FEATURE_DISABLED_BY_DEFAULT);
+
+// If enabled, only the ordered text section will be prefetched.
+BASE_FEATURE(kLibraryPrefetcherOnlyOrderedText, FEATURE_DISABLED_BY_DEFAULT);
+
+// When enabled, after start up the thread pool in PostTask.java will be
+// shutdown after pre-native to stop consuming resources.
+BASE_FEATURE(kShutdownPreNativeThreadPoolAfterStartup,
+             FEATURE_DISABLED_BY_DEFAULT);
 
 // If > 0, split the madvise range into chunks of this many bytes, rounded up to
 // a page size. The default of 1 therefore rounds to a whole page.
@@ -198,6 +205,40 @@ BASE_FEATURE_PARAM(bool,
 // failures. Otherwise, it returns TERMINATION_STATUS_OOM.
 BASE_FEATURE(kUseTerminationStatusMemoryExhaustion, FEATURE_ENABLED_BY_DEFAULT);
 
+// Optimize text decoding by using FindFirstNonASCII to find and copy ASCII
+// content.
+BASE_FEATURE(kUtfConversionAsciiFastPath, FEATURE_DISABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_WIN)
+// When enabled, use ABOVE_NORMAL_PRIORITY_CLASS for Priority::kUserBlocking on
+// Windows.
+BASE_FEATURE(kUserBlockingAboveNormalPriority, FEATURE_DISABLED_BY_DEFAULT);
+
+// When enabled, retries CreateFileMapping on a commit limit failure (OOM).
+// If retrying fails, the function returns failure as usual and reports the
+// last error code.
+BASE_FEATURE(kRetryCreateFileMappingOnCommitLimit, FEATURE_DISABLED_BY_DEFAULT);
+
+
+// Prevents base::DeletePathRecursively on Windows from traversing NTFS reparse
+// points (such as directory junctions). This protects against TOCTOU
+// vulnerabilities and prevents deleting files outside the target directory.
+BASE_FEATURE(kPreventReparsePointTraversal, FEATURE_ENABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_POSIX)
+// If enabled, threads acquiring a base::Lock will try to acquire it in user
+// space. The `kSpinCount` parameter represents the maximum number of pause
+// instructions (yields) that will be executed with an exponential backoff
+// before blocking in the kernel.
+BASE_FEATURE(kBaseLockTrySpin, FEATURE_DISABLED_BY_DEFAULT);
+#if defined(ARCH_CPU_X86_FAMILY)
+BASE_FEATURE_PARAM(int, kSpinCountX86, &kBaseLockTrySpin, "spin_count_x86", 0);
+#elif defined(ARCH_CPU_ARM_FAMILY)
+BASE_FEATURE_PARAM(int, kSpinCountArm, &kBaseLockTrySpin, "spin_count_arm", 0);
+#endif  // defined(ARCH_CPU_X86_FAMILY)
+#endif  // BUILDFLAG(IS_POSIX)
+
 bool IsReducePPMsEnabled() {
   return g_is_reduce_ppms_enabled.load(std::memory_order_relaxed);
 }
@@ -205,6 +246,10 @@ bool IsReducePPMsEnabled() {
 void Init() {
   g_is_reduce_ppms_enabled.store(FeatureList::IsEnabled(kReducePPMs),
                                  std::memory_order_relaxed);
+  strings_internal::InitializeUtfStringConversionsFeatures();
+#if BUILDFLAG(IS_POSIX)
+  base::Lock::InitializeFeatures();
+#endif  // BUILDFLAG(IS_POSIX)
 
   sequence_manager::internal::SequenceManagerImpl::InitializeFeatures();
   sequence_manager::internal::ThreadController::InitializeFeatures();
@@ -212,7 +257,6 @@ void Init() {
 
   debug::StackTrace::InitializeFeatures();
   FilePath::InitializeFeatures();
-  InitializeVariantMapFeatures();
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   MessagePumpEpoll::InitializeFeatures();

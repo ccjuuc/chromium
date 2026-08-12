@@ -25,13 +25,9 @@ void VideoPainter::PaintReplaced(const PaintInfo& paint_info,
 
   WebMediaPlayer* media_player =
       layout_video_.MediaElement()->GetWebMediaPlayer();
-  // TODO(crbug.com/419834322): Canvas drawElementImage does not yet draw video,
-  // so force the poster until it does.
   bool force_video_poster =
       layout_video_.GetDocument().GetPaintPreviewState() ==
-          Document::kPaintingPreviewSkipAcceleratedContent ||
-      (RuntimeEnabledFeatures::CanvasDrawElementEnabled() &&
-       (paint_info.GetPaintFlags() & PaintFlag::kPrivacyPreserving));
+      Document::kPaintingPreviewSkipAcceleratedContent;
   bool should_display_poster =
       layout_video_.GetDisplayMode() == LayoutVideo::kPoster ||
       force_video_poster;
@@ -40,7 +36,7 @@ void VideoPainter::PaintReplaced(const PaintInfo& paint_info,
 
   if (paint_info.IsPrivacyPreserving()) {
     if (should_display_poster) {
-      if (!layout_video_.ImageResource()->IsAccessAllowed()) {
+      if (!layout_video_.ImageResource()->IsCorsSameOrigin()) {
         return;
       }
     } else if (media_player->WouldTaintOrigin()) {
@@ -105,14 +101,16 @@ void VideoPainter::PaintReplaced(const PaintInfo& paint_info,
   if (should_display_poster || !force_software_video_paint) {
     // This will display the poster image, if one is present, and otherwise
     // paint nothing.
-
     ImagePainter(layout_video_)
         .PaintIntoRect(context, replaced_rect, visual_rect);
   } else {
+    bool acquire_texture_backing =
+        layout_video_.MediaElement()->IsInCanvasSubtree();
     cc::PaintFlags video_flags = context.FillFlags();
     video_flags.setColor(SK_ColorBLACK);
     layout_video_.VideoElement()->PaintCurrentFrame(
-        context.Canvas(), snapped_replaced_rect, video_flags);
+        context.Canvas(), snapped_replaced_rect, video_flags,
+        acquire_texture_backing);
   }
 }
 

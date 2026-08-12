@@ -5,6 +5,8 @@
 #ifndef SERVICES_NETWORK_PUBLIC_CPP_FIRST_PARTY_SETS_MOJOM_TRAITS_H_
 #define SERVICES_NETWORK_PUBLIC_CPP_FIRST_PARTY_SETS_MOJOM_TRAITS_H_
 
+#include <optional>
+
 #include "base/containers/flat_map.h"
 #include "base/version.h"
 #include "mojo/public/cpp/bindings/enum_traits.h"
@@ -25,7 +27,7 @@ struct COMPONENT_EXPORT(FIRST_PARTY_SETS_MOJOM_TRAITS)
     EnumTraits<network::mojom::SiteType, net::SiteType> {
   static network::mojom::SiteType ToMojom(net::SiteType site_type);
 
-  static bool FromMojom(network::mojom::SiteType site_type, net::SiteType* out);
+  static net::SiteType FromMojom(network::mojom::SiteType site_type);
 };
 
 template <>
@@ -71,14 +73,9 @@ struct COMPONENT_EXPORT(FIRST_PARTY_SETS_MOJOM_TRAITS)
     return sets.public_sets_version_;
   }
 
-  static const base::flat_map<net::SchemefulSite, net::FirstPartySetEntry>&
-  sets(const net::GlobalFirstPartySets& sets) {
-    return sets.entries_;
-  }
-
-  static const base::flat_map<net::SchemefulSite, net::SchemefulSite>& aliases(
+  static const net::FirstPartySetsContextConfig& public_config(
       const net::GlobalFirstPartySets& sets) {
-    return sets.aliases_;
+    return sets.public_config_;
   }
 
   static const net::FirstPartySetsContextConfig& manual_config(
@@ -130,7 +127,7 @@ struct COMPONENT_EXPORT(FIRST_PARTY_SETS_MOJOM_TRAITS)
     return cache_filter.filter_;
   }
 
-  static int64_t browser_run_id(
+  static std::optional<int64_t> browser_run_id(
       const net::FirstPartySetsCacheFilter& cache_filter) {
     return cache_filter.browser_run_id_;
   }

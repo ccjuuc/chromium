@@ -1,4 +1,4 @@
-# tags: [ Android Fuchsia Linux Mac Mac12 Mac12-arm64 Mac13 Mac13-arm64 Mac14 Mac14-arm64 Mac15 Mac15-arm64 Webview Win Win10.20h2 Win11 Win11-arm64 iOS17-simulator ]
+# tags: [ Android Fuchsia Linux Mac Mac13 Mac13-arm64 Mac14 Mac14-arm64 Mac15 Mac15-arm64 Mac26 Mac26-arm64 Webview Win Win10.20h2 Win11 Win11-arm64 iOS17-simulator ]
 # tags: [ Release Debug ]
 # results: [ Timeout Crash Pass Failure Slow Skip ]
 
@@ -21,22 +21,14 @@ crbug.com/420606 [ Linux ] external/wpt/workers/constructors/Worker/Worker-const
 # Flaky under MSan (hang forever).
 crbug.com/422982 [ Linux ] virtual/threaded/* [ Skip ]
 
-crbug.com/708175 [ Linux ] external/wpt/IndexedDB/interleaved-cursors-small.any.html [ Timeout ]
-crbug.com/708175 [ Linux ] external/wpt/IndexedDB/interleaved-cursors-small.any.serviceworker.html [ Timeout ]
-crbug.com/708175 [ Linux ] external/wpt/IndexedDB/interleaved-cursors-small.any.sharedworker.html [ Timeout ]
-crbug.com/708175 [ Linux ] external/wpt/IndexedDB/interleaved-cursors-small.any.worker.html [ Timeout ]
-crbug.com/708175 [ Linux ] external/wpt/IndexedDB/interleaved-cursors-large.any.html [ Timeout ]
-crbug.com/708175 [ Linux ] external/wpt/IndexedDB/interleaved-cursors-large.any.serviceworker.html [ Timeout ]
-crbug.com/708175 [ Linux ] external/wpt/IndexedDB/interleaved-cursors-large.any.sharedworker.html [ Timeout ]
-crbug.com/708175 [ Linux ] external/wpt/IndexedDB/interleaved-cursors-large.any.worker.html [ Timeout ]
-crbug.com/708175 [ Linux ] virtual/indexeddb_sqlite/external/wpt/IndexedDB/interleaved-cursors-small.any.html [ Skip Timeout ]
-crbug.com/708175 [ Linux ] virtual/indexeddb_sqlite/external/wpt/IndexedDB/interleaved-cursors-small.any.serviceworker.html [ Skip Timeout ]
-crbug.com/708175 [ Linux ] virtual/indexeddb_sqlite/external/wpt/IndexedDB/interleaved-cursors-small.any.sharedworker.html [ Skip Timeout ]
-crbug.com/708175 [ Linux ] virtual/indexeddb_sqlite/external/wpt/IndexedDB/interleaved-cursors-small.any.worker.html [ Skip Timeout ]
-crbug.com/708175 [ Linux ] virtual/indexeddb_sqlite/external/wpt/IndexedDB/interleaved-cursors-large.any.html [ Skip Timeout ]
-crbug.com/708175 [ Linux ] virtual/indexeddb_sqlite/external/wpt/IndexedDB/interleaved-cursors-large.any.serviceworker.html [ Skip Timeout ]
-crbug.com/708175 [ Linux ] virtual/indexeddb_sqlite/external/wpt/IndexedDB/interleaved-cursors-large.any.sharedworker.html [ Skip Timeout ]
-crbug.com/708175 [ Linux ] virtual/indexeddb_sqlite/external/wpt/IndexedDB/interleaved-cursors-large.any.worker.html [ Skip Timeout ]
+crbug.com/708175 [ Linux ] external/wpt/IndexedDB/interleaved-cursors-small.any.html [ Skip Timeout ]
+crbug.com/708175 [ Linux ] external/wpt/IndexedDB/interleaved-cursors-small.any.serviceworker.html [ Skip Timeout ]
+crbug.com/708175 [ Linux ] external/wpt/IndexedDB/interleaved-cursors-small.any.sharedworker.html [ Skip Timeout ]
+crbug.com/708175 [ Linux ] external/wpt/IndexedDB/interleaved-cursors-small.any.worker.html [ Skip Timeout ]
+crbug.com/708175 [ Linux ] external/wpt/IndexedDB/interleaved-cursors-large.any.html [ Skip Timeout ]
+crbug.com/708175 [ Linux ] external/wpt/IndexedDB/interleaved-cursors-large.any.serviceworker.html [ Skip Timeout ]
+crbug.com/708175 [ Linux ] external/wpt/IndexedDB/interleaved-cursors-large.any.sharedworker.html [ Skip Timeout ]
+crbug.com/708175 [ Linux ] external/wpt/IndexedDB/interleaved-cursors-large.any.worker.html [ Skip Timeout ]
 
 # Times out on MSAN
 crbug.com/462190 [ Linux ] inspector-protocol/heap-profiler/heap-samples-in-snapshot.js [ Timeout ]
@@ -72,7 +64,10 @@ crbug.com/931660 [ Linux ] fast/history/replacestate-nocrash.html [ Pass Timeout
 # Sheriff 2019-11-11
 
 
-crbug.com/856601 [ Linux ] external/wpt/compression/compression-stream.tentative.any.serviceworker.html [ Pass Timeout ]
+crbug.com/856601 [ Linux ] external/wpt/compression/compression-stream.any.serviceworker.html [ Pass Timeout ]
+crbug.com/490781032 [ Linux ] external/wpt/compression/compression-stream.any.worker.html [ Pass Timeout ]
+crbug.com/490702367 [ Linux ] external/wpt/compression/compression-stream.any.sharedworker.html [ Pass Timeout ]
+crbug.com/856601 [ Linux ] external/wpt/compression/compression-stream.any.html [ Pass Timeout ]
 
 # Sheriff 2020-02-10
 crbug.com/1050559 [ Linux ] external/wpt/WebCryptoAPI/derive_bits_keys/hkdf.https.any.worker.html?1-1000 [ Skip ]
@@ -172,14 +167,30 @@ crbug.com/441382126 [ Linux ] external/wpt/storage-access-api/requestStorageAcce
 crbug.com/415946389 [ Linux ] external/wpt/wasm/core/f32.wast.js.html [ Crash Pass ]
 crbug.com/415388655 [ Linux ] external/wpt/wasm/core/simd/simd_f32x4_cmp.wast.js.html [ Crash Pass ]
 crbug.com/451364297 [ Linux ] external/wpt/wasm/core/simd/simd_f64x2_cmp.wast.js.html [ Crash Pass ]
-crbug.com/416340205 [ Linux ] virtual/fledge-bidding-and-auction-private-aggregation/external/wpt/fledge/tentative/private-aggregation.https.window.html?16-20 [ Crash Pass ]
 
 # Gardener 2025-11-11
 crbug.com/459630422 [ Linux ] external/wpt/storage-access-api/requestStorageAccess-cross-origin-iframe-navigation.sub.https.window.html [ Pass Timeout ]
 
 # Gardener 2025-11-18.
 crbug.com/457967584 [ Linux ] external/wpt/css/css-anchor-position/anchored-transition-display-none-001.html [ Pass Timeout ]
-crbug.com/457902170 [ Linux ] virtual/run-snapshot-post-layout/external/wpt/css/css-anchor-position/anchored-transition-display-none-001.html [ Pass Timeout ]
 
 # Gardener 2025-12-23
 crbug.com/471103692 [ Linux ] external/wpt/webaudio/the-audio-api/the-mediastreamaudiosourcenode-interface/mediastreamaudiosourcenode-from-context-with-different-rate.https.html [ Pass Timeout ]
+
+# Gardener 2026-02-24
+crbug.com/459235322 [ Linux ] webaudio/OfflineAudioContext/offlineaudiocontext-promise-basic.html [ Pass Timeout ]
+
+# Times out under MSan, similar to crbug.com/459235322.
+crbug.com/480249475 [ Linux ] external/wpt/css/css-pseudo/input-element-pseudo-open.optional.html [ Pass Timeout ]
+
+# Flaky on Linux MSan.
+crbug.com/488337157 [ Linux ] external/wpt/css/css-pseudo/input-element-pseudo-open-click.optional.html [ Pass Timeout Crash ]
+crbug.com/490381610 [ Linux ] external/wpt/wasm/core/simd/simd_f32x4_arith.wast.js.html [ Failure Pass Timeout Crash ]
+crbug.com/446167772 [ Linux ] external/wpt/webcodecs/audio-encoder-codec-specific.https.any.html [ Failure Pass Timeout Crash ]
+
+# Flaky timing out on MSAN.
+crbug.com/487895128 [ Linux ] external/wpt/storage/estimate-indexeddb.https.any.html [ Pass Timeout ]
+crbug.com/487895128 [ Linux ] external/wpt/storage/estimate-indexeddb.https.any.worker.html [ Pass Timeout ]
+
+# Reliably timing out on MSAN
+crbug.com/508089939 [ Linux ] external/wpt/navigation-api/navigate-event/intercept-cross-origin-focus-without-user-activation.html [ Timeout ]

@@ -32,20 +32,21 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.UserActionTester;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.autofill.AutofillTestHelper;
 import org.chromium.chrome.browser.autofill.PersonalDataManager.CreditCard;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.ProfileManager;
-import org.chromium.chrome.browser.settings.SettingsActivity;
-import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
+import org.chromium.chrome.browser.settings.SettingsActivityInterface;
+import org.chromium.chrome.browser.settings.SettingsTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.components.autofill.VirtualCardEnrollmentState;
 import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
 import org.chromium.components.prefs.PrefService;
@@ -57,22 +58,17 @@ import java.util.concurrent.TimeoutException;
 /** Instrumentation tests for AutofillCardBenefitsFragment. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
-@EnableFeatures({
-    ChromeFeatureList.AUTOFILL_ENABLE_CARD_BENEFITS_FOR_AMERICAN_EXPRESS,
-    ChromeFeatureList.AUTOFILL_ENABLE_CARD_BENEFITS_FOR_BMO,
-    ChromeFeatureList.AUTOFILL_ENABLE_FLAT_RATE_CARD_BENEFITS_FROM_CURINOS
-})
 public class AutofillCardBenefitsFragmentTest {
     @Rule public final AutofillTestRule mRule = new AutofillTestRule();
 
     @Rule
-    public final SettingsActivityTestRule<AutofillCardBenefitsFragment> mSettingsActivityTestRule =
-            new SettingsActivityTestRule<>(AutofillCardBenefitsFragment.class);
+    public final SettingsTestRule<AutofillCardBenefitsFragment> mSettingsTestRule =
+            new SettingsTestRule<>(AutofillCardBenefitsFragment.class);
 
     private static final CreditCard SAMPLE_CARD_AMERICAN_EXPRESS_WITH_BENEFIT =
             new CreditCard(
                     /* guid= */ "",
-                    /* origin= */ "",
+                    /* isUserConfirmed= */ false,
                     /* isLocal= */ false,
                     /* isVirtual= */ false,
                     /* name= */ "american express",
@@ -99,7 +95,7 @@ public class AutofillCardBenefitsFragmentTest {
     private static final CreditCard SAMPLE_CARD_BMO_WITH_BENEFIT =
             new CreditCard(
                     /* guid= */ "",
-                    /* origin= */ "",
+                    /* isUserConfirmed= */ false,
                     /* isLocal= */ false,
                     /* isVirtual= */ false,
                     /* name= */ "bmo",
@@ -136,6 +132,9 @@ public class AutofillCardBenefitsFragmentTest {
     public void tearDown() throws TimeoutException {
         mAutofillTestHelper.clearAllDataForTesting();
         mActionTester.tearDown();
+        // Clear shared preferences to prevent persisted preference state from bleeding into
+        // subsequent batched tests.
+        ContextUtils.getAppSharedPreferences().edit().clear().apply();
     }
 
     // Test to verify that the Preference screen is displayed and its title is visible as expected.
@@ -143,7 +142,7 @@ public class AutofillCardBenefitsFragmentTest {
     @MediumTest
     @DisableFeatures(ChromeFeatureList.SETTINGS_MULTI_COLUMN)
     public void testCardBenefitsPreferenceScreen_shownWithTitle() throws Exception {
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsTestRule.startSettingsActivity();
 
         assertNotNull(getPreferenceScreen(activity));
         assertEquals(
@@ -163,7 +162,7 @@ public class AutofillCardBenefitsFragmentTest {
                     getPrefService().setBoolean(Pref.AUTOFILL_PAYMENT_CARD_BENEFITS, true);
                 });
 
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsTestRule.startSettingsActivity();
 
         ChromeSwitchPreference benefitTogglePreference =
                 (ChromeSwitchPreference)
@@ -190,7 +189,7 @@ public class AutofillCardBenefitsFragmentTest {
                     getPrefService().setBoolean(Pref.AUTOFILL_PAYMENT_CARD_BENEFITS, true);
                 });
 
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsTestRule.startSettingsActivity();
 
         ChromeSwitchPreference benefitTogglePreference =
                 (ChromeSwitchPreference)
@@ -218,7 +217,7 @@ public class AutofillCardBenefitsFragmentTest {
                     getPrefService().setBoolean(Pref.AUTOFILL_PAYMENT_CARD_BENEFITS, false);
                 });
 
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsTestRule.startSettingsActivity();
 
         ChromeSwitchPreference benefitTogglePreference =
                 (ChromeSwitchPreference)
@@ -238,7 +237,7 @@ public class AutofillCardBenefitsFragmentTest {
                     getPrefService().setBoolean(Pref.AUTOFILL_PAYMENT_CARD_BENEFITS, true);
                 });
 
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsTestRule.startSettingsActivity();
 
         ChromeSwitchPreference benefitTogglePreference =
                 (ChromeSwitchPreference)
@@ -271,7 +270,7 @@ public class AutofillCardBenefitsFragmentTest {
     @Test
     @MediumTest
     public void testCardBenefitsPreferenceScreen_learnMoreLink() throws Exception {
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsTestRule.startSettingsActivity();
 
         Preference linkPreference =
                 getPreferenceScreen(activity).findPreference(PREF_KEY_LEARN_ABOUT);
@@ -290,12 +289,10 @@ public class AutofillCardBenefitsFragmentTest {
     // text for issuer terms, and card icon.
     @Test
     @MediumTest
-    // TODO(crbug.com/433576895): Re-enable containment feature once the test is fixed.
-    @DisableFeatures(ChromeFeatureList.ANDROID_SETTINGS_CONTAINMENT)
     public void testCardBenefitsPreferenceScreen_displayNetworkAndTerm() throws Exception {
         mAutofillTestHelper.addServerCreditCard(SAMPLE_CARD_AMERICAN_EXPRESS_WITH_BENEFIT);
 
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsTestRule.startSettingsActivity();
 
         Preference cardPreference =
                 getPreferenceScreen(activity).findPreference(PREF_KEY_CARD_BENEFIT_TERM);
@@ -305,7 +302,7 @@ public class AutofillCardBenefitsFragmentTest {
         assertEquals(
                 cardPreference.getSummary(),
                 activity.getString(R.string.autofill_settings_page_card_benefits_issuer_term_text));
-        assertTrue(cardPreference.getIcon().isVisible());
+        assertNotNull(cardPreference.getIcon());
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     cardPreference.performClick();
@@ -322,7 +319,7 @@ public class AutofillCardBenefitsFragmentTest {
     @Test
     @MediumTest
     public void testCardBenefitsPreferenceScreen_totalCount_noCardBenefit() throws Exception {
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsTestRule.startSettingsActivity();
 
         assertEquals(2, getPreferenceScreen(activity).getPreferenceCount());
     }
@@ -335,7 +332,7 @@ public class AutofillCardBenefitsFragmentTest {
     public void testCardBenefitsPreferenceScreen_totalCount_oneCardBenefit() throws Exception {
         mAutofillTestHelper.addServerCreditCard(SAMPLE_CARD_AMERICAN_EXPRESS_WITH_BENEFIT);
 
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsTestRule.startSettingsActivity();
 
         assertEquals(3, getPreferenceScreen(activity).getPreferenceCount());
     }
@@ -348,44 +345,9 @@ public class AutofillCardBenefitsFragmentTest {
         mAutofillTestHelper.addServerCreditCard(SAMPLE_CARD_AMERICAN_EXPRESS_WITH_BENEFIT);
         mAutofillTestHelper.addServerCreditCard(SAMPLE_CARD_BMO_WITH_BENEFIT);
 
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsTestRule.startSettingsActivity();
 
         assertEquals(2, getPreferenceCountWithKey(activity, PREF_KEY_CARD_BENEFIT_TERM));
-    }
-
-    // Test to verify terms for different cards with benefits are listed only if the card's
-    // respective benefit feature flag is enabled.
-    @Test
-    @MediumTest
-    @DisableFeatures({ChromeFeatureList.AUTOFILL_ENABLE_CARD_BENEFITS_FOR_BMO})
-    public void testCardBenefitsPreferenceScreen_withOneBenefitFlagOn() throws Exception {
-        mAutofillTestHelper.addServerCreditCard(SAMPLE_CARD_AMERICAN_EXPRESS_WITH_BENEFIT);
-        mAutofillTestHelper.addServerCreditCard(SAMPLE_CARD_BMO_WITH_BENEFIT);
-
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
-
-        assertEquals(1, getPreferenceCountWithKey(activity, PREF_KEY_CARD_BENEFIT_TERM));
-        assertTrue(
-                doesPreferenceTitleExist(
-                        activity,
-                        SAMPLE_CARD_AMERICAN_EXPRESS_WITH_BENEFIT.getProductDescription()));
-    }
-
-    // Test to verify terms for different card with benefits are not listed if the card's respective
-    // benefit feature flag is disabled.
-    @Test
-    @MediumTest
-    @DisableFeatures({
-        ChromeFeatureList.AUTOFILL_ENABLE_CARD_BENEFITS_FOR_AMERICAN_EXPRESS,
-        ChromeFeatureList.AUTOFILL_ENABLE_CARD_BENEFITS_FOR_BMO
-    })
-    public void testCardBenefitsPreferenceScreen_withBenefitFlagsOff() throws Exception {
-        mAutofillTestHelper.addServerCreditCard(SAMPLE_CARD_AMERICAN_EXPRESS_WITH_BENEFIT);
-        mAutofillTestHelper.addServerCreditCard(SAMPLE_CARD_BMO_WITH_BENEFIT);
-
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
-
-        assertEquals(0, getPreferenceCountWithKey(activity, PREF_KEY_CARD_BENEFIT_TERM));
     }
 
     // Test to verify terms for card with the same product (same product description and same
@@ -398,7 +360,7 @@ public class AutofillCardBenefitsFragmentTest {
         mAutofillTestHelper.addServerCreditCard(
                 new CreditCard(
                         /* guid= */ "",
-                        /* origin= */ "",
+                        /* isUserConfirmed= */ false,
                         /* isLocal= */ false,
                         /* isVirtual= */ false,
                         /* name= */ "american express",
@@ -424,7 +386,7 @@ public class AutofillCardBenefitsFragmentTest {
                         /* benefitSource= */ "amex",
                         /* productTermsUrl= */ new GURL("http://www.example.com/amex/terms")));
 
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsTestRule.startSettingsActivity();
 
         assertEquals(1, getPreferenceCountWithKey(activity, PREF_KEY_CARD_BENEFIT_TERM));
     }
@@ -437,7 +399,7 @@ public class AutofillCardBenefitsFragmentTest {
         mAutofillTestHelper.addServerCreditCard(
                 new CreditCard(
                         /* guid= */ "",
-                        /* origin= */ "",
+                        /* isUserConfirmed= */ false,
                         /* isLocal= */ false,
                         /* isVirtual= */ false,
                         /* name= */ "american express",
@@ -462,7 +424,7 @@ public class AutofillCardBenefitsFragmentTest {
                         /* benefitSource= */ "amex",
                         /* productTermsUrl= */ new GURL("http://www.example.com/amex/terms")));
 
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsTestRule.startSettingsActivity();
 
         assertEquals(2, getPreferenceCountWithKey(activity, PREF_KEY_CARD_BENEFIT_TERM));
     }
@@ -477,7 +439,7 @@ public class AutofillCardBenefitsFragmentTest {
         mAutofillTestHelper.addServerCreditCard(
                 new CreditCard(
                         /* guid= */ "",
-                        /* origin= */ "",
+                        /* isUserConfirmed= */ false,
                         /* isLocal= */ false,
                         /* isVirtual= */ false,
                         /* name= */ "bmo",
@@ -503,7 +465,7 @@ public class AutofillCardBenefitsFragmentTest {
                         /* benefitSource= */ "bmo",
                         /* productTermsUrl= */ new GURL("http://www.example.com/bmo/terms")));
 
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsTestRule.startSettingsActivity();
 
         assertEquals(2, getPreferenceCountWithKey(activity, PREF_KEY_CARD_BENEFIT_TERM));
     }
@@ -515,7 +477,7 @@ public class AutofillCardBenefitsFragmentTest {
         mAutofillTestHelper.addServerCreditCard(
                 new CreditCard(
                         /* guid= */ "",
-                        /* origin= */ "",
+                        /* isUserConfirmed= */ false,
                         /* isLocal= */ false,
                         /* isVirtual= */ false,
                         /* name= */ "american express",
@@ -539,12 +501,13 @@ public class AutofillCardBenefitsFragmentTest {
                         /* issuerId= */ "amex",
                         /* benefitSource= */ "amex",
                         /* productTermsUrl= */ new GURL("")));
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsTestRule.startSettingsActivity();
 
         assertEquals(0, getPreferenceCountWithKey(activity, PREF_KEY_CARD_BENEFIT_TERM));
     }
 
-    private int getPreferenceCountWithKey(SettingsActivity activity, String preferenceKey) {
+    private int getPreferenceCountWithKey(
+            SettingsActivityInterface activity, String preferenceKey) {
         int matchingPreferenceCount = 0;
 
         for (int preferenceIndex = 0;
@@ -558,19 +521,7 @@ public class AutofillCardBenefitsFragmentTest {
         return matchingPreferenceCount;
     }
 
-    private boolean doesPreferenceTitleExist(SettingsActivity activity, String title) {
-        for (int preferenceIndex = 0;
-                preferenceIndex < getPreferenceScreen(activity).getPreferenceCount();
-                preferenceIndex++) {
-            Preference preference = getPreferenceScreen(activity).getPreference(preferenceIndex);
-            if (preference.getTitle() != null && preference.getTitle().equals(title)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static PreferenceScreen getPreferenceScreen(SettingsActivity activity) {
+    private static PreferenceScreen getPreferenceScreen(SettingsActivityInterface activity) {
         return ((AutofillCardBenefitsFragment) activity.getMainFragment()).getPreferenceScreen();
     }
 

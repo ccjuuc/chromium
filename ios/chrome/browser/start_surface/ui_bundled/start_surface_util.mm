@@ -4,12 +4,18 @@
 
 #import "ios/chrome/browser/start_surface/ui_bundled/start_surface_util.h"
 
+#import <string_view>
+
 #import "base/apple/foundation_util.h"
 #import "base/check.h"
 #import "base/i18n/number_formatting.h"
 #import "base/time/time.h"
 #import "ios/chrome/app/application_delegate/app_state.h"
 #import "ios/chrome/app/application_delegate/app_state_observer.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state_prefs.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/incognito_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/scene_ui_blocker_state.h"
 #import "ios/chrome/browser/shared/public/features/system_flags.h"
 #import "ios/chrome/browser/start_surface/ui_bundled/start_surface_features.h"
 #import "ios/chrome/grit/ios_strings.h"
@@ -18,8 +24,15 @@
 namespace {
 
 // The key to store the timestamp when the scene enters into background.
-NSString* const kStartSurfaceSceneEnterIntoBackgroundTime =
-    @"StartSurfaceSceneEnterIntoBackgroundTime";
+constexpr std::string_view kStartSurfaceSceneEnterIntoBackgroundTime =
+    "StartSurfaceSceneEnterIntoBackgroundTime";
+
+// Shared implementation to set the surface start time to a specific value.
+void SetStartSurfaceSessionObjectForSceneStateImpl(SceneState* scene_state,
+                                                   base::Time timestamp) {
+  [scene_state.prefs setTime:timestamp
+                      forKey:kStartSurfaceSceneEnterIntoBackgroundTime];
+}
 
 }  // namespace
 
@@ -28,19 +41,17 @@ namespace test {
 void SetStartSurfaceSessionObjectForSceneStateForTesting(  // IN-TEST
     SceneState* scene_state,
     base::Time timestamp) {
-  [scene_state setSessionObject:timestamp.ToNSDate()
-                         forKey:kStartSurfaceSceneEnterIntoBackgroundTime];
+  SetStartSurfaceSessionObjectForSceneStateImpl(scene_state, timestamp);
 }
 
 }  // namespace test
 
 std::optional<base::Time> GetTimeMostRecentTabWasOpenForSceneState(
     SceneState* scene_state) {
-  if (NSDate* timestamp = base::apple::ObjCCast<NSDate>([scene_state
-          sessionObjectForKey:kStartSurfaceSceneEnterIntoBackgroundTime])) {
-    return base::Time::FromNSDate(timestamp);
-  }
-  return std::nullopt;
+  SceneStatePrefs* prefs = scene_state.prefs;
+  const base::Time time =
+      [prefs timeForKey:kStartSurfaceSceneEnterIntoBackgroundTime];
+  return time != base::Time() ? std::make_optional(time) : std::nullopt;
 }
 
 std::optional<base::TimeDelta> GetTimeSinceMostRecentTabWasOpenForSceneState(
@@ -66,8 +77,8 @@ bool ShouldShowTabGroupInGridForSceneState(SceneState* scene_state) {
   if (*elapsed <= min_duration || *elapsed >= max_duration) {
     return false;
   }
-  if (scene_state.presentingModalOverlay ||
-      scene_state.startupHadExternalIntent || scene_state.pendingUserActivity) {
+  if (scene_state.uiBlockerState.presentingModalOverlay ||
+      scene_state.startupHadExternalIntent) {
     return false;
   }
   return true;
@@ -80,9 +91,9 @@ bool ShouldShowStartSurfaceForSceneState(SceneState* scene_state) {
       *elapsed < experimental_flags::GetReturnToHomeSurfaceDuration()) {
     return false;
   }
-  if (scene_state.presentingModalOverlay ||
-      scene_state.startupHadExternalIntent || scene_state.pendingUserActivity ||
-      scene_state.incognitoContentVisible) {
+  if (scene_state.uiBlockerState.presentingModalOverlay ||
+      scene_state.startupHadExternalIntent ||
+      scene_state.incognitoState.incognitoContentVisible) {
     return false;
   }
   return true;
@@ -111,6 +122,5 @@ NSString* GetRecentTabTileTimeLabelForSceneState(SceneState* scene_state) {
 }
 
 void SetStartSurfaceSessionObjectForSceneState(SceneState* scene_state) {
-  [scene_state setSessionObject:base::Time::Now().ToNSDate()
-                         forKey:kStartSurfaceSceneEnterIntoBackgroundTime];
+  SetStartSurfaceSessionObjectForSceneStateImpl(scene_state, base::Time::Now());
 }

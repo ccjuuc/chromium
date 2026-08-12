@@ -11,6 +11,7 @@
 #include "base/json/json_writer.h"
 #include "base/strings/escape.h"
 #include "chromeos/components/quick_answers/quick_answers_model.h"
+#include "chromeos/components/quick_answers/search_result_parsers/search_response_parser.h"
 #include "chromeos/services/assistant/public/shared/constants.h"
 #include "net/base/url_util.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -20,8 +21,6 @@
 
 namespace quick_answers {
 namespace {
-
-using base::Value;
 
 // The JSON we generate looks like this:
 // {
@@ -59,19 +58,19 @@ constexpr std::string_view kRequestContextKey = "requestContext";
 
 std::string BuildSearchRequestPayload(const std::string& selected_text,
                                       const std::string& device_language) {
-  Value::Dict payload;
+  base::DictValue payload;
 
-  Value::Dict query;
+  base::DictValue query;
   query.Set(kRawQueryKey, selected_text);
   payload.Set(kQueryKey, std::move(query));
 
   // TODO(llin): Change the client type.
-  Value::Dict client_id;
+  base::DictValue client_id;
   client_id.Set(kClientTypeKey, kClientType);
   payload.Set(kClientIdKey, std::move(client_id));
 
-  Value::Dict request_context;
-  Value::Dict language_context;
+  base::DictValue request_context;
+  base::DictValue language_context;
   language_context.Set(kLanguageCodeKey, device_language);
   request_context.Set(kLanguageContextKey, std::move(language_context));
   payload.Set(kRequestContextKey, std::move(request_context));
@@ -111,9 +110,7 @@ void SearchResultLoader::ProcessResponse(
     const PreprocessedOutput& preprocessed_output,
     std::optional<std::string> response_body,
     ResponseParserCallback complete_callback) {
-  search_response_parser_ =
-      std::make_unique<SearchResponseParser>(std::move(complete_callback));
-  search_response_parser_->ProcessResponse(*response_body);
+  std::move(complete_callback).Run(ParseSearchResponse(*response_body));
 }
 
 }  // namespace quick_answers

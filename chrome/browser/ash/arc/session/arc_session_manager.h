@@ -25,7 +25,6 @@
 #include "chrome/browser/ash/arc/session/arc_app_id_provider_impl.h"
 #include "chrome/browser/ash/arc/session/arc_requirement_checker.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager_observer.h"
-#include "chrome/browser/ash/arc/session/arc_vm_data_migration_necessity_checker.h"
 #include "chrome/browser/ash/guest_os/public/guest_os_mount_provider_registry.h"
 #include "chrome/browser/ash/policy/arc/android_management_client.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
@@ -52,12 +51,6 @@ inline constexpr char kGeneratedBuildPropertyFilePath[] =
 // The file exists only when ARCVM is in use.
 inline constexpr char kGeneratedCombinedPropertyFilePathVm[] =
     "/run/arcvm/host_generated/combined.prop";
-
-// Maximum number of auto-resumes for ARCVM /data migration. When this number of
-// auto-resumes have been already attempted but the migration has not finished,
-// ARC is blocked and the user needs to manually trigger the resume by clicking
-// a notification.
-inline constexpr int kArcVmDataMigrationMaxAutoResumeCount = 3;
 
 class ArcDataRemover;
 class ArcFastAppReinstallStarter;
@@ -349,8 +342,6 @@ class ArcSessionManager : public ArcSessionRunner::Observer,
   void SetArcSessionRunnerForTesting(
       std::unique_ptr<ArcSessionRunner> arc_session_runner);
   ArcSessionRunner* GetArcSessionRunnerForTesting();
-  void SetAttemptUserExitCallbackForTesting(
-      const base::RepeatingClosure& callback);
   void SetAttemptRestartCallbackForTesting(
       const base::RepeatingClosure& callback);
   void SetAndroidManagementCheckerFactoryForTesting(
@@ -488,17 +479,9 @@ class ArcSessionManager : public ArcSessionRunner::Observer,
   // Starts to remove ARC data, if it is requested via RequestArcDataRemoval().
   // On completion, OnArcDataRemoved() is called.
   // If not requested, just skipping the data removal, and moves to
-  // MaybeReenableArc() or CheckArcVmDataMigrationNecessity() directly.
+  // MaybeReenableArc() directly.
   void MaybeStartArcDataRemoval();
   void OnArcDataRemoved(std::optional<bool> success);
-
-  // Checks whether /data migration is needed for enabling virtio-blk /data.
-  // On completion, OnArcVmDataMigrationNecessityChecked() is called.
-  // ArcSessionRunner::set_use_virtio_blk_data() should be called after the
-  // check is finished but before ARC is enabled in MaybeReenableArc().
-  void CheckArcVmDataMigrationNecessity(base::OnceClosure callback);
-  void OnArcVmDataMigrationNecessityChecked(base::OnceClosure callback,
-                                            std::optional<bool> result);
 
   // On ARC session stopped and/or data removal completion, this is called
   // so that, if necessary, ARC session is restarted.
@@ -575,6 +558,7 @@ class ArcSessionManager : public ArcSessionRunner::Observer,
   bool provisioning_reported_ = false;
   bool skipped_terms_of_service_negotiation_ = false;
   bool activation_is_allowed_ = false;
+  bool is_post_oobe_shutdown_4gb_device_ = false;
   // Tri-state of if Activation is delayed. 1) std::nullopt means it is yet
   // unknown, 2) true means Activation is delayed by ARC-on-demand, and 3)
   // false means Activation is not delayed by ARC-on-demand.
@@ -586,9 +570,6 @@ class ArcSessionManager : public ArcSessionRunner::Observer,
 
   std::unique_ptr<ArcSupportHost> support_host_;
   std::unique_ptr<ArcDataRemover> data_remover_;
-
-  std::unique_ptr<ArcVmDataMigrationNecessityChecker>
-      arc_vm_data_migration_necessity_checker_;
 
   ArcRequirementChecker::AndroidManagementCheckerFactory
       android_management_checker_factory_;
@@ -618,8 +599,6 @@ class ArcSessionManager : public ArcSessionRunner::Observer,
     bool deferred;
   };
   std::optional<UserSessionStartUpTaskTimer> user_session_start_up_task_timer_;
-
-  base::RepeatingClosure attempt_user_exit_callback_;
 
   base::RepeatingClosure attempt_restart_callback_;
 

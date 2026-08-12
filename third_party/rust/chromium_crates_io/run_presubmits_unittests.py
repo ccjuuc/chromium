@@ -55,7 +55,7 @@ class CheckCargoTomlIsSortedTests(unittest.TestCase):
         msg = CheckCargoTomlIsSorted(cargo_toml)
         self.assertTrue(
             "Simple string entries should appear before table entries" in msg)
-        self.assertTrue("`xyz` should appear after `def`" in msg)
+        self.assertTrue("`xyz` should appear before `def`" in msg)
 
     def testSortedSimpleAndElaborate(self):
         cargo_toml = {
@@ -180,6 +180,33 @@ class CheckMultiversionCratesTests(unittest.TestCase):
         self.assertTrue("foo@1.2.3, foo@4.5.6" in msg)
         self.assertTrue("[crate.foo.extra_kv]" in msg)
         self.assertTrue("multiversion_cleanup_bug = " in msg)
+
+    def testStaleTag(self):
+        crate_ids = set(["foo@1.2.3"])
+        gnrt_config = {
+            "crate": {
+                "foo": {
+                    "extra_kv": {
+                        "multiversion_cleanup_bug": "blah"
+                    }
+                }
+            }
+        }
+        msg = CheckMultiversionCrates(crate_ids, gnrt_config)
+        print(msg)
+        self.assertTrue("unnecessary `multiversion_cleanup_bug`" in msg)
+        self.assertTrue("foo" in msg)
+
+    def testPlaceholderCratesAreIgnored(self):
+        placeholder_crate_id = crate_utils.GetPlaceholderCrateIdForTesting()
+        placeholder_crate_name = crate_utils.ConvertCrateIdToCrateName(
+            placeholder_crate_id)
+        crate_ids = set([
+            placeholder_crate_id,
+            f"{placeholder_crate_name}@999.0.0",
+        ])
+        gnrt_config = {}
+        self.assertEqual("", CheckMultiversionCrates(crate_ids, gnrt_config))
 
 
 class CheckNonapplicableGnrtConfigEntriesTests(unittest.TestCase):

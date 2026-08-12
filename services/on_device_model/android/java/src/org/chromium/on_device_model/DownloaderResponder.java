@@ -22,4 +22,19 @@ public interface DownloaderResponder {
      * called.
      */
     void onUnavailable(@DownloadFailureReason int downloadFailureReason);
+
+    /**
+     * Called when the status check is complete. Called at most once.
+     *
+     * @param modelStatus The model status code.
+     */
+    void onStatusCheckResult(@ModelStatus int modelStatus);
+
+    /**
+     * Called periodically during download to report progress. May be called multiple times.
+     *
+     * @param downloadedBytes The total number of bytes downloaded so far.
+     * @param totalBytes The total number of bytes to download.
+     */
+    void onDownloadProgress(long downloadedBytes, long totalBytes);
 }

@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
+#include "base/containers/to_vector.h"
 #include "base/dcheck_is_on.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -19,6 +19,7 @@
 #include "base/trace_event/common/trace_event_common.h"
 #include "build/build_config.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
+#include "content/browser/permissions/permission_util.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/browser/xr/metrics/session_metrics_helper.h"
 #include "content/browser/xr/service/browser_xr_runtime_impl.h"
@@ -27,6 +28,7 @@
 #include "content/browser/xr/webxr_internals/mojom/webxr_internals.mojom.h"
 #include "content/browser/xr/webxr_internals/webxr_internals_handler_impl.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/permission_controller.h"
 #include "content/public/browser/permission_descriptor_util.h"
 #include "content/public/browser/permission_request_description.h"
@@ -35,7 +37,9 @@
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/child_process_id_util.h"
 #include "content/public/common/origin_util.h"
+#include "content/public/common/page_visibility_state.h"
 #include "device/vr/buildflags/buildflags.h"
 #include "device/vr/public/cpp/features.h"
 #include "device/vr/public/cpp/session_mode.h"
@@ -44,6 +48,10 @@
 #include "device/vr/public/mojom/xr_session.mojom-shared.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
 #include "third_party/blink/public/mojom/permissions/permission_status.mojom-shared.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/device_info.h"
+#endif
 
 namespace {
 
@@ -85,7 +93,7 @@ std::vector<blink::PermissionType> GetRequiredPermissionsForFeatures(
     auto feature_permission =
         content::XrPermissionResults::GetPermissionFor(required_feature);
     if (feature_permission &&
-        !base::Contains(permissions, *feature_permission)) {
+        !std::ranges::contains(permissions, *feature_permission)) {
       permissions.push_back(*feature_permission);
     }
   }
@@ -94,7 +102,7 @@ std::vector<blink::PermissionType> GetRequiredPermissionsForFeatures(
     auto feature_permission =
         content::XrPermissionResults::GetPermissionFor(optional_feature);
     if (feature_permission &&
-        !base::Contains(permissions, *feature_permission)) {
+        !std::ranges::contains(permissions, *feature_permission)) {
       permissions.push_back(*feature_permission);
     }
   }
@@ -113,7 +121,7 @@ std::unordered_set<device::mojom::XRSessionFeature> GetMissingRequiredFeatures(
   std::unordered_set<device::mojom::XRSessionFeature> missing_required_features;
 
   for (const auto& required_feature : required_features) {
-    if (!base::Contains(enabled_features, required_feature)) {
+    if (!enabled_features.contains(required_feature)) {
       DVLOG(2) << __func__
                << ": one of the required features was not enabled on the "
                   "created session, feature: "
@@ -221,28 +229,10 @@ VRServiceImpl::VRServiceImpl(content::RenderFrameHost* render_frame_host)
                                  // owned by VRServiceImpl.
 }
 
-// Constructor for testing.
-VRServiceImpl::VRServiceImpl(base::PassKey<XRRuntimeManagerTest>)
-    : render_frame_host_(nullptr) {
-  DVLOG(2) << __func__;
-  runtime_manager_ = XRRuntimeManagerImpl::GetOrCreateInstanceForTesting();
-  runtime_manager_->AddService(this);
-}
 
 VRServiceImpl::~VRServiceImpl() {
   DVLOG(2) << __func__;
-  // Ensure that any active magic window sessions are disconnected to avoid
-  // collisions when a new session starts. See https://crbug.com/40655152, the
-  // disconnect handler doesn't get called automatically on page navigation.
-  for (auto it = magic_window_controllers_.begin();
-       it != magic_window_controllers_.end(); ++it) {
-    OnInlineSessionDisconnected(it.id());
-  }
-  magic_window_controllers_.Clear();
-
-  OnExitPresent();
-
-  runtime_manager_->RemoveService(this);
+  Teardown();
 }
 
 void VRServiceImpl::Create(
@@ -288,6 +278,10 @@ void VRServiceImpl::ResolvePendingRequests() {
 
 void VRServiceImpl::RuntimesChanged() {
   DVLOG(2) << __func__;
+  if (!IsRenderFrameHostVisible()) {
+    pending_device_changed_ = true;
+    return;
+  }
   if (service_client_) {
     service_client_->OnDeviceChanged();
   }
@@ -306,8 +300,9 @@ void VRServiceImpl::RenderFrameDeleted(content::RenderFrameHost* host) {
   if (host != render_frame_host_)
     return;
 
-  // Clear out the render_frame_host_ before doing any closing activities.
-  render_frame_host_ = nullptr;
+  // |Teardown| will clear the `render_frame_host_` and also clean up any state
+  // before doing so.
+  Teardown();
 
   // Receiver should always be live here, as this is a SelfOwnedReceiver.
   // Close the receiver (and delete this VrServiceImpl) when the RenderFrameHost
@@ -316,9 +311,21 @@ void VRServiceImpl::RenderFrameDeleted(content::RenderFrameHost* host) {
   receiver_->Close();
 }
 
+void VRServiceImpl::OnVisibilityChanged(content::Visibility visibility) {
+  // Re-check frame visibility, as our associated RenderFrameHost may remain
+  // hidden even when the top-level page becomes visible.
+  if (!pending_device_changed_ || !IsRenderFrameHostVisible()) {
+    return;
+  }
+  pending_device_changed_ = false;
+  if (service_client_) {
+    service_client_->OnDeviceChanged();
+  }
+}
+
 void VRServiceImpl::OnWebContentsFocusChanged(content::RenderWidgetHost* host,
                                               bool focused) {
-  if (!render_frame_host_->GetView() ||
+  if (!render_frame_host_ || !render_frame_host_->GetView() ||
       render_frame_host_->GetView()->GetRenderWidgetHost() != host) {
     return;
   }
@@ -419,6 +426,12 @@ void VRServiceImpl::OnImmersiveSessionCreated(
                   device::mojom::RequestSessionError::UNKNOWN_FAILURE,
                   "Required feature not granted.", &missing_required_features);
     return;
+  }
+
+  if (enabled_features.contains(device::mojom::XRSessionFeature::DOM_OVERLAY)) {
+    // Tell RenderFrameHostImpl that we're setting up the WebXR DOM Overlay,
+    // it checks for this in EnterFullscreen via HasSeenRecentXrOverlaySetup().
+    render_frame_host_->SetIsXrOverlaySetup();
   }
 
   // Get the metrics tracker for the new immersive session
@@ -557,6 +570,16 @@ void VRServiceImpl::RequestSession(
     return;
   }
 
+  if (!IsRenderFrameHostVisible()) {
+    // Page visibility is verified blink-side, so this should never fail unless
+    // the requesting client is misbehaving or compromised. Treat non-visible
+    // page as unknown failure:
+    RejectSession(std::move(callback), options->trace_id,
+                  device::mojom::RequestSessionError::UNKNOWN_FAILURE,
+                  "Page is not visible.");
+    return;
+  }
+
   // The consent flow cannot differentiate between optional and required
   // features, but we don't need to block creation if an optional feature is
   // not supported. Remove all unsupported optional features from the
@@ -573,11 +596,40 @@ void VRServiceImpl::RequestSession(
 
 void VRServiceImpl::DoRequestPermissions(
     const std::vector<blink::PermissionType> request_permissions,
-    base::OnceCallback<void(const std::vector<PermissionResult>&)>
-        result_callback) {
+    base::OnceCallback<void(const std::vector<blink::mojom::PermissionStatus>&,
+                            bool)> result_callback) {
   PermissionController* permission_controller =
       GetWebContents()->GetBrowserContext()->GetPermissionController();
   CHECK(permission_controller);
+
+  std::vector<blink::mojom::PermissionStatus> current_statuses;
+  current_statuses.reserve(request_permissions.size());
+  for (auto permission_type : request_permissions) {
+    auto descriptor =
+        PermissionDescriptorUtil::CreatePermissionDescriptorForPermissionType(
+            permission_type);
+
+    blink::mojom::PermissionStatus status;
+    if (PermissionUtil::IsDevicePermission(descriptor)) {
+      status = permission_controller->GetCombinedPermissionAndDeviceStatus(
+          std::move(descriptor), render_frame_host_);
+    } else {
+      status = permission_controller->GetPermissionStatusForCurrentDocument(
+          std::move(descriptor), render_frame_host_);
+    }
+    current_statuses.push_back(status);
+  }
+
+  bool needs_prompt =
+      std::ranges::any_of(current_statuses, [](const auto& status) {
+        return status == blink::mojom::PermissionStatus::ASK;
+      });
+
+  // If we don't need to prompt the user, just return the results now.
+  if (!needs_prompt) {
+    std::move(result_callback).Run(current_statuses, /*needs_prompt=*/false);
+    return;
+  }
 
   permission_controller->RequestPermissionsFromCurrentDocument(
       render_frame_host_,
@@ -585,7 +637,16 @@ void VRServiceImpl::DoRequestPermissions(
           PermissionDescriptorUtil::
               CreatePermissionDescriptorForPermissionTypes(request_permissions),
           /*user_gesture=*/true),
-      std::move(result_callback));
+      base::BindOnce(
+          [](base::OnceCallback<void(
+                 const std::vector<blink::mojom::PermissionStatus>&, bool)>
+                 callback,
+             bool needs_prompt, const std::vector<PermissionResult>& results) {
+            std::move(callback).Run(
+                base::ToVector(results, &PermissionResult::status),
+                needs_prompt);
+          },
+          std::move(result_callback), needs_prompt));
 }
 
 void VRServiceImpl::GetPermissionStatus(SessionRequestData request,
@@ -594,13 +655,6 @@ void VRServiceImpl::GetPermissionStatus(SessionRequestData request,
   DCHECK(request.options);
   DCHECK(runtime);
   DCHECK_EQ(runtime->GetId(), request.runtime_id);
-
-#if BUILDFLAG(ENABLE_OPENXR)
-  if (request.options->mode == device::mojom::XRSessionMode::kImmersiveAr &&
-      runtime->GetId() == device::mojom::XRDeviceId::OPENXR_DEVICE_ID) {
-    DCHECK(device::features::IsOpenXrArEnabled());
-  }
-#endif
 
   // Need to calculate the permissions before the call below, as otherwise
   // std::move nulls options out before `GetRequiredPermissions()` runs.
@@ -617,18 +671,24 @@ void VRServiceImpl::GetPermissionStatus(SessionRequestData request,
 void VRServiceImpl::OnPermissionResultsForMode(
     SessionRequestData request,
     const std::vector<blink::PermissionType>& permissions,
-    const std::vector<PermissionResult>& results) {
+    const std::vector<blink::mojom::PermissionStatus>& results,
+    bool needs_prompt) {
   DVLOG(2) << __func__ << ": permissions.size()=" << permissions.size();
   DCHECK_EQ(permissions.size(), results.size());
 
-  // Prolong the user activation since the user may have taken long enough to
-  // answer the permission prompts that the transient user activation expired.
-  // This is fine to do here, since we enforce that the activation existed prior
-  // to requesting permissions.
-  DVLOG(3) << __func__ << ": prolonging user activation, current status="
-           << render_frame_host_->HasTransientUserActivation();
-  render_frame_host_->NotifyUserActivation(
-      blink::mojom::UserActivationNotificationType::kInteraction);
+  if (needs_prompt) {
+    // Prolong the user activation since the user may have taken long enough to
+    // answer the permission prompts that the transient user activation expired.
+    // This is fine to do here, since we enforce that the activation existed
+    // prior to requesting permissions.
+    DVLOG(3) << __func__ << ": prolonging user activation, current status="
+             << render_frame_host_->HasTransientUserActivation();
+    render_frame_host_->NotifyUserActivation(
+        blink::mojom::UserActivationNotificationType::kInteraction);
+  } else {
+    DVLOG(3) << __func__
+             << ": NOT prolonging user activation (no prompt shown)";
+  }
 
   const XrPermissionResults permission_results(permissions, results);
 
@@ -652,7 +712,7 @@ void VRServiceImpl::OnPermissionResultsForMode(
                      weak_ptr_factory_.GetWeakPtr(), std::move(request),
                      permissions_for_features);
   if (permissions_for_features.empty()) {
-    std::move(result_callback).Run({});
+    std::move(result_callback).Run({}, /*needs_prompt=*/false);
     return;
   }
 
@@ -662,7 +722,22 @@ void VRServiceImpl::OnPermissionResultsForMode(
 void VRServiceImpl::OnPermissionResultsForFeatures(
     SessionRequestData request,
     const std::vector<blink::PermissionType>& permissions,
-    const std::vector<PermissionResult>& results) {
+    const std::vector<blink::mojom::PermissionStatus>& results,
+    bool needs_prompt) {
+  if (needs_prompt) {
+    // Prolong the user activation since the user may have taken long enough to
+    // answer the permission prompts that the transient user activation expired.
+    // This is fine to do here, since we enforce that the activation existed
+    // prior to requesting permissions.
+    DVLOG(3) << __func__ << ": prolonging user activation, current status="
+             << render_frame_host_->HasTransientUserActivation();
+    render_frame_host_->NotifyUserActivation(
+        blink::mojom::UserActivationNotificationType::kInteraction);
+  } else {
+    DVLOG(3) << __func__
+             << ": NOT prolonging user activation (no prompt shown)";
+  }
+
   const XrPermissionResults permission_results(permissions, results);
 
   std::unordered_set<device::mojom::XRSessionFeature> rejected_features;
@@ -734,31 +809,37 @@ void VRServiceImpl::EnsureRuntimeInstalled(SessionRequestData request,
   }
 
   runtime->EnsureInstalled(
-      render_frame_host_->GetProcess()->GetDeprecatedID(),
-      render_frame_host_->GetRoutingID(),
+      content::GlobalRenderFrameHostId(
+          render_frame_host_->GetProcess()->GetID(),
+          render_frame_host_->GetRoutingID()),
       base::BindOnce(&VRServiceImpl::OnInstallResult,
                      weak_ptr_factory_.GetWeakPtr(), std::move(request)));
 }
 
 void VRServiceImpl::OnInstallResult(SessionRequestData request,
-                                    bool install_succeeded) {
-  DVLOG(2) << __func__ << ": install_succeeded=" << install_succeeded;
+                                    XrInstallResult result) {
+  DVLOG(2) << __func__ << ": result=" << std::to_underlying(result);
 
-  if (!install_succeeded) {
+  if (result == XrInstallResult::kFailed) {
     RejectSession(std::move(request.callback), request.options->trace_id,
                   device::mojom::RequestSessionError::RUNTIME_INSTALL_FAILURE,
                   "Runtime installation failed.");
     return;
   }
 
-  // Prolong the user activation since the user may have taken long enough to
-  // install the runtime that the transient user activation expired. This is
-  // fine to do here, since we enforce that the activation existed prior to
-  // kicking off installation.
-  DVLOG(3) << __func__ << ": prolonging user activation, current status="
-           << render_frame_host_->HasTransientUserActivation();
-  render_frame_host_->NotifyUserActivation(
-      blink::mojom::UserActivationNotificationType::kInteraction);
+  if (result == XrInstallResult::kSuccessInstalled) {
+    // Prolong the user activation since the user may have taken long enough to
+    // install the runtime that the transient user activation expired. This is
+    // fine to do here, since we enforce that the activation existed prior to
+    // kicking off installation.
+    DVLOG(3) << __func__ << ": prolonging user activation, current status="
+             << render_frame_host_->HasTransientUserActivation();
+    render_frame_host_->NotifyUserActivation(
+        blink::mojom::UserActivationNotificationType::kInteraction);
+  } else {
+    DVLOG(3) << __func__
+             << ": NOT prolonging user activation (no install UI shown)";
+  }
 
   DoRequestSession(std::move(request));
 }
@@ -780,8 +861,7 @@ void VRServiceImpl::DoRequestSession(SessionRequestData request) {
     return;
   }
 
-  TRACE_EVENT_INSTANT1("xr", "GetRuntimeForOptions", TRACE_EVENT_SCOPE_THREAD,
-                       "id", request.runtime_id);
+  TRACE_EVENT_INSTANT("xr", "GetRuntimeForOptions", "id", request.runtime_id);
 
   auto runtime_options = GetRuntimeOptions(request.options.get());
   // Make the resolved enabled features available to the runtime.
@@ -790,42 +870,12 @@ void VRServiceImpl::DoRequestSession(SessionRequestData request) {
                                             request.required_features.end());
   runtime_options->optional_features.assign(request.optional_features.begin(),
                                             request.optional_features.end());
-
-  if constexpr (BUILDFLAG(IS_ANDROID)) {
-    bool send_renderer_information = false;
-#if BUILDFLAG(ENABLE_ARCORE)
-    send_renderer_information =
-        send_renderer_information ||
-        request.runtime_id == device::mojom::XRDeviceId::ARCORE_DEVICE_ID;
+#if BUILDFLAG(IS_ANDROID)
+  runtime_options->renderer_information =
+      device::mojom::RendererInformation::New(
+          ToRendererProcessId(render_frame_host_->GetProcess()->GetID()),
+          render_frame_host_->GetRoutingID());
 #endif
-#if BUILDFLAG(ENABLE_CARDBOARD)
-    send_renderer_information =
-        send_renderer_information ||
-        request.runtime_id == device::mojom::XRDeviceId::CARDBOARD_DEVICE_ID;
-#endif
-#if BUILDFLAG(ENABLE_OPENXR) && BUILDFLAG(IS_ANDROID)
-    send_renderer_information =
-        send_renderer_information ||
-        request.runtime_id == device::mojom::XRDeviceId::OPENXR_DEVICE_ID;
-#endif
-    if (send_renderer_information) {
-      runtime_options->render_process_id =
-          render_frame_host_->GetProcess()->GetDeprecatedID();
-      runtime_options->render_frame_id = render_frame_host_->GetRoutingID();
-    }
-  }
-
-  bool use_dom_overlay =
-      base::Contains(runtime_options->required_features,
-                     device::mojom::XRSessionFeature::DOM_OVERLAY) ||
-      base::Contains(runtime_options->optional_features,
-                     device::mojom::XRSessionFeature::DOM_OVERLAY);
-
-  if (use_dom_overlay) {
-    // Tell RenderFrameHostImpl that we're setting up the WebXR DOM Overlay,
-    // it checks for this in EnterFullscreen via HasSeenRecentXrOverlaySetup().
-    render_frame_host_->SetIsXrOverlaySetup();
-  }
 
   if (device::XRSessionModeUtils::IsImmersive(runtime_options->mode)) {
     if (!request.options->tracked_images.empty()) {
@@ -868,6 +918,16 @@ void VRServiceImpl::SupportsSession(
 
   TRACE_EVENT("xr", "VRServiceImpl::SupportsSession: received",
               perfetto::Flow::Global(options->trace_id));
+
+  if (!IsRenderFrameHostVisible()) {
+    bool is_supported_when_hidden = false;
+#if BUILDFLAG(IS_ANDROID)
+    is_supported_when_hidden = !base::android::device_info::is_desktop() ||
+                               base::android::device_info::is_xr();
+#endif
+    std::move(callback).Run(is_supported_when_hidden);
+    return;
+  }
 
   runtime_manager_->SupportsSession(std::move(options), std::move(callback));
 }
@@ -964,6 +1024,28 @@ void VRServiceImpl::OnVisibilityStateChanged(
 
 content::WebContents* VRServiceImpl::GetWebContents() {
   return content::WebContents::FromRenderFrameHost(render_frame_host_);
+}
+
+bool VRServiceImpl::IsRenderFrameHostVisible() const {
+  return render_frame_host_ && render_frame_host_->GetVisibilityState() ==
+                                   content::PageVisibilityState::kVisible;
+}
+
+void VRServiceImpl::Teardown() {
+  if (!render_frame_host_) {
+    return;
+  }
+
+  for (auto it = magic_window_controllers_.begin();
+       it != magic_window_controllers_.end(); ++it) {
+    OnInlineSessionDisconnected(it.id());
+  }
+  magic_window_controllers_.Clear();
+
+  OnExitPresent();
+
+  runtime_manager_->RemoveService(this);
+  render_frame_host_ = nullptr;
 }
 
 }  // namespace content

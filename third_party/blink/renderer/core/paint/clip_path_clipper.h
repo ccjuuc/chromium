@@ -9,6 +9,7 @@
 
 #include "third_party/blink/renderer/core/animation/element_animations.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/paint/paint_flags.h"
 #include "third_party/blink/renderer/platform/geometry/contoured_rect.h"
 #include "third_party/blink/renderer/platform/geometry/path.h"
 #include "ui/gfx/geometry/rect_f.h"
@@ -64,13 +65,25 @@ class CORE_EXPORT ClipPathClipper {
       CompositedStateResolutionType state);
 
   // Sets a potential composited clip path animation to be not composited.
-  // Called during pre-paint, currently in the case of fragmented layouts.
+  // Called early during pre-paint, before the paint properties have finished
+  // populating. At this point, some state that would normally be a fallback
+  // reason in CheckCanStartAnimationOnCompositor is not available.
+  // Additionally, there are some reasons where we need to force a fallback
+  // immediately rather than waiting to be set compositor pending again. This
+  // method covers those cases.
+  // TODO(crbug.com/488268869): The handling of fragmentation here shouldn't be
+  // necessary, layout has already produced the required information.
+  // TODO(crbug.com/489619758): Most of these reasons should be moved to be
+  // handled elsewhere. This method has been the source of bugs, see
+  // crbug.com/488090095
   static void FallbackClipPathAnimationIfNecessary(
       const LayoutObject& layout_object,
-      bool is_in_block_fragmentation);
+      bool should_force_fallback = false);
 
   // Called by the paint property tree builder if a maximum clip area can't be
   // sufficiently determined.
+  // TODO(crbug.com/489619758): This should be merged with
+  // FallbackClipPathAnimationIfNecessary or removed.
   static void FallbackClipPathAnimationDueToAbsentBounds(
       const LayoutObject& layout_object);
 
@@ -83,7 +96,8 @@ class CORE_EXPORT ClipPathClipper {
 
   static void PaintClipPathAsMaskImage(GraphicsContext&,
                                        const LayoutObject&,
-                                       const DisplayItemClient&);
+                                       const DisplayItemClient&,
+                                       PaintFlags);
 
   // Returns the local reference box for a given operation. Useful for
   // when the desired operation is already known, or clip-path is not currently

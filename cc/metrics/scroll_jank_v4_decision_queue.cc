@@ -10,7 +10,6 @@
 #include "base/check.h"
 #include "cc/metrics/scroll_jank_v4_decider.h"
 #include "cc/metrics/scroll_jank_v4_frame.h"
-#include "cc/metrics/scroll_jank_v4_frame_stage.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
 
 namespace cc {
@@ -19,7 +18,7 @@ namespace {
 
 using ScrollDamage = ScrollJankV4Frame::ScrollDamage;
 using DamagingFrame = ScrollJankV4Frame::DamagingFrame;
-using ScrollUpdates = ScrollJankV4FrameStage::ScrollUpdates;
+using ScrollUpdates = ScrollJankV4Frame::Stage::ScrollUpdates;
 
 }  // namespace
 
@@ -30,8 +29,7 @@ ScrollJankV4DecisionQueue::ScrollJankV4DecisionQueue(
     : result_consumer_(std::move(result_consumer)) {}
 
 ScrollJankV4DecisionQueue::~ScrollJankV4DecisionQueue() {
-  FlushDeferredSyntheticFrames(
-      /* future_real_frame_is_fast_scroll_or_sufficiently_fast_fling= */ false);
+  FlushDeferredSyntheticFrames(/*future_real_updates=*/nullptr);
 }
 
 bool ScrollJankV4DecisionQueue::ProcessFrameWithScrollUpdates(
@@ -51,19 +49,14 @@ bool ScrollJankV4DecisionQueue::ProcessFrameWithScrollUpdates(
   // If the frame contains only synthetic inputs, defer the decision until we
   // receive a frame with at least one real input.
   if (!updates.real().has_value()) {
-    deferred_synthetic_frames_.emplace_back(*updates.synthetic(), damage, args);
+    deferred_synthetic_frames_.emplace_back(updates, damage, args);
     return true;
   }
 
   // If the new frame contains at least one real input, we have enough
   // information to decide if any preceding synthetic frames and the new frame
   // itself are janky (in chronological order).
-  const ScrollUpdates::Real& real_updates = *updates.real();
-  bool future_real_frame_is_fast_scroll_or_sufficiently_fast_fling =
-      ScrollJankV4Decider::IsFastScroll(real_updates) ||
-      ScrollJankV4Decider::IsSufficientlyFastFling(real_updates);
-  FlushDeferredSyntheticFrames(
-      future_real_frame_is_fast_scroll_or_sufficiently_fast_fling);
+  FlushDeferredSyntheticFrames(/*future_real_updates=*/&*updates.real());
   auto result =
       decider_.DecideJankForFrameWithRealScrollUpdates(updates, damage, args);
   result_consumer_->OnFrameResult(updates, damage, args, result);
@@ -73,21 +66,19 @@ bool ScrollJankV4DecisionQueue::ProcessFrameWithScrollUpdates(
 void ScrollJankV4DecisionQueue::OnScrollStarted() {
   // There should be no deferred synthetic frames to flush UNLESS we didn't
   // receive the scroll end event for some reason.
-  FlushDeferredSyntheticFrames(
-      /* future_real_frame_is_fast_scroll_or_sufficiently_fast_fling= */ false);
+  FlushDeferredSyntheticFrames(/*future_real_updates=*/nullptr);
   decider_.OnScrollStarted();
   result_consumer_->OnScrollStarted();
 }
 
 void ScrollJankV4DecisionQueue::OnScrollEnded() {
-  FlushDeferredSyntheticFrames(
-      /* future_real_frame_is_fast_scroll_or_sufficiently_fast_fling= */ false);
+  FlushDeferredSyntheticFrames(/*future_real_updates=*/nullptr);
   decider_.OnScrollEnded();
   result_consumer_->OnScrollEnded();
 }
 
 bool ScrollJankV4DecisionQueue::AcceptFrameIfValidAndChronological(
-    const ScrollJankV4FrameStage::ScrollUpdates& updates,
+    const ScrollJankV4Frame::Stage::ScrollUpdates& updates,
     const ScrollJankV4Frame::ScrollDamage& damage,
     const ScrollJankV4Frame::BeginFrameArgsForScrollJank& args) {
   // Check that the frame is valid and that it came after the most recently
@@ -113,14 +104,11 @@ bool ScrollJankV4DecisionQueue::AcceptFrameIfValidAndChronological(
 }
 
 void ScrollJankV4DecisionQueue::FlushDeferredSyntheticFrames(
-    bool future_real_frame_is_fast_scroll_or_sufficiently_fast_fling) {
-  for (const auto& [synthetic_updates, damage, args] :
-       deferred_synthetic_frames_) {
-    ScrollUpdates updates =
-        ScrollUpdates(/* real= */ std::nullopt, synthetic_updates);
+    const ScrollJankV4Frame::Stage::ScrollUpdates::Real* future_real_updates) {
+  for (const auto& [updates, damage, args] : deferred_synthetic_frames_) {
+    CHECK(!updates.real().has_value());
     auto result = decider_.DecideJankForFrameWithSyntheticScrollUpdatesOnly(
-        updates, damage, args,
-        future_real_frame_is_fast_scroll_or_sufficiently_fast_fling);
+        updates, damage, args, future_real_updates);
     result_consumer_->OnFrameResult(updates, damage, args, result);
   }
   deferred_synthetic_frames_.clear();

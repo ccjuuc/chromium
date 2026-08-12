@@ -4,53 +4,77 @@
 
 #include "components/services/storage/dom_storage/async_dom_storage_database.h"
 
-#include "base/debug/alias.h"
-#include "base/feature_list.h"
+#include "base/files/file_path.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/strings/stringprintf.h"
-#include "base/task/sequenced_task_runner.h"
-#include "base/task/thread_pool.h"
-#include "components/services/storage/dom_storage/leveldb/dom_storage_batch_operation_leveldb.h"
-#include "third_party/leveldatabase/env_chromium.h"
+#include "base/strings/strcat.h"
+#include "base/task/bind_post_task.h"
+#include "components/services/storage/dom_storage/dom_storage_histogram_helper.h"
 
 namespace storage {
 
-// static
-scoped_refptr<base::SequencedTaskRunner>
-AsyncDomStorageDatabase::GetTaskRunnerForDb(const base::FilePath& directory,
-                                            const std::string& dbname) {
-  CHECK(!directory.empty());
-  return base::ThreadPool::CreateSequencedTaskRunnerForResource(
-      {base::MayBlock(), base::WithBaseSyncPrimitives(),
-       base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
-      directory.AppendASCII(dbname));
+namespace {
+
+// Records the duration of an operation to a histogram with the suffix
+// corresponding to `metrics_type`.
+void RecordDuration(const std::string& histogram_name,
+                    DatabaseMetricsType metrics_type,
+                    base::TimeTicks start_time) {
+  base::UmaHistogramTimes(
+      base::StrCat({histogram_name, GetHistogramSuffix(metrics_type)}),
+      base::TimeTicks::Now() - start_time);
 }
+
+// Records status and duration histograms for a `StatusOr<T>` result.
+template <typename T>
+void RecordExpectedAndDuration(const std::string& status_histogram_name,
+                               const std::string& duration_histogram_name,
+                               DatabaseMetricsType metrics_type,
+                               base::TimeTicks start_time,
+                               const StatusOr<T>& result) {
+  RecordDuration(duration_histogram_name, metrics_type, start_time);
+
+  if (result.has_value()) {
+    DbStatus::OK().Log(status_histogram_name, metrics_type);
+  } else {
+    result.error().Log(status_histogram_name, metrics_type);
+  }
+}
+
+// Records status and duration histograms for a `DbStatus` result.
+void RecordStatusAndDuration(const std::string& status_histogram_name,
+                             const std::string& duration_histogram_name,
+                             DatabaseMetricsType metrics_type,
+                             base::TimeTicks start_time,
+                             const DbStatus& status) {
+  RecordDuration(duration_histogram_name, metrics_type, start_time);
+  status.Log(status_histogram_name, metrics_type);
+}
+
+}  // namespace
 
 // static
 std::unique_ptr<AsyncDomStorageDatabase> AsyncDomStorageDatabase::Open(
     StorageType storage_type,
-    const base::FilePath& directory,
-    const std::string& dbname,
+    const base::FilePath& dir_to_open,
     const std::optional<base::trace_event::MemoryAllocatorDumpGuid>&
         memory_dump_id,
-    StatusCallback callback) {
-  std::unique_ptr<AsyncDomStorageDatabase> db(new AsyncDomStorageDatabase);
+    const base::FilePath& dir_to_destroy,
+    OpenCallback callback) {
+  std::unique_ptr<AsyncDomStorageDatabase> instance(
+      new AsyncDomStorageDatabase(storage_type));
+
   DomStorageDatabaseFactory::Open(
-      storage_type, directory, dbname, memory_dump_id,
-      // For the in-memory case, blocking shutdown is only important to avoid
-      // leaking the SequenceBound on shutdown (and triggering ASAN failures).
-      directory.empty() ? base::ThreadPool::CreateSequencedTaskRunner(
-                              {base::WithBaseSyncPrimitives(),
-                               base::TaskShutdownBehavior::BLOCK_SHUTDOWN})
-                        : GetTaskRunnerForDb(directory, dbname),
+      storage_type, dir_to_open, memory_dump_id, dir_to_destroy,
       base::BindOnce(&AsyncDomStorageDatabase::OnDatabaseOpened,
-                     db->weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
-  return db;
+                     instance->weak_ptr_factory_.GetWeakPtr(),
+                     std::move(callback)));
+
+  return instance;
 }
 
-AsyncDomStorageDatabase::AsyncDomStorageDatabase() = default;
+AsyncDomStorageDatabase::AsyncDomStorageDatabase(StorageType storage_type)
+    : storage_type_(storage_type) {}
 
 AsyncDomStorageDatabase::~AsyncDomStorageDatabase() {
   DCHECK(committers_.empty());
@@ -59,44 +83,60 @@ AsyncDomStorageDatabase::~AsyncDomStorageDatabase() {
 void AsyncDomStorageDatabase::ReadMapKeyValues(
     DomStorageDatabase::MapLocator map_locator,
     ReadMapKeyValuesCallback callback) {
-  RunDatabaseTask(base::BindOnce(
-                      [](DomStorageDatabase::MapLocator map_locator,
-                         DomStorageDatabase& db) {
-                        return db.ReadMapKeyValues(std::move(map_locator));
-                      },
-                      std::move(map_locator)),
-                  std::move(callback));
+  CHECK(is_database_opened_);
+
+  RunTaskOnDbSequenceAndRecordHistograms<
+      std::map<DomStorageDatabase::Key, DomStorageDatabase::Value>>(
+      "ReadMapKeyValues",
+      base::BindOnce(
+          [](DomStorageDatabase::MapLocator map_locator,
+             DomStorageDatabase* database) {
+            return database->ReadMapKeyValues(std::move(map_locator));
+          },
+          std::move(map_locator)),
+      std::move(callback));
 }
 
 void AsyncDomStorageDatabase::CloneMap(
     DomStorageDatabase::MapLocator source_map,
     DomStorageDatabase::MapLocator target_map,
     StatusCallback callback) {
-  RunDatabaseTask(base::BindOnce(
-                      [](DomStorageDatabase::MapLocator source_map,
-                         DomStorageDatabase::MapLocator target_map,
-                         DomStorageDatabase& db) {
-                        return db.CloneMap(std::move(source_map),
-                                           std::move(target_map));
-                      },
-                      std::move(source_map), std::move(target_map)),
-                  std::move(callback));
+  CHECK(is_database_opened_);
+
+  RunTaskOnDbSequenceAndRecordHistograms(
+      "CloneMap",
+      base::BindOnce(
+          [](DomStorageDatabase::MapLocator source_map,
+             DomStorageDatabase::MapLocator target_map,
+             DomStorageDatabase* database) {
+            return database->CloneMap(std::move(source_map),
+                                      std::move(target_map));
+          },
+          std::move(source_map), std::move(target_map)),
+      std::move(callback));
 }
 
 void AsyncDomStorageDatabase::ReadAllMetadata(
     ReadAllMetadataCallback callback) {
-  RunDatabaseTask(base::BindOnce([](DomStorageDatabase& db) {
-                    return db.ReadAllMetadata();
-                  }),
-                  std::move(callback));
+  CHECK(is_database_opened_);
+
+  RunTaskOnDbSequenceAndRecordHistograms<DomStorageDatabase::Metadata>(
+      "ReadAllMetadata", base::BindOnce([](DomStorageDatabase* database) {
+        return database->ReadAllMetadata();
+      }),
+      std::move(callback));
 }
 
 void AsyncDomStorageDatabase::PutMetadata(DomStorageDatabase::Metadata metadata,
                                           StatusCallback callback) {
-  RunDatabaseTask(
+  CHECK(is_database_opened_);
+
+  RunTaskOnDbSequenceAndRecordHistograms(
+      "PutMetadata",
       base::BindOnce(
-          [](DomStorageDatabase::Metadata metadata, DomStorageDatabase& db) {
-            return db.PutMetadata(std::move(metadata));
+          [](DomStorageDatabase::Metadata metadata,
+             DomStorageDatabase* database) {
+            return database->PutMetadata(std::move(metadata));
           },
           std::move(metadata)),
       std::move(callback));
@@ -107,13 +147,16 @@ void AsyncDomStorageDatabase::DeleteStorageKeysFromSession(
     std::vector<blink::StorageKey> metadata_to_delete,
     std::vector<DomStorageDatabase::MapLocator> maps_to_delete,
     StatusCallback callback) {
-  RunDatabaseTask(
+  CHECK(is_database_opened_);
+
+  RunTaskOnDbSequenceAndRecordHistograms(
+      "DeleteStorageKeysFromSession",
       base::BindOnce(
           [](std::string session_id,
              std::vector<blink::StorageKey> metadata_to_delete,
              std::vector<DomStorageDatabase::MapLocator> maps_to_delete,
-             DomStorageDatabase& db) {
-            return db.DeleteStorageKeysFromSession(
+             DomStorageDatabase* database) {
+            return database->DeleteStorageKeysFromSession(
                 std::move(session_id), std::move(metadata_to_delete),
                 std::move(maps_to_delete));
           },
@@ -126,13 +169,16 @@ void AsyncDomStorageDatabase::DeleteSessions(
     std::vector<std::string> session_ids,
     std::vector<DomStorageDatabase::MapLocator> maps_to_delete,
     StatusCallback callback) {
-  RunDatabaseTask(
+  CHECK(is_database_opened_);
+
+  RunTaskOnDbSequenceAndRecordHistograms(
+      "DeleteSessions",
       base::BindOnce(
           [](std::vector<std::string> session_ids,
              std::vector<DomStorageDatabase::MapLocator> maps_to_delete,
-             DomStorageDatabase& db) {
-            return db.DeleteSessions(std::move(session_ids),
-                                     std::move(maps_to_delete));
+             DomStorageDatabase* database) {
+            return database->DeleteSessions(std::move(session_ids),
+                                            std::move(maps_to_delete));
           },
           std::move(session_ids), std::move(maps_to_delete)),
       std::move(callback));
@@ -140,72 +186,26 @@ void AsyncDomStorageDatabase::DeleteSessions(
 
 void AsyncDomStorageDatabase::PurgeOriginsForShutdown(
     std::set<url::Origin> origins) {
-  RunDatabaseTask(
+  CHECK(is_database_opened_);
+
+  RunTaskOnDbSequenceAndRecordHistograms(
+      "PurgeOrigins",
       base::BindOnce(
-          [](std::set<url::Origin> origins, DomStorageDatabase& db) {
-            return db.PurgeOrigins(std::move(origins));
+          [](std::set<url::Origin> origins, DomStorageDatabase* database) {
+            return database->PurgeOrigins(std::move(origins));
           },
           std::move(origins)),
-      // Ignore errors since this is called during shutdown.
       base::DoNothing());
 }
 
-void AsyncDomStorageDatabase::RewriteDB(StatusCallback callback) {
-  RunDatabaseTask(
-      base::BindOnce([](DomStorageDatabase& db) { return db.RewriteDB(); }),
-      std::move(callback));
-}
+void AsyncDomStorageDatabase::CleanUpStaleData(StatusCallback callback) {
+  CHECK(is_database_opened_);
 
-void AsyncDomStorageDatabase::RunBatchDatabaseTasks(
-    RunBatchTasksContext context,
-    std::vector<BatchDatabaseTask> tasks,
-    base::OnceCallback<void(DbStatus)> callback) {
-  RunDatabaseTask(base::BindOnce(
-                      [](RunBatchTasksContext context,
-                         std::vector<BatchDatabaseTask> tasks,
-                         DomStorageDatabaseLevelDB& db) -> DbStatus {
-                        std::unique_ptr<DomStorageBatchOperationLevelDB> batch =
-                            db.CreateBatchOperation();
-                        // TODO(crbug.com/40245293): Remove this after debugging
-                        // is complete.
-                        base::debug::Alias(&context);
-                        size_t batch_task_count = tasks.size();
-                        size_t iteration_count = 0;
-                        size_t current_batch_size =
-                            batch->ApproximateSizeForMetrics();
-                        base::debug::Alias(&batch_task_count);
-                        base::debug::Alias(&iteration_count);
-                        base::debug::Alias(&current_batch_size);
-                        for (auto& task : tasks) {
-                          iteration_count++;
-                          std::move(task).Run(*batch, db);
-                          size_t growth = batch->ApproximateSizeForMetrics() -
-                                          current_batch_size;
-                          base::UmaHistogramCustomCounts(
-                              "Storage.DomStorage."
-                              "BatchTaskGrowthSizeBytes2",
-                              growth, 1, 100 * 1024 * 1024, 50);
-                          const size_t kTargetBatchSizesMB[] = {20, 100, 500};
-                          for (size_t batch_size_mb : kTargetBatchSizesMB) {
-                            size_t target_batch_size =
-                                batch_size_mb * 1024 * 1024;
-                            if (current_batch_size < target_batch_size &&
-                                batch->ApproximateSizeForMetrics() >=
-                                    target_batch_size) {
-                              base::UmaHistogramCounts10000(
-                                  base::StringPrintf("Storage.DomStorage."
-                                                     "IterationsToReach%zuMB2",
-                                                     batch_size_mb),
-                                  iteration_count);
-                            }
-                          }
-                          current_batch_size =
-                              batch->ApproximateSizeForMetrics();
-                        }
-                        return batch->Commit();
-                      },
-                      context, std::move(tasks)),
-                  std::move(callback));
+  RunTaskOnDbSequenceAndRecordHistograms(
+      "CleanUpStaleData", base::BindOnce([](DomStorageDatabase* database) {
+        return database->CleanUpStaleData();
+      }),
+      std::move(callback));
 }
 
 void AsyncDomStorageDatabase::AddCommitter(Committer* source) {
@@ -219,6 +219,8 @@ void AsyncDomStorageDatabase::RemoveCommitter(Committer* source) {
 }
 
 void AsyncDomStorageDatabase::InitiateCommit() {
+  CHECK(is_database_opened_);
+
   std::vector<DomStorageDatabase::MapBatchUpdate> commits;
   std::vector<base::OnceCallback<void(DbStatus)>> commit_dones;
   commit_dones.reserve(committers_.size());
@@ -240,33 +242,93 @@ void AsyncDomStorageDatabase::InitiateCommit() {
       },
       std::move(commit_dones));
 
-  RunDatabaseTask(
+  RunTaskOnDbSequenceAndRecordHistograms(
+      "UpdateMaps",
       base::BindOnce(
           [](std::vector<DomStorageDatabase::MapBatchUpdate> commits,
-             DomStorageDatabase& db) {
-            return db.UpdateMaps(std::move(commits));
+             DomStorageDatabase* database) {
+            return database->UpdateMaps(std::move(commits));
           },
           std::move(commits)),
       std::move(run_all));
 }
 
 void AsyncDomStorageDatabase::OnDatabaseOpened(
-    StatusCallback callback,
-    StatusOr<base::SequenceBound<DomStorageDatabase>> database) {
-  if (!database.has_value()) {
-    std::move(callback).Run(std::move(database.error()));
-    return;
+    OpenCallback callback,
+    DomStorageDatabaseFactory::OpenResult result) {
+  CHECK(!is_database_opened_);
+  metrics_type_ = result.metrics_type;
+  is_sqlite_ = result.is_sqlite;
+  database_ = result.TakeDatabase();
+  is_database_opened_ = result.open_status.ok();
+  if (is_database_opened_) {
+    CHECK(database_);
   }
 
-  database_ = *std::move(database);
+  std::move(callback).Run(OpenOutcome{std::move(result.open_status),
+                                      std::move(result.destroy_outcome)});
+}
 
-  std::vector<BoundDatabaseTask> tasks;
-  std::swap(tasks, tasks_to_run_on_open_);
-
-  for (auto& task : tasks) {
-    database_.PostTaskWithThisObject(std::move(task));
+std::string_view AsyncDomStorageDatabase::StorageTypeForHistograms() const {
+  switch (storage_type_) {
+    case StorageType::kLocalStorage:
+      return "Storage.LocalStorage";
+    case StorageType::kSessionStorage:
+      return "Storage.SessionStorage";
   }
-  std::move(callback).Run(DbStatus::OK());
+}
+
+std::string AsyncDomStorageDatabase::GetHistogram(
+    std::string_view operation) const {
+  return base::StrCat({StorageTypeForHistograms(), ".", operation});
+}
+
+std::string AsyncDomStorageDatabase::GetDurationHistogram(
+    std::string_view operation) const {
+  return base::StrCat({StorageTypeForHistograms(), ".Duration.", operation});
+}
+
+void AsyncDomStorageDatabase::RunTaskOnDbSequenceAndRecordHistograms(
+    std::string_view operation,
+    base::OnceCallback<DbStatus(DomStorageDatabase*)> db_task,
+    StatusCallback callback) {
+  database_.PostTaskWithThisObject(base::BindOnce(
+      [](base::OnceCallback<DbStatus(DomStorageDatabase*)> db_task,
+         std::string status_histogram_name, std::string duration_histogram_name,
+         DatabaseMetricsType metrics_type, StatusCallback callback,
+         DomStorageDatabase* database) {
+        base::TimeTicks start = base::TimeTicks::Now();
+        DbStatus status = std::move(db_task).Run(database);
+        RecordStatusAndDuration(status_histogram_name, duration_histogram_name,
+                                metrics_type, start, status);
+        std::move(callback).Run(std::move(status));
+      },
+      std::move(db_task), GetHistogram(operation),
+      GetDurationHistogram(operation), metrics_type_,
+      base::BindPostTaskToCurrentDefault(std::move(callback))));
+}
+
+template <typename T>
+void AsyncDomStorageDatabase::RunTaskOnDbSequenceAndRecordHistograms(
+    std::string_view operation,
+    base::OnceCallback<StatusOr<T>(DomStorageDatabase*)> db_task,
+    base::OnceCallback<void(StatusOr<T>)> callback) {
+  database_.PostTaskWithThisObject(base::BindOnce(
+      [](base::OnceCallback<StatusOr<T>(DomStorageDatabase*)> db_task,
+         std::string status_histogram_name, std::string duration_histogram_name,
+         DatabaseMetricsType metrics_type,
+         base::OnceCallback<void(StatusOr<T>)> callback,
+         DomStorageDatabase* database) {
+        base::TimeTicks start = base::TimeTicks::Now();
+        StatusOr<T> result = std::move(db_task).Run(database);
+        RecordExpectedAndDuration(status_histogram_name,
+                                  duration_histogram_name, metrics_type, start,
+                                  result);
+        std::move(callback).Run(std::move(result));
+      },
+      std::move(db_task), GetHistogram(operation),
+      GetDurationHistogram(operation), metrics_type_,
+      base::BindPostTaskToCurrentDefault(std::move(callback))));
 }
 
 }  // namespace storage

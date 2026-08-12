@@ -4,8 +4,6 @@
 
 package org.chromium.chrome.browser.omnibox.suggestions;
 
-import static androidx.test.espresso.Espresso.onView;
-import static androidx.test.espresso.action.ViewActions.pressKey;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
@@ -37,15 +35,17 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.ImportantFormFactors;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.autofill.settings.AutofillPaymentMethodsFragment;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.SupportedProfileType;
 import org.chromium.chrome.browser.omnibox.suggestions.action.OmniboxPedal;
 import org.chromium.chrome.browser.omnibox.suggestions.base.BaseSuggestionView;
 import org.chromium.chrome.browser.safety_hub.SafetyHubFragment;
@@ -53,8 +53,8 @@ import org.chromium.chrome.browser.settings.MainSettings;
 import org.chromium.chrome.browser.settings.SettingsActivity;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.IncognitoTabHostUtils;
+import org.chromium.chrome.browser.tabmodel.SupportedProfileType;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.ReusedCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
@@ -67,7 +67,7 @@ import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.omnibox.AutocompleteMatch;
 import org.chromium.components.omnibox.AutocompleteMatchBuilder;
 import org.chromium.components.omnibox.AutocompleteResult;
-import org.chromium.components.omnibox.OmniboxFeatures;
+import org.chromium.components.omnibox.OmniboxCapabilities;
 import org.chromium.components.omnibox.OmniboxSuggestionType;
 import org.chromium.components.omnibox.action.OmniboxPedalId;
 import org.chromium.ui.base.DeviceFormFactor;
@@ -82,6 +82,7 @@ import java.util.List;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @Batch(Batch.PER_CLASS)
 @DisableFeatures(ChromeFeatureList.SETTINGS_MULTI_COLUMN)
+@DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/481445129
 public class OmniboxPedalsTest {
     @Rule
     public ReusedCtaTransitTestRule<WebPageStation> mActivityTestRule =
@@ -95,7 +96,7 @@ public class OmniboxPedalsTest {
 
     @Before
     public void setUp() throws InterruptedException {
-        OmniboxFeatures.setShouldRetainOmniboxOnFocusForTesting(false);
+        OmniboxCapabilities.setHasDesktopExperienceForTesting(false);
         mStartingPage = mActivityTestRule.start();
         mOmniboxUtils = new OmniboxTestUtils(mStartingPage.getActivity());
     }
@@ -162,7 +163,7 @@ public class OmniboxPedalsTest {
                     Fragment fragment =
                             mTargetActivity
                                     .getSupportFragmentManager()
-                                    .findFragmentById(R.id.content);
+                                    .findFragmentById(R.id.settings_content);
                     Criteria.checkThat(fragment, Matchers.instanceOf(fragmentType));
                 });
     }
@@ -287,14 +288,15 @@ public class OmniboxPedalsTest {
 
     @Test
     @MediumTest
+    @DisabledTest // Flaky: crbug.com/495701957
     public void testPedalsStartedOnTabEnterKeyStroke() throws Exception {
         setSuggestions(createPedalSuggestion(OmniboxPedalId.MANAGE_CHROME_ACCESSIBILITY));
 
-        onView(withId(R.id.url_bar)).perform(pressKey(KeyEvent.KEYCODE_DPAD_DOWN));
-        onView(withId(R.id.url_bar)).perform(pressKey(KeyEvent.KEYCODE_TAB));
+        mOmniboxUtils.sendKey(KeyEvent.KEYCODE_DPAD_DOWN);
+        mOmniboxUtils.sendKey(KeyEvent.KEYCODE_TAB);
         clickOnPedalToSettings(
                 () -> {
-                    onView(withId(R.id.url_bar)).perform(pressKey(KeyEvent.KEYCODE_ENTER));
+                    mOmniboxUtils.sendKey(KeyEvent.KEYCODE_ENTER);
                 },
                 AccessibilitySettings.class);
     }

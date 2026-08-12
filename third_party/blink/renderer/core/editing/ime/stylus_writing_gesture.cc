@@ -4,7 +4,10 @@
 
 #include "third_party/blink/renderer/core/editing/ime/stylus_writing_gesture.h"
 
+#include "base/feature_list.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/input/stylus_writing_gesture.mojom-blink.h"
+#include "third_party/blink/renderer/core/css/properties/longhands.h"
 #include "third_party/blink/renderer/core/editing/editor.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
@@ -13,7 +16,7 @@
 #include "third_party/blink/renderer/core/editing/plain_text_range.h"
 #include "third_party/blink/renderer/core/editing/selection_template.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
-
+#include "third_party/blink/renderer/core/style/computed_style.h"
 namespace blink {
 
 namespace {
@@ -53,7 +56,8 @@ class StylusWritingGestureDelete : public StylusWritingTwoRectGesture {
       const gfx::Rect& start_rect,
       const gfx::Rect& end_rect,
       const String& text_alternative,
-      const mojom::blink::StylusWritingGestureGranularity granularity);
+      const mojom::blink::StylusWritingGestureGranularity granularity,
+      const bool is_preview);
   bool MaybeApplyGesture(LocalFrame*) override;
 
  protected:
@@ -62,6 +66,7 @@ class StylusWritingGestureDelete : public StylusWritingTwoRectGesture {
 
  private:
   const mojom::blink::StylusWritingGestureGranularity granularity_;
+  const bool is_preview_;
 };
 
 class StylusWritingGestureRemoveSpaces : public StylusWritingTwoRectGesture {
@@ -82,7 +87,8 @@ class StylusWritingGestureSelect : public StylusWritingTwoRectGesture {
       const gfx::Rect& start_rect,
       const gfx::Rect& end_rect,
       const String& text_alternative,
-      const mojom::StylusWritingGestureGranularity granularity);
+      const mojom::StylusWritingGestureGranularity granularity,
+      const bool is_preview);
   bool MaybeApplyGesture(LocalFrame*) override;
 
  protected:
@@ -91,6 +97,7 @@ class StylusWritingGestureSelect : public StylusWritingTwoRectGesture {
 
  private:
   const mojom::StylusWritingGestureGranularity granularity_;
+  const bool is_preview_;
 };
 
 class StylusWritingGestureAddText : public StylusWritingGesture {
@@ -131,7 +138,8 @@ std::unique_ptr<StylusWritingGesture> CreateGesture(
       }
       return std::make_unique<blink::StylusWritingGestureDelete>(
           gesture_data->start_rect, gesture_data->end_rect.value(),
-          text_alternative, gesture_data->granularity);
+          text_alternative, gesture_data->granularity,
+          gesture_data->is_preview);
     }
     case mojom::blink::StylusWritingGestureAction::ADD_SPACE_OR_TEXT: {
       return std::make_unique<blink::StylusWritingGestureAddText>(
@@ -156,7 +164,8 @@ std::unique_ptr<StylusWritingGesture> CreateGesture(
       }
       return std::make_unique<blink::StylusWritingGestureSelect>(
           gesture_data->start_rect, gesture_data->end_rect.value(),
-          text_alternative, gesture_data->granularity);
+          text_alternative, gesture_data->granularity,
+          gesture_data->is_preview);
     }
     default: {
       NOTREACHED();
@@ -168,8 +177,8 @@ PlainTextRange ExpandWithWordGranularity(
     EphemeralRange ephemeral_range,
     Element* const root_editable_element,
     InputMethodController& input_method_controller) {
-  SelectionInDOMTree expanded_selection = ExpandWithGranularity(
-      SelectionInDOMTree::Builder().SetBaseAndExtent(ephemeral_range).Build(),
+  SelectionInDomTree expanded_selection = ExpandWithGranularity(
+      SelectionInDomTree::Builder().SetBaseAndExtent(ephemeral_range).Build(),
       TextGranularity::kWord, WordInclusion::kMiddle);
   PlainTextRange expanded_range = PlainTextRange::Create(
       *root_editable_element, expanded_selection.ComputeRange());
@@ -343,9 +352,11 @@ StylusWritingGestureDelete::StylusWritingGestureDelete(
     const gfx::Rect& start_rect,
     const gfx::Rect& end_rect,
     const String& text_alternative,
-    const mojom::blink::StylusWritingGestureGranularity granularity)
+    const mojom::blink::StylusWritingGestureGranularity granularity,
+    const bool is_preview)
     : StylusWritingTwoRectGesture(start_rect, end_rect, text_alternative),
-      granularity_(granularity) {}
+      granularity_(granularity),
+      is_preview_(is_preview) {}
 
 bool StylusWritingGestureDelete::MaybeApplyGesture(LocalFrame* frame) {
   std::optional<PlainTextRange> gesture_range =
@@ -355,9 +366,35 @@ bool StylusWritingGestureDelete::MaybeApplyGesture(LocalFrame* frame) {
     return false;
   }
 
-  // Delete the text between offsets and set cursor.
   InputMethodController& input_method_controller =
       frame->GetInputMethodController();
+  input_method_controller.ClearImeTextSpansByType(
+      ImeTextSpan::Type::kPreviewStylusGesture, gesture_range->Start(),
+      gesture_range->End());
+
+  if (is_preview_) {
+    Vector<ImeTextSpan> preview_spans;
+    Element* const root_editable_element =
+        frame->Selection().RootEditableElementOrDocumentElement();
+    // Deletion preview highlight color is 20% opacity of the text
+    // color.
+    Color preview_color =
+        root_editable_element->GetComputedStyle()->VisitedDependentColor(
+            GetCSSPropertyColor());
+    preview_color.SetAlpha(0.2 * (preview_color.Alpha()));
+    ImeTextSpan preview_span(
+        ImeTextSpan::Type::kPreviewStylusGesture, 0, gesture_range->length(),
+        Color::kTransparent, ui::mojom::ImeTextSpanThickness::kNone,
+        ui::mojom::ImeTextSpanUnderlineStyle::kNone, Color::kTransparent,
+        preview_color, Color::kTransparent, true, false, Vector<String>(),
+        true);
+    preview_spans.push_back(preview_span);
+    input_method_controller.AddImeTextSpansToExistingText(
+        preview_spans, gesture_range->Start(), gesture_range->End());
+    return true;
+  }
+
+  // Delete the text between offsets and set cursor.
   input_method_controller.SetEditableSelectionOffsets(
       PlainTextRange(gesture_range->End(), gesture_range->End()));
   input_method_controller.DeleteSurroundingText(
@@ -378,7 +415,7 @@ std::optional<PlainTextRange> StylusWritingGestureDelete::AdjustRange(
     return PlainTextRange(range->Start() + 1, range->End());
   }
   // When there are spaces either side of the gesture, include one.
-  if (input_text.length() > range->End() && range->Start() - 1 >= 0 &&
+  if (input_text.length() > range->End() && range->Start() > 0 &&
       IsHTMLSpaceNotLineBreak(input_text[range->Start() - 1]) &&
       !IsHTMLSpaceNotLineBreak(input_text[range->End() - 1])) {
     return PlainTextRange(range->Start() - 1, range->End());
@@ -413,7 +450,8 @@ bool StylusWritingGestureRemoveSpaces::MaybeApplyGesture(LocalFrame* frame) {
 
   InputMethodController& input_method_controller =
       frame->GetInputMethodController();
-  input_method_controller.ReplaceTextAndKeepSelection("", space_range.value());
+  input_method_controller.ReplaceTextAndKeepSelection("", {},
+                                                      space_range.value());
   input_method_controller.SetEditableSelectionOffsets(
       PlainTextRange(space_range->Start(), space_range->Start()));
   return true;
@@ -423,9 +461,11 @@ StylusWritingGestureSelect::StylusWritingGestureSelect(
     const gfx::Rect& start_rect,
     const gfx::Rect& end_rect,
     const String& text_alternative,
-    const mojom::StylusWritingGestureGranularity granularity)
+    const mojom::StylusWritingGestureGranularity granularity,
+    const bool is_preview)
     : StylusWritingTwoRectGesture(start_rect, end_rect, text_alternative),
-      granularity_(granularity) {}
+      granularity_(granularity),
+      is_preview_(is_preview) {}
 
 bool StylusWritingGestureSelect::MaybeApplyGesture(LocalFrame* frame) {
   std::optional<PlainTextRange> gesture_range =
@@ -435,9 +475,29 @@ bool StylusWritingGestureSelect::MaybeApplyGesture(LocalFrame* frame) {
     return false;
   }
 
-  // Select the text between offsets.
   InputMethodController& input_method_controller =
       frame->GetInputMethodController();
+  input_method_controller.ClearImeTextSpansByType(
+      ImeTextSpan::Type::kPreviewStylusGesture, gesture_range->Start(),
+      gesture_range->End());
+  if (is_preview_) {
+    Vector<ImeTextSpan> preview_spans;
+    // Selection preview highlight color is the same as selection highlight
+    // color.
+    Color preview_color = LayoutTheme::GetTheme().TapHighlightColor();
+    ImeTextSpan preview_span(
+        ImeTextSpan::Type::kPreviewStylusGesture, 0, gesture_range->length(),
+        Color::kTransparent, ui::mojom::ImeTextSpanThickness::kNone,
+        ui::mojom::ImeTextSpanUnderlineStyle::kNone, Color::kTransparent,
+        preview_color, Color::kTransparent, true, false, Vector<String>(),
+        true);
+    preview_spans.push_back(preview_span);
+    input_method_controller.AddImeTextSpansToExistingText(
+        preview_spans, gesture_range->Start(), gesture_range->End());
+    return true;
+  }
+
+  // Select the text between offsets.
   input_method_controller.SetEditableSelectionOffsets(
       gesture_range.value(), /*show_handle=*/true, /*show_context_menu=*/true);
   return true;
@@ -534,7 +594,7 @@ bool StylusWritingGestureSplitOrMerge::MaybeApplyGesture(LocalFrame* frame) {
 
   // Remove spaces found.
   input_method_controller.ReplaceTextAndKeepSelection(
-      "", PlainTextRange(space_start, space_end));
+      "", {}, PlainTextRange(space_start, space_end));
   input_method_controller.SetEditableSelectionOffsets(
       PlainTextRange(space_start, space_start));
   return true;

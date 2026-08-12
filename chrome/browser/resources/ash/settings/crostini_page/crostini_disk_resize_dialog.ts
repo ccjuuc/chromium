@@ -23,7 +23,8 @@ import {TERMINA_VM_TYPE} from '../guest_os/guest_os_browser_proxy.js';
 import {recordSettingChange} from '../metrics_recorder.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
 
-import {type CrostiniBrowserProxy, CrostiniBrowserProxyImpl, type SliderTick} from './crostini_browser_proxy.js';
+import {CrostiniBrowserProxyImpl} from './crostini_browser_proxy.js';
+import type {CrostiniBrowserProxy, SliderTick} from './crostini_browser_proxy.js';
 import {getTemplate} from './crostini_disk_resize_dialog.html.js';
 
 /**
@@ -117,14 +118,14 @@ export class SettingsCrostiniDiskResizeDialogElement extends PolymerElement {
   }
 
   private browserProxy_: CrostiniBrowserProxy;
-  private minDiskSize_: string;
-  private maxDiskSize_: string;
-  private diskSizeTicks_: SliderTick[];
-  private defaultDiskSizeTick_: number;
-  private maxDiskSizeTick_: number;
-  private isLowSpaceAvailable_: boolean;
-  private displayState_: DisplayState;
-  private resizeState_: ResizeState;
+  declare private minDiskSize_: string;
+  declare private maxDiskSize_: string;
+  declare private diskSizeTicks_: SliderTick[];
+  declare private defaultDiskSizeTick_: number;
+  declare private maxDiskSizeTick_: number;
+  declare private isLowSpaceAvailable_: boolean;
+  declare private displayState_: DisplayState;
+  declare private resizeState_: ResizeState;
 
   constructor() {
     super();

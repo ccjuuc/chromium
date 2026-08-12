@@ -14,6 +14,8 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import android.content.Context;
+import android.content.Intent;
 import android.database.Cursor;
 import android.graphics.Color;
 import android.net.Uri;
@@ -27,6 +29,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
@@ -34,6 +37,7 @@ import org.robolectric.shadows.ShadowContentResolver;
 import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.Callback;
+import org.chromium.base.ContextUtils;
 import org.chromium.base.FakeTimeTestRule;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -60,6 +64,7 @@ import org.chromium.components.ukm.UkmRecorder;
 import org.chromium.components.ukm.UkmRecorderJni;
 import org.chromium.content_public.browser.RenderFrameHost;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.url.GURL;
 import org.chromium.url.JUnitTestGURLs;
 
 import java.util.concurrent.TimeUnit;
@@ -83,9 +88,13 @@ public class PageContentProviderImplUnitTest {
 
     private final ActivityTabProvider mActivityTabProvider = new ActivityTabProvider();
     private PageContentProvider mProvider;
+    private Context mContextSpy;
 
     @Before
     public void setUp() throws Exception {
+        mContextSpy = Mockito.spy(ContextUtils.getApplicationContext());
+        ContextUtils.initApplicationContextForTests(mContextSpy);
+
         // In production code PageContentProvider must be called from the binder thread, disable
         // thread checks for these tests.
         ThreadUtils.hasSubtleSideEffectsSetThreadAssertsDisabledForTesting(true);
@@ -96,9 +105,10 @@ public class PageContentProviderImplUnitTest {
         InnerTextBridgeJni.setInstanceForTesting(mInnerTextNatives);
         PageContentProtoProviderBridgeJni.setInstanceForTesting(mPageContentProtoProviderNatives);
         mActivityTabProvider.setForTesting(mTab);
+        GURL url = JUnitTestGURLs.GOOGLE_URL;
         when(mWebContents.getMainFrame()).thenReturn(mRenderFrameHost);
         when(mTab.getWebContents()).thenReturn(mWebContents);
-        when(mTab.getUrl()).thenReturn(JUnitTestGURLs.GOOGLE_URL);
+        when(mTab.getUrl()).thenReturn(url);
     }
 
     @Test
@@ -130,7 +140,9 @@ public class PageContentProviderImplUnitTest {
                         PageContentProviderEvent.REQUEST_FAILED_INVALID_ID,
                         PageContentProviderEvent.REQUEST_STARTED);
 
-        var textContentUri = getMetadataFieldFromJson(structuredDataJson, "content_uri");
+        var textContentUri =
+                getMetadataFieldFromJson(
+                        structuredDataJson, PageContentProviderImpl.JSON_KEY_CONTENT_URI);
 
         // Run all delayed tasks to ensure the URI is expired.
         ShadowLooper.idleMainLooper(1, TimeUnit.HOURS);
@@ -145,12 +157,134 @@ public class PageContentProviderImplUnitTest {
     @Test
     public void testGetAssistContentJson() {
         var eventChecker = getWatcherForEvent(PageContentProviderEvent.GET_CONTENT_URI_SUCCESS);
-        var structuredDataJson =
-                PageContentProviderImpl.getAssistContentStructuredDataForUrl(
-                        JUnitTestGURLs.GOOGLE_URL.getSpec(), mActivityTabProvider, false);
+        String structuredDataJson;
+        try (HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Android.AssistContent.WebPageContentProvider.TargetPackageProvided",
+                        false)) {
+            structuredDataJson =
+                    PageContentProviderImpl.getAssistContentStructuredDataForUrl(
+                            JUnitTestGURLs.GOOGLE_URL.getSpec(), mActivityTabProvider, false);
+        }
 
-        var textContentUri = getMetadataFieldFromJson(structuredDataJson, "content_uri");
+        var textContentUri =
+                getMetadataFieldFromJson(
+                        structuredDataJson, PageContentProviderImpl.JSON_KEY_CONTENT_URI);
         assertNotNull(textContentUri);
+        var protoContentUri =
+                getMetadataFieldFromJson(
+                        structuredDataJson, PageContentProviderImpl.JSON_KEY_PROTO_CONTENT_URI);
+        assertNotNull(protoContentUri);
+        eventChecker.assertExpected();
+    }
+
+    @Test
+    public void testGetAssistContentJson_NoTextUri() {
+        var eventChecker = getWatcherForEvent(PageContentProviderEvent.GET_CONTENT_URI_SUCCESS);
+        String structuredDataJson;
+        try (HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Android.AssistContent.WebPageContentProvider.TargetPackageProvided",
+                        true)) {
+            structuredDataJson =
+                    PageContentProviderImpl.getAssistContentStructuredDataForUrl(
+                            JUnitTestGURLs.GOOGLE_URL.getSpec(),
+                            mActivityTabProvider,
+                            false,
+                            /* addTextUri= */ false,
+                            /* addProtoUri= */ true,
+                            "com.google.android.googlequicksearchbox");
+        }
+
+        Assert.assertFalse(
+                hasMetadataField(structuredDataJson, PageContentProviderImpl.JSON_KEY_CONTENT_URI));
+        var protoContentUri =
+                getMetadataFieldFromJson(
+                        structuredDataJson, PageContentProviderImpl.JSON_KEY_PROTO_CONTENT_URI);
+        assertNotNull(protoContentUri);
+        verify(mContextSpy)
+                .grantUriPermission(
+                        eq("com.google.android.googlequicksearchbox"),
+                        eq(Uri.parse(protoContentUri)),
+                        eq(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+        eventChecker.assertExpected();
+    }
+
+    @Test
+    public void testGetAssistContentJson_NoProtoUri() {
+        var eventChecker = getWatcherForEvent(PageContentProviderEvent.GET_CONTENT_URI_SUCCESS);
+        String structuredDataJson;
+        try (HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Android.AssistContent.WebPageContentProvider.TargetPackageProvided",
+                        true)) {
+            structuredDataJson =
+                    PageContentProviderImpl.getAssistContentStructuredDataForUrl(
+                            JUnitTestGURLs.GOOGLE_URL.getSpec(),
+                            mActivityTabProvider,
+                            false,
+                            /* addTextUri= */ true,
+                            /* addProtoUri= */ false,
+                            "com.google.android.googlequicksearchbox");
+        }
+
+        var textContentUri =
+                getMetadataFieldFromJson(
+                        structuredDataJson, PageContentProviderImpl.JSON_KEY_CONTENT_URI);
+        assertNotNull(textContentUri);
+        Assert.assertFalse(
+                hasMetadataField(
+                        structuredDataJson, PageContentProviderImpl.JSON_KEY_PROTO_CONTENT_URI));
+        verify(mContextSpy)
+                .grantUriPermission(
+                        eq("com.google.android.googlequicksearchbox"),
+                        eq(Uri.parse(textContentUri)),
+                        eq(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+        eventChecker.assertExpected();
+    }
+
+    @Test
+    public void testGetAssistContentJson_NoUris() {
+        String structuredDataJson;
+        try (HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Android.AssistContent.WebPageContentProvider.TargetPackageProvided",
+                        true)) {
+            structuredDataJson =
+                    PageContentProviderImpl.getAssistContentStructuredDataForUrl(
+                            JUnitTestGURLs.GOOGLE_URL.getSpec(),
+                            mActivityTabProvider,
+                            false,
+                            /* addTextUri= */ false,
+                            /* addProtoUri= */ false,
+                            "com.google.android.googlequicksearchbox");
+        }
+
+        Assert.assertNull(structuredDataJson);
+    }
+
+    @Test
+    public void testGetProtoContentUriForUrl() {
+        var eventChecker =
+                getWatcherForEvent(PageContentProviderEvent.GET_CONTENT_URI_SUCCESS, true);
+        Uri protoContentUri;
+        try (HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Android.AssistContent.WebPageContentProvider.TargetPackageProvided",
+                        true)) {
+            protoContentUri =
+                    PageContentProviderImpl.getProtoContentUriForUrl(
+                            JUnitTestGURLs.GOOGLE_URL.getSpec(),
+                            mActivityTabProvider,
+                            "com.google.android.googlequicksearchbox");
+        }
+
+        assertNotNull(protoContentUri);
+        verify(mContextSpy)
+                .grantUriPermission(
+                        eq("com.google.android.googlequicksearchbox"),
+                        eq(protoContentUri),
+                        eq(Intent.FLAG_GRANT_READ_URI_PERMISSION));
         eventChecker.assertExpected();
     }
 
@@ -168,7 +302,9 @@ public class PageContentProviderImplUnitTest {
                         PageContentProviderEvent.REQUEST_STARTED,
                         PageContentProviderEvent.REQUEST_SUCCEEDED_RETURNED_EXTRACTED);
 
-        var contentUri = getMetadataFieldFromJson(structuredDataJson, "content_uri");
+        var contentUri =
+                getMetadataFieldFromJson(
+                        structuredDataJson, PageContentProviderImpl.JSON_KEY_CONTENT_URI);
         // Wait 300ms between creating URI and querying it.
         mFakeTimeTestRule.advanceMillis(300);
         Cursor resultCursor;
@@ -209,7 +345,9 @@ public class PageContentProviderImplUnitTest {
                         PageContentProviderEvent.REQUEST_STARTED,
                         PageContentProviderEvent.REQUEST_FAILED_EMPTY_RESULT);
 
-        var contentUri = getMetadataFieldFromJson(structuredDataJson, "content_uri");
+        var contentUri =
+                getMetadataFieldFromJson(
+                        structuredDataJson, PageContentProviderImpl.JSON_KEY_CONTENT_URI);
         mFakeTimeTestRule.advanceMillis(300);
         Cursor resultCursor = mProvider.query(Uri.parse(contentUri), null, null, null, null);
         assertCursorContainsErrorMessage(resultCursor, "Error during extraction");
@@ -231,7 +369,9 @@ public class PageContentProviderImplUnitTest {
         var structuredDataJson =
                 PageContentProviderImpl.getAssistContentStructuredDataForUrl(
                         JUnitTestGURLs.GOOGLE_URL.getSpec(), mActivityTabProvider, false);
-        var protoContentUri = getMetadataFieldFromJson(structuredDataJson, "proto_content_uri");
+        var protoContentUri =
+                getMetadataFieldFromJson(
+                        structuredDataJson, PageContentProviderImpl.JSON_KEY_PROTO_CONTENT_URI);
 
         Cursor resultCursor = mProvider.query(Uri.parse(protoContentUri), null, null, null, null);
 
@@ -240,37 +380,171 @@ public class PageContentProviderImplUnitTest {
         eventChecker.assertExpected();
     }
 
+    @Test
+    public void testProtoQuery_destroyedWebContents() {
+        var structuredDataJson =
+                PageContentProviderImpl.getAssistContentStructuredDataForUrl(
+                        JUnitTestGURLs.GOOGLE_URL.getSpec(), mActivityTabProvider, false);
+        var eventChecker =
+                getWatcherForEvent(
+                        RequestType.QUERY,
+                        Format.PROTO,
+                        PageContentProviderEvent.REQUEST_STARTED,
+                        PageContentProviderEvent.REQUEST_FAILED_TO_GET_CURRENT_TAB);
+
+        var contentUri =
+                getMetadataFieldFromJson(
+                        structuredDataJson, PageContentProviderImpl.JSON_KEY_PROTO_CONTENT_URI);
+        when(mWebContents.isDestroyed()).thenReturn(true);
+        Cursor resultCursor = mProvider.query(Uri.parse(contentUri), null, null, null, null);
+        assertCursorContainsErrorMessage(resultCursor, "Failed to get current tab");
+        eventChecker.assertExpected();
+    }
+
+    @Test
+    public void testTextOpenFileValidContentUri() throws Exception {
+        setInnerTextExtractionResult("Page contents!", 200);
+
+        var structuredDataJson =
+                PageContentProviderImpl.getAssistContentStructuredDataForUrl(
+                        JUnitTestGURLs.GOOGLE_URL.getSpec(), mActivityTabProvider, false);
+        var eventChecker =
+                getWatcherForEvent(
+                        RequestType.OPEN_FILE,
+                        Format.TEXT,
+                        PageContentProviderEvent.REQUEST_STARTED,
+                        PageContentProviderEvent.REQUEST_SUCCEEDED_RETURNED_EXTRACTED);
+
+        var contentUri = getMetadataFieldFromJson(structuredDataJson, "content_uri");
+
+        mProvider.openFile(Uri.parse(contentUri), "r");
+
+        eventChecker.assertExpected();
+    }
+
+    @Test
+    public void testProtoOpenFileValidContentUri() throws Exception {
+        var nodeContents = "Page contents!";
+        var apcProto = getAnnotatedPageContentsProto(nodeContents);
+        setProtoContentExtractionResult(apcProto, 100);
+        var eventChecker =
+                getWatcherForEvent(
+                        RequestType.OPEN_FILE,
+                        Format.PROTO,
+                        PageContentProviderEvent.REQUEST_STARTED,
+                        PageContentProviderEvent.REQUEST_SUCCEEDED_RETURNED_EXTRACTED);
+
+        var structuredDataJson =
+                PageContentProviderImpl.getAssistContentStructuredDataForUrl(
+                        JUnitTestGURLs.GOOGLE_URL.getSpec(), mActivityTabProvider, false);
+        var protoContentUri = getMetadataFieldFromJson(structuredDataJson, "proto_content_uri");
+
+        mProvider.openFile(Uri.parse(protoContentUri), "r");
+
+        eventChecker.assertExpected();
+    }
+
+    @Test
+    public void testProtoQueryValidContentUri_WithGsa() {
+        var nodeContents = "Page contents!";
+        var apcProto = getAnnotatedPageContentsProto(nodeContents);
+        setProtoContentExtractionResult(apcProto, 100);
+        var eventChecker =
+                getWatcherForEvent(
+                        RequestType.QUERY,
+                        Format.PROTO,
+                        /* isGsa= */ true,
+                        PageContentProviderEvent.REQUEST_STARTED,
+                        PageContentProviderEvent.REQUEST_SUCCEEDED_RETURNED_EXTRACTED);
+
+        var protoContentUri =
+                PageContentProviderImpl.getProtoContentUriForUrl(
+                        JUnitTestGURLs.GOOGLE_URL.getSpec(),
+                        mActivityTabProvider,
+                        "com.google.android.googlequicksearchbox");
+        mFakeTimeTestRule.advanceMillis(300);
+        Cursor resultCursor;
+        try (HistogramWatcher histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "Android.AssistContent.WebPageContentProvider.Latency.CreateToExtractionStart.Query.Proto.Aga",
+                                300)
+                        .expectIntRecord(
+                                "Android.AssistContent.WebPageContentProvider.Latency.ExtractionStartToEnd.Query.Proto.Aga",
+                                100)
+                        .expectIntRecord(
+                                "Android.AssistContent.WebPageContentProvider.Latency.TotalLatency.Query.Proto.Aga",
+                                300 + 100)
+                        .build()) {
+            resultCursor = mProvider.query(protoContentUri, null, null, null, null);
+        }
+
+        assertProtoCursorContainsValues(
+                resultCursor, JUnitTestGURLs.GOOGLE_URL.getSpec(), apcProto.toByteArray());
+        verify(mPageContentProtoProviderNatives).getAiPageContent(eq(mWebContents), any());
+        eventChecker.assertExpected();
+    }
+
     private HistogramWatcher getWatcherForEvent(@PageContentProviderEvent int event) {
-        return HistogramWatcher.newSingleRecordWatcher(
-                "Android.AssistContent.WebPageContentProvider.Events", event);
+        return getWatcherForEvent(event, false);
+    }
+
+    private HistogramWatcher getWatcherForEvent(
+            @PageContentProviderEvent int event, boolean isGsa) {
+        var name =
+                PageContentProviderMetrics.concatenateConsumerToHistogramName(
+                        "Android.AssistContent.WebPageContentProvider.Events", isGsa);
+        return HistogramWatcher.newSingleRecordWatcher(name, event);
     }
 
     private HistogramWatcher getWatcherForEvent(
             @RequestType int requestType,
             @Format int format,
             @PageContentProviderEvent int... events) {
+        return getWatcherForEvent(requestType, format, false, events);
+    }
+
+    private HistogramWatcher getWatcherForEvent(
+            @RequestType int requestType,
+            @Format int format,
+            boolean isGsa,
+            @PageContentProviderEvent int... events) {
         var histogramName =
-                PageContentProviderMetrics.concatenateTypeAndFormatToHistogramName(
-                        "Android.AssistContent.WebPageContentProvider.Events", requestType, format);
+                PageContentProviderMetrics.concatenateTypeFormatAndConsumerToHistogramName(
+                        "Android.AssistContent.WebPageContentProvider.Events",
+                        requestType,
+                        format,
+                        isGsa);
         return HistogramWatcher.newBuilder().expectIntRecords(histogramName, events).build();
     }
 
     private String getMetadataFieldFromJson(String jsonString, String fieldName) {
         try {
             JSONObject jsonObject = (JSONObject) new JSONTokener(jsonString).nextValue();
-            return jsonObject.getJSONObject("page_metadata").getString(fieldName);
+            return jsonObject
+                    .getJSONObject(PageContentProviderImpl.JSON_KEY_PAGE_METADATA)
+                    .getString(fieldName);
         } catch (JSONException e) {
             Assert.fail("Error parsing metadata json");
             return null;
         }
     }
 
+    private boolean hasMetadataField(String jsonString, String fieldName) {
+        try {
+            JSONObject jsonObject = (JSONObject) new JSONTokener(jsonString).nextValue();
+            return jsonObject
+                    .getJSONObject(PageContentProviderImpl.JSON_KEY_PAGE_METADATA)
+                    .has(fieldName);
+        } catch (JSONException e) {
+            return false;
+        }
+    }
+
     private void setInnerTextExtractionResult(String result, int resultDelayMs) {
         doAnswer(
                         invocationOnMock -> {
-                            Callback<String> callback =
-                                    (Callback<String>)
-                                            invocationOnMock.getArgument(1, Callback.class);
+                            Callback<String> callback = invocationOnMock.getArgument(1);
                             mFakeTimeTestRule.advanceMillis(resultDelayMs);
                             callback.onResult(result);
                             return null;
@@ -282,9 +556,7 @@ public class PageContentProviderImplUnitTest {
     private void setProtoContentExtractionResult(AnnotatedPageContent proto, int resultDelayMs) {
         doAnswer(
                         invocationOnMock -> {
-                            Callback<byte[]> callback =
-                                    (Callback<byte[]>)
-                                            invocationOnMock.getArgument(1, Callback.class);
+                            Callback<byte[]> callback = invocationOnMock.getArgument(1);
                             mFakeTimeTestRule.advanceMillis(resultDelayMs);
                             callback.onResult(proto.toByteArray());
                             return null;
@@ -296,9 +568,7 @@ public class PageContentProviderImplUnitTest {
     private void setInnerTextExtractionError(int resultDelayMs) {
         doAnswer(
                         invocationOnMock -> {
-                            Callback<String> callback =
-                                    (Callback<String>)
-                                            invocationOnMock.getArgument(1, Callback.class);
+                            Callback<String> callback = invocationOnMock.getArgument(1);
                             mFakeTimeTestRule.advanceMillis(resultDelayMs);
                             callback.onResult(null);
                             return null;

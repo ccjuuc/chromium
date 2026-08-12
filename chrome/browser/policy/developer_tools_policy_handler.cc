@@ -10,7 +10,6 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/browser/policy/extension_developer_mode_policy_handler.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/chrome_switches.h"
@@ -28,11 +27,13 @@
 #include "components/user_manager/user_manager.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/browser/policy/extension_developer_mode_policy_handler.h"
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+
 namespace policy {
 
 namespace {
-
-using Availability = DeveloperToolsPolicyHandler::Availability;
 
 // The result of checking a policy value.
 enum class PolicyCheckResult {
@@ -47,7 +48,7 @@ enum class PolicyCheckResult {
 #if BUILDFLAG(IS_ANDROID)
 // key::kDeveloperToolsDisabled has been deprecated and has never been supported
 // on Android.
-std::optional<Availability> GetValueFromDeveloperToolsDisabledPolicy(
+std::optional<DeveloperToolsAvailability> GetValueFromDeveloperToolsDisabledPolicy(
     const PolicyMap& policies) {
   return std::nullopt;
 }
@@ -74,7 +75,7 @@ PolicyCheckResult CheckDeveloperToolsDisabled(
 // Returns the target value of the |kDevToolsAvailability| pref derived only
 // from the legacy DeveloperToolsDisabled policy. If this policy is not set or
 // does not have a valid value, returns |nullopt|.
-std::optional<Availability> GetValueFromDeveloperToolsDisabledPolicy(
+std::optional<DeveloperToolsAvailability> GetValueFromDeveloperToolsDisabledPolicy(
     const PolicyMap& policies) {
   const base::Value* developer_tools_disabled = policies.GetValue(
       key::kDeveloperToolsDisabled, base::Value::Type::BOOLEAN);
@@ -85,15 +86,15 @@ std::optional<Availability> GetValueFromDeveloperToolsDisabledPolicy(
     return std::nullopt;
   }
 
-  return developer_tools_disabled->GetBool() ? Availability::kDisallowed
-                                             : Availability::kAllowed;
+  return developer_tools_disabled->GetBool() ? DeveloperToolsAvailability::kDisallowed
+                                             : DeveloperToolsAvailability::kAllowed;
 }
 #endif  // BUILDFLAG(IS_ANDROID)
 
 // Returns true if |value| is within the valid range of the
 // DeveloperToolsAvailability enum policy.
 bool IsValidDeveloperToolsAvailabilityValue(int value) {
-  return value >= 0 && value <= static_cast<int>(Availability::kMaxValue);
+  return value >= 0 && value <= static_cast<int>(DeveloperToolsAvailability::kMaxValue);
 }
 
 // Checks the value of the DeveloperToolsAvailability policy. |errors| may be
@@ -127,7 +128,7 @@ PolicyCheckResult CheckDeveloperToolsAvailability(
 // Returns the target value of the |kDevToolsAvailability| pref derived only
 // from the DeveloperToolsAvailability policy. If this policy is not set or does
 // not have a valid value, returns |nullopt|.
-std::optional<Availability> GetValueFromDeveloperToolsAvailabilityPolicy(
+std::optional<DeveloperToolsAvailability> GetValueFromDeveloperToolsAvailabilityPolicy(
     const PolicyMap& policies) {
   // It is safe to use `GetValueUnsafe()` because type checking is performed
   // before the value is used.
@@ -140,16 +141,16 @@ std::optional<Availability> GetValueFromDeveloperToolsAvailabilityPolicy(
     return std::nullopt;
   }
 
-  return static_cast<Availability>(developer_tools_availability->GetInt());
+  return static_cast<DeveloperToolsAvailability>(developer_tools_availability->GetInt());
 }
 
 // Returns the target value of the |kDevToolsAvailability| pref, derived from
 // both the DeveloperToolsDisabled policy and the
 // DeveloperToolsAvailability policy. If both policies are set,
 // DeveloperToolsAvailability wins.
-std::optional<Availability> GetValueFromBothPolicies(
+std::optional<DeveloperToolsAvailability> GetValueFromBothPolicies(
     const PolicyMap& policies) {
-  const std::optional<Availability> developer_tools_availability =
+  const std::optional<DeveloperToolsAvailability> developer_tools_availability =
       GetValueFromDeveloperToolsAvailabilityPolicy(policies);
 
   if (developer_tools_availability.has_value()) {
@@ -163,8 +164,8 @@ std::optional<Availability> GetValueFromBothPolicies(
 // Returns the current policy-set developer tools availability according to
 // the values in |pref_service|. If no policy mandating developer tools
 // availability is set, the default will be
-// |Availability::kDisallowedForForceInstalledExtensions|.
-Availability GetDevToolsAvailability(const PrefService* pref_sevice) {
+// |DeveloperToolsAvailability::kDisallowedForForceInstalledExtensions|.
+DeveloperToolsAvailability GetDevToolsAvailability(const PrefService* pref_sevice) {
   int value = pref_sevice->GetInteger(prefs::kDevToolsAvailability);
   if (!IsValidDeveloperToolsAvailabilityValue(value)) {
     // This should never happen, because the |kDevToolsAvailability| pref is
@@ -174,7 +175,7 @@ Availability GetDevToolsAvailability(const PrefService* pref_sevice) {
     NOTREACHED();
   }
 
-  return static_cast<Availability>(value);
+  return static_cast<DeveloperToolsAvailability>(value);
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -187,17 +188,17 @@ bool IsDevToolsAvailabilitySetByPolicy(const PrefService* pref_service) {
 
 // Returns the most restrictive availability within [|availability_1|,
 // |availability_2|].
-Availability GetMostRestrictiveAvailability(Availability availability_1,
-                                            Availability availability_2) {
-  if (availability_1 == Availability::kDisallowed ||
-      availability_2 == Availability::kDisallowed) {
-    return Availability::kDisallowed;
+DeveloperToolsAvailability GetMostRestrictiveAvailability(DeveloperToolsAvailability availability_1,
+                                            DeveloperToolsAvailability availability_2) {
+  if (availability_1 == DeveloperToolsAvailability::kDisallowed ||
+      availability_2 == DeveloperToolsAvailability::kDisallowed) {
+    return DeveloperToolsAvailability::kDisallowed;
   }
-  if (availability_1 == Availability::kDisallowedForForceInstalledExtensions ||
-      availability_2 == Availability::kDisallowedForForceInstalledExtensions) {
-    return Availability::kDisallowedForForceInstalledExtensions;
+  if (availability_1 == DeveloperToolsAvailability::kDisallowedForForceInstalledExtensions ||
+      availability_2 == DeveloperToolsAvailability::kDisallowedForForceInstalledExtensions) {
+    return DeveloperToolsAvailability::kDisallowedForForceInstalledExtensions;
   }
-  return Availability::kAllowed;
+  return DeveloperToolsAvailability::kAllowed;
 }
 
 const PrefService* GetPrimaryUserPrefs() {
@@ -252,10 +253,10 @@ bool DeveloperToolsPolicyHandler::CheckPolicySettings(
     return false;
   }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  const std::optional<Availability> policy = GetValueFromBothPolicies(policies);
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  const std::optional<DeveloperToolsAvailability> policy = GetValueFromBothPolicies(policies);
 
-  if (policy.has_value() && *policy == Availability::kDisallowed &&
+  if (policy.has_value() && *policy == DeveloperToolsAvailability::kDisallowed &&
       extension_developer_mode_policy_handler_.IsValidPolicySet(policies)) {
     errors->AddError(key::kDeveloperToolsAvailability,
                      IDS_POLICY_DEVELOPER_TOOLS_EXTENSIONS_CONFLICT_MESSAGE,
@@ -263,7 +264,7 @@ bool DeveloperToolsPolicyHandler::CheckPolicySettings(
                      key::kDeveloperToolsAvailability,
                      /*error_path=*/{}, PolicyMap::MessageType::kInfo);
   }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
   // Always continue to ApplyPolicySettings which can handle invalid policy
   // values.
@@ -272,33 +273,33 @@ bool DeveloperToolsPolicyHandler::CheckPolicySettings(
 
 void DeveloperToolsPolicyHandler::ApplyPolicySettings(const PolicyMap& policies,
                                                       PrefValueMap* prefs) {
-  const std::optional<Availability> policy = GetValueFromBothPolicies(policies);
+  const std::optional<DeveloperToolsAvailability> policy = GetValueFromBothPolicies(policies);
 
   if (policy.has_value()) {
     prefs->SetInteger(prefs::kDevToolsAvailability, static_cast<int>(*policy));
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
     // ExtensionDeveloperModePolicySettings takes precedence over this policy.
     // Thus, we only set the value of kExtensionsUIDeveloperMode if the former
     // is not set.
-    if (*policy == Availability::kDisallowed &&
+    if (*policy == DeveloperToolsAvailability::kDisallowed &&
         !extension_developer_mode_policy_handler_.IsValidPolicySet(policies)) {
       prefs->SetValue(prefs::kExtensionsUIDeveloperMode, base::Value(false));
     }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   }
 }
 
-policy::DeveloperToolsPolicyHandler::Availability
+policy::DeveloperToolsAvailability
 DeveloperToolsPolicyHandler::GetEffectiveAvailability(Profile* profile) {
 #if BUILDFLAG(IS_CHROMEOS)
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   if (command_line->HasSwitch(switches::kForceDevToolsAvailable)) {
-    return Availability::kAllowed;
+    return DeveloperToolsAvailability::kAllowed;
   }
 #endif
 
-  Availability availability = GetDevToolsAvailability(profile->GetPrefs());
+  DeveloperToolsAvailability availability = GetDevToolsAvailability(profile->GetPrefs());
 #if BUILDFLAG(IS_CHROMEOS)
   // Do not create DevTools if it's disabled for primary user.
   const PrefService* primary_user_prefs = GetPrimaryUserPrefs();

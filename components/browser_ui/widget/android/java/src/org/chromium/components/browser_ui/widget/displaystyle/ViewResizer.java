@@ -41,7 +41,7 @@ public class ViewResizer implements DisplayStyleObserver, View.OnLayoutChangeLis
         mMinWidePaddingPixels = minWidePaddingPixels;
         mUiConfig = config;
         mDisplayStyleObserver = new DisplayStyleObserverAdapter(view, config, this);
-        view.addOnLayoutChangeListener(this);
+        mView.addOnLayoutChangeListener(this);
     }
 
     /**
@@ -68,9 +68,10 @@ public class ViewResizer implements DisplayStyleObserver, View.OnLayoutChangeLis
         mDisplayStyleObserver.attach();
     }
 
-    /** Detaches from the {@link UiConfig}. */
-    public void detach() {
-        mDisplayStyleObserver.detach();
+    /** Detaches from the {@link #mUiConfig} and cleans up. */
+    public void destroy() {
+        mView.removeOnLayoutChangeListener(this);
+        mDisplayStyleObserver.destroy();
     }
 
     @Override
@@ -98,9 +99,11 @@ public class ViewResizer implements DisplayStyleObserver, View.OnLayoutChangeLis
 
     /** Computes the lateral padding to be applied to the associated view. */
     protected int computePadding() {
-        if (!mUiConfig.getCurrentDisplayStyle().isWide()) return mDefaultPaddingPixels;
-        return ViewResizerUtil.computePaddingForWideDisplay(
-                mUiConfig.getContext(), mView, mMinWidePaddingPixels);
+        // Any changes to the padding calculation logic should be implemented within
+        // ViewResizerUtil#computePadding. This utility logic is utilized by various
+        // components across the codebase, not just by ViewResizer and its children.
+        return ViewResizerUtil.computePadding(
+                mView, mUiConfig, mDefaultPaddingPixels, mMinWidePaddingPixels);
     }
 
     protected int getMinWidePaddingPixels() {

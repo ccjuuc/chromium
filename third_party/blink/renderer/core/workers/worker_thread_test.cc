@@ -90,7 +90,7 @@ void CreateNestedWorkerThenTerminateParent(
   EXPECT_CALL(*nested_worker_helper->reporting_proxy, WillEvaluateScriptMock())
       .Times(1);
   EXPECT_CALL(*nested_worker_helper->reporting_proxy,
-              DidEvaluateTopLevelScript(true))
+              DidEvaluateTopLevelScript(true, _))
       .Times(1);
   EXPECT_CALL(*nested_worker_helper->reporting_proxy,
               WillDestroyWorkerGlobalScope())
@@ -177,7 +177,7 @@ class WorkerThreadTest : public testing::Test {
   void ExpectReportingCalls() {
     EXPECT_CALL(*reporting_proxy_, DidCreateWorkerGlobalScope(_)).Times(1);
     EXPECT_CALL(*reporting_proxy_, WillEvaluateScriptMock()).Times(1);
-    EXPECT_CALL(*reporting_proxy_, DidEvaluateTopLevelScript(true)).Times(1);
+    EXPECT_CALL(*reporting_proxy_, DidEvaluateTopLevelScript(true, _)).Times(1);
     EXPECT_CALL(*reporting_proxy_, WillDestroyWorkerGlobalScope()).Times(1);
     EXPECT_CALL(*reporting_proxy_, DidTerminateWorkerThread()).Times(1);
   }
@@ -185,7 +185,7 @@ class WorkerThreadTest : public testing::Test {
   void ExpectReportingCallsForWorkerPossiblyTerminatedBeforeInitialization() {
     EXPECT_CALL(*reporting_proxy_, DidCreateWorkerGlobalScope(_)).Times(1);
     EXPECT_CALL(*reporting_proxy_, WillEvaluateScriptMock()).Times(AtMost(1));
-    EXPECT_CALL(*reporting_proxy_, DidEvaluateTopLevelScript(_))
+    EXPECT_CALL(*reporting_proxy_, DidEvaluateTopLevelScript(_, _))
         .Times(AtMost(1));
     EXPECT_CALL(*reporting_proxy_, WillDestroyWorkerGlobalScope())
         .Times(AtMost(1));
@@ -195,7 +195,8 @@ class WorkerThreadTest : public testing::Test {
   void ExpectReportingCallsForWorkerForciblyTerminated() {
     EXPECT_CALL(*reporting_proxy_, DidCreateWorkerGlobalScope(_)).Times(1);
     EXPECT_CALL(*reporting_proxy_, WillEvaluateScriptMock()).Times(1);
-    EXPECT_CALL(*reporting_proxy_, DidEvaluateTopLevelScript(false)).Times(1);
+    EXPECT_CALL(*reporting_proxy_, DidEvaluateTopLevelScript(false, _))
+        .Times(1);
     EXPECT_CALL(*reporting_proxy_, WillDestroyWorkerGlobalScope()).Times(1);
     EXPECT_CALL(*reporting_proxy_, DidTerminateWorkerThread()).Times(1);
   }
@@ -374,30 +375,13 @@ TEST_F(WorkerThreadTest, Terminate_WhileDebuggerTaskIsRunningOnInitialization) {
   EXPECT_CALL(*reporting_proxy_, WillDestroyWorkerGlobalScope()).Times(1);
   EXPECT_CALL(*reporting_proxy_, DidTerminateWorkerThread()).Times(1);
 
-  auto global_scope_creation_params =
-      std::make_unique<GlobalScopeCreationParams>(
-          KURL("http://fake.url/"), mojom::blink::ScriptType::kClassic,
-          "fake global scope name", "fake user agent", UserAgentMetadata(),
-          nullptr /* web_worker_fetch_context */,
-          Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
-          Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
-          network::mojom::ReferrerPolicy::kDefault, security_origin_.get(),
-          false /* starter_secure_context */,
-          CalculateHttpsState(security_origin_.get()),
-          MakeGarbageCollected<WorkerClients>(),
-          nullptr /* content_settings_client */,
-          nullptr /* inherited_trial_features */,
-          base::UnguessableToken::Create(),
-          std::make_unique<WorkerSettings>(std::make_unique<Settings>().get()),
-          mojom::blink::V8CacheOptions::kDefault,
-          nullptr /* worklet_module_responses_map */);
-
   // Set wait_for_debugger so that the worker thread can pause
   // on initialization to run debugger tasks.
   auto devtools_params = std::make_unique<WorkerDevToolsParams>();
   devtools_params->wait_for_debugger = true;
 
-  worker_thread_->Start(std::move(global_scope_creation_params),
+  worker_thread_->Start(GlobalScopeCreationParams::CreateForWorkerForTesting(
+                            security_origin_.get(), KURL("http://fake.url/")),
                         WorkerBackingThreadStartupData::CreateDefault(),
                         std::move(devtools_params));
 

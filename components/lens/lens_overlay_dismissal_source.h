@@ -144,7 +144,16 @@ enum class LensOverlayDismissalSource {
   // Desktop.
   kContextualTasksContextCleared = 36,
 
-  kMaxValue = kContextualTasksContextCleared
+  // The user clicked the Lens button in the Contextual Tasks composebox while
+  // the overlay was showing. Only used on Desktop.
+  kContextualTasksComposeboxLensButtonClick = 37,
+
+  // The input state in the Contextual Tasks composebox changed to disable
+  // image uploads. Only used on Desktop.
+  kContextualTasksImageUploadsDisabled = 38,
+
+  kMaxValue = kContextualTasksImageUploadsDisabled,
+
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/lens/enums.xml:LensOverlayDismissalSource)
 

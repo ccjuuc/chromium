@@ -11,6 +11,8 @@
 #include "media/base/decoder_buffer.h"
 #include "media/base/media_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/size.h"
 
 using testing::_;
 using testing::Invoke;
@@ -23,8 +25,8 @@ FakeDemuxerStream::FakeDemuxerStream(bool is_audio) {
   type_ = is_audio ? DemuxerStream::AUDIO : DemuxerStream::VIDEO;
   if (is_audio) {
     audio_config_.Initialize(
-        AudioCodec::kAAC, kSampleFormatS16, CHANNEL_LAYOUT_STEREO, 38400,
-        std::vector<uint8_t>(), EncryptionScheme::kUnencrypted,
+        AudioCodec::kAAC, kSampleFormatS16, ChannelLayoutConfig::Stereo(),
+        38400, std::vector<uint8_t>(), EncryptionScheme::kUnencrypted,
         base::TimeDelta(), 0);
   } else {
     gfx::Size size(640, 480);
@@ -103,8 +105,8 @@ FakeMediaResource::FakeMediaResource()
 
 FakeMediaResource::~FakeMediaResource() = default;
 
-std::vector<DemuxerStream*> FakeMediaResource::GetAllStreams() {
-  std::vector<DemuxerStream*> streams;
+std::vector<raw_ptr<DemuxerStream>> FakeMediaResource::GetAllStreams() {
+  std::vector<raw_ptr<DemuxerStream>> streams;
   streams.push_back(audio_stream_.get());
   streams.push_back(video_stream_.get());
   return streams;

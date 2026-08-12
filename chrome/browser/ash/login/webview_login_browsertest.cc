@@ -9,6 +9,7 @@
 #include <string>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/login_screen_test_api.h"
 #include "ash/shell.h"
@@ -35,12 +36,12 @@
 #include "base/values.h"
 #include "chrome/browser/ash/login/helper.h"
 #include "chrome/browser/ash/login/lock/screen_locker_tester.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/oobe_quick_start/connectivity/fake_target_device_connection_broker.h"
 #include "chrome/browser/ash/login/saml/lockscreen_reauth_dialog_test_helper.h"
 #include "chrome/browser/ash/login/signin/token_handle_store_factory.h"
 #include "chrome/browser/ash/login/signin/token_handle_util.h"
 #include "chrome/browser/ash/login/signin_partition_manager.h"
+#include "chrome/browser/ash/login/signin_partition_manager_factory.h"
 #include "chrome/browser/ash/login/test/auth_ui_utils.h"
 #include "chrome/browser/ash/login/test/cryptohome_mixin.h"
 #include "chrome/browser/ash/login/test/device_state_mixin.h"
@@ -59,9 +60,9 @@
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/policy/core/device_policy_cros_test_helper.h"
 #include "chrome/browser/ash/policy/test_support/embedded_policy_test_server_mixin.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ssl/ssl_client_certificate_selector.h"
 #include "chrome/browser/sync/sync_service_factory.h"
@@ -73,12 +74,12 @@
 #include "chrome/browser/ui/webui/ash/login/quick_start_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/user_creation_screen_handler.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/ash/scoped_test_system_nss_key_slot_mixin.h"
 #include "chrome/test/base/fake_gaia_mixin.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
 #include "chromeos/ash/components/http_auth_dialog/http_auth_dialog.h"
 #include "chromeos/ash/components/login/auth/public/user_context.h"
@@ -210,7 +211,7 @@ void InjectCookie(content::StoragePartition* storage_partition) {
           kTestCookieName, kTestCookieValue, kTestCookieHost, "/", base::Time(),
           base::Time(), base::Time(), base::Time(), /*secure=*/true,
           /*httponly=*/false, net::CookieSameSite::NO_RESTRICTION,
-          net::COOKIE_PRIORITY_MEDIUM);
+          net::COOKIE_PRIORITY_MEDIUM, net::CookieSourceType::kOther);
   base::RunLoop run_loop;
   cookie_manager->SetCanonicalCookie(
       *cookie, net::cookie_util::SimulatedCookieSource(*cookie, "https"),
@@ -283,6 +284,19 @@ class WebviewLoginTest : public OobeBaseTest {
     command_line->AppendSwitch(switches::kOobeSkipPostLogin);
     OobeBaseTest::SetUpCommandLine(command_line);
   }
+
+  void SetUpOnMainThread() override {
+    OobeBaseTest::SetUpOnMainThread();
+    // Configure FakeGaia with default OAuth access tokens and Gaia ID mappings.
+    //
+    // Previously, asynchronous Mojo delays in AccountManagerFacade masked the
+    // missing FakeGaia configuration by deferring token availability until
+    // after session startup. Without those delays, token availability fires
+    // immediately during startup, requiring FakeGaia to be configured to avoid
+    // token fetch hangs/timeouts.
+    fake_gaia_.SetupFakeGaiaForLoginWithDefaults();
+  }
+
   base::HistogramTester histogram_tester_;
 
  protected:
@@ -454,7 +468,7 @@ IN_PROC_BROWSER_TEST_F(WebviewLoginTest, StoragePartitionHandling) {
       login::GetSigninPartition();
 
   EXPECT_FALSE(signin_frame_partition_name_1.empty());
-  EXPECT_EQ(login::SigninPartitionManager::Factory::GetForBrowserContext(
+  EXPECT_EQ(login::SigninPartitionManagerFactory::GetForBrowserContext(
                 browser_context)
                 ->GetCurrentStoragePartitionName(),
             signin_frame_partition_name_1);
@@ -480,7 +494,7 @@ IN_PROC_BROWSER_TEST_F(WebviewLoginTest, StoragePartitionHandling) {
       login::GetSigninPartition();
 
   EXPECT_FALSE(signin_frame_partition_name_2.empty());
-  EXPECT_EQ(login::SigninPartitionManager::Factory::GetForBrowserContext(
+  EXPECT_EQ(login::SigninPartitionManagerFactory::GetForBrowserContext(
                 browser_context)
                 ->GetCurrentStoragePartitionName(),
             signin_frame_partition_name_2);
@@ -818,12 +832,12 @@ IN_PROC_BROWSER_TEST_F(WebviewLoginTestWithSyncTrustedVaultEnabled,
 
   // AddRecoveryMethod() logic is deferred until refresh tokens are loaded.
   signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(browser->profile());
+      IdentityManagerFactory::GetForProfile(browser->GetProfile());
   signin::WaitForRefreshTokensLoaded(identity_manager);
 
   syncer::SyncServiceImpl* sync_service =
       SyncServiceFactory::GetAsSyncServiceImplForProfileForTesting(
-          browser->profile());
+          browser->GetProfile());
   trusted_vault::TrustedVaultClient* trusted_vault_client =
       sync_service->GetSyncClientForTest()->GetTrustedVaultClient();
 
@@ -1567,7 +1581,9 @@ class WebviewClientCertsLoginTestBase : public WebviewLoginTest {
         device_policy_builder_.GetBlob());
     PrefChangeRegistrar registrar;
     base::test::TestFuture<const char*> pref_changed_future;
-    registrar.Init(ProfileHelper::GetSigninProfile()->GetPrefs());
+    registrar.Init(Profile::FromBrowserContext(
+                       BrowserContextHelper::Get()->GetSigninBrowserContext())
+                       ->GetPrefs());
     registrar.Add(
         ::prefs::kManagedAutoSelectCertificateForUrls,
         base::BindRepeating(pref_changed_future.GetRepeatingCallback(),
@@ -1586,7 +1602,7 @@ class WebviewClientCertsLoginTestBase : public WebviewLoginTest {
       base::ScopedAllowBlockingForTesting allow_io;
       ASSERT_TRUE(base::ReadFileToString(authority_file_path, &x509_contents));
     }
-    base::Value::Dict onc_dict =
+    base::DictValue onc_dict =
         BuildDeviceOncDictForUntrustedAuthority(x509_contents);
 
     em::ChromeDeviceSettingsProto& proto(device_policy_builder_.payload());
@@ -1623,7 +1639,9 @@ class WebviewClientCertsLoginTestBase : public WebviewLoginTest {
         device_policy_builder_.GetBlob());
     PrefChangeRegistrar registrar;
     base::test::TestFuture<const char*> pref_changed_future;
-    registrar.Init(ProfileHelper::GetSigninProfile()->GetPrefs());
+    registrar.Init(Profile::FromBrowserContext(
+                       BrowserContextHelper::Get()->GetSigninBrowserContext())
+                       ->GetPrefs());
     registrar.Add(
         ::prefs::kPromptOnMultipleMatchingCertificates,
         base::BindRepeating(pref_changed_future.GetRepeatingCallback(),
@@ -1712,19 +1730,19 @@ class WebviewClientCertsLoginTestBase : public WebviewLoginTest {
  private:
   // Builds a device ONC dictionary defining a single untrusted authority
   // certificate.
-  static base::Value::Dict BuildDeviceOncDictForUntrustedAuthority(
+  static base::DictValue BuildDeviceOncDictForUntrustedAuthority(
       const std::string& x509_authority_cert) {
-    base::Value::Dict onc_certificate;
+    base::DictValue onc_certificate;
     onc_certificate.Set(onc::certificate::kGUID, base::Value(kTestGuid));
     onc_certificate.Set(onc::certificate::kType,
                         base::Value(onc::certificate::kAuthority));
     onc_certificate.Set(onc::certificate::kX509,
                         base::Value(x509_authority_cert));
 
-    base::Value::List onc_certificates;
+    base::ListValue onc_certificates;
     onc_certificates.Append(std::move(onc_certificate));
 
-    base::Value::Dict onc_dict;
+    base::DictValue onc_dict;
     onc_dict.Set(onc::toplevel_config::kCertificates,
                  std::move(onc_certificates));
     onc_dict.Set(onc::toplevel_config::kType,
@@ -1778,7 +1796,7 @@ class WebviewClientCertsLoginTest : public WebviewClientCertsLoginTestBase {
 // the sign-in screen which is not the sign-in frame. In this case, the EULA
 // webview is used.
 // TODO(pmarko): This is DISABLED because the eula UI it depends on has been
-// deprecated and removed. https://crbug.com/849710.
+// deprecated and removed. https://crbug.com/41392843.
 IN_PROC_BROWSER_TEST_F(WebviewClientCertsLoginTest,
                        DISABLED_ClientCertRequestedInOtherWebView) {
   ASSERT_NO_FATAL_FAILURE(SetUpClientCertsInSystemSlot({kClientCert1Name}));

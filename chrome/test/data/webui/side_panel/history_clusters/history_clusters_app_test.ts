@@ -5,7 +5,7 @@
 import 'chrome://history-clusters-side-panel.top-chrome/history_clusters.js';
 
 import type {HistoryClustersAppElement} from 'chrome://history-clusters-side-panel.top-chrome/history_clusters.js';
-import {BrowserProxyImpl, HistoryEmbeddingsBrowserProxyImpl, HistoryEmbeddingsPageHandlerRemote, PageCallbackRouter, PageHandlerRemote} from 'chrome://history-clusters-side-panel.top-chrome/history_clusters.js';
+import {historyClustersBrowserProxyFactory, historyEmbeddingsBrowserProxyFactory, HistoryEmbeddingsPageHandlerRemote, PageHandlerRemote} from 'chrome://history-clusters-side-panel.top-chrome/history_clusters.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {TestMock} from 'chrome://webui-test/test_mock.js';
@@ -21,13 +21,14 @@ suite('HistoryClustersAppWithEmbeddingsTest', () => {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
 
     clustersHandler = TestMock.fromClass(PageHandlerRemote);
-    const callbackRouter = new PageCallbackRouter();
-    BrowserProxyImpl.setInstance(
-        new BrowserProxyImpl(clustersHandler, callbackRouter));
+    const {instance: clustersProxy} =
+        historyClustersBrowserProxyFactory.createForTest(clustersHandler);
+    historyClustersBrowserProxyFactory.setInstance(clustersProxy);
 
     embeddingsHandler = TestMock.fromClass(HistoryEmbeddingsPageHandlerRemote);
-    HistoryEmbeddingsBrowserProxyImpl.setInstance(
-        new HistoryEmbeddingsBrowserProxyImpl(embeddingsHandler));
+    const {instance: embeddingsProxy} =
+        historyEmbeddingsBrowserProxyFactory.createForTest(embeddingsHandler);
+    historyEmbeddingsBrowserProxyFactory.setInstance(embeddingsProxy);
 
     loadTimeData.overrideValues({
       enableHistoryEmbeddings: true,
@@ -53,7 +54,11 @@ suite('HistoryClustersAppWithEmbeddingsTest', () => {
   }
 
   test('SwitchesSearchIcon', async () => {
-    assertEquals('history-embeddings:search', app.$.searchbox.iconOverride);
+    assertEquals(
+        loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'history-embeddings:search-spark' :
+            'history-embeddings:search-old',
+        app.$.searchbox.iconOverride);
 
     // Disable history embeddings and verify icon has switched.
     loadTimeData.overrideValues({enableHistoryEmbeddings: false});
@@ -130,7 +135,7 @@ suite('HistoryClustersAppWithEmbeddingsTest', () => {
     const embeddingsComponent = await forceEmbeddingsComponent();
     const mockItem = {
       title: 'Google',
-      url: {url: 'http://google.com'},
+      url: 'http://google.com',
       urlForDisplay: 'google.com',
       relativeTime: '2 hours ago',
       shortDateTime: 'Sept 2, 2022',
@@ -160,7 +165,7 @@ suite('HistoryClustersAppWithEmbeddingsTest', () => {
     const embeddingsComponent = await forceEmbeddingsComponent();
     const mockItem = {
       title: 'Google',
-      url: {url: 'http://google.com'},
+      url: 'http://google.com',
       urlForDisplay: 'google.com',
       relativeTime: '2 hours ago',
       shortDateTime: 'Sept 2, 2022',
@@ -187,7 +192,7 @@ suite('HistoryClustersAppWithEmbeddingsTest', () => {
     embeddingsComponent.dispatchEvent(new CustomEvent('remove-item-click', {
       detail: {
         title: 'Google',
-        url: {url: 'http://google.com'},
+        url: 'http://google.com',
         urlForDisplay: 'google.com',
         relativeTime: '2 hours ago',
         sourcePassage: 'Google description',
@@ -196,7 +201,7 @@ suite('HistoryClustersAppWithEmbeddingsTest', () => {
     }));
     const removeVisitArgs =
         await clustersHandler.whenCalled('removeVisitByUrlAndTime');
-    assertDeepEquals({url: 'http://google.com'}, removeVisitArgs[0]);
+    assertDeepEquals('http://google.com', removeVisitArgs[0]);
     assertEquals(1000, removeVisitArgs[1]);
   });
 

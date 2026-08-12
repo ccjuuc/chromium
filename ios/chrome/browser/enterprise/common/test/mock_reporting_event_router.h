@@ -9,10 +9,12 @@
 #import "components/enterprise/data_controls/core/browser/verdict.h"
 #import "components/safe_browsing/core/common/proto/csd.pb.h"
 #import "components/safe_browsing/core/common/proto/realtimeapi.pb.h"
-#import "ios/chrome/browser/enterprise/connectors/reporting/ios_realtime_reporting_client.h"
-#import "ios/chrome/browser/enterprise/connectors/reporting/ios_realtime_reporting_client_factory.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "testing/gmock/include/gmock/gmock.h"
+
+namespace enterprise_connectors {
+class IOSRealtimeReportingClient;
+}
 
 // Mock version for ReportingEventRouter.
 class MockReportingEventRouter
@@ -20,11 +22,19 @@ class MockReportingEventRouter
   using ReferrerChain =
       google::protobuf::RepeatedPtrField<safe_browsing::ReferrerChainEntry>;
 
+  using FrameUrlChain = google::protobuf::RepeatedPtrField<std::string>;
+
  public:
   explicit MockReportingEventRouter(
       enterprise_connectors::IOSRealtimeReportingClient* reporting_client);
   ~MockReportingEventRouter() override;
 
+  MOCK_METHOD(
+      void,
+      OnSensitiveDataEvent,
+      (const enterprise_connectors::ReportingEventRouter::SensitiveDataEvent&
+           event),
+      (override));
   MOCK_METHOD(void,
               OnUrlFilteringInterstitial,
               (const GURL& url,
@@ -41,6 +51,14 @@ class MockReportingEventRouter
               ReportPasteWarningBypassed,
               (const data_controls::ClipboardContext&,
                const data_controls::Verdict&),
+              (override));
+  MOCK_METHOD(void,
+              ReportPasteFromGemini,
+              (const GURL&,
+               const std::string&,
+               const data_controls::Verdict&,
+               int64_t,
+               bool),
               (override));
   MOCK_METHOD(void,
               ReportCopy,

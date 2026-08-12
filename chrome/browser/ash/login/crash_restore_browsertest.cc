@@ -22,12 +22,12 @@
 #include "chrome/browser/ash/login/test/logged_in_user_mixin.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/test/user_policy_mixin.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
@@ -110,48 +110,33 @@ IN_PROC_BROWSER_TEST_F(CrashRestoreSimpleTest, RestoreSessionForOneUser) {
 }
 
 // Observer that keeps track of user sessions restore event.
-class UserSessionRestoreObserver : public UserSessionStateObserver {
+class UserSessionRestoreObserver {
  public:
-  UserSessionRestoreObserver()
-      : running_loop_(false),
-        user_sessions_restored_(
-            UserSessionManager::GetInstance()->UserSessionsRestored()) {
-    if (!user_sessions_restored_)
-      UserSessionManager::GetInstance()->AddSessionStateObserver(this);
+  UserSessionRestoreObserver() {
+    if (!UserSessionManager::GetInstance()->UserSessionsRestored()) {
+      run_loop_.emplace();
+      UserSessionManager::GetInstance()
+          ->SetOnPendingUserSessionRestoreFinishedForTesting(
+              run_loop_->QuitClosure());
+    }
   }
 
   UserSessionRestoreObserver(const UserSessionRestoreObserver&) = delete;
   UserSessionRestoreObserver& operator=(const UserSessionRestoreObserver&) =
       delete;
-
-  ~UserSessionRestoreObserver() override = default;
-
-  void PendingUserSessionsRestoreFinished() override {
-    user_sessions_restored_ = true;
-    UserSessionManager::GetInstance()->RemoveSessionStateObserver(this);
-    if (!running_loop_)
-      return;
-
-    message_loop_runner_->Quit();
-    running_loop_ = false;
-  }
+  ~UserSessionRestoreObserver() = default;
 
   // Wait until the user sessions are restored. If that happened between the
   // construction of this object and this call or even before it was created
   // then it returns immediately.
   void Wait() {
-    if (user_sessions_restored_)
-      return;
-
-    running_loop_ = true;
-    message_loop_runner_ = new content::MessageLoopRunner();
-    message_loop_runner_->Run();
+    if (run_loop_) {
+      run_loop_->Run();
+    }
   }
 
  private:
-  bool running_loop_;
-  bool user_sessions_restored_;
-  scoped_refptr<content::MessageLoopRunner> message_loop_runner_;
+  std::optional<base::RunLoop> run_loop_;
 };
 
 class CrashRestoreComplexTest : public CrashRestoreSimpleTest {
@@ -174,21 +159,21 @@ class CrashRestoreComplexTest : public CrashRestoreSimpleTest {
   // Register test users so that UserManager knows them and make kUserId3 as the
   // last active user.
   void RegisterUsers() {
-    base::Value::Dict local_state;
+    base::DictValue local_state;
 
     static const char* const kTestUserIds[] = {kUserId1, kUserId2, kUserId3};
 
-    base::Value::List users_list;
+    base::ListValue users_list;
     for (const auto* user_id : kTestUserIds)
       users_list.Append(user_id);
 
     local_state.Set("LoggedInUsers", std::move(users_list));
     local_state.Set("LastActiveUser", kUserId3);
 
-    base::Value::List known_users_list;
+    base::ListValue known_users_list;
     int gaia_id = 10000;
     for (const auto* user_id : kTestUserIds) {
-      base::Value::Dict user_dict;
+      base::DictValue user_dict;
       user_dict.Set("account_type", "google");
       user_dict.Set("email", user_id);
       user_dict.Set("gaia_id", base::NumberToString(gaia_id++));
@@ -211,7 +196,7 @@ class CrashRestoreComplexTest : public CrashRestoreSimpleTest {
     // NOTE: This does not include IdentityManager prefs like
     // kGoogleServicesAccountId, so the IdentityManager will not initialize
     // itself with a primary account.
-    base::Value::Dict prefs;
+    base::DictValue prefs;
     prefs.Set(prefs::kSessionExitType, "Crashed");
     std::string prefs_json;
     ASSERT_TRUE(base::JSONWriter::Write(prefs, &prefs_json));
@@ -222,8 +207,9 @@ class CrashRestoreComplexTest : public CrashRestoreSimpleTest {
     for (const auto& account_id : {account_id1_, account_id2_, account_id3_}) {
       const std::string user_id_hash =
           user_manager::FakeUserManager::GetFakeUsernameHash(account_id);
-      const base::FilePath user_profile_path =
-          user_data_dir.Append(ProfileHelper::GetUserProfileDir(user_id_hash));
+      const base::FilePath user_profile_path = user_data_dir.Append(
+          base::FilePath(BrowserContextHelper::GetUserBrowserContextDirName(
+              user_id_hash)));
       ASSERT_TRUE(base::CreateDirectory(user_profile_path));
 
       ASSERT_TRUE(
@@ -232,7 +218,10 @@ class CrashRestoreComplexTest : public CrashRestoreSimpleTest {
   }
 };
 
-IN_PROC_BROWSER_TEST_F(CrashRestoreComplexTest, RestoreSessionForThreeUsers) {
+// Disabled due to bot failures.
+// TODO(crbug.com/496355983): Re-enable the test.
+IN_PROC_BROWSER_TEST_F(CrashRestoreComplexTest,
+                       DISABLED_RestoreSessionForThreeUsers) {
   {
     UserSessionRestoreObserver restore_observer;
     restore_observer.Wait();

@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 
+#include <ostream>
 #include <tuple>
 #include <vector>
 
@@ -70,6 +71,10 @@ struct OmniboxPopupSelection {
     // their links still need to be tab-accessible, so this state is available
     // when such a match has an IPH URL link.
     FOCUSED_IPH_LINK,
+
+    // CTRL_ENTER state means that the user triggered Ctrl+Enter on this
+    // suggestion.
+    CTRL_ENTER,
 
     // Whenever new line state is added, accessibility label for current
     // selection should be revisited
@@ -150,5 +155,11 @@ struct OmniboxPopupSelection {
       bool aim_button_visible,
       Step step);
 };
+
+#if DCHECK_ALWAYS_ON
+std::ostream& operator<<(std::ostream& os, const OmniboxPopupSelection& s);
+std::ostream& operator<<(std::ostream& os,
+                         const std::vector<OmniboxPopupSelection>& ss);
+#endif
 
 #endif  // COMPONENTS_OMNIBOX_BROWSER_OMNIBOX_POPUP_SELECTION_H_

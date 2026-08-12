@@ -6,7 +6,6 @@
 
 #include <cstddef>
 
-#include "base/containers/contains.h"
 #include "base/json/json_writer.h"
 #include "base/json/values_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -19,9 +18,9 @@
 #include "components/enterprise/connectors/core/reporting_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_client.h"
-#include "components/policy/core/common/cloud/realtime_reporting_job_configuration.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/proto/cloud_policy.pb.h"
+#include "components/policy/test_support/embedded_policy_test_server.h"
 #include "components/policy/test_support/policy_storage.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -32,15 +31,15 @@ namespace {
 
 using base::test::EqualsProto;
 
-base::Value::List CreateOptInEventsList(
-    const std::map<std::string, std::vector<std::string>>&
+base::ListValue CreateOptInEventsList(
+    const base::flat_map<std::string, std::vector<std::string>>&
         enabled_opt_in_events) {
-  base::Value::List enabled_opt_in_events_list;
+  base::ListValue enabled_opt_in_events_list;
   for (const auto& enabled_opt_in_event : enabled_opt_in_events) {
-    base::Value::Dict event_value;
+    base::DictValue event_value;
     event_value.Set(kKeyOptInEventName, enabled_opt_in_event.first);
 
-    base::Value::List url_patterns_list;
+    base::ListValue url_patterns_list;
     for (const auto& url_pattern : enabled_opt_in_event.second) {
       url_patterns_list.Append(url_pattern);
     }
@@ -51,15 +50,15 @@ base::Value::List CreateOptInEventsList(
   return enabled_opt_in_events_list;
 }
 
-base::Value::Dict CreateSecurityEventReportingSettings(
-    const std::set<std::string>& enabled_event_names,
-    const std::map<std::string, std::vector<std::string>>&
+base::DictValue CreateSecurityEventReportingSettings(
+    const base::flat_set<std::string>& enabled_event_names,
+    const base::flat_map<std::string, std::vector<std::string>>&
         enabled_opt_in_events) {
-  base::Value::Dict settings;
+  base::DictValue settings;
 
   settings.Set(kKeyServiceProvider, base::Value("google"));
   if (!enabled_event_names.empty()) {
-    base::Value::List enabled_event_name_list;
+    base::ListValue enabled_event_name_list;
     for (const auto& enabled_event_name : enabled_event_names) {
       enabled_event_name_list.Append(enabled_event_name);
     }
@@ -74,35 +73,13 @@ base::Value::Dict CreateSecurityEventReportingSettings(
   return settings;
 }
 
-constexpr char kKeyURL[] = "url";
-constexpr char kKeyEventResult[] = "eventResult";
-constexpr char kKeyTriggeredRuleInfo[] = "triggeredRuleInfo";
-constexpr char kKeyTriggeredRuleName[] = "ruleName";
-constexpr char kKeyTriggeredRuleId[] = "ruleId";
-constexpr char kKeyUrlCategory[] = "urlCategory";
-constexpr char kKeyUserName[] = "userName";
-constexpr char kKeyAction[] = "action";
-constexpr char kKeyHasWatermarking[] = "hasWatermarking";
-constexpr char kKeyIsFederated[] = "isFederated";
-constexpr char kKeyIsPhishingUrl[] = "isPhishingUrl";
-constexpr char kKeyFederatedOrigin[] = "federatedOrigin";
-constexpr char kKeyProfileIdentifier[] = "profileIdentifier";
-constexpr char kKeyProfileUserName[] = "profileUserName";
-constexpr char kKeyLoginUserName[] = "loginUserName";
-constexpr char kKeyTrigger[] = "trigger";
-constexpr char kKeyPasswordBreachIdentities[] = "identities";
-constexpr char kKeyPasswordBreachIdentitiesUsername[] = "username";
-constexpr char kKeyPasswordBreachIdentitiesUrl[] = "url";
-constexpr char kReferrers[] = "referrers";
-constexpr char kKeyIp[] = "ip";
-
 }  // namespace
 
 void SetOnSecurityEventReporting(
     PrefService* prefs,
     bool enabled,
-    const std::set<std::string>& enabled_event_names,
-    const std::map<std::string, std::vector<std::string>>&
+    const base::flat_set<std::string>& enabled_event_names,
+    const base::flat_map<std::string, std::vector<std::string>>&
         enabled_opt_in_events,
     bool machine_scope) {
   ScopedListPrefUpdate settings_list(prefs, kOnSecurityEventPref);
@@ -122,7 +99,8 @@ void SetOnSecurityEventReporting(
 
 ::chrome::cros::reporting::proto::TriggeredRuleInfo MakeTriggeredRuleInfo(
     ::chrome::cros::reporting::proto::TriggeredRuleInfo::Action action,
-    bool has_watermark) {
+    bool has_watermark,
+    bool has_screenshot_protection) {
   ::chrome::cros::reporting::proto::TriggeredRuleInfo info;
   info.set_action(action);
   info.set_rule_id(123);
@@ -130,6 +108,9 @@ void SetOnSecurityEventReporting(
   info.set_url_category("test rule category");
   if (has_watermark) {
     info.set_has_watermarking(true);
+  }
+  if (has_screenshot_protection) {
+    info.set_has_screenshot_protection(true);
   }
   return info;
 }
@@ -155,15 +136,15 @@ safe_browsing::ReferrerChainEntry MakeReferrerChainEntry() {
 
 std::unique_ptr<policy::EmbeddedPolicyTestServer>
 CreatePolicyTestServerForSecurityEvents(
-    const std::set<std::string>& enabled_event_names,
-    const std::map<std::string, std::vector<std::string>>&
+    const base::flat_set<std::string>& enabled_event_names,
+    const base::flat_map<std::string, std::vector<std::string>>&
         enabled_opt_in_events) {
 #if BUILDFLAG(IS_FUCHSIA)
   // Policy is not supported for Fuchsia yet.
   return nullptr;
 #else
-  base::Value::List reporting_settings =
-      base::Value::List().Append(CreateSecurityEventReportingSettings(
+  base::ListValue reporting_settings =
+      base::ListValue().Append(CreateSecurityEventReportingSettings(
           enabled_event_names, enabled_opt_in_events));
   std::optional<std::string> reporting_settings_payload =
       base::WriteJson(reporting_settings);
@@ -195,15 +176,10 @@ EventReportValidatorBase::~EventReportValidatorBase() {
 }
 
 void EventReportValidatorBase::ExpectNoReport() {
-  if (base::FeatureList::IsEnabled(
-          policy::kUploadRealtimeReportingEventsUsingProto)) {
-    EXPECT_CALL(*client_, UploadSecurityEvent).Times(0);
-  } else {
-    EXPECT_CALL(*client_, UploadSecurityEventReport).Times(0);
-  }
+  EXPECT_CALL(*client_, UploadSecurityEvent).Times(0);
 }
 
-void EventReportValidatorBase::ExpectProtoBasedUrlFilteringInterstitialEvent(
+void EventReportValidatorBase::ExpectUrlFilteringInterstitialEvent(
     chrome::cros::reporting::proto::UrlFilteringInterstitialEvent
         expected_urlf_event) {
   EXPECT_CALL(*client_, UploadSecurityEvent)
@@ -211,8 +187,7 @@ void EventReportValidatorBase::ExpectProtoBasedUrlFilteringInterstitialEvent(
           [this, expected_urlf_event](
               bool include_device_info,
               ::chrome::cros::reporting::proto::UploadEventsRequest request,
-              base::OnceCallback<void(policy::CloudPolicyClient::Result)>
-                  callback) {
+              policy::CloudPolicyClient::ResultCallback callback) {
             // There should only be 1 event per test.
             ASSERT_EQ(1, request.events_size());
             ASSERT_TRUE(
@@ -227,138 +202,8 @@ void EventReportValidatorBase::ExpectProtoBasedUrlFilteringInterstitialEvent(
           });
 }
 
-void EventReportValidatorBase::ExpectURLFilteringInterstitialEvent(
-    chrome::cros::reporting::proto::UrlFilteringInterstitialEvent
-        expected_urlf_event) {
-  EXPECT_CALL(*client_, UploadSecurityEventReport)
-      .WillOnce([this, expected_urlf_event](
-                    bool include_device_info, base::Value::Dict report,
-                    base::OnceCallback<void(policy::CloudPolicyClient::Result)>
-                        callback) {
-        // Extract the event list.
-        const base::Value::List* event_list = report.FindList(
-            policy::RealtimeReportingJobConfiguration::kEventListKey);
-        ASSERT_TRUE(event_list);
-
-        // There should only be 1 event per test.
-        ASSERT_EQ(1u, event_list->size());
-        const base::Value::Dict& wrapper = (*event_list)[0].GetDict();
-        const base::Value::Dict* event = wrapper.FindDict(
-            enterprise_connectors::kKeyUrlFilteringInterstitialEvent);
-        ASSERT_TRUE(event);
-
-        ValidateField(event, kKeyURL, expected_urlf_event.url());
-        ValidateField(event, kKeyEventResult,
-                      chrome::cros::reporting::proto::EventResult_Name(
-                          expected_urlf_event.event_result()));
-        ValidateField(event, kKeyProfileIdentifier,
-                      expected_urlf_event.profile_identifier());
-        const base::Value::List* triggered_rules =
-            event->FindList(kKeyTriggeredRuleInfo);
-        ASSERT_TRUE(triggered_rules);
-        ASSERT_EQ(base::checked_cast<size_t>(
-                      expected_urlf_event.triggered_rule_info_size()),
-                  triggered_rules->size());
-        for (size_t i = 0; i < triggered_rules->size(); ++i) {
-          const base::Value::Dict& rule = (*triggered_rules)[i].GetDict();
-          ValidateThreatInfo(&rule, expected_urlf_event.triggered_rule_info(i));
-        }
-        if (!done_closure_.is_null()) {
-          done_closure_.Run();
-        }
-      });
-}
-
-void EventReportValidatorBase::ExpectURLFilteringInterstitialEventWithReferrers(
-    chrome::cros::reporting::proto::UrlFilteringInterstitialEvent
-        expected_urlf_event) {
-  EXPECT_CALL(*client_, UploadSecurityEventReport)
-      .WillOnce([this, expected_urlf_event](
-                    bool include_device_info, base::Value::Dict report,
-                    base::OnceCallback<void(policy::CloudPolicyClient::Result)>
-                        callback) {
-        // Extract the event list.
-        const base::Value::List* event_list = report.FindList(
-            policy::RealtimeReportingJobConfiguration::kEventListKey);
-        ASSERT_TRUE(event_list);
-
-        // There should only be 1 event per test.
-        ASSERT_EQ(1u, event_list->size());
-        const base::Value::Dict& wrapper = (*event_list)[0].GetDict();
-        const base::Value::Dict* event = wrapper.FindDict(
-            enterprise_connectors::kKeyUrlFilteringInterstitialEvent);
-        ASSERT_TRUE(event);
-
-        ValidateField(event, kKeyURL, expected_urlf_event.url());
-        ValidateField(event, kKeyEventResult,
-                      chrome::cros::reporting::proto::EventResult_Name(
-                          expected_urlf_event.event_result()));
-        ValidateField(event, kKeyProfileIdentifier,
-                      expected_urlf_event.profile_identifier());
-        const base::Value::List* triggered_rules =
-            event->FindList(kKeyTriggeredRuleInfo);
-        ASSERT_TRUE(triggered_rules);
-        ASSERT_EQ(base::checked_cast<size_t>(
-                      expected_urlf_event.triggered_rule_info_size()),
-                  triggered_rules->size());
-        for (size_t i = 0; i < triggered_rules->size(); ++i) {
-          const base::Value::Dict& rule = (*triggered_rules)[i].GetDict();
-          ValidateThreatInfo(&rule, expected_urlf_event.triggered_rule_info(i));
-        }
-        const base::Value::List* referrers = event->FindList(kReferrers);
-        ASSERT_TRUE(referrers);
-        for (size_t i = 0; i < referrers->size(); ++i) {
-          const base::Value::Dict& referrer = (*referrers)[i].GetDict();
-          ValidateReferrer(&referrer, expected_urlf_event.referrers(i));
-        }
-        if (!done_closure_.is_null()) {
-          done_closure_.Run();
-        }
-      });
-}
-
 void EventReportValidatorBase::SetDoneClosure(base::RepeatingClosure closure) {
   done_closure_ = std::move(closure);
-}
-
-void EventReportValidatorBase::ExpectLoginEvent(
-    const std::string& expected_url,
-    const bool expected_is_federated,
-    const std::string& expected_federated_origin,
-    const std::string& expected_profile_username,
-    const std::string& expected_profile_identifier,
-    const std::u16string& expected_login_username) {
-  EXPECT_CALL(*client_, UploadSecurityEventReport)
-      .WillOnce([this, expected_url, expected_is_federated,
-                 expected_federated_origin, expected_profile_username,
-                 expected_profile_identifier, expected_login_username](
-                    bool include_device_info, base::Value::Dict report,
-                    base::OnceCallback<void(policy::CloudPolicyClient::Result)>
-                        callback) {
-        // Extract the event list.
-        const base::Value::List* event_list = report.FindList(
-            policy::RealtimeReportingJobConfiguration::kEventListKey);
-        ASSERT_TRUE(event_list);
-
-        // There should only be 1 event per test.
-        ASSERT_EQ(1u, event_list->size());
-        const base::Value::Dict& wrapper = (*event_list)[0].GetDict();
-        const base::Value::Dict* event =
-            wrapper.FindDict(enterprise_connectors::kKeyLoginEvent);
-        ASSERT_TRUE(event);
-
-        ValidateField(event, kKeyURL, expected_url);
-        ValidateField(event, kKeyIsFederated, expected_is_federated);
-        ValidateFederatedOrigin(event, expected_federated_origin);
-        ValidateField(event, kKeyProfileUserName, expected_profile_username);
-        ValidateField(event, kKeyProfileIdentifier,
-                      expected_profile_identifier);
-        ValidateField(event, kKeyLoginUserName, expected_login_username);
-
-        if (!done_closure_.is_null()) {
-          done_closure_.Run();
-        }
-      });
 }
 
 void EventReportValidatorBase::ExpectLoginEvent(
@@ -368,8 +213,7 @@ void EventReportValidatorBase::ExpectLoginEvent(
           [this, expected_login_event](
               bool include_device_info,
               ::chrome::cros::reporting::proto::UploadEventsRequest request,
-              base::OnceCallback<void(policy::CloudPolicyClient::Result)>
-                  callback) {
+              policy::CloudPolicyClient::ResultCallback callback) {
             // There should only be 1 event per test.
             ASSERT_EQ(1, request.events_size());
             ASSERT_TRUE(request.events().Get(0).has_login_event());
@@ -390,8 +234,7 @@ void EventReportValidatorBase::ExpectSecurityInterstitialEvent(
           [this, expected_interstitial_event](
               bool include_device_info,
               ::chrome::cros::reporting::proto::UploadEventsRequest request,
-              base::OnceCallback<void(policy::CloudPolicyClient::Result)>
-                  callback) {
+              policy::CloudPolicyClient::ResultCallback callback) {
             // There should only be 1 event per test.
             ASSERT_EQ(1, request.events_size());
             ASSERT_TRUE(request.events().Get(0).has_interstitial_event());
@@ -407,41 +250,6 @@ void EventReportValidatorBase::ExpectSecurityInterstitialEvent(
 }
 
 void EventReportValidatorBase::ExpectPasswordBreachEvent(
-    const std::string& expected_trigger,
-    const std::vector<std::pair<std::string, std::u16string>>&
-        expected_identities,
-    const std::string& expected_profile_username,
-    const std::string& expected_profile_identifier) {
-  EXPECT_CALL(*client_, UploadSecurityEventReport)
-      .WillOnce([this, expected_trigger, expected_identities,
-                 expected_profile_username, expected_profile_identifier](
-                    bool include_device_info, base::Value::Dict report,
-                    base::OnceCallback<void(policy::CloudPolicyClient::Result)>
-                        callback) {
-        // Extract the event list.
-        const base::Value::List* event_list = report.FindList(
-            policy::RealtimeReportingJobConfiguration::kEventListKey);
-        ASSERT_TRUE(event_list);
-
-        // There should only be 1 event per test.
-        ASSERT_EQ(1u, event_list->size());
-        const base::Value::Dict& wrapper = (*event_list)[0].GetDict();
-        const base::Value::Dict* event =
-            wrapper.FindDict(enterprise_connectors::kKeyPasswordBreachEvent);
-        ASSERT_TRUE(event);
-
-        ValidateField(event, kKeyTrigger, expected_trigger);
-        ValidateIdentities(event, std::move(expected_identities));
-        ValidateField(event, kKeyProfileUserName, expected_profile_username);
-        ValidateField(event, kKeyProfileIdentifier,
-                      expected_profile_identifier);
-        if (!done_closure_.is_null()) {
-          done_closure_.Run();
-        }
-      });
-}
-
-void EventReportValidatorBase::ExpectPasswordBreachEvent(
     chrome::cros::reporting::proto::PasswordBreachEvent
         expected_password_breach_event) {
   EXPECT_CALL(*client_, UploadSecurityEvent)
@@ -449,8 +257,7 @@ void EventReportValidatorBase::ExpectPasswordBreachEvent(
           [this, expected_password_breach_event](
               bool include_device_info,
               ::chrome::cros::reporting::proto::UploadEventsRequest request,
-              base::OnceCallback<void(policy::CloudPolicyClient::Result)>
-                  callback) {
+              policy::CloudPolicyClient::ResultCallback callback) {
             // There should only be 1 event per test.
             ASSERT_EQ(1, request.events_size());
             ASSERT_TRUE(request.events().Get(0).has_password_breach_event());
@@ -465,44 +272,6 @@ void EventReportValidatorBase::ExpectPasswordBreachEvent(
           });
 }
 
-void EventReportValidatorBase::ExpectPasswordReuseEvent(
-    const std::string& expected_url,
-    const std::string& expected_username,
-    bool expected_is_phishing_url,
-    const std::string& event_result,
-    const std::string& expected_profile_username,
-    const std::string& expected_profile_identifier) {
-  EXPECT_CALL(*client_, UploadSecurityEventReport)
-      .WillOnce([this, expected_url, expected_username,
-                 expected_is_phishing_url, event_result,
-                 expected_profile_username, expected_profile_identifier](
-                    bool include_device_info, base::Value::Dict report,
-                    base::OnceCallback<void(policy::CloudPolicyClient::Result)>
-                        callback) {
-        // Extract the event list.
-        const base::Value::List* event_list = report.FindList(
-            policy::RealtimeReportingJobConfiguration::kEventListKey);
-        ASSERT_TRUE(event_list);
-
-        // There should only be 1 event per test.
-        ASSERT_EQ(1u, event_list->size());
-        const base::Value::Dict& wrapper = (*event_list)[0].GetDict();
-        const base::Value::Dict* event =
-            wrapper.FindDict(enterprise_connectors::kKeyPasswordReuseEvent);
-        ASSERT_TRUE(event);
-
-        ValidateField(event, kKeyURL, expected_url);
-        ValidateField(event, kKeyUserName, expected_username);
-        ValidateField(event, kKeyIsPhishingUrl, expected_is_phishing_url);
-        ValidateField(event, kKeyEventResult, event_result);
-        ValidateField(event, kKeyProfileUserName, expected_profile_username);
-        ValidateField(event, kKeyProfileIdentifier,
-                      expected_profile_identifier);
-        if (!done_closure_.is_null()) {
-          done_closure_.Run();
-        }
-      });
-}
 void EventReportValidatorBase::ExpectPasswordChangedEvent(
     chrome::cros::reporting::proto::SafeBrowsingPasswordChangedEvent
         expected_password_changed_event) {
@@ -511,8 +280,7 @@ void EventReportValidatorBase::ExpectPasswordChangedEvent(
           [this, expected_password_changed_event](
               bool include_device_info,
               ::chrome::cros::reporting::proto::UploadEventsRequest request,
-              base::OnceCallback<void(policy::CloudPolicyClient::Result)>
-                  callback) {
+              policy::CloudPolicyClient::ResultCallback callback) {
             // There should only be 1 event per test.
             ASSERT_EQ(1, request.events_size());
             ASSERT_TRUE(request.events().Get(0).has_password_changed_event());
@@ -534,8 +302,7 @@ void EventReportValidatorBase::ExpectPasswordReuseEvent(
           [this, expected_password_reuse_event](
               bool include_device_info,
               ::chrome::cros::reporting::proto::UploadEventsRequest request,
-              base::OnceCallback<void(policy::CloudPolicyClient::Result)>
-                  callback) {
+              policy::CloudPolicyClient::ResultCallback callback) {
             // There should only be 1 event per test.
             ASSERT_EQ(1, request.events_size());
             ASSERT_TRUE(request.events().Get(0).has_password_reuse_event());
@@ -549,133 +316,6 @@ void EventReportValidatorBase::ExpectPasswordReuseEvent(
           });
 }
 
-void EventReportValidatorBase::ExpectPassowrdChangedEvent(
-    const std::string& expected_username,
-    const std::string& expected_profile_username,
-    const std::string& expected_profile_identifier) {
-  EXPECT_CALL(*client_, UploadSecurityEventReport)
-      .WillOnce([this, expected_username, expected_profile_username,
-                 expected_profile_identifier](
-                    bool include_device_info, base::Value::Dict report,
-                    base::OnceCallback<void(policy::CloudPolicyClient::Result)>
-                        callback) {
-        // Extract the event list.
-        const base::Value::List* event_list = report.FindList(
-            policy::RealtimeReportingJobConfiguration::kEventListKey);
-        ASSERT_TRUE(event_list);
-
-        // There should only be 1 event per test.
-        ASSERT_EQ(1u, event_list->size());
-        const base::Value::Dict& wrapper = (*event_list)[0].GetDict();
-        const base::Value::Dict* event =
-            wrapper.FindDict(enterprise_connectors::kKeyPasswordChangedEvent);
-        ASSERT_TRUE(event);
-
-        ValidateField(event, kKeyUserName, expected_username);
-        ValidateField(event, kKeyProfileUserName, expected_profile_username);
-        ValidateField(event, kKeyProfileIdentifier,
-                      expected_profile_identifier);
-        if (!done_closure_.is_null()) {
-          done_closure_.Run();
-        }
-      });
-}
-
-void EventReportValidatorBase::ExpectSecurityInterstitialEventWithReferrers(
-    const std::string& expected_url,
-    const std::string& expected_reason,
-    const std::string& expected_profile_username,
-    const std::string& expected_profile_identifier,
-    const std::string& result,
-    const bool expected_click_through,
-    int expected_net_error_code,
-    const ::chrome::cros::reporting::proto::UrlInfo& expected_referrers) {
-  EXPECT_CALL(*client_, UploadSecurityEventReport)
-      .WillOnce([this, expected_url, expected_reason, expected_profile_username,
-                 expected_profile_identifier, result, expected_click_through,
-                 expected_net_error_code, expected_referrers](
-                    bool include_device_info, base::Value::Dict report,
-                    base::OnceCallback<void(policy::CloudPolicyClient::Result)>
-                        callback) {
-        // Extract the event list.
-        const base::Value::List* event_list = report.FindList(
-            policy::RealtimeReportingJobConfiguration::kEventListKey);
-        ASSERT_TRUE(event_list);
-
-        // There should only be 1 event per test.
-        ASSERT_EQ(1u, event_list->size());
-        const base::Value::Dict& wrapper = (*event_list)[0].GetDict();
-        const base::Value::Dict* event =
-            wrapper.FindDict(enterprise_connectors::kKeyInterstitialEvent);
-        ASSERT_TRUE(event);
-
-        ValidateField(event, kKeyURL, expected_url);
-        ValidateField(event, kKeyReason, expected_reason);
-        ValidateField(event, kKeyNetErrorCode, expected_net_error_code);
-        ValidateField(event, kKeyClickedThrough, expected_click_through);
-        ValidateField(event, kKeyProfileUserName, expected_profile_username);
-        ValidateField(event, kKeyProfileIdentifier,
-                      expected_profile_identifier);
-        ValidateField(event, kKeyEventResult, result);
-        const base::Value::List* referrers = event->FindList(kReferrers);
-        ASSERT_TRUE(referrers);
-        for (const auto& referrer : *referrers) {
-          ValidateReferrer(&referrer.GetDict(), expected_referrers);
-        }
-        if (!done_closure_.is_null()) {
-          done_closure_.Run();
-        }
-      });
-}
-
-#if BUILDFLAG(ENTERPRISE_DATA_CONTROLS)
-void EventReportValidatorBase::ExpectDataControlsSensitiveDataEvent(
-    const std::string& expected_url,
-    const std::string& expected_tab_url,
-    const std::string& expected_source,
-    const std::string& expected_destination,
-    const std::set<std::string>* expected_mimetypes,
-    const std::string& expected_trigger,
-    const data_controls::Verdict::TriggeredRules& expected_triggered_rules,
-    const std::string& expected_result,
-    const std::string& expected_profile_username,
-    const std::string& expected_profile_identifier,
-    int64_t expected_content_size) {
-  EXPECT_CALL(*client_, UploadSecurityEventReport)
-      .WillOnce([this, expected_url, expected_tab_url, expected_source,
-                 expected_destination, expected_mimetypes, expected_trigger,
-                 expected_triggered_rules, expected_result,
-                 expected_profile_username, expected_profile_identifier,
-                 expected_content_size](
-                    bool include_device_info, base::Value::Dict report,
-                    base::OnceCallback<void(policy::CloudPolicyClient::Result)>
-                        callback) {
-        const base::Value::List* event_list = report.FindList(
-            policy::RealtimeReportingJobConfiguration::kEventListKey);
-        ASSERT_TRUE(event_list);
-        // There should only be 1 event per test.
-        ASSERT_EQ(1u, event_list->size());
-        const base::Value::Dict& wrapper = (*event_list)[0].GetDict();
-        const base::Value::Dict* event =
-            wrapper.FindDict(enterprise_connectors::kKeySensitiveDataEvent);
-        ASSERT_TRUE(event);
-
-        ValidateField(event, kKeyURL, expected_url);
-        ValidateField(event, kKeyTabUrl, expected_tab_url);
-        ValidateField(event, kKeySource, expected_source);
-        ValidateField(event, kKeyDestination, expected_destination);
-        ValidateMimeType(event, expected_mimetypes);
-        ValidateDataControlsTriggerdRules(event, expected_triggered_rules);
-        ValidateField(event, kKeyTrigger, expected_trigger);
-        ValidateField(event, kKeyContentSize, expected_content_size);
-
-        if (!done_closure_.is_null()) {
-          done_closure_.Run();
-        }
-      });
-}
-#endif  // BUILDFLAG(ENTERPRISE_DATA_CONTROLS)
-
 void EventReportValidatorBase::ExpectSensitiveDataEvent(
     chrome::cros::reporting::proto::DlpSensitiveDataEvent
         expected_sensitive_data_event) {
@@ -684,8 +324,7 @@ void EventReportValidatorBase::ExpectSensitiveDataEvent(
           [this, expected_sensitive_data_event](
               bool include_device_info,
               ::chrome::cros::reporting::proto::UploadEventsRequest request,
-              base::OnceCallback<void(policy::CloudPolicyClient::Result)>
-                  callback) {
+              policy::CloudPolicyClient::ResultCallback callback) {
             // There should only be 1 event per test.
             ASSERT_EQ(1, request.events_size());
             ASSERT_TRUE(request.events().Get(0).has_sensitive_data_event());
@@ -700,218 +339,6 @@ void EventReportValidatorBase::ExpectSensitiveDataEvent(
           });
 }
 
-void EventReportValidatorBase::ValidateField(
-    const base::Value::Dict* value,
-    const std::string& field_key,
-    const std::optional<std::string>& expected_value) {
-  if (expected_value.has_value()) {
-    ASSERT_TRUE(value->FindString(field_key))
-        << "Mismatch in field " << field_key << "\nNo value was set"
-        << "\nExpected value: " << expected_value.value();
-    ASSERT_EQ(*value->FindString(field_key), expected_value.value())
-        << "Mismatch in field " << field_key
-        << "\nActual value: " << value->FindString(field_key)
-        << "\nExpected value: " << expected_value.value();
-  } else {
-    ASSERT_EQ(nullptr, value->FindString(field_key))
-        << "Field " << field_key << " should not be populated. It has value "
-        << *value->FindString(field_key);
-  }
-}
 
-void EventReportValidatorBase::ValidateField(
-    const base::Value::Dict* value,
-    const std::string& field_key,
-    const std::optional<std::u16string>& expected_value) {
-  const std::string* s = value->FindString(field_key);
-  if (expected_value.has_value()) {
-    ASSERT_TRUE(s) << "Mismatch in field " << field_key << "\nNo value was set"
-                   << "\nExpected value: " << expected_value.value();
-
-    const std::u16string actual_string_value = base::UTF8ToUTF16(*s);
-    ASSERT_EQ(actual_string_value, expected_value.value())
-        << "Mismatch in field " << field_key
-        << "\nActual value: " << actual_string_value
-        << "\nExpected value: " << expected_value.value();
-  } else {
-    ASSERT_EQ(nullptr, s) << "Field " << field_key
-                          << " should not be populated. It has value "
-                          << *value->FindString(field_key);
-  }
-}
-
-void EventReportValidatorBase::ValidateField(
-    const base::Value::Dict* value,
-    const std::string& field_key,
-    const std::optional<int>& expected_value) {
-  if (expected_value.has_value()) {
-    ASSERT_TRUE(value->FindInt(field_key).has_value())
-        << "Mismatch in field " << field_key << "\nNo value was set"
-        << "\nExpected value: " << expected_value.value();
-    ASSERT_EQ(value->FindInt(field_key), expected_value)
-        << "Mismatch in field " << field_key
-        << "\nActual value: " << value->FindInt(field_key).value()
-        << "\nExpected value: " << expected_value.value();
-  } else {
-    ASSERT_FALSE(value->FindInt(field_key).has_value())
-        << "Field " << field_key << " should not be populated. It has value "
-        << *value->FindInt(field_key);
-  }
-}
-
-void EventReportValidatorBase::ValidateField(const base::Value::Dict* value,
-                                             const std::string& field_key,
-                                             int expected_value) {
-  ASSERT_TRUE(value->FindInt(field_key).has_value())
-      << "Mismatch in field " << field_key << "\nNo value was set"
-      << "\nExpected value: " << expected_value;
-  ASSERT_EQ(value->FindInt(field_key), expected_value)
-      << "Mismatch in field " << field_key
-      << "\nActual value: " << value->FindInt(field_key).value()
-      << "\nExpected value: " << expected_value;
-}
-
-void EventReportValidatorBase::ValidateField(const base::Value::Dict* value,
-                                             const std::string& field_key,
-                                             bool expected_value) {
-  ASSERT_TRUE(value->FindBool(field_key).has_value())
-      << "Mismatch in field " << field_key << "\nNo value was set"
-      << "\nExpected value: " << expected_value;
-  ASSERT_EQ(value->FindBool(field_key), expected_value)
-      << "Mismatch in field " << field_key
-      << "\nActual value: " << value->FindBool(field_key).value()
-      << "\nExpected value: " << expected_value;
-}
-
-void EventReportValidatorBase::ValidateField(const base::Value::Dict* value,
-                                             const std::string& field_key,
-                                             int64_t expected_value) {
-  ASSERT_TRUE(base::ValueToInt64(value->Find(field_key)).has_value())
-      << "Mismatch in field " << field_key << "\nNo value was set"
-      << "\nExpected value: " << expected_value;
-  ASSERT_EQ(base::ValueToInt64(value->Find(field_key)).value(), expected_value)
-      << "Mismatch in field " << field_key << "\nActual value: "
-      << base::ValueToInt64(value->Find(field_key)).value()
-      << "\nExpected value: " << expected_value;
-}
-
-void EventReportValidatorBase::ValidateThreatInfo(
-    const base::Value::Dict* value,
-    const chrome::cros::reporting::proto::TriggeredRuleInfo
-        expected_rule_info) {
-  ValidateField(value, kKeyTriggeredRuleName, expected_rule_info.rule_name());
-  ValidateField(value, kKeyTriggeredRuleId,
-                std::optional<int>(expected_rule_info.rule_id()));
-  ValidateField(value, kKeyUrlCategory, expected_rule_info.url_category());
-  ValidateField(value, kKeyAction,
-                chrome::cros::reporting::proto::TriggeredRuleInfo::Action_Name(
-                    expected_rule_info.action()));
-  if (expected_rule_info.has_watermarking()) {
-    ValidateField(value, kKeyHasWatermarking, true);
-  }
-}
-
-void EventReportValidatorBase::ValidateReferrer(
-    const base::Value::Dict* value,
-    const chrome::cros::reporting::proto::UrlInfo expected_referrer) {
-  ValidateField(value, kKeyURL, expected_referrer.url());
-  ValidateField(value, kKeyIp, expected_referrer.ip());
-}
-
-void EventReportValidatorBase::ValidateFederatedOrigin(
-    const base::Value::Dict* value,
-    const std::string& expected_federated_origin) {
-  std::optional<bool> is_federated = value->FindBool(kKeyIsFederated);
-  const std::string* federated_origin = value->FindString(kKeyFederatedOrigin);
-  if (is_federated.has_value() && is_federated.value()) {
-    EXPECT_NE(nullptr, federated_origin);
-    EXPECT_EQ(expected_federated_origin, *federated_origin);
-  } else {
-    EXPECT_EQ(nullptr, federated_origin);
-  }
-}
-
-void EventReportValidatorBase::ValidateIdentities(
-    const base::Value::Dict* value,
-    const std::vector<std::pair<std::string, std::u16string>>&
-        expected_identities) {
-  const base::Value::List* identities =
-      value->FindList(kKeyPasswordBreachIdentities);
-  EXPECT_NE(nullptr, identities);
-  EXPECT_EQ(expected_identities.size(), identities->size());
-  for (const auto& expected_identity : expected_identities) {
-    bool matched = false;
-    for (const auto& actual_identity : *identities) {
-      const base::Value::Dict& actual_identity_dict = actual_identity.GetDict();
-      const std::string* url =
-          actual_identity_dict.FindString(kKeyPasswordBreachIdentitiesUrl);
-      const std::string* actual_username =
-          actual_identity_dict.FindString(kKeyPasswordBreachIdentitiesUsername);
-      EXPECT_NE(nullptr, actual_username);
-      const std::u16string username = base::UTF8ToUTF16(*actual_username);
-      EXPECT_NE(nullptr, url);
-      if (expected_identity.first == *url &&
-          expected_identity.second == username) {
-        matched = true;
-        break;
-      }
-    }
-    EXPECT_TRUE(matched);
-  }
-}
-
-void EventReportValidatorBase::ValidateMimeType(
-    const base::Value::Dict* value,
-    const std::set<std::string>* expected_mimetypes) {
-  const std::string* type = value->FindString(kKeyContentType);
-  if (expected_mimetypes) {
-    EXPECT_TRUE(base::Contains(*expected_mimetypes, *type))
-        << *type << " is not an expected mimetype";
-  } else {
-    EXPECT_EQ(nullptr, type);
-  }
-}
-
-#if BUILDFLAG(ENTERPRISE_DATA_CONTROLS)
-void EventReportValidatorBase::ValidateDataControlsTriggerdRules(
-    const base::Value::Dict* value,
-    const data_controls::Verdict::TriggeredRules& expected_triggered_rules) {
-  const base::Value::List* triggered_rules =
-      value->FindList(kKeyTriggeredRuleInfo);
-  ASSERT_TRUE(triggered_rules);
-  ASSERT_EQ(expected_triggered_rules.size(), triggered_rules->size());
-  size_t i = 0;
-
-  for (const base::Value& rule : *triggered_rules) {
-    const std::string* name = rule.GetDict().FindString(kKeyTriggeredRuleName);
-    ASSERT_TRUE(name);
-
-    // There should be a rule with the same index as in `triggered_rules`, but
-    // `expected_triggered_rules` might be tracking it internally as a
-    // profile rule or machine rule so we need to check with two different
-    // keys.
-    data_controls::Verdict::TriggeredRule expected_rule;
-    if (expected_triggered_rules.count({i, true})) {
-      expected_rule = expected_triggered_rules.find({i, true})->second;
-    } else if (expected_triggered_rules.count({i, false})) {
-      expected_rule = expected_triggered_rules.find({i, false})->second;
-    } else {
-      NOTREACHED();
-    }
-
-    std::optional<int> id = rule.GetDict().FindInt(kKeyTriggeredRuleId);
-    if (id) {
-      int expected_rule_id = 0;
-      ASSERT_TRUE(base::StringToInt(expected_rule.rule_id, &expected_rule_id));
-      ASSERT_EQ(expected_rule_id, *id);
-    } else {
-      ASSERT_TRUE(expected_rule.rule_id.empty())
-          << " Got rule_id " << expected_rule.rule_id << " instead of nothing.";
-    }
-
-    ++i;
-  }
-}
-#endif  // BUILDFLAG(ENTERPRISE_DATA_CONTROLS)
 
 }  // namespace enterprise_connectors::test

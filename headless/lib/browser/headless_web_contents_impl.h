@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/observer_list.h"
@@ -33,6 +34,7 @@ class Rect;
 
 namespace headless {
 class HeadlessBrowserImpl;
+class HeadlessBrowserContextImpl;
 
 // Exported for tests.
 class HEADLESS_EXPORT HeadlessWebContentsImpl : public HeadlessWebContents,
@@ -47,7 +49,7 @@ class HEADLESS_EXPORT HeadlessWebContentsImpl : public HeadlessWebContents,
   static HeadlessWebContentsImpl* From(content::WebContents* web_contents);
 
   static std::unique_ptr<HeadlessWebContentsImpl> Create(
-      HeadlessWebContents::Builder* builder);
+      const HeadlessWebContents::CreateParams& params);
 
   // Takes ownership of |child_contents|.
   static std::unique_ptr<HeadlessWebContentsImpl> CreateForChildContents(

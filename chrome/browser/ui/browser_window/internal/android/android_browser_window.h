@@ -8,9 +8,21 @@
 #include <jni.h>
 
 #include "base/android/scoped_java_ref.h"
+#include "base/callback_list.h"
+#include "base/memory/raw_ref.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "components/sessions/core/session_id.h"
+#include "extensions/buildflags/buildflags.h"
 #include "ui/base/unowned_user_data/unowned_user_data_host.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "components/prefs/pref_change_registrar.h"
+
+namespace extensions {
+class ExtensionBrowserWindowHelper;
+}  // namespace extensions
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 // Android implementation of |BrowserWindowInterface|.
 class AndroidBrowserWindow final : public BrowserWindowInterface {
@@ -28,7 +40,7 @@ class AndroidBrowserWindow final : public BrowserWindowInterface {
   void Destroy(JNIEnv* env);
 
   // Implements Java |AndroidBrowserWindow.Natives#getSessionIdForTesting|.
-  jint GetSessionIdForTesting(JNIEnv* env) const;
+  int32_t GetSessionIdForTesting(JNIEnv* env) const;
 
   // Implements |BrowserWindowInterface|.
   ui::UnownedUserDataHost& GetUnownedUserDataHost() override;
@@ -38,7 +50,11 @@ class AndroidBrowserWindow final : public BrowserWindowInterface {
   Profile* GetProfile() override;
   const Profile* GetProfile() const override;
   const SessionID& GetSessionID() const override;
+  bool IsDeleteScheduled() const override;
+  base::CallbackListSubscription RegisterBrowserDidClose(
+      BrowserDidCloseCallback callback) override;
   Type GetType() const override;
+  base::WeakPtr<BrowserWindowInterface> GetWeakPtr() override;
 
   // Implements |content::PageNavigator|, which is inherited by
   // |BrowserWindowInterface|.
@@ -52,12 +68,31 @@ class AndroidBrowserWindow final : public BrowserWindowInterface {
   base::android::ScopedJavaLocalRef<jobject> GetActivity();
 
  private:
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  // Handle changes to kDevToolsAvailability preference.
+  void OnDevToolsAvailabilityChanged();
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+
   base::android::ScopedJavaGlobalRef<jobject> java_android_browser_window_;
   ui::UnownedUserDataHost unowned_user_data_host_;
 
   const BrowserWindowInterface::Type type_;
   const raw_ref<Profile> profile_;
   const SessionID session_id_;
+
+  using BrowserDidCloseCallbackList =
+      base::RepeatingCallbackList<void(BrowserWindowInterface*)>;
+  BrowserDidCloseCallbackList browser_did_close_callback_list_;
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  // Android doesn't have BrowserWindowFeatures, so this lives here.
+  // TODO(crbug.com/484037810): Introduce BrowserWindowFeatures for Android.
+  std::unique_ptr<extensions::ExtensionBrowserWindowHelper>
+      extension_browser_window_helper_;
+  PrefChangeRegistrar profile_pref_registrar_;
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+
+  base::WeakPtrFactory<AndroidBrowserWindow> weak_ptr_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_UI_BROWSER_WINDOW_INTERNAL_ANDROID_ANDROID_BROWSER_WINDOW_H_

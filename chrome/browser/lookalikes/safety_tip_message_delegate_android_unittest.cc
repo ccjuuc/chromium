@@ -9,7 +9,6 @@
 #include "chrome/browser/android/android_theme_resources.h"
 #include "chrome/browser/android/resource_mapper.h"
 #include "chrome/browser/lookalikes/safety_tip_ui_helper.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/messages/android/mock_message_dispatcher_bridge.h"
 #include "components/strings/grit/components_strings.h"
@@ -177,7 +176,7 @@ TEST_F(SafetyTipMessageDelegateAndroidTest, MessagePropertyValuesLookAlike) {
   EXPECT_EQ(l10n_util::GetStringUTF16(GetSafetyTipLeaveButtonId(status)),
             GetMessageWrapper()->GetPrimaryButtonText());
   EXPECT_EQ(
-      ResourceMapper::MapToJavaDrawableId(IDR_ANDROID_INFOBAR_SAFETYTIP_SHIELD),
+      ResourceMapper::MapToJavaDrawableId(IDR_ANDROID_MESSAGE_SAFETYTIP_SHIELD),
       GetMessageWrapper()->GetIconResourceId());
   EXPECT_EQ(ResourceMapper::MapToJavaDrawableId(IDR_ANDROID_MESSAGE_SETTINGS),
             GetMessageWrapper()->GetSecondaryIconResourceId());

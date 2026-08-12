@@ -107,7 +107,7 @@ gfx::ImageSkia ScaleDesktopFrame(std::unique_ptr<webrtc::DesktopFrame> frame,
   // TODO(sergeyu): Fix screen/window capturers to capture alpha channel and
   // remove this code. Currently screen/window capturers (at least some
   // implementations) only capture R, G and B channels and set Alpha to 0.
-  // crbug.com/264424
+  // crbug.com/41029106
   for (int y = 0; y < result.height(); ++y) {
     for (int x = 0; x < result.width(); ++x) {
       UNSAFE_TODO(
@@ -216,7 +216,8 @@ content::DesktopMediaID::Id GetUpdatedWindowId(
     }
   }
 #elif BUILDFLAG(IS_MAC)
-  if (remote_cocoa::ScopedCGWindowID::Get(desktop_media_id.id)) {
+  if (!is_source_list_delegated &&
+      remote_cocoa::ScopedCGWindowID::Get(desktop_media_id.id)) {
     window_id = desktop_media_id.id;
   }
 #endif
@@ -290,7 +291,8 @@ class NativeDesktopMediaList::Worker
   static std::vector<SourceDescription> FormatSources(
       const webrtc::DesktopCapturer::SourceList& sources,
       const DesktopMediaID::Type source_type,
-      DesktopMediaID::Id excluded_window_id);
+      DesktopMediaID::Id excluded_window_id,
+      bool is_source_list_delegated);
 
 #if BUILDFLAG(IS_WIN)
   static std::vector<SourceDescription> GetCurrentProcessWindows();
@@ -410,8 +412,8 @@ void NativeDesktopMediaList::Worker::Refresh(bool update_thumbnails) {
     capturer_->SelectSources(source_ids, thumbnail_size_);
   }
 
-  std::vector<SourceDescription> source_descriptions =
-      FormatSources(sources, source_type_, excluded_window_id_);
+  std::vector<SourceDescription> source_descriptions = FormatSources(
+      sources, source_type_, excluded_window_id_, is_source_list_delegated_);
 
 #if BUILDFLAG(IS_WIN)
   // If |add_current_process_windows_| is set to false, |capturer_| will have
@@ -485,7 +487,8 @@ std::vector<DesktopMediaListBase::SourceDescription>
 NativeDesktopMediaList::Worker::FormatSources(
     const webrtc::DesktopCapturer::SourceList& sources,
     const DesktopMediaID::Type source_type,
-    DesktopMediaID::Id excluded_window_id) {
+    DesktopMediaID::Id excluded_window_id,
+    bool is_source_list_delegated) {
   std::vector<SourceDescription> source_descriptions;
   std::u16string title;
   for (size_t i = 0; i < sources.size(); ++i) {
@@ -513,6 +516,9 @@ NativeDesktopMediaList::Worker::FormatSources(
         NOTREACHED();
     }
     DesktopMediaID source_id(source_type, sources[i].id);
+    if (is_source_list_delegated) {
+      source_id.id_type = DesktopMediaID::IdType::kNativePickerSession;
+    }
     source_descriptions.emplace_back(std::move(source_id), title);
   }
 
@@ -654,11 +660,15 @@ void NativeDesktopMediaList::Worker::OnRecurrentCaptureResult(
   gfx::ImageSkia thumbnail =
       ScaleDesktopFrame(std::move(frame), thumbnail_size_);
 
+  DesktopMediaID id(source_type_, source_id);
+  if (is_source_list_delegated_) {
+    id.id_type = content::DesktopMediaID::IdType::kNativePickerSession;
+  }
+
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(
-          &AssignWindowIdAndUpdateThumbnail,
-          DesktopMediaID(source_type_, source_id), is_source_list_delegated_,
+          &AssignWindowIdAndUpdateThumbnail, id, is_source_list_delegated_,
           thumbnail,
           base::BindOnce(&NativeDesktopMediaList::UpdateSourceThumbnail,
                          media_list_)));
@@ -896,8 +906,14 @@ void NativeDesktopMediaList::Refresh(bool update_thumbnails) {
   DCHECK(can_refresh());
 
 #if defined(USE_AURA)
-  DCHECK_EQ(pending_aura_capture_requests_, 0);
-  DCHECK(!pending_native_thumbnail_capture_);
+  if (pending_aura_capture_requests_ > 0 || pending_native_thumbnail_capture_) {
+    // If there's still a pending capture, just bail out; we can't refresh until
+    // the capture is actually finished. This can happen if the worker thread is
+    // slow to finish its native captures or the update rate for refreshes is
+    // very fast (or the timing is just unlucky).
+    return;
+  }
+
   new_aura_thumbnail_hashes_.clear();
 #endif
 

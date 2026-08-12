@@ -7,8 +7,9 @@
 
 #include <optional>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list_types.h"
 #include "base/time/time.h"
 #include "base/types/strong_alias.h"
@@ -66,7 +67,7 @@ using execution_context_priority::PriorityAndReason;
 // it.
 class FrameNode : public TypedNode<FrameNode> {
  public:
-  using NodeSet = base::flat_set<const Node*>;
+  using NodeSet = base::flat_set<raw_ptr<const Node>>;
   template <class ReturnType>
   using NodeSetView = NodeSetView<NodeSet, ReturnType>;
 
@@ -94,6 +95,16 @@ class FrameNode : public TypedNode<FrameNode> {
   // lifetime of the frame, except that it will always be null during the
   // OnBeforeFrameNodeAdded() and OnFrameNodeRemoved() notifications.
   virtual const FrameNode* GetParentFrameNode() const = 0;
+
+  // Returns the document owning the frame this RenderFrameHost is located in,
+  // which will either be a parent (for <iframe>s) or outer document (for
+  // <fencedframe>). Unlike GetParentOrOuterDocumentOrEmbedder(), this does
+  // not traverse to embedders (e.g. GuestViews). This is a constant over the
+  // lifetime of the frame, except that it will always be null during the
+  // OnBeforeFrameNodeAdded() and OnFrameNodeRemoved() notifications.
+  //
+  // This method is equivalent to RenderFrameHost::GetParentOrOuterDocument().
+  virtual const FrameNode* GetParentOrOuterDocument() const = 0;
 
   // Returns the document owning the frame this RenderFrameHost is located in,
   // which will either be a parent (for <iframe>s) or outer document (for
@@ -264,12 +275,12 @@ class FrameNode : public TypedNode<FrameNode> {
   // Returns the most recently estimated resident set of the frame. This is an
   // estimate because RSS is computed by process, and a process can host
   // multiple frames.
-  virtual base::ByteCount GetResidentSetEstimate() const = 0;
+  virtual base::ByteSize GetResidentSetEstimate() const = 0;
 
   // Returns the most recently estimated private footprint of the frame. This is
   // an estimate because it is computed by process, and a process can host
   // multiple frames.
-  virtual base::ByteCount GetPrivateFootprintEstimate() const = 0;
+  virtual base::ByteSize GetPrivateFootprintEstimate() const = 0;
 
   // Called when the process of a cross-process subframe has gone.
   virtual void CrossProcessSubframeRenderProcessGone() = 0;

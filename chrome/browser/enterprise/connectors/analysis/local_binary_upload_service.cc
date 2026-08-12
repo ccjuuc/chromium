@@ -18,6 +18,7 @@
 #include "chrome/browser/safe_browsing/cloud_content_scanning/deep_scanning_utils.h"
 #include "components/device_signals/core/browser/system_signals_service_host.h"
 #include "components/enterprise/connectors/core/analysis_settings.h"
+#include "components/enterprise/connectors/core/cloud_content_scanning/deep_scanning_utils.h"
 #include "content/public/browser/browser_thread.h"
 #include "third_party/content_analysis_sdk/src/browser/include/content_analysis/sdk/analysis_client.h"
 
@@ -705,8 +706,8 @@ void LocalBinaryUploadService::OnTimeout(BinaryUploadRequest::Id id) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DVLOG(1) << __func__ << ": id=" << id;
 
-  if (active_requests_.count(id) > 0) {
-    const auto& info = active_requests_.at(id);
+  if (auto it = active_requests_.find(id); it != active_requests_.end()) {
+    const auto& info = it->second;
     RecordRequestMetrics(
         info, enterprise_connectors::ScanRequestUploadResult::kTimeout,
         ContentAnalysisResponse());

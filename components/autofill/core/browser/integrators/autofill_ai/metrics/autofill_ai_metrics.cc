@@ -4,15 +4,24 @@
 
 #include "components/autofill/core/browser/integrators/autofill_ai/metrics/autofill_ai_metrics.h"
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <algorithm>
+#include <string_view>
+#include <vector>
 
 #include "base/containers/flat_map.h"
+#include "base/containers/span.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
-#include "base/strings/stringprintf.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_type_names.h"
+#include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/foundations/autofill_client.h"
+#include "components/autofill/core/common/dense_set.h"
 
 namespace autofill {
 namespace {
@@ -96,6 +105,60 @@ void LogStoredEntitiesCount(base::span<const EntityInstance> entities) {
   }
 }
 
+void LogEntityDeletedFromSettings(EntityType type,
+                                  EntityInstance::RecordType record_type) {
+  static constexpr std::string_view kHistogramPrefix =
+      "Autofill.Ai.EntityDeletedFromSettings";
+  const std::string_view type_string = EntityTypeToMetricsString(type);
+  const std::string_view record_type_string =
+      EntityRecordTypeToMetricsString(record_type);
+  base::UmaHistogramEnumeration(
+      base::StrCat(
+          {kHistogramPrefix, ".", type_string, ".", record_type_string}),
+      type.name());
+  base::UmaHistogramEnumeration(
+      base::StrCat({kHistogramPrefix, ".", record_type_string}), type.name());
+  base::UmaHistogramEnumeration(
+      base::StrCat({kHistogramPrefix, ".", type_string}), type.name());
+  base::UmaHistogramEnumeration(kHistogramPrefix, type.name());
+}
+
+void LogEntityUpdatedFromSettings(EntityType type,
+                                  EntityInstance::RecordType record_type) {
+  static constexpr std::string_view kHistogramPrefix =
+      "Autofill.Ai.EntityUpdatedFromSettings";
+  const std::string_view type_string = EntityTypeToMetricsString(type);
+  const std::string_view record_type_string =
+      EntityRecordTypeToMetricsString(record_type);
+  base::UmaHistogramEnumeration(
+      base::StrCat(
+          {kHistogramPrefix, ".", type_string, ".", record_type_string}),
+      type.name());
+  base::UmaHistogramEnumeration(
+      base::StrCat({kHistogramPrefix, ".", record_type_string}), type.name());
+  base::UmaHistogramEnumeration(
+      base::StrCat({kHistogramPrefix, ".", type_string}), type.name());
+  base::UmaHistogramEnumeration(kHistogramPrefix, type.name());
+}
+
+void LogEntityAddedFromSettings(EntityType type,
+                                EntityInstance::RecordType record_type) {
+  static constexpr std::string_view kHistogramPrefix =
+      "Autofill.Ai.EntityAddedFromSettings";
+  const std::string_view type_string = EntityTypeToMetricsString(type);
+  const std::string_view record_type_string =
+      EntityRecordTypeToMetricsString(record_type);
+  base::UmaHistogramEnumeration(
+      base::StrCat(
+          {kHistogramPrefix, ".", type_string, ".", record_type_string}),
+      type.name());
+  base::UmaHistogramEnumeration(
+      base::StrCat({kHistogramPrefix, ".", record_type_string}), type.name());
+  base::UmaHistogramEnumeration(
+      base::StrCat({kHistogramPrefix, ".", type_string}), type.name());
+  base::UmaHistogramEnumeration(kHistogramPrefix, type.name());
+}
+
 // LINT.IfChange(EntityTypeToMetricsString)
 std::string_view EntityTypeToMetricsString(EntityType type) {
   switch (type.name()) {
@@ -113,6 +176,10 @@ std::string_view EntityTypeToMetricsString(EntityType type) {
       return "RedressNumber";
     case EntityTypeName::kFlightReservation:
       return "FlightReservation";
+    case EntityTypeName::kOrder:
+      return "Order";
+    case EntityTypeName::kShipment:
+      return "Shipment";
   }
   NOTREACHED();
 }
@@ -126,6 +193,8 @@ std::string_view EntityRecordTypeToMetricsString(
       return "Local";
     case EntityInstance::RecordType::kServerWallet:
       return "ServerWallet";
+    case EntityInstance::RecordType::kPersonalContext:
+      return "PersonalContext";
   }
   NOTREACHED();
 }
@@ -145,5 +214,31 @@ std::string_view EntityPromptTypeToMetricsString(
   NOTREACHED();
 }
 // LINT.ThenChange(//tools/metrics/histograms/metadata/autofill/histograms.xml:Autofill.Ai.EntityPromptType)
+
+int GetBucketForAutofillAiReauthResultByFieldType(FieldType field_type,
+                                                  bool auth_succeeded) {
+  static_assert(
+      static_cast<int>(FieldType::MAX_VALID_FIELD_TYPE) <= (UINT16_MAX >> 4),
+      "Autofill::FieldType value needs more than 12 bits.");
+
+  return (static_cast<int>(field_type) << 2) | (auth_succeeded ? 0 : 1);
+}
+
+void LogReauthToFillResultPerFieldType(const FieldTypeSet& ai_field_types,
+                                       bool auth_succeeded) {
+  for (FieldType field_type : ai_field_types) {
+    base::UmaHistogramSparse("Autofill.Ai.ReauthToFill.ResultPerFieldType",
+                             GetBucketForAutofillAiReauthResultByFieldType(
+                                 field_type, auth_succeeded));
+  }
+}
+
+void LogUnmaskResult(EntityInstance::RecordType record_type,
+                     AutofillAiUnmaskResult result) {
+  base::UmaHistogramEnumeration(
+      base::StrCat({"Autofill.Ai.Unmask.Result.",
+                    EntityRecordTypeToMetricsString(record_type)}),
+      result);
+}
 
 }  // namespace autofill

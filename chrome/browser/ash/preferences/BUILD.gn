@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-
 assert(is_chromeos)
 
 static_library("preferences") {
@@ -16,7 +14,6 @@ static_library("preferences") {
     "//base",
     "//chromeos/ash/components/dbus/update_engine",
     "//chromeos/ash/components/language_preferences",
-    "//chromeos/crosapi/mojom",
     "//components/prefs",
     "//components/sync_preferences",
     "//components/user_manager",
@@ -28,7 +25,6 @@ static_library("preferences") {
     "//ash",
     "//ash/constants",
     "//base:i18n",
-    "//chrome/browser:browser_process",
     "//chrome/browser:browser_public_dependencies",
     "//chrome/browser:global_features",
     "//chrome/browser/ash/accessibility",
@@ -41,6 +37,7 @@ static_library("preferences") {
     "//chrome/browser/ash/policy/skyvault",
     "//chrome/browser/ash/profiles",
     "//chrome/browser/ash/system",
+    "//chrome/browser/download",
     "//chrome/browser/prefs:util",
     "//chrome/browser/ui/ash/system",
     "//chrome/common:chrome_features",
@@ -53,6 +50,7 @@ static_library("preferences") {
     "//chromeos/ash/components/settings",
     "//chromeos/ash/components/system",
     "//chromeos/ash/components/timezone",
+    "//chromeos/ash/experiences/frozen_update",
     "//chromeos/components/disks:prefs",
     "//chromeos/components/magic_boost/public/cpp",
     "//chromeos/constants",
@@ -86,6 +84,7 @@ source_set("browser_tests") {
     "//base",
     "//base/test:test_support",
     "//chrome/browser:browser_process",
+    "//chrome/browser:browser_process_platform_part",
     "//chrome/browser/ash/input_method",
     "//chrome/browser/ash/login:test_support",
     "//chrome/browser/ash/login/test:test_support",

@@ -27,6 +27,7 @@ import org.mockito.junit.MockitoRule;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.FileUtils;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.util.AdvancedMockContext;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
@@ -91,7 +92,8 @@ public class MultiInstanceMigrationTest {
         FileUtils.recursivelyDeleteFile(
                 TabStateDirectory.getOrCreateBaseStateDirectory(), FileUtils.DELETE_ALL);
         TabbedModeTabPersistencePolicy.resetMigrationTaskForTesting();
-        TabWindowManagerSingleton.resetTabModelSelectorFactoryForTesting();
+        ThreadUtils.runOnUiThreadBlocking(
+                TabWindowManagerSingleton::resetTabModelSelectorFactoryForTesting);
     }
 
     private void buildPersistentStoreAndWaitForMigration() {
@@ -100,7 +102,8 @@ public class MultiInstanceMigrationTest {
                     MockTabModelSelector selector =
                             new MockTabModelSelector(mProfile, mIncognitoProfile, 0, 0, null);
                     TabbedModeTabPersistencePolicy persistencePolicy =
-                            new TabbedModeTabPersistencePolicy(0, false, true);
+                            new TabbedModeTabPersistencePolicy(
+                                    0, false, true, ObservableSuppliers.createNonNull(false));
                     TabPersistentStoreImpl store =
                             new TabPersistentStoreImpl(
                                     TabPersistentStoreImpl.CLIENT_TAG_REGULAR,
@@ -108,7 +111,9 @@ public class MultiInstanceMigrationTest {
                                     selector,
                                     null,
                                     TabWindowManagerSingleton.getInstance(),
-                                    mCipherFactory);
+                                    mCipherFactory,
+                                    /* isAuthoritative= */ true,
+                                    /* recordLegacyTabCountMetrics= */ true);
                     store.waitForMigrationToFinish();
                 });
     }
@@ -365,7 +370,7 @@ public class MultiInstanceMigrationTest {
     @Feature({"TabPersistentStore"})
     public void testNewMetataFileExists() throws Exception {
         // Set up two old metadata files.
-        int maxCount = TabWindowManager.MAX_SELECTORS;
+        int maxCount = TabWindowManager.MAX_SELECTORS_1000;
         File[] stateDirs = createOldStateDirs(maxCount, true);
         File metadataFile0 =
                 new File(stateDirs[0], TabbedModeTabPersistencePolicy.LEGACY_SAVED_STATE_FILE);

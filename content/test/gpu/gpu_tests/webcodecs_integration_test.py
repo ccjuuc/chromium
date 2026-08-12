@@ -101,6 +101,18 @@ class WebCodecsIntegrationTest(gpu_integration_test.GpuIntegrationTest):
               'source_type': source_type,
           }],
       )
+    for source_type in ['offscreen', 'hw_decoder', 'sw_decoder']:
+      for codec in video_codecs:
+        for acc in accelerations:
+          yield (
+              f'WebCodecs_cropEncode_{source_type}_{codec}_{acc}',
+              'crop-encode.html',
+              [{
+                  'source_type': source_type,
+                  'codec': codec,
+                  'acceleration': acc,
+              }],
+          )
     for source_type in hbd_frame_sources:
       yield (
           f'WebCodecs_DrawImage_{source_type}',
@@ -476,7 +488,7 @@ class WebCodecsIntegrationTest(gpu_integration_test.GpuIntegrationTest):
 
   @staticmethod
   def CameraCanShowFourColors(os_name: str) -> bool:
-    return os_name not in ('android', 'chromeos')
+    return os_name not in ('android', 'chromeos', 'fuchsia')
 
   @classmethod
   def GetBrowserArguments(cls, enable_d3d12_encoder: bool) -> list[str]:

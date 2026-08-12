@@ -67,30 +67,6 @@ UserEducationHelpBubbleController* UserEducationHelpBubbleController::Get() {
   return g_instance;
 }
 
-std::optional<HelpBubbleId> UserEducationHelpBubbleController::GetHelpBubbleId(
-    ui::ElementIdentifier element_id,
-    ui::ElementContext element_context) const {
-  if (help_bubble_ && help_bubble_->IsA<HelpBubbleViewsAsh>()) {
-    // Cache the `bubble_view` with its associated anchor.
-    auto* bubble_view = help_bubble_->AsA<HelpBubbleViewsAsh>()->bubble_view();
-    auto* anchor_view = bubble_view->GetAnchorView();
-
-    // Find all `tracked_views` matching `element_id` and `element_context`.
-    const views::ElementTrackerViews::ViewList tracked_views =
-        views::ElementTrackerViews::GetInstance()->GetAllMatchingViews(
-            element_id, element_context);
-
-    // A help bubble exists for a `tracked_view` if the `tracked_view` is the
-    // `anchor_view` for the help bubble.
-    for (const auto* tracked_view : tracked_views) {
-      if (tracked_view == anchor_view) {
-        return bubble_view->id();
-      }
-    }
-  }
-  return std::nullopt;
-}
-
 base::CallbackListSubscription
 UserEducationHelpBubbleController::AddHelpBubbleAnchorBoundsChangedCallback(
     base::RepeatingClosure callback) {
@@ -137,7 +113,7 @@ void UserEducationHelpBubbleController::NotifyHelpBubbleShown(
     base::PassKey<HelpBubbleViewAsh>,
     const HelpBubbleViewAsh* help_bubble_view) {
   // Ignore event if the associated help bubble has already been shown.
-  if (!base::Contains(help_bubble_metadata_by_key_, help_bubble_view)) {
+  if (!help_bubble_metadata_by_key_.contains(help_bubble_view)) {
     help_bubble_metadata_by_key_.emplace(
         std::piecewise_construct, std::forward_as_tuple(help_bubble_view),
         std::forward_as_tuple(help_bubble_view,

@@ -5,7 +5,6 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_DOWNLOAD_BUBBLE_DOWNLOAD_BUBBLE_PARTIAL_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_DOWNLOAD_BUBBLE_DOWNLOAD_BUBBLE_PARTIAL_VIEW_H_
 
-#include <optional>
 #include <string_view>
 
 #include "base/functional/callback_forward.h"
@@ -15,7 +14,7 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/focus/focus_manager.h"
 
-class Browser;
+class BrowserWindowInterface;
 class DownloadBubbleUIController;
 class DownloadBubbleNavigationHandler;
 
@@ -27,7 +26,7 @@ class DownloadBubblePartialView : public DownloadBubblePrimaryView,
 
  public:
   DownloadBubblePartialView(
-      base::WeakPtr<Browser> browser,
+      BrowserWindowInterface* browser,
       base::WeakPtr<DownloadBubbleUIController> bubble_controller,
       base::WeakPtr<DownloadBubbleNavigationHandler> navigation_handler,
       const DownloadBubbleRowListViewInfo& info,
@@ -52,9 +51,6 @@ class DownloadBubblePartialView : public DownloadBubblePrimaryView,
   // A callback to be run when this view has been hovered over by the mouse or
   // focused by the keyboard.
   base::OnceClosure on_interacted_closure_;
-
-  // Records the end time of the last download if it is successful.
-  std::optional<base::Time> last_download_completed_time_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_DOWNLOAD_BUBBLE_DOWNLOAD_BUBBLE_PARTIAL_VIEW_H_

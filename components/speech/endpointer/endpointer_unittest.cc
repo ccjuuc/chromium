@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "base/types/fixed_array.h"
 #include "components/speech/audio_buffer.h"
@@ -21,9 +22,7 @@ namespace speech {
 class FrameProcessor {
  public:
   // Process a single frame of test audio samples.
-  virtual EpStatus ProcessFrame(int64_t time,
-                                int16_t* samples,
-                                int frame_size) = 0;
+  virtual EpStatus ProcessFrame(int64_t time, base::span<int16_t> samples) = 0;
 };
 
 void RunEndpointerEventsTest(FrameProcessor* processor, int sample_rate) {
@@ -53,8 +52,7 @@ void RunEndpointerEventsTest(FrameProcessor* processor, int sample_rate) {
       samples[i] = static_cast<int16_t>(gain * randNum);
     }
 
-    EpStatus ep_status =
-        processor->ProcessFrame(time, samples.data(), frame_size);
+    EpStatus ep_status = processor->ProcessFrame(time, samples);
     time += static_cast<int64_t>(frame_size * (1e6 / sample_rate));
 
     // Log the status.
@@ -80,10 +78,8 @@ class EnergyEndpointerFrameProcessor : public FrameProcessor {
   explicit EnergyEndpointerFrameProcessor(EnergyEndpointer* endpointer)
       : endpointer_(endpointer) {}
 
-  EpStatus ProcessFrame(int64_t time,
-                        int16_t* samples,
-                        int frame_size) override {
-    endpointer_->ProcessAudioFrame(time, samples, frame_size, nullptr);
+  EpStatus ProcessFrame(int64_t time, base::span<int16_t> samples) override {
+    endpointer_->ProcessAudioFrame(time, samples, nullptr);
     int64_t ep_time;
     return endpointer_->Status(&ep_time);
   }
@@ -127,11 +123,9 @@ class EndpointerFrameProcessor : public FrameProcessor {
   explicit EndpointerFrameProcessor(Endpointer* endpointer)
       : endpointer_(endpointer) {}
 
-  EpStatus ProcessFrame(int64_t time,
-                        int16_t* samples,
-                        int frame_size) override {
+  EpStatus ProcessFrame(int64_t time, base::span<int16_t> samples) override {
     scoped_refptr<AudioChunk> frame(
-        new AudioChunk(reinterpret_cast<uint8_t*>(samples), frame_size * 2, 2));
+        new AudioChunk(base::as_writable_byte_span(samples), 2));
     endpointer_->ProcessAudio(*frame.get(), nullptr);
     int64_t ep_time;
     return endpointer_->Status(&ep_time);
@@ -173,6 +167,64 @@ TEST(EndpointerTest, HighSampleRate) {
   RunEndpointerEventsTest(&frame_processor, sample_rate);
 
   endpointer.EndSession();
+}
+
+// Verifies that StartSession(/*reset_environment=*/false) preserves the
+// adapted noise-level estimate learned during a prior utterance, whereas the
+// default StartSession() resets it. This underpins continuous-session use
+// where re-running noise adaptation on every utterance boundary would delay
+// detection of the next utterance's onset.
+TEST(EndpointerTest, StartSessionPreservesEnvironmentWhenRequested) {
+  const int sample_rate = 8000;
+
+  EnergyEndpointerParams ep_config;
+  ep_config.set_frame_period(1.0f / static_cast<float>(kFrameRate));
+  ep_config.set_frame_duration(1.0f / static_cast<float>(kFrameRate));
+  ep_config.set_endpoint_margin(0.2f);
+  ep_config.set_onset_window(0.15f);
+  ep_config.set_speech_on_window(0.4f);
+  ep_config.set_offset_window(0.15f);
+  ep_config.set_onset_detect_dur(0.09f);
+  ep_config.set_onset_confirm_dur(0.075f);
+  ep_config.set_on_maintain_dur(0.10f);
+  ep_config.set_offset_confirm_dur(0.12f);
+  ep_config.set_decision_threshold(100.0f);
+  EnergyEndpointer endpointer;
+  endpointer.Init(ep_config);
+  endpointer.StartSession();
+
+  // Drive enough audio to move the noise-level estimate away from its initial
+  // (post-reset) value.
+  EnergyEndpointerFrameProcessor frame_processor(&endpointer);
+  RunEndpointerEventsTest(&frame_processor, sample_rate);
+  const float adapted_noise_db = endpointer.GetNoiseLevelDb();
+
+  // Restarting while preserving the environment must keep the learned level.
+  endpointer.StartSession(/*reset_environment=*/false);
+  EXPECT_FLOAT_EQ(adapted_noise_db, endpointer.GetNoiseLevelDb());
+
+  // A default restart resets the environment, changing the level back toward
+  // its configured default (decision_threshold / 2).
+  endpointer.StartSession(/*reset_environment=*/true);
+  EXPECT_NE(adapted_noise_db, endpointer.GetNoiseLevelDb());
+
+  endpointer.EndSession();
+
+  // Verify the same behavior through the Endpointer wrapper. This confirms
+  // the wrapper forwards |reset_environment|.
+  Endpointer wrapper(sample_rate);
+  wrapper.StartSession();
+  EndpointerFrameProcessor wrapper_processor(&wrapper);
+  RunEndpointerEventsTest(&wrapper_processor, sample_rate);
+  const float wrapper_adapted_noise_db = wrapper.NoiseLevelDb();
+
+  wrapper.StartSession(/*reset_environment=*/false);
+  EXPECT_FLOAT_EQ(wrapper_adapted_noise_db, wrapper.NoiseLevelDb());
+
+  wrapper.StartSession(/*reset_environment=*/true);
+  EXPECT_NE(wrapper_adapted_noise_db, wrapper.NoiseLevelDb());
+
+  wrapper.EndSession();
 }
 
 }  // namespace speech

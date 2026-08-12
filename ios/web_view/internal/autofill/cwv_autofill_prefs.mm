@@ -9,11 +9,10 @@
 #import "components/sync/service/sync_prefs.h"
 
 namespace ios_web_view {
-void RegisterCWVAutofillPrefs(user_prefs::PrefRegistrySyncable* pref_registry) {
+void RegisterCWVAutofillPrefs(PrefRegistrySimple* pref_registry) {
   pref_registry->RegisterBooleanPref(kCWVAutofillAddressSyncEnabled, false);
   pref_registry->RegisterBooleanPref(kCWVAutofillVCNUsageEnabled, false);
-  pref_registry->RegisterBooleanPref(kUseImageFetcherEnabled, false);
-  pref_registry->RegisterBooleanPref(kUseCardCustomImageEnabled, false);
+  pref_registry->RegisterBooleanPref(kCWVAutofillSafeLifecycleEnabled, false);
 }
 
 bool IsAutofillAddressSyncEnabled(const PrefService* prefs) {
@@ -32,20 +31,12 @@ void SetAutofillVCNUsageEnabled(PrefService* prefs, bool enabled) {
   prefs->SetBoolean(kCWVAutofillVCNUsageEnabled, enabled);
 }
 
-bool IsUseImageFetcherEnabled(const PrefService* prefs) {
-  return prefs->GetBoolean(kUseImageFetcherEnabled);
+bool IsAutofillSafeLifecycleEnabled(const PrefService* prefs) {
+  return prefs->GetBoolean(kCWVAutofillSafeLifecycleEnabled);
 }
 
-void SetUseImageFetcherEnabled(PrefService* prefs, bool enabled) {
-  prefs->SetBoolean(kUseImageFetcherEnabled, enabled);
-}
-
-bool IsUseCardCustomImagerEnabled(const PrefService* prefs) {
-  return prefs->GetBoolean(kUseCardCustomImageEnabled);
-}
-
-void SetUseCardCustomImageEnabled(PrefService* prefs, bool enabled) {
-  prefs->SetBoolean(kUseCardCustomImageEnabled, enabled);
+void SetAutofillSafeLifecycleEnabled(PrefService* prefs, bool enabled) {
+  prefs->SetBoolean(kCWVAutofillSafeLifecycleEnabled, enabled);
 }
 
 }  // namespace ios_web_view

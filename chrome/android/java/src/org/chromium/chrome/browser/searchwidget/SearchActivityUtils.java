@@ -16,11 +16,18 @@ import androidx.annotation.VisibleForTesting;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.Log;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.document.ChromeLauncherActivity;
+import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
 import org.chromium.chrome.browser.omnibox.suggestions.OmniboxLoadUrlParams;
+import org.chromium.chrome.browser.tab.TabLaunchType;
+import org.chromium.chrome.browser.tab.TabSelectionType;
+import org.chromium.chrome.browser.tabmodel.TabModel;
+import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+import org.chromium.chrome.browser.tabwindow.TabWindowInfo;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityExtras;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityExtras.IntentOrigin;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityExtras.ResolutionType;
@@ -32,6 +39,14 @@ import org.chromium.url.GURL;
 @NullMarked
 public class SearchActivityUtils {
     private static final String TAG = "SAUtils";
+
+    /** Delegate for {@link #resolveOmniboxRequestForResult(Activity, OmniboxLoadUrlParams)}. */
+    public interface TestDelegate {
+        void resolveOmniboxRequestForResult(
+                Activity activity, @Nullable OmniboxLoadUrlParams params);
+    }
+
+    private static @Nullable TestDelegate sDelegate;
 
     /**
      * Retrieve the intent origin.
@@ -137,12 +152,21 @@ public class SearchActivityUtils {
      */
     /* package */ static void resolveOmniboxRequestForResult(
             Activity activity, @Nullable OmniboxLoadUrlParams params) {
+        if (sDelegate != null) {
+            sDelegate.resolveOmniboxRequestForResult(activity, params);
+            return;
+        }
         var intent = createLoadUrlIntent(activity.getCallingActivity(), params);
         if (intent != null) {
             activity.setResult(Activity.RESULT_OK, intent);
         } else {
             activity.setResult(Activity.RESULT_CANCELED);
         }
+    }
+
+    public static void setDelegateForTesting(TestDelegate delegate) {
+        sDelegate = delegate;
+        ResettersForTesting.register(() -> sDelegate = null);
     }
 
     /**
@@ -207,5 +231,46 @@ public class SearchActivityUtils {
         }
 
         return intent;
+    }
+
+    /**
+     * Brings the specified tab to the front. If the tab is in the current window and same model,
+     * switches to it directly. Otherwise, launches an intent to bring it to the front.
+     *
+     * @param activity The current activity.
+     * @param tabModelSelector The TabModelSelector for the current activity.
+     * @param tabWindowInfo Information about the tab and its window.
+     * @param url The URL of the tab.
+     * @param onTabSwitched A callback to run after switching to the tab or launching the intent.
+     */
+    public static void bringTabToFront(
+            Activity activity,
+            @Nullable TabModelSelector tabModelSelector,
+            TabWindowInfo tabWindowInfo,
+            GURL url,
+            @Nullable Runnable onTabSwitched) {
+        if (tabModelSelector == null) return;
+        TabModel tabModel = tabWindowInfo.tabModel;
+        int tabId = tabWindowInfo.tab.getId();
+
+        if (tabModelSelector.getCurrentModel() == tabModel) {
+            int tabIndex = tabModel.indexOf(tabWindowInfo.tab);
+            if (tabIndex == TabModel.INVALID_TAB_INDEX) return;
+            tabModel.setIndex(tabIndex, TabSelectionType.FROM_OMNIBOX);
+            if (onTabSwitched != null) {
+                onTabSwitched.run();
+            }
+            return;
+        }
+
+        Intent intent =
+                IntentHandler.createTrustedBringTabToFrontIntent(
+                        tabId, IntentHandler.BringToFrontSource.ACTIVATE_TAB);
+        intent.setData(Uri.parse(url.getSpec()));
+        IntentHandler.setTabLaunchType(intent, TabLaunchType.FROM_OMNIBOX);
+        MultiWindowUtils.launchIntentInMaybeClosedWindow(activity, intent, tabWindowInfo.windowId);
+        if (onTabSwitched != null) {
+            onTabSwitched.run();
+        }
     }
 }

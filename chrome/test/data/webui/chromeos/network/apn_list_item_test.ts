@@ -18,10 +18,9 @@ import type {ApnProperties} from 'chrome://resources/mojo/chromeos/services/netw
 import {ApnAuthenticationType, ApnIpType, ApnSource, ApnState, ApnType} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/cros_network_config.mojom-webui.js';
 import {NetworkType, PortalState} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/network_types.mojom-webui.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {FakeNetworkConfig} from 'chrome://webui-test/chromeos/fake_network_config_mojom.js';
 import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
 import {eventToPromise} from 'chrome://webui-test/test_util.js';
-
-import {FakeNetworkConfig} from '../fake_network_config_mojom.js';
 
 const TEST_APN_EVENT_DATA_GUID = 'test_guid';
 
@@ -195,10 +194,10 @@ suite('ApnListItemTest', function() {
     });
     await flushTasks();
     assertTrue(!!getRemoveButton());
-    assertFalse(!!getRemoveButton().disabled);
+    assertFalse(getRemoveButton().disabled);
 
     apnListItem.shouldDisallowApnModification = true;
-    assertTrue(!!getRemoveButton().disabled);
+    assertTrue(getRemoveButton().disabled);
 
     apnListItem.shouldDisallowApnModification = false;
     mojoApi_.setNetworkTypeEnabledState(NetworkType.kCellular, true);
@@ -255,11 +254,11 @@ suite('ApnListItemTest', function() {
     apnListItem.apn = disabledApn;
     await flushTasks();
     assertTrue(!!getEnableButton());
-    assertFalse(!!getEnableButton().disabled);
+    assertFalse(getEnableButton().disabled);
     assertFalse(!!getDisableButton());
 
     apnListItem.shouldDisallowApnModification = true;
-    assertTrue(!!getEnableButton().disabled);
+    assertTrue(getEnableButton().disabled);
 
     apnListItem.shouldDisallowApnModification = false;
     getEnableButton().click();
@@ -273,11 +272,11 @@ suite('ApnListItemTest', function() {
     apnListItem.apn = createApn(/*disabled=*/ false);
     await flushTasks();
     assertTrue(!!getDisableButton());
-    assertFalse(!!getDisableButton().disabled);
+    assertFalse(getDisableButton().disabled);
     assertFalse(!!getEnableButton());
 
     apnListItem.shouldDisallowApnModification = true;
-    assertTrue(!!getDisableButton().disabled);
+    assertTrue(getDisableButton().disabled);
 
     apnListItem.shouldDisallowApnModification = false;
     getDisableButton().click();
@@ -313,7 +312,8 @@ suite('ApnListItemTest', function() {
                   '#detailsButton')!;
 
           let apnDetailsClickedEvent =
-              eventToPromise('show-apn-detail-dialog', window);
+              eventToPromise<CustomEvent<ApnEventData>>(
+                  'show-apn-detail-dialog', window);
           assertTrue(!!getDetailsButton());
           assertEquals(
               apnListItem.i18n('apnMenuDetails'),
@@ -335,8 +335,8 @@ suite('ApnListItemTest', function() {
               apnListItem.i18n('apnMenuEdit'),
               getDetailsButton().innerText.trim());
 
-          apnDetailsClickedEvent =
-              eventToPromise('show-apn-detail-dialog', window);
+          apnDetailsClickedEvent = eventToPromise<CustomEvent<ApnEventData>>(
+              'show-apn-detail-dialog', window);
           getDetailsButton().click();
           eventData = await apnDetailsClickedEvent;
           assertEquals(TEST_APN_EVENT_DATA.apn.name, eventData.detail.apn.name);
@@ -352,8 +352,8 @@ suite('ApnListItemTest', function() {
                 apnListItem.i18n('apnMenuDetails'),
                 getDetailsButton().innerText.trim());
 
-            apnDetailsClickedEvent =
-                eventToPromise('show-apn-detail-dialog', window);
+            apnDetailsClickedEvent = eventToPromise<CustomEvent<ApnEventData>>(
+                'show-apn-detail-dialog', window);
             getDetailsButton().click();
             eventData = await apnDetailsClickedEvent;
             assertEquals(
@@ -367,7 +367,8 @@ suite('ApnListItemTest', function() {
   test('Test if disable/remove warning event is fired.', async () => {
     await init();
     const guid = 'cellular_guid';
-    let promptShowEvent = eventToPromise('show-error-toast', window);
+    let promptShowEvent =
+        eventToPromise<CustomEvent<string>>('show-error-toast', window);
     await openThreeDotMenu();
     const getDisableButton = () =>
         getThreeDotsMenu().querySelector<HTMLButtonElement>('#disableButton')!;
@@ -398,7 +399,8 @@ suite('ApnListItemTest', function() {
         apnListItem.i18n('apnWarningPromptForDisableRemove'), eventData.detail);
     assertFalse(getThreeDotsMenu().open);
 
-    promptShowEvent = eventToPromise('show-error-toast', window);
+    promptShowEvent =
+        eventToPromise<CustomEvent<string>>('show-error-toast', window);
     getRemoveButton().click();
     eventData = await promptShowEvent;
     managedProps = await mojoApi_.getManagedProperties(guid);
@@ -412,7 +414,8 @@ suite('ApnListItemTest', function() {
   test('Test if enable warning event is fired.', async () => {
     await init();
     const guid = 'cellular_guid';
-    const promptShowEvent = eventToPromise('show-error-toast', window);
+    const promptShowEvent =
+        eventToPromise<CustomEvent<string>>('show-error-toast', window);
     await openThreeDotMenu();
     const getEnableButton = () =>
         getThreeDotsMenu().querySelector<HTMLButtonElement>('#enableButton')!;

@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/css/css_counter_value.h"
 
+#include "third_party/blink/renderer/core/css/css_markup.h"
 #include "third_party/blink/renderer/core/css/css_primitive_value.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
@@ -14,7 +15,7 @@ String CSSCounterValue::CustomCSSText() const {
   if (is_reversed_) {
     result.Append("reversed(");
   }
-  result.Append(identifier_->Value());
+  SerializeIdentifier(identifier_->Value(), result);
   if (is_reversed_) {
     result.Append(')');
   }
@@ -23,6 +24,11 @@ String CSSCounterValue::CustomCSSText() const {
     result.Append(value_->CustomCSSText());
   }
   return result.ReleaseString();
+}
+
+bool CSSCounterValue::HasRandomFunctions() const {
+  return (identifier_ && identifier_->HasRandomFunctions()) ||
+         (value_ && value_->HasRandomFunctions());
 }
 
 }  // namespace blink::cssvalue

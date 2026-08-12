@@ -61,7 +61,7 @@ class TestFrameSinkManagerImpl : public mojom::FrameSinkManager {
       override {}
   void DestroyCompositorFrameSink(
       const FrameSinkId& frame_sink_id,
-      DestroyCompositorFrameSinkCallback callback) override {}
+      DestroyCompositorFrameSinkCallback callback) override;
   void RegisterFrameSinkHierarchy(
       const FrameSinkId& parent_frame_sink_id,
       const FrameSinkId& child_frame_sink_id) override {}
@@ -76,7 +76,8 @@ class TestFrameSinkManagerImpl : public mojom::FrameSinkManager {
   void EvictSurfaces(const std::vector<SurfaceId>& surface_ids) override {}
   void RequestCopyOfOutput(const SurfaceId& surface_id,
                            std::unique_ptr<CopyOutputRequest> request,
-                           bool capture_exact_surface_id) override {}
+                           bool capture_exact_surface_id,
+                           base::TimeDelta timeout) override {}
 #if BUILDFLAG(IS_ANDROID)
   void CacheBackBuffer(uint32_t cache_id,
                        const FrameSinkId& root_frame_sink_id) override {}

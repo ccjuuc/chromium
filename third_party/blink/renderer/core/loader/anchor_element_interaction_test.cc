@@ -10,6 +10,7 @@
 
 #include "base/location.h"
 #include "base/run_loop.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "base/test/with_feature_override.h"
@@ -20,20 +21,25 @@
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/mojom/preloading/anchor_element_interaction_host.mojom-blink.h"
+#include "third_party/blink/public/platform/web_network_state_notifier.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/frame/settings.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/anchor_element_metrics_sender.h"
 #include "third_party/blink/renderer/core/html/anchor_element_viewport_position_tracker.h"
 #include "third_party/blink/renderer/core/html/html_anchor_element.h"
 #include "third_party/blink/renderer/core/input/event_handler.h"
 #include "third_party/blink/renderer/core/intersection_observer/intersection_observer.h"
 #include "third_party/blink/renderer/core/loader/anchor_element_interaction_tracker.h"
+#include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
 #include "third_party/blink/renderer/platform/scheduler/test/fake_task_runner.h"
-#include "third_party/blink/renderer/platform/testing/testing_platform_support_with_mock_scheduler.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
 #include "ui/gfx/geometry/point_f.h"
 
 namespace blink {
@@ -61,39 +67,52 @@ class MockAnchorElementInteractionHost
     std::optional<bool> is_mouse_pointer;
     std::optional<double> mouse_velocity;
     std::optional<bool> is_eager;
+    bool renderer_enacted = false;
   };
   std::vector<Call> calls_;
 
  private:
-  void OnPointerDown(const KURL& target) override {
-    calls_.push_back({.url = target, .type = PointerEventType::kOnPointerDown});
+  void OnPointerDown(const KURL& target, bool renderer_enacted) override {
+    calls_.push_back({.url = target,
+                      .type = PointerEventType::kOnPointerDown,
+                      .renderer_enacted = renderer_enacted});
   }
-  void OnPointerHoverEager(
-      const KURL& target,
-      mojom::blink::AnchorElementPointerDataPtr mouse_data) override {
+  void OnPointerHoverEager(const KURL& target,
+                           mojom::blink::AnchorElementPointerDataPtr mouse_data,
+                           bool renderer_enacted) override {
     calls_.push_back({.url = target,
                       .type = PointerEventType::kOnPointerHover,
                       .is_mouse_pointer = mouse_data->is_mouse_pointer,
                       .mouse_velocity = mouse_data->mouse_velocity,
-                      .is_eager = true});
+                      .is_eager = true,
+                      .renderer_enacted = renderer_enacted});
   }
   void OnPointerHoverModerate(
       const KURL& target,
-      mojom::blink::AnchorElementPointerDataPtr mouse_data) override {
+      mojom::blink::AnchorElementPointerDataPtr mouse_data,
+      bool renderer_enacted) override {
     calls_.push_back({.url = target,
                       .type = PointerEventType::kOnPointerHover,
                       .is_mouse_pointer = mouse_data->is_mouse_pointer,
                       .mouse_velocity = mouse_data->mouse_velocity,
-                      .is_eager = false});
+                      .is_eager = false,
+                      .renderer_enacted = renderer_enacted});
   }
-  void OnModerateViewportHeuristicTriggered(const KURL& target) override {
-    calls_.push_back(
-        {.url = target, .type = PointerEventType::kNone, .is_eager = false});
+  void OnModerateViewportHeuristicTriggered(const KURL& target,
+                                            bool renderer_enacted) override {
+    calls_.push_back({.url = target,
+                      .type = PointerEventType::kNone,
+                      .is_eager = false,
+                      .renderer_enacted = renderer_enacted});
   }
-  void OnEagerViewportHeuristicTriggered(const Vector<KURL>& targets) override {
-    for (const KURL& url : targets) {
-      calls_.push_back(
-          {.url = url, .type = PointerEventType::kNone, .is_eager = true});
+  void OnEagerViewportHeuristicTriggered(
+      Vector<mojom::blink::AnchorElementInteractionTargetPtr> targets)
+      override {
+    for (const auto& target : targets) {
+      calls_.push_back({.url = KURL(target->url),
+                        .type = PointerEventType::kNone,
+                        .is_eager = true,
+                        .renderer_enacted = target->renderer_enacted});
     }
   }
 
@@ -103,6 +122,8 @@ class MockAnchorElementInteractionHost
 
 class AnchorElementInteractionTest : public SimTest {
  protected:
+  AnchorElementInteractionTest()
+      : SimTest(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
   void SetUp() override {
     SimTest::SetUp();
 
@@ -404,6 +425,53 @@ TEST_F(AnchorElementInteractionTest, ShorterThanEagerMouseHover) {
 
   ASSERT_EQ(hosts_.size(), 1u);
   EXPECT_EQ(hosts_[0]->calls_.size(), 0u);
+}
+
+class AnchorElementInteractionRendererSideHeuristicsTest
+    : public AnchorElementInteractionTest {
+ public:
+  AnchorElementInteractionRendererSideHeuristicsTest() {
+    feature_list_.InitWithFeatures(
+        {features::kSpeculationRulesRendererSideHeuristics},
+        {features::kPreloadingEagerHoverHeuristics});
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+TEST_F(AnchorElementInteractionRendererSideHeuristicsTest,
+       ModerateHoverStillNotifiesBrowser) {
+  String source("https://example.com/p1");
+  SimRequest main_resource(source, "text/html");
+  LoadURL(source);
+  main_resource.Complete(R"HTML(
+    <a href='https://anchor1.example/'>
+      <div style='padding: 0px; width: 400px; height: 400px;'></div>
+    </a>
+  )HTML");
+
+  auto task_runner = base::MakeRefCounted<scheduler::FakeTaskRunner>();
+  GetDocument().GetAnchorElementInteractionTracker()->SetTaskRunnerForTesting(
+      task_runner, task_runner->GetMockTickClock());
+
+  gfx::PointF coordinates(100, 100);
+  WebMouseEvent event(WebInputEvent::Type::kMouseMove, coordinates, coordinates,
+                      WebPointerProperties::Button::kNoButton, 0,
+                      WebInputEvent::kNoModifiers,
+                      WebInputEvent::GetStaticTimeStampForTests());
+  GetDocument().GetFrame()->GetEventHandler().HandleMouseMoveEvent(
+      event, Vector<WebMouseEvent>(), Vector<WebMouseEvent>());
+
+  task_runner->AdvanceTimeAndRun(GetLongerThanModerateHoverDwellTime());
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return hosts_.size() == 1u && hosts_[0]->calls_.size() == 1u; }));
+
+  ASSERT_EQ(hosts_.size(), 1u);
+  ASSERT_EQ(hosts_[0]->calls_.size(), 1u);
+  EXPECT_EQ(hosts_[0]->calls_[0].url, KURL("https://anchor1.example/"));
+  EXPECT_EQ(hosts_[0]->calls_[0].type, PointerEventType::kOnPointerHover);
+  EXPECT_FALSE(hosts_[0]->calls_[0].is_eager.value());
 }
 
 class AnchorElementInteractionEagerHeuristicsTest
@@ -742,8 +810,11 @@ class AnchorElementInteractionViewportHeuristicsTest
            {"distance_from_ptr_down_hi", "0"},
            {"largest_anchor_threshold", "0.5"}}},
          {features::kPreloadingEagerViewportHeuristics,
-          {{"viewport_present_time", "100ms"}}}},
-        {});
+          {{"viewport_present_time", "100ms"}}},
+         {features::kPreloadingEligibilityCheckOnRenderer, {}}},
+        // These tests cover the browser-notification path, which is bypassed
+        // when the renderer selects and enacts candidates itself.
+        {features::kSpeculationRulesRendererSideHeuristics});
     config_scope_ =
         std::make_unique<ModerateViewportHeuristicConfigTestingScope>();
   }
@@ -791,10 +862,12 @@ class AnchorElementInteractionViewportHeuristicsTest
   }
 
   void ProcessPositionUpdates() {
-    platform_->RunForPeriodSeconds(ConvertDOMHighResTimeStampToSeconds(
-        AnchorElementViewportPositionTracker::MaybeGetOrCreateFor(GetDocument())
-            ->GetIntersectionObserverForTesting()
-            ->delay()));
+    task_environment().FastForwardBy(
+        base::Seconds(ConvertDOMHighResTimeStampToSeconds(
+            AnchorElementViewportPositionTracker::MaybeGetOrCreateFor(
+                GetDocument())
+                ->GetIntersectionObserverForTesting()
+                ->delay())));
     GetDocument().View()->UpdateAllLifecyclePhasesForTest();
     base::RunLoop().RunUntilIdle();
   }
@@ -818,19 +891,19 @@ class AnchorElementInteractionViewportHeuristicsTest
     main_resource.Complete(params.main_resource_body);
 
     GetDocument().GetAnchorElementInteractionTracker()->SetTaskRunnerForTesting(
-        platform_->test_task_runner(),
-        platform_->test_task_runner()->GetMockTickClock());
+        task_environment().GetMainThreadTaskRunner(),
+        task_environment().GetMockTickClock());
 
     Compositor().BeginFrame();
     // The 10ms matches the "post_fcp_observation_delay" param set for
     // kNavigationPredictor.
-    platform_->RunForPeriod(base::Milliseconds(10));
+    task_environment().FastForwardBy(base::Milliseconds(10));
     DispatchPointerDownAndVerticalScroll(params.pointer_down_location,
                                          params.scroll_delta);
     ProcessPositionUpdates();
 
     // Wait for all activation of viewport heuristics.
-    platform_->RunForPeriod(EnoughWaitTimeForAllViewportHeuristics());
+    task_environment().FastForwardBy(EnoughWaitTimeForAllViewportHeuristics());
     base::RunLoop().RunUntilIdle();
   }
 
@@ -839,7 +912,7 @@ class AnchorElementInteractionViewportHeuristicsTest
     AnchorElementInteractionTest::SetUp();
 
     // Allows WidgetInputHandlerManager::InitOnInputHandlingThread() to run.
-    platform_->RunForPeriod(base::Milliseconds(1));
+    task_environment().FastForwardBy(base::Milliseconds(1));
   }
 
   frame_test_helpers::TestWebFrameWidget* CreateWebFrameWidget(
@@ -872,8 +945,7 @@ class AnchorElementInteractionViewportHeuristicsTest
     return test_web_frame_widget;
   }
 
-  ScopedTestingPlatformSupport<TestingPlatformSupportWithMockScheduler>
-      platform_;
+  ScopedTestingPlatformSupport<TestingPlatformSupport> platform_;
 
  private:
   base::test::ScopedFeatureList feature_list_;
@@ -881,6 +953,12 @@ class AnchorElementInteractionViewportHeuristicsTest
 };
 
 TEST_F(AnchorElementInteractionViewportHeuristicsTest, BasicTest) {
+  // When this is enabled, host receives an additional PointerOver call that it
+  // does not expect. This test should account for mouse hover over both active
+  // and inactive pages. https://issues.chromium.org/issues/488090081
+  ScopedSyntheticMouseHoverOverInactivePageForTest
+      disable_synthetic_mouse_hover_over_inactive_page(false);
+
   String body = R"HTML(
     <body style="margin: 0px">
       <div style="height: 200px"></div>
@@ -903,6 +981,105 @@ TEST_F(AnchorElementInteractionViewportHeuristicsTest, BasicTest) {
   EXPECT_TRUE(hosts_[0]->calls_[1].is_eager.has_value());
   EXPECT_NE(hosts_[0]->calls_[0].is_eager.value(),
             hosts_[0]->calls_[1].is_eager.value());
+}
+
+TEST_F(AnchorElementInteractionViewportHeuristicsTest,
+       PreloadingDataSaverEnabled) {
+  ScopedSyntheticMouseHoverOverInactivePageForTest
+      disable_synthetic_mouse_hover_over_inactive_page(false);
+  WebNetworkStateNotifier::SetSaveDataEnabled(true);
+
+  String body = R"HTML(
+    <body style="margin: 0px">
+      <div style="height: 200px"></div>
+      <a href="https://example.com/foo"
+         style="height: 100px; display: block;">link</a>
+      <div style="height: 300px"></div>
+    </body>
+  )HTML";
+  RunBasicTestFixture({.main_resource_body = body,
+                       .pointer_down_location = gfx::PointF(100, 180),
+                       .scroll_delta = -100});
+
+  ASSERT_EQ(hosts_.size(), 1u);
+  // Verify that no IPC messages were sent to the browser process to trigger
+  // preloading.
+  EXPECT_EQ(hosts_[0]->calls_.size(), 0u);
+  WebNetworkStateNotifier::SetSaveDataEnabled(false);
+}
+
+TEST_F(AnchorElementInteractionViewportHeuristicsTest, BatterySaverEnabled) {
+  ScopedSyntheticMouseHoverOverInactivePageForTest
+      disable_synthetic_mouse_hover_over_inactive_page(false);
+
+  String body = R"HTML(
+    <body style="margin: 0px">
+      <div style="height: 200px"></div>
+      <a href="https://example.com/foo"
+         style="height: 100px; display: block;">link</a>
+      <div style="height: 300px"></div>
+    </body>
+  )HTML";
+  String source("https://example.com/page.html");
+  SimRequest main_resource(source, "text/html");
+  LoadURL(source);
+  main_resource.Complete(body);
+
+  GetDocument().GetPage()->GetSettings().SetBatterySaverEnabled(true);
+
+  GetDocument().GetAnchorElementInteractionTracker()->SetTaskRunnerForTesting(
+      task_environment().GetMainThreadTaskRunner(),
+      task_environment().GetMockTickClock());
+
+  Compositor().BeginFrame();
+  task_environment().FastForwardBy(base::Milliseconds(10));
+  DispatchPointerDownAndVerticalScroll(gfx::PointF(100, 180), -100);
+  ProcessPositionUpdates();
+
+  task_environment().FastForwardBy(EnoughWaitTimeForAllViewportHeuristics());
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_EQ(hosts_.size(), 1u);
+  // Verify that no IPC messages were sent to the browser process to trigger
+  // preloading.
+  EXPECT_EQ(hosts_[0]->calls_.size(), 0u);
+}
+
+TEST_F(AnchorElementInteractionViewportHeuristicsTest, PreloadingDisabled) {
+  ScopedSyntheticMouseHoverOverInactivePageForTest
+      disable_synthetic_mouse_hover_over_inactive_page(false);
+
+  String body = R"HTML(
+    <body style="margin: 0px">
+      <div style="height: 200px"></div>
+      <a href="https://example.com/foo"
+         style="height: 100px; display: block;">link</a>
+      <div style="height: 300px"></div>
+    </body>
+  )HTML";
+  String source("https://example.com/page.html");
+  SimRequest main_resource(source, "text/html");
+  LoadURL(source);
+  main_resource.Complete(body);
+
+  GetDocument().GetPage()->GetSettings().SetPreloadingDisabled(true);
+
+  GetDocument().GetAnchorElementInteractionTracker()->SetTaskRunnerForTesting(
+      task_environment().GetMainThreadTaskRunner(),
+      task_environment().GetMockTickClock());
+
+  Compositor().BeginFrame();
+  task_environment().FastForwardBy(base::Milliseconds(10));
+  DispatchPointerDownAndVerticalScroll(gfx::PointF(100, 180), -100);
+  ProcessPositionUpdates();
+
+  task_environment().FastForwardBy(EnoughWaitTimeForAllViewportHeuristics());
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_EQ(hosts_.size(), 1u);
+  // Verify that no IPC messages were sent to the browser process to trigger
+  // preloading.
+  EXPECT_EQ(hosts_[0]->calls_.size(), 0u);
 }
 
 // Tests scenario where an anchor's distance_from_pointer_down_ratio after a
@@ -994,6 +1171,48 @@ TEST_F(AnchorElementInteractionViewportHeuristicsTest,
   EXPECT_EQ(moderate_viewport_call_it->type, PointerEventType::kNone);
 }
 
+// With renderer-side heuristics the renderer enacts the matching candidate
+// itself, but the browser must still be told the heuristic fired so it can
+// record the preloading prediction for it.
+class AnchorElementInteractionViewportHeuristicsRendererSideTest
+    : public AnchorElementInteractionViewportHeuristicsTest {
+ public:
+  AnchorElementInteractionViewportHeuristicsRendererSideTest() {
+    feature_list_.InitAndEnableFeature(
+        features::kSpeculationRulesRendererSideHeuristics);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+TEST_F(AnchorElementInteractionViewportHeuristicsRendererSideTest,
+       BrowserIsStillNotified) {
+  String body = R"HTML(
+    <body style="margin: 0px">
+      <div style="height: 100px"></div>
+      <a href="https://example.com/foo"
+        style="display: block; height: 40px;">foo</a>
+      <a href="https://example.com/bar"
+        style="display: block; height: 20px;">bar</a>
+      <div style="height: 400px"></div>
+    </body>
+  )HTML";
+  RunBasicTestFixture({.main_resource_body = body,
+                       .pointer_down_location = gfx::PointF(100, 150),
+                       .scroll_delta = -25});
+
+  ASSERT_EQ(hosts_.size(), 1u);
+  const auto moderate_viewport_call_it = std::ranges::find_if(
+      hosts_[0]->calls_,
+      [](const MockAnchorElementInteractionHost::Call& call) {
+        return call.type == PointerEventType::kNone &&
+               call.is_eager.has_value() && !call.is_eager.value();
+      });
+  ASSERT_NE(moderate_viewport_call_it, hosts_[0]->calls_.end());
+  EXPECT_EQ(moderate_viewport_call_it->url, KURL("https://example.com/foo"));
+}
+
 TEST_F(AnchorElementInteractionViewportHeuristicsTest, MultipleAnchors) {
   String body = R"HTML(
     <body style="margin: 0px">
@@ -1033,6 +1252,12 @@ TEST_F(AnchorElementInteractionViewportHeuristicsTest, MultipleAnchors) {
 
 TEST_F(AnchorElementInteractionViewportHeuristicsTest,
        PointerDownImmediatelyAfterScroll) {
+  // When this is enabled, host receives an additional PointerOver call that it
+  // does not expect. This test should account for mouse hover over both active
+  // and inactive pages. https://issues.chromium.org/issues/488090081
+  ScopedSyntheticMouseHoverOverInactivePageForTest
+      disable_synthetic_mouse_hover_over_inactive_page(false);
+
   String source(KURL("https://example.com"));
   SimRequest main_resource(source, "text/html");
   LoadURL(source);
@@ -1044,22 +1269,22 @@ TEST_F(AnchorElementInteractionViewportHeuristicsTest,
   )HTML");
 
   GetDocument().GetAnchorElementInteractionTracker()->SetTaskRunnerForTesting(
-      platform_->test_task_runner(),
-      platform_->test_task_runner()->GetMockTickClock());
+      task_environment().GetMainThreadTaskRunner(),
+      task_environment().GetMockTickClock());
 
   Compositor().BeginFrame();
   // The 10ms matches the "post_fcp_observation_delay" param set for
   // kNavigationPredictor.
-  platform_->RunForPeriod(base::Milliseconds(10));
+  task_environment().FastForwardBy(base::Milliseconds(10));
   DispatchPointerDownAndVerticalScroll(gfx::PointF(100, 200), -100);
   ProcessPositionUpdates();
 
-  platform_->RunForPeriod(base::Milliseconds(10));
+  task_environment().FastForwardBy(base::Milliseconds(10));
   // Second pointerdown happens 10ms after the scroll end, which is within the
   // configured delay period of 100ms.
   DispatchPointerDown(gfx::PointF(200, 375));
   // Ensure we go past the configured delay period.
-  platform_->RunForPeriodSeconds(0.1);
+  task_environment().FastForwardBy(base::Seconds(0.1));
   base::RunLoop().RunUntilIdle();
 
   // Second pointerdown happening during the delay period should prevent the
@@ -1074,6 +1299,12 @@ TEST_F(AnchorElementInteractionViewportHeuristicsTest,
 
 TEST_F(AnchorElementInteractionViewportHeuristicsTest,
        EagerHeuristicsTriggerForAnchorsInViewport) {
+  // When this is enabled, host receives an additional PointerOver call that it
+  // does not expect. This test should account for mouse hover over both active
+  // and inactive pages. https://issues.chromium.org/issues/488090081
+  ScopedSyntheticMouseHoverOverInactivePageForTest
+      disable_synthetic_mouse_hover_over_inactive_page(false);
+
   String body = R"HTML(
     <body style="margin: 0px">
       <div style="height: 50px"></div>
@@ -1107,6 +1338,12 @@ TEST_F(AnchorElementInteractionViewportHeuristicsTest,
 
 TEST_F(AnchorElementInteractionViewportHeuristicsTest,
        PredictorDisabledIfAllAnchorsNotSampledIn) {
+  // When this is enabled, host receives an additional PointerOver call that it
+  // does not expect. This test should account for mouse hover over both active
+  // and inactive pages. https://issues.chromium.org/issues/488090081
+  ScopedSyntheticMouseHoverOverInactivePageForTest
+      disable_synthetic_mouse_hover_over_inactive_page(false);
+
   std::map<std::string, std::string> params = GetParamsForNavigationPredictor();
   params["random_anchor_sampling_period"] = "2";
   base::test::ScopedFeatureList feature_list;
@@ -1129,6 +1366,312 @@ TEST_F(AnchorElementInteractionViewportHeuristicsTest,
   // 1 (not all anchors are sampled in).
   ASSERT_EQ(hosts_.size(), 1u);
   EXPECT_EQ(hosts_[0]->calls_.size(), 0u);
+}
+
+// Predicate matching a "moderate" viewport heuristic trigger (as opposed to an
+// "eager" one or a hover/pointer-down call).
+bool IsModerateViewportCall(
+    const MockAnchorElementInteractionHost::Call& call) {
+  return call.type == PointerEventType::kNone && call.is_eager.has_value() &&
+         !call.is_eager.value();
+}
+
+// Verifies that an author-specified "moderate_viewport_heuristics" object,
+// delivered via speculation rules, overrides the default heuristic config when
+// the SpeculationRulesModerateViewportHeuristicsControl origin trial is
+// enabled. Here the "delay" is overridden to the (clamped) maximum of 5s, so
+// the "moderate" viewport trigger should not fire within the usual wait window
+// (it fires at the default 100ms without the override), but should fire after
+// advancing time past the overridden delay.
+TEST_F(AnchorElementInteractionViewportHeuristicsTest,
+       AuthorOverridesDelayViaOriginTrial) {
+  ScopedSpeculationRulesModerateViewportHeuristicsControlForTest ot_enabled(
+      true);
+  ScopedSyntheticMouseHoverOverInactivePageForTest
+      disable_synthetic_mouse_hover_over_inactive_page(false);
+
+  String body = R"HTML(
+    <body style="margin: 0px">
+      <script type="speculationrules">
+      {
+        "moderate_viewport_heuristics": { "delay": 5000 }
+      }
+      </script>
+      <div style="height: 200px"></div>
+      <a href="https://example.com/foo"
+         style="height: 100px; display: block;">link</a>
+      <div style="height: 300px"></div>
+    </body>
+  )HTML";
+  RunBasicTestFixture({.main_resource_body = body,
+                       .pointer_down_location = gfx::PointF(100, 180),
+                       .scroll_delta = -100});
+
+  // Within the standard wait window only the "eager" viewport trigger should
+  // have fired; the "moderate" trigger is still waiting out the 5s delay.
+  ASSERT_EQ(hosts_.size(), 1u);
+  auto is_moderate_viewport_call =
+      [](const MockAnchorElementInteractionHost::Call& call) {
+        return call.type == PointerEventType::kNone &&
+               call.is_eager.has_value() && !call.is_eager.value();
+      };
+  EXPECT_EQ(std::ranges::count_if(hosts_[0]->calls_, is_moderate_viewport_call),
+            0);
+
+  // After advancing past the overridden delay, the "moderate" trigger fires.
+  task_environment().FastForwardBy(base::Seconds(5));
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return std::ranges::any_of(hosts_[0]->calls_, is_moderate_viewport_call);
+  }));
+  const auto moderate_viewport_call_it =
+      std::ranges::find_if(hosts_[0]->calls_, is_moderate_viewport_call);
+  ASSERT_NE(moderate_viewport_call_it, hosts_[0]->calls_.end());
+  EXPECT_EQ(moderate_viewport_call_it->url, KURL("https://example.com/foo"));
+
+  // Applying author params (under the origin trial) records the use counter.
+  EXPECT_TRUE(GetDocument().IsUseCounted(
+      WebFeature::kSpeculationRulesModerateViewportHeuristicsControl));
+}
+
+// Speculation rules are parsed regardless of the origin trial; whether the
+// author params take effect is decided live when the heuristic runs. So opting
+// into the trial *after* the rules were parsed must still apply the params on a
+// subsequent scroll, with no re-parsing required. This is the third-party
+// origin-trial ordering case (token registered after rules are injected).
+TEST_F(AnchorElementInteractionViewportHeuristicsTest,
+       LateOriginTrialOptInAppliesParsedParams) {
+  ScopedSyntheticMouseHoverOverInactivePageForTest
+      disable_synthetic_mouse_hover_over_inactive_page(false);
+
+  // The document and its speculation rules load and parse while the origin
+  // trial is NOT enabled.
+  String source(KURL("https://example.com"));
+  SimRequest main_resource(source, "text/html");
+  LoadURL(source);
+  main_resource.Complete(R"HTML(
+    <body style="margin: 0px">
+      <script type="speculationrules">
+      { "moderate_viewport_heuristics": { "delay": 5000 } }
+      </script>
+      <div style="height: 200px"></div>
+      <a href="https://example.com/foo"
+         style="height: 100px; display: block;">link</a>
+      <div style="height: 300px"></div>
+    </body>
+  )HTML");
+
+  GetDocument().GetAnchorElementInteractionTracker()->SetTaskRunnerForTesting(
+      task_environment().GetMainThreadTaskRunner(),
+      task_environment().GetMockTickClock());
+  Compositor().BeginFrame();
+  task_environment().FastForwardBy(base::Milliseconds(10));
+
+  // Now opt into the origin trial, after the rules have already been parsed.
+  ScopedSpeculationRulesModerateViewportHeuristicsControlForTest ot_enabled(
+      true);
+
+  DispatchPointerDownAndVerticalScroll(gfx::PointF(100, 180), -100);
+  ProcessPositionUpdates();
+  // FastForwardBy runs any tasks that come due within the window (including the
+  // mojo delivery of an eager trigger), so no explicit run-loop flush is needed
+  // before checking that no "moderate" trigger has fired yet.
+  task_environment().FastForwardBy(EnoughWaitTimeForAllViewportHeuristics());
+
+  // The author's 5s delay applies even though the trial was enabled only after
+  // parsing: with the default 100ms delay the "moderate" trigger would already
+  // have fired within this window.
+  ASSERT_EQ(hosts_.size(), 1u);
+  EXPECT_EQ(std::ranges::count_if(hosts_[0]->calls_, IsModerateViewportCall),
+            0);
+
+  task_environment().FastForwardBy(base::Seconds(5));
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return std::ranges::any_of(hosts_[0]->calls_, IsModerateViewportCall);
+  }));
+  const auto moderate_viewport_call_it =
+      std::ranges::find_if(hosts_[0]->calls_, IsModerateViewportCall);
+  ASSERT_NE(moderate_viewport_call_it, hosts_[0]->calls_.end());
+  EXPECT_EQ(moderate_viewport_call_it->url, KURL("https://example.com/foo"));
+}
+
+// With the default config, the dominant anchor ("two") is selected (see the
+// MultipleAnchors test). An author-specified, very high
+// "largest_anchor_threshold" should suppress that selection, since no anchor is
+// large enough relative to its neighbours to clear the bar.
+TEST_F(AnchorElementInteractionViewportHeuristicsTest,
+       AuthorOverridesLargestAnchorThresholdViaOriginTrial) {
+  ScopedSpeculationRulesModerateViewportHeuristicsControlForTest ot_enabled(
+      true);
+  ScopedSyntheticMouseHoverOverInactivePageForTest
+      disable_synthetic_mouse_hover_over_inactive_page(false);
+
+  String body = R"HTML(
+    <body style="margin: 0px">
+      <script type="speculationrules">
+      { "moderate_viewport_heuristics": { "largest_anchor_threshold": 5.0 } }
+      </script>
+      <div style="height: 100px"></div>
+      <a href="https://example.com/one"
+        style="display: block; height: 30px;">one</a>
+      <a href="https://example.com/two"
+        style="display: block; height: 40px;">two</a>
+      <a href="https://example.com/three"
+        style="display: block; height: 20px;">three</a>
+      <a href="https://example.com/four"
+        style="display: block; height: 20px;">four</a>
+      <a href="https://example.com/five"
+        style="display: block; height: 100px;">five</a>
+      <div style="height: 400px"></div>
+    </body>
+  )HTML";
+  RunBasicTestFixture({.main_resource_body = body,
+                       .pointer_down_location = gfx::PointF(100, 220),
+                       .scroll_delta = -25});
+
+  ASSERT_EQ(hosts_.size(), 1u);
+  EXPECT_EQ(std::ranges::count_if(hosts_[0]->calls_, IsModerateViewportCall),
+            0);
+}
+
+// With the default config, "one" and "five" are excluded by the proximity
+// filter, so "two" wins. Widening "distance_from_pointer_down" to [-1, 1] lets
+// the proximity filter admit everything, so the largest anchor overall ("five")
+// is selected instead.
+TEST_F(AnchorElementInteractionViewportHeuristicsTest,
+       AuthorOverridesDistanceBandViaOriginTrial) {
+  ScopedSpeculationRulesModerateViewportHeuristicsControlForTest ot_enabled(
+      true);
+  ScopedSyntheticMouseHoverOverInactivePageForTest
+      disable_synthetic_mouse_hover_over_inactive_page(false);
+
+  String body = R"HTML(
+    <body style="margin: 0px">
+      <script type="speculationrules">
+      { "moderate_viewport_heuristics": {
+          "distance_from_pointer_down": [-1.0, 1.0] } }
+      </script>
+      <div style="height: 100px"></div>
+      <a href="https://example.com/one"
+        style="display: block; height: 30px;">one</a>
+      <a href="https://example.com/two"
+        style="display: block; height: 40px;">two</a>
+      <a href="https://example.com/three"
+        style="display: block; height: 20px;">three</a>
+      <a href="https://example.com/four"
+        style="display: block; height: 20px;">four</a>
+      <a href="https://example.com/five"
+        style="display: block; height: 100px;">five</a>
+      <div style="height: 400px"></div>
+    </body>
+  )HTML";
+  RunBasicTestFixture({.main_resource_body = body,
+                       .pointer_down_location = gfx::PointF(100, 220),
+                       .scroll_delta = -25});
+
+  ASSERT_EQ(hosts_.size(), 1u);
+  const auto moderate_viewport_call_it =
+      std::ranges::find_if(hosts_[0]->calls_, IsModerateViewportCall);
+  ASSERT_NE(moderate_viewport_call_it, hosts_[0]->calls_.end());
+  EXPECT_EQ(moderate_viewport_call_it->url, KURL("https://example.com/five"));
+}
+
+// An author-specified "delay" larger than the 5s cap is clamped to 5s: the
+// "moderate" trigger must not have fired during the standard wait window, but
+// must fire after advancing exactly 5s (it would still be waiting if the
+// requested 10s had been honored).
+TEST_F(AnchorElementInteractionViewportHeuristicsTest,
+       AuthorDelayIsClampedToFiveSeconds) {
+  ScopedSpeculationRulesModerateViewportHeuristicsControlForTest ot_enabled(
+      true);
+  ScopedSyntheticMouseHoverOverInactivePageForTest
+      disable_synthetic_mouse_hover_over_inactive_page(false);
+
+  String body = R"HTML(
+    <body style="margin: 0px">
+      <script type="speculationrules">
+      { "moderate_viewport_heuristics": { "delay": 10000 } }
+      </script>
+      <div style="height: 200px"></div>
+      <a href="https://example.com/foo"
+         style="height: 100px; display: block;">link</a>
+      <div style="height: 300px"></div>
+    </body>
+  )HTML";
+  RunBasicTestFixture({.main_resource_body = body,
+                       .pointer_down_location = gfx::PointF(100, 180),
+                       .scroll_delta = -100});
+
+  ASSERT_EQ(hosts_.size(), 1u);
+  EXPECT_EQ(std::ranges::count_if(hosts_[0]->calls_, IsModerateViewportCall),
+            0);
+
+  task_environment().FastForwardBy(base::Seconds(5));
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return std::ranges::any_of(hosts_[0]->calls_, IsModerateViewportCall);
+  }));
+  const auto moderate_viewport_call_it =
+      std::ranges::find_if(hosts_[0]->calls_, IsModerateViewportCall);
+  ASSERT_NE(moderate_viewport_call_it, hosts_[0]->calls_.end());
+  EXPECT_EQ(moderate_viewport_call_it->url, KURL("https://example.com/foo"));
+}
+
+// An author-specified "delay" below the 10ms floor (enforced per privacy
+// review) is clamped up to 10ms. A requested delay of 0 would otherwise fire
+// the "moderate" trigger synchronously while processing position updates; the
+// clamp defers it, so it must not fire until time has advanced past 10ms.
+TEST_F(AnchorElementInteractionViewportHeuristicsTest,
+       AuthorDelayIsClampedToTenMillisecondMinimum) {
+  ScopedSpeculationRulesModerateViewportHeuristicsControlForTest ot_enabled(
+      true);
+  ScopedSyntheticMouseHoverOverInactivePageForTest
+      disable_synthetic_mouse_hover_over_inactive_page(false);
+
+  String source(KURL("https://example.com"));
+  SimRequest main_resource(source, "text/html");
+  LoadURL(source);
+  main_resource.Complete(R"HTML(
+    <body style="margin: 0px">
+      <script type="speculationrules">
+      { "moderate_viewport_heuristics": { "delay": 0 } }
+      </script>
+      <div style="height: 200px"></div>
+      <a href="https://example.com/foo"
+         style="height: 100px; display: block;">link</a>
+      <div style="height: 300px"></div>
+    </body>
+  )HTML");
+
+  GetDocument().GetAnchorElementInteractionTracker()->SetTaskRunnerForTesting(
+      task_environment().GetMainThreadTaskRunner(),
+      task_environment().GetMockTickClock());
+
+  Compositor().BeginFrame();
+  // The 10ms matches the "post_fcp_observation_delay" param set for
+  // kNavigationPredictor.
+  task_environment().FastForwardBy(base::Milliseconds(10));
+  DispatchPointerDownAndVerticalScroll(gfx::PointF(100, 180), -100);
+  ProcessPositionUpdates();
+
+  // The requested delay of 0 is clamped up to the 10ms minimum, so the
+  // "moderate" trigger must not have fired synchronously with the position
+  // update (it would have, had the 0ms been honored).
+  ASSERT_EQ(hosts_.size(), 1u);
+  EXPECT_EQ(std::ranges::count_if(hosts_[0]->calls_, IsModerateViewportCall),
+            0);
+
+  // After advancing past the 10ms floor, the "moderate" trigger fires.
+  task_environment().FastForwardBy(base::Milliseconds(10));
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return std::ranges::any_of(hosts_[0]->calls_, IsModerateViewportCall);
+  }));
+  const auto moderate_viewport_call_it =
+      std::ranges::find_if(hosts_[0]->calls_, IsModerateViewportCall);
+  ASSERT_NE(moderate_viewport_call_it, hosts_[0]->calls_.end());
+  EXPECT_EQ(moderate_viewport_call_it->url, KURL("https://example.com/foo"));
+
+  // Applying author params (under the origin trial) records the use counter.
+  EXPECT_TRUE(GetDocument().IsUseCounted(
+      WebFeature::kSpeculationRulesModerateViewportHeuristicsControl));
 }
 
 // Regression test for https://crbug.com/458237344.

@@ -9,9 +9,11 @@
 #include <utility>
 #include <vector>
 
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/gtest_util.h"
+#include "base/test/run_until.h"
 #include "build/build_config.h"
 #include "ui/accessibility/ax_action_data.h"
 #include "ui/accessibility/ax_enums.mojom.h"
@@ -28,7 +30,10 @@
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/native_ui_types.h"
+#include "ui/views/accessibility/ax_virtual_view.h"
+#include "ui/views/cascading_property.h"
 #include "ui/views/controls/button/button.h"
+#include "ui/views/controls/button/radio_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/menu/submenu_view.h"
 #include "ui/views/controls/menu/test_menu_item_view.h"
@@ -610,6 +615,61 @@ TEST_F(ViewAXPlatformNodeDelegateTest, LabelIsChildOfButton) {
   EXPECT_EQ(ax::mojom::Role::kStaticText, label_accessibility()->GetRole());
 }
 
+// An ignored view is left out of its parent's children, but still reports that
+// parent. Asking it for its index in parent therefore searches a list it can
+// never appear in.
+TEST_F(ViewAXPlatformNodeDelegateTest, IgnoredChildIndexInParent) {
+  button_->SetInstallFocusRingOnFocus(false);
+
+  // A focusable button ignores all of its children, and a parent with no
+  // unignored children is a leaf, which is handled separately. So make the
+  // button unfocusable and give the label a sibling.
+  button_->SetFocusBehavior(View::FocusBehavior::NEVER);
+  button_->AddChildView(std::make_unique<Label>());
+  label_->GetViewAccessibility().SetIsIgnored(true);
+
+  ASSERT_EQ(1u, button_accessibility()->GetChildCount());
+  ASSERT_NE(label_->GetNativeViewAccessible(),
+            button_accessibility()->ChildAtIndex(0));
+  ASSERT_EQ(button_->GetNativeViewAccessible(),
+            label_accessibility()->GetParent());
+
+  auto* label_node = static_cast<ui::AXPlatformNodeBase*>(
+      ui::AXPlatformNode::FromNativeViewAccessible(
+          label_->GetNativeViewAccessible()));
+  ASSERT_NE(nullptr, label_node);
+
+  EXPECT_FALSE(label_node->GetIndexInParent().has_value());
+}
+
+// A virtual child hides all of its parent's real children, but those children
+// still report that parent. Asking one of them for its index in parent
+// therefore searches a list it can never appear in.
+TEST_F(ViewAXPlatformNodeDelegateTest, HiddenRealChildIndexInParent) {
+  button_->SetInstallFocusRingOnFocus(false);
+  button_->SetFocusBehavior(View::FocusBehavior::NEVER);
+
+  auto virtual_label = std::make_unique<AXVirtualView>();
+  virtual_label->SetRole(ax::mojom::Role::kStaticText);
+  virtual_label->SetName("Virtual label");
+  button_->GetViewAccessibility().AddVirtualChildView(std::move(virtual_label));
+
+  // The virtual child is now the button's only child, and the real label is
+  // nowhere among them.
+  ASSERT_EQ(1u, button_accessibility()->GetChildCount());
+  ASSERT_NE(label_->GetNativeViewAccessible(),
+            button_accessibility()->ChildAtIndex(0));
+  ASSERT_EQ(button_->GetNativeViewAccessible(),
+            label_accessibility()->GetParent());
+
+  auto* label_node = static_cast<ui::AXPlatformNodeBase*>(
+      ui::AXPlatformNode::FromNativeViewAccessible(
+          label_->GetNativeViewAccessible()));
+  ASSERT_NE(nullptr, label_node);
+
+  EXPECT_FALSE(label_node->GetIndexInParent().has_value());
+}
+
 // Verify Views with invisible ancestors have ax::mojom::State::kInvisible.
 TEST_F(ViewAXPlatformNodeDelegateTest, InvisibleViews) {
   EXPECT_TRUE(widget_->IsVisible());
@@ -859,6 +919,27 @@ TEST_F(ViewAXPlatformNodeDelegateTest, SetSizeAndPosition) {
 
   EXPECT_EQ(view_accessibility(group_ids[4])->GetSetSize(), 4);
   EXPECT_EQ(view_accessibility(group_ids[4])->GetPosInSet(), 1);
+}
+
+TEST_F(ViewAXPlatformNodeDelegateTest, NonSiblingRadioButtons) {
+  // Ensure that radio buttons that aren't direct siblings read properly when
+  // the Cascading property is applied.
+  auto* group_owner =
+      widget_->GetRootView()->AddChildView(std::make_unique<View>());
+  SetCascadingRadioGroupView(group_owner, kCascadingRadioGroupView);
+
+  auto* wrapper1 = group_owner->AddChildView(std::make_unique<View>());
+  auto* radio1 =
+      wrapper1->AddChildView(std::make_unique<RadioButton>(u"Radio 1", 1));
+  auto* wrapper2 = group_owner->AddChildView(std::make_unique<View>());
+  auto* radio2 =
+      wrapper2->AddChildView(std::make_unique<RadioButton>(u"Radio 2", 1));
+
+  EXPECT_EQ(view_accessibility(radio1)->GetSetSize(), 2);
+  EXPECT_EQ(view_accessibility(radio1)->GetPosInSet(), 1);
+
+  EXPECT_EQ(view_accessibility(radio2)->GetSetSize(), 2);
+  EXPECT_EQ(view_accessibility(radio2)->GetPosInSet(), 2);
 }
 
 TEST_F(ViewAXPlatformNodeDelegateTest, TreeNavigation) {
@@ -1209,6 +1290,29 @@ TEST_F(ViewAXPlatformNodeDelegateTest, FocusOnMenuClose) {
   run_loop.Run();
   EXPECT_EQ(button_->GetNativeViewAccessible(),
             button_accessibility()->GetFocus());
+}
+
+TEST_F(ViewAXPlatformNodeDelegateTest, TransientFocusDelaysNextFocusEvent) {
+  button_accessibility()->SetName("Button", ax::mojom::NameFrom::kAttribute);
+  textfield_accessibility()->SetName("Textfield",
+                                     ax::mojom::NameFrom::kAttribute);
+
+  int focus_events = 0;
+  ui::AXPlatformNodeBase::SetOnNotifyEventCallbackForTesting(
+      ax::mojom::Event::kFocus,
+      base::BindRepeating([](int* count) { ++*count; }, &focus_events));
+
+  widget()->GetRootView()->GetViewAccessibility().NotifyTransientFocus();
+  EXPECT_EQ(1, focus_events);
+
+  button_->NotifyAccessibilityEventDeprecated(ax::mojom::Event::kFocus, true);
+  EXPECT_EQ(1, focus_events);
+
+  EXPECT_TRUE(base::test::RunUntil([&]() { return focus_events == 2; }));
+  EXPECT_EQ(2, focus_events);
+
+  ui::AXPlatformNodeBase::SetOnNotifyEventCallbackForTesting(
+      ax::mojom::Event::kFocus, {});
 }
 
 TEST_F(ViewAXPlatformNodeDelegateTest, GetUnignoredSelection) {

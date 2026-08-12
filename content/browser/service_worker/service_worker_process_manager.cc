@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "content/browser/process_lock.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/browser/site_instance_impl.h"
@@ -88,13 +87,13 @@ ServiceWorkerProcessManager::AllocateWorkerProcess(
   if (force_new_process_for_test_)
     can_use_existing_process = false;
 
-  out_info->process_id = ChildProcessHost::kInvalidUniqueID;
+  out_info->process_id = ChildProcessId();
   out_info->start_situation = ServiceWorkerMetrics::StartSituation::UNKNOWN;
 
-  if (process_id_for_test_ != ChildProcessHost::kInvalidUniqueID) {
+  if (process_id_for_test_) {
     // Let tests specify the returned process ID.
-    int result = can_use_existing_process ? process_id_for_test_
-                                          : new_process_id_for_test_;
+    ChildProcessId result = can_use_existing_process ? process_id_for_test_
+                                                     : new_process_id_for_test_;
     out_info->process_id = result;
     out_info->start_situation =
         ServiceWorkerMetrics::StartSituation::EXISTING_READY_PROCESS;
@@ -105,7 +104,7 @@ ServiceWorkerProcessManager::AllocateWorkerProcess(
     return blink::ServiceWorkerStatusCode::kErrorAbort;
   }
 
-  DCHECK(!base::Contains(worker_process_map_, embedded_worker_id))
+  DCHECK(!worker_process_map_.contains(embedded_worker_id))
       << embedded_worker_id << " already has a process allocated";
 
   // Create a SiteInstance to get the renderer process from.
@@ -178,14 +177,14 @@ ServiceWorkerProcessManager::AllocateWorkerProcess(
   worker_process_map_.emplace(embedded_worker_id, std::move(site_instance));
   if (!rph->AreRefCountsDisabled())
     rph->IncrementWorkerRefCount();
-  out_info->process_id = rph->GetDeprecatedID();
+  out_info->process_id = rph->GetID();
   out_info->start_situation = start_situation;
   return blink::ServiceWorkerStatusCode::kOk;
 }
 
 void ServiceWorkerProcessManager::ReleaseWorkerProcess(int embedded_worker_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (process_id_for_test_ != ChildProcessHost::kInvalidUniqueID) {
+  if (process_id_for_test_) {
     // Unittests don't increment or decrement the worker refcount of a
     // RenderProcessHost.
     return;

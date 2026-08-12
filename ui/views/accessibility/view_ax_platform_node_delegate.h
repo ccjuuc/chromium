@@ -22,9 +22,7 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/views/accessibility/view_accessibility.h"
-#include "ui/views/controls/table/table_view.h"
 #include "ui/views/views_export.h"
-#include "ui/views/widget/widget_observer.h"
 
 namespace ui {
 
@@ -35,6 +33,7 @@ struct AXActionData;
 namespace views {
 
 class AtomicViewAXTreeManager;
+class TableView;
 class View;
 
 // Shared base class for platforms that require an implementation of
@@ -59,6 +58,7 @@ class VIEWS_EXPORT ViewAXPlatformNodeDelegate
   void SetPopupFocusOverride() override;
   void EndPopupFocusOverride() override;
   void FireFocusAfterMenuClose() override;
+  void NotifyTransientFocus() override;
   gfx::NativeViewAccessible GetNativeObject() const override;
   void FireNativeEvent(ax::mojom::Event event_type) override;
 #if BUILDFLAG(IS_MAC)
@@ -88,6 +88,7 @@ class VIEWS_EXPORT ViewAXPlatformNodeDelegate
   gfx::NativeViewAccessible GetNativeViewAccessible() override;
   gfx::NativeViewAccessible GetParent() const override;
   bool IsLeaf() const override;
+  bool IsIgnored() const override;
   bool IsInvisibleOrIgnored() const override;
   bool IsFocused() const override;
   gfx::Rect GetBoundsRect(
@@ -110,7 +111,6 @@ class VIEWS_EXPORT ViewAXPlatformNodeDelegate
   bool AccessibilityPerformAction(const ui::AXActionData& data) override;
   bool ShouldIgnoreHoveredStateForTesting() override;
   bool IsOffscreen() const override;
-  std::u16string GetAuthorUniqueId() const override;
   bool IsMinimized() const override;
   bool IsReadOnlySupported() const override;
   bool IsReadOnlyOrDisabled() const override;

@@ -6,12 +6,10 @@
 
 #include <memory>
 #include <string>
-#include <vector>
 
+#include "base/containers/span.h"
 #include "build/build_config.h"
-#include "chrome/browser/send_tab_to_self/desktop_notification_handler.h"
-#include "chrome/browser/send_tab_to_self/receiving_ui_handler.h"
-#include "components/send_tab_to_self/features.h"
+#include "components/send_tab_to_self/receiving_ui_handler.h"
 #include "components/send_tab_to_self/send_tab_to_self_model.h"
 
 namespace send_tab_to_self {
@@ -26,23 +24,19 @@ SendTabToSelfClientService::SendTabToSelfClientService(
 SendTabToSelfClientService::~SendTabToSelfClientService() = default;
 
 void SendTabToSelfClientService::Shutdown() {
+  model_observation_.Reset();
   receiving_ui_handler_.reset();
 }
 
-void SendTabToSelfClientService::SendTabToSelfModelLoaded() {
-  // TODO(crbug.com/40621767): Push changes that happened before the model was
-  // loaded.
-}
-
-void SendTabToSelfClientService::EntriesAddedRemotely(
-    const std::vector<const SendTabToSelfEntry*>& new_entries) {
+void SendTabToSelfClientService::OnEntriesAddedRemotely(
+    base::span<const SendTabToSelfEntry* const> new_entries) {
   if (receiving_ui_handler_) {
     receiving_ui_handler_->DisplayNewEntries(new_entries);
   }
 }
 
-void SendTabToSelfClientService::EntriesRemovedRemotely(
-    const std::vector<std::string>& guids) {
+void SendTabToSelfClientService::OnEntriesRemovedRemotely(
+    base::span<const std::string> guids) {
   if (receiving_ui_handler_) {
     receiving_ui_handler_->DismissEntries(guids);
   }

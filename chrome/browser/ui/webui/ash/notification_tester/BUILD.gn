@@ -13,7 +13,7 @@ static_library("notification_tester") {
   ]
 
   public_deps = [
-    "//chrome/common",
+    "//ash/resources/vector_icons",
     "//content/public/browser",
     "//content/public/common",
   ]
@@ -21,7 +21,6 @@ static_library("notification_tester") {
   deps = [
     "//ash/constants",
     "//base",
-    "//chrome/app:generated_resources",
     "//chrome/app/theme:chrome_unscaled_resources",
     "//chrome/app/theme:theme_resources",
     "//chrome/app/vector_icons",

@@ -8,13 +8,15 @@
 #include <utility>
 
 #include "base/functional/bind.h"
-#include "base/memory/ref_counted_memory.h"
 #include "base/memory/singleton.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/threading/thread.h"
 #include "base/values.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/defaults.h"
+#include "chrome/browser/download/download_core_service.h"
+#include "chrome/browser/download/download_core_service_factory.h"
 #include "chrome/browser/enterprise/connectors/connectors_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/advanced_protection_status_manager.h"
@@ -32,8 +34,6 @@
 #include "chrome/grit/downloads_resources.h"
 #include "chrome/grit/downloads_resources_map.h"
 #include "chrome/grit/generated_resources.h"
-#include "chrome/grit/theme_resources.h"
-#include "components/download/public/common/download_features.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/feature_engagement/public/feature_list.h"
 #include "components/google/core/common/google_util.h"
@@ -51,7 +51,6 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/resource/resource_bundle.h"
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/webui/webui_util.h"
 #include "url/gurl.h"
@@ -106,7 +105,7 @@ content::WebUIDataSource* CreateAndAddDownloadsUIHTMLSource(Profile* profile) {
        IDS_BLOCK_REASON_SENSITIVE_CONTENT_WARNING},
       {"sensitiveContentBlockedDesc",
        IDS_SENSITIVE_CONTENT_BLOCKED_DESCRIPTION},
-      {"forcedSaveToGdriveDesc", IDS_FORCED_SAVE_TO_GDRIVE_DESCRIPTION},
+      {"forcedSaveToCloudDesc", IDS_FORCED_SAVE_TO_CLOUD_DESCRIPTION},
       {"blockedTooLargeDesc", IDS_BLOCKED_TOO_LARGE_DESCRIPTION},
       {"blockedPasswordProtectedDesc",
        IDS_BLOCKED_PASSWORD_PROTECTED_DESCRIPTION},
@@ -132,6 +131,7 @@ content::WebUIDataSource* CreateAndAddDownloadsUIHTMLSource(Profile* profile) {
        IDS_DOWNLOADS_TOAST_DELETED_FROM_HISTORY_STILL_ON_DEVICE},
       {"toastDeletedFromHistory", IDS_DOWNLOADS_TOAST_DELETED_FROM_HISTORY},
       {"toastCopiedDownloadLink", IDS_DOWNLOADS_TOAST_COPIED_DOWNLOAD_LINK},
+      {"toastCopiedLink", IDS_DOWNLOADS_TOAST_COPIED_LINK},
       {"toastCopyDownloadLinkFailed",
        IDS_DOWNLOADS_TOAST_COPY_DOWNLOAD_LINK_FAILED},
       {"undo", IDS_DOWNLOAD_UNDO},
@@ -198,9 +198,6 @@ content::WebUIDataSource* CreateAndAddDownloadsUIHTMLSource(Profile* profile) {
   };
   source->AddLocalizedStrings(kStrings);
 
-  source->AddBoolean("showInitiatorOrigin",
-                     base::FeatureList::IsEnabled(
-                         download::features::kDisplayInitiatorOrigin));
   source->AddLocalizedString(
       "dangerUncommonDesc",
       requests_ap_verdicts
@@ -240,6 +237,10 @@ content::WebUIDataSource* CreateAndAddDownloadsUIHTMLSource(Profile* profile) {
                         GURL(chrome::kDownloadBlockedLearnMoreURL),
                         g_browser_process->GetApplicationLocale())
                         .spec());
+
+  source->AddString("webuiRefresh2026", features::IsWebuiRefresh2026Enabled()
+                                            ? "webui-refresh-2026"
+                                            : "");
 
   return source;
 }
@@ -286,13 +287,6 @@ WEB_UI_CONTROLLER_TYPE_IMPL(DownloadsUI)
 
 DownloadsUI::~DownloadsUI() = default;
 
-// static
-base::RefCountedMemory* DownloadsUI::GetFaviconResourceBytes(
-    ui::ResourceScaleFactor scale_factor) {
-  return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
-      IDR_DOWNLOADS_FAVICON, scale_factor);
-}
-
 void DownloadsUI::BindInterface(
     mojo::PendingReceiver<downloads::mojom::PageHandlerFactory> receiver) {
   page_factory_receiver_.reset();
@@ -305,6 +299,12 @@ void DownloadsUI::CreatePageHandler(
     mojo::PendingReceiver<downloads::mojom::PageHandler> receiver) {
   DCHECK(page);
   Profile* profile = Profile::FromWebUI(web_ui());
+  // Make sure download history is initialized.
+  DownloadCoreService* service =
+      DownloadCoreServiceFactory::GetForBrowserContext(profile);
+  if (service) {
+    service->InitializeHistory();
+  }
   DownloadManager* dlm = profile->GetDownloadManager();
 
   page_handler_ = std::make_unique<DownloadsDOMHandler>(

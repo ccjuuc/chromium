@@ -141,7 +141,7 @@ enum SearchResultType {
   ASSISTANT,
   // An OsSettingsResult.
   OS_SETTINGS,
-  // A Plugin VM App Result.
+  // Deprecated Plugin VM app result. Do not reuse.
   PLUGIN_VM_APP,
   // LaCrOS binary. (Deprecated).
   LACROS_DEPRECATED,
@@ -231,9 +231,6 @@ ASH_PUBLIC_EXPORT void RecordSearchResultOpenTypeHistogram(
     bool is_tablet_mode);
 
 ASH_PUBLIC_EXPORT void RecordDefaultSearchResultOpenTypeHistogram(
-    SearchResultType type);
-
-ASH_PUBLIC_EXPORT void RecordZeroStateSuggestionOpenTypeHistogram(
     SearchResultType type);
 
 ASH_PUBLIC_EXPORT void RecordLauncherIssuedSearchQueryLength(int query_length);

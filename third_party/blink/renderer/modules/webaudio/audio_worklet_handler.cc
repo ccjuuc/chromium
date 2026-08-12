@@ -27,7 +27,6 @@
 #include "third_party/blink/renderer/modules/webaudio/cross_thread_audio_worklet_processor_info.h"
 #include "third_party/blink/renderer/platform/audio/audio_bus.h"
 #include "third_party/blink/renderer/platform/audio/audio_utilities.h"
-#include "third_party/blink/renderer/platform/audio/denormal_disabler.h"
 #include "third_party/blink/renderer/platform/bindings/exception_messages.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
@@ -51,9 +50,7 @@ AudioWorkletHandler::AudioWorkletHandler(
     const AudioWorkletNodeOptions* options)
     : AudioHandler(NodeType::kNodeTypeAudioWorklet, node, sample_rate),
       name_(name),
-      param_handler_map_(param_handler_map),
-      allow_denormal_in_processing_(base::FeatureList::IsEnabled(
-          features::kWebAudioAllowDenormalInProcessing)) {
+      param_handler_map_(param_handler_map) {
   DCHECK(IsMainThread());
 
   for (const auto& param_name : param_handler_map_.Keys()) {
@@ -92,6 +89,7 @@ AudioWorkletHandler::AudioWorkletHandler(
   }
 
   Initialize();
+  weak_this_ = weak_ptr_factory_.GetWeakPtr();
 }
 
 AudioWorkletHandler::~AudioWorkletHandler() {
@@ -113,11 +111,17 @@ scoped_refptr<AudioWorkletHandler> AudioWorkletHandler::Create(
                                                 param_handler_map, options));
 }
 
-void AudioWorkletHandler::ProcessInternal(uint32_t frames_to_process) {
+void AudioWorkletHandler::Process(uint32_t frames_to_process) {
   DCHECK(Context()->IsAudioThread());
 
   TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("webaudio.audionode"),
                "AudioWorkletHandler::Process");
+
+  bool has_connected_inputs = HasActiveInputs();
+
+  if (!is_active_source_ && !has_connected_inputs) {
+    FinishProcessorOnRenderThread();
+  }
 
   // The associated processor is not ready, finished, or might be in an error
   // state. If so, silence the connected outputs and return.
@@ -130,8 +134,8 @@ void AudioWorkletHandler::ProcessInternal(uint32_t frames_to_process) {
     return;
   }
 
-  // If the input or the output is not connected, inform the processor with
-  // nullptr.
+  // If the input is not connected, pass nullptr to indicate 0 channels to the
+  // processor.
   for (unsigned i = 0; i < NumberOfInputs(); ++i) {
     inputs_[i] = Input(i).IsConnected() ? Input(i).Bus() : nullptr;
   }
@@ -165,44 +169,28 @@ void AudioWorkletHandler::ProcessInternal(uint32_t frames_to_process) {
   }
 
   // Run the render code and check the return value or the state of processor.
-  // If the return value is falsy, the processor's `Process()` function
-  // won't be called again.
-  if (!processor_->Process(inputs_, outputs_, param_value_map_) ||
+  is_active_source_ = processor_->Process(inputs_, outputs_, param_value_map_);
+
+  if ((!is_active_source_ && !has_connected_inputs) ||
       processor_->hasErrorOccurred()) {
-    // If the user-supplied code is not runnable (i.e. threw an exception)
-    // anymore after the process() call above. Invoke error on the main thread.
-    AudioWorkletProcessorErrorState error_state = processor_->GetErrorState();
-    if (error_state == AudioWorkletProcessorErrorState::kProcessError ||
-        error_state ==
-            AudioWorkletProcessorErrorState::kProcessMethodUndefinedError) {
-      PostCrossThreadTask(
-          *main_thread_task_runner_, FROM_HERE,
-          CrossThreadBindOnce(&AudioWorkletHandler::NotifyProcessorError,
-                              weak_ptr_factory_.GetWeakPtr(), error_state));
+    if (processor_->hasErrorOccurred()) {
+      // If the user-supplied code is not runnable (i.e. threw an exception)
+      // anymore after the process() call above. Invoke error on the main
+      // thread.
+      AudioWorkletProcessorErrorDetails error_details =
+          processor_->GetErrorDetails();
+      AudioWorkletProcessorErrorState error_state = error_details.error_state;
+      if (error_state == AudioWorkletProcessorErrorState::kProcessError ||
+          error_state ==
+              AudioWorkletProcessorErrorState::kProcessMethodUndefinedError) {
+        PostCrossThreadTask(
+            *main_thread_task_runner_, FROM_HERE,
+            CrossThreadBindOnce(&AudioWorkletHandler::NotifyProcessorError,
+                                weak_this_, error_details));
+      }
     }
 
-    // After this point, the handler has no more pending activity and is ready
-    // for GC.
-    Context()->NotifySourceNodeFinishedProcessing(this);
-    processor_.Clear();
-    tail_time_ = 0;
-
-    // The processor is cleared, so queue a task to mark this handler (and its
-    // associated AudioWorkletNode) is ready for GC.
-    PostCrossThreadTask(
-        *main_thread_task_runner_, FROM_HERE,
-        CrossThreadBindOnce(
-            &AudioWorkletHandler::MarkProcessorInactiveOnMainThread,
-            weak_ptr_factory_.GetWeakPtr()));
-  }
-}
-
-void AudioWorkletHandler::Process(uint32_t frames_to_process) {
-  if (allow_denormal_in_processing_) {
-    DenormalEnabler denormal_enabler;
-    ProcessInternal(frames_to_process);
-  } else {
-    ProcessInternal(frames_to_process);
+    FinishProcessorOnRenderThread();
   }
 }
 
@@ -266,29 +254,59 @@ void AudioWorkletHandler::SetProcessorOnRenderThread(
   if (processor) {
     processor_ = processor;
   } else {
+    AudioWorkletProcessorErrorDetails error_details(
+        AudioWorkletProcessorErrorState::kConstructionError,
+        StrCat({name_, " invoking user-supplied constructor failed"}),
+        /*source_url=*/"",
+        /*line_number=*/0,
+        /*column_number=*/0,
+        /*char_position=*/0);
     PostCrossThreadTask(
         *main_thread_task_runner_, FROM_HERE,
-        CrossThreadBindOnce(
-            &AudioWorkletHandler::NotifyProcessorError,
-            weak_ptr_factory_.GetWeakPtr(),
-            AudioWorkletProcessorErrorState::kConstructionError));
+        CrossThreadBindOnce(&AudioWorkletHandler::NotifyProcessorError,
+                            weak_this_, error_details));
   }
 }
 
 void AudioWorkletHandler::NotifyProcessorError(
-    AudioWorkletProcessorErrorState error_state) {
+    const AudioWorkletProcessorErrorDetails& error_details) {
   DCHECK(IsMainThread());
   if (!Context() || !Context()->GetExecutionContext() || !GetNode()) {
     return;
   }
 
-  static_cast<AudioWorkletNode*>(GetNode())->FireProcessorError(error_state);
+  static_cast<AudioWorkletNode*>(GetNode())->FireProcessorError(error_details);
 }
 
 void AudioWorkletHandler::MarkProcessorInactiveOnMainThread() {
   DCHECK(IsMainThread());
 
   is_processor_active_ = false;
+}
+
+bool AudioWorkletHandler::HasActiveInputs() {
+  DCHECK(Context()->IsAudioThread());
+  for (unsigned i = 0; i < NumberOfInputs(); ++i) {
+    if (Input(i).IsConnected()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void AudioWorkletHandler::FinishProcessorOnRenderThread() {
+  DCHECK(Context()->IsAudioThread());
+  if (processor_) {
+    Context()->NotifySourceNodeFinishedProcessing(this);
+    processor_.Clear();
+    tail_time_ = 0;
+
+    PostCrossThreadTask(
+        *main_thread_task_runner_, FROM_HERE,
+        CrossThreadBindOnce(
+            &AudioWorkletHandler::MarkProcessorInactiveOnMainThread,
+            weak_this_));
+  }
 }
 
 }  // namespace blink

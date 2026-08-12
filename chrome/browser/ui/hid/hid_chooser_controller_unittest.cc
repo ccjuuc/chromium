@@ -21,7 +21,6 @@
 #include "chrome/browser/hid/hid_chooser_context.h"
 #include "chrome/browser/hid/hid_chooser_context_factory.h"
 #include "chrome/browser/hid/mock_hid_device_observer.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/permissions/mock_chooser_controller_view.h"
@@ -877,7 +876,7 @@ TEST_F(HidChooserControllerTest, OneOptionForSamePhysicalDevice) {
   EXPECT_EQ(kTestPhysicalDeviceIds[0], devices[1]->physical_device_id);
   EXPECT_NE(devices[0]->guid, devices[1]->guid);
 
-  // Regression test for https://crbug.com/1069057. Ensure that the
+  // Regression test for https://crbug.com/40683822. Ensure that the
   // set of options is still valid after the callback is run.
   EXPECT_EQ(1u, hid_chooser_controller->NumOptions());
   EXPECT_EQ(u"a", hid_chooser_controller->GetOption(0));

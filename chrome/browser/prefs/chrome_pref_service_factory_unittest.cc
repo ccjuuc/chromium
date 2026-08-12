@@ -36,7 +36,7 @@ class ChromePrefServiceFactoryTestBase : public testing::Test {
         /*policy_service=*/
         g_browser_process->browser_policy_connector()->GetPolicyService(),
         /*supervised_user_settings=*/nullptr,
-        /*content_filters_service=*/nullptr,
+        g_browser_process->device_parental_controls(),
         /*extension_prefs=*/nullptr, pref_registry_,
         /*connector=*/g_browser_process->browser_policy_connector(),
         /*async=*/true, task_environment_.GetMainThreadTaskRunner().get(),
@@ -68,13 +68,13 @@ TEST_F(ChromePrefServiceFactoryTamperedPrefTest,
 
   EXPECT_TRUE(chrome_prefs::GetTamperedPrefList(profile_.get()).empty());
 
-  base::Value::List tampered_list;
+  base::ListValue tampered_list;
   tampered_list.Append("pref.path.one");
   tampered_list.Append("pref.path.two");
   pref_service->SetList(user_prefs::kTrackedPreferencesReset,
                         std::move(tampered_list));
 
-  const base::Value::List& retrieved_list =
+  const base::ListValue& retrieved_list =
       chrome_prefs::GetTamperedPrefList(profile_.get());
   EXPECT_EQ(2U, retrieved_list.size());
   EXPECT_EQ("pref.path.one", retrieved_list[0].GetString());
@@ -85,7 +85,7 @@ TEST_F(ChromePrefServiceFactoryTamperedPrefTest,
        ClearTamperedPrefListClearsPref) {
   PrefService* pref_service = profile_->GetPrefs();
 
-  base::Value::List tampered_list;
+  base::ListValue tampered_list;
   tampered_list.Append("pref.path.to.clear");
   pref_service->SetList(user_prefs::kTrackedPreferencesReset,
                         std::move(tampered_list));
@@ -98,44 +98,7 @@ TEST_F(ChromePrefServiceFactoryTamperedPrefTest,
 
 #if BUILDFLAG(IS_ANDROID)
 
-class ChromePrefServiceFactoryTestWithMigrateAccountPrefsDisabled
-    : public ChromePrefServiceFactoryTestBase {
- public:
-  ChromePrefServiceFactoryTestWithMigrateAccountPrefsDisabled() {
-    feature_list_.InitAndDisableFeature(syncer::kMigrateAccountPrefs);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-TEST_F(ChromePrefServiceFactoryTestWithMigrateAccountPrefsDisabled,
-       ShouldNotRemoveAccountPrefsFile) {
-  // Simulate a pre-existing account preferences file.
-  ASSERT_TRUE(base::WriteFile(AccountPreferencesFilePath(), "{}"));
-
-  BuildPrefService();
-  // Wait for any tasks posted to the IO to finish.
-  base::RunLoop run_loop;
-  content::GetIOThreadTaskRunner()->PostTask(FROM_HERE, run_loop.QuitClosure());
-  run_loop.Run();
-
-  // Account prefs file should not be removed.
-  EXPECT_TRUE(base::PathExists(AccountPreferencesFilePath()));
-}
-
-class ChromePrefServiceFactoryTestWithMigrateAccountPrefsEnabled
-    : public ChromePrefServiceFactoryTestBase {
- public:
-  ChromePrefServiceFactoryTestWithMigrateAccountPrefsEnabled()
-      : feature_list_(syncer::kMigrateAccountPrefs) {}
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-TEST_F(ChromePrefServiceFactoryTestWithMigrateAccountPrefsEnabled,
-       ShouldRemoveAccountPrefsFile) {
+TEST_F(ChromePrefServiceFactoryTestBase, ShouldRemoveAccountPrefsFile) {
   // Simulate a pre-existing account preferences file.
   ASSERT_TRUE(base::WriteFile(AccountPreferencesFilePath(), "{}"));
 

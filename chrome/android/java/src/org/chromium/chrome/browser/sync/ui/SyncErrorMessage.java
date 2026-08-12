@@ -13,6 +13,7 @@ import android.content.res.Resources;
 
 import androidx.annotation.DrawableRes;
 import androidx.annotation.StringRes;
+import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.IntentUtils;
@@ -30,7 +31,6 @@ import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
-import org.chromium.chrome.browser.sync.TrustedVaultClient;
 import org.chromium.chrome.browser.sync.settings.ManageSyncSettings;
 import org.chromium.chrome.browser.sync.settings.SyncSettingsUtils;
 import org.chromium.chrome.browser.sync.settings.SyncSettingsUtils.ErrorUiAction;
@@ -42,15 +42,18 @@ import org.chromium.components.messages.MessageDispatcherProvider;
 import org.chromium.components.messages.MessageIdentifier;
 import org.chromium.components.messages.PrimaryActionClickBehavior;
 import org.chromium.components.signin.AccountManagerFacadeProvider;
-import org.chromium.components.signin.base.CoreAccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
+import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.identitymanager.IdentityManager;
+import org.chromium.components.sync.BookmarksLimitExceededHelpClickedSource;
 import org.chromium.components.sync.SyncService;
 import org.chromium.components.sync.UserActionableError;
+import org.chromium.components.trusted_vault.TrustedVaultClient;
 import org.chromium.components.trusted_vault.TrustedVaultUserActionTriggerForUMA;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modelutil.PropertyModel;
+
+import java.util.concurrent.TimeUnit;
 
 /**
  * A message UI that informs the current sync error and contains a button to take action to resolve
@@ -74,6 +77,10 @@ public class SyncErrorMessage implements SyncService.SyncStateChangedListener {
             new UnownedUserDataKey<>();
     private static final String PASSWORDS_SYNC_ERROR_MESSAGE_VERSION_PARAM_NAME = "version";
     private static final String TAG = "SyncErrorMessage";
+
+    @VisibleForTesting
+    public static final long UNLOCK_VAULT_MESSAGE_DURATION =
+            TimeUnit.MILLISECONDS.convert(45, TimeUnit.SECONDS);
 
     /**
      * Creates a {@link SyncErrorMessage} in the window of |dispatcher|, or results in a no-op if
@@ -134,7 +141,7 @@ public class SyncErrorMessage implements SyncService.SyncStateChangedListener {
         String title = getTitle(activity);
         String primaryButtonText = getPrimaryButtonText(activity);
         Resources resources = activity.getResources();
-        mModel =
+        PropertyModel.Builder builder =
                 new PropertyModel.Builder(MessageBannerProperties.ALL_KEYS)
                         .with(
                                 MessageBannerProperties.MESSAGE_IDENTIFIER,
@@ -150,8 +157,14 @@ public class SyncErrorMessage implements SyncService.SyncStateChangedListener {
                                 MessageBannerProperties.ICON_TINT_COLOR,
                                 activity.getColor(R.color.default_red))
                         .with(MessageBannerProperties.ON_PRIMARY_ACTION, this::onAccepted)
-                        .with(MessageBannerProperties.ON_DISMISSED, this::onDismissed)
-                        .build();
+                        .with(MessageBannerProperties.ON_DISMISSED, this::onDismissed);
+
+        if (ChromeFeatureList.isEnabled(
+                ChromeFeatureList.SYNC_TRUSTED_VAULT_ERROR_MESSAGE_DURATION)) {
+            builder.with(MessageBannerProperties.DISMISSAL_DURATION, UNLOCK_VAULT_MESSAGE_DURATION);
+        }
+
+        mModel = builder.build();
         mMessageDispatcher =
                 sMessageDispatcherForTesting == null ? dispatcher : sMessageDispatcherForTesting;
         mMessageDispatcher.enqueueWindowScopedMessage(mModel, false);
@@ -187,7 +200,6 @@ public class SyncErrorMessage implements SyncService.SyncStateChangedListener {
                 startUpdateCredentialsFlow(mActivity);
                 break;
             case UserActionableError.NEEDS_PASSPHRASE:
-            case UserActionableError.NEEDS_SETTINGS_CONFIRMATION:
             case UserActionableError.NEEDS_CLIENT_UPGRADE:
                 openSettings();
                 break;
@@ -209,13 +221,7 @@ public class SyncErrorMessage implements SyncService.SyncStateChangedListener {
     }
 
     private void onDismissed(@DismissReason int reason) {
-        if (reason != DismissReason.TIMER
-                && reason != DismissReason.GESTURE
-                && reason != DismissReason.PRIMARY_ACTION) {
-            // If the user didn't explicitly accept/dismiss the message, and the display timeout
-            // wasn't reached either, resetLastShownTime() so the message can be shown again. This
-            // includes the case where the user changes tabs while the message is showing
-            // (TAB_SWITCHED).
+        if (allowAnotherMessage(reason)) {
             SyncErrorMessageImpressionTracker.resetLastShownTime();
         }
         mSyncService.removeSyncStateChangedListener(this);
@@ -227,34 +233,30 @@ public class SyncErrorMessage implements SyncService.SyncStateChangedListener {
         }
     }
 
+    private boolean allowAnotherMessage(@DismissReason int reason) {
+        if (mError == UserActionableError.NEEDS_TRUSTED_VAULT_KEY_FOR_PASSWORDS
+                && ChromeFeatureList.isEnabled(
+                        ChromeFeatureList.SYNC_TRUSTED_VAULT_ERROR_MESSAGE_DURATION)) {
+            return reason != DismissReason.GESTURE && reason != DismissReason.PRIMARY_ACTION;
+        }
+        // If the user didn't explicitly accept/dismiss the message, and the display timeout
+        // wasn't reached either, resetLastShownTime() so the message can be shown again. This
+        // includes the case where the user changes tabs while the message is showing
+        // (TAB_SWITCHED).
+        return reason != DismissReason.TIMER
+                && reason != DismissReason.GESTURE
+                && reason != DismissReason.PRIMARY_ACTION;
+    }
+
     private void recordHistogram(@ErrorUiAction int action) {
         assert mError != UserActionableError.NONE;
         String name =
-                (mSyncService.hasSyncConsent()
-                                ? "Signin.SyncErrorMessage"
-                                : "Sync.IdentityErrorMessage")
-                        + SyncSettingsUtils.getHistogramSuffixForError(mError);
+                "Sync.IdentityErrorMessage" + SyncSettingsUtils.getHistogramSuffixForError(mError);
         RecordHistogram.recordEnumeratedHistogram(name, action, ErrorUiAction.NUM_ENTRIES);
     }
 
     private String getPrimaryButtonText(Context context) {
         assert mError != UserActionableError.NONE;
-        // Check if this is for a sync error.
-        if (mSyncService.hasSyncConsent()) {
-            switch (mError) {
-                case UserActionableError.SIGN_IN_NEEDS_UPDATE:
-                    return context.getString(R.string.password_error_sign_in_button_title);
-                case UserActionableError.NEEDS_TRUSTED_VAULT_KEY_FOR_EVERYTHING:
-                case UserActionableError.NEEDS_TRUSTED_VAULT_KEY_FOR_PASSWORDS:
-                case UserActionableError.TRUSTED_VAULT_RECOVERABILITY_DEGRADED_FOR_EVERYTHING:
-                case UserActionableError.TRUSTED_VAULT_RECOVERABILITY_DEGRADED_FOR_PASSWORDS:
-                    return context.getString(R.string.trusted_vault_error_card_button);
-                case UserActionableError.BOOKMARKS_LIMIT_EXCEEDED:
-                    return context.getString(R.string.learn_more);
-                default:
-                    return context.getString(R.string.open_settings_button);
-            }
-        }
 
         // Strings for identity error.
         switch (mError) {
@@ -273,8 +275,6 @@ public class SyncErrorMessage implements SyncService.SyncStateChangedListener {
                 return context.getString(R.string.identity_error_message_button_verify);
             case UserActionableError.BOOKMARKS_LIMIT_EXCEEDED:
                 return context.getString(R.string.learn_more);
-            case UserActionableError.NEEDS_SETTINGS_CONFIRMATION:
-            case UserActionableError.UNRECOVERABLE_ERROR:
             default:
                 assert false;
                 return "";
@@ -304,11 +304,6 @@ public class SyncErrorMessage implements SyncService.SyncStateChangedListener {
 
     private @Nullable String getTitle(Context context) {
         assert mError != UserActionableError.NONE;
-        // Check if this is for a sync error.
-        if (mSyncService.hasSyncConsent()) {
-            // Use the same title with sync error card of sync settings.
-            return SyncSettingsUtils.getSyncErrorCardTitle(context, mError);
-        }
 
         // Strings for identity error.
         switch (mError) {
@@ -326,8 +321,6 @@ public class SyncErrorMessage implements SyncService.SyncStateChangedListener {
                 return context.getString(R.string.identity_error_card_button_verify);
             case UserActionableError.BOOKMARKS_LIMIT_EXCEEDED:
                 return context.getString(R.string.bookmark_sync_limit_error_title);
-            case UserActionableError.NEEDS_SETTINGS_CONFIRMATION:
-            case UserActionableError.UNRECOVERABLE_ERROR:
             default:
                 assert false;
                 return "";
@@ -344,12 +337,6 @@ public class SyncErrorMessage implements SyncService.SyncStateChangedListener {
 
     private @Nullable String getMessage(Context context) {
         assert mError != UserActionableError.NONE;
-        // Check if this is for a sync error.
-        if (mSyncService.hasSyncConsent()) {
-            return mError == UserActionableError.NEEDS_SETTINGS_CONFIRMATION
-                    ? context.getString(R.string.sync_settings_not_confirmed_title)
-                    : SyncSettingsUtils.getSyncErrorHint(context, mError);
-        }
 
         // Strings for identity error.
         switch (mError) {
@@ -370,8 +357,6 @@ public class SyncErrorMessage implements SyncService.SyncStateChangedListener {
                 return context.getString(R.string.identity_error_message_body);
             case UserActionableError.BOOKMARKS_LIMIT_EXCEEDED:
                 return context.getString(R.string.bookmark_sync_limit_error_description);
-            case UserActionableError.NEEDS_SETTINGS_CONFIRMATION:
-            case UserActionableError.UNRECOVERABLE_ERROR:
             default:
                 assert false;
                 return "";
@@ -394,12 +379,14 @@ public class SyncErrorMessage implements SyncService.SyncStateChangedListener {
     }
 
     private void openBookmarkLimitHelpPage() {
-        SyncSettingsUtils.openBookmarkLimitHelpPage(mActivity, mSyncService);
+        SyncSettingsUtils.openBookmarkLimitHelpPage(
+                mActivity,
+                mSyncService,
+                BookmarksLimitExceededHelpClickedSource.SYNC_ERROR_MESSAGE);
     }
 
     private void openTrustedVaultKeyRetrievalActivity() {
-        CoreAccountInfo primaryAccountInfo =
-                mIdentityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN);
+        @Nullable AccountInfo primaryAccountInfo = mIdentityManager.getPrimaryAccountInfo();
         if (primaryAccountInfo == null) {
             return;
         }
@@ -424,8 +411,7 @@ public class SyncErrorMessage implements SyncService.SyncStateChangedListener {
     }
 
     private void openTrustedVaultRecoverabilityDegradedActivity() {
-        CoreAccountInfo primaryAccountInfo =
-                mIdentityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN);
+        @Nullable AccountInfo primaryAccountInfo = mIdentityManager.getPrimaryAccountInfo();
         if (primaryAccountInfo == null) {
             return;
         }
@@ -452,26 +438,24 @@ public class SyncErrorMessage implements SyncService.SyncStateChangedListener {
     private void openSettings() {
         SettingsNavigation settingsNavigation =
                 SettingsNavigationFactory.createSettingsNavigation();
-        settingsNavigation.startSettings(
-                getApplicationContext(),
-                ManageSyncSettings.class,
-                ManageSyncSettings.createArguments(false));
+        settingsNavigation.startSettings(getApplicationContext(), ManageSyncSettings.class);
     }
 
     private void startUpdateCredentialsFlow(Activity activity) {
-        final CoreAccountInfo primaryAccountInfo =
-                mIdentityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN);
-        assert primaryAccountInfo != null;
+        final @Nullable AccountInfo primaryAccountInfo = mIdentityManager.getPrimaryAccountInfo();
+        if (primaryAccountInfo == null) {
+            // Can happen in case of a race condition between a sign-out (because the primary
+            // account got removed from the device) and the user tapping the sync error message.
+            return;
+        }
         AccountManagerFacadeProvider.getInstance()
-                .updateCredentials(
-                        CoreAccountInfo.getAndroidAccountFrom(primaryAccountInfo), activity, null);
+                .updateCredentials(primaryAccountInfo.getId(), activity, null);
     }
 
     private static @UserActionableError int getError(Profile profile) {
         @UserActionableError int error = SyncSettingsUtils.getSyncError(profile);
-        // Do not show sync error message for UPM_BACKEND_OUTDATED or OTHER_ERRORS.
-        if (error == UserActionableError.NEEDS_UPM_BACKEND_UPGRADE
-                || error == UserActionableError.UNRECOVERABLE_ERROR) {
+        // Do not show sync error message for UPM_BACKEND_OUTDATED.
+        if (error == UserActionableError.NEEDS_UPM_BACKEND_UPGRADE) {
             return UserActionableError.NONE;
         }
         return error;

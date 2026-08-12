@@ -9,13 +9,16 @@
 #include <string>
 #include <utility>
 
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/public/cpp/reauth_reason.h"
 #include "base/check.h"
+#include "base/check_deref.h"
 #include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
+#include "base/syslog_logging.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
@@ -23,7 +26,6 @@
 #include "chrome/browser/ash/login/reauth_stats.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
 #include "chrome/browser/ash/login/wizard_context.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/ui/webui/ash/login/cryptohome_recovery_screen_handler.h"
 #include "chromeos/ash/components/cryptohome/auth_factor.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
@@ -33,8 +35,12 @@
 #include "chromeos/ash/components/login/auth/public/user_context.h"
 #include "chromeos/ash/components/login/auth/recovery/cryptohome_recovery_performer.h"
 #include "chromeos/ash/components/osauth/public/auth_session_storage.h"
+#include "chromeos/ash/components/osauth/public/common_types.h"
 #include "chromeos/ash/services/auth_factor_config/auth_factor_config_utils.h"
+#include "components/device_event_log/device_event_log.h"
+#include "components/prefs/pref_service.h"
 #include "components/user_manager/user_manager.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace {
 
@@ -63,13 +69,19 @@ std::string CryptohomeRecoveryScreen::GetResultString(Result result) {
 }
 
 CryptohomeRecoveryScreen::CryptohomeRecoveryScreen(
+    PrefService& local_state,
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
     base::WeakPtr<CryptohomeRecoveryScreenView> view,
     const ScreenExitCallback& exit_callback)
     : BaseScreen(CryptohomeRecoveryScreenView::kScreenId,
                  OobeScreenPriority::DEFAULT),
+      local_state_(local_state),
+      shared_url_loader_factory_(std::move(shared_url_loader_factory)),
       auth_factor_editor_(UserDataAuthClient::Get()),
       view_(std::move(view)),
-      exit_callback_(exit_callback) {}
+      exit_callback_(exit_callback) {
+  CHECK(shared_url_loader_factory_);
+}
 
 CryptohomeRecoveryScreen::~CryptohomeRecoveryScreen() = default;
 
@@ -78,6 +90,16 @@ void CryptohomeRecoveryScreen::ShowImpl() {
     return;
 
   CHECK(context()->user_context);
+
+  if (context()->ShouldTriggerAutoWipe(local_state_.get())) {
+    LOGIN_LOG(EVENT)
+        << "AutoWipe behavior active: skipping cryptohome recovery";
+    SYSLOG(INFO)
+        << "(LOGIN) AutoWipe behavior active: skipping cryptohome recovery";
+    exit_callback_.Run(Result::kFallbackOnline);
+    return;
+  }
+
   auth_factor_editor_.GetAuthFactorsConfiguration(
       std::move(context()->user_context),
       base::BindOnce(&CryptohomeRecoveryScreen::OnGetAuthFactorsConfiguration,
@@ -88,7 +110,7 @@ void CryptohomeRecoveryScreen::ShowImpl() {
 
 void CryptohomeRecoveryScreen::HideImpl() {}
 
-void CryptohomeRecoveryScreen::OnUserAction(const base::Value::List& args) {
+void CryptohomeRecoveryScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionReauth) {
     exit_callback_.Run(Result::kGaiaLogin);
@@ -135,7 +157,8 @@ void CryptohomeRecoveryScreen::OnGetAuthFactorsConfiguration(
       } else {
         LOG(WARNING) << "Reauth proof token is not present";
         was_reauth_proof_token_missing_ = true;
-        RecordReauthReason(account_id, ReauthReason::kCryptohomeRecovery);
+        RecordReauthReason(local_state_.get(), account_id,
+                           ReauthReason::kCryptohomeRecovery);
         view_->ShowReauthNotification();
         return;
       }
@@ -145,8 +168,7 @@ void CryptohomeRecoveryScreen::OnGetAuthFactorsConfiguration(
       LOG(ERROR) << "Contuining Recovery with no passwords";
     }
     recovery_performer_ = std::make_unique<CryptohomeRecoveryPerformer>(
-        UserDataAuthClient::Get(),
-        g_browser_process->shared_url_loader_factory());
+        UserDataAuthClient::Get(), shared_url_loader_factory_);
     recovery_performer_->AuthenticateWithRecovery(
         std::move(user_context),
         base::BindOnce(&CryptohomeRecoveryScreen::OnAuthenticateWithRecovery,

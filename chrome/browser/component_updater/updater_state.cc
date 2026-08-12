@@ -66,9 +66,8 @@ std::unique_ptr<UpdaterState::StateReader> UpdaterState::StateReader::Create(
                 kMaxPrefsFileSize)) {
           return nullptr;
         }
-        std::optional<base::Value::Dict> parsed_json =
-            base::JSONReader::ReadDict(contents,
-                                       base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+        std::optional<base::DictValue> parsed_json = base::JSONReader::ReadDict(
+            contents, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
         return parsed_json ? std::make_unique<StateReaderChromiumUpdater>(
                                  std::move(*parsed_json))
                            : nullptr;
@@ -91,7 +90,7 @@ std::unique_ptr<UpdaterState::StateReader> UpdaterState::StateReader::Create(
 }
 
 UpdaterState::StateReaderChromiumUpdater::StateReaderChromiumUpdater(
-    base::Value::Dict parsed_json)
+    base::DictValue parsed_json)
     : parsed_json_(std::move(parsed_json)) {}
 
 base::Time UpdaterState::StateReaderChromiumUpdater::FindTimeKey(
@@ -211,7 +210,7 @@ UpdaterState::Attributes UpdaterState::Serialize() const {
     attributes["lastupdatecheckerrorcode"] =
         state_->last_update_check_error.code;
     attributes["lastupdatecheckerrorcat"] =
-        static_cast<int>(state_->last_update_check_error.category);
+        std::to_underlying(state_->last_update_check_error.category);
     attributes["lastupdatecheckextracode1"] =
         state_->last_update_check_error.extra;
   }

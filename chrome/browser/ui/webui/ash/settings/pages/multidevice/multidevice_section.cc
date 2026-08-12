@@ -6,6 +6,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "ash/constants/url_constants.h"
 #include "base/feature_list.h"
 #include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
@@ -22,8 +23,6 @@
 #include "chrome/browser/ui/webui/ash/settings/search/search_tag_registry.h"
 #include "chrome/browser/ui/webui/nearby_share/shared_resources.h"
 #include "chrome/browser/ui/webui/settings/shared_settings_localized_strings_provider.h"
-#include "chrome/common/url_constants.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/phonehub/phone_hub_manager.h"
 #include "chromeos/ash/components/phonehub/pref_names.h"
@@ -548,8 +547,6 @@ void MultiDeviceSection::AddLoadTimeData(
        IDS_SETTINGS_MULTIDEVICE_NOTIFICATION_ACCESS_PROHIBITED_TOOLTIP},
       {"multideviceItemDisabledByPhoneAdminTooltip",
        IDS_SETTINGS_MULTIDEVICE_ITEM_DISABLED_BY_PHONE_ADMIN_TOOLTIP},
-      {"multideviceInstantHotspotItemTitle",
-       IDS_SETTINGS_MULTIDEVICE_INSTANT_HOTSPOT},
       {"multideviceInstantTetheringItemTitle",
        IDS_SETTINGS_MULTIDEVICE_INSTANT_TETHERING},
       {"multideviceInstantTetheringItemSummary",
@@ -692,7 +689,7 @@ void MultiDeviceSection::AddLoadTimeData(
       l10n_util::GetStringFUTF16(
           IDS_SETTINGS_MULTIDEVICE_SMART_LOCK_SUMMARY,
           ui::GetChromeOSDeviceName(),
-          GetHelpUrlWithBoard(chrome::kEasyUnlockLearnMoreUrl)));
+          GetHelpUrlWithBoard(ash::external_urls::kEasyUnlockLearnMoreUrl)));
   html_source->AddString(
       "multidevicePhoneHubItemSummary",
       l10n_util::GetStringFUTF16(IDS_SETTINGS_MULTIDEVICE_PHONE_HUB_SUMMARY,
@@ -714,12 +711,12 @@ void MultiDeviceSection::AddLoadTimeData(
       "multideviceWifiSyncItemSummary",
       l10n_util::GetStringFUTF16(
           IDS_SETTINGS_MULTIDEVICE_WIFI_SYNC_SUMMARY,
-          GetHelpUrlWithBoard(chrome::kWifiSyncLearnMoreURL)));
+          GetHelpUrlWithBoard(ash::external_urls::kWifiSyncLearnMoreURL)));
   html_source->AddString(
       "multideviceEnableWifiSyncV1ItemSummary",
       l10n_util::GetStringFUTF16(
           IDS_SETTINGS_MULTIDEVICE_ENABLE_WIFI_SYNC_V1_SUMMARY,
-          GetHelpUrlWithBoard(chrome::kWifiSyncLearnMoreURL)));
+          GetHelpUrlWithBoard(ash::external_urls::kWifiSyncLearnMoreURL)));
   html_source->AddString(
       "multidevicePhoneHubTaskContinuationDisabledSummary",
       l10n_util::GetStringFUTF16(
@@ -727,7 +724,7 @@ void MultiDeviceSection::AddLoadTimeData(
           GetHelpUrlWithBoard(phonehub::kPhoneHubLearnMoreLink)));
   html_source->AddString(
       "multidevicePhoneHubPermissionsLearnMoreURL",
-      GetHelpUrlWithBoard(chrome::kPhoneHubPermissionLearnMoreURL));
+      GetHelpUrlWithBoard(ash::external_urls::kPhoneHubPermissionLearnMoreURL));
   html_source->AddString(
       "multidevicePermissionsSetupAckTitle",
       ui::SubstituteChromeOSDeviceType(
@@ -765,9 +762,6 @@ void MultiDeviceSection::AddLoadTimeData(
   html_source->AddBoolean("isEcheAppEnabled", features::IsEcheSWAEnabled());
   OnEnableScreenLockChanged();
   OnScreenLockStatusChanged();
-  html_source->AddBoolean(
-      "isSmartLockSignInRemoved",
-      base::FeatureList::IsEnabled(features::kSmartLockSignInRemoved));
 
   html_source->AddString(
       "multidevicePhoneHubAppsItemTitle",
@@ -908,8 +902,7 @@ void MultiDeviceSection::OnFeatureStatesChanged(
 
   if (IsFeatureSupported(Feature::kPhoneHub)) {
     updater.AddSearchTags(GetMultiDeviceOptedInPhoneHubSearchConcepts());
-    if (features::IsPhoneHubCameraRollEnabled() &&
-        IsFeatureSupported(Feature::kPhoneHubCameraRoll)) {
+    if (IsFeatureSupported(Feature::kPhoneHubCameraRoll)) {
       updater.AddSearchTags(
           GetMultiDeviceOptedInPhoneHubCameraRollSearchConcepts());
     }

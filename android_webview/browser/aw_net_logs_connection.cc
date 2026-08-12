@@ -49,6 +49,7 @@ void AwNetLogsConnection::stopNetLogs() {
     return;
   }
   aw_net_log_observer_->StopObserving(nullptr, base::OnceClosure());
+  aw_net_log_observer_.reset();
 }
 
 AwNetLogsConnection* GetInstance() {
@@ -59,7 +60,8 @@ AwNetLogsConnection* GetInstance() {
   return instance;
 }
 
-static void JNI_AwNetLogsConnection_StartNetLogs(JNIEnv* env, const jint j_fd) {
+static void JNI_AwNetLogsConnection_StartNetLogs(JNIEnv* env,
+                                                 const int32_t j_fd) {
   GetInstance()->startNetLogBounded(j_fd);
 }
 

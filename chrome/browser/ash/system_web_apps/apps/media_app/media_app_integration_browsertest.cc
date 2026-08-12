@@ -7,11 +7,11 @@
 #include <utility>
 #include <vector>
 
+#include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/webui/media_app_ui/buildflags.h"
 #include "ash/webui/media_app_ui/test/media_app_ui_browsertest.h"
 #include "ash/webui/media_app_ui/url_constants.h"
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "base/check_deref.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
@@ -24,10 +24,10 @@
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_file_util.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
+#include "chrome/browser/ash/browser_delegate/browser_controller.h"
 #include "chrome/browser/ash/file_manager/app_service_file_tasks.h"
 #include "chrome/browser/ash/file_manager/file_manager_test_util.h"
 #include "chrome/browser/ash/file_manager/volume_manager.h"
@@ -45,19 +45,23 @@
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_list_observer.h"
+#include "chrome/browser/ui/browser_init_state.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/dbus/cros_disks/cros_disks_client.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
+#include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/crash/content/browser/error_reporting/mock_crash_endpoint.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/intent.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
@@ -281,28 +285,12 @@ using MediaAppIntegrationAllProfilesTest = MediaAppIntegrationTest;
 using MediaAppIntegrationWithFilesAppAllProfilesTest =
     MediaAppIntegrationWithFilesAppTest;
 
-class BrowserWindowWaiter : public BrowserListObserver {
- public:
-  void WaitForBrowserAdded() {
-    BrowserList::GetInstance()->AddObserver(this);
-    base::RunLoop run_loop;
-    quit_closure_ = run_loop.QuitClosure();
-    run_loop.Run();
-    BrowserList::GetInstance()->RemoveObserver(this);
-  }
-
-  // BrowserListObserver:
-  void OnBrowserAdded(Browser* browser) override { quit_closure_.Run(); }
-
- private:
-  base::RepeatingClosure quit_closure_;
-};
-
 // Waits for the number of active Browsers in the test process to reach `count`.
 void WaitForBrowserCount(size_t count) {
-  EXPECT_LE(chrome::GetTotalBrowserCount(), count) << "Too many browsers";
-  while (chrome::GetTotalBrowserCount() < count) {
-    BrowserWindowWaiter().WaitForBrowserAdded();
+  EXPECT_LE(GlobalBrowserCollection::GetInstance()->GetSize(), count)
+      << "Too many browsers";
+  while (GlobalBrowserCollection::GetInstance()->GetSize() < count) {
+    ui_test_utils::BrowserCreatedObserver().Wait();
   }
 }
 
@@ -337,9 +325,10 @@ std::string FindAnyTTF() {
 content::WebContents* PrepareActiveBrowserForTest(
     int expected_browser_count = 2) {
   WaitForBrowserCount(expected_browser_count);
-  Browser* app_browser = chrome::FindBrowserWithActiveWindow();
+  BrowserWindowInterface* app_browser =
+      GlobalBrowserCollection::GetInstance()->GetActiveBrowser();
   content::WebContents* web_ui =
-      app_browser->tab_strip_model()->GetActiveWebContents();
+      app_browser->GetTabStripModel()->GetActiveWebContents();
   MediaAppUiBrowserTest::PrepareAppForTest(web_ui);
   return web_ui;
 }
@@ -457,7 +446,8 @@ IN_PROC_BROWSER_TEST_P(MediaAppIntegrationTest, MediaApp) {
 IN_PROC_BROWSER_TEST_P(MediaAppIntegrationTest, MediaAppLaunchWithFile) {
   // Launch the App for the first time.
   content::WebContents* app = DirectlyLaunchWithFile(TestFile(kFilePng800x600));
-  Browser* first_browser = chrome::FindBrowserWithActiveWindow();
+  BrowserWindowInterface* first_browser =
+      GlobalBrowserCollection::GetInstance()->GetActiveBrowser();
   MediaAppUiBrowserTest::PrepareAppForTest(app);
 
   EXPECT_EQ("800x600", WaitForImageAlt(app, kFilePng800x600));
@@ -465,7 +455,8 @@ IN_PROC_BROWSER_TEST_P(MediaAppIntegrationTest, MediaAppLaunchWithFile) {
 
   // Launch with a different file in a new window.
   app = DirectlyLaunchWithFile(TestFile(kFileJpeg640x480));
-  Browser* second_browser = chrome::FindBrowserWithActiveWindow();
+  BrowserWindowInterface* second_browser =
+      GlobalBrowserCollection::GetInstance()->GetActiveBrowser();
   MediaAppUiBrowserTest::PrepareAppForTest(app);
 
   EXPECT_EQ("640x480", WaitForImageAlt(app, kFileJpeg640x480));
@@ -482,7 +473,8 @@ IN_PROC_BROWSER_TEST_P(MediaAppIntegrationTest,
   ash::SystemAppLaunchParams audio_params;
   audio_params.launch_paths.push_back(TestFile(kFilePng800x600));
   LaunchAndWait(audio_params);
-  Browser* first_browser = chrome::FindBrowserWithActiveWindow();
+  BrowserWindowInterface* first_browser =
+      GlobalBrowserCollection::GetInstance()->GetActiveBrowser();
   content::WebContents* app = PrepareActiveBrowserForTest();
 
   EXPECT_EQ("800x600", WaitForImageAlt(app, kFilePng800x600));
@@ -493,7 +485,8 @@ IN_PROC_BROWSER_TEST_P(MediaAppIntegrationTest,
   image_params.launch_paths.push_back(TestFile(kFileJpeg640x480));
   LaunchAndWait(image_params);
   app = PrepareActiveBrowserForTest(3);
-  Browser* second_browser = chrome::FindBrowserWithActiveWindow();
+  BrowserWindowInterface* second_browser =
+      GlobalBrowserCollection::GetInstance()->GetActiveBrowser();
 
   EXPECT_EQ("640x480", WaitForImageAlt(app, kFileJpeg640x480));
   EXPECT_NE(first_browser, second_browser);
@@ -511,9 +504,9 @@ IN_PROC_BROWSER_TEST_P(MediaAppIntegrationTest, MediaAppLaunchImageMulti) {
   BrowserWindowInterface* const system_app_browser =
       browser_created_observer.Wait();
 
-  EXPECT_EQ(
-      2u,
-      chrome::GetTotalBrowserCount());  // 1 extra for the browser test browser.
+  EXPECT_EQ(2u,
+            GlobalBrowserCollection::GetInstance()
+                ->GetSize());  // 1 extra for the browser test browser.
 
   content::TitleWatcher watcher(
       system_app_browser->GetTabStripModel()->GetActiveWebContents(),
@@ -532,7 +525,7 @@ IN_PROC_BROWSER_TEST_P(MediaAppIntegrationTest, MediaAppLaunchPdfMulti) {
   ui_test_utils::BrowserCreatedObserver browser_created_observer;
   LaunchAndWait(pdf_params);
   WaitForBrowserCount(3);  // 1 extra for the browser test browser.
-  EXPECT_EQ(3u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(3u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   Browser* const pdf_img_browser = browser_created_observer.Wait();
   Browser* const pdf_tall_browser =
@@ -723,7 +716,7 @@ IN_PROC_BROWSER_TEST_P(MediaAppIntegrationWithFilesAppTest,
 
   const auto kTestFile = folder.files()[0];
   // Stamp the file with a time far in the past, so it can be "updated".
-  // Note: Add a bit to the epoch to workaround https://crbug.com/1080434.
+  // Note: Add a bit to the epoch to workaround https://crbug.com/40690801.
   TouchFileSync(kTestFile, base::Time::UnixEpoch() + base::Days(1));
 
   folder.Open(kTestFile);
@@ -833,9 +826,10 @@ startxref
   EXPECT_EQ(true, ExecJs(app, kOpenPdfInViewer));
 
   WaitForBrowserCount(3);
-  Browser* popup_browser = chrome::FindBrowserWithActiveWindow();
+  BrowserWindowInterface* popup_browser =
+      GlobalBrowserCollection::GetInstance()->GetActiveBrowser();
   content::WebContents* popup_ui =
-      popup_browser->tab_strip_model()->GetActiveWebContents();
+      popup_browser->GetTabStripModel()->GetActiveWebContents();
 
   content::TitleWatcher watcher(popup_ui,
                                 u"PDF Accessibility Mode - TestPdfTitle.pdf");
@@ -1079,7 +1073,8 @@ IN_PROC_BROWSER_TEST_P(MediaAppIntegrationWithFilesAppAllProfilesTest,
                        FileOpenUsesMediaApp) {
   base::HistogramTester histograms;
 
-  Browser* test_browser = chrome::FindBrowserWithActiveWindow();
+  BrowserWindowInterface* test_browser =
+      GlobalBrowserCollection::GetInstance()->GetActiveBrowser();
 
   file_manager::test::FolderInMyFiles folder(profile());
   folder.Add({TestFile(kFilePng800x600)});
@@ -1088,16 +1083,18 @@ IN_PROC_BROWSER_TEST_P(MediaAppIntegrationWithFilesAppAllProfilesTest,
   // Although window focus changes on ChromeOS are synchronous, the app launch
   // codepaths may not be, so ensure a Browser is created.
   WaitForBrowserCount(2);
-  Browser* app_browser = chrome::FindBrowserWithActiveWindow();
+  BrowserWindowInterface* app_browser =
+      GlobalBrowserCollection::GetInstance()->GetActiveBrowser();
   content::WebContents* web_ui =
-      app_browser->tab_strip_model()->GetActiveWebContents();
+      app_browser->GetTabStripModel()->GetActiveWebContents();
   MediaAppUiBrowserTest::PrepareAppForTest(web_ui);
 
   EXPECT_EQ(open_result, platform_util::OPEN_SUCCEEDED);
 
   // Check that chrome://media-app launched and the test file loads.
   EXPECT_NE(test_browser, app_browser);
-  EXPECT_EQ(web_app::GetAppIdFromApplicationName(app_browser->app_name()),
+  EXPECT_EQ(web_app::GetAppIdFromApplicationName(
+                BrowserInitState::From(app_browser)->create_params().app_name),
             MediaAppAppId());
   EXPECT_EQ("800x600", WaitForImageAlt(web_ui, kFilePng800x600));
 
@@ -1159,25 +1156,31 @@ IN_PROC_BROWSER_TEST_P(MediaAppIntegrationTest,
   EXPECT_EQ(folder.Open(TestFile(kFileAudioOgg)),
             platform_util::OPEN_SUCCEEDED);
   WaitForBrowserCount(2);
-  Browser* audio_app_browser = chrome::FindBrowserWithActiveWindow();
+  BrowserWindowInterface* audio_app_browser =
+      GlobalBrowserCollection::GetInstance()->GetActiveBrowser();
   content::WebContents* audio_web_ui =
-      audio_app_browser->tab_strip_model()->GetActiveWebContents();
+      audio_app_browser->GetTabStripModel()->GetActiveWebContents();
   MediaAppUiBrowserTest::PrepareAppForTest(audio_web_ui);
 
   // Launch with the image file.
   EXPECT_EQ(folder.Open(TestFile(kFileJpeg640x480)),
             platform_util::OPEN_SUCCEEDED);
   WaitForBrowserCount(3);
-  Browser* image_app_browser = chrome::FindBrowserWithActiveWindow();
+  BrowserWindowInterface* image_app_browser =
+      GlobalBrowserCollection::GetInstance()->GetActiveBrowser();
   content::WebContents* image_web_ui =
-      image_app_browser->tab_strip_model()->GetActiveWebContents();
+      image_app_browser->GetTabStripModel()->GetActiveWebContents();
   MediaAppUiBrowserTest::PrepareAppForTest(image_web_ui);
 
   EXPECT_NE(image_app_browser, audio_app_browser);
-  EXPECT_TRUE(ash::IsBrowserForSystemWebApp(image_app_browser,
-                                            ash::SystemWebAppType::MEDIA));
-  EXPECT_TRUE(ash::IsBrowserForSystemWebApp(audio_app_browser,
-                                            ash::SystemWebAppType::MEDIA));
+  EXPECT_TRUE(ash::IsBrowserForSystemWebApp(
+      CHECK_DEREF(ash::BrowserController::GetInstance()->GetDelegate(
+          image_app_browser)),
+      ash::SystemWebAppType::MEDIA));
+  EXPECT_TRUE(ash::IsBrowserForSystemWebApp(
+      CHECK_DEREF(ash::BrowserController::GetInstance()->GetDelegate(
+          audio_app_browser)),
+      ash::SystemWebAppType::MEDIA));
 
   // Verify that launch params were correctly proceed by the "second" app to
   // launch.
@@ -1294,7 +1297,7 @@ IN_PROC_BROWSER_TEST_P(MediaAppIntegrationWithFilesAppAllProfilesTest,
   const base::FilePath copied_jpeg_640x480 = folder.files()[0];
 
   // Stamp the file with a time far in the past, so it can be "updated".
-  // Note: Add a bit to the epoch to workaround https://crbug.com/1080434.
+  // Note: Add a bit to the epoch to workaround https://crbug.com/40690801.
   TouchFileSync(copied_jpeg_640x480, base::Time::UnixEpoch() + base::Days(1));
 
   // Sent an open request using only the 640x480 JPEG file.
@@ -1512,7 +1515,8 @@ IN_PROC_BROWSER_TEST_P(MediaAppIntegrationTest, OpenVideoFile) {
 
 IN_PROC_BROWSER_TEST_P(MediaAppIntegrationTest, ToggleBrowserFullscreen) {
   content::WebContents* web_ui = LaunchWithOneTestFile(kFileVideoVP9);
-  Browser* app_browser = chrome::FindBrowserWithActiveWindow();
+  BrowserWindowInterface* app_browser =
+      GlobalBrowserCollection::GetInstance()->GetActiveBrowser();
 
   constexpr char kToggleFullscreen[] = R"(
       (async function toggleFullscreen() {
@@ -1521,13 +1525,13 @@ IN_PROC_BROWSER_TEST_P(MediaAppIntegrationTest, ToggleBrowserFullscreen) {
       })();
   )";
 
-  EXPECT_FALSE(app_browser->window()->IsFullscreen());
+  EXPECT_FALSE(app_browser->GetWindow()->IsFullscreen());
 
   EXPECT_EQ("success", ExtractStringInGlobalScope(web_ui, kToggleFullscreen));
-  EXPECT_TRUE(app_browser->window()->IsFullscreen());
+  EXPECT_TRUE(app_browser->GetWindow()->IsFullscreen());
 
   EXPECT_EQ("success", ExtractStringInGlobalScope(web_ui, kToggleFullscreen));
-  EXPECT_FALSE(app_browser->window()->IsFullscreen());
+  EXPECT_FALSE(app_browser->GetWindow()->IsFullscreen());
 }
 
 // Tests that invoking the maybeTriggerPdfHats() MediaApp delegate method fires
@@ -1538,7 +1542,7 @@ IN_PROC_BROWSER_TEST_P(MediaAppIntegrationTest, MaybeTriggerPdfHats) {
   // Enable HaTS testing for PDF editing.
   base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
       ash::switches::kForceHappinessTrackingSystem,
-      features::kHappinessTrackingMediaAppPdf.name);
+      ash::features::kHappinessTrackingMediaAppPdf.name);
 
   content::WebContents* web_ui = LaunchWithOneTestFile(kFilePdfTall);
 
@@ -1552,13 +1556,18 @@ IN_PROC_BROWSER_TEST_P(MediaAppIntegrationTest, MaybeTriggerPdfHats) {
   // Notifications only fire if the device is "online". Simulate that.
   network_portal_detector_.SimulateDefaultNetworkState(
       ash::NetworkPortalDetectorMixin::NetworkStatus::kOnline);
-  message_center::MessageCenterWaiter waiter("hats_notification");
+  const user_manager::User& user = CHECK_DEREF(
+      ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile()));
+  const std::string notification_id =
+      ash::HatsNotificationController::GetMessageCenterNotificationIdForTesting(
+          user);
+  message_center::MessageCenterWaiter waiter(notification_id);
 
   EXPECT_EQ("success",
             ExtractStringInGlobalScope(web_ui, kMaybeTriggerPdfHats));
   waiter.WaitUntilAdded();
   EXPECT_TRUE(message_center::MessageCenter::Get()->FindVisibleNotificationById(
-      "hats_notification"));
+      notification_id));
 }
 
 // Tests that the Photos happiness tracking survey triggers when the monitored
@@ -1567,7 +1576,7 @@ IN_PROC_BROWSER_TEST_P(MediaAppIntegrationTest, MaybeTriggerPhotosHats) {
   // Enable HaTS testing for the Photos Experience.
   base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
       ash::switches::kForceHappinessTrackingSystem,
-      features::kHappinessTrackingPhotosExperience.name);
+      ash::features::kHappinessTrackingPhotosExperience.name);
 
   // Pretend the Gallery is the Android Photos app, so it can be tracked for
   // survey triggers that fire when the app is closed.
@@ -1577,14 +1586,22 @@ IN_PROC_BROWSER_TEST_P(MediaAppIntegrationTest, MaybeTriggerPhotosHats) {
   // Notifications only fire if the device is "online". Simulate that.
   network_portal_detector_.SimulateDefaultNetworkState(
       ash::NetworkPortalDetectorMixin::NetworkStatus::kOnline);
-  message_center::MessageCenterWaiter waiter("hats_notification");
+  const user_manager::User& user = CHECK_DEREF(
+      ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile()));
+  const std::string notification_id =
+      ash::HatsNotificationController::GetMessageCenterNotificationIdForTesting(
+          user);
+  message_center::MessageCenterWaiter waiter(notification_id);
 
   LaunchWithNoFiles();
-  chrome::FindBrowserWithActiveWindow()->window()->Close();
+  GlobalBrowserCollection::GetInstance()
+      ->GetActiveBrowser()
+      ->GetWindow()
+      ->Close();
 
   waiter.WaitUntilAdded();
   EXPECT_TRUE(message_center::MessageCenter::Get()->FindVisibleNotificationById(
-      "hats_notification"));
+      notification_id));
 
   // Avoid leaving a ref to the std::string about to be destroyed.
   SetPhotosExperienceSurveyTriggerAppIdForTesting("");

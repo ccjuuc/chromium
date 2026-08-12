@@ -15,9 +15,9 @@
 #include "device/fido/public/features.h"
 
 #if BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/trusted_vault/trusted_vault_client_android.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/trusted_vault/android/trusted_vault_client_android.h"
 #else
 #include "base/files/file_path.h"
 #include "components/trusted_vault/standalone_trusted_vault_client.h"
@@ -105,7 +105,7 @@ TrustedVaultServiceFactory::TrustedVaultServiceFactory()
           ProfileSelections::Builder()
               .WithRegular(ProfileSelection::kOriginalOnly)
               // TODO(crbug.com/40257657): Check if this service is needed in
-              // Guest mode. Currently it is required due to dependant services
+              // Guest mode. Currently it is required due to dependent services
               // (e.g. SyncService) that have similar TODO, if they stop being
               // used in Guest mode, this service could stop to be used as well.
               .WithGuest(ProfileSelection::kOriginalOnly)

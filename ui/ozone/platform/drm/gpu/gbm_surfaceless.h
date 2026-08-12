@@ -11,6 +11,7 @@
 #include <memory>
 #include <vector>
 
+#include "base/containers/circular_deque.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "ui/gfx/gpu_fence_handle.h"
@@ -57,7 +58,6 @@ class GbmSurfaceless : public gl::Presenter {
               bool has_alpha) override;
   bool SupportsPlaneGpuFences() const override;
   void SetRelyOnImplicitSync() override;
-  void SetNotifyNonSimpleOverlayFailure() override;
   void Present(SwapCompletionCallback completion_callback,
                PresentationCallback presentation_callback,
                gfx::FrameData data) override;
@@ -70,11 +70,12 @@ class GbmSurfaceless : public gl::Presenter {
 
  private:
   struct PendingFrame {
-    PendingFrame();
+    explicit PendingFrame(uint32_t frame_id);
     ~PendingFrame();
 
     bool ScheduleOverlayPlanes(gfx::AcceleratedWidget widget);
 
+    uint32_t frame_id;
     bool ready = false;
     gfx::SwapResult swap_result = gfx::SwapResult::SWAP_FAILED;
     std::vector<gl::GLSurfaceOverlay> overlays;
@@ -85,14 +86,14 @@ class GbmSurfaceless : public gl::Presenter {
   void SubmitFrame();
 
   EGLSyncKHR InsertFence();
-  void FenceRetired(PendingFrame* frame);
+  void FenceRetired(uint32_t frame_id);
 
-  void OnSubmission(bool should_handle_non_simple_overlay_failure,
-                    gfx::SwapResult result,
-                    gfx::GpuFenceHandle release_fence);
+  void OnSubmission(gfx::SwapResult result, gfx::GpuFenceHandle release_fence);
   void OnPresentation(const gfx::PresentationFeedback& feedback);
 
   EGLDisplay GetEGLDisplay();
+
+  uint32_t next_frame_id() { return ++frame_id_; }
 
   const raw_ptr<GbmSurfaceFactory> surface_factory_;
   const std::unique_ptr<DrmWindowProxy> window_;
@@ -100,15 +101,15 @@ class GbmSurfaceless : public gl::Presenter {
 
   // The native surface. Deleting this is allowed to free the EGLNativeWindow.
   const gfx::AcceleratedWidget widget_;
-  std::vector<std::unique_ptr<PendingFrame>> unsubmitted_frames_;
+  base::circular_deque<std::unique_ptr<PendingFrame>> unsubmitted_frames_;
   std::unique_ptr<PendingFrame> submitted_frame_;
   std::unique_ptr<gfx::GpuFence> submitted_frame_gpu_fence_;
+
+  uint32_t frame_id_ = 0u;
+
   bool last_swap_buffers_result_ = true;
   bool supports_plane_gpu_fences_ = false;
   bool use_egl_fence_sync_ = true;
-  // Determines submission of non-simple overlays (see gfx::OverlayType) should
-  // be handled with gfx::SwapResult::SWAP_NON_SIMPLE_OVERLAYS_FAILED.
-  bool notify_non_simple_overlay_failure_ = false;
 
   // Conservatively assume we begin on a device that requires
   // explicit synchronization.

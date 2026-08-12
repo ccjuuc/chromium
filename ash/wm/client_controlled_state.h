@@ -70,6 +70,7 @@ class ASH_EXPORT ClientControlledState : public BaseState {
   }
 
   // WindowState::State:
+  void OnWMEvent(WindowState* window_state, const WMEvent* event) override;
   void AttachState(WindowState* window_state,
                    WindowState::State* previous_state) override;
   void DetachState(WindowState* window_state) override;
@@ -90,6 +91,8 @@ class ASH_EXPORT ClientControlledState : public BaseState {
   // false otherwise.
   bool EnterNextState(WindowState* window_state,
                       chromeos::WindowStateType next_state_type);
+
+  Delegate* delegate_for_testing() { return delegate_.get(); }
 
  private:
   chromeos::WindowStateType GetResolvedNextWindowStateType(

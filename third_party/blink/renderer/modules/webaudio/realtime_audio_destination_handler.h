@@ -6,14 +6,11 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_REALTIME_AUDIO_DESTINATION_HANDLER_H_
 
 #include <atomic>
-#include <memory>
-
 #include "base/memory/weak_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "third_party/blink/public/platform/web_audio_latency_hint.h"
 #include "third_party/blink/public/platform/web_audio_sink_descriptor.h"
-#include "third_party/blink/renderer/modules/webaudio/audio_context.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_destination_node.h"
 #include "third_party/blink/renderer/platform/audio/audio_callback_metric_reporter.h"
 #include "third_party/blink/renderer/platform/audio/audio_destination.h"
@@ -39,7 +36,6 @@ class MODULES_EXPORT RealtimeAudioDestinationHandler final
 
   // For AudioHandler.
   void Dispose() override;
-  AudioContext* Context() const override;
   void Initialize() override;
   void Uninitialize() override;
   void SetChannelCount(unsigned, ExceptionState&) override;
@@ -127,8 +123,7 @@ class MODULES_EXPORT RealtimeAudioDestinationHandler final
   }
 
   // https://chromium.googlesource.com/chromium/src/+/refs/heads/main/docs/media/capture/README.md#logs
-  void SendLogMessage(const char* const function_name,
-                      const String& message) const;
+  void SendLogMessage(const String& function_name, const String& message) const;
 
   // Stores a sink descriptor for sink transition.
   WebAudioSinkDescriptor sink_descriptor_;

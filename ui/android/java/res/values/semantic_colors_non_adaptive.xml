@@ -115,7 +115,6 @@ found in the LICENSE file.
 
     <!--  Dropdown divier  -->
     <color name="dropdown_divider_color">@color/baseline_neutral_70</color>
-    <color name="dropdown_dark_divider_color">@color/white_alpha_12</color>
 
     <!-- Ripple Colors -->
     <color name="ripple_color_blue_dark">@color/baseline_primary_40</color>
@@ -134,7 +133,6 @@ found in the LICENSE file.
     <color name="tab_strip_tablet_bg_incognito">@color/gm3_baseline_surface_container_highest_dark</color>
     <color name="tab_strip_tablet_divider_bg_incognito">@color/baseline_neutral_variant_30</color>
     <color name="tab_strip_tablet_bg_unfocused_incognito">@color/gm3_baseline_surface_container_low_dark</color>
-    <color name="search_suggestion_bg_color_hover_incognito">@color/gm3_baseline_surface_container_low_dark</color>
 
     <!-- Illustration -->
     <color name="promo_illustration_bg_color_light">@color/baseline_neutral_90_alpha_38</color>
@@ -148,7 +146,6 @@ found in the LICENSE file.
     <color name="preference_highlighted_bg_color_light">@color/white_alpha_24</color>
 
     <!-- Snackbar colors -->
-    <color name="snackbar_background_color_baseline_dark">@color/baseline_neutral_10_with_surface_tint_dark_alpha_12</color>
     <color name="floating_snackbar_background_incognito">@color/gm3_baseline_surface_container_high_dark</color>
 
     <!-- Rating star colors -->

@@ -27,7 +27,7 @@ import {MAX_NUM_SAVED_SCANNERS} from 'chrome://scanning/scanning_app_types.js';
 import type {ScannerCapabilitiesResponse, ScannerSetting, ScannersReceivedResponse, ScanSettings, StartMultiPageScanResponse} from 'chrome://scanning/scanning_app_types.js';
 import {getColorModeString, getPageSizeString} from 'chrome://scanning/scanning_app_util.js';
 import {ScanningBrowserProxyImpl} from 'chrome://scanning/scanning_browser_proxy.js';
-import {assertArrayEquals, assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chromeos/chai_assert.js';
+import {assertArrayEquals, assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {eventToPromise, isVisible} from 'chrome://webui-test/chromeos/test_util.js';
 import {flushTasks, waitAfterNextRender} from 'chrome://webui-test/polymer_test_util.js';
 
@@ -117,7 +117,7 @@ class FakeScanService implements ScanServiceInterface {
   private getResolver(methodName: string): PromiseResolver<void> {
     const method = this.resolverMap.get(methodName);
     assertTrue(!!method, `Method '${methodName}' not found.`);
-    return method!;
+    return method;
   }
 
   protected methodCalled(methodName: string) {
@@ -265,7 +265,7 @@ class FakeMultiPageScanController implements MultiPageScanControllerInterface {
   private getResolver(methodName: string): PromiseResolver<void> {
     const method = this.resolverMap.get(methodName);
     assertTrue(!!method, `Method '${methodName}' not found.`);
-    return method!;
+    return method;
   }
 
   protected methodCalled(methodName: string): void {
@@ -1981,8 +1981,7 @@ suite('scanningAppTest', function() {
     await changeSelectedValue(
         getSettingSelect('#scannerSelect'), secondScannerId);
     await changeSelectedValue(
-        getSettingSelect('#sourceSelect'),
-        scannerSetting.sourceName.toString());
+        getSettingSelect('#sourceSelect'), scannerSetting.sourceName);
     await changeSelectedValue(
         getSettingSelect('#fileTypeSelect'),
         scannerSetting.fileType.toString());
@@ -1996,8 +1995,7 @@ suite('scanningAppTest', function() {
         getSettingSelect('#resolutionSelect'),
         scannerSetting.resolutionDpi.toString());
 
-    assertEquals(
-        scannerSetting.sourceName.toString(), scanningApp.selectedSource);
+    assertEquals(scannerSetting.sourceName, scanningApp.selectedSource);
     assertEquals(
         scannerSetting.fileType.toString(), scanningApp.selectedFileType);
     assertEquals(

@@ -16,7 +16,7 @@ namespace chrome_browsing_data_remover {
 // This is an extension of content::BrowsingDataRemover::RemoveDataMask which
 // includes all datatypes therefrom and adds additional Chrome-specific ones.
 using DataType = uint64_t;
-  // Embedder can start adding datatypes after the last platform datatype.
+// Embedder can start adding datatypes after the last platform datatype.
 constexpr DataType DATA_TYPE_EMBEDDER_BEGIN =
     content::BrowsingDataRemover::DATA_TYPE_CONTENT_END << 1;
 
@@ -28,7 +28,8 @@ constexpr DataType DATA_TYPE_PASSWORDS = DATA_TYPE_EMBEDDER_BEGIN << 2;
 constexpr DataType DATA_TYPE_WEB_APP_DATA = DATA_TYPE_EMBEDDER_BEGIN << 3;
 #endif
 constexpr DataType DATA_TYPE_SITE_USAGE_DATA = DATA_TYPE_EMBEDDER_BEGIN << 4;
-constexpr DataType DATA_TYPE_DURABLE_PERMISSION = DATA_TYPE_EMBEDDER_BEGIN << 5;
+constexpr DataType DATA_TYPE_PERSISTENT_PERMISSION = DATA_TYPE_EMBEDDER_BEGIN
+                                                     << 5;
 constexpr DataType DATA_TYPE_EXTERNAL_PROTOCOL_DATA = DATA_TYPE_EMBEDDER_BEGIN
                                                       << 6;
 constexpr DataType DATA_TYPE_HOSTED_APP_DATA_TEST_ONLY =
@@ -45,6 +46,8 @@ constexpr DataType DATA_TYPE_READING_LIST = DATA_TYPE_EMBEDDER_BEGIN << 14;
 constexpr DataType DATA_TYPE_TABS = DATA_TYPE_EMBEDDER_BEGIN << 15;
 constexpr DataType DATA_TYPE_SEARCH_ENGINE_CHOICE = DATA_TYPE_EMBEDDER_BEGIN
                                                     << 16;
+constexpr DataType DATA_TYPE_PRIVATE_VERIFICATION_TOKENS =
+    DATA_TYPE_EMBEDDER_BEGIN << 17;
 
 // Group datatypes.
 
@@ -57,11 +60,12 @@ constexpr DataType DATA_TYPE_SITE_DATA =
 #if BUILDFLAG(IS_ANDROID)
     DATA_TYPE_WEB_APP_DATA |
 #endif
-    DATA_TYPE_SITE_USAGE_DATA | DATA_TYPE_DURABLE_PERMISSION |
+    DATA_TYPE_SITE_USAGE_DATA | DATA_TYPE_PERSISTENT_PERMISSION |
     DATA_TYPE_EXTERNAL_PROTOCOL_DATA | DATA_TYPE_ISOLATED_ORIGINS |
     DATA_TYPE_ISOLATED_WEB_APP_COOKIES |
     content::BrowsingDataRemover::DATA_TYPE_PRIVACY_SANDBOX |
-    content::BrowsingDataRemover::DATA_TYPE_DEVICE_BOUND_SESSIONS;
+    content::BrowsingDataRemover::DATA_TYPE_DEVICE_BOUND_SESSIONS |
+    DATA_TYPE_PRIVATE_VERIFICATION_TOKENS;
 
 // Datatypes protected by Important Sites.
 constexpr DataType IMPORTANT_SITES_DATA_TYPES =
@@ -81,6 +85,9 @@ constexpr DataType FILTERABLE_DATA_TYPES =
 // look like a new Profile. Does not delete account-scoped data like
 // passwords but will remove access to account-scoped data by signing the
 // user out.
+//
+// TODO(crbug.com/506130502): This treats account vs local data inconsistently,
+// remove or fix.
 constexpr DataType ALL_DATA_TYPES =
     DATA_TYPE_SITE_DATA |  //
     content::BrowsingDataRemover::DATA_TYPE_CACHE |
@@ -114,7 +121,7 @@ constexpr OriginType ORIGIN_TYPE_EMBEDDER_BEGIN =
 constexpr OriginType ORIGIN_TYPE_EXTENSION = ORIGIN_TYPE_EMBEDDER_BEGIN;
 #endif
 
-  // All origin types.
+// All origin types.
 constexpr OriginType ALL_ORIGIN_TYPES =
     content::BrowsingDataRemover::ORIGIN_TYPE_UNPROTECTED_WEB |
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)

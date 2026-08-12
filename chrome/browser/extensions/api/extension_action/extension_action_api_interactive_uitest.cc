@@ -121,8 +121,8 @@ IN_PROC_BROWSER_TEST_F(ActionAPIInteractiveUITest, OpenPopupInSpecifiedWindow) {
   ASSERT_TRUE(second_browser);
   ui_test_utils::BrowserActivationWaiter(second_browser).WaitForActivation();
 
-  EXPECT_FALSE(browser()->window()->IsActive());
-  EXPECT_TRUE(second_browser->window()->IsActive());
+  EXPECT_FALSE(browser()->GetWindow()->IsActive());
+  EXPECT_TRUE(second_browser->GetWindow()->IsActive());
 
   int window_id = ExtensionTabUtil::GetWindowId(second_browser);
 
@@ -157,8 +157,8 @@ IN_PROC_BROWSER_TEST_F(ActionAPIInteractiveUITest, OpenPopupInInactiveWindow) {
   // TODO(crbug.com/40057101): We should allow extensions to open a
   // popup in an inactive window. Currently, this fails, so try to open the
   // popup in the active window (but with a specified ID).
-  EXPECT_FALSE(browser()->window()->IsActive());
-  EXPECT_TRUE(second_browser->window()->IsActive());
+  EXPECT_FALSE(browser()->GetWindow()->IsActive());
+  EXPECT_TRUE(second_browser->GetWindow()->IsActive());
 
   int inactive_window_id = ExtensionTabUtil::GetWindowId(browser());
 
@@ -222,7 +222,7 @@ IN_PROC_BROWSER_TEST_F(ActionAPIInteractiveUITest, OpenPopupFailures) {
 
 // Tests that openPopup() will not succeed if a popup is only visible on a tab
 // because of a declarative condition.
-// https://crbug.com/1289846.
+// https://crbug.com/40058555.
 IN_PROC_BROWSER_TEST_F(ActionAPIInteractiveUITest,
                        DontOpenPopupForDeclarativelyShownAction) {
   ASSERT_TRUE(StartEmbeddedTestServer());

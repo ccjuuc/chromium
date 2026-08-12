@@ -3,12 +3,21 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/chrome_browser_interface_binders_webui_parts.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_ui.h"
+#include "chrome/browser/glic/host/glic_ui.h"
+#include "chrome/browser/glic/public/glic_enabling.h"
+#include "chrome/browser/ui/webui/private_ai_internals/private_ai_internals_ui.h"
 #include "chrome/common/buildflags.h"
+#include "chrome/common/chrome_features.h"
 #include "components/compose/buildflags.h"
+#include "components/contextual_tasks/public/features.h"
 #include "components/enterprise/buildflags/buildflags.h"
 #include "components/on_device_translation/buildflags/buildflags.h"
+#include "components/private_ai/features.h"
+#include "components/private_ai/private_ai_internals/webui/private_ai_internals.mojom.h"
 #include "components/safe_browsing/buildflags.h"
 #include "components/signin/public/base/signin_buildflags.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_ui_browser_interface_broker_registry.h"
 #include "content/public/browser/web_ui_controller_interface_binder.h"
 #include "extensions/buildflags/buildflags.h"
@@ -24,30 +33,26 @@
 #include "chrome/common/compose/compose.mojom.h"
 #endif
 
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+#if BUILDFLAG(ENABLE_DICE_SUPPORT) || BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ui/webui/signin/batch_upload/batch_upload.mojom.h"
 #include "chrome/browser/ui/webui/signin/batch_upload_ui.h"
+#endif
+
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+#include "chrome/browser/ui/webui/signin/cross_device_signin_qr_bubble/cross_device_signin_qr_bubble.mojom.h"
+#include "chrome/browser/ui/webui/signin/cross_device_signin_qr_bubble_ui.h"
 #include "chrome/browser/ui/webui/signin/signout_confirmation/signout_confirmation.mojom.h"
 #include "chrome/browser/ui/webui/signin/signout_confirmation/signout_confirmation_ui.h"
-#include "components/sync/base/features.h"
-#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+#endif
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/ui/webui/extensions_zero_state_promo/zero_state_promo_ui.h"
 #endif
 
-#if BUILDFLAG(ENABLE_GLIC)
-#include "chrome/browser/glic/fre/glic_fre_ui.h"
-#include "chrome/browser/glic/host/glic_ui.h"
-#include "chrome/browser/glic/public/glic_enabling.h"
-#include "content/public/browser/render_process_host.h"
+#if !BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "components/guest_view/browser/slim_web_view/slim_web_view.mojom.h"  // nogncheck
 #endif
 
-#if BUILDFLAG(ENABLE_WEBUI_TAB_STRIP)
-#include "chrome/browser/ui/webui/tab_strip/tab_strip.mojom.h"
-#include "chrome/browser/ui/webui/tab_strip/tab_strip_ui.h"
-#include "components/browser_apis/tab_strip/tab_strip_api.mojom.h"
-#endif
 
 #if BUILDFLAG(ENABLE_SESSION_SERVICE)
 #include "chrome/browser/ui/webui/tab_strip_internals/tab_strip_internals_ui.h"
@@ -75,10 +80,15 @@ void PopulateChromeWebUIFrameBindersPartsFeatures(
       CertificateManagerUI>(map);
 #endif  // BUILDFLAG(CHROME_ROOT_STORE_CERT_MANAGEMENT_UI)
 
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+#if BUILDFLAG(ENABLE_DICE_SUPPORT) || BUILDFLAG(IS_CHROMEOS)
   RegisterWebUIControllerInterfaceBinder<
       batch_upload::mojom::PageHandlerFactory, BatchUploadUI>(map);
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT) || BUILDFLAG(IS_CHROMEOS)
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  RegisterWebUIControllerInterfaceBinder<
+      cross_device_signin::mojom::PageHandlerFactory,
+      CrossDeviceSigninQrBubbleUI>(map);
   RegisterWebUIControllerInterfaceBinder<
       signout_confirmation::mojom::PageHandlerFactory, SignoutConfirmationUI>(
       map);
@@ -93,33 +103,34 @@ void PopulateChromeWebUIFrameBindersPartsFeatures(
       extensions::ZeroStatePromoController>(map);
 #endif
 
-#if BUILDFLAG(ENABLE_GLIC)
   if (glic::GlicEnabling::IsProfileEligible(Profile::FromBrowserContext(
           render_frame_host->GetProcess()->GetBrowserContext()))) {
     // Register binders for all eligible profiles.
-    if (glic::GlicEnabling::IsUnifiedFreEnabled(Profile::FromBrowserContext(
-            render_frame_host->GetProcess()->GetBrowserContext()))) {
-      RegisterWebUIControllerInterfaceBinder<glic::mojom::FrePageHandlerFactory,
-                                             glic::GlicUI>(map);
-    } else {
-      RegisterWebUIControllerInterfaceBinder<glic::mojom::FrePageHandlerFactory,
-                                             glic::GlicFreUI>(map);
-    }
+
     // For GlicUI, the WebUI page will check whether Glic is policy-enabled and
-    // restrict access if needed. This isn't required for the GlicFreUI.
+    // restrict access if needed.
     RegisterWebUIControllerInterfaceBinder<glic::mojom::PageHandlerFactory,
                                            glic::GlicUI>(map);
     RegisterWebUIControllerInterfaceBinder<
         glic::mojom::GlicPreloadHandlerFactory, glic::GlicUI>(map);
   }
+
+  if (glic::GlicEnabling::IsInternalsWebUIEnabled(Profile::FromBrowserContext(
+          render_frame_host->GetProcess()->GetBrowserContext()))) {
+    RegisterWebUIControllerInterfaceBinder<
+        glic::mojom::InternalsPageHandlerFactory, glic::GlicUI>(map);
+  }
+#if !BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  if (base::FeatureList::IsEnabled(contextual_tasks::kContextualTasks)) {
+    RegisterWebUIControllerInterfaceBinder<
+        guest_view::mojom::PageHandlerFactory, glic::GlicUI, ContextualTasksUI>(
+        map);
+  } else {
+    RegisterWebUIControllerInterfaceBinder<
+        guest_view::mojom::PageHandlerFactory, glic::GlicUI>(map);
+  }
 #endif
 
-#if BUILDFLAG(ENABLE_WEBUI_TAB_STRIP)
-  RegisterWebUIControllerInterfaceBinder<tab_strip::mojom::PageHandlerFactory,
-                                         TabStripUI>(map);
-  RegisterWebUIControllerInterfaceBinder<tabs_api::mojom::TabStripService,
-                                         TabStripUI>(map);
-#endif
 
 #if BUILDFLAG(ENABLE_SESSION_SERVICE)
   RegisterWebUIControllerInterfaceBinder<
@@ -130,6 +141,12 @@ void PopulateChromeWebUIFrameBindersPartsFeatures(
   RegisterWebUIControllerInterfaceBinder<watermark::mojom::PageHandlerFactory,
                                          WatermarkUI>(map);
 #endif
+
+  if (base::FeatureList::IsEnabled(private_ai::kPrivateAi)) {
+    RegisterWebUIControllerInterfaceBinder<
+        private_ai_internals::mojom::PrivateAiInternalsPageHandler,
+        private_ai::PrivateAiInternalsUI>(map);
+  }
 
 #if BUILDFLAG(FULL_SAFE_BROWSING)
   RegisterWebUIControllerInterfaceBinder<::mojom::ResetPasswordHandler,

@@ -9,10 +9,10 @@
 #include <memory>
 #include <optional>
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/test/bind.h"
 #include "base/test/test_future.h"
 #include "base/unguessable_token.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/app_service_test.h"
@@ -36,11 +36,11 @@
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/login/login_state/login_state.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/instance.h"
 #include "components/webapps/browser/install_result_code.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
@@ -156,7 +156,7 @@ class KioskWebAppServiceLauncherTest : public BrowserWithTestWindowTest {
     install_page_state.manifest_before_default_processing->start_url =
         start_url;
     install_page_state.manifest_before_default_processing->id =
-        web_app::GenerateManifestIdFromStartUrlOnly(start_url);
+        web_app::GenerateManifestIdFromStartUrlOnly(start_url).value();
     install_page_state.manifest_before_default_processing->display =
         blink::mojom::DisplayMode::kStandalone;
     install_page_state.manifest_before_default_processing->short_name =
@@ -270,7 +270,8 @@ TEST_F(KioskWebAppServiceLauncherTest,
 TEST_F(
     KioskWebAppServiceLauncherTest,
     ShouldInvokeInitializeNetworkWhenAppIsSuccessfullyInstalledButNotOfflineEnabled) {
-  profile()->GetPrefs()->SetBoolean(::prefs::kKioskWebAppOfflineEnabled, false);
+  profile()->GetPrefs()->SetBoolean(ash::prefs::kKioskWebAppOfflineEnabled,
+                                    false);
   InstallApp();
 
   EXEC_AND_WAIT_FOR_CALL(launcher().Initialize(), delegate(),

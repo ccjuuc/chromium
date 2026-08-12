@@ -20,8 +20,6 @@
 #include "components/sync_device_info/fake_device_info_tracker.h"
 #include "url/gurl.h"
 
-class PageActionIconView;
-
 class FakeSharingMessageBridge : public SharingMessageBridge {
  public:
   FakeSharingMessageBridge() = default;
@@ -60,9 +58,7 @@ class SharingBrowserTest : public SyncTest {
 
   void SetUpOnMainThread() override;
 
-  void Init(
-      sync_pb::SharingSpecificFields_EnabledFeatures first_device_feature,
-      sync_pb::SharingSpecificFields_EnabledFeatures second_device_feature);
+  void Init(syncer::DeviceInfo::SharingFeature device_feature);
 
   virtual std::string GetTestPageURL() const = 0;
 
@@ -79,15 +75,12 @@ class SharingBrowserTest : public SyncTest {
 
   content::WebContents* web_contents() const;
 
-  PageActionIconView* GetPageActionIconView(PageActionIconType type);
-
  private:
-  void SetUpDevices(
-      sync_pb::SharingSpecificFields_EnabledFeatures first_device_feature,
-      sync_pb::SharingSpecificFields_EnabledFeatures second_device_feature);
+  void SetUpDevices(syncer::DeviceInfo::SharingFeature first_device_feature,
+                    syncer::DeviceInfo::SharingFeature second_device_feature);
 
   void RegisterDevice(int profile_index,
-                      sync_pb::SharingSpecificFields_EnabledFeatures feature);
+                      syncer::DeviceInfo::SharingFeature feature);
   void AddDeviceInfo(const syncer::DeviceInfo& original_device,
                      int fake_device_id);
 
@@ -95,7 +88,6 @@ class SharingBrowserTest : public SyncTest {
       scoped_testing_factory_installer_;
   raw_ptr<content::WebContents, DanglingUntriaged> web_contents_;
   syncer::FakeDeviceInfoTracker fake_device_info_tracker_;
-  std::vector<std::unique_ptr<syncer::DeviceInfo>> device_infos_;
   raw_ptr<SharingService, AcrossTasksDanglingUntriaged> sharing_service_;
   FakeSharingMessageBridge fake_sharing_message_bridge_;
 };

@@ -73,16 +73,16 @@ void DelayHandler::Process(uint32_t frames_to_process) {
           CHECK(delay_time_->IsAudioRate());
           delay_time_->CalculateSampleAccurateValues(
               kernels_[i]->DelayTimes().first(frames_to_process));
-          kernels_[i]->ProcessARate(source_bus->Channel(i)->Data(),
-                                    destination_bus->Channel(i)->MutableData(),
+          kernels_[i]->ProcessARate(source_bus->Channel(i)->Span(),
+                                    destination_bus->Channel(i)->MutableSpan(),
                                     frames_to_process);
         }
       } else {
         for (unsigned i = 0; i < kernels_.size(); ++i) {
           CHECK(!delay_time_->IsAudioRate());
           kernels_[i]->SetDelayTime(delay_time_->FinalValue());
-          kernels_[i]->ProcessKRate(source_bus->Channel(i)->Data(),
-                                    destination_bus->Channel(i)->MutableData(),
+          kernels_[i]->ProcessKRate(source_bus->Channel(i)->Span(),
+                                    destination_bus->Channel(i)->MutableSpan(),
                                     frames_to_process);
         }
       }
@@ -156,7 +156,7 @@ void DelayHandler::CheckNumberOfChannelsForInput(AudioNodeInput* input) {
     // the chain...
     Output(0).SetNumberOfChannels(number_of_channels);
 
-    // Re-initialize the processor with the new channel count.
+    // Re-initialize the handler with the new channel count.
     number_of_channels_ = number_of_channels;
 
     Initialize();

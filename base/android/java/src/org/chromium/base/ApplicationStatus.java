@@ -9,7 +9,6 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.Application;
-import android.content.SharedPreferences;
 import android.view.Window;
 
 import androidx.annotation.AnyThread;
@@ -18,6 +17,7 @@ import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.build.annotations.NullMarked;
@@ -34,7 +34,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 
 import javax.annotation.concurrent.GuardedBy;
 
@@ -96,7 +95,7 @@ public class ApplicationStatus {
      * A map of which observers listen to state changes from which {@link Activity}.
      *
      * <p>Access to the cached state should be synchronized by this map.
-     **/
+     */
     @GuardedBy("sActivityInfo")
     private static final Map<Activity, ActivityInfo> sActivityInfo =
             new HashMap<Activity, ActivityInfo>();
@@ -104,9 +103,6 @@ public class ApplicationStatus {
     /** A map to cache TaskId for each {@link Activity}. */
     public static final Map<Activity, Integer> sActivityTaskId =
             Collections.synchronizedMap(new HashMap<Activity, Integer>());
-
-    // Shared preferences key for TaskId caching of an activity.
-    private static final String CACHE_ACTIVITY_TASKID_KEY = "cache_activity_taskid_enabled";
 
     @SuppressLint("SupportAnnotationUsage")
     @ApplicationState
@@ -231,21 +227,7 @@ public class ApplicationStatus {
         sTaskVisibilityListeners.removeObserver(listener);
     }
 
-    public static void setCachingEnabled(boolean enabled) {
-        SharedPreferences.Editor editor = ContextUtils.getAppSharedPreferences().edit();
-        editor.putBoolean(CACHE_ACTIVITY_TASKID_KEY, enabled).apply();
-    }
-
-    public static boolean isCachingEnabled() {
-        try (StrictModeContext ignored = StrictModeContext.allowDiskReads()) {
-            return ContextUtils.getAppSharedPreferences()
-                    .getBoolean(CACHE_ACTIVITY_TASKID_KEY, false);
-        }
-    }
-
     public static int getTaskId(Activity activity) {
-        if (!isCachingEnabled()) return activity.getTaskId();
-
         if (!sActivityTaskId.containsKey(activity)) {
             synchronized (sActivityTaskId) {
                 sActivityTaskId.put(activity, activity.getTaskId());
@@ -486,7 +468,6 @@ public class ApplicationStatus {
     }
 
     /** Testing method to update the state of the specified activity. */
-    @VisibleForTesting
     @MainThread
     public static void onStateChangeForTesting(Activity activity, int newState) {
         onStateChange(activity, newState);
@@ -628,25 +609,6 @@ public class ApplicationStatus {
             }
         }
         return false;
-    }
-
-    /**
-     * Cleanup Activity info from an app Task that is no longer reachable.
-     *
-     * @param taskId The id of the Task that is no longer running.
-     * @return Whether any tasks were cleaned up.
-     */
-    public static boolean cleanupInvalidTask(int taskId) {
-        List<Activity> inaccessibleActivities = new ArrayList<>();
-        for (Entry<Activity, Integer> activityTaskInfo : sActivityTaskId.entrySet()) {
-            if (taskId == activityTaskInfo.getValue()) {
-                inaccessibleActivities.add(activityTaskInfo.getKey());
-            }
-        }
-        for (Activity activity : inaccessibleActivities) {
-            onStateChange(activity, ActivityState.DESTROYED);
-        }
-        return !inaccessibleActivities.isEmpty();
     }
 
     /**
@@ -861,6 +823,6 @@ public class ApplicationStatus {
     interface Natives {
         // Called to notify the native side of state changes.
         // IMPORTANT: This is always called on the main thread!
-        void onApplicationStateChange(@ApplicationState int newState);
+        void onApplicationStateChange(@JniType("ApplicationState") @ApplicationState int newState);
     }
 }

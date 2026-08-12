@@ -4,8 +4,22 @@
 
 #include "components/autofill/core/browser/payments/payments_requests/get_details_for_create_card_request.h"
 
+#include <stdint.h>
+
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
+#include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
+#include "components/autofill/core/browser/payments/client_behavior_constants.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
 
 namespace autofill::payments {
 
@@ -20,7 +34,7 @@ GetDetailsForCreateCardRequest::GetDetailsForCreateCardRequest(
     const std::string& app_locale,
     base::OnceCallback<void(PaymentsAutofillClient::PaymentsRpcResult,
                             const std::u16string&,
-                            std::unique_ptr<base::Value::Dict>,
+                            std::unique_ptr<base::DictValue>,
                             std::vector<std::pair<int, int>>)> callback,
     const int billable_service_number,
     const int64_t billing_customer_number,
@@ -44,8 +58,8 @@ std::string GetDetailsForCreateCardRequest::GetRequestContentType() {
 }
 
 std::string GetDetailsForCreateCardRequest::GetRequestContent() {
-  base::Value::Dict request_dict;
-  base::Value::Dict context;
+  base::DictValue request_dict;
+  base::DictValue context;
   context.Set("language_code", app_locale_);
   context.Set("billable_service", billable_service_number_);
   if (billing_customer_number_ != 0) {
@@ -56,7 +70,7 @@ std::string GetDetailsForCreateCardRequest::GetRequestContent() {
   request_dict.Set("chrome_user_context",
                    BuildChromeUserContext(client_behavior_signals_));
 
-  base::Value::Dict card_info;
+  base::DictValue card_info;
   card_info.Set("unique_country_code", unique_country_code_);
   switch (upload_card_source_) {
     case UploadCardSource::kUnknown:
@@ -77,19 +91,18 @@ std::string GetDetailsForCreateCardRequest::GetRequestContent() {
 }
 
 void GetDetailsForCreateCardRequest::ParseResponse(
-    const base::Value::Dict& response) {
+    const base::DictValue& response) {
   if (const auto* context_token = response.FindString("context_token")) {
     context_token_ = base::UTF8ToUTF16(*context_token);
   }
 
-  if (const base::Value::Dict* dictionary_value =
+  if (const base::DictValue* dictionary_value =
           response.FindDict("legal_message")) {
     legal_message_ =
-        std::make_unique<base::Value::Dict>(dictionary_value->Clone());
+        std::make_unique<base::DictValue>(dictionary_value->Clone());
   }
 
-  if (const base::Value::Dict* card_details =
-          response.FindDict("card_details")) {
+  if (const base::DictValue* card_details = response.FindDict("card_details")) {
     if (const auto* supported_card_bin_ranges_string =
             card_details->FindString("supported_card_bin_ranges_string")) {
       supported_card_bin_ranges_ =

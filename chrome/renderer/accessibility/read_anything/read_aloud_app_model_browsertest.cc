@@ -4,11 +4,13 @@
 
 #include "chrome/renderer/accessibility/read_anything/read_aloud_app_model.h"
 
+#include <algorithm>
 #include <memory>
 
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "chrome/renderer/accessibility/read_anything/read_aloud_traversal_utils.h"
 #include "chrome/test/base/chrome_render_view_test.h"
@@ -43,7 +45,7 @@ class ReadAnythingReadAloudAppModelTest : public ChromeRenderViewTest {
     model_->set_speech_rate(speech_rate);
   }
 
-  const base::Value::List& EnabledLanguages() {
+  const base::ListValue& EnabledLanguages() {
     return model_->languages_enabled_in_pref();
   }
 
@@ -51,7 +53,7 @@ class ReadAnythingReadAloudAppModelTest : public ChromeRenderViewTest {
     model_->SetLanguageEnabled(lang, enabled);
   }
 
-  const base::Value::Dict& Voices() { return model_->voices(); }
+  const base::DictValue& Voices() { return model_->voices(); }
 
   void SetVoice(const std::string& voice, const std::string& lang) {
     model_->SetVoice(voice, lang);
@@ -73,15 +75,6 @@ class ReadAnythingReadAloudAppModelTest : public ChromeRenderViewTest {
 
   void LogSpeechStop(ReadAloudAppModel::ReadAloudStopSource source) {
     model_->LogSpeechStop(source);
-  }
-
-  void EnableReadAloud() {
-    scoped_feature_list_.InitAndEnableFeature(features::kReadAnythingReadAloud);
-  }
-
-  void DisableReadAloud() {
-    scoped_feature_list_.InitWithFeatures({},
-                                          {features::kReadAnythingReadAloud});
   }
 
   std::vector<ui::AXNodeID> MoveToNextGranularityAndGetText(
@@ -209,27 +202,8 @@ class ReadAnythingReadAloudAppModelTest : public ChromeRenderViewTest {
   std::unique_ptr<ui::AXTreeManager> tree_manager_;
 };
 
-// Read Aloud is currently only enabled by default on ChromeOS.
-#if !BUILDFLAG(IS_CHROMEOS)
-TEST_F(ReadAnythingReadAloudAppModelTest, LogSpeechStop_WithoutReadAloud) {
-  DisableReadAloud();
-  auto source = ReadAloudAppModel::ReadAloudStopSource::kCloseReadingMode;
-  base::HistogramTester histogram_tester;
-
-  LogSpeechStop(source);
-
-  histogram_tester.ExpectTotalCount(
-      ReadAloudAppModel::kSpeechStopSourceHistogramName, 0);
-  histogram_tester.ExpectTotalCount(
-      ReadAloudAppModel::kAudioStartTimeSuccessHistogramName, 0);
-  histogram_tester.ExpectTotalCount(
-      ReadAloudAppModel::kAudioStartTimeFailureHistogramName, 0);
-}
-#endif
-
 TEST_F(ReadAnythingReadAloudAppModelTest,
-       LogSpeechStop_WithReadAloud_AudioDidNotStart_LogsDelay) {
-  EnableReadAloud();
+       LogSpeechStop_AudioDidNotStart_LogsDelay) {
   SetSpeechPlaying(true);
   const auto delay = base::Milliseconds(25);
   task_environment_.FastForwardBy(delay);
@@ -247,8 +221,7 @@ TEST_F(ReadAnythingReadAloudAppModelTest,
 }
 
 TEST_F(ReadAnythingReadAloudAppModelTest,
-       LogSpeechStop_WithReadAloud_AudioDidStart_DoesNotLogDelay) {
-  EnableReadAloud();
+       LogSpeechStop_AudioDidStart_DoesNotLogDelay) {
   SetSpeechPlaying(true);
   const auto delay = base::Milliseconds(12);
   task_environment_.FastForwardBy(delay);
@@ -267,8 +240,7 @@ TEST_F(ReadAnythingReadAloudAppModelTest,
 }
 
 TEST_F(ReadAnythingReadAloudAppModelTest,
-       LogSpeechStop_WithReadAloud_LogsStopSourceWithSpeechNotPlaying) {
-  EnableReadAloud();
+       LogSpeechStop_LogsStopSourceWithSpeechNotPlaying) {
   auto source = ReadAloudAppModel::ReadAloudStopSource::kFinishContent;
   base::HistogramTester histogram_tester;
 
@@ -279,8 +251,7 @@ TEST_F(ReadAnythingReadAloudAppModelTest,
 }
 
 TEST_F(ReadAnythingReadAloudAppModelTest,
-       LogSpeechStop_WithReadAloud_LogsStopSourceWithSpeechPlaying) {
-  EnableReadAloud();
+       LogSpeechStop_LogsStopSourceWithSpeechPlaying) {
   SetSpeechPlaying(true);
   auto source = ReadAloudAppModel::ReadAloudStopSource::kFinishContent;
   base::HistogramTester histogram_tester;
@@ -292,7 +263,6 @@ TEST_F(ReadAnythingReadAloudAppModelTest,
 }
 
 TEST_F(ReadAnythingReadAloudAppModelTest, SetAudioCurrentlyPlaying_LogsDelay) {
-  EnableReadAloud();
   SetSpeechPlaying(true);
   const auto delay = base::Milliseconds(27);
   task_environment_.FastForwardBy(delay);
@@ -335,10 +305,10 @@ TEST_F(ReadAnythingReadAloudAppModelTest, EnabledLanguages) {
 
   const std::string enabled_lang = "fr";
   SetLanguageEnabled(enabled_lang, true);
-  EXPECT_TRUE(base::Contains(EnabledLanguages(), enabled_lang));
+  EXPECT_TRUE(EnabledLanguages().contains(enabled_lang));
 
   SetLanguageEnabled(enabled_lang, false);
-  EXPECT_FALSE(base::Contains(EnabledLanguages(), enabled_lang));
+  EXPECT_FALSE(EnabledLanguages().contains(enabled_lang));
 }
 
 TEST_F(ReadAnythingReadAloudAppModelTest, Voices) {
@@ -350,15 +320,15 @@ TEST_F(ReadAnythingReadAloudAppModelTest, Voices) {
   const char* voice2 = "Shang";
   SetVoice(voice1, lang1);
   SetVoice(voice2, lang2);
-  EXPECT_TRUE(base::Contains(Voices(), lang1));
-  EXPECT_TRUE(base::Contains(Voices(), lang2));
+  EXPECT_TRUE(Voices().contains(lang1));
+  EXPECT_TRUE(Voices().contains(lang2));
   EXPECT_STREQ(Voices().FindString(lang1)->c_str(), voice1);
   EXPECT_STREQ(Voices().FindString(lang2)->c_str(), voice2);
 
   const char* voice3 = "Mushu";
   SetVoice(voice3, lang2);
-  EXPECT_TRUE(base::Contains(Voices(), lang1));
-  EXPECT_TRUE(base::Contains(Voices(), lang2));
+  EXPECT_TRUE(Voices().contains(lang1));
+  EXPECT_TRUE(Voices().contains(lang2));
   EXPECT_STREQ(Voices().FindString(lang2)->c_str(), voice3);
 }
 
@@ -394,12 +364,10 @@ class ReadAnythingReadAloudAppModelV8SegmentationTest
     : public ReadAnythingReadAloudAppModelTest {
  public:
   void SetUp() override {
-    // Phrase highlighting currently doesn't work with the TS text segmentation
-    // implementation, so we need to disable it to test phrase highlighting.
+    // V8 based text segmentation is currently only used when phrase
+    // highlighting is enabled.
     scoped_feature_list_.InitWithFeatures(
-        {features::kReadAnythingReadAloud,
-         features::kReadAnythingReadAloudPhraseHighlighting},
-        {features::kReadAnythingReadAloudTSTextSegmentation});
+        {features::kReadAnythingReadAloudPhraseHighlighting}, {});
     ReadAnythingReadAloudAppModelTest::SetUp();
   }
 };
@@ -463,10 +431,17 @@ TEST_F(
 TEST_F(
     ReadAnythingReadAloudAppModelV8SegmentationTest,
     GetHighlightForCurrentSegmentIndex_PhrasesEnabled_ValidModel_SentenceSpansMultipleNodes_ReturnsCorrectNodes) {
-  model().GetDependencyParserModel().UpdateWithFile(test::GetValidModelFile());
-  DependencyParserModel& phrase_model = model().GetDependencyParserModel();
+  model()
+      .GetDependencyParserModel()
+      .AsyncCall(&DependencyParserModel::UpdateWithFile)
+      .WithArgs(test::GetValidModelFile());
 
-  EXPECT_TRUE(phrase_model.IsAvailable());
+  base::test::TestFuture<bool> future;
+  model()
+      .GetDependencyParserModel()
+      .AsyncCall(&DependencyParserModel::IsAvailable)
+      .Then(future.GetCallback());
+  EXPECT_TRUE(future.Get());
 
   // Text indices:             0123456789012345678901234567890
   std::u16string sentence1 = u"Never feel heavy or ";
@@ -620,7 +595,7 @@ TEST_F(ReadAnythingReadAloudAppModelV8SegmentationTest,
   // Expect that GetNextValidPosition fails without inserted the granularity.
   // The first segment was returned correctly.
   EXPECT_EQ(current_granularity.node_ids.size(), 1u);
-  EXPECT_TRUE(base::Contains(current_granularity.node_ids, kId1));
+  EXPECT_TRUE(std::ranges::contains(current_granularity.node_ids, kId1));
 
   ui::AXNodePosition::AXPositionInstance new_position =
       GetNextNodePosition(&current_nodes);
@@ -767,12 +742,12 @@ TEST_F(ReadAnythingReadAloudAppModelV8SegmentationTest,
   a11y::ReadAloudCurrentGranularity first_granularity =
       GetNextNodes(&current_nodes);
   EXPECT_EQ(first_granularity.node_ids.size(), 1u);
-  EXPECT_TRUE(base::Contains(first_granularity.node_ids, kId1));
+  EXPECT_TRUE(std::ranges::contains(first_granularity.node_ids, kId1));
   EXPECT_EQ(first_granularity.text, sentence1);
   a11y::ReadAloudCurrentGranularity next_granularity =
       GetNextNodes(&current_nodes);
   EXPECT_EQ(next_granularity.node_ids.size(), 1u);
-  EXPECT_TRUE(base::Contains(next_granularity.node_ids, kId2));
+  EXPECT_TRUE(std::ranges::contains(next_granularity.node_ids, kId2));
   EXPECT_EQ(next_granularity.text, sentence2);
 
   // If we init without resetting we should just go to the next sentence
@@ -780,7 +755,7 @@ TEST_F(ReadAnythingReadAloudAppModelV8SegmentationTest,
   a11y::ReadAloudCurrentGranularity last_granularity =
       GetNextNodes(&current_nodes);
   EXPECT_EQ(last_granularity.node_ids.size(), 1u);
-  EXPECT_TRUE(base::Contains(last_granularity.node_ids, kId3));
+  EXPECT_TRUE(std::ranges::contains(last_granularity.node_ids, kId3));
   EXPECT_EQ(last_granularity.text, sentence3);
 
   // After reset and then init, we should get the first sentence again.
@@ -788,7 +763,7 @@ TEST_F(ReadAnythingReadAloudAppModelV8SegmentationTest,
   InitAXPositionWithNode(kId1);
   a11y::ReadAloudCurrentGranularity after_reset = GetNextNodes(&current_nodes);
   EXPECT_EQ(after_reset.node_ids.size(), 1u);
-  EXPECT_TRUE(base::Contains(after_reset.node_ids, kId1));
+  EXPECT_TRUE(std::ranges::contains(after_reset.node_ids, kId1));
   EXPECT_EQ(first_granularity.text, sentence1);
 }
 
@@ -1198,4 +1173,99 @@ TEST_F(
   EXPECT_EQ(kId2, segments.at(1).id);
   EXPECT_EQ(0, segments.at(1).text_start);
   EXPECT_EQ(node2_text.size(), segments.at(1).text_end);
+}
+
+TEST_F(ReadAnythingReadAloudAppModelTest, ResetAndLogSingleSampleMetrics) {
+  const std::vector<std::string> metrics = {
+      "Accessibility.ReadAnything.ReadAloudPlaySessionCount",
+      "Accessibility.ReadAnything.ReadAloudPauseSessionCount",
+      "Accessibility.ReadAnything.ReadAloudNextButtonSessionCount",
+      "Accessibility.ReadAnything.ReadAloudPreviousButtonSessionCount",
+  };
+
+  const std::string& playCountName = metrics[0];
+  const std::string& pauseCountName = metrics[1];
+  const std::string& nextButtonCountName = metrics[2];
+  const std::string& previousButtonCountName = metrics[3];
+
+  // Play - pause - play
+  model().IncrementMetric(playCountName);
+  model().IncrementMetric(pauseCountName);
+  model().IncrementMetric(playCountName);
+
+  base::HistogramTester histogram_tester;
+  model().ResetAndLogSingleSampleMetrics();
+
+  // Each metric has been logged once.
+  for (const auto& metric : metrics) {
+    histogram_tester.ExpectTotalCount(metric, /*expected_count=*/1);
+  }
+
+  // ReadAloudPlaySessionCount has a single sample of 2.
+  // ReadAloudPauseSessionCount has a single sample of 1.
+  // ReadAloudNextButtonSessionCount and ReadAloudPreviousButtonSessionCount
+  // each have a single sample of 0.
+  histogram_tester.ExpectUniqueSample(playCountName, /*sample=*/2,
+                                      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectUniqueSample(pauseCountName, /*sample=*/1,
+                                      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectUniqueSample(nextButtonCountName, /*sample=*/0,
+                                      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectUniqueSample(previousButtonCountName, /*sample=*/0,
+                                      /*expected_bucket_count=*/1);
+
+  // Increment in the new session
+  model().IncrementMetric(playCountName);
+  model().ResetAndLogSingleSampleMetrics();
+
+  // Each metric has two total samples.
+  for (const auto& metric : metrics) {
+    histogram_tester.ExpectTotalCount(metric, /*expected_count=*/2);
+  }
+
+  // ReadAloudPlaySessionCount should now have one sample of 1 and one sample
+  // of 2.
+  histogram_tester.ExpectBucketCount(playCountName, /*sample=*/1,
+                                     /*expected_count=*/1);
+  histogram_tester.ExpectBucketCount(playCountName, /*sample=*/2,
+                                     /*expected_count=*/1);
+
+  // ReadAloudPauseSessionCount should now have one sample of 1 and one sample
+  // of 0.
+  histogram_tester.ExpectBucketCount(pauseCountName, /*sample=*/0,
+                                     /*expected_count=*/1);
+  histogram_tester.ExpectBucketCount(pauseCountName, /*sample=*/1,
+                                     /*expected_count=*/1);
+
+  // ReadAloudNextButtonSessionCount and ReadAloudPreviousButtonSessionCount
+  // each have two samples of 0.
+  histogram_tester.ExpectBucketCount(previousButtonCountName, /*sample=*/0,
+                                     /*expected_count=*/2);
+  histogram_tester.ExpectBucketCount(nextButtonCountName, /*sample=*/0,
+                                     /*expected_count=*/2);
+}
+
+TEST_F(ReadAnythingReadAloudAppModelTest, LogPlaybackContext) {
+  base::HistogramTester histograms;
+  const char* histogram_name =
+      "Accessibility.ReadAnything.ReadAloud.PlaybackContext";
+
+  // Test Side Panel
+  model_->LogPlaybackContext(
+      ReadAloudAppModel::ReadAnythingPlaybackContext::kSidePanel);
+  EXPECT_EQ(model_->current_session_context_for_testing(),
+            ReadAloudAppModel::ReadAnythingPlaybackContext::kSidePanel);
+  histograms.ExpectUniqueSample(
+      histogram_name,
+      ReadAloudAppModel::ReadAnythingPlaybackContext::kSidePanel, 1);
+
+  // Test Immersive
+  model_->LogPlaybackContext(
+      ReadAloudAppModel::ReadAnythingPlaybackContext::kImmersive);
+  EXPECT_EQ(model_->current_session_context_for_testing(),
+            ReadAloudAppModel::ReadAnythingPlaybackContext::kImmersive);
+  histograms.ExpectBucketCount(
+      histogram_name,
+      ReadAloudAppModel::ReadAnythingPlaybackContext::kImmersive, 1);
+  histograms.ExpectTotalCount(histogram_name, 2);
 }

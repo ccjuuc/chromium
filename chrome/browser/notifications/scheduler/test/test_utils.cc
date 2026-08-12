@@ -7,11 +7,10 @@
 #include <sstream>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/strings/stringprintf.h"
-#include "chrome/browser/notifications/scheduler/internal/notification_entry.h"
 #include "chrome/browser/notifications/scheduler/public/notification_data.h"
+#include "chrome/browser/notifications/scheduler/public/notification_entry.h"
 
 namespace notifications {
 namespace test {
@@ -113,11 +112,11 @@ std::string DebugString(const NotificationEntry* entry) {
            << " : " << static_cast<int>(mapping.second);
   }
 
-  if (base::Contains(entry->icons_uuid, IconType::kSmallIcon)) {
+  if (entry->icons_uuid.contains(IconType::kSmallIcon)) {
     stream << " \n small_icons_id:"
            << entry->icons_uuid.at(IconType::kSmallIcon);
   }
-  if (base::Contains(entry->icons_uuid, IconType::kLargeIcon)) {
+  if (entry->icons_uuid.contains(IconType::kLargeIcon)) {
     stream << " \n large_icons_id:"
            << entry->icons_uuid.at(IconType::kLargeIcon);
   }

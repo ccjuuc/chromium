@@ -7,9 +7,13 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/find_bar/find_bar_controller.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/views/translate/translate_bubble_controller.h"
 #include "chrome/browser/ui/webui_browser/webui_browser_window.h"
+#include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
+#include "chrome/browser/ui/window_metadata/window_metadata_controller.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/views/view.h"
@@ -25,8 +29,9 @@ views::Widget* FindBarOwnerWebUIBrowser::GetOwnerWidget() {
 }
 
 gfx::Rect FindBarOwnerWebUIBrowser::GetFindBarBoundingBox() {
-  if (!window_->browser()->SupportsWindowFeature(
-          Browser::WindowFeature::kFeatureLocationBar)) {
+  if (!WindowFeatureController::From(window_->browser())
+           ->SupportsWindowFeature(
+               WindowFeatureController::WindowFeature::kFeatureLocationBar)) {
     return gfx::Rect();
   }
 
@@ -61,7 +66,7 @@ gfx::Rect FindBarOwnerWebUIBrowser::GetFindBarClippingBox() {
 }
 
 bool FindBarOwnerWebUIBrowser::IsOffTheRecord() const {
-  return window_->browser()->profile()->IsOffTheRecord();
+  return window_->browser()->GetProfile()->IsOffTheRecord();
 }
 
 views::Widget* FindBarOwnerWebUIBrowser::GetWidgetForAnchoring() {
@@ -71,12 +76,16 @@ views::Widget* FindBarOwnerWebUIBrowser::GetWidgetForAnchoring() {
 std::u16string FindBarOwnerWebUIBrowser::GetFindBarAccessibleWindowTitle() {
   return l10n_util::GetStringFUTF16(
       IDS_FIND_IN_PAGE_ACCESSIBLE_TITLE,
-      window_->browser()->GetWindowTitleForCurrentTab(false));
+      WindowMetadataController::From(window_->browser())
+          ->GetWindowTitleForCurrentTab(false));
 }
 
 void FindBarOwnerWebUIBrowser::OnFindBarVisibilityChanged(
     gfx::Rect visible_bounds) {
-  window_->browser()->OnFindBarVisibilityChanged();
+  window_->browser()
+      ->GetFeatures()
+      .GetFindBarController()
+      ->OnFindBarVisibilityChanged();
 }
 
 void FindBarOwnerWebUIBrowser::CloseOverlappingBubbles() {

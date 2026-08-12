@@ -4,17 +4,20 @@
 
 #include "third_party/blink/renderer/core/page/focusgroup_controller.h"
 
+#include "third_party/blink/public/common/metrics/document_update_reason.h"
 #include "third_party/blink/public/mojom/input/focus_type.mojom-blink.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/flat_tree_traversal.h"
 #include "third_party/blink/renderer/core/dom/focus_params.h"
 #include "third_party/blink/renderer/core/dom/focusgroup_flags.h"
+#include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/events/keyboard_event.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/input/event_handler.h"
+#include "third_party/blink/renderer/core/keywords.h"
 #include "third_party/blink/renderer/core/page/focus_controller.h"
 #include "third_party/blink/renderer/core/page/focusgroup_controller_utils.h"
 #include "third_party/blink/renderer/core/page/grid_focusgroup_structure_info.h"
@@ -24,16 +27,28 @@ namespace blink {
 using utils = FocusgroupControllerUtils;
 
 // static
+bool FocusgroupController::HandleKeyboardEvent(KeyboardEvent* event,
+                                               const LocalFrame* frame) {
+  CHECK(frame);
+  CHECK(frame->DomWindow());
+  if (!event->isTrusted()) {
+    return false;
+  }
+  ExecutionContext* context = frame->DomWindow()->GetExecutionContext();
+  if (!RuntimeEnabledFeatures::FocusgroupEnabled(context)) {
+    return false;
+  }
+  return HandleArrowKeyboardEvent(event, frame) ||
+         HandleHomeEndKeyboardEvent(event, frame);
+}
+
+// static
 bool FocusgroupController::HandleArrowKeyboardEvent(KeyboardEvent* event,
                                                     const LocalFrame* frame) {
-  DCHECK(frame);
-  DCHECK(frame->DomWindow());
+  CHECK(frame);
+  CHECK(frame->DomWindow());
   ExecutionContext* context = frame->DomWindow()->GetExecutionContext();
-  DCHECK(RuntimeEnabledFeatures::FocusgroupEnabled(context));
-
-  FocusgroupDirection direction = utils::FocusgroupDirectionForEvent(event);
-  if (direction == FocusgroupDirection::kNone)
-    return false;
+  CHECK(RuntimeEnabledFeatures::FocusgroupEnabled(context));
 
   if (!frame->GetDocument())
     return false;
@@ -46,13 +61,115 @@ bool FocusgroupController::HandleArrowKeyboardEvent(KeyboardEvent* event,
     return false;
   }
 
+  // Resolve the logical direction from the focused element's writing mode.
+  // This means arrow keys follow the element's local writing direction: in an
+  // RTL context ArrowLeft is forward-inline, in vertical-rl ArrowDown is
+  // forward-inline, etc.
+  FocusgroupDirection direction =
+      utils::FocusgroupDirectionForEvent(event, *focused);
+  if (direction == FocusgroupDirection::kNone) {
+    return false;
+  }
+
+  // If the currently focused element is (or is within) an arrow key handler
+  // for its focusgroup owner on the navigation axis, do not run focusgroup
+  // arrow navigation. The interactive control's native arrow-key behavior
+  // should take precedence. Note: Unlike some controls (e.g., text inputs),
+  // scroll containers don't consume arrow key events; they scroll but allow
+  // the event to propagate. This check is necessary to prevent focusgroup
+  // navigation from interfering with native scrolling.
+  if (utils::IsInDirectionalKeyHandler(*focused, direction)) {
+    return false;
+  }
+
   return Advance(focused, direction);
+}
+
+// static
+bool FocusgroupController::HandleHomeEndKeyboardEvent(KeyboardEvent* event,
+                                                      const LocalFrame* frame) {
+  CHECK(frame);
+  CHECK(frame->DomWindow());
+  ExecutionContext* context = frame->DomWindow()->GetExecutionContext();
+  CHECK(RuntimeEnabledFeatures::FocusgroupEnabled(context));
+
+  Document* document = frame->GetDocument();
+  if (!document) {
+    return false;
+  }
+
+  Element* focused = document->FocusedElement();
+  if (!focused || focused != event->RawTarget()) {
+    return false;
+  }
+
+  const AtomicString key(event->key());
+  bool is_home = (key == keywords::kHome);
+  bool is_end = (key == keywords::kEnd);
+  if (!is_home && !is_end) {
+    return false;
+  }
+
+  // Caret browsing handles Home/End in the editor.
+  if (frame->IsCaretBrowsingEnabled()) {
+    return false;
+  }
+
+  // Home/End with modifier keys should not trigger focusgroup navigation
+  // (e.g., Ctrl+Home scrolls to the document start).
+  if (event->ctrlKey() || event->metaKey() || event->shiftKey() ||
+      event->altKey()) {
+    return false;
+  }
+
+  if (focused->editContext()) {
+    return false;
+  }
+
+  Element* owner =
+      utils::FindNearestFocusgroupAncestor(focused, FocusgroupType::kLinear);
+  if (!owner || !utils::IsFocusgroupItemWithOwner(focused, owner)) {
+    return false;
+  }
+
+  // A keydown listener can change editable style before default handling.
+  document->UpdateStyleAndLayoutTreeForElement(
+      focused, DocumentUpdateReason::kFocusgroup);
+  focused = document->FocusedElement();
+  if (!focused || focused != event->RawTarget()) {
+    return false;
+  }
+  if (!utils::IsFocusgroupItemWithOwner(focused, owner)) {
+    return false;
+  }
+
+  // Do not intercept Home/End for editable elements or controls with native
+  // directional-key behavior.
+  if (IsEditable(*focused) ||
+      utils::IsInDirectionalKeyHandlerForAnyAxis(*focused, *owner)) {
+    return false;
+  }
+
+  FocusgroupItemPosition position =
+      is_home ? FocusgroupItemPosition::kFirst : FocusgroupItemPosition::kLast;
+  Element* target = utils::FocusgroupItemWithin(owner, position);
+  if (!target || target == focused) {
+    return false;
+  }
+
+  // The direction is used only to determine FocusType (forward vs backward)
+  // for the focus system. Home/End are axis-independent, so the inline/block
+  // distinction does not matter here.
+  FocusgroupDirection direction = is_home ? FocusgroupDirection::kBackwardInline
+                                          : FocusgroupDirection::kForwardInline;
+  Focus(target, direction);
+  return true;
 }
 
 // static
 bool FocusgroupController::Advance(Element* initial_element,
                                    FocusgroupDirection direction) {
-  if (RuntimeEnabledFeatures::FocusgroupGridEnabled(
+  if (RuntimeEnabledFeatures::FocusgroupV2Enabled(
           initial_element->GetExecutionContext())) {
     Element* grid_root = utils::FindNearestFocusgroupAncestor(
         initial_element, FocusgroupType::kGrid);
@@ -150,7 +267,8 @@ bool FocusgroupController::AdvanceInGrid(Element* initial_element,
     // 3. Only set the focus on grid focusgroup items. If we're on a cell that
     // isn't a grid focusgroup item, keep going to the next/previous element
     // until we find a valid item or we exhausted all the options.
-    if (utils::IsGridFocusgroupItem(current)) {
+    if (utils::IsGridFocusgroupItem(current) &&
+        current->IsKeyboardFocusableSlow()) {
       Focus(current, direction);
       return true;
     }

@@ -9,13 +9,14 @@
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
+#include "chrome/browser/actor/actor_metrics.h"
 #include "chrome/browser/actor/actor_tab_data.h"
-#include "chrome/browser/actor/shared_types.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/actor/core/shared_types.h"
 #include "components/network_session_configurator/common/network_switches.h"
 #include "components/optimization_guide/content/browser/page_content_proto_provider.h"
 #include "components/optimization_guide/proto/features/common_quality_data.pb.h"
@@ -90,7 +91,7 @@ class ActorUiDomNodeGeometryBrowserTest
   ActorUiDomNodeGeometryBrowserTest() {
     feature_list_.InitWithFeatures(
         /*enabled_features=*/{features::kGlicActorUi,
-                              features::kGlicActorUiOverlayMagicCursor},
+                              features::kGlicActorUiMagicCursor},
         /*disabled_features=*/{});
   }
 
@@ -109,6 +110,8 @@ class ActorUiDomNodeGeometryBrowserTest
   }
 
   void SetUpOnMainThread() override {
+    embedded_test_server()->ServeFilesFromSourceDirectory(
+        "components/test/data");
     ASSERT_TRUE(embedded_test_server()->Start());
   }
 
@@ -155,7 +158,7 @@ class ActorUiDomNodeGeometryBrowserTest
 
     tab_data_ =
         ActorTabData::From(browser()->tab_strip_model()->GetActiveTab());
-    tab_data_->DidObserveContent(apc);
+    tab_data_->DidObserveContent(apc, ApcSource::kActor);
     std::move(quit_closure).Run();
   }
 
@@ -174,7 +177,6 @@ class ActorUiDomNodeGeometryBrowserTest
     content::EvalJsResult result = content::EvalJs(
         web_contents(),
         absl::StrFormat("getElementTextAtPoint(%d, %d)", pt.x(), pt.y()));
-    EXPECT_THAT(result, content::EvalJsResult::IsOk());
     EXPECT_TRUE(result.is_string());
     return result.ExtractString();
   }
@@ -268,6 +270,28 @@ IN_PROC_BROWSER_TEST_P(ActorUiDomNodeGeometryBrowserTest,
   ColorPoint(point_div2, "green");
 
   SkiaWebContentsDiff();
+}
+
+IN_PROC_BROWSER_TEST_P(ActorUiDomNodeGeometryBrowserTest,
+                       EmptyBoundingBox_Rejected) {
+  LoadPage(embedded_test_server()->GetURL("/actor/dom_node_geometry.html"));
+  GetPageApc();
+  auto* geom = tab_data_->GetLastObservedDomNodeGeometry();
+
+  auto node_both = GetDomNodeForAriaLabel("f_div");
+  auto result_both = geom->GetDomNode(node_both);
+  EXPECT_FALSE(result_both.has_value());
+  EXPECT_EQ(result_both.error(), GetDomNodeResult::kEmptyBoundingBox);
+
+  auto node_width = GetDomNodeForAriaLabel("g_div");
+  auto result_width = geom->GetDomNode(node_width);
+  EXPECT_FALSE(result_width.has_value());
+  EXPECT_EQ(result_width.error(), GetDomNodeResult::kEmptyBoundingBox);
+
+  auto node_height = GetDomNodeForAriaLabel("h_div");
+  auto result_height = geom->GetDomNode(node_height);
+  EXPECT_FALSE(result_height.has_value());
+  EXPECT_EQ(result_height.error(), GetDomNodeResult::kEmptyBoundingBox);
 }
 
 // Run with 0.5 (Low DPI), 1.0 (Standard), and 1.5 (High DPI).

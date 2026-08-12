@@ -15,7 +15,6 @@
 #include "base/strings/stringprintf.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
-#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/accessibility_switches.h"
 #include "ui/accessibility/platform/inspect/ax_api_type.h"
 #include "ui/accessibility/platform/inspect/ax_inspect_scenario.h"
@@ -106,11 +105,7 @@ constexpr TypeInfo kTypeInfos[] = {
         {
             "@UIA-WIN-",
             FILE_PATH_LITERAL("-uia-win"),
-            [](base::test::ScopedFeatureList& scoped_feature_list) {
-#if BUILDFLAG(IS_WIN)
-              scoped_feature_list.InitAndEnableFeature(features::kUiaProvider);
-#endif
-            },
+            [](base::test::ScopedFeatureList&) {},
         },
     },
     {
@@ -388,8 +383,7 @@ std::vector<int> AXInspectTestHelper::DiffLines(
   std::vector<int> diff_lines;
   int i = 0, j = 0;
   while (i < actual_lines_count && j < expected_lines_count) {
-    if (expected_lines[j].size() == 0 ||
-        expected_lines[j][0] == kCommentToken) {
+    if (expected_lines[j].empty() || expected_lines[j][0] == kCommentToken) {
       // Skip comment lines and blank lines in expected output.
       ++j;
       continue;

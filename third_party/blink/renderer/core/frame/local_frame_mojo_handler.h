@@ -29,6 +29,10 @@
 #include "third_party/blink/public/mojom/input/text_input_host.mojom-blink.h"
 #endif
 
+namespace base {
+class UnguessableToken;
+}
+
 namespace blink {
 
 class Document;
@@ -76,9 +80,6 @@ class LocalFrameMojoHandler
   BackForwardCacheControllerHostRemote();
 
   mojom::blink::DevicePostureType GetDevicePosture();
-  void OverrideDevicePostureForEmulation(
-      mojom::blink::DevicePostureType device_posture_param);
-  void DisableDevicePostureOverrideForEmulation();
 
  private:
   Page* GetPage() const;
@@ -121,7 +122,9 @@ class LocalFrameMojoHandler
   void SaveImageAt(const gfx::Point& window_point) final;
   void ReportBlinkFeatureUsage(const Vector<mojom::blink::WebFeature>&) final;
   void RenderFallbackContent() final;
-  void BeforeUnload(bool is_reload, BeforeUnloadCallback callback) final;
+  void BeforeUnload(bool is_reload,
+                    bool force_to_proceed,
+                    BeforeUnloadCallback callback) final;
   void MediaPlayerActionAt(const gfx::Point& window_point,
                            mojom::blink::MediaPlayerActionPtr action) final;
   void RequestVideoFrameAtWithBoundsHint(
@@ -141,7 +144,6 @@ class LocalFrameMojoHandler
   // frame's sandbox flags or container policy. The new policy won't take effect
   // until the next navigation.
   void DidUpdateFramePolicy(const FramePolicy& frame_policy) final;
-  void OnFrameVisibilityChanged(mojom::blink::FrameVisibility visibility) final;
   void PostMessageEvent(
       const std::optional<RemoteFrameToken>& source_frame_token,
       const scoped_refptr<const SecurityOrigin>& source_origin,
@@ -150,7 +152,7 @@ class LocalFrameMojoHandler
   void JavaScriptMethodExecuteRequest(
       const String& object_name,
       const String& method_name,
-      base::Value::List arguments,
+      base::ListValue arguments,
       bool wants_result,
       JavaScriptMethodExecuteRequestCallback callback) final;
   void JavaScriptExecuteRequest(
@@ -169,9 +171,18 @@ class LocalFrameMojoHandler
       bool wants_result,
       int32_t world_id,
       JavaScriptExecuteRequestInIsolatedWorldCallback callback) final;
+  void InvokeScriptToolForInspector(
+      const base::UnguessableToken& invocation_id,
+      const String& tool_name,
+      const String& input_arguments,
+      InvokeScriptToolForInspectorCallback callback) final;
+  void NotifyInspectorOfCrossDocumentScriptToolResult(
+      const base::UnguessableToken& invocation_id) final;
 #if BUILDFLAG(IS_MAC)
-  void GetCharacterIndexAtPoint(const gfx::Point& point) final;
-  void GetFirstRectForRange(const gfx::Range& range) final;
+  void GetCharacterIndexAtPoint(const base::UnguessableToken& request_token,
+                                const gfx::Point& point) final;
+  void GetFirstRectForRange(const base::UnguessableToken& request_token,
+                            const gfx::Range& range) final;
   void GetStringForRange(const gfx::Range& range,
                          GetStringForRangeCallback callback) final;
 #endif
@@ -227,6 +238,7 @@ class LocalFrameMojoHandler
       base::TimeTicks redirect_time,
       base::TimeTicks request_start,
       base::TimeTicks response_start,
+      base::TimeTicks completion_time,
       uint32_t response_code,
       const String& mime_type,
       network::mojom::blink::LoadTimingInfoPtr load_timing_info,
@@ -235,7 +247,7 @@ class LocalFrameMojoHandler
       bool is_secure_transport,
       bool is_validated,
       const String& normalized_server_timing,
-      const ::network::URLLoaderCompletionStatus& completion_status) final;
+      mojom::blink::SubframeResourceLengthsPtr resource_lengths) final;
   void GetScrollPosition(GetScrollPositionCallback callback) final;
 
   // blink::mojom::LocalMainFrame overrides:
@@ -267,6 +279,7 @@ class LocalFrameMojoHandler
       double randomized_trigger_rate,
       mojom::blink::ConfidenceLevel confidence) final;
   void SetV8CompileHints(base::ReadOnlySharedMemoryRegion data) override;
+  void NotifyRelatedPagesFinalized(bool has_other_related_pages) final;
 
   // mojom::FullscreenVideoElementHandler implementation:
   void RequestFullscreenVideoElement() final;
@@ -275,7 +288,7 @@ class LocalFrameMojoHandler
   void OnPostureChanged(mojom::blink::DevicePostureType posture) final;
 
 #if BUILDFLAG(IS_ANDROID)
-  void PerformSpellCheck() final;
+  void PerformFullContentSpellCheck() final;
 #endif
 
   Member<blink::LocalFrame> frame_;

@@ -76,7 +76,6 @@ void IntranetRedirectDetector::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterStringPref(prefs::kLastKnownIntranetRedirectOrigin,
                                std::string());
   registry->RegisterBooleanPref(prefs::kDNSInterceptionChecksEnabled, true);
-  registry->RegisterIntegerPref(omnibox::kIntranetRedirectBehavior, 0);
 }
 
 void IntranetRedirectDetector::Restart() {
@@ -151,9 +150,9 @@ void IntranetRedirectDetector::FinishSleep() {
   for (size_t i = 0; i < 3; ++i) {
     std::string url_string("http://");
     // We generate a random hostname with between 7 and 15 characters.
-    const int num_chars = base::RandInt(7, 15);
+    const int num_chars = base::RandIntInclusive(7, 15);
     for (int j = 0; j < num_chars; ++j)
-      url_string += ('a' + base::RandInt(0, 'z' - 'a'));
+      url_string += ('a' + base::RandIntInclusive(0, 'z' - 'a'));
     GURL random_url(url_string + '/');
 
     auto resource_request = std::make_unique<network::ResourceRequest>();
@@ -234,9 +233,10 @@ void IntranetRedirectDetector::OnSimpleLoaderComplete(
 }
 
 void IntranetRedirectDetector::OnConnectionChanged(
-    network::mojom::ConnectionType type) {
-  if (type != network::mojom::ConnectionType::CONNECTION_NONE)
+    net::NetworkChangeNotifier::ConnectionType type) {
+  if (type != net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE) {
     Restart();
+  }
 }
 
 void IntranetRedirectDetector::OnDnsConfigChanged() {

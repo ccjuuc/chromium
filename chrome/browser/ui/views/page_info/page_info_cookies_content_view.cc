@@ -6,6 +6,7 @@
 
 #include "base/check.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
@@ -32,10 +33,6 @@
 #include "ui/views/view_class_properties.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
-#include "ash/constants/ash_features.h"
-#include "chrome/browser/ash/floating_sso/floating_sso_service.h"
-#include "chrome/browser/ash/floating_sso/floating_sso_service_factory.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/views/accessibility/non_accessible_image_view.h"
 #endif
 
@@ -46,8 +43,11 @@ using ::content_settings::CookieControlsUtil;
 const ui::ImageModel GetThirdPartyCookiesIcon(
     bool third_party_cookies_enabled) {
   return PageInfoViewFactory::GetImageModel(
-      third_party_cookies_enabled ? views::kEyeRefreshIcon
-                                  : views::kEyeCrossedRefreshIcon);
+      third_party_cookies_enabled         ? features::IsRoundedIconsEnabled()
+                                                ? views::kVisibilityIcon
+                                                : views::kEyeRefreshOldIcon
+      : features::IsRoundedIconsEnabled() ? views::kVisibilityOffIcon
+                                          : views::kEyeCrossedRefreshOldIcon);
 }
 
 class ThirdPartyCookieLabelWrapper : public views::BoxLayoutView {
@@ -271,7 +271,7 @@ void PageInfoCookiesContentView::SetThirdPartyCookiesTitleAndDescription(
       title_text = l10n_util::GetStringUTF16(
           IDS_PAGE_INFO_COOKIES_SITE_NOT_WORKING_TITLE);
       description =
-          IDS_PAGE_INFO_TRACKING_PROTECTION_SITE_NOT_WORKING_DESCRIPTION_TEMPORARY;
+          IDS_PAGE_INFO_COOKIES_SITE_NOT_WORKING_DESCRIPTION_PERMANENT;
       break;
     case CookieControlsState::kAllowed3pc:
       if (expiration.is_null() ||
@@ -308,7 +308,11 @@ void PageInfoCookiesContentView::SetThirdPartyCookiesToggle(
                                        CookieControlsState::kAllowed3pc);
   third_party_cookies_toggle_->SetID(
       PageInfoViewFactory::VIEW_ID_PAGE_INFO_THIRD_PARTY_COOKIES_TOGGLE);
-  third_party_cookies_toggle_->GetViewAccessibility().SetName(subtitle);
+  third_party_cookies_toggle_->GetViewAccessibility().SetName(
+      base::JoinString({l10n_util::GetStringUTF16(
+                            IDS_PAGE_INFO_COOKIES_THIRD_PARTY_COOKIES_LABEL),
+                        subtitle},
+                       u"\n"));
   third_party_cookies_toggle_subtitle_->SetText(subtitle);
 }
 
@@ -414,12 +418,17 @@ void PageInfoCookiesContentView::InitRwsButton(bool is_managed) {
           base::BindRepeating(
               &PageInfoCookiesContentView::RwsSettingsButtonClicked,
               base::Unretained(this)),
-          PageInfoViewFactory::GetImageModel(vector_icons::kTenancyIcon),
+          PageInfoViewFactory::GetImageModel(
+              features::IsRoundedIconsEnabled()
+                  ? vector_icons::kTenancyFilledIcon
+                  : vector_icons::kTenancyOldIcon),
           l10n_util::GetStringUTF16(IDS_PAGE_INFO_COOKIES),
           /*secondary_text=*/u" ", PageInfoViewFactory::GetLaunchIcon(),
-          is_managed
-              ? PageInfoViewFactory::GetImageModel(vector_icons::kBusinessIcon)
-              : ui::ImageModel()));
+          is_managed ? PageInfoViewFactory::GetImageModel(
+                           features::IsRoundedIconsEnabled()
+                               ? vector_icons::kDomainIcon
+                               : vector_icons::kBusinessOldIcon)
+                     : ui::ImageModel()));
   rws_button_->SetID(
       PageInfoViewFactory::VIEW_ID_PAGE_INFO_LINK_OR_BUTTON_RWS_SETTINGS);
   rws_button_->SetTooltipText(
@@ -468,8 +477,9 @@ void PageInfoCookiesContentView::AddThirdPartyCookiesContainer() {
       std::make_unique<RichControlsContainerView>());
   third_party_cookies_row_->SetTitle(l10n_util::GetStringUTF16(
       IDS_PAGE_INFO_COOKIES_THIRD_PARTY_COOKIES_LABEL));
-  third_party_cookies_row_->SetIcon(
-      PageInfoViewFactory::GetImageModel(views::kEyeCrossedRefreshIcon));
+  third_party_cookies_row_->SetIcon(PageInfoViewFactory::GetImageModel(
+      features::IsRoundedIconsEnabled() ? views::kVisibilityOffIcon
+                                        : views::kEyeCrossedRefreshOldIcon));
   third_party_cookies_row_->SetTitleTextStyleAndColor(
       views::style::STYLE_BODY_3_MEDIUM, kColorPageInfoForeground);
 
@@ -490,23 +500,7 @@ void PageInfoCookiesContentView::AddThirdPartyCookiesContainer() {
 
 #if BUILDFLAG(IS_CHROMEOS)
 void PageInfoCookiesContentView::MaybeAddSyncDisclaimer() {
-  if (!ash::features::IsFloatingSsoAllowed()) {
-    return;
-  }
-  Profile* profile = Profile::FromBrowserContext(
-      presenter_->web_contents()->GetBrowserContext());
-  // Floating SSO is an internal name for the feature which can sync cookies for
-  // ChromeOS enterprise users.
-  ash::floating_sso::FloatingSsoService* floating_sso_service =
-      ash::floating_sso::FloatingSsoServiceFactory::GetForProfile(profile);
-  if (!floating_sso_service) {
-    return;
-  }
-  if (!floating_sso_service->IsFloatingSsoEnabled()) {
-    return;
-  }
-  // Even when cookie sync is enabled, it isn't applied to every site.
-  if (!floating_sso_service->ShouldSyncCookiesForUrl(presenter_->site_url())) {
+  if (!presenter_->ShouldSyncCookiesForCurrentUrl()) {
     return;
   }
 
@@ -534,10 +528,11 @@ void PageInfoCookiesContentView::MaybeAddSyncDisclaimer() {
   // Add the enterprise icon.
   cookies_sync_icon_ = cookies_sync_container_->AddChildView(
       std::make_unique<NonAccessibleImageView>());
-  const int icon_size = GetLayoutConstant(PAGE_INFO_ICON_SIZE);
+  const int icon_size = GetLayoutConstant(LayoutConstant::kPageInfoIconSize);
   cookies_sync_icon_->SetImageSize({icon_size, icon_size});
-  cookies_sync_icon_->SetImage(
-      PageInfoViewFactory::GetImageModel(vector_icons::kBusinessIcon));
+  cookies_sync_icon_->SetImage(PageInfoViewFactory::GetImageModel(
+      features::IsRoundedIconsEnabled() ? vector_icons::kDomainIcon
+                                        : vector_icons::kBusinessOldIcon));
 
   // Add the description.
   cookies_sync_description_ = cookies_sync_container_->AddChildView(

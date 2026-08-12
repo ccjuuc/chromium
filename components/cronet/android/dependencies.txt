@@ -3,6 +3,10 @@
 //base/allocator/partition_allocator
 //base/allocator/partition_allocator/src/partition_alloc
 //base/android/linker
+//base/i18n
+//base/i18n/internal
+//base/logging
+//base/logging/rust_logger
 //base/numerics
 //base/third_party/cityhash
 //base/third_party/cityhash_v103
@@ -15,7 +19,7 @@
 //build/android
 //build/config
 //build/config/compiler
-//build/modules/linux
+//build/modules
 //build/rust
 //build/rust/allocator
 //build/rust/chromium_prelude
@@ -28,8 +32,6 @@
 //components/cbor
 //components/cronet
 //components/cronet/android
-//components/cronet/native
-//components/grpc_support
 //components/metrics
 //components/network_time/time_tracker
 //components/prefs
@@ -38,6 +40,8 @@
 //crypto
 //net
 //net/android
+//net/base
+//net/base/module
 //net/base/registry_controlled_domains
 //net/dns
 //net/dns/public
@@ -47,7 +51,6 @@
 //net/third_party/uri_template
 //net/traffic_annotation
 //third_party/abseil-cpp
-//third_party/android_build_tools
 //third_party/android_deps
 //third_party/android_sdk
 //third_party/androidx
@@ -60,7 +63,6 @@
 //third_party/compiler-rt
 //third_party/cpu_features
 //third_party/ijar
-//third_party/jdk
 //third_party/jni_zero
 //third_party/kotlin_stdlib
 //third_party/llvm-libc
@@ -68,7 +70,9 @@
 //third_party/modp_b64
 //third_party/perfetto
 //third_party/protobuf
+//third_party/re2
 //third_party/rust/anstyle
+//third_party/rust/base64
 //third_party/rust/clap
 //third_party/rust/clap_builder
 //third_party/rust/clap_lex
@@ -86,11 +90,14 @@
 //third_party/rust/memchr
 //third_party/rust/proc_macro2
 //third_party/rust/quote
+//third_party/rust/ref_cast
+//third_party/rust/ref_cast_impl
 //third_party/rust/ryu
 //third_party/rust/serde
 //third_party/rust/serde_core
 //third_party/rust/serde_derive
 //third_party/rust/serde_json_lenient
+//third_party/rust/sfv
 //third_party/rust/strsim
 //third_party/rust/syn
 //third_party/rust/termcolor
@@ -99,5 +106,4 @@
 //third_party/simdutf
 //third_party/zlib
 //third_party/zstd
-//tools/android/errorprone_plugin
 //url

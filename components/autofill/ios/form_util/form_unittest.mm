@@ -6,6 +6,7 @@
 #import "base/test/ios/wait_util.h"
 #import "base/time/time.h"
 #import "components/autofill/ios/browser/autofill_util.h"
+#import "components/autofill/ios/form_util/autofill_test_with_web_state.h"
 #import "ios/web/public/js_messaging/web_view_js_utils.h"
 #import "ios/web/public/test/javascript_test.h"
 #import "ios/web/public/test/js_test_util.h"
@@ -50,8 +51,15 @@ class FormJsTest : public web::JavascriptTest {
 
   void SetUp() override {
     web::JavascriptTest::SetUp();
+
+    // Inject default feature flag placeholders before loading scripts.
+    WKUserScript* script = [[WKUserScript alloc]
+          initWithSource:autofill::test::GetAutofillTestPlaceholders()
+           injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+        forMainFrameOnly:NO];
+    [web_view().configuration.userContentController addUserScript:script];
+
     AddGCrWebScript();
-    AddCommonScript();
     AddUserScript(@"autofill_form_features");
     AddUserScript(@"form_util_tests");
   }
@@ -93,7 +101,8 @@ TEST_F(FormJsTest, FormSubmitted_Deduping) {
        "let oldFn = UserMessageHandler.prototype.postMessage; "
        " function newFn(...args) { ++gMsgCount; return oldFn.apply(this, "
        "args); }; "
-       "UserMessageHandler.prototype.postMessage = newFn";
+       "UserMessageHandler.prototype.postMessage = newFn; "
+       "void(0);";
   ExecuteJavaScriptInWebView(web_view(), swizzleScript);
 
   // == Submit first form ==

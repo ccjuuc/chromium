@@ -10,6 +10,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
 #include "content/public/common/content_constants.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/messaging/messaging_endpoint.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/mojom/context_type.mojom.h"
@@ -24,6 +25,8 @@
 #include "extensions/renderer/native_extension_bindings_system_test_base.h"
 #include "extensions/renderer/script_context.h"
 #include "extensions/renderer/script_context_set.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -105,13 +108,16 @@ TEST_F(ExtensionHooksDelegateTest, MessagingSanityChecks) {
   tester.TestConnect("", "", self_target);
 
   constexpr char kStandardMessage[] = R"({"data":"hello"})";
+  // We expect the port to remain OPEN for all these cases, as even when a
+  // callback isn't supplied we return a promise which may be fulfilled with a
+  // response if any of the associated event listeners choose to reply.
   tester.TestSendMessage("{data: 'hello'}", kStandardMessage, self_target,
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendMessage("{data: 'hello'}, function() {}", kStandardMessage,
                          self_target, SendMessageTester::OPEN);
 
   tester.TestSendRequest("{data: 'hello'}", kStandardMessage, self_target,
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendRequest("{data: 'hello'}, function() {}", kStandardMessage,
                          self_target, SendMessageTester::OPEN);
 
@@ -230,8 +236,8 @@ TEST_F(ExtensionHooksDelegateTest, SendRequestChannelLeftOpenToReplyAsync) {
   // channel should remain open.
   messaging_service()->DeliverMessage(
       script_context_set(), port_id,
-      Message("\"message\"", mojom::SerializationFormat::kJson, false),
-      nullptr);
+      Message("\"message\"", /*user_gesture=*/false),
+      /*restrict_to_render_frame=*/nullptr);
   ::testing::Mock::VerifyAndClearExpectations(ipc_message_sender());
   EXPECT_TRUE(
       messaging_service()->HasPortForTesting(script_context(), port_id));
@@ -239,7 +245,7 @@ TEST_F(ExtensionHooksDelegateTest, SendRequestChannelLeftOpenToReplyAsync) {
 
 // Tests that overriding the runtime equivalents of chrome.extension methods
 // with accessors that throw does not cause a crash on access. Regression test
-// for https://crbug.com/949170.
+// for https://crbug.com/41450968.
 TEST_F(ExtensionHooksDelegateTest, RuntimeAliasesCorrupted) {
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();

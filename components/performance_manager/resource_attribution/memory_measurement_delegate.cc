@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -63,7 +63,7 @@ void MemoryMeasurementDelegateImpl::RequestMemorySummary(
   // The memory instrumentation service is not available in unit tests unless
   // explicitly created.
   if (!mem_instrumentation) {
-    std::move(callback).Run(CreateMemorySummaryMap());
+    std::move(callback).Run({});
     return;
   }
   // TODO(crbug.com/40926264): Pass a set of processes to measure instead of
@@ -79,10 +79,10 @@ void MemoryMeasurementDelegateImpl::OnMemorySummary(
     memory_instrumentation::mojom::RequestOutcome outcome,
     std::unique_ptr<GlobalMemoryDump> memory_dump) {
   if (outcome != memory_instrumentation::mojom::RequestOutcome::kSuccess) {
-    std::move(callback).Run(CreateMemorySummaryMap());
+    std::move(callback).Run({});
     return;
   }
-  MemorySummaryMap results = CreateMemorySummaryMap();
+  MemorySummaryMap results;
   CHECK(memory_dump);
   for (const auto& process_dump : memory_dump->process_dumps()) {
     ProcessNodeImpl* process_node =
@@ -97,13 +97,13 @@ void MemoryMeasurementDelegateImpl::OnMemorySummary(
         ProcessContext::FromProcessNode(process_node),
         MemorySummaryMeasurement{
             .resident_set_size =
-                base::KiB(process_dump.os_dump().resident_set_kb),
+                base::KiBU(process_dump.os_dump().resident_set_kb),
             .private_footprint =
-                base::KiB(process_dump.os_dump().private_footprint_kb),
+                base::KiBU(process_dump.os_dump().private_footprint_kb),
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
             // `private_footprint_swap_kb` is only defined on these platforms
             .private_swap =
-                base::KiB(process_dump.os_dump().private_footprint_swap_kb),
+                base::KiBU(process_dump.os_dump().private_footprint_swap_kb),
 #endif
         });
   }
@@ -142,12 +142,6 @@ MemoryMeasurementDelegate::GetDefaultFactory() {
   static base::NoDestructor<MemoryMeasurementDelegateFactoryImpl>
       default_factory;
   return default_factory.get();
-}
-
-// static
-MemoryMeasurementDelegate::MemorySummaryMap
-MemoryMeasurementDelegate::CreateMemorySummaryMap() {
-  return MemorySummaryMap(base::PassKey<MemoryMeasurementDelegate>{});
 }
 
 }  // namespace resource_attribution

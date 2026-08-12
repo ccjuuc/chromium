@@ -2,18 +2,28 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import 'chrome://whats-new/whats_new_app.js';
+
 import {CommandHandlerRemote} from 'chrome://resources/js/browser_command.mojom-webui.js';
 import {BrowserCommandProxy} from 'chrome://resources/js/browser_command/browser_command_proxy.js';
-import {assertEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+import {assertDeepEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {TestMock} from 'chrome://webui-test/test_mock.js';
 import {eventToPromise, microtasksFinished} from 'chrome://webui-test/test_util.js';
-import {ModulePosition, ScrollDepth} from 'chrome://whats-new/whats_new.mojom-webui.js';
-import {formatModuleName} from 'chrome://whats-new/whats_new_app.js';
-import {WhatsNewProxyImpl} from 'chrome://whats-new/whats_new_proxy.js';
+import {formatModuleName} from 'chrome://whats-new/format_module_name.js';
+import type {DebugInfo} from 'chrome://whats-new/types.js';
+import {browserProxyFactory, ModulePosition, ScrollDepth} from 'chrome://whats-new/whats_new.mojom-webui.js';
 
-import {TestWhatsNewBrowserProxy} from './test_whats_new_browser_proxy.js';
+import {TestWhatsNewPageHandler} from './test_whats_new_page_handler.js';
 
 const whatsNewURL = 'chrome://webui-test/whats_new/test.html';
+
+declare const window: Window&{
+  chromeWhatsNew: {
+    debugInfo: () => DebugInfo,
+    triggerBrowserCommand: (commandId: number) => void,
+  },
+};
 
 function getUrlForFixture(filename: string, query?: string): string {
   if (query) {
@@ -23,59 +33,79 @@ function getUrlForFixture(filename: string, query?: string): string {
 }
 
 suite('WhatsNewAppTest', function() {
+  let handler: TestWhatsNewPageHandler;
+
   setup(function() {
+    loadTimeData.resetForTesting({isStaging: false});
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
+    handler = new TestWhatsNewPageHandler();
+    browserProxyFactory.setInstance({handler});
   });
 
   test('with query parameters', async () => {
-    const proxy = new TestWhatsNewBrowserProxy(whatsNewURL);
-    WhatsNewProxyImpl.setInstance(proxy);
+    handler.setGetServerUrlResponse(whatsNewURL);
     window.history.replaceState({}, '', '?auto=true');
     const whatsNewApp = document.createElement('whats-new-app');
     document.body.appendChild(whatsNewApp);
-    await proxy.handler.whenCalled('getServerUrl');
+    await handler.whenCalled('getServerUrl');
     await microtasksFinished();
 
     const iframe =
-        whatsNewApp.shadowRoot!.querySelector<HTMLIFrameElement>('#content');
+        whatsNewApp.shadowRoot.querySelector<HTMLIFrameElement>('#content');
     assertTrue(!!iframe);
     assertEquals(whatsNewURL + '?updated=true', iframe.src);
   });
 
   test('with version as query parameter', async () => {
-    const proxy = new TestWhatsNewBrowserProxy(whatsNewURL + '?version=m98');
-    WhatsNewProxyImpl.setInstance(proxy);
+    handler.setGetServerUrlResponse(whatsNewURL + '?version=98');
     window.history.replaceState({}, '', '?auto=true');
     const whatsNewApp = document.createElement('whats-new-app');
     document.body.appendChild(whatsNewApp);
-    await proxy.handler.whenCalled('getServerUrl');
+    await handler.whenCalled('getServerUrl');
     await microtasksFinished();
 
     const iframe =
-        whatsNewApp.shadowRoot!.querySelector<HTMLIFrameElement>('#content');
+        whatsNewApp.shadowRoot.querySelector<HTMLIFrameElement>('#content');
     assertTrue(!!iframe);
-    assertEquals(whatsNewURL + '?version=m98&updated=true', iframe.src);
+    assertEquals(whatsNewURL + '?version=98&updated=true', iframe.src);
+    assertEquals(window.chromeWhatsNew.debugInfo().requestedVersion, 98);
+  });
+
+  test('with enabled and rolled parameters', async () => {
+    handler.setGetServerUrlResponse(
+        whatsNewURL + '?enabled=abc,def&rolled=xyz');
+    window.history.replaceState({}, '', '?auto=true');
+    const whatsNewApp = document.createElement('whats-new-app');
+    document.body.appendChild(whatsNewApp);
+    await handler.whenCalled('getServerUrl');
+    await microtasksFinished();
+
+    const iframe =
+        whatsNewApp.shadowRoot.querySelector<HTMLIFrameElement>('#content');
+    assertTrue(!!iframe);
+    assertDeepEquals(
+        window.chromeWhatsNew.debugInfo().requestedEnabledFeatures,
+        ['abc', 'def']);
+    assertDeepEquals(
+        window.chromeWhatsNew.debugInfo().requestedRolledFeatures, ['xyz']);
   });
 
   test('no query parameters', async () => {
-    const proxy = new TestWhatsNewBrowserProxy(whatsNewURL);
-    WhatsNewProxyImpl.setInstance(proxy);
+    handler.setGetServerUrlResponse(whatsNewURL);
     window.history.replaceState({}, '', '/');
     const whatsNewApp = document.createElement('whats-new-app');
     document.body.appendChild(whatsNewApp);
-    await proxy.handler.whenCalled('getServerUrl');
+    await handler.whenCalled('getServerUrl');
     await microtasksFinished();
 
     const iframe =
-        whatsNewApp.shadowRoot!.querySelector<HTMLIFrameElement>('#content');
+        whatsNewApp.shadowRoot.querySelector<HTMLIFrameElement>('#content');
     assertTrue(!!iframe);
     assertEquals(whatsNewURL + '?updated=false', iframe.src);
   });
 
   test('with browser command format', async () => {
-    const proxy =
-        new TestWhatsNewBrowserProxy(getUrlForFixture('test_with_command_4'));
-    WhatsNewProxyImpl.setInstance(proxy);
+    handler.setGetServerUrlResponse(getUrlForFixture('test_with_command_4'));
     const browserCommandHandler = TestMock.fromClass(CommandHandlerRemote);
     BrowserCommandProxy.getInstance().handler = browserCommandHandler;
     browserCommandHandler.setResultFor(
@@ -93,91 +123,128 @@ suite('WhatsNewAppTest', function() {
     assertEquals('browser_command', data.data.event);
     assertEquals(4, data.data.commandId);
 
-    await proxy.handler.whenCalled('recordBrowserCommandExecuted');
-    assertEquals(1, proxy.handler.getCallCount('recordBrowserCommandExecuted'));
+    await handler.whenCalled('recordBrowserCommandExecuted');
+    assertEquals(1, handler.getCallCount('recordBrowserCommandExecuted'));
+  });
+
+  test('with browser command test API', async () => {
+    handler.setGetServerUrlResponse(whatsNewURL);
+    const browserCommandHandler = TestMock.fromClass(CommandHandlerRemote);
+    const browserCommandProxy = BrowserCommandProxy.getInstance();
+    browserCommandProxy.handler = browserCommandHandler;
+    browserCommandHandler.setResultFor(
+        'canExecuteCommand', Promise.resolve({canExecute: true}));
+    window.history.replaceState({}, '', '/');
+    const whatsNewApp = document.createElement('whats-new-app');
+    document.body.appendChild(whatsNewApp);
+
+    await microtasksFinished();
+    const executeCommandPromise =
+        browserCommandHandler.whenCalled('executeCommand');
+
+    // Use test API.
+    window.chromeWhatsNew.triggerBrowserCommand(4);
+
+    const [commandId] = await executeCommandPromise;
+    assertEquals(4, commandId);
   });
 
   test('with page_load metrics from embedded page', async () => {
-    const proxy = new TestWhatsNewBrowserProxy(
+    handler.setGetServerUrlResponse(
         getUrlForFixture('test_with_metrics_page_loaded'));
-    WhatsNewProxyImpl.setInstance(proxy);
     window.history.replaceState({}, '', '/');
     const whatsNewApp = document.createElement('whats-new-app');
     document.body.appendChild(whatsNewApp);
 
-    const isAutoOpen =
-        await proxy.handler.whenCalled('recordVersionPageLoaded');
+    const isAutoOpen = await handler.whenCalled('recordVersionPageLoaded');
     assertEquals(false, isAutoOpen);
 
     const contentLoadedCallCount =
-        proxy.handler.getCallCount('recordTimeToLoadContent');
+        handler.getCallCount('recordTimeToLoadContent');
     assertEquals(1, contentLoadedCallCount);
+    assertEquals(window.chromeWhatsNew.debugInfo().renderedVersion, 128);
+    assertDeepEquals(
+        window.chromeWhatsNew.debugInfo().renderedModules,
+        ['Module1', 'Module2']);
   });
 
   test('with module_impression metrics from embedded page', async () => {
-    const proxy = new TestWhatsNewBrowserProxy(
+    handler.setGetServerUrlResponse(
         getUrlForFixture('test_with_metrics_module_impression'));
-    WhatsNewProxyImpl.setInstance(proxy);
     window.history.replaceState({}, '', '/');
     const whatsNewApp = document.createElement('whats-new-app');
     document.body.appendChild(whatsNewApp);
 
-    const moduleImpression =
-        await proxy.handler.whenCalled('recordModuleImpression');
+    const moduleImpression = await handler.whenCalled('recordModuleImpression');
     assertEquals('ChromeFeature', moduleImpression[0]);
     assertEquals(ModulePosition.kSpotlight1, moduleImpression[1]);
   });
 
   test('with explore_more_toggled metrics from embedded page', async () => {
-    const proxy = new TestWhatsNewBrowserProxy(
+    handler.setGetServerUrlResponse(
         getUrlForFixture('test_with_metrics_explore_more_toggled'));
-    WhatsNewProxyImpl.setInstance(proxy);
     window.history.replaceState({}, '', '/');
     const whatsNewApp = document.createElement('whats-new-app');
     document.body.appendChild(whatsNewApp);
 
-    let expanded = await proxy.handler.whenCalled('recordExploreMoreToggled');
+    let expanded = await handler.whenCalled('recordExploreMoreToggled');
     assertEquals(true, expanded);
-    await proxy.handler.resetResolver('recordExploreMoreToggled');
-    expanded = await proxy.handler.whenCalled('recordExploreMoreToggled');
+    handler.resetResolver('recordExploreMoreToggled');
+    expanded = await handler.whenCalled('recordExploreMoreToggled');
     assertEquals(false, expanded);
   });
 
   test('with scroll_depth metrics from embedded page', async () => {
-    const proxy = new TestWhatsNewBrowserProxy(
+    handler.setGetServerUrlResponse(
         getUrlForFixture('test_with_metrics_scroll_depth'));
-    WhatsNewProxyImpl.setInstance(proxy);
     window.history.replaceState({}, '', '/');
     const whatsNewApp = document.createElement('whats-new-app');
     document.body.appendChild(whatsNewApp);
 
-    const percentage = await proxy.handler.whenCalled('recordScrollDepth');
+    const percentage = await handler.whenCalled('recordScrollDepth');
     assertEquals(ScrollDepth.k25, percentage);
   });
 
   test('with time_on_page metrics from embedded page', async () => {
-    const proxy = new TestWhatsNewBrowserProxy(
+    handler.setGetServerUrlResponse(
         getUrlForFixture('test_with_metrics_time_on_page'));
-    WhatsNewProxyImpl.setInstance(proxy);
     window.history.replaceState({}, '', '/');
     const whatsNewApp = document.createElement('whats-new-app');
     document.body.appendChild(whatsNewApp);
 
-    const timeOnPage = await proxy.handler.whenCalled('recordTimeOnPage');
+    const [timeOnPage, isHeartbeat] =
+        await handler.whenCalled('recordTimeOnPage');
     // 3 million microseconds = 3 thousand milliseconds
     assertEquals(3n * 1000n * 1000n, timeOnPage.microseconds);
+    assertFalse(isHeartbeat);
+  });
+
+  test('with time_on_page_heartbeat metrics from embedded page', async () => {
+    handler.setGetServerUrlResponse(
+        getUrlForFixture('test_with_metrics_time_on_page_heartbeat'));
+    window.history.replaceState({}, '', '/');
+    const whatsNewApp = document.createElement('whats-new-app');
+    document.body.appendChild(whatsNewApp);
+
+    await handler.whenCalled('recordCtaClick');
+
+    window.dispatchEvent(new Event('beforeunload'));
+
+    const [timeOnPage, isHeartbeat] =
+        await handler.whenCalled('recordTimeOnPage');
+    // 3 million microseconds = 3 thousand milliseconds
+    assertEquals(3n * 1000n * 1000n, timeOnPage.microseconds);
+    assertTrue(isHeartbeat);
   });
 
   test('with module_click metrics from embedded page', async () => {
-    const proxy = new TestWhatsNewBrowserProxy(
+    handler.setGetServerUrlResponse(
         getUrlForFixture('test_with_metrics_module_click'));
-    WhatsNewProxyImpl.setInstance(proxy);
     window.history.replaceState({}, '', '/');
     const whatsNewApp = document.createElement('whats-new-app');
     document.body.appendChild(whatsNewApp);
 
-    const clickedModule =
-        await proxy.handler.whenCalled('recordModuleLinkClicked');
+    const clickedModule = await handler.whenCalled('recordModuleLinkClicked');
     assertEquals('FeatureWithLink', clickedModule[0]);
     assertEquals(ModulePosition.kSpotlight1, clickedModule[1]);
   });
@@ -201,131 +268,145 @@ suite('WhatsNewAppTest', function() {
   });
 
   test('with video metrics from embedded page', async () => {
-    const proxy = new TestWhatsNewBrowserProxy(
+    handler.setGetServerUrlResponse(
         getUrlForFixture('test_with_metrics_module_video_events'));
-    WhatsNewProxyImpl.setInstance(proxy);
     window.history.replaceState({}, '', '/');
     const whatsNewApp = document.createElement('whats-new-app');
     document.body.appendChild(whatsNewApp);
 
-    const videoStarted =
-        await proxy.handler.whenCalled('recordModuleVideoStarted');
+    const videoStarted = await handler.whenCalled('recordModuleVideoStarted');
     assertEquals('ChromeFeature', videoStarted[0]);
     assertEquals(ModulePosition.kSpotlight1, videoStarted[1]);
 
-    const videoEnded = await proxy.handler.whenCalled('recordModuleVideoEnded');
+    const videoEnded = await handler.whenCalled('recordModuleVideoEnded');
     assertEquals('ChromeVideoEndFeature', videoEnded[0]);
     assertEquals(ModulePosition.kSpotlight3, videoEnded[1]);
 
-    const playClicked =
-        await proxy.handler.whenCalled('recordModulePlayClicked');
+    const playClicked = await handler.whenCalled('recordModulePlayClicked');
     assertEquals('ChromeVideoFeature', playClicked[0]);
     assertEquals(ModulePosition.kSpotlight1, playClicked[1]);
 
-    const pauseClicked =
-        await proxy.handler.whenCalled('recordModulePauseClicked');
+    const pauseClicked = await handler.whenCalled('recordModulePauseClicked');
     assertEquals('ChromeVideoFeature', pauseClicked[0]);
     assertEquals(ModulePosition.kSpotlight2, pauseClicked[1]);
 
     const restartClicked =
-        await proxy.handler.whenCalled('recordModuleRestartClicked');
+        await handler.whenCalled('recordModuleRestartClicked');
     assertEquals('ChromeVideoFeature', restartClicked[0]);
     assertEquals(ModulePosition.kSpotlight3, restartClicked[1]);
   });
 
   test('with qr_code_toggled metrics from embedded page', async () => {
-    const proxy = new TestWhatsNewBrowserProxy(
+    handler.setGetServerUrlResponse(
         getUrlForFixture('test_with_metrics_qr_code_toggled'));
-    WhatsNewProxyImpl.setInstance(proxy);
     window.history.replaceState({}, '', '/');
     const whatsNewApp = document.createElement('whats-new-app');
     document.body.appendChild(whatsNewApp);
 
-    let expanded = await proxy.handler.whenCalled('recordQrCodeToggled');
+    let expanded = await handler.whenCalled('recordQrCodeToggled');
     assertEquals(true, expanded);
-    await proxy.handler.resetResolver('recordQrCodeToggled');
-    expanded = await proxy.handler.whenCalled('recordQrCodeToggled');
+    handler.resetResolver('recordQrCodeToggled');
+    expanded = await handler.whenCalled('recordQrCodeToggled');
     assertEquals(false, expanded);
   });
 
   test('with expand_media_toggled metrics from embedded page', async () => {
-    const proxy = new TestWhatsNewBrowserProxy(
+    handler.setGetServerUrlResponse(
         getUrlForFixture('test_with_metrics_expand_media_toggled'));
-    WhatsNewProxyImpl.setInstance(proxy);
     window.history.replaceState({}, '', '/');
     const whatsNewApp = document.createElement('whats-new-app');
     document.body.appendChild(whatsNewApp);
 
-    let expandedMedia =
-        await proxy.handler.whenCalled('recordExpandMediaToggled');
+    let expandedMedia = await handler.whenCalled('recordExpandMediaToggled');
     assertEquals('ChromeFeature', expandedMedia[0]);
     assertEquals(true, expandedMedia[1]);
-    await proxy.handler.resetResolver('recordExpandMediaToggled');
-    expandedMedia = await proxy.handler.whenCalled('recordExpandMediaToggled');
+    handler.resetResolver('recordExpandMediaToggled');
+    expandedMedia = await handler.whenCalled('recordExpandMediaToggled');
     assertEquals('ChromeFeature', expandedMedia[0]);
     assertEquals(false, expandedMedia[1]);
   });
 
   test('with next button click metric from embedded page', async () => {
-    const proxy = new TestWhatsNewBrowserProxy(
+    handler.setGetServerUrlResponse(
         getUrlForFixture('test_with_metrics_next_button_click'));
-    WhatsNewProxyImpl.setInstance(proxy);
     window.history.replaceState({}, '', '/');
     const whatsNewApp = document.createElement('whats-new-app');
     document.body.appendChild(whatsNewApp);
 
-    await proxy.handler.whenCalled('recordNextButtonClick');
-    assertEquals(1, proxy.handler.getCallCount('recordNextButtonClick'));
+    await handler.whenCalled('recordNextButtonClick');
+    assertEquals(1, handler.getCallCount('recordNextButtonClick'));
   });
 
   test('with nav_click metric from embedded page', async () => {
-    const proxy = new TestWhatsNewBrowserProxy(
+    handler.setGetServerUrlResponse(
         getUrlForFixture('test_with_metrics_nav_click'));
-    WhatsNewProxyImpl.setInstance(proxy);
     window.history.replaceState({}, '', '/');
     const whatsNewApp = document.createElement('whats-new-app');
     document.body.appendChild(whatsNewApp);
 
-    await proxy.handler.whenCalled('recordNavClick');
-    assertEquals(1, proxy.handler.getCallCount('recordNavClick'));
+    await handler.whenCalled('recordNavClick');
+    assertEquals(1, handler.getCallCount('recordNavClick'));
   });
 
   test('with feature_tile_navigation metric from embedded page', async () => {
-    const proxy = new TestWhatsNewBrowserProxy(
+    handler.setGetServerUrlResponse(
         getUrlForFixture('test_with_metrics_feature_tile_navigation'));
-    WhatsNewProxyImpl.setInstance(proxy);
     window.history.replaceState({}, '', '/');
     const whatsNewApp = document.createElement('whats-new-app');
     document.body.appendChild(whatsNewApp);
 
-    await proxy.handler.whenCalled('recordFeatureTileNavigation');
-    assertEquals(1, proxy.handler.getCallCount('recordFeatureTileNavigation'));
+    await handler.whenCalled('recordFeatureTileNavigation');
+    assertEquals(1, handler.getCallCount('recordFeatureTileNavigation'));
   });
 
   test(
       'with carousel_scroll_button_click metric from embedded page',
       async () => {
-        const proxy = new TestWhatsNewBrowserProxy(
+        handler.setGetServerUrlResponse(
             getUrlForFixture('test_with_metrics_carousel_scroll_button_click'));
-        WhatsNewProxyImpl.setInstance(proxy);
         window.history.replaceState({}, '', '/');
         const whatsNewApp = document.createElement('whats-new-app');
         document.body.appendChild(whatsNewApp);
 
-        await proxy.handler.whenCalled('recordCarouselScrollButtonClick');
+        await handler.whenCalled('recordCarouselScrollButtonClick');
         assertEquals(
-            1, proxy.handler.getCallCount('recordCarouselScrollButtonClick'));
+            1, handler.getCallCount('recordCarouselScrollButtonClick'));
       });
 
   test('with cta_click metric from embedded page', async () => {
-    const proxy = new TestWhatsNewBrowserProxy(
+    handler.setGetServerUrlResponse(
         getUrlForFixture('test_with_metrics_cta_click'));
-    WhatsNewProxyImpl.setInstance(proxy);
     window.history.replaceState({}, '', '/');
     const whatsNewApp = document.createElement('whats-new-app');
     document.body.appendChild(whatsNewApp);
 
-    await proxy.handler.whenCalled('recordCtaClick');
-    assertEquals(1, proxy.handler.getCallCount('recordCtaClick'));
+    await handler.whenCalled('recordCtaClick');
+    assertEquals(1, handler.getCallCount('recordCtaClick'));
+  });
+
+  const testsForStaging = [true, false];
+  testsForStaging.forEach(isStagingEnabled => {
+    test(
+        `with staging environment set to enabled=${
+            isStagingEnabled.toString()}`,
+        async () => {
+          loadTimeData.overrideValues({isStaging: isStagingEnabled});
+
+          handler.setGetServerUrlResponse(whatsNewURL);
+          window.history.replaceState({}, '', '/');
+          const whatsNewApp = document.createElement('whats-new-app');
+          document.body.appendChild(whatsNewApp);
+
+          await handler.whenCalled('getServerUrl');
+          await microtasksFinished();
+
+          const stagingIndicator =
+              whatsNewApp.shadowRoot.querySelector<HTMLIFrameElement>(
+                  '#staging-indicator');
+          assertEquals(Boolean(stagingIndicator), isStagingEnabled);
+          assertEquals(
+              window.chromeWhatsNew.debugInfo().environment,
+              isStagingEnabled ? 'staging' : 'production');
+        });
   });
 });

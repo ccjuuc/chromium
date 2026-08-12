@@ -4,6 +4,7 @@
 
 #import "ios/chrome/browser/bubble/ui_bundled/bubble_view.h"
 
+#import <algorithm>
 #import <ostream>
 
 #import "base/check.h"
@@ -74,11 +75,8 @@ const CGFloat kCloseButtonTopTrailingPadding = 15.0f;
 // Margin between title and label.
 const CGFloat kTitleBottomMargin = 3.0f;
 
-// The top and bottom margin of the title in snooze button.
-const CGFloat kSnoozeButtonTitleVerticalMargin = 16.0f;
-const CGFloat kSnoozeButtonMinimumSize = 48.0f;
-const CGFloat kSnoozeButtonFontSize = 15.0f;
-
+// The minimum size for the next button.
+const CGFloat kNextButtonMinimumSize = 48.0f;
 // Vertical spacing between the next button and separator.
 const CGFloat kNextButtonSeparatorVerticalSpacing = 12.0f;
 // Vertical margin below and above next button and seprator.
@@ -183,7 +181,7 @@ UIView* BubbleArrowViewWithDirection(BubbleArrowDirection arrowDirection) {
 // Returns a close button for BubbleView.
 UIButton* BubbleCloseButton() {
   UIImage* buttonImage =
-      DefaultSymbolWithPointSize(kXMarkSymbol, kSymbolBubblePointSize);
+      SymbolWithPointSize(SymbolXMark, kSymbolBubblePointSize);
   // Computes the paddings to position the button's image. The button is
   // bigger than the image for accessibility purposes.
   const CGFloat closeButtonBottomPadding = kCloseButtonSize -
@@ -206,24 +204,6 @@ UIButton* BubbleCloseButton() {
   [button setTintColor:[UIColor colorNamed:kSolidButtonTextColor]];
   [button setAccessibilityLabel:l10n_util::GetNSString(IDS_IOS_ICON_CLOSE)];
   [button setAccessibilityIdentifier:kBubbleViewCloseButtonIdentifier];
-  [button setTranslatesAutoresizingMaskIntoConstraints:NO];
-  return button;
-}
-
-// Returns a snooze button for BubbleView.
-UIButton* BubbleSnoozeButton(
-    UIControlContentHorizontalAlignment buttonAlignment) {
-  UIButton* button = [UIButton buttonWithType:UIButtonTypeSystem];
-  [button setTitle:l10n_util::GetNSString(IDS_IOS_IPH_BUBBLE_SNOOZE)
-          forState:UIControlStateNormal];
-  [button setTitleColor:[UIColor colorNamed:kSolidButtonTextColor]
-               forState:UIControlStateNormal];
-  [button.titleLabel
-      setFont:[UIFont boldSystemFontOfSize:kSnoozeButtonFontSize]];
-  [button.titleLabel setNumberOfLines:0];
-  [button.titleLabel setLineBreakMode:NSLineBreakByWordWrapping];
-  [button setContentHorizontalAlignment:buttonAlignment];
-  [button setAccessibilityIdentifier:kBubbleViewSnoozeButtonIdentifier];
   [button setTranslatesAutoresizingMaskIntoConstraints:NO];
   return button;
 }
@@ -252,13 +232,23 @@ UILabel* BubbleTitleLabelWithText(NSString* text,
   return label;
 }
 
-UIButton* BubbleNextButton(BubblePageControlPage page) {
+UIButton* BubbleNextButton(BubblePageControlPage page,
+                           NSInteger totalPageControlPages,
+                           NSString* customTitle) {
   UIButton* button = [UIButton buttonWithType:UIButtonTypeSystem];
   button.accessibilityIdentifier = kBubbleViewNextButtonIdentifier;
-  int textID = page == BubblePageControlPageFourth ? IDS_IOS_IPH_BUBBLE_GOT_IT
-                                                   : IDS_IOS_IPH_BUBBLE_NEXT;
-  [button setTitle:l10n_util::GetNSString(textID)
-          forState:UIControlStateNormal];
+  NSString* title = customTitle;
+  if (!title) {
+    NSInteger maxPages = BubblePageControlPageFourth;
+    if (totalPageControlPages > 0) {
+      maxPages = std::min(totalPageControlPages, maxPages);
+    }
+    BOOL isLastPage = (page == maxPages);
+    int textID =
+        isLastPage ? IDS_IOS_IPH_BUBBLE_GOT_IT : IDS_IOS_IPH_BUBBLE_NEXT;
+    title = l10n_util::GetNSString(textID);
+  }
+  [button setTitle:title forState:UIControlStateNormal];
   [button setTitleColor:[UIColor colorNamed:kSolidButtonTextColor]
                forState:UIControlStateNormal];
   [button.titleLabel
@@ -271,7 +261,8 @@ UIButton* BubbleNextButton(BubblePageControlPage page) {
   return button;
 }
 
-UIStackView* PageControl(BubblePageControlPage page) {
+UIStackView* PageControl(BubblePageControlPage page,
+                         NSInteger totalPageControlPages) {
   CHECK(page != BubblePageControlPageNone);
   UIStackView* container = [[UIStackView alloc] init];
   container.axis = UILayoutConstraintAxisHorizontal;
@@ -280,17 +271,22 @@ UIStackView* PageControl(BubblePageControlPage page) {
   container.alignment = UIStackViewAlignmentCenter;
   container.spacing = 8;
   container.accessibilityIdentifier = kBubbleViewPageControlIdentifier;
-  for (NSInteger i = 0; i < (NSInteger)BubblePageControlPageFourth; i++) {
+  NSInteger maxPages = BubblePageControlPageFourth;
+  if (totalPageControlPages > 0) {
+    maxPages = std::min(totalPageControlPages, maxPages);
+  }
+  for (NSInteger i = 0; i < maxPages; i++) {
     UIImageSymbolConfiguration* symbolConfiguration =
         [UIImageSymbolConfiguration
             configurationWithPointSize:kPageControlPageSymbolPointSize];
     UIImageView* circleImageView = [[UIImageView alloc]
-        initWithImage:DefaultSymbolWithConfiguration(kCircleBadgeFill,
-                                                     symbolConfiguration)];
+        initWithImage:SymbolWithConfiguration(SymbolCircleBadgeFill,
+                                              symbolConfiguration)];
     BOOL shouldBeHighlighted = i == page - 1;
-    circleImageView.tintColor = shouldBeHighlighted
-                                    ? [UIColor whiteColor]
-                                    : [UIColor colorWithWhite:1 alpha:0.45];
+    UIColor* baseCircleColor = [UIColor colorNamed:kSolidButtonTextColor];
+    circleImageView.tintColor =
+        shouldBeHighlighted ? baseCircleColor
+                            : [baseCircleColor colorWithAlphaComponent:0.45];
     [container addArrangedSubview:circleImageView];
   }
   return container;
@@ -309,8 +305,6 @@ UIStackView* PageControl(BubblePageControlPage page) {
 @property(nonatomic, strong, readonly) UIView* arrow;
 // Optional close button displayed at the trailing top corner of the bubble.
 @property(nonatomic, strong, readonly) UIButton* closeButton;
-// Optional snooze button displayed on the bubble.
-@property(nonatomic, strong, readonly) UIButton* snoozeButton;
 // Triangular shape, the backing layer for the arrow.
 @property(nonatomic, weak) CAShapeLayer* arrowLayer;
 @property(nonatomic, assign, readonly) BubbleAlignment alignment;
@@ -325,8 +319,6 @@ UIStackView* PageControl(BubblePageControlPage page) {
 
 // Controls if there is a close button in the view.
 @property(nonatomic, readonly) BOOL showsCloseButton;
-// Controls if there is a snooze button in the view.
-@property(nonatomic, readonly) BOOL showsSnoozeButton;
 // Controls if there is a next button in the view.
 @property(nonatomic, readonly) BOOL showsNextButton;
 // The delegate for interactions in this View.
@@ -335,6 +327,14 @@ UIStackView* PageControl(BubblePageControlPage page) {
 @end
 
 @implementation BubbleView {
+  // Flag indicating if title should be shown.
+  BOOL _showsTitle;
+  // Distance between the arrow's tip and the edge of the bubble.
+  CGFloat _alignmentOffset;
+  // Maximum content size category for the bubble view's text.
+  UIContentSizeCategory _maximumContentSizeCategory;
+  // Total page control pages (defaults to 4).
+  NSInteger _totalPageControlPages;
   // Separator line between text and next button.
   UIView* _separator;
   // Optional Next button displayed on the bubble.
@@ -348,16 +348,67 @@ UIStackView* PageControl(BubblePageControlPage page) {
                    alignment:(BubbleAlignment)alignment
             showsCloseButton:(BOOL)shouldShowCloseButton
                        title:(NSString*)titleString
-           showsSnoozeButton:(BOOL)shouldShowSnoozeButton
              showsNextButton:(BOOL)showsNextButton
                         page:(BubblePageControlPage)page
                textAlignment:(NSTextAlignment)textAlignment
+                    delegate:(id<BubbleViewDelegate>)delegate {
+  return [self initWithText:text
+             arrowDirection:direction
+                  alignment:alignment
+           showsCloseButton:shouldShowCloseButton
+                      title:titleString
+            showsNextButton:showsNextButton
+                       page:page
+              textAlignment:textAlignment
+      customNextButtonTitle:nil
+                   delegate:delegate];
+}
+
+- (instancetype)initWithText:(NSString*)text
+              arrowDirection:(BubbleArrowDirection)direction
+                   alignment:(BubbleAlignment)alignment
+            showsCloseButton:(BOOL)shouldShowCloseButton
+                       title:(NSString*)titleString
+             showsNextButton:(BOOL)showsNextButton
+                        page:(BubblePageControlPage)page
+               textAlignment:(NSTextAlignment)textAlignment
+       customNextButtonTitle:(NSString*)customNextButtonTitle
+                    delegate:(id<BubbleViewDelegate>)delegate {
+  return [self initWithText:text
+             arrowDirection:direction
+                  alignment:alignment
+           showsCloseButton:shouldShowCloseButton
+                      title:titleString
+            showsNextButton:showsNextButton
+                       page:page
+      totalPageControlPages:BubblePageControlPageFourth
+              textAlignment:textAlignment
+      customNextButtonTitle:customNextButtonTitle
+                   delegate:delegate];
+}
+
+- (instancetype)initWithText:(NSString*)text
+              arrowDirection:(BubbleArrowDirection)direction
+                   alignment:(BubbleAlignment)alignment
+            showsCloseButton:(BOOL)shouldShowCloseButton
+                       title:(NSString*)titleString
+             showsNextButton:(BOOL)showsNextButton
+                        page:(BubblePageControlPage)page
+       totalPageControlPages:(NSInteger)totalPageControlPages
+               textAlignment:(NSTextAlignment)textAlignment
+       customNextButtonTitle:(NSString*)customNextButtonTitle
                     delegate:(id<BubbleViewDelegate>)delegate {
   self = [super initWithFrame:CGRectZero];
   if (self) {
     _direction = direction;
     _alignment = alignment;
     _alignmentOffset = bubble_util::BubbleDefaultAlignmentOffset();
+    NSInteger defaultMaxPages = BubblePageControlPageFourth;
+    BOOL hasCustomPages = totalPageControlPages > 0;
+    _totalPageControlPages =
+        hasCustomPages ? std::min(totalPageControlPages, defaultMaxPages)
+                       : defaultMaxPages;
+
     // Add background view.
     _background = BubbleBackgroundView();
     [self addSubview:_background];
@@ -389,33 +440,21 @@ UIStackView* PageControl(BubblePageControlPage page) {
              forControlEvents:UIControlEventTouchUpInside];
       [self addSubview:_closeButton];
     }
-    // Add snooze button if present.
-    _showsSnoozeButton = shouldShowSnoozeButton;
-    if (_showsSnoozeButton) {
-      UIControlContentHorizontalAlignment buttonAlignment =
-          textAlignment == NSTextAlignmentCenter
-              ? UIControlContentHorizontalAlignmentCenter
-              : UIControlContentHorizontalAlignmentLeading;
-      _snoozeButton = BubbleSnoozeButton(buttonAlignment);
-      [_snoozeButton addTarget:self
-                        action:@selector(snoozeButtonWasTapped:)
-              forControlEvents:UIControlEventTouchUpInside];
-      [self addSubview:_snoozeButton];
-    }
     _showsNextButton = showsNextButton;
     if (_showsNextButton) {
       _separator = [[UIView alloc] init];
       _separator.translatesAutoresizingMaskIntoConstraints = NO;
       _separator.backgroundColor = [UIColor colorNamed:kSeparatorColor];
       [self addSubview:_separator];
-      _nextButton = BubbleNextButton(page);
+      _nextButton =
+          BubbleNextButton(page, _totalPageControlPages, customNextButtonTitle);
       [_nextButton addTarget:self
                       action:@selector(nextButtonWasTapped:)
             forControlEvents:UIControlEventTouchUpInside];
       [self addSubview:_nextButton];
 
       if (page > BubblePageControlPageNone) {
-        _stepPageControl = PageControl(page);
+        _stepPageControl = PageControl(page, _totalPageControlPages);
         [_stepPageControl
             setContentHuggingPriority:UILayoutPriorityRequired
                               forAxis:UILayoutConstraintAxisHorizontal];
@@ -428,16 +467,26 @@ UIStackView* PageControl(BubblePageControlPage page) {
     self.isAccessibilityElement = YES;
 
     __weak __typeof(self) weakSelf = self;
-    NSArray<UITrait>* traits = TraitCollectionSetForTraits(@[
+    NSArray<UITrait>* styleTraits = @[
       UITraitUserInterfaceIdiom.class, UITraitUserInterfaceStyle.class,
       UITraitDisplayGamut.class, UITraitAccessibilityContrast.class,
       UITraitUserInterfaceLevel.class
-    ]);
-    UITraitChangeHandler handler = ^(id<UITraitEnvironment> traitEnvironment,
-                                     UITraitCollection* previousCollection) {
-      [weakSelf maybeChangeArrowColor:previousCollection];
-    };
-    [weakSelf registerForTraitChanges:traits withHandler:handler];
+    ];
+    UITraitChangeHandler styleHandler =
+        ^(id<UITraitEnvironment> traitEnvironment,
+          UITraitCollection* previousCollection) {
+          [weakSelf maybeChangeArrowColor:previousCollection];
+        };
+    [weakSelf registerForTraitChanges:styleTraits withHandler:styleHandler];
+
+    UITraitChangeHandler sizeHandler =
+        ^(id<UITraitEnvironment> traitEnvironment,
+          UITraitCollection* previousCollection) {
+          [weakSelf updateFonts];
+        };
+    [weakSelf
+        registerForTraitChanges:@[ UITraitPreferredContentSizeCategory.class ]
+                    withHandler:sizeHandler];
   }
   return self;
 }
@@ -450,10 +499,11 @@ UIStackView* PageControl(BubblePageControlPage page) {
                   alignment:alignment
            showsCloseButton:NO
                       title:nil
-          showsSnoozeButton:NO
             showsNextButton:NO
                        page:BubblePageControlPageNone
+      totalPageControlPages:BubblePageControlPageFourth
               textAlignment:NSTextAlignmentCenter
+      customNextButtonTitle:nil
                    delegate:nil];
 }
 
@@ -462,6 +512,46 @@ UIStackView* PageControl(BubblePageControlPage page) {
 - (void)setAlignmentOffset:(CGFloat)alignmentOffset {
   _alignmentOffset = alignmentOffset;
   [self updateArrowAlignmentConstraint];
+}
+
+- (void)setMaximumContentSizeCategory:
+    (UIContentSizeCategory)maximumContentSizeCategory {
+  if (_maximumContentSizeCategory != maximumContentSizeCategory) {
+    _maximumContentSizeCategory = [maximumContentSizeCategory copy];
+    [self updateFonts];
+  }
+}
+
+- (void)updateFonts {
+  UIContentSizeCategory currentCategory =
+      self.traitCollection.preferredContentSizeCategory;
+  UIContentSizeCategory targetCategory = currentCategory;
+  if (self.maximumContentSizeCategory &&
+      UIContentSizeCategoryCompareToCategory(currentCategory,
+                                             self.maximumContentSizeCategory) ==
+          NSOrderedDescending) {
+    targetCategory = self.maximumContentSizeCategory;
+  }
+  UITraitCollection* targetTraits = [self.traitCollection
+      traitCollectionByModifyingTraits:^(id<UIMutableTraits> mutableTraits) {
+        mutableTraits.preferredContentSizeCategory = targetCategory;
+      }];
+
+  UIFontTextStyle labelStyle =
+      self.titleLabel ? UIFontTextStyleFootnote : UIFontTextStyleSubheadline;
+  self.label.font = [UIFont preferredFontForTextStyle:labelStyle
+                        compatibleWithTraitCollection:targetTraits];
+  if (self.titleLabel) {
+    self.titleLabel.font =
+        [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline
+            compatibleWithTraitCollection:targetTraits];
+  }
+  if (self.showsNextButton) {
+    _nextButton.titleLabel.font =
+        [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline
+            compatibleWithTraitCollection:targetTraits];
+  }
+  [self setNeedsLayout];
 }
 
 #pragma mark - UIAccessibility
@@ -479,12 +569,12 @@ UIStackView* PageControl(BubblePageControlPage page) {
 - (NSArray<UIAccessibilityCustomAction*>*)accessibilityCustomActions {
   NSMutableArray<UIAccessibilityCustomAction*>* accessibilityCustomActions =
       [NSMutableArray array];
-  if (self.showsSnoozeButton) {
+  if (self.showsNextButton) {
     [accessibilityCustomActions
         addObject:[[UIAccessibilityCustomAction alloc]
-                      initWithName:self.snoozeButton.accessibilityLabel
+                      initWithName:_nextButton.accessibilityLabel
                             target:self
-                          selector:@selector(snoozeButtonWasTapped:)]];
+                          selector:@selector(nextButtonWasTapped:)]];
   }
   if (self.showsCloseButton) {
     [accessibilityCustomActions
@@ -526,14 +616,6 @@ UIStackView* PageControl(BubblePageControlPage page) {
   }
 }
 
-// Handles taps on the snooze button.
-- (void)snoozeButtonWasTapped:(UIButton*)button {
-  DCHECK(self.showsSnoozeButton);
-  if ([self.delegate respondsToSelector:@selector(didTapSnoozeButton)]) {
-    [self.delegate didTapSnoozeButton];
-  }
-}
-
 - (void)nextButtonWasTapped:(UIButton*)button {
   DCHECK(self.showsNextButton);
   if ([self.delegate respondsToSelector:@selector(didTapNextButton)]) {
@@ -571,10 +653,6 @@ UIStackView* PageControl(BubblePageControlPage page) {
   if (self.titleLabel) {
     [constraints addObjectsFromArray:[self titleLabelConstraints]];
   }
-  // Add constraints for snooze button.
-  if (self.showsSnoozeButton) {
-    [constraints addObjectsFromArray:[self snoozeButtonConstraints]];
-  }
   if (self.showsNextButton) {
     [constraints addObjectsFromArray:[self nextButtonConstraints]];
     if (_stepPageControl) {
@@ -602,6 +680,12 @@ UIStackView* PageControl(BubblePageControlPage page) {
   ];
   for (NSLayoutConstraint* constraint in labelAlignmentConstraints) {
     constraint.priority = UILayoutPriorityDefaultLow;
+  }
+  if (self.label.textAlignment != NSTextAlignmentCenter) {
+    // Force the leading constraint to be satisfied over the trailing constraint
+    // to left-align (or right-align in RTL) the label inside the background,
+    // avoiding extra leading space when the bubble is wider than the text.
+    labelAlignmentConstraints[1].priority = UILayoutPriorityDefaultHigh - 10;
   }
   // Add horizontal margins between the bubble's frame and the background. These
   // constraints are optional (if the bubble is too close to the edge of the
@@ -700,41 +784,10 @@ UIStackView* PageControl(BubblePageControlPage page) {
   return constraints;
 }
 
-// Returns the constraint for the snooze button.
-- (NSArray<NSLayoutConstraint*>*)snoozeButtonConstraints {
-  UIView* background = self.background;
-  UIView* label = self.label;
-  UIButton* snoozeButton = self.snoozeButton;
-  NSMutableArray<NSLayoutConstraint*>* constraints =
-      [NSMutableArray arrayWithArray:@[
-        [snoozeButton.titleLabel.topAnchor
-            constraintEqualToAnchor:label.bottomAnchor
-                           constant:kSnoozeButtonTitleVerticalMargin],
-        [snoozeButton.leadingAnchor
-            constraintEqualToAnchor:label.leadingAnchor],
-        [background.bottomAnchor
-            constraintEqualToAnchor:snoozeButton.titleLabel.bottomAnchor
-                           constant:kSnoozeButtonTitleVerticalMargin],
-        [background.trailingAnchor
-            constraintGreaterThanOrEqualToAnchor:snoozeButton.trailingAnchor
-                                        constant:kBubbleHorizontalPadding],
-        [snoozeButton.heightAnchor
-            constraintGreaterThanOrEqualToConstant:kSnoozeButtonMinimumSize],
-        [snoozeButton.widthAnchor
-            constraintGreaterThanOrEqualToConstant:kSnoozeButtonMinimumSize],
-      ]];
-  if (self.showsCloseButton) {
-    [constraints
-        addObject:[snoozeButton.trailingAnchor
-                      constraintLessThanOrEqualToAnchor:self.closeButton
-                                                            .leadingAnchor]];
-  }
-  return constraints;
-}
-
 - (NSArray<NSLayoutConstraint*>*)nextButtonConstraints {
   return @[
-    [_separator.heightAnchor constraintEqualToConstant:AlignValueToPixel(0.5)],
+    [_separator.heightAnchor
+        constraintEqualToConstant:AlignValueToLowerPixel(0.5)],
     [_separator.topAnchor constraintEqualToAnchor:_label.bottomAnchor
                                          constant:kNextButtonVerticalMargin],
     [_separator.leadingAnchor constraintEqualToAnchor:_label.leadingAnchor],
@@ -750,7 +803,7 @@ UIStackView* PageControl(BubblePageControlPage page) {
                        constant:kBubbleHorizontalPadding],
     [_nextButton.heightAnchor constraintGreaterThanOrEqualToConstant:42.0f],
     [_nextButton.widthAnchor
-        constraintGreaterThanOrEqualToConstant:kSnoozeButtonMinimumSize],
+        constraintGreaterThanOrEqualToConstant:kNextButtonMinimumSize],
   ];
 }
 
@@ -940,18 +993,12 @@ UIStackView* PageControl(BubblePageControlPage page) {
 // label) with the available size to minimize whitespace. Returns the size of
 // the combined UI element including padding between texts.
 - (CGSize)optimalTextSize:(CGSize)size {
-  // Computes sizeThatFits for label, title and snoozeButton's label.
+  // Computes sizeThatFits for label and title.
   CGSize labelSize = [self.label sizeThatFits:size];
   CGSize titleSize = CGSizeZero;
   if (self.titleLabel) {
     titleSize = [self.titleLabel sizeThatFits:size];
     titleSize.height += kTitleBottomMargin;
-  }
-  CGSize snoozeButtonTitleSize = CGSizeZero;
-  if (self.showsSnoozeButton) {
-    snoozeButtonTitleSize = [self.snoozeButton.titleLabel sizeThatFits:size];
-    // Add padding to computed height.
-    snoozeButtonTitleSize.height += kSnoozeButtonTitleVerticalMargin;
   }
   CGSize nextButtonTitleSize = CGSizeZero;
   if (self.showsNextButton) {
@@ -960,12 +1007,9 @@ UIStackView* PageControl(BubblePageControlPage page) {
     nextButtonTitleSize.height +=
         kNextButtonVerticalMargin * 2 + kNextButtonSeparatorVerticalSpacing;
   }
-  // Optimal width is the maximum width between label, title and snoozeButton's
-  // label.
+  // Optimal width is the maximum width between label and title.
   CGFloat textWidth = MAX(labelSize.width, titleSize.width);
-  textWidth = MAX(textWidth, snoozeButtonTitleSize.width);
   CGFloat textHeight = labelSize.height + titleSize.height +
-                       snoozeButtonTitleSize.height +
                        nextButtonTitleSize.height;
   CGSize textSize = CGSizeMake(textWidth, textHeight);
   return textSize;
@@ -986,7 +1030,7 @@ UIStackView* PageControl(BubblePageControlPage page) {
   if (self.showsCloseButton) {
     textHorizontalInset += MAX(kCloseButtonSize, kBubbleHorizontalPadding) +
                            kBubbleHorizontalPadding;
-  } else if (!self.titleLabel) {
+  } else {
     textHorizontalInset += kBubbleHorizontalPadding * 2;
   }
 
@@ -1000,11 +1044,8 @@ UIStackView* PageControl(BubblePageControlPage page) {
   // Calculate the height needed to display the bubble.
   // Combined height of title, label and snooze button including all margins.
   CGFloat textContentHeight = kBubbleVerticalPadding + optimalTextSize.height;
-  if (self.showsSnoozeButton) {
-    textContentHeight +=
-        MAX(kBubbleVerticalPadding, kSnoozeButtonTitleVerticalMargin);
-  } else if (self.showsNextButton) {
-    textContentHeight += AlignValueToPixel(0.5);
+  if (self.showsNextButton) {
+    textContentHeight += AlignValueToLowerPixel(0.5);
     textContentHeight += kNextButtonVerticalMargin;
   } else {
     textContentHeight += kBubbleVerticalPadding;

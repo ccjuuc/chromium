@@ -66,7 +66,6 @@ namespace blink {
 
 class CompositorFilterOperations;
 class ComputedStyle;
-class FilterEffect;
 class FilterOperations;
 class HitTestResult;
 class HitTestingTransformState;
@@ -223,13 +222,6 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
     return curr;
   }
 
-  // This is the scroll offset that's actually used to display to the screen.
-  // It should only be used in paint/compositing type use cases (includes hit
-  // testing, intersection observer). Most other cases should use the unsnapped
-  // offset from LayoutBox (for layout) or the source offset from the
-  // ScrollableArea.
-  gfx::Vector2d PixelSnappedScrolledContentOffset() const;
-
   bool IsRootLayer() const { return is_root_layer_; }
 
   void UpdateScrollingAfterLayout();
@@ -262,6 +254,7 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
   bool HitTest(const HitTestLocation& location,
                HitTestResult&,
                const PhysicalRect& hit_test_area);
+  bool HitTestReplacedNormalFlowInline(HitTestResult&, const HitTestLocation&);
 
   using InlineEdge = LogicalStaticPosition::InlineEdge;
   using BlockEdge = LogicalStaticPosition::BlockEdge;
@@ -521,7 +514,15 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
   // See
   // https://chromium.googlesource.com/chromium/src.git/+/main/third_party/blink/renderer/core/paint/README.md
   // for the definition of a replaced normal-flow stacking element.
-  bool IsReplacedNormalFlowStacking() const;
+  bool IsReplacedNormalFlowStackingContext() const;
+
+  // Returns true if this replaced normal-flow stacking context should be
+  // painted inline by its parent's content painter via
+  // PaintLayerForReplacedNormalFlowStackingContext rather than in
+  // PaintChildren. Floated and fragmented elements are excluded because
+  // they have their own paint phases or require PaintChildren's full
+  // fragment context.
+  bool ShouldPaintReplacedNormalFlowInline() const;
 
 #if DCHECK_IS_ON()
   bool LayerListMutationAllowed() const { return layer_list_mutation_allowed_; }
@@ -654,6 +655,8 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
       ShouldRespectOverflowClipType);
   bool HitTestClippedOutByClipPath(const PaintLayer& root_layer,
                                    const HitTestLocation&) const;
+  bool HitTestClippedOutByBorderShape(const PaintLayer& transform_container,
+                                      const HitTestLocation&) const;
   bool HitTestClippedOutByBorderRadius(
       const PaintLayer& transform_container,
       const PaintLayerFragment* container_fragment,
@@ -707,6 +710,8 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
   void SetNeedsReorderOverlayOverflowControls(bool);
 
   bool ComputeHasFilterThatMovesPixels() const;
+
+  bool ComputeHasReferenceFilter() const;
 
   // Self-painting layer is an optimization where we avoid the heavy Layer
   // painting machinery for a Layer allocated only to handle the overflow clip
@@ -765,6 +770,9 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
 
   // Caches |ComputeHasFilterThatMovesPixels()|, updated on style changes.
   unsigned has_filter_that_moves_pixels_ : 1;
+
+  // Caches `ComputeHasReferenceFilter()`, updated on style changes.
+  unsigned has_reference_filter_ : 1 = false;
 
   // True if the current subtree is underneath a LayoutSVGHiddenContainer
   // ancestor.

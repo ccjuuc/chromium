@@ -8,13 +8,16 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/compiler_specific.h"
+#include "content/public/browser/immersive_playback_options.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "third_party/blink/public/mojom/frame/blocked_navigation_types.mojom.h"
+#include "url/origin.h"
 
 class GURL;
 
@@ -49,6 +52,10 @@ class WebContentsDelegateAndroid : public content::WebContentsDelegate {
                              const jni_zero::JavaRef<jobject>& obj);
   ~WebContentsDelegateAndroid() override;
 
+  WebContentsDelegateAndroid(const WebContentsDelegateAndroid&) = delete;
+  WebContentsDelegateAndroid& operator=(const WebContentsDelegateAndroid&) =
+      delete;
+
   // Overridden from WebContentsDelegate:
   content::WebContents* OpenURLFromTab(
       content::WebContents* source,
@@ -80,6 +87,9 @@ class WebContentsDelegateAndroid : public content::WebContentsDelegate {
       const GURL& opener_url,
       const std::string& frame_name,
       const GURL& target_url) override;
+  void CanDownload(const GURL& url,
+                   const std::string& request_method,
+                   base::OnceCallback<void(bool)> callback) override;
   void CloseContents(content::WebContents* source) override;
   bool DidAddMessageToConsole(content::WebContents* source,
                               blink::mojom::ConsoleMessageLevel log_level,
@@ -87,11 +97,20 @@ class WebContentsDelegateAndroid : public content::WebContentsDelegate {
                               int32_t line_no,
                               const std::u16string& source_id) override;
   void UpdateTargetURL(content::WebContents* source, const GURL& url) override;
+  content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
+      content::WebContents* source,
+      const input::NativeWebKeyboardEvent& event) override;
   bool HandleKeyboardEvent(content::WebContents* source,
                            const input::NativeWebKeyboardEvent& event) override;
   bool TakeFocus(content::WebContents* source, bool reverse) override;
   void ShowRepostFormWarningDialog(content::WebContents* source) override;
   bool ShouldBlockMediaRequest(const GURL& url) override;
+  void RequestImmersivePlaybackConfirmation(
+      const content::ImmersiveOptions& default_options,
+      base::OnceCallback<void(content::ImmersivePlaybackConfirmationResult)>
+          callback) override;
+  bool CanEnterFullscreenModeForTab(
+      content::RenderFrameHost* requesting_frame) override;
   void EnterFullscreenModeForTab(
       content::RenderFrameHost* requesting_frame,
       const blink::mojom::FullscreenOptions& options) override;
@@ -109,6 +128,8 @@ class WebContentsDelegateAndroid : public content::WebContentsDelegate {
   void OnDidBlockNavigation(
       content::WebContents* web_contents,
       const GURL& blocked_url,
+      const GURL& initiator_url,
+      const url::Origin& initiator_origin,
       blink::mojom::NavigationBlockedReason reason) override;
   int GetTopControlsHeight() override;
   int GetTopControlsMinHeight() override;
@@ -141,15 +162,14 @@ class WebContentsDelegateAndroid : public content::WebContentsDelegate {
   // reference instead.
   void SetContentsBounds(content::WebContents* source,
                          const gfx::Rect& bounds) override;
+  void PrintCrossProcessSubframe(
+      content::WebContents* web_contents,
+      const gfx::Rect& rect,
+      int document_cookie,
+      content::RenderFrameHost* subframe_host) const override;
 
  protected:
   base::android::ScopedJavaLocalRef<jobject> GetJavaDelegate(JNIEnv* env) const;
-
- private:
-  // We depend on the java side user of WebContentDelegateAndroid to hold a
-  // strong reference to that object as long as they want to receive callbacks
-  // on it. Using a weak ref here allows it to be correctly GCed.
-  JavaObjectWeakGlobalRef weak_java_delegate_;
 };
 
 }  // namespace web_contents_delegate_android

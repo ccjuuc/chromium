@@ -9,27 +9,42 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/buildflag.h"
 #include "components/input/timeout_monitor.h"
+#include "content/browser/bad_message.h"
 #include "content/browser/renderer_host/navigation_controller_impl.h"
+#include "content/browser/renderer_host/render_frame_host_manager.h"
+#include "content/browser/renderer_host/render_widget_host_impl.h"
+#include "content/browser/site_instance_impl.h"
 #include "content/common/content_navigation_policy.h"
 #include "content/common/features.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/cors_origin_pattern_setter.h"
 #include "content/public/browser/shared_cors_origin_access_list.h"
+#include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/fake_local_frame.h"
 #include "content/public/test/test_utils.h"
 #include "content/test/navigation_simulator_impl.h"
+#include "content/test/storage_partition_test_helpers.h"
 #include "content/test/test_render_frame_host.h"
 #include "content/test/test_render_view_host.h"
 #include "content/test/test_web_contents.h"
+#include "mojo/public/cpp/test_support/fake_message_dispatch_context.h"
+#include "mojo/public/cpp/test_support/test_utils.h"
 #include "net/base/features.h"
 #include "net/base/isolation_info.h"
 #include "net/base/network_isolation_partition.h"
+#include "net/cookies/canonical_cookie.h"
+#include "net/cookies/cookie_access_result.h"
+#include "net/cookies/cookie_change_dispatcher.h"
+#include "net/cookies/cookie_constants.h"
 #include "net/cookies/site_for_cookies.h"
+#include "services/network/public/cpp/connection_allowlist.h"
 #include "services/network/public/cpp/cors/origin_access_list.h"
 #include "services/network/public/mojom/cors.mojom.h"
 #include "services/network/public/mojom/cors_origin_pattern.mojom.h"
@@ -39,6 +54,7 @@
 #include "third_party/blink/public/common/runtime_feature_state/runtime_feature_state_read_context.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
+#include "third_party/blink/public/mojom/notifications/notification_service.mojom.h"
 #include "third_party/blink/public/mojom/webauthn/authenticator.mojom.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -84,6 +100,30 @@ class FirstPartyOverrideContentBrowserClient : public ContentBrowserClient {
   }
 };
 
+// Extends `FirstPartyOverrideContentBrowserClient` with a configurable
+// MIME handler effective top frame for StorageKey truncation tests.
+class MimeHandlerOverrideContentBrowserClient
+    : public FirstPartyOverrideContentBrowserClient {
+ public:
+  void SetEffectiveTopFrame(RenderFrameHost* rfh) { effective_top_ = rfh; }
+
+  RenderFrameHost* GetEffectiveTopFrameForPartitioning(
+      RenderFrameHost* render_frame_host) override {
+    return effective_top_;
+  }
+
+  // Mirrors the production scheme guard so the override fires only for the
+  // chrome-extension frame's own commit, not the embedder or descendants.
+  bool IsSecureContextRoot(RenderFrameHost* parent_frame,
+                           FrameTreeNodeId frame_tree_node_id,
+                           const GURL& url) override {
+    return url.SchemeIs("chrome-extension");
+  }
+
+ private:
+  raw_ptr<RenderFrameHost> effective_top_ = nullptr;
+};
+
 // A test class that forces kOriginKeyedProcessesByDefault off for tests that
 // require that same-site cross-origin navigations don't trigger a RFH swap.
 class RenderFrameHostImplTest_NoOriginKeyedProcessesByDefault
@@ -125,7 +165,7 @@ TEST_F(RenderFrameHostImplTest_NoOriginKeyedProcessesByDefault,
   RenderFrameHostImpl* initial_rfh = main_test_rfh();
   // This test is for a bug that only happens when there is no RFH swap on
   // same-site navigations, so we should disable same-site proactive
-  // BrowsingInstance for |initial_rfh| before continiung.
+  // BrowsingInstance for |initial_rfh| before continuing.
   DisableProactiveBrowsingInstanceSwapFor(initial_rfh);
   if (ShouldCreateNewHostForAllFrames()) {
     GTEST_SKIP();
@@ -192,6 +232,53 @@ TEST_F(RenderFrameHostImplTest, InvalidURL) {
   EXPECT_FALSE(invalid_url.is_valid());
   NavigateAndCommit(invalid_url);
   EXPECT_EQ(GURL(url::kAboutBlankURL), main_rfh()->GetLastCommittedURL());
+}
+
+TEST_F(RenderFrameHostImplTest, DefaultToMainFrameWhenNoSubframeFocused) {
+  NavigateAndCommit(GURL("https://test.example.com"));
+
+  // Ensure top-level widget has OS focus.
+  RenderWidgetHostImpl* widget =
+      static_cast<RenderWidgetHostImpl*>(main_rfh()->GetRenderWidgetHost());
+  widget->Focus();
+  EXPECT_TRUE(widget->is_focused());
+
+  // In a unit test, FrameTree::GetFocusedFrame() starts as nullptr before any
+  // subframe focus IPC has been received.
+  EXPECT_EQ(nullptr, contents()->GetPrimaryFrameTree().GetFocusedFrame());
+
+  // By default (with killswitch kDefaultToMainFrameFocusWhenNoSubframeFocused
+  // enabled), the main frame is treated as focused when GetFocusedFrame() is
+  // null.
+  EXPECT_TRUE(main_test_rfh()->IsFocused());
+
+  // Disabling the killswitch falls back to returning false when
+  // GetFocusedFrame() is null.
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      features::kDefaultToMainFrameFocusWhenNoSubframeFocused);
+  EXPECT_FALSE(main_test_rfh()->IsFocused());
+}
+
+TEST_F(RenderFrameHostImplTest, ExitFullscreenDestruction) {
+  class DestructionDelegate : public WebContentsDelegate {
+   public:
+    explicit DestructionDelegate(base::OnceClosure destruction_closure)
+        : destruction_closure_(std::move(destruction_closure)) {}
+    void ExitFullscreenModeForTab(WebContents* web_contents) override {
+      std::move(destruction_closure_).Run();
+    }
+
+   private:
+    base::OnceClosure destruction_closure_;
+  };
+
+  DestructionDelegate delegate(base::BindOnce(
+      &RenderFrameHostImplTest::DeleteContents, base::Unretained(this)));
+  contents()->SetDelegate(&delegate);
+
+  // This should not crash.
+  main_test_rfh()->ExitFullscreen();
 }
 
 // Ensures that IsolationInfo's SiteForCookies is empty and
@@ -288,7 +375,7 @@ TEST_F(RenderFrameHostImplTest_NoOriginKeyedProcessesByDefault,
     simulator->Commit();
   }
 
-  // This test is targetted at the case an RFH is reused between navigations.
+  // This test is targeted at the case an RFH is reused between navigations.
   RenderFrameHost* initial_rfh = main_rfh();
   DisableProactiveBrowsingInstanceSwapFor(main_rfh());
   if (ShouldCreateNewHostForAllFrames()) {
@@ -363,11 +450,15 @@ TEST_F(RenderFrameHostImplTest, PolicyContainerLifecycle) {
   EXPECT_EQ(main_rfh->policy_container_host()->referrer_policy(),
             network::mojom::ReferrerPolicy::kDefault);
 
+  base::UnguessableToken initiator_state_token =
+      base::UnguessableToken::Create();
   static_cast<blink::mojom::PolicyContainerHost*>(
       main_rfh->policy_container_host())
-      ->SetReferrerPolicy(network::mojom::ReferrerPolicy::kAlways);
+      ->SetReferrerPolicy(network::mojom::ReferrerPolicy::kAlways,
+                          initiator_state_token);
   EXPECT_EQ(main_rfh->policy_container_host()->referrer_policy(),
             network::mojom::ReferrerPolicy::kAlways);
+  EXPECT_EQ(main_rfh->current_initiator_state_token(), initiator_state_token);
 
   // Create a child frame and check that it inherits the PolicyContainerHost
   // from the parent frame.
@@ -379,11 +470,18 @@ TEST_F(RenderFrameHostImplTest, PolicyContainerLifecycle) {
   EXPECT_EQ(child_frame->policy_container_host()->referrer_policy(),
             network::mojom::ReferrerPolicy::kAlways);
 
+  // The child frame's `initiator_state_token` should be different.
+  EXPECT_NE(child_frame->current_initiator_state_token(),
+            initiator_state_token);
+
   // Create a new WebContents with opener and test that the new main frame
   // inherits the PolicyContainerHost from the opener.
+  base::UnguessableToken child_initiator_state_token =
+      base::UnguessableToken::Create();
   static_cast<blink::mojom::PolicyContainerHost*>(
       child_frame->policy_container_host())
-      ->SetReferrerPolicy(network::mojom::ReferrerPolicy::kNever);
+      ->SetReferrerPolicy(network::mojom::ReferrerPolicy::kNever,
+                          child_initiator_state_token);
   WebContents::CreateParams params(browser_context());
   std::unique_ptr<WebContentsImpl> new_contents(
       WebContentsImpl::CreateWithOpener(params, child_frame));
@@ -393,6 +491,11 @@ TEST_F(RenderFrameHostImplTest, PolicyContainerLifecycle) {
   ASSERT_NE(new_frame->policy_container_host(), nullptr);
   EXPECT_EQ(new_frame->policy_container_host()->referrer_policy(),
             network::mojom::ReferrerPolicy::kNever);
+
+  // The new frame's `initiator_state_token` should be different.
+  EXPECT_NE(new_frame->current_initiator_state_token(), initiator_state_token);
+  EXPECT_NE(new_frame->current_initiator_state_token(),
+            child_initiator_state_token);
 }
 
 TEST_F(RenderFrameHostImplTest, FaviconURLsSet) {
@@ -410,18 +513,21 @@ TEST_F(RenderFrameHostImplTest, FaviconURLsSet) {
 
   std::vector<blink::mojom::FaviconURLPtr> one_favicon_url;
   one_favicon_url.push_back(blink::mojom::FaviconURL::New(kFavicon));
-  main_rfh->UpdateFaviconURL(std::move(one_favicon_url));
+  main_rfh->UpdateFaviconURL(std::move(one_favicon_url),
+                             blink::mojom::FaviconUpdateReason::kPageLoad);
   EXPECT_EQ(1u, contents()->GetFaviconURLs().size());
 
   std::vector<blink::mojom::FaviconURLPtr> two_favicon_urls;
   two_favicon_urls.push_back(blink::mojom::FaviconURL::New(kFavicon));
   two_favicon_urls.push_back(blink::mojom::FaviconURL::New(kFavicon));
-  main_rfh->UpdateFaviconURL(std::move(two_favicon_urls));
+  main_rfh->UpdateFaviconURL(std::move(two_favicon_urls),
+                             blink::mojom::FaviconUpdateReason::kPageLoad);
   EXPECT_EQ(2u, contents()->GetFaviconURLs().size());
 
   std::vector<blink::mojom::FaviconURLPtr> another_one_favicon_url;
   another_one_favicon_url.push_back(blink::mojom::FaviconURL::New(kFavicon));
-  main_rfh->UpdateFaviconURL(std::move(another_one_favicon_url));
+  main_rfh->UpdateFaviconURL(std::move(another_one_favicon_url),
+                             blink::mojom::FaviconUpdateReason::kPageLoad);
   EXPECT_EQ(1u, contents()->GetFaviconURLs().size());
 }
 
@@ -441,7 +547,8 @@ TEST_F(RenderFrameHostImplTest, FaviconURLsResetWithNavigation) {
   navigation->Commit();
 
   EXPECT_EQ(0u, contents()->GetFaviconURLs().size());
-  main_rfh->UpdateFaviconURL(std::move(favicon_urls));
+  main_rfh->UpdateFaviconURL(std::move(favicon_urls),
+                             blink::mojom::FaviconUpdateReason::kPageLoad);
   EXPECT_EQ(1u, contents()->GetFaviconURLs().size());
 
   navigation = NavigationSimulator::CreateBrowserInitiated(
@@ -506,6 +613,61 @@ TEST_F(RenderFrameHostImplTest, ChildOfCredentiallessIsCredentialless) {
             grandchild_frame->GetNetworkIsolationKey().GetNonce().value());
 }
 
+// A compromised renderer that delivers a `connectionallowlist` iframe attribute
+// whose serialized value is not a valid HTTP header value (e.g. it contains
+// CR/LF) must be terminated. Otherwise the value would flow to
+// NavigationRequest::SetupConnectionAllowlistEmbeddedEnforcement() and crash
+// the browser process at net::HttpRequestHeaders::SetHeader().
+TEST_F(RenderFrameHostImplTest,
+       InvalidConnectionAllowlistAttributeIsBadMessage) {
+  auto* child_frame = static_cast<TestRenderFrameHost*>(
+      content::RenderFrameHostTester::For(main_test_rfh())
+          ->AppendChild("child"));
+
+  auto attributes = blink::mojom::IframeAttributes::New();
+  network::ConnectionAllowlist required_connection_allowlist;
+  required_connection_allowlist.serialized_value =
+      "(response-origin)\r\nX-Injected: evil";
+  attributes->required_connection_allowlist =
+      std::move(required_connection_allowlist);
+
+  base::HistogramTester histograms;
+  main_test_rfh()->DidChangeIframeAttributes(child_frame->GetFrameToken(),
+                                             std::move(attributes));
+
+  // The renderer is terminated with the dedicated bad-message reason, and the
+  // malicious attribute is never stored on the child.
+  histograms.ExpectUniqueSample(
+      "Stability.BadMessageTerminated.Content",
+      bad_message::RFH_INVALID_CONNECTION_ALLOWLIST_ATTRIBUTE, 1);
+  EXPECT_FALSE(child_frame->frame_tree_node()
+                   ->connection_allowlist_attribute()
+                   .has_value());
+}
+
+TEST_F(RenderFrameHostImplTest, SpeculativeFrameHostIsCredentialless) {
+  // Start with a committed page.
+  GURL url1("https://a.com");
+  NavigationSimulator::NavigateAndCommitFromDocument(url1, main_test_rfh());
+
+  // Start a cross-site navigation to create a speculative RFH.
+  GURL url2("https://b.com");
+  std::unique_ptr<NavigationSimulator> simulator =
+      NavigationSimulator::CreateBrowserInitiated(url2, contents());
+  simulator->Start();
+
+  RenderFrameHostManager* manager =
+      main_test_rfh()->frame_tree_node()->render_manager();
+  RenderFrameHostImpl* speculative_rfh = manager->speculative_frame_host();
+
+  if (AreStrictSiteInstancesEnabled()) {
+    ASSERT_NE(speculative_rfh, nullptr);
+    // Verify that calling IsCredentialless() on the speculative RFH
+    // does not crash and returns false (since it has no policy container yet).
+    EXPECT_FALSE(speculative_rfh->IsCredentialless());
+  }
+}
+
 // FakeLocalFrame implementation that records calls to BeforeUnload().
 class FakeLocalFrameWithBeforeUnload : public content::FakeLocalFrame {
  public:
@@ -518,7 +680,9 @@ class FakeLocalFrameWithBeforeUnload : public content::FakeLocalFrame {
   }
 
   // FakeLocalFrame:
-  void BeforeUnload(bool is_reload, BeforeUnloadCallback callback) override {
+  void BeforeUnload(bool is_reload,
+                    bool force_to_proceed,
+                    BeforeUnloadCallback callback) override {
     was_before_unload_sent_to_renderer_ = true;
   }
 
@@ -696,7 +860,7 @@ TEST_F(RenderFrameHostImplTest, CalculateStorageKey) {
                                                          grandchild_frame));
 
   // With no host permissions the grandchild document should have a cross-site
-  // storage key with the `initial_url_ext` as it's top level origin.
+  // storage key with the `initial_url_ext` as its top level origin.
   blink::StorageKey expected_grandchild_no_permissions_storage_key =
       blink::StorageKey::Create(
           grandchild_frame->GetLastCommittedOrigin(),
@@ -718,7 +882,7 @@ TEST_F(RenderFrameHostImplTest, CalculateStorageKey) {
                 grandchild_frame->GetLastCommittedOrigin(), nullptr));
 
   // Now give extension host permissions to `child_frame`. Since the root
-  // extension rfh has host permissions to`child_frame` calling
+  // extension rfh has host permissions to `child_frame` calling
   // `CalculateStorageKey` should create a storage key with the `child_origin`
   // as the `top_level_site`.
   AddHostPermissions("childframe.com", main_rfh());
@@ -827,7 +991,7 @@ TEST_F(RenderFrameHostImplTest,
   // Give extension host permissions to `child_url`.
   AddHostPermissions("childframe.com", main_rfh());
 
-  // The top level document has host permssions to the child_url so the top
+  // The top level document has host permissions to the child_url so the top
   // level document should be excluded from storage key calculations and a first
   // party, same-site storage key is expected.
   blink::StorageKey expected_child_with_permissions_storage_key =
@@ -938,6 +1102,7 @@ TEST_F(RenderFrameHostImplWebAuthnTest,
       "doofenshmirtz.evil", url::Origin::Create(url),
       /*is_payment_credential_get_assertion=*/false,
       /*remote_desktop_client_override_origin=*/std::nullopt,
+      /*app_id=*/std::nullopt,
       base::BindLambdaForTesting(
           [&status](blink::mojom::AuthenticatorStatus s, bool is_cross_origin) {
             status = s;
@@ -958,6 +1123,7 @@ TEST_F(RenderFrameHostImplWebAuthnTest,
       "doofenshmirtz.evil", url::Origin::Create(url),
       /*is_payment_credential_creation=*/false,
       /*remote_desktop_client_override_origin=*/std::nullopt,
+      /*app_id=*/std::nullopt,
       base::BindLambdaForTesting(
           [&status](blink::mojom::AuthenticatorStatus s, bool is_cross_origin) {
             status = s;
@@ -978,11 +1144,131 @@ TEST_F(RenderFrameHostImplWebAuthnTest,
       "owca.org", url::Origin::Create(url),
       /*is_payment_credential_get_assertion=*/false,
       /*remote_desktop_client_override_origin=*/std::nullopt,
+      /*app_id=*/std::nullopt,
       base::BindLambdaForTesting(
           [&status](blink::mojom::AuthenticatorStatus s, bool is_cross_origin) {
             status = s;
           }));
   EXPECT_EQ(status.value(), blink::mojom::AuthenticatorStatus::SUCCESS);
+}
+
+TEST_F(RenderFrameHostImplWebAuthnTest,
+       PerformGetAssertionWebAuthSecurityChecks_AppId_Success) {
+  GURL url("https://owca.org");
+  const auto origin = url::Origin::Create(url);
+  EXPECT_CALL(*browser_client_,
+              IsSecurityLevelAcceptableForWebAuthn(main_test_rfh(), origin))
+      .WillOnce(testing::Return(true));
+  std::optional<blink::mojom::AuthenticatorStatus> status;
+  main_test_rfh()->PerformGetAssertionWebAuthSecurityChecks(
+      "owca.org", url::Origin::Create(url),
+      /*is_payment_credential_get_assertion=*/false,
+      /*remote_desktop_client_override_origin=*/std::nullopt,
+      /*app_id=*/"https://owca.org/appid.json",
+      base::BindLambdaForTesting(
+          [&status](blink::mojom::AuthenticatorStatus s, bool is_cross_origin) {
+            status = s;
+          }));
+  EXPECT_EQ(status.value(), blink::mojom::AuthenticatorStatus::SUCCESS);
+}
+
+TEST_F(RenderFrameHostImplWebAuthnTest,
+       PerformGetAssertionWebAuthSecurityChecks_AppId_Invalid) {
+  GURL url("https://owca.org");
+  const auto origin = url::Origin::Create(url);
+  // AppId validation happens before IsSecurityLevelAcceptableForWebAuthn check.
+  std::optional<blink::mojom::AuthenticatorStatus> status;
+  main_test_rfh()->PerformGetAssertionWebAuthSecurityChecks(
+      "owca.org", url::Origin::Create(url),
+      /*is_payment_credential_get_assertion=*/false,
+      /*remote_desktop_client_override_origin=*/std::nullopt,
+      /*app_id=*/"https://evil.com/appid.json",
+      base::BindLambdaForTesting(
+          [&status](blink::mojom::AuthenticatorStatus s, bool is_cross_origin) {
+            status = s;
+          }));
+  EXPECT_EQ(status.value(), blink::mojom::AuthenticatorStatus::INVALID_DOMAIN);
+}
+
+TEST_F(
+    RenderFrameHostImplWebAuthnTest,
+    PerformGetAssertionWebAuthSecurityChecks_RemoteDesktopOrigin_AppIdMismatch) {
+  GURL url("https://owca.org");
+  const auto origin = url::Origin::Create(url);
+  // AppId validation happens before IsSecurityLevelAcceptableForWebAuthn check.
+  std::optional<blink::mojom::AuthenticatorStatus> status;
+  main_test_rfh()->PerformGetAssertionWebAuthSecurityChecks(
+      "owca.org", origin,
+      /*is_payment_credential_get_assertion=*/false,
+      /*remote_desktop_client_override_origin=*/
+      url::Origin::Create(GURL("https://evil.com")),
+      /*app_id=*/"https://owca.org/appid.json",
+      base::BindLambdaForTesting(
+          [&status](blink::mojom::AuthenticatorStatus s, bool is_cross_origin) {
+            status = s;
+          }));
+  EXPECT_EQ(status.value(), blink::mojom::AuthenticatorStatus::
+                                REMOTE_DESKTOP_CLIENT_OVERRIDE_NOT_AUTHORIZED);
+}
+
+TEST_F(RenderFrameHostImplWebAuthnTest,
+       PerformGetAssertionWebAuthSecurityChecks_InvalidRemoteDesktopOrigin) {
+  GURL url("https://owca.org");
+  const auto origin = url::Origin::Create(url);
+  EXPECT_CALL(*browser_client_,
+              IsSecurityLevelAcceptableForWebAuthn(main_test_rfh(), origin))
+      .WillOnce(testing::Return(true));
+  // Security checks happen before IsSecurityLevelAcceptableForWebAuthn check.
+  std::optional<blink::mojom::AuthenticatorStatus> status;
+  main_test_rfh()->PerformGetAssertionWebAuthSecurityChecks(
+      "owca.org", origin,
+      /*is_payment_credential_get_assertion=*/false,
+      /*remote_desktop_client_override_origin=*/
+      url::Origin::Create(GURL("https://evil.com")),
+      /*app_id=*/std::nullopt,
+      base::BindLambdaForTesting(
+          [&status](blink::mojom::AuthenticatorStatus s, bool is_cross_origin) {
+            status = s;
+          }));
+  EXPECT_EQ(status.value(), blink::mojom::AuthenticatorStatus::
+                                REMOTE_DESKTOP_CLIENT_OVERRIDE_NOT_AUTHORIZED);
+}
+
+TEST_F(RenderFrameHostImplWebAuthnTest,
+       PerformMakeCredentialWebAuthSecurityChecks_AppId_Success) {
+  GURL url("https://owca.org");
+  const auto origin = url::Origin::Create(url);
+  EXPECT_CALL(*browser_client_,
+              IsSecurityLevelAcceptableForWebAuthn(main_test_rfh(), origin))
+      .WillOnce(testing::Return(true));
+  std::optional<blink::mojom::AuthenticatorStatus> status;
+  main_test_rfh()->PerformMakeCredentialWebAuthSecurityChecks(
+      "owca.org", url::Origin::Create(url),
+      /*is_payment_credential_creation=*/false,
+      /*remote_desktop_client_override_origin=*/std::nullopt,
+      /*app_id=*/"https://owca.org/appid.json",
+      base::BindLambdaForTesting(
+          [&status](blink::mojom::AuthenticatorStatus s, bool is_cross_origin) {
+            status = s;
+          }));
+  EXPECT_EQ(status.value(), blink::mojom::AuthenticatorStatus::SUCCESS);
+}
+
+TEST_F(RenderFrameHostImplWebAuthnTest,
+       PerformMakeCredentialWebAuthSecurityChecks_AppId_Invalid) {
+  GURL url("https://owca.org");
+  const auto origin = url::Origin::Create(url);
+  std::optional<blink::mojom::AuthenticatorStatus> status;
+  main_test_rfh()->PerformMakeCredentialWebAuthSecurityChecks(
+      "owca.org", url::Origin::Create(url),
+      /*is_payment_credential_creation=*/false,
+      /*remote_desktop_client_override_origin=*/std::nullopt,
+      /*app_id=*/"https://evil.com/appid.json",
+      base::BindLambdaForTesting(
+          [&status](blink::mojom::AuthenticatorStatus s, bool is_cross_origin) {
+            status = s;
+          }));
+  EXPECT_EQ(status.value(), blink::mojom::AuthenticatorStatus::INVALID_DOMAIN);
 }
 
 TEST_F(RenderFrameHostImplWebAuthnTest,
@@ -997,6 +1283,7 @@ TEST_F(RenderFrameHostImplWebAuthnTest,
       "owca.org", url::Origin::Create(url),
       /*is_payment_credential_creation=*/false,
       /*remote_desktop_client_override_origin=*/std::nullopt,
+      /*app_id=*/std::nullopt,
       base::BindLambdaForTesting(
           [&status](blink::mojom::AuthenticatorStatus s, bool is_cross_origin) {
             status = s;
@@ -1005,175 +1292,6 @@ TEST_F(RenderFrameHostImplWebAuthnTest,
 }
 
 #endif  // BUILDFLAG(IS_ANDROID)
-
-class AvoidUnnecessaryBeforeUnloadCheckSyncTest
-    : public RenderFrameHostImplTest {
- public:
-  class ForcePostTaskContentBrowserClient : public ContentBrowserClient {
-    bool SupportsAvoidUnnecessaryBeforeUnloadCheckSync() override {
-      return false;
-    }
-  };
-
-  // In this function, the following code path will be executed on navigation.
-  //
-  // [AvoidUnnecessaryBeforeUnloadCheckSync disabled]
-  // - Start a browser initiated navigation.
-  // - Run TestRenderFrameHost::SendBeforeUnload()
-  // - Run on_sendbeforeunload_begin_ closure
-  // - Run RenderFrameHostImpl::SendBeforeUnload() => Post a task
-  // - Run on_sendbeforeunload_end_ closure
-  //
-  // (In the posted task)
-  // - Run RenderFrameHostImpl::ProcessBeforeUnloadCompleted()
-  // - Run on_process_before_unload_completed_for_testing_ closure
-  //
-  // [AvoidUnnecessaryBeforeUnloadCheckSync + `kWithSendBeforeUnload`]
-  // - Start a browser initiated navigation.
-  // - Run TestRenderFrameHost::SendBeforeUnload()
-  // - Run on_sendbeforeunload_begin_ closure
-  // - Run RenderFrameHostImpl::SendBeforeUnload()
-  // - Run RenderFrameHostImpl::ProcessBeforeUnloadCompleted()
-  // - Run on_process_before_unload_completed_for_testing_ closure
-  // - Run on_sendbeforeunload_end_ closure
-  //
-  // [AvoidUnnecessaryBeforeUnloadCheckSync + `kWithoutSendBeforeUnload`]
-  // - Start a browser initiated navigation.
-  // - (the rest will be skipped)
-  //
-  // - expect_beforeunload_processed_on_sendbeforeunload_stack argument checks
-  //   if ProcessBeforeUnloadCompleted() is called without posting a task by
-  //   checking it in on_sendbeforeunload_end_ closure. This argument is
-  //   optional because this argument doesn't make sense when SendBeforeUnload()
-  //   and ProcessBeforeUnloadCompleted are not called at all.
-  //
-  // - expect_to_run_sendbeforeunload argument checks if both
-  //   SendBeforeUnload() and ProcessBeforeUnloadCompleted() are called or not.
-  void TestBeforeUnloadBehaviorOnNavigation(
-      std::optional<bool>
-          expect_beforeunload_processed_on_sendbeforeunload_stack,
-      bool expect_to_run_sendbeforeunload,
-      const base::Location& location = FROM_HERE) {
-    TestRenderFrameHost* rfh = contents()->GetPrimaryMainFrame();
-    bool beforeunload_processed = false;
-    bool run_sendbeforeunload = false;
-    // The following callback is called when processing beforeunload is
-    // completed.
-    rfh->set_on_process_before_unload_completed_for_testing(
-        base::BindLambdaForTesting([&]() { beforeunload_processed = true; }));
-    // The following callback is called when SendBeforeUnload() is about to
-    // start.
-    rfh->set_on_sendbeforeunload_begin(base::BindLambdaForTesting([&]() {
-      EXPECT_FALSE(beforeunload_processed) << location.ToString();
-    }));
-    // The following callback is called when SendBeforeUnload() is about to end.
-    rfh->set_on_sendbeforeunload_end(base::BindLambdaForTesting([&]() {
-      EXPECT_EQ(beforeunload_processed,
-                *expect_beforeunload_processed_on_sendbeforeunload_stack)
-          << location.ToString();
-      run_sendbeforeunload = true;
-    }));
-
-    auto simulator = NavigationSimulatorImpl::CreateBrowserInitiated(
-        GURL("https://example.com/navigation.html"), contents());
-    simulator->Start();
-    simulator->Wait();
-
-    EXPECT_EQ(beforeunload_processed, expect_to_run_sendbeforeunload)
-        << location.ToString();
-    EXPECT_EQ(run_sendbeforeunload, expect_to_run_sendbeforeunload)
-        << location.ToString();
-  }
-};
-
-TEST_F(AvoidUnnecessaryBeforeUnloadCheckSyncTest, EnabledWithSendBeforeUnload) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeaturesAndParameters(
-      /*enabled_features=*/{{features::kAvoidUnnecessaryBeforeUnloadCheckSync,
-                             {{features::
-                                   kAvoidUnnecessaryBeforeUnloadCheckSyncMode
-                                       .name,
-                               "WithSendBeforeUnload"}}}},
-      /*disabled_features=*/{});
-
-  TestBeforeUnloadBehaviorOnNavigation(
-      /*expect_beforeunload_processed_on_sendbeforeunload_stack=*/true,
-      /*expect_to_run_sendbeforeunload=*/true);
-}
-
-TEST_F(AvoidUnnecessaryBeforeUnloadCheckSyncTest, Disabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(
-      features::kAvoidUnnecessaryBeforeUnloadCheckSync);
-
-  TestBeforeUnloadBehaviorOnNavigation(
-      /*expect_beforeunload_processed_on_sendbeforeunload_stack=*/false,
-      /*expect_to_run_sendbeforeunload=*/true);
-}
-
-TEST_F(AvoidUnnecessaryBeforeUnloadCheckSyncTest,
-       EnabledWithSendBeforeUnloadButBrowserClientProhibits) {
-  ForcePostTaskContentBrowserClient force_post_task_content_browser_client;
-  ContentBrowserClient* old_browser_client =
-      SetBrowserClientForTesting(&force_post_task_content_browser_client);
-
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeaturesAndParameters(
-      /*enabled_features=*/{{features::kAvoidUnnecessaryBeforeUnloadCheckSync,
-                             {{features::
-                                   kAvoidUnnecessaryBeforeUnloadCheckSyncMode
-                                       .name,
-                               "WithSendBeforeUnload"}}}},
-      /*disabled_features=*/{});
-
-  // SupportsAvoidUnnecessaryBeforeUnloadCheckSync() takes precedence over
-  // enabling the kAvoidUnnecessaryBeforeUnloadCheckSync feature.
-  TestBeforeUnloadBehaviorOnNavigation(
-      /*expect_beforeunload_processed_on_sendbeforeunload_stack=*/false,
-      /*expect_to_run_sendbeforeunload=*/true);
-
-  SetBrowserClientForTesting(old_browser_client);
-}
-
-TEST_F(AvoidUnnecessaryBeforeUnloadCheckSyncTest,
-       EnabledWithoutSendBeforeUnload) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeaturesAndParameters(
-      /*enabled_features=*/{{features::kAvoidUnnecessaryBeforeUnloadCheckSync,
-                             {{features::
-                                   kAvoidUnnecessaryBeforeUnloadCheckSyncMode
-                                       .name,
-                               "WithoutSendBeforeUnload"}}}},
-      /*disabled_features=*/{});
-
-  TestBeforeUnloadBehaviorOnNavigation(
-      /*expect_beforeunload_processed_on_send_beforeunload_stack=*/std::nullopt,
-      /*expect_to_run_send_beforeunload=*/false);
-}
-
-TEST_F(AvoidUnnecessaryBeforeUnloadCheckSyncTest,
-       EnabledWithoutSendBeforeUnloadButBrowserClientProhibits) {
-  ForcePostTaskContentBrowserClient force_post_task_content_browser_client;
-  ContentBrowserClient* old_browser_client =
-      SetBrowserClientForTesting(&force_post_task_content_browser_client);
-
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeaturesAndParameters(
-      /*enabled_features=*/{{features::kAvoidUnnecessaryBeforeUnloadCheckSync,
-                             {{features::
-                                   kAvoidUnnecessaryBeforeUnloadCheckSyncMode
-                                       .name,
-                               "WithoutSendBeforeUnload"}}}},
-      /*disabled_features=*/{});
-
-  // SupportsAvoidUnnecessaryBeforeUnloadCheckSync() takes precedence over
-  // enabling the kAvoidUnnecessaryBeforeUnloadCheckSync feature.
-  TestBeforeUnloadBehaviorOnNavigation(
-      /*expect_beforeunload_processed_on_send_beforeunload_stack=*/false,
-      /*expect_to_run_send_beforeunload=*/true);
-
-  SetBrowserClientForTesting(old_browser_client);
-}
 
 class SkipBeforeUnloadDialogAndNavigateContentBrowserClient
     : public ContentBrowserClient {
@@ -1471,6 +1589,443 @@ TEST_F(RenderFrameHostImplTest, CapturedMediaStreamAddedRemoved) {
   EXPECT_CALL(observer, OnFrameIsCapturingMediaStreamChanged(main_rfh, false));
   main_rfh->OnMediaStreamRemoved(
       RenderFrameHostImpl::MediaStreamType::kCapturingMediaStream);
+}
+
+// Ensure that an invalid WindowOpenDisposition in CreateNewWindow causes a bad
+// message.
+TEST_F(RenderFrameHostImplTest, CreateNewWindowInvalidDisposition) {
+  mojom::CreateNewWindowParamsPtr params = mojom::CreateNewWindowParams::New();
+  params->disposition = WindowOpenDisposition::UNKNOWN;
+
+  // The bad message is reported to the process.
+  EXPECT_EQ(0, process()->bad_msg_count());
+
+  static_cast<RenderFrameHostImpl*>(main_rfh())
+      ->CreateNewWindow(std::move(params), base::DoNothing());
+
+  EXPECT_EQ(1, process()->bad_msg_count());
+}
+
+class RenderFrameHostImplCookieChangeListenerTest
+    : public RenderFrameHostImplTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  RenderFrameHostImplCookieChangeListenerTest() {
+    if (GetParam()) {
+      feature_list_.InitAndEnableFeature(
+          features::kBackForwardCacheCCNSIgnoreUnchangedCookies);
+    } else {
+      feature_list_.InitAndDisableFeature(
+          features::kBackForwardCacheCCNSIgnoreUnchangedCookies);
+    }
+  }
+
+ protected:
+  bool IsBackForwardCacheCCNSIgnoreUnchangedCookiesEnabled() {
+    return GetParam();
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         RenderFrameHostImplCookieChangeListenerTest,
+                         testing::Bool());
+
+// Tests the behavior of the `RenderFrameHostImpl::CookieChangeListener`.
+TEST_P(RenderFrameHostImplCookieChangeListenerTest, CookieChangeListener) {
+  StoragePartition* partition = main_rfh()->GetStoragePartition();
+  GURL url("https://example.com");
+  std::unique_ptr<RenderFrameHostImpl::CookieChangeListener> listener =
+      std::make_unique<RenderFrameHostImpl::CookieChangeListener>(partition,
+                                                                  url);
+  std::unique_ptr<net::CanonicalCookie> cookie_ignored =
+      net::CanonicalCookie::CreateForTesting(url, "a=1", base::Time::Now(),
+                                             net::CookieSourceType::kHTTP);
+  ASSERT_TRUE(cookie_ignored);
+  std::unique_ptr<net::CanonicalCookie> cookie_overwrite =
+      net::CanonicalCookie::CreateForTesting(url, "a=2", base::Time::Now(),
+                                             net::CookieSourceType::kHTTP);
+  ASSERT_TRUE(cookie_overwrite);
+  std::unique_ptr<net::CanonicalCookie> cookie_overwrite_no_change =
+      net::CanonicalCookie::CreateForTesting(url, "a=2", base::Time::Now(),
+                                             net::CookieSourceType::kHTTP);
+  ASSERT_TRUE(cookie_overwrite_no_change);
+
+  // Initially the count is 0.
+  listener->AddNavigationCookieToIgnoreForTesting(*cookie_ignored);
+  EXPECT_EQ(0, listener->cookie_change_info().cookie_modification_count);
+
+  // The counter doesn't change if the cookie change is ignored.
+  {
+    listener->OnCookieChangeForTesting(
+        net::CookieChangeInfo(*cookie_ignored, net::CookieAccessResult(),
+                              net::CookieChangeCause::INSERTED));
+    EXPECT_EQ(0, listener->cookie_change_info().cookie_modification_count);
+  }
+
+  // The counter increments if the ignored cookie gets changed for another time.
+  {
+    listener->OnCookieChangeForTesting(
+        net::CookieChangeInfo(*cookie_ignored, net::CookieAccessResult(),
+                              net::CookieChangeCause::INSERTED));
+    EXPECT_EQ(1, listener->cookie_change_info().cookie_modification_count);
+  }
+
+  // The counter increments if there is a new cookie value set.
+  {
+    listener->OnCookieChangeForTesting(
+        net::CookieChangeInfo(*cookie_overwrite, net::CookieAccessResult(),
+                              net::CookieChangeCause::INSERTED));
+    EXPECT_EQ(2, listener->cookie_change_info().cookie_modification_count);
+  }
+
+  // The counter increments if there is a cookie modification without value
+  // change and the `kBackForwardCacheCCNSIgnoreUnchangedCookies` is enabled.
+  {
+    net::CookieChangeInfo change_info(
+        *cookie_overwrite_no_change, net::CookieAccessResult(),
+        net::CookieChangeCause::INSERTED_NO_CHANGE_OVERWRITE);
+    listener->OnCookieChangeForTesting(change_info);
+    EXPECT_EQ(IsBackForwardCacheCCNSIgnoreUnchangedCookiesEnabled() ? 2 : 3,
+              listener->cookie_change_info().cookie_modification_count);
+  }
+
+  {
+    net::CookieChangeInfo change_info(
+        *cookie_overwrite_no_change, net::CookieAccessResult(),
+        net::CookieChangeCause::INSERTED_NO_VALUE_CHANGE_OVERWRITE);
+    listener->OnCookieChangeForTesting(change_info);
+    EXPECT_EQ(IsBackForwardCacheCCNSIgnoreUnchangedCookiesEnabled() ? 2 : 4,
+              listener->cookie_change_info().cookie_modification_count);
+  }
+}
+
+// Fixture for tests over the MIME-handler frame topology (embedder ->
+// extension OOPIF -> grandchild) through
+// `MimeHandlerOverrideContentBrowserClient`. Centralizes the scheme
+// registration, the ContentBrowserClient swap, and the canonical
+// embedder/extension/grandchild frame-tree helpers.
+class RenderFrameHostImplMimeHandlerTest : public RenderFrameHostImplTest {
+ public:
+  RenderFrameHostImplMimeHandlerTest() {
+    feature_list_.InitAndEnableFeature(
+        net::features::kThirdPartyStoragePartitioning);
+    url::AddStandardScheme("chrome-extension", url::SCHEME_WITH_HOST);
+    previous_client_ = SetBrowserClientForTesting(&modified_client_);
+  }
+
+  ~RenderFrameHostImplMimeHandlerTest() override {
+    SetBrowserClientForTesting(previous_client_);
+  }
+
+  void TearDown() override {
+    // Drop the raw_ptr to the extension frame before
+    // `RenderFrameHostImplTest::TearDown` destroys the WebContents and its
+    // RFHs, otherwise the dangling-pointer detector trips.
+    modified_client_.SetEffectiveTopFrame(nullptr);
+    RenderFrameHostImplTest::TearDown();
+  }
+
+ protected:
+  // Commits the main frame at the embedder URL and returns it.
+  TestRenderFrameHost* CommitEmbedder(const GURL& embedder_url) {
+    NavigationSimulator::CreateRendererInitiated(embedder_url, main_rfh())
+        ->Commit();
+    return main_test_rfh();
+  }
+
+  // Appends a child of `parent` and (optionally) commits a navigation to
+  // `url`. When `url` is empty, returns the still-uncommitted child.
+  TestRenderFrameHost* AppendAndMaybeCommit(TestRenderFrameHost* parent,
+                                            std::string_view name,
+                                            const GURL& url) {
+    auto* child = static_cast<TestRenderFrameHost*>(
+        content::RenderFrameHostTester::For(parent)->AppendChild(
+            std::string(name)));
+    if (url.is_empty()) {
+      return child;
+    }
+    return static_cast<TestRenderFrameHost*>(
+        NavigationSimulator::NavigateAndCommitFromDocument(url, child));
+  }
+
+  // main(embedder) → extension(extension_url) → grandchild(grandchild_url).
+  struct Subtree {
+    raw_ptr<TestRenderFrameHost> main_frame;
+    raw_ptr<TestRenderFrameHost> extension_frame;
+    raw_ptr<TestRenderFrameHost> grandchild_frame;
+  };
+  Subtree BuildEmbedderExtensionGrandchild(const GURL& embedder_url,
+                                           const GURL& extension_url,
+                                           const GURL& grandchild_url) {
+    Subtree tree;
+    tree.main_frame = CommitEmbedder(embedder_url);
+    tree.extension_frame =
+        AppendAndMaybeCommit(tree.main_frame, "extension", extension_url);
+    tree.grandchild_frame = AppendAndMaybeCommit(tree.extension_frame,
+                                                 "grandchild", grandchild_url);
+    return tree;
+  }
+
+  MimeHandlerOverrideContentBrowserClient modified_client_;
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+  url::ScopedSchemeRegistryForTests scoped_registry_;
+  raw_ptr<ContentBrowserClient> previous_client_ = nullptr;
+};
+
+namespace {
+constexpr char kEmbedderUrl[] = "https://embedder.com/doc.pdf";
+constexpr char kExtensionUrl[] = "chrome-extension://abc123/viewer.html";
+constexpr char kGrandchildUrl[] = "https://child-content.com/page.html";
+}  // namespace
+
+// Override active: the descendant's StorageKey uses the extension as
+// top_level_site, not the embedder. The extension frame itself stays
+// first-party (handled by `ShouldUseFirstPartyStorageKey`), and the
+// main frame is unaffected.
+TEST_F(RenderFrameHostImplMimeHandlerTest, StorageKeyMimeHandlerTruncation) {
+  Subtree tree = BuildEmbedderExtensionGrandchild(
+      GURL(kEmbedderUrl), GURL(kExtensionUrl), GURL(kGrandchildUrl));
+  modified_client_.SetEffectiveTopFrame(tree.extension_frame);
+
+  const net::SchemefulSite embedder_site(
+      url::Origin::Create(GURL(kEmbedderUrl)));
+  const net::SchemefulSite extension_site(
+      url::Origin::Create(GURL(kExtensionUrl)));
+
+  blink::StorageKey main_key = tree.main_frame->CalculateStorageKey(
+      tree.main_frame->GetLastCommittedOrigin(), /*nonce=*/nullptr);
+  EXPECT_EQ(embedder_site, main_key.top_level_site());
+  EXPECT_EQ(blink::mojom::AncestorChainBit::kSameSite,
+            main_key.ancestor_chain_bit());
+
+  blink::StorageKey extension_key = tree.extension_frame->CalculateStorageKey(
+      tree.extension_frame->GetLastCommittedOrigin(), /*nonce=*/nullptr);
+  EXPECT_EQ(extension_site, extension_key.top_level_site());
+  EXPECT_EQ(blink::mojom::AncestorChainBit::kSameSite,
+            extension_key.ancestor_chain_bit());
+
+  blink::StorageKey grandchild_key = tree.grandchild_frame->CalculateStorageKey(
+      tree.grandchild_frame->GetLastCommittedOrigin(), /*nonce=*/nullptr);
+  EXPECT_EQ(extension_site, grandchild_key.top_level_site());
+  EXPECT_EQ(blink::mojom::AncestorChainBit::kCrossSite,
+            grandchild_key.ancestor_chain_bit());
+}
+
+// No override: descendant's StorageKey falls through to the embedder.
+TEST_F(RenderFrameHostImplMimeHandlerTest, StorageKeyNoMimeHandlerTruncation) {
+  Subtree tree = BuildEmbedderExtensionGrandchild(
+      GURL(kEmbedderUrl), GURL(kExtensionUrl), GURL(kGrandchildUrl));
+
+  blink::StorageKey storage_key = tree.grandchild_frame->CalculateStorageKey(
+      tree.grandchild_frame->GetLastCommittedOrigin(), /*nonce=*/nullptr);
+
+  EXPECT_EQ(net::SchemefulSite(url::Origin::Create(GURL(kEmbedderUrl))),
+            storage_key.top_level_site());
+  EXPECT_EQ(blink::mojom::AncestorChainBit::kCrossSite,
+            storage_key.ancestor_chain_bit());
+}
+
+// Override active: descendant's IsolationInfo uses the extension as
+// top_frame_origin.
+TEST_F(RenderFrameHostImplMimeHandlerTest,
+       IsolationInfoMimeHandlerChildFrameOverride) {
+  Subtree tree = BuildEmbedderExtensionGrandchild(GURL(kEmbedderUrl),
+                                                  GURL(kExtensionUrl), GURL());
+  // Set the override before the grandchild navigates so its commit-time
+  // IsolationInfo sees the extension as effective top.
+  modified_client_.SetEffectiveTopFrame(tree.extension_frame);
+  tree.grandchild_frame = AppendAndMaybeCommit(
+      tree.extension_frame, "grandchild", GURL(kGrandchildUrl));
+
+  EXPECT_EQ(url::Origin::Create(GURL(kExtensionUrl)),
+            tree.grandchild_frame->GetIsolationInfoForSubresources()
+                .top_frame_origin());
+}
+
+// No override: descendant's IsolationInfo falls through to the embedder.
+TEST_F(RenderFrameHostImplMimeHandlerTest,
+       IsolationInfoNoMimeHandlerChildFrameOverride) {
+  Subtree tree = BuildEmbedderExtensionGrandchild(
+      GURL(kEmbedderUrl), GURL(kExtensionUrl), GURL(kGrandchildUrl));
+
+  EXPECT_EQ(url::Origin::Create(GURL(kEmbedderUrl)),
+            tree.grandchild_frame->GetIsolationInfoForSubresources()
+                .top_frame_origin());
+}
+
+// During the extension frame's own navigation, `IsExtensionHost` matches
+// by frame tree node id (set before the navigation commits), so the
+// override fires with `effective_top == this` while
+// `GetLastCommittedOrigin()` still returns the initial about:blank
+// inherited from the embedder. The override must use the pending
+// `frame_origin` instead.
+TEST_F(RenderFrameHostImplMimeHandlerTest,
+       IsolationInfoMimeHandlerSelfFramePendingCommit) {
+  TestRenderFrameHost* embedder = CommitEmbedder(GURL(kEmbedderUrl));
+  TestRenderFrameHost* extension_frame =
+      AppendAndMaybeCommit(embedder, "extension", GURL());
+  modified_client_.SetEffectiveTopFrame(extension_frame);
+
+  url::Origin extension_origin = url::Origin::Create(GURL(kExtensionUrl));
+  net::IsolationInfo info =
+      extension_frame->ComputeIsolationInfoForSubresourcesForPendingCommit(
+          extension_origin, /*is_credentialless=*/false,
+          /*fenced_frame_nonce_for_navigation=*/std::nullopt);
+
+  EXPECT_EQ(extension_origin, info.top_frame_origin());
+}
+
+// `DidNavigate` replicates the secure-context-root bit from the committing
+// NavigationRequest's commit_params. The extension frame commits at a
+// chrome-extension URL, so its `IsSecureContextRoot()` override fires and
+// the replicated bit is true; the embedder (non-extension URL) stays false.
+TEST_F(RenderFrameHostImplMimeHandlerTest,
+       DidNavigateReplicatesSecureContextRootFromCommitParams) {
+  TestRenderFrameHost* embedder = CommitEmbedder(GURL(kEmbedderUrl));
+  TestRenderFrameHost* extension_frame =
+      AppendAndMaybeCommit(embedder, "extension", GURL(kExtensionUrl));
+
+  EXPECT_TRUE(extension_frame->frame_tree_node()
+                  ->current_replication_state()
+                  .is_secure_context_root);
+  EXPECT_FALSE(embedder->frame_tree_node()
+                   ->current_replication_state()
+                   .is_secure_context_root);
+}
+
+// A freshly-appended child that has not committed any navigation is not a
+// secure-context root: the bit defaults to false and the dropped
+// new-frame-origin path leaves it untouched.
+TEST_F(RenderFrameHostImplMimeHandlerTest, NewFrameIsNotSecureContextRoot) {
+  TestRenderFrameHost* embedder = CommitEmbedder(GURL(kEmbedderUrl));
+  TestRenderFrameHost* child = AppendAndMaybeCommit(embedder, "child", GURL());
+
+  EXPECT_FALSE(child->frame_tree_node()
+                   ->current_replication_state()
+                   .is_secure_context_root);
+}
+
+// A same-document navigation (e.g. a fragment change) reuses the committed
+// document, so the frame's secure-context-root status cannot change. The
+// synchronous-commit NavigationRequest carries the default
+// `is_secure_context_root=false`, so `DidNavigate` must not clobber the bit
+// the cross-document commit established for the extension frame.
+TEST_F(RenderFrameHostImplMimeHandlerTest,
+       SameDocumentNavigationPreservesSecureContextRoot) {
+  TestRenderFrameHost* embedder = CommitEmbedder(GURL(kEmbedderUrl));
+  TestRenderFrameHost* extension_frame =
+      AppendAndMaybeCommit(embedder, "extension", GURL(kExtensionUrl));
+  ASSERT_TRUE(extension_frame->frame_tree_node()
+                  ->current_replication_state()
+                  .is_secure_context_root);
+
+  // Fragment navigation within the extension document.
+  NavigationSimulator::CreateRendererInitiated(
+      GURL(std::string(kExtensionUrl) + "#frag"), extension_frame)
+      ->CommitSameDocument();
+
+  EXPECT_TRUE(extension_frame->frame_tree_node()
+                  ->current_replication_state()
+                  .is_secure_context_root);
+}
+
+TEST_F(RenderFrameHostImplTest, NotificationServiceBlockedForPdf) {
+  UrlInfo url_info(
+      UrlInfoInit(GURL("https://foo.com/document.pdf"))
+          .WithEmbedderIsolationInfo(EmbedderIsolationInfo::CreateForPdf()));
+  scoped_refptr<SiteInstanceImpl> pdf_instance =
+      SiteInstanceImpl::CreateForUrlInfo(GetBrowserContext(), url_info,
+                                         /*is_guest=*/false,
+                                         /*is_fenced=*/false,
+                                         /*is_fixed_storage_partition=*/false);
+  std::unique_ptr<TestWebContents> pdf_web_contents =
+      TestWebContents::Create(GetBrowserContext(), pdf_instance);
+  TestRenderFrameHost* pdf_rfh = pdf_web_contents->GetPrimaryMainFrame();
+
+  mojo::FakeMessageDispatchContext fake_dispatch_context;
+  mojo::test::BadMessageObserver bad_message_observer;
+  mojo::Remote<blink::mojom::NotificationService> service;
+  pdf_rfh->CreateNotificationService(service.BindNewPipeAndPassReceiver());
+
+  EXPECT_EQ("PDF renderers may not bind blink.mojom.NotificationService",
+            bad_message_observer.WaitForBadMessage());
+}
+
+// Ensure that initiator policies are not inherited when the initiator is in a
+// different StoragePartition from the navigation.
+TEST_F(RenderFrameHostImplTest,
+       NoInitiatorPolicyInheritanceWithDifferentStoragePartitions) {
+  const GURL kRegularSite("https://default.com");
+  const GURL kCustomSite("https://custom.com");
+
+  // 1. Set up the custom storage partition client.
+  CustomStoragePartitionForSomeSites client(kCustomSite);
+  ScopedContentBrowserClientSetting setting(&client);
+
+  auto* default_partition =
+      static_cast<StoragePartitionImpl*>(main_rfh()->GetStoragePartition());
+
+  auto* browser_context = main_rfh()->GetBrowserContext();
+  StoragePartitionConfig config =
+      client.GetStoragePartitionConfigForSite(browser_context, kCustomSite);
+  auto* custom_partition = static_cast<StoragePartitionImpl*>(
+      browser_context->GetStoragePartition(config));
+
+  ASSERT_NE(default_partition, custom_partition);
+
+  // 2. Simulate a navigation to a page with the default StoragePartition.
+  NavigationSimulator::NavigateAndCommitFromBrowser(contents(), kRegularSite);
+  EXPECT_EQ(default_partition, main_rfh()->GetStoragePartition());
+  PolicyContainerPolicies kDefaultPolicies =
+      main_test_rfh()->policy_container_host()->policies().Clone();
+
+  // 3. Set some CSP on the page, so that we have non-default
+  // PolicyContainerPolicies.
+  auto csp = network::ParseContentSecurityPolicies(
+      "script-src https://default.com",
+      network::mojom::ContentSecurityPolicyType::kEnforce,
+      network::mojom::ContentSecurityPolicySource::kHTTP, kRegularSite);
+  main_test_rfh()
+      ->policy_container_host()
+      ->AddContentSecurityPoliciesForTesting(std::move(csp));
+
+  PolicyContainerPolicies initiator_policies =
+      main_test_rfh()->policy_container_host()->policies().Clone();
+  EXPECT_NE(kDefaultPolicies, initiator_policies);
+
+  // 4. Start a renderer-initiated navigation to the site that uses a
+  // non-default StoragePartition.
+  std::unique_ptr<NavigationSimulator> renderer_navigation =
+      NavigationSimulator::CreateRendererInitiated(kCustomSite,
+                                                   main_test_rfh());
+  renderer_navigation->ReadyToCommit();
+
+  // 5. The initiator policies should be recorded, but they should not be
+  // inheritable.
+  NavigationRequest* navigation_request = static_cast<NavigationRequest*>(
+      renderer_navigation->GetNavigationHandle());
+  EXPECT_NE(nullptr, navigation_request->GetInitiatorPolicyContainerPolicies());
+  EXPECT_EQ(initiator_policies,
+            *(navigation_request->GetInitiatorPolicyContainerPolicies()));
+  EXPECT_EQ(
+      nullptr,
+      navigation_request->GetInitiatorPolicyContainerPoliciesForInheritance());
+
+  // 6. Simulate the navigation commit. The RenderFrameHost committing the
+  // navigation should use a custom StoragePartition and it should not have
+  // inherited its policies from its initiator.
+  renderer_navigation->Commit();
+  EXPECT_EQ(custom_partition, main_test_rfh()->GetStoragePartition());
+
+  PolicyContainerPolicies policies =
+      main_test_rfh()->policy_container_host()->policies().Clone();
+  EXPECT_NE(initiator_policies, policies);
+  EXPECT_EQ(kDefaultPolicies, policies);
 }
 
 }  // namespace content

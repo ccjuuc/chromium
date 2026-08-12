@@ -16,14 +16,15 @@
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_refptr.h"
 #include "base/scoped_generic.h"
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "base/win/registry.h"
 #include "chrome/updater/policy/platform_policy_manager.h"
@@ -57,7 +58,7 @@ struct PolicySectionEvents
   virtual ~PolicySectionEvents() = default;
 };
 
-base::Value::Dict LoadGroupPolicies() {
+base::DictValue LoadGroupPolicies() {
   base::ScopedClosureRunner leave_policy_section_closure;
 
   if (base::IsManagedDevice()) {
@@ -95,7 +96,7 @@ base::Value::Dict LoadGroupPolicies() {
     }
   }
 
-  base::Value::Dict policies;
+  base::DictValue policies;
 
   for (base::win::RegistryValueIterator it(HKEY_LOCAL_MACHINE,
                                            UPDATER_POLICIES_KEY);

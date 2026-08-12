@@ -3,8 +3,10 @@
 // found in the LICENSE file.
 
 import {quoteString} from 'chrome://resources/js/util.js';
-import {CrLitElement, html} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+
+import {getHtml} from './searched_label.html.js';
 
 export class HistorySearchedLabelElement extends CrLitElement {
   static get is() {
@@ -12,7 +14,7 @@ export class HistorySearchedLabelElement extends CrLitElement {
   }
 
   override render() {
-    return html`<slot></slot>`;
+    return getHtml.bind(this)();
   }
 
   static override get properties() {
@@ -25,8 +27,8 @@ export class HistorySearchedLabelElement extends CrLitElement {
     };
   }
 
-  accessor searchTerm: string;
-  override accessor title: string;
+  accessor searchTerm: string = '';
+  override accessor title: string = '';
 
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);

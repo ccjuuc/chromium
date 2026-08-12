@@ -24,6 +24,8 @@ class CookieSyncDataTypeController : public syncer::DataTypeController {
   CookieSyncDataTypeController(
       std::unique_ptr<syncer::DataTypeControllerDelegate>
           delegate_for_full_sync_mode,
+      std::unique_ptr<syncer::DataTypeControllerDelegate>
+          delegate_for_transport_mode,
       syncer::SyncService* sync_service,
       PrefService* prefs);
 
@@ -34,7 +36,8 @@ class CookieSyncDataTypeController : public syncer::DataTypeController {
   ~CookieSyncDataTypeController() override;
 
   // syncer::DataTypeController:
-  PreconditionState GetPreconditionState() const override;
+  PreconditionState GetPreconditionState(
+      const PreconditionContext& context) const override;
 
  private:
   void OnFloatingSsoPrefChanged();

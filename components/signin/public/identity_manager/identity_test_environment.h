@@ -21,6 +21,10 @@
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "google_apis/gaia/gaia_id.h"
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+#include "components/signin/public/base/binding_key_registration_token_result.h"
+#endif
+
 class FakeProfileOAuth2TokenService;
 class IdentityTestEnvironmentBrowserStateAdaptor;
 class IdentityTestEnvironmentProfileAdaptor;
@@ -29,6 +33,10 @@ class TestSigninClient;
 
 namespace sync_preferences {
 class TestingPrefServiceSyncable;
+}
+
+namespace metrics {
+class ProfileMetricsService;
 }
 
 namespace network {
@@ -236,6 +244,13 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
   // an access token value of "access_token".
   void SetAutomaticIssueOfAccessTokens(bool grant);
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  void EnableTokenBindingRegistration();
+  void IssueTokenBindingRegistrationTokenForAuthCode(
+      std::string_view auth_code,
+      std::optional<signin::BindingKeyRegistrationTokenResult> result);
+#endif
+
   // Issues |token| in response to any access token request that either has (a)
   // already occurred and has not been matched by a previous call to this or
   // other WaitFor... method, or (b) will occur in the future. In the latter
@@ -414,13 +429,15 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
   static std::unique_ptr<IdentityManager> BuildIdentityManagerForTests(
       SigninClient* signin_client,
       PrefService* pref_service,
+      metrics::ProfileMetricsService* profile_metrics_service,
       base::FilePath user_data_dir);
 
   static std::unique_ptr<IdentityManager> FinishBuildIdentityManagerForTests(
       std::unique_ptr<AccountTrackerService> account_tracker_service,
       std::unique_ptr<ProfileOAuth2TokenService> token_service,
       SigninClient* signin_client,
-      PrefService* pref_service
+      PrefService* pref_service,
+      metrics::ProfileMetricsService* profile_metrics_service
 #if BUILDFLAG(IS_CHROMEOS)
       ,
       account_manager::AccountManagerFacade* account_manager_facade

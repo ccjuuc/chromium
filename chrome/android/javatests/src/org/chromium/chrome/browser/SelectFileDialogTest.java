@@ -25,6 +25,7 @@ import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
@@ -34,8 +35,8 @@ import org.chromium.base.test.util.UrlUtils;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.TestContentProvider;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.test.util.DOMUtils;
 import org.chromium.ui.base.ActivityWindowAndroid;
@@ -48,10 +49,11 @@ import java.io.File;
 /** Integration test for select file dialog used for <input type="file" /> */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@Batch(Batch.PER_CLASS)
 public class SelectFileDialogTest {
     @Rule
-    public FreshCtaTransitTestRule mActivityTestRule =
-            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.autoResetCtaActivityRule();
 
     @Rule public MockitoRule mockitoRule = MockitoJUnit.rule();
 
@@ -79,7 +81,7 @@ public class SelectFileDialogTest {
                     /* listenToActivityState= */ true,
                     IntentRequestTracker.createFromActivity(activity),
                     insetObserver,
-                    /* trackOcclusion= */ true);
+                    /* occlusionTrackingAllowed= */ true);
         }
 
         @Override
@@ -110,7 +112,7 @@ public class SelectFileDialogTest {
 
     @Before
     public void setUp() {
-        mActivityTestRule.startOnUrl(DATA_URL);
+        mActivityTestRule.startOnWebPage(DATA_URL);
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -136,9 +138,9 @@ public class SelectFileDialogTest {
     @Test
     @MediumTest
     @Feature({"TextInput", "Main"})
-    @DisabledTest(message = "https://crbug.com/724163")
+    @DisabledTest(message = "https://crbug.com/40521518")
     public void testSelectFileAndCancelRequest() throws Throwable {
-        // TODO(aurimas) remove this wait once crbug.com/179511 is fixed.
+        // TODO(aurimas) remove this wait once crbug.com/40303742 is fixed.
         // Wait for page scale will timeout and causing the test to fail.
         mActivityTestRule.assertWaitForPageScaleFactorMatch(2);
         {

@@ -18,15 +18,15 @@ namespace commerce {
 class ShoppingService;
 }  // namespace commerce
 
-@protocol ApplicationCommands;
 class AuthenticationService;
 class FaviconLoader;
 @protocol NewTabPageActionsDelegate;
 class PrefService;
 @protocol PriceTrackingPromoActionDelegate;
-@class PriceTrackingPromoItem;
+@class PriceTrackingPromoConfig;
 @protocol PriceTrackingPromoMediatorDelegate;
 class PushNotificationService;
+@protocol SceneCommands;
 @protocol SnackbarCommands;
 
 // Mediator for the Price Tracking Promo card in the Magic Stack.
@@ -36,7 +36,7 @@ class PushNotificationService;
 @property(nonatomic, weak) id<PriceTrackingPromoMediatorDelegate> delegate;
 
 // Dispatcher.
-@property(nonatomic, weak) id<ApplicationCommands, SnackbarCommands> dispatcher;
+@property(nonatomic, weak) id<SceneCommands, SnackbarCommands> dispatcher;
 
 // Delegate to delegate actions to the owner of the PriceTrackingPromoMediator
 @property(nonatomic, weak) id<PriceTrackingPromoActionDelegate> actionDelegate;
@@ -73,7 +73,7 @@ class PushNotificationService;
 
 // Data for price tracking promo to show. Includes the image for the
 // latest subscription to be displayed.
-- (PriceTrackingPromoItem*)priceTrackingPromoItemToShow;
+- (PriceTrackingPromoConfig*)priceTrackingPromoConfigToShow;
 
 // Enable price tracking notifications settings and show
 // snackbar giving user the option to manage these settings.

@@ -67,7 +67,11 @@ public class PostMessageHandler implements OriginVerificationListener {
         mPostMessageBackend = postMessageBackend;
         mMessageCallback =
                 (messagePayload, sentPorts) -> {
-                    assumeNonNull(mChannel);
+                    if (mChannel == null) {
+                        Log.e(TAG, "Discarding postMessage as channel is null.");
+                        return;
+                    }
+
                     if (mChannel[0].isTransferred()) {
                         Log.e(TAG, "Discarding postMessage as channel has been transferred.");
                         return;
@@ -99,24 +103,20 @@ public class PostMessageHandler implements OriginVerificationListener {
      */
     public void reset(final @Nullable WebContents webContents) {
         if (webContents == null || webContents.isDestroyed()) {
-            disconnectChannel();
+            closeChannelAndForgetWebContents();
             return;
         }
         // Can't reset with the same web contents twice.
         if (webContents.equals(mWebContents)) return;
         mWebContents = webContents;
-        if (mPostMessageSourceUri == null) return;
         new WebContentsObserver(webContents) {
             private boolean mNavigatedOnce;
 
             @Override
             public void didFinishNavigationInPrimaryMainFrame(NavigationHandle navigation) {
-                if (mNavigatedOnce
-                        && navigation.hasCommitted()
-                        && !navigation.isSameDocument()
-                        && mChannel != null) {
-                    observe(null);
-                    disconnectChannel();
+                if (mNavigatedOnce && navigation.hasCommitted() && !navigation.isSameDocument()) {
+                    mPostMessageSourceUri = null;
+                    closeChannel();
                     return;
                 }
                 mNavigatedOnce = true;
@@ -125,7 +125,7 @@ public class PostMessageHandler implements OriginVerificationListener {
             @Override
             public void primaryMainFrameRenderProcessGone(
                     @TerminationStatus int terminationStatus) {
-                disconnectChannel();
+                closeChannelAndForgetWebContents();
             }
 
             @Override
@@ -133,7 +133,7 @@ public class PostMessageHandler implements OriginVerificationListener {
                     Page page,
                     GlobalRenderFrameHostId rfhId,
                     @LifecycleState int rfhLifecycleState) {
-                if (mChannel != null) {
+                if (mChannel != null || mPostMessageSourceUri == null) {
                     return;
                 }
                 initializeWithWebContents(webContents);
@@ -155,16 +155,36 @@ public class PostMessageHandler implements OriginVerificationListener {
         mPostMessageBackend.onNotifyMessageChannelReady(null);
     }
 
-    private void disconnectChannel() {
+    /**
+     * Closes the message channel and notifies the client that it is gone, keeping the {@link
+     * WebContents}. The client can re-establish messaging for the new document by calling
+     * requestPostMessageChannel() again, which re-verifies the origin and re-enters {@link
+     * #initializeWithPostMessageUri}.
+     */
+    private void closeChannel() {
         if (mChannel == null) return;
         mChannel[0].close();
         mChannel = null;
-        mWebContents = null;
         mPostMessageBackend.onDisconnectChannel(ContextUtils.getApplicationContext());
     }
 
     /**
+     * Closes the message channel and additionally drops the {@link WebContents}, for the cases
+     * where it can no longer host a channel at all (destroyed, swapped out, or renderer gone). No
+     * channel can be re-established until {@link #reset} supplies a new {@link WebContents}.
+     */
+    private void closeChannelAndForgetWebContents() {
+        // The reference is only dropped when there was a live channel: keeping a stale
+        // WebContents otherwise is what makes reset() bail out early instead of attaching a
+        // second observer to the same WebContents.
+        if (mChannel == null) return;
+        closeChannel();
+        mWebContents = null;
+    }
+
+    /**
      * Sets the postMessage postMessageUri for this session to the given {@link Uri}.
+     *
      * @param postMessageUri The postMessageUri value to be set.
      */
     public void initializeWithPostMessageUri(Uri postMessageUri, @Nullable Uri targetOrigin) {

@@ -9,11 +9,14 @@
 #include <memory>
 #include <optional>
 
+#include "base/synchronization/lock.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/thread_annotations.h"
 #include "base/types/optional_ref.h"
 #include "base/types/pass_key.h"
 #include "build/build_config.h"
 #include "cc/input/browser_controls_state.h"
+#include "cc/metrics/scroll_sequence_tracker.h"
 #include "cc/trees/paint_holding_reason.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -52,26 +55,15 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
     : public ThreadSafeRefCounted<WidgetInputHandlerManager>,
       public InputHandlerProxyClient,
       public MainThreadEventQueueClient {
-  // Used in UMA metrics reporting. Do not re-order, and rename the metric if
-  // additional states are required.
-  enum class InitialInputTiming {
-    // Input comes before lifecycle update
-    kBeforeLifecycle = 0,
-    // Input is before commit
-    kBeforeCommit = 1,
-    // Input comes before first paint
-    kBeforeFirstPaint = 2,
-    // Input comes only after first paint
-    kAfterFirstPaint = 3,
-    kMaxValue = kAfterFirstPaint
-  };
-
  public:
   // For use in bitfields to keep track of why we should keep suppressing input
   // events. Maybe the rendering pipeline is currently deferring something, or
   // we are still waiting for the user to see some non empty paint. And we use
   // the combination of states to correctly report UMA for input that is
   // suppressed.
+  //
+  // TODO(mustaq@chromium.org): Investigate which of these bits are still used
+  // in the codebase, and remove the rest.
   enum class SuppressingInputEventsBits {
     // if set, suppress events because pipeline is deferring main frame updates
     kDeferMainFrameUpdates = 1 << 0,
@@ -79,8 +71,6 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
     kDeferCommits = 1 << 1,
     // if set, we have not painted a main frame from the current navigation yet
     kHasNotPainted = 1 << 2,
-    // if set, we are not visible, and should not accept any input
-    kHidden = 1 << 3,
   };
 
   // The `widget` and `frame_widget_input_handler` should be invalidated
@@ -124,11 +114,10 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
                         std::unique_ptr<cc::EventMetrics> metrics,
                         HandledEventCallback handled_callback) override;
   void InputEventsDispatched(bool raf_aligned) override;
-  void SetNeedsMainFrame(bool urgent) override;
+  void SetNeedsMainFrame(cc::BeginMainFrameReason reason, bool urgent) override;
   bool RequestedMainFramePending() override;
 
-  void OnFirstContentfulPaint(const base::TimeTicks& first_paint_time);
-  void SetHidden(bool hidden);
+  void OnFirstContentfulPaint();
   void OnDevToolsSessionConnectionChanged(bool attached);
 
   // InputHandlerProxyClient overrides.
@@ -149,8 +138,10 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
 
   void ProcessTouchAction(cc::TouchAction touch_action);
 
-  mojom::blink::WidgetInputHandlerHost* GetWidgetInputHandlerHost();
-  mojom::blink::WidgetInputHandlerHost* GetVizWidgetInputHandlerHost();
+  mojo::SharedRemote<mojom::blink::WidgetInputHandlerHost>
+  GetWidgetInputHandlerHost();
+  mojo::SharedRemote<mojom::blink::WidgetInputHandlerHost>
+  GetVizWidgetInputHandlerHost();
 
 #if BUILDFLAG(IS_ANDROID)
   void AttachSynchronousCompositor(
@@ -221,8 +212,8 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
   void SetInputHandlerProxyForTesting(
       std::unique_ptr<InputHandlerProxy> input_handler_proxy);
 
-  base::WeakPtr<WidgetInputHandlerManager> AsWeakPtr() {
-    return weak_ptr_factory_.GetWeakPtr();
+  void set_destruction_callback_for_testing(base::OnceClosure callback) {
+    destruction_callback_for_testing_ = std::move(callback);
   }
 
   uint16_t suppressing_input_events_state() const {
@@ -233,12 +224,14 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
   int HandwritingRadiusOnInputThread() const {
     return input_handler_proxy_->HandwritingRadiusOnInputThread();
   }
+  void PostSetPointerLockedToInputThread(bool is_locked);
 
  private:
   friend class ThreadSafeRefCounted<WidgetInputHandlerManager>;
   ~WidgetInputHandlerManager() override;
 
   void InitInputHandler();
+
   void InitOnInputHandlingThread(
       const base::WeakPtr<cc::CompositorDelegateForInput>& compositor_delegate,
       bool sync_compositing);
@@ -322,23 +315,14 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
   const scoped_refptr<base::SingleThreadTaskRunner>& InputThreadTaskRunner(
       TaskRunnerType type = TaskRunnerType::kDefault) const;
 
-  void LogInputTimingUMA();
-
-  // Records event UMA using the given `first_paint_time`.  If no paint occurred
-  // before this method is called, `first_paint_time` must be passed as
-  // `TimeTicks` zero.
-  void RecordEventMetricsForPaintTiming(
-      std::optional<base::TimeTicks> first_paint_time);
-
-  // Start `first_paint_max_delay_timer_` if not started already.  This runs on
-  // the main thread.
-  void StartFirstPaintMaxDelayTimer();
-
   // Helpers for FlushEventQueuesForTesting.
   void FlushCompositorQueueForTesting();
   void FlushMainThreadQueueForTesting(base::OnceClosure done);
 
-  void OnVizHostDisconnected() { viz_host_.reset(); }
+  void OnVizHostDisconnected() {
+    base::AutoLock lock(viz_host_lock_);
+    viz_host_.reset();
+  }
 
   // Only valid to be called on the main thread.
   base::WeakPtr<WidgetBase> widget_;
@@ -346,18 +330,18 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
       frame_widget_input_handler_;
   scoped_refptr<scheduler::WidgetScheduler> widget_scheduler_;
 
-  // This caches `widget_->is_embedded()` value for access from outside the main
-  // thread (where `widget_` is not usable).
-  const bool widget_is_embedded_;
-
   // InputHandlerProxy is only interacted with on the compositor
   // thread.
   std::unique_ptr<InputHandlerProxy> input_handler_proxy_;
 
   // The WidgetInputHandlerHost is bound on the compositor task runner
   // but class can be called on the compositor and main thread.
-  mojo::SharedRemote<mojom::blink::WidgetInputHandlerHost> host_;
-  mojo::SharedRemote<mojom::blink::WidgetInputHandlerHost> viz_host_;
+  base::Lock host_lock_;
+  mojo::SharedRemote<mojom::blink::WidgetInputHandlerHost> host_
+      GUARDED_BY(host_lock_);
+  base::Lock viz_host_lock_;
+  mojo::SharedRemote<mojom::blink::WidgetInputHandlerHost> viz_host_
+      GUARDED_BY(viz_host_lock_);
 
   // Any thread can access these variables.
   scoped_refptr<base::SingleThreadTaskRunner> main_thread_task_runner_;
@@ -383,34 +367,6 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
   // we definitely don't have a compositor thread.
   bool uses_input_handler_ = false;
 
-  struct UmaData {
-    // Saves the number of user-interactions that would be dropped by the
-    // DropInputEventsBeforeFirstPaint feature (i.e. before receiving the first
-    // presentation of content).
-    int suppressed_interactions_count = 0;
-
-    // Saves the number of events that would be dropped by the
-    // DropInputEventsBeforeFirstPaint feature (i.e. before receiving the first
-    // presentation of content).
-    int suppressed_events_count = 0;
-
-    // Saves most recent input event time that would be dropped by the
-    // DropInputEventsBeforeFirstPaint feature (i.e. before receiving the first
-    // presentation of content). If this is after the first paint timestamp,
-    // we log the difference to track the worst dropped event experienced.
-    base::TimeTicks most_recent_suppressed_event_time;
-
-    // Control of UMA. We emit one UMA metric per navigation telling us
-    // whether any non-move input arrived before we starting updating the page
-    // or displaying content to the user. It must be atomic because navigation
-    // can occur on the renderer thread (resetting this) coincident with the UMA
-    // being sent on the compositor thread.
-    bool have_emitted_uma{false};
-  };
-
-  base::Lock uma_data_lock_;
-  UmaData uma_data_;
-
   // State tracking why we should keep suppressing input events, keeps track of
   // which parts of the rendering pipeline are currently deferred, or whether
   // we are waiting for the first non empty paint. We use this state to suppress
@@ -431,23 +387,14 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
   // coverage for input suppression: crbug.com/987626
   bool allow_pre_commit_input_ = false;
 
-  // Specifies weather the renderer has received a scroll-update event after the
-  // last scroll-begin or not, It is used to determine whether a scroll-update
-  // is the first one in a scroll sequence or not. This variable is only used on
-  // the input handling thread (i.e. on the compositor thread if it exists).
-  bool has_seen_first_gesture_scroll_update_after_begin_ = false;
+  // Tracks the current scroll sequence for metrics purposes. Among other
+  // things, it determines whether a scroll-update is the first one in a scroll
+  // sequence or not. This variable is only used on the input handling thread
+  // (i.e. on the compositor thread if it exists).
+  cc::ScrollSequenceTracker scroll_tracker_;
 
   // Timer for count dropped events.
   std::unique_ptr<base::OneShotTimer> dropped_event_counts_timer_;
-
-  // Timer to detect if first visibly non-empty paint happened after an
-  // acceptable maximum delay.  This timer is allocated and run on the main
-  // thread.
-  std::unique_ptr<base::OneShotTimer> first_paint_max_delay_timer_;
-
-  // Tracks whether `RecordEventMetricsForPaintTiming` has already recorded the
-  // UMA related to first paint.
-  bool recorded_event_metric_for_paint_timing_ = false;
 
   unsigned dropped_pointer_down_ = 0;
 
@@ -461,12 +408,8 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
   const bool allow_scroll_resampling_ = true;
 
   std::atomic<bool> dev_tools_session_attached_ = false;
-  const bool ignore_hidden_input_;
-  // The timestamp when the widget was hidden. Used to track the duration of
-  // hidden state.
-  base::TimeTicks hidden_received_;
 
-  base::WeakPtrFactory<WidgetInputHandlerManager> weak_ptr_factory_{this};
+  base::OnceClosure destruction_callback_for_testing_;
 };
 
 }  // namespace blink

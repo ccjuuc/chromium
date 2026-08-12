@@ -35,6 +35,19 @@ class BoxBorderPainter {
         .Paint();
   }
 
+  // Paints the border area mask in opaque black, ignoring border colors and
+  // dark mode. Used by background-clip: border-area to create a DstIn mask
+  // that clips the background to where the border strokes would paint.
+  static void PaintBorderArea(GraphicsContext& context,
+                              const PhysicalRect& border_rect,
+                              const ComputedStyle& style,
+                              BackgroundBleedAvoidance bleed_avoidance,
+                              PhysicalBoxSides sides_to_include) {
+    BoxBorderPainter(context, border_rect, style, bleed_avoidance,
+                     sides_to_include, BorderAreaMaskTag::kTag)
+        .Paint();
+  }
+
   static void PaintSingleRectOutline(GraphicsContext& context,
                                      const ComputedStyle& style,
                                      const PhysicalRect& border_rect,
@@ -60,12 +73,21 @@ class BoxBorderPainter {
                                 const AutoDarkMode& auto_dark_mode);
 
  private:
+  enum class BorderAreaMaskTag { kTag };
+
   // For PaintBorder().
   BoxBorderPainter(GraphicsContext&,
                    const PhysicalRect& border_rect,
                    const ComputedStyle&,
                    BackgroundBleedAvoidance,
                    PhysicalBoxSides sides_to_include);
+  // For PaintBorderArea().
+  BoxBorderPainter(GraphicsContext&,
+                   const PhysicalRect& border_rect,
+                   const ComputedStyle&,
+                   BackgroundBleedAvoidance,
+                   PhysicalBoxSides sides_to_include,
+                   BorderAreaMaskTag);
   // For PaintSingleRectOutline().
   BoxBorderPainter(GraphicsContext&,
                    const ComputedStyle&,
@@ -82,6 +104,7 @@ class BoxBorderPainter {
     kHardMiter,  // Not anti-aliased
   };
 
+  void InitFromEdges(const PhysicalRect& border_rect);
   void ComputeBorderProperties();
 
   BorderEdgeFlags PaintOpacityGroup(const ComplexBorderInfo&,
@@ -155,21 +178,24 @@ class BoxBorderPainter {
   const BackgroundBleedAvoidance bleed_avoidance_;
   const PhysicalBoxSides sides_to_include_;
 
+  // invariant attributes
+  const DarkModeFilter::ElementRole element_role_ =
+      DarkModeFilter::ElementRole::kBorder;
+
   // computed attributes
   ContouredRect outer_;
   ContouredRect inner_;
   BorderEdgeArray edges_;
 
-  unsigned visible_edge_count_;
-  unsigned first_visible_edge_;
-  BorderEdgeFlags visible_edge_set_;
-  DarkModeFilter::ElementRole element_role_;
+  unsigned visible_edge_count_ = 0;
+  unsigned first_visible_edge_ = 0;
+  BorderEdgeFlags visible_edge_set_ = 0;
 
-  bool is_uniform_style_;
-  bool is_uniform_width_;
-  bool is_uniform_color_;
-  bool is_rounded_;
-  bool has_transparency_;
+  bool is_uniform_style_ = true;
+  bool is_uniform_width_ = true;
+  bool is_uniform_color_ = true;
+  bool is_rounded_ = false;
+  bool has_transparency_ = false;
 };
 
 }  // namespace blink

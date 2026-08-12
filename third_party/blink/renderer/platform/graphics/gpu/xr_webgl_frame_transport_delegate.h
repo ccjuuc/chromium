@@ -53,10 +53,11 @@ class PLATFORM_EXPORT XRWebGLFrameTransportDelegate
 
   // XRFrameTransportDelegate overrides
   void WaitOnFence(gfx::GpuFence* fence) override;
-  gpu::SyncToken GenerateSyncToken() override;
+  void VerifySyncToken(gpu::SyncToken& sync_token) override;
   std::pair<gfx::GpuMemoryBufferHandle, gpu::SyncToken> CopyImage(
-      const scoped_refptr<StaticBitmapImage>& image,
+      SharedImageHolder* image,
       bool last_transfer_succeeded) override;
+  bool IsContextLost() override;
 
   // GarbageCollected override
   void Trace(Visitor* visitor) const override;

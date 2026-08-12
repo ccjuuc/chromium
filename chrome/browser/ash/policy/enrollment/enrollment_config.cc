@@ -8,21 +8,21 @@
 #include <string>
 #include <string_view>
 
+#include "ash/constants/ash_login_pref_names.h"
+#include "ash/constants/ash_policy_pref_names.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "base/values.h"
 #include "chrome/browser/ash/login/configuration_keys.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/oobe_configuration.h"
 #include "chrome/browser/ash/login/wizard_context.h"
 #include "chrome/browser/ash/policy/enrollment/enrollment_token_provider.h"
 #include "chrome/browser/ash/policy/server_backed_state/server_backed_device_state.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
@@ -31,7 +31,7 @@
 namespace policy {
 namespace {
 
-std::string GetString(const base::Value::Dict& dict, std::string_view key) {
+std::string GetString(const base::DictValue& dict, std::string_view key) {
   const std::string* value = dict.FindString(key);
   return value ? *value : std::string();
 }
@@ -99,33 +99,30 @@ std::string_view ToStringView(EnrollmentConfig::Mode mode) {
 #undef CASE
 }
 
-EnrollmentConfig GetPrescribedRecoveryConfig(
-    PrefService* local_state,
+std::optional<EnrollmentConfig> GetPrescribedRecoveryConfig(
+    PrefService& local_state,
     const ash::InstallAttributes& install_attributes,
     ash::system::StatisticsProvider* statistics_provider) {
-  EnrollmentConfig recovery_config;
-
-  // Regardless what mode is applicable, the enrollment domain is fixed.
-  recovery_config.management_domain = install_attributes.GetDomain();
-
-  if (!local_state->GetBoolean(prefs::kEnrollmentRecoveryRequired)) {
-    return recovery_config;
+  if (!local_state.GetBoolean(ash::prefs::kEnrollmentRecoveryRequired)) {
+    return std::nullopt;
   }
 
   if (ash::DeviceSettingsService::IsInitialized() &&
       ash::DeviceSettingsService::Get()->HasDmToken()) {
     LOG(WARNING) << "False recovery flag.";
-    local_state->ClearPref(::prefs::kEnrollmentRecoveryRequired);
-    return recovery_config;
+    local_state.ClearPref(ash::prefs::kEnrollmentRecoveryRequired);
+    return std::nullopt;
   }
 
   LOG(WARNING) << "Enrollment recovery required according to pref.";
   const auto serial_number = statistics_provider->GetMachineID();
   if (!serial_number || serial_number->empty()) {
     LOG(WARNING) << "Postponing recovery because machine id is missing.";
-    return recovery_config;
+    return std::nullopt;
   }
 
+  EnrollmentConfig recovery_config;
+  recovery_config.management_domain = install_attributes.GetDomain();
   recovery_config.mode = EnrollmentConfig::MODE_RECOVERY;
 
   return recovery_config;
@@ -188,18 +185,18 @@ struct EnrollmentConfig::PrescribedConfig {
   OOBEConfigSource oobe_config_source = OOBEConfigSource::kNone;
 
   static PrescribedConfig GetPrescribedConfig(
-      PrefService* local_state,
+      PrefService& local_state,
       ash::system::StatisticsProvider* statistics_provider,
-      const base::Value::Dict& device_state,
+      const base::DictValue& device_state,
       const ash::OobeConfiguration* oobe_configuration);
 };
 
 // static
 EnrollmentConfig::PrescribedConfig
 EnrollmentConfig::PrescribedConfig::GetPrescribedConfig(
-    PrefService* local_state,
+    PrefService& local_state,
     ash::system::StatisticsProvider* statistics_provider,
-    const base::Value::Dict& device_state,
+    const base::DictValue& device_state,
     const ash::OobeConfiguration* oobe_configuration) {
   // Decide enrollment mode. Give precedence to forced variants.
   if (IsEnrollingAfterRollback()) {
@@ -260,14 +257,14 @@ EnrollmentConfig::PrescribedConfig::GetPrescribedConfig(
   }
 
   const bool pref_enrollment_auto_start_present =
-      local_state->HasPrefPath(prefs::kDeviceEnrollmentAutoStart);
+      local_state.HasPrefPath(ash::prefs::kDeviceEnrollmentAutoStart);
   const bool pref_enrollment_auto_start =
-      local_state->GetBoolean(prefs::kDeviceEnrollmentAutoStart);
+      local_state.GetBoolean(ash::prefs::kDeviceEnrollmentAutoStart);
 
   const bool pref_enrollment_can_exit_present =
-      local_state->HasPrefPath(prefs::kDeviceEnrollmentCanExit);
+      local_state.HasPrefPath(ash::prefs::kDeviceEnrollmentCanExit);
   const bool pref_enrollment_can_exit =
-      local_state->GetBoolean(prefs::kDeviceEnrollmentCanExit);
+      local_state.GetBoolean(ash::prefs::kDeviceEnrollmentCanExit);
 
   if (pref_enrollment_auto_start_present && pref_enrollment_auto_start &&
       pref_enrollment_can_exit_present && !pref_enrollment_can_exit) {
@@ -288,7 +285,7 @@ EnrollmentConfig::PrescribedConfig::GetPrescribedConfig(
     return {.mode = EnrollmentConfig::MODE_LOCAL_FORCED};
   }
 
-  if (local_state->GetBoolean(ash::prefs::kOobeComplete)) {
+  if (local_state.GetBoolean(ash::prefs::kOobeComplete)) {
     // If OOBE is complete, don't return advertised modes as there's currently
     // no way to make sure advertised enrollment only gets shown once.
     return {.mode = EnrollmentConfig::MODE_NONE};
@@ -317,13 +314,13 @@ struct EnrollmentConfig::PrescribedLicense {
   LicenseType license_type = LicenseType::kNone;
 
   static PrescribedLicense GetPrescribedLicense(
-      const base::Value::Dict& device_state);
+      const base::DictValue& device_state);
 };
 
 // static
 EnrollmentConfig::PrescribedLicense
 EnrollmentConfig::PrescribedLicense::GetPrescribedLicense(
-    const base::Value::Dict& device_state) {
+    const base::DictValue& device_state) {
   EnrollmentConfig::AssignedUpgradeType assigned_upgrade_type =
       EnrollmentConfig::AssignedUpgradeType::
           kAssignedUpgradeTypeChromeEnterprise;
@@ -371,32 +368,38 @@ EnrollmentConfig::EnrollmentConfig(PrescribedConfig prescribed_config,
       oobe_config_source(prescribed_config.oobe_config_source) {}
 
 // static
-EnrollmentConfig EnrollmentConfig::GetPrescribedEnrollmentConfig() {
+EnrollmentConfig EnrollmentConfig::GetPrescribedEnrollmentConfig(
+    PrefService& local_state) {
   return GetPrescribedEnrollmentConfig(
-      g_browser_process->local_state(), *ash::InstallAttributes::Get(),
+      local_state, *ash::InstallAttributes::Get(),
       ash::system::StatisticsProvider::GetInstance(),
       ash::OobeConfiguration::Get());
 }
 
 // static
 EnrollmentConfig EnrollmentConfig::GetPrescribedEnrollmentConfig(
-    PrefService* local_state,
+    PrefService& local_state,
     const ash::InstallAttributes& install_attributes,
     ash::system::StatisticsProvider* statistics_provider,
     const ash::OobeConfiguration* oobe_configuration) {
-  DCHECK(local_state);
   DCHECK(statistics_provider);
   DCHECK(oobe_configuration);
-  // If OOBE is done and the device is enrolled, check for need to recover
-  // enrollment.
-  if (local_state->GetBoolean(ash::prefs::kOobeComplete) &&
-      install_attributes.IsCloudManaged()) {
-    return GetPrescribedRecoveryConfig(local_state, install_attributes,
-                                       statistics_provider);
+
+  // Return enrollment recovery config if required.
+  if (std::optional<EnrollmentConfig> maybe_recovery_config =
+          GetPrescribedRecoveryConfig(local_state, install_attributes,
+                                      statistics_provider)) {
+    return maybe_recovery_config.value();
   }
 
-  const base::Value::Dict& device_state =
-      local_state->GetDict(prefs::kServerBackedDeviceState);
+  // If OOBE is done and the device is enrolled, no need to enroll.
+  if (local_state.GetBoolean(ash::prefs::kOobeComplete) &&
+      install_attributes.IsCloudManaged()) {
+    return EnrollmentConfig{};
+  }
+
+  const base::DictValue& device_state =
+      local_state.GetDict(ash::prefs::kServerBackedDeviceState);
 
   return EnrollmentConfig(
       PrescribedConfig::GetPrescribedConfig(local_state, statistics_provider,
@@ -427,14 +430,14 @@ EnrollmentConfig EnrollmentConfig::GetEffectiveConfig() const {
   return manual_config;
 }
 
-EnrollmentConfig EnrollmentConfig::GetManualFallbackConfig() const {
-  CHECK(is_mode_with_manual_fallback())
-      << "Only automatic enrollment config can produce manual fallback config. "
-         "Got "
-      << *this;
+std::optional<EnrollmentConfig> EnrollmentConfig::GetManualFallbackConfig()
+    const {
+  if (!is_mode_with_manual_fallback()) {
+    return std::nullopt;
+  }
 
-  EnrollmentConfig manual_fallback_config = *this;
-  manual_fallback_config.mode = GetManualFallbackMode(mode);
+  std::optional<EnrollmentConfig> manual_fallback_config = *this;
+  manual_fallback_config->mode = GetManualFallbackMode(mode);
 
   return manual_fallback_config;
 }

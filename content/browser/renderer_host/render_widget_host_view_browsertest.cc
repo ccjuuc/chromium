@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
@@ -63,10 +64,15 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/page/content_to_visible_time_reporter.h"
+#include "third_party/blink/public/common/page/content_to_visible_time_request.h"
 #include "third_party/blink/public/mojom/page/page_visibility_state.mojom-shared.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/display/display_switches.h"
 #include "ui/gfx/geometry/size_conversions.h"
+
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
 
 #if defined(USE_AURA)
 #include "content/browser/renderer_host/delegated_frame_host.h"
@@ -76,6 +82,7 @@
 #if BUILDFLAG(IS_ANDROID)
 #include "content/browser/renderer_host/compositor_impl_android.h"
 #include "content/browser/renderer_host/render_widget_host_view_android.h"
+#include "gpu/command_buffer/client/client_shared_image.h"
 #include "ui/android/delegated_frame_host_android.h"
 #endif
 
@@ -642,6 +649,21 @@ IN_PROC_BROWSER_TEST_F(BFCachedRenderWidgetHostViewBrowserTest,
       NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
   RenderFrameHostWrapper rfh1(shell()->web_contents()->GetPrimaryMainFrame());
 
+#if BUILDFLAG(IS_OZONE)
+  if (ui::OzonePlatform::RunningOnWaylandForTest()) {
+    // Process any pending platform resize/configure events to stabilize the
+    // SurfaceId.
+    viz::SurfaceId stable_id;
+    viz::SurfaceId new_stable_id =
+        GetCurrentSurfaceIdOnDelegatedFrameHost(rfh1->GetView());
+    while (new_stable_id != stable_id) {
+      stable_id = new_stable_id;
+      GiveItSomeTime();
+      new_stable_id = GetCurrentSurfaceIdOnDelegatedFrameHost(rfh1->GetView());
+    }
+  }
+#endif
+
   const auto id_before_cached =
       GetCurrentSurfaceIdOnDelegatedFrameHost(rfh1->GetView());
   ASSERT_TRUE(id_before_cached.is_valid());
@@ -883,7 +905,7 @@ IN_PROC_BROWSER_TEST_F(BFCachedRenderWidgetHostViewBrowserTest,
     const auto evicted_ids =
         static_cast<RenderWidgetHostImpl*>(rfh1->GetRenderWidgetHost())
             ->CollectSurfaceIdsForEviction();
-    ASSERT_TRUE(base::Contains(evicted_ids, id_after_cached));
+    ASSERT_TRUE(std::ranges::contains(evicted_ids, id_after_cached));
   }
 }
 
@@ -1146,7 +1168,7 @@ IN_PROC_BROWSER_TEST_P(CompositingRenderWidgetHostViewBrowserTest,
     ++count_attempts;
     base::RunLoop run_loop;
     GetRenderWidgetHostView()->CopyFromSurface(
-        gfx::Rect(), frame_size(),
+        gfx::Rect(), frame_size(), base::TimeDelta(),
         base::BindOnce(&RenderWidgetHostViewBrowserTest::FinishCopyFromSurface,
                        base::Unretained(this), run_loop.QuitClosure()));
     run_loop.Run();
@@ -1169,7 +1191,7 @@ IN_PROC_BROWSER_TEST_P(CompositingRenderWidgetHostViewBrowserTest,
 
   base::RunLoop run_loop;
   GetRenderWidgetHostView()->CopyFromSurface(
-      gfx::Rect(), frame_size(),
+      gfx::Rect(), frame_size(), base::TimeDelta(),
       base::BindOnce(&RenderWidgetHostViewBrowserTest::FinishCopyFromSurface,
                      base::Unretained(this), run_loop.QuitClosure()));
   shell()->web_contents()->Close();
@@ -1372,7 +1394,7 @@ class CompositingRenderWidgetHostViewBrowserTestTabCapture
 
       base::RunLoop run_loop;
       rwhv->CopyFromSurface(
-          copy_rect, output_size,
+          copy_rect, output_size, base::TimeDelta(),
           base::BindOnce(&CompositingRenderWidgetHostViewBrowserTestTabCapture::
                              VerifyResult,
                          base::Unretained(this), run_loop.QuitClosure()));
@@ -1612,15 +1634,24 @@ class RenderWidgetHostViewPresentationFeedbackBrowserTest
   // becomes visible. The default parameters request a tab switch measurement.
   void CreateVisibleTimeRequest(bool show_reason_tab_switching = true,
                                 bool show_reason_bfcache_restore = false) {
+    auto& request_trigger =
+        GetRenderWidgetHostView()->host()->GetVisibleTimeRequestTrigger();
+    if (show_reason_tab_switching) {
+      request_trigger.UpdateRequest(blink::VisibleTimeEvent{
+          .event_start_time = base::TimeTicks::Now(),
+          .reason = blink::VisibleTimeEvent::TabSwitchReason{
+              .destination_is_loaded = true,
+              .had_saved_frame_at_start =
+                  GetRenderWidgetHostView()->HasSavedCompositorFrame(),
+          }});
+    }
     if (show_reason_bfcache_restore) {
       GetRenderWidgetHostView()->OnOldViewDidNavigatePreCommit();
       GetRenderWidgetHostView()->DidEnterBackForwardCache();
+      request_trigger.UpdateRequest(blink::VisibleTimeEvent{
+          .event_start_time = base::TimeTicks::Now(),
+          .reason = blink::VisibleTimeEvent::BFCacheRestoreReason{}});
     }
-    GetRenderWidgetHostView()
-        ->host()
-        ->GetVisibleTimeRequestTrigger()
-        .UpdateRequest(base::TimeTicks::Now(), /*destination_is_loaded=*/true,
-                       show_reason_tab_switching, show_reason_bfcache_restore);
   }
 
   void ExpectPresentationFeedback(TabSwitchResult expected_result) {
@@ -1676,7 +1707,7 @@ class RenderWidgetHostViewPresentationFeedbackBrowserTest
 
    private:
     raw_ptr<BrowserCompositorMac> browser_compositor_;
-    ui::Layer layer_{ui::LAYER_SOLID_COLOR};
+    ui::LayerSolidColor layer_;
     std::unique_ptr<ui::RecyclableCompositorMac> recyclable_compositor_;
   };
 
@@ -1864,7 +1895,7 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostViewCopyFromSurfaceBrowserTest,
       std::nullopt, rwhv_android->GetCurrentSurfaceId());
   base::RunLoop run_loop;
   GetRenderViewHost()->GetWidget()->GetView()->CopyFromSurface(
-      gfx::Rect(), gfx::Size(),
+      gfx::Rect(), gfx::Size(), base::TimeDelta(),
       base::BindOnce(&CheckSurfaceRangeRemovedAfterCopy, range_for_copy,
                      compositor, run_loop.QuitClosure()));
 
@@ -1879,13 +1910,13 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostViewCopyFromSurfaceBrowserTest,
 
 namespace {
 
-void AssertSnapshotIsPureWhite(base::RepeatingClosure resume_test,
-                               const content::CopyFromSurfaceResult& result) {
-  const SkBitmap& snapshot = result.has_value() ? result->bitmap : SkBitmap();
-  for (int r = 0; r < snapshot.height(); ++r) {
-    for (int c = 0; c < snapshot.width(); ++c) {
-      ASSERT_EQ(snapshot.getColor(c, r), SK_ColorWHITE);
-    }
+void AssertCopySharedImageSucceeded(
+    base::RepeatingClosure resume_test,
+    scoped_refptr<gpu::ClientSharedImage> shared_image,
+    viz::ReleaseCallback release_callback) {
+  EXPECT_TRUE(shared_image);
+  if (release_callback) {
+    std::move(release_callback).Run(gpu::SyncToken(), /*is_lost=*/false);
   }
   std::move(resume_test).Run();
 }
@@ -1914,10 +1945,11 @@ class ScopedSnapshotWaiter : public WebContentsObserver {
            base::RepeatingClosure resume) {
           ASSERT_TRUE(std::move(renderer_swapped).Run());
           ASSERT_TRUE(old_view);
-          static_cast<RenderWidgetHostViewBase*>(old_view)
-              ->CopyFromExactSurface(gfx::Rect(), gfx::Size(),
-                                     base::BindOnce(&AssertSnapshotIsPureWhite,
-                                                    std::move(resume)));
+          static_cast<RenderWidgetHostViewAndroid*>(old_view)
+              ->CopySharedImageFromExactSurface(
+                  gfx::Rect(), gfx::Size(),
+                  base::BindOnce(&AssertCopySharedImageSucceeded,
+                                 std::move(resume)));
         },
         request->frame_tree_node()->current_frame_host()->GetView(),
         // The request must outlive its own callback.

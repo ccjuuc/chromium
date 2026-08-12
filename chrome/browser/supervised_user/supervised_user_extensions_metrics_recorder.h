@@ -5,12 +5,11 @@
 #ifndef CHROME_BROWSER_SUPERVISED_USER_SUPERVISED_USER_EXTENSIONS_METRICS_RECORDER_H_
 #define CHROME_BROWSER_SUPERVISED_USER_SUPERVISED_USER_EXTENSIONS_METRICS_RECORDER_H_
 
-#include "chrome/browser/extensions/extension_install_prompt.h"
 #include "extensions/browser/supervised_user_extensions_delegate.h"
 
 // Records UMA metrics for supervised users using extensions.
 class SupervisedUserExtensionsMetricsRecorder
-    : public ExtensionInstallPrompt::Observer {
+    : public extensions::ExtensionInstallPromptClient::Observer {
  public:
   // These enum values represent the state that the child user has attained
   // while trying to install an extension.
@@ -71,7 +70,7 @@ class SupervisedUserExtensionsMetricsRecorder
   // These values are logged to UMA. Entries should not be renumbered and
   // numeric values should never be reused. Please keep in sync with
   // "SupervisedUserParentPermissionDialog" in
-  // src/tools/metrics/histograms/enums.xml.
+  // tools/metrics/histograms/metadata/families/enums.xml.
   enum class ParentPermissionDialogState {
     // Recorded when the parent permission dialog opens.
     kOpened = 0,
@@ -91,9 +90,31 @@ class SupervisedUserExtensionsMetricsRecorder
     kIncorrectParentPasswordProvided = 5,
     // Add future entries above this comment, in sync with
     // "SupervisedUserParentPermissionDialog" in
-    // src/tools/metrics/histograms/enums.xml.
+    // tools/metrics/histograms/metadata/families/enums.xml.
     // Update kMaxValue to the last value.
     kMaxValue = kIncorrectParentPasswordProvided
+  };
+
+  // These enum values represent the state of the Ask Parent Dialog for
+  // installing and enabling extensions for supervised users on android.
+  // These values are logged to UMA. Entries should not be renumbered and
+  // numeric values should never be reused. Please keep in sync with
+  // "SupervisedUserAskParentDialog" in
+  // tools/metrics/histograms/metadata/families/enums.xml.
+  enum class AskParentDialogState {
+    // Recorded when the ask parent dialog opens.
+    kOpened = 0,
+    // Recorded when the user cancels the Ask Parent Dialog, denying the attempt
+    // to enable an extension.
+    kCanceled = 1,
+    // Recorded when the user continues the request for parent approval, which
+    // will trigger the parent authentication flow.
+    kApproved = 2,
+    // Add future entries above this comment, in sync with
+    // "SupervisedUserAskParentDialog" in
+    // tools/metrics/histograms/metadata/families/enums.xml.
+    // Update kMaxValue to the last value.
+    kMaxValue = kApproved
   };
 
   // These enum values represent supervised user actions to enable or disable an
@@ -101,7 +122,7 @@ class SupervisedUserExtensionsMetricsRecorder
   // These values are logged to UMA. Entries should not be renumbered and
   // numeric values should never be reused. Please keep in sync with
   // "SupervisedUserExtensionEnablement" in
-  // src/tools/metrics/histograms/enums.xml.
+  // tools/metrics/histograms/metadata/families/enums.xml.
   enum class EnablementState {
     // Recorded when the child successfully enables an approved extension.
     kEnabled = 0,
@@ -114,7 +135,7 @@ class SupervisedUserExtensionsMetricsRecorder
     kFailedToEnable = 2,
     // Add future entries above this comment, in sync with
     // "SupervisedUserExtensionEnablement" in
-    // src/tools/metrics/histograms/enums.xml.
+    // tools/metrics/histograms/metadata/families/enums.xml.
     // Update kMaxValue to the last value.
     kMaxValue = kFailedToEnable
   };
@@ -140,6 +161,11 @@ class SupervisedUserExtensionsMetricsRecorder
   static const char kParentPermissionDialogOpenedActionName[];
   static const char kParentPermissionDialogParentApprovedActionName[];
   static const char kParentPermissionDialogParentCanceledActionName[];
+  // UMA metrics for the Ask Parent Dialog.
+  static const char kAskParentDialogHistogramName[];
+  static const char kAskParentDialogOpenedActionName[];
+  static const char kAskParentDialogCanceledActionName[];
+  static const char kAskParentDialogApprovedActionName[];
 
   // UMA metrics for enabling or disabling extensions.
   static const char kEnablementHistogramName[];
@@ -154,7 +180,7 @@ class SupervisedUserExtensionsMetricsRecorder
   SupervisedUserExtensionsMetricsRecorder& operator=(
       const SupervisedUserExtensionsMetricsRecorder&) = delete;
 
-  // ExtensionInstallPrompt::Observer:
+  // ExtensionInstallPromptClient::Observer:
   void OnDialogOpened() override;
   void OnDialogAccepted() override;
   void OnDialogCanceled() override;
@@ -169,6 +195,9 @@ class SupervisedUserExtensionsMetricsRecorder
   // Record UMA metrics related to the Parent Permission Dialog.
   void RecordParentPermissionDialogUmaMetrics(
       ParentPermissionDialogState state);
+
+  // Record UMA metrics related to the Ask Parent Dialog.
+  void RecordAskParentDialogUmaMetrics(AskParentDialogState state);
 
   // Records when the supervised user enables or disables an approved extension.
   static void RecordEnablementUmaMetrics(EnablementState state);

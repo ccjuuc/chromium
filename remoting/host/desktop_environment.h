@@ -22,11 +22,13 @@ class ActionExecutor;
 class ActiveDisplayMonitor;
 class AudioCapturer;
 class ClientSessionControl;
+class IpcFifoBufferReader;
 class ClientSessionEvents;
 class DesktopDisplayInfoMonitor;
 class FileOperations;
 class InputInjector;
 class KeyboardLayoutMonitor;
+class AudioInjector;
 class RemoteWebAuthnStateChangeNotifier;
 class ScreenControls;
 class UrlForwarderConfigurator;
@@ -68,16 +70,26 @@ class DesktopEnvironment {
   virtual std::unique_ptr<RemoteWebAuthnStateChangeNotifier>
   CreateRemoteWebAuthnStateChangeNotifier() = 0;
 
+  // Creates an audio injector using the provided IPC FIFO buffer reader.
+  //
+  // Architectural Note: This interface explicitly requires the concrete
+  // IpcFifoBufferReader type rather than a generic FifoBufferReader abstraction
+  // to guarantee absolute compile-time type safety across process boundaries.
+  // Multi-process hosts require Mojo data pipes to route audio from the network
+  // process to the desktop process. While single-process hosts could
+  // theoretically use pure C++ in-memory buffers, the framework overhead of
+  // in-process Mojo pipes is completely negligible for audio throughput, and
+  // sharing the concrete IPC type allows us to unify the pipeline and eliminate
+  // dangerous unchecked downcasts.
+  virtual std::unique_ptr<AudioInjector> CreateAudioInjector(
+      std::unique_ptr<IpcFifoBufferReader> reader) = 0;
+
   // Returns the set of all capabilities supported by |this|.
   virtual std::string GetCapabilities() const = 0;
 
   // Passes the final set of capabilities negotiated between the client and host
   // to |this|.
   virtual void SetCapabilities(const std::string& capabilities) = 0;
-
-  // Returns an id which identifies the current desktop session on Windows.
-  // Other platforms will always return the default value (UINT32_MAX).
-  virtual std::uint32_t GetDesktopSessionId() const = 0;
 };
 
 // Used to create |DesktopEnvironment| instances.

@@ -16,11 +16,13 @@ class AffiliatedGroupTest : public testing::Test {
   AffiliatedGroupTest() = default;
 
   void EnableSyncForTestAccount() {
+    sync_service_.SetSignedIn(signin::ConsentLevel::kSync);
     sync_service_.GetUserSettings()->SetSelectedTypes(
         /*sync_everything=*/false, {syncer::UserSelectableType::kPasswords});
   }
 
   void DisableSyncFeature() {
+    sync_service_.SetSignedIn(signin::ConsentLevel::kSignin);
     sync_service_.GetUserSettings()->SetSelectedTypes(
         /*sync_everything=*/false, /*types=*/{});
   }
@@ -36,8 +38,7 @@ TEST_F(AffiliatedGroupTest,
   form.url = GURL("https://url.com");
   affiliations::FacetBrandingInfo branding_info("Group name",
                                                 GURL("https://icon_url.com"));
-  AffiliatedGroup group({password_manager::CredentialUIEntry(form)},
-                        branding_info);
+  AffiliatedGroup group({CredentialUIEntry(form)}, branding_info);
 
   EXPECT_EQ(group.GetAllowedIconUrl(&sync_service_),
             GURL("https://icon_url.com"));
@@ -49,22 +50,20 @@ TEST_F(AffiliatedGroupTest, GetGroupIconUrl_NotSyncing_ReturnsFallbackIcon) {
   form.url = GURL("https://url.com");
   affiliations::FacetBrandingInfo branding_info("Group name",
                                                 GURL("https://icon_url.com"));
-  AffiliatedGroup group({password_manager::CredentialUIEntry(form)},
-                        branding_info);
+  AffiliatedGroup group({CredentialUIEntry(form)}, branding_info);
 
   EXPECT_EQ(group.GetAllowedIconUrl(&sync_service_),
             GURL("https://url.com/favicon.ico"));
 }
 
 TEST_F(AffiliatedGroupTest,
-       GetGroupIconUrl_CustonPassphrase_ReturnsFallbackIcon) {
+       GetGroupIconUrl_CustomPassphrase_ReturnsFallbackIcon) {
   sync_service_.SetIsUsingExplicitPassphrase(true);
   PasswordForm form;
   form.url = GURL("https://url.com");
   affiliations::FacetBrandingInfo branding_info("Group name",
                                                 GURL("https://icon_url.com"));
-  AffiliatedGroup group({password_manager::CredentialUIEntry(form)},
-                        branding_info);
+  AffiliatedGroup group({CredentialUIEntry(form)}, branding_info);
 
   EXPECT_EQ(group.GetAllowedIconUrl(&sync_service_),
             GURL("https://url.com/favicon.ico"));

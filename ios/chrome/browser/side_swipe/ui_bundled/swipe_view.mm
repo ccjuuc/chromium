@@ -13,7 +13,9 @@
 @property(nonatomic, strong) UIImageView* bottomToolbarSnapshot;
 
 @property(nonatomic, strong) NSLayoutConstraint* toolbarTopConstraint;
+@property(nonatomic, strong) NSLayoutConstraint* toolbarBottomConstraint;
 @property(nonatomic, strong) NSLayoutConstraint* imageTopConstraint;
+@property(nonatomic, strong) NSLayoutConstraint* imageBottomConstraint;
 
 @property(nonatomic, strong) TopAlignedImageView* imageView;
 
@@ -21,17 +23,13 @@
 
 @implementation SwipeView
 
-@synthesize topToolbarSnapshot = _topToolbarSnapshot;
-@synthesize bottomToolbarSnapshot = _bottomToolbarSnapshot;
-@synthesize topMargin = _topMargin;
-@synthesize toolbarTopConstraint = _toolbarTopConstraint;
-@synthesize imageTopConstraint = _imageTopConstraint;
-@synthesize imageView = _imageView;
-
-- (instancetype)initWithFrame:(CGRect)frame topMargin:(CGFloat)topMargin {
+- (instancetype)initWithFrame:(CGRect)frame
+                    topMargin:(CGFloat)topMargin
+                 bottomMargin:(CGFloat)bottomMargin {
   self = [super initWithFrame:frame];
   if (self) {
     _topMargin = topMargin;
+    _bottomMargin = bottomMargin;
 
     _imageView = [[TopAlignedImageView alloc] init];
     [_imageView setBackgroundColor:[UIColor whiteColor]];
@@ -53,18 +51,22 @@
                                  constraintEqualToAnchor:self.trailingAnchor]];
     }
 
-    _toolbarTopConstraint = [[_topToolbarSnapshot topAnchor]
-        constraintEqualToAnchor:self.topAnchor];
+    _toolbarTopConstraint = [[_topToolbarSnapshot bottomAnchor]
+        constraintEqualToAnchor:_imageView.topAnchor];
 
     _imageTopConstraint =
         [_imageView.topAnchor constraintEqualToAnchor:self.topAnchor
                                              constant:topMargin];
+    _imageBottomConstraint =
+        [_imageView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor
+                                                constant:-bottomMargin];
     [constraints addObjectsFromArray:@[
       _imageTopConstraint,
-      [[_imageView bottomAnchor] constraintEqualToAnchor:self.bottomAnchor],
+      _imageBottomConstraint,
       _toolbarTopConstraint,
-      [_bottomToolbarSnapshot.bottomAnchor
-          constraintEqualToAnchor:self.bottomAnchor],
+      _toolbarBottomConstraint = [[_bottomToolbarSnapshot topAnchor]
+          constraintEqualToAnchor:self.bottomAnchor
+                         constant:-bottomMargin],
     ]];
 
     [NSLayoutConstraint activateConstraints:constraints];
@@ -93,6 +95,12 @@
 - (void)setTopMargin:(CGFloat)topMargin {
   _topMargin = topMargin;
   self.imageTopConstraint.constant = topMargin;
+}
+
+- (void)setBottomMargin:(CGFloat)bottomMargin {
+  _bottomMargin = bottomMargin;
+  self.toolbarBottomConstraint.constant = -bottomMargin;
+  self.imageBottomConstraint.constant = -bottomMargin;
 }
 
 - (void)setImage:(UIImage*)image {

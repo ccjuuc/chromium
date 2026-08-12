@@ -5,6 +5,7 @@
 import 'chrome://read-later.top-chrome/shared/sp_empty_state.js';
 import 'chrome://read-later.top-chrome/shared/sp_footer.js';
 import 'chrome://read-later.top-chrome/shared/sp_heading.js';
+import 'chrome://read-later.top-chrome/shared/sp_icons.html.js';
 import 'chrome://resources/cr_elements/cr_button/cr_button.js';
 import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
 import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
@@ -37,7 +38,8 @@ const ReadingListAppElementBase = HelpBubbleMixinLit(CrLitElement);
 export interface ReadingListAppElement {
   $: {
     footer: HTMLElement,
-    readingListList: CrLazyListElement,
+    readingListList: CrLazyListElement<ReadLaterEntry>,
+    scroller: HTMLElement,
   };
 }
 
@@ -69,7 +71,6 @@ export class ReadingListAppElement extends ReadingListAppElementBase {
       buttonRipples: {type: Boolean},
       loadingContent_: {type: Boolean},
       itemSize_: {type: Number},
-      minViewportHeight_: {type: Number},
       scrollTarget_: {type: Object},
       unreadHeader_: {type: String},
       readHeader_: {type: String},
@@ -88,8 +89,7 @@ export class ReadingListAppElement extends ReadingListAppElementBase {
   accessor buttonRipples: boolean = loadTimeData.getBoolean('useRipples');
   protected accessor loadingContent_: boolean = true;
   protected accessor itemSize_: number = 48;
-  protected accessor minViewportHeight_: number = 0;
-  protected accessor scrollTarget_: HTMLElement|null = null;
+  protected accessor scrollTarget_: HTMLElement = document.documentElement;
   private accessor unreadHeader_: string =
       loadTimeData.getString('unreadHeader');
   private accessor readHeader_: string = loadTimeData.getString('readHeader');
@@ -112,7 +112,6 @@ export class ReadingListAppElement extends ReadingListAppElementBase {
       // state.
       if (document.visibilityState === 'visible') {
         this.updateReadLaterEntries_();
-        this.updateViewportHeight_();
       }
     };
   }
@@ -136,9 +135,8 @@ export class ReadingListAppElement extends ReadingListAppElementBase {
             (state: CurrentPageActionButtonState) =>
                 this.updateCurrentPageActionButton_(state)));
 
-    this.scrollTarget_ = this.$.readingListList;
+    this.scrollTarget_ = this.$.scroller;
     this.updateReadLaterEntries_();
-    this.updateViewportHeight_();
     this.apiProxy_.updateCurrentPageActionButtonState();
 
     this.readingListEventTracker_.add(
@@ -200,15 +198,6 @@ export class ReadingListAppElement extends ReadingListAppElementBase {
     }
   }
 
-  private updateViewportHeight_() {
-    this.apiProxy_.getWindowData().then(({windows}) => {
-      const activeWindow = windows.find((w) => w.active);
-      const windowHeight =
-          activeWindow ? activeWindow.height : windows[0]!.height;
-      this.minViewportHeight_ = windowHeight - this.$.footer.offsetHeight;
-    });
-  }
-
   getFocusedIndexForTesting() {
     return this.focusedIndex_;
   }
@@ -218,7 +207,11 @@ export class ReadingListAppElement extends ReadingListAppElementBase {
     this.unreadExpanded_ = true;
   }
 
-  protected updateFocusedItem_() {
+  protected onViewportFilled_() {
+    this.updateFocusedItem_();
+  }
+
+  private updateFocusedItem_() {
     this.focusedItem_ = this.focusedIndex_ === -1 ?
         null :
         this.querySelector<HTMLElement>(
@@ -245,7 +238,7 @@ export class ReadingListAppElement extends ReadingListAppElementBase {
   private createHeaderEntry_(title: string): ReadLaterEntry {
     return {
       title: title,
-      url: {url: ''},
+      url: '',
       displayUrl: '',
       updateTime: 0n,
       read: false,
@@ -273,9 +266,11 @@ export class ReadingListAppElement extends ReadingListAppElementBase {
   protected getExpandButtonIcon_(title: string): string {
     switch (title) {
       case this.unreadHeader_:
-        return this.unreadExpanded_ ? 'cr:expand-less' : 'cr:expand-more';
+        return this.unreadExpanded_ ? 'cr:keyboard-arrow-up' :
+                                      'cr:keyboard-arrow-down';
       case this.readHeader_:
-        return this.readExpanded_ ? 'cr:expand-less' : 'cr:expand-more';
+        return this.readExpanded_ ? 'cr:keyboard-arrow-up' :
+                                    'cr:keyboard-arrow-down';
       default:
         assertNotReached();
     }
@@ -348,7 +343,11 @@ export class ReadingListAppElement extends ReadingListAppElementBase {
    * @return The appropriate cr icon for the current page action button
    */
   protected getCurrentPageActionButtonIcon_(): string {
-    return this.getCurrentPageActionButtonMarkAsRead_() ? 'cr:check' : 'cr:add';
+    return this.getCurrentPageActionButtonMarkAsRead_() ?
+        'cr:check' :
+        (loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+             'sp:add-circle' :
+             'sp:add-circle-old');
   }
 
   /**
@@ -392,7 +391,7 @@ export class ReadingListAppElement extends ReadingListAppElementBase {
     );
   }
 
-  protected async onItemKeyDown_(e: KeyboardEvent) {
+  protected async onItemKeydown_(e: KeyboardEvent) {
     if (e.shiftKey || !navigationKeys.has(e.key)) {
       return;
     }

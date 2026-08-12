@@ -32,9 +32,9 @@ class LensComposeboxHandler : public composebox::mojom::PageHandler,
       Profile* profile,
       content::WebContents* web_contents,
       mojo::PendingReceiver<composebox::mojom::PageHandler> pending_handler,
-      mojo::PendingRemote<composebox::mojom::Page> pending_page,
       mojo::PendingReceiver<searchbox::mojom::PageHandler>
-          pending_searchbox_handler);
+          pending_searchbox_handler,
+      mojo::PendingRemote<searchbox::mojom::Page> pending_searchbox_page);
   ~LensComposeboxHandler() override;
 
   // composebox::mojom::PageHandler:
@@ -43,13 +43,24 @@ class LensComposeboxHandler : public composebox::mojom::PageHandler,
                    bool alt_key,
                    bool ctrl_key,
                    bool meta_key,
-                   bool shift_key) override;
+                   bool shift_key,
+                   bool is_voice_search) override;
   void FocusChanged(bool focused) override;
-  void SetDeepSearchMode(bool enabled) override;
-  void SetCreateImageMode(bool enabled, bool image_present) override;
   void HandleLensButtonClick() override;
   void HandleFileUpload(bool is_image) override;
+  void StartPlatformVoiceRecognition() override;
+  void OnContextMenuOpened() override;
   void NavigateUrl(const GURL& url) override;
+  void CloseLensOverlayFromWebUI(
+      composebox::mojom::LensOverlayDismissalSource dismissal_source) override;
+  void SetSmartTabSharingActive(bool active) override;
+  void GetSmartTabSharingActive(
+      GetSmartTabSharingActiveCallback callback) override;
+  void NotifyComposeboxQuerySubmittedWithContext() override;
+  void CanShowNextboxAnimation(
+      CanShowNextboxAnimationCallback callback) override;
+  void RecordNextboxAnimationImpression() override;
+
   // searchbox::mojom::PageHandler:
   void DeleteAutocompleteMatch(uint8_t line, const GURL& url) override;
   void ExecuteAction(uint8_t line,
@@ -64,7 +75,7 @@ class LensComposeboxHandler : public composebox::mojom::PageHandler,
   void OnThumbnailRemoved() override;
   void DeleteContext(const base::UnguessableToken& file_token,
                      bool from_automatic_chip) override;
-  void ClearFiles() override;
+  void ClearFiles(bool should_block_auto_suggested_tabs) override;
 
  private:
   // Owns this.
@@ -72,7 +83,6 @@ class LensComposeboxHandler : public composebox::mojom::PageHandler,
 
   // These are located at the end of the list of member variables to ensure the
   // WebUI page is disconnected before other members are destroyed.
-  mojo::Remote<composebox::mojom::Page> page_;
   mojo::Receiver<composebox::mojom::PageHandler> handler_;
 };
 

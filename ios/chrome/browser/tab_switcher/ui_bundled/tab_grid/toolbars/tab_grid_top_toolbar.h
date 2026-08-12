@@ -10,6 +10,7 @@
 #import "ios/chrome/browser/keyboard/ui_bundled/key_command_actions.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_grid_paging.h"
 
+@class LayoutGuideCenter;
 @class TabGridPageControl;
 @protocol TabGridToolbarsGridDelegate;
 
@@ -44,29 +45,31 @@
 // Delegate to call when a button is tapped.
 @property(nonatomic, weak) id<TabGridToolbarsGridDelegate> buttonsDelegate;
 
+- (instancetype)initWithLayoutGuideCenter:(LayoutGuideCenter*)layoutGuideCenter
+    NS_DESIGNATED_INITIALIZER;
+
+- (instancetype)init NS_UNAVAILABLE;
+- (instancetype)initWithFrame:(CGRect)frame NS_UNAVAILABLE;
+- (instancetype)initWithCoder:(NSCoder*)aDecoder NS_UNAVAILABLE;
+
 // Sets the delegate for the searchbar.
 - (void)setSearchBarDelegate:(id<UISearchBarDelegate>)delegate;
 // Sets `enabled` on the search button.
 - (void)setSearchButtonEnabled:(BOOL)enabled;
 // Sets `enabled` on the select tabs action.
 - (void)setSelectTabsActionEnabled:(BOOL)enabled;
+// Sets `enabled` on the close all tabs and groups action.
+- (void)setCloseAllActionEnabled:(BOOL)enabled;
 // Sets `enabled` on the select all button.
 - (void)setSelectAllButtonEnabled:(BOOL)enabled;
-// Sets `enabled` on the done button.
-- (void)setDoneButtonEnabled:(BOOL)enabled;
-// Sets `enabled` on the undo button.
-- (void)setUndoButtonEnabled:(BOOL)enabled;
-// Uses undo text on the close all button based on `useUndo` value.
-- (void)useUndo:(BOOL)useUndo;
+// Sets `enabled` on the close other tabs action.
+- (void)setCloseOtherTabsEnabled:(BOOL)enabled;
+// Sets `enabled` on the Exit Tab Grid button.
+- (void)setExitTabGridButtonEnabled:(BOOL)enabled;
 // Sets `enabled` on the page action menu entry point.
 - (void)setPageActionMenuButtonEnabled:(BOOL)enabled;
 // Sets `visible` on the page action menu entry point.
 - (void)setPageActionMenuButtonVisible:(BOOL)visible;
-
-// Sets the `menu` displayed on tapping the Edit button.
-- (void)setEditButtonMenu:(UIMenu*)menu;
-// Sets `enabled` on the Edit button.
-- (void)setEditButtonEnabled:(BOOL)enabled;
 
 // Sets `enabled` on the Overflow Menu.
 - (void)setOverflowMenuEnabled:(BOOL)enabled;
@@ -78,17 +81,9 @@
 - (void)highlightPageControlItem:(TabGridPage)page;
 // Removes the last highlighted page, if there is one.
 - (void)resetLastPageControlHighlight;
-
-// Hides components and uses a black background color for tab grid transition
-// animation.
-- (void)hide;
-// Recovers the normal appearance for tab grid transition animation.
-- (void)show;
 // Updates the appearance of the this toolbar, based on whether the content
 // below it is `scrolledToEdge` or not.
 - (void)setScrollViewScrolledToEdge:(BOOL)scrolledToEdge;
-// Adds the receiver in the chain before the original next responder.
-- (void)respondBeforeResponder:(UIResponder*)nextResponder;
 // Relinquishs the searchBar status as first responder.
 - (void)unfocusSearchBar;
 // Sets the text of the UISearchBar.

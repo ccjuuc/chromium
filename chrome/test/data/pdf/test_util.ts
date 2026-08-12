@@ -5,16 +5,20 @@
 // Utilities that are used in multiple tests.
 
 // clang-format off
-import type {Bookmark, DocumentDimensions, LayoutOptions, PdfViewerElement, ViewerToolbarElement} from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js';
-import {resetForTesting as resetMetricsForTesting, UserAction, Viewport} from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js';
+import './test_bookmarks.js';
+
+import type {DocumentDimensions, LayoutOptions, PdfViewerElement, SaveMessage, ViewerToolbarElement, TextAnnotation} from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js';
+import {PostMessageDataType, resetForTesting as resetMetricsForTesting, UserAction, Viewport} from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js';
 // <if expr="enable_pdf_ink2">
-import type {AnnotationBrush, InkBrushSelectorElement, InkColorSelectorElement, InkSizeSelectorElement, SelectableIconButtonElement, ViewerBottomToolbarDropdownElement} from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js';
-import {AnnotationBrushType, DEFAULT_TEXTBOX_WIDTH, MIN_TEXTBOX_SIZE_PX, hexToColor, Ink2Manager, TEXT_COLORS, TextAlignment, TextStyle, PluginController, PluginControllerEventType} from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js';
+import type {AnnotationBrush, AnnotationBrushMessage, InkBrushSelectorElement, InkColorSelectorElement, InkSizeSelectorElement, SelectableIconButtonElement, ViewerBottomToolbarDropdownElement, InkTextBoxElement, InkTextAnnotationsElement} from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js';
+import {AnnotationBrushType, DEFAULT_TEXTBOX_WIDTH, MIN_TEXTBOX_SIZE_PX, hexToColor, Ink2Manager, TEXT_COLORS, TextAlignment, PluginController, PluginControllerEventType, TextTypeface} from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js';
 // </if>
 // <if expr="enable_pdf_save_to_drive">
 import {SaveToDriveBubbleAction, SaveToDriveBubbleState, SaveToDriveSaveType } from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js';
+
 // </if>
-import {CrLitElement, html} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+import type {TestBookmarksElement} from './test_bookmarks.js';
+
 import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
 // clang-format on
 
@@ -71,6 +75,16 @@ export class MockElement {
     this.scrollLeft = Math.max(0, x);
     this.scrollTop = Math.max(0, y);
     this.scrollCallback!();
+  }
+
+  dispatchEvent(event: Event): boolean {
+    if (event.type === 'scroll') {
+      if (this.scrollCallback) {
+        this.scrollCallback();
+      }
+      window.dispatchEvent(new Event('scroll'));
+    }
+    return true;
   }
 }
 
@@ -174,14 +188,21 @@ export class MockDocumentDimensions implements DocumentDimensions {
   }
 }
 
+interface MockMessage extends Record<string, unknown> {
+  type: string;
+  messageId?: string;
+  token?: string;
+}
+
 export class MockPdfPluginElement extends HTMLEmbedElement {
-  private messages_: any[] = [];
+  viewport: Viewport|null = null;
+  private messages_: MockMessage[] = [];
   // <if expr="enable_pdf_ink2">
   private messageReplies_: Map<string, Object> = new Map();
   private replyToSave_: boolean = false;
   // </if>
 
-  get messages(): any[] {
+  get messages(): MockMessage[] {
     return this.messages_;
   }
 
@@ -189,15 +210,22 @@ export class MockPdfPluginElement extends HTMLEmbedElement {
     this.messages_.length = 0;
   }
 
-  findMessage(type: string): any {
-    return this.messages_.find(element => element.type === type);
+  findMessage<T = MockMessage>(type: string): T|undefined {
+    return this.messages_.find(element => element.type === type) as unknown as
+        T |
+        undefined;
   }
 
-  postMessage(message: any, _transfer: Transferable[]) {
+  postMessage(message: MockMessage, _transfer: Transferable[]) {
     chrome.test.assertTrue(!!message.type);
     // <if expr="enable_pdf_ink2">
     if (message.type === 'save' && this.replyToSave_) {
-      this.replyToSaveMessage_(message);
+      this.replyToSaveMessage_(message as unknown as SaveMessage);
+    } else if (message.type === 'syncScrollToRemote' && this.viewport) {
+      this.viewport.ackScrollToRemote({
+        x: message['x'] as number,
+        y: message['y'] as number,
+      });
     } else if (this.messageReplies_.has(message.type)) {
       const reply = this.messageReplies_.get(message.type);
       chrome.test.assertTrue(!!reply);
@@ -234,7 +262,7 @@ export class MockPdfPluginElement extends HTMLEmbedElement {
     this.replyToSave_ = reply;
   }
 
-  private replyToSaveMessage_(message: any) {
+  private replyToSaveMessage_(message: SaveMessage) {
     chrome.test.assertTrue(!!message.token);
     if (message.saveRequestType === SaveRequestType.ORIGINAL) {
       this.dispatchEvent(new MessageEvent('message', {
@@ -278,33 +306,6 @@ export function createMockPdfPluginForTest(): MockPdfPluginElement {
       MockPdfPluginElement;
 }
 
-class TestBookmarksElement extends CrLitElement {
-  static get is() {
-    return 'test-bookmarks';
-  }
-
-  override render() {
-    return this.bookmarks.map(
-        item => html`<viewer-bookmark .bookmark="${item}" depth="0">
-             </viewer-bookmark>`);
-  }
-
-  static override get properties() {
-    return {
-      bookmarks: {type: Array},
-    };
-  }
-
-  accessor bookmarks: Bookmark[] = [];
-}
-
-declare global {
-  interface HTMLElementTagNameMap {
-    'test-bookmarks': TestBookmarksElement;
-  }
-}
-
-customElements.define(TestBookmarksElement.is, TestBookmarksElement);
 
 /**
  * @return An element containing a dom-repeat of bookmarks, for
@@ -319,6 +320,7 @@ export class MockMetricsPrivate {
   // <if expr="enable_pdf_save_to_drive">
   enumerationCounter: Map<string, Map<number, number>> = new Map();
   metricsEnumSize = new Map<string, number>([
+    ['PDF.PostMessageDataType', PostMessageDataType.COUNT],
     ['PDF.SaveToDrive.BubbleAction', SaveToDriveBubbleAction.COUNT],
     ['PDF.SaveToDrive.BubbleState', SaveToDriveBubbleState.COUNT],
     ['PDF.SaveToDrive.RetrySaveType', SaveToDriveSaveType.COUNT],
@@ -455,6 +457,8 @@ export function createWheelEvent(
     clientX: position.clientX,
     clientY: position.clientY,
     ctrlKey,
+    bubbles: true,
+    composed: true,
     // Necessary for preventDefault() to work.
     cancelable: true,
   });
@@ -600,8 +604,11 @@ export function setupTestMockPluginForInk(): MockPdfPluginElement {
 // functionality of getZoomableViewport() and setupTestMockPluginForInk(), which
 // are mutually exclusive since they both attempt to call setContent() on the
 // viewport. Returns a reference to the new viewport and mock plugin.
-export function setUpInkTestContext():
-    {viewport: Viewport, mockPlugin: MockPdfPluginElement} {
+export function setUpInkTestContext(scrollbarWidth: number = 5): {
+  viewport: Viewport,
+  mockPlugin: MockPdfPluginElement,
+  mockWindow: MockElement,
+} {
   // Clear the DOM and create dummy content.
   document.body.innerHTML = '';
   const dummyContent = document.createElement('div');
@@ -612,7 +619,7 @@ export function setUpInkTestContext():
   const mockSizer = new MockSizer();
   const viewport = new Viewport(
       mockWindow as unknown as HTMLElement, mockSizer as unknown as HTMLElement,
-      dummyContent, /*scrollbarWidth=*/ 5, /*defaultZoom=*/ 1);
+      dummyContent, scrollbarWidth, /*defaultZoom=*/ 1);
   viewport.setZoomFactorRange([0.25, 0.4, 0.5, 1, 2]);
   const documentDimensions = new MockDocumentDimensions(0, 0);
   documentDimensions.addPage(400, 500);
@@ -620,6 +627,7 @@ export function setUpInkTestContext():
 
   // Create mock plugin.
   const mockPlugin = createMockPdfPluginForTest();
+  mockPlugin.viewport = viewport;
   mockPlugin.id = 'plugin';
   mockPlugin.src = 'data:text/plain,plugin-content';
   mockPlugin.setMessageReply('getAnnotationBrush', {
@@ -641,13 +649,8 @@ export function setUpInkTestContext():
   // new dummy viewport.
   const manager = Ink2Manager.getInstance();
   manager.setViewport(viewport);
-  manager.viewportChanged();
 
-  // Use setViewportChangedCallback to subscribe the manager to viewport
-  // changes. In prod these are piped through the top level pdf-viewer element.
-  viewport.setViewportChangedCallback(() => manager.viewportChanged());
-
-  return {viewport, mockPlugin};
+  return {viewport, mockPlugin, mockWindow};
 }
 
 /**
@@ -674,22 +677,20 @@ export function setGetAnnotationBrushReply(
 export function assertAnnotationBrush(
     mockPlugin: MockPdfPluginElement, expectedBrush: AnnotationBrush) {
   const setAnnotationBrushMessage =
-      mockPlugin.findMessage('setAnnotationBrush');
+      mockPlugin.findMessage<AnnotationBrushMessage>('setAnnotationBrush');
   chrome.test.assertTrue(setAnnotationBrushMessage !== undefined);
-  chrome.test.assertEq('setAnnotationBrush', setAnnotationBrushMessage.type);
-  chrome.test.assertEq(expectedBrush.type, setAnnotationBrushMessage.data.type);
+  const message = setAnnotationBrushMessage;
+  chrome.test.assertEq('setAnnotationBrush', message.type);
+  chrome.test.assertEq(expectedBrush.type, message.data.type);
   const hasColor = expectedBrush.color !== undefined;
-  chrome.test.assertEq(
-      hasColor, setAnnotationBrushMessage.data.color !== undefined);
+  chrome.test.assertEq(hasColor, message.data.color !== undefined);
   if (hasColor) {
-    chrome.test.assertEq(
-        expectedBrush.color!.r, setAnnotationBrushMessage.data.color.r);
-    chrome.test.assertEq(
-        expectedBrush.color!.g, setAnnotationBrushMessage.data.color.g);
-    chrome.test.assertEq(
-        expectedBrush.color!.b, setAnnotationBrushMessage.data.color.b);
+    const color = message.data.color!;
+    chrome.test.assertEq(expectedBrush.color!.r, color.r);
+    chrome.test.assertEq(expectedBrush.color!.g, color.g);
+    chrome.test.assertEq(expectedBrush.color!.b, color.b);
   }
-  chrome.test.assertEq(expectedBrush.size, setAnnotationBrushMessage.data.size);
+  chrome.test.assertEq(expectedBrush.size, message.data.size);
 
   mockPlugin.clearMessages();
 }
@@ -702,6 +703,15 @@ export function assertAnnotationBrush(
 export function getBrushSelector(parentElement: HTMLElement):
     InkBrushSelectorElement {
   return getRequiredElement(parentElement, 'ink-brush-selector');
+}
+
+export function getBrush(
+    selector: InkBrushSelectorElement,
+    type: AnnotationBrushType): SelectableIconButtonElement {
+  const brush = selector.shadowRoot.querySelector<SelectableIconButtonElement>(
+      `#${type}`);
+  chrome.test.assertTrue(!!brush);
+  return brush;
 }
 
 
@@ -776,7 +786,8 @@ export async function clickDropdownButton(
 }
 
 export function assertDeepEquals(
-    value1: object|any[]|undefined|null, value2: object|any[]|undefined|null) {
+    value1: object|unknown[]|undefined|null,
+    value2: object|unknown[]|undefined|null) {
   chrome.test.assertTrue(chrome.test.checkDeepEq(value1, value2));
 }
 
@@ -786,32 +797,56 @@ export function assertDeepEquals(
 // a textbox may not actually be created if a click event is simulated in a part
 // of the viewport that doesn't contain a page.
 export function createTextBox() {
+  const annotation = getTestAnnotation(0);
+  annotation.text = '';
+  annotation.textAttributes.color = hexToColor(TEXT_COLORS[0]!.color);
+  annotation.textBoxRect = {
+    height: MIN_TEXTBOX_SIZE_PX,
+    locationX: 50,
+    locationY: 50,
+    width: DEFAULT_TEXTBOX_WIDTH,
+  };
   Ink2Manager.getInstance().dispatchEvent(
       new CustomEvent('initialize-text-box', {
         detail: {
-          annotation: {
-            text: '',
-            textAttributes: {
-              size: 12,
-              typeface: 'sans-serif',
-              styles: {
-                [TextStyle.BOLD]: false,
-                [TextStyle.ITALIC]: false,
-              },
-              alignment: TextAlignment.LEFT,
-              color: hexToColor(TEXT_COLORS[0]!.color),
-            },
-            textBoxRect: {
-              height: MIN_TEXTBOX_SIZE_PX,
-              locationX: 50,
-              locationY: 50,
-              width: DEFAULT_TEXTBOX_WIDTH,
-            },
-            id: 0,
-            pageNumber: 0,
-          },
+          annotation,
           pageDimensions: {x: 10, y: 3, width: 390, height: 490},
         },
       }));
+}
+
+export function getTextBox(viewer: PdfViewerElement): InkTextBoxElement|null {
+  const annotations =
+      viewer.shadowRoot.querySelector<InkTextAnnotationsElement>(
+          'ink-text-annotations');
+  return annotations ? annotations.$.textBox : null;
+}
+
+export function getTestAnnotation(id: number): TextAnnotation {
+  return {
+    id: id,
+    mojoTextInfo: new ArrayBuffer(0),
+    pageIndex: 0,
+    pdfZoom: 1.0,
+    text: 'Hello World',
+    textAttributes: {
+      typeface: TextTypeface.SANS_SERIF,
+      size: 12,
+      color: {r: 0, g: 100, b: 0},
+      alignment: TextAlignment.LEFT,
+      styles: {
+        bold: false,
+        italic: false,
+      },
+    },
+    textBoxRect: {
+      height: 35,
+      locationX: 60,
+      locationY: 25,
+      width: 50,
+    },
+    textOrientation: 0,
+    viewportOrientation: 0,
+  };
 }
 // </if>

@@ -12,9 +12,10 @@ import static org.chromium.ui.listmenu.ListItemType.MENU_ITEM;
 import static org.chromium.ui.listmenu.ListItemType.SUBMENU_HEADER;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.CLICK_LISTENER;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.ENABLED;
+import static org.chromium.ui.listmenu.ListMenuItemProperties.MENU_ITEM_ID;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.TITLE;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.TITLE_ID;
-import static org.chromium.ui.listmenu.ListMenuSubmenuItemProperties.SUBMENU_ITEMS;
+import static org.chromium.ui.listmenu.ListMenuSubmenuItemProperties.SUBMENU_PROVIDER;
 
 import android.app.Activity;
 import android.graphics.Rect;
@@ -23,6 +24,8 @@ import android.view.View;
 import androidx.annotation.PluralsRes;
 
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.tasks.tab_management.TabOverflowMenuCoordinator.OnItemClickedCallback;
+import org.chromium.ui.listmenu.ListMenuItemProperties;
 import org.chromium.ui.modelutil.MVCListAdapter;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -40,7 +43,6 @@ public class StripLayoutContextMenuCoordinatorTestUtils {
             Function<Integer, Integer> getMenuWidthFunc) {
         testAnchorWidth_smallAnchorWidth(weakReferenceActivity, getMenuWidthFunc);
         testAnchorWidth_largeAnchorWidth(weakReferenceActivity, getMenuWidthFunc);
-        testAnchorWidth_moderateAnchorWidth(weakReferenceActivity, getMenuWidthFunc);
     }
 
     private static void testAnchorWidth_smallAnchorWidth(
@@ -50,7 +52,7 @@ public class StripLayoutContextMenuCoordinatorTestUtils {
                 weakReferenceActivity
                         .get()
                         .getResources()
-                        .getDimensionPixelSize(R.dimen.tab_strip_context_menu_min_width),
+                        .getDimensionPixelSize(R.dimen.tab_strip_context_menu_max_width),
                 (int) getMenuWidthFunc.apply(1));
     }
 
@@ -63,18 +65,6 @@ public class StripLayoutContextMenuCoordinatorTestUtils {
                         .getResources()
                         .getDimensionPixelSize(R.dimen.tab_strip_context_menu_max_width),
                 (int) getMenuWidthFunc.apply(10000));
-    }
-
-    private static void testAnchorWidth_moderateAnchorWidth(
-            WeakReference<Activity> weakReferenceActivity,
-            Function<Integer, Integer> getMenuWidthFunc) {
-        int minWidth =
-                weakReferenceActivity
-                        .get()
-                        .getResources()
-                        .getDimensionPixelSize(R.dimen.tab_strip_context_menu_min_width);
-        int expectedWidth = minWidth + 1;
-        assertEquals(expectedWidth, (int) getMenuWidthFunc.apply(expectedWidth));
     }
 
     public static void testAnchor_offset(
@@ -110,10 +100,75 @@ public class StripLayoutContextMenuCoordinatorTestUtils {
             @PluralsRes int label,
             List<String> otherWindowTitles,
             Activity activity) {
+        verifyAddToWindowSubmenu(
+                modelList, indexOfAddToWindow, label, otherWindowTitles, activity, false);
+    }
+
+    public static void verifyAddToWindowSubmenu(
+            ModelList modelList,
+            int indexOfAddToWindow,
+            @PluralsRes int label,
+            List<String> otherWindowTitles,
+            Activity activity,
+            boolean isIncognito) {
+        verifyAddToWindowSubmenu(
+                modelList,
+                indexOfAddToWindow,
+                label,
+                otherWindowTitles,
+                activity,
+                isIncognito,
+                /* expectNewWindow= */ true);
+    }
+
+    /**
+     * Verifies the state and contents of the "Move to another window" submenu. This method also
+     * simulates interactions (opening the submenu and navigating back) to verify the full flow.
+     *
+     * @param modelList The model list containing the menu items.
+     * @param indexOfAddToWindow The index of the "Move to another window" item in the model list.
+     * @param label The plural resource ID for the item label (e.g., to move one or more tabs).
+     * @param otherWindowTitles The list of titles for other available windows.
+     * @param activity The current activity.
+     * @param isIncognito Whether the current menu is for incognito mode.
+     * @param expectNewWindow Whether the "New window" option is expected to be present in the
+     *     submenu. For example, this should be hidden if the last set of tabs in a window are
+     *     attempted to be moved.
+     */
+    public static void verifyAddToWindowSubmenu(
+            ModelList modelList,
+            int indexOfAddToWindow,
+            @PluralsRes int label,
+            List<String> otherWindowTitles,
+            Activity activity,
+            boolean isIncognito,
+            boolean expectNewWindow) {
+        if (otherWindowTitles.isEmpty()) {
+            assertTrue(
+                    "Expected to move to new window when no other windows exist", expectNewWindow);
+            MVCListAdapter.ListItem moveToOtherWindowItem = modelList.get(indexOfAddToWindow);
+            assertEquals(
+                    "Expected title to be 'Move to new window'",
+                    activity.getResources().getQuantityString(label, 1),
+                    moveToOtherWindowItem.model.get(TITLE));
+            if (isIncognito) {
+                assertEquals(
+                        "Expected incognito text appearance",
+                        R.style.TextAppearance_DensityAdaptive_TextLarge_Primary_Baseline_Light,
+                        moveToOtherWindowItem.model.get(ListMenuItemProperties.TEXT_APPEARANCE_ID));
+            }
+            return;
+        }
         int modelListSizeBeforeNav = modelList.size();
         var moveToOtherWindowItem = modelList.get(indexOfAddToWindow);
-        var subMenu = moveToOtherWindowItem.model.get(SUBMENU_ITEMS);
-        int expectedNumberOfItems = 1 + otherWindowTitles.size();
+        if (isIncognito) {
+            assertEquals(
+                    "Expected incognito text appearance for submenu parent",
+                    R.style.TextAppearance_DensityAdaptive_TextLarge_Primary_Baseline_Light,
+                    moveToOtherWindowItem.model.get(ListMenuItemProperties.TEXT_APPEARANCE_ID));
+        }
+        var subMenu = moveToOtherWindowItem.model.get(SUBMENU_PROVIDER).get();
+        int expectedNumberOfItems = (expectNewWindow ? 1 : 0) + otherWindowTitles.size();
         assertEquals(
                 "Submenu should have "
                         + expectedNumberOfItems
@@ -121,6 +176,17 @@ public class StripLayoutContextMenuCoordinatorTestUtils {
                         + getDebugString(subMenu),
                 expectedNumberOfItems,
                 subMenu.size());
+
+        for (MVCListAdapter.ListItem subMenuItem : subMenu) {
+            if (isIncognito) {
+                assertEquals(
+                        "Expected incognito text appearance for submenu item: "
+                                + subMenuItem.model.get(TITLE),
+                        R.style.TextAppearance_DensityAdaptive_TextLarge_Primary_Baseline_Light,
+                        subMenuItem.model.get(ListMenuItemProperties.TEXT_APPEARANCE_ID));
+            }
+        }
+
         moveToOtherWindowItem.model.get(CLICK_LISTENER).onClick(new View(activity));
         assertNotNull("Submenu should be present", subMenu);
         assertEquals(
@@ -139,27 +205,57 @@ public class StripLayoutContextMenuCoordinatorTestUtils {
                 activity.getResources().getQuantityString(label, 2),
                 headerItem.model.get(TITLE));
         assertTrue("Expected submenu header to be enabled", headerItem.model.get(ENABLED));
-        assertEquals("Expected 2nd item to have MENU_ITEM type", MENU_ITEM, modelList.get(1).type);
-        assertEquals(
-                "Expected 2nd item to be 'New window' row",
-                R.string.menu_new_window,
-                modelList.get(1).model.get(TITLE_ID));
+
+        int nextIndex = 1;
+        if (expectNewWindow) {
+            assertEquals(
+                    "Expected item to have MENU_ITEM type",
+                    MENU_ITEM,
+                    modelList.get(nextIndex).type);
+            assertEquals(
+                    "Expected item to be 'New window' row",
+                    R.string.menu_new_window,
+                    modelList.get(nextIndex).model.get(TITLE_ID));
+            if (isIncognito) {
+                assertEquals(
+                        "Expected incognito text appearance for 'New window' item",
+                        R.style.TextAppearance_DensityAdaptive_TextLarge_Primary_Baseline_Light,
+                        modelList
+                                .get(nextIndex)
+                                .model
+                                .get(ListMenuItemProperties.TEXT_APPEARANCE_ID));
+            }
+            nextIndex++;
+        }
+
         if (!otherWindowTitles.isEmpty()) {
             for (int i = 0; i < otherWindowTitles.size(); i++) {
-                assertEquals(
-                        "Expected window row at position " + (i + 2) + " to have MENU_ITEM type",
-                        MENU_ITEM,
-                        modelList.get(i + 2).type);
+                int currentIndex = nextIndex + i;
                 assertEquals(
                         "Expected window row at position "
-                                + (i + 2)
+                                + currentIndex
+                                + " to have MENU_ITEM type",
+                        MENU_ITEM,
+                        modelList.get(currentIndex).type);
+                assertEquals(
+                        "Expected window row at position "
+                                + currentIndex
                                 + " to have text "
                                 + otherWindowTitles.get(i),
                         otherWindowTitles.get(i),
-                        modelList.get(i + 2).model.get(TITLE));
+                        modelList.get(currentIndex).model.get(TITLE));
                 assertTrue(
-                        "Expected window row at position " + (i + 2) + " to be enabled",
-                        modelList.get(i + 2).model.get(ENABLED));
+                        "Expected window row at position " + currentIndex + " to be enabled",
+                        modelList.get(currentIndex).model.get(ENABLED));
+                if (isIncognito) {
+                    assertEquals(
+                            "Expected incognito text appearance for window row " + i,
+                            R.style.TextAppearance_DensityAdaptive_TextLarge_Primary_Baseline_Light,
+                            modelList
+                                    .get(currentIndex)
+                                    .model
+                                    .get(ListMenuItemProperties.TEXT_APPEARANCE_ID));
+                }
             }
         }
         headerItem.model.get(CLICK_LISTENER).onClick(new View(activity));
@@ -169,22 +265,18 @@ public class StripLayoutContextMenuCoordinatorTestUtils {
                 modelList.size());
     }
 
-    public static void clickMoveToNewWindow(
-            ModelList modelList, int moveToOtherWindowIdx, View view) {
+    public static <T> void clickMoveToNewWindow(
+            ModelList modelList,
+            int moveToOtherWindowIdx,
+            OnItemClickedCallback<T> onItemClickedCallback,
+            T anchorId,
+            String collaborationId) {
         var moveToOtherWindowItem = modelList.get(moveToOtherWindowIdx);
-        moveToOtherWindowItem.model.get(CLICK_LISTENER).onClick(view);
-        assertTrue(
-                "Expected model list to have at least 2 items, but contents were "
-                        + getDebugString(modelList),
-                modelList.size() >= 2);
-        MVCListAdapter.ListItem newWindowItem = modelList.get(1);
-        assertEquals("Expected 2nd item to have MENU_ITEM type", MENU_ITEM, newWindowItem.type);
-        assertEquals(
-                "Expected 2nd item to be 'New window' row",
-                R.string.menu_new_window,
-                newWindowItem.model.get(TITLE_ID));
-
-        newWindowItem.model.get(CLICK_LISTENER).onClick(view);
+        onItemClickedCallback.onClick(
+                moveToOtherWindowItem.model.get(MENU_ITEM_ID),
+                anchorId,
+                collaborationId,
+                /* listViewTouchTracker= */ null);
     }
 
     public static void clickMoveToWindowRow(

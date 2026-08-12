@@ -26,7 +26,8 @@
 #include "chrome/test/base/chromeos/crosier/upstart.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/experiences/arc/metrics/arc_metrics_constants.h"
-#include "components/user_manager/user_manager.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #include "content/public/browser/browser_context.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
@@ -42,12 +43,13 @@ class ArcBootWaiter : public arc::ArcBootPhaseMonitorBridge::Observer {
   ~ArcBootWaiter() override = default;
 
   void Wait() {
-    const user_manager::User* primary_user =
-        user_manager::UserManager::Get()->GetPrimaryUser();
-    CHECK(primary_user);
+    const session_manager::Session* primary_session =
+        session_manager::SessionManager::Get()->GetPrimarySession();
+    CHECK(primary_session);
 
     auto* browser_context =
-        ash::BrowserContextHelper::Get()->GetBrowserContextByUser(primary_user);
+        ash::BrowserContextHelper::Get()->GetBrowserContextByAccountId(
+            primary_session->account_id());
     arc::ArcBootPhaseMonitorBridge* boot_bridge =
         arc::ArcBootPhaseMonitorBridge::GetForBrowserContext(browser_context);
     CHECK(boot_bridge);
@@ -161,14 +163,16 @@ bool ShouldEnableArcVm() {
   std::string use_flags;
   CHECK(base::ReadFileToString(
       base::FilePath("/usr/local/etc/tast_use_flags.txt"), &use_flags));
-  return base::Contains(use_flags, "arcvm") &&
-         !base::Contains(use_flags, "arcpp");
+  return use_flags.contains("arcvm") && !use_flags.contains("arcpp");
 }
 
 // Gets the active user's browser context.
 content::BrowserContext* GetActiveUserBrowserContext() {
-  auto* user = user_manager::UserManager::Get()->GetActiveUser();
-  return ash::BrowserContextHelper::Get()->GetBrowserContextByUser(user);
+  const session_manager::Session* active_session =
+      session_manager::SessionManager::Get()->GetActiveSession();
+  CHECK(active_session);
+  return ash::BrowserContextHelper::Get()->GetBrowserContextByAccountId(
+      active_session->account_id());
 }
 
 void WaitForAppRegister(const std::string& app_id) {

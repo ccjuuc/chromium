@@ -13,7 +13,6 @@
 #import "components/policy/core/common/cloud/cloud_policy_client.h"
 #import "components/policy/core/common/cloud/cloud_policy_constants.h"
 #import "components/policy/core/common/cloud/mock_cloud_policy_client.h"
-#import "components/policy/core/common/cloud/realtime_reporting_job_configuration.h"
 #import "components/safe_browsing/core/common/features.h"
 #import "ios/chrome/browser/enterprise/connectors/reporting/ios_realtime_reporting_client_factory.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
@@ -76,39 +75,8 @@ class IOSRealtimeReportingClientTest
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-// Tests that uploading events succeed using the dictionary mapping the events.
-TEST_P(IOSRealtimeReportingClientTest, TestDeprecatedUmaEventUploadSucceeds) {
-  SetCloudPolicyClient(is_profile_reporting());
-
-  ReportingSettings settings;
-  settings.per_profile = is_profile_reporting();
-  base::Value::Dict event;
-
-  base::RunLoop run_loop;
-  EXPECT_CALL(*client_.get(), UploadSecurityEventReport(_, _, _))
-      .WillOnce([&](bool include_device_info, base::Value::Dict&& report,
-                    policy::CloudPolicyClient::ResultCallback callback) {
-        upload_callback_ = std::move(callback);
-        run_loop.Quit();
-      });
-  reporting_client_->ReportRealtimeEvent(kKeyLoginEvent, std::move(settings),
-                                         std::move(event));
-  run_loop.Run();
-
-  ASSERT_TRUE(upload_callback_);
-  std::move(upload_callback_)
-      .Run(policy::CloudPolicyClient::Result(policy::DM_STATUS_SUCCESS));
-
-  histogram_.ExpectUniqueSample(kUploadSuccess,
-                                EnterpriseReportingEventType::kLoginEvent, 1);
-  histogram_.ExpectTotalCount(kUploadFailure, 0);
-}
-
 // Tests that uploading events succeed using the new reporting events proto.
 TEST_P(IOSRealtimeReportingClientTest, TestUmaEventUploadSucceeds) {
-  base::test::ScopedFeatureList scoped_feature_list(
-      policy::kUploadRealtimeReportingEventsUsingProto);
-
   SetCloudPolicyClient(is_profile_reporting());
 
   ReportingSettings settings;
@@ -143,38 +111,8 @@ TEST_P(IOSRealtimeReportingClientTest, TestUmaEventUploadSucceeds) {
   histogram_.ExpectTotalCount(kUploadFailure, 0);
 }
 
-// Tests that uploading events fails using the dictionary mapping the events.
-TEST_P(IOSRealtimeReportingClientTest, TestDeprecatedUmaEventUploadFails) {
-  SetCloudPolicyClient(is_profile_reporting());
-
-  ReportingSettings settings;
-  settings.per_profile = is_profile_reporting();
-  base::Value::Dict event;
-
-  base::RunLoop run_loop;
-  EXPECT_CALL(*client_.get(), UploadSecurityEventReport(_, _, _))
-      .WillOnce([&](bool include_device_info, base::Value::Dict&& report,
-                    policy::CloudPolicyClient::ResultCallback callback) {
-        upload_callback_ = std::move(callback);
-        run_loop.Quit();
-      });
-  reporting_client_->ReportRealtimeEvent(kKeyLoginEvent, std::move(settings),
-                                         std::move(event));
-  run_loop.Run();
-
-  ASSERT_TRUE(upload_callback_);
-  std::move(upload_callback_)
-      .Run(policy::CloudPolicyClient::Result(policy::DM_STATUS_REQUEST_FAILED));
-
-  histogram_.ExpectUniqueSample(kUploadFailure,
-                                EnterpriseReportingEventType::kLoginEvent, 1);
-  histogram_.ExpectTotalCount(kUploadSuccess, 0);
-}
-
 // Tests that uploading events fail using the new reporting events proto.
 TEST_P(IOSRealtimeReportingClientTest, TestUmaEventUploadFails) {
-  base::test::ScopedFeatureList scoped_feature_list(
-      policy::kUploadRealtimeReportingEventsUsingProto);
   SetCloudPolicyClient(is_profile_reporting());
 
   ReportingSettings settings;
@@ -222,6 +160,9 @@ TEST_F(IOSRealtimeReportingClientTest,
                               kAllReportingEnabledEvents.end());
   all_reporting_events.insert(kAllReportingOptInEvents.begin(),
                               kAllReportingOptInEvents.end());
+  // Saas usage event is independent from reporting connector, so it is
+  // neither enabled nor opt-in event.
+  all_reporting_events.insert(kKeySaasUsageEvent);
 
   EXPECT_EQ(all_reporting_events.size(), kEventNameToUmaEnumMap.size());
   for (std::string eventName : all_reporting_events) {

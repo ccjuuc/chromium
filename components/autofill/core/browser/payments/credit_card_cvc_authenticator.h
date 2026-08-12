@@ -6,9 +6,14 @@
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_CREDIT_CARD_CVC_AUTHENTICATOR_H_
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
+#include "base/memory/weak_ptr.h"
+#include "base/values.h"
 #include "build/build_config.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/payments/card_unmask_delegate.h"
@@ -46,7 +51,7 @@ class CreditCardCvcAuthenticator
       cvc = std::u16string(s);
       return *this;
     }
-    CvcAuthenticationResponse& with_request_options(base::Value::Dict v) {
+    CvcAuthenticationResponse& with_request_options(base::DictValue v) {
       request_options = std::move(v);
       return *this;
     }
@@ -58,7 +63,7 @@ class CreditCardCvcAuthenticator
     raw_ptr<const CreditCard> card = nullptr;
     // TODO(crbug.com/40927733): Remove CVC.
     std::u16string cvc;
-    base::Value::Dict request_options;
+    base::DictValue request_options;
     std::string card_authorization_token;
   };
   class Requester {

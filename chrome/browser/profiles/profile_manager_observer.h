@@ -13,10 +13,13 @@ enum class ProfileKeepAliveOrigin;
 class ProfileManagerObserver : public base::CheckedObserver {
  public:
   // Called when a Profile is added to the manager, the profile is fully created
-  // and registered with the ProfileManager. This is only called for normal
-  // (on-the-record) profiles as the ProfileManager doesn't own the OTR profile.
-  // For OTR profile creation, see
-  // ProfileObserver::OnOffTheRecordProfileCreated().
+  // and registered with the ProfileManager. This is called for:
+  //  - Regular profiles,
+  //  - Original profiles of the Guest and system profiles.
+  // This is NOT called for:
+  //  - Incognito profiles (OTR profile associated to a regular profile). For
+  //    these profiles, see `ProfileObserver::OnOffTheRecordProfileCreated()`.
+  //  - Guest and system profiles.
   // Unlike ProfileAttributesStorage::Observer::OnProfileAdded(), which is only
   // called when a new user is first created, this is called once on every run
   // of Chrome, provided that the Profile is in use.
@@ -24,7 +27,7 @@ class ProfileManagerObserver : public base::CheckedObserver {
 
   // Called when the user deletes a profile and all associated data should be
   // erased. Note that the Profile object will not be destroyed until Chrome
-  // shuts down. See https://crbug.com/88586
+  // shuts down. See https://crbug.com/40594327
   virtual void OnProfileMarkedForPermanentDeletion(Profile* profile) {}
 
   // Called when the profile manager is destroying. As the `ProfileManager` is

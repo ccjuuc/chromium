@@ -23,10 +23,13 @@
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/profiles/profile_colors_util.h"
 #include "chrome/browser/ui/signin/signin_view_controller.h"
+#include "chrome/browser/ui/webui/signin/signin_ui_error.h"
+#include "chrome/browser/ui/webui/signin/signin_utils_desktop.h"
+#include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
 #include "chrome/common/channel_info.h"
 #include "components/policy/core/browser/signin/profile_separation_policies.h"
 #include "components/policy/core/browser/signin/user_cloud_signin_restriction_policy_fetcher.h"
@@ -211,7 +214,11 @@ void ManagedProfileCreationController::OnProfileSeparationPoliciesReceived(
   account_level_signin_restriction_policy_fetcher_.reset();
 
   // If the user is not allowed to sign in, we should not show the disclaimer.
-  if (!source_profile_->GetPrefs()->GetBoolean(prefs::kSigninAllowed)) {
+  SigninUIError can_offer_error = CanOfferSignin(
+      source_profile_, GaiaId(account_info_.gaia), account_info_.email,
+      /*allow_account_from_other_profile=*/true,
+      /*ignore_reauth_error=*/true);
+  if (!can_offer_error.IsOk()) {
     // If the profile creation is required by policy, we should sign the user
     // out since they cannot sign in to Chrome.
     if (profile_creation_required_by_policy_) {
@@ -228,10 +235,12 @@ void ManagedProfileCreationController::OnProfileSeparationPoliciesReceived(
 void ManagedProfileCreationController::ShowManagementDisclaimer() {
   CHECK(policies_received_);
   CHECK(source_profile_);
-  Browser* browser = chrome::FindLastActiveWithProfile(source_profile_);
+  BrowserWindowInterface* const browser =
+      ProfileBrowserCollection::GetForProfile(source_profile_)
+          ->GetLastActiveBrowser();
   bool has_browser_with_tab =
-      browser &&
-      browser->SupportsWindowFeature(Browser::WindowFeature::kFeatureTabStrip);
+      browser && WindowFeatureController::From(browser)->SupportsWindowFeature(
+                     WindowFeatureController::WindowFeature::kFeatureTabStrip);
 
   if (user_choice_for_testing_.has_value()) {
     CHECK_IS_TEST();
@@ -363,7 +372,8 @@ void ManagedProfileCreationController::MoveAccountIntoNewProfile() {
   CHECK(!profile_creator_);
   if (managed_profile_already_exists) {
     profile_creator_ = std::make_unique<DiceSignedInProfileCreator>(
-        source_profile_, account_info_.account_id, switch_to_entry->GetPath(),
+        source_profile_, account_info_.account_id, std::vector<CoreAccountId>{},
+        switch_to_entry->GetPath(),
         base::BindOnce(
             &ManagedProfileCreationController::OnNewSignedInProfileCreated,
             weak_ptr_factory_.GetWeakPtr(),
@@ -372,8 +382,8 @@ void ManagedProfileCreationController::MoveAccountIntoNewProfile() {
     return;
   }
   profile_creator_ = std::make_unique<DiceSignedInProfileCreator>(
-      source_profile_, account_info_.account_id, profile_name,
-      profiles::GetPlaceholderAvatarIndex(),
+      source_profile_, account_info_.account_id, std::vector<CoreAccountId>{},
+      profile_name, profiles::GetPlaceholderAvatarIndex(),
       base::BindOnce(
           &ManagedProfileCreationController::OnNewSignedInProfileCreated,
           weak_ptr_factory_.GetWeakPtr(),

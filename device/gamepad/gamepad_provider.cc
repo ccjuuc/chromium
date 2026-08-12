@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-
 #include "device/gamepad/gamepad_provider.h"
 
 #include <stddef.h>
@@ -23,6 +22,7 @@
 #include "base/location.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/synchronization/waitable_event.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread.h"
@@ -110,9 +110,18 @@ GamepadProvider::~GamepadProvider() {
   // some of them require their destructor to be called on the same sequence as
   // their other methods.
   simulated_gamepad_data_fetcher_ = nullptr;
+
+  base::WaitableEvent cleared(base::WaitableEvent::ResetPolicy::MANUAL,
+                              base::WaitableEvent::InitialState::NOT_SIGNALED);
   polling_thread_->task_runner()->PostTask(
-      FROM_HERE, base::BindOnce(&GamepadFetcherVector::clear,
-                                base::Unretained(&data_fetchers_)));
+      FROM_HERE,
+      base::BindOnce(
+          [](GamepadFetcherVector* fetchers, base::WaitableEvent* event) {
+            fetchers->clear();
+            event->Signal();
+          },
+          base::Unretained(&data_fetchers_), base::Unretained(&cleared)));
+  cleared.Wait();
 
   // Use Stop() to join the polling thread, as there may be pending callbacks
   // which dereference |polling_thread_|.
@@ -507,8 +516,9 @@ void GamepadProvider::DoPoll() {
     it->GetGamepadData(changed);
   }
 
-  Gamepads old_buffer;
-  Gamepads new_buffer;
+  // Value-initialize to zero padding and prevent leaks (crbug.com/501747804).
+  Gamepads old_buffer = {};
+  Gamepads new_buffer = {};
   GetCurrentGamepadData(&old_buffer);
 
   for (size_t i = 0; i < Gamepads::kItemsLengthCap; ++i) {

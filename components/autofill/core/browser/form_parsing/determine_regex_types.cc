@@ -4,22 +4,36 @@
 
 #include "components/autofill/core/browser/form_parsing/determine_regex_types.h"
 
-#include <memory>
+#include <stddef.h>
 
-#include "base/containers/contains.h"
-#include "base/containers/to_vector.h"
+#include <functional>
+#include <memory>
+#include <optional>
+#include <utility>
+#include <vector>
+
+#include "base/containers/flat_map.h"
+#include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/metrics/histogram_macros.h"
+#include "build/buildflag.h"
 #include "components/autofill/core/browser/country_type.h"
+#include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/form_parsing/autofill_parsing_utils.h"
 #include "components/autofill/core/browser/form_parsing/field_candidates.h"
 #include "components/autofill/core/browser/form_parsing/form_field_parser.h"
+#include "components/autofill/core/browser/form_parsing/regex_patterns.h"
 #include "components/autofill/core/browser/form_qualifiers.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/form_structure_rationalizer.h"
-#include "components/autofill/core/browser/form_structure_sectioning_util.h"
+#include "components/autofill/core/browser/heuristic_source.h"
 #include "components/autofill/core/browser/logging/log_manager.h"
+#include "components/autofill/core/browser/metrics/log_event.h"
 #include "components/autofill/core/browser/metrics/prediction_quality_metrics.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/language_code.h"
+#include "components/autofill/core/common/signatures.h"
+#include "components/autofill/core/common/unique_ids.h"
 
 namespace autofill {
 
@@ -29,11 +43,13 @@ namespace {
 // are returned, but not assigned to the `fields_` yet. Use
 // `AssignBestFieldTypes()` to do so.
 FieldCandidatesMap ParseFieldTypesWithPatterns(const FormData& form,
-                                               ParsingContext& context) {
+                                               ParsingContext& context,
+                                               bool ignore_small_forms) {
   FieldCandidatesMap field_type_map;
 
-  if (ShouldRunHeuristics(form)) {
-    FormFieldParser::ParseFormFields(context, form.fields(), field_type_map);
+  if (ShouldRunHeuristics(form, ignore_small_forms)) {
+    FormFieldParser::ParseFormFields(context, form.fields(), field_type_map,
+                                     ignore_small_forms);
   } else if (ShouldRunHeuristicsForSingleFields(form)) {
     FormFieldParser::ParseSingleFields(context, form.fields(), field_type_map);
     FormFieldParser::ParseStandaloneCVCFields(context, form.fields(),
@@ -61,7 +77,7 @@ RegexPredictions::RegexPredictions(HeuristicSource source,
                                    base::span<const FormFieldData> fields)
     : source_(source) {
   const HeuristicSource active_source = GetActiveHeuristicSource();
-  std::vector<std::pair<FieldGlobalId, FieldType>> field_predictions;
+  std::vector<std::pair<FieldGlobalId, FieldCandidate>> field_predictions;
   for (const FormFieldData& field : fields) {
     auto iter = field_type_map.find(field.global_id());
     if (iter == field_type_map.end()) {
@@ -75,7 +91,7 @@ RegexPredictions::RegexPredictions(HeuristicSource source,
     }
 
     field_predictions.emplace_back(field.global_id(),
-                                   candidates.BestHeuristicType());
+                                   candidates.BestHeuristicCandidate());
   }
   predictions_ = base::flat_map(std::move(field_predictions));
 }
@@ -105,7 +121,10 @@ void RegexPredictions::ApplyTo(
     if (it == predictions_.end()) {
       continue;
     }
-    field->set_heuristic_type(source_, it->second);
+
+    const FieldCandidate& candidate = it->second;
+    field->set_heuristic_type(source_, candidate.type);
+    field->set_regex_match_info(candidate.match_info);
 
     const size_t field_rank = ++field_rank_map.at(field->GetFieldSignature());
     // Log the field type predicted from local heuristics.
@@ -121,7 +140,8 @@ void RegexPredictions::ApplyTo(
 RegexPredictions DetermineRegexTypes(const GeoIpCountryCode& client_country,
                                      const LanguageCode& current_page_language,
                                      const FormData& form,
-                                     LogManager* log_manager) {
+                                     LogManager* log_manager,
+                                     bool ignore_small_forms) {
   SCOPED_UMA_HISTOGRAM_TIMER("Autofill.Timing.DetermineHeuristicTypes");
 
   const LanguageCode& page_language =
@@ -135,9 +155,10 @@ RegexPredictions DetermineRegexTypes(const GeoIpCountryCode& client_country,
                          PatternFile::kLegacy,
 #endif
                          GetActiveRegexFeatures(), log_manager);
-  return RegexPredictions(HeuristicSource::kRegexes,
-                          ParseFieldTypesWithPatterns(form, context),
-                          form.fields());
+  return RegexPredictions(
+      HeuristicSource::kRegexes,
+      ParseFieldTypesWithPatterns(form, context, ignore_small_forms),
+      form.fields());
 }
 
 }  // namespace autofill

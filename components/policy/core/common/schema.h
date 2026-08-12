@@ -125,14 +125,14 @@ class POLICY_EXPORT Schema {
   static base::expected<Schema, std::string> Parse(const std::string& content);
 
   // Verifies if |schema| is a valid JSON v3 schema. When this validation passes
-  // then |schema| is valid JSON that can be parsed into a Value::Dict which can
-  // be used to build a |Schema|. Returns the parsed Value::Dict when |schema|
-  // validated, otherwise returns an error description. For performance reasons,
-  // currently IsValidSchema() won't check the correctness of regular
+  // then |schema| is valid JSON that can be parsed into a base::DictValue which
+  // can be used to build a |Schema|. Returns the parsed base::DictValue when
+  // |schema| validated, otherwise returns an error description. For performance
+  // reasons, currently IsValidSchema() won't check the correctness of regular
   // expressions used in "pattern" and "patternProperties" and in Validate()
   // invalid regular expression don't accept any strings. |options| is a
   // bitwise-OR combination of the options above (see |kSchemaOptions*| above).
-  static base::expected<base::Value::Dict, std::string> ParseToDictAndValidate(
+  static base::expected<base::DictValue, std::string> ParseToDictAndValidate(
       const std::string& schema,
       int options);
 
@@ -214,6 +214,12 @@ class POLICY_EXPORT Schema {
   // Returns the Schema for the property named |key|. If |key| is not a known
   // property name then the returned Schema is not valid.
   Schema GetKnownProperty(const std::string& key) const;
+
+  // Returns the canonical name for |key| if a case-insensitive match is found
+  // in the known properties of this schema.
+  // This method should be called only if `Schema` type is `DICT`.
+  std::optional<std::string> GetKnownPropertyKeyCaseInsensitive(
+      const std::string& key) const;
 
   // Returns all Schemas from pattern properties that match |key|. May be empty.
   SchemaList GetPatternProperties(const std::string& key) const;

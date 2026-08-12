@@ -17,7 +17,7 @@
 
 // Gaia ID.
 @property(nonatomic, assign) GaiaId gaiaID;
-// User name.
+// User name. It may be nil.
 @property(nonatomic, copy) NSString* name;
 // User email.
 @property(nonatomic, copy) NSString* email;
@@ -30,10 +30,9 @@
 // Style for the IdentityView.
 @property(nonatomic, assign) IdentityViewStyle identityViewStyle;
 
-// Same as `configureCell:withStyler:` with a completion block.
+// Same as `configureCell:` with a completion block.
 - (void)configureCell:(UITableViewCell*)cell
-           withStyler:(ChromeTableViewStyler*)styler
-           completion:(ProceduralBlock)completion;
+       withCompletion:(ProceduralBlock)completion;
 
 @end
 

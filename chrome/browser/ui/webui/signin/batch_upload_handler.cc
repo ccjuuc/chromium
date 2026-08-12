@@ -51,8 +51,7 @@ std::string ComputeBatchUploadSubtitle(syncer::DataType first_type,
   // later.
   // This section should be remoevd when cleaning up
   // `syncer::kReplaceSyncPromosWithSignInPromos`.
-  if (!base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos)) {
+  if (!syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     // Check for the "hero" type availability.
     if (first_type == syncer::DataType::PASSWORDS) {
       if (number_of_types > 1) {
@@ -236,7 +235,7 @@ void BatchUploadHandler::SaveToAccount(
         device_reauth::DeviceAuthSource::kSettingsBatchUpload);
 
     device_authenticator_ = ChromeDeviceAuthenticatorFactory::GetForProfile(
-        browser_->profile(),
+        browser_->GetProfile(),
         browser_->tab_strip_model()
             ->GetActiveWebContents()
             ->GetTopLevelNativeWindow(),

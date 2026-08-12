@@ -22,8 +22,6 @@
 #include "chrome/browser/ash/drive/file_system_util.h"
 #include "chrome/browser/ash/guest_os/guest_os_share_path.h"
 #include "chrome/browser/ash/guest_os/guest_os_share_path_factory.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_features.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_policy_constants.h"
@@ -31,7 +29,6 @@
 #include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager_factory.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
@@ -102,7 +99,7 @@ constexpr auto kGoogleOneOfferBannerSupportedCountries =
 #define SET_STRING_PLURAL(id, idr, n) \
   dict->Set(id, l10n_util::GetPluralStringFUTF16(idr, n))
 
-void AddStringsForFileTypes(base::Value::Dict* dict) {
+void AddStringsForFileTypes(base::DictValue* dict) {
   // TODO(crbug.com/41146170): Rename string IDs to something like
   // FILE_TYPE_WHATEVER.
   SET_STRING("ARCHIVE_FILE_TYPE", IDS_FILE_BROWSER_ARCHIVE_FILE_TYPE);
@@ -145,9 +142,10 @@ void AddStringsForFileTypes(base::Value::Dict* dict) {
   SET_STRING("WORD_DOCUMENT_FILE_TYPE",
              IDS_FILE_BROWSER_WORD_DOCUMENT_FILE_TYPE);
   SET_STRING("TINI_FILE_TYPE", IDS_FILE_BROWSER_TINI_FILE_TYPE);
+  SET_STRING("SWBN_FILE_TYPE", IDS_FILE_BROWSER_SWBN_FILE_TYPE);
 }
 
-void AddStringsForDrive(base::Value::Dict* dict) {
+void AddStringsForDrive(base::DictValue* dict) {
   SET_STRING("BULK_PINNING_BUTTON_LABEL_ISSUE",
              IDS_FILE_BROWSER_BULK_PINNING_BUTTON_LABEL_ISSUE);
   SET_STRING("BULK_PINNING_BUTTON_LABEL_OFFLINE",
@@ -259,7 +257,7 @@ void AddStringsForDrive(base::Value::Dict* dict) {
              IDS_FILE_BROWSER_BULK_PINNING_METERED_NETWORK_LABEL);
 }
 
-void AddStringsForMediaView(base::Value::Dict* dict) {
+void AddStringsForMediaView(base::DictValue* dict) {
   SET_STRING("MEDIA_VIEW_ALL_ROOT_LABEL",
              IDS_FILE_BROWSER_MEDIA_VIEW_ALL_ROOT_LABEL);
   SET_STRING("MEDIA_VIEW_AUDIO_ROOT_LABEL",
@@ -297,7 +295,7 @@ void AddStringsForMediaView(base::Value::Dict* dict) {
              IDS_FILE_BROWSER_RECENT_EMPTY_DOCUMENTS_FOLDER);
 }
 
-void AddStringsForMediaPlayer(base::Value::Dict* dict) {
+void AddStringsForMediaPlayer(base::DictValue* dict) {
   SET_STRING("MEDIA_PLAYER_PLAY_BUTTON_LABEL",
              IDS_MEDIA_PLAYER_PLAY_BUTTON_LABEL);
   SET_STRING("MEDIA_PLAYER_PAUSE_BUTTON_LABEL",
@@ -316,7 +314,7 @@ void AddStringsForMediaPlayer(base::Value::Dict* dict) {
              IDS_MEDIA_PLAYER_VOLUME_SLIDER_LABEL);
 }
 
-void AddStringsForCrUiMenuItemShortcuts(base::Value::Dict* dict) {
+void AddStringsForCrUiMenuItemShortcuts(base::DictValue* dict) {
   // Shortcut key names: used from cr.ui.MenuItem.updateShortcut_.
   SET_STRING("SHORTCUT_ALT", IDS_FILE_BROWSER_SHORTCUT_ALT);
   SET_STRING("SHORTCUT_BACKSPACE", IDS_FILE_BROWSER_SHORTCUT_BACKSPACE);
@@ -327,7 +325,7 @@ void AddStringsForCrUiMenuItemShortcuts(base::Value::Dict* dict) {
   SET_STRING("SHORTCUT_SPACE", IDS_FILE_BROWSER_SHORTCUT_SPACE);
 }
 
-void AddStringsForFileErrors(base::Value::Dict* dict) {
+void AddStringsForFileErrors(base::DictValue* dict) {
   SET_STRING("FILE_ERROR_GENERIC", IDS_FILE_BROWSER_FILE_ERROR_GENERIC);
   SET_STRING("FILE_ERROR_INVALID_MODIFICATION",
              IDS_FILE_BROWSER_FILE_ERROR_INVALID_MODIFICATION);
@@ -344,11 +342,11 @@ void AddStringsForFileErrors(base::Value::Dict* dict) {
   SET_STRING("FILE_ERROR_SECURITY", IDS_FILE_BROWSER_FILE_ERROR_SECURITY);
 }
 
-void AddStringsForSharesheet(base::Value::Dict* dict) {
+void AddStringsForSharesheet(base::DictValue* dict) {
   SET_STRING("SHARESHEET_BUTTON_LABEL", IDS_SHARESHEET_TITLE_LABEL);
 }
 
-void AddStringsForHoldingSpace(base::Value::Dict* dict) {
+void AddStringsForHoldingSpace(base::DictValue* dict) {
   const std::u16string pin_command = l10n_util::GetStringUTF16(
       IDS_FILE_BROWSER_HOLDING_SPACE_PIN_TO_SHELF_COMMAND_LABEL);
   dict->Set("HOLDING_SPACE_PIN_COMMAND_LABEL", pin_command);
@@ -367,13 +365,13 @@ void AddStringsForHoldingSpace(base::Value::Dict* dict) {
              IDS_FILE_BROWSER_HOLDING_SPACE_WELCOME_TITLE);
 }
 
-void AddStringsForPhotos(base::Value::Dict* dict) {
+void AddStringsForPhotos(base::DictValue* dict) {
   SET_STRING("PHOTOS_WELCOME_DISMISS", IDS_FILE_BROWSER_PHOTOS_WELCOME_DISMISS);
   SET_STRING("PHOTOS_WELCOME_TEXT", IDS_FILE_BROWSER_PHOTOS_WELCOME_TEXT);
   SET_STRING("PHOTOS_WELCOME_TITLE", IDS_FILE_BROWSER_PHOTOS_WELCOME_TITLE);
 }
 
-void AddStringsGeneric(base::Value::Dict* dict) {
+void AddStringsGeneric(base::DictValue* dict) {
   SET_STRING("ALL_FILES_FILTER", IDS_FILE_BROWSER_ALL_FILES_FILTER);
   SET_STRING("ARCHIVE_MOUNT_FAILED", IDS_FILE_BROWSER_ARCHIVE_MOUNT_FAILED);
   SET_STRING("ARCHIVE_MOUNT_MESSAGE", IDS_FILE_BROWSER_ARCHIVE_MOUNT_MESSAGE);
@@ -510,16 +508,6 @@ void AddStringsGeneric(base::Value::Dict* dict) {
   SET_STRING("DELETE_IN_USE_ERROR", IDS_FILE_BROWSER_DELETE_IN_USE_ERROR);
   SET_STRING("DELETE_FILE_NAME", IDS_FILE_BROWSER_DELETE_FILE_NAME);
   SET_STRING("DELETE_ITEMS_REMAINING", IDS_FILE_BROWSER_DELETE_ITEMS_REMAINING);
-  SET_STRING("DEVICE_HARD_UNPLUGGED_MESSAGE",
-             IDS_DEVICE_HARD_UNPLUGGED_MESSAGE);
-  SET_STRING("DEVICE_HARD_UNPLUGGED_TITLE", IDS_DEVICE_HARD_UNPLUGGED_TITLE);
-  SET_STRING("DEVICE_UNKNOWN_BUTTON_LABEL", IDS_DEVICE_UNKNOWN_BUTTON_LABEL);
-  SET_STRING("DEVICE_UNKNOWN_DEFAULT_MESSAGE",
-             IDS_DEVICE_UNKNOWN_DEFAULT_MESSAGE);
-  SET_STRING("DEVICE_UNKNOWN_MESSAGE", IDS_DEVICE_UNKNOWN_MESSAGE);
-  SET_STRING("DEVICE_UNSUPPORTED_DEFAULT_MESSAGE",
-             IDS_DEVICE_UNSUPPORTED_DEFAULT_MESSAGE);
-  SET_STRING("DEVICE_UNSUPPORTED_MESSAGE", IDS_DEVICE_UNSUPPORTED_MESSAGE);
   SET_STRING("DIRECTORY_ALREADY_EXISTS",
              IDS_FILE_BROWSER_DIRECTORY_ALREADY_EXISTS);
   SET_STRING("DISABLED_MOBILE_SYNC_NOTIFICATION_ENABLE_BUTTON",
@@ -538,6 +526,8 @@ void AddStringsGeneric(base::Value::Dict* dict) {
              IDS_FILE_BROWSER_DRAGGING_MULTIPLE_ITEMS);
   SET_STRING("EMPTY_TRASH_BUTTON_LABEL",
              IDS_FILE_BROWSER_EMPTY_TRASH_BUTTON_LABEL);
+  SET_STRING("DEPRECATED_DEBIAN_PACKAGE_INSTALL",
+             IDS_FILE_BROWSER_DEPRECATED_DEBIAN_PACKAGE_INSTALL);
   SET_STRING("ERROR_CREATING_FOLDER", IDS_FILE_BROWSER_ERROR_CREATING_FOLDER);
   SET_STRING("ERROR_HIDDEN_NAME", IDS_FILE_BROWSER_ERROR_HIDDEN_NAME);
   SET_STRING("ERROR_INVALID_CHARACTER",
@@ -555,8 +545,8 @@ void AddStringsGeneric(base::Value::Dict* dict) {
   SET_STRING("ERROR_RESERVED_NAME", IDS_FILE_BROWSER_ERROR_RESERVED_NAME);
   SET_STRING("ERROR_WHITESPACE_NAME", IDS_FILE_BROWSER_ERROR_WHITESPACE_NAME);
   SET_STRING("FEEDBACK_EXPAND_LABEL", IDS_FILE_BROWSER_FEEDBACK_EXPAND_LABEL);
-  SET_STRING("EXTERNAL_STORAGE_DISABLED_MESSAGE",
-             IDS_EXTERNAL_STORAGE_DISABLED_MESSAGE);
+  SET_STRING("REMOVABLE_DEVICE_EXTERNAL_STORAGE_DISABLED_MESSAGE",
+             IDS_REMOVABLE_DEVICE_EXTERNAL_STORAGE_DISABLED_MESSAGE);
   SET_STRING("FAILED_SPACE_INFO", IDS_FILE_BROWSER_FAILED_SPACE_INFO);
   SET_STRING("FILENAME_LABEL", IDS_FILE_BROWSER_FILENAME_LABEL);
   SET_STRING("FILE_ALREADY_EXISTS", IDS_FILE_BROWSER_FILE_ALREADY_EXISTS);
@@ -572,10 +562,6 @@ void AddStringsGeneric(base::Value::Dict* dict) {
              IDS_FILE_BROWSER_FOLDER_SHARED_WITH_CROSTINI);
   SET_STRING("FOLDER_SHARED_WITH_CROSTINI_PLURAL",
              IDS_FILE_BROWSER_FOLDER_SHARED_WITH_CROSTINI_PLURAL);
-  SET_STRING("FOLDER_SHARED_WITH_PLUGIN_VM",
-             IDS_FILE_BROWSER_FOLDER_SHARED_WITH_PLUGIN_VM);
-  SET_STRING("FOLDER_SHARED_WITH_PLUGIN_VM_PLURAL",
-             IDS_FILE_BROWSER_FOLDER_SHARED_WITH_PLUGIN_VM_PLURAL);
   SET_STRING("FORMATTING_FINISHED_FAILURE_MESSAGE",
              IDS_FORMATTING_FINISHED_FAILURE_MESSAGE);
   SET_STRING("FORMATTING_FINISHED_SUCCESS_MESSAGE",
@@ -591,10 +577,6 @@ void AddStringsGeneric(base::Value::Dict* dict) {
   SET_STRING("FORMATTING_WARNING", IDS_FILE_BROWSER_FORMATTING_WARNING);
   SET_STRING("PAUSE_LABEL", IDS_FILE_BROWSER_PAUSE_LABEL);
   SET_STRING("PERCENT_COMPLETE", IDS_FILE_BROWSER_PERCENT_COMPLETE);
-  SET_STRING("RENAMING_OF_DEVICE_FINISHED_FAILURE_MESSAGE",
-             IDS_RENAMING_OF_DEVICE_FINISHED_FAILURE_MESSAGE);
-  SET_STRING("RENAMING_OF_DEVICE_FAILED_TITLE",
-             IDS_RENAMING_OF_DEVICE_FAILED_TITLE);
   SET_STRING("FORMAT_DEVICE_BUTTON_LABEL",
              IDS_FILE_BROWSER_FORMAT_DEVICE_BUTTON_LABEL);
   SET_STRING("FORMAT_DIALOG_TITLE", IDS_FILE_BROWSER_FORMAT_DIALOG_TITLE);
@@ -643,11 +625,6 @@ void AddStringsGeneric(base::Value::Dict* dict) {
   SET_STRING("MANY_FILES_SELECTED", IDS_FILE_BROWSER_MANY_FILES_SELECTED);
   SET_STRING("MESSAGE_FOLDER_SHARED_WITH_CROSTINI",
              IDS_FILE_BROWSER_MESSAGE_FOLDER_SHARED_WITH_CROSTINI);
-  SET_STRING(
-      "MESSAGE_FOLDER_SHARED_WITH_CROSTINI_AND_PLUGIN_VM",
-      IDS_FILE_BROWSER_MESSAGE_FOLDER_SHARED_WITH_CROSTINI_AND_PLUGIN_VM);
-  SET_STRING("MESSAGE_FOLDER_SHARED_WITH_PLUGIN_VM",
-             IDS_FILE_BROWSER_MESSAGE_FOLDER_SHARED_WITH_PLUGIN_VM);
   SET_STRING("METADATA_BOX_ALBUM_TITLE",
              IDS_FILE_BROWSER_METADATA_BOX_ALBUM_TITLE);
   SET_STRING("METADATA_BOX_AUDIO_INFO",
@@ -713,10 +690,6 @@ void AddStringsGeneric(base::Value::Dict* dict) {
              IDS_FILE_BROWSER_MOVE_TARGET_EXISTS_ERROR);
   SET_STRING("MOVE_TO_TRASH_BUTTON_LABEL",
              IDS_FILE_BROWSER_MOVE_TO_TRASH_BUTTON_LABEL);
-  SET_STRING("MULTIPART_DEVICE_UNSUPPORTED_DEFAULT_MESSAGE",
-             IDS_MULTIPART_DEVICE_UNSUPPORTED_DEFAULT_MESSAGE);
-  SET_STRING("MULTIPART_DEVICE_UNSUPPORTED_MESSAGE",
-             IDS_MULTIPART_DEVICE_UNSUPPORTED_MESSAGE);
   SET_STRING("NAME_COLUMN_LABEL", IDS_FILE_BROWSER_NAME_COLUMN_LABEL);
   SET_STRING("NEW_FOLDER_BUTTON_LABEL",
              IDS_FILE_BROWSER_NEW_FOLDER_BUTTON_LABEL);
@@ -757,8 +730,6 @@ void AddStringsGeneric(base::Value::Dict* dict) {
   SET_STRING("PASTE_INTO_FOLDER_BUTTON_LABEL",
              IDS_FILE_BROWSER_PASTE_INTO_FOLDER_BUTTON_LABEL);
   SET_STRING("PENDING_LABEL", IDS_FILE_BROWSER_PENDING_LABEL);
-  SET_STRING("PLUGIN_VM_DIRECTORY_LABEL",
-             IDS_FILE_BROWSER_PLUGIN_VM_DIRECTORY_LABEL);
   SET_STRING("PREPARING_LABEL", IDS_FILE_BROWSER_PREPARING_LABEL);
   SET_STRING("QUICK_VIEW_CLOSE_BUTTON_LABEL",
              IDS_FILE_BROWSER_QUICK_VIEW_CLOSE_BUTTON_LABEL);
@@ -780,18 +751,40 @@ void AddStringsGeneric(base::Value::Dict* dict) {
              IDS_REMOVABLE_DEVICE_ALLOW_PLAY_STORE_ACCESS_MESSAGE);
   SET_STRING("REMOVABLE_DEVICE_PLAY_STORE_APPS_HAVE_ACCESS_MESSAGE",
              IDS_REMOVABLE_DEVICE_PLAY_STORE_APPS_HAVE_ACCESS_MESSAGE);
+  SET_STRING("REMOVABLE_DEVICE_HARD_UNPLUGGED_MESSAGE",
+             IDS_REMOVABLE_DEVICE_HARD_UNPLUGGED_MESSAGE);
+  SET_STRING("REMOVABLE_DEVICE_HARD_UNPLUGGED_TITLE",
+             IDS_REMOVABLE_DEVICE_HARD_UNPLUGGED_TITLE);
   SET_STRING("REMOVABLE_DEVICE_IMPORT_BUTTON_LABEL",
              IDS_REMOVABLE_DEVICE_IMPORT_BUTTON_LABEL);
   SET_STRING("REMOVABLE_DEVICE_IMPORT_MESSAGE",
              IDS_REMOVABLE_DEVICE_IMPORT_MESSAGE);
+  SET_STRING("REMOVABLE_DEVICE_MULTIPART_DEVICE_UNSUPPORTED_DEFAULT_MESSAGE",
+             IDS_REMOVABLE_DEVICE_MULTIPART_DEVICE_UNSUPPORTED_DEFAULT_MESSAGE);
+  SET_STRING("REMOVABLE_DEVICE_MULTIPART_DEVICE_UNSUPPORTED_MESSAGE",
+             IDS_REMOVABLE_DEVICE_MULTIPART_DEVICE_UNSUPPORTED_MESSAGE);
   SET_STRING("REMOVABLE_DEVICE_NAVIGATION_BUTTON_LABEL",
              IDS_REMOVABLE_DEVICE_NAVIGATION_BUTTON_LABEL);
-  SET_STRING("REMOVABLE_DEVICE_OPEN_SETTTINGS_BUTTON_LABEL",
-             IDS_REMOVABLE_DEVICE_OPEN_SETTTINGS_BUTTON_LABEL);
   SET_STRING("REMOVABLE_DEVICE_NAVIGATION_MESSAGE",
              IDS_REMOVABLE_DEVICE_NAVIGATION_MESSAGE);
   SET_STRING("REMOVABLE_DEVICE_NAVIGATION_MESSAGE_READONLY_POLICY",
              IDS_REMOVABLE_DEVICE_NAVIGATION_MESSAGE_READONLY_POLICY);
+  SET_STRING("REMOVABLE_DEVICE_OPEN_SETTTINGS_BUTTON_LABEL",
+             IDS_REMOVABLE_DEVICE_OPEN_SETTTINGS_BUTTON_LABEL);
+  SET_STRING("REMOVABLE_DEVICE_RENAMING_OF_DEVICE_FINISHED_FAILURE_MESSAGE",
+             IDS_REMOVABLE_DEVICE_RENAMING_OF_DEVICE_FINISHED_FAILURE_MESSAGE);
+  SET_STRING("REMOVABLE_DEVICE_RENAMING_OF_DEVICE_FAILED_TITLE",
+             IDS_REMOVABLE_DEVICE_RENAMING_OF_DEVICE_FAILED_TITLE);
+  SET_STRING("REMOVABLE_DEVICE_UNKNOWN_BUTTON_LABEL",
+             IDS_REMOVABLE_DEVICE_UNKNOWN_BUTTON_LABEL);
+  SET_STRING("REMOVABLE_DEVICE_UNKNOWN_DEFAULT_MESSAGE",
+             IDS_REMOVABLE_DEVICE_UNKNOWN_DEFAULT_MESSAGE);
+  SET_STRING("REMOVABLE_DEVICE_UNKNOWN_MESSAGE",
+             IDS_REMOVABLE_DEVICE_UNKNOWN_MESSAGE);
+  SET_STRING("REMOVABLE_DEVICE_UNSUPPORTED_DEFAULT_MESSAGE",
+             IDS_REMOVABLE_DEVICE_UNSUPPORTED_DEFAULT_MESSAGE);
+  SET_STRING("REMOVABLE_DEVICE_UNSUPPORTED_MESSAGE",
+             IDS_REMOVABLE_DEVICE_UNSUPPORTED_MESSAGE);
   SET_STRING("REPARTITION_DEVICE_BUTTON_LABEL",
              IDS_FILE_BROWSER_REPARTITION_DEVICE_BUTTON_LABEL);
   SET_STRING("REPARTITION_DIALOG_CONFIRM_LABEL",
@@ -886,22 +879,6 @@ void AddStringsGeneric(base::Value::Dict* dict) {
              IDS_FILE_BROWSER_SHARE_WITH_LINUX_BUTTON_LABEL);
   SET_STRING("MANAGE_LINUX_SHARING_BUTTON_LABEL",
              IDS_FILE_BROWSER_MANAGE_LINUX_SHARING_BUTTON_LABEL);
-  SET_STRING("SHARE_WITH_PLUGIN_VM_BUTTON_LABEL",
-             IDS_FILE_BROWSER_SHARE_WITH_PLUGIN_VM_BUTTON_LABEL);
-  SET_STRING("MANAGE_PLUGIN_VM_SHARING_BUTTON_LABEL",
-             IDS_FILE_BROWSER_MANAGE_PLUGIN_VM_SHARING_BUTTON_LABEL);
-  SET_STRING(
-      "UNABLE_TO_DROP_IN_PLUGIN_VM_DIRECTORY_NOT_SHARED_MESSAGE",
-      IDS_FILE_BROWSER_UNABLE_TO_DROP_IN_PLUGIN_VM_DIRECTORY_NOT_SHARED_MESSAGE);
-  SET_STRING(
-      "UNABLE_TO_DROP_IN_PLUGIN_VM_EXTERNAL_DRIVE_MESSAGE",
-      IDS_FILE_BROWSER_UNABLE_TO_DROP_IN_PLUGIN_VM_EXTERNAL_DRIVE_MESSAGE);
-  SET_STRING(
-      "UNABLE_TO_OPEN_WITH_PLUGIN_VM_DIRECTORY_NOT_SHARED_MESSAGE",
-      IDS_FILE_BROWSER_UNABLE_TO_OPEN_WITH_PLUGIN_VM_DIRECTORY_NOT_SHARED_MESSAGE);
-  SET_STRING(
-      "UNABLE_TO_OPEN_WITH_PLUGIN_VM_EXTERNAL_DRIVE_MESSAGE",
-      IDS_FILE_BROWSER_UNABLE_TO_OPEN_WITH_PLUGIN_VM_EXTERNAL_DRIVE_MESSAGE);
   SET_STRING("CHANGE_TO_LISTVIEW_BUTTON_LABEL",
              IDS_FILE_BROWSER_CHANGE_TO_LISTVIEW_BUTTON_LABEL);
   SET_STRING("CHANGE_TO_THUMBNAILVIEW_BUTTON_LABEL",
@@ -921,12 +898,6 @@ void AddStringsGeneric(base::Value::Dict* dict) {
              IDS_FILE_BROWSER_SHARE_ROOT_FOLDER_WITH_CROSTINI);
   SET_STRING("SHARE_ROOT_FOLDER_WITH_CROSTINI_DRIVE",
              IDS_FILE_BROWSER_SHARE_ROOT_FOLDER_WITH_CROSTINI_DRIVE);
-  SET_STRING("SHARE_ROOT_FOLDER_WITH_PLUGIN_VM_TITLE",
-             IDS_FILE_BROWSER_SHARE_ROOT_FOLDER_WITH_PLUGIN_VM_TITLE);
-  SET_STRING("SHARE_ROOT_FOLDER_WITH_PLUGIN_VM",
-             IDS_FILE_BROWSER_SHARE_ROOT_FOLDER_WITH_PLUGIN_VM);
-  SET_STRING("SHARE_ROOT_FOLDER_WITH_PLUGIN_VM_DRIVE",
-             IDS_FILE_BROWSER_SHARE_ROOT_FOLDER_WITH_PLUGIN_VM_DRIVE);
   SET_STRING("SIZE_BYTES", IDS_FILE_BROWSER_SIZE_BYTES);
   SET_STRING("SIZE_COLUMN_LABEL", IDS_FILE_BROWSER_SIZE_COLUMN_LABEL);
   SET_STRING("COLUMN_ASC_SORT_MESSAGE",
@@ -1205,7 +1176,7 @@ bool IsEligibleAndEnabledGoogleOneOfferFilesBanner(
              ash::features::kDisableGoogleOneOfferFilesBanner);
 }
 
-void AddStringsForVms(base::Value::Dict* dict) {
+void AddStringsForVms(base::DictValue* dict) {
   auto* profile = GetProfile();
   std::u16string overall_name = bruschetta::GetOverallVmName(profile);
 
@@ -1242,7 +1213,7 @@ void AddStringsForVms(base::Value::Dict* dict) {
                 overall_name));
 }
 
-void AddStringsForSkyVault(base::Value::Dict* dict) {
+void AddStringsForSkyVault(base::DictValue* dict) {
   dict->Set(
       "SKYVAULT_MIGRATION_BANNER_GOOGLE_DRIVE",
       base::ReplaceStringPlaceholders(
@@ -1263,8 +1234,8 @@ void AddStringsForSkyVault(base::Value::Dict* dict) {
 
 }  // namespace
 
-base::Value::Dict GetFileManagerStrings(const std::string& application_locale) {
-  base::Value::Dict dict;
+base::DictValue GetFileManagerStrings(const std::string& application_locale) {
+  base::DictValue dict;
 
   AddStringsForDrive(&dict);
   AddStringsForMediaView(&dict);
@@ -1304,8 +1275,8 @@ base::Value::Dict GetFileManagerStrings(const std::string& application_locale) {
   return dict;
 }
 
-base::Value::Dict GetFileManagerPluralStrings() {
-  base::Value::Dict dict;
+base::DictValue GetFileManagerPluralStrings() {
+  base::DictValue dict;
 
   dict.Set("ERROR_PROGRESS_SUMMARY", IDS_FILE_BROWSER_ERROR_PROGRESS_SUMMARY);
   dict.Set("WARNING_PROGRESS_SUMMARY",
@@ -1345,7 +1316,7 @@ void AddFileManagerFeatureStrings(
     const std::string& application_locale,
     const variations::VariationsService& variations_service,
     Profile* profile,
-    base::Value::Dict* dict) {
+    base::DictValue* dict) {
   DCHECK(profile);
 
   dict->Set("HIDE_SPACE_INFO", ash::demo_mode::IsDeviceInDemoMode());
@@ -1358,9 +1329,6 @@ void AddFileManagerFeatureStrings(
       "FILES_SINGLE_PARTITION_FORMAT_ENABLED",
       base::FeatureList::IsEnabled(ash::features::kFilesSinglePartitionFormat));
 
-  dict->Set("FUSEBOX_DEBUG",
-            base::FeatureList::IsEnabled(ash::features::kFuseBoxDebug));
-
   dict->Set("DRIVEFS_MIRRORING", ash::features::IsDriveFsMirroringEnabled());
 
   dict->Set("GUEST_OS", true);
@@ -1371,7 +1339,7 @@ void AddFileManagerFeatureStrings(
   dict->Set("CROS_COMPONENTS", chromeos::features::IsCrosComponentsEnabled());
 
   if (base::FeatureList::IsEnabled(
-          features::kDataLeakPreventionFilesRestriction)) {
+          ash::features::kDataLeakPreventionFilesRestriction)) {
     policy::DlpRulesManager* rules_manager =
         policy::DlpRulesManagerFactory::GetForPrimaryProfile();
     dict->Set("DLP_ENABLED",
@@ -1381,13 +1349,13 @@ void AddFileManagerFeatureStrings(
   }
 
   dict->Set("SKYVAULT_V2_ENABLED",
-            base::FeatureList::IsEnabled(features::kSkyVaultV2));
+            base::FeatureList::IsEnabled(ash::features::kSkyVaultV2));
 
-  base::Value::List vms;
+  base::ListValue vms;
   auto* share_path = guest_os::GuestOsSharePathFactory::GetForProfile(profile);
   if (share_path) {
     for (const auto& guest : share_path->ListGuests()) {
-      base::Value::Dict d;
+      base::DictValue d;
       d.Set("vmName", guest.vm_name);
       d.Set("containerName", guest.container_name);
       vms.Append(std::move(d));

@@ -256,8 +256,8 @@ class BufferManagerClientSideArraysTest : public BufferManagerTestBase {
     GpuDriverBugWorkarounds gpu_driver_bug_workarounds;
     gpu_driver_bug_workarounds.use_client_side_arrays_for_stream_buffers = true;
     GpuFeatureInfo gpu_feature_info;
-    feature_info_ =
-        new FeatureInfo(gpu_driver_bug_workarounds, gpu_feature_info);
+    feature_info_ = base::MakeRefCounted<FeatureInfo>(
+        gpu_driver_bug_workarounds, gpu_feature_info);
     SetUpBase(nullptr, feature_info_.get(), "");
   }
 
@@ -505,7 +505,6 @@ TEST_F(BufferManagerTest, MaxValueCacheClearedCorrectly) {
 }
 
 TEST_F(BufferManagerTest, BindBufferConflicts) {
-  manager_->set_allow_buffers_on_multiple_targets(false);
   GLuint client_id = 1;
   GLuint service_id = 101;
 

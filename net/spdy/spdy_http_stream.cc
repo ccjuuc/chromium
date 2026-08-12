@@ -12,11 +12,13 @@
 #include <utility>
 
 #include "base/check_op.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "base/values.h"
+#include "net/base/features.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
 #include "net/base/upload_data_stream.h"
@@ -117,7 +119,14 @@ int SpdyHttpStream::ReadResponseBody(IOBuffer* buf,
 
   // If we have data buffered, complete the IO immediately.
   if (!response_body_queue_.IsEmpty()) {
-    return response_body_queue_.Dequeue(buf->first(buf_len));
+    // Dequeueing can fire consume callbacks that trigger session
+    // teardown and destroy `this`.
+    base::WeakPtr<SpdyHttpStream> self = weak_factory_.GetWeakPtr();
+    int rv = response_body_queue_.Dequeue(buf->first(buf_len));
+    if (!self) {
+      return ERR_CONNECTION_CLOSED;
+    }
+    return rv;
   } else if (stream_closed_) {
     return closed_stream_status_;
   }
@@ -147,22 +156,26 @@ bool SpdyHttpStream::IsConnectionReused() const {
   return is_reused_;
 }
 
-int64_t SpdyHttpStream::GetTotalReceivedBytes() const {
-  if (stream_closed_)
+base::ByteSize SpdyHttpStream::GetTotalReceivedBytes() const {
+  if (stream_closed_) {
     return closed_stream_received_bytes_;
+  }
 
-  if (!stream_)
-    return 0;
+  if (!stream_) {
+    return base::ByteSize(0);
+  }
 
   return stream_->raw_received_bytes();
 }
 
-int64_t SpdyHttpStream::GetTotalSentBytes() const {
-  if (stream_closed_)
+base::ByteSize SpdyHttpStream::GetTotalSentBytes() const {
+  if (stream_closed_) {
     return closed_stream_sent_bytes_;
+  }
 
-  if (!stream_)
-    return 0;
+  if (!stream_) {
+    return base::ByteSize(0);
+  }
 
   return stream_->raw_sent_bytes();
 }
@@ -200,6 +213,17 @@ bool SpdyHttpStream::GetLoadTimingInfo(LoadTimingInfo* load_timing_info) const {
   }
 
   return true;
+}
+
+void SpdyHttpStream::PopulateLoadTimingInternalInfo(
+    LoadTimingInternalInfo* load_timing_internal_info) const {
+  CHECK(load_timing_internal_info);
+  load_timing_internal_info->max_stream_limit_pending_delay =
+      stream_request_.max_stream_limit_pending_delay();
+  if (spdy_session_) {
+    load_timing_internal_info->resolution_details =
+        spdy_session_->GetResolutionDetails();
+  }
 }
 
 int SpdyHttpStream::SendRequest(const HttpRequestHeaders& request_headers,
@@ -300,7 +324,8 @@ void SpdyHttpStream::OnHeadersReceived(
   const int rv = SpdyHeadersToHttpResponse(response_headers, response_info_);
   DCHECK_NE(rv, ERR_INCOMPLETE_HTTP2_HEADERS);
 
-  if (rv == ERR_RESPONSE_HEADERS_MULTIPLE_LOCATION) {
+  if (rv == ERR_RESPONSE_HEADERS_MULTIPLE_LOCATION ||
+      rv == ERR_RESPONSE_HEADERS_MULTIPLE_CONTENT_DISPOSITION) {
     // Cancel will call OnClose, which might call callbacks and might destroy
     // `this`.
     stream_->Cancel(rv);
@@ -527,11 +552,19 @@ void SpdyHttpStream::DoBufferedReadCallback() {
     return;
 
   if (!response_body_queue_.IsEmpty()) {
+    // Dequeueing can fire consume callbacks that trigger synchronous session
+    // teardown and destroy `this`.
+    base::WeakPtr<SpdyHttpStream> self = weak_factory_.GetWeakPtr();
     int rv =
         response_body_queue_.Dequeue(user_buffer_->first(user_buffer_len_));
+    if (!self) {
+      return;
+    }
     user_buffer_ = nullptr;
     user_buffer_len_ = 0;
-    DoResponseCallback(rv);
+    if (response_callback_) {
+      DoResponseCallback(rv);
+    }
     return;
   }
 
@@ -571,6 +604,22 @@ void SpdyHttpStream::DoResponseCallback(int rv) {
 }
 
 int SpdyHttpStream::GetRemoteEndpoint(IPEndPoint* endpoint) {
+  // When the flag is enabled, we correctly route to the parent class, which
+  // delegates to SpdySession::GetRemoteEndpoint. This triggers proactive
+  // draining of the session if the socket is disconnected.
+  // When disabled, we keep the legacy behavior of calling GetPeerAddress
+  // directly, which bypasses the draining logic.
+  //
+  // TODO(crbug.com/450428442): Once this feature flag is removed, this entire
+  // override of GetRemoteEndpoint in SpdyHttpStream can be deleted. We can
+  // then inherit MultiplexedHttpStream::GetRemoteEndpoint directly from the
+  // parent class, as its implementation behaves identically to the
+  // flag-enabled branch.
+  if (base::FeatureList::IsEnabled(
+          features::kDrainSpdySessionSynchronouslyOnRemoteEndpointDisconnect)) {
+    return MultiplexedHttpStream::GetRemoteEndpoint(endpoint);
+  }
+
   if (!spdy_session_)
     return ERR_SOCKET_NOT_CONNECTED;
 

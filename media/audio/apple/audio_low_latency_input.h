@@ -43,6 +43,7 @@
 
 #include "base/cancelable_callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/synchronization/lock.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -53,6 +54,7 @@
 #include "media/base/audio_block_fifo.h"
 #include "media/base/audio_glitch_info.h"
 #include "media/base/audio_parameters.h"
+#include "media/base/sample_format.h"
 
 #if BUILDFLAG(IS_MAC)
 #include "media/audio/mac/audio_manager_mac.h"
@@ -62,10 +64,13 @@
 
 namespace media {
 class AudioManagerApple;
+class AUCallbackProxy;
 
 class MEDIA_EXPORT AUAudioInputStream
     : public AgcAudioStream<AudioInputStream> {
  public:
+  using Error = AudioInputStream::AudioInputCallback::Error;
+
   // The ctor takes all the usual parameters, plus |manager| which is the
   // the audio manager who is creating this object.
   AUAudioInputStream(AudioManagerApple* manager,
@@ -110,6 +115,13 @@ class MEDIA_EXPORT AUAudioInputStream
   static void UpmixMonoToStereoInPlace(AudioBuffer* audio_buffer,
                                        int bytes_per_sample);
 
+  // Called by `data_callback_proxy_` on the real-time priority I/O thread from
+  // the audio unit.
+  OSStatus OnDataIsAvailable(AudioUnitRenderActionFlags* flags,
+                             const AudioTimeStamp* time_stamp,
+                             UInt32 bus_number,
+                             UInt32 number_of_frames);
+
  private:
   bool OpenAUHAL();
   bool OpenVoiceProcessingAU();
@@ -123,21 +135,43 @@ class MEDIA_EXPORT AUAudioInputStream
                                   UInt32 bus_number,
                                   UInt32 number_of_frames,
                                   AudioBufferList* io_data);
-  OSStatus OnDataIsAvailable(AudioUnitRenderActionFlags* flags,
-                             const AudioTimeStamp* time_stamp,
-                             UInt32 bus_number,
-                             UInt32 number_of_frames);
 
   // Pushes recorded data to consumer of the input audio stream.
   OSStatus Provide(UInt32 number_of_frames,
                    AudioBufferList* io_data,
                    const AudioTimeStamp* time_stamp);
 
+  // Attempts to set the audio format to Float32. If rejected by the OS, falls
+  // back to SignedInt16. Returns the OSStatus of the AudioUnitSetProperty
+  // attempt.
+  OSStatus ConfigureFormat();
+
+  // Attempts to set the audio format to Float32 for VoiceProcessing streams. If
+  // rejected by the OS, fall back to SignedInt16. Returns the OSStatus of the
+  // AudioUnitSetProperty attempt.
+  OSStatus ConfigureFormatForVoiceProcessing();
+
+  // Returns a copy of `source_format` configured for 16-bit signed integer
+  // (S16) samples. Used as a fallback when F32 is not supported.
+  AudioStreamBasicDescription GetFallbackFormat(
+      const AudioStreamBasicDescription& source_format);
+
+  // Sets the stream format property on the Audio Unit.
+  OSStatus SetInputStreamFormat(const AudioStreamBasicDescription& format,
+                                SampleFormat uma_format);
+
   // Gets the current capture time.
   base::TimeTicks GetCaptureTime(const AudioTimeStamp* input_time_stamp);
 
   // Issues the OnError() callback to the |sink_|.
-  void HandleError(OSStatus err, const base::Location& location = FROM_HERE);
+  void HandleError(OSStatus err,
+                   const char* message,
+                   const base::Location& location = FROM_HERE);
+  void HandleErrorAndNotify_Locked(Error error_code,
+                                   OSStatus err,
+                                   const char* message,
+                                   const base::Location& location = FROM_HERE)
+      EXCLUSIVE_LOCKS_REQUIRED(lock_);
 
   // Helper methods to set and get atomic |input_callback_is_active_|.
   void SetInputCallbackIsActive(bool active);
@@ -161,8 +195,7 @@ class MEDIA_EXPORT AUAudioInputStream
   void ReportAndResetStats();
 
   // Logs a message both to the log callback and to the console.
-  void LogMessageEverywhere(const char* function_name,
-                            const std::string& message);
+  void SendLog(const std::string& message, OSStatus result = noErr);
 
   // Verifies that Open(), Start(), Stop() and Close() are all called on the
   // creating thread which is the main browser thread (CrBrowserMain) on Mac.
@@ -177,10 +210,10 @@ class MEDIA_EXPORT AUAudioInputStream
   // Stores the number of frames that we actually get callbacks for.
   // This may be different from what we ask for, so we use this for stats in
   // order to understand how often this happens and what are the typical values.
-  size_t number_of_frames_provided_ = 0;
+  size_t number_of_frames_provided_ GUARDED_BY(lock_) = 0;
 
   // Pointer to the object that will receive the recorded audio samples.
-  raw_ptr<AudioInputCallback> sink_ = nullptr;
+  raw_ptr<AudioInputCallback> sink_ GUARDED_BY(lock_) = nullptr;
 
   // Structure that holds the desired output format of the stream.
   // Note that, this format can differ from the device(=input) format.
@@ -197,6 +230,10 @@ class MEDIA_EXPORT AUAudioInputStream
   // Provides a mechanism for encapsulating one or more buffers of audio data.
   AudioBufferList audio_buffer_list_;
 
+  // SampleFormat chosen for audio input. Could be downgraded to S16 if F32 is
+  // not supported.
+  SampleFormat sample_format_ = kSampleFormatF32;
+
   // Temporary storage for recorded data. The InputProc() renders into this
   // array as soon as a frame of the desired buffer size has been recorded.
   std::unique_ptr<uint8_t[]> audio_data_buffer_;
@@ -205,7 +242,7 @@ class MEDIA_EXPORT AUAudioInputStream
   base::TimeDelta hardware_latency_;
 
   // FIFO used to accumulates recorded data.
-  media::AudioBlockFifo fifo_;
+  media::AudioBlockFifo fifo_ GUARDED_BY(lock_);
 
   // Used to defer Start() to workaround http://crbug.com/160920.
   base::CancelableOnceClosure deferred_start_cb_;
@@ -244,12 +281,22 @@ class MEDIA_EXPORT AUAudioInputStream
   AudioDeviceID output_device_id_for_aec_ = kAudioObjectUnknown;
 
   // Used to detect and report glitches.
-  GlitchHelper glitch_helper_;
+  GlitchHelper glitch_helper_ GUARDED_BY(lock_);
 
   AmplitudePeakDetector peak_detector_;
 
   // Callback to send statistics info.
   AudioManager::LogCallback log_callback_;
+
+  // Guards members accessed on the helper / audio thread.
+  base::Lock lock_;
+
+  // Set to true if stopping the AudioUnit fails. Used to leak
+  // `data_callback_proxy_`.
+  bool stop_failed_ = false;
+
+  // Proxy to intercept callbacks and allow safe leak on teardown failure.
+  std::unique_ptr<AUCallbackProxy> data_callback_proxy_;
 };
 
 }  // namespace media

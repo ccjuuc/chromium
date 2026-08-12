@@ -4,8 +4,8 @@
 
 #include "chrome/browser/ui/webui/ash/login/perks_discovery_screen_handler.h"
 
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "chrome/browser/ui/webui/ash/login/base_screen_handler.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/login/localized_values_builder.h"
 
 namespace ash {
@@ -26,9 +26,9 @@ void PerksDiscoveryScreenHandler::Show() {
 
 void PerksDiscoveryScreenHandler::SetPerksData(
     const std::vector<SinglePerkDiscoveryPayload>& perks) {
-  base::Value::List perks_list;
+  base::ListValue perks_list;
   for (const auto& perk : perks) {
-    base::Value::Dict perk_dict;
+    base::DictValue perk_dict;
     perk_dict.Set("perkId", base::Value(perk.id));
     perk_dict.Set("title", base::Value(perk.title));
     perk_dict.Set("subtitle", base::Value(perk.subtitle));

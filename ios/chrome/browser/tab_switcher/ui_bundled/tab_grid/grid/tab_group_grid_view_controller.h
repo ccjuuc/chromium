@@ -8,6 +8,8 @@
 #import "ios/chrome/browser/tab_switcher/tab_grid/base_grid/ui/base_grid_view_controller+subclassing.h"
 
 @protocol GridViewDelegate;
+@class TabGroupColorPalette;
+@protocol TabGroupHeaderDelegate;
 
 // A view controller that contains a grid of tabs from the same group.
 @interface TabGroupGridViewController : BaseGridViewController
@@ -15,8 +17,8 @@
 // Group's title.
 @property(nonatomic, copy) NSString* groupTitle;
 
-// Group's color.
-@property(nonatomic, copy) UIColor* groupColor;
+// Color palette for the tab group.
+@property(nonatomic) TabGroupColorPalette* tabGroupColorPalette;
 
 // Whether this tab group is shared with other users.
 @property(nonatomic, assign) BOOL shared;
@@ -26,6 +28,9 @@
 
 // The text in the activity summary cell.
 @property(nonatomic, copy) NSString* activitySummaryCellText;
+
+// Delegate to display the edition view.
+@property(nonatomic, weak) id<TabGroupHeaderDelegate> tabGroupHeaderDelegate;
 
 @end
 

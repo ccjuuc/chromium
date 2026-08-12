@@ -5,7 +5,8 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_FILLING_FIELD_FILLING_SKIP_REASON_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_FILLING_FIELD_FILLING_SKIP_REASON_H_
 
-#include <cstdint>
+#include <stdint.h>
+
 #include <string_view>
 
 namespace autofill {
@@ -17,7 +18,7 @@ enum class FieldFillingSkipReason : uint8_t {
   kNotSkipped = 1,
   kNotInFilledSection = 2,
   kNotFocused = 3,
-  kFormChanged = 4,
+  // kFormChanged = 4, // DEPRECATED
   kInvisibleField = 5,
   kValuePrefilled = 6,
   kUserFilledFields = 7,
@@ -28,11 +29,14 @@ enum class FieldFillingSkipReason : uint8_t {
   kFillingLimitReachedType = 12,
   kUnrecognizedAutocompleteAttribute = 13,
   // kFieldDoesNotMatchTargetFieldsSet = 14, // DEPRECATED
-  kFieldTypeUnrelated = 15,
+  // kFieldTypeUnrelated = 15, // DEPRECATED
   kNoValueToFill = 16,
   kAutofilledValueDidNotChange = 17,
-  kBlockedByOtherFillingProduct = 18,
-  kMaxValue = kBlockedByOtherFillingProduct
+  // The field was blocked by either a different filling operation (which will
+  // fill it) or by another product (e.g., by AutofillAi).
+  kBlockedByOtherFillingOperationOrProduct = 18,
+  kIframeSecurityPolicy = 19,
+  kMaxValue = kIframeSecurityPolicy,
 };
 
 std::string_view GetSkipFieldFillLogMessage(FieldFillingSkipReason skip_reason);

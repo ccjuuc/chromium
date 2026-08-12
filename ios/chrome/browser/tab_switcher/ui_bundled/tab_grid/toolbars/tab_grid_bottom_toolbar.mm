@@ -9,8 +9,8 @@
 #import "base/metrics/user_metrics.h"
 #import "base/metrics/user_metrics_action.h"
 #import "base/strings/sys_string_conversions.h"
-#import "ios/chrome/browser/incognito_reauth/ui_bundled/features.h"
 #import "ios/chrome/browser/keyboard/ui_bundled/UIKeyCommand+Chrome.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/scene_layout_state.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
@@ -55,22 +55,20 @@ CGFloat CompactButtonHorizontalPadding() {
 
 }  // namespace
 
+@interface TabGridBottomToolbar () <SceneLayoutStateObserver>
+@end
+
 @implementation TabGridBottomToolbar {
   UIToolbar* _containerToolbar;
   TabGridNewTabButton* _smallNewTabButton;
   TabGridNewTabButton* _largeNewTabButton;
   UIButton* _doneButton;
-  UIButton* _undoButton;
-  UIButton* _editButton;
   UIButton* _addToButton;
   UIButton* _closeTabsButton;
   UIButton* _shareButton;
-  BOOL _undoActive;
   BOOL _scrolledToEdge;
   TabGridToolbarBackground* _backgroundView;
   TabGridToolbarScrollingBackground* _scrollBackgroundView;
-  // Configures the responder following the receiver in the responder chain.
-  UIResponder* _followingNextResponder;
   NSLayoutConstraint* _viewTopConstraint;
 }
 
@@ -79,9 +77,6 @@ CGFloat CompactButtonHorizontalPadding() {
   if (self) {
     [self setupViews];
     [self updateLayout];
-    NSArray<UITrait>* traits = TraitCollectionSetForTraits(
-        @[ UITraitVerticalSizeClass.class, UITraitHorizontalSizeClass.class ]);
-    [self registerForTraitChanges:traits withAction:@selector(updateLayout)];
   }
   return self;
 }
@@ -102,6 +97,11 @@ CGFloat CompactButtonHorizontalPadding() {
           .active = YES;
     }
   }
+
+  [self
+      registerForTraitChanges:
+          @[ UITraitVerticalSizeClass.class, UITraitHorizontalSizeClass.class ]
+                   withAction:@selector(updateLayout)];
   [super didMoveToSuperview];
 }
 
@@ -112,6 +112,11 @@ CGFloat CompactButtonHorizontalPadding() {
 - (CGSize)intrinsicContentSize {
   if (!_largeNewTabButton.hidden) {
     return CGSizeZero;
+  }
+  if (IsChromeNextIaEnabled()) {
+    if (self.mode != TabGridMode::kSelection) {
+      return CGSizeZero;
+    }
   }
   return _containerToolbar.intrinsicContentSize;
 }
@@ -160,31 +165,9 @@ CGFloat CompactButtonHorizontalPadding() {
   _doneButton.enabled = enabled;
 }
 
-- (void)setCloseAllButtonEnabled:(BOOL)enabled {
-  _undoButton.enabled = enabled;
-}
-
 - (void)setIncognitoBackgroundHidden:(BOOL)hidden {
   [_scrollBackgroundView hideIncognitoToolbarBackground:hidden];
   [self updateBackgroundVisibility];
-}
-
-- (void)useUndoCloseAll:(BOOL)useUndo {
-  _undoButton.enabled = YES;
-  if (_undoActive != useUndo) {
-    _undoActive = useUndo;
-    [self updateLayout];
-  }
-}
-
-- (void)hide {
-  _smallNewTabButton.alpha = 0.0;
-  _largeNewTabButton.alpha = 0.0;
-}
-
-- (void)show {
-  _smallNewTabButton.alpha = 1.0;
-  _largeNewTabButton.alpha = 1.0;
 }
 
 - (void)setScrollViewScrolledToEdge:(BOOL)scrolledToEdge {
@@ -201,6 +184,11 @@ CGFloat CompactButtonHorizontalPadding() {
                           animated:(BOOL)animated {
   [_scrollBackgroundView setContentOffset:backgroundContentOffset
                                  animated:animated];
+}
+
+- (void)updateNewTabButtonBackgroundColor:(UIColor*)backgroundColor {
+  _smallNewTabButton.buttonColor = backgroundColor;
+  _largeNewTabButton.buttonColor = backgroundColor;
 }
 
 #pragma mark Close Tabs
@@ -225,14 +213,11 @@ CGFloat CompactButtonHorizontalPadding() {
   _addToButton.enabled = enabled;
 }
 
-#pragma mark Edit Button
+#pragma mark - SceneLayoutStateObserver
 
-- (void)setEditButtonMenu:(UIMenu*)menu {
-  _editButton.menu = menu;
-}
-
-- (void)setEditButtonEnabled:(BOOL)enabled {
-  _editButton.enabled = enabled;
+- (void)layoutState:(SceneLayoutState*)layoutState
+    didChangeAppBarPosition:(AppBarPosition)appBarPosition {
+  [self updateLayout];
 }
 
 #pragma mark - Private
@@ -256,7 +241,7 @@ CGFloat CompactButtonHorizontalPadding() {
     buttonConfiguration.image = image;
     button = [UIButton buttonWithConfiguration:buttonConfiguration
                                  primaryAction:nil];
-    button.tintColor = TabGridGlassButtonTintColor();
+    button.tintColor = UIColor.clearColor;
   } else {
     button = [UIButton systemButtonWithPrimaryAction:nil];
     button.tintColor = UIColor.whiteColor;
@@ -318,33 +303,17 @@ CGFloat CompactButtonHorizontalPadding() {
   NSMutableArray<NSLayoutConstraint*>* constraints =
       [NSMutableArray arrayWithArray:@[
         // Vertical layout:
-        [_editButton.centerYAnchor
-            constraintEqualToAnchor:_containerToolbar.centerYAnchor],
-        [_undoButton.centerYAnchor
-            constraintEqualToAnchor:_containerToolbar.centerYAnchor],
         [_smallNewTabButton.centerYAnchor
             constraintEqualToAnchor:_containerToolbar.centerYAnchor],
         [_doneButton.centerYAnchor
             constraintEqualToAnchor:_containerToolbar.centerYAnchor],
 
         // Horizontal layout:
-        [_editButton.leadingAnchor
-            constraintEqualToAnchor:_containerToolbar.leadingAnchor
-                           constant:CompactButtonHorizontalPadding()],
-        [_undoButton.leadingAnchor
-            constraintEqualToAnchor:_containerToolbar.leadingAnchor
-                           constant:CompactButtonHorizontalPadding()],
         [_doneButton.trailingAnchor
             constraintEqualToAnchor:_containerToolbar.trailingAnchor
                            constant:-CompactButtonHorizontalPadding()],
         [_smallNewTabButton.centerXAnchor
             constraintEqualToAnchor:_containerToolbar.centerXAnchor],
-        [_smallNewTabButton.leadingAnchor
-            constraintGreaterThanOrEqualToAnchor:_editButton.trailingAnchor
-                                        constant:kCompactMinButtonSpacing],
-        [_smallNewTabButton.leadingAnchor
-            constraintGreaterThanOrEqualToAnchor:_undoButton.trailingAnchor
-                                        constant:kCompactMinButtonSpacing],
         [_doneButton.leadingAnchor
             constraintGreaterThanOrEqualToAnchor:_smallNewTabButton
                                                      .trailingAnchor
@@ -403,22 +372,13 @@ CGFloat CompactButtonHorizontalPadding() {
 
   [self addSubview:_containerToolbar];
 
-  // Close button.
-  _undoButton =
-      [self createButtonWithTitle:l10n_util::GetNSString(
-                                      IDS_IOS_TAB_GRID_UNDO_CLOSE_ALL_BUTTON)
-                            image:nil
-                   targetSelector:@selector(closeAllButtonTapped:)];
-  _undoButton.accessibilityIdentifier = kTabGridUndoCloseAllButtonIdentifier;
-  [_containerToolbar addSubview:_undoButton];
-
   // Done button.
   _doneButton = [self
       createButtonWithTitle:l10n_util::GetNSString(IDS_IOS_TAB_GRID_DONE_BUTTON)
                       image:nil
              targetSelector:@selector(doneButtonTapped:)];
   _doneButton.role = UIButtonRolePrimary;
-  _doneButton.accessibilityIdentifier = kTabGridDoneButtonIdentifier;
+  _doneButton.accessibilityIdentifier = kTabGridExitTabGridButtonIdentifier;
   _doneButton.titleLabel.font = [UIFont boldSystemFontOfSize:kButtonFontSize];
   [_containerToolbar addSubview:_doneButton];
 
@@ -440,15 +400,6 @@ CGFloat CompactButtonHorizontalPadding() {
   _largeNewTabButton.page = self.page;
   [self addSubview:_largeNewTabButton];
 
-  // Edit button.
-  _editButton = [self
-      createButtonWithTitle:l10n_util::GetNSString(IDS_IOS_TAB_GRID_EDIT_BUTTON)
-                      image:nil
-             targetSelector:nil];
-  _editButton.accessibilityIdentifier = kTabGridEditButtonIdentifier;
-  _editButton.showsMenuAsPrimaryAction = YES;
-  [_containerToolbar addSubview:_editButton];
-
   // Add To button.
   _addToButton = [self createButtonWithTitle:l10n_util::GetNSString(
                                                  IDS_IOS_TAB_GRID_ADD_TO_BUTTON)
@@ -461,8 +412,8 @@ CGFloat CompactButtonHorizontalPadding() {
   // Share button.
   _shareButton =
       [self createButtonWithTitle:nil
-                            image:DefaultSymbolWithPointSize(
-                                      kShareSymbol, kSymbolActionPointSize)
+                            image:SymbolWithPointSize(SymbolShare,
+                                                      kSymbolActionPointSize)
                    targetSelector:@selector(shareSelectedTabs:)];
   _shareButton.accessibilityIdentifier = kTabGridEditShareButtonIdentifier;
   [_containerToolbar addSubview:_shareButton];
@@ -508,20 +459,27 @@ CGFloat CompactButtonHorizontalPadding() {
 
   BOOL useCompactLayout = [self shouldUseCompactLayout];
   BOOL hideToolbar;
-  if (base::FeatureList::IsEnabled(kTabRecallNewTabGroupButton)) {
-    hideToolbar = self.mode == TabGridMode::kSearch;
-  } else {
-    hideToolbar = self.mode == TabGridMode::kSearch ||
-                  (!useCompactLayout && (self.page == TabGridPageTabGroups));
+  hideToolbar = self.mode == TabGridMode::kSearch;
+
+  BOOL appBarAvailable =
+      self.layoutState.appBarPosition != AppBarPosition::kNone;
+  if (IsChromeNextIaEnabled() && appBarAvailable) {
+    // If the App Bar is available (iPhone), the bottom toolbar buttons should
+    // be hidden in the Tab Grid's non-selection states.
+    hideToolbar =
+        self.mode == TabGridMode::kSearch || self.mode == TabGridMode::kNormal;
   }
+
+  _viewTopConstraint.active = NO;
+
   if (hideToolbar) {
     self.hidden = YES;
     [self updateBackgroundVisibility];
+    [self invalidateIntrinsicContentSize];
     return;
   }
 
   self.hidden = NO;
-  _viewTopConstraint.active = NO;
 
   if (self.mode == TabGridMode::kSelection) {
     _closeTabsButton.hidden = NO;
@@ -532,26 +490,17 @@ CGFloat CompactButtonHorizontalPadding() {
     _viewTopConstraint.active = YES;
     _containerToolbar.hidden = NO;
     [self updateBackgroundVisibility];
+    [self invalidateIntrinsicContentSize];
     return;
   }
 
   if (useCompactLayout) {
     if (self.page == TabGridPageTabGroups) {
       _doneButton.hidden = NO;
-
-      if (base::FeatureList::IsEnabled(kTabRecallNewTabGroupButton)) {
-        _smallNewTabButton.hidden = NO;
-      }
+      _smallNewTabButton.hidden = NO;
     } else if (self.isInTabGroupView) {
       _smallNewTabButton.hidden = NO;
     } else {
-      if (_undoActive) {
-        _undoButton.hidden = NO;
-      } else {
-        BOOL overflowEnabled =
-            base::FeatureList::IsEnabled(kTabSwitcherOverflowMenu);
-        _editButton.hidden = overflowEnabled;
-      }
       _smallNewTabButton.hidden = NO;
       _doneButton.hidden = NO;
     }
@@ -560,6 +509,7 @@ CGFloat CompactButtonHorizontalPadding() {
     _viewTopConstraint.active = YES;
     _containerToolbar.hidden = NO;
     [self updateBackgroundVisibility];
+    [self invalidateIntrinsicContentSize];
     return;
   }
 
@@ -569,6 +519,7 @@ CGFloat CompactButtonHorizontalPadding() {
   _viewTopConstraint.active = YES;
   _containerToolbar.hidden = YES;
   [self updateBackgroundVisibility];
+  [self invalidateIntrinsicContentSize];
 }
 
 // Returns YES if the `_largeNewTabButton` is showing on the toolbar.
@@ -633,9 +584,7 @@ CGFloat CompactButtonHorizontalPadding() {
 
 // Hides all buttons from superView.
 - (void)hideAllButtons {
-  _undoButton.hidden = YES;
   _doneButton.hidden = YES;
-  _editButton.hidden = YES;
   _addToButton.hidden = YES;
   _closeTabsButton.hidden = YES;
   _shareButton.hidden = YES;
@@ -643,28 +592,15 @@ CGFloat CompactButtonHorizontalPadding() {
   _largeNewTabButton.hidden = YES;
 }
 
-#pragma mark - Public
-
-- (void)respondBeforeResponder:(UIResponder*)nextResponder {
-  _followingNextResponder = nextResponder;
-}
-
 #pragma mark - UIResponder
 
-- (UIResponder*)nextResponder {
-  return _followingNextResponder;
-}
-
 - (NSArray<UIKeyCommand*>*)keyCommands {
-  return @[ UIKeyCommand.cr_undo, UIKeyCommand.cr_close ];
+  return @[ UIKeyCommand.cr_closeAll, UIKeyCommand.cr_close ];
 }
 
 - (BOOL)canPerformAction:(SEL)action withSender:(id)sender {
   if (sel_isEqual(action, @selector(keyCommand_closeAll))) {
-    return !_undoActive && _undoButton.enabled;
-  }
-  if (sel_isEqual(action, @selector(keyCommand_undo))) {
-    return _undoActive;
+    return _doneButton.enabled;
   }
   if (sel_isEqual(action, @selector(keyCommand_close))) {
     return _doneButton.enabled;
@@ -674,14 +610,7 @@ CGFloat CompactButtonHorizontalPadding() {
 
 - (void)keyCommand_closeAll {
   base::RecordAction(base::UserMetricsAction("MobileKeyCommandCloseAll"));
-  [self closeAllButtonTapped:nil];
-}
-
-- (void)keyCommand_undo {
-  base::RecordAction(base::UserMetricsAction("MobileKeyCommandUndo"));
-  // This function is also responsible for handling undo.
-  // TODO(crbug.com/40273478): This should be separated to avoid confusion.
-  [self closeAllButtonTapped:nil];
+  [self.buttonsDelegate closeAllButtonTapped:nil];
 }
 
 - (void)keyCommand_close {
@@ -691,15 +620,9 @@ CGFloat CompactButtonHorizontalPadding() {
 
 #pragma mark - Control actions
 
-- (void)closeAllButtonTapped:(id)sender {
-  if (_undoButton.enabled) {
-    [self.buttonsDelegate closeAllButtonTapped:sender];
-  }
-}
-
 - (void)doneButtonTapped:(id)sender {
   if (_doneButton.enabled) {
-    [self.buttonsDelegate doneButtonTapped:sender];
+    [self.buttonsDelegate exitTabGridButtonTapped:sender];
   }
 }
 
@@ -729,6 +652,20 @@ CGFloat CompactButtonHorizontalPadding() {
   }
   _hideScrolledToEdgeBackground = hideScrolledToEdgeBackground;
   [self updateBackgroundVisibility];
+}
+
+- (void)setLayoutState:(SceneLayoutState*)layoutState {
+  if (_layoutState == layoutState) {
+    return;
+  }
+  if (_layoutState) {
+    [_layoutState removeObserver:self];
+  }
+  _layoutState = layoutState;
+  if (_layoutState) {
+    [_layoutState addObserver:self];
+  }
+  [self updateLayout];
 }
 
 @end

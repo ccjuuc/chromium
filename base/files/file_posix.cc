@@ -23,7 +23,9 @@ static_assert(sizeof(base::stat_wrapper_t::st_size) >= 8);
 
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
+#include "base/files/file_tracing.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
@@ -346,16 +348,19 @@ std::optional<size_t> File::ReadNoBestEffort(int64_t offset,
   return checked_cast<size_t>(bytes_read);
 }
 
-int File::ReadAtCurrentPosNoBestEffort(char* data, int size) {
+std::optional<size_t> File::ReadAtCurrentPosNoBestEffort(
+    base::span<uint8_t> data) {
   ScopedBlockingCall scoped_blocking_call(FROM_HERE, BlockingType::MAY_BLOCK);
   DCHECK(IsValid());
-  if (size < 0) {
-    return -1;
-  }
 
-  SCOPED_FILE_TRACE_WITH_SIZE("ReadAtCurrentPosNoBestEffort", size);
-  return checked_cast<int>(
-      HANDLE_EINTR(read(file_.get(), data, static_cast<size_t>(size))));
+  SCOPED_FILE_TRACE_WITH_SIZE("ReadAtCurrentPosNoBestEffort",
+                              base::checked_cast<int64_t>(data.size()));
+  const ssize_t bytes_read =
+      HANDLE_EINTR(read(file_.get(), data.data(), data.size()));
+  if (bytes_read < 0) {
+    return std::nullopt;
+  }
+  return checked_cast<size_t>(bytes_read);
 }
 
 int File::Write(int64_t offset, const char* data, int size) {
@@ -568,7 +573,7 @@ void File::DoInitialize(const FilePath& path, uint32_t flags) {
 
   if (flags & FLAG_CREATE_ALWAYS) {
     DCHECK(!open_flags);
-    DCHECK(flags & FLAG_WRITE);
+    DCHECK(flags & (FLAG_WRITE | FLAG_APPEND));
     open_flags = O_CREAT | O_TRUNC;
   }
 
@@ -602,6 +607,10 @@ void File::DoInitialize(const FilePath& path, uint32_t flags) {
     open_flags |= O_APPEND | O_RDWR;
   } else if (flags & FLAG_APPEND) {
     open_flags |= O_APPEND | O_WRONLY;
+  }
+
+  if (flags & FLAG_NO_FOLLOW) {
+    open_flags |= O_NOFOLLOW;
   }
 
   static_assert(O_RDONLY == 0, "O_RDONLY must equal zero");

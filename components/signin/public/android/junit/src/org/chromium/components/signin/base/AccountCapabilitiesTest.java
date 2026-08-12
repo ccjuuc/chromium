@@ -4,32 +4,35 @@
 
 package org.chromium.components.signin.base;
 
-import com.google.common.collect.Lists;
-
 import org.junit.Assert;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.robolectric.ParameterizedRobolectricTestRunner;
+import org.robolectric.ParameterizedRobolectricTestRunner.Parameter;
+import org.robolectric.ParameterizedRobolectricTestRunner.Parameters;
 import org.robolectric.annotation.Config;
 
-import org.chromium.base.test.params.BlockJUnit4RunnerDelegate;
-import org.chromium.base.test.params.ParameterAnnotations;
-import org.chromium.base.test.params.ParameterProvider;
-import org.chromium.base.test.params.ParameterSet;
-import org.chromium.base.test.params.ParameterizedRunner;
+import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.components.signin.AccountCapabilitiesConstants;
 import org.chromium.components.signin.AccountManagerDelegate;
 import org.chromium.components.signin.Tribool;
 
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /** Test class for {@link AccountCapabilities}. */
-@RunWith(ParameterizedRunner.class)
-@ParameterAnnotations.UseRunnerDelegate(BlockJUnit4RunnerDelegate.class)
+@RunWith(ParameterizedRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 public final class AccountCapabilitiesTest {
+
+    @Rule public BaseRobolectricTestRule mBaseRule = new BaseRobolectricTestRule();
+
+    @Parameter(0)
+    public String mCapabilityName;
 
     /**
      * Returns the capability value for the specified capability name from the appropriate getter in
@@ -48,19 +51,13 @@ public final class AccountCapabilitiesTest {
             case AccountCapabilitiesConstants
                     .CAN_SHOW_HISTORY_SYNC_OPT_INS_WITHOUT_MINOR_MODE_RESTRICTIONS_CAPABILITY_NAME:
                 return capabilities.canShowHistorySyncOptInsWithoutMinorModeRestrictions();
-            case AccountCapabilitiesConstants.CAN_USE_CHROMEOS_GENERATIVE_AI:
-                return capabilities.canUseChromeOSGenerativeAi();
-            case AccountCapabilitiesConstants.CAN_USE_COPYEDITOR_FEATURE_NAME:
-                return capabilities.canUseCopyeditorFeature();
             case AccountCapabilitiesConstants
                     .CAN_USE_DEVTOOLS_GENERATIVE_AI_FEATURES_CAPABILITY_NAME:
                 return capabilities.canUseDevToolsGenerativeAiFeatures();
             case AccountCapabilitiesConstants.CAN_USE_EDU_FEATURES_CAPABILITY_NAME:
                 return capabilities.canUseEduFeatures();
-            case AccountCapabilitiesConstants.CAN_USE_GENERATIVE_AI_IN_RECORDER_APP:
-                return capabilities.canUseGenerativeAiInRecorderApp();
-            case AccountCapabilitiesConstants.CAN_USE_GENERATIVE_AI_PHOTO_EDITING:
-                return capabilities.canUseGenerativeAiPhotoEditing();
+            case AccountCapabilitiesConstants.CAN_USE_GEMINI_IN_CHROME_CAPABILITY_NAME:
+                return capabilities.canUseGeminiInChromeCapability();
             case AccountCapabilitiesConstants.CAN_USE_MANTA_SERVICE_NAME:
                 return capabilities.canUseMantaService();
             case AccountCapabilitiesConstants.CAN_USE_MODEL_EXECUTION_FEATURES_NAME:
@@ -72,12 +69,20 @@ public final class AccountCapabilitiesTest {
             case AccountCapabilitiesConstants.IS_OPTED_IN_TO_PARENTAL_SUPERVISION_CAPABILITY_NAME:
                 return capabilities.isOptedInToParentalSupervision();
             case AccountCapabilitiesConstants
+                    .IS_SUBJECT_TO_ACCOUNT_LEVEL_ENTERPRISE_POLICIES_CAPABILITY_NAME:
+                return capabilities.isSubjectToAccountLevelEnterprisePolicies();
+            case AccountCapabilitiesConstants
                     .IS_SUBJECT_TO_CHROME_PRIVACY_SANDBOX_RESTRICTED_MEASUREMENT_NOTICE:
                 return capabilities.isSubjectToChromePrivacySandboxRestrictedMeasurementNotice();
             case AccountCapabilitiesConstants.IS_SUBJECT_TO_ENTERPRISE_POLICIES_CAPABILITY_NAME:
                 return capabilities.isSubjectToEnterpriseFeatures();
             case AccountCapabilitiesConstants.IS_SUBJECT_TO_PARENTAL_CONTROLS_CAPABILITY_NAME:
                 return capabilities.isSubjectToParentalControls();
+            case AccountCapabilitiesConstants
+                    .IS_SUBJECT_TO_UNIVERSAL_OPT_OUT_CAPABILITY_NAME:
+                return capabilities.isSubjectToUniversalOptOut();
+            case AccountCapabilitiesConstants.SUPPORTS_WALLET_PRIVATE_PASSES_IN_AUTOFILL_NAME:
+                return capabilities.supportsWalletPrivatePassesInAutofill();
                 /** keep-sorted end */
         }
         throw new AssertionError("Capability name is not known.");
@@ -94,127 +99,60 @@ public final class AccountCapabilitiesTest {
         return response;
     }
 
-    /** List of parameters to run in capability fetching tests. */
-    public static class CapabilitiesTestParams implements ParameterProvider {
-        private static final List<ParameterSet> sCapabilties =
+    @Parameters
+    public static Collection<Object> data() {
+        List<Object> params =
                 Arrays.asList(
-                        new ParameterSet()
-                                .name("CanHaveEmailAddressDisplayed")
-                                .value(
-                                        AccountCapabilitiesConstants
-                                                .CAN_HAVE_EMAIL_ADDRESS_DISPLAYED_CAPABILITY_NAME),
-                        new ParameterSet()
-                                .name("CanShowHistorySyncOptInsWithoutMinorModeRestrictions")
-                                .value(
-                                        AccountCapabilitiesConstants
-                                                .CAN_SHOW_HISTORY_SYNC_OPT_INS_WITHOUT_MINOR_MODE_RESTRICTIONS_CAPABILITY_NAME),
-                        new ParameterSet()
-                                .name("CanRunChromePrivacySandboxTrials")
-                                .value(
-                                        AccountCapabilitiesConstants
-                                                .CAN_RUN_CHROME_PRIVACY_SANDBOX_TRIALS_CAPABILITY_NAME),
-                        new ParameterSet()
-                                .name("IsOptedInToParentalSupervision")
-                                .value(
-                                        AccountCapabilitiesConstants
-                                                .IS_OPTED_IN_TO_PARENTAL_SUPERVISION_CAPABILITY_NAME),
-                        new ParameterSet()
-                                .name("CanUseCopyEditorFeature")
-                                .value(
-                                        AccountCapabilitiesConstants
-                                                .CAN_USE_COPYEDITOR_FEATURE_NAME),
-                        new ParameterSet()
-                                .name("CanUseDevToolsGenerativeAiFeatures")
-                                .value(
-                                        AccountCapabilitiesConstants
-                                                .CAN_USE_DEVTOOLS_GENERATIVE_AI_FEATURES_CAPABILITY_NAME),
-                        new ParameterSet()
-                                .name("CanUseMantaService")
-                                .value(AccountCapabilitiesConstants.CAN_USE_MANTA_SERVICE_NAME),
-                        new ParameterSet()
-                                .name("CanUseModelExecutionFeatures")
-                                .value(
-                                        AccountCapabilitiesConstants
-                                                .CAN_USE_MODEL_EXECUTION_FEATURES_NAME),
-                        new ParameterSet()
-                                .name("IsAllowedForMachineLearning")
-                                .value(
-                                        AccountCapabilitiesConstants
-                                                .IS_ALLOWED_FOR_MACHINE_LEARNING_CAPABILITY_NAME),
-                        new ParameterSet()
-                                .name("IsSubjectToEnterpriseFeatures")
-                                .value(
-                                        AccountCapabilitiesConstants
-                                                .IS_SUBJECT_TO_ENTERPRISE_POLICIES_CAPABILITY_NAME),
-                        new ParameterSet()
-                                .name("CanFetchFamilyMemberInfo")
-                                .value(
-                                        AccountCapabilitiesConstants
-                                                .CAN_FETCH_FAMILY_MEMBER_INFO_CAPABILITY_NAME),
-                        new ParameterSet()
-                                .name("IsSubjectToParentalControls")
-                                .value(
-                                        AccountCapabilitiesConstants
-                                                .IS_SUBJECT_TO_PARENTAL_CONTROLS_CAPABILITY_NAME),
-                        new ParameterSet()
-                                .name("CanUseSpeakerLabelInRecorderApp")
-                                .value(
-                                        AccountCapabilitiesConstants
-                                                .CAN_USE_SPEAKER_LABEL_IN_RECORDER_APP),
-                        new ParameterSet()
-                                .name("CanUseGenerativeAiInRecorderApp")
-                                .value(
-                                        AccountCapabilitiesConstants
-                                                .CAN_USE_GENERATIVE_AI_IN_RECORDER_APP),
-                        new ParameterSet()
-                                .name("CanUseGenerativeAiPhotoEditing")
-                                .value(
-                                        AccountCapabilitiesConstants
-                                                .CAN_USE_GENERATIVE_AI_PHOTO_EDITING),
-                        new ParameterSet()
-                                .name("CanUseChromeOSGenerativeAi")
-                                .value(
-                                        AccountCapabilitiesConstants
-                                                .CAN_USE_CHROMEOS_GENERATIVE_AI));
-
-        // Returns String value added from Capabilities ParameterSet.
-        static String getCapabilityName(ParameterSet parameterSet) {
-            String parameterSetString = parameterSet.toString();
-            // Removes the brackets added by Arrays.toString for parameter value.
-            return parameterSetString.replace("[", "").replace("]", "");
-        }
-
-        static {
-            // Asserts that the list of parameters contains all supported capability names.
-            assert AccountCapabilitiesConstants.SUPPORTED_ACCOUNT_CAPABILITY_NAMES.containsAll(
-                    Lists.transform(sCapabilties, (paramSet) -> getCapabilityName(paramSet)));
-        }
-
-        @Override
-        public Iterable<ParameterSet> getParameters() {
-            return sCapabilties;
-        }
+                        new Object[] {
+                            AccountCapabilitiesConstants
+                                    .CAN_HAVE_EMAIL_ADDRESS_DISPLAYED_CAPABILITY_NAME,
+                            AccountCapabilitiesConstants
+                                    .CAN_SHOW_HISTORY_SYNC_OPT_INS_WITHOUT_MINOR_MODE_RESTRICTIONS_CAPABILITY_NAME,
+                            AccountCapabilitiesConstants
+                                    .CAN_RUN_CHROME_PRIVACY_SANDBOX_TRIALS_CAPABILITY_NAME,
+                            AccountCapabilitiesConstants
+                                    .IS_OPTED_IN_TO_PARENTAL_SUPERVISION_CAPABILITY_NAME,
+                            AccountCapabilitiesConstants
+                                    .CAN_USE_DEVTOOLS_GENERATIVE_AI_FEATURES_CAPABILITY_NAME,
+                            AccountCapabilitiesConstants.CAN_USE_MANTA_SERVICE_NAME,
+                            AccountCapabilitiesConstants.CAN_USE_MODEL_EXECUTION_FEATURES_NAME,
+                            AccountCapabilitiesConstants
+                                    .IS_ALLOWED_FOR_MACHINE_LEARNING_CAPABILITY_NAME,
+                            AccountCapabilitiesConstants
+                                    .IS_SUBJECT_TO_ENTERPRISE_POLICIES_CAPABILITY_NAME,
+                            AccountCapabilitiesConstants
+                                    .CAN_FETCH_FAMILY_MEMBER_INFO_CAPABILITY_NAME,
+                            AccountCapabilitiesConstants.CAN_USE_GEMINI_IN_CHROME_CAPABILITY_NAME,
+                            AccountCapabilitiesConstants
+                                    .IS_SUBJECT_TO_PARENTAL_CONTROLS_CAPABILITY_NAME,
+                            AccountCapabilitiesConstants
+                                    .IS_SUBJECT_TO_UNIVERSAL_OPT_OUT_CAPABILITY_NAME,
+                            AccountCapabilitiesConstants.CAN_USE_SPEAKER_LABEL_IN_RECORDER_APP,
+                            AccountCapabilitiesConstants
+                                    .SUPPORTS_WALLET_PRIVATE_PASSES_IN_AUTOFILL_NAME,
+                            AccountCapabilitiesConstants
+                                    .IS_SUBJECT_TO_ACCOUNT_LEVEL_ENTERPRISE_POLICIES_CAPABILITY_NAME
+                        });
+        assert AccountCapabilitiesConstants.SUPPORTED_ACCOUNT_CAPABILITY_NAMES.containsAll(params);
+        return params;
     }
 
     @Test
-    @ParameterAnnotations.UseMethodParameter(CapabilitiesTestParams.class)
-    public void testCapabilityResponseException(String capabilityName) {
+    public void testCapabilityResponseException() {
         AccountCapabilities capabilities = new AccountCapabilities(Map.of());
-        Assert.assertEquals(Tribool.UNKNOWN, getCapability(capabilityName, capabilities));
+        Assert.assertEquals(Tribool.UNKNOWN, getCapability(mCapabilityName, capabilities));
     }
 
     @Test
-    @ParameterAnnotations.UseMethodParameter(CapabilitiesTestParams.class)
-    public void testCapabilityResponseYes(String capabilityName) {
-        AccountCapabilities capabilities = new AccountCapabilities(Map.of(capabilityName, true));
-        Assert.assertEquals(Tribool.TRUE, getCapability(capabilityName, capabilities));
+    public void testCapabilityResponseYes() {
+        AccountCapabilities capabilities = new AccountCapabilities(Map.of(mCapabilityName, true));
+        Assert.assertEquals(Tribool.TRUE, getCapability(mCapabilityName, capabilities));
     }
 
     @Test
-    @ParameterAnnotations.UseMethodParameter(CapabilitiesTestParams.class)
-    public void testCapabilityResponseNo(String capabilityName) {
-        AccountCapabilities capabilities = new AccountCapabilities(Map.of(capabilityName, false));
-        Assert.assertEquals(Tribool.FALSE, getCapability(capabilityName, capabilities));
+    public void testCapabilityResponseNo() {
+        AccountCapabilities capabilities = new AccountCapabilities(Map.of(mCapabilityName, false));
+        Assert.assertEquals(Tribool.FALSE, getCapability(mCapabilityName, capabilities));
     }
 
     @Test

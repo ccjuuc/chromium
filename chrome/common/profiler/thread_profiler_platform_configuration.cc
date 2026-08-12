@@ -5,7 +5,7 @@
 #include "chrome/common/profiler/thread_profiler_platform_configuration.h"
 
 #include "base/command_line.h"
-#include "base/containers/flat_map.h"
+#include "base/containers/enum_set.h"
 #include "base/feature_list.h"
 #include "base/functional/callback.h"
 #include "base/notreached.h"
@@ -77,7 +77,7 @@ DefaultPlatformConfiguration::GetEnableRates(
 
   switch (*release_channel) {
     case version_info::Channel::BETA: {
-      // TODO(crbug.com/1497983): Ramp up enable rate on Non-Android platforms.
+      // TODO(crbug.com/40287243): Ramp up enable rate on Non-Android platforms.
       return RelativePopulations{90.0, 0.0, 10.0};
     }
     case version_info::Channel::STABLE: {
@@ -133,8 +133,9 @@ bool DefaultPlatformConfiguration::IsEnabledForThread(
 bool DefaultPlatformConfiguration::IsSupportedForChannel(
     std::optional<version_info::Channel> release_channel) const {
   // The profiler is always supported for local builds and the CQ.
-  if (!release_channel)
+  if (!release_channel) {
     return true;
+  }
 
 #if BUILDFLAG(IS_CHROMEOS)
   if (browser_test_mode_enabled()) {
@@ -176,41 +177,37 @@ class AndroidPlatformConfiguration : public DefaultPlatformConfiguration {
       std::optional<version_info::Channel> release_channel) const override;
 
  private:
+  using ProfilerThreadTypeSet =
+      base::EnumSet<sampling_profiler::ProfilerThreadType,
+                    sampling_profiler::ProfilerThreadType::kMin,
+                    sampling_profiler::ProfilerThreadType::kMax>;
+
   // Whether profiling is enabled on a thread type for Android DEV channel.
-  const base::flat_map<sampling_profiler::ProfilerThreadType, bool>
-      thread_enabled_on_dev_;
+  const ProfilerThreadTypeSet thread_enabled_on_dev_;
 };
 
 AndroidPlatformConfiguration::AndroidPlatformConfiguration(
     bool browser_test_mode_enabled,
     base::RepeatingCallback<bool(double)> is_enabled_on_dev_callback)
     : DefaultPlatformConfiguration(browser_test_mode_enabled),
-      thread_enabled_on_dev_(
-          base::MakeFlatMap<sampling_profiler::ProfilerThreadType, bool>(
-              []() {
-                std::vector<sampling_profiler::ProfilerThreadType> threads;
-                for (int i = 0;
-                     i <= static_cast<int>(
-                              sampling_profiler::ProfilerThreadType::kMax);
-                     i++) {
-                  threads.push_back(
-                      static_cast<sampling_profiler::ProfilerThreadType>(i));
-                }
-                return threads;
-              }(),
-              {},
-              [&](sampling_profiler::ProfilerThreadType thread) {
-                // Only enable 25% of threads on Dev channel as analysis
-                // shows 25% thread enable rate will give us sufficient
-                // resolution (100us).
-                return std::make_pair(thread,
-                                      is_enabled_on_dev_callback.Run(0.25));
-              })) {}
+      thread_enabled_on_dev_([&]() {
+        ProfilerThreadTypeSet enabled;
+        for (sampling_profiler::ProfilerThreadType thread :
+             ProfilerThreadTypeSet::All()) {
+          // Only enable 25% of threads on Dev channel as analysis
+          // shows 25% thread enable rate will give us sufficient
+          // resolution (100us).
+          if (is_enabled_on_dev_callback.Run(0.25)) {
+            enabled.Put(thread);
+          }
+        }
+        return enabled;
+      }()) {}
 
 ThreadProfilerPlatformConfiguration::RelativePopulations
 AndroidPlatformConfiguration::GetEnableRates(
     std::optional<version_info::Channel> release_channel) const {
-  // Always enable profiling in local/CQ builds or browser test mode.
+  // Always enable profiling in tests or local/CQ builds.
   if (!release_channel.has_value() || browser_test_mode_enabled()) {
     return RelativePopulations{0.0, 100.0, 0.0};
   }
@@ -276,7 +273,8 @@ AndroidPlatformConfiguration::ChooseEnabledProcess() const {
   }
   DCHECK_EQ(100, total_weight);
 
-  int chosen = base::RandInt(0, total_weight - 1);  // Max is inclusive.
+  int chosen =
+      base::RandIntInclusive(0, total_weight - 1);  // Max is inclusive.
   int cumulative_weight = 0;
   for (const auto& process_enable_weight : process_enable_weights) {
     if (chosen >= cumulative_weight &&
@@ -306,11 +304,8 @@ bool AndroidPlatformConfiguration::IsEnabledForThread(
     // channel based on the data volume after launch. Temporarily use the same
     // thread-level enable rate as dev channel.
     case version_info::Channel::BETA:
-    case version_info::Channel::DEV: {
-      const auto entry = thread_enabled_on_dev_.find(thread);
-      CHECK(entry != thread_enabled_on_dev_.end());
-      return entry->second;
-    }
+    case version_info::Channel::DEV:
+      return thread_enabled_on_dev_.Has(thread);
     case version_info::Channel::CANARY:
       return true;
     default:

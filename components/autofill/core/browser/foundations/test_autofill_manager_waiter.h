@@ -16,6 +16,7 @@
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/time/time.h"
 #include "components/autofill/core/browser/foundations/autofill_manager.h"
+#include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
 #include "components/autofill/core/common/dense_set.h"
 #include "components/autofill/core/common/unique_ids.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -38,6 +39,7 @@ enum class AutofillManagerEvent {
   kDidAutofillForm,
   kJavaScriptChangedAutofilledValue,
   kFormSubmitted,
+  kFormWithEmailVerificationTokenSubmitted,
   kLoadedServerPredictions,
   kMaxValue = kLoadedServerPredictions
 };
@@ -196,8 +198,7 @@ class TestAutofillManagerWaiter : public AutofillManager::Observer {
                                      FieldGlobalId field) override;
   void OnAfterTextFieldValueChanged(AutofillManager& manager,
                                     FormGlobalId form,
-                                    FieldGlobalId field,
-                                    const std::u16string& text_value) override;
+                                    FieldGlobalId field) override;
 
   void OnBeforeTextFieldDidScroll(AutofillManager& manager,
                                   FormGlobalId form,
@@ -250,8 +251,21 @@ class TestAutofillManagerWaiter : public AutofillManager::Observer {
   void OnAfterFormSubmitted(AutofillManager& manager,
                             const FormData& form) override;
 
-  void OnBeforeLoadedServerPredictions(AutofillManager& manager) override;
-  void OnAfterLoadedServerPredictions(AutofillManager& manager) override;
+  void OnBeforeFormWithEmailVerificationTokenSubmitted(
+      AutofillManager& manager,
+      const FormData& form,
+      const FieldGlobalId& field_id) override;
+  void OnAfterFormWithEmailVerificationTokenSubmitted(
+      AutofillManager& manager,
+      const FormData& form,
+      const FieldGlobalId& field_id) override;
+
+  void OnBeforeLoadedServerPredictions(
+      AutofillManager& manager,
+      base::span<const FormGlobalId> forms) override;
+  void OnAfterLoadedServerPredictions(
+      AutofillManager& manager,
+      base::span<const FormGlobalId> forms) override;
 
   DenseSet<Event> relevant_events_;
   std::unique_ptr<State> state_ = std::make_unique<State>();
@@ -478,10 +492,8 @@ class TestAutofillManagerSingleEventWaiter::Impl
   }
   void OnAfterTextFieldValueChanged(AutofillManager& manager,
                                     FormGlobalId form,
-                                    FieldGlobalId field,
-                                    const std::u16string& text_value) override {
-    MaybeQuit(&Observer::OnAfterTextFieldValueChanged, manager, form, field,
-              text_value);
+                                    FieldGlobalId field) override {
+    MaybeQuit(&Observer::OnAfterTextFieldValueChanged, manager, form, field);
   }
   void OnBeforeTextFieldDidScroll(AutofillManager& manager,
                                   FormGlobalId form,
@@ -557,24 +569,40 @@ class TestAutofillManagerSingleEventWaiter::Impl
   }
   void OnFieldTypesDetermined(AutofillManager& manager,
                               FormGlobalId form,
-                              FieldTypeSource source) override {
-    MaybeQuit(&Observer::OnFieldTypesDetermined, manager, form, source);
+                              FieldTypeSource source,
+                              bool small_forms_were_parsed) override {
+    MaybeQuit(&Observer::OnFieldTypesDetermined, manager, form, source,
+              small_forms_were_parsed);
   }
   void OnSuggestionsShown(AutofillManager& manager,
                           base::span<const Suggestion> suggestions) override {
     MaybeQuit(&Observer::OnSuggestionsShown, manager, suggestions);
   }
-  void OnSuggestionsHidden(AutofillManager& manager) override {
+  void OnSuggestionsHidden(AutofillManager& manager,
+                           SuggestionHidingReason reason) override {
     MaybeQuit(&Observer::OnSuggestionsHidden, manager);
   }
   void OnFillOrPreviewForm(
       AutofillManager& manager,
       FormGlobalId form_id,
+      FieldGlobalId trigger_field_id,
       mojom::ActionPersistence action_persistence,
       const base::flat_set<FieldGlobalId>& filled_field_ids,
+      const base::flat_map<FieldGlobalId, DenseSet<FieldFillingSkipReason>>&
+          skip_reasons,
       const FillingPayload& filling_payload) override {
     MaybeQuit(&Observer::OnFillOrPreviewForm, manager, form_id,
-              action_persistence, filled_field_ids, filling_payload);
+              trigger_field_id, action_persistence, filled_field_ids,
+              skip_reasons, filling_payload);
+  }
+  void OnFillOrPreviewField(AutofillManager& manager,
+                            FormGlobalId form_id,
+                            FieldGlobalId field_id,
+                            mojom::ActionPersistence action_persistence,
+                            const std::u16string& value,
+                            std::optional<FieldType> field_type_used) override {
+    MaybeQuit(&Observer::OnFillOrPreviewField, manager, form_id, field_id,
+              action_persistence, value, field_type_used);
   }
   void OnBeforeFormSubmitted(AutofillManager& manager,
                              const FormData& form) override {
@@ -584,11 +612,15 @@ class TestAutofillManagerSingleEventWaiter::Impl
                             const FormData& form) override {
     MaybeQuit(&Observer::OnAfterFormSubmitted, manager, form);
   }
-  void OnBeforeLoadedServerPredictions(AutofillManager& manager) override {
-    MaybeQuit(&Observer::OnBeforeLoadedServerPredictions, manager);
+  void OnBeforeLoadedServerPredictions(
+      AutofillManager& manager,
+      base::span<const FormGlobalId> forms) override {
+    MaybeQuit(&Observer::OnBeforeLoadedServerPredictions, manager, forms);
   }
-  void OnAfterLoadedServerPredictions(AutofillManager& manager) override {
-    MaybeQuit(&Observer::OnAfterLoadedServerPredictions, manager);
+  void OnAfterLoadedServerPredictions(
+      AutofillManager& manager,
+      base::span<const FormGlobalId> forms) override {
+    MaybeQuit(&Observer::OnAfterLoadedServerPredictions, manager, forms);
   }
 
   // Quits the `run_loop_` if `event` matches `event_`.

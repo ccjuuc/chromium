@@ -10,13 +10,13 @@
 #include <shlobj.h>
 #include <taskschd.h>
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
@@ -45,25 +45,25 @@ namespace {
 
 // The name of the tasks as will be visible in the scheduler so we know we can
 // safely delete them if they get stuck for whatever reason.
-const wchar_t kTaskName1[] = L"Chrome Updater Test task 1 (delete me)";
-const wchar_t kTaskName2[] = L"Chrome Updater Test task 2 (delete me)";
+constexpr wchar_t kTaskName1[] = L"Chrome Updater Test task 1 (delete me)";
+constexpr wchar_t kTaskName2[] = L"Chrome Updater Test task 2 (delete me)";
 
-const wchar_t kPrefixTaskName1[] = L"Chrome Updater Test task 1";
-const wchar_t kPrefixTaskName2[] = L"Chrome Updater Test task 2";
+constexpr wchar_t kPrefixTaskName1[] = L"Chrome Updater Test task 1";
+constexpr wchar_t kPrefixTaskName2[] = L"Chrome Updater Test task 2";
 
-const wchar_t kUpdaterTaskName1[] = L"Updater1.1{xxxxxxxx}";
-const wchar_t kUpdaterTaskName2[] = L"Updater1.11{xxxxxxxx}";
+constexpr wchar_t kUpdaterTaskName1[] = L"Updater1.1{xxxxxxxx}";
+constexpr wchar_t kUpdaterTaskName2[] = L"Updater1.11{xxxxxxxx}";
 
-const wchar_t kPrefixUpdaterTaskName1[] = L"Updater1.1";
+constexpr wchar_t kPrefixUpdaterTaskName1[] = L"Updater1.1";
 
 // Optional descriptions for the tasks above.
-const wchar_t kTaskDescription1[] =
+constexpr wchar_t kTaskDescription1[] =
     L"Task 1 used only for Chrome Updater unit testing.";
-const wchar_t kTaskDescription2[] =
+constexpr wchar_t kTaskDescription2[] =
     L"Task 2 used only for Chrome Updater unit testing.";
 
 // A command-line switch used in testing.
-const char kUnitTestSwitch[] = "a_switch";
+constexpr char kUnitTestSwitch[] = "a_switch";
 
 class TaskSchedulerTests : public ::testing::Test {
  public:
@@ -327,8 +327,8 @@ TEST_F(TaskSchedulerTests, GetTaskNameList) {
 
   std::vector<std::wstring> task_names;
   EXPECT_TRUE(task_scheduler_->GetTaskNameList(task_names));
-  EXPECT_TRUE(base::Contains(task_names, kTaskName1));
-  EXPECT_TRUE(base::Contains(task_names, kTaskName2));
+  EXPECT_TRUE(std::ranges::contains(task_names, kTaskName1));
+  EXPECT_TRUE(std::ranges::contains(task_names, kTaskName2));
 }
 
 TEST_F(TaskSchedulerTests, FindFirstTaskName) {
@@ -380,7 +380,7 @@ TEST_F(TaskSchedulerTests, GetTasksIncludesHidden) {
 
   std::vector<std::wstring> task_names;
   EXPECT_TRUE(task_scheduler_->GetTaskNameList(task_names));
-  EXPECT_TRUE(base::Contains(task_names, kTaskName1));
+  EXPECT_TRUE(std::ranges::contains(task_names, kTaskName1));
 }
 
 TEST_F(TaskSchedulerTests, GetTaskInfoExecActions) {
@@ -476,19 +476,14 @@ TEST_F(TaskSchedulerTests, GetTaskInfoUserId) {
 
   EXPECT_TRUE(task_scheduler_->GetTaskInfo(kTaskName1, info));
 
-  const std::wstring expected_user_id = [&is_system]() -> std::wstring {
-    if (is_system) {
-      return L"SYSTEM";
-    }
-
-    base::win::ScopedBstr user_name_bstr;
-    ULONG user_name_size = 256;
-    EXPECT_TRUE(::GetUserNameExW(
-        NameSamCompatible,
-        user_name_bstr.AllocateBytes(user_name_size * sizeof(OLECHAR)),
-        &user_name_size));
-    return user_name_bstr.Get();
-  }();
+  std::wstring expected_user_id = L"SYSTEM";
+  if (!is_system) {
+    wchar_t user_name[256] = {};
+    ULONG user_name_size = std::size(user_name);
+    ASSERT_TRUE(
+        ::GetUserNameExW(NameSamCompatible, user_name, &user_name_size));
+    expected_user_id = std::wstring(user_name, user_name_size);
+  }
 
   EXPECT_TRUE(base::EndsWith(info.user_id, expected_user_id,
                              base::CompareCase::INSENSITIVE_ASCII) ||
@@ -569,7 +564,7 @@ TEST(TaskSchedulerTest, ForEachTaskWithPrefix) {
     task_scheduler->ForEachTaskWithPrefix(
         kTaskNamePrefix, [&count_entries, &task_scheduler,
                           kTaskNamePrefix](const std::wstring& task_name) {
-          EXPECT_TRUE(base::StartsWith(task_name, kTaskNamePrefix));
+          EXPECT_TRUE(task_name.starts_with(kTaskNamePrefix));
           ++count_entries;
           EXPECT_TRUE(task_scheduler->DeleteTask(task_name));
         });

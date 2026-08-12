@@ -5,8 +5,6 @@
 #ifndef ASH_SYSTEM_UNIFIED_UNIFIED_SYSTEM_TRAY_CONTROLLER_H_
 #define ASH_SYSTEM_UNIFIED_UNIFIED_SYSTEM_TRAY_CONTROLLER_H_
 
-#include <memory>
-
 #include "ash/ash_export.h"
 #include "ash/system/audio/unified_volume_slider_controller.h"
 #include "ash/system/media/quick_settings_media_view_controller.h"
@@ -14,12 +12,8 @@
 #include "ash/system/unified/quick_settings_view.h"
 #include "ash/system/unified/unified_system_tray_model.h"
 #include "base/memory/advanced_memory_safety_checks.h"
-#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "components/global_media_controls/public/constants.h"
-#include "ui/display/display_observer.h"
-#include "ui/views/controls/slider.h"
-#include "ui/views/view.h"
 
 namespace ash {
 
@@ -34,7 +28,7 @@ class UnifiedSystemTrayModel;
 // Controller class of `QuickSettingsView`. Handles events of the view.
 class ASH_EXPORT UnifiedSystemTrayController
     : public UnifiedVolumeSliderController::Delegate,
-      public display::DisplayObserver {
+      public chromeos::PowerManagerClient::Observer {
   // Do not remove this macro!
   // The macro is maintained by the memory safety team.
   ADVANCED_MEMORY_SAFETY_CHECKS();
@@ -134,10 +128,6 @@ class ASH_EXPORT UnifiedSystemTrayController
   // UnifiedVolumeSliderController::Delegate:
   void OnAudioSettingsButtonClicked() override;
 
-  // display::DisplayObserver:
-  void OnDisplayAdded(const display::Display& new_display) override;
-  void OnDisplaysRemoved(const display::Displays& removed_displays) override;
-
   // Sets whether the quick settings view should show the media view.
   void SetShowMediaView(bool show_media_view);
 
@@ -181,10 +171,6 @@ class ASH_EXPORT UnifiedSystemTrayController
 
   void ShutDownDetailedViewController();
   void PrepareBubbleDestroy();
-
-  // Enable or disable the brightness slider view.
-  void UpdateBrightnessSlider() const;
-  bool GetBrightnessSliderEnabledForTesting() const;
 
  private:
   friend class AccessibilityFeaturePodControllerTest;

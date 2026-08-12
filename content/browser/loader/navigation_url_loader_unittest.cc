@@ -83,6 +83,8 @@ class NavigationURLLoaderTest : public testing::Test {
     blink::mojom::BeginNavigationParamsPtr begin_params =
         blink::mojom::BeginNavigationParams::New(
             std::nullopt /* initiator_frame_token */,
+            std::nullopt /* initiator_state_token */,
+            std::nullopt /* initiator_document_token */,
             std::string() /* headers */, net::LOAD_NORMAL,
             false /* skip_service_worker */,
             blink::mojom::RequestContextType::LOCATION,
@@ -94,13 +96,15 @@ class NavigationURLLoaderTest : public testing::Test {
             std::string() /* searchable_form_encoding */,
             GURL() /* client_side_redirect_url */,
             std::nullopt /* devtools_initiator_info */,
-            nullptr /* trust_token_params */, std::nullopt /* impression */,
+            nullptr /* trust_token_params */,
             base::TimeTicks() /* renderer_before_unload_start */,
             base::TimeTicks() /* renderer_before_unload_end */,
-            blink::mojom::NavigationInitiatorActivationAndAdStatus::
-                kDidNotStartWithTransientActivation,
-            false /* is_container_initiated */,
-            net::StorageAccessApiStatus::kNone, false /* has_rel_opener */);
+            base::TimeTicks() /* before_unload_dialog_opened */,
+            base::TimeTicks() /* before_unload_dialog_closed */,
+            false /* started_with_transient_activation */,
+            false /* started_by_ad */, false /* is_container_initiated */,
+            false /* has_rel_opener */,
+            std::nullopt /* script_tool_invocation_id */);
     auto common_params = blink::CreateCommonNavigationParams();
     common_params->url = url;
     common_params->initiator_origin = url::Origin::Create(url);
@@ -130,13 +134,10 @@ class NavigationURLLoaderTest : public testing::Test {
             base::UnguessableToken::Create() /* devtools_frame_token */,
             nullptr /* client_security_state */,
             std::nullopt /* devtools_accepted_stream_types */,
-            false /* is_pdf */,
-            ChildProcessHost::kInvalidUniqueID /* initiator_process_id */,
+            false /* is_pdf */, ChildProcessId() /* initiator_process_id */,
             std::nullopt /* initiator_document_token */,
-            nullptr /* serving_page_metrics_container */,
             false /* allow_cookies_from_browser */, 0 /* navigation_id */,
-            false /* shared_storage_writable */, false /* is_ad_tagged */,
-            false /* force_no_https_upgrade */));
+            false /* is_ad_tagged */, false /* force_no_https_upgrade */));
     return NavigationURLLoader::Create(
         browser_context_.get(), storage_partition, std::move(request_info),
         nullptr, nullptr, nullptr, delegate,

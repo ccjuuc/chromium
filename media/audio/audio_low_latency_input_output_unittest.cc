@@ -37,6 +37,8 @@
 
 namespace media {
 
+using Error = AudioInputStream::AudioInputCallback::Error;
+
 namespace {
 
 // Limits the number of delay measurements we can store in an array and
@@ -161,7 +163,7 @@ class FullDuplexAudioSinkSource
   }
 
   // AudioInputStream::AudioInputCallback.
-  void OnError() override {}
+  void OnError(Error error_code) override {}
   void OnData(const AudioBus* src,
               base::TimeTicks capture_time,
               double volume,
@@ -220,8 +222,8 @@ class FullDuplexAudioSinkSource
 
       // We should only have 16 bits per sample.
       DCHECK_EQ(frame_size_ / channels_, 2);
-      dest->FromInterleaved<SignedInt16SampleTypeTraits>(
-          reinterpret_cast<const int16_t*>(source.data()), size / channels_);
+      dest->FromInterleavedBytes<SignedInt16SampleTypeTraits>(
+          source.first(size));
 
       buffer_->Seek(size);
       return size / frame_size_;
@@ -334,7 +336,7 @@ class StreamWrapper {
     StreamType* stream = StreamTraits::CreateStream(
         audio_manager_,
         AudioParameters(format_,
-                        ChannelLayoutConfig(channel_layout_, channels()),
+                        ChannelLayoutConfig::FromLayout(channel_layout_),
                         sample_rate_, samples_per_packet_));
     EXPECT_TRUE(stream);
     return stream;

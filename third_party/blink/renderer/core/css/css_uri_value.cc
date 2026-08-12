@@ -19,8 +19,8 @@ CSSURIValue::~CSSURIValue() = default;
 
 SVGResource* CSSURIValue::EnsureResourceReference() const {
   if (!resource_) {
-    resource_ =
-        MakeGarbageCollected<ExternalSVGResourceDocumentContent>(AbsoluteUrl());
+    resource_ = MakeGarbageCollected<ExternalSVGResourceDocumentContent>(
+        AbsoluteUrl(), UrlData().GetModifiers());
   }
   return resource_.Get();
 }
@@ -44,8 +44,8 @@ AtomicString CSSURIValue::FragmentIdentifier() const {
 const AtomicString& CSSURIValue::NormalizedFragmentIdentifier() const {
   if (normalized_fragment_identifier_cache_.IsNull()) {
     normalized_fragment_identifier_cache_ =
-        AtomicString(DecodeURLEscapeSequences(
-            FragmentIdentifier(), DecodeURLMode::kUTF8OrIsomorphic));
+        AtomicString(DecodeUrlEscapeSequences(
+            FragmentIdentifier(), DecodeUrlMode::kUtf8OrIsomorphic));
   }
 
   // NOTE: If is_local_ is true, the normalized URL may be different
@@ -53,14 +53,18 @@ const AtomicString& CSSURIValue::NormalizedFragmentIdentifier() const {
   // but it should not matter for the fragment. We DCHECK that we get
   // the right result, to be sure.
   DCHECK_EQ(normalized_fragment_identifier_cache_,
-            AtomicString(DecodeURLEscapeSequences(
-                FragmentIdentifier(), DecodeURLMode::kUTF8OrIsomorphic)));
+            AtomicString(DecodeUrlEscapeSequences(
+                FragmentIdentifier(), DecodeUrlMode::kUtf8OrIsomorphic)));
 
   return normalized_fragment_identifier_cache_;
 }
 
 KURL CSSURIValue::AbsoluteUrl() const {
-  return KURL(UrlData().ResolvedUrl());
+  KURL url(UrlData().ResolvedUrl());
+  if (UrlData().IsPotentiallyDanglingMarkup()) {
+    url.SetPotentiallyDanglingMarkup();
+  }
+  return url;
 }
 
 bool CSSURIValue::IsLocal(const Document& document) const {

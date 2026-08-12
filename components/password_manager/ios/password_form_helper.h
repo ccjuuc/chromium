@@ -45,7 +45,8 @@ enum class HandleSubmittedFormStatus {
   kRejectedNoFrameMatchingId = 4,
   kRejectedNoTrustedUrl = 5,
   kRejectedCantExtractFormData = 6,
-  kMaxValue = kRejectedCantExtractFormData
+  kRejectedNoUserInteraction = 7,
+  kMaxValue = kRejectedNoUserInteraction
 };
 
 // A protocol implemented by a delegate of PasswordFormHelper.
@@ -97,6 +98,7 @@ enum class HandleSubmittedFormStatus {
 - (void)fillPasswordFormWithFillData:(password_manager::FillData)fillData
                              inFrame:(web::WebFrame*)frame
                     triggeredOnField:(autofill::FieldRendererId)fieldRendererID
+                   triggerSubmission:(BOOL)triggerSubmission
                    completionHandler:(nullable void (^)(BOOL))completionHandler;
 
 // Finds the password form with unique ID |formIdentifier| and calls

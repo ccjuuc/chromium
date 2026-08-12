@@ -71,6 +71,7 @@ class COMPONENT_EXPORT(APP_RESTORE) FullRestoreReadHandler
 
   // aura::EnvObserver:
   void OnWindowInitialized(aura::Window* window) override;
+  void OnWillDestroyEnv() override;
 
   // aura::WindowObserver:
   void OnWindowDestroyed(aura::Window* window) override;

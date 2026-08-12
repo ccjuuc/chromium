@@ -30,9 +30,9 @@ id<GREYMatcher> NotificationsSettingsMatcher() {
   return grey_accessibilityID(kNotificationsBannerTableViewId);
 }
 
-// Taps the context menu item with the given label.
+// Taps the alert item with the given label.
 void TapMenuItem(int labelId) {
-  id item = chrome_test_util::ContextMenuItemWithAccessibilityLabelId(labelId);
+  id item = chrome_test_util::ButtonWithAccessibilityLabelId(labelId);
   [[EarlGrey selectElementWithMatcher:item] performAction:grey_tap()];
 }
 
@@ -69,7 +69,6 @@ class ScopedOpenUrlSwizzler : public EarlGreyScopedBlockSwizzler {
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config;
-  config.features_enabled.push_back(kProvisionalNotificationAlert);
   return config;
 }
 

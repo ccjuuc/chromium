@@ -35,6 +35,7 @@ class TabModalDialogHost : public web_modal::WebContentsModalDialogHost,
   bool ShouldConstrainDialogBoundsByHost() override;
   void AddObserver(web_modal::ModalDialogHostObserver* observer) override;
   void RemoveObserver(web_modal::ModalDialogHostObserver* observer) override;
+  void NotifyPositionRequiresUpdate() override;
 
   // web_modal::WebContentsModalDialogHost:
   gfx::Size GetMaximumDialogSize() override;
@@ -49,8 +50,13 @@ class TabModalDialogHost : public web_modal::WebContentsModalDialogHost,
                              const gfx::Rect& new_bounds) override;
 
  private:
-  int GetDialogYCoordinate();
-  void NotifyPositionRequiresUpdate();
+  // The y-coordinate for modal dialogs on tabs that are not the bottom tab of
+  // a split. This the bottom of the toolbar, minus a small overlap.
+  int GetToolbarOverlappingYCoordinate();
+
+  int GetDialogYCoordinate(int contents_container_view_y, int dialog_height);
+
+  bool IsBottomTabInSplit();
 
   const raw_ptr<BrowserView> browser_view_;
   const raw_ptr<ContentsContainerView> contents_container_view_;
@@ -59,8 +65,7 @@ class TabModalDialogHost : public web_modal::WebContentsModalDialogHost,
   base::ScopedObservation<views::Widget, views::WidgetObserver>
       widget_observation_{this};
 
-  base::ObserverList<web_modal::ModalDialogHostObserver>::Unchecked
-      observer_list_;
+  base::ObserverList<web_modal::ModalDialogHostObserver> observer_list_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_TAB_MODAL_DIALOG_HOST_H_

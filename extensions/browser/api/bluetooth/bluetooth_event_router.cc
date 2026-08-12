@@ -8,7 +8,6 @@
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/lazy_instance.h"
@@ -224,9 +223,11 @@ void BluetoothEventRouter::SetDiscoveryFilter(
 
 BluetoothApiPairingDelegate* BluetoothEventRouter::GetPairingDelegate(
     const ExtensionId& extension_id) {
-  return base::Contains(pairing_delegate_map_, extension_id)
-             ? pairing_delegate_map_[extension_id]
-             : nullptr;
+  if (auto it = pairing_delegate_map_.find(extension_id);
+      it != pairing_delegate_map_.end()) {
+    return it->second;
+  }
+  return nullptr;
 }
 
 void BluetoothEventRouter::OnAdapterInitialized(
@@ -267,28 +268,29 @@ void BluetoothEventRouter::AddPairingDelegateImpl(
     return;
   }
 
-  if (base::Contains(pairing_delegate_map_, extension_id)) {
+  auto [it, inserted] =
+      pairing_delegate_map_.try_emplace(extension_id, nullptr);
+  if (!inserted) {
     // For WebUI there may be more than one page open to the same url
     // (e.g. chrome://settings). These will share the same pairing delegate.
     BLUETOOTH_LOG(EVENT) << "Pairing delegate already exists for extension_id: "
                          << extension_id;
     return;
   }
-  BluetoothApiPairingDelegate* delegate =
-      new BluetoothApiPairingDelegate(browser_context_);
+  it->second = new BluetoothApiPairingDelegate(browser_context_);
   DCHECK(adapter_.get());
   adapter_->AddPairingDelegate(
-      delegate, device::BluetoothAdapter::PAIRING_DELEGATE_PRIORITY_HIGH);
-  pairing_delegate_map_[extension_id] = delegate;
+      it->second, device::BluetoothAdapter::PAIRING_DELEGATE_PRIORITY_HIGH);
 }
 
 void BluetoothEventRouter::RemovePairingDelegate(
     const ExtensionId& extension_id) {
-  if (base::Contains(pairing_delegate_map_, extension_id)) {
-    BluetoothApiPairingDelegate* delegate = pairing_delegate_map_[extension_id];
+  if (auto it = pairing_delegate_map_.find(extension_id);
+      it != pairing_delegate_map_.end()) {
+    BluetoothApiPairingDelegate* delegate = it->second;
     if (adapter_.get())
       adapter_->RemovePairingDelegate(delegate);
-    pairing_delegate_map_.erase(extension_id);
+    pairing_delegate_map_.erase(it);
     delete delegate;
     MaybeReleaseAdapter();
   }
@@ -488,7 +490,7 @@ void BluetoothEventRouter::CleanUpForExtension(
   // discovery_session_map.erase() should happen before
   // delete session_iter->second, because deleting the
   // BluetoothDiscoverySession object may trigger a chain reaction
-  // (see http://crbug.com/711484#c9) which will modify
+  // (see http://crbug.com/40515577#c9) which will modify
   // discovery_session_map_ itself.
   device::BluetoothDiscoverySession* discovery_session = session_iter->second;
   discovery_session_map_.erase(session_iter);

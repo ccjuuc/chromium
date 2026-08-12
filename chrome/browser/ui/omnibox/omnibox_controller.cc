@@ -41,7 +41,7 @@ OmniboxController::OmniboxController(
       popup_state_manager_(std::make_unique<OmniboxPopupStateManager>()) {
   AutocompleteControllerConfig autocomplete_controller_config{
       .provider_types = AutocompleteClassifier::DefaultOmniboxProviders()};
-  if (base::FeatureList::IsEnabled(omnibox::kWebUIOmniboxPopup)) {
+  if (omnibox::IsWebUIOmniboxPopupEnabled()) {
     autocomplete_controller_config.show_iph_matches = false;
   }
   if (autocomplete_stop_timer_duration.has_value()) {
@@ -68,8 +68,6 @@ void OmniboxController::SetView(OmniboxView* view) {
   }
 }
 
-constexpr bool is_ios = !!BUILDFLAG(IS_IOS);
-
 OmniboxController::~OmniboxController() = default;
 
 void OmniboxController::StartAutocomplete(
@@ -92,7 +90,7 @@ void OmniboxController::StopAutocomplete(bool clear_result) const {
 void OmniboxController::StartZeroSuggestPrefetch() {
   TRACE_EVENT0("omnibox", "OmniboxController::StartZeroSuggestPrefetch");
   if (base::FeatureList::IsEnabled(features::kPrewarm) &&
-      features::kPrewarmZeroSuggestTrigger.Get()) {
+      base::FeatureList::IsEnabled(features::kPrewarmZeroSuggestTrigger)) {
     client_->MaybePrewarmForDefaultSearchEngine(PrewarmTrigger::kZeroSuggest);
   }
 
@@ -102,7 +100,7 @@ void OmniboxController::StartZeroSuggestPrefetch() {
   GURL current_url = client_->GetURL();
   std::u16string text = base::UTF8ToUTF16(current_url.spec());
 
-  if (omnibox::IsNTPPage(page_classification) || !is_ios) {
+  if (omnibox::IsNTPPage(page_classification)) {
     text.clear();
   }
 
@@ -122,7 +120,7 @@ void OmniboxController::OnResultChanged(AutocompleteController* controller,
   // OnResultChanged will be also called upon the first user interaction
   // with the omnibox to show a new result.
   if (base::FeatureList::IsEnabled(features::kPrewarm) &&
-      features::kPrewarmUserInteractionTrigger.Get()) {
+      !base::FeatureList::IsEnabled(features::kPrewarmZeroSuggestTrigger)) {
     client_->MaybePrewarmForDefaultSearchEngine(
         PrewarmTrigger::kUserInteraction);
   }
@@ -135,10 +133,11 @@ void OmniboxController::OnResultChanged(AutocompleteController* controller,
       edit_model_->OnCurrentMatchChanged();
     } else {
       edit_model_->OnPopupResultChanged();
-      edit_model_->OnPopupDataChanged(
-          std::u16string(),
-          /*is_temporary_text=*/false, std::u16string(), std::u16string(),
-          std::u16string(), false, std::u16string(), AutocompleteMatch());
+      edit_model_->OnPopupDataChanged(std::u16string(),
+                                      /*is_temporary_text=*/false,
+                                      std::u16string(), std::u16string(),
+                                      std::u16string(), KeywordState::kNone,
+                                      std::u16string(), AutocompleteMatch());
     }
   } else {
     edit_model_->OnPopupResultChanged();
@@ -190,6 +189,10 @@ bool OmniboxController::IsSuggestionHidden(
 }
 
 bool OmniboxController::IsPopupOpen() const {
+  if (base::FeatureList::IsEnabled(omnibox::kWebUIOmniboxFullPopup)) {
+    return !autocomplete_controller()->result().empty();
+  }
+
   OmniboxPopupState state = popup_state_manager_->popup_state();
   if (popup_state_validation_callback_) {
     popup_state_validation_callback_.Run(state);

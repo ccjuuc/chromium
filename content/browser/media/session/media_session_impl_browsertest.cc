@@ -17,6 +17,7 @@
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -24,10 +25,10 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/ukm/test_ukm_recorder.h"
+#include "content/browser/back_forward_cache/back_forward_cache_impl.h"
 #include "content/browser/media/session/audio_focus_delegate.h"
 #include "content/browser/media/session/mock_media_session_player_observer.h"
 #include "content/browser/media/session/mock_media_session_service_impl.h"
-#include "content/browser/renderer_host/back_forward_cache_impl.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/media_session.h"
@@ -39,6 +40,7 @@
 #include "content/public/test/prerender_test_util.h"
 #include "content/shell/browser/shell.h"
 #include "content/test/content_browser_test_utils_internal.h"
+#include "media/audio/audio_constants.h"
 #include "media/base/media_content_type.h"
 #include "media/base/media_switches.h"
 #include "net/base/filename_util.h"
@@ -63,7 +65,6 @@ using ::testing::NiceMock;
 namespace {
 
 const double kDefaultVolumeMultiplier = 1.0;
-const double kDuckingVolumeMultiplier = 0.2;
 const double kDifferentDuckingVolumeMultiplier = 0.018;
 
 const std::u16string kExpectedSourceTitlePrefix = u"http://example.com:";
@@ -384,9 +385,20 @@ class MediaSessionImplBrowserTest : public ContentBrowserTest {
  protected:
   std::unique_ptr<net::test_server::HttpResponse> HandleRequest(
       const net::test_server::HttpRequest& request) {
+    last_request_path_ = request.relative_url;
+    auto it = request.headers.find("Referer");
+    if (it != request.headers.end()) {
+      last_request_referer_ = it->second;
+    } else {
+      last_request_referer_.clear();
+    }
+
     get_favicon_calls();
     return std::make_unique<net::test_server::BasicHttpResponse>();
   }
+
+  std::string last_request_path_;
+  std::string last_request_referer_;
 
   raw_ptr<MediaSessionImpl> media_session_ = nullptr;
   raw_ptr<MockAudioFocusDelegate> mock_audio_focus_delegate_ = nullptr;
@@ -581,14 +593,14 @@ IN_PROC_BROWSER_TEST_P(MediaSessionImplParamBrowserTest,
   StartNewPlayer(player_observer.get());
   SystemStartDucking();
 
-  EXPECT_FLOAT_EQ(kDuckingVolumeMultiplier,
+  EXPECT_FLOAT_EQ(media::kDefaultDuckingVolumeMultiplier,
                   player_observer->GetVolumeMultiplier(0));
-  EXPECT_FLOAT_EQ(kDuckingVolumeMultiplier,
+  EXPECT_FLOAT_EQ(media::kDefaultDuckingVolumeMultiplier,
                   player_observer->GetVolumeMultiplier(1));
 
   StartNewPlayer(player_observer.get());
 
-  EXPECT_FLOAT_EQ(kDuckingVolumeMultiplier,
+  EXPECT_FLOAT_EQ(media::kDefaultDuckingVolumeMultiplier,
                   player_observer->GetVolumeMultiplier(2));
 }
 
@@ -645,7 +657,7 @@ IN_PROC_BROWSER_TEST_P(MediaSessionImplParamBrowserTest,
   EXPECT_FALSE(IsActive());
 
   SystemStartDucking();
-  EXPECT_FLOAT_EQ(kDuckingVolumeMultiplier,
+  EXPECT_FLOAT_EQ(media::kDefaultDuckingVolumeMultiplier,
                   player_observer->GetVolumeMultiplier(player_id));
 
   // On resume, ducking should stop.
@@ -2715,7 +2727,8 @@ IN_PROC_BROWSER_TEST_F(MediaSessionImplBrowserTest, UpdateFaviconURL) {
       /*is_default_icon=*/false));
 
   media_session_->DidUpdateFaviconURL(
-      shell()->web_contents()->GetPrimaryMainFrame(), favicons);
+      shell()->web_contents()->GetPrimaryMainFrame(), favicons,
+      blink::mojom::FaviconUpdateReason::kPageLoad);
 
   {
     std::vector<media_session::MediaImage> expected_images;
@@ -2744,7 +2757,8 @@ IN_PROC_BROWSER_TEST_F(MediaSessionImplBrowserTest, UpdateFaviconURL) {
     media_session::test::MockMediaSessionMojoObserver observer(*media_session_);
     media_session_->DidUpdateFaviconURL(
         shell()->web_contents()->GetPrimaryMainFrame(),
-        std::vector<blink::mojom::FaviconURLPtr>());
+        std::vector<blink::mojom::FaviconURLPtr>(),
+        blink::mojom::FaviconUpdateReason::kPageLoad);
     observer.WaitForExpectedImagesOfType(
         media_session::mojom::MediaSessionImageType::kSourceIcon,
         std::vector<media_session::MediaImage>());
@@ -2760,7 +2774,8 @@ IN_PROC_BROWSER_TEST_F(MediaSessionImplBrowserTest,
       /*is_default_icon=*/false));
 
   media_session_->DidUpdateFaviconURL(
-      shell()->web_contents()->GetPrimaryMainFrame(), favicons);
+      shell()->web_contents()->GetPrimaryMainFrame(), favicons,
+      blink::mojom::FaviconUpdateReason::kPageLoad);
 
   {
     std::vector<media_session::MediaImage> expected_images;
@@ -2824,7 +2839,8 @@ class FaviconWaiter : public WebContentsObserver {
 
   void DidUpdateFaviconURL(
       RenderFrameHost* render_frame_host,
-      const std::vector<blink::mojom::FaviconURLPtr>& candidates) override {
+      const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+      blink::mojom::FaviconUpdateReason reason) override {
     received_favicon_ = true;
     run_loop_.Quit();
   }
@@ -3111,7 +3127,8 @@ IN_PROC_BROWSER_TEST_F(MediaSessionImplBrowserTest, CacheFaviconImages) {
                                     valid_sizes, /*is_default_icon=*/false));
 
   media_session_->DidUpdateFaviconURL(
-      shell()->web_contents()->GetPrimaryMainFrame(), favicons);
+      shell()->web_contents()->GetPrimaryMainFrame(), favicons,
+      blink::mojom::FaviconUpdateReason::kPageLoad);
 
   media_session::MediaImage test_image;
   test_image.src = favicon_server().GetURL("/favicon.ico");
@@ -3305,6 +3322,77 @@ IN_PROC_BROWSER_TEST_F(MediaSessionImplBrowserTest,
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
+IN_PROC_BROWSER_TEST_F(MediaSessionImplBrowserTest,
+                       DownloadArtworkFromCorrectFrame) {
+  // Navigate to a page with an iframe.
+  GURL main_url = embedded_test_server()->GetURL("example.com", "/title1.html");
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  RenderFrameHost* main_frame = shell()->web_contents()->GetPrimaryMainFrame();
+  GURL iframe_url =
+      embedded_test_server()->GetURL("example2.com", "/title1.html");
+
+  // Create the iframe.
+  ASSERT_TRUE(ExecJs(
+      main_frame,
+      base::StringPrintf("let iframe = document.createElement('iframe'); "
+                         "iframe.src = '%s'; "
+                         "document.body.appendChild(iframe);",
+                         iframe_url.spec().c_str())));
+  EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
+
+  // Get the RenderFrameHost for the iframe.
+  RenderFrameHost* iframe_host = nullptr;
+  WebContentsImpl* web_contents =
+      static_cast<WebContentsImpl*>(shell()->web_contents());
+  web_contents->ForEachRenderFrameHost([&](RenderFrameHost* rfh) {
+    if (rfh->GetLastCommittedURL() == iframe_url) {
+      iframe_host = rfh;
+    }
+  });
+  ASSERT_TRUE(iframe_host);
+
+  // Set up the media session service for the iframe.
+  MockMediaSessionServiceImpl mock_media_session_service(iframe_host);
+
+  // Set the metadata with artwork.
+  blink::mojom::SpecMediaMetadataPtr spec_metadata(
+      blink::mojom::SpecMediaMetadata::New());
+  spec_metadata->title = u"title";
+  spec_metadata->artist = u"artist";
+  spec_metadata->album = u"album";
+
+  std::vector<media_session::MediaImage> images;
+  media_session::MediaImage image;
+  image.src = favicon_server().GetURL("/artwork.png");
+  image.sizes.emplace_back(100, 100);
+  images.push_back(image);
+  spec_metadata->artwork = images;
+
+  mock_media_session_service.SetMetadata(std::move(spec_metadata));
+
+  // Start a player in the iframe.
+  auto player_observer = std::make_unique<MockMediaSessionPlayerObserver>(
+      iframe_host, media::MediaContentType::kPersistent);
+  StartNewPlayer(player_observer.get());
+  ResolveAudioFocusSuccess();
+
+  // Get the media image bitmap.
+  base::RunLoop run_loop;
+  media_session_->GetMediaImageBitmap(
+      images[0], 100, 100,
+      base::BindLambdaForTesting([&](const SkBitmap&) { run_loop.Quit(); }));
+  run_loop.Run();
+
+  // Check that the artwork was downloaded.
+  EXPECT_EQ(last_request_path_, "/artwork.png");
+
+  // Check that the artwork was downloaded from the iframe.
+  EXPECT_EQ(last_request_referer_, iframe_url.GetWithEmptyPath().spec());
+
+  RemovePlayers(player_observer.get());
+}
+
 class MediaSessionImplPrerenderingBrowserTest
     : public MediaSessionImplBrowserTest {
  public:
@@ -3414,7 +3502,8 @@ IN_PROC_BROWSER_TEST_F(MediaSessionImplPrerenderingBrowserTest,
       /*is_default_icon=*/false));
 
   media_session_->DidUpdateFaviconURL(
-      shell()->web_contents()->GetPrimaryMainFrame(), favicons);
+      shell()->web_contents()->GetPrimaryMainFrame(), favicons,
+      blink::mojom::FaviconUpdateReason::kPageLoad);
   media_session::MediaImage test_image;
   test_image.src = test_image_src;
   test_image.sizes = valid_sizes;
@@ -3436,7 +3525,7 @@ IN_PROC_BROWSER_TEST_F(MediaSessionImplPrerenderingBrowserTest,
   // Prerender the next page.
   auto prerender_url =
       embedded_test_server()->GetURL("example.com", "/title2.html");
-  FrameTreeNodeId host_id = prerender_helper_.AddPrerender(prerender_url);
+  PrerenderHostId host_id = prerender_helper_.AddPrerender(prerender_url);
   content::RenderFrameHost* prerender_rfh =
       prerender_helper_.GetPrerenderedMainFrameHost(host_id);
   EXPECT_NE(prerender_rfh, nullptr);
@@ -3574,8 +3663,16 @@ IN_PROC_BROWSER_TEST_F(MediaSessionImplWithBackForwardCacheBrowserTest,
   EXPECT_TRUE(player_observer->IsPlaying(1));
 }
 
+// TODO(crbug.com/521159836): Re-enable on Linux MSAN.
+#if BUILDFLAG(IS_LINUX) && defined(MEMORY_SANITIZER)
+#define MAYBE_RecordsUkm_BrowserInitiated_AutoPip_IsDryRun \
+  DISABLED_RecordsUkm_BrowserInitiated_AutoPip_IsDryRun
+#else
+#define MAYBE_RecordsUkm_BrowserInitiated_AutoPip_IsDryRun \
+  RecordsUkm_BrowserInitiated_AutoPip_IsDryRun
+#endif
 IN_PROC_BROWSER_TEST_P(MediaSessionImplUkmBrowserTest,
-                       RecordsUkm_BrowserInitiated_AutoPip_IsDryRun) {
+                       MAYBE_RecordsUkm_BrowserInitiated_AutoPip_IsDryRun) {
   EXPECT_TRUE(NavigateToURL(
       shell(), embedded_test_server()->GetURL("example.com",
                                               "/media/session/position.html")));

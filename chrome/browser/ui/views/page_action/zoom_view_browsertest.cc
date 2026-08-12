@@ -11,8 +11,7 @@
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/location_bar/zoom_bubble_coordinator.h"
 #include "chrome/browser/ui/views/location_bar/zoom_bubble_view.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
-#include "chrome/browser/ui/views/page_action/page_action_view.h"
+#include "chrome/browser/ui/views/page_action/test_support/page_action_test_support.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
 #include "ui/views/test/widget_test.h"
@@ -22,16 +21,18 @@ using ZoomViewBrowserTest = InProcessBrowserTest;
 namespace {
 
 views::View* GetZoomView(Browser* browser) {
-  auto* toolbar_button_provider =
+  auto* provider =
       BrowserView::GetBrowserViewForBrowser(browser)->toolbar_button_provider();
-  return toolbar_button_provider->GetPageActionView(kActionZoomNormal);
+  return page_actions::GetIconLabelBubbleViewForTesting(
+      provider->GetPageActionViewInterface(kActionShowZoomBubble),
+      kActionShowZoomBubble);
 }
 
 }  // namespace
 
 IN_PROC_BROWSER_TEST_F(ZoomViewBrowserTest, SharedPageVisibility) {
   auto* zoom_icon = GetZoomView(browser());
-  auto* second_zoom_icon = GetZoomView(CreateBrowser(browser()->profile()));
+  auto* second_zoom_icon = GetZoomView(CreateBrowser(browser()->GetProfile()));
 
   ZoomBubbleCoordinator* zoom_bubble_coordinator =
       ZoomBubbleCoordinator::From(browser());

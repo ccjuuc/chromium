@@ -10,7 +10,9 @@ import static org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties.HIGHL
 import static org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties.HOVER_LISTENER;
 import static org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties.ICON;
 import static org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties.ICON_COLOR_RES;
+import static org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties.ICON_NO_TINT;
 import static org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties.ICON_SHOW_BADGE;
+import static org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties.ICON_SUPPLIER;
 import static org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties.KEY_LISTENER;
 import static org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties.MANAGED;
 import static org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties.MENU_ICON_AT_START;
@@ -24,9 +26,11 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.PropertyKey;
+import org.chromium.ui.modelutil.PropertyModel.WritableBooleanPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
 
 import java.util.List;
+import java.util.function.Supplier;
 
 /**
  * {@link PropertyKey} list for app menu, most keys are set by {@link AppMenuPropertiesDelegate},
@@ -34,11 +38,13 @@ import java.util.List;
  */
 @NullMarked
 public class AppMenuItemWithSubmenuProperties {
-    public static final WritableObjectPropertyKey<List<ListItem>> SUBMENU_ITEMS =
+    public static final WritableObjectPropertyKey<Supplier<List<ListItem>>> SUBMENU_PROVIDER =
             new WritableObjectPropertyKey<>();
 
     public static final WritableObjectPropertyKey<View.@Nullable OnClickListener> CLICK_LISTENER =
             new WritableObjectPropertyKey<>();
+
+    public static final WritableBooleanPropertyKey IS_EXPANDED = new WritableBooleanPropertyKey();
 
     public static final PropertyKey[] ALL_KEYS =
             new PropertyKey[] {
@@ -48,14 +54,17 @@ public class AppMenuItemWithSubmenuProperties {
                 HIGHLIGHTED,
                 MANAGED,
                 ICON,
+                ICON_SUPPLIER,
                 ICON_COLOR_RES,
                 ICON_SHOW_BADGE,
+                ICON_NO_TINT,
                 POSITION,
                 HOVER_LISTENER,
                 KEY_LISTENER,
                 HAS_HOVER_BACKGROUND,
                 MENU_ICON_AT_START,
                 CLICK_LISTENER,
-                SUBMENU_ITEMS,
+                SUBMENU_PROVIDER,
+                IS_EXPANDED,
             };
 }

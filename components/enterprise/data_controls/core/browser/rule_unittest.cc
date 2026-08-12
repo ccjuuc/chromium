@@ -13,6 +13,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
+#include "components/enterprise/buildflags/buildflags.h"
 #include "components/enterprise/data_controls/core/browser/features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -431,6 +432,28 @@ TEST(DataControlsRuleTest, InvalidRestrictions) {
       MakeRule(base::StringPrintf(kTemplate, R"(["not_a_real_restriction"])")));
 }
 
+TEST(DataControlsRuleTest, GetLevelWithoutContext) {
+  auto rule = MakeRule(R"({
+    "name": "Block pastes",
+    "rule_id": "1234",
+    "description": "A test rule to block pastes",
+    "destinations": { "urls": ["*"] },
+    "restrictions": [
+      { "class": "CLIPBOARD", "level": "BLOCK" },
+      { "class": "SCREENSHOT", "level": "WARN" }
+    ]
+  })");
+  ASSERT_TRUE(rule);
+
+  // The raw level should be returned without evaluating conditions like
+  // destinations.
+  ASSERT_EQ(rule->GetLevel(Rule::Restriction::kClipboard), Rule::Level::kBlock);
+  ASSERT_EQ(rule->GetLevel(Rule::Restriction::kScreenshot), Rule::Level::kWarn);
+
+  // Unspecified restrictions should return kNotSet.
+  ASSERT_EQ(rule->GetLevel(Rule::Restriction::kPrinting), Rule::Level::kNotSet);
+}
+
 TEST(DataControlsRuleTest, Restrictions) {
   auto rule = MakeRule(R"({
     "name": "Block pastes",
@@ -769,6 +792,101 @@ TEST_P(DataControlsRuleOrTest, NonTriggeringContext) {
 
   ASSERT_EQ(rule->GetLevel(Rule::Restriction::kClipboard, {}),
             Rule::Level::kNotSet);
+}
+
+TEST(DataControlsRuleTest, SizeConditionRuleMatchingHigherThan) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      kDataControlsUrlRegexAndSizeAttributes);
+
+  auto rule = MakeRule(R"({
+    "name": "Size Eval Rule Higher",
+    "sources": { "size_higher_than": 1000 },
+    "restrictions": [ { "class": "CLIPBOARD", "level": "BLOCK" } ]
+  })");
+  ASSERT_TRUE(rule);
+
+  EXPECT_EQ(
+      rule->GetLevel(Rule::Restriction::kClipboard,
+                     {.source = {.url = GURL("https://google.com"),
+                                 .content_size = 500}}),
+      Rule::Level::kNotSet);
+
+  EXPECT_EQ(
+      rule->GetLevel(Rule::Restriction::kClipboard,
+                     {.source = {.url = GURL("https://google.com"),
+                                 .content_size = 1000}}),
+      Rule::Level::kNotSet);
+
+  EXPECT_EQ(
+      rule->GetLevel(Rule::Restriction::kClipboard,
+                     {.source = {.url = GURL("https://google.com"),
+                                 .content_size = 1001}}),
+      Rule::Level::kBlock);
+
+  EXPECT_EQ(
+      rule->GetLevel(Rule::Restriction::kClipboard,
+                     {.source = {.url = GURL("https://google.com"),
+                                 .content_size = 2000}}),
+      Rule::Level::kBlock);
+}
+
+TEST(DataControlsRuleTest, SizeConditionRuleMatchingLowerThan) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      kDataControlsUrlRegexAndSizeAttributes);
+
+  auto rule = MakeRule(R"({
+    "name": "Size Eval Rule Lower",
+    "sources": { "size_lower_than": 1000 },
+    "restrictions": [ { "class": "CLIPBOARD", "level": "BLOCK" } ]
+  })");
+  ASSERT_TRUE(rule);
+
+  EXPECT_EQ(
+      rule->GetLevel(Rule::Restriction::kClipboard,
+                     {.source = {.url = GURL("https://google.com"),
+                                 .content_size = 500}}),
+      Rule::Level::kBlock);
+
+  EXPECT_EQ(
+      rule->GetLevel(Rule::Restriction::kClipboard,
+                     {.source = {.url = GURL("https://google.com"),
+                                 .content_size = 999}}),
+      Rule::Level::kBlock);
+  EXPECT_EQ(
+      rule->GetLevel(Rule::Restriction::kClipboard,
+                     {.source = {.url = GURL("https://google.com"),
+                                 .content_size = 1000}}),
+      Rule::Level::kNotSet);
+  EXPECT_EQ(
+      rule->GetLevel(Rule::Restriction::kClipboard,
+                     {.source = {.url = GURL("https://google.com"),
+                                 .content_size = 2000}}),
+      Rule::Level::kNotSet);
+}
+
+TEST(DataControlsRuleTest, UrlRegexMatching) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      kDataControlsUrlRegexAndSizeAttributes);
+
+  auto clipboard_rule = MakeRule(R"({
+    "name": "Regex paste rule",
+    "sources": { "url_regexprs": ["^https://.*\\.restricted\\.com/.*$"] },
+    "restrictions": [ { "class": "CLIPBOARD", "level": "BLOCK" } ]
+  })");
+  ASSERT_TRUE(clipboard_rule);
+  EXPECT_EQ(
+      clipboard_rule->GetLevel(
+          Rule::Restriction::kClipboard,
+          {.source = {.url = GURL("https://google.com")}}),
+      Rule::Level::kNotSet);
+  EXPECT_EQ(
+      clipboard_rule->GetLevel(
+          Rule::Restriction::kClipboard,
+          {.source = {.url = GURL("https://foo.restricted.com/data")}}),
+      Rule::Level::kBlock);
 }
 
 }  // namespace data_controls

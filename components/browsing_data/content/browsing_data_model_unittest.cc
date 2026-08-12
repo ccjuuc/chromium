@@ -74,7 +74,8 @@ std::unique_ptr<net::CanonicalCookie> MakeCanonicalCookie(
       /*expiration=*/base::Time(), /*last_access=*/base::Time(),
       /*last_update=*/base::Time(),
       /*secure=*/true, /*httponly=*/false, net::CookieSameSite::UNSPECIFIED,
-      net::CookiePriority::COOKIE_PRIORITY_DEFAULT, cookie_partition_key);
+      net::CookiePriority::COOKIE_PRIORITY_DEFAULT,
+      net::CookieSourceType::kOther, cookie_partition_key);
 }
 
 }  // namespace
@@ -587,11 +588,6 @@ TEST_F(BrowsingDataModelTest, ThirdPartyCookieTypes) {
   auto partitioned_shared_dictionary_key = net::SharedDictionaryIsolationKey{
       kSiteOrigin, net::SchemefulSite(kTestOrigin)};
 
-  content::InterestGroupManager::InterestGroupDataKey interest_group_key{
-      kSiteOrigin, kSiteOrigin};
-  content::AttributionDataModel::DataKey attribution_reporting_key{kSiteOrigin};
-  content::PrivateAggregationDataModel::DataKey private_aggregation_key{
-      kSiteOrigin};
   net::device_bound_sessions::SessionKey device_bound_session_key(
       net::SchemefulSite(kSiteOrigin.GetURL()),
       net::device_bound_sessions::SessionKey::Id("session_id"));
@@ -628,11 +624,6 @@ TEST_F(BrowsingDataModelTest, ThirdPartyCookieTypes) {
            partitioned_shared_worker_info},
           {BrowsingDataModel::StorageType::kCookie, *partitioned_cookie},
           {BrowsingDataModel::StorageType::kTrustTokens, kSiteOrigin},
-          {BrowsingDataModel::StorageType::kInterestGroup, interest_group_key},
-          {BrowsingDataModel::StorageType::kAttributionReporting,
-           attribution_reporting_key},
-          {BrowsingDataModel::StorageType::kPrivateAggregation,
-           private_aggregation_key},
           {BrowsingDataModel::StorageType::kSharedDictionary,
            partitioned_shared_dictionary_key}};
 

@@ -9,7 +9,6 @@
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "google_apis/gaia/oauth2_response.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -78,9 +77,8 @@ GaiaAccessTokenFetcher::GetTrafficAnnotationTag() const {
         "This feature cannot be disabled in settings, but if user signs "
         "out of Chrome, this request would not be made."
       chrome_policy {
-        SigninAllowed {
-          policy_options {mode: MANDATORY}
-          SigninAllowed: false
+        BrowserSignin {
+          BrowserSignin: 0
         }
       }
     })");

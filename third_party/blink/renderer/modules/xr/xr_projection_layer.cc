@@ -12,9 +12,14 @@
 
 namespace blink {
 
-XRProjectionLayer::XRProjectionLayer(XRGraphicsBinding* binding,
-                                     XRLayerDrawingContext* drawing_context)
-    : XRCompositionLayer(binding, drawing_context) {
+XRProjectionLayer::XRProjectionLayer(XRSession* session,
+                                     XRGraphicsBinding* binding,
+                                     XRLayerDrawingContext* drawing_context,
+                                     V8XRLayerLayout::Enum final_layout)
+    : XRCompositionLayer(session, binding, drawing_context) {
+  // Let SetLayout() decide which layout to use.
+  SetLayout(final_layout);
+
   CreateLayerBackend();
   // Ensure correct viewports are sent to the runtime on the first frame.
   SetModified(true);

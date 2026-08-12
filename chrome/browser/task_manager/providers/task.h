@@ -10,7 +10,6 @@
 #include <optional>
 #include <string>
 
-#include "base/byte_count.h"
 #include "base/byte_size.h"
 #include "base/memory/weak_ptr.h"
 #include "base/process/kill.h"
@@ -43,7 +42,6 @@ class Task {
     GPU,       /* A graphics process. */
     ARC,       /* An ARC process. */
     CROSTINI,  /* A Crostini VM process. */
-    PLUGIN_VM, /* A Plugin VM process. */
     ZYGOTE,    /* A Linux zygote process. */
     UTILITY,   /* A browser utility process. */
 

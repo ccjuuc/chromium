@@ -17,6 +17,7 @@
 #include "components/prefs/pref_service.h"
 #include "components/sessions/core/session_id.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
+#include "ui/base/ui_base_features.h"
 #include "url/gurl.h"
 
 namespace {
@@ -104,18 +105,19 @@ void LensOmniboxClient::OnAutocompleteAccept(
 
 LensSearchboxHandler::LensSearchboxHandler(
     mojo::PendingReceiver<searchbox::mojom::PageHandler> pending_page_handler,
+    mojo::PendingRemote<searchbox::mojom::Page> pending_page,
     Profile* profile,
     content::WebContents* web_contents,
     LensSearchboxClient* lens_searchbox_client)
     : SearchboxHandler(
           std::move(pending_page_handler),
+          std::move(pending_page),
           profile,
           web_contents,
-          std::make_unique<OmniboxController>(
-              std::make_unique<LensOmniboxClient>(profile,
-                                                  web_contents,
-                                                  lens_searchbox_client),
-              lens::features::GetLensSearchboxAutocompleteTimeout())),
+          std::make_unique<LensOmniboxClient>(profile,
+                                              web_contents,
+                                              lens_searchbox_client),
+          lens::features::GetLensSearchboxAutocompleteTimeout()),
       lens_searchbox_client_(lens_searchbox_client) {
   autocomplete_controller_observation_.Observe(autocomplete_controller());
 }
@@ -126,22 +128,14 @@ std::string LensSearchboxHandler::AutocompleteIconToResourceName(
     const gfx::VectorIcon& icon) const {
   // The default icon for contextual suggestions is the subdirectory arrow right
   // icon. For the Lens searchbox, we want to stay consistent with the search
-  // loupe instead.
-  if (icon.name == omnibox::kSubdirectoryArrowRightIcon.name) {
-    return searchbox_internal::kSearchIconResourceName;
+  // spark loupe instead.
+  if (icon.name == (features::IsRoundedIconsEnabled()
+                        ? omnibox::kSubdirectoryArrowRightIcon.name
+                        : omnibox::kSubdirectoryArrowRightOldIcon.name)) {
+    return searchbox_internal::kSearchSparkIconResourceName;
   }
 
   return SearchboxHandler::AutocompleteIconToResourceName(icon);
-}
-
-void LensSearchboxHandler::SetPage(
-    mojo::PendingRemote<searchbox::mojom::Page> pending_page) {
-  SearchboxHandler::SetPage(std::move(pending_page));
-
-  // The client may have text waiting to be sent to the searchbox that it
-  // couldn't do earlier since the page binding was not set. So now we let the
-  // client know the binding is ready.
-  lens_searchbox_client_->OnPageBound();
 }
 
 void LensSearchboxHandler::OnFocusChanged(bool focused) {
@@ -149,11 +143,20 @@ void LensSearchboxHandler::OnFocusChanged(bool focused) {
   lens_searchbox_client_->OnFocusChanged(focused);
 }
 
-void LensSearchboxHandler::QueryAutocomplete(const std::u16string& input,
-                                             bool prevent_inline_autocomplete) {
+void LensSearchboxHandler::QueryAutocomplete(
+    int32_t query_id,
+    const std::u16string& input,
+    bool prevent_inline_autocomplete,
+    uint32_t cursor_position,
+    omnibox::SuggestInventory suggest_inventory,
+    bool is_on_focus,
+    const std::string& keyword,
+    searchbox::mojom::InputMethod input_method) {
   lens_searchbox_client_->OnTextModified();
 
-  SearchboxHandler::QueryAutocomplete(input, prevent_inline_autocomplete);
+  SearchboxHandler::QueryAutocomplete(
+      query_id, input, prevent_inline_autocomplete, cursor_position,
+      suggest_inventory, is_on_focus, keyword, input_method);
 }
 
 void LensSearchboxHandler::SetInputText(const std::string& input_text) {
@@ -166,7 +169,7 @@ void LensSearchboxHandler::SetThumbnail(const std::string& thumbnail_url,
 }
 
 void LensSearchboxHandler::OnThumbnailRemoved() {
-  omnibox_controller()->client()->OnThumbnailRemoved();
+  client()->OnThumbnailRemoved();
 }
 
 void LensSearchboxHandler::OnAutocompleteStopTimerTriggered(

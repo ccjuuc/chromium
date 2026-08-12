@@ -37,12 +37,12 @@
 #include "components/policy/policy_export.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 
-namespace chrome::cros::reporting::proto {
-class UploadEventsRequest;
-}
-
 namespace network {
 class SharedURLLoaderFactory;
+}
+
+namespace chrome::cros::reporting::proto {
+class UploadEventsRequest;
 }
 
 namespace policy {
@@ -59,6 +59,9 @@ inline constexpr char kPolicyFetchingTimeHistogramName[] =
 
 POLICY_EXPORT BASE_DECLARE_FEATURE(kPolicyFetchWithSha256);
 
+// Returns the form factor of the device.
+POLICY_EXPORT enterprise_management::FormFactor GetFormFactor();
+
 // Implements the core logic required to talk to the device management service.
 // Also keeps track of the current state of the association with the service,
 // such as whether there is a valid registration (DMToken is present in that
@@ -71,8 +74,9 @@ class POLICY_EXPORT CloudPolicyClient {
  public:
   // Maps a (policy type, settings entity ID) pair to its corresponding
   // PolicyFetchResponse.
-  using ResponseMap = base::flat_map<CloudPolicyClientTypeParams,
-                               enterprise_management::PolicyFetchResponse>;
+  using ResponseMap =
+      base::flat_map<PolicyTypeToFetch,
+                     enterprise_management::PolicyFetchResponse>;
 
   // A callback which receives boolean status of an operation. If the
   // operation succeeded, |status| is true.
@@ -102,6 +106,11 @@ class POLICY_EXPORT CloudPolicyClient {
 
   using PromotionEligibilityCallback = base::OnceCallback<void(
       enterprise_management::GetUserEligiblePromotionsResponse)>;
+
+  using GenerateChromeProfileChallengeCallback = base::OnceCallback<void(
+      DeviceManagementStatus,
+      const enterprise_management::GenerateChromeProfileChallengeResponse&
+          response)>;
 
   using MacAddress = std::array<uint8_t, 6>;
 
@@ -133,12 +142,30 @@ class POLICY_EXPORT CloudPolicyClient {
   class POLICY_EXPORT Result {
    public:
     explicit Result(DeviceManagementStatus);
-    explicit Result(DeviceManagementStatus, int);
-    explicit Result(DeviceManagementStatus, int, base::Value::Dict);
+    Result(DeviceManagementStatus, int);
+    Result(DeviceManagementStatus, int, base::DictValue);
     explicit Result(NotRegistered);
+
+    static Result CreateForRealtimeUpload(
+        DeviceManagementStatus status,
+        int response_code,
+        base::DictValue response,
+        ::chrome::cros::reporting::proto::UploadEventsRequest upload_request);
+
+    static Result CreateForRealtimeUpload(
+        DeviceManagementStatus status,
+        int response_code,
+        ::chrome::cros::reporting::proto::UploadEventsRequest upload_request);
+
+    static Result CreateForRealtimeUpload(
+        NotRegistered not_registered,
+        ::chrome::cros::reporting::proto::UploadEventsRequest upload_request);
 
     Result(const Result& other);
     Result& operator=(const Result& other);
+    Result(Result&& other);
+    Result& operator=(Result&& other);
+    ~Result();
 
     bool IsSuccess() const;
     bool IsClientNotRegisteredError() const;
@@ -146,17 +173,20 @@ class POLICY_EXPORT CloudPolicyClient {
 
     DeviceManagementStatus GetDMServerError() const;
     int GetNetError() const;
-    bool operator==(const Result& other) const {
-      return this->result_ == other.result_ && net_error_ == other.net_error_ &&
-             response_ == other.response_;
-    }
+    int GetResponseCode() const;
+    bool operator==(const Result& other) const;
 
-    const base::Value::Dict& GetResponse() const;
+    const base::DictValue& GetResponse() const;
+    const ::chrome::cros::reporting::proto::UploadEventsRequest&
+    upload_events_request() const;
 
    private:
     std::variant<NotRegistered, DeviceManagementStatus> result_;
     int net_error_ = 0;
-    base::Value::Dict response_;
+    int response_code_ = 0;
+    base::DictValue response_;
+    std::unique_ptr<::chrome::cros::reporting::proto::UploadEventsRequest>
+        upload_events_request_;
   };
 
   // A callback which receives the operations result.
@@ -190,7 +220,7 @@ class POLICY_EXPORT CloudPolicyClient {
     // PSM protocol execution result. Its value will exist if the device
     // undergoes enrollment and a PSM server-backed state determination was
     // performed before (on Chrome OS, as encoded in the
-    // `prefs::kEnrollmentPsmResult` pref).
+    // `ash::prefs::kEnrollmentPsmResult` pref).
     std::optional<
         enterprise_management::DeviceRegisterRequest::PsmExecutionResult>
         psm_execution_result;
@@ -198,7 +228,7 @@ class POLICY_EXPORT CloudPolicyClient {
     // The following field is relevant only to Chrome OS.
     // PSM protocol determination timestamp. Its value will exist if the device
     // undergoes enrollment and PSM got executed successfully (on ChromeOS, as
-    // encoded in `prefs::kEnrollmentPsmDeterminationTime` pref).
+    // encoded in `ash::prefs::kEnrollmentPsmDeterminationTime` pref).
     std::optional<int64_t> psm_determination_timestamp;
 
     // The following field is relevant only to Chrome OS Demo Mode.
@@ -473,20 +503,8 @@ class POLICY_EXPORT CloudPolicyClient {
 
   // DEPRECATED: Use |UploadSecurityEvent| instead.
   virtual void UploadSecurityEventReport(bool include_device_info,
-                                         base::Value::Dict report,
+                                         base::DictValue report,
                                          ResultCallback callback);
-
-  // Uploads a report on the status of app push-installs. The client must be in
-  // a registered state. The |callback| will be called when the operation
-  // completes.
-  // Only one outstanding app push-install report upload is allowed.
-  // In case the new push-installs report upload is started, the previous one
-  // will be canceled.
-  virtual void UploadAppInstallReport(base::Value::Dict report,
-                                      ResultCallback callback);
-
-  // Cancels the pending app push-install status report upload, if exists.
-  virtual void CancelAppInstallReportUpload();
 
   // Attempts to fetch remote commands, with `last_command_id` being the ID of
   // the last command that finished execution, `command_results` being
@@ -546,6 +564,9 @@ class POLICY_EXPORT CloudPolicyClient {
 
   virtual void DeterminePromotionEligibility(
       PromotionEligibilityCallback callback);
+
+  virtual void GenerateChromeProfileChallenge(
+      GenerateChromeProfileChallengeCallback callback);
 
   // Adds an observer to be called back upon policy and state changes.
   void AddObserver(Observer* observer);
@@ -643,14 +664,26 @@ class POLICY_EXPORT CloudPolicyClient {
   void AddPolicyTypeToFetch(const std::string& policy_type,
                             const std::string& settings_entity_id);
 
-  void AddPolicyTypeToFetch(const CloudPolicyClientTypeParams& params);
+  void AddPolicyTypeToFetch(const PolicyTypeToFetch& params);
+
+  bool HasPolicyTypeToFetch(const std::string& policy_type,
+                            const std::string& settings_entity_id) const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return types_to_fetch_.contains(
+        PolicyTypeToFetch(policy_type, settings_entity_id));
+  }
+
+  bool HasPolicyTypeToFetch() const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return !types_to_fetch_.empty();
+  }
 
   // FetchPolicy() calls won't request the given policy type and optional
   // |settings_entity_id| anymore.
   void RemovePolicyTypeToFetch(const std::string& policy_type,
                                const std::string& settings_entity_id);
 
-  void RemovePolicyTypeToFetch(const CloudPolicyClientTypeParams& params);
+  void RemovePolicyTypeToFetch(const PolicyTypeToFetch& params);
 
   // Configures a set of device state keys to transfer to the server in the next
   // policy fetch. If the fetch is successful, the keys will be cleared so they
@@ -682,7 +715,7 @@ class POLICY_EXPORT CloudPolicyClient {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     return client_id_;
   }
-  const base::Value::Dict* configuration_seed() const {
+  const base::DictValue* configuration_seed() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     return configuration_seed_.get();
   }
@@ -727,6 +760,10 @@ class POLICY_EXPORT CloudPolicyClient {
     return fetched_invalidation_version_;
   }
 
+  const base::flat_set<PolicyTypeToFetch>& types_to_fetch() const {
+    return types_to_fetch_;
+  }
+
   scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory();
 
   // Returns the number of active requests.
@@ -735,20 +772,24 @@ class POLICY_EXPORT CloudPolicyClient {
   void SetURLLoaderFactoryForTesting(
       scoped_refptr<network::SharedURLLoaderFactory> factory);
 
+  base::WeakPtr<CloudPolicyClient> GetWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
  protected:
   // A map of (policy type, settings entity ID) pairs to fetch to the set of
   // settings entity IDs that should be fetched for the given policy type and
   // settings entity ID.
-  typedef base::flat_set<CloudPolicyClientTypeParams> CloudPolicyClientTypeParamsSet;
+  typedef base::flat_set<PolicyTypeToFetch> PolicyTypeToFetchSet;
 
   void FetchPolicyInternal(
       PolicyFetchReason reason,
-      const CloudPolicyClientTypeParamsSet& types_to_fetch,
+      const PolicyTypeToFetchSet& types_to_fetch,
       base::OnceCallback<void(DMServerJobResult)> callback);
 
   enterprise_management::PolicyFetchRequest* AddPolicyFetchRequest(
       enterprise_management::DevicePolicyRequest* policy_request,
-      const CloudPolicyClientTypeParams& type_to_fetch);
+      const PolicyTypeToFetch& type_to_fetch);
 
   // Upload a certificate to the server.  Like FetchPolicy, this method
   // requires that the client is in a registered state.  |certificate_data| must
@@ -793,8 +834,20 @@ class POLICY_EXPORT CloudPolicyClient {
       ResultCallback callback,
       DeviceManagementService::Job* job,
       DeviceManagementStatus status,
-      int net_error,
-      std::optional<base::Value::Dict> response);
+      int response_code,
+      std::optional<base::DictValue> response,
+      const ::chrome::cros::reporting::proto::UploadEventsRequest&
+          upload_request);
+
+  // Callback for realtime report upload requests - JSON format.
+  // TODO(crbug.com/478929452): Delete this callback after the proto-based
+  // reporting launch.
+  void OnRealtimeReportUploadCompletedDeprecated(
+      ResultCallback callback,
+      DeviceManagementService::Job* job,
+      DeviceManagementStatus status,
+      int response_code,
+      std::optional<base::DictValue> response);
 
   // Callback for remote command fetch requests.
   void OnRemoteCommandsFetched(RemoteCommandCallback callback,
@@ -821,6 +874,10 @@ class POLICY_EXPORT CloudPolicyClient {
 
   void OnPromotionEligibilityDetermined(PromotionEligibilityCallback callback,
                                         DMServerJobResult result);
+
+  void OnGenerateChromeProfileChallengeCompleted(
+      GenerateChromeProfileChallengeCallback callback,
+      DMServerJobResult result);
 
   // Callback for `UploadFmRegistrationToken` request.
   void OnUploadFmRegistrationTokenResponse(ResultCallback callback,
@@ -855,7 +912,7 @@ class POLICY_EXPORT CloudPolicyClient {
   std::string oidc_user_email_;
   bool is_dasherless_ = false;
 
-  CloudPolicyClientTypeParamsSet types_to_fetch_;
+  PolicyTypeToFetchSet types_to_fetch_;
   std::vector<std::string> state_keys_to_upload_;
 
   // OAuth token that if set is used as an additional form of authentication
@@ -863,7 +920,7 @@ class POLICY_EXPORT CloudPolicyClient {
   std::string oauth_token_;
 
   std::string dm_token_;
-  std::unique_ptr<base::Value::Dict> configuration_seed_;
+  std::unique_ptr<base::DictValue> configuration_seed_;
   DeviceMode device_mode_ = DEVICE_MODE_NOT_SET;
   ThirdPartyIdentityType third_party_identity_type_ = NO_THIRD_PARTY_MANAGEMENT;
   std::string client_id_;
@@ -897,11 +954,6 @@ class POLICY_EXPORT CloudPolicyClient {
   // All of the outstanding non-policy-fetch request jobs.
   std::vector<std::unique_ptr<DeviceManagementService::Job>> request_jobs_;
 
-  // Only one outstanding app push-install report upload is allowed, and it must
-  // be accessible so that it can be canceled.
-  raw_ptr<DeviceManagementService::Job> app_install_report_request_job_ =
-      nullptr;
-
   // Only one outstanding extension install report upload is allowed, and it
   // must be accessible so that it can be canceled.
   raw_ptr<DeviceManagementService::Job> extension_install_report_request_job_ =
@@ -934,7 +986,7 @@ class POLICY_EXPORT CloudPolicyClient {
 
   // DEPRECATED: Use CreateNewRealtimeReportingJob instead.
   DeviceManagementService::Job* CreateNewRealtimeReportingJobDeprecated(
-      base::Value::Dict report,
+      base::DictValue report,
       const std::string& server_url,
       bool include_device_info,
       ResultCallback callback);

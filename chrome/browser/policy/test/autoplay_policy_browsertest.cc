@@ -3,11 +3,15 @@
 // found in the LICENSE file.
 
 #include "base/strings/stringprintf.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/policy/policy_test_utils.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/test/base/ui_test_utils.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/test/base/chrome_test_utils.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
 #include "content/public/browser/render_frame_host.h"
@@ -17,6 +21,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/fenced_frame_test_util.h"
 #include "content/public/test/test_navigation_observer.h"
+#include "media/base/media_switches.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "url/gurl.h"
 
@@ -30,6 +35,9 @@ const char kUnifiedAutoplayTestPageURL[] = "/media/unified_autoplay.html";
 class AutoplayPolicyTest : public PolicyTest {
  public:
   AutoplayPolicyTest() {
+#if BUILDFLAG(IS_ANDROID)
+    scoped_feature_list_.InitAndEnableFeature(media::kAutoplayPoliciesAndroid);
+#endif
     // Start two embedded test servers on different ports. This will ensure
     // the test works correctly with cross origin iframes and site-per-process.
     embedded_test_server2()->AddDefaultHandlers(GetChromeTestDataDir());
@@ -43,7 +51,7 @@ class AutoplayPolicyTest : public PolicyTest {
         main_origin.empty()
             ? embedded_test_server()->GetURL(kAutoplayTestPageURL)
             : embedded_test_server()->GetURL(main_origin, kAutoplayTestPageURL);
-    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), origin));
+    ASSERT_TRUE(NavigateToUrl(origin, this));
 
     // Navigate the subframe to the test page but on the second origin.
     GURL origin2 = subframe_origin.empty()
@@ -72,7 +80,7 @@ class AutoplayPolicyTest : public PolicyTest {
   }
 
   content::WebContents* GetWebContents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return chrome_test_utils::GetActiveWebContents(this);
   }
 
   content::RenderFrameHost* GetPrimaryMainFrame() {
@@ -84,6 +92,8 @@ class AutoplayPolicyTest : public PolicyTest {
   }
 
  private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+
   // Second instance of embedded test server to provide a second test origin.
   net::EmbeddedTestServer embedded_test_server2_;
 };
@@ -138,7 +148,7 @@ IN_PROC_BROWSER_TEST_F(AutoplayPolicyTest, MAYBE_AutoplayAllowlist_Allowed) {
   EXPECT_FALSE(TryAutoplay(GetChildFrame()));
 
   // Create a test allowlist with our origin.
-  base::Value::List allowlist;
+  base::ListValue allowlist;
   allowlist.Append(embedded_test_server()->GetURL("/").spec());
 
   // Update policy to allow autoplay for our test origin.
@@ -161,7 +171,7 @@ IN_PROC_BROWSER_TEST_F(AutoplayPolicyTest, AutoplayAllowlist_PatternAllowed) {
   EXPECT_FALSE(TryAutoplay(GetChildFrame()));
 
   // Create a test allowlist with our origin.
-  base::Value::List allowlist;
+  base::ListValue allowlist;
   allowlist.Append("127.0.0.1:*");
 
   // Update policy to allow autoplay for our test origin.
@@ -184,7 +194,7 @@ IN_PROC_BROWSER_TEST_F(AutoplayPolicyTest, AutoplayAllowlist_Missing) {
   EXPECT_FALSE(TryAutoplay(GetChildFrame()));
 
   // Create a test allowlist with a random origin.
-  base::Value::List allowlist;
+  base::ListValue allowlist;
   allowlist.Append("https://www.example.com");
 
   // Update policy to allow autoplay for a random origin.
@@ -199,7 +209,7 @@ IN_PROC_BROWSER_TEST_F(AutoplayPolicyTest, AutoplayAllowlist_Missing) {
   EXPECT_FALSE(TryAutoplay(GetChildFrame()));
 }
 
-// Flaky on Linux and ChromeOS. See: crbug.com/1172978.
+// Flaky on Linux and ChromeOS. See: crbug.com/40745945.
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_AutoplayDeniedByPolicy DISABLED_AutoplayDeniedByPolicy
 #else
@@ -223,7 +233,7 @@ IN_PROC_BROWSER_TEST_F(AutoplayPolicyTest, MAYBE_AutoplayDeniedByPolicy) {
   EXPECT_FALSE(TryAutoplay(GetChildFrame()));
 
   // Create a test allowlist with a random origin.
-  base::Value::List allowlist;
+  base::ListValue allowlist;
   allowlist.Append("https://www.example.com");
 
   // Update policy to allow autoplay for a random origin.
@@ -237,7 +247,7 @@ IN_PROC_BROWSER_TEST_F(AutoplayPolicyTest, MAYBE_AutoplayDeniedByPolicy) {
   EXPECT_FALSE(TryAutoplay(GetChildFrame()));
 }
 
-// Flaky on Linux. See: crbug.com/1172978.
+// Flaky on Linux. See: crbug.com/40745945.
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_AutoplayDeniedAllowedWithURL DISABLED_AutoplayDeniedAllowedWithURL
 #else
@@ -261,7 +271,7 @@ IN_PROC_BROWSER_TEST_F(AutoplayPolicyTest, MAYBE_AutoplayDeniedAllowedWithURL) {
   EXPECT_FALSE(TryAutoplay(GetChildFrame()));
 
   // Create a test allowlist with our test origin.
-  base::Value::List allowlist;
+  base::ListValue allowlist;
   allowlist.Append(embedded_test_server()->GetURL("/").spec());
 
   // Update policy to allow autoplay for our test origin.
@@ -295,7 +305,7 @@ IN_PROC_BROWSER_TEST_F(AutoplayPolicyTest,
   EXPECT_FALSE(TryAutoplay(GetChildFrame()));
 
   // Create a test allowlist with our test origin.
-  base::Value::List allowlist;
+  base::ListValue allowlist;
   allowlist.Append(embedded_test_server()->GetURL("/").spec());
 
   // Update policy to allow autoplay for our test origin.
@@ -318,9 +328,8 @@ class AutoplayPolicyFencedFrameTest : public AutoplayPolicyTest {
   void SetUpCommandLine(base::CommandLine* command_line) override {}
 
   void NavigateAndCheckAutoplayAllowed(bool expected_result) {
-    ASSERT_TRUE(ui_test_utils::NavigateToURL(
-        browser(),
-        embedded_test_server()->GetURL(kUnifiedAutoplayTestPageURL)));
+    ASSERT_TRUE(NavigateToUrl(
+        embedded_test_server()->GetURL(kUnifiedAutoplayTestPageURL), this));
     // Append a cross origin fenced frame into the primary main frame.
     content::RenderFrameHost* fenced_frame_host =
         fenced_frame_helper_.CreateFencedFrame(
@@ -362,7 +371,7 @@ IN_PROC_BROWSER_TEST_F(AutoplayPolicyFencedFrameTest,
   NavigateAndCheckAutoplayAllowed(false);
 
   // Create a test allowlist with our origin.
-  base::Value::List allowlist;
+  base::ListValue allowlist;
   allowlist.Append(embedded_test_server()->GetURL("/").spec());
 
   // Update policy to allow autoplay for our test origin.
@@ -374,5 +383,78 @@ IN_PROC_BROWSER_TEST_F(AutoplayPolicyFencedFrameTest,
   // Check that autoplay was allowed by policy.
   NavigateAndCheckAutoplayAllowed(true);
 }
+
+class AutoplayPolicyBypassTest : public AutoplayPolicyTest,
+                                 public testing::WithParamInterface<bool> {
+ public:
+  AutoplayPolicyBypassTest() {
+    if (GetParam()) {
+      scoped_feature_list_.InitAndEnableFeature(
+          media::kAutoplayBypassForMicCamera);
+    } else {
+      scoped_feature_list_.InitAndDisableFeature(
+          media::kAutoplayBypassForMicCamera);
+    }
+  }
+
+  void GrantPermission(ContentSettingsType type) {
+    HostContentSettingsMapFactory::GetForProfile(
+        chrome_test_utils::GetProfile(this))
+        ->SetContentSettingCustomScope(ContentSettingsPattern::FromURL(
+                                           embedded_test_server()->GetURL("/")),
+                                       ContentSettingsPattern::Wildcard(), type,
+                                       CONTENT_SETTING_ALLOW);
+  }
+
+  void SetAutoplayAllowedPolicy(bool enabled) {
+    PolicyMap policies;
+    SetPolicy(&policies, key::kAutoplayAllowed, base::Value(enabled));
+    UpdateProviderPolicy(policies);
+  }
+
+  void ExpectAutoplay(bool expected) {
+    EXPECT_EQ(expected, TryAutoplay(GetPrimaryMainFrame()));
+    EXPECT_EQ(expected, TryAutoplay(GetChildFrame()));
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_P(AutoplayPolicyBypassTest,
+                       AutoplayAllowedByCameraPermission) {
+  NavigateToTestPage();
+  ExpectAutoplay(false);
+
+  GrantPermission(ContentSettingsType::MEDIASTREAM_CAMERA);
+
+  NavigateToTestPage();
+  ExpectAutoplay(GetParam());
+}
+
+IN_PROC_BROWSER_TEST_P(AutoplayPolicyBypassTest,
+                       AutoplayAllowedByMicrophonePermission) {
+  NavigateToTestPage();
+  ExpectAutoplay(false);
+
+  GrantPermission(ContentSettingsType::MEDIASTREAM_MIC);
+
+  NavigateToTestPage();
+  ExpectAutoplay(GetParam());
+}
+
+IN_PROC_BROWSER_TEST_P(AutoplayPolicyBypassTest,
+                       AutoplayAllowedByPolicyDespiteNoMicCameraPermission) {
+  NavigateToTestPage();
+  ExpectAutoplay(false);
+
+  SetAutoplayAllowedPolicy(true);
+
+  NavigateToTestPage();
+  ExpectAutoplay(true);
+}
+
+// this `Bool()` is whether the `media::kAutoplayBypassForMicCamera` is enabled.
+INSTANTIATE_TEST_SUITE_P(All, AutoplayPolicyBypassTest, testing::Bool());
 
 }  // namespace policy

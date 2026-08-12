@@ -2,10 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {
-  assert,
-  assertInstanceof,
-} from '../../assert.js';
+import {assert, assertInstanceof} from '../../assert.js';
 import {AsyncJobQueue} from '../../async_job_queue.js';
 import * as dom from '../../dom.js';
 import {reportError} from '../../error.js';
@@ -14,12 +11,8 @@ import {I18nString} from '../../i18n_string.js';
 import {LowStorageActionType, sendLowStorageEvent} from '../../metrics.js';
 import {Filenamer} from '../../models/file_namer.js';
 import * as loadTimeData from '../../models/load_time_data.js';
-import {
-  GifSaver,
-  TimeLapseEncoderArgs,
-  TimeLapseSaver,
-  VideoSaver,
-} from '../../models/video_saver.js';
+import type {TimeLapseEncoderArgs, TimeLapseSaver, VideoSaver} from '../../models/video_saver.js';
+import {GifSaver} from '../../models/video_saver.js';
 import {ChromeHelper} from '../../mojo/chrome_helper.js';
 import {DeviceOperator} from '../../mojo/device_operator.js';
 import {CrosImageCapture} from '../../mojo/image_capture.js';
@@ -28,27 +21,14 @@ import {PerfLogger} from '../../perf.js';
 import * as sound from '../../sound.js';
 import * as state from '../../state.js';
 import * as toast from '../../toast.js';
-import {
-  CanceledError,
-  ErrorLevel,
-  ErrorType,
-  Facing,
-  getVideoTrackSettings,
-  LowStorageError,
-  Metadata,
-  NoChunkError,
-  NoFrameError,
-  PerfEvent,
-  PreviewVideo,
-  Resolution,
-  VideoType,
-} from '../../type.js';
+import type {Facing, Metadata, PreviewVideo} from '../../type.js';
+import {CanceledError, ErrorLevel, ErrorType, getVideoTrackSettings, LowStorageError, NoChunkError, NoFrameError, PerfEvent, Resolution, VideoType} from '../../type.js';
 import {getFpsRangeFromConstraints, sleep} from '../../util.js';
 import {WaitableEvent} from '../../waitable_event.js';
-import {StreamConstraints} from '../stream_constraints.js';
+import type {StreamConstraints} from '../stream_constraints.js';
 
 import {ModeBase, ModeFactory} from './mode_base.js';
-import {PhotoResult} from './photo.js';
+import type {PhotoResult} from './photo.js';
 import {RecordTime} from './record_time.js';
 
 /**
@@ -210,13 +190,13 @@ export interface VideoHandler {
 }
 
 // This is used as an enum.
-/* eslint-disable @typescript-eslint/naming-convention */
+
 const RecordType = {
   NORMAL: state.State.RECORD_TYPE_NORMAL,
   GIF: state.State.RECORD_TYPE_GIF,
   TIME_LAPSE: state.State.RECORD_TYPE_TIME_LAPSE,
 } as const;
-/* eslint-enable @typescript-eslint/naming-convention */
+
 
 type RecordType = typeof RecordType[keyof typeof RecordType];
 
@@ -537,7 +517,7 @@ export class Video extends ModeBase {
   private getVideoTrack(): MediaStreamVideoTrack {
     // The type annotation on MediaStream.getVideoTracks() in @types/webrtc is
     // not specific enough.
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+
     return this.getRecordingStream().getVideoTracks()[0] as
         MediaStreamVideoTrack;
   }
@@ -575,6 +555,9 @@ export class Video extends ModeBase {
       state.set(state.State.RECORDING, true);
       this.recordTime.start(MAX_GIF_DURATION_MS);
 
+      // Turn off due to false positive
+      // https://github.com/eslint/eslint/issues/17579.
+
       let gifSaver = null;
       try {
         gifSaver = await this.captureGif();
@@ -604,6 +587,9 @@ export class Video extends ModeBase {
       window.addEventListener('beforeunload', beforeUnloadListener);
 
       this.recordTime.start();
+      // Turn off due to false positive
+      // https://github.com/eslint/eslint/issues/17579.
+
       let timeLapseSaver: TimeLapseSaver|null = null;
       try {
         assert(param !== null);

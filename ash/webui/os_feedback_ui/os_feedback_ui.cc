@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-
 #include "ash/webui/os_feedback_ui/os_feedback_ui.h"
 
 #include <memory>
@@ -17,6 +16,7 @@
 #include "ash/webui/os_feedback_ui/backend/os_feedback_delegate.h"
 #include "ash/webui/os_feedback_ui/mojom/os_feedback_ui.mojom.h"
 #include "ash/webui/os_feedback_ui/url_constants.h"
+#include "base/containers/span.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
@@ -120,19 +120,12 @@ void AddLocalizedStrings(content::WebUIDataSource* source) {
       {"wifiDebugLogsInfo", IDS_FEEDBACK_TOOL_WIFI_DEBUG_LOGS_CHECKBOX},
       {"wifiDebugLogsMessage", IDS_FEEDBACK_TOOL_WIFI_DEBUG_LOGS_MESSAGE},
       {"wifiDebugLogsTitle", IDS_FEEDBACK_TOOL_WIFI_DEBUG_LOGS_TITLE},
-      {"linkCrossDeviceDogfoodFeedbackInfo",
-       IDS_FEEDBACK_TOOL_LINK_CROSS_DEVICE_DOGFOOD_FEEDBACK_INFO},
-      {"linkCrossDeviceDogfoodFeedbackMessage",
-       IDS_FEEDBACK_TOOL_LINK_CROSS_DEVICE_DOGFOOD_FEEDBACK_MESSAGE},
       {"includeAutofillCheckboxLabel",
        IDS_FEEDBACK_TOOL_AUTOFILL_LOGS_CHECKBOX},
   };
 
   source->AddLocalizedStrings(kLocalizedStrings);
   source->UseStringsJs();
-
-  source->AddBoolean("enableLinkCrossDeviceDogfoodFeedbackFlag",
-                     features::IsLinkCrossDeviceDogfoodFeedbackEnabled());
 }
 
 }  // namespace

@@ -18,6 +18,9 @@ void AggregateFrameData::UpdateCpuUsage(base::TimeTicks update_time,
                                         bool is_ad) {
   // Update the overall usage for all of the relevant buckets.
   cpu_usage_ += update;
+  if (is_ad) {
+    live_ad_cpu_usage_ += update;
+  }
 
   // Update the peak usage.
   total_peak_cpu_.UpdatePeakWindowedPercent(update, update_time);
@@ -33,22 +36,6 @@ void AggregateFrameData::UpdateFirstAdFCPSinceNavStart(
   }
 }
 
-void AggregateFrameData::OnAdAuctionComplete(bool is_server_auction,
-                                             bool is_on_device_auction,
-                                             content::AuctionResult result) {
-  // Don't consider an auction to have completed if it was aborted -- if an
-  // abort signal was sent, the caller likely was not waiting for the auction to
-  // finish.
-  if (!first_ad_fcp_after_main_nav_start_ &&
-      result != content::AuctionResult::kAbortSignal &&
-      result != content::AuctionResult::kDocumentDestruction) {
-    completed_fledge_server_auction_before_fcp_ |= is_server_auction;
-    completed_fledge_on_device_auction_before_fcp_ |= is_on_device_auction;
-    completed_only_winning_fledge_auctions_ &=
-        result == content::AuctionResult::kSuccess;
-  }
-}
-
 void AggregateFrameData::ProcessResourceLoadInFrame(
     const mojom::ResourceDataUpdatePtr& resource,
     bool is_outermost_main_frame) {
@@ -58,7 +45,7 @@ void AggregateFrameData::ProcessResourceLoadInFrame(
   }
 }
 
-void AggregateFrameData::AdjustAdBytes(base::ByteCount unaccounted_ad_bytes,
+void AggregateFrameData::AdjustAdBytes(base::ByteSize unaccounted_ad_bytes,
                                        ResourceMimeType mime_type,
                                        bool is_outermost_main_frame) {
   // TODO(crbug.com/40216775): Test coverage isn't enough for this

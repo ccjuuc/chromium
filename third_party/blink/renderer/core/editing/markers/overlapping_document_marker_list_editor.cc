@@ -10,6 +10,21 @@
 
 namespace blink {
 
+namespace {
+
+// Returns the index of the first element in `collection` that does not satisfy
+// `pred`. If no such element is found (i.e. all elements satisfy `pred`),
+// returns `collection.size()`.
+template <typename Collection, typename T, typename Predicate>
+wtf_size_t GetInsertionIndex(const Collection& collection,
+                             const T& value,
+                             Predicate pred) {
+  auto it = std::lower_bound(collection.begin(), collection.end(), value, pred);
+  return CheckedDistance(collection.begin(), it);
+}
+
+}  // namespace
+
 void OverlappingDocumentMarkerListEditor::AddMarker(
     MarkerList* list,
     DocumentMarker* marker) {
@@ -18,24 +33,23 @@ void OverlappingDocumentMarkerListEditor::AddMarker(
     return;
   }
 
-  auto const pos = std::lower_bound(
-      list->begin(), list->end(), marker,
-      [](const Member<DocumentMarker>& marker_in_list,
-         const DocumentMarker* marker_to_insert) {
-        return marker_in_list->StartOffset() <= marker_to_insert->StartOffset();
-      });
-
-  list->insert(base::checked_cast<wtf_size_t>(pos - list->begin()), marker);
+  list->insert(
+      GetInsertionIndex(*list, marker,
+                        [](const Member<DocumentMarker>& marker_in_list,
+                           const DocumentMarker* marker_to_insert) {
+                          return marker_in_list->StartOffset() <=
+                                 marker_to_insert->StartOffset();
+                        }),
+      marker);
 }
-
 
 bool OverlappingDocumentMarkerListEditor::MoveMarkers(
     MarkerList* src_list,
-    int length,
+    wtf_size_t length,
     DocumentMarkerList* dst_list) {
-  DCHECK_GT(length, 0);
+  DCHECK_GT(length, 0u);
   bool did_move_marker = false;
-  const unsigned end_offset = length - 1;
+  const wtf_size_t end_offset = length - 1;
 
   HeapVector<Member<DocumentMarker>> unmoved_markers;
   for (DocumentMarker* marker : *src_list) {
@@ -57,15 +71,15 @@ bool OverlappingDocumentMarkerListEditor::MoveMarkers(
 }
 
 bool OverlappingDocumentMarkerListEditor::RemoveMarkers(MarkerList* list,
-                                                     unsigned start_offset,
-                                                     int length) {
+                                                        wtf_size_t start_offset,
+                                                        wtf_size_t length) {
   // For overlapping markers, even if sorted, the quickest way to perform
   // this operation is to build a new list with the markers that aren't
   // being removed. Exploiting the sort is difficult because markers
   // may be nested. See
   // OverlappingDocumentMarkerListEditorTest.RemoveMarkersNestedOverlap
   // for an example.
-  const unsigned end_offset = start_offset + length;
+  const wtf_size_t end_offset = start_offset + length;
   HeapVector<Member<DocumentMarker>> unremoved_markers;
   for (const Member<DocumentMarker>& marker : *list) {
     if (marker->EndOffset() <= start_offset ||
@@ -80,11 +94,10 @@ bool OverlappingDocumentMarkerListEditor::RemoveMarkers(MarkerList* list,
   return did_remove_marker;
 }
 
-bool OverlappingDocumentMarkerListEditor::ShiftMarkers(
-    MarkerList* list,
-    unsigned offset,
-    unsigned old_length,
-    unsigned new_length) {
+bool OverlappingDocumentMarkerListEditor::ShiftMarkers(MarkerList* list,
+                                                       wtf_size_t offset,
+                                                       wtf_size_t old_length,
+                                                       wtf_size_t new_length) {
   // For an overlapping marker list, the quickest way to perform this operation is
   // to build a new list with the markers not removed by the shift. Note that
   // ComputeOffsetsAfterShift will move markers in such a way that they remain
@@ -116,8 +129,8 @@ bool OverlappingDocumentMarkerListEditor::ShiftMarkers(
 HeapVector<Member<DocumentMarker>>
 OverlappingDocumentMarkerListEditor::MarkersIntersectingRange(
     const MarkerList& list,
-    unsigned start_offset,
-    unsigned end_offset) {
+    wtf_size_t start_offset,
+    wtf_size_t end_offset) {
   DCHECK_LE(start_offset, end_offset);
 
   // Optimize finding the last possible overlapping marker, then iterate
@@ -125,7 +138,7 @@ OverlappingDocumentMarkerListEditor::MarkersIntersectingRange(
   // sorted on start does not imply sorted on end.
   auto const end_it =
       std::upper_bound(list.begin(), list.end(), end_offset,
-                       [](unsigned end_offset, const DocumentMarker* marker) {
+                       [](wtf_size_t end_offset, const DocumentMarker* marker) {
                          return end_offset <= marker->StartOffset();
                        });
 

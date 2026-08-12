@@ -32,6 +32,7 @@
 #include "third_party/skia/include/gpu/ganesh/GrBackendSurface.h"
 #include "third_party/skia/include/gpu/ganesh/SkImageGanesh.h"
 #include "third_party/skia/include/gpu/ganesh/SkSurfaceGanesh.h"
+#include "third_party/skia/include/gpu/ganesh/mock/GrMockBackendSurface.h"
 #include "ui/gfx/gpu_fence_handle.h"
 #include "ui/gfx/presentation_feedback.h"
 #include "ui/gfx/swap_result.h"
@@ -340,9 +341,9 @@ bool FakeSkiaOutputSurface::GetGrBackendTexture(
   GrMockTextureInfo mock_texture_info = GrMockTextureInfo(
       SkColorTypeToGrColorType(ToClosestSkColorType(image_context.format())),
       SkTextureCompressionType::kNone, ++next_id);
-  *backend_texture = GrBackendTexture(image_context.size().width(),
-                                      image_context.size().height(),
-                                      skgpu::Mipmapped::kNo, mock_texture_info);
+  *backend_texture = GrBackendTextures::MakeMock(
+      image_context.size().width(), image_context.size().height(),
+      skgpu::Mipmapped::kNo, mock_texture_info);
   return true;
 }
 
@@ -351,7 +352,7 @@ void FakeSkiaOutputSurface::SwapBuffersAck() {
   gpu::SwapBuffersCompleteParams params;
   params.swap_response.timings = {now, now};
   params.swap_response.result = gfx::SwapResult::SWAP_ACK;
-  client_->DidReceiveSwapBuffersAck(params,
+  client_->DidReceiveSwapBuffersAck(std::move(params),
                                     /*release_fence=*/gfx::GpuFenceHandle());
   client_->DidReceivePresentationFeedback({now, base::TimeDelta(), 0});
 }
@@ -360,8 +361,7 @@ void FakeSkiaOutputSurface::DestroyCopyOutputTexture(
     scoped_refptr<gpu::ClientSharedImage> shared_image,
     const gpu::SyncToken& sync_token,
     bool is_lost) {
-  GetSharedImageInterface()->DestroySharedImage(sync_token,
-                                                std::move(shared_image));
+  shared_image->UpdateDestructionSyncToken(sync_token);
 }
 
 void FakeSkiaOutputSurface::ScheduleGpuTaskForTesting(
@@ -395,6 +395,10 @@ gpu::Mailbox FakeSkiaOutputSurface::CreateSolidColorSharedImage(
     const SkColor4f& color,
     const gfx::ColorSpace& color_space) {
   return gpu::Mailbox::Generate();
+}
+
+void FakeSkiaOutputSurface::DestroySharedImage(const gpu::Mailbox& mailbox) {
+  destroyed_mailboxes_.push_back(mailbox);
 }
 
 void FakeSkiaOutputSurface::SetSharedImagePurgeable(const gpu::Mailbox& mailbox,

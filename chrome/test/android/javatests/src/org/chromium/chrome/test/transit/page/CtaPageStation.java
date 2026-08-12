@@ -4,14 +4,17 @@
 
 package org.chromium.chrome.test.transit.page;
 
+import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
+import static androidx.test.espresso.matcher.ViewMatchers.withContentDescription;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
+
+import static org.hamcrest.CoreMatchers.allOf;
 
 import static org.chromium.base.test.transit.ViewSpec.viewSpec;
 
 import android.app.Activity;
 import android.os.SystemClock;
 import android.view.View;
-import android.widget.ImageButton;
 
 import org.chromium.base.test.transit.OptionalViewElement;
 import org.chromium.base.test.transit.TripBuilder;
@@ -27,7 +30,6 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
-import org.chromium.chrome.browser.toolbar.top.ToggleTabStackButton;
 import org.chromium.chrome.browser.toolbar.top.ToolbarControlContainer;
 import org.chromium.chrome.test.transit.ChromeTriggers;
 import org.chromium.chrome.test.transit.SoftKeyboardFacility;
@@ -49,11 +51,19 @@ import java.util.function.Supplier;
  * the expected title, etc.
  */
 public class CtaPageStation extends BasePageStation<ChromeTabbedActivity> {
+    private static final String SEARCH_PATH = "/search";
+    private static final String SEARCH_QUERY_PARAM = "q";
     public static final ViewSpec<UrlBar> URL_BAR = viewSpec(UrlBar.class, withId(R.id.url_bar));
+    public static final ViewSpec<View> TOOLBAR_MIC_BUTTON =
+            viewSpec(
+                    withId(R.id.optional_toolbar_button),
+                    withContentDescription(R.string.accessibility_toolbar_btn_mic));
+    public final OptionalViewElement<View> optionalToolbarMicButtonElement;
     public final OptionalViewElement<View> homeButtonElement;
-    public final ViewElement<ToolbarControlContainer> toolbarElement;
-    public final ViewElement<ToggleTabStackButton> tabSwitcherButtonElement;
-    public final ViewElement<ImageButton> menuButtonElement;
+    // TODO(crbug.com/477035792): Temporarily nullable while the toolbar is being migrated.
+    public final @Nullable ViewElement<ToolbarControlContainer> toolbarElement;
+    public final ViewElement<View> tabSwitcherButtonElement;
+    public final ViewElement<View> menuButtonElement;
 
     /** Prefer the CtaPageStation's subclass |newBuilder()|. */
     public static Builder<CtaPageStation> newGenericBuilder() {
@@ -76,18 +86,47 @@ public class CtaPageStation extends BasePageStation<ChromeTabbedActivity> {
                         ToolbarControlContainer.class,
                         withId(R.id.control_container),
                         ViewElement.unscopedOption());
+        // These should be unscoped because they can be present in both the top toolbar and the
+        // bottom bar.
         tabSwitcherButtonElement =
                 declareView(
-                        ToggleTabStackButton.class,
-                        withId(R.id.tab_switcher_button),
+                        View.class,
+                        allOf(withId(R.id.tab_switcher_button), isDisplayed()),
                         ViewElement.unscopedOption());
+
         menuButtonElement =
                 declareView(
-                        ImageButton.class, withId(R.id.menu_button), ViewElement.unscopedOption());
+                        View.class,
+                        allOf(withId(R.id.menu_button), isDisplayed()),
+                        ViewElement.unscopedOption());
 
         // The home button may not appear in tablets if the available screen size is too small.
         homeButtonElement =
-                declareOptionalView(withId(R.id.home_button), ViewElement.unscopedOption());
+                declareOptionalView(
+                        allOf(withId(R.id.home_button), isDisplayed()),
+                        ViewElement.unscopedOption());
+
+        // The optional toolbar mic button specifically.
+        optionalToolbarMicButtonElement = declareOptionalView(TOOLBAR_MIC_BUTTON);
+    }
+
+    /**
+     * Clicks the mic button in the toolbar, expecting to navigate to a search results page.
+     *
+     * @param query the query to expect in the search URL
+     * @return the {@link WebPageStation} representing the search results page
+     */
+    public WebPageStation clickToolbarMicToSearchPage(String query) {
+        return optionalToolbarMicButtonElement.clickTo().arriveAt(createSearchPageStation(query));
+    }
+
+    /** Returns a {@link WebPageStation} expecting a search results page for the given query. */
+    public WebPageStation createSearchPageStation(String query) {
+        return WebPageStation.newBuilder()
+                .initFrom(this)
+                // TODO(b/543914644): Create a method for verifying url args directly.
+                .withExpectedUrlSubstring(SEARCH_PATH + "?" + SEARCH_QUERY_PARAM + "=" + query)
+                .build();
     }
 
     /** Long presses the tab switcher button to open the action menu. */
@@ -107,6 +146,8 @@ public class CtaPageStation extends BasePageStation<ChromeTabbedActivity> {
 
     /** Shortcut to open a new tab programmatically as if selecting "New Tab" from the app menu. */
     public RegularNewTabPageStation openNewTabFast() {
+        assert !mIsIncognito || !IncognitoUtils.shouldOpenIncognitoAsWindow()
+                : "Regular tabs can only be opened in regular (non-incognito) windows.";
         return ChromeTriggers.invokeCustomMenuActionTo(R.id.new_tab_menu_id, this)
                 .arriveAt(RegularNewTabPageStation.newBuilder().initOpeningNewTab().build());
     }

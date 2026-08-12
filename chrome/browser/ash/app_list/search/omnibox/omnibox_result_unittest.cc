@@ -40,6 +40,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/paint_vector_icon.h"
@@ -168,7 +169,7 @@ class OmniboxResultTest : public testing::Test {
         std::make_unique<::test::TestAppListControllerDelegate>();
 
     favicon_cache_ = std::make_unique<FaviconCache>(
-        /*favicon_service=*/&favicon_service_, /*history_service=*/nullptr);
+        &favicon_service_, /*history_service=*/nullptr);
 
     // Ensure the bookmark model is loaded.
     bookmark_model_ =
@@ -204,9 +205,9 @@ class OmniboxResultTest : public testing::Test {
 
     return std::make_unique<OmniboxResult>(
         profile_.get(), app_list_controller_delegate_.get(),
-        CreateResult(match, /*controller=*/nullptr, favicon_cache_.get(),
-                     bookmark_model_, input_),
-        /*query=*/query);
+        TemplateURLServiceFactory::GetForProfile(profile_.get()),
+        CreateResult(match, /*controller=*/nullptr, bookmark_model_, input_),
+        /*query=*/query, favicon_cache_.get());
   }
 
   const GURL& GetLastOpenedUrl() const {
@@ -278,7 +279,8 @@ TEST_F(OmniboxResultTest, Metrics) {
   const auto bookmarked_result = CreateOmniboxResult(
       "https://example.com", AutocompleteMatchType::HISTORY_URL);
   EXPECT_EQ(ash::OMNIBOX_BOOKMARK, bookmarked_result->metrics_type());
-  EXPECT_EQ(&omnibox::kBookmarkIcon,
+  EXPECT_EQ(&(features::IsRoundedIconsEnabled() ? omnibox::kStarsFilledIcon
+                                                : omnibox::kBookmarkOldIcon),
             bookmarked_result->icon().icon.GetVectorIcon().vector_icon());
 
   // Unbookmarked URLs belong to the general "recently visited" category and

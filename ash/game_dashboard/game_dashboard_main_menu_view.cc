@@ -48,7 +48,6 @@
 #include "chromeos/ui/frame/caption_buttons/frame_caption_button_container_view.h"
 #include "chromeos/ui/frame/frame_header.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/vector_icons/vector_icons.h"
 #include "ui/accessibility/ax_enums.mojom-shared.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -56,7 +55,6 @@
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/compositor/layer.h"
-#include "ui/compositor/layer_type.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
@@ -718,12 +716,11 @@ class GameDashboardMainMenuView::GameControlsDetailsRow : public views::Button {
 
     // Initiate pulse layer if it starts to pulse for the first time.
     if (pulse_count == 0) {
-      gc_setup_button_pulse_layer_ =
-          std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
+      gc_setup_button_pulse_layer_ = std::make_unique<ui::LayerSolidColor>();
       widget->GetLayer()->Add(gc_setup_button_pulse_layer_.get());
       gc_setup_button_pulse_layer_->SetColor(
-          widget->GetColorProvider()->GetColor(
-              cros_tokens::kCrosSysHighlightText));
+          SkColor4f::FromColor(widget->GetColorProvider()->GetColor(
+              cros_tokens::kCrosSysHighlightText)));
     }
 
     DCHECK(gc_setup_button_pulse_layer_);
@@ -800,7 +797,7 @@ class GameDashboardMainMenuView::GameControlsDetailsRow : public views::Button {
   std::string app_name_;
 
   // Layer for setup button pulse animation.
-  std::unique_ptr<ui::Layer> gc_setup_button_pulse_layer_;
+  std::unique_ptr<ui::LayerSolidColor> gc_setup_button_pulse_layer_;
 };
 
 BEGIN_METADATA(GameDashboardMainMenuView, GameControlsDetailsRow)

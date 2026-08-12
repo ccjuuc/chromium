@@ -85,7 +85,7 @@ MediaStreamAudioSourceNode* MediaStreamAudioSourceNode::Create(
   // using an ordering on sequences of code unit values.
   // (See: https://infra.spec.whatwg.org/#code-unit)
   MediaStreamTrack* audio_track = audio_tracks[0];
-  for (auto track : audio_tracks) {
+  for (const auto& track : audio_tracks) {
     if (CodeUnitCompareLessThan(track->id(), audio_track->id())) {
       audio_track = track;
     }
@@ -95,7 +95,8 @@ MediaStreamAudioSourceNode* MediaStreamAudioSourceNode::Create(
   // this provider, which is [[input track]] from the spec.
   std::unique_ptr<AudioSourceProvider> provider =
       audio_track->CreateWebAudioSource(context.sampleRate(),
-                                        context.PlatformBufferDuration());
+                                        context.PlatformBufferDuration(),
+                                        context.renderQuantumSize());
 
   // 1.24.1. Step 4.
   MediaStreamAudioSourceNode* node =
@@ -151,11 +152,12 @@ MediaStreamAudioSourceNode::GetMediaStreamAudioSourceHandler() const {
   return static_cast<MediaStreamAudioSourceHandler&>(Handler());
 }
 
-void MediaStreamAudioSourceNode::SendLogMessage(const char* const function_name,
+void MediaStreamAudioSourceNode::SendLogMessage(const String& function_name,
                                                 const String& message) {
-  WebRtcLogMessage(
-      String::Format("[WA]MSASN::%s %s", function_name, message.Utf8().c_str())
-          .Utf8());
+  WebRtcLogMessage(String::Format("[WA]MSASN::%s %s",
+                                  function_name.Utf8().c_str(),
+                                  message.Utf8().c_str())
+                       .Utf8());
 }
 
 }  // namespace blink

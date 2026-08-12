@@ -63,8 +63,6 @@ class InMemoryFederatedPermissionContext
       const url::Origin& relying_party_embedder) override;
   bool IsAutoReauthnDisabledByEmbedder(
       content::WebContents* web_contents) override;
-  base::Time GetAutoReauthnEmbargoStartTime(
-      const url::Origin& relying_party_embedder) override;
   void RecordEmbargoForAutoReauthn(
       const url::Origin& relying_party_embedder) override;
   void RemoveEmbargoForAutoReauthn(
@@ -102,7 +100,7 @@ class InMemoryFederatedPermissionContext
       const std::string& account_id) override;
   std::optional<bool> GetIdpSigninStatus(
       const url::Origin& idp_origin) override;
-  base::Value::List GetAccounts(const url::Origin& identity_provider) override;
+  base::ListValue GetAccounts(const url::Origin& identity_provider) override;
   void SetIdpSigninStatus(
       const url::Origin& idp_origin,
       bool idp_signin_status,

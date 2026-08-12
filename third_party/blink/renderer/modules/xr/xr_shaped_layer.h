@@ -5,6 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_XR_XR_SHAPED_LAYER_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_XR_XR_SHAPED_LAYER_H_
 
+#include "third_party/blink/renderer/bindings/modules/v8/v8_xr_layer_layout.h"
 #include "third_party/blink/renderer/modules/xr/xr_composition_layer.h"
 
 namespace blink {
@@ -15,7 +16,9 @@ class XRSpace;
 
 class XRShapedLayer : public XRCompositionLayer {
  public:
-  XRShapedLayer(const XRLayerInit* init,
+  XRShapedLayer(XRSession* session,
+                const XRLayerInit* init,
+                V8XRLayerLayout::Enum final_layout,
                 XRGraphicsBinding* binding,
                 XRLayerDrawingContext* drawing_context);
   ~XRShapedLayer() override = default;
@@ -29,7 +32,6 @@ class XRShapedLayer : public XRCompositionLayer {
 
   // xr layer init parameters
   bool isStatic() const override;
-  bool clearOnAccess() const { return clear_on_access_; }
 
   void Trace(Visitor*) const override;
 
@@ -44,7 +46,6 @@ class XRShapedLayer : public XRCompositionLayer {
   uint16_t texture_width_;
   uint16_t texture_height_;
   bool is_static_;
-  bool clear_on_access_;
 };
 
 }  //  namespace blink

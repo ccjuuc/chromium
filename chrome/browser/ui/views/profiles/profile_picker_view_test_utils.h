@@ -14,6 +14,7 @@
 #include "chrome/browser/ui/views/profiles/profile_management_flow_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_view.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_web_contents_host.h"
+#include "chrome/browser/ui/webui/signin/signin_ui_error.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "ui/views/view_observer.h"
@@ -139,8 +140,14 @@ class MockProfilePickerWebContentsHost : public ProfilePickerWebContentsHost {
               ShowScreenInPickerContents,
               (const GURL& url, base::OnceClosure navigation_finished_closure));
   MOCK_METHOD(bool, ShouldUseDarkColors, (), (const));
+  MOCK_METHOD(bool, AreEffectsEnabled, (), (const));
   MOCK_METHOD(content::WebContents*, GetPickerContents, (), (const));
-  MOCK_METHOD(void, SetNativeToolbarVisible, (bool visible));
+  MOCK_METHOD(void, SetNativeToolbarSigninButtonsVisible, (bool visible));
+  MOCK_METHOD(void, SetNativeToolbarDontSignInButtonVisible, (bool visible));
+  MOCK_METHOD(void, SetNativeToolbarStartBrowsingButtonVisible, (bool visible));
+  MOCK_METHOD(void,
+              SetNativeToolbarEffectsControlButtonVisible,
+              (bool visible));
   MOCK_METHOD(SkColor, GetPreferredBackgroundColor, (), (const));
   MOCK_METHOD(content::WebContentsDelegate*, GetWebContentsDelegate, ());
   MOCK_METHOD(web_modal::WebContentsModalDialogHost*,
@@ -148,8 +155,9 @@ class MockProfilePickerWebContentsHost : public ProfilePickerWebContentsHost {
               ());
   MOCK_METHOD(void, Reset, (StepSwitchFinishedCallback callback));
   MOCK_METHOD(void,
-              ShowForceSigninErrorDialog,
-              (const ForceSigninUIError& error, bool success));
+              ShowSigninErrorDialog,
+              ((const std::variant<ForceSigninUIError, SigninUIError>& error),
+               bool success));
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_PROFILES_PROFILE_PICKER_VIEW_TEST_UTILS_H_

@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 
+#include "base/containers/adapters.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
@@ -39,7 +40,7 @@ constexpr char kKeyClass[] = "class";
 constexpr char kKeyLevel[] = "level";
 
 // Helper to make dictionary parsing code more readable.
-std::string GetStringOrEmpty(const base::Value::Dict& dict, const char* key) {
+std::string GetStringOrEmpty(const base::DictValue& dict, const char* key) {
   const std::string* value = dict.FindString(key);
   return value ? *value : std::string();
 }
@@ -48,19 +49,12 @@ std::string GetStringOrEmpty(const base::Value::Dict& dict, const char* key) {
 // their dictionary. If other attributes are present alongside them, it creates
 // ambiguity as to how the rule is evaluated, and as such this is considered an
 // error in the set policy.
-std::vector<std::string_view> OneOfConditions(const base::Value::Dict& value) {
+std::vector<std::string_view> OneOfConditions(const base::DictValue& value) {
   std::vector<std::string_view> oneof_conditions;
-  for (const char* oneof_value :
-       {// "and", "or" and "not" need to be the only value at their level as it
-        // is otherwise ambiguous which of them has precedence or how they are
-        // combined together into one condition.
-        kKeyAnd, kKeyOr, kKeyNot,
-
-        // "os_clipboard" needs to be the only value in its dictionary as it
-        // represents a unique source/destination. For example, a clipboard
-        // interaction cannot both be the OS clipboard and match URL patterns
-        // at the same time.
-        AttributesCondition::kKeyOsClipboard}) {
+  // "and", "or" and "not" need to be the only value at their level as it
+  // is otherwise ambiguous which of them has precedence or how they are
+  // combined together into one condition.
+  for (const char* oneof_value : {kKeyAnd, kKeyOr, kKeyNot}) {
     if (value.contains(oneof_value)) {
       oneof_conditions.push_back(oneof_value);
     }
@@ -68,14 +62,59 @@ std::vector<std::string_view> OneOfConditions(const base::Value::Dict& value) {
   return oneof_conditions;
 }
 
-// Returns any condition present in `value` that wouldn't match
-// `OneOfConditions`.
-std::vector<std::string_view> AnyOfConditions(const base::Value::Dict& value) {
-  std::vector<std::string_view> anyof_conditions;
-  for (const char* anyof_condition :
-       {kKeySources, kKeyDestinations, AttributesCondition::kKeyUrls,
+// Exclusive endpoints like "os_clipboard" or "gemini_in_chrome" represent
+// unique sources/destinations that cannot be combined with tab-bound
+// conditions like "urls" or "incognito".
+std::vector<std::string_view> ExclusiveEndpointConditions(
+    const base::DictValue& value) {
+  std::vector<std::string_view> exclusive_conditions;
+  for (const char* exclusive_value :
+       {AttributesCondition::kKeyOsClipboard,
+        // TODO(crbug.com/510383413): Support combining `gemini_in_chrome` with
+        // profile-bound attributes like `incognito`. When implemented, update
+        // `ExclusiveEndpointConditions` and `TabContextConditions`.
+        AttributesCondition::kKeyGeminiInChrome}) {
+    if (value.contains(exclusive_value)) {
+      exclusive_conditions.push_back(exclusive_value);
+    }
+  }
+  return exclusive_conditions;
+}
+
+// Returns conditions that require a browser tab context ("urls", "incognito",
+// etc.). These cannot coexist in the same dictionary alongside
+// ExclusiveEndpointConditions.
+std::vector<std::string_view> TabContextConditions(
+    const base::DictValue& value) {
+  std::vector<std::string_view> tab_conditions;
+  for (const char* tab_condition :
+       {AttributesCondition::kKeyUrls,
+        AttributesCondition::kKeyUrlRegexprs,
         AttributesCondition::kKeyIncognito,
         AttributesCondition::kKeyOtherProfile,
+#if BUILDFLAG(IS_CHROMEOS)
+        AttributesCondition::kKeyComponents
+#endif  // BUILDFLAG(IS_CHROMEOS)
+       }) {
+    if (value.contains(tab_condition)) {
+      tab_conditions.push_back(tab_condition);
+    }
+  }
+  return tab_conditions;
+}
+
+// Returns any non-OneOf condition present in `value`.
+std::vector<std::string_view> AnyOfConditions(const base::DictValue& value) {
+  std::vector<std::string_view> anyof_conditions;
+  for (const char* anyof_condition :
+       {kKeySources, kKeyDestinations, AttributesCondition::kKeyOsClipboard,
+        AttributesCondition::kKeyGeminiInChrome,
+        AttributesCondition::kKeyUrls,
+        AttributesCondition::kKeyUrlRegexprs,
+        AttributesCondition::kKeyIncognito,
+        AttributesCondition::kKeyOtherProfile,
+        AttributesCondition::kKeySizeHigherThan,
+        AttributesCondition::kKeySizeLowerThan,
 #if BUILDFLAG(IS_CHROMEOS)
         AttributesCondition::kKeyComponents
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -85,6 +124,25 @@ std::vector<std::string_view> AnyOfConditions(const base::Value::Dict& value) {
     }
   }
   return anyof_conditions;
+}
+
+
+
+// Returns true if `error_path` indicates that the attribute being validated is
+// nested inside a "destinations" dictionary.
+bool IsDestinationCondition(const policy::PolicyErrorPath& error_path) {
+  for (const auto& element : base::Reversed(error_path)) {
+    if (std::holds_alternative<std::string>(element)) {
+      const std::string& path_string = std::get<std::string>(element);
+      if (path_string == kKeyDestinations) {
+        return true;
+      }
+      if (path_string == kKeySources) {
+        return false;
+      }
+    }
+  }
+  return false;
 }
 
 // Clones `error_path` and update the copy with a new value.
@@ -133,7 +191,7 @@ std::optional<Rule> Rule::Create(const base::Value& value) {
 }
 
 // static
-std::optional<Rule> Rule::Create(const base::Value::Dict& value) {
+std::optional<Rule> Rule::Create(const base::DictValue& value) {
   auto condition = GetCondition(value);
   if (!condition) {
     return std::nullopt;
@@ -175,6 +233,14 @@ Rule::Level Rule::GetLevel(Restriction restriction,
   return Level::kNotSet;
 }
 
+Rule::Level Rule::GetLevel(Restriction restriction) const {
+  auto it = restrictions_.find(restriction);
+  if (it == restrictions_.end()) {
+    return Level::kNotSet;
+  }
+  return it->second;
+}
+
 const std::string& Rule::name() const {
   return name_;
 }
@@ -189,7 +255,7 @@ const std::string& Rule::description() const {
 
 // static
 std::unique_ptr<const Condition> Rule::GetCondition(
-    const base::Value::Dict& value) {
+    const base::DictValue& value) {
   // `value` can hold different condition-related keys, namely:
   // - The "not" key with a sub-dict that is parsed recursively.
   // - The "and" or "not" keys with sub-arrays of conditions parsed recursively.
@@ -198,15 +264,15 @@ std::unique_ptr<const Condition> Rule::GetCondition(
   // by policy validations of the DataControlsRules policy, and as such the
   // precedence in which these keys are parsed here should not matter.
 
-  if (const base::Value::Dict* condition = value.FindDict(kKeyNot)) {
+  if (const base::DictValue* condition = value.FindDict(kKeyNot)) {
     return NotCondition::Create(GetCondition(*condition));
   }
 
-  if (const base::Value::List* condition = value.FindList(kKeyAnd)) {
+  if (const base::ListValue* condition = value.FindList(kKeyAnd)) {
     return AndCondition::Create(GetListConditions(*condition));
   }
 
-  if (const base::Value::List* condition = value.FindList(kKeyOr)) {
+  if (const base::ListValue* condition = value.FindList(kKeyOr)) {
     return OrCondition::Create(GetListConditions(*condition));
   }
 
@@ -218,7 +284,7 @@ std::unique_ptr<const Condition> Rule::GetCondition(
 
 // static
 std::unique_ptr<const Condition> Rule::GetSourcesAndDestinationsCondition(
-    const base::Value::Dict& value) {
+    const base::DictValue& value) {
   // This function will add a `Condition` for each of the following keys found
   // in `value`:
   // - "sources"
@@ -250,7 +316,7 @@ std::unique_ptr<const Condition> Rule::GetSourcesAndDestinationsCondition(
 
 // static
 std::vector<std::unique_ptr<const Condition>> Rule::GetListConditions(
-    const base::Value::List& value) {
+    const base::ListValue& value) {
   std::vector<std::unique_ptr<const Condition>> sub_conditions;
   for (const base::Value& sub_value : value) {
     if (!sub_value.is_dict()) {
@@ -267,8 +333,8 @@ std::vector<std::unique_ptr<const Condition>> Rule::GetListConditions(
 
 // static
 base::flat_map<Rule::Restriction, Rule::Level> Rule::GetRestrictions(
-    const base::Value::Dict& value) {
-  const base::Value::List* restrictions_list = value.FindList(kKeyRestrictions);
+    const base::DictValue& value) {
+  const base::ListValue* restrictions_list = value.FindList(kKeyRestrictions);
   if (!restrictions_list) {
     return {};
   }
@@ -286,7 +352,7 @@ base::flat_map<Rule::Restriction, Rule::Level> Rule::GetRestrictions(
       continue;
     }
 
-    const base::Value::Dict& entry_dict = entry.GetDict();
+    const base::DictValue& entry_dict = entry.GetDict();
     const std::string* class_string = entry_dict.FindString(kKeyClass);
     const std::string* level_string = entry_dict.FindString(kKeyLevel);
     if (!class_string || !level_string) {
@@ -402,7 +468,7 @@ const char* Rule::LevelToString(Level level) {
 
 // static
 bool Rule::ValidateRuleValue(const char* policy_name,
-                             const base::Value::Dict& root_value,
+                             const base::DictValue& root_value,
                              policy::PolicyErrorPath error_path,
                              policy::PolicyErrorMap* errors) {
   auto restrictions = GetRestrictions(root_value);
@@ -420,16 +486,26 @@ bool Rule::ValidateRuleValue(const char* policy_name,
 // static
 bool Rule::ValidateRuleSubValues(
     const char* policy_name,
-    const base::Value::Dict& value,
+    const base::DictValue& value,
     const base::flat_map<Rule::Restriction, Rule::Level>& restrictions,
     policy::PolicyErrorPath error_path,
     policy::PolicyErrorMap* errors) {
   std::vector<std::string_view> oneof_conditions = OneOfConditions(value);
   std::vector<std::string_view> anyof_conditions = AnyOfConditions(value);
   if (oneof_conditions.size() > 1 ||
-      (oneof_conditions.size() == 1 && anyof_conditions.size() != 0)) {
+      (oneof_conditions.size() == 1 && !anyof_conditions.empty())) {
     AddMutuallyExclusiveErrors(oneof_conditions, anyof_conditions, policy_name,
                                std::move(error_path), errors);
+    return false;
+  }
+
+  std::vector<std::string_view> exclusive_conditions =
+      ExclusiveEndpointConditions(value);
+  std::vector<std::string_view> tab_conditions = TabContextConditions(value);
+  if (exclusive_conditions.size() > 1 ||
+      (!exclusive_conditions.empty() && !tab_conditions.empty())) {
+    AddMutuallyExclusiveErrors(exclusive_conditions, tab_conditions,
+                               policy_name, std::move(error_path), errors);
     return false;
   }
 
@@ -473,7 +549,7 @@ void Rule::AddMutuallyExclusiveErrors(
     const char* policy_name,
     policy::PolicyErrorPath error_path,
     policy::PolicyErrorMap* errors) {
-  if (!errors || oneof_conditions.size() == 0) {
+  if (!errors || oneof_conditions.empty()) {
     return;
   }
 
@@ -483,7 +559,7 @@ void Rule::AddMutuallyExclusiveErrors(
                      base::JoinString(oneof_conditions, ", "), error_path);
   }
 
-  if (anyof_conditions.size() > 0) {
+  if (!anyof_conditions.empty()) {
     errors->AddError(policy_name,
                      IDS_POLICY_DATA_CONTROLS_MUTUALLY_EXCLUSIVE_KEY_SETS,
                      base::JoinString(anyof_conditions, ", "),
@@ -509,6 +585,7 @@ bool Rule::AddUnsupportedAttributeErrors(
                   AttributesCondition::kKeyUrls,
                   AttributesCondition::kKeyIncognito,
                   AttributesCondition::kKeyOtherProfile,
+                  AttributesCondition::kKeyGeminiInChrome,
 #if BUILDFLAG(IS_CHROMEOS)
                   AttributesCondition::kKeyComponents,
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -550,11 +627,47 @@ bool Rule::AddUnsupportedAttributeErrors(
         // BUILDFLAG(IS_CHROMEOS)
       });
 
+  static const base::NoDestructor<
+      base::flat_map<Rule::Restriction, std::set<std::string_view>>>
+      kSourceSupportedAttributes([] {
+        auto map = *kSupportedAttributes;
+        map[Restriction::kClipboard].insert({
+            AttributesCondition::kKeySizeHigherThan,
+            AttributesCondition::kKeySizeLowerThan,
+            AttributesCondition::kKeyUrlRegexprs,
+        });
+        map[Restriction::kScreenshot].insert(
+            AttributesCondition::kKeyUrlRegexprs);
+        return map;
+      }());
+
+  static const base::NoDestructor<
+      base::flat_map<Rule::Restriction, std::set<std::string_view>>>
+      kDestinationSupportedAttributes([] {
+        auto map = *kSupportedAttributes;
+        map[Restriction::kClipboard].insert(
+            AttributesCondition::kKeyUrlRegexprs);
+        map[Restriction::kScreenshot].insert(
+            AttributesCondition::kKeyUrlRegexprs);
+        return map;
+      }());
+
+  const bool url_regex_and_size_attributes_enabled =
+      base::FeatureList::GetInstance() &&
+      base::FeatureList::IsEnabled(kDataControlsUrlRegexAndSizeAttributes);
+
+  const auto& active_supported_attributes =
+      url_regex_and_size_attributes_enabled
+          ? (IsDestinationCondition(error_path)
+                 ? *kDestinationSupportedAttributes
+                 : *kSourceSupportedAttributes)
+          : *kSupportedAttributes;
+
   bool valid = true;
   for (const auto& restriction : restrictions) {
     auto supported_attributes_it =
-        kSupportedAttributes->find(restriction.first);
-    if (supported_attributes_it == kSupportedAttributes->end()) {
+        active_supported_attributes.find(restriction.first);
+    if (supported_attributes_it == active_supported_attributes.end()) {
       // This shouldn't be reached as `AddUnsupportedRestrictionErrors` should
       // catch these unsupported restrictions.
       NOTREACHED();
@@ -562,6 +675,7 @@ bool Rule::AddUnsupportedAttributeErrors(
 
     const std::set<std::string_view>& supported_attributes =
         supported_attributes_it->second;
+
     for (const auto& attribute : anyof_conditions) {
       if (!supported_attributes.contains(attribute)) {
         if (errors) {

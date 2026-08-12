@@ -5,17 +5,19 @@
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/personalization_app_utils.h"
 
 #include <memory>
+#include <optional>
+#include <string>
 #include <string_view>
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "ash/constants/generative_ai_country_restrictions.h"
 #include "ash/webui/personalization_app/personalization_app_ui.h"
 #include "base/base64.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/logging.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/personalization_app_ambient_provider_impl.h"
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/personalization_app_keyboard_backlight_provider_impl.h"
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/personalization_app_sea_pen_provider_impl.h"
@@ -35,6 +37,7 @@
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 #include "components/user_manager/user_type.h"
+#include "components/variations/service/variations_service.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "url/gurl.h"
 
@@ -56,6 +59,17 @@ constexpr auto kSeaPenTextInputSupportedLanguages =
     base::MakeFixedFlatSet<std::string_view>({"en", "fr", "de", "ja", "es",
                                               "nl", "it", "sv", "nb", "da",
                                               "fi", "pt"});
+
+// Returns country code in the format of lowercase ISO 3166-1 alpha-2.
+// Example: us, br, in.
+std::optional<std::string> GetCountryCode() {
+  if (g_browser_process == nullptr ||
+      g_browser_process->variations_service() == nullptr) {
+    return std::nullopt;
+  }
+  return g_browser_process->variations_service()->GetLatestCountry();
+}
+
 }  // namespace
 
 std::unique_ptr<content::WebUIController> CreatePersonalizationAppUI(
@@ -71,9 +85,10 @@ std::unique_ptr<content::WebUIController> CreatePersonalizationAppUI(
       ash::personalization_app::PersonalizationAppThemeProviderImpl>(web_ui);
   auto user_provider = std::make_unique<
       ash::personalization_app::PersonalizationAppUserProviderImpl>(web_ui);
+  // TODO(crbug.com/404133902): Avoid using g_browser_process.
   auto wallpaper_provider = std::make_unique<
       ash::personalization_app::PersonalizationAppWallpaperProviderImpl>(
-      web_ui,
+      g_browser_process->local_state(), web_ui,
       std::make_unique<wallpaper_handlers::WallpaperFetcherDelegateImpl>());
   auto sea_pen_provider = std::make_unique<
       ash::personalization_app::PersonalizationAppSeaPenProviderImpl>(
@@ -86,14 +101,11 @@ std::unique_ptr<content::WebUIController> CreatePersonalizationAppUI(
       std::move(wallpaper_provider));
 }
 
-const user_manager::User* GetUser(const Profile* profile) {
-  auto* profile_helper = ProfileHelper::Get();
-  DCHECK(profile_helper);
-  const user_manager::User* user = profile_helper->GetUserByProfile(profile);
-  return user;
+const user_manager::User* GetUser(Profile* profile) {
+  return ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile);
 }
 
-AccountId GetAccountId(const Profile* profile) {
+AccountId GetAccountId(Profile* profile) {
   const auto* user = GetUser(profile);
   if (!user) {
     return EmptyAccountId();
@@ -101,7 +113,7 @@ AccountId GetAccountId(const Profile* profile) {
   return user->GetAccountId();
 }
 
-bool CanSeeWallpaperOrPersonalizationApp(const Profile* profile) {
+bool CanSeeWallpaperOrPersonalizationApp(Profile* profile) {
   const auto* user = GetUser(profile);
   if (!user) {
     return false;
@@ -137,6 +149,12 @@ bool IsSystemInSupportedLanguage() {
 
 bool IsEligibleForSeaPen(Profile* profile) {
   if (!IsAllowedToInstallSeaPen(profile)) {
+    return false;
+  }
+
+  std::optional<std::string> country_code = GetCountryCode();
+  if (!country_code.has_value() ||
+      !ash::IsGenerativeAiAllowedForCountry(country_code.value())) {
     return false;
   }
 

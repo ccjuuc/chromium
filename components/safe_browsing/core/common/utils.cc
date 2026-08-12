@@ -8,15 +8,14 @@
 
 #include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/prefs/pref_service.h"
-#include "components/safe_browsing/core/browser/db/hit_report.h"
 #include "components/safe_browsing/core/common/features.h"
+#include "components/safe_browsing/core/common/threat_enums.h"
 #include "components/security_interstitials/core/unsafe_resource.h"
 #include "crypto/sha2.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
@@ -28,7 +27,7 @@
 #include "services/network/public/mojom/cookie_access_observer.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 
-#if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 #include "base/enterprise_util.h"
 #endif
 
@@ -42,35 +41,6 @@ const char kAuthHeaderBearer[] = "Bearer ";
 
 // Represents the HTTP response code when it has not explicitly been set.
 const int kUnsetHttpResponseCode = 0;
-
-class CookieWriteLogger : public network::mojom::CookieAccessObserver {
- public:
-  explicit CookieWriteLogger(
-      safe_browsing::SafeBrowsingAuthenticatedEndpoint endpoint)
-      : endpoint_(endpoint) {}
-
-  // network::mojom::CookieAccessObserver:
-  void OnCookiesAccessed(
-      std::vector<network::mojom::CookieAccessDetailsPtr> details) override {
-    for (const network::mojom::CookieAccessDetailsPtr& access : details) {
-      if (access->type != network::mojom::CookieAccessDetails::Type::kChange) {
-        continue;
-      }
-
-      base::UmaHistogramEnumeration(
-          "SafeBrowsing.AuthenticatedCookieResetEndpoint", endpoint_);
-    }
-  }
-
-  void Clone(mojo::PendingReceiver<network::mojom::CookieAccessObserver>
-                 listener) override {
-    mojo::MakeSelfOwnedReceiver(std::make_unique<CookieWriteLogger>(endpoint_),
-                                std::move(listener));
-  }
-
- private:
-  safe_browsing::SafeBrowsingAuthenticatedEndpoint endpoint_;
-};
 
 }  // namespace
 
@@ -89,18 +59,20 @@ std::string ShortURLForReporting(const GURL& url) {
 
 ChromeUserPopulation::ProfileManagementStatus GetProfileManagementStatus(
     const policy::BrowserPolicyConnector* bpc) {
-#if BUILDFLAG(IS_WIN)
-  if (base::IsManagedDevice())
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+  if (base::IsManagedDevice()) {
     return ChromeUserPopulation::ENTERPRISE_MANAGED;
-  else
+  } else {
     return ChromeUserPopulation::NOT_MANAGED;
+  }
 #elif BUILDFLAG(IS_CHROMEOS)
-  if (!bpc || !bpc->IsDeviceEnterpriseManaged())
-    return ChromeUserPopulation::NOT_MANAGED;
-  return ChromeUserPopulation::ENTERPRISE_MANAGED;
+  if (bpc && bpc->IsDeviceEnterpriseManaged()) {
+    return ChromeUserPopulation::ENTERPRISE_MANAGED;
+  }
+  return ChromeUserPopulation::NOT_MANAGED;
 #else
   return ChromeUserPopulation::UNAVAILABLE;
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
 }
 
 void SetDelayInPref(PrefService* prefs,
@@ -114,20 +86,23 @@ void SetDelayInPref(PrefService* prefs,
 
 base::TimeDelta GetDelayFromPref(PrefService* prefs, const char* pref_name) {
   const base::TimeDelta zero_delay;
-  if (!prefs->HasPrefPath(pref_name))
+  if (!prefs->HasPrefPath(pref_name)) {
     return zero_delay;
+  }
 
   int64_t seconds_since_epoch = prefs->GetInt64(pref_name);
-  if (seconds_since_epoch <= 0)
+  if (seconds_since_epoch <= 0) {
     return zero_delay;
+  }
 
   base::Time next_event = base::Time::FromDeltaSinceWindowsEpoch(
       base::Seconds(seconds_since_epoch));
   base::Time now = base::Time::Now();
-  if (now > next_event)
+  if (now > next_event) {
     return zero_delay;
-  else
+  } else {
     return next_event - now;
+  }
 }
 
 bool CanGetReputationOfUrl(const GURL& url) {
@@ -150,14 +125,6 @@ bool CanGetReputationOfUrl(const GURL& url) {
   }
 
   return true;
-}
-
-void LogAuthenticatedCookieResets(network::ResourceRequest& resource_request,
-                                  SafeBrowsingAuthenticatedEndpoint endpoint) {
-  resource_request.trusted_params = network::ResourceRequest::TrustedParams();
-  mojo::MakeSelfOwnedReceiver(std::make_unique<CookieWriteLogger>(endpoint),
-                              resource_request.trusted_params->cookie_observer
-                                  .InitWithNewPipeAndPassReceiver());
 }
 
 void SetAccessToken(network::ResourceRequest* resource_request,
@@ -183,11 +150,14 @@ bool ErrorIsRetriable(int net_error, int http_error) {
          (http_error == kUnsetHttpResponseCode || http_error == net::HTTP_OK);
 }
 
-std::string GetExtraMetricsSuffix(
+// LINT.IfChange(GetExtraMetricsSuffix)
+std::string_view GetExtraMetricsSuffix(
     security_interstitials::UnsafeResource unsafe_resource) {
   switch (unsafe_resource.threat_source) {
     case safe_browsing::ThreatSource::LOCAL_PVER4:
       return "from_device_v4";
+    case safe_browsing::ThreatSource::LOCAL_PVER5_LOCAL_BLOCKLIST:
+      return "from_local_blocklist_v5";
     case safe_browsing::ThreatSource::CLIENT_SIDE_DETECTION:
       return "from_client_side_detection";
     case safe_browsing::ThreatSource::URL_REAL_TIME_CHECK:
@@ -198,19 +168,26 @@ std::string GetExtraMetricsSuffix(
       return "from_android_safebrowsing_real_time";
     case safe_browsing::ThreatSource::ANDROID_SAFEBROWSING:
       return "from_android_safebrowsing";
+    case safe_browsing::ThreatSource::GLIC_COUNTER_ABUSE:
+      return "from_glic_counter_abuse";
     case safe_browsing::ThreatSource::UNKNOWN:
       break;
   }
   NOTREACHED();
 }
+// LINT.ThenChange(//tools/metrics/histograms/metadata/interstitial/histograms.xml:SecurityInterstitialSBWithSourceType)
 
-std::string GetExtraExtraMetricsSuffix(
+std::string_view GetExtraExtraMetricsSuffix(
     security_interstitials::UnsafeResource unsafe_resource) {
   switch (unsafe_resource.threat_subtype) {
     case safe_browsing::ThreatSubtype::SCAM_EXPERIMENT_VERDICT_1:
       return "scam_experiment_verdict_1";
     case safe_browsing::ThreatSubtype::SCAM_EXPERIMENT_VERDICT_2:
       return "scam_experiment_verdict_2";
+    case safe_browsing::ThreatSubtype::SCAM_EXPERIMENT_VERDICT_3:
+      return "scam_experiment_verdict_3";
+    case safe_browsing::ThreatSubtype::SCAM_EXPERIMENT_VERDICT_4:
+      return "scam_experiment_verdict_4";
     case safe_browsing::ThreatSubtype::SCAM_EXPERIMENT_CATCH_ALL_ENFORCEMENT:
       return "scam_experiment_catch_all";
     case safe_browsing::ThreatSubtype::UNKNOWN:
@@ -257,9 +234,36 @@ std::string GetThreatTypeStringForInterstitial(
     case SB_THREAT_TYPE_ENTERPRISE_PASSWORD_REUSE:
     case SB_THREAT_TYPE_APK_DOWNLOAD:
     case SB_THREAT_TYPE_HIGH_CONFIDENCE_ALLOWLIST:
+    case SB_THREAT_TYPE_CSD_DOWNLOAD_ALLOWLIST:
+    case SB_THREAT_TYPE_WARNABLE_SUSPICIOUS_SITE:
       NOTREACHED();
   }
-  return std::string();
+  return {};
+}
+
+// Information on ClientSideDetectionType bucket allocation can be found at
+// go/crca-csd-trigger-priority.
+int GetClientSideDetectionTypeTier(ClientSideDetectionType type) {
+  switch (type) {
+    case ClientSideDetectionType::NOTIFICATION_PERMISSION_PROMPT:
+      return 0;
+    case ClientSideDetectionType::FORCE_REQUEST:
+    case ClientSideDetectionType::KEYBOARD_LOCK_REQUESTED:
+    case ClientSideDetectionType::USER_REPORT:
+      return 1;
+    case ClientSideDetectionType::VIBRATION_API:
+    case ClientSideDetectionType::CLIPBOARD_COPY_API:
+    case ClientSideDetectionType::CREDIT_CARD_FORM:
+    case ClientSideDetectionType::UNFAMILIAR_LOGIN_PAGE:
+      return 2;
+    case ClientSideDetectionType::TRIGGER_MODELS:
+    case ClientSideDetectionType::IMAGE_EMBEDDING_MATCH:
+      return 3;
+    case ClientSideDetectionType::CLIENT_SIDE_DETECTION_TYPE_UNSPECIFIED:
+    case ClientSideDetectionType::POINTER_LOCK_REQUESTED:
+    case ClientSideDetectionType::FULLSCREEN_API:
+      NOTREACHED();
+  }
 }
 
 }  // namespace safe_browsing

@@ -21,6 +21,7 @@
 #include "chrome/browser/extensions/scoped_test_mv2_enabler.h"
 #include "chrome/browser/login_detection/login_detection_util.h"
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
+#include "chrome/browser/renderer_context_menu/render_view_context_menu_browsertest_util.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
 #include "chrome/browser/tab_contents/navigation_metrics_recorder.h"
 #include "chrome/browser/ui/browser.h"
@@ -55,7 +56,9 @@
 #include "content/public/browser/reload_type.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host_view.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_isolation_policy.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -69,6 +72,8 @@
 #include "content/public/test/navigation_handle_observer.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/url_loader_interceptor.h"
+#include "extensions/common/extension_features.h"
+#include "extensions/common/switches.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/test_extension_dir.h"
 #include "google_apis/gaia/gaia_switches.h"
@@ -88,7 +93,8 @@ using ::testing::UnorderedElementsAre;
 
 class ChromeNavigationBrowserTest : public InProcessBrowserTest {
  public:
-  ChromeNavigationBrowserTest() {
+  ChromeNavigationBrowserTest()
+      : https_server_(net::EmbeddedTestServer::TYPE_HTTPS) {
     scoped_feature_list_.InitAndEnableFeature(ukm::kUkmFeature);
   }
 
@@ -111,6 +117,7 @@ class ChromeNavigationBrowserTest : public InProcessBrowserTest {
   void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
     embedded_test_server()->StartAcceptingConnections();
+    https_server_.StartAcceptingConnections();
   }
 
   void PreRunTestOnMainThread() override {
@@ -123,11 +130,23 @@ class ChromeNavigationBrowserTest : public InProcessBrowserTest {
   }
 
  protected:
+  void SetUp() override {
+    https_server_.AddDefaultHandlers(GetChromeTestDataDir());
+    https_server_.SetCertHostnames({"saved.com", "saved2.com", "foo.com",
+                                    "coop1.com", "coop2.com", "coop3.com",
+                                    "coop4.com"});
+    ASSERT_TRUE(https_server_.InitializeAndListen());
+    InProcessBrowserTest::SetUp();
+  }
+
+  net::EmbeddedTestServer* https_server() { return &https_server_; }
+
   void ExpectHideAndRestoreSadTabWhenNavigationCancels(bool cross_site);
   void ExpectHideSadTabWhenNavigationCompletes(bool cross_site);
 
  private:
   std::unique_ptr<ukm::TestAutoSetUkmRecorder> test_ukm_recorder_;
+  net::EmbeddedTestServer https_server_;
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
@@ -276,8 +295,8 @@ class CtrlClickProcessTest : public ChromeNavigationBrowserTest {
 };
 
 // Tests that verify that ctrl-click results 1) open up in a new renderer
-// process (https://crbug.com/23815) and 2) are in a new BrowsingInstance (e.g.
-// cannot find the opener's window by name - https://crbug.com/658386).
+// process (https://crbug.com/40316458) and 2) are in a new BrowsingInstance
+// (e.g. cannot find the opener's window by name - https://crbug.com/40490152).
 class CtrlClickShouldEndUpInNewProcessTest : public CtrlClickProcessTest {
  protected:
   void VerifyProcessExpectations(content::WebContents* main_contents,
@@ -312,7 +331,7 @@ IN_PROC_BROWSER_TEST_F(CtrlClickShouldEndUpInNewProcessTest, SubframeTarget) {
 
 // Similar to the tests above, but verifies that the new WebContents ends up in
 // the same process as the opener when it is exceeding the process limit.
-// See https://crbug.com/774723.
+// See https://crbug.com/40544799.
 class CtrlClickShouldEndUpInSameProcessTest : public CtrlClickProcessTest {
  public:
   void SetUpCommandLine(base::CommandLine* command_line) override {
@@ -328,9 +347,14 @@ class CtrlClickShouldEndUpInSameProcessTest : public CtrlClickProcessTest {
     // SiteInstance and BrowsingInstance from the old contents.
     EXPECT_EQ(contents1->GetPrimaryMainFrame()->GetProcess(),
               contents2->GetPrimaryMainFrame()->GetProcess());
-    EXPECT_EQ(
-        contents1->GetPrimaryMainFrame()->GetSiteInstance()->GetSiteURL(),
-        contents2->GetPrimaryMainFrame()->GetSiteInstance()->GetSiteURL());
+    EXPECT_EQ(contents1->GetPrimaryMainFrame()
+                  ->GetSiteInstance()
+                  ->GetSecurityPrincipal()
+                  .GetDeprecatedSiteURL(),
+              contents2->GetPrimaryMainFrame()
+                  ->GetSiteInstance()
+                  ->GetSecurityPrincipal()
+                  .GetDeprecatedSiteURL());
     EXPECT_FALSE(contents1->GetSiteInstance()->IsRelatedSiteInstance(
         contents2->GetSiteInstance()));
   }
@@ -355,7 +379,7 @@ IN_PROC_BROWSER_TEST_F(CtrlClickShouldEndUpInSameProcessTest, SubframeTarget) {
 }
 
 // Test to verify that spoofing a URL via a redirect from a slightly malformed
-// URL doesn't work.  See also https://crbug.com/657720.
+// URL doesn't work.  See also https://crbug.com/40085742.
 IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
                        ContextMenuNavigationToInvalidUrl) {
   GURL initial_url = embedded_test_server()->GetURL("/title1.html");
@@ -414,8 +438,8 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
 }
 
 // Ensure that URL transformations do not let a webpage populate the Omnibox
-// with a javascript: URL.  See https://crbug.com/850824 and
-// https://crbug.com/1116280.
+// with a javascript: URL.  See https://crbug.com/40091605 and
+// https://crbug.com/40053083.
 IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
                        ClearInvalidPendingURLOnFail) {
   GURL initial_url = embedded_test_server()->GetURL(
@@ -427,10 +451,10 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
       browser()->tab_strip_model()->GetActiveWebContents();
 
   const char* kTestUrls[] = {
-      // https://crbug.com/850824
+      // https://crbug.com/40091605
       "o.o:@javascript:foo()",
 
-      // https://crbug.com/1116280
+      // https://crbug.com/40053083
       "o.o:@javascript::://foo.com%0Aalert(document.domain)"};
   for (const char* kTestUrl : kTestUrls) {
     SCOPED_TRACE(testing::Message() << "kTestUrl = " << kTestUrl);
@@ -464,8 +488,9 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
 
     // Ensure that the omnibox doesn't start with javascript: scheme.
     EXPECT_EQ(test_url, new_contents->GetVisibleURL());
-    OmniboxView* omnibox_view =
-        browser()->window()->GetLocationBar()->GetOmniboxView();
+    OmniboxView* omnibox_view = BrowserWindow::FromBrowser(browser())
+                                    ->GetLocationBar()
+                                    ->GetOmniboxView();
     std::string omnibox_text = base::UTF16ToASCII(omnibox_view->GetText());
     EXPECT_THAT(omnibox_text, testing::Not(testing::StartsWith("javascript:")));
   }
@@ -527,7 +552,7 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
 
 // Check that if a page has an iframe that loads an error page, that error page
 // does not inherit the Content Security Policy from the parent frame.  See
-// https://crbug.com/703801.  This test is in chrome/ because error page
+// https://crbug.com/40511850.  This test is in chrome/ because error page
 // behavior is only fully defined in chrome/.
 IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
                        ErrorPageDoesNotInheritCSP) {
@@ -649,8 +674,8 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
   }
 }
 
-// Test for https://crbug.com/866549#c2. It verifies that about:blank does not
-// commit in the error page process when it is redirected to.
+// Test for https://crbug.com/40586222#comment3. It verifies that about:blank
+// does not commit in the error page process when it is redirected to.
 IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
                        RedirectErrorPageReloadToAboutBlank) {
   // TODO(https://crbug.com/40804030): Remove this when updated to use MV3.
@@ -669,9 +694,11 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
     EXPECT_FALSE(observer.last_navigation_succeeded());
     EXPECT_EQ(url, observer.last_navigation_url());
-    EXPECT_EQ(
-        GURL(content::kUnreachableWebDataURL),
-        web_contents->GetPrimaryMainFrame()->GetSiteInstance()->GetSiteURL());
+    EXPECT_EQ(GURL(content::kUnreachableWebDataURL),
+              web_contents->GetPrimaryMainFrame()
+                  ->GetSiteInstance()
+                  ->GetSecurityPrincipal()
+                  .GetDeprecatedSiteURL());
   }
 
   // Install an extension, which will redirect all navigations to a.com URLs to
@@ -696,7 +723,8 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
       )");
 
   ExtensionTestMessageListener ready_listener("ready");
-  extensions::ChromeTestExtensionLoader extension_loader(browser()->profile());
+  extensions::ChromeTestExtensionLoader extension_loader(
+      browser()->GetProfile());
   extension_loader.LoadExtension(test_extension_dir.UnpackedPath());
 
   // Wait for the background page to load.
@@ -712,9 +740,11 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
     observer.Wait();
     EXPECT_TRUE(observer.last_navigation_succeeded());
     EXPECT_EQ(GURL(url::kAboutBlankURL), observer.last_navigation_url());
-    EXPECT_NE(
-        GURL(content::kUnreachableWebDataURL),
-        web_contents->GetPrimaryMainFrame()->GetSiteInstance()->GetSiteURL());
+    EXPECT_NE(GURL(content::kUnreachableWebDataURL),
+              web_contents->GetPrimaryMainFrame()
+                  ->GetSiteInstance()
+                  ->GetSecurityPrincipal()
+                  .GetDeprecatedSiteURL());
   }
 
   // In the above setup, the reload was carried out with the error page being
@@ -730,10 +760,11 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
   // non-error navigation to about:blank.  In this case, the final SiteInstance
   // and process selection should still honor the initiator, rather than end up
   // in an unlocked process and an unassigned SiteInstance.  See
-  // https://crbug.com/1426928.
-  EXPECT_EQ(
-      "http://a.com/",
-      web_contents->GetPrimaryMainFrame()->GetSiteInstance()->GetSiteURL());
+  // https://crbug.com/40261555.
+  EXPECT_EQ("http://a.com/", web_contents->GetPrimaryMainFrame()
+                                 ->GetSiteInstance()
+                                 ->GetSecurityPrincipal()
+                                 .GetDeprecatedSiteURL());
   EXPECT_TRUE(web_contents->GetPrimaryMainFrame()
                   ->GetProcess()
                   ->IsProcessLockedToSiteForTesting());
@@ -742,7 +773,7 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
 // This test covers a navigation that:
 // 1. is initiated by a cross-site initiator,
 // 2. gets redirected via webRequest API to about:blank.
-// This is a regression test for https://crbug.com/1026738.
+// This is a regression test for https://crbug.com/40659880.
 IN_PROC_BROWSER_TEST_F(
     ChromeNavigationBrowserTest,
     NavigationInitiatedByCrossSiteSubframeRedirectedToAboutBlank) {
@@ -782,13 +813,14 @@ IN_PROC_BROWSER_TEST_F(
   ext_dir.WriteManifest(kManifest);
   ext_dir.WriteFile(FILE_PATH_LITERAL("background.js"), kRulesScript);
   ExtensionTestMessageListener ready_listener("ready");
-  extensions::ChromeTestExtensionLoader extension_loader(browser()->profile());
+  extensions::ChromeTestExtensionLoader extension_loader(
+      browser()->GetProfile());
   scoped_refptr<const extensions::Extension> extension =
       extension_loader.LoadExtension(ext_dir.UnpackedPath());
   ASSERT_TRUE(extension);
   ASSERT_TRUE(ready_listener.WaitUntilSatisfied());
   browser()
-      ->profile()
+      ->GetProfile()
       ->GetDefaultStoragePartition()
       ->FlushNetworkInterfaceForTesting();
 
@@ -834,7 +866,7 @@ IN_PROC_BROWSER_TEST_F(
   //    Note that the extension from step 1 above will redirect
   //    this navigation to an about:blank URL.
   //
-  // This step would have hit the CHECK from https://crbug.com/1026738.
+  // This step would have hit the CHECK from https://crbug.com/40659880.
   url::Origin cross_site_origin = cross_site_subframe->GetLastCommittedOrigin();
   content::TestNavigationObserver nav_observer(popup, 1);
   ASSERT_TRUE(ExecJs(cross_site_subframe,
@@ -848,10 +880,10 @@ IN_PROC_BROWSER_TEST_F(
   //    as the navigation initiator (and separate from the opener and the old
   //    popup SiteInstance).
   EXPECT_EQ(old_subframe_site_instance.get(), popup->GetSiteInstance());
-  EXPECT_NE(url::kAboutBlankURL,
-            popup->GetSiteInstance()->GetSiteURL().GetScheme());
-  EXPECT_NE(url::kDataScheme,
-            popup->GetSiteInstance()->GetSiteURL().GetScheme());
+  EXPECT_FALSE(popup->GetSiteInstance()->GetSecurityPrincipal().SchemeIs(
+      url::kAboutBlankURL));
+  EXPECT_FALSE(popup->GetSiteInstance()->GetSecurityPrincipal().SchemeIs(
+      url::kDataScheme));
   if (content::AreAllSitesIsolatedForTesting()) {
     EXPECT_NE(opener->GetSiteInstance(), popup->GetSiteInstance());
     EXPECT_NE(old_popup_site_instance.get(), popup->GetSiteInstance());
@@ -881,7 +913,7 @@ IN_PROC_BROWSER_TEST_F(
 // 1. is initiated by a cross-site initiator,
 // 2. gets redirected via webRequest API to a data: URL
 // This covers a scenario similar to the one that led to crashes in
-// https://crbug.com/1026738.
+// https://crbug.com/40659880.
 IN_PROC_BROWSER_TEST_F(
     ChromeNavigationBrowserTest,
     NavigationInitiatedByCrossSiteSubframeRedirectedToDataUrl) {
@@ -925,13 +957,14 @@ IN_PROC_BROWSER_TEST_F(
       FILE_PATH_LITERAL("background.js"),
       content::JsReplace(kRulesScriptTemplate, kRedirectTargetUrl));
   ExtensionTestMessageListener ready_listener("ready");
-  extensions::ChromeTestExtensionLoader extension_loader(browser()->profile());
+  extensions::ChromeTestExtensionLoader extension_loader(
+      browser()->GetProfile());
   scoped_refptr<const extensions::Extension> extension =
       extension_loader.LoadExtension(ext_dir.UnpackedPath());
   ASSERT_TRUE(extension);
   ASSERT_TRUE(ready_listener.WaitUntilSatisfied());
   browser()
-      ->profile()
+      ->GetProfile()
       ->GetDefaultStoragePartition()
       ->FlushNetworkInterfaceForTesting();
 
@@ -989,8 +1022,8 @@ IN_PROC_BROWSER_TEST_F(
   if (content::AreAllSitesIsolatedForTesting()) {
     EXPECT_NE(opener->GetSiteInstance(), popup->GetSiteInstance());
     EXPECT_NE(old_popup_site_instance.get(), popup->GetSiteInstance());
-    EXPECT_EQ(url::kDataScheme,
-              popup->GetSiteInstance()->GetSiteURL().GetScheme());
+    EXPECT_TRUE(popup->GetSiteInstance()->GetSecurityPrincipal().SchemeIs(
+        url::kDataScheme));
 
     // Verify that full isolation results in a separate process for each
     // SiteInstance. Otherwise they share a process because none of the sites
@@ -1002,8 +1035,8 @@ IN_PROC_BROWSER_TEST_F(
   } else {
     EXPECT_EQ(opener->GetSiteInstance(), popup->GetSiteInstance());
     EXPECT_EQ(old_popup_site_instance.get(), popup->GetSiteInstance());
-    EXPECT_NE(url::kDataScheme,
-              popup->GetSiteInstance()->GetSiteURL().GetScheme());
+    EXPECT_FALSE(popup->GetSiteInstance()->GetSecurityPrincipal().SchemeIs(
+        url::kDataScheme));
 
     EXPECT_FALSE(opener->GetSiteInstance()->RequiresDedicatedProcess());
     EXPECT_FALSE(popup->GetSiteInstance()->RequiresDedicatedProcess());
@@ -1095,13 +1128,14 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
       FILE_PATH_LITERAL("background.js"),
       content::JsReplace(kRulesScriptTemplate, kRedirectTargetUrl));
   ExtensionTestMessageListener ready_listener("ready");
-  extensions::ChromeTestExtensionLoader extension_loader(browser()->profile());
+  extensions::ChromeTestExtensionLoader extension_loader(
+      browser()->GetProfile());
   scoped_refptr<const extensions::Extension> extension =
       extension_loader.LoadExtension(ext_dir.UnpackedPath());
   ASSERT_TRUE(extension);
   ASSERT_TRUE(ready_listener.WaitUntilSatisfied());
   browser()
-      ->profile()
+      ->GetProfile()
       ->GetDefaultStoragePartition()
       ->FlushNetworkInterfaceForTesting();
 
@@ -1236,13 +1270,14 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
       FILE_PATH_LITERAL("background.js"),
       content::JsReplace(kRulesScriptTemplate, kRedirectTargetUrl));
   ExtensionTestMessageListener ready_listener("ready");
-  extensions::ChromeTestExtensionLoader extension_loader(browser()->profile());
+  extensions::ChromeTestExtensionLoader extension_loader(
+      browser()->GetProfile());
   scoped_refptr<const extensions::Extension> extension =
       extension_loader.LoadExtension(ext_dir.UnpackedPath());
   ASSERT_TRUE(extension);
   ASSERT_TRUE(ready_listener.WaitUntilSatisfied());
   browser()
-      ->profile()
+      ->GetProfile()
       ->GetDefaultStoragePartition()
       ->FlushNetworkInterfaceForTesting();
 
@@ -1360,13 +1395,14 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
       FILE_PATH_LITERAL("background.js"),
       content::JsReplace(kRulesScriptTemplate, kRedirectTargetUrl));
   ExtensionTestMessageListener ready_listener("ready");
-  extensions::ChromeTestExtensionLoader extension_loader(browser()->profile());
+  extensions::ChromeTestExtensionLoader extension_loader(
+      browser()->GetProfile());
   scoped_refptr<const extensions::Extension> extension =
       extension_loader.LoadExtension(ext_dir.UnpackedPath());
   ASSERT_TRUE(extension);
   ASSERT_TRUE(ready_listener.WaitUntilSatisfied());
   browser()
-      ->profile()
+      ->GetProfile()
       ->GetDefaultStoragePartition()
       ->FlushNetworkInterfaceForTesting();
 
@@ -1412,7 +1448,7 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
 
 // Tests scenario where a blank iframe inside a blank popup (a popup with only
 // the initial navigation entry) does a same document navigation. This test was
-// added as a regression test for crbug.com/1237874. The main purpose of this
+// added as a regression test for crbug.com/40783736. The main purpose of this
 // test is to ensure that WebContentsObservers and Chrome features don't crash.
 IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
                        SameDocumentNavigationInIframeInBlankDocument) {
@@ -1460,7 +1496,7 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
 
 // Test scenario where we attempt a synchronous renderer-initiated same-document
 // navigation inside a blank popup (a popup with only the initial navigation
-// entry). Regression test for crbug.com/1254238. The main purpose of this test
+// entry). Regression test for crbug.com/40794217. The main purpose of this test
 // is to ensure that WebContentsObservers and Chrome features don't crash.
 IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
                        SameDocumentNavigationInBlankPopup) {
@@ -1539,7 +1575,7 @@ class SignInIsolationBrowserTest : public ChromeNavigationBrowserTest {
 // This test ensures that the sign-in origin requires a dedicated process.  It
 // only ensures that the sign-in origin is added as an isolated origin at
 // chrome/ layer; IsolatedOriginTest provides the main test coverage of origins
-// whitelisted for process isolation.  See https://crbug.com/739418.
+// whitelisted for process isolation.  See https://.
 IN_PROC_BROWSER_TEST_F(SignInIsolationBrowserTest, NavigateToSignInPage) {
   const GURL first_url =
       embedded_test_server()->GetURL("google.com", "/title1.html");
@@ -1621,7 +1657,7 @@ class WebstoreIsolationBrowserTest : public ChromeNavigationBrowserTest {
 // Tests that Chrome Web Store URL used by the hosted app in production
 // (chrome.google.com/webstore/) is isolated from the rest of google.com and
 // other chrome.google.com pages not in the /webstore/ path. See
-// https://crbug.com/939108.
+// https://crbug.com/40094229.
 IN_PROC_BROWSER_TEST_F(WebstoreIsolationBrowserTest, WebstorePopupIsIsolated) {
   const GURL first_url("https://google.com/title1.html");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), first_url));
@@ -1655,23 +1691,37 @@ IN_PROC_BROWSER_TEST_F(WebstoreIsolationBrowserTest, WebstorePopupIsIsolated) {
   EXPECT_TRUE(content::NavigateToURLFromRenderer(popup, webstore_url));
   scoped_refptr<content::SiteInstance> webstore_instance(
       popup->GetPrimaryMainFrame()->GetSiteInstance());
-  EXPECT_NE(webstore_instance, popup_instance);
-  EXPECT_NE(webstore_instance, initial_instance);
-  EXPECT_NE(webstore_instance->GetProcess(), initial_instance->GetProcess());
-  EXPECT_NE(webstore_instance->GetProcess(),
-            popup_instance->GetOrCreateProcessForTesting());
-  EXPECT_FALSE(webstore_instance->IsRelatedSiteInstance(popup_instance.get()));
-  EXPECT_FALSE(
-      webstore_instance->IsRelatedSiteInstance(initial_instance.get()));
 
-  // Finally navigate the popup back away from the web store URL. This will lead
-  // to another new process and BrowsingInstance swap.
-  EXPECT_TRUE(content::NavigateToURLFromRenderer(popup, first_url));
-  scoped_refptr<content::SiteInstance> final_instance(
-      popup->GetPrimaryMainFrame()->GetSiteInstance());
-  EXPECT_NE(final_instance->GetProcess(),
-            webstore_instance->GetOrCreateProcessForTesting());
-  EXPECT_FALSE(final_instance->IsRelatedSiteInstance(webstore_instance.get()));
+  if (base::FeatureList::IsEnabled(extensions_features::kWebstoreHostedApp)) {
+    // The webstore hosted app is installed. The webstore should have been
+    // forced into a new site instance.
+    EXPECT_NE(webstore_instance, popup_instance);
+    EXPECT_NE(webstore_instance, initial_instance);
+    EXPECT_NE(webstore_instance->GetProcess(), initial_instance->GetProcess());
+    EXPECT_NE(webstore_instance->GetProcess(),
+              popup_instance->GetOrCreateProcessForTesting());
+    EXPECT_FALSE(
+        webstore_instance->IsRelatedSiteInstance(popup_instance.get()));
+    EXPECT_FALSE(
+        webstore_instance->IsRelatedSiteInstance(initial_instance.get()));
+
+    // Finally navigate the popup back away from the web store URL. This will
+    // lead to another new process and BrowsingInstance swap.
+    EXPECT_TRUE(content::NavigateToURLFromRenderer(popup, first_url));
+    scoped_refptr<content::SiteInstance> final_instance(
+        popup->GetPrimaryMainFrame()->GetSiteInstance());
+    EXPECT_NE(final_instance->GetProcess(),
+              webstore_instance->GetOrCreateProcessForTesting());
+    EXPECT_FALSE(
+        final_instance->IsRelatedSiteInstance(webstore_instance.get()));
+  } else {
+    // The webstore hosted app isn't installed. No fun site instance
+    // shenanigans; the popup should be in a related site instance to its
+    // opener.
+    EXPECT_EQ(webstore_instance, popup_instance);
+    EXPECT_EQ(webstore_instance->GetProcess(),
+              popup_instance->GetOrCreateProcessForTesting());
+  }
 }
 
 // Make sure that the new Chrome Web Store URL used in production
@@ -1722,7 +1772,7 @@ class WebstoreOverrideIsolationBrowserTest
     // Override the webstore URL. Note: although this specifies a path, in
     // reality we just look at the scheme, host and port when using the
     // override.
-    command_line->AppendSwitchASCII(::switches::kAppsGalleryURL,
+    command_line->AppendSwitchASCII(extensions::switches::kAppsGalleryURL,
                                     "https://chrome.foo.com/frame_tree");
 
     WebstoreIsolationBrowserTest::SetUpCommandLine(command_line);
@@ -1731,7 +1781,7 @@ class WebstoreOverrideIsolationBrowserTest
 
 // Make sure that Chrome Web Store origins are isolated from the rest of their
 // site when overriding the URL from the command line. See
-// https://crbug.com/939108.
+// https://crbug.com/40094229.
 IN_PROC_BROWSER_TEST_F(WebstoreOverrideIsolationBrowserTest,
                        WebstorePopupIsIsolated) {
   const GURL first_url("https://foo.com/title1.html");
@@ -1770,7 +1820,7 @@ IN_PROC_BROWSER_TEST_F(WebstoreOverrideIsolationBrowserTest,
 }
 
 // Check that it's possible to navigate to a chrome scheme URL from a crashed
-// tab. See https://crbug.com/764641.
+// tab. See https://crbug.com/41344263.
 IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest, ChromeSchemeNavFromSadTab) {
   // Kill the renderer process.
   content::RenderProcessHost* process = browser()
@@ -1823,7 +1873,7 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTestWithMobileEmulation,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), initial_url));
 
   Attach();
-  base::Value::Dict params;
+  base::DictValue params;
   params.Set("width", 400);
   params.Set("height", 800);
   params.Set("deviceScaleFactor", 1.0);
@@ -1840,7 +1890,7 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTestWithMobileEmulation,
 }
 
 // Check that clicking on a link doesn't carry the transient user activation
-// from the original page to the navigated page (crbug.com/865243).
+// from the original page to the navigated page (crbug.com/41402563).
 IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
                        WindowOpenBlockedAfterClickNavigation) {
   // Navigate to a test page with links.
@@ -1866,8 +1916,8 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
                        OpenerNavigation_DownloadPolicy_Disallowed) {
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
-                                               false);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
+                                                  false);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL("a.com", "/title1.html")));
 
@@ -1907,7 +1957,7 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
   std::vector<raw_ptr<download::DownloadItem, VectorExperimental>>
       download_items;
   content::DownloadManager* manager =
-      browser()->profile()->GetDownloadManager();
+      browser()->GetProfile()->GetDownloadManager();
   manager->GetAllDownloads(&download_items);
   EXPECT_TRUE(download_items.empty());
 }
@@ -1915,8 +1965,8 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
 // Opener navigations from a same-origin popup should be allowed.
 IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
                        OpenerNavigation_DownloadPolicy_Allowed) {
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
-                                               false);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
+                                                  false);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL("a.com", "/title1.html")));
 
@@ -1941,7 +1991,7 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
   EXPECT_TRUE(WaitForLoadStop(popup));
 
   content::DownloadTestObserverInProgress observer(
-      browser()->profile()->GetDownloadManager(), 1 /* wait_count */);
+      browser()->GetProfile()->GetDownloadManager(), 1 /* wait_count */);
   EXPECT_TRUE(content::ExecJs(
       popup,
       "window.opener.location ='data:html/text;base64,'+btoa('payload');"));
@@ -1955,7 +2005,7 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
   std::vector<raw_ptr<download::DownloadItem, VectorExperimental>>
       download_items;
   content::DownloadManager* manager =
-      browser()->profile()->GetDownloadManager();
+      browser()->GetProfile()->GetDownloadManager();
   manager->GetAllDownloads(&download_items);
   for (download::DownloadItem* item : download_items) {
     if (!item->IsDone())
@@ -1964,7 +2014,7 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
 }
 
 // Test which verifies that a noopener link/window.open() properly focus the
-// newly opened tab. See https://crbug.com/912348.
+// newly opened tab. See https://crbug.com/41430290.
 IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
                        NoopenerCorrectlyFocusesNewTab) {
   content::WebContents* main_contents =
@@ -2087,7 +2137,7 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
                        NavigationCanceledOnProfileShutdown) {
   Browser* incognito = CreateIncognitoBrowser();
   Profile* incognito_profile =
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/false);
+      browser()->GetProfile()->GetPrimaryOTRProfile(/*create_if_needed=*/false);
   ASSERT_TRUE(incognito_profile);
 
   // Create a custom WebContents in which to perform a navigation. Note that we
@@ -2122,7 +2172,7 @@ IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
             EXPECT_FALSE(navigation_handle->HasCommitted());
             was_navigation_canceled = true;
           }));
-  incognito->window()->Close();
+  incognito->GetWindow()->Close();
   profile_destruction_waiter.Wait();
 
   // Make sure the navigation was canceled during profile destruction.
@@ -2180,7 +2230,7 @@ void ChromeNavigationBrowserTest::
   EXPECT_TRUE(sad_tab_helper->sad_tab());
   // Ensure that the omnibox URL is the crashed one.
   OmniboxView* omnibox_view =
-      browser()->window()->GetLocationBar()->GetOmniboxView();
+      BrowserWindow::FromBrowser(browser())->GetLocationBar()->GetOmniboxView();
   std::string omnibox_text = base::UTF16ToASCII(omnibox_view->GetText());
   EXPECT_EQ(omnibox_text, url_start.spec());
 
@@ -2234,7 +2284,7 @@ void ChromeNavigationBrowserTest::ExpectHideSadTabWhenNavigationCompletes(
   EXPECT_FALSE(sad_tab_helper->sad_tab());
 }
 
-// Flaky, see https://crbug.com/1223052 and https://crbug.com/1236500.
+// Flaky, see https://crbug.com/40187460 and https://crbug.com/40192730.
 // Ensure that completing a navigation from a sad tab will clear the sad tab.
 IN_PROC_BROWSER_TEST_F(ChromeNavigationBrowserTest,
                        DISABLED_ClearSadTabWhenNavigationCompletes_CrossSite) {
@@ -2254,7 +2304,7 @@ using NavigationConsumingTest = ChromeNavigationBrowserTest;
 // The fullscreen API is spec'd to require a user activation (aka user gesture),
 // so use that API to test if navigation consumes the activation.
 // https://fullscreen.spec.whatwg.org/#allowed-to-request-fullscreen
-// https://crbug.com/1283289 Flaky on ChromeOS.
+// https://crbug.com/40813521 Flaky on ChromeOS.
 #if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_NavigationConsumesUserGesture_Fullscreen \
   DISABLED_NavigationConsumesUserGesture_Fullscreen
@@ -2324,7 +2374,7 @@ IN_PROC_BROWSER_TEST_F(NavigationConsumingTest,
   EXPECT_EQ(false, content::EvalJs(contents, different_document_script));
 }
 
-// Regression test for https://crbug.com/856779, where a navigation to a
+// Regression test for https://crbug.com/41396970, where a navigation to a
 // top-level, same process frame in another tab fails to focus that tab.
 IN_PROC_BROWSER_TEST_F(NavigationConsumingTest, TargetNavigationFocus) {
   content::WebContents* opener =
@@ -2513,7 +2563,7 @@ class SiteIsolationForPasswordSitesBrowserTest
   }
 
   std::vector<std::string> GetSavedIsolatedSites() {
-    return GetSavedIsolatedSites(browser()->profile());
+    return GetSavedIsolatedSites(browser()->GetProfile());
   }
 
   std::vector<std::string> GetSavedIsolatedSites(Profile* profile) {
@@ -2626,10 +2676,10 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationForPasswordSitesBrowserTest,
   // Isolate saved.com and saved2.com persistently.
   GURL saved_url(
       embedded_https_test_server().GetURL("saved.com", "/title1.html"));
-  StartIsolatingSite(browser()->profile(), saved_url);
+  StartIsolatingSite(browser()->GetProfile(), saved_url);
   GURL saved2_url(
       embedded_https_test_server().GetURL("saved2.com", "/title1.html"));
-  StartIsolatingSite(browser()->profile(), saved2_url);
+  StartIsolatingSite(browser()->GetProfile(), saved2_url);
 
   // Check that saved.com utilizes a dedicated process in future navigations.
   // Open a new tab to force creation of a new BrowsingInstance.
@@ -2685,9 +2735,9 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationForPasswordSitesBrowserTest,
                        IsolatedSiteIsSavedOnlyOnce) {
   GURL saved_url(
       embedded_https_test_server().GetURL("saved.com", "/title1.html"));
-  StartIsolatingSite(browser()->profile(), saved_url);
-  StartIsolatingSite(browser()->profile(), saved_url);
-  StartIsolatingSite(browser()->profile(), saved_url);
+  StartIsolatingSite(browser()->GetProfile(), saved_url);
+  StartIsolatingSite(browser()->GetProfile(), saved_url);
+  StartIsolatingSite(browser()->GetProfile(), saved_url);
   EXPECT_THAT(GetSavedIsolatedSites(),
               UnorderedElementsAre("https://saved.com"));
 }
@@ -2700,7 +2750,7 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationForPasswordSitesBrowserTest,
   // Isolate saved.com and verify it's been saved to disk.
   GURL saved_url(
       embedded_https_test_server().GetURL("saved.com", "/title1.html"));
-  StartIsolatingSite(browser()->profile(), saved_url);
+  StartIsolatingSite(browser()->GetProfile(), saved_url);
   EXPECT_THAT(GetSavedIsolatedSites(),
               UnorderedElementsAre("https://saved.com"));
 
@@ -2709,7 +2759,7 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationForPasswordSitesBrowserTest,
   //
   // TODO(alexmos): This might change in the future if we decide to inherit
   // main profile's isolated origins in incognito. See
-  // https://crbug.com/905513.
+  // https://crbug.com/40602510.
   Browser* incognito = CreateIncognitoBrowser();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito, saved_url));
   content::WebContents* contents =
@@ -2724,7 +2774,7 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationForPasswordSitesBrowserTest,
   // process, and the site is not persisted for either the main or incognito
   // profiles.
   GURL foo_url(embedded_https_test_server().GetURL("foo.com", "/title1.html"));
-  StartIsolatingSite(incognito->profile(), foo_url);
+  StartIsolatingSite(incognito->GetProfile(), foo_url);
 
   AddBlankTabAndShow(incognito);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito, foo_url));
@@ -2740,9 +2790,9 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationForPasswordSitesBrowserTest,
                    ->GetSiteInstance()
                    ->RequiresDedicatedProcess());
 
-  EXPECT_THAT(GetSavedIsolatedSites(browser()->profile()),
+  EXPECT_THAT(GetSavedIsolatedSites(browser()->GetProfile()),
               testing::Not(testing::Contains("https://foo.com")));
-  EXPECT_THAT(GetSavedIsolatedSites(incognito->profile()),
+  EXPECT_THAT(GetSavedIsolatedSites(incognito->GetProfile()),
               testing::Not(testing::Contains("https://foo.com")));
 }
 
@@ -2754,7 +2804,7 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationForPasswordSitesBrowserTest,
   // Isolate saved.com and verify it's been saved to disk.
   GURL saved_url(embedded_https_test_server().GetURL("saved.com",
                                                      "/clear_site_data.html"));
-  StartIsolatingSite(browser()->profile(), saved_url);
+  StartIsolatingSite(browser()->GetProfile(), saved_url);
   EXPECT_THAT(GetSavedIsolatedSites(),
               UnorderedElementsAre("https://saved.com"));
 
@@ -2835,17 +2885,17 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationForOAuthSitesBrowserTest, PopupFlow) {
       IsolatedOriginSource::USER_TRIGGERED));
 
   // Create a popup that emulates an OAuth sign-in flow.
-  content::WebContentsAddedObserver web_contents_added_observer;
-  content::TestNavigationObserver navigation_observer(nullptr, 1);
-  navigation_observer.StartWatchingNewWebContents();
+  content::CreateAndLoadWebContentsObserver create_and_load_observer(
+      1, base::BindRepeating([](content::WebContents* wc) {
+        return wc->GetWebUI() == nullptr;
+      }));
   ASSERT_TRUE(content::ExecJs(
       browser()->tab_strip_model()->GetActiveWebContents(),
       content::JsReplace(
           "window.open($1, 'oauth_window', 'width=10,height=10');",
           https_server()->GetURL("www.oauthprovider.com",
                                  "/title2.html?client_id=123"))));
-  auto* popup_contents = web_contents_added_observer.GetWebContents();
-  navigation_observer.WaitForNavigationFinished();
+  auto* popup_contents = create_and_load_observer.Wait();
 
   // When the popup is closed, it will be detected as an OAuth login.
   content::WebContentsDestroyedWatcher destroyed_watcher(popup_contents);
@@ -2969,9 +3019,7 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationForOAuthSitesBrowserTest, RedirectFlow) {
 // sites in user prefs, which requires the //chrome layer.
 class SiteIsolationForCOOPBrowserTest : public ChromeNavigationBrowserTest {
  public:
-  // Use an HTTP server, since the COOP header is only populated for HTTPS.
-  SiteIsolationForCOOPBrowserTest()
-      : https_server_(net::EmbeddedTestServer::TYPE_HTTPS) {
+  SiteIsolationForCOOPBrowserTest() {
     // Enable COOP isolation with a max of 3 stored sites.
     const std::vector<base::test::FeatureRefAndParams> kEnabledFeatures = {
         {::features::kSiteIsolationForCrossOriginOpenerPolicy,
@@ -2995,26 +3043,8 @@ class SiteIsolationForCOOPBrowserTest : public ChromeNavigationBrowserTest {
     return sites;
   }
 
- protected:
-  void SetUp() override {
-    https_server_.AddDefaultHandlers(GetChromeTestDataDir());
-    https_server_.SetCertHostnames({"saved.com", "saved2.com", "foo.com",
-                                    "coop1.com", "coop2.com", "coop3.com",
-                                    "coop4.com"});
-    ASSERT_TRUE(https_server_.InitializeAndListen());
-    ChromeNavigationBrowserTest::SetUp();
-  }
-
-  void SetUpOnMainThread() override {
-    https_server_.StartAcceptingConnections();
-    ChromeNavigationBrowserTest::SetUpOnMainThread();
-  }
-
-  net::EmbeddedTestServer* https_server() { return &https_server_; }
-
  private:
   base::test::ScopedFeatureList feature_list_;
-  net::EmbeddedTestServer https_server_;
 };
 
 // Verifies that sites isolated due to COOP headers are persisted across
@@ -3022,7 +3052,7 @@ class SiteIsolationForCOOPBrowserTest : public ChromeNavigationBrowserTest {
 // interacting with it via a user activation.  Part 1/2.
 IN_PROC_BROWSER_TEST_F(SiteIsolationForCOOPBrowserTest,
                        PRE_PersistAcrossRestarts) {
-  EXPECT_THAT(GetSavedIsolatedSites(browser()->profile()), IsEmpty());
+  EXPECT_THAT(GetSavedIsolatedSites(browser()->GetProfile()), IsEmpty());
 
   content::WebContents* contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -3048,7 +3078,7 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationForCOOPBrowserTest,
                   ->RequiresDedicatedProcess());
 
   // Check that saved.com and saved2.com were saved to disk.
-  EXPECT_THAT(GetSavedIsolatedSites(browser()->profile()),
+  EXPECT_THAT(GetSavedIsolatedSites(browser()->GetProfile()),
               UnorderedElementsAre("https://saved.com", "https://saved2.com"));
 }
 
@@ -3056,7 +3086,7 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationForCOOPBrowserTest,
 // persisted across restarts.  Part 2/2.
 IN_PROC_BROWSER_TEST_F(SiteIsolationForCOOPBrowserTest, PersistAcrossRestarts) {
   // Check that saved.com and saved2.com are still saved after a restart.
-  EXPECT_THAT(GetSavedIsolatedSites(browser()->profile()),
+  EXPECT_THAT(GetSavedIsolatedSites(browser()->GetProfile()),
               UnorderedElementsAre("https://saved.com", "https://saved2.com"));
 
   // Check that these sites have been loaded as isolated on startup and utilize
@@ -3120,8 +3150,8 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationForCOOPBrowserTest, Incognito) {
                    ->RequiresDedicatedProcess());
 
   // Neither profile should've saved foo.com to COOP isolated sites prefs.
-  EXPECT_THAT(GetSavedIsolatedSites(browser()->profile()), IsEmpty());
-  EXPECT_THAT(GetSavedIsolatedSites(incognito->profile()), IsEmpty());
+  EXPECT_THAT(GetSavedIsolatedSites(browser()->GetProfile()), IsEmpty());
+  EXPECT_THAT(GetSavedIsolatedSites(incognito->GetProfile()), IsEmpty());
 }
 
 // Verify that when a COOP-isolated site is visited again, the timestamp in its
@@ -3129,7 +3159,7 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationForCOOPBrowserTest, Incognito) {
 // trimming the list of stored COOP sites to its maximum size.
 IN_PROC_BROWSER_TEST_F(SiteIsolationForCOOPBrowserTest,
                        TimestampUpdateOnSecondVisit) {
-  EXPECT_THAT(GetSavedIsolatedSites(browser()->profile()), IsEmpty());
+  EXPECT_THAT(GetSavedIsolatedSites(browser()->GetProfile()), IsEmpty());
 
   content::WebContents* contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -3151,7 +3181,7 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationForCOOPBrowserTest,
   EXPECT_TRUE(ExecJs(contents, "// no-op"));  // Simulate user activation.
 
   // At this point, the first three sites should be saved to prefs.
-  EXPECT_THAT(GetSavedIsolatedSites(browser()->profile()),
+  EXPECT_THAT(GetSavedIsolatedSites(browser()->GetProfile()),
               UnorderedElementsAre("https://coop1.com", "https://coop2.com",
                                    "https://coop3.com"));
 
@@ -3161,7 +3191,7 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationForCOOPBrowserTest,
   contents = browser()->tab_strip_model()->GetActiveWebContents();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), coop1));
   EXPECT_TRUE(ExecJs(contents, "// no-op"));  // Simulate user activation.
-  EXPECT_THAT(GetSavedIsolatedSites(browser()->profile()),
+  EXPECT_THAT(GetSavedIsolatedSites(browser()->GetProfile()),
               UnorderedElementsAre("https://coop1.com", "https://coop2.com",
                                    "https://coop3.com"));
 
@@ -3170,7 +3200,7 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationForCOOPBrowserTest,
   // be coop2.com, since coop1.com's timestamp was just updated.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), coop4));
   EXPECT_TRUE(ExecJs(contents, "// no-op"));  // Simulate user activation.
-  EXPECT_THAT(GetSavedIsolatedSites(browser()->profile()),
+  EXPECT_THAT(GetSavedIsolatedSites(browser()->GetProfile()),
               UnorderedElementsAre("https://coop1.com", "https://coop3.com",
                                    "https://coop4.com"));
 }
@@ -3202,57 +3232,56 @@ class FencedFrameNavigationBrowserTest : public ChromeNavigationBrowserTest {
   content::test::FencedFrameTestHelper fenced_frame_test_helper_;
 };
 
-IN_PROC_BROWSER_TEST_F(FencedFrameNavigationBrowserTest,
-                       FencedFrameMainFrameNavigationBlockedIfNetworkRevoked) {
-  ASSERT_TRUE(embedded_https_test_server().Start());
+// This is a regression test for crbug.com/456473704. It tests that navigating
+// to a top-level data URL that inherits DocumentIsolationPolicy from the
+// context the navigation started in does not crash. In order for the top-level
+// navigation to succeed, we have it start from the context menu action "Open
+// link in a new tab". Otherwise, the top-level navigation would be blocked.
+// This is why this test is located in the Chrome layer and not in the
+// DocumentIsolationPolicy browsertests in content/.
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+#define MAYBE_TopLevelDataURLNavigationWithDocumentIsolationPolicy \
+  DISABLED_TopLevelDataURLNavigationWithDocumentIsolationPolicy
+#else
+#define MAYBE_TopLevelDataURLNavigationWithDocumentIsolationPolicy \
+  TopLevelDataURLNavigationWithDocumentIsolationPolicy
+#endif
+IN_PROC_BROWSER_TEST_F(
+    ChromeNavigationBrowserTest,
+    MAYBE_TopLevelDataURLNavigationWithDocumentIsolationPolicy) {
+  ContextMenuNotificationObserver menu_observer(
+      IDC_CONTENT_CONTEXT_OPENLINKNEWTAB);
+  ui_test_utils::AllBrowserTabAddedWaiter add_tab;
+  // First, navigate to a page with DocumentIsolationPolicy and a data URL link.
+  const GURL kDocumentIsolationPolicyURL(
+      https_server()->GetURL("/set-header-with-file/chrome/test/data/"
+                             "data_url_link.html?document-isolation-policy: "
+                             "isolate-and-require-corp"));
+  ASSERT_TRUE(
+      ui_test_utils::NavigateToURL(browser(), kDocumentIsolationPolicyURL));
 
-  // Navigate to a page that contains a fenced frame.
-  const GURL main_url = embedded_https_test_server().GetURL(
-      "a.test", "/cross_site_iframe_factory.html?a.test(a.test{fenced})");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
+  // Open a context menu.
+  content::WebContents* tab =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  blink::WebMouseEvent mouse_event(
+      blink::WebInputEvent::Type::kMouseDown,
+      blink::WebInputEvent::kNoModifiers,
+      blink::WebInputEvent::GetStaticTimeStampForTests());
+  mouse_event.button = blink::WebMouseEvent::Button::kRight;
+  mouse_event.SetPositionInWidget(15, 15);
+  gfx::Rect offset = tab->GetContainerBounds();
+  mouse_event.SetPositionInScreen(15 + offset.x(), 15 + offset.y());
+  mouse_event.click_count = 1;
+  tab->GetPrimaryMainFrame()->GetRenderWidgetHost()->ForwardMouseEvent(
+      mouse_event);
+  mouse_event.SetType(blink::WebInputEvent::Type::kMouseUp);
+  tab->GetPrimaryMainFrame()->GetRenderWidgetHost()->ForwardMouseEvent(
+      mouse_event);
 
-  // Get fenced frame render frame host.
-  std::vector<content::RenderFrameHost*> child_frames =
-      fenced_frame_test_helper().GetChildFencedFrameHosts(
-          primary_main_frame_host());
-  EXPECT_EQ(child_frames.size(), 1u);
-  content::RenderFrameHost* fenced_frame_rfh = child_frames[0];
+  // The menu_observer will select "Open link in new tab". Wait for the new tab
+  // to be added.
+  content::WebContents* new_tab = add_tab.Wait();
+  EXPECT_TRUE(content::WaitForLoadStop(new_tab));
 
-  GURL target_url = embedded_https_test_server().GetURL(
-      "a.test", "/fenced_frames/title0.html");
-
-  // Open the link in new tab.
-  content::OpenURLParams params(
-      target_url, content::Referrer(), content::FrameTreeNodeId(),
-      WindowOpenDisposition::NEW_BACKGROUND_TAB, ui::PAGE_TRANSITION_LINK,
-      /*is_renderer_initiated=*/false);
-
-  params.source_render_process_id =
-      fenced_frame_rfh->GetProcess()->GetDeprecatedID();
-  params.source_render_frame_id = fenced_frame_rfh->GetRoutingID();
-  params.initiator_frame_token = fenced_frame_rfh->GetFrameToken();
-  params.initiator_process_id =
-      fenced_frame_rfh->GetProcess()->GetDeprecatedID();
-  params.initiator_origin = fenced_frame_rfh->GetLastCommittedOrigin();
-  params.source_site_instance = fenced_frame_rfh->GetSiteInstance();
-
-  // Disable fenced frame untrusted network.
-  EXPECT_TRUE(ExecJs(fenced_frame_rfh, R"(
-    (async () => {
-      return window.fence.disableUntrustedNetwork();
-    })();
-  )"));
-
-  ui_test_utils::TabAddedWaiter tab_add(browser());
-
-  // Initiate a main frame navigation with the fenced frame as the initiator.
-  browser()->OpenURL(params, /*navigation_handle_callback=*/{});
-
-  // Make sure the navigation did not take place.
-  tab_add.Wait();
-  int index_of_new_tab = browser()->tab_strip_model()->count() - 1;
-  content::WebContents* new_web_contents =
-      browser()->tab_strip_model()->GetWebContentsAt(index_of_new_tab);
-  EXPECT_TRUE(WaitForLoadStop(new_web_contents));
-  EXPECT_TRUE(new_web_contents->GetLastCommittedURL().is_empty());
+  EXPECT_TRUE(new_tab->GetLastCommittedURL().SchemeIs(url::kDataScheme));
 }

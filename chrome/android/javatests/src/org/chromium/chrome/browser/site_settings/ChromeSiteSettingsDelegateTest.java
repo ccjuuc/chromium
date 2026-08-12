@@ -11,6 +11,7 @@ import static org.junit.Assert.assertEquals;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
 
+import androidx.annotation.IntDef;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.filters.SmallTest;
 import androidx.test.platform.app.InstrumentationRegistry;
@@ -46,6 +47,8 @@ import org.chromium.net.test.ServerCertificate;
 import org.chromium.url.GURL;
 import org.chromium.url.Origin;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.Map;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
@@ -75,7 +78,7 @@ public class ChromeSiteSettingsDelegateTest {
     }
 
     // Tests that a fallback favicon is generated when a real one isn't found locally.
-    // This is a regression test for crbug.com/1077716.
+    // This is a regression test for crbug.com/40688837.
     @Test
     @SmallTest
     @DisableIf.Build(
@@ -125,18 +128,18 @@ public class ChromeSiteSettingsDelegateTest {
         assertEquals(2, result.size());
 
         // Ensure that the entry matches the set cookie.
-        var https_origin = Origin.create(new GURL("https://browsing-data.com"));
-        var http_origin = Origin.create(new GURL("http://browsing-data.com"));
+        var httpsOrigin = Origin.create(new GURL("https://browsing-data.com"));
+        var httpOrigin = Origin.create(new GURL("http://browsing-data.com"));
 
         var entries = result.entrySet().stream().collect(Collectors.toList());
-        assertEquals(https_origin, entries.get(0).getKey());
+        assertEquals(httpsOrigin, entries.get(0).getKey());
 
         BrowsingDataInfo info = entries.get(0).getValue();
-        assertEquals(https_origin, info.getOrigin());
+        assertEquals(httpsOrigin, info.getOrigin());
         assertEquals(1, info.getCookieCount());
         assertEquals(0, info.getStorageSize());
 
-        assertEquals(http_origin, entries.get(1).getKey());
+        assertEquals(httpOrigin, entries.get(1).getKey());
     }
 
     // Tests that removeBrowsingData removes data correctly for a given host.
@@ -167,7 +170,8 @@ public class ChromeSiteSettingsDelegateTest {
         assertEquals(0, result.size());
     }
 
-    private void setCookie(Scheme scheme, String hostname, String data) throws TimeoutException {
+    private void setCookie(@Scheme int scheme, String hostname, String data)
+            throws TimeoutException {
         EmbeddedTestServer server =
                 scheme == Scheme.HTTPS
                         ? EmbeddedTestServer.createAndStartHTTPSServer(
@@ -187,9 +191,11 @@ public class ChromeSiteSettingsDelegateTest {
         server.stopAndDestroyServer();
     }
 
-    private enum Scheme {
-        HTTP,
-        HTTPS
+    @IntDef({Scheme.HTTP, Scheme.HTTPS})
+    @Retention(RetentionPolicy.SOURCE)
+    private @interface Scheme {
+        int HTTP = 0;
+        int HTTPS = 1;
     }
 
     private void clearBrowsingData(int dataType, int timePeriod) throws TimeoutException {

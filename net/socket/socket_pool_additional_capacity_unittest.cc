@@ -4,6 +4,8 @@
 
 #include "net/socket/socket_pool_additional_capacity.h"
 
+#include <limits>
+
 #include "base/notimplemented.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
@@ -22,7 +24,7 @@ TEST(SocketPoolAdditionalCapacityTest, CreateWithDisabledFeature) {
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitAndDisableFeature(
       features::kTcpSocketPoolLimitRandomization);
-  EXPECT_EQ(SocketPoolAdditionalCapacity::Create(),
+  EXPECT_EQ(SocketPoolAdditionalCapacity::Create(0),
             SocketPoolAdditionalCapacity::CreateEmpty());
 }
 
@@ -36,10 +38,6 @@ TEST(SocketPoolAdditionalCapacityTest, CreateWithEnabledFeature) {
               "0.1",
           },
           {
-              "TcpSocketPoolLimitRandomizationCapacity",
-              "2",
-          },
-          {
               "TcpSocketPoolLimitRandomizationMinimum",
               "0.3",
           },
@@ -48,7 +46,7 @@ TEST(SocketPoolAdditionalCapacityTest, CreateWithEnabledFeature) {
               "0.4",
           },
       });
-  EXPECT_EQ(SocketPoolAdditionalCapacity::Create(),
+  EXPECT_EQ(SocketPoolAdditionalCapacity::Create(2),
             SocketPoolAdditionalCapacity::CreateForTest(0.1, 2, 0.3, 0.4));
 }
 
@@ -57,6 +55,12 @@ TEST(SocketPoolAdditionalCapacityTest, CreateForTest) {
                 SocketPoolAdditionalCapacity::CreateForTest(0.1, 2, 0.3, 0.4)),
             "SocketPoolAdditionalCapacity(base:1.000000e-01,capacity:2,minimum:"
             "3.000000e-01,noise:4.000000e-01)");
+}
+
+TEST(SocketPoolAdditionalCapacityTest, CreateDefault) {
+  EXPECT_EQ(std::string(SocketPoolAdditionalCapacity::Create(256)),
+            "SocketPoolAdditionalCapacity(base:1.000000e-06,capacity:256,"
+            "minimum:1.000000e-02,noise:2.000000e-01)");
 }
 
 TEST(SocketPoolAdditionalCapacityTest, InvalidCreation) {
@@ -68,9 +72,9 @@ TEST(SocketPoolAdditionalCapacityTest, InvalidCreation) {
             empty_pool);
   EXPECT_EQ(SocketPoolAdditionalCapacity::CreateForTest(1.1, 2, 0.3, 0.4),
             empty_pool);
-  EXPECT_EQ(
-      SocketPoolAdditionalCapacity::CreateForTest(std::nan(""), 2, 0.3, 0.4),
-      empty_pool);
+  EXPECT_EQ(SocketPoolAdditionalCapacity::CreateForTest(
+                std::numeric_limits<double>::quiet_NaN(), 2, 0.3, 0.4),
+            empty_pool);
 
   // capacity range
   EXPECT_EQ(SocketPoolAdditionalCapacity::CreateForTest(0.1, 2000, 0.3, 0.4),
@@ -81,21 +85,21 @@ TEST(SocketPoolAdditionalCapacityTest, InvalidCreation) {
             empty_pool);
   EXPECT_EQ(SocketPoolAdditionalCapacity::CreateForTest(0.1, 2, 1.3, 0.4),
             empty_pool);
-  EXPECT_EQ(
-      SocketPoolAdditionalCapacity::CreateForTest(0.1, 2, std::nan(""), 0.4),
-      empty_pool);
+  EXPECT_EQ(SocketPoolAdditionalCapacity::CreateForTest(
+                0.1, 2, std::numeric_limits<double>::quiet_NaN(), 0.4),
+            empty_pool);
 
   // noise range
   EXPECT_EQ(SocketPoolAdditionalCapacity::CreateForTest(0.1, 2, 0.3, -0.4),
             empty_pool);
   EXPECT_EQ(SocketPoolAdditionalCapacity::CreateForTest(0.1, 2, 0.3, 1.4),
             empty_pool);
-  EXPECT_EQ(
-      SocketPoolAdditionalCapacity::CreateForTest(0.1, 2, 0.3, std::nan("")),
-      empty_pool);
+  EXPECT_EQ(SocketPoolAdditionalCapacity::CreateForTest(
+                0.1, 2, 0.3, std::numeric_limits<double>::quiet_NaN()),
+            empty_pool);
 }
 
-TEST(SocketPoolAdditionalCapacityTest, NextStateBeforeAllocation) {
+TEST(SocketPoolAdditionalCapacityTest, NextExpandabilityBeforeAllocation) {
   // We use a base and noise of 0.0 with a minimum of 0.5 to ensure every roll
   // is a 50/50 shot so that we don't need to run the test millions of times
   // for flakes to be noticeable. The capacity of 2 is needed to test the logic.
@@ -103,32 +107,42 @@ TEST(SocketPoolAdditionalCapacityTest, NextStateBeforeAllocation) {
       SocketPoolAdditionalCapacity::CreateForTest(0.0, 2, 0.5, 0.0);
 
   // Test out of bounds cases
-  EXPECT_EQ(SocketPoolState::kCapped, pool_capacity.NextStateBeforeAllocation(
-                                          SocketPoolState::kUncapped, 5, 2));
-  EXPECT_EQ(SocketPoolState::kCapped, pool_capacity.NextStateBeforeAllocation(
-                                          SocketPoolState::kCapped, 5, 2));
+  EXPECT_EQ(SocketPoolExpandability::kCapped,
+            pool_capacity.NextExpandabilityBeforeAllocation(
+                SocketPoolExpandability::kUncapped, 5, 2));
+  EXPECT_EQ(SocketPoolExpandability::kCapped,
+            pool_capacity.NextExpandabilityBeforeAllocation(
+                SocketPoolExpandability::kCapped, 5, 2));
 
   // Below soft cap we are always uncapped
-  EXPECT_EQ(SocketPoolState::kUncapped, pool_capacity.NextStateBeforeAllocation(
-                                            SocketPoolState::kUncapped, 0, 2));
-  EXPECT_EQ(SocketPoolState::kUncapped, pool_capacity.NextStateBeforeAllocation(
-                                            SocketPoolState::kCapped, 0, 2));
-  EXPECT_EQ(SocketPoolState::kUncapped, pool_capacity.NextStateBeforeAllocation(
-                                            SocketPoolState::kUncapped, 1, 2));
-  EXPECT_EQ(SocketPoolState::kUncapped, pool_capacity.NextStateBeforeAllocation(
-                                            SocketPoolState::kCapped, 1, 2));
+  EXPECT_EQ(SocketPoolExpandability::kUncapped,
+            pool_capacity.NextExpandabilityBeforeAllocation(
+                SocketPoolExpandability::kUncapped, 0, 2));
+  EXPECT_EQ(SocketPoolExpandability::kUncapped,
+            pool_capacity.NextExpandabilityBeforeAllocation(
+                SocketPoolExpandability::kCapped, 0, 2));
+  EXPECT_EQ(SocketPoolExpandability::kUncapped,
+            pool_capacity.NextExpandabilityBeforeAllocation(
+                SocketPoolExpandability::kUncapped, 1, 2));
+  EXPECT_EQ(SocketPoolExpandability::kUncapped,
+            pool_capacity.NextExpandabilityBeforeAllocation(
+                SocketPoolExpandability::kCapped, 1, 2));
 
   // At hard cap we are always capped
-  EXPECT_EQ(SocketPoolState::kCapped, pool_capacity.NextStateBeforeAllocation(
-                                          SocketPoolState::kCapped, 4, 2));
-  EXPECT_EQ(SocketPoolState::kCapped, pool_capacity.NextStateBeforeAllocation(
-                                          SocketPoolState::kUncapped, 4, 2));
+  EXPECT_EQ(SocketPoolExpandability::kCapped,
+            pool_capacity.NextExpandabilityBeforeAllocation(
+                SocketPoolExpandability::kCapped, 4, 2));
+  EXPECT_EQ(SocketPoolExpandability::kCapped,
+            pool_capacity.NextExpandabilityBeforeAllocation(
+                SocketPoolExpandability::kUncapped, 4, 2));
 
   // If capped at or above soft cap we always stay that way
-  EXPECT_EQ(SocketPoolState::kCapped, pool_capacity.NextStateBeforeAllocation(
-                                          SocketPoolState::kCapped, 2, 2));
-  EXPECT_EQ(SocketPoolState::kCapped, pool_capacity.NextStateBeforeAllocation(
-                                          SocketPoolState::kCapped, 3, 2));
+  EXPECT_EQ(SocketPoolExpandability::kCapped,
+            pool_capacity.NextExpandabilityBeforeAllocation(
+                SocketPoolExpandability::kCapped, 2, 2));
+  EXPECT_EQ(SocketPoolExpandability::kCapped,
+            pool_capacity.NextExpandabilityBeforeAllocation(
+                SocketPoolExpandability::kCapped, 3, 2));
 
   // When uncapped between soft and hard cap, we should be able to see some
   // distribution of each option. The probability inputs here should make it
@@ -136,8 +150,9 @@ TEST(SocketPoolAdditionalCapacityTest, NextStateBeforeAllocation) {
   bool did_see_uncapped = false;
   bool did_see_capped = false;
   for (size_t i = 0; i < 1000; ++i) {
-    if (SocketPoolState::kUncapped == pool_capacity.NextStateBeforeAllocation(
-                                          SocketPoolState::kUncapped, 3, 2)) {
+    if (SocketPoolExpandability::kUncapped ==
+        pool_capacity.NextExpandabilityBeforeAllocation(
+            SocketPoolExpandability::kUncapped, 3, 2)) {
       did_see_uncapped = true;
     } else {
       did_see_capped = true;
@@ -147,7 +162,7 @@ TEST(SocketPoolAdditionalCapacityTest, NextStateBeforeAllocation) {
   EXPECT_TRUE(did_see_capped);
 }
 
-TEST(SocketPoolAdditionalCapacityTest, NextStateAfterRelease) {
+TEST(SocketPoolAdditionalCapacityTest, NextExpandabilityAfterRelease) {
   // We use a base and noise of 0.0 with a minimum of 0.5 to ensure every roll
   // is a 50/50 shot so that we don't need to run the test millions of times
   // for flakes to be noticeable. The capacity of 2 is needed to test the logic.
@@ -155,32 +170,42 @@ TEST(SocketPoolAdditionalCapacityTest, NextStateAfterRelease) {
       SocketPoolAdditionalCapacity::CreateForTest(0.0, 2, 0.5, 0.0);
 
   // Test out of bounds cases
-  EXPECT_EQ(SocketPoolState::kCapped, pool_capacity.NextStateAfterRelease(
-                                          SocketPoolState::kUncapped, 5, 2));
-  EXPECT_EQ(SocketPoolState::kCapped, pool_capacity.NextStateAfterRelease(
-                                          SocketPoolState::kCapped, 5, 2));
+  EXPECT_EQ(SocketPoolExpandability::kCapped,
+            pool_capacity.NextExpandabilityAfterRelease(
+                SocketPoolExpandability::kUncapped, 5, 2));
+  EXPECT_EQ(SocketPoolExpandability::kCapped,
+            pool_capacity.NextExpandabilityAfterRelease(
+                SocketPoolExpandability::kCapped, 5, 2));
 
   // Below soft cap we are always uncapped
-  EXPECT_EQ(SocketPoolState::kUncapped, pool_capacity.NextStateAfterRelease(
-                                            SocketPoolState::kUncapped, 0, 2));
-  EXPECT_EQ(SocketPoolState::kUncapped, pool_capacity.NextStateAfterRelease(
-                                            SocketPoolState::kCapped, 0, 2));
-  EXPECT_EQ(SocketPoolState::kUncapped, pool_capacity.NextStateAfterRelease(
-                                            SocketPoolState::kUncapped, 1, 2));
-  EXPECT_EQ(SocketPoolState::kUncapped, pool_capacity.NextStateAfterRelease(
-                                            SocketPoolState::kCapped, 1, 2));
+  EXPECT_EQ(SocketPoolExpandability::kUncapped,
+            pool_capacity.NextExpandabilityAfterRelease(
+                SocketPoolExpandability::kUncapped, 0, 2));
+  EXPECT_EQ(SocketPoolExpandability::kUncapped,
+            pool_capacity.NextExpandabilityAfterRelease(
+                SocketPoolExpandability::kCapped, 0, 2));
+  EXPECT_EQ(SocketPoolExpandability::kUncapped,
+            pool_capacity.NextExpandabilityAfterRelease(
+                SocketPoolExpandability::kUncapped, 1, 2));
+  EXPECT_EQ(SocketPoolExpandability::kUncapped,
+            pool_capacity.NextExpandabilityAfterRelease(
+                SocketPoolExpandability::kCapped, 1, 2));
 
   // At hard cap we are always capped
-  EXPECT_EQ(SocketPoolState::kCapped, pool_capacity.NextStateAfterRelease(
-                                          SocketPoolState::kCapped, 4, 2));
-  EXPECT_EQ(SocketPoolState::kCapped, pool_capacity.NextStateAfterRelease(
-                                          SocketPoolState::kUncapped, 4, 2));
+  EXPECT_EQ(SocketPoolExpandability::kCapped,
+            pool_capacity.NextExpandabilityAfterRelease(
+                SocketPoolExpandability::kCapped, 4, 2));
+  EXPECT_EQ(SocketPoolExpandability::kCapped,
+            pool_capacity.NextExpandabilityAfterRelease(
+                SocketPoolExpandability::kUncapped, 4, 2));
 
   // If uncapped at or above soft cap we always stay that way
-  EXPECT_EQ(SocketPoolState::kUncapped, pool_capacity.NextStateAfterRelease(
-                                            SocketPoolState::kUncapped, 2, 2));
-  EXPECT_EQ(SocketPoolState::kUncapped, pool_capacity.NextStateAfterRelease(
-                                            SocketPoolState::kUncapped, 3, 2));
+  EXPECT_EQ(SocketPoolExpandability::kUncapped,
+            pool_capacity.NextExpandabilityAfterRelease(
+                SocketPoolExpandability::kUncapped, 2, 2));
+  EXPECT_EQ(SocketPoolExpandability::kUncapped,
+            pool_capacity.NextExpandabilityAfterRelease(
+                SocketPoolExpandability::kUncapped, 3, 2));
 
   // When capped between soft and hard cap, we should be able to see some
   // distribution of each option. The probability inputs here should make it
@@ -188,8 +213,9 @@ TEST(SocketPoolAdditionalCapacityTest, NextStateAfterRelease) {
   bool did_see_uncapped = false;
   bool did_see_capped = false;
   for (size_t i = 0; i < 1000; ++i) {
-    if (SocketPoolState::kUncapped ==
-        pool_capacity.NextStateAfterRelease(SocketPoolState::kCapped, 3, 2)) {
+    if (SocketPoolExpandability::kUncapped ==
+        pool_capacity.NextExpandabilityAfterRelease(
+            SocketPoolExpandability::kCapped, 3, 2)) {
       did_see_uncapped = true;
     } else {
       did_see_capped = true;
@@ -204,46 +230,51 @@ TEST(SocketPoolAdditionalCapacityTest, EmptyPool) {
       SocketPoolAdditionalCapacity::CreateEmpty();
 
   // No sockets in use
-  EXPECT_EQ(
-      SocketPoolState::kUncapped,
-      empty_pool.NextStateBeforeAllocation(SocketPoolState::kUncapped, 0, 256));
-  EXPECT_EQ(
-      SocketPoolState::kUncapped,
-      empty_pool.NextStateAfterRelease(SocketPoolState::kUncapped, 0, 256));
-  EXPECT_EQ(SocketPoolState::kUncapped, empty_pool.NextStateBeforeAllocation(
-                                            SocketPoolState::kCapped, 0, 256));
-  EXPECT_EQ(SocketPoolState::kUncapped,
-            empty_pool.NextStateAfterRelease(SocketPoolState::kCapped, 0, 256));
+  EXPECT_EQ(SocketPoolExpandability::kUncapped,
+            empty_pool.NextExpandabilityBeforeAllocation(
+                SocketPoolExpandability::kUncapped, 0, 256));
+  EXPECT_EQ(SocketPoolExpandability::kUncapped,
+            empty_pool.NextExpandabilityAfterRelease(
+                SocketPoolExpandability::kUncapped, 0, 256));
+  EXPECT_EQ(SocketPoolExpandability::kUncapped,
+            empty_pool.NextExpandabilityBeforeAllocation(
+                SocketPoolExpandability::kCapped, 0, 256));
+  EXPECT_EQ(SocketPoolExpandability::kUncapped,
+            empty_pool.NextExpandabilityAfterRelease(
+                SocketPoolExpandability::kCapped, 0, 256));
 
   // 50% of soft cap in use
-  EXPECT_EQ(SocketPoolState::kUncapped,
-            empty_pool.NextStateBeforeAllocation(SocketPoolState::kUncapped,
-                                                 128, 256));
-  EXPECT_EQ(
-      SocketPoolState::kUncapped,
-      empty_pool.NextStateAfterRelease(SocketPoolState::kUncapped, 128, 256));
-  EXPECT_EQ(
-      SocketPoolState::kUncapped,
-      empty_pool.NextStateBeforeAllocation(SocketPoolState::kCapped, 128, 256));
-  EXPECT_EQ(
-      SocketPoolState::kUncapped,
-      empty_pool.NextStateAfterRelease(SocketPoolState::kCapped, 128, 256));
+  EXPECT_EQ(SocketPoolExpandability::kUncapped,
+            empty_pool.NextExpandabilityBeforeAllocation(
+                SocketPoolExpandability::kUncapped, 128, 256));
+  EXPECT_EQ(SocketPoolExpandability::kUncapped,
+            empty_pool.NextExpandabilityAfterRelease(
+                SocketPoolExpandability::kUncapped, 128, 256));
+  EXPECT_EQ(SocketPoolExpandability::kUncapped,
+            empty_pool.NextExpandabilityBeforeAllocation(
+                SocketPoolExpandability::kCapped, 128, 256));
+  EXPECT_EQ(SocketPoolExpandability::kUncapped,
+            empty_pool.NextExpandabilityAfterRelease(
+                SocketPoolExpandability::kCapped, 128, 256));
 
   // 100% of soft cap in use
-  EXPECT_EQ(SocketPoolState::kCapped,
-            empty_pool.NextStateBeforeAllocation(SocketPoolState::kUncapped,
-                                                 256, 256));
-  EXPECT_EQ(
-      SocketPoolState::kCapped,
-      empty_pool.NextStateAfterRelease(SocketPoolState::kUncapped, 256, 256));
-  EXPECT_EQ(SocketPoolState::kCapped, empty_pool.NextStateBeforeAllocation(
-                                          SocketPoolState::kCapped, 256, 256));
-  EXPECT_EQ(SocketPoolState::kCapped, empty_pool.NextStateAfterRelease(
-                                          SocketPoolState::kCapped, 256, 256));
+  EXPECT_EQ(SocketPoolExpandability::kCapped,
+            empty_pool.NextExpandabilityBeforeAllocation(
+                SocketPoolExpandability::kUncapped, 256, 256));
+  EXPECT_EQ(SocketPoolExpandability::kCapped,
+            empty_pool.NextExpandabilityAfterRelease(
+                SocketPoolExpandability::kUncapped, 256, 256));
+  EXPECT_EQ(SocketPoolExpandability::kCapped,
+            empty_pool.NextExpandabilityBeforeAllocation(
+                SocketPoolExpandability::kCapped, 256, 256));
+  EXPECT_EQ(SocketPoolExpandability::kCapped,
+            empty_pool.NextExpandabilityAfterRelease(
+                SocketPoolExpandability::kCapped, 256, 256));
 }
 
 TEST(SocketPoolAdditionalCapacityTest,
      TestDefaultDistributionForFieldTrialConfig) {
+  SocketPoolAdditionalCapacity pool = SocketPoolAdditionalCapacity::Create(256);
 
   // In order to do that we need an easy way to measure distributions.
   // Since we are applying noise, we run a ten thousand variants.
@@ -252,14 +283,14 @@ TEST(SocketPoolAdditionalCapacityTest,
     size_t transition_allocation_count = 0;
     size_t transition_release_count = 0;
     for (size_t i = 0; i < 10000; ++i) {
-      if (SocketPoolState::kCapped ==
-          kFieldTrialPool.NextStateBeforeAllocation(SocketPoolState::kUncapped,
-                                                    sockets_in_use, 256)) {
+      if (SocketPoolExpandability::kCapped ==
+          pool.NextExpandabilityBeforeAllocation(
+              SocketPoolExpandability::kUncapped, sockets_in_use, 256)) {
         ++transition_allocation_count;
       }
-      if (SocketPoolState::kUncapped ==
-          kFieldTrialPool.NextStateAfterRelease(SocketPoolState::kCapped,
-                                                sockets_in_use, 256)) {
+      if (SocketPoolExpandability::kUncapped ==
+          pool.NextExpandabilityAfterRelease(SocketPoolExpandability::kCapped,
+                                             sockets_in_use, 256)) {
         ++transition_release_count;
       }
     }
@@ -309,12 +340,14 @@ void ValidateRandomizedInputs(double base,
                                                   noise);
   // Because there's some randomization here, we want to run these a few times.
   for (size_t i = 0; i < 1000; ++i) {
-    pool.NextStateBeforeAllocation(
-        capped ? SocketPoolState::kCapped : SocketPoolState::kUncapped,
+    pool.NextExpandabilityBeforeAllocation(
+        capped ? SocketPoolExpandability::kCapped
+               : SocketPoolExpandability::kUncapped,
         sockets_in_use, socket_soft_cap);
-    pool.NextStateAfterRelease(
-        capped ? SocketPoolState::kCapped : SocketPoolState::kUncapped,
-        sockets_in_use, socket_soft_cap);
+    pool.NextExpandabilityAfterRelease(capped
+                                           ? SocketPoolExpandability::kCapped
+                                           : SocketPoolExpandability::kUncapped,
+                                       sockets_in_use, socket_soft_cap);
   }
 }
 FUZZ_TEST(SocketPoolAdditionalCapacityTest, ValidateRandomizedInputs)
@@ -326,7 +359,9 @@ FUZZ_TEST(SocketPoolAdditionalCapacityTest, ValidateRandomizedInputs)
                  fuzztest::Arbitrary<size_t>(),
                  fuzztest::Arbitrary<size_t>())
     .WithSeeds({
-        {std::nan(""), 0, std::nan(""), std::nan(""), false, 0, 0},
+        {std::numeric_limits<double>::quiet_NaN(), 0,
+         std::numeric_limits<double>::quiet_NaN(),
+         std::numeric_limits<double>::quiet_NaN(), false, 0, 0},
         {0.0, 0, 0.0, 0.0, false, 0, 0},
         {0.3, 64, 0.1, 0.1, false, 96, 64},
         {0.6, 128, 0.2, 0.2, true, 192, 128},
@@ -342,26 +377,25 @@ class MockClientSocketPool : public ClientSocketPool {
  public:
   MockClientSocketPool()
       : ClientSocketPool(/*socket_soft_cap=*/256,
-                         kFieldTrialPool,
                          ProxyChain::Direct(),
                          /*is_for_websockets=*/false,
                          /*common_connect_job_params*/ nullptr,
                          /*connect_job_factory*/ nullptr) {}
 
-  SocketPoolState RequestSocket() {
-    UpdateStateBeforeAllocation();
-    if (State() == SocketPoolState::kUncapped) {
+  SocketPoolExpandability RequestSocket() {
+    UpdateExpandabilityBeforeAllocation();
+    if (Expandability() == SocketPoolExpandability::kUncapped) {
       ++sockets_in_use_;
     }
     CHECK_LE(sockets_in_use_, 512);
-    return State();
+    return Expandability();
   }
 
-  SocketPoolState ReleaseSocket() {
+  SocketPoolExpandability ReleaseSocket() {
     --sockets_in_use_;
-    UpdateStateAfterRelease();
+    UpdateExpandabilityAfterRelease();
     CHECK_GE(sockets_in_use_, 0);
-    return State();
+    return Expandability();
   }
 
   size_t SocketsInUse() const override { return sockets_in_use_; }
@@ -377,7 +411,6 @@ class MockClientSocketPool : public ClientSocketPool {
       ClientSocketHandle* handle,
       CompletionOnceCallback callback,
       const ProxyAuthCallback& proxy_auth_callback,
-      bool fail_if_alias_requires_proxy_override,
       const NetLogWithSource& net_log) override {
     NOTIMPLEMENTED();
     return ERR_IO_PENDING;
@@ -387,8 +420,7 @@ class MockClientSocketPool : public ClientSocketPool {
       scoped_refptr<SocketParams> params,
       const std::optional<NetworkTrafficAnnotationTag>& proxy_annotation_tag,
       size_t num_sockets,
-      bool fail_if_alias_requires_proxy_override,
-      CompletionOnceCallback callback,
+      PreconnectCompletionCallback callback,
       const NetLogWithSource& net_log) override {
     NOTIMPLEMENTED();
     return ERR_IO_PENDING;

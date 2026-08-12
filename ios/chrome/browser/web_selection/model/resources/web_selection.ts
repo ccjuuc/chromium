@@ -73,8 +73,19 @@ window.addEventListener('message', function(message) {
   getSelectedTextWithOffset(x, y);
 });
 
-const webSelection = new CrWebApi();
+const webSelection = new CrWebApi('webSelection');
 
 webSelection.addFunction('getSelectedText', getSelectedText);
 
-gCrWeb.registerApi('webSelection', webSelection);
+try {
+  gCrWeb.registerApi(webSelection);
+} catch (error) {
+  if (error instanceof Error && error.name === 'CrWebError' &&
+      error.message === 'API webSelection already registered.') {
+    // TODO(crbug.com/483452121): Refactor this script to stop registering an
+    // API in a script which is reinjected with `FeatureScript::
+    // ReinjectionBehavior::kReinjectOnDocumentRecreation`.
+  } else {
+    throw error;
+  }
+}

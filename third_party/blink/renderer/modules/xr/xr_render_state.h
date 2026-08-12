@@ -7,6 +7,7 @@
 
 #include <optional>
 
+#include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/bindings/core/v8/frozen_array.h"
 #include "third_party/blink/renderer/modules/xr/xr_layer.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
@@ -67,21 +68,26 @@ class XRRenderState : public ScriptWrappable {
   // bound to a different session.
   void removeOutputContext();
 
-  // Returns true if the current render state has at least one layer configured
-  // for drawing. This could be either the baseLayer or a non-empty layers
-  // list.
+  // Returns true if the current render state has at least one layer
+  // configured for drawing. This could be either the baseLayer or a non-empty
+  // layers list.
   bool HasActiveLayer() const;
+
+  // Returns true if the layer is included in the current render state.
+  bool HasLayer(XRLayer*) const;
 
   // Gets the transport delegate from the baseLayer, or from the last layer in
   // the layers list if baseLayer is null.
   XRFrameTransportDelegate* GetTransportDelegate();
 
+  void OnTransferComplete(const Vector<device::LayerId>& layer_ids);
+
   void Trace(Visitor*) const override;
 
  private:
-  // Helper method to update the list of layers according to a new render state.
-  // It also adds the needs redraw state for newly added layers and resets the
-  // needs redraw state for removed layers.
+  // Helper method to update the list of layers according to a new render
+  // state. It also adds the needs redraw state for newly added layers and
+  // resets the needs redraw state for removed layers.
   void UpdateLayersState(FrozenArray<XRLayer>* layers);
 
   bool immersive_;

@@ -66,7 +66,7 @@ std::optional<omnibox::SuggestResult> GetOmniboxDefaultSuggestion(
     return std::nullopt;
   }
 
-  const base::Value::Dict* dict =
+  const base::DictValue* dict =
       prefs->ReadPrefAsDict(extension_id, kOmniboxDefaultSuggestion);
   if (!dict) {
     return std::nullopt;
@@ -81,10 +81,11 @@ bool SetOmniboxDefaultSuggestion(
     const ExtensionId& extension_id,
     const omnibox::DefaultSuggestResult& suggestion) {
   ExtensionPrefs* prefs = ExtensionPrefs::Get(profile);
-  if (!prefs)
+  if (!prefs) {
     return false;
+  }
 
-  base::Value::Dict dict = suggestion.ToValue();
+  base::DictValue dict = suggestion.ToValue();
   // Add the content field so that the dictionary can be used to populate an
   // omnibox::SuggestResult.
   dict.Set(kSuggestionContent, base::Value(base::Value::Type::STRING));
@@ -118,7 +119,7 @@ void ExtensionOmniboxEventRouter::OnInputStarted(
     const ExtensionId& extension_id) {
   auto event = std::make_unique<Event>(events::OMNIBOX_ON_INPUT_STARTED,
                                        omnibox::OnInputStarted::kEventName,
-                                       base::Value::List(), profile);
+                                       base::ListValue(), profile);
   EventRouter::Get(profile)
       ->DispatchEventToExtension(extension_id, std::move(event));
 }
@@ -134,7 +135,7 @@ bool ExtensionOmniboxEventRouter::OnInputChanged(
           extension_id, omnibox::OnInputChanged::kEventName))
     return false;
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append(input);
   args.Append(suggest_id);
 
@@ -161,14 +162,15 @@ void ExtensionOmniboxEventRouter::OnInputEntered(
   extensions::ActiveTabPermissionGranter::FromWebContents(web_contents)
       ->GrantIfRequested(extension);
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append(input);
-  if (disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB)
+  if (disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB) {
     args.Append(kForegroundTabDisposition);
-  else if (disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB)
+  } else if (disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB) {
     args.Append(kBackgroundTabDisposition);
-  else
+  } else {
     args.Append(kCurrentTabDisposition);
+  }
 
   auto event = std::make_unique<Event>(events::OMNIBOX_ON_INPUT_ENTERED,
                                        omnibox::OnInputEntered::kEventName,
@@ -187,7 +189,7 @@ void ExtensionOmniboxEventRouter::OnInputCancelled(
     const ExtensionId& extension_id) {
   auto event = std::make_unique<Event>(events::OMNIBOX_ON_INPUT_CANCELLED,
                                        omnibox::OnInputCancelled::kEventName,
-                                       base::Value::List(), profile);
+                                       base::ListValue(), profile);
   EventRouter::Get(profile)
       ->DispatchEventToExtension(extension_id, std::move(event));
 }
@@ -196,7 +198,7 @@ void ExtensionOmniboxEventRouter::OnDeleteSuggestion(
     Profile* profile,
     const ExtensionId& extension_id,
     const std::string& suggestion_text) {
-  base::Value::List args;
+  base::ListValue args;
   args.Append(suggestion_text);
 
   auto event = std::make_unique<Event>(events::OMNIBOX_ON_DELETE_SUGGESTION,
@@ -372,11 +374,11 @@ ExtensionFunction::ResponseAction OmniboxSendSuggestionsFunction::Run() {
         }
         actions.reserve(suggestion.actions->size());
         for (const auto& action : *suggestion.actions) {
-          base::Value::Dict canvas_set =
-              action.icon ? action.icon->ToValue() : base::Value::Dict();
+          base::DictValue canvas_set =
+              action.icon ? action.icon->ToValue() : base::DictValue();
           gfx::ImageSkia image_skia;
           if (!canvas_set.empty()) {
-            base::Value::Dict& image_data = *canvas_set.FindDict("imageData");
+            base::DictValue& image_data = *canvas_set.FindDict("imageData");
             // The image data should have been verified by the pre-validation
             // param update.
             CHECK(!image_data.empty());
@@ -484,6 +486,12 @@ ExtensionFunction::ResponseAction OmniboxSetDefaultSuggestionFunction::Run() {
 
 void OmniboxSetDefaultSuggestionFunction::OnParsedDescriptionAndStyles(
     DescriptionAndStylesResult result) {
+  // Since the XML parsing happens asynchronously, the browser context can be
+  // torn down in the interim. If this happens, early-out.
+  if (!browser_context()) {
+    return;
+  }
+
   if (!result.error.empty()) {
     Respond(Error(std::move(result.error)));
     return;
@@ -543,8 +551,9 @@ ACMatchClassifications StyleTypesToACMatchClassifications(
           return match_classifications;
       }
 
-      for (size_t j = offset; j < offset + length && j < styles.size(); ++j)
+      for (size_t j = offset; j < offset + length && j < styles.size(); ++j) {
         styles[j] |= type_class;
+      }
     }
 
     for (size_t i = 0; i < styles.size(); ++i) {
@@ -569,8 +578,9 @@ void ApplyDefaultSuggestionForExtensionKeyword(
 
   std::optional<omnibox::SuggestResult> suggestion(
       GetOmniboxDefaultSuggestion(profile, keyword->GetExtensionId()));
-  if (!suggestion || suggestion->description.empty())
+  if (!suggestion || suggestion->description.empty()) {
     return;  // fall back to the universal default
+  }
 
   const std::u16string kPlaceholderText(u"%s");
   const std::u16string kReplacementText(u"<input>");
@@ -594,8 +604,9 @@ void ApplyDefaultSuggestionForExtensionKeyword(
     description.replace(placeholder, kPlaceholderText.length(), replacement);
 
     for (auto& description_style : description_styles) {
-      if (description_style.offset > placeholder)
+      if (description_style.offset > placeholder) {
         description_style.offset += replacement.length() - 2;
+      }
     }
   }
 

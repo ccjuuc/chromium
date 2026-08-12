@@ -24,6 +24,8 @@ enum class SchedulerClientType {
   kTest2 = -2,
   kTest3 = -3,
 
+  kMinValue = kTest3,
+
   // Default value of client type.
   kUnknown = 0,
   // Client used in chrome://notifications-internals for debugging.
@@ -38,21 +40,9 @@ enum class SchedulerClientType {
   kDeprecatedFeatureGuide = 5,
   // Clank tips notifications feature.
   kTips = 6,
-  kMaxValue = kTips
-};
-
-// The Chrome feature correlating to each tip notification.
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-// A Java counterpart will be generated for this enum.
-// GENERATED_JAVA_ENUM_PACKAGE: (
-//   org.chromium.chrome.browser.notifications.scheduler)
-enum class TipsNotificationsFeatureType {
-  kEnhancedSafeBrowsing = 0,
-  kQuickDelete = 1,
-  kGoogleLens = 2,
-  kBottomOmnibox = 3,
-  kMaxValue = kBottomOmnibox
+  // Clank finds notifications feature.
+  kChromeFinds = 7,
+  kMaxValue = kChromeFinds
 };
 
 // The type of user feedback from a displayed notification.

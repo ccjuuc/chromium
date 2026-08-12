@@ -42,7 +42,6 @@
 #include "content/public/test/browser_task_environment.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/openscreen/src/cast/common/public/cast_streaming_app_ids.h"
@@ -95,8 +94,8 @@ std::string MakeSourceId(const std::string& app_id = kAppId1,
       {"cast:", app_id, "?clientId=", client_id, "&appParams=", app_params});
 }
 
-base::Value::Dict MakeReceiverStatus(const std::string& app_id,
-                                     bool update_display_name = false) {
+base::DictValue MakeReceiverStatus(const std::string& app_id,
+                                   bool update_display_name = false) {
   return ParseJsonDict(R"({
         "applications": [{
           "appId": ")" +
@@ -179,6 +178,20 @@ class CastActivityManagerTest : public testing::Test,
 
     manager_.reset();
     CastActivityManager::SetActitityFactoryForTest(nullptr);
+  }
+
+  AppActivity* AddAppActivity(const MediaRoute& route,
+                              const std::string& app_id) {
+    return manager_->AddAppActivity(route, app_id);
+  }
+
+  CastActivity* AddMirroringActivity(
+      const MediaRoute& route,
+      const std::string& app_id,
+      content::FrameTreeNodeId frame_tree_node_id,
+      const CastSinkExtraData& cast_data) {
+    return manager_->AddMirroringActivity(route, app_id, frame_tree_node_id,
+                                          cast_data);
   }
 
   // from CastActivityFactoryForTest
@@ -519,7 +532,6 @@ class CastActivityManagerTest : public testing::Test,
 
  protected:
   content::BrowserTaskEnvironment task_environment_;
-  data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
   NiceMock<MockMojoMediaRouter> mock_router_;
   mojo::Remote<mojom::MediaRouter> router_remote_;
   std::unique_ptr<mojo::Receiver<mojom::MediaRouter>> router_receiver_;
@@ -717,13 +729,10 @@ TEST_F(CastActivityManagerTest, LaunchSessionTerminatesExistingSessionFromTab) {
 
   // Launch a new session from the same tab on a different sink.
   auto source = CastMediaSource::FromMediaSourceId(MakeSourceId(kAppId2));
-  // Use LaunchSessionParsed() instead of LaunchSession() here because
-  // LaunchSessionParsed() is called asynchronously and will fail the test.
-  manager_->LaunchSessionParsed(
+  manager_->LaunchSession(
       *source, sink2_, kPresentationId2, origin_, kFrameTreeNodeId,
       base::BindOnce(&CastActivityManagerTest::ExpectLaunchSessionSuccess,
-                     base::Unretained(this)),
-      data_decoder::DataDecoder::ValueOrError());
+                     base::Unretained(this)));
 }
 
 TEST_F(CastActivityManagerTest, LaunchSessionTerminatesPendingLaunchFromTab) {
@@ -733,13 +742,10 @@ TEST_F(CastActivityManagerTest, LaunchSessionTerminatesPendingLaunchFromTab) {
 
   // Launch a new session from the same tab on a different sink.
   auto source = CastMediaSource::FromMediaSourceId(MakeSourceId(kAppId2));
-  // Use LaunchSessionParsed() instead of LaunchSession() here because
-  // LaunchSessionParsed() is called asynchronously and will fail the test.
-  manager_->LaunchSessionParsed(
+  manager_->LaunchSession(
       *source, sink2_, kPresentationId2, origin_, kFrameTreeNodeId,
       base::BindOnce(&CastActivityManagerTest::ExpectLaunchSessionSuccess,
-                     base::Unretained(this)),
-      data_decoder::DataDecoder::ValueOrError());
+                     base::Unretained(this)));
 }
 
 TEST_F(CastActivityManagerTest, AddRemoveNonLocalActivity) {
@@ -844,7 +850,7 @@ TEST_F(CastActivityManagerTest, AppMessageFromReceiver) {
   // Destination ID matches client ID.
   openscreen::cast::proto::CastMessage message =
       cast_channel::CreateCastMessage("urn:x-cast:com.google.foo",
-                                      base::Value(base::Value::Dict()),
+                                      base::Value(base::DictValue()),
                                       "sourceId", "theClientId");
 
   EXPECT_CALL(*app_activity_, OnAppMessage(IsCastChannelMessage(message)));
@@ -904,11 +910,10 @@ TEST_F(CastActivityManagerTest, StartSessionAndRemoveExistingSessionOnSink) {
         launch_session_callback_ = std::move(callback);
       }));
   auto source = CastMediaSource::FromMediaSourceId(MakeSourceId(kAppId2));
-  manager_->LaunchSessionParsed(
+  manager_->LaunchSession(
       *source, sink_, kPresentationId2, origin_, kFrameTreeNodeId2,
       base::BindOnce(&CastActivityManagerTest::ExpectLaunchSessionSuccess,
-                     base::Unretained(this)),
-      data_decoder::DataDecoder::ValueOrError());
+                     base::Unretained(this)));
   RunUntilIdle();
   ReceiveLaunchSuccessResponseFromReceiver(kAppId2);
 
@@ -983,6 +988,80 @@ TEST_F(CastActivityManagerTest, LaunchMdnsInstantDeviceSuccess) {
   // histogram count.
   LaunchNonSdkMirroringSession();
   histogram_tester.ExpectTotalCount(histogram, 0);
+}
+
+// Regression test for crbug.com/500091052.
+TEST_F(CastActivityManagerTest, AddAppActivityCollision) {
+  MediaSource source(MakeSourceId(kAppId1));
+  MediaRoute route(kPresentationId, source, sink_.sink().id(), "description",
+                   true);
+
+  // First call to AddAppActivity should succeed.
+  AppActivity* activity1 = AddAppActivity(route, kAppId1);
+  ASSERT_TRUE(activity1);
+  EXPECT_EQ(1u, manager_->GetRoutes().size());
+
+  // Second call with same route_id should overwrite the existing activity
+  // instead of creating a dangling pointer.
+  AppActivity* activity2 = AddAppActivity(route, kAppId1);
+  ASSERT_TRUE(activity2);
+  EXPECT_NE(activity1, activity2);
+  EXPECT_EQ(1u, manager_->GetRoutes().size());
+
+  // Verify that the pointer in app_activities_ has been updated to the new
+  // activity.
+  EXPECT_EQ(activity2,
+            manager_->app_activities_for_testing().at(route.media_route_id()));
+}
+
+// Regression test for crbug.com/500091052.
+TEST_F(CastActivityManagerTest, AddMirroringActivityCollision) {
+  MediaSource source = MediaSource::ForTab(123);
+  MediaRoute route(kPresentationId, source, sink_.sink().id(), "description",
+                   true);
+  route.set_controller_type(RouteControllerType::kMirroring);
+
+  // First call to AddMirroringActivity should succeed.
+  CastActivity* activity1 = AddMirroringActivity(
+      route, cast_streaming_app_id_, kFrameTreeNodeId, sink_.cast_data());
+  ASSERT_TRUE(activity1);
+  EXPECT_EQ(1u, manager_->activities_for_testing().size());
+
+  // Second call with same route_id should overwrite the existing activity.
+  CastActivity* activity2 = AddMirroringActivity(
+      route, cast_streaming_app_id_, kFrameTreeNodeId, sink_.cast_data());
+  ASSERT_TRUE(activity2);
+  EXPECT_NE(activity1, activity2);
+  EXPECT_EQ(1u, manager_->activities_for_testing().size());
+
+  // Verify that activities_ map has been updated to the new activity.
+  EXPECT_EQ(
+      activity2,
+      manager_->activities_for_testing().at(route.media_route_id()).get());
+}
+
+TEST_F(CastActivityManagerTest, AddMirroringActivityOverwritesAppActivity) {
+  MediaSource source = MediaSource::ForTab(123);
+  MediaRoute route(kPresentationId, source, sink_.sink().id(), "description",
+                   true);
+  route.set_controller_type(RouteControllerType::kGeneric);
+
+  AppActivity* activity1 = AddAppActivity(route, kAppId1);
+  ASSERT_TRUE(activity1);
+  EXPECT_EQ(1u, manager_->activities_for_testing().size());
+  EXPECT_EQ(activity1,
+            manager_->app_activities_for_testing().at(route.media_route_id()));
+
+  // Adding a mirroring activity with the same route ID should overwrite the app
+  // activity and remove it from app_activities_.
+  CastActivity* activity2 = AddMirroringActivity(
+      route, cast_streaming_app_id_, kFrameTreeNodeId, sink_.cast_data());
+  ASSERT_TRUE(activity2);
+  EXPECT_NE(activity1, activity2);
+  EXPECT_EQ(1u, manager_->activities_for_testing().size());
+  EXPECT_TRUE(
+      manager_->app_activities_for_testing().find(route.media_route_id()) ==
+      manager_->app_activities_for_testing().end());
 }
 
 }  // namespace media_router

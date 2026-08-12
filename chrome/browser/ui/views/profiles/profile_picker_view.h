@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_UI_VIEWS_PROFILES_PROFILE_PICKER_VIEW_H_
 
 #include <optional>
+#include <variant>
 
 #include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
@@ -13,6 +14,7 @@
 #include "base/memory/weak_ptr.h"
 #include "build/buildflag.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/chrome_web_modal_dialog_manager_delegate.h"
 #include "chrome/browser/ui/profiles/profile_picker.h"
 #include "chrome/browser/ui/views/profiles/profile_management_types.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_web_contents_host.h"
@@ -24,13 +26,14 @@
 #include "ui/views/view.h"
 #include "ui/views/widget/widget_delegate.h"
 
-class ProfilePickerSignInToolbar;
+class ProfilePickerToolbar;
 class Profile;
 class ScopedProfileKeepAlive;
 class ProfileManagementFlowController;
 class ProfilePickerFlowController;
 class ProfilePickerFeaturePromoController;
 class ForceSigninUIError;
+class SigninUIError;
 
 namespace content {
 struct ContextMenuParams;
@@ -44,10 +47,13 @@ class ProfilePickerView : public views::WidgetDelegateView,
                           public ProfilePickerWebContentsHost,
                           public content::WebContentsDelegate,
                           public web_modal::WebContentsModalDialogHost,
-                          public ui::AcceleratorProvider {
+                          public ui::AcceleratorProvider,
+                          public ChromeWebModalDialogManagerDelegate {
   METADATA_HEADER(ProfilePickerView, views::WidgetDelegateView)
 
  public:
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kViewId);
+
   ProfilePickerView(const ProfilePickerView&) = delete;
   ProfilePickerView& operator=(const ProfilePickerView&) = delete;
 
@@ -63,15 +69,20 @@ class ProfilePickerView : public views::WidgetDelegateView,
       const GURL& url,
       base::OnceClosure navigation_finished_closure) override;
   bool ShouldUseDarkColors() const override;
+  bool AreEffectsEnabled() const override;
   content::WebContents* GetPickerContents() const override;
   web_modal::WebContentsModalDialogHost* GetWebContentsModalDialogHost()
       override;
   content::WebContentsDelegate* GetWebContentsDelegate() override;
   void Reset(StepSwitchFinishedCallback callback) override;
-  void ShowForceSigninErrorDialog(const ForceSigninUIError& error,
-                                  bool success) override;
-  void SetNativeToolbarVisible(bool visible) override;
-  bool IsNativeToolbarVisibleForTesting() const;
+  void ShowSigninErrorDialog(
+      const std::variant<ForceSigninUIError, SigninUIError>& error,
+      bool success) override;
+  void SetNativeToolbarSigninButtonsVisible(bool visible) override;
+  void SetNativeToolbarDontSignInButtonVisible(bool visible) override;
+  void SetNativeToolbarStartBrowsingButtonVisible(bool visible) override;
+  void SetNativeToolbarEffectsControlButtonVisible(bool visible) override;
+  bool AreNativeToolbarSigninButtonsVisibleForTesting() const;
   SkColor GetPreferredBackgroundColor() const override;
 
   // content::WebContentsDelegate:
@@ -79,6 +90,18 @@ class ProfilePickerView : public views::WidgetDelegateView,
                            const input::NativeWebKeyboardEvent& event) override;
   bool HandleContextMenu(content::RenderFrameHost& render_frame_host,
                          const content::ContextMenuParams& params) override;
+  content::WebContents* AddNewContents(
+      content::WebContents* source,
+      std::unique_ptr<content::WebContents> new_contents,
+      const GURL& target_url,
+      WindowOpenDisposition disposition,
+      const blink::mojom::WindowFeatures& window_features,
+      bool user_gesture,
+      bool* was_blocked) override;
+
+  // ChromeWebModalDialogManagerDelegate:
+  web_modal::WebContentsModalDialogHost* GetWebContentsModalDialogHost(
+      content::WebContents* web_contents) override;
 
   // web_modal::WebContentsModalDialogHost
   gfx::NativeView GetHostView() const override;
@@ -124,6 +147,8 @@ class ProfilePickerView : public views::WidgetDelegateView,
   // To display the Profile picker, use ProfilePicker::Show().
   explicit ProfilePickerView(ProfilePicker::Params&& params);
   ~ProfilePickerView() override;
+
+  const ProfilePicker::Params& params() const { return params_; }
 
   // Displays the profile picker.
   void Display();
@@ -207,8 +232,6 @@ class ProfilePickerView : public views::WidgetDelegateView,
       content::WebContents* contents,
       base::OnceClosure navigation_finished_closure = base::OnceClosure());
 
-  void NavigateBack();
-
   // Register basic keyboard accelerators such as closing the window (Alt-F4
   // on Windows).
   void ConfigureAccelerators();
@@ -260,14 +283,18 @@ class ProfilePickerView : public views::WidgetDelegateView,
   // WebContents outlive this observer.
   std::unique_ptr<NavigationFinishedObserver> show_screen_finished_observer_;
 
-  // Toolbar view displayed on top of the WebView for GAIA sign-in, owned by the
-  // view hierarchy.
-  raw_ptr<ProfilePickerSignInToolbar> toolbar_ = nullptr;
+  // Toolbar view displayed on top of the native WebUI(s) and/or WebView (Gaia),
+  // owned by the view hierarchy.
+  raw_ptr<ProfilePickerToolbar> toolbar_ = nullptr;
 
   std::unique_ptr<ProfileManagementFlowController> flow_controller_;
 
   // Manages IPH promos displayed through the Profile Picker.
   std::unique_ptr<ProfilePickerFeaturePromoController> feature_promo_;
+
+  // Returns whether the profile picker can navigate back. This is determined by
+  // the current step controller.
+  bool CanNavigateBack() const;
 
   base::CallbackListSubscription web_contents_attached_subscription_;
 

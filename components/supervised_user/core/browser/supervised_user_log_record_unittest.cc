@@ -8,16 +8,24 @@
 #include <optional>
 #include <ostream>
 
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/test/with_feature_override.h"
+#include "build/buildflag.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/common/features.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/supervised_user/core/browser/supervised_user_preferences.h"
 #include "components/supervised_user/core/browser/supervised_user_test_environment.h"
+#include "components/supervised_user/core/common/features.h"
 #include "components/supervised_user/core/common/pref_names.h"
+#include "components/supervised_user/core/common/supervised_user_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+using testing::Optional;
 
 namespace supervised_user {
 
@@ -84,8 +92,8 @@ class SupervisedUserLogRecordTest : public ::testing::Test {
             identity_test_env_.identity_manager(),
             *supervised_user_test_environment_.pref_service(),
             *host_content_settings_map_,
-            supervised_user_test_environment_.service(),
-            supervised_user_test_environment_.url_filtering_service()));
+            supervised_user_test_environment_.url_filtering_service(),
+            supervised_user_test_environment_.device_parental_controls()));
   }
 
   // Creates a regular user account (most likely, an adult) with the given email
@@ -94,7 +102,7 @@ class SupervisedUserLogRecordTest : public ::testing::Test {
     AccountInfo account_info =
         GetIdentityTestEnv()->MakePrimaryAccountAvailable(
             kEmail, signin::ConsentLevel::kSignin);
-    AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+    AccountCapabilitiesTestMutator mutator(&account_info);
     mutator.set_can_fetch_family_member_info(true);
     mutator.set_is_subject_to_parental_controls(false);
     mutator.set_is_opted_in_to_parental_supervision(false);
@@ -113,7 +121,7 @@ class SupervisedUserLogRecordTest : public ::testing::Test {
     AccountInfo account_info =
         GetIdentityTestEnv()->MakePrimaryAccountAvailable(
             kEmail, signin::ConsentLevel::kSignin);
-    AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+    AccountCapabilitiesTestMutator mutator(&account_info);
     mutator.set_can_fetch_family_member_info(true);
     mutator.set_is_subject_to_parental_controls(
         is_subject_to_parental_controls);
@@ -140,19 +148,19 @@ class SupervisedUserLogRecordTest : public ::testing::Test {
             identity_test_env_.identity_manager(),
             *supervised_user_test_environment_.pref_service(),
             *host_content_settings_map_,
-            supervised_user_test_environment_.service(),
-            supervised_user_test_environment_.url_filtering_service()));
+            supervised_user_test_environment_.url_filtering_service(),
+            supervised_user_test_environment_.device_parental_controls()));
   }
 
 #if BUILDFLAG(IS_ANDROID)
   void EnableSearchContentFilters() {
-    supervised_user_test_environment_.android_parental_controls()
-        ->SetSearchContentFiltersEnabledForTesting(true);
+    supervised_user_test_environment_.device_parental_controls()
+        .SetSearchContentFiltersEnabledForTesting(true);
   }
 
   void EnableBrowserContentFilters() {
-    supervised_user_test_environment_.android_parental_controls()
-        ->SetBrowserContentFiltersEnabledForTesting(true);
+    supervised_user_test_environment_.device_parental_controls()
+        .SetBrowserContentFiltersEnabledForTesting(true);
   }
 #endif  // BUILDFLAG(IS_ANDROID)
 
@@ -166,9 +174,8 @@ class SupervisedUserLogRecordTest : public ::testing::Test {
 TEST_F(SupervisedUserLogRecordTest, SignedOutIsUnsupervised) {
   std::optional<SupervisedUserLogRecord::Segment> supervision_status =
       CreateSupervisedUserLogRecord()->GetSupervisionStatusForPrimaryAccount();
-  ASSERT_TRUE(supervision_status.has_value());
-  EXPECT_EQ(supervision_status.value(),
-            SupervisedUserLogRecord::Segment::kUnsupervised);
+  EXPECT_THAT(supervision_status,
+              Optional(SupervisedUserLogRecord::Segment::kUnsupervised));
 }
 
 TEST_F(SupervisedUserLogRecordTest, CapabilitiesUnknownDefault) {
@@ -186,11 +193,40 @@ TEST_F(SupervisedUserLogRecordTest, SupervisionEnabledByUser) {
 
   std::optional<SupervisedUserLogRecord::Segment> supervision_status =
       CreateSupervisedUserLogRecord()->GetSupervisionStatusForPrimaryAccount();
-  ASSERT_TRUE(supervision_status.has_value());
-  EXPECT_EQ(
-      supervision_status.value(),
-      SupervisedUserLogRecord::Segment::kSupervisionEnabledByFamilyLinkUser);
+  EXPECT_THAT(supervision_status,
+              Optional(SupervisedUserLogRecord::Segment::
+                           kSupervisionEnabledByFamilyLinkUser));
 }
+
+#if !BUILDFLAG(IS_IOS)
+class SupervisedUserLogRecordWithApproximateGeolocationTest
+    : public base::test::WithFeatureOverride,
+      public SupervisedUserLogRecordTest {
+ public:
+  SupervisedUserLogRecordWithApproximateGeolocationTest()
+      : base::test::WithFeatureOverride(
+            content_settings::features::kApproximateGeolocationPermission) {}
+};
+
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(
+    SupervisedUserLogRecordWithApproximateGeolocationTest);
+
+TEST_P(SupervisedUserLogRecordWithApproximateGeolocationTest,
+       SupervisionEnabledByUser) {
+  CreateSupervisedUser(/*is_subject_to_parental_controls=*/true,
+                       /*is_opted_in_to_parental_supervision=*/true);
+
+  std::unique_ptr<SupervisedUserLogRecord> record =
+      CreateSupervisedUserLogRecord();
+  std::optional<SupervisedUserLogRecord::Segment> supervision_status =
+      record->GetSupervisionStatusForPrimaryAccount();
+  EXPECT_THAT(supervision_status,
+              Optional(SupervisedUserLogRecord::Segment::
+                           kSupervisionEnabledByFamilyLinkUser));
+  EXPECT_THAT(record->GetPermissionsToggleStateForPrimaryAccount(),
+              Optional(ToggleState::kEnabled));
+}
+#endif  // BUILDFLAG(IS_IOS)
 
 TEST_F(SupervisedUserLogRecordTest, SupervisionEnabledByPolicy) {
   CreateSupervisedUser(/*is_subject_to_parental_controls=*/true,
@@ -198,25 +234,23 @@ TEST_F(SupervisedUserLogRecordTest, SupervisionEnabledByPolicy) {
 
   std::optional<SupervisedUserLogRecord::Segment> supervision_status =
       CreateSupervisedUserLogRecord()->GetSupervisionStatusForPrimaryAccount();
-  ASSERT_TRUE(supervision_status.has_value());
-  EXPECT_EQ(
-      supervision_status.value(),
-      SupervisedUserLogRecord::Segment::kSupervisionEnabledByFamilyLinkPolicy);
+  EXPECT_THAT(supervision_status,
+              Optional(SupervisedUserLogRecord::Segment::
+                           kSupervisionEnabledByFamilyLinkPolicy));
 }
 
 TEST_F(SupervisedUserLogRecordTest, NotSupervised) {
   AccountInfo account_info = GetIdentityTestEnv()->MakePrimaryAccountAvailable(
       kEmail, signin::ConsentLevel::kSignin);
-  AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+  AccountCapabilitiesTestMutator mutator(&account_info);
   mutator.set_is_subject_to_parental_controls(false);
   mutator.set_is_opted_in_to_parental_supervision(false);
   GetIdentityTestEnv()->UpdateAccountInfoForAccount(account_info);
 
   std::optional<SupervisedUserLogRecord::Segment> supervision_status =
       CreateSupervisedUserLogRecord()->GetSupervisionStatusForPrimaryAccount();
-  ASSERT_TRUE(supervision_status.has_value());
-  EXPECT_EQ(supervision_status.value(),
-            SupervisedUserLogRecord::Segment::kUnsupervised);
+  EXPECT_THAT(supervision_status,
+              Optional(SupervisedUserLogRecord::Segment::kUnsupervised));
 }
 
 TEST_F(SupervisedUserLogRecordTest, SignedOutHasNoWebFilter) {
@@ -228,7 +262,7 @@ TEST_F(SupervisedUserLogRecordTest, SignedOutHasNoWebFilter) {
 TEST_F(SupervisedUserLogRecordTest, NotSupervisedHasNoWebFilter) {
   AccountInfo account_info = GetIdentityTestEnv()->MakePrimaryAccountAvailable(
       kEmail, signin::ConsentLevel::kSignin);
-  AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+  AccountCapabilitiesTestMutator mutator(&account_info);
   mutator.set_is_subject_to_parental_controls(false);
   mutator.set_is_opted_in_to_parental_supervision(false);
   GetIdentityTestEnv()->UpdateAccountInfoForAccount(account_info);
@@ -242,24 +276,21 @@ TEST_F(SupervisedUserLogRecordTest, SupervisedWithMatureSitesFilter) {
   std::optional<WebFilterType> web_filter =
       CreateSupervisedUserWithWebFilter(WebFilterType::kTryToBlockMatureSites)
           ->GetWebFilterTypeForPrimaryAccount();
-  ASSERT_TRUE(web_filter.has_value());
-  EXPECT_EQ(web_filter.value(), WebFilterType::kTryToBlockMatureSites);
+  EXPECT_THAT(web_filter, Optional(WebFilterType::kTryToBlockMatureSites));
 }
 
 TEST_F(SupervisedUserLogRecordTest, SupervisedWithAllowAllFilter) {
   std::optional<WebFilterType> web_filter =
       CreateSupervisedUserWithWebFilter(WebFilterType::kAllowAllSites)
           ->GetWebFilterTypeForPrimaryAccount();
-  ASSERT_TRUE(web_filter.has_value());
-  EXPECT_EQ(web_filter.value(), WebFilterType::kAllowAllSites);
+  EXPECT_THAT(web_filter, Optional(WebFilterType::kAllowAllSites));
 }
 
 TEST_F(SupervisedUserLogRecordTest, SupervisedWithCertainSitesFilter) {
   std::optional<WebFilterType> web_filter =
       CreateSupervisedUserWithWebFilter(WebFilterType::kCertainSites)
           ->GetWebFilterTypeForPrimaryAccount();
-  ASSERT_TRUE(web_filter.has_value());
-  EXPECT_EQ(web_filter.value(), WebFilterType::kCertainSites);
+  EXPECT_THAT(web_filter, Optional(WebFilterType::kCertainSites));
 }
 
 TEST_F(SupervisedUserLogRecordTest, HeadOfHousehold) {
@@ -267,9 +298,8 @@ TEST_F(SupervisedUserLogRecordTest, HeadOfHousehold) {
 
   std::optional<SupervisedUserLogRecord::Segment> supervision_status =
       CreateSupervisedUserLogRecord()->GetSupervisionStatusForPrimaryAccount();
-  ASSERT_TRUE(supervision_status.has_value());
-  EXPECT_EQ(supervision_status.value(),
-            SupervisedUserLogRecord::Segment::kParent);
+  EXPECT_THAT(supervision_status,
+              Optional(SupervisedUserLogRecord::Segment::kParent));
 }
 
 TEST_F(SupervisedUserLogRecordTest, Parent) {
@@ -277,53 +307,75 @@ TEST_F(SupervisedUserLogRecordTest, Parent) {
 
   std::optional<SupervisedUserLogRecord::Segment> supervision_status =
       CreateSupervisedUserLogRecord()->GetSupervisionStatusForPrimaryAccount();
-  ASSERT_TRUE(supervision_status.has_value());
-  EXPECT_EQ(supervision_status.value(),
-            SupervisedUserLogRecord::Segment::kParent);
+  EXPECT_THAT(supervision_status,
+              Optional(SupervisedUserLogRecord::Segment::kParent));
 }
 
 TEST_F(SupervisedUserLogRecordTest, RegularUserWithDisabledSupervision) {
   CreateRegularUser();
   std::optional<SupervisedUserLogRecord::Segment> supervision_status =
       CreateSupervisedUserLogRecord()->GetSupervisionStatusForPrimaryAccount();
-  ASSERT_TRUE(supervision_status.has_value());
-  EXPECT_EQ(supervision_status.value(),
-            SupervisedUserLogRecord::Segment::kUnsupervised);
+  EXPECT_THAT(supervision_status,
+              Optional(SupervisedUserLogRecord::Segment::kUnsupervised));
 }
 
 #if BUILDFLAG(IS_ANDROID)
 TEST_F(SupervisedUserLogRecordTest, RegularUserWithSearchFilterEnabled) {
+  // TODO(crbug.com/519491295): check ::EmitHistograms effects.
+  // With kSupervisedUserEmitLogRecordSeparately enabled; the log record is no
+  // longer emitted in the context of family link user, but instead recorded
+  // separately.
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      supervised_user::kSupervisedUserEmitLogRecordSeparately);
+
   CreateRegularUser();
   EnableSearchContentFilters();
 
   std::optional<SupervisedUserLogRecord::Segment> supervision_status =
       CreateSupervisedUserLogRecord()->GetSupervisionStatusForPrimaryAccount();
-  ASSERT_TRUE(supervision_status.has_value());
-  EXPECT_EQ(supervision_status.value(),
-            SupervisedUserLogRecord::Segment::kSupervisionEnabledLocally);
+  EXPECT_THAT(
+      supervision_status,
+      Optional(SupervisedUserLogRecord::Segment::kSupervisionEnabledLocally));
 }
 
 TEST_F(SupervisedUserLogRecordTest, RegularUserWithContentFiltersEnabled) {
+  // TODO(crbug.com/519491295): check ::EmitHistograms effects.
+  // With kSupervisedUserEmitLogRecordSeparately enabled; the log record is no
+  // longer emitted in the context of family link user, but instead recorded
+  // separately.
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      supervised_user::kSupervisedUserEmitLogRecordSeparately);
+
   CreateRegularUser();
   EnableBrowserContentFilters();
 
   std::optional<SupervisedUserLogRecord::Segment> supervision_status =
       CreateSupervisedUserLogRecord()->GetSupervisionStatusForPrimaryAccount();
-  ASSERT_TRUE(supervision_status.has_value());
-  EXPECT_EQ(supervision_status.value(),
-            SupervisedUserLogRecord::Segment::kSupervisionEnabledLocally);
+  EXPECT_THAT(
+      supervision_status,
+      Optional(SupervisedUserLogRecord::Segment::kSupervisionEnabledLocally));
 }
 
 TEST_F(SupervisedUserLogRecordTest, RegularUserWithAllLocalFiltersEnabled) {
+  // TODO(crbug.com/519491295): check ::EmitHistograms effects.
+  // With kSupervisedUserEmitLogRecordSeparately enabled; the log record is no
+  // longer emitted in the context of family link user, but instead recorded
+  // separately.
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      supervised_user::kSupervisedUserEmitLogRecordSeparately);
+
   CreateRegularUser();
   EnableSearchContentFilters();
   EnableBrowserContentFilters();
 
   std::optional<SupervisedUserLogRecord::Segment> supervision_status =
       CreateSupervisedUserLogRecord()->GetSupervisionStatusForPrimaryAccount();
-  ASSERT_TRUE(supervision_status.has_value());
-  EXPECT_EQ(supervision_status.value(),
-            SupervisedUserLogRecord::Segment::kSupervisionEnabledLocally);
+  EXPECT_THAT(
+      supervision_status,
+      Optional(SupervisedUserLogRecord::Segment::kSupervisionEnabledLocally));
 }
 #endif  // BUILDFLAG(IS_ANDROID)
 }  // namespace

@@ -9,9 +9,14 @@
 
 #include <stddef.h>
 
+#include <optional>
+
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/time/time.h"
+#include "build/build_config.h"
+#include "ui/gl/buildflags.h"
 #include "ui/gl/gl_export.h"
 
 namespace gl {
@@ -24,7 +29,6 @@ GL_EXPORT extern const char kGLImplementationStubName[];
 GL_EXPORT extern const char kGLImplementationDisabledName[];
 
 GL_EXPORT extern const char kANGLEImplementationDefaultName[];
-GL_EXPORT extern const char kANGLEImplementationD3D9Name[];
 GL_EXPORT extern const char kANGLEImplementationD3D11Name[];
 GL_EXPORT extern const char kANGLEImplementationD3D11on12Name[];
 GL_EXPORT extern const char kANGLEImplementationD3D11WarpName[];
@@ -65,6 +69,9 @@ GL_EXPORT extern const char kEnableGPUServiceTracing[];
 GL_EXPORT extern const char kGpuNoContextLost[];
 
 GL_EXPORT extern const char kUseANGLE[];
+#if BUILDFLAG(USE_STATIC_ANGLE)
+GL_EXPORT extern const char kUseDynamicAngle[];
+#endif
 GL_EXPORT extern const char kUseCmdDecoder[];
 GL_EXPORT extern const char kEnableANGLEFeatures[];
 GL_EXPORT extern const char kDisableANGLEFeatures[];
@@ -73,7 +80,6 @@ GL_EXPORT extern const char kTestGLLib[];
 GL_EXPORT extern const char kUseGpuInTests[];
 GL_EXPORT extern const char kEnableSgiVideoSync[];
 GL_EXPORT extern const char kDisableGLExtensions[];
-GL_EXPORT extern const char kEnableSwapBuffersWithBounds[];
 GL_EXPORT extern const char kDisableDirectComposition[];
 GL_EXPORT extern const char kEnableDirectCompositionVideoOverlays[];
 GL_EXPORT extern const char kUseAdapterLuid[];
@@ -94,6 +100,21 @@ GL_EXPORT extern const base::span<const char* const>
 GL_EXPORT extern const char kDisableAndroidNativeFenceSyncForTesting[];
 #endif
 
+#if BUILDFLAG(IS_WIN)
+// Report a fake vsync rate (in Hz) instead of the real display refresh rate,
+// skipping the wait on the real hardware vsync signal. E.g.
+// --fake-vsync-rate=240 paces BeginFrames as if the display were 240Hz,
+// regardless of what it actually supports, while still feeding the same
+// BeginFrame path a real vsync signal would. Implemented for Windows only;
+// other platforms will get equivalent support in the future.
+GL_EXPORT extern const char kFakeVsyncRate[];
+
+// Returns the fake vsync interval requested via kFakeVsyncRate on the
+// command line, or nullopt if the switch isn't present or isn't a valid
+// positive rate.
+GL_EXPORT std::optional<base::TimeDelta> GetFakeVsyncIntervalFromCommandLine();
+#endif
+
 }  // namespace switches
 
 namespace features {
@@ -101,7 +122,6 @@ namespace features {
 GL_EXPORT BASE_DECLARE_FEATURE(kDCompDebugVisualization);
 GL_EXPORT BASE_DECLARE_FEATURE(kDCompTripleBufferVideoSwapChain);
 GL_EXPORT BASE_DECLARE_FEATURE(kDirectCompositionSoftwareOverlays);
-GL_EXPORT BASE_DECLARE_FEATURE(kEarlyFullScreenVideoOptimization);
 GL_EXPORT BASE_DECLARE_FEATURE(kDirectCompositionLetterboxVideoOptimization);
 GL_EXPORT BASE_DECLARE_FEATURE(kDirectCompositionUnlimitedOverlays);
 GL_EXPORT BASE_DECLARE_FEATURE(kDesktopPlaneRemovalForMFFullScreenLetterbox);

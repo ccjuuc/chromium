@@ -18,6 +18,7 @@
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 
@@ -25,7 +26,8 @@ namespace new_tab_footer {
 
 NewTabFooterController::NewTabFooterController(
     Profile* profile,
-    std::vector<ContentsContainerView*> contents_container_views)
+    const std::vector<raw_ptr<ContentsContainerView, DanglingUntriaged>>&
+        contents_container_views)
     : profile_(profile) {
   for (ContentsContainerView* contents_container_view :
        contents_container_views) {
@@ -144,7 +146,7 @@ void NewTabFooterController::ContentsViewFooterCotroller::
   const bool show_extension = ShouldShowExtensionFooter(url);
   const bool show = show_managed || show_extension;
   if (show) {
-    footer_->ShowUI(load_start_timestamp, url);
+    footer_->ShowUI(load_start_timestamp, url, web_contents()->GetWeakPtr());
   } else {
     footer_->CloseUI();
   }
@@ -177,7 +179,7 @@ bool NewTabFooterController::ContentsViewFooterCotroller::
   if (owner_->skip_error_page_check_for_testing_) {
     return false;
   }
-  return web_contents()->GetSiteInstance()->GetSiteURL().SchemeIs(
+  return web_contents()->GetSiteInstance()->GetSecurityPrincipal().SchemeIs(
       content::kChromeErrorScheme);
 }
 

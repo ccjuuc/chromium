@@ -200,6 +200,13 @@ message IntelligentScanInfo {
     // The length of texts on the page is too short and will likely cause
     // hallucination.
     TEXT_TOO_SHORT = 5;
+    // The server side model is unavailable, which can be from a few reasons
+    // such as insufficient capacity.
+    SERVER_SIDE_MODEL_UNAVAILABLE = 6;
+    // The server side model could not create an output due to internal error.
+    SERVER_SIDE_MODEL_OUTPUT_MISSING = 7;
+    // The user has sent too many requests and has exceeded the daily quota.
+    SERVER_SIDE_MODEL_EXCEED_QUOTA = 8;
   }
   optional NoInfoReason no_info_reason = 3;
 
@@ -210,6 +217,9 @@ message IntelligentScanInfo {
 
   // The model type that the client uses to perform intelligent scan.
   optional IntelligentScanModelType model_type = 5;
+
+  // Scam score of the page, if it was detected.
+  optional float scam_score = 6;
 }
 
 message ClientPhishingRequest {
@@ -360,13 +370,21 @@ message ClientPhishingRequest {
   // the score meets the image embedding's minimum threshold.
   optional EmbeddingMatchMetadata target_image_embedding_score = 34;
 
-  // next available tag number: 35.
+  // The HTTP response code of the loaded page.
+  optional uint32 http_response_code = 35;
+
+  // next available tag number: 36.
 }
 
 message ClipboardExtractedData {
   repeated string suspicious_tokens = 1;
   optional bool is_first_token_suspicious = 2;
   optional bool is_last_token_suspicious = 3;
+  optional int32 payload_length = 4;
+  optional int32 total_parsed_tokens = 5;
+  repeated string urls = 6;
+  optional bool is_overall_suspicious = 7;
+  optional string content = 8;
 }
 
 // Verdict based on IntelligentScanInfo included in ClientPhishingRequest
@@ -375,6 +393,8 @@ enum IntelligentScanVerdict {
   INTELLIGENT_SCAN_VERDICT_SAFE = 1;
   SCAM_EXPERIMENT_VERDICT_1 = 2;
   SCAM_EXPERIMENT_VERDICT_2 = 3;
+  SCAM_EXPERIMENT_VERDICT_3 = 4;
+  SCAM_EXPERIMENT_VERDICT_4 = 5;
   SCAM_EXPERIMENT_CATCH_ALL_ENFORCEMENT = 999;
   SCAM_EXPERIMENT_CATCH_ALL_TELEMETRY = 1000;
 }
@@ -429,6 +449,7 @@ enum PreClassificationCheckResult {
 // This value must be kept in sync with those in
 // components/safe_browsing/content/common/safe_browsing.mojom. The enum
 // represents possible outcomes of the renderer-side classification.
+// LINT.IfChange(PhishingDetectorResult)
 enum PhishingDetectorResult {
   CLASSIFICATION_SUCCESS = 0;
   CLASSIFIER_NOT_READY = 1;
@@ -441,7 +462,9 @@ enum PhishingDetectorResult {
   DOM_EXTRACTION_FAILED = 8;
   TERM_EXTRACTION_FAILED = 9;
   VISUAL_EXTRACTION_FAILED = 10;
+  CLASSIFICATION_SKIPPED = 11;
 }
+// LINT.ThenChange(//tools/metrics/histograms/metadata/sb_client/enums.xml:ClientSidePhishingResult)
 
 // The referring app info that launches Chrome. Only used on Android.
 // This information may be spoofed so do not rely solely on its correctness
@@ -756,6 +779,20 @@ message VisualFeatures {
   // Using Rec 2020 color space:
   // https://en.wikipedia.org/wiki/Rec._2020
   optional BlurredImage image = 2;
+
+  // Downsampled if screenshot is larger than 4k (4096x2560px).
+  // There is no immediate plan to give users the ability to redact
+  // parts of the screenshot.
+  // The maximum screenshot size was chosen to match the maximum
+  // screenshot size in the Help>Report an issue... flow in
+  // take_screenshot.ts
+  message Screenshot {
+    optional int32 width = 1;
+    optional int32 height = 2;
+    optional bytes data = 3;
+  }
+
+  optional Screenshot high_res_screenshot = 3;
 }
 
 // This message encapsulates all the DOM features of the current page.
@@ -1203,6 +1240,32 @@ message ClientDownloadRequest {
   // 15 minutes in Chrome on Android, and it is not persistent across restarting
   // Chrome, and will be different for different Chrome profiles on the device.
   optional string rate_limiting_key = 99;
+
+  // Field 100 is reserved for server-side use and is never sent by the
+  // client.
+  reserved 100;
+
+  // This field is used to store information on installed antivirus products
+  // and is propagated to User Risky Activity (URA) reports. This info is used
+  // to understand the correlation between users disabling their antivirus
+  // software and Google accounts that have been compromised. This field is
+  // only populated for Enhanced Protection users on Windows.
+  message AntiVirusProduct {
+    enum AntiVirusState {
+      STATE_UNKNOWN = 0;
+      STATE_ON = 1;
+      STATE_OFF = 2;
+      STATE_SNOOZED = 3;
+      STATE_EXPIRED = 4;
+    }
+
+    optional string product_name = 1;
+    optional fixed32 product_name_hash = 2;
+    optional string product_version = 3;
+    optional fixed32 product_version_hash = 4;
+    optional AntiVirusState product_state = 5;
+  }
+  repeated AntiVirusProduct antivirus_products = 101;
 }
 
 message ReferrerChainOptions {
@@ -1339,6 +1402,8 @@ message ReferrerChainEntry {
   // next available tag number: 15.
 }  // End of ReferrerChainEntry
 
+// LINT.IfChange(ClientSideDetectionType)
+
 enum ClientSideDetectionType {
   CLIENT_SIDE_DETECTION_TYPE_UNSPECIFIED = 0;
   // Send a CSD request regardless of the client side model's score values.
@@ -1361,7 +1426,13 @@ enum ClientSideDetectionType {
   CREDIT_CARD_FORM = 9;
   // Image embedding matched.
   IMAGE_EMBEDDING_MATCH = 10;
+  // User reported an unsafe site.
+  USER_REPORT = 11;
+  // Unfamiliar login page triggered.
+  UNFAMILIAR_LOGIN_PAGE = 12;
 }
+
+// LINT.ThenChange(/tools/metrics/histograms/metadata/sb_client/enums.xml:ClientSideDetectionType,/tools/metrics/histograms/metadata/sb_client/histograms.xml:ClientSideDetectionRequestType)
 
 message ClientDownloadResponse {
   enum Verdict {
@@ -1610,8 +1681,7 @@ message ClientIncidentReport {
         optional string target_dll = 2;
       }
       repeated Patch patches = 3;
-      message NetworkProvider {}
-      repeated NetworkProvider network_providers = 4;
+      reserved 4;
       enum Channel {
         CHANNEL_UNKNOWN = 0;
         CHANNEL_CANARY = 1;
@@ -1899,6 +1969,10 @@ message ClientSafeBrowsingReportRequest {
     ANDROID_SAFEBROWSING = 8;
     // Client-side phishing.
     CLIENT_SIDE_DETECTION = 9;
+    // Glic Counter Abuse.
+    GLIC = 10;
+    // Native implementation of Safe Browsing API v5 protocol.
+    PVER5_NATIVE_LOCAL_BLOCKLIST = 11;
   }
 
   // The information propagated from the client about various environment
@@ -2734,6 +2808,63 @@ message ExtensionTelemetryReportRequest {
 
     optional DeclarativeNetRequestActionInfo
         declarative_net_request_action_info = 8;
+
+    // DOM access signal information for extension telemetry.
+    // This signal is created whenever an extension attempts to access the DOM
+    // of a web page.
+    message DOMAccessInfo {
+      message DOMAccess {
+        enum AccessType {
+          ACCESS_TYPE_UNSPECIFIED = 0;
+          // A read operation was performed on the DOM.
+          READ = 1;
+          // A write operation was performed on the DOM.
+          WRITE = 2;
+        }
+        // The name of the API used to access the DOM.
+        optional string api_name = 1;
+        // The URL of the page where the DOM was accessed.
+        optional string url = 2;
+        // The type of access that was performed.
+        optional AccessType access_type = 3;
+        // Deprecated: use timestamp_ms instead.
+        optional int64 timestamp_us = 4 [deprecated = true];
+        // The number of times this DOM access was performed.
+        optional uint32 count = 5;
+        // The timestamp of the latest API call (in milliseconds from the Unix
+        // epoch).
+        optional int64 timestamp_ms = 6;
+      }
+      repeated DOMAccess dom_accesses = 1;
+    }
+    optional DOMAccessInfo dom_access_info = 9;
+
+    // Script injection signal information for extension telemetry.
+    // This signal is created whenever an extension for example attempts to
+    // inject a script into a web page.
+    message ScriptInjectionInfo {
+      message ScriptInjection {
+        // The name of the API used to inject the script.
+        optional string api_name = 1;
+        // The arguments passed to the API.
+        optional string args = 2 [deprecated = true];
+        // The URL of the page where the script was injected.
+        optional string url = 3;
+        // Deprecated: use timestamp_ms instead.
+        optional int64 timestamp_us = 4 [deprecated = true];
+        // The arguments passed to the API.
+        repeated string args_list = 5;
+        // The URL extracted from the arguments, if any.
+        optional string arg_url = 6;
+        // The number of times this script injection was performed.
+        optional uint32 count = 7;
+        // The timestamp of the latest API call (in milliseconds from the Unix
+        // epoch).
+        optional int64 timestamp_ms = 8;
+      }
+      repeated ScriptInjection script_injections = 1;
+    }
+    optional ScriptInjectionInfo script_injection_info = 10;
   }
 
   // Single report structure consists of all the signals observed for a

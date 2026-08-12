@@ -8,6 +8,7 @@
 
 #include "base/strings/escape.h"
 #include "base/strings/utf_string_conversions.h"
+#include "build/android_buildflags.h"
 #include "components/dom_distiller/core/url_utils.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_types.h"
@@ -17,26 +18,39 @@
 #include "components/omnibox/browser/autocomplete_match_classification.h"
 #include "components/omnibox/browser/autocomplete_provider_client.h"
 #include "components/omnibox/browser/autocomplete_provider_listener.h"
+#include "components/omnibox/browser/page_classification_functions.h"
 #include "components/omnibox/browser/suggestion_group_util.h"
 #include "components/omnibox/browser/verbatim_match.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/url_formatter/url_formatter.h"
+#include "ui/base/device_form_factor.h"
 
 namespace {
 constexpr bool is_android = !!BUILDFLAG(IS_ANDROID);
+constexpr bool is_desktop_android = !!BUILDFLAG(IS_DESKTOP_ANDROID);
 
 // Returns whether specific context is eligible for a verbatim match.
-// Only offer verbatim match on a site visit and SRP (no NTP etc).
+// Offers verbatim match for:
+// 1) a site visit and SRP (no NTP etc).
+// 2) A composebox.
 bool IsVerbatimMatchEligible(
     metrics::OmniboxEventProto::PageClassification context) {
   using OEP = metrics::OmniboxEventProto;
-  // Only offer verbatim match on a site visit and SRP (no NTP etc).
+
+  if (context == OEP::ANDROID_SEARCH_WIDGET ||
+      context == OEP::ANDROID_SHORTCUTS_WIDGET ||
+      omnibox::IsComposebox(context)) {
+    return true;
+  }
+
+  if (is_desktop_android) {
+    return false;
+  }
+
   return context == OEP::SEARCH_RESULT_PAGE_DOING_SEARCH_TERM_REPLACEMENT ||
          context == OEP::SEARCH_RESULT_PAGE_NO_SEARCH_TERM_REPLACEMENT ||
          context == OEP::SEARCH_RESULT_PAGE_ON_CCT ||
-         context == OEP::ANDROID_SEARCH_WIDGET ||
-         context == OEP::ANDROID_SHORTCUTS_WIDGET ||
          context == OEP::OTHER_ON_CCT || context == OEP::OTHER;
 }
 }  // namespace
@@ -63,11 +77,22 @@ void ZeroSuggestVerbatimMatchProvider::Start(const AutocompleteInput& input,
   const auto& page_url = input.current_url();
   if (input.type() != metrics::OmniboxInputType::EMPTY &&
       !(page_url.is_valid() &&
-        ((page_url.GetScheme() == url::kHttpScheme) ||
-         (page_url.GetScheme() == url::kHttpsScheme) ||
-         (page_url.GetScheme() == url::kAboutScheme) ||
-         (page_url.GetScheme() ==
+        ((page_url.scheme() == url::kHttpScheme) ||
+         (page_url.scheme() == url::kHttpsScheme) ||
+         (page_url.scheme() == url::kAboutScheme) ||
+         (page_url.scheme() ==
           client_->GetEmbedderRepresentationOfAboutScheme())))) {
+    return;
+  }
+
+  // For composebox only, create verbatim match if there are context inputs
+  // in zero suggest.
+  if (omnibox::IsComposebox(input.current_page_classification())) {
+    if (base::FeatureList::IsEnabled(
+            omnibox::kComposeboxVerbatimMatchZeroSuggest) &&
+        input.lens_overlay_suggest_inputs().has_value()) {
+      CreateVerbatimMatchForComposebox(input);
+    }
     return;
   }
 
@@ -110,6 +135,23 @@ void ZeroSuggestVerbatimMatchProvider::OnPageTitleRetrieved(
   CreateVerbatimMatch(input, result.row.title());
 }
 
+void ZeroSuggestVerbatimMatchProvider::CreateVerbatimMatchForComposebox(
+    const AutocompleteInput& input) {
+  AutocompleteInput verbatim_input = input;
+  verbatim_input.set_prevent_inline_autocomplete(true);
+  verbatim_input.set_allow_exact_keyword_match(false);
+
+  AutocompleteMatch match =
+      VerbatimMatchForContext(this, client_, verbatim_input,
+                              omnibox::kVerbatimMatchZeroSuggestRelevance);
+
+  // Will only be valid if there's a TemplateURLService and DSE.
+  if (match.destination_url.is_valid()) {
+    match.suggestion_group_id = omnibox::GROUP_SEARCH;
+    matches_.push_back(std::move(match));
+  }
+}
+
 void ZeroSuggestVerbatimMatchProvider::CreateVerbatimMatch(
     const AutocompleteInput& input,
     std::u16string page_title) {
@@ -150,6 +192,7 @@ void ZeroSuggestVerbatimMatchProvider::CreateVerbatimMatch(
         dse->ExtractSearchTermsFromURL(match.destination_url,
                                        url_service->search_terms_data(),
                                        &match.contents);
+        match.contents = AutocompleteInput::SanitizeString(match.contents);
         // Upgrade Verbatim Match to a SEARCH_WHAT_YOU_TYPED.
         match.type = AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED;
         match.keyword = dse->keyword();

@@ -23,7 +23,6 @@ namespace {
 using autofill::PaymentsDataChangedWaiter;
 using autofill::PaymentsDataManager;
 using autofill::ServerCvc;
-using syncer::kSyncAutofillWalletCredentialData;
 using wallet_helper::CreateDefaultSyncWalletCard;
 using wallet_helper::CreateDefaultSyncWalletCredential;
 using wallet_helper::CreateSyncPaymentsCustomerData;
@@ -83,9 +82,7 @@ class SingleClientWalletCredentialSyncTest
       public testing::WithParamInterface<SyncTest::SetupSyncMode> {
  public:
   SingleClientWalletCredentialSyncTest() : SyncTest(SINGLE_CLIENT) {
-    std::vector<base::test::FeatureRef> enabled_features = {
-        kSyncAutofillWalletCredentialData,
-        autofill::features::kAutofillEnableCvcStorageAndFilling};
+    std::vector<base::test::FeatureRef> enabled_features;
     if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
       enabled_features.push_back(syncer::kReplaceSyncPromosWithSignInPromos);
     }
@@ -183,11 +180,10 @@ IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest, EnabledByDefault) {
 IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
                        DownloadCardCredential) {
   SetDefaultWalletCredentialOnFakeServer();
-  GetFakeServer()->SetWalletData({CreateDefaultSyncWalletCard()});
+  wallet_helper::SetWalletData(GetFakeServer(),
+                               {CreateDefaultSyncWalletCard()});
 
-  ASSERT_TRUE(SetupClients());
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+  ASSERT_TRUE(SignIn());
   WaitForCvcOnCard(GetPaymentsDataManager(0));
 
   ASSERT_EQ(syncer::SyncService::TransportState::ACTIVE,
@@ -223,11 +219,10 @@ IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
 IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
                        ClearOnSignOutAndDownstreamOnSignIn) {
   SetDefaultWalletCredentialOnFakeServer();
-  GetFakeServer()->SetWalletData({CreateDefaultSyncWalletCard()});
+  wallet_helper::SetWalletData(GetFakeServer(),
+                               {CreateDefaultSyncWalletCard()});
 
-  ASSERT_TRUE(SetupClients());
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+  ASSERT_TRUE(SignIn());
   WaitForCvcOnCard(GetPaymentsDataManager(0));
 
   ASSERT_EQ(syncer::SyncService::TransportState::ACTIVE,
@@ -280,7 +275,8 @@ IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
            .mutable_specifics()
            ->mutable_autofill_wallet_credential();
 
-  GetFakeServer()->SetWalletData(
+  wallet_helper::SetWalletData(
+      GetFakeServer(),
       {CreateSyncWalletCard(
            /*name=*/"new-card", /*last_four=*/"0002", kDefaultBillingAddressID,
            /*nickname=*/"", /*instrument_id=*/9),
@@ -294,8 +290,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
           entity_specifics_2, /*creation_time=*/1000,
           /*last_modified_time=*/0));
 
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+  ASSERT_TRUE(SignIn());
   WaitForCvcOnCard(GetPaymentsDataManager(0));
 
   ASSERT_EQ(syncer::SyncService::TransportState::ACTIVE,
@@ -330,7 +325,8 @@ IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
 IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
                        CorrectCvcSyncAttachedToCardEntity) {
   SetDefaultWalletCredentialOnFakeServer();
-  GetFakeServer()->SetWalletData(
+  wallet_helper::SetWalletData(
+      GetFakeServer(),
       {CreateDefaultSyncWalletCard(),
        CreateSyncWalletCard(
            /*name=*/"new-card", /*last_four=*/"0002", kDefaultBillingAddressID,
@@ -338,9 +334,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
        CreateSyncPaymentsCustomerData(
            /*customer_id=*/"different")});
 
-  ASSERT_TRUE(SetupClients());
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+  ASSERT_TRUE(SignIn());
   WaitForCvcOnCard(GetPaymentsDataManager(0));
 
   ASSERT_EQ(syncer::SyncService::TransportState::ACTIVE,
@@ -381,7 +375,8 @@ IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
 // user signs out.
 IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest, ClearOnSignOut) {
   SetDefaultWalletCredentialOnFakeServer();
-  GetFakeServer()->SetWalletData({CreateDefaultSyncWalletCard()});
+  wallet_helper::SetWalletData(GetFakeServer(),
+                               {CreateDefaultSyncWalletCard()});
   ASSERT_TRUE(SetupSync());
 
   PaymentsDataManager* paydm = GetPaymentsDataManager(0);
@@ -404,11 +399,10 @@ IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest, ClearOnSignOut) {
 IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
                        ClearOnSignOutFromTransportMode) {
   SetDefaultWalletCredentialOnFakeServer();
-  GetFakeServer()->SetWalletData({CreateDefaultSyncWalletCard()});
+  wallet_helper::SetWalletData(GetFakeServer(),
+                               {CreateDefaultSyncWalletCard()});
 
-  ASSERT_TRUE(SetupClients());
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+  ASSERT_TRUE(SignIn());
   WaitForCvcOnCard(GetPaymentsDataManager(0));
 
   ASSERT_EQ(syncer::SyncService::TransportState::ACTIVE,
@@ -438,7 +432,8 @@ IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
 IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
                        ClearOnDisablePaymentsSync) {
   SetDefaultWalletCredentialOnFakeServer();
-  GetFakeServer()->SetWalletData({CreateDefaultSyncWalletCard()});
+  wallet_helper::SetWalletData(GetFakeServer(),
+                               {CreateDefaultSyncWalletCard()});
   ASSERT_TRUE(SetupSync());
 
   PaymentsDataManager* paydm = GetPaymentsDataManager(0);
@@ -473,7 +468,8 @@ IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
 IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
                        ClearOnSyncPaused) {
   SetDefaultWalletCredentialOnFakeServer();
-  GetFakeServer()->SetWalletData({CreateDefaultSyncWalletCard()});
+  wallet_helper::SetWalletData(GetFakeServer(),
+                               {CreateDefaultSyncWalletCard()});
   ASSERT_TRUE(SetupSync());
 
   PaymentsDataManager* paydm = GetPaymentsDataManager(0);
@@ -513,7 +509,8 @@ IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
 IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
                        NewSyncDataShouldBeIncremental) {
   SetDefaultWalletCredentialOnFakeServer();
-  GetFakeServer()->SetWalletData(
+  wallet_helper::SetWalletData(
+      GetFakeServer(),
       {CreateDefaultSyncWalletCard(),
        CreateSyncWalletCard(/*name=*/"card-2", /*last_four=*/"0001",
                             kDefaultBillingAddressID,
@@ -572,7 +569,8 @@ IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
 IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
                        ClearOnDisableWalletSync) {
   SetDefaultWalletCredentialOnFakeServer();
-  GetFakeServer()->SetWalletData({CreateDefaultSyncWalletCard()});
+  wallet_helper::SetWalletData(GetFakeServer(),
+                               {CreateDefaultSyncWalletCard()});
   ASSERT_TRUE(SetupSync());
 
   PaymentsDataManager* paydm = GetPaymentsDataManager(0);
@@ -599,7 +597,8 @@ IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
                        ReconcileServerCvcForWalletCards) {
   // Set a wallet card on the fake server. This card will be synced first to the
   // client.
-  GetFakeServer()->SetWalletData(
+  wallet_helper::SetWalletData(
+      GetFakeServer(),
       {CreateSyncWalletCard(/*name=*/"card-1", /*last_four=*/"0001",
                             kDefaultBillingAddressID, /*nickname=*/"",
                             /*instrument_id=*/1)});
@@ -628,7 +627,8 @@ IN_PROC_BROWSER_TEST_P(SingleClientWalletCredentialSyncTest,
 
   // Creating an update for the card to force a sync of the new data and trigger
   // the reconcile flow on the wallet sync bridge.
-  GetFakeServer()->SetWalletData(
+  wallet_helper::SetWalletData(
+      GetFakeServer(),
       {CreateSyncWalletCard(/*name=*/"card-1-updated", /*last_four=*/"0001",
                             kDefaultBillingAddressID, /*nickname=*/"nickname",
                             /*instrument_id=*/1),

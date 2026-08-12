@@ -5,7 +5,6 @@
 #include "components/viz/test/test_gles2_interface.h"
 
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/heap_array.h"
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
@@ -112,7 +111,7 @@ GLuint TestGLES2Interface::CreateProgram() {
 void TestGLES2Interface::BindTexture(GLenum target, GLuint texture) {
   if (!texture)
     return;
-  DCHECK(base::Contains(textures_, texture));
+  DCHECK(textures_.contains(texture));
   used_textures_.insert(texture);
 }
 
@@ -320,9 +319,10 @@ void TestGLES2Interface::GenSyncTokenCHROMIUM(GLbyte* sync_token) {
   // of CommandBufferProxyImpl.
   if (context_lost_)
     return;
-  gpu::SyncToken sync_token_data(gpu::CommandBufferNamespace::GPU_IO,
-                                 gpu::CommandBufferId(),
-                                 next_insert_fence_sync_++);
+  gpu::SyncToken sync_token_data(
+      gpu::CommandBufferNamespace::GPU_IO,
+      gpu::CommandBufferId::FromUnsafeValue(test_command_buffer_id_),
+      next_insert_fence_sync_++);
   sync_token_data.SetVerifyFlush();
   UNSAFE_TODO(memcpy(sync_token, &sync_token_data, sizeof(sync_token_data)));
 }
@@ -438,16 +438,6 @@ void TestGLES2Interface::set_max_texture_size(int size) {
   test_capabilities_.max_texture_size = size;
 }
 
-void TestGLES2Interface::set_supports_gpu_memory_buffer_format(
-    gfx::BufferFormat format,
-    bool support) {
-  if (support) {
-    test_capabilities_.gpu_memory_buffer_formats.Put(format);
-  } else {
-    test_capabilities_.gpu_memory_buffer_formats.Remove(format);
-  }
-}
-
 void TestGLES2Interface::set_supports_texture_rg(bool support) {
   test_capabilities_.texture_rg = support;
 }
@@ -510,7 +500,7 @@ GLuint TestGLES2Interface::NextFramebufferId() {
 }
 
 void TestGLES2Interface::RetireFramebufferId(GLuint id) {
-  DCHECK(base::Contains(framebuffer_set_, id));
+  DCHECK(framebuffer_set_.contains(id));
   framebuffer_set_.erase(id);
 }
 
@@ -523,7 +513,7 @@ GLuint TestGLES2Interface::NextRenderbufferId() {
 }
 
 void TestGLES2Interface::RetireRenderbufferId(GLuint id) {
-  DCHECK(base::Contains(renderbuffer_set_, id));
+  DCHECK(renderbuffer_set_.contains(id));
   renderbuffer_set_.erase(id);
 }
 

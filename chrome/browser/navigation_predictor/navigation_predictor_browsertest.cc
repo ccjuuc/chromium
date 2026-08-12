@@ -562,7 +562,12 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest,
 
   auto entries = test_ukm_recorder->GetMergedEntriesByName(
       ukm::builders::PageLoad::kEntryName);
-  EXPECT_EQ(1u, entries.size());
+  // Check that the UKM recorder is actually alive and capturing data.
+  // We use EXPECT_GE rather than EXPECT_EQ(1) because other browser
+  // features (e.g. InitialWebUI, WebUIReloadButton) might cause background
+  // navigations that result in extra PageLoad entries. The exact number
+  // doesn't matter, as long as we verify no clicks are logged below.
+  EXPECT_GE(entries.size(), 1u);
 
   // Make sure no click has been logged.
   entries = test_ukm_recorder->GetMergedEntriesByName(
@@ -606,7 +611,7 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest, SingleObserver) {
 
   NavigationPredictorKeyedService* service =
       NavigationPredictorKeyedServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   EXPECT_NE(nullptr, service);
   service->AddObserver(&observer);
 
@@ -640,7 +645,7 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest,
 
   NavigationPredictorKeyedService* service =
       NavigationPredictorKeyedServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   EXPECT_NE(nullptr, service);
   service->AddObserver(&observer);
 
@@ -672,7 +677,7 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest, TwoObservers) {
 
   NavigationPredictorKeyedService* service =
       NavigationPredictorKeyedServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   service->AddObserver(&observer_1);
   service->AddObserver(&observer_2);
 
@@ -711,7 +716,7 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest, Incognito) {
   Browser* incognito = CreateIncognitoBrowser();
   NavigationPredictorKeyedService* incognito_service =
       NavigationPredictorKeyedServiceFactory::GetForProfile(
-          incognito->profile());
+          incognito->GetProfile());
   EXPECT_EQ(nullptr, incognito_service);
 }
 
@@ -792,7 +797,7 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorPrerenderBrowserTest,
   // Start prerendering. This shouldn't create a NavigationPredictor instance.
   // If it happens, the constructor of NavigationPredictor is called for the
   // non-primary page and the DCHECK there should fail.
-  content::FrameTreeNodeId host_id = prerender_test_helper().AddPrerender(url);
+  content::PrerenderHostId host_id = prerender_test_helper().AddPrerender(url);
   content::test::PrerenderHostObserver host_observer(*GetWebContents(),
                                                      host_id);
   EXPECT_FALSE(host_observer.was_activated());

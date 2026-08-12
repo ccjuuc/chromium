@@ -17,8 +17,8 @@
 #include "base/time/clock.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolation_data.h"
 #include "chrome/browser/web_applications/locks/all_apps_lock.h"
+#include "chrome/browser/web_applications/model/isolation_data.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/webapps/common/web_app_id.h"
@@ -72,7 +72,7 @@ class IsolatedWebAppsWindowOpenPermissionService : public KeyedService {
  private:
   void RetrieveNotificationStates();
   void OnAllAppsLockAcquiredForStateRetrieval(web_app::AllAppsLock& lock,
-                                              base::Value::Dict& debug_value);
+                                              base::DictValue& debug_value);
 
   void RegisterFirstTimeActiveAppNotification(const webapps::AppId& app_id);
   void CreateAndDisplayNotification(const webapps::AppId& app_id);

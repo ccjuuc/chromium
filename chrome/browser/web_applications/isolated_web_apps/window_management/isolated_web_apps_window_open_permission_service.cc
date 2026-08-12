@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "base/check_is_test.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/i18n/message_formatter.h"
 #include "base/strings/stringprintf.h"
@@ -22,10 +21,9 @@
 #include "chrome/browser/notifications/notification_display_service.h"
 #include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/notifications/notification_handler.h"
-#include "chrome/browser/ui/web_applications/app_browser_controller.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolation_data.h"
 #include "chrome/browser/web_applications/isolated_web_apps/window_management/isolated_web_apps_window_open_permission_service_delegate.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
+#include "chrome/browser/web_applications/model/isolation_data.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
@@ -64,20 +62,10 @@ std::string GetNotificationIdForApp(const webapps::AppId& app_id) {
 
 }  // namespace
 
-bool ShouldShowNotificationForWindowOpen(const web_app::WebApp& web_app) {
-  if (!web_app.isolation_data()) {
-    return false;
-  }
-
-  const bool is_managed =
-      web_app.GetSources().HasAny({web_app::WebAppManagement::kKiosk,
-                                   web_app::WebAppManagement::kIwaShimlessRma,
-                                   web_app::WebAppManagement::kIwaPolicy});
-  if (is_managed) {
-    return false;
-  }
-  if (const auto& state =
-          web_app.isolation_data()->opened_tabs_counter_notification_state()) {
+bool ShouldShowNotificationForWindowOpen(
+    const std::optional<IsolationData::OpenedTabsCounterNotificationState>&
+        state) {
+  if (state) {
     return !state->acknowledged() &&
            (state->times_shown() < kMaxNotificationShowCount);
   }
@@ -106,12 +94,12 @@ void IsolatedWebAppsWindowOpenPermissionService::RetrieveNotificationStates() {
 
 void IsolatedWebAppsWindowOpenPermissionService::
     OnAllAppsLockAcquiredForStateRetrieval(web_app::AllAppsLock& lock,
-                                           base::Value::Dict& debug_value) {
-  for (const WebApp& web_app :
-       lock.registrar().GetApps(WebAppFilter::IsIsolatedApp())) {
+                                           base::DictValue& debug_value) {
+  for (const WebApp& web_app : lock.registrar().GetApps(
+           WebAppFilter::IsIsolatedWebAppWithOnlyUserManagement())) {
     const auto& state =
         web_app.isolation_data()->opened_tabs_counter_notification_state();
-    if (state && ShouldShowNotificationForWindowOpen(web_app)) {
+    if (state && ShouldShowNotificationForWindowOpen(state)) {
       notification_states_cache_.emplace(web_app.app_id(), *state);
     }
   }
@@ -136,10 +124,12 @@ void IsolatedWebAppsWindowOpenPermissionService::Shutdown() {
 
 void IsolatedWebAppsWindowOpenPermissionService::OnWebContentsCreated(
     const webapps::AppId& opener_app_id) {
-  const web_app::WebApp* web_app =
-      provider()->registrar_unsafe().GetAppById(opener_app_id);
+  const web_app::WebApp* iwa = provider()->registrar_unsafe().GetAppById(
+      opener_app_id, WebAppFilter::IsIsolatedWebAppWithOnlyUserManagement());
 
-  if (!web_app || !ShouldShowNotificationForWindowOpen(*web_app)) {
+  if (!iwa ||
+      !ShouldShowNotificationForWindowOpen(
+          iwa->isolation_data()->opened_tabs_counter_notification_state())) {
     return;
   }
 
@@ -248,7 +238,7 @@ void IsolatedWebAppsWindowOpenPermissionService::PersistNotificationState(
           [](const webapps::AppId& app_id,
              const web_app::IsolationData::OpenedTabsCounterNotificationState&
                  notification_state,
-             web_app::AppLock& lock, base::Value::Dict& debug_value) {
+             web_app::AppLock& lock, base::DictValue& debug_value) {
             web_app::ScopedRegistryUpdate update =
                 lock.sync_bridge().BeginUpdate();
 

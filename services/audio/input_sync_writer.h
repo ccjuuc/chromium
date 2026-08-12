@@ -12,9 +12,11 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/unsafe_shared_memory_region.h"
 #include "base/sync_socket.h"
 #include "base/time/time.h"
+#include "base/unguessable_token.h"
 #include "build/build_config.h"
 #include "input_glitch_counter.h"
 #include "media/base/audio_bus.h"
@@ -108,6 +110,8 @@ class InputSyncWriter final : public InputController::SyncWriter {
   // Helper method for creating internal log messages prefixed with "AISW::".
   PRINTF_FORMAT(2, 3) void SendLogMessage(const char* format, ...);
 
+  const base::UnguessableToken id_;
+
   const base::RepeatingCallback<void(const std::string&)> log_callback_;
 
   // Socket used to signal that audio data is ready.
@@ -159,6 +163,9 @@ class InputSyncWriter final : public InputController::SyncWriter {
   // destructor.
   std::vector<std::unique_ptr<media::AudioBus>> audio_buses_;
 
+  // Vector of pointers to the AudioInputBuffers in the shared memory.
+  std::vector<raw_ptr<media::AudioInputBuffer>> input_buffers_;
+
   // Fifo for audio that is used in case there isn't room in the shared memory.
   // This can for example happen under load when the consumer side is starved.
   // It should ideally be rare, but we need to guarantee that the data arrives
@@ -190,10 +197,6 @@ class InputSyncWriter final : public InputController::SyncWriter {
 
   // Glitch info that has yet to be successfully communicated to the renderer.
   media::AudioGlitchInfo pending_glitch_info_;
-
-  // Enables an experimental synchronization model where consumer side puts read
-  // confirmations in shared memory instead of sending socket messages.
-  const bool confirm_reads_via_shmem_;
 
   // Represents the glitch info of one dropped buffer.
   const media::AudioGlitchInfo dropped_buffer_glitch_;

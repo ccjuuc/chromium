@@ -81,7 +81,6 @@ class TestFontSelector : public FontSelector {
                     const AtomicString& family_name,
                     const FontDataForRangeSet&) override {}
 
-  unsigned Version() const override { return 0; }
   void FontCacheInvalidated() override {}
   void ReportNotDefGlyph() const override {}
   ExecutionContext* GetExecutionContext() const override { return nullptr; }
@@ -144,7 +143,7 @@ Font* CreateAhemFont(float size) {
                         size);
 }
 
-#if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
 void TestFontPrewarmer::PrewarmFamily(const WebString& family_name) {
   family_names_.push_back(family_name);
 }

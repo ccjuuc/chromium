@@ -18,10 +18,10 @@ import org.junit.runner.RunWith;
 
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.browserservices.intents.WebappConstants;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 
 /** Tests for splash screens with EXTRA_ICON specified in the Intent. */
 @RunWith(ChromeJUnit4ClassRunner.class)
@@ -39,7 +39,8 @@ public class WebappSplashScreenHomescreenIconTest {
                                 .createIntent()
                                 .putExtra(
                                         WebappConstants.EXTRA_ICON,
-                                        WebappActivityTestRule.TEST_ICON));
+                                        WebappActivityTestRule.TEST_ICON)
+                                .putExtra(WebappConstants.EXTRA_IS_ICON_TRUSTED, true));
     }
 
     @Test

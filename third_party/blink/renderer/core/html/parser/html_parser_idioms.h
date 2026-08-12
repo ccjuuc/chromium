@@ -38,7 +38,8 @@ namespace blink {
 class TextEncoding;
 
 // Strip leading and trailing whitespace as defined by the HTML specification.
-CORE_EXPORT String StripLeadingAndTrailingHTMLSpaces(const String&);
+// The resultant string shares the content of the input string.
+CORE_EXPORT StringView StripLeadingAndTrailingHtmlSpaces(const StringView&);
 
 // https://infra.spec.whatwg.org/#split-on-ascii-whitespace
 CORE_EXPORT Vector<String> SplitOnASCIIWhitespace(const String&);
@@ -72,6 +73,11 @@ bool ParseHTMLClampedNonNegativeInteger(const String&,
                                         unsigned min,
                                         unsigned max,
                                         unsigned&);
+
+// https://html.spec.whatwg.org/C/#rules-for-parsing-floating-point-number-values
+CORE_EXPORT double ParseHTMLFloatingPointNumber(
+    const String&,
+    double fallback_value = std::numeric_limits<double>::quiet_NaN());
 
 // https://html.spec.whatwg.org/C/#rules-for-parsing-a-list-of-floating-point-numbers
 CORE_EXPORT Vector<double> ParseHTMLListOfFloatingPointNumbers(const String&);

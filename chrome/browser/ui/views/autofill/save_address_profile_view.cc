@@ -7,35 +7,24 @@
 #include <memory>
 #include <string>
 
-#include "base/logging.h"
-#include "base/strings/string_util.h"
 #include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/hats/hats_service.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
 #include "chrome/browser/ui/views/accessibility/theme_tracking_non_accessible_image_view.h"
 #include "chrome/browser/ui/views/autofill/autofill_bubble_utils.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/grit/theme_resources.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
-#include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/browser/geo/address_i18n.h"
-#include "components/autofill/core/browser/ui/addresses/autofill_address_util.h"
-#include "components/autofill/core/common/autofill_features.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/web_contents.h"
-#include "skia/ext/image_operations.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/canvas.h"
-#include "ui/gfx/color_utils.h"
 #include "ui/gfx/geometry/insets.h"
-#include "ui/gfx/geometry/point.h"
 #include "ui/gfx/image/canvas_image_source.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -193,8 +182,9 @@ SaveAddressProfileView::SaveAddressProfileView(
 
   std::u16string address = controller_->GetAddressSummary();
   if (!address.empty()) {
-    std::unique_ptr<views::ImageView> icon =
-        CreateAddressSectionIcon(vector_icons::kLocationOnIcon);
+    std::unique_ptr<views::ImageView> icon = CreateAddressSectionIcon(
+        ::features::IsRoundedIconsEnabled() ? vector_icons::kLocationOnIcon
+                                            : vector_icons::kLocationOnOldIcon);
     address_section_icons_.push_back(icon.get());
     AddAddressSection(/*parent_view=*/address_components_view_, std::move(icon),
                       CreateStreetAddressView(address));
@@ -202,8 +192,9 @@ SaveAddressProfileView::SaveAddressProfileView(
 
   std::u16string phone = controller_->GetProfilePhone();
   if (!phone.empty()) {
-    std::unique_ptr<views::ImageView> icon =
-        CreateAddressSectionIcon(vector_icons::kCallIcon);
+    std::unique_ptr<views::ImageView> icon = CreateAddressSectionIcon(
+        ::features::IsRoundedIconsEnabled() ? vector_icons::kCallFilledIcon
+                                            : vector_icons::kCallOldIcon);
     address_section_icons_.push_back(icon.get());
     AddAddressSection(
         /*parent_view=*/address_components_view_, std::move(icon), phone,
@@ -212,8 +203,9 @@ SaveAddressProfileView::SaveAddressProfileView(
 
   std::u16string email = controller_->GetProfileEmail();
   if (!email.empty()) {
-    std::unique_ptr<views::ImageView> icon =
-        CreateAddressSectionIcon(vector_icons::kEmailIcon);
+    std::unique_ptr<views::ImageView> icon = CreateAddressSectionIcon(
+        ::features::IsRoundedIconsEnabled() ? vector_icons::kMailFilledIcon
+                                            : vector_icons::kEmailOldIcon);
     address_section_icons_.push_back(icon.get());
     AddAddressSection(
         /*parent_view=*/address_components_view_, std::move(icon), email,

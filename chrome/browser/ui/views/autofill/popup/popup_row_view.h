@@ -13,7 +13,9 @@
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ui/autofill/next_idle_barrier.h"
+#include "chrome/browser/ui/views/autofill/popup/popup_interactive_row_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_view_utils.h"
+#include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/events/event_handler.h"
@@ -35,17 +37,10 @@ class PopupRowContentView;
 // responsible for the view layout. It expects a `PopupRowContentView` instead.
 // It also supports the expanding control depending on whether the suggestion
 // has children or not (see `Suggestion::children`).
-class PopupRowView : public views::View, public views::ViewObserver {
-  METADATA_HEADER(PopupRowView, views::View)
+class PopupRowView : public PopupInteractiveRowView,
+                     public views::ViewObserver {
+  METADATA_HEADER(PopupRowView, PopupInteractiveRowView)
  public:
-  // Enum class describing the different cells that a `PopupRowView` can
-  // contain.
-  enum class CellType {
-    // The cell containing the main content of the row.
-    kContent = 0,
-    // The cell containing the control elements (such as a delete button).
-    kControl = 1
-  };
 
   // Interface used to announce changes in selected cells to accessibility
   // frameworks.
@@ -99,9 +94,11 @@ class PopupRowView : public views::View, public views::ViewObserver {
   // views::ViewObserver:
   void OnViewFocused(views::View* focused_now) override;
 
-  // Gets and sets the selected cell within this row.
-  std::optional<CellType> GetSelectedCell() const { return selected_cell_; }
-  virtual void SetSelectedCell(std::optional<CellType> cell);
+  // PopupInteractiveRowView:
+  std::optional<CellType> GetSelectedCell() const override;
+  void SetSelectedCell(std::optional<CellType> cell) override;
+  bool HandleKeyPressEvent(const input::NativeWebKeyboardEvent& event) override;
+  bool IsSelectable() const override;
 
   // Sets whether the row's child suggestions are displayed in a sub-popup.
   // Note that the row doesn't control the sub-popup, but rather should be
@@ -111,12 +108,8 @@ class PopupRowView : public views::View, public views::ViewObserver {
   // Returns the control cell's bounds. The cell must be present.
   gfx::RectF GetControlCellBounds() const;
 
-  // Attempts to process a key press `event`. Returns true if it did (and the
-  // parent no longer needs to handle it).
-  virtual bool HandleKeyPressEvent(const input::NativeWebKeyboardEvent& event);
-
-  // Returns if the popup row is available for selection.
-  bool IsSelectable() const;
+  // Accepts the suggestion that corresponds to this view's line number.
+  bool Accept(AutofillMetrics::SuggestionAcceptedMethod method) const;
 
   // Returns the view representing the content area of the row.
   PopupRowContentView& GetContentView() { return *content_view_; }
@@ -186,24 +179,16 @@ class PopupRowView : public views::View, public views::ViewObserver {
   // has been moved into the item's screen bounds. For example, if the item is
   // hovered by the mouse at the time it's first shown, we want to ignore clicks
   // until the mouse has left and re-entered the bounds of the item
-  // (crbug.com/1240472, crbug.com/1241585, crbug.com/1287364).
+  // (crbug.com/40056900, crbug.com/40056936, crbug.com/40058496).
   // This is particularly relevant because mouse click interactions may be
   // processed with a delay, making it seem as if the two click interactions of
   // a double click were executed at intervals larger than the threshold (500ms)
-  // checked in the controller (crbug.com/1418837).
+  // checked in the controller (crbug.com/40063230).
   bool mouse_observed_outside_item_bounds_ = false;
 
-  // Whether the `mouse_observed_outside_item_bounds_` will be ignored or not.
-  // Today this happens when:
-  // 1. The AutofillSuggestionTriggerSource is `kManualFallbackAddress`. This is
-  // because in this situation even though the popup could appear behind the
-  // cursor, the user intention about opening it is explicit.
-  //
-  // 2. The suggestions are of autocomplete type and were regenerated due to a
-  // suggestion being removed. We want to ignore the check in this case because
-  // the cursor can be above the popup after a row is deleted. This however does
-  // not mean that the popup just showed up to the user so there is no need to
-  // move the cursor out and in.
+  // Whether `mouse_observed_outside_item_bounds_` should be ignored for this
+  // row. The policy is derived from the controller-level popup trigger and the
+  // row's suggestion type.
   const bool should_ignore_mouse_observed_outside_item_bounds_check_;
 
   // Whether the row's child suggestions (see `Suggestion::children`) are

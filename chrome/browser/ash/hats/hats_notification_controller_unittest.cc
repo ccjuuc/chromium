@@ -6,30 +6,30 @@
 
 #include <memory>
 
+#include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
+#include "base/check_deref.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/hats/hats_config.h"
-#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/prefs/browser_prefs.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/network/network_handler_test_helper.h"
 #include "chromeos/ash/components/network/network_state.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "components/sync_preferences/pref_service_mock_factory.h"
 #include "components/sync_preferences/pref_service_syncable.h"
-#include "components/user_manager/fake_user_manager.h"
-#include "components/user_manager/scoped_user_manager.h"
 #include "content/public/test/test_utils.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "net/base/url_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -55,12 +55,14 @@ const char kPsdValue1[] = "psdValue1";
 const char kPsdValue2[] = "psdValue2 =%^*$#&";
 const char kLocaleValue1[] = "locale1";
 const char kBrowserValue1[] = "browser1";
+const char kSecondUserEmail[] = "second-user@example.com";
+const char kSecondUserGaiaId[] = "fake-second-user-gaia";
 
 const ash::HatsConfig kNonPrioritizedTestConfig{
-    ::features::kHappinessTrackingSystem,
+    ash::features::kHappinessTrackingSystem,
     base::Days(7),
-    prefs::kHatsDeviceIsSelected,
-    prefs::kHatsSurveyCycleEndTimestamp,
+    ash::prefs::kHatsDeviceIsSelected,
+    ash::prefs::kHatsSurveyCycleEndTimestamp,
 };
 const char kFeatureNonPrioritizedCommandLine[] =
     "HappinessTrackingSystem:"
@@ -69,11 +71,11 @@ const char kFeatureNonPrioritizedCommandLine[] =
     "trigger_id/random_trigger_id_non_prio";
 
 const ash::HatsConfig kPrioritizedTestConfig{
-    ::features::kHappinessTrackingGeneralCameraPrioritized,
+    ash::features::kHappinessTrackingGeneralCameraPrioritized,
     base::Days(7),
-    prefs::kHatsGeneralCameraPrioritizedIsSelected,
-    prefs::kHatsGeneralCameraPrioritizedSurveyCycleEndTs,
-    prefs::kHatsGeneralCameraPrioritizedLastInteractionTimestamp,
+    ash::prefs::kHatsGeneralCameraPrioritizedIsSelected,
+    ash::prefs::kHatsGeneralCameraPrioritizedSurveyCycleEndTs,
+    ash::prefs::kHatsGeneralCameraPrioritizedLastInteractionTimestamp,
     base::Days(120)};
 const char kFeaturePrioritizedCommandLine[] =
     "HappinessTrackingGeneralCameraPrioritized:"
@@ -169,10 +171,15 @@ class HatsNotificationControllerTest
   }
 
   scoped_refptr<HatsNotificationController> InstantiateHatsController() {
+    return InstantiateHatsControllerForProfile(profile());
+  }
+
+  scoped_refptr<HatsNotificationController> InstantiateHatsControllerForProfile(
+      Profile* target_profile) {
     // The initialization will fail since the function IsNewDevice() will return
     // true.
     auto hats_notification_controller =
-        base::MakeRefCounted<HatsNotificationController>(profile(),
+        base::MakeRefCounted<HatsNotificationController>(target_profile,
                                                          kHatsGeneralSurvey);
 
     // HatsController::IsNewDevice() is run on a blocking thread.
@@ -199,6 +206,39 @@ class HatsNotificationControllerTest
     NetworkState network_state("");
     controller->PortalStateChanged(&network_state, portal_state);
     base::RunLoop().RunUntilIdle();
+  }
+
+  const user_manager::User& GetUser(Profile* target_profile) const {
+    return CHECK_DEREF(
+        BrowserContextHelper::Get()->GetUserByBrowserContext(target_profile));
+  }
+
+  std::string GetMessageCenterNotificationId(
+      const user_manager::User& target_user) const {
+    return HatsNotificationController::GetMessageCenterNotificationIdForTesting(
+        target_user);
+  }
+
+  const message_center::Notification* FindVisibleHatsNotification(
+      const std::string& notification_id) const {
+    return message_center::MessageCenter::Get()->FindVisibleNotificationById(
+        notification_id);
+  }
+
+  const message_center::Notification* FindHatsNotification(
+      const std::string& notification_id) const {
+    return message_center::MessageCenter::Get()->FindNotificationById(
+        notification_id);
+  }
+
+  bool HasVisibleHatsNotification(const std::string& notification_id) const {
+    return FindVisibleHatsNotification(notification_id) != nullptr;
+  }
+
+  void RemoveHatsNotification(const std::string& notification_id,
+                              bool by_user) {
+    message_center::MessageCenter::Get()->RemoveNotification(notification_id,
+                                                             by_user);
   }
 
   const raw_ref<const HatsConfig> GetHatsConfig() const {
@@ -238,70 +278,65 @@ TEST_F(HatsNotificationControllerTest, GetFormattedSiteContext) {
 }
 
 TEST_F(HatsNotificationControllerTest, NewDevice_ShouldNotShowNotification) {
+  const user_manager::User& user = GetUser(profile());
+  const std::string notification_id = GetMessageCenterNotificationId(user);
   int64_t initial_timestamp = base::Time::Now().ToInternalValue();
   PrefService* pref_service = profile()->GetPrefs();
-  pref_service->SetInt64(prefs::kHatsLastInteractionTimestamp,
+  pref_service->SetInt64(ash::prefs::kHatsLastInteractionTimestamp,
                          initial_timestamp);
 
   auto hats_notification_controller = InstantiateHatsController();
   hats_notification_controller->Initialize(true);
 
   int64_t current_timestamp =
-      pref_service->GetInt64(prefs::kHatsLastInteractionTimestamp);
+      pref_service->GetInt64(ash::prefs::kHatsLastInteractionTimestamp);
 
   // When the device is new, the controller does not begin initialization and
   // simply updates the timestamp to Time::Now().
   ASSERT_TRUE(base::Time::FromInternalValue(current_timestamp) >
               base::Time::FromInternalValue(initial_timestamp));
 
-  EXPECT_FALSE(
-      message_center::MessageCenter::Get()->FindVisibleNotificationById(
-          HatsNotificationController::kNotificationId));
+  EXPECT_FALSE(HasVisibleHatsNotification(notification_id));
 }
 
 TEST_F(HatsNotificationControllerTest, OldDevice_ShouldShowNotification) {
+  const user_manager::User& user = GetUser(profile());
+  const std::string notification_id = GetMessageCenterNotificationId(user);
   auto hats_notification_controller = InstantiateHatsController();
   hats_notification_controller->Initialize(false);
 
   // Ensure notification was launched to confirm initialization.
-  EXPECT_TRUE(message_center::MessageCenter::Get()->FindVisibleNotificationById(
-      HatsNotificationController::kNotificationId));
+  EXPECT_TRUE(HasVisibleHatsNotification(notification_id));
 
   // Simulate dismissing notification by the user to clean up the notification.
-  message_center::MessageCenter::Get()->RemoveNotification(
-      HatsNotificationController::kNotificationId, true /* by_user */);
+  RemoveHatsNotification(notification_id, true /* by_user */);
   // Verify it's gone from the message center.
-  EXPECT_FALSE(
-      message_center::MessageCenter::Get()->FindVisibleNotificationById(
-          HatsNotificationController::kNotificationId));
+  EXPECT_FALSE(HasVisibleHatsNotification(notification_id));
 }
 
 TEST_F(HatsNotificationControllerTest, NoInternet_DoNotShowNotification) {
+  const user_manager::User& user = GetUser(profile());
+  const std::string notification_id = GetMessageCenterNotificationId(user);
   auto hats_notification_controller = InstantiateHatsController();
 
   SendPortalState(hats_notification_controller,
                   NetworkState::PortalState::kUnknown);
-  EXPECT_FALSE(
-      message_center::MessageCenter::Get()->FindVisibleNotificationById(
-          HatsNotificationController::kNotificationId));
+  EXPECT_FALSE(HasVisibleHatsNotification(notification_id));
 
   SendPortalState(hats_notification_controller,
                   NetworkState::PortalState::kNoInternet);
-  EXPECT_FALSE(
-      message_center::MessageCenter::Get()->FindVisibleNotificationById(
-          HatsNotificationController::kNotificationId));
+  EXPECT_FALSE(HasVisibleHatsNotification(notification_id));
 
   SendPortalState(hats_notification_controller,
                   NetworkState::PortalState::kPortal);
-  EXPECT_FALSE(
-      message_center::MessageCenter::Get()->FindVisibleNotificationById(
-          HatsNotificationController::kNotificationId));
+  EXPECT_FALSE(HasVisibleHatsNotification(notification_id));
 }
 
 TEST_F(HatsNotificationControllerTest, DismissNotification_ShouldUpdatePref) {
   int64_t now_timestamp = base::Time::Now().ToInternalValue();
   PrefService* pref_service = profile()->GetPrefs();
-  pref_service->SetInt64(prefs::kHatsLastInteractionTimestamp, now_timestamp);
+  pref_service->SetInt64(ash::prefs::kHatsLastInteractionTimestamp,
+                         now_timestamp);
 
   auto hats_notification_controller = InstantiateHatsController();
 
@@ -309,7 +344,7 @@ TEST_F(HatsNotificationControllerTest, DismissNotification_ShouldUpdatePref) {
   hats_notification_controller->Close(true);
 
   int64_t new_timestamp =
-      pref_service->GetInt64(prefs::kHatsLastInteractionTimestamp);
+      pref_service->GetInt64(ash::prefs::kHatsLastInteractionTimestamp);
   // The flag should be updated to a new timestamp.
   EXPECT_TRUE(base::Time::FromInternalValue(new_timestamp) >
               base::Time::FromInternalValue(now_timestamp));
@@ -319,7 +354,7 @@ TEST_F(HatsNotificationControllerTest,
        DismissNotification_PrioritizedShouldUpdatePref) {
   base::Time now_timestamp = base::Time::Now();
   PrefService* pref_service = profile()->GetPrefs();
-  pref_service->SetInt64(prefs::kHatsLastInteractionTimestamp,
+  pref_service->SetInt64(ash::prefs::kHatsLastInteractionTimestamp,
                          now_timestamp.ToInternalValue());
 
   // Make sure time has actually advanced
@@ -336,56 +371,87 @@ TEST_F(HatsNotificationControllerTest,
   // The flag should be updated to a new timestamp.
   EXPECT_GT(survey_timestamp, now_timestamp);
 
-  base::Time global_timestamp =
-      pref_service->GetTime(prefs::kHatsPrioritizedLastInteractionTimestamp);
+  base::Time global_timestamp = pref_service->GetTime(
+      ash::prefs::kHatsPrioritizedLastInteractionTimestamp);
   // All prioritized HaTS has its own cooldown timestamp, should be updated.
   EXPECT_GT(global_timestamp, now_timestamp);
 
   // The general HaTS timestamp should not be changed.
   int64_t hats_timestamp =
-      pref_service->GetInt64(prefs::kHatsLastInteractionTimestamp);
+      pref_service->GetInt64(ash::prefs::kHatsLastInteractionTimestamp);
   EXPECT_EQ(base::Time::FromInternalValue(hats_timestamp), now_timestamp);
 }
 
 TEST_F(HatsNotificationControllerTest,
        Disconnected_RemoveNotification_Connected_AddNotification) {
+  const user_manager::User& user = GetUser(profile());
+  const std::string notification_id = GetMessageCenterNotificationId(user);
   auto hats_notification_controller = InstantiateHatsController();
 
   hats_notification_controller->Initialize(false);
 
   // Notification is launched.
-  EXPECT_TRUE(message_center::MessageCenter::Get()->FindVisibleNotificationById(
-      HatsNotificationController::kNotificationId));
+  EXPECT_TRUE(HasVisibleHatsNotification(notification_id));
 
   // Notification is removed when Internet connection is lost.
   SendPortalState(hats_notification_controller,
                   NetworkState::PortalState::kNoInternet);
-  EXPECT_FALSE(
-      message_center::MessageCenter::Get()->FindVisibleNotificationById(
-          HatsNotificationController::kNotificationId));
+  EXPECT_FALSE(HasVisibleHatsNotification(notification_id));
 
   // Notification is launched again when Internet connection is regained.
   SendPortalState(hats_notification_controller,
                   NetworkState::PortalState::kOnline);
-  EXPECT_TRUE(message_center::MessageCenter::Get()->FindVisibleNotificationById(
-      HatsNotificationController::kNotificationId));
+  EXPECT_TRUE(HasVisibleHatsNotification(notification_id));
 
   // Simulate dismissing notification by the user to clean up the notification.
-  message_center::MessageCenter::Get()->RemoveNotification(
-      HatsNotificationController::kNotificationId, true /* by_user */);
+  RemoveHatsNotification(notification_id, true /* by_user */);
   // Verify it's gone from the message center.
-  EXPECT_FALSE(
-      message_center::MessageCenter::Get()->FindVisibleNotificationById(
-          HatsNotificationController::kNotificationId));
+  EXPECT_FALSE(HasVisibleHatsNotification(notification_id));
+}
+
+TEST_F(HatsNotificationControllerTest,
+       ProfileScopedOfflineCleanupDoesNotRemoveOtherProfileNotification) {
+  Profile* first_profile = profile();
+  LogIn(kSecondUserEmail, GaiaId(kSecondUserGaiaId));
+  Profile* second_profile = CreateProfile(kSecondUserEmail);
+  const user_manager::User& first_user = GetUser(first_profile);
+  const user_manager::User& second_user = GetUser(second_profile);
+  auto first_controller = InstantiateHatsControllerForProfile(first_profile);
+  auto second_controller = InstantiateHatsControllerForProfile(second_profile);
+  const std::string first_notification_id =
+      GetMessageCenterNotificationId(first_user);
+  const std::string second_notification_id =
+      GetMessageCenterNotificationId(second_user);
+
+  SendPortalState(first_controller, NetworkState::PortalState::kOnline);
+  SendPortalState(second_controller, NetworkState::PortalState::kOnline);
+
+  EXPECT_NE(first_notification_id, second_notification_id);
+
+  const message_center::Notification* first_notification =
+      FindHatsNotification(first_notification_id);
+  const message_center::Notification* second_notification =
+      FindHatsNotification(second_notification_id);
+  ASSERT_TRUE(first_notification);
+  ASSERT_TRUE(second_notification);
+  EXPECT_EQ(first_profile->GetProfileUserName(),
+            first_notification->notifier_id().profile_id);
+  EXPECT_EQ(second_profile->GetProfileUserName(),
+            second_notification->notifier_id().profile_id);
+
+  SendPortalState(first_controller, NetworkState::PortalState::kNoInternet);
+
+  EXPECT_FALSE(FindHatsNotification(first_notification_id));
+  EXPECT_TRUE(FindHatsNotification(second_notification_id));
 }
 
 TEST_P(HatsNotificationControllerTest, ShouldShowSurveyToProfile) {
   // Insert the time values into prefs
   PrefService* pref_service = profile()->GetPrefs();
-  pref_service->SetTime(prefs::kHatsPrioritizedLastInteractionTimestamp,
+  pref_service->SetTime(ash::prefs::kHatsPrioritizedLastInteractionTimestamp,
                         base::Time::Now() - GetParam().prev_prio_hats);
   pref_service->SetInt64(
-      prefs::kHatsLastInteractionTimestamp,
+      ash::prefs::kHatsLastInteractionTimestamp,
       (base::Time::Now() - GetParam().prev_non_prio_hats).ToInternalValue());
 
   // Explanation by example:

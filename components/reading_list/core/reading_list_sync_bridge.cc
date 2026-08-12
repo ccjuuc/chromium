@@ -19,11 +19,11 @@
 #include "components/sync/model/data_type_local_change_processor.h"
 #include "components/sync/model/data_type_store.h"
 #include "components/sync/model/entity_change.h"
-#include "components/sync/model/in_memory_metadata_change_list.h"
 #include "components/sync/model/metadata_batch.h"
 #include "components/sync/model/mutable_data_batch.h"
 #include "components/sync/protocol/data_type_state.pb.h"
 #include "components/sync/protocol/data_type_state_helper.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 ReadingListSyncBridge::ReadingListSyncBridge(
     syncer::StorageType storage_type,
@@ -108,10 +108,6 @@ syncer::StorageType ReadingListSyncBridge::GetStorageTypeForUma() const {
   return storage_type_for_uma_;
 }
 
-std::unique_ptr<syncer::MetadataChangeList>
-ReadingListSyncBridge::CreateMetadataChangeList() {
-  return std::make_unique<syncer::InMemoryMetadataChangeList>();
-}
 
 // Perform the initial merge between local and sync data. This should only be
 // called when a data type is first enabled to start syncing, and there is no
@@ -132,7 +128,7 @@ std::optional<syncer::ModelError> ReadingListSyncBridge::MergeFullSyncData(
   DCHECK(model_);
 
   // Keep track of the last update of each item.
-  std::set<std::string> synced_entries;
+  absl::flat_hash_set<std::string> synced_entries;
   std::unique_ptr<ReadingListModelImpl::ScopedReadingListBatchUpdateImpl>
       model_batch_updates = model_->BeginBatchUpdatesWithSyncMetadata();
 
@@ -179,7 +175,7 @@ std::optional<syncer::ModelError> ReadingListSyncBridge::MergeFullSyncData(
   // Commit local only entries to server.
   for (const auto& url : model_->GetKeys()) {
     scoped_refptr<const ReadingListEntry> entry = model_->GetEntryByURL(url);
-    if (synced_entries.count(url.spec())) {
+    if (synced_entries.contains(url.spec())) {
       // Entry already exists and has been merged above.
       continue;
     }
@@ -327,9 +323,18 @@ void ReadingListSyncBridge::ApplyDisableSyncChanges(
       // |delete_metadata_change_list| represents), the actual reading list
       // entries need to be deleted. This function does both and is even
       // robust against orphan or unexpected data in storage.
-      model_->SyncDeleteAllEntriesAndSyncMetadata();
+      model_->SyncDeleteAllEntriesAndSyncMetadata(
+          std::move(delete_metadata_change_list));
       break;
   }
+}
+
+sync_pb::EntitySpecifics
+ReadingListSyncBridge::TrimAllSupportedFieldsFromRemoteSpecifics(
+    const sync_pb::EntitySpecifics& entity_specifics) const {
+  // Clears all fields by default to avoid the memory and I/O overhead of an
+  // additional copy of the data.
+  return sync_pb::EntitySpecifics();
 }
 
 bool ReadingListSyncBridge::IsEntityDataValid(
@@ -366,12 +371,14 @@ bool ReadingListSyncBridge::CompareEntriesForSync(
     if ((rhs.status() == sync_pb::ReadingListSpecifics::UNSEEN &&
          lhs.status() != sync_pb::ReadingListSpecifics::UNSEEN) ||
         (rhs.status() == sync_pb::ReadingListSpecifics::UNREAD &&
-         lhs.status() == sync_pb::ReadingListSpecifics::READ))
+         lhs.status() == sync_pb::ReadingListSpecifics::READ)) {
       return false;
+    }
   }
   if (rhs.update_title_time_us() == lhs.update_title_time_us()) {
-    if (rhs.title().compare(lhs.title()) < 0)
+    if (rhs.title().compare(lhs.title()) < 0) {
       return false;
+    }
   }
   if (rhs.creation_time_us() == lhs.creation_time_us()) {
     if (rhs.first_read_time_us() == 0 && lhs.first_read_time_us() != 0) {

@@ -4,12 +4,19 @@
 
 #import "ios/chrome/browser/context_menu/ui_bundled/image_preview_view_controller.h"
 
+#import <algorithm>
+
 #import "base/apple/foundation_util.h"
+#import "base/functional/bind.h"
 #import "base/metrics/histogram_functions.h"
 #import "base/strings/sys_string_conversions.h"
+#import "base/task/thread_pool.h"
 #import "base/timer/timer.h"
 #import "ios/chrome/browser/context_menu/ui_bundled/constants.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
+#import "ios/chrome/browser/shared/ui/util/image/image_util.h"
+#import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/web/model/image_fetch/image_fetch_tab_helper.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
@@ -20,6 +27,10 @@
 namespace {
 // Default time interval to wait before showing a spinner.
 constexpr base::TimeDelta kShowSpinnerDelay = base::Seconds(1);
+// Scale for downsampled preview images. Capped at 2x since all devices
+// supporting iOS 17+ are at least 2x, and the visual difference between
+// 2x and 3x is negligible for a context menu preview.
+constexpr CGFloat kPreviewImageScale = 2.0;
 }  // namespace
 
 @interface ImagePreviewViewController ()
@@ -28,6 +39,12 @@ constexpr base::TimeDelta kShowSpinnerDelay = base::Seconds(1);
 @implementation ImagePreviewViewController {
   // The URL of the image to load.
   NSURL* _imageURL;
+
+  // The frame ID of the subframe containing the image, if any.
+  NSString* _frameID;
+
+  // The origin of the subframe containing the image, if any.
+  url::Origin _frameOrigin;
 
   // Image transcoder used to convert untrusted image data into safe
   // locally-encoded image data, which can then be safely decoded using UIImage
@@ -52,11 +69,16 @@ constexpr base::TimeDelta kShowSpinnerDelay = base::Seconds(1);
   UIView* _spinnerView;
 }
 
-- (instancetype)initWithSrcURL:(NSURL*)URL webState:(web::WebState*)webState {
+- (instancetype)initWithSrcURL:(NSURL*)URL
+                      webState:(web::WebState*)webState
+                       frameID:(NSString*)frameID
+                   frameOrigin:(url::Origin)frameOrigin {
   self = [super initWithNibName:nil bundle:nil];
   if (self) {
     _imageURL = [URL copy];
     _webState = webState->GetWeakPtr();
+    _frameID = [frameID copy];
+    _frameOrigin = std::move(frameOrigin);
   }
   return self;
 }
@@ -67,9 +89,11 @@ constexpr base::TimeDelta kShowSpinnerDelay = base::Seconds(1);
   const GURL& lastCommittedURL = _webState->GetLastCommittedURL();
   web::Referrer referrer(lastCommittedURL, web::ReferrerPolicyDefault);
 
+  std::string frameIDStr = _frameID ? base::SysNSStringToUTF8(_frameID) : "";
+
   __weak __typeof(self) weakSelf = self;
   imageFetcher->GetImageData(net::GURLWithNSURL(_imageURL), referrer,
-                             ^(NSData* data) {
+                             frameIDStr, _frameOrigin, ^(NSData* data) {
                                [weakSelf imageDataReceived:data];
                              });
 }
@@ -108,12 +132,37 @@ constexpr base::TimeDelta kShowSpinnerDelay = base::Seconds(1);
   }
   _spinnerView.hidden = YES;
 
-  UIImage* image = [UIImage imageWithData:safeImageData];
   base::UmaHistogramBoolean("IOS.ContextMenu.ImagePreviewDisplayed", !error);
   if (!error) {
-    _imageView.image = image;
-    _imageView.hidden = NO;
-    self.preferredContentSize = image.size;
+    if (base::FeatureList::IsEnabled(kContextMenuPreviewDownsampleImage)) {
+      CGSize originalPixelSize = ImageSizeFromData(safeImageData);
+      CGFloat screenWidth =
+          self.view.window.windowScene.screen.bounds.size.width;
+      CGFloat pointWidth = originalPixelSize.width / kPreviewImageScale;
+      CGFloat aspect = originalPixelSize.height / originalPixelSize.width;
+      CGFloat fitWidth = std::min(pointWidth, screenWidth);
+      CGSize targetPointSize = CGSizeMake(fitWidth, fitWidth * aspect);
+
+      __weak ImagePreviewViewController* weakSelf = self;
+      base::ThreadPool::PostTaskAndReplyWithResult(
+          FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+          base::BindOnce(^{
+            return DownsampledImageFromData(safeImageData, targetPointSize,
+                                            kPreviewImageScale);
+          }),
+          base::BindOnce(^(UIImage* image) {
+            [weakSelf downsampledImageReady:image
+                          originalPixelSize:originalPixelSize];
+          }));
+    } else {
+      UIImage* image = [UIImage imageWithData:safeImageData];
+      base::UmaHistogramMemoryKB("IOS.ContextMenu.PreviewImageMemoryFootprint",
+                                 MemoryFootprintForImage(image));
+
+      _imageView.image = image;
+      _imageView.hidden = NO;
+      self.preferredContentSize = image.size;
+    }
     return;
   }
 
@@ -128,7 +177,7 @@ constexpr base::TimeDelta kShowSpinnerDelay = base::Seconds(1);
   [errorView addSubview:errorImageView];
   errorImageView.translatesAutoresizingMaskIntoConstraints = NO;
   AddSameCenterConstraints(errorView, errorImageView);
-  [errorImageView setImage:DefaultSymbolWithPointSize(kPhotoSymbol, 17)];
+  [errorImageView setImage:SymbolWithPointSize(SymbolPhoto, 17)];
   errorImageView.tintColor = [UIColor colorNamed:kTextSecondaryColor];
 }
 
@@ -167,6 +216,19 @@ constexpr base::TimeDelta kShowSpinnerDelay = base::Seconds(1);
 - (void)imageDataReceived:(NSData*)data {
   _imageData = data;
   [self showImage];
+}
+
+// Updates the preview with the downsampled image and sets the preferred
+// content size to the original pixel dimensions to match the previous
+// full-resolution behavior.
+- (void)downsampledImageReady:(UIImage*)image
+            originalPixelSize:(CGSize)originalPixelSize {
+  _imageView.image = image;
+  _imageView.hidden = NO;
+  self.preferredContentSize = originalPixelSize;
+
+  base::UmaHistogramMemoryKB("IOS.ContextMenu.PreviewImageMemoryFootprint",
+                             MemoryFootprintForImage(image));
 }
 
 // Called if the loading is too long. A spinner is presented.

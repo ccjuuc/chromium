@@ -106,7 +106,7 @@ std::string RendererSandboxedProcessLauncherDelegateWin::GetSandboxTag() {
 
 bool RendererSandboxedProcessLauncherDelegateWin::InitializeConfig(
     sandbox::TargetConfig* config) {
-  DCHECK(!config->IsConfigured());
+  CHECK(!config->IsConfigured(), base::NotFatalUntil::M153);
 
   sandbox::policy::SandboxWin::AddBaseHandleClosePolicy(config);
 
@@ -120,7 +120,7 @@ bool RendererSandboxedProcessLauncherDelegateWin::InitializeConfig(
       GetContentClient()->browser()->GetAppContainerSidForSandboxType(
           GetSandboxType(), ac_flags);
   if (!sid.empty()) {
-    sandbox::policy::SandboxWin::AddAppContainerPolicy(config, sid.c_str());
+    sandbox::policy::SandboxWin::AddAppContainerPolicy(config, sid);
   }
 
   if (dynamic_code_can_be_disabled_) {

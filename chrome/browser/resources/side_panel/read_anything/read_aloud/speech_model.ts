@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import type {ContentPosition} from '../content/read_anything_types.js';
+
 import {ReadAloudNode} from './read_aloud_types.js';
 import type {WordBoundaryState} from './word_boundaries.js';
 
@@ -65,6 +67,10 @@ export class SpeechModel {
   // our reading position if read aloud has started. This keeps track of the
   // last position so we can check if it's still in the new page.
   private lastReadingPosition_: ReadingPosition|null = null;
+  // The current position in the content, which can be derived from either a
+  // user selection or the line focus position. This is used to determine
+  // where to begin or resume speech playback.
+  private currentContentPosition_: ContentPosition|null = null;
   private savedSpeechPlayingState_: SpeechPlayingState|null = null;
   private savedWordBoundaryState_: WordBoundaryState|null = null;
 
@@ -82,6 +88,10 @@ export class SpeechModel {
 
   private resumeSpeechOnVoiceMenuClose_: boolean = false;
   private speechVolume_: number = 1.0;
+
+  // The current utterance being spoken by the speech engine.
+  // This is null if speech is not active.
+  private activeUtterance_: SpeechSynthesisUtterance|null = null;
 
   setVolume(volume: number): void {
     this.speechVolume_ = volume;
@@ -142,6 +152,14 @@ export class SpeechModel {
 
   setLastPosition(position: ReadingPosition|null) {
     this.lastReadingPosition_ = position;
+  }
+
+  getCurrentContentPosition(): ContentPosition|null {
+    return this.currentContentPosition_;
+  }
+
+  setCurrentContentPosition(position: ContentPosition|null) {
+    this.currentContentPosition_ = position;
   }
 
   getEngineState(): SpeechEngineState {
@@ -218,5 +236,13 @@ export class SpeechModel {
 
   incrementWordsHeard(): void {
     this.wordsHeard_++;
+  }
+
+  setActiveUtterance(utterance: SpeechSynthesisUtterance|null) {
+    this.activeUtterance_ = utterance;
+  }
+
+  getActiveUtterance() {
+    return this.activeUtterance_;
   }
 }

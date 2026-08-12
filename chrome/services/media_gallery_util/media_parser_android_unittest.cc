@@ -9,13 +9,14 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
-#include "chrome/services/media_gallery_util/public/mojom/media_parser.mojom.h"
+#include "components/media_gallery_util/public/mojom/media_parser.mojom.h"
 #include "media/base/supported_types.h"
 #include "media/base/test_data_util.h"
 #include "media/media_buildflags.h"
@@ -67,13 +68,9 @@ class TestMediaDataSource : public chrome::mojom::MediaDataSource {
             chrome::mojom::MediaDataSource::ReadCallback callback) override {
     base::File file(file_path_, base::File::Flags::FLAG_OPEN |
                                     base::File::Flags::FLAG_READ);
-    auto buffer = std::vector<uint8_t>(length);
-    int bytes_read =
-        UNSAFE_TODO(file.Read(position, (char*)(buffer.data()), length));
-    if (bytes_read < length)
-      buffer.resize(bytes_read);
-
-    std::move(callback).Run(std::vector<uint8_t>(std::move(buffer)));
+    std::vector<uint8_t> buffer(length);
+    buffer.resize(file.Read(position, buffer).value_or(0));
+    std::move(callback).Run(std::move(buffer));
   }
 
   base::FilePath file_path_;
@@ -142,7 +139,7 @@ TEST_F(MediaParserAndroidTest, VideoFrameExtractionH264) {
     const auto& frame = result->frame_data->get_decoded_frame();
     ASSERT_TRUE(frame);
     EXPECT_TRUE(HasValidYUVData(*frame));
-    EXPECT_TRUE(frame->IsMappable());
+    EXPECT_TRUE(frame->HasDirectCpuAccess());
     EXPECT_FALSE(frame->HasSharedImage());
   } else {
     EXPECT_EQ(result->frame_data->which(),
@@ -174,7 +171,7 @@ TEST_F(MediaParserAndroidTest, VideoFrameExtractionVp8) {
   const auto& frame = result->frame_data->get_decoded_frame();
   ASSERT_TRUE(frame);
   EXPECT_TRUE(HasValidYUVData(*frame));
-  EXPECT_TRUE(frame->IsMappable());
+  EXPECT_TRUE(frame->HasDirectCpuAccess());
   EXPECT_FALSE(frame->HasSharedImage());
   EXPECT_EQ(frame->storage_type(),
             media::VideoFrame::StorageType::STORAGE_OWNED_MEMORY);
@@ -192,7 +189,7 @@ TEST_F(MediaParserAndroidTest, VideoFrameExtractionVp8WithAlphaPlane) {
   const auto& frame = result->frame_data->get_decoded_frame();
   ASSERT_TRUE(frame);
   EXPECT_TRUE(HasValidYUVData(*frame));
-  EXPECT_TRUE(frame->IsMappable());
+  EXPECT_TRUE(frame->HasDirectCpuAccess());
   EXPECT_FALSE(frame->HasSharedImage());
   EXPECT_EQ(frame->storage_type(),
             media::VideoFrame::StorageType::STORAGE_OWNED_MEMORY);
@@ -207,7 +204,7 @@ TEST_F(MediaParserAndroidTest, VideoFrameExtractionVp9) {
   const auto& frame = result->frame_data->get_decoded_frame();
   ASSERT_TRUE(frame);
   EXPECT_TRUE(HasValidYUVData(*frame));
-  EXPECT_TRUE(frame->IsMappable());
+  EXPECT_TRUE(frame->HasDirectCpuAccess());
   EXPECT_FALSE(frame->HasSharedImage());
   EXPECT_EQ(frame->storage_type(),
             media::VideoFrame::StorageType::STORAGE_UNOWNED_MEMORY);
@@ -222,7 +219,7 @@ TEST_F(MediaParserAndroidTest, VideoFrameExtractionAv1) {
   const auto& frame = result->frame_data->get_decoded_frame();
   ASSERT_TRUE(frame);
   EXPECT_TRUE(HasValidYUVData(*frame));
-  EXPECT_TRUE(frame->IsMappable());
+  EXPECT_TRUE(frame->HasDirectCpuAccess());
   EXPECT_FALSE(frame->HasSharedImage());
   EXPECT_EQ(frame->storage_type(),
             media::VideoFrame::StorageType::STORAGE_UNOWNED_MEMORY);

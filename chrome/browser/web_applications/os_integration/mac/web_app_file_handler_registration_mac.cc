@@ -17,11 +17,6 @@ bool ShouldRegisterFileHandlersWithOs() {
   return true;
 }
 
-bool FileHandlingIconsSupportedByOs() {
-  // TODO(crbug.com/40185574): implement and flip this to true.
-  return false;
-}
-
 void RegisterFileHandlersWithOs(const webapps::AppId& app_id,
                                 const std::string& app_name,
                                 const base::FilePath& profile_path,
@@ -48,7 +43,7 @@ void UnregisterFileHandlersWithOs(const webapps::AppId& app_id,
   // When updating file handlers, |callback| here triggers the registering of
   // the new file handlers. It is therefore important that |callback| not be
   // dropped on the floor.
-  // https://crbug.com/1201993
+  // https://crbug.com/40178947
   std::move(callback).Run(Result::kOk);
 }
 

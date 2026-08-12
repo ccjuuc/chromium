@@ -10,6 +10,7 @@
 #include <array>
 #include <set>
 #include <string>
+#include <string_view>
 
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
@@ -152,7 +153,7 @@ constexpr auto kFontDefaults = std::to_array<FontDefault>({
     {prefs::kWebKitFantasyFontFamily, IDS_FANTASY_FONT_FAMILY},
     {prefs::kWebKitMathFontFamily, IDS_MATH_FONT_FAMILY},
 #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
-    BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+    BUILDFLAG(IS_LINUX) || BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
     {prefs::kWebKitStandardFontFamilyJapanese,
      IDS_STANDARD_FONT_FAMILY_JAPANESE},
     {prefs::kWebKitFixedFontFamilyJapanese, IDS_FIXED_FONT_FAMILY_JAPANESE},
@@ -175,6 +176,12 @@ constexpr auto kFontDefaults = std::to_array<FontDefault>({
      IDS_SERIF_FONT_FAMILY_TRADITIONAL_HAN},
     {prefs::kWebKitSansSerifFontFamilyTraditionalHan,
      IDS_SANS_SERIF_FONT_FAMILY_TRADITIONAL_HAN},
+    {prefs::kWebKitStandardFontFamilyDevanagari,
+     IDS_STANDARD_FONT_FAMILY_DEVANAGARI},
+    {prefs::kWebKitFixedFontFamilyDevanagari, IDS_FIXED_FONT_FAMILY_DEVANAGARI},
+    {prefs::kWebKitSerifFontFamilyDevanagari, IDS_SERIF_FONT_FAMILY_DEVANAGARI},
+    {prefs::kWebKitSansSerifFontFamilyDevanagari,
+     IDS_SANS_SERIF_FONT_FAMILY_DEVANAGARI},
 #endif
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
     {prefs::kWebKitCursiveFontFamilySimplifiedHan,
@@ -224,10 +231,12 @@ UScriptCode GetScriptOfFontPref(const char* pref_name) {
   static const size_t kScriptNameLength = 4;
 
   size_t len = strlen(pref_name);
-  DCHECK_GT(len, kScriptNameLength);
-  const char* scriptName = &UNSAFE_TODO(pref_name[len - kScriptNameLength]);
-  int32_t code = u_getPropertyValueEnum(UCHAR_SCRIPT, scriptName);
-  DCHECK(code >= 0 && code < USCRIPT_CODE_LIMIT);
+  CHECK_GE(len, kScriptNameLength);
+  std::string_view pref_name_view(pref_name);
+  const char* script_name =
+      pref_name_view.substr(len - kScriptNameLength).data();
+  int32_t code = u_getPropertyValueEnum(UCHAR_SCRIPT, script_name);
+  CHECK(code >= 0 && code < USCRIPT_CODE_LIMIT);
   return static_cast<UScriptCode>(code);
 }
 
@@ -375,6 +384,7 @@ void PrefsTabHelper::RegisterProfilePrefs(
                                 pref_defaults.tabs_to_links);
   registry->RegisterBooleanPref(prefs::kWebKitAllowRunningInsecureContent,
                                 false);
+  registry->RegisterBooleanPref(prefs::kSubresourceFilterHighlightAds, false);
   registry->RegisterBooleanPref(
       prefs::kEnableReferrers,
       !base::FeatureList::IsEnabled(features::kNoReferrers));
@@ -391,8 +401,7 @@ void PrefsTabHelper::RegisterProfilePrefs(
                                 pref_defaults.password_echo_enabled_touch);
   registry->RegisterIntegerPref(prefs::kAccessibilityFontWeightAdjustment, 0);
   registry->RegisterBooleanPref(
-      prefs::kAccessibilityTouchpadOverscrollHistoryNavigation,
-      ui::GetDeviceFormFactor() != ui::DEVICE_FORM_FACTOR_PHONE);
+      prefs::kAccessibilityTouchpadOverscrollHistoryNavigation, true);
 
 #endif
 

@@ -5,14 +5,6 @@
 #ifndef CHROME_BROWSER_UI_TABS_TAB_ENUMS_H_
 #define CHROME_BROWSER_UI_TABS_TAB_ENUMS_H_
 
-// State indicating if the user is following the web feed of the site loaded in
-// a tab.
-enum class TabWebFeedFollowState {
-  kUnknown,      // The initial state before the follow state is determined.
-  kFollowed,     // The web feed is followed.
-  kNotFollowed,  // The web feed is not followed.
-};
-
 // The Service, UI, or Setting which muted the tab.
 enum class TabMutedReason {
   kNone,                  // The tab has never been muted or unmuted.
@@ -20,6 +12,16 @@ enum class TabMutedReason {
   kAudioIndicator,        // Mute toggled via tab-strip audio icon.
   kContentSetting,        // The sound content setting was set to BLOCK.
   kContentSettingChrome,  // Mute toggled on chrome:// URL.
+};
+
+// Source of the call to CloseTab().
+enum class CloseTabSource {
+  // Tab was closed by a mouse event on the tab or its close button
+  kFromMouse,
+  // Tab was closed by a touch event on the tab or its close button
+  kFromTouch,
+  // Tab is closed by some means other than direct tab interaction
+  kFromNonUIEvent,
 };
 
 // A BitField used to specify what should happen when the tab is closed.
@@ -34,6 +36,8 @@ enum TabCloseTypes {
   // almost always want to set this.
   CLOSE_CREATE_HISTORICAL_TAB = 1 << 1,
 
+  // If true the side panel is expanded when the tab is closed.
+  CLOSE_EXPAND_SIDE_PANEL = 1 << 2,
 };
 
 // Constants used when adding tabs.
@@ -104,5 +108,37 @@ enum class TabActivationTypes {
 
   kMaxValue = kContextMenu,
 };
+
+// Enumerates the collapse state of the vertical tab strip.
+// KEEP IN SYNC WITH THE VerticalTabStripCollapseState ENUM IN enums.xml.
+// LINT.IfChange(VerticalTabStripCollapseState)
+enum class VerticalTabStripCollapseState {
+  kExpanded = 0,
+  kCollapsed = 1,
+  kMaxValue = kCollapsed,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/tab/enums.xml:VerticalTabStripCollapseState)
+
+// Enumerates entry points for Tab Groups Focus mode.
+// KEEP IN SYNC WITH THE TabGroupFocusEntryPoint ENUM IN enums.xml.
+// LINT.IfChange(TabGroupFocusEntryPoint)
+enum class TabGroupFocusEntryPoint {
+  kEditorBubble = 0,
+  kMaxValue = kEditorBubble,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/tab/enums.xml:TabGroupFocusEntryPoint)
+
+// Enumerates exit reasons for Tab Groups Focus mode.
+// KEEP IN SYNC WITH THE TabGroupFocusExitReason ENUM IN enums.xml.
+// LINT.IfChange(TabGroupFocusExitReason)
+enum class TabGroupFocusExitReason {
+  kEditorBubble = 0,
+  kTabStripButton = 1,
+  kGroupClosed = 2,
+  kGroupUngrouped = 3,
+  kLastTabClosed = 4,
+  kMaxValue = kLastTabClosed,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/tab/enums.xml:TabGroupFocusExitReason)
 
 #endif  // CHROME_BROWSER_UI_TABS_TAB_ENUMS_H_

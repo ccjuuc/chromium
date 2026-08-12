@@ -8,7 +8,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
@@ -115,9 +114,12 @@ void WebContentsSensorProviderProxy::RemoveObserver(Observer* observer) {
 
 void WebContentsSensorProviderProxy::GetSensor(
     SensorType type,
+    mojo::PendingReceiver<device::mojom::SensorClientController> controller,
+    bool initially_suspended,
     device::mojom::SensorProvider::GetSensorCallback callback) {
   EnsureDeviceServiceConnection();
-  sensor_provider_->GetSensor(type, std::move(callback));
+  sensor_provider_->GetSensor(type, std::move(controller), initially_suspended,
+                              std::move(callback));
 }
 
 void WebContentsSensorProviderProxy::CreateVirtualSensor(
@@ -125,7 +127,7 @@ void WebContentsSensorProviderProxy::CreateVirtualSensor(
     device::mojom::VirtualSensorMetadataPtr metadata,
     device::mojom::SensorProvider::CreateVirtualSensorCallback callback) {
   // CHECK that this was called via CreateVirtualSensorForDevTools().
-  CHECK(base::Contains(virtual_sensor_types_for_devtools_, type));
+  CHECK(virtual_sensor_types_for_devtools_.contains(type));
   EnsureDeviceServiceConnection();
   sensor_provider_->CreateVirtualSensor(type, std::move(metadata),
                                         std::move(callback));

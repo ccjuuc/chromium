@@ -24,6 +24,7 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/network_delegate.h"
+#include "net/log/net_log.h"
 #include "net/storage_access_api/status.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/websockets/websocket_event_interface.h"
@@ -45,7 +46,6 @@ namespace net {
 class IOBuffer;
 class IsolationInfo;
 class SSLInfo;
-class SiteForCookies;
 class WebSocketChannel;
 }  // namespace net
 
@@ -63,7 +63,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
       WebSocketFactory* factory,
       const GURL& url,
       const std::vector<std::string>& requested_protocols,
-      const net::SiteForCookies& site_for_cookies,
       net::StorageAccessApiStatus storage_access_api_status,
       const net::IsolationInfo& isolation_info,
       std::vector<mojom::HttpHeaderPtr> additional_headers,
@@ -98,10 +97,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
   // WebSocket was created with.
   bool AllowCookies(const GURL& url) const;
 
-  // Returns if the nonce from |isolation_info_| matches |nonce|, which
-  // originates from a fenced frame whose network access is being revoked.
-  bool RevokeIfNonceMatches(const base::UnguessableToken& nonce);
-
   // These methods are called by the network delegate to forward these events to
   // the |header_client_|.
   int OnBeforeStartTransaction(
@@ -116,6 +111,16 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
 
   // Gets the WebSocket associated with this request.
   static WebSocket* ForRequest(const net::URLRequest& request);
+
+  // If there is an active channel, logs a WEBSOCKET_ALIVE begin event to
+  // `observer`. No-op if the channel has not been created yet.
+  void AddActiveEntryIfActive(net::NetLog::ThreadSafeObserver* observer) const;
+
+  // Returns true if `lhs` should be logged before `rhs` when replaying
+  // pre-existing connections to a new NetLog observer. Orders by channel
+  // creation time, breaking ties by NetLog source ID. Connections without
+  // channels are sorted to the end.
+  static bool CompareForNetlog(const WebSocket& lhs, const WebSocket& rhs);
 
   static const void* const kUserDataKey;
 
@@ -155,7 +160,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
   void OnConnectionError(const base::Location& set_from);
   void AddChannel(const GURL& socket_url,
                   const std::vector<std::string>& requested_protocols,
-                  const net::SiteForCookies& site_for_cookies,
                   net::StorageAccessApiStatus storage_access_api_status,
                   const net::IsolationInfo& isolation_info,
                   std::vector<mojom::HttpHeaderPtr> additional_headers);
@@ -170,7 +174,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
   void OnBeforeSendHeadersComplete(
       net::NetworkDelegate::OnBeforeStartTransactionCallback callback,
       int result,
-      const std::optional<net::HttpRequestHeaders>& headers);
+      const std::optional<net::HttpRequestHeaders>& headers,
+      std::optional<base::DictValue> extended_net_log_events);
   void OnHeadersReceivedComplete(
       net::CompletionOnceCallback callback,
       scoped_refptr<net::HttpResponseHeaders>* out_headers,
@@ -225,6 +230,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
   // The channel we use to send events to the network.
   std::unique_ptr<net::WebSocketChannel> channel_;
 
+  const GURL url_;
+
   // Delay used for per-renderer WebSocket throttling.
   const base::TimeDelta delay_;
 
@@ -237,10 +244,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
 
   const network::mojom::ClientSecurityStatePtr client_security_state_;
 
-  // For 3rd-party cookie permission checking.
-  net::SiteForCookies site_for_cookies_;
-
-  // Used by RevokeIfNonceMatches() for handling network revocation.
+  // For 3rd-party cookie permission checking. Also used by
+  // RevokeIfNonceMatches() for handling network revocation.
   const net::IsolationInfo isolation_info_;
 
   bool handshake_succeeded_ = false;

@@ -64,7 +64,10 @@ source_set("upgrade_detector") {
 
 source_set("impl") {
   sources = []
-  deps = [ ":upgrade_detector" ]
+  deps = [
+    ":upgrade_detector",
+    "//chrome/browser/ui:browser_otr_state",
+  ]
 
   if (!is_android) {
     sources += [
@@ -78,8 +81,8 @@ source_set("impl") {
       "//base",
       "//base/version_info",
       "//chrome/browser:browser_process",
+      "//chrome/browser/lifetime",
       "//chrome/browser/ui",
-      "//chrome/browser/ui:browser_list",
       "//chrome/common:channel_info",
       "//chrome/common:constants",
       "//chrome/common:non_code_constants",
@@ -100,6 +103,7 @@ source_set("impl") {
         "//base:build_time",
         "//chrome/browser:buildflags",
         "//chrome/browser/google",
+        "//chrome/browser/obsolete_system",
         "//content/public/browser",
       ]
     } else {
@@ -107,7 +111,7 @@ source_set("impl") {
         "installed_version_updater_chromeos.cc",
         "upgrade_detector_chromeos.cc",
       ]
-      deps += [ "//chromeos/crosapi/cpp:crosapi_constants" ]
+      deps += [ "//chromeos/ash/components/channel" ]
     }
   }
 

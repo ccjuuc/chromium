@@ -55,8 +55,8 @@ UIColor* BackgroundColor() {
 
 @end
 
-@interface CredentialListViewController () <UITableViewDataSource,
-                                            UISearchResultsUpdating>
+@interface CredentialListViewController () <UISearchResultsUpdating,
+                                            UITableViewDataSource>
 
 // Search controller that contains search bar.
 @property(nonatomic, strong) UISearchController* searchController;
@@ -301,9 +301,6 @@ UIColor* BackgroundColor() {
 
 - (void)updateSearchResultsForSearchController:
     (UISearchController*)searchController {
-  if (searchController.searchBar.text.length) {
-    UpdateUMACountForKey(app_group::kCredentialExtensionSearchCount);
-  }
   [self.delegate updateResultsWithFilter:searchController.searchBar.text];
 }
 

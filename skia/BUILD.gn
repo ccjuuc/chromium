@@ -31,7 +31,6 @@ buildflag_header("buildflags") {
   flags = [
     "SKIA_SUPPORT_SKOTTIE=$skia_support_skottie",
     "SKIA_USE_DAWN=$skia_use_dawn",
-    "SKIA_USE_METAL=$skia_use_metal",
   ]
 }
 
@@ -46,15 +45,16 @@ rust_static_library("bridge_rust_side") {
   cxx_bindings = [ skia_fontations_bridge_root ]
   deps = [
     ":path_bridge",
-    "//third_party/rust/font_types/v0_10:lib",
-    "//third_party/rust/read_fonts/v0_36:lib",
-    "//third_party/rust/skrifa/v0_39:lib",
+    "//third_party/rust/font_types/v0_12:lib",
+    "//third_party/rust/read_fonts/v0_41:lib",
+    "//third_party/rust/skrifa/v0_44:lib",
   ]
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [
     ":skia_config",
     "//build/config/compiler:no_chromium_code",
   ]
+  no_clippy = true  # TODO(https://crbug.com/472355480)
 }
 
 # External-facing config for dependent code.
@@ -63,7 +63,12 @@ config("skia_config") {
     "SK_ENABLE_SKSL",
     "SK_UNTIL_CRBUG_1187654_IS_FIXED",
     "SK_USER_CONFIG_HEADER=\"../../skia/config/SkUserConfig.h\"",
+    "SK_USE_PARTITION_ALLOC",
     "SK_WIN_FONTMGR_NO_SIMULATIONS",
+
+    # Staging
+    "SK_ENABLE_LEGACY_SHADERCONTEXT",
+    "SK_LEGACY_DESERIAL_IMAGE_PROC",
 
     # Let Skia and Skia clients know whether to use `libpng`-based or
     # Rust-based PNG decoder and encoder.  This mimics what is done in
@@ -75,7 +80,17 @@ config("skia_config") {
     "SK_CODEC_ENCODES_PNG_WITH_RUST",
 
     "SK_CODEC_DECODES_BMP_WITH_RUST",
+    "SK_CODEC_DECODES_ICO_WITH_RUST",
+    "SK_CODEC_COLOR_PROFILE_PARSE_WITH_RUST",
+    "SK_EXIF_PARSE_WITH_RUST",
   ]
+
+  if (!allow_avx512) {
+    defines += [ "SK_DISABLE_AVX512_OPTS" ]
+  } else {
+    # TODO(kjlubick) remove this path when Skia has AVX512 on by default
+    defines += [ "SK_ENABLE_AVX512_OPTS" ]
+  }
 
   include_dirs = [
     "//third_party/skia",
@@ -149,9 +164,6 @@ config("skia_config") {
     if (skia_use_dawn) {
       defines += [ "SK_DAWN" ]
       configs += [ "//third_party/dawn/include/dawn:public" ]
-    }
-    if (skia_use_metal) {
-      defines += [ "SK_METAL" ]
     }
   }
   if (current_cpu == "loong64") {
@@ -233,6 +245,7 @@ component("skia") {
     "ext/benchmarking_canvas.h",
     "ext/cicp.h",
     "ext/codec_utils.h",
+    "ext/color_profile.h",
     "ext/convolver.h",
     "ext/draw_gainmap_image.h",
     "ext/event_tracer_impl.h",
@@ -242,7 +255,6 @@ component("skia") {
     "ext/legacy_display_globals.h",
     "ext/opacity_filter_canvas.h",
     "ext/pmcolor_utils.h",
-    "ext/recursive_gaussian_convolution.h",
     "ext/rgba_to_yuva.h",
     "ext/skcms_ext.h",
     "ext/skcolorspace_primaries.h",
@@ -262,6 +274,7 @@ component("skia") {
     "ext/benchmarking_canvas.cc",
     "ext/cicp.cc",
     "ext/codec_utils.cc",
+    "ext/color_profile.cc",
     "ext/convolver.cc",
     "ext/draw_gainmap_image.cc",
     "ext/event_tracer_impl.cc",
@@ -271,7 +284,6 @@ component("skia") {
     "ext/image_operations.cc",
     "ext/legacy_display_globals.cc",
     "ext/opacity_filter_canvas.cc",
-    "ext/recursive_gaussian_convolution.cc",
     "ext/rgba_to_yuva.cc",
     "ext/skcms_ext.cc",
     "ext/skcolorspace_primaries.cc",
@@ -309,7 +321,8 @@ component("skia") {
       "ext/convolver_mips_dspr2.cc",
       "ext/convolver_mips_dspr2.h",
     ]
-  } else if (current_cpu == "arm" || current_cpu == "arm64") {
+  } else if (current_cpu == "arm" || current_cpu == "arm64" ||
+             current_cpu == "arm64e") {
     sources += [
       "ext/convolver_neon.cc",
       "ext/convolver_neon.h",
@@ -401,11 +414,11 @@ component("skia") {
 
   # Select Skia ports.
 
-  # FreeType is needed everywhere where blink is used, on Linux and Android as main
-  # font backend, on Windows and Mac as fallback backend for Variations. Pdfium
-  # also uses this when decoding data out of the device cache.
-  # Fontations is the backend we are migrating to. In preparation for rollout
-  # default compile-in Fontations as well.
+  # FreeType is needed everywhere where blink is used, on Linux and Android as
+  # main font backend, on Windows and Mac as fallback backend for Variations.
+  # Pdfium also uses this when decoding data out of the device cache. Fontations
+  # is the backend we are migrating to. In preparation for rollout default
+  # compile-in Fontations as well.
   if (use_blink) {
     # See SK_TYPEFACE_FACTORY_FREETYPE and SK_TYPEFACE_FACTORY_FONTATIONS
     if (enable_freetype) {
@@ -479,19 +492,23 @@ component("skia") {
   all_dependent_configs = [ ":skia_config" ]
 
   deps += [
-    ":rust_bmp_ffi",
     ":rust_common_ffi",
     ":rust_png_ffi",
     ":skcms",
     ":skia_opts",
     ":skia_switches",
     "//base",
+    "//base/allocator/partition_allocator:raw_ptr",
     "//third_party/libwebp",
     "//third_party/libwebp:libwebp_webp",
     "//ui/base:features",
   ]
   public_deps = [
     ":buildflags",
+    ":rust_bmp_ffi",
+    ":rust_exif_ffi",
+    ":rust_icc_ffi",
+    ":rust_ico_ffi",
     ":skia_core_and_effects",
     ":skia_core_public_headers",
   ]
@@ -568,14 +585,10 @@ component("skia") {
     }
 
     public_deps += [ ":skia_graphite_public" ]
-    deps += [ ":skia_graphite_private" ]
-
-    if (skia_use_metal) {
-      deps += [ ":skia_ganesh_metal" ]
-    }
-    deps += [ "//gpu/config:workaround_list" ]
-  } else {
-    sources += skia_no_slug_srcs
+    deps += [
+      ":skia_graphite_private",
+      "//gpu/config:workaround_list",
+    ]
   }
 
   if (skia_support_pdf) {
@@ -583,7 +596,7 @@ component("skia") {
     assert(use_blink)
     deps += [
       # Needed for HarfBuzz hb_subet subsetting.
-      "//third_party/harfbuzz-ng",
+      "//third_party/harfbuzz",
       "//third_party/zlib",
     ]
     public += skia_pdf_public
@@ -646,6 +659,7 @@ rust_static_library("rust_common_ffi") {
     ":skia_config",
     "//build/config/compiler:no_chromium_code",
   ]
+  no_clippy = true  # TODO(https://crbug.com/472355480)
 }
 
 source_set("rust_common_ffi_cpp") {
@@ -682,6 +696,7 @@ rust_static_library("rust_png_ffi") {
     ":skia_config",
     "//build/config/compiler:no_chromium_code",
   ]
+  no_clippy = true  # TODO(https://crbug.com/472355480)
 }
 
 source_set("rust_png_ffi_cpp") {
@@ -711,10 +726,14 @@ rust_static_library("rust_bmp_ffi") {
     ":skia_config",
     "//build/config/compiler:no_chromium_code",
   ]
+  no_clippy = true  # TODO(https://crbug.com/472355480)
 }
 
 source_set("rust_bmp_ffi_cpp") {
-  visibility = [ ":*" ]
+  visibility = [
+    ":*",
+    "//third_party/blink/renderer/platform/image-decoders:*",
+  ]
   public = skia_codec_rust_bmp_public
   sources = skia_codec_rust_bmp
   public_deps = [
@@ -723,6 +742,134 @@ source_set("rust_bmp_ffi_cpp") {
     "//build/rust:cxx_cppdeps",
   ]
   deps = [ ":rust_bmp_ffi_cxx_generated_gen" ]
+  check_includes =
+      false  # Logically part of skia, but split out for build reasons
+  configs -= [ "//build/config/compiler:chromium_code" ]
+  configs += [
+    ":skia_config",
+    ":skia_library_config",
+    "//build/config/compiler:no_chromium_code",
+  ]
+}
+
+rust_static_library("rust_ico_ffi") {
+  visibility = [ ":*" ]
+  allow_unsafe = true  # For FFI
+  crate_root = skia_codec_rust_ico_ffi_crate_root
+  sources = skia_codec_rust_ico_ffi_rs_srcs
+  cxx_bindings = skia_codec_rust_ico_ffi_cxx_bridge_srcs
+  public_deps = [ ":rust_ico_ffi_cpp" ]
+  deps = [
+    ":rust_common_ffi",
+    "//third_party/rust/image/v0_25:lib",
+  ]
+  configs -= [ "//build/config/compiler:chromium_code" ]
+  configs += [
+    ":skia_config",
+    "//build/config/compiler:no_chromium_code",
+  ]
+  no_clippy = true  # TODO(https://crbug.com/472355480)
+}
+
+source_set("rust_ico_ffi_cpp") {
+  visibility = [
+    ":*",
+    "//third_party/blink/renderer/platform/image-decoders:*",
+  ]
+  public = skia_codec_rust_ico_public
+  sources = skia_codec_rust_ico
+  public_deps = [
+    ":rust_common_ffi_cpp",
+    ":skia_core_public_headers",
+    "//build/rust:cxx_cppdeps",
+  ]
+
+  # The ICO codec reuses the Rust-based BMP and PNG codecs to decode the
+  # embedded images, so it needs their generated cxx bridge headers and
+  # C++ glue code.
+  deps = [
+    ":rust_bmp_ffi",
+    ":rust_ico_ffi_cxx_generated_gen",
+    ":rust_png_ffi",
+  ]
+  check_includes =
+      false  # Logically part of skia, but split out for build reasons
+  configs -= [ "//build/config/compiler:chromium_code" ]
+  configs += [
+    ":skia_config",
+    ":skia_library_config",
+    "//build/config/compiler:no_chromium_code",
+  ]
+}
+
+rust_static_library("rust_icc_ffi") {
+  visibility = [ ":*" ]
+  allow_unsafe = true  # For FFI
+  crate_root = skia_rust_icc_ffi_crate_root
+  sources = skia_rust_icc_ffi_rs_srcs
+  cxx_bindings = skia_rust_icc_ffi_cxx_bridge_srcs
+  public_deps = [ ":rust_icc_ffi_cpp" ]
+  deps = [
+    ":rust_common_ffi",
+    "//third_party/rust/moxcms/v0_8:lib",
+  ]
+  configs -= [ "//build/config/compiler:chromium_code" ]
+  configs += [
+    ":skia_config",
+    "//build/config/compiler:no_chromium_code",
+  ]
+  no_clippy = true  # TODO(https://crbug.com/472355480)
+}
+
+source_set("rust_icc_ffi_cpp") {
+  visibility = [ ":*" ]
+  public = skia_rust_icc_ffi_cpp_hdrs + skia_codec_rust_icc_codec_hdrs
+  sources = skia_rust_icc_ffi_cpp_srcs + skia_codec_rust_icc_codec_srcs
+  public_deps = [
+    ":rust_common_ffi_cpp",
+    ":skia_core_public_headers",
+    "//build/rust:cxx_cppdeps",
+  ]
+  deps = [
+    ":rust_icc_ffi_cxx_generated_gen",
+    ":skcms",
+  ]
+  check_includes =
+      false  # Logically part of skia, but split out for build reasons
+  configs -= [ "//build/config/compiler:chromium_code" ]
+  configs += [
+    ":skia_config",
+    ":skia_library_config",
+    "//build/config/compiler:no_chromium_code",
+  ]
+}
+
+rust_static_library("rust_exif_ffi") {
+  visibility = [ ":*" ]
+  allow_unsafe = true  # For FFI
+  crate_root = skia_rust_exif_ffi_crate_root
+  sources = skia_rust_exif_ffi_rs_srcs
+  cxx_bindings = skia_rust_exif_ffi_cxx_bridge_srcs
+  public_deps = [ ":rust_exif_ffi_cpp" ]
+  deps = [ ":rust_common_ffi" ]
+  configs -= [ "//build/config/compiler:chromium_code" ]
+  configs += [
+    ":skia_config",
+    "//build/config/compiler:no_chromium_code",
+  ]
+  no_clippy = true  # TODO(https://crbug.com/472355480)
+}
+
+source_set("rust_exif_ffi_cpp") {
+  visibility = [ ":*" ]
+  public = skia_rust_exif_ffi_cpp_hdrs
+  sources = skia_rust_exif_ffi_cpp_srcs
+  public_deps = [
+    ":rust_common_ffi_cpp",
+    ":skia_core_public_headers",
+    "//build/rust:cxx_cppdeps",
+  ]
+  deps = [ ":rust_exif_ffi_cxx_generated_gen" ]
   check_includes =
       false  # Logically part of skia, but split out for build reasons
   configs -= [ "//build/config/compiler:chromium_code" ]
@@ -743,6 +890,11 @@ template("skia_source_set") {
     forward_variables_from(invoker, "*")
 
     check_includes = false
+
+    if (!defined(deps)) {
+      deps = []
+    }
+    deps += [ "//base/allocator/partition_allocator:raw_ptr" ]
 
     if (!is_debug) {
       configs -= [ "//build/config/compiler:default_optimization" ]
@@ -793,6 +945,17 @@ set_defaults("skia_source_set") {
   configs = default_compiler_configs
 }
 
+config("skia_avx512_flags") {
+  if (is_win) {
+    cflags = [ "/arch:AVX512" ]
+  } else {
+    cflags = [
+      "-march=x86-64-v4",
+      "-mprefer-vector-width=512",
+    ]
+  }
+}
+
 # Split out for targeted removal of the afdo_optimize_size config on Android.
 skia_source_set("skia_core_and_effects") {
   defines = []
@@ -834,9 +997,10 @@ skia_source_set("skia_core_and_effects") {
 }
 
 # Bits that involve special vector-y hardware.
+# https://en.wikipedia.org/wiki/X86-64#Microarchitecture_levels
 if (current_cpu == "x86" || current_cpu == "x64") {
-  skia_source_set("skia_opts_hsw") {
-    sources = skia_opts.hsw_sources
+  skia_source_set("skia_opts_ml3") {
+    sources = skia_opts.ml3_sources
     if (!is_win) {
       cflags = [
         "-mavx2",
@@ -848,6 +1012,11 @@ if (current_cpu == "x86" || current_cpu == "x64") {
     } else {
       cflags = [ "/arch:AVX2" ]
     }
+    visibility = [ ":skia_opts" ]
+  }
+  skia_source_set("skia_opts_ml4") {
+    sources = skia_opts.ml4_sources
+    configs += [ ":skia_avx512_flags" ]
     visibility = [ ":skia_opts" ]
   }
 }
@@ -870,7 +1039,10 @@ skia_source_set("skia_opts") {
   deps = [ "//base" ]
 
   if (current_cpu == "x86" || current_cpu == "x64") {
-    deps += [ ":skia_opts_hsw" ]
+    deps += [ ":skia_opts_ml3" ]
+    if (allow_avx512) {
+      deps += [ ":skia_opts_ml4" ]
+    }
   } else if (current_cpu == "arm") {
     # The assembly uses the frame pointer register (r7 in Thumb/r11 in
     # ARM), the compiler doesn't like that.
@@ -956,18 +1128,10 @@ if (current_cpu == "x64") {
   }
   skia_source_set("skcms_TransformSkx") {
     sources = skcms_TransformSkx
-    configs += [ ":skcms_library_config" ]
-    if (!is_win) {
-      cflags = [
-        "-mavx512f",
-        "-mavx512dq",
-        "-mavx512cd",
-        "-mavx512bw",
-        "-mavx512vl",
-      ]
-    } else {
-      cflags = [ "/arch:AVX512" ]
-    }
+    configs += [
+      ":skcms_library_config",
+      ":skia_avx512_flags",
+    ]
     visibility = [ ":skcms" ]
   }
 } else {
@@ -1023,48 +1187,22 @@ if (skia_support_gpu) {
         "//third_party/dawn/src/dawn:proc",
       ]
     }
-    if (skia_use_metal) {
-      public += skia_graphite_mtl_public
-      frameworks = [ "Metal.framework" ]
-    }
     deps = [ "//gpu/config:workaround_list" ]
   }
 
-  # If a source set contains only sources and no public files, then dependents can
-  # include any file from sources.
+  # If a source set contains only sources and no public files, then dependents
+  # can include any file from sources.
   skia_source_set("skia_graphite_private") {
     sources = skia_graphite_sources + skia_graphite_precompile_sources +
               skia_sksl_graphite_modules_sources
     if (skia_use_dawn) {
       sources += skia_graphite_dawn_sources
     }
-    if (skia_use_metal) {
-      sources += skia_shared_mtl_sources
-      sources += skia_graphite_mtl_sources
-    }
     deps = [ "//gpu/config:workaround_list" ]
     if (skia_use_dawn) {
       deps += [ "//third_party/dawn/include/dawn:cpp_headers" ]
     }
     visibility = [ ":skia" ]
-  }
-
-  if (skia_use_metal) {
-    # Split out Ganesh Metal sources, because they require ARC.
-    skia_source_set("skia_ganesh_metal") {
-      sources = skia_gpu_metal_public
-      sources += skia_gpu_metal_private
-      cflags_objcc = [
-        "-Wno-unguarded-availability",
-        "-fobjc-arc",
-      ]
-      deps = [ "//gpu/config:workaround_list" ]
-      if (skia_use_dawn) {
-        # Needed due to include chain containing webgpu_cpp.h via GrDawnTypes.h.
-        public_deps = [ "//third_party/dawn/include/dawn:cpp_headers" ]
-      }
-      visibility = [ ":skia" ]
-    }
   }
 }
 
@@ -1147,7 +1285,7 @@ test("skia_unittests") {
     "ext/geometry_unittest.cc",
     "ext/image_operations_unittest.cc",
     "ext/platform_canvas_unittest.cc",
-    "ext/recursive_gaussian_convolution_unittest.cc",
+    "ext/rgba_to_yuva_unittest.cc",
     "ext/skcolorspace_primaries_unittest.cc",
     "ext/skcolorspace_trfn_unittest.cc",
     "ext/skia_memory_dump_provider_unittest.cc",
@@ -1164,6 +1302,8 @@ test("skia_unittests") {
     sources -= [ "ext/platform_canvas_unittest.cc" ]
   }
 
+  fuzztests = [ "ImageOperationsResize.ResizeFuzzTest" ]
+
   deps = [
     ":skcms",
     ":skia",
@@ -1172,6 +1312,7 @@ test("skia_unittests") {
     "//base/test:test_support",
     "//mojo/core/test:run_all_unittests",
     "//testing/gtest",
+    "//third_party/fuzztest",
     "//ui/gfx",
     "//ui/gfx/geometry",
   ]
@@ -1223,17 +1364,6 @@ if (!is_ios) {
       "//build/win:default_exe_manifest",
     ]
   }
-}
-
-fuzzer_test("image_operations_resize_fuzzer") {
-  sources = [ "ext/image_operations_resize_fuzzer.cc" ]
-
-  deps = [
-    ":skia",
-    "//base",
-  ]
-
-  libfuzzer_options = [ "max_len=48" ]
 }
 
 group("fuzzers") {

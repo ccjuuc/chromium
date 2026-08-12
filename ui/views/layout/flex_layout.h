@@ -71,6 +71,9 @@ class View;
 // changed.
 class VIEWS_EXPORT FlexLayout : public LayoutManagerBase {
  public:
+  METADATA_HEADER(FlexLayout, LayoutManagerBase)
+
+ public:
   FlexLayout();
 
   FlexLayout(const FlexLayout&) = delete;
@@ -135,6 +138,23 @@ class VIEWS_EXPORT FlexLayout : public LayoutManagerBase {
   T* GetDefaultForTesting(const ui::ClassProperty<T*>* key) const {
     return GetDefault(key);
   }
+
+  // Calculates the main-axis budget available to `target_view`, if it were
+  // assigned the layout priority `target_flex_order`. `target_view` which must
+  // be a visible child of `host_view()`. Intended to be called from a
+  // multi-order FlexSpecification DrainPredicate with the `size_bounds` passed
+  // into that callback.
+  //
+  // This determines how much remaining available space `target_view` would have
+  // by simulating a basic layout pass. It subtracts out the preferred or
+  // minimum size of each peer child View, based on their order relative to
+  // `target_flex_order`. May return a value above the preferred size of
+  // `target_view`, or zero if there's no space remaining. Will never return a
+  // value less than 0.
+  int CalculateMainAxisSpaceAvailableToView(
+      const View* target_view,
+      int target_flex_order,
+      const SizeBounds& size_bounds) const;
 
  protected:
   // LayoutManagerBase:

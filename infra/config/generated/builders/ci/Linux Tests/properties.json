@@ -84,17 +84,12 @@
           "group": "tryserver.chromium.linux"
         },
         {
-          "builder": "linux-rel-test-selection",
-          "group": "tryserver.chromium.linux"
-        },
-        {
           "builder": "linux_chromium_compile_rel_ng",
           "group": "tryserver.chromium.linux"
         }
       ],
       "retry_failed_shards": true,
-      "targets_spec_directory": "infra/config/generated/builders/ci/Linux Tests/targets",
-      "targets_spec_directory_relative_to_source_dir": true
+      "targets_spec_directory": "infra/config/generated/builders/ci/Linux Tests/targets"
     }
   },
   "$recipe_engine/resultdb/test_presentation": {

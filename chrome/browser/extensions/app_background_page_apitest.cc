@@ -26,8 +26,8 @@
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/extensions/application_launch.h"
 #include "chrome/common/chrome_paths.h"
 #include "components/embedder_support/switches.h"
@@ -280,7 +280,7 @@ IN_PROC_BROWSER_TEST_F(AppBackgroundPageApiTest, ManifestBackgroundPage) {
 IN_PROC_BROWSER_TEST_F(AppBackgroundPageApiTest, NoJsBackgroundPage) {
   // Keep the task manager up through this test to verify that a crash doesn't
   // happen when window.open creates a background page that switches
-  // RenderViewHosts. See http://crbug.com/165138.
+  // RenderViewHosts. See http://crbug.com/40296271.
   chrome::ShowTaskManager(browser());
   BackgroundContentsCreationObserver creation_observer(profile());
 
@@ -480,9 +480,9 @@ IN_PROC_BROWSER_TEST_F(AppBackgroundPageApiTest, OpenPopupFromBGPage) {
   ASSERT_TRUE(RunExtensionTest("app_background_page/bg_open")) << message_;
 }
 
-// Partly a regression test for crbug.com/756465. Namely, that window.open
+// Partly a regression test for crbug.com/41339841. Namely, that window.open
 // correctly matches an app URL with a path component.
-// Flaky on Chrome OS https://crbug.com/1462141.
+// Flaky on Chrome OS https://crbug.com/40921765.
 #if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_OpenThenClose DISABLED_OpenThenClose
 #else

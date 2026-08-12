@@ -8,12 +8,13 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <wintrust.h>
 
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
-#include "base/win/wintrust_shim.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -197,8 +198,10 @@ class MockCertificateReceiver : public CertificateReceiver {
   MockCertificateReceiver(const MockCertificateReceiver&) = delete;
   MockCertificateReceiver& operator=(const MockCertificateReceiver&) = delete;
 
-  MOCK_METHOD3(OnCertificate,
-               bool(uint16_t, uint16_t, base::span<const uint8_t>));
+  MOCK_METHOD(bool,
+              OnCertificate,
+              (uint16_t, uint16_t, base::span<const uint8_t>),
+              (override));
 };
 
 struct CertificateTestData {

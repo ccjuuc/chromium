@@ -10,9 +10,7 @@
 #include <vector>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "components/performance_manager/frame_node_source.h"
 #include "components/performance_manager/graph/frame_node_impl.h"
@@ -33,7 +31,7 @@ using WorkerNodeSet = base::flat_set<raw_ptr<WorkerNodeImpl, CtnExperimental>>;
 namespace {
 
 // Retrieves the process node associated with the |render_process_id|.
-ProcessNodeImpl* GetProcessNode(int render_process_id) {
+ProcessNodeImpl* GetProcessNode(content::ChildProcessId render_process_id) {
   auto* render_process_host =
       content::RenderProcessHost::FromID(render_process_id);
   DCHECK(render_process_host);
@@ -48,7 +46,7 @@ ProcessNodeImpl* GetProcessNode(int render_process_id) {
 }  // namespace
 
 WorkerWatcher::WorkerWatcher(
-    const std::string& browser_context_id,
+    const base::UnguessableToken& browser_context_id,
     content::DedicatedWorkerService* dedicated_worker_service,
     content::SharedWorkerService* shared_worker_service,
     ServiceWorkerContextAdapter* service_worker_context_adapter,
@@ -162,7 +160,7 @@ void WorkerWatcher::TearDown() {
 
 void WorkerWatcher::OnWorkerCreated(
     const blink::DedicatedWorkerToken& dedicated_worker_token,
-    int worker_process_id,
+    content::ChildProcessId worker_process_id,
     const url::Origin& security_origin,
     content::DedicatedWorkerCreator creator) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -237,7 +235,7 @@ void WorkerWatcher::OnBeforeWorkerDestroyed(
   }
 
 #if DCHECK_IS_ON()
-  DCHECK(!base::Contains(detached_frame_count_per_worker_, worker_node.get()));
+  DCHECK(!detached_frame_count_per_worker_.contains(worker_node.get()));
 #endif  // DCHECK_IS_ON()
   PerformanceManagerImpl::DeleteNode(std::move(worker_node));
 
@@ -255,7 +253,7 @@ void WorkerWatcher::OnFinalResponseURLDetermined(
 
 void WorkerWatcher::OnWorkerCreated(
     const blink::SharedWorkerToken& shared_worker_token,
-    int worker_process_id,
+    content::ChildProcessId worker_process_id,
     const url::Origin& security_origin,
     const base::UnguessableToken& /* dev_tools_token */) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -302,7 +300,7 @@ void WorkerWatcher::OnBeforeWorkerDestroyed(
   }
 
 #if DCHECK_IS_ON()
-  DCHECK(!base::Contains(detached_frame_count_per_worker_, worker_node.get()));
+  DCHECK(!detached_frame_count_per_worker_.contains(worker_node.get()));
 #endif  // DCHECK_IS_ON()
   PerformanceManagerImpl::DeleteNode(std::move(worker_node));
 
@@ -374,8 +372,7 @@ void WorkerWatcher::OnVersionStoppedRunning(int64_t version_id) {
   DisconnectAllServiceWorkerClients(service_worker_node.get(), version_id);
 
 #if DCHECK_IS_ON()
-  DCHECK(!base::Contains(detached_frame_count_per_worker_,
-                         service_worker_node.get()));
+  DCHECK(!detached_frame_count_per_worker_.contains(service_worker_node.get()));
 #endif  // DCHECK_IS_ON()
   PerformanceManagerImpl::DeleteNode(std::move(service_worker_node));
 
@@ -443,7 +440,7 @@ void WorkerWatcher::OnControlleeRemoved(int64_t version_id,
     // |client_uuid| should not be part of this service worker's clients.
     auto it = service_worker_clients_.find(version_id);
     if (it != service_worker_clients_.end())
-      DCHECK(!base::Contains(it->second, client_uuid));
+      DCHECK(!it->second.contains(client_uuid));
 #endif  // DCHECK_IS_ON()
     return;
   }

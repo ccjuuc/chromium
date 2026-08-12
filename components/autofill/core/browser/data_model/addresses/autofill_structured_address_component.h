@@ -5,8 +5,8 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_ADDRESSES_AUTOFILL_STRUCTURED_ADDRESS_COMPONENT_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_ADDRESSES_AUTOFILL_STRUCTURED_ADDRESS_COMPONENT_H_
 
-#include <memory>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -75,6 +75,8 @@ VerificationStatus GetMoreSignificantVerificationStatus(
 // `kMergeChildrenAndReformatIfNeeded` will not be applied because
 // `kUseBetterOrMostRecentIfDifferent` is always applicable.
 enum MergeMode {
+  // Unset merge mode (shouldn't ever be merged individually).
+  kNone = 0,
   // If one component has an empty value, use the non-empty one.
   kReplaceEmpty = 1,
   // Recursively merge two components that have the same tokens in arbitrary
@@ -147,12 +149,15 @@ class AddressComponent {
   // AddressComponentsStore is being destroyed, the WipeRawPtrsForDestruction
   // function is used to clear the list of child pointers. This prevents
   // dangling pointers during the destruction process.
-  using SubcomponentsList = std::vector<AddressComponent*>;
+  using SubcomponentsList = std::vector<raw_ptr<AddressComponent>>;
 
   // Constructor for a compound child node.
   AddressComponent(FieldType storage_type,
                    SubcomponentsList subcomponents,
                    unsigned int merge_mode);
+
+  // Constructor for a child node with `kNone` merge mode.
+  AddressComponent(FieldType storage_type, SubcomponentsList subcomponents);
 
   // Disallows copies and direct assignments since they are not needed in the
   // current Autofill design.
@@ -499,6 +504,7 @@ class AddressComponent {
 
   // Unsets the node and all of its children.
   void UnsetAddressComponentAndItsSubcomponents();
+
  private:
   friend class AddressComponentTestApi;
 

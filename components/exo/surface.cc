@@ -218,6 +218,9 @@ class CustomWindowDelegate : public aura::WindowDelegate {
   void OnBoundsChanged(const gfx::Rect& old_bounds,
                        const gfx::Rect& new_bounds) override {}
   gfx::NativeCursor GetCursor(const gfx::Point& point) override {
+    if (!surface_) {
+      return ui::mojom::CursorType::kNull;
+    }
     views::Widget* widget =
         views::Widget::GetTopLevelWidgetForNativeView(surface_->window());
     if (widget)
@@ -225,6 +228,9 @@ class CustomWindowDelegate : public aura::WindowDelegate {
     return ui::mojom::CursorType::kNull;
   }
   int GetNonClientComponent(const gfx::Point& point) const override {
+    if (!surface_) {
+      return HTNOWHERE;
+    }
     views::Widget* widget =
         views::Widget::GetTopLevelWidgetForNativeView(surface_->window());
     if (widget && IsDeskContainer(widget->GetNativeView()->parent()) &&
@@ -244,6 +250,9 @@ class CustomWindowDelegate : public aura::WindowDelegate {
   void OnPaint(const ui::PaintContext& context) override {}
   void OnDeviceScaleFactorChanged(float old_device_scale_factor,
                                   float new_device_scale_factor) override {
+    if (!surface_) {
+      return;
+    }
     surface_->OnScaleFactorChanged(old_device_scale_factor,
                                    new_device_scale_factor);
   }
@@ -253,14 +262,23 @@ class CustomWindowDelegate : public aura::WindowDelegate {
   void OnWindowOcclusionChanged(
       aura::Window::OcclusionState old_occlusion_state,
       aura::Window::OcclusionState new_occlusion_state) override {
+    if (!surface_) {
+      return;
+    }
     surface_->OnWindowOcclusionChanged(old_occlusion_state,
                                        new_occlusion_state);
   }
   bool HasHitTestMask() const override { return true; }
   void GetHitTestMask(SkPath* mask) const override {
+    if (!surface_) {
+      return;
+    }
     surface_->GetHitTestMask(mask);
   }
   void OnKeyEvent(ui::KeyEvent* event) override {
+    if (!surface_) {
+      return;
+    }
     // Propagates the key event upto the top-level views Widget so that we can
     // trigger proper events in the views/ash level there. Event handling for
     // Surfaces is done in a post event handler in keyboard.cc.
@@ -270,8 +288,10 @@ class CustomWindowDelegate : public aura::WindowDelegate {
       widget->OnKeyEvent(event);
   }
 
+  void reset_surface() { surface_ = nullptr; }
+
  private:
-  const raw_ptr<Surface> surface_;
+  raw_ptr<Surface> surface_;
 };
 
 class CustomWindowTargeter : public aura::WindowTargeter {
@@ -343,6 +363,9 @@ Surface::Surface()
 }
 
 Surface::~Surface() {
+  // Tell WindowDelegate that surface is in destruction phrase, and no need to
+  // call back to the surface.
+  static_cast<CustomWindowDelegate*>(window_->delegate())->reset_surface();
   for (SurfaceObserver& observer : observers_)
     observer.OnSurfaceDestroying(this);
 
@@ -372,14 +395,6 @@ Surface* Surface::AsSurface(const aura::Window* window) {
   return window->GetProperty(kSurfaceKey);
 }
 
-std::vector<raw_ptr<aura::Window, VectorExperimental>>
-Surface::GetChildWindows() const {
-  std::vector<raw_ptr<aura::Window, VectorExperimental>> children;
-  for (const auto& [sub_surface, _] : sub_surfaces_) {
-    children.push_back(sub_surface->window());
-  }
-  return children;
-}
 
 void Surface::Attach(Buffer* buffer) {
   Attach(buffer, gfx::Vector2d());
@@ -655,8 +670,8 @@ bool Surface::DoPlaceAboveOrBelow(Surface* child,
     return false;
   }
 
-  DCHECK(ListContainsEntry(list, child));
   auto it = FindListEntry(list, child);
+  CHECK(it != list.end()) << "Child surface not in parent list";
 
   if (place_above) {
     if (reference != this) {
@@ -931,21 +946,6 @@ void Surface::SetAspectRatio(const gfx::SizeF& aspect_ratio) {
     delegate_->SetAspectRatio(aspect_ratio);
 }
 
-void Surface::SetAcquireFence(std::unique_ptr<gfx::GpuFence> gpu_fence) {
-  TRACE_EVENT1("exo", "Surface::SetAcquireFence", "fence_fd",
-               gpu_fence ? gpu_fence->GetGpuFenceHandle().Peek() : -1);
-
-  pending_state_.acquire_fence = std::move(gpu_fence);
-}
-
-bool Surface::HasPendingAcquireFence() const {
-  return !!pending_state_.acquire_fence;
-}
-
-bool Surface::HasAcquireFence() const {
-  return !!state_.acquire_fence;
-}
-
 void Surface::Commit() {
   TRACE_EVENT1(
       "exo", "Surface::Commit", "buffer_id",
@@ -984,7 +984,6 @@ void Surface::Commit() {
   cached_state_.overlay_priority_hint = pending_state_.overlay_priority_hint;
   cached_state_.clip_rect = pending_state_.clip_rect;
   cached_state_.surface_transform = pending_state_.surface_transform;
-  cached_state_.acquire_fence = std::move(pending_state_.acquire_fence);
   cached_state_.frame_callbacks.splice(cached_state_.frame_callbacks.end(),
                                        pending_state_.frame_callbacks);
   cached_state_.damage.Union(pending_state_.damage);
@@ -1152,7 +1151,6 @@ void Surface::CommitSurfaceHierarchy(bool synchronized) {
       state_.rounded_corners_bounds = cached_state_.rounded_corners_bounds;
       state_.clip_rect = cached_state_.clip_rect;
       state_.surface_transform = cached_state_.surface_transform;
-      state_.acquire_fence = std::move(cached_state_.acquire_fence);
       if (state_.basic_state.alpha)
         needs_update_resource_ = true;
     }
@@ -1161,11 +1159,6 @@ void Surface::CommitSurfaceHierarchy(bool synchronized) {
     // allocated/attached and may influence the format/modifier selection for
     // these.
     UpdateOverlayPriorityHint(cached_state_.overlay_priority_hint);
-
-    // Either we didn't have a pending acquire fence, or we had one along with
-    // a new buffer, and it was already moved to state_.acquire_fence. Note that
-    // it is a commit-time client error to commit a fence without a buffer.
-    DCHECK(!cached_state_.acquire_fence);
 
     if (needs_update_buffer_transform)
       UpdateBufferTransform(cached_invert_y);
@@ -1491,8 +1484,8 @@ void Surface::UpdateResource(FrameSinkResourceManager* resource_manager) {
     gfx::ColorSpace buffer_color_space = state_.basic_state.color_space;
 
     current_resource_ = state_.buffer->buffer()->ProduceTransferableResource(
-        resource_manager, std::move(state_.acquire_fence),
-        state_.basic_state.only_visible_on_secure_output, buffer_color_space,
+        resource_manager, state_.basic_state.only_visible_on_secure_output,
+        buffer_color_space,
         window_->GetToplevelWindow()->GetProperty(
             kProtectedNativePixmapQueryDelegate));
 
@@ -1580,7 +1573,6 @@ void Surface::AppendContentsToFrame(const gfx::PointF& parent_to_root_px,
                                     bool needs_full_damage,
                                     std::optional<float> device_scale_factor,
                                     viz::CompositorFrame* frame) {
-  UMA_HISTOGRAM_BOOLEAN("Graphics.Exo.Surface.AppendContentsToFrame", true);
   const std::unique_ptr<viz::CompositorRenderPass>& render_pass =
       frame->render_pass_list.back();
   gfx::PointF parent_to_root_dp = gfx::ScalePoint(
@@ -1707,7 +1699,6 @@ void Surface::AppendContentsToFrame(const gfx::PointF& parent_to_root_px,
       CHECK(current_resource_->id);
       frame->resource_list.push_back(*current_resource_);
     }
-    UMA_HISTOGRAM_BOOLEAN("Graphics.Exo.Surface.Occluded", true);
     return;
   }
 
@@ -1745,7 +1736,6 @@ void Surface::AppendContentsToFrame(const gfx::PointF& parent_to_root_px,
       // us to treat client buffers as rgbx. For an example see b/305977429
       const bool force_rgbx_for_opaque =
           are_contents_opaque && current_resource_has_alpha_;
-      UMA_HISTOGRAM_BOOLEAN("Graphics.Exo.Surface.TextureDrawQuad", true);
       viz::SharedQuadState* quad_state =
           render_pass->CreateAndAppendSharedQuadState();
       quad_state->SetAll(quad_to_target_transform, quad_rect, quad_rect, msk,
@@ -1765,7 +1755,6 @@ void Surface::AppendContentsToFrame(const gfx::PointF& parent_to_root_px,
                            /*is_tex_coords_normalized=*/false);
 
       if (force_rgbx_for_opaque) {
-        UMA_HISTOGRAM_BOOLEAN("Graphics.Exo.Surface.ForceRGBAForOpaque", true);
         texture_quad->set_force_rgbx();
       }
 
@@ -1780,7 +1769,6 @@ void Surface::AppendContentsToFrame(const gfx::PointF& parent_to_root_px,
       if (state_.basic_state.only_visible_on_secure_output &&
           state_.buffer.has_value() && state_.buffer->buffer() &&
           state_.buffer->buffer()->NeedsHardwareProtection()) {
-        UMA_HISTOGRAM_BOOLEAN("Graphics.Exo.Surface.ProtectedVideoType", true);
         texture_quad->protected_video_type =
             gfx::ProtectedVideoType::kHardwareProtected;
       }
@@ -1793,7 +1781,6 @@ void Surface::AppendContentsToFrame(const gfx::PointF& parent_to_root_px,
     }
     frame->resource_list.push_back(*current_resource_);
   } else if (state_.basic_state.alpha != 0.0f) {
-    UMA_HISTOGRAM_BOOLEAN("Graphics.Exo.Surface.SolidColorDrawQuad", true);
     viz::SharedQuadState* quad_state =
         render_pass->CreateAndAppendSharedQuadState();
     quad_state->SetAll(quad_to_target_transform, quad_rect, quad_rect, msk,

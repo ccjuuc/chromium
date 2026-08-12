@@ -28,10 +28,12 @@
 #include "extensions/browser/process_manager.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 #include "net/dns/mock_host_resolver.h"
+#include "services/service_manager/public/cpp/interface_provider.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/mojom/annotation/annotation.mojom-shared.h"
 #include "third_party/blink/public/mojom/annotation/annotation.mojom-test-utils.h"
 #include "ui/base/clipboard/clipboard.h"
+#include "ui/base/clipboard/test/clipboard_test_util.h"
 
 class MockLinkToTextMenuObserver : public LinkToTextMenuObserver {
  public:
@@ -246,8 +248,8 @@ IN_PROC_BROWSER_TEST_F(LinkToTextMenuObserverTest, CopiesLinkToText) {
   menu()->ExecuteCommand(IDC_CONTENT_CONTEXT_COPYLINKTOTEXT, 0);
 
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-  std::u16string text;
-  clipboard->ReadText(ui::ClipboardBuffer::kCopyPaste, nullptr, &text);
+  std::u16string text = ui::clipboard_test_util::ReadText(
+      clipboard, ui::ClipboardBuffer::kCopyPaste, nullptr);
   EXPECT_EQ(u"http://foo.com/#:~:text=hello%20world", text);
 }
 
@@ -276,8 +278,8 @@ IN_PROC_BROWSER_TEST_F(LinkToTextMenuObserverTest, ReplacesRefInURL) {
   menu()->ExecuteCommand(IDC_CONTENT_CONTEXT_COPYLINKTOTEXT, 0);
 
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-  std::u16string text;
-  clipboard->ReadText(ui::ClipboardBuffer::kCopyPaste, nullptr, &text);
+  std::u16string text = ui::clipboard_test_util::ReadText(
+      clipboard, ui::ClipboardBuffer::kCopyPaste, nullptr);
   EXPECT_EQ(u"http://foo.com/#:~:text=hello", text);
 }
 
@@ -345,8 +347,8 @@ IN_PROC_BROWSER_TEST_F(LinkToTextMenuObserverTest,
   menu()->ExecuteCommand(IDC_CONTENT_CONTEXT_COPYLINKTOTEXT, 0);
 
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-  std::u16string text;
-  clipboard->ReadText(ui::ClipboardBuffer::kCopyPaste, nullptr, &text);
+  std::u16string text = ui::clipboard_test_util::ReadText(
+      clipboard, ui::ClipboardBuffer::kCopyPaste, nullptr);
   EXPECT_EQ(u"http://foo.com/#:~:text=hello%20world", text);
 }
 
@@ -514,8 +516,8 @@ IN_PROC_BROWSER_TEST_F(LinkToTextMenuObserverTest,
   menu()->ExecuteCommand(IDC_CONTENT_CONTEXT_COPYLINKTOTEXT, 0);
 
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-  std::u16string text;
-  clipboard->ReadText(ui::ClipboardBuffer::kCopyPaste, nullptr, &text);
+  std::u16string text = ui::clipboard_test_util::ReadText(
+      clipboard, ui::ClipboardBuffer::kCopyPaste, nullptr);
   EXPECT_EQ(u"http://foo.com/#bar:~:text=hello%20world", text);
 }
 
@@ -532,8 +534,8 @@ IN_PROC_BROWSER_TEST_F(LinkToTextMenuObserverTest,
   menu()->ExecuteCommand(IDC_CONTENT_CONTEXT_COPYLINKTOTEXT, 0);
 
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-  std::u16string text;
-  clipboard->ReadText(ui::ClipboardBuffer::kCopyPaste, nullptr, &text);
+  std::u16string text = ui::clipboard_test_util::ReadText(
+      clipboard, ui::ClipboardBuffer::kCopyPaste, nullptr);
   EXPECT_EQ(u"http://foo.com/#bar:~:text=hello%20world", text);
 }
 
@@ -551,8 +553,8 @@ IN_PROC_BROWSER_TEST_F(
   menu()->ExecuteCommand(IDC_CONTENT_CONTEXT_COPYLINKTOTEXT, 0);
 
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-  std::u16string text;
-  clipboard->ReadText(ui::ClipboardBuffer::kCopyPaste, nullptr, &text);
+  std::u16string text = ui::clipboard_test_util::ReadText(
+      clipboard, ui::ClipboardBuffer::kCopyPaste, nullptr);
   EXPECT_EQ(u"http://foo.com/#bar:~:text=hello%20world", text);
 }
 
@@ -571,14 +573,14 @@ IN_PROC_BROWSER_TEST_F(
   menu()->ExecuteCommand(IDC_CONTENT_CONTEXT_COPYLINKTOTEXT, 0);
 
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-  std::u16string text;
-  clipboard->ReadText(ui::ClipboardBuffer::kCopyPaste, nullptr, &text);
+  std::u16string text = ui::clipboard_test_util::ReadText(
+      clipboard, ui::ClipboardBuffer::kCopyPaste, nullptr);
   EXPECT_EQ(u"http://foo.com/#bar:~:baz=keep&baz=keep2&text=hello%20world",
             text);
 }
 
 IN_PROC_BROWSER_TEST_F(LinkToTextMenuObserverTest, BlocksCopyingLinkToText) {
-  data_controls::SetDataControls(browser()->profile()->GetPrefs(), {R"({
+  data_controls::SetDataControls(browser()->GetProfile()->GetPrefs(), {R"({
                                    "name": "rule_name",
                                    "rule_id": "rule_id",
                                    "sources": {
@@ -606,14 +608,14 @@ IN_PROC_BROWSER_TEST_F(LinkToTextMenuObserverTest, BlocksCopyingLinkToText) {
   helper.WaitForDialogToClose();
 
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-  std::u16string text;
-  clipboard->ReadText(ui::ClipboardBuffer::kCopyPaste, nullptr, &text);
+  std::u16string text = ui::clipboard_test_util::ReadText(
+      clipboard, ui::ClipboardBuffer::kCopyPaste, nullptr);
   EXPECT_TRUE(text.empty());
 }
 
 IN_PROC_BROWSER_TEST_F(LinkToTextMenuObserverTest,
                        WarnsCopyingLinkToTextAndCancel) {
-  data_controls::SetDataControls(browser()->profile()->GetPrefs(), {R"({
+  data_controls::SetDataControls(browser()->GetProfile()->GetPrefs(), {R"({
                                    "name": "rule_name",
                                    "rule_id": "rule_id",
                                    "sources": {
@@ -641,14 +643,14 @@ IN_PROC_BROWSER_TEST_F(LinkToTextMenuObserverTest,
   helper.WaitForDialogToClose();
 
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-  std::u16string text;
-  clipboard->ReadText(ui::ClipboardBuffer::kCopyPaste, nullptr, &text);
+  std::u16string text = ui::clipboard_test_util::ReadText(
+      clipboard, ui::ClipboardBuffer::kCopyPaste, nullptr);
   EXPECT_TRUE(text.empty());
 }
 
 IN_PROC_BROWSER_TEST_F(LinkToTextMenuObserverTest,
                        WarnsCopyingLinkToTextAndBypass) {
-  data_controls::SetDataControls(browser()->profile()->GetPrefs(), {R"({
+  data_controls::SetDataControls(browser()->GetProfile()->GetPrefs(), {R"({
                                    "name": "rule_name",
                                    "rule_id": "rule_id",
                                    "sources": {
@@ -676,13 +678,13 @@ IN_PROC_BROWSER_TEST_F(LinkToTextMenuObserverTest,
   helper.WaitForDialogToClose();
 
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-  std::u16string text;
-  clipboard->ReadText(ui::ClipboardBuffer::kCopyPaste, nullptr, &text);
+  std::u16string text = ui::clipboard_test_util::ReadText(
+      clipboard, ui::ClipboardBuffer::kCopyPaste, nullptr);
   EXPECT_EQ(u"http://foo.com/#:~:text=hello%20world", text);
 }
 
 IN_PROC_BROWSER_TEST_F(LinkToTextMenuObserverTest, ReplacesCopyingLinkToText) {
-  data_controls::SetDataControls(browser()->profile()->GetPrefs(), {R"({
+  data_controls::SetDataControls(browser()->GetProfile()->GetPrefs(), {R"({
                                    "name": "rule_name",
                                    "rule_id": "rule_id",
                                    "destinations": {
@@ -704,8 +706,8 @@ IN_PROC_BROWSER_TEST_F(LinkToTextMenuObserverTest, ReplacesCopyingLinkToText) {
   menu()->ExecuteCommand(IDC_CONTENT_CONTEXT_COPYLINKTOTEXT, 0);
 
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-  std::u16string text;
-  clipboard->ReadText(ui::ClipboardBuffer::kCopyPaste, nullptr, &text);
+  std::u16string text = ui::clipboard_test_util::ReadText(
+      clipboard, ui::ClipboardBuffer::kCopyPaste, nullptr);
   EXPECT_EQ(u"Pasting this content here is blocked by your administrator.",
             text);
 }

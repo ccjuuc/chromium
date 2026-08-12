@@ -23,6 +23,8 @@
 #import "base/task/thread_pool.h"
 #import "base/time/default_clock.h"
 #import "base/time/default_tick_clock.h"
+#import "build/blink_buildflags.h"
+#import "components/activity_reporter/activity_reporter.h"
 #import "components/application_locale_storage/application_locale_storage.h"
 #import "components/breadcrumbs/core/breadcrumbs_status.h"
 #import "components/breadcrumbs/core/crash_reporter_breadcrumb_observer.h"
@@ -33,6 +35,7 @@
 #import "components/gcm_driver/gcm_driver.h"
 #import "components/history/core/browser/history_service.h"
 #import "components/keyed_service/core/service_access_type.h"
+#import "components/metrics/metrics_features.h"
 #import "components/metrics/metrics_service.h"
 #import "components/metrics_services_manager/metrics_services_manager.h"
 #import "components/net_log/net_export_file_writer.h"
@@ -44,9 +47,12 @@
 #import "components/prefs/pref_service.h"
 #import "components/sessions/core/session_id_generator.h"
 #import "components/signin/core/browser/active_primary_accounts_metrics_recorder.h"
+#import "components/supervised_user/core/browser/device_parental_controls.h"
+#import "components/supervised_user/core/browser/device_parental_controls_noop_impl.h"
 #import "components/translate/core/browser/translate_download_manager.h"
 #import "components/ukm/ukm_service.h"
 #import "components/update_client/configurator.h"
+#import "components/update_client/net/network_chromium.h"
 #import "components/update_client/update_query_params.h"
 #import "components/variations/service/variations_service.h"
 #import "components/version_info/channel.h"
@@ -72,7 +78,7 @@
 #import "ios/chrome/browser/shared/model/profile/incognito_session_tracker.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/signin/model/account_profile_mapper.h"
-#import "ios/chrome/browser/signin/model/avatar_provider.h"
+#import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/update_client/model/ios_chrome_update_query_params_delegate.h"
 #import "ios/chrome/common/channel_info.h"
 #import "ios/components/security_interstitials/safe_browsing/safe_browsing_service_impl.h"
@@ -87,7 +93,6 @@
 #import "mojo/public/cpp/bindings/pending_receiver.h"
 #import "net/log/net_log.h"
 #import "net/log/net_log_capture_mode.h"
-#import "net/socket/client_socket_pool_manager.h"
 #import "net/url_request/url_request_context_getter.h"
 #import "services/metrics/public/cpp/ukm_recorder.h"
 #import "services/network/network_change_manager.h"
@@ -95,13 +100,23 @@
 #import "services/network/public/mojom/network_service.mojom.h"
 #import "ui/base/resource/resource_bundle.h"
 
+#if !BUILDFLAG(USE_BLINK)
+#import "base/memory/memory_pressure_listener_registry.h"
+#endif
+
 ApplicationContextImpl::ApplicationContextImpl(
     base::SequencedTaskRunner* local_state_task_runner,
     const base::CommandLine& command_line,
     const std::string& locale,
     const std::string& country)
     : application_locale_storage_(std::make_unique<ApplicationLocaleStorage>()),
-      local_state_task_runner_(local_state_task_runner) {
+      local_state_task_runner_(local_state_task_runner)
+#if !BUILDFLAG(USE_BLINK)
+      ,
+      memory_pressure_listener_registry_(
+          std::make_unique<base::MemoryPressureListenerRegistry>())
+#endif
+{
   DCHECK(!GetApplicationContext());
   SetApplicationContext(this);
 
@@ -127,7 +142,7 @@ void ApplicationContextImpl::PreCreateThreads() {
 }
 
 void ApplicationContextImpl::PostCreateThreads() {
-  // Delegate all encryption calls to OSCrypt.
+  // Initialize OSCryptAsync with a KeychainKeyProvider.
   auto key_provider = std::make_unique<os_crypt_async::KeychainKeyProvider>();
   std::vector<std::pair<size_t, std::unique_ptr<os_crypt_async::KeyProvider>>>
       key_providers;
@@ -438,6 +453,25 @@ gcm::GCMDriver* ApplicationContextImpl::GetGCMDriver() {
   return gcm_driver_.get();
 }
 
+activity_reporter::ActivityReporter*
+ApplicationContextImpl::GetActivityReporter() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!activity_reporter_) {
+    activity_reporter_ = activity_reporter::CreateActivityReporter(
+        base::BindRepeating(
+            [](PrefService* pref_service) { return pref_service; },
+            GetLocalState()),
+        base::MakeRefCounted<update_client::NetworkFetcherChromiumFactory>(
+            GetSharedURLLoaderFactory(),
+            // Never send cookies for activity reports.
+            base::BindRepeating([](const GURL& url) { return false; })),
+        base::BindRepeating(&::GetChannel),
+        base::BindRepeating(&ios::provider::GetBrandCode), base::DoNothing(),
+        true);
+  }
+  return activity_reporter_.get();
+}
+
 component_updater::ComponentUpdateService*
 ApplicationContextImpl::GetComponentUpdateService() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -596,11 +630,22 @@ ApplicationContextImpl::GetAutoDeletionService() {
   return auto_deletion_service_.get();
 }
 
+supervised_user::DeviceParentalControls&
+ApplicationContextImpl::GetDeviceParentalControls() {
+  if (!device_parental_controls_) {
+    device_parental_controls_ =
+        std::make_unique<supervised_user::DeviceParentalControlsNoOpImpl>();
+  }
+  return *device_parental_controls_;
+}
+
 optimization_guide::OptimizationGuideGlobalState*
 ApplicationContextImpl::GetOptimizationGuideGlobalState() {
   if (!optimization_guide_global_state_) {
     optimization_guide_global_state_ =
-        std::make_unique<optimization_guide::OptimizationGuideGlobalState>();
+        std::make_unique<optimization_guide::OptimizationGuideGlobalState>(
+            GetLocalState(), GetProfileManager(), GetApplicationLocaleStorage(),
+            GetSharedURLLoaderFactory());
   }
   return optimization_guide_global_state_.get();
 }
@@ -618,13 +663,15 @@ void ApplicationContextImpl::OnAppEnterState(AppState app_state) {
   if (metrics_services_manager_) {
     if (metrics::MetricsService* metrics_service =
             metrics_services_manager_->GetMetricsService()) {
+      bool enable_background_metrics_work = base::FeatureList::IsEnabled(
+          metrics::features::kIOSBackgroundMetrics);
       switch (app_state) {
         case AppState::kForeground:
           metrics_service->OnAppEnterForeground();
           break;
 
         case AppState::kBackgroundFromActive:
-          metrics_service->OnAppEnterBackground();
+          metrics_service->OnAppEnterBackground(enable_background_metrics_work);
           break;
         case AppState::kBackgroundProcessing:
           // Background processing should be tracked in metrcis, including
@@ -635,7 +682,7 @@ void ApplicationContextImpl::OnAppEnterState(AppState app_state) {
           // When background processing is complete, this state should be
           // treated like normal backgrounding, including specifically the
           // clean exit beacon.
-          metrics_service->OnAppEnterBackground();
+          metrics_service->OnAppEnterBackground(enable_background_metrics_work);
           break;
       }
     }
@@ -732,12 +779,6 @@ void ApplicationContextImpl::CreateLocalState() {
   DCHECK(local_state_);
 
   sessions::SessionIdGenerator::GetInstance()->Init(local_state_.get());
-
-  net::ClientSocketPoolManager::set_max_sockets_per_proxy_chain(
-      net::HttpNetworkSession::NORMAL_SOCKET_POOL,
-      std::max(std::min<size_t>(net::kDefaultMaxSocketsPerProxyChain, 99u),
-               net::ClientSocketPoolManager::max_sockets_per_group(
-                   net::HttpNetworkSession::NORMAL_SOCKET_POOL)));
 
   // Cleanup obsolete preferences.
   MigrateObsoleteLocalStatePrefs(local_state_.get());

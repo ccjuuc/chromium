@@ -13,12 +13,14 @@ source_set("ui_bundled") {
   deps = [
     "//base",
     "//components/prefs",
+    "//components/signin/public/identity_manager/objc",
     "//components/strings:components_strings_grit",
     "//ios/chrome/app/strings",
     "//ios/chrome/app/strings:ios_strings_grit",
     "//ios/chrome/browser/account_picker/ui_bundled",
     "//ios/chrome/browser/account_picker/ui_bundled:account_picker_configuration",
     "//ios/chrome/browser/account_picker/ui_bundled:account_picker_logger",
+    "//ios/chrome/browser/authentication/signin/reauth/coordinator",
     "//ios/chrome/browser/authentication/ui_bundled/signin:constants",
     "//ios/chrome/browser/authentication/ui_bundled/signin:signin_headers",
     "//ios/chrome/browser/photos/model",
@@ -34,9 +36,11 @@ source_set("ui_bundled") {
     "//ios/chrome/browser/shared/ui/symbols",
     "//ios/chrome/browser/signin/model",
     "//ios/chrome/browser/signin/model:authentication_service",
+    "//ios/chrome/browser/signin/model:authentication_service_factory",
     "//ios/chrome/browser/signin/model:system_identity",
     "//ios/chrome/browser/store_kit/model",
     "//ios/chrome/browser/web/model/image_fetch",
+    "//ios/chrome/common:string_util",
     "//ios/web/public",
     "//ios/web/public/navigation:referrer",
     "//url",
@@ -57,6 +61,7 @@ source_set("unit_tests") {
     "//components/prefs:test_support",
     "//components/signin/public/identity_manager:test_support",
     "//components/strings:components_strings_grit",
+    "//components/sync:test_support",
     "//components/test/ios",
     "//components/variations:test_support",
     "//ios/chrome/app/strings:ios_strings_grit",
@@ -78,10 +83,14 @@ source_set("unit_tests") {
     "//ios/chrome/browser/shared/public/commands",
     "//ios/chrome/browser/shared/public/features",
     "//ios/chrome/browser/signin/model",
+    "//ios/chrome/browser/signin/model:authentication_service",
+    "//ios/chrome/browser/signin/model:authentication_service_factory",
     "//ios/chrome/browser/signin/model:fake_system_identity",
     "//ios/chrome/browser/signin/model:fake_system_identity_manager",
     "//ios/chrome/browser/signin/model:test_support",
     "//ios/chrome/browser/store_kit/model",
+    "//ios/chrome/browser/sync/model",
+    "//ios/chrome/browser/sync/model:test_support",
     "//ios/chrome/browser/web/model/image_fetch",
     "//ios/chrome/test:test_support",
     "//ios/chrome/test/fakes",
@@ -91,4 +100,26 @@ source_set("unit_tests") {
     "//testing/gtest",
     "//third_party/ocmock",
   ]
+}
+
+source_set("eg2_tests") {
+  configs += [ "//build/config/ios:xctest_config" ]
+  testonly = true
+  sources = [ "save_to_photos_egtest.mm" ]
+  deps = [
+    "//build:branding_buildflags",
+    "//ios/chrome/app/strings",
+    "//ios/chrome/browser/account_picker/ui_bundled/account_picker_confirmation:constants",
+    "//ios/chrome/browser/account_picker/ui_bundled/account_picker_screen",
+    "//ios/chrome/browser/authentication/test:eg_test_support+eg2",
+    "//ios/chrome/browser/shared/model/prefs:pref_names",
+    "//ios/chrome/browser/signin/model:fake_system_identity",
+    "//ios/chrome/browser/signin/model:test_constants",
+    "//ios/chrome/test:eg_test_support+eg2",
+    "//ios/chrome/test/earl_grey:eg_test_support+eg2",
+    "//ios/testing/earl_grey:eg_test_support+eg2",
+    "//net:test_support",
+    "//ui/base",
+  ]
+  frameworks = [ "UIKit.framework" ]
 }

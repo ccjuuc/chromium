@@ -6,26 +6,23 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
-#include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
-#include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/permissions/permission_prompt_bubble_base_view.h"
 #include "chrome/browser/ui/views/permissions/permission_prompt_bubble_view_factory.h"
+#include "chrome/browser/ui/views/permissions/permission_prompt_observer.h"
 #include "chrome/browser/ui/views/permissions/permission_prompt_style.h"
 #include "components/permissions/features.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/display/types/display_constants.h"
 
 PermissionPromptBubble::PermissionPromptBubble(
-    Browser* browser,
     content::WebContents* web_contents,
     Delegate* delegate)
-    : PermissionPromptDesktop(browser, web_contents, delegate) {
-  LocationBarView* lbv = GetLocationBarView();
-  if (lbv && lbv->IsDrawn() &&
+    : PermissionPromptDesktop(web_contents, delegate) {
+  LocationBar* lb = GetLocationBar();
+  if (lb && lb->IsDrawn() &&
       delegate->Requests()[0]->IsConfirmationChipSupported()) {
-    lbv->GetChipController()->InitializePermissionPrompt(
+    lb->GetChipController()->InitializePermissionPrompt(
         delegate->GetWeakPtr(),
         base::BindOnce(&PermissionPromptBubble::ShowBubble,
                        weak_factory_.GetWeakPtr()));
@@ -40,18 +37,15 @@ PermissionPromptBubble::~PermissionPromptBubble() {
 }
 
 void PermissionPromptBubble::ShowBubble() {
-  FullscreenController* fullscreen_controller = browser()
-                                                    ->GetFeatures()
-                                                    .exclusive_access_manager()
-                                                    ->fullscreen_controller();
-  CHECK(fullscreen_controller);
-  if (fullscreen_controller->IsTabFullscreen()) {
-    fullscreen_blocker_ =
-        web_contents()->ForSecurityDropFullscreen(display::kInvalidDisplayId);
+  auto blocker =
+      web_contents()->ForSecurityDropFullscreen(display::kInvalidDisplayId);
+  if (!blocker) {
+    return;
   }
+  fullscreen_blocker_ = std::move(*blocker);
 
   raw_ptr<PermissionPromptBubbleBaseView> prompt_bubble =
-      CreatePermissionPromptBubbleView(browser(), delegate()->GetWeakPtr(),
+      CreatePermissionPromptBubbleView(web_contents(), delegate()->GetWeakPtr(),
                                        PermissionPromptStyle::kBubbleOnly);
   prompt_bubble_tracker_.SetView(prompt_bubble);
   prompt_bubble->Show();
@@ -60,12 +54,25 @@ void PermissionPromptBubble::ShowBubble() {
       prompt_bubble->GetWidget()->GetPrimaryWindowWidget()->IsVisible();
 
   disallowed_custom_cursors_scope_ =
-      delegate()->GetAssociatedWebContents()->CreateDisallowCustomCursorScope(
+      web_contents()->CreateDisallowCustomCursorScope(
           /*max_dimension_dips=*/0);
+
+  auto* observer = PermissionPromptObserver::FromWebContents(web_contents());
+  if (observer) {
+    // Notify it is showing, but there is no minimum height/width.
+    observer->NotifyPermissionPromptChanged(
+        /*is_showing=*/true, gfx::Size());
+  }
 }
 
 void PermissionPromptBubble::CleanUpPromptBubble() {
   if (GetPromptBubble()) {
+    auto* observer = PermissionPromptObserver::FromWebContents(web_contents());
+    if (observer) {
+      observer->NotifyPermissionPromptChanged(
+          /*is_showing=*/false, gfx::Size());
+    }
+
     views::Widget* widget = GetPromptBubble()->GetWidget();
     widget->RemoveObserver(this);
     widget->CloseWithReason(views::Widget::ClosedReason::kUnspecified);
@@ -75,13 +82,19 @@ void PermissionPromptBubble::CleanUpPromptBubble() {
 }
 
 void PermissionPromptBubble::OnWidgetDestroying(views::Widget* widget) {
+  auto* observer = PermissionPromptObserver::FromWebContents(web_contents());
+  if (observer) {
+    observer->NotifyPermissionPromptChanged(
+        /*is_showing=*/false, gfx::Size());
+  }
+
   widget->RemoveObserver(this);
   prompt_bubble_tracker_.SetView(nullptr);
 }
 
 void PermissionPromptBubble::OnWidgetActivationChanged(views::Widget* widget,
                                                        bool active) {
-  // This logic prevents clickjacking. See https://crbug.com/1160485
+  // This logic prevents clickjacking. See https://crbug.com/40054242
   if (active && !parent_was_visible_when_activation_changed_) {
     // If the widget is active and the primary window wasn't active the last
     // time activation changed, we know that the window just came to the
@@ -124,11 +137,10 @@ bool PermissionPromptBubble::UpdateAnchor() {
     // location bar view. In that case we should create the chip in the location
     // bar view if required, then obtain a reference to the chip controller and
     // finally initialize it with the current permission request.
-    LocationBarView* lbv = GetLocationBarView();
+    LocationBar* lb = GetLocationBar();
 
-    if (lbv && lbv->IsDrawn() && !lbv->GetWidget()->IsFullscreen() &&
-        !lbv->IsEditingOrEmpty()) {
-      auto* chip_controller = lbv->GetChipController();
+    if (lb && lb->IsDrawn() && !lb->IsFullscreen() && !lb->IsEditingOrEmpty()) {
+      auto* chip_controller = lb->GetChipController();
       chip_controller->InitializePermissionPrompt(delegate()->GetWeakPtr());
     }
   }

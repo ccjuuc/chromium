@@ -13,6 +13,7 @@
 #include "base/component_export.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/observer_list_types.h"
 #include "base/scoped_observation.h"
 #include "base/values.h"
 #include "chromeos/ash/components/dbus/shill/shill_property_changed_observer.h"
@@ -47,18 +48,19 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkSmsHandler
   static const char kTextKey[];
   static const char kTimestampKey[];
 
-  class Observer {
+  class Observer : public base::CheckedObserver {
    public:
-    virtual ~Observer() = default;
-
     // Called when a new message arrives. |message| contains the message which
     // is a dictionary value containing entries for kNumberKey, kTextKey, and
     // kTimestampKey.
-    virtual void MessageReceived(const base::Value::Dict& message) {}
+    virtual void MessageReceived(const base::DictValue& message) {}
 
     // Called when a new message arrives from a network with |guid|.
     virtual void MessageReceivedFromNetwork(const std::string& guid,
                                             const TextMessageData& message) {}
+
+   protected:
+    ~Observer() override = default;
   };
 
   NetworkSmsHandler(const NetworkSmsHandler&) = delete;
@@ -86,7 +88,6 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkSmsHandler
   friend class TextMessageProviderTest;
 
   class NetworkSmsDeviceHandler;
-  class ModemManagerNetworkSmsDeviceHandler;
   class ModemManager1NetworkSmsDeviceHandler;
 
   // Timeout for waiting to fetch SMS details.
@@ -105,24 +106,24 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkSmsHandler
   // Adds |message| to the list of received messages. If the length of the
   // list exceeds the maximum number of retained messages, erase the least
   // recently received message.
-  void AddReceivedMessage(const base::Value::Dict& message);
+  void AddReceivedMessage(const base::DictValue& message);
 
   // Notify observers that |message| was received.
-  void NotifyMessageReceived(const base::Value::Dict& message);
+  void NotifyMessageReceived(const base::DictValue& message);
 
   // Called from NetworkSmsDeviceHandler when a message is received.
-  void MessageReceived(const base::Value::Dict& message);
+  void MessageReceived(const base::DictValue& message);
 
   // Callback to handle the manager properties with the list of devices.
-  void ManagerPropertiesCallback(std::optional<base::Value::Dict> properties);
+  void ManagerPropertiesCallback(std::optional<base::DictValue> properties);
 
   // Requests properties for each entry in |devices|.
-  void UpdateDevices(const base::Value::List& devices);
+  void UpdateDevices(const base::ListValue& devices);
 
   // Callback to handle the device properties for |device_path|.
   // A NetworkSmsDeviceHandler will be instantiated for each cellular device.
   void DevicePropertiesCallback(const std::string& device_path,
-                                std::optional<base::Value::Dict> properties);
+                                std::optional<base::DictValue> properties);
 
   // Called when the cellular device's object path changes. This means that
   // there has been an update to the device's SIM (removed or inserted) and that
@@ -133,9 +134,9 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkSmsHandler
   // last active network accordingly.
   void OnActiveDeviceIccidChanged(const std::string& iccid);
 
-  base::ObserverList<Observer, true>::Unchecked observers_;
+  base::ObserverList<Observer, true> observers_;
   std::unique_ptr<NetworkSmsDeviceHandler> device_handler_;
-  std::vector<base::Value::Dict> received_messages_;
+  std::vector<base::DictValue> received_messages_;
   std::string cellular_device_path_;
   raw_ptr<NetworkStateHandler> network_state_handler_ = nullptr;
   base::ScopedObservation<NetworkStateHandler, NetworkStateHandlerObserver>

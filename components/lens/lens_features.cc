@@ -9,6 +9,7 @@
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
@@ -16,6 +17,8 @@
 namespace lens::features {
 
 BASE_FEATURE(kLensStandalone, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kShowContextualTasksMenuIcon, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kLensOverlay,
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
@@ -25,6 +28,8 @@ BASE_FEATURE(kLensOverlay,
 #endif
 );
 
+BASE_FEATURE(kLensOverlayAndroid, base::FEATURE_DISABLED_BY_DEFAULT);
+
 BASE_FEATURE(kLensOverlayTranslateButton, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kLensOverlayTranslateLanguages, base::FEATURE_DISABLED_BY_DEFAULT);
@@ -32,8 +37,7 @@ BASE_FEATURE(kLensOverlayTranslateLanguages, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kLensOverlayImageContextMenuActions,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kLensOverlayContextualSearchbox,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kLensOverlayContextualSearchbox, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kLensOverlaySuggestionsMigration,
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -54,7 +58,8 @@ BASE_FEATURE(kLensOverlayVisualSelectionUpdates,
 BASE_FEATURE(kLensOverlayUpdatedClientContext,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kLensSearchSidePanelNewFeedback, base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kLensSearchSidePanelNewFeedback,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Enables the Lens Overlay omnibox entry point. This is a separate feature from
 // kLensOverlay so that the omnibox entry point can be disabled without a
@@ -63,6 +68,8 @@ BASE_FEATURE(kLensSearchSidePanelNewFeedback, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kLensOverlayOmniboxEntryPoint, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kLensOverlayUploadChunking, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kLensBypassCompressionForC2pa, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kLensOverlayRecontextualizeOnQuery,
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -86,9 +93,7 @@ BASE_FEATURE(kLensSearchNotFoundOnPageToast,
              "kLensSearchNotFoundOnPageToast",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kLensOverlayStraightToSrp, base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kLensSearchAimM3, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kLensSearchAimM3, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kLensSearchAimM3EnUs, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kLensSearchAimM3UseAimEligibility,
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -96,7 +101,6 @@ BASE_FEATURE(kLensSearchAimM3UseAimEligibility,
 BASE_FEATURE(kLensSearchReinvocationAffordance,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kLensOverlayEntrypointLabelAlt, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kLensOverlayTextSelectionContextMenuEntrypoint,
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -111,16 +115,57 @@ BASE_FEATURE(kLensAimSuggestions, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kLensAimSuggestionsGradientBackground,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kLensSearchZeroStateCsb, base::FEATURE_DISABLED_BY_DEFAULT);
-
 BASE_FEATURE(kLensVideoCitations, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kLensUpdatedFeedbackEntrypoint, base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kLensOverlayOptimizationFilter, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kLensSidePanelUnification, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kLensOverlayNonBlockingPrivacyNotice,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kLensOverlayNonBlockingPrivacyNoticeForImageSearch,
              base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kLensEnableWebpForImageUpload,
+             "LensEnableWebpForImageUpload",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kLensUseSeparateRequestIdForViewportImages,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kLensSendVitForSingleContextNextQueries,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kLensSendRawFileMediaTypes, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kLensSendQuerySubmissionTime, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kLensSendUrlsInComposeboxes,
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+             base::FEATURE_DISABLED_BY_DEFAULT
+#else
+             base::FEATURE_ENABLED_BY_DEFAULT
+#endif
+);
+
+BASE_FEATURE(kLensOnlySendAaiForModalityChips,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+const base::FeatureParam<bool> kLensOnlySendAaiExcludeRawAndDriveFiles{
+    &kLensOnlySendAaiForModalityChips, "exclude_raw_and_drive_files", true};
+
+BASE_FEATURE(kLensRestrictAnnotatedPageContentToSameSiteFramesForNextQueries,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kLensDeleteContextOnPageNavigation,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+const char kLensOverlayAndroidImplIntent[] = "intent";
+const char kLensOverlayAndroidImplWebUI[] = "webui";
+
+const base::FeatureParam<std::string> kLensOverlayAndroidImplType{
+    &kLensOverlayAndroid, "implementation_type", kLensOverlayAndroidImplIntent};
 
 constexpr base::FeatureParam<int> kLensUpdatedFeedbackToastTimeoutMs{
     &kLensUpdatedFeedbackEntrypoint, "feedback-toast-timeout-ms", 8000};
@@ -211,14 +256,6 @@ constexpr base::FeatureParam<bool> kIsOmniboxEntrypointAlwaysVisible{
 const base::FeatureParam<bool> kUseBrowserDarkModeSettingForLensOverlay{
     &kLensOverlay, "use-browser-dark-mode-setting", true};
 
-const base::FeatureParam<bool> kDynamicThemeForLensOverlay{
-    &kLensOverlay, "use-dynamic-theme", true};
-
-const base::FeatureParam<double> kDynamicThemeMinPopulationPct{
-    &kLensOverlay, "use-dynamic-theme-min-population-pct", 0.002f};
-
-const base::FeatureParam<double> kDynamicThemeMinChroma{
-    &kLensOverlay, "use-dynamic-theme-min-chroma", 3.0f};
 
 const base::FeatureParam<bool>
     kSendVisualSearchInteractionParamForLensTextQueries{
@@ -417,9 +454,6 @@ constexpr base::FeatureParam<base::TimeDelta> kSupportedLanguagesCacheTimeoutMs{
 constexpr base::FeatureParam<int> kRecentLanguagesAmount{
     &kLensOverlayTranslateLanguages, "recent-languages-amount", 5};
 
-constexpr base::FeatureParam<bool>
-    kLensOverlayVisualSelectionUpdatesEnableDynamicTheme{
-        &kLensOverlayVisualSelectionUpdates, "enable-dynamic-theme", false};
 
 constexpr base::FeatureParam<bool>
     kLensOverlayVisualSelectionUpdatesEnableBorderGlow{
@@ -497,34 +531,20 @@ constexpr base::FeatureParam<int> kLensOverlayUploadChunkRetries{
 constexpr base::FeatureParam<int> kLensOverlaySliderChangedTimeout{
     &kLensOverlayCornerSliders, "slider-changed-timeout", 1000};
 
-const base::FeatureParam<std::string> kLensOverlayEduUrlAllowFilters{
-    &kLensOverlayEduActionChip, "url-allow-filters", "[]"};
-
-const base::FeatureParam<std::string> kLensOverlayEduUrlBlockFilters{
-    &kLensOverlayEduActionChip, "url-block-filters", "[]"};
-
-const base::FeatureParam<std::string> kLensOverlayEduUrlPathMatchAllowFilters{
-    &kLensOverlayEduActionChip, "url-path-match-allow-filters", "[]"};
-
-const base::FeatureParam<std::string> kLensOverlayEduUrlPathMatchBlockFilters{
-    &kLensOverlayEduActionChip, "url-path-match-block-filters", "[]"};
-
-const base::FeatureParam<std::string> kLensOverlayEduHashedDomainBlockFilters{
-    &kLensOverlayEduActionChip, "hashed-domain-block-filters", ""};
-
-const base::FeatureParam<std::string>
-    kLensOverlayEduUrlForceAllowedMatchPatterns{
-        &kLensOverlayEduActionChip, "url-path-forced-allowed-match-patterns",
-        "[]"};
-
 const base::FeatureParam<bool> kLensOverlayEduActionChipDisabledByGlic{
     &kLensOverlayEduActionChip, "disabled-by-glic", true};
 
 const base::FeatureParam<int> kLensOverlayEduActionChipMaxShownCount{
     &kLensOverlayEduActionChip, "max-shown-count", 3};
 
-constexpr base::FeatureParam<std::string> kLensOverlayStraightToSrpQuery{
-    &kLensOverlayStraightToSrp, "query", ""};
+const base::FeatureParam<base::TimeDelta> kLensOverlayEduActionChipShowInterval{
+    &kLensOverlayEduActionChip, "lens-action-chip-show-interval",
+    base::Hours(0)};
+
+const base::FeatureParam<base::TimeDelta>
+    kLensOverlayEduActionChipShowDebounceInterval{
+        &kLensOverlayEduActionChip, "lens-action-chip-show-debounce-interval",
+        base::Seconds(1)};
 
 constexpr base::FeatureParam<bool> kOpenAimInSidePanel{
     &kLensSearchAimM3, "open-aim-in-side-panel", true};
@@ -547,16 +567,11 @@ constexpr base::FeatureParam<bool> kEnableFloatingGForHeader{
 constexpr base::FeatureParam<bool> kEnableClientSideHeader{
     &kLensSearchAimM3, "enable-client-side-header", true};
 
-const base::FeatureParam<int> kLensOverlayEntrypointLabelAltId{
-    &kLensOverlayEntrypointLabelAlt, "id", 0};
 
 constexpr base::FeatureParam<bool>
     kLensOverlayTextSelectionContextMenuEntrypointContextualize{
         &kLensOverlayTextSelectionContextMenuEntrypoint, "contextualize",
         false};
-
-constexpr base::FeatureParam<std::string> kZeroStateCsbQuery{
-    &kLensSearchZeroStateCsb, "zero-state-csb-query", ""};
 
 const base::FeatureParam<
     LensAimSuggestionsType>::Option kLensAimSuggestionsTypeOptions[] = {
@@ -573,6 +588,9 @@ const base::FeatureParam<LensAimSuggestionsType> kLensAimSuggestionsType(
 
 const base::FeatureParam<int> kLensOverlayNonBlockingPrivacyNoticeImpressionCap{
     &kLensOverlayNonBlockingPrivacyNotice, "impression-cap", 0};
+
+const base::FeatureParam<bool> kLensSidePanelUnificationAllowSignedOut{
+    &kLensSidePanelUnification, "allow-signed-out", true};
 
 std::string_view LensAimSuggestionModeToString(
     LensAimSuggestionsType type) {
@@ -844,13 +862,6 @@ bool UseBrowserDarkModeSettingForLensOverlay() {
   return kUseBrowserDarkModeSettingForLensOverlay.Get();
 }
 
-double DynamicThemeMinPopulationPct() {
-  return kDynamicThemeMinPopulationPct.Get();
-}
-
-double DynamicThemeMinChroma() {
-  return kDynamicThemeMinChroma.Get();
-}
 
 bool SendVisualSearchInteractionParamForLensTextQueries() {
   return kSendVisualSearchInteractionParamForLensTextQueries.Get();
@@ -928,6 +939,15 @@ int GetLensOverlayImageContextMenuActionsTextReceivedTimeout() {
 
 bool IsLensOverlaySidePanelOpenInNewTabEnabled() {
   return base::FeatureList::IsEnabled(kLensOverlaySidePanelOpenInNewTab);
+}
+
+bool IsLensSidePanelUnificationEnabled() {
+  return base::FeatureList::IsEnabled(kLensSidePanelUnification);
+}
+
+bool IsLensSidePanelUnificationAllowSignedOut() {
+  return IsLensSidePanelUnificationEnabled() &&
+         kLensSidePanelUnificationAllowSignedOut.Get();
 }
 
 bool IsLensOverlayClusterInfoOptimizationEnabled() {
@@ -1008,12 +1028,6 @@ bool IsLensOverlayVisualSelectionUpdatesEnabled() {
   return base::FeatureList::IsEnabled(kLensOverlayVisualSelectionUpdates);
 }
 
-bool IsDynamicThemeDetectionEnabled() {
-  if (IsLensOverlayVisualSelectionUpdatesEnabled()) {
-    return kLensOverlayVisualSelectionUpdatesEnableDynamicTheme.Get();
-  }
-  return kDynamicThemeForLensOverlay.Get();
-}
 
 bool GetVisualSelectionUpdatesEnableBorderGlow() {
   return IsLensOverlayVisualSelectionUpdatesEnabled() &&
@@ -1198,36 +1212,20 @@ bool IsLensOverlayEduActionChipEnabled() {
   return base::FeatureList::IsEnabled(kLensOverlayEduActionChip);
 }
 
-std::string GetLensOverlayEduUrlAllowFilters() {
-  return kLensOverlayEduUrlAllowFilters.Get();
-}
-
-std::string GetLensOverlayEduUrlBlockFilters() {
-  return kLensOverlayEduUrlBlockFilters.Get();
-}
-
-std::string GetLensOverlayEduUrlPathMatchAllowFilters() {
-  return kLensOverlayEduUrlPathMatchAllowFilters.Get();
-}
-
-std::string GetLensOverlayEduUrlPathMatchBlockFilters() {
-  return kLensOverlayEduUrlPathMatchBlockFilters.Get();
-}
-
-std::string GetLensOverlayEduUrlForceAllowedMatchPatterns() {
-  return kLensOverlayEduUrlForceAllowedMatchPatterns.Get();
-}
-
-std::string GetLensOverlayEduHashedDomainBlockFilters() {
-  return kLensOverlayEduHashedDomainBlockFilters.Get();
-}
-
 bool IsLensOverlayEduActionChipDisabledByGlic() {
   return kLensOverlayEduActionChipDisabledByGlic.Get();
 }
 
 int GetLensOverlayEduActionChipMaxShownCount() {
   return kLensOverlayEduActionChipMaxShownCount.Get();
+}
+
+base::TimeDelta GetLensOverlayEduActionChipShowInterval() {
+  return kLensOverlayEduActionChipShowInterval.Get();
+}
+
+base::TimeDelta GetLensOverlayEduActionChipShowDebounceInterval() {
+  return kLensOverlayEduActionChipShowDebounceInterval.Get();
 }
 
 bool IsLensOverlayKeyboardSelectionEnabled() {
@@ -1242,13 +1240,6 @@ bool IsLensSearchNotFoundOnPageToastEnabled() {
   return base::FeatureList::IsEnabled(kLensSearchNotFoundOnPageToast);
 }
 
-bool IsLensOverlayStraightToSrpEnabled() {
-  return base::FeatureList::IsEnabled(kLensOverlayStraightToSrp);
-}
-
-std::string GetStraightToSrpQuery() {
-  return kLensOverlayStraightToSrpQuery.Get();
-}
 
 bool IsLensOverlayTextSelectionContextMenuEntrypointEnabled() {
   return base::FeatureList::IsEnabled(
@@ -1267,13 +1258,6 @@ bool IsLensSidePanelWebviewResultsEnabled() {
   return base::FeatureList::IsEnabled(kLensSidePanelEnableWebviewResults);
 }
 
-bool IsLensSearchZeroStateCsbEnabled() {
-  return base::FeatureList::IsEnabled(kLensSearchZeroStateCsb);
-}
-
-std::string GetZeroStateCsbQuery() {
-  return IsLensSearchZeroStateCsbEnabled() ? kZeroStateCsbQuery.Get() : "";
-}
 
 bool IsLensVideoCitationsEnabled() {
   return base::FeatureList::IsEnabled(kLensVideoCitations);
@@ -1291,16 +1275,77 @@ int GetLensUpdatedFeedbackToastTimeoutMs() {
   return kLensUpdatedFeedbackToastTimeoutMs.Get();
 }
 
-bool IsLensOverlayOptimizationFilterEnabled() {
-  return base::FeatureList::IsEnabled(kLensOverlayOptimizationFilter);
-}
-
 bool IsLensOverlayNonBlockingPrivacyNoticeEnabled() {
   return base::FeatureList::IsEnabled(kLensOverlayNonBlockingPrivacyNotice);
 }
 
+bool IsLensOverlayNonBlockingPrivacyNoticeForImageSearchEnabled() {
+  return base::FeatureList::IsEnabled(kLensOverlayNonBlockingPrivacyNotice) &&
+         base::FeatureList::IsEnabled(
+             kLensOverlayNonBlockingPrivacyNoticeForImageSearch);
+}
+
 int GetLensOverlayNonBlockingPrivacyNoticeImpressionCap() {
   return kLensOverlayNonBlockingPrivacyNoticeImpressionCap.Get();
+}
+
+bool IsLensSendRawFileMediaTypesEnabled() {
+  return base::FeatureList::IsEnabled(kLensSendRawFileMediaTypes);
+}
+
+bool IsLensSendUrlsInComposeboxesEnabled() {
+  return base::FeatureList::IsEnabled(kLensSendUrlsInComposeboxes);
+}
+
+bool IsLensOnlySendAaiForModalityChipsEnabled() {
+  return base::FeatureList::IsEnabled(kLensOnlySendAaiForModalityChips);
+}
+
+bool IsLensOnlySendAaiExcludeRawAndDriveFilesEnabled() {
+  return kLensOnlySendAaiExcludeRawAndDriveFiles.Get();
+}
+
+BASE_FEATURE(kLensComposeboxIdentityDelegation,
+             "LensComposeboxIdentityDelegation",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+constexpr base::FeatureParam<std::string>
+    kLensComposeboxIdentityDelegationClusterInfoEndpointUrl{
+        &kLensComposeboxIdentityDelegation,
+        "lens-composebox-cluster-info-endpoint-url",
+        "https://lensfrontend-pa.clients6.google.com/v1/gsessionid"};
+
+constexpr base::FeatureParam<std::string>
+    kLensComposeboxIdentityDelegationEndpointUrl{
+        &kLensComposeboxIdentityDelegation, "lens-composebox-endpoint-url",
+        "https://lensfrontend-pa.clients6.google.com/v1/crupload"};
+
+constexpr base::FeatureParam<std::string>
+    kLensComposeboxIdentityDelegationUploadChunkEndpointUrl{
+        &kLensComposeboxIdentityDelegation,
+        "lens-composebox-upload-chunk-endpoint-url",
+        "https://lensfrontend-pa.clients6.google.com/v1/uploadChunk"};
+
+bool UseIdentityDelegationForLensComposeboxRequests() {
+  return base::FeatureList::IsEnabled(kLensComposeboxIdentityDelegation);
+}
+
+std::string GetLensComposeboxClusterInfoEndpointUrl() {
+  return UseIdentityDelegationForLensComposeboxRequests()
+             ? kLensComposeboxIdentityDelegationClusterInfoEndpointUrl.Get()
+             : kLensOverlayClusterInfoEndpointUrl.Get();
+}
+
+std::string GetLensComposeboxEndpointUrl() {
+  return UseIdentityDelegationForLensComposeboxRequests()
+             ? kLensComposeboxIdentityDelegationEndpointUrl.Get()
+             : kLensOverlayEndpointUrl.Get();
+}
+
+std::string GetLensComposeboxUploadChunkEndpointUrl() {
+  return UseIdentityDelegationForLensComposeboxRequests()
+             ? kLensComposeboxIdentityDelegationUploadChunkEndpointUrl.Get()
+             : kLensOverlayUploadChunkEndpointUrl.Get();
 }
 
 }  // namespace lens::features

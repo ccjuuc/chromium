@@ -7,42 +7,25 @@
 #include <memory>
 #include <utility>
 
-#include "base/debug/stack_trace.h"
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/media/router/media_router_feature.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
-#include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/media_router/ui_media_sink.h"
-#include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/media_router/cast_dialog_helper.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/media_router/common/issue.h"
-#include "components/media_router/common/mojom/media_router.mojom.h"
-#include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
-#include "ui/base/ui_base_types.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
-#include "ui/gfx/color_palette.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/ink_drop_impl.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/styled_label.h"
-#include "ui/views/controls/throbber.h"
-#include "ui/views/layout/box_layout.h"
 #include "ui/views/vector_icons.h"
+#include "ui/views/widget/widget.h"
 
 namespace media_router {
 
@@ -71,10 +54,14 @@ std::unique_ptr<views::View> CreatePrimaryIconForSink(const UIMediaSink& sink) {
   // The stop button has the highest priority, and the issue icon comes second.
   if (sink.state == UIMediaSinkState::CONNECTED) {
     return CreatePrimaryIconView(ui::ImageModel::FromVectorIcon(
-        kGenericStopIcon, ui::kColorAccent, kPrimaryIconSize));
+        features::IsRoundedIconsEnabled() ? kStopCircleIcon
+                                          : kGenericStopOldIcon,
+        ui::kColorAccent, kPrimaryIconSize));
   } else if (sink.issue) {
     auto icon = std::make_unique<views::ImageView>(
-        ui::ImageModel::FromVectorIcon(::vector_icons::kInfoOutlineIcon,
+        ui::ImageModel::FromVectorIcon(::features::IsRoundedIconsEnabled()
+                                           ? vector_icons::kInfoIcon
+                                           : vector_icons::kInfoOutlineOldIcon,
                                        ui::kColorIcon, kPrimaryIconSize));
     icon->SetBorder(views::CreateEmptyBorder(kPrimaryIconBorder));
     return icon;
@@ -146,8 +133,8 @@ void CastDialogSinkButton::OnMouseReleased(const ui::MouseEvent& event) {
 
 void CastDialogSinkButton::OnEnabledChanged() {
   HoverButton::OnEnabledChanged();
-  // Prevent a DCHECK failure seen at https://crbug.com/912687 by not having an
-  // InkDrop if the button is disabled.
+  // Prevent a DCHECK failure seen at https://crbug.com/40605457 by not having
+  // an InkDrop if the button is disabled.
   views::InkDrop::Get(this)->SetMode(
       GetEnabled() ? views::InkDropHost::InkDropMode::ON
                    : views::InkDropHost::InkDropMode::OFF);
@@ -187,14 +174,13 @@ void CastDialogSinkButton::UpdateTitleTextStyle() {
 
 void CastDialogSinkButton::RequestFocus() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  static bool requesting_focus = false;
-  if (requesting_focus) {
-    // TODO(crbug.com/1291739): Figure out why this happens.
-    DLOG(ERROR) << "Recursive call to RequestFocus\n"
-                << base::debug::StackTrace();
+
+  // Prevent recursive calls to RequestFocus() while the widget is being
+  // shown and is not yet active. See crbug.com/155642655.
+  if (GetWidget() && !GetWidget()->IsActive()) {
     return;
   }
-  requesting_focus = true;
+
   if (GetEnabled()) {
     HoverButton::RequestFocus();
   } else {
@@ -202,7 +188,6 @@ void CastDialogSinkButton::RequestFocus() {
     // want focus.
     icon_view()->RequestFocus();
   }
-  requesting_focus = false;
 }
 
 void CastDialogSinkButton::OnFocus() {
@@ -232,18 +217,21 @@ const gfx::VectorIcon* CastDialogSinkButton::GetVectorIcon(
   const gfx::VectorIcon* vector_icon;
   switch (icon_type) {
     case SinkIconType::CAST_AUDIO_GROUP:
-      vector_icon = &kSpeakerGroupIcon;
+      vector_icon = &(features::IsRoundedIconsEnabled() ? kSpeakerGroupIcon
+                                                        : kSpeakerGroupOldIcon);
       break;
     case SinkIconType::CAST_AUDIO:
-      vector_icon = &kSpeakerIcon;
+      vector_icon =
+          &(features::IsRoundedIconsEnabled() ? kSpeakerIcon : kSpeakerOldIcon);
       break;
     case SinkIconType::WIRED_DISPLAY:
-      vector_icon = &kInputIcon;
+      vector_icon =
+          &(features::IsRoundedIconsEnabled() ? kInputIcon : kInputOldIcon);
       break;
     case SinkIconType::CAST:
     case SinkIconType::GENERIC:
     default:
-      vector_icon = &kTvIcon;
+      vector_icon = &(features::IsRoundedIconsEnabled() ? kTvIcon : kTvOldIcon);
       break;
   }
   return vector_icon;
@@ -251,7 +239,9 @@ const gfx::VectorIcon* CastDialogSinkButton::GetVectorIcon(
 
 // static
 const gfx::VectorIcon* CastDialogSinkButton::GetVectorIcon(UIMediaSink sink) {
-  return sink.issue ? &::vector_icons::kInfoOutlineIcon
+  return sink.issue ? &(::features::IsRoundedIconsEnabled()
+                            ? vector_icons::kInfoIcon
+                            : vector_icons::kInfoOutlineOldIcon)
                     : GetVectorIcon(sink.icon_type);
 }
 

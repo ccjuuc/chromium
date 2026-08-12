@@ -37,6 +37,7 @@ class RTCAnswerOptionsPlatform;
 class RTCIceCandidatePlatform;
 class RTCOfferOptionsPlatform;
 class RTCPeerConnectionHandler;
+class RTCTrackEvent;
 class UserMediaRequest;
 class WebLocalFrame;
 
@@ -165,6 +166,11 @@ class MODULES_EXPORT PeerConnectionTracker
       TransceiverUpdatedReason reason,
       const RTCRtpTransceiverPlatform& transceiver,
       size_t transceiver_index);
+
+  // Sends an update when the "track" event is fired for a remote track added
+  // by setRemoteDescription. Example event: "ontrack".
+  virtual void TrackOnTrack(RTCPeerConnectionHandler* pc_handler,
+                            const RTCTrackEvent& event);
 
   // Sends an update when a DataChannel is created.
   virtual void TrackCreateDataChannel(
@@ -320,7 +326,7 @@ class MODULES_EXPORT PeerConnectionTracker
                                 const String& callback_type,
                                 const String& value);
 
-  void AddStandardStats(int lid, base::Value::List value);
+  void AddStandardStats(int lid, base::ListValue value);
 
   // This map stores the local ID assigned to each RTCPeerConnectionHandler.
   typedef HashMap<RTCPeerConnectionHandler*, int> PeerConnectionLocalIdMap;

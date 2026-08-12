@@ -139,8 +139,7 @@ ResponseAction PasswordsPrivateRequestPlaintextPasswordFunction::Run() {
           parameters->id, parameters->reason,
           base::BindOnce(
               &PasswordsPrivateRequestPlaintextPasswordFunction::GotPassword,
-              this),
-          GetSenderWebContents());
+              this));
 
   // GotPassword() might respond before we reach this point.
   return did_respond() ? AlreadyResponded() : RespondLater();
@@ -255,8 +254,7 @@ ResponseAction PasswordsPrivateMovePasswordsToAccountFunction::Run() {
   auto parameters =
       api::passwords_private::MovePasswordsToAccount::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(parameters);
-  GetDelegate(browser_context())
-      ->MovePasswordsToAccount(parameters->ids, GetSenderWebContents());
+  GetDelegate(browser_context())->MovePasswordsToAccount(parameters->ids);
   return RespondNow(NoArguments());
 }
 
@@ -343,8 +341,7 @@ ResponseAction PasswordsPrivateContinueImportFunction::Run() {
       ->ContinueImport(
           parameters->selected_ids,
           base::BindOnce(
-              &PasswordsPrivateContinueImportFunction::ImportCompleted, this),
-          GetSenderWebContents());
+              &PasswordsPrivateContinueImportFunction::ImportCompleted, this));
 
   // `ImportCompleted()` might respond before we reach this point.
   return did_respond() ? AlreadyResponded() : RespondLater();
@@ -385,11 +382,17 @@ ResponseAction PasswordsPrivateExportPasswordsFunction::Run() {
 }
 
 void PasswordsPrivateExportPasswordsFunction::ExportRequestCompleted(
-    const std::string& error) {
-  if (error.empty()) {
-    Respond(NoArguments());
-  } else {
-    Respond(Error(error));
+    PasswordsPrivateDelegate::ExportPasswordsResult result) {
+  switch (result) {
+    case PasswordsPrivateDelegate::ExportPasswordsResult::kSuccess:
+      Respond(NoArguments());
+      break;
+    case PasswordsPrivateDelegate::ExportPasswordsResult::kInProgress:
+      Respond(Error("in-progress"));
+      break;
+    case PasswordsPrivateDelegate::ExportPasswordsResult::kReauthFailed:
+      Respond(Error("reauth-failed"));
+      break;
   }
 }
 
@@ -402,42 +405,6 @@ ResponseAction PasswordsPrivateRequestExportProgressStatusFunction::Run() {
   return RespondNow(ArgumentList(
       api::passwords_private::RequestExportProgressStatus::Results::Create(
           GetDelegate(browser_context())->GetExportProgressStatus())));
-}
-
-// PasswordsPrivateIsAccountStorageEnabledFunction
-ResponseAction PasswordsPrivateIsAccountStorageEnabledFunction::Run() {
-  if (!GetDelegate(browser_context())) {
-    return RespondNow(Error(kNoDelegateError));
-  }
-
-  return RespondNow(
-      WithArguments(GetDelegate(browser_context())->IsAccountStorageEnabled()));
-}
-
-// PasswordsPrivateSetAccountStorageEnabledFunction
-ResponseAction PasswordsPrivateSetAccountStorageEnabledFunction::Run() {
-  if (!GetDelegate(browser_context())) {
-    return RespondNow(Error(kNoDelegateError));
-  }
-
-  auto parameters =
-      api::passwords_private::SetAccountStorageEnabled::Params::Create(args());
-  EXTENSION_FUNCTION_VALIDATE(parameters);
-
-  GetDelegate(browser_context())
-      ->SetAccountStorageEnabled(parameters->enabled, GetSenderWebContents());
-  return RespondNow(NoArguments());
-}
-
-// PasswordsPrivateShouldShowAccountStorageSettingToggleFunction
-ResponseAction
-PasswordsPrivateShouldShowAccountStorageSettingToggleFunction::Run() {
-  if (!GetDelegate(browser_context())) {
-    return RespondNow(Error(kNoDelegateError));
-  }
-
-  return RespondNow(WithArguments(
-      GetDelegate(browser_context())->ShouldShowAccountStorageSettingToggle()));
 }
 
 // PasswordsPrivateGetInsecureCredentialsFunction:
@@ -594,47 +561,13 @@ ResponseAction PasswordsPrivateAddPasswordFunction::Run() {
                          base::UTF8ToUTF16(parameters->options.username),
                          base::UTF8ToUTF16(parameters->options.password),
                          base::UTF8ToUTF16(parameters->options.note),
-                         parameters->options.use_account_store,
-                         GetSenderWebContents())) {
+                         parameters->options.use_account_store)) {
     return RespondNow(Error(
         "Could not add the password. Either the url is invalid, the password "
         "is empty or an entry with such origin and username already exists."));
   }
 
   return RespondNow(NoArguments());
-}
-
-// PasswordsPrivateExtendAuthValidityFunction
-ResponseAction PasswordsPrivateExtendAuthValidityFunction::Run() {
-  if (!GetDelegate(browser_context())) {
-    return RespondNow(Error(kNoDelegateError));
-  }
-
-  GetDelegate(browser_context())->RestartAuthTimer();
-  return RespondNow(NoArguments());
-}
-
-// PasswordsPrivateSwitchBiometricAuthBeforeFillingStateFunction
-ResponseAction
-PasswordsPrivateSwitchBiometricAuthBeforeFillingStateFunction::Run() {
-  if (!GetDelegate(browser_context())) {
-    return RespondNow(Error(kNoDelegateError));
-  }
-
-  GetDelegate(browser_context())
-      ->SwitchBiometricAuthBeforeFillingState(
-          GetSenderWebContents(),
-          base::BindOnce(
-              &PasswordsPrivateSwitchBiometricAuthBeforeFillingStateFunction::
-                  OnAuthenticationComplete,
-              this));
-
-  return did_respond() ? AlreadyResponded() : RespondLater();
-}
-
-void PasswordsPrivateSwitchBiometricAuthBeforeFillingStateFunction::
-    OnAuthenticationComplete(bool result) {
-  Respond(WithArguments(result));
 }
 
 // PasswordsPrivateShowExportedFileInShellFunction
@@ -648,63 +581,14 @@ ResponseAction PasswordsPrivateShowExportedFileInShellFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(parameters);
 
   GetDelegate(browser_context())
-      ->ShowExportedFileInShell(GetSenderWebContents(), parameters->file_path);
+      ->ShowLastExportedFileInShell(GetSenderWebContents());
   return RespondNow(NoArguments());
-}
-
-// PasswordsPrivateShowAddShortcutDialogFunction
-ResponseAction PasswordsPrivateShowAddShortcutDialogFunction::Run() {
-  if (!GetDelegate(browser_context())) {
-    return RespondNow(Error(kNoDelegateError));
-  }
-
-  GetDelegate(browser_context())->ShowAddShortcutDialog(GetSenderWebContents());
-  return RespondNow(NoArguments());
-}
-
-// PasswordsPrivateChangePasswordManagerPinFunction
-ResponseAction PasswordsPrivateChangePasswordManagerPinFunction::Run() {
-  if (auto delegate = GetDelegate(browser_context())) {
-    delegate->ChangePasswordManagerPin(
-        GetSenderWebContents(),
-        base::BindOnce(&PasswordsPrivateChangePasswordManagerPinFunction::
-                           OnPinChangeCompleted,
-                       this));
-    return did_respond() ? AlreadyResponded() : RespondLater();
-  }
-
-  return RespondNow(Error(kNoDelegateError));
-}
-
-void PasswordsPrivateChangePasswordManagerPinFunction::OnPinChangeCompleted(
-    bool success) {
-  Respond(WithArguments(success));
-}
-
-// PasswordsPrivateIsPasswordManagerPinAvailableFunction
-ResponseAction PasswordsPrivateIsPasswordManagerPinAvailableFunction::Run() {
-  if (auto delegate = GetDelegate(browser_context())) {
-    delegate->IsPasswordManagerPinAvailable(
-        GetSenderWebContents(),
-        base::BindOnce(&PasswordsPrivateIsPasswordManagerPinAvailableFunction::
-                           OnPasswordManagerPinAvailabilityReceived,
-                       this));
-    return did_respond() ? AlreadyResponded() : RespondLater();
-  }
-
-  return RespondNow(Error(kNoDelegateError));
-}
-
-void PasswordsPrivateIsPasswordManagerPinAvailableFunction::
-    OnPasswordManagerPinAvailabilityReceived(bool is_available) {
-  Respond(WithArguments(is_available));
 }
 
 // PasswordsPrivateDisconnectCloudAuthenticatorFunction
 ResponseAction PasswordsPrivateDisconnectCloudAuthenticatorFunction::Run() {
   if (auto delegate = GetDelegate(browser_context())) {
     delegate->DisconnectCloudAuthenticator(
-        GetSenderWebContents(),
         base::BindOnce(&PasswordsPrivateDisconnectCloudAuthenticatorFunction::
                            OnDisconnectCloudAuthenticatorCompleted,
                        this));
@@ -722,30 +606,11 @@ void PasswordsPrivateDisconnectCloudAuthenticatorFunction::
 // PasswordsPrivateIsConnectedToCloudAuthenticatorFunction
 ResponseAction PasswordsPrivateIsConnectedToCloudAuthenticatorFunction::Run() {
   if (auto delegate = GetDelegate(browser_context())) {
-    return RespondNow(WithArguments(
-        delegate->IsConnectedToCloudAuthenticator(GetSenderWebContents())));
+    return RespondNow(
+        WithArguments(delegate->IsConnectedToCloudAuthenticator()));
   }
 
   return RespondNow(Error(kNoDelegateError));
-}
-
-// PasswordsPrivateDeleteAllPasswordManagerDataFunction
-ResponseAction PasswordsPrivateDeleteAllPasswordManagerDataFunction::Run() {
-  if (auto delegate = GetDelegate(browser_context())) {
-    delegate->DeleteAllPasswordManagerData(
-        GetSenderWebContents(),
-        base::BindOnce(&PasswordsPrivateDeleteAllPasswordManagerDataFunction::
-                           OnDeletionCompleted,
-                       this));
-    return did_respond() ? AlreadyResponded() : RespondLater();
-  }
-
-  return RespondNow(Error(kNoDelegateError));
-}
-
-void PasswordsPrivateDeleteAllPasswordManagerDataFunction::OnDeletionCompleted(
-    bool success) {
-  Respond(WithArguments(success));
 }
 
 }  // namespace extensions

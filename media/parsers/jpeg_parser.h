@@ -8,9 +8,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <array>
+#include <ostream>
 
 #include "base/containers/span.h"
+#include "base/memory/raw_span.h"
 #include "media/base/media_export.h"
 
 namespace media {
@@ -80,17 +83,19 @@ const size_t kJpegMaxQuantizationTableNum = 4;
 // Parsing result of JPEG DHT marker.
 struct JpegHuffmanTable {
   bool valid;
-  uint8_t code_length[16];
-  uint8_t code_value[162];
+  std::array<uint8_t, 16> code_length;
+  std::array<uint8_t, 162> code_value;
 };
 
 // K.3.3.1 "Specification of typical tables for DC difference coding"
 MEDIA_EXPORT
-extern const JpegHuffmanTable kDefaultDcTable[kJpegMaxHuffmanTableNumBaseline];
+extern const std::array<JpegHuffmanTable, kJpegMaxHuffmanTableNumBaseline>
+    kDefaultDcTable;
 
 // K.3.3.2 "Specification of typical tables for AC coefficient coding"
 MEDIA_EXPORT
-extern const JpegHuffmanTable kDefaultAcTable[kJpegMaxHuffmanTableNumBaseline];
+extern const std::array<JpegHuffmanTable, kJpegMaxHuffmanTableNumBaseline>
+    kDefaultAcTable;
 
 // Parsing result of JPEG DQT marker.
 struct JpegQuantizationTable {
@@ -141,12 +146,13 @@ struct JpegParseResult {
   JpegQuantizationTable q_table[kJpegMaxQuantizationTableNum];
   uint16_t restart_interval;
   JpegScanHeader scan;
-  const char* data;
-  // The size of compressed data of the first image.
-  size_t data_size;
+  base::raw_span<const uint8_t> data;
   // The size of the first entire image including header.
   size_t image_size;
 };
+
+MEDIA_EXPORT std::ostream& operator<<(std::ostream& os,
+                                      const JpegParseResult& result);
 
 // Parses JPEG picture in |buffer| with |length|.  Returns true iff header is
 // valid and JPEG baseline sequential process is present. If parsed
@@ -154,12 +160,6 @@ struct JpegParseResult {
 MEDIA_EXPORT
 bool ParseJpegPicture(base::span<const uint8_t> buffer,
                       JpegParseResult* result);
-
-// Parses the first image of JPEG stream in |buffer| with |length|.  Returns
-// true iff header is valid and JPEG baseline sequential process is present.
-// If parsed successfully, |result| is the parsed result.
-MEDIA_EXPORT
-bool ParseJpegStream(base::span<const uint8_t> buffer, JpegParseResult* result);
 
 }  // namespace media
 

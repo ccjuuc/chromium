@@ -5,14 +5,13 @@
 #include "chrome/browser/apps/platform_apps/extension_app_shim_manager_delegate_mac.h"
 
 #include <memory>
+#include <ranges>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "apps/launcher.h"
-#include "base/containers/adapters.h"
 #include "base/memory/raw_ptr.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_shim/app_shim_termination_manager.h"
 #include "chrome/browser/apps/platform_apps/app_window_registry_util.h"
 #include "chrome/browser/apps/platform_apps/platform_app_launch.h"
@@ -27,6 +26,7 @@
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_metrics.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "extensions/browser/app_window/app_window.h"
 #include "extensions/browser/app_window/app_window_registry.h"
 #include "extensions/browser/app_window/native_app_window.h"
@@ -106,7 +106,7 @@ bool ExtensionAppShimManagerDelegate::ShowAppWindows(
     const webapps::AppId& app_id) {
   AppWindowList windows =
       AppWindowRegistry::Get(profile)->GetAppWindowsForApp(app_id);
-  for (extensions::AppWindow* window : base::Reversed(windows)) {
+  for (extensions::AppWindow* window : std::views::reverse(windows)) {
     if (window)
       window->GetBaseWindow()->Show();
   }
@@ -163,7 +163,7 @@ bool ExtensionAppShimManagerDelegate::AppUsesRemoteCocoa(
   if (!extension->is_hosted_app())
     return false;
 
-  // https://crbug.com/1086824
+  // https://crbug.com/40694497
   return extension->id() == extension_misc::kYoutubeAppId ||
          extension->id() == extension_misc::kGoogleDriveAppId ||
          extension->id() == extension_misc::kGmailAppId;
@@ -229,7 +229,7 @@ void ExtensionAppShimManagerDelegate::LaunchShim(
   DCHECK(extension);
   // Only force recreation of shims when RemoteViews is in use (that is, for
   // PWAs). Otherwise, shims may be created unexpectedly.
-  // https://crbug.com/941160
+  // https://crbug.com/41446487
   if (web_app::RecreateShimsRequested(update_behavior) &&
       AppUsesRemoteCocoa(profile, app_id)) {
     // Load the resources needed to build the app shim (icons, etc), and then

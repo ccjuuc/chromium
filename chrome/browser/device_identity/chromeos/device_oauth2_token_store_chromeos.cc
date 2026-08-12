@@ -13,6 +13,7 @@
 #include "base/path_service.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/device_identity/chromeos/token_encryptor.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
@@ -40,7 +41,7 @@ std::string LoadRefreshTokenV3() {
 
 namespace chromeos {
 
-BASE_FEATURE(kRefreshTokenV3Feature, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kRefreshTokenV3Feature, base::FEATURE_ENABLED_BY_DEFAULT);
 
 DeviceOAuth2TokenStoreChromeOS::DeviceOAuth2TokenStoreChromeOS(
     PrefService* local_state)
@@ -115,6 +116,15 @@ void DeviceOAuth2TokenStoreChromeOS::SetAndSaveRefreshToken(
     // remove the code that stores the token using the old methods, but also
     // make sure the FlushTokenSaveCallbacks() is called.
     if (base::FeatureList::IsEnabled(kRefreshTokenV3Feature)) {
+      // An empty token cannot be saved. The operation should fail asynchronously
+      // to match the behavior of the V2 encryption path.
+      if (refresh_token_.empty()) {
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE,
+            base::BindOnce(&DeviceOAuth2TokenStoreChromeOS::OnStoreTokenV3Done,
+                           weak_ptr_factory_.GetWeakPtr(), /*success=*/false));
+        return;
+      }
       StoreRefreshTokenV3();
       return;
     }

@@ -33,7 +33,7 @@ class HotspotAllowedFlagHandlerTest : public ::testing::Test {
 
   void OnGetManagerCallback(const std::string& property_name,
                             bool expected_value,
-                            std::optional<base::Value::Dict> result) {
+                            std::optional<base::DictValue> result) {
     if (!result) {
       ADD_FAILURE() << "Error getting Shill manager properties";
       return;
@@ -41,7 +41,8 @@ class HotspotAllowedFlagHandlerTest : public ::testing::Test {
     std::optional<bool> actual_value = result->FindBool(property_name);
     if (!actual_value) {
       ADD_FAILURE()
-          << "Error getting TetheringAllowed in Shill manager properties";
+          << "Error getting experimental tethering flag in Shill manager "
+             "properties";
       return;
     }
     EXPECT_EQ(expected_value, *actual_value);

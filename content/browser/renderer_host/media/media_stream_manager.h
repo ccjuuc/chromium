@@ -35,6 +35,7 @@
 #include "content/browser/renderer_host/media/media_stream_power_logger.h"
 #include "content/browser/renderer_host/media/media_stream_provider.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/desktop_capture.h"
 #include "content/public/browser/desktop_media_id.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/media_request_state.h"
@@ -42,6 +43,7 @@
 #include "content/public/browser/permission_controller.h"
 #include "content/public/browser/permission_result.h"
 #include "content/public/common/buildflags.h"
+#include "content/public/common/child_process_id.h"
 #include "media/base/video_facing.h"
 #include "media/capture/mojom/video_capture.mojom.h"
 #include "mojo/public/cpp/bindings/unique_receiver_set.h"
@@ -70,7 +72,6 @@ class Origin;
 namespace content {
 
 class AudioInputDeviceManager;
-class AudioServiceListener;
 class FakeMediaStreamUIProxy;
 class MediaStreamUIProxy;
 class PermissionControllerImpl;
@@ -182,9 +183,6 @@ class CONTENT_EXPORT MediaStreamManager
 
   // Used to access AudioInputDeviceManager.
   AudioInputDeviceManager* audio_input_device_manager() const;
-
-  // Used to access AudioServiceListener, must be called on UI thread.
-  AudioServiceListener* audio_service_listener();
 
   // Used to access MediaDevicesManager.
   MediaDevicesManager* media_devices_manager();
@@ -365,7 +363,8 @@ class CONTENT_EXPORT MediaStreamManager
 
   // Returns true if the renderer process identified with |render_process_id|
   // is allowed to access |origin|.
-  static bool IsOriginAllowed(int render_process_id, const url::Origin& origin);
+  static bool IsOriginAllowed(ChildProcessId render_process_id,
+                              const url::Origin& origin);
 
   // Returns internal single instance of PreferredAudioOutputDeviceManager
   // object instance. The client should not take ownership of the returned
@@ -425,6 +424,13 @@ class CONTENT_EXPORT MediaStreamManager
       const base::UnguessableToken& session_id,
       const std::optional<gfx::Rect>& region_capture_rect);
 
+  void OpenNativeScreenCapturePicker(
+      DesktopMediaID::Type type,
+      base::OnceCallback<void(DesktopMediaID::Id)> created_callback,
+      base::OnceCallback<void(webrtc::DesktopCapturer::Source)> picker_callback,
+      base::OnceCallback<void()> cancel_callback,
+      base::OnceCallback<void()> error_callback);
+
 #if BUILDFLAG(ENABLE_SCREEN_CAPTURE)
   // Determines whether the captured surface (tab/window) should be focused.
   // This can be called at most once, and only within the first 1s of the
@@ -479,10 +485,39 @@ class CONTENT_EXPORT MediaStreamManager
   std::optional<url::Origin> GetOriginByVideoSessionId(
       const base::UnguessableToken& session_id);
 
+  bool IsSessionAllowedOnLockScreen(const base::UnguessableToken& session_id);
+
+  // Validates that the renderer-supplied `session_id` is authorized for use by
+  // the calling `render_frame_host_id`.
+  //
+  // Returns `true` if:
+  // - The session is active and owned by `render_frame_host_id` (valid usage).
+  // - The session is not active/not found in MediaStreamManager. This is
+  //   considered safe as a non-existent session cannot be hijacked; it will
+  //   fail gracefully downstream (e.g., returning null device). This allows
+  //   legitimate asynchronous races (such as teardown races) to fail gracefully
+  //   instead of causing false-positive renderer terminations.
+  //
+  // Returns `false` if:
+  // - The session is active but owned by a different `RenderFrameHost`/origin.
+  // - The session is active but is of the wrong type (e.g., passing a video
+  //   session ID to an audio endpoint).
+  // A return value of `false` indicates a security violation, and the caller
+  // should terminate the renderer (e.g., via `mojo::ReportBadMessage`).
+  bool ValidateAudioSession(
+      const base::UnguessableToken& session_id,
+      const GlobalRenderFrameHostId& render_frame_host_id) const;
+
+  bool ValidateVideoSession(
+      const base::UnguessableToken& session_id,
+      const GlobalRenderFrameHostId& render_frame_host_id) const;
+
  private:
   friend class MediaStreamManagerTest;
   FRIEND_TEST_ALL_PREFIXES(MediaStreamManagerTest, DesktopCaptureDeviceStopped);
   FRIEND_TEST_ALL_PREFIXES(MediaStreamManagerTest, DesktopCaptureDeviceChanged);
+  FRIEND_TEST_ALL_PREFIXES(MediaStreamManagerTest,
+                           DesktopCaptureDeviceChangeDeniedThenCancel);
   FRIEND_TEST_ALL_PREFIXES(MediaStreamManagerTest,
                            MultiCaptureOnMediaStreamUIWindowId);
   FRIEND_TEST_ALL_PREFIXES(MediaStreamManagerTest,
@@ -524,7 +559,8 @@ class CONTENT_EXPORT MediaStreamManager
       const std::string& label,
       const media::AudioParameters& output_parameters,
       const blink::mojom::StreamDevicesSet& stream_devices_set,
-      blink::mojom::MediaStreamRequestResult result);
+      blink::mojom::MediaStreamRequestResult result,
+      bool is_allowed_while_screen_locked = false);
   void HandleChangeSourceRequestResponse(
       const std::string& label,
       DeviceRequest* request,
@@ -548,14 +584,20 @@ class CONTENT_EXPORT MediaStreamManager
   void StopDevice(blink::mojom::MediaStreamType type,
                   const base::UnguessableToken& session_id);
 
+  // Used by the native screen capture picker to stop application-audio for a
+  // specific session ID. Note: this only affects application audio; if
+  // system-audio is captured, it will not be stopped.
+  void StopApplicationAudioForPickerSessionId(
+      DesktopMediaID::Id picker_session_id);
+
   // Calls the correct capture manager and closes the device with |session_id|.
   // All requests that use the device are updated.
   void CloseDevice(blink::mojom::MediaStreamType type,
                    const base::UnguessableToken& session_id);
 
   // Returns true if a request for devices has been completed and the devices
-  // has either been opened or an error has occurred.
-  bool RequestDone(const DeviceRequest& request) const;
+  // have either been opened or an error has occurred.
+  static bool RequestDone(const DeviceRequest& request);
 
   MediaStreamProvider* GetDeviceManager(
       blink::mojom::MediaStreamType stream_type) const;
@@ -571,12 +613,15 @@ class CONTENT_EXPORT MediaStreamManager
       const std::string& label) const;
   DeviceRequest* FindRequest(const std::string& label) const;
 
-  // Find a request by the session-ID of its video device.
-  // (In case of multiple video devices - any of them would fit.)
-  // TOOD(crbug.com/1466247): Remove this after making the Captured Surface
-  // Control APIs pass the label instead.
-  DeviceRequest* FindRequestByVideoSessionId(
-      const base::UnguessableToken& session_id) const;
+  enum class SessionType { kAudio, kVideo };
+
+  DeviceRequest* FindRequestBySessionId(
+      const base::UnguessableToken& session_id,
+      SessionType* out_type) const;
+
+  bool ValidateSession(const base::UnguessableToken& session_id,
+                       const GlobalRenderFrameHostId& render_frame_host_id,
+                       SessionType expected_type) const;
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   CapturedSurfaceController* GetCapturedSurfaceController(
@@ -772,18 +817,19 @@ class CONTENT_EXPORT MediaStreamManager
       int page_request_id,
       PermissionResult permission_result);
 
-  // Start tracking capture-handle changes for tab-capture.
+  // Start tracking capture-handle changes for tab and window capture.
   void MaybeStartTrackingCaptureHandleConfig(
       const std::string& label,
       const blink::MediaStreamDevice& captured_device,
       DeviceRequest& request);
 
-  // Stop tracking capture-handle changes for tab-capture.
+  // Stop tracking capture-handle changes for tab and window capture.
   void MaybeStopTrackingCaptureHandleConfig(
       const std::string& label,
       const blink::MediaStreamDevice& captured_device);
 
-  // When device changes, update which tabs' capture-handles are tracked.
+  // When device changes, update which tabs/windows' capture-handles are
+  // tracked.
   void MaybeUpdateTrackedCaptureHandleConfigs(
       const std::string& label,
       const blink::mojom::StreamDevicesSet& new_stream_devices_set,
@@ -857,7 +903,7 @@ class CONTENT_EXPORT MediaStreamManager
   // * Otherwise, the capturing tab will capture itself.
   std::optional<WebContentsMediaCaptureId> fake_ui_factory_captured_tab_id_;
 
-  // Observes changes of captured tabs' CaptureHandleConfig and reports
+  // Observes changes of captured tabs/windows' CaptureHandleConfig and reports
   // this changes back to their capturers. This object lives on the UI thread
   // and must be accessed on it and torn down from it.
   CaptureHandleManager capture_handle_manager_;
@@ -865,8 +911,6 @@ class CONTENT_EXPORT MediaStreamManager
   // Maps render process hosts to log callbacks. Used on the IO thread.
   std::map<int, base::RepeatingCallback<void(const std::string&)>>
       log_callbacks_;
-
-  std::unique_ptr<AudioServiceListener> audio_service_listener_;
 
   // Provider of system power change logging to the WebRTC logs.
   MediaStreamPowerLogger power_logger_;
@@ -883,6 +927,8 @@ class CONTENT_EXPORT MediaStreamManager
 
   std::unique_ptr<media::SystemEventMonitorImpl> system_event_monitor_;
 #endif
+
+  base::WeakPtrFactory<MediaStreamManager> weak_ptr_factory_{this};
 };
 
 }  // namespace content

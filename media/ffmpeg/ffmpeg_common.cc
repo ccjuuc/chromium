@@ -9,6 +9,7 @@
 #include "base/hash/sha1.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
+#include "base/numerics/byte_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -17,6 +18,7 @@
 #include "media/base/audio_timestamp_helper.h"
 #include "media/base/decoder_buffer.h"
 #include "media/base/encryption_scheme.h"
+#include "media/base/limits.h"
 #include "media/base/media_util.h"
 #include "media/base/supported_types.h"
 #include "media/base/video_aspect_ratio.h"
@@ -32,6 +34,9 @@
 #if BUILDFLAG(ENABLE_PLATFORM_HEVC)
 #include "media/formats/mp4/hevc.h"
 #endif
+#if BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
+#include "media/formats/mp4/dolby_vision.h"
+#endif  // BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
 #endif
 
 namespace media {
@@ -116,36 +121,7 @@ void CopyBufferFromConfig(const T& config, AVCodecContext* codec_context) {
   std::ranges::fill(padding, '\0');
 }
 
-base::span<const uint32_t> GetSkipSamples(const AVPacket* packet) {
-  size_t skip_samples_size = 0;
-  const uint32_t* skip_samples_ptr =
-      reinterpret_cast<const uint32_t*>(av_packet_get_side_data(
-          packet, AV_PKT_DATA_SKIP_SAMPLES, &skip_samples_size));
-  // SAFETY:
-  // https://ffmpeg.org/doxygen/6.0/group__lavc__packet.html#ga68712351b8a025b464e5c854d4a9fe1f
-  // ffmpeg documentation: av_packet_get_side_data() returns a pointer to
-  // already allocated data with a valid size if present and sets `size`
-  // to its length, or nullptr if no data is available and sets `size` to zero.
-  //
-  // Since we are not allocating memory, and it is considered a valid use case
-  // to construct a base::span<> from nullptr with size zero, this is safe.
-  return UNSAFE_BUFFERS(
-      base::span<const uint32_t>(skip_samples_ptr, skip_samples_size));
-}
-
 }  // namespace
-
-// Allows faster SIMD YUV convert. Also, FFmpeg overreads/-writes occasionally.
-// See video_get_buffer() in libavcodec/utils.c.
-static const int kFFmpegOutputBufferPaddingSize = 16;
-
-static_assert(VideoFrame::kFrameSizePadding >= kFFmpegOutputBufferPaddingSize,
-              "VideoFrame padding size does not fit ffmpeg requirement");
-
-static_assert(
-    VideoFrame::kFrameAddressAlignment >= kFFmpegBufferAddressAlignment &&
-    VideoFrame::kFrameAddressAlignment % kFFmpegBufferAddressAlignment == 0,
-    "VideoFrame frame address alignment does not fit ffmpeg requirement");
 
 static const AVRational kMicrosBase = { 1, base::Time::kMicrosecondsPerSecond };
 
@@ -409,11 +385,16 @@ bool AVCodecContextToAudioDecoderConfig(const AVCodecContext* codec_context,
       codec_context->sample_fmt, codec_context->codec_id);
 
   ChannelLayout channel_layout =
-      codec_context->ch_layout.nb_channels > 8
-          ? CHANNEL_LAYOUT_DISCRETE
-          : ChannelLayoutToChromeChannelLayout(
-                codec_context->ch_layout.u.mask,
-                codec_context->ch_layout.nb_channels);
+      ChannelLayoutToChromeChannelLayout(codec_context->ch_layout);
+
+  // If there is a mismatch of `channel_layout` and `nb_channels`, we trust the
+  // count. We skip this check for DISCRETE layouts since it does not have a
+  // specific channel count.
+  if (channel_layout != CHANNEL_LAYOUT_DISCRETE &&
+      ChannelLayoutToChannelCount(channel_layout) !=
+          codec_context->ch_layout.nb_channels) {
+    channel_layout = GuessChannelLayout(codec_context->ch_layout.nb_channels);
+  }
 
   switch (codec) {
     // For AC3/EAC3 we enable only demuxing, but not decoding, so FFmpeg does
@@ -462,11 +443,21 @@ bool AVCodecContextToAudioDecoderConfig(const AVCodecContext* codec_context,
         .copy_from_nonoverlapping(AVCodecContextExtraDataToSpan(codec_context));
   }
 
-  config->Initialize(codec, sample_format, channel_layout, codec_context->sample_rate,
-                     extra_data, encryption_scheme, seek_preroll,
-                     codec_context->delay);
-  if (channel_layout == CHANNEL_LAYOUT_DISCRETE)
-    config->SetChannelsForDiscrete(codec_context->ch_layout.nb_channels);
+  // FFmpeg exports AAC edit list padding in
+  // AVCodecParameters::initial_padding, which propagates to
+  // codec_context->delay. AAC does not have a pipeline decoder delay, and
+  // this padding is already discarded using container-level discard padding.
+  // Pass 0 here to prevent AudioDiscardHelper from treating it as decoder
+  // delay and failing.
+  int codec_delay = codec_context->delay;
+  if (codec == AudioCodec::kAAC) {
+    codec_delay = 0;
+  }
+
+  config->Initialize(codec, sample_format,
+                     {channel_layout, codec_context->ch_layout.nb_channels},
+                     codec_context->sample_rate, extra_data, encryption_scheme,
+                     seek_preroll, codec_delay);
 
 #if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
   // These are bitstream formats unknown to ffmpeg, so they don't have
@@ -713,8 +704,8 @@ bool AVStreamToVideoDecoderConfig(const AVStream* stream,
       profile = AV1PROFILE_PROFILE_MAIN;
       if (codec_context->extradata && codec_context->extradata_size) {
         mp4::AV1CodecConfigurationRecord av1_config;
-        if (av1_config.Parse(codec_context->extradata,
-                             codec_context->extradata_size)) {
+        if (av1_config.Parse(
+                AVCodecContextExtraDataToSpan(codec_context.get()))) {
           profile = av1_config.profile;
         } else {
           DLOG(WARNING) << "Failed to parse AV1 extra data for profile.";
@@ -759,10 +750,9 @@ bool AVStreamToVideoDecoderConfig(const AVStream* stream,
     // crbug.com/343014700.
     color_space = VideoColorSpace::REC709();
   } else if (codec_context->codec_id == AV_CODEC_ID_HEVC &&
-             (color_space.primaries == VideoColorSpace::PrimaryID::INVALID ||
-              color_space.transfer == VideoColorSpace::TransferID::INVALID ||
-              color_space.matrix == VideoColorSpace::MatrixID::INVALID) &&
-             pixel_format == PIXEL_FORMAT_I420) {
+             !color_space.IsSpecified() &&
+             AVPixelFormatToVideoPixelFormat(codec_context->pix_fmt) ==
+                 PIXEL_FORMAT_I420) {
     // Some HEVC SDR content encoded by the Adobe Premiere HW HEVC encoder has
     // invalid primaries but valid transfer and matrix, and some HEVC SDR
     // content encoded by web camera has invalid primaries and transfer, this
@@ -789,21 +779,30 @@ bool AVStreamToVideoDecoderConfig(const AVStream* stream,
   }
 
   VideoTransformation video_transformation = VideoTransformation();
+  VideoSpatialFormat spatial_format;
   for (const auto& side_data :
        AVCodecParametersCodedSideToSpan(stream->codecpar)) {
     switch (side_data.type) {
       case AV_PKT_DATA_DISPLAYMATRIX: {
-        CHECK_EQ(side_data.size, sizeof(int32_t) * 3 * 3);
+        constexpr size_t kNumElements = 3 * 3;
+        CHECK_EQ(side_data.size, sizeof(int32_t) * kNumElements);
+        // SAFETY: The FFmpeg API guarantees that `side_data.data` is a valid
+        // pointer to `side_data.size` bytes of data. The size is checked to be
+        // 3x3 matrix of int32_t.
+        // See:
+        // https://ffmpeg.org/doxygen/trunk/group__lavc__packet__side__data.html#gga9a80bfcacc586b483a973272800edb97aab8c149a1e6c67aad340733becec87e1
         video_transformation = VideoTransformation::FromFFmpegDisplayMatrix(
-            reinterpret_cast<int32_t*>(side_data.data));
+            UNSAFE_BUFFERS(base::span<const int32_t, kNumElements>(
+                reinterpret_cast<const int32_t*>(side_data.data),
+                kNumElements)));
         break;
       }
       case AV_PKT_DATA_MASTERING_DISPLAY_METADATA: {
         AVMasteringDisplayMetadata* mdcv =
             reinterpret_cast<AVMasteringDisplayMetadata*>(side_data.data);
-        gfx::HdrMetadataSmpteSt2086 smpte_st_2086;
+        skhdr::MasteringDisplayColorVolume sk_mdcv;
         if (mdcv->has_primaries) {
-          smpte_st_2086.primaries = {
+          sk_mdcv.fDisplayPrimaries = {
               static_cast<float>(av_q2d(mdcv->display_primaries[0][0])),
               static_cast<float>(av_q2d(mdcv->display_primaries[0][1])),
               static_cast<float>(av_q2d(mdcv->display_primaries[1][0])),
@@ -815,22 +814,25 @@ bool AVStreamToVideoDecoderConfig(const AVStream* stream,
           };
         }
         if (mdcv->has_luminance) {
-          smpte_st_2086.luminance_max = av_q2d(mdcv->max_luminance);
-          smpte_st_2086.luminance_min = av_q2d(mdcv->min_luminance);
+          sk_mdcv.fMaximumDisplayMasteringLuminance =
+              av_q2d(mdcv->max_luminance);
+          sk_mdcv.fMinimumDisplayMasteringLuminance =
+              av_q2d(mdcv->min_luminance);
         }
 
         // TODO(crbug.com/40268540): Consider rejecting metadata that
         // does not specify all values.
         if (mdcv->has_primaries || mdcv->has_luminance) {
-          hdr_metadata.smpte_st_2086 = smpte_st_2086;
+          hdr_metadata.SetMDCV(sk_mdcv);
         }
         break;
       }
       case AV_PKT_DATA_CONTENT_LIGHT_LEVEL: {
         AVContentLightMetadata* clli =
             reinterpret_cast<AVContentLightMetadata*>(side_data.data);
-        hdr_metadata.cta_861_3 =
-            gfx::HdrMetadataCta861_3(clli->MaxCLL, clli->MaxFALL);
+        hdr_metadata.SetCLLI(skhdr::ContentLightLevelInformation::MakeUint16(
+            /*maxCLL=*/clli->MaxCLL,
+            /*maxFALL=*/clli->MaxFALL));
         break;
       }
 #if BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
@@ -862,16 +864,73 @@ bool AVStreamToVideoDecoderConfig(const AVStream* stream,
             type.profile = VideoCodecProfile::VIDEO_CODEC_PROFILE_UNKNOWN;
             break;
         }
+
+        auto dv_color_space = mp4::ParseDolbyVisionColorSpace(
+            type.profile, dovi->dv_bl_signal_compatibility_id);
+        if (dv_color_space.IsSpecified()) {
+          type.color_space = dv_color_space;
+        }
+
         // Treat dolby vision contents as dolby vision codec only if the
         // device support clear DV decoding, otherwise use the original
         // HEVC or AVC codec and profile.
         if (media::IsDecoderSupportedVideoType(type)) {
           codec = type.codec;
           profile = type.profile;
+          color_space = type.color_space;
         }
         break;
       }
 #endif  // BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
+      case AV_PKT_DATA_STEREO3D: {
+        const AVStereo3D* stereo =
+            reinterpret_cast<const AVStereo3D*>(side_data.data);
+        // We do not support inverted stereoscopic layouts yet.
+        if ((stereo->flags & AV_STEREO3D_FLAG_INVERT) != 0) {
+          spatial_format.stereo_mode = VideoStereoMode::kMono;
+          break;
+        }
+        switch (stereo->type) {
+          case AV_STEREO3D_SIDEBYSIDE:
+            spatial_format.stereo_mode = VideoStereoMode::kSideBySideLeftFirst;
+            break;
+          case AV_STEREO3D_TOPBOTTOM:
+            spatial_format.stereo_mode = VideoStereoMode::kTopBottomLeftFirst;
+            break;
+          default:
+            spatial_format.stereo_mode = VideoStereoMode::kMono;
+            break;
+        }
+        break;
+      }
+      case AV_PKT_DATA_SPHERICAL: {
+        const AVSphericalMapping* spherical =
+            reinterpret_cast<const AVSphericalMapping*>(side_data.data);
+        switch (spherical->projection) {
+          case AV_SPHERICAL_EQUIRECTANGULAR:
+            spatial_format.projection_type = VideoProjectionType::kEquirect360;
+            break;
+          case AV_SPHERICAL_HALF_EQUIRECTANGULAR:
+            spatial_format.projection_type = VideoProjectionType::kEquirect180;
+            break;
+          case AV_SPHERICAL_EQUIRECTANGULAR_TILE: {
+            const uint32_t kEquirect180Threshold = 0x30000000;
+            if (spherical->bound_left >= kEquirect180Threshold &&
+                spherical->bound_right >= kEquirect180Threshold) {
+              spatial_format.projection_type =
+                  VideoProjectionType::kEquirect180;
+            } else {
+              spatial_format.projection_type =
+                  VideoProjectionType::kEquirect360;
+            }
+            break;
+          }
+          default:
+            spatial_format.projection_type = VideoProjectionType::kNone;
+            break;
+        }
+        break;
+      }
       default:
         break;
     }
@@ -883,6 +942,7 @@ bool AVStreamToVideoDecoderConfig(const AVStream* stream,
                      natural_size, extra_data, GetEncryptionScheme(stream));
   // Set the aspect ratio explicitly since our version hasn't been rounded.
   config->set_aspect_ratio(aspect_ratio);
+  config->set_spatial_format(spatial_format);
 
   if (hdr_metadata.IsValid()) {
     config->set_hdr_metadata(hdr_metadata);
@@ -899,15 +959,26 @@ void VideoDecoderConfigToAVCodecContext(
   codec_context->profile = VideoCodecProfileToProfileID(config.profile());
   codec_context->coded_width = config.coded_size().width();
   codec_context->coded_height = config.coded_size().height();
-  if (config.color_space_info().range == gfx::ColorSpace::RangeID::FULL)
+  if (config.color_space_info().range() == gfx::ColorSpace::RangeID::FULL) {
     codec_context->color_range = AVCOL_RANGE_JPEG;
+  }
 
   CopyBufferFromConfig(config, codec_context);
   ApplyCodecContextSecuritySettings(codec_context);
 }
 
-ChannelLayout ChannelLayoutToChromeChannelLayout(int64_t layout, int channels) {
-  switch (layout) {
+ChannelLayout ChannelLayoutToChromeChannelLayout(
+    const AVChannelLayout& layout) {
+  // We currently register 1st order ambisonics (which has 4 channels) to be
+  // seen as a QUAD channel layout. While this is incorrect (and DISCRETE would
+  // be more appropriate), we opt to preserve the historical behavior. Fixing
+  // this behavior might require a substantial update, to prevent loss of
+  // information in the case of downmixing (both from QUAD or DISCRETE).
+  // However, UMAs have shown that the number of ambisonic playbacks is
+  // practically zero, so we should only update this path if we receive actual
+  // user complaints.
+
+  switch (layout.u.mask) {
     case AV_CH_LAYOUT_MONO:
       return CHANNEL_LAYOUT_MONO;
     case AV_CH_LAYOUT_STEREO:
@@ -967,10 +1038,14 @@ ChannelLayout ChannelLayoutToChromeChannelLayout(int64_t layout, int channels) {
     case AV_CH_FRONT_LEFT | AV_CH_FRONT_RIGHT | AV_CH_LOW_FREQUENCY |
         AV_CH_BACK_CENTER:
       return CHANNEL_LAYOUT_3_1_BACK;
+    case AV_CH_LAYOUT_5POINT1POINT4_BACK:
+      return CHANNEL_LAYOUT_5_1_4;
+    case AV_CH_LAYOUT_7POINT1POINT4_BACK:
+      return CHANNEL_LAYOUT_7_1_4;
     default:
       // FFmpeg channel_layout is 0 for .wav and .mp3.  Attempt to guess layout
       // based on the channel count.
-      return GuessChannelLayout(channels);
+      return GuessChannelLayout(layout.nb_channels);
   }
 }
 
@@ -1070,34 +1145,24 @@ base::TimeDelta ConvertStreamTimestamp(const AVRational& time_base,
 std::optional<DecoderBufferSideData::DiscardPadding>
 GetDiscardPaddingFromAVPacket(const AVPacket* packet, int samples_per_second) {
   // Skip samples are only valid for audio packets.
-  constexpr int kSkipSamplesValidSize = 10;
-  constexpr int kSkipEndSamplesOffset = 1;
-  base::span<const uint32_t> skip_samples = GetSkipSamples(packet);
-  if (skip_samples.size() >= kSkipSamplesValidSize) {
-    // Because FFmpeg rolls codec delay and skip samples into one we can only
-    // allow front discard padding on the first packet.  Otherwise the discard
-    // helper can't figure out which data to discard.  See AudioDiscardHelper.
-    //
-    // NOTE: Large values may end up as negative here, but negatives are
-    // discarded below.
-    auto discard_front_samples = static_cast<int>(skip_samples[0]);
-    if (discard_front_samples < 0) {
-      // See https://crbug.com/1189939 and https://trac.ffmpeg.org/ticket/9622
-      DLOG(ERROR) << "Negative skip samples are not allowed.";
-      discard_front_samples = 0;
-    }
+  size_t skip_samples_size = 0;
+  const uint8_t* skip_samples_ptr = av_packet_get_side_data(
+      packet, AV_PKT_DATA_SKIP_SAMPLES, &skip_samples_size);
 
-    // NOTE: Large values may end up as negative here, which could lead to
-    // a negative timestamp. It's not clear if this is intentional.
-    const auto discard_end_samples =
-        static_cast<int>(skip_samples[kSkipEndSamplesOffset]);
+  if (skip_samples_ptr && skip_samples_size >= 8) {
+    // SAFETY: av_packet_get_side_data returns a pointer to size bytes.
+    auto byte_span = UNSAFE_BUFFERS(
+        base::span<const uint8_t>(skip_samples_ptr, skip_samples_size));
+    const uint32_t skip_start =
+        base::U32FromLittleEndian(byte_span.subspan<0, 4>());
+    const uint32_t skip_end =
+        base::U32FromLittleEndian(byte_span.subspan<4, 4>());
 
-    if (discard_front_samples || discard_end_samples) {
-      const auto front_discard = AudioTimestampHelper::FramesToTime(
-          discard_front_samples, samples_per_second);
-      return std::make_pair(front_discard,
-                            AudioTimestampHelper::FramesToTime(
-                                discard_end_samples, samples_per_second));
+    if (skip_start || skip_end) {
+      const auto front_discard =
+          AudioTimestampHelper::FramesToTime(skip_start, samples_per_second);
+      return std::make_pair(front_discard, AudioTimestampHelper::FramesToTime(
+                                               skip_end, samples_per_second));
     }
   }
 

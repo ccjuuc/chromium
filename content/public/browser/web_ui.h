@@ -24,6 +24,7 @@ namespace content {
 
 class RenderFrameHost;
 class WebContents;
+class WebUIConfig;
 class WebUIController;
 class WebUIMessageHandler;
 
@@ -45,7 +46,7 @@ class CONTENT_EXPORT WebUI {
       std::string_view function_name,
       base::span<const base::ValueView> arg_list);
   static std::u16string GetJavascriptCall(std::string_view function_name,
-                                          const base::Value::List& arg_list);
+                                          const base::ListValue& arg_list);
 
   virtual ~WebUI() {}
 
@@ -87,8 +88,7 @@ class CONTENT_EXPORT WebUI {
 
   // Used by WebUIMessageHandlers. If the given message is already registered,
   // the call has no effect.
-  using MessageCallback =
-      base::RepeatingCallback<void(const base::Value::List&)>;
+  using MessageCallback = base::RepeatingCallback<void(const base::ListValue&)>;
   virtual void RegisterMessageCallback(std::string_view message,
                                        MessageCallback callback) = 0;
 
@@ -106,7 +106,7 @@ class CONTENT_EXPORT WebUI {
   // then later wants to undo that, or to route it to a different WebUI object.
   virtual void ProcessWebUIMessage(const GURL& source_url,
                                    const std::string& message,
-                                   base::Value::List args) = 0;
+                                   base::ListValue args) = 0;
 
   // Returns true if this WebUI can currently call JavaScript.
   virtual bool CanCallJavascript() = 0;
@@ -138,6 +138,9 @@ class CONTENT_EXPORT WebUI {
     CallJavascriptFunctionUnsafe(function_name, args);
   }
 
+  // Returns the WebUIConfig for the WebUI, if one exists.
+  virtual WebUIConfig* GetWebUIConfig() = 0;
+
   // Allows mutable access to this WebUI's message handlers for testing.
   virtual std::vector<std::unique_ptr<WebUIMessageHandler>>*
   GetHandlersForTesting() = 0;
@@ -149,7 +152,7 @@ class CONTENT_EXPORT WebUI {
   template <typename Is, typename... Args>
   struct Call;
 
-  // Helper to unpack a  base::Value::List  and invoke a callback, passing
+  // Helper to unpack a  base::ListValue  and invoke a callback, passing
   // list[0] as the first argument, list[1] as the second argument, et cetera.
   // Each value in the list will be coerced to the type of the corresponding
   // function parameter, CHECK()ing if the conversion is not possible or if the
@@ -158,7 +161,7 @@ class CONTENT_EXPORT WebUI {
   struct Call<std::index_sequence<Is...>, Args...> {
     static void Impl(base::RepeatingCallback<void(Args...)> callback,
                      std::string_view message,
-                     const base::Value::List& list) {
+                     const base::ListValue& list) {
       CHECK_EQ(list.size(), sizeof...(Args)) << message;
       callback.Run(GetValue<Args>(list[Is])...);
     }
@@ -182,13 +185,13 @@ inline const std::string& WebUI::GetValue<const std::string&>(
 }
 
 template <>
-inline const base::Value::Dict& WebUI::GetValue<const base::Value::Dict&>(
+inline const base::DictValue& WebUI::GetValue<const base::DictValue&>(
     const base::Value& value) {
   return value.GetDict();
 }
 
 template <>
-inline const base::Value::List& WebUI::GetValue<const base::Value::List&>(
+inline const base::ListValue& WebUI::GetValue<const base::ListValue&>(
     const base::Value& value) {
   return value.GetList();
 }

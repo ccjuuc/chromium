@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/strings/string_split.h"
 #include "base/strings/stringprintf.h"
@@ -109,8 +108,7 @@ LogSourceAccessManager::LogSourceAccessManager(content::BrowserContext* context)
            base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN})),
       redactor_container_(
           base::MakeRefCounted<redaction::RedactionToolContainer>(
-              task_runner_for_redactor_,
-              /* first_party_extension_ids= */ nullptr)) {}
+              task_runner_for_redactor_)) {}
 
 LogSourceAccessManager::~LogSourceAccessManager() = default;
 
@@ -237,7 +235,7 @@ LogSourceAccessManager::ResourceId LogSourceAccessManager::CreateResource(
   if (resource_id == kInvalidResourceId)
     return kInvalidResourceId;
 
-  if (base::Contains(open_handles_, resource_id)) {
+  if (open_handles_.contains(resource_id)) {
     return kInvalidResourceId;
   }
 

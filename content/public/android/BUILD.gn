@@ -67,20 +67,17 @@ java_group("content_java") {
   ]
 }
 
-generate_jni("common_jni") {
-  sources = [ "java/src/org/chromium/content/common/SurfaceWrapper.java" ]
-}
-generate_jni("public_common_jni") {
-  sources =
-      [ "java/src/org/chromium/content_public/common/ResourceRequestBody.java" ]
-}
 generate_jni("content_main_dex_jni") {
   sources = [
     "java/src/org/chromium/content/browser/BrowserStartupControllerImpl.java",
     "java/src/org/chromium/content/browser/TracingControllerAndroidImpl.java",
+    "java/src/org/chromium/content/common/SurfaceWrapper.java",
     "java/src/org/chromium/content_public/browser/ContentFeatureMap.java",
+    "java/src/org/chromium/content_public/common/ChildProcessId.java",
+    "java/src/org/chromium/content_public/common/ResourceRequestBody.java",
   ]
 }
+
 generate_jni("content_app_jni") {
   sources = [
     "java/src/org/chromium/content/app/ContentChildProcessServiceDelegate.java",
@@ -92,12 +89,11 @@ generate_jni("content_app_jni") {
 # needed in child processes.
 android_library("content_main_dex_java") {
   deps = [
-    ":common_jni_java",
     ":content_app_jni_java",
     ":content_java_resources",
     ":content_main_dex_jni_java",
-    ":public_common_jni_java",
     "//base:base_java",
+    "//base:flagged_apis_java",
     "//base:process_launcher_java",
     "//base/version_info/android:version_constants_java",
     "//build/android:build_java",
@@ -105,6 +101,7 @@ android_library("content_main_dex_java") {
     "//content/common:common_java",
     "//content/public/common:common_java",
     "//third_party/android_deps:com_google_code_findbugs_jsr305_java",
+    "//third_party/android_deps:com_google_errorprone_error_prone_annotations_java",
     "//third_party/androidx:androidx_annotation_annotation_java",
     "//third_party/jni_zero:jni_zero_java",
     "//ui/accessibility:accessibility_features_java",
@@ -142,7 +139,9 @@ android_library("content_main_dex_java") {
     "java/src/org/chromium/content_public/browser/ContentFeatureList.java",
     "java/src/org/chromium/content_public/browser/ContentFeatureMap.java",
     "java/src/org/chromium/content_public/browser/DeviceUtils.java",
+    "java/src/org/chromium/content_public/browser/JavalessRenderersFeatureList.java",
     "java/src/org/chromium/content_public/browser/TracingControllerAndroid.java",
+    "java/src/org/chromium/content_public/common/ChildProcessId.java",
     "java/src/org/chromium/content_public/common/ContentProcessInfo.java",
     "java/src/org/chromium/content_public/common/ContentUrlConstants.java",
     "java/src/org/chromium/content_public/common/IsolatedWorldIds.java",
@@ -175,6 +174,7 @@ android_library("content_full_java") {
     "//build/android:build_java",
     "//cc:cc_java",
     "//cc/mojom:mojom_java",
+    "//components/cached_flags:java",
     "//components/download/public/common:public_java",
     "//components/origin_matcher/android:java",
     "//components/payments/mojom:mojom_java",
@@ -198,7 +198,9 @@ android_library("content_full_java") {
     "//services/device/public/java:nfc_java",
     "//services/device/public/mojom:mojom_java",
     "//services/media_session/public/cpp/android:media_session_java",
+    "//services/media_session/public/mojom:mojom_java",
     "//services/network/public/mojom:mojom_permissions_policy_java",
+    "//services/network/public/mojom:url_loader_base_java",
     "//services/service_manager/public/java:service_manager_java",
     "//services/service_manager/public/mojom:mojom_java",
     "//services/shape_detection:shape_detection_java",
@@ -227,6 +229,7 @@ android_library("content_full_java") {
     "//ui/accessibility:accessibility_features_native_map_java",
     "//ui/accessibility:ax_base_java",
     "//ui/accessibility:ax_enums_mojo_java",
+    "//ui/accessibility/android:accessibility_node_info_compat_dumper_java",
     "//ui/android:ui_no_recycler_view_java",
     "//ui/android:ui_utils_java",
     "//ui/base/ime/mojom:mojom_java",
@@ -248,9 +251,8 @@ android_library("content_full_java") {
   resources_package = "org.chromium.content"
 
   sources = [
-    "java/src/org/chromium/content/browser/AdditionalNavigationParamsUtils.java",
+    "java/src/org/chromium/content/browser/AdditionalNavigationParamsImpl.java",
     "java/src/org/chromium/content/browser/AppWebMessagePort.java",
-    "java/src/org/chromium/content/browser/AttributionOsLevelManager.java",
     "java/src/org/chromium/content/browser/AudioFocusDelegate.java",
     "java/src/org/chromium/content/browser/BackgroundSyncNetworkObserver.java",
     "java/src/org/chromium/content/browser/BindingManager.java",
@@ -295,6 +297,7 @@ android_library("content_full_java") {
     "java/src/org/chromium/content/browser/accessibility/AccessibilityNodeInfoUtils.java",
     "java/src/org/chromium/content/browser/accessibility/AssistDataBuilder.java",
     "java/src/org/chromium/content/browser/accessibility/AutoDisableAccessibilityHandler.java",
+    "java/src/org/chromium/content/browser/accessibility/FakeAndroidCache.java",
     "java/src/org/chromium/content/browser/accessibility/ViewStructureBuilder.java",
     "java/src/org/chromium/content/browser/accessibility/WebContentsAccessibilityDelegate.java",
     "java/src/org/chromium/content/browser/accessibility/WebContentsAccessibilityImpl.java",
@@ -314,12 +317,15 @@ android_library("content_full_java") {
     "java/src/org/chromium/content/browser/font/AndroidFontLookupImpl.java",
     "java/src/org/chromium/content/browser/font/FontsContractWrapper.java",
     "java/src/org/chromium/content/browser/framehost/NavigationControllerImpl.java",
+    "java/src/org/chromium/content/browser/framehost/PageImpl.java",
     "java/src/org/chromium/content/browser/framehost/RenderFrameHostDelegate.java",
     "java/src/org/chromium/content/browser/framehost/RenderFrameHostImpl.java",
+    "java/src/org/chromium/content/browser/input/AutocorrectManager.java",
     "java/src/org/chromium/content/browser/input/ChromiumBaseInputConnection.java",
     "java/src/org/chromium/content/browser/input/CursorAnchorInfoController.java",
     "java/src/org/chromium/content/browser/input/DateTimeChooserAndroid.java",
     "java/src/org/chromium/content/browser/input/ImeAdapterImpl.java",
+    "java/src/org/chromium/content/browser/input/ImeMetricsUtils.java",
     "java/src/org/chromium/content/browser/input/ImeTextSpan.java",
     "java/src/org/chromium/content/browser/input/ImeUtils.java",
     "java/src/org/chromium/content/browser/input/InputMethodManagerWrapperImpl.java",
@@ -337,6 +343,7 @@ android_library("content_full_java") {
     "java/src/org/chromium/content/browser/input/SuggestionsPopupWindow.java",
     "java/src/org/chromium/content/browser/input/TextInputState.java",
     "java/src/org/chromium/content/browser/input/TextSuggestionHost.java",
+    "java/src/org/chromium/content/browser/input/TextSuggestionPopupController.java",
     "java/src/org/chromium/content/browser/input/TextSuggestionsPopupWindow.java",
     "java/src/org/chromium/content/browser/input/ThreadedInputConnection.java",
     "java/src/org/chromium/content/browser/input/ThreadedInputConnectionFactory.java",
@@ -354,7 +361,6 @@ android_library("content_full_java") {
     "java/src/org/chromium/content/browser/picker/TwoFieldDatePickerDialog.java",
     "java/src/org/chromium/content/browser/picker/WeekPicker.java",
     "java/src/org/chromium/content/browser/picker/WeekPickerDialog.java",
-    "java/src/org/chromium/content/browser/selection/LGEmailActionModeWorkaroundImpl.java",
     "java/src/org/chromium/content/browser/selection/MagnifierAnimator.java",
     "java/src/org/chromium/content/browser/selection/MagnifierSurfaceControl.java",
     "java/src/org/chromium/content/browser/selection/MagnifierWrapper.java",
@@ -400,7 +406,6 @@ android_library("content_full_java") {
     "java/src/org/chromium/content_public/browser/JavaScriptCallback.java",
     "java/src/org/chromium/content_public/browser/JavascriptInjector.java",
     "java/src/org/chromium/content_public/browser/KeyboardShortcutRecorder.java",
-    "java/src/org/chromium/content_public/browser/LGEmailActionModeWorkaround.java",
     "java/src/org/chromium/content_public/browser/LoadCommittedDetails.java",
     "java/src/org/chromium/content_public/browser/LoadUrlParams.java",
     "java/src/org/chromium/content_public/browser/MediaSession.java",
@@ -432,6 +437,7 @@ android_library("content_full_java") {
     "java/src/org/chromium/content_public/browser/StylusWritingImeCallback.java",
     "java/src/org/chromium/content_public/browser/SurfaceInputTransferHandlerMap.java",
     "java/src/org/chromium/content_public/browser/ViewEventSink.java",
+    "java/src/org/chromium/content_public/browser/ViewFocusChangeSuppression.java",
     "java/src/org/chromium/content_public/browser/WebContents.java",
     "java/src/org/chromium/content_public/browser/WebContentsAccessibility.java",
     "java/src/org/chromium/content_public/browser/WebContentsInternals.java",
@@ -439,6 +445,7 @@ android_library("content_full_java") {
     "java/src/org/chromium/content_public/browser/WebContentsStatics.java",
     "java/src/org/chromium/content_public/browser/selection/SelectionActionMenuDelegate.java",
     "java/src/org/chromium/content_public/browser/selection/SelectionDropdownMenuDelegate.java",
+    "java/src/org/chromium/content_public/browser/selection/SelectionUtils.java",
   ]
 
   if (enable_screen_capture) {
@@ -475,6 +482,7 @@ java_cpp_enum("content_public_android_java_enums_srcjar") {
     "//content/public/browser/android/motion_event_action.h",
     "//content/public/browser/back_forward_transition_animation_manager.h",
     "//content/public/browser/bluetooth_scanning_prompt.h",
+    "//content/public/browser/immersive_playback_options.h",
     "//content/public/browser/invalidate_type.h",
     "//content/public/browser/navigation_controller.h",
     "//content/public/browser/overlay_window.h",
@@ -498,9 +506,8 @@ generate_jar_jni("jar_jni") {
 
 generate_jni("content_jni_headers") {
   sources = [
-    "java/src/org/chromium/content/browser/AdditionalNavigationParamsUtils.java",
+    "java/src/org/chromium/content/browser/AdditionalNavigationParamsImpl.java",
     "java/src/org/chromium/content/browser/AppWebMessagePort.java",
-    "java/src/org/chromium/content/browser/AttributionOsLevelManager.java",
     "java/src/org/chromium/content/browser/AudioFocusDelegate.java",
     "java/src/org/chromium/content/browser/BackgroundSyncNetworkObserver.java",
     "java/src/org/chromium/content/browser/BrowserContextHandleImpl.java",
@@ -526,6 +533,7 @@ generate_jni("content_jni_headers") {
     "java/src/org/chromium/content/browser/accessibility/AccessibilityNodeInfoBuilder.java",
     "java/src/org/chromium/content/browser/accessibility/AccessibilityNodeInfoUtils.java",
     "java/src/org/chromium/content/browser/accessibility/AssistDataBuilder.java",
+    "java/src/org/chromium/content/browser/accessibility/FakeAndroidCache.java",
     "java/src/org/chromium/content/browser/accessibility/ViewStructureBuilder.java",
     "java/src/org/chromium/content/browser/accessibility/WebContentsAccessibilityImpl.java",
     "java/src/org/chromium/content/browser/accessibility/captioning/CaptioningController.java",
@@ -533,6 +541,7 @@ generate_jni("content_jni_headers") {
     "java/src/org/chromium/content/browser/androidoverlay/DialogOverlayImpl.java",
     "java/src/org/chromium/content/browser/device_posture/DevicePosturePlatformProviderAndroid.java",
     "java/src/org/chromium/content/browser/framehost/NavigationControllerImpl.java",
+    "java/src/org/chromium/content/browser/framehost/PageImpl.java",
     "java/src/org/chromium/content/browser/framehost/RenderFrameHostImpl.java",
     "java/src/org/chromium/content/browser/input/DateTimeChooserAndroid.java",
     "java/src/org/chromium/content/browser/input/ImeAdapterImpl.java",
@@ -541,6 +550,7 @@ generate_jni("content_jni_headers") {
     "java/src/org/chromium/content/browser/input/SelectPopup.java",
     "java/src/org/chromium/content/browser/input/SuggestionInfo.java",
     "java/src/org/chromium/content/browser/input/TextSuggestionHost.java",
+    "java/src/org/chromium/content/browser/input/TextSuggestionPopupController.java",
     "java/src/org/chromium/content/browser/selection/MagnifierSurfaceControl.java",
     "java/src/org/chromium/content/browser/selection/SelectionPopupControllerImpl.java",
     "java/src/org/chromium/content/browser/selection/SmartSelectionClient.java",
@@ -553,7 +563,6 @@ generate_jni("content_jni_headers") {
     "java/src/org/chromium/content_public/browser/LoadCommittedDetails.java",
     "java/src/org/chromium/content_public/browser/LoadUrlParams.java",
     "java/src/org/chromium/content_public/browser/NavigationHandle.java",
-    "java/src/org/chromium/content_public/browser/Page.java",
   ]
 
   if (enable_screen_capture) {
@@ -583,6 +592,7 @@ android_library("content_javatests") {
     "//base:process_launcher_java",
     "//cc/mojom:mojom_java",
     "//components/payments/mojom:mojom_java",
+    "//content/common:common_java",
     "//content/public/common:common_java",
     "//content/public/test/android:content_java_test_support",
     "//content/shell/android:content_shell_apk_java",
@@ -625,6 +635,7 @@ android_library("content_javatests") {
     "//ui/accessibility:accessibility_features_java",
     "//ui/accessibility:accessibility_features_native_map_java",
     "//ui/accessibility:ax_base_java",
+    "//ui/accessibility:ui_accessibility_test_support_java",
     "//ui/android:ui_java",
     "//ui/android:ui_java_test_support",
     "//ui/base/cursor/mojom:cursor_type_java",
@@ -675,15 +686,16 @@ android_library("content_javatests") {
     "javatests/src/org/chromium/content/browser/accessibility/AccessibilityContentShellTestData.java",
     "javatests/src/org/chromium/content/browser/accessibility/AccessibilityContentShellTestUtils.java",
     "javatests/src/org/chromium/content/browser/accessibility/AccessibilityEventDispatcherTest.java",
+    "javatests/src/org/chromium/content/browser/accessibility/AccessibilityNodeInfoUtilsTest.java",
     "javatests/src/org/chromium/content/browser/accessibility/AssistViewStructureTest.java",
+    "javatests/src/org/chromium/content/browser/accessibility/FakeAconfigFlaggedApiDelegate.java",
+    "javatests/src/org/chromium/content/browser/accessibility/FakeAndroidCacheTest.java",
     "javatests/src/org/chromium/content/browser/accessibility/TestViewStructure.java",
+    "javatests/src/org/chromium/content/browser/accessibility/WebContentsAccessibilityE2ETest.java",
     "javatests/src/org/chromium/content/browser/accessibility/WebContentsAccessibilityEventsTest.java",
     "javatests/src/org/chromium/content/browser/accessibility/WebContentsAccessibilityTest.java",
     "javatests/src/org/chromium/content/browser/accessibility/WebContentsAccessibilityTreeTest.java",
     "javatests/src/org/chromium/content/browser/accessibility/captioning/CaptioningChangeDelegateTest.java",
-    "javatests/src/org/chromium/content/browser/androidoverlay/DialogOverlayImplPixelTest.java",
-    "javatests/src/org/chromium/content/browser/androidoverlay/DialogOverlayImplTest.java",
-    "javatests/src/org/chromium/content/browser/androidoverlay/DialogOverlayImplTestRule.java",
     "javatests/src/org/chromium/content/browser/font/AndroidFontLookupImplTest.java",
     "javatests/src/org/chromium/content/browser/input/CursorAnchorInfoControllerTest.java",
     "javatests/src/org/chromium/content/browser/input/ImeActivityTestRule.java",
@@ -711,20 +723,22 @@ android_library("content_javatests") {
   data = [
     "//content/test/data/accessibility/accname/",
     "//content/test/data/accessibility/aria/",
+    "//third_party/aria-practices/src/content/patterns/",
     "//content/test/data/accessibility/css/",
     "//content/test/data/accessibility/event/",
     "//content/test/data/accessibility/html/",
+    "//content/test/data/accessibility/mathml/",
     "//content/test/data/android/",
     "//content/test/data/media/",
   ]
   data_deps = [ "//net:test_support" ]
+  srcjar_deps = [ "//ui/accessibility/android:accessibility_test_service_aidl" ]
 }
 
 robolectric_binary("content_junit_tests") {
   resources_package = "org.chromium.content"
   sources = [
-    "java/src/org/chromium/content/browser/input/ImeAdapterImplUnitTest.java",
-    "java/src/org/chromium/content/browser/input/ImeUtilsTest.java",
+    "junit/src/org/chromium/content/browser/AudioFocusDelegateTest.java",
     "junit/src/org/chromium/content/browser/BindingManagerTest.java",
     "junit/src/org/chromium/content/browser/ChildProcessConnectionMetricsUnitTest.java",
     "junit/src/org/chromium/content/browser/ChildProcessRankingTest.java",
@@ -732,12 +746,19 @@ robolectric_binary("content_junit_tests") {
     "junit/src/org/chromium/content/browser/GestureListenerManagerImplUnitTest.java",
     "junit/src/org/chromium/content/browser/ScreenOrientationProviderImplTest.java",
     "junit/src/org/chromium/content/browser/SpareChildConnectionTest.java",
+    "junit/src/org/chromium/content/browser/WindowEventObserverManagerTest.java",
+    "junit/src/org/chromium/content/browser/accessibility/AccessibilityNodeInfoBuilderTest.java",
     "junit/src/org/chromium/content/browser/androidoverlay/DialogOverlayCoreTest.java",
+    "junit/src/org/chromium/content/browser/input/AutocorrectManagerTest.java",
+    "junit/src/org/chromium/content/browser/input/ImeAdapterImplTest.java",
+    "junit/src/org/chromium/content/browser/input/ImeMetricsUtilsTest.java",
+    "junit/src/org/chromium/content/browser/input/ImeUtilsTest.java",
     "junit/src/org/chromium/content/browser/input/InputMethodManagerWrapperImplTest.java",
     "junit/src/org/chromium/content/browser/input/OngoingGestureTest.java",
     "junit/src/org/chromium/content/browser/input/RangeTest.java",
     "junit/src/org/chromium/content/browser/input/StylusGestureConverterTest.java",
     "junit/src/org/chromium/content/browser/input/TextInputStateTest.java",
+    "junit/src/org/chromium/content/browser/input/TextSuggestionPopupControllerTest.java",
     "junit/src/org/chromium/content/browser/input/ThreadedInputConnectionFactoryTest.java",
     "junit/src/org/chromium/content/browser/input/ThreadedInputConnectionTest.java",
     "junit/src/org/chromium/content/browser/picker/DateDialogNormalizerTest.java",
@@ -745,11 +766,15 @@ robolectric_binary("content_junit_tests") {
     "junit/src/org/chromium/content/browser/selection/SelectActionMenuHelperTest.java",
     "junit/src/org/chromium/content/browser/selection/SelectionMenuCachedResultTest.java",
     "junit/src/org/chromium/content/browser/selection/SelectionPopupControllerTest.java",
+    "junit/src/org/chromium/content/browser/selection/SelectionUtilsTest.java",
     "junit/src/org/chromium/content/browser/selection/SmartSelectionEventProcessorTest.java",
+    "junit/src/org/chromium/content/browser/selection/SmartSelectionProviderTest.java",
     "junit/src/org/chromium/content/browser/sms/SmsProviderGmsTest.java",
     "junit/src/org/chromium/content/browser/webcontents/WebContentsImplTest.java",
     "junit/src/org/chromium/content/browser/webcontents/WebContentsObserverProxyTest.java",
+    "junit/src/org/chromium/content_public/browser/ContactsDialogHostTest.java",
     "junit/src/org/chromium/content_public/browser/MessagePayloadTest.java",
+    "junit/src/org/chromium/content_public/browser/ViewFocusChangeSuppressionTest.java",
     "junit/src/org/chromium/content_public/browser/media/capture/ImageHandlerTest.java",
     "junit/src/org/chromium/content_public/browser/media/capture/ScreenCaptureTest.java",
   ]
@@ -772,6 +797,7 @@ robolectric_binary("content_junit_tests") {
     "//services/device/public/mojom:mojom_java",
     "//skia/public/mojom:mojom_java",
     "//third_party/androidx:androidx_activity_activity_java",
+    "//third_party/androidx:androidx_core_core_java",
     "//third_party/androidx:androidx_test_core_java",
     "//third_party/androidx:androidx_test_runner_java",
     "//third_party/blink/public:blink_headers_java",
@@ -783,8 +809,10 @@ robolectric_binary("content_junit_tests") {
     "//third_party/jni_zero:jni_zero_java",
     "//third_party/junit",
     "//third_party/mockito:mockito_java",
+    "//ui/accessibility:accessibility_features_java",
     "//ui/android:ui_java",
     "//ui/android:ui_java_test_support",
+    "//ui/base/ime/mojom:mojom_java",
     "//ui/base/mojom:ui_base_types_java",
     "//ui/gfx/geometry/mojom:mojom_java",
   ]

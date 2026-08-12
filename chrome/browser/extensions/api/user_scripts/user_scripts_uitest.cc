@@ -9,6 +9,7 @@
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/background_script_executor.h"
+#include "extensions/browser/script_result_queue.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -61,21 +62,7 @@ class UserScriptsUITest
             page_id, kPathToUserScriptsToggle, enabled));
   }
 
-  // Toggles the (non extensions_features::kUserScriptUserExtensionToggle state)
-  // dev mode toggle `enabled` state.
-  auto ToggleDevModeInUI(ui::ElementIdentifier page_id, bool enabled) {
-    const DeepQuery kPathToDevModeToggle{
-        "extensions-manager extensions-toolbar",
-        "cr-toggle#devMode",
-    };
 
-    // Enable dev mode toggle in the UI.
-    return Steps(
-        // Navigate to the extensions detail page for the extension.
-        NavigateWebContents(page_id, GURL(chrome::kChromeUIExtensionsURL)),
-        CheckCurrentToggleStateAndThenToggleItInUI(
-            page_id, kPathToDevModeToggle, enabled));
-  }
 
   // Checks that the chrome.userScripts API is not available in the background
   // script.
@@ -100,21 +87,32 @@ class UserScriptsUITest
   auto RegisterUserScript(const ExtensionId& extension_id) {
     // Register the user script in the extension background script and confirm
     // it registered successfully.
-    return CheckResult(
-        [this, &extension_id]() -> std::string {
-          return BackgroundScriptExecutor::ExecuteScript(
-                     profile(), extension_id, "registerUserScripts();",
-                     BackgroundScriptExecutor::ResultCapture::kSendScriptResult)
-              .TakeString();
-        },
-        /*matcher=*/"success", /*check_description=*/
-        "Registering dynamic user script and checking that it completed");
+    return Do([this, extension_id]() {
+      ScriptResultQueue queue;
+      BackgroundScriptExecutor::ExecuteScriptAsync(profile(), extension_id,
+                                                   "registerUserScripts();");
+      SCOPED_TRACE("Waiting for user script registration result");
+      while (true) {
+        // We use a manual ScriptResultQueue loop to filter out potential
+        // "available" messages from the API availability poller that is running
+        // concurrently when this step executes.
+        std::string result = queue.GetNextResult().GetString();
+        if (result == "success") {
+          return;
+        }
+        if (result == "available" || result == "unavailable") {
+          continue;
+        }
+        ADD_FAILURE() << "Unexpected API registration result: " << result;
+        return;
+      }
+    });
   }
 };
 
-// Tests the toggling the UI toggle (dependent on feature) controls whether the
-// user has allowed userScripts API usage.
-IN_PROC_BROWSER_TEST_P(UserScriptsUITest, ToggleControls_UserScriptsAPIUsage) {
+// Tests whether toggling the UI toggle controls whether the user has allowed
+// userScripts API usage.
+IN_PROC_BROWSER_TEST_F(UserScriptsUITest, ToggleControls_UserScriptsAPIUsage) {
   // Load extension that has API permission to use the userScripts API, but not
   // the per-extension toggle for userScripts enabled.
   ExtensionTestMessageListener extension_background_started_listener =
@@ -150,11 +148,9 @@ IN_PROC_BROWSER_TEST_P(UserScriptsUITest, ToggleControls_UserScriptsAPIUsage) {
 
       VerifyUserScriptsIsNotAvailable(extension->id()),
 
-      // Enable the toggle depending on feature state and wait for the
-      // userScripts API to become available to use.
-      GetParam() ? TogglePerExtensionToggleInUI(kTab, extension->id(),
-                                                /*enabled=*/true)
-                 : ToggleDevModeInUI(kTab, /*enabled=*/true),
+      // Enable the toggle and wait for the userScripts API to become available
+      // to use.
+      TogglePerExtensionToggleInUI(kTab, extension->id(), /*enabled=*/true),
       WaitForState(kApiAvailability, "available"),
 
       RegisterUserScript(extension->id()),
@@ -165,11 +161,9 @@ IN_PROC_BROWSER_TEST_P(UserScriptsUITest, ToggleControls_UserScriptsAPIUsage) {
       // Ensure the user script injected its <div>.
       EnsurePresent(kTab, kPathToUserScriptInjectedDiv),
 
-      // Disable the toggle depending on feature state and wait for the
-      // userScripts API to become unavailable to use.
-      GetParam() ? TogglePerExtensionToggleInUI(kTab, extension->id(),
-                                                /*enabled=*/false)
-                 : ToggleDevModeInUI(kTab, /*enabled=*/false),
+      // Disable the toggle and wait for the userScripts API to become
+      // unavailable to use.
+      TogglePerExtensionToggleInUI(kTab, extension->id(), /*enabled=*/false),
       WaitForState(kApiAvailability, "unavailable"),
 
       // Navigate tab to a webpage where the user script should no longer inject
@@ -179,14 +173,5 @@ IN_PROC_BROWSER_TEST_P(UserScriptsUITest, ToggleControls_UserScriptsAPIUsage) {
       // Ensure the user script no longer injects its <div>.
       EnsureNotPresent(kTab, kPathToUserScriptInjectedDiv));
 }
-
-INSTANTIATE_TEST_SUITE_P(PerExtensionToggle,
-                         UserScriptsUITest,
-                         // extensions_features::kUserScriptUserExtensionToggle
-                         testing::Values("true"));
-INSTANTIATE_TEST_SUITE_P(DevModeToggle,
-                         UserScriptsUITest,
-                         // extensions_features::kUserScriptUserExtensionToggle
-                         testing::Values("false"));
 
 }  // namespace extensions

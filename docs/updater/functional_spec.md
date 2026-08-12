@@ -95,7 +95,7 @@ preferred language on the current system. Every string shown in the UI is
 translated.
 
 ### Bundle Installer
-TODO(crbug.com/40664480): Implement bundle installers.
+TODO(crbug.com/40149046): Implement bundle installers.
 
 The bundle installer allows installation of more than one application. The
 bundle installer is typically used in software distribution scenarios.
@@ -312,6 +312,10 @@ process is determined by command-line arguments:
         * The value of `installerdata` needs to be URL encoded.
         * The data will be decoded and written to a file same as in
           [installdataindex](#installdataindex).
+    *   --installsource=...
+        * A user defined `installsource` string for use with offline installs.
+          This is passed up in the `installsource` field in install type event
+          pings.
     *   --offlinedir={GUID}
         *   Performs offline install, which means no update check or file
             download is performed against the server during installation.
@@ -387,8 +391,10 @@ process is determined by command-line arguments:
         `--handoff` parameters.
 *   `RUNFORCEINSTALL` (for MSI installers)
     * Allows running an MSI metainstaller with the `--force-install` option.
-    * In addition, if the MSI is tagged, this also installs the application(s)
-      that are implicitly specified in the tag.
+    * This adds `--force-install` to the installer command line,
+      force-installing the updater while maintaining standard MSI
+      installation behavior, including tag extraction, application
+      installation, and product component state registration.
     * For example, `msiexec /i GoogleChrome.msi RUNFORCEINSTALL=1`.
 *   --test
     *   Exit immediately with no error.
@@ -538,6 +544,10 @@ the server indicating an installation failure.
 The user interface is localized in the same languages as the Chromium project.
 
 No UI will be shown if the `--silent` switch is specified on the command line.
+On Windows, if a silent installation requires UAC elevation and `--silent`
+does not have the `allow-uac` value parameter (i.e. `--silent=allow-uac`),
+the installation will abort immediately and fail silently to prevent showing
+any interactive UI prompts.
 
 The launch command provided by the application installer via the
 [installer result API](#installer-result-api)
@@ -630,9 +640,21 @@ As part of installing or updating an application, the updater executes the
 application's installer. The API for the application installer is platform-
 specific.
 
-Application installers are run with a 15-minute timeout. If the installer runs
-for longer than this, the updater assumes failure and continues operation.
-However, the updater does not kill the installer process.
+Application installers are run with a 15-minute timeout (`kWaitForAppInstaller`).
+If the installer runs for longer than this, the updater logs the failure,
+reports `GOOPDATEINSTALL_E_INSTALLER_TIMED_OUT` (`0x80040904`), cleans up its
+unpacked temporary files, and continues operation. However, **the updater does
+not kill the installer process**—it will continue running in the background.
+
+Because a timed-out installer process remains running in the background,
+subsequent install or update attempts may launch a concurrent instance of the
+installer. Therefore, application installers should implement a single-instance
+mechanism (such as a system-wide named mutex). If an installer process detects
+another instance running, it should exit with `ERROR_INSTALL_ALREADY_RUNNING`
+(`1618` / `0x652`). When the updater encounters this exit code on Windows, it
+retries launching the installer up to 4 times with exponential backoff (starting
+at 5 seconds) before failing with `GOOPDATEINSTALL_E_INSTALL_ALREADY_RUNNING`
+(`0x80040907`).
 
 The application installer API varies by platform.
 [macOS](installer_api_mac.md),
@@ -897,6 +919,50 @@ the following parameters:
 --appargs=appguid={8237E44A-0054-442C-B6B6-EA0509993955}&
           installerdata=%7B%22distribution%22%3A%7B%22msi%22%3Atrue%7D%7D
 ```
+
+### PKG installers (macOS)
+
+Similar to MSI installers on Windows, macOS flat packages (.pkg) can be tagged
+to convey dynamic install parameters. Currently, .pkg tags only support the
+`brand` parameter.
+
+Chrome PKGs are built using the signing pipeline
+(`chrome/installer/mac/sign_chrome.py`). The signing script itself does not
+insert a tag.
+
+A PKG installer can be tagged using the `tag` tool (built from
+`chrome/updater/tools/tag_main.cc`) as follows:
+
+```
+out/Default/tag
+    "--set-tag=brand=GGLL"
+    product.pkg
+```
+
+The .pkg format is a XAR archive and uses XAR signing. XAR signatures cover each
+individual file in the archive in both its compressed and uncompressed form.
+Bytes inside the archive that are not referenced as part of any compressed file
+remain outside of the signature. Apple notarization refers to the code-signed
+applications inside the archive, so it is similarly indifferent to "stray bytes"
+on the archive.
+
+Apple relies on this property for "stapling" notarization "tickets" to a signed
+.pkg without breaking the signature; the notarization ticket is appended to the
+end of the file. Apple's notarization tools only recognize a stapled
+notarization if it is at the end of the file, so we insert the Omaha tag just
+before the stapled notarization record.
+
+When a tagged Chrome PKG is run, the `postinstall` script invokes
+`ksadmin --register` including the `--tagged-pkg-path <file>` flag, providing
+the path to the `.pkg` being installed (which macOS Installer provides both as
+a parameter and an environment variable to `postinstall` scripts). `ksadmin`
+attempts to extract the tag and uses its brand code to set up a brand file
+(as specified by `--write-brand-file ifneeded` and `--brand-file-path <path>`),
+for persistent recording of the brand across updates. (It does not overwrite an
+existing brand, so an overinstall remains credited to the original brand.) If
+`ksadmin` cannot find an Omaha tag, cannot parse the tag, or cannot find a brand
+in the tag, it uses the brand code provided in the `--brand-value` parameter,
+if present. If no brand is provided by either method, no brand is written.
 
 ### Enterprise Enrollment
 The machine updater may be enrolled with a particular enterprise. Enrollment is
@@ -1665,6 +1731,21 @@ On Windows, when the updater uninstalls itself, and there are no other versions
 of the updater in existence for the scope, the updater saves a copy of the final
 log file to `Windows\SystemTemp\updater.log` for system installs, and
 `%TMP%\updater.log` for user installs.
+
+### State Persistence
+The updater's internal state is persisted in `prefs.json`. There are two types
+of `prefs.json` files:
+
+1. **Global prefs**: Located in `{UPDATER_DATA_DIR}`. This file is shared among
+   all instances of the updater and contains global state such as the active
+   updater version.
+2. **Local prefs**: Located in the versioned installation directory (e.g.,
+   `{UPDATER_DATA_DIR}\{VERSION}`). This file contains state specific to a
+   particular version of the updater, such as its qualification status.
+
+For system-scoped installations, `prefs.json` files are made readable to all
+users on the system to facilitate the collection of diagnostics data by Chrome's
+support tool.
 
 ## Network
 

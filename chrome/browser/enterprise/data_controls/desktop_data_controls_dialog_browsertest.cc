@@ -62,9 +62,9 @@ class DesktopDataControlsDialogTest : public InProcessBrowserTest,
     ASSERT_EQ(delegate->GetDefaultDialogButton(),
               static_cast<int>(ui::mojom::DialogButton::kOk));
 
-    ASSERT_FALSE(base::Contains(delegates_, dialog));
-    ASSERT_FALSE(base::Contains(dialog_close_loops_, dialog));
-    ASSERT_FALSE(base::Contains(dialog_close_callbacks_, dialog));
+    ASSERT_FALSE(delegates_.contains(dialog));
+    ASSERT_FALSE(dialog_close_loops_.contains(dialog));
+    ASSERT_FALSE(dialog_close_callbacks_.contains(dialog));
 
     delegates_[dialog] = delegate;
     dialog_close_loops_[dialog] = std::make_unique<base::RunLoop>();
@@ -74,9 +74,9 @@ class DesktopDataControlsDialogTest : public InProcessBrowserTest,
 
   void OnDestructed(DesktopDataControlsDialog* dialog) override {
     ASSERT_TRUE(dialog);
-    ASSERT_TRUE(base::Contains(delegates_, dialog));
-    ASSERT_TRUE(base::Contains(dialog_close_loops_, dialog));
-    ASSERT_TRUE(base::Contains(dialog_close_callbacks_, dialog));
+    ASSERT_TRUE(delegates_.contains(dialog));
+    ASSERT_TRUE(dialog_close_loops_.contains(dialog));
+    ASSERT_TRUE(dialog_close_callbacks_.contains(dialog));
 
     std::move(dialog_close_callbacks_[dialog]).Run();
   }
@@ -113,6 +113,28 @@ class DesktopDataControlsDialogTest : public InProcessBrowserTest,
       dialog_close_loops_;
 };
 
+// Observer that simulates the observed WebContents going away while the modal
+// dialog widget is still being created inside Show(). This mirrors what can
+// happen on platforms where showing a tab-modal dialog spins a nested run
+// loop.
+class WebContentsDestroyedDuringShowObserver
+    : public DesktopDataControlsDialog::TestObserver {
+ public:
+  void OnWidgetInitialized(DesktopDataControlsDialog* dialog,
+                           views::DialogDelegate* dialog_delegate) override {
+    dialog->WebContentsDestroyed();
+  }
+
+  void OnDestructed(DesktopDataControlsDialog* dialog) override {
+    ++destructed_count_;
+  }
+
+  size_t destructed_count() const { return destructed_count_; }
+
+ private:
+  size_t destructed_count_ = 0;
+};
+
 }  // namespace
 
 IN_PROC_BROWSER_TEST_P(DesktopDataControlsDialogUiTest, DefaultUi) {
@@ -125,7 +147,8 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(DataControlsDialog::Type::kClipboardPasteBlock,
                     DataControlsDialog::Type::kClipboardCopyBlock,
                     DataControlsDialog::Type::kClipboardPasteWarn,
-                    DataControlsDialog::Type::kClipboardCopyWarn));
+                    DataControlsDialog::Type::kClipboardCopyWarn,
+                    DataControlsDialog::Type::kClipboardDragBlock));
 
 IN_PROC_BROWSER_TEST_F(DesktopDataControlsDialogTest, ShowDialogMultipleTimes) {
   // Only 1 dialog should be shown for the same WebContents-Type pair.
@@ -137,6 +160,19 @@ IN_PROC_BROWSER_TEST_F(DesktopDataControlsDialogTest, ShowDialogMultipleTimes) {
 
   ASSERT_EQ(constructor_called_count_, 1u);
   CloseDialogsAndWait();
+}
+
+IN_PROC_BROWSER_TEST_F(InProcessBrowserTest,
+                       WebContentsDestroyedWhileShowingWidget) {
+  WebContentsDestroyedDuringShowObserver observer;
+
+  DesktopDataControlsDialogFactory::GetInstance()->ShowDialogIfNeeded(
+      browser()->tab_strip_model()->GetActiveWebContents(),
+      DataControlsDialog::Type::kClipboardCopyBlock);
+
+  // The dialog should have been closed and destroyed synchronously once Show()
+  // detected that its WebContents went away during widget creation.
+  EXPECT_EQ(observer.destructed_count(), 1u);
 }
 
 IN_PROC_BROWSER_TEST_F(DesktopDataControlsDialogTest,
@@ -155,9 +191,12 @@ IN_PROC_BROWSER_TEST_F(DesktopDataControlsDialogTest,
     DesktopDataControlsDialogFactory::GetInstance()->ShowDialogIfNeeded(
         browser()->tab_strip_model()->GetActiveWebContents(),
         DataControlsDialog::Type::kClipboardCopyWarn);
+    DesktopDataControlsDialogFactory::GetInstance()->ShowDialogIfNeeded(
+        browser()->tab_strip_model()->GetActiveWebContents(),
+        DataControlsDialog::Type::kClipboardDragBlock);
   }
 
-  ASSERT_EQ(constructor_called_count_, 4u);
+  ASSERT_EQ(constructor_called_count_, 5u);
   CloseDialogsAndWait();
 }
 
@@ -167,7 +206,7 @@ IN_PROC_BROWSER_TEST_F(DesktopDataControlsDialogTest,
   DesktopDataControlsDialogFactory::GetInstance()->ShowDialogIfNeeded(
       browser()->tab_strip_model()->GetActiveWebContents(),
       DataControlsDialog::Type::kClipboardCopyBlock);
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   DesktopDataControlsDialogFactory::GetInstance()->ShowDialogIfNeeded(
       browser()->tab_strip_model()->GetActiveWebContents(),
       DataControlsDialog::Type::kClipboardCopyBlock);
@@ -183,7 +222,7 @@ IN_PROC_BROWSER_TEST_F(DesktopDataControlsDialogTest,
   delegate->SetDeleteOnClosedAndObserve(&test_dialog_destructor_called_unused_);
 
   auto view = std::make_unique<views::WebDialogView>(
-      browser()->profile(), delegate,
+      browser()->GetProfile(), delegate,
       std::make_unique<ChromeWebContentsHandler>());
   auto view_ptr = view.get();
   gfx::NativeView parent_view =
@@ -203,6 +242,15 @@ IN_PROC_BROWSER_TEST_F(DesktopDataControlsDialogTest,
   }
   ASSERT_TRUE(was_bypassed.IsReady());
   ASSERT_FALSE(was_bypassed.Get());
+}
+
+IN_PROC_BROWSER_TEST_F(DesktopDataControlsDialogTest,
+                       VerifyDragBlockDialogBasicContent) {
+  DesktopDataControlsDialogFactory::GetInstance()->ShowDialogIfNeeded(
+      browser()->tab_strip_model()->GetActiveWebContents(),
+      DataControlsDialog::Type::kClipboardDragBlock);
+  ASSERT_EQ(constructor_called_count_, 1u);
+  CloseDialogsAndWait();
 }
 
 }  // namespace data_controls

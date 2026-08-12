@@ -17,11 +17,13 @@
 #include "components/user_education/common/user_education_context.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
-class BrowserFeaturePromoControllerBase;
+class BookmarkBubbleViewPromoHelper;
+class BrowserFeaturePromoController;
 class BrowserView;
 class BrowserWindowInterface;
 class NewTabPageUI;
 class NtpPromoHandler;
+class SidePanelHeaderController;
 
 namespace content {
 class WebContents;
@@ -55,7 +57,7 @@ class BrowserUserEducationInterface {
   // Only a limited number of non-test classes are allowed direct access to the
   // `UserEducationContext`.
   template <typename T>
-    requires std::same_as<T, BrowserFeaturePromoControllerBase> ||
+    requires std::same_as<T, BrowserFeaturePromoController> ||
              std::same_as<T, UserEducationInternalsPageHandlerImpl> ||
              std::same_as<T, NtpPromoHandler> || std::same_as<T, NewTabPageUI>
 
@@ -82,12 +84,52 @@ class BrowserUserEducationInterface {
   // background.
   virtual bool IsFeaturePromoActive(const base::Feature& iph_feature) const = 0;
 
-  // Returns whether `MaybeShowFeaturePromo()` would succeed if called now.
+  // Returns whether any feature promo is running.
   //
-  // USAGE NOTE: Only call this method if figuring out whether to try to show an
-  // IPH would involve significant expense. This method may itself have
-  // non-trivial cost.
-  virtual user_education::FeaturePromoResult CanShowFeaturePromo(
+  // See `IsFeaturePromoActive()` for details for what is considered for a
+  // feature promo to be active.
+  virtual bool IsAnyFeaturePromoActive() const = 0;
+
+  // Returns whether `MaybeShowFeaturePromo()` would succeed immediately if
+  // called right now.
+  //
+  // Promos can be queued for a short time until conditions are right to show
+  // them, and this function does not take that into account, leading to false
+  // negatives (in addition to just failing during browser/Feature Engagement
+  // initialization).
+  //
+  // In many cases, instead consider:
+  //  - If you want to know whether a promo is likely to show, just call
+  //    `MaybeShowFeaturePromo()` and look at the return value.
+  //  - For most promos, if you want to know whether the promo is permanently
+  //    dismissed, call `HasFeaturePromoBeenDismissed()`.
+  //
+  // Only call this method if figuring out whether to try to show an IPH would
+  // involve significant expense, and you do not mind the drawbacks/false
+  // negatives listed above. Because of the drawbacks and cost of this method,
+  // it is protected by a PassKey to prevent unnecessary usage.
+  template <typename T>
+    requires std::same_as<T, BookmarkBubbleViewPromoHelper> ||
+             std::same_as<T, SidePanelHeaderController>
+  user_education::FeaturePromoResult WouldShowFeaturePromo(
+      const base::Feature& iph_feature,
+      base::PassKey<T>) const {
+    return WouldShowFeaturePromoImpl(iph_feature);
+  }
+
+  // Returns whether the promo for `iph_feature` has been dismissed in a way
+  // that would prevent it from showing again (user action, toast timeout, etc.)
+  // Unlike other methods, this can be reliably called during most of browser
+  // initialization.
+  //
+  // This does not take additional conditions into account; an additional
+  // condition *might* prevent a promo from ever showing again, but interpreting
+  // the conditions is promo-specific.
+  //
+  // It also does not [yet] take into account promos which can reshow after a
+  // specific amount of time. For now it will return true if the promo has ever
+  // been dismissed.
+  virtual bool HasFeaturePromoBeenDismissed(
       const base::Feature& iph_feature) const = 0;
 
   // Maybe shows an in-product help promo.
@@ -95,10 +137,10 @@ class BrowserUserEducationInterface {
   // If this feature promo is likely to be shown at browser startup, prefer
   // calling `MaybeShowStartupFeaturePromo()` instead.
   //
-  // If determining whether to call this method would involve significant
-  // expense, you *may* first call `CanShowFeaturePromo()` before doing the
-  // required computation; otherwise just call this method.
-  virtual void MaybeShowFeaturePromo(
+  // Returns true if the promo is shown *or* queued; false if it was rejected
+  // right away. This can be used to make snap decisions on whether to show UI
+  // that could interfere with an IPH.
+  virtual bool MaybeShowFeaturePromo(
       user_education::FeaturePromoParams params) = 0;
 
   // Maybe shows an in-product help promo at startup, whenever the Feature
@@ -114,7 +156,18 @@ class BrowserUserEducationInterface {
   // was actually shown. Since `show_promo_result_callback` could be called any
   // time, make sure that you will not experience any race conditions or UAFs if
   // the calling object goes out of scope.
-  virtual void MaybeShowStartupFeaturePromo(
+  //
+  // IMPORTANT USAGE NOTE: Once a promo has been successfully queued in an
+  // eligible browser using this method, subsequent attempts to show the same
+  // promo using this method will fail *even if the initial attempt failed for
+  // some other reason*. You can therefore safely call this method at browser
+  // window creation, as subsequent browser windows in the same profile won't be
+  // able to re-show the promo.
+  //
+  // Returns true if the promo is shown *or* queued; false if it was rejected
+  // right away. This can be used to make snap decisions on whether to show UI
+  // that could interfere with an IPH.
+  virtual bool MaybeShowStartupFeaturePromo(
       user_education::FeaturePromoParams params) = 0;
 
   // Aborts the in-product help promo for `iph_feature` if it is showing or
@@ -165,9 +218,14 @@ class BrowserUserEducationInterface {
   // its tabstrip, or null if `contents` is not a tab in any known browser.
   //
   // For WebUI embedded in a specific browser window or secondary UI of a
-  // browser window, instead just use the appropriate BrowserWindow[Interface]
-  // for that window.
+  // browser window, instead use `MaybeGetForWebUiContents()`.
   static BrowserUserEducationInterface* MaybeGetForWebContentsInTab(
+      content::WebContents* contents);
+
+  // Returns the interface associated with the browser containing `contents` in
+  // a WebUI. Returns null if it cannot determine the associated browser. Use
+  // this function for secondary UI (side panels, dialogs, etc.)
+  static BrowserUserEducationInterface* MaybeGetForWebUiContents(
       content::WebContents* contents);
 
   // Retrieves from the a browser window interface, or null if none.
@@ -177,6 +235,10 @@ class BrowserUserEducationInterface {
  protected:
   virtual const user_education::UserEducationContextPtr&
   GetUserEducationContextImpl() const = 0;
+
+  // Implementation for `WouldShowFeaturePromo()`.
+  virtual user_education::FeaturePromoResult WouldShowFeaturePromoImpl(
+      const base::Feature& iph_feature) const = 0;
 
  private:
   ui::ScopedUnownedUserData<BrowserUserEducationInterface>

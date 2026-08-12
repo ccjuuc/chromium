@@ -27,6 +27,7 @@
 #include "content/browser/renderer_host/input/touch_emulator_impl.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
+#include "content/browser/screen_orientation/screen_orientation_provider.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/url_constants.h"
@@ -40,7 +41,7 @@
 #include "services/device/public/mojom/sensor.mojom-shared.h"
 #include "services/network/public/cpp/client_hints.h"
 #include "third_party/blink/public/mojom/device_posture/device_posture_provider.mojom.h"
-#include "third_party/blink/public/mojom/page/widget.mojom-data-view.h"
+#include "third_party/blink/public/mojom/page/widget.mojom-shared.h"
 #include "ui/display/mojom/screen_orientation.mojom.h"
 #include "ui/events/gesture_detection/gesture_provider_config_helper.h"
 
@@ -148,6 +149,13 @@ void EmulationHandler::SetRenderer(int process_host_id,
 #if BUILDFLAG(ENABLE_COMPUTE_PRESSURE)
     pressure_overrides_.clear();
 #endif  // BUILDFLAG(ENABLE_COMPUTE_PRESSURE)
+    if (screen_orientation_lock_emulation_enabled_) {
+      screen_orientation_lock_emulation_enabled_ = false;
+      UpdateScreenOrientationEmulation(false);
+    }
+    if (device_posture_emulation_enabled_) {
+      ClearDevicePostureOverride();
+    }
   }
   host_ = frame_host;
   if (touch_emulation_enabled_)
@@ -158,6 +166,7 @@ void EmulationHandler::SetRenderer(int process_host_id,
 }
 
 void EmulationHandler::Wire(UberDispatcher* dispatcher) {
+  frontend_ = std::make_unique<Emulation::Frontend>(dispatcher->channel());
   Emulation::Dispatcher::wire(dispatcher, this);
 }
 
@@ -169,6 +178,10 @@ Response EmulationHandler::Disable() {
   user_agent_ = std::string();
   if (device_emulation_enabled_) {
     device_emulation_enabled_ = false;
+    if (screen_orientation_lock_emulation_enabled_) {
+      screen_orientation_lock_emulation_enabled_ = false;
+      UpdateScreenOrientationEmulation(false);
+    }
     UpdateDeviceEmulationState();
   }
   if (focus_emulation_enabled_)
@@ -181,6 +194,9 @@ Response EmulationHandler::Disable() {
   pressure_overrides_.clear();
 #endif  // BUILDFLAG(ENABLE_COMPUTE_PRESSURE)
   ClearDevicePostureOverride();
+  if (geolocation_overridden_) {
+    ClearGeolocationOverride();
+  }
   return Response::Success();
 }
 
@@ -492,23 +508,10 @@ Response EmulationHandler::SetPressureSourceOverrideEnabled(
 #endif  // BUILDFLAG(ENABLE_COMPUTE_PRESSURE)
 }
 
-// TODO: Remove obsolete method.
-// `SetPressureStateOverride` will be replaced by SetPressureDataOverride.
-// The method UpdateVirtualPressureSourceState called previously
-// was removed in //content.
 void EmulationHandler::SetPressureStateOverride(
     const Emulation::PressureSource& source,
     const Emulation::PressureState& state,
     std::unique_ptr<SetPressureStateOverrideCallback> callback) {
-  callback->sendFailure(Response::InternalError());
-  return;
-}
-
-void EmulationHandler::SetPressureDataOverride(
-    const Emulation::PressureSource& source,
-    const Emulation::PressureState& state,
-    std::optional<double> own_contribution_estimate,
-    std::unique_ptr<SetPressureDataOverrideCallback> callback) {
   if (!host_) {
     callback->sendFailure(Response::InternalError());
     return;
@@ -533,10 +536,9 @@ void EmulationHandler::SetPressureDataOverride(
         Response::InvalidParams(kPressureSourceIsNotOverridden));
     return;
   }
-  it->second->UpdateVirtualPressureSourceData(
-      mojo_state, own_contribution_estimate.value_or(0.0),
-      base::BindOnce(&SetPressureDataOverrideCallback::sendSuccess,
-                     std::move(callback)));
+  it->second->UpdateVirtualPressureSourceState(
+      mojo_state, base::BindOnce(&SetPressureStateOverrideCallback::sendSuccess,
+                                 std::move(callback)));
 #else
   callback->sendFailure(Response::InternalError());
 #endif  // BUILDFLAG(ENABLE_COMPUTE_PRESSURE)
@@ -601,6 +603,7 @@ Response EmulationHandler::SetGeolocationOverride(
             /*error_message=*/"", /*error_technical=*/""));
   }
   geolocation_context->SetOverride(std::move(override_result));
+  geolocation_overridden_ = true;
   return Response::Success();
 }
 
@@ -610,6 +613,7 @@ Response EmulationHandler::ClearGeolocationOverride() {
 
   auto* geolocation_context = GetWebContents()->GetGeolocationContext();
   geolocation_context->ClearOverride();
+  geolocation_overridden_ = false;
   return Response::Success();
 }
 
@@ -656,7 +660,9 @@ Response EmulationHandler::SetDeviceMetricsOverride(
     std::unique_ptr<Emulation::ScreenOrientation> screen_orientation,
     std::unique_ptr<protocol::Page::Viewport> viewport,
     std::unique_ptr<protocol::Emulation::DisplayFeature> display_feature,
-    std::unique_ptr<protocol::Emulation::DevicePosture> device_posture) {
+    std::unique_ptr<protocol::Emulation::DevicePosture> device_posture,
+    std::optional<std::string> scrollbar_type,
+    std::optional<bool> screen_orientation_lock_emulation) {
   const static int max_size = 10000000;
   const static double max_scale = 10;
   const static int max_orientation_angle = 360;
@@ -771,6 +777,16 @@ Response EmulationHandler::SetDeviceMetricsOverride(
   if (device_posture) {
     params.device_posture =
         DevicePostureTypeFromString(device_posture->GetType()).value();
+    SetDevicePostureOverride(std::move(device_posture));
+  }
+
+  if (mobile ||
+      (scrollbar_type &&
+       *scrollbar_type ==
+           Emulation::SetDeviceMetricsOverride::ScrollbarTypeEnum::Overlay)) {
+    params.force_android_overlay_scrollbar = true;
+  } else {
+    params.force_android_overlay_scrollbar = false;
   }
 
   if (viewport) {
@@ -796,6 +812,13 @@ Response EmulationHandler::SetDeviceMetricsOverride(
     } else {
       return Response::ServerError("Can't find the associated web contents");
     }
+  }
+
+  bool enable_orientation_lock =
+      screen_orientation_lock_emulation.value_or(false);
+  if (enable_orientation_lock != screen_orientation_lock_emulation_enabled_) {
+    screen_orientation_lock_emulation_enabled_ = enable_orientation_lock;
+    UpdateScreenOrientationEmulation(enable_orientation_lock);
   }
 
   if (device_emulation_enabled_ && params == device_emulation_params_) {
@@ -827,8 +850,13 @@ Response EmulationHandler::ClearDeviceMetricsOverride() {
     return Response::Success();
 
   GetWebContents()->ClearDeviceEmulationSize();
+  ClearDevicePostureOverride();
   device_emulation_enabled_ = false;
   device_emulation_params_ = blink::DeviceEmulationParams();
+  if (screen_orientation_lock_emulation_enabled_) {
+    screen_orientation_lock_emulation_enabled_ = false;
+    UpdateScreenOrientationEmulation(false);
+  }
   UpdateDeviceEmulationState();
   // Renderer should answer after emulation was disabled, so that the response
   // is only sent to the client once updates were applied.
@@ -1068,7 +1096,9 @@ void EmulationHandler::UpdateTouchEventEmulationState() {
       touch_emulator->Disable();
     }
   }
-  GetWebContents()->SetForceDisableOverscrollContent(touch_emulation_enabled_);
+  if (WebContentsImpl* web_contents = GetWebContents()) {
+    web_contents->SetForceDisableOverscrollContent(touch_emulation_enabled_);
+  }
 }
 
 void EmulationHandler::UpdateDeviceEmulationState(
@@ -1124,9 +1154,10 @@ Response EmulationHandler::SetDevicePostureOverride(
 Response EmulationHandler::ClearDevicePostureOverride() {
   if (device_posture_emulation_enabled_) {
     device_posture_emulation_enabled_ = false;
-    GetWebContents()
-        ->GetDevicePostureProvider()
-        ->DisableDevicePostureOverrideForEmulation();
+    if (WebContentsImpl* web_contents = GetWebContents()) {
+      web_contents->GetDevicePostureProvider()
+          ->DisableDevicePostureOverrideForEmulation();
+    }
   }
   return Response::Success();
 }
@@ -1250,6 +1281,77 @@ void EmulationHandler::ApplyNetworkOverridesForDownload(
   ApplyOverrides(&headers, &user_agent_overridden, &accept_language_overridden);
   for (net::HttpRequestHeaders::Iterator it(headers); it.GetNext();) {
     parameters->add_request_header(it.name(), it.value());
+  }
+}
+
+void EmulationHandler::UpdateScreenOrientationEmulation(bool enabled) {
+  WebContentsImpl* web_contents = GetWebContents();
+  if (!web_contents) {
+    return;
+  }
+  ScreenOrientationProvider* provider =
+      web_contents->GetScreenOrientationProvider();
+  if (!provider) {
+    return;
+  }
+  provider->SetDevToolsEmulationEnabled(enabled);
+  if (enabled) {
+    provider->SetOrientationLockChangedCallback(base::BindRepeating(
+        &EmulationHandler::OnOrientationLockChanged, base::Unretained(this)));
+  } else {
+    provider->SetOrientationLockChangedCallback(
+        ScreenOrientationProvider::OrientationLockChangedCallback());
+  }
+}
+
+void EmulationHandler::OnOrientationLockChanged(
+    bool locked,
+    std::optional<device::mojom::ScreenOrientationLockType> orientation) {
+  if (!frontend_) {
+    return;
+  }
+
+  if (locked && orientation.has_value()) {
+    std::string type;
+    int angle = 0;
+    switch (orientation.value()) {
+      case device::mojom::ScreenOrientationLockType::PORTRAIT_PRIMARY:
+        type = Emulation::ScreenOrientation::TypeEnum::PortraitPrimary;
+        angle = 0;
+        break;
+      case device::mojom::ScreenOrientationLockType::PORTRAIT_SECONDARY:
+        type = Emulation::ScreenOrientation::TypeEnum::PortraitSecondary;
+        angle = 180;
+        break;
+      case device::mojom::ScreenOrientationLockType::LANDSCAPE_PRIMARY:
+        type = Emulation::ScreenOrientation::TypeEnum::LandscapePrimary;
+        angle = 90;
+        break;
+      case device::mojom::ScreenOrientationLockType::LANDSCAPE_SECONDARY:
+        type = Emulation::ScreenOrientation::TypeEnum::LandscapeSecondary;
+        angle = 270;
+        break;
+      case device::mojom::ScreenOrientationLockType::PORTRAIT:
+        type = Emulation::ScreenOrientation::TypeEnum::PortraitPrimary;
+        angle = 0;
+        break;
+      case device::mojom::ScreenOrientationLockType::LANDSCAPE:
+        type = Emulation::ScreenOrientation::TypeEnum::LandscapePrimary;
+        angle = 90;
+        break;
+      default:
+        type = Emulation::ScreenOrientation::TypeEnum::PortraitPrimary;
+        angle = 0;
+        break;
+    }
+    auto screen_orientation = Emulation::ScreenOrientation::Create()
+                                  .SetType(type)
+                                  .SetAngle(angle)
+                                  .Build();
+    frontend_->ScreenOrientationLockChanged(locked,
+                                            std::move(screen_orientation));
+  } else {
+    frontend_->ScreenOrientationLockChanged(locked);
   }
 }
 

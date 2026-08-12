@@ -11,7 +11,6 @@
 #include "base/strings/string_util.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/web_apps/web_app_views_utils.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "components/web_modal/web_contents_modal_dialog_manager_delegate.h"
@@ -114,6 +113,13 @@ SiteIconTextAndOriginView::~SiteIconTextAndOriginView() = default;
 void SiteIconTextAndOriginView::ContentsChanged(
     views::Textfield* sender,
     const std::u16string& new_contents) {
+  // This view is reused in places where there is no web_contents. Since the
+  // below bug is marked as fixed, simply ignore these cases for now, and if we
+  // can, remove the code here in general.
+  if (!web_contents_) {
+    return;
+  }
+
   CHECK_EQ(sender, title_field_);
   text_tracker_callback_.Run(GetTrimmedTitle(new_contents));
 

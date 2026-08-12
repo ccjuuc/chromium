@@ -25,6 +25,7 @@ import org.chromium.android_webview.AwContents;
 import org.chromium.android_webview.common.Lifetime;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.TraceEvent;
+import org.chromium.js_injection.mojom.DocumentInjectionTime;
 import org.chromium.support_lib_boundary.SpeculativeLoadingParametersBoundaryInterface;
 import org.chromium.support_lib_boundary.VisualStateCallbackBoundaryInterface;
 import org.chromium.support_lib_boundary.WebMessageBoundaryInterface;
@@ -53,8 +54,11 @@ class SupportLibWebViewChromium implements WebViewProviderBoundaryInterface {
 
     public SupportLibWebViewChromium(WebView webView) {
         mWebView = new WeakReference<>(webView);
-        mSharedWebViewChromium =
-                new WeakReference<>(WebkitToSharedGlueConverter.getSharedWebViewChromium(webView));
+        var sharedWebViewChromium = WebkitToSharedGlueConverter.getSharedWebViewChromium(webView);
+        mSharedWebViewChromium = new WeakReference<>(sharedWebViewChromium);
+        // SupportLibWebViewChromium is created lazily, so its construction implies the use of an
+        // API and the builder can no longer be used.
+        sharedWebViewChromium.forbidBuilderConfiguration();
     }
 
     @Override
@@ -156,6 +160,94 @@ class SupportLibWebViewChromium implements WebViewProviderBoundaryInterface {
     }
 
     @Override
+    public void addWebMessageListener(
+            String jsObjectName,
+            String[] allowedOriginRules,
+            /* WebMessageListener */ InvocationHandler listener,
+            String worldName) {
+        try (TraceEvent event =
+                TraceEvent.scoped("WebView.APICall.AndroidX.ADD_WEB_MESSAGE_LISTENER_WITH_WORLD")) {
+            recordApiCall(ApiCall.ADD_WEB_MESSAGE_LISTENER_WITH_WORLD);
+            SharedWebViewChromium sharedWebViewChromium = mSharedWebViewChromium.get();
+            WebView webView = mWebView.get();
+            if (sharedWebViewChromium == null || webView == null) {
+                throw new IllegalStateException(
+                        "Support lib method called on WebView that no longer exists.");
+            }
+            sharedWebViewChromium.addWebMessageListener(
+                    jsObjectName,
+                    allowedOriginRules,
+                    new SupportLibWebMessageListenerAdapter(webView, listener),
+                    worldName);
+        }
+    }
+
+    @Override
+    public void removeWebMessageListener(final String jsObjectName, String worldName) {
+        try (TraceEvent event =
+                TraceEvent.scoped(
+                        "WebView.APICall.AndroidX.REMOVE_WEB_MESSAGE_LISTENER_WITH_WORLD")) {
+            recordApiCall(ApiCall.REMOVE_WEB_MESSAGE_LISTENER_WITH_WORLD);
+            SharedWebViewChromium sharedWebViewChromium = mSharedWebViewChromium.get();
+            if (sharedWebViewChromium == null) {
+                throw new IllegalStateException(
+                        "Support lib method called on WebView that no longer exists.");
+            }
+            sharedWebViewChromium.removeWebMessageListener(jsObjectName, worldName);
+        }
+    }
+
+    @Override
+    public /* ScriptHandler */ InvocationHandler addJavaScriptOnEvent(
+            final String script,
+            final String[] allowedOriginRules,
+            @JavaScriptInjectionTime int injectionEvent,
+            String worldName) {
+        try (TraceEvent event =
+                TraceEvent.scoped("WebView.APICall.AndroidX.ADD_JAVA_SCRIPT_ON_EVENT")) {
+            recordApiCall(ApiCall.ADD_JAVA_SCRIPT_ON_EVENT);
+            SharedWebViewChromium sharedWebViewChromium = mSharedWebViewChromium.get();
+            if (sharedWebViewChromium == null) {
+                throw new IllegalStateException(
+                        "Support lib method called on WebView that no longer exists.");
+            }
+            return BoundaryInterfaceReflectionUtil.createInvocationHandlerFor(
+                    SupportLibScriptHandlerAdapter.persistentJavascriptHandler(
+                            sharedWebViewChromium.addJavaScriptOnEvent(
+                                    script,
+                                    getDocumentInjectionEvent(injectionEvent),
+                                    allowedOriginRules,
+                                    worldName)));
+        }
+    }
+
+    @Override
+    public int getJavaScriptWorld(String worldName) {
+        try (TraceEvent event =
+                TraceEvent.scoped("WebView.APICall.AndroidX.GET_JAVA_SCRIPT_WORLD")) {
+            recordApiCall(ApiCall.GET_JAVA_SCRIPT_WORLD);
+            SharedWebViewChromium sharedWebViewChromium = mSharedWebViewChromium.get();
+            if (sharedWebViewChromium == null) {
+                throw new IllegalStateException(
+                        "Support lib method called on WebView that no longer exists.");
+            }
+            return sharedWebViewChromium.getJavaScriptWorld(worldName);
+        }
+    }
+
+    private @DocumentInjectionTime.EnumType int getDocumentInjectionEvent(
+            @JavaScriptInjectionTime int event) {
+        switch (event) {
+            case JavaScriptInjectionTime.DOCUMENT_START:
+                return DocumentInjectionTime.DOCUMENT_START;
+            case JavaScriptInjectionTime.DOCUMENT_END:
+                return DocumentInjectionTime.DOCUMENT_END;
+            default:
+                throw new IllegalArgumentException("Unknown event: " + event);
+        }
+    }
+
+    @Override
     public /* ScriptHandler */ InvocationHandler addDocumentStartJavaScript(
             final String script, final String[] allowedOriginRules) {
         try (TraceEvent event =
@@ -167,7 +259,7 @@ class SupportLibWebViewChromium implements WebViewProviderBoundaryInterface {
                         "Support lib method called on WebView that no longer exists.");
             }
             return BoundaryInterfaceReflectionUtil.createInvocationHandlerFor(
-                    new SupportLibScriptHandlerAdapter(
+                    SupportLibScriptHandlerAdapter.documentStartHandler(
                             sharedWebViewChromium.addDocumentStartJavaScript(
                                     script, allowedOriginRules)));
         }
@@ -367,6 +459,28 @@ class SupportLibWebViewChromium implements WebViewProviderBoundaryInterface {
                             CallbackConverter.fromValueCallback(errorCallback));
         } catch (Exception e) {
             callbackExecutor.execute(() -> errorCallback.onReceiveValue(e));
+        }
+    }
+
+    @Override
+    public /* Navigation */ InvocationHandler navigate(
+            String url, /* NavigationParams */ InvocationHandler navigationParameters) {
+        try (TraceEvent event = TraceEvent.scoped("WebView.APICall.AndroidX.NAVIGATE")) {
+            recordApiCall(ApiCall.NAVIGATE);
+
+            SharedWebViewChromium sharedWebViewChromium = mSharedWebViewChromium.get();
+            if (sharedWebViewChromium == null) {
+                throw new IllegalStateException(
+                        "Support lib method called on WebView that no longer exists.");
+            }
+            return BoundaryInterfaceReflectionUtil.createInvocationHandlerFor(
+                    new SupportLibWebViewNavigationAdapter(
+                            sharedWebViewChromium
+                                    .getAwContents()
+                                    .navigate(
+                                            new SupportLibNavigationParametersAdapter(
+                                                            navigationParameters)
+                                                    .toAwNavigationParams(url))));
         }
     }
 

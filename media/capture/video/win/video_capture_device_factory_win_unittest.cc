@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/capture/video/win/video_capture_device_factory_win.h"
 
 #include <ks.h>
@@ -26,8 +21,12 @@
 #include <utility>
 #include <vector>
 
+#include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/notreached.h"
 #include "base/run_loop.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/test/bind.h"
@@ -294,7 +293,7 @@ class StubMFActivate final : public StubInterface<IMFActivate> {
     }
     *ppwszValue = static_cast<wchar_t*>(
         CoTaskMemAlloc((value.size() + 1) * sizeof(wchar_t)));
-    wcscpy(*ppwszValue, value.c_str());
+    UNSAFE_TODO(wcscpy(*ppwszValue, value.c_str()));
     *pcchLength = value.length();
     return S_OK;
   }
@@ -1197,7 +1196,7 @@ class StubEnumMoniker : public StubInterface<IEnumMoniker> {
       return S_FALSE;
     const ULONG original_cursor_position = cursor_position_;
     while (celt-- > 0 && cursor_position_ < monikers_.size())
-      *rgelt++ = AddReference(monikers_[cursor_position_++].get());
+      UNSAFE_TODO(*rgelt++) = AddReference(monikers_[cursor_position_++].get());
     if (celt_fetched)
       *celt_fetched = cursor_position_ - original_cursor_position;
     return S_OK;
@@ -1250,6 +1249,7 @@ class FakeVideoCaptureDeviceFactoryWin : public VideoCaptureDeviceFactoryWin {
   MFSourceOutcome CreateDeviceSourceMediaFoundation(
       Microsoft::WRL::ComPtr<IMFAttributes> attributes,
       const bool banned_for_d3d11,
+      scoped_refptr<DXGIDeviceManager> dxgi_device_manager,
       IMFMediaSource** source) override {
     UINT32 length;
     if (FAILED(attributes->GetStringLength(
@@ -1264,7 +1264,7 @@ class FakeVideoCaptureDeviceFactoryWin : public VideoCaptureDeviceFactoryWin {
       return MFSourceOutcome::kFailed;
     }
     const bool has_dxgi_device_manager =
-        static_cast<bool>(GetDxgiDeviceManager()) && !banned_for_d3d11;
+        static_cast<bool>(dxgi_device_manager) && !banned_for_d3d11;
     if (use_d3d11_with_media_foundation_for_testing() !=
         has_dxgi_device_manager) {
       return MFSourceOutcome::kFailed;
@@ -1307,7 +1307,7 @@ class FakeVideoCaptureDeviceFactoryWin : public VideoCaptureDeviceFactoryWin {
     for (auto& device : stub_devices) {
       if (!device->MatchesQuery(attributes.Get(), &hr))
         continue;
-      *(*devices + offset++) = AddReference(device.get());
+      UNSAFE_TODO(*(*devices + offset++)) = AddReference(device.get());
     }
     return true;
   }
@@ -1326,10 +1326,11 @@ class FakeVideoCaptureDeviceFactoryWin : public VideoCaptureDeviceFactoryWin {
   VideoCaptureFormats GetSupportedFormatsMediaFoundation(
       Microsoft::WRL::ComPtr<IMFMediaSource> source,
       const bool banned_for_d3d11,
-      const std::string& display_name) override {
+      const std::string& display_name,
+      scoped_refptr<DXGIDeviceManager> dxgi_device_manager) override {
     if (disable_get_supported_formats_mf_mocking_) {
       return VideoCaptureDeviceFactoryWin::GetSupportedFormatsMediaFoundation(
-          source, banned_for_d3d11, display_name);
+          source, banned_for_d3d11, display_name, dxgi_device_manager);
     }
     VideoCaptureFormats supported_formats;
     if (display_name == base::SysWideToUTF8(kMFDeviceName6)) {

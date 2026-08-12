@@ -5,6 +5,8 @@
 package org.chromium.chrome.browser.keyboard_accessory.button_group_component;
 
 import static org.chromium.chrome.browser.keyboard_accessory.button_group_component.KeyboardAccessoryButtonGroupProperties.ACTIVE_TAB;
+import static org.chromium.chrome.browser.keyboard_accessory.button_group_component.KeyboardAccessoryButtonGroupProperties.AT_MEMORY_CALLBACK;
+import static org.chromium.chrome.browser.keyboard_accessory.button_group_component.KeyboardAccessoryButtonGroupProperties.AT_MEMORY_ENABLED;
 import static org.chromium.chrome.browser.keyboard_accessory.button_group_component.KeyboardAccessoryButtonGroupProperties.BUTTON_SELECTION_CALLBACKS;
 import static org.chromium.chrome.browser.keyboard_accessory.button_group_component.KeyboardAccessoryButtonGroupProperties.TABS;
 
@@ -57,10 +59,11 @@ public class KeyboardAccessoryButtonGroupViewBinder
     private void updateAllButtons(
             KeyboardAccessoryButtonGroupView view, ListModel<KeyboardAccessoryData.Tab> model) {
         view.removeAllButtons();
+        view.addAtMemoryButton();
         if (model.size() <= 0) return;
         for (int i = 0; i < model.size(); i++) {
             KeyboardAccessoryData.Tab tab = model.get(i);
-            view.addButton(tab.getIcon(), tab.getContentDescription());
+            view.addButton(tab.getIconId(), tab.getContentDescription(), i);
         }
     }
 
@@ -70,7 +73,7 @@ public class KeyboardAccessoryButtonGroupViewBinder
             final int observedIconIndex = i;
             model.get(i)
                     .addIconObserver(
-                            (unusedTypeId, unusedDrawable) -> {
+                            _ -> {
                                 onItemsChanged(model, view, observedIconIndex, 1, null);
                             });
         }
@@ -90,6 +93,15 @@ public class KeyboardAccessoryButtonGroupViewBinder
             if (listener != null) view.setButtonSelectionListener(listener);
         } else if (propertyKey == ACTIVE_TAB) {
             // not used for this view.
+        } else if (propertyKey == AT_MEMORY_CALLBACK) {
+            view.setAtMemoryCallback(model.get(AT_MEMORY_CALLBACK));
+        } else if (propertyKey == AT_MEMORY_ENABLED) {
+            view.setAtMemoryEnabled(model.get(AT_MEMORY_ENABLED));
+            // Update the button list to hide/show the AtMemory button.
+            KeyboardAccessoryButtonGroupViewBinder viewBinder =
+                    KeyboardAccessoryButtonGroupCoordinator.createButtonGroupViewBinder(
+                            model, view);
+            viewBinder.updateAllButtons(view, model.get(TABS));
         } else {
             assert false : "Every possible property update needs to be handled!";
         }

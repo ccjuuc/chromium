@@ -9,92 +9,70 @@
 #include <vector>
 
 #include "base/functional/callback.h"
-#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/test/gmock_callback_support.h"
 #include "base/test/task_environment.h"
-#include "net/ssl/client_cert_store.h"
-#include "net/ssl/ssl_cert_request_info.h"
 #include "remoting/base/http_status.h"
+#include "remoting/base/internal_headers.h"
 #include "remoting/base/protobuf_http_test_responder.h"
-#include "remoting/base/rsa_key_pair.h"
-#include "remoting/proto/messaging_service.h"
-#include "remoting/signaling/messaging_client.h"
+#include "remoting/signaling/corp_messaging_client.h"
+#include "remoting/signaling/jingle_message_struct_converter.h"
 #include "remoting/signaling/signaling_address.h"
-#include "remoting/signaling/xmpp_constants.h"
-#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/libjingle_xmpp/xmllite/xmlelement.h"
 
 namespace remoting {
 
 namespace {
 
 using testing::_;
-using testing::ByMove;
-using testing::Mock;
+using testing::HasSubstr;
 using testing::Return;
 
 constexpr char kFakeLocalCorpId[] = "fake_local_user@domain.com";
 constexpr char kFakeRemoteCorpId[] = "fake_remote_user@domain.com";
 
-enum class Direction {
-  OUTGOING,
-  INCOMING,
-};
+constexpr char kFauxMessagingToken[] = "ZmF1eF9tZXNzYWdpbmdfdG9rZW4=";
+constexpr char kFakeAuthzToken[] = "ZmFrZV9hdXRoel90b2tlbg==";
+constexpr char kFakeToken[] = "ZmFrZV90b2tlbg==";
+constexpr char kToken1[] = "dG9rZW4x";
+constexpr char kToken2[] = "dG9rZW4y";
 
-std::unique_ptr<jingle_xmpp::XmlElement> CreateXmlStanza(
-    Direction direction,
-    const std::string& id) {
-  static constexpr char kStanzaTemplate[] =
-      "<iq xmlns=\"jabber:client\" type=\"set\">"
-      "<bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\">"
-      "<resource>chromoting</resource>"
-      "</bind>"
-      "</iq>";
-  auto stanza = base::WrapUnique<jingle_xmpp::XmlElement>(
-      jingle_xmpp::XmlElement::ForStr(kStanzaTemplate));
-  stanza->SetAttr(kQNameId, id);
-  if (direction == Direction::OUTGOING) {
-    stanza->SetAttr(kQNameFrom, kFakeLocalCorpId);
-    stanza->SetAttr(kQNameTo, kFakeRemoteCorpId);
-  } else {
-    stanza->SetAttr(kQNameFrom, kFakeRemoteCorpId);
-    stanza->SetAttr(kQNameTo, kFakeLocalCorpId);
-  }
-  return stanza;
-}
 
-class FakeMessagingClient : public MessagingClient {
+
+class FakeMessagingClient : public CorpMessagingClient {
  public:
   FakeMessagingClient() = default;
   ~FakeMessagingClient() override = default;
 
-  // MessagingClient implementation.
+  // CorpMessagingClient implementation.
   base::CallbackListSubscription RegisterMessageCallback(
-      const MessageCallback& callback) override {
+      const CorpMessagingClient::MessageCallback& callback) override {
     return callback_list_.Add(callback);
   }
 
   MOCK_METHOD(void,
               SendMessage,
-              (const SignalingAddress&, SignalingMessage&&, DoneCallback),
+              (const SignalingAddress&,
+               internal::PeerMessageStruct&&,
+               CorpMessagingClient::DoneCallback),
               (override));
   MOCK_METHOD(void,
               StartReceivingMessages,
-              (base::OnceClosure on_ready, DoneCallback on_closed),
+              (base::OnceClosure on_ready,
+               CorpMessagingClient::DoneCallback on_closed),
               (override));
   MOCK_METHOD(void, StopReceivingMessages, (), (override));
   MOCK_METHOD(bool, IsReceivingMessages, (), (const, override));
 
   void OnMessage(const SignalingAddress& sender_address,
-                 const SignalingMessage& message) {
+                 const internal::PeerMessageStruct& message) {
     callback_list_.Notify(sender_address, message);
   }
 
  private:
-  MessageCallbackList callback_list_;
+  CorpMessagingClient::MessageCallbackList callback_list_;
 };
 
 }  // namespace
@@ -112,8 +90,19 @@ class CorpSignalStrategyTest : public testing::Test,
             std::move(messaging_client), SignalingAddress(kFakeLocalCorpId)));
     signal_strategy_->AddListener(this);
 
-    ON_CALL(*this, OnSignalStrategyIncomingMessage(_, _))
-        .WillByDefault(Return(false));
+    // By default, messages will be collected in received_messages_.
+    ON_CALL(*this, OnSignalingMessage(_, _))
+        .WillByDefault([&](const SignalingAddress& sender_address,
+                           const JingleMessage& jingle_message) {
+          received_messages_.push_back(jingle_message);
+          return true;
+        });
+    ON_CALL(*this, OnSignalingReply(_, _))
+        .WillByDefault([&](const SignalingAddress& sender_address,
+                           const JingleMessageReply& jingle_reply) {
+          received_replies_.push_back(jingle_reply);
+          return true;
+        });
   }
 
   ~CorpSignalStrategyTest() override {
@@ -124,8 +113,13 @@ class CorpSignalStrategyTest : public testing::Test,
 
  protected:
   MOCK_METHOD(bool,
-              OnSignalStrategyIncomingMessage,
-              (const SignalingAddress&, const SignalingMessage&),
+              OnSignalingMessage,
+              (const SignalingAddress&, const JingleMessage&),
+              (override));
+
+  MOCK_METHOD(bool,
+              OnSignalingReply,
+              (const SignalingAddress&, const JingleMessageReply&),
               (override));
 
   base::test::TaskEnvironment task_environment_;
@@ -136,190 +130,411 @@ class CorpSignalStrategyTest : public testing::Test,
   std::unique_ptr<CorpSignalStrategy> signal_strategy_;
 
   std::vector<SignalStrategy::State> state_history_;
-  std::vector<std::unique_ptr<jingle_xmpp::XmlElement>> received_messages_;
+  std::vector<JingleMessage> received_messages_;
+  std::vector<JingleMessageReply> received_replies_;
 
  private:
   // SignalStrategy::Listener overrides.
-  void OnSignalStrategyStateChange(SignalStrategy::State state) override {
+  void OnSignalingStateChanged(SignalStrategy::State state) override {
     state_history_.push_back(state);
-  }
-
-  bool OnSignalStrategyIncomingStanza(
-      const jingle_xmpp::XmlElement* stanza) override {
-    received_messages_.push_back(
-        std::make_unique<jingle_xmpp::XmlElement>(*stanza));
-    return true;
   }
 };
 
 TEST_F(CorpSignalStrategyTest, ConnectAndDisconnect) {
-  ASSERT_EQ(SignalStrategy::State::DISCONNECTED, signal_strategy_->GetState());
-  ASSERT_EQ(SignalStrategy::Error::OK, signal_strategy_->GetError());
+  ASSERT_EQ(signal_strategy_->GetState(), SignalStrategy::State::DISCONNECTED);
+  ASSERT_EQ(signal_strategy_->GetError(), SignalStrategy::Error::OK);
   ASSERT_FALSE(signal_strategy_->IsSignInError());
 
   EXPECT_CALL(*messaging_client_, StartReceivingMessages(_, _))
-      .WillOnce([](base::OnceClosure on_ready,
-                   MessagingClient::DoneCallback on_closed) {
-        std::move(on_ready).Run();
-        return testing::Return();
-      });
-  ASSERT_EQ(0u, state_history_.size());
+      .WillOnce(base::test::RunOnceClosure<0>());
+  ASSERT_EQ(state_history_.size(), 0u);
   signal_strategy_->Connect();
 
-  ASSERT_EQ(2u, state_history_.size());
-  ASSERT_EQ(SignalStrategy::State::CONNECTING, state_history_[0]);
-  ASSERT_EQ(SignalStrategy::State::CONNECTED, state_history_[1]);
+  ASSERT_EQ(state_history_.size(), 2u);
+  ASSERT_EQ(state_history_[0], SignalStrategy::State::CONNECTING);
+  ASSERT_EQ(state_history_[1], SignalStrategy::State::CONNECTED);
 
-  ASSERT_EQ(SignalStrategy::State::CONNECTED, signal_strategy_->GetState());
-  ASSERT_EQ(SignalStrategy::Error::OK, signal_strategy_->GetError());
+  ASSERT_EQ(signal_strategy_->GetState(), SignalStrategy::State::CONNECTED);
+  ASSERT_EQ(signal_strategy_->GetError(), SignalStrategy::Error::OK);
   ASSERT_FALSE(signal_strategy_->IsSignInError());
 
   EXPECT_CALL(*messaging_client_, StopReceivingMessages());
   signal_strategy_->Disconnect();
 
-  ASSERT_EQ(3u, state_history_.size());
-  ASSERT_EQ(SignalStrategy::State::DISCONNECTED, state_history_[2]);
-  ASSERT_EQ(SignalStrategy::State::DISCONNECTED, signal_strategy_->GetState());
+  ASSERT_EQ(state_history_.size(), 3u);
+  ASSERT_EQ(state_history_[2], SignalStrategy::State::DISCONNECTED);
+  ASSERT_EQ(signal_strategy_->GetState(), SignalStrategy::State::DISCONNECTED);
 }
 
 TEST_F(CorpSignalStrategyTest, StartStream_Unauthenticated) {
-  ASSERT_EQ(SignalStrategy::State::DISCONNECTED, signal_strategy_->GetState());
-  ASSERT_EQ(SignalStrategy::Error::OK, signal_strategy_->GetError());
+  ASSERT_EQ(signal_strategy_->GetState(), SignalStrategy::State::DISCONNECTED);
+  ASSERT_EQ(signal_strategy_->GetError(), SignalStrategy::Error::OK);
   ASSERT_FALSE(signal_strategy_->IsSignInError());
 
   EXPECT_CALL(*messaging_client_, StartReceivingMessages(_, _))
-      .WillOnce([](base::OnceClosure on_ready,
-                   MessagingClient::DoneCallback on_closed) {
-        std::move(on_closed).Run(
-            HttpStatus(HttpStatus::Code::UNAUTHENTICATED, "unauthenticated"));
-      });
+      .WillOnce(base::test::RunOnceCallback<1>(
+          HttpStatus(HttpStatus::Code::UNAUTHENTICATED, "unauthenticated")));
 
   signal_strategy_->Connect();
 
-  ASSERT_EQ(2u, state_history_.size());
-  ASSERT_EQ(SignalStrategy::State::CONNECTING, state_history_[0]);
-  ASSERT_EQ(SignalStrategy::State::DISCONNECTED, state_history_[1]);
+  ASSERT_EQ(state_history_.size(), 2u);
+  ASSERT_EQ(state_history_[0], SignalStrategy::State::CONNECTING);
+  ASSERT_EQ(state_history_[1], SignalStrategy::State::DISCONNECTED);
 
-  ASSERT_EQ(SignalStrategy::State::DISCONNECTED, signal_strategy_->GetState());
-  ASSERT_EQ(SignalStrategy::Error::AUTHENTICATION_FAILED,
-            signal_strategy_->GetError());
+  ASSERT_EQ(signal_strategy_->GetState(), SignalStrategy::State::DISCONNECTED);
+  ASSERT_EQ(signal_strategy_->GetError(),
+            SignalStrategy::Error::AUTHENTICATION_FAILED);
   ASSERT_TRUE(signal_strategy_->IsSignInError());
 }
 
 TEST_F(CorpSignalStrategyTest, StartStream_NetworkError) {
-  ASSERT_EQ(SignalStrategy::State::DISCONNECTED, signal_strategy_->GetState());
-  ASSERT_EQ(SignalStrategy::Error::OK, signal_strategy_->GetError());
+  ASSERT_EQ(signal_strategy_->GetState(), SignalStrategy::State::DISCONNECTED);
+  ASSERT_EQ(signal_strategy_->GetError(), SignalStrategy::Error::OK);
   ASSERT_FALSE(signal_strategy_->IsSignInError());
 
   EXPECT_CALL(*messaging_client_, StartReceivingMessages(_, _))
-      .WillOnce([](base::OnceClosure on_ready,
-                   MessagingClient::DoneCallback on_closed) {
-        std::move(on_closed).Run(
-            HttpStatus(HttpStatus::Code::UNAVAILABLE, "unavailable"));
-      });
+      .WillOnce(base::test::RunOnceCallback<1>(
+          HttpStatus(HttpStatus::Code::UNAVAILABLE, "unavailable")));
 
   signal_strategy_->Connect();
 
-  ASSERT_EQ(2u, state_history_.size());
-  ASSERT_EQ(SignalStrategy::State::CONNECTING, state_history_[0]);
-  ASSERT_EQ(SignalStrategy::State::DISCONNECTED, state_history_[1]);
+  ASSERT_EQ(state_history_.size(), 2u);
+  ASSERT_EQ(state_history_[0], SignalStrategy::State::CONNECTING);
+  ASSERT_EQ(state_history_[1], SignalStrategy::State::DISCONNECTED);
 
-  ASSERT_EQ(SignalStrategy::State::DISCONNECTED, signal_strategy_->GetState());
-  ASSERT_EQ(SignalStrategy::Error::NETWORK_ERROR, signal_strategy_->GetError());
+  ASSERT_EQ(signal_strategy_->GetState(), SignalStrategy::State::DISCONNECTED);
+  ASSERT_EQ(signal_strategy_->GetError(), SignalStrategy::Error::NETWORK_ERROR);
   ASSERT_FALSE(signal_strategy_->IsSignInError());
 }
 
-TEST_F(CorpSignalStrategyTest, SendStanza_Success) {
+
+TEST_F(CorpSignalStrategyTest, SendMessage_PopulatesStructuredFields) {
   EXPECT_CALL(*messaging_client_, StartReceivingMessages(_, _))
-      .WillOnce([](base::OnceClosure on_ready,
-                   MessagingClient::DoneCallback on_closed) {
-        std::move(on_ready).Run();
-        return testing::Return();
-      });
+      .WillOnce(base::test::RunOnceClosure<0>());
   signal_strategy_->Connect();
 
-  // Simulate an incoming message to set the remote address.
-  internal::IqStanzaStruct iq_stanza_struct;
-  iq_stanza_struct.xml = CreateXmlStanza(Direction::INCOMING, "id1")->Str();
-  iq_stanza_struct.messaging_authz_token = "faux_messaging_token";
-  internal::PeerMessageStruct peer_message;
-  peer_message.payload = std::move(iq_stanza_struct);
-  messaging_client_->OnMessage(SignalingAddress(kFakeRemoteCorpId),
-                               SignalingMessage(peer_message));
+  // Set the token.
+  {
+    JingleMessage token_message;
+    token_message.message_id = "id1";
+    token_message.from = SignalingAddress(kFakeRemoteCorpId);
+    token_message.to = SignalingAddress(kFakeLocalCorpId);
+    token_message.sid = "sid123";
+    token_message.SetPayload(SessionInfo());
 
-  auto stanza =
-      CreateXmlStanza(Direction::OUTGOING, signal_strategy_->GetNextId());
-  std::string stanza_string = stanza->Str();
+    internal::IqStanzaStruct iq_stanza_struct =
+        JingleMessageToStruct(token_message);
+    iq_stanza_struct.messaging_authz_token = kFauxMessagingToken;
+    internal::PeerMessageStruct message;
+    message.payload = std::move(iq_stanza_struct);
+    messaging_client_->OnMessage(SignalingAddress(kFakeRemoteCorpId), message);
+  }
+
+  JingleMessage jingle_message;
+  jingle_message.message_id = "msg_id";
+  jingle_message.from = SignalingAddress(kFakeLocalCorpId);
+  jingle_message.to = SignalingAddress(kFakeRemoteCorpId);
+  jingle_message.SetPayload(SessionInfo());
 
   EXPECT_CALL(*messaging_client_, SendMessage(_, _, _))
-      .WillOnce([stanza_string](const SignalingAddress& address,
-                                SignalingMessage&& message,
-                                MessagingClient::DoneCallback on_done) {
-        EXPECT_EQ("faux_messaging_token", address.id());
-        auto* peer_message = std::get_if<internal::PeerMessageStruct>(&message);
-        ASSERT_TRUE(peer_message);
+      .WillOnce([&](const SignalingAddress& address,
+                    internal::PeerMessageStruct&& message,
+                    CorpMessagingClient::DoneCallback on_done) {
         auto* iq_stanza =
-            std::get_if<internal::IqStanzaStruct>(&peer_message->payload);
+            std::get_if<internal::IqStanzaStruct>(&message.payload);
         ASSERT_TRUE(iq_stanza);
-        EXPECT_EQ(stanza_string, iq_stanza->xml);
+        EXPECT_EQ(iq_stanza->id, "msg_id");
+        EXPECT_EQ(iq_stanza->sender.local_part, "fake_local_user");
+        EXPECT_EQ(iq_stanza->receiver.local_part, "fake_remote_user");
         std::move(on_done).Run(HttpStatus::OK());
       });
 
-  signal_strategy_->SendStanza(std::move(stanza));
+  signal_strategy_->SendMessage(std::move(jingle_message));
 }
 
-TEST_F(CorpSignalStrategyTest, SendStanza_NotConnected) {
-  auto stanza =
-      CreateXmlStanza(Direction::OUTGOING, signal_strategy_->GetNextId());
-  EXPECT_FALSE(signal_strategy_->SendStanza(std::move(stanza)));
+TEST_F(CorpSignalStrategyTest, SendMessage_NotConnected) {
+  EXPECT_CALL(*messaging_client_, SendMessage(_, _, _)).Times(0);
+  JingleMessage jingle_message;
+  jingle_message.to = SignalingAddress(kFakeRemoteCorpId);
+  jingle_message.from = SignalingAddress(kFakeLocalCorpId);
+  jingle_message.SetPayload(SessionInfo());
+
+  ASSERT_FALSE(signal_strategy_->SendMessage(std::move(jingle_message)));
 }
 
 TEST_F(CorpSignalStrategyTest, ReceiveStanza_Success) {
   EXPECT_CALL(*messaging_client_, StartReceivingMessages(_, _))
-      .WillOnce([](base::OnceClosure on_ready,
-                   MessagingClient::DoneCallback on_closed) {
-        std::move(on_ready).Run();
-        return testing::Return();
-      });
+      .WillOnce(base::test::RunOnceClosure<0>());
   signal_strategy_->Connect();
 
-  auto stanza =
-      CreateXmlStanza(Direction::INCOMING, signal_strategy_->GetNextId());
-  std::string stanza_string = stanza->Str();
+  JingleMessage jingle_message;
+  jingle_message.message_id = signal_strategy_->GetNextId();
+  jingle_message.from = SignalingAddress(kFakeRemoteCorpId);
+  jingle_message.to = SignalingAddress(kFakeLocalCorpId);
+  jingle_message.sid = "sid123";
+  jingle_message.SetPayload(SessionInfo());
 
-  internal::IqStanzaStruct iq_stanza_struct;
-  iq_stanza_struct.xml = stanza_string;
-  iq_stanza_struct.messaging_authz_token = "fake_authz_token";
+  internal::IqStanzaStruct iq_stanza_struct =
+      JingleMessageToStruct(jingle_message);
+  iq_stanza_struct.messaging_authz_token = kFakeAuthzToken;
 
-  internal::PeerMessageStruct peer_message;
-  peer_message.payload = std::move(iq_stanza_struct);
+  internal::PeerMessageStruct message;
+  message.payload = std::move(iq_stanza_struct);
 
-  messaging_client_->OnMessage(SignalingAddress(kFakeRemoteCorpId),
-                               SignalingMessage(peer_message));
+  messaging_client_->OnMessage(SignalingAddress(kFakeRemoteCorpId), message);
 
-  ASSERT_EQ(1u, received_messages_.size());
-  ASSERT_EQ(stanza_string, received_messages_[0]->Str());
+  ASSERT_EQ(received_messages_.size(), 1u);
+  EXPECT_EQ(received_messages_[0].to.id(), kFakeLocalCorpId);
+  EXPECT_EQ(received_messages_[0].from.id(), kFakeRemoteCorpId);
+  EXPECT_EQ(received_messages_[0].message_id, jingle_message.message_id);
+  EXPECT_EQ(received_messages_[0].sid, "sid123");
 }
 
-TEST_F(CorpSignalStrategyTest, ReceiveStanza_MalformedXmpp) {
+TEST_F(CorpSignalStrategyTest, ReceiveStanza_XmlOnlyDropped) {
   EXPECT_CALL(*messaging_client_, StartReceivingMessages(_, _))
-      .WillOnce([](base::OnceClosure on_ready,
-                   MessagingClient::DoneCallback on_closed) {
-        std::move(on_ready).Run();
-        return testing::Return();
-      });
+      .WillOnce(base::test::RunOnceClosure<0>());
   signal_strategy_->Connect();
 
   internal::IqStanzaStruct iq_stanza_struct;
-  iq_stanza_struct.xml = "Malformed!!!";
+  iq_stanza_struct.xml = "<iq>...</iq>";
 
-  internal::PeerMessageStruct peer_message;
-  peer_message.payload = std::move(iq_stanza_struct);
+  internal::PeerMessageStruct message;
+  message.payload = std::move(iq_stanza_struct);
 
+  messaging_client_->OnMessage(SignalingAddress(kFakeRemoteCorpId), message);
+
+  ASSERT_EQ(received_messages_.size(), 0u);
+}
+
+TEST_F(CorpSignalStrategyTest, LocalAddressPreservedAfterDisconnect) {
+  EXPECT_CALL(*messaging_client_, StartReceivingMessages(_, _))
+      .WillOnce(base::test::RunOnceClosure<0>());
+  signal_strategy_->Connect();
+
+  ASSERT_EQ(signal_strategy_->GetLocalAddress().id(), kFakeLocalCorpId);
+
+  EXPECT_CALL(*messaging_client_, StopReceivingMessages());
+  signal_strategy_->Disconnect();
+
+  EXPECT_EQ(signal_strategy_->GetLocalAddress().id(), kFakeLocalCorpId);
+}
+
+TEST_F(CorpSignalStrategyTest, LocalAddressPreservedAfterChannelError) {
+  CorpMessagingClient::DoneCallback on_closed_callback;
+  EXPECT_CALL(*messaging_client_, StartReceivingMessages(_, _))
+      .WillOnce([&](base::OnceClosure on_ready,
+                    CorpMessagingClient::DoneCallback on_closed) {
+        std::move(on_ready).Run();
+        on_closed_callback = std::move(on_closed);
+      });
+  signal_strategy_->Connect();
+  ASSERT_EQ(signal_strategy_->GetState(), SignalStrategy::State::CONNECTED);
+  ASSERT_EQ(signal_strategy_->GetLocalAddress().id(), kFakeLocalCorpId);
+
+  EXPECT_CALL(*messaging_client_, StopReceivingMessages());
+  std::move(on_closed_callback)
+      .Run(HttpStatus(HttpStatus::Code::UNAVAILABLE, "error"));
+
+  ASSERT_EQ(signal_strategy_->GetState(), SignalStrategy::State::DISCONNECTED);
+  EXPECT_EQ(signal_strategy_->GetLocalAddress().id(), kFakeLocalCorpId);
+}
+
+TEST_F(CorpSignalStrategyTest, ReceiveStanza_NonIqStanza) {
+  EXPECT_CALL(*messaging_client_, StartReceivingMessages(_, _))
+      .WillOnce(base::test::RunOnceClosure<0>());
+  signal_strategy_->Connect();
+
+  internal::PeerMessageStruct message;
+  message.payload = internal::SystemTestStruct();
+
+  messaging_client_->OnMessage(SignalingAddress(kFakeRemoteCorpId), message);
+
+  ASSERT_EQ(received_messages_.size(), 0u);
+}
+
+TEST_F(CorpSignalStrategyTest, ReceiveStanza_MissingAuthzToken) {
+  EXPECT_CALL(*messaging_client_, StartReceivingMessages(_, _))
+      .WillOnce(base::test::RunOnceClosure<0>());
+  signal_strategy_->Connect();
+
+  JingleMessage jingle_message;
+  jingle_message.message_id = signal_strategy_->GetNextId();
+  jingle_message.from = SignalingAddress(kFakeRemoteCorpId);
+  jingle_message.to = SignalingAddress(kFakeLocalCorpId);
+  jingle_message.sid = "sid123";
+  jingle_message.SetPayload(SessionInfo());
+
+  internal::IqStanzaStruct iq_stanza_struct =
+      JingleMessageToStruct(jingle_message);
+  iq_stanza_struct.messaging_authz_token = "";
+
+  internal::PeerMessageStruct message;
+  message.payload = std::move(iq_stanza_struct);
+
+  messaging_client_->OnMessage(SignalingAddress(kFakeRemoteCorpId), message);
+
+  ASSERT_EQ(received_messages_.size(), 0u);
+}
+
+TEST_F(CorpSignalStrategyTest, ReceiveStanza_AuthzTokenChanged) {
+  EXPECT_CALL(*messaging_client_, StartReceivingMessages(_, _))
+      .WillOnce(base::test::RunOnceClosure<0>());
+  signal_strategy_->Connect();
+
+  JingleMessage jingle_message;
+  jingle_message.from = SignalingAddress(kFakeRemoteCorpId);
+  jingle_message.to = SignalingAddress(kFakeLocalCorpId);
+  jingle_message.sid = "sid123";
+  jingle_message.SetPayload(SessionInfo());
+
+  // First message sets the token.
+  {
+    jingle_message.message_id = "id1";
+    internal::IqStanzaStruct iq_stanza_struct =
+        JingleMessageToStruct(jingle_message);
+    iq_stanza_struct.messaging_authz_token = kToken1;
+    internal::PeerMessageStruct message;
+    message.payload = std::move(iq_stanza_struct);
+    messaging_client_->OnMessage(SignalingAddress(kFakeRemoteCorpId), message);
+  }
+
+  // Second message changes the token.
+  {
+    jingle_message.message_id = "id2";
+    internal::IqStanzaStruct iq_stanza_struct =
+        JingleMessageToStruct(jingle_message);
+    iq_stanza_struct.messaging_authz_token = kToken2;
+    internal::PeerMessageStruct message;
+    message.payload = std::move(iq_stanza_struct);
+
+    EXPECT_CALL(*messaging_client_,
+                SendMessage(SignalingAddress(kToken2), _, _))
+        .WillOnce(base::test::RunOnceCallback<2>(HttpStatus::OK()));
+
+    messaging_client_->OnMessage(SignalingAddress(kFakeRemoteCorpId), message);
+
+    // Verify token change by sending a message.
+    JingleMessage outbound_message;
+    outbound_message.to = SignalingAddress(kFakeRemoteCorpId);
+    outbound_message.from = SignalingAddress(kFakeLocalCorpId);
+    outbound_message.sid = "sid123";
+    outbound_message.SetPayload(SessionInfo());
+    signal_strategy_->SendMessage(std::move(outbound_message));
+  }
+}
+
+TEST_F(CorpSignalStrategyTest, ReceiveStanza_JingleMessageReply) {
+  EXPECT_CALL(*messaging_client_, StartReceivingMessages(_, _))
+      .WillOnce(base::test::RunOnceClosure<0>());
+  signal_strategy_->Connect();
+
+  JingleMessageReply reply;
+  reply.to = SignalingAddress(kFakeLocalCorpId);
+  reply.from = SignalingAddress(kFakeRemoteCorpId);
+  reply.message_id = "reply_id";
+  reply.reply_type = JingleMessageReply::REPLY_RESULT;
+
+  internal::IqStanzaStruct iq_stanza_struct = JingleMessageReplyToStruct(reply);
+  iq_stanza_struct.messaging_authz_token = kFakeAuthzToken;
+
+  internal::PeerMessageStruct message;
+  message.payload = std::move(iq_stanza_struct);
+
+  messaging_client_->OnMessage(SignalingAddress(kFakeRemoteCorpId), message);
+
+  ASSERT_EQ(received_replies_.size(), 1u);
+  EXPECT_EQ(received_replies_[0].message_id, "reply_id");
+}
+
+TEST_F(CorpSignalStrategyTest, ReceiveStanza_MultipleListeners) {
+  EXPECT_CALL(*messaging_client_, StartReceivingMessages(_, _))
+      .WillOnce(base::test::RunOnceClosure<0>());
+  signal_strategy_->Connect();
+
+  class SecondaryListener : public SignalStrategy::Listener {
+   public:
+    MOCK_METHOD(bool,
+                OnSignalingMessage,
+                (const SignalingAddress&, const JingleMessage&),
+                (override));
+    MOCK_METHOD(bool,
+                OnSignalingReply,
+                (const SignalingAddress&, const JingleMessageReply&),
+                (override));
+    void OnSignalingStateChanged(SignalStrategy::State state) override {}
+  };
+
+  SecondaryListener secondary_listener;
+  signal_strategy_->AddListener(&secondary_listener);
+
+  // First listener returns false, second should be called.
+  EXPECT_CALL(*this, OnSignalingMessage(_, _)).WillOnce(Return(false));
+  EXPECT_CALL(secondary_listener, OnSignalingMessage(_, _))
+      .WillOnce(Return(true));
+
+  JingleMessage jingle_message;
+  jingle_message.message_id = "id1";
+  jingle_message.from = SignalingAddress(kFakeRemoteCorpId);
+  jingle_message.to = SignalingAddress(kFakeLocalCorpId);
+  jingle_message.sid = "sid123";
+  jingle_message.SetPayload(SessionInfo());
+
+  internal::IqStanzaStruct iq_stanza_struct =
+      JingleMessageToStruct(jingle_message);
+  iq_stanza_struct.messaging_authz_token = kFakeToken;
+  internal::PeerMessageStruct message;
+  message.payload = std::move(iq_stanza_struct);
+  messaging_client_->OnMessage(SignalingAddress(kFakeRemoteCorpId), message);
+
+  signal_strategy_->RemoveListener(&secondary_listener);
+}
+
+TEST_F(CorpSignalStrategyTest, SendMessage_MissingAuthzToken) {
+  EXPECT_CALL(*messaging_client_, StartReceivingMessages(_, _))
+      .WillOnce(base::test::RunOnceClosure<0>());
+  signal_strategy_->Connect();
+
+  // We haven't received any messages, so `messaging_authz_token_` is empty.
+  EXPECT_CALL(*messaging_client_, SendMessage(_, _, _)).Times(0);
+
+  JingleMessage jingle_message;
+  jingle_message.to = SignalingAddress(kFakeRemoteCorpId);
+  jingle_message.from = SignalingAddress(kFakeLocalCorpId);
+  jingle_message.SetPayload(SessionInfo());
+  ASSERT_FALSE(signal_strategy_->SendMessage(std::move(jingle_message)));
+}
+
+TEST_F(CorpSignalStrategyTest, SendReply_Success) {
+  EXPECT_CALL(*messaging_client_, StartReceivingMessages(_, _))
+      .WillOnce(base::test::RunOnceClosure<0>());
+  signal_strategy_->Connect();
+
+  // Set the token.
+  JingleMessage jingle_message;
+  jingle_message.message_id = "id1";
+  jingle_message.from = SignalingAddress(kFakeRemoteCorpId);
+  jingle_message.to = SignalingAddress(kFakeLocalCorpId);
+  jingle_message.sid = "sid123";
+  jingle_message.SetPayload(SessionInfo());
+
+  internal::IqStanzaStruct iq_stanza_struct =
+      JingleMessageToStruct(jingle_message);
+  iq_stanza_struct.messaging_authz_token = kFakeToken;
+  internal::PeerMessageStruct incoming_message;
+  incoming_message.payload = std::move(iq_stanza_struct);
   messaging_client_->OnMessage(SignalingAddress(kFakeRemoteCorpId),
-                               SignalingMessage(peer_message));
+                               incoming_message);
 
-  ASSERT_EQ(0u, received_messages_.size());
+  JingleMessageReply reply;
+  reply.to = SignalingAddress(kFakeRemoteCorpId);
+  reply.from = SignalingAddress(kFakeLocalCorpId);
+  reply.message_id = "reply_id";
+
+  EXPECT_CALL(*messaging_client_,
+              SendMessage(SignalingAddress(kFakeToken), _, _))
+      .WillOnce(base::test::RunOnceCallback<2>(HttpStatus::OK()));
+
+  ASSERT_TRUE(signal_strategy_->SendReply(std::move(reply)));
 }
 
 }  // namespace remoting

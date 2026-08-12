@@ -4,7 +4,6 @@
 
 #include "components/user_education/webui/whats_new_registry.h"
 
-#include "base/containers/contains.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/values.h"
 #include "ui/webui/resources/js/browser_command/browser_command.mojom.h"
@@ -148,7 +147,7 @@ const std::vector<std::string_view> WhatsNewRegistry::GetActiveFeatureNames()
   }
 
   // Add modules based on ordered list.
-  const base::Value::List& module_names_in_order =
+  const base::ListValue& module_names_in_order =
       storage_service_->ReadModuleData();
   for (const base::Value& module_value : module_names_in_order) {
     if (feature_names.size() >= kRequestEntropyLimit) {
@@ -169,7 +168,7 @@ const std::vector<std::string_view> WhatsNewRegistry::GetRolledFeatureNames()
   std::vector<std::string_view> feature_names;
 
   // Add modules based on ordered list.
-  const base::Value::List& module_names_in_order =
+  const base::ListValue& module_names_in_order =
       storage_service_->ReadModuleData();
   for (auto& module_value : module_names_in_order) {
     if (feature_names.size() >= kRequestEntropyLimit) {
@@ -187,7 +186,7 @@ const std::vector<std::string_view> WhatsNewRegistry::GetRolledFeatureNames()
 
 const std::vector<std::string> WhatsNewRegistry::GetCustomizations() const {
   std::vector<std::string> customizations;
-  const base::Value::List& module_names_in_order =
+  const base::ListValue& module_names_in_order =
       storage_service_->ReadModuleData();
   for (const base::Value& module_value : module_names_in_order) {
     auto found_module = modules_.find(module_value.GetString());

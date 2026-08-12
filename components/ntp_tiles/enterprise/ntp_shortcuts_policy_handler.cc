@@ -7,11 +7,9 @@
 #include <string>
 
 #include "base/containers/flat_set.h"
-#include "base/feature_list.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
 #include "components/ntp_tiles/enterprise/enterprise_shortcuts_store.h"
-#include "components/ntp_tiles/features.h"
 #include "components/ntp_tiles/pref_names.h"
 #include "components/policy/core/browser/policy_error_map.h"
 #include "components/policy/core/common/policy_map.h"
@@ -27,23 +25,12 @@ namespace policy {
 
 namespace {
 
-bool IsNTPEnterpriseShortcutsEnabled() {
-  // Check that FeatureList is available as a protection against early startup
-  // crashes. Some policy providers are initialized very early even before
-  // base::FeatureList is available, but when policies are finally applied, the
-  // feature stack is fully initialized. The instance check ensures that the
-  // final decision is delayed until all features are initialized, without any
-  // other downstream effect.
-  return base::FeatureList::GetInstance() &&
-         base::FeatureList::IsEnabled(ntp_tiles::kNtpEnterpriseShortcuts);
-}
-
 // Converts a shortcuts policy entry `policy_dict` into a dictionary to be
 // saved to prefs, with fields corresponding to `EnterpriseShortcut`. `CHECK`s
 // are safe since this function is only used after policy values are validated.
 base::Value NTPShortcutsDictFromPolicyValue(
-    const base::Value::Dict& policy_dict) {
-  base::Value::Dict dict;
+    const base::DictValue& policy_dict) {
+  base::DictValue dict;
 
   // To align with `EnterpriseShortcut`, use "title" as dictionary key instead
   // of "name".
@@ -125,7 +112,7 @@ bool NTPShortcutsPolicyHandler::CheckPolicySettings(const PolicyMap& policies,
                                                     PolicyErrorMap* errors) {
   ignored_urls_.clear();
 
-  if (!IsNTPEnterpriseShortcutsEnabled() || !policies.Get(policy_name())) {
+  if (!policies.Get(policy_name())) {
     return true;
   }
 
@@ -134,7 +121,7 @@ bool NTPShortcutsPolicyHandler::CheckPolicySettings(const PolicyMap& policies,
     return false;
   }
 
-  const base::Value::List& shortcuts =
+  const base::ListValue& shortcuts =
       policies.GetValue(policy_name(), base::Value::Type::LIST)->GetList();
 
   if (shortcuts.size() > kMaxNtpShortcuts) {
@@ -147,7 +134,7 @@ bool NTPShortcutsPolicyHandler::CheckPolicySettings(const PolicyMap& policies,
   base::flat_set<GURL> valid_urls_already_seen;
   base::flat_set<GURL> duplicated_urls;
   for (const base::Value& entry : shortcuts) {
-    const base::Value::Dict& dict = entry.GetDict();
+    const base::DictValue& dict = entry.GetDict();
     const std::string* name = dict.FindString(kName);
     const std::string* url_str = dict.FindString(kUrl);
 
@@ -222,13 +209,6 @@ bool NTPShortcutsPolicyHandler::CheckPolicySettings(const PolicyMap& policies,
 
 void NTPShortcutsPolicyHandler::ApplyPolicySettings(const PolicyMap& policies,
                                                     PrefValueMap* prefs) {
-  // If policy handler is disabled, the pref should be cleared to prevent old
-  // shortcuts from appearing.
-  if (!IsNTPEnterpriseShortcutsEnabled()) {
-    prefs->RemoveValue(ntp_tiles::prefs::kEnterpriseShortcutsPolicyList);
-    return;
-  }
-
   const base::Value* policy_value =
       policies.GetValue(policy_name(), base::Value::Type::LIST);
   if (!policy_value) {
@@ -236,9 +216,9 @@ void NTPShortcutsPolicyHandler::ApplyPolicySettings(const PolicyMap& policies,
     return;
   }
 
-  base::Value::List shortcuts;
+  base::ListValue shortcuts;
   for (const base::Value& item : policy_value->GetList()) {
-    const base::Value::Dict& policy_dict = item.GetDict();
+    const base::DictValue& policy_dict = item.GetDict();
     const std::string* url_str = policy_dict.FindString(kUrl);
     // An entry with a missing, empty, or invalid URL should be ignored.
     if (!url_str) {

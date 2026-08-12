@@ -77,6 +77,9 @@ class RemotingClient : public SignalStrategy::Listener,
   void SetVideoLayout(const protocol::VideoLayout& layout) override;
   void SetTransportInfo(const protocol::TransportInfo& transport_info) override;
   void SetActiveDisplay(const protocol::ActiveDisplay& active_display) override;
+  void ControlMicrophone(const protocol::MicrophoneControl& control) override;
+  void DeliverTerminalControl(
+      const protocol::TerminalControl& terminal_control) override;
   void InjectClipboardEvent(const protocol::ClipboardEvent& event) override;
   void SetCursorShape(const protocol::CursorShapeInfo& cursor_shape) override;
   void SetHostCursorPosition(
@@ -90,10 +93,8 @@ class RemotingClient : public SignalStrategy::Listener,
   void OnRouteChanged(const std::string& channel_name,
                       const protocol::TransportRoute& route) override;
 
-  // SignalStrategy::StatusObserver interface.
-  void OnSignalStrategyStateChange(SignalStrategy::State state) override;
-  bool OnSignalStrategyIncomingStanza(
-      const jingle_xmpp::XmlElement* stanza) override;
+  // SignalStrategy::Listener interface.
+  void OnSignalingStateChanged(SignalStrategy::State state) override;
 
   void OnGetManagedChromeOsHostRetrieved(
       const HttpStatus& status,

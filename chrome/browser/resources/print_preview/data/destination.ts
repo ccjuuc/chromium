@@ -5,6 +5,8 @@
 import '/strings.m.js';
 
 import {assert} from 'chrome://resources/js/assert.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+import {stripDiacritics} from 'chrome://resources/js/search_highlight_utils.js';
 
 import type {Cdd, ColorCapability, ColorOption, CopiesCapability, DpiOption, DuplexType, MediaSizeOption} from './cdd.js';
 /**
@@ -105,6 +107,10 @@ const COLOR_TYPES: string[] = ['STANDARD_COLOR', 'CUSTOM_COLOR'];
  */
 const MONOCHROME_TYPES: string[] = ['STANDARD_MONOCHROME', 'CUSTOM_MONOCHROME'];
 
+function matchWithDiacritics(candidate: string, query: RegExp): boolean {
+  const strippedCandidate = stripDiacritics(candidate);
+  return !!strippedCandidate.match(query);
+}
 
 /**
  * Print destination data object.
@@ -242,12 +248,16 @@ export class Destination {
   /** @return Path to the SVG for the destination's icon. */
   get icon(): string {
     if (this.id_ === GooglePromotedDestinationId.SAVE_AS_PDF) {
-      return 'cr:insert-drive-file';
+      return 'cr:draft-filled';
     }
     if (this.isEnterprisePrinter) {
-      return 'print-preview:business';
+      return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+          'print-preview:domain' :
+          'print-preview:business-old';
     }
-    return 'print-preview:print';
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'print-preview:print-filled' :
+        'print-preview:print-old';
   }
 
   /**
@@ -263,9 +273,10 @@ export class Destination {
    * @return Whether the query matches this destination.
    */
   matches(query: RegExp): boolean {
-    return !!this.displayName_.match(query) ||
-        !!this.extensionName_.match(query) || !!this.location_.match(query) ||
-        !!this.description_.match(query);
+    return matchWithDiacritics(this.displayName_, query) ||
+        matchWithDiacritics(this.extensionName_, query) ||
+        matchWithDiacritics(this.location_, query) ||
+        matchWithDiacritics(this.description_, query);
   }
 
   /**

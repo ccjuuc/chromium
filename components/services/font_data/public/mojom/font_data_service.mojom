@@ -55,6 +55,10 @@ struct MatchFamilyNameResult {
 
   // Variable font properties.
   VariationPosition? variation_position;
+
+  // Flags to indicate that bold/oblique are being internally simulated.
+  bool synthetic_bold;
+  bool synthetic_oblique;
 };
 
 // Loads and resolves fonts from the renderer to the browser (embedder). Takes
@@ -92,4 +96,10 @@ interface FontDataService {
   [Sync]
   LegacyMakeTypeface(string? family_name, TypefaceStyle style) =>
       (MatchFamilyNameResult? result);
+
+  // Returns a match for a font identified by its PostScript name or full font
+  // name (as used by @font-face src: local()). Returns null if not found or
+  // if local font matching is not supported on the current platform.
+  [Sync]
+  MatchLocalFont(string font_unique_name) => (MatchFamilyNameResult? result);
 };

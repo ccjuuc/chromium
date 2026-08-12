@@ -19,7 +19,6 @@
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/webui_url_constants.h"
-#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/affiliations/core/browser/affiliation_utils.h"
 #include "components/autofill/core/common/autofill_features.h"
@@ -41,6 +40,7 @@
 #include "content/public/browser/web_contents.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image_skia.h"
@@ -49,7 +49,7 @@
 #include "url/origin.h"
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/hats/hats_service.h"          // nogncheck
 #include "chrome/browser/ui/hats/hats_service_factory.h"  // nogncheck
 #include "chrome/browser/ui/user_education/show_promo_in_page.h"
@@ -198,8 +198,7 @@ bool IsSyncingAutosignSetting(Profile* profile) {
   return (
       sync_service &&
       sync_service->GetActiveDataTypes().Has(syncer::PRIORITY_PREFERENCES) &&
-      // With `kSyncSupportAlwaysSyncingPriorityPreferences` feature enabled,
-      // PRIORITY_PREFERENCES will always be active (decoupled from sync user
+      // PRIORITY_PREFERENCES is always active (decoupled from sync user
       // toggle). Thus, the preferences user toggle should be checked
       // separately.
       sync_service->GetUserSettings()->GetSelectedTypes().Has(
@@ -213,13 +212,11 @@ std::string GetGooglePasswordManagerSubPageURLStr() {
 
 // Navigation is handled differently on Android.
 #if !BUILDFLAG(IS_ANDROID)
-void TriggerManagePasswordsPerceptionSurvey(Browser* browser,
+void TriggerManagePasswordsPerceptionSurvey(BrowserWindowInterface* browser,
                                             ManagePasswordsReferrer referrer) {
-  Profile* profile = browser->profile();
+  Profile* profile = browser->GetProfile();
   if (!base::FeatureList::IsEnabled(
           autofill::features::kManagePasswordsPerceptionSurvey) ||
-      !base::FeatureList::IsEnabled(
-          autofill::features::kYourSavedInfoSettingsPage) ||
       profile->IsOffTheRecord()) {
     return;
   }
@@ -236,7 +233,7 @@ void TriggerManagePasswordsPerceptionSurvey(Browser* browser,
                                     10000, product_specific_bits_data);
 }
 
-void NavigateToManagePasswordsPage(Browser* browser,
+void NavigateToManagePasswordsPage(BrowserWindowInterface* browser,
                                    ManagePasswordsReferrer referrer) {
   if (!browser) {
     return;
@@ -247,7 +244,7 @@ void NavigateToManagePasswordsPage(Browser* browser,
   chrome::ShowPasswordManager(browser);
 }
 
-void NavigateToPasswordDetailsPage(Browser* browser,
+void NavigateToPasswordDetailsPage(BrowserWindowInterface* browser,
                                    const std::string& password_domain_name,
                                    ManagePasswordsReferrer referrer) {
   if (!browser) {
@@ -273,7 +270,7 @@ const gfx::VectorIcon& GooglePasswordManagerVectorIcon() {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   return vector_icons::kGooglePasswordManagerIcon;
 #else
-  return kKeyIcon;
+  return features::IsRoundedIconsEnabled() ? kVpnKeyFilledIcon : kKeyOldIcon;
 #endif
 }
 
@@ -297,6 +294,6 @@ std::string GetDisplayableAccountName(
     return "";
   }
   return account_info->CanHaveEmailAddressDisplayed()
-             ? account_info.value().email
-             : account_info.value().full_name;
+             ? std::string(account_info->GetEmail())
+             : std::string(account_info->GetFullName().value_or(""));
 }

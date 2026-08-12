@@ -42,7 +42,7 @@ TEST(StartupTabProviderTest, GetInitialPrefsTabsForState) {
       StartupTabProviderImpl::GetInitialPrefsTabsForState(true, input);
 
   ASSERT_EQ(2U, output.size());
-  EXPECT_EQ(GURL(chrome::kChromeUINewTabURL), output[0].url);
+  EXPECT_EQ(chrome::ChromeUINewTabURLAsGURL(), output[0].url);
   EXPECT_EQ(output[0].type, StartupTab::Type::kNormal);
   EXPECT_EQ(input[1], output[1].url);
   EXPECT_EQ(output[1].type, StartupTab::Type::kNormal);
@@ -193,12 +193,12 @@ TEST(StartupTabProviderTest, GetNewTabPageTabsForState) {
       StartupTabProviderImpl::GetNewTabPageTabsForState(pref_default);
 
   ASSERT_EQ(1U, output.size());
-  EXPECT_EQ(GURL(chrome::kChromeUINewTabURL), output[0].url);
+  EXPECT_EQ(chrome::ChromeUINewTabURLAsGURL(), output[0].url);
 
   output = StartupTabProviderImpl::GetNewTabPageTabsForState(pref_urls);
 
   ASSERT_EQ(1U, output.size());
-  EXPECT_EQ(GURL(chrome::kChromeUINewTabURL), output[0].url);
+  EXPECT_EQ(chrome::ChromeUINewTabURLAsGURL(), output[0].url);
 }
 
 TEST(StartupTabProviderTest, GetNewTabPageTabsForState_Negative) {
@@ -239,6 +239,7 @@ TEST(StartupTabProviderTest, GetCommandLineTabs) {
         instance.GetCommandLineTabs(command_line, base::FilePath(), &profile);
     ASSERT_EQ(1u, output.size());
     EXPECT_EQ(GURL("https://google.com"), output[0].url);
+    EXPECT_FALSE(output[0].is_untrusted_launch);
 
     EXPECT_EQ(CommandLineTabsPresent::kYes,
               instance.HasCommandLineTabs(command_line, base::FilePath()));
@@ -372,12 +373,15 @@ TEST(StartupTabProviderTest, GetCommandLineTabsCustomScheme) {
         instance.GetCommandLineTabs(command_line, base::FilePath(), &profile);
     ASSERT_EQ(1u, output.size());
     EXPECT_EQ(GURL("https://www.google.com"), output[0].url);
+    EXPECT_TRUE(output[0].is_untrusted_launch);
 
     EXPECT_EQ(CommandLineTabsPresent::kYes,
               instance.HasCommandLineTabs(command_line, base::FilePath()));
   }
 
-  // Custom scheme case with a file URL.
+  // Custom scheme case with a file URL. This is not allowed because custom
+  // scheme redirects represent untrusted web context and are restricted to
+  // standard web schemes.
   {
     const std::string arg_ascii =
         base::StrCat({scheme_prefix, "file:///tmp/test.html"});
@@ -385,15 +389,15 @@ TEST(StartupTabProviderTest, GetCommandLineTabsCustomScheme) {
     StartupTabProviderImpl instance;
     StartupTabs output =
         instance.GetCommandLineTabs(command_line, base::FilePath(), &profile);
-    ASSERT_EQ(1u, output.size());
-    EXPECT_EQ(GURL("file:///tmp/test.html"), output[0].url);
+    ASSERT_EQ(0u, output.size());
 
-    EXPECT_EQ(CommandLineTabsPresent::kYes,
+    EXPECT_EQ(CommandLineTabsPresent::kNo,
               instance.HasCommandLineTabs(command_line, base::FilePath()));
   }
 
-  // Custom scheme case with a chrome:// URL. This is not allowed,
-  // except on ChromeOS where any settings page is allowed.
+  // Custom scheme case with a chrome:// URL. This is not allowed on any
+  // platform because custom scheme redirects are treated as untrusted web-safe
+  // launches and highly restricted to prevent privilege escalation.
   {
     const std::string arg_ascii =
         base::StrCat({scheme_prefix, "chrome://settings"});
@@ -401,24 +405,24 @@ TEST(StartupTabProviderTest, GetCommandLineTabsCustomScheme) {
     StartupTabProviderImpl instance;
     StartupTabs output =
         instance.GetCommandLineTabs(command_line, base::FilePath(), &profile);
-#if BUILDFLAG(IS_CHROMEOS)
-    // On ChromeOS, the browser and OS are integrated. Allowing command-line
-    // access to any settings page is considered a safe and useful feature for
-    // administrators and power users. ValidateUrl() contains an explicit
-    // platform-specific check to allow this.
-    ASSERT_EQ(1u, output.size());
-    EXPECT_EQ(GURL("chrome://settings"), output[0].url);
-    EXPECT_EQ(CommandLineTabsPresent::kYes,
-              instance.HasCommandLineTabs(command_line, base::FilePath()));
-#else
-    // On Windows, Mac, and Linux, Chrome is a guest application. To minimize
-    // the attack surface from other applications, command-line access to
-    // internal chrome:// pages is highly restricted. ValidateUrl() enforces
-    // a strict allowlist, which "chrome://settings" does not pass.
     ASSERT_EQ(0u, output.size());
     EXPECT_EQ(CommandLineTabsPresent::kNo,
               instance.HasCommandLineTabs(command_line, base::FilePath()));
-#endif
+  }
+
+  // Custom scheme case with opaque format (no slashes).
+  {
+    const std::string arg_ascii = base::StrCat(
+        {shell_integration::GetDirectLaunchUrlScheme(), ":http://example.com"});
+    base::CommandLine command_line = MakeCommandLine(arg_ascii);
+    StartupTabProviderImpl instance;
+    StartupTabs output =
+        instance.GetCommandLineTabs(command_line, base::FilePath(), &profile);
+    ASSERT_EQ(1u, output.size());
+    EXPECT_EQ(GURL("http://example.com"), output[0].url);
+
+    EXPECT_EQ(CommandLineTabsPresent::kYes,
+              instance.HasCommandLineTabs(command_line, base::FilePath()));
   }
 
   // Custom scheme case with no inner URL.
@@ -463,29 +467,18 @@ TEST(StartupTabProviderTest, GetCommandLineTabsCustomScheme) {
               instance.HasCommandLineTabs(command_line, base::FilePath()));
   }
 
-  // Custom scheme case with file: path fix up
+  // Custom scheme case with file: path fix up. This is not allowed because
+  // custom scheme redirects represent untrusted web context and are restricted
+  // to standard web schemes.
   {
     const std::string arg_ascii = base::StrCat({scheme_prefix, "file:foo.txt"});
     base::CommandLine command_line = MakeCommandLine(arg_ascii);
     StartupTabProviderImpl instance;
     StartupTabs output =
         instance.GetCommandLineTabs(command_line, base::FilePath(), &profile);
-    ASSERT_EQ(1u, output.size());
+    ASSERT_EQ(0u, output.size());
 
-#if BUILDFLAG(IS_WIN)
-    // On Windows, the URL parser in FixupRelativeFile misinterprets a string
-    // like "file:foo.txt" due to ambiguity with UNC paths (e.g., \\server).
-    // It incorrectly parses "foo.txt" as the "host" part of the URL,
-    // resulting in "file://foo.txt/". TODO(crbug.com/40265634)
-    EXPECT_EQ(GURL("file://foo.txt/"), output[0].url);
-#else
-    // On POSIX systems, the colon is a valid filename character, and the
-    // string is correctly interpreted as a relative path, resulting in the
-    // expected canonical "file:///foo.txt".
-    EXPECT_EQ(GURL("file:///foo.txt"), output[0].url);
-#endif
-
-    EXPECT_EQ(CommandLineTabsPresent::kYes,
+    EXPECT_EQ(CommandLineTabsPresent::kNo,
               instance.HasCommandLineTabs(command_line, base::FilePath()));
   }
 }
@@ -518,69 +511,3 @@ TEST(StartupTabProviderTest, MAYBE_GetCommandLineTabsFileUrl) {
               instance.HasCommandLineTabs(command_line, base::FilePath()));
   }
 }
-
-#if !BUILDFLAG(IS_ANDROID)
-
-class StartupTabProviderPrivacySandboxTest : public testing::Test {
- protected:
-  extensions::ExtensionRegistry* registry() {
-    return extensions::ExtensionRegistry::Get(&profile_);
-  }
-  TestingProfile* profile() { return &profile_; }
-
- private:
-  content::BrowserTaskEnvironment task_environment_;
-  TestingProfile profile_;
-};
-
-TEST_F(StartupTabProviderPrivacySandboxTest, GetPrivacySandboxTabsForState) {
-  // If no suitable tabs are available, and the profile does not have a custom
-  // NTP, a generic new tab URL should be returned.
-  auto output = StartupTabProviderImpl::GetPrivacySandboxTabsForState(
-      registry(), GURL(chrome::kChromeUINewTabPageURL),
-      {{StartupTab(GURL("https://www.unrelated.com"))}});
-  ASSERT_EQ(1U, output.size());
-  EXPECT_EQ(GURL(chrome::kChromeUINewTabURL), output[0].url);
-}
-
-TEST_F(StartupTabProviderPrivacySandboxTest,
-       GetPrivacySandboxTabsForState_SuitableTabAlready) {
-  // If there is already a suitable tab available for the Privacy Sandbox
-  // dialog, no additional tab should be added.
-  auto output = StartupTabProviderImpl::GetPrivacySandboxTabsForState(
-      registry(), GURL(chrome::kChromeUINewTabPageURL),
-      {{StartupTab(GURL("chrome://newtab"))}});
-  ASSERT_EQ(0U, output.size());
-}
-
-TEST_F(StartupTabProviderPrivacySandboxTest,
-       GetPrivacySandboxTabsForState_ExtensionControlledNtp) {
-  // Create an extension which overrides the NTP url. Even if a new tab is
-  // available as part of the startup tabs, an additional about:blank should be
-  // returned.
-  scoped_refptr<const extensions::Extension> extension =
-      extensions::ExtensionBuilder("1")
-          .SetManifestKey("chrome_url_overrides",
-                          base::Value::Dict().Set("newtab", "custom_tab.html"))
-          .Build();
-  registry()->AddEnabled(extension);
-  auto output = StartupTabProviderImpl::GetPrivacySandboxTabsForState(
-      registry(), GURL(chrome::kChromeUINewTabPageURL),
-      {StartupTab(GURL(chrome::kChromeUINewTabURL))});
-  ASSERT_EQ(1U, output.size());
-  EXPECT_EQ(GURL(url::kAboutBlankURL), output[0].url);
-}
-
-TEST_F(StartupTabProviderPrivacySandboxTest,
-       GetPrivacySandboxTabsForState_DseControlledNtp) {
-  // If the user's DSE is changing the newtab such that it is no longer Chrome
-  // controlled, and the user has no other suitable startup tab, about:blank
-  // should be used.
-  auto output = StartupTabProviderImpl::GetPrivacySandboxTabsForState(
-      registry(), GURL("https://wwww.example.com/newtab"),
-      {StartupTab(GURL(chrome::kChromeUINewTabURL))});
-  ASSERT_EQ(1U, output.size());
-  EXPECT_EQ(GURL(url::kAboutBlankURL), output[0].url);
-}
-
-#endif  // !BUILDFLAG(IS_ANDROID)

@@ -40,11 +40,17 @@ class MockWebStateDelegate : public web::WebStateDelegate {
                NSArray<NSNumber*>*,
                web::WebStatePermissionDecisionHandler),
               (override));
-  MOCK_METHOD(
-      void,
-      OnAuthRequired,
-      (web::WebState*, NSURLProtectionSpace*, NSURLCredential*, AuthCallback),
-      (override));
+  MOCK_METHOD(void,
+              OnAuthRequired,
+              (web::WebState*,
+               NSURLProtectionSpace*,
+               NSURLCredential*,
+               HTTPAuthCallback),
+              (override));
+  MOCK_METHOD(void,
+              OnAuthRequired,
+              (web::WebState*, NSURLProtectionSpace*, ClientCertAuthCallback),
+              (override));
   MOCK_METHOD(void,
               ContextMenuConfiguration,
               (web::WebState*,
@@ -59,6 +65,15 @@ class MockWebStateDelegate : public web::WebStateDelegate {
               ShouldAllowCopy,
               (web::WebState*, base::OnceCallback<void(bool)>),
               (override));
+  MOCK_METHOD(void,
+              ShouldAllowPaste,
+              (web::WebState*, base::OnceCallback<void(bool)>),
+              (override));
+  MOCK_METHOD(void,
+              ShouldAllowCut,
+              (web::WebState*, base::OnceCallback<void(bool)>),
+              (override));
+  MOCK_METHOD(void, DidFinishClipboardRead, (web::WebState*), (override));
 };
 
 }  // namespace
@@ -103,7 +118,7 @@ TEST_F(ReaderModeWebStateDelegateTest,
   EXPECT_TRUE(callback_called);
 }
 
-// Tests that OnAuthRequired is not forwarded.
+// Tests that OnAuthRequired for HTTP auth is not forwarded.
 TEST_F(ReaderModeWebStateDelegateTest, OnAuthRequiredNotForwarded) {
   EXPECT_CALL(mock_web_state_delegate_,
               OnAuthRequired(testing::_, testing::_, testing::_, testing::_))
@@ -114,6 +129,20 @@ TEST_F(ReaderModeWebStateDelegateTest, OnAuthRequiredNotForwarded) {
       base::BindOnce([](bool* result, NSString* username,
                         NSString* password) { *result = true; },
                      &callback_called));
+  EXPECT_TRUE(callback_called);
+}
+
+// Tests that OnAuthRequired for client certs is not forwarded.
+TEST_F(ReaderModeWebStateDelegateTest, OnClientCertAuthRequiredNotForwarded) {
+  EXPECT_CALL(mock_web_state_delegate_,
+              OnAuthRequired(testing::_, testing::_, testing::_))
+      .Times(0);
+  __block bool callback_called = false;
+  reader_mode_web_state_delegate_.OnAuthRequired(
+      nullptr, nil,
+      base::BindOnce(
+          [](bool* result, SecIdentityRef identity) { *result = true; },
+          &callback_called));
   EXPECT_TRUE(callback_called);
 }
 
@@ -156,4 +185,22 @@ TEST_F(ReaderModeWebStateDelegateTest,
 TEST_F(ReaderModeWebStateDelegateTest, ShouldAllowCopyForwarded) {
   EXPECT_CALL(mock_web_state_delegate_, ShouldAllowCopy(nullptr, testing::_));
   reader_mode_web_state_delegate_.ShouldAllowCopy(nullptr, base::DoNothing());
+}
+
+// Tests that ShouldAllowPaste is forwarded.
+TEST_F(ReaderModeWebStateDelegateTest, ShouldAllowPasteForwarded) {
+  EXPECT_CALL(mock_web_state_delegate_, ShouldAllowPaste(nullptr, testing::_));
+  reader_mode_web_state_delegate_.ShouldAllowPaste(nullptr, base::DoNothing());
+}
+
+// Tests that ShouldAllowCut is forwarded.
+TEST_F(ReaderModeWebStateDelegateTest, ShouldAllowCutForwarded) {
+  EXPECT_CALL(mock_web_state_delegate_, ShouldAllowCut(nullptr, testing::_));
+  reader_mode_web_state_delegate_.ShouldAllowCut(nullptr, base::DoNothing());
+}
+
+// Tests that DidFinishClipboardRead is forwarded.
+TEST_F(ReaderModeWebStateDelegateTest, DidFinishClipboardReadForwarded) {
+  EXPECT_CALL(mock_web_state_delegate_, DidFinishClipboardRead(nullptr));
+  reader_mode_web_state_delegate_.DidFinishClipboardRead(nullptr);
 }

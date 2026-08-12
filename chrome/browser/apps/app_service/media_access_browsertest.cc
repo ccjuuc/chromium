@@ -14,6 +14,7 @@
 #include "chrome/browser/ssl/https_upgrades_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
@@ -128,9 +129,9 @@ IN_PROC_BROWSER_TEST_F(MediaAccessExtensionAppsTest,
   base::OnceClosure video_closure1 = StartMediaCapture(
       web_content1, blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE);
   EXPECT_TRUE(
-      AccessingCamera(browser()->profile(), app_constants::kChromeAppId));
-  EXPECT_FALSE(
-      AccessingMicrophone(browser()->profile(), app_constants::kChromeAppId));
+      AccessingCamera(browser()->GetProfile(), app_constants::kChromeAppId));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(),
+                                   app_constants::kChromeAppId));
 
   AddBlankTabAndShow(browser());
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetUrl2()));
@@ -140,29 +141,31 @@ IN_PROC_BROWSER_TEST_F(MediaAccessExtensionAppsTest,
       web_content2, blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE);
 
   EXPECT_TRUE(
-      AccessingCamera(browser()->profile(), app_constants::kChromeAppId));
-  EXPECT_TRUE(
-      AccessingMicrophone(browser()->profile(), app_constants::kChromeAppId));
+      AccessingCamera(browser()->GetProfile(), app_constants::kChromeAppId));
+  EXPECT_TRUE(AccessingMicrophone(browser()->GetProfile(),
+                                  app_constants::kChromeAppId));
 
   // Stop accessing the camera for |web_content1|.
   std::move(video_closure1).Run();
   EXPECT_FALSE(
-      AccessingCamera(browser()->profile(), app_constants::kChromeAppId));
-  EXPECT_TRUE(
-      AccessingMicrophone(browser()->profile(), app_constants::kChromeAppId));
+      AccessingCamera(browser()->GetProfile(), app_constants::kChromeAppId));
+  EXPECT_TRUE(AccessingMicrophone(browser()->GetProfile(),
+                                  app_constants::kChromeAppId));
 
   // Stop accessing the microphone for |web_content2|.
   std::move(audio_closure1).Run();
   EXPECT_FALSE(
-      AccessingCamera(browser()->profile(), app_constants::kChromeAppId));
-  EXPECT_FALSE(
-      AccessingMicrophone(browser()->profile(), app_constants::kChromeAppId));
+      AccessingCamera(browser()->GetProfile(), app_constants::kChromeAppId));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(),
+                                   app_constants::kChromeAppId));
 }
 
 IN_PROC_BROWSER_TEST_F(MediaAccessExtensionAppsTest,
                        RequestAccessingForChromeInNewBrowsers) {
   Browser* browser1 =
-      Browser::Create(Browser::CreateParams(browser()->profile(), true));
+      CreateBrowserWindow(BrowserWindowCreateParams(browser()->GetProfile(),
+                                                    /*from_user_gesture=*/true))
+          ->GetBrowserForMigrationOnly();
   ASSERT_TRUE(browser1);
   ASSERT_NE(browser(), browser1);
 
@@ -176,9 +179,9 @@ IN_PROC_BROWSER_TEST_F(MediaAccessExtensionAppsTest,
   base::OnceClosure audio_closure1 = StartMediaCapture(
       web_content1, blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE);
   EXPECT_TRUE(
-      AccessingCamera(browser()->profile(), app_constants::kChromeAppId));
-  EXPECT_TRUE(
-      AccessingMicrophone(browser()->profile(), app_constants::kChromeAppId));
+      AccessingCamera(browser()->GetProfile(), app_constants::kChromeAppId));
+  EXPECT_TRUE(AccessingMicrophone(browser()->GetProfile(),
+                                  app_constants::kChromeAppId));
 
   AddBlankTabAndShow(browser1);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser1, GetUrl2()));
@@ -190,38 +193,38 @@ IN_PROC_BROWSER_TEST_F(MediaAccessExtensionAppsTest,
   base::OnceClosure audio_closure2 = StartMediaCapture(
       web_content2, blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE);
   EXPECT_TRUE(
-      AccessingCamera(browser()->profile(), app_constants::kChromeAppId));
-  EXPECT_TRUE(
-      AccessingMicrophone(browser()->profile(), app_constants::kChromeAppId));
+      AccessingCamera(browser()->GetProfile(), app_constants::kChromeAppId));
+  EXPECT_TRUE(AccessingMicrophone(browser()->GetProfile(),
+                                  app_constants::kChromeAppId));
 
   // Close the tab for |web_content2|.
   browser1->tab_strip_model()->CloseSelectedTabs();
   EXPECT_TRUE(
-      AccessingCamera(browser()->profile(), app_constants::kChromeAppId));
-  EXPECT_TRUE(
-      AccessingMicrophone(browser()->profile(), app_constants::kChromeAppId));
+      AccessingCamera(browser()->GetProfile(), app_constants::kChromeAppId));
+  EXPECT_TRUE(AccessingMicrophone(browser()->GetProfile(),
+                                  app_constants::kChromeAppId));
   std::move(video_closure2).Run();
   std::move(audio_closure2).Run();
 
   EXPECT_TRUE(
-      AccessingCamera(browser()->profile(), app_constants::kChromeAppId));
-  EXPECT_TRUE(
-      AccessingMicrophone(browser()->profile(), app_constants::kChromeAppId));
+      AccessingCamera(browser()->GetProfile(), app_constants::kChromeAppId));
+  EXPECT_TRUE(AccessingMicrophone(browser()->GetProfile(),
+                                  app_constants::kChromeAppId));
 
   // Close the tab for |web_content1|.
   browser1->tab_strip_model()->CloseSelectedTabs();
   EXPECT_FALSE(
-      AccessingCamera(browser()->profile(), app_constants::kChromeAppId));
-  EXPECT_FALSE(
-      AccessingMicrophone(browser()->profile(), app_constants::kChromeAppId));
+      AccessingCamera(browser()->GetProfile(), app_constants::kChromeAppId));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(),
+                                   app_constants::kChromeAppId));
 
   std::move(video_closure1).Run();
   std::move(audio_closure1).Run();
 
   EXPECT_FALSE(
-      AccessingCamera(browser()->profile(), app_constants::kChromeAppId));
-  EXPECT_FALSE(
-      AccessingMicrophone(browser()->profile(), app_constants::kChromeAppId));
+      AccessingCamera(browser()->GetProfile(), app_constants::kChromeAppId));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(),
+                                   app_constants::kChromeAppId));
 }
 
 IN_PROC_BROWSER_TEST_F(MediaAccessExtensionAppsTest,
@@ -237,27 +240,27 @@ IN_PROC_BROWSER_TEST_F(MediaAccessExtensionAppsTest,
   base::OnceClosure video_closure = StartMediaCapture(
       web_contents, blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE);
 
-  EXPECT_TRUE(AccessingCamera(browser()->profile(), extension->id()));
-  EXPECT_FALSE(AccessingMicrophone(browser()->profile(), extension->id()));
+  EXPECT_TRUE(AccessingCamera(browser()->GetProfile(), extension->id()));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(), extension->id()));
 
   // Request accessing the microphone for |web_contents|.
   base::OnceClosure audio_closure = StartMediaCapture(
       web_contents, blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE);
 
-  EXPECT_TRUE(AccessingCamera(browser()->profile(), extension->id()));
-  EXPECT_TRUE(AccessingMicrophone(browser()->profile(), extension->id()));
+  EXPECT_TRUE(AccessingCamera(browser()->GetProfile(), extension->id()));
+  EXPECT_TRUE(AccessingMicrophone(browser()->GetProfile(), extension->id()));
 
   // Stop accessing the microphone for |web_contents|.
   std::move(audio_closure).Run();
 
-  EXPECT_TRUE(AccessingCamera(browser()->profile(), extension->id()));
-  EXPECT_FALSE(AccessingMicrophone(browser()->profile(), extension->id()));
+  EXPECT_TRUE(AccessingCamera(browser()->GetProfile(), extension->id()));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(), extension->id()));
 
   // Stop accessing the camera for |web_contents|.
   std::move(video_closure).Run();
 
-  EXPECT_FALSE(AccessingCamera(browser()->profile(), extension->id()));
-  EXPECT_FALSE(AccessingMicrophone(browser()->profile(), extension->id()));
+  EXPECT_FALSE(AccessingCamera(browser()->GetProfile(), extension->id()));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(), extension->id()));
 }
 
 IN_PROC_BROWSER_TEST_F(MediaAccessExtensionAppsTest,
@@ -283,8 +286,8 @@ IN_PROC_BROWSER_TEST_F(MediaAccessExtensionAppsTest,
   base::OnceClosure audio_closure1 = StartMediaCapture(
       web_content1, blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE);
 
-  EXPECT_TRUE(AccessingCamera(browser()->profile(), extension->id()));
-  EXPECT_TRUE(AccessingMicrophone(browser()->profile(), extension->id()));
+  EXPECT_TRUE(AccessingCamera(browser()->GetProfile(), extension->id()));
+  EXPECT_TRUE(AccessingMicrophone(browser()->GetProfile(), extension->id()));
 
   AddBlankTabAndShow(browser());
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetUrl1()));
@@ -294,33 +297,33 @@ IN_PROC_BROWSER_TEST_F(MediaAccessExtensionAppsTest,
   base::OnceClosure video_closure2 = StartMediaCapture(
       web_content2, blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE);
 
-  EXPECT_TRUE(AccessingCamera(browser()->profile(), extension->id()));
-  EXPECT_TRUE(AccessingMicrophone(browser()->profile(), extension->id()));
+  EXPECT_TRUE(AccessingCamera(browser()->GetProfile(), extension->id()));
+  EXPECT_TRUE(AccessingMicrophone(browser()->GetProfile(), extension->id()));
   EXPECT_TRUE(
-      AccessingCamera(browser()->profile(), app_constants::kChromeAppId));
-  EXPECT_FALSE(
-      AccessingMicrophone(browser()->profile(), app_constants::kChromeAppId));
+      AccessingCamera(browser()->GetProfile(), app_constants::kChromeAppId));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(),
+                                   app_constants::kChromeAppId));
 
   // Uninstall the app.
   std::string app_id = extension->id();
   UninstallApp(app_id);
 
-  EXPECT_FALSE(AccessingCamera(browser()->profile(), app_id));
-  EXPECT_FALSE(AccessingMicrophone(browser()->profile(), app_id));
+  EXPECT_FALSE(AccessingCamera(browser()->GetProfile(), app_id));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(), app_id));
   EXPECT_TRUE(
-      AccessingCamera(browser()->profile(), app_constants::kChromeAppId));
-  EXPECT_FALSE(
-      AccessingMicrophone(browser()->profile(), app_constants::kChromeAppId));
+      AccessingCamera(browser()->GetProfile(), app_constants::kChromeAppId));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(),
+                                   app_constants::kChromeAppId));
 
   // Stop accessing the camera for |web_content2|.
   std::move(video_closure2).Run();
 
-  EXPECT_FALSE(AccessingCamera(browser()->profile(), app_id));
-  EXPECT_FALSE(AccessingMicrophone(browser()->profile(), app_id));
+  EXPECT_FALSE(AccessingCamera(browser()->GetProfile(), app_id));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(), app_id));
   EXPECT_FALSE(
-      AccessingCamera(browser()->profile(), app_constants::kChromeAppId));
-  EXPECT_FALSE(
-      AccessingMicrophone(browser()->profile(), app_constants::kChromeAppId));
+      AccessingCamera(browser()->GetProfile(), app_constants::kChromeAppId));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(),
+                                   app_constants::kChromeAppId));
 }
 
 IN_PROC_BROWSER_TEST_F(MediaAccessExtensionAppsTest,
@@ -332,31 +335,31 @@ IN_PROC_BROWSER_TEST_F(MediaAccessExtensionAppsTest,
   base::OnceClosure video_closure = StartMediaCapture(
       web_contents, blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE);
   EXPECT_TRUE(
-      AccessingCamera(browser()->profile(), app_constants::kChromeAppId));
-  EXPECT_FALSE(
-      AccessingMicrophone(browser()->profile(), app_constants::kChromeAppId));
+      AccessingCamera(browser()->GetProfile(), app_constants::kChromeAppId));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(),
+                                   app_constants::kChromeAppId));
 
   // Request GUM_DESKTOP_VIDEO_CAPTURE accessing the camera for |web_contents|.
   base::OnceClosure desktop_closure = StartMediaCapture(
       web_contents, blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE);
   EXPECT_TRUE(
-      AccessingCamera(browser()->profile(), app_constants::kChromeAppId));
-  EXPECT_FALSE(
-      AccessingMicrophone(browser()->profile(), app_constants::kChromeAppId));
+      AccessingCamera(browser()->GetProfile(), app_constants::kChromeAppId));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(),
+                                   app_constants::kChromeAppId));
 
   // Stop GUM_DESKTOP_VIDEO_CAPTURE accessing the camera for |web_contents|.
   std::move(desktop_closure).Run();
   EXPECT_TRUE(
-      AccessingCamera(browser()->profile(), app_constants::kChromeAppId));
-  EXPECT_FALSE(
-      AccessingMicrophone(browser()->profile(), app_constants::kChromeAppId));
+      AccessingCamera(browser()->GetProfile(), app_constants::kChromeAppId));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(),
+                                   app_constants::kChromeAppId));
 
   // Stop DEVICE_VIDEO_CAPTURE accessing the camera for |web_contents|.
   std::move(video_closure).Run();
   EXPECT_FALSE(
-      AccessingCamera(browser()->profile(), app_constants::kChromeAppId));
-  EXPECT_FALSE(
-      AccessingMicrophone(browser()->profile(), app_constants::kChromeAppId));
+      AccessingCamera(browser()->GetProfile(), app_constants::kChromeAppId));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(),
+                                   app_constants::kChromeAppId));
 }
 
 class MediaAccessWebAppsTest : public web_app::WebAppBrowserTestBase {
@@ -368,23 +371,24 @@ class MediaAccessWebAppsTest : public web_app::WebAppBrowserTestBase {
     auto web_app_info =
         web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(url);
     web_app_info->scope = url;
-    return web_app::test::InstallWebApp(browser()->profile(),
+    return web_app::test::InstallWebApp(browser()->GetProfile(),
                                         std::move(web_app_info));
   }
 
   void UninstallWebApp(const std::string& app_id) const {
-    web_app::WebAppTestUninstallObserver app_listener(browser()->profile());
+    web_app::WebAppTestUninstallObserver app_listener(browser()->GetProfile());
     app_listener.BeginListening();
-    web_app::test::UninstallWebApp(browser()->profile(), app_id);
+    web_app::test::UninstallWebApp(browser()->GetProfile(), app_id);
     app_listener.Wait();
   }
 
   GURL GetUrl1() {
-    return https_server()->GetURL("app.com", "/ssl/google.html");
+    return embedded_https_test_server().GetURL("app.com", "/ssl/google.html");
   }
 
   GURL GetUrl2() {
-    return https_server()->GetURL("app.com", "/google/google.html");
+    return embedded_https_test_server().GetURL("app.com",
+                                               "/google/google.html");
   }
 
   content::WebContents* GetWebContents() {
@@ -396,14 +400,14 @@ IN_PROC_BROWSER_TEST_F(MediaAccessWebAppsTest, RequestAccessingCamera) {
   std::string app_id = CreateWebApp(GetUrl1());
 
   // Launch |app_id| in a new tab.
-  web_app::LaunchWebAppBrowser(browser()->profile(), app_id);
+  web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
   web_app::NavigateViaLinkClickToURLAndWait(browser(), GetUrl1());
 
   // Request accessing the camera for |app_id| in the new tab.
   content::WebContents* web_content1 = GetWebContents();
   base::OnceClosure video_closure1 = StartMediaCapture(
       web_content1, blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE);
-  EXPECT_TRUE(AccessingCamera(browser()->profile(), app_id));
+  EXPECT_TRUE(AccessingCamera(browser()->GetProfile(), app_id));
 
   // Launch |app_id| in a new window.
   content::WebContents* web_content2 = OpenApplication(app_id);
@@ -415,18 +419,18 @@ IN_PROC_BROWSER_TEST_F(MediaAccessWebAppsTest, RequestAccessingCamera) {
   // Request accessing the camera for |app_id| in the new window.
   base::OnceClosure video_closure2 = StartMediaCapture(
       web_content2, blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE);
-  EXPECT_TRUE(AccessingCamera(browser()->profile(), app_id));
+  EXPECT_TRUE(AccessingCamera(browser()->GetProfile(), app_id));
 
   // Stop accessing the camera for |app_id| in the tab.
   std::move(video_closure1).Run();
-  EXPECT_TRUE(AccessingCamera(browser()->profile(), app_id));
+  EXPECT_TRUE(AccessingCamera(browser()->GetProfile(), app_id));
 
   // Stop accessing the camera for |app_id| in the window.
   std::move(video_closure2).Run();
-  EXPECT_FALSE(AccessingCamera(browser()->profile(), app_id));
+  EXPECT_FALSE(AccessingCamera(browser()->GetProfile(), app_id));
 
   web_app::CloseAndWait(app_browser);
-  EXPECT_FALSE(AccessingCamera(browser()->profile(), app_id));
+  EXPECT_FALSE(AccessingCamera(browser()->GetProfile(), app_id));
   web_app::CloseAndWait(browser());
 }
 
@@ -434,14 +438,14 @@ IN_PROC_BROWSER_TEST_F(MediaAccessWebAppsTest, RequestAccessingMicrophone) {
   std::string app_id = CreateWebApp(GetUrl1());
 
   // Launch |app_id| in a new tab.
-  web_app::LaunchWebAppBrowser(browser()->profile(), app_id);
+  web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
   web_app::NavigateViaLinkClickToURLAndWait(browser(), GetUrl1());
 
   // Request accessing the microphone for |app_id| in the new tab.
   content::WebContents* web_content1 = GetWebContents();
   base::OnceClosure audio_closure1 = StartMediaCapture(
       web_content1, blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE);
-  EXPECT_TRUE(AccessingMicrophone(browser()->profile(), app_id));
+  EXPECT_TRUE(AccessingMicrophone(browser()->GetProfile(), app_id));
 
   // Launch |app_id| in a new window.
   content::WebContents* web_content2 = OpenApplication(app_id);
@@ -453,26 +457,26 @@ IN_PROC_BROWSER_TEST_F(MediaAccessWebAppsTest, RequestAccessingMicrophone) {
   // Request accessing the microphone for |app_id| in the new window.
   base::OnceClosure audio_closure2 = StartMediaCapture(
       web_content2, blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE);
-  EXPECT_TRUE(AccessingMicrophone(browser()->profile(), app_id));
+  EXPECT_TRUE(AccessingMicrophone(browser()->GetProfile(), app_id));
 
   // Close browsers.
   web_app::CloseAndWait(app_browser);
-  EXPECT_TRUE(AccessingMicrophone(browser()->profile(), app_id));
+  EXPECT_TRUE(AccessingMicrophone(browser()->GetProfile(), app_id));
 
   // Stop accessing the microphone for |app_id| in the tab.
   std::move(audio_closure1).Run();
-  EXPECT_FALSE(AccessingMicrophone(browser()->profile(), app_id));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(), app_id));
 
   // Stop accessing the microphone for |app_id| in the window.
   std::move(audio_closure2).Run();
-  EXPECT_FALSE(AccessingMicrophone(browser()->profile(), app_id));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(), app_id));
 }
 
 IN_PROC_BROWSER_TEST_F(MediaAccessWebAppsTest, RemoveApp) {
   std::string app_id = CreateWebApp(GetUrl1());
 
   // Launch |app_id| in a new tab.
-  web_app::LaunchWebAppBrowser(browser()->profile(), app_id);
+  web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
   web_app::NavigateViaLinkClickToURLAndWait(browser(), GetUrl1());
 
   // Request accessing the camera and the microphone for |app_id| in the new
@@ -482,8 +486,8 @@ IN_PROC_BROWSER_TEST_F(MediaAccessWebAppsTest, RemoveApp) {
       web_content1, blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE);
   base::OnceClosure video_closure1 = StartMediaCapture(
       web_content1, blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE);
-  EXPECT_TRUE(AccessingMicrophone(browser()->profile(), app_id));
-  EXPECT_TRUE(AccessingCamera(browser()->profile(), app_id));
+  EXPECT_TRUE(AccessingMicrophone(browser()->GetProfile(), app_id));
+  EXPECT_TRUE(AccessingCamera(browser()->GetProfile(), app_id));
 
   // Launch |app_id| in a new window.
   content::WebContents* web_content2 = OpenApplication(app_id);
@@ -498,24 +502,24 @@ IN_PROC_BROWSER_TEST_F(MediaAccessWebAppsTest, RemoveApp) {
       web_content2, blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE);
   base::OnceClosure video_closure2 = StartMediaCapture(
       web_content2, blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE);
-  EXPECT_TRUE(AccessingMicrophone(browser()->profile(), app_id));
-  EXPECT_TRUE(AccessingCamera(browser()->profile(), app_id));
+  EXPECT_TRUE(AccessingMicrophone(browser()->GetProfile(), app_id));
+  EXPECT_TRUE(AccessingCamera(browser()->GetProfile(), app_id));
 
   UninstallWebApp(app_id);
-  EXPECT_FALSE(AccessingCamera(browser()->profile(), app_id));
-  EXPECT_FALSE(AccessingMicrophone(browser()->profile(), app_id));
+  EXPECT_FALSE(AccessingCamera(browser()->GetProfile(), app_id));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(), app_id));
 
   CreateWebApp(GetUrl1());
 
-  EXPECT_FALSE(AccessingCamera(browser()->profile(), app_id));
-  EXPECT_FALSE(AccessingMicrophone(browser()->profile(), app_id));
+  EXPECT_FALSE(AccessingCamera(browser()->GetProfile(), app_id));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(), app_id));
 }
 
 IN_PROC_BROWSER_TEST_F(MediaAccessWebAppsTest, TwoApps) {
   std::string app_id1 = CreateWebApp(GetUrl1());
 
   // Launch |app_id1| in a new tab.
-  web_app::LaunchWebAppBrowser(browser()->profile(), app_id1);
+  web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id1);
   web_app::NavigateViaLinkClickToURLAndWait(browser(), GetUrl1());
 
   // Request accessing the camera and the microphone for |app_id1| in the new
@@ -525,8 +529,8 @@ IN_PROC_BROWSER_TEST_F(MediaAccessWebAppsTest, TwoApps) {
       web_content1, blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE);
   base::OnceClosure video_closure1 = StartMediaCapture(
       web_content1, blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE);
-  EXPECT_TRUE(AccessingMicrophone(browser()->profile(), app_id1));
-  EXPECT_TRUE(AccessingCamera(browser()->profile(), app_id1));
+  EXPECT_TRUE(AccessingMicrophone(browser()->GetProfile(), app_id1));
+  EXPECT_TRUE(AccessingCamera(browser()->GetProfile(), app_id1));
 
   std::string app_id2 = CreateWebApp(GetUrl2());
 
@@ -543,22 +547,22 @@ IN_PROC_BROWSER_TEST_F(MediaAccessWebAppsTest, TwoApps) {
       web_content2, blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE);
   base::OnceClosure video_closure2 = StartMediaCapture(
       web_content2, blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE);
-  EXPECT_TRUE(AccessingMicrophone(browser()->profile(), app_id2));
-  EXPECT_TRUE(AccessingCamera(browser()->profile(), app_id2));
+  EXPECT_TRUE(AccessingMicrophone(browser()->GetProfile(), app_id2));
+  EXPECT_TRUE(AccessingCamera(browser()->GetProfile(), app_id2));
 
   UninstallWebApp(app_id1);
-  EXPECT_FALSE(AccessingCamera(browser()->profile(), app_id1));
-  EXPECT_FALSE(AccessingMicrophone(browser()->profile(), app_id1));
-  EXPECT_TRUE(AccessingMicrophone(browser()->profile(), app_id2));
-  EXPECT_TRUE(AccessingCamera(browser()->profile(), app_id2));
+  EXPECT_FALSE(AccessingCamera(browser()->GetProfile(), app_id1));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(), app_id1));
+  EXPECT_TRUE(AccessingMicrophone(browser()->GetProfile(), app_id2));
+  EXPECT_TRUE(AccessingCamera(browser()->GetProfile(), app_id2));
   std::move(audio_closure1).Run();
   std::move(video_closure1).Run();
 
   // Stop accessing the camera and the microphone for |app_id2|.
   std::move(audio_closure2).Run();
   std::move(video_closure2).Run();
-  EXPECT_FALSE(AccessingCamera(browser()->profile(), app_id2));
-  EXPECT_FALSE(AccessingCamera(browser()->profile(), app_id2));
+  EXPECT_FALSE(AccessingCamera(browser()->GetProfile(), app_id2));
+  EXPECT_FALSE(AccessingCamera(browser()->GetProfile(), app_id2));
 
   // Navigate to Url1, and check |app_id1| is not accessing the camera or the
   // microphone, because it has been removed.
@@ -568,8 +572,8 @@ IN_PROC_BROWSER_TEST_F(MediaAccessWebAppsTest, TwoApps) {
       web_content3, blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE);
   base::OnceClosure video_closure3 = StartMediaCapture(
       web_content3, blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE);
-  EXPECT_FALSE(AccessingCamera(browser()->profile(), app_id1));
-  EXPECT_FALSE(AccessingMicrophone(browser()->profile(), app_id1));
+  EXPECT_FALSE(AccessingCamera(browser()->GetProfile(), app_id1));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(), app_id1));
   std::move(audio_closure3).Run();
   std::move(video_closure3).Run();
 
@@ -581,10 +585,10 @@ IN_PROC_BROWSER_TEST_F(MediaAccessWebAppsTest, TwoApps) {
       web_content4, blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE);
   base::OnceClosure video_closure4 = StartMediaCapture(
       web_content4, blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE);
-  EXPECT_TRUE(AccessingMicrophone(browser()->profile(), app_id2));
-  EXPECT_TRUE(AccessingCamera(browser()->profile(), app_id2));
-  EXPECT_FALSE(AccessingCamera(browser()->profile(), app_id1));
-  EXPECT_FALSE(AccessingMicrophone(browser()->profile(), app_id1));
+  EXPECT_TRUE(AccessingMicrophone(browser()->GetProfile(), app_id2));
+  EXPECT_TRUE(AccessingCamera(browser()->GetProfile(), app_id2));
+  EXPECT_FALSE(AccessingCamera(browser()->GetProfile(), app_id1));
+  EXPECT_FALSE(AccessingMicrophone(browser()->GetProfile(), app_id1));
 }
 
 IN_PROC_BROWSER_TEST_F(MediaAccessWebAppsTest,
@@ -592,7 +596,7 @@ IN_PROC_BROWSER_TEST_F(MediaAccessWebAppsTest,
   std::string app_id = CreateWebApp(GetUrl1());
 
   // Launch |app_id| in a new tab.
-  web_app::LaunchWebAppBrowser(browser()->profile(), app_id);
+  web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
   web_app::NavigateViaLinkClickToURLAndWait(browser(), GetUrl1());
 
   // Request DEVICE_VIDEO_CAPTURE accessing the camera for |app_id| in the new
@@ -600,22 +604,22 @@ IN_PROC_BROWSER_TEST_F(MediaAccessWebAppsTest,
   content::WebContents* web_contents = GetWebContents();
   base::OnceClosure video_closure = StartMediaCapture(
       web_contents, blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE);
-  EXPECT_TRUE(AccessingCamera(browser()->profile(), app_id));
+  EXPECT_TRUE(AccessingCamera(browser()->GetProfile(), app_id));
 
   // Request GUM_DESKTOP_VIDEO_CAPTURE accessing the camera for |app_id| in the
   // new tab.
   base::OnceClosure desktop_closure = StartMediaCapture(
       web_contents, blink::mojom::MediaStreamType::GUM_DESKTOP_VIDEO_CAPTURE);
-  EXPECT_TRUE(AccessingCamera(browser()->profile(), app_id));
+  EXPECT_TRUE(AccessingCamera(browser()->GetProfile(), app_id));
 
   // Stop DEVICE_VIDEO_CAPTURE accessing the camera for |app_id| in the tab.
   std::move(video_closure).Run();
-  EXPECT_FALSE(AccessingCamera(browser()->profile(), app_id));
+  EXPECT_FALSE(AccessingCamera(browser()->GetProfile(), app_id));
 
   // Stop GUM_DESKTOP_VIDEO_CAPTURE accessing the camera for |app_id| in the
   // tab.
   std::move(desktop_closure).Run();
-  EXPECT_FALSE(AccessingCamera(browser()->profile(), app_id));
+  EXPECT_FALSE(AccessingCamera(browser()->GetProfile(), app_id));
 
   web_app::CloseAndWait(browser());
 }
@@ -625,7 +629,7 @@ IN_PROC_BROWSER_TEST_F(MediaAccessWebAppsTest,
   std::string app_id = CreateWebApp(GetUrl1());
 
   // Launch |app_id| in a new tab.
-  web_app::LaunchWebAppBrowser(browser()->profile(), app_id);
+  web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
   web_app::NavigateViaLinkClickToURLAndWait(browser(), GetUrl1());
 
   // Request GUM_DESKTOP_VIDEO_CAPTURE accessing the camera for |app_id| in the
@@ -633,22 +637,22 @@ IN_PROC_BROWSER_TEST_F(MediaAccessWebAppsTest,
   content::WebContents* web_contents = GetWebContents();
   base::OnceClosure desktop_closure = StartMediaCapture(
       web_contents, blink::mojom::MediaStreamType::GUM_DESKTOP_VIDEO_CAPTURE);
-  EXPECT_FALSE(AccessingCamera(browser()->profile(), app_id));
+  EXPECT_FALSE(AccessingCamera(browser()->GetProfile(), app_id));
 
   // Request DEVICE_VIDEO_CAPTURE accessing the camera for |app_id| in the new
   // tab.
   base::OnceClosure video_closure = StartMediaCapture(
       web_contents, blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE);
-  EXPECT_TRUE(AccessingCamera(browser()->profile(), app_id));
+  EXPECT_TRUE(AccessingCamera(browser()->GetProfile(), app_id));
 
   // Stop GUM_DESKTOP_VIDEO_CAPTURE accessing the camera for |app_id| in the
   // tab.
   std::move(desktop_closure).Run();
-  EXPECT_TRUE(AccessingCamera(browser()->profile(), app_id));
+  EXPECT_TRUE(AccessingCamera(browser()->GetProfile(), app_id));
 
   // Stop DEVICE_VIDEO_CAPTURE accessing the camera for |app_id| in the tab.
   std::move(video_closure).Run();
-  EXPECT_FALSE(AccessingCamera(browser()->profile(), app_id));
+  EXPECT_FALSE(AccessingCamera(browser()->GetProfile(), app_id));
 
   web_app::CloseAndWait(browser());
 }

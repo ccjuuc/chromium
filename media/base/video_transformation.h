@@ -25,11 +25,17 @@ enum VideoRotation : int {
   VIDEO_ROTATION_MAX = VIDEO_ROTATION_270
 };
 
+// Returns true if the rotation is 90 or 270 degrees (orthogonal).
+constexpr bool IsOrthogonal(VideoRotation rotation) {
+  return rotation == VIDEO_ROTATION_90 || rotation == VIDEO_ROTATION_270;
+}
+
 // Stores frame rotation & mirroring values. These are usually calculated from
 // a rotation matrix from a demuxer, and we only support 90 degree rotation
 // increments.
 struct MEDIA_EXPORT VideoTransformation {
-  static VideoTransformation FromFFmpegDisplayMatrix(const int32_t* matrix);
+  static VideoTransformation FromFFmpegDisplayMatrix(
+      base::span<const int32_t, 9> matrix3x3);
 
   constexpr VideoTransformation(VideoRotation rotation, bool mirrored)
       : rotation(rotation), mirrored(mirrored) {}
@@ -67,6 +73,10 @@ struct MEDIA_EXPORT VideoTransformation {
 
   // Stringifies the rotation and mirrored into a human readable string.
   std::string ToString() const;
+
+  // Returns true if the video is rotated 90 or 270 degrees (i.e., orthogonal),
+  // which swaps the width and height of the video frame during rendering.
+  constexpr bool IsOrthogonal() const { return media::IsOrthogonal(rotation); }
 };
 
 MEDIA_EXPORT bool operator==(const struct VideoTransformation& first,

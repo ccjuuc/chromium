@@ -18,18 +18,16 @@
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/ash/arc/fileapi/arc_documents_provider_util.h"
+#include "chrome/browser/ash/file_manager/fileapi_util.h"
 #include "chrome/browser/ash/fileapi/file_access_permissions.h"
 #include "chrome/browser/ash/fileapi/file_system_backend.h"
 #include "chrome/browser/ash/fileapi/file_system_backend_delegate.h"
 #include "chrome/browser/ash/fileapi/observable_file_system_operation_impl.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/media_galleries/fileapi/media_file_system_backend.h"
-#include "chrome/common/url_constants.h"
 #include "chromeos/ash/components/dbus/cros_disks/cros_disks_client.h"
-#include "chromeos/ash/components/file_manager/app_id.h"
 #include "components/file_access/scoped_file_access_delegate.h"
 #include "components/user_manager/user.h"
-#include "extensions/common/extension.h"
 #include "storage/browser/file_system/async_file_util.h"
 #include "storage/browser/file_system/external_mount_points.h"
 #include "storage/browser/file_system/file_stream_reader.h"
@@ -265,11 +263,11 @@ bool FileSystemBackend::IsAccessAllowed(
     return true;
   }
 
-  // ImageLoader extension has read-only access via FileSystemUrlLoaderFactory.
-  if (origin.GetURL() == extensions::Extension::GetBaseURLFromExtensionId(
-                             ::file_manager::kImageLoaderExtensionId) &&
-      IsReadOperation(backend_function, operation_type)) {
-    return true;
+  // ImageLoader extension must use read-only operations.
+  if (origin.GetURL() == ::file_manager::util::GetImageLoaderBaseURL()) {
+    if (!IsReadOperation(backend_function, operation_type)) {
+      return false;
+    }
   }
 
   return file_access_permissions_->HasAccessPermission(origin,
@@ -296,17 +294,6 @@ void FileSystemBackend::GrantFileAccessToOrigin(
 
 void FileSystemBackend::RevokeAccessForOrigin(const url::Origin& origin) {
   file_access_permissions_->RevokePermissions(origin);
-}
-
-std::vector<base::FilePath> FileSystemBackend::GetRootDirectories() const {
-  std::vector<storage::MountPoints::MountPointInfo> mount_points;
-  mount_points_->AddMountPointInfosTo(&mount_points);
-  system_mount_points_->AddMountPointInfosTo(&mount_points);
-
-  std::vector<base::FilePath> root_dirs;
-  for (size_t i = 0; i < mount_points.size(); ++i)
-    root_dirs.push_back(mount_points[i].path);
-  return root_dirs;
 }
 
 storage::AsyncFileUtil* FileSystemBackend::GetAsyncFileUtil(
@@ -414,7 +401,7 @@ bool FileSystemBackend::HasInplaceCopyImplementation(
     case storage::kFileSystemTypeDriveFs:
       return true;
     // TODO(fukino): Support in-place copy for DocumentsProvider.
-    // crbug.com/953603.
+    // crbug.com/189883198.
     case storage::kFileSystemTypeArcDocumentsProvider:
     case storage::kFileSystemTypeLocal:
     case storage::kFileSystemTypeArcContent:

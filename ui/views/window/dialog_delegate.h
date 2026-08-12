@@ -32,7 +32,6 @@
 
 class AppInfoDialogViewsTest;
 class AuthenticatorRequestDialogView;
-class AutoSigninFirstRunDialogView;
 class BatchUploadDialogView;
 class BluetoothDeviceCredentialsView;
 class BluetoothDevicePairConfirmView;
@@ -127,10 +126,6 @@ class SelectBnplIssuerDialog;
 }  // namespace payments
 }  // namespace autofill
 
-namespace borealis {
-class BorealisSplashScreenView;
-}
-
 namespace extensions {
 class SecurityDialogTrackerTest;
 }
@@ -142,7 +137,6 @@ class GlicFreDialogView;
 namespace payments {
 class PaymentRequestDialogView;
 class SecurePaymentConfirmationDialogView;
-class SecurePaymentConfirmationNoCredsDialogView;
 }  // namespace payments
 
 namespace policy {
@@ -383,7 +377,7 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   static std::unique_ptr<FrameView> CreateDialogFrameView(Widget* widget);
 
   // TODO(crbug.com/431219296): Deprecate after API migration.
-  const gfx::Insets& margins() const { return margins_.contents.value(); }
+  const gfx::Insets& margins() const { return margins_.contents; }
 
   void set_margins(const gfx::Insets& margins) {
     set_frame_margins({.contents = margins});
@@ -398,6 +392,14 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   // The margins between the content and the inside of the border.
   // Also includes title and footnote margins.
   struct FrameMargins {
+    gfx::Insets contents;
+    gfx::Insets title;
+    gfx::Insets footnote;
+  };
+
+  // Parameter object for set_frame_margins.  Fields are optional to allow
+  // set_frame_margins to be used without having to specify all three fields.
+  struct FrameMarginsParams {
     std::optional<gfx::Insets> contents;
     std::optional<gfx::Insets> title;
     std::optional<gfx::Insets> footnote;
@@ -405,7 +407,8 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   const FrameMargins& frame_margins() const { return margins_; }
   // Set the content, title, and/or footnote margins. Note this is not a direct
   // replacement, only non-empty fields will be updated.
-  void set_frame_margins(const FrameMargins& margins);
+  // Example: set_frame_margins({.contents = gfx::Insets()});
+  void set_frame_margins(const FrameMarginsParams& margins);
 
   // Set a fixed width for the dialog. Used by DialogClientView.
   void set_fixed_width(int fixed_width) { fixed_width_ = fixed_width; }
@@ -616,11 +619,6 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   // Returns the corner radius that is used for this dialog.
   int GetCornerRadius() const;
 
-  bool allow_vertical_buttons() const { return allow_vertical_buttons_; }
-  void set_allow_vertical_buttons(bool allow) {
-    allow_vertical_buttons_ = allow;
-  }
-
  protected:
   // Overridden from WidgetDelegate:
   ax::mojom::Role GetAccessibleWindowRole() override;
@@ -638,7 +636,9 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
       std::variant<base::OnceClosure, base::RepeatingCallback<bool()>>&
           callback);
 
-  FrameMargins margins_;
+  FrameMargins margins_ = {.contents = gfx::Insets(),
+                           .title = gfx::Insets(),
+                           .footnote = gfx::Insets()};
 
   // Use a fixed dialog width for dialog. Used by DialogClientView.
   int fixed_width_ = 0;
@@ -675,15 +675,6 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   // Ownership of the views::Widget created by CreateDialogWidget().
   Widget::InitParams::Ownership ownership_of_new_widget_ =
       Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET;
-
-  // If set, allows the dialog buttons to be arranged in a vertical
-  // layout to maintain fixed dialog width. Specifically, if an extra view has
-  // been supplied (commonly a third button), and the width of the resulting
-  // row of buttons exceeds the specified `fixed_width_`, buttons are stacked
-  // in a column instead. Conventionally, three-button dialogs are designed
-  // with a width large enough to accommodate the required horizontal width.
-  // This switch is an experiment to explore an alternate approach.
-  bool allow_vertical_buttons_ = false;
 };
 
 // A DialogDelegate implementation that is-a View. Used to override GetWidget()
@@ -721,7 +712,6 @@ class VIEWS_EXPORT DialogDelegateView : public DialogDelegate, public View {
   // See comments atop class.
   friend class ::AppInfoDialogViewsTest;
   friend class ::AuthenticatorRequestDialogView;
-  friend class ::AutoSigninFirstRunDialogView;
   friend class ::BatchUploadDialogView;
   friend class ::BluetoothDeviceCredentialsView;
   friend class ::BluetoothDevicePairConfirmView;
@@ -797,12 +787,10 @@ class VIEWS_EXPORT DialogDelegateView : public DialogDelegate, public View {
   friend class ::autofill::WebauthnDialogView;
   friend class ::autofill::payments::PaymentsWindowUserConsentDialogView;
   friend class ::autofill::payments::SelectBnplIssuerDialog;
-  friend class ::borealis::BorealisSplashScreenView;
   friend class ::extensions::SecurityDialogTrackerTest;
   friend class ::glic::GlicFreDialogView;
   friend class ::payments::PaymentRequestDialogView;
   friend class ::payments::SecurePaymentConfirmationDialogView;
-  friend class ::payments::SecurePaymentConfirmationNoCredsDialogView;
   friend class ::policy::EnterpriseStartupDialogView;
   friend class ::policy::IdleDialogView;
   friend class ::policy::PolicyDialogBase;
@@ -887,7 +875,8 @@ VIEW_BUILDER_PROPERTY(int, DefaultButton)
 VIEW_BUILDER_METHOD(SetButtonLabel, ui::mojom::DialogButton, std::u16string)
 VIEW_BUILDER_METHOD(SetButtonEnabled, ui::mojom::DialogButton, bool)
 VIEW_BUILDER_METHOD(set_margins, gfx::Insets)
-VIEW_BUILDER_METHOD(set_frame_margins, const DialogDelegateView::FrameMargins&)
+VIEW_BUILDER_METHOD(set_frame_margins,
+                    const DialogDelegate::FrameMarginsParams&)
 VIEW_BUILDER_METHOD(set_use_round_corners, bool)
 VIEW_BUILDER_METHOD(set_corner_radius, int)
 VIEW_BUILDER_METHOD(set_draggable, bool)

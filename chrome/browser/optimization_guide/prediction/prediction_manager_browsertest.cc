@@ -37,7 +37,6 @@
 #include "components/optimization_guide/core/delivery/prediction_model_override.h"
 #include "components/optimization_guide/core/hints/optimization_guide_store.h"
 #include "components/optimization_guide/core/hints/store_update_data.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_prefs.h"
 #include "components/optimization_guide/core/optimization_guide_switches.h"
@@ -97,18 +96,17 @@ void SetUpValidModelInfoReceival(ModelFileObserver* model_file_observer,
                   proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
         EXPECT_TRUE(model_info.has_value());
 
-        EXPECT_EQ(123, model_info->GetVersion());
-        EXPECT_TRUE(model_info->GetModelFilePath().IsAbsolute());
-        EXPECT_TRUE(base::PathExists(model_info->GetModelFilePath()));
+        EXPECT_EQ(123, model_info->version);
+        EXPECT_TRUE(model_info->model_file_path.IsAbsolute());
+        EXPECT_TRUE(base::PathExists(model_info->model_file_path));
 
         EXPECT_EQ(expected_additional_files.size(),
-                  model_info->GetAdditionalFiles().size());
-        for (const base::FilePath& add_file :
-             model_info->GetAdditionalFiles()) {
+                  model_info->additional_files.size());
+        for (const base::FilePath& add_file : model_info->additional_files) {
           EXPECT_TRUE(add_file.IsAbsolute());
           EXPECT_TRUE(base::PathExists(add_file));
-          EXPECT_TRUE(base::Contains(expected_additional_files,
-                                     add_file.BaseName().value()));
+          EXPECT_TRUE(
+              expected_additional_files.contains(add_file.BaseName().value()));
         }
         run_loop->Quit();
       },
@@ -145,7 +143,7 @@ class PredictionManagerBrowserTestBase : public InProcessBrowserTest {
         net::EmbeddedTestServer::TYPE_HTTPS);
     net::EmbeddedTestServer::ServerCertificateConfig models_server_cert_config;
     models_server_cert_config.dns_names = {
-        GURL(kOptimizationGuideServiceGetModelsDefaultURL).GetHost()};
+        features::GetOptimizationGuideServiceGetModelsURL().GetHost()};
     models_server_cert_config.ip_addresses = {net::IPAddress::IPv4Localhost()};
     models_server_->SetSSLConfig(models_server_cert_config);
     models_server_->ServeFilesFromSourceDirectory(
@@ -188,7 +186,7 @@ class PredictionManagerBrowserTestBase : public InProcessBrowserTest {
         switches::kOptimizationGuideServiceGetModelsURL,
         models_server_
             ->GetURL(
-                GURL(kOptimizationGuideServiceGetModelsDefaultURL).GetHost(),
+                features::GetOptimizationGuideServiceGetModelsURL().GetHost(),
                 "/")
             .spec());
     cmd->AppendSwitchASCII("force-variation-ids", "4");
@@ -200,7 +198,7 @@ class PredictionManagerBrowserTestBase : public InProcessBrowserTest {
   }
 
   void RegisterWithKeyedService(ModelFileObserver* model_file_observer) {
-    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
         ->AddObserverForOptimizationTargetModel(
             optimization_guide::proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD,
             std::nullopt,
@@ -212,7 +210,7 @@ class PredictionManagerBrowserTestBase : public InProcessBrowserTest {
   PredictionManager* GetPredictionManager() {
     OptimizationGuideKeyedService* optimization_guide_keyed_service =
         OptimizationGuideKeyedServiceFactory::GetForProfile(
-            browser()->profile());
+            browser()->GetProfile());
     return optimization_guide_keyed_service->GetPredictionManager();
   }
 
@@ -430,7 +428,7 @@ class PredictionManagerModelDownloadingBrowserTest
 
   void RegisterModelFileObserverWithKeyedService(Profile* profile = nullptr) {
     OptimizationGuideKeyedServiceFactory::GetForProfile(
-        profile ? profile : browser()->profile())
+        profile ? profile : browser()->GetProfile())
         ->AddObserverForOptimizationTargetModel(
             proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD,
             /*model_metadata=*/std::nullopt,
@@ -451,7 +449,7 @@ class PredictionManagerModelDownloadingBrowserTest
   std::unique_ptr<ModelFileObserver> model_file_observer_;
 };
 
-// Flaky on various bots. See https://crbug.com/1266318
+// Flaky on various bots. See https://crbug.com/40802033
 IN_PROC_BROWSER_TEST_F(PredictionManagerModelDownloadingBrowserTest,
                        DISABLED_TestIncognitoUsesModelFromRegularProfile) {
   SetResponseType(
@@ -491,8 +489,8 @@ IN_PROC_BROWSER_TEST_F(PredictionManagerModelDownloadingBrowserTest,
     base::HistogramTester otr_histogram_tester;
     std::unique_ptr<base::RunLoop> run_loop = std::make_unique<base::RunLoop>();
     SetUpValidModelInfoReceival(model_file_observer(), run_loop.get());
-    Browser* otr_browser = CreateIncognitoBrowser(browser()->profile());
-    RegisterModelFileObserverWithKeyedService(otr_browser->profile());
+    Browser* otr_browser = CreateIncognitoBrowser(browser()->GetProfile());
+    RegisterModelFileObserverWithKeyedService(otr_browser->GetProfile());
 
     run_loop->Run();
 
@@ -887,7 +885,7 @@ IN_PROC_BROWSER_TEST_F(PredictionManagerModelPackageOverrideTest, TestE2E) {
   SetUpValidModelInfoReceival(&model_file_observer, &run_loop,
                               {FILE_PATH_LITERAL("good_additional_file.txt")});
 
-  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
       ->AddObserverForOptimizationTargetModel(
           proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD,
           /*model_metadata=*/std::nullopt,

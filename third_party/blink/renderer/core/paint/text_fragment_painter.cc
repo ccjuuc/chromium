@@ -11,9 +11,9 @@
 #include "third_party/blink/renderer/core/editing/markers/text_match_marker.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/layout/geometry/logical_rect.h"
-#include "third_party/blink/renderer/core/layout/inline/fit_text_scale.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_cursor.h"
 #include "third_party/blink/renderer/core/layout/inline/offset_mapping.h"
+#include "third_party/blink/renderer/core/layout/inline/text_fit_scale.h"
 #include "third_party/blink/renderer/core/layout/layout_counter.h"
 #include "third_party/blink/renderer/core/layout/layout_text_combine.h"
 #include "third_party/blink/renderer/core/layout/list/list_marker.h"
@@ -41,6 +41,8 @@
 #include "third_party/blink/renderer/platform/graphics/graphics_context_state_saver.h"
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
 #include "third_party/blink/renderer/platform/transforms/affine_transform.h"
+#include "third_party/blink/renderer/platform/wtf/text/ascii_ctype.h"
+#include "third_party/blink/renderer/platform/wtf/text/unicode.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 
 namespace blink {
@@ -57,10 +59,16 @@ inline const DisplayItemClient& AsDisplayItemClient(const InlineCursor& cursor,
   return *cursor.Current().GetDisplayItemClient();
 }
 
-inline PhysicalRect PhysicalBoxRect(const InlineCursor& cursor,
-                                    const PhysicalOffset& paint_offset,
-                                    const PhysicalOffset& parent_offset,
-                                    const LayoutTextCombine* text_combine) {
+struct PhysicalBoxGeometry {
+  PhysicalRect text_paint_rect;
+  PhysicalOffset selection_offset;
+};
+
+inline PhysicalBoxGeometry ComputePhysicalBoxGeometry(
+    const InlineCursor& cursor,
+    const PhysicalOffset& paint_offset,
+    const PhysicalOffset& parent_offset,
+    const LayoutTextCombine* text_combine) {
   PhysicalRect box_rect;
   if (const auto* svg_data = cursor.CurrentItem()->GetSvgFragmentData()) {
     box_rect = PhysicalRect::FastAndLossyFromRectF(svg_data->rect);
@@ -74,16 +82,22 @@ inline PhysicalRect PhysicalBoxRect(const InlineCursor& cursor,
   } else {
     box_rect = cursor.CurrentItem()->RectInContainerFragment();
   }
-  box_rect.offset.left += paint_offset.left;
-  // We round the y-axis to ensure consistent line heights.
-  box_rect.offset.top =
-      LayoutUnit((paint_offset.top + parent_offset.top).Round()) +
-      (box_rect.offset.top - parent_offset.top);
+  box_rect.offset += paint_offset;
   if (text_combine) {
     box_rect.offset.left =
         text_combine->AdjustTextLeftForPaint(box_rect.offset.left);
   }
-  return box_rect;
+  const PhysicalOffset selection_offset = box_rect.offset;
+
+  // Round the physical y-axis to ensure the actual text glyphs are drawn at a
+  // whole-pixel y-offset, and so that text decorations like underlines are
+  // placed consistently relative to the text.
+  //
+  // Also return the unrounded offset as selection_offset, so that selection
+  // highlights can be painted flush with adjacent lines.
+  const LayoutUnit line_top = paint_offset.top + parent_offset.top;
+  box_rect.offset.top += LayoutUnit(line_top.Round()) - line_top;
+  return {box_rect, selection_offset};
 }
 
 inline const InlineCursor& InlineCursorForBlockFlow(
@@ -117,6 +131,107 @@ bool ShouldPaintEmphasisMark(const ComputedStyle& style,
     return !text_item.HasOverAnnotation();
   }
   return !text_item.HasUnderAnnotation();
+}
+
+bool IsDecorationSkipSpace(UChar c) {
+  if (c <= 0x7F) {
+    return IsAsciiSpace(c);
+  }
+  return !!(unicode::Category(c) & unicode::kSeparator_Space);
+}
+
+bool IsNotDecorationSkipSpace(UChar c) {
+  return !IsDecorationSkipSpace(c);
+}
+
+struct SpaceSkipWidths {
+  LayoutUnit start_width;
+  LayoutUnit end_width;
+};
+
+Vector<gfx::RectF> ComputeInteriorSpaceRects(const FragmentItem& text_item,
+                                             const StringView& item_text,
+                                             LayoutUnit decoration_line_over,
+                                             LayoutUnit decoration_block_size) {
+  Vector<gfx::RectF> rects;
+  if (item_text.empty()) {
+    return rects;
+  }
+
+  const wtf_size_t len = item_text.length();
+  const wtf_size_t item_start = text_item.StartOffset();
+  wtf_size_t last_non_space = item_text.ReverseFind(IsNotDecorationSkipSpace);
+
+  // Skip leading spaces.
+  wtf_size_t i = item_text.Find(IsNotDecorationSkipSpace);
+  // Walk through the non-space portions; collect space runs encountered between
+  // two non-space characters.
+  while (i < len) {
+    // Advance past non-space characters.
+    i = item_text.Find(IsDecorationSkipSpace, i);
+    if (i >= len) {
+      break;
+    }
+
+    // Found a space run starting at i. Find its end.
+    wtf_size_t space_start = i;
+    i = item_text.Find(IsNotDecorationSkipSpace, i);
+    wtf_size_t space_end = i;
+
+    // If this space run starts after the last non-space character, it is a
+    // trailing run — stop (handled separately via SpaceSkipWidths).
+    if (space_start > last_non_space) {
+      break;
+    }
+
+    // This is an interior space run.
+    auto [left, right] = text_item.LineLeftAndRightForOffsets(
+        item_text, item_start + space_start, item_start + space_end);
+    if (right > left) {
+      rects.emplace_back(left, decoration_line_over, right - left,
+                         decoration_block_size);
+    }
+  }
+
+  return rects;
+}
+
+SpaceSkipWidths ComputeSpaceSkipWidths(const FragmentItem& text_item,
+                                       const StringView& item_text,
+                                       TextDecorationSkipSpaces skip,
+                                       bool check_start,
+                                       bool check_end) {
+  SpaceSkipWidths result;
+  if (item_text.empty()) {
+    return result;
+  }
+
+  const wtf_size_t item_start = text_item.StartOffset();
+  const wtf_size_t item_end = text_item.EndOffset();
+  if (check_start && EnumHasFlags(skip, TextDecorationSkipSpaces::kStart)) {
+    // Find how many leading spaces are in this item.
+    wtf_size_t i = item_text.Find(IsNotDecorationSkipSpace);
+    i = (i == kNotFound) ? item_text.length() : i;
+    if (i > 0) {
+      auto [left, right] = text_item.LineLeftAndRightForOffsets(
+          item_text, item_start, item_start + i);
+      result.start_width = right - left;
+    }
+  }
+
+  if (check_end && EnumHasFlags(skip, TextDecorationSkipSpaces::kEnd)) {
+    // Find how many trailing spaces are in this item.
+    const wtf_size_t len = item_text.length();
+    wtf_size_t pos = item_text.ReverseFind(IsNotDecorationSkipSpace);
+    wtf_size_t i = (pos == kNotFound) ? 0 : pos + 1;
+    if (i < len) {
+      auto [left, right] = text_item.LineLeftAndRightForOffsets(
+          item_text, item_start + i, item_end);
+      result.end_width = right - left;
+    }
+  }
+
+  return result;
 }
 
 PhysicalDirection GetDisclosureOrientation(const ComputedStyle& style,
@@ -175,7 +290,7 @@ void TextFragmentPainter::PaintSymbol(const LayoutObject* layout_object,
                                       const PhysicalSize box_size,
                                       const PaintInfo& paint_info,
                                       const PhysicalOffset& paint_offset) {
-  const AtomicString& type = LayoutCounter::ListStyle(layout_object, style);
+  const AtomicString type = LayoutCounter::ListStyle(layout_object, style);
   PhysicalRect marker_rect(
       ListMarker::RelativeSymbolMarkerRect(style, type, box_size.width));
   marker_rect.Move(paint_offset);
@@ -190,7 +305,7 @@ void TextFragmentPainter::PaintSymbol(const LayoutObject* layout_object,
   }
 #endif
   GraphicsContext& context = paint_info.context;
-  Color color(layout_object->ResolveColor(GetCSSPropertyColor()));
+  Color color(layout_object->ResolveColor(GetCSSPropertyWebkitTextFillColor()));
   if (BoxModelObjectPainter::ShouldForceWhiteBackgroundForPrintEconomy(
           layout_object->GetDocument(), style)) {
     color = TextPainter::TextColorForWhiteBackground(color);
@@ -245,8 +360,9 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
   const bool is_rendering_resource = paint_info.IsRenderingResourceSubtree();
   const auto* const text_combine =
       DynamicTo<LayoutTextCombine>(layout_object->Parent());
-  const PhysicalRect physical_box =
-      PhysicalBoxRect(cursor_, paint_offset, parent_offset_, text_combine);
+  const PhysicalBoxGeometry box_geometry = ComputePhysicalBoxGeometry(
+      cursor_, paint_offset, parent_offset_, text_combine);
+  const PhysicalRect& physical_box = box_geometry.text_paint_rect;
 #if DCHECK_IS_ON()
   if (text_combine) [[unlikely]] {
     LayoutTextCombine::AssertStyleIsValid(style);
@@ -287,8 +403,8 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
     // Empty selections might be the boundary of the document selection, and
     // thus need to get recorded. We only need to paint the selection if it
     // has a valid range.
-    selection_for_bounds_recording.emplace(root_inline_cursor,
-                                           physical_box.offset, rotation);
+    selection_for_bounds_recording.emplace(
+        root_inline_cursor, box_geometry.selection_offset, rotation);
     if (selection_for_bounds_recording->Status().HasValidRange())
       selection = &selection_for_bounds_recording.value();
   }
@@ -307,7 +423,6 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
   const auto* const svg_inline_text =
       DynamicTo<LayoutSVGInlineText>(layout_object);
   float scaling_factor = 1.0f;
-  bool is_scaled_inline_only = false;
   if (svg_inline_text) [[unlikely]] {
     DCHECK(text_item.IsSvgText());
     scaling_factor = svg_inline_text->ScalingFactor();
@@ -316,10 +431,8 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
         svg_inline_text->Parent()->VisualRectInLocalSVGCoordinates());
   } else {
     DCHECK(!text_item.IsSvgText());
-    if (RuntimeEnabledFeatures::CssFitWidthTextEnabled()) {
-      auto fit_text_scale = text_item.GetFitTextScale();
-      scaling_factor = fit_text_scale.first;
-      is_scaled_inline_only = fit_text_scale.second;
+    if (RuntimeEnabledFeatures::CssTextFitEnabled()) {
+      scaling_factor = text_item.GetTextFitScale();
     }
     PhysicalRect ink_overflow = text_item.SelfInkOverflowRect();
     ink_overflow.Move(physical_box.offset);
@@ -415,8 +528,7 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
   GraphicsContextStateSaver state_saver(context, /*save_and_restore=*/false);
   const int ascent = font_data ? font_data->GetFontMetrics().Ascent() : 0;
   LayoutUnit top = physical_box.offset.top + ascent;
-  if (RuntimeEnabledFeatures::CssFitWidthTextEnabled() &&
-      !is_scaled_inline_only && !svg_inline_text) {
+  if (RuntimeEnabledFeatures::CssTextFitEnabled() && !svg_inline_text) {
     top = LayoutUnit(physical_box.offset.top + ascent * scaling_factor);
   }
   LineRelativeOffset text_origin{physical_box.offset.left, top};
@@ -427,12 +539,124 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
 
   TextPainter text_painter(context, paint_info.GetSvgContextPaints(), *font,
                            visual_rect, text_origin);
-  TextDecorationPainter decoration_painter(text_painter, inline_context_,
-                                           paint_info, style, text_style,
-                                           rotated_box, selection);
+
+  const bool has_applied_text_decorations = style.HasAppliedTextDecorations();
+
+  // Apply text-decoration-skip-spaces by trimming the decoration box.
+  LineRelativeRect decoration_box = rotated_box;
+  const TextDecorationSkipSpaces skip_spaces =
+      RuntimeEnabledFeatures::CSSTextDecorationSkipSpacesEnabled()
+          ? style.GetTextDecorationSkipSpaces()
+          : TextDecorationSkipSpaces::kNone;
+  // For text-decoration-skip-spaces: all, collect interior space run rects
+  // (in item-local line-relative coordinates) so we can clip them out of the
+  // decoration canvas after the writing-mode rotation is applied.
+  Vector<gfx::RectF> interior_space_rects;
+  if (skip_spaces != TextDecorationSkipSpaces::kNone &&
+      has_applied_text_decorations) {
+    const bool is_first_text_on_line = [&]() -> bool {
+      if (cursor_.IsAtFirst()) {
+        return true;
+      }
+      // Check if every preceding inline leaf consists entirely of skip spaces.
+      InlineCursor prev = cursor_;
+      prev.MoveToPreviousInlineLeaf();
+      while (prev) {
+        // Atomic inlines (e.g. <img>) are not text — treat them as non-space
+        // content that breaks the "all spaces" chain.
+        if (!prev.Current().IsText()) {
+          return false;
+        }
+        const StringView prev_text = prev.CurrentText();
+        if (!prev_text.IsAllSpecialCharacters<IsDecorationSkipSpace>()) {
+          return false;
+        }
+        prev.MoveToPreviousInlineLeaf();
+      }
+      return true;
+    }();
+    const bool is_last_text_on_line = [&]() -> bool {
+      InlineCursor next = cursor_;
+      next.MoveToNextInlineLeaf();
+      while (next) {
+        // Atomic inlines (e.g. <img>) are not text — treat them as non-space
+        // content that breaks the "all spaces" chain.
+        if (!next.Current().IsText()) {
+          return false;
+        }
+        const StringView next_text = next.CurrentText();
+        if (!next_text.IsAllSpecialCharacters<IsDecorationSkipSpace>()) {
+          return false;
+        }
+        next.MoveToNextInlineLeaf();
+      }
+      return true;
+    }();
+
+    // For 'all', treat it as 'start end' for space-character trimming, but
+    // also trim any trailing letter-spacing at line edges.
+    const bool is_all = (skip_spaces == TextDecorationSkipSpaces::kAll);
+    const TextDecorationSkipSpaces effective_skip =
+        is_all ? (TextDecorationSkipSpaces::kStart |
+                  TextDecorationSkipSpaces::kEnd)
+               : skip_spaces;
+
+    LayoutUnit extra_end_trim;
+    if (is_all && is_last_text_on_line) {
+      // 'all' additionally skips letter-spacing adjacent to the line end.
+      // letter-spacing is added after each glyph, so the last character on a
+      // line has trailing letter-spacing extending the decoration. Trim it.
+      const float letter_spacing = style.LetterSpacing();
+      if (letter_spacing > 0) {
+        extra_end_trim = LayoutUnit(letter_spacing);
+      }
+    }
+
+    const StringView item_text = cursor_.CurrentText();
+
+    if (is_first_text_on_line || is_last_text_on_line) {
+      SpaceSkipWidths skip_widths =
+          ComputeSpaceSkipWidths(text_item, item_text, effective_skip,
+                                 is_first_text_on_line, is_last_text_on_line);
+      skip_widths.end_width += extra_end_trim;
+      if (skip_widths.start_width > LayoutUnit() ||
+          skip_widths.end_width > LayoutUnit()) {
+        decoration_box.offset.line_left += skip_widths.start_width;
+        decoration_box.size.inline_size -=
+            (skip_widths.start_width + skip_widths.end_width);
+      }
+    }
+    decoration_box.size.inline_size =
+        decoration_box.size.inline_size.ClampNegativeToZero();
+
+    if (is_all) {
+      interior_space_rects = ComputeInteriorSpaceRects(
+          text_item, item_text, decoration_box.offset.line_over,
+          decoration_box.size.block_size);
+      const LayoutUnit item_line_left = LayoutUnit(physical_box.offset.left);
+      for (auto& rect : interior_space_rects) {
+        rect.set_x(rect.x() + item_line_left);
+      }
+    }
+  }
+
+  TextDecorationFragmentContext fragment_context;
+  if (has_applied_text_decorations &&
+      TextDecorationInfo::NeedsFragmentContextForInset(style)) {
+    fragment_context = ComputeTextDecorationFragmentContext(cursor_);
+  }
+  TextDecorationPainter decoration_painter(
+      text_painter, inline_context_, paint_info, style, text_style,
+      decoration_box, selection, fragment_context);
   HighlightPainter highlight_painter(
       fragment_paint_info, text_painter, decoration_painter, paint_info,
       cursor_, text_item, physical_box.offset, style, text_style, selection);
+  // Pass the decoration_box to HighlightPainter so that the kOverlay path
+  // respects text-decoration-skip-spaces trimming.
+  if (skip_spaces != TextDecorationSkipSpaces::kNone &&
+      has_applied_text_decorations) {
+    highlight_painter.SetOriginatingDecorationRect(decoration_box);
+  }
   if (paint_info.phase == PaintPhase::kForeground) {
     if (auto* mf_checker = MobileFriendlinessChecker::From(document)) {
       if (auto* text = DynamicTo<LayoutText>(*layout_object)) {
@@ -465,21 +689,6 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
       svg_state.EnsureShaderTransform().PostConcat(
           fragment_transform.Inverse());
     }
-  } else if (RuntimeEnabledFeatures::CssFitWidthTextEnabled() &&
-             scaling_factor != 1.0f) {
-    state_saver.SaveIfNeeded();
-    AffineTransform t;
-    if (is_scaled_inline_only) {
-      t.SetMatrix(
-          scaling_factor, 0, 0, 1,
-          text_origin.line_left - scaling_factor * text_origin.line_left, 0);
-    } else {
-      t.SetMatrix(
-          scaling_factor, 0, 0, scaling_factor,
-          text_origin.line_left - scaling_factor * text_origin.line_left,
-          text_origin.line_over - scaling_factor * text_origin.line_over);
-    }
-    context.ConcatCTM(t);
   }
 
   const bool paint_marker_backgrounds =
@@ -502,10 +711,17 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
     }
   }
 
+  if (!interior_space_rects.empty()) {
+    state_saver.SaveIfNeeded();
+    for (const gfx::RectF& space_rect : interior_space_rects) {
+      context.ClipOut(space_rect);
+    }
+  }
+
   if (highlight_painter.Selection()) [[unlikely]] {
     PhysicalRect physical_selection =
         highlight_painter.Selection()->PhysicalSelectionRect();
-    if (scaling_factor != 1.0f) {
+    if (svg_inline_text && scaling_factor != 1.0f) {
       physical_selection.offset.Scale(1 / scaling_factor);
       physical_selection.size.Scale(1 / scaling_factor);
     }
@@ -544,16 +760,21 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
       // Shadows must paint before decorations, but painting shadows in their
       // own pass is less efficient, so only do it when decorations are present.
       bool paint_shadows_first =
-          text_style.shadow && style.HasAppliedTextDecorations();
+          text_style.shadow && has_applied_text_decorations;
       if (paint_shadows_first) {
         highlight_painter.PaintOriginatingShadow(text_style, node_id);
       }
       decoration_painter.Begin(text_item, TextDecorationPainter::kOriginating);
       decoration_painter.PaintExceptLineThrough(fragment_paint_info);
-      text_painter.Paint(
-          fragment_paint_info, text_style, node_id, auto_dark_mode,
-          paint_shadows_first ? TextPainter::kTextProperOnly
-                              : TextPainter::kBothShadowsAndTextProper);
+      {
+        std::optional<GraphicsContextStateSaver> fit_text_state_saver;
+        text_painter.ApplyTextFitScale(fragment_paint_info,
+                                       &fit_text_state_saver);
+        text_painter.Paint(
+            fragment_paint_info, text_style, node_id, auto_dark_mode,
+            paint_shadows_first ? TextPainter::kTextProperOnly
+                                : TextPainter::kBothShadowsAndTextProper);
+      }
       decoration_painter.PaintOnlyLineThrough();
       if (highlight_case == HighlightPainter::kFastSpellingGrammar) {
         highlight_painter.FastPaintSpellingGrammarDecorations();
@@ -580,7 +801,7 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
   if (highlight_painter.Selection() && paint_marker_backgrounds) [[unlikely]] {
     if (highlight_case == HighlightPainter::kFastSelection) {
       highlight_painter.Selection()->PaintSelectionBackground(
-          context, node, document, style, rotation);
+          context, node, document, style, paint_info, rotation);
     }
   }
 
@@ -612,6 +833,50 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
       case HighlightPainter::kFastSpellingGrammar:
       case HighlightPainter::kNoHighlights:
         NOTREACHED();
+    }
+  }
+
+  // Paint the character overlapping the block caret with the second value of
+  // caret-color when it's non-auto.
+  std::optional<unsigned> block_caret_char_offset;
+  if (!is_printing && !is_rendering_resource &&
+      paint_info.phase != PaintPhase::kTextClip &&
+      RuntimeEnabledFeatures::CSSCaretColorWithOptionalSecondValueEnabled(
+          layout_object->GetDocument().GetExecutionContext()) &&
+      !layout_object->StyleRef().IsCaretTextColorAuto()) [[unlikely]] {
+    if (LocalFrame* frame = layout_object->GetDocument().GetFrame()) {
+      block_caret_char_offset =
+          frame->Selection().ComputeBlockCaretCharacterOffset(cursor_);
+    }
+  }
+  if (block_caret_char_offset) [[unlikely]] {
+    std::optional<Color> block_text_color =
+        layout_object->StyleRef().ResolvedCaretTextColor();
+    if (block_text_color) {
+      TextPaintStyle block_style = text_style;
+      block_style.fill_color = *block_text_color;
+      block_style.stroke_color = *block_text_color;
+      block_style.emphasis_mark_color = *block_text_color;
+      const unsigned char_start =
+          fragment_paint_info.from + *block_caret_char_offset;
+      const unsigned char_end = char_start + 1;
+      // Clip to the character cell so that any cached SkTextBlob reused by
+      // GraphicsContext::DrawText for the whole fragment can only repaint
+      // this one character with the override color.
+      PhysicalRect char_paint_rect =
+          cursor_.CurrentLocalRect(char_start, char_end);
+      char_paint_rect.Move(physical_box.offset);
+      const LineRelativeRect char_clip_rect =
+          LineRelativeRect::Create(char_paint_rect, rotation);
+      GraphicsContextStateSaver clip_state_saver(context);
+      context.Clip(gfx::RectF(char_clip_rect));
+      std::optional<GraphicsContextStateSaver> fit_text_state_saver;
+      text_painter.ApplyTextFitScale(fragment_paint_info,
+                                     &fit_text_state_saver);
+      text_painter.Paint(fragment_paint_info.WithStartOffset(char_start)
+                             .WithEndOffset(char_end),
+                         block_style, node_id, auto_dark_mode,
+                         TextPainter::kTextProperOnly);
     }
   }
 }

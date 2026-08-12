@@ -7,6 +7,7 @@ import {html} from '//resources/lit/v3_0/lit.rollup.js';
 import type {AppElement} from './app.js';
 
 export function getHtml(this: AppElement) {
+  // clang-format off
   return html`<!--_html_template_start_-->
 <cr-toolbar page-name="$i18n{title}" ?show-search="${this.showSearch_}"
     always-show-logo>
@@ -65,7 +66,7 @@ export function getHtml(this: AppElement) {
         <localized-link slot="description"
             .localizedString=
                 "${this.i18nAdvanced('appManagementNotificationsDescription')}"
-            @link-clicked="${this.openNotificationsSystemSettings_}">
+            @link-clicked="${this.onNotificationsSystemSettingsLinkClicked_}">
         </localized-link>
       ` : ''}
       </app-management-permission-item>
@@ -75,17 +76,23 @@ export function getHtml(this: AppElement) {
       </div>
       <div class="permission-list indented-permission-block">
         <app-management-permission-item class="subpermission-row"
-            icon="app-management:location" .app="${this.app_}"
+            icon="${this.webuiRoundedIconsEnabled_
+                ? 'app-management:location-on'
+                : 'app-management:location-old'}" .app="${this.app_}"
             permission-label="$i18n{appManagementLocationPermissionLabel}"
             permission-type="kLocation">
         </app-management-permission-item>
         <app-management-permission-item class="subpermission-row"
-            icon="app-management:camera" .app="${this.app_}"
+            icon="${this.webuiRoundedIconsEnabled_
+                ? 'app-management:videocam'
+                : 'app-management:camera-old'}" .app="${this.app_}"
             permission-label="$i18n{appManagementCameraPermissionLabel}"
             permission-type="kCamera">
         </app-management-permission-item>
         <app-management-permission-item class="subpermission-row"
-            icon="app-management:microphone" .app="${this.app_}"
+            icon="${this.webuiRoundedIconsEnabled_
+                ? 'app-management:mic'
+                : 'app-management:microphone-old'}" .app="${this.app_}"
             permission-label="$i18n{appManagementMicrophonePermissionLabel}"
             permission-type="kMicrophone">
         </app-management-permission-item>
@@ -112,4 +119,5 @@ export function getHtml(this: AppElement) {
   </div>
 </div>
 <!--_html_template_end_-->`;
+  // clang-format on
 }

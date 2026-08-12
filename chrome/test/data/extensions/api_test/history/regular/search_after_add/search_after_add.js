@@ -5,14 +5,13 @@
 // History api test for Chrome.
 // browser_tests.exe --gtest_filter=HistoryExtensionApiTest.SearchAfterAdd
 
-const scriptUrl = '_test_resources/api_test/history/regular/common.js';
-let loadScript = chrome.test.loadScript(scriptUrl);
+const SCRIPT_URL = '_test_resources/api_test/history/regular/common.js';
+const loadScript = chrome.test.loadScript(SCRIPT_URL);
 
 loadScript.then(async function() {
-chrome.test.runTests([
-  function searchAfterAdd() {
+  chrome.test.runTests([function searchAfterAdd() {
     chrome.history.deleteAll(function() {
-      var VALID_URL = 'http://www.google.com/';
+      const VALID_URL = 'http://www.google.com/';
       chrome.history.addUrl({url: VALID_URL}, function() {
         chrome.history.search({text: ''}, function(historyItems) {
           assertEq(1, historyItems.length);
@@ -21,5 +20,5 @@ chrome.test.runTests([
         });
       });
     });
-  }
-])});
+  }]);
+});

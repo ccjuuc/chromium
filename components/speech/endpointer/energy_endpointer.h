@@ -42,6 +42,7 @@
 #include <memory>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "components/speech/endpointer/energy_endpointer_params.h"
 
 namespace speech {
@@ -69,7 +70,14 @@ class EnergyEndpointer {
   void Init(const EnergyEndpointerParams& params);
 
   // Start the endpointer. This should be called at the beginning of a session.
-  void StartSession();
+  // If |reset_environment| is true (the default), the adaptive decision
+  // threshold and the learned noise/speech level estimates are reset to their
+  // configured defaults. Pass false to begin a new utterance within an ongoing
+  // session while preserving the already-learned acoustic environment; this
+  // avoids a costly threshold re-adaptation before speech can be re-detected,
+  // which otherwise manifests as a delay in detecting the start of the next
+  // utterance.
+  void StartSession(bool reset_environment = true);
 
   // Stop the endpointer.
   void EndSession();
@@ -85,8 +93,7 @@ class EnergyEndpointer {
   // Computes the next input frame and modifies EnergyEndpointer status as
   // appropriate based on the computation.
   void ProcessAudioFrame(int64_t time_us,
-                         const int16_t* samples,
-                         int num_samples,
+                         base::span<const int16_t> samples,
                          float* rms_out);
 
   // Returns the current state of the EnergyEndpointer and the time
@@ -101,10 +108,10 @@ class EnergyEndpointer {
  private:
   class HistoryRing;
 
-  // Resets the endpointer internal state.  If reset_threshold is true, the
+  // Resets the endpointer internal state.  If reset_environment is true, the
   // state will be reset completely, including adaptive thresholds and the
   // removal of all history information.
-  void Restart(bool reset_threshold);
+  void Restart(bool reset_environment);
 
   // Update internal speech and noise levels.
   void UpdateLevels(float rms);

@@ -4,6 +4,7 @@
 
 package org.chromium.chrome.browser.customtabs.features.desktop_popup_header;
 
+import android.content.Context;
 import android.os.Build;
 
 import androidx.annotation.ChecksSdkIntAtLeast;
@@ -14,7 +15,6 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider.CustomTabsUiType;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 
 @NullMarked
 public class DesktopPopupHeaderUtils {
@@ -28,7 +28,6 @@ public class DesktopPopupHeaderUtils {
     public static boolean isDesktopPopupHeaderEnabled(
             final BrowserServicesIntentDataProvider intentDataProvider) {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM
-                && ChromeFeatureList.sAndroidWindowPopupCustomTabUi.isEnabled()
                 && intentDataProvider.getUiType() == CustomTabsUiType.POPUP;
     }
 
@@ -50,5 +49,27 @@ public class DesktopPopupHeaderUtils {
     @IdRes
     public static int getHeaderViewStubViewId() {
         return R.id.desktop_popup_header;
+    }
+
+    /**
+     * Calculates the height of the desktop pop-up header in pixels.
+     *
+     * <p>This method determines the greater of the internal minimum header requirements (based on
+     * resource dimensions) and the system-provided caption bar height.
+     *
+     * @param context The {@link Context} used to retrieve dimension resources.
+     * @param appHeaderHeightPx The height of the window caption bar provided by the OS.
+     * @return The final height of the desktop pop-up header in pixels.
+     */
+    public static int getFinalHeaderHeightPx(Context context, int appHeaderHeightPx) {
+        final int minimumHeaderHeightPx =
+                Math.max(
+                        context.getResources()
+                                .getDimensionPixelSize(
+                                        R.dimen.custom_tabs_popup_title_bar_min_height),
+                        context.getResources()
+                                .getDimensionPixelSize(
+                                        R.dimen.custom_tabs_popup_title_bar_text_height));
+        return Math.max(minimumHeaderHeightPx, appHeaderHeightPx);
     }
 }

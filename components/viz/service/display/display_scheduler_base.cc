@@ -6,6 +6,19 @@
 
 namespace viz {
 
+DrawAndSwapParams::DrawAndSwapParams() = default;
+DrawAndSwapParams::DrawAndSwapParams(const DrawAndSwapParams& other) = default;
+DrawAndSwapParams::DrawAndSwapParams(DrawAndSwapParams&& other) = default;
+DrawAndSwapParams& DrawAndSwapParams::operator=(
+    const DrawAndSwapParams& other) = default;
+DrawAndSwapParams& DrawAndSwapParams::operator=(DrawAndSwapParams&& other) =
+    default;
+DrawAndSwapParams::~DrawAndSwapParams() = default;
+
+int DisplaySchedulerClient::GetCurrentAllocatedBuffers() const {
+  return 0;
+}
+
 DisplaySchedulerBase::DisplaySchedulerBase() = default;
 
 DisplaySchedulerBase::~DisplaySchedulerBase() {

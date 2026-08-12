@@ -9,7 +9,7 @@
 #import "ios/chrome/browser/signin/model/authentication_service_observer_bridge.h"
 #import "ios/chrome/browser/signin/model/system_identity.h"
 
-@interface SendTabToSelfMediator () <IdentityManagerObserverBridgeDelegate> {
+@interface SendTabToSelfMediator () <IdentityManagerObserving> {
   std::unique_ptr<signin::IdentityManagerObserverBridge>
       _identityManagerObserver;
   raw_ptr<AuthenticationService> _authenticationService;
@@ -30,8 +30,7 @@
     _identityManagerObserver =
         std::make_unique<signin::IdentityManagerObserverBridge>(
             _identityManager, self);
-    _primaryIdentity = _authenticationService->GetPrimaryIdentity(
-        signin::ConsentLevel::kSignin);
+    _primaryIdentity = _authenticationService->GetPrimaryIdentity();
   }
   return self;
 }
@@ -48,11 +47,11 @@
   _identityManagerObserver.reset();
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onEndBatchOfPrimaryAccountChanges {
+- (void)batchOfPrimaryAccountChangesDidEnd {
   id<SystemIdentity> primaryIdentity =
-      _authenticationService->GetPrimaryIdentity(signin::ConsentLevel::kSignin);
+      _authenticationService->GetPrimaryIdentity();
   if (primaryIdentity == _primaryIdentity) {
     // No changes, so nothing to do.
     return;

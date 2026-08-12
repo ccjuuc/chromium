@@ -41,7 +41,10 @@ size_t FindInitialQuerySafeString(std::string_view source) {
   for (i = 0; i < base::bits::AlignDown(source.length(), kChunkSize);
        i += kChunkSize) {
     char b __attribute__((vector_size(16)));
-    UNSAFE_TODO(memcpy(&b, source.data() + i, sizeof(b)));
+    // SAFETY: The size of `b` is sizeof(b), of course. `source.data() + i` has
+    // sizeof(b), which is 16, because the loop condition with
+    // base::bits::AlignDown() ensures it.
+    UNSAFE_BUFFERS(memcpy(&b, source.data() + i, sizeof(b)));
 
     // Compare each element with the ranges for CHAR_QUERY
     // (see kSharedCharTypeTable), vectorized so that it creates
@@ -78,17 +81,17 @@ void DoAppendStringOfType(std::basic_string_view<CHAR> source,
   if constexpr (sizeof(CHAR) == 1) {
     if (type == CHAR_QUERY && length >= kMinimumLengthForSIMD) {
       i = FindInitialQuerySafeString(source);
-      output->Append(source.data(), i);
+      output->Append(source.substr(0, i));
     }
   }
   for (; i < length; i++) {
     if (static_cast<UCHAR>(source[i]) >= 0x80) {
-      // ReadUTFCharLossy will fill the code point with
+      // ReadUtfCharLossy will fill the code point with
       // kUnicodeReplacementCharacter when the input is invalid, which is what
       // we want.
       base_icu::UChar32 code_point;
       ReadUtfCharLossy(source, &i, &code_point);
-      AppendUTF8EscapedValue(code_point, output);
+      AppendUtf8EscapedValue(code_point, output);
     } else {
       // Just append the 7-bit character, possibly escaping it.
       unsigned char uch = static_cast<unsigned char>(source[i]);
@@ -147,7 +150,7 @@ void DoOverrideComponent(std::string_view override_source,
 // may get resized while we're overriding a subsequent component. Instead, the
 // caller should use the beginning of the |utf8_buffer| as the string pointer
 // for all components once all overrides have been prepared.
-bool PrepareUTF16OverrideComponent(
+bool PrepareUtf16OverrideComponent(
     bool should_override,
     std::optional<std::u16string_view> override_source,
     CanonOutput* utf8_buffer,
@@ -163,7 +166,7 @@ bool PrepareUTF16OverrideComponent(
 
       // Convert to UTF-8.
       dest_component->begin = utf8_buffer->length();
-      success = ConvertUTF16ToUTF8(override_source_value, utf8_buffer);
+      success = ConvertUtf16ToUtf8(override_source_value, utf8_buffer);
       dest_component->len = utf8_buffer->length() - dest_component->begin;
     }
   }
@@ -201,8 +204,7 @@ void AppendStringOfType(std::u16string_view source,
 bool ReadUtfCharLossy(std::string_view str,
                       size_t* begin,
                       base_icu::UChar32* code_point_out) {
-  if (!base::ReadUnicodeCharacter(str.data(), str.length(), begin,
-                                  code_point_out)) {
+  if (!base::ReadUnicodeCharacter(str, begin, code_point_out)) {
     *code_point_out = kUnicodeReplacementCharacter;
     return false;
   }
@@ -212,8 +214,7 @@ bool ReadUtfCharLossy(std::string_view str,
 bool ReadUtfCharLossy(std::u16string_view str,
                       size_t* begin,
                       base_icu::UChar32* code_point_out) {
-  if (!base::ReadUnicodeCharacter(str.data(), str.length(), begin,
-                                  code_point_out)) {
+  if (!base::ReadUnicodeCharacter(str, begin, code_point_out)) {
     *code_point_out = kUnicodeReplacementCharacter;
     return false;
   }
@@ -228,23 +229,23 @@ void AppendInvalidNarrowString(std::u16string_view input, CanonOutput* output) {
   DoAppendInvalidNarrowString<char16_t, char16_t>(input, output);
 }
 
-bool ConvertUTF16ToUTF8(std::u16string_view input, CanonOutput* output) {
+bool ConvertUtf16ToUtf8(std::u16string_view input, CanonOutput* output) {
   bool success = true;
   for (size_t i = 0; i < input.length(); i++) {
     base_icu::UChar32 code_point;
     success &= ReadUtfCharLossy(input, &i, &code_point);
-    AppendUTF8Value(code_point, output);
+    AppendUtf8Value(code_point, output);
   }
   return success;
 }
 
-bool ConvertUTF8ToUTF16(std::string_view input,
+bool ConvertUtf8ToUtf16(std::string_view input,
                         CanonOutputT<char16_t>* output) {
   bool success = true;
   for (size_t i = 0; i < input.length(); i++) {
     base_icu::UChar32 code_point;
     success &= ReadUtfCharLossy(input, &i, &code_point);
-    AppendUTF16Value(code_point, output);
+    AppendUtf16Value(code_point, output);
   }
   return success;
 }
@@ -252,9 +253,9 @@ bool ConvertUTF8ToUTF16(std::string_view input,
 void SetupOverrideComponents(const Replacements<char>& repl,
                              Replacements<char>& overridden) {
   // Get the source and parsed structures of the things we are replacing.
-  const URLComponentSource<char>& repl_source = repl.sources();
+  const UrlComponentSource<char>& repl_source = repl.sources();
   const Parsed& repl_parsed = repl.components();
-  URLComponentSource<char>* source = &overridden.sources_;
+  UrlComponentSource<char>* source = &overridden.sources_;
   Parsed* parsed = &overridden.components_;
 
   DoOverrideComponent(repl_source.scheme, repl_parsed.scheme, &source->scheme,
@@ -280,28 +281,28 @@ bool SetupUtf16OverrideComponents(const Replacements<char16_t>& repl,
                                   Replacements<char>& overridden) {
   bool success = true;
 
-  URLComponentSource<char>* source = &overridden.sources_;
+  UrlComponentSource<char>* source = &overridden.sources_;
   Parsed* parsed = &overridden.components_;
 
-  success &= PrepareUTF16OverrideComponent(repl.IsSchemeOverridden(),
+  success &= PrepareUtf16OverrideComponent(repl.IsSchemeOverridden(),
                                            repl.MaybeScheme(), &utf8_buffer,
                                            &parsed->scheme);
-  success &= PrepareUTF16OverrideComponent(repl.IsUsernameOverridden(),
+  success &= PrepareUtf16OverrideComponent(repl.IsUsernameOverridden(),
                                            repl.MaybeUsername(), &utf8_buffer,
                                            &parsed->username);
-  success &= PrepareUTF16OverrideComponent(repl.IsPasswordOverridden(),
+  success &= PrepareUtf16OverrideComponent(repl.IsPasswordOverridden(),
                                            repl.MaybePassword(), &utf8_buffer,
                                            &parsed->password);
-  success &= PrepareUTF16OverrideComponent(
+  success &= PrepareUtf16OverrideComponent(
       repl.IsHostOverridden(), repl.MaybeHost(), &utf8_buffer, &parsed->host);
-  success &= PrepareUTF16OverrideComponent(
+  success &= PrepareUtf16OverrideComponent(
       repl.IsPortOverridden(), repl.MaybePort(), &utf8_buffer, &parsed->port);
-  success &= PrepareUTF16OverrideComponent(
+  success &= PrepareUtf16OverrideComponent(
       repl.IsPathOverridden(), repl.MaybePath(), &utf8_buffer, &parsed->path);
   success &=
-      PrepareUTF16OverrideComponent(repl.IsQueryOverridden(), repl.MaybeQuery(),
+      PrepareUtf16OverrideComponent(repl.IsQueryOverridden(), repl.MaybeQuery(),
                                     &utf8_buffer, &parsed->query);
-  success &= PrepareUTF16OverrideComponent(
+  success &= PrepareUtf16OverrideComponent(
       repl.IsRefOverridden(), repl.MaybeRef(), &utf8_buffer, &parsed->ref);
 
   // PrepareUTF16OverrideComponent will not have set the data pointer since the
@@ -334,26 +335,5 @@ bool SetupUtf16OverrideComponents(const Replacements<char16_t>& repl,
 
   return success;
 }
-
-#ifndef WIN32
-
-int _itoa_s(int value, char* buffer, size_t size_in_chars, int radix) {
-  const char* format_str;
-  if (radix == 10)
-    format_str = "%d";
-  else if (radix == 16)
-    format_str = "%x";
-  else
-    return EINVAL;
-
-  int written = UNSAFE_TODO(snprintf(buffer, size_in_chars, format_str, value));
-  if (static_cast<size_t>(written) >= size_in_chars) {
-    // Output was truncated, or written was negative.
-    return EINVAL;
-  }
-  return 0;
-}
-
-#endif  // !WIN32
 
 }  // namespace url

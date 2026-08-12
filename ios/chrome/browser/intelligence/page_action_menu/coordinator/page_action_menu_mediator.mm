@@ -4,6 +4,9 @@
 
 #import "ios/chrome/browser/intelligence/page_action_menu/coordinator/page_action_menu_mediator.h"
 
+#import <optional>
+
+#import "base/scoped_observation.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/content_settings/core/browser/host_content_settings_map.h"
 #import "components/prefs/pref_service.h"
@@ -19,25 +22,32 @@
 #import "ios/chrome/browser/infobars/model/infobar_type.h"
 #import "ios/chrome/browser/infobars/model/overlays/default_infobar_overlay_request_factory.h"
 #import "ios/chrome/browser/infobars/model/overlays/infobar_overlay_request_inserter.h"
-#import "ios/chrome/browser/intelligence/bwg/model/bwg_service.h"
-#import "ios/chrome/browser/intelligence/bwg/model/bwg_tab_helper.h"
+#import "ios/chrome/browser/intelligence/bwg/metrics/gemini_metrics.h"
+#import "ios/chrome/browser/intelligence/bwg/model/gemini_service.h"
+#import "ios/chrome/browser/intelligence/bwg/model/gemini_tab_helper.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_availability.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
+#import "ios/chrome/browser/intelligence/page_action_menu/ui/page_action_menu_consumer.h"
+#import "ios/chrome/browser/intelligence/page_action_menu/ui/page_action_menu_content_entry_point.h"
 #import "ios/chrome/browser/intelligence/page_action_menu/ui/page_action_menu_feature.h"
 #import "ios/chrome/browser/intelligence/page_action_menu/utils/ai_hub_metrics.h"
-#import "ios/chrome/browser/lens_overlay/coordinator/lens_overlay_availability.h"
+#import "ios/chrome/browser/lens_overlay/public/lens_overlay_availability.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_modality.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_request_queue.h"
 #import "ios/chrome/browser/price_insights/model/price_insights_model.h"
 #import "ios/chrome/browser/reader_mode/model/features.h"
+#import "ios/chrome/browser/reader_mode/model/reader_mode_browser_agent.h"
+#import "ios/chrome/browser/reader_mode/model/reader_mode_browser_agent_observer_bridge.h"
 #import "ios/chrome/browser/reader_mode/model/reader_mode_tab_helper.h"
+#import "ios/chrome/browser/reader_mode/model/reader_mode_web_state_utils.h"
 #import "ios/chrome/browser/shared/public/commands/contextual_sheet_commands.h"
 #import "ios/chrome/browser/shared/public/commands/page_action_menu_commands.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
+#import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/translate/model/chrome_ios_translate_client.h"
 #import "ios/chrome/browser/web/model/blocked_popup_tab_helper.h"
 #import "ios/chrome/grit/ios_strings.h"
-#import "ios/public/provider/chrome/browser/bwg/bwg_api.h"
 #import "ios/web/public/permissions/permissions.h"
 #import "ios/web/public/web_state.h"
 #import "ios/web/public/web_state_observer_bridge.h"
@@ -48,9 +58,18 @@ namespace {
 // The size of icons displayed in feature rows.
 const CGFloat kFeatureRowIconSize = 20;
 
+// Returns whether it is possible to start a sign-in.
+bool SigninIsPossible(AuthenticationService* auth_service) {
+  if (!auth_service) {
+    return false;
+  }
+  return !auth_service->HasPrimaryIdentity() && auth_service->SigninEnabled();
+}
+
 }  // namespace
 
-@interface PageActionMenuMediator () <CRWWebStateObserver>
+@interface PageActionMenuMediator () <CRWWebStateObserver,
+                                      ReaderModeBrowserAgentObserving>
 @end
 
 @implementation PageActionMenuMediator {
@@ -60,6 +79,9 @@ const CGFloat kFeatureRowIconSize = 20;
   // Observer for the WebState.
   std::unique_ptr<web::WebStateObserverBridge> _webStateObserver;
 
+  // The authentication service to check sign-in status.
+  raw_ptr<AuthenticationService> _authenticationService;
+
   // The `PrefService` used to store reminder data.
   raw_ptr<PrefService> _profilePrefs;
 
@@ -67,34 +89,53 @@ const CGFloat kFeatureRowIconSize = 20;
   raw_ptr<TemplateURLService> _templateURLService;
 
   // The service for the Gemini floaty.
-  raw_ptr<BwgService> _BWGService;
+  raw_ptr<GeminiService> _geminiService;
+
+  // The tab helper for the Gemini floaty.
+  raw_ptr<GeminiTabHelper> _geminiTabHelper;
 
   // The tab helper for Reader mode.
   raw_ptr<ReaderModeTabHelper> _readerModeTabHelper;
+
+  // The browser agent for Reader mode bridge.
+  std::unique_ptr<ReaderModeBrowserAgentObserverBridge>
+      _readerModeObserverBridge;
+  std::optional<base::ScopedObservation<ReaderModeBrowserAgent,
+                                        ReaderModeBrowserAgent::Observer>>
+      _readerModeScopedObservation;
 
   // The host content settings map for managing site permissions.
   raw_ptr<HostContentSettingsMap> _hostContentSettingsMap;
 }
 
 - (instancetype)initWithWebState:(web::WebState*)webState
+           authenticationService:(AuthenticationService*)authenticationService
               profilePrefService:(PrefService*)profilePrefs
               templateURLService:(TemplateURLService*)templateURLService
-                      BWGService:(BwgService*)BWGService
+                   geminiService:(GeminiService*)geminiService
+                 geminiTabHelper:(GeminiTabHelper*)geminiTabHelper
              readerModeTabHelper:(ReaderModeTabHelper*)readerModeTabHelper
+          readerModeBrowserAgent:(ReaderModeBrowserAgent*)readerModeBrowserAgent
           hostContentSettingsMap:
               (HostContentSettingsMap*)hostContentSettingsMap {
   self = [super init];
   if (self) {
     _webState = webState;
+    _authenticationService = authenticationService;
     _profilePrefs = profilePrefs;
     _templateURLService = templateURLService;
-    _BWGService = BWGService;
+    _geminiService = geminiService;
+    _geminiTabHelper = geminiTabHelper;
     _readerModeTabHelper = readerModeTabHelper;
     _hostContentSettingsMap = hostContentSettingsMap;
     _webStateObserver = std::make_unique<web::WebStateObserverBridge>(self);
     _webState->AddObserver(_webStateObserver.get());
-    if (IsZeroStateSuggestionsAIHubEnabled()) {
-      [self executeGeminiZeroStateSuggestions];
+
+    if (readerModeBrowserAgent) {
+      _readerModeObserverBridge =
+          std::make_unique<ReaderModeBrowserAgentObserverBridge>(self);
+      _readerModeScopedObservation.emplace(_readerModeObserverBridge.get());
+      _readerModeScopedObservation->Observe(readerModeBrowserAgent);
     }
   }
   return self;
@@ -107,45 +148,128 @@ const CGFloat kFeatureRowIconSize = 20;
 #pragma mark - Public
 
 - (void)disconnect {
+  _readerModeScopedObservation.reset();
+  _readerModeObserverBridge.reset();
   _readerModeTabHelper = nullptr;
   [self detachFromWebState];
 }
 
 - (BOOL)isLensAvailableForProfile {
-  return IsLensOverlayAvailable(_profilePrefs);
+  return IsLensOverlayAllowedByPolicy(_profilePrefs);
+}
+
+#pragma mark - ReaderModeBrowserAgentObserving
+
+- (void)readerModeBrowserAgent:(ReaderModeBrowserAgent*)agent
+            didHideModeContent:(BOOL)animated {
+  [self.pageActionMenuHandler dismissPageActionMenuWithCompletion:nil];
+}
+
+- (void)readerModeBrowserAgentDestroyed:(ReaderModeBrowserAgent*)agent {
+  _readerModeScopedObservation.reset();
 }
 
 #pragma mark - PageActionMenuMutator
 
-- (BOOL)isLensAvailableForTraitCollection:(UITraitCollection*)traitCollection {
-  BOOL isLandscape = IsCompactHeight(traitCollection);
-  return [self isLensAvailableForProfile] &&
-         search::DefaultSearchProviderIsGoogle(_templateURLService) &&
-         !isLandscape;
-}
-
-- (BOOL)isGeminiAvailable {
-  if (IsGeminiImmediateOverlayEnabled()) {
-    return _BWGService->IsBwgAvailableForWebState(_webState);
-  } else {
-    return !_webState->IsLoading() &&
-           _BWGService->IsBwgAvailableForWebState(_webState);
+- (BOOL)shouldShowFeatureEntryPoints {
+  if (IsPageActionMenuAuthFlowEnabled()) {
+    return YES;
   }
-}
-
-- (BOOL)isReaderModeAvailable {
-  // TODO(crbug.com/447371545): Migrate Reader Mode to the feature type system.
-  if (!_readerModeTabHelper) {
-    return NO;
-  }
-  return _readerModeTabHelper->CurrentPageIsEligibleForReaderMode();
+  return [self isUserSignedIn];
 }
 
 - (BOOL)isReaderModeActive {
-  if (!_readerModeTabHelper) {
-    return NO;
+  return IsReaderModeActiveInWebState(_webState);
+}
+
+- (PageActionMenuContentEntryPoint*)geminiEntryPoint {
+  if (_webState && _webState->GetBrowserState()->IsOffTheRecord()) {
+    return [[PageActionMenuContentEntryPoint alloc] initWithEnabled:NO];
   }
-  return _readerModeTabHelper->IsActive();
+
+  if (!_geminiService || !_geminiTabHelper) {
+    return [[PageActionMenuContentEntryPoint alloc] initWithEnabled:NO];
+  }
+
+  // Signed-out users see an enabled button; tap routes to sign-in.
+  if (IsPageActionMenuAuthFlowEnabled() && ![self isUserSignedIn]) {
+    if (!SigninIsPossible(_authenticationService)) {
+      return [[PageActionMenuContentEntryPoint alloc] initWithEnabled:NO];
+    }
+    return [[PageActionMenuContentEntryPoint alloc] initWithEnabled:YES];
+  }
+
+  ProfileIOS* profile =
+      ProfileIOS::FromBrowserState(_webState->GetBrowserState());
+  gemini::GeminiAvailabilityResult availability =
+      gemini::IsGeminiAvailable(gemini::EntryPoint::AIHub, profile, _webState);
+  if (!availability.enabled) {
+    if (availability.ineligibility_reasons.has_value() &&
+        availability.ineligibility_reasons->chrome_enterprise) {
+      return [[PageActionMenuContentEntryPoint alloc]
+          initWithEnabled:NO
+               footerItem:[ContentEntryPointUnavailabilityItem
+                              geminiEnterprise]];
+    }
+    return [[PageActionMenuContentEntryPoint alloc] initWithEnabled:NO];
+  }
+
+  return [[PageActionMenuContentEntryPoint alloc] initWithEnabled:YES];
+}
+
+- (PageActionMenuContentEntryPoint*)lensEntryPointForTraitCollection:
+    (UITraitCollection*)traitCollection {
+  const BOOL isLandscape = IsCompactHeight(traitCollection);
+  const BOOL hasDefaultSearchEngine =
+      search::DefaultSearchProviderIsGoogle(_templateURLService);
+  const BOOL featureAvailable = [self isLensAvailableForProfile];
+  if (featureAvailable && hasDefaultSearchEngine && !isLandscape) {
+    return [[PageActionMenuContentEntryPoint alloc] initWithEnabled:YES];
+  }
+
+  if (!featureAvailable) {
+    return [[PageActionMenuContentEntryPoint alloc]
+        initWithEnabled:NO
+             footerItem:[ContentEntryPointUnavailabilityItem lensEnterprise]];
+  }
+
+  if (!hasDefaultSearchEngine) {
+    return [[PageActionMenuContentEntryPoint alloc]
+        initWithEnabled:NO
+             footerItem:[ContentEntryPointUnavailabilityItem lensSearchEngine]];
+  }
+
+  // Disabled without disclaimer.
+  return [[PageActionMenuContentEntryPoint alloc] initWithEnabled:NO];
+}
+
+- (PageActionMenuContentEntryPoint*)readerModeEntryPoint {
+  // TODO(crbug.com/447371545): Migrate Reader Mode to the feature type system.
+  if (!_readerModeTabHelper) {
+    return [[PageActionMenuContentEntryPoint alloc] initWithEnabled:NO];
+  }
+
+  const BOOL eligible =
+      _readerModeTabHelper->CurrentPageIsEligibleForReaderMode();
+  // There are no readerMode non eligibility disclaimers.
+  return [[PageActionMenuContentEntryPoint alloc] initWithEnabled:eligible];
+}
+
+- (NSArray<ContentEntryPointUnavailabilityItem*>*)
+    unavailabilityItemsForTraitCollection:(UITraitCollection*)traitCollection {
+  NSMutableArray<ContentEntryPointUnavailabilityItem*>* items =
+      [NSMutableArray array];
+  NSArray<PageActionMenuContentEntryPoint*>* mainEntryPoints = @[
+    [self lensEntryPointForTraitCollection:traitCollection],
+    [self readerModeEntryPoint], [self geminiEntryPoint]
+  ];
+  for (PageActionMenuContentEntryPoint* entryPoint in mainEntryPoints) {
+    if (entryPoint.unavailabilityItem) {
+      [items addObject:entryPoint.unavailabilityItem];
+    }
+  }
+
+  return items;
 }
 
 - (BOOL)isFeatureAvailable:(PageActionMenuFeatureType)featureType {
@@ -155,8 +279,7 @@ const CGFloat kFeatureRowIconSize = 20;
 
   switch (featureType) {
     case PageActionMenuTranslate: {
-      ChromeIOSTranslateClient* translateClient =
-          ChromeIOSTranslateClient::FromWebState(_webState);
+      ChromeIOSTranslateClient* translateClient = [self findTranslateClient];
       return IsTranslateActive(translateClient);
     }
     case PageActionMenuCameraPermission: {
@@ -180,7 +303,7 @@ const CGFloat kFeatureRowIconSize = 20;
 
       // Show row only if blocking is active AND there are blocked popups.
       BlockedPopupTabHelper* helper =
-          BlockedPopupTabHelper::GetOrCreateForWebState(_webState);
+          BlockedPopupTabHelper::FromWebState(_webState);
       bool hasBlockedPopups = helper && helper->GetBlockedPopupCount() > 0;
 
       return setting == CONTENT_SETTING_BLOCK && hasBlockedPopups;
@@ -216,8 +339,7 @@ const CGFloat kFeatureRowIconSize = 20;
     return nil;
   }
 
-  ChromeIOSTranslateClient* translateClient =
-      ChromeIOSTranslateClient::FromWebState(_webState);
+  ChromeIOSTranslateClient* translateClient = [self findTranslateClient];
 
   if (!IsTranslateActive(translateClient) ||
       !translateClient->GetTranslateManager()) {
@@ -250,7 +372,7 @@ const CGFloat kFeatureRowIconSize = 20;
     return 0;
   }
   BlockedPopupTabHelper* helper =
-      BlockedPopupTabHelper::GetOrCreateForWebState(_webState);
+      BlockedPopupTabHelper::FromWebState(_webState);
   return helper ? helper->GetBlockedPopupCount() : 0;
 }
 
@@ -272,9 +394,13 @@ const CGFloat kFeatureRowIconSize = 20;
   switch (featureType) {
     case PageActionMenuCameraPermission:
       permission = web::PermissionCamera;
+      RecordPageActionMenuFeatureRowUsed(
+          IOSPageActionMenuFeatureType::kCameraPermission);
       break;
     case PageActionMenuMicrophonePermission:
       permission = web::PermissionMicrophone;
+      RecordPageActionMenuFeatureRowUsed(
+          IOSPageActionMenuFeatureType::kMicrophonePermission);
       break;
     default:
       return;
@@ -299,8 +425,8 @@ const CGFloat kFeatureRowIconSize = 20;
         initWithFeatureType:PageActionMenuTranslate
                       title:l10n_util::GetNSString(
                                 IDS_IOS_AI_HUB_TRANSLATE_LABEL)
-                       icon:CustomSymbolTemplateWithPointSize(
-                                kTranslateSymbol, kFeatureRowIconSize)
+                       icon:SymbolTemplateWithPointSize(SymbolTranslate,
+                                                        kFeatureRowIconSize)
                  actionType:PageActionMenuButtonAction];
     translateFeature.subtitle = [self translateLanguagePair];
     translateFeature.actionType = PageActionMenuSettingsAction;
@@ -318,8 +444,8 @@ const CGFloat kFeatureRowIconSize = 20;
         initWithFeatureType:PageActionMenuPopupBlocker
                       title:l10n_util::GetNSString(
                                 IDS_IOS_AI_HUB_POPUP_BLOCKER_LABEL)
-                       icon:CustomSymbolWithPointSize(kPopupBadgeMinusSymbol,
-                                                      kFeatureRowIconSize)
+                       icon:SymbolWithPointSize(SymbolPopupBadgeMinus,
+                                                kFeatureRowIconSize)
                  actionType:PageActionMenuButtonAction];
 
     NSInteger blockedCount = [self blockedPopupCount];
@@ -341,8 +467,8 @@ const CGFloat kFeatureRowIconSize = 20;
         initWithFeatureType:PageActionMenuCameraPermission
                       title:l10n_util::GetNSString(
                                 IDS_IOS_AI_HUB_CAMERA_PERMISSION_LABEL)
-                       icon:CustomSymbolWithPointSize(kCameraFillSymbol,
-                                                      kFeatureRowIconSize)
+                       icon:SymbolWithPointSize(SymbolCameraFill,
+                                                kFeatureRowIconSize)
                  actionType:PageActionMenuToggleAction];
     web::PermissionState state =
         _webState->GetStateForPermission(web::PermissionCamera);
@@ -358,8 +484,8 @@ const CGFloat kFeatureRowIconSize = 20;
         initWithFeatureType:PageActionMenuMicrophonePermission
                       title:l10n_util::GetNSString(
                                 IDS_IOS_AI_HUB_MICROPHONE_PERMISSION_LABEL)
-                       icon:DefaultSymbolWithPointSize(kMicrophoneFillSymbol,
-                                                       kFeatureRowIconSize)
+                       icon:SymbolWithPointSize(SymbolMicrophoneFill,
+                                                kFeatureRowIconSize)
                  actionType:PageActionMenuToggleAction];
     web::PermissionState state =
         _webState->GetStateForPermission(web::PermissionMicrophone);
@@ -374,11 +500,36 @@ const CGFloat kFeatureRowIconSize = 20;
         initWithFeatureType:PageActionMenuPriceTracking
                       title:l10n_util::GetNSString(
                                 IDS_IOS_AI_HUB_PRICE_TRACKING_LABEL)
-                       icon:CustomSymbolWithPointSize(kDownTrendSymbol,
-                                                      kFeatureRowIconSize)
+                       icon:SymbolWithPointSize(SymbolDownTrend,
+                                                kFeatureRowIconSize)
                  actionType:PageActionMenuButtonAction];
-    priceTrackingFeature.actionText =
-        l10n_util::GetNSString(IDS_IOS_AI_HUB_PRICE_TRACKING_BUTTON_LABEL);
+    BOOL isSubscribed = NO;
+    ContextualPanelTabHelper* tabHelper =
+        ContextualPanelTabHelper::FromWebState(_webState);
+    if (tabHelper) {
+      std::vector<base::WeakPtr<ContextualPanelItemConfiguration>> configs =
+          tabHelper->GetCurrentCachedConfigurations();
+      for (const auto& config_weak : configs) {
+        if (!config_weak) {
+          continue;
+        }
+        ContextualPanelItemConfiguration* config = config_weak.get();
+        if (config->item_type == ContextualPanelItemType::PriceInsightsItem) {
+          PriceInsightsItemConfiguration* priceInsightsConfig =
+              static_cast<PriceInsightsItemConfiguration*>(config);
+          isSubscribed = priceInsightsConfig->is_subscribed;
+          break;
+        }
+      }
+    }
+
+    if (isSubscribed) {
+      priceTrackingFeature.actionText =
+          l10n_util::GetNSString(IDS_IOS_AI_HUB_PRICE_TRACKING_BUTTON_LABEL);
+    } else {
+      priceTrackingFeature.actionText = nil;
+    }
+
     [features addObject:priceTrackingFeature];
   }
 
@@ -391,7 +542,7 @@ const CGFloat kFeatureRowIconSize = 20;
   }
 
   BlockedPopupTabHelper* helper =
-      BlockedPopupTabHelper::GetOrCreateForWebState(_webState);
+      BlockedPopupTabHelper::FromWebState(_webState);
   if (!helper) {
     return;
   }
@@ -424,8 +575,7 @@ const CGFloat kFeatureRowIconSize = 20;
     return;
   }
 
-  ChromeIOSTranslateClient* translateClient =
-      ChromeIOSTranslateClient::FromWebState(_webState);
+  ChromeIOSTranslateClient* translateClient = [self findTranslateClient];
   if (!translateClient || !translateClient->GetTranslateManager()) {
     return;
   }
@@ -512,8 +662,7 @@ std::string GetTargetLanguageCode(ChromeIOSTranslateClient* translate_client) {
     return;
   }
 
-  ChromeIOSTranslateClient* translateClient =
-      ChromeIOSTranslateClient::FromWebState(webState);
+  ChromeIOSTranslateClient* translateClient = [self findTranslateClient];
   if (!translateClient || !translateClient->GetTranslateManager()) {
     return;
   }
@@ -559,21 +708,19 @@ std::string GetTargetLanguageCode(ChromeIOSTranslateClient* translate_client) {
       params);
 }
 
-// Fetches zero-state suggestions from the BWG tab helper and pass them to the
-// UI provider through a callback.
-- (void)executeGeminiZeroStateSuggestions {
-  if (!IsZeroStateSuggestionsAIHubEnabled()) {
-    return;
+// Finds the translate client depending on whether Reader mode is active.
+- (ChromeIOSTranslateClient*)findTranslateClient {
+  web::WebState* targetWebState = _webState;
+  ReaderModeTabHelper* readerModeTabHelper =
+      ReaderModeTabHelper::FromWebState(_webState);
+  if (readerModeTabHelper) {
+    web::WebState* readerModeWebState =
+        readerModeTabHelper->GetReaderModeWebState();
+    if (readerModeWebState) {
+      targetWebState = readerModeWebState;
+    }
   }
-  BwgTabHelper* tabHelper = BwgTabHelper::FromWebState(_webState);
-  if (!tabHelper) {
-    return;
-  }
-
-  tabHelper->ExecuteZeroStateSuggestions(
-      base::BindOnce(^(NSArray<NSString*>* suggestions){
-          // No-op.
-      }));
+  return ChromeIOSTranslateClient::FromWebState(targetWebState);
 }
 
 // Finds the translate infobar.
@@ -598,6 +745,53 @@ std::string GetTargetLanguageCode(ChromeIOSTranslateClient* translate_client) {
   if (translateInfobar) {
     translateInfobar->set_accepted(accepted);
   }
+}
+
+// Returns true if the user is signed in.
+- (BOOL)isUserSignedIn {
+  if (!_authenticationService) {
+    return NO;
+  }
+  return _authenticationService->HasPrimaryIdentity();
+}
+
+- (BOOL)isManagedAccount {
+  if (!_authenticationService) {
+    return NO;
+  }
+  return _authenticationService->HasPrimaryIdentityManaged();
+}
+
+- (BOOL)isGeminiEligibilityLoading {
+  if (!_geminiService) {
+    return NO;
+  }
+  return _geminiService->IsWorkspacePolicyCheckPending();
+}
+
+// Returns YES if the signed-in user is ineligible due to workspace
+// restriction specifically. This is the only ineligibility that can be
+// resolved by switching accounts without triggering a profile switch.
+// Enterprise managed accounts trigger a profile switch on sign-in, and
+// account capability (U13/U18) applies to all accounts the user owns.
+- (BOOL)isIneligibleGeminiAccountSwitchable {
+  if (![self isUserSignedIn] || !_geminiService ||
+      !_authenticationService->SigninEnabled()) {
+    return NO;
+  }
+
+  ProfileIOS* profile =
+      ProfileIOS::FromBrowserState(_webState->GetBrowserState());
+  gemini::GeminiAvailabilityResult availability =
+      gemini::IsGeminiAvailable(gemini::EntryPoint::AIHub, profile, _webState);
+
+  if (!availability.ineligibility_reasons.has_value()) {
+    return NO;
+  }
+
+  return !availability.ineligibility_reasons->chrome_enterprise &&
+         !availability.ineligibility_reasons->account_capability &&
+         availability.ineligibility_reasons->workspace;
 }
 
 @end

@@ -10,7 +10,7 @@
 
 #include "base/barrier_closure.h"
 #include "base/base64.h"
-#include "base/containers/contains.h"
+#include "base/byte_size.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
@@ -30,6 +30,7 @@
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/common/child_process_id_util.h"
 #include "content/public/common/content_client.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
@@ -39,6 +40,7 @@
 #include "net/base/mime_sniffer.h"
 #include "net/cookies/cookie_access_result.h"
 #include "net/cookies/cookie_util.h"
+#include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
 #include "net/url_request/redirect_info.h"
@@ -53,7 +55,6 @@
 #include "services/network/public/cpp/resource_request_body.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
 #include "services/network/public/mojom/early_hints.mojom.h"
-#include "services/network/public/mojom/encoded_body_length.mojom-forward.h"
 #include "services/network/public/mojom/encoded_body_length.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
@@ -153,8 +154,7 @@ DevToolsURLLoaderInterceptor::Pattern::Pattern(
 bool DevToolsURLLoaderInterceptor::Pattern::Matches(
     const std::string& url,
     blink::mojom::ResourceType resource_type) const {
-  if (!resource_types.empty() &&
-      !base::Contains(resource_types, resource_type)) {
+  if (!resource_types.empty() && !resource_types.contains(resource_type)) {
     return false;
   }
   return base::MatchPattern(url, url_pattern);
@@ -387,9 +387,10 @@ class NoOpHeaderClient final : public network::mojom::TrustedHeaderClient {
   NoOpHeaderClient& operator=(const NoOpHeaderClient&) = delete;
   ~NoOpHeaderClient() override = default;
 
-  void OnBeforeSendHeaders(const net::HttpRequestHeaders& headers,
+  void OnBeforeSendHeaders(const GURL& request_url,
+                           const net::HttpRequestHeaders& headers,
                            OnBeforeSendHeadersCallback callback) override {
-    std::move(callback).Run(net::OK, std::nullopt);
+    std::move(callback).Run(net::OK, std::nullopt, std::nullopt);
   }
 
   void OnHeadersReceived(const std::string& headers,
@@ -505,9 +506,7 @@ class InterceptionJob : public network::mojom::URLLoaderClient,
 
   // network::mojom::URLLoader methods
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_headers,
+      network::HttpRequestHeadersUpdateParams headers_update_params,
       const std::optional<GURL>& new_url) override;
   void SetPriority(net::RequestPriority priority,
                    int32_t intra_priority_value) override;
@@ -527,7 +526,8 @@ class InterceptionJob : public network::mojom::URLLoaderClient,
   void OnComplete(const network::URLLoaderCompletionStatus& status) override;
 
   // network::mojom::TrustedHeaderClient methods
-  void OnBeforeSendHeaders(const net::HttpRequestHeaders& headers,
+  void OnBeforeSendHeaders(const GURL& request_url,
+                           const net::HttpRequestHeaders& headers,
                            OnBeforeSendHeadersCallback callback) override;
   void OnHeadersReceived(const std::string& headers,
                          const net::IPEndPoint& endpoint,
@@ -539,7 +539,8 @@ class InterceptionJob : public network::mojom::URLLoaderClient,
       const net::HttpRequestHeaders& original_headers,
       OnBeforeSendHeadersCallback original_callback,
       int result_from_target,
-      const std::optional<net::HttpRequestHeaders>& headers_from_target);
+      const std::optional<net::HttpRequestHeaders>& headers_from_target,
+      std::optional<base::DictValue> extended_net_log_events);
 
   void StartLoadingResponseBody(mojo::ScopedDataPipeConsumerHandle body);
 
@@ -904,8 +905,11 @@ void DevToolsURLLoaderInterceptor::HandleAuthRequest(
 }
 
 DevToolsURLLoaderInterceptor::DevToolsURLLoaderInterceptor(
-    RequestInterceptedCallback callback)
-    : request_intercepted_callback_(std::move(callback)), weak_factory_(this) {}
+    RequestInterceptedCallback callback,
+    CheckCookieAccessCallback cookie_access_callback)
+    : request_intercepted_callback_(std::move(callback)),
+      cookie_access_callback_(std::move(cookie_access_callback)),
+      weak_factory_(this) {}
 
 DevToolsURLLoaderInterceptor::~DevToolsURLLoaderInterceptor() {
   for (auto const& entry : jobs_)
@@ -1027,7 +1031,8 @@ InterceptionJob::InterceptionJob(
     mojo::PendingRemote<network::mojom::URLLoaderFactory> target_factory,
     mojo::PendingRemote<network::mojom::CookieManager> cookie_manager)
     : id_prefix_(id),
-      global_req_id_(process_id, create_loader_params->request_id),
+      global_req_id_(ToOriginatingProcessIdUnsafe(process_id),
+                     create_loader_params->request_id),
       frame_token_(frame_token),
       report_upload_(!!create_loader_params->request.request_body),
       interceptor_(interceptor),
@@ -1329,15 +1334,28 @@ Response InterceptionJob::InnerContinueRequest(
 
 void InterceptionJob::ProcessFollowRedirect(
     const net::HttpRequestHeaders& modified_cors_exempt_headers) {
-  std::vector<std::string> removed_headers;
-  net::HttpRequestHeaders modified_headers;
   CHECK(headers_before_redirect_);
+  network::HttpRequestHeadersUpdateParams headers_update_params;
   HeadersOverride::ComputeModifications(*headers_before_redirect_,
                                         create_loader_params_->request.headers,
-                                        removed_headers, modified_headers);
+                                        headers_update_params.removed_headers,
+                                        headers_update_params.modified_headers);
+  headers_update_params.modified_cors_exempt_headers =
+      modified_cors_exempt_headers;
+  // Never report Origin as a client modification. The diff above is taken
+  // against the pre-redirect headers, so the Origin that the browser itself
+  // recomputed for this redirect (in FollowRedirect(), mirroring what the
+  // network service does) shows up here as though the client had set it.
+  // Forwarding it trips the network service's guard against modifying Origin
+  // on redirect and fails the request with net::ERR_INVALID_ARGUMENT, even for
+  // a client that never touched Origin. Dropping it is safe in every case: the
+  // network service recomputes the same value itself, so the request is
+  // unchanged on the wire, and Origin is not a header clients are allowed to
+  // change on a redirect anyway.
+  headers_update_params.modified_headers.RemoveHeader(
+      net::HttpRequestHeaders::kOrigin);
   headers_before_redirect_.reset();
-  loader_->FollowRedirect(removed_headers, modified_headers,
-                          modified_cors_exempt_headers, std::nullopt);
+  loader_->FollowRedirect(std::move(headers_update_params), std::nullopt);
   state_ = State::kRequestSent;
 }
 
@@ -1473,9 +1491,10 @@ Response InterceptionJob::ProcessResponseOverride(
   response_metadata_->transfer_size = body_size;
 
   response_metadata_->status.completion_time = base::TimeTicks::Now();
-  response_metadata_->status.encoded_data_length = headers_size + body_size;
-  response_metadata_->status.encoded_body_length = body_size;
-  response_metadata_->status.decoded_body_length = body_size;
+  response_metadata_->status.encoded_data_length =
+      base::ByteSize(headers_size) + base::ByteSize(body_size);
+  response_metadata_->status.encoded_body_length = base::ByteSize(body_size);
+  response_metadata_->status.decoded_body_length = base::ByteSize(body_size);
 
   base::OnceClosure continue_after_cookies_set;
   std::string location;
@@ -1522,11 +1541,19 @@ void InterceptionJob::ProcessSetCookies(const net::HttpResponseHeaders& headers,
 
   net::CookieOptions options;
   options.set_include_httponly();
+  url::Origin top_frame_origin =
+      create_loader_params_->request.trusted_params.has_value() &&
+              create_loader_params_->request.trusted_params->isolation_info
+                  .top_frame_origin()
+                  .has_value()
+          ? *create_loader_params_->request.trusted_params->isolation_info
+                 .top_frame_origin()
+          : url::Origin();
   bool should_treat_as_first_party =
       GetContentClient()
           ->browser()
           ->ShouldIgnoreSameSiteCookieRestrictionsWhenTopLevel(
-              create_loader_params_->request.site_for_cookies.scheme(),
+              top_frame_origin,
               create_loader_params_->request.url.SchemeIsCryptographic());
   DCHECK_EQ(create_loader_params_->request.url, url_chain_.back());
   bool is_main_frame_navigation =
@@ -1546,6 +1573,11 @@ void InterceptionJob::ProcessSetCookies(const net::HttpResponseHeaders& headers,
       },
       base::BarrierClosure(cookies.size(), std::move(callback)));
   for (auto& cookie : cookies) {
+    if (interceptor_ && interceptor_->cookie_access_callback_ &&
+        !interceptor_->cookie_access_callback_.Run(*cookie)) {
+      on_cookie_set.Run(net::CookieAccessResult());
+      continue;
+    }
     cookie_manager_->SetCanonicalCookie(
         *cookie, create_loader_params_->request.url, options, on_cookie_set);
   }
@@ -1684,12 +1716,17 @@ void InterceptionJob::FetchCookies(base::OnceClosure callback) {
   const network::ResourceRequest& request = create_loader_params_->request;
   DCHECK_EQ(request.url, url_chain_.back());
 
+  url::Origin top_frame_origin =
+      request.trusted_params.has_value() &&
+              request.trusted_params->isolation_info.top_frame_origin()
+                  .has_value()
+          ? *request.trusted_params->isolation_info.top_frame_origin()
+          : url::Origin();
   bool should_treat_as_first_party =
       GetContentClient()
           ->browser()
           ->ShouldIgnoreSameSiteCookieRestrictionsWhenTopLevel(
-              request.site_for_cookies.scheme(),
-              request.url.SchemeIsCryptographic());
+              top_frame_origin, request.url.SchemeIsCryptographic());
   bool is_main_frame_navigation =
       request.trusted_params.has_value() &&
       request.trusted_params->isolation_info.request_type() ==
@@ -1703,7 +1740,7 @@ void InterceptionJob::FetchCookies(base::OnceClosure callback) {
               network::mojom::RequestDestination::kWebIdentity));
 
   cookie_manager_->GetCookieList(
-      request.url, options, net::CookiePartitionKeyCollection::Todo(),
+      request.url, options, net::CookiePartitionKeyCollection(),
       base::BindOnce(&InterceptionJob::OnGotCookies, base::Unretained(this),
                      std::move(callback)));
 }
@@ -1792,9 +1829,7 @@ void InterceptionJob::Shutdown() {
 
 // URLLoader methods
 void InterceptionJob::FollowRedirect(
-    const std::vector<std::string>& removed_headers,
-    const net::HttpRequestHeaders& modified_headers,
-    const net::HttpRequestHeaders& modified_cors_exempt_headers,
+    network::HttpRequestHeadersUpdateParams headers_update_params,
     const std::optional<GURL>& new_url) {
   DCHECK(!new_url.has_value()) << "Redirect with modified url was not "
                                   "supported yet. crbug.com/845683";
@@ -1821,11 +1856,14 @@ void InterceptionJob::FollowRedirect(
   // Reflect changes to the request that the network service will make on
   // FollowRedirect.
   net::RedirectUtil::UpdateHttpRequest(request->url, request->method, info,
-                                       removed_headers, modified_headers,
+                                       headers_update_params.removed_headers,
+                                       headers_update_params.modified_headers,
                                        &request->headers, &clear_body);
-  request->cors_exempt_headers.MergeFrom(modified_cors_exempt_headers);
-  for (const std::string& name : removed_headers)
+  request->cors_exempt_headers.MergeFrom(
+      headers_update_params.modified_cors_exempt_headers);
+  for (const std::string& name : headers_update_params.removed_headers) {
     request->cors_exempt_headers.RemoveHeader(name);
+  }
 
   if (clear_body) {
     request->request_body = nullptr;
@@ -1833,16 +1871,7 @@ void InterceptionJob::FollowRedirect(
   }
   request_cookies_.reset();
 
-  request->method = info.new_method;
-  request->url = info.new_url;
-  request->site_for_cookies = info.new_site_for_cookies;
-  request->referrer_policy = info.new_referrer_policy;
-  request->referrer = GURL(info.new_referrer);
-  if (request->trusted_params) {
-    const auto new_origin = url::Origin::Create(info.new_url);
-    request->trusted_params->isolation_info =
-        request->trusted_params->isolation_info.CreateForRedirect(new_origin);
-  }
+  request->UpdateOnRedirect(info);
   response_metadata_.reset();
 
   UpdateCORSFlag();
@@ -1859,7 +1888,7 @@ void InterceptionJob::FollowRedirect(
       return;
   }
   if (state_ == State::kRedirectReceived) {
-    ProcessFollowRedirect(modified_cors_exempt_headers);
+    ProcessFollowRedirect(headers_update_params.modified_cors_exempt_headers);
     return;
   }
 
@@ -2035,6 +2064,7 @@ void InterceptionJob::OnTargetHeaderClientDisconnect() {
 }
 
 void InterceptionJob::OnBeforeSendHeaders(
+    const GURL& request_url,
     const net::HttpRequestHeaders& headers,
     OnBeforeSendHeadersCallback callback) {
   if (header_client_) {
@@ -2044,13 +2074,14 @@ void InterceptionJob::OnBeforeSendHeaders(
     OnBeforeSendHeadersCallback wrapped_callback = base::BindOnce(
         &InterceptionJob::OnTargetHeaderClientBeforeSendHeadersComplete,
         weak_ptr_factory_.GetWeakPtr(), headers, std::move(callback));
-    header_client_->OnBeforeSendHeaders(headers, std::move(wrapped_callback));
+    header_client_->OnBeforeSendHeaders(request_url, headers,
+                                        std::move(wrapped_callback));
     return;
   }
 
   if (!headers_override_ ||
       !headers_override_->overridden_cookie().has_value()) {
-    std::move(callback).Run(net::OK, headers);
+    std::move(callback).Run(net::OK, headers, std::nullopt);
     return;
   }
 
@@ -2064,7 +2095,7 @@ void InterceptionJob::OnBeforeSendHeaders(
   net::HttpRequestHeaders final_headers = headers;
   final_headers.SetHeader(net::HttpRequestHeaders::kCookie,
                           headers_override_->overridden_cookie().value());
-  std::move(callback).Run(net::OK, final_headers);
+  std::move(callback).Run(net::OK, final_headers, std::nullopt);
 }
 
 void InterceptionJob::OnHeadersReceived(
@@ -2089,17 +2120,20 @@ void InterceptionJob::OnTargetHeaderClientBeforeSendHeadersComplete(
     const net::HttpRequestHeaders& original_headers,
     OnBeforeSendHeadersCallback original_callback,
     int result_from_target,
-    const std::optional<net::HttpRequestHeaders>& headers_from_target) {
+    const std::optional<net::HttpRequestHeaders>& headers_from_target,
+    std::optional<base::DictValue> extended_net_log_events) {
   // If the downstream client (e.g., an extension) blocked or cancelled the
   // request, we must respect that decision and forward the result immediately.
   if (result_from_target != net::OK) {
-    std::move(original_callback).Run(result_from_target, headers_from_target);
+    std::move(original_callback)
+        .Run(result_from_target, headers_from_target, std::nullopt);
     return;
   }
 
   if (!headers_override_ ||
       !headers_override_->overridden_cookie().has_value()) {
-    std::move(original_callback).Run(result_from_target, headers_from_target);
+    std::move(original_callback)
+        .Run(result_from_target, headers_from_target, std::nullopt);
     return;
   }
 
@@ -2114,7 +2148,8 @@ void InterceptionJob::OnTargetHeaderClientBeforeSendHeadersComplete(
       headers_from_target.value_or(original_headers);
   final_headers.SetHeader(net::HttpRequestHeaders::kCookie,
                           headers_override_->overridden_cookie().value());
-  std::move(original_callback).Run(result_from_target, final_headers);
+  std::move(original_callback)
+      .Run(result_from_target, final_headers, std::nullopt);
 }
 
 void InterceptionJob::OnAuthRequest(

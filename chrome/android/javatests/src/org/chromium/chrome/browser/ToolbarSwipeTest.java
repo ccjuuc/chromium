@@ -4,7 +4,6 @@
 
 package org.chromium.chrome.browser;
 
-import static org.chromium.base.test.util.Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE;
 import static org.chromium.ui.test.util.ViewUtils.createMotionEvent;
 
 import android.content.pm.ActivityInfo;
@@ -25,16 +24,17 @@ import org.chromium.base.task.TaskTraits;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.base.test.util.UrlUtils;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.compositor.layouts.LayoutManagerChrome;
 import org.chromium.chrome.browser.compositor.layouts.LayoutManagerImpl;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.layouts.animation.CompositorAnimationHandler;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.page.WebPageStation;
@@ -79,7 +79,6 @@ public class ToolbarSwipeTest {
     @Test
     @MediumTest
     @Feature({"Android-TabSwitcher"})
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testToolbarSwipeOnlyTab() {
         WebPageStation pageStation =
                 initToolbarSwipeTest(
@@ -103,7 +102,6 @@ public class ToolbarSwipeTest {
     @Test
     @MediumTest
     @Feature({"Android-TabSwitcher"})
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testToolbarSwipePrevTab() {
         WebPageStation pageStation =
                 initToolbarSwipeTest(
@@ -117,7 +115,6 @@ public class ToolbarSwipeTest {
     @Test
     @MediumTest
     @Feature({"Android-TabSwitcher"})
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testToolbarSwipeNextTab() {
         WebPageStation pageStation =
                 initToolbarSwipeTest(
@@ -129,7 +126,6 @@ public class ToolbarSwipeTest {
     @Test
     @MediumTest
     @Feature({"Android-TabSwitcher"})
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testToolbarSwipePrevTabNone() {
         WebPageStation pageStation =
                 initToolbarSwipeTest(
@@ -141,7 +137,6 @@ public class ToolbarSwipeTest {
     @Test
     @MediumTest
     @Feature({"Android-TabSwitcher"})
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testToolbarSwipeNextTabNone() {
         WebPageStation pageStation =
                 initToolbarSwipeTest(
@@ -155,7 +150,6 @@ public class ToolbarSwipeTest {
     @Test
     @MediumTest
     @Feature({"Android-TabSwitcher"})
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testToolbarSwipeNextThenPrevTab() {
         WebPageStation pageStation =
                 initToolbarSwipeTest(
@@ -169,7 +163,7 @@ public class ToolbarSwipeTest {
     @Test
     @MediumTest
     @Feature({"Android-TabSwitcher"})
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287381
     public void testToolbarSwipeNextThenPrevTabIncognito() {
         WebPageStation pageStation =
                 initToolbarSwipeTest(
@@ -216,7 +210,7 @@ public class ToolbarSwipeTest {
     /** Test that swipes and tab transitions are not causing URL bar to be focused. */
     @Test
     @MediumTest
-    @Restriction({DeviceFormFactor.PHONE, RESTRICTION_TYPE_NON_LOW_END_DEVICE})
+    @Restriction(DeviceFormFactor.PHONE)
     @Feature({"Android-TabSwitcher"})
     public void testOSKIsNotShownDuringSwipe() throws InterruptedException {
         final View urlBar = mActivityTestRule.getActivity().findViewById(R.id.url_bar);
@@ -281,7 +275,7 @@ public class ToolbarSwipeTest {
     }
 
     private LayoutManagerChrome updateTabsViewSize() {
-        View tabsView = mActivityTestRule.getActivity().getTabsView();
+        View tabsView = mActivityTestRule.getActivity().getTabsViewForTesting();
         mTabsViewWidthDp = tabsView.getWidth() * mPxToDp;
         return mActivityTestRule.getActivity().getLayoutManager();
     }

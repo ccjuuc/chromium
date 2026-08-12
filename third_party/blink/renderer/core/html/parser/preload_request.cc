@@ -6,10 +6,8 @@
 
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
-#include "services/network/public/mojom/attribution.mojom-blink.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/core/dom/document.h"
-#include "third_party/blink/renderer/core/frame/attribution_src_loader.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
@@ -47,8 +45,9 @@ bool PreloadRequest::ExclusionInfo::ShouldExclude(
   if (resources_.Contains(url))
     return true;
   for (const auto& scope : scopes_) {
-    if (url.GetString().StartsWith(scope.GetString()))
+    if (url.GetString().starts_with(scope.GetString())) {
       return true;
+    }
   }
   return false;
 }
@@ -77,7 +76,7 @@ std::unique_ptr<PreloadRequest> PreloadRequest::CreateIfNeeded(
   // data URLs if the document's URL is a data URL. We don't want to create
   // extra resource requests with data URLs to avoid copy / initialization
   // overhead, which can be significant for large URLs.
-  if (resource_url.empty() || resource_url.StartsWith("#") ||
+  if (resource_url.empty() || resource_url.starts_with('#') ||
       (ProtocolIs(resource_url, "data") &&
        (!RuntimeEnabledFeatures::PreloadLinkRelDataUrlsEnabled() ||
         request_type != PreloadRequest::kRequestTypeLinkRelPreload))) {
@@ -118,33 +117,6 @@ Resource* PreloadRequest::Start(Document* document) {
       ResourceFetcher::DetermineRequestDestination(resource_type_));
   resource_request.SetExpectedPublicKeys(integrity_metadata_);
   resource_request.SetFetchPriorityHint(fetch_priority_hint_);
-
-  // Disable issue logging to avoid duplicates, since `CanRegister()` will be
-  // called again later.
-  if (is_attribution_reporting_eligible_img_or_script_ &&
-      document->domWindow()->GetFrame()->GetAttributionSrcLoader()->CanRegister(
-          url, /*element=*/nullptr, /*log_issues=*/false)) {
-    resource_request.SetAttributionReportingEligibility(
-        network::mojom::AttributionReportingEligibility::kEventSourceOrTrigger);
-  }
-
-  bool shared_storage_writable_opted_in =
-      shared_storage_writable_opted_in_ &&
-      RuntimeEnabledFeatures::SharedStorageAPIEnabled(document->domWindow()) &&
-      document->domWindow()->IsSecureContext() &&
-      !document->domWindow()->GetSecurityOrigin()->IsOpaque();
-  resource_request.SetSharedStorageWritableOptedIn(
-      shared_storage_writable_opted_in);
-  if (shared_storage_writable_opted_in) {
-    CHECK_EQ(resource_type_, ResourceType::kImage);
-    UseCounter::Count(document, WebFeature::kSharedStorageAPI_Image_Attribute);
-  }
-
-  bool browsing_topics =
-      browsing_topics_eligible_ && RuntimeEnabledFeatures::TopicsAPIEnabled() &&
-      document->domWindow()->IsSecureContext() &&
-      !document->domWindow()->GetSecurityOrigin()->IsOpaque();
-  resource_request.SetBrowsingTopics(browsing_topics);
 
   ResourceLoaderOptions options(document->domWindow()->GetCurrentWorld());
   options.initiator_info = initiator_info;

@@ -4,14 +4,13 @@
 
 package org.chromium.chrome.browser.sync.settings;
 
-import static androidx.test.espresso.Espresso.onView;
-import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 
 import android.view.View;
 
 import androidx.test.filters.LargeTest;
 
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -22,19 +21,20 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
 import org.chromium.chrome.browser.sync.FakeSyncServiceImpl;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
 import org.chromium.chrome.test.util.browser.signin.SigninTestRule;
@@ -46,12 +46,13 @@ import org.chromium.ui.test.util.ViewUtils;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @DisableFeatures(ChromeFeatureList.SETTINGS_MULTI_COLUMN)
+@Batch(Batch.PER_CLASS)
 public class IdentityErrorCardPreferenceTest {
     public final SettingsActivityTestRule<ManageSyncSettings> mSettingsActivityTestRule =
             new SettingsActivityTestRule<>(ManageSyncSettings.class);
 
-    public final FreshCtaTransitTestRule mActivityTestRule =
-            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+    public final AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     // SettingsActivity has to be finished before the outer CTA can be finished or trying to finish
     // CTA won't work.
@@ -64,7 +65,7 @@ public class IdentityErrorCardPreferenceTest {
     @Rule public final SigninTestRule mSigninTestRule = new SigninTestRule();
 
     private static final String RENDER_TEST_DESCRIPTION = "Identity error card.";
-    private static final int RENDER_TEST_REVISION = 2;
+    private static final int RENDER_TEST_REVISION = 3;
 
     @Rule
     public final ChromeRenderTestRule mRenderTestRule =
@@ -86,6 +87,11 @@ public class IdentityErrorCardPreferenceTest {
                     mFakeSyncServiceImpl = new FakeSyncServiceImpl();
                     SyncServiceFactory.setInstanceForTesting(mFakeSyncServiceImpl);
                 });
+    }
+
+    @After
+    public void tearDown() {
+        mSigninTestRule.forceSignOut();
     }
 
     @Test
@@ -257,16 +263,6 @@ public class IdentityErrorCardPreferenceTest {
         }
         mRenderTestRule.render(
                 getIdentityErrorCardView(), "identity_error_card_bookmark_limit_reached");
-    }
-
-    @Test
-    @LargeTest
-    public void testIdentityErrorCardNotShownForUnrecoverableErrors() throws Exception {
-        mFakeSyncServiceImpl.setHasUnrecoverableError(true);
-        mSigninTestRule.addTestAccountThenSignin();
-
-        mSettingsActivityTestRule.startSettingsActivity();
-        onView(withId(R.id.signin_settings_card)).check(doesNotExist());
     }
 
     private View getIdentityErrorCardView() {

@@ -19,7 +19,6 @@
 #include "ash/webui/shimless_rma/mojom/shimless_rma.mojom.h"
 #include "ash/webui/shimless_rma/mojom/shimless_rma_mojom_traits.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
@@ -341,7 +340,7 @@ void ShimlessRmaService::OnForgetNewNetworkConnections(
   for (auto& network : networks) {
     const std::string& guid = network->guid;
     const bool found_network_guid =
-        base::Contains(existing_saved_network_guids_.value(), guid);
+        existing_saved_network_guids_.value().contains(guid);
 
     if (!found_network_guid) {
       pending_network_guids_to_forget_.insert(guid);
@@ -1027,15 +1026,14 @@ void ShimlessRmaService::GetLog(GetLogCallback callback) {
 
 void ShimlessRmaService::SaveLog(SaveLogCallback callback) {
   if (diagnostics::DiagnosticsLogController::IsInitialized()) {
+    auto log_data =
+        diagnostics::DiagnosticsLogController::Get()->GetSessionLogData();
+
     task_runner_->PostTaskAndReplyWithResult(
         FROM_HERE,
-        base::BindOnce(
-            &diagnostics::DiagnosticsLogController::
-                GenerateSessionStringOnBlockingPool,
-            // base::Unretained safe here because ~DiagnosticsLogController is
-            // called during shutdown of ash::Shell and will out-live
-            // ShimlessRmaService.
-            base::Unretained(diagnostics::DiagnosticsLogController::Get())),
+        base::BindOnce(&diagnostics::DiagnosticsLogController::
+                           GenerateSessionStringOnBlockingPool,
+                       std::move(log_data)),
         base::BindOnce(&ShimlessRmaService::OnDiagnosticsLogReady,
                        weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
     return;

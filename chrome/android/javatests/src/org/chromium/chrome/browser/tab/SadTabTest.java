@@ -24,18 +24,22 @@ import org.chromium.base.CallbackUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.base.test.util.UrlUtils;
+import org.chromium.chrome.R;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.fullscreen.FullscreenManagerTestUtils;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.net.test.util.TestWebServer;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.test.util.DeviceRestriction;
 
 /** Tests related to the sad tab logic. */
@@ -67,7 +71,7 @@ public class SadTabTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     Tab tab = mActivityTestRule.getActivity().getActivityTab();
-                    tab.show(TabSelectionType.FROM_USER, TabLoadIfNeededCaller.OTHER);
+                    tab.show(TabSelectionType.FROM_USER);
                     SadTab sadTab = SadTab.from(tab);
                     sadTab.removeIfPresent();
                 });
@@ -194,6 +198,12 @@ public class SadTabTest {
     @MediumTest
     @Feature({"SadTab"})
     @Restriction(DeviceRestriction.RESTRICTION_TYPE_NON_AUTO) // Browser controls don't move in auto
+    // TODO(crbug.com/473893732): Update the test for lock top control or use restriction.
+    @DisableFeatures({
+        ChromeFeatureList.LOCK_TOP_CONTROLS_ON_LARGE_TABLETS_V2,
+        ChromeFeatureList.ANDROID_BOTTOM_BAR
+    })
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/481443873
     public void testSadTabBrowserControlsVisibility() {
         ThreadUtils.runOnUiThreadBlocking(
                 TabStateBrowserControlsVisibilityDelegate::disablePageLoadDelayForTests);

@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include "base/memory/raw_ptr.h"
-#include "base/test/scoped_feature_list.h"
 #include "content/browser/renderer_host/legacy_render_widget_host_win.h"
 #include "content/browser/renderer_host/render_widget_host_view_aura.h"
 #include "content/public/browser/web_contents.h"
@@ -12,7 +11,6 @@
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/scoped_accessibility_mode_override.h"
 #include "content/shell/browser/shell.h"
-#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/platform/ax_platform_node_win.h"
 #include "ui/accessibility/platform/ax_system_caret_win.h"
 #include "ui/base/win/hwnd_subclass.h"
@@ -80,7 +78,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityObjectLifetimeWinBrowserTest,
   shell()->Close();
 
   // At this point our test reference should be the only one remaining.
-  EXPECT_EQ(test_node_->m_dwRef, 1);
+  EXPECT_EQ(test_node_->ref_count_for_testing(), 1u);
 }
 
 IN_PROC_BROWSER_TEST_F(AccessibilityObjectLifetimeWinBrowserTest,
@@ -103,7 +101,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityObjectLifetimeWinBrowserTest,
   shell()->Close();
 
   // At this point our test reference should be the only one remaining.
-  EXPECT_EQ(test_node_->m_dwRef, 1);
+  EXPECT_EQ(test_node_->ref_count_for_testing(), 1u);
 }
 
 // Window subclassing message filter for the legacy window to allow us to
@@ -166,8 +164,6 @@ class AccessibilityObjectLifetimeUiaWinBrowserTest
 
   ~AccessibilityObjectLifetimeUiaWinBrowserTest() override = default;
 
- private:
-  base::test::ScopedFeatureList scoped_feature_list_{::features::kUiaProvider};
 };
 
 IN_PROC_BROWSER_TEST_F(AccessibilityObjectLifetimeUiaWinBrowserTest,
@@ -201,7 +197,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityObjectLifetimeUiaWinBrowserTest,
   shell()->Close();
 
   // At this point our test reference should be the only one remaining.
-  EXPECT_EQ(test_node_->m_dwRef, 1);
+  EXPECT_EQ(test_node_->ref_count_for_testing(), 1u);
 }
 
 }  // namespace content

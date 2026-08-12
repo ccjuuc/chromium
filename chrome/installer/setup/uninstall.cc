@@ -20,6 +20,7 @@
 
 #include "base/base_paths.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -96,24 +97,18 @@ void DeleteInstallTempDir(const base::FilePath& target_path) {
 // Processes uninstall WorkItems from install_worker in no-rollback-list.
 void ProcessChromeWorkItems(const InstallerState& installer_state) {
   std::unique_ptr<WorkItemList> work_item_list(WorkItem::CreateWorkItemList());
-  work_item_list->set_log_message(
-      "Cleanup OS upgrade command and deprecated per-user registrations");
+  work_item_list->set_log_message("Cleanup OS upgrade command");
   work_item_list->set_best_effort(true);
   work_item_list->set_rollback_enabled(false);
   AddOsUpgradeWorkItems(installer_state, base::FilePath(), base::Version(),
                         work_item_list.get());
-  // Perform a best-effort cleanup of per-user keys. On system-level installs
-  // this will only cleanup keys for the user running the uninstall but it was
-  // considered that this was good enough (better than triggering Active Setup
-  // for all users solely for this cleanup).
-  AddCleanupDeprecatedPerUserRegistrationsWorkItems(work_item_list.get());
   work_item_list->Do();
 }
 
 void ClearRlzProductState() {
-  const rlz_lib::AccessPoint points[] = {
-      rlz_lib::CHROME_OMNIBOX, rlz_lib::CHROME_HOME_PAGE,
-      rlz_lib::CHROME_APP_LIST, rlz_lib::NO_ACCESS_POINT};
+  const rlz_lib::AccessPoint points[] = {rlz_lib::CHROME_OMNIBOX,
+                                         rlz_lib::CHROME_HOME_PAGE,
+                                         rlz_lib::CHROME_APP_LIST};
 
   rlz_lib::ClearProductState(rlz_lib::CHROME, points);
 
@@ -537,7 +532,7 @@ void UninstallActiveSetupEntries(const InstallerState& installer_state) {
 
 // Removes the persistent blocklist state for the current user.  Note: this will
 // not remove the state for users other than the one uninstalling Chrome on a
-// system-level install (http://crbug.com/388725). Doing so would require
+// system-level install (http://crbug.com/41117134). Doing so would require
 // extracting the per-user registry hive iteration from
 // UninstallActiveSetupEntries so that it could service multiple tasks.
 void RemoveBlocklistState() {

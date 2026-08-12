@@ -4,9 +4,9 @@
 
 #include "chrome/browser/task_manager/providers/fallback_task_provider.h"
 
+#include <algorithm>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
@@ -120,14 +120,14 @@ void FallbackTaskProvider::ShowPendingTask(Task* task) {
     // Log when we use the secondary task provider, to help drive this count to
     // zero and have providers for all known processes.
     // TODO(avi): Turn this into a DCHECK and remove the log once there are
-    // providers for all known processes. See https://crbug.com/1083509.
+    // providers for all known processes. See https://crbug.com/40131424.
     base::UmaHistogramBoolean("BrowserRenderProcessHost.LabeledInTaskManager",
                               false);
     LOG(ERROR)
         << "Every renderer should have at least one task provided by a primary "
         << "task provider. If a \"Renderer\" fallback task is shown, it is a "
         << "bug. If you have repro steps, please file a new bug and tag it as "
-        << "a dependency of crbug.com/739782.";
+        << "a dependency of crbug.com/40528867.";
   }
 
   pending_shown_tasks_.erase(task);
@@ -164,7 +164,7 @@ void FallbackTaskProvider::OnTaskAddedBySource(Task* task,
 
   // Log when a primary task is shown instead, to provide a point of comparison
   // for cases the secondary task is shown. Remove when there are providers for
-  // for all known processes. See https://crbug.com/1083509.
+  // for all known processes. See https://crbug.com/40131424.
   base::UmaHistogramBoolean("BrowserRenderProcessHost.LabeledInTaskManager",
                             true);
 
@@ -199,7 +199,7 @@ void FallbackTaskProvider::OnTaskRemovedBySource(Task* task,
 
 void FallbackTaskProvider::OnTaskUnresponsive(Task* task) {
   DCHECK(task);
-  if (base::Contains(shown_tasks_, task)) {
+  if (std::ranges::contains(shown_tasks_, task)) {
     NotifyObserverTaskUnresponsive(task);
   }
 }

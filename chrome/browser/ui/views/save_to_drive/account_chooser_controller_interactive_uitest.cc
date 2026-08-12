@@ -5,11 +5,9 @@
 #include "base/callback_list.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/save_to_drive/account_chooser_controller.h"
 #include "chrome/browser/ui/views/save_to_drive/account_chooser_test_util.h"
 #include "chrome/browser/ui/views/save_to_drive/account_chooser_view.h"
@@ -21,9 +19,7 @@
 #include "components/sync/test/test_sync_service.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "testing/gmock/include/gmock/gmock.h"
 #include "ui/gfx/image/image.h"
-#include "ui/gfx/image/image_unittest_util.h"
 
 namespace save_to_drive {
 namespace {
@@ -32,6 +28,7 @@ using ::save_to_drive::testing::GetTestAccount;
 using ::save_to_drive::testing::GetTestAccounts;
 
 constexpr char kAvatarUrl[] = "https://avatar.com/avatar.png";
+constexpr char16_t kTestUploadTitle[] = u"test.pdf";
 
 AccountChosenCallback GetOnAccountChosenCallback(
     const AccountInfo& expected_account,
@@ -40,8 +37,8 @@ AccountChosenCallback GetOnAccountChosenCallback(
       [&expected_account, &waiter](std::optional<AccountInfo> account) {
         // Cannot match by id because IdentityTestEnvironment generates an
         // id on your behalf.
-        EXPECT_EQ(account->full_name, expected_account.full_name);
-        EXPECT_EQ(account->email, expected_account.email);
+        EXPECT_EQ(account->GetFullName(), expected_account.GetFullName());
+        EXPECT_EQ(account->GetEmail(), expected_account.GetEmail());
         waiter.OnEvent();
       });
 }
@@ -76,7 +73,7 @@ class AccountChooserControllerInteractiveUiTest
     InteractiveBrowserTest::SetUpOnMainThread();
     identity_test_environment_adaptor_ =
         std::make_unique<IdentityTestEnvironmentProfileAdaptor>(
-            browser()->profile());
+            browser()->GetProfile());
   }
 
   // InteractiveBrowserTest:
@@ -92,7 +89,8 @@ class AccountChooserControllerInteractiveUiTest
       account_chooser_controller_ = std::make_unique<AccountChooserController>(
           browser()->tab_strip_model()->GetActiveWebContents(),
           identity_test_environment_adaptor_->identity_test_env()
-              ->identity_manager());
+              ->identity_manager(),
+          kTestUploadTitle);
     });
   }
 
@@ -127,13 +125,16 @@ class AccountChooserControllerInteractiveUiTest
     signin::IdentityTestEnvironment* identity_test_env =
         identity_test_environment_adaptor_->identity_test_env();
     AccountInfo persisted_account =
-        identity_test_env->MakeAccountAvailable(account.email);
-    persisted_account.full_name = account.full_name;
-    persisted_account.account_image = account.account_image;
+        identity_test_env->MakeAccountAvailable(account.GetEmail());
+    persisted_account =
+        AccountInfo::Builder(persisted_account)
+            .SetFullName(std::string(account.GetFullName().value_or("")))
+            .SetAvatarImage(account.GetAvatarImage().value_or(gfx::Image()))
+            .Build();
     identity_test_env->UpdateAccountInfoForAccount(persisted_account);
-    signin::SimulateAccountImageFetch(identity_test_env->identity_manager(),
-                                      persisted_account.account_id, kAvatarUrl,
-                                      persisted_account.account_image);
+    signin::SimulateAccountImageFetch(
+        identity_test_env->identity_manager(), persisted_account.GetAccountId(),
+        kAvatarUrl, persisted_account.GetAvatarImage().value_or(gfx::Image()));
     return persisted_account;
   }
 
@@ -147,8 +148,11 @@ class AccountChooserControllerInteractiveUiTest
 
   auto VerifyPopupOpened() {
     return Steps(
-        CheckResult([]() -> size_t { return chrome::GetTotalBrowserCount(); },
-                    2u, "Expect two browsers."),
+        CheckResult(
+            []() -> size_t {
+              return GlobalBrowserCollection::GetInstance()->GetSize();
+            },
+            2u, "Expect two browsers."),
         Check(
             []() {
               return ui_test_utils::FindMatchingBrowsers(
@@ -178,8 +182,10 @@ class AccountChooserControllerInteractiveUiTest
 
   auto VerifyPopupClosed() {
     return CheckResult(
-        []() -> size_t { return chrome::GetTotalBrowserCount(); }, 1u,
-        "Expect one browser.");
+        []() -> size_t {
+          return GlobalBrowserCollection::GetInstance()->GetSize();
+        },
+        1u, "Expect one browser.");
   }
 
   auto MakeAccountAvailableAndSimulateOnExtendedAccountInfoUpdated(
@@ -196,7 +202,7 @@ class AccountChooserControllerInteractiveUiTest
     return Do([this, account]() {
       signin::IdentityTestEnvironment* identity_test_env =
           identity_test_environment_adaptor_->identity_test_env();
-      identity_test_env->RemoveRefreshTokenForAccount(account->account_id);
+      identity_test_env->RemoveRefreshTokenForAccount(account->GetAccountId());
     });
   }
 
@@ -206,13 +212,17 @@ class AccountChooserControllerInteractiveUiTest
       signin::IdentityTestEnvironment* identity_test_env =
           identity_test_environment_adaptor_->identity_test_env();
       *persisted_account = identity_test_env->MakePrimaryAccountAvailable(
-          account.email, signin::ConsentLevel::kSignin);
-      persisted_account->full_name = account.full_name;
-      persisted_account->account_image = account.account_image;
+          std::string(account.GetEmail()), signin::ConsentLevel::kSignin);
+      *persisted_account =
+          AccountInfo::Builder(*persisted_account)
+              .SetFullName(std::string(account.GetFullName().value_or("")))
+              .SetAvatarImage(account.GetAvatarImage().value_or(gfx::Image()))
+              .Build();
       identity_test_env->UpdateAccountInfoForAccount(*persisted_account);
       signin::SimulateAccountImageFetch(
-          identity_test_env->identity_manager(), persisted_account->account_id,
-          kAvatarUrl, persisted_account->account_image);
+          identity_test_env->identity_manager(),
+          persisted_account->GetAccountId(), kAvatarUrl,
+          persisted_account->GetAvatarImage().value_or(gfx::Image()));
     });
   }
 
@@ -353,13 +363,22 @@ IN_PROC_BROWSER_TEST_F(AccountChooserControllerInteractiveUiTest,
       Do([&waiter]() { EXPECT_TRUE(waiter.Wait()); }));
 }
 
+// TODO(481839673): Re-enable on ChromeOS.
+#if BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_RemoveOneAccountFromMultipleAccounts \
+  DISABLED_RemoveOneAccountFromMultipleAccounts
+#else
+#define MAYBE_RemoveOneAccountFromMultipleAccounts \
+  RemoveOneAccountFromMultipleAccounts
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 // Steps:
 // 1. Call GetAccount with multiple accounts.
 // 2. Remove an account.
 // 3. Verify the account chooser is shown.
 // 4. Verify the account is selected.
 IN_PROC_BROWSER_TEST_F(AccountChooserControllerInteractiveUiTest,
-                       RemoveOneAccountFromMultipleAccounts) {
+                       MAYBE_RemoveOneAccountFromMultipleAccounts) {
   std::vector<AccountInfo> accounts =
       GetTestAccounts({"pothos", "fern"}, "test.com");
   // Populate the persisted accounts with two empty accounts so it is legal to
@@ -375,8 +394,8 @@ IN_PROC_BROWSER_TEST_F(AccountChooserControllerInteractiveUiTest,
         // The first account should be selected because we removed the
         // second account.
         const AccountInfo& expected_account = persisted_accounts_ptr->at(0);
-        EXPECT_EQ(account->full_name, expected_account.full_name);
-        EXPECT_EQ(account->email, expected_account.email);
+        EXPECT_EQ(account->GetFullName(), expected_account.GetFullName());
+        EXPECT_EQ(account->GetEmail(), expected_account.GetEmail());
         waiter.OnEvent();
       });
   RunTestSequence(
@@ -394,6 +413,9 @@ IN_PROC_BROWSER_TEST_F(AccountChooserControllerInteractiveUiTest,
       Do([&waiter]() { EXPECT_TRUE(waiter.Wait()); }));
 }
 
+// This test doesn't make sense for ChromeOS. ChromeOS requires at least one
+// account.
+#if !BUILDFLAG(IS_CHROMEOS)
 // Steps:
 // 1. Call GetAccount with one account.
 // 2. Remove the account.
@@ -412,6 +434,7 @@ IN_PROC_BROWSER_TEST_F(AccountChooserControllerInteractiveUiTest,
           &persisted_account),
       VerifyPopupOpened());
 }
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 // Steps:
 // 1. Call GetAccount with a signed out primary account.

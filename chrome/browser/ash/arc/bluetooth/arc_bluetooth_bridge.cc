@@ -15,17 +15,17 @@
 #include <iomanip>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "ash/constants/ash_pref_names.h"
-#include "base/containers/contains.h"
 #include "base/containers/queue.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
@@ -33,9 +33,9 @@
 #include "base/time/time.h"
 #include "chrome/browser/ash/arc/bluetooth/arc_bluez_bridge.h"
 #include "chrome/browser/ash/arc/bluetooth/arc_floss_bridge.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/ash/bluetooth/bluetooth_pairing_dialog.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
 #include "chromeos/ash/experiences/arc/bluetooth/bluetooth_type_converters.h"
 #include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_bridge.h"
@@ -43,7 +43,8 @@
 #include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
 #include "components/device_event_log/device_event_log.h"
 #include "components/prefs/pref_service.h"
-#include "components/user_manager/user_manager.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #include "device/bluetooth/bluetooth_common.h"
 #include "device/bluetooth/bluetooth_device.h"
 #include "device/bluetooth/bluetooth_gatt_connection.h"
@@ -153,8 +154,7 @@ arc::mojom::BluetoothGattStatus ConvertGattErrorCodeToStatus(
 // Example of identifier: /org/bluez/hci0/dev_E0_CF_65_8C_86_1A/service001a
 // Convert the last 4 characters of |identifier| to an
 // int, by interpreting them as hexadecimal digits.
-std::optional<uint16_t> ConvertGattIdentifierToId(
-    const std::string& identifier) {
+std::optional<uint16_t> ConvertGattIdentifierToId(std::string_view identifier) {
   uint32_t result;
   if (identifier.size() < 4 ||
       !base::HexStringToUInt(identifier.substr(identifier.size() - 4), &result))
@@ -305,11 +305,12 @@ class ArcBluezBridgeFactory
   static constexpr const char* kName = "ArcBluezBridgeFactory";
 
   static ArcBluezBridgeFactory* GetInstance() {
-    return base::Singleton<ArcBluezBridgeFactory>::get();
+    static base::NoDestructor<ArcBluezBridgeFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcBluezBridgeFactory>;
+  friend base::NoDestructor<ArcBluezBridgeFactory>;
   ArcBluezBridgeFactory() = default;
   ~ArcBluezBridgeFactory() override = default;
 };
@@ -324,11 +325,12 @@ class ArcFlossBridgeFactory
   static constexpr const char* kName = "ArcFlossBridgeFactory";
 
   static ArcFlossBridgeFactory* GetInstance() {
-    return base::Singleton<ArcFlossBridgeFactory>::get();
+    static base::NoDestructor<ArcFlossBridgeFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcFlossBridgeFactory>;
+  friend base::NoDestructor<ArcFlossBridgeFactory>;
   ArcFlossBridgeFactory() = default;
   ~ArcFlossBridgeFactory() override = default;
 };
@@ -1073,7 +1075,7 @@ void ArcBluetoothBridge::DisableAdapter(DisableAdapterCallback callback) {
     BLUETOOTH_LOG(EVENT) << "Received a request to disable adapter (remote)";
     // Silently ignore any request to turn off Bluetooth from Android.
     // Android will still receive the success callback.
-    // (https://crbug.com/851097)
+    // (https://crbug.com/40580051)
   }
 
   OnPoweredOff(std::move(callback), false /* save_user_pref */);
@@ -1701,7 +1703,7 @@ void ArcBluetoothBridge::SendBluetoothPoweredStateBroadcast(
   if (!intent_instance)
     return;
 
-  base::Value::Dict extras;
+  base::DictValue extras;
   extras.Set("enable", powered == AdapterPowerState::TURN_ON);
   std::string extras_json;
   bool write_success = base::JSONWriter::Write(extras, &extras_json);
@@ -1933,7 +1935,7 @@ void ArcBluetoothBridge::RegisterForGattNotification(
   // exist. Note that the notification session object may have been created as
   // a result of a previous call to WriteGattDescriptor, which can be left
   // as-is.
-  if (!base::Contains(notification_session_, char_id_str)) {
+  if (!notification_session_.contains(char_id_str)) {
     notification_session_.emplace(char_id_str, nullptr);
   }
 
@@ -2823,9 +2825,12 @@ ArcBluetoothBridge::GetAdvertisingData(const BluetoothDevice* device) const {
 
 void ArcBluetoothBridge::SetPrimaryUserBluetoothPowerSetting(
     bool enabled) const {
-  const user_manager::User* const user =
-      user_manager::UserManager::Get()->GetPrimaryUser();
-  Profile* profile = ash::ProfileHelper::Get()->GetProfileByUser(user);
+  const auto* primary_session =
+      session_manager::SessionManager::Get()->GetPrimarySession();
+  DCHECK(primary_session);
+  Profile* profile = Profile::FromBrowserContext(
+      ash::BrowserContextHelper::Get()->GetBrowserContextByAccountId(
+          primary_session->account_id()));
   DCHECK(profile);
   profile->GetPrefs()->SetBoolean(ash::prefs::kUserBluetoothAdapterEnabled,
                                   enabled);

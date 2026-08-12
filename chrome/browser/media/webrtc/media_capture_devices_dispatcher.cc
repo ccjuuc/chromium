@@ -10,6 +10,7 @@
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
+#include "base/memory/singleton.h"
 #include "base/metrics/field_trial.h"
 #include "base/observer_list.h"
 #include "base/strings/string_number_conversions.h"
@@ -38,7 +39,6 @@
 #include "extensions/buildflags/buildflags.h"
 #include "media/base/media_switches.h"
 #include "third_party/blink/public/common/features.h"
-#include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 
 #if BUILDFLAG(ENABLE_SCREEN_CAPTURE)
@@ -174,7 +174,7 @@ void MediaCaptureDevicesDispatcher::ProcessMediaAccessRequest(
 
 #if defined(TOOLKIT_VIEWS)
 void MediaCaptureDevicesDispatcher::ProcessSelectAudioOutputRequest(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     const content::SelectAudioOutputRequest& request,
     content::SelectAudioOutputCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);

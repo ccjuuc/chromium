@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_REGISTRAR_OBSERVER_H_
 #define CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_REGISTRAR_OBSERVER_H_
 
+#include "base/containers/span.h"
 #include "base/observer_list_types.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
@@ -24,7 +25,7 @@ class WebAppRegistrarObserver : public base::CheckedObserver {
   // A call site may compare existing WebApp state from the registry against
   // this new WebApp state with sync changes applied.
   virtual void OnWebAppsWillBeUpdatedFromSync(
-      const std::vector<const WebApp*>& new_apps_state) {}
+      base::span<const WebApp* const> new_apps_state) {}
 
   virtual void OnAppRegistrarDestroyed() = 0;
 
@@ -44,8 +45,9 @@ class WebAppRegistrarObserver : public base::CheckedObserver {
   virtual void OnWebAppsDisabledModeChanged() {}
   virtual void OnWebAppLastBadgingTimeChanged(const webapps::AppId& app_id,
                                               const base::Time& time) {}
-  virtual void OnWebAppLastLaunchTimeChanged(const webapps::AppId& app_id,
-                                             const base::Time& time) {}
+  virtual void OnWebAppLastLaunchTimeChanged(
+      const webapps::AppId& app_id,
+      const std::optional<base::Time>& time) {}
   virtual void OnWebAppFirstInstallTimeChanged(const webapps::AppId& app_id,
                                                const base::Time& time) {}
   virtual void OnWebAppUserDisplayModeChanged(
@@ -56,6 +58,9 @@ class WebAppRegistrarObserver : public base::CheckedObserver {
   virtual void OnWebAppRunOnOsLoginModeChanged(
       const webapps::AppId& app_id,
       RunOnOsLoginMode run_on_os_login_mode) {}
+
+  virtual void OnWebAppValidatedScopeExtensionsChanged(
+      const webapps::AppId& app_id) {}
 
   // Called after the WebAppSettings policy has been updated. If a policy is set
   // this event is also fired during browser startup after the policy has been
@@ -75,6 +80,11 @@ class WebAppRegistrarObserver : public base::CheckedObserver {
   // Called when a pending update is available.
   virtual void OnWebAppPendingUpdateChanged(const webapps::AppId& app_id,
                                             bool has_pending_update) {}
+
+  // Called when the pending migration info for an app has changed.
+  virtual void OnWebAppPendingMigrationInfoChanged(const webapps::AppId& app_id,
+                                                   bool has_pending_migration) {
+  }
 };
 
 }  // namespace web_app

@@ -8,11 +8,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
-#include "chrome/browser/enterprise/connectors/device_trust/common/common_types.h"
-
-#if BUILDFLAG(IS_CHROMEOS)
-#include "chromeos/ash/components/install_attributes/install_attributes.h"
-#endif  // BUILDFLAG(IS_CHROMEOS)
+#include "components/enterprise/device_trust/core/common_types.h"
 
 namespace enterprise_connectors {
 
@@ -119,14 +115,13 @@ void LogOrigin(DTOrigin origin) {
   base::UmaHistogramEnumeration(kOriginHistogram, origin);
 }
 
-void LogEnrollmentStatus() {
+void LogEnrollmentStatus(bool is_enterprise_managed) {
   static constexpr char kEnrollmentStatusHistogram[] =
       "Enterprise.DeviceTrust.EnrollmentStatus";
-  base::UmaHistogramEnumeration(
-      kEnrollmentStatusHistogram,
-      ash::InstallAttributes::Get()->IsEnterpriseManaged()
-          ? DTEnrollmentStatus::kManaged
-          : DTEnrollmentStatus::kUnmanaged);
+  base::UmaHistogramEnumeration(kEnrollmentStatusHistogram,
+                                is_enterprise_managed
+                                    ? DTEnrollmentStatus::kManaged
+                                    : DTEnrollmentStatus::kUnmanaged);
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 

@@ -4,11 +4,11 @@
 
 #include "chrome/browser/ash/policy/status_collector/app_info_generator.h"
 
+#include "ash/constants/ash_pref_names.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/prefs/pref_service.h"
 #include "components/services/app_service/public/cpp/app_registry_cache.h"
@@ -82,7 +82,7 @@ namespace policy {
 
 AppInfoGenerator::AppInfoProvider::AppInfoProvider(Profile* profile)
     : activity_storage(profile->GetPrefs(),
-                       prefs::kAppActivityTimes,
+                       ash::prefs::kAppActivityTimes,
                        /*day_start_offset=*/base::Seconds(0)),
       app_service_proxy(*apps::AppServiceProxyFactory::GetForProfile(profile)) {
 }
@@ -111,7 +111,7 @@ AppInfoGenerator::~AppInfoGenerator() {
 
 // static
 void AppInfoGenerator::RegisterProfilePrefs(PrefRegistrySimple* registry) {
-  registry->RegisterDictionaryPref(prefs::kAppActivityTimes);
+  registry->RegisterDictionaryPref(ash::prefs::kAppActivityTimes);
 }
 
 const AppInfoGenerator::Result AppInfoGenerator::Generate() const {
@@ -280,24 +280,26 @@ void AppInfoGenerator::OpenUsageInterval(
     const std::string& app_id,
     const base::UnguessableToken& instance_id,
     const base::Time start_time) {
-  if (app_instances_by_id_.count(app_id) == 0) {
-    app_instances_by_id_[app_id] = std::make_unique<AppInstances>(start_time);
+  std::unique_ptr<AppInstances>& app_instance = app_instances_by_id_[app_id];
+  if (app_instance == nullptr) {
+    app_instance = std::make_unique<AppInstances>(start_time);
   }
-  app_instances_by_id_[app_id]->running_instances.insert(instance_id);
+  app_instance->running_instances.insert(instance_id);
 }
 
 void AppInfoGenerator::CloseUsageInterval(
     const std::string& app_id,
     const base::UnguessableToken& instance_id,
     const base::Time end_time) {
-  if (app_instances_by_id_.count(app_id)) {
-    auto& app_instances = app_instances_by_id_[app_id];
+  if (auto it = app_instances_by_id_.find(app_id);
+      it != app_instances_by_id_.end()) {
+    auto& app_instances = it->second;
     app_instances->running_instances.erase(instance_id);
     if (app_instances->running_instances.empty()) {
       base::Time start_time = app_instances->start_time;
       provider_->activity_storage.AddActivityPeriod(start_time, end_time,
                                                     app_id);
-      app_instances_by_id_.erase(app_id);
+      app_instances_by_id_.erase(it);
     }
   }
 }

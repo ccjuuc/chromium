@@ -14,12 +14,15 @@ static_library("facilitated_payments") {
 
   deps = [
     "//chrome/browser/autofill",
+    "//chrome/browser/device_reauth",
     "//chrome/browser/facilitated_payments/ui/android",
     "//chrome/browser/optimization_guide",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/signin",
+    "//chrome/browser/strike_database",
     "//chrome/browser/ui/autofill",
     "//components/autofill/core/browser",
+    "//components/device_reauth",
     "//components/facilitated_payments/android",
     "//components/facilitated_payments/content/browser",
     "//components/facilitated_payments/core/browser",

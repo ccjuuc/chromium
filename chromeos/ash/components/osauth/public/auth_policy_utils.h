@@ -10,6 +10,11 @@
 #include "base/component_export.h"
 #include "base/values.h"
 #include "chromeos/ash/components/osauth/public/common_types.h"
+#include "components/prefs/pref_service.h"
+
+namespace cryptohome {
+class AuthFactor;
+}
 
 namespace ash {
 
@@ -17,7 +22,19 @@ namespace ash {
 // set.
 COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_OSAUTH)
 std::optional<AuthFactorsSet> GetAuthFactorsSetFromPolicyList(
-    const base::Value::List* policy_allowed_auth_factors);
+    const base::ListValue* policy_allowed_auth_factors);
+
+COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_OSAUTH)
+bool IsPinEnabledAsMainFactorByPolicy(const PrefService* pref_service);
+
+COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_OSAUTH)
+bool HasPinFactor(const base::ListValue* auth_factors);
+
+COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_OSAUTH)
+bool IsGaiaPassword(const cryptohome::AuthFactor& factor);
+
+COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_OSAUTH)
+bool IsLocalPassword(const cryptohome::AuthFactor& factor);
 
 }  // namespace ash
 

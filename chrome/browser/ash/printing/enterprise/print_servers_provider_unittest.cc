@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "chrome/browser/ash/printing/print_server.h"
-#include "chrome/common/pref_names.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -308,7 +307,7 @@ TEST_F(PrintServersProviderTest, Allowlist) {
   EXPECT_TRUE(obs.GetCalls().back().complete);
   EXPECT_TRUE(obs.GetCalls().back().servers.empty());
   // Apply allowlist.
-  base::Value::List value;
+  base::ListValue value;
   for (std::string id : {"id3", "idX", "id1"})
     value.Append(std::move(id));
   pref_service_.SetManagedPref(kAllowlistPrefName,

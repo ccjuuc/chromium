@@ -2,7 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
 import("//third_party/protobuf/proto_library.gni")
 
 assert(is_chromeos)
@@ -39,7 +38,6 @@ static_library("enterprise") {
     "//chrome/browser/profiles",
     "//chrome/common:constants",
     "//chromeos/ash/components/settings",
-    "//chromeos/crosapi/mojom",
     "//chromeos/printing",
     "//components/device_event_log",
     "//components/policy:policy_code_generate",

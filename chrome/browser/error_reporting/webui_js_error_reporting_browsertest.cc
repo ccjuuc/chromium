@@ -4,18 +4,19 @@
 
 #include <memory>
 
-#include "base/containers/contains.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/error_reporting/mock_chrome_js_error_report_processor.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
+#include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
+#include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_service_factory.h"
 #include "chrome/browser/sessions/session_service_test_helper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -111,7 +112,7 @@ class ScopedLogMessageWatcher {
                              size_t message_start,
                              const std::string& str) {
     CHECK(current_handler_ != nullptr);
-    if (base::Contains(str, kWebpageErrorMessage)) {
+    if (str.contains(kWebpageErrorMessage)) {
       current_handler_->callback_.Run();
     }
     if (current_handler_->previous_handler_ != nullptr) {
@@ -233,11 +234,11 @@ IN_PROC_BROWSER_TEST_F(WebUIJSErrorReportingTest,
   auto mock_processor =
       std::make_unique<ScopedMockChromeJsErrorReportProcessor>(endpoint);
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   SessionStartupPref pref(SessionStartupPref::LAST);
   SessionStartupPref::SetStartupPref(profile, pref);
 
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), error_url_));
   endpoint.WaitForReport();
   endpoint.clear_last_report();
@@ -249,6 +250,8 @@ IN_PROC_BROWSER_TEST_F(WebUIJSErrorReportingTest,
   {
     ScopedKeepAlive keep_alive(KeepAliveOrigin::SESSION_RESTORE,
                                KeepAliveRestartOption::DISABLED);
+    ScopedProfileKeepAlive profile_keep_alive(
+        profile, ProfileKeepAliveOrigin::kBrowserWindow);
     CloseBrowserSynchronously(browser());
 
     // Create a new error processor to reset the list of already seen reports,

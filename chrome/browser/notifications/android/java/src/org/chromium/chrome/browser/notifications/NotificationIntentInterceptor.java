@@ -24,6 +24,8 @@ import org.chromium.base.ApplicationStatus;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.Log;
+import org.chromium.base.TimeUtils;
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.base.SplitCompatIntentService;
@@ -130,10 +132,30 @@ public class NotificationIntentInterceptor {
      * A trampoline activity that handles logging metrics for click events and action click events.
      */
     public static class TrampolineActivity extends Activity {
+        // These values are persisted to logs. Entries should not be renumbered and
+        // numeric values should never be reused.
+        @IntDef({TrampolineActivityEvent.CREATED, TrampolineActivityEvent.DESTROYED})
+        @Retention(RetentionPolicy.SOURCE)
+        private @interface TrampolineActivityEvent {
+            int CREATED = 0;
+            int DESTROYED = 1;
+            int COUNT = 2;
+        }
+
+        private static void recordTrampolineActivityEvent(@TrampolineActivityEvent int event) {
+            RecordHistogram.recordEnumeratedHistogram(
+                    "Notifications.Android.TrampolineActivity",
+                    event,
+                    TrampolineActivityEvent.COUNT);
+        }
+
+        private long mCreateTime;
 
         @Override
         protected void onCreate(@Nullable Bundle savedInstanceState) {
             super.onCreate(savedInstanceState);
+            mCreateTime = TimeUtils.elapsedRealtimeMillis();
+            recordTrampolineActivityEvent(TrampolineActivityEvent.CREATED);
 
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM
                     || hasVisibleActivities()) {
@@ -162,6 +184,15 @@ public class NotificationIntentInterceptor {
             if (!handleNotificationIntent()) {
                 TrampolineActivityTracker.getInstance().finishTrackedActivity();
             }
+        }
+
+        @Override
+        protected void onDestroy() {
+            long duration = TimeUtils.elapsedRealtimeMillis() - mCreateTime;
+            RecordHistogram.recordTimesHistogram(
+                    "Notifications.Android.TrampolineActivity.Duration", duration);
+            recordTrampolineActivityEvent(TrampolineActivityEvent.DESTROYED);
+            super.onDestroy();
         }
 
         @Override
@@ -218,10 +249,16 @@ public class NotificationIntentInterceptor {
             pendingIntent = pendingIntentProvider.getPendingIntent();
             flags = pendingIntentProvider.getFlags();
         }
-        // The delete intent needs to be handled by broadcast receiver from Q due to background
-        // activity start restriction.
+        // The delete intent, and "close incognito" content intent, need to be handled by broadcast
+        // receiver from Q due to background activity start restriction.
+        // TODO(crbug.com/527130820): Avoid hardcoding specific action types here. Instead,
+        // add an explicit background action parameter to the notification builder layer.
         boolean shouldUseBroadcast =
-                intentType == NotificationIntentInterceptor.IntentType.DELETE_INTENT
+                (intentType == IntentType.CONTENT_INTENT
+                                && metadata.type
+                                        == NotificationUmaTracker.SystemNotificationType
+                                                .CLOSE_INCOGNITO)
+                        || intentType == NotificationIntentInterceptor.IntentType.DELETE_INTENT
                         || actionType == NotificationUmaTracker.ActionType.PRE_UNSUBSCRIBE
                         || actionType == NotificationUmaTracker.ActionType.UNDO_UNSUBSCRIBE
                         || actionType
@@ -238,6 +275,18 @@ public class NotificationIntentInterceptor {
                         || actionType
                                 == NotificationUmaTracker.ActionType
                                         .REPORT_UNWARNED_NOTIFICATION_AS_SPAM;
+
+        boolean isDownloadAction =
+                actionType == NotificationUmaTracker.ActionType.DOWNLOAD_PAUSE
+                        || actionType == NotificationUmaTracker.ActionType.DOWNLOAD_RESUME
+                        || actionType == NotificationUmaTracker.ActionType.DOWNLOAD_CANCEL
+                        || actionType == NotificationUmaTracker.ActionType.DOWNLOAD_PAGE_PAUSE
+                        || actionType == NotificationUmaTracker.ActionType.DOWNLOAD_PAGE_RESUME
+                        || actionType == NotificationUmaTracker.ActionType.DOWNLOAD_PAGE_CANCEL;
+
+        if (isDownloadAction && ChromeFeatureList.sNotificationTrampolineNoNewTask.isEnabled()) {
+            shouldUseBroadcast = true;
+        }
 
         Context applicationContext = ContextUtils.getApplicationContext();
         Intent intent = null;
@@ -260,6 +309,20 @@ public class NotificationIntentInterceptor {
         // picture-in-picture.
         if (!shouldUseBroadcast && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             intent.addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION);
+        }
+
+        // Required because we are starting an Activity from a non-Activity context.
+        if (!shouldUseBroadcast) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        }
+
+        // To preserve legacy behavior, FLAG_ACTIVITY_NEW_DOCUMENT and
+        // FLAG_ACTIVITY_MULTIPLE_TASK are added to replicate the previous
+        // documentLaunchMode="always" behavior.
+        // TODO(crbug.com/445326737): remove once the experiment is fully rolled out.
+        if (!shouldUseBroadcast
+                && !ChromeFeatureList.sNotificationTrampolineNoNewTask.isEnabled()) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT | Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
         }
 
         // This flag ensures the broadcast is delivered with foreground priority to speed up the

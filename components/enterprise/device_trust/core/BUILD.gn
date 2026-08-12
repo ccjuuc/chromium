@@ -1,0 +1,89 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+source_set("core") {
+  configs += [ "//components/enterprise:extra_warnings" ]
+
+  sources = [
+    "common_types.cc",
+    "device_trust_constants.cc",
+  ]
+
+  public = [
+    "common_types.h",
+    "device_trust_constants.h",
+    "device_trust_key_manager.h",
+  ]
+
+  deps = [ "//base" ]
+
+  public_deps = [
+    "//components/policy/proto",
+    "//crypto",
+  ]
+}
+
+source_set("device_trust_connector_service") {
+  configs += [ "//components/enterprise:extra_warnings" ]
+
+  public = [ "device_trust_connector_service.h" ]
+
+  sources = [ "device_trust_connector_service.cc" ]
+
+  deps = [
+    "//components/enterprise/device_trust",
+    "//components/url_matcher",
+    "//url",
+  ]
+
+  public_deps = [
+    ":core",
+    "//base",
+    "//components/device_signals/core/browser",
+    "//components/keyed_service/core",
+    "//components/prefs",
+  ]
+}
+
+source_set("test_support") {
+  testonly = true
+  configs += [ "//components/enterprise:extra_warnings" ]
+
+  public = [ "fake_device_trust_connector_service.h" ]
+  sources = [ "fake_device_trust_connector_service.cc" ]
+
+  deps = [
+    "//components/enterprise/device_trust",
+    "//components/pref_registry",
+    "//components/prefs:test_support",
+    "//components/sync_preferences:test_support",
+  ]
+
+  public_deps = [
+    ":core",
+    ":device_trust_connector_service",
+    "//base",
+  ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+
+  sources = [
+    "common_types_unittest.cc",
+    "device_trust_connector_service_unittest.cc",
+  ]
+
+  deps = [
+    ":core",
+    ":device_trust_connector_service",
+    "//base",
+    "//components/enterprise/device_trust",
+    "//components/enterprise/device_trust/core/attestation:unit_tests",
+    "//components/prefs:test_support",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//url",
+  ]
+}

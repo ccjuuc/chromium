@@ -2,6 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
+#include <string_view>
+
+#include "base/feature_list.h"
+#include "base/functional/callback_helpers.h"
+#include "base/metrics/statistics_recorder.h"
+#include "base/no_destructor.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
@@ -31,6 +38,8 @@
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_base.h"
+#include "device/bluetooth/bluetooth_adapter_factory.h"
+#include "device/bluetooth/test/mock_bluetooth_adapter.h"
 #include "google_apis/gaia/gaia_switches.h"
 #include "net/test/embedded_test_server/request_handler_util.h"
 #include "ui/base/interaction/state_observer.h"
@@ -39,13 +48,36 @@
 #include "ui/views/window/dialog_delegate.h"
 
 namespace {
+
+using DeepQuery = ::WebContentsInteractionTestUtil::DeepQuery;
+
 const char kTestEmail[] = "kTestEmail@email.com";
-const InteractiveBrowserTest::DeepQuery kHistoryOptinAcceptButton = {
-    "history-sync-optin-app", "#acceptButton"};
-const InteractiveBrowserTest::DeepQuery kHistoryOptinRejectButton = {
-    "history-sync-optin-app", "#rejectButton"};
 
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kSignoutDialogWebContentsId);
+
+const DeepQuery& GetHistoryOptinAcceptButtonQuery() {
+  if (base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh)) {
+    static const base::NoDestructor<DeepQuery> kQuery(
+        {"history-sync-optin-app-refresh", "#acceptButton"});
+    return *kQuery;
+  } else {
+    static const base::NoDestructor<DeepQuery> kQuery(
+        {"history-sync-optin-app", "#acceptButton"});
+    return *kQuery;
+  }
+}
+
+const DeepQuery& GetHistoryOptinRejectButtonQuery() {
+  if (base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh)) {
+    static const base::NoDestructor<DeepQuery> kQuery(
+        {"history-sync-optin-app-refresh", "#rejectButton"});
+    return *kQuery;
+  } else {
+    static const base::NoDestructor<DeepQuery> kQuery(
+        {"history-sync-optin-app", "#rejectButton"});
+    return *kQuery;
+  }
+}
 
 std::unique_ptr<net::test_server::HttpResponse> HandleSigninPageResponse(
     const net::test_server::HttpRequest& request) {
@@ -62,7 +94,11 @@ class SyncSettingsInteractiveTest
           WebUiInteractiveTestMixin<InteractiveBrowserTest>> {
  public:
   SyncSettingsInteractiveTest()
-      : gaia_signin_page_test_server_(net::EmbeddedTestServer::TYPE_HTTPS) {}
+      : gaia_signin_page_test_server_(net::EmbeddedTestServer::TYPE_HTTPS) {
+    mock_adapter_ =
+        base::MakeRefCounted<testing::NiceMock<device::MockBluetoothAdapter>>();
+    device::BluetoothAdapterFactory::SetAdapterForTesting(mock_adapter_);
+  }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     SigninBrowserTestBaseT<WebUiInteractiveTestMixin<InteractiveBrowserTest>>::
@@ -112,6 +148,7 @@ class SyncSettingsInteractiveTest
   base::test::ScopedFeatureList feature_list_{
       syncer::kReplaceSyncPromosWithSignInPromos};
   net::EmbeddedTestServer gaia_signin_page_test_server_;
+  scoped_refptr<testing::NiceMock<device::MockBluetoothAdapter>> mock_adapter_;
 };
 
 IN_PROC_BROWSER_TEST_F(SyncSettingsInteractiveTest,
@@ -167,8 +204,16 @@ IN_PROC_BROWSER_TEST_F(SyncSettingsInteractiveTest,
 
 // Tests that a signed in user sees the History Sync Optin dialog after
 // signing-in from the settings menu.
+// TODO(crbug.com/512594622): Re-enable test on Mac.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_ShowHistorySyncOptinDialogFromSettingsSignin \
+  DISABLED_ShowHistorySyncOptinDialogFromSettingsSignin
+#else
+#define MAYBE_ShowHistorySyncOptinDialogFromSettingsSignin \
+  ShowHistorySyncOptinDialogFromSettingsSignin
+#endif
 IN_PROC_BROWSER_TEST_F(SyncSettingsInteractiveTest,
-                       ShowHistorySyncOptinDialogFromSettingsSignin) {
+                       MAYBE_ShowHistorySyncOptinDialogFromSettingsSignin) {
   base::HistogramTester histogram_tester;
   // Handle the Gaia signin page.
   embedded_test_server()->StartAcceptingConnections();
@@ -214,10 +259,12 @@ IN_PROC_BROWSER_TEST_F(SyncSettingsInteractiveTest,
       WaitForShow(SigninViewController::kHistorySyncOptinViewId),
       InstrumentNonTabWebView(kHistorySyncOptinDialogContentsId,
                               SigninViewController::kHistorySyncOptinViewId),
-      WaitForStateChange(kHistorySyncOptinDialogContentsId,
-                         UiElementHasAppeared(kHistoryOptinAcceptButton)),
-      WaitForStateChange(kHistorySyncOptinDialogContentsId,
-                         UiElementHasAppeared(kHistoryOptinRejectButton)));
+      WaitForStateChange(
+          kHistorySyncOptinDialogContentsId,
+          UiElementHasAppeared(GetHistoryOptinAcceptButtonQuery())),
+      WaitForStateChange(
+          kHistorySyncOptinDialogContentsId,
+          UiElementHasAppeared(GetHistoryOptinRejectButtonQuery())));
 
   histogram_tester.ExpectUniqueSample("Signin.HistorySyncOptIn.Started",
                                       signin_metrics::AccessPoint::kSettings,
@@ -227,9 +274,18 @@ IN_PROC_BROWSER_TEST_F(SyncSettingsInteractiveTest,
 
 // Tests that a signed in user on the web can trigger and see the History
 // Sync Optin dialog.
+
+// TODO(crbug.com/510237034): Re-enable test on Mac
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_ShowHistorySyncOptinDialogFromSettingsInAccountAwareMode \
+  DISABLED_ShowHistorySyncOptinDialogFromSettingsInAccountAwareMode
+#else
+#define MAYBE_ShowHistorySyncOptinDialogFromSettingsInAccountAwareMode \
+  ShowHistorySyncOptinDialogFromSettingsInAccountAwareMode
+#endif
 IN_PROC_BROWSER_TEST_F(
     SyncSettingsInteractiveTest,
-    ShowHistorySyncOptinDialogFromSettingsInAccountAwareMode) {
+    MAYBE_ShowHistorySyncOptinDialogFromSettingsInAccountAwareMode) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTabId);
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kHistorySyncOptinDialogContentsId);
   const DeepQuery kContinueAsButton = {"settings-ui",
@@ -258,8 +314,46 @@ IN_PROC_BROWSER_TEST_F(
       WaitForShow(SigninViewController::kHistorySyncOptinViewId),
       InstrumentNonTabWebView(kHistorySyncOptinDialogContentsId,
                               SigninViewController::kHistorySyncOptinViewId),
-      WaitForStateChange(kHistorySyncOptinDialogContentsId,
-                         UiElementHasAppeared(kHistoryOptinAcceptButton)),
-      WaitForStateChange(kHistorySyncOptinDialogContentsId,
-                         UiElementHasAppeared(kHistoryOptinRejectButton)));
+      WaitForStateChange(
+          kHistorySyncOptinDialogContentsId,
+          UiElementHasAppeared(GetHistoryOptinAcceptButtonQuery())),
+      WaitForStateChange(
+          kHistorySyncOptinDialogContentsId,
+          UiElementHasAppeared(GetHistoryOptinRejectButtonQuery())));
+}
+
+IN_PROC_BROWSER_TEST_F(SyncSettingsInteractiveTest,
+                       SignInOfferedLoggedOnMigration) {
+  base::HistogramTester histogram_tester;
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTabId);
+  const DeepQuery kSignInButton = {"settings-ui",
+                                   "settings-main",
+                                   "settings-people-page-index",
+                                   "settings-people-page",
+                                   "settings-sync-account-control",
+                                   "cr-button#signIn"};
+  const GURL kAccountSettingsUrl = GURL(chrome::kChromeUIAccountSettingsURL);
+
+  base::test::TestFuture<void> histogram_future;
+  base::StatisticsRecorder::ScopedHistogramSampleObserver observer(
+      "Signin.SignIn.Offered", base::IgnoreArgs<std::string_view, uint64_t,
+                                                base::HistogramBase::Sample32>(
+                                   histogram_future.GetRepeatingCallback()));
+
+  RunTestSequence(
+      InstrumentTab(kTabId, 0, browser()),
+      NavigateWebContents(kTabId, kAccountSettingsUrl),
+      WaitForStateChange(kTabId, PageWithMatchingTitle("Settings")),
+      WaitForStateChange(kTabId, UiElementHasAppeared(kSignInButton)));
+
+  EXPECT_TRUE(histogram_future.Wait());
+
+  histogram_tester.ExpectUniqueSample(
+      "Signin.SignIn.Offered", signin_metrics::AccessPoint::kSettings, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Signin.SignIn.Offered.NewAccountNoExistingAccount",
+      signin_metrics::AccessPoint::kSettings, 1);
+  histogram_tester.ExpectTotalCount("Signin.SignIn.Offered.WithDefault", 0);
+  histogram_tester.ExpectTotalCount(
+      "Signin.SignIn.Offered.NewAccountExistingAccount", 0);
 }

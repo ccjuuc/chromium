@@ -33,6 +33,7 @@
 #include "chrome/browser/ash/login/screens/user_selection_screen.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/ash/login/session/user_session_manager_test_api.h"
+#include "chrome/browser/ash/login/test/auth_ui_utils.h"
 #include "chrome/browser/ash/login/test/cryptohome_mixin.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
@@ -47,6 +48,7 @@
 #include "chrome/browser/ash/policy/core/device_policy_cros_browser_test.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/login/mock_login_display_host.h"
@@ -57,7 +59,6 @@
 #include "chrome/browser/ui/webui/ash/login/locale_switch_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/terms_of_service_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/tpm_error_screen_handler.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/fake_gaia_mixin.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
@@ -215,7 +216,11 @@ class ExistingUserControllerTest : public policy::DevicePolicyCrosBrowserTest {
 
   void SetUpOnMainThread() override {
     policy::DevicePolicyCrosBrowserTest::SetUpOnMainThread();
-    existing_user_controller_ = std::make_unique<ExistingUserController>();
+    existing_user_controller_ = std::make_unique<ExistingUserController>(
+        g_browser_process->local_state(),
+        g_browser_process->GetFeatures()->application_locale_storage(),
+        g_browser_process->shared_url_loader_factory(),
+        g_browser_process->platform_part()->browser_policy_connector_ash());
     EXPECT_CALL(*mock_login_display_host_, GetExistingUserController())
         .Times(AnyNumber())
         .WillRepeatedly(Return(existing_user_controller_.get()));
@@ -837,11 +842,8 @@ class ExistingUserControllerAuthFailureTest : public OobeBaseTest {
                                        true /*check_if_submittable*/);
   }
 
-  // Waits for auth error message to be shown in login UI.
-  void WaitForAuthErrorMessage() {
-    base::RunLoop().RunUntilIdle();
-    EXPECT_TRUE(LoginScreenTestApi::IsAuthErrorBubbleShown());
-  }
+  // Waits for the auth error bubble to be shown in the login UI.
+  void WaitForAuthErrorMessage() { test::AuthErrorBubbleWaiter()->Wait(); }
 
  protected:
   FakeGaiaMixin fake_gaia_{&mixin_host_};

@@ -15,7 +15,7 @@
 #include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "chrome/browser/extensions/extension_gcm_app_handler.h"
+#include "chrome/browser/extensions/api/gcm/extension_gcm_app_handler.h"
 #include "chrome/browser/gcm/gcm_profile_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/gcm.h"
@@ -133,7 +133,7 @@ ExtensionFunction::ResponseAction GcmRegisterFunction::Run() {
 void GcmRegisterFunction::CompleteFunctionWithResult(
     const std::string& registration_id,
     gcm::GCMClient::Result gcm_result) {
-  base::Value::List result;
+  base::ListValue result;
   result.Append(registration_id);
 
   const bool succeeded = gcm::GCMClient::SUCCESS == gcm_result;
@@ -184,8 +184,9 @@ ExtensionFunction::ResponseAction GcmSendFunction::Run() {
   gcm::OutgoingMessage outgoing_message;
   outgoing_message.id = params->message.message_id;
   outgoing_message.data = params->message.data.additional_properties;
-  if (params->message.time_to_live)
+  if (params->message.time_to_live) {
     outgoing_message.time_to_live = *params->message.time_to_live;
+  }
 
   GetGCMDriver()->Send(
       extension()->id(), params->message.destination_id, outgoing_message,
@@ -198,7 +199,7 @@ ExtensionFunction::ResponseAction GcmSendFunction::Run() {
 void GcmSendFunction::CompleteFunctionWithResult(
     const std::string& message_id,
     gcm::GCMClient::Result gcm_result) {
-  base::Value::List result;
+  base::ListValue result;
   result.Append(message_id);
 
   const bool succeeded = gcm::GCMClient::SUCCESS == gcm_result;
@@ -232,8 +233,9 @@ void GcmJsEventRouter::OnMessage(const std::string& app_id,
                                  const gcm::IncomingMessage& message) {
   api::gcm::OnMessage::Message message_arg;
   message_arg.data.additional_properties = message.data;
-  if (!message.sender_id.empty())
+  if (!message.sender_id.empty()) {
     message_arg.from = message.sender_id;
+  }
   if (!message.collapse_key.empty()) {
     message_arg.collapse_key = message.collapse_key;
   }

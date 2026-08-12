@@ -137,8 +137,8 @@ WebURLResponse WebURLResponse::Create(
   response.SetCurrentRequestUrl(url);
   response.SetResponseTime(head.response_time);
   response.SetOriginalResponseTime(head.original_response_time);
-  response.SetMimeType(WebString::FromUTF8(head.mime_type));
-  response.SetTextEncodingName(WebString::FromUTF8(head.charset));
+  response.SetMimeType(WebString::FromUtf8(head.mime_type));
+  response.SetTextEncodingName(WebString::FromUtf8(head.charset));
   response.SetExpectedContentLength(head.content_length);
   response.SetHasMajorCertificateErrors(
       net::IsCertStatusError(head.cert_status));
@@ -152,6 +152,7 @@ WebURLResponse WebURLResponse::Create(
   response.SetWasFetchedViaSPDY(head.was_fetched_via_spdy);
   response.SetWasFetchedViaServiceWorker(head.was_fetched_via_service_worker);
   response.SetFromSyntheticResponse(head.from_synthetic_response);
+  response.SetInterceptedByPlugin(head.intercepted_by_plugin);
   response.SetDidUseSharedDictionary(head.did_use_shared_dictionary);
   response.SetServiceWorkerResponseSource(head.service_worker_response_source);
   if (!head.service_worker_router_info.is_null()) {
@@ -165,11 +166,11 @@ WebURLResponse WebURLResponse::Create(
   response.SetCacheStorageCacheName(
       head.service_worker_response_source ==
               network::mojom::FetchResponseSource::kCacheStorage
-          ? WebString::FromUTF8(head.cache_storage_cache_name)
+          ? WebString::FromUtf8(head.cache_storage_cache_name)
           : WebString());
 
   response.SetDnsAliases(
-      base::ToVector(head.dns_aliases, &WebString::FromASCII));
+      base::ToVector(head.dns_aliases, &WebString::FromAscii));
   response.SetRemoteIPEndpoint(head.remote_endpoint);
   response.SetAddressSpace(head.response_address_space);
   response.SetClientAddressSpace(head.client_address_space);
@@ -184,7 +185,7 @@ WebURLResponse WebURLResponse::Create(
       head.encoded_body_length ? head.encoded_body_length->value : 0);
   response.SetWasAlpnNegotiated(head.was_alpn_negotiated);
   response.SetAlpnNegotiatedProtocol(
-      WebString::FromUTF8(head.alpn_negotiated_protocol));
+      WebString::FromUtf8(head.alpn_negotiated_protocol));
   response.SetAlternateProtocolUsage(head.alternate_protocol_usage);
   response.SetHasAuthorizationCoveredByWildcardOnPreflight(
       head.has_authorization_covered_by_wildcard_on_preflight);
@@ -495,6 +496,10 @@ void WebURLResponse::SetFromSyntheticResponse(bool value) {
   resource_response_->SetFromSyntheticResponse(value);
 }
 
+void WebURLResponse::SetInterceptedByPlugin(bool value) {
+  resource_response_->SetInterceptedByPlugin(value);
+}
+
 network::mojom::FetchResponseSource
 WebURLResponse::GetServiceWorkerResponseSource() const {
   return resource_response_->GetServiceWorkerResponseSource();
@@ -569,7 +574,7 @@ std::vector<WebString> WebURLResponse::CorsExposedHeaderNames() const {
 void WebURLResponse::SetCorsExposedHeaderNames(
     const std::vector<WebString>& header_names) {
   Vector<String> exposed_header_names;
-  exposed_header_names.AppendSpan(base::span(header_names));
+  exposed_header_names.append_range(header_names);
   resource_response_->SetCorsExposedHeaderNames(exposed_header_names);
 }
 
@@ -612,7 +617,7 @@ void WebURLResponse::SetEncodedDataLength(int64_t length) {
   resource_response_->SetEncodedDataLength(length);
 }
 
-int64_t WebURLResponse::EncodedBodyLength() const {
+uint64_t WebURLResponse::EncodedBodyLength() const {
   return resource_response_->EncodedBodyLength();
 }
 

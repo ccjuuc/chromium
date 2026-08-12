@@ -10,15 +10,15 @@
 #include "base/command_line.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/extensions/api/tabs/tabs_api.h"
+#include "chrome/browser/extensions/chrome_app_deprecation.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/apps/chrome_app_delegate.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/extensions/app_launch_params.h"
-#include "chrome/browser/web_applications/extension_status_utils.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
@@ -98,7 +98,8 @@ void PlatformAppBrowserTest::TearDownOnMainThread() {
 // static
 AppWindow* PlatformAppBrowserTest::GetFirstAppWindowForBrowser(
     Browser* browser) {
-  AppWindowRegistry* app_registry = AppWindowRegistry::Get(browser->profile());
+  AppWindowRegistry* app_registry =
+      AppWindowRegistry::Get(browser->GetProfile());
   const AppWindowRegistry::AppWindowList& app_windows =
       app_registry->app_windows();
 
@@ -179,7 +180,7 @@ void PlatformAppBrowserTest::LaunchPlatformApp(const Extension* extension) {
 void PlatformAppBrowserTest::LaunchHostedApp(const Extension* extension) {
   apps::AppServiceProxyFactory::GetForProfile(profile())->LaunchAppWithParams(
       CreateAppLaunchParamsUserContainer(
-          browser()->profile(), extension,
+          browser()->GetProfile(), extension,
           WindowOpenDisposition::NEW_FOREGROUND_TAB,
           apps::LaunchSource::kFromCommandLine));
 }
@@ -199,7 +200,7 @@ AppWindow* PlatformAppBrowserTest::GetFirstAppWindow() {
 AppWindow* PlatformAppBrowserTest::GetFirstAppWindowForApp(
     const std::string& app_id) {
   AppWindowRegistry* app_registry =
-      AppWindowRegistry::Get(browser()->profile());
+      AppWindowRegistry::Get(browser()->GetProfile());
   const AppWindowRegistry::AppWindowList& app_windows =
       app_registry->GetAppWindowsForApp(app_id);
 
@@ -214,9 +215,8 @@ size_t PlatformAppBrowserTest::RunGetWindowsFunctionForExtension(
     const Extension* extension) {
   scoped_refptr<WindowsGetAllFunction> function = new WindowsGetAllFunction();
   function->set_extension(extension);
-  base::Value::List result(
-      utils::ToList(utils::RunFunctionAndReturnSingleResult(
-          function.get(), "[]", browser()->profile())));
+  base::ListValue result(utils::ToList(utils::RunFunctionAndReturnSingleResult(
+      function.get(), "[]", browser()->GetProfile())));
   return result.size();
 }
 
@@ -226,18 +226,19 @@ bool PlatformAppBrowserTest::RunGetWindowFunctionForExtension(
   scoped_refptr<WindowsGetFunction> function = new WindowsGetFunction();
   function->set_extension(extension);
   utils::RunFunction(function.get(), base::StringPrintf("[%u]", window_id),
-                     browser()->profile(), api_test_utils::FunctionMode::kNone);
+                     browser()->GetProfile(),
+                     api_test_utils::FunctionMode::kNone);
   return *function->response_type() ==
          ExtensionFunction::ResponseType::kSucceeded;
 }
 
 size_t PlatformAppBrowserTest::GetAppWindowCount() {
-  return AppWindowRegistry::Get(browser()->profile())->app_windows().size();
+  return AppWindowRegistry::Get(browser()->GetProfile())->app_windows().size();
 }
 
 size_t PlatformAppBrowserTest::GetAppWindowCountForApp(
     const std::string& app_id) {
-  return AppWindowRegistry::Get(browser()->profile())
+  return AppWindowRegistry::Get(browser()->GetProfile())
       ->GetAppWindowsForApp(app_id)
       .size();
 }
@@ -254,8 +255,8 @@ AppWindow* PlatformAppBrowserTest::CreateAppWindowFromParams(
     const Extension* extension,
     const AppWindow::CreateParams& params) {
   AppWindow* window = new AppWindow(
-      browser()->profile(),
-      std::make_unique<ChromeAppDelegate>(browser()->profile(), true),
+      browser()->GetProfile(),
+      std::make_unique<ChromeAppDelegate>(browser()->GetProfile(), true),
       extension);
   ProcessManager* process_manager = ProcessManager::Get(context);
   ExtensionHost* background_host =
@@ -283,6 +284,11 @@ void PlatformAppBrowserTest::CallAdjustBoundsToBeVisibleOnScreenForAppWindow(
   window->AdjustBoundsToBeVisibleOnScreen(cached_bounds, cached_screen_bounds,
                                           current_screen_bounds, minimum_size,
                                           bounds);
+}
+
+void PlatformAppBrowserTest::SetNativeWindowFullscreenForTesting(
+    AppWindow* window) {
+  window->SetNativeWindowFullscreen();
 }
 
 AppWindow* PlatformAppBrowserTest::CreateTestAppWindow(

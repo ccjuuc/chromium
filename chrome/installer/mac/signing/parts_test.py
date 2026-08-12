@@ -29,6 +29,22 @@ class TestGetParts(unittest.TestCase):
             all_parts['helper-alerts'].identifier)
         self.assertEqual('test.signing.bundle_id.helper',
                          all_parts['helper-app'].identifier)
+        self.assertIn('libEGL.dylib', all_parts)
+        self.assertIn('libGLESv2.dylib', all_parts)
+
+    def test_get_parts_static_angle(self):
+
+        class StaticAngleTestConfig(test_config.TestConfig):
+
+            @property
+            def use_static_angle(self):
+                return True
+
+        config = StaticAngleTestConfig()
+        all_parts = parts.get_parts(config)
+        self.assertNotIn('libEGL.dylib', all_parts)
+        self.assertNotIn('libGLESv2.dylib', all_parts)
+        self.assertIn('libvulkan.dylib', all_parts)
 
     def test_get_parts_no_customize(self):
         config = model.Distribution(channel='dev').to_config(
@@ -61,6 +77,18 @@ class TestGetParts(unittest.TestCase):
         self.assertEqual('test.signing.bundle_id.helper',
                          all_parts['helper-app'].identifier)
 
+    def test_get_parts_chrome_branded(self):
+        config = test_config.TestConfig()
+        all_parts = parts.get_parts(config)
+        self.assertIn('libchromecompaneros.dylib', all_parts)
+        self.assertEqual('libchromecompaneros',
+                         all_parts['libchromecompaneros.dylib'].identifier)
+
+    def test_get_parts_non_chrome_branded(self):
+        config = test_config.TestConfigNonChromeBranded()
+        all_parts = parts.get_parts(config)
+        self.assertNotIn('libchromecompaneros.dylib', all_parts)
+
     def test_part_options(self):
         all_parts = parts.get_parts(test_config.TestConfig())
         self.assertEqual(
@@ -82,10 +110,6 @@ class TestGetParts(unittest.TestCase):
             model.CodeSignOptions.RESTRICT | model.CodeSignOptions.KILL
             | model.CodeSignOptions.HARDENED_RUNTIME,
             all_parts['helper-gpu-app'].options)
-        self.assertEqual(
-            model.CodeSignOptions.RESTRICT | model.CodeSignOptions.KILL
-            | model.CodeSignOptions.HARDENED_RUNTIME,
-            all_parts['helper-plugin-app'].options)
         self.assertEqual(
             model.CodeSignOptions.RESTRICT
             | model.CodeSignOptions.LIBRARY_VALIDATION

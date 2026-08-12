@@ -8,13 +8,14 @@
 #import "base/gtest_prod_util.h"
 #import "components/enterprise/connectors/core/connectors_service_base.h"
 #import "components/keyed_service/core/keyed_service.h"
-#import "ios/chrome/browser/enterprise/connectors/connectors_manager.h"
 
-class ProfileIOS;
+namespace signin {
+class IdentityManager;
+}
 
 namespace policy {
 class UserCloudPolicyManager;
-}  // namespace policy
+}
 
 namespace enterprise_connectors {
 
@@ -24,7 +25,12 @@ namespace enterprise_connectors {
 // - OnSecurityEventEnterpriseConnectors
 class ConnectorsService : public ConnectorsServiceBase, public KeyedService {
  public:
-  explicit ConnectorsService(ProfileIOS* profile);
+  ConnectorsService(PrefService* pref_service,
+                    signin::IdentityManager* identity_manager,
+                    policy::UserCloudPolicyManager* user_cloud_policy_manager,
+                    const std::string& profile_name,
+                    const base::FilePath& profile_path,
+                    bool is_off_the_record);
   ~ConnectorsService() override;
 
   // Returns the CBCM domain or profile domain that enables connector policies.
@@ -32,8 +38,6 @@ class ConnectorsService : public ConnectorsServiceBase, public KeyedService {
   // precedence.
   std::string GetManagementDomain();
 
-  // ConnectorsServiceBase:
-  bool IsConnectorEnabled(AnalysisConnector connector) const override;
   // Returns the DM tokens corresponding to browser management, if one is
   // present.
   std::optional<std::string> GetBrowserDmToken() const override;
@@ -50,13 +54,22 @@ class ConnectorsService : public ConnectorsServiceBase, public KeyedService {
   const PrefService* GetPrefs() const override;
   policy::CloudPolicyManager* GetManagedUserCloudPolicyManager() const override;
 
+  bool IsProfileAffiliated() const override;
+  std::string GetProfileEmail() const override;
+  std::string GetDeviceClientId() const override;
+
  private:
   FRIEND_TEST_ALL_PREFIXES(ConnectorsServiceTest, GetPrefs);
   FRIEND_TEST_ALL_PREFIXES(ConnectorsServiceTest, GetProfileDmToken);
   FRIEND_TEST_ALL_PREFIXES(ConnectorsServiceTest, GetBrowserDmToken);
   FRIEND_TEST_ALL_PREFIXES(ConnectorsServiceTest, ConnectorsEnabled);
 
-  raw_ptr<ProfileIOS> profile_;
+  raw_ptr<PrefService> pref_service_;
+  raw_ptr<signin::IdentityManager> identity_manager_;
+  raw_ptr<policy::UserCloudPolicyManager> user_cloud_policy_manager_;
+  std::string profile_name_;
+  base::FilePath profile_path_;
+  bool is_off_the_record_ = false;
 };
 
 }  // namespace enterprise_connectors

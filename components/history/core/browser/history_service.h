@@ -228,13 +228,6 @@ class HistoryService : public KeyedService,
                              const GURL& url,
                              base::Time end_ts);
 
-  // Updates the history database by setting the browsing topics allowed bit.
-  // The page can be identified by the combination of the context id, the
-  // navigation entry id and the url. No-op if the page is not found.
-  void SetBrowsingTopicsAllowed(ContextID context_id,
-                                int nav_entry_id,
-                                const GURL& url);
-
   // Updates the history database by setting the detected language of the page
   // content.
   // The page can be identified by the combination of the context id, the
@@ -313,6 +306,18 @@ class HistoryService : public KeyedService,
       QueryURLCallback callback,
       base::CancelableTaskTracker* tracker);
 
+  // Returns one `URLID` per input URL, in input order; unknown URLs map to 0.
+  // Returns `nullopt` if the history database is unavailable.
+  using QueryUrlIdsCallback =
+      base::OnceCallback<void(std::optional<std::vector<URLID>>)>;
+
+  // Bulk variant of `QueryURL` that resolves many URLs in a single backend
+  // round trip.
+  base::CancelableTaskTracker::TaskId QueryUrlIds(
+      const std::vector<GURL>& urls,
+      QueryUrlIdsCallback callback,
+      base::CancelableTaskTracker* tracker);
+
   // Queries the basic information about the URL in the history database, and
   // includes the visits (each time the URL is visited). If visits are not
   // needed, use `QueryURL()` instead, as it's faster.
@@ -372,8 +377,8 @@ class HistoryService : public KeyedService,
       base::OnceCallback<void(VisibleVisitCountToHostResult)>;
 
   // TODO(crbug.com/40778368): Rename this function to use origin instead of
-  // host.
-  base::CancelableTaskTracker::TaskId GetVisibleVisitCountToHost(
+  // host. Virtual for mocking.
+  virtual base::CancelableTaskTracker::TaskId GetVisibleVisitCountToHost(
       const GURL& url,
       GetVisibleVisitCountToHostCallback callback,
       base::CancelableTaskTracker* tracker);
@@ -650,28 +655,28 @@ class HistoryService : public KeyedService,
   // Delete and add 2 sets of clusters. Doing this in one call avoids an
   // additional thread hops.
   base::CancelableTaskTracker::TaskId ReplaceClusters(
-      const std::vector<int64_t>& ids_to_delete,
+      const std::vector<ClusterId>& ids_to_delete,
       const std::vector<Cluster>& clusters_to_add,
       base::OnceClosure callback,
       base::CancelableTaskTracker* tracker);
 
   // Implemented and called by `ReserveNextClusterIdWithVisit()` below with the
   // last cluster ID that was added to the database.
-  using ClusterIdCallback = base::OnceCallback<void(int64_t)>;
+  using ClusterIdCallback = base::OnceCallback<void(ClusterId)>;
 
   // Adds a cluster with `cluster_visit` and invokes `callback` with the ID of
   // the new cluster. It is expected for this to only be called for local
   // visits. Virtual for testing.
   virtual base::CancelableTaskTracker::TaskId ReserveNextClusterIdWithVisit(
-      const ClusterVisit& cluster_visit,
-      base::OnceCallback<void(int64_t)> callback,
+      ClusterVisit cluster_visit,
+      base::OnceCallback<void(ClusterId)> callback,
       base::CancelableTaskTracker* tracker);
 
   // Adds `visits` to the cluster `cluster_id`.
   // Virtual for testing.
   virtual base::CancelableTaskTracker::TaskId AddVisitsToCluster(
-      int64_t cluster_id,
-      const std::vector<ClusterVisit>& visits,
+      ClusterId cluster_id,
+      std::vector<ClusterVisit> visits,
       base::OnceClosure callback,
       base::CancelableTaskTracker* tracker);
 
@@ -691,7 +696,7 @@ class HistoryService : public KeyedService,
   // Updates the details of the existing cluster visit that has the same visit
   // ID as `new_cluster_visit`.
   virtual base::CancelableTaskTracker::TaskId UpdateClusterVisit(
-      const history::ClusterVisit& new_cluster_visit,
+      history::ClusterVisit new_cluster_visit,
       base::OnceClosure callback,
       base::CancelableTaskTracker* tracker);
 

@@ -24,6 +24,9 @@ namespace extensions {
 namespace keys = manifest_keys;
 namespace errors = manifest_errors;
 
+// static
+const char* InputComponents::kManifestDataKey = keys::kInputComponents;
+
 InputComponentInfo::InputComponentInfo() = default;
 
 InputComponentInfo::InputComponentInfo(const InputComponentInfo& other) =
@@ -37,8 +40,7 @@ InputComponents::~InputComponents() = default;
 // static
 const std::vector<InputComponentInfo>* InputComponents::GetInputComponents(
     const Extension* extension) {
-  InputComponents* info = static_cast<InputComponents*>(
-      extension->GetManifestData(keys::kInputComponents));
+  const auto* info = extension->GetManifestData<InputComponents>();
   return info ? &info->input_components : nullptr;
 }
 
@@ -56,8 +58,7 @@ bool InputComponentsHandler::Parse(Extension* extension,
 
   auto info = std::make_unique<InputComponents>();
   for (size_t i = 0; i < list_value->GetList().size(); ++i) {
-    const base::Value::Dict* module_value =
-        list_value->GetList()[i].GetIfDict();
+    const base::DictValue* module_value = list_value->GetList()[i].GetIfDict();
     if (!module_value) {
       *error = errors::kInvalidInputComponents16;
       return false;
@@ -96,18 +97,24 @@ bool InputComponentsHandler::Parse(Extension* extension,
     }
 
     std::set<std::string> layouts;
-    const base::Value::List* layouts_value =
+    const base::ListValue* layouts_value =
         module_value->FindList(keys::kLayouts);
     if (layouts_value) {
       for (size_t j = 0; j < layouts_value->size(); ++j) {
         const base::Value& layout = (*layouts_value)[j];
-        if (!layout.is_string()) {
+        const std::string* layout_str = layout.GetIfString();
+        if (!layout_str ||
+            !base::ContainsOnlyChars(*layout_str,
+                                     "abcdefghijklmnopqrstuvwxyz"
+                                     "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                                     "0123456789"
+                                     "_()-:")) {
           *error = ErrorUtils::FormatErrorMessageUTF16(
               errors::kInvalidInputComponentLayoutName, base::NumberToString(i),
               base::NumberToString(j));
           return false;
         }
-        layouts.insert(layout.GetString());
+        layouts.insert(*layout_str);
       }
     }
 
@@ -151,7 +158,7 @@ bool InputComponentsHandler::Parse(Extension* extension,
     component.input_view_url = std::move(input_view_url);
     info->input_components.push_back(std::move(component));
   }
-  extension->SetManifestData(keys::kInputComponents, std::move(info));
+  extension->SetManifestData(std::move(info));
   return true;
 }
 

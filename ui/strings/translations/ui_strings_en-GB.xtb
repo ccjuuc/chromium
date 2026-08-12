@@ -1,7 +1,6 @@
 <?xml version="1.0" ?>
 <!DOCTYPE translationbundle>
 <translationbundle lang="en-GB">
-<translation id="1028699632127661925">Sending to <ph name="DEVICE_NAME" />...</translation>
 <translation id="111910763555783249">Notification settings</translation>
 <translation id="1127811143501539442">{DAYS,plural, =1{1 day ago}other{# days ago}}</translation>
 <translation id="1156623771253174079">{SECONDS,plural, =1{1 minute ago}other{# minutes ago}}</translation>
@@ -12,7 +11,6 @@
 <translation id="1253734725326687145">Touch target moved to top right. Tap here.</translation>
 <translation id="1266864766717917324">Couldn't share <ph name="CONTENT_TYPE" /></translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">Try sharing the text in smaller chunks.</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">Left to Right</translation>
 <translation id="1383876407941801731">Search</translation>
@@ -20,6 +18,7 @@
 <translation id="1432724887402139994">{SECONDS,plural, =1{1 Minute Ago}other{# Minutes Ago}}</translation>
 <translation id="1450753235335490080">Can't share <ph name="CONTENT_TYPE" /></translation>
 <translation id="1523230076022876491">{MONTHS,plural, =1{1 Month Ago}other{# Months Ago}}</translation>
+<translation id="1591017414891297549">PREVIEW</translation>
 <translation id="1591184457164800433">{MINUTES,plural, =1{1 minute and }other{# minutes and }}</translation>
 <translation id="1643823602425662293">Notification</translation>
 <translation id="169515659049020177">Shift</translation>
@@ -44,7 +43,6 @@
 <translation id="2148716181193084225">Today</translation>
 <translation id="2168039046890040389">Page Up</translation>
 <translation id="2190355936436201913">(empty)</translation>
-<translation id="2192232475740621500">Use low density</translation>
 <translation id="2267918077332197517">Block all notifications from this site</translation>
 <translation id="2283117145434822734">F6</translation>
 <translation id="2289052229480071835">Tap the touch targets on your screen.</translation>
@@ -56,7 +54,6 @@
 <translation id="2388990488038464401">Call this number from your phone?</translation>
 <translation id="2435457462613246316">Show password</translation>
 <translation id="24452542372838207">Expand notification</translation>
-<translation id="2445449901874883781">Use high density</translation>
 <translation id="2448407890032181691">Touch target moved to bottom right. Tap here.</translation>
 <translation id="2482878487686419369">Notifications</translation>
 <translation id="2497284189126895209">All Files</translation>
@@ -69,7 +66,6 @@
 <translation id="2586657967955657006">Clipboard</translation>
 <translation id="2653844658857826081">NEW</translation>
 <translation id="2666092431469916601">Top</translation>
-<translation id="2701330563083355633">Shared from <ph name="DEVICE_NAME" /></translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{1 year ago}other{# years ago}}</translation>
 <translation id="2878511608894704031">Delete all</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{in 1 d}other{in # d}}</translation>
@@ -88,7 +84,6 @@
 <translation id="3306688585798492231">Built-in display</translation>
 <translation id="335581015389089642">Speech</translation>
 <translation id="3372635229069101468">Click <ph name="BEGIN_BOLD" />Details<ph name="END_BOLD" />.</translation>
-<translation id="3389286852084373014">Text is too large</translation>
 <translation id="3406306243914553062">HTML content</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{1 day left}other{# days left}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" /> File</translation>
@@ -109,6 +104,7 @@
 <translation id="4031910098617850788">F5</translation>
 <translation id="40579289237549812">{UNREAD_NOTIFICATIONS,plural, =1{1 unread notification}other{# unread notifications}}</translation>
 <translation id="41501027364808384">{COUNT,plural, =1{Turn on the following extension in Incognito:}other{Turn on the following extensions in Incognito:}}</translation>
+<translation id="4230098358142093034">Home</translation>
 <translation id="4266252015790371705">{MONTHS,plural, =1{1 month ago}other{# months ago}}</translation>
 <translation id="4277033906326892359">Column <ph name="COLUMN_NAME" /> sorted in ascending order</translation>
 <translation id="4289300219472526559">Start Speaking</translation>
@@ -190,7 +186,6 @@
 <translation id="6965382102122355670">OK</translation>
 <translation id="6974053822202609517">Right to Left</translation>
 <translation id="7052633198403197513">F1</translation>
-<translation id="7170202025028120564">Your application's display settings will take effect when it is next restarted.</translation>
 <translation id="7222373446505536781">F11</translation>
 <translation id="7238427729722629793">{MINUTES,plural, =1{1 min left}other{# mins left}}</translation>
 <translation id="7252604552361840748">Find the extension above</translation>
@@ -200,6 +195,7 @@
 <translation id="7410957453383678442">{MINUTES,plural, =1{1 minute left}other{# minutes left}}</translation>
 <translation id="7437971918971306061">Column <ph name="COLUMN_NAME" /> unsorted.</translation>
 <translation id="7460907917090416791"><ph name="QUANTITY" /> TB</translation>
+<translation id="7485236722522518129">F4</translation>
 <translation id="7507604095951736240">Emoji</translation>
 <translation id="7620655452534002301">Removed.</translation>
 <translation id="7658239707568436148">Cancel</translation>
@@ -232,6 +228,7 @@
 <translation id="8677655579646609597"><ph name="QUANTITY" /> KB/s</translation>
 <translation id="8725488761726303204">+<ph name="NUMBER" /> more</translation>
 <translation id="8730621377337864115">Done</translation>
+<translation id="8741385002816058621">This is a feature in preview</translation>
 <translation id="8772073294905169192">{HOURS,plural, =1{1h}other{#h}}</translation>
 <translation id="8798099450830957504">Default</translation>
 <translation id="8841375032071747811">Back button</translation>
@@ -245,7 +242,6 @@
 <translation id="9170848237812810038">&amp;Undo</translation>
 <translation id="9195990613383871904">Tomorrow</translation>
 <translation id="928628199082367701">Super</translation>
-<translation id="932327136139879170">Home</translation>
 <translation id="944069440740578670">Unread notifications</translation>
 <translation id="966963601246348639">{SECONDS,plural, =1{1 Second Ago}other{# Seconds Ago}}</translation>
 </translationbundle>

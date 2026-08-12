@@ -35,8 +35,8 @@ constexpr NSTimeInterval kIdentityButtonAnimationDuration = 0.1;
 constexpr CGFloat kContentMargin = 16.;
 // Space between elements in `_contentView`.
 constexpr CGFloat kContentSpacing = 16.;
-// Vertical insets of primary button.
-constexpr CGFloat kPrimaryButtonVerticalInsets = 15.5;
+// Corner radius for the identity button.
+constexpr CGFloat kIdentityButtonControlCornerRadius = 24.;
 
 // The coefficient to multiply the title view font with to get the logo size.
 constexpr CGFloat kLogoTitleFontMultiplier = 1.75;
@@ -57,22 +57,25 @@ UIFont* GetNavigationBarTitleFont() {
 }
 
 // Returns the width and height of a single pixel in point.
-CGFloat GetPixelLength() {
-  return 1.0 / [UIScreen mainScreen].scale;
+CGFloat GetPixelLength(UITraitCollection* traitCollection) {
+  CGFloat scale = traitCollection.displayScale;
+  if (scale == 0) {
+    scale = 2.0;
+  }
+  return 1.0 / scale;
 }
 
 // Creates the google photos branded title view for the navigation.
 BrandedNavigationItemTitleView* CreateGooglePhotosImageView(
     NSString* title,
-    NSString* brandedSymbolName) {
+    Symbol brandedSymbol) {
   BrandedNavigationItemTitleView* title_view =
       [[BrandedNavigationItemTitleView alloc]
           initWithFont:ios::provider::GetBrandedProductRegularFont(
                            UIFont.labelFontSize)];
   title_view.title = title;
-  title_view.imageLogo = MakeSymbolMulticolor(CustomSymbolWithPointSize(
-      brandedSymbolName, UIFont.labelFontSize * kLogoTitleFontMultiplier));
-  ;
+  title_view.imageLogo = MakeSymbolMulticolor(SymbolWithPointSize(
+      brandedSymbol, UIFont.labelFontSize * kLogoTitleFontMultiplier));
   title_view.titleLogoSpacing = kTitleLogoSpacing;
   return title_view;
 }
@@ -154,7 +157,9 @@ UILabel* CreateGooglePhotosTitleLabel(NSString* title) {
 
 - (void)stopSpinner {
   // Remove spinner.
-  DCHECK(_activityIndicatorView);
+  if (!_activityIndicatorView) {
+    return;
+  }
   [_activityIndicatorView removeFromSuperview];
   _activityIndicatorView = nil;
   if (!_identityButtonControlShouldBeHidden) {
@@ -203,13 +208,15 @@ UILabel* CreateGooglePhotosTitleLabel(NSString* title) {
   // Set the navigation title in the left bar button item to have left
   // alignment.
   if (_configuration.useBrandedTitle) {
-    if (_configuration.brandedSymbolName) {
+    if (_configuration.brandedSymbol.has_value()) {
       self.navigationItem.titleView = CreateGooglePhotosImageView(
-          _configuration.titleText, _configuration.brandedSymbolName);
+          _configuration.titleText, _configuration.brandedSymbol.value());
     } else {
       self.navigationItem.titleView =
           CreateGooglePhotosTitleLabel(_configuration.titleText);
     }
+  } else if (@available(iOS 26, *)) {
+    self.navigationItem.title = _configuration.titleText;
   } else {
     // Set the navigation title in the left bar button item to have left
     // alignment.
@@ -230,11 +237,10 @@ UILabel* CreateGooglePhotosTitleLabel(NSString* title) {
   self.navigationController.navigationBar.maximumContentSizeCategory =
       UIContentSizeCategoryExtraExtraLarge;
   // Create the skip button.
-  UIBarButtonItem* cancelButtonItem =
-      [[UIBarButtonItem alloc] initWithTitle:l10n_util::GetNSString(IDS_CANCEL)
-                                       style:UIBarButtonItemStylePlain
-                                      target:self
-                                      action:@selector(cancelButtonAction:)];
+  UIBarButtonItem* cancelButtonItem = [[UIBarButtonItem alloc]
+      initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
+                           target:self
+                           action:@selector(cancelButtonAction:)];
   cancelButtonItem.accessibilityIdentifier =
       kAccountPickerCancelButtonAccessibilityIdentifier;
   self.navigationItem.rightBarButtonItem = cancelButtonItem;
@@ -374,7 +380,8 @@ UILabel* CreateGooglePhotosTitleLabel(NSString* title) {
                          constant:16.],
       [separator.trailingAnchor
           constraintEqualToAnchor:identityStackView.trailingAnchor],
-      [separator.heightAnchor constraintEqualToConstant:GetPixelLength()],
+      [separator.heightAnchor
+          constraintEqualToConstant:GetPixelLength(self.traitCollection)],
       // Switch with label constraints
       [switchWithLabelContainer.widthAnchor
           constraintEqualToAnchor:identityStackView.widthAnchor],
@@ -395,11 +402,6 @@ UILabel* CreateGooglePhotosTitleLabel(NSString* title) {
   // Add the primary button (the "Continue as"/"Sign in" button).
   _primaryButton =
       [[ChromeButton alloc] initWithStyle:ChromeButtonStylePrimary];
-  UIButtonConfiguration* buttonConfiguration = _primaryButton.configuration;
-  buttonConfiguration.contentInsets = NSDirectionalEdgeInsetsMake(
-      kPrimaryButtonVerticalInsets, 0, kPrimaryButtonVerticalInsets, 0);
-  _primaryButton.configuration = buttonConfiguration;
-
   _primaryButton.accessibilityIdentifier =
       kAccountPickerPrimaryButtonAccessibilityIdentifier;
   _primaryButton.translatesAutoresizingMaskIntoConstraints = NO;
@@ -414,9 +416,12 @@ UILabel* CreateGooglePhotosTitleLabel(NSString* title) {
         constraintEqualToAnchor:_contentView.widthAnchor]
   ]];
 
-  if (!_configuration.defaultCornerRadius) {
-    // Adjust the identity button control rounded corners to the same value than
-    // the "continue as" button.
+  // Adjust the identity button control rounded corners to the same value than
+  // the "continue as" button.
+  if (@available(iOS 26, *)) {
+    _groupedIdentityButtonSection.layer.cornerRadius =
+        kIdentityButtonControlCornerRadius;
+  } else {
     _groupedIdentityButtonSection.layer.cornerRadius =
         _primaryButton.configuration.background.cornerRadius;
   }
@@ -487,7 +492,6 @@ UILabel* CreateGooglePhotosTitleLabel(NSString* title) {
 #pragma mark - AccountPickerConfirmationScreenConsumer
 
 - (void)showDefaultAccountWithFullName:(NSString*)fullName
-                             givenName:(NSString*)givenName
                                  email:(NSString*)email
                                 avatar:(UIImage*)avatar
                                managed:(BOOL)managed {

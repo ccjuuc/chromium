@@ -125,11 +125,16 @@ particularly dangerous so there will be additional management requirements
 before applying them. For those policies, please append the following statements
 at the end of the policy description according to their supported platforms.
 
-```
-On <ph name="MS_WIN_NAME">Microsoft® Windows®</ph>, this policy is only available on instances that are joined to a <ph name="MS_AD_NAME">Microsoft® Active Directory®</ph> domain, joined to <ph name="MS_AAD_NAME">Microsoft® Azure® Active Directory®</ph> or enrolled in <ph name="CHROME_BROWSER_CLOUD_MANAGEMENT_NAME">Chrome Enterprise Core</ph>`.
+Policies marked as `sensitive: true` will have the appropriate statements
+automatically appended to their description.
 
-On <ph name="MAC_OS_NAME">macOS</ph>, this policy is only available on instances that are managed via MDM, joined to a domain via MCX or enrolled in <ph name="CHROME_BROWSER_CLOUD_MANAGEMENT_NAME">Chrome Enterprise Core</ph>.
+<!-- LINT.IfChange(sensitive_policy_notices) -->
 ```
+On <ph name="MS_WIN_NAME">Microsoft® Windows®</ph>, this policy is only available on instances that are joined to a <ph name="MS_AD_NAME">Microsoft® Active Directory®</ph> domain, joined to <ph name="MS_AAD_NAME">Microsoft® Azure® Active Directory®</ph> or enrolled in <ph name="CHROME_ENTERPRISE_CORE_NAME">Chrome Enterprise Core</ph>.
+
+On <ph name="MAC_OS_NAME">macOS</ph>, this policy is only available on instances that are managed via MDM, joined to a domain via MCX or enrolled in <ph name="CHROME_ENTERPRISE_CORE_NAME">Chrome Enterprise Core</ph>.
+```
+<!-- LINT.ThenChange(/components/policy/resources/policy_templates.py:sensitive_policy_notices) -->
 
 #### Too many details
 
@@ -195,26 +200,33 @@ avoid validation errors.
 * ChromeOS: `<ph name="PRODUCT_OS_NAME">$2<ex>Google ChromeOS</ex></ph>`
 * ChromeOS Flex: `<ph name="PRODUCT_OS_FLEX_NAME">Google ChromeOS Flex</ph>`
 * Chrome Browser Cloud Management: `<ph name="CHROME_BROWSER_CLOUD_MANAGEMENT_NAME">Chrome Browser Cloud Management</ph>`
-* Chrome Cleanup: `<ph name="CHROME_CLEANUP_NAME">Chrome Cleanup</ph>`
+* Chrome Enterprise Core: `<ph name="CHROME_ENTERPRISE_CORE_NAME">Chrome Enterprise Core</ph>`
+* Chrome Enterprise Premium: `<ph name="CHROME_ENTERPRISE_PREMIUM_NAME">Chrome Enterprise Premium</ph>`
 * Chrome Remote Desktop: `<ph name="CHROME_REMOTE_DESKTOP_PRODUCT_NAME">Chrome Remote Desktop</ph>`
 * Chrome Sync: `<ph name="CHROME_SYNC_NAME">Chrome Sync</ph>`
 * Chrome DevTools: `<ph name="CHROME_DEVTOOLS_NAME">Chrome DevTools</ph>`
 
 #### Google Product
 
+* Gemini Enterprise: `<ph name="GEMINI_ENTERPRISE_PRODUCT_NAME">Gemini Enterprise</ph>`
+* Gemini in Chrome: Gemini in Chrome
+* Gemini Spark: `<ph name="GOOGLE_GEMINI_SPARK_PRODUCT_NAME">Gemini Spark</ph>`
 * Google Admin console: `<ph name="GOOGLE_ADMIN_CONSOLE_PRODUCT_NAME">Google Admin console</ph>`
 * Google AI Mode: `<ph name="GOOGLE_AI_MODE_PRODUCT_NAME">Google AI Mode</ph>`
 * Google Calendar: `<ph name="GOOGLE_CALENDAR_NAME">Google Calendar</ph>`
 * Google Cast: `<ph name="PRODUCT_NAME">Google Cast</ph>`
 * Google Classroom: `<ph name="GOOGLE_CLASSROOM_NAME">Google Classroom</ph>`
+* Google Cloud: `<ph name="GOOGLE_CLOUD_PRODUCT_NAME">Google Cloud</ph>`
 * Google Cloud Print: `<ph name="CLOUD_PRINT_NAME">Google Cloud Print</ph>`
 * Google Drive: `<ph name="GOOGLE_DRIVE_NAME">Google Drive</ph>`
 * Google Gemini: `<ph name="GOOGLE_GEMINI_PRODUCT_NAME">Google Gemini</ph>`
+* Google Lens: `<ph name="GOOGLE_LENS_PRODUCT_NAME">Google Lens</ph>`
 * Google Photos: `<ph name="GOOGLE_PHOTOS_PRODUCT_NAME">Google Photos</ph>`
 * Google Search: `<ph name="GOOGLE_SEARCH_PRODUCT_NAME">Google Search</ph>`
 * Google Tasks: `<ph name="GOOGLE_TASKS_NAME">Google Tasks</ph>`
 * Google Update: `<ph name="GOOGLE_UPDATE_NAME">Google Update</ph>`
 * Google Workspace: `<ph name="GOOGLE_WORKSPACE_PRODUCT_NAME">Google Workspace</ph>`
+* YouTube: `<ph name="YOUTUBE_PRODUCT_NAME">YouTube</ph>`
 
 #### Operating System
 
@@ -230,6 +242,9 @@ avoid validation errors.
 * Internet Explorer: `<ph name="IE_PRODUCT_NAME">Internet® Explorer®</ph>`
 * Microsoft Active Directory: `<ph name="MS_AD_NAME">Microsoft® Active Directory®</ph>`
 * Microsoft Azure Active Directory `<ph name="MS_AAD_NAME">Microsoft® Azure® Active Directory®</ph>`
+* Microsoft Authenticator: `<ph name="MS_AUTH_APP_NAME">Microsoft® Authenticator®</ph>`
+* Microsoft Intune Company portal: `<ph name="MS_ICP_NAME">Microsoft® Intune Company Portal®</ph>`
+* Microsoft Link to Windows: `<ph name="MS_LTW_NAME">Microsoft® Link to Windows®</ph>`
 
 Using placeholders means the text won’t be translated. Please update the list
 above if a new placeholder is introduced.

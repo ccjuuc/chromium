@@ -6,24 +6,26 @@ chrome.test.getConfig(function(config) {
   // We expect three events: PENDING, IN_PROGRESS and CANCELED as the final
   // one.
   const statuses = [
-    chrome.printing.JobStatus.PENDING, chrome.printing.JobStatus.IN_PROGRESS,
-    chrome.printing.JobStatus.CANCELED
+    chrome.printing.JobStatus.PENDING,
+    chrome.printing.JobStatus.IN_PROGRESS,
+    chrome.printing.JobStatus.CANCELED,
   ];
-  var eventCounter = 0;
+  let eventCounter = 0;
   chrome.printing.onJobStatusChanged.addListener((jobId, status) => {
     chrome.test.assertEq(statuses[eventCounter], status);
     eventCounter++;
     // We don't expect any other events to happen so finish the test as
     // passed.
-    if (eventCounter == statuses.length)
+    if (eventCounter === statuses.length) {
       chrome.test.notifyPass();
+    }
 
-    if (status == chrome.printing.JobStatus.IN_PROGRESS) {
+    if (status === chrome.printing.JobStatus.IN_PROGRESS) {
       chrome.printing.cancelJob(jobId, () => {});
     }
   });
 
-  const url = 'http://localhost:' + config.testServer.port + '/pdf/test.pdf';
+  const url = `http://localhost:${config.testServer.port}/pdf/test.pdf`;
   submitJob('id', 'test job', url, minimal_ticket, response => {
     chrome.test.assertNe(undefined, response);
     chrome.test.assertNe(undefined, response.status);

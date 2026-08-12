@@ -34,7 +34,6 @@
 #include "base/check_op.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_animation_trigger_behavior.h"
 #include "third_party/blink/renderer/core/style/computed_style_base_constants.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -70,10 +69,12 @@ enum PseudoId : uint8_t {
   kPseudoIdCheckMark,
   kPseudoIdBefore,
   kPseudoIdAfter,
+  kPseudoIdExpandIcon,
   kPseudoIdPickerIcon,
-  kPseudoIdInterestHint,
+  kPseudoIdInterestButton,
   kPseudoIdMarker,
   kPseudoIdBackdrop,
+  kPseudoIdOverscrollBackdrop,
   kPseudoIdSelection,
   kPseudoIdScrollbar,
   kPseudoIdScrollMarker,
@@ -97,6 +98,7 @@ enum PseudoId : uint8_t {
   kPseudoIdViewTransitionOld,
   kPseudoIdViewTransitionNew,
 
+  kPseudoIdSkeleton,
   kPseudoIdOverscrollAreaParent,
 
   // Internal IDs follow:
@@ -118,6 +120,7 @@ enum PseudoId : uint8_t {
   kPseudoIdFileSelectorButton,
   kPseudoIdDetailsContent,
   kPseudoIdPickerSelect,
+  kPseudoIdSelectListbox,
   kPseudoIdPermissionIcon,
 
   // Special values follow:
@@ -266,11 +269,20 @@ enum class EFillBox : unsigned {
   kPadding,
   kContent,
   kText,
+  kBorderArea,
+  kBorderAreaText,  // [ border-area text ] combined
   kFillBox,
   kStrokeBox,
   kViewBox,
   kNoClip
 };
+
+// Returns true for clip values that don't correspond to a standard geometry
+// box and need special handling (e.g. can't produce an opaque rect).
+inline bool IsSpecialClipFillBox(EFillBox box) {
+  return box == EFillBox::kText || box == EFillBox::kBorderArea ||
+         box == EFillBox::kBorderAreaText;
+}
 
 inline EFillBox EnclosingFillBox(EFillBox box_a, EFillBox box_b) {
   if (box_a == EFillBox::kNoClip || box_b == EFillBox::kNoClip) {
@@ -282,9 +294,12 @@ inline EFillBox EnclosingFillBox(EFillBox box_a, EFillBox box_b) {
   if (box_a == EFillBox::kStrokeBox || box_b == EFillBox::kStrokeBox) {
     return EFillBox::kStrokeBox;
   }
-  // background-clip:text is clipped to the border box.
+  // background-clip:text and background-clip:border-area are clipped to the
+  // border box.
   if (box_a == EFillBox::kBorder || box_a == EFillBox::kText ||
-      box_b == EFillBox::kBorder || box_b == EFillBox::kText) {
+      box_a == EFillBox::kBorderArea || box_a == EFillBox::kBorderAreaText ||
+      box_b == EFillBox::kBorder || box_b == EFillBox::kText ||
+      box_b == EFillBox::kBorderArea || box_b == EFillBox::kBorderAreaText) {
     return EFillBox::kBorder;
   }
   if (box_a == EFillBox::kPadding || box_b == EFillBox::kPadding) {
@@ -349,7 +364,7 @@ enum GridAutoFlow {
                          int(kInternalAutoFlowDirectionColumn)
 };
 
-static const size_t kContainmentBits = 6;
+static const size_t kContainmentBits = 5;
 enum Containment {
   kContainsNone = 0x0,
   kContainsLayout = 0x1,
@@ -357,7 +372,6 @@ enum Containment {
   kContainsPaint = 0x4,
   kContainsBlockSize = 0x8,
   kContainsInlineSize = 0x10,
-  kContainsViewTransition = 0x20,
   kContainsSize = kContainsBlockSize | kContainsInlineSize,
   kContainsStrict =
       kContainsStyle | kContainsLayout | kContainsPaint | kContainsSize,
@@ -383,6 +397,23 @@ inline EContainerType operator|(EContainerType a, EContainerType b) {
   return EContainerType(int(a) | int(b));
 }
 inline EContainerType& operator|=(EContainerType& a, EContainerType b) {
+  return a = a | b;
+}
+
+typedef unsigned MarginTrimMask;
+enum EMarginTrim {
+  kMarginTrimNone = 0x0,
+  kMarginTrimBlockStart = 0x1,
+  kMarginTrimInlineStart = 0x2,
+  kMarginTrimBlockEnd = 0x4,
+  kMarginTrimInlineEnd = 0x8,
+  kMarginTrimBlock = kMarginTrimBlockStart | kMarginTrimBlockEnd,
+  kMarginTrimInline = kMarginTrimInlineStart | kMarginTrimInlineEnd,
+};
+inline EMarginTrim operator|(EMarginTrim a, EMarginTrim b) {
+  return EMarginTrim(int(a) | int(b));
+}
+inline EMarginTrim& operator|=(EMarginTrim& a, EMarginTrim b) {
   return a = a | b;
 }
 
@@ -447,17 +478,11 @@ enum class ContentDistributionType : unsigned {
   kStretch
 };
 
-// Reasonable maximum to prevent insane font sizes from causing crashes on some
+// LINT.IfChange(kMaximumAllowedFontSize)
+// A maximum to prevent unreasonable font sizes from causing crashes on some
 // platforms (such as Windows).
 static const float kMaximumAllowedFontSize = 10000.0f;
-
-enum class CSSBoxType : unsigned {
-  kMissing,
-  kMargin,
-  kBorder,
-  kPadding,
-  kContent
-};
+// LINT.ThenChange(//content/app_shim_remote_cocoa/web_menu_runner_mac.mm:fontSize)
 
 enum class TextEmphasisPosition : unsigned {
   kOverRight,
@@ -536,6 +561,19 @@ enum class ViewportUnitFlag {
 enum class TimelineAxis { kBlock, kInline, kX, kY };
 enum class TimelineScroller { kNearest, kRoot, kSelf };
 
+// <shape-box> = <visual-box> | margin-box | half-border-box
+// <visual-box> = border-box | padding-box | content-box
+// https://drafts.csswg.org/css-shapes-1/#typedef-shape-box
+enum class ShapeBox : unsigned {
+  kMarginBox,
+  kBorderBox,
+  kPaddingBox,
+  kContentBox,
+};
+
+// <coord-box> = <paint-box> | view-box
+// <paint-box> = <visual-box> | fill-box | stroke-box
+// https://drafts.csswg.org/css-box-4/#typedef-coord-box
 enum class CoordBox {
   kContentBox,
   kPaddingBox,
@@ -545,15 +583,13 @@ enum class CoordBox {
   kViewBox
 };
 
-// https://drafts.fxtf.org/css-masking/#typedef-geometry-box
+// <geometry-box> = <shape-box> | fill-box | stroke-box | view-box
+// https://drafts.csswg.org/css-masking/#typedef-geometry-box
 enum class GeometryBox {
-  // <box> = border-box | padding-box | content-box
   kBorderBox,
   kPaddingBox,
   kContentBox,
-  // <shape-box> = <box> | margin-box
   kMarginBox,
-  // <geometry-box> = <shape-box> | fill-box | stroke-box | view-box
   kFillBox,
   kStrokeBox,
   kViewBox,
@@ -612,12 +648,6 @@ inline PositionVisibility& operator|=(PositionVisibility& a,
   return a = a | b;
 }
 
-inline PositionVisibility InitialPositionVisibilityKeyword() {
-  if (RuntimeEnabledFeatures::AnchorsVisibleInitialValueEnabled()) {
-    return PositionVisibility::kAnchorsVisible;
-  }
-  return PositionVisibility::kAlways;
-}
 
 enum class FlexWrapMode : uint8_t { kNowrap, kWrap, kWrapReverse };
 

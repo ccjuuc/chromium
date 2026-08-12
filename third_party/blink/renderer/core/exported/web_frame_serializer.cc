@@ -66,9 +66,8 @@ void ContinueGenerateMHTMLParts(
   LocalFrame* frame =
       web_frame ? To<WebLocalFrameImpl>(web_frame)->GetFrame() : nullptr;
 
-  TRACE_EVENT_END1("page-serialization",
-                   "WebFrameSerializer::generateMHTMLParts serializing",
-                   "resource count", static_cast<uint64_t>(resources.size()));
+  TRACE_EVENT_END("page-serialization", "resource count",
+                  static_cast<uint64_t>(resources.size()));
 
   // There was an error serializing the frame (e.g. of an image resource).
   if (resources.empty() || !frame) {
@@ -83,16 +82,16 @@ void ContinueGenerateMHTMLParts(
     // comment). Frames get a Content-ID header.
     MHTMLArchive::GenerateMHTMLPart(
         boundary, FrameSerializer::GetContentID(frame), encoding_policy,
-        resources.TakeFirst(), *output->MutableData());
+        resources.TakeFirst(), output->MutableData());
     while (!resources.empty()) {
       TRACE_EVENT0("page-serialization",
                    "WebFrameSerializer::generateMHTMLParts encoding");
       MHTMLArchive::GenerateMHTMLPart(boundary, String(), encoding_policy,
                                       resources.TakeFirst(),
-                                      *output->MutableData());
+                                      output->MutableData());
     }
   }
-  std::move(callback).Run(WebThreadSafeData(output));
+  std::move(callback).Run(WebThreadSafeData(std::move(output)));
 }
 
 }  // namespace
@@ -112,8 +111,8 @@ WebThreadSafeData WebFrameSerializer::GenerateMHTMLHeader(
   scoped_refptr<RawData> buffer = RawData::Create();
   MHTMLArchive::GenerateMHTMLHeader(
       boundary, document->Url(), document->title(),
-      document->SuggestedMIMEType(), base::Time::Now(), *buffer->MutableData());
-  return WebThreadSafeData(buffer);
+      document->SuggestedMIMEType(), base::Time::Now(), buffer->MutableData());
+  return WebThreadSafeData(std::move(buffer));
 }
 
 void WebFrameSerializer::GenerateMHTMLParts(
@@ -133,8 +132,8 @@ void WebFrameSerializer::GenerateMHTMLParts(
           : MHTMLArchive::EncodingPolicy::kUseDefaultEncoding;
 
   // Serialize.
-  TRACE_EVENT_BEGIN0("page-serialization",
-                     "WebFrameSerializer::generateMHTMLParts serializing");
+  TRACE_EVENT_BEGIN("page-serialization",
+                    "WebFrameSerializer::generateMHTMLParts serializing");
   Deque<SerializedResource> resources;
   FrameSerializer::SerializeFrame(
       *web_delegate, *frame,

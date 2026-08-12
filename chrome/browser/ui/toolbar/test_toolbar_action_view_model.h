@@ -24,7 +24,7 @@ class TestToolbarActionViewModel : public ToolbarActionViewModel {
 
   // ToolbarActionViewModel:
   std::string GetId() const override;
-  base::CallbackListSubscription RegisterUpdateObserver(
+  base::CallbackListSubscription RegisterIconUpdateObserver(
       base::RepeatingClosure observer) override;
   ui::ImageModel GetIcon(content::WebContents* web_contents,
                          const gfx::Size& size) override;
@@ -36,14 +36,19 @@ class TestToolbarActionViewModel : public ToolbarActionViewModel {
   std::u16string GetTooltip(content::WebContents* web_contents) const override;
   ToolbarActionViewModel::HoverCardState GetHoverCardState(
       content::WebContents* web_contents) const override;
+  HoverCardUiState GetHoverCardUiState(
+      const ToolbarActionViewModel::HoverCardState& state,
+      content::WebContents* web_contents) const override;
   bool IsEnabled(content::WebContents* web_contents) const override;
   bool IsShowingPopup() const override;
   void HidePopup() override;
-  gfx::NativeView GetPopupNativeView() override;
+  gfx::NativeView GetPopupNativeViewForTesting() override;
   ui::MenuModel* GetContextMenu(
       extensions::ExtensionContextMenuModel::ContextMenuSource
           context_menu_source) override;
   void ExecuteUserAction(InvocationSource source) override;
+  bool CanHandleAccelerators() const override;
+  bool TryHandleAcceleratorPress() override;
   void TriggerPopupForAPI(ShowPopupCallback callback) override;
   extensions::SitePermissionsHelper::SiteInteraction GetSiteInteraction(
       content::WebContents* web_contents) const override;
@@ -51,7 +56,8 @@ class TestToolbarActionViewModel : public ToolbarActionViewModel {
   // Instruct the controller to fake showing a popup.
   void ShowPopup(bool by_user);
 
-  // Configure the test controller. These also call NotifyObserver().
+  // Configure the test controller. These also call `NotifyIconObserver()`,
+  // which updates the icon states.
   void SetActionName(const std::u16string& name);
   void SetActionTitle(const std::u16string& title);
   void SetAccessibleName(const std::u16string& name);
@@ -62,13 +68,13 @@ class TestToolbarActionViewModel : public ToolbarActionViewModel {
 
  private:
   // Notifies the observers.
-  void NotifyObservers();
+  void NotifyIconObservers();
 
   // The id of the controller.
   std::string id_;
 
   // The observers of the view model.
-  base::RepeatingClosureList observers_;
+  base::RepeatingClosureList icon_observers_;
 
   // Action name for the controller.
   std::u16string action_name_;

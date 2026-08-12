@@ -4,10 +4,10 @@
 
 #include "base/containers/to_vector.h"
 
+#include <forward_list>
 #include <ranges>
 #include <set>
 
-#include "base/containers/adapters.h"
 #include "base/containers/flat_set.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -48,13 +48,29 @@ TEST(ToVectorTest, Projection) {
   ProjectionTest<base::flat_set<int>>();
 }
 
+TEST(ToVectorTest, IdentityWithCustomType) {
+  std::set<int> v = {1, 2, 3};
+  auto vec = base::ToVector<int64_t>(v);
+  static_assert(std::same_as<decltype(vec), std::vector<int64_t>>);
+
+  EXPECT_THAT(vec, ElementsAre(1L, 2L, 3L));
+}
+
+TEST(ToVectorTest, IdentityWithCustomTypeAndProjection) {
+  std::set<int> v = {1, 2, 3};
+  auto vec = base::ToVector<int64_t>(v, [](int x) { return x * 2; });
+  static_assert(std::same_as<decltype(vec), std::vector<int64_t>>);
+
+  EXPECT_THAT(vec, ElementsAre(2L, 4L, 6L));
+}
+
 TEST(ToVectorTest, MoveOnly) {
   std::vector<std::unique_ptr<int>> v;
   v.push_back(std::make_unique<int>(1));
   v.push_back(std::make_unique<int>(2));
   v.push_back(std::make_unique<int>(3));
 
-  auto v2 = base::ToVector(base::RangeAsRvalues(std::move(v)));
+  auto v2 = base::ToVector(std::views::as_rvalue(v));
   EXPECT_THAT(v2, ElementsAre(Pointee(1), Pointee(2), Pointee(3)));
 
   // The old vector should be consumed. The standard guarantees that a
@@ -94,6 +110,41 @@ TEST(ToVectorTest, MoveConstructionFromArray) {
       std::make_unique<int>(3),
   });
   EXPECT_THAT(vec, ElementsAre(Pointee(1), Pointee(2), Pointee(3)));
+}
+
+TEST(ToVectorTest, CustomTypeWithArray) {
+  auto vec = base::ToVector<std::string_view>({
+      "foo",
+      "bar",
+      "baz",
+  });
+
+  static_assert(std::same_as<decltype(vec), std::vector<std::string_view>>);
+  EXPECT_THAT(vec, ElementsAre("foo", "bar", "baz"));
+}
+
+TEST(ToVectorTest, ConstexprTest) {
+  static constexpr int a[] = {1, 2, 3};
+  static_assert(base::ToVector(a) == std::vector{1, 2, 3});
+  static_assert(base::ToVector(a, [](int x) { return x + 1; }) ==
+                std::vector{2, 3, 4});
+  static_assert(base::ToVector({1, 2, 3}) == std::vector{1, 2, 3});
+}
+
+TEST(ToVectorTest, UnsizedRangeProjected) {
+  const std::forward_list<int> a = {1, 2, 3};
+  EXPECT_THAT(base::ToVector(a, [](int x) { return x + 1; }),
+              ElementsAre(2, 3, 4));
+}
+
+TEST(ToVectorTest, ToVectorWithZipAndProjection) {
+  const std::vector a = {1, 2, 3};
+  const std::vector b = {3, 2, 1};
+  auto z = std::views::zip(a, b);
+
+  EXPECT_THAT(base::ToVector(
+                  z, [](std::pair<int, int> x) { return x.first + x.second; }),
+              ElementsAre(4, 4, 4));
 }
 
 }  // namespace

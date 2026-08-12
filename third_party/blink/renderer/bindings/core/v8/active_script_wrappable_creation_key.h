@@ -30,6 +30,7 @@ class ActiveScriptWrappableCreationKey final {
   friend class BroadcastChannel;
   friend class CacheStorage;
   friend class CanvasRenderingContext;
+  friend class ContainerQueryList;
   template <typename Traits>
   friend class DecoderTemplate;
   friend class DedicatedWorker;
@@ -110,8 +111,7 @@ class ActiveScriptWrappableCreationKey final {
   friend class WebPrintJob;
   friend class WebSocketStream;
   friend class WebTransport;
-  friend class WorkerGlobalScope;
-  friend class WorkletGlobalScope;
+  friend class WorkerOrWorkletGlobalScope;
   friend class XMLHttpRequest;
   friend class XRSession;
 };

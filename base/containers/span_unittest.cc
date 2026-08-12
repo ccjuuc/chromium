@@ -7,8 +7,10 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <array>
 #include <concepts>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <span>
 #include <string>
@@ -28,6 +30,8 @@
 #include "base/strings/to_string.h"
 #include "base/strings/utf_ostream_operators.h"
 #include "base/test/gtest_util.h"
+#include "partition_alloc/buildflags.h"
+#include "partition_alloc/partition_alloc.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/abseil-cpp/absl/hash/hash_testing.h"
@@ -2065,8 +2069,8 @@ TEST(SpanTest, OutOfBoundsDeath) {
   // checked too late due to https://crbug.com/1520041.
 
   // Copying more values than fit in the destination.
-  ASSERT_DEATH_IF_SUPPORTED(
-      std::copy(span_len3.begin(), span_len3.end(), span_len2.begin()), "");
+  ASSERT_DEATH_IF_SUPPORTED(std::ranges::copy(span_len3, span_len2.begin()),
+                            "");
   ASSERT_DEATH_IF_SUPPORTED(std::ranges::copy(span_len3, span_len2.begin()),
                             "");
   ASSERT_DEATH_IF_SUPPORTED(
@@ -2083,11 +2087,11 @@ TEST(SpanTest, Sort) {
   span<int> dynamic_span = array;
   std::ranges::sort(dynamic_span);
   EXPECT_THAT(array, ElementsAre(1, 2, 3, 4, 5));
-  std::sort(dynamic_span.rbegin(), dynamic_span.rend());
+  std::ranges::sort(Reversed(dynamic_span));
   EXPECT_THAT(array, ElementsAre(5, 4, 3, 2, 1));
 
   span<int, 5> static_span = array;
-  std::sort(static_span.rbegin(), static_span.rend(), std::greater<>());
+  std::ranges::sort(Reversed(static_span), std::greater<>());
   EXPECT_THAT(array, ElementsAre(1, 2, 3, 4, 5));
   std::ranges::sort(static_span, std::greater<>());
   EXPECT_THAT(array, ElementsAre(5, 4, 3, 2, 1));
@@ -3411,6 +3415,124 @@ TEST(SpanTest, Example_UnsafeBuffersPatterns) {
   }
 }
 
+#if PA_BUILDFLAG(CHECKED_SPAN)
+
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+
+TEST(SpanTest, CheckedSpanCrashes) {
+  // Storage is wrapped in `std::unique_ptr` to force heap allocation,
+  // as it would otherwise not be owned by PartitionAlloc.
+  auto storage = std::make_unique<std::array<char, 31u>>();
+  char* thirtyone_chars = storage->data();
+
+  const size_t usable_bytes =
+      partition_alloc::PartitionRoot::GetUsableSize(thirtyone_chars);
+
+  // Were this the same size, that would mean that the end of the
+  // allocation already touches the end of the slot, and this test case
+  // becomes bogus.
+  CHECK_GT(usable_bytes, 31u);
+
+  // SAFETY: This is not safe. PartitionAlloc should force a crash.
+  EXPECT_DEATH_IF_SUPPORTED(
+      UNSAFE_BUFFERS(base::span<char>(thirtyone_chars, usable_bytes + 1)), "");
+}
+
+TEST(SpanTest, CheckedSpanDisallowsWraparound) {
+  // Storage is wrapped in `std::unique_ptr` to force heap allocation,
+  // as it would otherwise not be owned by PartitionAlloc.
+  auto storage = std::make_unique<std::array<char, 31u>>();
+
+  // If pointer wraparound occurs, a span minted with this size can read
+  // anything.
+  constexpr size_t kBadSize = std::numeric_limits<size_t>::max();
+
+  // To get the end of the bogus span in the same allocation, advance
+  // the start by one byte.
+  //
+  // This calculation assumes that:
+  // <any pointer> + [maximum `size_t`] + 1 == <the same pointer>
+  // which assumes
+  // 1. that pointers have the same size as `size_t` and
+  // 2. that pointer arithmetic is defined to overflow (for this test to
+  //    be meaningful).
+  //
+  // If such a span could be minted, its end would be one byte behind
+  // its start.
+  static_assert(uintptr_t{1u} + kBadSize == uintptr_t{0u});
+  const char* thirty_chars =
+      base::span<const char>(*storage).subspan<1u>().data();
+
+  // SAFETY: This is not safe. We want this to crash.
+  EXPECT_DEATH_IF_SUPPORTED(
+      UNSAFE_BUFFERS(base::span<const char>(thirty_chars, kBadSize)), "");
+}
+
+#endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+
+TEST(SpanTest, CheckedSpanAllowsSlack) {
+  // Storage is wrapped in `std::unique_ptr` to force heap allocation,
+  // as it would otherwise not be owned by PartitionAlloc.
+  auto storage = std::make_unique<std::array<char, 31u>>();
+  char* thirtyone_chars = storage->data();
+
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+  // When PA-E is enabled, this test case can directly query how many
+  // bytes of slack space are available before overrunning the slot
+  // boundary.
+  const size_t usable_bytes =
+      partition_alloc::PartitionRoot::GetUsableSize(thirtyone_chars);
+
+  // Were this the same size, that would mean that the end of the
+  // allocation already touches the end of the slot, and this test case
+  // becomes bogus.
+  CHECK_GT(usable_bytes, 31u);
+#else
+  // When PA-E is disabled, there's nothing to check. Spans can be made
+  // arbitrarily big without triggering any crashing. Pick some random
+  // value and perfunctorily demonstrate that nothing will trigger a
+  // crash.
+  constexpr size_t usable_bytes = 62u;
+#endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+
+  for (size_t extent = 0u; extent <= usable_bytes; ++extent) {
+    // SAFETY: This is safe insofar as PartitionAlloc (when present via
+    // PA-E) guarantees that an extent of `usable_bytes` will not crash.
+    UNSAFE_BUFFERS(base::span<char>(thirtyone_chars, extent));
+  }
+}
+
+#endif  // PA_BUILDFLAG(CHECKED_SPAN)
+
+TEST(SpanTest, UncheckedSpanNeverCrashes) {
+  // Storage is wrapped in `std::unique_ptr` to force heap allocation,
+  // as it would otherwise not be owned by PartitionAlloc.
+  auto storage = std::make_unique<std::array<char, 31u>>();
+  char* thirtyone_chars = storage->data();
+
+  // Arbitrarily pick a bogus length and show that the span can be made
+  // this long without triggering a crash.
+  constexpr size_t bogus_extent_bytes = 62u;
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+  // When PA-E is enabled, this test case can directly query how many
+  // bytes of slack space are available before overrunning the slot
+  // boundary.
+  const size_t usable_bytes =
+      partition_alloc::PartitionRoot::GetUsableSize(thirtyone_chars);
+
+  // Were this the same size, that would mean that the end of the
+  // allocation already touches the end of the slot, and this test case
+  // becomes bogus.
+  CHECK_GT(bogus_extent_bytes, usable_bytes);
+#endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+
+  for (size_t extent = 0u; extent <= bogus_extent_bytes; ++extent) {
+    // SAFETY: This is not safe, but the contents are never accessed.
+    // The test passes if this does not `CHECK()`.
+    UNSAFE_BUFFERS(base::span(base::unchecked, thirtyone_chars, extent));
+  }
+}
+
 }  // namespace base
 
 // Test for compatibility with std::span<>, in case some third-party
@@ -3422,6 +3544,28 @@ TEST(SpanTest, FromStdSpan) {
   std::span<int> mut_std_span(kData);
   std::span<const int, 3u> fixed_std_span(kData);
   std::span<int, 3u> mut_fixed_std_span(kData);
+
+  // Constexpr tests
+  {
+    static constexpr int kLocalData[] = {10, 11, 12};
+    static constexpr std::span<const int> const_std_span(kLocalData);
+
+    // Implicit
+    static constexpr base::span<const int> const_base_span = const_std_span;
+    static_assert(const_base_span.size() == 3u);
+    static_assert(const_base_span.data() == kLocalData);
+
+    // Explicit
+    static constexpr base::span<const int> const_base_span_explicit{
+        const_std_span};
+    static_assert(const_base_span_explicit.size() == 3u);
+
+    // Fixed
+    static constexpr std::span<const int, 3u> const_fixed_std_span(kLocalData);
+    static constexpr base::span<const int, 3u> const_fixed_base_span =
+        const_fixed_std_span;
+    static_assert(const_fixed_base_span.size() == 3u);
+  }
 
   // Tests *implicit* conversions through assignment construction.
   {
@@ -3475,6 +3619,29 @@ TEST(SpanTest, ToStdSpan) {
   base::span<const int, 3u> fixed_base_span(kData);
   base::span<int, 3u> mut_fixed_base_span(kData);
 
+  // Constexpr tests
+  {
+    static constexpr int kLocalData[] = {10, 11, 12};
+    static constexpr base::span<const int> const_base_span(kLocalData);
+
+    // Implicit
+    static constexpr std::span<const int> const_std_span = const_base_span;
+    static_assert(const_std_span.size() == 3u);
+    static_assert(const_std_span.data() == kLocalData);
+
+    // Explicit
+    static constexpr std::span<const int> const_std_span_explicit{
+        const_base_span};
+    static_assert(const_std_span_explicit.size() == 3u);
+
+    // Fixed
+    static constexpr base::span<const int, 3u> const_fixed_base_span(
+        kLocalData);
+    static constexpr std::span<const int, 3u> const_fixed_std_span =
+        const_fixed_base_span;
+    static_assert(const_fixed_std_span.size() == 3u);
+  }
+
   // Tests *implicit* conversions through assignment construction.
   {
     std::span<const int> std_span = base_span;
@@ -3514,4 +3681,99 @@ TEST(SpanTest, ToStdSpan) {
   }
 
   // no as_byte_span() in std::span.
+}
+
+TEST(SpanTest, ReinterpretSpan) {
+  // Basic usage:
+  {
+    alignas(uint32_t) uint8_t kAlignedArray[] = {0, 1, 2, 3, 4, 5, 6, 7};
+    auto s = base::span(kAlignedArray);
+    auto rs = base::subtle::reinterpret_span<uint32_t>(s);
+    static_assert(
+        std::is_same_v<typename decltype(rs)::element_type, uint32_t>);
+    EXPECT_EQ(rs.size(), 2u);
+  }
+
+  // Fixed extent:
+  {
+    alignas(uint32_t) uint8_t kAlignedArray[] = {0, 1, 2, 3, 4, 5, 6, 7};
+    auto s = base::span<uint8_t, 8u>(kAlignedArray);
+    auto rs = base::subtle::reinterpret_span<uint32_t>(s);
+    static_assert(
+        std::is_same_v<typename decltype(rs)::element_type, uint32_t>);
+    static_assert(decltype(rs)::extent == 2u);
+    EXPECT_EQ(rs.size(), 2u);
+  }
+
+  // Const => Const.
+  {
+    alignas(uint32_t) uint8_t kAlignedArray[] = {0, 1, 2, 3, 4, 5, 6, 7};
+    auto s = base::span<const uint8_t>(kAlignedArray);
+    auto rs = base::subtle::reinterpret_span<const uint32_t>(s);
+    static_assert(
+        std::is_same_v<typename decltype(rs)::element_type, const uint32_t>);
+    EXPECT_EQ(rs.size(), 2u);
+  }
+
+  // Mutable => Const
+  {
+    alignas(uint32_t) uint8_t kAlignedArray[] = {0, 1, 2, 3, 4, 5, 6, 7};
+    auto s = base::span<uint8_t>(kAlignedArray);
+    auto rs = base::subtle::reinterpret_span<const uint32_t>(s);
+    static_assert(
+        std::is_same_v<typename decltype(rs)::element_type, const uint32_t>);
+    EXPECT_EQ(rs.size(), 2u);
+  }
+
+  // Empty span.
+  {
+    auto s = base::span<uint8_t>();
+    auto rs = base::subtle::reinterpret_span<uint32_t>(s);
+    CHECK_EQ(s.size(), 0u);
+    CHECK_EQ(s.data(), nullptr);
+    static_assert(
+        std::is_same_v<typename decltype(rs)::element_type, uint32_t>);
+    EXPECT_EQ(rs.size(), 0u);
+  }
+
+  // Check unaligned empty span.
+  // Empty slice (e.g. data() != nullptr, but size() == 0).
+  {
+    alignas(uint32_t) uint8_t kAlignedArray[] = {0, 1, 2, 3};
+    auto s = base::span(kAlignedArray).subspan(1u, 0u);
+    CHECK_EQ(s.size(), 0u);
+    CHECK_NE(s.data(), nullptr);  // Unaligned, but valid pointer.
+    EXPECT_CHECK_DEATH({
+      [[maybe_unused]] auto rs = base::subtle::reinterpret_span<uint32_t>(s);
+    });
+  }
+
+  // Alignment check fails:
+  {
+    alignas(uint32_t) uint8_t kAlignedArray[] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+    auto s = base::span(kAlignedArray).subspan(1u, 4u);
+    if (alignof(uint32_t) > 1) {
+      EXPECT_CHECK_DEATH({
+        [[maybe_unused]] auto r = base::subtle::reinterpret_span<uint32_t>(s);
+      });
+    }
+  }
+
+  // Size check fails:
+  {
+    alignas(uint32_t) uint8_t kAlignedArray[] = {0, 0, 0, 0, 0, 0, 0, 0};
+    auto s = base::span(kAlignedArray).first(7u);
+    EXPECT_CHECK_DEATH({
+      [[maybe_unused]] auto r = base::subtle::reinterpret_span<uint32_t>(s);
+    });
+  }
+
+  // Data integrity after round-trip.
+  {
+    uint32_t data[] = {0x12345678, 0x9ABCDEF0};
+    auto bytes = base::as_byte_span(data);
+    auto reconstructed = base::subtle::reinterpret_span<const uint32_t>(bytes);
+    EXPECT_EQ(reconstructed[0], data[0]);
+    EXPECT_EQ(reconstructed[1], data[1]);
+  }
 }

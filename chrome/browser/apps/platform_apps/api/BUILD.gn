@@ -23,8 +23,6 @@ function_registration("api_registration") {
 
 source_set("api") {
   sources = [
-    "browser/browser_api.cc",
-    "browser/browser_api.h",
     "sync_file_system/sync_file_system_api.cc",
     "sync_file_system/sync_file_system_api.h",
     "sync_file_system/sync_file_system_api_helpers.cc",
@@ -45,6 +43,8 @@ source_set("api") {
     "//chrome/browser:browser_process",
     "//chrome/browser/extensions",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/sync_file_system",
+    "//chrome/browser/ui/select_file_policy",
     "//chrome/common",
     "//chrome/common/apps/platform_apps",
     "//chrome/common/apps/platform_apps/api",
@@ -56,12 +56,11 @@ source_set("api") {
   visibility = []
 
   if (is_chromeos) {
-    # For transition period of crosapi removal.
-    visibility += [ "//chrome/browser/ash/crosapi" ]
-
     sources += [
       "arc_apps_private/arc_apps_private_api.cc",
       "arc_apps_private/arc_apps_private_api.h",
+      "browser/browser_api.cc",
+      "browser/browser_api.h",
       "browser_context_keyed_service_factories.cc",
       "browser_context_keyed_service_factories.h",
       "enterprise_remote_apps/enterprise_remote_apps_api.cc",
@@ -78,13 +77,15 @@ source_set("api") {
       "//chrome/browser/ash/app_list/arc",
       "//chrome/browser/ash/login/demo_mode",
       "//chrome/browser/ash/remote_apps",
-      "//chrome/services/media_gallery_util/public/cpp",
+      "//chrome/browser/media_galleries",
       "//chromeos/components/remote_apps/mojom",
+      "//components/media_gallery_util",
       "//components/storage_monitor",
       "//ui/events:event_constants",
     ]
 
-    # TODO(crbug.com/40251081): Remove these deps. Needed only to allow circular includes.
+    # TODO(crbug.com/40251081): Remove these deps. Needed only to allow circular
+    # includes.
     deps += [ "//chrome/browser/ash/extensions/file_manager" ]
 
     # TODO(crbug.com/40251079): Remove circular dependencies.

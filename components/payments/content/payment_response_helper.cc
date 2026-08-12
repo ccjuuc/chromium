@@ -9,6 +9,7 @@
 
 #include "base/check.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/autofill_type.h"
@@ -18,6 +19,7 @@
 #include "components/autofill/core/browser/geo/phone_number_i18n.h"
 #include "components/payments/content/payment_request_spec.h"
 #include "components/payments/core/features.h"
+#include "components/payments/core/journey_logger.h"
 #include "components/payments/core/method_strings.h"
 #include "components/payments/core/payment_request_data_util.h"
 #include "components/payments/core/payment_request_delegate.h"
@@ -32,12 +34,14 @@ PaymentResponseHelper::PaymentResponseHelper(
     base::WeakPtr<PaymentRequestDelegate> payment_request_delegate,
     autofill::AutofillProfile* selected_shipping_profile,
     autofill::AutofillProfile* selected_contact_profile,
+    base::WeakPtr<JourneyLogger> journey_logger,
     base::WeakPtr<Delegate> delegate)
     : app_locale_(std::move(app_locale)),
       is_waiting_for_shipping_address_normalization_(false),
       is_waiting_for_instrument_details_(false),
       spec_(spec),
       delegate_(delegate),
+      journey_logger_(journey_logger),
       selected_app_(selected_app),
       payment_request_delegate_(payment_request_delegate),
       selected_contact_profile_(selected_contact_profile) {
@@ -85,19 +89,51 @@ void PaymentResponseHelper::OnInstrumentDetailsReady(
   payer_data_from_app_.selected_shipping_option_id =
       payer_data.selected_shipping_option_id;
   is_waiting_for_instrument_details_ = false;
+  if (selected_app_->type() == PaymentApp::Type::SERVICE_WORKER_APP) {
+    if (journey_logger_) {
+      journey_logger_->RecordRespondWithResolvedStatus();
+    }
+    if (base::FeatureList::IsEnabled(
+            features::kPaymentRequestMandatoryPaymentAppUi) &&
+        !WasPaymentHandlerWindowInteractedWith()) {
+      is_waiting_for_user_gesture_ = true;
+      return;
+    }
+  }
 
-  if (!is_waiting_for_shipping_address_normalization_)
+  if (!is_waiting_for_shipping_address_normalization_) {
     GeneratePaymentResponse();
+  }
+}
+
+void PaymentResponseHelper::OnUserInteractionCaptured() {
+  if (!is_waiting_for_user_gesture_) {
+    return;
+  }
+
+  is_waiting_for_user_gesture_ = false;
+
+  if (!is_waiting_for_shipping_address_normalization_) {
+    GeneratePaymentResponse();
+  }
 }
 
 void PaymentResponseHelper::OnInstrumentDetailsError(
+    mojom::PaymentEventResponseType error,
     const std::string& error_message) {
   if (!is_waiting_for_instrument_details_)
     return;
 
   is_waiting_for_instrument_details_ = false;
   is_waiting_for_shipping_address_normalization_ = false;
-  delegate_->OnPaymentResponseError(error_message);
+
+  if (selected_app_->type() == PaymentApp::Type::SERVICE_WORKER_APP &&
+      error == mojom::PaymentEventResponseType::PAYMENT_EVENT_REJECT &&
+      journey_logger_) {
+    journey_logger_->RecordRespondWithRejectedStatus();
+  }
+
+  delegate_->OnPaymentResponseError(error, error_message);
 }
 
 void PaymentResponseHelper::OnAddressNormalized(
@@ -109,8 +145,9 @@ void PaymentResponseHelper::OnAddressNormalized(
   shipping_address_ = normalized_profile;
   is_waiting_for_shipping_address_normalization_ = false;
 
-  if (!is_waiting_for_instrument_details_)
+  if (!is_waiting_for_instrument_details_ && !is_waiting_for_user_gesture_) {
     GeneratePaymentResponse();
+  }
 }
 
 mojom::PayerDetailPtr PaymentResponseHelper::GeneratePayerDetail(
@@ -162,6 +199,8 @@ mojom::PayerDetailPtr PaymentResponseHelper::GeneratePayerDetail(
   return payer;
 }
 
+// TODO(b/525086085): Consolidate address normailization and user gesture check
+// at the begin of GeneratePaymentResponse().
 void PaymentResponseHelper::GeneratePaymentResponse() {
   DCHECK(!is_waiting_for_instrument_details_);
   DCHECK(!is_waiting_for_shipping_address_normalization_);
@@ -196,6 +235,10 @@ void PaymentResponseHelper::GeneratePaymentResponse() {
       selected_app_->SetAppSpecificResponseFields(std::move(payment_response));
 
   delegate_->OnPaymentResponseReady(std::move(payment_response));
+}
+
+bool PaymentResponseHelper::WasPaymentHandlerWindowInteractedWith() {
+  return delegate_->WasPaymentHandlerWindowInteractedWith();
 }
 
 }  // namespace payments

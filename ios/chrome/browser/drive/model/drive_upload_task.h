@@ -6,6 +6,7 @@
 #define IOS_CHROME_BROWSER_DRIVE_MODEL_DRIVE_UPLOAD_TASK_H_
 
 #import "base/files/file_path.h"
+#import "base/memory/raw_ptr.h"
 #import "ios/chrome/browser/drive/model/drive_file_uploader.h"
 #import "ios/chrome/browser/drive/model/upload_task.h"
 
@@ -30,6 +31,7 @@ class DriveUploadTask final : public UploadTask {
   State GetState() const final;
   void Start() final;
   void Cancel() final;
+  void Fail(NSError* error, bool resumable) final;
   id<SystemIdentity> GetIdentity() const final;
   float GetProgress() const final;
   std::optional<GURL> GetResponseLink(
@@ -37,19 +39,6 @@ class DriveUploadTask final : public UploadTask {
   NSError* GetError() const final;
 
  private:
-  // Performs the first step of this upload task i.e. search a destination Drive
-  // folder using `uploader_->SearchSaveToDriveFolder(folder_name, ...)`.
-  // The result will be reported to `CreateFolderOrDirectlyUploadFile()`;
-  void SearchFolderThenCreateFolderOrDirectlyUploadFile();
-
-  // Performs the second step of this upload task i.e.
-  // if the first step returned an existing folder, directly upload the file to
-  // this existing folder using `UploadFile()`. Otherwise, create a destination
-  // folder using `uploader_->CreateSaveToDriveFolder(folder_name, ...)` and
-  // report the result to `UploadFile()`;
-  void CreateFolderOrDirectlyUploadFile(
-      const DriveFolderResult& folder_search_result);
-
   // Performs the first and second steps of this upload task i.e. search a
   // destination Drive folder and create it if it does not exist in a single
   // operation using `uploader_->FetchSaveToDriveClientFolder(folder_name,

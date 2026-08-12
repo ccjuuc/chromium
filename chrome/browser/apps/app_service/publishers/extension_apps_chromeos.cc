@@ -17,21 +17,20 @@
 #include "ash/public/cpp/app_menu_constants.h"
 #include "ash/public/cpp/shelf_types.h"
 #include "ash/shell.h"
-#include "base/containers/contains.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/containers/extend.h"
 #include "base/feature_list.h"
 #include "base/files/safe_base_name.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/scoped_observation.h"
 #include "base/strings/stringprintf.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/apps/app_service/app_icon/app_icon_factory.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/chrome_app_deprecation/chrome_app_deprecation.h"
 #include "chrome/browser/apps/app_service/intent_util.h"
-#include "chrome/browser/apps/app_service/launch_result_type.h"
 #include "chrome/browser/apps/app_service/launch_utils.h"
 #include "chrome/browser/apps/app_service/menu_util.h"
 #include "chrome/browser/apps/app_service/metrics/app_service_metrics.h"
@@ -61,10 +60,8 @@
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_tab_helper.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/extensions/api/file_browser_handlers/file_browser_handler.h"
 #include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/extensions/extension_metrics.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
@@ -80,6 +77,7 @@
 #include "components/services/app_service/public/cpp/intent.h"
 #include "components/services/app_service/public/cpp/intent_filter.h"
 #include "components/services/app_service/public/cpp/intent_filter_util.h"
+#include "components/services/app_service/public/cpp/launch_result.h"
 #include "content/public/browser/clear_site_data_utils.h"
 #include "extensions/browser/app_window/app_window.h"
 #include "extensions/browser/extension_system.h"
@@ -179,6 +177,7 @@ ash::ShelfLaunchSource ConvertLaunchSource(apps::LaunchSource launch_source) {
     case apps::LaunchSource::kFromSparky:
     case apps::LaunchSource::kFromNavigationCapturing:
     case apps::LaunchSource::kFromWebInstallApi:
+    case apps::LaunchSource::kFromMigration:
       return ash::LAUNCH_FROM_UNKNOWN;
   }
 }
@@ -349,7 +348,7 @@ void ExtensionAppsChromeOs::LaunchAppWithArgumentsCallback(
     bool should_open) {
   // Exit early, while notifying, in case `Don't open` was chosen.
   if (!should_open) {
-    std::move(callback).Run(LaunchResult(State::kFailed));
+    std::move(callback).Run(LaunchResult::kFailed);
     return;
   }
 
@@ -368,7 +367,7 @@ void ExtensionAppsChromeOs::LaunchAppWithIntent(const std::string& app_id,
   // `extension` is required.
   const auto* extension = MaybeGetExtension(app_id);
   if (!extension) {
-    std::move(callback).Run(LaunchResult(State::kFailed));
+    std::move(callback).Run(LaunchResult::kFailed);
     return;
   }
 
@@ -379,7 +378,7 @@ void ExtensionAppsChromeOs::LaunchAppWithIntent(const std::string& app_id,
     // This vector cannot be empty because this is reached after explicitly
     // opening one or more files.
     if (base_names.empty()) {
-      std::move(callback).Run(LaunchResult(State::kFailed));
+      std::move(callback).Run(LaunchResult::kFailed);
       return;
     }
 
@@ -493,15 +492,14 @@ void ExtensionAppsChromeOs::LaunchExtension(const std::string& app_id,
   file_manager::file_browser_handlers::ExecuteFileBrowserHandler(
       profile(), extension, action_id, file_urls,
       base::BindOnce(
-          [](LaunchCallback callback,
-             extensions::api::file_manager_private::TaskResult result,
+          [](extensions::api::file_manager_private::TaskResult result,
              std::string error) {
             bool success =
                 result !=
                 extensions::api::file_manager_private::TaskResult::kFailed;
-            std::move(callback).Run(ConvertBoolToLaunchResult(success));
-          },
-          std::move(callback)));
+            return success ? LaunchResult::kSuccess : LaunchResult::kFailed;
+          })
+          .Then(std::move(callback)));
 }
 
 void ExtensionAppsChromeOs::PauseApp(const std::string& app_id) {
@@ -834,7 +832,7 @@ void ExtensionAppsChromeOs::OnSystemFeaturesPrefChanged() {
     return;
   }
 
-  const base::Value::List& disabled_system_features_pref =
+  const base::ListValue& disabled_system_features_pref =
       local_state->GetList(policy::policy_prefs::kSystemFeaturesDisableList);
 
   const bool is_pref_disabled_mode_hidden =
@@ -872,12 +870,11 @@ bool ExtensionAppsChromeOs::Accepts(const extensions::Extension* extension) {
     }
 
     // Only accept extensions with file_browser_handlers.
-    FileBrowserHandler::List* handler_list =
-        FileBrowserHandler::GetHandlers(extension);
-    if (!handler_list) {
-      return false;
+    if (FileBrowserHandler::GetHandlers(extension)) {
+      return true;
     }
-    return true;
+
+    return false;
   }
 
   if (!extension->is_app() || IsBlocklisted(extension->id())) {
@@ -931,7 +928,7 @@ bool ExtensionAppsChromeOs::ShouldShownInLauncher(
 AppPtr ExtensionAppsChromeOs::CreateApp(const extensions::Extension* extension,
                                         Readiness readiness) {
   CHECK(extension);
-  const bool is_app_disabled = base::Contains(disabled_apps_, extension->id());
+  const bool is_app_disabled = disabled_apps_.contains(extension->id());
 
   auto app = CreateAppImpl(
       extension, is_app_disabled ? Readiness::kDisabledByPolicy : readiness);
@@ -983,7 +980,7 @@ IconEffects ExtensionAppsChromeOs::GetIconEffects(
     icon_effects =
         static_cast<IconEffects>(icon_effects | IconEffects::kPaused);
   }
-  if (base::Contains(disabled_apps_, extension->id())) {
+  if (disabled_apps_.contains(extension->id())) {
     icon_effects =
         static_cast<IconEffects>(icon_effects | IconEffects::kBlocked);
   }
@@ -1047,7 +1044,7 @@ void ExtensionAppsChromeOs::RegisterInstance(extensions::AppWindow* app_window,
   }
 
   if (new_state == InstanceState::kDestroyed) {
-    DCHECK(base::Contains(app_window_to_aura_window_, app_window));
+    DCHECK(app_window_to_aura_window_.contains(app_window));
     window = app_window_to_aura_window_[app_window];
   }
   InstanceParams params(app_window->extension_id(), window);
@@ -1088,18 +1085,17 @@ content::WebContents* ExtensionAppsChromeOs::LaunchImpl(
 }
 
 void ExtensionAppsChromeOs::UpdateAppDisabledState(
-    const base::Value::List& disabled_system_features_pref,
+    const base::ListValue& disabled_system_features_pref,
     int feature,
     const std::string& app_id,
     bool is_disabled_mode_changed) {
-  const bool is_disabled =
-      base::Contains(disabled_system_features_pref, base::Value(feature));
+  const bool is_disabled = disabled_system_features_pref.contains(feature);
   // Sometimes the policy is updated before the app is installed, so this way
   // the disabled_apps_ is updated regardless the Publish should happen or not
   // and the app will be published with the correct readiness upon its
   // installation.
   const bool should_publish =
-      (base::Contains(disabled_apps_, app_id) != is_disabled) ||
+      (disabled_apps_.contains(app_id) != is_disabled) ||
       is_disabled_mode_changed;
 
   if (is_disabled) {

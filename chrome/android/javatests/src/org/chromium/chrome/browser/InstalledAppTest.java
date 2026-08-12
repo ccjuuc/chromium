@@ -14,6 +14,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
@@ -21,8 +22,8 @@ import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 
 /** Test suite for navigator.getInstalledRelatedApps functionality. */
@@ -31,10 +32,11 @@ import org.chromium.chrome.test.transit.page.WebPageStation;
     ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
     "enable-blink-features=InstalledApp",
 })
+@Batch(Batch.PER_CLASS)
 public class InstalledAppTest {
     @Rule
-    public FreshCtaTransitTestRule mActivityTestRule =
-            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.autoResetCtaActivityRule();
 
     private static final String TEST_FILE = "/content/test/data/android/installedapp.html";
 
@@ -88,7 +90,7 @@ public class InstalledAppTest {
      * <p>Note this isn't a very thorough test; it just expects an empty response. Testing any real
      * response would require setting up (or mocking) a real APK. There are extremely thorough
      * layout tests and Java unit tests for this feature. This end-to-end test just ensures that the
-     * Mojo bridge between Blink and Java is working (regression: https://crbug.com/750348).
+     * Mojo bridge between Blink and Java is working (regression: https://crbug.com/40532462).
      */
     @Test
     @MediumTest

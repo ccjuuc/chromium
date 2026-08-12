@@ -43,6 +43,18 @@ suite('CrUrlListItemTest', () => {
     assertTrue(folderIcon.hasAttribute('hidden'));
   });
 
+  test('UsesCustomIconSlotContent', async () => {
+    // Slot a custom icon.
+    const customIcon = document.createElement('div');
+    customIcon.slot = 'customIcon';
+    customIcon.id = 'customIcon';
+    element.appendChild(customIcon);
+    await microtasksFinished();
+    const slottedElement = element.$.customIcon.assignedElements()[0];
+    assertTrue(!!slottedElement);
+    assertEquals('customIcon', slottedElement.id);
+  });
+
   test('TruncatesAndDisplaysCount', async () => {
     const count = element.shadowRoot.querySelector('.count')!;
     element.count = 11;
@@ -51,6 +63,17 @@ suite('CrUrlListItemTest', () => {
     element.count = 2983;
     await element.updateComplete;
     assertEquals('99+', count.textContent);
+  });
+
+  test('DescriptionWithBdi', async () => {
+    element.description = '1.google.com';
+    await element.updateComplete;
+    const descriptionText =
+        element.shadowRoot.querySelector('.description-text')!;
+    assertTrue(!!descriptionText);
+    const bdi = descriptionText.querySelector('bdi')!;
+    assertEquals(
+        'ltr', (bdi.computedStyleMap().get('direction') as CSSUnitValue).value);
   });
 
   test('SetsActiveClass', () => {

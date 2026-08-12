@@ -114,17 +114,17 @@ export class OnboardingLandingPage extends OnboardingLandingPageBase {
     };
   }
 
-  allButtonsDisabled: boolean;
-  getStartedButtonClicked: boolean;
-  confirmExitButtonClicked: boolean;
-  canExit: boolean;
+  declare allButtonsDisabled: boolean;
+  declare getStartedButtonClicked: boolean;
+  declare confirmExitButtonClicked: boolean;
+  declare canExit: boolean;
   shimlessRmaService: ShimlessRmaServiceInterface = getShimlessRmaService();
   hwVerificationObserverReceiver: HardwareVerificationStatusObserverReceiver;
-  protected componentsList: string;
-  protected verificationInProgress: boolean;
-  protected isCompliant: boolean;
-  protected isSkipped: boolean;
-  protected verificationFailedMessage: TrustedHTML;
+  declare protected componentsList: string;
+  declare protected verificationInProgress: boolean;
+  declare protected isCompliant: boolean;
+  declare protected isSkipped: boolean;
+  declare protected verificationFailedMessage: TrustedHTML;
 
   constructor() {
     super();
@@ -179,8 +179,7 @@ export class OnboardingLandingPage extends OnboardingLandingPageBase {
    */
   onHardwareVerificationResult(result: HardwareVerificationResult): void {
     this.isCompliant = result.passResult !== undefined;
-    this.isSkipped = loadTimeData.getBoolean('hardwareValidationSkipEnabled') &&
-        result.skipResult !== undefined;
+    this.isSkipped = result.skipResult !== undefined;
     this.verificationInProgress = false;
 
     if (!this.isSkipped && !this.isCompliant) {

@@ -15,7 +15,7 @@
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "build/build_config.h"
-#include "components/sync/protocol/sync_enums.pb.h"
+#include "components/sync_device_info/device_info.h"
 #include "ui/base/device_form_factor.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -57,10 +57,17 @@ void OnHardwareInfoReady(LocalDeviceNameInfo* name_info_ptr,
 #endif
 }
 
-void OnPersonalizableDeviceNameReady(LocalDeviceNameInfo* name_info_ptr,
-                                     base::ScopedClosureRunner done_closure,
-                                     std::string personalizable_name) {
-  name_info_ptr->personalizable_name = std::move(personalizable_name);
+struct BlockingDeviceDetails {
+  std::string personalizable_name;
+  std::optional<std::string> android_build_fingerprint;
+};
+
+void OnBlockingDeviceDetailsReady(LocalDeviceNameInfo* name_info_ptr,
+                                  base::ScopedClosureRunner done_closure,
+                                  BlockingDeviceDetails details) {
+  name_info_ptr->personalizable_name = std::move(details.personalizable_name);
+  name_info_ptr->android_build_fingerprint =
+      std::move(details.android_build_fingerprint);
 }
 
 void OnMachineStatisticsLoaded(LocalDeviceNameInfo* name_info_ptr,
@@ -81,26 +88,26 @@ void OnMachineStatisticsLoaded(LocalDeviceNameInfo* name_info_ptr,
 
 }  // namespace
 
-sync_pb::SyncEnums::DeviceType GetLocalDeviceType() {
+DeviceInfo::DeviceType GetLocalDeviceType() {
 #if BUILDFLAG(IS_CHROMEOS)
-  return sync_pb::SyncEnums_DeviceType_TYPE_CROS;
+  return DeviceInfo::DeviceType::kChromeOS;
 #elif BUILDFLAG(IS_LINUX)
-  return sync_pb::SyncEnums_DeviceType_TYPE_LINUX;
+  return DeviceInfo::DeviceType::kLinux;
 #elif BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
   switch (ui::GetDeviceFormFactor()) {
     case ui::DEVICE_FORM_FACTOR_TABLET:
-      return sync_pb::SyncEnums_DeviceType_TYPE_TABLET;
+      return DeviceInfo::DeviceType::kTablet;
     case ui::DEVICE_FORM_FACTOR_PHONE:
-      return sync_pb::SyncEnums_DeviceType_TYPE_PHONE;
+      return DeviceInfo::DeviceType::kPhone;
     default:
-      return sync_pb::SyncEnums_DeviceType_TYPE_OTHER;
+      return DeviceInfo::DeviceType::kOther;
   }
 #elif BUILDFLAG(IS_MAC)
-  return sync_pb::SyncEnums_DeviceType_TYPE_MAC;
+  return DeviceInfo::DeviceType::kMac;
 #elif BUILDFLAG(IS_WIN)
-  return sync_pb::SyncEnums_DeviceType_TYPE_WIN;
+  return DeviceInfo::DeviceType::kWindows;
 #else
-  return sync_pb::SyncEnums_DeviceType_TYPE_OTHER;
+  return DeviceInfo::DeviceType::kOther;
 #endif
 }
 
@@ -160,6 +167,17 @@ std::string GetPersonalizableDeviceNameBlocking() {
   return device_name;
 }
 
+BlockingDeviceDetails GetBlockingDeviceDetails() {
+  std::string device_name = GetPersonalizableDeviceNameBlocking();
+
+  std::optional<std::string> android_build_fingerprint;
+#if BUILDFLAG(IS_ANDROID)
+  android_build_fingerprint = base::SysInfo::GetAndroidBuildFingerprint();
+#endif
+
+  return {std::move(device_name), std::move(android_build_fingerprint)};
+}
+
 void GetLocalDeviceNameInfo(
     base::OnceCallback<void(LocalDeviceNameInfo)> callback) {
   auto name_info = std::make_unique<LocalDeviceNameInfo>();
@@ -188,8 +206,8 @@ void GetLocalDeviceNameInfo(
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE,
       {base::MayBlock(), base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
-      base::BindOnce(&GetPersonalizableDeviceNameBlocking),
-      base::BindOnce(&OnPersonalizableDeviceNameReady, name_info_ptr,
+      base::BindOnce(&GetBlockingDeviceDetails),
+      base::BindOnce(&OnBlockingDeviceDetailsReady, name_info_ptr,
                      base::ScopedClosureRunner(done_closure)));
 }
 

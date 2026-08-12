@@ -7,9 +7,12 @@
 
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include "base/types/id_type.h"
 #include "base/types/optional_ref.h"
+#include "components/content_settings/core/common/content_settings.h"
+#include "components/content_settings/core/common/content_settings_types.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/permission_controller.h"
 #include "content/public/browser/permission_result.h"
@@ -37,25 +40,9 @@ class CONTENT_EXPORT PermissionControllerDelegate {
  public:
   virtual ~PermissionControllerDelegate();
 
-  // Requests multiple permissions on behalf of a frame identified by
-  // |render_frame_host|. When the permission request is handled, whether it
-  // failed, timed out or succeeded, the |callback| will be run. The order of
-  // statuses in the returned vector will correspond to the order of requested
-  // permission types.
-  // TODO(crbug.com/40275129): `RequestPermissions` and
-  // `RequestPermissionsFromCurrentDocument` do exactly the same things. Merge
-  // them together.
-  virtual void RequestPermissions(
-      RenderFrameHost* render_frame_host,
-      const PermissionRequestDescription& request_description,
-      base::OnceCallback<void(const std::vector<PermissionResult>&)>
-          callback) = 0;
-
-  // Requests permissions from the current document in the given
-  // RenderFrameHost. Use this over `RequestPermission` whenever possible as
-  // this API takes into account the lifecycle state of a given document (i.e.
-  // whether it's in back-forward cache or being prerendered) in addition to its
-  // origin.
+  // Requests permissions from the given RenderFrameHost. This API takes into
+  // account the lifecycle state of a given document (i.e. whether it's in
+  // back-forward cache or being prerendered) in addition to its origin.
   virtual void RequestPermissionsFromCurrentDocument(
       RenderFrameHost* render_frame_host,
       const PermissionRequestDescription& request_description,
@@ -116,6 +103,21 @@ class CONTENT_EXPORT PermissionControllerDelegate {
   virtual void ResetPermission(blink::PermissionType permission,
                                const GURL& requesting_origin,
                                const GURL& embedding_origin) = 0;
+
+  // Subscribes to changes of all related permission types for a given
+  // ContentSettingsType. Returns a SubscriptionId if successful, or an invalid
+  // SubscriptionId() if not supported.
+  // This method has default virtual implementations returning safe defaults
+  // to prevent compilation breakages in other embedders (e.g. WebView).
+  virtual content::PermissionController::SubscriptionId
+  SubscribeToContentSettingsTypeChange(
+      ContentSettingsType content_settings_type,
+      const GURL& requesting_origin,
+      const GURL& embedding_origin,
+      base::RepeatingCallback<void(const PermissionSetting&)> callback);
+
+  virtual void UnsubscribeFromContentSettingsTypeChange(
+      content::PermissionController::SubscriptionId subscription_id);
 
   // Set a pointer of subscriptions map from PermissionController.
   virtual void OnPermissionStatusChangeSubscriptionAdded(

@@ -44,11 +44,20 @@ bool IsEnUs() {
          features->application_locale_storage() &&
          features->application_locale_storage()->Get() == kEnglishUSLocale;
 }
+
 }  // namespace
 
 namespace lens {
 
-bool IsLensOverlayContextualSearchboxEnabled() {
+bool IsLensOverlayContextualSearchboxEnabled(Profile* profile) {
+  // If not AIM eligible or cobrowse eligible, return false.
+  auto* aim_eligibility_service =
+      AimEligibilityServiceFactory::GetForProfile(profile);
+  if (!aim_eligibility_service || !aim_eligibility_service->IsAimEligible() ||
+      !aim_eligibility_service->IsCobrowseServerEligible()) {
+    return false;
+  }
+
   // If the feature is overridden (e.g. via server-side config or command-line),
   // use that state.
   auto* feature_list = base::FeatureList::GetInstance();
@@ -63,74 +72,88 @@ bool IsLensOverlayContextualSearchboxEnabled() {
         lens::features::kLensOverlayContextualSearchbox);
   }
 
-  // Otherwise, enable it to en-US users in US.
-  return IsEnUs();
+  // Otherwise, return true.
+  return true;
 }
 
 bool IsAimM3Enabled(Profile* profile) {
-  // Set whether to use the AIM eligibility service based on the feature flag.
-  bool should_use_aim_eligibility_service = base::FeatureList::IsEnabled(
-      lens::features::kLensSearchAimM3UseAimEligibility);
+  auto* aim_eligibility_service =
+      AimEligibilityServiceFactory::GetForProfile(profile);
+  if (!aim_eligibility_service || !aim_eligibility_service->IsAimEligible() ||
+      !aim_eligibility_service->IsCobrowseServerEligible()) {
+    return false;
+  }
 
-  // Since the AIM Eligibility Service is already launched in the US, force it
-  // to be used there for M3 US users.
   if (base::FeatureList::IsEnabled(lens::features::kLensSearchAimM3EnUs) &&
       IsEnUs()) {
-    should_use_aim_eligibility_service = true;
+    return true;
   }
 
-  if (should_use_aim_eligibility_service) {
-    return AimEligibilityService::GenericKillSwitchFeatureCheck(
-        AimEligibilityServiceFactory::GetForProfile(profile),
-        lens::features::kLensSearchAimM3, lens::features::kLensSearchAimM3EnUs);
-  }
-  // If not using the AIM eligibility service, then just check the M3 feature
-  // flag.
   return base::FeatureList::IsEnabled(lens::features::kLensSearchAimM3);
 }
 
 bool ShouldShowLensOverlayEduActionChip(Profile* profile) {
+  if (!lens::features::IsLensOverlayEduActionChipEnabled()) {
+    return false;
+  }
+
   LensKeyedService* service = LensKeyedServiceFactory::GetForProfile(
       profile, /*create_if_necessary=*/true);
   if (service == nullptr) {
     return false;
   }
-  int shown_count = service->GetActionChipShownCount();
-  return lens::features::IsLensOverlayEduActionChipEnabled() &&
-         shown_count <=
-             lens::features::GetLensOverlayEduActionChipMaxShownCount();
+
+  if (service->GetActionChipShownCount() >
+      lens::features::GetLensOverlayEduActionChipMaxShownCount()) {
+    return false;
+  }
+
+  base::TimeDelta time_delta =
+      base::Time::Now() - service->GetActionChipLastShownTime();
+  // This function may be called multiple times for a single show. Check that
+  // the debounce interval has passed before considering the current call a
+  // second show attempt.
+  if (time_delta >=
+          lens::features::GetLensOverlayEduActionChipShowDebounceInterval() &&
+      time_delta < lens::features::GetLensOverlayEduActionChipShowInterval()) {
+    return false;
+  }
+  return true;
 }
 
-void IncrementLensOverlayEduActionChipShownCount(Profile* profile) {
+void RecordLensOverlayEduActionChipShown(Profile* profile) {
   LensKeyedService* service = LensKeyedServiceFactory::GetForProfile(
       profile, /*create_if_necessary=*/true);
   service->IncrementActionChipShownCount();
+  service->ResetActionChipLastShownTime();
 }
 
-bool DidUserGrantLensOverlayNeededPermissions(PrefService* pref_service) {
+bool DidUserGrantLensOverlayNeededPermissions(Profile* profile) {
+  auto* pref_service = profile->GetPrefs();
   if (!CanSharePageScreenshotWithLensOverlay(pref_service)) {
     return false;
   }
-  if (IsLensOverlayContextualSearchboxEnabled()) {
+  if (IsLensOverlayContextualSearchboxEnabled(profile)) {
     return CanSharePageContentWithLensOverlay(pref_service);
   }
   return true;
 }
 
-void GrantLensOverlayNeededPermissions(PrefService* pref_service) {
-  if (lens::IsLensOverlayContextualSearchboxEnabled()) {
+void GrantLensOverlayNeededPermissions(Profile* profile) {
+  auto* pref_service = profile->GetPrefs();
+  if (lens::IsLensOverlayContextualSearchboxEnabled(profile)) {
     pref_service->SetBoolean(prefs::kLensSharingPageContentEnabled, true);
   }
   pref_service->SetBoolean(prefs::kLensSharingPageScreenshotEnabled, true);
 }
 
 bool MaybeIncrementPrivacyNoticeShownCountAndGrantPermissions(
-    PrefService* pref_service) {
+    Profile* profile) {
   // This function should not be called if the non-blocking privacy notice is
   // not enabled.
   CHECK(lens::features::IsLensOverlayNonBlockingPrivacyNoticeEnabled());
 
-  if (DidUserGrantLensOverlayNeededPermissions(pref_service)) {
+  if (DidUserGrantLensOverlayNeededPermissions(profile)) {
     // User has already granted permissions. Do not show the privacy notice.
     return true;
   }
@@ -142,12 +165,13 @@ bool MaybeIncrementPrivacyNoticeShownCountAndGrantPermissions(
     return false;
   }
 
+  auto* pref_service = profile->GetPrefs();
   int shown_count = pref_service->GetInteger(
       prefs::kLensOverlayNonBlockingPrivacyNoticeShownCount);
   if (shown_count >= impression_cap) {
     // Shown count has reached impression cap. Grant permissions and do not show
     // the privacy notice.
-    GrantLensOverlayNeededPermissions(pref_service);
+    GrantLensOverlayNeededPermissions(profile);
     return true;
   }
 

@@ -15,6 +15,17 @@
 
 namespace install_static {
 
+// The brand-specific company name to be included as a component of the install
+// and user data directory paths. May be empty if no such dir is to be used.
+inline constexpr wchar_t kCompanyPathName[] = L"Google";
+
+// The brand-specific product name to be included as a component of the install
+// and user data directory paths.
+inline constexpr wchar_t kProductPathName[] = L"Chrome";
+
+// The brand-specific safe browsing client name.
+inline constexpr char kSafeBrowsingName[] = "googlechrome";
+
 // Note: This list of indices must be kept in sync with the brand-specific
 // resource strings in chrome/installer/util/prebuild/create_string_rc.
 enum InstallConstantIndex {
@@ -48,9 +59,6 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
         .active_setup_guid =
             L"{8A69D345-D564-463c-AFF1-A69D9E530F96}",  // Active Setup
                                                         // GUID.
-        .legacy_command_execute_clsid =
-            L"{5C65F4B0-3651-4514-B207-D10CB699B14B}",  // CommandExecuteImpl
-                                                        // CLSID.
         .toast_activator_clsid = {0xA2C6CB58,
                                   0xC076,
                                   0x425C,
@@ -117,7 +125,6 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
         .active_setup_guid =
             L"{8237E44A-0054-442C-B6B6-EA0509993955}",  // Active Setup
                                                         // GUID.
-        .legacy_command_execute_clsid = L"",  // CommandExecuteImpl CLSID.
         .toast_activator_clsid = {0xB89B137F,
                                   0x96AA,
                                   0x4AE2,
@@ -191,7 +198,6 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
         .active_setup_guid =
             L"{401C381F-E0DE-4B85-8BD8-3F3F14FBDA57}",  // Active Setup
                                                         // GUID.
-        .legacy_command_execute_clsid = L"",  // CommandExecuteImpl CLSID.
         .toast_activator_clsid = {0xF01C03EB,
                                   0xD431,
                                   0x4C83,
@@ -264,9 +270,6 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
         .active_setup_guid =
             L"{4ea16ac7-fd5a-47c3-875b-dbf4a2008c20}",  // Active Setup
                                                         // GUID.
-        .legacy_command_execute_clsid =
-            L"{1BEAC3E3-B852-44F4-B468-8906C062422E}",  // CommandExecuteImpl
-                                                        // CLSID.
         .toast_activator_clsid = {0xFA372A6E,
                                   0x149F,
                                   0x4E95,

@@ -91,7 +91,11 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadResponseHandler
 
   bool started_;
 
-  // Information needed to create DownloadCreateInfo when the time comes.
+  const url::Origin first_origin_;
+
+  // Information needed to create DownloadCreateInfo when the time comes. These
+  // members are consumed by CreateDownloadCreateInfo() and must not be used
+  // afterwards.
   std::unique_ptr<DownloadSaveInfo> save_info_;
   std::vector<GURL> url_chain_;
   std::string method_;
@@ -100,12 +104,14 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadResponseHandler
   bool is_transient_;
   bool fetch_error_body_;
   network::mojom::RedirectMode cross_origin_redirects_;
-  url::Origin first_origin_;
   DownloadUrlParameters::RequestHeadersType request_headers_;
   std::string request_origin_;
   DownloadSource download_source_;
   net::CertStatus cert_status_ = 0;
   bool has_strong_validators_;
+  // Whether the response was served by a Service Worker. Captured in
+  // OnReceiveResponse so it is available when mapping the completion status.
+  bool fetched_via_service_worker_ = false;
   std::optional<url::Origin> request_initiator_;
   ::network::mojom::CredentialsMode credentials_mode_;
   std::optional<net::IsolationInfo> isolation_info_;

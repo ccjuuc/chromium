@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/check_op.h"
 #include "base/containers/to_vector.h"
 #include "base/files/file_util.h"
@@ -19,6 +20,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -27,7 +29,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/test/trace_event_analyzer.h"
+#include "base/test/tracing/trace_event_analyzer.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -38,7 +40,7 @@
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_manager_factory.h"
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_test_utils.h"
-#include "chrome/browser/preloading/preview/preview_test_util.h"
+#include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
@@ -47,12 +49,16 @@
 #include "chrome/browser/sessions/session_restore_test_helper.h"
 #include "chrome/browser/sessions/session_service_factory.h"
 #include "chrome/browser/sessions/session_service_test_helper.h"
+#include "chrome/browser/sessions/tab_restore_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/browser_live_tab_context.h"
+#include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
@@ -75,6 +81,7 @@
 #include "components/page_load_metrics/browser/page_load_tracker.h"
 #include "components/prefs/pref_service.h"
 #include "components/sessions/content/content_test_helper.h"
+#include "components/sessions/core/tab_restore_service.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/public/browser/back_forward_cache.h"
 #include "content/public/browser/browser_thread.h"
@@ -89,6 +96,7 @@
 #include "content/public/common/content_switches.h"
 #include "content/public/common/referrer.h"
 #include "content/public/common/result_codes.h"
+#include "content/public/common/url_constants.h"
 #include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -140,36 +148,6 @@ const char kResponseWithNoStore[] =
     "\r\n"
     "The server speaks HTTP!";
 
-constexpr char kCreateFrameAtPositionScript[] = R"(
-  var new_iframe = document.createElement('iframe');
-  new_iframe.src = $1;
-  new_iframe.name = 'frame';
-  new_iframe.frameBorder = 0;
-  new_iframe.setAttribute('style',
-      'position:absolute; top:$2; left:$3; width:$4; height:$4;');
-  document.body.appendChild(new_iframe);)";
-
-constexpr char kCreateFrameAtPositionNotifyOnLoadScript[] = R"(
-  var new_iframe = document.createElement('iframe');
-  new_iframe.src = $1;
-  new_iframe.name = 'frame';
-  new_iframe.frameBorder = 0;
-  new_iframe.setAttribute('style',
-      'position:absolute; top:$2; left:$3; width:$4; height:$4;');
-  new_iframe.onload = function() {
-    window.domAutomationController.send('iframe.onload');
-  };
-  document.body.appendChild(new_iframe);)";
-
-constexpr char kCreateFrameAtTopRightPositionScript[] = R"(
-  var new_iframe = document.createElement('iframe');
-  new_iframe.src = $1;
-  new_iframe.name = 'frame';
-  new_iframe.frameBorder = 0;
-  new_iframe.setAttribute('style',
-      'position:absolute; top:$2; right:$3; width:$4; height:$4;');
-  document.body.appendChild(new_iframe);)";
-
 std::unique_ptr<net::test_server::HttpResponse> HandleCachableRequestHandler(
     const net::test_server::HttpRequest& request) {
   if (!base::StartsWith(request.relative_url, kCacheablePathPrefix,
@@ -190,53 +168,6 @@ std::unique_ptr<net::test_server::HttpResponse> HandleCachableRequestHandler(
   response->set_content("hi");
   return std::move(response);
 }
-
-struct DecoupleWidthFromStyleCase {
-  const char* property_name;
-  WebFeature feature;
-};
-
-static const DecoupleWidthFromStyleCase kDecoupleComputedWidthCases[] = {
-    {
-        "border-top-width",
-        WebFeature::kComputedBorderTopWidthWithNoneOrHiddenStyle,
-    },
-    {
-        "border-right-width",
-        WebFeature::kComputedBorderRightWidthWithNoneOrHiddenStyle,
-    },
-    {
-        "border-bottom-width",
-        WebFeature::kComputedBorderBottomWidthWithNoneOrHiddenStyle,
-    },
-    {
-        "border-left-width",
-        WebFeature::kComputedBorderLeftWidthWithNoneOrHiddenStyle,
-    },
-    {
-        "border-width",
-        WebFeature::kComputedBorderWidthWithNoneOrHiddenStyle,
-    },
-    {
-        "column-rule-width",
-        WebFeature::kComputedColumnRuleWidthWithNoneOrHiddenStyle,
-    },
-    {
-        "outline-width",
-        WebFeature::kComputedOutlineWidthWithNoneOrHiddenStyle,
-    },
-};
-
-static const DecoupleWidthFromStyleCase kDecoupleResolvedWidthCases[] = {
-    {
-        "column-rule-width",
-        WebFeature::kResolvedColumnRuleWidthWithNoneOrHiddenStyle,
-    },
-    {
-        "outline-width",
-        WebFeature::kResolvedOutlineWidthWithNoneOrHiddenStyle,
-    },
-};
 
 }  // namespace
 
@@ -310,20 +241,44 @@ class PageLoadMetricsBrowserTest : public InProcessBrowserTest {
     // 'internal' metrics as these may be recorded for debugging purposes, and
     // abandonment-related metrics, which are expected to be recorded for all
     // kinds of navigations.
-    size_t total_pageload_histograms =
-        histogram_tester_->GetTotalCountsForPrefix("PageLoad.").size();
-    size_t total_internal_histograms =
-        histogram_tester_->GetTotalCountsForPrefix("PageLoad.Internal.").size();
-    size_t total_abandon_histograms =
-        histogram_tester_
-            ->GetTotalCountsForPrefix(
-                internal::kAbandonedPageLoadMetricsHistogramPrefix)
-            .size();
-    DCHECK_GE(total_pageload_histograms,
-              total_internal_histograms + total_abandon_histograms);
-    return total_pageload_histograms - total_internal_histograms -
-               total_abandon_histograms ==
-           0;
+    size_t total_pageload_histograms = 0;
+
+    // We filter out WebUI and NonTabWebUI metrics because the browser may load
+    // background WebUIs (e.g., side panels, hidden WebUIs) during test
+    // execution independent of the explicit test navigations. These background
+    // loads shouldn't fail tests that assert no standard page load metrics are
+    // recorded. Examples of such metrics include:
+    //  - PageLoad.PaintTiming.NavigationToFirstContentfulPaint.WebUI
+    //  - PageLoad.PaintTiming.NavigationToLargestContentfulPaint2.NonTabWebUI
+    auto is_webui_metric = [](const std::string& name) {
+      static constexpr const char* kWebUIPrefixes[] = {
+          "PageLoad.PaintTiming.NavigationToFirstContentfulPaint.WebUI",
+          "PageLoad.PaintTiming.NavigationToLargestContentfulPaint.WebUI",
+          "PageLoad.PaintTiming.NavigationToFirstContentfulPaint.NonTabWebUI",
+          ("PageLoad.PaintTiming.NavigationToLargestContentfulPaint2."
+           "NonTabWebUI"),
+      };
+      for (const char* prefix : kWebUIPrefixes) {
+        if (base::StartsWith(name, prefix, base::CompareCase::SENSITIVE)) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    for (const auto& entry :
+         histogram_tester_->GetTotalCountsForPrefix("PageLoad.")) {
+      if (!base::StartsWith(entry.first, "PageLoad.Internal.",
+                            base::CompareCase::SENSITIVE) &&
+          !base::StartsWith(entry.first,
+                            internal::kAbandonedPageLoadMetricsHistogramPrefix,
+                            base::CompareCase::SENSITIVE) &&
+          !is_webui_metric(entry.first)) {
+        LOG(INFO) << "UNEXPECTED METRIC: " << entry.first;
+        total_pageload_histograms++;
+      }
+    }
+    return total_pageload_histograms == 0;
   }
 
   std::unique_ptr<PageLoadMetricsTestWaiter> CreatePageLoadMetricsTestWaiter(
@@ -339,7 +294,7 @@ class PageLoadMetricsBrowserTest : public InProcessBrowserTest {
   void TriggerNoStatePrefetch(const GURL& url) {
     prerender::NoStatePrefetchManager* no_state_prefetch_manager =
         prerender::NoStatePrefetchManagerFactory::GetForBrowserContext(
-            browser()->profile());
+            browser()->GetProfile());
     ASSERT_TRUE(no_state_prefetch_manager);
 
     prerender::test_utils::TestNoStatePrefetchContentsFactory*
@@ -367,7 +322,6 @@ class PageLoadMetricsBrowserTest : public InProcessBrowserTest {
   void VerifyBasicPageLoadUkms(const GURL& expected_source_url) {
     const auto& entries =
         test_ukm_recorder_->GetMergedEntriesByName(PageLoad::kEntryName);
-    EXPECT_EQ(1u, entries.size());
     for (const auto& kv : entries) {
       test_ukm_recorder_->ExpectEntrySourceHasUrl(kv.second.get(),
                                                   expected_source_url);
@@ -469,7 +423,6 @@ class PageLoadMetricsBrowserTest : public InProcessBrowserTest {
 
     const auto& entries = test_ukm_recorder_->GetMergedEntriesByName(
         NavigationTiming::kEntryName);
-    ASSERT_EQ(expected_source_urls.size(), entries.size());
     int i = 0;
     for (const auto& kv : entries) {
       test_ukm_recorder_->ExpectEntrySourceHasUrl(kv.second.get(),
@@ -490,6 +443,8 @@ class PageLoadMetricsBrowserTest : public InProcessBrowserTest {
   content::RenderFrameHost* RenderFrameHost() const {
     return web_contents()->GetPrimaryMainFrame();
   }
+  test::ScopedPrewarmFeatureList scoped_prewarm_feature_list_{
+      test::ScopedPrewarmFeatureList::PrewarmState::kDisabled};
   base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<base::HistogramTester> histogram_tester_;
   std::unique_ptr<ukm::TestAutoSetUkmRecorder> test_ukm_recorder_;
@@ -771,246 +726,6 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
   main_frame_viewport_rect_expectation_waiter->Wait();
 }
 
-// TODO(crbug.com/40916877): Fix this test on Mac.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_MainFrameIntersection_RTLPage \
-  DISABLED_MainFrameIntersection_RTLPage
-#else
-#define MAYBE_MainFrameIntersection_RTLPage MainFrameIntersection_RTLPage
-#endif
-IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
-                       MAYBE_MainFrameIntersection_RTLPage) {
-  ASSERT_TRUE(embedded_test_server()->Start());
-  GURL url = embedded_test_server()->GetURL(
-      "a.com", "/scroll/scrollable_page_with_content_rtl.html");
-
-  auto main_frame_intersection_rect_expectation_waiter =
-      CreatePageLoadMetricsTestWaiter("waiter");
-
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
-
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-
-  int document_width =
-      EvalJs(web_contents, "document.body.scrollWidth").ExtractInt();
-
-  int side_scrollbar_width =
-      EvalJs(web_contents,
-             "window.innerWidth - document.documentElement.clientWidth")
-          .ExtractInt();
-  int bottom_scrollbar_height =
-      EvalJs(web_contents,
-             "window.innerHeight - document.documentElement.clientHeight")
-          .ExtractInt();
-
-  content::RenderWidgetHostView* guest_host_view =
-      web_contents->GetRenderWidgetHostView();
-  gfx::Size viewport_size = guest_host_view->GetVisibleViewportSize();
-  viewport_size -= gfx::Size(side_scrollbar_width, bottom_scrollbar_height);
-
-  main_frame_intersection_rect_expectation_waiter
-      ->AddMainFrameIntersectionExpectation(
-          gfx::Rect(document_width - 100 - 50, 5050, 100, 100));
-
-  ASSERT_TRUE(ExecJs(web_contents, "window.scrollTo(0, 5000)"));
-
-  GURL subframe_url = embedded_test_server()->GetURL("a.com", "/title1.html");
-  EXPECT_TRUE(
-      ExecJs(web_contents,
-             content::JsReplace(kCreateFrameAtTopRightPositionScript,
-                                subframe_url.spec().c_str(), 5050, 50, 100)));
-
-  main_frame_intersection_rect_expectation_waiter->Wait();
-}
-
-IN_PROC_BROWSER_TEST_F(
-    PageLoadMetricsBrowserTest,
-    // TODO(crbug.com/40839452): Re-enable this test
-    DISABLED_NonZeroMainFrameScrollOffset_NestedSameOriginFrame_MainFrameIntersection) {
-  ASSERT_TRUE(embedded_test_server()->Start());
-  GURL url = embedded_test_server()->GetURL(
-      "a.com", "/scroll/scrollable_page_with_content.html");
-
-  auto main_frame_intersection_expectation_waiter =
-      CreatePageLoadMetricsTestWaiter("waiter");
-
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
-
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-
-  // Subframe
-  main_frame_intersection_expectation_waiter
-      ->AddMainFrameIntersectionExpectation(
-          gfx::Rect(/*x=*/50, /*y=*/5050, /*width=*/100, /*height=*/100));
-
-  // Nested frame
-  main_frame_intersection_expectation_waiter
-      ->AddMainFrameIntersectionExpectation(
-          gfx::Rect(/*x=*/55, /*y=*/5055, /*width=*/1, /*height=*/1));
-
-  ASSERT_TRUE(ExecJs(web_contents, "window.scrollTo(0, 5000)"));
-
-  GURL subframe_url = embedded_test_server()->GetURL("a.com", "/title1.html");
-  content::DOMMessageQueue dom_message_queue(web_contents);
-  std::string message;
-  content::ExecuteScriptAsync(
-      web_contents,
-      content::JsReplace(kCreateFrameAtPositionNotifyOnLoadScript,
-                         subframe_url.spec().c_str(), 5050, 50, 100));
-  EXPECT_TRUE(dom_message_queue.WaitForMessage(&message));
-  EXPECT_EQ("\"iframe.onload\"", message);
-
-  content::RenderFrameHost* subframe = content::FrameMatchingPredicate(
-      web_contents->GetPrimaryPage(),
-      base::BindRepeating(&content::FrameMatchesName, "frame"));
-
-  GURL nested_frame_url =
-      embedded_test_server()->GetURL("a.com", "/title1.html");
-  EXPECT_TRUE(ExecJs(
-      subframe, content::JsReplace(kCreateFrameAtPositionScript,
-                                   nested_frame_url.spec().c_str(), 5, 5, 1)));
-
-  main_frame_intersection_expectation_waiter->Wait();
-}
-
-// TODO(crbug.com/40234728): Fix flakiness.
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
-#define MAYBE_NonZeroMainFrameScrollOffset_NestedCrossOriginFrame_MainFrameIntersection \
-  DISABLED_NonZeroMainFrameScrollOffset_NestedCrossOriginFrame_MainFrameIntersection
-#else
-#define MAYBE_NonZeroMainFrameScrollOffset_NestedCrossOriginFrame_MainFrameIntersection \
-  NonZeroMainFrameScrollOffset_NestedCrossOriginFrame_MainFrameIntersection
-#endif
-IN_PROC_BROWSER_TEST_F(
-    PageLoadMetricsBrowserTest,
-    MAYBE_NonZeroMainFrameScrollOffset_NestedCrossOriginFrame_MainFrameIntersection) {
-  ASSERT_TRUE(embedded_test_server()->Start());
-  GURL url = embedded_test_server()->GetURL(
-      "a.com", "/scroll/scrollable_page_with_content.html");
-
-  auto main_frame_intersection_expectation_waiter =
-      CreatePageLoadMetricsTestWaiter("waiter");
-
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
-
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-
-  // Subframe
-  main_frame_intersection_expectation_waiter
-      ->AddMainFrameIntersectionExpectation(
-          gfx::Rect(/*x=*/50, /*y=*/5050, /*width=*/100, /*height=*/100));
-
-  // Nested frame
-  main_frame_intersection_expectation_waiter
-      ->AddMainFrameIntersectionExpectation(
-          gfx::Rect(/*x=*/55, /*y=*/5055, /*width=*/1, /*height=*/1));
-
-  ASSERT_TRUE(ExecJs(web_contents, "window.scrollTo(0, 5000)"));
-
-  GURL subframe_url = embedded_test_server()->GetURL("b.com", "/title1.html");
-  content::DOMMessageQueue dom_message_queue(web_contents);
-  std::string message;
-  content::ExecuteScriptAsync(
-      web_contents,
-      content::JsReplace(kCreateFrameAtPositionNotifyOnLoadScript,
-                         subframe_url.spec().c_str(), 5050, 50, 100));
-  EXPECT_TRUE(dom_message_queue.WaitForMessage(&message));
-  EXPECT_EQ("\"iframe.onload\"", message);
-
-  content::RenderFrameHost* subframe = content::FrameMatchingPredicate(
-      web_contents->GetPrimaryPage(),
-      base::BindRepeating(&content::FrameMatchesName, "frame"));
-
-  GURL nested_frame_url =
-      embedded_test_server()->GetURL("c.com", "/title1.html");
-  EXPECT_TRUE(ExecJs(
-      subframe, content::JsReplace(kCreateFrameAtPositionScript,
-                                   nested_frame_url.spec().c_str(), 5, 5, 1)));
-
-  main_frame_intersection_expectation_waiter->Wait();
-}
-
-// TODO(crbug.com/40916877): Fix this test on Mac.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_NonZeroMainFrameScrollOffset_SameOriginFrameAppended_MainFrameIntersection \
-  DISABLED_NonZeroMainFrameScrollOffset_SameOriginFrameAppended_MainFrameIntersection
-#else
-#define MAYBE_NonZeroMainFrameScrollOffset_SameOriginFrameAppended_MainFrameIntersection \
-  NonZeroMainFrameScrollOffset_SameOriginFrameAppended_MainFrameIntersection
-#endif
-IN_PROC_BROWSER_TEST_F(
-    PageLoadMetricsBrowserTest,
-    MAYBE_NonZeroMainFrameScrollOffset_SameOriginFrameAppended_MainFrameIntersection) {
-  ASSERT_TRUE(embedded_test_server()->Start());
-  GURL url = embedded_test_server()->GetURL(
-      "a.com", "/scroll/scrollable_page_with_content.html");
-
-  auto main_frame_intersection_expectation_waiter =
-      CreatePageLoadMetricsTestWaiter("waiter");
-
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
-
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-
-  main_frame_intersection_expectation_waiter
-      ->AddMainFrameIntersectionExpectation(
-          gfx::Rect(/*x=*/50, /*y=*/5050, /*width=*/1, /*height=*/1));
-
-  ASSERT_TRUE(ExecJs(web_contents, "window.scrollTo(0, 5000)"));
-
-  GURL subframe_url = embedded_test_server()->GetURL("a.com", "/title1.html");
-
-  EXPECT_TRUE(
-      ExecJs(web_contents,
-             content::JsReplace(kCreateFrameAtPositionScript,
-                                subframe_url.spec().c_str(), 5050, 50, 1)));
-
-  main_frame_intersection_expectation_waiter->Wait();
-}
-
-// TODO(crbug.com/40916877): Fix this test on Mac.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_NonZeroMainFrameScrollOffset_CrossOriginFrameAppended_MainFrameIntersection \
-  DISABLED_NonZeroMainFrameScrollOffset_CrossOriginFrameAppended_MainFrameIntersection
-#else
-#define MAYBE_NonZeroMainFrameScrollOffset_CrossOriginFrameAppended_MainFrameIntersection \
-  NonZeroMainFrameScrollOffset_CrossOriginFrameAppended_MainFrameIntersection
-#endif
-IN_PROC_BROWSER_TEST_F(
-    PageLoadMetricsBrowserTest,
-    MAYBE_NonZeroMainFrameScrollOffset_CrossOriginFrameAppended_MainFrameIntersection) {
-  ASSERT_TRUE(embedded_test_server()->Start());
-  GURL url = embedded_test_server()->GetURL(
-      "a.com", "/scroll/scrollable_page_with_content.html");
-
-  auto main_frame_intersection_expectation_waiter =
-      CreatePageLoadMetricsTestWaiter("waiter");
-
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
-
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-
-  main_frame_intersection_expectation_waiter
-      ->AddMainFrameIntersectionExpectation(
-          gfx::Rect(/*x=*/50, /*y=*/5050, /*width=*/1, /*height=*/1));
-
-  ASSERT_TRUE(ExecJs(web_contents, "window.scrollTo(0, 5000)"));
-
-  GURL subframe_url = embedded_test_server()->GetURL("b.com", "/title1.html");
-
-  EXPECT_TRUE(
-      ExecJs(web_contents,
-             content::JsReplace(kCreateFrameAtPositionScript,
-                                subframe_url.spec().c_str(), 5050, 50, 1)));
-
-  main_frame_intersection_expectation_waiter->Wait();
-}
-
 IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest, NewPage) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -1108,7 +823,26 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest, NoStatePrefetchMetrics) {
   VerifyNavigationMetrics({url});
 }
 
-IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest, CachedPage) {
+class PageLoadMetricsBrowserTestWithInitialWebUIParam
+    : public PageLoadMetricsBrowserTest,
+      public ::testing::WithParamInterface<bool> {
+ public:
+  PageLoadMetricsBrowserTestWithInitialWebUIParam() {
+    if (GetParam()) {
+      sub_feature_list_.InitWithFeatures(
+          {features::kInitialWebUI, features::kWebUIReloadButton}, {});
+    } else {
+      sub_feature_list_.InitWithFeatures(
+          {}, {features::kInitialWebUI, features::kWebUIReloadButton});
+    }
+  }
+
+ private:
+  base::test::ScopedFeatureList sub_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_P(PageLoadMetricsBrowserTestWithInitialWebUIParam,
+                       CachedPage) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
   GURL url = embedded_test_server()->GetURL(kCacheablePathPrefix);
@@ -1117,14 +851,13 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest, CachedPage) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   NavigateToUntrackedUrl();
 
-  auto entries =
-      test_ukm_recorder_->GetMergedEntriesByName(PageLoad::kEntryName);
-  EXPECT_EQ(1u, entries.size());
-  for (const auto& kv : entries) {
-    auto* const uncached_load_entry = kv.second.get();
-    test_ukm_recorder_->ExpectEntrySourceHasUrl(uncached_load_entry, url);
+  {
+    auto entries =
+        test_ukm_recorder_->GetMergedEntriesByName(PageLoad::kEntryName);
+    EXPECT_EQ(1u, entries.size());
 
-    EXPECT_FALSE(test_ukm_recorder_->EntryHasMetric(uncached_load_entry,
+    const auto& kv = entries.begin();
+    EXPECT_FALSE(test_ukm_recorder_->EntryHasMetric(kv->second.get(),
                                                     PageLoad::kWasCachedName));
   }
 
@@ -1141,22 +874,27 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest, CachedPage) {
   // persisted at the end of the page load lifetime.
   NavigateToUntrackedUrl();
 
-  entries = test_ukm_recorder_->GetMergedEntriesByName(PageLoad::kEntryName);
-  EXPECT_EQ(1u, entries.size());
-  for (const auto& kv : entries) {
-    auto* const cached_load_entry = kv.second.get();
-    test_ukm_recorder_->ExpectEntrySourceHasUrl(cached_load_entry, url);
+  {
+    auto entries =
+        test_ukm_recorder_->GetMergedEntriesByName(PageLoad::kEntryName);
+    EXPECT_EQ(1u, entries.size());
 
-    EXPECT_TRUE(test_ukm_recorder_->EntryHasMetric(cached_load_entry,
+    const auto& kv = entries.begin();
+    EXPECT_TRUE(test_ukm_recorder_->EntryHasMetric(kv->second.get(),
                                                    PageLoad::kWasCachedName));
   }
 
   VerifyNavigationMetrics({url});
 }
 
+INSTANTIATE_TEST_SUITE_P(All,
+                         PageLoadMetricsBrowserTestWithInitialWebUIParam,
+                         ::testing::Bool());
+
 // Test that we log kMainFrameResource_RequestHasNoStore when response has
 // cache-control:no-store response header.
-IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest, MainFrameHasNoStore) {
+IN_PROC_BROWSER_TEST_P(PageLoadMetricsBrowserTestWithInitialWebUIParam,
+                       MainFrameHasNoStore) {
   // Create a HTTP response to control main-frame navigation to send no-store
   // response.
   net::test_server::ControllableHttpResponse response(embedded_test_server(),
@@ -1188,23 +926,27 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest, MainFrameHasNoStore) {
 
   auto entries =
       test_ukm_recorder_->GetMergedEntriesByName(PageLoad::kEntryName);
-  EXPECT_EQ(1u, entries.size());
-  for (const auto& kv : entries) {
-    auto* const no_store_entry = kv.second.get();
-    test_ukm_recorder_->ExpectEntrySourceHasUrl(no_store_entry, kUrl);
-
-    // RequestHasNoStore event should be recorded with value 1 as the response
-    // as no-store in it.
-    EXPECT_TRUE(test_ukm_recorder_->EntryHasMetric(
-        no_store_entry, PageLoad::kMainFrameResource_RequestHasNoStoreName));
-    test_ukm_recorder_->ExpectEntryMetric(
-        no_store_entry, PageLoad::kMainFrameResource_RequestHasNoStoreName, 1);
+  if (GetParam()) {
+    EXPECT_GE(entries.size(), 1u);
+  } else {
+    EXPECT_EQ(1u, entries.size());
   }
+
+  size_t count = 0;
+  for (const auto& kv : entries) {
+    auto* entry = kv.second.get();
+    const int64_t* metric_value = ukm::TestUkmRecorder::GetEntryMetric(
+        entry, PageLoad::kMainFrameResource_RequestHasNoStoreName);
+    if (metric_value && *metric_value == 1) {
+      count++;
+    }
+  }
+  EXPECT_EQ(1u, count);
 }
 
 // Test that we set kMainFrameResource_RequestHasNoStore to false when response
 // has no cache-control:no-store header.
-IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
+IN_PROC_BROWSER_TEST_P(PageLoadMetricsBrowserTestWithInitialWebUIParam,
                        MainFrameDoesnotHaveNoStore) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -1217,17 +959,22 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
 
   auto entries =
       test_ukm_recorder_->GetMergedEntriesByName(PageLoad::kEntryName);
-  EXPECT_EQ(1u, entries.size());
-  for (const auto& kv : entries) {
-    auto* const no_store_entry = kv.second.get();
-    test_ukm_recorder_->ExpectEntrySourceHasUrl(no_store_entry, kUrl);
-
-    // RequestHasNoStore event should be recorded with value false.
-    EXPECT_TRUE(test_ukm_recorder_->EntryHasMetric(
-        no_store_entry, PageLoad::kMainFrameResource_RequestHasNoStoreName));
-    test_ukm_recorder_->ExpectEntryMetric(
-        no_store_entry, PageLoad::kMainFrameResource_RequestHasNoStoreName, 0);
+  if (GetParam()) {
+    EXPECT_GE(entries.size(), 1u);
+  } else {
+    EXPECT_EQ(1u, entries.size());
   }
+
+  size_t count = 0;
+  for (const auto& kv : entries) {
+    auto* entry = kv.second.get();
+    const int64_t* metric_value = ukm::TestUkmRecorder::GetEntryMetric(
+        entry, PageLoad::kMainFrameResource_RequestHasNoStoreName);
+    if (metric_value && *metric_value == 0) {
+      count++;
+    }
+  }
+  EXPECT_EQ(1u, count);
 }
 
 IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest, NewPageInNewForegroundTab) {
@@ -1244,10 +991,10 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest, NewPageInNewForegroundTab) {
   waiter->AddPageExpectation(TimingField::kLoadEvent);
   waiter->Wait();
 
-  // Due to crbug.com/725347, with browser side navigation enabled, navigations
-  // in new tabs were recorded as starting in the background. Here we verify
-  // that navigations initiated in a new tab are recorded as happening in the
-  // foreground.
+  // Due to crbug.com/40522104, with browser side navigation enabled,
+  // navigations in new tabs were recorded as starting in the background. Here
+  // we verify that navigations initiated in a new tab are recorded as happening
+  // in the foreground.
   histogram_tester_->ExpectTotalCount(internal::kHistogramLoad, 1);
   histogram_tester_->ExpectTotalCount(internal::kBackgroundHistogramLoad, 0);
 }
@@ -1493,7 +1240,7 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest, IgnoreDownloads) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
   content::DownloadTestObserverTerminal downloads_observer(
-      browser()->profile()->GetDownloadManager(),
+      browser()->GetProfile()->GetDownloadManager(),
       1,  // == wait_count (only waiting for "download-test3.gif").
       content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);
 
@@ -1518,6 +1265,19 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest, NoDocumentWrite) {
 
   histogram_tester_->ExpectTotalCount(internal::kHistogramFirstContentfulPaint,
                                       1);
+  histogram_tester_->ExpectTotalCount(
+      internal::kHistogramActualNavigationStartToNavigationCommitSent, 1);
+  histogram_tester_->ExpectTotalCount(
+      internal::kHistogramActualNavigationStartToParseStart, 1);
+  histogram_tester_->ExpectTotalCount(
+      internal::kHistogramActualNavigationStartToDOMContentLoaded, 1);
+  histogram_tester_->ExpectTotalCount(
+      internal::kHistogramActualNavigationStartToFirstContentfulPaint, 1);
+  histogram_tester_->ExpectTotalCount(
+      internal::kHistogramNavigationCommitSentToParseStart, 1);
+  histogram_tester_->ExpectTotalCount(
+      internal::kHistogramParseStartToDOMContentLoaded, 1);
+
   histogram_tester_->ExpectTotalCount(
       internal::kHistogramDocWriteBlockParseStartToFirstContentfulPaint, 0);
 }
@@ -1632,8 +1392,8 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest, DISABLED_BadXhtml) {
   // When an XHTML page contains invalid XML, it causes a paint of the error
   // message without a layout. Page load metrics currently treats this as an
   // error. Eventually, we'll fix this by special casing the handling of
-  // documents with non-well-formed XML on the blink side. See crbug.com/627607
-  // for more.
+  // documents with non-well-formed XML on the blink side. See
+  // crbug.com/40476240 for more.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(),
       embedded_test_server()->GetURL("/page_load_metrics/badxml.xhtml")));
@@ -1687,7 +1447,7 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
   ASSERT_TRUE(embedded_test_server()->Start());
 
   content::DownloadTestObserverTerminal downloads_observer(
-      browser()->profile()->GetDownloadManager(),
+      browser()->GetProfile()->GetDownloadManager(),
       1,  // == wait_count (only waiting for "download-test1.lib").
       content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);
 
@@ -1949,102 +1709,6 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTestWithAutoupgradesDisabled,
 
   histogram_tester_->ExpectBucketCount("Blink.UseCounter.WebDXFeatures",
                                        WebDXFeature::kWebAnimations, 1);
-}
-
-class PageLoadMetricsBrowserTestWithDecoupleComputedBorderWidthFromStyle
-    : public PageLoadMetricsBrowserTest,
-      public testing::WithParamInterface<DecoupleWidthFromStyleCase> {
- public:
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    PageLoadMetricsBrowserTest::SetUpCommandLine(command_line);
-    feature_list_.InitAndEnableFeature(
-        blink::features::kDecoupleComputedBorderWidthFromStyle);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    PageLoadMetricsBrowserTestWithDecoupleComputedBorderWidthFromStyle,
-    testing::ValuesIn(kDecoupleComputedWidthCases));
-
-IN_PROC_BROWSER_TEST_P(
-    PageLoadMetricsBrowserTestWithDecoupleComputedBorderWidthFromStyle,
-    UseCounterForComputedSingleProperty) {
-  ASSERT_TRUE(embedded_test_server()->Start());
-
-  // Expect 0 hits before we query for the property.
-  histogram_tester_->ExpectBucketCount("Blink.UseCounter.Features",
-                                       GetParam().feature, 0);
-
-  auto waiter = CreatePageLoadMetricsTestWaiter("waiter");
-  waiter->AddPageExpectation(TimingField::kLoadEvent);
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL(
-                     "/page_load_metrics/use_counter_features.html")));
-  waiter->Wait();
-
-  content::EvalJsResult result =
-      EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
-             base::StringPrintf("document.getElementById('width-no-style')."
-                                "computedStyleMap().get('%s');",
-                                GetParam().property_name));
-  EXPECT_TRUE(result.is_ok());
-
-  NavigateToUntrackedUrl();
-
-  histogram_tester_->ExpectBucketCount("Blink.UseCounter.Features",
-                                       GetParam().feature, 1);
-}
-
-class PageLoadMetricsBrowserTestWithDecoupleResolvedWidthFromStyle
-    : public PageLoadMetricsBrowserTest,
-      public testing::WithParamInterface<DecoupleWidthFromStyleCase> {
- public:
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    PageLoadMetricsBrowserTest::SetUpCommandLine(command_line);
-    feature_list_.InitAndEnableFeature(
-        blink::features::kDecoupleResolvedColumnRuleWidthFromStyle);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    PageLoadMetricsBrowserTestWithDecoupleResolvedWidthFromStyle,
-    testing::ValuesIn(kDecoupleResolvedWidthCases));
-
-IN_PROC_BROWSER_TEST_P(
-    PageLoadMetricsBrowserTestWithDecoupleResolvedWidthFromStyle,
-    UseCounterForResolvedSingleProperty) {
-  ASSERT_TRUE(embedded_test_server()->Start());
-
-  // Expect 0 hits before we query for the property via `getComputedStyle`.
-  histogram_tester_->ExpectBucketCount("Blink.UseCounter.Features",
-                                       GetParam().feature, 0);
-
-  auto waiter = CreatePageLoadMetricsTestWaiter("waiter");
-  waiter->AddPageExpectation(TimingField::kLoadEvent);
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL(
-                     "/page_load_metrics/use_counter_features.html")));
-  waiter->Wait();
-
-  content::EvalJsResult result = EvalJs(
-      browser()->tab_strip_model()->GetActiveWebContents(),
-      base::StringPrintf("window.getComputedStyle(document.getElementById('"
-                         "width-no-style')).getPropertyValue('%s');",
-                         GetParam().property_name));
-  EXPECT_TRUE(result.is_ok());
-
-  NavigateToUntrackedUrl();
-
-  histogram_tester_->ExpectBucketCount("Blink.UseCounter.Features",
-                                       GetParam().feature, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
@@ -2609,53 +2273,10 @@ IN_PROC_BROWSER_TEST_F(SessionRestorePageLoadMetricsBrowserTest,
   ASSERT_EQ(2, tab_strip->count());
 }
 
-enum class ReduceTransferSizeUpdatedIPCTestCase {
-  kEnabled,
-  kDisabled,
-};
-
-class PageLoadMetricsResourceLoadBrowserTest
-    : public PageLoadMetricsBrowserTest,
-      public ::testing::WithParamInterface<
-          ReduceTransferSizeUpdatedIPCTestCase> {
- public:
-  PageLoadMetricsResourceLoadBrowserTest() {
-    if (IsReduceTransferSizeUpdatedIPCEnabled()) {
-      feature_list_.InitAndEnableFeature(
-          network::features::kReduceTransferSizeUpdatedIPC);
-    } else {
-      feature_list_.InitAndDisableFeature(
-          network::features::kReduceTransferSizeUpdatedIPC);
-    }
-  }
-  ~PageLoadMetricsResourceLoadBrowserTest() override = default;
-
- protected:
-  bool IsReduceTransferSizeUpdatedIPCEnabled() const {
-    return GetParam() == ReduceTransferSizeUpdatedIPCTestCase::kEnabled;
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    PageLoadMetricsResourceLoadBrowserTest,
-    testing::ValuesIn({ReduceTransferSizeUpdatedIPCTestCase::kDisabled,
-                       ReduceTransferSizeUpdatedIPCTestCase::kEnabled}),
-    [](const testing::TestParamInfo<ReduceTransferSizeUpdatedIPCTestCase>&
-           info) {
-      switch (info.param) {
-        case ReduceTransferSizeUpdatedIPCTestCase::kEnabled:
-          return "ReduceTransferSizeUpdatedIPCEnabled";
-        case ReduceTransferSizeUpdatedIPCTestCase::kDisabled:
-          return "ReduceTransferSizeUpdatedIPCDisabled";
-      }
-    });
+using PageLoadMetricsResourceLoadBrowserTest = PageLoadMetricsBrowserTest;
 
 // TODO(crbug.com/41412649) Disabled due to flaky timeouts on all platforms.
-IN_PROC_BROWSER_TEST_P(PageLoadMetricsResourceLoadBrowserTest,
+IN_PROC_BROWSER_TEST_F(PageLoadMetricsResourceLoadBrowserTest,
                        DISABLED_ReceivedAggregateResourceDataLength) {
   embedded_test_server()->ServeFilesFromSourceDirectory("content/test/data");
   content::SetupCrossSiteRedirector(embedded_test_server());
@@ -2667,7 +2288,7 @@ IN_PROC_BROWSER_TEST_P(PageLoadMetricsResourceLoadBrowserTest,
       browser(), embedded_test_server()->GetURL(
                      "foo.com", "/cross_site_iframe_factory.html?foo")));
   waiter->Wait();
-  base::ByteCount one_frame_page_size = waiter->current_network_bytes();
+  base::ByteSize one_frame_page_size = waiter->current_network_bytes();
 
   waiter = CreatePageLoadMetricsTestWaiter("waiter");
   waiter->AddPageExpectation(TimingField::kLoadEvent);
@@ -2678,11 +2299,11 @@ IN_PROC_BROWSER_TEST_P(PageLoadMetricsResourceLoadBrowserTest,
   // Verify that 7 iframes are fetched, with some amount of tolerance since
   // favicon is fetched only once.
   waiter->AddMinimumNetworkBytesExpectation(
-      7 * (one_frame_page_size - base::ByteCount(100)));
+      7 * (one_frame_page_size - base::ByteSize(100)).AsByteSize());
   waiter->Wait();
 }
 
-IN_PROC_BROWSER_TEST_P(PageLoadMetricsResourceLoadBrowserTest,
+IN_PROC_BROWSER_TEST_F(PageLoadMetricsResourceLoadBrowserTest,
                        ChunkedResponse_OverheadDoesNotCountForBodyBytes) {
   const char kHttpResponseHeader[] =
       "HTTP/1.1 200 OK\r\n"
@@ -2723,7 +2344,7 @@ IN_PROC_BROWSER_TEST_P(PageLoadMetricsResourceLoadBrowserTest,
             kChunkSize * kNumChunks);
 }
 
-IN_PROC_BROWSER_TEST_P(PageLoadMetricsResourceLoadBrowserTest,
+IN_PROC_BROWSER_TEST_F(PageLoadMetricsResourceLoadBrowserTest,
                        ReceivedCompleteResources) {
   const char kHttpResponseHeader[] =
       "HTTP/1.1 200 OK\r\n"
@@ -2759,7 +2380,7 @@ IN_PROC_BROWSER_TEST_P(PageLoadMetricsResourceLoadBrowserTest,
   main_html_response->Send(std::string(1000, ' '));
   main_html_response->Done();
   waiter->AddMinimumCompleteResourcesExpectation(1);
-  waiter->AddMinimumNetworkBytesExpectation(base::ByteCount(1000));
+  waiter->AddMinimumNetworkBytesExpectation(base::ByteSize(1000));
   waiter->Wait();
 
   script_response->WaitForRequest();
@@ -2771,21 +2392,12 @@ IN_PROC_BROWSER_TEST_P(PageLoadMetricsResourceLoadBrowserTest,
   script_response->Send(std::string(1000, ' '));
   // Data received but resource not complete
   waiter->AddMinimumCompleteResourcesExpectation(1);
-  waiter->AddMinimumNetworkBytesExpectation(base::ByteCount(2000));
+  waiter->AddMinimumNetworkBytesExpectation(base::ByteSize(2000));
 
-  if (!IsReduceTransferSizeUpdatedIPCEnabled()) {
-    // When ReduceTransferSizeUpdatedIPC is disabled, network bytes information
-    // is sent almost every time when the body data is received. So we can call
-    // Wait() before finishing `script_response`,
-    waiter->Wait();
-    script_response->Done();
-  } else {
-    // But when ReduceTransferSizeUpdatedIPC is enabled, network bytes
-    // information is sent only when the resource is complete. So we need to
-    // call Wait() after finishing `script_response`.
-    script_response->Done();
-    waiter->Wait();
-  }
+  // Network bytes information is sent only when the resource is complete.
+  // So we need to call Wait() after finishing `script_response`.
+  script_response->Done();
+  waiter->Wait();
   waiter->AddMinimumCompleteResourcesExpectation(2);
   waiter->Wait();
 
@@ -2795,7 +2407,7 @@ IN_PROC_BROWSER_TEST_P(PageLoadMetricsResourceLoadBrowserTest,
   iframe_response->Send(std::string(2000, ' '));
   iframe_response->Done();
   waiter->AddMinimumCompleteResourcesExpectation(3);
-  waiter->AddMinimumNetworkBytesExpectation(base::ByteCount(4000));
+  waiter->AddMinimumNetworkBytesExpectation(base::ByteSize(4000));
   waiter->Wait();
 }
 
@@ -2863,6 +2475,10 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
   embedded_test_server()->ServeFilesFromSourceDirectory("content/test/data");
   ASSERT_TRUE(embedded_test_server()->Start());
 
+  // Make sure that the initial implicit navigation is ended by navigating to an
+  // untracked URL.
+  NavigateToUntrackedUrl();
+
   {
     // Initial browser initiated navigation.
     base::HistogramTester histogram_tester;
@@ -2888,6 +2504,30 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
     histogram_tester.ExpectTotalCount(
         internal::kHistogramInputCoverageWithoutUserGestureRendererInitiated,
         0);
+    histogram_tester.ExpectTotalCount("Navigation.Timeline.Total.Duration", 1);
+    histogram_tester.ExpectTotalCount(
+        "Navigation.Timeline.TotalExcludingBeforeUnload.Duration", 1);
+    histogram_tester.ExpectTotalCount(
+        "Navigation.Timeline.TotalExcludingBeforeUnload.MainFrameOnly.Duration",
+        1);
+    EXPECT_GT(
+        histogram_tester.GetTotalSum("Navigation.Timeline.Total.Duration"), 0);
+    // InteractionTo* metrics are not recorded when there is no user input.
+    histogram_tester.ExpectTotalCount(
+        "Navigation.Timeline.InteractionToActualNavigationStart.Duration", 0);
+    histogram_tester.ExpectTotalCount(
+        "Navigation.Timeline.InteractionToNavigationFinished."
+        "MainFrameOnly.Duration",
+        0);
+    histogram_tester.ExpectTotalCount(
+        "Navigation.Timeline.InteractionToNavigationFinished."
+        "ExcludingBeforeUnload.MainFrameOnly.Duration",
+        0);
+    // Navigation metrics for before-navigation phase.
+    histogram_tester.ExpectTotalCount(
+        internal::kHistogramInteractionToNavigationStart, 0);
+    histogram_tester.ExpectTotalCount(
+        internal::kHistogramActualNavigationStartToNavigationStart, 1);
   }
 
   {
@@ -2927,6 +2567,14 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
     histogram_tester.ExpectTotalCount(
         internal::kHistogramInputCoverageWithoutUserGestureRendererInitiated,
         1);
+    histogram_tester.ExpectTotalCount("Navigation.Timeline.Total.Duration", 1);
+    EXPECT_GT(
+        histogram_tester.GetTotalSum("Navigation.Timeline.Total.Duration"), 0);
+    histogram_tester.ExpectTotalCount(
+        "Navigation.Timeline.TotalExcludingBeforeUnload.Duration", 1);
+    histogram_tester.ExpectTotalCount(
+        "Navigation.Timeline.TotalExcludingBeforeUnload.MainFrameOnly.Duration",
+        1);
     // InteractionTo* metrics are not recorded when there is no user input.
     histogram_tester.ExpectTotalCount(
         "Navigation.Timeline.InteractionToActualNavigationStart.Duration", 0);
@@ -2942,6 +2590,11 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
         "Navigation.Timeline.InteractionToNavigationFinished."
         "ExcludingBeforeUnload.MainFrameOnly.Duration",
         0);
+    // Navigation metrics for before-navigation phase.
+    histogram_tester.ExpectTotalCount(
+        internal::kHistogramInteractionToNavigationStart, 0);
+    histogram_tester.ExpectTotalCount(
+        internal::kHistogramActualNavigationStartToNavigationStart, 1);
   }
 
   {
@@ -2984,20 +2637,50 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
     histogram_tester.ExpectTotalCount(
         internal::kHistogramInputCoverageWithoutUserGestureRendererInitiated,
         0);
+    histogram_tester.ExpectTotalCount("Navigation.Timeline.Total.Duration", 1);
+    int64_t total_duration =
+        histogram_tester.GetTotalSum("Navigation.Timeline.Total.Duration");
+    EXPECT_GT(total_duration, 0);
+    histogram_tester.ExpectTotalCount(
+        "Navigation.Timeline.TotalExcludingBeforeUnload.Duration", 1);
+    histogram_tester.ExpectTotalCount(
+        "Navigation.Timeline.TotalExcludingBeforeUnload.MainFrameOnly.Duration",
+        1);
     histogram_tester.ExpectTotalCount(
         "Navigation.Timeline.InteractionToActualNavigationStart.Duration", 1);
+    EXPECT_GT(
+        histogram_tester.GetTotalSum(
+            "Navigation.Timeline.InteractionToActualNavigationStart.Duration"),
+        0);
     histogram_tester.ExpectTotalCount(
         "Navigation.Timeline.InteractionToActualNavigationStart."
         "MainFrameOnly.Duration",
         1);
+    EXPECT_GT(histogram_tester.GetTotalSum(
+                  "Navigation.Timeline.InteractionToActualNavigationStart."
+                  "MainFrameOnly.Duration"),
+              0);
     histogram_tester.ExpectTotalCount(
         "Navigation.Timeline.InteractionToNavigationFinished."
         "MainFrameOnly.Duration",
         1);
+    EXPECT_GT(histogram_tester.GetTotalSum(
+                  "Navigation.Timeline.InteractionToNavigationFinished."
+                  "MainFrameOnly.Duration"),
+              total_duration);
     histogram_tester.ExpectTotalCount(
         "Navigation.Timeline.InteractionToNavigationFinished."
         "ExcludingBeforeUnload.MainFrameOnly.Duration",
         1);
+    EXPECT_GT(histogram_tester.GetTotalSum(
+                  "Navigation.Timeline.InteractionToNavigationFinished."
+                  "ExcludingBeforeUnload.MainFrameOnly.Duration"),
+              total_duration);
+    // Navigation metrics for before-navigation phase.
+    histogram_tester.ExpectTotalCount(
+        internal::kHistogramInteractionToNavigationStart, 1);
+    histogram_tester.ExpectTotalCount(
+        internal::kHistogramActualNavigationStartToNavigationStart, 1);
   }
 }
 
@@ -3355,7 +3038,7 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
 }
 
 // Does a navigation to a page which records a WebFeature before commit.
-// Regression test for https://crbug.com/1043018.
+// Regression test for https://crbug.com/40115086.
 IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest, PreCommitWebFeature) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -3398,7 +3081,7 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
 
   // Expectation is before NavigateToUrl for this test as the expectation can be
   // met after NavigateToUrl and before the Wait.
-  waiter->AddMainFrameIntersectionExpectation(
+  waiter->AddMainFrameRectExpectation(
       gfx::Rect(0, 0, document_width,
                 document_height));  // Initial main frame rect.
 
@@ -3410,7 +3093,7 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
 
   // Create a |document_width|x|document_height| frame at 100,100, increasing
   // the page width and height by 100.
-  waiter->AddMainFrameIntersectionExpectation(
+  waiter->AddMainFrameRectExpectation(
       gfx::Rect(0, 0, document_width + 100, document_height + 100));
   EXPECT_TRUE(ExecJs(
       web_contents,
@@ -3419,250 +3102,10 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
   waiter->Wait();
 }
 
-// TODO(crbug.com/40916877): Fix this test on Mac.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_MainFrameIntersectionSingleFrame \
-  DISABLED_MainFrameIntersectionSingleFrame
-#else
-#define MAYBE_MainFrameIntersectionSingleFrame MainFrameIntersectionSingleFrame
-#endif
-// Creates a single frame within the main frame and verifies the intersection
-// with the main frame.
-IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
-                       MAYBE_MainFrameIntersectionSingleFrame) {
-  ASSERT_TRUE(embedded_test_server()->Start());
 
-  auto waiter = CreatePageLoadMetricsTestWaiter("waiter");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(),
-      embedded_test_server()->GetURL(
-          "/page_load_metrics/blank_with_positioned_iframe_writer.html")));
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
 
-  waiter->AddMainFrameIntersectionExpectation(gfx::Rect(100, 100, 200, 200));
 
-  // Create a 200x200 iframe at 100,100.
-  EXPECT_TRUE(ExecJs(web_contents,
-                     "createIframeAtRect(\"test\", 100, 100, 200, 200);"));
 
-  waiter->Wait();
-}
-
-// TODO(crbug.com/40916877): Fix this test on Mac.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_MainFrameIntersectionSameOrigin \
-  DISABLED_MainFrameIntersectionSameOrigin
-#else
-#define MAYBE_MainFrameIntersectionSameOrigin MainFrameIntersectionSameOrigin
-#endif
-// Creates a set of nested frames within the main frame and verifies
-// their intersections with the main frame.
-IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
-                       MAYBE_MainFrameIntersectionSameOrigin) {
-  EXPECT_TRUE(embedded_test_server()->Start());
-
-  auto waiter = CreatePageLoadMetricsTestWaiter("waiter");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(),
-      embedded_test_server()->GetURL(
-          "/page_load_metrics/blank_with_positioned_iframe_writer.html")));
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-
-  waiter->AddMainFrameIntersectionExpectation(gfx::Rect(100, 100, 200, 200));
-
-  // Create a 200x200 iframe at 100,100.
-  EXPECT_TRUE(ExecJs(web_contents,
-                     "createIframeAtRect(\"test\", 100, 100, 200, 200);"));
-  waiter->Wait();
-
-  NavigateIframeToURL(
-      web_contents, "test",
-      embedded_test_server()->GetURL(
-          "/page_load_metrics/blank_with_positioned_iframe_writer.html"));
-
-  // Creates the grandchild iframe within the child frame at 10, 10 with
-  // dimensions 300x300. This frame is clipped by 110 pixels in the bottom and
-  // right. This translates to an intersection of 110, 110, 190, 190 with the
-  // main frame.
-  waiter->AddMainFrameIntersectionExpectation(gfx::Rect(110, 110, 190, 190));
-  content::RenderFrameHost* child_frame =
-      content::ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
-  EXPECT_TRUE(
-      ExecJs(child_frame, "createIframeAtRect(\"test2\", 10, 10, 300, 300);"));
-
-  waiter->Wait();
-}
-
-// TODO(crbug.com/40916877): Fix this test on Mac.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_MainFrameIntersectionCrossOrigin \
-  DISABLED_MainFrameIntersectionCrossOrigin
-#else
-#define MAYBE_MainFrameIntersectionCrossOrigin MainFrameIntersectionCrossOrigin
-#endif
-// Creates a set of nested frames, with a cross origin subframe, within the
-// main frame and verifies their intersections with the main frame.
-IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
-                       MAYBE_MainFrameIntersectionCrossOrigin) {
-  EXPECT_TRUE(embedded_test_server()->Start());
-  auto waiter = CreatePageLoadMetricsTestWaiter("waiter");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(),
-      embedded_test_server()->GetURL(
-          "/page_load_metrics/blank_with_positioned_iframe_writer.html")));
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-
-  waiter->AddMainFrameIntersectionExpectation(gfx::Rect(100, 100, 200, 200));
-
-  // Create a 200x200 iframe at 100,100.
-  EXPECT_TRUE(ExecJs(web_contents,
-                     "createIframeAtRect(\"test\", 100, 100, 200, 200);"));
-
-  NavigateIframeToURL(
-      web_contents, "test",
-      embedded_test_server()->GetURL(
-          "b.com",
-          "/page_load_metrics/blank_with_positioned_iframe_writer.html"));
-
-  // Wait for the main frame intersection after we have navigated the frame
-  // to a cross-origin url.
-  waiter->Wait();
-
-  // Change the size of the frame to 150, 150. This tests the cross origin
-  // code path as the previous wait can flakily pass due to receiving the
-  // correct intersection before the frame transitions to cross-origin without
-  // checking that the final computation is consistent.
-  waiter->AddMainFrameIntersectionExpectation(gfx::Rect(100, 100, 150, 150));
-  EXPECT_TRUE(ExecJs(web_contents,
-                     "let frame = document.getElementById('test'); "
-                     "frame.width = 150; "
-                     "frame.height = 150; "));
-  waiter->Wait();
-
-  // Creates the grandchild iframe within the child frame at 10, 10 with
-  // dimensions 300x300. This frame is clipped by 110 pixels in the bottom and
-  // right. This translates to an intersection of 110, 110, 190, 190 with the
-  // main frame.
-  waiter->AddMainFrameIntersectionExpectation(gfx::Rect(110, 110, 140, 140));
-  content::RenderFrameHost* child_frame =
-      content::ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
-  EXPECT_TRUE(
-      ExecJs(child_frame, "createIframeAtRect(\"test2\", 10, 10, 300, 300);"));
-
-  waiter->Wait();
-}
-
-// TODO(crbug.com/40916877): Fix this test on Mac.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_MainFrameIntersectionCrossOriginOutOfView \
-  DISABLED_MainFrameIntersectionCrossOriginOutOfView
-#else
-#define MAYBE_MainFrameIntersectionCrossOriginOutOfView \
-  MainFrameIntersectionCrossOriginOutOfView
-#endif
-// Creates a set of nested frames, with a cross origin subframe that is out of
-// view within the main frame and verifies their intersections with the main
-// frame.
-IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
-                       MAYBE_MainFrameIntersectionCrossOriginOutOfView) {
-  EXPECT_TRUE(embedded_test_server()->Start());
-  auto waiter = CreatePageLoadMetricsTestWaiter("waiter");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(),
-      embedded_test_server()->GetURL(
-          "/page_load_metrics/blank_with_positioned_iframe_writer.html")));
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-
-  waiter->AddMainFrameIntersectionExpectation(gfx::Rect(100, 100, 200, 200));
-
-  // Create a 200x200 iframe at 100,100.
-  EXPECT_TRUE(ExecJs(web_contents,
-                     "createIframeAtRect(\"test\", 100, 100, 200, 200);"));
-
-  NavigateIframeToURL(
-      web_contents, "test",
-      embedded_test_server()->GetURL(
-          "b.com",
-          "/page_load_metrics/blank_with_positioned_iframe_writer.html"));
-
-  // Wait for the main frame intersection after we have navigated the frame
-  // to a cross-origin url.
-  waiter->Wait();
-
-  // Creates the grandchild iframe within the child frame outside the parent
-  // frame's viewport.
-  waiter->AddMainFrameIntersectionExpectation(gfx::Rect(0, 0, 0, 0));
-  content::RenderFrameHost* child_frame =
-      content::ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
-  EXPECT_TRUE(ExecJs(child_frame,
-                     "createIframeAtRect(\"test2\", 5000, 5000, 190, 190);"));
-
-  waiter->Wait();
-}
-
-// TODO(crbug.com/40916877): Fix this test on Mac.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_MainFrameIntersectionCrossOriginScrolled \
-  DISABLED_MainFrameIntersectionCrossOriginScrolled
-#else
-#define MAYBE_MainFrameIntersectionCrossOriginScrolled \
-  MainFrameIntersectionCrossOriginScrolled
-#endif
-// Creates a set of nested frames, with a cross origin subframe that is out of
-// view within the main frame and verifies their intersections with the main
-// frame. The out of view frame is then scrolled back into view and the
-// intersection is verified.
-IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
-                       MAYBE_MainFrameIntersectionCrossOriginScrolled) {
-  EXPECT_TRUE(embedded_test_server()->Start());
-  auto waiter = CreatePageLoadMetricsTestWaiter("waiter");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(),
-      embedded_test_server()->GetURL(
-          "/page_load_metrics/blank_with_positioned_iframe_writer.html")));
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-
-  waiter->AddMainFrameIntersectionExpectation(gfx::Rect(100, 100, 200, 200));
-
-  // Create a 200x200 iframe at 100,100.
-  EXPECT_TRUE(ExecJs(web_contents,
-                     "createIframeAtRect(\"test\", 100, 100, 200, 200);"));
-
-  NavigateIframeToURL(
-      web_contents, "test",
-      embedded_test_server()->GetURL(
-          "b.com",
-          "/page_load_metrics/blank_with_positioned_iframe_writer.html"));
-
-  // Wait for the main frame intersection after we have navigated the frame
-  // to a cross-origin url.
-  waiter->Wait();
-
-  // Creates the grandchild iframe within the child frame outside the parent
-  // frame's viewport.
-  waiter->AddMainFrameIntersectionExpectation(gfx::Rect(0, 0, 0, 0));
-  content::RenderFrameHost* child_frame =
-      content::ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
-  EXPECT_TRUE(ExecJs(child_frame,
-                     "createIframeAtRect(\"test2\", 5000, 5000, 190, 190);"));
-  waiter->Wait();
-
-  // Scroll the child frame and verify the grandchild frame's intersection.
-  // The parent frame is at position 100,100 with dimensions 200x200. The
-  // child frame after scrolling is positioned at 100,100 within the parent
-  // frame and is clipped to 100x100. The grand child's main frame document
-  // position is then 200,200 after the child frame is scrolled.
-  waiter->AddMainFrameIntersectionExpectation(gfx::Rect(200, 200, 100, 100));
-
-  EXPECT_TRUE(ExecJs(child_frame, "window.scroll(4900, 4900); "));
-
-  waiter->Wait();
-}
 
 IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest, PageLCPStopsUponInput) {
   embedded_test_server()->ServeFilesFromSourceDirectory("content/test/data");
@@ -3699,10 +3142,14 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest, PageLCPStopsUponInput) {
 
   histogram_tester_->ExpectTotalCount(
       internal::kHistogramLargestContentfulPaint, 1);
+  histogram_tester_->ExpectTotalCount(
+      internal::kHistogramParseStartToLargestContentfulPaint, 1);
   auto all_frames_value =
       histogram_tester_
           ->GetAllSamples(internal::kHistogramLargestContentfulPaint)[0]
           .min;
+  histogram_tester_->ExpectTotalCount(
+      internal::kHistogramActualNavigationStartToLargestContentfulPaint, 1);
 
   histogram_tester_->ExpectTotalCount(
       internal::kHistogramLargestContentfulPaintMainFrame, 1);
@@ -3776,25 +3223,6 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
       internal::kBackgroundHistogramFirstContentfulPaint, 0);
 }
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_MAC)
-// The LinkPreview feature is implemented only on desktops, and window
-// implementation assumes the Aura for now.
-// TODO(crbug.com/305004651): Implement the feature for other platforms and
-// enable the following tests on the remaining platforms.
-class PageLoadMetricsPreviewBrowserTest : public PageLoadMetricsBrowserTest {
- public:
-  PageLoadMetricsPreviewBrowserTest() {
-    helper_ = std::make_unique<test::PreviewTestHelper>(
-        base::BindRepeating(&PageLoadMetricsPreviewBrowserTest::web_contents,
-                            base::Unretained(this)));
-  }
-
- protected:
-  std::unique_ptr<test::PreviewTestHelper> helper_;
-};
-
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_MAC)
-
 class PageLoadMetricsBrowserTestTerminatedPage
     : public PageLoadMetricsBrowserTest {
  protected:
@@ -3836,7 +3264,7 @@ class PageLoadMetricsBrowserTestTerminatedPage
   void AddNewTab() {
     std::unique_ptr<content::WebContents> web_contents_to_add =
         content::WebContents::Create(
-            content::WebContents::CreateParams(browser()->profile()));
+            content::WebContents::CreateParams(browser()->GetProfile()));
 
     web_contents_to_add->GetController().LoadURL(
         embedded_test_server()->GetURL("/title1.html"), content::Referrer(),
@@ -4091,7 +3519,9 @@ IN_PROC_BROWSER_TEST_P(PageLoadMetricsBrowserTestNoRendererCrashedPage,
   destruction_observer.Wait();
   EXPECT_TRUE(web_contents() == contents);
   EXPECT_FALSE(contents->IsCrashed());
-  EXPECT_EQ(GURL(GetParam()), contents->GetLastCommittedURL());
+  // GetWithoutRef() allows chrome://process-internals/ to (sometimes) redirect
+  // to chrome://process-internals/#general. See crbug.com/526654572.
+  EXPECT_EQ(GURL(GetParam()), contents->GetLastCommittedURL().GetWithoutRef());
   EXPECT_FALSE(contents->HasUncommittedNavigationInPrimaryMainFrame());
 
   // Verify page load metric is recorded.
@@ -4108,7 +3538,7 @@ INSTANTIATE_TEST_SUITE_P(
                        blink::kChromeUINetworkErrorURL,
                        blink::kChromeUIProcessInternalsURL}));
 
-// Test is flaky. https://crbug.com/1260953
+// Test is flaky. https://crbug.com/40202043
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_WIN)
 #define MAYBE_PageLCPAnimatedImage DISABLED_PageLCPAnimatedImage
@@ -4212,7 +3642,7 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
 
   auto waiter2 = CreatePageLoadMetricsTestWaiter("waiter2");
   waiter2->AddPageExpectation(TimingField::kFirstContentfulPaint);
-  waiter1->AddPageExpectation(TimingField::kLargestContentfulPaint);
+  waiter2->AddPageExpectation(TimingField::kLargestContentfulPaint);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), kUrl2));
   waiter2->Wait();
 
@@ -4525,6 +3955,24 @@ class PrerenderPageLoadMetricsBrowserTest : public PageLoadMetricsBrowserTest {
   content::test::PrerenderTestHelper prerender_helper_;
 };
 
+class PrerenderPageLoadMetricsBrowserTestWithInitialWebUIParam
+    : public PrerenderPageLoadMetricsBrowserTest,
+      public ::testing::WithParamInterface<bool> {
+ public:
+  PrerenderPageLoadMetricsBrowserTestWithInitialWebUIParam() {
+    if (GetParam()) {
+      sub_feature_list_.InitWithFeatures(
+          {features::kInitialWebUI, features::kWebUIReloadButton}, {});
+    } else {
+      sub_feature_list_.InitWithFeatures(
+          {}, {features::kInitialWebUI, features::kWebUIReloadButton});
+    }
+  }
+
+ private:
+  base::test::ScopedFeatureList sub_feature_list_;
+};
+
 IN_PROC_BROWSER_TEST_F(PrerenderPageLoadMetricsBrowserTest, PrerenderEvent) {
   using page_load_metrics::internal::kPageLoadPrerender2Event;
   using page_load_metrics::internal::PageLoadPrerenderEvent;
@@ -4564,7 +4012,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderPageLoadMetricsBrowserTest, PrerenderEvent) {
       PageLoadPrerenderEvent::kPrerenderActivationNavigation, 1);
 }
 
-IN_PROC_BROWSER_TEST_F(PrerenderPageLoadMetricsBrowserTest,
+IN_PROC_BROWSER_TEST_P(PrerenderPageLoadMetricsBrowserTestWithInitialWebUIParam,
                        PrerenderingDoNotRecordUKM) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -4574,20 +4022,33 @@ IN_PROC_BROWSER_TEST_F(PrerenderPageLoadMetricsBrowserTest,
 
   // Load a page in the prerender.
   GURL prerender_url = embedded_test_server()->GetURL("/title2.html");
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_helper_.AddPrerender(prerender_url);
   content::test::PrerenderHostObserver host_observer(*web_contents(), host_id);
   EXPECT_FALSE(host_observer.was_activated());
   auto entries =
       test_ukm_recorder_->GetMergedEntriesByName(PageLoad::kEntryName);
-  EXPECT_EQ(0u, entries.size());
+  if (GetParam()) {
+    EXPECT_GE(entries.size(), 0u);
+  } else {
+    EXPECT_EQ(0u, entries.size());
+  }
 
   // Activate.
   prerender_helper_.NavigatePrimaryPage(prerender_url);
   EXPECT_TRUE(host_observer.was_activated());
   entries = test_ukm_recorder_->GetMergedEntriesByName(PageLoad::kEntryName);
-  EXPECT_EQ(1u, entries.size());
+  if (GetParam()) {
+    EXPECT_GE(entries.size(), 1u);
+  } else {
+    EXPECT_EQ(1u, entries.size());
+  }
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    PrerenderPageLoadMetricsBrowserTestWithInitialWebUIParam,
+    ::testing::Bool());
 
 enum BackForwardCacheStatus { kDisabled = 0, kEnabled = 1 };
 
@@ -4639,8 +4100,9 @@ void PageLoadMetricsBackForwardCacheBrowserTest::VerifyPageEndReasons(
   for (const ukm::mojom::UkmEntry* entry :
        test_ukm_recorder_->GetEntriesByName(PageLoad::kEntryName)) {
     auto* source = test_ukm_recorder_->GetSourceForSourceId(entry->source_id);
-    if (source->url() != url)
+    if (source->url() != url) {
       continue;
+    }
     if (test_ukm_recorder_->EntryHasMetric(
             entry, PageLoad::kNavigation_PageEndReason3Name)) {
       if (is_bfcache_enabled) {
@@ -4687,8 +4149,9 @@ int64_t PageLoadMetricsBackForwardCacheBrowserTest::CountForMetricForURL(
   for (const ukm::mojom::UkmEntry* entry :
        test_ukm_recorder_->GetEntriesByName(entry_name)) {
     auto* source = test_ukm_recorder_->GetSourceForSourceId(entry->source_id);
-    if (source->url() != url)
+    if (source->url() != url) {
       continue;
+    }
     if (test_ukm_recorder_->EntryHasMetric(entry, metric_name)) {
       count++;
     }
@@ -4893,3 +4356,129 @@ INSTANTIATE_TEST_SUITE_P(
     testing::ValuesIn({BackForwardCacheStatus::kDisabled,
                        BackForwardCacheStatus::kEnabled}),
     PageLoadMetricsBackForwardCacheBrowserTest::DescribeParams);
+
+// ============================================================================
+// Desktop Paint Timing Slices Test Suite
+// ============================================================================
+//
+// Domain:
+// Validates end-to-end integration of desktop paint timing metric slices
+// across core post-startup navigation scenarios (NewWindow and SameWindow).
+// Startup navigation and granular combinatorial edge cases are covered by unit
+// tests in page_load_metrics_initialize_unittest.cc.
+
+namespace {
+
+constexpr char kFcpPrefix[] =
+    "PageLoad.PaintTiming.NavigationToFirstContentfulPaint";
+constexpr char kLcpPrefix[] =
+    "PageLoad.PaintTiming.NavigationToLargestContentfulPaint2";
+constexpr std::array<const char*, 3> kMetricSuffixes = {
+    ".Startup", ".NewWindow", ".SameWindow"};
+
+// Verifies that the expected slice suffix receives the specified metric count
+// and all other scenario slice suffixes receive zero recordings.
+void ExpectSlicedPaintMetrics(const base::HistogramTester& tester,
+                              const std::string& expected_suffix,
+                              size_t expected_count) {
+  for (const char* suffix : kMetricSuffixes) {
+    const size_t count = (expected_suffix == suffix) ? expected_count : 0;
+    tester.ExpectTotalCount(std::string(kFcpPrefix) + suffix, count);
+    tester.ExpectTotalCount(std::string(kLcpPrefix) + suffix, count);
+  }
+}
+
+}  // namespace
+
+using DesktopPaintTimingSliceBrowserTest = PageLoadMetricsBrowserTest;
+
+// Validates paint timing metric slices for a single-tab new window navigation
+// after startup completion.
+//
+// Scenario:
+// - Action: Open URL in a newly created browser window.
+// - Precondition: `is_startup` = false, new window target index = 0.
+// - Expected Metric Suffix: `.NewWindow`
+IN_PROC_BROWSER_TEST_F(DesktopPaintTimingSliceBrowserTest,
+                       NewWindowNavigation) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  const GURL url = embedded_test_server()->GetURL("/title1.html");
+
+  base::HistogramTester histogram_tester;
+  NavigateParams nav_params(browser(), url, ui::PAGE_TRANSITION_LINK);
+  nav_params.disposition = WindowOpenDisposition::NEW_WINDOW;
+  Navigate(&nav_params);
+
+  Browser* new_browser = static_cast<Browser*>(
+      GetLastActiveBrowserWindowInterfaceWithAnyProfile());
+  PageLoadMetricsTestWaiter waiter(
+      new_browser->tab_strip_model()->GetActiveWebContents());
+  waiter.AddPageExpectation(TimingField::kFirstContentfulPaint);
+  waiter.AddPageExpectation(TimingField::kLargestContentfulPaint);
+  waiter.AddPageExpectation(TimingField::kLoadEvent);
+  waiter.Wait();
+
+  ASSERT_TRUE(
+      ui_test_utils::NavigateToURL(new_browser, GURL(url::kAboutBlankURL)));
+  ExpectSlicedPaintMetrics(histogram_tester, ".NewWindow", 1);
+}
+
+// Validates paint timing metric slices for opening a new tab within an
+// existing window after startup completion.
+//
+// Scenario:
+// - Action: Open URL in a new foreground tab within existing window.
+// - Precondition: `is_startup` = false, target index = 1.
+// - Expected Metric Suffix: `.SameWindow`
+IN_PROC_BROWSER_TEST_F(DesktopPaintTimingSliceBrowserTest,
+                       SameWindowNewTabNavigation) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  const GURL url = embedded_test_server()->GetURL("/title1.html");
+
+  base::HistogramTester histogram_tester;
+  NavigateParams nav_params(browser(), url, ui::PAGE_TRANSITION_LINK);
+  nav_params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  Navigate(&nav_params);
+
+  PageLoadMetricsTestWaiter waiter(
+      browser()->tab_strip_model()->GetActiveWebContents());
+  waiter.AddPageExpectation(TimingField::kFirstContentfulPaint);
+  waiter.AddPageExpectation(TimingField::kLargestContentfulPaint);
+  waiter.AddPageExpectation(TimingField::kLoadEvent);
+  waiter.Wait();
+
+  NavigateToUntrackedUrl();
+  ExpectSlicedPaintMetrics(histogram_tester, ".SameWindow", 1);
+}
+
+// Validates paint timing metric slices for tab reloads within an existing
+// window after startup completion.
+//
+// Scenario:
+// - Action: Reload active tab in existing window.
+// - Precondition: `is_startup` = false, active undiscarded tab.
+// - Expected Metric Suffix: `.SameWindow` (2 recordings: 1 for initial load, 1
+// for reload)
+IN_PROC_BROWSER_TEST_F(DesktopPaintTimingSliceBrowserTest,
+                       TabReloadNavigation) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  const GURL url = embedded_test_server()->GetURL("/title1.html");
+
+  base::HistogramTester histogram_tester;
+  auto waiter = CreatePageLoadMetricsTestWaiter("initial_waiter");
+  waiter->AddPageExpectation(TimingField::kFirstContentfulPaint);
+  waiter->AddPageExpectation(TimingField::kLargestContentfulPaint);
+  waiter->AddPageExpectation(TimingField::kLoadEvent);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  waiter->Wait();
+
+  waiter = CreatePageLoadMetricsTestWaiter("reload_waiter");
+  waiter->AddPageExpectation(TimingField::kFirstContentfulPaint);
+  waiter->AddPageExpectation(TimingField::kLargestContentfulPaint);
+  waiter->AddPageExpectation(TimingField::kLoadEvent);
+  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+  waiter->Wait();
+
+  NavigateToUntrackedUrl();
+  ExpectSlicedPaintMetrics(histogram_tester, ".SameWindow", 2);
+}

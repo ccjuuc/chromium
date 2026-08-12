@@ -15,16 +15,13 @@
 #include "base/containers/flat_map.h"
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
-#include "chrome/browser/ui/tabs/split_tab_highlight_delegate.h"
+#include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/views/device_chooser_content_view.h"
 #include "chrome/browser/ui/views/file_system_access/file_system_access_restore_permission_bubble_view.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
-#include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view_base.h"
-#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/interaction/element_identifier.h"
@@ -47,11 +44,10 @@ const std::vector<ui::ElementIdentifier>& GetTrackedBubbleDialogs() {
 namespace split_tabs {
 
 SplitTabHighlightController::SplitTabHighlightController(
-    BrowserView* browser_view)
-    : split_tab_highlight_delegate_(
-          std::make_unique<split_tabs::SplitTabHighlightDelegateImpl>(
-              browser_view)),
-      browser_window_interface_(browser_view->browser()) {
+    BrowserWindowInterface* browser,
+    Delegate* delegate)
+    : browser_window_interface_(browser),
+      split_tab_highlight_delegate_(delegate) {
   tracked_bubble_visibility_ = base::MakeFlatMap<ui::ElementIdentifier, bool>(
       GetTrackedBubbleDialogs(), {},
       [](ui::ElementIdentifier id) { return std::make_pair(id, false); });
@@ -59,8 +55,9 @@ SplitTabHighlightController::SplitTabHighlightController(
       browser_window_interface_->RegisterActiveTabDidChange(
           base::BindRepeating(&SplitTabHighlightController::OnActiveTabChange,
                               base::Unretained(this))));
-  chip_controller_observation_.Observe(
-      browser_view->toolbar()->location_bar()->GetChipController());
+  chip_controller_observation_.Observe(browser_window_interface_->GetFeatures()
+                                           .location_bar()
+                                           ->GetChipController());
   for (ui::ElementIdentifier identifier : GetTrackedBubbleDialogs()) {
     AddShowHideElementSubscriptions(identifier);
   }
@@ -163,7 +160,8 @@ void SplitTabHighlightController::OnElementHidden(
 }
 
 void SplitTabHighlightController::UpdateHighlight() {
-  split_tab_highlight_delegate_->SetHighlight(ShouldHighlight());
+  split_tab_highlight_delegate_->SetHighlightActiveContentsView(
+      ShouldHighlight());
 }
 
 }  // namespace split_tabs

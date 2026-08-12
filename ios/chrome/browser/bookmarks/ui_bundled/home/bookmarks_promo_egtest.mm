@@ -25,7 +25,7 @@
 #import "ios/chrome/browser/metrics/model/metrics_app_interface.h"
 #import "ios/chrome/browser/policy/model/policy_app_interface.h"
 #import "ios/chrome/browser/policy/model/policy_earl_grey_utils.h"
-#import "ios/chrome/browser/settings/ui_bundled/google_services/manage_sync_settings_constants.h"
+#import "ios/chrome/browser/settings/manage_sync/public/manage_sync_settings_constants.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/public/snackbar/snackbar_constants.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
@@ -35,7 +35,7 @@
 #import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
-#import "ios/chrome/test/earl_grey/web_http_server_chrome_test_case.h"
+#import "ios/chrome/test/earl_grey/chrome_test_case.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
 #import "ui/base/l10n/l10n_util.h"
 
@@ -49,7 +49,7 @@ using chrome_test_util::SecondarySignInButton;
 using chrome_test_util::SettingsDoneButton;
 
 // Bookmark promo integration tests for Chrome.
-@interface BookmarksPromoTestCase : WebHttpServerChromeTestCase
+@interface BookmarksPromoTestCase : ChromeTestCase
 @end
 
 @implementation BookmarksPromoTestCase
@@ -64,7 +64,6 @@ using chrome_test_util::SettingsDoneButton;
         "<dict><key>SyncTypesListDisabled</key><array><string>bookmarks</"
         "string></array></dict>");
   }
-
   return config;
 }
 
@@ -484,20 +483,7 @@ using chrome_test_util::SettingsDoneButton;
                                    kManageSyncTableViewAccessibilityIdentifier)]
       assertWithMatcher:grey_sufficientlyVisible()];
 
-  // Scroll to the bottom to view the signout button.
-  id<GREYMatcher> scroll_view_matcher =
-      grey_accessibilityID(kManageSyncTableViewAccessibilityIdentifier);
-  [[EarlGrey selectElementWithMatcher:scroll_view_matcher]
-      performAction:grey_scrollToContentEdge(kGREYContentEdgeBottom)];
-
-  // Tap the "Sign out" button.
-  [[EarlGrey selectElementWithMatcher:
-                 grey_allOf(grey_accessibilityLabel(l10n_util::GetNSString(
-                                IDS_IOS_GOOGLE_ACCOUNT_SETTINGS_SIGN_OUT_ITEM)),
-                            grey_userInteractionEnabled(), nil)]
-      performAction:grey_tap()];
-  [ChromeEarlGreyUI waitForAppToIdle];
-  [SigninEarlGrey verifySignedOut];
+  [SigninEarlGreyUI tapSignOutFromSyncSettings];
 
   // Verify that Account Settings is closed.
   [[EarlGrey

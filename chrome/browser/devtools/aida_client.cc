@@ -12,11 +12,11 @@
 #include "base/json/json_string_value_serializer.h"
 #include "base/json/string_escape.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_util.h"
-#include "chrome/browser/browser_features.h"
+#include "base/time/time.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/common/pref_names.h"
@@ -76,7 +76,8 @@ bool IsAidaBlockedByAge(std::optional<AccountInfo> account_info) {
     return true;
   }
   return account_info.value()
-             .capabilities.can_use_devtools_generative_ai_features() !=
+             .GetAccountCapabilities()
+             .can_use_devtools_generative_ai_features() !=
          signin::Tribool::kTrue;
 }
 
@@ -107,8 +108,10 @@ bool IsAidaBlockedByGeo(std::string country_code) {
 
 AidaClient::Availability AidaClient::CanUseAida(Profile* profile) {
   struct Availability result;
-  // AidaClient is only available on branded builds
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  // AidaClient is only available on branded builds.
+  // Currently it's also not available on Android.
+  // TODO(b/532900989): Enable this on Android.
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_ANDROID)
   result.available = true;
   auto account_info = AccountInfoForProfile(profile);
   result.blocked_by_age = IsAidaBlockedByAge(account_info);

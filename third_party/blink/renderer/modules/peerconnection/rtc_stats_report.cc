@@ -52,13 +52,16 @@ T StatsConversionHelper(const T& value) {
   return value;
 }
 String StatsConversionHelper(const std::string& value) {
-  return String::FromUTF8(value);
+  return String::FromUtf8(value);
+}
+uint32_t StatsConversionHelper(const uint64_t& value) {
+  return base::saturated_cast<uint32_t>(value);
 }
 
 // Macro to reduce the transformation between WebRTC and v8 values
 // to a single line. Arguments are the webrtc stat and the equivalent
 // v8 setter function. Uses StatsConversionHelper to specialize for
-// std::string -> String::FromUTF8.
+// std::string -> String::FromUtf8 and uint64_t -> uint32_t.
 #define SET_STAT(webrtc_stat, v8_setter)            \
   if (webrtc_stat.has_value()) {                    \
     v8_setter(StatsConversionHelper(*webrtc_stat)); \
@@ -241,6 +244,14 @@ RTCRemoteInboundRtpStreamStats* ToV8Stat(
   // RTCReceivedRtpStreamStats
   SET_STAT(webrtc_stat.packets_lost, v8_stat->setPacketsLost);
   SET_STAT(webrtc_stat.jitter, v8_stat->setJitter);
+  SET_STAT(webrtc_stat.packets_received_with_ect1,
+           v8_stat->setPacketsReceivedWithEct1);
+  SET_STAT(webrtc_stat.packets_received_with_ce,
+           v8_stat->setPacketsReceivedWithCe);
+  SET_STAT(webrtc_stat.packets_reported_as_lost,
+           v8_stat->setPacketsReportedAsLost);
+  SET_STAT(webrtc_stat.packets_reported_as_lost_but_recovered,
+           v8_stat->setPacketsReportedAsLostButRecovered);
   // RTCRemoteInboundRtpStreamStats
   SET_STAT(webrtc_stat.local_id, v8_stat->setLocalId);
   SET_STAT(webrtc_stat.round_trip_time, v8_stat->setRoundTripTime);
@@ -296,9 +307,10 @@ RTCOutboundRtpStreamStats* ToV8Stat(
   if (expose_hardware_caps && webrtc_stat.psnr_sum.has_value()) {
     Vector<std::pair<String, double>> psnr_sum;
     for (const auto& [key, value] : *webrtc_stat.psnr_sum) {
-      psnr_sum.emplace_back(String::FromUTF8(key), value);
+      psnr_sum.emplace_back(String::FromUtf8(key), value);
     }
     v8_stat->setPsnrSum(std::move(psnr_sum));
+    SET_STAT(webrtc_stat.psnr_measurements, v8_stat->setPsnrMeasurements);
   }
   SET_STAT(webrtc_stat.total_encode_time, v8_stat->setTotalEncodeTime);
   SET_STAT(webrtc_stat.total_packet_send_delay,
@@ -309,7 +321,7 @@ RTCOutboundRtpStreamStats* ToV8Stat(
   if (webrtc_stat.quality_limitation_durations.has_value()) {
     Vector<std::pair<String, double>> quality_durations;
     for (const auto& [key, value] : *webrtc_stat.quality_limitation_durations) {
-      quality_durations.emplace_back(String::FromUTF8(key), value);
+      quality_durations.emplace_back(String::FromUtf8(key), value);
     }
     v8_stat->setQualityLimitationDurations(std::move(quality_durations));
   }
@@ -574,7 +586,7 @@ RTCCertificateStats* ToV8Stat(ScriptState* script_state,
 RTCStats* RTCStatsToIDL(ScriptState* script_state,
                         const webrtc::RTCStats& stat,
                         bool expose_hardware_caps) {
-  auto v8_stats_type = V8RTCStatsType::Create(String::FromUTF8(stat.type()));
+  auto v8_stats_type = V8RTCStatsType::Create(String::FromUtf8(stat.type()));
   CHECK(v8_stats_type.has_value());
 
   RTCStats* v8_stats = nullptr;
@@ -654,7 +666,7 @@ RTCStats* RTCStatsToIDL(ScriptState* script_state,
       break;
   }
 
-  v8_stats->setId(String::FromUTF8(stat.id()));
+  v8_stats->setId(String::FromUtf8(stat.id()));
   LocalDOMWindow* window = LocalDOMWindow::From(script_state);
   if (window && window->GetFrame() &&
       window->GetFrame()->Loader().GetDocumentLoader()) {
@@ -700,7 +712,7 @@ class RTCStatsReportIterationSource final
     if (!rtc_stats) {
       return false;
     }
-    key = String::FromUTF8(rtc_stats->id());
+    key = String::FromUtf8(rtc_stats->id());
     object = ScriptObject::From(script_state, v8_stat);
     return true;
   }

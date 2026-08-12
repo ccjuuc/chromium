@@ -4,7 +4,12 @@
 
 #include "components/enterprise/connectors/core/analysis_test_utils.h"
 
+#include "base/json/json_reader.h"
 #include "base/no_destructor.h"
+#include "components/enterprise/connectors/core/common.h"
+#include "components/enterprise/data_controls/core/browser/prefs.h"
+#include "components/policy/core/common/policy_types.h"
+#include "components/prefs/scoped_user_pref_update.h"
 
 namespace enterprise_connectors::test {
 
@@ -191,8 +196,8 @@ const char kNoDlpOrMalwareDotCa[] = "https://no.dlp.or.malware.ca";
 const std::map<std::string, std::string>& GetExpectedLearnMoreUrlSpecs() {
   static const base::NoDestructor<std::map<std::string, std::string>>
       kExpectedLearnMoreUrlSpecs{
-          {{"dlp", "http://www.example.com/dlp"},
-           {"malware", "http://www.example.com/malware"}},
+          {{kDlpTag, "http://www.example.com/dlp"},
+           {kMalwareTag, "http://www.example.com/malware"}},
       };
   return *kExpectedLearnMoreUrlSpecs;
 }
@@ -203,7 +208,7 @@ const std::map<std::string, std::string>& GetExpectedLearnMoreUrlSpecs() {
 AnalysisSettings* OnlyDlpEnabledSettings() {
   static base::NoDestructor<AnalysisSettings> settings([]() {
     AnalysisSettings settings;
-    settings.tags = {{"dlp", TagSettings()}};
+    settings.tags = {{kDlpTag, TagSettings()}};
     return settings;
   }());
   return settings.get();
@@ -211,19 +216,19 @@ AnalysisSettings* OnlyDlpEnabledSettings() {
 
 AnalysisSettings* NormalDlpSettings() {
   static base::NoDestructor<AnalysisSettings> settings(
-      NormalSettingsWithTags({{"dlp", TagSettings()}}));
+      NormalSettingsWithTags({{kDlpTag, TagSettings()}}));
   return settings.get();
 }
 
 AnalysisSettings* NormalMalwareSettings() {
   static base::NoDestructor<AnalysisSettings> settings(
-      NormalSettingsWithTags({{"malware", TagSettings()}}));
+      NormalSettingsWithTags({{kMalwareTag, TagSettings()}}));
   return settings.get();
 }
 
 AnalysisSettings* NormalDlpAndMalwareSettings() {
   static base::NoDestructor<AnalysisSettings> settings(NormalSettingsWithTags(
-      {{"dlp", TagSettings()}, {"malware", TagSettings()}}));
+      {{kDlpTag, TagSettings()}, {kMalwareTag, TagSettings()}}));
   return settings.get();
 }
 
@@ -231,7 +236,7 @@ AnalysisSettings* NormalSettingsWithCustomMessage() {
   static base::NoDestructor<AnalysisSettings> settings([]() {
     AnalysisSettings settings = NormalSettingsWithTags({
         {
-            "dlp",
+            kDlpTag,
             {
                 .custom_message =
                     {
@@ -240,7 +245,7 @@ AnalysisSettings* NormalSettingsWithCustomMessage() {
             },
         },
         {
-            "malware",
+            kMalwareTag,
             {
                 .custom_message =
                     {
@@ -258,12 +263,12 @@ AnalysisSettings* NormalSettingsDlpRequiresBypassJustification() {
   static base::NoDestructor<AnalysisSettings> settings([]() {
     AnalysisSettings settings = NormalSettingsWithTags({
         {
-            "dlp",
+            kDlpTag,
             {
                 .requires_justification = true,
             },
         },
-        {"malware", TagSettings()},
+        {kMalwareTag, TagSettings()},
     });
     return settings;
   }());
@@ -272,6 +277,30 @@ AnalysisSettings* NormalSettingsDlpRequiresBypassJustification() {
 
 AnalysisSettings* NoSettings() {
   return nullptr;
+}
+
+void SetAnalysisConnectorsPrefs(PrefService* prefs,
+                                AnalysisConnector connector,
+                                std::vector<std::string> rules,
+                                bool machine_scope) {
+  ScopedListPrefUpdate list(prefs, AnalysisConnectorPref(connector));
+  if (!list->empty()) {
+    list->clear();
+  }
+
+  for (const std::string& rule : rules) {
+    list->Append(
+        *base::JSONReader::Read(rule, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
+  }
+
+  prefs->SetInteger(
+      AnalysisConnectorScopePref(connector),
+      machine_scope ? policy::POLICY_SCOPE_MACHINE : policy::POLICY_SCOPE_USER);
+}
+
+void ClearAnalysisConnectorsPrefs(PrefService* prefs,
+                                  AnalysisConnector connector) {
+  prefs->ClearPref(AnalysisConnectorPref(connector));
 }
 
 }  // namespace enterprise_connectors::test

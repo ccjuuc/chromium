@@ -23,6 +23,9 @@ const size_t kFencedFrameMaxBeaconLength = 64000;
 // When setting, longer strings are truncated to this length.
 const size_t kFencedFrameConfigSharedStorageContextMaxLength = 2048;
 
+// The maximum number of ad components a bid in an auction can have.
+const size_t kMaxAdAuctionAdComponents = 0;
+
 // Histogram names for fenced frame.
 inline constexpr char kFencedFrameCreationOrNavigationOutcomeHistogram[] =
     "Blink.FencedFrame.CreationOrNavigationOutcome";
@@ -39,44 +42,14 @@ inline constexpr char kFencedFrameMandatoryUnsandboxedFlagsSandboxed[] =
 inline constexpr char kFencedFrameFailedSandboxLoadInTopLevelFrame[] =
     "Blink.FencedFrame.FailedSandboxLoadInTopLevelFrame";
 
-inline constexpr char kFencedFrameTopNavigationHistogram[] =
-    "Navigation.FencedFrameTopNavigation";
-
-inline constexpr char kAutomaticBeaconOutcomeHistogram[] =
-    "Navigation.AutomaticBeaconOutcome";
-
-inline constexpr char kAutomaticBeaconEventTypeHistogram[] =
-    "Navigation.FencedFrameAutomaticBeaconEventType";
-
-inline constexpr char kFencedFrameBeaconReportingHttpResultUMA[] =
-    "Blink.FencedFrame.BeaconReportingHttpResult";
-
 inline constexpr char kFencedFrameBeaconReportingCountUMA[] =
     "Navigation.FencedFrameBeaconReportingCountSameOrigin";
-
-inline constexpr char kFencedFrameBeaconReportingCountCrossOriginUMA[] =
-    "Navigation.FencedFrameBeaconReportingCountCrossOrigin";
 
 inline constexpr char kSameSiteAdComponentsMaxCountForWinningBidHistogram[] =
     "Ads.InterestGroup.Auction.SameSiteAdComponentsMaxCountForWinningBid";
 
 inline constexpr char kAdComponentsCountForWinningBidHistogram[] =
     "Ads.InterestGroup.Auction.AdComponentsCountForWinningBid";
-
-inline constexpr char kDisableUntrustedNetworkOutcome[] =
-    "Blink.FencedFrame.DisableUntrustedNetworkOutcome";
-
-inline constexpr char kSharedStorageGetInFencedFrameOutcome[] =
-    "Blink.FencedFrame.SharedStorageGetInFencedFrameOutcome";
-
-inline constexpr char kNotifyEventOutcome[] =
-    "Blink.FencedFrame.NotifyEventOutcome";
-
-inline constexpr char kMaxSameSiteFencedFramesInViewportPerPageLoad[] =
-    "Blink.FencedFrame.MaxSameSiteFencedFramesInViewportPerPageLoad";
-
-inline constexpr char kMaxSameSiteFencedFramesInViewportAtUnload[] =
-    "Blink.FencedFrame.MaxSameSiteFencedFramesInViewportAtUnload";
 
 // Corresponds to the "FencedFrameCreationOutcome" histogram enumeration type in
 // tools/metrics/histograms/metadata/blink/enums.xml.
@@ -95,67 +68,6 @@ enum class FencedFrameCreationOutcome {
   kMaxValue = kResponseHeaderNotOptIn
 };
 
-// Corresponds to the "FencedFrameDisableUntrustedNetworkOutcome" histogram
-// enumeration type in tools/metrics/histograms/metadata/blink/enums.xml.
-//
-// PLEASE DO NOT REORDER, REMOVE, OR CHANGE THE MEANING OF THESE VALUES.
-//
-// LINT.IfChange(DisableUntrustedNetworkOutcome)
-enum class DisableUntrustedNetworkOutcome {
-  kResolved = 0,  // The fenced frame has its network fully revoked.
-  kNotActive = 1,
-  kNotAllowed = 2,
-  kMaxValue = kNotAllowed
-};
-// LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:FencedFrameDisableUntrustedNetworkOutcome)
-
-// Corresponds to the "SharedStorageGetInFencedFrameOutcome" histogram
-// enumeration type in tools/metrics/histograms/metadata/blink/enums.xml.
-//
-// PLEASE DO NOT REORDER, REMOVE, OR CHANGE THE MEANING OF THESE VALUES.
-//
-// LINT.IfChange(SharedStorageGetInFencedFrameOutcome)
-enum class SharedStorageGetInFencedFrameOutcome {
-  kSuccess = 0,  // A fenced frame successfully read from shared storage.
-  kInsecureContext = 1,
-  kDisabled = 2,
-  kWithoutRevokeNetwork = 3,
-  kKeyNotFound = 4,
-  kGetError = 5,
-  kFeatureDisabled = 6,
-  kPermissionDisabled = 7,
-  kMaxValue = kPermissionDisabled
-};
-// LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:SharedStorageGetInFencedFrameOutcome)
-
-// Corresponds to the "FencedFrameNotifyEventOutcome" histogram enumeration type
-// in tools/metrics/histograms/metadata/blink/enums.xml.
-//
-// PLEASE DO NOT REORDER, REMOVE, OR CHANGE THE MEANING OF THESE VALUES.
-//
-// LINT.IfChange(NotifyEventOutcome)
-enum class NotifyEventOutcome {
-  kSuccess = 0,
-  kNotActive = 1,
-  kNotFencedFrameRoot = 2,
-  kInvalidEvent = 3,
-  kUnsupportedEventType = 4,
-  kNoTransientUserActivation = 5,
-  kMaxValue = kNoTransientUserActivation
-};
-// LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:FencedFrameNotifyEventOutcome)
-
-// Corresponds to the "AutomaticBeaconOutcome" histogram enumeration type in
-// tools/metrics/histograms/metadata/navigation/histograms.xml.
-//
-// PLEASE DO NOT REORDER, REMOVE, OR CHANGE THE MEANING OF THESE VALUES.
-enum class AutomaticBeaconOutcome {
-  kSuccess = 0,
-  kNoUserActivation,
-  kNotSameOriginNotOptedIn,
-  kMaxValue = kNotSameOriginNotOptedIn,
-};
-
 // Corresponds to the "FencedFrameNavigationState" histogram enumeration type in
 // tools/metrics/histograms/metadata/navigation/enums.xml.
 //
@@ -164,22 +76,6 @@ enum class FencedFrameNavigationState {
   kBegin = 0,
   kCommit = 1,
   kMaxValue = kCommit
-};
-
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-enum class FencedFrameBeaconReportingResult {
-  kUnknownResult = 0,
-  kDestinationEnumInvalid = 1,
-  kDestinationEnumSuccess = 2,
-  kDestinationEnumFailure = 3,
-  kDestinationUrlInvalid = 4,
-  kDestinationUrlSuccess = 5,
-  kDestinationUrlFailure = 6,
-  kAutomaticInvalid = 7,
-  kAutomaticSuccess = 8,
-  kAutomaticFailure = 9,
-  kMaxValue = kAutomaticFailure
 };
 
 // Whether or not a fenced frame is allowed to be navigated to `url`. For now
@@ -200,17 +96,6 @@ BLINK_COMMON_EXPORT void RecordFencedFrameUnsandboxedFlags(
     network::mojom::WebSandboxFlags flags);
 BLINK_COMMON_EXPORT void RecordFencedFrameFailedSandboxLoadInTopLevelFrame(
     bool is_main_frame);
-BLINK_COMMON_EXPORT void RecordDisableUntrustedNetworkOutcome(
-    const DisableUntrustedNetworkOutcome outcome);
-BLINK_COMMON_EXPORT void RecordSharedStorageGetInFencedFrameOutcome(
-    const SharedStorageGetInFencedFrameOutcome outcome);
-BLINK_COMMON_EXPORT void RecordNotifyEventOutcome(
-    const NotifyEventOutcome outcome);
-
-// Returns true if the DOM event type name `event_type` is allowed to be
-// propagated from a fenced frame to its embedder. Returns false otherwise.
-BLINK_COMMON_EXPORT bool CanNotifyEventTypeAcrossFence(
-    const std::string& event_type);
 
 // Automatic beacon type definitions
 inline constexpr char kDeprecatedFencedFrameTopNavigationBeaconType[] =

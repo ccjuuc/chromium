@@ -70,10 +70,10 @@ export class NearbyProgressElement extends PolymerElement {
     };
   }
 
-  hasError: boolean;
-  shareTarget: ShareTarget|null;
-  showIndeterminateProgress: boolean;
-  targetImageSize: number;
+  declare hasError: boolean;
+  declare shareTarget: ShareTarget|null;
+  declare showIndeterminateProgress: boolean;
+  declare targetImageSize: number;
 
   override ready(): void {
     super.ready();
@@ -108,13 +108,12 @@ export class NearbyProgressElement extends PolymerElement {
 
   private getTargetImageUrl_(): string {
     if (!(this.shareTarget && this.shareTarget.imageUrl &&
-          this.shareTarget.imageUrl.url &&
-          this.shareTarget.imageUrl.url.length)) {
+          this.shareTarget.imageUrl.length)) {
       return '';
     }
 
     // Adds the parameter to resize to the desired size.
-    return this.shareTarget.imageUrl.url + '=s' + this.targetImageSize;
+    return this.shareTarget.imageUrl + '=s' + this.targetImageSize;
   }
 
   private listenToTargetImageLoad_(): void {

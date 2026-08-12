@@ -8,11 +8,6 @@
 //    clang-format -i -style=chromium filename
 // DO NOT EDIT!
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 // It is included by raster_cmd_decoder.cc
 #ifndef GPU_COMMAND_BUFFER_SERVICE_RASTER_DECODER_AUTOGEN_H_
 #define GPU_COMMAND_BUFFER_SERVICE_RASTER_DECODER_AUTOGEN_H_
@@ -61,7 +56,7 @@ error::Error RasterDecoderImpl::HandleGenQueriesEXTImmediate(
   }
   auto queries_copy = std::make_unique<GLuint[]>(n);
   GLuint* queries_safe = queries_copy.get();
-  std::copy(queries, queries + n, queries_safe);
+  std::copy(queries, UNSAFE_TODO(queries + n), queries_safe);
   if (!gles2::CheckUniqueAndNonNullIds(n, queries_safe) ||
       !GenQueriesEXTHelper(n, queries_safe)) {
     return error::kInvalidArguments;
@@ -145,10 +140,33 @@ error::Error RasterDecoderImpl::HandleBeginRasterCHROMIUMImmediate(
   return error::kNoError;
 }
 
+error::Error RasterDecoderImpl::HandleRasterCHROMIUM(
+    uint32_t immediate_data_size,
+    const volatile void* cmd_data) {
+  const volatile raster::cmds::RasterCHROMIUM& c =
+      *static_cast<const volatile raster::cmds::RasterCHROMIUM*>(cmd_data);
+  GLuint raster_shm_id = static_cast<GLuint>(c.raster_shm_id);
+  GLuint raster_shm_offset = static_cast<GLuint>(c.raster_shm_offset);
+  GLuint raster_shm_size = static_cast<GLuint>(c.raster_shm_size);
+  GLuint font_shm_id = static_cast<GLuint>(c.font_shm_id);
+  GLuint font_shm_offset = static_cast<GLuint>(c.font_shm_offset);
+  GLuint font_shm_size = static_cast<GLuint>(c.font_shm_size);
+  DoRasterCHROMIUM(raster_shm_id, raster_shm_offset, raster_shm_size,
+                   font_shm_id, font_shm_offset, font_shm_size);
+  return error::kNoError;
+}
+
 error::Error RasterDecoderImpl::HandleEndRasterCHROMIUM(
     uint32_t immediate_data_size,
     const volatile void* cmd_data) {
   DoEndRasterCHROMIUM();
+  return error::kNoError;
+}
+
+error::Error RasterDecoderImpl::HandleFlushTileRasterGraphiteCommandsCHROMIUM(
+    uint32_t immediate_data_size,
+    const volatile void* cmd_data) {
+  DoFlushTileRasterGraphiteCommandsCHROMIUM();
   return error::kNoError;
 }
 
@@ -463,6 +481,10 @@ error::Error RasterDecoderImpl::HandleReadbackYUVImagePixelsINTERNALImmediate(
   const volatile raster::cmds::ReadbackYUVImagePixelsINTERNALImmediate& c =
       *static_cast<const volatile raster::cmds::
                        ReadbackYUVImagePixelsINTERNALImmediate*>(cmd_data);
+  GLuint src_x = static_cast<GLuint>(c.src_x);
+  GLuint src_y = static_cast<GLuint>(c.src_y);
+  GLuint src_width = static_cast<GLuint>(c.src_width);
+  GLuint src_height = static_cast<GLuint>(c.src_height);
   GLuint dst_width = static_cast<GLuint>(c.dst_width);
   GLuint dst_height = static_cast<GLuint>(c.dst_height);
   GLint shm_id = static_cast<GLint>(c.shm_id);
@@ -486,7 +508,8 @@ error::Error RasterDecoderImpl::HandleReadbackYUVImagePixelsINTERNALImmediate(
   if (mailbox == nullptr) {
     return error::kOutOfBounds;
   }
-  DoReadbackYUVImagePixelsINTERNAL(dst_width, dst_height, shm_id, shm_offset,
+  DoReadbackYUVImagePixelsINTERNAL(src_x, src_y, src_width, src_height,
+                                   dst_width, dst_height, shm_id, shm_offset,
                                    y_offset, y_stride, u_offset, u_stride,
                                    v_offset, v_stride, mailbox);
   return error::kNoError;

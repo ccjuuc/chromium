@@ -12,6 +12,7 @@
 #include <string>
 
 #include "base/auto_reset.h"
+#include "base/memory/memory_pressure_level.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
@@ -38,7 +39,7 @@
 #endif
 
 namespace IPC {
-class SyncChannel;
+class ChannelProxy;
 class UrgentMessageObserver;
 }  // namespace IPC
 
@@ -57,6 +58,7 @@ class BackgroundTracingAgentProviderImpl;
 namespace content {
 
 class ChildPerformanceCoordinator;
+class HostReceiverBatcher;
 class InProcessChildThreadParams;
 
 // The main thread of a child process derives from this class.
@@ -91,11 +93,23 @@ class ChildThreadImpl : public IPC::Listener, virtual public ChildThread {
   void RecordAction(const base::UserMetricsAction& action) override;
   void RecordComputedAction(const std::string& action) override;
   void BindHostReceiver(mojo::GenericPendingReceiver receiver) override;
+
+  // Like BindHostReceiver(), but the bind request may be coalesced with other
+  // batched requests and sent to the browser as a single IPC on a later task,
+  // reducing per-startup IPC volume.
+  //
+  // IMPORTANT: only use this for receivers whose interface is used
+  // ASYNCHRONOUSLY. Because the bind is deferred, making a SYNCHRONOUS mojo
+  // call on the resulting interface before the batch is flushed would hang (the
+  // browser has not bound it yet). Such callers must use BindHostReceiver(),
+  // which sends immediately.
+  void BindHostReceiverBatched(mojo::GenericPendingReceiver receiver);
+
   scoped_refptr<base::SingleThreadTaskRunner> GetIOTaskRunner() override;
   void SetFieldTrialGroup(const std::string& trial_name,
                           const std::string& group_name) override;
 
-  IPC::SyncChannel* channel() { return channel_.get(); }
+  IPC::ChannelProxy* channel() { return channel_.get(); }
 
   scoped_refptr<base::SingleThreadTaskRunner> main_thread_runner() const {
     return main_thread_runner_;
@@ -147,11 +161,13 @@ class ChildThreadImpl : public IPC::Listener, virtual public ChildThread {
 
   bool IsInBrowserProcess() const;
 
-#if BUILDFLAG(IS_ANDROID)
   // Received memory pressure signal sent by the browser process.
   virtual void OnMemoryPressureFromBrowserReceived(
       base::MemoryPressureLevel level);
-#endif
+
+  mojo::ScopedMessagePipeHandle TakeInitialGPUChannel() {
+    return std::move(initial_gpu_channel_);
+  }
 
  private:
   class IOThreadState;
@@ -161,6 +177,10 @@ class ChildThreadImpl : public IPC::Listener, virtual public ChildThread {
   // IPC message handlers.
 
   void EnsureConnected(int connection_timeout);
+
+  // Sends a coalesced batch of host-receiver bind requests to the browser (the
+  // flush target of `host_receiver_batcher_`). Runs on the main thread.
+  void SendHostReceivers(std::vector<mojo::GenericPendingReceiver> receivers);
 
 #if BUILDFLAG(IS_WIN)
   const mojo::Remote<mojom::FontCacheWin>& GetFontCacheWin();
@@ -174,7 +194,7 @@ class ChildThreadImpl : public IPC::Listener, virtual public ChildThread {
   mutable mojo::Remote<mojom::FontCacheWin> font_cache_win_;
 #endif
 
-  std::unique_ptr<IPC::SyncChannel> channel_;
+  std::unique_ptr<IPC::ChannelProxy> channel_;
 
   // The OnChannelError() callback was invoked - the channel is dead, don't
   // attempt to communicate.
@@ -203,11 +223,17 @@ class ChildThreadImpl : public IPC::Listener, virtual public ChildThread {
   // An interface to the browser's process host object.
   mojo::SharedRemote<mojom::ChildProcessHost> child_process_host_;
 
+  // Coalesces BindHostReceiverBatched() requests into batched IPCs. Created in
+  // Init(); flushes on the main thread via SendHostReceivers().
+  std::unique_ptr<HostReceiverBatcher> host_receiver_batcher_;
+
   // ChildThreadImpl state which lives on the IO thread, including its
   // implementation of the mojom ChildProcess interface.
   scoped_refptr<IOThreadState> io_thread_state_;
 
   std::unique_ptr<ChildPerformanceCoordinator> performance_coordinator_;
+
+  mojo::ScopedMessagePipeHandle initial_gpu_channel_;
 
   base::WeakPtrFactory<ChildThreadImpl> weak_factory_{this};
 };

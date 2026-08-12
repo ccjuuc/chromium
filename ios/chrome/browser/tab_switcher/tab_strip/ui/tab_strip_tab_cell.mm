@@ -11,6 +11,7 @@
 #import "base/notreached.h"
 #import "base/strings/string_number_conversions.h"
 #import "ios/chrome/browser/shared/ui/elements/extended_touch_target_button.h"
+#import "ios/chrome/browser/shared/ui/elements/gradient/gradient_view.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/util/image/image_util.h"
 #import "ios/chrome/browser/shared/ui/util/rtl_geometry.h"
@@ -19,7 +20,6 @@
 #import "ios/chrome/browser/tab_switcher/tab_strip/ui/tab_strip_group_stroke_view.h"
 #import "ios/chrome/browser/tab_switcher/tab_strip/ui/tab_strip_utils.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
-#import "ios/chrome/common/ui/elements/gradient_view.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/public/provider/chrome/browser/raccoon/raccoon_api.h"
@@ -940,8 +940,7 @@ constexpr CGFloat kBlueDotInset = 1;
 
 // Returns a new close button.
 - (UIButton*)createCloseButton {
-  UIImage* closeSymbol =
-      DefaultSymbolWithPointSize(kXMarkSymbol, kCloseButtonSize);
+  UIImage* closeSymbol = SymbolWithPointSize(SymbolXMark, kCloseButtonSize);
   ExtendedTouchTargetButton* button = [[ExtendedTouchTargetButton alloc] init];
   button.minimumDiameter = kCloseButtonMinimumTouchTarget;
   button.translatesAutoresizingMaskIntoConstraints = NO;
@@ -975,7 +974,8 @@ constexpr CGFloat kBlueDotInset = 1;
                              colorWithAlphaComponent:0]
                 endColor:TabStripHelper.cellBackgroundColor
               startPoint:CGPointMake(0.0f, 0.5f)
-                endPoint:CGPointMake(1.0f, 0.5f)];
+                endPoint:CGPointMake(1.0f, 0.5f)
+            gradientType:GradientLayerType::kLinear];
   gradientView.translatesAutoresizingMaskIntoConstraints = NO;
   return gradientView;
 }

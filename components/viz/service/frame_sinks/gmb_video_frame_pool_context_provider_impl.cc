@@ -22,7 +22,7 @@
 namespace viz {
 
 class GmbVideoFramePoolContext
-    : public media::RenderableGpuMemoryBufferVideoFramePool::Context,
+    : public media::RenderableMappableSharedImageVideoFramePool::Context,
       public gpu::SharedContextState::ContextLostObserver {
  public:
   explicit GmbVideoFramePoolContext(
@@ -97,11 +97,11 @@ class GmbVideoFramePoolContext
  private:
   void InitializeOnGpu(base::WaitableEvent* event) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(gpu_sequence_checker_);
-    DCHECK(!initialized_);
-    DCHECK(gpu_service_);
+    CHECK(!initialized_);
+    CHECK(gpu_service_);
 
     shared_context_state_ = gpu_service_->GetContextState();
-    DCHECK(shared_context_state_);
+    CHECK(shared_context_state_);
 
     shared_context_state_->AddContextLostObserver(this);
 
@@ -121,7 +121,7 @@ class GmbVideoFramePoolContext
         /*is_for_display_compositor=*/false, gpu_service_->main_runner(),
         /*always_create_native_gmb_handle=*/true);
 
-    DCHECK(sii_in_process_);
+    CHECK(sii_in_process_);
 
     initialized_ = true;
 
@@ -130,7 +130,7 @@ class GmbVideoFramePoolContext
 
   void DestroyOnGpu(base::WaitableEvent* event) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(gpu_sequence_checker_);
-    DCHECK(initialized_);
+    CHECK(initialized_);
 
     shared_context_state_->RemoveContextLostObserver(this);
     shared_context_state_ = nullptr;
@@ -142,7 +142,7 @@ class GmbVideoFramePoolContext
   void OnContextLost() override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(gpu_sequence_checker_);
 
-    DCHECK(on_context_lost_);
+    CHECK(on_context_lost_);
     std::move(on_context_lost_).Run();
   }
 
@@ -169,7 +169,7 @@ GmbVideoFramePoolContextProviderImpl::GmbVideoFramePoolContextProviderImpl(
 GmbVideoFramePoolContextProviderImpl::~GmbVideoFramePoolContextProviderImpl() =
     default;
 
-std::unique_ptr<media::RenderableGpuMemoryBufferVideoFramePool::Context>
+std::unique_ptr<media::RenderableMappableSharedImageVideoFramePool::Context>
 GmbVideoFramePoolContextProviderImpl::CreateContext(
     base::OnceClosure on_context_lost) {
   return std::make_unique<GmbVideoFramePoolContext>(gpu_service_,

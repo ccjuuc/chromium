@@ -43,8 +43,7 @@ class TabModalDialogViewAndroid : public TabModalDialogView {
   std::u16string GetUserInput() override;
 
   void Accept(JNIEnv* env, const base::android::JavaRef<jstring>& prompt);
-  void Cancel(JNIEnv* env,
-              jboolean button_clicked);
+  void Cancel(JNIEnv* env, bool button_clicked);
 
  private:
   TabModalDialogViewAndroid(
@@ -57,6 +56,8 @@ class TabModalDialogViewAndroid : public TabModalDialogView {
       content::JavaScriptDialogManager::DialogClosedCallback
           callback_on_button_clicked,
       base::OnceClosure callback_on_cancelled);
+
+  void Show();
 
   std::unique_ptr<TabModalDialogViewAndroid> dialog_;
   base::android::ScopedJavaGlobalRef<jobject> dialog_jobject_;

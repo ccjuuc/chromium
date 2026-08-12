@@ -17,14 +17,19 @@
 #import "ios/chrome/browser/autofill/model/bottom_sheet/autofill_bottom_sheet_java_script_feature.h"
 #import "ios/chrome/browser/autofill/model/bottom_sheet/autofill_bottom_sheet_tab_helper.h"
 #import "ios/chrome/browser/autofill/model/bottom_sheet/save_card_bottom_sheet_model.h"
+#import "ios/chrome/browser/autofill/scan_save_and_fill/ui/payments_scan_save_and_fill_edit_view_controller.h"
 #import "ios/chrome/browser/net/model/crurl.h"
+#import "ios/chrome/browser/settings/ui_bundled/credit_card_scanner/credit_card_scanner_coordinator.h"
+#import "ios/chrome/browser/settings/ui_bundled/credit_card_scanner/credit_card_scanner_coordinator_delegate.h"
+#import "ios/chrome/browser/settings/ui_bundled/credit_card_scanner/credit_card_scanner_view_controller.h"
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/autofill_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
+#import "ios/chrome/test/app/uikit_test_util.h"
 #import "ios/web/public/test/fakes/fake_web_frames_manager.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
 #import "ios/web/public/test/web_task_environment.h"
@@ -54,6 +59,8 @@ class SaveCardBottomSheetCoordinatorTest : public PlatformTest {
     autofill::AutofillSaveCardUiInfo ui_info =
         autofill::AutofillSaveCardUiInfo();
     ui_info.logo_icon_id = IDR_AUTOFILL_GOOGLE_PAY;
+    // Coordinator tests simulate a server upload save flow.
+    ui_info.is_for_upload = true;
     ui_info.card_label = std::u16string(u"CardName ****2345");
     ui_info.card_sub_label = std::u16string(u"01/29");
 
@@ -71,16 +78,16 @@ class SaveCardBottomSheetCoordinatorTest : public PlatformTest {
                         SaveCreditCardOptions()
                             .with_num_strikes(0))));
 
-    window_ = [[UIWindow alloc] init];
+    window_ = [[UIWindow alloc]
+        initWithWindowScene:chrome_test_util::GetAnyWindowScene()];
     window_.rootViewController = [[UIViewController alloc] init];
     [window_ addSubview:window_.rootViewController.view];
     UIView.animationsEnabled = NO;
 
-    application_commands_handler_ =
-        OCMProtocolMock(@protocol(ApplicationCommands));
+    scene_handler_ = OCMProtocolMock(@protocol(SceneCommands));
     [browser_->GetCommandDispatcher()
-        startDispatchingToTarget:application_commands_handler_
-                     forProtocol:@protocol(ApplicationCommands)];
+        startDispatchingToTarget:scene_handler_
+                     forProtocol:@protocol(SceneCommands)];
 
     autofill_commands_handler_ = OCMProtocolMock(@protocol(AutofillCommands));
     [browser_->GetCommandDispatcher()
@@ -93,7 +100,7 @@ class SaveCardBottomSheetCoordinatorTest : public PlatformTest {
   }
 
   ~SaveCardBottomSheetCoordinatorTest() override {
-    EXPECT_OCMOCK_VERIFY((id)application_commands_handler_);
+    EXPECT_OCMOCK_VERIFY((id)scene_handler_);
     EXPECT_OCMOCK_VERIFY((id)autofill_commands_handler_);
   }
 
@@ -102,7 +109,7 @@ class SaveCardBottomSheetCoordinatorTest : public PlatformTest {
   std::unique_ptr<TestProfileIOS> profile_;
   std::unique_ptr<TestBrowser> browser_;
   UIWindow* window_;
-  id<ApplicationCommands> application_commands_handler_;
+  id<SceneCommands> scene_handler_;
   id<AutofillCommands> autofill_commands_handler_;
   SaveCardBottomSheetCoordinator* coordinator_;
 };
@@ -116,7 +123,7 @@ TEST_F(SaveCardBottomSheetCoordinatorTest, OpensNewTabForLinkClicked) {
   CrURL* url = [[CrURL alloc]
       initWithNSURL:[NSURL URLWithString:@"https://example.test"]];
 
-  OCMExpect([application_commands_handler_
+  OCMExpect([scene_handler_
       openURLInNewTab:[OCMArg checkWithBlock:^(OpenNewTabCommand* command) {
         return command.URL == url.gurl;
       }]]);
@@ -127,7 +134,7 @@ TEST_F(SaveCardBottomSheetCoordinatorTest, OpensNewTabForLinkClicked) {
 
   histogram_tester.ExpectBucketCount(
       "Autofill.SaveCreditCardPromptResult.IOS.Server.BottomSheet.NumStrikes.0."
-      "NoFixFlow",
+      "NoFixFlow.SavingWithoutCvc",
       autofill::autofill_metrics::SaveCreditCardPromptResultIOS::kLinkClicked,
       /*expected_count=*/1);
 }
@@ -146,7 +153,69 @@ TEST_F(SaveCardBottomSheetCoordinatorTest, OnViewDisappeared) {
 
   histogram_tester.ExpectBucketCount(
       "Autofill.SaveCreditCardPromptResult.IOS.Server.BottomSheet.NumStrikes.0."
-      "NoFixFlow",
+      "NoFixFlow.SavingWithoutCvc",
       autofill::autofill_metrics::SaveCreditCardPromptResultIOS::kSwiped,
       /*expected_count=*/1);
+}
+
+// Tests that starting the coordinator for a scan-and-save flow presents the
+// ScannedCardBottomSheetViewController and executes the completion block.
+@interface SaveCardBottomSheetCoordinator (Testing)
+- (void)creditCardScannerCoordinatorDidFinish:
+    (CreditCardScannerCoordinator*)coordinator;
+@end
+
+TEST_F(SaveCardBottomSheetCoordinatorTest,
+       ScanAndSaveFlowPresentsScannedCardBottomSheet) {
+  web::WebState* web_state = browser_->GetWebStateList()->GetWebStateAt(0);
+
+  autofill::AutofillSaveCardUiInfo ui_info = autofill::AutofillSaveCardUiInfo();
+  autofill::payments::PaymentsAutofillClient::SaveCreditCardOptions options;
+
+  options.source_feature = autofill::payments::PaymentsAutofillClient::
+      SourceFeature::kScanCardSaveAndFill;
+
+  AutofillBottomSheetTabHelper::FromWebState(web_state)
+      ->ShowSaveCardBottomSheet(
+          std::make_unique<autofill::SaveCardBottomSheetModel>(
+              std::move(ui_info),
+              std::make_unique<autofill::AutofillSaveCardDelegate>(
+                  static_cast<autofill::payments::PaymentsAutofillClient::
+                                  CardSaveAndFillDialogCallback>(
+                      base::DoNothing()),
+                  options)));
+
+  id mock_base_view_controller = OCMClassMock([UIViewController class]);
+  coordinator_ = [[SaveCardBottomSheetCoordinator alloc]
+      initWithBaseViewController:mock_base_view_controller
+                         browser:browser_.get()];
+
+  OCMExpect([mock_base_view_controller
+      presentViewController:[OCMArg checkWithBlock:^BOOL(id viewController) {
+        return [viewController
+            isKindOfClass:[CreditCardScannerViewController class]];
+      }]
+                   animated:YES
+                 completion:[OCMArg any]]);
+
+  [coordinator_ start];
+
+  EXPECT_OCMOCK_VERIFY(mock_base_view_controller);
+
+  OCMExpect([mock_base_view_controller
+      presentViewController:[OCMArg checkWithBlock:^BOOL(id viewController) {
+        if ([viewController isKindOfClass:[UINavigationController class]]) {
+          UINavigationController* navigationController =
+              (UINavigationController*)viewController;
+          return [navigationController.viewControllers.firstObject
+              isKindOfClass:[PaymentsScanSaveAndFillEditViewController class]];
+        }
+        return NO;
+      }]
+                   animated:YES
+                 completion:[OCMArg any]]);
+
+  [coordinator_ creditCardScannerCoordinatorDidFinish:nil];
+
+  EXPECT_OCMOCK_VERIFY(mock_base_view_controller);
 }

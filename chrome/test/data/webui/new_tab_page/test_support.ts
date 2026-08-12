@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import type {BackgroundImage, Theme} from 'chrome://new-tab-page/new_tab_page.mojom-webui.js';
-import {NtpBackgroundImageSource} from 'chrome://new-tab-page/new_tab_page.mojom-webui.js';
+import type {BackgroundImage, Theme} from 'chrome://new-tab-page/new_tab_page.js';
+import {NtpBackgroundImageSource} from 'chrome://new-tab-page/new_tab_page.js';
 import {getDeepActiveElement} from 'chrome://resources/js/util.js';
 import {assertEquals, assertNotEquals} from 'chrome://webui-test/chai_assert.js';
 import {keyDownOn} from 'chrome://webui-test/keyboard_mock_interactions.js';
@@ -54,7 +54,7 @@ export function installMock<T extends object>(
 
 export function createBackgroundImage(url: string): BackgroundImage {
   return {
-    url: {url},
+    url: url,
     url2x: null,
     attributionUrl: null,
     size: null,
@@ -69,6 +69,7 @@ export function createBackgroundImage(url: string): BackgroundImage {
 export function createTheme({
   isDark = false,
   isBaseline = true,
+  isGm3 = true,
   backgroundColor = {
     value: 0xffff0000,
   },
@@ -89,6 +90,7 @@ export function createTheme({
     logoColor: null,
     isBaseline: isBaseline,
     isDark,
+    isGm3,
     mostVisited: mostVisited,
     textColor: {value: 0xff0000ff},
     isCustomBackground: true,

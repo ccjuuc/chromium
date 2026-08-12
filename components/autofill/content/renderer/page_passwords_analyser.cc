@@ -10,7 +10,6 @@
 #include <string>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/lazy_instance.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/strcat.h"
@@ -197,7 +196,7 @@ std::vector<FormInputCollection> ExtractFormsForAnalysis(
   std::set<WebFormControlElement> inputs_with_forms;
   std::map<std::string, std::vector<WebNode>> nodes_for_id;
 
-  for (const WebFormElement& form : document.GetTopLevelForms()) {
+  for (const WebFormElement& form : document.GetOutermostForms()) {
     form_input_collections.push_back(FormInputCollection{form});
     // Collect all the inputs in the form.
     for (const WebFormControlElement& input : form.GetFormControlElements()) {
@@ -210,8 +209,8 @@ std::vector<FormInputCollection> ExtractFormsForAnalysis(
       // to be username or password fields.
       if (input.TagName() == "INPUT" &&
           (!input.HasAttribute("type") ||
-           base::Contains(kTypeAttributes,
-                          input.GetAttribute("type").Utf8()))) {
+           std::ranges::contains(kTypeAttributes,
+                                 input.GetAttribute("type").Utf8()))) {
         form_input_collections.back().AddInput(input);
         inputs_with_forms.insert(input);
       }
@@ -245,7 +244,7 @@ std::vector<FormInputCollection> ExtractFormsForAnalysis(
   std::string selector = "input:not([type])";
   for (const char* text_type : kTypeTextAttributes)
     base::StrAppend(&selector, {", input[type=\"", text_type, "\"]"});
-  auto text_inputs = document.QuerySelectorAll(WebString::FromUTF8(selector));
+  auto text_inputs = document.QuerySelectorAll(WebString::FromUtf8(selector));
   for (const WebElement& text_input : text_inputs) {
     const WebInputElement input_element =
         text_input.DynamicTo<WebInputElement>();

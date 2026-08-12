@@ -5,15 +5,20 @@ package org.chromium.chrome.browser;
 
 import static org.junit.Assert.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.when;
 
 import android.content.Context;
 import android.content.res.Configuration;
+import android.graphics.Insets;
+import android.os.Build;
 import android.util.DisplayMetrics;
 import android.view.Display;
+import android.view.WindowInsets;
 import android.view.WindowManager;
+import android.view.WindowMetrics;
 
 import androidx.test.filters.MediumTest;
 
@@ -48,6 +53,8 @@ public class ChromeBaseAppCompatActivityUnitTest {
     @Mock private Context mContext;
     @Mock private WindowManager mWindowManager;
     @Mock private Display mDisplay;
+    @Mock private WindowMetrics mWindowMetrics;
+    @Mock private WindowInsets mWindowInsets;
 
     @Before
     public void setUp() {
@@ -55,6 +62,11 @@ public class ChromeBaseAppCompatActivityUnitTest {
         when(mContext.getResources())
                 .thenReturn(ContextUtils.getApplicationContext().getResources());
         when(mWindowManager.getDefaultDisplay()).thenReturn(mDisplay);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            when(mWindowManager.getCurrentWindowMetrics()).thenReturn(mWindowMetrics);
+            when(mWindowMetrics.getWindowInsets()).thenReturn(mWindowInsets);
+            when(mWindowInsets.getInsets(anyInt())).thenReturn(Insets.NONE);
+        }
         doAnswer(
                         (invocation) -> {
                             DisplayMetrics realDisplayMetrics = invocation.getArgument(0);

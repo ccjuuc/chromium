@@ -8,12 +8,15 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/common/extensions/sync_helper.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/manifest_handlers/app_display_info.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -36,14 +39,14 @@ class ExtensionSyncTypeTest : public testing::Test {
       mojom::ManifestLocation location,
       const base::FilePath& extension_path,
       int creation_flags) {
-    auto source = base::Value::Dict()
+    auto source = base::DictValue()
                       .Set(keys::kName, "PossiblySyncableExtension")
                       .Set(keys::kVersion, "0.0.0.0")
                       .Set(keys::kManifestVersion, 2);
     if (type == APP && launch_url.is_empty())
       source.Set(keys::kApp, "true");
     if (type == THEME)
-      source.Set(keys::kTheme, base::Value::Dict());
+      source.Set(keys::kTheme, base::DictValue());
     if (!update_url.is_empty()) {
       source.Set(keys::kUpdateURL, update_url.spec());
     }
@@ -146,7 +149,7 @@ TEST_F(ExtensionSyncTypeTest, OnlyDisplayAppsInLauncher) {
 }
 
 TEST_F(ExtensionSyncTypeTest, DisplayInXManifestProperties) {
-  auto manifest = base::Value::Dict()
+  auto manifest = base::DictValue()
                       .Set(keys::kName, "TestComponentApp")
                       .Set(keys::kVersion, "0.0.0.0");
   manifest.SetByDottedPath(keys::kPlatformAppBackgroundPage, "background.html");

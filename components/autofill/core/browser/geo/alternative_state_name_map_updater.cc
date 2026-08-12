@@ -4,33 +4,38 @@
 
 #include "components/autofill/core/browser/geo/alternative_state_name_map_updater.h"
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <algorithm>
-#include <memory>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
-#include "base/files/file_path.h"
-#include "base/files/file_util.h"
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_helpers.h"
-#include "base/logging.h"
-#include "base/strings/strcat.h"
-#include "base/strings/string_util.h"
+#include "base/functional/callback_forward.h"
+#include "base/location.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/sequence_checker.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
+#include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/geo/alternative_state_name_map.h"
 #include "components/autofill/core/browser/geo/alternative_state_name_map_constants.h"
 #include "components/autofill/core/browser/geo/country_data.h"
+#include "components/autofill/core/browser/geo/grit/autofill_alternative_state_name_map_resources.h"
 #include "components/autofill/core/browser/proto/states.pb.h"
-#include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_l10n_util.h"
-#include "components/autofill/core/common/autofill_prefs.h"
-#include "components/prefs/pref_service.h"
-#include "third_party/zlib/google/compression_utils.h"
 #include "ui/base/resource/resource_bundle.h"
+
 namespace autofill {
 
 int32_t FindResourceIdForCountry(std::string_view country_code) {
@@ -136,7 +141,8 @@ void AlternativeStateNameMapUpdater::LoadStatesData(
   std::erase_if(country_to_state_names_map,
                 [&country_codes](
                     const CountryToStateNamesListMapping::value_type& entry) {
-                  return !base::Contains(country_codes, entry.first.value());
+                  return !std::ranges::contains(country_codes,
+                                                entry.first.value());
                 });
 
   // If there is no valid country to be processed, return early.
@@ -153,7 +159,7 @@ void AlternativeStateNameMapUpdater::LoadStatesData(
   for (const auto& [country_code, states] : country_to_state_names_map) {
     // This is a security check to ensure that we only attempt to read files
     // that match to known countries.
-    if (!base::Contains(country_codes, country_code.value())) {
+    if (!std::ranges::contains(country_codes, country_code.value())) {
       continue;
     }
 

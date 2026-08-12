@@ -57,6 +57,9 @@ class SaveToDriveFlow : public content::DocumentUserData<SaveToDriveFlow> {
   // is used to create a mock flow in tests.
   static void SetCreateCallbackForTesting(CreateCallback* callback);
 
+  // Sets whether or not `HasValidTabId()` will return true for test.
+  static void SetSkipValidateTabForTesting(bool skip_check_tab);
+
   SaveToDriveFlow(const SaveToDriveFlow&) = delete;
   SaveToDriveFlow& operator=(const SaveToDriveFlow&) = delete;
   ~SaveToDriveFlow() override;
@@ -67,6 +70,11 @@ class SaveToDriveFlow : public content::DocumentUserData<SaveToDriveFlow> {
   // Cleans up the flow and its resources. This is called when the flow is
   // aborted or completed. Marked virtual for testing.
   virtual void Stop();
+
+  // Returns weather the stream container associated with the
+  // `render_frame_host` has a tab id with valid web content. Also returns true
+  // when `SetSkipValidateTabForTesting(true)` has been called."
+  static bool HasValidTabId(content::RenderFrameHost* render_frame_host);
 
   class TestApi {
    public:
@@ -122,6 +130,8 @@ class SaveToDriveFlow : public content::DocumentUserData<SaveToDriveFlow> {
 
   // This is set when an account is chosen.
   std::optional<SaveToDriveAccountInfo> save_to_drive_account_info_;
+  // This is the title of the document that is being saved to Drive.
+  std::string upload_title_;
   // This is set after the upload starts.
   std::optional<extensions::api::pdf_viewer_private::SaveToDriveProgress>
       upload_progress_;

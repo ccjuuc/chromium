@@ -179,6 +179,7 @@ void FragmentItemsBuilder::AddLine(const PhysicalLineBoxFragment& line_fragment,
   const wtf_size_t item_count = items_.size() - line_start_index;
   DCHECK_EQ(line_item.DescendantsCount(), 1u);
   line_item.SetDescendantsCount(item_count);
+  line_item.SetLineTextFitScale(line_container->TextFitScale());
 
   // Keep children's offsets relative to |line|. They will be adjusted later in
   // |ConvertToPhysical()|.
@@ -447,8 +448,8 @@ std::optional<PhysicalSize> FragmentItemsBuilder::ToFragmentItems(
   ConvertToPhysical(outer_size);
   std::optional<PhysicalSize> new_size;
   if (node_.IsSvgText()) {
-    new_size = SvgTextLayoutAlgorithm(node_, GetWritingMode())
-                   .Layout(TextContent(false), items_);
+    new_size =
+        SvgTextLayoutAlgorithm(node_, GetWritingMode()).Layout(*this, items_);
   }
   new (data) FragmentItems(this);
   return new_size;

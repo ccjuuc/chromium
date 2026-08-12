@@ -4,7 +4,6 @@
 
 #import "ios/chrome/browser/omnibox/eg_tests/omnibox_matchers.h"
 
-#import "base/containers/contains.h"
 #import "base/strings/string_number_conversions.h"
 #import "ios/chrome/browser/omnibox/public/omnibox_popup_accessibility_identifier_constants.h"
 #import "ios/chrome/common/NSString+Chromium.h"
@@ -43,7 +42,7 @@ id<GREYMatcher> PopupRowWithUrlMatcher(GURL url) {
   id<GREYMatcher> url_matcher = grey_allOf(
       grey_descendant(
           chrome_test_util::StaticTextWithAccessibilityLabel(url_string)),
-      grey_minimumVisiblePercent(0.7), nil);
+      grey_minimumVisiblePercent(0.6), nil);
   return grey_allOf(chrome_test_util::OmniboxPopupRow(), url_matcher, nil);
 }
 

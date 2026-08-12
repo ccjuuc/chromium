@@ -6,16 +6,19 @@
 
 #include <memory>
 
+#include "ash/constants/webui_url_constants.h"
 #include "ash/public/cpp/network_config_service.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "ash/webui/common/trusted_types_util.h"
 #include "build/build_config.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/ash/floating_workspace/floating_workspace_handler.h"
 #include "chrome/browser/ui/webui/ash/login/oobe_ui.h"
-#include "chrome/common/url_constants.h"
-#include "chrome/common/webui_url_constants.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/grit/floating_workspace_resources.h"
 #include "chrome/grit/floating_workspace_resources_map.h"
 #include "chrome/grit/generated_resources.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
@@ -26,7 +29,7 @@ namespace ash {
 
 FloatingWorkspaceUIConfig::FloatingWorkspaceUIConfig()
     : ChromeOSWebUIConfig(content::kChromeUIScheme,
-                          chrome::kChromeUIFloatingWorkspaceDialogHost) {}
+                          ash::kChromeUIFloatingWorkspaceDialogHost) {}
 
 FloatingWorkspaceUI::FloatingWorkspaceUI(content::WebUI* web_ui)
     : MojoWebDialogUI(web_ui) {
@@ -34,10 +37,10 @@ FloatingWorkspaceUI::FloatingWorkspaceUI(content::WebUI* web_ui)
   main_handler_ = main_handler.get();
   web_ui->AddMessageHandler(std::move(main_handler));
 
-  content::BrowserContext* browser_context =
-      web_ui->GetWebContents()->GetBrowserContext();
+  Profile* profile = Profile::FromWebUI(web_ui);
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
-      browser_context, chrome::kChromeUIFloatingWorkspaceDialogHost);
+      profile, ash::kChromeUIFloatingWorkspaceDialogHost);
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
 
   webui::SetupWebUIDataSource(source, kFloatingWorkspaceResources,
                               IDR_FLOATING_WORKSPACE_FLOATING_WORKSPACE_HTML);

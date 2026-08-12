@@ -81,9 +81,9 @@ const CGFloat kTableViewSectionFooterHeight = 3;
   self.headerImageBottomMargin = kHeaderBottomMargin;
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
   UIImage* logo = MakeSymbolMulticolor(
-      CustomSymbolWithPointSize(kMulticolorChromeballSymbol, kLogoSize));
+      SymbolWithPointSize(SymbolMulticolorChromeball, kLogoSize));
 #else
-  UIImage* logo = CustomSymbolWithPointSize(kChromeProductSymbol, kLogoSize);
+  UIImage* logo = SymbolWithPointSize(SymbolChromeProduct, kLogoSize);
 #endif  // BUILDFLAG(IOS_USE_BRANDED_ASSETS)
   self.headerImage = logo;
 
@@ -133,6 +133,7 @@ const CGFloat kTableViewSectionFooterHeight = 3;
     case kGeneralScreenWithPasswordItemAfterDBPromo:
     case kShoppingUsersWithFallbackAfterDBPromo:
     case kSignedInUsersOnlyAfterDBPromo:
+    case kBestOfApp:
       return l10n_util::GetNSString(
           IDS_IOS_BEST_FEATURES_START_BROWSING_BUTTON);
     case kGeneralScreenBeforeDBPromo:

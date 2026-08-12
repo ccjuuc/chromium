@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// This file was exported from google3, do not edit manually.
+// See README.chromium for details.
+
 edition = "2023";
 
 option optimize_for = LITE_RUNTIME;
@@ -9,15 +12,15 @@ option java_package = "org.chromium.components.variations";
 
 package variations;
 
-import "layer.proto";
+import "components/variations/proto/layer.proto";
 
 option features.enum_type = CLOSED;
 option features.utf8_validation = NONE;
 
-// This defines the Protocol Buffer representation of a Chrome Variations study
-// as sent to clients of the Variations server.
+// This defines the Protocol Buffer representation of a Finch study as sent to
+// clients of the Finch server.
 //
-// Next tag: 19
+// Next tag: 20
 message Study {
   // The name of the study. Should not contain spaces or special characters.
   // Ex: "my_study"
@@ -60,16 +63,20 @@ message Study {
   // Ex: "default"
   string default_experiment_name = 8;
 
-  // Specifies under which conditions a |google_web_experiment_id| or
-  // |google_web_trigger_experiment_id| is visible to Google web properties.
+  // Specifies under which conditions a Google web experiment ID or a Google web
+  // trigger experiment ID is visible to Google web properties. An ID is visible
+  // if it is included in the X-Client-Data header of a request to a Google web
+  // property.
   enum GoogleWebVisibility {
-    // Eligible requests to Google web properties include the experiment ID. See
-    // AppendHeaderIfNeeded() in variations_http_headers.cc for eligibility
-    // details.
+    // The experiment ID is included in the header regardless of the context
+    // in which the request is initiated.
+    //
+    // Use this option only when necessary. This is the default at the
+    // Experiment level to match the previous behavior.
     ANY = 0;
 
     // Only requests initiated from a first-party context include the
-    // experiment ID.
+    // experiment ID. This option is preferred.
     //
     // The following requests are considered to be from a first-party context:
     // requests initiated by (i) the browser, (ii) a Chrome internal page,
@@ -79,23 +86,23 @@ message Study {
     FIRST_PARTY = 1;
   }
 
-  // The starting timestamp for Google web visibility, in Unix time format
-  // (seconds since epoch; midnight January 1, 1970 UTC). It specifies the date
-  // and time when Google web visibility should commence once this experiment
-  // is activated. If not set, or 0, the experiment becomes visible immediately
-  // upon activation.
+  // The start date for Google web visibility visibility in Unix time format.
+  // (Seconds since midnight January 1, 1970 UTC). It specifies the exact date
+  // when Google web IDs reporting for a particular study should commence. The
+  // Google web visibility start and end dates provide more finely-grained
+  // control over when an experiment reports its Google web IDs. If omitted, the
+  // client will default to the de-facto behavior of always reporting Google web
+  // IDs when the study is active.
   int64 google_web_visibility_start_date = 17;
 
-  // The ending timestamp for Google web visibility, in Unix time format
-  // (seconds since epoch; midnight January 1, 1970 UTC). It specifies the date
-  // and time when Google web visibility should cease if this experiment
-  // is active. If not set, or 0, the experiment remains visible once
-  // activated.
+  // The end date for Google web visibility in Unix time format. (Seconds since
+  // midnight January 1, 1970 UTC). It defines the specific date on which Google
+  // web ID reporting for a study should cease.
   int64 google_web_visibility_end_date = 18;
 
   // An experiment within the study.
   //
-  // Next tag: 17
+  // Next tag: 21
   message Experiment {
     // A named parameter value for this experiment.
     //
@@ -124,12 +131,11 @@ message Study {
     // behavior on Google web properties.
     uint64 google_web_trigger_experiment_id = 8;
 
-    // Optional visibility setting affecting |google_web_experiment_id| and
-    // |google_web_trigger_experiment_id| fields. See GoogleWebVisibility
-    // enum for details.
+    // Optional visibility setting affecting the experiment ID fields. See
+    // GoogleWebVisibility enum for details.
     GoogleWebVisibility google_web_visibility = 16 [default = ANY];
 
-    // Optional id used to uniquely identify this experiment when activating
+    // Optional ID used to uniquely identify this experiment when activating
     // integrations with the Android Google App.
     // IMPORTANT: This field is only approved for integrations with the Android
     // Google App and must receive a privacy review before extending to other
@@ -204,20 +210,6 @@ message Study {
     }
 
     Type type = 7 [default = NORMAL];
-
-    // A UI string to override, and the new value to use.
-    message OverrideUIString {
-      // The first 32 bits of the MD5 hash digest of the resource name to
-      // override.
-      // e.g. Hash("IDS_BOOKMARK_BAR_UNDO")
-      fixed32 name_hash = 1;
-
-      // The new value of the string being overridden.
-      // e.g. "Undo"
-      string value = 2;
-    }
-
-    repeated OverrideUIString override_ui_string = 9;
   }
 
   // List of experiments in this study. This list should include the default /
@@ -252,25 +244,40 @@ message Study {
     PLATFORM_IOS = 5;
     PLATFORM_ANDROID_WEBVIEW = 6;
     PLATFORM_FUCHSIA = 7;
-    PLATFORM_ANDROID_WEBLAYER = 8;
-    PLATFORM_CHROMEOS_LACROS = 9;
+    // PLATFORM_ANDROID_WEBLAYER was sunsetted and reserved.
+    // Tracking bug: b/305377215
+    reserved 8;
+    reserved PLATFORM_ANDROID_WEBLAYER;
+    // PLATFORM_CHROMEOS_LACROS was sunsetted and reserved.
+    // Tracking bug: b/435674999
+    reserved 9;
+    reserved PLATFORM_CHROMEOS_LACROS;
   }
 
   // Possible form factors Chrome is running on.
+  // The set of field trials to apply is determined at application startup. For
+  // foldables--which are devices that can change from phone-sized to
+  // tablet-sized--this can cause problems. When folding/unfolding, while
+  // ChromeTabbedActivity may be recreated, the Chrome application intentionally
+  // is not. For foldables, this means that a feature that's limited in the
+  // Finch config to 'phone' or 'tablet' only may incorrectly be (un)available
+  // after (un)folding. Rather than using the Finch form_factor field, features
+  // that should only be enabled on a phone-sized or tablet-sized screen should
+  // check the current UI mode in client Java or C++ code.
   enum FormFactor {
-    // Chrome Desktop on Windows, Mac, Linux, or Chrome OS.
+    // Chrome Desktop on Windows, Mac, Linux, or ChromeOS.
     DESKTOP = 0;
 
     // Phone-based mobile Chrome, e.g. an Android phone or iPhone.
-    PHONE = 1;
+    PHONE = 1;  // beware of foldables; see comment by enum definition.
 
     // Tablet-based mobile Chrome, e.g. an Android tablet or iPad.
-    TABLET = 2;
+    TABLET = 2;  // beware of foldables; see comment by enum definition.
 
-    // Chrome OS running in single-app Kiosk mode.
+    // ChromeOS running in single-app Kiosk mode.
     KIOSK = 3;
 
-    // Chrome OS running on Meet Hardware devices e.g. Chromebox For Meetings.
+    // ChromeOS running on Meet Hardware devices e.g. Chromebox For Meetings.
     MEET_DEVICE = 4;
 
     // Chrome running on Android TV.
@@ -295,16 +302,6 @@ message Study {
     TRANSLATED_X86_64 = 4;
   }
 
-  // Enum to pass as optional bool.
-  enum OptionalBool {
-    // Neither True nor False. (For cases like missing / unset / default etc.)
-    OPTIONAL_BOOL_MISSING = 0;
-    // Explicit True.
-    OPTIONAL_BOOL_TRUE = 1;
-    // Explicit False.
-    OPTIONAL_BOOL_FALSE = 2;
-  }
-
   // Possible states of the policy restriction filter.
   enum PolicyRestriction {
     // No restriction configs apply to clients that do not have a
@@ -325,7 +322,7 @@ message Study {
   // Filtering criteria specifying whether this study is applicable to a given
   // Chrome instance.
   //
-  // Next tag: 24
+  // Next tag: 28
   message Filter {
     // The start date of the study in Unix time format. (Seconds since midnight
     // January 1, 1970 UTC). See: http://en.wikipedia.org/wiki/Unix_time
@@ -341,35 +338,40 @@ message Study {
     // be disabled, causing it to select its default group.
     int64 end_date = 13;
 
-    // The minimum Chrome version for this study, allowing a trailing '*'
-    // character for pattern matching. Inclusive. (To check for a match, iterate
-    // over each component checking >= until a * or end of string is reached.)
-    // Optional - if not specified, there is no minimum version.
+    // The minimum Chrome version for this study, allowing a trailing wildcard
+    // '.*' for pattern matching. Inclusive. (To check for a match, iterate over
+    // each component checking >= until '.*' or the end of the string is
+    // reached.)
     // Ex: "17.0.963.46", "17.0.963.*", "17.*"
+    //
+    // If not specified, there is no minimum Chrome version.
     string min_version = 2;
 
-    // The maximum Chrome version for this study; same formatting as
-    // |min_version| above. Inclusive. (To check for a match, iterate over each
-    // component checking <= until a * or end of string is reached.)
-    // Optional - if not specified, there is no maximum version.
-    // Ex: "19.*"
+    // The maximum Chrome version for this study. See |min_version| above for
+    // formatting and examples. Inclusive. (To check for a match, iterate over
+    // each component checking <= until '.*' or the end of the string is
+    // reached.)
+    //
+    // If not specified, there is no maximum Chrome version.
     string max_version = 3;
 
-    // The minimum OS version for this study, allowing a trailing '*' character
+    // The minimum OS version for this study, allowing a trailing wildcard '.*'
     // for pattern matching. Inclusive. (To check for a match, iterate over each
-    // component checking >= until a * or end of string is reached.) OS versions
-    // are sanitized into a list of digits separated by dots like so:
+    // component checking >= until '.*' or the end of the string is reached.) OS
+    // versions are sanitized into a list of digits separated by dots like so:
     //  Windows:  "6.2.7601 SP1"      --> "6.2.7601.1"
     //  Mac OS X: "10.11.2"           --> "10.11.2"
     //  Linux:    "4.13.0-32-generic" --> "4.13.0"
-    // Optional - if not specified, there is no minimum version.
+    //
+    // If not specified, there is no minimum OS version.
     string min_os_version = 16;
 
-    // The maximum OS version for this study, allowing a trailing '*' character
-    // for pattern matching. Inclusive. (To check for a match, iterate over each
-    // component checking <= until a * or end of string is reached.)
-    // Optional - if not specified, there is no minimum version.
-    // Ex: See |min_os_version| for details.
+    // The maximum OS version for this study. See |min_os_version| above for
+    // formatting and examples. Inclusive. (To check for a match, iterate over
+    // each component checking <= until '.*' or the end of the string is
+    // reached.)
+    //
+    // If not specified, there is no maximum OS version.
     string max_os_version = 17;
 
     // List of channels that will receive this study. If omitted, the study
@@ -410,15 +412,11 @@ message Study {
         [features.repeated_field_encoding = EXPANDED];
 
     // List of hardware classes that will receive this study.
-    // This supports Chrome OS and as of M77, Android.
+    // This supports ChromeOS and Android.
     //
-    // Starting with Chrome M67, this does a case insensitive match on the same
-    // hardware class field that is reported to UMA in the SystemProfileProto's
-    // |hardware.hardware_class| field.
-    //
-    // Older versions did a case sensitive substring comparison, which was
-    // problematic for short hardware classes like "eve" that existed as
-    // substrings of other longer ones.
+    // This does a case insensitive match on the same hardware class field that
+    // is reported to UMA in the SystemProfileProto's |hardware.hardware_class|
+    // field.
     //
     // If omitted, the study applies to all hardware classes unless
     // |exclude_hardware_class| is specified. Mutually exclusive with
@@ -427,15 +425,11 @@ message Study {
     repeated string hardware_class = 8;
 
     // List of hardware classes that will be excluded in this study.
-    // This supports Chrome OS and as of M77, Android.
+    // This supports ChromeOS and Android.
     //
-    // Starting with Chrome M67, this does a case insensitive match on the same
-    // hardware class field that is reported to UMA in the SystemProfileProto's
-    // |hardware.hardware_class| field.
-    //
-    // Older versions did a case sensitive substring comparison, which was
-    // problematic for short hardware classes like "eve" that existed as
-    // substrings of other longer ones.
+    // This does a case insensitive match on the same hardware class field that
+    // is reported to UMA in the SystemProfileProto's |hardware.hardware_class|
+    // field.
     //
     // If omitted, the study applies to all hardware classes unless
     // |hardware_class| is specified. Mutually exclusive with |hardware_class|.
@@ -463,7 +457,7 @@ message Study {
     // only. If omitted, the config applies to both groups.
     // - On windows and mac, machines on a domain network are considered
     //   enterprise.
-    // - On chromeOS, registered mode determines enterprise status.
+    // - On ChromeOS, registered mode determines enterprise status.
     // - Android, iOS, and linux consider all clients as non-enterprise.
     bool is_enterprise = 18;
 
@@ -491,6 +485,40 @@ message Study {
     // of the signed in users are a member of any of the specified groups.
     // The values are the gaia ID of the google group.
     repeated int64 exclude_google_group = 23;
+
+    // List of hardware manufacturers that will receive this study.
+    //
+    // This does a case insensitive match on the hardware manufacturer.
+    //
+    // If omitted, the study applies to all hardware manufacturers unless
+    // |exclude_hardware_manufacturer| is specified. Mutually exclusive with
+    // |exclude_hardware_manufacturer|.
+    // Ex: ["google", "lenovo"]
+    // Supported only on Android starting in M150.
+    repeated string hardware_manufacturer = 24;
+
+    // List of hardware manufacturers that will be excluded from this study.
+    //
+    // This does a case insensitive match on the hardware manufacturer.
+    //
+    // If omitted, the study applies to all hardware manufacturers unless
+    // |hardware_manufacturer| is specified. Mutually exclusive with
+    // |hardware_manufacturer|.
+    // Ex: ["google", "lenovo"]
+    // Supported only on Android starting in M150.
+    repeated string exclude_hardware_manufacturer = 25;
+
+    // Specifies that the config should apply only to clients where the browser
+    // or at least one of the signed in users is affiliated with a customer that
+    // is a member of at least one of the specified enterprise groups.
+    // The values are the enterprise group IDs.
+    repeated string enterprise_group = 26;
+
+    // Specifies that the config should apply only to clients where the browser
+    // and all of the signed in users are not affiliated with a customer that is
+    // a member of any of the specified enterprise groups.
+    // The values are the enterprise group IDs.
+    repeated string exclude_enterprise_group = 27;
   }
 
   // Filtering criteria for this study. A study that is filtered out for a given
@@ -523,9 +551,16 @@ message Study {
     // associated with ACTIVATE_ON_QUERY and for studying longer-term effects
     // without activation on start up. Only valid for studies using PERMANENT
     // consistency.
+    // Supported starting with version 142.0.7444.48.
     STICKY_AFTER_QUERY = 2;
   }
 
   // Activation type for this study. Defaults to ACTIVATE_ON_QUERY if omitted.
   ActivationType activation_type = 12;
+
+  // WIP: Do not use yet.
+  // Indicates that this study config is runtime mutable and will apply to users
+  // as they receive a new Finch config (without needing a Chrome restart).
+  // TODO: b/482451024 - Document this feature.
+  bool runtime_mutable = 19;
 }

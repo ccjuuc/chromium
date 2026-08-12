@@ -59,12 +59,12 @@ export class ScanDoneSectionElement extends ScanDoneSectionElementBase {
     return ['setFileSavedTextContent(numFilesSaved, selectedFolder)'];
   }
 
-  numFilesSaved: number;
-  scannedFilePaths: FilePath[];
-  selectedFileType: string;
-  selectedFolder: string;
-  fileSavedTextContent: TrustedHTML|string;
-  editButtonLabel: string;
+  declare numFilesSaved: number;
+  declare scannedFilePaths: FilePath[];
+  declare selectedFileType: string;
+  declare selectedFolder: string;
+  declare fileSavedTextContent: TrustedHTML|string;
+  declare editButtonLabel: string;
   // ScanningBrowserProxy is initialized when scanning_app.js is created.
   private browserProxy = ScanningBrowserProxyImpl.getInstance();
 
@@ -93,9 +93,8 @@ export class ScanDoneSectionElement extends ScanDoneSectionElementBase {
   private setFileSavedTextContent(): void {
     this.browserProxy.getPluralString('fileSavedText', this.numFilesSaved)
         .then((pluralString: string): void => {
-          const fileSavedTextContent =
-              this.getAriaLabelledContent(loadTimeData.substituteString(
-                  pluralString.toString(), this.selectedFolder));
+          const fileSavedTextContent = this.getAriaLabelledContent(
+              loadTimeData.substituteString(pluralString, this.selectedFolder));
           this.fileSavedTextContent = sanitizeInnerHtml(
               fileSavedTextContent,
               {attrs: ['id', 'aria-hidden', 'aria-labelledby']});

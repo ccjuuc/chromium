@@ -28,7 +28,6 @@
 #include <utility>
 
 #include "base/auto_reset.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/numerics/safe_conversions.h"
@@ -41,6 +40,7 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/platform/web_url_request.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_private_token.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_arraybuffer_arraybufferview_blob_document_formdata_urlsearchparams_usvstring.h"
@@ -53,7 +53,6 @@
 #include "third_party/blink/renderer/core/event_target_names.h"
 #include "third_party/blink/renderer/core/events/progress_event.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
-#include "third_party/blink/renderer/core/fetch/attribution_reporting_to_mojom.h"
 #include "third_party/blink/renderer/core/fetch/trust_token_to_mojom.h"
 #include "third_party/blink/renderer/core/fileapi/blob.h"
 #include "third_party/blink/renderer/core/fileapi/file.h"
@@ -130,7 +129,7 @@ void FindCharsetInMediaType(const String& media_type,
   unsigned length = media_type.length();
 
   while (pos < length) {
-    pos = media_type.FindIgnoringASCIICase("charset", pos);
+    pos = media_type.FindIgnoringAsciiCase("charset", pos);
 
     if (pos == kNotFound)
       return;
@@ -173,7 +172,7 @@ String ExtractCharsetFromMediaType(const String& media_type) {
   unsigned pos = 0;
   unsigned len = 0;
   FindCharsetInMediaType(media_type, pos, len);
-  return media_type.Substring(pos, len);
+  return media_type.substr(pos, len);
 }
 
 void ReplaceCharsetInMediaType(String& media_type,
@@ -337,6 +336,7 @@ void XMLHttpRequest::InitResponseDocument() {
     response_document_ = MakeGarbageCollected<XMLDocument>(init);
 
   // FIXME: Set Last-Modified.
+  response_document_->SetIsXHRDocument(true);
   response_document_->SetMimeType(GetResponseMIMEType());
 }
 
@@ -395,7 +395,7 @@ Blob* XMLHttpRequest::ResponseBlob() {
 
   if (!response_blob_) {
     auto blob_data = std::make_unique<BlobData>();
-    blob_data->SetContentType(GetResponseMIMEType().LowerASCII());
+    blob_data->SetContentType(GetResponseMIMEType().ToAsciiLower());
     size_t size = 0;
     if (binary_response_builder_ && binary_response_builder_->size()) {
       for (const auto& span : *binary_response_builder_)
@@ -834,7 +834,7 @@ void XMLHttpRequest::send(Document* document, ExceptionState& exception_state) {
     String body = CreateMarkup(document);
 
     http_body = EncodedFormData::Create(
-        Utf8Encoding().Encode(body, UnencodableHandling::kNoUnencodables));
+        Utf8Encoding().Encode(body, UnencodableHandling::kNone));
   }
 
   CreateRequest(std::move(http_body), exception_state);
@@ -848,7 +848,7 @@ void XMLHttpRequest::send(const String& body, ExceptionState& exception_state) {
 
   if (!body.IsNull() && AreMethodAndURLValidForSend()) {
     http_body = EncodedFormData::Create(
-        Utf8Encoding().Encode(body, UnencodableHandling::kNoUnencodables));
+        Utf8Encoding().Encode(body, UnencodableHandling::kNone));
     UpdateContentTypeAndCharset(AtomicString("text/plain;charset=UTF-8"),
                                 "UTF-8");
   }
@@ -899,9 +899,9 @@ void XMLHttpRequest::send(FormData* body, ExceptionState& exception_state) {
     // TODO (sof): override any author-provided charset= in the
     // content type value to UTF-8 ?
     if (!HasContentTypeRequestHeader()) {
-      AtomicString content_type = AtomicString(StrCat(
-          {"multipart/form-data; boundary=",
-           FetchUtils::NormalizeHeaderValue(http_body->Boundary().data())}));
+      AtomicString content_type = AtomicString(
+          StrCat({"multipart/form-data; boundary=",
+                  FetchUtils::NormalizeHeaderValue(http_body->Boundary())}));
       SetRequestHeaderInternal(http_names::kContentType, content_type);
     }
   }
@@ -1018,7 +1018,7 @@ void XMLHttpRequest::CreateRequest(scoped_refptr<EncodedFormData> http_body,
       task_state_ = CaptureCurrentTaskState(&execution_context);
     }
     async_task_context_.Schedule(&execution_context, "XMLHttpRequest.send",
-                                 probe::AsyncTaskContext::ScanForAds::kTrue);
+                                 probe::AsyncTaskContext::StackOptions::kScan);
     DispatchProgressEvent(event_type_names::kLoadstart, 0, 0);
     // Event handler could have invalidated this send operation,
     // (re)setting the send flag and/or initiating another send
@@ -1060,9 +1060,6 @@ void XMLHttpRequest::CreateRequest(scoped_refptr<EncodedFormData> http_body,
   request.SetSkipServiceWorker(world_ && world_->IsIsolatedWorld());
   if (trust_token_params_)
     request.SetTrustTokenParams(*trust_token_params_);
-
-  request.SetAttributionReportingEligibility(
-      attribution_reporting_eligibility_);
 
   probe::WillLoadXHR(&execution_context, method_, url_, async_,
                      request_headers_, with_credentials_);
@@ -1449,20 +1446,7 @@ void XMLHttpRequest::setPrivateToken(const PrivateToken* trust_token,
   trust_token_params_ = std::move(params);
 }
 
-void XMLHttpRequest::setAttributionReporting(
-    const AttributionReportingRequestOptions* options,
-    ExceptionState& exception_state) {
-  // These precondition checks are copied from |setRequestHeader|.
-  if (state_ != kOpened || send_flag_) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                      "The object's state must be OPENED.");
-    return;
-  }
-
-  attribution_reporting_eligibility_ =
-      ConvertAttributionReportingRequestOptionsToMojom(
-          *options, *GetExecutionContext(), exception_state);
-}
+void XMLHttpRequest::setAttributionReporting(const ScriptValue& options) {}
 
 bool XMLHttpRequest::HasContentTypeRequestHeader() const {
   return request_headers_.Find(http_names::kContentType) !=
@@ -1503,7 +1487,7 @@ String XMLHttpRequest::getAllResponseHeaders() const {
       continue;
     }
 
-    headers.push_back(std::make_pair(it->key.UpperASCII(), it->value));
+    headers.push_back(std::make_pair(it->key.ToAsciiUpper(), it->value));
   }
   std::sort(headers.begin(), headers.end(),
             [](const std::pair<String, String>& x,
@@ -1511,7 +1495,7 @@ String XMLHttpRequest::getAllResponseHeaders() const {
               return CodeUnitCompareLessThan(x.first, y.first);
             });
   for (const auto& header : headers) {
-    string_builder.Append(header.first.LowerASCII());
+    string_builder.Append(header.first.ToAsciiLower());
     string_builder.Append(':');
     string_builder.Append(' ');
     string_builder.Append(header.second);
@@ -1541,7 +1525,7 @@ const AtomicString& XMLHttpRequest::getResponseHeader(
 
   if (response_.GetType() == network::mojom::FetchResponseType::kCors &&
       !cors::IsCorsSafelistedResponseHeader(name) &&
-      !base::Contains(access_control_expose_header_set, name.Ascii())) {
+      !access_control_expose_header_set.contains(name.Ascii())) {
     LogConsoleError(GetExecutionContext(),
                     StrCat({"Refused to get unsafe header \"", name, "\""}));
     return g_null_atom;
@@ -1554,7 +1538,7 @@ AtomicString XMLHttpRequest::FinalResponseMIMETypeInternal() const {
       net::ExtractMimeTypeFromMediaType(mime_type_override_.Utf8(),
                                         /*accept_comma_separated=*/false);
   if (overridden_type.has_value()) {
-    return AtomicString::FromUTF8(overridden_type->c_str());
+    return AtomicString::FromUtf8(overridden_type.value());
   }
 
   if (response_.IsHTTP()) {
@@ -1563,7 +1547,7 @@ AtomicString XMLHttpRequest::FinalResponseMIMETypeInternal() const {
         net::ExtractMimeTypeFromMediaType(header.Utf8(),
                                           /*accept_comma_separated=*/true);
     if (extracted_type.has_value()) {
-      return AtomicString::FromUTF8(extracted_type->c_str());
+      return AtomicString::FromUtf8(extracted_type.value());
     }
 
     return g_empty_atom;
@@ -1626,7 +1610,7 @@ void XMLHttpRequest::UpdateContentTypeAndCharset(
 
   if (original_content_type != content_type) {
     UseCounter::Count(GetExecutionContext(), WebFeature::kReplaceCharsetInXHR);
-    if (!EqualIgnoringASCIICase(original_content_type, content_type)) {
+    if (!EqualIgnoringAsciiCase(original_content_type, content_type)) {
       UseCounter::Count(GetExecutionContext(),
                         WebFeature::kReplaceCharsetInXHRIgnoringCase);
     }
@@ -1638,7 +1622,7 @@ bool XMLHttpRequest::ResponseIsXML() const {
 }
 
 bool XMLHttpRequest::ResponseIsHTML() const {
-  return EqualIgnoringASCIICase(FinalResponseMIMETypeInternal(), "text/html");
+  return EqualIgnoringAsciiCase(FinalResponseMIMETypeInternal(), "text/html");
 }
 
 int XMLHttpRequest::status() const {
@@ -1985,7 +1969,7 @@ void XMLHttpRequest::DidDownloadToBlob(scoped_refptr<BlobDataHandle> blob) {
     // HandleNetworkError();
   } else {
     // Fix content type if overrides or fallbacks are in effect.
-    String mime_type = GetResponseMIMEType().LowerASCII();
+    String mime_type = GetResponseMIMEType().ToAsciiLower();
     if (blob->GetType() != mime_type) {
       auto blob_size = blob->size();
       auto blob_data = std::make_unique<BlobData>();

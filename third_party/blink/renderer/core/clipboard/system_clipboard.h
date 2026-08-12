@@ -88,7 +88,27 @@ class CORE_EXPORT SystemClipboard final
 
   String ReadRTF();
 
+  // Synchronous overload. Used by legacy DataTransfer paths.
+  // Async Clipboard API call sites should use the callback overload below
+  // to avoid blocking the renderer main thread.
   mojo_base::BigBuffer ReadPng(mojom::blink::ClipboardBuffer);
+
+  // Asynchronous overload for the Async Clipboard API. If the remote is
+  // unbound or the buffer is invalid, the callback is invoked synchronously
+  // with an empty BigBuffer. Tracks crbug.com/474131935.
+  void ReadPng(mojom::blink::ClipboardBuffer buffer,
+               mojom::blink::ClipboardHost::ReadPngCallback callback);
+
+  // Reads the PNG on the currently-active buffer (`buffer_`) and wraps it as
+  // an <img src="data:image/png;base64,..."> markup string. Mirrors
+  // ReadHTML()/ReadPlainText()/ReadRtf() in honouring SetSelectionMode().
+  // Editor-paste call sites must use this overload.
+  String ReadImageAsImageMarkup();
+
+  // Explicit-buffer overload. Reserved for callers that legitimately address
+  // a specific OS buffer (e.g. the Async Clipboard API, which carries the
+  // buffer on its Web Platform contract). Editor paste must NOT use this
+  // overload; it bypasses the SetSelectionMode() invariant.
   String ReadImageAsImageMarkup(mojom::blink::ClipboardBuffer);
 
   // Write the image and its associated tag (bookmark/HTML types).
@@ -189,26 +209,28 @@ class CORE_EXPORT SystemClipboard final
         mojom::blink::ClipboardFilesPtr& files);
 
    private:
-    // Called in the set methods to bind this snapshot to the specified buffer.
-    // All calls to set data for all types need to specify the same buffer.
-    void BindToBuffer(mojom::blink::ClipboardBuffer buffer);
+    struct BufferData {
+      std::optional<String> plain_text_;
 
-    std::optional<mojom::blink::ClipboardBuffer> buffer_;
+      std::optional<String> html_;
+      KURL url_;
+      unsigned fragment_start_ = 0;
+      unsigned fragment_end_ = 0;
 
-    std::optional<String> plain_text_;
+      std::optional<String> rtf_;
 
-    std::optional<String> html_;
-    KURL url_;
-    unsigned fragment_start_ = 0;
-    unsigned fragment_end_ = 0;
+      std::optional<mojo_base::BigBuffer> png_;
 
-    std::optional<String> rtf_;
+      mutable std::optional<mojom::blink::ClipboardFilesPtr> files_;
 
-    std::optional<mojo_base::BigBuffer> png_;
+      HashMap<String, String> custom_data_;
+    };
 
-    mutable std::optional<mojom::blink::ClipboardFilesPtr> files_;
+    const BufferData* GetBufferData(mojom::blink::ClipboardBuffer buffer) const;
+    BufferData* GetOrCreateBufferData(mojom::blink::ClipboardBuffer buffer);
 
-    HashMap<String, String> custom_data_;
+    BufferData standard_data_;
+    BufferData selection_data_;
   };
 
   bool IsValidBufferType(mojom::blink::ClipboardBuffer);

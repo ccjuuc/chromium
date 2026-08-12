@@ -4,11 +4,11 @@
 
 #include "chrome/browser/profiles/batch_upload/batch_upload_service.h"
 
+#include <algorithm>
 #include <array>
 #include <map>
 
 #include "base/check_deref.h"
-#include "base/containers/contains.h"
 #include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -21,8 +21,9 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
-#include "chrome/browser/ui/views/profiles/avatar_toolbar_button.h"
+#include "chrome/browser/ui/views/toolbar/avatar_toolbar_button_interface.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/service/local_data_description.h"
@@ -31,9 +32,11 @@
 
 namespace {
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
 // Duration of displaying the saving to account text in the avatar button.
 constexpr base::TimeDelta kBatchUploadAvatarButtonOverrideTextDuration =
     base::Seconds(3);
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
 // This list contains all the data types that are available for the Batch Upload
 // dialog. Data types should not be repeated and the list is ordered based on
@@ -88,7 +91,7 @@ syncer::LocalDataDescription GetPrimaryTypeLocalDataDescription(
     const std::map<syncer::DataType, syncer::LocalDataDescription>&
         local_data_descriptions_map,
     syncer::DataType primary_type) {
-  CHECK(base::Contains(kBatchUploadAvailableTypesOrder, primary_type));
+  CHECK(std::ranges::contains(kBatchUploadAvailableTypesOrder, primary_type));
   CHECK(local_data_descriptions_map.contains(primary_type));
   const syncer::LocalDataDescription& primary_local_data_description =
       local_data_descriptions_map.at(primary_type);
@@ -162,9 +165,10 @@ bool HasLocalDataToShow(
       });
 }
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
 void RecordBatchUploadTriggeredMetrics(
     BatchUploadService::EntryPoint entry_point,
-    signin::IdentityManager& identity_manager,
+    const GaiaId& gaia_id,
     PrefService& prefs) {
   signin::ProfileMenuAvatarButtonPromoInfo::Type promo_type;
   switch (entry_point) {
@@ -198,9 +202,10 @@ void RecordBatchUploadTriggeredMetrics(
       break;
   }
 
-  signin::RecordAvatarButtonPromoAcceptedAtPromoShownCount(
-      promo_type, &identity_manager, prefs);
+  signin::RecordAvatarButtonPromoAcceptedAtPromoShownCount(promo_type, gaia_id,
+                                                           prefs);
 }
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
 }  // namespace
 
@@ -275,6 +280,7 @@ void BatchUploadService::OnGetLocalDataDescriptionsReady(
     return;
   }
 
+  std::move(state_.dialog_state_->dialog_shown_callback_).Run(true);
   delegate_->ShowBatchUploadDialog(
       state_.dialog_state_->browser_,
       GetOrderedListOfNonEmptyDataDescriptions(
@@ -283,7 +289,7 @@ void BatchUploadService::OnGetLocalDataDescriptionsReady(
       /*complete_callback=*/
       base::BindOnce(&BatchUploadService::OnBatchUploadDialogResult,
                      base::Unretained(this)));
-  std::move(state_.dialog_state_->dialog_shown_callback_).Run(true);
+  // The dialog may be reset at this point: `state_.dialog_state_` may be null.
 }
 
 void BatchUploadService::OnBatchUploadDialogResult(
@@ -301,6 +307,7 @@ void BatchUploadService::OnBatchUploadDialogResult(
 
   sync_service_->TriggerLocalDataMigrationForItems(item_ids_to_move);
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
   // `browser` may be null in tests.
   Browser* browser = state_.dialog_state_->browser_.get();
   if (browser) {
@@ -308,13 +315,19 @@ void BatchUploadService::OnBatchUploadDialogResult(
         std::make_unique<ResettableState::SavingBrowserState>();
     TriggerAvatarButtonSavingDataText(browser);
   }
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
   // The callback has to be called after `TriggerLocalDataMigrationForItems()`
   // so that it reacts to the state after the migration.
   std::move(state_.dialog_state_->dialog_closed_callback_).Run();
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  GaiaId primary_gaia =
+      identity_manager_->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
+          .gaia;
   RecordBatchUploadTriggeredMetrics(state_.dialog_state_->entry_point_,
-                                    identity_manager_.get(), prefs_.get());
+                                    primary_gaia, prefs_.get());
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
   ResetDialogState();
 }
 
@@ -336,6 +349,7 @@ bool BatchUploadService::IsUserEligibleToOpenDialog() const {
   return true;
 }
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
 void BatchUploadService::TriggerAvatarButtonSavingDataText(Browser* browser) {
   CHECK(browser);
   CHECK(state_.saving_browser_state_);
@@ -343,12 +357,14 @@ void BatchUploadService::TriggerAvatarButtonSavingDataText(Browser* browser) {
   state_.saving_browser_state_->avatar_override_clear_callback_ =
       BrowserView::GetBrowserViewForBrowser(browser)
           ->toolbar_button_provider()
-          ->GetAvatarToolbarButton()
+          ->GetAvatarToolbarButtonInterface()
           ->SetExplicitButtonState(
               l10n_util::GetStringUTF16(
                   IDS_BATCH_UPLOAD_AVATAR_BUTTON_SAVING_TO_ACCOUNT),
               /*accessibility_label=*/std::nullopt,
-              /*explicit_action=*/std::nullopt);
+              /*explicit_action=*/std::nullopt,
+              /*should_announce=*/true);
+
   // Prepare the timer to stop the overridden text from showing.
   state_.saving_browser_state_->avatar_override_timer_.Start(
       FROM_HERE, kBatchUploadAvatarButtonOverrideTextDuration,
@@ -357,13 +373,16 @@ void BatchUploadService::TriggerAvatarButtonSavingDataText(Browser* browser) {
                      // member and will not fire if destroyed.
                      base::Unretained(this)));
 }
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
 void BatchUploadService::OnAvatarOverrideTextTimeout() {
   CHECK(state_.saving_browser_state_ &&
         state_.saving_browser_state_->avatar_override_clear_callback_);
   state_.saving_browser_state_->avatar_override_clear_callback_.RunAndReset();
   state_.saving_browser_state_.reset();
 }
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
 bool BatchUploadService::IsDialogOpened() const {
   return state_.dialog_state_ != nullptr;

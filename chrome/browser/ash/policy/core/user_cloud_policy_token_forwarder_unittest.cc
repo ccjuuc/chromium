@@ -20,16 +20,19 @@
 #include "base/time/time.h"
 #include "chrome/browser/ash/login/users/scoped_account_id_annotator.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
+#include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
 #include "components/account_id/account_id.h"
+#include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/mock_cloud_external_data_manager.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_client.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_service.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_store.h"
+#include "components/signin/public/base/oauth_consumer_id.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/sync_preferences/pref_service_syncable.h"
@@ -43,6 +46,8 @@
 #include "google_apis/gaia/gaia_id.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "net/base/backoff_entry.h"
+#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -63,17 +68,24 @@ constexpr base::TimeDelta kTokenLifetime = base::Minutes(30);
 class MockUserCloudPolicyManagerAsh : public UserCloudPolicyManagerAsh {
  public:
   MockUserCloudPolicyManagerAsh(
+      scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
       Profile* profile,
       const AccountId& account_id,
       const scoped_refptr<base::SequencedTaskRunner>& task_runner)
       : UserCloudPolicyManagerAsh(
+            TestingBrowserProcess::GetGlobal()->local_state(),
+            std::move(shared_url_loader_factory),
+            TestingBrowserProcess::GetGlobal()
+                ->platform_part()
+                ->browser_policy_connector_ash(),
             profile,
-            std::make_unique<MockCloudPolicyStore>(),
-            std::make_unique<MockCloudPolicyStore>(),
+            std::make_unique<MockCloudPolicyStore>(
+                dm_protocol::GetChromeUserPolicyType()),
+            std::make_unique<MockCloudPolicyStore>(
+                dm_protocol::kChromeExtensionInstallUserCloudPolicyType),
             std::make_unique<MockCloudExternalDataManager>(),
             base::FilePath() /* component_policy_cache_path */,
             UserCloudPolicyManagerAsh::PolicyEnforcement::kPolicyRequired,
-            g_browser_process->local_state(),
             base::Minutes(1) /* policy_refresh_timeout */,
             base::BindOnce(&MockUserCloudPolicyManagerAsh::OnFatalError,
                            base::Unretained(this)),
@@ -108,12 +120,15 @@ class UserCloudPolicyTokenForwarderTest : public testing::Test {
             TestingBrowserProcess::GetGlobal()->GetTestingLocalState())),
         profile_manager_(std::make_unique<TestingProfileManager>(
             TestingBrowserProcess::GetGlobal())),
-        store_(std::make_unique<MockCloudPolicyStore>()) {}
+        store_(std::make_unique<MockCloudPolicyStore>(
+            dm_protocol::GetChromeUserPolicyType())) {}
 
   ~UserCloudPolicyTokenForwarderTest() override = default;
 
   void SetUp() override {
     ash::ConciergeClient::InitializeFake(/*fake_cicerone_client=*/nullptr);
+    TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(
+        test_url_loader_factory_.GetSafeWeakWrapper());
     ASSERT_TRUE(profile_manager_->SetUp());
   }
 
@@ -121,6 +136,7 @@ class UserCloudPolicyTokenForwarderTest : public testing::Test {
     user_policy_manager_->core()->Disconnect();
     // Must be torn down before |profile_manager_|.
     user_policy_manager_.reset();
+    TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(nullptr);
     ash::ConciergeClient::Shutdown();
   }
 
@@ -167,7 +183,8 @@ class UserCloudPolicyTokenForwarderTest : public testing::Test {
     ASSERT_TRUE(user_manager_->GetActiveUser());
 
     user_policy_manager_ = std::make_unique<MockUserCloudPolicyManagerAsh>(
-        profile, account_id, mock_time_task_runner_);
+        test_url_loader_factory_.GetSafeWeakWrapper(), profile, account_id,
+        mock_time_task_runner_);
     std::unique_ptr<MockCloudPolicyClient> client =
         std::make_unique<MockCloudPolicyClient>();
     CloudPolicyClient* client_ptr = client.get();
@@ -192,12 +209,10 @@ class UserCloudPolicyTokenForwarderTest : public testing::Test {
   // Issues OAuth token for device management scope for any pending token
   // requests. Blocks waiting for the request if there are no pending requests.
   void IssueOAuthToken(const std::string& token, base::Time expiration) {
-    signin::ScopeSet scopes;
-    scopes.insert(GaiaConstants::kDeviceManagementServiceOAuth);
-    scopes.insert(GaiaConstants::kGoogleUserInfoEmail);
     identity_test_env_profile_adaptor_->identity_test_env()
-        ->WaitForAccessTokenRequestIfNecessaryAndRespondWithTokenForScopes(
-            token, expiration, std::string() /*id_token*/, scopes);
+        ->WaitForAccessTokenRequestIfNecessaryAndRespondWithTokenForConsumerId(
+            token, expiration,
+            signin::OAuthConsumerId::kCloudPolicyClientRegistration);
   }
 
   // Issues OAuth token error for any pending token requests. Blocks waiting for
@@ -205,8 +220,7 @@ class UserCloudPolicyTokenForwarderTest : public testing::Test {
   void IssueOAuthTokenError() {
     identity_test_env_profile_adaptor_->identity_test_env()
         ->WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-            GoogleServiceAuthError(
-                GoogleServiceAuthError::State::SERVICE_UNAVAILABLE));
+            GoogleServiceAuthError::FromServiceUnavailable(""));
   }
 
   // Simulates CloudPolicyService changing state to initialized.
@@ -230,6 +244,7 @@ class UserCloudPolicyTokenForwarderTest : public testing::Test {
   std::unique_ptr<IdentityTestEnvironmentProfileAdaptor>
       identity_test_env_profile_adaptor_;
   std::unique_ptr<MockCloudPolicyStore> store_;
+  network::TestURLLoaderFactory test_url_loader_factory_;
 };
 
 TEST_F(UserCloudPolicyTokenForwarderTest,

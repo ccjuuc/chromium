@@ -59,7 +59,7 @@ class TipsNotificationCriteriaTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
     builder.AddTestingFactory(
         feature_engagement::TrackerFactory::GetInstance(),
@@ -102,7 +102,7 @@ class TipsNotificationCriteriaTest : public PlatformTest {
             GetApplicationContext()->GetSystemIdentityManager());
     system_identity_manager->AddIdentity(fake_identity);
     GetAuthService()->SignIn(fake_identity,
-                             signin_metrics::AccessPoint::kUnknown);
+                             signin_metrics::AccessPoint::kStartPage);
   }
 
   void SetIsGoogleDefaultSearchEngine(bool is_google) {
@@ -120,10 +120,9 @@ class TipsNotificationCriteriaTest : public PlatformTest {
   base::test::ScopedFeatureList feature_list_;
   web::WebTaskEnvironment task_environment_;
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
-  raw_ptr<feature_engagement::test::MockTracker, DanglingUntriaged>
-      mock_tracker_;
   std::unique_ptr<TestProfileIOS> profile_;
   std::unique_ptr<TipsNotificationCriteria> criteria_;
+  raw_ptr<feature_engagement::test::MockTracker> mock_tracker_;
   raw_ptr<syncer::MockSyncService> sync_service_mock_ = nullptr;
 };
 
@@ -328,46 +327,6 @@ TEST_F(TipsNotificationCriteriaTest, TestShouldSendDocking_Triggered) {
       *mock_tracker_,
       HasEverTriggered(
           testing::Ref(feature_engagement::kIPHiOSDockingPromoFeature), true))
-      .WillOnce(testing::Return(true));
-  EXPECT_FALSE(
-      criteria_->ShouldSendNotification(TipsNotificationType::kDocking));
-}
-
-// Tests that the Docking notification should be sent if the Feature Engagement
-// Tracker has not been triggered for either the main promo or the "Remind Me
-// Later" feature.
-TEST_F(TipsNotificationCriteriaTest, TestShouldSendDocking_NotTriggered) {
-  EXPECT_CALL(
-      *mock_tracker_,
-      HasEverTriggered(
-          testing::Ref(feature_engagement::kIPHiOSDockingPromoFeature), true))
-      .WillOnce(testing::Return(false));
-  EXPECT_CALL(
-      *mock_tracker_,
-      HasEverTriggered(
-          testing::Ref(
-              feature_engagement::kIPHiOSDockingPromoRemindMeLaterFeature),
-          true))
-      .WillOnce(testing::Return(false));
-  EXPECT_TRUE(
-      criteria_->ShouldSendNotification(TipsNotificationType::kDocking));
-}
-
-// Tests that the Docking notification should not be sent if the Feature
-// Engagement Tracker has been triggered for the "Remind Me Later" feature.
-TEST_F(TipsNotificationCriteriaTest,
-       TestShouldSendDocking_RemindMeLaterTriggered) {
-  EXPECT_CALL(
-      *mock_tracker_,
-      HasEverTriggered(
-          testing::Ref(feature_engagement::kIPHiOSDockingPromoFeature), true))
-      .WillOnce(testing::Return(false));
-  EXPECT_CALL(
-      *mock_tracker_,
-      HasEverTriggered(
-          testing::Ref(
-              feature_engagement::kIPHiOSDockingPromoRemindMeLaterFeature),
-          true))
       .WillOnce(testing::Return(true));
   EXPECT_FALSE(
       criteria_->ShouldSendNotification(TipsNotificationType::kDocking));

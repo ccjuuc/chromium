@@ -17,6 +17,7 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/ash/desks/desks_templates_app_launch_handler.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/webui/ash/scanner_feedback_dialog/scanner_feedback_dialog.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
@@ -25,8 +26,10 @@
 #include "components/app_constants/constants.h"
 #include "components/app_restore/restore_data.h"
 #include "components/application_locale_storage/application_locale_storage.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/user_manager/user_manager.h"
 #include "components/variations/service/variations_service.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
@@ -144,10 +147,11 @@ Browser* CreateBrowser() {
     return nullptr;
   }
 
-  Browser::CreateParams params(Browser::Type::TYPE_NORMAL, active_profile,
-                               /*user_gesture=*/false);
+  BrowserWindowCreateParams params(BrowserWindowInterface::TYPE_NORMAL,
+                                   active_profile,
+                                   /*user_gesture=*/false);
   params.should_trigger_session_restore = false;
-  return Browser::Create(std::move(params));
+  return CreateBrowserWindow(std::move(params))->GetBrowserForMigrationOnly();
 }
 
 // Finds the first tab with given url on the desk with the given `index` and
@@ -167,15 +171,18 @@ ash::BrowserDelegate* FindTabOnDeskAtIndex(const GURL& url,
           return ash::BrowserController::kContinueIteration;
         }
 
-        if (browser.GetBrowser().GetProfile()->IsIncognitoProfile()) {
+        if (browser.IsOffTheRecord()) {
           return ash::BrowserController::kContinueIteration;
         }
 
-        for (size_t idx = 0; idx < browser.GetWebContentsCount(); idx++) {
-          if (browser.GetWebContentsAt(idx)->GetVisibleURL() == url) {
+        int idx = 0;
+        for (tabs::TabInterface* tab : browser.GetTabIterator()) {
+          if (tab->GetContents()->GetVisibleURL() == url) {
             out_tab_index = idx;
             found_browser = &browser;
+            break;
           }
+          idx++;
         }
         return found_browser ? ash::BrowserController::kBreakIteration
                              : ash::BrowserController::kContinueIteration;
@@ -307,9 +314,9 @@ void CoralDelegateImpl::CheckGenAIAgeAvailability(
   }
   const AccountInfo extended_account_info =
       identity_manager->FindExtendedAccountInfoByAccountId(account_id);
-  std::move(callback).Run(
-      extended_account_info.capabilities.can_use_chromeos_generative_ai() ==
-      signin::Tribool::kTrue);
+  std::move(callback).Run(extended_account_info.GetAccountCapabilities()
+                              .can_use_chromeos_generative_ai() ==
+                          signin::Tribool::kTrue);
   return;
 }
 

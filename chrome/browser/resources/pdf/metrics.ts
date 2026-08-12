@@ -7,6 +7,21 @@ import {FittingType} from './constants.js';
 // Handles events specific to the PDF viewer and logs the corresponding metrics.
 
 /**
+ * These values are persisted to logs. Entries should not be renumbered, removed
+ * or reused.
+ */
+export enum PostMessageDataType {
+  // LINT.IfChange(PostMessageDataType)
+  GET_SELECTED_TEXT = 0,
+  PRINT = 1,
+  SELECT_ALL = 2,
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/pdf/enums.xml:PDFPostMessageDataType)
+
+  // Must be the last one.
+  COUNT = 3,
+}
+
+/**
  * Records when the zoom mode is changed to fit a FittingType.
  * @param fittingType the new FittingType.
  */
@@ -273,7 +288,29 @@ export enum UserAction {
   EXIT_INK2_TEXT_ANNOTATION_MODE_FIRST = 103,
   EXIT_INK2_TEXT_ANNOTATION_MODE = 104,
 
-  NUMBER_OF_ACTIONS = 105,
+  // Recorded when the user adds a new, non-empty text annotation.
+  ADD_INK2_TEXT_ANNOTATION_FIRST = 105,
+  ADD_INK2_TEXT_ANNOTATION = 106,
+
+  // Recorded when the user starts adding a text annotation, but did not add any
+  // text.
+  ADD_INK2_TEXT_ANNOTATION_ABORTED_FIRST = 107,
+  ADD_INK2_TEXT_ANNOTATION_ABORTED = 108,
+
+  // Recorded when the user edits a text annotation.
+  EDIT_INK2_TEXT_ANNOTATION_FIRST = 109,
+  EDIT_INK2_TEXT_ANNOTATION = 110,
+
+  // Recorded when the user starts editing a text annotation, but did not change
+  // any text.
+  EDIT_INK2_TEXT_ANNOTATION_ABORTED_FIRST = 111,
+  EDIT_INK2_TEXT_ANNOTATION_ABORTED = 112,
+
+  // Recorded when the user deletes a text annotation.
+  DELETE_INK2_TEXT_ANNOTATION_FIRST = 113,
+  DELETE_INK2_TEXT_ANNOTATION = 114,
+
+  NUMBER_OF_ACTIONS = 115,
 }
 
 function createFirstMap(): Map<UserAction, UserAction> {

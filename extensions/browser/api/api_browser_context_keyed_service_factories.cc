@@ -7,6 +7,7 @@
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "extensions/browser/api/alarms/alarm_manager.h"
+#include "extensions/browser/api/content_settings/content_settings_service.h"
 #include "extensions/browser/api/declarative/rules_registry_service.h"
 #include "extensions/browser/api/declarative_net_request/rules_monitor_service.h"
 #include "extensions/browser/api/idle/idle_manager_factory.h"
@@ -17,9 +18,13 @@
 #include "extensions/browser/api/runtime/runtime_api.h"
 #include "extensions/browser/api/storage/session_storage_manager.h"  // nogncheck
 #include "extensions/browser/api/storage/storage_frontend.h"  // nogncheck
+#include "extensions/browser/api/system_display/system_display_api.h"
+#include "extensions/browser/api/test/test_api.h"
 #include "extensions/browser/api/web_request/web_request_api.h"
 #include "extensions/browser/api/web_request/web_request_proxying_url_loader_factory.h"
 #include "extensions/browser/api/web_request/web_request_proxying_websocket.h"
+#include "extensions/browser/api/web_request/web_request_proxying_webtransport_shutdown_notifier_factory.h"
+#include "extensions/browser/api/webstore_private/webstore_private_api.h"
 #include "extensions/buildflags/buildflags.h"
 
 // The following are not supported in the experimental desktop-android build.
@@ -27,22 +32,12 @@
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "extensions/browser/api/api_resource_manager.h"
 #include "extensions/browser/api/audio/audio_api.h"
-#include "extensions/browser/api/bluetooth/bluetooth_api.h"
-#include "extensions/browser/api/bluetooth/bluetooth_private_api.h"
-#include "extensions/browser/api/bluetooth_low_energy/bluetooth_api_advertisement.h"
-#include "extensions/browser/api/bluetooth_low_energy/bluetooth_low_energy_connection.h"
-#include "extensions/browser/api/bluetooth_low_energy/bluetooth_low_energy_notify_session.h"
-#include "extensions/browser/api/bluetooth_socket/bluetooth_api_socket.h"
-#include "extensions/browser/api/bluetooth_socket/bluetooth_socket_event_dispatcher.h"
-#include "extensions/browser/api/content_settings/content_settings_service.h"  // nogncheck
 #include "extensions/browser/api/feedback_private/feedback_private_api.h"
 #include "extensions/browser/api/hid/hid_connection_resource.h"
 #include "extensions/browser/api/hid/hid_device_manager.h"
 #include "extensions/browser/api/networking_private/networking_private_event_router_factory.h"
 #include "extensions/browser/api/printer_provider/printer_provider_api_factory.h"
 #include "extensions/browser/api/protocol_handlers/protocol_handlers_manager.h"
-#include "extensions/browser/api/serial/serial_connection.h"
-#include "extensions/browser/api/serial/serial_port_manager.h"
 #include "extensions/browser/api/socket/socket.h"
 #include "extensions/browser/api/socket/tcp_socket.h"
 #include "extensions/browser/api/socket/udp_socket.h"
@@ -56,7 +51,16 @@
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "extensions/browser/api/bluetooth/bluetooth_api.h"
+#include "extensions/browser/api/bluetooth/bluetooth_private_api.h"
+#include "extensions/browser/api/bluetooth_low_energy/bluetooth_api_advertisement.h"
+#include "extensions/browser/api/bluetooth_low_energy/bluetooth_low_energy_connection.h"
+#include "extensions/browser/api/bluetooth_low_energy/bluetooth_low_energy_notify_session.h"
+#include "extensions/browser/api/bluetooth_socket/bluetooth_api_socket.h"
+#include "extensions/browser/api/bluetooth_socket/bluetooth_socket_event_dispatcher.h"
 #include "extensions/browser/api/clipboard/clipboard_api.h"
+#include "extensions/browser/api/serial/serial_connection.h"
+#include "extensions/browser/api/serial/serial_port_manager.h"
 #include "extensions/browser/api/socket/app_firewall_hole_manager.h"
 #include "extensions/browser/api/webcam_private/webcam_private_api.h"
 #endif
@@ -71,6 +75,7 @@ namespace extensions {
 
 void EnsureApiBrowserContextKeyedServiceFactoriesBuilt() {
   AlarmManager::GetFactoryInstance();
+  ContentSettingsService::GetFactoryInstance();
   declarative_net_request::RulesMonitorService::GetFactoryInstance();
   IdleManagerFactory::GetInstance();
   ManagementAPI::GetFactoryInstance();
@@ -81,17 +86,25 @@ void EnsureApiBrowserContextKeyedServiceFactoriesBuilt() {
   RuntimeAPI::GetFactoryInstance();
   SessionStorageManager::GetFactory();
   StorageFrontend::GetFactoryInstance();
+#if BUILDFLAG(IS_ANDROID)
+  SystemDisplayAPI::GetFactoryInstance();
+#endif
+  TestStartedAndFinishedEventQueue::GetFactoryInstance();
   WebRequestAPI::GetFactoryInstance();
   WebRequestProxyingURLLoaderFactory::EnsureAssociatedFactoryBuilt();
   WebRequestProxyingWebSocket::EnsureAssociatedFactoryBuilt();
+  WebRequestProxyingWebTransportShutdownNotifierFactory::GetInstance();
+  WebstorePrivateApi::EnsureAssociatedFactoryBuilt();
 
 // The following are not supported in the experimental desktop-android build.
 // TODO(https://crbug.com/356905053): Enable these APIs on desktop-android.
 #if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(IS_CHROMEOS)
   ApiResourceManager<BluetoothApiAdvertisement>::GetFactoryInstance();
   ApiResourceManager<BluetoothApiSocket>::GetFactoryInstance();
   ApiResourceManager<BluetoothLowEnergyConnection>::GetFactoryInstance();
   ApiResourceManager<BluetoothLowEnergyNotifySession>::GetFactoryInstance();
+#endif
   ApiResourceManager<HidConnectionResource>::GetFactoryInstance();
 #if BUILDFLAG(IS_CHROMEOS)
   ApiResourceManager<LogSourceResource>::GetFactoryInstance();
@@ -99,11 +112,15 @@ void EnsureApiBrowserContextKeyedServiceFactoriesBuilt() {
   ApiResourceManager<ResumableTCPServerSocket>::GetFactoryInstance();
   ApiResourceManager<ResumableTCPSocket>::GetFactoryInstance();
   ApiResourceManager<ResumableUDPSocket>::GetFactoryInstance();
+#if BUILDFLAG(IS_CHROMEOS)
   ApiResourceManager<SerialConnection>::GetFactoryInstance();
+#endif
   ApiResourceManager<Socket>::GetFactoryInstance();
   ApiResourceManager<UsbDeviceResource>::GetFactoryInstance();
+#if BUILDFLAG(IS_CHROMEOS)
   api::BluetoothSocketEventDispatcher::GetFactoryInstance();
   api::SerialPortManager::GetFactoryInstance();
+#endif
   api::TCPServerSocketEventDispatcher::GetFactoryInstance();
   api::TCPSocketEventDispatcher::GetFactoryInstance();
   api::UDPSocketEventDispatcher::GetFactoryInstance();
@@ -111,12 +128,11 @@ void EnsureApiBrowserContextKeyedServiceFactoriesBuilt() {
   AppFirewallHoleManager::EnsureFactoryBuilt();
 #endif
   AudioAPI::GetFactoryInstance();
+#if BUILDFLAG(IS_CHROMEOS)
   BluetoothAPI::GetFactoryInstance();
   BluetoothPrivateAPI::GetFactoryInstance();
-#if BUILDFLAG(IS_CHROMEOS)
   ClipboardAPI::GetFactoryInstance();
 #endif
-  ContentSettingsService::GetFactoryInstance();
   FeedbackPrivateAPI::GetFactoryInstance();
   HidDeviceManager::GetFactoryInstance();
 #if BUILDFLAG(IS_CHROMEOS)

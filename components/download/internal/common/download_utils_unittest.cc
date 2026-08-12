@@ -8,6 +8,9 @@
 
 #include "base/test/scoped_feature_list.h"
 #include "components/download/public/common/download_features.h"
+#include "crypto/secure_hash.h"
+#include "net/base/net_errors.h"
+#include "net/cert/cert_status_flags.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
@@ -112,7 +115,7 @@ TEST(DownloadUtilsTest, CreateResourceRequestWithPermissionsPolicy) {
              /*self_if_matches=*/std::nullopt,
              /*matches_all_origins=*/false,
              /*matches_opaque_src=*/false}}},
-          std::nullopt, origin);
+          origin);
   params->set_permissions_policy(permissions_policy.get());
   auto resource_request = CreateResourceRequest(params.get());
   EXPECT_EQ(*resource_request->permissions_policy, *permissions_policy);
@@ -136,10 +139,62 @@ TEST(DownloadUtilsTest,
              /*self_if_matches=*/std::nullopt,
              /*matches_all_origins=*/false,
              /*matches_opaque_src=*/false}}},
-          std::nullopt, origin);
+          origin);
   params->set_permissions_policy(permissions_policy.get());
   auto resource_request = CreateResourceRequest(params.get());
   EXPECT_EQ(resource_request->permissions_policy, std::nullopt);
+}
+
+// Regression test for crbug.com/500510384.
+// Scenario: Resumption was attempted, but offset was clamped to 0.
+TEST(DownloadUtilsTest, HandleServerResponse200_ClampedOffsetClearsHash) {
+  scoped_refptr<net::HttpResponseHeaders> headers(
+      new net::HttpResponseHeaders("HTTP/1.1 200 OK"));
+  DownloadSaveInfo save_info;
+  save_info.offset = 0;
+  save_info.hash_state = crypto::SecureHash::Create(crypto::SecureHash::SHA256);
+
+  EXPECT_EQ(DOWNLOAD_INTERRUPT_REASON_NONE,
+            HandleSuccessfulServerResponse(*headers, &save_info,
+                                           /*fetch_error_body=*/false));
+
+  // Verification that the hash state was cleared.
+  EXPECT_EQ(nullptr, save_info.hash_state);
+}
+
+// A net::ERR_ABORTED completion on a non-Service-Worker download is a user
+// cancellation (the historical laptop-lid-close heuristic), which is terminal
+// and non-resumable.
+TEST(DownloadUtilsTest, AbortedNonServiceWorkerIsUserCanceled) {
+  EXPECT_EQ(DOWNLOAD_INTERRUPT_REASON_USER_CANCELED,
+            HandleRequestCompletionStatus(
+                net::ERR_ABORTED, /*has_strong_validators=*/false,
+                /*cert_status=*/0, /*is_partial_request=*/false,
+                DOWNLOAD_INTERRUPT_REASON_NONE,
+                /*is_served_from_service_worker=*/false));
+}
+
+// A net::ERR_ABORTED completion on a Service-Worker-served download is a
+// transient body-transmission failure, so it must map to a resumable
+// NETWORK_FAILED rather than a terminal USER_CANCELED. (crbug.com/40410035)
+TEST(DownloadUtilsTest, AbortedServiceWorkerIsNetworkFailed) {
+  EXPECT_EQ(DOWNLOAD_INTERRUPT_REASON_NETWORK_FAILED,
+            HandleRequestCompletionStatus(
+                net::ERR_ABORTED, /*has_strong_validators=*/false,
+                /*cert_status=*/0, /*is_partial_request=*/false,
+                DOWNLOAD_INTERRUPT_REASON_NONE,
+                /*is_served_from_service_worker=*/true));
+}
+
+// A certificate error on an aborted request still takes precedence over the
+// Service Worker remapping.
+TEST(DownloadUtilsTest, AbortedServiceWorkerWithCertErrorIsCertProblem) {
+  EXPECT_EQ(DOWNLOAD_INTERRUPT_REASON_SERVER_CERT_PROBLEM,
+            HandleRequestCompletionStatus(
+                net::ERR_ABORTED, /*has_strong_validators=*/false,
+                net::CERT_STATUS_DATE_INVALID, /*is_partial_request=*/false,
+                DOWNLOAD_INTERRUPT_REASON_NONE,
+                /*is_served_from_service_worker=*/true));
 }
 
 }  // namespace

@@ -62,6 +62,8 @@ const char* const STRING_ATTRIBUTES[] = {
     "container_title",
     "content_description",
     "supplemental_description",
+    "math_arg",
+    "math_intent",
 };
 
 const char* const INT_ATTRIBUTES[] = {
@@ -96,27 +98,27 @@ AccessibilityTreeFormatterAndroid::AccessibilityTreeFormatterAndroid() {}
 
 AccessibilityTreeFormatterAndroid::~AccessibilityTreeFormatterAndroid() {}
 
-base::Value::Dict AccessibilityTreeFormatterAndroid::BuildTree(
+base::DictValue AccessibilityTreeFormatterAndroid::BuildTree(
     ui::AXPlatformNodeDelegate* root) const {
   if (!root) {
-    return base::Value::Dict();
+    return base::DictValue();
   }
 
   // XXX: Android formatter should walk native Android tree (not internal one).
-  base::Value::Dict dict;
+  base::DictValue dict;
   RecursiveBuildTree(*root, &dict);
   return dict;
 }
 
-base::Value::Dict AccessibilityTreeFormatterAndroid::BuildTreeForSelector(
+base::DictValue AccessibilityTreeFormatterAndroid::BuildTreeForSelector(
     const AXTreeSelector& selector) const {
   NOTREACHED();
 }
 
-base::Value::Dict AccessibilityTreeFormatterAndroid::BuildNode(
+base::DictValue AccessibilityTreeFormatterAndroid::BuildNode(
     ui::AXPlatformNodeDelegate* node) const {
   CHECK(node);
-  base::Value::Dict dict;
+  base::DictValue dict;
   AddProperties(*node, &dict);
   return dict;
 }
@@ -131,7 +133,7 @@ void AccessibilityTreeFormatterAndroid::AddDefaultFilters(
 
 void AccessibilityTreeFormatterAndroid::RecursiveBuildTree(
     const ui::AXPlatformNodeDelegate& node,
-    base::Value::Dict* dict) const {
+    base::DictValue* dict) const {
   if (!ShouldDumpNode(node)) {
     return;
   }
@@ -141,7 +143,7 @@ void AccessibilityTreeFormatterAndroid::RecursiveBuildTree(
     return;
   }
 
-  base::Value::List children;
+  base::ListValue children;
 
   const BrowserAccessibilityAndroid* android_node =
       static_cast<const BrowserAccessibilityAndroid*>(&node);
@@ -149,16 +151,34 @@ void AccessibilityTreeFormatterAndroid::RecursiveBuildTree(
   for (size_t i = 0; i < android_node->PlatformChildCount(); ++i) {
     ui::BrowserAccessibility* child_node = android_node->PlatformGetChild(i);
     CHECK(child_node);
-    base::Value::Dict child_dict;
+    base::DictValue child_dict;
     RecursiveBuildTree(*child_node, &child_dict);
     children.Append(std::move(child_dict));
   }
   dict->Set(kChildrenDictAttr, std::move(children));
 }
 
+void AccessibilityTreeFormatterAndroid::SetIfHasValue(
+    base::DictValue* dict,
+    std::string key,
+    std::optional<int> value) const {
+  if (value.has_value()) {
+    dict->Set(key, value.value());
+  }
+}
+
+void AccessibilityTreeFormatterAndroid::SetIfNonZero(
+    base::DictValue* dict,
+    std::string key,
+    int value) const {
+  if (value != 0) {
+    dict->Set(key, value);
+  }
+}
+
 void AccessibilityTreeFormatterAndroid::AddProperties(
     const ui::AXPlatformNodeDelegate& node,
-    base::Value::Dict* dict) const {
+    base::DictValue* dict) const {
   dict->Set("id", node.GetId());
 
   const BrowserAccessibilityAndroid* android_node =
@@ -196,37 +216,55 @@ void AccessibilityTreeFormatterAndroid::AddProperties(
   dict->Set("table_header", android_node->IsTableHeader());
 
   // String attributes.
-  dict->Set("name", android_node->GetTextContentUTF16());
-  dict->Set("hint", android_node->GetHint());
-  dict->Set("tooltip_text", android_node->GetTooltipText());
-  dict->Set("role_description", android_node->GetRoleDescription());
-  dict->Set("state_description", android_node->GetStateDescription());
-  dict->Set("container_title", android_node->GetContainerTitle());
-  dict->Set("content_description", android_node->GetContentDescription());
+  dict->Set("name", android_node->GetAndroidText());
+  dict->Set("hint", android_node->GetAndroidHint());
+  dict->Set("tooltip_text", android_node->GetAndroidTooltipText());
+  dict->Set("role_description", android_node->GetAndroidRoleDescription());
+  dict->Set("state_description", android_node->GetAndroidStateDescription());
+  dict->Set("container_title", android_node->GetAndroidContainerTitle());
+  dict->Set("content_description",
+            android_node->GetAndroidContentDescription());
   dict->Set("supplemental_description",
-            android_node->GetSupplementalDescription());
+            android_node->GetAndroidSupplementalDescription());
+
+  if (ui::IsMath(android_node->GetRole())) {
+    std::string intent = android_node->GetMathIntent();
+    if (!intent.empty()) {
+      dict->Set("math_intent", intent);
+    }
+    std::string arg = android_node->GetMathArg();
+    if (!arg.empty()) {
+      dict->Set("math_arg", arg);
+    }
+  }
 
   // Int attributes.
-  dict->Set("item_index", android_node->GetItemIndex());
-  dict->Set("item_count", android_node->GetItemCount());
-  dict->Set("row_count", android_node->RowCount());
-  dict->Set("column_count", android_node->ColumnCount());
-  dict->Set("row_index", android_node->RowIndex());
-  dict->Set("row_span", android_node->RowSpan());
-  dict->Set("column_index", android_node->ColumnIndex());
-  dict->Set("column_span", android_node->ColumnSpan());
-  dict->Set("input_type", android_node->AndroidInputType());
-  dict->Set("live_region_type", android_node->AndroidLiveRegionType());
-  dict->Set("range_min", static_cast<int>(android_node->RangeMin()));
-  dict->Set("range_max", static_cast<int>(android_node->RangeMax()));
-  dict->Set("range_current_value",
-            static_cast<int>(android_node->RangeCurrentValue()));
-  dict->Set("text_change_added_count", android_node->GetTextChangeAddedCount());
-  dict->Set("text_change_removed_count",
-            android_node->GetTextChangeRemovedCount());
-  dict->Set("selection_mode", android_node->GetSelectionMode());
-  dict->Set("expanded_state", android_node->ExpandedState());
-  dict->Set("checked", android_node->GetChecked());
+  SetIfHasValue(dict, "item_index", android_node->GetItemIndex());
+  SetIfHasValue(dict, "item_count", android_node->GetItemCount());
+  SetIfHasValue(dict, "row_count", android_node->RowCount());
+  SetIfHasValue(dict, "column_count", android_node->ColumnCount());
+  SetIfHasValue(dict, "row_index", android_node->RowIndex());
+  SetIfHasValue(dict, "row_span", android_node->RowSpan());
+  SetIfHasValue(dict, "column_index", android_node->ColumnIndex());
+  SetIfHasValue(dict, "column_span", android_node->ColumnSpan());
+
+  // TODO(crbug.com/491078290): Audit the remaining numeric attributes below to
+  // check if they should return std::optional natively. For these, 0 is often
+  // a valid value (e.g., a slider with range_min=0), but we explicitly filter
+  // them out here for now to prevent dump test noise.
+  SetIfNonZero(dict, "input_type", android_node->AndroidInputType());
+  SetIfNonZero(dict, "live_region_type", android_node->AndroidLiveRegionType());
+  SetIfNonZero(dict, "selection_mode", android_node->GetSelectionMode());
+  SetIfNonZero(dict, "expanded_state", android_node->ExpandedState());
+  SetIfNonZero(dict, "checked", android_node->GetChecked());
+  SetIfNonZero(dict, "range_min", static_cast<int>(android_node->RangeMin()));
+  SetIfNonZero(dict, "range_max", static_cast<int>(android_node->RangeMax()));
+  SetIfNonZero(dict, "range_current_value",
+               static_cast<int>(android_node->RangeCurrentValue()));
+  SetIfNonZero(dict, "text_change_added_count",
+               android_node->GetTextChangeAddedCount());
+  SetIfNonZero(dict, "text_change_removed_count",
+               android_node->GetTextChangeRemovedCount());
 
   // Actions.
   dict->Set("action_expand", android_node->IsCollapsed());
@@ -234,7 +272,7 @@ void AccessibilityTreeFormatterAndroid::AddProperties(
 }
 
 std::string AccessibilityTreeFormatterAndroid::ProcessTreeForOutput(
-    const base::Value::Dict& dict) const {
+    const base::DictValue& dict) const {
   const std::string* error_value = dict.FindString("error");
   if (error_value) {
     return *error_value;
@@ -275,11 +313,12 @@ std::string AccessibilityTreeFormatterAndroid::ProcessTreeForOutput(
   }
 
   for (const char* attribute_name : INT_ATTRIBUTES) {
-    int value = dict.FindInt(attribute_name).value_or(0);
-    if (value == 0) {
+    std::optional<int> value = dict.FindInt(attribute_name);
+    if (!value.has_value()) {
       continue;
     }
-    WriteAttribute(true, StringPrintf("%s=%d", attribute_name, value), &line);
+    WriteAttribute(true, StringPrintf("%s=%d", attribute_name, value.value()),
+                   &line);
   }
 
   for (const char* attribute_name : ACTION_ATTRIBUTES) {

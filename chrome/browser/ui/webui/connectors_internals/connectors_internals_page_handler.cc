@@ -6,31 +6,46 @@
 
 #include "base/check.h"
 #include "base/containers/span.h"
+#include "base/i18n/icubridge/date_time_formatter.h"
+#include "base/i18n/icubridge/icu_bridge.h"
 #include "base/i18n/time_formatting.h"
 #include "base/json/json_writer.h"
 #include "base/notimplemented.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/enterprise/client_certificates/certificate_provisioning_service_factory.h"
-#include "chrome/browser/enterprise/connectors/device_trust/common/common_types.h"
-#include "chrome/browser/enterprise/connectors/device_trust/device_trust_connector_service.h"
 #include "chrome/browser/enterprise/connectors/device_trust/device_trust_connector_service_factory.h"
 #include "chrome/browser/enterprise/connectors/device_trust/device_trust_service.h"
 #include "chrome/browser/enterprise/connectors/device_trust/device_trust_service_factory.h"
 #include "chrome/browser/enterprise/reporting/cloud_profile_reporting_service.h"
 #include "chrome/browser/enterprise/reporting/cloud_profile_reporting_service_factory.h"
+#include "chrome/browser/enterprise/signals/signals_aggregator_factory.h"
 #include "chrome/browser/enterprise/signals/user_permission_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/connectors_internals/device_trust_utils.h"
+#include "components/device_signals/core/browser/signals_aggregator.h"
 #include "components/device_signals/core/browser/user_permission_service.h"
+#include "components/enterprise/browser/reporting/chrome_profile_request_generator.h"
 #include "components/enterprise/browser/reporting/common_pref_names.h"
+#include "components/enterprise/browser/reporting/report_util.h"
 #include "components/enterprise/buildflags/buildflags.h"
 #include "components/enterprise/client_certificates/core/certificate_provisioning_service.h"
 #include "components/enterprise/connectors/connectors_internals.mojom.h"
+#include "components/enterprise/connectors/core/connectors_internals_utils.h"
+#include "components/enterprise/device_trust/core/common_types.h"
 #include "components/prefs/pref_service.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "net/cert/x509_certificate.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/enterprise/reporting/reporting_delegate_factory_android.h"
+#else
+#include "chrome/browser/enterprise/reporting/reporting_delegate_factory_desktop.h"
+#include "components/enterprise/device_trust/core/device_trust_connector_service.h"  // nogncheck
+#endif
 
 #if BUILDFLAG(IS_MAC)
 #include "chrome/browser/enterprise/connectors/device_trust/key_management/core/mac/secure_enclave_client.h"
@@ -40,8 +55,6 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "components/enterprise/browser/controller/chrome_browser_cloud_management_controller.h"
-#include "components/enterprise/client_certificates/core/client_identity.h"
-#include "components/enterprise/client_certificates/core/private_key.h"
 #endif
 
 namespace enterprise_connectors {
@@ -64,35 +77,20 @@ std::string ConvertPolicyLevelToString(DTCPolicyLevel level) {
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(ENTERPRISE_CLIENT_CERTIFICATES)
-connectors_internals::mojom::ClientIdentityPtr GetIdentity(
-    client_certificates::CertificateProvisioningService* provisioning_service,
-    std::vector<std::string>& enabled_levels,
-    const std::string& enabled_level) {
-  const auto& status = provisioning_service->GetCurrentStatus();
-  if (!(status.is_policy_enabled)) {
-    return nullptr;
-  }
-  enabled_levels.push_back(enabled_level);
-
-  if (!status.identity.has_value()) {
-    return nullptr;
-  }
-
-  return utils::ConvertIdentity(status.identity.value(),
-                                status.last_upload_code);
-}
-#endif  // BUILDFLAG(ENTERPRISE_CLIENT_CERTIFICATES)
-
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_ANDROID)
 std::string GetStringFromTimestamp(base::Time timestamp) {
-  return (timestamp == base::Time()) ? std::string()
-                                     : base::UnlocalizedTimeFormatWithPattern(
-                                           timestamp, "yyyy-LL-dd HH:mm zzz");
+  using base::i18n::DateTimeFormatterOptions;
+  using base::i18n::GetKnownLanguageTag;
+  using base::i18n::IcuBridge;
+  using base::i18n::datetime_options::YMDT;
+
+  return (timestamp == base::Time())
+             ? std::string()
+             : base::UTF16ToUTF8(
+                   IcuBridge::GetInstance().date_time_formatter().Format(
+                       timestamp, GetKnownLanguageTag("en-US"),
+                       YMDT::Short().with_time_precision(
+                           DateTimeFormatterOptions::TimePrecision::kMinute)));
 }
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
-        // BUILDFLAG(IS_ANDROID)
 
 }  // namespace
 
@@ -158,10 +156,16 @@ void ConnectorsInternalsPageHandler::GetClientCertificateState(
   auto* profile_certificate_provisioning_service =
       client_certificates::CertificateProvisioningServiceFactory::GetForProfile(
           profile_);
-  auto* browser_certificate_provisioning_service =
+  client_certificates::CertificateProvisioningService*
+      browser_certificate_provisioning_service = nullptr;
+#if !BUILDFLAG(IS_CHROMEOS)
+  // Browser-level (machine) certificate provisioning is driven by the Chrome
+  // Browser Cloud Management controller, which does not exist on ChromeOS.
+  browser_certificate_provisioning_service =
       g_browser_process->browser_policy_connector()
           ->chrome_browser_cloud_management_controller()
           ->GetCertificateProvisioningService();
+#endif  // !BUILDFLAG(IS_CHROMEOS)
   if (!profile_certificate_provisioning_service &&
       !browser_certificate_provisioning_service) {
     std::move(callback).Run(
@@ -174,14 +178,14 @@ void ConnectorsInternalsPageHandler::GetClientCertificateState(
   connectors_internals::mojom::ClientIdentityPtr managed_browser_identity =
       nullptr;
   if (browser_certificate_provisioning_service) {
-    managed_browser_identity = GetIdentity(
+    managed_browser_identity = utils::GetIdentity(
         browser_certificate_provisioning_service, enabled_levels, kBrowser);
   }
 
   connectors_internals::mojom::ClientIdentityPtr managed_profile_identity =
       nullptr;
   if (profile_certificate_provisioning_service) {
-    managed_profile_identity = GetIdentity(
+    managed_profile_identity = utils::GetIdentity(
         profile_certificate_provisioning_service, enabled_levels, kProfile);
   }
 
@@ -199,8 +203,6 @@ void ConnectorsInternalsPageHandler::GetClientCertificateState(
 
 void ConnectorsInternalsPageHandler::GetSignalsReportingState(
     GetSignalsReportingStateCallback callback) {
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_ANDROID)
   auto* profile_prefs = profile_->GetPrefs();
 
   std::string last_upload_attempt_time_string =
@@ -233,7 +235,8 @@ void ConnectorsInternalsPageHandler::GetSignalsReportingState(
             /*error_info=*/"Profile reporting service unavailable",
             /*status_report_enabled=*/false, /*signals_report_enabled=*/false,
             last_upload_attempt_time_string, last_upload_success_time_string,
-            last_signals_upload_config, can_collect_all_signals));
+            last_signals_upload_config, can_collect_all_signals,
+            /*signals_json=*/std::nullopt));
     return;
   }
 
@@ -246,39 +249,56 @@ void ConnectorsInternalsPageHandler::GetSignalsReportingState(
             /*error_info=*/"Profile report scheduler unavailable",
             /*status_report_enabled=*/false, /*signals_report_enabled=*/false,
             last_upload_attempt_time_string, last_upload_success_time_string,
-            last_signals_upload_config, can_collect_all_signals));
+            last_signals_upload_config, can_collect_all_signals,
+            /*signals_json=*/std::nullopt));
     return;
   }
 
   bool status_report_enabled = profile_report_scheduler->IsReportingEnabled();
   bool signals_report_enabled =
       profile_report_scheduler->AreSecurityReportsEnabled();
+  auto state = connectors_internals::mojom::SignalsReportingState::New(
+      /*error_info=*/std::nullopt, status_report_enabled,
+      signals_report_enabled, last_upload_attempt_time_string,
+      last_upload_success_time_string, last_signals_upload_config,
+      can_collect_all_signals, /*signals_json=*/std::nullopt);
 
-  std::move(callback).Run(
-      connectors_internals::mojom::SignalsReportingState::New(
-          /*error_info=*/std::nullopt, status_report_enabled,
-          signals_report_enabled, last_upload_attempt_time_string,
-          last_upload_success_time_string, last_signals_upload_config,
-          can_collect_all_signals));
+  auto* signals_aggregator =
+      enterprise_signals::SignalsAggregatorFactory::GetForProfile(profile_);
+
+  if (!signals_report_enabled || !signals_aggregator) {
+    std::move(callback).Run(std::move(state));
+    return;
+  }
+
+#if BUILDFLAG(IS_ANDROID)
+  auto delegate_factory =
+      std::make_unique<enterprise_reporting::ReportingDelegateFactoryAndroid>();
 #else
-  std::move(callback).Run(
-      connectors_internals::mojom::SignalsReportingState::New(
-          /*error_info=*/"User signals reporting is unsupported on the current "
-                         "platform",
-          /*status_report_enabled=*/false, /*signals_report_enabled=*/false,
-          /*last_upload_attempt_timestamp=*/std::string(),
-          /*last_upload_success_timestamp=*/std::string(),
-          /*last_signals_upload_config=*/std::string(),
-          /*can_collect_all_fields=*/false));
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
-        // BUILDFLAG(IS_ANDROID)
+  auto delegate_factory =
+      std::make_unique<enterprise_reporting::ReportingDelegateFactoryDesktop>();
+#endif
+
+  request_generator_ =
+      std::make_unique<enterprise_reporting::ChromeProfileRequestGenerator>(
+          profile_->GetPath(), delegate_factory.get(), signals_aggregator);
+
+  enterprise_reporting::ReportGenerationConfig config;
+  config.report_type = enterprise_reporting::ReportType::kProfileReport;
+  config.security_signals_mode = SecuritySignalsMode::kSignalsAttached;
+
+  request_generator_->Generate(
+      std::move(config),
+      base::BindOnce(&ConnectorsInternalsPageHandler::OnReportGenerated,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(callback),
+                     std::move(state)));
 }
 
 #if !BUILDFLAG(IS_ANDROID)
 void ConnectorsInternalsPageHandler::OnSignalsCollected(
     GetDeviceTrustStateCallback callback,
     bool is_device_trust_enabled,
-    const base::Value::Dict signals) {
+    const base::DictValue signals) {
   std::string signals_json;
   base::JSONWriter::WriteWithOptions(
       signals, base::JSONWriter::OPTIONS_PRETTY_PRINT, &signals_json);
@@ -309,5 +329,35 @@ void ConnectorsInternalsPageHandler::OnSignalsCollected(
   std::move(callback).Run(std::move(state));
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+void ConnectorsInternalsPageHandler::OnReportGenerated(
+    GetSignalsReportingStateCallback callback,
+    connectors_internals::mojom::SignalsReportingStatePtr state,
+    base::expected<enterprise_reporting::ReportRequestQueue,
+                   enterprise_reporting::ReportGenerationError> result) {
+  std::string error_message;
+  if (!result.has_value()) {
+    error_message = base::StringPrintf(
+        "Report generation failed with error code: %d", result.error());
+  } else if (result.value().empty()) {
+    error_message = "Report generator returned an empty queue.";
+  }
+
+  if (!error_message.empty()) {
+    state->error_info = std::move(error_message);
+    std::move(callback).Run(std::move(state));
+    request_generator_.reset();
+    return;
+  }
+
+  enterprise_reporting::ReportRequestQueue requests = std::move(result).value();
+  std::unique_ptr<enterprise_reporting::ReportRequest> request =
+      std::move(requests.front());
+
+  state->signals_json =
+      enterprise_connectors::utils::GetJsonForReportRequest(*request);
+  std::move(callback).Run(std::move(state));
+  request_generator_.reset();
+}
 
 }  // namespace enterprise_connectors

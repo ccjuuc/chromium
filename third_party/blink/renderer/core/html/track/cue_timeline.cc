@@ -193,8 +193,7 @@ void CueTimeline::TimeMarchesOn() {
   // kHaveNothing.
   if (media_element.getReadyState() != HTMLMediaElement::kHaveNothing &&
       media_element.GetWebMediaPlayer()) {
-    current_cues =
-        cue_tree_.AllOverlaps(cue_tree_.CreateInterval(movie_time, movie_time));
+    current_cues = cue_tree_.AllOverlaps(movie_time, movie_time);
   }
 
   CueList previous_cues;
@@ -219,7 +218,7 @@ void CueTimeline::TimeMarchesOn() {
   CueList missed_cues;
   if (last_time >= 0 && last_seek_time < movie_time) {
     CueList potentially_skipped_cues =
-        cue_tree_.AllOverlaps(cue_tree_.CreateInterval(last_time, movie_time));
+        cue_tree_.AllOverlaps(last_time, movie_time);
     missed_cues.ReserveInitialCapacity(potentially_skipped_cues.size());
 
     for (CueInterval cue : potentially_skipped_cues) {
@@ -360,19 +359,11 @@ void CueTimeline::TimeMarchesOn() {
       media_element.ScheduleEvent(
           CreateEventWithTarget(event_type_names::kExit, task.second.Get()));
     } else {
-      TextTrackCue* cue = task.second.Get();
       bool is_enter_event = task.first == task.second->startTime();
       AtomicString event_name =
           is_enter_event ? event_type_names::kEnter : event_type_names::kExit;
       media_element.ScheduleEvent(
           CreateEventWithTarget(event_name, task.second.Get()));
-      if (features::IsTextBasedAudioDescriptionEnabled()) {
-        if (is_enter_event) {
-          cue->OnEnter(MediaElement());
-        } else {
-          cue->OnExit(MediaElement());
-        }
-      }
     }
   }
 
@@ -509,7 +500,9 @@ void CueTimeline::CancelCueEventTimer() {
 }
 
 void CueTimeline::CueEventTimerFired(TimerBase*) {
-  InvokeTimeMarchesOn();
+  if (!MediaElement().IsShowPosterFlagSet()) {
+    InvokeTimeMarchesOn();
+  }
 }
 
 void CueTimeline::CueTimestampEventTimerFired(TimerBase*) {

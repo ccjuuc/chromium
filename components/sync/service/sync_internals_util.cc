@@ -54,11 +54,10 @@ std::string SeverityToString(TypeStatusForDebugging::Severity severity) {
   NOTREACHED();
 }
 
-// Converts TypeStatusMapForDebugging to a base::Value::List.
-base::Value::List TypeStatusMapToValueList(
-    const TypeStatusMapForDebugging& map) {
-  base::Value::List result;
-  auto type_status_header = base::Value::Dict()
+// Converts TypeStatusMapForDebugging to a base::ListValue.
+base::ListValue TypeStatusMapToValueList(const TypeStatusMapForDebugging& map) {
+  base::ListValue result;
+  auto type_status_header = base::DictValue()
                                 .Set("status", "header")
                                 .Set("name", "Data Type")
                                 .Set("num_entries", "Total Entries")
@@ -67,7 +66,7 @@ base::Value::List TypeStatusMapToValueList(
                                 .Set("state", "State");
   result.Append(std::move(type_status_header));
   for (const auto& [type, status] : map) {
-    base::Value::Dict type_status;
+    base::DictValue type_status;
     type_status.Set("name", DataTypeToDebugString(type));
     type_status.Set("status", SeverityToString(status.severity));
     type_status.Set("state", status.state);
@@ -82,8 +81,8 @@ base::Value::List TypeStatusMapToValueList(
 // 'stat_status'.
 class StatBase {
  public:
-  base::Value::Dict ToValue() const {
-    return base::Value::Dict()
+  base::DictValue ToValue() const {
+    return base::DictValue()
         .Set("stat_name", base::Value(key_))
         .Set("stat_value", value_.Clone())
         .Set("stat_status", base::Value(status_));
@@ -130,12 +129,12 @@ class Section {
     return AddStat(key, std::string(kUninitialized));
   }
 
-  base::Value::Dict ToValue() const {
-    base::Value::List stats;
+  base::DictValue ToValue() const {
+    base::ListValue stats;
     for (const std::unique_ptr<StatBase>& stat : stats_) {
       stats.Append(stat->ToValue());
     }
-    return base::Value::Dict()
+    return base::DictValue()
         .Set("title", base::Value(title_))
         .Set("data", std::move(stats))
         .Set("is_sensitive", base::Value(is_sensitive_));
@@ -170,8 +169,8 @@ class SectionList {
 
   // If `include_sensitive_data` is true, returns all added sections. Otherwise,
   // omits those added with `is_sensitive` set to true.
-  base::Value::List ToValue(IncludeSensitiveData include_sensitive_data) const {
-    base::Value::List result;
+  base::ListValue ToValue(IncludeSensitiveData include_sensitive_data) const {
+    base::ListValue result;
     for (const std::unique_ptr<Section>& section : sections_) {
       if (include_sensitive_data || !section->is_sensitive()) {
         result.Append(section->ToValue());
@@ -203,12 +202,12 @@ std::string GetUserActionableErrorString(
     case SyncService::UserActionableError::
         kTrustedVaultRecoverabilityDegradedForEverything:
       return "Trusted vault recoverability degraded for everything";
-#if !BUILDFLAG(IS_IOS)
+#if !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
     case SyncService::UserActionableError::kNeedsSettingsConfirmation:
       return "Needs settings confirmation";
     case SyncService::UserActionableError::kUnrecoverableError:
       return "Unrecoverable error";
-#endif  // !BUILDFLAG(IS_IOS)
+#endif  // !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
 #if BUILDFLAG(IS_ANDROID)
     case SyncService::UserActionableError::kNeedsUPMBackendUpgrade:
       return "Needs UPM backend upgrade";
@@ -217,6 +216,10 @@ std::string GetUserActionableErrorString(
       return "Client version is too old and needs upgrade";
     case SyncService::UserActionableError::kBookmarksLimitExceeded:
       return "Bookmarks limit exceeded";
+#if BUILDFLAG(IS_IOS)
+    case SyncService::UserActionableError::kDeviceManagementError:
+      return "Device Management error";
+#endif  // BUILDFLAG(IS_IOS)
   }
 
   NOTREACHED();
@@ -293,16 +296,15 @@ std::string GetConnectionStatus(const SyncTokenStatus& status) {
       return "not attempted";
     case CONNECTION_OK:
       return base::StringPrintf(
-          "OK since %s",
-          GetTimeStr(status.connection_status_update_time).c_str());
+          "OK since %s", GetTimeStr(status.connection_status_update_time));
     case CONNECTION_AUTH_ERROR:
       return base::StringPrintf(
           "auth error since %s",
-          GetTimeStr(status.connection_status_update_time).c_str());
+          GetTimeStr(status.connection_status_update_time));
     case CONNECTION_SERVER_ERROR:
       return base::StringPrintf(
           "server error since %s",
-          GetTimeStr(status.connection_status_update_time).c_str());
+          GetTimeStr(status.connection_status_update_time));
   }
   NOTREACHED();
 }
@@ -352,11 +354,11 @@ std::string TransportStateStringToDebugString(
 // its contents.  Most of the message consists of simple fields in
 // chrome://sync-internals which are grouped into sections and populated with
 // the help of the SyncStat classes defined above.
-base::Value::Dict ConstructAboutInformation(
+base::DictValue ConstructAboutInformation(
     IncludeSensitiveData include_sensitive_data,
     SyncService* service,
     const std::string& channel) {
-  base::Value::Dict about_info;
+  base::DictValue about_info;
 
   SectionList section_list;
 
@@ -411,10 +413,6 @@ base::Value::Dict ConstructAboutInformation(
       section_local->AddBoolStat("Local Sync Backend Enabled");
   Stat<std::string>* local_backend_path =
       section_local->AddStringStat("Local Backend Path");
-  // TODO(crbug.com/454302754) Remove this once the experiment for determining a
-  // new permanent bookmark limit has finished.
-  Stat<std::string>* bookmarks_limit =
-      section_local->AddStringStat("Bookmarks Limit");
 
   Section* section_network =
       section_list.AddSection("Network", /*is_sensitive=*/false);
@@ -515,9 +513,8 @@ base::Value::Dict ConstructAboutInformation(
   std::string auth_error_str = service->GetAuthError().ToString();
   auth_error->Set(
       base::StringPrintf(
-          "%s since %s",
-          (auth_error_str.empty() ? "OK" : auth_error_str).c_str(),
-          GetTimeStr(service->GetAuthErrorTime(), "browser startup").c_str()),
+          "%s since %s", (auth_error_str.empty() ? "OK" : auth_error_str),
+          GetTimeStr(service->GetAuthErrorTime(), "browser startup")),
       /*is_good=*/auth_error_str.empty());
 
   SyncStatus full_status;
@@ -574,7 +571,6 @@ base::Value::Dict ConstructAboutInformation(
   if (is_local_sync_enabled_state && is_status_valid) {
     local_backend_path->Set(full_status.local_sync_folder);
   }
-  bookmarks_limit->Set(base::NumberToString(kSyncBookmarksLimitValue.Get()));
 
   // Network.
   if (snapshot.is_initialized()) {
@@ -700,7 +696,7 @@ base::Value::Dict ConstructAboutInformation(
     description.Set(full_status.sync_protocol_error.error_description);
   }
 
-  about_info.Set("actionable_error", base::Value::List()
+  about_info.Set("actionable_error", base::ListValue()
                                          .Append(error_type.ToValue())
                                          .Append(action.ToValue())
                                          .Append(description.ToValue()));

@@ -5,7 +5,9 @@
 #include "chrome/browser/ash/system/device_disabling_manager.h"
 
 #include <memory>
+#include <optional>
 
+#include "ash/constants/ash_policy_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
@@ -18,9 +20,9 @@
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
+#include "chromeos/ash/components/login/login_state/login_state.h"
 #include "chromeos/ash/components/policy/device_policy/device_policy_builder.h"
 #include "chromeos/ash/components/system/fake_statistics_provider.h"
 #include "components/ownership/mock_owner_key_util.h"
@@ -60,6 +62,7 @@ class DeviceDisablingManagerTestBase : public testing::Test,
       const DeviceDisablingManagerTestBase&) = delete;
 
   // testing::Test:
+  void SetUp() override;
   void TearDown() override;
 
   virtual void CreateDeviceDisablingManager();
@@ -91,14 +94,34 @@ DeviceDisablingManagerTestBase::DeviceDisablingManagerTestBase() {
   StatisticsProvider::SetTestProvider(&statistics_provider_);
 }
 
+void DeviceDisablingManagerTestBase::SetUp() {
+  // DeviceRestrictionScheduleController depends on LoginState.
+  LoginState::Initialize();
+  // DeviceDisablingManager depends on DeviceRestrictionScheduleController.
+  TestingBrowserProcess::GetGlobal()
+      ->platform_part()
+      ->InitializeDeviceRestrictionScheduleController();
+}
+
 void DeviceDisablingManagerTestBase::TearDown() {
   DestroyDeviceDisablingManager();
+
+  TestingBrowserProcess::GetGlobal()
+      ->platform_part()
+      ->ShutdownDeviceRestrictionScheduleController();
+  LoginState::Shutdown();
 }
 
 void DeviceDisablingManagerTestBase::CreateDeviceDisablingManager() {
   device_disabling_manager_ = std::make_unique<DeviceDisablingManager>(
-      TestingBrowserProcess::GetGlobal()->local_state(), this,
-      CrosSettings::Get(), &fake_user_manager_);
+      TestingBrowserProcess::GetGlobal()->local_state(),
+      TestingBrowserProcess::GetGlobal()
+          ->platform_part()
+          ->browser_policy_connector_ash(),
+      TestingBrowserProcess::GetGlobal()
+          ->platform_part()
+          ->device_restriction_schedule_controller(),
+      this, CrosSettings::Get(), &fake_user_manager_);
   device_disabling_manager_->Init();
 }
 
@@ -142,14 +165,15 @@ class DeviceDisablingManagerOOBETest : public DeviceDisablingManagerTestBase {
 
   void CheckWhetherDeviceDisabledDuringOOBE();
 
-  void SetDeviceDisabled(bool disabled);
+  void SetDeviceDisabled(
+      bool disabled,
+      std::optional<bool> location_tracking_enabled = std::nullopt);
 
  private:
   void OnDeviceDisabledChecked(bool device_disabled);
 
   FakeStatisticsProvider statistics_provider_;
 
-  base::RunLoop run_loop_;
   bool device_disabled_ = false;
 };
 
@@ -159,6 +183,7 @@ DeviceDisablingManagerOOBETest::DeviceDisablingManagerOOBETest() {
 }
 
 void DeviceDisablingManagerOOBETest::SetUp() {
+  DeviceDisablingManagerTestBase::SetUp();
   CreateDeviceDisablingManager();
   StatisticsProvider::SetTestProvider(&statistics_provider_);
 }
@@ -168,15 +193,23 @@ void DeviceDisablingManagerOOBETest::TearDown() {
 }
 
 void DeviceDisablingManagerOOBETest::CheckWhetherDeviceDisabledDuringOOBE() {
+  base::RunLoop run_loop;
   GetDeviceDisablingManager()->CheckWhetherDeviceDisabledDuringOOBE(
-      base::BindOnce(&DeviceDisablingManagerOOBETest::OnDeviceDisabledChecked,
-                     base::Unretained(this)));
-  run_loop_.Run();
+      base::BindOnce(
+          [](DeviceDisablingManagerOOBETest* test, base::RunLoop* run_loop,
+             bool device_disabled) {
+            test->OnDeviceDisabledChecked(device_disabled);
+            run_loop->Quit();
+          },
+          base::Unretained(this), base::Unretained(&run_loop)));
+  run_loop.Run();
 }
 
-void DeviceDisablingManagerOOBETest::SetDeviceDisabled(bool disabled) {
+void DeviceDisablingManagerOOBETest::SetDeviceDisabled(
+    bool disabled,
+    std::optional<bool> location_tracking_enabled) {
   ScopedDictPrefUpdate dict(TestingBrowserProcess::GetGlobal()->local_state(),
-                            prefs::kServerBackedDeviceState);
+                            ash::prefs::kServerBackedDeviceState);
   if (disabled) {
     dict->Set(policy::kDeviceStateMode, policy::kDeviceStateModeDisabled);
   } else {
@@ -184,12 +217,15 @@ void DeviceDisablingManagerOOBETest::SetDeviceDisabled(bool disabled) {
   }
   dict->Set(policy::kDeviceStateManagementDomain, kEnrollmentDomain);
   dict->Set(policy::kDeviceStateDisabledMessage, kDisabledMessage1);
+  if (location_tracking_enabled.has_value()) {
+    dict->Set(policy::kDeviceStateLocationTrackingEnabled,
+              location_tracking_enabled.value());
+  }
 }
 
 void DeviceDisablingManagerOOBETest::OnDeviceDisabledChecked(
     bool device_disabled) {
   device_disabled_ = device_disabled;
-  run_loop_.Quit();
 }
 
 // Verifies that the device is not considered disabled during OOBE by default.
@@ -216,35 +252,23 @@ TEST_F(DeviceDisablingManagerOOBETest, NotDisabledWhenTurnedOffBySwitch) {
   EXPECT_FALSE(device_disabled());
 }
 
-// Verifies that the device is not considered disabled during OOBE when it is
-// already enterprise enrolled, even if the device is marked as disabled.
-TEST_F(DeviceDisablingManagerOOBETest, NotDisabledWhenEnterpriseOwned) {
-  SetEnterpriseOwned();
-  SetDeviceDisabled(true);
-  CheckWhetherDeviceDisabledDuringOOBE();
-  EXPECT_FALSE(device_disabled());
-}
-
-// Verifies that the device is not considered disabled during OOBE when it is
-// already owned by a consumer, even if the device is marked as disabled.
-TEST_F(DeviceDisablingManagerOOBETest, NotDisabledWhenConsumerOwned) {
-  SetConsumerOwned();
-  SetDeviceDisabled(true);
-  CheckWhetherDeviceDisabledDuringOOBE();
-  EXPECT_FALSE(device_disabled());
-}
-
 // Verifies that the device is considered disabled during OOBE when it is marked
 // as disabled, device disabling is not turned off by flag and the device is not
 // owned yet.
 TEST_F(DeviceDisablingManagerOOBETest, ShowWhenDisabledAndNotOwned) {
   SetUnowned();
-  SetDeviceDisabled(true);
+
+  SetDeviceDisabled(true, true);
   CheckWhetherDeviceDisabledDuringOOBE();
   EXPECT_TRUE(device_disabled());
   EXPECT_EQ(kEnrollmentDomain,
             GetDeviceDisablingManager()->enrollment_domain());
   EXPECT_EQ(kDisabledMessage1, GetDeviceDisablingManager()->disabled_message());
+  EXPECT_TRUE(GetDeviceDisablingManager()->location_tracking_enabled());
+
+  SetDeviceDisabled(true, false);
+  CheckWhetherDeviceDisabledDuringOOBE();
+  EXPECT_FALSE(GetDeviceDisablingManager()->location_tracking_enabled());
 }
 
 // Base class for tests that verify device disabling behavior once the device is
@@ -265,12 +289,15 @@ class DeviceDisablingManagerTest : public DeviceDisablingManagerTestBase,
 
   // DeviceDisablingManager::Observer:
   MOCK_METHOD1(OnDisabledMessageChanged, void(const std::string&));
+  MOCK_METHOD1(OnLocationTrackingEnabledChanged, void(bool));
   MOCK_METHOD0(OnRestrictionScheduleMessageChanged, void());
 
   void MakeCrosSettingsTrusted();
 
   void SetDeviceDisabled(bool disabled);
   void SetDisabledMessage(const std::string& disabled_message);
+
+  void SetLocationTrackingEnabled(bool location_tracking_enabled);
 
  private:
   void SimulatePolicyFetch();
@@ -292,8 +319,9 @@ void DeviceDisablingManagerTest::CreateDeviceDisablingManager() {
 }
 
 void DeviceDisablingManagerTest::DestroyDeviceDisablingManager() {
-  if (GetDeviceDisablingManager())
+  if (GetDeviceDisablingManager()) {
     GetDeviceDisablingManager()->RemoveObserver(this);
+  }
   DeviceDisablingManagerTestBase::DestroyDeviceDisablingManager();
 }
 
@@ -326,6 +354,15 @@ void DeviceDisablingManagerTest::SetDisabledMessage(
   SimulatePolicyFetch();
 }
 
+void DeviceDisablingManagerTest::SetLocationTrackingEnabled(
+    bool location_tracking_enabled) {
+  device_policy_.policy_data()
+      .mutable_device_state()
+      ->mutable_disabled_state()
+      ->set_location_tracking_enabled(location_tracking_enabled);
+  SimulatePolicyFetch();
+}
+
 void DeviceDisablingManagerTest::SimulatePolicyFetch() {
   device_policy_.Build();
   session_manager_client_.set_device_policy(device_policy_.GetBlob());
@@ -342,6 +379,7 @@ TEST_F(DeviceDisablingManagerTest, NotDisabledByDefault) {
   EXPECT_CALL(*this, RestartToLoginScreen()).Times(0);
   EXPECT_CALL(*this, ShowDeviceDisabledScreen()).Times(0);
   EXPECT_CALL(*this, OnDisabledMessageChanged(_)).Times(0);
+  EXPECT_CALL(*this, OnLocationTrackingEnabledChanged(_)).Times(0);
   CreateDeviceDisablingManager();
 }
 
@@ -355,6 +393,7 @@ TEST_F(DeviceDisablingManagerTest, NotDisabledWhenExplicitlyNotDisabled) {
   EXPECT_CALL(*this, RestartToLoginScreen()).Times(0);
   EXPECT_CALL(*this, ShowDeviceDisabledScreen()).Times(0);
   EXPECT_CALL(*this, OnDisabledMessageChanged(_)).Times(0);
+  EXPECT_CALL(*this, OnLocationTrackingEnabledChanged(_)).Times(0);
   CreateDeviceDisablingManager();
 }
 
@@ -371,6 +410,7 @@ TEST_F(DeviceDisablingManagerTest,
   EXPECT_CALL(*this, RestartToLoginScreen()).Times(0);
   EXPECT_CALL(*this, ShowDeviceDisabledScreen()).Times(0);
   EXPECT_CALL(*this, OnDisabledMessageChanged(_)).Times(0);
+  EXPECT_CALL(*this, OnLocationTrackingEnabledChanged(_)).Times(0);
   CreateDeviceDisablingManager();
 }
 
@@ -384,6 +424,7 @@ TEST_F(DeviceDisablingManagerTest, NotDisabledWhenConsumerOwned) {
   EXPECT_CALL(*this, RestartToLoginScreen()).Times(0);
   EXPECT_CALL(*this, ShowDeviceDisabledScreen()).Times(0);
   EXPECT_CALL(*this, OnDisabledMessageChanged(_)).Times(0);
+  EXPECT_CALL(*this, OnLocationTrackingEnabledChanged(_)).Times(0);
   CreateDeviceDisablingManager();
 }
 
@@ -398,6 +439,7 @@ TEST_F(DeviceDisablingManagerTest, DisabledOnLoginScreen) {
   EXPECT_CALL(*this, RestartToLoginScreen()).Times(0);
   EXPECT_CALL(*this, ShowDeviceDisabledScreen()).Times(1);
   EXPECT_CALL(*this, OnDisabledMessageChanged(_)).Times(0);
+  EXPECT_CALL(*this, OnLocationTrackingEnabledChanged(_)).Times(0);
   CreateDeviceDisablingManager();
   EXPECT_EQ(kEnrollmentDomain,
             GetDeviceDisablingManager()->enrollment_domain());
@@ -417,6 +459,7 @@ TEST_F(DeviceDisablingManagerTest, DisableAndReEnableOnLoginScreen) {
   EXPECT_CALL(*this, RestartToLoginScreen()).Times(0);
   EXPECT_CALL(*this, ShowDeviceDisabledScreen()).Times(0);
   EXPECT_CALL(*this, OnDisabledMessageChanged(_)).Times(0);
+  EXPECT_CALL(*this, OnLocationTrackingEnabledChanged(_)).Times(0);
   CreateDeviceDisablingManager();
   Mock::VerifyAndClearExpectations(this);
 
@@ -426,11 +469,13 @@ TEST_F(DeviceDisablingManagerTest, DisableAndReEnableOnLoginScreen) {
   EXPECT_CALL(*this, ShowDeviceDisabledScreen()).Times(1);
   EXPECT_CALL(*this, OnDisabledMessageChanged(_)).Times(0);
   EXPECT_CALL(*this, OnDisabledMessageChanged(kDisabledMessage1)).Times(1);
+  EXPECT_CALL(*this, OnLocationTrackingEnabledChanged(_)).Times(0);
   SetDeviceDisabled(true);
   Mock::VerifyAndClearExpectations(this);
   EXPECT_EQ(kEnrollmentDomain,
             GetDeviceDisablingManager()->enrollment_domain());
   EXPECT_EQ(kDisabledMessage1, GetDeviceDisablingManager()->disabled_message());
+  EXPECT_FALSE(GetDeviceDisablingManager()->location_tracking_enabled());
 
   // Update the disabled message. Verify that the device disabled screen is
   // updated.
@@ -438,14 +483,17 @@ TEST_F(DeviceDisablingManagerTest, DisableAndReEnableOnLoginScreen) {
   EXPECT_CALL(*this, ShowDeviceDisabledScreen()).Times(0);
   EXPECT_CALL(*this, OnDisabledMessageChanged(_)).Times(0);
   EXPECT_CALL(*this, OnDisabledMessageChanged(kDisabledMessage2)).Times(1);
+  EXPECT_CALL(*this, OnLocationTrackingEnabledChanged(_)).Times(0);
   SetDisabledMessage(kDisabledMessage2);
   Mock::VerifyAndClearExpectations(this);
   EXPECT_EQ(kDisabledMessage2, GetDeviceDisablingManager()->disabled_message());
+  EXPECT_FALSE(GetDeviceDisablingManager()->location_tracking_enabled());
 
   // Mark the device as enabled again. Verify that Chrome restarts.
   EXPECT_CALL(*this, RestartToLoginScreen()).Times(1);
   EXPECT_CALL(*this, ShowDeviceDisabledScreen()).Times(0);
   EXPECT_CALL(*this, OnDisabledMessageChanged(_)).Times(0);
+  EXPECT_CALL(*this, OnLocationTrackingEnabledChanged(_)).Times(0);
   SetDeviceDisabled(false);
 }
 
@@ -462,6 +510,7 @@ TEST_F(DeviceDisablingManagerTest, DisableDuringSession) {
   EXPECT_CALL(*this, RestartToLoginScreen()).Times(0);
   EXPECT_CALL(*this, ShowDeviceDisabledScreen()).Times(0);
   EXPECT_CALL(*this, OnDisabledMessageChanged(_)).Times(0);
+  EXPECT_CALL(*this, OnLocationTrackingEnabledChanged(_)).Times(0);
   CreateDeviceDisablingManager();
   Mock::VerifyAndClearExpectations(this);
 
@@ -470,6 +519,7 @@ TEST_F(DeviceDisablingManagerTest, DisableDuringSession) {
   EXPECT_CALL(*this, ShowDeviceDisabledScreen()).Times(0);
   EXPECT_CALL(*this, OnDisabledMessageChanged(_)).Times(0);
   EXPECT_CALL(*this, OnDisabledMessageChanged(kDisabledMessage1)).Times(1);
+  EXPECT_CALL(*this, OnLocationTrackingEnabledChanged(_)).Times(0);
   SetDeviceDisabled(true);
 }
 
@@ -537,6 +587,33 @@ TEST_F(DeviceDisablingManagerTest, IsDeviceDisabledEnterpriseOwned) {
   SetDeviceDisabled(true);
 
   EXPECT_TRUE(DeviceDisablingManager::IsDeviceDisabledDuringNormalOperation());
+}
+
+TEST_F(DeviceDisablingManagerTest, LocationTracking) {
+  SetEnterpriseOwned();
+  MakeCrosSettingsTrusted();
+  SetDeviceDisabled(true);
+
+  EXPECT_CALL(*this, RestartToLoginScreen()).Times(0);
+  EXPECT_CALL(*this, ShowDeviceDisabledScreen()).Times(1);
+  EXPECT_CALL(*this, OnDisabledMessageChanged(_)).Times(testing::AnyNumber());
+  // The initial state is false.
+  EXPECT_CALL(*this, OnLocationTrackingEnabledChanged(_)).Times(0);
+  CreateDeviceDisablingManager();
+  EXPECT_FALSE(GetDeviceDisablingManager()->location_tracking_enabled());
+  Mock::VerifyAndClearExpectations(this);
+
+  // Enable location tracking.
+  EXPECT_CALL(*this, OnLocationTrackingEnabledChanged(true)).Times(1);
+  SetLocationTrackingEnabled(true);
+  EXPECT_TRUE(GetDeviceDisablingManager()->location_tracking_enabled());
+  Mock::VerifyAndClearExpectations(this);
+
+  // Disable location tracking.
+  EXPECT_CALL(*this, OnLocationTrackingEnabledChanged(false)).Times(1);
+  SetLocationTrackingEnabled(false);
+  EXPECT_FALSE(GetDeviceDisablingManager()->location_tracking_enabled());
+  Mock::VerifyAndClearExpectations(this);
 }
 
 }  // namespace system

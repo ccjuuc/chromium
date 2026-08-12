@@ -12,6 +12,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/types/strong_alias.h"
 #include "components/password_manager/core/browser/password_store/password_store.h"
 #include "components/password_manager/core/browser/password_store/password_store_backend.h"
 
@@ -21,12 +22,12 @@ class SequencedTaskRunner;
 
 namespace password_manager {
 
-struct PasswordForm;
-
+class AffiliatedMatchHelper;
 class SmartBubbleStatsStore;
 
-using PasswordMap = std::
-    map<std::string /* signon_realm */, std::vector<PasswordForm>, std::less<>>;
+using PasswordMap = std::map<std::string /* signon_realm */,
+                             std::vector<StoredCredential>,
+                             std::less<>>;
 
 // Fake password store backend to be used in tests.
 class FakePasswordStoreBackend : public PasswordStoreBackend {
@@ -49,45 +50,57 @@ class FakePasswordStoreBackend : public PasswordStoreBackend {
       scoped_refptr<base::SequencedTaskRunner> task_runner = nullptr);
   ~FakePasswordStoreBackend() override;
 
-  void Clear();
   void TriggerOnLoginsRetainedForAndroid(
-      const std::vector<PasswordForm>& password_forms);
+      const std::vector<StoredCredential>& credentials);
+  // Note: On Android, affiliations are not computed in Chrome (they are
+  // provided by GMSCore/UPM), so the test backend directly injects affiliated
+  // and grouped realms. On Desktop, affiliations are computed in Chrome via
+  // `AffiliatedMatchHelper`.
+  // Do NOT enable this method on Desktop; instead, attach a
+  // `MockAffiliatedMatchHelper` via `SetAffiliatedMatchHelper()` and use
+  // `ExpectCallToGetAffiliatedAndGrouped()`.
+#if BUILDFLAG(IS_ANDROID)
+  void SetAffiliatedAndGroupedRealms(
+      const std::string& realm,
+      const std::vector<std::string>& affiliated_realms,
+      const std::vector<std::string>& grouped_realms = {});
+#endif
   void ReturnErrorOnRequest(
-      PasswordStoreBackendError password_store_backend_error);
+      std::optional<PasswordStoreBackendError> password_store_backend_error);
+  void SetError(ActionableError error);
+  void NotifyAboutError();
+  void SetAffiliatedMatchHelper(AffiliatedMatchHelper* match_helper);
 
-  const PasswordMap& stored_passwords() const { return stored_passwords_; }
   IsAccountStore is_account_store() const { return is_account_store_; }
 
- private:
   // Implements PasswordStoreBackend interface.
-  void InitBackend(AffiliatedMatchHelper* affiliated_match_helper,
-                   RemoteChangesReceived remote_form_changes_received,
+  void InitBackend(RemoteChangesReceived remote_form_changes_received,
                    base::RepeatingClosure sync_enabled_or_disabled_cb,
                    base::OnceCallback<void(bool)> completion) override;
   void Shutdown(base::OnceClosure shutdown_completed) override;
-  bool IsAbleToSavePasswords() override;
-  void GetAllLoginsAsync(LoginsOrErrorReply callback) override;
+  ActionableError GetError() override;
+  void GetAllLoginsAsync(BackendLoginsOrErrorReply callback) override;
   void GetAllLoginsWithAffiliationAndBrandingAsync(
-      LoginsOrErrorReply callback) override;
-  void GetAutofillableLoginsAsync(LoginsOrErrorReply callback) override;
+      BackendLoginsOrErrorReply callback) override;
+  void GetAutofillableLoginsAsync(BackendLoginsOrErrorReply callback) override;
   void FillMatchingLoginsAsync(
-      LoginsOrErrorReply callback,
+      BackendLoginsOrErrorReply callback,
       bool include_psl,
       const std::vector<PasswordFormDigest>& forms) override;
-  void GetGroupedMatchingLoginsAsync(const PasswordFormDigest& form_digest,
-                                     LoginsOrErrorReply callback) override;
-  void AddLoginAsync(const PasswordForm& form,
+  void GetGroupedMatchingLoginsAsync(
+      const PasswordFormDigest& form_digest,
+      BackendLoginsOrErrorReply callback) override;
+  void AddLoginAsync(StoredCredential cred,
                      PasswordChangesOrErrorReply callback) override;
-  void UpdateLoginAsync(const PasswordForm& form,
+  void UpdateLoginAsync(StoredCredential cred,
                         PasswordChangesOrErrorReply callback) override;
   void RemoveLoginAsync(const base::Location& location,
-                        const PasswordForm& form,
+                        StoredCredential cred,
                         PasswordChangesOrErrorReply callback) override;
   void RemoveLoginsCreatedBetweenAsync(
       const base::Location& location,
       base::Time delete_begin,
       base::Time delete_end,
-      base::OnceCallback<void(bool)> sync_completion,
       PasswordChangesOrErrorReply callback) override;
   void DisableAutoSignInForOriginsAsync(
       const base::RepeatingCallback<bool(const GURL&)>& origin_filter,
@@ -102,18 +115,37 @@ class FakePasswordStoreBackend : public PasswordStoreBackend {
   // `base::SequencedTaskRunner::GetCurrentDefault` if none is injected.
   const scoped_refptr<base::SequencedTaskRunner>& GetTaskRunner() const;
 
-  LoginsResult GetAllLoginsInternal();
-  LoginsResult GetAutofillableLoginsInternal();
-  LoginsResult FillMatchingLoginsInternal(
+  // Posts `task` to the task runner and replies with its result via `callback`.
+  // If `password_store_backend_error_` has been set (e.g. via
+  // `ReturnErrorOnRequest`), skips executing `task` and asynchronously returns
+  // the simulated error instead.
+  void PostTaskAndReplyWithResultOrSimulateError(
+      base::OnceCallback<PasswordStoreChangeList()> task,
+      PasswordChangesOrErrorReply callback);
+  void PostTaskAndReplyWithResultOrSimulateError(
+      base::OnceCallback<BackendLoginsResult()> task,
+      BackendLoginsOrErrorReply callback);
+
+ private:
+  BackendLoginsResult GetAllLoginsInternal();
+  BackendLoginsResult GetAutofillableLoginsInternal();
+  BackendLoginsResult FillMatchingLoginsInternal(
       const std::vector<PasswordFormDigest>& forms,
       bool include_psl);
-  LoginsResult FillMatchingLoginsHelper(const PasswordFormDigest& form,
-                                        bool include_psl);
-  PasswordStoreChangeList AddLoginInternal(const PasswordForm& form);
-  PasswordStoreChangeList UpdateLoginInternal(const PasswordForm& form);
+  BackendLoginsResult FillMatchingLoginsHelper(const PasswordFormDigest& form,
+                                               bool include_psl);
+#if BUILDFLAG(IS_ANDROID)
+  BackendLoginsResult GetGroupedMatchingLoginsInternal(
+      const PasswordFormDigest& form_digest);
+  void AddLoginsWithMatchType(const std::vector<std::string>& realms,
+                              PasswordForm::MatchType match_type,
+                              BackendLoginsResult& results);
+#endif
+  PasswordStoreChangeList AddLoginInternal(const StoredCredential& cred);
+  PasswordStoreChangeList UpdateLoginInternal(const StoredCredential& cred);
   void DisableAutoSignInForOriginsInternal(
       const base::RepeatingCallback<bool(const GURL&)>& origin_filter);
-  PasswordStoreChangeList RemoveLoginInternal(const PasswordForm& form);
+  PasswordStoreChangeList RemoveLoginInternal(const StoredCredential& cred);
   PasswordStoreChangeList RemoveLoginsCreatedBetweenInternal(
       base::Time delete_begin,
       base::Time delete_end);
@@ -121,11 +153,16 @@ class FakePasswordStoreBackend : public PasswordStoreBackend {
   const IsAccountStore is_account_store_{false};
   const UpdateAlwaysSucceeds update_always_succeeds_{false};
 
-  raw_ptr<AffiliatedMatchHelper> match_helper_;
+  raw_ptr<AffiliatedMatchHelper> match_helper_ = nullptr;
   PasswordMap stored_passwords_;
+#if BUILDFLAG(IS_ANDROID)
+  std::map<std::string, std::vector<std::string>> affiliated_realms_;
+  std::map<std::string, std::vector<std::string>> grouped_realms_;
+#endif
   PasswordStoreBackend::RemoteChangesReceived remote_form_changes_received_;
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
   std::optional<PasswordStoreBackendError> password_store_backend_error_;
+  ActionableError actionable_error_ = ActionableError::kNoError;
   base::WeakPtrFactory<FakePasswordStoreBackend> weak_ptr_factory_{this};
 };
 

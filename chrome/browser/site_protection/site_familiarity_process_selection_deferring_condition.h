@@ -5,10 +5,13 @@
 #ifndef CHROME_BROWSER_SITE_PROTECTION_SITE_FAMILIARITY_PROCESS_SELECTION_DEFERRING_CONDITION_H_
 #define CHROME_BROWSER_SITE_PROTECTION_SITE_FAMILIARITY_PROCESS_SELECTION_DEFERRING_CONDITION_H_
 
+#include "base/feature_list.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/cancelable_task_tracker.h"
+#include "base/time/time.h"
+#include "base/timer/elapsed_timer.h"
 #include "chrome/browser/site_protection/site_familiarity_fetcher.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/safe_browsing/core/browser/db/database_manager.h"
@@ -17,6 +20,16 @@
 #include "url/origin.h"
 
 namespace site_protection {
+
+BASE_DECLARE_FEATURE(kSkipSiteFamiliarityDeferralForSameSite);
+
+inline constexpr char
+    kSiteFamiliarityDeferNavigationForDefaultSearchEngineHistogram[] =
+        "SafeBrowsing.SiteFamiliarity.DeferNavigation.DefaultSearchEngine";
+
+inline constexpr char kSiteFamiliarityDeferNavigationDurationHistogram[] =
+    "SafeBrowsing.SiteFamiliarity.DeferNavigationToComputeSiteFamiliarity."
+    "DeferDuration";
 
 // ProcessSelectionDeferringCondition which defers process-selection till the
 // site's familiarity is computed.
@@ -40,11 +53,17 @@ class SiteFamiliarityProcessSelectionDeferringCondition
   // Sets the verdict on the NavigationHandle.
   void SetVerdictOnHandle();
 
+  // Returns true if the navigation is in a cross-site subframe.
+  bool IsCrossSiteSubframe() const;
+
   SiteFamiliarityFetcher fetcher_;
   std::optional<SiteFamiliarityFetcher::Verdict> verdict_;
 
   // Callback passed to OnWillSelectFinalProcess().
   base::OnceClosure callback_;
+
+  // Timer for computing deferral duration.
+  std::optional<base::ElapsedTimer> defer_timer_;
 
   base::WeakPtrFactory<SiteFamiliarityProcessSelectionDeferringCondition>
       weak_factory_{this};

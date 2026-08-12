@@ -4,7 +4,12 @@
 
 #include "base/threading/platform_thread.h"
 
+#include <array>
+
+#include "base/bits.h"
+#include "base/no_destructor.h"
 #include "base/task/current_thread.h"
+#include "base/threading/scoped_thread_priority.h"
 #include "base/threading/thread_id_name_manager.h"
 #include "base/trace_event/trace_event.h"
 
@@ -13,10 +18,26 @@
 #endif
 
 namespace base {
-
 namespace {
 
-constinit thread_local ThreadType current_thread_type = ThreadType::kDefault;
+MessagePumpType GetCurrentMessagePumpType() {
+  // CurrentIOThread::IsSet() and CurrentUIThread::IsSet() can't both be set at
+  // the same time, so there's no precedence to worry about: both
+  // CurrentIOThread::IsSet() and CurrentUIThread::IsSet() rely on
+  // GetCurrentSequenceManagerImpl(), which returns the single SequenceManager
+  // instance bound to the current thread.
+  if (CurrentIOThread::IsSet()) {
+    return MessagePumpType::IO;
+  } else if (CurrentUIThread::IsSet()) {
+    return MessagePumpType::UI;
+  }
+  return MessagePumpType::DEFAULT;
+}
+
+internal::ThreadTypeManager* GetThreadTypeManager() {
+  constinit thread_local internal::ThreadTypeManager thread_type_manager;
+  return &thread_type_manager;
+}
 
 }  // namespace
 
@@ -25,23 +46,13 @@ void PlatformThreadId::WriteIntoTrace(perfetto::TracedValue&& context) const {
 }
 
 // static
-void PlatformThreadBase::SetCurrentThreadType(ThreadType thread_type,
-                                              bool may_change_affinity) {
-  MessagePumpType message_pump_type = MessagePumpType::DEFAULT;
-  if (CurrentIOThread::IsSet()) {
-    message_pump_type = MessagePumpType::IO;
-  } else if (CurrentUIThread::IsSet()) {
-    message_pump_type = MessagePumpType::UI;
-  }
-  CHECK_LE(thread_type, ThreadType::kMaxValue);
-  internal::SetCurrentThreadTypeImpl(thread_type, message_pump_type,
-                                     may_change_affinity);
-  current_thread_type = thread_type;
+void PlatformThreadBase::SetDefaultThreadType(ThreadType thread_type) {
+  GetThreadTypeManager()->SetDefault(thread_type);
 }
 
 // static
 ThreadType PlatformThreadBase::GetCurrentThreadType() {
-  return current_thread_type;
+  return GetThreadTypeManager()->GetCurrent();
 }
 
 // static
@@ -63,4 +74,110 @@ void PlatformThreadBase::SetNameCommon(const std::string& name) {
   ThreadIdNameManager::GetInstance()->SetName(name);
 }
 
+// static
+bool PlatformThreadBase::CurrentThreadHasLeases() {
+  return GetThreadTypeManager()->HasLeases();
+}
+
+PlatformThreadBase::RaiseThreadTypeLease::RaiseThreadTypeLease(
+    ThreadType thread_type)
+    : RaiseThreadTypeLease(thread_type, GetThreadTypeManager()) {}
+
+PlatformThreadBase::RaiseThreadTypeLease::RaiseThreadTypeLease(
+    ThreadType thread_type,
+    internal::ThreadTypeManager* manager)
+    : leased_thread_type_(thread_type), manager_(manager) {
+  // Creating a lease while a ScopedBoostPriority is active is not allowed.
+  DCHECK(!ScopedBoostablePriority::CurrentThreadHasScope());
+  manager_->AcquireRaiseLease(thread_type);
+}
+
+PlatformThreadBase::RaiseThreadTypeLease::RaiseThreadTypeLease(
+    RaiseThreadTypeLease&& other) noexcept
+    : leased_thread_type_(other.leased_thread_type_),
+      manager_(std::exchange(other.manager_, nullptr)) {}
+
+PlatformThreadBase::RaiseThreadTypeLease::~RaiseThreadTypeLease() {
+  if (manager_) {
+    // Releasing a lease while a ScopedBoostPriority is active is not allowed.
+    DCHECK(!ScopedBoostablePriority::CurrentThreadHasScope());
+    manager_->DropRaiseLease(leased_thread_type_);
+  }
+}
+
+namespace internal {
+
+void ThreadTypeManager::SetDefault(ThreadType type) {
+  CHECK_LE(type, ThreadType::kMaxValue);
+  default_thread_type_ = type;
+  MaybeUpdate();
+}
+
+ThreadType ThreadTypeManager::GetCurrent() const {
+  return effective_thread_type_.value_or(ThreadType::kDefault);
+}
+
+void ThreadTypeManager::MaybeUpdate() {
+  auto highest_lease = raise_leases_.GetHighestLease();
+  ThreadType type;
+  if (!highest_lease.has_value() && !default_thread_type_.has_value()) {
+    type = ThreadType::kDefault;
+  } else {
+    type = std::max(highest_lease.value_or(ThreadType::kBackground),
+                    default_thread_type_.value_or(ThreadType::kBackground));
+  }
+
+  if (type != effective_thread_type_) {
+    effective_thread_type_ = type;
+    SetCurrentThreadTypeImpl(effective_thread_type_.value(),
+                             GetCurrentMessagePumpType());
+  }
+}
+
+void ThreadTypeManager::AcquireRaiseLease(ThreadType type) {
+  CHECK_LE(type, ThreadType::kMaxValue);
+  raise_leases_.Acquire(type);
+  MaybeUpdate();
+}
+
+void ThreadTypeManager::DropRaiseLease(ThreadType type) {
+  CHECK_LE(type, ThreadType::kMaxValue);
+  raise_leases_.Drop(type);
+  MaybeUpdate();
+}
+
+void ThreadTypeManager::RaiseLeases::Acquire(ThreadType thread_type) {
+  // TODO(crbug.com/470337728): consider using base::EnumSet.
+  auto type = static_cast<uint32_t>(thread_type);
+  leases[type]++;
+  bitmask |= (1u << type);
+}
+
+void ThreadTypeManager::RaiseLeases::Drop(ThreadType thread_type) {
+  // TODO(crbug.com/470337728): consider using base::EnumSet.
+  auto type = static_cast<uint32_t>(thread_type);
+  leases[type]--;
+  if (leases[type] == 0) {
+    bitmask &= ~(1u << type);
+  }
+}
+
+std::optional<ThreadType> ThreadTypeManager::RaiseLeases::GetHighestLease()
+    const {
+  if (bitmask == 0) {
+    return std::nullopt;
+  }
+  return static_cast<ThreadType>(base::bits::Log2Floor(bitmask));
+}
+
+void ThreadTypeManager::SetCurrentThreadTypeImpl(
+    ThreadType thread_type,
+    MessagePumpType pump_type_hint) {
+  base::internal::SetCurrentThreadTypeImpl(thread_type, pump_type_hint);
+}
+
+bool ThreadTypeManager::HasLeases() const {
+  return raise_leases_.GetHighestLease().has_value();
+}
+}  // namespace internal
 }  // namespace base

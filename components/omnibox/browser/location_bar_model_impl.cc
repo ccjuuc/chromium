@@ -4,6 +4,8 @@
 
 #include "components/omnibox/browser/location_bar_model_impl.h"
 
+#include <string>
+
 #include "base/check.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
@@ -11,6 +13,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "components/contextual_tasks/public/features.h"
 #include "components/dom_distiller/core/url_constants.h"
 #include "components/dom_distiller/core/url_utils.h"
 #include "components/omnibox/browser/buildflags.h"
@@ -24,9 +27,12 @@
 #include "net/cert/x509_certificate.h"
 #include "net/ssl/ssl_connection_status_flags.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/text_elider.h"
 #include "ui/gfx/vector_icon_types.h"
+#include "url/gurl.h"
 #include "url/origin.h"
+#include "url/url_canon.h"
 
 #if (!BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_VR)) && !BUILDFLAG(IS_IOS)
 #include "components/omnibox/browser/vector_icons.h"  // nogncheck
@@ -44,10 +50,19 @@ LocationBarModelImpl::~LocationBarModelImpl() = default;
 
 // LocationBarModelImpl Implementation.
 std::u16string LocationBarModelImpl::GetFormattedFullURL() const {
+  if (IsContextualTasksPage()) {
+    return GetContextualTasksDisplayURL();
+  }
   return GetFormattedURL(url_formatter::kFormatUrlOmitDefaults);
 }
 
 std::u16string LocationBarModelImpl::GetURLForDisplay() const {
+  // For the contextual tasks page, apply "origin-swapping" logic in order to
+  // display the proper URL in the Omnibox.
+  if (IsContextualTasksPage()) {
+    return GetContextualTasksDisplayURL();
+  }
+
   url_formatter::FormatUrlTypes format_types =
       url_formatter::kFormatUrlOmitDefaults;
   if (delegate_->ShouldTrimDisplayUrlAfterHostName()) {
@@ -145,6 +160,14 @@ GURL LocationBarModelImpl::GetURL() const {
              : GURL(url::kAboutBlankURL);
 }
 
+bool LocationBarModelImpl::IsContextualTasksPage() const {
+  return delegate_->IsContextualTasksPage();
+}
+
+GURL LocationBarModelImpl::GetContextualTasksInnerFrameURL() const {
+  return delegate_->GetContextualTasksInnerFrameURL();
+}
+
 security_state::SecurityLevel LocationBarModelImpl::GetSecurityLevel() const {
   // When empty, assume no security style.
   if (!ShouldDisplayURL())
@@ -169,16 +192,12 @@ LocationBarModelImpl::GetPageClassification(bool is_prefetch) const {
   if (!delegate_->GetURL(&gurl)) {
     return OmniboxEventProto::OTHER;
   }
-  if (delegate_->IsNewTabPage()) {
+  if (delegate_->IsNewTabPage() || delegate_->IsNewTabPageURL(gurl)) {
     return is_prefetch ? OmniboxEventProto::NTP_ZPS_PREFETCH
                : OmniboxEventProto::INSTANT_NTP_WITH_OMNIBOX_AS_STARTING_FOCUS;
   }
   if (!gurl.is_valid()) {
     return OmniboxEventProto::INVALID_SPEC;
-  }
-  if (delegate_->IsNewTabPageURL(gurl)) {
-    return is_prefetch ? OmniboxEventProto::NTP_ZPS_PREFETCH
-                       : OmniboxEventProto::NTP;
   }
   if (gurl.spec() == url::kAboutBlankURL) {
     return OmniboxEventProto::BLANK;
@@ -234,7 +253,8 @@ const gfx::VectorIcon& LocationBarModelImpl::GetVectorIcon() const {
     return *icon_override;
 
   if (IsOfflinePage())
-    return omnibox::kOfflinePinIcon;
+    return features::IsRoundedIconsEnabled() ? omnibox::kOfflinePinFilledIcon
+                                             : omnibox::kOfflinePinOldIcon;
 #endif
 
   return location_bar_model::GetSecurityVectorIcon(
@@ -292,6 +312,13 @@ std::u16string LocationBarModelImpl::GetSecureAccessibilityText() const {
     default:
       return std::u16string();
   }
+}
+
+std::u16string LocationBarModelImpl::GetContextualTasksDisplayURL() const {
+  const auto inner_frame_url = delegate_->GetContextualTasksInnerFrameURL();
+  GURL display_url =
+      location_bar_model::GetContextualTasksDisplayURL(inner_frame_url);
+  return display_url.is_valid() ? base::UTF8ToUTF16(display_url.spec()) : u"";
 }
 
 bool LocationBarModelImpl::ShouldDisplayURL() const {

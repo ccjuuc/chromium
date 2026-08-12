@@ -10,9 +10,12 @@
 #include <memory>
 
 #include "base/compiler_specific.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/process/process_handle.h"
 #include "base/sequence_checker.h"
-#include "remoting/host/win/worker_process_launcher.h"
+#include "remoting/host/win/windows_process_delegate.h"
 
 namespace base {
 class CommandLine;
@@ -23,7 +26,7 @@ namespace remoting {
 
 // Implements logic for launching and monitoring a worker process in a different
 // session.
-class WtsSessionProcessDelegate : public WorkerProcessLauncher::Delegate {
+class WtsSessionProcessDelegate : public WindowsProcessDelegate {
  public:
   WtsSessionProcessDelegate(
       scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
@@ -48,12 +51,23 @@ class WtsSessionProcessDelegate : public WorkerProcessLauncher::Delegate {
   void CrashProcess(const base::Location& location) override;
   void KillProcess() override;
 
+  // Assigns |process| to the job object so that tests can exercise the
+  // job-object shutdown path without launching a process in another session.
+  // Returns true on success. The delegate must have been created with
+  // |launch_elevated| and the job must have been initialized.
+  bool AssignProcessToJobForTesting(base::ProcessHandle process);
+
+  // Registers |callback| to be run when the internal Core object is destroyed.
+  void SetCoreDeletedCallbackForTesting(base::OnceClosure callback);
+
  private:
   // The actual implementation resides in WtsSessionProcessDelegate::Core class.
   class Core;
   scoped_refptr<Core> core_;
 
   SEQUENCE_CHECKER(sequence_checker_);
+
+  base::WeakPtrFactory<WtsSessionProcessDelegate> weak_ptr_factory_{this};
 };
 
 }  // namespace remoting

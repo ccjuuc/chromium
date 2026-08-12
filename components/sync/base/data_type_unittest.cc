@@ -56,6 +56,17 @@ TEST(DataTypeTest, DataTypeHistogramMapping) {
   }
 }
 
+TEST(DataTypeTest, GetDataTypeFromStableIdentifier) {
+  for (DataType type : DataTypeSet::All()) {
+    SCOPED_TRACE(DataTypeToDebugString(type));
+    EXPECT_EQ(type, GetDataTypeFromStableIdentifier(
+                        DataTypeToStableIdentifier(type)));
+  }
+  EXPECT_EQ(UNSPECIFIED, GetDataTypeFromStableIdentifier(0));
+  EXPECT_EQ(UNSPECIFIED, GetDataTypeFromStableIdentifier(-1));
+  EXPECT_EQ(UNSPECIFIED, GetDataTypeFromStableIdentifier(9999));
+}
+
 TEST(DataTypeTest, DataTypeToStableIdentifier) {
   std::set<int> identifiers;
   DataTypeSet all_types = DataTypeSet::All();
@@ -142,6 +153,17 @@ TEST(DataTypeTest, DataTypeSetFromSpecificsFieldNumberList) {
   }
   EXPECT_EQ(GetDataTypeSetFromSpecificsFieldNumberList(field_numbers),
             ProtocolTypes());
+}
+
+TEST(DataTypeTest, LocalSyncSupportedTypes) {
+  EXPECT_TRUE(LocalSyncSupportedTypes().Has(BOOKMARKS));
+  EXPECT_TRUE(LocalSyncSupportedTypes().Has(PREFERENCES));
+  EXPECT_TRUE(LocalSyncSupportedTypes().Has(PASSWORDS));
+
+  EXPECT_FALSE(LocalSyncSupportedTypes().Has(ACCOUNT_SETTING));
+  EXPECT_FALSE(LocalSyncSupportedTypes().Has(APP_LIST));
+  EXPECT_FALSE(LocalSyncSupportedTypes().Has(HISTORY));
+  EXPECT_FALSE(LocalSyncSupportedTypes().Has(THEMES_ANDROID));
 }
 
 }  // namespace

@@ -29,7 +29,7 @@ public class PageInfoConnectionSecurityController implements PageInfoSubpageCont
     private final PageInfoRowView mRowView;
     private @Nullable ConnectionSecurityView mActiveView;
     private final ConnectionSecurityView.ViewParams mViewParams;
-    private final long mNativeConnectionSecurityController;
+    private long mNativeConnectionSecurityController;
 
     public PageInfoConnectionSecurityController(
             PageInfoMainController mainController,
@@ -75,6 +75,8 @@ public class PageInfoConnectionSecurityController implements PageInfoSubpageCont
     }
 
     private void loadIdentityInfo() {
+        if (mNativeConnectionSecurityController == 0) return;
+
         PageInfoConnectionSecurityControllerJni.get()
                 .loadIdentityInfo(mNativeConnectionSecurityController);
     }
@@ -87,10 +89,11 @@ public class PageInfoConnectionSecurityController implements PageInfoSubpageCont
         loadIdentityInfo();
         PageInfoRowView.ViewParams rowParams = new PageInfoRowView.ViewParams();
         rowParams.title = summary;
-        rowParams.iconResId = R.drawable.lock;
+        rowParams.iconResId = R.drawable.ic_lock_24dp;
         rowParams.visible = summary != null;
         rowParams.clickCallback = this::launchSubpage;
         mRowView.setParams(rowParams);
+        mMainController.updateConnectionWrapperVisibility();
     }
 
     /** Called by PageInfoController to show the security info directly within the PageInfo UI. */
@@ -141,6 +144,8 @@ public class PageInfoConnectionSecurityController implements PageInfoSubpageCont
     public void updateSubpageIfNeeded() {}
 
     public void resetCertDecision() {
+        if (mNativeConnectionSecurityController == 0) return;
+
         PageInfoConnectionSecurityControllerJni.get()
                 .resetCertDecisions(mNativeConnectionSecurityController);
         mMainController.dismiss();
@@ -148,6 +153,7 @@ public class PageInfoConnectionSecurityController implements PageInfoSubpageCont
 
     public void destroy() {
         PageInfoConnectionSecurityControllerJni.get().destroy(mNativeConnectionSecurityController);
+        mNativeConnectionSecurityController = 0;
     }
 
     @NativeMethods

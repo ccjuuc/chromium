@@ -22,6 +22,7 @@
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/base64.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -66,6 +67,24 @@ TEST(HTTPParsersTest, ParseCacheControl) {
   EXPECT_EQ(base::TimeDelta(), header.max_age.value());
   EXPECT_EQ(std::nullopt, header.stale_while_revalidate);
 
+  header = ParseCacheControlDirectives(AtomicString("max-age=\"0\""),
+                                       AtomicString());
+  EXPECT_TRUE(header.parsed);
+  EXPECT_FALSE(header.contains_no_cache);
+  EXPECT_FALSE(header.contains_no_store);
+  EXPECT_FALSE(header.contains_must_revalidate);
+  EXPECT_EQ(base::TimeDelta(), header.max_age.value());
+  EXPECT_EQ(std::nullopt, header.stale_while_revalidate);
+
+  header =
+      ParseCacheControlDirectives(AtomicString("max-age=\"0"), AtomicString());
+  EXPECT_TRUE(header.parsed);
+  EXPECT_FALSE(header.contains_no_cache);
+  EXPECT_FALSE(header.contains_no_store);
+  EXPECT_FALSE(header.contains_must_revalidate);
+  EXPECT_EQ(base::TimeDelta(), header.max_age.value());
+  EXPECT_EQ(std::nullopt, header.stale_while_revalidate);
+
   header = ParseCacheControlDirectives(AtomicString("max-age"), AtomicString());
   EXPECT_TRUE(header.parsed);
   EXPECT_FALSE(header.contains_no_cache);
@@ -75,6 +94,15 @@ TEST(HTTPParsersTest, ParseCacheControl) {
   EXPECT_EQ(std::nullopt, header.stale_while_revalidate);
 
   header = ParseCacheControlDirectives(AtomicString("max-age=0, no-cache"),
+                                       AtomicString());
+  EXPECT_TRUE(header.parsed);
+  EXPECT_TRUE(header.contains_no_cache);
+  EXPECT_FALSE(header.contains_no_store);
+  EXPECT_FALSE(header.contains_must_revalidate);
+  EXPECT_EQ(base::TimeDelta(), header.max_age.value());
+  EXPECT_EQ(std::nullopt, header.stale_while_revalidate);
+
+  header = ParseCacheControlDirectives(AtomicString("max-age=\"0\", no-cache"),
                                        AtomicString());
   EXPECT_TRUE(header.parsed);
   EXPECT_TRUE(header.contains_no_cache);
@@ -94,6 +122,24 @@ TEST(HTTPParsersTest, ParseCacheControl) {
 
   header =
       ParseCacheControlDirectives(AtomicString("nonsense"), AtomicString());
+  EXPECT_TRUE(header.parsed);
+  EXPECT_FALSE(header.contains_no_cache);
+  EXPECT_FALSE(header.contains_no_store);
+  EXPECT_FALSE(header.contains_must_revalidate);
+  EXPECT_EQ(std::nullopt, header.max_age);
+  EXPECT_EQ(std::nullopt, header.stale_while_revalidate);
+
+  header =
+      ParseCacheControlDirectives(AtomicString("nonsense="), AtomicString());
+  EXPECT_TRUE(header.parsed);
+  EXPECT_FALSE(header.contains_no_cache);
+  EXPECT_FALSE(header.contains_no_store);
+  EXPECT_FALSE(header.contains_must_revalidate);
+  EXPECT_EQ(std::nullopt, header.max_age);
+  EXPECT_EQ(std::nullopt, header.stale_while_revalidate);
+
+  header =
+      ParseCacheControlDirectives(AtomicString("nonsense=\""), AtomicString());
   EXPECT_TRUE(header.parsed);
   EXPECT_FALSE(header.contains_no_cache);
   EXPECT_FALSE(header.contains_no_store);
@@ -311,6 +357,7 @@ TEST(HTTPParsersTest, HTTPToken) {
 
 TEST(HTTPParsersTest, ExtractMIMETypeFromMediaType) {
   const AtomicString text_html("text/html");
+  const AtomicString text_plain("text/plain");
 
   EXPECT_EQ(text_html, ExtractMIMETypeFromMediaType(AtomicString("text/html")));
   EXPECT_EQ(text_html, ExtractMIMETypeFromMediaType(
@@ -332,27 +379,30 @@ TEST(HTTPParsersTest, ExtractMIMETypeFromMediaType) {
   EXPECT_EQ(text_html, ExtractMIMETypeFromMediaType(
                            AtomicString("text/html ; charset=iso-8859-1")));
 
-  // Non-standard multiple type/subtype listing using a comma as a separator
-  // is accepted.
-  EXPECT_EQ(text_html,
+  // Multiple type/subtype listing using a comma as a separator. The last valid
+  // entry wins.
+  EXPECT_EQ(text_plain,
             ExtractMIMETypeFromMediaType(AtomicString("text/html,text/plain")));
-  EXPECT_EQ(text_html, ExtractMIMETypeFromMediaType(
-                           AtomicString("text/html , text/plain")));
-  EXPECT_EQ(text_html, ExtractMIMETypeFromMediaType(
-                           AtomicString("text/html\t,\ttext/plain")));
-  EXPECT_EQ(text_html, ExtractMIMETypeFromMediaType(AtomicString(
-                           "text/html,text/plain;charset=iso-8859-1")));
+  EXPECT_EQ(text_plain, ExtractMIMETypeFromMediaType(
+                            AtomicString("text/html , text/plain")));
+  EXPECT_EQ(text_plain, ExtractMIMETypeFromMediaType(
+                            AtomicString("text/html\t,\ttext/plain")));
+  EXPECT_EQ(text_plain, ExtractMIMETypeFromMediaType(AtomicString(
+                            "text/html,text/plain;charset=iso-8859-1")));
 
-  // Preserves case.
-  EXPECT_EQ("tExt/hTMl",
-            ExtractMIMETypeFromMediaType(AtomicString("tExt/hTMl")));
+  // Converts to lowercase for consistency between Blink and ORB.
+  EXPECT_EQ(text_html, ExtractMIMETypeFromMediaType(AtomicString("tExt/hTMl")));
 
-  EXPECT_EQ(g_empty_string,
+  // Unusual valid and invalid MIME type declarations.
+  EXPECT_EQ(text_html,
             ExtractMIMETypeFromMediaType(AtomicString(", text/html")));
   EXPECT_EQ(g_empty_string,
             ExtractMIMETypeFromMediaType(AtomicString("; text/html")));
 
   // If no normalization is required, the same AtomicString should be returned.
+  // Note: Since net::HttpUtil converts to lowercase and returns a new
+  // AtomicString, we do not expect the same implementation pointer if it is
+  // modified. But for already lowercase "text/html", it should still match.
   const AtomicString& passthrough = ExtractMIMETypeFromMediaType(text_html);
   EXPECT_EQ(text_html.Impl(), passthrough.Impl());
 }
@@ -369,8 +419,9 @@ TEST(HTTPParsersTest, MinimizedMIMEType) {
 
 TEST(HTTPParsersTest, ExtractMIMETypeFromMediaTypeInvalidInput) {
   // extractMIMETypeFromMediaType() returns the string before the first
-  // semicolon after trimming OWSes at the head and the tail even if the
-  // string doesn't conform to the media-type ABNF defined in the RFC 7231.
+  // semicolon after trimming OWSes (Optional White Spaces) at the head and the
+  // tail even if the string doesn't conform to the media-type ABNF defined in
+  // the RFC 7231.
 
   // These behaviors could be fixed later when ready.
 
@@ -378,12 +429,13 @@ TEST(HTTPParsersTest, ExtractMIMETypeFromMediaTypeInvalidInput) {
   EXPECT_EQ(AtomicString("\r\ntext/html\r\n"),
             ExtractMIMETypeFromMediaType(AtomicString("\r\ntext/html\r\n")));
   // U+2003, EM SPACE (UTF-8: E2 80 83).
-  EXPECT_EQ(AtomicString::FromUTF8("\xE2\x80\x83text/html"),
+  EXPECT_EQ(AtomicString::FromUtf8("\xE2\x80\x83text/html"),
             ExtractMIMETypeFromMediaType(
-                AtomicString::FromUTF8("\xE2\x80\x83text/html")));
+                AtomicString::FromUtf8("\xE2\x80\x83text/html")));
 
-  // Invalid type/subtype.
-  EXPECT_EQ(AtomicString("a"), ExtractMIMETypeFromMediaType(AtomicString("a")));
+  // Invalid type/subtype is rejected because it doesn't contain a slash, so
+  // net::HttpUtil::ParseMimeType returns false, leading to g_empty_string.
+  EXPECT_EQ(g_empty_string, ExtractMIMETypeFromMediaType(AtomicString("a")));
 
   // Invalid parameters.
   EXPECT_EQ(AtomicString("text/html"),
@@ -393,20 +445,26 @@ TEST(HTTPParsersTest, ExtractMIMETypeFromMediaTypeInvalidInput) {
   EXPECT_EQ(AtomicString("text/html"),
             ExtractMIMETypeFromMediaType(AtomicString("text/html; = = = ")));
 
-  // Only OWSes at either the beginning or the end of the type/subtype
-  // portion.
-  EXPECT_EQ(AtomicString("text / html"),
+  // net::HttpUtil::ParseMimeType rejects spaces before the slash because the
+  // type/subtype portion is parsed up to the first space/tab character.
+  // Therefore "text" is treated as the MIME type and lacks a slash, so it is
+  // rejected.
+  EXPECT_EQ(g_empty_string,
             ExtractMIMETypeFromMediaType(AtomicString("text / html")));
-  EXPECT_EQ(AtomicString("t e x t / h t m l"),
+  EXPECT_EQ(g_empty_string,
             ExtractMIMETypeFromMediaType(AtomicString("t e x t / h t m l")));
 
+  // net::HttpUtil::ParseMimeType does not perform strict token validation
+  // on other invalid characters like newlines or non-standard whitespaces if
+  // they appear in the middle without hitting space, tab, semicolon or open
+  // parenthesis. Thus, these are returned as-is.
   EXPECT_EQ(AtomicString("text\r\n/\nhtml"),
             ExtractMIMETypeFromMediaType(AtomicString("text\r\n/\nhtml")));
   EXPECT_EQ(AtomicString("text\n/\nhtml"),
             ExtractMIMETypeFromMediaType(AtomicString("text\n/\nhtml")));
-  EXPECT_EQ(AtomicString::FromUTF8("text\xE2\x80\x83/html"),
+  EXPECT_EQ(AtomicString::FromUtf8("text\xE2\x80\x83/html"),
             ExtractMIMETypeFromMediaType(
-                AtomicString::FromUTF8("text\xE2\x80\x83/html")));
+                AtomicString::FromUtf8("text\xE2\x80\x83/html")));
 }
 
 TEST(HTTPParsersTest, ParseHTTPRefresh) {
@@ -426,7 +484,7 @@ TEST(HTTPParsersTest, ParseHTTPRefresh) {
   EXPECT_EQ(base::Seconds(1), delay);
   EXPECT_EQ("dest", url);
   EXPECT_TRUE(
-      ParseHTTPRefresh("1 ;\nurl=dest", IsASCIISpace<UChar>, delay, url));
+      ParseHTTPRefresh("1 ;\nurl=dest", IsAsciiSpace<UChar>, delay, url));
   EXPECT_EQ(base::Seconds(1), delay);
   EXPECT_EQ("dest", url);
   EXPECT_TRUE(ParseHTTPRefresh("1 ;\nurl=dest", nullptr, delay, url));
@@ -438,20 +496,20 @@ TEST(HTTPParsersTest, ParseHTTPRefresh) {
   EXPECT_EQ("dest", url);
 
   EXPECT_TRUE(
-      ParseHTTPRefresh("10\nurl=dest", IsASCIISpace<UChar>, delay, url));
+      ParseHTTPRefresh("10\nurl=dest", IsAsciiSpace<UChar>, delay, url));
   EXPECT_EQ(base::Seconds(10), delay);
   EXPECT_EQ("dest", url);
 
   EXPECT_TRUE(
-      ParseHTTPRefresh("1.5; url=dest", IsASCIISpace<UChar>, delay, url));
+      ParseHTTPRefresh("1.5; url=dest", IsAsciiSpace<UChar>, delay, url));
   EXPECT_EQ(base::Seconds(1), delay);
   EXPECT_EQ("dest", url);
   EXPECT_TRUE(
-      ParseHTTPRefresh("1.5.9; url=dest", IsASCIISpace<UChar>, delay, url));
+      ParseHTTPRefresh("1.5.9; url=dest", IsAsciiSpace<UChar>, delay, url));
   EXPECT_EQ(base::Seconds(1), delay);
   EXPECT_EQ("dest", url);
   EXPECT_TRUE(
-      ParseHTTPRefresh("7..; url=dest", IsASCIISpace<UChar>, delay, url));
+      ParseHTTPRefresh("7..; url=dest", IsAsciiSpace<UChar>, delay, url));
   EXPECT_EQ(base::Seconds(7), delay);
   EXPECT_EQ("dest", url);
 }
@@ -533,7 +591,8 @@ void testServerTimingHeader(const char* headerValue,
   for (const auto& header : *results) {
     Vector<String> expectedResult = expectedResults[i++];
     EXPECT_EQ(header->Name(), expectedResult[0]);
-    EXPECT_EQ(header->Duration(), expectedResult[1].ToDouble());
+    EXPECT_EQ(header->Duration(),
+              StringToDouble(expectedResult[1]).value_or(0));
     EXPECT_EQ(header->Description(), expectedResult[2]);
   }
 }
@@ -1067,7 +1126,7 @@ TEST(NoVarySearchPrefetchEnabledTest, ParsingNVSReturnsDefaultURLVariance) {
       "Set-Cookie: a\r\n"
       "Set-Cookie: b\r\n\r\n";
   const auto parsed_headers =
-      ParseHeaders(String::FromUTF8(headers), KURL("https://a.com"));
+      ParseHeaders(String::FromUtf8(headers), KURL("https://a.com"));
 
   ASSERT_TRUE(parsed_headers);
   ASSERT_TRUE(parsed_headers->no_vary_search_with_parse_error);

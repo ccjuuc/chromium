@@ -74,6 +74,10 @@ config("mediapipe_flags") {
   }
 }
 
+config("com_google_audio_tools_config") {
+  include_dirs = [ "src/third_party/com_google_audio_tools" ]
+}
+
 proto_library("any_lite_proto_impl") {
   proto_in_dir = "shims/protobuf"
   cc_generator_options = "lite=true:"
@@ -176,7 +180,7 @@ source_set("com_google_audio_tools_portable") {
     "src/third_party/com_google_audio_tools/audio/dsp/portable/number_util.c",
     "src/third_party/com_google_audio_tools/audio/dsp/portable/number_util.h",
   ]
-  include_dirs = [ "src/third_party/com_google_audio_tools" ]
+  public_configs = [ ":com_google_audio_tools_config" ]
 }
 source_set("com_google_audio_tools") {
   sources = [
@@ -203,13 +207,15 @@ source_set("com_google_audio_tools") {
     ":mediapipe_shims",
   ]
 
-  # With clang modules, these are unneccesary.
-  if (is_win && !use_clang_modules) {
-    cflags = [ "-permissive" ]
+  if (is_win) {
+    if (!use_clang_modules) {
+      # With clang modules, this is unneccesary.
+      cflags = [ "-permissive" ]
+    }
     defines = [ "_USE_MATH_DEFINES" ]
   }
   public_deps = [ "//third_party/abseil-cpp:absl" ]
-  include_dirs = [ "src/third_party/com_google_audio_tools" ]
+  public_configs = [ ":com_google_audio_tools_config" ]
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [
     "//build/config/compiler:no_chromium_code",
@@ -263,13 +269,14 @@ tflite_source_set("mediapipe_tasks_always_link") {
     "src/mediapipe/util/time_series_util.h",
   ]
 
-  # TODO(b/283522287): Enable XNNPACK in MediaPipe on Windows. XNNPACK in TFLite is exposed through a C API and something is not working correctly in linking on Windows.
+  # TODO(b/283522287): Enable XNNPACK in MediaPipe on Windows. XNNPACK in TFLite
+  # is exposed through a C API and something is not working correctly in linking
+  # on Windows.
   if (build_tflite_with_xnnpack && !is_win) {
     sources +=
         [ "src/mediapipe/calculators/tensor/inference_calculator_xnnpack.cc" ]
   }
 
-  include_dirs = [ "src/third_party/com_google_audio_tools" ]
   deps = [
     ":com_google_audio_tools",
     ":mediapipe_flatbuffer_schema",
@@ -662,6 +669,8 @@ tflite_static_library("mediapipe_tasks") {
     "src/mediapipe/tasks/cc/core/base_task_api.h",
     "src/mediapipe/tasks/cc/core/external_file_handler.cc",
     "src/mediapipe/tasks/cc/core/external_file_handler.h",
+    "src/mediapipe/tasks/cc/core/logging/factory/logging_factory.cc",
+    "src/mediapipe/tasks/cc/core/logging/factory/logging_factory.h",
     "src/mediapipe/tasks/cc/core/model_asset_bundle_resources.cc",
     "src/mediapipe/tasks/cc/core/model_asset_bundle_resources.h",
     "src/mediapipe/tasks/cc/core/model_resources.cc",

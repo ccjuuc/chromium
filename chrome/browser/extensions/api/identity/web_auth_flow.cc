@@ -40,10 +40,11 @@
 #else
 static_assert(BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS));
 #include "base/functional/callback_forward.h"
+#include "base/functional/callback_helpers.h"
 #include "chrome/browser/android/tab_android.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
-#include "chrome/browser/ui/tabs/tab_list_interface.h"
 #endif
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
@@ -71,8 +72,9 @@ WebAuthFlow::WebAuthFlow(
       timeout_for_non_interactive_(timeout_for_non_interactive),
       non_interactive_timeout_timer_(std::make_unique<base::OneShotTimer>()),
       popup_bounds_(popup_bounds) {
-  TRACE_EVENT_BEGIN("identity", "WebAuthFlow",
-                    perfetto::Track::FromPointer(this));
+  TRACE_EVENT_BEGIN(
+      "identity", "WebAuthFlow",
+      perfetto::NamedTrack::FromPointer("extensions::WebAuthFlow", this));
   if (timeout_for_non_interactive_) {
     DCHECK_GE(*timeout_for_non_interactive_, base::TimeDelta());
     DCHECK_LE(*timeout_for_non_interactive_, base::Minutes(1));
@@ -88,8 +90,7 @@ WebAuthFlow::~WebAuthFlow() {
   DCHECK(!delegate_);
   BrowserWindowInterface* popup_browser =
       web_contents()
-          ? extensions::browser_window_util::GetBrowserForTabContents(
-                *web_contents())
+          ? browser_window_util::GetBrowserForTabContents(*web_contents())
           : nullptr;
   if (popup_browser) {
     popup_browser->GetWindow()->Close();
@@ -105,7 +106,8 @@ WebAuthFlow::~WebAuthFlow() {
   // below may generate notifications.
   WebContentsObserver::Observe(nullptr);
 
-  TRACE_EVENT_END("identity", perfetto::Track::FromPointer(this));
+  TRACE_EVENT_END("identity", perfetto::NamedTrack::FromPointer(
+                                  "extensions::WebAuthFlow", this));
 }
 
 void WebAuthFlow::SetClockForTesting(
@@ -169,15 +171,27 @@ void WebAuthFlow::CloseInfoBar() {
 #if BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
 void WebAuthFlow::OnBrowserWindowInterfaceInitialized(
     BrowserWindowInterface* browser) {
+  if (!browser) {
+    delegate_->OnAuthFlowFailure(WebAuthFlow::Failure::CANNOT_CREATE_WINDOW);
+    return;
+  }
+
   TabModel* tab_model =
       TabModelList::FindTabModelWithWindowSessionId(browser->GetSessionID());
-  // TODO(crbug.com/434156398): Update the CreateTab() signature to accept
-  // std::unique_ptr<WebContents>.
   tab_model->CreateTab(
       TabAndroid::FromWebContents(tab_model->GetActiveWebContents()),
-      web_contents_.release(), TabModel::kInvalidIndex,
+      std::move(web_contents_), TabModel::kInvalidIndex,
       TabModel::TabLaunchType::FROM_RECENT_TABS_FOREGROUND,
       /*should_pin=*/false);
+
+  if (popup_displayed_callback_for_testing_) {
+    std::move(popup_displayed_callback_for_testing_).Run();
+  }
+}
+
+void WebAuthFlow::SetPopupDisplayedCallbackForTesting(
+    base::OnceClosure callback) {
+  popup_displayed_callback_for_testing_ = std::move(callback);
 }
 #endif
 
@@ -188,21 +202,22 @@ bool WebAuthFlow::DisplayAuthPageInPopupWindow() {
   }
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-  Browser::CreateParams browser_params(Browser::TYPE_POPUP, profile_,
-                                       user_gesture_);
+  BrowserWindowCreateParams browser_params(BrowserWindowInterface::TYPE_POPUP,
+                                           profile_, user_gesture_);
   browser_params.omit_from_session_restore = true;
   browser_params.should_trigger_session_restore = false;
   if (popup_bounds_.has_value()) {
     browser_params.initial_bounds = popup_bounds_.value();
   }
 
-  Browser* browser = Browser::Create(browser_params);
+  Browser* browser = CreateBrowserWindow(std::move(browser_params))
+                         ->GetBrowserForMigrationOnly();
   browser->tab_strip_model()->AddWebContents(
       std::move(web_contents_), /*index=*/0,
       ui::PageTransition::PAGE_TRANSITION_AUTO_TOPLEVEL,
       AddTabTypes::ADD_ACTIVE);
 
-  browser->window()->Show();
+  browser->GetWindow()->Show();
 #else
   static_assert(BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS));
   BrowserWindowCreateParams params(BrowserWindowInterface::TYPE_POPUP,
@@ -295,8 +310,9 @@ void WebAuthFlow::WebContentsDestroyed() {
 }
 
 void WebAuthFlow::TitleWasSet(content::NavigationEntry* entry) {
-  if (delegate_)
+  if (delegate_) {
     delegate_->OnAuthFlowTitleChange(base::UTF16ToUTF8(entry->GetTitle()));
+  }
 }
 
 void WebAuthFlow::DidStopLoading() {
@@ -328,9 +344,10 @@ void WebAuthFlow::DidFinishNavigation(
 
   // Websites may create and remove <iframe> during the auth flow. In
   // particular, to integrate CAPTCHA tests. Chrome shouldn't abort the auth
-  // flow if a navigation failed in a sub-frame. https://crbug.com/1049565.
-  if (!navigation_handle->IsInPrimaryMainFrame())
+  // flow if a navigation failed in a sub-frame. https://crbug.com/40672617.
+  if (!navigation_handle->IsInPrimaryMainFrame()) {
     return;
+  }
 
   if (delegate_) {
     delegate_->OnNavigationFinished(navigation_handle);
@@ -365,16 +382,18 @@ void WebAuthFlow::DidFinishNavigation(
       // response headers.
     } else {
       failed = true;
-      TRACE_EVENT_INSTANT("identity", "DidFinishNavigationFailure",
-                          perfetto::Track::FromPointer(this), "error_code",
-                          navigation_handle->GetNetErrorCode());
+      TRACE_EVENT_INSTANT(
+          "identity", "DidFinishNavigationFailure",
+          perfetto::NamedTrack::FromPointer("extensions::WebAuthFlow", this),
+          "error_code", navigation_handle->GetNetErrorCode());
     }
   } else if (navigation_handle->GetResponseHeaders() &&
              navigation_handle->GetResponseHeaders()->response_code() >= 400) {
     failed = true;
     TRACE_EVENT_INSTANT(
         "identity", "DidFinishNavigationFailure",
-        perfetto::Track::FromPointer(this), "response_code",
+        perfetto::NamedTrack::FromPointer("extensions::WebAuthFlow", this),
+        "response_code",
         navigation_handle->GetResponseHeaders()->response_code());
   }
 
@@ -393,8 +412,13 @@ void WebAuthFlow::OnProfileWillBeDestroyed(Profile* profile) {
   // already observe Profile destruction, so we can just be silent here.
   delegate_ = nullptr;
 
-  // Destroy the WebContents so that they don't outlive the profile.
-  if (web_contents()) {
+  BrowserWindowInterface* popup_browser =
+      web_contents()
+          ? browser_window_util::GetBrowserForTabContents(*web_contents())
+          : nullptr;
+  if (popup_browser) {
+    popup_browser->GetWindow()->Close();
+  } else if (web_contents()) {
     web_contents()->Close();
   }
 

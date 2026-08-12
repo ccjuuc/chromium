@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.!
 
-#include <iostream>
-
-#include "absl/memory/memory.h"
 #include "filesystem.h"
+
+#include <fstream>
+#include <iostream>
+#include <memory>
+
+#include "absl/status/status.h"
+#include "absl/strings/string_view.h"
 #include "util.h"
 
 #if defined(OS_WIN) && defined(UNICODE) && defined(_UNICODE)
@@ -29,30 +33,32 @@ namespace filesystem {
 
 class PosixReadableFile : public ReadableFile {
  public:
-  PosixReadableFile(absl::string_view filename, bool is_binary = false)
-      : is_(filename.empty()
-                ? &std::cin
-                : new std::ifstream(WPATH(filename),
-                                    is_binary ? std::ios::binary | std::ios::in
-                                              : std::ios::in)) {
-    if (!*is_)
-      status_ = util::StatusBuilder(util::StatusCode::kNotFound, GTL_LOC)
+  explicit PosixReadableFile(absl::string_view filename,
+                             bool is_binary = false) {
+    if (filename.empty()) {
+      is_ = &std::cin;
+    } else {
+      file_.open(WPATH(filename),
+                 is_binary ? std::ios::binary | std::ios::in : std::ios::in);
+      is_ = &file_;
+    }
+    if (!*is_ || ((is_->peek() != 0) && is_->fail())) {
+      status_ = absl::StatusBuilder(absl::StatusCode::kNotFound)
                 << "\"" << filename.data() << "\": " << util::StrError(errno);
+    }
   }
 
-  ~PosixReadableFile() {
-    if (is_ != &std::cin) delete is_;
-  }
+  ~PosixReadableFile() override = default;
 
-  util::Status status() const { return status_; }
+  absl::Status status() const override { return status_; }
 
-  bool ReadLine(std::string *line) {
+  bool ReadLine(std::string* line) override {
     return static_cast<bool>(std::getline(*is_, *line));
   }
 
-  bool ReadAll(std::string *line) {
+  bool ReadAll(std::string* line) override {
     if (is_ == &std::cin) {
-      LOG(ERROR) << "ReadAll is not supported for stdin.";
+      ABSL_LOG(ERROR) << "ReadAll is not supported for stdin.";
       return false;
     }
     line->assign(std::istreambuf_iterator<char>(*is_),
@@ -61,40 +67,45 @@ class PosixReadableFile : public ReadableFile {
   }
 
  private:
-  util::Status status_;
-  std::istream *is_;
+  absl::Status status_;
+  std::ifstream file_;
+  std::istream* is_;
 };
 
 class PosixWritableFile : public WritableFile {
  public:
-  PosixWritableFile(absl::string_view filename, bool is_binary = false)
-      : os_(filename.empty()
-                ? &std::cout
-                : new std::ofstream(WPATH(filename),
-                                    is_binary ? std::ios::binary | std::ios::out
-                                              : std::ios::out)) {
-    if (!*os_)
-      status_ =
-          util::StatusBuilder(util::StatusCode::kPermissionDenied, GTL_LOC)
-          << "\"" << filename.data() << "\": " << util::StrError(errno);
+  explicit PosixWritableFile(absl::string_view filename,
+                             bool is_binary = false) {
+    if (filename.empty()) {
+      os_ = &std::cout;
+    } else {
+      file_.open(WPATH(filename),
+                 is_binary ? std::ios::binary | std::ios::out : std::ios::out);
+      os_ = &file_;
+    }
+    if (!*os_) {
+      status_ = absl::StatusBuilder(absl::StatusCode::kPermissionDenied)
+                << "\"" << filename.data() << "\": " << util::StrError(errno);
+    }
   }
 
-  ~PosixWritableFile() {
-    if (os_ != &std::cout) delete os_;
-  }
+  ~PosixWritableFile() override = default;
 
-  util::Status status() const { return status_; }
+  absl::Status status() const override { return status_; }
 
-  bool Write(absl::string_view text) {
+  bool Write(absl::string_view text) override {
     os_->write(text.data(), text.size());
     return os_->good();
   }
 
-  bool WriteLine(absl::string_view text) { return Write(text) && Write("\n"); }
+  bool WriteLine(absl::string_view text) override {
+    return Write(text) && Write("\n");
+  }
 
  private:
-  util::Status status_;
-  std::ostream *os_;
+  absl::Status status_;
+  std::ofstream file_;
+  std::ostream* os_;
 };
 
 using DefaultReadableFile = PosixReadableFile;
@@ -102,12 +113,12 @@ using DefaultWritableFile = PosixWritableFile;
 
 std::unique_ptr<ReadableFile> NewReadableFile(absl::string_view filename,
                                               bool is_binary) {
-  return absl::make_unique<DefaultReadableFile>(filename, is_binary);
+  return std::make_unique<DefaultReadableFile>(filename, is_binary);
 }
 
 std::unique_ptr<WritableFile> NewWritableFile(absl::string_view filename,
                                               bool is_binary) {
-  return absl::make_unique<DefaultWritableFile>(filename, is_binary);
+  return std::make_unique<DefaultWritableFile>(filename, is_binary);
 }
 
 }  // namespace filesystem

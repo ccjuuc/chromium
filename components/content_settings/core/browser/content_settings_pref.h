@@ -87,12 +87,13 @@ class ContentSettingsPref {
   void ReadContentSettingsFromPref();
   // A helper function to read settings from a dictionary.
   void ReadSettingsFromDictionary(
-      const base::Value::Dict& all_settings_dictionary,
+      const base::DictValue& all_settings_dictionary,
       prefs::DictionaryValueUpdate* mutable_settings)
       EXCLUSIVE_LOCKS_REQUIRED(value_map_.GetLock());
   // Helper function to determine if the setting should be removed.
-  bool ShouldRemoveSetting(base::Time expiration,
-                           content_settings::mojom::SessionModel session_model);
+  bool ShouldRemoveSetting(
+      base::Time expiration,
+      std::optional<content_settings::mojom::SessionModel> session_model);
 
   // Callback for changes in the pref with the same name.
   void OnPrefChanged();

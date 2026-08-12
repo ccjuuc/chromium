@@ -10,6 +10,7 @@ import 'chrome://resources/cr_components/managed_footnote/managed_footnote.js';
 import 'chrome://resources/cr_elements/cr_button/cr_button.js';
 import 'chrome://resources/cr_elements/cr_infinite_list/cr_infinite_list.js';
 
+import {ColorChangeUpdater, COLORS_CSS_SELECTOR} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
 import {getInstance as getAnnouncerInstance} from 'chrome://resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import type {CrInfiniteListElement} from 'chrome://resources/cr_elements/cr_infinite_list/cr_infinite_list.js';
 import {getToastManager} from 'chrome://resources/cr_elements/cr_toast/cr_toast_manager.js';
@@ -21,9 +22,9 @@ import {PromiseResolver} from 'chrome://resources/js/promise_resolver.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
-import {BrowserProxy} from './browser_proxy.js';
 import type {MojomData} from './data.js';
-import type {PageCallbackRouter, PageHandlerInterface} from './downloads.mojom-webui.js';
+import {browserProxyFactory} from './downloads.mojom-webui.js';
+import type {BrowserProxy} from './downloads.mojom-webui.js';
 import {getCss} from './manager.css.js';
 import {getHtml} from './manager.html.js';
 import {SearchService} from './search_service.js';
@@ -32,7 +33,7 @@ import type {DownloadsToolbarElement} from './toolbar.js';
 export interface DownloadsManagerElement {
   $: {
     toolbar: DownloadsToolbarElement,
-    downloadsList: CrInfiniteListElement,
+    downloadsList: CrInfiniteListElement<MojomData>,
     mainContainer: HTMLElement,
   };
 }
@@ -64,11 +65,6 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
     return {
       hasDownloads_: {type: Boolean},
 
-      hasShadow_: {
-        type: Boolean,
-        reflect: true,
-      },
-
       inSearchMode_: {type: Boolean},
       items_: {type: Array},
       spinnerActive_: {type: Boolean},
@@ -93,7 +89,6 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
   protected accessor items_: MojomData[] = [];
   protected accessor hasDownloads_: boolean = false;
   // Used for CSS styling.
-  protected accessor hasShadow_: boolean = false;
   protected accessor inSearchMode_: boolean = false;
   protected accessor spinnerActive_: boolean = false;
   protected accessor bypassPromptItemId_: string = '';
@@ -105,11 +100,10 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
   // </if>
   protected accessor lastFocused_: HTMLElement|null = null;
   protected accessor listBlurred_: boolean = false;
-  protected accessor listScrollTarget_: HTMLElement|null = null;
+  protected accessor listScrollTarget_: HTMLElement = document.documentElement;
 
   private announcerTimeout_: number|null = null;
-  private mojoHandler_: PageHandlerInterface;
-  private mojoEventTarget_: PageCallbackRouter;
+  private browserProxy_: BrowserProxy;
   private searchService_: SearchService = SearchService.getInstance();
   private loaded_: PromiseResolver<void> = new PromiseResolver();
   private listenerIds_: number[] = [];
@@ -118,11 +112,7 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
   constructor() {
     super();
 
-    const browserProxy = BrowserProxy.getInstance();
-
-    this.mojoEventTarget_ = browserProxy.callbackRouter;
-
-    this.mojoHandler_ = browserProxy.handler;
+    this.browserProxy_ = browserProxyFactory.getInstance();
 
     // Regular expression that captures the leading slash, the content and the
     // trailing slash in three different groups.
@@ -140,12 +130,22 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
     this.toggleAttribute('loading', true);
     document.documentElement.classList.remove('loading');
 
+    const enableWebuiRefresh2026 =
+        loadTimeData.getString('webuiRefresh2026') !== '';
+    if (enableWebuiRefresh2026) {
+      this.addThemedColors_();
+      ColorChangeUpdater.forDocument().start();
+    }
+
     this.listenerIds_ = [
-      this.mojoEventTarget_.clearAll.addListener(this.clearAll_.bind(this)),
-      this.mojoEventTarget_.insertItems.addListener(
+      this.browserProxy_.callbackRouter.clearAll.addListener(
+          this.clearAll_.bind(this)),
+      this.browserProxy_.callbackRouter.insertItems.addListener(
           this.insertItems_.bind(this)),
-      this.mojoEventTarget_.removeItem.addListener(this.removeItem_.bind(this)),
-      this.mojoEventTarget_.updateItem.addListener(this.updateItem_.bind(this)),
+      this.browserProxy_.callbackRouter.removeItem.addListener(
+          this.removeItem_.bind(this)),
+      this.browserProxy_.callbackRouter.updateItem.addListener(
+          this.updateItem_.bind(this)),
     ];
 
     this.eventTracker_.add(
@@ -154,8 +154,7 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
 
     this.loaded_.promise.then(() => {
       requestIdleCallback(function() {
-        // https://github.com/microsoft/TypeScript/issues/13569
-        (document as any).fonts.load('bold 12px Roboto');
+        document.fonts.load('bold 12px Roboto');
       });
     });
 
@@ -167,7 +166,7 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
         this.onToastClicked_(e);
 
     // <if expr="_google_chrome">
-    this.mojoHandler_.isEligibleForEsbPromo().then((result) => {
+    this.browserProxy_.handler.isEligibleForEsbPromo().then((result) => {
       this.isEligibleForEsbPromo_ = result.result;
     });
     // </if>
@@ -177,7 +176,7 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
     super.disconnectedCallback();
 
     this.listenerIds_.forEach(
-        id => assert(this.mojoEventTarget_.removeListener(id)));
+        id => assert(this.browserProxy_.callbackRouter.removeListener(id)));
 
     this.eventTracker_.removeAll();
   }
@@ -191,9 +190,8 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
     const bypassItem = this.items_.find(item => item.id === e.detail.id);
     if (bypassItem) {
       this.bypassPromptItemId_ = bypassItem.id;
-      assert(!!this.mojoHandler_);
-
-      this.mojoHandler_.recordOpenBypassWarningDialog(this.bypassPromptItemId_);
+      this.browserProxy_.handler.recordOpenBypassWarningDialog(
+          this.bypassPromptItemId_);
     }
   }
 
@@ -219,15 +217,10 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
     // TODO(awado): Change this to log the ESB promo as viewed when the user
     // scrolls the download into view.
     if (this.items_.slice(0, 5).some(download => download.id === item.id)) {
-      this.logEsbPromotionRowViewed();
+      this.browserProxy_.handler.logEsbPromotionRowViewed();
       return true;
     }
     return false;
-  }
-
-  private logEsbPromotionRowViewed() {
-    assert(!!this.mojoHandler_);
-    this.mojoHandler_.logEsbPromotionRowViewed();
   }
   // </if>
 
@@ -250,14 +243,13 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
         'downloads-bypass-warning-confirmation-dialog');
     assert(dialog);
     assert(this.bypassPromptItemId_ !== '');
-    assert(!!this.mojoHandler_);
     if (dialog.wasConfirmed()) {
-      this.mojoHandler_.saveDangerousFromDialogRequiringGesture(
+      this.browserProxy_.handler.saveDangerousFromDialogRequiringGesture(
           this.bypassPromptItemId_);
     } else {
       // Closing the dialog by clicking cancel is treated the same as closing
       // the dialog by pressing Esc. Both are treated as CANCEL, not CLOSE.
-      this.mojoHandler_.recordCancelBypassWarningDialog(
+      this.browserProxy_.handler.recordCancelBypassWarningDialog(
           this.bypassPromptItemId_);
     }
     this.hideBypassWarningPrompt_();
@@ -366,7 +358,7 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
       return;
     }
 
-    this.mojoHandler_.clearAll();
+    this.browserProxy_.handler.clearAll();
     const canUndo =
         this.items_.some(data => !data.isDangerous && !data.isInsecure);
     getToastManager().show(
@@ -380,7 +372,7 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
     }
 
     getToastManager().hide();
-    this.mojoHandler_.undo();
+    this.browserProxy_.handler.undo();
   }
 
   private onToastClicked_(e: Event) {
@@ -397,7 +389,6 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
       // Approaching the end of the scrollback. Attempt to load more items.
       this.searchService_.loadMore();
     }
-    this.hasShadow_ = container.scrollTop > 0;
   }
 
   protected onSearchChanged_() {
@@ -445,7 +436,7 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
 
   protected onUndoClick_() {
     getToastManager().hide();
-    this.mojoHandler_.undo();
+    this.browserProxy_.handler.undo();
   }
 
   private updateItem_(index: number, data: MojomData) {
@@ -460,6 +451,10 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
     this.listBlurred_ = e.detail.value;
   }
 
+  protected onRestoreListFocus_() {
+    this.listBlurred_ = false;
+  }
+
   // Override FindShortcutMixin methods.
   override handleFindShortcut(modalContextOpen: boolean): boolean {
     if (modalContextOpen) {
@@ -472,6 +467,14 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
   // Override FindShortcutMixin methods.
   override searchInputHasFocus() {
     return this.$.toolbar.isSearchFocused();
+  }
+
+  private addThemedColors_() {
+    assert(document.body.querySelector(COLORS_CSS_SELECTOR) === null);
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'chrome://theme/colors.css?sets=ui,chrome';
+    document.body.appendChild(link);
   }
 }
 

@@ -18,6 +18,7 @@
 #include "cc/trees/occlusion.h"
 #include "components/viz/common/quads/solid_color_draw_quad.h"
 #include "components/viz/common/quads/surface_draw_quad.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 #include "ui/gfx/geometry/vector2d_conversions.h"
 
 namespace cc {
@@ -79,13 +80,12 @@ void SurfaceLayerImpl::SetRange(const viz::SurfaceRange& surface_range,
 
   if (surface_range_.end() != surface_range.end() &&
       surface_range.end().local_surface_id().is_valid()) {
-    TRACE_EVENT_WITH_FLOW2(
-        TRACE_DISABLED_BY_DEFAULT("viz.surface_id_flow"),
-        "LocalSurfaceId.Embed.Flow",
-        TRACE_ID_GLOBAL(
-            surface_range.end().local_surface_id().embed_trace_id()),
-        TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT, "step",
-        "ImplSetSurfaceId", "surface_id", surface_range.end().ToString());
+    TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("viz.surface_id_flow"),
+                "LocalSurfaceId.Embed.Flow",
+                perfetto::Flow::Global(
+                    surface_range.end().local_surface_id().embed_trace_id()),
+                "step", "ImplSetSurfaceId", "surface_id",
+                surface_range.end().ToString());
   }
 
   surface_range_ = surface_range;
@@ -140,20 +140,24 @@ void SurfaceLayerImpl::ResetStateForUpdateSubmissionStateCallback() {
   NoteLayerPropertyChanged();
 }
 
-void SurfaceLayerImpl::PushPropertiesTo(LayerImpl* layer) {
-  LayerImpl::PushPropertiesTo(layer);
+void SurfaceLayerImpl::CopyPropertiesTo(LayerImpl* layer) const {
+  LayerImpl::CopyPropertiesTo(layer);
   SurfaceLayerImpl* layer_impl = static_cast<SurfaceLayerImpl*>(layer);
-  layer_impl->SetRange(surface_range_, std::move(deadline_in_frames_));
-  // Unless the client explicitly specifies otherwise, don't block on
-  // |surface_range_| more than once.
-  deadline_in_frames_ = 0u;
   layer_impl->SetStretchContentToFillBounds(stretch_content_to_fill_bounds_);
   layer_impl->SetSurfaceHitTestable(surface_hit_testable_);
   layer_impl->SetHasPointerEventsNone(has_pointer_events_none_);
   layer_impl->SetIsReflection(is_reflection_);
   layer_impl->SetOverrideChildPaintFlags(override_child_paint_flags_);
+}
 
-  if (layer_impl->IsActive() && will_draw_needs_reset_) {
+void SurfaceLayerImpl::MovePropertiesToActiveLayer(LayerImpl* active_layer) {
+  LayerImpl::MovePropertiesToActiveLayer(active_layer);
+  SurfaceLayerImpl* layer_impl = static_cast<SurfaceLayerImpl*>(active_layer);
+  layer_impl->SetRange(surface_range_, std::move(deadline_in_frames_));
+  // Unless the client explicitly specifies otherwise, don't block on
+  // |surface_range_| more than once.
+  deadline_in_frames_ = 0u;
+  if (will_draw_needs_reset_) {
     layer_impl->will_draw_ = false;
     will_draw_needs_reset_ = false;
   }

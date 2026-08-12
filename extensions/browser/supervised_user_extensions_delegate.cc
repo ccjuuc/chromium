@@ -67,4 +67,20 @@ void SupervisedUserExtensionsDelegate::RecordExtensionEnablementUmaMetrics(
   NOTIMPLEMENTED();
 }
 
+bool SupervisedUserExtensionsDelegate::CanSkipExtensionParentApprovals() {
+  NOTIMPLEMENTED();
+  return false;
+}
+
+void SupervisedUserExtensionsDelegate::RecordAskParentDialogUmaMetrics(
+    AskParentDialogState state) {}
+
+void SupervisedUserExtensionsDelegate::RecordEnablementUmaMetrics(
+    EnablementState state) {}
+
+ExtensionInstallPromptClient::Observer*
+SupervisedUserExtensionsDelegate::GetInstallPromptObserver() {
+  return nullptr;
+}
+
 }  // namespace extensions

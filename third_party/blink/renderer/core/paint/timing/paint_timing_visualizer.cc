@@ -84,38 +84,39 @@ void PaintTimingVisualizer::DumpImageDebuggingRect(const LayoutObject& object,
 }
 
 void PaintTimingVisualizer::DumpTrace(std::unique_ptr<TracedValue> value) {
-  TRACE_EVENT_INSTANT1("loading", "PaintTimingVisualizer::LayoutObjectPainted",
-                       TRACE_EVENT_SCOPE_THREAD, "data", std::move(value));
+  TRACE_EVENT_INSTANT("loading", "PaintTimingVisualizer::LayoutObjectPainted",
+                      "data", std::move(value));
 }
 
 void PaintTimingVisualizer::RecordMainFrameViewport(
-    LocalFrameView& frame_view) {
-  if (!need_recording_viewport)
+    const PaintTimingDetector& detector,
+    const LocalFrame& frame) {
+  if (!need_recording_viewport) {
     return;
-  if (!frame_view.GetFrame().IsOutermostMainFrame())
+  }
+  if (!frame.IsOutermostMainFrame()) {
     return;
-  ScrollableArea* scrollable_area = frame_view.GetScrollableArea();
+  }
+  ScrollableArea* scrollable_area = frame.View()->GetScrollableArea();
   DCHECK(scrollable_area);
-  gfx::Rect viewport_rect = scrollable_area->VisibleContentRect();
+  gfx::Rect viewport_rect =
+      scrollable_area->VisibleContentRect(kExcludeScrollbars);
 
   FloatClipRect float_clip_visual_rect((gfx::RectF(viewport_rect)));
   gfx::RectF float_visual_rect =
-      frame_view.GetPaintTimingDetector().BlinkSpaceToDIPs(
-          float_clip_visual_rect.Rect());
+      detector.BlinkSpaceToDIPs(float_clip_visual_rect.Rect());
 
   std::unique_ptr<TracedValue> value = std::make_unique<TracedValue>();
   CreateQuad(value.get(), "viewport_rect", gfx::QuadF(float_visual_rect));
-  value->SetDouble("dpr", frame_view.GetFrame().DevicePixelRatio());
-  TRACE_EVENT_INSTANT1("loading", "PaintTimingVisualizer::Viewport",
-                       TRACE_EVENT_SCOPE_THREAD, "data", std::move(value));
+  value->SetDouble("dpr", frame.DevicePixelRatio());
+  TRACE_EVENT_INSTANT("loading", "PaintTimingVisualizer::Viewport", "data",
+                      std::move(value));
   need_recording_viewport = false;
 }
 
 // static
 bool PaintTimingVisualizer::IsTracingEnabled() {
-  bool enabled;
-  TRACE_EVENT_CATEGORY_GROUP_ENABLED("loading", &enabled);
-  return enabled;
+  return TRACE_EVENT_CATEGORY_ENABLED("loading");
 }
 
 void PaintTimingVisualizer::OnStart(

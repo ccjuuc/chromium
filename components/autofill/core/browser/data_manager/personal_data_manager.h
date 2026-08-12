@@ -9,16 +9,18 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
-#include "components/autofill/core/browser/autofill_shared_storage_handler.h"
-#include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "components/history/core/browser/history_service_observer.h"
+#include "components/history/core/browser/history_types.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/strike_database/strike_database_base.h"
 
 class PrefService;
 
@@ -85,7 +87,6 @@ class PersonalDataManager : public KeyedService,
       syncer::SyncService* sync_service,
       strike_database::StrikeDatabaseBase* strike_database,
       AutofillImageFetcherBase* image_fetcher,
-      std::unique_ptr<AutofillSharedStorageHandler> shared_storage_handler,
       std::string app_locale,
       std::string country_code,
       AutofillOptimizationGuideDecider* autofill_optimization_guide_decider);
@@ -142,6 +143,8 @@ class PersonalDataManager : public KeyedService,
 
   // TODO(crbug.com/40100455): Consider moving this to the TestPDM or a TestAPI.
   void SetSyncServiceForTest(syncer::SyncService* sync_service);
+
+  base::WeakPtr<PersonalDataManager> GetWeakPtr();
 
  protected:
   // Responsible for all address-related logic of the PDM. Non-null.

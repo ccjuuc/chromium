@@ -44,12 +44,14 @@
 #include "third_party/blink/renderer/core/html/html_table_section_element.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/html_names.h"
+#include "third_party/blink/renderer/core/keywords.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/weborigin/referrer.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 
 namespace blink {
 
@@ -287,23 +289,24 @@ static bool GetBordersFromFrameAttributeValue(const AtomicString& value,
   border_bottom = false;
   border_left = false;
 
-  if (EqualIgnoringASCIICase(value, "above"))
+  if (EqualIgnoringAsciiCase(value, "above")) {
     border_top = true;
-  else if (EqualIgnoringASCIICase(value, "below"))
+  } else if (EqualIgnoringAsciiCase(value, "below")) {
     border_bottom = true;
-  else if (EqualIgnoringASCIICase(value, "hsides"))
+  } else if (EqualIgnoringAsciiCase(value, "hsides")) {
     border_top = border_bottom = true;
-  else if (EqualIgnoringASCIICase(value, "vsides"))
+  } else if (EqualIgnoringAsciiCase(value, "vsides")) {
     border_left = border_right = true;
-  else if (EqualIgnoringASCIICase(value, "lhs"))
+  } else if (EqualIgnoringAsciiCase(value, "lhs")) {
     border_left = true;
-  else if (EqualIgnoringASCIICase(value, "rhs"))
+  } else if (EqualIgnoringAsciiCase(value, "rhs")) {
     border_right = true;
-  else if (EqualIgnoringASCIICase(value, "box") ||
-           EqualIgnoringASCIICase(value, "border"))
+  } else if (EqualIgnoringAsciiCase(value, "box") ||
+             EqualIgnoringAsciiCase(value, "border")) {
     border_top = border_bottom = border_left = border_right = true;
-  else if (!EqualIgnoringASCIICase(value, "void"))
+  } else if (!EqualIgnoringAsciiCase(value, "void")) {
     return false;
+  }
   return true;
 }
 
@@ -357,7 +360,7 @@ void HTMLTableElement::CollectStyleForPresentationAttribute(
     }
   } else if (name == html_names::kAlignAttr) {
     if (!value.empty()) {
-      if (EqualIgnoringASCIICase(value, "center")) {
+      if (EqualIgnoringAsciiCase(value, "center")) {
         AddPropertyToPresentationAttributeStyle(
             style, CSSPropertyID::kMarginInlineStart, CSSValueID::kAuto);
         AddPropertyToPresentationAttributeStyle(
@@ -440,21 +443,22 @@ void HTMLTableElement::ParseAttribute(
         params.new_value, border_top, border_right, border_bottom, border_left);
   } else if (name == html_names::kRulesAttr) {
     rules_attr_ = kUnsetRules;
-    if (EqualIgnoringASCIICase(params.new_value, "none"))
+    if (EqualIgnoringAsciiCase(params.new_value, keywords::kNone)) {
       rules_attr_ = kNoneRules;
-    else if (EqualIgnoringASCIICase(params.new_value, "groups"))
+    } else if (EqualIgnoringAsciiCase(params.new_value, "groups")) {
       rules_attr_ = kGroupsRules;
-    else if (EqualIgnoringASCIICase(params.new_value, "rows"))
+    } else if (EqualIgnoringAsciiCase(params.new_value, "rows")) {
       rules_attr_ = kRowsRules;
-    else if (EqualIgnoringASCIICase(params.new_value, "cols"))
+    } else if (EqualIgnoringAsciiCase(params.new_value, "cols")) {
       rules_attr_ = kColsRules;
-    else if (EqualIgnoringASCIICase(params.new_value, "all"))
+    } else if (EqualIgnoringAsciiCase(params.new_value, "all")) {
       rules_attr_ = kAllRules;
+    }
   } else if (params.name == html_names::kCellpaddingAttr) {
     if (!params.new_value.empty()) {
       padding_ =
           std::max(0, std::min((int32_t)std::numeric_limits<uint16_t>::max(),
-                               params.new_value.ToInt()));
+                               StringToIntLoose(params.new_value).value_or(0)));
     } else {
       padding_ = 1;
     }
@@ -485,7 +489,9 @@ HTMLTableElement::AdditionalPresentationAttributeStyle() {
   if (frame_attr_)
     return nullptr;
 
-  if (!border_attr_ && !border_color_attr_) {
+  if (!border_attr_ &&
+      (!border_color_attr_ ||
+       RuntimeEnabledFeatures::TableBorderColorNoImplicitBorderEnabled())) {
     // Setting the border to 'hidden' allows it to win over any border
     // set on the table's cells during border-conflict resolution.
     if (rules_attr_ != kUnsetRules) {
@@ -531,6 +537,17 @@ CSSPropertyValueSet* HTMLTableElement::CreateSharedCellStyle() {
   auto* style =
       MakeGarbageCollected<MutableCSSPropertyValueSet>(kHTMLQuirksMode);
 
+  // Determine the border-color for interior cells. The legacy behavior (flag
+  // enabled), and the `bordercolor` attribute, make cells inherit the table's
+  // border-color. Otherwise cells resolve to `currentColor`, since border-color
+  // is not an inherited property per CSS Backgrounds 3.
+  const CSSValue* cell_border_color =
+      RuntimeEnabledFeatures::TableCellBorderColorInheritEnabled() ||
+              border_color_attr_
+          ? static_cast<const CSSValue*>(CSSInheritedValue::Create())
+          : static_cast<const CSSValue*>(
+                CSSIdentifierValue::Create(CSSValueID::kCurrentcolor));
+
   switch (GetCellBorders()) {
     case kSolidBordersColsOnly:
       style->SetLonghandProperty(CSSPropertyID::kBorderLeftWidth,
@@ -541,8 +558,7 @@ CSSPropertyValueSet* HTMLTableElement::CreateSharedCellStyle() {
                                  CSSValueID::kSolid);
       style->SetLonghandProperty(CSSPropertyID::kBorderRightStyle,
                                  CSSValueID::kSolid);
-      style->SetProperty(CSSPropertyID::kBorderColor,
-                         *CSSInheritedValue::Create());
+      style->SetProperty(CSSPropertyID::kBorderColor, *cell_border_color);
       break;
     case kSolidBordersRowsOnly:
       style->SetLonghandProperty(CSSPropertyID::kBorderTopWidth,
@@ -553,8 +569,7 @@ CSSPropertyValueSet* HTMLTableElement::CreateSharedCellStyle() {
                                  CSSValueID::kSolid);
       style->SetLonghandProperty(CSSPropertyID::kBorderBottomStyle,
                                  CSSValueID::kSolid);
-      style->SetProperty(CSSPropertyID::kBorderColor,
-                         *CSSInheritedValue::Create());
+      style->SetProperty(CSSPropertyID::kBorderColor, *cell_border_color);
       break;
     case kSolidBorders:
       style->SetProperty(CSSPropertyID::kBorderWidth,
@@ -562,8 +577,7 @@ CSSPropertyValueSet* HTMLTableElement::CreateSharedCellStyle() {
                              1, CSSPrimitiveValue::UnitType::kPixels));
       style->SetProperty(CSSPropertyID::kBorderStyle,
                          *CSSIdentifierValue::Create(CSSValueID::kSolid));
-      style->SetProperty(CSSPropertyID::kBorderColor,
-                         *CSSInheritedValue::Create());
+      style->SetProperty(CSSPropertyID::kBorderColor, *cell_border_color);
       break;
     case kInsetBorders:
       style->SetProperty(CSSPropertyID::kBorderWidth,
@@ -571,8 +585,7 @@ CSSPropertyValueSet* HTMLTableElement::CreateSharedCellStyle() {
                              1, CSSPrimitiveValue::UnitType::kPixels));
       style->SetProperty(CSSPropertyID::kBorderStyle,
                          *CSSIdentifierValue::Create(CSSValueID::kInset));
-      style->SetProperty(CSSPropertyID::kBorderColor,
-                         *CSSInheritedValue::Create());
+      style->SetProperty(CSSPropertyID::kBorderColor, *cell_border_color);
       break;
     case kNoBorders:
       // If 'rules=none' then allow any borders set at cell level to take

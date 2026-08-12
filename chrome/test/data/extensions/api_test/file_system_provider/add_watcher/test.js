@@ -10,22 +10,22 @@ let testUtil;
  * @type {Object}
  * @const
  */
-var TESTING_FILE = Object.freeze({
+const TESTING_FILE = Object.freeze({
   isDirectory: false,
   name: 'tiramisu.txt',
   size: 4096,
-  modificationTime: new Date(2014, 4, 28, 10, 39, 15)
+  modificationTime: new Date(2014, 4, 28, 10, 39, 15),
 });
 
 /**
  * @type {Object}
  * @const
  */
-var TESTING_BROKEN_FILE = Object.freeze({
+const TESTING_BROKEN_FILE = Object.freeze({
   isDirectory: false,
   name: 'broken-file.txt',
   size: 4096,
-  modificationTime: new Date(2014, 4, 27, 10, 38, 10)
+  modificationTime: new Date(2014, 4, 27, 10, 38, 10),
 });
 
 /**
@@ -41,12 +41,12 @@ function onAddWatcherRequested(options, onSuccess, onError) {
     return;
   }
 
-  if (options.entryPath === '/' + TESTING_FILE.name) {
+  if (options.entryPath === `/${TESTING_FILE.name}`) {
     onSuccess();
     return;
   }
 
-  if (options.entryPath === '/' + TESTING_BROKEN_FILE.name) {
+  if (options.entryPath === `/${TESTING_BROKEN_FILE.name}`) {
     onError('INVALID_OPERATION');
     return;
   }
@@ -64,8 +64,8 @@ function setUp(callback) {
   chrome.fileSystemProvider.onGetMetadataRequested.addListener(
       testUtil.onGetMetadataRequestedDefault);
 
-  testUtil.defaultMetadata['/' + TESTING_FILE.name] = TESTING_FILE;
-  testUtil.defaultMetadata['/' + TESTING_BROKEN_FILE.name] =
+  testUtil.defaultMetadata[`/${TESTING_FILE.name}`] = TESTING_FILE;
+  testUtil.defaultMetadata[`/${TESTING_BROKEN_FILE.name}`] =
       TESTING_BROKEN_FILE;
 
   chrome.fileSystemProvider.onAddWatcherRequested.addListener(
@@ -83,27 +83,25 @@ function runTests() {
     // Add an entry watcher on an existing file.
     function addWatcher() {
       testUtil.fileSystem.root.getFile(
-          TESTING_FILE.name,
-          {create: false},
+          TESTING_FILE.name, {create: false},
           chrome.test.callbackPass(function(fileEntry) {
             chrome.test.assertEq(TESTING_FILE.name, fileEntry.name);
             chrome.fileManagerPrivate.addFileWatch(
-                fileEntry,
-                chrome.test.callbackPass(function(result) {
+                fileEntry, chrome.test.callbackPass(function(result) {
                   chrome.test.assertTrue(result);
                   chrome.fileSystemProvider.getAll(
                       chrome.test.callbackPass(function(fileSystems) {
                         chrome.test.assertEq(1, fileSystems.length);
+                        chrome.test.assertEq(1, fileSystems[0].watchers.length);
+                        const watcher = fileSystems[0].watchers[0];
                         chrome.test.assertEq(
-                            1, fileSystems[0].watchers.length);
-                        var watcher = fileSystems[0].watchers[0];
-                        chrome.test.assertEq(
-                            '/' + TESTING_FILE.name, watcher.entryPath);
+                            `/${TESTING_FILE.name}`, watcher.entryPath);
                         chrome.test.assertFalse(watcher.recursive);
                         chrome.test.assertEq(undefined, watcher.tag);
                       }));
                 }));
-          }), function(error) {
+          }),
+          function(error) {
             chrome.test.fail(error.name);
           });
     },
@@ -112,23 +110,21 @@ function runTests() {
     // fail.
     function addExistingFileWatcher() {
       testUtil.fileSystem.root.getFile(
-          TESTING_FILE.name,
-          {create: false},
+          TESTING_FILE.name, {create: false},
           chrome.test.callbackPass(function(fileEntry) {
             chrome.test.assertEq(TESTING_FILE.name, fileEntry.name);
             chrome.fileManagerPrivate.addFileWatch(
                 fileEntry,
-                chrome.test.callbackFail(
-                    'Unknown error.', function(result) {
-                      chrome.test.assertFalse(!!result);
-                      chrome.fileSystemProvider.getAll(
-                          chrome.test.callbackPass(function(fileSystems) {
-                            chrome.test.assertEq(1, fileSystems.length);
-                            chrome.test.assertEq(
-                                1, fileSystems[0].watchers.length);
-                          }));
+                chrome.test.callbackFail('Unknown error.', function(result) {
+                  chrome.test.assertFalse(!!result);
+                  chrome.fileSystemProvider.getAll(
+                      chrome.test.callbackPass(function(fileSystems) {
+                        chrome.test.assertEq(1, fileSystems.length);
+                        chrome.test.assertEq(1, fileSystems[0].watchers.length);
+                      }));
                 }));
-          }), function(error) {
+          }),
+          function(error) {
             chrome.test.fail(error.name);
           });
     },
@@ -136,26 +132,24 @@ function runTests() {
     // Add an entry watcher on a broken file, what should fail.
     function addBrokenFileWatcher() {
       testUtil.fileSystem.root.getFile(
-          TESTING_BROKEN_FILE.name,
-          {create: false},
+          TESTING_BROKEN_FILE.name, {create: false},
           chrome.test.callbackPass(function(fileEntry) {
             chrome.test.assertEq(TESTING_BROKEN_FILE.name, fileEntry.name);
             chrome.fileManagerPrivate.addFileWatch(
                 fileEntry,
-                chrome.test.callbackFail(
-                    'Unknown error.', function(result) {
-                      chrome.test.assertFalse(!!result);
-                      chrome.fileSystemProvider.getAll(
-                          chrome.test.callbackPass(function(fileSystems) {
-                            chrome.test.assertEq(1, fileSystems.length);
-                            chrome.test.assertEq(
-                                1, fileSystems[0].watchers.length);
-                          }));
-                    }));
-          }), function(error) {
+                chrome.test.callbackFail('Unknown error.', function(result) {
+                  chrome.test.assertFalse(!!result);
+                  chrome.fileSystemProvider.getAll(
+                      chrome.test.callbackPass(function(fileSystems) {
+                        chrome.test.assertEq(1, fileSystems.length);
+                        chrome.test.assertEq(1, fileSystems[0].watchers.length);
+                      }));
+                }));
+          }),
+          function(error) {
             chrome.test.fail(error.name);
           });
-    }
+    },
   ]);
 }
 
@@ -163,7 +157,7 @@ function runTests() {
 // considered modules.
 (async () => {
   testUtil = await import(
-    '/_test_resources/api_test/file_system_provider/test_util.js');
+      '/_test_resources/api_test/file_system_provider/test_util.js');
 
   // Setup and run all of the test cases.
   setUp(runTests);

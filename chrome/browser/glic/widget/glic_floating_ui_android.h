@@ -37,7 +37,8 @@ class GlicFloatingUi : public GlicUiEmbedder {
   Host::EmbedderDelegate* GetHostEmbedderDelegate() override;
   void Show(const ShowOptions& options) override;
   bool IsShowing() const override;
-  void Close() override;
+  bool IsShowingOrBackgrounded() const override;
+  void Close(const CloseOptions& options) override;
   void Focus() override;
   bool HasFocus() override;
   std::unique_ptr<GlicUiEmbedder> CreateInactiveEmbedder() const override;

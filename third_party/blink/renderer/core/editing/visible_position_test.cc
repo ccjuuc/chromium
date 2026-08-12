@@ -154,7 +154,7 @@ TEST_F(VisiblePositionTest, NonNullIsValidBeforeMutation) {
   EXPECT_TRUE(CreateVisiblePosition(position).IsValid());
 }
 
-TEST_F(VisiblePositionTest, NonNullInvalidatedAfterDOMChange) {
+TEST_F(VisiblePositionTest, NonNullInvalidatedAfterDomChange) {
   SetBodyContent("<p>one</p>");
 
   Element* paragraph = QuerySelector("p");
@@ -219,7 +219,7 @@ TEST_F(VisiblePositionTest, NormalizationAroundLineBreak) {
 
   StaticElementList* tests =
       GetDocument().QuerySelectorAll(AtomicString("div"));
-  for (unsigned i = 0; i < tests->length(); ++i) {
+  for (wtf_size_t i = 0; i < tests->length(); ++i) {
     Element* test = tests->item(i);
     Node* node1 = test->firstChild();
     Node* node2 = test->lastChild();

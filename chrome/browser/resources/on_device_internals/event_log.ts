@@ -7,9 +7,9 @@ import '//resources/cr_elements/cr_button/cr_button.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {Time} from '//resources/mojo/mojo/public/mojom/base/time.mojom-webui.js';
 
-import {BrowserProxy} from './browser_proxy.js';
 import {getCss} from './event_log.css.js';
 import {getHtml} from './event_log.html.js';
+import {browserProxyFactory} from './on_device_internals_page.mojom-webui.js';
 
 /**
  * Converts a mojo time to a JS time.
@@ -23,7 +23,7 @@ function convertMojoTimeToJs(mojoTime: Time): Date {
   // conversion from microseconds to milliseconds.
   const windowsEpoch = Date.UTC(1601, 0, 1, 0, 0, 0, 0);
   const unixEpoch = Date.UTC(1970, 0, 1, 0, 0, 0, 0);
-  // |epochDeltaInMs| equals to base::Time::kTimeTToMicrosecondsOffset.
+  // |epochDeltaInMs| equals to base::Time::kMicrosecondsFromWindowsToUnixEpoch.
   const epochDeltaInMs = unixEpoch - windowsEpoch;
   const timeInMs = Number(mojoTime.internalValue) / 1000;
 
@@ -37,14 +37,14 @@ export class EventLogMessage {
   message: string;
 
   constructor(
-      eventTime: Time, sourceFile: string, sourceLine: number,
+      eventTime: Time, sourceFile: string, sourceLine: bigint,
       message: string) {
     this.eventTime = convertMojoTimeToJs(eventTime);
     this.message = message;
     this.setSourceLink(sourceFile, sourceLine);
   }
 
-  setSourceLink(sourceFile: string, sourceLine: number) {
+  setSourceLink(sourceFile: string, sourceLine: bigint) {
     if (!sourceFile.startsWith('../../')) {
       this.sourceLinkText = `${sourceFile}(${sourceLine})`;
       return;
@@ -91,8 +91,9 @@ export class OnDeviceInternalsEventLogElement extends CrLitElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    BrowserProxy.getInstance().callbackRouter.onLogMessageAdded.addListener(
-        this.onLogMessageAdded_.bind(this));
+    browserProxyFactory.getInstance()
+        .callbackRouter.onLogMessageAdded.addListener(
+            this.onLogMessageAdded_.bind(this));
   }
 
   /**
@@ -118,7 +119,7 @@ export class OnDeviceInternalsEventLogElement extends CrLitElement {
   }
 
   private onLogMessageAdded_(
-      eventTime: Time, sourceFile: string, sourceLine: number,
+      eventTime: Time, sourceFile: string, sourceLine: bigint,
       message: string) {
     this.eventLogMessages_.push(
         new EventLogMessage(eventTime, sourceFile, sourceLine, message));

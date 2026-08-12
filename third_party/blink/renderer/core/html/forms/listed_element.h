@@ -45,6 +45,16 @@ class Node;
 class ValidationMessageClient;
 class ValidityState;
 
+enum class DisabledChangedReason {
+  // kAttributeChanged means that the disabled attribute was added or removed
+  // from an element.
+  kAttributeChanged,
+  // kFieldsetChildrenChanged means that the disabledness of an element is being
+  // changed due to children being added, removed, or moved from a fieldset
+  // element.
+  kFieldsetChildrenChanged,
+};
+
 // https://html.spec.whatwg.org/C/#category-listed
 class CORE_EXPORT ListedElement : public GarbageCollectedMixin {
  public:
@@ -139,7 +149,7 @@ class CORE_EXPORT ListedElement : public GarbageCollectedMixin {
   void SetNeedsValidityCheck();
 
   // This should be called when |disabled| content attribute is changed.
-  virtual void DisabledAttributeChanged();
+  virtual void DisabledAttributeChanged(DisabledChangedReason);
   // This should be called when |readonly| content attribute is changed.
   void ReadonlyAttributeChanged();
   // Override this if you want to know 'disabled' state changes immediately.
@@ -154,8 +164,7 @@ class CORE_EXPORT ListedElement : public GarbageCollectedMixin {
   void RemovedFrom(ContainerNode&);
   // This should be called in Node::DidMoveToDocument().
   void DidMoveToNewDocument(Document& old_document);
-  // This is for HTMLFieldSetElement class.
-  virtual void AncestorDisabledStateWasChanged();
+  virtual void AncestorDisabledStateWasChanged(DisabledChangedReason);
 
   // https://html.spec.whatwg.org/C/#concept-element-disabled
   bool IsActuallyDisabled() const;
@@ -190,6 +199,8 @@ class CORE_EXPORT ListedElement : public GarbageCollectedMixin {
  protected:
   ListedElement();
 
+  bool FormWasSetByParser() const { return form_was_set_by_parser_; }
+
   // FIXME: Remove usage of setForm. resetFormOwner should be enough, and
   // setForm is confusing.
   void SetForm(HTMLFormElement*);
@@ -210,6 +221,8 @@ class CORE_EXPORT ListedElement : public GarbageCollectedMixin {
   void UpdateWillValidateCache(
       WillValidateReason = WillValidateReason::kDefault);
   virtual bool RecalcWillValidate() const;
+  // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#barred-from-constraint-validation
+  virtual bool ReadOnlyPreventsConstraintValidation() const { return false; }
 
   String CustomValidationMessage() const;
   // This is just a setter. This doesn't set |customError| flag.

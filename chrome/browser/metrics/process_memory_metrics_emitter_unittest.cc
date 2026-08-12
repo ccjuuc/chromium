@@ -25,6 +25,7 @@
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_source.h"
+#include "services/network/public/mojom/network_service.mojom.h"
 #include "services/resource_coordinator/public/cpp/memory_instrumentation/browser_metrics.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
@@ -55,6 +56,12 @@ using UkmEntry = ukm::builders::Memory_Experimental;
 
 int GetResidentValue(const MetricMap& metric_map) {
   auto it = metric_map.find("Resident");
+  EXPECT_NE(it, metric_map.end());
+  return it->second;
+}
+
+int GetPrivateMemoryFootprintValue(const MetricMap& metric_map) {
+  auto it = metric_map.find("PrivateMemoryFootprint");
   EXPECT_NE(it, metric_map.end());
   return it->second;
 }
@@ -465,9 +472,11 @@ MetricMap GetExpectedGpuMetrics() {
 
 void PopulateUtilityMetrics(GlobalMemoryDumpPtr& global_dump,
                             MetricMap& metrics_mb,
-                            const std::optional<std::string>& service_name) {
+                            const std::optional<std::string>& service_name,
+                            base::ProcessId pid = base::kNullProcessId) {
   auto pmd(memory_instrumentation::mojom::ProcessMemoryDump::New());
   pmd->process_type = ProcessType::UTILITY;
+  pmd->pid = pid;
   if (service_name.has_value()) {
     pmd->service_name = service_name.value();
   }
@@ -477,6 +486,20 @@ void PopulateUtilityMetrics(GlobalMemoryDumpPtr& global_dump,
   OSMemDumpPtr os_dump = GetFakeOSMemDump(metrics_mb);
   pmd->os_dump = std::move(os_dump);
   global_dump->process_dumps.push_back(std::move(pmd));
+}
+
+MetricMap GetExpectedNetworkServiceMetrics() {
+  return MetricMap({
+      {"ProcessType", static_cast<int64_t>(ProcessType::UTILITY)},
+      {"Resident", 0},
+      {"Malloc", 0},
+      {"PrivateMemoryFootprint", 0},
+      {"SharedMemoryFootprint", 0},
+      {"Uptime", 42},
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+      {"PrivateSwapFootprint", 0},
+#endif
+  });
 }
 
 MetricMap GetExpectedAudioServiceMetrics() {
@@ -1017,6 +1040,53 @@ TEST_F(ProcessMemoryMetricsEmitterTest, SingleMeasurement_ProcessInfoNotFound) {
   EXPECT_EQ(1u, entries.size());
 }
 
+TEST_F(ProcessMemoryMetricsEmitterTest, NetworkServiceHistogramsAreRecorded) {
+  base::HistogramTester histograms;
+
+  GlobalMemoryDumpPtr global_dump(
+      memory_instrumentation::mojom::GlobalMemoryDump::New());
+  global_dump->aggregated_metrics =
+      memory_instrumentation::mojom::AggregatedMetrics::New();
+
+  MetricMap expected_network_metrics = GetExpectedNetworkServiceMetrics();
+  PopulateUtilityMetrics(global_dump, expected_network_metrics,
+                         network::mojom::NetworkService::Name_, 200 /* pid */);
+
+  constexpr uint64_t kMiB = 1024 * 1024;
+  SetAllocatorDumpMetric(global_dump->process_dumps[0],
+                         "devtools/durable_message_collectors", "message_count",
+                         10);
+  SetAllocatorDumpMetric(global_dump->process_dumps[0],
+                         "devtools/durable_message_collectors",
+                         "collector_count", 2);
+  SetAllocatorDumpMetric(global_dump->process_dumps[0],
+                         "devtools/durable_message_collectors", "size",
+                         14 * kMiB);
+
+  std::vector<AnyNodeWrapper> graph_nodes = CreateTestGraphNodes();
+  auto emitter =
+      base::MakeRefCounted<ProcessMemoryMetricsEmitterFake>(test_ukm_recorder_);
+  emitter->ReceivedMemoryDump(
+      emitter->GetProcessToPageInfoMap(graph()),
+      memory_instrumentation::mojom::RequestOutcome::kSuccess,
+      GlobalMemoryDump::MoveFrom(std::move(global_dump)));
+
+  histograms.ExpectBucketCount(
+      "Memory.Experimental.NetworkService2.DurableMessages."
+      "AggregateMemoryUsage",
+      14, 1);
+
+  histograms.ExpectBucketCount(
+      "Memory.Experimental.NetworkService2.Custom.DurableMessages."
+      "AggregateMessageCount",
+      10, 1);
+
+  histograms.ExpectBucketCount(
+      "Memory.Experimental.NetworkService2.Custom.DurableMessages."
+      "CollectorCount",
+      2, 1);
+}
+
 TEST_F(ProcessMemoryMetricsEmitterTest, RendererAndTotalHistogramsAreRecorded) {
   // Take a snapshot of the current state of the histograms.
   base::HistogramTester histograms;
@@ -1046,6 +1116,14 @@ TEST_F(ProcessMemoryMetricsEmitterTest, RendererAndTotalHistogramsAreRecorded) {
                          "size", 22 * kMiB);
   SetAllocatorDumpMetric(global_dump->process_dumps[1], "canvas/hibernated",
                          "size", 12 * kMiB);
+
+  // 16 * kKib because it is reported as a kib metric in UMA.
+  SetAllocatorDumpMetric(global_dump->process_dumps[0],
+                         "malloc/partitions/allocator",
+                         "aligned_alloc_wasted_size", 16 * kKiB);
+  SetAllocatorDumpMetric(global_dump->process_dumps[1],
+                         "malloc/partitions/allocator",
+                         "aligned_alloc_wasted_size", 32 * kKiB);
 
   global_dump->aggregated_metrics->native_library_resident_kb =
       kNativeLibraryResidentMemoryFootprint;
@@ -1100,6 +1178,12 @@ TEST_F(ProcessMemoryMetricsEmitterTest, RendererAndTotalHistogramsAreRecorded) {
       1);
   histograms.ExpectBucketCount(
       "Memory.Experimental.Renderer2.Small.HibernatedCanvas.Size", 22 * kKiB,
+      1);
+  histograms.ExpectBucketCount(
+      "Memory.Experimental.Renderer2.Small.Malloc.AlignedAlloc.WastedKiB", 16,
+      1);
+  histograms.ExpectBucketCount(
+      "Memory.Experimental.Renderer2.Small.Malloc.AlignedAlloc.WastedKiB", 32,
       1);
   histograms.ExpectUniqueSample("Memory.Renderer.PrivateMemoryFootprint",
                                 kTestRendererPrivateMemoryFootprint, 2);
@@ -1268,4 +1352,171 @@ TEST_F(ProcessMemoryMetricsEmitterTest,
   entries = test_ukm_recorder_.GetEntriesByName(
       ukm::builders::Memory_TabFootprint::kEntryName);
   ASSERT_EQ(entries.size(), 0u);
+}
+
+TEST_F(ProcessMemoryMetricsEmitterTest, FirstPartyNtpMemoryMetrics) {
+  // Test 1: With a visible 1P NTP.
+  {
+    base::HistogramTester histograms;
+    GlobalMemoryDumpPtr global_dump(
+        memory_instrumentation::mojom::GlobalMemoryDump::New());
+    global_dump->aggregated_metrics =
+        memory_instrumentation::mojom::AggregatedMetrics::New();
+
+    MetricMap expected_browser_metrics = GetExpectedBrowserMetrics();
+    PopulateBrowserMetrics(global_dump, expected_browser_metrics);
+
+    MetricMap expected_renderer_metrics = GetExpectedRendererMetrics();
+    PopulateRendererMetrics(global_dump, expected_renderer_metrics,
+                            kTestRendererPid201);
+
+    auto process_node = CreateNode<TestProcessNodeImpl>();
+    process_node->SetProcessWithPid(kTestRendererPid201);
+    auto page_node = CreateNode<PageNodeImpl>();
+    page_node->SetUkmSourceId(ukm::UkmRecorder::GetNewSourceID());
+    page_node->SetIsVisible(true);
+    page_node->OnMainFrameNavigationCommitted(false, base::TimeTicks::Now(), 1,
+                                              GURL("chrome://new-tab-page/"),
+                                              "text/html", std::nullopt);
+    auto frame_node =
+        CreateFrameNodeAutoId(process_node.get(), page_node.get());
+
+    auto emitter = base::MakeRefCounted<ProcessMemoryMetricsEmitterFake>(
+        test_ukm_recorder_);
+    emitter->ReceivedMemoryDump(
+        emitter->GetProcessToPageInfoMap(graph()),
+        memory_instrumentation::mojom::RequestOutcome::kSuccess,
+        GlobalMemoryDump::MoveFrom(std::move(global_dump)));
+
+    histograms.ExpectUniqueSample(
+        "Memory.Visible1pNtpRenderer.PrivateMemoryFootprint",
+        kTestRendererPrivateMemoryFootprint, 1);
+    histograms.ExpectTotalCount(
+        "Memory.NonVisible1pNtpRenderer.PrivateMemoryFootprint", 0);
+    histograms.ExpectTotalCount(
+        "Memory.Non1pNtpRenderer.PrivateMemoryFootprint", 0);
+    histograms.ExpectUniqueSample(
+        "Memory.Browser.PrivateMemoryFootprint.1pNtpVisible",
+        GetPrivateMemoryFootprintValue(expected_browser_metrics), 1);
+    histograms.ExpectUniqueSample(
+        "Memory.Total.PrivateMemoryFootprint.1pNtpVisible",
+        GetPrivateMemoryFootprintValue(expected_browser_metrics) +
+            kTestRendererPrivateMemoryFootprint,
+        1);
+
+    histograms.ExpectTotalCount(
+        "Memory.Browser.PrivateMemoryFootprint.1pNtpNotPresent", 0);
+    histograms.ExpectTotalCount(
+        "Memory.Total.PrivateMemoryFootprint.1pNtpNotPresent", 0);
+  }
+
+  // Test 2: When no 1P NTP is present.
+  {
+    base::HistogramTester histograms_no_ntp;
+    GlobalMemoryDumpPtr global_dump(
+        memory_instrumentation::mojom::GlobalMemoryDump::New());
+    global_dump->aggregated_metrics =
+        memory_instrumentation::mojom::AggregatedMetrics::New();
+
+    MetricMap expected_browser_metrics = GetExpectedBrowserMetrics();
+    PopulateBrowserMetrics(global_dump, expected_browser_metrics);
+
+    MetricMap expected_renderer_metrics = GetExpectedRendererMetrics();
+    PopulateRendererMetrics(global_dump, expected_renderer_metrics,
+                            kTestRendererPid201);
+
+    auto process_node = CreateNode<TestProcessNodeImpl>();
+    process_node->SetProcessWithPid(kTestRendererPid201);
+    auto page_node = CreateNode<PageNodeImpl>();
+    page_node->SetUkmSourceId(ukm::UkmRecorder::GetNewSourceID());
+    page_node->SetIsVisible(true);
+    page_node->OnMainFrameNavigationCommitted(false, base::TimeTicks::Now(), 2,
+                                              GURL("https://www.google.com/"),
+                                              "text/html", std::nullopt);
+    auto frame_node =
+        CreateFrameNodeAutoId(process_node.get(), page_node.get());
+
+    auto emitter = base::MakeRefCounted<ProcessMemoryMetricsEmitterFake>(
+        test_ukm_recorder_);
+    emitter->ReceivedMemoryDump(
+        emitter->GetProcessToPageInfoMap(graph()),
+        memory_instrumentation::mojom::RequestOutcome::kSuccess,
+        GlobalMemoryDump::MoveFrom(std::move(global_dump)));
+
+    histograms_no_ntp.ExpectUniqueSample(
+        "Memory.Non1pNtpRenderer.PrivateMemoryFootprint",
+        kTestRendererPrivateMemoryFootprint, 1);
+    histograms_no_ntp.ExpectTotalCount(
+        "Memory.Visible1pNtpRenderer.PrivateMemoryFootprint", 0);
+    histograms_no_ntp.ExpectTotalCount(
+        "Memory.NonVisible1pNtpRenderer.PrivateMemoryFootprint", 0);
+    histograms_no_ntp.ExpectTotalCount(
+        "Memory.Browser.PrivateMemoryFootprint.1pNtpVisible", 0);
+    histograms_no_ntp.ExpectTotalCount(
+        "Memory.Total.PrivateMemoryFootprint.1pNtpVisible", 0);
+
+    histograms_no_ntp.ExpectUniqueSample(
+        "Memory.Browser.PrivateMemoryFootprint.1pNtpNotPresent",
+        GetPrivateMemoryFootprintValue(expected_browser_metrics), 1);
+    histograms_no_ntp.ExpectUniqueSample(
+        "Memory.Total.PrivateMemoryFootprint.1pNtpNotPresent",
+        GetPrivateMemoryFootprintValue(expected_browser_metrics) +
+            kTestRendererPrivateMemoryFootprint,
+        1);
+  }
+
+  // Test 3: With a non-visible 1P NTP (background/hidden).
+  {
+    base::HistogramTester histograms_non_visible;
+    GlobalMemoryDumpPtr global_dump(
+        memory_instrumentation::mojom::GlobalMemoryDump::New());
+    global_dump->aggregated_metrics =
+        memory_instrumentation::mojom::AggregatedMetrics::New();
+
+    MetricMap expected_browser_metrics = GetExpectedBrowserMetrics();
+    PopulateBrowserMetrics(global_dump, expected_browser_metrics);
+
+    MetricMap expected_renderer_metrics = GetExpectedRendererMetrics();
+    PopulateRendererMetrics(global_dump, expected_renderer_metrics,
+                            kTestRendererPid201);
+
+    auto process_node = CreateNode<TestProcessNodeImpl>();
+    process_node->SetProcessWithPid(kTestRendererPid201);
+    auto page_node = CreateNode<PageNodeImpl>();
+    page_node->SetUkmSourceId(ukm::UkmRecorder::GetNewSourceID());
+    page_node->SetIsVisible(false);
+    page_node->OnMainFrameNavigationCommitted(false, base::TimeTicks::Now(), 3,
+                                              GURL("chrome://new-tab-page/"),
+                                              "text/html", std::nullopt);
+    auto frame_node =
+        CreateFrameNodeAutoId(process_node.get(), page_node.get());
+
+    auto emitter = base::MakeRefCounted<ProcessMemoryMetricsEmitterFake>(
+        test_ukm_recorder_);
+    emitter->ReceivedMemoryDump(
+        emitter->GetProcessToPageInfoMap(graph()),
+        memory_instrumentation::mojom::RequestOutcome::kSuccess,
+        GlobalMemoryDump::MoveFrom(std::move(global_dump)));
+
+    histograms_non_visible.ExpectUniqueSample(
+        "Memory.NonVisible1pNtpRenderer.PrivateMemoryFootprint",
+        kTestRendererPrivateMemoryFootprint, 1);
+    histograms_non_visible.ExpectTotalCount(
+        "Memory.Visible1pNtpRenderer.PrivateMemoryFootprint", 0);
+    histograms_non_visible.ExpectTotalCount(
+        "Memory.Non1pNtpRenderer.PrivateMemoryFootprint", 0);
+    histograms_non_visible.ExpectTotalCount(
+        "Memory.Browser.PrivateMemoryFootprint.1pNtpVisible", 0);
+    histograms_non_visible.ExpectTotalCount(
+        "Memory.Browser.PrivateMemoryFootprint.1pNtpNotPresent", 0);
+
+    histograms_non_visible.ExpectUniqueSample(
+        "Memory.Browser.PrivateMemoryFootprint.1pNtpNonVisible",
+        GetPrivateMemoryFootprintValue(expected_browser_metrics), 1);
+    histograms_non_visible.ExpectUniqueSample(
+        "Memory.Total.PrivateMemoryFootprint.1pNtpNonVisible",
+        GetPrivateMemoryFootprintValue(expected_browser_metrics) +
+            kTestRendererPrivateMemoryFootprint,
+        1);
+  }
 }

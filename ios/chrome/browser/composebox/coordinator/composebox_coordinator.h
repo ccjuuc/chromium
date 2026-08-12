@@ -6,11 +6,11 @@
 #define IOS_CHROME_BROWSER_COMPOSEBOX_COORDINATOR_COMPOSEBOX_COORDINATOR_H_
 
 #import "base/ios/block_types.h"
-#import "ios/chrome/browser/omnibox/model/omnibox_position/omnibox_state_provider.h"
+#import "ios/chrome/browser/omnibox/model/omnibox_focus/omnibox_state_provider.h"
 #import "ios/chrome/browser/shared/coordinator/chrome_coordinator/chrome_coordinator.h"
 
 @protocol ComposeboxAnimationBase;
-enum class ComposeboxEntrypoint;
+@class ComposeboxFocusParams;
 
 // Coordinator that contains the composebox, presenting it modally.
 @interface ComposeboxCoordinator : ChromeCoordinator <OmniboxStateProvider>
@@ -19,11 +19,10 @@ enum class ComposeboxEntrypoint;
 @property(nonatomic, assign, getter=isPresented, readonly) BOOL presented;
 
 /// Initializes the coordinator with the `baseViewController`, `browser`,
-/// `entrypoint` and an optional `query` to pre-fill the omnibox.
+/// and `focusParams`.
 - (instancetype)initWithBaseViewController:(UIViewController*)baseViewController
                                    browser:(Browser*)browser
-                                entrypoint:(ComposeboxEntrypoint)entrypoint
-                                     query:(NSString*)query
+                               focusParams:(ComposeboxFocusParams*)focusParams
                    composeboxAnimationBase:
                        (id<ComposeboxAnimationBase>)composeboxAnimationBase
     NS_DESIGNATED_INITIALIZER;
@@ -33,6 +32,9 @@ enum class ComposeboxEntrypoint;
 
 /// Gracefully dismisses the coordinator before completing the cleanup.
 - (void)stopAnimatedWithCompletion:(ProceduralBlock)completion;
+
+// Hides the menu managed by this composebox instance.
+- (void)hideComposeboxMenu;
 
 @end
 

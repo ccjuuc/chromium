@@ -7,6 +7,7 @@
 #include "third_party/blink/renderer/core/dom/column_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/dom_node_ids.h"
 #include "third_party/blink/renderer/core/dom/element.h"
+#include "third_party/blink/renderer/core/dom/indexed_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
@@ -15,11 +16,13 @@
 #include "third_party/blink/renderer/core/layout/layout_box.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
+#include "third_party/blink/renderer/core/overscroll/overscroll_area_tracker.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/platform/geometry/length_functions.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "ui/gfx/geometry/quad_f.h"
+#include "ui/gfx/geometry/vector2d_f.h"
 
 namespace blink {
 namespace {
@@ -45,18 +48,20 @@ cc::SnapAlignment AdjustForRtlWritingMode(cc::SnapAlignment align) {
 // https://drafts.csswg.org/css-scroll-snap-1/#snap-axis
 cc::ScrollSnapType GetPhysicalSnapType(const LayoutBox& snap_container) {
   cc::ScrollSnapType scroll_snap_type =
-      snap_container.Style()->GetScrollSnapType();
+      snap_container.StyleRef().GetScrollSnapType();
   if (scroll_snap_type.axis == cc::SnapAxis::kInline) {
-    if (snap_container.Style()->IsHorizontalWritingMode())
+    if (snap_container.StyleRef().IsHorizontalWritingMode()) {
       scroll_snap_type.axis = cc::SnapAxis::kX;
-    else
+    } else {
       scroll_snap_type.axis = cc::SnapAxis::kY;
+    }
   }
   if (scroll_snap_type.axis == cc::SnapAxis::kBlock) {
-    if (snap_container.Style()->IsHorizontalWritingMode())
+    if (snap_container.StyleRef().IsHorizontalWritingMode()) {
       scroll_snap_type.axis = cc::SnapAxis::kY;
-    else
+    } else {
       scroll_snap_type.axis = cc::SnapAxis::kX;
+    }
   }
   // Writing mode does not affect the cases where axis is kX, kY or kBoth.
   return scroll_snap_type;
@@ -106,10 +111,9 @@ bool SnapCoordinator::UpdateSnapContainerData(LayoutBox& snap_container) {
   // https://drafts.csswg.org/css-overflow-3/#scrollport. So we use the
   // PhysicalRect of the padding box here. The coordinate is relative to the
   // container's border box.
-  PhysicalRect container_rect(
-      snap_container.OverflowClipRect(PhysicalOffset()));
+  PhysicalRect container_rect = snap_container.OverflowClipRect();
 
-  const ComputedStyle* container_style = snap_container.Style();
+  const ComputedStyle& container_style = snap_container.StyleRef();
   // The percentage of scroll-padding is different from that of normal
   // padding, as scroll-padding resolves the percentage against corresponding
   // dimension of the scrollport[1], while the normal padding resolves that
@@ -123,17 +127,17 @@ bool SnapCoordinator::UpdateSnapContainerData(LayoutBox& snap_container) {
   // [3] See for example LayoutBoxModelObject::ComputedCSSPadding where it
   //     uses |MinimumValueForLength| but against the "width".
   container_rect.ContractEdges(
-      MinimumValueForLength(container_style->ScrollPaddingTop(),
+      MinimumValueForLength(container_style.ScrollPaddingTop(),
                             container_rect.Height()),
-      MinimumValueForLength(container_style->ScrollPaddingRight(),
+      MinimumValueForLength(container_style.ScrollPaddingRight(),
                             container_rect.Width()),
-      MinimumValueForLength(container_style->ScrollPaddingBottom(),
+      MinimumValueForLength(container_style.ScrollPaddingBottom(),
                             container_rect.Height()),
-      MinimumValueForLength(container_style->ScrollPaddingLeft(),
+      MinimumValueForLength(container_style.ScrollPaddingLeft(),
                             container_rect.Width()));
   snap_container_data.set_rect(gfx::RectF(container_rect));
   snap_container_data.set_has_horizontal_writing_mode(
-      container_style->IsHorizontalWritingMode());
+      container_style.IsHorizontalWritingMode());
 
   if (snap_container_data.scroll_snap_type().strictness ==
       cc::SnapStrictness::kProximity) {
@@ -149,31 +153,36 @@ bool SnapCoordinator::UpdateSnapContainerData(LayoutBox& snap_container) {
           ? old_snap_container_data->GetTargetSnapAreaElementIds()
           : cc::TargetSnapAreaElementIds();
 
-  for (auto& fragment : snap_container.PhysicalFragments()) {
-    if (auto* snap_areas = fragment.SnapAreas()) {
-      for (Element* snap_area : *snap_areas) {
-        cc::SnapAreaData snap_area_data =
-            CalculateSnapAreaData(*snap_area, snap_container);
-        // The target snap elements should be preserved in the new container
-        // only if the respective snap areas are still present.
-        if (old_target_ids.x == snap_area_data.element_id) {
-          new_target_ids.x = old_target_ids.x;
-        }
-        if (old_target_ids.y == snap_area_data.element_id) {
-          new_target_ids.y = old_target_ids.y;
-        }
+  if (snap_container.IsOverscrollAreaParent()) {
+    AddOverscrollSnapAreas(snap_container, snap_container_data, new_target_ids,
+                           old_target_ids);
+  } else {
+    for (auto& fragment : snap_container.PhysicalFragments()) {
+      if (auto* snap_areas = fragment.SnapAreas()) {
+        for (Element* snap_area : *snap_areas) {
+          cc::SnapAreaData snap_area_data =
+              CalculateSnapAreaData(*snap_area, snap_container);
+          // The target snap elements should be preserved in the new container
+          // only if the respective snap areas are still present.
+          if (old_target_ids.x == snap_area_data.element_id) {
+            new_target_ids.x = old_target_ids.x;
+          }
+          if (old_target_ids.y == snap_area_data.element_id) {
+            new_target_ids.y = old_target_ids.y;
+          }
 
-        if (snap_area_data.rect.width() > snap_container_data.rect().width() ||
-            snap_area_data.rect.height() >
-                snap_container_data.rect().height()) {
-          snap_container.GetDocument().CountUse(
-              WebFeature::kScrollSnapCoveringSnapArea);
+          if (snap_area_data.rect.width() >
+                  snap_container_data.rect().width() ||
+              snap_area_data.rect.height() >
+                  snap_container_data.rect().height()) {
+            snap_container.GetDocument().CountUse(
+                WebFeature::kScrollSnapCoveringSnapArea);
+          }
+          snap_container_data.AddSnapAreaData(snap_area_data);
         }
-        snap_container_data.AddSnapAreaData(snap_area_data);
       }
     }
   }
-
   snap_container_data.SetTargetSnapAreaElementIds(new_target_ids);
 
   if (!old_snap_container_data ||
@@ -183,6 +192,51 @@ bool SnapCoordinator::UpdateSnapContainerData(LayoutBox& snap_container) {
     return true;
   }
   return false;
+}
+
+void SnapCoordinator::AddOverscrollSnapAreas(
+    LayoutBox& snap_container,
+    cc::SnapContainerData& snap_container_data,
+    cc::TargetSnapAreaElementIds& new_target_ids,
+    const cc::TargetSnapAreaElementIds& old_target_ids) {
+  // The ::-internal-overscroll-area-parent establishes two snap areas:
+  // 1. One for its initial scroll position, and
+  // 2. A second for the element in its area.
+  // Other elements with scroll-snap-align are not added.
+  PseudoElement* pseudo_container = To<PseudoElement>(snap_container.GetNode());
+  // ::-internal-overscroll-area-parent has an additional snap area of
+  // its own initial scroll position.
+  cc::SnapAreaData overscroll_initial_snap_area;
+  overscroll_initial_snap_area.rect =
+      gfx::RectF(snap_container.OverflowClipRect()) +
+      gfx::Vector2dF(snap_container.ScrollOrigin().OffsetFromOrigin());
+  overscroll_initial_snap_area.element_id = CompositorElementIdFromDOMNodeId(
+      snap_container.GetNode()->GetDomNodeId());
+  overscroll_initial_snap_area.scroll_snap_align = cc::ScrollSnapAlign(
+      cc::SnapAlignment::kCenter, cc::SnapAlignment::kCenter);
+  // We must always stop at the initial area, i.e. it is unexpected to swipe
+  // from one side of overscroll to the other.
+  overscroll_initial_snap_area.must_snap = true;
+  snap_container_data.AddSnapAreaData(overscroll_initial_snap_area);
+
+  // Create a snap area for the overscroll area.
+  Element& overscroll_area = pseudo_container->UltimateOriginatingElement();
+  cc::SnapAreaData overscroll_snap_area =
+      CalculateSnapAreaData(overscroll_area, snap_container);
+  overscroll_snap_area.must_snap = false;
+  overscroll_snap_area.scroll_snap_align = cc::ScrollSnapAlign(
+      cc::SnapAlignment::kCenter, cc::SnapAlignment::kCenter);
+  snap_container_data.AddSnapAreaData(overscroll_snap_area);
+
+  // Preserve target snap ids that are still present.
+  if (old_target_ids.x == overscroll_initial_snap_area.element_id ||
+      old_target_ids.x == overscroll_snap_area.element_id) {
+    new_target_ids.x = old_target_ids.x;
+  }
+  if (old_target_ids.y == overscroll_initial_snap_area.element_id ||
+      old_target_ids.y == overscroll_snap_area.element_id) {
+    new_target_ids.y = old_target_ids.y;
+  }
 }
 
 // https://drafts.csswg.org/css-scroll-snap-1/#scroll-snap-align
@@ -205,33 +259,35 @@ static cc::ScrollSnapAlign GetPhysicalAlignment(
   // itself. (This allows items in a container to have consistent snap alignment
   // in general, while ensuring that start always aligns the item to allow
   // reading its contents from the beginning.)
-  WritingDirectionMode writing_direction =
+  WritingDirectionMode container_writing_direction =
       container_style.GetWritingDirection();
   WritingDirectionMode area_writing_direction =
       area_style.GetWritingDirection();
-  if (area_writing_direction.IsHorizontal()) {
-    if (area_rect.Width() > container_rect.Width())
-      writing_direction = area_writing_direction;
-  } else {
-    if (area_rect.Height() > container_rect.Height())
-      writing_direction = area_writing_direction;
+  bool flip_x = container_writing_direction.IsFlippedX();
+  bool flip_y = container_writing_direction.IsFlippedY();
+  if (area_rect.Width() > container_rect.Width()) {
+    flip_x = area_writing_direction.IsFlippedX();
+  }
+  if (area_rect.Height() > container_rect.Height()) {
+    flip_y = area_writing_direction.IsFlippedY();
   }
 
-  bool rtl = (writing_direction.IsRtl());
-  if (writing_direction.IsHorizontal()) {
+  if (container_writing_direction.IsHorizontal()) {
     adjusted_alignment.alignment_inline =
-        rtl ? AdjustForRtlWritingMode(align.alignment_inline)
-            : align.alignment_inline;
-    adjusted_alignment.alignment_block = align.alignment_block;
-  } else {
-    bool flipped = writing_direction.IsFlippedBlocks();
-    adjusted_alignment.alignment_inline =
-        flipped ? AdjustForRtlWritingMode(align.alignment_block)
-                : align.alignment_block;
+        flip_x ? AdjustForRtlWritingMode(align.alignment_inline)
+               : align.alignment_inline;
     adjusted_alignment.alignment_block =
-        rtl ? AdjustForRtlWritingMode(align.alignment_inline)
-            : align.alignment_inline;
+        flip_y ? AdjustForRtlWritingMode(align.alignment_block)
+               : align.alignment_block;
+  } else {
+    adjusted_alignment.alignment_inline =
+        flip_x ? AdjustForRtlWritingMode(align.alignment_block)
+               : align.alignment_block;
+    adjusted_alignment.alignment_block =
+        flip_y ? AdjustForRtlWritingMode(align.alignment_inline)
+               : align.alignment_inline;
   }
+
   return adjusted_alignment;
 }
 
@@ -239,14 +295,14 @@ static cc::ScrollSnapAlign GetPhysicalAlignment(
 cc::SnapAreaData SnapCoordinator::CalculateSnapAreaData(
     Element& snap_area,
     const LayoutBox& snap_container) {
-  const ComputedStyle* container_style = snap_container.Style();
   const ComputedStyle* area_style = snap_area.GetComputedStyle();
   cc::SnapAreaData snap_area_data;
 
   // Calculate the bounding box of all fragments generated by `snap_area`,
   // relatively to `snap_container`.
-  const MapCoordinatesFlags mapping_mode =
-      kTraverseDocumentBoundaries | kIgnoreScrollOffset;
+  const MapCoordinatesFlags mapping_mode = {
+      MapCoordinatesMode::kTraverseDocumentBoundaries,
+      MapCoordinatesMode::kIgnoreScrollOffset};
   Vector<gfx::QuadF> quads;
   if (const LayoutBox* box = snap_area.GetLayoutBox()) {
     box->QuadsInAncestor(quads, &snap_container, mapping_mode);
@@ -273,7 +329,7 @@ cc::SnapAreaData SnapCoordinator::CalculateSnapAreaData(
   PhysicalRect container_rect = snap_container.PhysicalBorderBoxRect();
 
   snap_area_data.scroll_snap_align = GetPhysicalAlignment(
-      *area_style, *container_style, area_rect, container_rect);
+      *area_style, snap_container.StyleRef(), area_rect, container_rect);
 
   snap_area_data.must_snap =
       (area_style->ScrollSnapStop() == EScrollSnapStop::kAlways);

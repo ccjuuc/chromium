@@ -37,7 +37,6 @@ ContentTestSuite::ContentTestSuite(int argc, char** argv)
   // Failing tests on windows:
   // -DelegatedFrameHostTest.NoCopyOutputRequestWithNoValidSurface
   // -EmbeddedFrameSinkProviderImplTest.*
-  // -RendererSandboxSettings/RendererFeatureSandboxWinTest.RendererGeneratedPolicyTest/0
   // TODO(40105939): Enable field trials on windows.
   // --------------------------------------------------
   // On Android, `content_unittests` fails during `--gtest-list-tests` with
@@ -106,11 +105,6 @@ ContentTestSuite::ContentTestSuite(int argc, char** argv)
   // TODO(447307242) Enable testing for this field trial feature.
   // Reproducer:PrerendererTest.RemoveRendererHostAfterCandidateRemoved
   disable_field_trial("LCPTimingPredictorPrerender2");
-
-  // TODO(447306957) Enable testing for this field trial feature.
-  // Reproducer:ServiceWorkerRaceNetworkRequestURLLoaderClientTest.NetworkError_AfterInitialResponse
-  disable_field_trial(
-      "ServiceWorkerStaticRouterRaceNetworkRequestPerformanceImprovement");
 
   // TODO(447307245) Enable testing for this field trial feature.
   // Reproducer:ParametrizedTests/PrefetchServiceTest.PrefetchQueueNotStuckWhenResettingRunningPrefetch/2

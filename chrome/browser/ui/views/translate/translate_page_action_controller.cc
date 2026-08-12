@@ -11,10 +11,10 @@
 #include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/ui_features.h"
-#include "chrome/browser/ui/views/page_action/page_action_controller.h"
 #include "chrome/browser/ui/views/translate/translate_bubble_controller.h"
 #include "components/tabs/public/tab_interface.h"
 #include "components/translate/core/browser/language_state.h"
@@ -35,7 +35,6 @@ ChromeTranslateClient& GetTranslateClient(
 TranslatePageActionController::TranslatePageActionController(
     tabs::TabInterface& tab_interface)
     : PageActionObserver(kActionShowTranslate), tab_interface_(tab_interface) {
-  CHECK(IsPageActionMigrated(PageActionIconType::kTranslate));
   translate_observation_.Observe(
       GetTranslateClient(tab_interface).translate_driver());
   will_discard_contents_subscription_ =
@@ -107,10 +106,10 @@ void TranslatePageActionController::UpdatePageAction() {
     // so we manually enable the action here. This should be removed once the
     // bug is fixed.
     actions::ActionManager::Get()
-        .FindAction(kActionShowTranslate,
-                    tab_interface_->GetBrowserWindowInterface()
-                        ->GetActions()
-                        ->root_action_item())
+        .FindAction(
+            kActionShowTranslate,
+            BrowserActions::From(tab_interface_->GetBrowserWindowInterface())
+                ->root_action_item())
         ->SetEnabled(true);
     page_action_controller->Show(kActionShowTranslate);
   } else {

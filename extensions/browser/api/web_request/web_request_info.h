@@ -15,13 +15,13 @@
 #include "base/containers/flat_map.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/values.h"
-#include "content/public/browser/child_process_id.h"
 #include "content/public/browser/global_routing_id.h"
+#include "content/public/common/child_process_id.h"
 #include "extensions/browser/api/declarative_net_request/request_action.h"
-#include "extensions/browser/api/web_request/web_request_resource_type.h"
 #include "extensions/browser/extension_api_frame_id_map.h"
 #include "extensions/buildflags/buildflags.h"
-#include "ipc/constants.mojom.h"
+#include "extensions/common/api/web_request/web_request_resource_type.h"
+#include "ipc/constants.mojom-forward.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
 #include "net/ssl/ssl_info.h"
@@ -44,8 +44,7 @@ struct WebRequestInfoInitParams {
   // URLLoaderFactory interface.
   WebRequestInfoInitParams(
       uint64_t request_id,
-      int render_process_id,
-      int frame_routing_id,
+      content::GlobalRenderFrameHostId global_id,
       std::unique_ptr<ExtensionNavigationUIData> navigation_ui_data,
       const network::ResourceRequest& request,
       bool is_download,
@@ -63,15 +62,14 @@ struct WebRequestInfoInitParams {
 
   uint64_t id = 0;
   GURL url;
-  int render_process_id = -1;
-  int frame_routing_id = IPC::mojom::kRoutingIdNone;
+  content::GlobalRenderFrameHostId global_id;
   std::string method;
   bool is_navigation_request = false;
   std::optional<url::Origin> initiator;
   WebRequestResourceType web_request_type = WebRequestResourceType::OTHER;
   bool is_async = false;
   net::HttpRequestHeaders extra_request_headers;
-  std::optional<base::Value::Dict> request_body_data;
+  std::optional<base::DictValue> request_body_data;
   bool is_web_view = false;
   int web_view_instance_id = -1;
   int web_view_rules_registry_id = -1;
@@ -80,6 +78,7 @@ struct WebRequestInfoInitParams {
   bool is_service_worker_script = false;
   std::optional<int64_t> navigation_id;
   content::GlobalRenderFrameHostId parent_routing_id;
+  bool is_privileged = false;
 
  private:
   void InitializeWebViewAndFrameData(
@@ -129,13 +128,9 @@ struct WebRequestInfo {
   // The URL of the request.
   const GURL url;
 
-  // The ID of the render process which initiated the request, or -1 of not
-  // applicable (i.e. if initiated by the browser).
-  const int render_process_id;
-
-  // The frame routing ID of the frame which initiated this request, or
-  // IPC::mojom::kRoutingIdNone if the request was not initiated by a frame.
-  const int frame_routing_id = IPC::mojom::kRoutingIdNone;
+  // The ID and frame routing ID of the render process which initiated the
+  // request, or invalid if not applicable (i.e. if initiated by the browser).
+  const content::GlobalRenderFrameHostId global_id;
 
   // The HTTP method used for the request, if applicable.
   const std::string method;
@@ -176,7 +171,7 @@ struct WebRequestInfo {
   // A dictionary of request body data matching the format expected by
   // WebRequest API consumers. This may have a "formData" key and/or a "raw"
   // key. See WebRequest API documentation for more details.
-  std::optional<base::Value::Dict> request_body_data;
+  std::optional<base::DictValue> request_body_data;
 
   // Indicates whether this request was initiated by a <webview> instance.
   const bool is_web_view;
@@ -212,6 +207,12 @@ struct WebRequestInfo {
   // TODO(karandeepb, mcnee): For subresources, having "parent" in the name is
   // misleading. This should be renamed to indicate that this is the initiator.
   const content::GlobalRenderFrameHostId parent_routing_id;
+
+  // True if this request is for privileged content (see //chrome's
+  // PrivilegedWebContents). Such requests are hidden from the webRequest API
+  // and exempt from Declarative Net Request. Computed once at construction,
+  // since a navigation may have no live renderer process to consult later.
+  const bool is_privileged;
 
   // For SecurityInfo object.
   std::optional<net::SSLInfo> ssl_info;

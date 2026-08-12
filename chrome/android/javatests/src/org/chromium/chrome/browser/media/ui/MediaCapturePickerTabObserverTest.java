@@ -5,8 +5,10 @@
 package org.chromium.chrome.browser.media.ui;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -28,8 +30,10 @@ import org.chromium.chrome.browser.media.MediaCapturePickerManager;
 import org.chromium.chrome.browser.media.MediaCapturePickerTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabObserver;
+import org.chromium.chrome.browser.url_constants.UrlConstantResolver;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.url.GURL;
 
 /** Tests for the {@link MediaCapturePickerTabObserver}. */
 @RunWith(ChromeJUnit4ClassRunner.class)
@@ -74,10 +78,15 @@ public class MediaCapturePickerTabObserverTest {
         }
     }
 
-    private Tab createMockTab(WebContents webContents, boolean isNative) {
+    private Tab createMockTab(WebContents webContents) {
         final Tab tab = mock(Tab.class);
-        when(tab.isNativePage()).thenReturn(isNative);
         when(tab.getWebContents()).thenReturn(webContents);
+        return tab;
+    }
+
+    private Tab createMockTab(WebContents webContents, GURL url) {
+        final Tab tab = createMockTab(webContents);
+        when(tab.getUrl()).thenReturn(url);
         return tab;
     }
 
@@ -88,7 +97,7 @@ public class MediaCapturePickerTabObserverTest {
         final var observer =
                 new MediaCapturePickerTabObserver(mObserverDelegate, params, mFilterDelegate);
 
-        final Tab tab = createMockTab(params.webContents, /* isNative= */ false);
+        final Tab tab = createMockTab(params.webContents);
         observer.onTabAdded(tab);
         verify(mObserverDelegate).onTabAdded(tab);
         verify(tab).addObserver(any());
@@ -105,7 +114,7 @@ public class MediaCapturePickerTabObserverTest {
         final var observer =
                 new MediaCapturePickerTabObserver(mObserverDelegate, params, mFilterDelegate);
 
-        final Tab tab = createMockTab(/* webContents= */ null, /* isNative= */ true);
+        final Tab tab = createMockTab(params.webContents, UrlConstantResolver.getOriginalNtpGurl());
         observer.onTabAdded(tab);
         verify(mObserverDelegate, never()).onTabAdded(tab);
         verify(tab).addObserver(any());
@@ -124,8 +133,8 @@ public class MediaCapturePickerTabObserverTest {
         final var observer =
                 new MediaCapturePickerTabObserver(mObserverDelegate, params, mFilterDelegate);
 
-        final Tab thisTab = createMockTab(webContents, /* isNative= */ false);
-        final Tab anotherTab = createMockTab(mock(WebContents.class), /* isNative= */ false);
+        final Tab thisTab = createMockTab(webContents);
+        final Tab anotherTab = createMockTab(mock(WebContents.class));
 
         observer.onTabAdded(thisTab);
         verify(mObserverDelegate).onTabAdded(thisTab);
@@ -154,7 +163,7 @@ public class MediaCapturePickerTabObserverTest {
 
         // Tab that should be filtered.
         final WebContents filteredWebContents = mock(WebContents.class);
-        final Tab filteredTab = createMockTab(filteredWebContents, /* isNative= */ false);
+        final Tab filteredTab = createMockTab(filteredWebContents);
         when(mFilterDelegate.shouldFilterWebContents(filteredWebContents)).thenReturn(true);
 
         observer.onTabAdded(filteredTab);
@@ -163,7 +172,7 @@ public class MediaCapturePickerTabObserverTest {
 
         // Tab that should not be filtered.
         final WebContents allowedWebContents = mock(WebContents.class);
-        final Tab allowedTab = createMockTab(allowedWebContents, /* isNative= */ false);
+        final Tab allowedTab = createMockTab(allowedWebContents);
         when(mFilterDelegate.shouldFilterWebContents(allowedWebContents)).thenReturn(false);
 
         observer.onTabAdded(allowedTab);
@@ -178,7 +187,7 @@ public class MediaCapturePickerTabObserverTest {
         final var observer =
                 new MediaCapturePickerTabObserver(mObserverDelegate, params, mFilterDelegate);
 
-        final Tab tab = createMockTab(params.webContents, /* isNative= */ false);
+        final Tab tab = createMockTab(params.webContents);
         final ArgumentCaptor<TabObserver> tabObserverCaptor =
                 ArgumentCaptor.forClass(TabObserver.class);
 
@@ -187,7 +196,20 @@ public class MediaCapturePickerTabObserverTest {
         verify(tab).addObserver(tabObserverCaptor.capture());
 
         final TabObserver tabObserver = tabObserverCaptor.getValue();
+
         tabObserver.onTitleUpdated(tab);
-        verify(mObserverDelegate).onTabUpdated(tab);
+        verify(mObserverDelegate).onTabTitleUpdated(tab);
+
+        tabObserver.onFaviconUpdated(tab, null, null);
+        verify(mObserverDelegate).onTabIconUpdated(eq(tab), any());
+
+        tabObserver.onUrlUpdated(tab);
+        verify(mObserverDelegate).onTabContentUpdated(tab);
+
+        tabObserver.onContentChanged(tab);
+        verify(mObserverDelegate, times(2)).onTabContentUpdated(tab);
+
+        tabObserver.onPageLoadFinished(tab, GURL.emptyGURL());
+        verify(mObserverDelegate, times(3)).onTabContentUpdated(tab);
     }
 }

@@ -7,8 +7,10 @@ package org.chromium.chrome.browser.tasks.tab_management;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -33,6 +35,8 @@ import org.mockito.junit.MockitoRule;
 import org.chromium.base.Token;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.collaboration.CollaborationServiceFactory;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceOrchestrator;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceOrchestratorFactory;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
@@ -48,7 +52,7 @@ import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.listmenu.ListMenuItemProperties;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
-import org.chromium.ui.widget.RectProvider;
+import org.chromium.ui.widget.ViewRectProvider;
 
 import java.util.List;
 
@@ -71,7 +75,9 @@ public class TabListGroupMenuCoordinatorUnitTest {
     @Mock private TabGroupSyncService mTabGroupSyncService;
     @Mock private CollaborationService mCollaborationService;
     @Mock private ServiceStatus mServiceStatus;
+    @Mock private ViewRectProvider mViewRectProvider;
     @Mock private OnItemClickedCallback<Token> mOnItemClickedCallback;
+    @Mock private MultiInstanceOrchestrator mMultiInstanceOrchestrator;
 
     @Captor private ArgumentCaptor<ModelList> mModelListCaptor;
 
@@ -88,6 +94,7 @@ public class TabListGroupMenuCoordinatorUnitTest {
         when(mTab.getTabGroupId()).thenReturn(TAB_GROUP_TOKEN);
         when(mTabModel.getProfile()).thenReturn(mProfile);
         when(mTabModel.isIncognitoBranded()).thenReturn(false);
+        MultiInstanceOrchestratorFactory.setInstanceForTesting(mMultiInstanceOrchestrator);
         TabGroupSyncServiceFactory.setForTesting(mTabGroupSyncService);
         CollaborationServiceFactory.setForTesting(mCollaborationService);
         when(mCollaborationService.getServiceStatus()).thenReturn(mServiceStatus);
@@ -98,6 +105,9 @@ public class TabListGroupMenuCoordinatorUnitTest {
         when(mTab.getTabGroupId()).thenReturn(TAB_GROUP_TOKEN);
         mSavedTabGroup = new SavedTabGroup();
         when(mTabGroupSyncService.getGroup(any(LocalTabGroupId.class))).thenReturn(mSavedTabGroup);
+
+        when(mViewRectProvider.getRect()).thenReturn(new Rect());
+        when(mViewRectProvider.isViewShown()).thenReturn(true);
 
         mMenuCoordinator =
                 spy(
@@ -119,7 +129,7 @@ public class TabListGroupMenuCoordinatorUnitTest {
     }
 
     @Test
-    public void testBuildMenuItems_WithDelete() {
+    public void testBuildMenuItems_withDelete() {
         ModelList modelList = new ModelList();
         when(mServiceStatus.isAllowedToJoin()).thenReturn(false);
 
@@ -135,14 +145,11 @@ public class TabListGroupMenuCoordinatorUnitTest {
     }
 
     @Test
-    public void testBuildMenuItems_WithIcons() {
+    public void testBuildMenuItems_withIcons() {
         ModelList modelList = new ModelList();
         when(mServiceStatus.isAllowedToJoin()).thenReturn(false);
 
-        RectProvider viewRectProvider = mock();
-        when(viewRectProvider.getRect()).thenReturn(new Rect());
-
-        mMenuCoordinator.showMenu(viewRectProvider, TAB_GROUP_TOKEN, /* focusable= */ true);
+        mMenuCoordinator.showMenu(mViewRectProvider, TAB_GROUP_TOKEN, /* focusable= */ true);
         mMenuCoordinator.destroyMenuForTesting();
         mMenuCoordinator.buildMenuActionItems(modelList, TAB_GROUP_TOKEN);
 
@@ -154,7 +161,24 @@ public class TabListGroupMenuCoordinatorUnitTest {
     }
 
     @Test
-    public void testBuildMenuItems_NoDelete() {
+    public void testBuildMenuItems_viewNotShown() {
+        when(mViewRectProvider.isViewShown()).thenReturn(false);
+
+        mMenuCoordinator.showMenu(mViewRectProvider, TAB_GROUP_TOKEN, /* focusable= */ true);
+        verify(mMenuCoordinator, never())
+                .createAndShowMenu(
+                        any(),
+                        any(),
+                        anyBoolean(),
+                        anyBoolean(),
+                        anyInt(),
+                        anyInt(),
+                        any(),
+                        anyBoolean());
+    }
+
+    @Test
+    public void testBuildMenuItems_noDelete() {
         setCollaborationState(true);
         ModelList modelList = new ModelList();
         mMenuCoordinator.buildMenuActionItems(modelList, TAB_GROUP_TOKEN);
@@ -181,7 +205,7 @@ public class TabListGroupMenuCoordinatorUnitTest {
     }
 
     @Test
-    public void testBuildMenuItems_Share() {
+    public void testBuildMenuItems_share() {
         setCollaborationState(true);
         ModelList modelList = new ModelList();
         when(mServiceStatus.isAllowedToCreate()).thenReturn(false);
@@ -231,7 +255,7 @@ public class TabListGroupMenuCoordinatorUnitTest {
     }
 
     @Test
-    public void testBuildCollaborationMenuItems_Unknown() {
+    public void testBuildCollaborationMenuItems_unknown() {
         setCollaborationState(true);
         ModelList modelList = new ModelList();
         mMenuCoordinator.buildCollaborationMenuItems(modelList, MemberRole.UNKNOWN);
@@ -240,7 +264,7 @@ public class TabListGroupMenuCoordinatorUnitTest {
     }
 
     @Test
-    public void testBuildAllItems_Member() {
+    public void testBuildAllItems_member() {
         setCollaborationState(true);
         when(mCollaborationService.getCurrentUserRoleForGroup(COLLABORATION_ID1))
                 .thenReturn(MemberRole.MEMBER);
@@ -263,7 +287,7 @@ public class TabListGroupMenuCoordinatorUnitTest {
     }
 
     @Test
-    public void testBuildAllItems_Owner() {
+    public void testBuildAllItems_owner() {
         setCollaborationState(true);
         when(mCollaborationService.getCurrentUserRoleForGroup(COLLABORATION_ID1))
                 .thenReturn(MemberRole.OWNER);
@@ -283,6 +307,34 @@ public class TabListGroupMenuCoordinatorUnitTest {
         assertListMenuItemsAre(mModelListCaptor.getValue(), menuIds);
 
         mMenuCoordinator.dismiss();
+    }
+
+    @Test
+    public void testBuildMenuItems_textAppearance() {
+        ModelList modelList = new ModelList();
+        mMenuCoordinator.buildMenuActionItems(modelList, TAB_GROUP_TOKEN);
+
+        for (int i = 0; i < modelList.size(); i++) {
+            PropertyModel propertyModel = modelList.get(i).model;
+            // The style was removed, so it should now be the default from ListItemBuilder.
+            assertEquals(
+                    "Should use default non-incognito style",
+                    R.style.TextAppearance_BrowserUIListMenuItem,
+                    propertyModel.get(ListMenuItemProperties.TEXT_APPEARANCE_ID));
+        }
+
+        modelList = new ModelList();
+        when(mTabModel.isIncognitoBranded()).thenReturn(true);
+        mMenuCoordinator.buildMenuActionItems(modelList, TAB_GROUP_TOKEN);
+
+        for (int i = 0; i < modelList.size(); i++) {
+            PropertyModel propertyModel = modelList.get(i).model;
+            // For incognito, it should be the incognito default from ListItemBuilder.
+            assertEquals(
+                    "Incognito should use default incognito style",
+                    R.style.TextAppearance_DensityAdaptive_TextLarge_Primary_Baseline_Light,
+                    propertyModel.get(ListMenuItemProperties.TEXT_APPEARANCE_ID));
+        }
     }
 
     private void assertListMenuItemsAre(ModelList modelList, List<Integer> menuIds) {

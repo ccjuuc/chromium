@@ -14,6 +14,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/synchronization/lock.h"
+#include "base/task/current_thread.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "mojo/core/embedder/embedder.h"
@@ -152,8 +153,9 @@ ThreadLocalNode::ThreadLocalNode(base::PassKey<ThreadLocalNode>) {
       .memory_flags = IPCZ_MEMORY_FIXED_PARCEL_CAPACITY,
   };
   IpczHandle node;
-  const IpczResult create_result = ipcz.CreateNode(
-      &core::ipcz_driver::kDriver, IPCZ_NO_FLAGS, &create_options, &node);
+  const IpczResult create_result =
+      ipcz.CreateNode(&core::ipcz_driver::GetIpczDriver(), IPCZ_NO_FLAGS,
+                      &create_options, &node);
   CHECK_EQ(create_result, IPCZ_RESULT_OK);
   node_.reset(Handle(node));
 
@@ -364,6 +366,14 @@ namespace mojo {
 
 bool IsDirectReceiverSupported() {
   return core::IsMojoIpczEnabled();
+}
+
+bool IsAsyncIOSupported() {
+  if (!base::CurrentThread::IsSet()) {
+    return false;
+  }
+  return base::CurrentIOThread::IsSet() ||
+         base::CurrentThread::Get()->IsAsyncIOSupported();
 }
 
 #if BUILDFLAG(IS_WIN)

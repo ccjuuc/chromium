@@ -12,6 +12,7 @@ import android.widget.TextView;
 import androidx.fragment.app.FragmentManager;
 import androidx.lifecycle.Lifecycle.State;
 import androidx.test.core.app.ActivityScenario;
+import androidx.test.ext.junit.rules.ActivityScenarioRule;
 
 import org.hamcrest.Matchers;
 import org.junit.After;
@@ -28,9 +29,12 @@ import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.UserActionTester;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.homepage.HomepageManager;
 import org.chromium.chrome.browser.homepage.HomepagePolicyManager;
 import org.chromium.chrome.browser.homepage.HomepageTestRule;
@@ -92,6 +96,10 @@ public class HomepageSettingsUnitTest {
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
+    @Rule
+    public ActivityScenarioRule<TestActivity> mActivityScenarioRule =
+            new ActivityScenarioRule<>(TestActivity.class);
+
     @Mock public HomepagePolicyManager mMockHomepagePolicyManager;
     @Mock public PartnerBrowserCustomizations mMockPartnerBrowserCustomizations;
     @Mock public Profile mProfile;
@@ -112,7 +120,7 @@ public class HomepageSettingsUnitTest {
     public void setUp() {
         HomepagePolicyManager.setInstanceForTests(mMockHomepagePolicyManager);
         PartnerBrowserCustomizations.setInstanceForTesting(mMockPartnerBrowserCustomizations);
-        mActivityScenario = ActivityScenario.launch(TestActivity.class);
+        mActivityScenario = mActivityScenarioRule.getScenario();
         mActivityScenario.onActivity(
                 activity -> {
                     mActivity = activity;
@@ -126,7 +134,6 @@ public class HomepageSettingsUnitTest {
 
     @After
     public void tearDown() {
-        mActivityScenario.close();
         mActionTester.tearDown();
     }
 
@@ -204,6 +211,7 @@ public class HomepageSettingsUnitTest {
 
     @Test
     @Feature({"Homepage"})
+    @DisableFeatures(ChromeFeatureList.DISABLE_PARTNER_HOMEPAGE_ANDROID)
     public void testStartUp_ChromeNtp_WithPartner() {
         setPartnerHomepage(TEST_URL_FOO);
         mHomepageTestRule.useChromeNtpForTest();
@@ -788,6 +796,7 @@ public class HomepageSettingsUnitTest {
 
     @Test
     @Feature({"Homepage"})
+    @DisableFeatures(ChromeFeatureList.DISABLE_PARTNER_HOMEPAGE_ANDROID)
     public void testStartUp_DefaultToPartner() {
         setPartnerHomepage(TEST_URL_FOO);
         mHomepageTestRule.useDefaultHomepageForTest();
@@ -1082,7 +1091,7 @@ public class HomepageSettingsUnitTest {
 
         // Act: Click the NTP radio button.
         checkRadioButtonAndWait(mChromeNtpRadioButton);
-        ShadowLooper.idleMainLooper(); // Ensure any pending tasks are run.
+        RobolectricUtil.runAllBackgroundAndUi(); // Ensure any pending tasks are run.
 
         // Assert: The HomepageManager should reflect the change to NTP immediately,
         // even though finishSettingsActivity() has not been called.
@@ -1170,7 +1179,7 @@ public class HomepageSettingsUnitTest {
 
     private void checkRadioButtonAndWait(RadioButtonWithDescription radioButton) {
         TouchCommon.singleClickView(radioButton, 5, 5);
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         Assert.assertTrue("RadioButton is not checked.", radioButton.isChecked());
     }
 

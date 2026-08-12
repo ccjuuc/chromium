@@ -4,8 +4,9 @@
 
 #include "services/preferences/tracked/tracked_atomic_preference.h"
 
-#include "base/containers/contains.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/values.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #include "services/preferences/public/cpp/tracked/pref_names.h"
 #include "services/preferences/public/mojom/tracked_preference_validation_delegate.mojom.h"
 #include "services/preferences/tracked/pref_hash_store_transaction.h"
@@ -48,7 +49,7 @@ void TrackedAtomicPreference::OnNewValue(
 }
 
 bool TrackedAtomicPreference::EnforceAndReport(
-    base::Value::Dict& pref_store_contents,
+    base::DictValue& pref_store_contents,
     PrefHashStoreTransaction* transaction,
     PrefHashStoreTransaction* external_validation_transaction,
     const os_crypt_async::Encryptor* encryptor) const {
@@ -58,13 +59,15 @@ bool TrackedAtomicPreference::EnforceAndReport(
   // rolled out and the hmac based validation is removed.
   // transaction->CheckValue() (from CL1) is dual-hash aware and uses the
   // encryptor with which `transaction` was initialized by PrefHashFilter.
-  ValueState value_state = transaction->CheckValue(pref_path_, value);
+  ValueState value_state =
+      transaction->CheckValue(pref_path_, value, GetReportingId());
   helper_.ReportValidationResult(value_state, transaction->GetStoreUMASuffix());
 
   ValueState external_validation_value_state = ValueState::UNSUPPORTED;
   if (external_validation_transaction) {
     external_validation_value_state =
-        external_validation_transaction->CheckValue(pref_path_, value);
+        external_validation_transaction->CheckValue(pref_path_, value,
+                                                    GetReportingId());
     helper_.ReportValidationResult(
         external_validation_value_state,
         external_validation_transaction->GetStoreUMASuffix());
@@ -84,11 +87,10 @@ bool TrackedAtomicPreference::EnforceAndReport(
       reset_action == TrackedPreferenceHelper::DO_RESET_LEGACY ||
       reset_action == TrackedPreferenceHelper::DO_RESET_ENCRYPTED) {
     if (value) {
-      base::Value::List* reset_prefs_list =
+      base::ListValue* reset_prefs_list =
           pref_store_contents.EnsureList(user_prefs::kTrackedPreferencesReset);
-      base::Value new_path(pref_path_);
-      if (!base::Contains(*reset_prefs_list, new_path)) {
-        reset_prefs_list->Append(std::move(new_path));
+      if (!reset_prefs_list->contains(pref_path_)) {
+        reset_prefs_list->Append(pref_path_);
       }
     }
     pref_store_contents.RemoveByDottedPath(pref_path_);

@@ -78,14 +78,14 @@ class ManagePasswordsState {
           password_manager::PasswordForm());
 
   // Move to MANAGE_STATE or INACTIVE_STATE for PSL matched passwords.
-  // |password_forms| contains best matches from the password store for the
-  // form which was autofilled, |origin| is an origin of the form which was
+  // |password_credentials| contains best matches from the password store for
+  // the form which was autofilled, |origin| is an origin of the form which was
   // autofilled. In addition, |federated_matches|, contains stored federated
   // credentials, if any, to show to the user as well.
   void OnPasswordAutofilled(
-      base::span<const password_manager::PasswordForm> password_forms,
+      base::span<const password_manager::StoredCredential> password_credentials,
       url::Origin origin,
-      base::span<const password_manager::PasswordForm> federated_matches);
+      base::span<const password_manager::StoredCredential> federated_matches);
 
   // Move to INACTIVE_STATE.
   void OnInactive();
@@ -221,8 +221,7 @@ class ManagePasswordsState {
   password_manager::ui::State state_;
 
   // The client used for logging.
-  raw_ptr<password_manager::PasswordManagerClient, AcrossTasksDanglingUntriaged>
-      client_;
+  raw_ptr<password_manager::PasswordManagerClient> client_;
 
   // Whether GPM pin was created in the same flow as recent passkey creation.
   bool gpm_pin_created_during_recent_passkey_creation_ = false;

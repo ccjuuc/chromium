@@ -98,7 +98,6 @@ class ProgramManagerTestBase : public GpuServiceTest, public DecoderClient {
   void OnRescheduleAfterFinished() override {}
   void ScheduleGrContextCleanup() override {}
   void HandleReturnData(base::span<const uint8_t> data) override {}
-  bool ShouldYield() override { return false; }
 
   std::unique_ptr<ProgramManager> manager_;
   GpuPreferences gpu_preferences_;
@@ -121,6 +120,39 @@ TEST_F(ProgramManagerTest, Basic) {
   EXPECT_EQ(kClient1Id, client_id);
   // Check we get nothing for a non-existent program.
   EXPECT_TRUE(manager_->GetProgram(kClient2Id) == nullptr);
+}
+
+// Regression test: GL_SAMPLER_EXTERNAL_2D_Y2Y_EXT must be recognised as a
+// sampler. The UniformInfo constructor accepts it (sets accepts_api_type =
+// kUniform1i), so IsSampler() must also return true; otherwise the
+// SetSamplers() texture-unit range check is skipped and an attacker-supplied
+// out-of-range unit index is forwarded to the native driver via glUniform1i.
+TEST(ProgramManagerUniformInfoTest, SamplerExternal2DY2YIsSampler) {
+  std::vector<GLint> locs = {0};
+
+  // Control: GL_SAMPLER_EXTERNAL_OES is correctly handled.
+  Program::UniformInfo oes("s_oes", 0, GL_SAMPLER_EXTERNAL_OES, false, locs);
+  EXPECT_EQ(UniformApiType::kUniform1i, oes.accepts_api_type);
+  EXPECT_TRUE(oes.IsSampler());
+  EXPECT_EQ(1u, oes.texture_units.size());
+
+  // Bug: GL_SAMPLER_EXTERNAL_2D_Y2Y_EXT is accepted as a kUniform1i target
+  // (program_manager.cc:371) but IsSampler() returns false
+  // (program_manager.h:103-126 omits it). texture_units is therefore empty,
+  // the uniform is excluded from sampler_indices_, and Program::SetSamplers()
+  // skips the `value[ii] < num_texture_units` bounds check at
+  // program_manager.cc:1433.
+  Program::UniformInfo y2y("s_y2y", 0, GL_SAMPLER_EXTERNAL_2D_Y2Y_EXT, false,
+                           locs);
+  EXPECT_EQ(UniformApiType::kUniform1i, y2y.accepts_api_type)
+      << "Y2Y sampler accepts glUniform1i (program_manager.cc:371)";
+  EXPECT_TRUE(y2y.IsSampler())
+      << "GL_SAMPLER_EXTERNAL_2D_Y2Y_EXT missing from "
+         "UniformInfo::IsSampler() switch -- SetSamplers() texture-unit "
+         "bounds check is bypassed";
+  EXPECT_EQ(1u, y2y.texture_units.size())
+      << "texture_units sized to 0 because IsSampler() returned false; "
+         "uniform excluded from sampler_indices_";
 }
 
 TEST_F(ProgramManagerTest, Destroy) {
@@ -1075,6 +1107,25 @@ TEST_F(ProgramManagerWithShaderTest, ProgramInfoUseCount) {
   EXPECT_TRUE(info2 == nullptr);
   EXPECT_FALSE(vshader->InUse());
   EXPECT_FALSE(fshader->InUse());
+}
+
+TEST_F(ProgramManagerWithShaderTest, ProgramInfoActiveTransformFeedbackCount) {
+  Program* program =
+      manager_->CreateProgram(kClientProgramId, kServiceProgramId);
+  ASSERT_TRUE(program != nullptr);
+  EXPECT_FALSE(program->IsActiveForTransformFeedback());
+
+  program->IncrementActiveTransformFeedbackCount();
+  EXPECT_TRUE(program->IsActiveForTransformFeedback());
+
+  program->IncrementActiveTransformFeedbackCount();
+  EXPECT_TRUE(program->IsActiveForTransformFeedback());
+
+  program->DecrementActiveTransformFeedbackCount();
+  EXPECT_TRUE(program->IsActiveForTransformFeedback());
+
+  program->DecrementActiveTransformFeedbackCount();
+  EXPECT_FALSE(program->IsActiveForTransformFeedback());
 }
 
 TEST_F(ProgramManagerWithShaderTest, ProgramInfoUseCount2) {

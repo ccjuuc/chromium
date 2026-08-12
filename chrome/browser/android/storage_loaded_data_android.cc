@@ -6,18 +6,20 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 
 #include "base/android/callback_android.h"
 #include "base/android/jni_array.h"
-#include "base/android/jni_callback.h"
 #include "base/android/jni_string.h"
 #include "base/android/token_android.h"
 #include "base/functional/bind.h"
+#include "chrome/browser/android/restore_entity_tracker_android.h"
 #include "chrome/browser/android/tab_android.h"
 #include "chrome/browser/android/tab_group_collection_data_android.h"
 #include "chrome/browser/android/tab_state_storage_service_factory.h"
 #include "chrome/browser/tab/collection_save_forwarder.h"
 #include "chrome/browser/tab/storage_loaded_data.h"
+#include "chrome/browser/tab/storage_loading_context.h"
 #include "chrome/browser/tab/tab_group_collection_data.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/android/jni_conversion.h"
@@ -28,10 +30,6 @@
 
 namespace tabs {
 
-namespace {
-
-using ScopedJavaLocalRef = base::android::ScopedJavaLocalRef<jobject>;
-
 base::android::ScopedJavaLocalRef<jobject> CreateLoadedTabState(
     JNIEnv* env,
     tabs_pb::TabState& tab_state) {
@@ -40,11 +38,10 @@ base::android::ScopedJavaLocalRef<jobject> CreateLoadedTabState(
   if (tab_state.has_web_contents_state_bytes()) {
     std::string* web_contents_state_bytes_ptr =
         tab_state.release_web_contents_state_bytes();
-    j_web_contents_state_buffer =
-        base::android::ScopedJavaLocalRef<jobject>::Adopt(
-            env, env->NewDirectByteBuffer(
-                     static_cast<void*>(web_contents_state_bytes_ptr->data()),
-                     web_contents_state_bytes_ptr->size()));
+    j_web_contents_state_buffer = jni_zero::AdoptRef(
+        env, env->NewDirectByteBuffer(
+                 static_cast<void*>(web_contents_state_bytes_ptr->data()),
+                 web_contents_state_bytes_ptr->size()));
     j_web_contents_state_string_pointer =
         reinterpret_cast<long>(web_contents_state_bytes_ptr);
   }
@@ -66,62 +63,51 @@ base::android::ScopedJavaLocalRef<jobject> CreateLoadedTabState(
           tab_state.user_agent(),
           tab_state.last_navigation_committed_timestamp_millis(),
           j_tab_group_id, tab_state.tab_has_sensitive_content(),
-          tab_state.is_pinned());
+          tab_state.is_pinned(), tab_state.url());
 
   return Java_StorageLoadedData_createLoadedTabState(env, tab_state.tab_id(),
                                                      j_tab_state);
 }
 
-base::android::ScopedJavaLocalRef<jobjectArray> CreateLoadedTabStates(
+base::android::ScopedJavaLocalRef<jobject> CreateStorageLoadWarning(
     JNIEnv* env,
-    std::vector<tabs_pb::TabState>& loaded_tabs) {
-  std::vector<base::android::ScopedJavaLocalRef<jobject>>
-      j_loaded_tab_state_vector;
-  for (auto& loaded_tab : loaded_tabs) {
-    j_loaded_tab_state_vector.push_back(CreateLoadedTabState(env, loaded_tab));
-  }
-
-  base::android::ScopedJavaLocalRef<jclass> type = base::android::GetClass(
-      env, "org/chromium/chrome/browser/tab/StorageLoadedData$LoadedTabState");
-  return base::android::ToTypedJavaArrayOfObjects(
-      env, j_loaded_tab_state_vector, type.obj());
+    const StorageLoadingContext::Warning& warning) {
+  return Java_StorageLoadedData_createStorageLoadWarning(
+      env, static_cast<int>(warning.status), warning.message);
 }
-
-base::android::ScopedJavaLocalRef<jobjectArray> CreateGroupCollectionData(
-    JNIEnv* env,
-    std::vector<std::unique_ptr<TabGroupCollectionData>>& loaded_groups) {
-  std::vector<base::android::ScopedJavaLocalRef<jobject>> j_loaded_group_vector;
-  for (auto& loaded_group : loaded_groups) {
-    auto* android_group =
-        new TabGroupCollectionDataAndroid(std::move(loaded_group));
-    j_loaded_group_vector.push_back(android_group->GetJavaObject());
-  }
-
-  base::android::ScopedJavaLocalRef<jclass> type = base::android::GetClass(
-      env, "org/chromium/chrome/browser/tab/TabGroupCollectionData");
-  return base::android::ToTypedJavaArrayOfObjects(env, j_loaded_group_vector,
-                                                  type.obj());
-}
-
-}  // namespace
 
 StorageLoadedDataAndroid::StorageLoadedDataAndroid(
     JNIEnv* env,
     std::unique_ptr<StorageLoadedData> data)
     : data_(std::move(data)) {
-  base::android::ScopedJavaLocalRef<jobjectArray> loaded_tab_states =
-      CreateLoadedTabStates(env, data_->GetLoadedTabs());
-  base::android::ScopedJavaLocalRef<jobjectArray> loaded_groups =
-      CreateGroupCollectionData(env, data_->GetLoadedGroups());
+  std::vector<TabGroupCollectionDataAndroid*> tab_group_collection_data_android;
+  for (auto& loaded_group : data_->GetLoadedGroups()) {
+    auto* android_group =
+        new TabGroupCollectionDataAndroid(std::move(loaded_group));
+    tab_group_collection_data_android.push_back(android_group);
+  }
+  const StorageLoadingContext& context = data_->GetLoadingContext();
+
   j_object_ = Java_StorageLoadedData_createData(
-      env, reinterpret_cast<intptr_t>(this), loaded_tab_states, loaded_groups,
-      data_->GetActiveTabIndex().value_or(-1));
+      env, reinterpret_cast<intptr_t>(this), data_->GetLoadedTabs(),
+      tab_group_collection_data_android,
+      data_->GetActiveTabIndex().value_or(-1), context.warnings());
 }
 
 StorageLoadedDataAndroid::~StorageLoadedDataAndroid() = default;
 
 void StorageLoadedDataAndroid::Destroy(JNIEnv* env) {
   delete this;
+}
+
+void StorageLoadedDataAndroid::OnTabRejected(JNIEnv* env, int tab_android_id) {
+  RestoreEntityTrackerAndroid* tracker =
+      static_cast<RestoreEntityTrackerAndroid*>(data_->GetTracker());
+  std::optional<StorageId> node_id =
+      tracker->GetStorageIdForTab(tab_android_id);
+  if (node_id.has_value()) {
+    GetData()->NotifyNodeRejected(*node_id);
+  }
 }
 
 base::android::ScopedJavaLocalRef<jobject>

@@ -124,8 +124,7 @@ class ThreadGroupTestBase : public testing::Test, public ThreadGroup::Delegate {
     thread_group_impl->Start(kMaxTasks, kMaxBestEffortTasks, TimeDelta::Max(),
                              service_thread_.task_runner(), nullptr,
                              worker_environment,
-                             /*synchronous_thread_start_for_testing=*/false,
-                             /*may_block_threshold=*/{});
+                             /*synchronous_thread_start_for_testing=*/false);
   }
 
   void DestroyThreadGroup() {
@@ -148,7 +147,8 @@ class ThreadGroupTestBase : public testing::Test, public ThreadGroup::Delegate {
 
  private:
   // ThreadGroup::Delegate:
-  ThreadGroup* GetThreadGroupForTraits(const TaskTraits& traits) override {
+  ThreadGroup* GetThreadGroup(ThreadType thread_type,
+                              ThreadPolicy policy) override {
     return thread_group_.get();
   }
 
@@ -365,23 +365,20 @@ TEST_F(ThreadGroupTest, CanRunPolicyShouldYield) {
   task_tracker_.SetCanRunPolicy(CanRunPolicy::kNone);
   thread_group_->DidUpdateCanRunPolicy();
   EXPECT_TRUE(
-      thread_group_->ShouldYield({TaskPriority::BEST_EFFORT, TimeTicks()}));
-  EXPECT_TRUE(
-      thread_group_->ShouldYield({TaskPriority::USER_VISIBLE, TimeTicks()}));
+      thread_group_->ShouldYield({ThreadType::kBackground, TimeTicks()}));
+  EXPECT_TRUE(thread_group_->ShouldYield({ThreadType::kUtility, TimeTicks()}));
 
   task_tracker_.SetCanRunPolicy(CanRunPolicy::kForegroundOnly);
   thread_group_->DidUpdateCanRunPolicy();
   EXPECT_TRUE(
-      thread_group_->ShouldYield({TaskPriority::BEST_EFFORT, TimeTicks()}));
-  EXPECT_FALSE(
-      thread_group_->ShouldYield({TaskPriority::USER_VISIBLE, TimeTicks()}));
+      thread_group_->ShouldYield({ThreadType::kBackground, TimeTicks()}));
+  EXPECT_FALSE(thread_group_->ShouldYield({ThreadType::kUtility, TimeTicks()}));
 
   task_tracker_.SetCanRunPolicy(CanRunPolicy::kAll);
   thread_group_->DidUpdateCanRunPolicy();
   EXPECT_FALSE(
-      thread_group_->ShouldYield({TaskPriority::BEST_EFFORT, TimeTicks()}));
-  EXPECT_FALSE(
-      thread_group_->ShouldYield({TaskPriority::USER_VISIBLE, TimeTicks()}));
+      thread_group_->ShouldYield({ThreadType::kBackground, TimeTicks()}));
+  EXPECT_FALSE(thread_group_->ShouldYield({ThreadType::kUtility, TimeTicks()}));
 }
 
 TEST_F(ThreadGroupTest, SetMaxTasks) {
@@ -454,7 +451,8 @@ TEST_F(ThreadGroupTest, UpdatePriorityBestEffortToUserBlocking) {
   for (size_t i = 0; i < kMaxTasks; ++i) {
     task_runners.push_back(MakeRefCounted<PooledSequencedTaskRunner>(
         TaskTraits(TaskPriority::BEST_EFFORT),
-        &mock_pooled_task_runner_delegate_));
+        &mock_pooled_task_runner_delegate_,
+        /*inherit_task_importance_by_default=*/false));
     task_runners.back()->PostTask(
         FROM_HERE, BindLambdaForTesting([&] {
           // Increment the number of tasks running.
@@ -565,11 +563,11 @@ TEST_F(ThreadGroupTest, ShouldYieldSingleTask) {
                                &mock_pooled_task_runner_delegate_)
       ->PostTask(FROM_HERE, BindLambdaForTesting([&] {
                    EXPECT_FALSE(thread_group_->ShouldYield(
-                       {TaskPriority::BEST_EFFORT, TimeTicks::Now()}));
+                       {ThreadType::kBackground, TimeTicks::Now()}));
                    EXPECT_FALSE(thread_group_->ShouldYield(
-                       {TaskPriority::USER_VISIBLE, TimeTicks::Now()}));
+                       {ThreadType::kUtility, TimeTicks::Now()}));
                    EXPECT_FALSE(thread_group_->ShouldYield(
-                       {TaskPriority::USER_VISIBLE, TimeTicks::Now()}));
+                       {ThreadType::kUtility, TimeTicks::Now()}));
                  }));
 
   task_tracker_.FlushForTesting();
@@ -812,7 +810,7 @@ TEST_F(ThreadGroupTest, JoinJobTaskSourceStaleConcurrency) {
   TestWaitableEvent thread_running;
   std::atomic_size_t max_concurrency(1);
   auto task_source = MakeRefCounted<JobTaskSource>(
-      FROM_HERE, TaskTraits{},
+      FROM_HERE, TaskTraits{}, ThreadType::kDefault,
       BindLambdaForTesting([&](JobDelegate*) { thread_running.Signal(); }),
       BindLambdaForTesting(
           [&](size_t /*worker_count*/) -> size_t { return max_concurrency; }),
@@ -837,7 +835,7 @@ TEST_F(ThreadGroupTest, CancelJobTaskSourceWithStaleConcurrency) {
 
   TestWaitableEvent thread_running;
   auto task_source = MakeRefCounted<JobTaskSource>(
-      FROM_HERE, TaskTraits{},
+      FROM_HERE, TaskTraits{}, ThreadType::kDefault,
       BindLambdaForTesting([&](JobDelegate*) { thread_running.Signal(); }),
       BindRepeating([](size_t /*worker_count*/) -> size_t { return 1; }),
       &mock_pooled_task_runner_delegate_);

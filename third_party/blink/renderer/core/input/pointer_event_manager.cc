@@ -9,6 +9,7 @@
 #include "third_party/blink/public/mojom/input/input_handler.mojom-blink.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/events/event_path.h"
+#include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/core/event_type_names.h"
 #include "third_party/blink/renderer/core/events/mouse_event.h"
 #include "third_party/blink/renderer/core/frame/event_handler_registry.h"
@@ -158,11 +159,7 @@ WebInputEventResult PointerEventManager::DispatchPointerEvent(
   bool should_filter = ShouldFilterEvent(pointer_event);
   // We are about to dispatch this event. It has to be trusted at this point.
   pointer_event->SetTrusted(true);
-  std::optional<EventTiming> event_timing;
-  if (frame_ && frame_->DomWindow()) {
-    event_timing =
-        EventTiming::TryCreate(frame_->DomWindow(), *pointer_event, target);
-  }
+  UIEventTiming event_timing(frame_, *pointer_event);
 
   if (event_type == event_type_names::kPointerdown ||
       event_type == event_type_names::kPointerover ||
@@ -231,8 +228,9 @@ WebInputEventResult PointerEventManager::DispatchPointerEvent(
 Element* PointerEventManager::GetEffectiveTargetForPointerEvent(
     Element* target,
     PointerId pointer_id) {
-  if (pointer_capture_target_.Contains(pointer_id)) {
-    return pointer_capture_target_.at(pointer_id);
+  const auto it = pointer_capture_target_.find(pointer_id);
+  if (it != pointer_capture_target_.end()) {
+    return it->value;
   }
   return target;
 }
@@ -283,8 +281,9 @@ void PointerEventManager::SetElementUnderPointer(PointerEvent* pointer_event,
       !original_element_under_pointer_removed_.Contains(pointer_id) ||
       RuntimeEnabledFeatures::BoundaryEventDispatchTracksNodeRemovalEnabled());
 
-  Element* exited_target = element_under_pointer_.Contains(pointer_id)
-                               ? element_under_pointer_.at(pointer_id)
+  const auto exited_target_it = element_under_pointer_.find(pointer_id);
+  Element* exited_target = exited_target_it != element_under_pointer_.end()
+                               ? exited_target_it->value
                                : nullptr;
   bool original_exited_target_removed =
       original_element_under_pointer_removed_.Contains(pointer_id);
@@ -311,6 +310,42 @@ void PointerEventManager::NodeChildrenWillBeRemoved(ContainerNode& container) {
 
 void PointerEventManager::NodeWillBeRemoved(Node& node) {
   HandleRemoveSubtree(node, /*include_root=*/true);
+}
+
+void PointerEventManager::HandlePseudoElementRemoval(PseudoElement& pseudo) {
+  Element* parent = pseudo.ParentOrShadowHostElement();
+  for (auto& entry : element_under_pointer_) {
+    if (entry.value && entry.value->IsPseudoElement() &&
+        pseudo.IsShadowIncludingInclusiveAncestorOf(*entry.value)) {
+      entry.value = parent;
+      if (RuntimeEnabledFeatures::
+              BoundaryEventDispatchTracksNodeRemovalEnabled()) {
+        original_element_under_pointer_removed_.insert(entry.key);
+      }
+    }
+  }
+
+  for (auto& entry : pointer_capture_target_) {
+    if (entry.value && entry.value->IsPseudoElement() &&
+        pseudo.IsShadowIncludingInclusiveAncestorOf(*entry.value)) {
+      entry.value = parent;
+    }
+  }
+
+  for (auto& entry : pending_pointer_capture_target_) {
+    if (entry.value && entry.value->IsPseudoElement() &&
+        pseudo.IsShadowIncludingInclusiveAncestorOf(*entry.value)) {
+      entry.value = parent;
+    }
+  }
+
+  if (pointer_event_factory_) {
+    pointer_event_factory_->HandlePseudoElementRemoved(pseudo);
+  }
+
+  if (touch_event_manager_) {
+    touch_event_manager_->HandlePseudoElementRemoval(pseudo);
+  }
 }
 
 void PointerEventManager::HandleRemoveSubtree(Node& node, bool include_root) {
@@ -370,8 +405,10 @@ void PointerEventManager::HandlePointerInterruption(
     // If we are sending a pointercancel we have sent the pointerevent to some
     // target before.
     Element* target = nullptr;
-    if (element_under_pointer_.Contains(pointer_event->pointerId()))
-      target = element_under_pointer_.at(pointer_event->pointerId());
+    const auto it = element_under_pointer_.find(pointer_event->pointerId());
+    if (it != element_under_pointer_.end()) {
+      target = it->value;
+    }
 
     DispatchPointerEvent(
         GetEffectiveTargetForPointerEvent(target, pointer_event->pointerId()),
@@ -379,18 +416,24 @@ void PointerEventManager::HandlePointerInterruption(
 
     ReleasePointerCapture(pointer_event->pointerId());
 
-    // Send the leave/out events and lostpointercapture if needed.
-    // Note that for mouse due to the web compat we still don't send the
-    // boundary events and for now only send lostpointercapture if needed.
-    // Sending boundary events and possibly updating hover for mouse
-    // in this case may cause some of the existing pages to break.
-    if (web_pointer_event.pointer_type ==
-        WebPointerProperties::PointerType::kMouse) {
-      ProcessPendingPointerCapture(pointer_event);
-    } else {
+    if (RuntimeEnabledFeatures::SuppressPointerStreamAfterDragEnabled()) {
+      // Send the leave/out events and lostpointercapture if needed.
       ProcessCaptureAndPositionOfPointerEvent(pointer_event, nullptr);
+    } else {
+      // TODO(crbug.com/452372355): Remove this branch of the `if` once the
+      // suppression feature flag is enabled by default.
+      // Send the leave/out events and lostpointercapture if needed.
+      // Note that for mouse due to the web compat we still don't send the
+      // boundary events and for now only send lostpointercapture if needed.
+      // Sending boundary events and possibly updating hover for mouse
+      // in this case may cause some of the existing pages to break.
+      if (web_pointer_event.pointer_type ==
+          WebPointerProperties::PointerType::kMouse) {
+        ProcessPendingPointerCapture(pointer_event);
+      } else {
+        ProcessCaptureAndPositionOfPointerEvent(pointer_event, nullptr);
+      }
     }
-
     RemovePointer(pointer_event);
   }
 }
@@ -1228,8 +1271,13 @@ WebInputEventResult PointerEventManager::SendMousePointerEvent(
 
   if (consider_click_dispatch) {
     ProcessPendingPointerCapture(pointer_event);
+    Element* click_mouse_target = mouse_target;
+    if (click_mouse_target && click_mouse_target->IsPseudoElement() &&
+        !click_mouse_target->isConnected()) {
+      click_mouse_target = mouse_event_manager_->GetElementUnderMouse();
+    }
     mouse_event_manager_->DispatchMouseClickIfNeeded(
-        mouse_target, captured_click_target, mouse_event,
+        click_mouse_target, captured_click_target, mouse_event,
         pointer_event->pointerId(), pointer_event->pointerType(),
         pointer_event_factory_->GetPointerDownTarget(
             pointer_event->pointerId()),
@@ -1364,15 +1412,10 @@ void PointerEventManager::ProcessPendingPointerCapture(
 void PointerEventManager::RemoveTargetFromPointerCapturingMapping(
     PointerCapturingMap& map,
     const Element* target) {
-  // We could have kept a reverse mapping to make this deletion possibly
-  // faster but it adds some code complication which might not be worth of
-  // the performance improvement considering there might not be a lot of
-  // active pointer or pointer captures at the same time.
-  PointerCapturingMap tmp = map;
-  for (PointerCapturingMap::iterator it = tmp.begin(); it != tmp.end(); ++it) {
-    if (it->value == target)
-      map.erase(it->key);
-  }
+  // No reverse (Element -> PointerId) mapping is kept: there are rarely many
+  // active pointers or captures at once, so a linear scan is cheap enough and
+  // avoids the cost of maintaining a second map on every capture change.
+  map.erase_if([target](const auto& entry) { return entry.value == target; });
 }
 
 void PointerEventManager::RemovePointer(PointerEvent* pointer_event) {
@@ -1430,8 +1473,11 @@ void PointerEventManager::ReleasePointerCapture(PointerId pointer_id) {
 }
 
 Element* PointerEventManager::GetMouseCaptureTarget() {
-  if (pending_pointer_capture_target_.Contains(PointerEventFactory::kMouseId))
-    return pending_pointer_capture_target_.at(PointerEventFactory::kMouseId);
+  const auto it =
+      pending_pointer_capture_target_.find(PointerEventFactory::kMouseId);
+  if (it != pending_pointer_capture_target_.end()) {
+    return it->value;
+  }
   return nullptr;
 }
 
@@ -1450,10 +1496,9 @@ bool PointerEventManager::IsActive(const PointerId pointer_id) const {
 // those managers will keep track of these pointer events.
 bool PointerEventManager::IsPointerIdActiveOnFrame(PointerId pointer_id,
                                                    LocalFrame* frame) const {
+  const auto it = element_under_pointer_.find(pointer_id);
   Element* last_element_receiving_event =
-      element_under_pointer_.Contains(pointer_id)
-          ? element_under_pointer_.at(pointer_id)
-          : nullptr;
+      it != element_under_pointer_.end() ? it->value : nullptr;
   return last_element_receiving_event &&
          last_element_receiving_event->GetDocument().GetFrame() == frame;
 }
@@ -1484,9 +1529,9 @@ void PointerEventManager::SetLastPointerPositionForFrameBoundary(
     Element* new_target) {
   PointerId pointer_id =
       pointer_event_factory_->GetPointerEventId(web_pointer_event);
-  Element* last_target = element_under_pointer_.Contains(pointer_id)
-                             ? element_under_pointer_.at(pointer_id)
-                             : nullptr;
+  const auto it = element_under_pointer_.find(pointer_id);
+  Element* last_target =
+      it != element_under_pointer_.end() ? it->value : nullptr;
   if (!new_target) {
     pointer_event_factory_->RemoveLastPosition(pointer_id);
   } else if (!last_target || new_target->GetDocument().GetFrame() !=

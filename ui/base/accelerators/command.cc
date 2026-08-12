@@ -5,6 +5,7 @@
 #include "ui/base/accelerators/command.h"
 
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -86,8 +87,8 @@ std::string Command::CommandPlatform() {
   // TODO(crbug.com/40220501): Change this once we decide what string should be
   // used for Fuchsia.
   return ui::kKeybindingPlatformLinux;
-#elif BUILDFLAG(IS_DESKTOP_ANDROID)
-  // For now, we use linux keybindings on desktop android.
+#elif BUILDFLAG(IS_ANDROID)
+  // For now, we use linux keybindings on android.
   // TODO(https://crbug.com/356905053): Should this be ChromeOS keybindings?
   return ui::kKeybindingPlatformLinux;
 #else
@@ -225,7 +226,7 @@ ui::Accelerator Command::ParseImpl(std::string_view accelerator,
   // is not allowed.
   const size_t max_token_size =
       allow_ctrl_alt ? kMaxTokenSize : kMaxTokenSize - 1;
-  std::vector<std::string> tokens = base::SplitString(
+  std::vector<std::string_view> tokens = base::SplitStringPiece(
       accelerator, "+", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
   if (tokens.empty() || tokens.size() > max_token_size) {
     std::move(error_callback).Run(ui::AcceleratorParseError::kMalformedInput);
@@ -235,7 +236,7 @@ ui::Accelerator Command::ParseImpl(std::string_view accelerator,
   // Now, parse it into an accelerator.
   int modifiers = ui::EF_NONE;
   ui::KeyboardCode key = ui::VKEY_UNKNOWN;
-  for (const std::string& token : tokens) {
+  for (std::string_view token : tokens) {
     if (token == ui::kKeyCtrl) {
       modifiers |= ui::EF_CONTROL_DOWN;
     } else if (token == ui::kKeyCommand) {

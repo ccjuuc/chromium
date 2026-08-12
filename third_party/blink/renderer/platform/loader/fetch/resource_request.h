@@ -39,7 +39,6 @@
 #include "net/storage_access_api/status.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/network/public/cpp/fetch_retry_options.h"
-#include "services/network/public/mojom/attribution.mojom-blink.h"
 #include "services/network/public/mojom/chunked_data_pipe_getter.mojom-blink-forward.h"
 #include "services/network/public/mojom/cors.mojom-blink-forward.h"
 #include "services/network/public/mojom/fetch_api.mojom-blink.h"
@@ -50,6 +49,7 @@
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink-forward.h"
 #include "third_party/blink/public/platform/resource_request_blocked_reason.h"
 #include "third_party/blink/public/platform/web_url_request_extra_data.h"
+#include "third_party/blink/renderer/platform/loader/fetch/ad_tagging_utils.h"
 #include "third_party/blink/renderer/platform/loader/fetch/render_blocking_behavior.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_load_priority.h"
 #include "third_party/blink/renderer/platform/network/http_header_map.h"
@@ -58,10 +58,6 @@
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/ref_counted.h"
-
-namespace network {
-class PermissionsPolicy;
-}  // namespace network
 
 namespace blink {
 
@@ -224,8 +220,6 @@ class PLATFORM_EXPORT ResourceRequestHead {
   }
   void SetHTTPOrigin(const SecurityOrigin*);
   void ClearHTTPOrigin();
-  void SetHttpOriginIfNeeded(const SecurityOrigin*);
-  void SetHTTPOriginToMatchReferrerIfNeeded();
 
   void SetHTTPUserAgent(const AtomicString& http_user_agent) {
     SetHttpHeaderField(http_names::kUserAgent, http_user_agent);
@@ -303,40 +297,7 @@ class PLATFORM_EXPORT ResourceRequestHead {
     fetch_retry_options_ = fetch_retry_options;
   }
 
-  // True if the request should be considered for computing and attaching the
-  // topics headers.
-  bool GetBrowsingTopics() const { return browsing_topics_; }
-  void SetBrowsingTopics(bool browsing_topics) {
-    browsing_topics_ = browsing_topics;
-  }
 
-  // True if this is an ad auction request eligible for attaching the
-  // `Sec-Ad-Auction-Fetch` request header and processing the
-  // `X-Ad-Auction-Result` response header.
-  bool GetAdAuctionHeaders() const { return ad_auction_headers_; }
-  void SetAdAuctionHeaders(bool ad_auction_headers) {
-    ad_auction_headers_ = ad_auction_headers;
-  }
-
-  // True if the original request included the required attribute for the
-  // response to be eligible to write to shared storage, pending a
-  // `PermissionsPolicy` check.
-  bool GetSharedStorageWritableOptedIn() const {
-    return shared_storage_writable_opted_in_;
-  }
-  void SetSharedStorageWritableOptedIn(bool shared_storage_writable_opted_in) {
-    shared_storage_writable_opted_in_ = shared_storage_writable_opted_in;
-  }
-
-  // True if the current request should have the
-  // `http_names::kSecSharedStorageWritable` header attached and is eligible to
-  // write to shared storage from response headers.
-  bool GetSharedStorageWritableEligible() const {
-    return shared_storage_writable_eligible_;
-  }
-  void SetSharedStorageWritableEligible(bool shared_storage_writable_eligible) {
-    shared_storage_writable_eligible_ = shared_storage_writable_eligible;
-  }
 
   // True if service workers should not get events for the request.
   bool GetSkipServiceWorker() const { return skip_service_worker_; }
@@ -446,8 +407,20 @@ class PLATFORM_EXPORT ResourceRequestHead {
     return suggested_filename_;
   }
 
-  void SetIsAdResource() { is_ad_resource_ = true; }
-  bool IsAdResource() const { return is_ad_resource_; }
+  void SetIsAdResource(AdProvenance ad_provenance = NoProvenance{}) {
+    // Only update `ad_provenance_` if it wasn't set.
+    // TODO(crbug.com/490396399): Ideally, we should ensure `SetIsAdResource` is
+    // only called once.
+    if (!ad_provenance_.has_value()) {
+      ad_provenance_ = std::move(ad_provenance);
+    }
+  }
+
+  bool IsAdResource() const { return ad_provenance_.has_value(); }
+
+  const std::optional<AdProvenance>& GetAdProvenance() const {
+    return ad_provenance_;
+  }
 
   void SetUpgradeIfInsecure(bool upgrade_if_insecure) {
     upgrade_if_insecure_ = upgrade_if_insecure;
@@ -456,6 +429,14 @@ class PLATFORM_EXPORT ResourceRequestHead {
 
   bool IsRevalidating() const { return is_revalidating_; }
   void SetIsRevalidating(bool value) { is_revalidating_ = value; }
+  const String& RevalidationEtag() const { return revalidation_etag_; }
+  void SetRevalidationEtag(const String& etag) { revalidation_etag_ = etag; }
+  const String& RevalidationLastModified() const {
+    return revalidation_last_modified_;
+  }
+  void SetRevalidationLastModified(const String& last_modified) {
+    revalidation_last_modified_ = last_modified;
+  }
   void SetIsAutomaticUpgrade(bool is_automatic_upgrade) {
     is_automatic_upgrade_ = is_automatic_upgrade;
   }
@@ -464,12 +445,13 @@ class PLATFORM_EXPORT ResourceRequestHead {
   void SetAllowStaleResponse(bool value) { allow_stale_response_ = value; }
   bool AllowsStaleResponse() const { return allow_stale_response_; }
 
-  const std::optional<base::UnguessableToken>& GetDevToolsToken() const {
-    return devtools_token_;
+  const std::optional<base::UnguessableToken>& GetDevToolsThrottlingToken()
+      const {
+    return devtools_throttling_token_;
   }
-  void SetDevToolsToken(
+  void SetDevToolsThrottlingToken(
       const std::optional<base::UnguessableToken>& devtools_token) {
-    devtools_token_ = devtools_token;
+    devtools_throttling_token_ = devtools_token;
   }
 
   const scoped_refptr<
@@ -496,8 +478,12 @@ class PLATFORM_EXPORT ResourceRequestHead {
   void SetClientDataHeader(const String& value) { client_data_header_ = value; }
   const String& GetClientDataHeader() const { return client_data_header_; }
 
-  void SetPurposeHeader(const String& value) { purpose_header_ = value; }
-  const String& GetPurposeHeader() const { return purpose_header_; }
+  void SetEventSourceLastEventId(const String& value) {
+    event_source_last_event_id_ = value;
+  }
+  const String& GetEventSourceLastEventId() const {
+    return event_source_last_event_id_;
+  }
 
   // A V8 stack id string describing where the request was initiated. DevTools
   // can use this to display the initiator call stack when debugging a process
@@ -607,34 +593,6 @@ class PLATFORM_EXPORT ResourceRequestHead {
     return storage_access_api_status_;
   }
 
-  network::mojom::AttributionSupport GetAttributionReportingSupport() const {
-    return attribution_reporting_support_;
-  }
-
-  void SetAttributionReportingSupport(
-      network::mojom::AttributionSupport attribution_support) {
-    attribution_reporting_support_ = attribution_support;
-  }
-
-  network::mojom::AttributionReportingEligibility
-  GetAttributionReportingEligibility() const {
-    return attribution_reporting_eligibility_;
-  }
-
-  void SetAttributionReportingEligibility(
-      network::mojom::AttributionReportingEligibility eligibility) {
-    attribution_reporting_eligibility_ = eligibility;
-  }
-
-  const std::optional<base::UnguessableToken>& GetAttributionSrcToken() const {
-    return attribution_reporting_src_token_;
-  }
-
-  void SetAttributionReportingSrcToken(
-      std::optional<base::UnguessableToken> src_token) {
-    attribution_reporting_src_token_ = src_token;
-  }
-
   bool SharedDictionaryWriterEnabled() const {
     return shared_dictionary_writer_enabled_;
   }
@@ -685,14 +643,12 @@ class PLATFORM_EXPORT ResourceRequestHead {
 #endif
   }
 
-  bool AllowsDeviceBoundSessionRegistration() const {
-    return allows_device_bound_session_registration_;
+  bool AllowsDeviceBoundSessions() const {
+    return allows_device_bound_sessions_;
   }
 
-  void SetAllowsDeviceBoundSessionRegistration(
-      bool allows_device_bound_session_registration) {
-    allows_device_bound_session_registration_ =
-        allows_device_bound_session_registration;
+  void SetAllowsDeviceBoundSessions(bool allows_device_bound_sessions) {
+    allows_device_bound_sessions_ = allows_device_bound_sessions;
   }
 
  private:
@@ -719,19 +675,16 @@ class PLATFORM_EXPORT ResourceRequestHead {
   bool download_to_blob_ : 1;
   bool use_stream_on_response_ : 1;
   bool keepalive_ : 1;
-  bool browsing_topics_ : 1;
-  bool ad_auction_headers_ : 1;
-  bool shared_storage_writable_opted_in_ : 1;
-  bool shared_storage_writable_eligible_ : 1;
   bool allow_stale_response_ : 1;
   bool skip_service_worker_ : 1;
   bool download_to_cache_only_ : 1;
   bool site_for_cookies_set_ : 1;
   bool is_form_submission_ : 1;
   bool priority_incremental_ : 1;
-  bool is_ad_resource_ : 1;
   bool upgrade_if_insecure_ : 1;
   bool is_revalidating_ : 1;
+  String revalidation_etag_;
+  String revalidation_last_modified_;
   bool is_automatic_upgrade_ : 1;
   bool is_from_origin_dirty_style_sheet_ : 1;
   bool is_fetch_like_api_ : 1;
@@ -774,17 +727,19 @@ class PLATFORM_EXPORT ResourceRequestHead {
   std::optional<network::mojom::blink::TrustTokenParams> trust_token_params_;
   network::mojom::IPAddressSpace target_address_space_;
 
+  std::optional<AdProvenance> ad_provenance_;
+
   std::optional<String> suggested_filename_;
 
   mutable CacheControlHeader cache_control_header_cache_;
 
   static const base::TimeDelta default_timeout_interval_;
 
-  std::optional<base::UnguessableToken> devtools_token_;
+  std::optional<base::UnguessableToken> devtools_throttling_token_;
   String devtools_id_;
   String requested_with_header_;
   String client_data_header_;
-  String purpose_header_;
+  String event_source_last_event_id_;
 
   std::optional<String> devtools_stack_id_;
 
@@ -824,15 +779,6 @@ class PLATFORM_EXPORT ResourceRequestHead {
   net::StorageAccessApiStatus storage_access_api_status_ =
       net::StorageAccessApiStatus::kNone;
 
-  network::mojom::AttributionSupport attribution_reporting_support_ =
-      network::mojom::AttributionSupport::kUnset;
-
-  network::mojom::AttributionReportingEligibility
-      attribution_reporting_eligibility_ =
-          network::mojom::AttributionReportingEligibility::kUnset;
-
-  std::optional<base::UnguessableToken> attribution_reporting_src_token_;
-
   // The request is for a known transparent placeholder image, which enables us
   // to bypass as much processing as possible.
   // TODO(crbug.com/41496436): Make all the optimizations referencing the flag
@@ -852,10 +798,10 @@ class PLATFORM_EXPORT ResourceRequestHead {
   bool is_set_url_allowed_ = true;
 #endif
 
-  // Whether this request is allowed to register new device bound
-  // sessions or accept challenges on device bound sessions (e.g. due to
-  // an Origin Trial)
-  bool allows_device_bound_session_registration_ = false;
+  // Whether this request is allowed to belong to a device bound session. This
+  // includes registering a new session, accepting challenges, or deferring the
+  // request until a session is refreshed.
+  bool allows_device_bound_sessions_ = true;
 };
 
 class PLATFORM_EXPORT ResourceRequestBody {
@@ -931,15 +877,6 @@ class PLATFORM_EXPORT ResourceRequest final : public ResourceRequestHead {
 
   ResourceRequestBody& MutableBody() { return body_; }
 
-  // `PermissionsPolicy` is in blink/public and hence cannot access
-  // `ResourceRequest`. We implement this method here and make `ResourceRequest`
-  // a forward-declared friend class to `PermissionsPolicy` in order to keep
-  // `PermissionsPolicy::IsFeatureEnabledForSubresourceRequestAssumingOptIn()`
-  // private for safety.
-  bool IsFeatureEnabledForSubresourceRequestAssumingOptIn(
-      const network::PermissionsPolicy* policy,
-      network::mojom::PermissionsPolicyFeature feature,
-      const url::Origin& origin);
 
  private:
   ResourceRequestBody body_;

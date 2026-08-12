@@ -407,7 +407,7 @@ public class AutofillTestHelper {
     /** Creates a simple {@link CreditCard}. */
     public static CreditCard createLocalCreditCard(
             String name, String number, String month, String year) {
-        return new CreditCard("", "", true, name, number, "", month, year, "", 0, "", "");
+        return new CreditCard("", false, true, name, number, "", month, year, "", 0, "", "");
     }
 
     /** Creates a virtual credit card. */
@@ -422,7 +422,7 @@ public class AutofillTestHelper {
             String obfuscatedLastFourDigits) {
         return new CreditCard(
                 /* guid= */ "",
-                /* origin= */ "",
+                /* isUserConfirmed= */ false,
                 /* isLocal= */ false,
                 /* isVirtual= */ true,
                 /* name= */ name,
@@ -460,7 +460,7 @@ public class AutofillTestHelper {
             String network) {
         return new CreditCard(
                 /* guid= */ "",
-                /* origin= */ "",
+                /* isUserConfirmed= */ false,
                 /* isLocal= */ isLocal,
                 /* isVirtual= */ false,
                 /* name= */ name,
@@ -501,8 +501,6 @@ public class AutofillTestHelper {
      * @param applyDeactivatedStyle Whether to apply deactivated style to the suggestion.
      * @param shouldDisplayTermsAvailable Whether to display terms message with the suggestion.
      * @param guid The payment method identifier associated with the suggestion.
-     * @param isLocalPaymentsMethod Whether the payment method associated with the suggestion is
-     *     local.
      * @return A newly created, {@code AutofillSuggestion} object.
      */
     public static AutofillSuggestion createCreditCardSuggestion(
@@ -516,14 +514,9 @@ public class AutofillTestHelper {
             int iconId,
             boolean applyDeactivatedStyle,
             boolean shouldDisplayTermsAvailable,
-            String guid,
-            boolean isLocalPaymentsMethod) {
+            String guid) {
         PaymentsPayload payload =
-                new PaymentsPayload(
-                        labelContentDescription,
-                        shouldDisplayTermsAvailable,
-                        guid,
-                        isLocalPaymentsMethod);
+                new PaymentsPayload(labelContentDescription, shouldDisplayTermsAvailable, guid);
         return new AutofillSuggestion.Builder()
                 .setLabel(label)
                 .setSecondaryLabel(secondaryLabel)
@@ -550,11 +543,10 @@ public class AutofillTestHelper {
             int callCount = mOnPersonalDataChangedHelper.getCallCount();
             boolean isDataLoaded =
                     runOnUiThreadBlocking(
-                            () -> {
-                                return getPersonalDataManagerForLastUsedProfile()
-                                        .registerDataObserver(
-                                                mOnPersonalDataChangedHelper::notifyCalled);
-                            });
+                            () ->
+                                    getPersonalDataManagerForLastUsedProfile()
+                                            .registerDataObserver(
+                                                    mOnPersonalDataChangedHelper::notifyCalled));
             if (isDataLoaded) return;
             mOnPersonalDataChangedHelper.waitForCallback(callCount);
         } catch (TimeoutException e) {
@@ -709,6 +701,6 @@ public class AutofillTestHelper {
 
         void addMaskedBankAccount(BankAccount bankAccount);
 
-        void addEwallet(Ewallet ewallet);
+        void addEwallet(@JniType("autofill::Ewallet") Ewallet ewallet);
     }
 }

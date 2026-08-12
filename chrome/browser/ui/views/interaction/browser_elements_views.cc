@@ -4,14 +4,16 @@
 
 #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
 
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "ui/base/interaction/element_identifier.h"
-#include "ui/base/interaction/framework_specific_implementation.h"
+#include "ui/base/interaction/safe_castable.h"
 #include "ui/views/interaction/element_tracker_views.h"
 
-DEFINE_TYPED_IDENTIFIER_VALUE(views::WebView,
+DEFINE_TYPED_IDENTIFIER_VALUE(ui::ElementIdentifier,
+                              views::WebView,
                               kActiveContentsWebViewRetrievalId);
 
-DEFINE_FRAMEWORK_SPECIFIC_METADATA(BrowserElementsViews)
+DEFINE_SAFE_CAST_TARGET(BrowserElementsViews)
 
 BrowserElementsViews::BrowserElementsViews(BrowserWindowInterface& browser)
     : BrowserElements(browser) {}
@@ -37,13 +39,31 @@ BrowserElementsViews* BrowserElementsViews::From(
   return base ? base->AsA<BrowserElementsViews>() : nullptr;
 }
 
-views::View* BrowserElementsViews::GetView(ui::ElementIdentifier id) {
+// static
+BrowserElementsViews* BrowserElementsViews::From(views::View* view) {
+  const auto context = views::ElementTrackerViews::GetContextForView(view);
+  BrowserWindowInterface* result = nullptr;
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [&](BrowserWindowInterface* browser) {
+        if (auto* elements = BrowserElements::From(browser)) {
+          if (elements->GetContext() == context) {
+            result = browser;
+          }
+        }
+        return !result;
+      });
+  return result ? From(result) : nullptr;
+}
+
+views::View* BrowserElementsViews::GetView(ui::ElementIdentifier id,
+                                           bool require_visible) {
   return views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
-      id, GetContext());
+      id, GetContext(), require_visible);
 }
 
 BrowserElementsViews::ViewList BrowserElementsViews::GetAllViews(
-    ui::ElementIdentifier id) {
+    ui::ElementIdentifier id,
+    bool require_visible) {
   return views::ElementTrackerViews::GetInstance()->GetAllMatchingViews(
-      id, GetContext());
+      id, GetContext(), require_visible);
 }

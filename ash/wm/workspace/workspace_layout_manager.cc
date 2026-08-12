@@ -5,6 +5,7 @@
 #include "ash/wm/workspace/workspace_layout_manager.h"
 
 #include <algorithm>
+#include <ranges>
 
 #include "ash/accessibility/accessibility_controller.h"
 #include "ash/app_list/app_list_controller_impl.h"
@@ -29,8 +30,6 @@
 #include "ash/wm/window_util.h"
 #include "ash/wm/wm_event.h"
 #include "ash/wm/workspace/backdrop_controller.h"
-#include "base/containers/adapters.h"
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window_tracker.h"
@@ -228,7 +227,7 @@ void WorkspaceLayoutManager::OnWindowHierarchyChanged(
   // If the window is already tracked by the workspace this update would be
   // redundant as the fullscreen and shelf state would have been handled in
   // OnWindowAddedToLayout.
-  if (base::Contains(windows_, params.target)) {
+  if (windows_.contains(params.target)) {
     return;
   }
 
@@ -289,7 +288,7 @@ void WorkspaceLayoutManager::OnWindowDestroying(aura::Window* window) {
 void WorkspaceLayoutManager::OnWindowActivating(ActivationReason reason,
                                                 aura::Window* gaining_active,
                                                 aura::Window* losing_active) {
-  if (!base::Contains(windows_, gaining_active)) {
+  if (!windows_.contains(gaining_active)) {
     return;
   }
 
@@ -306,8 +305,8 @@ void WorkspaceLayoutManager::OnWindowActivated(ActivationReason reason,
                                                aura::Window* lost_active) {
   // This callback may be called multiple times with one activation change
   // because we have one instance of this class for each desk.
-  if ((!gained_active || !base::Contains(windows_, gained_active)) &&
-      (!lost_active || !base::Contains(windows_, lost_active))) {
+  if ((!gained_active || !windows_.contains(gained_active)) &&
+      (!lost_active || !windows_.contains(lost_active))) {
     return;
   }
 
@@ -526,8 +525,10 @@ void WorkspaceLayoutManager::AdjustAllWindowsBoundsForWorkAreaChange(
   // Update the windows from top-most to bottom-most so when windows get bigger
   // they occlude windows below them first.
   auto ordered_windows = window_util::SortWindowsBottomToTop(windows_);
-  for (aura::Window* window : base::Reversed(ordered_windows)) {
-    WindowState::Get(window)->OnWMEvent(event);
+  for (aura::Window* window : std::views::reverse(ordered_windows)) {
+    if (!window->is_destroying()) {
+      WindowState::Get(window)->OnWMEvent(event);
+    }
   }
 }
 

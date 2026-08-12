@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/webui/ash/login/error_screen_handler.h"
 
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "base/values.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/grit/generated_resources.h"
@@ -18,7 +19,7 @@ ErrorScreenHandler::ErrorScreenHandler() : BaseScreenHandler(kScreenId) {}
 ErrorScreenHandler::~ErrorScreenHandler() = default;
 
 void ErrorScreenHandler::ShowScreenWithParam(bool is_closeable) {
-  ShowInWebUI(base::Value::Dict().Set("isCloseable", is_closeable));
+  ShowInWebUI(base::DictValue().Set("isCloseable", is_closeable));
 }
 
 void ErrorScreenHandler::ShowOobeScreen(OobeScreenId screen) {

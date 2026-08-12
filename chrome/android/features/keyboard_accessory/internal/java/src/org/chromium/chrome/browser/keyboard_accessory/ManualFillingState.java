@@ -6,9 +6,13 @@ package org.chromium.chrome.browser.keyboard_accessory;
 
 import android.util.SparseArray;
 
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NullableObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.keyboard_accessory.ManualFillingComponent.UpdateAccessorySheetDelegate;
 import org.chromium.chrome.browser.keyboard_accessory.data.CachedProviderAdapter;
-import org.chromium.chrome.browser.keyboard_accessory.data.ConditionalProviderAdapter;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.AccessorySheetData;
 import org.chromium.chrome.browser.keyboard_accessory.data.Provider;
@@ -27,10 +31,10 @@ class ManualFillingState {
         AccessoryTabType.PASSWORDS, AccessoryTabType.CREDIT_CARDS, AccessoryTabType.ADDRESSES,
     };
     private final WebContents mWebContents;
-    private final SparseArray<Provider<AccessorySheetData>> mSheetDataProviders =
+    private final SparseArray<MonotonicObservableSupplier<AccessorySheetData>> mSheetDataProviders =
             new SparseArray<>();
     private final SparseArray<KeyboardAccessoryData.Tab> mAvailableTabs = new SparseArray<>();
-    private ManualFillingComponent.@Nullable UpdateAccessorySheetDelegate mUpdater;
+    private @Nullable UpdateAccessorySheetDelegate mUpdater;
     @Nullable private CachedProviderAdapter<KeyboardAccessoryData.Action[]> mActionsProvider;
     private boolean mWebContentsShowing;
 
@@ -73,7 +77,7 @@ class ManualFillingState {
         if (mActionsProvider != null) mActionsProvider.notifyAboutCachedItems();
     }
 
-    void setSheetUpdater(ManualFillingComponent.UpdateAccessorySheetDelegate delegate) {
+    void setSheetUpdater(UpdateAccessorySheetDelegate delegate) {
         mUpdater = delegate;
     }
 
@@ -127,15 +131,20 @@ class ManualFillingState {
     }
 
     /**
-     * Wraps the given provider for sheet data in a {@link ConditionalProviderAdapter} and stores
-     * it.
+     * Wraps the given provider for sheet data in a {@link SettableMonotonicObservableSupplier} with
+     * an additional check and stores it.
      *
      * @param provider A {@link Provider} providing sheet data.
      */
     void wrapSheetDataProvider(
             @AccessoryTabType int tabType, Provider<AccessorySheetData> provider) {
-        mSheetDataProviders.put(
-                tabType, new ConditionalProviderAdapter<>(provider, () -> mWebContentsShowing));
+        SettableMonotonicObservableSupplier<AccessorySheetData> conditionalSupplier =
+                ObservableSuppliers.createMonotonic();
+        provider.addObserver(
+                (type, item) -> {
+                    if (mWebContentsShowing) conditionalSupplier.set(item);
+                });
+        mSheetDataProviders.put(tabType, conditionalSupplier);
     }
 
     /**
@@ -143,8 +152,8 @@ class ManualFillingState {
      *
      * @return A {@link CachedProviderAdapter} wrapping a {@link Provider}.
      */
-    @Nullable
-    Provider<AccessorySheetData> getSheetDataProvider(@AccessoryTabType int tabType) {
+    @Nullable NullableObservableSupplier<AccessorySheetData> getSheetDataProvider(
+            @AccessoryTabType int tabType) {
         return mSheetDataProviders.get(tabType);
     }
 

@@ -14,6 +14,7 @@
 #include "base/containers/queue.h"
 #include "base/containers/span.h"
 #include "base/containers/unique_ptr_adapters.h"
+#include "base/feature_list.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -79,6 +80,7 @@ class BoundSessionCookieRefreshServiceImpl
                              const net::HttpResponseHeaders* headers) override;
   std::vector<chrome::mojom::BoundSessionThrottlerParamsPtr>
   GetBoundSessionThrottlerParams() const override;
+  std::vector<BoundSessionKey> GetAllSessions() const override;
   void AddBoundSessionRequestThrottledHandlerReceiver(
       mojo::PendingReceiver<chrome::mojom::BoundSessionRequestThrottledHandler>
           receiver) override;

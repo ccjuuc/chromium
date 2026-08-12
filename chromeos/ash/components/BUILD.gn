@@ -15,6 +15,7 @@ group("unit_tests") {
     "//chromeos/ash/components/auto_sign_out:unit_tests",
     "//chromeos/ash/components/boca:unit_tests",
     "//chromeos/ash/components/boca/babelorca:unit_tests",
+    "//chromeos/ash/components/boca/gemini:unit_tests",
     "//chromeos/ash/components/boca/on_task:unit_tests",
     "//chromeos/ash/components/boca/receiver:unit_tests",
     "//chromeos/ash/components/boca/session_api:unit_tests",
@@ -22,7 +23,6 @@ group("unit_tests") {
     "//chromeos/ash/components/carrier_lock:unit_tests",
     "//chromeos/ash/components/channel:unit_tests",
     "//chromeos/ash/components/cryptohome:unit_tests",
-    "//chromeos/ash/components/data_migration:unit_tests",
     "//chromeos/ash/components/dbus:unit_tests",
     "//chromeos/ash/components/disks:unit_tests",
     "//chromeos/ash/components/drivefs:unit_tests",
@@ -55,6 +55,7 @@ group("unit_tests") {
     "//chromeos/ash/components/pcie_peripheral:unit_tests",
     "//chromeos/ash/components/peripheral_notification:unit_tests",
     "//chromeos/ash/components/phonehub:unit_tests",
+    "//chromeos/ash/components/platform_keys:unit_tests",
     "//chromeos/ash/components/policy:unit_tests",
     "//chromeos/ash/components/power:unit_tests",
     "//chromeos/ash/components/process_snapshot:unit_tests",
@@ -69,7 +70,6 @@ group("unit_tests") {
     "//chromeos/ash/components/sync_wifi:unit_tests",
     "//chromeos/ash/components/system:unit_tests",
     "//chromeos/ash/components/system_info:unit_tests",
-    "//chromeos/ash/components/telemetry_extension:unit_tests",
     "//chromeos/ash/components/tether:unit_tests",
     "//chromeos/ash/components/throttle:unit_tests",
     "//chromeos/ash/components/timezone:unit_tests",
@@ -78,10 +78,6 @@ group("unit_tests") {
     "//chromeos/ash/components/trial_group:unit_tests",
     "//chromeos/ash/components/wifi_p2p:unit_tests",
   ]
-
-  if (target_cpu == "x64") {
-    deps += [ "//chromeos/ash/components/memory/userspace_swap:unit_tests" ]
-  }
 }
 
 static_library("test_support") {
@@ -95,6 +91,7 @@ static_library("test_support") {
     "//base",
     "//base:i18n",
     "//base/test:test_support",
+    "//services/network:test_support",
     "//testing/gtest",
     "//ui/accessibility:test_support",
     "//ui/aura",

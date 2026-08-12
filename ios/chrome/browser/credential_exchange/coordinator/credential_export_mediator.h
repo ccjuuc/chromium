@@ -10,10 +10,12 @@
 
 #import <vector>
 
+#import "components/webauthn/ios/passkey_types.h"
 #import "ios/chrome/browser/credential_exchange/ui/credential_export_consumer.h"
 #import "ios/chrome/browser/credential_exchange/ui/credential_export_favicon_provider.h"
 #import "ios/chrome/browser/credential_exchange/ui/credential_export_view_controller.h"
 #import "ios/chrome/browser/credential_exchange/ui/credential_export_view_controller_presentation_delegate.h"
+#import "ios/chrome/browser/passwords/password_exporter/coordinator/password_export_handler.h"
 
 namespace password_manager {
 class AffiliatedGroup;
@@ -23,7 +25,16 @@ namespace webauthn {
 class PasskeyModel;
 }  // namespace webauthn
 
+namespace signin {
+class IdentityManager;
+}  // namespace signin
+
+namespace syncer {
+class SyncService;
+}  // namespace syncer
+
 class FaviconLoader;
+@protocol ReauthenticationProtocol;
 
 // Protocol for the Mediator to request UI actions from the Coordinator.
 @protocol CredentialExportMediatorDelegate <NSObject>
@@ -31,14 +42,17 @@ class FaviconLoader;
 // Asks the delegate to fetch trusted vault keys. This is only called if
 // passkeys are detected in the export list.
 - (void)fetchTrustedVaultKeysWithCompletion:
-    (void (^)(NSArray<NSData*>*))completion;
+    (void (^)(webauthn::SharedKeyList))completion;
+
+// Asks the delegate to display a generic error alert.
+- (void)showGenericError;
 
 @end
 
 // Mediator for the credential exchange export flow.
 @interface CredentialExportMediator
-    : NSObject <CredentialExportViewControllerPresentationDelegate,
-                CredentialExportFaviconProvider>
+    : NSObject <CredentialExportFaviconProvider,
+                CredentialExportViewControllerPresentationDelegate>
 
 // The consumer that receives updates about the credentials.
 @property(nonatomic, weak) id<CredentialExportConsumer> consumer;
@@ -51,9 +65,16 @@ class FaviconLoader;
                                    affiliatedGroups
                   passkeyModel:(webauthn::PasskeyModel*)passkeyModel
                  faviconLoader:(FaviconLoader*)faviconLoader
+        reauthenticationModule:(id<ReauthenticationProtocol>)reauthModule
+                 exportHandler:(id<PasswordExportHandler>)exportHandler
+                   syncService:(syncer::SyncService*)syncService
+               identityManager:(signin::IdentityManager*)identityManager
     NS_DESIGNATED_INITIALIZER;
 
 - (instancetype)init NS_UNAVAILABLE;
+
+// Cancels the password export flow.
+- (void)exportFlowCancelled;
 
 @end
 

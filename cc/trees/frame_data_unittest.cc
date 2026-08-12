@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/test/trace_test_utils.h"
+#include "base/test/tracing/trace_test_utils.h"
 #include "base/trace_event/trace_config.h"
 #include "base/trace_event/trace_log.h"
 #include "components/viz/common/quads/compositor_render_pass.h"
@@ -46,8 +46,8 @@ TEST(FrameDataTest, FrameDataAsValueTest) {
   std::string frame_string = frame.ToString();
 
   // Test that the frame has some strings set.
-  EXPECT_TRUE(base::Contains(frame_string, ("\"has_no_damage\": false")));
-  EXPECT_TRUE(base::Contains(frame_string, ("\"render_passes\": [ {")));
+  EXPECT_TRUE(frame_string.contains("\"has_no_damage\": false"));
+  EXPECT_TRUE(frame_string.contains("\"render_passes\": [ {"));
 
   // Disable tracelog to avoid teardown failures.
   base::trace_event::TraceLog::GetInstance()->SetDisabled();

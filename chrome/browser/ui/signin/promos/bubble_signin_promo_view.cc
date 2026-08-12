@@ -31,6 +31,7 @@
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/prefs/pref_service.h"
+#include "components/send_tab_to_self/features.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/base/signin_prefs.h"
 #include "components/signin/public/base/signin_switches.h"
@@ -87,6 +88,19 @@ int GetSubtitleID(bool is_signin_promo,
             break;
         }
       } break;
+      case signin::SignInPromoType::kSearchAIMode: {
+        switch (signed_in_state) {
+          case SignedInState::kSignedOut:
+          case SignedInState::kWebOnlySignedIn:
+            return IDS_AI_SIGNIN_PROMO_SUBTITLE;
+          case SignedInState::kSignInPending:
+            return IDS_AI_VERIFY_PROMO_SUBTITLE;
+          case SignedInState::kSignedIn:
+          case SignedInState::kSyncing:
+          case SignedInState::kSyncPaused:
+            break;
+        }
+      } break;
       case signin::SignInPromoType::kBookmark: {
         if (!is_signin_promo) {
           return IDS_BOOKMARK_DICE_PROMO_SYNC_MESSAGE;
@@ -122,7 +136,23 @@ int GetSubtitleID(bool is_signin_promo,
           case SignedInState::kSyncPaused:
             break;
         }
-      }
+      } break;
+      case signin::SignInPromoType::kSendTabToSelf: {
+        switch (signed_in_state) {
+          case SignedInState::kSignedOut:
+          case SignedInState::kWebOnlySignedIn:
+            return base::FeatureList::IsEnabled(
+                       send_tab_to_self::kSendTabToSelfEnhancedDesktopUI)
+                       ? IDS_SEND_TAB_TO_SELF_SIGN_IN_PROMO_BODY
+                       : IDS_SEND_TAB_TO_SELF_SIGN_IN_PROMO_LABEL;
+          case SignedInState::kSignInPending:
+          case SignedInState::kSyncPaused:
+            return IDS_SEND_TAB_TO_SELF_VERIFY_ITS_YOU_PROMO_LABEL;
+          case SignedInState::kSignedIn:
+          case SignedInState::kSyncing:
+            break;
+        }
+      } break;
     }
   }
 
@@ -163,8 +193,8 @@ std::u16string GetAccessibilityText(bool is_signin_promo,
       !account.IsEmpty()) {
     return l10n_util::GetStringFUTF16(
         IDS_SIGNIN_DICE_WEB_INTERCEPT_BUBBLE_CHROME_SIGNIN_ACCEPT_TEXT,
-        {base::UTF8ToUTF16(
-            base::StrCat({account.given_name, " ", account.email}))});
+        {base::UTF8ToUTF16(base::StrCat(
+            {account.GetGivenName().value_or(""), " ", account.GetEmail()}))});
   }
 
   return std::u16string();
@@ -195,7 +225,9 @@ signin_metrics::PromoAction GetPromoAction(bool is_signin_promo,
 void IncrementContextualPromoDismissCountPerSignedOutProfile(
     Profile* profile,
     signin_metrics::AccessPoint access_point) {
-  if (!base::FeatureList::IsEnabled(switches::kSigninPromoLimitsExperiment)) {
+  signin::SignInPromoType promo_type =
+      signin::GetSignInPromoTypeFromAccessPoint(access_point);
+  if (signin::ShouldUseAutofillSignInPromoLimits(promo_type)) {
     int dismiss_count = profile->GetPrefs()->GetInteger(
         prefs::kAutofillSignInPromoDismissCountPerProfile);
     profile->GetPrefs()->SetInteger(
@@ -203,8 +235,6 @@ void IncrementContextualPromoDismissCountPerSignedOutProfile(
     return;
   }
 
-  signin::SignInPromoType promo_type =
-      signin::GetSignInPromoTypeFromAccessPoint(access_point);
   switch (promo_type) {
     case signin::SignInPromoType::kPassword:
       return profile->GetPrefs()->SetInteger(
@@ -220,6 +250,12 @@ void IncrementContextualPromoDismissCountPerSignedOutProfile(
               prefs::
                   kAddressSignInPromoDismissCountPerProfileForLimitsExperiment) +
               1);
+    case signin::SignInPromoType::kSearchAIMode:
+      return profile->GetPrefs()->SetInteger(
+          prefs::kSearchAIModeSignInPromoDismissCountPerProfile,
+          profile->GetPrefs()->GetInteger(
+              prefs::kSearchAIModeSignInPromoDismissCountPerProfile) +
+              1);
     case signin::SignInPromoType::kBookmark:
       CHECK(base::FeatureList::IsEnabled(syncer::kUnoPhase2FollowUp));
       return profile->GetPrefs()->SetInteger(
@@ -229,6 +265,7 @@ void IncrementContextualPromoDismissCountPerSignedOutProfile(
                   kBookmarkSignInPromoDismissCountPerProfileForLimitsExperiment) +
               1);
     case signin::SignInPromoType::kExtension:
+    case signin::SignInPromoType::kSendTabToSelf:
       NOTREACHED();
   }
 }
@@ -237,14 +274,14 @@ void IncrementContextualPromoDismissCountPerAccount(
     Profile* profile,
     signin_metrics::AccessPoint access_point,
     const AccountInfo& account) {
-  if (!base::FeatureList::IsEnabled(switches::kSigninPromoLimitsExperiment)) {
+  signin::SignInPromoType promo_type =
+      signin::GetSignInPromoTypeFromAccessPoint(access_point);
+  if (signin::ShouldUseAutofillSignInPromoLimits(promo_type)) {
     SigninPrefs(*profile->GetPrefs())
         .IncrementAutofillSigninPromoDismissCount(account.gaia);
     return;
   }
 
-  signin::SignInPromoType promo_type =
-      signin::GetSignInPromoTypeFromAccessPoint(access_point);
   switch (promo_type) {
     case signin::SignInPromoType::kPassword:
       SigninPrefs(*profile->GetPrefs())
@@ -259,23 +296,47 @@ void IncrementContextualPromoDismissCountPerAccount(
       SigninPrefs(*profile->GetPrefs())
           .IncrementBookmarkSigninPromoDismissCount(account.gaia);
       break;
+    case signin::SignInPromoType::kSearchAIMode:
+      SigninPrefs(*profile->GetPrefs())
+          .IncrementSearchAIModeSigninPromoDismissCount(account.gaia);
+      break;
     case signin::SignInPromoType::kExtension:
+    case signin::SignInPromoType::kSendTabToSelf:
       NOTREACHED();
   }
 }
 
+// Delegate factory method based on the presence of the `data_id`.
+std::unique_ptr<BubbleSignInPromoDelegate> CreateDelegate(
+    content::WebContents* web_contents,
+    signin_metrics::AccessPoint access_point,
+    std::optional<syncer::LocalDataItemModel::DataId> data_id) {
+  if (data_id.has_value()) {
+    return std::make_unique<BubbleSignInPromoForSyncableDataTypeDelegate>(
+        *web_contents, access_point, std::move(data_id.value()));
+  }
+  return std::make_unique<DefaultBubbleSignInPromoDelegate>(*web_contents,
+                                                            access_point);
+}
 }  // namespace
 
 BubbleSignInPromoView::BubbleSignInPromoView(
     content::WebContents* web_contents,
     signin_metrics::AccessPoint access_point,
-    syncer::LocalDataItemModel::DataId data_id,
+    std::optional<syncer::LocalDataItemModel::DataId> data_id,
     ui::ButtonStyle button_style)
-    : access_point_(access_point),
-      delegate_(
-          std::make_unique<BubbleSignInPromoDelegate>(*web_contents,
-                                                      access_point,
-                                                      std::move(data_id))) {
+    : BubbleSignInPromoView(web_contents,
+                            access_point,
+                            CreateDelegate(web_contents, access_point, data_id),
+                            button_style) {}
+
+BubbleSignInPromoView::BubbleSignInPromoView(
+    content::WebContents* web_contents,
+    signin_metrics::AccessPoint access_point,
+    std::unique_ptr<BubbleSignInPromoDelegate> delegate,
+    ui::ButtonStyle button_style)
+    : access_point_(access_point), delegate_(std::move(delegate)) {
+  CHECK(delegate_);
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext())
           ->GetOriginalProfile();
@@ -315,7 +376,8 @@ BubbleSignInPromoView::BubbleSignInPromoView(
   int title_resource_id =
       GetSubtitleID(is_signin_promo, promo_type, signed_in_state);
   std::u16string button_text =
-      GetButtonText(is_signin_promo, signed_in_state, account.given_name);
+      GetButtonText(is_signin_promo, signed_in_state,
+                    std::string(account.GetGivenName().value_or("")));
   std::u16string accessibility_text =
       GetAccessibilityText(is_signin_promo, signed_in_state, account);
   signin_metrics::PromoAction promo_action =
@@ -375,7 +437,7 @@ BubbleSignInPromoView::BubbleSignInPromoView(
     signin_button_view_ =
         button_parent->AddChildView(std::move(signin_button_pointer));
   } else {
-    gfx::Image account_icon = account.account_image;
+    gfx::Image account_icon = account.GetAvatarImage().value_or(gfx::Image());
     if (account_icon.IsEmpty()) {
       account_icon = ui::ResourceBundle::GetSharedInstance().GetImageNamed(
           profiles::GetPlaceholderAvatarIconResourceID());
@@ -406,11 +468,30 @@ views::View* BubbleSignInPromoView::GetSignInButton() const {
   return signin_button_view_ ? signin_button_view_->GetSignInButton() : nullptr;
 }
 
+gfx::Insets BubbleSignInPromoView::GetBubbleSigninPromoMargins() {
+  views::LayoutProvider* layout_provider = views::LayoutProvider::Get();
+  gfx::Insets margin = layout_provider->GetInsetsMetric(views::INSETS_DIALOG);
+  // The top margin sets the distance to the title rather than the top of the
+  // dialog, so it needs to be smaller.
+  margin.set_top(layout_provider->GetDistanceMetric(
+      DISTANCE_RELATED_CONTROL_VERTICAL_SMALL));
+  return margin;
+}
+
 void BubbleSignInPromoView::SignIn() {
   std::optional<AccountInfo> account = signin_button_view_->account();
-  delegate_->OnSignIn(account.value_or(AccountInfo()));
+  // Take ownership of the delegate before closing the widget, as closing may
+  // result in the immediate destruction of `this`.
+  std::unique_ptr<BubbleSignInPromoDelegate> delegate = std::move(delegate_);
+
+  // `CloseWithReason()` must be called before `OnSignIn()` to ensure that the
+  // `kAcceptButtonClicked` reason is recorded. Otherwise, the focus loss
+  // triggered by opening the sign-in tab could cause the widget to close with
+  // `kLostFocus` instead.
   GetWidget()->CloseWithReason(
       views::Widget::ClosedReason::kAcceptButtonClicked);
+
+  delegate->OnSignIn(account.value_or(AccountInfo()));
 }
 
 void BubbleSignInPromoView::AddedToWidget() {
@@ -454,7 +535,7 @@ void BubbleSignInPromoView::OnWidgetDestroying(views::Widget* widget) {
 
   // Count the number of times the promo was dismissed in order to not show it
   // anymore after 2 dismissals.
-  if (account.gaia.empty()) {
+  if (account.GetGaiaId().empty()) {
     IncrementContextualPromoDismissCountPerSignedOutProfile(profile,
                                                             access_point_);
   } else {
@@ -463,7 +544,7 @@ void BubbleSignInPromoView::OnWidgetDestroying(views::Widget* widget) {
   }
 
   // Launch a HaTS survey if the user actively dismissed the promo.
-  signin::LaunchSigninHatsSurveyForProfile(
+  signin::LaunchHatsSurveyForProfile(
       kHatsSurveyTriggerIdentitySigninPromoBubbleDismissed, profile,
       /*defer_if_no_browser=*/false, access_point_);
 

@@ -179,7 +179,7 @@ void PinnedToolbarActionsModel::UnpinAction(actions::ActionId action_id) {
 }
 
 void PinnedToolbarActionsModel::UpdatePinnedActionIds() {
-  const base::Value::List& updated_pinned_action_ids =
+  const base::ListValue& updated_pinned_action_ids =
       pref_service_->GetList(prefs::kPinnedActions);
 
   // TODO(dljames): Investigate if there is a more optimal way to do this kind
@@ -216,20 +216,21 @@ void PinnedToolbarActionsModel::UpdatePinnedActionIds() {
 void PinnedToolbarActionsModel::ResetToDefault() {
   pref_service_->ClearPref(prefs::kShowHomeButton);
   pref_service_->ClearPref(prefs::kShowForwardButton);
+  pref_service_->ClearPref(prefs::kPinSplitTabButton);
   pref_service_->ClearPref(prefs::kPinnedActions);
 }
 
 bool PinnedToolbarActionsModel::IsDefault() const {
-  const bool action_are_default =
-      pref_service_->GetDefaultPrefValue(prefs::kPinnedActions)->GetList() ==
-      pref_service_->GetList(prefs::kPinnedActions);
-  const bool home_is_default =
-      pref_service_->GetDefaultPrefValue(prefs::kShowHomeButton)->GetBool() ==
-      pref_service_->GetBoolean(prefs::kShowHomeButton);
-  const bool forward_is_default =
-      pref_service_->GetDefaultPrefValue(prefs::kShowForwardButton)
-          ->GetBool() == pref_service_->GetBoolean(prefs::kShowForwardButton);
-  return action_are_default && home_is_default && forward_is_default;
+  const auto is_default_pref_value = [&](std::string_view pref_path) {
+    const auto* default_value = pref_service_->GetDefaultPrefValue(pref_path);
+    return *default_value == pref_service_->GetValue(pref_path);
+  };
+
+  return std::ranges::all_of(
+      std::initializer_list{prefs::kPinnedActions, prefs::kShowHomeButton,
+                            prefs::kShowForwardButton,
+                            prefs::kPinSplitTabButton},
+      is_default_pref_value);
 }
 
 void PinnedToolbarActionsModel::MaybeMigrateExistingPinnedStates() {
@@ -240,16 +241,19 @@ void PinnedToolbarActionsModel::MaybeMigrateExistingPinnedStates() {
     UpdatePinnedState(kActionShowChromeLabs, true);
     pref_service_->SetBoolean(prefs::kPinnedChromeLabsMigrationComplete, true);
   }
-  if (features::HasTabSearchToolbarButton() &&
-      !pref_service_->GetBoolean(prefs::kTabSearchMigrationComplete)) {
-    UpdatePinnedState(kActionTabSearch, true);
-    pref_service_->SetBoolean(prefs::kTabSearchMigrationComplete, true);
-  }
   if (!pref_service_->GetBoolean(prefs::kPinnedCastMigrationComplete)) {
     bool previously_pinned =
         pref_service_->GetBoolean(prefs::kShowCastIconInToolbar);
     UpdatePinnedState(kActionRouteMedia, previously_pinned);
     pref_service_->SetBoolean(prefs::kPinnedCastMigrationComplete, true);
+  }
+  if (base::FeatureList::IsEnabled(
+          features::kTabsFromOtherDevicesSidePanelPinnedByDefault) &&
+      !pref_service_->GetBoolean(
+          prefs::kTabsFromOtherDevicesAutoPinnedMigration)) {
+    UpdatePinnedState(kActionSidePanelShowTabsFromOtherDevices, true);
+    pref_service_->SetBoolean(prefs::kTabsFromOtherDevicesAutoPinnedMigration,
+                              true);
   }
 }
 
@@ -261,7 +265,7 @@ PinnedToolbarActionsModel::PinnedActionIds() const {
 void PinnedToolbarActionsModel::UpdatePref(
     const std::vector<actions::ActionId>& updated_list) {
   ScopedListPrefUpdate update(pref_service_, prefs::kPinnedActions);
-  base::Value::List& list_of_values = update.Get();
+  base::ListValue& list_of_values = update.Get();
   list_of_values.clear();
   for (auto id : updated_list) {
     const std::optional<std::string>& id_string =

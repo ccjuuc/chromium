@@ -7,17 +7,21 @@ import {html} from '//resources/lit/v3_0/lit.rollup.js';
 import type {SupportedLinksItemElement} from './supported_links_item.js';
 
 export function getHtml(this: SupportedLinksItemElement) {
+  // clang-format off
   return html`<!--_html_template_start_-->
 <div class="permission-section-header">
   <localized-link id="heading" class="header-text"
-      @link-clicked="${this.launchDialog_}"
+      @link-clicked="${this.onLinkClicked_}"
       .localizedString=
           "${this.i18nAdvanced('appManagementIntentSettingsTitle')}">
   </localized-link>
 </div>
 ${this.disabled_ ? html`
   <span class="info-text-row" id="disabledExplanationText">
-    <cr-icon id="infoIcon" icon="app-management:info"></cr-icon>
+    <cr-icon id="infoIcon"
+        icon="${this.webuiRoundedIconsEnabled_
+            ? 'app-management:info'
+            : 'app-management:info-old'}"></cr-icon>
     <localized-link id="infoString"
         .localizedString="${this.getDisabledExplanation_()}">
     </localized-link>
@@ -26,7 +30,7 @@ ${this.disabled_ ? html`
 <div class="list-frame">
   <cr-radio-group id="radioGroup"
       .selected="${this.getCurrentPreferredApp_()}"
-      @selected-changed="${this.onSupportedLinkPrefChanged_}"
+      @selected-changed="${this.onSupportedLinkPrefSelectedChanged_}"
       ?disabled="${this.disabled_}">
     <cr-radio-button
         id="preferredRadioButton"
@@ -36,7 +40,7 @@ ${this.disabled_ ? html`
     <cr-radio-button
         id="browserRadioButton"
         name="browser"
-        label="$i18n{appManagementIntentSharingOpenBrowserLabel}">
+        label="${this.getBrowserLabel_()}">
     </cr-radio-button>
     ${this.showOverlappingAppsWarning_ ? html`
       <div id="overlapWarning">${this.overlappingAppsWarning_}</div>
@@ -53,9 +57,10 @@ ${this.showOverlappingAppsDialog_ ? html`
       id="overlapDialog"
       .app="${this.app}"
       .apps="${this.apps}"
-      @close="${this.onOverlappingDialogClosed_}"
+      @close="${this.onOverlappingDialogClose_}"
       .overlappingAppIds="${this.overlappingAppIds_}">
   </app-management-supported-links-overlapping-apps-dialog>
 ` : ''}
 <!--_html_template_end_-->`;
+  // clang-format on
 }

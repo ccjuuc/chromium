@@ -4,6 +4,8 @@
 
 #include "media/gpu/windows/d3d12_video_encode_h264_delegate.h"
 
+#include <algorithm>
+
 #include "base/bits.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/strings/stringprintf.h"
@@ -266,11 +268,12 @@ size_t D3D12VideoEncodeH264Delegate::GetMaxNumOfRefFrames() const {
 }
 
 size_t D3D12VideoEncodeH264Delegate::GetMaxNumOfManualRefBuffers() const {
-  // We should have initialized.
-  CHECK_GT(max_num_ref_frames_, 1u);
-
-  // Same as L1Tx modes, we must reserve 1 DPB slot internally for handling
-  // frame_num gap.
+  if (max_num_ref_frames_ <= 1) {
+    return 0;
+  }
+  // We always reserve 1 DPB slot internally for handling frame_num gap (same
+  // as L1Tx modes). When the non-reference-frame workaround is active, reserve
+  // 1 more slot for the forced non-reference frame.
   if (gpu_workarounds_.disable_d3d12_h264_encoder_non_reference_frames) {
     return max_num_ref_frames_ - 2;
   }
@@ -349,7 +352,8 @@ EncoderStatus D3D12VideoEncodeH264Delegate::EncodeImpl(
     ID3D12Resource* input_frame,
     UINT input_frame_subresource,
     const VideoEncoder::EncodeOptions& options,
-    const gfx::ColorSpace& input_color_space) {
+    const gfx::ColorSpace& input_color_space,
+    const gfx::HDRMetadata& input_hdr_metadata) {
   // Filling the |input_arguments_| according to
   // https://github.com/microsoft/DirectX-Specs/blob/master/d3d/D3D12VideoEncoding.md#6120-struct-d3d12_video_encoder_input_arguments
 
@@ -394,6 +398,11 @@ EncoderStatus D3D12VideoEncodeH264Delegate::EncodeImpl(
       destroy_buffer = 1;
     }
   } else {
+    if (options.reference_buffers.size() > list0_reference_frames_.size()) {
+      return {EncoderStatus::Codes::kBadReferenceBuffer,
+              "Number of manual reference buffers exceeds that is supported by "
+              "encoder"};
+    }
     reference_buffers = options.reference_buffers;
     update_buffer = options.update_buffer;
   }
@@ -643,7 +652,19 @@ EncoderStatus D3D12VideoEncodeH264Delegate::InitializeVideoEncoder(
                                  "support manual reference control, got %u",
                                  picture_control_support_h264.MaxDPBCapacity)};
     }
-    max_num_ref_frames_ = picture_control_support_h264.MaxDPBCapacity;
+    // Manual reference control is implemented via H.264 long-term references,
+    // so the number of usable slots must not exceed the driver's
+    // MaxLongTermReferences. Reserve one extra DPB slot for frame_num gap
+    // handling (matches the SVC path), but never exceed MaxDPBCapacity.
+    max_num_ref_frames_ = std::min<uint32_t>(
+        picture_control_support_h264.MaxDPBCapacity,
+        picture_control_support_h264.MaxLongTermReferences + 1);
+    // We never see driver with MaxL0ReferenceForP < MaxLongTermReferences,
+    // but bound to it in case it happens. Manual reference buffer is with
+    // budget (max_num_ref_frames_ -1).
+    max_num_ref_frames_ = std::min<uint32_t>(
+        max_num_ref_frames_,
+        picture_control_support_h264.MaxL0ReferencesForP + 1);
   }
 
   if ((config.bitrate.mode() == Bitrate::Mode::kConstant ||

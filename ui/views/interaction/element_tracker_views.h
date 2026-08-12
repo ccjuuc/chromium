@@ -13,9 +13,9 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
-#include "base/scoped_multi_source_observation.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
+#include "ui/views/interaction/element_tracker_widget_state.h"
 #include "ui/views/view_utils.h"
 #include "ui/views/views_export.h"
 
@@ -38,16 +38,18 @@ class VIEWS_EXPORT TrackedElementViews : public ui::TrackedElement {
   // TrackedElement:
   gfx::Rect GetScreenBounds() const override;
   gfx::NativeView GetNativeView() const override;
+  std::string GetSecondaryIdentifier() const override;
   std::string ToString() const override;
 
-  DECLARE_FRAMEWORK_SPECIFIC_METADATA()
+  DECLARE_SAFE_CAST_TARGET()
 
  private:
   const raw_ptr<View> view_;
 };
 
 // Manages TrackedElements associated with View objects.
-class VIEWS_EXPORT ElementTrackerViews {
+class VIEWS_EXPORT ElementTrackerViews
+    : public internal::ElementTrackerWidgetState::Delegate {
  public:
   using ViewList = std::vector<View*>;
 
@@ -132,15 +134,16 @@ class VIEWS_EXPORT ElementTrackerViews {
                             ui::ElementContext context,
                             bool require_visible = false);
 
-  // Returns a list of all visible Views with identifier `id` in `context`.
-  // The list may be empty. Ignores any non-Views elements which might match.
+  // Returns a list of all Views with identifier `id` in `context`. The list
+  // may be empty. Ignores any non-Views elements which might match.
   ViewList GetAllMatchingViews(ui::ElementIdentifier id,
-                               ui::ElementContext context);
+                               ui::ElementContext context,
+                               bool require_visible = false);
 
-  // Returns a list of all visible Views with identifier `id` in any context.
-  // Order is not guaranteed. Ignores any non-Views elements with the same
-  // identifier.
-  ViewList GetAllMatchingViewsInAnyContext(ui::ElementIdentifier id);
+  // Returns a list of all Views with identifier `id` in any context. Order is
+  // not guaranteed. Ignores any non-Views elements with the same identifier.
+  ViewList GetAllMatchingViewsInAnyContext(ui::ElementIdentifier id,
+                                           bool require_visible = false);
 
   // Returns a widget that matches the given context. A valid
   // TrackedElementViews must exist within the widget.
@@ -174,7 +177,6 @@ class VIEWS_EXPORT ElementTrackerViews {
   friend class base::NoDestructor<ElementTrackerViews>;
   FRIEND_TEST_ALL_PREFIXES(ElementTrackerViewsTest, CleansUpWidgetTrackers);
   class ElementDataViews;
-  class WidgetTracker;
 
   ElementTrackerViews();
   ~ElementTrackerViews();
@@ -195,8 +197,12 @@ class VIEWS_EXPORT ElementTrackerViews {
   // Aura is not exactly synced with our event reporting.
   bool IsWidgetVisible(const Widget* widget) const;
 
+  // internal::ElementTrackerWidgetState::Delegate:
+  void OnWidgetVisibilityChanged(const Widget* widget, bool visible) override;
+  void OnWidgetDestroying(const Widget* widget) override;
+
   std::map<ui::ElementIdentifier, ElementDataViews> element_data_;
-  std::map<const Widget*, WidgetTracker> widget_trackers_;
+  std::map<const Widget*, internal::ElementTrackerWidgetState> widget_trackers_;
 };
 
 // Template implementations.

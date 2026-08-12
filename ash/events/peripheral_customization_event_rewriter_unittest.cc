@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <ranges>
 #include <variant>
 
 #include "ash/accelerators/accelerator_controller_impl.h"
@@ -16,12 +17,9 @@
 #include "ash/public/cpp/accelerator_keycode_lookup_cache.h"
 #include "ash/public/cpp/input_device_settings_controller.h"
 #include "ash/public/cpp/test/mock_input_device_settings_controller.h"
-#include "ash/public/mojom/input_device_settings.mojom-forward.h"
-#include "ash/public/mojom/input_device_settings.mojom-shared.h"
 #include "ash/public/mojom/input_device_settings.mojom.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
-#include "base/containers/adapters.h"
 #include "base/containers/flat_map.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
@@ -161,15 +159,16 @@ struct TestKey {
   // Returns press key event.
   static constexpr TestKeyEvent Pressed(ui::EventFlags flags = ui::EF_NONE) {
     return {ui::EventType::kKeyPressed, code,
-            (flags & ui::EF_SHIFT_DOWN) ? shifted_key : key, keycode,
-            flags | modifier_flag};
+            ui::DomKey((flags & ui::EF_SHIFT_DOWN) ? shifted_key : key),
+            keycode, flags | modifier_flag};
   }
 
   // Returns release key event.
   static constexpr TestKeyEvent Released(ui::EventFlags flags = ui::EF_NONE) {
     // Note: modifier flag should not be present on release events.
     return {ui::EventType::kKeyReleased, code,
-            (flags & ui::EF_SHIFT_DOWN) ? shifted_key : key, keycode, flags};
+            ui::DomKey((flags & ui::EF_SHIFT_DOWN) ? shifted_key : key),
+            keycode, flags};
   }
 
   // Returns press then release key events.
@@ -633,7 +632,7 @@ class PeripheralCustomizationEventRewriterTest : public AshTestBase {
 
     // Send modifier key release events to unset rewriter'.s modifier flag
     // state.
-    for (const auto& modifier : base::Reversed(kModifierList)) {
+    for (const auto& modifier : std::views::reverse(kModifierList)) {
       if (!(extra_flags & modifier.flag)) {
         continue;
       }

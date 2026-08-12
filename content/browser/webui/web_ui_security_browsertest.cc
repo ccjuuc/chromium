@@ -10,12 +10,13 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/thread_restrictions.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/process_lock.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/browser/webui/web_ui_controller_factory_registry.h"
 #include "content/common/content_navigation_policy.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_isolation_policy.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_ui.h"
@@ -57,7 +58,8 @@ class WebUISecurityTest : public ContentBrowserTest {
   ScopedWebUIControllerFactoryRegistration factory_registration_{&factory_};
 };
 
-// Verify chrome-untrusted:// have no bindings.
+// Verify chrome-untrusted:// have no bindings and cannot request chrome or file
+// URLs.
 IN_PROC_BROWSER_TEST_F(WebUISecurityTest, UntrustedNoBindings) {
   auto* web_contents = shell()->web_contents();
   WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
@@ -66,17 +68,19 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, UntrustedNoBindings) {
   const GURL untrusted_url(GetChromeUntrustedUIURL("test-host/title1.html"));
   EXPECT_TRUE(NavigateToURL(web_contents, untrusted_url));
 
+  auto process_id =
+      *shell()->web_contents()->GetPrimaryMainFrame()->GetProcess()->GetID();
   EXPECT_FALSE(ChildProcessSecurityPolicyImpl::GetInstance()->HasWebUIBindings(
-      shell()
-          ->web_contents()
-          ->GetPrimaryMainFrame()
-          ->GetProcess()
-          ->GetDeprecatedID()));
+      process_id));
   EXPECT_TRUE(shell()
                   ->web_contents()
                   ->GetPrimaryMainFrame()
                   ->GetEnabledBindings()
                   .empty());
+  EXPECT_FALSE(ChildProcessSecurityPolicyImpl::GetInstance()->CanRequestURL(
+      process_id, GURL("file:///etc/passwd")));
+  EXPECT_FALSE(ChildProcessSecurityPolicyImpl::GetInstance()->CanRequestURL(
+      process_id, GURL("chrome://version")));
 }
 
 // Loads a WebUI which does not have any bindings.
@@ -238,9 +242,11 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUISameSiteSubframe) {
   EXPECT_EQ(subframe_url, observer.last_committed_url());
   EXPECT_EQ(root->current_frame_host()->GetSiteInstance(),
             root->child_at(0)->current_frame_host()->GetSiteInstance());
-  EXPECT_EQ(
-      GetWebUIURL("web-ui"),
-      root->child_at(0)->current_frame_host()->GetSiteInstance()->GetSiteURL());
+  EXPECT_EQ(GetWebUIURL("web-ui"), root->child_at(0)
+                                       ->current_frame_host()
+                                       ->GetSiteInstance()
+                                       ->GetSecurityPrincipal()
+                                       .GetDeprecatedSiteURL());
 
   // The subframe should have its own WebUI object different from the parent
   // frame.
@@ -288,8 +294,10 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUICrossSiteSubframe) {
     EXPECT_EQ(url::Origin::Create(child_frame_url),
               child->current_frame_host()->GetLastCommittedOrigin());
   }
-  EXPECT_EQ(GetWebUIURL("web-ui-subframe"),
-            child->current_frame_host()->GetSiteInstance()->GetSiteURL());
+  EXPECT_EQ(GetWebUIURL("web-ui-subframe"), child->current_frame_host()
+                                                ->GetSiteInstance()
+                                                ->GetSecurityPrincipal()
+                                                .GetDeprecatedSiteURL());
   EXPECT_NE(root->current_frame_host()->GetSiteInstance(),
             child->current_frame_host()->GetSiteInstance());
   EXPECT_NE(root->current_frame_host()->GetProcess(),
@@ -540,7 +548,10 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUIFailedNavigation) {
   EXPECT_TRUE(root->current_frame_host()->GetEnabledBindings().empty());
 
   if (SiteIsolationPolicy::IsErrorPageIsolationEnabled(true)) {
-    EXPECT_EQ(root->current_frame_host()->GetSiteInstance()->GetSiteURL(),
+    EXPECT_EQ(root->current_frame_host()
+                  ->GetSiteInstance()
+                  ->GetSecurityPrincipal()
+                  .GetDeprecatedSiteURL(),
               GURL(kUnreachableWebDataURL));
   }
 

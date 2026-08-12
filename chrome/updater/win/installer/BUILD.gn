@@ -75,6 +75,7 @@ source_set("lib") {
     "//chrome/updater:tagging",
     "//components/update_client",
     "//third_party/abseil-cpp:absl",
+    "//ui/gfx",
   ]
 }
 
@@ -164,6 +165,10 @@ template("generate_installer") {
     configs += [ "//build/config/win:windowed" ]
 
     libs = [ "setupapi.lib" ]
+
+    if (!is_asan) {
+      ldflags = [ "/DEPENDENTLOADFLAG:0x800" ]
+    }
 
     deps = [
              ":$archive_name",

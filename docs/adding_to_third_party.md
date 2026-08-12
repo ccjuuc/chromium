@@ -19,8 +19,8 @@ dependency has its own dependencies *and* it can be built on its own (without
 Chromium), you can check its dependencies into its third_party. For example,
 Dawn is a project that is developed independently of Chromium, and
 it has a dependency on GLFW (which Chromium does not have). Dawn
-can check that dependency into its `//third_party/glfw`, and in a Chromium
-checkout, that will show up at `//third_party/dawn/third_party/glfw`.
+can check that dependency into its `//third_party/glfw3/src`, and in a Chromium
+checkout, that will show up at `//third_party/dawn/third_party/glfw3/src`.
 That is okay, but it'd be better if we could add GLFW to a Chromium
 checkout (in chromium/src's `third_party/glfw`) and configure Dawn
 to use that location when it is being built as part of Chromium.
@@ -41,53 +41,64 @@ Regardless of where you add a third party dependency, you should use the
 
 # Before you start
 
-To make sure the inclusion of a new third_party project makes sense for the
-Chromium project, you should first obtain
-[Chrome ATL](../ATL_OWNERS) approval. Please include the following information in an
-email to chrome-atls-discuss@google.com:
-* Motivation of your project
-* Design docs
-* Additional checkout size
-   * If the increase is significant (e.g., 20+ MB), can we consider limiting the
-   files to be checked in?
-* Build time increase
-   * This refers to building `chrome` or test targets in the critical
-     development path. The [compile-size](speed/binary_size/compile_size_builder.md)
-     builder in CQ is a good proxy for the whether the delta is acceptable
-     (caveat that it measures just `chrome` on Linux).
-   * If the increase is significant (e.g., 30+ seconds), can we consider making
-   this an optional build target?
-* Binary size increase on Android ([official](https://www.chromium.org/developers/gn-build-configuration) builds)
-   * Any increase of 16 KB or more on Android is flagged on the build bots and
-   justification is needed.
-* Binary size increase on Windows
-* Is this library maintained on all platforms that we will use it on?
-   * If not, will the Chrome org be expected to maintain this for some or all
-   platforms?
-* Does it have any performance / memory implications (esp. on Android)? Was the
-library designed with intended use on Android?
-* Do we really need the library? Is there any alternative such as an existing
-library already in Chromium? If introducing a library with similar functionality
-as existing, will it be easy for another developer to understand which should be
-used where? Will you commit to consolidating uses in Chromium and remove the
-alternative libraries?
-* Is the library written in a [memory safe
-  language](security/rule-of-2.md#unsafe-implementation-languages)? If not, is
-  there an alternative library available that is memory safe and meets
-  Chromium's needs?
-  * You will be responsible for [owning the library](#add-owners), which
-    includes updating it for security and stability fixes. For C/C++, this is
-    your responsibility.  For [Rust](#rust), minor version updates are regularly
-    handled by a rotation, so you are only responsible for major version updates
-    (and minor version updates which result in `gnrt` or Chromium CQ failures).
-* For desktop (Win/Mac/Linux/ChromeOS), does the dependency introduce closed
-source components (e.g., binaries, WASM binaries, obfuscated code)? If yes,
-please reach out to Chrome ATLs.
+NOTE: You can skip this step when you are only moving existing directories in
+Chromium to //third_party/.
 
+To make sure the inclusion of a new //third_party project makes sense for the
+Chromium project, you should first obtain approval from Chrome's Technical
+Steering Council and Chrome Security. Please include the following topics in an
+email to chromium-third-party-libraries at chromium.org (this will trigger a
+review by both parties - you're good to go once you have both signoffs on the
+email thread):
 
-Googlers can access [go/chrome-atls](https://goto.google.com/chrome-atls) and review
-existing topics in g/chrome-atls, and can also come to office hours to ask
-questions.
+1.  Link to the upstream repository.
+
+2.  Motivation:
+
+    What does the library do, and how does that functionality support Chromium's
+    goals? Are there alternatives you considered, either dependencies we already
+    include, or other libraries we could have chosen? Linking to a design doc
+    (and ensuring it's shared appropriately!) would be ideal.
+
+3.  Security:
+
+    Is the library written in a
+    [memory-safe language](security/rule-of-2.md#unsafe-implementation-languages)?
+    Does it process untrusted input? What's the integration strategy (e.g. will
+    it run in a utility process, as part of the browser process, etc)? Will the
+    library be built from source, or distributed as a pre-built binary? In the
+    latter case, please explain why it can't be built from source, as you'll need
+    explicit approval.
+
+4.  Maintenance:
+
+    You will be responsible for [owning the dependency](#add-owners), keeping it
+    up to date with security and stability fixes. Third party dependencies must
+    be [kept up to date](#fresh-deps), so you'll need a plan to autoroll it. If
+    it cannot be autorolled, you will need an exception, as discussed in
+    "[Update Mechanism](#update-mechanism)" and
+    "[Autoroll Exceptions](#autoroll-exceptions)" below.
+
+    Likewise, how well-maintained is the upstream on all the platforms Chromium
+    supports? What is the expected maintenance burden on the Chromium project
+    over time?
+
+5.  Weight:
+
+    What is the expected build time and binary size impact? If you have
+    an active CL, the [compile-size](speed/binary_size/compile_size_builder.md)
+    and [android-binary-size](speed/binary_size/android_binary_size_trybot.md)
+    bots are good data points to link to as good proxies for speed and size
+    implications. If the expected APK increase is greater
+    than 16kb, consider analyzing the library via tools like
+    [Chrome Supersize](../tools/binary_size/libsupersize/README.md) to trim
+    unnecessary overhead.
+
+    What's the impact on checkout size? If it's significant (e.g. >20MB),
+    consider filtering the files to be checked in.
+
+    Are there performance or memory implications to be aware of, especially on
+    Android?
 
 ## Rust
 
@@ -100,6 +111,12 @@ The process for importing a new Rust third-party dependency is documented at
 (Googlers can also find additional considerations at go/chrome-rust).
 
 Email rust-dev@chromium.org with any questions about the Rust toolchain.
+
+Note that new Rust crates do not require security approval - the Rust
+third_party approval is sufficient. Likewise, minor version updates for crates
+are regularly handled by a rotation; you'll only be responsible for major
+version updates (and minor version updates which result in `gnrt` or Chromium
+CQ failures).
 
 ## A note on size constraints
 
@@ -135,12 +152,29 @@ in third_party/OWNERS for help.
 
 See [Chrome Code Policy](https://goto.google.com/chrome-code-policy)
 
+# Keeping dependencies up to date (fresh) {#fresh-deps}
+
+It is Chromium policy that third party dependencies be kept up to date, or
+"fresh". Fresh means:
+
+* There is no newer minor or patch version that has been available for 3+ months.
+* There is no newer major version that has been available for 1 year or more.
+* The upstream project has had a release within the last 2 years.
+
+The easiest way to ensure your dependency meets this criteria is to onboard it
+to an autoroller. Refer to
+[managing-third-party](https://chromium.googlesource.com/chromium/src/+/main/docs/managing-third-party/)
+for options and user guides. While the autoroller will detect new versions as
+they become available and attempt to roll them into Chromium, OWNERS are
+responsible for resolving any issues which arise as a result of the update and
+landing the update as soon as feasible. If you cannot autoroll your dependency,
+you will need an [autoroll exception](#autoroll-exception).
 
 # Get the code
 
 There are two common ways to depend on third-party code: you can reference a
 Git repo directly (via entries in the DEPS file) or you can check in a
-snapshot. The former is preferable in most cases:
+snapshot (vendor the code). The former is preferable in most cases:
 
 1. If you are actively developing in the upstream repo, then having the DEPS
    file include the upstream (that's been mirrored to GoB, see [here](/docs/dependencies.md#adding-to-GoB))
@@ -159,7 +193,7 @@ snapshot. The former is preferable in most cases:
 Checking in a snapshot is useful if this is effectively taking on maintenance
 of an unmaintained project (e.g. an ancient library that we're going to GN-ify
 that hasn't been updated in years). And, of course, if the code you need isn't
-in a Git repo, then you have to snapshot.
+in a Git repo, then you have to snapshot/vendor.
 
 ## Node packages
 
@@ -268,6 +302,11 @@ you're re-using code. See
 for a list of fields to include. A presubmit check will check this has the right
 format.
 
+Make sure to document all security considerations, concerns, and risks in the
+`Description:` field of the README.chromium. Third party code is a hot spot
+for security vulnerabilities. Help people make informed decisions about
+relying on this package by highlighting security considerations.
+
 ## Security Critical {#security-critical}
 README.chromium files contain a field indicating whether the package is
 security-critical or not. A package is security-critical if it is compiled
@@ -281,45 +320,46 @@ into the product and does any of the following:
 
 ## Update Mechanism {#update-mechanism}
 
-We aim to eventually autoroll as many dependencies as is feasible, and track those
-that can't with an [exception](https://issues.chromium.org/issues/new?component=1801247&template=2135097).
+The `Update Mechanism:` field specifies how this dependency is kept up-to-date.
+You will use one of the following values below. The bug link should be an
+approved autoroll exception ([example](https://crbug.com/422921734)).
 
-> We are currently only enforcing exceptions for **'Static'** dependencies.
-> New dependencies pulled in via DEPS should be set to **'Manual'**.
-
-The `Update Mechanism:` field specifies how this dependency is kept
-up-to-date. You will use one of the exact string formats listed below,
-replacing `(https://crbug.com/BUG_ID)` with the actual bug link where required.
-The format is `Primary[.SubsetSpecifier] (https://crbug.com/BUG_ID)`.
-
-**Accepted Values:**
 * `Autoroll`
-* `Manual (https://crbug.com/BUG_ID)`
-* `Static (https://crbug.com/BUG_ID)`
-* `Static.HardFork (https://crbug.com/BUG_ID)`
+* `Manual (https://crbug.com/<BUG_ID>)`
+* `Static (https://crbug.com/<BUG_ID>)`
+* `Static.HardFork (https://crbug.com/<BUG_ID>)`
 
 |||---||| 3,3,6
+
 ### Autoroll
 
-Updated automatically by a service e.g. Skia Autoroller, Copybara.
+Updated automatically by a service.
 
-No exception required.
+Please refer to
+[managing-third-party](https://chromium.googlesource.com/chromium/src/+/main/docs/managing-third-party/)
+for options and user guide.
 
+*** note
 ### Manual
 
-Updated manually by OWNERS e.g., using `roll_deps`.
+**An exception is required.**
 
-No exception required *yet*.
+Updated manually by OWNERS.
+
+Owners may use `roll-dep`, or custom bespoke methods.
+***
+
 *** note
 ### Static / Static.HardFork
 
-An exception is required.
+**An exception is required.**
 
-*Changes are authored by Chromium Authors.*
+*The dependency will be treated as if it's written by Chromium Authors.*
 
-* **Static**: Origin is not a typical git repo or package manager, or package is
-intentionally never updated.
-* **Static.HardFork**: Origin is a git repo or package manager, but our version
+* **Static**: Origin is not a version controlled repository or a package
+manager, or the dependency is intentionally never updated, or the upstream Git
+repo is archived.
+* **Static.HardFork**: Origin is a Git repo or package manager, but our version
 has diverged from the upstream, and is no longer updatable.
 ***
 |||---|||
@@ -328,12 +368,25 @@ has diverged from the upstream, and is no longer updatable.
 > revision/version/cpe which represents the closest point of divergence
 > from the upstream. This may return some false positives but ensures
 > coverage is optimal.
-### Autoroll Exceptions
 
-If a dependency can't be autorolled, it needs an exception. OWNERS
-should file a bug using the template in
-[`Chromium > ThirdParty > Autoroll Exceptions`](https://issues.chromium.org/issues/new?component=1801247&template=2135097).
-This component has auto-assignment and will help you track the exception.
+### Autoroll Exceptions {#autoroll-exceptions}
+
+You can request your dependency to be exempted from autorolling. You MUST
+demonstrate a strong technical need for doing so.
+
+For example, the following justifications ARE NOT sufficient for granting an
+exemption:
+
+* The dependency is test-only
+* The dependency isn't shipped
+
+The exemption is evaluated on a case-by-case basis by Chrome ATLs and Chrome's
+third-party supply chain security team.
+
+To request an exemption, file a bug in
+[Chromium > ThirdParty > Autoroll Exceptions](https://issues.chromium.org/issues/new?component=1801247&template=2135097)
+and explain your reasons.
+
 
 ### Transitive Dependencies
 If a child dependency is rolled with a parent, it should specify an
@@ -385,7 +438,7 @@ or not.
 #### Add a LICENSE file and run related checks
 
 You need a LICENSE file. Example:
-[//third_party/libjpeg/LICENSE](../third_party/libjpeg/LICENSE). Dependencies
+[//third_party/libpng/LICENSE](../third_party/libpng/LICENSE). Dependencies
 should not be added without a license file and license type, even if they are
 not shipped in a final product. Existing dependencies without a license file or
 license type are currently being cleaned up as part of the metadata uplift
@@ -420,67 +473,50 @@ Use SPDX license identifiers (https://spdx.org/licenses/) when possible e.g.
 ['Apache-2.0'](https://spdx.org/licenses/Apache-2.0.html). You can find the full
 allowlist in
 [depot_tools/+/main:metadata/fields/custom/license_allowlist.py](https://source.chromium.org/chromium/chromium/tools/depot_tools/+/main:metadata/fields/custom/license_allowlist.py).
-If the dependency uses a license that is not in the allowlist, you will need to
-add it to the
-[allowlist](https://source.chromium.org/chromium/chromium/tools/depot_tools/+/main:metadata/fields/custom/license_allowlist.py).
-This requires approval from the ATLs who will check that the license
-classification is one of [unencumbered/permissive/notice/reciprocal]. If the
-license is more restrictive than reciprocal, engage with the ATLs to determine
-if the dependency is appropriate for Chromium. The license identifier will still
-need to be added to the restricted list
-['WITH_PERMISSION_ONLY'](https://source.chromium.org/chromium/chromium/tools/depot_tools/+/main:metadata/fields/custom/license_allowlist.py).
-Do not use a license on that list without approval from the ATLs.
 
-### License Classifications
+If the dependency uses a license that is not in the
+[license classification](#license-classifications)(see below) to determine what actions are
+required.
 
-Licenses used in our codebase fall into several categories of increasing
-restrictiveness, with notice-level and less restrictive licenses being allowed
-in all projects:
+## License Classifications
 
-* **Public Domain/Unencumbered/Permissive Licenses** - These licenses allow
-  you to do almost anything with the code, they may require attribution e.g.:
-  * [CC0-1.0](https://spdx.org/licenses/CC0-1.0.html).
-  * [Unlicense](https://spdx.org/licenses/Unlicense.html).
-* **Notice Licenses** - (Most open source licenses fall into this category)
-  These licenses are similar to permissive but have additional notice
-  requirements e.g.:
-  * [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html): [`Any modified files
-      must carry prominent notices stating that you changed the
-      files`](https://source.chromium.org/chromium/chromium/src/+/main:third_party/catapult/third_party/coverage/LICENSE.txt;l=98).
-  * [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause): [`3. Neither the
-     name of the copyright holder nor the names of its contributors may be
-     used to endorse or promote products derived from this software without
-     specific prior written
-     permission.`](https://source.chromium.org/chromium/chromium/src/+/main:ios/third_party/fishhook/LICENSE;drc=1308ce89bbb959047a73145a0ca4a2f5f7dde894;l=10).
+Licenses used in our codebase fall into several categories. Notice-level and
+less restrictive licenses are allowed in all projects.
 
-Additionally, open source projects like Chromium are also allowed to use reciprocal licenses:
-
-*   **Reciprocal Licenses** - These licenses require sharing modifications under
-    the same terms:
-
-    *   [MPL-1.1](https://spdx.org/licenses/MPL-1.1.html).
-    *   [APSL-2.0](https://spdx.org/licenses/APSL-2.0.html).
-
-*   **Restricted Licenses !Case-by-case Approval Required!** - These licenses
-    have stricter requirements but are allowed in some circumstances. These
-    licenses may require you to publish the code under the same terms and
-    conditions:
-
-    *   [LGPL-2.1](https://spdx.org/licenses/LGPL-2.1.html).
-    *   [GPL-2.0](https://spdx.org/licenses/GPL-2.0.html).
+| Classification | Description | Examples | Can I use it? |
+| :--- | :--- | :--- | :--- |
+| **Public Domain / Permissive** | Allow you to do almost anything, may require attribution. | [CC0-1.0](https://spdx.org/licenses/CC0-1.0.html), [Unlicense](https://spdx.org/licenses/Unlicense.html) | Yes |
+| **Notice** | Require copyright notice and attribution. | [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html), [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause) | Yes |
+| **Reciprocal** | Require sharing modifications under the same terms. | [MPL-1.1](https://spdx.org/licenses/MPL-1.1.html), [APSL-2.0](https://spdx.org/licenses/APSL-2.0.html) | Yes (allowed for open-source projects like Chromium) |
+| **Restricted** | Stricter requirements, case-by-case approval required. | [LGPL-2.1](https://spdx.org/licenses/LGPL-2.1.html), [GPL-2.0](https://spdx.org/licenses/GPL-2.0.html) | Requires [approval](#file-a-restricted-license-request) |
 
 Make sure you understand the license terms before checking in a dependency, and
 when making any local modifications or forks.
 
-The following restricted licenses are allowed under the following circumstances
-(this is not a definitive list):
+### Restricted Licenses
 
-* GPL licenses are allowed for all non-shipped dependencies.
-* LGPLv2.1 is always okay as long as it is part of the Chromium binary.
+Restricted licenses (like GPL) have stricter requirements and require
+case-by-case approval unless they have been added to the
+[allowlist](https://source.chromium.org/chromium/chromium/tools/depot_tools/+/main:metadata/fields/custom/license_allowlist.py)
+(e.g. LGPL).
+
+Common cases that are allowed (but still require a request):
+*   **[GPL-2.0](https://spdx.org/licenses/GPL-2.0.html)** licenses are allowed for all non-shipped dependencies.
+
+#### File a Restricted License Request
+
+*   **Googlers**: File a bug using [this bug template](http://b/issues/new?component=1450496&template=2332739).
+    If approved, you will be given a
+    [`restrictive_license_approval.textproto`](https://chromium.googlesource.com/chromium/tools/depot_tools/+/main/metadata/restrictive_license_approval.proto)
+    file to put next to your `README.chromium`.
+*   **External Contributors**: File a bug using [this bug template](https://g-issues.chromium.org/issues/new?component=1456923&template=2336896).
+    A member of the `//third_party/OWNERS` team will review it and handle this process on your
+    behalf.
 
 ## Multiple packages
 Adding multiple packages in a single third party directory is not recommended,
-because it does not follow the best practices for [third party dependency structure](#standard-dep-structure)
+because it does not follow the best practices for
+[third party dependency structure](#standard-dep-structure)
 and complicates vulnerability scanning.
 
 Each dependency should have its own third party directory with a few very
@@ -498,7 +534,8 @@ line to separate the data for each package:
 # Vulnerability Cover {#vulnerability-cover}
 
 All dependencies _must_ provide sufficient metadata to enable vulnerability scanning:
-* `URL` and (`Version` or `Revision`) match upstream identifiers (git, package manager, etc); or
+* `URL` and (`Version` or `Revision`) match upstream identifiers (git, package manager, etc);
+or
 * `CPEPrefix` and `Version`.
 
 There are limited exceptions for dependencies matching:
@@ -513,13 +550,8 @@ following sign-offs. Some of these are accessible to Googlers only.
 Non-Googlers can email one of the people in
 [//third_party/OWNERS](../third_party/OWNERS) for help.
 
-* Make sure you have the approval from Chrome ATLs as mentioned
-  [above](#before-you-start).
-* Get security@chromium.org (or chrome-security@google.com, Google-only)
-  approval. Document all security considerations, concerns, and risks in the
-  `Description:` field of the README.chromium. Third party code is a hot spot
-  for security vulnerabilities. Help people make informed decisions about
-  relying on this package by highlighting security considerations.
+* Make sure you have the approval from Chrome TSC and Chrome Security as
+mentioned [above](#before-you-start).
 * Add chromium-third-party@google.com as a reviewer on your change. This
   will trigger automatic assignment to a reviewer who will check license use,
   metadata compliance and verify long term dependency maintenance plans.
@@ -531,10 +563,6 @@ Non-Googlers can email one of the people in
   process, ask one of the [//third_party/OWNERS](../third_party/OWNERS) instead.
 * Lastly, if all other steps are complete, get a positive code review from a
   member of [//third_party/OWNERS](../third_party/OWNERS) to land the change.
-
-Please send separate emails to the ATLs and security@chromium.org.
-You can skip the ATL review and security@chromium.org when you are only moving
-existing directories in Chromium to //third_party/.
 
 Subsequent changes don't normally require third-party-owners or security
 approval; you can modify the code as much as you want. When you update code, be
@@ -549,7 +577,7 @@ right credit and attributions for all of the third_party code we use.
 To view this in chrome, you can open chrome://credits.
 
 That page displays a resource embedded in the browser as part of the
-[//components/resources/components_resources.grd](../components/resources/components_resource.grd)
+[//components/resources/components_resources.grd](../components/resources/components_resources.grd)
 GRIT file; the actual HTML text is generated in the
 [//components/resources:about_credits](../components/resources/BUILD.gn)
 build target using a template from the output of the

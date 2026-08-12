@@ -20,7 +20,9 @@
 #include "components/enterprise/buildflags/buildflags.h"
 #include "components/offline_items_collection/core/fail_state.h"
 #include "components/vector_icons/vector_icons.h"
+#include "extensions/strings/grit/extensions_strings.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 
 #if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
 #include "chrome/browser/enterprise/connectors/common.h"
@@ -178,6 +180,7 @@ void DownloadBubbleSecurityViewInfo::PopulateForInterrupted(
           IDS_DOWNLOAD_BUBBLE_SUBPAGE_SUMMARY_TOO_BIG);
       return;
     case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE:
+    case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_ONEDRIVE:
     case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK: {
 #if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
       if (enterprise_connectors::ShouldPromptReviewForDownload(
@@ -222,6 +225,8 @@ void DownloadBubbleSecurityViewInfo::PopulateForInterrupted(
   }
 
   switch (model.GetLastFailState()) {
+    // TODO(alshawwa): Handle LOCAL_DOWNLOAD_BLOCKED separately.
+    case FailState::LOCAL_DOWNLOAD_BLOCKED:
     case FailState::FILE_BLOCKED:
       warning_summary_ = l10n_util::GetStringUTF16(
           IDS_DOWNLOAD_BUBBLE_INTERRUPTED_SUBPAGE_SUMMARY_BLOCKED_ORGANIZATION);
@@ -461,7 +466,10 @@ void DownloadBubbleSecurityViewInfo::PopulateForInProgressOrComplete(
       } else {
         warning_summary_ = l10n_util::GetStringUTF16(
             IDS_DOWNLOAD_BUBBLE_SUBPAGE_SUMMARY_ASYNC_SCANNING);
-        warning_secondary_icon_ = &vector_icons::kDocumentScannerIcon;
+        warning_secondary_icon_ =
+            &(features::IsRoundedIconsEnabled()
+                  ? vector_icons::kDocumentScannerIcon
+                  : vector_icons::kDocumentScannerOldIcon);
         warning_secondary_text_ =
             download::DoesDownloadConnectorBlock(model.profile(),
                                                  model.GetURL())
@@ -519,6 +527,7 @@ void DownloadBubbleSecurityViewInfo::PopulateForInProgressOrComplete(
     case download::DOWNLOAD_DANGER_TYPE_ALLOWLISTED_BY_POLICY:
     case download::DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED:
     case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE:
+    case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_ONEDRIVE:
     case download::DOWNLOAD_DANGER_TYPE_MAX:
       return;
   }

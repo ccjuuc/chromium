@@ -29,11 +29,17 @@ constexpr CGFloat kLargeWidthThreshold = 1000;
 
 }  // namespace
 
-CGFloat TabGridItemAspectRatio(CGSize size) {
+CGFloat TabGridItemAspectRatio(CGSize size, UIWindowScene* window_scene) {
   const CGFloat width = size.width;
   const CGFloat height = size.height;
 
-  const CGRect screen_bounds = UIScreen.mainScreen.bounds;
+  CGRect screen_bounds;
+
+  if (@available(iOS 26, *)) {
+    screen_bounds = window_scene.effectiveGeometry.coordinateSpace.bounds;
+  } else {
+    screen_bounds = window_scene.screen.bounds;
+  }
   const CGFloat screen_aspect_ratio =
       CGRectGetHeight(screen_bounds) / CGRectGetWidth(screen_bounds);
 
@@ -123,5 +129,25 @@ Browser* GetBrowserForTabWithCriteria(BrowserList* browser_list,
       return browser;
     }
   }
+  return nullptr;
+}
+
+web::WebState* GetWebStateForTabWithCriteria(BrowserList* browser_list,
+                                             WebStateSearchCriteria criteria,
+                                             bool is_otr_tab) {
+  Browser* browser =
+      GetBrowserForTabWithCriteria(browser_list, criteria, is_otr_tab);
+
+  if (!browser) {
+    return nullptr;
+  }
+
+  WebStateList* web_state_list = browser->GetWebStateList();
+  int index = GetWebStateIndex(web_state_list, criteria);
+
+  if (index != WebStateList::kInvalidIndex) {
+    return web_state_list->GetWebStateAt(index);
+  }
+
   return nullptr;
 }

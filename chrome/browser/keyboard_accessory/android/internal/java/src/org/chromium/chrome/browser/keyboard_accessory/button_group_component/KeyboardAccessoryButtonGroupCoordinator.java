@@ -5,7 +5,6 @@
 package org.chromium.chrome.browser.keyboard_accessory.button_group_component;
 
 import static org.chromium.chrome.browser.keyboard_accessory.button_group_component.KeyboardAccessoryButtonGroupProperties.ACTIVE_TAB;
-import static org.chromium.chrome.browser.keyboard_accessory.button_group_component.KeyboardAccessoryButtonGroupProperties.BUTTON_SELECTION_CALLBACKS;
 import static org.chromium.chrome.browser.keyboard_accessory.button_group_component.KeyboardAccessoryButtonGroupProperties.TABS;
 
 import android.view.View;
@@ -29,7 +28,7 @@ import java.util.HashMap;
 @NullMarked
 public class KeyboardAccessoryButtonGroupCoordinator {
     private final PropertyModel mModel =
-            new PropertyModel.Builder(TABS, ACTIVE_TAB, BUTTON_SELECTION_CALLBACKS)
+            new PropertyModel.Builder(KeyboardAccessoryButtonGroupProperties.ALL_KEYS)
                     .with(TABS, new ListModel<>())
                     .with(ACTIVE_TAB, null)
                     .build();
@@ -140,6 +139,15 @@ public class KeyboardAccessoryButtonGroupCoordinator {
      * @return A {@link KeyboardAccessoryCoordinator.TabSwitchingDelegate}.
      */
     public KeyboardAccessoryCoordinator.TabSwitchingDelegate getTabSwitchingDelegate() {
+        return mMediator;
+    }
+
+    /**
+     * Returns a delegate that executes on several @memory-related actions.
+     *
+     * @return A {@link KeyboardAccessoryCoordinator.AtMemoryDelegate}.
+     */
+    public KeyboardAccessoryCoordinator.AtMemoryDelegate getAtMemoryDelegate() {
         return mMediator;
     }
 

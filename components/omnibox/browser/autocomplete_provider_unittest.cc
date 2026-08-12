@@ -421,14 +421,6 @@ class AutocompleteProviderTest : public testing::Test {
       metrics::OmniboxEventProto::PageClassification classification) {
     controller_->input_.current_page_classification_ = classification;
   }
-  void add_zero_suggest_provider_experiment_stats_v2(
-      const omnibox::metrics::ChromeSearchboxStats::ExperimentStatsV2&
-          experiment_stat_v2) {
-    auto& experiment_stats_v2s =
-        const_cast<SearchSuggestionParser::ExperimentStatsV2s&>(
-            controller_->zero_suggest_provider_->experiment_stats_v2s());
-    experiment_stats_v2s.push_back(experiment_stat_v2);
-  }
 
   // Resets the controller with the given |type|. |type| is a bitmap containing
   // AutocompleteProvider::Type values that will (potentially, depending on
@@ -613,7 +605,7 @@ void AutocompleteProviderTest::RunKeywordTest(
       input,
       metrics::OmniboxEventProto::INSTANT_NTP_WITH_OMNIBOX_AS_STARTING_FOCUS,
       TestingSchemeClassifier());
-  autocomplete_input.set_prefer_keyword(true);
+  autocomplete_input.set_in_keyword_mode(true);
   controller_->input_ = autocomplete_input;
   AutocompleteResult result;
   result.AppendMatches(matches);
@@ -1557,10 +1549,10 @@ TEST_F(AutocompleteProviderTest, GetDestinationURL) {
 #endif
 
   // Test experiment stats v2 set.
-  omnibox::metrics::ChromeSearchboxStats::ExperimentStatsV2 experiment_stats_v2;
-  experiment_stats_v2.set_type_int(10001);
-  experiment_stats_v2.set_string_value("0:67");
-  add_zero_suggest_provider_experiment_stats_v2(experiment_stats_v2);
+  auto* experiment_stat_v2 =
+      match.search_terms_args->searchbox_stats.add_experiment_stats_v2();
+  experiment_stat_v2->set_type_int(10001);
+  experiment_stat_v2->set_string_value("0,67");
   url = GetDestinationURL(match, base::Milliseconds(2456));
   EXPECT_EQ("//gs_lcrp=EgZjaHJvbWXSAQgyNDU2ajFqNOIDCRIEMCw2NyCRTg&",
             url.GetPath());

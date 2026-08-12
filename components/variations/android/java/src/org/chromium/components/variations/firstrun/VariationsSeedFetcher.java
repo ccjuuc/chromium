@@ -6,7 +6,6 @@ package org.chromium.components.variations.firstrun;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
 
-import android.content.SharedPreferences;
 import android.os.SystemClock;
 
 import androidx.annotation.IntDef;
@@ -81,7 +80,8 @@ public class VariationsSeedFetcher {
                           ChromeVariations: 2
                         }
                       }
-                    }""");
+                    }\
+                    """);
 
     @IntDef({VariationsPlatform.ANDROID, VariationsPlatform.ANDROID_WEBVIEW})
     @Retention(RetentionPolicy.SOURCE)
@@ -104,7 +104,7 @@ public class VariationsSeedFetcher {
 
     // Values for the "Variations.FirstRun.SeedFetchResult" sparse histogram, which also logs
     // HTTP result codes. These are negative so that they don't conflict with the HTTP codes.
-    // These values should not be renumbered or re-used since they are logged to UMA.
+    // These values should not be renumbered or reused since they are logged to UMA.
     @VisibleForTesting public static final int SEED_FETCH_RESULT_DELTA_PATCH_EXCEPTION = -6;
     @VisibleForTesting public static final int SEED_FETCH_RESULT_INVALID_IM_HEADER = -5;
     // private static final int SEED_FETCH_RESULT_INVALID_DATE_HEADER = -4;
@@ -228,17 +228,8 @@ public class VariationsSeedFetcher {
             urlString = DEFAULT_VARIATIONS_SERVER_URL;
         }
 
-        urlString += "?osname=";
-        switch (params.mPlatform) {
-            case VariationsPlatform.ANDROID:
-                urlString += "android";
-                break;
-            case VariationsPlatform.ANDROID_WEBVIEW:
-                urlString += "android_webview";
-                break;
-            default:
-                assert false;
-        }
+        urlString += "?osname=" + getOsNameParam(params.mPlatform);
+
         if (params.mRestrictMode != null && !params.mRestrictMode.isEmpty()) {
             urlString += "&restrict=" + params.mRestrictMode;
         }
@@ -257,6 +248,40 @@ public class VariationsSeedFetcher {
         }
 
         return urlString;
+    }
+
+    /**
+     * Returns the platform for which a variations seed should be fetched. Considers the
+     * --fake-variations-platform switch.
+     */
+    private String getOsNameParam(@VariationsPlatform int platform) {
+        String forcedPlatform =
+                CommandLine.getInstance()
+                        .getSwitchValue(VariationsSwitches.FAKE_VARIATIONS_PLATFORM);
+        if (forcedPlatform != null) {
+            if (Arrays.asList(
+                            "android",
+                            "android_webview",
+                            "chromeos",
+                            "fuchsia",
+                            "ios",
+                            "linux",
+                            "mac",
+                            "win")
+                    .contains(forcedPlatform)) {
+                return forcedPlatform;
+            }
+            Log.d(TAG, "Invalid platform provided: %s", forcedPlatform);
+        }
+        switch (platform) {
+            case VariationsPlatform.ANDROID:
+                return "android";
+            case VariationsPlatform.ANDROID_WEBVIEW:
+                return "android_webview";
+            default:
+                assert false;
+                return "";
+        }
     }
 
     /** Object holding information about the seed download parameters. */
@@ -465,6 +490,17 @@ public class VariationsSeedFetcher {
         }
     }
 
+    // Return false if an attempt has already been made to fetch the seed, even if it failed.
+    // Only attempt to get the initial Java seed once, since a failure probably indicates a network
+    // problem that is unlikely to be resolved by a second attempt.
+    // Note that VariationsSeedBridge.hasNativePref() is a pure Java function, reading an Android
+    // preference that is set when the seed is fetched by the native code.
+    public static boolean shouldFetchSeed() {
+        return !(ContextUtils.getAppSharedPreferences()
+                        .getBoolean(VARIATIONS_INITIALIZED_PREF, false)
+                || VariationsSeedBridge.hasNativePref());
+    }
+
     /**
      * Fetch the first run variations seed.
      *
@@ -476,14 +512,7 @@ public class VariationsSeedFetcher {
         assert !ThreadUtils.runningOnUiThread();
         // Prevent multiple simultaneous fetches
         synchronized (sLock) {
-            SharedPreferences prefs = ContextUtils.getAppSharedPreferences();
-            // Early return if an attempt has already been made to fetch the seed, even if it
-            // failed. Only attempt to get the initial Java seed once, since a failure probably
-            // indicates a network problem that is unlikely to be resolved by a second attempt.
-            // Note that VariationsSeedBridge.hasNativePref() is a pure Java function, reading an
-            // Android preference that is set when the seed is fetched by the native code.
-            if (prefs.getBoolean(VARIATIONS_INITIALIZED_PREF, false)
-                    || VariationsSeedBridge.hasNativePref()) {
+            if (!shouldFetchSeed()) {
                 return;
             }
 
@@ -505,7 +534,10 @@ public class VariationsSeedFetcher {
                         info.isGzipCompressed);
             }
             // VARIATIONS_INITIALIZED_PREF should still be set to true when exceptions occur
-            prefs.edit().putBoolean(VARIATIONS_INITIALIZED_PREF, true).apply();
+            ContextUtils.getAppSharedPreferences()
+                    .edit()
+                    .putBoolean(VARIATIONS_INITIALIZED_PREF, true)
+                    .apply();
         }
     }
 

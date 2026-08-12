@@ -32,7 +32,6 @@
 #include "components/omnibox/browser/autocomplete_provider_listener.h"
 #include "components/omnibox/browser/autocomplete_result.h"
 #include "components/omnibox/browser/autocomplete_scoring_signals_annotator.h"
-#include "components/optimization_guide/machine_learning_tflite_buildflags.h"
 #include "third_party/omnibox_proto/types.pb.h"
 
 class BookmarkProvider;
@@ -245,9 +244,21 @@ class AutocompleteController : public AutocompleteProviderListener,
       base::TimeDelta query_formulation_time,
       AutocompleteMatch* match) const;
 
+  // Processes inline location suggestion side-effects when a match is selected.
+  virtual void MaybeProcessInlineLocationSuggestionMatch(
+      const AutocompleteMatch& match);
+
   void UpdateSearchTermsArgsWithAdditionalSearchboxStats(
       base::TimeDelta query_formulation_time,
       TemplateURLRef::SearchTermsArgs& search_terms_args) const;
+
+  // Sets the Smart Compose stats to be included in searchbox stats on
+  // navigation.
+  void SetSmartComposeStats(const omnibox::metrics::SmartComposeStats& stats);
+
+  // Adds an invocation source parameter to the match's destination URL.
+  void UpdateMatchDestinationURLWithInvocationSource(
+      AutocompleteMatch* match) const;
 
   // Constructs and sets the final destination URL on the given match.
   void SetMatchDestinationURL(AutocompleteMatch* match) const;
@@ -274,6 +285,8 @@ class AutocompleteController : public AutocompleteProviderListener,
   // Groups `published_result_` by search vs URL.
   // See also `AutocompleteResult::GroupSuggestionsBySearchVsURL()`.
   virtual void GroupSuggestionsBySearchVsURL(size_t begin, size_t end);
+  std::u16string GetSuggestionGroupHeaderText(
+      const std::optional<omnibox::GroupId>& suggestion_group_id) const;
   bool done() const {
     return last_update_type_ == UpdateType::kNone ||
            last_update_type_ == UpdateType::kSyncPassOnly ||
@@ -318,10 +331,11 @@ class AutocompleteController : public AutocompleteProviderListener,
   friend class OmniboxEditModelPopupTest;
   friend class OmniboxMetricsTest;
   friend class OmniboxSearchAggregatorTest;
+  friend class InlineLocationSignalingE2EInteractiveUiTest;
   friend class extensions::UnscopedOmniboxApiTest;
   friend class SearchPreloadResponseController;
 #if BUILDFLAG(IS_IOS)
-  friend class OmniboxInttestAutocompleteController;
+  friend class FakeSuggestionsAutocompleteController;
 #endif
   FRIEND_TEST_ALL_PREFIXES(AutocompleteControllerTest,
                            FilterMatchesForInstantKeywordWithBareAt);
@@ -480,13 +494,11 @@ class AutocompleteController : public AutocompleteProviderListener,
       const base::trace_event::MemoryDumpArgs& args,
       base::trace_event::ProcessMemoryDump* process_memory_dump) override;
 
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
   // Runs the batch scoring for all the eligible matches in `results_.matches_`.
   void RunBatchUrlScoringModel(OldResult& old_result);
   void RunBatchUrlScoringModelMappedSearchBlending(OldResult& old_result);
   void RunBatchUrlScoringModelPiecewiseMappedSearchBlending(
       OldResult& old_result);
-#endif  // BUILDFLAG(BUILD_WITH_TFLITE_LIB)
 
   // Constructs a destination URL from supplied search terms args.
   // TODO(crbug.com/40257536): look for a way to dissolve this function into
@@ -513,7 +525,7 @@ class AutocompleteController : public AutocompleteProviderListener,
   const omnibox::metrics::ChromeSearchboxStats::ExperimentStatsV2
   GetOmniboxPositionExperimentStatsV2() const;
 
-  base::ObserverList<Observer> observers_;
+  base::ReentrantObserverList<Observer> observers_;
 
   // The client passed to the providers.
   const std::unique_ptr<AutocompleteProviderClient> provider_client_;
@@ -610,6 +622,9 @@ class AutocompleteController : public AutocompleteProviderListener,
 
   // The preferred steady state (unfocused) omnibox position.
   metrics::OmniboxEventProto::OmniboxPosition steady_state_omnibox_position_;
+
+  // The Smart Compose stats to be included in searchbox stats on navigation.
+  std::optional<omnibox::metrics::SmartComposeStats> smart_compose_stats_;
 
   // Configures autocomplete provider for different embedders.
   // TODO(crbug.com/455133849 & crbug.com/455132352): Make `const` after

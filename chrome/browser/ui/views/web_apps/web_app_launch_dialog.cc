@@ -4,19 +4,21 @@
 
 #include "base/auto_reset.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
+#include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/web_apps/web_app_install_dialog_delegate.h"
 #include "chrome/browser/ui/web_applications/web_app_dialogs.h"
 #include "chrome/browser/web_applications/commands/launch_web_app_command.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/mojom/web_install/web_install.mojom.h"
@@ -39,9 +41,7 @@ DEFINE_ELEMENT_IDENTIFIER_VALUE(kWebInstallLaunchDialogAppName);
 using WebAppBackgroundAppLaunchAcceptanceCallback =
     base::OnceCallback<void(bool accepted)>;
 
-namespace {
-bool g_auto_accept_launch_for_testing = false;
-}  // namespace
+
 
 class WebAppLaunchDialogDelegate : public WebAppModalDialogDelegate {
  public:
@@ -82,6 +82,18 @@ class WebAppLaunchDialogDelegate : public WebAppModalDialogDelegate {
     }
   }
 
+  // views::WidgetObserver:
+  void OnWidgetBoundsChanged(views::Widget* widget,
+                             const gfx::Rect& new_bounds) override {
+    if (IsWidgetCurrentSizeSmallerThanPreferredSize(widget,
+                                                    kLaunchMaxShrinkage)) {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(&WebAppLaunchDialogDelegate::CloseDialogAsIgnored,
+                         weak_ptr_factory_.GetWeakPtr()));
+    }
+  }
+
   void CloseDialogAsIgnored() override {
     if (!dialog_model() || !dialog_model()->host()) {
       return;
@@ -108,7 +120,8 @@ void ShowWebInstallAppLaunchDialog(
     std::string app_name,
     const SkBitmap& icon,
     WebAppBackgroundAppLaunchAcceptanceCallback callback) {
-  Browser* browser = chrome::FindBrowserWithTab(web_contents);
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
   if (!browser) {
     std::move(callback).Run(/*accepted=*/false);
     return;
@@ -158,15 +171,18 @@ void ShowWebInstallAppLaunchDialog(
   views::Widget* launch_dialog_widget =
       constrained_window::ShowWebModalDialogViews(dialog.release(),
                                                   web_contents);
+  if (IsWidgetCurrentSizeSmallerThanPreferredSize(launch_dialog_widget,
+                                                  kLaunchMaxShrinkage)) {
+    delegate_weak_ptr->CloseDialogAsIgnored();
+    return;
+  }
   delegate_weak_ptr->OnWidgetShownStartTracking(launch_dialog_widget);
 
-  if (g_auto_accept_launch_for_testing) {
+  InstallDialogTestResponse auto_response =
+      GetPwaInstallationDialogAutoResponseForTesting();  // IN-TEST
+  if (auto_response != InstallDialogTestResponse::kNone) {
     dialog_delegate->AcceptDialog();
   }
-}
-
-base::AutoReset<bool> SetAutoAcceptWebInstallLaunchDialogForTesting() {
-  return base::AutoReset<bool>(&g_auto_accept_launch_for_testing, true);
 }
 
 }  // namespace web_app

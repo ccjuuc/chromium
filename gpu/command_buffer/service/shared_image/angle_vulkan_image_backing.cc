@@ -7,6 +7,7 @@
 #include "base/logging.h"
 #include "components/viz/common/gpu/vulkan_context_provider.h"
 #include "components/viz/common/resources/shared_image_format_utils.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_format_service_utils.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_gl_utils.h"
@@ -87,7 +88,7 @@ class AngleVulkanImageBacking::
 
   // GLTexturePassthroughImageRepresentation:
   const scoped_refptr<gles2::TexturePassthrough>& GetTexturePassthrough(
-      int plane_index) override {
+      size_t plane_index) override {
     DCHECK(format().IsValidPlaneIndex(plane_index));
     return textures_[plane_index];
   }
@@ -217,23 +218,12 @@ class AngleVulkanImageBacking::SkiaAngleVulkanImageRepresentation
 AngleVulkanImageBacking::AngleVulkanImageBacking(
     scoped_refptr<SharedContextState> context_state,
     const Mailbox& mailbox,
-    viz::SharedImageFormat format,
-    const gfx::Size& size,
-    const gfx::ColorSpace& color_space,
-    GrSurfaceOrigin surface_origin,
-    SkAlphaType alpha_type,
-    gpu::SharedImageUsageSet usage,
-    std::string debug_label)
-    : ClearTrackingSharedImageBacking(mailbox,
-                                      format,
-                                      size,
-                                      color_space,
-                                      surface_origin,
-                                      alpha_type,
-                                      usage,
-                                      std::move(debug_label),
-                                      format.EstimatedSizeInBytes(size),
-                                      /*is_thread_safe=*/false),
+    const SharedImageInfo& si_info)
+    : ClearTrackingSharedImageBacking(
+          mailbox,
+          si_info,
+          si_info.format.EstimatedSizeInBytes(si_info.size),
+          /*is_thread_safe=*/false),
       context_state_(std::move(context_state)) {}
 
 AngleVulkanImageBacking::~AngleVulkanImageBacking() {
@@ -345,7 +335,6 @@ bool AngleVulkanImageBacking::InitializeWihGMB(
                            : ToVkFormatSinglePlanar(format());
   auto vulkan_image = vulkan_implementation->CreateImageFromGpuMemoryHandle(
       device_queue, std::move(handle), size(), vk_format, color_space());
-
   if (!vulkan_image) {
     return false;
   }
@@ -353,7 +342,6 @@ bool AngleVulkanImageBacking::InitializeWihGMB(
   vk_textures_.emplace_back(std::move(vulkan_image), format(), color_space());
 
   SetCleared();
-
   return true;
 }
 
@@ -689,7 +677,8 @@ bool AngleVulkanImageBacking::InitializePassthroughTexture() {
     if (gl::g_current_gl_driver->ext.b_GL_KHR_debug) {
       const std::string label =
           "SharedImage_AngleVulkan" + CreateLabelForSharedImageUsage(usage());
-      api->glObjectLabelFn(GL_TEXTURE, texture_id, label.size(), label.c_str());
+      api->glObjectLabelKHRFn(GL_TEXTURE, texture_id, label.size(),
+                              label.c_str());
     }
 
     auto& gl_texture = gl_textures_.emplace_back();

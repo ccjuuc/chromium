@@ -60,7 +60,7 @@ void GetAliasedFeature(v8::Local<v8::Name> property_name,
   v8::Isolate* isolate = info.GetIsolate();
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Context> context =
-      info.HolderV2()->GetCreationContextChecked(isolate);
+      info.Holder()->GetCreationContextChecked(isolate);
 
   v8::TryCatch try_catch(isolate);
   v8::Local<v8::Value> chrome;
@@ -110,7 +110,7 @@ void ThrowDeprecatedAccessError(
 
 void EmptySetterCallback(v8::Local<v8::Name> name,
                          v8::Local<v8::Value> value,
-                         const v8::PropertyCallbackInfo<void>& info) {
+                         const v8::PropertyCallbackInfo<v8::Boolean>& info) {
   // Empty setter is required to keep the native data property in "accessor"
   // state even in case the value is updated by user code.
   // TODO(337075390): consider not using empty setter and let the property
@@ -247,7 +247,7 @@ RequestResult ExtensionHooksDelegate::HandleSendRequest(
   v8::Local<v8::Value> v8_message = arguments[1];
 
   mojom::ChannelType channel_type = mojom::ChannelType::kSendRequest;
-  std::unique_ptr<Message> message = messaging_util::MessageFromV8(
+  std::optional<Message> message = messaging_util::MessageFromV8(
       script_context->v8_context(), v8_message,
       messaging_util::GetSerializationFormat(script_context->extension(),
                                              channel_type),
@@ -262,15 +262,19 @@ RequestResult ExtensionHooksDelegate::HandleSendRequest(
   if (!arguments[2]->IsNull())
     response_callback = arguments[2].As<v8::Function>();
 
-  // extension.sendRequest() is restricted to MV2, so it should never be called
-  // with a promise based request as they are restricted to MV3 and above.
-  DCHECK_NE(binding::AsyncResponseType::kPromise, parse_result.async_type);
-
-  messaging_service_->SendOneTimeMessage(
+  v8::Local<v8::Promise> promise = messaging_service_->SendOneTimeMessage(
       script_context, MessageTarget::ForExtension(target_id), channel_type,
-      *message, parse_result.async_type, response_callback);
+      std::move(*message), parse_result.async_type, response_callback);
+  DCHECK_EQ(parse_result.async_type == binding::AsyncResponseType::kPromise,
+            !promise.IsEmpty())
+      << "SendOneTimeMessage should only return a Promise for promise based "
+         "API calls, otherwise it should be empty";
 
-  return RequestResult(RequestResult::HANDLED);
+  RequestResult result(RequestResult::HANDLED);
+  if (parse_result.async_type == binding::AsyncResponseType::kPromise) {
+    result.return_value = promise;
+  }
+  return result;
 }
 
 RequestResult ExtensionHooksDelegate::HandleGetURL(

@@ -68,8 +68,7 @@ bool PrerenderWebContentsDelegate::TakeFocus(WebContents* source,
 
 void PrerenderWebContentsDelegate::WebContentsCreated(
     WebContents* source_contents,
-    int opener_render_process_id,
-    int opener_render_frame_id,
+    const GlobalRenderFrameHostId& opener_id,
     const std::string& frame_name,
     const GURL& target_url,
     WebContents* new_contents) {
@@ -110,6 +109,8 @@ bool PrerenderWebContentsDelegate::IsFullscreenForTabOrPending(
 void PrerenderWebContentsDelegate::OnDidBlockNavigation(
     WebContents* web_contents,
     const GURL& blocked_url,
+    const GURL& initiator_url,
+    const url::Origin& initiator_origin,
     blink::mojom::NavigationBlockedReason reason) {
   // DCHECK against LifecycleState in RenderFrameHostImpl::DidBlockNavigation()
   // ensures this is never called during prerendering.

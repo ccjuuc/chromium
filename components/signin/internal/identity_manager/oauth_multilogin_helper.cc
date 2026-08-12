@@ -13,6 +13,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "components/signin/internal/identity_manager/oauth_multilogin_token_fetcher.h"
 #include "components/signin/internal/identity_manager/oauth_multilogin_token_response.h"
@@ -72,8 +73,42 @@ net::CookieOptions GetCookieOptions() {
 }
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
+// Returns a GURL that can be used as a fetcher URL in
+// `net::device_bound_sessions::SessionParams`.
+//
+// OAML can create bound sessions on several Google domains and the fetcher URL
+// must be from the same site. Thus, the OAML URL is unsuitable for domains
+// outside of "*google.com".
+GURL ComputeFetcherUrlForDeviceBoundSessionRegistrationPayload(
+    OAuthMultiloginResult::DeviceBoundSession::Domain domain,
+    std::string_view refresh_url) {
+  GURL absolute_refresh_url(refresh_url);
+  if (absolute_refresh_url.is_valid()) {
+    // If the refresh URL is already an absolute URL, just use it.
+    return absolute_refresh_url;
+  }
+
+  // Fallback case based on `domain`. It's needed while the server still may
+  // return relative URLs.
+  // TODO(crbug.com/482079651): get rid of this path once the server always
+  // sends absolute URLs.
+  const GURL base_url = [&] {
+    switch (domain) {
+      case OAuthMultiloginResult::DeviceBoundSession::Domain::kGoogle:
+        return GaiaUrls::GetInstance()->gaia_url();
+      case OAuthMultiloginResult::DeviceBoundSession::Domain::kYoutube:
+        return GURL("https://accounts.youtube.com/");
+      case OAuthMultiloginResult::DeviceBoundSession::Domain::kUnknown:
+        NOTREACHED();
+    }
+  }();
+
+  return base_url.Resolve(refresh_url);
+}
+
 net::device_bound_sessions::SessionParams
 CreateStandardDeviceBoundSessionParamsFromRegistrationPayload(
+    OAuthMultiloginResult::DeviceBoundSession::Domain domain,
     const RegisterBoundSessionPayload& registration_payload) {
   using net::device_bound_sessions::SessionParams;
   CHECK(registration_payload.parsed_for_dbsc_standard);
@@ -95,11 +130,6 @@ CreateStandardDeviceBoundSessionParamsFromRegistrationPayload(
         {.type = *type, .domain = from_spec.domain, .path = from_spec.path});
   }
 
-  SessionParams::Scope scope;
-  scope.include_site = registration_payload.scope.include_site;
-  scope.specifications = std::move(specifications);
-  scope.origin = registration_payload.scope.origin;
-
   std::vector<SessionParams::Credential> credentials;
   for (const RegisterBoundSessionPayload::Credential& from_credential :
        registration_payload.credentials) {
@@ -108,26 +138,77 @@ CreateStandardDeviceBoundSessionParamsFromRegistrationPayload(
                            .attributes = from_credential.attributes});
   }
 
-  return SessionParams(registration_payload.session_id,
-                       // TODO(crbug.com/464268881): Use more robust URL here to
-                       // support different domains.
-                       GaiaUrls::GetInstance()->oauth_multilogin_url(),
-                       registration_payload.refresh_url, std::move(scope),
-                       std::move(credentials),
-                       // Passing an arbitrary key in params as it will be
-                       // retrieved later from the wrapped key passed to
-                       // the `DeviceBoundSessionManager`.
-                       unexportable_keys::UnexportableKeyId(),
-                       registration_payload.allowed_refresh_initiators);
+  return SessionParams{
+      .session_id = registration_payload.session_id,
+      .fetcher_url = ComputeFetcherUrlForDeviceBoundSessionRegistrationPayload(
+          domain, registration_payload.refresh_url),
+      .refresh_url = registration_payload.refresh_url,
+      .scope =
+          {
+              .include_site = registration_payload.scope.include_site,
+              .specifications = std::move(specifications),
+              .origin = registration_payload.scope.origin,
+          },
+      .credentials = std::move(credentials),
+      // Passing an arbitrary key in params as it will be
+      // retrieved later from the wrapped key passed to
+      // the `DeviceBoundSessionManager`.
+      .key_id = unexportable_keys::UnexportableSigningKeyId(),
+      .allowed_refresh_initiators =
+          registration_payload.allowed_refresh_initiators,
+  };
 }
 
 void RecordCreateBoundSessionsResult(
-    OAuthMultiloginHelper::DeviceBoundSessionCreateSessionsResult result) {
-  base::UmaHistogramEnumeration(
-      "Signin.DeviceBoundSessions.OAuthMultilogin.CreateSessionsResult",
-      result);
+    OAuthMultiloginHelper::DeviceBoundSessionCreateSessionsResult result,
+    PartitionSuffix partition_suffix,
+    gaia::GaiaSource::Type gaia_source_type) {
+  static constexpr std::string_view kBaseHistogramName =
+      "Signin.DeviceBoundSessions.OAuthMultilogin.CreateSessionsResult";
+  base::UmaHistogramEnumeration(kBaseHistogramName, result);
+  std::string_view suffix_str = PartitionSuffixToString(partition_suffix);
+  if (!suffix_str.empty()) {
+    base::UmaHistogramEnumeration(
+        base::JoinString({kBaseHistogramName, suffix_str}, "."), result);
+  }
+  if (gaia_source_type ==
+      gaia::GaiaSource::Type::kAccountReconcilorDiceCookieUpgrade) {
+    base::UmaHistogramEnumeration(
+        "Signin.CookieBinding.UpgradeCreateBoundSessionsResult", result);
+  }
 }
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+
+void RecordMultiloginResponseStatus(OAuthMultiloginResponseStatus status,
+                                    PartitionSuffix partition_suffix) {
+  // Record the version 2 histogram, which includes all statuses including
+  // network errors.
+  static constexpr std::string_view kBaseHistogramName2 =
+      "Signin.OAuthMultiloginResponseStatus2";
+  base::UmaHistogramEnumeration(kBaseHistogramName2, status);
+  std::string_view suffix_str = PartitionSuffixToString(partition_suffix);
+  if (!suffix_str.empty()) {
+    base::UmaHistogramEnumeration(
+        base::JoinString({kBaseHistogramName2, suffix_str}, "."), status);
+  }
+
+  // Record the V1 histogram, excluding network errors to avoid skewing existing
+  // metrics.
+  // TODO(crbug.com/531677785): Deprecate this histogram once the version 2 one
+  // (Signin.OAuthMultiloginResponseStatus2) has been recorded for a long enough
+  // time.
+  if (status == OAuthMultiloginResponseStatus::kNetworkError) {
+    return;
+  }
+
+  static constexpr std::string_view kBaseHistogramName =
+      "Signin.OAuthMultiloginResponseStatus";
+  base::UmaHistogramEnumeration(kBaseHistogramName, status);
+  if (!suffix_str.empty()) {
+    base::UmaHistogramEnumeration(
+        base::JoinString({kBaseHistogramName, suffix_str}, "."), status);
+  }
+}
 
 }  // namespace
 
@@ -283,6 +364,7 @@ void OAuthMultiloginHelper::StartFetchingMultiLogin() {
     case CookieBindingSupport::kDisabled:
       break;
   }
+  cookie_binding_params.youtube_mode = GetYoutubeCookieBindingMode();
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
   gaia_auth_fetcher_->StartOAuthMultilogin(
       mode_, multilogin_credentials, external_cc_result_, std::move(decryptor),
@@ -291,6 +373,9 @@ void OAuthMultiloginHelper::StartFetchingMultiLogin() {
 
 void OAuthMultiloginHelper::OnOAuthMultiloginFinished(
     const OAuthMultiloginResult& result) {
+  RecordMultiloginResponseStatus(result.status(),
+                                 partition_delegate_->GetPartitionSuffix());
+
   if (result.status() == OAuthMultiloginResponseStatus::kOk) {
     if (VLOG_IS_ON(1)) {
       std::vector<std::string> account_ids;
@@ -362,6 +447,7 @@ void OAuthMultiloginHelper::OnOAuthMultiloginFinished(
   bool is_transient_error =
       result.status() == OAuthMultiloginResponseStatus::kInvalidTokens ||
       result.status() == OAuthMultiloginResponseStatus::kRetry ||
+      result.status() == OAuthMultiloginResponseStatus::kNetworkError ||
       result.status() ==
           OAuthMultiloginResponseStatus::kRetryWithTokenBindingChallenge;
 
@@ -427,9 +513,7 @@ void OAuthMultiloginHelper::OnCookiesSet(
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
 OAuthMultiloginHelper::CookieBindingSupport
 OAuthMultiloginHelper::GetCookieBindingSupport() const {
-  if (partition_delegate_->GetDeviceBoundSessionManagerForPartition() &&
-      base::FeatureList::IsEnabled(
-          switches::kEnableOAuthMultiloginStandardCookiesBinding)) {
+  if (partition_delegate_->GetDeviceBoundSessionManagerForPartition()) {
     return CookieBindingSupport::kStandard;
   }
   if (bound_session_delegate_ &&
@@ -438,6 +522,20 @@ OAuthMultiloginHelper::GetCookieBindingSupport() const {
     return CookieBindingSupport::kPrototype;
   }
   return CookieBindingSupport::kDisabled;
+}
+
+gaia::MultiloginCookieBindingParams::Mode
+OAuthMultiloginHelper::GetYoutubeCookieBindingMode() const {
+  if (GetCookieBindingSupport() != CookieBindingSupport::kStandard) {
+    return gaia::MultiloginCookieBindingParams::Mode::kDisabled;
+  }
+  if (!base::FeatureList::IsEnabled(
+          switches::kEnableOAuthMultiloginYoutubeCookiesBinding)) {
+    return gaia::MultiloginCookieBindingParams::Mode::kDisabled;
+  }
+  return switches::kOAuthMultiloginYoutubeCookieBindingEnforced.Get()
+             ? gaia::MultiloginCookieBindingParams::Mode::kEnabledEnforced
+             : gaia::MultiloginCookieBindingParams::Mode::kEnabledUnenforced;
 }
 
 bool OAuthMultiloginHelper::StartSettingCookiesViaDeviceBoundSessionManager(
@@ -449,11 +547,13 @@ bool OAuthMultiloginHelper::StartSettingCookiesViaDeviceBoundSessionManager(
     CHECK(device_bound_session->register_session_payload.has_value());
     sessions_params.push_back(
         CreateStandardDeviceBoundSessionParamsFromRegistrationPayload(
+            device_bound_session->domain,
             *device_bound_session->register_session_payload));
   }
   if (sessions_params.empty()) {
     RecordCreateBoundSessionsResult(
-        DeviceBoundSessionCreateSessionsResult::kFallbackNoBoundSessions);
+        DeviceBoundSessionCreateSessionsResult::kFallbackNoBoundSessions,
+        partition_delegate_->GetPartitionSuffix(), gaia_source_.type());
     return false;
   }
 
@@ -466,7 +566,8 @@ bool OAuthMultiloginHelper::StartSettingCookiesViaDeviceBoundSessionManager(
   }
   if (wrapped_key.empty()) {
     RecordCreateBoundSessionsResult(
-        DeviceBoundSessionCreateSessionsResult::kFallbackNoBindingKey);
+        DeviceBoundSessionCreateSessionsResult::kFallbackNoBindingKey,
+        partition_delegate_->GetPartitionSuffix(), gaia_source_.type());
     return false;
   }
 
@@ -486,10 +587,20 @@ void OAuthMultiloginHelper::OnBoundSessionsCreated(
         session_results,
     std::vector<net::CookieInclusionStatus> cookie_results) {
   bool all_success = true;
+  std::string_view partition_suffix =
+      PartitionSuffixToString(partition_delegate_->GetPartitionSuffix());
+  static constexpr std::string_view kBaseHistogramName =
+      "Signin.DeviceBoundSessions.OAuthMultilogin.SessionCreationError";
+  std::string partition_histogram_name;
+  if (!partition_suffix.empty()) {
+    partition_histogram_name =
+        base::JoinString({kBaseHistogramName, partition_suffix}, ".");
+  }
   for (const auto& error : session_results) {
-    base::UmaHistogramEnumeration(
-        "Signin.DeviceBoundSessions.OAuthMultilogin.SessionCreationError",
-        error);
+    base::UmaHistogramEnumeration(kBaseHistogramName, error);
+    if (!partition_histogram_name.empty()) {
+      base::UmaHistogramEnumeration(partition_histogram_name, error);
+    }
     all_success &=
         (error ==
          net::device_bound_sessions::SessionError::ErrorType::kSuccess);
@@ -497,7 +608,8 @@ void OAuthMultiloginHelper::OnBoundSessionsCreated(
 
   RecordCreateBoundSessionsResult(
       all_success ? DeviceBoundSessionCreateSessionsResult::kSuccess
-                  : DeviceBoundSessionCreateSessionsResult::kFailure);
+                  : DeviceBoundSessionCreateSessionsResult::kFailure,
+      partition_delegate_->GetPartitionSuffix(), gaia_source_.type());
 
   for (const auto& status : cookie_results) {
     base::UmaHistogramBoolean("Signin.SetCookieSuccess", status.IsInclude());

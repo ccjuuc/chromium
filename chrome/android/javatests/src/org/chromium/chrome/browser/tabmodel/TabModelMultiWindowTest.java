@@ -6,8 +6,10 @@ package org.chromium.chrome.browser.tabmodel;
 
 import static org.hamcrest.CoreMatchers.notNullValue;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
@@ -15,12 +17,10 @@ import static org.chromium.base.ThreadUtils.runOnUiThreadBlocking;
 import static org.chromium.chrome.test.util.ChromeTabUtils.getTabCountOnUiThread;
 
 import android.content.Context;
-import android.content.Intent;
 import android.os.Build;
 
 import androidx.test.filters.LargeTest;
 import androidx.test.platform.app.InstrumentationRegistry;
-import androidx.test.runner.lifecycle.Stage;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -30,13 +30,12 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
-import org.chromium.base.ContextUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.Token;
-import org.chromium.base.test.util.ApplicationTestUtils;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.ImportantFormFactors;
 import org.chromium.base.test.util.MinAndroidSdkLevel;
@@ -45,8 +44,7 @@ import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.media.MediaCaptureDevicesDispatcherAndroid;
 import org.chromium.chrome.browser.media.MediaCaptureDevicesDispatcherAndroidJni;
-import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.NewWindowAppSource;
-import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
+import org.chromium.chrome.browser.multiwindow.MultiWindowTestHelper;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTaskTrackerFactory;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
@@ -121,11 +119,12 @@ public class TabModelMultiWindowTest {
     }
 
     @Test
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/481443908
     @LargeTest
     public void testMoveTabGroupToWindow() {
         ChromeTabbedActivity activity1 = mActivityTestRule.getActivity();
-        TabGroupModelFilter filter = activity1.getTabModelSelector().getTabGroupModelFilter(false);
-        List<Tab> group = createTabGroup(2, filter);
+        TabModel tabModel = activity1.getTabModelSelector().getModel(false);
+        List<Tab> group = createTabGroup(2, tabModel);
         Token groupId = group.get(0).getTabGroupId();
         int initialTabCount = getTabCountOnUiThread(mTabModelJni);
 
@@ -137,9 +136,12 @@ public class TabModelMultiWindowTest {
         long nativeBrowserWindow2 = getNativeBrowserWindow(activity2);
 
         runOnUiThreadBlocking(
-                () ->
-                        mTabModelJni.moveTabGroupToWindowForTesting(
-                                groupId, nativeBrowserWindow2, 0));
+                () -> {
+                    boolean moved =
+                            mTabModelJni.moveTabGroupToWindowForTesting(
+                                    groupId, nativeBrowserWindow2, /* newIndex= */ 0);
+                    assertTrue(moved);
+                });
 
         assertEquals(initialTabCount - 2, getTabCountOnUiThread(mTabModelJni));
         TabModel model2 = activity2.getTabModelSelector().getModel(false);
@@ -150,12 +152,41 @@ public class TabModelMultiWindowTest {
         assertEquals(groupId, group.get(1).getTabGroupId());
     }
 
+    @Test
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/481443908
+    @LargeTest
+    public void testMoveTabGroupToWindowFailure() {
+        // Create a tab group.
+        ChromeTabbedActivity activity1 = mActivityTestRule.getActivity();
+        TabModel tabModel = activity1.getTabModelSelector().getModel(false);
+        createTabGroup(2, tabModel);
+
+        // Create an invalid group ID.
+        Token invalidGroupId = Token.EMPTY;
+
+        // Create a new window.
+        ChromeTabbedActivity activity2 = createNewWindow(activity1);
+        assertNotNull(activity2);
+        assertNotEquals(activity1, activity2);
+        long nativeBrowserWindow2 = getNativeBrowserWindow(activity2);
+
+        // Try to move an invalid group.
+        runOnUiThreadBlocking(
+                () -> {
+                    boolean moved =
+                            mTabModelJni.moveTabGroupToWindowForTesting(
+                                    invalidGroupId, nativeBrowserWindow2, /* newIndex= */ 0);
+                    assertFalse(moved);
+                });
+    }
+
     private long getNativeBrowserWindow(ChromeTabbedActivity activity) {
         return runOnUiThreadBlocking(
                 () -> {
                     var taskTracker = ChromeAndroidTaskTrackerFactory.getInstance();
                     var chromeTask = taskTracker.get(activity.getTaskId());
-                    return chromeTask.getOrCreateNativeBrowserWindowPtr();
+                    var profile = activity.getTabModelSelector().getCurrentModel().getProfile();
+                    return chromeTask.getOrCreateNativeBrowserWindowPtr(profile);
                 });
     }
 
@@ -167,33 +198,21 @@ public class TabModelMultiWindowTest {
                 /* incognito= */ false);
     }
 
-    private List<Tab> createTabGroup(int numberOfTabs, TabGroupModelFilter filter) {
+    private List<Tab> createTabGroup(int numberOfTabs, TabModel tabModel) {
         List<Tab> tabs = new ArrayList<>();
         for (int i = 0; i < numberOfTabs; i++) tabs.add(createTab());
         ThreadUtils.runOnUiThreadBlocking(
                 () ->
-                        filter.mergeListOfTabsToGroup(
+                        tabModel.mergeListOfTabsToGroup(
                                 tabs,
                                 tabs.get(0),
-                                /* notify= */ TabGroupModelFilter.MergeNotificationType
-                                        .DONT_NOTIFY));
+                                /* notify= */ TabGroupMergeNotificationType.DONT_NOTIFY));
         return tabs;
     }
 
     private ChromeTabbedActivity createNewWindow(Context context) {
-        Intent intent =
-                MultiWindowUtils.createNewWindowIntent(
-                        context,
-                        /* instanceId= */ -1,
-                        /* preferNew= */ true,
-                        /* openAdjacently= */ false,
-                        /* addTrustedIntentExtras= */ true,
-                        NewWindowAppSource.OTHER);
         ChromeTabbedActivity activity =
-                ApplicationTestUtils.waitForActivityWithClass(
-                        ChromeTabbedActivity.class,
-                        Stage.RESUMED,
-                        () -> ContextUtils.getApplicationContext().startActivity(intent));
+                MultiWindowTestHelper.createNewChromeTabbedActivity(context);
         CriteriaHelper.pollUiThread(
                 () ->
                         Criteria.checkThat(

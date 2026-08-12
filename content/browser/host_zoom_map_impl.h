@@ -104,15 +104,11 @@ class CONTENT_EXPORT HostZoomMapImpl : public HostZoomMap {
   // Notifies all JNI observers about a zoom level change.
   void NotifyJniObservers(const ZoomLevelChange& change);
   // Manages the lifecycle of JNI observers.
-  jlong AddJniZoomLevelObserver(
+  int64_t AddJniZoomLevelObserver(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& j_callback);
-  void RemoveJniZoomLevelObserver(jlong subscription_key);
+  void RemoveJniZoomLevelObserver(int64_t subscription_key);
 #endif
-
-  double GetZoomLevelForPreviewAndHost(const std::string& host) override;
-  void SetZoomLevelForPreviewAndHost(const std::string& host,
-                                     double level) override;
 
   void SetIndependentZoomForFrameTreeNode(WebContents* web_contents,
                                           FrameTreeNodeId ftn_id) override;
@@ -181,8 +177,6 @@ class CONTENT_EXPORT HostZoomMapImpl : public HostZoomMap {
   // not enabled it means that GuestViews will have their own WebContents, and
   // so the use of a single zoom level for an entire WebContents suffices.
   IndependentZoomFrameTreeNodes independent_zoom_frame_tree_nodes_;
-
-  HostZoomLevels host_zoom_levels_for_preview_;
 
   raw_ptr<base::Clock> clock_;
 };

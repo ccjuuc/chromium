@@ -12,6 +12,7 @@
 #include "base/json/json_writer.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_path_override.h"
+#include "base/win/scoped_bstr.h"
 #include "chrome/credential_provider/extension/user_device_context.h"
 #include "chrome/credential_provider/gaiacp/gcpw_strings.h"
 #include "chrome/credential_provider/gaiacp/mdm_utils.h"
@@ -58,19 +59,19 @@ TEST_P(GemDeviceDetailsExtensionTest, WithUserDeviceContext) {
   std::wstring domain_name = L"company.com";
   if (has_valid_sid) {
     // Create a fake user associated to a gaia id.
-    CComBSTR sid_str;
-    ASSERT_EQ(S_OK,
-              fake_os_user_manager()->CreateTestOSUser(
-                  kDefaultUsername, L"password", L"Full Name", L"comment",
-                  kDefaultGaiaId, L"user@company.com", domain_name, &sid_str));
-    user_sid = OLE2W(sid_str);
+    base::win::ScopedBstr sid_str;
+    ASSERT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
+                        kDefaultUsername, L"password", L"Full Name", L"comment",
+                        kDefaultGaiaId, L"user@company.com", domain_name,
+                        sid_str.Receive()));
+    user_sid = sid_str.Get();
   }
 
   if (fail_sid_lookup) {
     fake_os_user_manager()->FailFindUserBySID(user_sid.c_str(), 1);
   }
 
-  auto expected_response_value = base::Value::Dict().Set(
+  auto expected_response_value = base::DictValue().Set(
       "deviceResourceId", base::WideToUTF8(device_resource_id));
   std::string expected_response =
       base::WriteJson(expected_response_value).value_or("");
@@ -102,7 +103,7 @@ TEST_P(GemDeviceDetailsExtensionTest, WithUserDeviceContext) {
     ASSERT_EQ(1UL, fake_http_url_fetcher_factory()->requests_created());
     FakeWinHttpUrlFetcherFactory::RequestData request_data =
         fake_http_url_fetcher_factory()->GetRequestData(0);
-    base::Value::Dict body_dict =
+    base::DictValue body_dict =
         base::JSONReader::ReadDict(request_data.body,
                                    base::JSON_PARSE_CHROMIUM_EXTENSIONS)
             .value();

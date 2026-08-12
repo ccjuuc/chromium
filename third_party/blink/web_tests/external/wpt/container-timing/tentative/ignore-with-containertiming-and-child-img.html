@@ -1,6 +1,6 @@
 <!DOCTYPE HTML>
 <meta charset=utf-8>
-<title>Container Timing: an image inside a containertiming inside a containertiming-ignore</title>
+<title>Container Timing: an image inside a containertiming inside a containertimingignore</title>
 <body>
 <style>
 body {
@@ -10,7 +10,6 @@ body {
 <script src="/resources/testharness.js"></script>
 <script src="/resources/testharnessreport.js"></script>
 <script src="/container-timing/resources/container-timing-helpers.js"></script>
-<script src="/element-timing/resources/element-timing-helpers.js"></script>
 <script>
   let beforeRender;
   async_test(function (t) {
@@ -20,7 +19,7 @@ body {
         assert_equals(entryList.getEntries().length, 1);
         const entry = entryList.getEntries()[0];
         checkContainerEntry(entry, 'div2_ct', 'img_id', beforeRender)
-        checkRect(entry, [0, 100, 0, 100])
+        checkContainerIntersectionRect(entry, [0, 100, 0, 100])
         checkContainerSize(entry, 10000);
       })
     );
@@ -28,7 +27,7 @@ body {
 
     // Add a div that is the container timing root
     const div1 = document.createElement('div');
-    div1.setAttribute('containertiming-ignore', '');
+    div1.setAttribute('containertimingignore', '');
     document.body.appendChild(div1);
 
     // Intermediate ignore should block paint events
@@ -43,7 +42,7 @@ body {
     div2.appendChild(img);
 
     beforeRender = performance.now();
-}, 'An image inside a containertiming, inside a containertiming-ignore is still reported.');
+}, 'An image inside a containertiming, inside a containertimingignore is still reported.');
 </script>
 
 </body>

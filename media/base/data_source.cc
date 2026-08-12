@@ -28,14 +28,14 @@ GURL DataSource::GetUrlAfterRedirects() const {
   return GURL();
 }
 
+bool DataSource::DidRedirect() const {
+  return false;
+}
+
 void DataSource::StopPreloading() {}
 
 void DataSource::OnMediaPlaybackRateChanged(double playback_rate) {}
 
 void DataSource::OnMediaIsPlaying() {}
-
-CrossOriginDataSource* DataSource::GetAsCrossOriginDataSource() {
-  return nullptr;
-}
 
 }  // namespace media

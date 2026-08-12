@@ -19,7 +19,7 @@
 #include <thread>
 #include <utility>
 
-#include "base/containers/contains.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
@@ -276,6 +276,16 @@ class ScopedBufferLock {
 
   BYTE* data() const { return data_; }
   DWORD length() const { return length_; }
+
+  base::span<const uint8_t> as_span() const {
+    if (!data_) {
+      return {};
+    }
+    // SAFETY: IMFMediaBuffer lock guarantees valid memory of at least `length_`
+    // bytes.
+    return UNSAFE_BUFFERS(
+        base::span(data_.get(), static_cast<size_t>(length_)));
+  }
 
  private:
   ComPtr<IMFMediaBuffer> buffer_;
@@ -706,47 +716,30 @@ HRESULT CopyTextureToGpuMemoryBuffer(ID3D11Texture2D* texture,
   Microsoft::WRL::ComPtr<ID3D11DeviceContext> device_context;
   texture_device->GetImmediateContext(&device_context);
 
-  Microsoft::WRL::ComPtr<IDXGIKeyedMutex> keyed_mutex;
-  hr = target_texture.As(&keyed_mutex);
-  CHECK(SUCCEEDED(hr));
+  device_context->CopySubresourceRegion(target_texture.Get(), 0, 0, 0, 0,
+                                        texture, 0, nullptr);
 
-  hr = keyed_mutex->AcquireSync(0, INFINITE);
-  // Can't check for FAILED(hr) because AcquireSync may return e.g.
-  // WAIT_ABANDONED.
-  if (hr != S_OK) {
-    DLOG(ERROR) << "Failed to acquire the mutex:"
-                << logging::SystemErrorCodeToString(hr);
-    return E_FAIL;
-  }
+  // Wait here for copy completion for D3D11/D3D12 interop, due to:
+  // 1) For D3D12 access in GPU process, D3D12 runtime is not aware of the
+  // simultaneous D3D11 write-access by capture module, so capture module
+  // must ensure copy completion before handing over to D3D12;
+  // 2) For D3D11 access in GPU process, if we add a D3D11Fence here and
+  // deliver that in GMB for access in GPU process, it will not work as GPU
+  // process is on a different D3D11 device/context, though they may be on
+  // the same adapter.
+  Microsoft::WRL::ComPtr<IDXGIDevice2> dxgi_device2;
+  hr = texture_device.As(&dxgi_device2);
+  CHECK_EQ(hr, S_OK);
+  base::WaitableEvent event;
 
-  {
-    gpu::DXGIScopedReleaseKeyedMutex scoped_keyed_mutex(keyed_mutex, 0);
-
-    device_context->CopySubresourceRegion(target_texture.Get(), 0, 0, 0, 0,
-                                          texture, 0, nullptr);
-
-    // Wait here for copy completion for D3D11/D3D12 interop, due to:
-    // 1) For D3D12 access in GPU process, D3D12 runtime is not aware of the
-    // simultaneous D3D11 write-access by capture module, so capture module
-    // must ensure copy completion before handing over to D3D12;
-    // 2) For D3D11 access in GPU process, if we add a D3D11Fence here and
-    // deliver that in GMB for access in GPU process, it will not work as GPU
-    // process is on a different D3D11 device/context, though they may be on
-    // the same adapter.
-    Microsoft::WRL::ComPtr<IDXGIDevice2> dxgi_device2;
-    hr = texture_device.As(&dxgi_device2);
-    CHECK_EQ(hr, S_OK);
-    base::WaitableEvent event(base::WaitableEvent::ResetPolicy::AUTOMATIC,
-                              base::WaitableEvent::InitialState::NOT_SIGNALED);
-
-    hr = dxgi_device2->EnqueueSetEvent(event.handle());
-    if (SUCCEEDED(hr)) {
-      event.Wait();
-    } else {
-      LOG(WARNING) << "Failed to set event: "
-                   << logging::SystemErrorCodeToString(hr);
-      device_context->Flush();
-    }
+  hr = dxgi_device2->EnqueueSetEvent(event.handle());
+  if (SUCCEEDED(hr)) {
+    TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("video_and_image_capture"),
+                 "CopyTextureToGpuMemoryBufferSync");
+    event.Wait();
+  } else {
+    LOG(WARNING) << "Failed to set event: "
+                 << logging::SystemErrorCodeToString(hr);
   }
 
   return S_OK;
@@ -2423,7 +2416,7 @@ HRESULT VideoCaptureDeviceMFWin::DeliverExternalBufferToClient(
   client_->OnIncomingCapturedExternalBuffer(
       std::move(external_buffer), reference_time, timestamp,
       MaybeForwardCaptureBeginTime(capture_begin_time), gfx::Rect(texture_size),
-      frame_metadata);
+      texture_size, frame_metadata);
   return hr;
 }
 
@@ -2485,9 +2478,9 @@ void VideoCaptureDeviceMFWin::OnIncomingCapturedDataInternal() {
 
   if (!delivered_texture && client_.get()) {
     client_->OnIncomingCapturedData(
-        locked_buffer.data(), locked_buffer.length(),
-        selected_video_capability_->supported_format, color_space_,
-        camera_rotation_.value(), false /* flip_y */, reference_time, timestamp,
+        locked_buffer.as_span(), selected_video_capability_->supported_format,
+        color_space_, camera_rotation_.value(), false /* flip_y */,
+        reference_time, timestamp,
         MaybeForwardCaptureBeginTime(capture_begin_time),
         /*metadata=*/std::nullopt);
   }

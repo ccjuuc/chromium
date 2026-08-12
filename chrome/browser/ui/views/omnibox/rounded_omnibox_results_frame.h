@@ -13,7 +13,8 @@
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 
-class LocationBarView;
+class LocationBar;
+class OmniboxPopupWebUIBaseContent;
 
 // A class that wraps a Widget's content view to provide a custom results frame.
 class RoundedOmniboxResultsFrame : public views::View {
@@ -21,7 +22,7 @@ class RoundedOmniboxResultsFrame : public views::View {
 
  public:
   RoundedOmniboxResultsFrame(views::View* contents,
-                             LocationBarView* location_bar,
+                             LocationBar* location_bar,
                              bool forward_mouse_events);
   RoundedOmniboxResultsFrame(const RoundedOmniboxResultsFrame&) = delete;
   RoundedOmniboxResultsFrame& operator=(const RoundedOmniboxResultsFrame&) =
@@ -47,7 +48,21 @@ class RoundedOmniboxResultsFrame : public views::View {
   // Returns the `contents_` view.
   views::View* GetContents();
 
+  // Returns the nested `OmniboxPopupWebUIBaseContent` if the contents of the
+  // frame contains one.
+  OmniboxPopupWebUIBaseContent* GetOmniboxPopupWebUIBaseContent();
+
   void SetCutoutVisibility(bool visible);
+
+  static constexpr int kDefaultElevation = 16;
+
+  // Updates whether mouse events should be forwarded to the underlying
+  // location bar.
+  void set_forward_mouse_events(bool forward) {
+    forward_mouse_events_ = forward;
+  }
+
+  bool forward_mouse_events() const { return forward_mouse_events_; }
 
   // views::View:
   void Layout(PassKey) override;
@@ -58,6 +73,8 @@ class RoundedOmniboxResultsFrame : public views::View {
 #endif  // !USE_AURA
 
  private:
+  void SetElevation(int elevation);
+
   gfx::Insets GetContentInsets();
 
   raw_ptr<views::View> top_background_ = nullptr;
@@ -65,7 +82,7 @@ class RoundedOmniboxResultsFrame : public views::View {
   raw_ptr<views::View> contents_;
 
   // Only used on platforms that support Aura (non-Mac).
-  [[maybe_unused]] const bool forward_mouse_events_;
+  [[maybe_unused]] bool forward_mouse_events_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_OMNIBOX_ROUNDED_OMNIBOX_RESULTS_FRAME_H_

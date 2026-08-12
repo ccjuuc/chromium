@@ -4,22 +4,21 @@
 
 import {html} from '//resources/lit/v3_0/lit.rollup.js';
 
-import {ToolbarEvent} from '../content/read_anything_types.js';
-
 import type {LineFocusMenuElement} from './line_focus_menu.js';
 
 export function getHtml(this: LineFocusMenuElement) {
   // clang-format off
   return html`<!--_html_template_start_-->
-<simple-action-menu
+<grouped-action-menu
     id="menu"
     label="$i18n{lineFocusLabel}"
-    .menuItems="${this.options_}"
+    .menuGroups="${this.groups_}"
     .nonModal="${this.nonModal}"
-    event-name="${ToolbarEvent.LINE_FOCUS}"
-    current-selected-index="${this.restoredLineFocusIndex_()}"
-    @line-focus-change="${this.onLineFocusChange_}">
-</simple-action-menu>
+    .closeOnClick="${false}"
+    @line-focus-style-change="${this.onLineFocusStyleChange_}"
+    @line-focus-toggle-change="${this.onLineFocusToggleChange_}"
+    @line-focus-movement-change="${this.onLineFocusMovementChange_}">
+</grouped-action-menu>
 <!--_html_template_end_-->`;
   // clang-format on
 }

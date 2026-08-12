@@ -10,6 +10,7 @@
 #include "third_party/blink/renderer/core/dom/container_node.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
+#include "third_party/blink/renderer/core/html/parser/fragment_parser.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/sanitizer/sanitizer.h"
 #include "third_party/blink/renderer/core/sanitizer/sanitizer_builtins.h"
@@ -17,67 +18,53 @@
 
 namespace blink {
 
-// Note: SanitizerSafeInternal and SanitizerUnsafeInternal are mostly identical.
-//   But because SetHTMLOptions and SetHTMLUnsafeOptions are unrelated types (as
-//   far as C++ is concerned) they cannot easily be merged.
+namespace {
 
-void SanitizerAPI::SanitizeSafeInternal(const ContainerNode* context_element,
-                                        ContainerNode* root_element,
-                                        SetHTMLOptions* options,
-                                        ExceptionState& exception_state) {
-  // Per spec, we need to parse & sanitize into an inert (non-active) document.
-  CHECK(!root_element->GetDocument().IsActive());
-
-  if (exception_state.HadException()) {
-    root_element->setTextContent("");
-    return;
+const Sanitizer* SanitizerFromOptions(const FragmentParserOptions& options,
+                                      Sanitizer::Mode mode,
+                                      ExceptionState& exception_state) {
+  if (!options.sanitizer_init()) {
+    return Sanitizer::Create(nullptr, mode, exception_state);
   }
 
-  if (context_element->IsElementNode()) {
-    const Element* real_element = To<Element>(context_element);
-    if (real_element->TagQName() == html_names::kScriptTag ||
-        real_element->TagQName() == svg_names::kScriptTag) {
-      root_element->setTextContent("");
-      return;
-    }
-  }
-
-  const Sanitizer* sanitizer = nullptr;
-  if (!options || !options->hasSanitizer()) {
-    // Default case: No dictionary, or dictionary without 'sanitizer' member.
-    sanitizer = Sanitizer::Create(nullptr, /*safe*/ true, exception_state);
-  } else {
-    if (options->sanitizer()->IsSanitizer()) {
-      // We already got a sanitizer.
-      sanitizer = options->sanitizer()->GetAsSanitizer();
-    } else if (options->sanitizer()->IsSanitizerConfig()) {
-      // We need to create a Sanitizer from a given config.
-      sanitizer =
-          Sanitizer::Create(options->sanitizer()->GetAsSanitizerConfig(),
-                            /*safe*/ true, exception_state);
-    } else if (options->sanitizer()->IsSanitizerPresets()) {
-      // Create a Sanitizer from a "preset" string.
-      sanitizer = Sanitizer::Create(
-          options->sanitizer()->GetAsSanitizerPresets().AsEnum(),
+  switch (options.sanitizer_init()->GetContentType()) {
+    case V8UnionSanitizerOrSanitizerConfigOrSanitizerPresets::ContentType::
+        kSanitizer:
+      return options.sanitizer_init()->GetAsSanitizer();
+    case V8UnionSanitizerOrSanitizerConfigOrSanitizerPresets::ContentType::
+        kSanitizerConfig:
+      return Sanitizer::Create(options.sanitizer_init()->GetAsSanitizerConfig(),
+                               mode, exception_state);
+    case V8UnionSanitizerOrSanitizerConfigOrSanitizerPresets::ContentType::
+        kSanitizerPresets:
+      return Sanitizer::Create(
+          options.sanitizer_init()->GetAsSanitizerPresets().AsEnum(),
           exception_state);
-    } else {
-      // Default case: Dictionary with 'sanitizer' member but no (valid) value.
-      sanitizer = Sanitizer::Create(nullptr, /*safe*/ true, exception_state);
-    }
+  }
+}
+}  // namespace
+
+// static
+bool SanitizerAPI::AllowMutatingRootElement(
+    Sanitizer::Mode mode,
+    const ContainerNode* context_element) {
+  if (mode == Sanitizer::Mode::kUnsafe) {
+    return true;
+  }
+  if (!context_element->IsElementNode()) {
+    return true;
   }
 
-  if (exception_state.HadException()) {
-    return;
-  }
-
-  CHECK(sanitizer);
-  sanitizer->SanitizeSafe(root_element);
+  const Element* real_element = To<Element>(context_element);
+  return !html_names::kScriptTag.Matches(real_element->TagQName()) &&
+         !svg_names::kScriptTag.Matches(real_element->TagQName());
 }
 
-void SanitizerAPI::SanitizeUnsafeInternal(const ContainerNode* context_element,
-                                          ContainerNode* root_element,
-                                          SetHTMLUnsafeOptions* options,
-                                          ExceptionState& exception_state) {
+void SanitizerAPI::SanitizeInternal(Sanitizer::Mode mode,
+                                    const ContainerNode* context_element,
+                                    ContainerNode* root_element,
+                                    FragmentParserOptions options,
+                                    ExceptionState& exception_state) {
   // Per spec, we need to parse & sanitize into an inert (non-active) document.
   CHECK(!root_element->GetDocument().IsActive());
 
@@ -86,36 +73,45 @@ void SanitizerAPI::SanitizeUnsafeInternal(const ContainerNode* context_element,
     return;
   }
 
-  const Sanitizer* sanitizer = nullptr;
-  if (!options || !options->hasSanitizer()) {
-    // Default case: No dictionary, or dictionary without 'sanitizer' member.
-    sanitizer = Sanitizer::Create(nullptr, /*safe*/ false, exception_state);
-  } else {
-    if (options->sanitizer()->IsSanitizer()) {
-      // We already got a sanitizer.
-      sanitizer = options->sanitizer()->GetAsSanitizer();
-    } else if (options->sanitizer()->IsSanitizerConfig()) {
-      // We need to create a Sanitizer from a given config.
-      sanitizer =
-          Sanitizer::Create(options->sanitizer()->GetAsSanitizerConfig(),
-                            /*safe*/ false, exception_state);
-    } else if (options->sanitizer()->IsSanitizerPresets()) {
-      // Create a Sanitizer from a "preset" string.
-      sanitizer = Sanitizer::Create(
-          options->sanitizer()->GetAsSanitizerPresets().AsEnum(),
-          exception_state);
-    } else {
-      // Default case: Dictionary with 'sanitizer' member but not (valid) value.
-      sanitizer = Sanitizer::Create(nullptr, /*safe*/ false, exception_state);
-    }
+  if (!AllowMutatingRootElement(mode, context_element)) {
+    root_element->setTextContent("");
+    return;
   }
 
+  const Sanitizer* sanitizer =
+      SanitizerFromOptions(options, mode, exception_state);
   if (exception_state.HadException()) {
+    root_element->setTextContent("");
     return;
   }
 
   CHECK(sanitizer);
-  sanitizer->SanitizeUnsafe(root_element);
+  switch (mode) {
+    case Sanitizer::Mode::kSafe:
+      sanitizer->SanitizeSafe(root_element);
+      break;
+    case Sanitizer::Mode::kUnsafe:
+      sanitizer->SanitizeUnsafe(root_element);
+      break;
+  }
+}
+
+StreamingSanitizer* SanitizerAPI::CreateStreamingSanitizer(
+    Sanitizer::Mode mode,
+    FragmentParserOptions options,
+    ExceptionState& exception_state) {
+  const Sanitizer* sanitizer =
+      SanitizerFromOptions(options, mode, exception_state);
+  if (exception_state.HadException()) {
+    return nullptr;
+  }
+  CHECK(sanitizer);
+  Sanitizer* clone = MakeGarbageCollected<Sanitizer>();
+  clone->setFrom(*sanitizer);
+  if (mode == Sanitizer::Mode::kSafe) {
+    clone->removeUnsafe();
+  }
+  return MakeGarbageCollected<StreamingSanitizer>(clone, mode);
 }
 
 }  // namespace blink

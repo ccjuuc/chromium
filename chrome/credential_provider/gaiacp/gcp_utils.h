@@ -24,6 +24,7 @@
 #include "chrome/credential_provider/gaiacp/internet_availability_checker.h"
 #include "chrome/credential_provider/gaiacp/scoped_lsa_policy.h"
 #include "chrome/credential_provider/gaiacp/win_http_url_fetcher.h"
+#include "services/device/public/proto/hid_gcpw.pb.h"
 #include "url/gurl.h"
 
 // These define are documented in
@@ -223,6 +224,7 @@ enum class CommDirection {
 };
 HRESULT InitializeStdHandles(CommDirection direction,
                              StdHandlesToCreate to_create,
+                             bool create_named_pipe_for_stdin,
                              ScopedStartupInfo* startupinfo,
                              StdParentHandles* parent_handles);
 
@@ -270,6 +272,19 @@ bool WriteToStartupSentinel();
 void DeleteStartupSentinel();
 void DeleteStartupSentinelForVersion(const std::wstring& version);
 
+// Returns the root GCPW ProgramData directory
+// ("C:\ProgramData\Google\Credential Provider"), ensuring it is created and
+// secured with restrictive DACLs. Returns an empty path on failure.
+base::FilePath GetDataDirectory();
+
+// Creates a directory with restrictive DACLs that limit access exclusively to
+// NT AUTHORITY\SYSTEM and BUILTIN\Administrators, preventing inheritance from
+// parent folders (such as ProgramData). If the directory already exists, its
+// DACL is updated to be secure. Parent directories of `path` are created
+// as-needed. Returns false if the directory could not be created or the DACL
+// could not be applied.
+bool SecureCreateDirectory(const base::FilePath& path);
+
 // Gets a string resource from the DLL with the given id.
 std::wstring GetStringResource(UINT base_message_id);
 
@@ -281,10 +296,10 @@ std::wstring GetStringResource(UINT base_message_id,
 // Gets the language selected by the base::win::i18n::LanguageSelector.
 std::wstring GetSelectedLanguage();
 
-// Securely clear a base::Value::Dict that may have a password field.
-void SecurelyClearDictionaryValue(base::optional_ref<base::Value::Dict> dict);
+// Securely clear a base::DictValue that may have a password field.
+void SecurelyClearDictionaryValue(base::optional_ref<base::DictValue> dict);
 void SecurelyClearDictionaryValueWithKey(
-    base::optional_ref<base::Value::Dict> dict,
+    base::optional_ref<base::DictValue> dict,
     const std::string& password_key);
 
 // Securely clear std::wstring and std::string.
@@ -294,9 +309,9 @@ void SecurelyClearString(std::string& str);
 // Securely clear a given |buffer| with size |length|.
 void SecurelyClearBuffer(void* buffer, size_t length);
 
-// Helpers to get strings from base::Value::Dict.
-std::wstring GetDictString(const base::Value::Dict& dict, const char* name);
-std::string GetDictStringUTF8(const base::Value::Dict& dict, const char* name);
+// Helpers to get strings from base::DictValue.
+std::wstring GetDictString(const base::DictValue& dict, const char* name);
+std::string GetDictStringUTF8(const base::DictValue& dict, const char* name);
 
 // Perform a recursive search on a nested dictionary object. Note that the
 // names provided in the input should be in order. Below is an example : Lets
@@ -368,7 +383,7 @@ void InitWindowsStringWithString(const WindowsStringCharT* string,
 // Extracts the provided keys from the given dictionary. Returns true if all
 // keys are found. If any of the key isn't found, returns false.
 bool ExtractKeysFromDict(
-    const base::Value::Dict& dict,
+    const base::DictValue& dict,
     const std::vector<std::pair<std::string, std::string*>>& needed_outputs);
 
 // Gets the bios serial number of the windows device.
@@ -429,6 +444,20 @@ std::unique_ptr<base::File> GetOpenedFileForUser(const std::wstring& sid,
 // stores the last fetch time.
 base::TimeDelta GetTimeDeltaSinceLastFetch(const std::wstring& sid,
                                            const std::wstring& flag);
+
+// Reads a single message from the pipe. The message is expected to be prefixed
+// with a 32-bit size.
+HRESULT ReadMessageFromPipe(base::win::ScopedHandle& pipe,
+                            std::vector<uint8_t>* buffer);
+
+// Writes a single message to the pipe. The message is prefixed with a 32-bit
+// size.
+HRESULT WriteMessageToPipe(base::win::ScopedHandle& pipe,
+                           const std::vector<uint8_t>& buffer);
+
+device::gcpw::HidOpenDeviceGcpwResponse ProcessHidOpenDeviceRequest(
+    const device::gcpw::HidOpenDeviceGcpwRequest& request,
+    HANDLE logon_ui_process);
 
 }  // namespace credential_provider
 

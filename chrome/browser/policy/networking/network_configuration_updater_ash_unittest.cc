@@ -19,10 +19,15 @@
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/ash/settings/scoped_test_device_settings_service.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
+#include "chrome/browser/ash/settings/stub_cros_settings_provider.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/policy/networking/device_network_configuration_updater_ash.h"
 #include "chrome/browser/policy/networking/user_network_configuration_updater_ash.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
+#include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
 #include "chromeos/ash/components/network/fake_network_device_handler.h"
 #include "chromeos/ash/components/network/mock_managed_network_configuration_handler.h"
 #include "chromeos/ash/components/network/onc/onc_certificate_importer.h"
@@ -43,6 +48,7 @@
 #include "components/policy/core/common/policy_service_impl.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/policy_constants.h"
+#include "components/session_manager/test/test_user_session_manager.h"
 #include "components/user_manager/fake_user_manager.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "components/user_manager/user.h"
@@ -53,6 +59,8 @@
 #include "net/cert/x509_util_nss.h"
 #include "net/test/cert_test_util.h"
 #include "net/test/test_data_directory.h"
+#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -242,16 +250,16 @@ std::string ValueToString(const T& value) {
 // certificates contained in |toplevel_onc|. Appends the selected certificate
 // into |out_parsed_client_certificates|.
 void SelectSingleClientCertificateFromOnc(
-    base::Value::Dict& toplevel_onc,
+    base::DictValue& toplevel_onc,
     size_t client_certificate_index,
     std::vector<chromeos::onc::OncParsedCertificates::ClientCertificate>*
         out_parsed_client_certificates) {
-  const base::Value::List* certs =
+  const base::ListValue* certs =
       toplevel_onc.FindList(onc::toplevel_config::kCertificates);
   ASSERT_TRUE(certs);
   ASSERT_TRUE(certs->size() > client_certificate_index);
 
-  base::Value::List selected_certs;
+  base::ListValue selected_certs;
   selected_certs.Append((*certs)[client_certificate_index].Clone());
 
   chromeos::onc::OncParsedCertificates parsed_selected_certs(selected_certs);
@@ -262,7 +270,7 @@ void SelectSingleClientCertificateFromOnc(
 }
 
 // Matcher to match `base::Value` with a compatible type (string, `base::Value`,
-// `base::Value::Dict`, `base::Value::List` etc.). See the `==` operator
+// `base::DictValue`, `base::ListValue` etc.). See the `==` operator
 // overrides in `base/values.h` and the definition of `ValueToString()` for
 // the restrictions on allowed types for `value`.
 MATCHER_P(IsEqualTo,
@@ -290,15 +298,37 @@ ACTION_P(SetCertificateList, list) {
 
 class NetworkConfigurationUpdaterAshTest : public testing::Test {
  protected:
-  NetworkConfigurationUpdaterAshTest() : certificate_importer_(nullptr) {}
+  NetworkConfigurationUpdaterAshTest() = default;
+  ~NetworkConfigurationUpdaterAshTest() override = default;
 
   void SetUp() override {
-    fake_user_ = static_cast<ash::FakeChromeUserManager*>(
-                     user_manager::UserManager::Get())
-                     ->AddUser(AccountId::FromUserEmail(kFakeUserEmail));
+    TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(
+        test_url_loader_factory_.GetSafeWeakWrapper());
 
-    ash::UserSessionManager::GetInstance()->set_start_session_type_for_testing(
+    test_user_session_manager_ =
+        std::make_unique<ash::test::TestUserSessionManager>(
+            TestingBrowserProcess::GetGlobal()->local_state());
+    user_session_manager_ = std::make_unique<ash::UserSessionManager>(
+        TestingBrowserProcess::GetGlobal()->local_state(),
+        TestingBrowserProcess::GetGlobal()
+            ->GetFeatures()
+            ->application_locale_storage(),
+        TestingBrowserProcess::GetGlobal()->shared_url_loader_factory(),
+        TestingBrowserProcess::GetGlobal()
+            ->platform_part()
+            ->browser_policy_connector_ash());
+
+    const AccountId account_id =
+        AccountId::FromUserEmailGaiaId(kFakeUserEmail, GaiaId("12345"));
+    fake_user_ = test_user_session_manager_->AddRegularUser(account_id);
+    ASSERT_TRUE(fake_user_);
+
+    // Simulate log-in.
+    user_session_manager_->set_start_session_type_for_testing(
         ash::UserSessionManager::StartSessionType::kPrimary);
+    test_user_session_manager_->LogIn(account_id);
+
+    profile_ = std::make_unique<TestingProfile>();
 
     fake_statistics_provider_.SetMachineStatistic(ash::system::kSerialNumberKey,
                                                   kFakeSerialNumber);
@@ -312,15 +342,15 @@ class NetworkConfigurationUpdaterAshTest : public testing::Test {
     providers.push_back(&provider_);
     policy_service_ = std::make_unique<PolicyServiceImpl>(std::move(providers));
 
-    std::optional<base::Value::Dict> fake_toplevel_onc =
+    std::optional<base::DictValue> fake_toplevel_onc =
         chromeos::onc::ReadDictionaryFromJson(kFakeONC);
     ASSERT_TRUE(fake_toplevel_onc.has_value());
 
-    base::Value::Dict* global_config = fake_toplevel_onc->FindDict(
+    base::DictValue* global_config = fake_toplevel_onc->FindDict(
         onc::toplevel_config::kGlobalNetworkConfiguration);
     fake_global_network_config_.Merge(global_config->Clone());
 
-    base::Value::List* certs =
+    base::ListValue* certs =
         fake_toplevel_onc->FindList(onc::toplevel_config::kCertificates);
     ASSERT_TRUE(certs);
 
@@ -334,8 +364,26 @@ class NetworkConfigurationUpdaterAshTest : public testing::Test {
         .Times(AnyNumber());
   }
 
-  base::Value::List* GetExpectedFakeNetworkConfigs(::onc::ONCSource source) {
-    std::optional<base::Value::Dict> fake_toplevel_onc =
+  void TearDown() override {
+    certificate_importer_ = nullptr;
+    network_configuration_updater_.reset();
+    client_certificate_importer_owned_.reset();
+    fake_certificates_.reset();
+    policy_service_.reset();
+    provider_.Shutdown();
+    base::RunLoop().RunUntilIdle();
+
+    user_session_manager_->Shutdown();
+    profile_.reset();
+    fake_user_ = nullptr;
+    user_session_manager_.reset();
+    test_user_session_manager_.reset();
+
+    TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(nullptr);
+  }
+
+  base::ListValue* GetExpectedFakeNetworkConfigs(::onc::ONCSource source) {
+    std::optional<base::DictValue> fake_toplevel_onc =
         chromeos::onc::ReadDictionaryFromJson(kFakeONC);
     if (!fake_toplevel_onc.has_value()) {
       return nullptr;
@@ -347,14 +395,8 @@ class NetworkConfigurationUpdaterAshTest : public testing::Test {
     return &fake_network_configs_;
   }
 
-  base::Value::Dict* GetExpectedFakeGlobalNetworkConfig() {
+  base::DictValue* GetExpectedFakeGlobalNetworkConfig() {
     return &fake_global_network_config_;
-  }
-
-  void TearDown() override {
-    network_configuration_updater_.reset();
-    provider_.Shutdown();
-    base::RunLoop().RunUntilIdle();
   }
 
   void MarkPolicyProviderInitialized() {
@@ -378,7 +420,7 @@ class NetworkConfigurationUpdaterAshTest : public testing::Test {
       bool set_client_cert_importer) {
     UserNetworkConfigurationUpdaterAsh* updater =
         UserNetworkConfigurationUpdaterAsh::CreateForUserPolicy(
-            &profile_, *fake_user_, policy_service_.get(),
+            profile_.get(), *fake_user_, policy_service_.get(),
             &network_config_handler_)
             .release();
     if (set_client_cert_importer) {
@@ -403,6 +445,7 @@ class NetworkConfigurationUpdaterAshTest : public testing::Test {
   }
 
   content::BrowserTaskEnvironment task_environment_;
+  network::TestURLLoaderFactory test_url_loader_factory_;
 
   std::unique_ptr<chromeos::onc::OncParsedCertificates> fake_certificates_;
   StrictMock<ash::MockManagedNetworkConfigurationHandler>
@@ -413,15 +456,19 @@ class NetworkConfigurationUpdaterAshTest : public testing::Test {
   ash::ScopedTestingCrosSettings scoped_testing_cros_settings_;
   ash::system::ScopedFakeStatisticsProvider fake_statistics_provider_;
 
+  // NOTE: TestUserSessionManager is not a UserSessionManager.
+  std::unique_ptr<ash::test::TestUserSessionManager> test_user_session_manager_;
+  std::unique_ptr<ash::UserSessionManager> user_session_manager_;
+
   // Ownership of client_certificate_importer_owned_ is passed to the
   // NetworkConfigurationUpdater. When that happens, |certificate_importer_|
   // continues to point to that instance but
   // |client_certificate_importer_owned_| is released.
-  raw_ptr<FakeCertificateImporter, DanglingUntriaged> certificate_importer_;
+  raw_ptr<FakeCertificateImporter> certificate_importer_ = nullptr;
   std::unique_ptr<ash::onc::CertificateImporter>
       client_certificate_importer_owned_;
 
-  TestingProfile profile_;
+  std::unique_ptr<TestingProfile> profile_;
 
   StrictMock<MockConfigurationPolicyProvider> provider_;
   std::unique_ptr<PolicyServiceImpl> policy_service_;
@@ -430,8 +477,8 @@ class NetworkConfigurationUpdaterAshTest : public testing::Test {
   std::unique_ptr<NetworkConfigurationUpdater> network_configuration_updater_;
 
  private:
-  base::Value::List fake_network_configs_;
-  base::Value::Dict fake_global_network_config_;
+  base::ListValue fake_network_configs_;
+  base::DictValue fake_global_network_config_;
   ash::ScopedFakeSessionManagerClient scoped_session_manager_client_;
 };
 
@@ -485,15 +532,14 @@ TEST_F(NetworkConfigurationUpdaterAshTest,
 }
 
 TEST_F(NetworkConfigurationUpdaterAshTest, PolicyIsValidatedAndRepaired) {
-  base::Value::Dict onc_repaired =
-      chromeos::onc::test_utils::ReadTestDictionary(
-          "repaired_toplevel_partially_invalid.onc");
+  base::DictValue onc_repaired = chromeos::onc::test_utils::ReadTestDictionary(
+      "repaired_toplevel_partially_invalid.onc");
 
-  base::Value::List* network_configs_repaired =
+  base::ListValue* network_configs_repaired =
       onc_repaired.FindList(onc::toplevel_config::kNetworkConfigurations);
   ASSERT_TRUE(network_configs_repaired);
 
-  base::Value::Dict* global_config_repaired =
+  base::DictValue* global_config_repaired =
       onc_repaired.FindDict(onc::toplevel_config::kGlobalNetworkConfiguration);
   ASSERT_TRUE(global_config_repaired);
 

@@ -27,17 +27,17 @@ import {MostRelevantTabResumptionProxyImpl} from './most_relevant_tab_resumption
 
 export const MAX_URL_VISITS = 5;
 
-export interface ModuleElement {
+export interface MostRelevantTabResumptionModuleElement {
   $: {
-    moduleHeaderElementV2: ModuleHeaderElement,
+    moduleHeader: ModuleHeaderElement,
     urlVisits: HTMLElement,
   };
 }
 
-export class ModuleElement extends I18nMixinLit
+export class MostRelevantTabResumptionModuleElement extends I18nMixinLit
 (CrLitElement) {
   static get is() {
-    return 'ntp-most-relevant-tab-resumption';
+    return 'ntp-most-relevant-tab-resumption-module';
   }
 
   static override get styles() {
@@ -57,7 +57,7 @@ export class ModuleElement extends I18nMixinLit
       },
 
       /** The cluster displayed by this element. */
-      urlVisits: {type: Object},
+      urlVisits: {type: Array},
 
       /**
        * To determine whether the favicon service should use the host if
@@ -83,6 +83,7 @@ export class ModuleElement extends I18nMixinLit
   accessor urlVisits: URLVisit[] = [];
   protected accessor fallbackToHost_: boolean =
       loadTimeData.getBoolean('mostRelevantTabResumptionModuleFallbackToHost');
+  protected accessor shouldShowDeviceIcon_: boolean = false;
   protected accessor showInfoDialog_: boolean = false;
   protected accessor allowFaviconServerFallback_: boolean =
       loadTimeData.getBoolean(
@@ -90,22 +91,28 @@ export class ModuleElement extends I18nMixinLit
 
   protected getMenuItems_(): MenuItem[] {
     return [
-        {
-          action: 'dismiss',
-          icon: 'modules:thumb_down',
-          text: this.i18n('modulesMostRelevantTabResumptionDismissAll'),
-        },
-        {
-          action: 'disable',
-          icon: 'modules:block',
-          text: this.i18nRecursive(
-              '', 'modulesDisableButtonTextV2', 'modulesTabResumptionTitle'),
-        },
-        {
-          action: 'info',
-          icon: 'modules:info',
-          text: this.i18n('moduleInfoButtonTitle'),
-        },
+      {
+        action: 'dismiss',
+        icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'modules:thumb-down' :
+            'modules:thumb_down-old',
+        text: this.i18n('modulesMostRelevantTabResumptionDismissAll'),
+      },
+      {
+        action: 'disable',
+        icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'modules:block' :
+            'modules:block-old',
+        text: this.i18nRecursive(
+            '', 'modulesDisableButtonTextV2', 'modulesTabResumptionTitle'),
+      },
+      {
+        action: 'info',
+        icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'modules:info' :
+            'modules:info-old',
+        text: this.i18n('moduleInfoButtonTitle'),
+      },
     ];
   }
 
@@ -117,7 +124,7 @@ export class ModuleElement extends I18nMixinLit
     });
   }
 
-  protected onDismissAllButtonClick_() {
+  protected onHeaderDismissButtonClick_() {
     MostRelevantTabResumptionProxyImpl.getInstance().handler.dismissModule(
         this.urlVisits);
     this.fire('dismiss-module-instance', {
@@ -191,7 +198,7 @@ export class ModuleElement extends I18nMixinLit
   }
 
   protected computeDomain_(urlVisit: URLVisit): string {
-    let domain = (new URL(urlVisit.url.url)).hostname;
+    let domain = (new URL(urlVisit.url)).hostname;
     domain = domain.replace('www.', '');
     return domain;
   }
@@ -199,19 +206,25 @@ export class ModuleElement extends I18nMixinLit
   protected computeIcon_(urlVisit: URLVisit): string {
     switch (urlVisit.formFactor) {
       case FormFactor.kDesktop:
-        return 'tab_resumption:computer';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'tab_resumption:desktop-windows' :
+            'tab_resumption:computer-old';
       case FormFactor.kPhone:
-        return 'tab_resumption:phone';
+        return 'tab_resumption:phone-custom';
       case FormFactor.kTablet:
-        return 'tab_resumption:tablet';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'tab_resumption:tablet-android' :
+            'tab_resumption:tablet-old';
       case FormFactor.kAutomotive:
-        return 'tab_resumption:automotive';
+        return 'tab_resumption:automotive-custom';
       case FormFactor.kWearable:
-        return 'tab_resumption:wearable';
+        return 'tab_resumption:wearable-custom';
       case FormFactor.kTv:
         return 'tab_resumption:tv';
       default:
-        return 'tab_resumption:globe';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'tab_resumption:public' :
+            'tab_resumption:globe-old';
     }
   }
 
@@ -234,18 +247,36 @@ export class ModuleElement extends I18nMixinLit
   protected onInfoDialogClose_() {
     this.showInfoDialog_ = false;
   }
+
+  protected getCheckSmallIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'modules:check-small' :
+        'modules:done-old';
+  }
 }
 
-customElements.define(ModuleElement.is, ModuleElement);
+export type ModuleElement = MostRelevantTabResumptionModuleElement;
 
-async function createElement(): Promise<ModuleElement|null> {
+declare global {
+  interface HTMLElementTagNameMap {
+    'ntp-most-relevant-tab-resumption-module':
+        MostRelevantTabResumptionModuleElement;
+  }
+}
+
+customElements.define(
+    MostRelevantTabResumptionModuleElement.is,
+    MostRelevantTabResumptionModuleElement);
+
+async function createElement():
+    Promise<MostRelevantTabResumptionModuleElement|null> {
   const {urlVisits} = await MostRelevantTabResumptionProxyImpl.getInstance()
                           .handler.getURLVisits();
   if (!urlVisits || urlVisits.length === 0) {
     return null;
   }
 
-  const element = new ModuleElement();
+  const element = new MostRelevantTabResumptionModuleElement();
   element.urlVisits = urlVisits;
 
   urlVisits.slice(0, MAX_URL_VISITS).forEach((urlVisit) => {

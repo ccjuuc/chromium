@@ -18,7 +18,6 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -28,6 +27,7 @@
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
+#include "media/base/agtm.h"
 #include "media/base/data_source.h"
 #include "media/base/decrypt_config.h"
 #include "media/base/demuxer.h"
@@ -60,6 +60,10 @@
 namespace media {
 
 namespace {
+
+perfetto::NamedTrack GetTracingTrack(const FFmpegDemuxer* demuxer) {
+  return perfetto::NamedTrack::FromPointer("media::FFmpegDemuxer", demuxer);
+}
 
 void SetAVStreamDiscard(AVStream* stream, AVDiscard discard) {
   DCHECK(stream);
@@ -270,12 +274,13 @@ FFmpegDemuxerStream::FFmpegDemuxerStream(
     : demuxer_(demuxer),
       task_runner_(base::SequencedTaskRunner::GetCurrentDefault()),
       stream_(stream),
+      stream_time_base_(stream->time_base),
       stream_start_time_(
-          ConvertStreamTimestamp(stream->time_base, stream->start_time)),
+          ConvertStreamTimestamp(stream_time_base_, stream->start_time)),
       audio_config_(audio_config.release()),
       video_config_(video_config.release()),
-      media_log_(media_log),
-      duration_(ConvertStreamTimestamp(stream->time_base, stream->duration)),
+      media_log_(MediaLog::CloneSafely(media_log)),
+      duration_(ConvertStreamTimestamp(stream_time_base_, stream->duration)),
       last_packet_pos_(AV_NOPTS_VALUE),
       last_packet_dts_(AV_NOPTS_VALUE) {
   DCHECK(demuxer_);
@@ -323,7 +328,8 @@ FFmpegDemuxerStream::~FFmpegDemuxerStream() {
   DCHECK(buffer_queue_.IsEmpty());
 }
 
-base::span<const uint8_t> GetSideData(const AVPacket* packet) {
+base::span<const uint8_t> GetMatroskaBlockAdditionalSideData(
+    const AVPacket* packet) {
   size_t side_data_size = 0;
   uint8_t* side_data = av_packet_get_side_data(
       packet, AV_PKT_DATA_MATROSKA_BLOCKADDITIONAL, &side_data_size);
@@ -337,6 +343,28 @@ base::span<const uint8_t> GetSideData(const AVPacket* packet) {
   // Since we are not allocating memory, and it is considered a valid use case
   // to construct a base::span<> from nullptr with size zero, this is safe.
   return UNSAFE_BUFFERS(base::span<const uint8_t>(side_data, side_data_size));
+}
+
+std::vector<uint8_t> GetAgtmSideData(const AVPacket* packet) {
+  std::vector<uint8_t> data;
+  size_t side_data_size = 0;
+  AVDynamicHDRSmpte2094App5* side_data =
+      reinterpret_cast<AVDynamicHDRSmpte2094App5*>(av_packet_get_side_data(
+          packet, AV_PKT_DATA_DYNAMIC_HDR_SMPTE_2094_APP5, &side_data_size));
+  if (side_data == nullptr || side_data_size == 0) {
+    return data;
+  }
+  size_t size = 0;
+  if (av_dynamic_hdr_smpte2094_app5_to_t35(side_data, nullptr, &size) != 0) {
+    return data;
+  }
+  data.resize(size);
+  uint8_t* vector_data = data.data();
+  if (av_dynamic_hdr_smpte2094_app5_to_t35(side_data, &vector_data, &size) !=
+      0) {
+    data.clear();
+  }
+  return data;
 }
 
 void FFmpegDemuxerStream::EnqueuePacket(ScopedAVPacket packet) {
@@ -406,16 +434,17 @@ void FFmpegDemuxerStream::EnqueuePacket(ScopedAVPacket packet) {
 
   scoped_refptr<DecoderBuffer> buffer;
 
-  base::span<const uint8_t> side_data = GetSideData(packet.get());
+  base::span<const uint8_t> matroska_block_additional_side_data =
+      GetMatroskaBlockAdditionalSideData(packet.get());
+  std::vector<uint8_t> agtm_side_data = GetAgtmSideData(packet.get());
 
   std::unique_ptr<DecryptConfig> decrypt_config;
   size_t data_offset = 0;
   if ((type() == DemuxerStream::AUDIO && audio_config_->is_encrypted()) ||
       (type() == DemuxerStream::VIDEO && video_config_->is_encrypted())) {
-    if (!WebMCreateDecryptConfig(
-            packet->data, packet->size,
-            reinterpret_cast<const uint8_t*>(encryption_key_id_.data()),
-            encryption_key_id_.size(), &decrypt_config, &data_offset)) {
+    if (!WebMCreateDecryptConfig(AVPacketData(*packet),
+                                 base::as_byte_span(encryption_key_id_),
+                                 &decrypt_config, &data_offset)) {
       MEDIA_LOG(ERROR, media_log_) << "Creation of DecryptConfig failed.";
     }
   }
@@ -442,13 +471,12 @@ void FFmpegDemuxerStream::EnqueuePacket(ScopedAVPacket packet) {
     packet_span = packet_span.subspan(data_offset);
 
     if (packet_span.size() < MPEG1AudioStreamParser::kHeaderSize ||
-        !MPEG1AudioStreamParser::ParseHeader(nullptr, nullptr, packet_span,
-                                             nullptr)) {
+        !MPEG1AudioStreamParser::ParseHeader(packet_span)) {
       LIMITED_MEDIA_LOG(INFO, media_log_, num_discarded_packet_warnings_, 5)
           << "Discarding invalid MP3 packet, ts: "
-          << ConvertStreamTimestamp(stream_->time_base, packet->pts)
+          << ConvertStreamTimestamp(stream_time_base_, packet->pts)
           << ", duration: "
-          << ConvertStreamTimestamp(stream_->time_base, packet->duration);
+          << ConvertStreamTimestamp(stream_time_base_, packet->duration);
       return;
     }
   }
@@ -458,18 +486,20 @@ void FFmpegDemuxerStream::EnqueuePacket(ScopedAVPacket packet) {
   // into memory we control.
   buffer = DecoderBuffer::CopyFrom(AVPacketData(*packet).subspan(data_offset));
 
-  if (side_data.size() > 8) {
+  if (matroska_block_additional_side_data.size() > 8) {
     // First 8 bytes of side data is the side_data_id in big endian. This is the
     // same as the matroska BlockAddID whose values are documented here:
     // https://www.matroska.org/technical/codec_specs.html#block-addition-mappings
-    const uint64_t side_data_id = base::U64FromBigEndian(side_data.first<8u>());
+    const uint64_t side_data_id =
+        base::U64FromBigEndian(matroska_block_additional_side_data.first<8u>());
     if (side_data_id == 1) {
       buffer->WritableSideData().alpha_data =
-          base::HeapArray<uint8_t>::CopiedFrom(side_data.subspan(8u));
-    } else if (side_data_id == 4) {
-      buffer->WritableSideData().itu_t35_data =
-          base::HeapArray<uint8_t>::CopiedFrom(side_data.subspan(8u));
+          base::HeapArray<uint8_t>::CopiedFrom(
+              matroska_block_additional_side_data.subspan(8u));
     }
+  }
+  if (agtm_side_data.size() > 0) {
+    buffer->WritableSideData().hdr_metadata.SetSerializedAgtm(agtm_side_data);
   }
 
   if (decrypt_config) {
@@ -480,12 +510,12 @@ void FFmpegDemuxerStream::EnqueuePacket(ScopedAVPacket packet) {
   // pipeline will then use the timestamps to estimate duration. Incorrect
   // duration information can lead to stuttering effects during seeking. See
   // https://crbug.com/397343886.
-  auto d = ConvertStreamTimestamp(stream_->time_base, packet->duration);
+  auto d = ConvertStreamTimestamp(stream_time_base_, packet->duration);
   buffer->set_duration(d <= base::Milliseconds(1) ? kNoTimestamp : d);
 
   // Note: If pts is kNoFFmpegTimestamp, stream_timestamp will be kNoTimestamp.
   const base::TimeDelta stream_timestamp =
-      ConvertStreamTimestamp(stream_->time_base, packet->pts);
+      ConvertStreamTimestamp(stream_time_base_, packet->pts);
 
   if (stream_timestamp == kNoTimestamp ||
       stream_timestamp == kInfiniteDuration) {
@@ -508,8 +538,9 @@ void FFmpegDemuxerStream::EnqueuePacket(ScopedAVPacket packet) {
   // long it's hard to know what might break.
   if (is_audio && audio_decoder_config().codec_delay() &&
       demuxer_->start_time().is_negative()) {
+    // Note: FFmpeg doesn't seem to always use -FramesToTime(codec_delay()) as
+    // the start_time for unknown reasons, so we use the start time directly.
     buffer->set_timestamp(stream_timestamp - demuxer_->start_time());
-    DCHECK_GE(buffer->timestamp(), base::TimeDelta());
   }
 
   if (discard_padding) {
@@ -845,7 +876,7 @@ FFmpegDemuxer::FFmpegDemuxer(
       blocking_task_runner_(base::ThreadPool::CreateSequencedTaskRunner(
           {base::MayBlock(), base::TaskPriority::USER_BLOCKING})),
       data_source_(data_source),
-      media_log_(media_log),
+      media_log_(MediaLog::CloneSafely(media_log)),
       encrypted_media_init_data_cb_(encrypted_media_init_data_cb),
       media_tracks_updated_cb_(std::move(media_tracks_updated_cb)),
       is_local_file_(is_local_file) {
@@ -883,6 +914,8 @@ DemuxerType FFmpegDemuxer::GetDemuxerType() const {
 void FFmpegDemuxer::Initialize(DemuxerHost* host,
                                PipelineStatusCallback init_cb) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
+  TRACE_EVENT_BEGIN("media", "FFmpegDemuxer::Initialize",
+                    GetTracingTrack(this));
   host_ = host;
   weak_this_ = cancel_pending_seek_factory_.GetWeakPtr();
   init_cb_ = std::move(init_cb);
@@ -974,8 +1007,8 @@ void FFmpegDemuxer::Stop() {
   // thread. We don't need to wait for any outstanding tasks since they will all
   // fail to return after invalidating WeakPtrs.
   stopped_ = true;
-  weak_factory_.InvalidateWeakPtrs();
-  cancel_pending_seek_factory_.InvalidateWeakPtrs();
+  weak_factory_.InvalidateWeakPtrsAndDoom();
+  cancel_pending_seek_factory_.InvalidateWeakPtrsAndDoom();
 }
 
 void FFmpegDemuxer::StartWaitingForSeek(base::TimeDelta seek_time) {}
@@ -994,8 +1027,7 @@ void FFmpegDemuxer::CancelPendingSeek(base::TimeDelta seek_time) {
 void FFmpegDemuxer::Seek(base::TimeDelta time, PipelineStatusCallback cb) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   DCHECK(!pending_seek_cb_);
-  TRACE_EVENT_BEGIN("media", "FFmpegDemuxer::Seek",
-                    perfetto::Track::FromPointer(this));
+  TRACE_EVENT_BEGIN("media", "FFmpegDemuxer::Seek", GetTracingTrack(this));
   pending_seek_cb_ = std::move(cb);
   SeekInternal(time, base::BindOnce(&FFmpegDemuxer::OnSeekFrameDone,
                                     weak_factory_.GetWeakPtr()));
@@ -1078,9 +1110,9 @@ void FFmpegDemuxer::SeekInternal(base::TimeDelta time,
 
   blocking_task_runner_->PostTaskAndReplyWithResult(
       FROM_HERE,
-      base::BindOnce(&AVSeekFrame, glue_->format_context(),
-                     seeking_stream->index,
-                     ConvertToTimeBase(seeking_stream->time_base, seek_time)),
+      base::BindOnce(
+          &AVSeekFrame, glue_->format_context(), seeking_stream->index,
+          ConvertToTimeBase(demux_stream->stream_time_base(), seek_time)),
       std::move(seek_cb));
 }
 
@@ -1088,9 +1120,9 @@ base::Time FFmpegDemuxer::GetTimelineOffset() const {
   return timeline_offset_;
 }
 
-std::vector<DemuxerStream*> FFmpegDemuxer::GetAllStreams() {
+std::vector<raw_ptr<DemuxerStream>> FFmpegDemuxer::GetAllStreams() {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  std::vector<DemuxerStream*> result;
+  std::vector<raw_ptr<DemuxerStream>> result;
   // Put enabled streams at the beginning of the list so that
   // MediaResource::GetFirstStream returns the enabled stream if there is one.
   // TODO(servolk): Revisit this after media track switching is supported.
@@ -1346,7 +1378,7 @@ void FFmpegDemuxer::OnFindStreamInfoDone(int result) {
     // return nullptr if the AVStream is invalid. Validity checks will verify
     // things like: codec, channel layout, sample/pixel format, etc...
     std::unique_ptr<FFmpegDemuxerStream> demuxer_stream =
-        FFmpegDemuxerStream::Create(this, stream, media_log_);
+        FFmpegDemuxerStream::Create(this, stream, media_log_.get());
     if (demuxer_stream.get()) {
       streams_[i] = std::move(demuxer_stream);
     } else {
@@ -1433,7 +1465,7 @@ void FFmpegDemuxer::OnFindStreamInfoDone(int result) {
       VideoDecoderConfig video_config = streams_[i]->video_decoder_config();
 
       RecordVideoCodecStats(glue_->container(), video_config,
-                            stream->codecpar->color_range, media_log_);
+                            stream->codecpar->color_range, media_log_.get());
 
       media_track = media_tracks->AddVideoTrack(
           video_config, stream_enabled, track_id, MediaTrack::Kind("main"),
@@ -1559,8 +1591,14 @@ void FFmpegDemuxer::LogMetadata(AVFormatContext* avctx,
       video_tracks.push_back(stream->video_decoder_config());
     }
   }
-  media_log_->SetProperty<MediaLogProperty::kAudioTracks>(audio_tracks);
-  media_log_->SetProperty<MediaLogProperty::kVideoTracks>(video_tracks);
+
+  if (!audio_tracks.empty()) {
+    media_log_->SetProperty<MediaLogProperty::kAudioTracks>(audio_tracks);
+  }
+  if (!video_tracks.empty()) {
+    media_log_->SetProperty<MediaLogProperty::kVideoTracks>(video_tracks);
+  }
+
   media_log_->SetProperty<MediaLogProperty::kMaxDuration>(max_duration);
   media_log_->SetProperty<MediaLogProperty::kStartTime>(start_time_);
   media_log_->SetProperty<MediaLogProperty::kBitrate>(bitrate_);
@@ -1869,7 +1907,7 @@ void FFmpegDemuxer::SetLiveness(StreamLiveness liveness) {
 void FFmpegDemuxer::RunInitCB(PipelineStatus status) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   DCHECK(init_cb_);
-  TRACE_EVENT_END("media", perfetto::Track::FromPointer(this), "status",
+  TRACE_EVENT_END("media", GetTracingTrack(this), "status",
                   PipelineStatusToString(status));
   std::move(init_cb_).Run(status);
 }
@@ -1877,7 +1915,7 @@ void FFmpegDemuxer::RunInitCB(PipelineStatus status) {
 void FFmpegDemuxer::RunPendingSeekCB(PipelineStatus status) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   DCHECK(pending_seek_cb_);
-  TRACE_EVENT_END("media", perfetto::Track::FromPointer(this), "status",
+  TRACE_EVENT_END("media", GetTracingTrack(this), "status",
                   PipelineStatusToString(status));
   std::move(pending_seek_cb_).Run(status);
 }

@@ -23,12 +23,11 @@
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/associated_interfaces/associated_interfaces.mojom.h"
 #include "third_party/blink/public/mojom/frame/frame_replication_state.mojom-forward.h"
-#include "third_party/blink/public/mojom/shared_storage/shared_storage_worklet_service.mojom-forward.h"
 #include "third_party/blink/public/mojom/worker/worklet_global_scope_creation_params.mojom-forward.h"
 #include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
 
 namespace IPC {
-class SyncChannel;
+class ChannelProxy;
 }  // namespace IPC
 
 namespace blink {
@@ -89,7 +88,6 @@ class CONTENT_EXPORT AgentSchedulingGroup
 
  private:
   // IPC::Listener:
-  void OnBadMessageReceived() override;
   void OnAssociatedInterfaceRequest(
       const std::string& interface_name,
       mojo::ScopedInterfaceEndpointHandle handle) override;
@@ -97,10 +95,6 @@ class CONTENT_EXPORT AgentSchedulingGroup
   // mojom::AgentSchedulingGroup:
   void CreateView(mojom::CreateViewParamsPtr params) override;
   void CreateFrame(mojom::CreateFrameParamsPtr params) override;
-  void CreateSharedStorageWorkletService(
-      mojo::PendingReceiver<blink::mojom::SharedStorageWorkletService> receiver,
-      blink::mojom::WorkletGlobalScopeCreationParamsPtr
-          global_scope_creation_params) override;
 
   // mojom::RouteProvider
   void GetRoute(
@@ -128,7 +122,7 @@ class CONTENT_EXPORT AgentSchedulingGroup
   // This AgentSchedulingGroup's legacy IPC channel. Will only be used in
   // `features::MBIMode::kEnabledPerRenderProcessHost` or
   // `features::MBIMode::kEnabledPerSiteInstance` mode.
-  std::unique_ptr<IPC::SyncChannel> channel_;
+  std::unique_ptr<IPC::ChannelProxy> channel_;
 
   const raw_ref<RenderThread> render_thread_;
 

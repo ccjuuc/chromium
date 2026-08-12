@@ -157,7 +157,7 @@ public class MinimizeAppAndCloseTabBackPressHandler
         mActivityTabSupplier = activityTabSupplier;
         mUseSystemBack = shouldUseSystemBack();
 
-        mActivityTabSupplier.addObserver(mOnTabChanged);
+        mActivityTabSupplier.addSyncObserverAndPostIfNonNull(mOnTabChanged);
         // Init system back arm, using the current tab to determine whether back press should be
         // handled.
         onTabChanged(mActivityTabSupplier.get());
@@ -236,7 +236,7 @@ public class MinimizeAppAndCloseTabBackPressHandler
             minimizeApp = !shouldCloseTab || mMinimizationShouldCloseTab.test(currentTab);
         }
 
-        return new Pair(minimizeApp, shouldCloseTab);
+        return new Pair<>(minimizeApp, shouldCloseTab);
     }
 
     @Override

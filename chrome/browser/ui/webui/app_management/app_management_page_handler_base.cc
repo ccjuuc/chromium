@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/webui/app_management/app_management_page_handler_base.h"
 
+#include <limits>
 #include <memory>
 #include <set>
 #include <string>
@@ -15,6 +16,7 @@
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/callback_helpers.h"
 #include "base/i18n/message_formatter.h"
+#include "base/logging.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -23,8 +25,12 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/web_applications/link_capturing_features.h"
 #include "chrome/browser/web_applications/locks/all_apps_lock.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
+#include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/app_constants/constants.h"
@@ -109,8 +115,21 @@ std::optional<std::string> MaybeFormatBytes(std::optional<uint64_t> bytes) {
   if (!bytes) {
     return std::nullopt;
   }
-  return base::UTF16ToUTF8(ui::FormatBytes(
-      base::ByteSize(base::checked_cast<uint64_t>(bytes.value()))));
+
+  if (bytes.value() > std::numeric_limits<int64_t>::max()) {
+    // ui::FormatBytes() takes a base::ByteSize, which is unsigned but capped in
+    // size to the signed range. We would expect the value passed into this
+    // function to fit in that range.
+    //
+    // Something is going wrong if values this big are being passed in.
+    // TODO(http://b/40063212): Investigate why ARC apps have these implausible
+    // and surely incorrect values and fix it.
+    LOG(ERROR) << "Invalid app size: " << bytes.value();
+    base::debug::DumpWithoutCrashing();
+    return std::nullopt;
+  }
+
+  return base::UTF16ToUTF8(ui::FormatBytes(base::ByteSize(bytes.value())));
 }
 
 }  // namespace
@@ -320,9 +339,30 @@ AppManagementPageHandlerBase::CreateAppFromAppUpdate(
   app->data_size = MaybeFormatBytes(update.DataSizeInBytes());
 
   app->publisher_id = update.PublisherId();
+
+  bool is_browser_tab_app = (update.AppType() == apps::AppType::kWeb) &&
+                            (update.WindowMode() == apps::WindowMode::kBrowser);
+
+  bool is_browser_tab_app_supporting_existing_clients = false;
+  if (is_browser_tab_app && base::FeatureList::IsEnabled(
+                                apps::features::kUpdateAppStringsOnSettings)) {
+    auto* provider = web_app::WebAppProvider::GetForWebApps(profile_);
+    if (provider) {
+      const web_app::WebApp* web_app =
+          provider->registrar_unsafe().GetAppById(update.AppId());
+      if (web_app && web_app->launch_handler()
+                         .value_or(web_app::LaunchHandler{})
+                         .TargetsExistingClients()) {
+        is_browser_tab_app_supporting_existing_clients = true;
+      }
+    }
+  }
+
+  // Note: After every setting change, the page updates dynamically, so changing
+  // the 'open in window' slider on non-ChromeOS platforms will cause this code
+  // to execute again, making the suggested links options change immediately.
   app->disable_user_choice_navigation_capturing =
-      (update.AppType() == apps::AppType::kWeb) &&
-      (update.WindowMode() == apps::WindowMode::kBrowser);
+      is_browser_tab_app && !is_browser_tab_app_supporting_existing_clients;
 
   return app;
 }

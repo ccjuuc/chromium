@@ -6,6 +6,8 @@
 
 #include <utility>
 
+#include "base/callback_list.h"
+#include "base/check.h"
 #include "base/notreached.h"
 #include "components/pdf/browser/pdf_document_helper_client.h"
 #include "components/pdf/browser/pdf_frame_util.h"
@@ -13,9 +15,11 @@
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_user_data.h"
 #include "content/public/common/referrer_type_converters.h"
 #include "pdf/mojom/pdf.mojom.h"
 #include "pdf/pdf_features.h"
+#include "services/network/public/mojom/referrer_policy.mojom-shared.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/point_f.h"
@@ -23,29 +27,78 @@
 
 namespace pdf {
 
+namespace {
+
+class PDFDocumentHelperCreationTracker
+    : public content::WebContentsUserData<PDFDocumentHelperCreationTracker> {
+ public:
+  explicit PDFDocumentHelperCreationTracker(content::WebContents* contents)
+      : content::WebContentsUserData<PDFDocumentHelperCreationTracker>(
+            *contents) {}
+  ~PDFDocumentHelperCreationTracker() override = default;
+
+  base::CallbackListSubscription RegisterCallback(base::OnceClosure callback) {
+    return callbacks_.Add(std::move(callback));
+  }
+
+  void NotifyCreated() { callbacks_.Notify(); }
+
+ private:
+  friend class content::WebContentsUserData<PDFDocumentHelperCreationTracker>;
+  base::OnceClosureList callbacks_;
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
+};
+
+WEB_CONTENTS_USER_DATA_KEY_IMPL(PDFDocumentHelperCreationTracker);
+
+}  // namespace
+
+// static
+base::CallbackListSubscription PDFDocumentHelper::RegisterForCreate(
+    content::WebContents& web_contents,
+    base::OnceClosure callback) {
+  // Disallow calling this if the helper already exists, as the caller is
+  // expected to check this beforehand.
+  DCHECK(!MaybeGetForWebContents(web_contents));
+
+  return PDFDocumentHelperCreationTracker::GetOrCreateForWebContents(
+             &web_contents)
+      ->RegisterCallback(std::move(callback));
+}
+
 // static
 void PDFDocumentHelper::BindPdfHost(
     mojo::PendingAssociatedReceiver<mojom::PdfHost> pdf_host,
     content::RenderFrameHost* rfh,
     std::unique_ptr<PDFDocumentHelperClient> client) {
   auto* pdf_helper = PDFDocumentHelper::GetForCurrentDocument(rfh);
+  bool newly_created = false;
   if (!pdf_helper) {
     PDFDocumentHelper::CreateForCurrentDocument(rfh, std::move(client));
     pdf_helper = PDFDocumentHelper::GetForCurrentDocument(rfh);
+    newly_created = true;
   }
   pdf_helper->pdf_host_receivers_.Bind(rfh, std::move(pdf_host));
+
+  if (newly_created) {
+    auto* web_contents = content::WebContents::FromRenderFrameHost(rfh);
+    if (auto* tracker =
+            PDFDocumentHelperCreationTracker::FromWebContents(web_contents)) {
+      tracker->NotifyCreated();
+    }
+  }
 }
 
 // static
 PDFDocumentHelper* PDFDocumentHelper::MaybeGetForWebContents(
-    content::WebContents* contents) {
+    content::WebContents& contents) {
   PDFDocumentHelper* pdf_helper = nullptr;
 
   // Iterate through each of the render frame hosts, because the frame
   // associated to a PDFDocumentHelper is not guaranteed to be a specific frame.
   // For example, if kPdfOopif feature is enabled, the frame is the top frame.
   // If kPdfOopif is disabled, it is a child frame.
-  contents->ForEachRenderFrameHostWithAction(
+  contents.ForEachRenderFrameHostWithAction(
       [&pdf_helper](content::RenderFrameHost* rfh) {
         auto* possible_pdf_helper =
             PDFDocumentHelper::GetForCurrentDocument(rfh);
@@ -147,15 +200,14 @@ void PDFDocumentHelper::SelectionChanged(const gfx::PointF& left,
 }
 
 void PDFDocumentHelper::SetPluginCanSave(bool can_save) {
-  client_->SetPluginCanSave(pdf_host_receivers_.GetCurrentTargetFrame(),
-                            can_save);
+  client_->SetPluginCanSave(pdf_host_receivers_.CurrentTargetFrame(), can_save);
 }
 
 #if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
 void PDFDocumentHelper::OnSearchifyStarted() {
   if (!searchify_started_) {
     searchify_started_ = true;
-    client_->OnSearchifyStarted(&render_frame_host());
+    client_->OnSearchifyStarted(render_frame_host());
   }
 }
 #endif
@@ -288,6 +340,33 @@ void PDFDocumentHelper::RegisterForDocumentLoadComplete(
   document_load_complete_callbacks_.push_back(std::move(callback));
 }
 
+void PDFDocumentHelper::HasMeaningfulText(
+    pdf::mojom::PdfListener::HasMeaningfulTextCallback callback) {
+  if (!remote_pdf_client_ || !is_document_load_complete_) {
+    std::move(callback).Run(false);
+    return;
+  }
+  remote_pdf_client_->HasMeaningfulText(std::move(callback));
+}
+
+void PDFDocumentHelper::HasJavaScript(
+    pdf::mojom::PdfListener::HasJavaScriptCallback callback) {
+  if (!remote_pdf_client_ || !is_document_load_complete_) {
+    std::move(callback).Run(false);
+    return;
+  }
+  remote_pdf_client_->HasJavaScript(std::move(callback));
+}
+
+void PDFDocumentHelper::IsPasswordProtected(
+    pdf::mojom::PdfListener::IsPasswordProtectedCallback callback) {
+  if (!remote_pdf_client_ || !is_document_load_complete_) {
+    std::move(callback).Run(false);
+    return;
+  }
+  remote_pdf_client_->IsPasswordProtected(std::move(callback));
+}
+
 void PDFDocumentHelper::OnSelectionEvent(ui::SelectionEventType event) {
   // Should be handled by `TouchSelectionControllerClientAura`.
   NOTREACHED();
@@ -312,13 +391,14 @@ void PDFDocumentHelper::OnManagerWillDestroy(
   touch_selection_controller_client_manager_ = nullptr;
 }
 
-bool PDFDocumentHelper::IsCommandIdEnabled(int command_id) const {
+bool PDFDocumentHelper::IsCommandIdEnabled(int command_id,
+                                           bool can_paste) const {
   // TODO(wjmaclean|dsinclair): Make PDFium send readability information in the
   // selection changed message?
   bool readable = true;
 
   switch (command_id) {
-    case ui::TouchEditable::kCopy:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kCopy):
       return readable && has_selection_;
       // TODO(wjmaclean): add logic for cut/paste as the information required
       // from PDFium becomes available.
@@ -330,7 +410,7 @@ void PDFDocumentHelper::ExecuteCommand(int command_id, int event_flags) {
   // TODO(wjmaclean, dsinclair): Need to communicate to PDFium to accept
   // cut/paste commands.
   switch (command_id) {
-    case ui::TouchEditable::kCopy:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kCopy):
       GetWebContents().Copy();
       break;
   }
@@ -379,7 +459,7 @@ void PDFDocumentHelper::RunContextMenu() {
   touch_selection_controller->HideAndDisallowShowingAutomatically();
 }
 
-bool PDFDocumentHelper::ShouldShowQuickMenu() {
+bool PDFDocumentHelper::ShouldShowQuickMenu(bool can_paste) {
   return false;
 }
 
@@ -418,11 +498,10 @@ void PDFDocumentHelper::OnDocumentLoadComplete() {
   }
   document_load_complete_callbacks_.clear();
 
-  client_->OnDocumentLoadComplete(&render_frame_host());
+  client_->OnDocumentLoadComplete(render_frame_host());
 }
 
-void PDFDocumentHelper::SaveUrlAs(const GURL& url,
-                                  network::mojom::ReferrerPolicy policy) {
+void PDFDocumentHelper::SavePdf() {
   client_->OnSaveURL();
 
   // Save using the PDF embedder host.
@@ -434,15 +513,16 @@ void PDFDocumentHelper::SaveUrlAs(const GURL& url,
     return;
   }
 
-  content::Referrer referrer(url, policy);
+  const GURL& url = rfh->GetLastCommittedURL();
+  content::Referrer referrer(url, network::mojom::ReferrerPolicy::kDefault);
   referrer = content::Referrer::SanitizeForRequest(url, referrer);
   GetWebContents().SaveFrame(url, referrer, rfh);
 }
 
 void PDFDocumentHelper::UpdateContentRestrictions(
     int32_t content_restrictions) {
-  client_->UpdateContentRestrictions(
-      pdf_host_receivers_.GetCurrentTargetFrame(), content_restrictions);
+  client_->UpdateContentRestrictions(pdf_host_receivers_.CurrentTargetFrame(),
+                                     content_restrictions);
 }
 
 DOCUMENT_USER_DATA_KEY_IMPL(PDFDocumentHelper);

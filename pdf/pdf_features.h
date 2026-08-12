@@ -20,6 +20,8 @@ static_assert(BUILDFLAG(ENABLE_PDF), "ENABLE_PDF not set to true");
 namespace chrome_pdf::features {
 
 BASE_DECLARE_FEATURE(kAccessiblePDFForm);
+BASE_DECLARE_FEATURE(kPdfBrotliDecode);
+BASE_DECLARE_FEATURE(kPdfBufferedPaintManager);
 BASE_DECLARE_FEATURE(kPdfGetSaveDataInBlocks);
 BASE_DECLARE_FEATURE(kPdfIncrementalLoading);
 BASE_DECLARE_FEATURE(kPdfOopif);
@@ -32,14 +34,13 @@ BASE_DECLARE_FEATURE(kPdfUseSkiaRenderer);
 extern const base::FeatureParam<bool> kPdfUseSkiaPremultiplied;
 BASE_DECLARE_FEATURE(kPdfXfaSupport);
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-BASE_DECLARE_FEATURE(kPdfiumPerRequestFontMatching);
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_WIN)
+BASE_DECLARE_FEATURE(kPdfiumPerRequestFontMatchingWin);
+#endif
 
 #if BUILDFLAG(ENABLE_PDF_INK2)
 BASE_DECLARE_FEATURE(kPdfInk2);
 extern const base::FeatureParam<bool> kPdfInk2TextAnnotations;
-extern const base::FeatureParam<bool> kPdfInk2TextHighlighting;
 #endif  // BUILDFLAG(ENABLE_PDF_INK2)
 
 #if BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)

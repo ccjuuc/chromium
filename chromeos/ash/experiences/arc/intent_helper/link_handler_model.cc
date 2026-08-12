@@ -9,7 +9,6 @@
 
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_package.h"
@@ -29,7 +28,7 @@ bool GetQueryValue(const GURL& url,
                    std::u16string* out) {
   const std::string_view str = url.query();
 
-  url::Component query(0, str.length());
+  url::Component query(str);
   url::Component key;
   url::Component value;
 
@@ -37,14 +36,13 @@ bool GetQueryValue(const GURL& url,
     if (value.is_empty()) {
       continue;
     }
-    if (str.substr(key.begin, key.len) == key_to_find) {
+    if (key.AsViewOn(str) == key_to_find) {
       if (value.len >= kMaxValueLen) {
         return false;
       }
       url::RawCanonOutputW<kMaxValueLen> output;
-      url::DecodeURLEscapeSequences(str.substr(value.begin, value.len),
-                                    url::DecodeURLMode::kUTF8OrIsomorphic,
-                                    &output);
+      url::DecodeUrlEscapeSequences(
+          value.AsViewOn(str), url::DecodeUrlMode::kUtf8OrIsomorphic, &output);
       *out = std::u16string(output.view());
       return true;
     }

@@ -16,12 +16,14 @@ source_set("ios") {
     "//base",
     "//components/user_data_importer/utility:bookmarks",
     "//ios/web/public/js_messaging:web_view_js_utils",
+    "//ios/web/public/thread",
     "//url",
   ]
 }
 
 compile_ts("compile_bookmark_parser") {
   sources = [ "resources/bookmark_parser.ts" ]
+  tsconfig_base = "tsconfig_base.json"
 }
 
 action("strip_comments") {

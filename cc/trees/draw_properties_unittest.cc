@@ -10,13 +10,13 @@
 #include <tuple>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/scoped_feature_list.h"
 #include "cc/animation/animation.h"
 #include "cc/animation/animation_host.h"
 #include "cc/animation/animation_id_provider.h"
+#include "cc/base/features.h"
 #include "cc/layers/content_layer_client.h"
 #include "cc/layers/effect_tree_layer_list_iterator.h"
 #include "cc/layers/layer.h"
@@ -66,9 +66,10 @@ class DrawPropertiesTestBase : public LayerTreeImplTestBase {
     if (layer_impl->layer_tree_impl()
             ->property_trees()
             ->scroll_tree_mutable()
-            .SetScrollOffsetDeltaForTesting(layer_impl->element_id(), delta))
+            .SetScrollOffsetDeltaForTesting(layer_impl->element_id(), delta)) {
       layer_impl->layer_tree_impl()->DidUpdateScrollOffset(
           layer_impl->element_id(), /*pushed_from_main_or_pending_tree=*/false);
+    }
   }
 
   static float MaximumAnimationToScreenScale(LayerImpl* layer_impl) {
@@ -102,8 +103,9 @@ class DrawPropertiesTestBase : public LayerTreeImplTestBase {
   // impl-side pending tree, and updates pending tree draw properties.
   void Commit(float device_scale_factor = 1.0f) {
     UpdateMainDrawProperties(device_scale_factor);
-    if (!host_impl()->pending_tree())
+    if (!host_impl()->pending_tree()) {
       host_impl()->CreatePendingTree();
+    }
     host()->CommitToPendingTree();
     // TODO(crbug.com/40617417) This call should be handled by
     // FakeLayerTreeHost instead of manually pushing the properties from the
@@ -126,8 +128,9 @@ class DrawPropertiesTestBase : public LayerTreeImplTestBase {
 
   bool UpdateLayerListContains(int id) const {
     for (const auto& layer : update_layer_list_) {
-      if (layer->id() == id)
+      if (layer->id() == id) {
         return true;
+      }
     }
     return false;
   }
@@ -1757,7 +1760,7 @@ TEST_F(DrawPropertiesTest,
       std::unique_ptr<gfx::AnimationCurve>(new FakeTransformTransition(1.0)), 0,
       1, KeyframeModel::TargetPropertyId(TargetProperty::TRANSFORM));
   keyframe_model->set_fill_mode(KeyframeModel::FillMode::NONE);
-  keyframe_model->set_time_offset(base::Milliseconds(-1000));
+  keyframe_model->set_start_delay(base::Milliseconds(1000));
   AddKeyframeModelToElementWithAnimation(
       grand_child->element_id(), timeline_impl(), std::move(keyframe_model));
 
@@ -2036,14 +2039,18 @@ static bool ProjectionClips(const gfx::Transform& map_transform,
                             const gfx::RectF& mapped_rect) {
   gfx::Transform inverse = map_transform.GetCheckedInverse();
   bool clipped = false;
-  if (!clipped)
+  if (!clipped) {
     MathUtil::ProjectPoint(inverse, mapped_rect.top_right(), &clipped);
-  if (!clipped)
+  }
+  if (!clipped) {
     MathUtil::ProjectPoint(inverse, mapped_rect.origin(), &clipped);
-  if (!clipped)
+  }
+  if (!clipped) {
     MathUtil::ProjectPoint(inverse, mapped_rect.bottom_right(), &clipped);
-  if (!clipped)
+  }
+  if (!clipped) {
     MathUtil::ProjectPoint(inverse, mapped_rect.bottom_left(), &clipped);
+  }
   return clipped;
 }
 
@@ -3154,8 +3161,8 @@ TEST_F(DrawPropertiesTest,
   root->layer_tree_impl()
       ->property_trees()
       ->effect_tree_mutable()
-      .Node(child1->effect_tree_index())
-      ->backdrop_filters.Append(
+      .MutableNode(child1->effect_tree_index())
+      .backdrop_filters.Append(
           FilterOperation::CreateZoomFilter(1.f /* zoom */, 0 /* inset */));
 
   auto& child1_transform_node = CreateTransformNode(child1);
@@ -4917,7 +4924,9 @@ class DrawPropertiesStickyPositionTest : public DrawPropertiesTest {
     sticky->SetBounds(gfx::Size(10, 10));
     CopyProperties(parent, sticky.get());
     CreateTransformNode(sticky.get());
-    EnsureStickyData(sticky.get()).scroll_ancestor =
+    EnsureStickyData(sticky.get()).x_scroll_ancestor =
+        parent->scroll_tree_index();
+    EnsureStickyData(sticky.get()).y_scroll_ancestor =
         parent->scroll_tree_index();
     root_->AddChild(sticky);
     return sticky;
@@ -5143,15 +5152,17 @@ TEST_F(DrawPropertiesStickyPositionTest, StickyPositionBottomRounded) {
 
   // Once we get past the top of the container it moves to be aligned 10px
   // up from the the bottom of the scroller.
+  // bottom_offset = 10.5 causes bottom_delta = -45.5 at this scroll position.
+  // floor(-45.5 + 0.5) = floor(-45.0) = -45. Screen y = 150 + (-45) - 25 = 80.
   SetScrollOffsetDelta(scroller_impl_, gfx::Vector2dF(0.f, 25.f));
   UpdateActiveTreeDrawProperties();
   EXPECT_VECTOR2DF_EQ(
-      gfx::Vector2dF(0.f, 79.f),
+      gfx::Vector2dF(0.f, 80.f),
       sticky_pos_impl_->ScreenSpaceTransform().To2dTranslation());
   SetScrollOffsetDelta(scroller_impl_, gfx::Vector2dF(0.f, 30.f));
   UpdateActiveTreeDrawProperties();
   EXPECT_VECTOR2DF_EQ(
-      gfx::Vector2dF(0.f, 79.f),
+      gfx::Vector2dF(0.f, 80.f),
       sticky_pos_impl_->ScreenSpaceTransform().To2dTranslation());
 }
 
@@ -5613,6 +5624,38 @@ TEST_F(DrawPropertiesStickyPositionTest, StickyPositionNested) {
       inner_sticky_impl->ScreenSpaceTransform().To2dTranslation());
 }
 
+TEST_F(DrawPropertiesStickyPositionTest,
+       StickyPositionBottomPixelSnapRounding) {
+  CreateTree();
+
+  // Element at y=90, height=10, bottom at 100.
+  // constraint_box_rect bottom = 100 (integer, no clip mismatch).
+  SetPostTranslation(sticky_pos_.get(), gfx::Vector2dF(0, 90));
+  auto& sticky_position = EnsureStickyData(sticky_pos_.get()).constraints;
+  sticky_position.is_anchored_bottom = true;
+  sticky_position.bottom_offset = 0.0f;
+  sticky_position.constraint_box_rect = gfx::RectF(0, 0, 100, 100);
+  sticky_position.scroll_container_relative_sticky_box_rect =
+      gfx::RectF(0, 90, 10, 10);
+  sticky_position.scroll_container_relative_containing_block_rect =
+      gfx::RectF(0, 0, 50, 200);
+  // pixel_snap_offset of -0.5 is where LayoutUnit::Round and std::round
+  // disagree. LayoutUnit::Round(-0.5)=0, std::round(-0.5)=-1.
+  sticky_position.pixel_snap_offset = gfx::Vector2dF(0.0f, -0.5f);
+
+  CommitAndUpdateImplPointers();
+
+  // At scroll=0: clip bottom = 100, sticky_box bottom = 100.
+  // bottom_delta = min(0, 100 - 100) = 0. No sticking needed.
+  // sticky_offset = 0 + pixel_snap(-0.5) = -0.5.
+  //
+  // With std::round: round(-0.5) = -1. Element at 90 + (-1) = 89. Wrong!
+  // With floor(x+0.5): floor(0) = 0. Element at 90 + 0 = 90. Correct!
+  EXPECT_VECTOR2DF_EQ(
+      gfx::Vector2dF(0.f, 90.f),
+      sticky_pos_impl_->ScreenSpaceTransform().To2dTranslation());
+}
+
 class DrawPropertiesAnchorPositionScrollTest : public DrawPropertiesTest {
  protected:
   void CreateRoot() {
@@ -5772,6 +5815,24 @@ TEST_F(DrawPropertiesAnchorPositionScrollTest, NestedScrollers) {
       gfx::Vector2dF(-20, -20),
       GetImpl(anchored.get())->ScreenSpaceTransform().To2dTranslation());
 }
+
+TEST_F(DrawPropertiesAnchorPositionScrollTest, Cycle) {
+  CreateRoot();
+  scoped_refptr<Layer> anchored1 = CreateAnchored(root_.get(), {});
+  scoped_refptr<Layer> anchored2 =
+      CreateAnchored(root_.get(), {anchored1->element_id()});
+
+  // Create a cycle: anchored1 -> anchored2 -> anchored1
+  auto& data1 =
+      GetPropertyTrees(anchored1.get())
+          ->transform_tree_mutable()
+          .EnsureAnchorPositionScrollData(anchored1->transform_tree_index());
+  data1.adjustment_container_ids = {anchored2->element_id()};
+
+  // This should not crash (stack overflow).
+  UpdateMainDrawProperties();
+}
+
 class AnimationScaleFactorTrackingLayerImpl : public LayerImpl {
  public:
   static std::unique_ptr<AnimationScaleFactorTrackingLayerImpl> Create(
@@ -6835,7 +6896,7 @@ TEST_F(DrawPropertiesTestWithLayerTree, SkippingSubtreeMain) {
       keyframe_model_id, 1,
       KeyframeModel::TargetPropertyId(TargetProperty::TRANSFORM));
   keyframe_model->set_fill_mode(KeyframeModel::FillMode::NONE);
-  keyframe_model->set_time_offset(base::Milliseconds(-1000));
+  keyframe_model->set_start_delay(base::Milliseconds(1000));
   AddKeyframeModelToElementWithAnimation(child->element_id(), timeline(),
                                          std::move(keyframe_model));
   UpdateMainDrawProperties();
@@ -6864,7 +6925,7 @@ TEST_F(DrawPropertiesTestWithLayerTree, SkippingSubtreeMain) {
       keyframe_model_id, 1,
       KeyframeModel::TargetPropertyId(TargetProperty::OPACITY));
   keyframe_model->set_fill_mode(KeyframeModel::FillMode::NONE);
-  keyframe_model->set_time_offset(base::Milliseconds(-1000));
+  keyframe_model->set_start_delay(base::Milliseconds(1000));
   AddKeyframeModelToElementWithExistingKeyframeEffect(
       child->element_id(), timeline(), std::move(keyframe_model));
   UpdateMainDrawProperties();
@@ -7893,6 +7954,112 @@ TEST_F(DrawPropertiesTest, SublayerScaleWithTransformNodeBetweenTwoTargets) {
   EXPECT_EQ(gfx::Rect(15, 15), test_layer->visible_layer_rect());
 }
 
+// Like page_scale_factor for the main frame, external_page_scale_factor
+// magnifies an OOPIF's raster resolution but not its geometry, so a non-root
+// effect surface (opacity/filter/mask) must be sized at that scale to keep text
+// crisp. The root surface is left unmagnified.
+TEST_F(DrawPropertiesTest, OopifNonRootEffectSurfaceSizedAtExternalPageScale) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      features::kSizeOopifEffectSurfacesAtExternalScale);
+
+  LayerImpl* root = root_layer();
+  LayerImpl* render_surface = AddLayerInActiveTree<LayerImpl>();
+  LayerImpl* test_layer = AddLayerInActiveTree<LayerImpl>();
+
+  root->SetBounds(gfx::Size(30, 30));
+  render_surface->SetBounds(gfx::Size(30, 30));
+  test_layer->SetBounds(gfx::Size(30, 30));
+  test_layer->SetDrawsContent(true);
+
+  CopyProperties(root, render_surface);
+  CreateEffectNode(render_surface).render_surface_reason =
+      RenderSurfaceReason::kTest;
+  CopyProperties(render_surface, test_layer);
+
+  host_impl()->active_tree()->SetExternalPageScaleFactor(2.f);
+  UpdateActiveTreeDrawProperties();
+
+  // The non-root effect surface is enlarged by the external page scale factor.
+  EXPECT_EQ(gfx::Vector2dF(2.f, 2.f),
+            GetEffectNode(render_surface)->surface_contents_scale);
+  // The root surface is left unmagnified.
+  EXPECT_EQ(gfx::Vector2dF(1.f, 1.f),
+            GetEffectNode(root)->surface_contents_scale);
+}
+
+// The external page scale factor multiplies a non-root effect surface's own
+// scale rather than replacing it.
+TEST_F(DrawPropertiesTest, OopifEffectSurfaceScaleCombinesWithLocalScale) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      features::kSizeOopifEffectSurfacesAtExternalScale);
+  LayerImpl* root = root_layer();
+  LayerImpl* render_surface = AddLayerInActiveTree<LayerImpl>();
+  LayerImpl* test_layer = AddLayerInActiveTree<LayerImpl>();
+
+  gfx::Transform scale;
+  scale.Scale(2.f, 2.f);
+
+  root->SetBounds(gfx::Size(30, 30));
+  render_surface->SetBounds(gfx::Size(30, 30));
+  test_layer->SetBounds(gfx::Size(30, 30));
+  test_layer->SetDrawsContent(true);
+
+  CopyProperties(root, render_surface);
+  CreateTransformNode(render_surface).local = scale;
+  CreateEffectNode(render_surface).render_surface_reason =
+      RenderSurfaceReason::kTest;
+  CopyProperties(render_surface, test_layer);
+
+  host_impl()->active_tree()->SetExternalPageScaleFactor(2.f);
+  UpdateActiveTreeDrawProperties();
+
+  // Local 2x transform scale multiplied by the 2x external page scale factor.
+  EXPECT_EQ(gfx::Vector2dF(4.f, 4.f),
+            GetEffectNode(render_surface)->surface_contents_scale);
+}
+
+// A non-root k2DScaleTransformWithCompositedDescendants surface rasters at an
+// integer scale (fractional remainder becomes the draw transform). The external
+// page scale factor is applied *before* that ceil so the magnified raster scale
+// is what gets rounded up. This keeps a magnified OOPIF's effect surface
+// seam-free even when the local scale times the external scale is fractional --
+// ceiling after the multiply guarantees an integer raster scale, whereas
+// ceiling first and then multiplying by a fractional external scale would not.
+TEST_F(DrawPropertiesTest,
+       OopifK2DScaleEffectSurfaceCeilsAfterExternalPageScale) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      features::kSizeOopifEffectSurfacesAtExternalScale);
+  LayerImpl* root = root_layer();
+  LayerImpl* render_surface = AddLayerInActiveTree<LayerImpl>();
+  LayerImpl* test_layer = AddLayerInActiveTree<LayerImpl>();
+
+  gfx::Transform scale;
+  scale.Scale(3.5f, 3.5f);
+
+  root->SetBounds(gfx::Size(30, 30));
+  render_surface->SetBounds(gfx::Size(30, 30));
+  test_layer->SetBounds(gfx::Size(30, 30));
+  test_layer->SetDrawsContent(true);
+
+  CopyProperties(root, render_surface);
+  CreateTransformNode(render_surface).local = scale;
+  CreateEffectNode(render_surface).render_surface_reason =
+      RenderSurfaceReason::k2DScaleTransformWithCompositedDescendants;
+  CopyProperties(render_surface, test_layer);
+
+  host_impl()->active_tree()->SetExternalPageScaleFactor(2.f);
+  UpdateActiveTreeDrawProperties();
+
+  // Local 3.5x scale is multiplied by the 2x external page scale (7.0) and only
+  // then ceiled, so the surface rasters at an integer 7x -- not ceil(3.5)=4
+  // then *2 = 8.
+  EXPECT_EQ(gfx::Vector2dF(7.f, 7.f),
+            GetEffectNode(render_surface)->surface_contents_scale);
+}
+
 TEST_F(DrawPropertiesTest, NoisyTransform) {
   LayerImpl* root = root_layer();
   LayerImpl* render_surface = AddLayerInActiveTree<LayerImpl>();
@@ -7974,7 +8141,8 @@ TEST_F(DrawPropertiesTest, LargeTransformTest) {
   EXPECT_TRUE(is_inf_or_nan);
 
   // The root layer should be in the RenderSurfaceList.
-  EXPECT_TRUE(base::Contains(GetRenderSurfaceList(), GetRenderSurface(root)));
+  EXPECT_TRUE(
+      std::ranges::contains(GetRenderSurfaceList(), GetRenderSurface(root)));
 }
 
 #if DCHECK_IS_ON()
@@ -8058,7 +8226,7 @@ TEST_F(DrawPropertiesTestWithLayerTree, OpacityAnimationsTrackingTest) {
       keyframe_model_id, 1,
       KeyframeModel::TargetPropertyId(TargetProperty::OPACITY));
   keyframe_model->set_fill_mode(KeyframeModel::FillMode::NONE);
-  keyframe_model->set_time_offset(base::Milliseconds(-1000));
+  keyframe_model->set_start_delay(base::Milliseconds(1000));
   KeyframeModel* keyframe_model_ptr = keyframe_model.get();
   AddKeyframeModelToElementWithExistingKeyframeEffect(
       animated->element_id(), timeline(), std::move(keyframe_model));
@@ -8068,7 +8236,7 @@ TEST_F(DrawPropertiesTestWithLayerTree, OpacityAnimationsTrackingTest) {
   EffectNode* node = GetEffectNode(animated.get());
   EXPECT_TRUE(node->has_potential_opacity_animation);
 
-  keyframe_model_ptr->set_time_offset(base::Milliseconds(0));
+  keyframe_model_ptr->set_start_delay(base::TimeDelta());
   host()->AnimateLayers(base::TimeTicks::Max());
   node = GetEffectNode(animated.get());
   EXPECT_TRUE(node->has_potential_opacity_animation);
@@ -8113,7 +8281,7 @@ TEST_F(DrawPropertiesTestWithLayerTree, TransformAnimationsTrackingTest) {
       std::move(curve), 3, 3,
       KeyframeModel::TargetPropertyId(TargetProperty::TRANSFORM)));
   keyframe_model->set_fill_mode(KeyframeModel::FillMode::NONE);
-  keyframe_model->set_time_offset(base::Milliseconds(-1000));
+  keyframe_model->set_start_delay(base::Milliseconds(1000));
   KeyframeModel* keyframe_model_ptr = keyframe_model.get();
   AddKeyframeModelToElementWithExistingKeyframeEffect(
       animated->element_id(), timeline(), std::move(keyframe_model));
@@ -8124,7 +8292,7 @@ TEST_F(DrawPropertiesTestWithLayerTree, TransformAnimationsTrackingTest) {
   EXPECT_FALSE(node->is_currently_animating);
   EXPECT_TRUE(node->has_potential_animation);
 
-  keyframe_model_ptr->set_time_offset(base::Milliseconds(0));
+  keyframe_model_ptr->set_start_delay(base::TimeDelta());
   host()->AnimateLayers(base::TimeTicks::Max());
   node = GetTransformNode(animated.get());
   EXPECT_TRUE(node->is_currently_animating);
@@ -8615,10 +8783,9 @@ struct MaskFilterTestCase {
   gfx::LinearGradient gradient_mask;
 };
 
-class DrawPropertiesWithLayerTreeTest :
-    public DrawPropertiesTestWithLayerTree,
-    public testing::WithParamInterface<MaskFilterTestCase> {
-};
+class DrawPropertiesWithLayerTreeTest
+    : public DrawPropertiesTestWithLayerTree,
+      public testing::WithParamInterface<MaskFilterTestCase> {};
 
 // In layer tree mode, not using impl-side PropertyTreeBuilder.
 TEST_P(DrawPropertiesWithLayerTreeTest, MaskFilterOnRenderSurface) {
@@ -8632,8 +8799,9 @@ TEST_P(DrawPropertiesWithLayerTreeTest, MaskFilterOnRenderSurface) {
 
   const MaskFilterTestCase test_case = GetParam();
   gfx::LinearGradient gradient_mask = test_case.gradient_mask;
-  if (!gradient_mask.IsEmpty())
+  if (!gradient_mask.IsEmpty()) {
     gradient_mask.AddStep(50, 0x50);
+  }
 
   scoped_refptr<Layer> root = Layer::Create();
   host()->SetRootLayer(root);
@@ -8689,21 +8857,26 @@ TEST_P(DrawPropertiesWithLayerTreeTest, MaskFilterOnRenderSurface) {
   UpdateMainDrawProperties();
   CommitAndActivate();
 
-  EXPECT_NE(test_case.rounded_corners.IsEmpty(),
+  EXPECT_NE(
+      test_case.rounded_corners.IsEmpty(),
       GetRenderSurfaceImpl(child_1)->mask_filter_info().HasRoundedCorners());
-  EXPECT_NE(test_case.rounded_corners.IsEmpty(),
+  EXPECT_NE(
+      test_case.rounded_corners.IsEmpty(),
       GetRenderSurfaceImpl(child_2)->mask_filter_info().HasRoundedCorners());
-  EXPECT_NE(test_case.rounded_corners.IsEmpty(),
+  EXPECT_NE(
+      test_case.rounded_corners.IsEmpty(),
       GetRenderSurfaceImpl(child_3)->mask_filter_info().HasRoundedCorners());
 
-  EXPECT_NE(test_case.gradient_mask.IsEmpty(),
+  EXPECT_NE(
+      test_case.gradient_mask.IsEmpty(),
       GetRenderSurfaceImpl(child_1)->mask_filter_info().HasGradientMask());
-  EXPECT_NE(test_case.gradient_mask.IsEmpty(),
+  EXPECT_NE(
+      test_case.gradient_mask.IsEmpty(),
       GetRenderSurfaceImpl(child_2)->mask_filter_info().HasGradientMask());
-  EXPECT_NE(test_case.gradient_mask.IsEmpty(),
+  EXPECT_NE(
+      test_case.gradient_mask.IsEmpty(),
       GetRenderSurfaceImpl(child_3)->mask_filter_info().HasGradientMask());
-  }
-
+}
 
 INSTANTIATE_TEST_SUITE_P(
     DrawPropertiesWithLayerTreeTests,
@@ -8711,7 +8884,8 @@ INSTANTIATE_TEST_SUITE_P(
     testing::ValuesIn<MaskFilterTestCase>({
         {"WithRoundedCorners", gfx::RoundedCornersF(10.f),
          gfx::LinearGradient::GetEmpty()},
-        {"WithGradientMask", gfx::RoundedCornersF(0.f), gfx::LinearGradient(45)},
+        {"WithGradientMask", gfx::RoundedCornersF(0.f),
+         gfx::LinearGradient(45)},
         {"WithRoundedCornersAndGradientMask", gfx::RoundedCornersF(10.f),
          gfx::LinearGradient(45)},
     }),

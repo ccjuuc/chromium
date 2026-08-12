@@ -84,7 +84,7 @@ void TriggerDownloadButton(content::RenderFrameHost* extension_host) {
 // cases that saving takes more than the 1s delay.
 void CompareFileContent(const base::FilePath& test_file_path,
                         const base::FilePath& save_path,
-                        base::OnceCallback<void(void)> callback,
+                        base::OnceClosure callback,
                         bool wait_before_compare) {
   if (!wait_before_compare && base::ContentsEqual(test_file_path, save_path)) {
     std::move(callback).Run();
@@ -138,14 +138,14 @@ class PDFExtensionDownloadTest : public base::test::WithFeatureOverride,
   void SetUpOnMainThread() override {
     PDFExtensionTestBase::SetUpOnMainThread();
 
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
-                                                 false);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
+                                                    false);
     DownloadPrefs::FromDownloadManager(GetDownloadManager())
         ->ResetAutoOpenByUser();
 
     file_activity_observer_ =
         std::make_unique<DownloadTestFileActivityObserver>(
-            browser()->profile());
+            browser()->GetProfile());
     file_activity_observer_->EnableFileChooser(true);
   }
 
@@ -184,7 +184,7 @@ class PDFExtensionDownloadTest : public base::test::WithFeatureOverride,
 
  private:
   content::DownloadManager* GetDownloadManager() {
-    return browser()->profile()->GetDownloadManager();
+    return browser()->GetProfile()->GetDownloadManager();
   }
 
   std::unique_ptr<content::DownloadTestObserver> CreateDownloadWaiter() {
@@ -286,7 +286,7 @@ class PDFExtensionSaveInBlocksTest
 
   void SetPolicy() {
     policy::PolicyMap policy_map;
-    base::Value::List allowed_origins;
+    base::ListValue allowed_origins;
     allowed_origins.Append(
         base::FilePath(ChromeContentClient::kPDFExtensionPluginPath)
             .MaybeAsASCII());

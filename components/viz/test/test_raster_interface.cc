@@ -76,9 +76,10 @@ void TestRasterInterface::GenSyncTokenCHROMIUM(GLbyte* sync_token) {
   if (context_lost_)
     return;
 
-  gpu::SyncToken sync_token_data(gpu::CommandBufferNamespace::GPU_IO,
-                                 gpu::CommandBufferId(),
-                                 next_insert_fence_sync_++);
+  gpu::SyncToken sync_token_data(
+      gpu::CommandBufferNamespace::GPU_IO,
+      gpu::CommandBufferId::FromUnsafeValue(test_command_buffer_id_),
+      next_insert_fence_sync_++);
   sync_token_data.SetVerifyFlush();
   UNSAFE_TODO(memcpy(sync_token, &sync_token_data, sizeof(sync_token_data)));
 }
@@ -89,9 +90,10 @@ void TestRasterInterface::GenUnverifiedSyncTokenCHROMIUM(GLbyte* sync_token) {
   if (context_lost_)
     return;
 
-  gpu::SyncToken sync_token_data(gpu::CommandBufferNamespace::GPU_IO,
-                                 gpu::CommandBufferId(),
-                                 next_insert_fence_sync_++);
+  gpu::SyncToken sync_token_data(
+      gpu::CommandBufferNamespace::GPU_IO,
+      gpu::CommandBufferId::FromUnsafeValue(test_command_buffer_id_),
+      next_insert_fence_sync_++);
   UNSAFE_TODO(memcpy(sync_token, &sync_token_data, sizeof(sync_token_data)));
 }
 
@@ -121,16 +123,6 @@ void TestRasterInterface::WaitSyncTokenCHROMIUM(const GLbyte* sync_token) {
 void TestRasterInterface::ShallowFlushCHROMIUM() {
   if (test_support_)
     test_support_->CallAllSyncPointCallbacks();
-}
-
-void TestRasterInterface::set_supports_gpu_memory_buffer_format(
-    gfx::BufferFormat format,
-    bool support) {
-  if (support) {
-    caps_.gpu_memory_buffer_formats.Put(format);
-  } else {
-    caps_.gpu_memory_buffer_formats.Remove(format);
-  }
 }
 
 bool TestRasterInterface::ReadbackImagePixels(

@@ -38,7 +38,7 @@ class CORE_EXPORT IdleSpellCheckController final
   IdleSpellCheckController& operator=(const IdleSpellCheckController&) = delete;
   ~IdleSpellCheckController() override;
 
-  enum class State {
+  enum class State : uint8_t {
 #define V(state) k##state,
     FOR_EACH_IDLE_SPELL_CHECK_CONTROLLER_STATE(V)
 #undef V
@@ -69,6 +69,9 @@ class CORE_EXPORT IdleSpellCheckController final
   void SetNeedsMoreColdModeInvocationForTesting();
   void SkipColdModeTimerForTesting();
   int IdleCallbackHandle() const { return idle_callback_handle_; }
+  uint64_t LastProcessedUndoStepSequenceForTesting() const {
+    return last_processed_undo_step_sequence_;
+  }
 
   void Trace(Visitor*) const override;
 
@@ -121,7 +124,7 @@ class CORE_EXPORT IdleSpellCheckController final
   int idle_callback_handle_;
   uint64_t last_processed_undo_step_sequence_ = 0;
   const Member<ColdModeSpellCheckRequester> cold_mode_requester_;
-  Member<SpellCheckRequester> spell_check_requeseter_;
+  Member<SpellCheckRequester> spell_check_requester_;
   TaskHandle cold_mode_timer_;
 
   bool needs_invocation_for_changed_selection_ = false;

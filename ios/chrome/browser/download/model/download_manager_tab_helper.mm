@@ -4,14 +4,19 @@
 
 #import "ios/chrome/browser/download/model/download_manager_tab_helper.h"
 
+#import <optional>
+
 #import "base/check_op.h"
 #import "base/feature_list.h"
 #import "base/files/file_path.h"
+#import "base/functional/bind.h"
 #import "base/functional/callback_helpers.h"
 #import "base/strings/sys_string_conversions.h"
+#import "components/enterprise/connectors/core/cloud_content_scanning/files_request_handler_base.h"
 #import "components/policy/core/common/policy_pref_names.h"
 #import "components/prefs/pref_service.h"
 #import "ios/chrome/browser/download/model/auto_deletion/auto_deletion_service.h"
+#import "ios/chrome/browser/download/model/browser_download_service.h"
 #import "ios/chrome/browser/download/model/download_directory_util.h"
 #import "ios/chrome/browser/download/model/download_file_service.h"
 #import "ios/chrome/browser/download/model/download_file_service_factory.h"
@@ -21,24 +26,25 @@
 #import "ios/chrome/browser/drive/model/drive_service_factory.h"
 #import "ios/chrome/browser/drive/model/drive_tab_helper.h"
 #import "ios/chrome/browser/drive/model/upload_task.h"
+#import "ios/chrome/browser/enterprise/cloud_content_scanning/model/cloud_content_scanning_helper.h"
+#import "ios/chrome/browser/enterprise/connectors/analysis/content_analysis_info.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_list.h"
 #import "ios/chrome/browser/shared/model/browser/browser_list_factory.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
+#import "ios/chrome/browser/shared/model/utils/mime_type_util.h"
 #import "ios/chrome/browser/shared/model/web_state_list/browser_util.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/signin/model/authentication_service.h"
+#import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/web/public/download/download_task.h"
 #import "ui/base/l10n/l10n_util_mac.h"
-
-namespace {
-
-}  // namespace
 
 DownloadManagerTabHelper::DownloadManagerTabHelper(web::WebState* web_state)
     : web_state_(web_state) {
@@ -52,48 +58,13 @@ DownloadManagerTabHelper::~DownloadManagerTabHelper() {
     web_state_ = nullptr;
   }
 
-  if (task_) {
-    task_->RemoveObserver(this);
-    task_ = nullptr;
-    task_final_file_path_.clear();
-  }
+  CleanupCurrentDownload();
 }
 
 #pragma mark - Public methods
 
-// static
-bool DownloadManagerTabHelper::ShouldRestrictDownloadToFile(
-    web::WebState* web_state) {
-  ProfileIOS* profile =
-      ProfileIOS::FromBrowserState(web_state->GetBrowserState());
-  PrefService* pref_service = profile->GetPrefs();
-  return static_cast<policy::DownloadRestriction>(pref_service->GetInteger(
-             policy::policy_prefs::kDownloadRestrictions)) ==
-         policy::DownloadRestriction::ALL_FILES;
-}
-
-// static
-bool DownloadManagerTabHelper::ShouldRestrictDownload(
-    web::WebState* web_state) {
-  ProfileIOS* profile =
-      ProfileIOS::FromBrowserState(web_state->GetBrowserState());
-  PrefService* pref_service = profile->GetPrefs();
-  bool is_save_to_drive_available = drive::IsSaveToDriveAvailable(
-      profile->IsOffTheRecord(), IdentityManagerFactory::GetForProfile(profile),
-      drive::DriveServiceFactory::GetForProfile(profile), pref_service);
-  return ShouldRestrictDownloadToFile(web_state) && !is_save_to_drive_available;
-}
-
 void DownloadManagerTabHelper::SetCurrentDownload(
     std::unique_ptr<web::DownloadTask> task) {
-  // Check if the download should be restricted.
-  if (task && ShouldRestrictDownload(web_state_)) {
-    if (web_state_->IsVisible()) {
-      ShowRestrictDownloadSnackbar();
-    }
-    return;
-  }
-
   // If downloads are persistent, they cannot be lost once completed.
   if (!task_ || (task_->GetState() == web::DownloadTask::State::kComplete &&
                  !WillDownloadTaskBeSavedToDrive())) {
@@ -105,9 +76,7 @@ void DownloadManagerTabHelper::SetCurrentDownload(
   // If there is no new task and an existing task is present, remove the
   // observer and reset the task.
   if (!task) {
-    task_->RemoveObserver(this);
-    task_ = nullptr;
-    task_final_file_path_.clear();
+    CleanupCurrentDownload();
     return;
   }
 
@@ -159,17 +128,17 @@ web::DownloadTask* DownloadManagerTabHelper::GetActiveDownloadTask() {
 }
 
 void DownloadManagerTabHelper::CleanupCurrentDownload() {
-  if (delegate_ && delegate_started_) {
-    delegate_started_ = false;
-    [delegate_ downloadManagerTabHelper:this didCleanupDownload:task_.get()];
-  }
-
   if (task_) {
+    if (delegate_ && delegate_started_) {
+      delegate_started_ = false;
+      [delegate_ downloadManagerTabHelper:this didCleanupDownload:task_.get()];
+    }
     task_->RemoveObserver(this);
-    // Defer task destruction to avoid clearing ObserverList during iteration.
-    ScheduleTaskDestruction();
+    task_.reset();
     task_final_file_path_.clear();
   }
+  files_request_handler_.reset();
+  content_analysis_info_.reset();
 }
 
 void DownloadManagerTabHelper::AdaptToFullscreen(bool adapt_to_fullscreen) {
@@ -179,9 +148,21 @@ void DownloadManagerTabHelper::AdaptToFullscreen(bool adapt_to_fullscreen) {
   }
 }
 
+bool DownloadManagerTabHelper::IsScannerProcessing() const {
+  if (is_processing_for_testing_) {
+    return true;
+  }
+  return files_request_handler_ != nullptr;
+}
+
+void DownloadManagerTabHelper::SetIsScannerProcessingForTesting(  // IN-TEST
+    bool processing) {
+  is_processing_for_testing_ = processing;
+}
+
 bool DownloadManagerTabHelper::WillDownloadTaskBeSavedToDrive() const {
   DriveTabHelper* drive_tab_helper =
-      DriveTabHelper::GetOrCreateForWebState(task_->GetWebState());
+      DriveTabHelper::FromWebState(task_->GetWebState());
   UploadTask* upload_task =
       drive_tab_helper->GetUploadTaskForDownload(task_.get());
   return upload_task && !upload_task->IsDone();
@@ -191,7 +172,7 @@ bool DownloadManagerTabHelper::WillDownloadTaskBeSavedToDrive() const {
 
 void DownloadManagerTabHelper::WasShown(web::WebState* web_state) {
   if (task_ && delegate_ && !delegate_started_) {
-    if (ShouldRestrictDownload(web_state_)) {
+    if (BrowserDownloadService::ShouldRestrictAllDownloads(web_state_)) {
       SetCurrentDownload(nullptr);
       return;
     }
@@ -216,11 +197,7 @@ void DownloadManagerTabHelper::WebStateDestroyed(web::WebState* web_state) {
   DCHECK_EQ(web_state_, web_state);
   web_state_->RemoveObserver(this);
   web_state_ = nullptr;
-  if (task_) {
-    task_->RemoveObserver(this);
-    task_ = nullptr;
-    task_final_file_path_.clear();
-  }
+  CleanupCurrentDownload();
 }
 
 #pragma mark - web::DownloadTaskObserver
@@ -229,24 +206,15 @@ void DownloadManagerTabHelper::OnDownloadUpdated(web::DownloadTask* task) {
   DCHECK_EQ(task, task_.get());
   switch (task->GetState()) {
     case web::DownloadTask::State::kCancelled:
-      CleanupCurrentDownload();
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(&DownloadManagerTabHelper::CleanupCurrentDownload,
+                         weak_ptr_factory_.GetWeakPtr()));
       break;
     case web::DownloadTask::State::kInProgress:
       break;
     case web::DownloadTask::State::kComplete:
-      // If the download succeeded and the file will not be uploaded, move it to
-      // the appropriate folder.
-      if (!WillDownloadTaskBeSavedToDrive()) {
-        base::FilePath user_download_path;
-        GetDownloadsDirectory(&user_download_path);
-        base::FilePath base_file_name = task_->GenerateFileName();
-
-        GetDownloadFileService()->ResolveAvailableFilePath(
-            user_download_path, base_file_name,
-            base::BindOnce(
-                &DownloadManagerTabHelper::UseAvailableUserDocumentsPath,
-                weak_ptr_factory_.GetWeakPtr()));
-      }
+      DownloadManagerTabHelper::ProcessCompleteDownloadTask();
       break;
     case web::DownloadTask::State::kFailed:
     case web::DownloadTask::State::kFailedNotResumable:
@@ -261,11 +229,7 @@ void DownloadManagerTabHelper::OnDownloadUpdated(web::DownloadTask* task) {
 
 void DownloadManagerTabHelper::DidCreateDownload(
     std::unique_ptr<web::DownloadTask> task) {
-  if (task_) {
-    task_->RemoveObserver(this);
-    task_ = nullptr;
-    task_final_file_path_.clear();
-  }
+  CleanupCurrentDownload();
   task_ = std::move(task);
   task_->AddObserver(this);
   if (web_state_->IsVisible() && delegate_) {
@@ -274,6 +238,8 @@ void DownloadManagerTabHelper::DidCreateDownload(
                       didCreateDownload:task_.get()
                       webStateIsVisible:true];
   }
+
+  MaybeEnrollFileForAutoDeletion(task_.get());
 }
 
 void DownloadManagerTabHelper::OnDownloadPolicyDecision(
@@ -334,10 +300,15 @@ void DownloadManagerTabHelper::MoveComplete(bool move_completed,
                                             const base::FilePath& source_path,
                                             const base::FilePath& final_path) {
   DCHECK(move_completed);
-  MaybeScheduleFileForAutoDeletion();
+  if (move_completed) {
+    task_final_file_path_ = final_path;
+  }
+  MaybeSetDownloadPathForAutoDeletion();
+  [delegate_ downloadManagerTabHelperDidChangeState:this];
 }
 
-void DownloadManagerTabHelper::MaybeScheduleFileForAutoDeletion() {
+void DownloadManagerTabHelper::MaybeEnrollFileForAutoDeletion(
+    web::DownloadTask* task) {
   PrefService* localState = GetApplicationContext()->GetLocalState();
   BOOL isAutoDeletionEnabled =
       localState->GetBoolean(prefs::kDownloadAutoDeletionEnabled);
@@ -347,17 +318,20 @@ void DownloadManagerTabHelper::MaybeScheduleFileForAutoDeletion() {
 
   auto_deletion::AutoDeletionService* service =
       GetApplicationContext()->GetAutoDeletionService();
-  service->MarkTaskForDeletion(task_.get(), GetDownloadTaskFinalFilePath());
+  service->SetDownloadTask(task);
 }
 
-void DownloadManagerTabHelper::ScheduleTaskDestruction() {
-  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(&DownloadManagerTabHelper::DestroyTask,
-                                weak_ptr_factory_.GetWeakPtr()));
-}
+void DownloadManagerTabHelper::MaybeSetDownloadPathForAutoDeletion() {
+  PrefService* localState = GetApplicationContext()->GetLocalState();
+  BOOL isAutoDeletionEnabled =
+      localState->GetBoolean(prefs::kDownloadAutoDeletionEnabled);
+  if (!IsDownloadAutoDeletionFeatureEnabled() || !isAutoDeletionEnabled) {
+    return;
+  }
 
-void DownloadManagerTabHelper::DestroyTask() {
-  task_.reset();
+  auto_deletion::AutoDeletionService* service =
+      GetApplicationContext()->GetAutoDeletionService();
+  service->SetDownloadPath(GetDownloadTaskFinalFilePath());
 }
 
 DownloadFileService* DownloadManagerTabHelper::GetDownloadFileService() {
@@ -370,4 +344,56 @@ DownloadFileService* DownloadManagerTabHelper::GetDownloadFileService() {
 
   CHECK(download_file_service);
   return download_file_service;
+}
+
+void DownloadManagerTabHelper::MaybeMoveDownloadToDownloadsDirectory(
+    base::WeakPtr<web::DownloadTask> task,
+    bool shouldProceed) {
+  // Ignore the result if it does not correspond to the current download.
+  if (!task || task.get() != task_.get()) {
+    return;
+  }
+
+  if (!shouldProceed) {
+    CleanupCurrentDownload();
+    return;
+  }
+
+  // This will only report when scan result is WARNING and bypassed.
+  files_request_handler_->ReportWarningBypass(
+      /* user_justification */ std::nullopt);
+
+  [delegate_ downloadManagerTabHelperDidChangeState:this];
+  base::FilePath user_download_path;
+  GetDownloadsDirectory(&user_download_path);
+  base::FilePath base_file_name = task_->GenerateFileName();
+
+  GetDownloadFileService()->ResolveAvailableFilePath(
+      user_download_path, base_file_name,
+      base::BindOnce(&DownloadManagerTabHelper::UseAvailableUserDocumentsPath,
+                     weak_ptr_factory_.GetWeakPtr()));
+
+  // Ensure the handler and content_analysis_info_ are destroyed as soon as they
+  // are no longer necessary.
+  files_request_handler_.reset();
+  content_analysis_info_.reset();
+}
+
+void DownloadManagerTabHelper::ProcessCompleteDownloadTask() {
+  if (WillDownloadTaskBeSavedToDrive()) {
+    return;
+  }
+
+  enterprise_connectors::FileDownloadScanningResources resources =
+      enterprise_connectors::PrepareCloudContentScanning(
+          web_state_, task_->GetRedirectedUrl(), task_->GetResponsePath(),
+          enterprise_connectors::TriggerType::kSavePrompt,
+          base::BindOnce(
+              &DownloadManagerTabHelper::MaybeMoveDownloadToDownloadsDirectory,
+              weak_ptr_factory_.GetWeakPtr(), task_->GetWeakPtr()));
+  files_request_handler_ = std::move(resources.files_request_handler);
+  content_analysis_info_ = std::move(resources.content_analysis_info);
+
+  // Upload the file for content scanning.
+  files_request_handler_->UploadData();
 }

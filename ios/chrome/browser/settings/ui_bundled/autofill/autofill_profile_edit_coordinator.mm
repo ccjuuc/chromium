@@ -102,8 +102,8 @@
   _viewController.handler = _sharedViewController;
   _viewController.snackbarCommandsHandler = HandlerForProtocol(
       self.browser->GetCommandDispatcher(), SnackbarCommands);
-  _viewController.applicationHandler = HandlerForProtocol(
-      self.browser->GetCommandDispatcher(), ApplicationCommands);
+  _viewController.sceneHandler =
+      HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
 
   if (self.openInEditMode) {
     [_viewController editButtonPressed];
@@ -117,6 +117,7 @@
 - (void)stop {
   _sharedViewController = nil;
   _viewController = nil;
+  [_mediator disconnect];
   _mediator = nil;
 }
 
@@ -173,8 +174,7 @@
   AuthenticationService* authenticationService =
       AuthenticationServiceFactory::GetForProfile(self.profile);
   CHECK(authenticationService);
-  id<SystemIdentity> identity =
-      authenticationService->GetPrimaryIdentity(signin::ConsentLevel::kSignin);
+  id<SystemIdentity> identity = authenticationService->GetPrimaryIdentity();
   return identity ? identity.userEmail : nil;
 }
 

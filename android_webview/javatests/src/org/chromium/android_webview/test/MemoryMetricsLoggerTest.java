@@ -10,7 +10,6 @@ import static org.chromium.android_webview.test.OnlyRunIn.ProcessMode.SINGLE_PRO
 import androidx.test.filters.SmallTest;
 
 import org.jni_zero.JNINamespace;
-import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -35,6 +34,8 @@ public class MemoryMetricsLoggerTest extends AwParameterizedTest {
     private HistogramWatcher mHistogramExpectationRendererSingle;
     private HistogramWatcher mHistogramExpectationTotal;
 
+    private HistogramWatcher mHistogramExpectationBrowserPAAllocatedObjects;
+
     public MemoryMetricsLoggerTest(AwSettingsMutation param) {
         this.mActivityTestRule = new AwActivityTestRule(param.getMutation());
     }
@@ -44,20 +45,34 @@ public class MemoryMetricsLoggerTest extends AwParameterizedTest {
         mHistogramExpectationBrowser =
                 HistogramWatcher.newBuilder()
                         .expectAnyRecordTimes("Memory.Browser.PrivateMemoryFootprint", 1)
+                        .expectAnyRecordTimes("Memory.Browser.ResidentSet", 1)
+                        .expectAnyRecordTimes("Memory.Browser.ResidentSetPeak", 1)
                         .allowExtraRecordsForHistogramsAbove()
                         .build();
         mHistogramExpectationRendererMulti =
                 HistogramWatcher.newBuilder()
                         .expectAnyRecordTimes("Memory.Renderer.PrivateMemoryFootprint", 1)
+                        .expectAnyRecordTimes("Memory.Renderer.ResidentSet", 1)
+                        .expectAnyRecordTimes("Memory.Renderer.ResidentSetPeak", 1)
                         .allowExtraRecordsForHistogramsAbove()
                         .build();
         mHistogramExpectationRendererSingle =
                 HistogramWatcher.newBuilder()
                         .expectNoRecords("Memory.Renderer.PrivateMemoryFootprint")
+                        .expectNoRecords("Memory.Renderer.ResidentSet")
+                        .expectNoRecords("Memory.Renderer.ResidentSetPeak")
                         .build();
         mHistogramExpectationTotal =
                 HistogramWatcher.newBuilder()
                         .expectAnyRecordTimes("Memory.Total.PrivateMemoryFootprint", 1)
+                        .expectAnyRecordTimes("Memory.Total.ResidentSet", 1)
+                        .allowExtraRecordsForHistogramsAbove()
+                        .build();
+
+        mHistogramExpectationBrowserPAAllocatedObjects =
+                HistogramWatcher.newBuilder()
+                        .expectAnyRecordTimes(
+                                "Memory.Browser.PartitionAlloc.Malloc.AllocatedObjects", 1)
                         .allowExtraRecordsForHistogramsAbove()
                         .build();
         TestAwContentsClient contentsClient = new TestAwContentsClient();
@@ -71,9 +86,6 @@ public class MemoryMetricsLoggerTest extends AwParameterizedTest {
         Assert.assertTrue(MemoryMetricsLoggerUtilsJni.get().forceRecordHistograms());
     }
 
-    @After
-    public void tearDown() {}
-
     @Test
     @Feature({"AndroidWebView"})
     @OnlyRunIn(MULTI_PROCESS)
@@ -82,6 +94,8 @@ public class MemoryMetricsLoggerTest extends AwParameterizedTest {
         mHistogramExpectationBrowser.assertExpected();
         mHistogramExpectationRendererMulti.assertExpected();
         mHistogramExpectationTotal.assertExpected();
+
+        mHistogramExpectationBrowserPAAllocatedObjects.assertExpected();
     }
 
     @Test
@@ -93,5 +107,7 @@ public class MemoryMetricsLoggerTest extends AwParameterizedTest {
         // Verify no renderer record in single process mode.
         mHistogramExpectationRendererSingle.assertExpected();
         mHistogramExpectationTotal.assertExpected();
+
+        mHistogramExpectationBrowserPAAllocatedObjects.assertExpected();
     }
 }

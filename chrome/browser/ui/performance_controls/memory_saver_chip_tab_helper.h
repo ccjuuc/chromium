@@ -5,7 +5,7 @@
 #ifndef CHROME_BROWSER_UI_PERFORMANCE_CONTROLS_MEMORY_SAVER_CHIP_TAB_HELPER_H_
 #define CHROME_BROWSER_UI_PERFORMANCE_CONTROLS_MEMORY_SAVER_CHIP_TAB_HELPER_H_
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/performance_manager/public/user_tuning/user_performance_tuning_manager.h"
 #include "chrome/browser/ui/tabs/contents_observing_tab_feature.h"
@@ -41,7 +41,8 @@ class MemorySaverChipTabHelper : public tabs::ContentsObservingTabFeature,
   explicit MemorySaverChipTabHelper(tabs::TabInterface& tab);
   ~MemorySaverChipTabHelper() override;
 
-  static constexpr int kChipAnimationCount = 3;
+  // The number of times the expanded chip should contain educational content.
+  static constexpr int kEducationCount = 3;
 
   memory_saver::ChipState chip_state() const { return chip_state_; }
 
@@ -54,14 +55,10 @@ class MemorySaverChipTabHelper : public tabs::ContentsObservingTabFeature,
   // Checks whether memory saver mode is currently enabled.
   void OnMemorySaverModeChanged() override;
 
-  // Returns whether the tab associated with this helper has been navigated
-  // away from and to another tab.
-  bool ShouldChipAnimate();
-
  private:
   // Threshold was selected based on the 75th percentile of tab memory usage.
-  static constexpr base::ByteCount kExpandedMemorySaverChipThreshold =
-      base::MiB(197);
+  static constexpr base::ByteSize kExpandedMemorySaverChipThreshold =
+      base::MiBU(197);
 
   static constexpr base::TimeDelta kExpandedMemorySaverChipFrequency =
       base::Days(1);
@@ -85,9 +82,7 @@ class MemorySaverChipTabHelper : public tabs::ContentsObservingTabFeature,
   void UpdatePageActionState();
 
   memory_saver::ChipState chip_state_ = memory_saver::ChipState::HIDDEN;
-  // Represents whether the current chip state has been properly rendered. This
-  // gets reset when a tab gets hidden so the chip can be redrawn.
-  bool was_rendered_ = false;
+
   raw_ptr<PrefService> pref_service_;
 
   // Used to track whether MemorySaver mode is enabled, and hence whether

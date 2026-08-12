@@ -6,7 +6,6 @@
 
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
@@ -297,8 +296,7 @@ void NearbyConnectionsManagerImpl::StartDiscovery(
       ShouldEnableWebRtc(data_usage,
                          NearbyConnectionsManager::PowerLevel::kHighPower),
       /*wifi_lan=*/
-      ShouldEnableWifiLan(data_usage, PowerLevel::kHighPower) &&
-          ::features::IsNearbyMdnsEnabled(),
+      ShouldEnableWifiLan(data_usage, PowerLevel::kHighPower),
       /*wifi_direct=*/
       base::FeatureList::IsEnabled(features::kNearbySharingWifiDirect));
   CD_LOG(VERBOSE, Feature::NEARBY_INFRA)
@@ -400,7 +398,7 @@ void NearbyConnectionsManagerImpl::OnConnectionTimedOut(
 
 void NearbyConnectionsManagerImpl::OnConnectionTimedOutV3(
     const std::string& endpoint_id) {
-  if (base::Contains(endpoint_id_to_presence_device_map_, endpoint_id)) {
+  if (endpoint_id_to_presence_device_map_.contains(endpoint_id)) {
     CD_LOG(ERROR, Feature::NEARBY_INFRA)
         << __func__
         << "(V3) Failed to connect to the remote shareTarget: Timed out.";
@@ -904,10 +902,10 @@ void NearbyConnectionsManagerImpl::OnDisconnected(
       std::move(connections_[endpoint_id]);
   connections_.erase(endpoint_id);
 
-  if (base::Contains(requested_bwu_endpoint_ids_, endpoint_id)) {
+  if (requested_bwu_endpoint_ids_.contains(endpoint_id)) {
     base::UmaHistogramBoolean(
         "Nearby.Share.Medium.RequestedBandwidthUpgradeResult",
-        base::Contains(current_upgraded_mediums_, endpoint_id));
+        current_upgraded_mediums_.contains(endpoint_id));
   }
   requested_bwu_endpoint_ids_.erase(endpoint_id);
   on_bandwidth_changed_endpoint_ids_.erase(endpoint_id);
@@ -922,7 +920,7 @@ void NearbyConnectionsManagerImpl::OnBandwidthChanged(
   // This may or may not be preceded by a call to `UpgradeBandwidth`. It's not
   // useful to record this first Medium since no Bandwidth Upgrade occurred, so
   // we ignore it.
-  if (!base::Contains(on_bandwidth_changed_endpoint_ids_, endpoint_id)) {
+  if (!on_bandwidth_changed_endpoint_ids_.contains(endpoint_id)) {
     CD_LOG(VERBOSE, Feature::NEARBY_INFRA)
         << __func__ << ": Initial call with medium=" << medium
         << "; endpoint_id=" << endpoint_id;
@@ -1023,7 +1021,7 @@ void NearbyConnectionsManagerImpl::OnConnectionInitiatedV3(
     return;
   }
 
-  if (!base::Contains(endpoint_id_to_presence_device_map_, endpoint_id)) {
+  if (!endpoint_id_to_presence_device_map_.contains(endpoint_id)) {
     CD_LOG(WARNING, Feature::NEARBY_INFRA)
         << __func__ << "Received endpoint_id for device no longer in map.";
     return;
@@ -1068,7 +1066,7 @@ void NearbyConnectionsManagerImpl::OnConnectionResultV3(
 
   auto it = pending_outgoing_connections_.find(endpoint_id);
   if (it == pending_outgoing_connections_.end() ||
-      !base::Contains(endpoint_id_to_connect_v3_start_time_, endpoint_id)) {
+      !endpoint_id_to_connect_v3_start_time_.contains(endpoint_id)) {
     connection_listener_v3s_.ReportBadMessage(base::StringPrintf(
         "OnConnectionResultV3() received endpoint_id=%s which "
         "does not exist in connections V3",
@@ -1148,7 +1146,7 @@ void NearbyConnectionsManagerImpl::OnBandwidthChangedV3(
   // This may or may not be preceded by a call to `UpgradeBandwidth`. It's not
   // useful to record this first Medium since no Bandwidth Upgrade occurred, so
   // we ignore it.
-  if (!base::Contains(on_bandwidth_changed_endpoint_ids_v3_, endpoint_id)) {
+  if (!on_bandwidth_changed_endpoint_ids_v3_.contains(endpoint_id)) {
     CD_LOG(VERBOSE, Feature::NEARBY_INFRA)
         << __func__
         << ": (V3) Initial call with medium=" << bandwidth_info->medium
@@ -1165,7 +1163,7 @@ void NearbyConnectionsManagerImpl::OnBandwidthChangedV3(
     current_upgraded_mediums_v3_.insert_or_assign(endpoint_id,
                                                   bandwidth_info->medium);
 
-    if (base::Contains(endpoint_id_to_presence_device_map_, endpoint_id) &&
+    if (endpoint_id_to_presence_device_map_.contains(endpoint_id) &&
         bandwidth_upgrade_listener_) {
       // TODO(b/337049943): Determine whether to pass back the entire
       // `PresenceDevice` or just the `endpoint_id`.
@@ -1179,7 +1177,7 @@ void NearbyConnectionsManagerImpl::OnBandwidthChangedV3(
 void NearbyConnectionsManagerImpl::OnPayloadReceivedV3(
     const std::string& endpoint_id,
     PayloadPtr payload) {
-  if (!base::Contains(endpoint_id_to_presence_device_map_, endpoint_id)) {
+  if (!endpoint_id_to_presence_device_map_.contains(endpoint_id)) {
     CD_LOG(WARNING, Feature::NEARBY_INFRA)
         << __func__ << "Received endpoint_id for device not in map.";
     return;
@@ -1191,7 +1189,7 @@ void NearbyConnectionsManagerImpl::OnPayloadReceivedV3(
 void NearbyConnectionsManagerImpl::OnPayloadTransferUpdateV3(
     const std::string& endpoint_id,
     PayloadTransferUpdatePtr update) {
-  if (!base::Contains(endpoint_id_to_presence_device_map_, endpoint_id)) {
+  if (!endpoint_id_to_presence_device_map_.contains(endpoint_id)) {
     CD_LOG(WARNING, Feature::NEARBY_INFRA)
         << __func__ << "Received endpoint_id for device not in map.";
     return;

@@ -36,7 +36,7 @@ bool IOSCaptivePortalBlockingPage::ShouldCreateNewNavigation() const {
 }
 
 void IOSCaptivePortalBlockingPage::PopulateInterstitialStrings(
-    base::Value::Dict& load_time_data) const {
+    base::DictValue& load_time_data) const {
   load_time_data.Set("iconClass", "icon-offline");
   load_time_data.Set("type", "CAPTIVE_PORTAL");
   load_time_data.Set("overridable", false);
@@ -88,7 +88,7 @@ void IOSCaptivePortalBlockingPage::HandleCommand(
     captive_portal::CaptivePortalMetrics::LogCaptivePortalBlockingPageEvent(
         captive_portal::CaptivePortalMetrics::OPEN_LOGIN_PAGE);
 
-    CaptivePortalTabHelper::GetOrCreateForWebState(web_state())
+    CaptivePortalTabHelper::FromWebState(web_state())
         ->DisplayCaptivePortalLoginPage(landing_url_);
   }
 }

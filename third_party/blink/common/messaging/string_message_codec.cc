@@ -5,6 +5,7 @@
 #include "third_party/blink/public/common/messaging/string_message_codec.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -15,6 +16,7 @@
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "base/numerics/checked_math.h"
+#include "base/numerics/safe_conversions.h"
 #include "mojo/public/cpp/base/big_buffer.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
 #include "third_party/blink/public/mojom/array_buffer/array_buffer_contents.mojom.h"
@@ -194,17 +196,18 @@ TransferableMessage EncodeWebMessagePayload(const WebMessagePayload& payload) {
             if (ContainsOnlyLatin1(str)) {
               std::string data_latin1(str.cbegin(), str.cend());
               WriteUint8(kOneByteStringTag, &buffer);
-              WriteUint32(data_latin1.size(), &buffer);
+              WriteUint32(base::checked_cast<uint32_t>(data_latin1.size()),
+                          &buffer);
               WriteBytes(base::as_byte_span(data_latin1), &buffer);
             } else {
               auto str_as_bytes = base::as_byte_span(str);
-              if ((buffer.size() + 1 +
-                   BytesNeededForUint32(str_as_bytes.size())) &
-                  1) {
+              uint32_t str_size_32 =
+                  base::checked_cast<uint32_t>(str_as_bytes.size());
+              if ((buffer.size() + 1 + BytesNeededForUint32(str_size_32)) & 1) {
                 WriteUint8(kPaddingTag, &buffer);
               }
               WriteUint8(kTwoByteStringTag, &buffer);
-              WriteUint32(str_as_bytes.size(), &buffer);
+              WriteUint32(str_size_32, &buffer);
               WriteBytes(str_as_bytes, &buffer);
             }
           },
@@ -219,8 +222,9 @@ TransferableMessage EncodeWebMessagePayload(const WebMessagePayload& payload) {
             message.array_buffer_contents_array.push_back(
                 mojom::SerializedArrayBufferContents::New(
                     std::move(big_buffer),
-                    array_buffer->GetIsResizableByUserJavaScript(),
-                    array_buffer->GetMaxByteLength()));
+                    array_buffer->GetIsResizableByUserJavaScript()
+                        ? std::optional(array_buffer->GetMaxByteLength())
+                        : std::nullopt));
           }},
       payload);
 
@@ -301,18 +305,19 @@ std::optional<WebMessagePayload> DecodeToWebMessagePayload(
     }
     case kArrayBufferTransferTag: {
       uint32_t array_buffer_index;
-      if (!ReadUint32(iter, &array_buffer_index))
+      if (!ReadUint32(iter, &array_buffer_index)) {
         return std::nullopt;
-      // We only support transfer ArrayBuffer at the first index.
-      if (array_buffer_index != 0)
-        return std::nullopt;
-      if (message.array_buffer_contents_array.size() != 1)
-        return std::nullopt;
-      auto& array_buffer_contents = message.array_buffer_contents_array[0];
-      std::optional<size_t> max_byte_length;
-      if (array_buffer_contents->is_resizable_by_user_javascript) {
-        max_byte_length.emplace(array_buffer_contents->max_byte_length);
       }
+      // We only support transfer ArrayBuffer at the first index.
+      if (array_buffer_index != 0) {
+        return std::nullopt;
+      }
+      if (message.array_buffer_contents_array.size() != 1) {
+        return std::nullopt;
+      }
+      auto& array_buffer_contents = message.array_buffer_contents_array[0];
+      std::optional<size_t> max_byte_length =
+          array_buffer_contents->javascript_resize_limit;
       return std::make_optional(
           WebMessagePayload(std::make_unique<BigBufferArrayBuffer>(
               std::move(array_buffer_contents->contents), max_byte_length)));

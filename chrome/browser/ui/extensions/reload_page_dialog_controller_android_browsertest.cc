@@ -8,7 +8,6 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/threading/thread_restrictions.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
-#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/chrome_test_utils.h"
@@ -18,6 +17,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "extensions/browser/ui_util.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_features.h"
 #include "extensions/test/test_extension_dir.h"
@@ -74,7 +74,7 @@ MATCHER_P(IsExpectedMessage, extensions, "") {
   std::u16string expected_title;
   if (extensions.size() == 1) {
     std::u16string fixed_up_name =
-        extensions::util::GetFixupExtensionNameForUIDisplay(
+        extensions::ui_util::GetFixupExtensionNameForUIDisplay(
             base::UTF8ToUTF16(extensions[0]->name()));
     expected_title = l10n_util::GetStringFUTF16(
         IDS_EXTENSION_RELOAD_PAGE_BUBBLE_ALLOW_SINGLE_EXTENSION_TITLE,
@@ -161,4 +161,52 @@ IN_PROC_BROWSER_TEST_F(ReloadPageDialogControllerAndroidBrowserTest,
       std::make_unique<extensions::ReloadPageDialogController>(web_contents,
                                                                GetProfile());
   reload_page_dialog_->TriggerShow(extensions);
+}
+
+IN_PROC_BROWSER_TEST_F(ReloadPageDialogControllerAndroidBrowserTest,
+                       DismissMessageOnDestruction) {
+  content::WebContents* web_contents = GetActiveWebContents();
+  ASSERT_NE(nullptr, web_contents);
+  ASSERT_TRUE(NavigateToURL(web_contents, GURL("about:blank")));
+
+  const extensions::Extension* extension = InstallExtensionAndroid("Extension");
+  ASSERT_NE(nullptr, extension);
+  std::vector<const extensions::Extension*> extensions = {extension};
+
+  using testing::_;
+  messages::MessageDispatcherBridge::SetInstanceForTesting(
+      message_dispatcher_bridge());
+
+  messages::MessageWrapper* captured_message = nullptr;
+  EXPECT_CALL(*message_dispatcher_bridge(),
+              EnqueueMessage(_, _, messages::MessageScopeType::NAVIGATION,
+                             messages::MessagePriority::kNormal))
+      .WillOnce([&captured_message](messages::MessageWrapper* message,
+                                    content::WebContents* web_contents,
+                                    messages::MessageScopeType scope_type,
+                                    messages::MessagePriority priority) {
+        captured_message = message;
+        message->SetMessageEnqueued(
+            web_contents->GetTopLevelNativeWindow()->GetJavaObject());
+        return true;
+      });
+
+  reload_page_dialog_ =
+      std::make_unique<extensions::ReloadPageDialogController>(web_contents,
+                                                               GetProfile());
+  reload_page_dialog_->TriggerShow(extensions);
+
+  ASSERT_NE(nullptr, captured_message);
+  EXPECT_TRUE(captured_message->is_in_queue());
+
+  EXPECT_CALL(*message_dispatcher_bridge(),
+              DismissMessage(captured_message,
+                             messages::DismissReason::DISMISSED_BY_FEATURE))
+      .WillOnce([](messages::MessageWrapper* message,
+                   messages::DismissReason dismiss_reason) {
+        JNIEnv* env = base::android::AttachCurrentThread();
+        message->HandleDismissCallback(env, static_cast<int>(dismiss_reason));
+      });
+
+  reload_page_dialog_.reset();
 }

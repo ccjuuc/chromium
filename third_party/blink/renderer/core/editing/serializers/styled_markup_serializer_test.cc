@@ -130,6 +130,63 @@ TEST_F(StyledMarkupSerializerTest, InlineFormatting) {
   EXPECT_EQ(body_content, Serialize<EditingInFlatTreeStrategy>());
 }
 
+// Copying the whole "Hello World" keeps the space between the two spans
+// breaking: it is inside the selection, not at an edge, so it is not
+// converted to nbsp.
+TEST_F(StyledMarkupSerializerTest, SpaceInsideSelectionNotConvertedToNbsp) {
+  SetBodyContent("<span>Hello</span> <span>World</span>");
+  EXPECT_EQ(std::string::npos,
+            Serialize<EditingStrategy>(ShouldAnnotateOptions())
+                .find("<span>\u00A0</span>"));
+  EXPECT_EQ(std::string::npos,
+            Serialize<EditingInFlatTreeStrategy>(ShouldAnnotateOptions())
+                .find("<span>\u00A0</span>"));
+}
+
+// Copying only "Hello " ends the selection right after the space, so the
+// trailing space is at the fragment edge and is preserved as nbsp, so it
+// survives re-parsing.
+TEST_F(StyledMarkupSerializerTest, TrailingSpaceAtSelectionEndConvertedToNbsp) {
+  SetBodyContent("<div id='d'>Hello <b>World</b></div>");
+  Element* div = GetDocument().getElementById(AtomicString("d"));
+  auto* hello = To<Text>(div->firstChild());
+
+  Position start_dom(hello, 0);
+  Position end_dom(hello, 6);
+  EXPECT_NE(std::string::npos, SerializePart<EditingStrategy>(
+                                   start_dom, end_dom, ShouldAnnotateOptions())
+                                   .find("<span>\u00A0</span>"));
+
+  PositionInFlatTree start_ict(hello, 0);
+  PositionInFlatTree end_ict(hello, 6);
+  EXPECT_NE(std::string::npos, SerializePart<EditingInFlatTreeStrategy>(
+                                   start_ict, end_ict, ShouldAnnotateOptions())
+                                   .find("<span>\u00A0</span>"));
+}
+
+// A selection whose boundaries are anchored on an Element node (rather than on
+// a Text node) does not resolve to a text edge, so the selection-edge logic
+// leaves spaces untouched. The leading space of "<div> Hello</div>" is also
+// collapsed away by rendering, so the serialized markup is just "Hello" with no
+// non-breaking space either way. This guards against the patch unintentionally
+// changing behavior for element-anchored boundaries.
+TEST_F(StyledMarkupSerializerTest, ElementAnchoredBoundaryNotConvertedToNbsp) {
+  SetBodyContent("<div id='d'> Hello</div>");
+  Element* div = GetDocument().getElementById(AtomicString("d"));
+
+  Position start_dom(div, 0);
+  Position end_dom = Position::LastPositionInNode(*div);
+  EXPECT_EQ(std::string::npos, SerializePart<EditingStrategy>(
+                                   start_dom, end_dom, ShouldAnnotateOptions())
+                                   .find("<span>\u00A0</span>"));
+
+  PositionInFlatTree start_ict(div, 0);
+  PositionInFlatTree end_ict = PositionInFlatTree::LastPositionInNode(*div);
+  EXPECT_EQ(std::string::npos, SerializePart<EditingInFlatTreeStrategy>(
+                                   start_ict, end_ict, ShouldAnnotateOptions())
+                                   .find("<span>\u00A0</span>"));
+}
+
 TEST_F(StyledMarkupSerializerTest, Mixed) {
   const char* body_content = "<i>foo<b>bar</b>baz</i>";
   SetBodyContent(body_content);
@@ -189,7 +246,7 @@ TEST_F(StyledMarkupSerializerTest, ShadowTreeNested) {
   const char* shadow_content2 = "NESTED";
   SetBodyContent(body_content);
   ShadowRoot* shadow_root1 = SetShadowContent(shadow_content1, "host");
-  CreateShadowRootForElementWithIDAndSetInnerHTML(*shadow_root1, "host2",
+  CreateShadowRootForElementWithIdAndSetInnerHtml(*shadow_root1, "host2",
                                                   shadow_content2);
 
   EXPECT_EQ(
@@ -351,7 +408,7 @@ TEST_F(StyledMarkupSerializerTest, SkipUnselectableContent) {
                                  ShouldSkipUnselectableContentOptions()));
 }
 
-TEST_F(StyledMarkupSerializerTest, SkipUnselectableContentInShadowDOM) {
+TEST_F(StyledMarkupSerializerTest, SkipUnselectableContentInShadowDom) {
   const char* body_content =
       "<span style=\"user-select: all;\">SELECTABLE_1<span "
       "style=\"user-select: none;\">NON_SELECTABLE_1<span style=\"user-select: "
@@ -430,6 +487,74 @@ TEST_F(StyledMarkupSerializerTest, MathMLTableRowNotDuplicated) {
   // Verify no duplicate pattern exists
   EXPECT_EQ(std::string::npos, serialized.find("<mtr><mtr>"))
       << "Found duplicate <mtr><mtr> pattern. Full output: " << serialized;
+}
+
+TEST_F(StyledMarkupSerializerTest,
+       MathMLPartialSelectionShouldHaveBalancedTags) {
+  const char* body_content =
+      "<math><mrow>"
+      "  <mfrac>"
+      "    <mrow>"
+      "      <msqrt>"
+      "        <mrow>"
+      "          <mo id='start'>±</mo>"
+      "          <msqrt>"
+      "            <mrow>"
+      "              <msup><mi>b</mi><mn>2</mn></msup>"
+      "              <mo>-</mo>"
+      "              <mi id='after'>x</mi>"
+      "            </mrow>"
+      "          </msqrt>"
+      "        </mrow>"
+      "      </msqrt>"
+      "    </mrow>"
+      "  </mfrac>"
+      "</mrow></math>";
+
+  SetBodyContent(body_content);
+
+  Element* start_mo = GetDocument().getElementById(AtomicString("start"));
+  Element* after_mi = GetDocument().getElementById(AtomicString("after"));
+  ASSERT_TRUE(start_mo);
+  ASSERT_TRUE(after_mi);
+
+  Node* start_text = start_mo->firstChild();
+  ASSERT_TRUE(start_text);
+
+  // Select from the ± operator up to (but not into) the following <mi>.
+  Position start_pos(start_text, 0);
+  Position end_pos(after_mi, 0);
+
+  std::string serialized =
+      SerializePart<EditingStrategy>(start_pos, end_pos,
+                                     CreateMarkupOptions::Builder()
+                                         .SetShouldAnnotateForInterchange(true)
+                                         .Build());
+
+  auto count_occurrences = [](const std::string& str,
+                              const std::string& substr) -> int {
+    int count = 0;
+    size_t pos = 0;
+    while ((pos = str.find(substr, pos)) != std::string::npos) {
+      count++;
+      pos += substr.length();
+    }
+    return count;
+  };
+
+  int open_msqrt = count_occurrences(serialized, "<msqrt");
+  int close_msqrt = count_occurrences(serialized, "</msqrt>");
+  int open_mrow = count_occurrences(serialized, "<mrow");
+  int close_mrow = count_occurrences(serialized, "</mrow>");
+
+  // Expected to be balanced after the fix; currently fails (unbalanced).
+  EXPECT_EQ(open_msqrt, close_msqrt)
+      << "Unbalanced <msqrt> tags. Opens: " << open_msqrt
+      << ", Closes: " << close_msqrt << "\nFull output: " << serialized;
+
+  EXPECT_EQ(open_mrow, close_mrow)
+      << "Unbalanced <mrow> tags. Opens: " << open_mrow
+      << ", Closes: " << close_mrow << "\nFull output: " << serialized;
 }
 
 }  // namespace blink

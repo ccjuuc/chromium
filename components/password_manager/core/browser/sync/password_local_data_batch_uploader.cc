@@ -19,6 +19,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/password_store_consumer.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/sync/service/local_data_description.h"
@@ -76,22 +77,28 @@ class PasswordLocalDataBatchUploader::PasswordFetchRequest
   }
 
   // Must only be called after the passed `done_callback` was invoked.
-  std::vector<std::unique_ptr<PasswordForm>> TakeResults() {
+  std::vector<PasswordForm> TakeResults() {
     CHECK(results_.has_value());
     return std::move(results_.value());
   }
 
  private:
   // PasswordStoreConsumer implementation.
-  void OnGetPasswordStoreResults(
-      std::vector<std::unique_ptr<PasswordForm>> results) override {
-    results_ = std::move(results);
+  void OnGetPasswordStoreResultsOrErrorFrom(
+      PasswordStoreInterface* store,
+      LoginsResultOrError results_or_error) override {
+    if (std::holds_alternative<PasswordStoreBackendError>(results_or_error)) {
+      results_ = std::vector<PasswordForm>();
+    } else {
+      results_ =
+          ToPasswordForms(std::get<LoginsResult>(std::move(results_or_error)));
+    }
     std::move(done_callback_).Run();
     // `this` might be deleted now, do not do anything else.
   }
 
   base::OnceClosure done_callback_;
-  std::optional<std::vector<std::unique_ptr<PasswordForm>>> results_;
+  std::optional<std::vector<PasswordForm>> results_;
   base::WeakPtrFactory<PasswordFetchRequest> weak_ptr_factory_{this};
 };
 
@@ -112,12 +119,12 @@ void PasswordLocalDataBatchUploader::GetLocalDataDescription(
 
   auto request = std::make_unique<PasswordFetchRequest>();
   PasswordFetchRequest* request_ptr = request.get();
-  // Unretained() is safe, `this` outlives the `request`.
   request_ptr->Run(
       profile_store_.get(),
       base::BindOnce(
           &PasswordLocalDataBatchUploader::OnGotLocalPasswordsForDescription,
-          base::Unretained(this), std::move(callback), std::move(request)));
+          weak_ptr_factory_.GetWeakPtr(), std::move(callback),
+          std::move(request)));
 }
 
 void PasswordLocalDataBatchUploader::TriggerLocalDataMigrationInternal(
@@ -130,11 +137,11 @@ void PasswordLocalDataBatchUploader::TriggerLocalDataMigrationInternal(
   auto account_store_request = std::make_unique<PasswordFetchRequest>();
   PasswordFetchRequest* profile_store_request_ptr = profile_store_request.get();
   PasswordFetchRequest* account_store_request_ptr = account_store_request.get();
-  // Unretained() is safe, `this` outlives the requests.
+
   auto barrier_closure = base::BarrierClosure(
       2, base::BindOnce(
              &PasswordLocalDataBatchUploader::OnGotAllPasswordsForMigration,
-             base::Unretained(this), std::move(profile_store_request),
+             weak_ptr_factory_.GetWeakPtr(), std::move(profile_store_request),
              std::move(account_store_request), std::move(items)));
   trigger_local_data_migration_ongoing_ = true;
   profile_store_request_ptr->Run(profile_store_.get(), barrier_closure);
@@ -157,13 +164,13 @@ void PasswordLocalDataBatchUploader::OnGotLocalPasswordsForDescription(
   std::vector<syncer::LocalDataItemModel> local_data_models;
   for (auto& result : request->TakeResults()) {
     syncer::LocalDataItemModel item;
-    item.id = PasswordFormKey(PasswordFormUniqueKey(*result.get()));
-    item.title = result->url.GetHost();
-    item.subtitle = base::UTF16ToUTF8(result->username_value);
-    item.icon = syncer::LocalDataItemModel::PageUrlIcon(result->url);
+    item.id = PasswordFormKey(PasswordFormUniqueKey(result));
+    item.title = result.url.GetHost();
+    item.subtitle = base::UTF16ToUTF8(result.username_value);
+    item.icon = syncer::LocalDataItemModel::PageUrlIcon(result.url);
     local_data_models.push_back(std::move(item));
 
-    urls.push_back(result->url);
+    urls.push_back(result.url);
   }
 
   syncer::LocalDataDescription local_data(std::move(urls));
@@ -183,23 +190,22 @@ void PasswordLocalDataBatchUploader::OnGotAllPasswordsForMigration(
     items_to_upload = ToPasswordFormUniqueKeySet(*items);
   }
 
-  std::vector<std::unique_ptr<PasswordForm>> local_passwords =
+  std::vector<PasswordForm> local_passwords =
       profile_store_request->TakeResults();
-  std::vector<std::unique_ptr<PasswordForm>> account_passwords =
+  std::vector<PasswordForm> account_passwords =
       account_store_request->TakeResults();
 
-  auto comparator = [](const std::unique_ptr<PasswordForm>& lhs,
-                       const std::unique_ptr<PasswordForm>& rhs) {
-    return PasswordFormUniqueKey(*lhs) < PasswordFormUniqueKey(*rhs);
+  auto comparator = [](const PasswordForm& lhs, const PasswordForm& rhs) {
+    return PasswordFormUniqueKey(lhs) < PasswordFormUniqueKey(rhs);
   };
   std::ranges::sort(account_passwords, comparator);
 
   int moved_passwords_counter = 0;
-  for (const std::unique_ptr<PasswordForm>& local_password : local_passwords) {
+  for (const PasswordForm& local_password : local_passwords) {
     // Check if `local_password` should be filtered out or not.
     if (items_to_upload.has_value() &&
         !items_to_upload.value().contains(
-            PasswordFormUniqueKey(*local_password))) {
+            PasswordFormUniqueKey(local_password))) {
       // Filter out passwords not selected for upload by the user.
       continue;
     }
@@ -210,17 +216,19 @@ void PasswordLocalDataBatchUploader::OnGotAllPasswordsForMigration(
     auto it =
         std::ranges::lower_bound(account_passwords, local_password, comparator);
     if (it == account_passwords.end() ||
-        !ArePasswordFormUniqueKeysEqual(**it, *local_password)) {
-      account_store_->AddLogin(*local_password);
+        !ArePasswordFormUniqueKeysEqual(*it, local_password)) {
+      account_store_->AddLogin(
+          password_manager::FromPasswordForm(local_password));
       ++moved_passwords_counter;
-    } else if ((*it)->password_value != local_password->password_value &&
-               GetLatestOfTimeLastUsedOrModifiedOrCreated(**it) <
-                   GetLatestOfTimeLastUsedOrModifiedOrCreated(
-                       *local_password)) {
-      account_store_->UpdateLogin(*local_password);
+    } else if (it->password_value != local_password.password_value &&
+               GetLatestOfTimeLastUsedOrModifiedOrCreated(*it) <
+                   GetLatestOfTimeLastUsedOrModifiedOrCreated(local_password)) {
+      account_store_->UpdateLogin(
+          password_manager::FromPasswordForm(local_password));
       ++moved_passwords_counter;
     }
-    profile_store_->RemoveLogin(FROM_HERE, *local_password);
+    profile_store_->RemoveLogin(
+        FROM_HERE, password_manager::FromPasswordForm(local_password));
   }
 
   base::UmaHistogramCounts1M("Sync.PasswordsBatchUpload.Count",
@@ -236,7 +244,7 @@ bool PasswordLocalDataBatchUploader::CanUpload() const {
   // could incorrectly report that local data exists, simply because the
   // migration hasn't completed just yet.
   return profile_store_ && account_store_ &&
-         account_store_->IsAbleToSavePasswords() &&
+         account_store_->GetError() == ActionableError::kNoError &&
          !trigger_local_data_migration_ongoing_;
 }
 

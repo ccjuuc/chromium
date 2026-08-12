@@ -10,8 +10,6 @@ import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 
-import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeNtpUrl;
-
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -22,13 +20,14 @@ import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.omnibox.suggestions.OmniboxLoadUrlParams;
+import org.chromium.chrome.browser.url_constants.UrlConstantResolver;
 import org.chromium.components.embedder_support.util.UrlConstants;
 
 /** Unit tests for the URL bar UI component. */
 @RunWith(BaseRobolectricTestRunner.class)
 public class OverrideUrlLoadingDelegateImplUnitTest {
-    public @Rule MockitoRule mockitoRule = MockitoJUnit.rule();
-    private @Mock Runnable mOpenGridTabSwitcher;
+    @Rule public final MockitoRule mockitoRule = MockitoJUnit.rule();
+    @Mock private Runnable mOpenGridTabSwitcher;
     private OverrideUrlLoadingDelegateImpl mDelegate;
 
     @Before
@@ -43,8 +42,11 @@ public class OverrideUrlLoadingDelegateImplUnitTest {
 
     @Test
     public void handleLoadUrl_unsupportedUrl() {
-        assertFalse(willHandleLoadUrlWithPostData(getOriginalNativeNtpUrl(), false));
-        assertFalse(willHandleLoadUrlWithPostData(getOriginalNativeNtpUrl(), true));
+        assertFalse(
+                willHandleLoadUrlWithPostData(
+                        UrlConstantResolver.getOriginalNativeNtpUrl(), false));
+        assertFalse(
+                willHandleLoadUrlWithPostData(UrlConstantResolver.getOriginalNativeNtpUrl(), true));
     }
 
     @Test

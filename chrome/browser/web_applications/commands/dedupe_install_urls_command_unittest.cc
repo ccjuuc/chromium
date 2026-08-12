@@ -16,6 +16,7 @@
 #include "chrome/browser/web_applications/test/web_app_test.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
+#include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_management_type.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
@@ -76,7 +77,7 @@ class DedupeInstallUrlsCommandTest : public WebAppTest {
         .SetOnAppsSynchronizedCompletedCallbackForTesting(future.GetCallback());
     profile()->GetPrefs()->SetList(
         prefs::kWebAppInstallForceList,
-        base::Value::List().Append(base::Value::Dict().Set("url", url.spec())));
+        base::ListValue().Append(base::DictValue().Set("url", url.spec())));
     CHECK(future.Wait());
   }
 
@@ -145,8 +146,8 @@ class DedupeInstallUrlsCommandTest : public WebAppTest {
 
 TEST_F(DedupeInstallUrlsCommandTest,
        PolicyUpgradePlaceholderWithTwoInstallSources) {
-  // This tests for users affected by crbug.com/1427340, specifically those left
-  // with a placeholder web app installed with kPolicy and kDefault install
+  // This tests for users affected by crbug.com/40261748, specifically those
+  // left with a placeholder web app installed with kPolicy and kDefault install
   // sources.
   // They got into this state by the following steps:
   // - A web app policy installed install URL A, was unsuccessful and created
@@ -192,7 +193,10 @@ TEST_F(DedupeInstallUrlsCommandTest,
   }
 
   // Placeholder app should no longer be present.
-  EXPECT_FALSE(provider().registrar_unsafe().IsInRegistrar(placeholder_app_id));
+  EXPECT_FALSE(provider()
+                   .registrar_unsafe()
+                   .GetInstallState(placeholder_app_id)
+                   .has_value());
 
   // Real app should be installed
   const WebApp* real_app =
@@ -218,12 +222,18 @@ TEST_F(DedupeInstallUrlsCommandTest,
   EXPECT_THAT(
       histogram_tester.GetAllSamples("WebApp.DedupeInstallUrls.AppsDeduped"),
       base::BucketsAre(base::Bucket(/*apps=*/2, /*count=*/1)));
+
+  // There are 2 apps, and one of them gets uninstalled.
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("Webapp.Install.UninstallEvent"),
+      base::BucketsAre(base::Bucket(
+          webapps::WebappUninstallSource::kInstallUrlDeduping, /*count=*/1)));
 }
 
 TEST_F(DedupeInstallUrlsCommandTest,
        PreinstallUpgradePlaceholderWithTwoInstallSources) {
-  // This tests for users affected by crbug.com/1427340, specifically those left
-  // with a placeholder web app installed with kPolicy and kDefault install
+  // This tests for users affected by crbug.com/40261748, specifically those
+  // left with a placeholder web app installed with kPolicy and kDefault install
   // sources.
   // They got into this state by the following steps:
   // - A web app policy installed install URL A, was unsuccessful and created
@@ -264,7 +274,10 @@ TEST_F(DedupeInstallUrlsCommandTest,
   SynchronizePreinstalledWebAppManagerWithInstallUrl(install_url);
 
   // Placeholder app should no longer be present.
-  EXPECT_FALSE(provider().registrar_unsafe().IsInRegistrar(placeholder_app_id));
+  EXPECT_FALSE(provider()
+                   .registrar_unsafe()
+                   .GetInstallState(placeholder_app_id)
+                   .has_value());
 
   // Real app should be installed
   const WebApp* real_app =
@@ -293,10 +306,10 @@ TEST_F(DedupeInstallUrlsCommandTest,
 }
 
 TEST_F(DedupeInstallUrlsCommandTest, SameInstallUrlForRealAndPlaceholder) {
-  // This tests for users affected by crbug.com/1427340, specifically those left
-  // with a kDefault placeholder-like app (placeholder in appearance but not in
-  // configuration) and kPolicy real app.
-  // They got into this state by the following steps:
+  // This tests for users affected by crbug.com/40261748, specifically those
+  // left with a kDefault placeholder-like app (placeholder in appearance but
+  // not in configuration) and kPolicy real app. They got into this state by the
+  // following steps:
   // - A web app policy installed install URL A, was unsuccessful and created
   //   placeholder P for install URL A.
   // - A web app preinstall installed install URL A, saw the placeholder P and
@@ -365,7 +378,10 @@ TEST_F(DedupeInstallUrlsCommandTest, SameInstallUrlForRealAndPlaceholder) {
   SynchronizePolicyWebAppManager();
 
   // Placeholder app should no longer be present.
-  EXPECT_FALSE(provider().registrar_unsafe().IsInRegistrar(placeholder_app_id));
+  EXPECT_FALSE(provider()
+                   .registrar_unsafe()
+                   .GetInstallState(placeholder_app_id)
+                   .has_value());
 
   // Real app should be installed
   const WebApp* real_app =
@@ -395,9 +411,9 @@ TEST_F(DedupeInstallUrlsCommandTest, SameInstallUrlForRealAndPlaceholder) {
 }
 
 TEST_F(DedupeInstallUrlsCommandTest, DefaultPlaceholderForceReinstalled) {
-  // This tests for users affected by crbug.com/1427340, specifically those left
-  // with a kDefault placeholder-like app (placeholder in appearance but not in
-  // configuration) and kPolicy real app for a different install URL.
+  // This tests for users affected by crbug.com/40261748, specifically those
+  // left with a kDefault placeholder-like app (placeholder in appearance but
+  // not in configuration) and kPolicy real app for a different install URL.
   // They got into this state by the following steps:
   // - A web app policy installed install URL A, was unsuccessful and created
   //   placeholder P for install URL A.
@@ -471,7 +487,10 @@ TEST_F(DedupeInstallUrlsCommandTest, DefaultPlaceholderForceReinstalled) {
   SynchronizePreinstalledWebAppManagerWithInstallUrl(install_url);
 
   // Placeholder app should no longer be present.
-  EXPECT_FALSE(provider().registrar_unsafe().IsInRegistrar(placeholder_app_id));
+  EXPECT_FALSE(provider()
+                   .registrar_unsafe()
+                   .GetInstallState(placeholder_app_id)
+                   .has_value());
 
   // Real app should be installed
   const WebApp* real_app =
@@ -541,8 +560,8 @@ TEST_F(DedupeInstallUrlsCommandTest, MoreThanTwoDuplicates) {
 
   // The most recently installed web app is chosen as the dedupe into target.
   const WebAppRegistrar& registrar = provider().registrar_unsafe();
-  EXPECT_FALSE(registrar.IsInRegistrar(app_id_a1));
-  EXPECT_FALSE(registrar.IsInRegistrar(app_id_a2));
+  EXPECT_FALSE(registrar.GetInstallState(app_id_a1).has_value());
+  EXPECT_FALSE(registrar.GetInstallState(app_id_a2).has_value());
   const WebApp* app_a = registrar.GetAppById(app_id_a3);
   ASSERT_TRUE(app_a);
   EXPECT_EQ(app_a->GetSources(),
@@ -550,8 +569,8 @@ TEST_F(DedupeInstallUrlsCommandTest, MoreThanTwoDuplicates) {
                                    WebAppManagement::Type::kKiosk,
                                    WebAppManagement::Type::kPolicy}));
 
-  EXPECT_FALSE(registrar.IsInRegistrar(app_id_b1));
-  EXPECT_FALSE(registrar.IsInRegistrar(app_id_b2));
+  EXPECT_FALSE(registrar.GetInstallState(app_id_b1).has_value());
+  EXPECT_FALSE(registrar.GetInstallState(app_id_b2).has_value());
   const WebApp* app_b = registrar.GetAppById(app_id_b3);
   ASSERT_TRUE(app_b);
   EXPECT_EQ(
@@ -568,6 +587,13 @@ TEST_F(DedupeInstallUrlsCommandTest, MoreThanTwoDuplicates) {
   histogram_tester.ExpectUniqueSample("WebApp.DedupeInstallUrls.AppsDeduped",
                                       /*apps=*/3,
                                       /*count=*/2);
+
+  // There are 6 apps, and 4 of them gets uninstalled, while only 2 apps remain
+  // (`app_a` and `app_b`).
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("Webapp.Install.UninstallEvent"),
+      base::BucketsAre(base::Bucket(
+          webapps::WebappUninstallSource::kInstallUrlDeduping, /*count=*/4)));
 }
 
 }  // namespace web_app

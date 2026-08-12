@@ -11,13 +11,12 @@
 
 #include "base/check.h"
 #include "base/feature_list.h"
+#include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "components/viz/common/features.h"
 #include "components/viz/service/display_embedder/skia_output_surface_dependency.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
-#include "ui/display/types/display_snapshot.h"
-#include "ui/gfx/buffer_format_util.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rrect_f.h"
 #include "ui/gfx/overlay_plane_data.h"
@@ -199,8 +198,9 @@ void OutputPresenterGL::ScheduleOverlayPlane(
 #endif
 }
 
-void OutputPresenterGL::SetVSyncDisplayID(int64_t display_id) {
-  presenter_->SetVSyncDisplayID(display_id);
+void OutputPresenterGL::SetVSyncDisplayID(int64_t display_id,
+                                          bool force_update) {
+  presenter_->SetVSyncDisplayID(display_id, force_update);
 }
 
 #if BUILDFLAG(IS_APPLE)

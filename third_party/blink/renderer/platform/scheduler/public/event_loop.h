@@ -9,14 +9,18 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/deque.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/ref_counted.h"
+#include "v8/include/v8-cpp-heap-external.h"
+#include "v8/include/v8-forward.h"
 #include "v8/include/v8-isolate.h"
 #include "v8/include/v8-microtask-queue.h"
+#include "v8/include/v8-persistent-handle.h"
 
 namespace blink {
 
@@ -94,25 +98,36 @@ class PLATFORM_EXPORT EventLoop final : public RefCounted<EventLoop> {
 
   // Returns the MicrotaskQueue instance to be associated to v8::Context. Pass
   // it to v8::Context::New().
-  v8::MicrotaskQueue* microtask_queue() const { return microtask_queue_.get(); }
+  v8::MicrotaskQueue* microtask_queue() const {
+#ifdef V8_CPPGC_MICROTASK_QUEUE
+    return microtask_queue_;
+#else
+    return microtask_queue_.get();
+#endif
+  }
 
   bool IsSchedulerAttachedForTest(FrameOrWorkerScheduler*);
 
-  class PauseMicrotasksHandle {
+  class PLATFORM_EXPORT PauseMicrotasksHandle {
    public:
-    ~PauseMicrotasksHandle() = default;
+    ~PauseMicrotasksHandle();
+    PauseMicrotasksHandle(const PauseMicrotasksHandle& r) = delete;
+    PauseMicrotasksHandle& operator=(const PauseMicrotasksHandle& r) = delete;
 
    private:
     friend class EventLoop;
-    PauseMicrotasksHandle(v8::Isolate* isolate, v8::MicrotaskQueue* queue);
-
-    v8::Isolate::SuppressMicrotaskExecutionScope scope_;
+    explicit PauseMicrotasksHandle(scoped_refptr<EventLoop> loop)
+        : loop_(std::move(loop)) {
+      ++loop_->microtasks_pause_count_;
+    }
+    scoped_refptr<EventLoop> loop_;
   };
 
   // Suppresses microtask execution for the lifetime of the returned handle.
   // Pending microtasks would be executed as soon as all issued handles go
   // out of scope.
   [[nodiscard]] std::unique_ptr<PauseMicrotasksHandle> PauseMicrotasks();
+  bool AreMicrotasksPaused() const { return !!microtasks_pause_count_; }
 
  private:
   friend class RefCounted<EventLoop>;
@@ -120,19 +135,35 @@ class PLATFORM_EXPORT EventLoop final : public RefCounted<EventLoop> {
 
   EventLoop(Delegate* delegate,
             v8::Isolate* isolate,
-            std::unique_ptr<v8::MicrotaskQueue> microtask_queue);
+#ifdef V8_CPPGC_MICROTASK_QUEUE
+            v8::MicrotaskQueue* microtask_queue
+#else
+            std::unique_ptr<v8::MicrotaskQueue> microtask_queue
+#endif
+  );
   ~EventLoop();
 
-  static void RunPendingMicrotask(void* data);
+  static void RunPendingMicrotask(v8::Local<v8::Data> data);
   static void RunEndOfCheckpointTasks(v8::Isolate* isolat, void* data);
 
   WeakPersistent<Delegate> delegate_;
-  raw_ptr<v8::Isolate> isolate_;
+  const raw_ptr<v8::Isolate> isolate_;
+  int microtasks_pause_count_ = 0;
   bool loop_enabled_ = true;
   Deque<base::OnceClosure> pending_microtasks_;
   Vector<base::OnceClosure> end_of_checkpoint_tasks_;
+  // TODO(https://crbug.com/515252150): remove #ifdef once the old
+  // v8::MicrotaskQueue::New() returning std::unique_ptr<> gets through
+  // the V8 API deprecation process.
+#ifdef V8_CPPGC_MICROTASK_QUEUE
+  Persistent<v8::MicrotaskQueue> microtask_queue_;
+#else
   std::unique_ptr<v8::MicrotaskQueue> microtask_queue_;
+#endif
   HashSet<FrameOrWorkerScheduler*> schedulers_;
+  v8::Global<v8::CppHeapExternal> microtask_data_;
+
+  base::WeakPtrFactory<EventLoop> weak_ptr_factory_{this};
 };
 
 }  // namespace scheduler

@@ -19,6 +19,7 @@
 #include "third_party/blink/renderer/core/layout/layout_algorithm.h"
 #include "third_party/blink/renderer/core/layout/layout_result.h"
 #include "third_party/blink/renderer/core/layout/line_clamp_data.h"
+#include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/core/layout/unpositioned_float.h"
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
 
@@ -35,7 +36,11 @@ struct PreviousInflowPosition {
   MarginStrut margin_strut;
   // > 0: Block-end annotation space of the previous line
   // < 0: Block-end annotation overflow of the previous line
+  // This field is used to pass information across line boxes.
   LayoutUnit block_end_annotation_space;
+  // Block-end annotation space of the previous sibling block.
+  // This field is used to pass information across child IFCs.
+  LayoutUnit previous_sibling_block_end_annotation_space;
   bool self_collapsing_child_had_clearance;
 };
 
@@ -86,7 +91,8 @@ struct BlockLineClampData {
     return data.lines_until_clamp == 0;
   }
 
-  void UpdateFromStyle(int lines_until_clamp, LayoutUnit clamp_bfc_offset);
+  void Setup(const BlockNode& node,
+             const BoxFragmentBuilder& container_builder);
 
   // Returns false if we need to relayout with a different clamp BFC offset.
   bool UpdateAfterLayout(const LayoutResult* layout_result,
@@ -125,23 +131,25 @@ struct BlockLineClampData {
   // if data.state == kClampByLines.
   int initial_lines_until_clamp = 0;
 
-  // Only relevant if data.state == kMeasureLinesUntilBfcOffset.
-  MarginStrut end_margin_strut;
-
   // If set, the box was clamped, and this is the previous inflow position after
   // the last line or box before clamp. Can only be set if
-  // data.state == kClampByLines.
+  // `data.IsClampByLines()` or `data.state == kClampAfterLayoutObject`.
   std::optional<PreviousInflowPosition> previous_inflow_position_when_clamped;
 
   // If set, any lines added by any further layout results are ignored when
   // decreasing the number of lines until clamp. Used when we know that the
   // remaining lines in this block box would not exist if we weren't
-  // ellipsizing. Can only be set if data.state == kClampByLines.
+  // ellipsizing. Can only be set when `data.IsClampByLines()`.
   bool ignore_further_lines = false;
 
   // The last LayoutObject encountered since the last line.
-  // Can only be set if data.state == kMeasureLinesUntilBfcOffset.
+  // Can only be set when `data.IsMeasureUntilBfcOffset()`.
   const LayoutObject* last_layout_object = nullptr;
+
+  // The chain of ancestor data needed to compute the size of the line-clamp
+  // container corresponding to each clamp point.
+  // Can only be set when `data.IsMeasureUntilBfcOffset()`.
+  const LineClampAncestorChain* ancestor_chain = nullptr;
 };
 
 // A class for general block layout (e.g. a <div> with no special style).
@@ -158,6 +166,7 @@ class CORE_EXPORT BlockLayoutAlgorithm
 
   MinMaxSizesResult ComputeMinMaxSizes(const MinMaxSizesFloatInput&);
   const LayoutResult* Layout();
+  LayoutUnit ComputeInitialBlockStartAnnotationSpace() const;
 
  private:
   NOINLINE const LayoutResult* HandleNonsuccessfulLayoutResult(
@@ -183,6 +192,7 @@ class CORE_EXPORT BlockLayoutAlgorithm
   NOINLINE const LayoutResult* RelayoutClampingAfterLayoutObject(
       const LayoutObject*);
   NOINLINE const LayoutResult* RelayoutForTextBoxTrimEnd();
+  NOINLINE const LayoutResult* RelayoutForMarginTrimEnd();
 
   inline const LayoutResult* Layout(
       InlineChildLayoutContext* inline_child_layout_context);
@@ -226,7 +236,8 @@ class CORE_EXPORT BlockLayoutAlgorithm
       bool is_new_fc,
       const std::optional<LayoutUnit> bfc_block_offset = std::nullopt,
       bool has_clearance_past_adjoining_floats = false,
-      LayoutUnit block_start_annotation_space = LayoutUnit());
+      LayoutUnit block_start_annotation_space = LayoutUnit(),
+      LayoutUnit previous_sibling_block_end_annotation_space = LayoutUnit());
 
   // @return Estimated BFC block offset for the "to be layout" child.
   InflowChildData ComputeChildData(const PreviousInflowPosition&,
@@ -361,6 +372,10 @@ class CORE_EXPORT BlockLayoutAlgorithm
   // Look for a better breakpoint (than we already have) between lines (i.e. a
   // class B breakpoint), and store it.
   void UpdateEarlyBreakBetweenLines();
+
+  // Returns baseline offset if we can get `SimpleFontData` from the primary
+  // font.
+  std::optional<LayoutUnit> BaselineForEmptyLine() const;
 
   // Propagates the baseline from the given |child| if needed.
   void PropagateBaselineFromLineBox(const PhysicalFragment& child,
@@ -516,6 +531,20 @@ class CORE_EXPORT BlockLayoutAlgorithm
   InlineNode override_text_box_trim_end_child_ = nullptr;
   const BreakToken* override_text_box_trim_end_break_token_ = nullptr;
 
+  // The last in-flow child laid out that isn't self-collapsing. If trailing
+  // margins are to be trimmed, the outgoing block-end margin from this child is
+  // where to start trimming.
+  LayoutInputNode last_non_self_collapsing_child_ = nullptr;
+
+  // In relayout for end margin trimming, this is the child after which margin
+  // trimming should start. It will be set to nullptr when the child is
+  // reached. If it's nullptr initially, it means that the entire container is
+  // self-collapsing.
+  LayoutInputNode pending_margin_end_trim_child_ = nullptr;
+
+  // The incoming margin strut at the start of layout.
+  MarginStrut incoming_margin_strut_;
+
   // Intrinsic block size based on child layout and containment.
   LayoutUnit intrinsic_block_size_;
 
@@ -548,6 +577,19 @@ class CORE_EXPORT BlockLayoutAlgorithm
   // this). It is used to check if we're at a valid class A or B breakpoint
   // (between block-level siblings or line box siblings).
   bool has_break_opportunity_before_next_child_ : 1;
+
+  // Set when performing an extra layout pass to correctly truncate trailing
+  // margins for end margin trimming.
+  bool is_relayout_for_margin_end_trim_ : 1 = false;
+
+  // Set to true if the child is already laid out to measure the `text-fit`
+  // scaling factor, preventing infinite recursion.
+  bool is_measuring_text_fit_ : 1 = false;
+
+  // Set if last_non_self_collapsing_child_ should be left as-is, because we're
+  // in a relayout pass (but not necessarily in a relayout pass for margin
+  // trimming).
+  bool is_last_non_self_collapsing_child_determined_ : 1 = false;
 };
 
 }  // namespace blink

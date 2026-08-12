@@ -9,6 +9,9 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_panel_controller.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_ui_service.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_ui_service_factory.h"
 #include "chrome/browser/contextual_tasks/entry_point_eligibility_manager.h"
 #include "chrome/browser/lens/core/mojom/geometry.mojom.h"
 #include "chrome/browser/profiles/profile.h"
@@ -31,12 +34,11 @@
 #include "chrome/browser/ui/lens/lens_search_feature_flag_utils.h"
 #include "chrome/browser/ui/lens/lens_searchbox_controller.h"
 #include "chrome/browser/ui/lens/lens_session_metrics_logger.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_key.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/webui/util/image_util.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
-#include "chrome/grit/branded_strings.h"
 #include "components/contextual_tasks/public/features.h"
 #include "components/lens/lens_features.h"
 #include "components/lens/lens_overlay_permission_utils.h"
@@ -77,9 +79,20 @@ std::string ScaleBitmapAndEncodeToDataUri(SkBitmap bitmap) {
 }
 
 bool UseNonBlockingPrivacyNotice(
-    lens::LensOverlayInvocationSource invocation_source) {
+    lens::LensOverlayInvocationSource invocation_source,
+    bool should_route_to_contextual_tasks) {
   if (!lens::features::IsLensOverlayNonBlockingPrivacyNoticeEnabled()) {
     return false;
+  }
+  // The non-blocking privacy notice may be used for the image context menu
+  // entrypoint if the flag is enabled and if the query is not being routed to
+  // Contextual Tasks.
+  if (lens::features::
+          IsLensOverlayNonBlockingPrivacyNoticeForImageSearchEnabled() &&
+      invocation_source ==
+          lens::LensOverlayInvocationSource::kContentAreaContextMenuImage &&
+      !should_route_to_contextual_tasks) {
+    return true;
   }
   // Invocation sources that simply open the overlay without submitting a query
   // are permitted to use the non-blocking privacy notice.
@@ -91,7 +104,11 @@ bool UseNonBlockingPrivacyNotice(
           invocation_source ==
               lens::LensOverlayInvocationSource::kOmniboxPageAction ||
           invocation_source ==
-              lens::LensOverlayInvocationSource::kHomeworkActionChip);
+              lens::LensOverlayInvocationSource::kHomeworkActionChip ||
+          invocation_source ==
+              lens::LensOverlayInvocationSource::kOmniboxContextualQuery ||
+          invocation_source ==
+              lens::LensOverlayInvocationSource::kContextualTasksComposebox);
 }
 
 }  // namespace
@@ -138,9 +155,8 @@ void LensSearchController::Initialize(
   // Create Gen204 controller first as query controller depends on it.
   gen204_controller_ = std::make_unique<lens::LensOverlayGen204Controller>();
 
-  lens_overlay_controller_ = CreateLensOverlayController(
-      tab_, this, variations_client, identity_manager, pref_service,
-      sync_service, theme_service);
+  lens_overlay_controller_ =
+      CreateLensOverlayController(tab_, this, pref_service, theme_service);
 
   lens_overlay_side_panel_coordinator_ =
       CreateLensOverlaySidePanelCoordinator();
@@ -183,7 +199,8 @@ LensSearchController* LensSearchController::FromTabWebContents(
 }
 
 void LensSearchController::OpenLensOverlay(
-    lens::LensOverlayInvocationSource invocation_source) {
+    lens::LensOverlayInvocationSource invocation_source,
+    bool should_show_csb) {
   CheckInitialized(initialized_);
 
   // The overlay can only be reinvoked if the feature is enabled.
@@ -195,7 +212,8 @@ void LensSearchController::OpenLensOverlay(
           invocation_source,
           /*permission_granted_callback=*/base::BindRepeating(
               &LensSearchController::OpenLensOverlay,
-              weak_ptr_factory_.GetWeakPtr(), invocation_source))) {
+              weak_ptr_factory_.GetWeakPtr(), invocation_source,
+              should_show_csb))) {
     return;
   }
 
@@ -214,18 +232,18 @@ void LensSearchController::OpenLensOverlay(
     return;
   }
 
-  if (lens::features::IsLensSearchZeroStateCsbEnabled() && IsOff()) {
-    IssueZeroStateRequest(invocation_source);
-    return;
-  }
 
   // If the overlay is already active, don't start a new session. This can
   // happen if the side panel is open and the user reinvokes the overlay.
   if (IsOff()) {
     // Setup all state necessary for this Lens session.
     StartLensSession(invocation_source);
+  } else {
+    // Update the invocation source if the session is already active.
+    invocation_source_ = invocation_source;
   }
 
+  should_show_csb_ = should_show_csb;
   lens_overlay_controller_->ShowUI(invocation_source);
 }
 
@@ -260,6 +278,7 @@ void LensSearchController::OpenLensOverlayWithPendingRegion(
   // Setup all state necessary for this Lens session.
   StartLensSession(invocation_source);
 
+  should_show_csb_ = false;
   lens_overlay_controller_->ShowUIWithPendingRegion(
       invocation_source, std::move(region), region_bitmap);
 }
@@ -306,11 +325,13 @@ void LensSearchController::IssueContextualSearchRequest(
     const GURL& destination_url,
     AutocompleteMatchType::Type match_type,
     bool is_zero_prefix_suggestion) {
-  // This method should only be used by the omnibox contextual suggestion flow.
+  // This method should only be used by the omnibox flows.
   // There is no dependency on the omnibox, so this check is solely to ensure a
   // new flow is not accidentally added.
   CHECK(invocation_source ==
-        lens::LensOverlayInvocationSource::kOmniboxContextualSuggestion);
+            lens::LensOverlayInvocationSource::kOmniboxContextualSuggestion ||
+        invocation_source ==
+            lens::LensOverlayInvocationSource::kOmniboxContextualQuery);
 
   std::string query_text =
       lens::ExtractTextQueryParameterValue(destination_url);
@@ -345,6 +366,26 @@ void LensSearchController::IssueTextSearchRequest(
     StartLensSession(invocation_source, suppress_contextualization);
   }
 
+  // If routing to contextual tasks, ignore fetching context via the Lens
+  // contextualization controller. Instead, the context will be uploaded by
+  // the Lens query flow router using a session handle.
+  if (should_route_to_contextual_tasks()) {
+    auto lens_selection_type = lens::UNKNOWN_SELECTION_TYPE;
+    if (is_zero_prefix_suggestion) {
+      lens_selection_type = lens::MULTIMODAL_SUGGEST_ZERO_PREFIX;
+    } else if (match_type ==
+               AutocompleteMatchType::Type::SEARCH_WHAT_YOU_TYPED) {
+      lens_selection_type = lens::MULTIMODAL_SEARCH;
+    } else {
+      lens_selection_type = lens::MULTIMODAL_SUGGEST_TYPEAHEAD;
+    }
+    CHECK(query_router_);
+    query_router_->SendContextualTextQuery(
+        /*query_start_time=*/base::Time::Now(), query_text, lens_selection_type,
+        additional_query_parameters, invocation_source);
+    return;
+  }
+
   // TODO(crbug.com/404941800): This flow should not start the overlay once
   // contextualization is separated from the overlay.
   lens_overlay_controller_->IssueTextSearchRequest(
@@ -352,33 +393,15 @@ void LensSearchController::IssueTextSearchRequest(
       is_zero_prefix_suggestion, invocation_source);
 }
 
-void LensSearchController::IssueZeroStateRequest(
-    lens::LensOverlayInvocationSource invocation_source) {
-  CheckInitialized(initialized_);
-  if (!RunLensEligibilityChecks(
-          invocation_source,
-          base::BindRepeating(&LensSearchController::IssueZeroStateRequest,
-                              weak_ptr_factory_.GetWeakPtr(),
-                              invocation_source))) {
-    return;
-  }
-
-  auto query_start_time = base::Time::Now();
-  if (IsOff()) {
-    StartLensSession(invocation_source);
-  }
-
-  lens_contextualization_controller_->StartContextualization(
-      invocation_source,
-      base::BindOnce(
-          &LensSearchController::OnPageContextUpdatedForZeroStateRequest,
-          weak_ptr_factory_.GetWeakPtr(), invocation_source, query_start_time));
-  // Show the side panel right away so the ghost loader is shown.
-  lens_overlay_side_panel_coordinator()->RegisterEntryAndShow();
-}
 
 void LensSearchController::CloseLensAsync(
     lens::LensOverlayDismissalSource dismissal_source) {
+  CloseLensAsync(dismissal_source, /*side_panel_already_closing=*/false);
+}
+
+void LensSearchController::CloseLensAsync(
+    lens::LensOverlayDismissalSource dismissal_source,
+    bool side_panel_already_closing) {
   if (state() == State::kOff) {
     return;
   }
@@ -387,7 +410,7 @@ void LensSearchController::CloseLensAsync(
   // moved. It needs to be reset here to avoid a crash when the query router is
   // eventually destroyed.
   if (query_router_) {
-    query_router_->reset_file_upload_status_observation();
+    query_router_->reset_context_upload_status_observation();
   }
 
   // Close the side panel if it is showing. This provides a smooth closing
@@ -405,7 +428,9 @@ void LensSearchController::CloseLensAsync(
     // closing process.
     state_ = State::kClosingSidePanel;
     last_dismissal_source_ = dismissal_source;
-    side_panel_ui->Close(lens_overlay_side_panel_coordinator_->GetPanelType());
+    if (!side_panel_already_closing) {
+      side_panel_ui->Close();
+    }
     // Also trigger the overlay fade out animation, but don't pass a callback
     // to finish the closing process since the side panel will call
     // the finish closing process callback in OnSidePanelHidden().
@@ -629,18 +654,24 @@ LensSearchController::invocation_source() {
   return invocation_source_;
 }
 
+void LensSearchController::SetInvocationSource(
+    lens::LensOverlayInvocationSource invocation_source) {
+  invocation_source_ = invocation_source;
+
+  // Inform the UI of the state change with the new invocation source.
+  if (results_panel_router_ && results_panel_router_->IsEntryShowing()) {
+    results_panel_router_->OnOverlayShown();
+  }
+}
+
 std::unique_ptr<LensOverlayController>
 LensSearchController::CreateLensOverlayController(
     tabs::TabInterface* tab,
     LensSearchController* lens_search_controller,
-    variations::VariationsClient* variations_client,
-    signin::IdentityManager* identity_manager,
     PrefService* pref_service,
-    syncer::SyncService* sync_service,
     ThemeService* theme_service) {
-  return std::make_unique<LensOverlayController>(
-      tab, lens_search_controller, variations_client, identity_manager,
-      pref_service, sync_service, theme_service);
+  return std::make_unique<LensOverlayController>(tab, lens_search_controller,
+                                                 pref_service);
 }
 
 std::unique_ptr<lens::LensOverlayQueryController>
@@ -680,6 +711,11 @@ LensSearchController::CreateLensComposeboxController() {
   return std::make_unique<lens::LensComposeboxController>(this, profile);
 }
 
+std::unique_ptr<lens::LensQueryFlowRouter>
+LensSearchController::CreateLensQueryFlowRouter() {
+  return std::make_unique<lens::LensQueryFlowRouter>(this);
+}
+
 std::unique_ptr<lens::LensSearchContextualizationController>
 LensSearchController::CreateLensSearchContextualizationController() {
   return std::make_unique<lens::LensSearchContextualizationController>(this);
@@ -708,26 +744,62 @@ LensSearchController::CreateLensQueryController(
       gen204_controller_.get());
 }
 
+bool LensSearchController::ShouldEnableContextualTasksRouting(
+    lens::LensOverlayInvocationSource invocation_source) {
+  // Route all Lens overlay traffic directly to the Contextual Tasks panel
+  // when the Lens side panel unification feature is active, provided the
+  // contextual tasks feature is enabled (needed to create necessary services).
+  // No need to check the actual eligibility in this case as all Lens queries
+  // should open the contextual tasks panel in this case.
+  if (lens::features::IsLensSidePanelUnificationEnabled()) {
+    if (!contextual_tasks::IsContextualTasksUIEnabled()) {
+      return false;
+    }
+
+    // If signed out users are not allowed, verify full authentication. This
+    // needs to be done here so the correct panel is opened.
+    if (!lens::features::IsLensSidePanelUnificationAllowSignedOut()) {
+      // The isolated storage partition used by Contextual Tasks requires
+      // account cookies from the primary jar to be successfully synchronized
+      // for web-based authentication. Cookies are checked here to ensure
+      // traffic is not routed to a broken unauthenticated state.
+      auto* service = contextual_tasks::ContextualTasksUiServiceFactory::
+          GetForBrowserContext(tab_->GetBrowserWindowInterface()->GetProfile());
+      if (!service || !service->IsSignedInToBrowserWithValidCredentials() ||
+          !service->CookieJarContainsPrimaryAccount()) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  auto* const entry_point_eligibility_manager =
+      contextual_tasks::EntryPointEligibilityManager::From(
+          tab_->GetBrowserWindowInterface());
+
+  const bool are_entry_points_eligible =
+      entry_point_eligibility_manager &&
+      entry_point_eligibility_manager->AreEntryPointsEligible();
+
+  return are_entry_points_eligible &&
+         (contextual_tasks::GetEnableLensInContextualTasks() ||
+          invocation_source ==
+              lens::LensOverlayInvocationSource::kContextualTasksComposebox);
+}
+
 void LensSearchController::StartLensSession(
     lens::LensOverlayInvocationSource invocation_source,
     bool suppress_contextualization) {
   state_ = State::kInitializing;
   invocation_source_ = invocation_source;
 
-  // Check if contextual tasks is currently available. If so, route through
-  // results to the contextual tasks side panel.
-  auto* const entry_point_eligibility_manager =
-      contextual_tasks::EntryPointEligibilityManager::From(
-          tab_->GetBrowserWindowInterface());
   should_route_to_contextual_tasks_ =
-      contextual_tasks::GetEnableLensInContextualTasks() &&
-      entry_point_eligibility_manager &&
-      entry_point_eligibility_manager->AreEntryPointsEligible();
+      ShouldEnableContextualTasksRouting(invocation_source);
 
   // Create the query controller to be used for the current invocation.
   CHECK(!lens_overlay_query_controller_);
   lens_overlay_query_controller_ = CreateLensQueryController(invocation_source);
-  query_router_ = std::make_unique<lens::LensQueryFlowRouter>(this);
+  query_router_ = CreateLensQueryFlowRouter();
   query_router_->SetSuggestInputsReadyCallback(
       base::BindRepeating(&LensSearchController::OnSuggestInputsReady,
                           weak_ptr_factory_.GetWeakPtr()));
@@ -748,6 +820,7 @@ void LensSearchController::StartLensSession(
   // Reset session state.
   hats_triggered_in_session_ = false;
   is_handshake_complete_ = false;
+  should_show_csb_ = true;
 }
 
 bool LensSearchController::RunLensEligibilityChecks(
@@ -762,14 +835,24 @@ bool LensSearchController::RunLensEligibilityChecks(
   // The non-blocking privacy notice permits the overlay to open without
   // requesting user permission via the bubble.
   if (lens::features::IsLensOverlayNonBlockingPrivacyNoticeEnabled() &&
-      UseNonBlockingPrivacyNotice(invocation_source)) {
+      UseNonBlockingPrivacyNotice(
+          invocation_source,
+          ShouldEnableContextualTasksRouting(invocation_source))) {
+    return true;
+  }
+
+  // The Omnibox contextual query invocation source permits the overlay to open
+  // without user permission via the bubble. This is because the user should
+  // have already added the active tab context to the page.
+  if (invocation_source ==
+      lens::LensOverlayInvocationSource::kOmniboxContextualQuery) {
     return true;
   }
 
   // If the user hasn't granted permission, request user permission before
   // showing the UI.
   if (!lens::CanSharePageScreenshotWithLensOverlay(pref_service_) ||
-      (lens::IsLensOverlayContextualSearchboxEnabled() &&
+      (lens::IsLensOverlayContextualSearchboxEnabled(GetProfile()) &&
        !lens::CanSharePageContentWithLensOverlay(pref_service_))) {
     if (!lens_permission_bubble_controller_) {
       lens_permission_bubble_controller_ =
@@ -803,18 +886,18 @@ void LensSearchController::OnThumbnailProcessed(
     bool is_region_selection,
     const std::string& thumbnail_uri) {
   if (should_route_to_contextual_tasks()) {
-    if (!is_region_selection || !thumbnail_created_callback_) {
-      return;
-    }
     // This function returns full viewport thumbnails and region selection
     // thumbnails. Only region search selections should trigger the thumbnail
     // created callback to be run.
-    thumbnail_created_callback_.Run(thumbnail_uri);
-    return;
+    if (is_region_selection && thumbnail_created_callback_) {
+      thumbnail_created_callback_.Run(thumbnail_uri);
+    }
   }
 
-  lens_searchbox_controller_->SetSearchboxThumbnail(thumbnail_uri);
-  if (is_region_selection &&
+  if (lens_searchbox_controller_) {
+    lens_searchbox_controller_->SetSearchboxThumbnail(thumbnail_uri);
+  }
+  if (lens_composebox_controller_ && is_region_selection &&
       lens_overlay_controller_->use_aim_for_visual_search()) {
     lens_composebox_controller_->AddVisualSelectionContext(thumbnail_uri);
   }
@@ -829,7 +912,11 @@ void LensSearchController::CloseLensPart2(
   // Let the controllers know to cleanup.
   // TODO(crbug.com/404941800): Move logging to a shared location to not be
   // dependent on the overlay controller.
-  lens_overlay_controller_->CloseUI(dismissal_source);
+  if (query_router_) {
+    query_router_->RemoveContextualSearchContextIfNecessary(
+        lens_overlay_controller_->HasRegionSelection());
+  }
+  lens_overlay_controller_->CloseUI();
   lens_searchbox_controller_->CloseUI();
   lens_composebox_controller_->CloseUI();
   lens_permission_bubble_controller_.reset();
@@ -907,7 +994,8 @@ void LensSearchController::OnSidePanelWillHide(
     } else {
       // Trigger the close animation and notify the overlay that the side
       // panel is closing so that it can fade out the UI.
-      CloseLensAsync(lens::LensOverlayDismissalSource::kSidePanelCloseButton);
+      CloseLensAsync(lens::LensOverlayDismissalSource::kSidePanelCloseButton,
+                     /*side_panel_already_closing=*/true);
     }
   }
 }
@@ -1036,6 +1124,34 @@ void LensSearchController::TabWillEnterBackground(tabs::TabInterface* tab) {
     return;
   }
 
+  // Dismisses the Lens session and closes the side panel if the tab is
+  // backgrounded in the contextual tasks flow while waiting for results.
+  // This prevents a broken state where the overlay or a blank panel might be
+  // left open on a background tab.
+  if (should_route_to_contextual_tasks() && IsShowingUI()) {
+    auto* panel_controller =
+        contextual_tasks::ContextualTasksPanelController::From(
+            tab_->GetBrowserWindowInterface());
+    if (panel_controller) {
+      content::WebContents* panel_contents =
+          panel_controller->GetActiveWebContents();
+      if (panel_contents) {
+        GURL url = panel_contents->GetVisibleURL();
+        base::Uuid task_id =
+            contextual_tasks::ContextualTasksUiService::GetTaskIdFromUrl(url);
+
+        auto* ui_service = contextual_tasks::ContextualTasksUiServiceFactory::
+            GetForBrowserContext(tab_->GetContents()->GetBrowserContext());
+        if (ui_service && ui_service->IsTaskWaitingForUrl(task_id)) {
+          panel_controller->Close();
+          CloseLensSync(lens::LensOverlayDismissalSource::
+                            kTabBackgroundedWhileInitializing);
+          return;
+        }
+      }
+    }
+  }
+
   // If no Lens UI is showing when the tab is backgrounded, then the entire Lens
   // session should be closed.
   if (!IsShowingUI()) {
@@ -1075,24 +1191,7 @@ void LensSearchController::WillDetach(tabs::TabInterface* tab,
   }
 }
 
-void LensSearchController::OnPageContextUpdatedForZeroStateRequest(
-    lens::LensOverlayInvocationSource invocation_source,
-    base::Time query_start_time) {
-  lens_searchbox_controller()->SetSearchboxInputText(std::string());
-  if (lens_search_contextualization_controller()
-          ->GetCurrentPageContextEligibility()) {
-    // Create a region that consists of the entire viewport.
-    auto full_viewport_region = lens::mojom::CenterRotatedBox::New();
-    full_viewport_region->box =
-        gfx::RectF(/*x=*/0.5, /*y=*/0.5, /*width=*/1.0, /*height=*/1.0);
-    full_viewport_region->coordinate_type =
-        lens::mojom::CenterRotatedBox_CoordinateType::kNormalized;
 
-    lens_overlay_query_controller()->SendRegionSearch(
-        query_start_time, std::move(full_viewport_region),
-        lens::LensOverlaySelectionType::REGION_SEARCH,
-        /*additional_search_query_params=*/std::map<std::string, std::string>(),
-        /*region_bytes=*/std::nullopt);
-  }
+Profile* LensSearchController::GetProfile() {
+  return Profile::FromBrowserContext(tab_->GetContents()->GetBrowserContext());
 }
-

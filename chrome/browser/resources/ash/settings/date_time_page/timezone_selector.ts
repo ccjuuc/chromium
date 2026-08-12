@@ -16,7 +16,8 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 
 import type {DropdownMenuOptionList} from '../controls/settings_dropdown_menu.js';
 
-import {DateTimeBrowserProxy, type DateTimePageHandlerRemote} from './date_time_browser_proxy.js';
+import {DateTimeBrowserProxy} from './date_time_browser_proxy.js';
+import type {DateTimePageHandlerRemote} from './date_time_browser_proxy.js';
 import {getTemplate} from './timezone_selector.html.js';
 
 const TimezoneSelectorElementBase = PrefsMixin(PolymerElement);
@@ -80,9 +81,9 @@ export class TimezoneSelectorElement extends TimezoneSelectorElementBase {
     ];
   }
 
-  activeTimeZoneDisplayName: string;
-  shouldDisableTimeZoneGeoSelector: boolean;
-  private timeZoneList_: DropdownMenuOptionList;
+  declare activeTimeZoneDisplayName: string;
+  declare shouldDisableTimeZoneGeoSelector: boolean;
+  declare private timeZoneList_: DropdownMenuOptionList;
   private getTimeZonesRequestSent_: boolean;
 
   /**

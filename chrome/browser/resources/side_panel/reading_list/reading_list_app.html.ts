@@ -2,34 +2,43 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import type {CrLazyListElement} from '//resources/cr_elements/cr_lazy_list/cr_lazy_list.js';
 import {html} from '//resources/lit/v3_0/lit.rollup.js';
 
 import type {ReadLaterEntry} from './reading_list.mojom-webui.js';
 import type {ReadingListAppElement} from './reading_list_app.js';
 
+export interface TemplatizedDomNodes {
+  readingListList: CrLazyListElement<ReadLaterEntry>;
+}
+
 export function getHtml(this: ReadingListAppElement) {
+  // clang-format off
   return html`<!--_html_template_start_-->
 <div id="content" ?hidden="${this.loadingContent_}">
-  <sp-empty-state
-      ?hidden="${!this.isReadingListEmpty_()}"
-      image-path="./images/read_later_empty.svg"
-      dark-image-path="./images/read_later_empty_dark.svg"
-      heading="$i18n{emptyStateHeader}"
-      body="${this.getEmptyStateSubheaderText_()}">
-  </sp-empty-state>
+  <div class="sp-scroller sp-scroller-top-of-page"
+      ?hidden="${!this.isReadingListEmpty_()}">
+    <sp-empty-state
+        image-path="./images/read_later_empty.svg"
+        dark-image-path="./images/read_later_empty_dark.svg"
+        heading="$i18n{emptyStateHeader}"
+        body="${this.getEmptyStateSubheaderText_()}">
+    </sp-empty-state>
+  </div>
 
-  <div class="sp-card" ?hidden="${!this.getAllItems_().length}">
-    <cr-lazy-list id="readingListList" class="sp-scroller"
+  <div id="scroller" class="sp-scroller sp-scroller-top-of-page"
+      ?hidden="${!this.getAllItems_().length}">
+    <cr-lazy-list id="readingListList" class="sp-card"
         .items="${this.getAllItems_()}"
         .itemSize="${this.itemSize_}"
-        .minViewportHeight="${this.minViewportHeight_}"
         .scrollTarget="${this.scrollTarget_}"
         ?hidden="${!this.shouldShowList_()}"
-        @keydown="${this.onItemKeyDown_}"
-        @viewport-filled="${this.updateFocusedItem_}"
+        @keydown="${this.onItemKeydown_}"
+        @viewport-filled="${this.onViewportFilled_}"
         .restoreFocusElement="${this.focusedItem_}"
         .template="${
-      (item: ReadLaterEntry, index: number) => !item.url.url ? html`
+      (item: ReadLaterEntry, index: number) => !item.url ?
+      html`
       <sp-heading compact hide-back-button>
         <h2 slot="heading">${item.title}</h2>
         <cr-icon-button slot="buttons"
@@ -41,8 +50,8 @@ export function getHtml(this: ReadingListAppElement) {
         </cr-icon-button>
       </sp-heading>
     ` :
-                                                               html`
-      <reading-list-item data-url="${item.url.url}" data-index="${index}"
+      html`
+      <reading-list-item data-url="${item.url}" data-index="${index}"
           @focus="${this.onItemFocus_}"
           aria-label="${this.ariaLabel_(item)}" class="unread-item"
           .data="${item}" ?button-ripples="${this.buttonRipples}">
@@ -66,4 +75,5 @@ export function getHtml(this: ReadingListAppElement) {
   </sp-footer>
 </div>
 <!--_html_template_end_-->`;
+  // clang-format on
 }

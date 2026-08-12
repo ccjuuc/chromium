@@ -10,6 +10,7 @@ import android.os.Build;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
@@ -68,6 +69,54 @@ public final class Http2TestServer {
             SERVER_CERT_PEM = "cronet-quic-chain.pem";
             SERVER_KEY_PKCS8_PEM = "cronet-quic-leaf-cert.key.pkcs8.pem";
         }
+    }
+
+    /** Options for starting the HTTP/2 test server. */
+    public static class ServerStartOptions {
+        private final Context mContext;
+        private CountDownLatch mHangingUrlLatch;
+        private ChannelInboundHandlerAdapter mPreTlsPacketHandler;
+
+        public ServerStartOptions(Context context) {
+            mContext = context;
+        }
+
+        /**
+         * When using this you must provide a CountDownLatch in the call to startHttp2TestServer.
+         * The request handler will continue to hang until the provided CountDownLatch reaches 0.
+         *
+         * @param hangingUrlLatch the latch to use for the hanging URL.
+         */
+        public ServerStartOptions setHangingUrlLatch(CountDownLatch hangingUrlLatch) {
+            mHangingUrlLatch = hangingUrlLatch;
+            return this;
+        }
+
+        /**
+         * Sets the pre-TLS packet handler. This handler will be called before the TLS handshake and
+         * can be used to modify packets before they are sent to the server.
+         *
+         * @param preTlsPacketHandler the pre-TLS packet handler to set.
+         */
+        public ServerStartOptions setPreTlsPacketHandler(
+                ChannelInboundHandlerAdapter preTlsPacketHandler) {
+            mPreTlsPacketHandler = preTlsPacketHandler;
+            return this;
+        }
+
+        /**
+         * Sets the post-TLS packet handler. This handler will be called after the TLS handshake and
+         * can be used to modify packets after they are decrypted by the server.
+         *
+         * @param postTlsPacketHandler the post-TLS packet handler to set.
+         */
+        public ServerStartOptions setPostTlsPacketHandler(
+                ChannelInboundHandlerAdapter postTlsPacketHandler) {
+            mPostTlsPacketHandler = postTlsPacketHandler;
+            return this;
+        }
+
+        private ChannelInboundHandlerAdapter mPostTlsPacketHandler;
     }
 
     public static boolean shutdownHttp2TestServer() throws Exception {
@@ -150,16 +199,25 @@ public final class Http2TestServer {
     }
 
     public static boolean startHttp2TestServer(Context context) throws Exception {
-        TestFilesInstaller.installIfNeeded(context);
-        return startHttp2TestServer(
-                context, SERVER_CA_PEM, SERVER_CERT_PEM, SERVER_KEY_PKCS8_PEM, null);
+        return startHttp2TestServer(context, null);
     }
 
     public static boolean startHttp2TestServer(Context context, CountDownLatch hangingUrlLatch)
             throws Exception {
-        TestFilesInstaller.installIfNeeded(context);
         return startHttp2TestServer(
-                context, SERVER_CA_PEM, SERVER_CERT_PEM, SERVER_KEY_PKCS8_PEM, hangingUrlLatch);
+                new ServerStartOptions(context).setHangingUrlLatch(hangingUrlLatch));
+    }
+
+    public static boolean startHttp2TestServer(ServerStartOptions options) throws Exception {
+        TestFilesInstaller.installIfNeeded(options.mContext);
+        return startHttp2TestServer(
+                options.mContext,
+                SERVER_CA_PEM,
+                SERVER_CERT_PEM,
+                SERVER_KEY_PKCS8_PEM,
+                options.mHangingUrlLatch,
+                options.mPreTlsPacketHandler,
+                options.mPostTlsPacketHandler);
     }
 
     private static boolean startHttp2TestServer(
@@ -167,14 +225,18 @@ public final class Http2TestServer {
             String caFileName,
             String certFileName,
             String keyFileName,
-            CountDownLatch hangingUrlLatch)
+            CountDownLatch hangingUrlLatch,
+            ChannelInboundHandlerAdapter preTlsPacketHandler,
+            ChannelInboundHandlerAdapter postTlsPacketHandler)
             throws Exception {
         sReportingCollector = new ReportingCollector();
         Http2TestServerRunnable http2TestServerRunnable =
                 new Http2TestServerRunnable(
                         new File(CertTestUtil.CERTS_DIRECTORY + certFileName),
                         new File(CertTestUtil.CERTS_DIRECTORY + keyFileName),
-                        hangingUrlLatch);
+                        hangingUrlLatch,
+                        preTlsPacketHandler,
+                        postTlsPacketHandler);
         // This will run synchronously as we can't run the test before we have
         // started the test-server, if the test-server has failed to start then
         // the caller should assert on the value returned to make sure that the test
@@ -197,8 +259,15 @@ public final class Http2TestServer {
     private static class Http2TestServerRunnable implements Callable<Boolean> {
         private final SslContext mSslCtx;
         private final CountDownLatch mHangingUrlLatch;
+        private final ChannelInboundHandlerAdapter mPreTlsPacketHandler;
+        private final ChannelInboundHandlerAdapter mPostTlsPacketHandler;
 
-        Http2TestServerRunnable(File certFile, File keyFile, CountDownLatch hangingUrlLatch)
+        Http2TestServerRunnable(
+                File certFile,
+                File keyFile,
+                CountDownLatch hangingUrlLatch,
+                ChannelInboundHandlerAdapter preTlsPacketHandler,
+                ChannelInboundHandlerAdapter postTlsPacketHandler)
                 throws Exception {
             ApplicationProtocolConfig applicationProtocolConfig =
                     new ApplicationProtocolConfig(
@@ -223,11 +292,13 @@ public final class Http2TestServer {
                             0);
 
             mHangingUrlLatch = hangingUrlLatch;
+            mPreTlsPacketHandler = preTlsPacketHandler;
+            mPostTlsPacketHandler = postTlsPacketHandler;
         }
 
         @Override
         public Boolean call() throws Exception {
-            for(int retries = 0; retries < 10; retries++) {
+            for (int retries = 0; retries < 10; retries++) {
                 try {
                     // Configure the server.
                     EventLoopGroup group = new NioEventLoopGroup();
@@ -236,7 +307,12 @@ public final class Http2TestServer {
                     b.group(group)
                             .channel(NioServerSocketChannel.class)
                             .handler(new LoggingHandler(LogLevel.INFO))
-                            .childHandler(new Http2ServerInitializer(mSslCtx, mHangingUrlLatch));
+                            .childHandler(
+                                    new Http2ServerInitializer(
+                                            mSslCtx,
+                                            mHangingUrlLatch,
+                                            mPreTlsPacketHandler,
+                                            mPostTlsPacketHandler));
 
                     sServerChannel = b.bind(PORT).sync().channel();
                     Log.i(TAG, "Netty HTTP/2 server started on " + getServerUrl());
@@ -260,33 +336,50 @@ public final class Http2TestServer {
     private static class Http2ServerInitializer extends ChannelInitializer<SocketChannel> {
         private final SslContext mSslCtx;
         private final CountDownLatch mHangingUrlLatch;
+        private final ChannelInboundHandlerAdapter mPreTlsPacketHandler;
+        private final ChannelInboundHandlerAdapter mPostTlsPacketHandler;
 
-        public Http2ServerInitializer(SslContext sslCtx, CountDownLatch hangingUrlLatch) {
+        public Http2ServerInitializer(
+                SslContext sslCtx,
+                CountDownLatch hangingUrlLatch,
+                ChannelInboundHandlerAdapter preTlsPacketHandler,
+                ChannelInboundHandlerAdapter postTlsPacketHandler) {
             mSslCtx = sslCtx;
             mHangingUrlLatch = hangingUrlLatch;
+            mPreTlsPacketHandler = preTlsPacketHandler;
+            mPostTlsPacketHandler = postTlsPacketHandler;
         }
 
         @Override
         public void initChannel(SocketChannel ch) {
+            if (mPreTlsPacketHandler != null) {
+                ch.pipeline().addLast(mPreTlsPacketHandler);
+            }
             ch.pipeline()
                     .addLast(
                             mSslCtx.newHandler(ch.alloc()),
-                            new Http2NegotiationHandler(mHangingUrlLatch));
+                            new Http2NegotiationHandler(mHangingUrlLatch, mPostTlsPacketHandler));
         }
     }
 
     private static class Http2NegotiationHandler extends ApplicationProtocolNegotiationHandler {
         private final CountDownLatch mHangingUrlLatch;
+        private final ChannelInboundHandlerAdapter mPostTlsPacketHandler;
 
-        protected Http2NegotiationHandler(CountDownLatch hangingUrlLatch) {
+        protected Http2NegotiationHandler(
+                CountDownLatch hangingUrlLatch, ChannelInboundHandlerAdapter postTlsPacketHandler) {
             super(ApplicationProtocolNames.HTTP_1_1);
             mHangingUrlLatch = hangingUrlLatch;
+            mPostTlsPacketHandler = postTlsPacketHandler;
         }
 
         @Override
         protected void configurePipeline(ChannelHandlerContext ctx, String protocol)
                 throws Exception {
             if (ApplicationProtocolNames.HTTP_2.equals(protocol)) {
+                if (mPostTlsPacketHandler != null) {
+                    ctx.pipeline().addLast(mPostTlsPacketHandler);
+                }
                 ctx.pipeline()
                         .addLast(
                                 new Http2TestHandler.Builder()

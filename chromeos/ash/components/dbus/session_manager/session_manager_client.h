@@ -16,6 +16,7 @@
 #include "base/observer_list_types.h"
 #include "base/time/time.h"
 #include "base/types/expected.h"
+#include "chromeos/ash/components/dbus/login_manager/policy_descriptor.pb.h"
 #include "chromeos/dbus/common/dbus_callback.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "third_party/cros_system_api/dbus/login_manager/dbus-constants.h"
@@ -131,18 +132,6 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
     ~Observer() override = default;
   };
 
-  // Interface for performing actions on behalf of the stub implementation.
-  class StubDelegate {
-   public:
-    virtual ~StubDelegate() {}
-
-    // Locks the screen. Invoked by the stub when RequestLockScreen() is called.
-    // In the real implementation of SessionManagerClient::RequestLockScreen(),
-    // a lock request is forwarded to the session manager; in the stub, this is
-    // short-circuited and the screen is locked immediately.
-    virtual void LockScreenForStub() = 0;
-  };
-
   // Creates and initializes the global instance. |bus| must not be null.
   static void Initialize(dbus::Bus* bus);
 
@@ -160,10 +149,6 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
 
   SessionManagerClient(const SessionManagerClient&) = delete;
   SessionManagerClient& operator=(const SessionManagerClient&) = delete;
-
-  // Sets the delegate used by the stub implementation. Ownership of |delegate|
-  // remains with the caller.
-  virtual void SetStubDelegate(StubDelegate* delegate) = 0;
 
   // Adds or removes an observer.
   virtual void AddObserver(Observer* observer) = 0;
@@ -348,6 +333,7 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
   // callback.
   virtual void StorePolicyForUser(
       const cryptohome::AccountIdentifier& cryptohome_id,
+      login_manager::PolicyDomain domain,
       const std::string& policy_blob,
       chromeos::VoidDBusMethodCallback callback) = 0;
 

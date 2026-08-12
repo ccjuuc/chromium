@@ -19,32 +19,24 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/bookmarks/bookmark_drag_drop.h"
 #include "chrome/browser/ui/bookmarks/bookmark_utils.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/grit/platform_locale_settings.h"
 #include "components/bookmarks/browser/base_bookmark_model_observer.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node_data.h"
+#include "components/commerce/core/price_tracking_utils.h"
+#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-shared.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
-#include "ui/base/l10n/l10n_util.h"
-#include "ui/base/resource/resource_bundle.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/canvas.h"
-#include "ui/gfx/color_palette.h"
-#include "ui/gfx/font.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/image/canvas_image_source.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/render_text.h"
-#include "ui/resources/grit/ui_resources.h"
 #include "ui/views/drag_utils.h"
-#include "ui/views/style/platform_style.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/style/typography_provider.h"
 #include "ui/views/widget/widget.h"
@@ -154,8 +146,10 @@ class BookmarkDragImageSource : public gfx::CanvasImageSource {
 
     // Draw icon image.
     canvas->DrawImageInt(
-        icon_, kContainerRadius - kIconSize / 2,
-        kContainerRadius + kIconContainerRadius - kIconSize / 2);
+        icon_, /*src_x=*/0, /*src_y=*/0, icon_.width(), icon_.height(),
+        kContainerRadius - kIconSize / 2,
+        kContainerRadius + kIconContainerRadius - kIconSize / 2, kIconSize,
+        kIconSize, /*filter=*/true);
 
     // Draw bookmark title.
     gfx::FontList font_list = views::TypographyProvider::Get().GetFont(
@@ -253,8 +247,13 @@ class BookmarkDragHelper : public bookmarks::BaseBookmarkModelObserver {
 
       icon = ui::ImageModel::FromImage(image);
     } else {
-      icon = GetBookmarkFolderIcon(chrome::BookmarkFolderIconType::kNormal,
-                                   ui::kColorMenuIcon);
+      if (commerce::IsShoppingCollectionBookmarkFolder(drag_node)) {
+        icon = ui::ImageModel::FromVectorIcon(vector_icons::kShoppingBagIcon,
+                                              ui::kColorMenuIcon);
+      } else {
+        icon = GetBookmarkFolderIcon(chrome::BookmarkFolderIconType::kNormal,
+                                     ui::kColorMenuIcon);
+      }
     }
 
     OnBookmarkIconLoaded(drag_node, icon);
@@ -348,11 +347,11 @@ void DoDragImpl(std::unique_ptr<ui::OSExchangeData> drag_data,
 
   views::Widget* widget = views::Widget::GetWidgetForNativeView(native_view);
   if (widget) {
-    widget->RunShellDrag(nullptr, std::move(drag_data), gfx::Point(), operation,
-                         source);
+    widget->RunDragDropLoop(nullptr, std::move(drag_data), gfx::Point(),
+                            operation, source);
   } else {
-    views::RunShellDrag(native_view, std::move(drag_data), point, operation,
-                        source);
+    views::RunDragDropLoop(native_view, std::move(drag_data), point, operation,
+                           source);
   }
 }
 

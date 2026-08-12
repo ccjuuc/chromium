@@ -26,7 +26,7 @@ class AnimationEvents;
 class AnimationHost;
 class AnimationTimeline;
 class KeyframeEffect;
-struct AnimationEvent;
+struct AnimationPlaybackEvent;
 
 // An Animation is responsible for managing animating properties for a set of
 // targets. Each target is represented by a KeyframeEffect and can be animating
@@ -94,7 +94,10 @@ class CC_ANIMATION_EXPORT Animation : public base::RefCounted<Animation>,
   void DetachElement();
 
   void AddKeyframeModel(std::unique_ptr<KeyframeModel> keyframe_model);
-  void PauseKeyframeModel(int keyframe_model_id, base::TimeDelta time_offset);
+  void PauseKeyframeModelForTesting(int keyframe_model_id,
+                                    base::TimeDelta hold_time);
+  void Pause(base::TimeDelta hold_time,
+             KeyframeModel::RunState pause_run_state = KeyframeModel::PAUSED);
   virtual void RemoveKeyframeModel(int keyframe_model_id);
   void AbortKeyframeModel(int keyframe_model_id);
 
@@ -124,7 +127,7 @@ class CC_ANIMATION_EXPORT Animation : public base::RefCounted<Animation>,
   // appropriate, based on the event characteristics.
   // Delegates animation event that was successfully dispatched or doesn't need
   // to be dispatched.
-  void DispatchAndDelegateAnimationEvent(const AnimationEvent& event);
+  void DispatchAndDelegateAnimationEvent(const AnimationPlaybackEvent& event);
 
   // Returns true if this animation effects pending tree, such as a custom
   // property animation with paint worklet.
@@ -150,7 +153,35 @@ class CC_ANIMATION_EXPORT Animation : public base::RefCounted<Animation>,
 
   void set_is_replacement() { is_replacement_ = true; }
 
+  void SetStartTime(base::TimeTicks start_time);
   std::optional<base::TimeTicks> GetStartTime() const;
+
+  void SetHoldTime(std::optional<base::TimeDelta> hold_time);
+
+  void SetPlaybackRate(double playback_rate);
+  double GetPlaybackRate() const;
+
+  base::TimeDelta CalculateCurrentTime(base::TimeTicks monotonic_time) const;
+
+  void SetRunState(KeyframeModel::RunState run_state);
+  KeyframeModel::RunState GetRunState() const;
+
+  bool IsPaused() const;
+  bool IsFinished() const;
+
+  // Controls whether to rewind the animation when playing.
+  // With kDisabled, Play does not rewind.
+  // With kEnabled, Play rewinds if the animation has already finished.
+  // With kForced, Play rewinds unconditionally.
+  enum class AutoRewind { kDisabled, kEnabled, kForced };
+  void Play(base::TimeTicks monotonic_time,
+            AutoRewind auto_rewind = AutoRewind::kEnabled);
+  void PlayInternal(base::TimeTicks monotonic_time,
+                    AutoRewind auto_rewind,
+                    double playback_rate);
+
+  void Reverse(base::TimeTicks monotonic_time,
+               AutoRewind auto_rewind = AutoRewind::kEnabled);
 
   virtual bool IsWorkletAnimation() const;
 
@@ -168,7 +199,7 @@ class CC_ANIMATION_EXPORT Animation : public base::RefCounted<Animation>,
   void UnregisterAnimation();
 
   // Delegates animation event
-  void DelegateAnimationEvent(const AnimationEvent& event);
+  void DelegateAnimationEvent(const AnimationPlaybackEvent& event);
 
   // Common code between AttachElement and AttachNoElement.
   void AttachElementInternal(ElementId element_id);

@@ -18,6 +18,7 @@
 #import "ios/chrome/browser/metrics/model/metrics_app_interface.h"
 #import "ios/chrome/browser/policy/model/policy_util.h"
 #import "ios/chrome/browser/safari_data_import/test/safari_data_import_earl_grey_ui.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/common/ui/promo_style/constants.h"
 #import "ios/chrome/grit/ios_branded_strings.h"
 #import "ios/chrome/grit/ios_strings.h"
@@ -34,10 +35,7 @@
   id<GREYMatcher> buttonMatcher = grey_allOf(
       grey_ancestor(grey_accessibilityID(
           first_run::kFirstRunDefaultBrowserScreenAccessibilityIdentifier)),
-      grey_accessibilityTrait(UIAccessibilityTraitStaticText),
-      grey_accessibilityLabel(l10n_util::GetNSString(
-          IDS_IOS_FIRST_RUN_DEFAULT_BROWSER_SCREEN_SECONDARY_ACTION)),
-      nil);
+      chrome_test_util::ButtonStackSecondaryButton(), nil);
 
   [[[EarlGrey selectElementWithMatcher:buttonMatcher]
       assertWithMatcher:grey_notNil()] performAction:grey_tap()];
@@ -99,6 +97,7 @@
                                    test_switches::kAddFakeIdentitiesAtStartup);
   config.additional_args.push_back("-FirstRunForceEnabled");
   config.additional_args.push_back("true");
+  config.features_disabled.push_back(kBestOfAppFRE);
   config.additional_args.push_back(
       "--enable-features=BestFeaturesScreenInFirstRunExperience");
   config.additional_args.push_back("--BestFeaturesScreenInFirstRunParam=1");

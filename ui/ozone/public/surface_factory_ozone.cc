@@ -126,32 +126,9 @@ void SurfaceFactoryOzone::SetDrmModifiersFilter(
   NOTIMPLEMENTED();
 }
 
-std::vector<gfx::BufferFormat>
-SurfaceFactoryOzone::GetSupportedFormatsForTexturing() const {
-  return std::vector<gfx::BufferFormat>();
-}
-
-std::vector<viz::SharedImageFormat>
-SurfaceFactoryOzone::GetSupportedFormatsForGLNativePixmapImport() {
-  std::vector<viz::SharedImageFormat> supported_formats;
-  auto* gl_ozone = GetCurrentGLOzone();
-  if (!gl_ozone) {
-    return supported_formats;
-  }
-
-  for (int j = 0; j <= static_cast<int>(gfx::BufferFormat::LAST); ++j) {
-    const gfx::BufferFormat buffer_format = static_cast<gfx::BufferFormat>(j);
-    auto format = viz::GetSharedImageFormat(buffer_format);
-    if (gl_ozone->CanImportNativePixmap(format)) {
-      supported_formats.push_back(format);
-    }
-  }
-  return supported_formats;
-}
-
-std::optional<viz::SharedImageFormat>
-SurfaceFactoryOzone::GetPreferredFormatForSolidColor() const {
-  return std::nullopt;
+bool SurfaceFactoryOzone::IsFormatSupportedForTexturing(
+    viz::SharedImageFormat format) const {
+  return false;
 }
 
 }  // namespace ui

@@ -1,9 +1,8 @@
 Name: libaddressinput
 URL: https://github.com/google/libaddressinput
-Version: 2610f7b104
-Revision: 2610f7b104
-Update Mechanism: Manual
-Date: 2024-05-06
+Version: N/A
+Revision: 81eb9628382b07d371d8ea0b11badf7de3857fd5
+Update Mechanism: Autoroll
 License: Apache-2.0
 License File: LICENSE
 Security Critical: yes

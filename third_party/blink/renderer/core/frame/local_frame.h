@@ -32,11 +32,13 @@
 #include <memory>
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/gtest_prod_util.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
 #include "build/build_config.h"
+#include "cc/metrics/begin_main_frame_metrics.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "net/storage_access_api/status.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
@@ -50,6 +52,7 @@
 #include "third_party/blink/public/mojom/confidence_level.mojom-blink.h"
 #include "third_party/blink/public/mojom/device_posture/device_posture_provider.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/devtools/devtools_agent.mojom-blink-forward.h"
+#include "third_party/blink/public/mojom/favicon/favicon_url.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/frame/back_forward_cache_controller.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/frame/frame.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/frame/frame_owner_properties.mojom-blink-forward.h"
@@ -71,12 +74,12 @@
 #include "third_party/blink/public/platform/web_content_settings_client.h"
 #include "third_party/blink/public/web/web_print_params.h"
 #include "third_party/blink/public/web/web_script_execution_callback.h"
+#include "third_party/blink/renderer/core/ad_tracker/ad_script_identifier.h"
+#include "third_party/blink/renderer/core/ad_tracker/ad_tracker.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/weak_identifier_map.h"
 #include "third_party/blink/renderer/core/editing/forward.h"
 #include "third_party/blink/renderer/core/editing/iterators/text_iterator_behavior.h"
-#include "third_party/blink/renderer/core/frame/ad_script_identifier.h"
-#include "third_party/blink/renderer/core/frame/ad_tracker.h"
 #include "third_party/blink/renderer/core/frame/frame.h"
 #include "third_party/blink/renderer/core/frame/frame_types.h"
 #include "third_party/blink/renderer/core/frame/frame_visibility_observer.h"
@@ -118,8 +121,8 @@ class SharedURLLoaderFactory;
 namespace blink {
 
 class AdTracker;
+class ScriptInitiationMonitor;
 class AssociatedInterfaceProvider;
-class AttributionSrcLoader;
 class AuditsIssue;
 class BackgroundColorPaintImageGenerator;
 class BoxShadowPaintImageGenerator;
@@ -132,6 +135,7 @@ class Editor;
 class Element;
 class EventHandler;
 class EventHandlerRegistry;
+class EventTarget;
 class FrameConsole;
 class FrameOverlay;
 class FrameSelection;
@@ -153,7 +157,6 @@ class LocalWindowProxy;
 class Node;
 class NodeTraversal;
 class PerformanceMonitor;
-class WebLinkPreviewTriggerer;
 class PluginData;
 class PolicyContainer;
 class PostLayoutSnapshotClient;
@@ -163,21 +166,22 @@ class StyleEnvironmentVariables;
 class SystemClipboard;
 class TextFragmentHandler;
 class TextSuggestionController;
+class URLLoader;
 class VirtualKeyboardOverlayChangedObserver;
+class WebAutofillClient;
 class WebContentSettingsClient;
 class WebInputEventAttribution;
 class WebPluginContainerImpl;
 class WebPrescientNetworking;
-class URLLoader;
+class WindowControlsOverlayChangedDelegate;
+enum class BackForwardCacheAware;
+enum class MediaValueChange;
 struct BlinkTransferableMessage;
 struct WebScriptSource;
-class WindowControlsOverlayChangedDelegate;
 
 namespace v8_compile_hints {
 class V8LocalCompileHintsProducer;
 }  // namespace v8_compile_hints
-
-enum class BackForwardCacheAware;
 
 extern template class CORE_EXTERN_TEMPLATE_EXPORT Supplement<LocalFrame>;
 
@@ -228,18 +232,24 @@ class CORE_EXPORT LocalFrame final
   //   you pass ukm::kInvalidSourceId, a new ukm source id will be generated.
   // - `creator_base_url` is the base url of the initiator that created this
   //    frame.
+  // - `sandbox_origin_token` is used to deterministically generate opaque
+  //    origins for newly created sandboxed frames and windows. Only set
+  //    during initial frame/window creation, null for regular cross-document
+  //    navigation commits.
   //
   // Note: Usually, the initial empty document inherits its |policy_container|
   // and |storage_key| from the parent or the opener. The inheritance operation
   // is taken care of by the browser (if this LocalFrame was just created in
   // response to the creation of a RenderFrameHost) or by blink if this is a
   // synchronously created LocalFrame child.
-  void Init(Frame* opener,
-            const DocumentToken& document_token,
-            std::unique_ptr<PolicyContainer> policy_container,
-            const StorageKey& storage_key,
-            ukm::SourceId document_ukm_source_id,
-            const KURL& creator_base_url);
+  void Init(
+      Frame* opener,
+      const DocumentToken& document_token,
+      std::unique_ptr<PolicyContainer> policy_container,
+      const StorageKey& storage_key,
+      ukm::SourceId document_ukm_source_id,
+      const KURL& creator_base_url,
+      std::unique_ptr<base::UnguessableToken> sandbox_origin_token = nullptr);
   void SetView(LocalFrameView*);
   void CreateView(const gfx::Size&, const Color&);
 
@@ -343,7 +353,7 @@ class CORE_EXPORT LocalFrame final
 
   // Returns the transient user activation state of the |LocalFrame|, provided
   // it is non-null.  Otherwise returns |false|.
-  static bool HasTransientUserActivation(LocalFrame*);
+  static bool HasTransientUserActivation(const LocalFrame*);
 
   // Consumes the transient user activation state of the |LocalFrame|, provided
   // the frame pointer is non-null and the state hasn't been consumed since
@@ -361,9 +371,6 @@ class CORE_EXPORT LocalFrame final
   // Activates or clears history user activation state and also notifies frame
   // scheduler of the state change.
   void SetHadUserInteraction(bool had_user_interaction);
-
-  // Sets the Storage Access API status in the browser process..
-  void SetStorageAccessApiStatus(net::StorageAccessApiStatus status);
 
   // Registers an observer that will be notified if a VK occludes
   // the content when it raises/dismisses. The observer is a HeapHashSet
@@ -397,7 +404,8 @@ class CORE_EXPORT LocalFrame final
 
   void NetworkBecameAlmostIdle(base::TimeDelta almost_idle_start_time);
   void NetworkBecameIdle(base::TimeDelta idle_start_time);
-  void RequestNetworkIdleCallback(base::OnceClosure callback);
+  [[nodiscard]] base::CallbackListSubscription RequestNetworkIdleCallback(
+      base::OnceClosure callback);
 
   // =========================================================================
   // All public functions below this point are candidates to move out of
@@ -454,9 +462,6 @@ class CORE_EXPORT LocalFrame final
       StyleEnvironmentVariables& vars,
       const std::vector<gfx::Rect>& viewport_segments);
 
-  void OverrideDevicePostureForEmulation(
-      mojom::blink::DevicePostureType device_posture_param);
-  void DisableDevicePostureOverrideForEmulation();
   mojom::blink::DevicePostureType GetDevicePosture();
 
   String SelectedText() const;
@@ -479,7 +484,8 @@ class CORE_EXPORT LocalFrame final
   // returned after it.
   FrameScheduler* GetFrameScheduler();
   scoped_refptr<base::SingleThreadTaskRunner> GetTaskRunner(TaskType);
-  void ScheduleVisualUpdateUnlessThrottled();
+  void ScheduleVisualUpdateUnlessThrottled(
+      cc::BeginMainFrameReason reason = cc::BeginMainFrameReason::kOther);
 
   bool IsNavigationAllowed() const { return navigation_disable_count_ == 0; }
 
@@ -537,6 +543,8 @@ class CORE_EXPORT LocalFrame final
   WebContentSettingsClient* GetContentSettingsClient();
   const mojom::RendererContentSettingsPtr& GetContentSettings() const;
 
+  WebAutofillClient* GetAutofillClient();
+
   PluginData* GetPluginData() const;
 
   PerformanceMonitor* GetPerformanceMonitor() {
@@ -544,11 +552,10 @@ class CORE_EXPORT LocalFrame final
   }
   IdlenessDetector* GetIdlenessDetector() { return idleness_detector_.Get(); }
   AdTracker* GetAdTracker() { return ad_tracker_.Get(); }
+  ScriptInitiationMonitor* GetScriptInitiationMonitor() const;
+  ScriptInitiationMonitor* GetOrCreateScriptInitiationMonitor();
   void SetAdTrackerForTesting(AdTracker* ad_tracker);
   LCPScriptObserver* GetScriptObserver() { return script_observer_.Get(); }
-  AttributionSrcLoader* GetAttributionSrcLoader() {
-    return attribution_src_loader_.Get();
-  }
 
   enum class LazyLoadImageSetting { kDisabled, kEnabledExplicit };
   // Returns the enabled state of lazyloading of images.
@@ -601,10 +608,15 @@ class CORE_EXPORT LocalFrame final
   bool NeedsOcclusionTracking() const;
 
   // Replaces the initial empty document with a Document suitable for
-  // |mime_type| and populated with the contents of |data|. Only intended for
-  // use in internal-implementation LocalFrames that aren't in the frame tree.
+  // `mime_type` and populated with the contents of `data`. Optionally set the
+  // URL of the document to `url`. Pass `NullUrl()` if no URL is necessary.
+  // These functions are only intended for use in internal-implementation
+  // LocalFrames that aren't in the frame tree.
   void ForceSynchronousDocumentInstall(const AtomicString& mime_type,
                                        const SegmentedBuffer& data);
+  void ForceSynchronousDocumentInstall(const AtomicString& mime_type,
+                                       const SegmentedBuffer& data,
+                                       const KURL& url);
 
   // Called when certain event listeners are added for the first time/last time,
   // making it possible/not possible to terminate the frame suddenly.
@@ -741,7 +753,7 @@ class CORE_EXPORT LocalFrame final
 
   void FinishedLoading(FrameLoader::NavigationFinishState);
 
-  void UpdateFaviconURL();
+  void UpdateFaviconURL(mojom::blink::FaviconUpdateReason reason);
 
   using IsCapturingMediaCallback = base::RepeatingCallback<bool()>;
   void SetIsCapturingMediaCallback(IsCapturingMediaCallback callback);
@@ -774,6 +786,10 @@ class CORE_EXPORT LocalFrame final
       const ResourceRequest& request,
       network::mojom::blink::RedirectMode cross_origin_redirect_behavior,
       mojo::PendingRemote<mojom::blink::BlobURLToken> blob_url_token);
+
+  // Requests that the browser open the operating system's caption style
+  // settings page.
+  void ShowCaptionSettings();
 
   void NotifyUserActivation(
       mojom::blink::UserActivationNotificationType notification_type);
@@ -819,6 +835,13 @@ class CORE_EXPORT LocalFrame final
 
   LocalFrameToken GetLocalFrameToken() const;
 
+  // A helper that returns the initiator state token from the LocalFrame's
+  // LocalDomWindow.
+  const base::UnguessableToken& GetInitiatorStateToken() const;
+
+  // A helper that returns the document token from the LocalFrame's Document.
+  DocumentToken GetDocumentToken() const;
+
   LoaderFreezeMode GetLoaderFreezeMode();
 
   // Swaps `this` LocalFrame in to replace the current frame  (e.g. in the case
@@ -863,9 +886,15 @@ class CORE_EXPORT LocalFrame final
   // to FrameFirstPaint.
   void OnFirstPaint(bool text_painted, bool image_painted);
 
-  // Invoked on first contentful paint on this frame.
-  void OnFirstContentfulPaint(const base::TimeTicks& paint_time,
-                              const base::TimeTicks& navigation_time);
+  // Invoked on first contentful paint on this frame. `presentation_time` is the
+  // renderer-side presentation timestamp of the first contentful paint.
+  void OnFirstContentfulPaint(const base::TimeTicks& presentation_time);
+
+  // Invoked when the outermost main frame's largest contentful paint candidate
+  // changed. May be invoked multiple times as larger elements paint.
+  // `presentation_time` is the renderer-side presentation timestamp of the
+  // current largest contentful paint candidate.
+  void OnLargestContentfulPaint(const base::TimeTicks& presentation_time);
 
   void WriteIntoTrace(perfetto::TracedValue ctx) const;
 
@@ -962,9 +991,6 @@ class CORE_EXPORT LocalFrame final
   mojo::PendingRemote<mojom::blink::NavigationStateKeepAliveHandle>
   IssueKeepAliveHandle();
 
-  WebLinkPreviewTriggerer* GetOrCreateLinkPreviewTriggerer();
-  void SetLinkPreviewTriggererForTesting(
-      std::unique_ptr<WebLinkPreviewTriggerer> trigger);
 
   void AllowStorageAccessAndNotify(
       blink::WebContentSettingsClient::StorageType storage_type,
@@ -973,11 +999,12 @@ class CORE_EXPORT LocalFrame final
   bool AllowStorageAccessSyncAndNotify(
       blink::WebContentSettingsClient::StorageType storage_type);
 
-  void NotifyFrameVisibilityChanged(mojom::blink::FrameVisibility visibility);
+  void AddVisibilityObserver(FrameVisibilityObserver* observer);
+  void RemoveVisibilityObserver(FrameVisibilityObserver* observer);
 
-  HeapHashSet<WeakMember<FrameVisibilityObserver>>&
-  GetFrameVisibilityObserverSet() {
-    return frame_visibility_observers_;
+  void OnFrameVisibilityChangedForMediaPlayback(bool is_hidden);
+  std::optional<bool> IsHiddenForMediaPlayback() const {
+    return is_hidden_for_media_playback_;
   }
 
   bool IsCaretBrowsingOverridden() { return is_caret_browsing_overridden_; }
@@ -987,7 +1014,7 @@ class CORE_EXPORT LocalFrame final
   }
 
 #if BUILDFLAG(IS_ANDROID)
-  void PerformSpellCheck();
+  void PerformFullContentSpellCheck();
 #endif  // BUILDFLAG(IS_ANDROID)
  private:
   friend class FrameNavigationDisabler;
@@ -1057,8 +1084,6 @@ class CORE_EXPORT LocalFrame final
   void SetTitlebarAreaDocumentStyleEnvironmentVariables() const;
   void MaybeUpdateWindowControlsOverlayWithNewZoomLevel();
 
-  void EnsureLinkPreviewTriggererInitialized();
-
   void OnStorageAccessCallback(base::OnceCallback<void(bool)> callback,
                                mojom::blink::StorageTypeAccessed storage_type,
                                bool isAllowed);
@@ -1120,9 +1145,9 @@ class CORE_EXPORT LocalFrame final
   Member<PerformanceMonitor> performance_monitor_;
 
   Member<AdTracker> ad_tracker_;
+  Member<ScriptInitiationMonitor> script_initiation_monitor_;
   Member<IdlenessDetector> idleness_detector_;
-  base::OnceClosure network_idle_callback_;
-  Member<AttributionSrcLoader> attribution_src_loader_;
+  base::OnceClosureList network_idle_callbacks_;
   Member<InspectorIssueReporter> inspector_issue_reporter_;
   Member<InspectorTraceEvents> inspector_trace_events_;
   // Access content_capture_manager_ through GetOrResetContentCaptureManager()
@@ -1273,16 +1298,18 @@ class CORE_EXPORT LocalFrame final
 
   BrowserInterfaceBrokerProxyImpl browser_interface_broker_proxy_;
 
-  // Holds WebLinkPreviewTriggerer instance if content renderer client wants to
-  // inject it. Note that `link_preview_triggerer_` may be nullptr after
-  // initialization.
-  bool is_link_preivew_triggerer_initialized_ = false;
-  std::unique_ptr<WebLinkPreviewTriggerer> link_preview_triggerer_;
 
   HeapHashSet<WeakMember<FrameVisibilityObserver>> frame_visibility_observers_;
 
   // Whether caret browsing mode has been overridden by the embedder or not.
   bool is_caret_browsing_overridden_ = false;
+
+  // Whether this frame is hidden for the purposes of the
+  // media-playback-while-not-visible permission policy. Uses std::optional so
+  // that clients can know whether the value has been calculated already. True
+  // when the frame or any of its ancestors is not rendered (e.g. display:none,
+  // visibility:hidden, or zero-area layout on the iframe element).
+  std::optional<bool> is_hidden_for_media_playback_;
 };
 
 inline FrameLoader& LocalFrame::Loader() const {

@@ -5,6 +5,7 @@
 #include "services/tracing/public/cpp/system_metrics_sampler.h"
 
 #include "base/check.h"
+#include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/power_monitor/cpu_frequency_utils.h"
 #include "base/task/sequenced_task_runner.h"
@@ -12,7 +13,7 @@
 #include "base/time/time.h"
 #include "base/trace_event/common/trace_event_common.h"
 #include "base/trace_event/trace_event.h"
-#include "services/tracing/public/mojom/perfetto_service.mojom.h"
+#include "services/tracing/public/cpp/perfetto/perfetto_data_source_names.h"
 #include "third_party/perfetto/include/perfetto/tracing/core/data_source_descriptor.h"
 #include "third_party/perfetto/protos/perfetto/config/chrome/system_metrics.gen.h"
 #include "third_party/perfetto/protos/perfetto/config/data_source_config.gen.h"
@@ -28,13 +29,13 @@ namespace tracing {
 
 namespace {
 
-constexpr base::TimeDelta kDefaultSamplingInterval = base::Seconds(5);
+constexpr base::TimeDelta kDefaultSamplingInterval = base::Milliseconds(500);
 
 }  // namespace
 
 void SystemMetricsSampler::Register(bool system_wide) {
   perfetto::DataSourceDescriptor desc;
-  desc.set_name(tracing::mojom::kSystemMetricsSourceName);
+  desc.set_name(kSystemMetricsSourceName);
   perfetto::DataSource<SystemMetricsSampler>::Register(desc, system_wide);
 }
 

@@ -8,6 +8,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/byte_size.h"
 #include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/test/task_environment.h"
@@ -31,11 +32,11 @@ constexpr char kSafeSearchApiUrl[] =
     "https://safesearch.googleapis.com/v1:classify";
 
 std::string BuildResponse(bool is_porn) {
-  base::Value::Dict dict;
-  base::Value::Dict classification_dict;
+  base::DictValue dict;
+  base::DictValue classification_dict;
   if (is_porn)
     classification_dict.Set("pornography", is_porn);
-  base::Value::List classifications_list;
+  base::ListValue classifications_list;
   classifications_list.Append(std::move(classification_dict));
   dict.Set("classifications", std::move(classifications_list));
   return base::WriteJson(dict).value_or("");
@@ -87,7 +88,7 @@ class SafeSearchURLCheckerClientTest : public testing::Test {
 
   void SetUpResponse(net::Error error, const std::string& response) {
     network::URLLoaderCompletionStatus status(error);
-    status.decoded_body_length = response.size();
+    status.decoded_body_length = base::ByteSize(response.size());
     test_url_loader_factory_.AddResponse(GURL(kSafeSearchApiUrl),
                                          network::mojom::URLResponseHead::New(),
                                          response, status);

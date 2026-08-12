@@ -5,8 +5,11 @@
 #import "ios/chrome/browser/bookmarks/folder_chooser/ui/table_view_bookmarks_folder_item.h"
 
 #import "base/apple/foundation_util.h"
+#import "base/functional/bind.h"
 #import "base/i18n/rtl.h"
+#import "base/location.h"
 #import "base/strings/sys_string_conversions.h"
+#import "base/task/single_thread_task_runner.h"
 #import "ios/chrome/browser/bookmarks/public/bookmarks_ui_constants.h"
 #import "ios/chrome/browser/bookmarks/ui_bundled/cells/bookmark_table_cell_title_edit_delegate.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
@@ -43,9 +46,8 @@ const CGFloat kFolderCellHorizonalInset = 17.0;
   return self;
 }
 
-- (void)configureCell:(LegacyTableViewCell*)cell
-           withStyler:(ChromeTableViewStyler*)styler {
-  [super configureCell:cell withStyler:styler];
+- (void)configureCell:(LegacyTableViewCell*)cell {
+  [super configureCell:cell];
   TableViewBookmarksFolderCell* folderCell =
       base::apple::ObjCCastStrict<TableViewBookmarksFolderCell>(cell);
   switch (self.style) {
@@ -128,8 +130,8 @@ const CGFloat kFolderCellHorizonalInset = 17.0;
                           forAxis:UILayoutConstraintAxisHorizontal];
 
     // Slashed cloud view.
-    UIImage* cloudSlashedImage = CustomSymbolWithPointSize(
-        kCloudSlashSymbol, kCloudSlashSymbolPointSize);
+    UIImage* cloudSlashedImage =
+        SymbolWithPointSize(SymbolCloudSlash, kCloudSlashSymbolPointSize);
     self.cloudSlashedView =
         [[UIImageView alloc] initWithImage:cloudSlashedImage];
     self.cloudSlashedView.tintColor = CloudSlashTintColor();
@@ -220,12 +222,18 @@ const CGFloat kFolderCellHorizonalInset = 17.0;
   [self.folderTitleTextField becomeFirstResponder];
   // selectAll doesn't work immediately after calling becomeFirstResponder.
   // Do selectAll on the next run loop.
-  dispatch_async(dispatch_get_main_queue(), ^{
-    if ([self.folderTitleTextField isFirstResponder]) {
-      [self.folderTitleTextField selectAll:nil];
-    }
-  });
+  __weak __typeof(self) weakSelf = self;
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(^{
+        [weakSelf startEditCallback];
+      }));
   self.folderTitleTextField.delegate = self;
+}
+
+- (void)startEditCallback {
+  if ([self.folderTitleTextField isFirstResponder]) {
+    [self.folderTitleTextField selectAll:nil];
+  }
 }
 
 - (void)stopEdit {

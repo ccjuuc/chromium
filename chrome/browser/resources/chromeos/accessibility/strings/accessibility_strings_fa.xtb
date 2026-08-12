@@ -76,7 +76,7 @@
 <translation id="133801305381959373">فیلد نوشتاری قابل‌ویرایش بعدی وجود ندارد</translation>
 <translation id="1342835525016946179">article</translation>
 <translation id="1346059596910821859">نکته</translation>
-<translation id="1354356357730355833">کپی</translation>
+<translation id="1354356357730355833">کپی کردن</translation>
 <translation id="1360699455582016846">روی مورد زیر کلید مسیریابی <ph name="ROUTING_KEY_NUMBER" /> کلیک کنید</translation>
 <translation id="1365650529628379165">بالا بردن ابروها</translation>
 <translation id="1376703628032300005">رفتن به نویسه بعدی</translation>
@@ -242,11 +242,12 @@
 <translation id="2497706219848005458">مغز پسته‌ای</translation>
 <translation id="2512979179176933762">نمایش پنجره‌ها</translation>
 <translation id="2523609930580546572">‏آموزش گام‌به‌گام ChromeVox</translation>
+<translation id="2523760288355306549">ورودی بریل هنوز دردسترس نیست.</translation>
 <translation id="2525706221823668172">‏میان‌برهای صفحه‌کلید Chromebook</translation>
 <translation id="2553108862507765288">اشتباه دستوری</translation>
 <translation id="2556326187583116255">برای متوقف کردن گفتار فعلی، با ۲ انگشت تک‌ضرب بزنید</translation>
 <translation id="2573256689920773241">پیمایش پایه</translation>
-<translation id="257674075312929031">گروه</translation>
+<translation id="257674075312929031">گروه‌بندی</translation>
 <translation id="2577127557293415225">بستن هر دو چشم برای لحظه‌ای کوتاه</translation>
 <translation id="2582407057977008361">جدا</translation>
 <translation id="2592212930811759050">برای شروع ویرایش، دو ضربه سریع بزنید</translation>
@@ -263,7 +264,7 @@
 <translation id="2644542693584024604">املای اشتباه</translation>
 <translation id="2651441758640020174">فصل دلخواهتان را از فهرست انتخاب کنید.</translation>
 <translation id="2654172656519784359">یک واژه به جلو بروید</translation>
-<translation id="2661530546602071611">اطلاعیه</translation>
+<translation id="2661530546602071611">اعلامیه</translation>
 <translation id="2673280813984708147">درحال ویرایش</translation>
 <translation id="267442004702508783">بازآوری</translation>
 <translation id="2675533876313964202">سبز فسفری</translation>
@@ -476,7 +477,7 @@
 <translation id="3930498801443296724">نقل‌قول</translation>
 <translation id="3935615366277838204"><ph name="LETTER" /> بزرگ</translation>
 <translation id="3936394396199829062">صورتی مات</translation>
-<translation id="3943857333388298514">جاگذاری</translation>
+<translation id="3943857333388298514">جای‌گذاری</translation>
 <translation id="3962990492275676168">شروع به خواندن از محل کنونی</translation>
 <translation id="397094149579293440">نوشتار انتخاب نشده است</translation>
 <translation id="3970951409746498040">قهوه‌ای خاکی</translation>
@@ -567,7 +568,7 @@
 <translation id="4517854969512651305">افزایش مقدار</translation>
 <translation id="4537277403911487429">مورد مشابه بعدی</translation>
 <translation id="4547556996012970016">عنوان بعدی سطح ۵</translation>
-<translation id="4562381607973973258">Header</translation>
+<translation id="4562381607973973258">سرایند</translation>
 <translation id="4597532268155981612">فرم</translation>
 <translation id="4601047876198186470">‏.input {$$COUNT :number} .match $$COUNT 1{{علامت کوچک‌تر}} *{{{$$COUNT} علامت کوچک‌تر}}</translation>
 <translation id="4601367666219428522">‏جدول <ph name="TABLENAME" /> <ph name="TABLEROWS" />x<ph name="TABLECOLS" /></translation>
@@ -648,7 +649,7 @@
 <translation id="5050015258024679800">عنوان قبلی سطح ۴</translation>
 <translation id="5054047268577924192">مورد قبلی فهرست</translation>
 <translation id="5085453135206054947">ارغوانی مات</translation>
-<translation id="5087864757604726239">برگشت</translation>
+<translation id="5087864757604726239">برگشتن</translation>
 <translation id="5102981729317424850">نوار ابزار</translation>
 <translation id="5105050547967751155">rq</translation>
 <translation id="5111640677200759579">عنوان ستون</translation>
@@ -770,7 +771,7 @@
 <translation id="5866042630553435010">ناقص علامت زده‌شده</translation>
 <translation id="5866210856231860256">برای مرور کردن درس‌های این عنوان، کلید «جستجو» + «پیکان روبه‌راست» یا «جستجو» + «پیکان روبه‌چپ» را فشار دهید</translation>
 <translation id="5867591286054666064">در طول این آموزش گام‌به‌گام، برای شنیدن نام هر کلید روی آن فشار دهید.</translation>
-<translation id="5869546221129391014">جدولی</translation>
+<translation id="5869546221129391014">شبکه‌ای</translation>
 <translation id="5876817486144482042">کاهش میزان صدای گفتار</translation>
 <translation id="5878206664863390311">برای مرور کردن عنوان‌ها، کلید «جستجو» + «پیکان روبه‌راست» یا «جستجو» + «پیکان روبه‌چپ» را فشار دهید</translation>
 <translation id="5878908838135392163">آبی کبریتی روشن</translation>
@@ -896,7 +897,7 @@
 <translation id="6873188295213080042">‏نکته: برای پیمایش کردن، کلید Search را نگه دارید و کلیدهای جهت‌نما را فشار دهید.</translation>
 <translation id="6889949222685321250">.input {$$COUNT :number} .match $$COUNT 1{{+{$$COUNT}}} *{{+{$$COUNT}}}</translation>
 <translation id="6894148351896207544">گفتن تاریخ و زمان کنونی</translation>
-<translation id="6896758677409633944">کپی</translation>
+<translation id="6896758677409633944">کپی کردن</translation>
 <translation id="6897341342232909480">حرکت به چپ</translation>
 <translation id="6901540140423170855">تاریخ</translation>
 <translation id="6910211073230771657">حذف شد</translation>
@@ -1077,7 +1078,7 @@
 <translation id="8057472523431225012">مرحله فعلی</translation>
 <translation id="8058636807889143711">عبارت ریاضی بعدی وجود ندارد</translation>
 <translation id="8066678206530322333">بنر</translation>
-<translation id="8076492880354921740">برگه‌ها</translation>
+<translation id="8076492880354921740">زبانه‌ها</translation>
 <translation id="8083115023881784332">‏درحال حاضر تمرکزی در ChromeVox وجود ندارد. برای رفتن به راه‌انداز، Alt+Shift+L را فشار دهید.</translation>
 <translation id="8091452896542422286">فاصله</translation>
 <translation id="8096975275316362544">کرم نعنایی</translation>
@@ -1201,7 +1202,7 @@
 <translation id="9014206344398081366">‏آموزش گام‌به‌گام ChromeVox</translation>
 <translation id="9040132695316389094">عنوان ۱</translation>
 <translation id="9061884144798498064">انتخاب جدول بریل ۸ نقطه‌ای:</translation>
-<translation id="9063946545000394379">رفتن به نویسه قبلی</translation>
+<translation id="9063946545000394379">بردن به نویسه قبلی</translation>
 <translation id="9065283790526219006">+پنجره بازشو</translation>
 <translation id="9065912140022662363">دکمه رادیویی بعدی وجود ندارد</translation>
 <translation id="9067522039955793016">جداساز صفحه</translation>

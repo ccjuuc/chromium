@@ -5,7 +5,7 @@
 #import "ios/chrome/browser/lens_overlay/ui/lens_overlay_entrypoint_view.h"
 
 #import "base/memory/raw_ptr.h"
-#import "ios/chrome/browser/lens_overlay/coordinator/lens_overlay_availability.h"
+#import "ios/chrome/browser/lens_overlay/public/lens_overlay_availability.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
@@ -50,8 +50,8 @@ const CGFloat kVisibilityIndicatorSize = 30.0;
     [self setPreferredSymbolConfiguration:symbolConfig
                           forImageInState:UIControlStateNormal];
 
-    [self setImage:CustomSymbolWithPointSize(kCameraLensSymbol,
-                                             kLensCameraSymbolPointSize)
+    [self setImage:SymbolWithPointSize(SymbolCameraLens,
+                                       kLensCameraSymbolPointSize)
           forState:UIControlStateNormal];
     self.imageView.contentMode = UIViewContentModeScaleAspectFit;
 
@@ -60,10 +60,8 @@ const CGFloat kVisibilityIndicatorSize = 30.0;
     ]];
 
     __weak __typeof(self) weakSelf = self;
-    NSArray<UITrait>* traits = TraitCollectionSetForTraits(
-        @[ UITraitHorizontalSizeClass.class, UITraitVerticalSizeClass.class ]);
-
-    [self registerForTraitChanges:traits
+    [self registerForTraitChanges:@[
+      UITraitHorizontalSizeClass.class, UITraitVerticalSizeClass.class]
                       withHandler:^(id<UITraitEnvironment> traitEnvironment,
                                     UITraitCollection* previousCollection) {
                         [weakSelf setEnabledOnTraitChange:previousCollection];

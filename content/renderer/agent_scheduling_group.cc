@@ -22,26 +22,22 @@
 #include "content/renderer/render_frame_impl.h"
 #include "content/renderer/render_thread_impl.h"
 #include "content/renderer/renderer_navigation_metrics_manager.h"
-#include "ipc/ipc_channel_factory.h"
+#include "ipc/ipc_channel_proxy.h"
 #include "ipc/ipc_listener.h"
-#include "ipc/ipc_sync_channel.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "third_party/blink/public/mojom/frame/frame.mojom.h"
 #include "third_party/blink/public/mojom/page/page.mojom.h"
 #include "third_party/blink/public/mojom/page/prerender_page_param.mojom.h"
-#include "third_party/blink/public/mojom/shared_storage/shared_storage_worklet_service.mojom.h"
 #include "third_party/blink/public/mojom/worker/worklet_global_scope_creation_params.mojom.h"
 #include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
 #include "third_party/blink/public/web/web_remote_frame.h"
-#include "third_party/blink/public/web/web_shared_storage_worklet_thread.h"
 #include "third_party/blink/public/web/web_view.h"
 #include "third_party/blink/public/web/web_view_client.h"
 
 namespace content {
 
-using ::IPC::ChannelFactory;
+using ::IPC::ChannelProxy;
 using ::IPC::Listener;
-using ::IPC::SyncChannel;
 using ::mojo::AssociatedReceiver;
 using ::mojo::AssociatedRemote;
 using ::mojo::PendingAssociatedReceiver;
@@ -125,10 +121,9 @@ AgentSchedulingGroup::AgentSchedulingGroup(
   DCHECK(agent_group_scheduler_);
   DCHECK_NE(GetMBIMode(), features::MBIMode::kLegacy);
 
-  channel_ = SyncChannel::Create(
+  channel_ = std::make_unique<IPC::ChannelProxy>(
       /*listener=*/this, /*ipc_task_runner=*/render_thread_->GetIOTaskRunner(),
-      /*listener_task_runner=*/agent_group_scheduler_->DefaultTaskRunner(),
-      render_thread_->GetShutdownEvent());
+      /*listener_task_runner=*/agent_group_scheduler_->DefaultTaskRunner());
 
   channel_->SetUrgentMessageObserver(agent_group_scheduler_.get());
 
@@ -137,12 +132,8 @@ AgentSchedulingGroup::AgentSchedulingGroup(
   // 1. `UnfreezableMessageFilter` - in the process of being removed,
   // 2. `AutomationMessageFilter` - needs to be handled somehow.
 
-  channel_->Init(
-      ChannelFactory::CreateClientFactory(
-          bootstrap.PassPipe(),
-          /*ipc_task_runner=*/render_thread_->GetIOTaskRunner(),
-          /*proxy_task_runner=*/agent_group_scheduler_->DefaultTaskRunner()),
-      /*create_pipe_now=*/true);
+  channel_->Init(bootstrap.PassPipe(), IPC::Channel::MODE_CLIENT,
+                 /*create_pipe_now=*/true);
 }
 
 AgentSchedulingGroup::AgentSchedulingGroup(
@@ -161,11 +152,6 @@ AgentSchedulingGroup::AgentSchedulingGroup(
 
 AgentSchedulingGroup::~AgentSchedulingGroup() = default;
 
-void AgentSchedulingGroup::OnBadMessageReceived() {
-  // Not strictly required, since we don't currently do anything with bad
-  // messages in the renderer, but if we ever do then this will "just work".
-  return ToImpl(*render_thread_).OnBadMessageReceived();
-}
 
 void AgentSchedulingGroup::OnAssociatedInterfaceRequest(
     const std::string& interface_name,
@@ -184,7 +170,7 @@ void AgentSchedulingGroup::AddFrameRoute(
     const blink::LocalFrameToken& frame_token,
     RenderFrameImpl* render_frame,
     scoped_refptr<base::SingleThreadTaskRunner> task_runner) {
-  DCHECK(!base::Contains(listener_map_, frame_token));
+  DCHECK(!listener_map_.contains(frame_token));
   listener_map_.insert({frame_token, render_frame});
 
   // See warning in `GetAssociatedInterface`.
@@ -200,7 +186,7 @@ void AgentSchedulingGroup::AddFrameRoute(
 
 void AgentSchedulingGroup::RemoveFrameRoute(
     const blink::LocalFrameToken& frame_token) {
-  DCHECK(base::Contains(listener_map_, frame_token));
+  DCHECK(listener_map_.contains(frame_token));
   listener_map_.erase(frame_token);
 }
 
@@ -254,7 +240,6 @@ blink::WebView* AgentSchedulingGroup::CreateWebView(
 
   web_view->SetRendererPreferences(params->renderer_preferences);
   web_view->SetWebPreferences(params->web_preferences);
-  web_view->SetPageAttributionSupport(params->attribution_support);
 
   const bool is_for_nested_main_frame =
       params->type != mojom::ViewWidgetType::kTopLevel;
@@ -392,15 +377,6 @@ void AgentSchedulingGroup::CreateFrame(mojom::CreateFrameParamsPtr params) {
       std::move(params->frame_owner_properties),
       params->is_on_initial_empty_document, params->document_token,
       std::move(params->policy_container), params->is_for_nested_main_frame);
-}
-
-void AgentSchedulingGroup::CreateSharedStorageWorkletService(
-    mojo::PendingReceiver<blink::mojom::SharedStorageWorkletService> receiver,
-    blink::mojom::WorkletGlobalScopeCreationParamsPtr
-        global_scope_creation_params) {
-  blink::WebSharedStorageWorkletThread::Start(
-      agent_group_scheduler_->DefaultTaskRunner(), std::move(receiver),
-      std::move(global_scope_creation_params));
 }
 
 void AgentSchedulingGroup::BindAssociatedInterfaces(

@@ -52,7 +52,6 @@
  */
 
 interface CoreProbes {
-
   class BlobDataHandle;
   class ClassicScript;
   class ConsoleMessage;
@@ -65,9 +64,12 @@ interface CoreProbes {
   class ResourceError;
   class Script;
   class ScriptState;
+  struct ScriptToolError;
   class SpeculationCandidate;
+  class ToolData;
   class XMLHttpRequest;
   using PropertyName = std::variant<const char*, String>;
+  using ScriptException = std::optional<std::pair<ScriptValue, ScriptState*>>;
 
   void DidClearDocumentOfWindowObject([Keep] LocalFrame*);
   void DidCreateMainWorldContext([Keep] LocalFrame*);
@@ -80,7 +82,7 @@ interface CoreProbes {
   void DidModifyAdoptedStyleSheets([Keep] Node*);
   void WillChangeStyleElement([Keep] Element*);
   void CharacterDataModified([Keep] CharacterData*);
-  void DidInvalidateStyleAttr([Keep] Node*);
+  void DidInvalidateStyleAttr([Keep] Element*);
   void DidPerformSlotDistribution([Keep] HTMLSlotElement*);
   void DocumentDetached([Keep] Document*);
   void ActiveStyleSheetsUpdated([Keep] Document*);
@@ -242,6 +244,13 @@ interface CoreProbes {
   void SpeculationCandidatesUpdated([Keep] Document&, const HeapVector<Member<SpeculationCandidate>>& candidates);
   void DidInitializeFrameWidget(LocalFrame* document);
   void UpdateScrollableFlag([Keep] Node* node, std::optional<bool>);
+  void UpdateAdRelatedState([Keep] Node& node, std::optional<AdProvenance> ad_provenance);
   void WillHidePopover([Keep] HTMLElement* element, bool* force_open);
+  void WillLoseInterest([Keep] Element* element, bool* force_interest);
   void UpdateAffectedByStartingStylesFlag([Keep] Node* node, std::optional<bool> override_flag);
+  void WebMCPToolAdded([Keep] Document* document, const ToolData& tool);
+  void WebMCPToolRemoved([Keep] Document* document, const ToolData& tool);
+  void WebMCPToolExecuted([Keep] Document* document, const String& name, const String& input_arguments, const base::UnguessableToken& invocation_id);
+  void WebMCPToolResponded([Keep] Document* document, const String& result, const base::UnguessableToken& invocation_id);
+  void WebMCPToolFailed([Keep] Document* document, const ScriptToolError& result, const base::UnguessableToken& invocation_id, ScriptException exception);
 }

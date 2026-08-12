@@ -24,44 +24,59 @@ namespace send_tab_to_self {
 BASE_FEATURE(kSendTabToSelfEnableNotificationTimeOut,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kSendTabToSelfIOSPushNotifications,
-             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kSendTabToSelfPropagateFormFields,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
-const char kSendTabIOSPushNotificationsURLImageParam[] =
-    "variant_with_URL_image";
+BASE_FEATURE(kSendTabToSelfPropagateScrollPosition,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
-bool IsSendTabIOSPushNotificationsEnabledWithURLImage() {
-  if (base::FeatureList::IsEnabled(kSendTabToSelfIOSPushNotifications)) {
-    return base::GetFieldTrialParamByFeatureAsBool(
-        kSendTabToSelfIOSPushNotifications,
-        kSendTabIOSPushNotificationsURLImageParam, false);
-  }
-  return false;
-}
+BASE_FEATURE(kSendTabToSelfImprovedLastActiveLabels,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSendTabToSelfPropagateNavigationHistory,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSendTabToSelfAutoOpen, base::FEATURE_DISABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
+BASE_FEATURE(kSendTabToSelfSupportAutoOpenInTabGrid,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
+
+BASE_FEATURE(kSendTabToSelfEnhancedDesktopUI,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSendTabToSelfPostSendToast, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSendTabToSelfExtraEntryPoints, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSendTabToSelfEnhancedDesktopUIv2,
+             "SendTabToSelfEnhancedDesktopUIv2",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_ANDROID)
+BASE_FEATURE(kSendTabToSelfGesture, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSendTabToSelfOpenNativeApp, base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+BASE_FEATURE(kSendTabToSelfEnhancedBottomsheet,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
 
 #if BUILDFLAG(IS_IOS)
-const char kSendTabIOSPushNotificationsWithMagicStackCardParam[] =
-    "variant_with_magic_stack_card";
 
-bool IsSendTabIOSPushNotificationsEnabledWithMagicStackCard() {
-  if (base::FeatureList::IsEnabled(kSendTabToSelfIOSPushNotifications)) {
-    return base::GetFieldTrialParamByFeatureAsBool(
-        kSendTabToSelfIOSPushNotifications,
-        kSendTabIOSPushNotificationsWithMagicStackCardParam, true);
-  }
-  return false;
-}
+BASE_FEATURE(kSendTabToSelfIOSShareSheetDeviceList,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
-const char kSendTabIOSPushNotificationsWithTabRemindersParam[] =
-    "variant_with_tab_reminders";
+BASE_FEATURE(kSendTabToSelfIOSLimitToRegularBrowsers,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
-bool IsSendTabIOSPushNotificationsEnabledWithTabReminders() {
-  if (base::FeatureList::IsEnabled(kSendTabToSelfIOSPushNotifications)) {
-    return base::GetFieldTrialParamByFeatureAsBool(
-        kSendTabToSelfIOSPushNotifications,
-        kSendTabIOSPushNotificationsWithTabRemindersParam, false);
-  }
-  return false;
+BASE_FEATURE(kIOSTabReminders, base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool AreIOSTabRemindersEnabled() {
+  return base::FeatureList::IsEnabled(kIOSTabReminders);
 }
 
 const char kReminderNotificationsDefaultTimeOffset[] =
@@ -70,10 +85,13 @@ const char kReminderNotificationsDefaultTimeOffset[] =
 const base::TimeDelta GetReminderNotificationsDefaultTimeOffset() {
   // Default to 24 hours.
   return base::GetFieldTrialParamByFeatureAsTimeDelta(
-      kSendTabToSelfIOSPushNotifications,
-      kReminderNotificationsDefaultTimeOffset,
+      kIOSTabReminders, kReminderNotificationsDefaultTimeOffset,
       kReminderNotificationsDefaultOffset);
 }
 #endif  // BUILDFLAG(IS_IOS)
+
+#if BUILDFLAG(IS_ANDROID)
+BASE_FEATURE(kSendTabToSelfDynamicShortcuts, base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace send_tab_to_self

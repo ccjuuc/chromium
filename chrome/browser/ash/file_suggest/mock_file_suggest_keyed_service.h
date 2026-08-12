@@ -19,22 +19,20 @@ namespace base {
 class FilePath;
 }  // namespace base
 
+class PrefService;
+
 namespace ash {
 
 // A mock file suggestion service. Simply returns the cached suggestions without
 // relying on real suggestion providers.
 class MockFileSuggestKeyedService : public FileSuggestKeyedService {
  public:
-  // `application_locale_storage` must be non-null and must outlive the returned
-  // KeyedService.
   static std::unique_ptr<KeyedService> BuildMockFileSuggestKeyedService(
-      const ApplicationLocaleStorage* application_locale_storage,
       const base::FilePath& proto_path,
       content::BrowserContext* context);
 
-  // `application_locale_storage` must be non-null and must outlive `this`.
   MockFileSuggestKeyedService(
-      const ApplicationLocaleStorage* application_locale_storage,
+      PrefService* local_state,
       Profile* profile,
       PersistentProto<app_list::RemovedResultsProto> proto);
   MockFileSuggestKeyedService(const MockFileSuggestKeyedService&) = delete;

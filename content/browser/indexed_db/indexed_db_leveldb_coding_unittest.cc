@@ -14,11 +14,13 @@
 #include <utility>
 #include <vector>
 
+#include "base/base64.h"
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/test/insecure_random_generator.h"
 #include "components/services/storage/indexed_db/scopes/varint_coding.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/fuzztest/src/fuzztest/fuzztest.h"
 
 using blink::IndexedDBKey;
 using blink::IndexedDBKeyPath;
@@ -1104,10 +1106,8 @@ TEST(IndexedDBLevelDBCodingTest, ComparisonTest) {
       IndexNamesKey::Encode(1, 1, u""),
       IndexNamesKey::Encode(1, 1, u"a"),
       IndexNamesKey::Encode(1, 2, u"a"),
-      ObjectStoreDataKey::Encode(1, 1, std::string()),
       ObjectStoreDataKey::Encode(1, 1, MinIDBKey()),
       ObjectStoreDataKey::Encode(1, 1, MaxIDBKey()),
-      ExistsEntryKey::Encode(1, 1, std::string()),
       ExistsEntryKey::Encode(1, 1, MinIDBKey()),
       ExistsEntryKey::Encode(1, 1, MaxIDBKey()),
       IndexDataKey::Encode(1, 1, 30, MinIDBKey(), std::string(), 0),
@@ -1132,6 +1132,24 @@ TEST(IndexedDBLevelDBCodingTest, ComparisonTest) {
       EXPECT_GT(Compare(keys[j], keys[i], false), 0);
     }
   }
+}
+
+TEST(IndexedDBLevelDBCodingTest, CompareWithCorruptIndexDataKey) {
+  std::string index_data_key_with_positive_sequence_number =
+      IndexDataKey::Encode(1, 1, 30, MaxIDBKey(), MaxIDBKey(),
+                           std::numeric_limits<int64_t>::max());
+
+  // `IndexDataKey` must use a positive sequence number.  Simulate disk
+  // corruption with an encoded negative sequence number.
+  std::string index_data_key_with_negative_sequence_number;
+  ASSERT_TRUE(base::Base64Decode(
+      "AwMD/////wD+ioqKioqKirUBAAAAAAAAioqKioqKioqKioqKioqKioqKioqKioqKioo=",
+      &index_data_key_with_negative_sequence_number));
+
+  EXPECT_EQ(Compare(index_data_key_with_positive_sequence_number,
+                    index_data_key_with_negative_sequence_number,
+                    /*only_compare_index_keys=*/false),
+            -1);
 }
 
 TEST(IndexedDBLevelDBCodingTest, IndexDataKeyEncodeDecode) {
@@ -1183,5 +1201,54 @@ TEST(IndexedDBLevelDBCodingTest, EncodeVarIntVSEncodeByteTest) {
 TEST(IndexedDBLevelDBCodingTest, Empty) {
   EXPECT_EQ(KeyPrefix::EncodeInternal(0, 0, 0), KeyPrefix::EncodeEmpty());
 }
+
+TEST(IndexedDBLevelDBCodingTest, CompareEncodedIDBKeysInvalidTypeByte) {
+  // Valid type bytes are 0-6. Byte value 7 and above are invalid.
+  constexpr unsigned char kInvalidTypeByte = 7;
+
+  std::string valid_key;
+  EncodeIDBKey(IndexedDBKey(u"valid key"), &valid_key);
+
+  std::string invalid_key;
+  EncodeByte(kInvalidTypeByte, &invalid_key);
+
+  // Comparing with invalid key in first position should fail.
+  {
+    std::string_view slice_a(invalid_key);
+    std::string_view slice_b(valid_key);
+    bool ok = true;
+    CompareEncodedIDBKeys(&slice_a, &slice_b, &ok);
+    EXPECT_FALSE(ok);
+  }
+
+  // Comparing with invalid key in second position should fail.
+  {
+    std::string_view slice_a(valid_key);
+    std::string_view slice_b(invalid_key);
+    bool ok = true;
+    CompareEncodedIDBKeys(&slice_a, &slice_b, &ok);
+    EXPECT_FALSE(ok);
+  }
+
+  // Comparing two invalid keys should also fail.
+  {
+    std::string_view slice_a(invalid_key);
+    std::string_view slice_b(invalid_key);
+    bool ok = true;
+    CompareEncodedIDBKeys(&slice_a, &slice_b, &ok);
+    EXPECT_FALSE(ok);
+  }
+}
+
+namespace {
+
+// The Compare function should handle any input without crashing since bytes
+// could have been corrupted on disk.
+void CompareHandlesAnyInput(std::string a, std::string b, bool index_keys) {
+  Compare(a, b, index_keys);
+}
+}  // namespace
+
+FUZZ_TEST(IndexedDbLevelDbCodingFuzzTest, CompareHandlesAnyInput);
 
 }  // namespace content::indexed_db

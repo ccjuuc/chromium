@@ -219,9 +219,9 @@ class PresetPolicyDeviceDisablingTest : public DeviceDisablingTest {
 };
 
 // Same test as the one in DeviceDisablingTest, except the policy is being set
-// before Chrome process is started. This test covers a crash (crbug.com/709518)
-// in DeviceDisabledScreen where it would try to access DeviceDisablingManager
-// even though it wasn't yet constructed fully.
+// before Chrome process is started. This test covers a crash
+// (crbug.com/41311924) in DeviceDisabledScreen where it would try to access
+// DeviceDisablingManager even though it wasn't yet constructed fully.
 IN_PROC_BROWSER_TEST_F(PresetPolicyDeviceDisablingTest,
                        DisableBeforeStartup) {
   EXPECT_TRUE(DeviceDisabledScreenShown());
@@ -253,7 +253,7 @@ class DeviceDisablingBeforeLoginHostCreated
 };
 
 // Sometimes LoginHost creation postponed (e.g. due to language switch
-// https://crbug.com/1065569). This tests checks this flow.
+// https://crbug.com/40681894). This tests checks this flow.
 IN_PROC_BROWSER_TEST_F(DeviceDisablingBeforeLoginHostCreated,
                        ShowsDisabledScreen) {
   EXPECT_TRUE(

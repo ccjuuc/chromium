@@ -8,9 +8,9 @@
 #include "chrome/browser/ui/autofill/payments/chrome_payments_autofill_client.h"
 #include "chrome/browser/ui/autofill/payments/payments_view_factory.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
-#include "components/autofill/core/browser/autofill_progress_dialog_type.h"
 #include "components/autofill/core/browser/payments/autofill_error_dialog_context.h"
 #include "components/autofill/core/browser/payments/bnpl_util.h"
+#include "components/autofill/core/browser/ui/payments/autofill_progress_ui_type.h"
 #include "components/autofill/core/browser/ui/payments/bnpl_tos_controller_impl.h"
 #include "components/autofill/core/browser/ui/payments/bnpl_tos_view.h"
 #include "components/autofill/core/browser/ui/payments/select_bnpl_issuer_dialog_controller_impl.h"
@@ -26,7 +26,7 @@ DesktopBnplUiDelegate::~DesktopBnplUiDelegate() = default;
 void DesktopBnplUiDelegate::ShowSelectBnplIssuerUi(
     std::vector<BnplIssuerContext> bnpl_issuer_context,
     std::string app_locale,
-    base::OnceCallback<void(BnplIssuer)> selected_issuer_callback,
+    base::RepeatingCallback<void(BnplIssuer)> selected_issuer_callback,
     base::OnceClosure cancel_callback,
     bool has_seen_ai_terms) {
   select_bnpl_issuer_dialog_controller_ =
@@ -41,8 +41,13 @@ void DesktopBnplUiDelegate::ShowSelectBnplIssuerUi(
       std::move(selected_issuer_callback), std::move(cancel_callback));
 }
 
-void DesktopBnplUiDelegate::UpdateBnplIssuerDialogUi(
-    std::vector<BnplIssuerContext> issuer_contexts) {
+void DesktopBnplUiDelegate::UpdateBnplIssuerUi(
+    std::vector<BnplIssuerContext> issuer_contexts,
+    std::optional<int64_t>,
+    bool,
+    const std::optional<std::string>&,
+    base::OnceCallback<void(BnplIssuer)>,
+    base::OnceClosure) {
   if (select_bnpl_issuer_dialog_controller_) {
     select_bnpl_issuer_dialog_controller_->UpdateDialogWithIssuers(
         std::move(issuer_contexts));
@@ -83,7 +88,7 @@ void DesktopBnplUiDelegate::RemoveBnplTosOrProgressUi() {
 }
 
 void DesktopBnplUiDelegate::ShowProgressUi(
-    AutofillProgressDialogType autofill_progress_dialog_type,
+    AutofillProgressUiType autofill_progress_dialog_type,
     base::OnceClosure cancel_callback) {
   client_->GetPaymentsAutofillClient()->ShowAutofillProgressDialog(
       autofill_progress_dialog_type, std::move(cancel_callback));

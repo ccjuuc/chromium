@@ -19,6 +19,7 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/bookmarks/common/bookmark_constants.h"
+#include "components/bookmarks/common/bookmark_features.h"
 #include "components/browser_sync/browser_sync_switches.h"
 #include "components/password_manager/core/browser/password_manager_constants.h"
 #include "components/prefs/pref_service.h"
@@ -31,10 +32,12 @@
 #include "components/sync/base/pref_names.h"
 #include "components/sync/service/sync_feature_status_for_migrations_recorder.h"
 #include "components/sync/service/sync_prefs.h"
+#include "extensions/buildflags/buildflags.h"
 #include "google_apis/gaia/gaia_id.h"
 
 namespace browser_sync {
 
+#if !BUILDFLAG(IS_IOS)
 namespace {
 
 // These values are persisted to logs. Entries should not be renumbered and
@@ -54,6 +57,38 @@ enum class SyncToSigninMigrationDecision {
   kMaxValue = kDontMigrateAuthError
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:SyncToSigninMigrationDecisionOverall)
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused. Additionally, they're also persisted
+// in a pref, so no existing entry should be removed.
+// LINT.IfChange(SyncToSigninMigrationType)
+enum class SyncToSigninMigrationType {
+  // The user was migrated, but the migration type is unknown. This is logged in
+  // case the migration happened before the corresponding histogram was
+  // introduced.
+  kUnknown = 0,
+  // The user was migrated following the standard migration logic.
+  kMigrated = 1,
+  // The user was migrated with the force migration flag enabled.
+  kForceMigrated = 2,
+  // The user was have not yet been migrated.
+  kNotMigratedYet = 3,
+  // The users are already in the desired state, and the migration is not
+  // needed.
+  kMigrationNotNeeded = 4,
+  kMaxValue = kMigrationNotNeeded
+};
+// LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:SyncToSigninMigrationType)
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(SyncToSigninMigrationExecutionMode)
+enum class SyncToSigninMigrationExecutionMode {
+  kSynchronous = 0,
+  kAsynchronous = 1,
+  kMaxValue = kAsynchronous
+};
+// LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:SyncToSigninMigrationExecutionMode)
 
 #if !BUILDFLAG(IS_CHROMEOS)
 // These values are persisted to logs. Entries should not be renumbered and
@@ -124,6 +159,7 @@ SyncToSigninMigrationDecision GetSyncToSigninMigrationDecision(
       // In all these cases, the status is known, and migration can go ahead.
       break;
     case syncer::SyncFeatureStatusForSyncToSigninMigration::kPaused: {
+      base::FeatureList::IsEnabled(switches::kForceMigrateNoopForDebugging);
       if (base::FeatureList::IsEnabled(
               switches::kForceMigrateSyncingUserToSignedIn)) {
         forced = true;
@@ -145,6 +181,7 @@ SyncToSigninMigrationDecision GetSyncToSigninMigrationDecision(
     case syncer::SyncFeatureStatusForSyncToSigninMigration::kInitializing:
       // In the previous browser run, Sync didn't finish initializing. Defer
       // migration, unless force-migration is enabled.
+      base::FeatureList::IsEnabled(switches::kForceMigrateNoopForDebugging);
       if (base::FeatureList::IsEnabled(
               switches::kForceMigrateSyncingUserToSignedIn)) {
         forced = true;
@@ -155,6 +192,7 @@ SyncToSigninMigrationDecision GetSyncToSigninMigrationDecision(
       // The Sync status pref was never set (which should only happen once per
       // client), or has an unknown/invalid value (which should never happen).
       // Defer migration, unless force-migration is enabled.
+      base::FeatureList::IsEnabled(switches::kForceMigrateNoopForDebugging);
       if (base::FeatureList::IsEnabled(
               switches::kForceMigrateSyncingUserToSignedIn)) {
         forced = true;
@@ -165,8 +203,7 @@ SyncToSigninMigrationDecision GetSyncToSigninMigrationDecision(
 
   // Check the feature flag(s) last, so that metrics can record all the other
   // reasons to not do the migration, even with the flag disabled.
-  if (!base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos) ||
+  if (!syncer::IsReplaceSyncPromosWithSignInPromosEnabled() ||
       !base::FeatureList::IsEnabled(switches::kMigrateSyncingUserToSignedIn)) {
     return SyncToSigninMigrationDecision::kDontMigrateFlagDisabled;
   }
@@ -196,6 +233,7 @@ void UndoSyncToSigninMigration(PrefService* pref_service) {
         prefs::kGoogleServicesSyncingGaiaIdMigratedToSignedIn);
     pref_service->ClearPref(
         prefs::kGoogleServicesSyncingUsernameMigratedToSignedIn);
+    pref_service->ClearPref(prefs::kGoogleServicesSyncingUserMigrationType);
     return;
   }
 
@@ -226,6 +264,7 @@ void UndoSyncToSigninMigration(PrefService* pref_service) {
       prefs::kGoogleServicesSyncingGaiaIdMigratedToSignedIn);
   pref_service->ClearPref(
       prefs::kGoogleServicesSyncingUsernameMigratedToSignedIn);
+  pref_service->ClearPref(prefs::kGoogleServicesSyncingUserMigrationType);
 
   // Selected-data-types prefs: No reverse migration - the user will just go
   // back to their previous Sync settings.
@@ -243,6 +282,12 @@ void UndoSyncToSigninMigration(PrefService* pref_service) {
   // now.
   pref_service->ClearPref(
       syncer::prefs::internal::kMigrateReadingListFromLocalToAccount);
+
+  // Extensions: The migration is asynchronous. Most likely it has been
+  // completed by this point, but in case it's still pending, stop attempting it
+  // now.
+  pref_service->ClearPref(
+      syncer::prefs::internal::kMigrateExtensionsFromLocalToAccount);
 }
 
 const char* GetHistogramMigratingOrNotInfix(bool doing_migration) {
@@ -285,6 +330,59 @@ void RecordMigrationResult(base::Time start_time, bool migration_successful) {
                           base::Time::Now() - start_time);
 }
 
+void RecordMigrationType(PrefService* pref_service,
+                         SyncToSigninMigrationDecision decision) {
+  SyncToSigninMigrationType type =
+      SyncToSigninMigrationType::kMigrationNotNeeded;
+  switch (decision) {
+    case SyncToSigninMigrationDecision::kDontMigrateNotSignedIn:
+    case SyncToSigninMigrationDecision::kDontMigrateNotSyncing:
+      // The user is already in the desired state.
+      {
+        const bool was_migrated =
+            !pref_service
+                 ->GetString(
+                     prefs::kGoogleServicesSyncingGaiaIdMigratedToSignedIn)
+                 .empty();
+        if (was_migrated) {
+          // This returns kUnknown (the default value) if the pref is unset,
+          // which implies that the migration happened before this metric
+          // logging was introduced.
+          type =
+              static_cast<SyncToSigninMigrationType>(pref_service->GetInteger(
+                  prefs::kGoogleServicesSyncingUserMigrationType));
+        }
+        // Else, the user was always in the desired state, so `type` remains
+        // `kMigrationNotNeeded`.
+      }
+      break;
+    case SyncToSigninMigrationDecision::kMigrate:
+      // The user is currently undergoing regular migration.
+      type = SyncToSigninMigrationType::kMigrated;
+      break;
+    case SyncToSigninMigrationDecision::kMigrateForced:
+      // The user is currently undergoing forced migration.
+      type = SyncToSigninMigrationType::kForceMigrated;
+      break;
+    case SyncToSigninMigrationDecision::kDontMigrateFlagDisabled:
+    case SyncToSigninMigrationDecision::kDontMigrateSyncStatusUndefined:
+    case SyncToSigninMigrationDecision::kDontMigrateSyncStatusInitializing:
+    case SyncToSigninMigrationDecision::kDontMigrateAuthError:
+      // These cases should not be reached in case the migration has already
+      // happened, or is happening right now. But rather, this implies the user
+      // is eligible for regular migration but some pre-condition has not been
+      // met.
+      type = SyncToSigninMigrationType::kNotMigratedYet;
+      break;
+    case SyncToSigninMigrationDecision::kUndoMigration:
+    case SyncToSigninMigrationDecision::kUndoNotNecessary:
+      // No need to record the metric in this case.
+      return;
+  }
+  base::UmaHistogramEnumeration("Sync.SyncToSigninMigration.MigrationType",
+                                type);
+}
+
 // Helper used to share the logic between MaybeMigrateSyncingUserToSignedIn()
 // and MaybeMigrateSyncingUserToSignedInAsync(). If `closure` is null, all is
 // run on the current sequence otherwise IO ops are scheduled on a background
@@ -316,7 +414,7 @@ void MaybeMigrateSyncingUserToSignedInInternal(
   const SyncToSigninMigrationDecision decision =
       GetSyncToSigninMigrationDecision(pref_service);
   base::UmaHistogramEnumeration("Sync.SyncToSigninMigrationDecision", decision);
-
+  RecordMigrationType(pref_service, decision);
   switch (decision) {
     case SyncToSigninMigrationDecision::kUndoMigration:
       // Undo the migration (if appropriate) and nothing else.
@@ -381,9 +479,37 @@ void MaybeMigrateSyncingUserToSignedInInternal(
                     syncer::DataTypeToHistogramSuffix(syncer::READING_LIST)}),
       reading_list_decision);
 
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  const SyncToSigninMigrationDataTypeDecision extensions_decision =
+      GetSyncToSigninMigrationDataTypeDecision(
+          pref_service, syncer::EXTENSIONS,
+          syncer::prefs::internal::kSyncExtensions);
+  base::UmaHistogramEnumeration(
+      base::StrCat({"Sync.SyncToSigninMigrationDecision.",
+                    GetHistogramMigratingOrNotInfix(doing_migration),
+                    syncer::DataTypeToHistogramSuffix(syncer::EXTENSIONS)}),
+      extensions_decision);
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  const SyncToSigninMigrationDataTypeDecision themes_decision =
+      GetSyncToSigninMigrationDataTypeDecision(
+          pref_service, syncer::THEMES, syncer::prefs::internal::kSyncThemes);
+  base::UmaHistogramEnumeration(
+      base::StrCat({"Sync.SyncToSigninMigrationDecision.",
+                    GetHistogramMigratingOrNotInfix(doing_migration),
+                    syncer::DataTypeToHistogramSuffix(syncer::THEMES)}),
+      themes_decision);
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+
   if (!doing_migration) {
     return;
   }
+
+  base::UmaHistogramEnumeration(
+      "Sync.SyncToSigninMigrationExecutionMode",
+      is_blocking_allowed ? SyncToSigninMigrationExecutionMode::kSynchronous
+                          : SyncToSigninMigrationExecutionMode::kAsynchronous);
 
   // =========================
   // Global (prefs) migration.
@@ -408,6 +534,11 @@ void MaybeMigrateSyncingUserToSignedInInternal(
   pref_service->SetString(
       prefs::kGoogleServicesSyncingUsernameMigratedToSignedIn,
       pref_service->GetString(prefs::kGoogleServicesLastSyncingUsername));
+  pref_service->SetInteger(
+      prefs::kGoogleServicesSyncingUserMigrationType,
+      static_cast<int>(decision == SyncToSigninMigrationDecision::kMigrate
+                           ? SyncToSigninMigrationType::kMigrated
+                           : SyncToSigninMigrationType::kForceMigrated));
   // Clear the "previously syncing user" prefs, to prevent accidental misuse.
   pref_service->ClearPref(prefs::kGoogleServicesLastSyncingGaiaId);
   pref_service->ClearPref(prefs::kGoogleServicesLastSyncingUsername);
@@ -447,6 +578,11 @@ void MaybeMigrateSyncingUserToSignedInInternal(
     blocking_operations.push_back(
         base::BindOnce(&RenameFileAndReportSuccess, from_path, to_path,
                        "Sync.SyncToSigninMigrationOutcome.PasswordsFileMove"));
+    // Mark clearing of the stats table from the newly migrated password store.
+    pref_service->SetBoolean(
+        syncer::prefs::kCleanUpStatsTableFromAccountPasswordStore, true);
+    syncer::RecordSyncToSigninMigrationStatsTableCleanupStep(
+        syncer::SyncToSigninMigrationStatsTableCleanupStep::kCleanupRequested);
   }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
@@ -459,6 +595,15 @@ void MaybeMigrateSyncingUserToSignedInInternal(
     blocking_operations.push_back(
         base::BindOnce(&RenameFileAndReportSuccess, from_path, to_path,
                        "Sync.SyncToSigninMigrationOutcome.BookmarksFileMove"));
+    if (base::FeatureList::IsEnabled(bookmarks::kEncryptBookmarks)) {
+      base::FilePath encrypted_from_path = profile_path.Append(
+          bookmarks::kEncryptedLocalOrSyncableBookmarksFileName);
+      base::FilePath encrypted_to_path =
+          profile_path.Append(bookmarks::kEncryptedAccountBookmarksFileName);
+      blocking_operations.push_back(base::BindOnce(
+          &RenameFileAndReportSuccess, encrypted_from_path, encrypted_to_path,
+          "Sync.SyncToSigninMigrationOutcome.EncryptedBookmarksFileMove"));
+    }
   }
 
   // Reading list: Set migration pref. The DataTypeStoreServiceImpl will read
@@ -476,6 +621,24 @@ void MaybeMigrateSyncingUserToSignedInInternal(
     // `migration_successful` here. The actual outcome will be recorded in other
     // histograms.
   }
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  if (extensions_decision == SyncToSigninMigrationDataTypeDecision::kMigrate) {
+    pref_service->SetBoolean(
+        syncer::prefs::internal::kMigrateExtensionsFromLocalToAccount, true);
+    syncer::RecordSyncToSigninMigrationExtensionsStep(
+        syncer::SyncToSigninMigrationExtensionsStep::kMigrationRequested);
+  }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  if (themes_decision == SyncToSigninMigrationDataTypeDecision::kMigrate) {
+    pref_service->SetBoolean(
+        syncer::prefs::internal::kMigrateThemeFromLocalToAccount, true);
+    syncer::RecordSyncToSigninMigrationThemeStep(
+        syncer::SyncToSigninMigrationThemeStep::kMigrationRequested);
+  }
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
   if (!is_blocking_allowed) {
     base::ThreadPool::PostTaskAndReplyWithResult(
@@ -591,6 +754,7 @@ void MaybeMigrateSyncingUserToSignedInAsync(const base::FilePath& profile_path,
   MaybeMigrateSyncingUserToSignedInInternal(profile_path, pref_service,
                                             std::move(closure));
 }
+#endif  // !BUILDFLAG(IS_IOS)
 
 bool WasPrimaryAccountMigratedFromSyncingToSignedIn(
     const signin::IdentityManager* identity_manager,

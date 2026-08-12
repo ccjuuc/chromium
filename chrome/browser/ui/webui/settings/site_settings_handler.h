@@ -5,11 +5,13 @@
 #ifndef CHROME_BROWSER_UI_WEBUI_SETTINGS_SITE_SETTINGS_HANDLER_H_
 #define CHROME_BROWSER_UI_WEBUI_SETTINGS_SITE_SETTINGS_HANDLER_H_
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -81,6 +83,14 @@ class SiteSettingsHandler
   using AllSitesMap =
       std::map<GroupingKey, std::set<std::pair<url::Origin, bool>>>;
 
+  // Maps an (origin, partitioning site `GroupingKey`) pair to the storage size
+  // used by that origin under that partitioning site. The `GroupingKey` is the
+  // eTLD+1 for HTTP(S) origins and the origin itself for other schemes. A
+  // std::nullopt partitioning site represents the origin's unpartitioned
+  // (first-party) storage size.
+  using PerPartitionOriginSizeMap =
+      std::map<std::pair<url::Origin, std::optional<GroupingKey>>, int64_t>;
+
   explicit SiteSettingsHandler(Profile* profile);
 
   SiteSettingsHandler(const SiteSettingsHandler&) = delete;
@@ -123,32 +133,32 @@ class SiteSettingsHandler
 
   // Asynchronously fetches the usage for a given origin. Replies back with
   // OnGetUsageInfo above.
-  void HandleFetchUsageTotal(const base::Value::List& args);
+  void HandleFetchUsageTotal(const base::ListValue& args);
 
   // Asynchronously fetches the rws membership information label.
-  void HandleGetRwsMembershipLabel(const base::Value::List& args);
+  void HandleGetRwsMembershipLabel(const base::ListValue& args);
 
   // Deletes the storage being used for a given host.
-  void HandleClearUnpartitionedUsage(const base::Value::List& args);
+  void HandleClearUnpartitionedUsage(const base::ListValue& args);
 
-  void HandleClearPartitionedUsage(const base::Value::List& args);
+  void HandleClearPartitionedUsage(const base::ListValue& args);
 
   // Gets and sets the default value for a particular content settings type.
-  void HandleSetDefaultValueForContentType(const base::Value::List& args);
-  void HandleGetDefaultValueForContentType(const base::Value::List& args);
+  void HandleSetDefaultValueForContentType(const base::ListValue& args);
+  void HandleGetDefaultValueForContentType(const base::ListValue& args);
 
   // Returns a list of sites with permissions settings, grouped by their
   // eTLD+1. Recreates the model to fetch the cookie and usage data, which will
   // send the list of sites with cookies or usage data to the front end when
   // fetching finished.
-  void HandleGetAllSites(const base::Value::List& args);
+  void HandleGetAllSites(const base::ListValue& args);
 
   // Returns a list containing the most recent permission changes for the
   // content types that are visible in settings, grouped by origin/profile
   // (incognito, regular) combinations, limited to N origin/profile pairings.
   // This includes permission changes made by embargo, but does not include
   // permissions enforced via policy.
-  void HandleGetRecentSitePermissions(const base::Value::List& args);
+  void HandleGetRecentSitePermissions(const base::ListValue& args);
 
   // Called when the list of origins using storage has been fetched, and sends
   // this list back to the front end.
@@ -156,71 +166,77 @@ class SiteSettingsHandler
 
   // Converts a given number of bytes into a human-readable format, with data
   // units.
-  void HandleGetFormattedBytes(const base::Value::List& args);
+  void HandleGetFormattedBytes(const base::ListValue& args);
 
   // Returns the list of site exceptions for a given content settings type.
-  void HandleGetExceptionList(const base::Value::List& args);
+  void HandleGetExceptionList(const base::ListValue& args);
 
   // Returns the list of storage access site exceptions for a given content
   // setting (such as enabled or blocked).
-  void HandleGetStorageAccessExceptionList(const base::Value::List& args);
+  void HandleGetStorageAccessExceptionList(const base::ListValue& args);
 
   // Returns the list of chooser exceptions for a given chooser type.
-  void HandleGetChooserExceptionList(const base::Value::List& args);
+  void HandleGetChooserExceptionList(const base::ListValue& args);
 
   // Returns the list of the allowed permission grants as defined by the
   // File System Access API.
-  void HandleGetFileSystemGrants(const base::Value::List& args);
+  void HandleGetFileSystemGrants(const base::ListValue& args);
 
   // Revokes the File System Access permission for a given origin
   // and file path.
-  void HandleRevokeFileSystemGrant(const base::Value::List& args);
+  void HandleRevokeFileSystemGrant(const base::ListValue& args);
 
   // Revokes all of the File System Access permissions for a given origin.
-  void HandleRevokeFileSystemGrants(const base::Value::List& args);
+  void HandleRevokeFileSystemGrants(const base::ListValue& args);
 
   // Gets and sets a list of ContentSettingTypes for an origin.
   // TODO(crbug.com/40528601): Investigate replacing the
   // '*CategoryPermissionForPattern' equivalents below with these methods.
-  void HandleGetOriginPermissions(const base::Value::List& args);
-  void HandleSetOriginPermissions(const base::Value::List& args);
+  void HandleGetOriginPermissions(const base::ListValue& args);
+  void HandleSetOriginPermissions(const base::ListValue& args);
 
   // Handles setting and resetting an origin permission.
-  void HandleResetCategoryPermissionForPattern(const base::Value::List& args);
-  void HandleSetCategoryPermissionForPattern(const base::Value::List& args);
+  void HandleResetCategoryPermissionForPattern(const base::ListValue& args);
+  void HandleSetCategoryPermissionForPattern(const base::ListValue& args);
 
-  // TODO(andypaicu, crbug.com/880684): Update to only expect a list of three
+  // TODO(andypaicu, crbug.com/40592192): Update to only expect a list of three
   // arguments, replacing the current (requesting,embedding) arguments with
   // simply (origin) and update all call sites.
   // Handles resetting a chooser exception for the given site.
-  void HandleResetChooserExceptionForSite(const base::Value::List& args);
+  void HandleResetChooserExceptionForSite(const base::ListValue& args);
 
   // Returns whether the pattern is valid given the type.
-  void HandleIsPatternValidForType(const base::Value::List& args);
+  void HandleIsPatternValidForType(const base::ListValue& args);
 
   // Looks up whether an incognito session is active.
-  void HandleUpdateIncognitoStatus(const base::Value::List& args);
+  void HandleUpdateIncognitoStatus(const base::ListValue& args);
 
   // Handles the request for a list of all zoom levels.
-  void HandleFetchZoomLevels(const base::Value::List& args);
+  void HandleFetchZoomLevels(const base::ListValue& args);
 
   // Removes a particular zoom level for a given host.
-  void HandleRemoveZoomLevel(const base::Value::List& args);
+  void HandleRemoveZoomLevel(const base::ListValue& args);
 
   // Handles the request to send block autoplay state.
-  void HandleFetchBlockAutoplayStatus(const base::Value::List& args);
+  void HandleFetchBlockAutoplayStatus(const base::ListValue& args);
 
   // Updates the block autoplay enabled pref when the UI is toggled.
-  void HandleSetBlockAutoplayEnabled(const base::Value::List& args);
+  void HandleSetBlockAutoplayEnabled(const base::ListValue& args);
 
   // Clear web storage data and cookies for a site group.
-  void HandleClearSiteGroupDataAndCookies(const base::Value::List& args);
+  void HandleClearSiteGroupDataAndCookies(const base::ListValue& args);
 
   // Gets the list of content types that are blocked at the OS level.
-  void HandleGetSystemDeniedPermissions(const base::Value::List& args);
+  void HandleGetSystemDeniedPermissions(const base::ListValue& args);
 
   // Attempts to open the the OS permission settings.
-  void HandleOpenSystemPermissionSettings(const base::Value::List& args);
+  void HandleOpenSystemPermissionSettings(const base::ListValue& args);
+
+  // Handles the request for info about whether the url points to an isolated
+  // web app that has sub apps or is a sub app so that we can later on explain
+  // clearly that an isolated web app shares permissions with its installed
+  // sub apps and vice versa.
+  void HandleGetSubAppsPermissionExplanation(const base::ListValue& args);
 
   void ClearAllSitesMapForTesting();
 
@@ -247,9 +263,11 @@ class SiteSettingsHandler
   void StopObservingSourcesForProfile(Profile* profile);
 
   // Calculates the data storage that has been used for each origin, and
-  // stores the information in the |all_sites_map| and |origin_size_map|.
-  void GetOriginStorage(AllSitesMap* all_sites_map,
-                        std::map<url::Origin, int64_t>* origin_size_map);
+  // stores the information in the |all_sites_map| and
+  // |per_partition_origin_size_map|.
+  void GetOriginStorage(
+      AllSitesMap* all_sites_map,
+      PerPartitionOriginSizeMap* per_partition_origin_size_map);
 
   // Calculates the number of cookies for each etld+1 and each host, and
   // stores the information in the |all_sites_map| and |host_cookie_map|.
@@ -262,15 +280,34 @@ class SiteSettingsHandler
   // permissions UI and should be made visible to the user. There is a single
   // nullable string argument, which represents an associated origin. See
   // `SiteSettingsBrowserProxy#getCategoryList`.
-  void HandleGetCategoryList(const base::Value::List& args);
+  void HandleGetCategoryList(const base::ListValue& args);
 
-  // Returns a list of sites, grouped by their effective top level domain plus
-  // 1, with their cookies number and data usage information. This method will
-  // only be called after HandleGetAllSites is called.
-  base::Value::List PopulateCookiesAndUsageData(Profile* profile);
+  // Builds the data backing the All sites page: the list of site groups (each
+  // keyed by a `GroupingKey`, the eTLD+1 for normal web content), listing the
+  // origins in each group annotated with their cookie count and storage usage.
+  //
+  // Usage is keyed by origin and, for partitioned storage, by the partitioning
+  // site's `GroupingKey`. Thus, exact partitioning sites with the same
+  // `GroupingKey` are aggregated. An origin can appear on several rows, each
+  // showing only that aggregate: an unpartitioned row shows first-party
+  // storage, while a partitioned row shows only what the origin stored while
+  // embedded under that group's sites. For example, if `a.test` has 50KB of
+  // first-party storage and `example.com` is embedded under both `a.test` and
+  // `b.test`:
+  //
+  //   example.com ......... 50 KB   (unpartitioned)
+  //     example.com ....... 50 KB
+  //   a.test .............. 250 KB
+  //     a.test ............ 50 KB   (unpartitioned)
+  //     example.com ....... 200 KB  (partitioned under a.test)
+  //   b.test .............. 232 KB
+  //     example.com ....... 232 KB  (partitioned under b.test)
+  //
+  // Only called after HandleGetAllSites is called.
+  base::ListValue PopulateCookiesAndUsageData(Profile* profile);
 
   // Returns whether a given string is a valid origin.
-  void HandleIsOriginValid(const base::Value::List& args);
+  void HandleIsOriginValid(const base::ListValue& args);
 
   // Notifies the JS side about the state of the block autoplay toggle.
   void SendBlockAutoplayStatus();
@@ -282,10 +319,10 @@ class SiteSettingsHandler
   void SendZoomLevels();
 
   // Record metrics for actions on All Sites Page.
-  void HandleRecordAction(const base::Value::List& args);
+  void HandleRecordAction(const base::ListValue& args);
 
   // Gets a plural string for the given number of cookies.
-  void HandleGetNumCookiesString(const base::Value::List& args);
+  void HandleGetNumCookiesString(const base::ListValue& args);
 
   // Provides an opportunity for site data which is not integrated into a model
   // to be removed when entries for |origins| are removed.
@@ -295,7 +332,7 @@ class SiteSettingsHandler
 
   // Returns a dictionary containing the lists of the allowed permission
   // grant objects granted via the File System Access API, per origin.
-  base::Value::List PopulateFileSystemGrantData();
+  base::ListValue PopulateFileSystemGrantData();
 
   // Sends the list of notification permissions to review to the WebUI.
   void SendNotificationPermissionReviewList();

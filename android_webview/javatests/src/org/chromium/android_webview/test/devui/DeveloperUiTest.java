@@ -230,6 +230,8 @@ public class DeveloperUiTest {
     @MediumTest
     @Feature({"AndroidWebView"})
     @DisabledTest(message = "https://crbug.com/369532182")
+    // Hamcrest's allOf(Matcher...) has generic varargs; each call site uses multiple matchers.
+    @SuppressWarnings("unchecked")
     public void testMenuOptions_reportBug() throws Throwable {
         launchHomeFragment();
 
@@ -308,18 +310,6 @@ public class DeveloperUiTest {
                         IntentMatchers.hasData(
                                 hasPath(
                                         "/chromium/src/+/HEAD/android_webview/docs/developer-ui.md"))));
-    }
-
-    @Test
-    @MediumTest
-    @Feature({"AndroidWebView"})
-    @DisabledTest(message = "https://crbug.com/369532182")
-    public void testMenuOptions_components() throws Throwable {
-        launchHomeFragment();
-        openOptionsMenu();
-
-        onView(withText("Components")).check(matches(isDisplayed())).perform(click());
-        onView(withId(R.id.fragment_components_list)).check(matches(isDisplayed()));
     }
 
     @Test

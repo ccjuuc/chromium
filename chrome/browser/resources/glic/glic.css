@@ -4,19 +4,15 @@
 
 :root {
   color-scheme: light dark;
-  --color--secondary-container: light-dark(#C2E7FF, #004A77);
-  --color--on-surface: light-dark(#1B1C1D, #FFFFFF);
-  --color--on-secondary-container: light-dark(#004A77, #C2E7FF);
-  --color--error: light-dark(#B3261E, #F2B8B5);
-  --color--primary: light-dark(#0B57D0, #A8C7FA);
-  --color--surface: light-dark(#FFFFFF, #1B1C1D);
-  --color--on-surface-variant: light-dark(#575B5F, #A2A9B0);
-  --color--surface-container: light-dark(#F0F4F9, #282A2C);
 }
 
-html, body {
+html,
+body {
   margin: 0;
-  height: 100%
+  height: 100%;
+  width: 100%;
+  border-radius: 12px;
+  overflow: hidden;
 }
 
 body {
@@ -39,8 +35,12 @@ webview:not([hidden]) {
   height: 100%;
 }
 
+webview {
+  background-color: var(--color-glic-background);
+}
+
 .dialog {
-  color: var(--color--on-surface);
+  color: var(--cr-fallback-color-on-surface);
   font-family: Roboto, sans-serif;
   font-size: 13px;
   font-weight: 400;
@@ -59,15 +59,15 @@ webview:not([hidden]) {
 }
 
 .dialog .container {
-  background: var(--color--surface-container);
-  color: var(--color--on-surface-variant);
+  background: var(--cr-fallback-color-surface1);
+  color: var(--cr-fallback-color-on-surface-variant);
 }
 
 #localPanels .container {
   display: flex;
   flex-direction: column;
-  background: var(--color--surface);
-  height: 100%
+  background: var(--color-glic-background);
+  height: 100%;
 }
 
 #loadingPanel {
@@ -75,8 +75,8 @@ webview:not([hidden]) {
 }
 
 #loadingPanel .container {
-  padding-bottom: 0px;
-  background: var(--color--surface);
+  padding-bottom: 0;
+  background: var(--color-glic-background);
 }
 
 #loadingPanel .secondline {
@@ -155,7 +155,7 @@ webview:not([hidden]) {
   height: 24px;
   display: flex;
   justify-content: space-between;
-  cursor: grab;
+  -webkit-app-region: drag;
 }
 
 #loadingPanel .header {
@@ -185,16 +185,12 @@ webview:not([hidden]) {
   -webkit-app-region: no-drag;
   --cr-icon-button-size: 24px;
   --cr-icon-button-icon-size: 20px;
-  color: var(--color--on-surface-variant);
-}
-
-.panel .header {
-  -webkit-app-region: drag;
+  color: var(--cr-fallback-color-on-surface-variant);
 }
 
 .dialog .notice {
-  background-color: var(--color--surface);
-  color: var(--color--on-surface);
+  background-color: var(--color-glic-background);
+  color: var(--cr-fallback-color-on-surface);
   border-radius: 10px;
   padding: 12px;
   text-align: center;
@@ -208,13 +204,17 @@ webview:not([hidden]) {
   align-items: center;
 }
 
+.notice cr-button + cr-button {
+  margin-top: 8px;
+}
+
 .notice .icon {
-  color: var(--color--error);
+  color: var(--cr-fallback-color-error);
 }
 
 #disabledByAdminPanel .notice .icon {
   /* This isn't considered an error, so use primary color. */
-  color: var(--color--primary);
+  color: var(--cr-fallback-color-primary);
 }
 
 #disabledByAdminPanel .without-link {
@@ -244,7 +244,7 @@ webview:not([hidden]) {
 }
 
 .notice-message {
-  width: 300px;
+  max-width: 356px;
 }
 
 /* Guest panel contains glic webview. If in the show-header state, a header
@@ -260,7 +260,7 @@ webview:not([hidden]) {
 }
 
 .outerheader {
-  background: var(--color--surface);
+  background: var(--color-glic-background);
   position: absolute;
   width: 100%;
   height: 48px;
@@ -270,8 +270,16 @@ webview:not([hidden]) {
   display: none;
 }
 
+#guestPanel.show-header {
+  display: flex;
+  flex-direction: column;
+}
+
 #guestPanel.show-header #webviewHeader {
   display: block;
+  position: relative;
+  width: 100%;
+  order: -1;
 }
 
 #webviewContainer {
@@ -281,16 +289,15 @@ webview:not([hidden]) {
 }
 
 #guestPanel.show-header #webviewContainer {
-  position: absolute;
+  position: relative;
   width: 100%;
-  /* If showing a login page, the window height will always be 800px */
-  height: 752px;
-  bottom: 0;
+  height: auto;
+  flex: 1;
 }
 
 .tonal-button {
-  background-color: var(--color--secondary-container);
-  color: var(--color--on-secondary-container);
+  background-color: var(--cr-fallback-color-secondary-container);
+  color: var(--cr-fallback-color-on-secondary-container);
 }
 
 #debug {
@@ -305,7 +312,7 @@ cr-progress {
 }
 
 .placeholder {
-  background-color: var(--color--surface-container);
+  background-color: var(--cr-fallback-color-surface1);
   animation: 1s infinite ease-in-out opacity-fade;
 }
 
@@ -377,8 +384,8 @@ cr-progress {
   font-size: 11px;
   font-weight: 500;
   line-height: 16px;
-  color: var(--color--on-surface);
-  background-color: var(--color--surface);
+  color: var(--cr-fallback-color-on-surface);
+  background-color: var(--color-glic-background);
   padding: 12px;
   margin: 0 20px;
   border-radius: 10px;
@@ -391,7 +398,7 @@ cr-progress {
 
 .overlay.hidden .message {
   opacity: 0;
-  transition-delay: 0s
+  transition-delay: 0s;
 }
 
 .overlay cr-icon {
@@ -400,56 +407,55 @@ cr-progress {
   height: 20px;
 }
 
-#fre-app-container #freLoadingPanel .header {
-  position: static;
-  display: flex;
-  justify-content: space-between;
+
+#showError {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: var(--cr-fallback-color-surface1);
+  color: var(--cr-fallback-color-on-surface-variant);
 }
 
-#fre-app-container #freLoadingPanel .container {
-  padding: 16px;
+/* Scoped styles for Android platforms */
+.androidMobile .dialog .headline {
+  font-size: 20px;
+  line-height: 24px;
+  font-weight: 500;
+  margin: 16px 0 8px 0;
+  color: var(--cr-fallback-color-on-surface);
 }
 
-#fre-app-container #freLoadingPanel .title {
-  display: block;
-  width: 70px;
-  height: 20px;
-  border-radius: 12px;
+.androidMobile .dialog p {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+  color: var(--cr-fallback-color-on-surface-variant);
+  margin: 0 0 24px 0;
 }
 
-#fre-app-container #freLoadingPanel .a {
-  width: 90px;
-  height: 45px;
-  border-radius: 48px;
-  align-self: flex-start;
-  margin-bottom: 16px;
+.androidMobile .dialog .icon cr-icon {
+  width: 36px;
+  height: 36px;
 }
 
-#fre-app-container #freLoadingPanel .b {
-  height: 56px;
-  margin-bottom: 16px;
+/* Primary Button styling for Android */
+.androidMobile .tonal-button {
+  background-color: var(--cr-fallback-color-primary);
+  color: var(--cr-fallback-color-on-primary);
+  font-size: 14px;
+  font-weight: 500;
+  height: 40px;
+  border-radius: 20px; /* Pill shape */
+  padding: 0 24px;
+  box-shadow: none;
+  text-transform: none;
+  border: none;
 }
 
-#fre-app-container #freLoadingPanel .c {
-  height: 118px;
+.androidMobile .tonal-button:hover,
+.androidMobile .tonal-button:focus {
+  background-color: var(--cr-fallback-color-primary);
+  opacity: 0.9;
 }
 
-#fre-app-container #freLoadingPanel .e {
-  height: 98px;
-  margin-bottom: 16px;
-}
-
-#fre-app-container #freLoadingPanel .f {
-  height: 32px;
-  margin-bottom: 12px;
-}
-
-#panelContainer #fre-app-container .g {
-  width: auto;
-  flex: 1;
-  height: 32px;
-}
-
-#freLoadingPanel .container {
-  background: var(--color--surface);
-}

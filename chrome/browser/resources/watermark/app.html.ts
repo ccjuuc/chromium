@@ -4,17 +4,25 @@
 
 import {html} from '//resources/lit/v3_0/lit.rollup.js';
 
-import {FONT_SIZE_MAX, FONT_SIZE_MIN, type WatermarkAppElement} from './app.js';
+import {FONT_SIZE_MAX, FONT_SIZE_MIN} from './app.js';
+import type {WatermarkAppElement} from './app.js';
 
 // TODO(crbug.com/434714853): Replace with i18n strings
 
 export function getHtml(this: WatermarkAppElement) {
+  // clang-format off
   return html`
     <div class="controls-card">
       <div class="card-header">
         <div class="header-text">
-          <h1>Watermark testing</h1>
-          <p>Customize the watermark style and test it live</p>
+          <h1>Watermark Customization</h1>
+          <p>Customize the watermark style and text, and test it live</p>
+        </div>
+      </div>
+
+      <div class="card-header">
+        <div class="header-text">
+          <h2>Watermark style</h2>
         </div>
         <cr-button @click="${this.onCopyJsonClick_}">
             Copy style as JSON
@@ -31,27 +39,31 @@ export function getHtml(this: WatermarkAppElement) {
               type="number"
               min="${FONT_SIZE_MIN}"
               max="${FONT_SIZE_MAX}"
-              @keydown="${this.onFontSizeInputKeyDown_}"
-              @value-changed="${this.onFontSizeChanged_}">
+              .value="${this.fontSize_.toString()}"
+              ?invalid="${this.isFontSizeInvalid_}"
+              @keydown="${this.onFontSizeInputKeydown_}"
+              @value-changed="${this.onFontSizeValueChanged_}">
           </cr-input>
           <div class="spinner-buttons">
             <button
               class="spinner-btn up"
               ?disabled="${this.fontSize_ >= FONT_SIZE_MAX}"
-              @click="${this.onIncrementFontSize_}"
-              @mousedown="${this.onFontSizeInputMouseDown_}">
+              @click="${this.onIncrementFontSizeClick_}"
+              @mousedown="${this.onFontSizeInputMousedown_}">
             </button>
             <button
               class="spinner-btn down"
               ?disabled="${this.fontSize_ <= FONT_SIZE_MIN}"
-              @click="${this.onDecrementFontSize_}"
-              @mousedown="${this.onFontSizeInputMouseDown_}">
+              @click="${this.onDecrementFontSizeClick_}"
+              @mousedown="${this.onFontSizeInputMousedown_}">
             </button>
           </div>
         </div>
       </div>
 
-      <div id="fontSizeInputError">
+      <div
+        id="fontSizeInputError"
+        class="${this.isFontSizeInvalid_ ? 'visible' : ''}">
         <span>
           Font size should be between ${FONT_SIZE_MIN} and ${FONT_SIZE_MAX}
         </span>
@@ -64,7 +76,7 @@ export function getHtml(this: WatermarkAppElement) {
               min="0" max="100"
               .value="${this.outlineOpacity_}"
               .ticks="${this.opacityTicks_}"
-              @cr-slider-value-changed="${this.onOutlineOpacityChanged_}">
+              @cr-slider-value-changed="${this.onOutlineOpacityCrSliderValueChanged_}">
           </cr-slider>
           <span class="slider-percentage">${this.outlineOpacity_}%</span>
         </div>
@@ -77,11 +89,31 @@ export function getHtml(this: WatermarkAppElement) {
               min="0" max="100"
               .value="${this.fillOpacity_}"
               .ticks="${this.opacityTicks_}"
-              @cr-slider-value-changed="${this.onFillOpacityChanged_}">
+              @cr-slider-value-changed="${this.onFillOpacityCrSliderValueChanged_}">
           </cr-slider>
           <span class="slider-percentage">${this.fillOpacity_}%</span>
         </div>
       </div>
+
+      <div class="card-header">
+        <div class="header-text">
+          <h2>Watermark text</h2>
+        </div>
+      </div>
+
+      <div class="control-row">
+        <cr-textarea
+            id="watermarkTextInput"
+            class="text-input"
+            aria-label="Watermark text"
+            rows="2"
+            .value="${this.watermarkText_}"
+            autogrow
+            maxlength="512"
+            @value-changed="${this.onWatermarkTextValueChanged_}">
+        </cr-textarea>
+      </div>
     </div>
   `;
+  // clang-format on
 }

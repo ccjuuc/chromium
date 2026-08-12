@@ -5,13 +5,15 @@
 import 'chrome://diagnostics/routine_result_list.js';
 import 'chrome://webui-test/chromeos/mojo_webui_test_support.js';
 
+import {createRoutine} from 'chrome://diagnostics/diagnostics_utils.js';
+import {RoutineGroup} from 'chrome://diagnostics/routine_group.js';
 import {ExecutionProgress, ResultStatusItem} from 'chrome://diagnostics/routine_list_executor.js';
 import type {RoutineResultEntryElement} from 'chrome://diagnostics/routine_result_entry.js';
 import {RoutineResultListElement} from 'chrome://diagnostics/routine_result_list.js';
 import {RoutineType, StandardRoutineResult} from 'chrome://diagnostics/system_routine_controller.mojom-webui.js';
 import {strictQuery} from 'chrome://resources/ash/common/typescript_utils/strict_query.js';
 import {assert} from 'chrome://resources/js/assert.js';
-import {assertDeepEquals, assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chromeos/chai_assert.js';
+import {assertDeepEquals, assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
 import {isVisible} from 'chrome://webui-test/test_util.js';
 
@@ -77,24 +79,6 @@ suite('routineResultListTestSuite', function() {
     assertTrue(isVisible(strictQuery(
         '#resultListContainer', routineResultListElement.shadowRoot,
         HTMLDivElement)));
-  });
-
-  test('HideElement', async () => {
-    await initializeRoutineResultList([]);
-    assert(routineResultListElement);
-    assertFalse(routineResultListElement.hidden);
-    assertFalse(strictQuery(
-                    '#resultListContainer', routineResultListElement.shadowRoot,
-                    HTMLElement)
-                    .hidden);
-    routineResultListElement.hidden = true;
-    flushTasks();
-    assertTrue(routineResultListElement.hidden);
-    assert(routineResultListElement);
-    assertTrue(strictQuery(
-                   '#resultListContainer', routineResultListElement.shadowRoot,
-                   HTMLElement)
-                   .hidden);
   });
 
   test('EmptyByDefault', async () => {
@@ -213,5 +197,75 @@ suite('routineResultListTestSuite', function() {
             return flushTasks();
           });
     });
+  });
+
+  test('OnStatusUpdateReturnsTrueOnBlockingFailure', async () => {
+    const group = new RoutineGroup(
+        [createRoutine(RoutineType.kLanConnectivity, /*blocking=*/ true)],
+        'localNetworkGroupLabel');
+    const groups = [
+      group,
+      new RoutineGroup(
+          [createRoutine(RoutineType.kDnsResolverPresent, /*blocking=*/ true)],
+          'nameResolutionGroupLabel'),
+    ];
+
+    assertFalse(!!routineResultListElement);
+    routineResultListElement =
+        document.createElement(RoutineResultListElement.is);
+    assertTrue(!!routineResultListElement);
+    routineResultListElement.usingRoutineGroups = true;
+    document.body.appendChild(routineResultListElement);
+    await flushTasks();
+    routineResultListElement.initializeTestRun(groups);
+    await flushTasks();
+
+    // Running status does not signal blocking failure.
+    const runningStatus = new ResultStatusItem(
+        RoutineType.kLanConnectivity, ExecutionProgress.RUNNING);
+    assert(routineResultListElement);
+    let result = routineResultListElement.onStatusUpdate(runningStatus);
+    assertFalse(result);
+
+    // Completed with failure on a blocking routine signals blocking failure.
+    const failedStatus = new ResultStatusItem(
+        RoutineType.kLanConnectivity, ExecutionProgress.COMPLETED);
+    failedStatus.result = {
+      simpleResult: StandardRoutineResult.kTestFailed,
+      powerResult: undefined,
+    };
+    result = routineResultListElement.onStatusUpdate(failedStatus);
+    assertTrue(result);
+
+    await flushTasks();
+    // Remaining group is skipped.
+    assertTrue(routineResultListElement.ignoreRoutineStatusUpdates);
+  });
+
+  test('OnStatusUpdateReturnsFalseOnNonBlockingFailure', async () => {
+    const group = new RoutineGroup(
+        [createRoutine(RoutineType.kSignalStrength, /*blocking=*/ false)],
+        'wifiGroupLabel');
+
+    assertFalse(!!routineResultListElement);
+    routineResultListElement =
+        document.createElement(RoutineResultListElement.is);
+    assertTrue(!!routineResultListElement);
+    routineResultListElement.usingRoutineGroups = true;
+    document.body.appendChild(routineResultListElement);
+    await flushTasks();
+    routineResultListElement.initializeTestRun([group]);
+    await flushTasks();
+
+    const failedStatus = new ResultStatusItem(
+        RoutineType.kSignalStrength, ExecutionProgress.COMPLETED);
+    failedStatus.result = {
+      simpleResult: StandardRoutineResult.kTestFailed,
+      powerResult: undefined,
+    };
+    assert(routineResultListElement);
+    const result = routineResultListElement.onStatusUpdate(failedStatus);
+    assertFalse(result);
+    assertFalse(routineResultListElement.ignoreRoutineStatusUpdates);
   });
 });

@@ -18,7 +18,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
-#include "components/history_embeddings/history_embeddings_features.h"
+#include "components/history_embeddings/core/history_embeddings_features.h"
 #include "components/omnibox/browser/autocomplete_input.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_match_type.h"
@@ -95,14 +95,6 @@ class FeaturedSearchProviderTest : public testing::Test {
   void SetUp() override {
     toolbelt_scoped_config_.Get().enabled = true;
     client_ = std::make_unique<FakeAutocompleteProviderClient>();
-
-    MockAimEligibilityService* mock_aim_eligibility_service =
-        static_cast<MockAimEligibilityService*>(
-            client_->GetAimEligibilityService());
-    EXPECT_CALL(*mock_aim_eligibility_service, IsAimEligible())
-        .WillRepeatedly(testing::Return(true));
-    EXPECT_CALL(*mock_aim_eligibility_service, IsAimLocallyEligible())
-        .WillRepeatedly(testing::Return(true));
     provider_ =
         new FeaturedSearchProvider(client_.get(), /*show_iph_matches=*/true);
     omnibox::RegisterProfilePrefs(
@@ -448,8 +440,11 @@ TEST_F(FeaturedSearchProviderTest,
       }));
   base::test::ScopedFeatureList features;
   features.InitWithFeaturesAndParameters(
-      {{history_embeddings::kHistoryEmbeddings, {}},
-       {omnibox::kStarterPackIPH, {}}},
+      {
+          {history_embeddings::kHistoryEmbeddings, {}},
+          {omnibox::kStarterPackExpansion, {}},
+          {omnibox::kStarterPackIPH, {}},
+      },
       {});
   PrefService* prefs = client_->GetPrefs();
 
@@ -958,9 +953,10 @@ TEST_F(FeaturedSearchProviderTest, HistoryEmbedding_Iphs) {
 
 TEST_F(FeaturedSearchProviderTest, IphShownLimit) {
   base::test::ScopedFeatureList features;
-  features.InitWithFeatures(
-      {{omnibox::kStarterPackIPH}, {history_embeddings::kHistoryEmbeddings}},
-      {});
+  features.InitWithFeatures({{omnibox::kStarterPackExpansion},
+                             {omnibox::kStarterPackIPH},
+                             {history_embeddings::kHistoryEmbeddings}},
+                            {});
   AddStarterPackEntriesToTemplateUrlService();
   AutocompleteInput input;
   input.set_focus_type(metrics::INTERACTION_FOCUS);

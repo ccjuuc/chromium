@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/uuid.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
 #include "components/payments/core/payment_options_provider.h"
@@ -54,8 +55,12 @@ AutofillProfile CreateProfileWithContactInfo(const char* name,
                                              const char* phone) {
   AutofillProfile profile(
       autofill::i18n_model_definition::kLegacyHierarchyCountryCode);
-  autofill::test::SetProfileInfo(&profile, name, "", "", email, "", "", "", "",
-                                 "", "", "", phone);
+  autofill::test::SetProfileInfo(&profile,
+                                 autofill::test::SetProfileInfoOptionsBuilder()
+                                     .with_first_name(name)
+                                     .with_email(email)
+                                     .with_phone(phone)
+                                     .Build());
   return profile;
 }
 
@@ -63,8 +68,16 @@ AutofillProfile CreateProfileWithCompleteAddress(const char* name,
                                                  const char* phone) {
   AutofillProfile profile(
       autofill::i18n_model_definition::kLegacyHierarchyCountryCode);
-  autofill::test::SetProfileInfo(&profile, name, "", "", "", "", "123 Fake St.",
-                                 "", "Fakesville", "MN", "54000", "US", phone);
+  autofill::test::SetProfileInfo(&profile,
+                                 autofill::test::SetProfileInfoOptionsBuilder()
+                                     .with_first_name(name)
+                                     .with_address1("123 Fake St.")
+                                     .with_city("Fakesville")
+                                     .with_state("MN")
+                                     .with_zipcode("54000")
+                                     .with_country("US")
+                                     .with_phone(phone)
+                                     .Build());
   return profile;
 }
 
@@ -72,8 +85,13 @@ AutofillProfile CreateProfileWithPartialAddress(const char* name,
                                                 const char* phone) {
   AutofillProfile profile(
       autofill::i18n_model_definition::kLegacyHierarchyCountryCode);
-  autofill::test::SetProfileInfo(&profile, name, "", "", "", "", "123 Fake St.",
-                                 "", "", "", "54000", "", phone);
+  autofill::test::SetProfileInfo(&profile,
+                                 autofill::test::SetProfileInfoOptionsBuilder()
+                                     .with_first_name(name)
+                                     .with_address1("123 Fake St.")
+                                     .with_zipcode("54000")
+                                     .with_phone(phone)
+                                     .Build());
   return profile;
 }
 

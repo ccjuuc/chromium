@@ -7,10 +7,10 @@
 
 #include <vector>
 
-#include "base/byte_count.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "components/page_load_metrics/browser/navigation_scenario.h"
 #include "components/page_load_metrics/browser/page_load_metrics_observer.h"
 #include "components/page_load_metrics/common/page_load_metrics.mojom-forward.h"
 #include "components/page_load_metrics/common/test/weak_mock_timer.h"
@@ -94,13 +94,18 @@ class PageLoadMetricsObserverTester : public test::WeakMockTimerProvider {
   void SimulateCpuTimingUpdate(const mojom::CpuTiming& cpu_timing);
   void SimulateCpuTimingUpdate(const mojom::CpuTiming& cpu_timing,
                                content::RenderFrameHost* rfh);
-  void SimulateInputTimingUpdate(const mojom::InputTiming& input_timing);
-  void SimulateInputTimingUpdate(const mojom::InputTiming& input_timing,
-                                 content::RenderFrameHost* rfh);
+  void SimulateEventTimingUpdate(
+      const std::vector<mojom::EventTimingPtr>& event_timings);
+  void SimulateEventTimingUpdate(
+      const std::vector<mojom::EventTimingPtr>& event_timings,
+      content::RenderFrameHost* rfh);
   void SimulateTimingAndMetadataUpdate(const mojom::PageLoadTiming& timing,
                                        const mojom::FrameMetadata& metadata);
   void SimulateMetadataUpdate(const mojom::FrameMetadata& metadata,
                               content::RenderFrameHost* rfh);
+  void SimulateTimingAndFontLoadingMetricsUpdate(
+      const mojom::PageLoadTiming& timing,
+      mojom::FontLoadingMetricsPtr font_loading_metrics);
   void SimulateFeaturesUpdate(
       const std::vector<blink::UseCounterFeature>& new_features);
   void SimulateResourceDataUseUpdate(
@@ -151,10 +156,6 @@ class PageLoadMetricsObserverTester : public test::WeakMockTimerProvider {
                              bool blocked_by_policy,
                              StorageType storage_type);
 
-  // Simulate a V8 per-frame memory update.
-  void SimulateMemoryUpdate(content::RenderFrameHost* render_frame_host,
-                            base::ByteCount delta_bytes);
-
   MetricsWebContentsObserver* metrics_web_contents_observer() {
     return metrics_web_contents_observer_;
   }
@@ -168,6 +169,13 @@ class PageLoadMetricsObserverTester : public test::WeakMockTimerProvider {
   void RegisterObservers(PageLoadTracker* tracker);
 
   bool is_non_tab_webui() const { return is_non_tab_webui_; }
+  void set_navigation_scenario(NavigationScenario scenario) {
+    navigation_scenario_ = scenario;
+  }
+  NavigationScenario GetNavigationScenario(
+      content::NavigationHandle* navigation_handle) const {
+    return navigation_scenario_;
+  }
 
  private:
   void SimulatePageLoadTimingUpdate(
@@ -176,11 +184,15 @@ class PageLoadMetricsObserverTester : public test::WeakMockTimerProvider {
       const std::vector<blink::UseCounterFeature>& new_features,
       const mojom::FrameRenderDataUpdate& render_data,
       const mojom::CpuTiming& cpu_timing,
-      const mojom::InputTiming& input_timing,
+      const std::vector<mojom::EventTimingPtr>& event_timings,
       const std::optional<blink::SubresourceLoadMetrics>&
           subresource_load_metrics,
       content::RenderFrameHost* rfh,
-      const mojom::SoftNavigationMetrics& soft_navigation_metrics);
+      const std::vector<mojom::SoftNavigationMetricsPtr>&
+          soft_navigation_metrics,
+      const std::vector<mojom::LargestContentfulPaintTimingPtr>&
+          soft_largest_contentful_paint,
+      mojom::FontLoadingMetricsPtr font_loading_metrics = nullptr);
 
   content::WebContents* web_contents() const { return web_contents_; }
 
@@ -193,6 +205,7 @@ class PageLoadMetricsObserverTester : public test::WeakMockTimerProvider {
   ukm::TestAutoSetUkmRecorder test_ukm_recorder_;
 
   bool is_non_tab_webui_ = false;
+  NavigationScenario navigation_scenario_ = NavigationScenario::kUnknown;
 };
 
 }  // namespace page_load_metrics

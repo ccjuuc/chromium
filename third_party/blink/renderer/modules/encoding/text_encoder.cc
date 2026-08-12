@@ -53,12 +53,13 @@ TextEncoder* TextEncoder::Create(ExecutionContext* context,
 TextEncoder::TextEncoder(const TextEncoding& encoding)
     : encoding_(encoding), codec_(NewTextCodec(encoding)) {
   DCHECK_EQ(encoding_.GetName(), "UTF-8");
+  CHECK(codec_) << encoding_.GetName();
 }
 
 TextEncoder::~TextEncoder() = default;
 
 String TextEncoder::encoding() const {
-  String name = encoding_.GetName().GetString().DeprecatedLower();
+  String name = encoding_.GetName().GetString().ToAsciiLower();
   DCHECK_EQ(name, "utf-8");
   return name;
 }
@@ -71,7 +72,7 @@ NotShared<DOMUint8Array> TextEncoder::encode(const String& input,
   // unencodable sequences (for instance, unpaired UTF-16 surrogates)
   // are present in the input.
   std::string result = VisitCharacters(input, [this](auto chars) {
-    return codec_->Encode(chars, UnencodableHandling::kNoUnencodables);
+    return codec_->Encode(chars, UnencodableHandling::kNone);
   });
   if (base::FeatureList::IsEnabled(kThrowExceptionWhenTextEncodeOOM)) {
     NotShared<DOMUint8Array> result_array(

@@ -84,11 +84,13 @@ class CORE_EXPORT PerformanceEntry : public ScriptWrappable {
     kScript = 1 << 16,
     kContainer = 1 << 17,
     kInteractionContentfulPaint = 1 << 18,
+    kScroll = 1 << 19,
+    kMarkConditional = 1 << 20,
   };
 
   const AtomicString& name() const { return name_; }
   DOMHighResTimeStamp startTime() const;
-  uint32_t navigationId() const;
+  uint64_t navigationId() const;
   // source() will return null if the PerformanceEntry did not originate from a
   // Window context.
   DOMWindow* source() const;
@@ -162,6 +164,11 @@ class CORE_EXPORT PerformanceEntry : public ScriptWrappable {
   DOMHighResTimeStamp paintTime() const;
   std::optional<DOMHighResTimeStamp> presentationTime() const;
 
+  const DOMPaintTimingInfo& GetPaintTimingInfo() const {
+    CHECK(paint_timing_info_.has_value());
+    return paint_timing_info_.value();
+  }
+
   void Trace(Visitor*) const override;
 
   void SetPaintTimingInfo(const DOMPaintTimingInfo& paint_timing_info) {
@@ -173,12 +180,12 @@ class CORE_EXPORT PerformanceEntry : public ScriptWrappable {
                    double start_time,
                    double finish_time,
                    DOMWindow* source,
-                   uint32_t navigation_id);
+                   uint64_t navigation_id);
   PerformanceEntry(double duration,
                    const AtomicString& name,
                    double start_time,
                    DOMWindow* source,
-                   uint32_t navigation_id);
+                   uint64_t navigation_id);
 
   virtual void BuildJSONValue(V8ObjectBuilder&) const;
 
@@ -192,7 +199,7 @@ class CORE_EXPORT PerformanceEntry : public ScriptWrappable {
   // source_ will be null if the PerformanceEntry did not originate from a
   // Window context.
   const WeakMember<DOMWindow> source_;
-  const uint32_t navigation_id_;
+  const uint64_t navigation_id_;
   // For entries implementing PaintTimingMixin.
   std::optional<DOMPaintTimingInfo> paint_timing_info_;
 };

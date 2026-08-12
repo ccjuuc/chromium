@@ -30,15 +30,15 @@
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list_observer_bridge.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_opener.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
-#import "ios/chrome/browser/shared/public/commands/load_query_commands.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/qr_scanner_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/toolbar/legacy/ui_bundled/legacy_toolbar_consumer.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/test/toolbar_test_navigation_manager.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/toolbar_consumer.h"
 #import "ios/chrome/browser/web/model/web_navigation_browser_agent.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/test/providers/voice_search/test_voice_search.h"
@@ -92,7 +92,6 @@ class AdaptiveToolbarMediatorTest : public PlatformTest {
         /*enabled_features=*/
         {
             data_sharing::features::kDataSharingFeature,
-            kTabGroupInTabIconContextMenu,
         },
         /*disable_features=*/{});
 
@@ -125,15 +124,14 @@ class AdaptiveToolbarMediatorTest : public PlatformTest {
                                              scenario:kTestMenuScenario];
     mediator_.templateURLService =
         ios::TemplateURLServiceFactory::GetForProfile(profile_.get());
-    consumer_ = OCMProtocolMock(@protocol(ToolbarConsumer));
-    strict_consumer_ = OCMStrictProtocolMock(@protocol(ToolbarConsumer));
+    consumer_ = OCMProtocolMock(@protocol(LegacyToolbarConsumer));
+    strict_consumer_ = OCMStrictProtocolMock(@protocol(LegacyToolbarConsumer));
     SetUpWebStateList();
 
-    mock_application_commands_handler_ =
-        OCMStrictProtocolMock(@protocol(ApplicationCommands));
+    mock_scene_handler_ = OCMStrictProtocolMock(@protocol(SceneCommands));
     [test_browser_->GetCommandDispatcher()
-        startDispatchingToTarget:mock_application_commands_handler_
-                     forProtocol:@protocol(ApplicationCommands)];
+        startDispatchingToTarget:mock_scene_handler_
+                     forProtocol:@protocol(SceneCommands)];
 
     mock_settings_commands_handler_ =
         OCMStrictProtocolMock(@protocol(SettingsCommands));
@@ -153,11 +151,10 @@ class AdaptiveToolbarMediatorTest : public PlatformTest {
         startDispatchingToTarget:mock_qr_scanner_commands_handler_
                      forProtocol:@protocol(QRScannerCommands)];
 
-    mock_load_query_commands_handler_ =
-        OCMStrictProtocolMock(@protocol(LoadQueryCommands));
+    mock_gemini_handler_ = OCMStrictProtocolMock(@protocol(GeminiCommands));
     [test_browser_->GetCommandDispatcher()
-        startDispatchingToTarget:mock_load_query_commands_handler_
-                     forProtocol:@protocol(LoadQueryCommands)];
+        startDispatchingToTarget:mock_gemini_handler_
+                     forProtocol:@protocol(GeminiCommands)];
 
     [[UIPasteboard generalPasteboard] setItems:@[]];
 
@@ -176,11 +173,10 @@ class AdaptiveToolbarMediatorTest : public PlatformTest {
 
     EXPECT_OCMOCK_VERIFY(consumer_);
     EXPECT_OCMOCK_VERIFY(strict_consumer_);
-    EXPECT_OCMOCK_VERIFY(mock_application_commands_handler_);
+    EXPECT_OCMOCK_VERIFY(mock_scene_handler_);
     EXPECT_OCMOCK_VERIFY(mock_settings_commands_handler_);
     EXPECT_OCMOCK_VERIFY(mock_browser_coordinator_commands_handler_);
     EXPECT_OCMOCK_VERIFY(mock_qr_scanner_commands_handler_);
-    EXPECT_OCMOCK_VERIFY(mock_load_query_commands_handler_);
   }
 
  protected:
@@ -216,11 +212,11 @@ class AdaptiveToolbarMediatorTest : public PlatformTest {
   FakeWebStateListDelegate web_state_list_delegate_;
   id consumer_;
   id strict_consumer_;
-  id mock_application_commands_handler_;
+  id mock_scene_handler_;
   id mock_settings_commands_handler_;
   id mock_browser_coordinator_commands_handler_;
   id mock_qr_scanner_commands_handler_;
-  id mock_load_query_commands_handler_;
+  id mock_gemini_handler_;
   std::unique_ptr<TestProfileIOS> profile_;
   collaboration::messaging::MockMessagingBackendService messaging_backend_;
 
@@ -486,14 +482,11 @@ TEST_F(AdaptiveToolbarMediatorTest, MenuElements) {
   UIMenu* new_tab_menu =
       [mediator_ menuForButtonOfType:AdaptiveToolbarButtonTypeNewTab];
 
-  ASSERT_EQ(5U, new_tab_menu.children.count);
+  ASSERT_EQ(4U, new_tab_menu.children.count);
   for (UIMenuElement* element in new_tab_menu.children) {
-    if ([element isKindOfClass:[UIAction class]]) {
-      UIAction* action = (UIAction*)element;
-      EXPECT_EQ(0U, action.attributes);
-    } else {
-      ASSERT_TRUE([element isKindOfClass:[UIMenuElement class]]);
-    }
+    ASSERT_TRUE([element isKindOfClass:[UIAction class]]);
+    UIAction* action = (UIAction*)element;
+    EXPECT_EQ(0U, action.attributes);
   }
 
   UIMenu* tab_grid_menu =

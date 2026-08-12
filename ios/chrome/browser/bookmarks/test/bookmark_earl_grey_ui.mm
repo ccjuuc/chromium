@@ -50,7 +50,6 @@ using chrome_test_util::OpenLinkInIncognitoButton;
 using chrome_test_util::OpenLinkInNewTabButton;
 using chrome_test_util::SearchBar;
 using chrome_test_util::ShareButton;
-using chrome_test_util::TabGridEditButton;
 using chrome_test_util::TappableBookmarkNodeWithLabel;
 
 namespace chrome_test_util {
@@ -74,7 +73,6 @@ id<GREYMatcher> BookmarksContextMenuEditButton() {
   return grey_allOf(
       EditButton(), grey_userInteractionEnabled(),
       grey_not(grey_accessibilityID(kBookmarksHomeTrailingButtonIdentifier)),
-      grey_not(TabGridEditButton()),
       grey_not(grey_ancestor(
           grey_accessibilityID(kBookmarksHomeTrailingButtonIdentifier))),
       nil);
@@ -199,6 +197,24 @@ id<GREYMatcher> SearchIconButton() {
          usingSearchAction:grey_scrollInDirection(kGREYDirectionDown, 200)
       onElementWithMatcher:grey_accessibilityID(kPopupMenuToolsMenuTableViewId)]
       performAction:grey_tap()];
+}
+
+- (void)starAndEditCurrentTabWithSnackbarTitle:(NSString*)title {
+  [self starCurrentTab];
+  if (title) {
+    // Verify the snackbar title.
+    [ChromeEarlGrey
+        waitForUIElementToAppearWithMatcher:grey_accessibilityLabel(title)];
+  }
+  // Tap on the snackbar edit button.
+  [[EarlGrey
+      selectElementWithMatcher:grey_allOf(grey_accessibilityID(
+                                              kSnackbarButtonAccessibilityId),
+                                          grey_sufficientlyVisible(), nil)]
+      performAction:grey_tap()];
+  [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
+                                          kBookmarkEditViewContainerIdentifier)]
+      assertWithMatcher:grey_notNil()];
 }
 
 - (void)addFolderWithName:(NSString*)name
@@ -496,9 +512,8 @@ id<GREYMatcher> SearchIconButton() {
 }
 
 - (void)verifyEmptyBackgroundAppears {
-  [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
-                                          kTableViewIllustratedEmptyViewID)]
-      assertWithMatcher:grey_notNil()];
+  [ChromeEarlGrey waitForUIElementToAppearWithMatcher:
+                      grey_accessibilityID(kTableViewIllustratedEmptyViewID)];
 
   [[EarlGrey selectElementWithMatcher:grey_text(l10n_util::GetNSString(
                                           IDS_IOS_BOOKMARK_EMPTY_TITLE))]
@@ -781,11 +796,10 @@ id<GREYMatcher> SearchIconButton() {
 
   // Set the bookmark name.
   [[EarlGrey
-      selectElementWithMatcher:grey_allOf(grey_userInteractionEnabled(),
-                                          grey_not(TabGridEditButton()),
-                                          ButtonWithAccessibilityLabelId(
-                                              IDS_IOS_BOOKMARK_ACTION_EDIT),
-                                          nil)] performAction:grey_tap()];
+      selectElementWithMatcher:grey_allOf(grey_accessibilityID(
+                                              kSnackbarButtonAccessibilityId),
+                                          grey_sufficientlyVisible(), nil)]
+      performAction:grey_tap()];
 
   NSString* titleIdentifier = @"Title Field_textField";
   [[EarlGrey

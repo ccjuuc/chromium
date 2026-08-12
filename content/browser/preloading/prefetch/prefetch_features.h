@@ -63,13 +63,6 @@ CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchStateContaminationMitigation);
 CONTENT_EXPORT extern const base::FeatureParam<bool>
     kPrefetchStateContaminationSwapsBrowsingContextGroup;
 
-// Fix for prefetching a URL controlled by a ServiceWorker without fetch
-// handler. Currently this stops prefetching for such cases
-// (https://crbug.com/379076354).
-// Even when `kPrefetchServiceWorker` is enabled, this is still effective for
-// SW-ineligible prefetches.
-CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchServiceWorkerNoFetchHandlerFix);
-
 // Enabling this will apply net::RequestPriority::MEDIUM for prefetch
 // requests triggered by embedders. See crbug.com/353628437 to track this issue.
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchNetworkPriorityForEmbedders);
@@ -82,17 +75,6 @@ CONTENT_EXPORT BASE_DECLARE_FEATURE(
 // Allow prefetching ServiceWorker-controlled URLs.
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchServiceWorker);
 bool IsPrefetchServiceWorkerEnabled(content::BrowserContext* browser_context);
-
-// Replace current prefetch queue with a new queue and scheduler, which allows
-// prioritization, concurrent prefetches, bursting.
-//
-// For more details, see
-// https://docs.google.com/document/d/1W0Nk3Nq6NaUXkBppOUC5zyNmhVqMjYShm1bydGYd9qc
-CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchScheduler);
-
-// Call `PrefetchScheduler::Progress()` synchronously as much as possible.
-CONTENT_EXPORT extern const base::FeatureParam<bool>
-    kPrefetchSchedulerProgressSyncBestEffort;
 
 // Controls params for tests of `PrefetchScheduler`.
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchSchedulerTesting);
@@ -109,20 +91,65 @@ CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchMultipleActiveSetSizeLimitForBase);
 CONTENT_EXPORT extern const base::FeatureParam<size_t>
     kPrefetchMultipleActiveSetSizeLimitForBaseValue;
 
-// Kill switch, which enables reporting serving metrics of preloads.
-// (crbug.com/360094997)
+// Controls the limit for Eager prefetches.
+CONTENT_EXPORT
+BASE_DECLARE_FEATURE(kPrefetchEagerLimit);
+CONTENT_EXPORT extern const base::FeatureParam<size_t>
+    kMaxNumberOfEagerPrefetchesPerPage;
+
+// Controls the limit for Moderate prefetches.
+CONTENT_EXPORT
+BASE_DECLARE_FEATURE(kPrefetchModerateLimit);
+CONTENT_EXPORT extern const base::FeatureParam<size_t>
+    kMaxNumberOfModeratePrefetchesPerPage;
+
+// Force the off-the-main-thread prefetch code path for testing, to anyway
+// increase the test coverage of off-the-main-thread prefetch.
+// https://crbug.com/452389538
+// This is anyway expected to be incomplete, and expected deviations are
+// explicitly tracked in `TestExpectations` etc.
 //
-// TODO(crbug.com/360094997): Remove it after confirming stability.
-CONTENT_EXPORT BASE_DECLARE_FEATURE(kPreloadServingMetrics);
+// To enable this, also enable `kPrefetchOffTheMainThread`.
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchOffTheMainThreadForceForTesting);
 
-// Kill switch for the modified failure/disconnect notifications around
-// `PrefetchContainer`.
-// TODO(crbug.com/400761083): Remove it after confirming stability.
-CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchGracefulNotification);
+// Cancels unrelated prefetch when a navigation is started.
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchCancelUnrelatedPrefetch);
 
-// Kill switch for making the cancelling of `PrefetchStreamingURLLoader` async.
-// TODO(crbug.com/400761083): Remove it after confirming stability.
-CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchAsyncCancelOnCookiesChange);
+enum class PrefetchCancelUnrelatedPrefetchCancelPolicy {
+  // Cancel prefetches that are not servable.
+  kNotServable,
+  // Cancel prefetches that are not servable && initiated by the navigation's
+  // initiator document.
+  //
+  // Since browser-initiated navigations do not have an initiator document,
+  // no prefetches are cancelled for them.
+  kNotServableSameInitiatorDocument,
+};
+
+CONTENT_EXPORT extern const base::FeatureParam<
+    PrefetchCancelUnrelatedPrefetchCancelPolicy>
+    kPrefetchCancelUnrelatedPrefetchCancelPolicy;
+
+enum class PrefetchMatchResolverUnblockAsyncPolicy {
+  // Asyncifies `PrefetchMatchResolver::UnblockInternal()` for all blocked
+  // navigations.
+  kAsyncBlocked,
+  // Asyncifies `PrefetchMatchResolver::UnblockInternal()` for blocked
+  // navigations only when there is no matching prefetch (unmatch case).
+  kAsyncBlockedUnmatch,
+};
+
+CONTENT_EXPORT extern const base::FeatureParam<
+    PrefetchMatchResolverUnblockAsyncPolicy>
+    kPrefetchMatchResolverUnblockAsyncPolicy;
+
+// Kill switch for making `PrefetchHandle`'s callbacks async.
+// TODO(crbug.com/480271813): Remove it after confirming stability.
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchAsyncPrefetchHandleCallback);
+
+// Making `PrefetchMatchResolver::UnblockInternal()` async.
+// See crbug.com/404416345 to track this issue.
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchMatchResolverUnblockAsync);
 
 }  // namespace features
 

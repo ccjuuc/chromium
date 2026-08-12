@@ -28,15 +28,15 @@ import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.chrome.browser.omnibox.test.R;
+import org.chromium.chrome.browser.omnibox.R;
 
 /** Tests for {@link SuggestionSpannable}. */
 @RunWith(BaseRobolectricTestRunner.class)
 public class SuggestionSpannableUnitTest {
-    public @Rule MockitoRule mockitoRule = MockitoJUnit.rule();
+    @Rule public final MockitoRule mockitoRule = MockitoJUnit.rule();
     private Context mContext;
-    private @Mock ColorStateList mColor1;
-    private @Mock ColorStateList mColor2;
+    @Mock private ColorStateList mColor1;
+    @Mock private ColorStateList mColor2;
 
     @Before
     public void setUp() {

@@ -15,6 +15,7 @@
 #include "content/browser/file_system_access/file_system_access_error.h"
 #include "content/browser/renderer_host/code_cache_host_impl.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
+#include "content/browser/service_worker/embedded_worker_instance.h"
 #include "content/browser/service_worker/service_worker_consts.h"
 #include "content/browser/service_worker/service_worker_container_host.h"
 #include "content/browser/service_worker/service_worker_context_core.h"
@@ -28,6 +29,7 @@
 #include "content/public/browser/permission_descriptor_util.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/weak_document_ptr.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/origin_util.h"
 #include "mojo/public/cpp/bindings/message.h"
@@ -72,13 +74,13 @@ ServiceWorkerHost::~ServiceWorkerHost() {
 }
 
 void ServiceWorkerHost::CompleteStartWorkerPreparation(
-    int process_id,
+    ChildProcessId process_id,
     mojo::PendingReceiver<blink::mojom::BrowserInterfaceBroker> broker_receiver,
     mojo::PendingRemote<service_manager::mojom::InterfaceProvider>
         interface_provider_remote) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK_EQ(ChildProcessHost::kInvalidUniqueID, worker_process_id_);
-  DCHECK_NE(ChildProcessHost::kInvalidUniqueID, process_id);
+  DCHECK(!worker_process_id_);
+  DCHECK(process_id);
   worker_process_id_ = process_id;
   broker_receiver_.Bind(std::move(broker_receiver));
   remote_interfaces_.Bind(std::move(interface_provider_remote));
@@ -87,11 +89,14 @@ void ServiceWorkerHost::CompleteStartWorkerPreparation(
 void ServiceWorkerHost::CreateWebTransportConnector(
     mojo::PendingReceiver<blink::mojom::WebTransportConnector> receiver) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  // TODO(crbug.com/379869738): Remove GetUnsafeValue.
   mojo::MakeSelfOwnedReceiver(
       std::make_unique<WebTransportConnectorImpl>(
-          worker_process_id_, /*frame=*/nullptr, version_->key().origin(),
+          worker_process_id_.GetUnsafeValue(), /*frame=*/nullptr,
+          WeakDocumentPtr(), version_->key().origin(),
           GetNetworkAnonymizationKey(),
-          version_->BuildClientSecurityState()->Clone()),
+          version_->BuildClientSecurityState()->Clone(),
+          version_->network_restrictions_id()),
       std::move(receiver));
 }
 
@@ -102,9 +107,13 @@ void ServiceWorkerHost::CreateWebSocketConnector(
   const blink::StorageKey& storage_key = version_->key();
   mojo::MakeSelfOwnedReceiver(
       std::make_unique<WebSocketConnectorImpl>(
-          worker_process_id_, IPC::mojom::kRoutingIdNone, storage_key.origin(),
+          content::GlobalRenderFrameHostId(worker_process_id_,
+                                           IPC::mojom::kRoutingIdNone),
+          WeakDocumentPtr(), storage_key.origin(),
           storage_key.ToPartialNetIsolationInfo(),
-          version_->BuildClientSecurityState()->Clone()),
+          version_->BuildClientSecurityState()->Clone(),
+          version_->network_restrictions_id(),
+          version_->embedded_worker()->WorkerDevtoolsId()),
       std::move(receiver));
 }
 
@@ -306,7 +315,9 @@ void ServiceWorkerHost::BindCacheStorageForBucket(
 }
 
 storage::BucketClientInfo ServiceWorkerHost::GetBucketClientInfo() const {
-  return storage::BucketClientInfo{worker_process_id(), token()};
+  // TODO(crbug.com/379869738) Remove GetUnsafeValue.
+  return storage::BucketClientInfo{worker_process_id().GetUnsafeValue(),
+                                   token()};
 }
 
 RenderProcessHost* ServiceWorkerHost::GetProcessHost() const {

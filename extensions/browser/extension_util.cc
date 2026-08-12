@@ -12,8 +12,11 @@
 #include "base/strings/string_util.h"
 #include "build/chromeos_buildflags.h"
 #include "components/crx_file/id_util.h"
+#include "components/download/public/common/download_item.h"
+#include "components/user_prefs/user_prefs.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/child_process_security_policy.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/storage_partition_config.h"
@@ -21,11 +24,11 @@
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
-#include "extensions/browser/extension_util.h"
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/browser/process_map.h"
 #include "extensions/browser/script_injection_tracker.h"
+#include "extensions/browser/shared_module_service.h"
 #include "extensions/browser/ui_util.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_id.h"
@@ -38,6 +41,7 @@
 #include "extensions/common/mojom/manifest.mojom.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/switches.h"
+#include "extensions/common/user_script.h"
 #include "extensions/grit/extensions_browser_resources.h"
 #include "mojo/public/cpp/bindings/clone_traits.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -53,8 +57,7 @@
 #include "base/system/sys_info.h"
 #endif
 
-namespace extensions {
-namespace util {
+namespace extensions::util {
 
 namespace {
 
@@ -75,6 +78,30 @@ bool ExtensionIsFromWebstore(const Extension& extension) {
          extension.location() == mojom::ManifestLocation::kInternal;
 }
 
+// Handles logic that only requires the ExtensionId and the BrowserContext.
+// This is safe to call even when the extension is completely unloaded.
+bool IsIncognitoEnabledForIdAndContext(const ExtensionId& extension_id,
+                                       content::BrowserContext* context) {
+#if BUILDFLAG(IS_CHROMEOS)
+  // An OTR Profile is used for captive portal signin to hide PII from
+  // captive portals (which require HTTP redirects to function).
+  // However, for captive portal signin we do not want want to disable
+  // extensions by default. (Proxies are explicitly disabled elsewhere).
+  // See b/261727502 for details.
+  PrefService* prefs = user_prefs::UserPrefs::Get(context);
+  if (prefs) {
+    const PrefService::Preference* captive_portal_pref =
+        prefs->FindPreference(chromeos::prefs::kCaptivePortalSignin);
+    if (captive_portal_pref && captive_portal_pref->GetValue()->GetBool()) {
+      return true;
+    }
+  }
+#endif
+
+  // The ultimate fallback database check.
+  return ExtensionPrefs::Get(context)->IsIncognitoEnabled(extension_id);
+}
+
 }  // namespace
 
 bool CanBeIncognitoEnabled(const Extension* extension) {
@@ -83,11 +110,8 @@ bool CanBeIncognitoEnabled(const Extension* extension) {
           extension->location() == mojom::ManifestLocation::kComponent);
 }
 
-bool IsIncognitoEnabled(const ExtensionId& extension_id,
+bool IsIncognitoEnabled(const Extension* extension,
                         content::BrowserContext* context) {
-  const Extension* extension =
-      ExtensionRegistry::Get(context)->enabled_extensions().GetByID(
-          extension_id);
   if (extension) {
     if (!CanBeIncognitoEnabled(extension)) {
       return false;
@@ -106,23 +130,22 @@ bool IsIncognitoEnabled(const ExtensionId& extension_id,
     }
 #endif
   }
-#if BUILDFLAG(IS_CHROMEOS)
-  // An OTR Profile is used for captive portal signin to hide PII from
-  // captive portals (which require HTTP redirects to function).
-  // However, for captive portal signin we do not want want to disable
-  // extensions by default. (Proxies are explicitly disabled elsewhere).
-  // See b/261727502 for details.
-  PrefService* prefs =
-      ExtensionsBrowserClient::Get()->GetPrefServiceForContext(context);
-  if (prefs) {
-    const PrefService::Preference* captive_portal_pref =
-        prefs->FindPreference(chromeos::prefs::kCaptivePortalSignin);
-    if (captive_portal_pref && captive_portal_pref->GetValue()->GetBool()) {
-      return true;
+
+  return IsIncognitoEnabledForIdAndContext(extension->id(), context);
+}
+
+bool IsIncognitoEnabled(const ExtensionId& extension_id,
+                        content::BrowserContext* context) {
+  ExtensionRegistry* registry = ExtensionRegistry::Get(context);
+  if (registry) {
+    const Extension* extension =
+        registry->enabled_extensions().GetByID(extension_id);
+    if (extension) {
+      return IsIncognitoEnabled(extension, context);
     }
   }
-#endif
-  return ExtensionPrefs::Get(context)->IsIncognitoEnabled(extension_id);
+
+  return IsIncognitoEnabledForIdAndContext(extension_id, context);
 }
 
 bool CanCrossIncognito(const Extension* extension,
@@ -147,7 +170,10 @@ bool IsExtensionIdle(const std::string& extension_id,
     // We have to check all the extensions that use this shared module for idle
     // to tell whether it is really 'idle'.
     std::unique_ptr<ExtensionSet> dependents =
-        ExtensionSystem::Get(context)->GetDependentExtensions(extension);
+        ExtensionsBrowserClient::Get()
+            ->GetSharedModuleService(context)
+            ->GetDependentExtensions(extension);
+
     for (const auto& dependent : *dependents) {
       ids_to_check.push_back(dependent->id());
     }
@@ -310,7 +336,7 @@ bool CanWithholdPermissionsFromExtension(const ExtensionId& extension_id,
 }
 
 int GetBrowserContextId(content::BrowserContext* context) {
-  using ContextIdMap = std::map<std::string, int>;
+  using ContextIdMap = std::map<base::UnguessableToken, int>;
 
   static int next_id = 0;
   static base::NoDestructor<ContextIdMap> context_map;
@@ -318,7 +344,7 @@ int GetBrowserContextId(content::BrowserContext* context) {
   // we need to get the original context to make sure we take the right context.
   content::BrowserContext* original_context =
       ExtensionsBrowserClient::Get()->GetOriginalContext(context);
-  const std::string& context_id = original_context->UniqueId();
+  const base::UnguessableToken& context_id = original_context->UniqueToken();
   auto iter = context_map->find(context_id);
   if (iter == context_map->end()) {
     iter = context_map->insert(std::make_pair(context_id, next_id++)).first;
@@ -344,15 +370,16 @@ bool IsExtensionVisibleToContext(const Extension& extension,
 }
 
 void InitializeFileSchemeAccessForExtension(
-    int render_process_id,
+    content::ChildProcessId render_process_id,
     const ExtensionId& extension_id,
     content::BrowserContext* browser_context) {
   ExtensionPrefs* prefs = ExtensionPrefs::Get(browser_context);
   // TODO(karandeepb): This should probably use
   // extensions::util::AllowFileAccess.
   if (prefs->AllowFileAccess(extension_id)) {
+    // TODO(crbug.com/379869738) Remove GetUnsafeValue.
     content::ChildProcessSecurityPolicy::GetInstance()->GrantRequestScheme(
-        render_process_id, url::kFileScheme);
+        render_process_id.GetUnsafeValue(), url::kFileScheme);
   }
 }
 
@@ -369,20 +396,24 @@ const gfx::ImageSkia& GetDefaultExtensionIcon() {
 ExtensionId GetExtensionIdForSiteInstance(
     content::SiteInstance& site_instance) {
   // <webview> guests always store the ExtensionId in the partition domain.
-  if (site_instance.IsGuest()) {
-    return site_instance.GetStoragePartitionConfig().partition_domain();
+  const content::SecurityPrincipal& security_principal =
+      site_instance.GetSecurityPrincipal();
+  if (security_principal.IsGuest()) {
+    return site_instance.GetSecurityPrincipal()
+        .GetStoragePartitionConfig()
+        .partition_domain();
   }
 
   // This works for both apps and extensions because the site has been
   // normalized to the extension URL for hosted apps.
-  const GURL& site_url = site_instance.GetSiteURL();
-  if (!site_url.SchemeIs(kExtensionScheme)) {
+  if (!security_principal.SchemeIs(kExtensionScheme)) {
     return ExtensionId();
   }
 
   // Navigating to a disabled (or uninstalled or not-yet-installed) extension
   // will set the site URL to chrome-extension://invalid.
-  ExtensionId maybe_extension_id = site_url.GetHost();
+  std::string_view maybe_extension_id =
+      site_instance.GetSecurityPrincipal().GetHost();
   if (maybe_extension_id == "invalid") {
     return ExtensionId();
   }
@@ -393,17 +424,18 @@ ExtensionId GetExtensionIdForSiteInstance(
   // known, extension-id-based hostname).
   DCHECK(crx_file::id_util::IdIsValid(maybe_extension_id))
       << "; maybe_extension_id = " << maybe_extension_id;
-  return maybe_extension_id;
+  return ExtensionId(maybe_extension_id);
 }
 
 std::string GetExtensionIdFromFrame(
     content::RenderFrameHost* render_frame_host) {
-  const GURL& site = render_frame_host->GetSiteInstance()->GetSiteURL();
-  if (!site.SchemeIs(kExtensionScheme)) {
+  const content::SiteInstance* site_instance =
+      render_frame_host->GetSiteInstance();
+  if (!site_instance->GetSecurityPrincipal().SchemeIs(kExtensionScheme)) {
     return std::string();
   }
 
-  return site.GetHost();
+  return std::string(site_instance->GetSecurityPrincipal().GetHost());
 }
 
 bool CanRendererHostExtensionOrigin(int render_process_id,
@@ -501,7 +533,7 @@ bool CanRendererActOnBehalfOfExtension(
     //
     // GuestView is explicitly excluded, because we don't want to allow
     // GuestViews to spoof the extension id of their host.
-    if (!site_instance.IsGuest() &&
+    if (!site_instance.GetSecurityPrincipal().IsGuest() &&
         extension_id == util::GetExtensionIdForSiteInstance(site_instance)) {
       return true;
     }
@@ -543,5 +575,16 @@ bool AnyCurrentlyInstalledExtensionIsFromWebstore(
                              });
 }
 
-}  // namespace util
-}  // namespace extensions
+bool IsExtensionDownload(const download::DownloadItem& download_item) {
+  if (download_item.GetTargetDisposition() ==
+      download::DownloadItem::TARGET_DISPOSITION_PROMPT) {
+    return false;
+  }
+
+  if (download_item.GetMimeType() == Extension::kMimeType) {
+    return true;
+  }
+  return false;
+}
+
+}  // namespace extensions::util

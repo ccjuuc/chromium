@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -20,12 +21,12 @@
 #include "content/common/content_export.h"
 #include "content/public/browser/eye_dropper.h"
 #include "content/public/browser/fullscreen_types.h"
+#include "content/public/browser/immersive_playback_options.h"
 #include "content/public/browser/invalidate_type.h"
 #include "content/public/browser/media_stream_request.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/preloading.h"
 #include "content/public/browser/preloading_trigger_type.h"
-#include "content/public/browser/preview_cancel_reason.h"
 #include "content/public/browser/select_audio_output_request.h"
 #include "content/public/browser/serial_chooser.h"
 #include "content/public/browser/storage_partition_config.h"
@@ -36,8 +37,10 @@
 #include "third_party/blink/public/mojom/frame/blocked_navigation_types.mojom.h"
 #include "third_party/blink/public/mojom/frame/fullscreen.mojom-forward.h"
 #include "third_party/blink/public/mojom/installedapp/related_application.mojom.h"
+#include "third_party/blink/public/mojom/manifest/application_context.mojom.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
 #include "third_party/blink/public/mojom/page/draggable_region.mojom-forward.h"
+#include "third_party/blink/public/mojom/picture_in_picture/picture_in_picture.mojom-forward.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/mojom/window_show_state.mojom-forward.h"
 #include "ui/base/ui_base_types.h"
@@ -116,6 +119,7 @@ class SiteInstance;
 class WebContents;
 struct ContextMenuParams;
 struct DropData;
+struct GlobalRenderFrameHostId;
 struct MediaStreamRequest;
 struct OpenURLParams;
 struct Referrer;
@@ -397,14 +401,15 @@ class CONTENT_EXPORT WebContentsDelegate {
       const GURL& opener_url,
       const std::string& frame_name,
       const GURL& target_url,
+      WindowOpenDisposition disposition,
+      const blink::mojom::WindowFeatures& window_features,
       const StoragePartitionConfig& partition_config,
       SessionStorageNamespace* session_storage_namespace);
 
   // Notifies the delegate about the creation of a new WebContents. This
   // typically happens when popups are created.
   virtual void WebContentsCreated(WebContents* source_contents,
-                                  int opener_render_process_id,
-                                  int opener_render_frame_id,
+                                  const GlobalRenderFrameHostId& opener_id,
                                   const std::string& frame_name,
                                   const GURL& target_url,
                                   WebContents* new_contents) {}
@@ -420,6 +425,12 @@ class CONTENT_EXPORT WebContentsDelegate {
   // are owned by a prerender handle. `prerender_web_contents` outlives this
   // delegate.
   virtual void PrerenderWebContentsCreated(
+      WebContents* prerender_web_contents) {}
+
+  // Called when a prerendered WebContents is about to be released from a
+  // PrerenderNewTabHandle for activation. This gives the delegate a chance to
+  // clean up any prerender-specific state.
+  virtual void PrerenderWebContentsReleased(
       WebContents* prerender_web_contents) {}
 
   // Notification that one of the frames in the WebContents is hung. |source| is
@@ -497,9 +508,6 @@ class CONTENT_EXPORT WebContentsDelegate {
                                base::OnceCallback<void()> on_confirm,
                                base::OnceCallback<void()> on_cancel);
 
-  // Notifies `BrowserView` about the resizable boolean having been set vith
-  // `window.setResizable(bool)` API.
-  virtual void OnWebApiWindowResizableChanged() {}
   // Returns the overall resizability of the `BrowserView` when considering
   // both the value set by the AWC API and browser's "native" resizability.
   virtual bool GetCanResize();
@@ -514,6 +522,7 @@ class CONTENT_EXPORT WebContentsDelegate {
   virtual void MinimizeFromWebAPI() {}
   virtual void MaximizeFromWebAPI() {}
   virtual void RestoreFromWebAPI() {}
+  virtual void SetResizableFromWebAPI(bool resizable) {}
 #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
   // This returns the current state of the window, mappable to display-state
@@ -551,6 +560,11 @@ class CONTENT_EXPORT WebContentsDelegate {
   // user, or HTML API or from a web manifest setting). See
   // http://w3c.github.io/manifest/#dfn-display-mode
   virtual blink::mojom::DisplayMode GetDisplayMode(
+      const WebContents* web_contents);
+
+  // Reflects the application context in which the document's top-level browsing
+  // context is running.
+  virtual blink::mojom::ApplicationContext GetApplicationContext(
       const WebContents* web_contents);
 
   // Returns the security level to use for Navigator.RegisterProtocolHandler().
@@ -613,6 +627,16 @@ class CONTENT_EXPORT WebContentsDelegate {
   // Returns true if we are waiting for the user to make a selection on the
   // pointer lock permission request dialog.
   virtual bool IsWaitingForPointerLockPrompt(WebContents* web_contents);
+
+  // Returns true if keyboard lock should be allowed for |web_contents| when
+  // it is an inner WebContents (i.e. GetOuterWebContents() is non-null).
+  // Defaults to false, which blocks keyboard lock for most inner WebContents.
+  // Override to return true for embedders that host top-level browser tabs
+  // as inner WebContents.
+  // TODO(crbug.com/480028270): Remove this when tab WebContents are embedded
+  // via SurfaceEmbed in webium, for which GetOuterWebContents() will be null
+  // and keyboard lock will work without this opt-in.
+  virtual bool AllowKeyboardLockForInnerContents(WebContents* web_contents);
 
   // Requests keyboard lock. Once the request is approved or rejected,
   // GotResponseToKeyboardLockRequest() will be called on |web_contents|.
@@ -694,6 +718,8 @@ class CONTENT_EXPORT WebContentsDelegate {
   virtual void OnDidBlockNavigation(
       WebContents* web_contents,
       const GURL& blocked_url,
+      const GURL& initiator_url,
+      const url::Origin& initiator_origin,
       blink::mojom::NavigationBlockedReason reason) {}
 
   // Reports that passive mixed content was found at the specified url.
@@ -753,6 +779,11 @@ class CONTENT_EXPORT WebContentsDelegate {
       const gfx::Rect& rect,
       const base::UnguessableToken& guid,
       RenderFrameHost* render_frame_host) {}
+
+  // Returns true if the OS currently prevents the creation of a Document
+  // Picture-in-Picture window. This is used as a synchronous pre-check to block
+  // window creation (e.g. when Android is in an app fullscreen state).
+  virtual bool IsDocumentPictureInPictureBlockedBySystem() const;
 
   // Notifies the Picture-in-Picture controller that there is a new player
   // entering Picture-in-Picture.
@@ -833,8 +864,6 @@ class CONTENT_EXPORT WebContentsDelegate {
   // WebContents.
   virtual bool IsPrivileged();
 
-  // Initiates previewing the given `url` within the given `web_contents`.
-  virtual void InitiatePreview(WebContents& web_contents, const GURL& url) {}
 
   // CloseWatcher web API support. If the currently focused frame has a
   // CloseWatcher registered in JavaScript, the CloseWatcher should receive the
@@ -844,11 +873,7 @@ class CONTENT_EXPORT WebContentsDelegate {
   // intercept.
   virtual void DidChangeCloseSignalInterceptStatus() {}
 
-  // Reports that cancellation occurred in preview navigation.
-  virtual void CancelPreview(PreviewCancelReason reason) {}
 
-  // Notifies the previewed page is activated.
-  virtual void DidActivatePreviewedPage() {}
 
   // Updates the draggable regions defined by the app-region CSS property.
   virtual void DraggableRegionsChanged(
@@ -931,6 +956,17 @@ class CONTENT_EXPORT WebContentsDelegate {
   // If this returns non-null, overrides the behavior of
   // WebContents::GetResponsibleWebContents.
   virtual WebContents* GetResponsibleWebContents(WebContents* web_contents);
+
+  // Returns true if Picture-in-Picture is enabled.
+  virtual bool IsPictureInPictureEnabled() const;
+
+  // Returns true if immersive playback is enabled.
+  virtual bool IsImmersivePlaybackEnabled() const;
+
+  // Requests a confirmation from the user to enter immersive playback.
+  virtual void RequestImmersivePlaybackConfirmation(
+      const ImmersiveOptions& default_options,
+      base::OnceCallback<void(ImmersivePlaybackConfirmationResult)> callback);
 
  protected:
   virtual ~WebContentsDelegate();

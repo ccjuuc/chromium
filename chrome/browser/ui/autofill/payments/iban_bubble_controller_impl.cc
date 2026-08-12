@@ -14,9 +14,7 @@
 #include "chrome/browser/ui/autofill/autofill_bubble_base.h"
 #include "chrome/browser/ui/autofill/autofill_bubble_handler.h"
 #include "chrome/browser/ui/autofill/payments/save_iban_ui.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/common/webui_url_constants.h"
@@ -29,6 +27,7 @@
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/tabs/public/tab_interface.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace autofill {
@@ -150,10 +149,7 @@ void IbanBubbleControllerImpl::ShowConfirmationBubbleView(
                        CreateForSaveIbanFailure(hit_max_strikes);
 
   // Show upload confirmation bubble.
-  AutofillBubbleHandler* autofill_bubble_handler =
-      chrome::FindBrowserWithTab(web_contents())
-          ->window()
-          ->GetAutofillBubbleHandler();
+  AutofillBubbleHandler* autofill_bubble_handler = GetAutofillBubbleHandler();
   SetBubbleView(*autofill_bubble_handler->ShowSaveIbanConfirmationBubble(
       web_contents(), this));
   UpdatePageActionIcon();
@@ -176,7 +172,10 @@ std::u16string IbanBubbleControllerImpl::GetWindowTitle() const {
     case IbanBubbleType::kUploadSave:
     case IbanBubbleType::kUploadInProgress:
       return l10n_util::GetStringUTF16(
-          IDS_AUTOFILL_SAVE_IBAN_PROMPT_TITLE_SERVER);
+          base::FeatureList::IsEnabled(
+              features::kAutofillEnableWalletBrandingV2)
+              ? IDS_AUTOFILL_SAVE_IBAN_TO_WALLET_PROMPT_TITLE
+              : IDS_AUTOFILL_SAVE_IBAN_PROMPT_TITLE_SERVER);
     case IbanBubbleType::kManageSavedIban:
       return l10n_util::GetStringUTF16(IDS_AUTOFILL_IBAN_SAVED);
     case IbanBubbleType::kUploadCompleted:
@@ -188,7 +187,9 @@ std::u16string IbanBubbleControllerImpl::GetWindowTitle() const {
 std::u16string IbanBubbleControllerImpl::GetExplanatoryMessage() const {
   if (current_bubble_type_ == IbanBubbleType::kUploadSave) {
     return l10n_util::GetStringUTF16(
-        IDS_AUTOFILL_UPLOAD_IBAN_PROMPT_EXPLANATION);
+        base::FeatureList::IsEnabled(features::kAutofillEnableWalletBranding)
+            ? IDS_AUTOFILL_UPLOAD_IBAN_TO_WALLET_PROMPT_EXPLANATION
+            : IDS_AUTOFILL_UPLOAD_IBAN_PROMPT_EXPLANATION);
   }
   return std::u16string();
 }
@@ -309,7 +310,10 @@ void IbanBubbleControllerImpl::OnLegalMessageLinkClicked(const GURL& url) {
 
 void IbanBubbleControllerImpl::OnManageSavedIbanExtraButtonClicked() {
   CHECK(current_bubble_type_ == IbanBubbleType::kManageSavedIban);
-  chrome::ShowSettingsSubPage(chrome::FindBrowserWithTab(web_contents()),
+  tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents());
+  CHECK(tab);
+  CHECK(tab->GetBrowserWindowInterface());
+  chrome::ShowSettingsSubPage(tab->GetBrowserWindowInterface(),
                               chrome::kPaymentsSubPage);
   OnBubbleClosed(PaymentsUiClosedReason::kClosed);
 }
@@ -483,9 +487,7 @@ IbanBubbleControllerImpl::GetPageActionTooltipText() {
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 void IbanBubbleControllerImpl::DoShowBubble() {
-  Browser* browser = chrome::FindBrowserWithTab(web_contents());
-  AutofillBubbleHandler* autofill_bubble_handler =
-      browser->window()->GetAutofillBubbleHandler();
+  AutofillBubbleHandler* autofill_bubble_handler = GetAutofillBubbleHandler();
   SetBubbleView(*autofill_bubble_handler->ShowIbanBubble(
       web_contents(), this,
       /*is_user_gesture=*/is_reshow_, current_bubble_type_));
@@ -519,7 +521,8 @@ void IbanBubbleControllerImpl::DoShowBubble() {
 }
 
 bool IbanBubbleControllerImpl::CanBeReshown() const {
-  return current_bubble_type_ != IbanBubbleType::kUploadCompleted;
+  return current_bubble_type_ != IbanBubbleType::kUploadCompleted &&
+         current_bubble_type_ != IbanBubbleType::kInactive;
 }
 
 BubbleType IbanBubbleControllerImpl::GetBubbleType() const {
@@ -536,6 +539,14 @@ Profile* IbanBubbleControllerImpl::GetProfile() {
     return nullptr;
   }
   return Profile::FromBrowserContext(web_contents()->GetBrowserContext());
+}
+
+AutofillBubbleHandler* IbanBubbleControllerImpl::GetAutofillBubbleHandler() {
+  tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents());
+  CHECK(tab);
+  BrowserWindowInterface* browser = tab->GetBrowserWindowInterface();
+  CHECK(browser);
+  return AutofillBubbleHandler::Get(browser->GetUnownedUserDataHost());
 }
 
 void IbanBubbleControllerImpl::ShowIconOnly() {

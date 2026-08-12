@@ -1,7 +1,6 @@
 <?xml version="1.0" ?>
 <!DOCTYPE translationbundle>
 <translationbundle lang="af">
-<translation id="1028699632127661925">Stuur tans na <ph name="DEVICE_NAME" /> toe …</translation>
 <translation id="111910763555783249">Kennisgewing-instellings</translation>
 <translation id="1127811143501539442">{DAYS,plural, =1{1 dag gelede}other{# dae gelede}}</translation>
 <translation id="1156623771253174079">{SECONDS,plural, =1{1 minuut gelede}other{# minute gelede}}</translation>
@@ -12,7 +11,6 @@
 <translation id="1253734725326687145">Raakteiken is regs bo geskuif. Tik hier.</translation>
 <translation id="1266864766717917324">Kon nie <ph name="CONTENT_TYPE" /> deel nie.</translation>
 <translation id="1269641567813814718">Windows</translation>
-<translation id="1291104554099683393">Probeer die teks in kleiner stukkies deel.</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">Links na regs</translation>
 <translation id="1383876407941801731">Soek</translation>
@@ -20,6 +18,7 @@
 <translation id="1432724887402139994">{SECONDS,plural, =1{1 minuut gelede}other{# minute gelede}}</translation>
 <translation id="1450753235335490080">Kan nie <ph name="CONTENT_TYPE" /> deel nie</translation>
 <translation id="1523230076022876491">{MONTHS,plural, =1{1 maand gelede}other{# maande gelede}}</translation>
+<translation id="1591017414891297549">VOORSKOU</translation>
 <translation id="1591184457164800433">{MINUTES,plural, =1{1 minuut en }other{# minute en }}</translation>
 <translation id="1643823602425662293">Kennisgewing</translation>
 <translation id="169515659049020177">Skuifsleutel</translation>
@@ -44,7 +43,6 @@
 <translation id="2148716181193084225">Vandag</translation>
 <translation id="2168039046890040389">Bladsy op</translation>
 <translation id="2190355936436201913">(leeg)</translation>
-<translation id="2192232475740621500">Gebruik lae digtheid</translation>
 <translation id="2267918077332197517">Blokkeer alle kennisgewings van hierdie werf af</translation>
 <translation id="2283117145434822734">F6</translation>
 <translation id="2289052229480071835">Tik op die raakteikens op jou skerm.</translation>
@@ -56,7 +54,6 @@
 <translation id="2388990488038464401">Skakel hierdie nommer van jou foon af?</translation>
 <translation id="2435457462613246316">Wys wagwoord</translation>
 <translation id="24452542372838207">Vou kennisgewing uit</translation>
-<translation id="2445449901874883781">Gebruik hoë digtheid</translation>
 <translation id="2448407890032181691">Raakteiken is regs onder geskuif. Tik hier.</translation>
 <translation id="2482878487686419369">Kennisgewings</translation>
 <translation id="2497284189126895209">Alle lêers</translation>
@@ -69,7 +66,6 @@
 <translation id="2586657967955657006">Knipbord</translation>
 <translation id="2653844658857826081">NUUT</translation>
 <translation id="2666092431469916601">Top</translation>
-<translation id="2701330563083355633">Gedeel vanaf <ph name="DEVICE_NAME" /></translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{1 jaar gelede}other{# jaar gelede}}</translation>
 <translation id="2878511608894704031">Vee alles uit</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{oor 1 d.}other{oor # d.}}</translation>
@@ -88,7 +84,6 @@
 <translation id="3306688585798492231">Ingeboude skerm</translation>
 <translation id="335581015389089642">Spraak</translation>
 <translation id="3372635229069101468">Klik <ph name="BEGIN_BOLD" />Besonderhede<ph name="END_BOLD" /></translation>
-<translation id="3389286852084373014">Teks is te groot</translation>
 <translation id="3406306243914553062">HTML-inhoud</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{1 dag oor}other{# dae oor}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" />-lêer</translation>
@@ -109,6 +104,7 @@
 <translation id="4031910098617850788">F5</translation>
 <translation id="40579289237549812">{UNREAD_NOTIFICATIONS,plural, =1{1 ongelese kennisgewing}other{# ongelese kennisgewings}}</translation>
 <translation id="41501027364808384">{COUNT,plural, =1{Skakel die volgende uitbreiding in Incognito aan:}other{Skakel die volgende uitbreidings in Incognito aan:}}</translation>
+<translation id="4230098358142093034">Huis</translation>
 <translation id="4266252015790371705">{MONTHS,plural, =1{1 maand gelede}other{# maande gelede}}</translation>
 <translation id="4277033906326892359">Kolom <ph name="COLUMN_NAME" /> is gesorteer in stygende volgorde</translation>
 <translation id="4289300219472526559">Begin praat</translation>
@@ -190,7 +186,6 @@
 <translation id="6965382102122355670">OK</translation>
 <translation id="6974053822202609517">Regs na links</translation>
 <translation id="7052633198403197513">F1</translation>
-<translation id="7170202025028120564">Jou app se skerminstellings sal in werking tree wanneer dit weer herbegin word.</translation>
 <translation id="7222373446505536781">F11</translation>
 <translation id="7238427729722629793">{MINUTES,plural, =1{1 min. oor}other{# min. oor}}</translation>
 <translation id="7252604552361840748">Kry die uitbreiding hier bo</translation>
@@ -200,6 +195,7 @@
 <translation id="7410957453383678442">{MINUTES,plural, =1{1 minuut oor}other{# minute oor}}</translation>
 <translation id="7437971918971306061">Kolom <ph name="COLUMN_NAME" /> nie gesorteer nie.</translation>
 <translation id="7460907917090416791"><ph name="QUANTITY" /> TB</translation>
+<translation id="7485236722522518129">F4</translation>
 <translation id="7507604095951736240">Emosiekone</translation>
 <translation id="7620655452534002301">Verwyder.</translation>
 <translation id="7658239707568436148">Kanselleer</translation>
@@ -232,6 +228,7 @@
 <translation id="8677655579646609597"><ph name="QUANTITY" /> KB/s</translation>
 <translation id="8725488761726303204">+nog <ph name="NUMBER" /></translation>
 <translation id="8730621377337864115">Gedoen</translation>
+<translation id="8741385002816058621">Dit is ’n kenmerk in voorskou</translation>
 <translation id="8772073294905169192">{HOURS,plural, =1{1 u.}other{# u.}}</translation>
 <translation id="8798099450830957504">Verstek</translation>
 <translation id="8841375032071747811">Terugknoppie</translation>
@@ -245,7 +242,6 @@
 <translation id="9170848237812810038">Ontdoen</translation>
 <translation id="9195990613383871904">Môre</translation>
 <translation id="928628199082367701">Super</translation>
-<translation id="932327136139879170">Tuis</translation>
 <translation id="944069440740578670">Ongelese kennisgewings</translation>
 <translation id="966963601246348639">{SECONDS,plural, =1{1 sekonde gelede}other{# sekondes gelede}}</translation>
 </translationbundle>

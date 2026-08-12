@@ -16,6 +16,7 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "build/build_config.h"
@@ -32,7 +33,9 @@
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/recent_tabs_builder_test_helper.h"
+#include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/app_menu_icon_controller.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
@@ -43,12 +46,14 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/menu_model_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/history/core/common/pref_names.h"
 #include "components/sessions/content/content_test_helper.h"
 #include "components/sessions/core/serialized_navigation_entry_test_helper.h"
 #include "components/sessions/core/session_types.h"
 #include "components/sessions/core/tab_restore_service_impl.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
+#include "components/split_tabs/split_tab_visual_data.h"
 #include "components/sync/base/features.h"
 #include "components/sync/base/user_selectable_type.h"
 #include "components/sync/engine/data_type_activation_response.h"
@@ -134,7 +139,7 @@ class RecentTabsSubMenuModelTest : public InProcessBrowserTest {
 
   virtual void Init() {
     auto* session_sync_service =
-        SessionSyncServiceFactory::GetForProfile(browser()->profile());
+        SessionSyncServiceFactory::GetForProfile(browser()->GetProfile());
 
     syncer::DataTypeActivationRequest activation_request;
     activation_request.cache_guid = "test_cache_guid";
@@ -167,17 +172,18 @@ class RecentTabsSubMenuModelTest : public InProcessBrowserTest {
   void DisableSync() { sync_processor_->DisconnectSync(); }
 
   static std::unique_ptr<KeyedService> GetTabRestoreService(
+      os_crypt_async::OSCryptAsync* os_crypt_async,
       content::BrowserContext* browser_context) {
     return std::make_unique<sessions::TabRestoreServiceImpl>(
         base::WrapUnique(new ChromeTabRestoreServiceClient(
             Profile::FromBrowserContext(browser_context))),
-        nullptr, nullptr);
+        nullptr, nullptr, os_crypt_async);
   }
 
   void RegisterRecentTabs(RecentTabsBuilderTestHelper* helper) {
     helper->ExportToSessionSync(sync_processor_.get());
     helper->VerifyExport(
-        SessionSyncServiceFactory::GetForProfile(browser()->profile())
+        SessionSyncServiceFactory::GetForProfile(browser()->GetProfile())
             ->GetOpenTabsUIDelegate());
   }
 
@@ -227,7 +233,7 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
                        LogMenuMetricsForShowHistory) {
   Init();
   FakeIconDelegate fake_delegate;
-  AppMenuIconController app_menu_icon_controller(browser()->profile(),
+  AppMenuIconController app_menu_icon_controller(browser()->GetProfile(),
                                                  &fake_delegate);
   TestLogMetricsAppMenuModel app_menu_model(nullptr, browser(),
                                             &app_menu_icon_controller);
@@ -244,7 +250,7 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
                        LogMenuMetricsForShowGroupedHistory) {
   Init();
   FakeIconDelegate fake_delegate;
-  AppMenuIconController app_menu_icon_controller(browser()->profile(),
+  AppMenuIconController app_menu_icon_controller(browser()->GetProfile(),
                                                  &fake_delegate);
   TestLogMetricsAppMenuModel app_menu_model(nullptr, browser(),
                                             &app_menu_icon_controller);
@@ -262,7 +268,7 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
                        LogMenuMetricsForRecentTabsLoginForDeviceTabs) {
   Init();
   FakeIconDelegate fake_delegate;
-  AppMenuIconController app_menu_icon_controller(browser()->profile(),
+  AppMenuIconController app_menu_icon_controller(browser()->GetProfile(),
                                                  &fake_delegate);
   TestLogMetricsAppMenuModel app_menu_model(nullptr, browser(),
                                             &app_menu_icon_controller);
@@ -284,7 +290,7 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
                        LogMenuMetricsForRecentTabsSeeDeviceTabs) {
   Init();
   FakeIconDelegate fake_delegate;
-  AppMenuIconController app_menu_icon_controller(browser()->profile(),
+  AppMenuIconController app_menu_icon_controller(browser()->GetProfile(),
                                                  &fake_delegate);
   TestLogMetricsAppMenuModel app_menu_model(nullptr, browser(),
                                             &app_menu_icon_controller);
@@ -330,7 +336,7 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
   Init();
   DisableSync();
 
-  TabRestoreServiceFactory::GetForProfile(browser()->profile());
+  TabRestoreServiceFactory::GetForProfile(browser()->GetProfile());
 
   // Add 2 tabs and close them.
   content::WebContents* tab1 =
@@ -371,7 +377,7 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
 
   DisableSync();
 
-  TabRestoreServiceFactory::GetForProfile(browser()->profile());
+  TabRestoreServiceFactory::GetForProfile(browser()->GetProfile());
 
   AddTabToBrowser(GURL("http://foo/1"));
   AddTabToBrowser(GURL("http://foo/2"));
@@ -421,12 +427,337 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
   VerifyModel(model.GetSubmenuModelAt(5), kGroup0Data);
 }
 
+class RecentTabsSubMenuModelSplitTest : public RecentTabsSubMenuModelTest {
+ public:
+  RecentTabsSubMenuModelSplitTest() {
+    scoped_feature_list_.InitAndEnableFeature(tabs::kSplitViewTabRestore);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
+                       RecentlyClosedSplitsFromCurrentSession) {
+  Init();
+  ASSERT_TRUE(browser()->tab_strip_model()->SupportsTabGroups());
+
+  DisableSync();
+
+  TabRestoreServiceFactory::GetForProfile(browser()->GetProfile());
+
+  AddTabToBrowser(GURL("http://foo/1"));
+  AddTabToBrowser(GURL("http://foo/2"));
+  AddTabToBrowser(GURL("http://foo/3"));
+
+  // Pair tabs at index 1 and 2 into a split view.
+  browser()->tab_strip_model()->ActivateTabAt(1);
+  browser()->tab_strip_model()->AddToNewSplit(
+      {2}, split_tabs::SplitTabVisualData(),
+      split_tabs::SplitTabCreatedSource::kToolbarButton);
+
+  // Close the split view.
+  browser()->tab_strip_model()->CloseSelectedTabs();
+
+  RecentTabsSubMenuModel model(nullptr, browser());
+
+  std::vector<ModelData> kData;
+
+  kData = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // History
+      {ui::MenuModel::TYPE_COMMAND, true},    // History Cluster
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_TITLE, false},     // Recently closed
+      {ui::MenuModel::TYPE_SUBMENU, true},    // <split view submenu>
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_TITLE, false},     // Your devices
+      {ui::MenuModel::TYPE_COMMAND, true}     // recent tabs login
+  };
+
+  VerifyModel(model, kData);
+
+  // Expected split view menu items:
+  constexpr ModelData kSplitData[] = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // Restore split view
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_COMMAND, true},    // <tab for http://foo/1>
+      {ui::MenuModel::TYPE_COMMAND, true},    // <tab for http://foo/2>
+  };
+
+  VerifyModel(model.GetSubmenuModelAt(4), kSplitData);
+}
+
+IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
+                       RecentlyClosedWindowWithSplit) {
+  Init();
+  DisableSync();
+
+  Browser* new_browser = AddBrowser(browser(), {GURL("about:blank?0")});
+  ui_test_utils::NavigateToURLWithDisposition(
+      new_browser, GURL("about:blank?1"),
+      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+
+  new_browser->tab_strip_model()->ActivateTabAt(0);
+  new_browser->tab_strip_model()->AddToNewSplit(
+      {1}, split_tabs::SplitTabVisualData(),
+      split_tabs::SplitTabCreatedSource::kToolbarButton);
+
+  chrome::CloseWindow(new_browser);
+
+  RecentTabsSubMenuModel model(nullptr, browser());
+
+  std::vector<ModelData> kData = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // History
+      {ui::MenuModel::TYPE_COMMAND, true},    // History Cluster
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_TITLE, false},     // Recently closed
+      {ui::MenuModel::TYPE_SUBMENU, true},    // <window>
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_TITLE, false},     // Your devices
+      {ui::MenuModel::TYPE_COMMAND, true}     // recent tabs login
+  };
+
+  VerifyModel(model, kData);
+
+  constexpr ModelData kWindowSubmenuData[] = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // Restore window
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_SUBMENU, true},    // <split view>
+  };
+  const ui::MenuModel* const window_submenu = model.GetSubmenuModelAt(4);
+  ASSERT_NO_FATAL_FAILURE(VerifyModel(window_submenu, kWindowSubmenuData));
+
+  constexpr ModelData kSplitSubmenuData[] = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // Restore split view
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_COMMAND, true},    // <tab for http://wnd/split0>
+      {ui::MenuModel::TYPE_COMMAND, true},    // <tab for http://wnd/split1>
+  };
+  VerifyModel(window_submenu->GetSubmenuModelAt(2), kSplitSubmenuData);
+}
+
+IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
+                       RecentlyClosedWindowWithGroupsAndSplits) {
+  Init();
+  DisableSync();
+
+  Browser* new_browser = AddBrowser(browser(), {GURL("about:blank?0")});
+  for (int i = 1; i <= 7; ++i) {
+    ui_test_utils::NavigateToURLWithDisposition(
+        new_browser, GURL("about:blank?" + base::NumberToString(i)),
+        WindowOpenDisposition::NEW_FOREGROUND_TAB,
+        ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+  }
+
+  // Put them into groups and splits.
+  // Tab 0: Group 1
+  // Tab 1: Group 1
+  // Tab 2: Split 1
+  // Tab 3: Split 1
+  // Tab 4: Group 2
+  // Tab 5: Group 2
+  // Tab 6: Split 2
+  // Tab 7: Split 2
+  new_browser->tab_strip_model()->AddToNewGroup({0, 1});
+
+  new_browser->tab_strip_model()->ActivateTabAt(2);
+  new_browser->tab_strip_model()->AddToNewSplit(
+      {3}, split_tabs::SplitTabVisualData(),
+      split_tabs::SplitTabCreatedSource::kToolbarButton);
+
+  new_browser->tab_strip_model()->AddToNewGroup({4, 5});
+
+  new_browser->tab_strip_model()->ActivateTabAt(6);
+  new_browser->tab_strip_model()->AddToNewSplit(
+      {7}, split_tabs::SplitTabVisualData(),
+      split_tabs::SplitTabCreatedSource::kToolbarButton);
+
+  chrome::CloseWindow(new_browser);
+
+  RecentTabsSubMenuModel model(nullptr, browser());
+
+  std::vector<ModelData> kData = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // History
+      {ui::MenuModel::TYPE_COMMAND, true},    // History Cluster
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_TITLE, false},     // Recently closed
+      {ui::MenuModel::TYPE_SUBMENU, true},    // <window>
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_TITLE, false},     // Your devices
+      {ui::MenuModel::TYPE_COMMAND, true}     // recent tabs login
+  };
+
+  VerifyModel(model, kData);
+
+  constexpr ModelData kWindowSubmenuData[] = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // Restore window
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_SUBMENU, true},    // Group 1
+      {ui::MenuModel::TYPE_SUBMENU, true},    // Split 1
+      {ui::MenuModel::TYPE_SUBMENU, true},    // Group 2
+      {ui::MenuModel::TYPE_SUBMENU, true},    // Split 2
+  };
+  const ui::MenuModel* const window_submenu = model.GetSubmenuModelAt(4);
+  ASSERT_NO_FATAL_FAILURE(VerifyModel(window_submenu, kWindowSubmenuData));
+
+  // Verify Group 1 contents (index 2)
+  constexpr ModelData kGroup1Data[] = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // Restore Group 1
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_COMMAND, true},    // Tab 0
+      {ui::MenuModel::TYPE_COMMAND, true},    // Tab 1
+  };
+  VerifyModel(window_submenu->GetSubmenuModelAt(2), kGroup1Data);
+
+  // Verify Split 1 contents (index 3)
+  constexpr ModelData kSplit1Data[] = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // Restore Split 1
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_COMMAND, true},    // Tab 2
+      {ui::MenuModel::TYPE_COMMAND, true},    // Tab 3
+  };
+  VerifyModel(window_submenu->GetSubmenuModelAt(3), kSplit1Data);
+
+  // Verify Group 2 contents (index 4)
+  constexpr ModelData kGroup2Data[] = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // Restore Group 2
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_COMMAND, true},    // Tab 4
+      {ui::MenuModel::TYPE_COMMAND, true},    // Tab 5
+  };
+  VerifyModel(window_submenu->GetSubmenuModelAt(4), kGroup2Data);
+
+  // Verify Split 2 contents (index 5)
+  constexpr ModelData kSplit2Data[] = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // Restore Split 2
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_COMMAND, true},    // Tab 6
+      {ui::MenuModel::TYPE_COMMAND, true},    // Tab 7
+  };
+  VerifyModel(window_submenu->GetSubmenuModelAt(5), kSplit2Data);
+}
+
+IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
+                       RecentlyClosedWindowWithSplitAndRegularTabs) {
+  Init();
+  DisableSync();
+
+  Browser* new_browser = AddBrowser(browser(), {GURL("about:blank?0")});
+  for (int i = 1; i <= 3; ++i) {
+    ui_test_utils::NavigateToURLWithDisposition(
+        new_browser, GURL("about:blank?" + base::NumberToString(i)),
+        WindowOpenDisposition::NEW_FOREGROUND_TAB,
+        ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+  }
+
+  // Put Tab 1 and Tab 2 into a split. Tab 0 and Tab 3 remain regular tabs.
+  new_browser->tab_strip_model()->ActivateTabAt(1);
+  new_browser->tab_strip_model()->AddToNewSplit(
+      {2}, split_tabs::SplitTabVisualData(),
+      split_tabs::SplitTabCreatedSource::kToolbarButton);
+
+  chrome::CloseWindow(new_browser);
+
+  RecentTabsSubMenuModel model(nullptr, browser());
+
+  std::vector<ModelData> kData = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // History
+      {ui::MenuModel::TYPE_COMMAND, true},    // History Cluster
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_TITLE, false},     // Recently closed
+      {ui::MenuModel::TYPE_SUBMENU, true},    // <window>
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_TITLE, false},     // Your devices
+      {ui::MenuModel::TYPE_COMMAND, true}     // recent tabs login
+  };
+
+  VerifyModel(model, kData);
+
+  constexpr ModelData kWindowSubmenuData[] = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // Restore window
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_COMMAND, true},    // Tab 0
+      {ui::MenuModel::TYPE_SUBMENU, true},    // Split 1
+      {ui::MenuModel::TYPE_COMMAND, true},    // Tab 3
+  };
+  const ui::MenuModel* const window_submenu = model.GetSubmenuModelAt(4);
+  ASSERT_NO_FATAL_FAILURE(VerifyModel(window_submenu, kWindowSubmenuData));
+
+  // Verify Split 1 contents (index 3)
+  constexpr ModelData kSplitSubmenuData[] = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // Restore split view
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_COMMAND, true},    // Tab 1
+      {ui::MenuModel::TYPE_COMMAND, true},    // Tab 2
+  };
+  VerifyModel(window_submenu->GetSubmenuModelAt(3), kSplitSubmenuData);
+}
+
+IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
+                       RecentlyClosedGroupWithSplit) {
+  Init();
+  ASSERT_TRUE(browser()->tab_strip_model()->SupportsTabGroups());
+
+  DisableSync();
+
+  TabRestoreServiceFactory::GetForProfile(browser()->GetProfile());
+
+  AddTabToBrowser(GURL("http://foo/1"));
+  AddTabToBrowser(GURL("http://foo/2"));
+  AddTabToBrowser(GURL("http://foo/3"));
+
+  tab_groups::TabGroupId group =
+      browser()->tab_strip_model()->AddToNewGroup({1, 2, 3});
+
+  // Pair tabs at index 1 and 2 into a split view.
+  browser()->tab_strip_model()->ActivateTabAt(1);
+  browser()->tab_strip_model()->AddToNewSplit(
+      {2}, split_tabs::SplitTabVisualData(),
+      split_tabs::SplitTabCreatedSource::kToolbarButton);
+
+  // Close the group.
+  browser()->tab_strip_model()->CloseAllTabsInGroup(group);
+
+  RecentTabsSubMenuModel model(nullptr, browser());
+
+  std::vector<ModelData> kData = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // History
+      {ui::MenuModel::TYPE_COMMAND, true},    // History Cluster
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_TITLE, false},     // Recently closed
+      {ui::MenuModel::TYPE_SUBMENU, true},    // <group>
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_TITLE, false},     // Your devices
+      {ui::MenuModel::TYPE_COMMAND, true}     // recent tabs login
+  };
+
+  VerifyModel(model, kData);
+
+  constexpr ModelData kGroupSubmenuData[] = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // Restore group
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_SUBMENU, true},    // <split view>
+      {ui::MenuModel::TYPE_COMMAND, true},    // <tab for http://foo/3>
+  };
+  const ui::MenuModel* const group_submenu = model.GetSubmenuModelAt(4);
+  ASSERT_NO_FATAL_FAILURE(VerifyModel(group_submenu, kGroupSubmenuData));
+
+  constexpr ModelData kSplitSubmenuData[] = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // Restore split view
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_COMMAND, true},    // <tab for http://foo/1>
+      {ui::MenuModel::TYPE_COMMAND, true},    // <tab for http://foo/2>
+  };
+  VerifyModel(group_submenu->GetSubmenuModelAt(2), kSplitSubmenuData);
+}
+
 IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
                        RecentlyClosedTabsAndWindowsFromLastSessionWithRefresh) {
   Init();
   DisableSync();
 
-  TabRestoreServiceFactory::GetForProfile(browser()->profile());
+  TabRestoreServiceFactory::GetForProfile(browser()->GetProfile());
 
   RecentTabsSubMenuModel model(nullptr, browser());
   TestRecentTabsMenuModelDelegate delegate(&model);
@@ -691,10 +1022,92 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
           model.GetSubmenuModelAt(model.GetItemCount() - 1)->GetLabelAt(3)));
 }
 
+IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
+                       SavingBrowserHistoryDisabledPolicyChangeMidSession) {
+  Init();
+  DisableSync();
+  // Ensure the policy is explicitly false to start with.
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
+      prefs::kSavingBrowserHistoryDisabled, false);
+
+  TabRestoreServiceFactory::GetForProfile(browser()->GetProfile());
+
+  // Close some tabs to generate "Recently closed" entries.
+  content::WebContents* tab1 =
+      chrome::AddAndReturnTabAt(browser(), GURL("http://foo/1"), 0, true);
+  content::WebContents* tab2 =
+      chrome::AddAndReturnTabAt(browser(), GURL("http://foo/2"), 1, true);
+
+  ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
+      browser(), GURL("http://foo/0"), 1);
+
+  chrome::CloseWebContents(browser(), tab1, true);
+  chrome::CloseWebContents(browser(), tab2, true);
+
+  // Construct the sub-menu model and attach a model delegate.
+  RecentTabsSubMenuModel model(nullptr, browser());
+  TestRecentTabsMenuModelDelegate delegate(&model);
+
+  // Expect standard menu layout with the two recently closed tabs.
+  // Note: We only verify the first 6 items and do not check the items of
+  // the remote devices, in case sync has not finished, which causes test
+  // flakiness.
+  std::vector<ModelData> kDataEnabled = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // History
+      {ui::MenuModel::TYPE_COMMAND, true},    // History Cluster
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_TITLE, false},     // Recently closed
+      {ui::MenuModel::TYPE_COMMAND, true},    // tab 2
+      {ui::MenuModel::TYPE_COMMAND, true},    // tab 1
+  };
+  ASSERT_GE(model.GetItemCount(), kDataEnabled.size());
+  for (size_t i = 0; i < kDataEnabled.size(); ++i) {
+    SCOPED_TRACE(i);
+    EXPECT_EQ(kDataEnabled[i].type, model.GetTypeAt(i));
+    EXPECT_EQ(kDataEnabled[i].enabled, model.IsEnabledAt(i));
+  }
+
+  // Enable the policy mid-session.
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
+      prefs::kSavingBrowserHistoryDisabled, true);
+
+  // The model delegate should have been notified of menu structure changes.
+  EXPECT_TRUE(delegate.got_changes());
+
+  // Expect recently closed tab entries to be wiped and the header to become a
+  // disabled command.
+  std::vector<ModelData> kDataDisabled = {
+      {ui::MenuModel::TYPE_COMMAND, true},  // History
+      {ui::MenuModel::TYPE_COMMAND, true},  // History Cluster
+  };
+  VerifyModel(model, kDataDisabled);
+
+  // Disable the policy again mid-session.
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
+      prefs::kSavingBrowserHistoryDisabled, false);
+
+  // Expect recently closed tabs to remain empty since they were wiped when
+  // the policy was activated.
+  // Note: We only verify the first 4 items and do not check the items of
+  // the remote devices, in case sync has not finished, which causes test
+  // flakiness.
+  std::vector<ModelData> kDataEmpty = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // History
+      {ui::MenuModel::TYPE_COMMAND, true},    // History Cluster
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_COMMAND, false},   // Recently closed
+  };
+  ASSERT_GE(model.GetItemCount(), kDataEmpty.size());
+  for (size_t i = 0; i < kDataEmpty.size(); ++i) {
+    SCOPED_TRACE(i);
+    EXPECT_EQ(kDataEmpty[i].type, model.GetTypeAt(i));
+    EXPECT_EQ(kDataEmpty[i].enabled, model.IsEnabledAt(i));
+  }
+}
+
 #if !BUILDFLAG(IS_CHROMEOS)
 IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest, OtherDevicesAvailability) {
-  if (!base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos)) {
+  if (!syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     GTEST_SKIP();
   }
 
@@ -729,7 +1142,7 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest, OtherDevicesAvailability) {
 
   // Signed in.
   signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(browser()->profile());
+      IdentityManagerFactory::GetForProfile(browser()->GetProfile());
   signin::MakePrimaryAccountAvailable(identity_manager, "test@gmail.com",
                                       signin::ConsentLevel::kSignin);
   VerifyModel(RecentTabsSubMenuModel(nullptr, browser()),
@@ -737,7 +1150,7 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest, OtherDevicesAvailability) {
 
   // History sync explicitly disabled: tabs from other devices are not shown.
   syncer::SyncService* sync_service =
-      SyncServiceFactory::GetForProfile(browser()->profile());
+      SyncServiceFactory::GetForProfile(browser()->GetProfile());
   sync_service->GetUserSettings()->SetSelectedType(
       syncer::UserSelectableType::kTabs, false);
   VerifyModel(RecentTabsSubMenuModel(nullptr, browser()),

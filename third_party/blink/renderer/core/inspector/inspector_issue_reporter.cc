@@ -8,6 +8,7 @@
 
 #include "base/unguessable_token.h"
 #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-blink.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_node_ids.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -54,8 +55,9 @@ void InspectorIssueReporter::DomContentLoadedEventFired(LocalFrame* frame) {
     return;
 
   auto url = document->Url();
-  if (url.IsEmpty() || url.IsAboutBlankURL())
+  if (url.IsEmpty() || url.IsAboutBlankUrl()) {
     return;
+  }
 
   if (document->InNoQuirksMode())
     return;

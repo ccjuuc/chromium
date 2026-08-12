@@ -4,20 +4,21 @@
 
 #include "components/optimization_guide/core/model_execution/on_device_model_service_controller.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/metrics_hashes.h"
-#include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/strings/to_string.h"
 #include "base/task/thread_pool.h"
@@ -38,13 +39,13 @@
 #include "components/optimization_guide/core/model_execution/safety_config.h"
 #include "components/optimization_guide/core/model_execution/safety_model_info.h"
 #include "components/optimization_guide/core/model_execution/session_impl.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/optimization_guide/core/optimization_guide_util.h"
 #include "components/optimization_guide/proto/model_execution.pb.h"
 #include "components/optimization_guide/public/mojom/model_broker.mojom.h"
+#include "components/optimization_guide/public/mojom/model_broker_debug.mojom.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -98,6 +99,8 @@ OnDeviceModelEligibilityReason GetBaseModelError(
       return OnDeviceModelEligibilityReason::kModelNotEligible;
     case OnDeviceModelStatus::kInsufficientDiskSpace:
       return OnDeviceModelEligibilityReason::kInsufficientDiskSpace;
+    case OnDeviceModelStatus::kInsufficientDiskSpaceForCaches:
+      return OnDeviceModelEligibilityReason::kInsufficientDiskSpaceForCaches;
     case OnDeviceModelStatus::kInstallNotComplete:
     case OnDeviceModelStatus::kModelInstallerNotRegisteredForUnknownReason:
     case OnDeviceModelStatus::kModelInstalledTooLate:
@@ -114,39 +117,57 @@ OnDeviceModelEligibilityReason GetBaseModelError(
   }
 }
 
-void LogEligibilityReason(mojom::OnDeviceFeature feature,
-                          OnDeviceModelEligibilityReason reason) {
-  base::UmaHistogramEnumeration(
-      base::StrCat(
-          {"OptimizationGuide.ModelExecution.OnDeviceModelEligibilityReason.",
-           GetVariantName(feature)}),
-      reason);
-}
-
 void RecordOnDeviceLoadModelResult(
     on_device_model::mojom::LoadModelResult result) {
   base::UmaHistogramEnumeration(
       "OptimizationGuide.ModelExecution.OnDeviceBaseModelLoadResult", result);
 }
 
+ml::ModelBackendType GetBackendType(
+    const proto::OnDeviceModelPerformanceHint& performance_hint) {
+  if (performance_hint == proto::OnDeviceModelPerformanceHint::
+                              ON_DEVICE_MODEL_PERFORMANCE_HINT_CPU) {
+    return ml::ModelBackendType::kCpuBackend;
+  }
+  // Update once we support more backend types for performance hints.
+  return ml::ModelBackendType::kGpuBackend;
+}
+
+ml::ModelPerformanceHint ConvertPerformanceHint(
+    const proto::OnDeviceModelPerformanceHint& performance_hint) {
+  switch (performance_hint) {
+    case proto::OnDeviceModelPerformanceHint::
+        ON_DEVICE_MODEL_PERFORMANCE_HINT_HIGHEST_QUALITY:
+      return ml::ModelPerformanceHint::kHighestQuality;
+    case proto::OnDeviceModelPerformanceHint::
+        ON_DEVICE_MODEL_PERFORMANCE_HINT_FASTEST_INFERENCE:
+      return ml::ModelPerformanceHint::kFastestInference;
+    case proto::OnDeviceModelPerformanceHint::
+        ON_DEVICE_MODEL_PERFORMANCE_HINT_UNSPECIFIED:
+    case proto::OnDeviceModelPerformanceHint::
+        ON_DEVICE_MODEL_PERFORMANCE_HINT_CPU:
+      // Default to highest quality if the performance hint is unspecified or
+      // CPU performance hint is used. For the latter, there's no submodel
+      // support for CPU which is only used if fastest inference is hinted.
+      return ml::ModelPerformanceHint::kHighestQuality;
+  }
+}
+
 }  // namespace
 
 OnDeviceModelServiceController::OnDeviceModelServiceController(
-    std::unique_ptr<OnDeviceModelAccessController> access_controller,
-    base::SafeRef<PerformanceClassifier> performance_classifier,
-    base::WeakPtr<OnDeviceModelComponentStateManager>
-        on_device_component_state_manager,
+    on_device_model::ServiceClient& service_client,
     UsageTracker& usage_tracker,
-    base::SafeRef<on_device_model::ServiceClient> service_client)
-    : access_controller_(std::move(access_controller)),
+    ModelBrokerImpl& model_broker_impl,
+    std::unique_ptr<OnDeviceModelAccessController> access_controller,
+    base::WeakPtr<OnDeviceModelComponentStateManager>
+        on_device_component_state_manager)
+    : service_client_(service_client),
       usage_tracker_(usage_tracker),
-      service_client_(std::move(service_client)),
-      safety_client_(service_client_->GetWeakPtr()),
-      model_broker_impl_(
-          *usage_tracker_,
-          base::BindRepeating(
-              &PerformanceClassifier::EnsurePerformanceClassAvailable,
-              performance_classifier)) {
+      model_broker_impl_(model_broker_impl),
+      access_controller_(std::move(access_controller)),
+      safety_client_(service_client.GetWeakPtr()),
+      on_device_component_state_manager_(on_device_component_state_manager) {
   base_model_controller_.emplace(weak_ptr_factory_.GetSafeRef(), nullptr);
   service_client_->set_on_disconnect_fn(base::BindRepeating(
       &OnDeviceModelServiceController::OnServiceDisconnected,
@@ -159,45 +180,37 @@ OnDeviceModelServiceController::OnDeviceModelServiceController(
 
 OnDeviceModelServiceController::~OnDeviceModelServiceController() = default;
 
-OnDeviceModelEligibilityReason OnDeviceModelServiceController::CanCreateSession(
-    mojom::OnDeviceFeature feature) {
-  TRACE_EVENT("optimization_guide",
-              "OnDeviceModelServiceController::CanCreateSession", "feature",
-              base::ToString(feature));
-  // Ensure an initial solution is computed to avoid giving kUnknown error.
-  UpdateSolutionProvider(feature);
+std::vector<std::pair<mojom::BrokerModelInfoPtr, base::FilePath>>
+OnDeviceModelServiceController::GetBrokerModels() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::vector<std::pair<mojom::BrokerModelInfoPtr, base::FilePath>> models;
+  if (base_model_controller_ && base_model_controller_->model_metadata()) {
+    auto model_info = mojom::BrokerModelInfo::New();
+    model_info->name = "Base Model";
+    base::FilePath path_to_measure =
+        base_model_controller_->model_metadata()->model_path();
+    model_info->weights_path = path_to_measure.AsUTF8Unsafe();
 
-  return model_broker_impl_.GetSolutionProvider(feature).solution().error_or(
-      OnDeviceModelEligibilityReason::kSuccess);
-}
+    switch (base_model_controller_->model_metadata()->performance_hint()) {
+      case optimization_guide::proto::OnDeviceModelPerformanceHint::
+          ON_DEVICE_MODEL_PERFORMANCE_HINT_HIGHEST_QUALITY:
+        model_info->backend_type = "GPU (highest quality)";
+        break;
+      case optimization_guide::proto::OnDeviceModelPerformanceHint::
+          ON_DEVICE_MODEL_PERFORMANCE_HINT_FASTEST_INFERENCE:
+        model_info->backend_type = "GPU (fastest inference)";
+        break;
+      case optimization_guide::proto::OnDeviceModelPerformanceHint::
+          ON_DEVICE_MODEL_PERFORMANCE_HINT_CPU:
+        model_info->backend_type = "CPU";
+        break;
+      default:
+        model_info->backend_type = "UNKNOWN";
+    }
 
-std::unique_ptr<OnDeviceSession> OnDeviceModelServiceController::CreateSession(
-    mojom::OnDeviceFeature feature,
-    base::WeakPtr<OptimizationGuideLogger> logger,
-    const SessionConfigParams& config_params) {
-  TRACE_EVENT("optimization_guide",
-              "OnDeviceModelServiceController::CreateSession", "feature",
-              base::ToString(feature));
-  // Ensure an initial solution is computed to avoid giving kUnknown error.
-  UpdateSolutionProvider(feature);
-  auto& maybe_solution =
-      model_broker_impl_.GetSolutionProvider(feature).solution();
-  auto reason =
-      maybe_solution.error_or(OnDeviceModelEligibilityReason::kSuccess);
-  LogEligibilityReason(feature, reason);
-
-  usage_tracker_->OnDeviceEligibleFeatureUsed(feature);
-
-  // Return if we cannot do anything more for right now.
-  if (reason != OnDeviceModelEligibilityReason::kSuccess) {
-    VLOG(1) << "Failed to create Session:" << reason;
-    return nullptr;
+    models.emplace_back(std::move(model_info), std::move(path_to_measure));
   }
-
-  return model_broker_impl_.GetSolutionProvider(feature)
-      .local_subscriber()
-      .client()
-      ->CreateSession(config_params, logger);
+  return models;
 }
 
 void OnDeviceModelServiceController::SetLanguageDetectionModel(
@@ -288,19 +301,6 @@ OnDeviceModelServiceController::GetPerformanceHint() {
   return base_model_controller_->model_metadata()->performance_hint();
 }
 
-void OnDeviceModelServiceController::AddOnDeviceModelAvailabilityChangeObserver(
-    mojom::OnDeviceFeature feature,
-    OnDeviceModelAvailabilityObserver* observer) {
-  model_broker_impl_.GetSolutionProvider(feature).AddObserver(observer);
-}
-
-void OnDeviceModelServiceController::
-    RemoveOnDeviceModelAvailabilityChangeObserver(
-        mojom::OnDeviceFeature feature,
-        OnDeviceModelAvailabilityObserver* observer) {
-  model_broker_impl_.GetSolutionProvider(feature).RemoveObserver(observer);
-}
-
 on_device_model::Capabilities
 OnDeviceModelServiceController::GetCapabilities() {
   if (!base_model_controller_->model_metadata()) {
@@ -321,7 +321,11 @@ OnDeviceModelServiceController::GetSolution(mojom::OnDeviceFeature feature) {
   // Checks usage for feature before checking (eligible) model status, so that
   // kPendingUsage is returned if the feature is not requested but the model was
   // available for a different feature.
-  if (!usage_tracker_->WasOnDeviceEligibleFeatureRecentlyUsed(feature)) {
+  bool is_background_download_enabled_for_feature =
+      features::IsOnDeviceModelBackgroundDownloadEnabledForFeature(feature);
+
+  if (!usage_tracker_->WasUseCaseRecentlyUsed(ToUseCaseName(feature)) &&
+      !is_background_download_enabled_for_feature) {
     return base::unexpected(
         OnDeviceModelEligibilityReason::kNoOnDeviceFeatureUsed);
   }
@@ -371,7 +375,7 @@ void OnDeviceModelServiceController::UpdateSolutionProvider(
     mojom::OnDeviceFeature feature) {
   // Note: This always constructs the Solution, even if the provider was not
   // constructed yet, to update supported_adaptation_ranks_ on the base model.
-  model_broker_impl_.GetSolutionProvider(feature).Update(GetSolution(feature));
+  model_broker_impl_->GetSolutionProvider(feature).Update(GetSolution(feature));
 }
 
 OnDeviceModelServiceController::BaseModelController::BaseModelController(
@@ -389,7 +393,7 @@ OnDeviceModelServiceController::BaseModelController::BaseModelController(
 
   // Check if the model needs validation, which may mark it pending validation,
   // blocking session creation.
-  if (!access_controller().ShouldValidateModel(model_metadata_->version())) {
+  if (!access_controller().MaybeBeginValidation(model_metadata_->version())) {
     return;
   }
 
@@ -416,7 +420,7 @@ void OnDeviceModelServiceController::BaseModelController::RequireAdaptationRank(
     // Older configs may not specify rank, and should be covered by defaults.
     return;
   }
-  if (base::Contains(supported_adaptation_ranks_, required_rank)) {
+  if (std::ranges::contains(supported_adaptation_ranks_, required_rank)) {
     return;
   }
   // Add the rank and reset all remotes to force a reload.
@@ -505,17 +509,30 @@ on_device_model::ModelAssetPaths
 OnDeviceModelServiceController::BaseModelController::PopulateModelPaths() {
   on_device_model::ModelAssetPaths model_paths;
   model_paths.weights = model_metadata_->model_path().Append(kWeightsFile);
+  const ml::ModelBackendType backend_type =
+      GetBackendType(model_metadata_->performance_hint());
 
-  // TODO(crbug.com/400998489): Cache files are experimental for now.
-  if (model_metadata_->performance_hint() ==
-      proto::ON_DEVICE_MODEL_PERFORMANCE_HINT_CPU) {
-    model_paths.cache =
-        model_metadata_->model_path().Append(kExperimentalCacheFile);
+  if (backend_type == ml::ModelBackendType::kCpuBackend ||
+      base::FeatureList::IsEnabled(
+          on_device_model::features::kOnDeviceModelGpuWeightCache)) {
+    // Weights cache is used for CPU backend (XNNPACK) only (or enabled
+    // explicitly through feature flag) and re-built when it's deemed stale by
+    // version compatibility (see crbug.com/400998489).
+    model_paths.cache = model_metadata_->model_path().Append(kWeightCacheFile);
   }
   model_paths.encoder_cache =
       model_metadata_->model_path().Append(kEncoderCacheFile);
   model_paths.adapter_cache =
       model_metadata_->model_path().Append(kAdapterCacheFile);
+  // TODO(crbug.com/461547475): GPU cache is experimental for now, remove
+  // once feature flag is no longer needed.
+  if (base::FeatureList::IsEnabled(
+          on_device_model::features::kOnDeviceModelGpuProgramCache) &&
+      backend_type == ml::ModelBackendType::kGpuBackend) {
+    // Program cache will be used for GPU backend only.
+    model_paths.program_cache =
+        model_metadata_->model_path().Append(kProgramCacheFile);
+  }
 
   return model_paths;
 }
@@ -527,19 +544,19 @@ void OnDeviceModelServiceController::BaseModelController::OnModelAssetsLoaded(
               "OnDeviceModelServiceController::BaseModelController::"
               "OnModelAssetsLoaded");
   auto params = on_device_model::mojom::LoadModelParams::New();
-  params->backend_type = ml::ModelBackendType::kGpuBackend;
   params->assets = std::move(assets);
   params->max_tokens = kOnDeviceModelMaxTokens;
   params->adaptation_ranks = supported_adaptation_ranks_;
+  if (controller_->on_device_component_state_manager_) {
+    params->vram_mb = controller_->on_device_component_state_manager_
+                          ->performance_classifier()
+                          ->GetDeviceVramMb();
+  }
 
   proto::OnDeviceModelPerformanceHint hint =
       model_metadata_->performance_hint();
-  if (hint == proto::ON_DEVICE_MODEL_PERFORMANCE_HINT_CPU) {
-    params->backend_type = ml::ModelBackendType::kCpuBackend;
-  } else if (hint ==
-             proto::ON_DEVICE_MODEL_PERFORMANCE_HINT_FASTEST_INFERENCE) {
-    params->performance_hint = ml::ModelPerformanceHint::kFastestInference;
-  }
+  params->backend_type = GetBackendType(hint);
+  params->performance_hint = ConvertPerformanceHint(hint);
   controller_->service_client_->Get()->LoadModel(
       std::move(params), std::move(model),
       base::BindOnce(&RecordOnDeviceLoadModelResult));
@@ -562,7 +579,8 @@ void OnDeviceModelServiceController::BaseModelController::OnDisconnect(
   if (is_idle) {
     return;
   }
-  LOG(ERROR) << "Base model disconnected unexpectedly.";
+  LOG(ERROR) << "Base model disconnected unexpectedly; reason: " << reason
+             << ", description: " << description;
   base::TimeDelta delay =
       access_controller().OnDisconnectedFromRemote() - base::Time::Now();
   if (delay.is_positive()) {
@@ -622,8 +640,7 @@ OnDeviceModelServiceController::Solution::~Solution() = default;
 
 bool OnDeviceModelServiceController::Solution::IsValid() const {
   return model_controller_ &&
-         (!features::ShouldUseTextSafetyClassifierModel() ||
-          adapter_->CanSkipTextSafety() || safety_checker_->client());
+         (adapter_->CanSkipTextSafety() || safety_checker_->client());
 }
 
 // Creates a config describing this solution;
@@ -635,9 +652,9 @@ OnDeviceModelServiceController::Solution::MakeConfig() const {
       GetModelVersions(*controller_->base_model_controller_->model_metadata(),
                        controller_->safety_client_,
                        controller_->GetFeatureMetadata(feature_)->version()));
-  config->max_tokens = adapter_->GetTokenLimits().max_tokens;
   config->text_safety_config =
       mojo_base::ProtoWrapper(safety_checker_->safety_cfg().proto());
+  config->model_capabilities = controller_->GetCapabilities();
   return config;
 }
 

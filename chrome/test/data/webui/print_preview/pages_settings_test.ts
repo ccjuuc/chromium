@@ -34,14 +34,14 @@ suite('PagesSettingsTest', function() {
    * @return Promise that resolves when the input has been set and
    *     the input-change event has fired.
    */
-  function setCustomInput(inputString: string): Promise<void> {
+  function setCustomInput(inputString: string): Promise<CustomEvent<string>> {
     const pagesInput = pagesSection.$.pageSettingsCustomInput.inputElement;
     return triggerInputEvent(pagesInput, inputString, pagesSection);
   }
 
   /**
    * @param expectedPages The expected pages value.
-   * @param expectedPages The expected pages value.
+   * @param expectedRanges The expected ranges value.
    * @param expectedError The expected error message.
    * @param invalid Whether the pages setting should be invalid.
    */
@@ -56,8 +56,8 @@ suite('PagesSettingsTest', function() {
     const rangesValue = pagesSection.getSettingValue('ranges');
     assertEquals(expectedRanges.length, rangesValue.length);
     expectedRanges.forEach((range: Range, index: number) => {
-      assertEquals(range.to, rangesValue[index].to);
-      assertEquals(range.from, rangesValue[index].from);
+      assertEquals(range.to, rangesValue[index]!.to);
+      assertEquals(range.from, rangesValue[index]!.from);
     });
     assertEquals(!invalid, pagesSection.getSetting('pages').valid);
     assertEquals(
@@ -204,7 +204,8 @@ suite('PagesSettingsTest', function() {
     await setCustomInput('-');
     validateState(oneToHundred, [], '', false);
 
-    // https://crbug.com/806165
+    // https://crbug.com/41367185
+    // Validates that usage of U+3001 is equivalent to a comma.
     await setCustomInput('1\u30012\u30013\u30011\u300156');
     validateState(
         [1, 2, 3, 56], [{from: 1, to: 3}, {from: 56, to: 56}], '', false);
@@ -213,7 +214,48 @@ suite('PagesSettingsTest', function() {
     validateState(
         [1, 2, 3, 56], [{from: 1, to: 3}, {from: 56, to: 56}], '', false);
 
-    // https://crbug.com/1015145
+    // https://crbug.com/479721695
+    // Validates that Unicode dashes (class Pd) are equivalent to a hyphen.
+    await setCustomInput('1\u05be2,5\u20136,9\u301c10');
+    validateState(
+        [1, 2, 5, 6, 9, 10],
+        [
+          {from: 1, to: 2},
+          {from: 5, to: 6},
+          {from: 9, to: 10},
+        ],
+        '', false);
+
+    // https://crbug.com/479721697
+    // Validates that the specific examples given in
+    // IDS_PRINT_PREVIEW_EXAMPLE_PAGE_RANGE_TEXT of non-ASCII digits parse
+    // correctly.
+
+    // MYANMAR
+    await setCustomInput(
+        '\u1041-\u1045\u104a\u1048\u104a\u1041\u1041-\u1041\u1043');
+    validateState(
+        [1, 2, 3, 4, 5, 8, 11, 12, 13],
+        [
+          {from: 1, to: 5},
+          {from: 8, to: 8},
+          {from: 11, to: 13},
+        ],
+        '', false);
+
+    // BENGALI
+    await setCustomInput(
+        '\u09e7\u2014\u09eb,\u09ee,\u09e7\u09e7\u2014\u09e7\u09e9');
+    validateState(
+        [1, 2, 3, 4, 5, 8, 11, 12, 13],
+        [
+          {from: 1, to: 5},
+          {from: 8, to: 8},
+          {from: 11, to: 13},
+        ],
+        '', false);
+
+    // https://crbug.com/40653569
     // Tests that the pages gets sorted for an unsorted input.
     await setCustomInput('89-91, 3, 6, 46, 1, 4, 2-3');
     validateState(

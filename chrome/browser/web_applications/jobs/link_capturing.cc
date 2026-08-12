@@ -9,6 +9,7 @@
 #include "chrome/browser/web_applications/proto/web_app.pb.h"
 #include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
 #include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
@@ -19,13 +20,11 @@ void SetAppCapturesSupportedLinksDisableOverlapping(
     const webapps::AppId& app_id,
     bool set_to_preferred,
     AllAppsLock& lock,
-    base::Value::Dict& debug_value) {
+    base::DictValue& debug_value) {
   debug_value.Set("app_id", app_id);
   debug_value.Set("set_to_preferred", set_to_preferred);
 
-  if (!lock.registrar().IsInstallState(
-          app_id, {proto::INSTALLED_WITHOUT_OS_INTEGRATION,
-                   proto::INSTALLED_WITH_OS_INTEGRATION})) {
+  if (!lock.registrar().AppMatches(app_id, WebAppFilter::InstalledInChrome())) {
     debug_value.Set("result", "App not installed.");
     return;
   }

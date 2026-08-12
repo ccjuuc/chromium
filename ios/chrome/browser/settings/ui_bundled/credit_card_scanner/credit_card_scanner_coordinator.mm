@@ -5,6 +5,7 @@
 #import "ios/chrome/browser/settings/ui_bundled/credit_card_scanner/credit_card_scanner_coordinator.h"
 
 #import "base/ios/block_types.h"
+#import "base/metrics/histogram_functions.h"
 #import "ios/chrome/browser/scanner/ui_bundled/scanner_presenting.h"
 #import "ios/chrome/browser/settings/ui_bundled/credit_card_scanner/credit_card_scanner_consumer.h"
 #import "ios/chrome/browser/settings/ui_bundled/credit_card_scanner/credit_card_scanner_image_processor.h"
@@ -27,6 +28,9 @@
 
   // The consumer for credit card scanner.
   __weak id<CreditCardScannerConsumer> _creditCardScannerConsumer;
+
+  // Whether the scan succeeded.
+  BOOL _scanSucceeded;
 }
 
 #pragma mark - Lifecycle
@@ -66,8 +70,17 @@
 
 - (void)stop {
   [super stop];
-  [_creditCardScannerViewController dismissViewControllerAnimated:YES
-                                                       completion:nil];
+
+  base::UmaHistogramBoolean("IOS.ScanCardFinished", _scanSucceeded);
+
+  __weak id<CreditCardScannerCoordinatorDelegate> delegate = self.delegate;
+  __weak __typeof(self) weakSelf = self;
+  [_creditCardScannerViewController
+      dismissViewControllerAnimated:YES
+                         completion:^{
+                           [delegate
+                               creditCardScannerCoordinatorDidFinish:weakSelf];
+                         }];
   _creditCardScannerViewController.delegate = nil;
   _creditCardScannerViewController = nil;
   [_creditCardScannerMediator disconnect];
@@ -85,6 +98,7 @@
 
 - (void)creditCardScannerMediatorDidFinishScan:
     (CreditCardScannerMediator*)mediator {
+  _scanSucceeded = YES;
   [self stop];
 }
 

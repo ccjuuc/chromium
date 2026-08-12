@@ -6,7 +6,7 @@
 #define IOS_CHROME_BROWSER_LOCATION_BAR_UI_BUNDLED_LOCATION_BAR_CONSTANTS_H_
 
 #import <CoreGraphics/CoreGraphics.h>
-#import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 
 // The brightness of the location bar placeholder text in regular mode,
 // on an iPhone.
@@ -25,9 +25,11 @@ extern NSString* const kOmniboxShareButtonIdentifier;
 // Accessibility identifier of the voice search button.
 extern NSString* const kOmniboxVoiceSearchButtonIdentifier;
 
-// Accessibility identifier of the hidden label used to match omnibox text.
-// See crbug.com/465394669 for rationale.
-// TODO(crbug.com/465030009): Remove the hidden omnibox text label.
-extern NSString* const kOmniboxTextHiddenLabelIdentifier;
+// The max content size of the location bar.
+UIContentSizeCategory LegacyLocationBarSteadyViewMaxSizeCategory();
+UIContentSizeCategory LocationBarSteadyViewMaxSizeCategory();
+
+// The font text style for the location bar.
+UIFontTextStyle LocationBarFontTextStyle();
 
 #endif  // IOS_CHROME_BROWSER_LOCATION_BAR_UI_BUNDLED_LOCATION_BAR_CONSTANTS_H_

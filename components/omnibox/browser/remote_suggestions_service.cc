@@ -13,6 +13,7 @@
 #include "base/functional/bind.h"
 #include "base/i18n/char_iterator.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -24,6 +25,7 @@
 #include "components/omnibox/browser/enterprise_search_aggregator_suggestions_service.h"
 #include "components/omnibox/browser/page_classification_functions.h"
 #include "components/search/search.h"
+#include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/variations/net/variations_http_headers.h"
 #include "net/base/load_flags.h"
@@ -41,6 +43,9 @@ namespace {
 // Maximum length of page title sent to Suggest via `pageTitle` CGI param,
 // expressed as number of Unicode characters (codepoints).
 const size_t kMaxPageTitleLength = 128;
+
+// Suggest query parameter for setting the SuggestInventory for the request.
+constexpr char kSuggestInventoryParam[] = "azi";
 
 // TODO(crbug.com/842922363): Combine with the similar function in
 // zero_suggest_provider.cc.
@@ -276,21 +281,108 @@ GURL AddLensOverlaySuggestInputsDataToEndpointUrl(
           lens_overlay_suggest_inputs->search_session_id());
     }
   }
+
+  if (lens_overlay_suggest_inputs->has_encoded_contextual_inputs()) {
+    modified_url = net::AppendOrReplaceQueryParameter(
+        modified_url, "cinpts",
+        lens_overlay_suggest_inputs->encoded_contextual_inputs());
+  }
+
   return modified_url;
 }
 
-GURL AddAimToolModeToEndpointUrl(
+GURL AddAimInputStateParamsToEndpointUrl(
     TemplateURLRef::SearchTermsArgs search_terms_args,
     const GURL& url_to_modify) {
   GURL modified_url = GURL(url_to_modify);
-  if (search_terms_args.aim_tool_mode !=
-      omnibox::ChromeAimToolsAndModels::TOOL_MODE_UNSPECIFIED) {
+  if (search_terms_args.input_state.active_tool !=
+      omnibox::ToolMode::TOOL_MODE_UNSPECIFIED) {
+    // Override IMAGE_GEN tool mode if image gen upload is active.
+    omnibox::ToolMode tool_mode =
+        search_terms_args.input_state.image_gen_upload_active
+            ? omnibox::ToolMode::TOOL_MODE_IMAGE_GEN_UPLOAD
+            : search_terms_args.input_state.active_tool;
     modified_url = net::AppendOrReplaceQueryParameter(
         url_to_modify, "azm",
         base::NumberToString(
-            static_cast<int>(search_terms_args.aim_tool_mode)));
+            static_cast<int>(tool_mode)));
+  }
+  if (search_terms_args.input_state.active_model !=
+      omnibox::ModelMode::MODEL_MODE_UNSPECIFIED) {
+    modified_url = net::AppendOrReplaceQueryParameter(
+        modified_url, "sam",
+        base::NumberToString(
+            static_cast<int>(search_terms_args.input_state.active_model)));
   }
   return modified_url;
+}
+
+GURL AddSmartComposePreviousQueryToEndpointUrl(
+    TemplateURLRef::SearchTermsArgs search_terms_args,
+    const GURL& url_to_modify) {
+  GURL modified_url = GURL(url_to_modify);
+  if (!search_terms_args.previous_query.empty()) {
+    modified_url = net::AppendOrReplaceQueryParameter(
+        modified_url, "pq", search_terms_args.previous_query);
+  }
+  return modified_url;
+}
+
+GURL AddSuggestInventoryParamToEndpointUrl(
+    const TemplateURLRef::SearchTermsArgs& search_terms_args,
+    const GURL& url_to_modify) {
+  GURL modified_url = GURL(url_to_modify);
+  if (search_terms_args.suggest_inventory !=
+      omnibox::SuggestInventory::SUGGEST_INVENTORY_DEFAULT) {
+    modified_url = net::AppendOrReplaceQueryParameter(
+        modified_url, kSuggestInventoryParam,
+        base::NumberToString(
+            static_cast<int>(search_terms_args.suggest_inventory)));
+  }
+  return modified_url;
+}
+
+GURL AddQueryBuilderStatsToEndpointUrl(
+    const TemplateURLRef::SearchTermsArgs& search_terms_args,
+    const GURL& url_to_modify) {
+  GURL modified_url = GURL(url_to_modify);
+  if (search_terms_args.input_method > 0) {
+    modified_url = net::AppendOrReplaceQueryParameter(
+        modified_url, "qbi.m",
+        base::NumberToString(search_terms_args.input_method));
+    modified_url = net::AppendOrReplaceQueryParameter(
+        modified_url, "qbi.l",
+        base::NumberToString(search_terms_args.search_terms.length()));
+  }
+  return modified_url;
+}
+
+GURL ReplaceLensSuggestPathPlaceholderInEndpointUrl(
+    const TemplateURLRef::SearchTermsArgs& search_terms_args,
+    const GURL& url_to_modify) {
+  if (search_terms_args.request_source !=
+      SearchTermsData::RequestSource::LENS_OVERLAY) {
+    return url_to_modify;
+  }
+
+  std::string current_client;
+  if (!net::GetValueForKeyInQuery(url_to_modify, "client", &current_client) ||
+      current_client.empty()) {
+    return url_to_modify;
+  }
+
+  std::string modified_url = url_to_modify.spec();
+  base::ReplaceSubstringsAfterOffset(
+      &modified_url, 0, TemplateURLService::kLensOverlaySuggestPathPlaceholder,
+      TemplateURL::GetSuggestionPath(current_client));
+
+  const bool found_placeholder =
+      modified_url.find(
+          TemplateURLService::kLensOverlaySuggestPathPlaceholder) !=
+      std::string::npos;
+  CHECK(!found_placeholder);
+
+  return GURL(modified_url);
 }
 
 }  // namespace
@@ -354,13 +446,17 @@ GURL RemoteSuggestionsService::EndpointUrl(
                                                "chrome-multimodal");
       break;
     }
+    case metrics::OmniboxEventProto::COMPOSEBOX_EVERYWHERE:
     case metrics::OmniboxEventProto::NTP_REALBOX:
     case metrics::OmniboxEventProto::NTP_COMPOSEBOX:
     case metrics::OmniboxEventProto::CO_BROWSING_COMPOSEBOX:
     case metrics::OmniboxEventProto::NTP_OMNIBOX_COMPOSEBOX:
+    case metrics::OmniboxEventProto::OMNIBOX_EVERYWHERE:
     case metrics::OmniboxEventProto::SRP_OMNIBOX_COMPOSEBOX:
     case metrics::OmniboxEventProto::OTHER_OMNIBOX_COMPOSEBOX:
-      if (search_terms_args.lens_overlay_suggest_inputs.has_value()) {
+      if (search_terms_args.lens_overlay_suggest_inputs.has_value() &&
+          search_terms_args.input_state.active_tool ==
+              omnibox::ToolMode::TOOL_MODE_UNSPECIFIED) {
         url = net::AppendOrReplaceQueryParameter(url, "client",
                                                  "chrome-contextual");
       }
@@ -382,7 +478,11 @@ GURL RemoteSuggestionsService::EndpointUrl(
       break;
   }
   url = AddLensOverlaySuggestInputsDataToEndpointUrl(search_terms_args, url);
-  url = AddAimToolModeToEndpointUrl(search_terms_args, url);
+  url = AddAimInputStateParamsToEndpointUrl(search_terms_args, url);
+  url = AddSmartComposePreviousQueryToEndpointUrl(search_terms_args, url);
+  url = ReplaceLensSuggestPathPlaceholderInEndpointUrl(search_terms_args, url);
+  url = AddSuggestInventoryParamToEndpointUrl(search_terms_args, url);
+  url = AddQueryBuilderStatsToEndpointUrl(search_terms_args, url);
 
   return url;
 }

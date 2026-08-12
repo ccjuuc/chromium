@@ -12,6 +12,7 @@
 
 #include "base/time/time.h"
 #include "media/base/audio_codecs.h"
+#include "media/base/audio_parameters.h"
 #include "media/base/channel_layout.h"
 #include "media/base/encryption_scheme.h"
 #include "media/base/media_export.h"
@@ -28,7 +29,7 @@ class MEDIA_EXPORT AudioDecoderConfig {
   // Constructs an initialized object.
   AudioDecoderConfig(AudioCodec codec,
                      SampleFormat sample_format,
-                     ChannelLayout channel_layout,
+                     ChannelLayoutConfig channel_layout_config,
                      int samples_per_second,
                      const std::vector<uint8_t>& extra_data,
                      EncryptionScheme encryption_scheme);
@@ -43,7 +44,7 @@ class MEDIA_EXPORT AudioDecoderConfig {
   // Resets the internal state of this object. |codec_delay| is in frames.
   void Initialize(AudioCodec codec,
                   SampleFormat sample_format,
-                  ChannelLayout channel_layout,
+                  ChannelLayoutConfig channel_layout_config,
                   int samples_per_second,
                   const std::vector<uint8_t>& extra_data,
                   EncryptionScheme encryption_scheme,
@@ -61,13 +62,15 @@ class MEDIA_EXPORT AudioDecoderConfig {
   // Returns a human-readable string describing |*this|.
   std::string AsHumanReadableString() const;
 
-  // Sets the number of channels if |channel_layout_| is CHANNEL_LAYOUT_DISCRETE
-  void SetChannelsForDiscrete(int channels);
-
   AudioCodec codec() const { return codec_; }
   int bytes_per_channel() const { return bytes_per_channel_; }
-  ChannelLayout channel_layout() const { return channel_layout_; }
-  int channels() const { return channels_; }
+  ChannelLayoutConfig channel_layout_config() const {
+    return channel_layout_config_;
+  }
+  ChannelLayout channel_layout() const {
+    return channel_layout_config_.channel_layout();
+  }
+  int channels() const { return channel_layout_config_.channels(); }
   int samples_per_second() const { return samples_per_second_; }
   SampleFormat sample_format() const { return sample_format_; }
   int bytes_per_frame() const { return bytes_per_frame_; }
@@ -107,10 +110,10 @@ class MEDIA_EXPORT AudioDecoderConfig {
   // Optionally set by renderer to provide hardware layout when playback
   // starts. Intentionally not part of IsValid(). Layout is not updated for
   // device changes - use with care!
-  void set_target_output_channel_layout(ChannelLayout output_layout) {
-    target_output_channel_layout_ = output_layout;
+  void set_target_output_channel_layout(ChannelLayoutConfig channel_layout) {
+    target_output_channel_layout_ = channel_layout;
   }
-  ChannelLayout target_output_channel_layout() const {
+  const ChannelLayoutConfig& target_output_channel_layout() const {
     return target_output_channel_layout_;
   }
 
@@ -134,7 +137,7 @@ class MEDIA_EXPORT AudioDecoderConfig {
 
   AudioCodec codec_ = AudioCodec::kUnknown;
   SampleFormat sample_format_ = kUnknownSampleFormat;
-  ChannelLayout channel_layout_ = CHANNEL_LAYOUT_UNSUPPORTED;
+  ChannelLayoutConfig channel_layout_config_;
   int samples_per_second_ = 0;
   std::vector<uint8_t> extra_data_;
   EncryptionScheme encryption_scheme_ = EncryptionScheme::kUnencrypted;
@@ -152,7 +155,7 @@ class MEDIA_EXPORT AudioDecoderConfig {
   AudioCodecProfile profile_ = AudioCodecProfile::kUnknown;
 
   // Layout of the output hardware. Optionally set. See setter comments.
-  ChannelLayout target_output_channel_layout_ = CHANNEL_LAYOUT_NONE;
+  ChannelLayoutConfig target_output_channel_layout_;
 
   // Desired output format of bitstream. Optionally set. See setter comments.
   SampleFormat target_output_sample_format_ = kUnknownSampleFormat;
@@ -166,10 +169,6 @@ class MEDIA_EXPORT AudioDecoderConfig {
 
   int bytes_per_channel_ = 0;
   int bytes_per_frame_ = 0;
-
-  // Count of channels. By default derived from `channel_layout_`, but can also
-  // be manually set in `SetChannelsForDiscrete()`;
-  int channels_ = 0;
 
   // Not using DISALLOW_COPY_AND_ASSIGN here intentionally to allow the compiler
   // generated copy constructor and assignment operator. Since the extra data is

@@ -7,6 +7,8 @@
 
 #import <UIKit/UIKit.h>
 
+#import "base/feature_list.h"
+
 // Accessibility identifier for the TabResumptionView.
 extern NSString* const kTabResumptionViewIdentifier;
 

@@ -6,11 +6,13 @@ package org.chromium.chrome.browser.toolbar.incognito;
 import static android.view.View.GONE;
 import static android.view.View.VISIBLE;
 
+import android.animation.Animator;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.ViewStub;
 
 import androidx.annotation.VisibleForTesting;
@@ -18,7 +20,7 @@ import androidx.annotation.VisibleForTesting;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.tabmodel.IncognitoStateProvider;
 import org.chromium.chrome.browser.tabmodel.IncognitoTabHostUtils;
 import org.chromium.chrome.browser.theme.ThemeColorProvider;
@@ -26,8 +28,13 @@ import org.chromium.chrome.browser.toolbar.R;
 import org.chromium.chrome.browser.toolbar.top.ToolbarChild;
 import org.chromium.chrome.browser.toolbar.top.ToolbarLayout;
 import org.chromium.chrome.browser.toolbar.top.ToolbarUtils;
+import org.chromium.chrome.browser.user_education.IphCommandBuilder;
+import org.chromium.chrome.browser.user_education.UserEducationHelper;
 import org.chromium.components.browser_ui.widget.BrowserUiListMenuUtils;
 import org.chromium.components.browser_ui.widget.ListItemBuilder;
+import org.chromium.components.feature_engagement.EventConstants;
+import org.chromium.components.feature_engagement.FeatureConstants;
+import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.ui.listmenu.BasicListMenu;
 import org.chromium.ui.listmenu.ListMenu.Delegate;
 import org.chromium.ui.listmenu.ListMenuItemProperties;
@@ -35,14 +42,18 @@ import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.widget.AnchoredPopupWindow;
 import org.chromium.ui.widget.ViewRectProvider;
 
+import java.util.Collection;
 import java.util.function.Supplier;
 
 @NullMarked
 public class IncognitoIndicatorCoordinator extends ToolbarChild
         implements View.OnClickListener, View.OnLongClickListener, View.OnContextClickListener {
     private final ToolbarLayout mParentToolbar;
+    private final UserEducationHelper mUserEducationHelper;
+    private final Supplier<@Nullable Tracker> mTrackerSupplier;
     private @Nullable Boolean mIsIncognitoBranded;
     private boolean mVisible;
+    private boolean mHasSpaceToShow;
     private @Nullable View mIncognitoIndicator;
     private final int mDefaultFallbackWidth;
     private int mCachedWidth;
@@ -54,6 +65,8 @@ public class IncognitoIndicatorCoordinator extends ToolbarChild
      * toolbar.
      *
      * @param parentToolbar The parent view that contains the incognito indicator.
+     * @param userEducationHelper Helper for triggering in-product help (IPH).
+     * @param trackerSupplier A supplier for the tracker to record feature usage event.
      * @param topUiThemeColorProvider Provides theme and tint color that should be applied to the
      *     view.
      * @param incognitoStateProvider Provides incognito state to update view.
@@ -62,12 +75,16 @@ public class IncognitoIndicatorCoordinator extends ToolbarChild
      */
     public IncognitoIndicatorCoordinator(
             ToolbarLayout parentToolbar,
+            UserEducationHelper userEducationHelper,
+            Supplier<@Nullable Tracker> trackerSupplier,
             ThemeColorProvider topUiThemeColorProvider,
             IncognitoStateProvider incognitoStateProvider,
             Supplier<Integer> incognitoWindowCountSupplier,
             boolean visible) {
         super(topUiThemeColorProvider, incognitoStateProvider);
         mParentToolbar = parentToolbar;
+        mUserEducationHelper = userEducationHelper;
+        mTrackerSupplier = trackerSupplier;
         mVisible = visible;
         mIncognitoWindowCountSupplier = incognitoWindowCountSupplier;
         setVisibility(mVisible);
@@ -96,6 +113,11 @@ public class IncognitoIndicatorCoordinator extends ToolbarChild
         return mIncognitoIndicator != null && mIncognitoIndicator.getVisibility() == View.VISIBLE;
     }
 
+    @Override
+    public boolean hasSpaceToShow() {
+        return mHasSpaceToShow;
+    }
+
     /**
      * Updates the visibility of the incognito indicator.
      *
@@ -103,12 +125,13 @@ public class IncognitoIndicatorCoordinator extends ToolbarChild
      */
     public void setVisibility(boolean visible) {
         mVisible = visible;
+        boolean wasVisible = isVisible();
 
         // If the parent toolbar is null, this was called before initialization was completed. Skip
         // for now and wait until a subsequent call after initialization has finished.
         if (mParentToolbar == null) return;
         if (mIsIncognitoBranded == null) return;
-        if (!ChromeFeatureList.sTabStripIncognitoMigration.isEnabled()) return;
+        if (!IncognitoUtils.shouldOpenIncognitoAsWindow()) return;
 
         if (mIncognitoIndicator == null && mIsIncognitoBranded) {
             ViewStub stub = mParentToolbar.findViewById(R.id.incognito_indicator_stub);
@@ -120,6 +143,9 @@ public class IncognitoIndicatorCoordinator extends ToolbarChild
 
         if (mIncognitoIndicator != null) {
             mIncognitoIndicator.setVisibility(mIsIncognitoBranded && visible ? VISIBLE : GONE);
+            if (isVisible() && !wasVisible) {
+                triggerIPH();
+            }
         }
     }
 
@@ -130,18 +156,45 @@ public class IncognitoIndicatorCoordinator extends ToolbarChild
 
     @Override
     public int updateVisibility(int availableWidth) {
+        return updateVisibility(
+                availableWidth,
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+    }
+
+    @Override
+    public int updateVisibility(int availableWidth, int widthMeasureSpec, int heightMeasureSpec) {
         assert ToolbarUtils.isToolbarTabletResizeRefactorEnabled();
-        // Hide and consume no width if the incognito indicator feature is not enabled, or if the
-        // device is not in incognito mode. Do not cache the width of the indicator.
-        if (!ChromeFeatureList.sTabStripIncognitoMigration.isEnabled()
+        // Hide and consume no width if the desktop-like incognito window feature is not enabled,
+        // or if the device is not in incognito mode. Do not cache the width of the indicator.
+        if (!IncognitoUtils.shouldOpenIncognitoAsWindow()
                 || Boolean.FALSE.equals(mIsIncognitoBranded)) {
             setVisibility(false);
             return 0;
         }
 
         // If the incognito indicator has been displayed, cache its measured width.
-        if (mIncognitoIndicator != null && mIncognitoIndicator.getMeasuredWidth() > 0) {
-            mCachedWidth = mIncognitoIndicator.getMeasuredWidth();
+        if (mIncognitoIndicator != null) {
+            // Actively measure the view content to get the "Stable Width" upfront.
+            // This mimics the "Fixed Width" behavior of other buttons by determining the
+            // intrinsic size immediately.
+            // Use the parent's measure specs to mimic the actual measurement that will happen
+            // in ToolbarTablet.onMeasure.
+            ViewGroup.LayoutParams lp = mIncognitoIndicator.getLayoutParams();
+            int childWidthSpec =
+                    ViewGroup.getChildMeasureSpec(
+                            widthMeasureSpec,
+                            mParentToolbar.getPaddingLeft() + mParentToolbar.getPaddingRight(),
+                            lp.width);
+            int childHeightSpec =
+                    ViewGroup.getChildMeasureSpec(
+                            heightMeasureSpec,
+                            mParentToolbar.getPaddingTop() + mParentToolbar.getPaddingBottom(),
+                            lp.height);
+
+            mIncognitoIndicator.measure(childWidthSpec, childHeightSpec);
+            int measuredWidth = mIncognitoIndicator.getMeasuredWidth();
+            mCachedWidth = measuredWidth > 0 ? measuredWidth : mDefaultFallbackWidth;
         } else {
             mCachedWidth = mDefaultFallbackWidth;
         }
@@ -150,19 +203,14 @@ public class IncognitoIndicatorCoordinator extends ToolbarChild
         // is less than necessary, though, that extra width should still be consumed to avoid
         // showing any more buttons, as it might be confusing to users. This extra width will end up
         // absorbed into the location bar.
-        setVisibility(availableWidth >= mCachedWidth);
+        mHasSpaceToShow = availableWidth >= mCachedWidth;
+        setVisibility(mHasSpaceToShow);
         return Math.min(availableWidth, mCachedWidth);
     }
 
-    /**
-     * Returns whether the incognito indicator has a current measured width that is different from
-     * its allocated width, and therefore needs another allocation update before being shown.
-     */
-    public boolean needsUpdateBeforeShowing() {
-        if (!mVisible || Boolean.FALSE.equals(mIsIncognitoBranded) || mIncognitoIndicator == null) {
-            return false;
-        }
-        return mCachedWidth != mIncognitoIndicator.getMeasuredWidth();
+    @Override
+    public int updateVisibilityWithAnimation(int availableWidth, Collection<Animator> animators) {
+        return updateVisibility(availableWidth);
     }
 
     public @Nullable View getIncognitoIndicatorView() {
@@ -199,26 +247,35 @@ public class IncognitoIndicatorCoordinator extends ToolbarChild
                         context,
                         listItems,
                         delegate,
+                        R.drawable.popup_menu_bg_no_horizontal_padding,
                         R.color.toolbar_text_box_background_incognito,
                         null);
 
+        int measuredWidth = menu.getMenuDimensions()[0];
         mMenuWindow =
-                new AnchoredPopupWindow(
-                        context,
-                        mIncognitoIndicator,
-                        new ColorDrawable(Color.TRANSPARENT),
-                        menu.getContentView(),
-                        new ViewRectProvider(mIncognitoIndicator));
-        mMenuWindow.setDismissOnTouchInteraction(true);
-        mMenuWindow.setDismissOnScreenSizeChange(true);
-        mMenuWindow.setFocusable(true);
-        mMenuWindow.setHorizontalOverlapAnchor(true);
-        mMenuWindow.setVerticalOverlapAnchor(false);
-        mMenuWindow.setPreferredHorizontalOrientation(
-                AnchoredPopupWindow.HorizontalOrientation.MAX_AVAILABLE_SPACE);
-        mMenuWindow.setMaxWidth(
-                context.getResources()
-                        .getDimensionPixelSize(R.dimen.incognito_indicator_menu_max_width));
+                new AnchoredPopupWindow.Builder(
+                                context,
+                                mIncognitoIndicator,
+                                new ColorDrawable(Color.TRANSPARENT),
+                                menu::getContentView,
+                                new ViewRectProvider(mIncognitoIndicator))
+                        .addOnDismissListener(
+                                () -> {
+                                    if (mIncognitoIndicator != null) {
+                                        mIncognitoIndicator.setSelected(false);
+                                    }
+                                })
+                        .setAnimateFromAnchor(true)
+                        .setDismissOnScreenSizeChange(true)
+                        .setDismissOnTouchInteraction(true)
+                        .setFocusable(true)
+                        .setTouchModal(true)
+                        .setDesiredContentWidth(measuredWidth)
+                        .setHorizontalOverlapAnchor(true)
+                        .setPreferredHorizontalOrientation(
+                                AnchoredPopupWindow.HorizontalOrientation.MAX_AVAILABLE_SPACE)
+                        .setVerticalOverlapAnchor(false)
+                        .build();
 
         mMenuWindow.show();
     }
@@ -247,12 +304,20 @@ public class IncognitoIndicatorCoordinator extends ToolbarChild
         if (mIncognitoIndicator == null || mIncognitoIndicator.getVisibility() != View.VISIBLE) {
             return;
         }
+
+        if (mTrackerSupplier.get() != null) {
+            mTrackerSupplier
+                    .get()
+                    .notifyEvent(EventConstants.INCOGNITO_INDICATOR_CLOSE_ALL_WINDOWS_USED);
+        }
+
         if (mMenuWindow != null && mMenuWindow.isShowing()) {
             mMenuWindow.dismiss();
             return;
         }
         RecordUserAction.record("MobileIncognitoIndicatorClicked");
         Context context = mIncognitoIndicator.getContext();
+        mIncognitoIndicator.setSelected(true);
         createAndShowMenu(context, buildMenuItems(context));
     }
 
@@ -266,5 +331,18 @@ public class IncognitoIndicatorCoordinator extends ToolbarChild
     public boolean onContextClick(View view) {
         onClick(view);
         return true;
+    }
+
+    private void triggerIPH() {
+        if (mIncognitoIndicator == null) return;
+        mUserEducationHelper.requestShowIph(
+                new IphCommandBuilder(
+                                mIncognitoIndicator.getResources(),
+                                FeatureConstants.IPH_INCOGNITO_INDICATOR_CLOSE_ALL_WINDOWS,
+                                R.string.iph_incognito_indicator_close_all_windows_text,
+                                R.string
+                                        .iph_incognito_indicator_close_all_windows_accessibility_text)
+                        .setAnchorView(mIncognitoIndicator)
+                        .build());
     }
 }

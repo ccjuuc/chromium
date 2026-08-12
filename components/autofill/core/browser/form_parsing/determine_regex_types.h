@@ -6,6 +6,7 @@
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_FORM_PARSING_DETERMINE_REGEX_TYPES_H_
 
 #include <memory>
+#include <optional>
 
 #include "base/containers/flat_map.h"
 #include "base/containers/span.h"
@@ -13,7 +14,10 @@
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_parsing/field_candidates.h"
 #include "components/autofill/core/browser/heuristic_source.h"
+#include "components/autofill/core/common/form_field_data.h"
+#include "components/autofill/core/common/is_required.h"
 #include "components/autofill/core/common/language_code.h"
+#include "components/autofill/core/common/signatures.h"
 #include "components/autofill/core/common/unique_ids.h"
 
 namespace autofill {
@@ -38,17 +42,21 @@ class RegexPredictions {
 
  private:
   HeuristicSource source_ = internal::IsRequired();
-  base::flat_map<FieldGlobalId, FieldType> predictions_;
+
+  // Keeps the predictions mapping.
+  base::flat_map<FieldGlobalId, FieldCandidate> predictions_;
 };
 
 // Evaluates regular expressions against the form fields to determine their
-// possible types.
-// HeuristicSource::kRegexes refers this function.
+// possible types. `ignore_small_forms` denotes whether the heuristic
+// predictions should be cleared in case that the number of address fillable
+// fields in a form is smaller than `kMinRequiredFieldsForHeuristics`.
 [[nodiscard]] RegexPredictions DetermineRegexTypes(
     const GeoIpCountryCode& client_country,
     const LanguageCode& current_page_language,
     const FormData& form,
-    LogManager* log_manager);
+    LogManager* log_manager,
+    bool ignore_small_forms);
 
 }  // namespace autofill
 

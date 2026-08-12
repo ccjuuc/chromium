@@ -2,12 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "sandbox/win/src/sandbox_policy_base.h"
+
+#include <winternl.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -17,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
@@ -69,7 +67,7 @@ sandbox::PolicyGlobal* MakeBrokerPolicyMemory() {
   sandbox::PolicyGlobal* policy =
       static_cast<sandbox::PolicyGlobal*>(::operator new(kTotalPolicySz));
   DCHECK(policy);
-  memset(policy, 0, kTotalPolicySz);
+  UNSAFE_TODO(memset(policy, 0, kTotalPolicySz));
   policy->data_size = kTotalPolicySz - sizeof(sandbox::PolicyGlobal);
   return policy;
 }
@@ -113,9 +111,9 @@ bool ReplacePackageSidInDacl(HANDLE token,
 bool ApplyZeroAppShimToSuspendedProcess(HANDLE process) {
   PROCESS_BASIC_INFORMATION proc_info{};
   ULONG bytes_returned = 0;
-  NTSTATUS ret = GetNtExports()->QueryInformationProcess(
-      process, ProcessBasicInformation, &proc_info, sizeof(proc_info),
-      &bytes_returned);
+  NTSTATUS ret =
+      ::NtQueryInformationProcess(process, ProcessBasicInformation, &proc_info,
+                                  sizeof(proc_info), &bytes_returned);
   if (!NT_SUCCESS(ret) || sizeof(proc_info) != bytes_returned) {
     return false;
   }
@@ -202,8 +200,8 @@ std::optional<base::span<const uint8_t>> ConfigBase::policy_span() {
   if (policy_) {
     // Note: this is not policy().data_size as that relates to internal data,
     // not the entire allocated policy area.
-    return base::span<const uint8_t>(reinterpret_cast<uint8_t*>(policy_.get()),
-                                     kPolMemSize);
+    return UNSAFE_TODO(base::span<const uint8_t>(
+        reinterpret_cast<uint8_t*>(policy_.get()), kPolMemSize));
   }
   return std::nullopt;
 }
@@ -255,7 +253,7 @@ sandbox::LowLevelPolicy* ConfigBase::PolicyMaker() {
 }
 
 ResultCode ConfigBase::AllowFileAccess(FileSemantics semantics,
-                                       const wchar_t* pattern) {
+                                       std::wstring_view pattern) {
   if (!FileSystemPolicy::GenerateRules(pattern, semantics, PolicyMaker())) {
     return SBOX_ERROR_BAD_PARAMS;
   }
@@ -272,7 +270,7 @@ ResultCode ConfigBase::SetFakeGdiInit() {
   return SBOX_ALL_OK;
 }
 
-ResultCode ConfigBase::AllowExtraDll(const wchar_t* path) {
+ResultCode ConfigBase::AllowExtraDll(std::wstring_view path) {
   // Signed intercept rules only supported on Windows 10 TH2 and above. This
   // must match the version checks in process_mitigations.cc for
   // consistency.
@@ -281,15 +279,18 @@ ResultCode ConfigBase::AllowExtraDll(const wchar_t* path) {
               mitigations_ & MITIGATION_FORCE_MS_SIGNED_BINS)
         << "Enable MITIGATION_FORCE_MS_SIGNED_BINS before adding signed "
            "policy rules.";
-    if (!SignedPolicy::GenerateRules(base::FilePath(path), PolicyMaker())) {
+    auto handle =
+        SignedPolicy::GenerateRules(base::FilePath(path), PolicyMaker());
+    if (!handle.is_valid()) {
       return SBOX_ERROR_BAD_PARAMS;
     }
+    shared_handles_.emplace_back(std::move(handle));
   }
   return SBOX_ALL_OK;
 }
 
-void ConfigBase::AddDllToUnload(const wchar_t* dll_name) {
-  blocklisted_dlls_.push_back(dll_name);
+void ConfigBase::AddDllToUnload(std::wstring_view dll_name) {
+  blocklisted_dlls_.emplace_back(dll_name);
 }
 
 ResultCode ConfigBase::SetIntegrityLevel(IntegrityLevel integrity_level) {
@@ -307,18 +308,23 @@ void ConfigBase::SetDelayedIntegrityLevel(IntegrityLevel integrity_level) {
   delayed_integrity_level_ = integrity_level;
 }
 
-ResultCode ConfigBase::SetLowBox(const wchar_t* sid) {
-  if (!features::IsAppContainerSandboxSupported())
+ResultCode ConfigBase::SetLowBox(base::wcstring_view sid) {
+  if (!features::IsAppContainerSandboxSupported()) {
     return SBOX_ERROR_UNSUPPORTED;
+  }
 
-  DCHECK(sid);
-  if (app_container_)
+  DCHECK(!sid.empty());
+  if (app_container_) {
     return SBOX_ERROR_BAD_PARAMS;
+  }
 
-  app_container_ = AppContainerBase::CreateLowbox(sid);
-  if (!app_container_)
+  auto package_sid = base::win::Sid::FromSddlString(sid);
+  if (!package_sid) {
     return SBOX_ERROR_INVALID_LOWBOX_SID;
+  }
 
+  app_container_ = std::make_unique<AppContainerBase>(
+      L"lowbox", std::move(*package_sid), AppContainerType::kLowbox);
   return SBOX_ALL_OK;
 }
 
@@ -359,12 +365,13 @@ void ConfigBase::SetLockdownDefaultDacl() {
   lockdown_default_dacl_ = true;
 }
 
-ResultCode ConfigBase::AddAppContainerProfile(const wchar_t* package_name) {
+ResultCode ConfigBase::AddAppContainerProfile(
+    base::wcstring_view package_name) {
   if (!features::IsAppContainerSandboxSupported())
     return SBOX_ERROR_UNSUPPORTED;
 
   DCHECK(!configured_);
-  DCHECK(package_name);
+  DCHECK(!package_name.empty());
   if (app_container_ || integrity_level_ != INTEGRITY_LEVEL_LAST) {
     return SBOX_ERROR_BAD_PARAMS;
   }
@@ -470,6 +477,10 @@ bool ConfigBase::GetEnvironmentFiltered() {
 
 void ConfigBase::SetZeroAppShim() {
   zero_appshim_ = true;
+}
+
+void ConfigBase::SetSecurityAttributeName(std::wstring_view name) {
+  security_attribute_name_ = name;
 }
 
 TargetTokens::TargetTokens(base::win::AccessToken initial,
@@ -587,7 +598,7 @@ base::expected<TargetTokens, ResultCode> PolicyBase::MakeTokens() {
   // with the process and therefore with any thread that is not impersonating.
   std::optional<base::win::AccessToken> primary = CreateRestrictedToken(
       config()->GetLockdownTokenLevel(), integrity_level, TokenType::kPrimary,
-      lockdown_default_dacl, random_sid);
+      lockdown_default_dacl, random_sid, config()->security_attribute_name());
   if (!primary) {
     return base::unexpected(SBOX_ERROR_CANNOT_CREATE_RESTRICTED_TOKEN);
   }
@@ -610,9 +621,10 @@ base::expected<TargetTokens, ResultCode> PolicyBase::MakeTokens() {
   // Create the 'better' token. We use this token as the one that the main
   // thread uses when booting up the process. It should contain most of
   // what we need (before reaching main( ))
-  std::optional<base::win::AccessToken> impersonation = CreateRestrictedToken(
-      config()->GetInitialTokenLevel(), integrity_level,
-      TokenType::kImpersonation, lockdown_default_dacl, random_sid);
+  std::optional<base::win::AccessToken> impersonation =
+      CreateRestrictedToken(config()->GetInitialTokenLevel(), integrity_level,
+                            TokenType::kImpersonation, lockdown_default_dacl,
+                            random_sid, config()->security_attribute_name());
   if (!impersonation) {
     return base::unexpected(SBOX_ERROR_CANNOT_CREATE_RESTRICTED_IMP_TOKEN);
   }
@@ -722,25 +734,20 @@ ResultCode PolicyBase::InitProcess(HANDLE process_handle,
 EvalResult PolicyBase::EvalPolicy(IpcTag service,
                                   CountedParameterSetBase* params) {
   PolicyGlobal* policy = config()->policy();
-  if (policy) {
-    if (!policy->entry[static_cast<size_t>(service)]) {
-      // There is no policy for this particular service. This is not a big
-      // deal.
-      return DENY_ACCESS;
-    }
-    for (size_t i = 0; i < params->count; i++) {
-      if (!params->parameters[i].IsValid()) {
-        NOTREACHED();
-      }
-    }
-    PolicyProcessor pol_evaluator(policy->entry[static_cast<size_t>(service)]);
-    PolicyResult result =
-        pol_evaluator.Evaluate(kShortEval, params->parameters, params->count);
-    if (POLICY_MATCH == result)
-      return pol_evaluator.GetAction();
-
-    DCHECK(POLICY_ERROR != result);
+  if (!policy || !policy->NeedsIpc(service)) {
+    // There is no policy for this particular service.
+    return DENY_ACCESS;
   }
+  for (size_t i = 0; i < params->count; i++) {
+    CHECK(UNSAFE_TODO(params->parameters[i]).IsValid());
+  }
+  PolicyProcessor pol_evaluator(policy->GetService(service));
+  PolicyResult result =
+      pol_evaluator.Evaluate(params->parameters, params->count);
+  if (POLICY_MATCH == result) {
+    return pol_evaluator.GetAction();
+  }
+  DCHECK(POLICY_ERROR != result);
 
   return DENY_ACCESS;
 }
@@ -758,9 +765,10 @@ ResultCode PolicyBase::SetupAllInterceptions(TargetProcess& target) {
   PolicyGlobal* policy = config()->policy();
   if (policy) {
     for (size_t i = 0; i < kSandboxIpcCount; i++) {
-      if (policy->entry[i] &&
-          !dispatcher_->SetupService(&manager, static_cast<IpcTag>(i)))
+      if (UNSAFE_TODO(policy->entry[i]) &&
+          !dispatcher_->SetupService(&manager, static_cast<IpcTag>(i))) {
         return SBOX_ERROR_SETUP_INTERCEPTION_SERVICE;
+      }
     }
   }
 

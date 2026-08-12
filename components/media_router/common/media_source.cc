@@ -23,6 +23,7 @@
 #include "net/base/url_util.h"
 #include "third_party/blink/public/platform/modules/remoteplayback/remote_playback_source.h"
 #include "url/gurl.h"
+#include "url/url_constants.h"
 
 namespace media_router {
 
@@ -49,10 +50,15 @@ constexpr std::array<const char* const, 5> kAllowedSchemes{
      "test"}};
 
 bool IsSchemeAllowed(const GURL& url) {
-  return url.SchemeIsHTTPOrHTTPS() ||
-         std::ranges::any_of(kAllowedSchemes, [&url](const char* const scheme) {
-           return url.SchemeIs(scheme);
-         });
+  if (url.SchemeIs(url::kHttpsScheme)) {
+    return true;
+  } else if (url.SchemeIs(url::kHttpScheme)) {
+    return net::IsLocalhost(url);
+  } else {
+    return std::ranges::any_of(
+        kAllowedSchemes,
+        [&url](const char* const scheme) { return url.SchemeIs(scheme); });
+  }
 }
 
 bool IsSystemAudioCaptureSupported() {
@@ -71,6 +77,35 @@ bool IsSystemAudioCaptureSupported() {
 
 }  // namespace
 
+bool IsDialAppName(std::string_view app_name) {
+  if (app_name.empty() || app_name == "." || app_name == "..") {
+    return false;
+  }
+  // Reject the RFC 3986 dot-segment tokens so GetDialAppUrl()'s Resolve() call
+  // cannot traverse outside the device's Application-URL path namespace.
+  if (app_name == "." || app_name == "..") {
+    return false;
+  }
+  return std::ranges::all_of(app_name, [](char c) {
+    return base::IsAsciiAlpha(c) || base::IsAsciiDigit(c) || c == '-' ||
+           c == '.' || c == '_' || c == '~';
+  });
+}
+
+GURL GetDialAppUrl(const GURL& app_url, const std::string& app_name) {
+  if (!IsDialAppName(app_name) || !app_url.is_valid()) {
+    return GURL();
+  }
+
+  // The DIAL spec (Section 5.4) implies that the app URL must not have a
+  // trailing slash.
+  std::string spec = app_url.spec();
+  if (!spec.empty() && spec.back() != '/') {
+    spec += "/";
+  }
+  return GURL(spec).Resolve(app_name);
+}
+
 bool IsLegacyCastPresentationUrl(const GURL& url) {
   return base::StartsWith(url.spec(), kLegacyCastPresentationUrlPrefix,
                           base::CompareCase::INSENSITIVE_ASCII);
@@ -82,9 +117,17 @@ bool IsValidPresentationUrl(const GURL& url) {
 
 bool IsValidStandardPresentationSource(const std::string& media_source) {
   const GURL source_url(media_source);
-  return source_url.is_valid() && source_url.SchemeIsHTTPOrHTTPS() &&
-         !base::StartsWith(source_url.spec(), kLegacyCastPresentationUrlPrefix,
-                           base::CompareCase::INSENSITIVE_ASCII);
+  if (!source_url.is_valid()) {
+    return false;
+  } else if (source_url.SchemeIs(url::kHttpsScheme)) {
+    return !base::StartsWith(source_url.spec(),
+                             kLegacyCastPresentationUrlPrefix,
+                             base::CompareCase::INSENSITIVE_ASCII);
+  } else if (source_url.SchemeIs(url::kHttpScheme)) {
+    return net::IsLocalhost(source_url);
+  } else {
+    return false;
+  }
 }
 
 bool IsAutoJoinPresentationId(const std::string& presentation_id) {
@@ -222,7 +265,11 @@ bool MediaSource::IsDialSource() const {
 }
 
 std::string MediaSource::AppNameFromDialSource() const {
-  return IsDialSource() ? url_.GetPath() : "";
+  if (!IsDialSource()) {
+    return "";
+  }
+  std::string app_name = url_.GetPath();
+  return IsDialAppName(app_name) ? app_name : "";
 }
 
 std::string MediaSource::TruncateForLogging(size_t max_length) const {

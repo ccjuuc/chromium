@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_ASH_LOGIN_SCREENS_OSAUTH_PASSWORD_SELECTION_SCREEN_H_
 #define CHROME_BROWSER_ASH_LOGIN_SCREENS_OSAUTH_PASSWORD_SELECTION_SCREEN_H_
 
+#include <optional>
 #include <string>
 
 #include "base/functional/callback.h"
@@ -57,7 +58,7 @@ class PasswordSelectionScreen : public BaseOSAuthSetupScreen {
   // BaseScreen:
   void ShowImpl() override;
   void HideImpl() override;
-  void OnUserAction(const base::Value::List& args) override;
+  void OnUserAction(const base::ListValue& args) override;
   bool MaybeSkip(WizardContext& context) override;
 
  private:
@@ -70,6 +71,7 @@ class PasswordSelectionScreen : public BaseOSAuthSetupScreen {
 
   // Values obtained from UserContext in `InspectContext`
   bool has_online_password_ = false;
+  std::optional<bool> is_saml_flow_;
   bool is_shown_ = false;
   AccountId account_id_ = EmptyAccountId();
   AuthFactorsConfiguration auth_factors_config_;

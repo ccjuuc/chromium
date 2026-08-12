@@ -11,13 +11,11 @@
 #include "chrome/browser/ash/crostini/crostini_pref_names.h"
 #include "chrome/browser/ash/guest_os/guest_id.h"
 #include "chrome/browser/ash/guest_os/guest_os_pref_names.h"
-#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_features.h"
+#include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/experiences/guest_os/virtual_machines/virtual_machines_util.h"
 #include "components/policy/proto/chrome_device_policy.pb.h"
@@ -156,15 +154,12 @@ bool CrostiniFeatures::IsExportImportUIAllowed(Profile* profile) const {
 }
 
 bool CrostiniFeatures::IsRootAccessAllowed(Profile* profile) const {
-  if (base::FeatureList::IsEnabled(features::kCrostiniAdvancedAccessControls)) {
+  if (base::FeatureList::IsEnabled(
+          ash::features::kCrostiniAdvancedAccessControls)) {
     return profile->GetPrefs()->GetBoolean(
         crostini::prefs::kUserCrostiniRootAccessAllowedByPolicy);
   }
   return true;
-}
-
-bool CrostiniFeatures::IsContainerUpgradeUIAllowed(Profile* profile) const {
-  return g_crostini_features->IsAllowedNow(profile);
 }
 
 void CrostiniFeatures::CanChangeAdbSideloading(
@@ -179,9 +174,7 @@ void CrostiniFeatures::CanChangeAdbSideloading(
   }
 
   // ADB sideloading is not supported for managed devices or profiles.
-  auto* connector =
-      g_browser_process->platform_part()->browser_policy_connector_ash();
-  if (connector->IsDeviceEnterpriseManaged() ||
+  if (ash::InstallAttributes::Get()->IsEnterpriseManaged() ||
       profile->GetProfilePolicyConnector()->IsManaged()) {
     std::move(callback).Run(false);
     return;
@@ -212,7 +205,7 @@ bool CrostiniFeatures::IsPortForwardingAllowed(Profile* profile) const {
 
 bool CrostiniFeatures::IsBaguette(Profile* profile) const {
   bool is_baguette = false;
-  const base::Value::List& container_list =
+  const base::ListValue& container_list =
       profile->GetPrefs()->GetList(guest_os::prefs::kGuestOsContainers);
   for (const auto& container : container_list) {
     guest_os::GuestId id(container);
@@ -223,11 +216,6 @@ bool CrostiniFeatures::IsBaguette(Profile* profile) const {
   }
 
   return is_baguette;
-}
-
-bool CrostiniFeatures::IsMultiContainerAllowed(Profile* profile) const {
-  return g_crostini_features->IsAllowedNow(profile) &&
-         base::FeatureList::IsEnabled(ash::features::kCrostiniMultiContainer);
 }
 
 }  // namespace crostini

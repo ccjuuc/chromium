@@ -5,6 +5,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/to_string.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/extensions/api/tabs/tabs_api.h"
@@ -12,21 +13,32 @@
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
+#include "components/search_engines/template_url.h"
+#include "components/search_engines/template_url_data.h"
+#include "components/search_engines/template_url_service.h"
+#include "components/ukm/test_ukm_recorder.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/prerender_test_util.h"
+#include "extensions/browser/api/constants.h"
+#include "extensions/browser/event_router.h"
+#include "extensions/common/extension_features.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
 #include "extensions/test/test_extension_dir.h"
 #include "net/dns/mock_host_resolver.h"
+#include "services/metrics/public/cpp/ukm_builders.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/ui/browser.h"
@@ -40,12 +52,9 @@
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
-using ContextType = extensions::browser_test_util::ContextType;
-
 class ExtensionApiTabTest : public extensions::ExtensionApiTest {
  public:
-  explicit ExtensionApiTabTest(ContextType context_type = ContextType::kNone)
-      : ExtensionApiTest(context_type) {}
+  ExtensionApiTabTest() = default;
   ~ExtensionApiTabTest() override = default;
   ExtensionApiTabTest(const ExtensionApiTabTest&) = delete;
   ExtensionApiTabTest& operator=(const ExtensionApiTabTest&) = delete;
@@ -57,31 +66,7 @@ class ExtensionApiTabTest : public extensions::ExtensionApiTest {
   }
 };
 
-class ExtensionApiTabTestWithContextType
-    : public ExtensionApiTabTest,
-      public testing::WithParamInterface<ContextType> {
- public:
-  ExtensionApiTabTestWithContextType() : ExtensionApiTabTest(GetParam()) {}
-  ExtensionApiTabTestWithContextType(
-      const ExtensionApiTabTestWithContextType&) = delete;
-  ExtensionApiTabTestWithContextType& operator=(
-      const ExtensionApiTabTestWithContextType&) = delete;
-  ~ExtensionApiTabTestWithContextType() override = default;
-};
-
-#if !BUILDFLAG(IS_ANDROID)
-INSTANTIATE_TEST_SUITE_P(PersistentBackground,
-                         ExtensionApiTabTestWithContextType,
-                         ::testing::Values(ContextType::kPersistentBackground));
-#endif
-
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-INSTANTIATE_TEST_SUITE_P(ServiceWorker,
-                         ExtensionApiTabTestWithContextType,
-                         ::testing::Values(ContextType::kServiceWorker));
-
-class ExtensionApiTabBackForwardCacheTest
-    : public ExtensionApiTabTestWithContextType {
+class ExtensionApiTabBackForwardCacheTest : public ExtensionApiTabTest {
  public:
   ExtensionApiTabBackForwardCacheTest() {
     feature_list_.InitWithFeaturesAndParameters(
@@ -95,47 +80,25 @@ class ExtensionApiTabBackForwardCacheTest
   base::test::ScopedFeatureList feature_list_;
 };
 
-#if !BUILDFLAG(IS_ANDROID)
-INSTANTIATE_TEST_SUITE_P(PersistentBackground,
-                         ExtensionApiTabBackForwardCacheTest,
-                         ::testing::Values(ContextType::kPersistentBackground));
-#endif
-
-INSTANTIATE_TEST_SUITE_P(ServiceWorker,
-                         ExtensionApiTabBackForwardCacheTest,
-                         ::testing::Values(ContextType::kServiceWorker));
-#endif
-
-class ExtensionApiNewTabTest : public ExtensionApiTabTestWithContextType {
+class ExtensionApiNewTabTest : public ExtensionApiTabTest {
  public:
   ExtensionApiNewTabTest() = default;
   void SetUpCommandLine(base::CommandLine* command_line) override {
     ExtensionApiTabTest::SetUpCommandLine(command_line);
     // Override the default which InProcessBrowserTest adds if it doesn't see a
     // homepage.
-    command_line->AppendSwitchASCII(
-        switches::kHomePage, chrome::kChromeUINewTabURL);
+    command_line->AppendSwitchASCII(switches::kHomePage,
+                                    chrome::kChromeUINewTabURL);
   }
 };
 
-#if !BUILDFLAG(IS_ANDROID)
-INSTANTIATE_TEST_SUITE_P(PersistentBackground,
-                         ExtensionApiNewTabTest,
-                         ::testing::Values(ContextType::kPersistentBackground));
-#endif
-
-INSTANTIATE_TEST_SUITE_P(ServiceWorker,
-                         ExtensionApiNewTabTest,
-                         ::testing::Values(ContextType::kServiceWorker));
-
 // TODO(crbug.com/451682394): Disabled on Linux dbg due to flakiness.
-// TODO(crbug.com/471405507): Disabled on Android.
-#if (BUILDFLAG(IS_LINUX) && !defined(NDEBUG)) || BUILDFLAG(IS_ANDROID)
+#if (BUILDFLAG(IS_LINUX) && !defined(NDEBUG))
 #define MAYBE_Tabs DISABLED_Tabs
 #else
 #define MAYBE_Tabs Tabs
 #endif
-IN_PROC_BROWSER_TEST_P(ExtensionApiNewTabTest, MAYBE_Tabs) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiNewTabTest, MAYBE_Tabs) {
   // The test creates a tab and checks that the URL of the new tab
   // is that of the new tab page.  Make sure the pref that controls
   // this is set.
@@ -144,7 +107,7 @@ IN_PROC_BROWSER_TEST_P(ExtensionApiNewTabTest, MAYBE_Tabs) {
   ASSERT_TRUE(RunExtensionTest("tabs/basics/crud")) << message_;
 }
 
-// TODO(https://crbug.com/371432155): Enable these tests.
+// TODO(https://crbug.com/449095632): Enable these tests.
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 
 IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, TabAudible) {
@@ -161,17 +124,17 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, RemovingTabWhilePartOfGroup) {
       << message_;
 }
 
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
 // TODO(crbug.com/40925613): Re-enable this test
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_Muted DISABLED_Muted
 #else
 #define MAYBE_Muted Muted
 #endif
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, MAYBE_Muted) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, MAYBE_Muted) {
   ASSERT_TRUE(RunExtensionTest("tabs/basics/muted")) << message_;
 }
-
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // TODO(crbug.com/471405507): Disabled on Android.
 #if BUILDFLAG(IS_ANDROID)
@@ -184,22 +147,23 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, MAYBE_Tabs2) {
       << message_;
 }
 
-// TODO(https://crbug.com/371432155): Enable these tests.
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, Duplicate) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, Duplicate) {
   ASSERT_TRUE(RunExtensionTest("tabs/basics/duplicate")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, Size) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, Size) {
   ASSERT_TRUE(RunExtensionTest("tabs/basics/tab_size")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, Update) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, Update) {
   ASSERT_TRUE(RunExtensionTest("tabs/basics/update")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, Pinned) {
+// TODO(https://crbug.com/449095632): Enable these tests.
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+
+// Fails on desktop android (assumed synchrnous tab removal, then causes crash).
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, Pinned) {
   ASSERT_TRUE(RunExtensionTest("tabs/basics/pinned")) << message_;
 }
 
@@ -209,71 +173,148 @@ IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, Pinned) {
 #else
 #define MAYBE_Move Move
 #endif
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, MAYBE_Move) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, MAYBE_Move) {
   ASSERT_TRUE(RunExtensionTest("tabs/basics/move")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, Events) {
+// On desktop Android, times out waiting for onUpdated events.
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, Events) {
   ASSERT_TRUE(RunExtensionTest("tabs/basics/events")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, RelativeURLs) {
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, RelativeURLs) {
   ASSERT_TRUE(RunExtensionTest("tabs/basics/relative_urls")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, Query) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, Query) {
   ASSERT_TRUE(RunExtensionTest("tabs/basics/query")) << message_;
 }
 
-// TODO(crbug.com/40254426): Move to tabs_interactive_test.cc
-// TODO(crbug.com/40890826): Re-enable once flakiness is fixed.
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, DISABLED_Highlight) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, Highlight) {
   ASSERT_TRUE(RunExtensionTest("tabs/basics/highlight")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, LastAccessed) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, LastAccessed) {
   ASSERT_TRUE(RunExtensionTest("tabs/basics/last_accessed")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, CrashBrowser) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, CrashBrowser) {
   ASSERT_TRUE(RunExtensionTest("tabs/basics/crash")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, Opener) {
+// TODO(https://crbug.com/449095632): Enable these tests.
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+
+// Crashes on desktop Android with invalid tab index and ID.
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, Opener) {
   ASSERT_TRUE(RunExtensionTest("tabs/basics/opener")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, Remove) {
+// Times out on desktop Android.
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, Remove) {
   ASSERT_TRUE(RunExtensionTest("tabs/basics/remove")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, RemoveMultiple) {
+// Times out on desktop Android.
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, RemoveMultiple) {
   ASSERT_TRUE(RunExtensionTest("tabs/basics/remove_multiple")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, GetCurrent) {
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, GetCurrent) {
   ASSERT_TRUE(RunExtensionTest("tabs/get_current")) << message_;
 }
 
-// Disabled for being flaky. See crbug.com/1472144
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, DISABLED_Connect) {
+// Disabled for being flaky. See crbug.com/40926473
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, DISABLED_Connect) {
   ASSERT_TRUE(RunExtensionTest("tabs/connect")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, OnRemoved) {
+// NOTE: Window OnRemoved testing is skipped in JavaScript due to apparently
+// invalid window IDs.
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, OnRemoved) {
   ASSERT_TRUE(RunExtensionTest("tabs/on_removed")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, Reload) {
+// TODO(https://crbug.com/449095632): Enable these tests.
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+
+// TODO(crbug.com/499307054): Flaky on desktop Android. Crashes during test
+// shutdown with a Java exception. See bug.
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, Reload) {
   ASSERT_TRUE(RunExtensionTest("tabs/reload")) << message_;
 }
 
-class ExtensionApiCaptureTest
-    : public ExtensionApiTabTest,
-      public testing::WithParamInterface<ContextType> {
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+// Tests various behaviors of highlighting tabs using chrome.tabs.update(),
+// including that highlighting is additive, tabs can be unhighlighted, and
+// that extensions cannot unhighlight all tabs in a window.
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, UpdateHighlighted) {
+  constexpr char kManifest[] = R"({
+    "name": "Update Highlighted",
+    "version": "1.0",
+    "manifest_version": 3,
+    "background": {"service_worker": "background.js"}
+  })";
+
+  constexpr char kBackgroundJs[] = R"(
+    chrome.test.runTests([
+      async function highlightingTabs() {
+        // Open multiple tabs.
+        const win = await chrome.windows.create(
+                        {url: ['about:blank', 'about:blank', 'about:blank']});
+        const tabs = await chrome.tabs.query({windowId: win.id});
+        chrome.test.assertEq(3, tabs.length);
+
+        let highlightedTabs =
+            await chrome.tabs.query({windowId: win.id, highlighted: true});
+        chrome.test.assertEq(1, highlightedTabs.length);
+
+        chrome.test.assertEq(tabs[0].id, highlightedTabs[0].id);
+
+        // Highlight a different tab. Both tabs should be highlighted.
+        await chrome.tabs.update(tabs[2].id, {highlighted: true});
+        highlightedTabs =
+            await chrome.tabs.query({windowId: win.id, highlighted: true});
+        chrome.test.assertEq(2, highlightedTabs.length);
+        let highlightedIds = highlightedTabs.map(t => t.id);
+        chrome.test.assertEq(highlightedIds.sort(),
+                             [tabs[0].id, tabs[2].id].sort());
+
+        // Unhighlight the first tab. Only tabs[2] should be highlighted now.
+        await chrome.tabs.update(tabs[0].id, {highlighted: false});
+        highlightedTabs =
+            await chrome.tabs.query({windowId: win.id, highlighted: true});
+        chrome.test.assertEq(1, highlightedTabs.length);
+        chrome.test.assertEq(tabs[2].id, highlightedTabs[0].id);
+
+        // Try to unhighlight the last remaining highlighted tab (tabs[2]).
+        // This should fail.
+        await chrome.test.assertPromiseRejects(
+            chrome.tabs.update(tabs[2].id, {highlighted: false}),
+            'Error: Cannot unhighlight all tabs.');
+
+        chrome.test.succeed();
+      }
+    ]);
+  )";
+
+  extensions::TestExtensionDir test_dir;
+  test_dir.WriteManifest(kManifest);
+  test_dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackgroundJs);
+
+  extensions::ResultCatcher catcher;
+  ASSERT_TRUE(LoadExtension(test_dir.UnpackedPath()));
+  EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
+}
+
+class ExtensionApiCaptureTest : public ExtensionApiTabTest {
  public:
-  ExtensionApiCaptureTest() : ExtensionApiTabTest(GetParam()) {}
-  ~ExtensionApiCaptureTest() override = default;
+  ExtensionApiCaptureTest() = default;
   ExtensionApiCaptureTest(const ExtensionApiCaptureTest&) = delete;
   ExtensionApiCaptureTest& operator=(const ExtensionApiCaptureTest&) = delete;
 
@@ -285,21 +326,16 @@ class ExtensionApiCaptureTest
   }
 };
 
-INSTANTIATE_TEST_SUITE_P(PersistentBackground,
-                         ExtensionApiCaptureTest,
-                         ::testing::Values(ContextType::kPersistentBackground));
-INSTANTIATE_TEST_SUITE_P(ServiceWorker,
-                         ExtensionApiCaptureTest,
-                         ::testing::Values(ContextType::kServiceWorker));
-
-// https://crbug.com/1450747 Flaky on Mac.
-// TODO(crbug.com/381214152): Re-enable this test
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+// https://crbug.com/40915448 Flaky on Mac.
+// TODO(crbug.com/540627656): Disabled on Linux dbg due to timeout.
+// TODO(crbug.com/488154807): Flaky on desktop Android.
+#if BUILDFLAG(IS_MAC) || (BUILDFLAG(IS_LINUX) && !defined(NDEBUG)) || \
+    BUILDFLAG(IS_ANDROID)
 #define MAYBE_CaptureVisibleTabJpeg DISABLED_CaptureVisibleTabJpeg
 #else
 #define MAYBE_CaptureVisibleTabJpeg CaptureVisibleTabJpeg
 #endif
-IN_PROC_BROWSER_TEST_P(ExtensionApiCaptureTest, MAYBE_CaptureVisibleTabJpeg) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiCaptureTest, MAYBE_CaptureVisibleTabJpeg) {
   ExtensionTestMessageListener device_pixel_handler("get_device_pixel_ratio",
                                                     ReplyBehavior::kWillReply);
   auto get_device_pixel_ratio = [this, &device_pixel_handler](
@@ -318,16 +354,16 @@ IN_PROC_BROWSER_TEST_P(ExtensionApiCaptureTest, MAYBE_CaptureVisibleTabJpeg) {
       << message_;
 }
 
-// https://crbug.com/1450933 Flaky on Mac.
-// TODO(crbug.com/381277829): Flaky on ASAN and MSAN builds.
+// https://crbug.com/40915548 Flaky on Mac.
 // TODO(crbug.com/451698327): Disabled on Linux dbg due to flakiness.
-#if BUILDFLAG(IS_MAC) || defined(ADDRESS_SANITIZER) || \
-    defined(MEMORY_SANITIZER) || (BUILDFLAG(IS_LINUX) && !defined(NDEBUG))
+// TODO(crbug.com/488154807): Flaky on desktop Android.
+#if BUILDFLAG(IS_MAC) || (BUILDFLAG(IS_LINUX) && !defined(NDEBUG)) || \
+    BUILDFLAG(IS_ANDROID)
 #define MAYBE_CaptureVisibleTabPng DISABLED_CaptureVisibleTabPng
 #else
 #define MAYBE_CaptureVisibleTabPng CaptureVisibleTabPng
 #endif
-IN_PROC_BROWSER_TEST_P(ExtensionApiCaptureTest, MAYBE_CaptureVisibleTabPng) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiCaptureTest, MAYBE_CaptureVisibleTabPng) {
   ExtensionTestMessageListener device_pixel_handler("get_device_pixel_ratio",
                                                     ReplyBehavior::kWillReply);
   auto get_device_pixel_ratio = [this, &device_pixel_handler](
@@ -347,19 +383,21 @@ IN_PROC_BROWSER_TEST_P(ExtensionApiCaptureTest, MAYBE_CaptureVisibleTabPng) {
 }
 
 // TODO(crbug.com/40168659) Re-enable test
-IN_PROC_BROWSER_TEST_P(ExtensionApiCaptureTest,
+IN_PROC_BROWSER_TEST_F(ExtensionApiCaptureTest,
                        DISABLED_CaptureVisibleTabRace) {
   ASSERT_TRUE(RunExtensionTest("tabs/capture_visible_tab/test_race"))
       << message_;
 }
 
-// https://crbug.com/1107934 Flaky on Windows, Linux, ChromeOS.
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+// https://crbug.com/40707203 Flaky on Windows, Linux, ChromeOS.
+// TODO(crbug.com/488154807): Flaky on desktop Android.
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || \
+    BUILDFLAG(IS_ANDROID)
 #define MAYBE_CaptureVisibleFile DISABLED_CaptureVisibleFile
 #else
 #define MAYBE_CaptureVisibleFile CaptureVisibleFile
 #endif
-IN_PROC_BROWSER_TEST_P(ExtensionApiCaptureTest, MAYBE_CaptureVisibleFile) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiCaptureTest, MAYBE_CaptureVisibleFile) {
   ASSERT_TRUE(RunExtensionTest("tabs/capture_visible_tab/test_file", {},
                                {.allow_file_access = true}))
       << message_;
@@ -371,50 +409,48 @@ IN_PROC_BROWSER_TEST_P(ExtensionApiCaptureTest, MAYBE_CaptureVisibleFile) {
 #else
 #define MAYBE_CaptureVisibleDisabled CaptureVisibleDisabled
 #endif
-IN_PROC_BROWSER_TEST_P(ExtensionApiCaptureTest, MAYBE_CaptureVisibleDisabled) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiCaptureTest, MAYBE_CaptureVisibleDisabled) {
   profile()->GetPrefs()->SetBoolean(prefs::kDisableScreenshots, true);
   ASSERT_TRUE(RunExtensionTest("tabs/capture_visible_tab/test_disabled"))
       << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiCaptureTest, CaptureNullWindow) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiCaptureTest, CaptureNullWindow) {
   ASSERT_TRUE(RunExtensionTest("tabs/capture_visible_tab_null_window"))
       << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, OnCreated) {
+// NOTE: Creating active tab tests are skipped in JavaScript on Android.
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, OnCreated) {
   ASSERT_TRUE(RunExtensionTest("tabs/on_created")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType,
-                       LazyBackgroundTabsOnCreated) {
+// NOTE: Creating active tab tests are skipped in JavaScript on Android.
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, LazyBackgroundTabsOnCreated) {
   ASSERT_TRUE(RunExtensionTest("tabs/lazy_background_on_created")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, OnUpdated) {
+// NOTE: Favicon and title tests are skipped in JavaScript on Android.
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, OnUpdated) {
   ASSERT_TRUE(RunExtensionTest("tabs/on_updated")) << message_;
 }
 
-// TODO(crbug.com/378027647) Failing on ChromeOS and Linux
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
-#define MAYBE_OnUpdated DISABLED_OnUpdated
-#else
-#define MAYBE_OnUpdated OnUpdated
-#endif
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabBackForwardCacheTest, MAYBE_OnUpdated) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabBackForwardCacheTest, OnUpdated) {
   ASSERT_TRUE(RunExtensionTest("tabs/backForwardCache/on_updated")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, NoPermissions) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, NoPermissions) {
   ASSERT_TRUE(RunExtensionTest("tabs/no_permissions")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType,
-                       DISABLED_HostPermission) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, DISABLED_HostPermission) {
   ASSERT_TRUE(RunExtensionTest("tabs/host_permission")) << message_;
 }
 
-// Flaky on Windows, Mac and Linux. http://crbug.com/820110.
+// TODO(https://crbug.com/449095632): Enable these tests.
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+
+// Flaky on Windows, Mac and Linux. http://crbug.com/41375473.
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_UpdateWindowResize DISABLED_UpdateWindowResize
@@ -427,8 +463,11 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, MAYBE_UpdateWindowResize) {
 
 #if BUILDFLAG(IS_WIN)
 IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, FocusWindowDoesNotUnmaximize) {
-  HWND window =
-      browser()->window()->GetNativeWindow()->GetHost()->GetAcceleratedWidget();
+  HWND window = browser()
+                    ->GetWindow()
+                    ->GetNativeWindow()
+                    ->GetHost()
+                    ->GetAcceleratedWidget();
   ::SendMessage(window, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
   ASSERT_TRUE(RunExtensionTest("window_update/focus")) << message_;
   ASSERT_TRUE(::IsZoomed(window));
@@ -437,8 +476,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, FocusWindowDoesNotUnmaximize) {
 
 #if defined(USE_AURA) || BUILDFLAG(IS_MAC)
 // Maximizing/fullscreen popup window doesn't work on aura's managed mode.
-// See bug crbug.com/116305.
-// Mac: http://crbug.com/103912
+// See bug crbug.com/40162971.
+// Mac: http://crbug.com/40113467
+// On desktop Android, throws Java exception during minimize().
 #define MAYBE_UpdateWindowShowState DISABLED_UpdateWindowShowState
 #else
 #define MAYBE_UpdateWindowShowState UpdateWindowShowState
@@ -447,8 +487,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, MAYBE_UpdateWindowShowState) {
   ASSERT_TRUE(RunExtensionTest("window_update/show_state")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType,
-                       IncognitoDisabledByPref) {
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, IncognitoDisabledByPref) {
   IncognitoModePrefs::SetAvailability(
       profile()->GetPrefs(), policy::IncognitoModeAvailability::kDisabled);
 
@@ -457,7 +498,14 @@ IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType,
   ASSERT_TRUE(RunExtensionTest("tabs/incognito_disabled")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, GetViewsOfCreatedPopup) {
+// TODO(crbug.com/500790726): Flaky on desktop Android. Crashes during test
+// shutdown with a Java exception in ChromeAndroidTaskTrackerImpl.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_GetViewsOfCreatedPopup DISABLED_GetViewsOfCreatedPopup
+#else
+#define MAYBE_GetViewsOfCreatedPopup GetViewsOfCreatedPopup
+#endif
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, MAYBE_GetViewsOfCreatedPopup) {
   ASSERT_TRUE(RunExtensionTest("tabs/basics",
                                {.extension_url = "get_views_popup.html"}))
       << message_;
@@ -469,12 +517,17 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, GetViewsOfCreatedWindow) {
       << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType,
-                       OnUpdatedDiscardedState) {
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+
+// The discarded property is not yet supported on desktop Android.
+// https://crbug.com/505306735.
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, OnUpdatedDiscardedState) {
   ASSERT_TRUE(RunExtensionTest("tabs/basics/discarded")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType, OpenerCraziness) {
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, OpenerCraziness) {
   ASSERT_TRUE(RunExtensionTest("tabs/tab_opener_id")) << message_;
 }
 
@@ -496,9 +549,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, SendMessageFromOptionsPage) {
 // Tests that extension with "tabs" permission does not leak tab info to another
 // extension without "tabs" permission.
 //
-// Regression test for https://crbug.com/1302959
-IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType,
-                       TabsPermissionDoesNotLeakTabInfo) {
+// Regression test for https://crbug.com/40058969
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, TabsPermissionDoesNotLeakTabInfo) {
   constexpr char kManifestWithTabsPermission[] =
       R"({
         "name": "test", "version": "1", "manifest_version": 2,
@@ -520,7 +572,7 @@ IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType,
           chrome.test.assertEq(3, Array.from(arguments).length);
           // Note: we'll search within all of the arguments, just to make sure
           // we don't miss any inadvertently added ones. See
-          // https://crbug.com/1302959 for details.
+          // https://crbug.com/40058969 for details.
           let argumentsStr = JSON.stringify(arguments);
           let containsUrlStr = argumentsStr.indexOf(urlStr) != -1;
           chrome.test.assertFalse(containsUrlStr);
@@ -555,31 +607,32 @@ IN_PROC_BROWSER_TEST_P(ExtensionApiTabTestWithContextType,
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
-struct IncognitoTestParam {
-  IncognitoTestParam(bool is_incognito_enabled, ContextType context_type)
-      : is_incognito_enabled(is_incognito_enabled),
-        context_type(context_type) {}
-
-  bool is_incognito_enabled;
-  ContextType context_type;
-};
-
-class IncognitoExtensionApiTabTest
-    : public ExtensionApiTabTest,
-      public testing::WithParamInterface<IncognitoTestParam> {
+class IncognitoExtensionApiTabTest : public ExtensionApiTabTest,
+                                     public testing::WithParamInterface<bool> {
  public:
-  IncognitoExtensionApiTabTest()
-      : ExtensionApiTabTest(GetParam().context_type) {}
+  IncognitoExtensionApiTabTest() = default;
   IncognitoExtensionApiTabTest(const IncognitoExtensionApiTabTest&) = delete;
   IncognitoExtensionApiTabTest& operator=(const IncognitoExtensionApiTabTest&) =
       delete;
   ~IncognitoExtensionApiTabTest() override = default;
 };
 
-IN_PROC_BROWSER_TEST_P(IncognitoExtensionApiTabTest, Tabs) {
-  bool is_incognito_enabled = GetParam().is_incognito_enabled;
-  Browser* incognito_browser =
-      OpenURLOffTheRecord(profile(), GURL("about:blank"));
+// TODO(crbug.com/500790726): Flaky on desktop Android. Crashes during test
+// shutdown with a Java exception in ChromeAndroidTaskTrackerImpl.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_IncognitoTabs DISABLED_IncognitoTabs
+#else
+#define MAYBE_IncognitoTabs IncognitoTabs
+#endif
+IN_PROC_BROWSER_TEST_P(IncognitoExtensionApiTabTest, MAYBE_IncognitoTabs) {
+  bool is_incognito_enabled = GetParam();
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowserWindow();
+  TabListInterface* incognito_tab_list =
+      TabListInterface::From(incognito_browser);
+  // Some platforms do not open a tab by default. Ensure one exists.
+  if (incognito_tab_list->GetTabCount() == 0) {
+    incognito_tab_list->OpenTab(GURL("about:blank"), /*index=*/-1);
+  }
   std::string args = base::StringPrintf(
       R"({"isIncognito": %s, "windowId": %d})",
       base::ToString(is_incognito_enabled),
@@ -591,24 +644,7 @@ IN_PROC_BROWSER_TEST_P(IncognitoExtensionApiTabTest, Tabs) {
       << message_;
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    PB_IncognitoEnabled,
-    IncognitoExtensionApiTabTest,
-    testing::Values(IncognitoTestParam(true,
-                                       ContextType::kPersistentBackground)));
-INSTANTIATE_TEST_SUITE_P(
-    PB_IncognitoDisabled,
-    IncognitoExtensionApiTabTest,
-    testing::Values(IncognitoTestParam(false,
-                                       ContextType::kPersistentBackground)));
-INSTANTIATE_TEST_SUITE_P(
-    SW_IncognitoEnabled,
-    IncognitoExtensionApiTabTest,
-    testing::Values(IncognitoTestParam(true, ContextType::kServiceWorker)));
-INSTANTIATE_TEST_SUITE_P(
-    SW_IncognitoDisabled,
-    IncognitoExtensionApiTabTest,
-    testing::Values(IncognitoTestParam(false, ContextType::kServiceWorker)));
+INSTANTIATE_TEST_SUITE_P(All, IncognitoExtensionApiTabTest, testing::Bool());
 
 class ExtensionApiTabPrerenderingTest : public ExtensionApiTabTest {
  public:
@@ -619,7 +655,9 @@ class ExtensionApiTabPrerenderingTest : public ExtensionApiTabTest {
   ~ExtensionApiTabPrerenderingTest() override = default;
 
   content::WebContents* GetWebContents() {
-    return browser()->tab_strip_model()->GetWebContentsAt(0);
+    TabListInterface* tab_list = GetTabListInterface();
+    CHECK(tab_list);
+    return tab_list->GetTab(0)->GetContents();
   }
 
  private:
@@ -636,4 +674,572 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTabPrerenderingTest,
   ASSERT_TRUE(RunExtensionTest("tabs/prerendering_into_new_tab")) << message_;
 }
 
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+// Tests the tabs.onUpdated events dispatched when moving a tab group from one
+// window to another.
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabTest, MovingAGroupToANewWindow) {
+  constexpr char kManifest[] = R"({
+    "name": "Move Group Test",
+    "version": "1.0",
+    "manifest_version": 3,
+    "background": {"service_worker": "background.js"},
+    "permissions": ["tabs", "tabGroups"]
+  })";
+
+  constexpr char kBackgroundJs[] = R"(
+    chrome.test.runTests([
+      async function moveGroup() {
+        const isAndroid =
+            (await chrome.runtime.getPlatformInfo()).os === 'android';
+
+        // Create other tabs in window 1 to add to a group.
+        await chrome.tabs.create({url: 'about:blank'});
+        await chrome.tabs.create({url: 'about:blank'});
+
+        // Get the tabs in window 1. There should now be three of them.
+        const tabs = await chrome.tabs.query({currentWindow: true});
+        chrome.test.assertEq(3, tabs.length);
+
+        // Create a tab group in window 1.
+        const groupId =
+            await chrome.tabs.group({tabIds: [tabs[1].id, tabs[2].id]});
+        console.warn('Group ID: ' + groupId);
+
+        // Create a new window.
+        const window2 = await chrome.windows.create({url: 'about:blank'});
+
+        const groupIdUpdateEvents = [];
+
+        // Set up a listener to monitor tabs.onUpdated events.
+        chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+          if (changeInfo.hasOwnProperty('groupId')) {
+            console.warn(`Tab: ${tab.id}, groupId: ${tab.groupId}`);
+            groupIdUpdateEvents.push({tabId: tab.id, groupId: tab.groupId});
+          }
+        });
+
+        // Moving a tab group between windows results in a "removed" and
+        // "created" event.
+        let groupRemovedEvent =
+            chrome.test.listenOnce(chrome.tabGroups.onRemoved);
+        let groupCreatedEvent =
+            chrome.test.listenOnce(chrome.tabGroups.onCreated);
+
+        // Move the tab group to window 2 and wait for it to process.
+        await chrome.tabGroups.move(groupId, {windowId: window2.id, index: 0});
+
+        // TODO(https://crbug.com/511186385): The tabGroups.onRemoved event is
+        // not received on Android. Update this when that's fixed.
+        if (!isAndroid) {
+          await groupRemovedEvent;
+        }
+        await groupCreatedEvent;
+
+        // Wait for any pending events to come in.
+        await chrome.test.waitForRoundTrip('');
+
+        // Moving a tab group between windows is a destructive operation -- it
+        // destroys the group and then recreates it. As such, we expect four
+        // update events, two per tab: one to assign it to no group (-1) and
+        // another to reassign it to the same group ID it previously had.
+        const expectedGroupIdUpdateEvents = [
+          {tabId: tabs[1].id, groupId: -1},
+          {tabId: tabs[2].id, groupId: -1},
+          {tabId: tabs[1].id, groupId: groupId},
+          {tabId: tabs[2].id, groupId: groupId},
+        ];
+
+        // Event order might be non-deterministic, especially between the two
+        // tabs. Sort both the expected and actual array. The order here doesn't
+        // matter; it just matters that it's consistent.
+        const sortFunction = (a, b) => {
+          if (a.tabId != b.tabId) {
+            return a.tabId < b.tabId ? -1 : 1;
+          }
+          if (a.groupId != b.groupId) {
+            return a.groupId < b.groupId ? -1 : 1;
+          }
+          return 0;
+        };
+        expectedGroupIdUpdateEvents.sort(sortFunction);
+        groupIdUpdateEvents.sort(sortFunction);
+
+        chrome.test.assertEq(expectedGroupIdUpdateEvents,
+                             groupIdUpdateEvents);
+        chrome.test.succeed();
+      }
+    ]);
+  )";
+
+  extensions::TestExtensionDir test_dir;
+  test_dir.WriteManifest(kManifest);
+  test_dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackgroundJs);
+
+  extensions::ResultCatcher catcher;
+  ASSERT_TRUE(LoadExtension(test_dir.UnpackedPath()));
+  EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
+}
+
+class ExtensionApiTabDSERedirectTest : public ExtensionApiTabTest {
+ public:
+  ExtensionApiTabDSERedirectTest() = default;
+  ~ExtensionApiTabDSERedirectTest() override = default;
+
+  void SetUpOnMainThread() override {
+    ExtensionApiTabTest::SetUpOnMainThread();
+
+    GURL search_url = embedded_test_server()->GetURL("/search");
+
+    TemplateURLService* template_url_service =
+        TemplateURLServiceFactory::GetForProfile(profile());
+    TemplateURLData data;
+    data.SetShortName(u"Test");
+    data.SetKeyword(u"test");
+    data.SetURL(search_url.spec() + "?q={searchTerms}");
+    TemplateURL* template_url =
+        template_url_service->Add(std::make_unique<TemplateURL>(data));
+    template_url_service->SetUserSelectedDefaultSearchProvider(template_url);
+  }
+
+  void SetupDSEPage() {
+    content::WebContents* web_contents =
+        GetTabListInterface()->GetActiveTab()->GetContents();
+    std::ignore = content::NavigateToURL(
+        web_contents, embedded_test_server()->GetURL("/search?q=foo"));
+
+    web_contents->GetController().GetLastCommittedEntry()->SetTimestamp(
+        base::Time::Now());
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabDSERedirectTest,
+                       DSERedirectTabsUpdateAction) {
+  SetupDSEPage();
+
+  base::HistogramTester histogram_tester;
+  ukm::TestAutoSetUkmRecorder test_ukm_recorder;
+
+  static constexpr char kManifest[] =
+      R"({
+         "name": "UpdateAction Extension",
+         "version": "0.1",
+         "manifest_version": 3,
+         "permissions": ["tabs"],
+         "background": { "service_worker" : "background.js" }
+       })";
+  static constexpr char kBackground[] =
+      R"(
+        chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+          chrome.tabs.update(tabs[0].id, {url: 'http://example.com'}, () => {
+            chrome.test.succeed();
+          });
+        });
+      )";
+
+  extensions::TestExtensionDir test_dir;
+  test_dir.WriteManifest(kManifest);
+  test_dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+
+  extensions::ResultCatcher result_catcher;
+  ASSERT_TRUE(LoadExtension(test_dir.UnpackedPath()));
+  ASSERT_TRUE(result_catcher.GetNextResult());
+
+  histogram_tester.ExpectBucketCount("Extensions.Tabs.UpdateAction",
+                                     1 /* kDSERemovalsWithoutUserGesture */, 1);
+
+  auto dse_entries = test_ukm_recorder.GetEntriesByName(
+      ukm::builders::Extensions_Tabs_UpdateDSE::kEntryName);
+  EXPECT_EQ(1u, dse_entries.size());
+  test_ukm_recorder.ExpectEntryMetric(
+      dse_entries[0], ukm::builders::Extensions_Tabs_UpdateDSE::kSeenName,
+      true);
+  EXPECT_EQ(ukm::GetSourceIdType(dse_entries[0]->source_id),
+            ukm::SourceIdType::EXTENSION_ID);
+
+  auto search_redirect_entries = test_ukm_recorder.GetEntriesByName(
+      ukm::builders::Extensions_SearchRedirect::kEntryName);
+  EXPECT_EQ(1u, search_redirect_entries.size());
+  test_ukm_recorder.ExpectEntryMetric(
+      search_redirect_entries[0],
+      ukm::builders::Extensions_SearchRedirect::kApiName,
+      static_cast<int64_t>(
+          extensions::ExtensionSearchRedirectedByApi::kTabsUpdate));
+  EXPECT_EQ(ukm::GetSourceIdType(search_redirect_entries[0]->source_id),
+            ukm::SourceIdType::REDIRECT_ID);
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabDSERedirectTest,
+                       DSERedirectTabsUpdateAction_UserGesture) {
+  SetupDSEPage();
+
+  base::HistogramTester histogram_tester;
+
+  static constexpr char kManifest[] =
+      R"({
+         "name": "UpdateAction Extension",
+         "version": "0.1",
+         "manifest_version": 3,
+         "permissions": ["tabs"],
+         "background": { "service_worker" : "background.js" }
+       })";
+  static constexpr char kBackground[] =
+      R"(
+        chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+          chrome.test.runWithUserGesture(() => {
+            chrome.tabs.update(tabs[0].id, {url: 'http://example.com'}, () => {
+              chrome.test.succeed();
+            });
+          });
+        });
+      )";
+
+  extensions::TestExtensionDir test_dir;
+  test_dir.WriteManifest(kManifest);
+  test_dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+
+  extensions::ResultCatcher result_catcher;
+  ASSERT_TRUE(LoadExtension(test_dir.UnpackedPath()));
+  ASSERT_TRUE(result_catcher.GetNextResult());
+
+  histogram_tester.ExpectBucketCount("Extensions.Tabs.UpdateAction",
+                                     2 /* kDSERedirectsWithUserGesture */, 1);
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabDSERedirectTest,
+                       DSERedirectTabsUpdateAction_UserGesture_Async) {
+  SetupDSEPage();
+
+  base::HistogramTester histogram_tester;
+
+  static constexpr char kManifest[] =
+      R"({
+         "name": "UpdateAction Extension",
+         "version": "0.1",
+         "manifest_version": 3,
+         "permissions": ["tabs"],
+         "background": { "service_worker" : "background.js" }
+       })";
+  static constexpr char kBackground[] =
+      R"(
+        chrome.tabs.query({active: true, currentWindow: true}, async (tabs) => {
+          chrome.test.runWithUserGesture(() => {
+            chrome.tabs.update(tabs[0].id, {}, () => {
+              chrome.test.succeed();
+            });
+          });
+          await new Promise(resolve => setTimeout(resolve, 0));
+          chrome.tabs.update(tabs[0].id, {url: 'http://example.com'}, () => {
+            chrome.test.succeed();
+          });
+        });
+      )";
+
+  extensions::TestExtensionDir test_dir;
+  test_dir.WriteManifest(kManifest);
+  test_dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+
+  extensions::ResultCatcher result_catcher;
+  ASSERT_TRUE(LoadExtension(test_dir.UnpackedPath()));
+  ASSERT_TRUE(result_catcher.GetNextResult());
+
+  histogram_tester.ExpectBucketCount("Extensions.Tabs.UpdateAction",
+                                     2 /* kDSERedirectsWithUserGesture */, 1);
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabDSERedirectTest,
+                       DSERedirectTabsUpdateAction_UserGesture_EventRouter) {
+  SetupDSEPage();
+
+  base::HistogramTester histogram_tester;
+
+  static constexpr char kManifest[] =
+      R"({
+         "name": "UpdateAction Extension",
+         "version": "0.1",
+         "manifest_version": 3,
+         "permissions": ["tabs"],
+         "background": { "service_worker" : "background.js" }
+       })";
+  static constexpr char kBackground[] =
+      R"(
+        chrome.test.onMessage.addListener((msg) => {
+          chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+            chrome.tabs.update(tabs[0].id, {url: 'http://example.com'}, () => {
+              chrome.test.succeed();
+            });
+          });
+        });
+      )";
+
+  extensions::TestExtensionDir test_dir;
+  test_dir.WriteManifest(kManifest);
+  test_dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+
+  extensions::ResultCatcher result_catcher;
+  const extensions::Extension* extension =
+      LoadExtension(test_dir.UnpackedPath());
+  ASSERT_TRUE(extension);
+
+  auto event = std::make_unique<extensions::Event>(
+      extensions::events::FOR_TEST, "test.onMessage", base::ListValue(),
+      profile());
+  event->user_gesture = extensions::EventRouter::UserGestureState::kEnabled;
+  // Dispatch the event which will ultimately trigger RouteDispatchEvent
+  // with `params->is_user_gesture` = true.
+  extensions::EventRouter::Get(profile())->DispatchEventToExtension(
+      extension->id(), std::move(event));
+
+  ASSERT_TRUE(result_catcher.GetNextResult());
+
+  histogram_tester.ExpectBucketCount("Extensions.Tabs.UpdateAction",
+                                     2 /* kDSERedirectsWithUserGesture */, 1);
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabDSERedirectTest, DSETabsRemoveAction) {
+  tabs::TabInterface* new_tab =
+      GetTabListInterface()->OpenTab(GURL("about:blank"), -1, true);
+  content::WebContents* web_contents = new_tab->GetContents();
+  std::ignore = content::NavigateToURL(
+      web_contents, embedded_test_server()->GetURL("/search?q=foo"));
+
+  web_contents->GetController().GetLastCommittedEntry()->SetTimestamp(
+      base::Time::Now());
+
+  base::HistogramTester histogram_tester;
+
+  static constexpr char kManifest[] =
+      R"({
+         "name": "RemoveAction Extension",
+         "version": "0.1",
+         "manifest_version": 3,
+         "permissions": ["tabs"],
+         "background": { "service_worker" : "background.js" }
+       })";
+  static constexpr char kBackground[] =
+      R"(
+        chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+          chrome.tabs.remove(tabs[0].id, () => {
+            chrome.test.succeed();
+          });
+        });
+      )";
+
+  extensions::TestExtensionDir test_dir;
+  test_dir.WriteManifest(kManifest);
+  test_dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+
+  extensions::ResultCatcher result_catcher;
+  ASSERT_TRUE(LoadExtension(test_dir.UnpackedPath()));
+  ASSERT_TRUE(result_catcher.GetNextResult());
+
+  histogram_tester.ExpectBucketCount("Extensions.Tabs.RemoveAction",
+                                     1 /* kDSERemovalsWithoutUserGesture */, 1);
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabDSERedirectTest, NonDSETabsRemoveAction) {
+  std::ignore = GetTabListInterface()->OpenTab(GURL("about:blank"), -1, true);
+
+  base::HistogramTester histogram_tester;
+
+  static constexpr char kManifest[] =
+      R"({
+         "name": "RemoveAction Extension",
+         "version": "0.1",
+         "manifest_version": 3,
+         "permissions": ["tabs"],
+         "background": { "service_worker" : "background.js" }
+       })";
+  static constexpr char kBackground[] =
+      R"(
+        chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+          chrome.tabs.remove(tabs[0].id, () => {
+            chrome.test.succeed();
+          });
+        });
+      )";
+
+  extensions::TestExtensionDir test_dir;
+  test_dir.WriteManifest(kManifest);
+  test_dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+
+  extensions::ResultCatcher result_catcher;
+  ASSERT_TRUE(LoadExtension(test_dir.UnpackedPath()));
+  ASSERT_TRUE(result_catcher.GetNextResult());
+
+  histogram_tester.ExpectBucketCount("Extensions.Tabs.RemoveAction",
+                                     0 /* kOtherRemovals */, 1);
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabDSERedirectTest,
+                       DSETabsRemoveActionAfterLandingOnSERP) {
+  tabs::TabInterface* new_tab =
+      GetTabListInterface()->OpenTab(GURL("about:blank"), -1, true);
+  content::WebContents* web_contents = new_tab->GetContents();
+  std::ignore = content::NavigateToURL(
+      web_contents, embedded_test_server()->GetURL("/search?q=foo"));
+
+  web_contents->GetController().GetLastCommittedEntry()->SetTimestamp(
+      base::Time::Now() - base::Seconds(6));
+
+  base::HistogramTester histogram_tester;
+
+  static constexpr char kManifest[] =
+      R"({
+         "name": "RemoveAction Extension",
+         "version": "0.1",
+         "manifest_version": 3,
+         "permissions": ["tabs"],
+         "background": { "service_worker" : "background.js" }
+       })";
+  static constexpr char kBackground[] =
+      R"(
+        chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+          chrome.tabs.remove(tabs[0].id, () => {
+            chrome.test.succeed();
+          });
+        });
+      )";
+
+  extensions::TestExtensionDir test_dir;
+  test_dir.WriteManifest(kManifest);
+  test_dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+
+  extensions::ResultCatcher result_catcher;
+  ASSERT_TRUE(LoadExtension(test_dir.UnpackedPath()));
+  ASSERT_TRUE(result_catcher.GetNextResult());
+
+  histogram_tester.ExpectBucketCount("Extensions.Tabs.RemoveAction",
+                                     3 /* kDSERemovalsAfterLandingOnSERP */, 1);
+}
+
+class ExtensionApiTabSplitViewTest : public ExtensionApiTabTest {
+ public:
+  ExtensionApiTabSplitViewTest() = default;
+  ~ExtensionApiTabSplitViewTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList feature_list_{
+      extensions_features::kApiTabsSplitView};
+};
+
+IN_PROC_BROWSER_TEST_F(ExtensionApiTabSplitViewTest,
+                       CreateSplitWithTabIdValidation) {
+  constexpr char kManifest[] = R"({
+    "name": "Create Split With Tab Id Test",
+    "version": "1.0",
+    "manifest_version": 3,
+    "permissions": ["tabs"],
+    "background": {"service_worker": "background.js"}
+  })";
+
+  constexpr char kBackgroundJs[] = R"(
+    async function createFreshTab() {
+      return await chrome.tabs.create({url: 'about:blank'});
+    }
+
+    chrome.test.runTests([
+      async function validUnspecifiedIndex() {
+        const tab = await createFreshTab();
+        const newTab = await chrome.tabs.create({
+          splitWithTabId: tab.id
+        });
+        chrome.test.assertTrue(!!newTab);
+        chrome.test.succeed();
+      },
+
+      async function validAdjacentIndexRight() {
+        const tab = await createFreshTab();
+        const newTab = await chrome.tabs.create({
+          splitWithTabId: tab.id,
+          index: tab.index + 1
+        });
+        chrome.test.assertTrue(!!newTab);
+        await chrome.tabs.remove([tab.id, newTab.id]);
+        chrome.test.succeed();
+      },
+
+      async function validAdjacentIndexLeft() {
+        const tab = await createFreshTab();
+        const newTab = await chrome.tabs.create({
+          splitWithTabId: tab.id,
+          index: tab.index
+        });
+        chrome.test.assertTrue(!!newTab);
+        await chrome.tabs.remove([tab.id, newTab.id]);
+        chrome.test.succeed();
+      },
+
+      async function errorTabNotFound() {
+        await chrome.test.assertPromiseRejects(
+          chrome.tabs.create({
+            splitWithTabId: 999999
+          }),
+          'Error: No tab with id: 999999.'
+        );
+        chrome.test.succeed();
+      },
+
+      // TODO(crbug.com/456257896): Add a test for
+      // kSplitWithTabAlreadyInSplitViewError once there is an API to put a tab
+      // into a split view.
+
+      async function errorNotInSameWindow() {
+        const primaryWin = (await chrome.windows.getAll())[0];
+        const tab = await chrome.tabs.create({
+          windowId: primaryWin.id, url: 'about:blank'
+        });
+        const otherWin = await chrome.windows.create({url: ['about:blank']});
+        await chrome.test.assertPromiseRejects(
+          chrome.tabs.create({
+            windowId: otherWin.id,
+            splitWithTabId: tab.id,
+          }),
+          `Error: Cannot create split view with 'splitWithTabId': ${tab.id}. ` +
+              `Tab is not in the same window as the target window.`
+        );
+        await chrome.tabs.remove(tab.id);
+        await chrome.windows.remove(otherWin.id);
+        await chrome.windows.update(primaryWin.id, {focused: true});
+        chrome.test.succeed();
+      },
+
+      async function errorIndexTooSmall() {
+        const tab1 = await createFreshTab();
+        const tab2 = await createFreshTab();
+        await chrome.test.assertPromiseRejects(
+          chrome.tabs.create({
+            splitWithTabId: tab2.id,
+            index: 0
+          }),
+          `Error: Cannot create split view with 'splitWithTabId': Tab ID ` +
+              `${tab2.id} is at index ${tab2.index}, which is not adjacent ` +
+              `to 'index' 0.`
+        );
+        await chrome.tabs.remove([tab1.id, tab2.id]);
+        chrome.test.succeed();
+      },
+
+      async function errorIndexTooLarge() {
+        const tab = await createFreshTab();
+        await chrome.test.assertPromiseRejects(
+          chrome.tabs.create({
+            splitWithTabId: tab.id,
+            index: 100
+          }),
+          `Error: Cannot create split view with 'splitWithTabId': Tab ID ` +
+              `${tab.id} is at index ${tab.index}, which is not adjacent ` +
+              `to 'index' 100.`
+        );
+        await chrome.tabs.remove(tab.id);
+        chrome.test.succeed();
+      }
+    ]);
+  )";
+
+  extensions::TestExtensionDir test_dir;
+  test_dir.WriteManifest(kManifest);
+  test_dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackgroundJs);
+
+  extensions::ResultCatcher result_catcher;
+  ASSERT_TRUE(LoadExtension(test_dir.UnpackedPath()));
+  EXPECT_TRUE(result_catcher.GetNextResult());
+}

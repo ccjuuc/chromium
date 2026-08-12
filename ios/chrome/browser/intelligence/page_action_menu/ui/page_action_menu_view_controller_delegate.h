@@ -10,13 +10,17 @@
 // Delegate for PageActionMenuViewController.
 @protocol PageActionMenuViewControllerDelegate
 
-// Called when the button to open Reader mode options was tapped.
-- (void)viewControllerDidTapReaderModeOptionsButton:
-    (PageActionMenuViewController*)viewController;
-
 // Called when the user taps the translate options button.
 - (void)viewControllerDidTapTranslateOptionsButton:
     (PageActionMenuViewController*)viewController;
+
+// Called when the user taps the Ask Gemini button.
+- (void)viewControllerDidTapGemini:
+    (PageActionMenuViewController*)viewController;
+
+// Called when the user taps a link in the footer.
+- (void)viewController:(PageActionMenuViewController*)viewController
+    didTapFooterItemLink:(NSString*)actionIdentifier;
 
 @end
 

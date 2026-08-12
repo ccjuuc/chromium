@@ -8,6 +8,8 @@
 #include <utility>
 
 #include "base/files/file_path.h"
+#include "base/i18n/language_tag.h"
+#include "base/i18n/language_tag_value_converters.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
@@ -47,13 +49,21 @@ void PrefRegistrySimple::RegisterFilePathPref(
   RegisterPreference(path, base::Value(default_value.AsUTF8Unsafe()), flags);
 }
 
+void PrefRegistrySimple::RegisterLanguageTagPref(
+    std::string_view path,
+    const base::i18n::LanguageTag& default_value,
+    uint32_t flags) {
+  RegisterPreference(path, base::i18n::LanguageTagToValue(default_value),
+                     flags);
+}
+
 void PrefRegistrySimple::RegisterListPref(std::string_view path,
                                           uint32_t flags) {
   RegisterPreference(path, base::Value(base::Value::Type::LIST), flags);
 }
 
 void PrefRegistrySimple::RegisterListPref(std::string_view path,
-                                          base::Value::List default_value,
+                                          base::ListValue default_value,
                                           uint32_t flags) {
   RegisterPreference(path, base::Value(std::move(default_value)), flags);
 }
@@ -64,7 +74,7 @@ void PrefRegistrySimple::RegisterDictionaryPref(std::string_view path,
 }
 
 void PrefRegistrySimple::RegisterDictionaryPref(std::string_view path,
-                                                base::Value::Dict default_value,
+                                                base::DictValue default_value,
                                                 uint32_t flags) {
   RegisterPreference(path, base::Value(std::move(default_value)), flags);
 }

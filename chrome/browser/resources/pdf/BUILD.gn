@@ -31,6 +31,7 @@ build_webui("build") {
     "browser_api.ts",
     "constants.ts",
     "controller.ts",
+    "elements/icons.html.ts",
     "elements/viewer_attachment.html.ts",
     "elements/viewer_attachment.ts",
     "elements/viewer_attachment_bar.html.ts",
@@ -98,6 +99,8 @@ build_webui("build") {
       "elements/ink_color_selector.ts",
       "elements/ink_size_selector.html.ts",
       "elements/ink_size_selector.ts",
+      "elements/ink_text_annotations.html.ts",
+      "elements/ink_text_annotations.ts",
       "elements/ink_text_box.html.ts",
       "elements/ink_text_box.ts",
       "elements/ink_text_observer_mixin.ts",
@@ -118,18 +121,20 @@ build_webui("build") {
       "elements/viewer_text_side_panel.html.ts",
       "elements/viewer_text_side_panel.ts",
       "ink2_manager.ts",
+      "ink_text_annotation_utils.ts",
+      "undo_redo_stack.ts",
     ]
   }
 
   if (enable_pdf_save_to_drive) {
     ts_files += [
-      "save_to_drive_metrics.ts",
       "elements/circular_progress_ring.html.ts",
       "elements/circular_progress_ring.ts",
       "elements/viewer_save_to_drive_bubble.html.ts",
       "elements/viewer_save_to_drive_bubble.ts",
       "elements/viewer_save_to_drive_controls.html.ts",
       "elements/viewer_save_to_drive_controls.ts",
+      "save_to_drive_metrics.ts",
     ]
   }
 
@@ -164,6 +169,7 @@ build_webui("build") {
       "elements/ink_brush_selector.css",
       "elements/ink_color_selector.css",
       "elements/ink_size_selector.css",
+      "elements/ink_text_annotations.css",
       "elements/ink_text_box.css",
       "elements/selectable_icon_button.css",
       "elements/side_panel_shared.css",
@@ -184,8 +190,6 @@ build_webui("build") {
       "elements/viewer_save_to_drive_controls.css",
     ]
   }
-
-  icons_html_files = [ "elements/icons.html" ]
 
   html_to_wrapper_scheme = "chrome"
 

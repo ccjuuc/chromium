@@ -27,7 +27,6 @@ ScopedModelBrokerFeatureList::ScopedModelBrokerFeatureList() {
        {features::kOnDeviceModelPerformanceParams,
         {{"compatible_on_device_performance_classes", "3,4,5,6"},
          {"compatible_low_tier_on_device_performance_classes", "3"}}},
-       {features::kTextSafetyClassifier, {}},
        {features::kOnDeviceModelValidation,
         {{"on_device_model_validation_delay", "0"}}}},
       {});
@@ -39,10 +38,11 @@ ModelBrokerPrefService::ModelBrokerPrefService() {
 }
 ModelBrokerPrefService::~ModelBrokerPrefService() = default;
 
-FakeModelBroker::FakeModelBroker(const Options& options) {
+FakeModelBroker::FakeModelBroker(const Options& options) : options_(options) {
   if (options.performance_class != OnDeviceModelPerformanceClass::kUnknown) {
     UpdatePerformanceClassPref(&local_state_.local_state(),
                                options.performance_class);
+    UpdateVramPref(&local_state_.local_state(), options.vram_mb);
   }
   if (options.preinstall_base_model) {
     InstallBaseModel(std::make_unique<FakeBaseModelAsset>());
@@ -52,7 +52,7 @@ FakeModelBroker::~FakeModelBroker() = default;
 
 mojo::PendingRemote<mojom::ModelBroker> FakeModelBroker::BindAndPassRemote() {
   mojo::PendingRemote<mojom::ModelBroker> remote;
-  GetOrCreateBrokerState().service_controller().BindBroker(
+  GetOrCreateBrokerState().BindModelBroker(
       remote.InitWithNewPipeAndPassReceiver());
   return remote;
 }
@@ -66,10 +66,10 @@ void FakeModelBroker::InstallBaseModel(
   component_state_.Install(std::move(asset));
 }
 
+
 void FakeModelBroker::UpdateTarget(proto::OptimizationTarget target,
                                    const ModelInfo& model_info) {
-  model_provider_.UpdateModelImmediatelyForTesting(
-      target, std::make_unique<ModelInfo>(model_info));
+  model_provider_.UpdateModelImmediatelyForTesting(target, model_info);
 }
 
 void FakeModelBroker::UpdateModelAdaptation(const FakeAdaptationAsset& asset) {
@@ -78,7 +78,8 @@ void FakeModelBroker::UpdateModelAdaptation(const FakeAdaptationAsset& asset) {
 }
 
 void FakeModelBroker::UpdateSafetyModel(const FakeSafetyModelAsset& asset) {
-  UpdateTarget(proto::OPTIMIZATION_TARGET_TEXT_SAFETY, asset.model_info());
+  UpdateTarget(proto::OPTIMIZATION_TARGET_GENERALIZED_SAFETY,
+               asset.model_info());
 }
 
 void FakeModelBroker::UpdateLanguageDetectionModel(
@@ -89,9 +90,11 @@ void FakeModelBroker::UpdateLanguageDetectionModel(
 
 ModelBrokerState& FakeModelBroker::GetOrCreateBrokerState() {
   if (!model_broker_state_) {
-    model_broker_state_.emplace(local_state_.local_state(), model_provider_,
-                                component_state_.CreateDelegate(),
-                                fake_launcher_.LaunchFn());
+    model_broker_state_.emplace(
+        local_state_.local_state(), model_provider_,
+        component_state_.CreateDelegate(),
+        fake_launcher_.LaunchFn(),
+        &component_state_.component_update_service());
   }
   return *model_broker_state_;
 }

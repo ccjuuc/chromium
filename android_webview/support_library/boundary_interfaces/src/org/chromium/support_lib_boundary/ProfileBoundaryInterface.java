@@ -50,6 +50,33 @@ public interface ProfileBoundaryInterface {
             Executor callbackExecutor,
             /* PrefetchOperationCallback */ InvocationHandler callback);
 
+    void setMaxPrerenders(int maxPrerenders);
+
+    // Kept for compatibility. `int` version is going to be used moving forward.
+    void setMaxPrerenders(@Nullable Integer maxPrerenders);
+
+    void clearMaxPrerenders();
+
+    // Kept for compatibility. `int` version is going to be used moving forward.
+    void setMaxPrefetches(@Nullable Integer maxPrefetches);
+
+    // Kept for compatibility. `int` version is going to be used moving forward.
+    void setPrefetchTtlSeconds(@Nullable Integer prefetchTtlSeconds);
+
+    void setMaxPrefetches(int maxPrefetches);
+
+    void setPrefetchTtlSeconds(int prefetchTtlSeconds);
+
+    void clearMaxPrefetches();
+
+    void clearPrefetchTtl();
+
+    int getMaxPrerenders();
+
+    int getMaxPrefetches();
+
+    int getPrefetchTtlSeconds();
+
     void setSpeculativeLoadingConfig(/* SpeculativeLoadingConfig */ InvocationHandler config);
 
     void warmUpRendererProcess();
@@ -83,5 +110,19 @@ public interface ProfileBoundaryInterface {
 
     void preconnect(String url);
 
+    /**
+     * Asynchronously enqueues a preconnect request for the given URL.
+     *
+     * <p>This method is non-blocking and does not force native Chromium startup. The request is
+     * queued and executed once native initialization completes.
+     */
+    void enqueuePreconnect(@NonNull String url);
+
     void addQuicHints(Set<String> origins);
+
+    /* HttpCacheBoundaryInterface */ InvocationHandler getHttpCache();
+
+    void setCrossOriginIsolatedAllowList(@NonNull Set<String> originPatterns);
+
+    @NonNull Set<String> getCrossOriginIsolatedAllowList();
 }

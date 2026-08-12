@@ -22,6 +22,7 @@
 
 #include "third_party/blink/renderer/core/dom/events/event.h"
 
+#include "third_party/blink/renderer/core/dom/css_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/events/event_dispatcher.h"
 #include "third_party/blink/renderer/core/dom/events/event_path.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
@@ -30,9 +31,11 @@
 #include "third_party/blink/renderer/core/dom/static_node_list.h"
 #include "third_party/blink/renderer/core/event_interface_names.h"
 #include "third_party/blink/renderer/core/event_type_names.h"
+#include "third_party/blink/renderer/core/events/drag_event.h"
 #include "third_party/blink/renderer/core/events/focus_event.h"
 #include "third_party/blink/renderer/core/events/mouse_event.h"
 #include "third_party/blink/renderer/core/events/pointer_event.h"
+#include "third_party/blink/renderer/core/events/wheel_event.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/deprecation/deprecation.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -200,10 +203,6 @@ bool Event::IsPointerEvent() const {
   return false;
 }
 
-bool Event::IsHighlightPointerEvent() const {
-  return false;
-}
-
 bool Event::IsInputEvent() const {
   return false;
 }
@@ -237,10 +236,6 @@ bool Event::IsErrorEvent() const {
 }
 
 bool Event::IsPatchEvent() const {
-  return false;
-}
-
-bool Event::IsRouteEvent() const {
   return false;
 }
 
@@ -280,20 +275,9 @@ void Event::SetTarget(EventTarget* target) {
     ReceivedTarget();
 }
 
-void Event::SetRelatedTargetIfExists(EventTarget* related_target) {
-  if (auto* mouse_event = DynamicTo<MouseEvent>(this)) {
-    mouse_event->SetRelatedTarget(related_target);
-  } else if (auto* pointer_event = DynamicTo<PointerEvent>(this)) {
-    pointer_event->SetRelatedTarget(related_target);
-  } else if (auto* focus_event = DynamicTo<FocusEvent>(this)) {
-    focus_event->SetRelatedTarget(related_target);
-  }
-}
-
 void Event::ReceivedTarget() {}
 
 Element* Event::Retarget(Element* element) const {
-  CHECK(RuntimeEnabledFeatures::ImprovedSourceRetargetingEnabled());
   if (!element) {
     return nullptr;
   }
@@ -418,6 +402,13 @@ DispatchEventResult Event::DispatchEvent(EventDispatcher& dispatcher) {
   return dispatcher.Dispatch();
 }
 
+void Event::SetPseudoElementTarget(PseudoElement* pseudo_element_target) {
+  if (!RuntimeEnabledFeatures::CSSPseudoElementInterfaceEnabled()) {
+    return;
+  }
+  pseudo_element_target_ = CSSPseudoElement::From(pseudo_element_target);
+}
+
 void Event::Trace(Visitor* visitor) const {
   visitor->Trace(current_target_);
   visitor->Trace(target_);
@@ -431,8 +422,7 @@ CSSPseudoElement* Event::pseudoTarget() const {
   if (!RuntimeEnabledFeatures::CSSPseudoElementInterfaceEnabled()) {
     return nullptr;
   }
-  PseudoElement* pseudo_element_target = PseudoElementTarget();
-  if (!pseudo_element_target) {
+  if (!pseudo_element_target_ || !current_target_) {
     return nullptr;
   }
 
@@ -452,9 +442,11 @@ CSSPseudoElement* Event::pseudoTarget() const {
     }
   }
 
-  Element& target_element = *To<Element>(target()->ToNode());
-  return target_element.EnsureCSSPseudoElement(
-      pseudo_element_target->GetPseudoId());
+  Element* originating_element = pseudo_element_target_->element();
+  if (Retarget(originating_element) == originating_element) {
+    return pseudo_element_target_.Get();
+  }
+  return nullptr;
 }
 
 }  // namespace blink

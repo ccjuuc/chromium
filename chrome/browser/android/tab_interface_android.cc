@@ -9,9 +9,17 @@
 #include "components/tabs/public/tab_interface.h"
 
 TabInterfaceAndroid::TabInterfaceAndroid(TabAndroid* tab_android)
-    : weak_tab_android_(tab_android->GetTabAndroidWeakPtr()) {}
+    : weak_tab_android_(tab_android->GetTabAndroidWeakPtr()) {
+  tab_android->SetTabInterfaceAndroid(this,
+                                      base::PassKey<TabInterfaceAndroid>());
+}
 
-TabInterfaceAndroid::~TabInterfaceAndroid() = default;
+TabInterfaceAndroid::~TabInterfaceAndroid() {
+  if (weak_tab_android_) {
+    weak_tab_android_->ResetTabInterfaceAndroid(
+        this, base::PassKey<TabInterfaceAndroid>());
+  }
+}
 
 base::WeakPtr<tabs::TabInterface> TabInterfaceAndroid::GetWeakPtr() {
   if (!weak_tab_android_) {
@@ -25,6 +33,41 @@ content::WebContents* TabInterfaceAndroid::GetContents() const {
     return nullptr;
   }
   return weak_tab_android_->GetContents();
+}
+
+void TabInterfaceAndroid::LoadIfNeeded() {
+  if (!weak_tab_android_) {
+    return;
+  }
+  weak_tab_android_->LoadIfNeeded();
+}
+
+std::u16string TabInterfaceAndroid::GetTitle() const {
+  if (!weak_tab_android_) {
+    return std::u16string();
+  }
+  return weak_tab_android_->GetTitle();
+}
+
+GURL TabInterfaceAndroid::GetURL() const {
+  if (!weak_tab_android_) {
+    return GURL();
+  }
+  return weak_tab_android_->GetURL();
+}
+
+base::Time TabInterfaceAndroid::GetLastActiveTime() const {
+  if (!weak_tab_android_) {
+    return base::Time();
+  }
+  return weak_tab_android_->GetLastActiveTime();
+}
+
+Profile* TabInterfaceAndroid::GetProfile() const {
+  if (!weak_tab_android_) {
+    return nullptr;
+  }
+  return weak_tab_android_->GetProfile();
 }
 
 void TabInterfaceAndroid::Close() {
@@ -127,6 +170,15 @@ base::CallbackListSubscription TabInterfaceAndroid::RegisterGroupChanged(
   return weak_tab_android_->RegisterGroupChanged(std::move(callback));
 }
 
+base::CallbackListSubscription TabInterfaceAndroid::RegisterBlockedStateChanged(
+    BlockedStateChangedCallback callback) {
+  if (!weak_tab_android_) {
+    return base::CallbackListSubscription();
+  }
+
+  return weak_tab_android_->RegisterBlockedStateChanged(std::move(callback));
+}
+
 bool TabInterfaceAndroid::CanShowModalUI() const {
   if (!weak_tab_android_) {
     return false;
@@ -154,6 +206,21 @@ bool TabInterfaceAndroid::IsInNormalWindow() const {
     return false;
   }
   return weak_tab_android_->IsInNormalWindow();
+}
+
+BrowserWindowInterface* TabInterfaceAndroid::GetBrowserWindowInterface() {
+  if (!weak_tab_android_) {
+    return nullptr;
+  }
+  return weak_tab_android_->GetBrowserWindowInterface();
+}
+
+const BrowserWindowInterface* TabInterfaceAndroid::GetBrowserWindowInterface()
+    const {
+  if (!weak_tab_android_) {
+    return nullptr;
+  }
+  return weak_tab_android_->GetBrowserWindowInterface();
 }
 
 tabs::TabFeatures* TabInterfaceAndroid::GetTabFeatures() {

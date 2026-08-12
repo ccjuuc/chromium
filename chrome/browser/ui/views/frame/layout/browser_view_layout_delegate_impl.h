@@ -8,8 +8,10 @@
 #include "base/auto_reset.h"
 #include "base/memory/raw_ref.h"
 #include "chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h"
+#include "components/prefs/pref_change_registrar.h"
 
 class BrowserFrameView;
+class BrowserView;
 
 // Base class for concrete implementations of layout delegate used in live
 // browsers. Use `CreateDelegate()` to generate an appropriate delegate.
@@ -21,29 +23,24 @@ class BrowserViewLayoutDelegateImpl : public BrowserViewLayoutDelegate {
   ~BrowserViewLayoutDelegateImpl() override;
 
   bool ShouldDrawTabStrip() const override;
-  bool ShouldUseTouchableTabstrip() const override;
   bool ShouldDrawVerticalTabStrip() const override;
   bool IsVerticalTabStripCollapsed() const override;
   bool ShouldDrawWebAppFrameToolbar() const override;
-  bool GetBorderlessModeEnabled() const override;
-  gfx::Rect GetBoundsForTabStripRegionInBrowserView() const override;
-  gfx::Rect GetBoundsForToolbarInVerticalTabBrowserView() const override;
-  gfx::Rect GetBoundsForWebAppFrameToolbarInBrowserView() const override;
+  bool GetUnframedModeEnabled() const override;
   BrowserLayoutParams GetBrowserLayoutParams(
       bool use_browser_bounds) const override;
-  int GetTopInsetInBrowserView() const override;
-  void LayoutWebAppWindowTitle(const gfx::Rect& available_space,
-                               views::Label& window_title_label) const override;
+  WindowState GetBrowserWindowState() const override;
+  views::LayoutAlignment GetWindowTitleAlignment() const override;
   bool IsToolbarVisible() const override;
   bool IsBookmarkBarVisible() const override;
   bool IsInfobarVisible() const override;
   bool IsContentsSeparatorEnabled() const override;
   bool IsActiveTabSplit() const override;
+  bool IsActiveTabAtLeadingWindowEdge() const override;
   const ImmersiveModeController* GetImmersiveModeController() const override;
   ExclusiveAccessBubbleViews* GetExclusiveAccessBubble() const override;
   bool IsTopControlsSlideBehaviorEnabled() const override;
   float GetTopControlsSlideBehaviorShownRatio() const override;
-  bool SupportsWindowFeature(Browser::WindowFeature feature) const override;
   gfx::NativeView GetHostViewForAnchoring() const override;
   bool HasFindBarController() const override;
   void MoveWindowForFindBarIfNecessary() const override;
@@ -52,6 +49,7 @@ class BrowserViewLayoutDelegateImpl : public BrowserViewLayoutDelegate {
       const gfx::Rect& available_titlebar_area) override;
   bool ShouldLayoutTabStrip() const override;
   int GetExtraInfobarOffset() const override;
+  bool IsOrganizerPanelVisible() const override;
 
  protected:
   BrowserView& browser_view() { return browser_view_.get(); }
@@ -60,7 +58,11 @@ class BrowserViewLayoutDelegateImpl : public BrowserViewLayoutDelegate {
   const BrowserFrameView* GetFrameView() const;
 
  private:
+  void OnTabSearchPinnedStateChanged();
+
   const raw_ref<BrowserView> browser_view_;
+  PrefChangeRegistrar pref_registrar_;
+  bool tab_search_pinned_to_tab_strip_ = false;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_LAYOUT_BROWSER_VIEW_LAYOUT_DELEGATE_IMPL_H_

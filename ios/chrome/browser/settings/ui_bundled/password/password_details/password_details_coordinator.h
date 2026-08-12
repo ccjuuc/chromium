@@ -13,10 +13,9 @@ class AffiliatedGroup;
 struct CredentialUIEntry;
 }  // namespace password_manager
 
-@protocol ApplicationCommands;
 class Browser;
 @protocol PasswordDetailsCoordinatorDelegate;
-@protocol ReauthenticationProtocol;
+@protocol SceneCommands;
 
 // This coordinator presents a password details for the user.
 @interface PasswordDetailsCoordinator : ChromeCoordinator
@@ -28,7 +27,6 @@ class Browser;
                           credential:
                               (const password_manager::CredentialUIEntry&)
                                   credential
-                        reauthModule:(id<ReauthenticationProtocol>)reauthModule
                              context:(DetailsContext)context
     NS_DESIGNATED_INITIALIZER;
 
@@ -38,7 +36,6 @@ class Browser;
                              browser:(Browser*)browser
                      affiliatedGroup:(const password_manager::AffiliatedGroup&)
                                          affiliatedGroup
-                        reauthModule:(id<ReauthenticationProtocol>)reauthModule
                              context:(DetailsContext)context
     NS_DESIGNATED_INITIALIZER;
 

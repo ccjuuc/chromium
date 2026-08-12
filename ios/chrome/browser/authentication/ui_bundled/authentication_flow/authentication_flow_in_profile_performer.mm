@@ -41,7 +41,6 @@
 #import "ios/chrome/browser/policy/model/management_state.h"
 #import "ios/chrome/browser/policy/ui_bundled/management_util.h"
 #import "ios/chrome/browser/shared/coordinator/alert/action_sheet_coordinator.h"
-#import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider.h"
@@ -109,9 +108,7 @@
 - (void)registerUserPolicy:(ProfileIOS*)profile
                forIdentity:(id<SystemIdentity>)identity {
   std::string userEmail = base::SysNSStringToUTF8(identity.userEmail);
-  CoreAccountId accountID =
-      IdentityManagerFactory::GetForProfile(profile)->PickAccountIdForAccount(
-          identity.gaiaId, userEmail);
+  const CoreAccountId accountID = CoreAccountId::FromGaiaId(identity.gaiaId);
 
   policy::UserPolicySigninService* userPolicyService =
       policy::UserPolicySigninServiceFactory::GetForProfile(profile);
@@ -201,6 +198,7 @@
 
 - (void)didFetchAccountCapabilities {
   [_delegate didFetchAccountCapabilities];
+  _capabilitiesFetcher = nil;
 }
 
 // Starts a Watchdog Timer that ends the user policy registration on time out.

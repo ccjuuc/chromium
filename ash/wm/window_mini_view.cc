@@ -76,7 +76,7 @@ void WindowMiniViewBase::UpdateFocusState(bool focus) {
   // Notify all other subscriptions of the change.
   OnPropertyChanged(&is_focused_, views::PropertyEffects::kPaint);
 
-  views::FocusRing::Get(this)->SchedulePaint();
+  views::FocusRing::Get(this)->Refresh();
 }
 
 base::CallbackListSubscription WindowMiniViewBase::AddFocusedChangedCallback(
@@ -193,8 +193,7 @@ void WindowMiniView::SetShowPreview(bool show) {
   }
 
   if (!show) {
-    RemoveChildViewT(preview_view_.get());
-    preview_view_ = nullptr;
+    RemoveChildViewT(std::exchange(preview_view_, nullptr));
     return;
   }
 

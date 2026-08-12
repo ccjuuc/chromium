@@ -235,7 +235,7 @@ class Command():
         default='',
         choices=[
             'sign_in_pass', 'sign_up_pass', 'sign_up_fill',
-            'capture_update_pass', '*', ''
+            'capture_update_pass', '*', '', 'automated_password_change'
         ],
         help=('Only for password tests to designate the specific '
               'test scenario. Use * to indicate all password test'
@@ -550,7 +550,7 @@ class WprCommand(Command):
   def build(self, args):
     super().build(args)
     self.command_args = [
-        'third_party/catapult/telemetry/telemetry/bin/linux/x86_64/wpr',
+        sys.executable, 'third_party/webpagereplay/scripts/run_wpr.py',
         self.options.subhead, '--http_port=8080', '--https_port=8081'
     ]
 

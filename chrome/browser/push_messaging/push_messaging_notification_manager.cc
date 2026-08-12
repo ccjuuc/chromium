@@ -12,6 +12,7 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/utf_string_conversions.h"
@@ -43,19 +44,18 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/manifest_handlers/background_info.h"
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #else
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck crbug.com/40147906
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -113,11 +113,11 @@ void PushMessagingNotificationManager::EnforceUserVisibleOnlyRequirements(
     const GURL& origin,
     int64_t service_worker_registration_id,
     EnforceRequirementsCallback message_handled_callback,
-    bool requested_user_visible_only) {
+    bool user_visible_only_bypass) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   if (ShouldBypassUserVisibleOnlyRequirement(origin,
-                                             requested_user_visible_only)) {
+                                             user_visible_only_bypass)) {
     std::move(message_handled_callback)
         .Run(/* did_show_generic_notification= */ false);
     LogSilentPushEvent(SilentPushEvent::kNotificationEnforcementSkipped);
@@ -133,13 +133,14 @@ void PushMessagingNotificationManager::EnforceUserVisibleOnlyRequirements(
       base::BindOnce(
           &PushMessagingNotificationManager::DidCountVisibleNotifications,
           weak_factory_.GetWeakPtr(), origin, service_worker_registration_id,
-          std::move(message_handled_callback)));
+          std::move(message_handled_callback), user_visible_only_bypass));
 }
 
 void PushMessagingNotificationManager::DidCountVisibleNotifications(
     const GURL& origin,
     int64_t service_worker_registration_id,
     EnforceRequirementsCallback message_handled_callback,
+    bool user_visible_only_bypass,
     bool success,
     int notification_count) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
@@ -155,7 +156,7 @@ void PushMessagingNotificationManager::DidCountVisibleNotifications(
 
   // Sites with a currently visible tab don't need to show notifications.
 #if BUILDFLAG(IS_ANDROID)
-  for (const TabModel* model : TabModelList::models()) {
+  for (TabModel* model : TabModelList::models()) {
     Profile* profile = model->GetProfile();
     if (IsTabVisible(profile, model->GetActiveWebContents(), origin)) {
       notification_needed = false;
@@ -229,7 +230,7 @@ bool PushMessagingNotificationManager::IsTabVisible(
   // and thus should be considered when checking the visible URL. However, the
   // prefix has to be removed before the origins can be compared.
   if (visible_url.SchemeIs(content::kViewSourceScheme))
-    visible_url = GURL(visible_url.GetContent());
+    visible_url = GURL(visible_url.GetContentPiece());
 
   return visible_url.DeprecatedGetOriginAsURL() == origin;
 }
@@ -284,13 +285,13 @@ void PushMessagingNotificationManager::DidWriteNotificationData(
 
 bool PushMessagingNotificationManager::ShouldBypassUserVisibleOnlyRequirement(
     const GURL& origin,
-    bool requested_user_visible_only) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+    bool user_visible_only_bypass) {
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   if (origin.SchemeIs(extensions::kExtensionScheme)) {
     return ShouldExtensionsBypassUserVisibleOnlyRequirement(
-        origin, requested_user_visible_only);
+        origin, user_visible_only_bypass);
   }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
   // Returning true is an exception, so default to deny for anything we don't
   // explicitly identify.
@@ -302,14 +303,14 @@ void PushMessagingNotificationManager::LogSilentPushEvent(
   UMA_HISTOGRAM_ENUMERATION("PushMessaging.SilentNotification", event);
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 bool PushMessagingNotificationManager::
     ShouldExtensionsBypassUserVisibleOnlyRequirement(
         const GURL& origin,
-        bool requested_user_visible_only) {
+        bool user_visible_only_bypass) {
   // Worker based extensions are exempt from the user visible requirement only
   // if they request it.
-  if (!requested_user_visible_only) {
+  if (!user_visible_only_bypass) {
     return false;
   }
   const extensions::ExtensionSet& extensions =
@@ -321,4 +322,4 @@ bool PushMessagingNotificationManager::
   }
   return extensions::BackgroundInfo::IsServiceWorkerBased(extension);
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)

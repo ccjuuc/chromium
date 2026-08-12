@@ -5,11 +5,11 @@
 // History api test for Chrome.
 // browser_tests.exe --gtest_filter=HistoryApiTest.DeleteProhibited
 
-var PROHIBITED_ERR = "Browsing history is not allowed to be deleted.";
+const PROHIBITED_ERR = 'Browsing history is not allowed to be deleted.';
 
 function deleteProhibitedTestVerification() {
   removeItemRemovedListener();
-  chrome.test.fail("Delete was prohibited, but succeeded anyway.");
+  chrome.test.fail('Delete was prohibited, but succeeded anyway.');
 }
 
 // Orders history results by ID for reliable array comparison.
@@ -19,13 +19,14 @@ function sortResults(a, b) {
 
 // Returns true if both expected URLs are in the result list.
 function verifyHistory(resultList) {
-  var hasGoogle = false;
-  var hasPicasa = false;
-  for (var i = 0; i < resultList.length; i++) {
-    if (resultList[i].url == GOOGLE_URL)
+  let hasGoogle = false;
+  let hasPicasa = false;
+  for (let i = 0; i < resultList.length; i++) {
+    if (resultList[i].url === GOOGLE_URL) {
       hasGoogle = true;
-    else if (resultList[i].url == PICASA_URL)
+    } else if (resultList[i].url === PICASA_URL) {
       hasPicasa = true;
+    }
   }
   return (hasGoogle && hasPicasa);
 }
@@ -39,48 +40,55 @@ function verifyNoDeletion(testFunction) {
   // Add two URLs, wait if necessary to make sure they both show up in the
   // history results, then run the provided test function. Re-query the history
   // to make sure the test function had no effect.
-  var query = { 'text': '' };
-  chrome.history.addUrl({ url: GOOGLE_URL }, pass(function() {
-    chrome.history.addUrl({ url: PICASA_URL }, pass(function() {
-      chrome.history.search(query, pass(function lambda(resultsBefore) {
-        if (verifyHistory(resultsBefore)) {
-          // Success: proceed with the test.
-          testFunction(fail(PROHIBITED_ERR, function() {
-            chrome.history.search(query, pass(function(resultsAfter) {
-              assertEq(resultsBefore.sort(sortResults),
-                      resultsAfter.sort(sortResults));
-              removeItemRemovedListener();
+  const query = {text: ''};
+  chrome.history.addUrl(
+      {url: GOOGLE_URL}, pass(function() {
+        chrome.history.addUrl(
+            {url: PICASA_URL}, pass(function() {
+              chrome.history.search(
+                  query, pass(function lambda(resultsBefore) {
+                    if (verifyHistory(resultsBefore)) {
+                      // Success: proceed with the test.
+                      testFunction(fail(PROHIBITED_ERR, function() {
+                        chrome.history.search(
+                            query, pass(function(resultsAfter) {
+                              assertEq(
+                                  resultsBefore.sort(sortResults),
+                                  resultsAfter.sort(sortResults));
+                              removeItemRemovedListener();
+                            }));
+                      }));
+                    } else {
+                      chrome.test.fail(
+                          'Added URLs never showed up in the history. ' +
+                          'See http://crbug.com/40302275.');
+                    }
+                  }));
             }));
-          }));
-        } else {
-          chrome.test.fail("Added URLs never showed up in the history. " +
-                           "See http://crbug.com/176828.");
-        }
       }));
-    }));
-  }));
 }
 
-const scriptUrl = '_test_resources/api_test/history/regular/common.js';
-let loadScript = chrome.test.loadScript(scriptUrl);
+const SCRIPT_URL = '_test_resources/api_test/history/regular/common.js';
+const loadScript = chrome.test.loadScript(SCRIPT_URL);
 
 loadScript.then(async function() {
-chrome.test.runTests([
-  function deleteUrl() {
-    verifyNoDeletion(function(callback) {
-      chrome.history.deleteUrl({ 'url': GOOGLE_URL }, callback);
-    });
-  },
+  chrome.test.runTests([
+    function deleteUrl() {
+      verifyNoDeletion(function(callback) {
+        chrome.history.deleteUrl({url: GOOGLE_URL}, callback);
+      });
+    },
 
-  function deleteRange() {
-    var now = new Date();
-    verifyNoDeletion(function(callback) {
-      chrome.history.deleteRange(
-          { 'startTime': 0, 'endTime': now.getTime() + 1000.0 }, callback);
-    });
-  },
+    function deleteRange() {
+      const now = new Date();
+      verifyNoDeletion(function(callback) {
+        chrome.history.deleteRange(
+            {startTime: 0, endTime: now.getTime() + 1000.0}, callback);
+      });
+    },
 
-  function deleteAll() {
-    verifyNoDeletion(chrome.history.deleteAll);
-  }
-])});
+    function deleteAll() {
+      verifyNoDeletion(chrome.history.deleteAll);
+    },
+  ]);
+});

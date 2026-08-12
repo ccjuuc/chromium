@@ -4,10 +4,10 @@
 #ifndef CHROMEOS_ASH_EXPERIENCES_GUEST_OS_BOREALIS_MOTD_BOREALIS_MOTD_DIALOG_H_
 #define CHROMEOS_ASH_EXPERIENCES_GUEST_OS_BOREALIS_MOTD_BOREALIS_MOTD_DIALOG_H_
 
-#include "ash/constants/url_constants.h"
-#include "content/public/browser/web_ui_controller.h"
-#include "content/public/browser/webui_config.h"
-#include "content/public/common/url_constants.h"
+#include <string>
+
+#include "base/functional/callback.h"
+#include "chromeos/ash/experiences/guest_os/borealis/motd/borealis_motd_util.h"
 #include "ui/web_dialogs/web_dialog_delegate.h"
 
 namespace content {
@@ -16,45 +16,32 @@ class BrowserContext;
 
 namespace borealis {
 
-// Show Borealis MOTD dialog if features::kBorealis is enabled before the
-// Borealis splash screen.
-void MaybeShowBorealisMOTDDialog(base::OnceCallback<void()> cb,
-                                 content::BrowserContext* context);
-
-// Forward declaration so that config definition can come before controller.
-class BorealisMOTDUI;
-
-class BorealisMOTDUIConfig
-    : public content::DefaultWebUIConfig<BorealisMOTDUI> {
- public:
-  BorealisMOTDUIConfig()
-      : DefaultWebUIConfig(content::kChromeUIScheme,
-                           chrome::kChromeUIBorealisMOTDHost) {}
-};
-
-// The WebUI for chrome://borealis-motd
-class BorealisMOTDUI : public content::WebUIController {
- public:
-  explicit BorealisMOTDUI(content::WebUI* web_ui);
-  ~BorealisMOTDUI() override;
-};
-
 class BorealisMOTDDialog : public ui::WebDialogDelegate {
  public:
-  static void Show(base::OnceCallback<void()> cb,
-                   content::BrowserContext* context);
+  // The closed callback used by the Page Handler.
+  // Receives the action the user performed when closing the dialog (dismiss,
+  // uninstall) as an UserMotdAction.
+  using OnMotdClosedCallback = base::OnceCallback<void(UserMotdAction)>;
+
+  static void Show(content::BrowserContext* context,
+                   OnMotdClosedCallback callback);
+
+  // Shows Borealis MOTD dialog if features::kBorealis is enabled. In common
+  // cases, this is used before the Borealis splash screen.
+  static void MaybeShow(content::BrowserContext* context,
+                        OnMotdClosedCallback callback);
+
   BorealisMOTDDialog(const BorealisMOTDDialog&) = delete;
   BorealisMOTDDialog& operator=(const BorealisMOTDDialog&) = delete;
   ~BorealisMOTDDialog() override;
 
  private:
-  BorealisMOTDDialog(base::OnceCallback<void()>,
-                     content::BrowserContext* context);
+  BorealisMOTDDialog(content::BrowserContext* context,
+                     OnMotdClosedCallback callback);
   // ui::WebDialogDelegate:
   void OnDialogClosed(const std::string& json_retval) override;
-  void OnLoadingStateChanged(content::WebContents* source) override;
 
-  base::OnceCallback<void()> close_callback_;
+  OnMotdClosedCallback close_callback_;
 };
 
 }  // namespace borealis

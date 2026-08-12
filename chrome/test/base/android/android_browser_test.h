@@ -11,7 +11,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/test/browser_test_base.h"
 
+class BrowserWindowInterface;
 class PrefService;
+class TabListInterface;
 
 // A base class for browser tests run on Android. It exposes very little API
 // since the majority of the Android UI is accessed through static methods,
@@ -76,9 +78,16 @@ class AndroidBrowserTest : public content::BrowserTestBase {
   // Returns the test data path used by the embedded test server.
   base::FilePath GetChromeTestDataDir() const;
 
+  // Returns the BrowserWindowInterface for the initially-created browser.
+  BrowserWindowInterface* GetBrowserWindowInterface() const;
+
   // Returns the profile. If there are multiple profiles, it's not determined
   // what profile is returned.
   Profile* GetProfile() const;
+
+  // Returns the TabListInterface for the test. On Android this will return the
+  // TabModel associated with GetProfile().
+  TabListInterface* GetTabListInterface() const;
 
  private:
   // Temporary user data directory. Used only when a user data directory is not

@@ -8,20 +8,25 @@
 
 #include "third_party/blink/renderer/core/css/css_function_rule.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
+#include "third_party/blink/renderer/core/css/css_style_declaration.h"
+#include "third_party/blink/renderer/core/css/css_style_rule.h"
 #include "third_party/blink/renderer/core/css/css_test_helpers.h"
 #include "third_party/blink/renderer/core/css/properties/css_property.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
+#include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/inspector/inspected_frames.h"
 #include "third_party/blink/renderer/core/inspector/inspector_dom_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_network_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_resource_container.h"
 #include "third_party/blink/renderer/core/inspector/inspector_resource_content_loader.h"
 #include "third_party/blink/renderer/core/inspector/inspector_style_resolver.h"
+#include "third_party/blink/renderer/core/inspector/inspector_style_sheet.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
@@ -52,7 +57,8 @@ class InspectorCSSAgentTest : public PageTestBase {
     HeapHashMap<Member<const ScopedCSSName>, Member<CSSFunctionRule>>
         function_rules;
     InspectorCSSAgent::CollectReferencedFunctionRules(
-        sheets, *resolver.MatchedRules(), function_rules);
+        InspectorCSSAgent::BuildFunctionRuleMap(sheets),
+        *resolver.MatchedRules(), function_rules);
     return function_rules;
   }
 
@@ -62,11 +68,10 @@ class InspectorCSSAgentTest : public PageTestBase {
         MakeGarbageCollected<InspectedFrames>(frame);
     InspectorCSSAgent* agent = MakeGarbageCollected<InspectorCSSAgent>(
         MakeGarbageCollected<InspectorDOMAgent>(
-            GetDocument().GetExecutionContext()->GetIsolate(), inspected_frames,
-            nullptr),
+            GetDocument().GetExecutionContext()->GetIsolate(),
+            inspected_frames),
         inspected_frames,
-        MakeGarbageCollected<InspectorNetworkAgent>(inspected_frames, nullptr,
-                                                    nullptr),
+        MakeGarbageCollected<InspectorNetworkAgent>(inspected_frames, nullptr),
         MakeGarbageCollected<InspectorResourceContentLoader>(
             GetDocument().GetFrame()),
         MakeGarbageCollected<InspectorResourceContainer>(inspected_frames));
@@ -74,10 +79,9 @@ class InspectorCSSAgentTest : public PageTestBase {
     return agent;
   }
 
-  using FontAtRules =
-      std::unique_ptr<protocol::Array<protocol::CSS::CSSAtRule>>;
-  FontAtRules CollectFontAtRules(const char* selector,
-                                 std::vector<PseudoId> pseudo_ids) {
+  using AtRules = std::unique_ptr<protocol::Array<protocol::CSS::CSSAtRule>>;
+  AtRules CollectFontAtRules(const char* selector,
+                             std::vector<PseudoId> pseudo_ids) {
     Element* e = GetDocument().querySelector(AtomicString(selector),
                                              ASSERT_NO_EXCEPTION);
     CHECK(e);
@@ -90,8 +94,54 @@ class InspectorCSSAgentTest : public PageTestBase {
     return CreateInspectorCSSAgent()->FontAtRulesForNodes(elements);
   }
 
-  FontAtRules CollectFontAtRules(const char* selector) {
+  AtRules CollectFontAtRules(const char* selector) {
     return CollectFontAtRules(selector, {});
+  }
+
+  AtRules CollectCounterAtRules(const char* selector) {
+    Element* e = GetDocument().querySelector(AtomicString(selector),
+                                             ASSERT_NO_EXCEPTION);
+    CHECK(e);
+    return CreateInspectorCSSAgent()->CounterAtRulesForElement(e);
+  }
+
+  CSSStyleRule* GetSingleNestedStyleRule(TreeScope* tree_scope) {
+    CHECK_EQ(tree_scope->StyleSheets().length(), 1);
+    StyleSheet* sheet = tree_scope->StyleSheets().item(0);
+    CHECK(sheet->IsCSSStyleSheet());
+    CSSRuleList* css_rules =
+        To<CSSStyleSheet>(*sheet).cssRules(ASSERT_NO_EXCEPTION);
+    CHECK_EQ(css_rules->length(), 1);
+    CSSRule* rule = css_rules->item(0);
+    return DynamicTo<CSSStyleRule>(rule);
+  }
+
+  CSSStyleRule* GetInnermostStyleRule(CSSStyleSheet* sheet) {
+    CSSRuleList* css_rules = sheet->cssRules(ASSERT_NO_EXCEPTION);
+    CHECK_EQ(css_rules->length(), 1u);
+    CSSRule* rule = css_rules->item(0);
+
+    while (rule->cssRules()->length() > 0) {
+      rule = rule->cssRules()->item(0);
+      CHECK_LE(css_rules->length(), 1u);
+    }
+    return DynamicTo<CSSStyleRule>(rule);
+  }
+
+  std::unique_ptr<protocol::CSS::CSSRule> BuildObjectForInnermostRule(
+      const char* selector) {
+    Element* e = GetDocument().querySelector(AtomicString(selector),
+                                             ASSERT_NO_EXCEPTION);
+    CHECK(e);
+    TreeScope* tree_scope = &(e->GetTreeScope());
+    CHECK(tree_scope);
+    CHECK_EQ(tree_scope->StyleSheets().length(), 1u);
+    StyleSheet* sheet = tree_scope->StyleSheets().item(0);
+    CHECK(sheet->IsCSSStyleSheet());
+    CSSStyleRule* rule = GetInnermostStyleRule(DynamicTo<CSSStyleSheet>(sheet));
+    CHECK(rule);
+    return CreateInspectorCSSAgent()->BuildObjectForRule(
+        rule, e, kPseudoIdNone, /*pseudo_argument=*/g_null_atom, tree_scope);
   }
 
   CSSFunctionRule* FindFunctionRule(
@@ -453,17 +503,17 @@ TEST_F(InspectorCSSAgentTest, GetFontFaceRule) {
   GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
     <style>
       @font-face {
-        font-family: Bixa;
-        src: local(Bixa);
+        font-family: ExampleFontForTest;
+        src: url(//nonexistent.ttf);
       }
       #e {
-        font-family: Bixa;
+        font-family: ExampleFontForTest;
       }
     </style>
     <div id=e></div>
   )HTML");
   UpdateAllLifecyclePhasesForTest();
-  FontAtRules rules = CollectFontAtRules("#e");
+  AtRules rules = CollectFontAtRules("#e");
   EXPECT_TRUE(rules);
   EXPECT_EQ(1u, rules->size());
   EXPECT_EQ(rules->at(0)->getType(),
@@ -474,19 +524,19 @@ TEST_F(InspectorCSSAgentTest, GetFontFaceRule) {
   EXPECT_EQ(rules->at(0)->getStyle()->getCssProperties()->at(0)->getName(),
             "font-family");
   EXPECT_EQ(rules->at(0)->getStyle()->getCssProperties()->at(0)->getValue(),
-            "Bixa");
+            "ExampleFontForTest");
   EXPECT_EQ(rules->at(0)->getStyle()->getCssProperties()->at(1)->getName(),
             "src");
   EXPECT_EQ(rules->at(0)->getStyle()->getCssProperties()->at(1)->getValue(),
-            "local(Bixa)");
+            "url(//nonexistent.ttf)");
 }
 
 TEST_F(InspectorCSSAgentTest, GetFontFaceRuleNoMatch) {
   GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
     <style>
       @font-face {
-        font-family: Bixa;
-        src: local(Bixa);
+        font-family: ExampleFontForTest;
+        src: url(//nonexistent.ttf);
       }
       #e {
         font-family: Papyrus;
@@ -495,7 +545,7 @@ TEST_F(InspectorCSSAgentTest, GetFontFaceRuleNoMatch) {
     <div id=e></div>
   )HTML");
   UpdateAllLifecyclePhasesForTest();
-  FontAtRules rules = CollectFontAtRules("#e");
+  AtRules rules = CollectFontAtRules("#e");
   EXPECT_TRUE(rules);
   EXPECT_EQ(0u, rules->size());
 }
@@ -504,25 +554,25 @@ TEST_F(InspectorCSSAgentTest, GetFontFaceRuleFromPseudoElement) {
   GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
     <style>
       @font-face {
-        font-family: Bixa;
-        src: local(Bixa);
+        font-family: ExampleFontForTest;
+        src: url(//nonexistent.ttf);
       }
       #e {
         font-family: Papyrus;
       }
       #e::before {
         content: "before";
-        font-family: Bixa;
+        font-family: ExampleFontForTest;
       }
       #e::after {
         content: "after";
-        font-family: Bixa;
+        font-family: ExampleFontForTest;
       }
     </style>
     <div id=e></div>
   )HTML");
   UpdateAllLifecyclePhasesForTest();
-  FontAtRules rules = CollectFontAtRules(
+  AtRules rules = CollectFontAtRules(
       "#e", {PseudoId::kPseudoIdBefore, PseudoId::kPseudoIdAfter});
   EXPECT_TRUE(rules);
   EXPECT_EQ(1u, rules->size());
@@ -534,11 +584,11 @@ TEST_F(InspectorCSSAgentTest, GetFontFaceRuleFromPseudoElement) {
   EXPECT_EQ(rules->at(0)->getStyle()->getCssProperties()->at(0)->getName(),
             "font-family");
   EXPECT_EQ(rules->at(0)->getStyle()->getCssProperties()->at(0)->getValue(),
-            "Bixa");
+            "ExampleFontForTest");
   EXPECT_EQ(rules->at(0)->getStyle()->getCssProperties()->at(1)->getName(),
             "src");
   EXPECT_EQ(rules->at(0)->getStyle()->getCssProperties()->at(1)->getValue(),
-            "local(Bixa)");
+            "url(//nonexistent.ttf)");
 }
 
 TEST_F(InspectorCSSAgentTest, GetFontPaletteValuesRule) {
@@ -556,7 +606,7 @@ TEST_F(InspectorCSSAgentTest, GetFontPaletteValuesRule) {
     <div id=e></div>
   )HTML");
   UpdateAllLifecyclePhasesForTest();
-  FontAtRules rules = CollectFontAtRules("#e");
+  AtRules rules = CollectFontAtRules("#e");
   EXPECT_TRUE(rules);
   EXPECT_EQ(1u, rules->size());
   EXPECT_EQ(rules->at(0)->getType(),
@@ -577,6 +627,150 @@ TEST_F(InspectorCSSAgentTest, GetFontPaletteValuesRule) {
             "0 red");
 }
 
+TEST_F(InspectorCSSAgentTest, GetCounterStyleRuleSimple) {
+  GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
+    <style>
+      @counter-style --my-style {
+        system: cyclic;
+        symbols: 'a' 'b' 'c';
+      }
+      #e {
+        display: list-item;
+        list-style-type: --my-style;
+      }
+    </style>
+    <div id=e></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+  AtRules rules = CollectCounterAtRules("#e");
+  EXPECT_TRUE(rules);
+  EXPECT_EQ(1u, rules->size());
+  EXPECT_EQ(rules->at(0)->getType(),
+            protocol::CSS::CSSAtRule::TypeEnum::CounterStyle);
+  EXPECT_TRUE(rules->at(0)->getName());
+  EXPECT_EQ(rules->at(0)->getName()->getText(), "--my-style");
+  EXPECT_GE(rules->at(0)->getStyle()->getCssProperties()->size(), 2u);
+  EXPECT_EQ(rules->at(0)->getStyle()->getCssProperties()->at(0)->getName(),
+            "system");
+  EXPECT_EQ(rules->at(0)->getStyle()->getCssProperties()->at(0)->getValue(),
+            "cyclic");
+  EXPECT_EQ(rules->at(0)->getStyle()->getCssProperties()->at(1)->getName(),
+            "symbols");
+  EXPECT_EQ(rules->at(0)->getStyle()->getCssProperties()->at(1)->getValue(),
+            "'a' 'b' 'c'");
+}
+
+TEST_F(InspectorCSSAgentTest, GetCounterStyleRuleTwoFallbacks) {
+  GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
+    <style>
+      @counter-style style-b {
+        system: cyclic;
+        symbols: 'x' 'y';
+      }
+      @counter-style style-a {
+        system: cyclic;
+        symbols: 'a' 'b';
+        fallback: style-b;
+      }
+      #e {
+        display: list-item;
+        list-style-type: style-a;
+      }
+    </style>
+    <div id=e></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+  AtRules rules = CollectCounterAtRules("#e");
+  EXPECT_TRUE(rules);
+  EXPECT_EQ(2u, rules->size());
+  EXPECT_EQ(rules->at(0)->getName()->getText(), "style-a");
+  EXPECT_EQ(rules->at(1)->getName()->getText(), "style-b");
+}
+
+TEST_F(InspectorCSSAgentTest, GetCounterStyleRuleCycle) {
+  GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
+    <style>
+      @counter-style --my-style {
+        system: cyclic;
+        symbols: 'a' 'b';
+        fallback: --my-style;
+      }
+      #e {
+        display: list-item;
+        list-style-type: --my-style;
+      }
+    </style>
+    <div id=e></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+  AtRules rules = CollectCounterAtRules("#e");
+  EXPECT_TRUE(rules);
+  EXPECT_EQ(1u, rules->size());
+  EXPECT_EQ(rules->at(0)->getName()->getText(), "--my-style");
+}
+
+TEST_F(InspectorCSSAgentTest, GetCounterStyleRuleNonExistentFallback) {
+  GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
+    <style>
+      @counter-style --my-style {
+        system: cyclic;
+        symbols: 'a' 'b';
+        fallback: --non-existent-style;
+      }
+      #e {
+        display: list-item;
+        list-style-type: --my-style;
+      }
+    </style>
+    <div id=e></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+  AtRules rules = CollectCounterAtRules("#e");
+  EXPECT_TRUE(rules);
+  EXPECT_EQ(1u, rules->size());
+  EXPECT_EQ(rules->at(0)->getName()->getText(), "--my-style");
+}
+
+TEST_F(InspectorCSSAgentTest, GetCounterStyleRuleBuiltInFallback) {
+  GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
+    <style>
+      @counter-style --my-style {
+        system: cyclic;
+        symbols: 'a' 'b';
+        fallback: decimal;
+      }
+      #e {
+        display: list-item;
+        list-style-type: --my-style;
+      }
+    </style>
+    <div id=e></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+  AtRules rules = CollectCounterAtRules("#e");
+  EXPECT_TRUE(rules);
+  EXPECT_EQ(1u, rules->size());
+  EXPECT_EQ(rules->at(0)->getName()->getText(), "--my-style");
+}
+
+TEST_F(InspectorCSSAgentTest, GetCounterStyleRuleSymbolsFunctionHasNoAtRule) {
+  ScopedCSSCounterStyleSymbolsFunctionForTest scoped_feature(true);
+  GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
+    <style>
+      #e {
+        display: list-item;
+        list-style-type: symbols('a' 'b' 'c');
+      }
+    </style>
+    <div id=e></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+  // An anonymous symbols() counter style has no name, so there is no
+  // corresponding @counter-style at-rule to report to DevTools.
+  AtRules rules = CollectCounterAtRules("#e");
+  EXPECT_FALSE(rules);
+}
+
 TEST_F(InspectorCSSAgentTest, GetFontPaletteValuesRuleNoMatchPalette) {
   GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
     <style>
@@ -592,7 +786,7 @@ TEST_F(InspectorCSSAgentTest, GetFontPaletteValuesRuleNoMatchPalette) {
     <div id=e></div>
   )HTML");
   UpdateAllLifecyclePhasesForTest();
-  FontAtRules rules = CollectFontAtRules("#e");
+  AtRules rules = CollectFontAtRules("#e");
   EXPECT_TRUE(rules);
   EXPECT_EQ(0u, rules->size());
 }
@@ -612,7 +806,7 @@ TEST_F(InspectorCSSAgentTest, GetFontPaletteValuesRuleNoMatchFont) {
     <div id=e></div>
   )HTML");
   UpdateAllLifecyclePhasesForTest();
-  FontAtRules rules = CollectFontAtRules("#e");
+  AtRules rules = CollectFontAtRules("#e");
   EXPECT_TRUE(rules);
   EXPECT_EQ(0u, rules->size());
 }
@@ -639,7 +833,7 @@ TEST_F(InspectorCSSAgentTest, GetFontPaletteValuesRuleFromPseudoElement) {
     <div id=e></div>
   )HTML");
   UpdateAllLifecyclePhasesForTest();
-  FontAtRules rules = CollectFontAtRules(
+  AtRules rules = CollectFontAtRules(
       "#e", {PseudoId::kPseudoIdBefore, PseudoId::kPseudoIdAfter});
   EXPECT_TRUE(rules);
   EXPECT_EQ(1u, rules->size());
@@ -677,7 +871,7 @@ TEST_F(InspectorCSSAgentTest, GetFontFeatureValuesRuleSwash) {
     <div id=e></div>
   )HTML");
   UpdateAllLifecyclePhasesForTest();
-  FontAtRules rules = CollectFontAtRules("#e");
+  AtRules rules = CollectFontAtRules("#e");
   EXPECT_TRUE(rules);
   EXPECT_EQ(1u, rules->size());
   EXPECT_EQ(rules->at(0)->getType(),
@@ -709,7 +903,7 @@ TEST_F(InspectorCSSAgentTest, GetFontFeatureValuesRuleNoMatchFont) {
     <div id=e></div>
   )HTML");
   UpdateAllLifecyclePhasesForTest();
-  FontAtRules rules = CollectFontAtRules("#e");
+  AtRules rules = CollectFontAtRules("#e");
   EXPECT_TRUE(rules);
   EXPECT_EQ(0u, rules->size());
 }
@@ -730,7 +924,7 @@ TEST_F(InspectorCSSAgentTest, GetFontFeatureValuesRuleNoMatchFeature) {
     <div id=e></div>
   )HTML");
   UpdateAllLifecyclePhasesForTest();
-  FontAtRules rules = CollectFontAtRules("#e");
+  AtRules rules = CollectFontAtRules("#e");
   EXPECT_TRUE(rules);
   EXPECT_EQ(0u, rules->size());
 }
@@ -751,7 +945,7 @@ TEST_F(InspectorCSSAgentTest, GetFontFeatureValuesRuleAnnotation) {
     <div id=e></div>
   )HTML");
   UpdateAllLifecyclePhasesForTest();
-  FontAtRules rules = CollectFontAtRules("#e");
+  AtRules rules = CollectFontAtRules("#e");
   EXPECT_TRUE(rules);
   EXPECT_EQ(1u, rules->size());
   EXPECT_EQ(rules->at(0)->getType(),
@@ -777,7 +971,7 @@ TEST_F(InspectorCSSAgentTest, GetFontFeatureValuesRuleOrnaments) {
     <div id=e></div>
   )HTML");
   UpdateAllLifecyclePhasesForTest();
-  FontAtRules rules = CollectFontAtRules("#e");
+  AtRules rules = CollectFontAtRules("#e");
   EXPECT_TRUE(rules);
   EXPECT_EQ(1u, rules->size());
   EXPECT_EQ(rules->at(0)->getType(),
@@ -803,7 +997,7 @@ TEST_F(InspectorCSSAgentTest, GetFontFeatureValuesRuleStylistic) {
     <div id=e></div>
   )HTML");
   UpdateAllLifecyclePhasesForTest();
-  FontAtRules rules = CollectFontAtRules("#e");
+  AtRules rules = CollectFontAtRules("#e");
   EXPECT_TRUE(rules);
   EXPECT_EQ(1u, rules->size());
   EXPECT_EQ(rules->at(0)->getType(),
@@ -829,7 +1023,7 @@ TEST_F(InspectorCSSAgentTest, GetFontFeatureValuesRuleStyleset) {
     <div id=e></div>
   )HTML");
   UpdateAllLifecyclePhasesForTest();
-  FontAtRules rules = CollectFontAtRules("#e");
+  AtRules rules = CollectFontAtRules("#e");
   EXPECT_TRUE(rules);
   EXPECT_EQ(1u, rules->size());
   EXPECT_EQ(rules->at(0)->getType(),
@@ -855,7 +1049,7 @@ TEST_F(InspectorCSSAgentTest, GetFontFeatureValuesRuleCharacterVariant) {
     <div id=e></div>
   )HTML");
   UpdateAllLifecyclePhasesForTest();
-  FontAtRules rules = CollectFontAtRules("#e");
+  AtRules rules = CollectFontAtRules("#e");
   EXPECT_TRUE(rules);
   EXPECT_EQ(1u, rules->size());
   EXPECT_EQ(rules->at(0)->getType(),
@@ -881,7 +1075,7 @@ TEST_F(InspectorCSSAgentTest, GetFontFeatureValuesRuleMultipleFamilies) {
     <div id=e></div>
   )HTML");
   UpdateAllLifecyclePhasesForTest();
-  FontAtRules rules = CollectFontAtRules("#e");
+  AtRules rules = CollectFontAtRules("#e");
   EXPECT_TRUE(rules);
   EXPECT_EQ(1u, rules->size());
   EXPECT_EQ(rules->at(0)->getType(),
@@ -920,7 +1114,7 @@ TEST_F(InspectorCSSAgentTest, GetFontFeatureValuesRuleMultipleFeatures) {
     <div id=e></div>
   )HTML");
   UpdateAllLifecyclePhasesForTest();
-  FontAtRules rules = CollectFontAtRules("#e");
+  AtRules rules = CollectFontAtRules("#e");
   EXPECT_TRUE(rules);
   EXPECT_EQ(3u, rules->size());
   for (int i = 0; i < 3; ++i) {
@@ -942,6 +1136,219 @@ TEST_F(InspectorCSSAgentTest, GetFontFeatureValuesRuleMultipleFeatures) {
             protocol::CSS::CSSAtRule::SubsectionEnum::Annotation);
   EXPECT_EQ(rules->at(2)->getStyle()->getCssProperties()->at(0)->getName(),
             "extra");
+}
+
+TEST_F(InspectorCSSAgentTest, BuildSimpleRule) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <style>
+      #e {
+        color: red;
+      }
+    </style>
+    <div id=e></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+  std::unique_ptr<protocol::CSS::CSSRule> rule =
+      BuildObjectForInnermostRule("#e");
+  EXPECT_TRUE(rule);
+  EXPECT_EQ(rule->getSelectorList()->getText(), "#e");
+  EXPECT_FALSE(rule->getNestingSelectors());
+  EXPECT_EQ(rule->getRuleTypes()->size(), 0u);
+  EXPECT_EQ(rule->getMedia()->size(), 0u);
+  EXPECT_EQ(rule->getSupports()->size(), 0u);
+  EXPECT_EQ(rule->getContainerQueries()->size(), 0u);
+  EXPECT_EQ(rule->getScopes()->size(), 0u);
+  EXPECT_EQ(rule->getLayers()->size(), 0u);
+  EXPECT_EQ(rule->getStartingStyles()->size(), 0u);
+}
+
+TEST_F(InspectorCSSAgentTest, BuildNestedStyleRule) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <style>
+      div {
+        #e {
+          color: red;
+        }
+      }
+    </style>
+    <div><div id=e></div></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+  std::unique_ptr<protocol::CSS::CSSRule> rule =
+      BuildObjectForInnermostRule("#e");
+  EXPECT_TRUE(rule);
+  EXPECT_EQ(rule->getSelectorList()->getText(), "& #e");
+  ASSERT_TRUE(rule->getNestingSelectors());
+  EXPECT_EQ(rule->getNestingSelectors()->size(), 1u);
+  EXPECT_EQ(rule->getNestingSelectors()->at(0), "div");
+  ASSERT_EQ(rule->getRuleTypes()->size(), 1u);
+  EXPECT_EQ(rule->getRuleTypes()->at(0),
+            protocol::CSS::CSSRuleTypeEnum::StyleRule);
+}
+
+TEST_F(InspectorCSSAgentTest, BuildNestedMediaRule) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <style>
+      @media screen and (min-width: 1px) {
+        #e {
+          color: red;
+        }
+      }
+    </style>
+    <div id=e></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+  std::unique_ptr<protocol::CSS::CSSRule> rule =
+      BuildObjectForInnermostRule("#e");
+  EXPECT_TRUE(rule);
+  EXPECT_EQ(rule->getSelectorList()->getText(), "#e");
+  ASSERT_EQ(rule->getMedia()->size(), 1u);
+  EXPECT_EQ(rule->getMedia()->at(0)->getText(), "screen and (min-width: 1px)");
+  ASSERT_EQ(rule->getRuleTypes()->size(), 1u);
+  EXPECT_EQ(rule->getRuleTypes()->at(0),
+            protocol::CSS::CSSRuleTypeEnum::MediaRule);
+}
+
+TEST_F(InspectorCSSAgentTest, BuildNestedSupportsRule) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <style>
+      @supports (display: grid) {
+        #e {
+          color: red;
+        }
+      }
+    </style>
+    <div id=e></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+  std::unique_ptr<protocol::CSS::CSSRule> rule =
+      BuildObjectForInnermostRule("#e");
+  EXPECT_TRUE(rule);
+  EXPECT_EQ(rule->getSelectorList()->getText(), "#e");
+  ASSERT_EQ(rule->getSupports()->size(), 1u);
+  EXPECT_EQ(rule->getSupports()->at(0)->getText(), "(display: grid)");
+  EXPECT_TRUE(rule->getSupports()->at(0)->getActive());
+  ASSERT_EQ(rule->getRuleTypes()->size(), 1u);
+  EXPECT_EQ(rule->getRuleTypes()->at(0),
+            protocol::CSS::CSSRuleTypeEnum::SupportsRule);
+}
+
+TEST_F(InspectorCSSAgentTest, BuildNestedContainerRule) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <style>
+      @container (min-width: 1px) {
+        #e {
+          color: red;
+        }
+      }
+    </style>
+    <div style="container-type: inline-size;"><div id=e></div></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+  std::unique_ptr<protocol::CSS::CSSRule> rule =
+      BuildObjectForInnermostRule("#e");
+  EXPECT_TRUE(rule);
+  EXPECT_EQ(rule->getSelectorList()->getText(), "#e");
+  ASSERT_EQ(rule->getContainerQueries()->size(), 1u);
+  EXPECT_EQ(rule->getContainerQueries()->at(0)->getText(), "(min-width: 1px)");
+  ASSERT_EQ(rule->getRuleTypes()->size(), 1u);
+  EXPECT_EQ(rule->getRuleTypes()->at(0),
+            protocol::CSS::CSSRuleTypeEnum::ContainerRule);
+}
+
+TEST_F(InspectorCSSAgentTest, BuildNestedLayerRule) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <style>
+      @layer my-layer {
+        #e {
+          color: red;
+        }
+      }
+    </style>
+    <div id=e></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+  std::unique_ptr<protocol::CSS::CSSRule> rule =
+      BuildObjectForInnermostRule("#e");
+  EXPECT_TRUE(rule);
+  EXPECT_EQ(rule->getSelectorList()->getText(), "#e");
+  ASSERT_EQ(rule->getLayers()->size(), 1u);
+  EXPECT_EQ(rule->getLayers()->at(0)->getText(), "my-layer");
+  ASSERT_EQ(rule->getRuleTypes()->size(), 1u);
+  EXPECT_EQ(rule->getRuleTypes()->at(0),
+            protocol::CSS::CSSRuleTypeEnum::LayerRule);
+}
+
+TEST_F(InspectorCSSAgentTest, BuildNestedScopeRule) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <style>
+      @scope (.scope) {
+        #e {
+          color: red;
+        }
+      }
+    </style>
+    <div class=scope>
+        <div id=e></div>
+    </div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+  std::unique_ptr<protocol::CSS::CSSRule> rule =
+      BuildObjectForInnermostRule("#e");
+  EXPECT_TRUE(rule);
+  EXPECT_EQ(rule->getSelectorList()->getText(), "#e");
+  ASSERT_EQ(rule->getScopes()->size(), 1u);
+  EXPECT_EQ(rule->getScopes()->at(0)->getText(), "(.scope)");
+  ASSERT_EQ(rule->getRuleTypes()->size(), 1u);
+  EXPECT_EQ(rule->getRuleTypes()->at(0),
+            protocol::CSS::CSSRuleTypeEnum::ScopeRule);
+}
+
+TEST_F(InspectorCSSAgentTest, BuildNestedStartingStyleRule) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <style>
+      @starting-style {
+        #e {
+          color: red;
+        }
+      }
+    </style>
+    <div id=e></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+  std::unique_ptr<protocol::CSS::CSSRule> rule =
+      BuildObjectForInnermostRule("#e");
+  EXPECT_TRUE(rule);
+  EXPECT_EQ(rule->getSelectorList()->getText(), "#e");
+  ASSERT_EQ(rule->getStartingStyles()->size(), 1u);
+  ASSERT_EQ(rule->getRuleTypes()->size(), 1u);
+  EXPECT_EQ(rule->getRuleTypes()->at(0),
+            protocol::CSS::CSSRuleTypeEnum::StartingStyleRule);
+}
+
+TEST_F(InspectorCSSAgentTest, BuildNestedNavigationRule) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <style>
+      @navigation not (at: url-pattern("http:*xxx*")) {
+        #e {
+          color: red;
+        }
+      }
+    </style>
+    <div id=e></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+  std::unique_ptr<protocol::CSS::CSSRule> rule =
+      BuildObjectForInnermostRule("#e");
+  EXPECT_TRUE(rule);
+  EXPECT_EQ(rule->getSelectorList()->getText(), "#e");
+  ASSERT_EQ(rule->getNavigations()->size(), 1u);
+  EXPECT_EQ(rule->getNavigations()->at(0)->getText(),
+            "not (at: url-pattern(\"http:*xxx*\"))");
+  EXPECT_TRUE(rule->getNavigations()->at(0)->getActive());
+  ASSERT_EQ(rule->getRuleTypes()->size(), 1u);
+  EXPECT_EQ(rule->getRuleTypes()->at(0),
+            protocol::CSS::CSSRuleTypeEnum::NavigationRule);
 }
 
 const CSSPropertyID DirectionAwareConverterTestData[] = {

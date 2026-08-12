@@ -5,18 +5,21 @@
 #include "chrome/browser/ash/login/smart_lock/smart_lock_notification_controller.h"
 
 #include "ash/constants/notifier_catalogs.h"
+#include "ash/public/cpp/notification_utils.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "ash/webui/settings/public/constants/routes.mojom.h"
+#include "base/check_deref.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/notifications/notification_display_service.h"
-#include "chrome/browser/notifications/notification_display_service_factory.h"
-#include "chrome/browser/ui/settings_window_manager_chromeos.h"
-#include "chrome/common/webui_url_constants.h"
-#include "chrome/grit/generated_resources.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/grit/theme_resources.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/proximity_auth/screenlock_bridge.h"
+#include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
+#include "components/user_manager/user.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/chromeos/devicetype_utils.h"
+#include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification_types.h"
 
 namespace ash {
@@ -110,8 +113,12 @@ void SmartLockNotificationController::ShowPairingChangeNotification() {
 void SmartLockNotificationController::ShowPairingChangeAppliedNotification(
     const std::string& phone_name) {
   // Remove the pairing change notification if it is still being shown.
-  NotificationDisplayServiceFactory::GetForProfile(profile_)->Close(
-      NotificationHandler::Type::TRANSIENT, kEasyUnlockPairingChangeNotifierId);
+  const user_manager::User& user = CHECK_DEREF(
+      BrowserContextHelper::Get()->GetUserByBrowserContext(profile_));
+  message_center::MessageCenter::Get()->RemoveNotification(
+      CreateUserScopedNotificationId(kEasyUnlockPairingChangeNotifierId,
+                                     user.username_hash()),
+      /*by_user=*/false);
 
   message_center::RichNotificationData rich_notification_data;
   rich_notification_data.buttons.push_back(
@@ -136,15 +143,28 @@ void SmartLockNotificationController::ShowPairingChangeAppliedNotification(
 
 void SmartLockNotificationController::ShowNotification(
     std::unique_ptr<message_center::Notification> notification) {
+  const user_manager::User& user = CHECK_DEREF(
+      BrowserContextHelper::Get()->GetUserByBrowserContext(profile_));
+  notification = std::make_unique<message_center::Notification>(
+      CreateUserScopedNotificationId(notification->id(), user.username_hash()),
+      *notification);
+  notification->set_profile_id(user.GetAccountId().GetUserEmail());
   notification->SetSystemPriority();
-  NotificationDisplayServiceFactory::GetForProfile(profile_)->Display(
-      NotificationHandler::Type::TRANSIENT, *notification,
-      /*metadata=*/nullptr);
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(notification));
 }
 
 void SmartLockNotificationController::LaunchMultiDeviceSettings() {
-  chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
-      profile_, chromeos::settings::mojom::kMultiDeviceFeaturesSubpagePath);
+  auto* user =
+      ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile_.get());
+  if (user) {
+    // TODO(crbug.com/447287122): Revisit here to see if there's a case where no
+    // active session is there.
+    ash::SettingsAppManager::Get()->Open(
+        *user,
+        {.sub_page =
+             chromeos::settings::mojom::kMultiDeviceFeaturesSubpagePath});
+  }
 }
 
 void SmartLockNotificationController::LockScreen() {

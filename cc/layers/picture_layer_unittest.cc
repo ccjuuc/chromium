@@ -25,7 +25,7 @@
 #include "cc/test/layer_test_common.h"
 #include "cc/test/property_tree_test_utils.h"
 #include "cc/test/skia_common.h"
-#include "cc/test/stub_layer_tree_host_single_thread_client.h"
+#include "cc/test/stub_layer_tree_host_single_thread_delegate.h"
 #include "cc/test/test_task_graph_runner.h"
 #include "cc/trees/single_thread_proxy.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -42,7 +42,7 @@ TEST(PictureLayerTest, NoTilesIfEmptyBounds) {
   scoped_refptr<PictureLayer> layer = PictureLayer::Create(&client);
   layer->SetBounds(gfx::Size(10, 10));
 
-  FakeLayerTreeHostClient host_client;
+  FakeLayerTreeHostDelegate host_client;
   TestTaskGraphRunner task_graph_runner;
   auto animation_host = AnimationHost::CreateForTesting(ThreadInstance::kMain);
   std::unique_ptr<FakeLayerTreeHost> host = FakeLayerTreeHost::Create(
@@ -78,8 +78,7 @@ TEST(PictureLayerTest, NoTilesIfEmptyBounds) {
   // layer_tree_host_->ActivateCommitState() and the second argument would come
   // from layer_tree_host_->active_commit_state(); we use pending_commit_state()
   // just to keep the test code simple.
-  layer->PushPropertiesTo(layer_impl.get(), *host->GetPendingCommitState(),
-                          host->GetThreadUnsafeCommitState());
+  layer->PushPropertiesTo(layer_impl.get(), *host->GetPendingCommitState());
   EXPECT_FALSE(layer_impl->CanHaveTilings());
   EXPECT_TRUE(layer_impl->bounds() == gfx::Size(0, 0));
   EXPECT_EQ(gfx::Size(), layer_impl->raster_source()->size());
@@ -93,7 +92,7 @@ TEST(PictureLayerTest, InvalidateRasterAfterUpdate) {
   scoped_refptr<PictureLayer> layer = PictureLayer::Create(&client);
   layer->SetBounds(gfx::Size(50, 50));
 
-  FakeLayerTreeHostClient host_client;
+  FakeLayerTreeHostDelegate host_client;
   TestTaskGraphRunner task_graph_runner;
   auto animation_host = AnimationHost::CreateForTesting(ThreadInstance::kMain);
   std::unique_ptr<FakeLayerTreeHost> host = FakeLayerTreeHost::Create(
@@ -122,8 +121,8 @@ TEST(PictureLayerTest, InvalidateRasterAfterUpdate) {
       host_impl.pending_tree()->root_layer());
   {
     LayerTreeImpl::DiscardableImageMapUpdater updater(host_impl.pending_tree());
-    layer->PushPropertiesTo(layer_impl, *host->GetPendingCommitState(),
-                            host->GetThreadUnsafeCommitState());
+    layer->PushPropertiesTo(layer_impl, *host->GetPendingCommitState());
+    layer_impl->CommitPendingRasterSource();
   }
 
   EXPECT_EQ(invalidation_bounds,
@@ -137,7 +136,7 @@ TEST(PictureLayerTest, InvalidateRasterWithoutUpdate) {
   scoped_refptr<PictureLayer> layer = PictureLayer::Create(&client);
   layer->SetBounds(gfx::Size(50, 50));
 
-  FakeLayerTreeHostClient host_client;
+  FakeLayerTreeHostDelegate host_client;
   TestTaskGraphRunner task_graph_runner;
   auto animation_host = AnimationHost::CreateForTesting(ThreadInstance::kMain);
   std::unique_ptr<FakeLayerTreeHost> host = FakeLayerTreeHost::Create(
@@ -164,8 +163,7 @@ TEST(PictureLayerTest, InvalidateRasterWithoutUpdate) {
       FakePictureLayerImpl::Create(host_impl.pending_tree(), 1));
   FakePictureLayerImpl* layer_impl = static_cast<FakePictureLayerImpl*>(
       host_impl.pending_tree()->root_layer());
-  layer->PushPropertiesTo(layer_impl, *host->GetPendingCommitState(),
-                          host->GetThreadUnsafeCommitState());
+  layer->PushPropertiesTo(layer_impl, *host->GetPendingCommitState());
 
   EXPECT_EQ(gfx::Rect(), layer_impl->GetPendingInvalidation()->bounds());
 }
@@ -178,7 +176,7 @@ TEST(PictureLayerTest, ClearVisibleRectWhenNoTiling) {
   scoped_refptr<PictureLayer> layer = PictureLayer::Create(&client);
   layer->SetBounds(gfx::Size(10, 10));
 
-  FakeLayerTreeHostClient host_client;
+  FakeLayerTreeHostDelegate host_client;
   TestTaskGraphRunner task_graph_runner;
   auto animation_host = AnimationHost::CreateForTesting(ThreadInstance::kMain);
   std::unique_ptr<FakeLayerTreeHost> host = FakeLayerTreeHost::Create(
@@ -214,12 +212,11 @@ TEST(PictureLayerTest, ClearVisibleRectWhenNoTiling) {
   SetupRootProperties(layer_impl);
   UpdateDrawProperties(host_impl.pending_tree());
 
-  const auto& unsafe_state = host->GetThreadUnsafeCommitState();
   std::unique_ptr<CommitState> commit_state =
       host->WillCommit(/*completion=*/nullptr, /*has_updates=*/true);
   {
     LayerTreeImpl::DiscardableImageMapUpdater updater(host_impl.pending_tree());
-    layer->PushPropertiesTo(layer_impl, *commit_state, unsafe_state);
+    layer->PushPropertiesTo(layer_impl, *commit_state);
   }
   host->CommitComplete(commit_state->source_frame_number,
                        {base::TimeTicks(), base::TimeTicks::Now()});
@@ -242,8 +239,7 @@ TEST(PictureLayerTest, ClearVisibleRectWhenNoTiling) {
   // recording source.
   {
     LayerTreeImpl::DiscardableImageMapUpdater updater(host_impl.pending_tree());
-    layer->PushPropertiesTo(layer_impl, *host->GetPendingCommitState(),
-                            host->GetThreadUnsafeCommitState());
+    layer->PushPropertiesTo(layer_impl, *host->GetPendingCommitState());
   }
   UpdateDrawProperties(host_impl.pending_tree());
 
@@ -267,9 +263,9 @@ TEST(PictureLayerTest, NonMonotonicSourceFrameNumber) {
   settings.single_thread_proxy_scheduler = false;
   settings.use_zero_copy = true;
 
-  StubLayerTreeHostSingleThreadClient single_thread_client;
-  FakeLayerTreeHostClient host_client1;
-  FakeLayerTreeHostClient host_client2;
+  StubLayerTreeHostSingleThreadDelegate single_thread_delegate;
+  FakeLayerTreeHostDelegate host_client1;
+  FakeLayerTreeHostDelegate host_client2;
   TestTaskGraphRunner task_graph_runner;
 
   FakeContentLayerClient client;
@@ -285,7 +281,7 @@ TEST(PictureLayerTest, NonMonotonicSourceFrameNumber) {
   params.main_task_runner = base::SingleThreadTaskRunner::GetCurrentDefault();
   params.mutator_host = animation_host.get();
   std::unique_ptr<LayerTreeHost> host1 = LayerTreeHost::CreateSingleThreaded(
-      &single_thread_client, std::move(params));
+      &single_thread_delegate, std::move(params));
   host1->SetVisible(true);
   host_client1.SetLayerTreeHost(host1.get());
 
@@ -299,7 +295,7 @@ TEST(PictureLayerTest, NonMonotonicSourceFrameNumber) {
   params2.client = &host_client2;
   params2.mutator_host = animation_host2.get();
   std::unique_ptr<LayerTreeHost> host2 = LayerTreeHost::CreateSingleThreaded(
-      &single_thread_client, std::move(params2));
+      &single_thread_delegate, std::move(params2));
   host2->SetVisible(true);
   host_client2.SetLayerTreeHost(host2.get());
 
@@ -329,8 +325,8 @@ TEST(PictureLayerTest, NonMonotonicSourceFrameNumber) {
   EXPECT_EQ(3, layer->update_count());
   EXPECT_EQ(1, host2->SourceFrameNumber());
 
-  animation_host->SetMutatorHostClient(nullptr);
-  animation_host2->SetMutatorHostClient(nullptr);
+  animation_host->SetMutatorHostDelegate(nullptr);
+  animation_host2->SetMutatorHostDelegate(nullptr);
 
   host_client1.SetLayerTreeHost(nullptr);
   host_client2.SetLayerTreeHost(nullptr);
@@ -342,9 +338,9 @@ TEST(PictureLayerTest, ChangingHostsWithCollidingFrames) {
   LayerTreeSettings settings = LayerTreeSettings();
   settings.single_thread_proxy_scheduler = false;
 
-  StubLayerTreeHostSingleThreadClient single_thread_client;
-  FakeLayerTreeHostClient host_client1;
-  FakeLayerTreeHostClient host_client2;
+  StubLayerTreeHostSingleThreadDelegate single_thread_delegate;
+  FakeLayerTreeHostDelegate host_client1;
+  FakeLayerTreeHostDelegate host_client2;
   TestTaskGraphRunner task_graph_runner;
 
   FakeContentLayerClient client;
@@ -360,7 +356,7 @@ TEST(PictureLayerTest, ChangingHostsWithCollidingFrames) {
   params.main_task_runner = base::SingleThreadTaskRunner::GetCurrentDefault();
   params.mutator_host = animation_host.get();
   std::unique_ptr<LayerTreeHost> host1 = LayerTreeHost::CreateSingleThreaded(
-      &single_thread_client, std::move(params));
+      &single_thread_delegate, std::move(params));
   host1->SetVisible(true);
   host_client1.SetLayerTreeHost(host1.get());
 
@@ -374,7 +370,7 @@ TEST(PictureLayerTest, ChangingHostsWithCollidingFrames) {
   params2.client = &host_client2;
   params2.mutator_host = animation_host2.get();
   std::unique_ptr<LayerTreeHost> host2 = LayerTreeHost::CreateSingleThreaded(
-      &single_thread_client, std::move(params2));
+      &single_thread_delegate, std::move(params2));
   host2->SetVisible(true);
   host_client2.SetLayerTreeHost(host2.get());
 
@@ -439,7 +435,7 @@ TEST(PictureLayerTest, RecordingScaleIsCorrectlySet) {
   scoped_refptr<FakePictureLayer> layer = FakePictureLayer::Create(&client);
   layer->SetBounds(layer_bounds);
 
-  FakeLayerTreeHostClient host_client;
+  FakeLayerTreeHostDelegate host_client;
   TestTaskGraphRunner task_graph_runner;
   auto animation_host = AnimationHost::CreateForTesting(ThreadInstance::kMain);
   std::unique_ptr<FakeLayerTreeHost> host = FakeLayerTreeHost::Create(

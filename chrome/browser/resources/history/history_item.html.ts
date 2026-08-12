@@ -20,12 +20,14 @@ export function getHtml(this: HistoryItemElement) {
           </div>
         </div>
       </div>
-      <div role="row" @mousedown="${this.onRowMousedown_}" @click="${this.onRowClick_}">
+      <div role="row" @mousedown="${this.onRowMousedown_}"
+          @click="${this.onRowClick_}">
         <div id="item-container" focus-row-container>
-          <div role="gridcell">
+          <div role="gridcell" id="checkbox-cell">
             <cr-checkbox id="checkbox" .checked="${this.selected}"
                 focus-row-control focus-type="cr-checkbox"
-                @mousedown="${this.onCheckboxClick_}" @keydown="${this.onCheckboxClick_}"
+                @mousedown="${this.onCheckboxMousedown_}"
+                @keydown="${this.onCheckboxSelectKeydown_}"
                 @change="${this.onCheckboxChange_}" class="no-label"
                 ?hidden="${this.selectionNotAllowed_}"
                 .disabled="${this.selectionNotAllowed_}">
@@ -34,42 +36,91 @@ export function getHtml(this: HistoryItemElement) {
           </div>
           <!-- ARIA hidden to avoid redundancy since timestamp is already part of
               |getEntrySummary_|. -->
-          <span id="time-accessed" aria-hidden="true">
+          <span id="timeAccessed" aria-hidden="true">
             ${this.item?.readableTimestamp}
           </span>
           <div role="gridcell" id="item-info">
-            <div id="title-and-domain">
-              <a href="${this.item?.url}" id="link" class="website-link"
-                  focus-row-control focus-type="link"
-                  title="${this.item?.title}" @click="${this.onLinkClick_}"
-                  @auxclick="${this.onLinkClick_}" @contextmenu="${this.onLinkRightClick_}"
-                  aria-describedby="${this.getAriaDescribedByForHeading_()}">
-                <div class="website-icon" id="icon"></div>
-                <history-searched-label class="website-title"
-                    title="${this.item?.title}"
-                    search-term="${this.searchTerm}"></history-searched-label>
-              </a>
-              <span id="domain">${this.item?.domain}</span>
-            </div>
-            <div id="icons">
-              ${this.shouldShowActorTooltip_() ? html`
-                <cr-tooltip-icon id="actor-icon"
-                    icon-class="${this.actorIconClass_()}"
-                    tooltip-text="$i18n{actorTaskTooltip}"
-                    icon-aria-label="$i18n{actorTaskTooltip}">
-                </cr-tooltip-icon>
-              `: ''}
-              ${this.item?.starred ? html`
-                <cr-icon-button id="bookmark-star" iron-icon="cr:star"
-                    @click="${this.onRemoveBookmarkClick_}"
-                    title="$i18n{removeBookmark}"
-                    aria-hidden="true">
-                </cr-icon-button>
+            <div id="item-info-row">
+              <div id="title-and-domain">
+                <a href="${this.item?.url}" id="link" class="website-link"
+                    focus-row-control focus-type="link"
+                    title="${this.item?.title}" @click="${this.onLinkClick_}"
+                    @auxclick="${this.onLinkAuxclick_}" @contextmenu="${this.onLinkContextmenu_}"
+                    aria-describedby="${this.getAriaDescribedByForHeading_()}">
+                  <div class="website-icon" id="icon"></div>
+                  ${this.shouldShowActorIconNextToFavicon_() ? html`
+                    <cr-tooltip-icon id="actor-icon"
+                        icon-class="${this.actorIconClass_()}"
+                        tooltip-text="$i18n{actorTaskTooltip}"
+                        icon-aria-label="$i18n{actorTaskTooltip}">
+                    </cr-tooltip-icon>
+                  ` : ''}
+                  <history-searched-label class="website-title"
+                      title="${this.item?.title}"
+                      search-term="${this.searchTerm}"></history-searched-label>
+                </a>
+                <span id="domain">${this.item?.domain}</span>
+              </div>
+              <div id="icons">
+                ${this.shouldShowActorTooltip_() ? html`
+                  <cr-tooltip-icon id="actor-icon"
+                      icon-class="${this.actorIconClass_()}"
+                      tooltip-text="$i18n{actorTaskTooltip}"
+                      icon-aria-label="$i18n{actorTaskTooltip}">
+                  </cr-tooltip-icon>
                 `: ''}
+                ${this.item?.starred ? html`
+                  <cr-icon-button id="bookmark-star" iron-icon="cr:star-filled"
+                      @click="${this.onRemoveBookmarkClick_}"
+                      title="$i18n{removeBookmark}"
+                      aria-hidden="true">
+                  </cr-icon-button>
+                  `: ''}
+                ${this.isExpandable_() ? html`
+                  <cr-icon-button id="expand-button"
+                      iron-icon="${this.getExpandIcon_()}"
+                      title="$i18n{geminiKeyBrowsingActionsTitle}"
+                      aria-controls="collapse"
+                      focus-row-control focus-type="expand-button"
+                      @click="${this.onExpandClick_}"
+                      aria-expanded="${this.isExpanded_}">
+                  </cr-icon-button>
+                `: ''}
+              </div>
             </div>
+            ${this.isExpandable_() ? html`
+              <cr-collapse id="collapse" ?opened="${this.isExpanded_}"
+                  @click="${this.onCollapseClick_}">
+                <div id="expanded-container">
+                  <div class="critical-actions-title">
+                    $i18n{geminiKeyBrowsingActionsTitle}
+                  </div>
+                  <div class="critical-actions-list" role="list"
+                      aria-label="$i18n{geminiKeyBrowsingActionsTitle}">
+                    ${this.getCriticalActions_().map((action, index) => html`
+                      <div class="critical-action-row" role="listitem"
+                          data-index="${index}"
+                          focus-row-control focus-type="critical-action"
+                          tabindex="0"
+                          aria-label="${action.ariaLabel || action.label}"
+                          @click="${this.onCriticalActionClick_}"
+                          @keydown="${this.onCriticalActionKeydown_}">
+                        <span class="critical-action-label">${action.label}</span>
+                        <cr-icon-button class="critical-action-button"
+                            iron-icon="cr:open-in-new"
+                            title="${action.tooltip}"
+                            aria-label="${action.tooltip}"
+                            tabindex="-1">
+                        </cr-icon-button>
+                      </div>
+                    `)}
+                  </div>
+                </div>
+              </cr-collapse>
+            `: ''}
           </div>
           <div role="gridcell" id="options">
-            <cr-icon-button id="menu-button" iron-icon="cr:more-vert"
+            <cr-icon-button id="menuButton" iron-icon="cr:more-vert"
                 focus-row-control focus-type="cr-menu-button"
                 title="$i18n{actionMenuDescription}" @click="${this.onMenuButtonClick_}"
                 @keydown="${this.onMenuButtonKeydown_}"

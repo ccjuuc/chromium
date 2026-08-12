@@ -4,13 +4,13 @@
 
 #include "chrome/browser/ui/webui/ash/internet/internet_config_dialog.h"
 
+#include "ash/constants/url_constants.h"
 #include "ash/public/cpp/network_config_service.h"
 #include "ash/webui/common/trusted_types_util.h"
 #include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/url_constants.h"
-#include "chrome/grit/browser_resources.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/internet_config_dialog_resources.h"
 #include "chrome/grit/internet_config_dialog_resources_map.h"
@@ -21,6 +21,7 @@
 #include "chromeos/services/network_config/public/cpp/cros_network_config_util.h"
 #include "chromeos/services/network_config/public/mojom/cros_network_config.mojom.h"  // nogncheck
 #include "components/strings/grit/components_strings.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "ui/chromeos/strings/grit/ui_chromeos_strings.h"
@@ -60,7 +61,7 @@ void AddInternetStrings(content::WebUIDataSource* html_source) {
 
 std::string GetId(const std::string& network_type,
                   const std::string& network_id) {
-  std::string result = chrome::kChromeUIInternetConfigDialogURL + network_type;
+  std::string result = ash::kChromeUIInternetConfigDialogURL + network_type;
   if (!network_id.empty()) {
     result += ".";
     result += network_id;
@@ -138,7 +139,7 @@ InternetConfigDialog::InternetConfigDialog(
     std::optional<
         mojo::StructPtr<chromeos::network_config::mojom::WiFiConfigProperties>>
         prefilled_wifi_config)
-    : SystemWebDialogDelegate(GURL(chrome::kChromeUIInternetConfigDialogURL),
+    : SystemWebDialogDelegate(GURL(ash::kChromeUIInternetConfigDialogURL),
                               std::u16string() /* title */),
       dialog_id_(dialog_id),
       network_type_(network_type),
@@ -171,12 +172,12 @@ void InternetConfigDialog::GetDialogSize(gfx::Size* size) const {
 }
 
 std::string InternetConfigDialog::GetDialogArgs() const {
-  base::Value::Dict args;
+  base::DictValue args;
   args.Set("type", network_type_);
   args.Set("guid", network_id_);
 
   if (prefilled_wifi_config_.has_value()) {
-    base::Value::Dict prefilled_properties =
+    base::DictValue prefilled_properties =
         chromeos::network_config::WiFiConfigPropertiesToMojoJsValue(
             *prefilled_wifi_config_);
     args.Set("prefilledProperties", std::move(prefilled_properties));
@@ -188,8 +189,10 @@ std::string InternetConfigDialog::GetDialogArgs() const {
 
 InternetConfigDialogUI::InternetConfigDialogUI(content::WebUI* web_ui)
     : ui::MojoWebDialogUI(web_ui) {
+  Profile* profile = Profile::FromWebUI(web_ui);
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
-      Profile::FromWebUI(web_ui), chrome::kChromeUIInternetConfigDialogHost);
+      profile, ash::kChromeUIInternetConfigDialogHost);
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
 
   AddInternetStrings(source);
   source->AddLocalizedString("title", IDS_SETTINGS_INTERNET_CONFIG);

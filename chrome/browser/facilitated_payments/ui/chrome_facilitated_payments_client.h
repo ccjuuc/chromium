@@ -109,8 +109,17 @@ class ChromeFacilitatedPaymentsClient
   void InitPixAccountLinkingFlow(
       const url::Origin& pix_payment_page_origin) final;
   void ShowPixAccountLinkingPrompt(
+      int strike_count,
       base::OnceCallback<void()> on_accepted,
       base::OnceCallback<void()> on_declined) final;
+  void ShowPixAccountLinkingSuccessScreen() final;
+  void ShowAccountLinkingPrompt(
+      const payments::facilitated::AccountLinkingParams& params,
+      base::OnceCallback<void()> on_accepted,
+      base::OnceCallback<void()> on_declined,
+      base::OnceCallback<void()> on_dismissed) final;
+  void ShowAccountLinkingFailureNotification(
+      payments::facilitated::FacilitatedPaymentsType fop_type) final;
   bool HasScreenlockOrBiometricSetup() final;
 
   // Register any allowlists with the OptimizationGuide framework, so that

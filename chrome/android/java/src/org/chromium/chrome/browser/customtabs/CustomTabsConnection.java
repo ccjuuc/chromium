@@ -9,8 +9,11 @@ import static org.chromium.components.content_settings.PrefNames.COOKIE_CONTROLS
 
 import android.app.PendingIntent;
 import android.content.ComponentCallbacks2;
+import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.net.Network;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
@@ -68,6 +71,8 @@ import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntent
 import org.chromium.chrome.browser.browserservices.intents.SessionHolder;
 import org.chromium.chrome.browser.content.WebContentsFactory;
 import org.chromium.chrome.browser.customtabs.ClientManager.CalledWarmup;
+import org.chromium.chrome.browser.customtabs.HiddenTabHolder.HiddenTab;
+import org.chromium.chrome.browser.customtabs.HiddenTabHolder.SpeculationParams;
 import org.chromium.chrome.browser.customtabs.content.EngagementSignalsHandler;
 import org.chromium.chrome.browser.customtabs.features.branding.MismatchNotificationData;
 import org.chromium.chrome.browser.device.DeviceClassManager;
@@ -89,7 +94,6 @@ import org.chromium.components.embedder_support.util.Origin;
 import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.externalauth.ExternalAuthUtils;
 import org.chromium.components.user_prefs.UserPrefs;
-import org.chromium.content_public.browser.BrowserStartupController;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.common.Referrer;
 import org.chromium.network.mojom.ReferrerPolicy;
@@ -104,6 +108,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -249,7 +254,6 @@ public class CustomTabsConnection {
 
     protected final boolean mLogRequests;
     private final AtomicBoolean mWarmupHasBeenCalled = new AtomicBoolean();
-    private final AtomicBoolean mWarmupHasBeenFinished = new AtomicBoolean();
 
     private @Nullable Callback<SessionHolder<?>> mDisconnectCallback;
 
@@ -406,13 +410,26 @@ public class CustomTabsConnection {
             postMessageHandler = new PostMessageHandler(serviceConnection);
             engagementSignalsHandler = new EngagementSignalsHandler(customTabSession);
         }
-        return mClientManager.newSession(
-                session,
-                Binder.getCallingUid(),
-                onDisconnect,
-                postMessageHandler,
-                serviceConnection,
-                engagementSignalsHandler);
+        boolean success =
+                mClientManager.newSession(
+                        session,
+                        Binder.getCallingUid(),
+                        Binder.getCallingPid(),
+                        onDisconnect,
+                        postMessageHandler,
+                        serviceConnection,
+                        engagementSignalsHandler);
+        if (success) {
+            String packageName = getClientPackageNameForSession(session);
+            Log.i(
+                    TAG,
+                    "New Custom Tab session created by package: "
+                            + packageName
+                            + " (UID: "
+                            + Binder.getCallingUid()
+                            + ")");
+        }
+        return success;
     }
 
     /**
@@ -446,11 +463,7 @@ public class CustomTabsConnection {
      * @return Whether native initialization has finished.
      */
     public boolean hasWarmUpBeenFinished() {
-        if (ChromeFeatureList.sCctFixWarmup.isEnabled()) {
-            return ChromeBrowserInitializer.getInstance().isFullBrowserInitialized();
-        } else {
-            return mWarmupHasBeenFinished.get();
-        }
+        return ChromeBrowserInitializer.getInstance().isFullBrowserInitialized();
     }
 
     /**
@@ -479,12 +492,9 @@ public class CustomTabsConnection {
         // 5. RequestThrottler first access has to be done only once.
 
         // (1)
-        final boolean fixWarmupEnabled = ChromeFeatureList.sCctFixWarmup.isEnabled();
         boolean shouldStartBrowser =
-                fixWarmupEnabled
-                        && !ChromeBrowserInitializer.getInstance().isFullBrowserInitialized();
-        boolean legacyShouldStartBrowser = !fixWarmupEnabled && !initialized;
-        if (shouldStartBrowser || legacyShouldStartBrowser) {
+                !ChromeBrowserInitializer.getInstance().isFullBrowserInitialized();
+        if (shouldStartBrowser) {
             tasks.add(
                     TaskTraits.UI_DEFAULT,
                     () -> {
@@ -493,7 +503,6 @@ public class CustomTabsConnection {
                             ChromeBrowserInitializer.getInstance()
                                     .handleSynchronousStartupWithGpuWarmUp();
                             ProcessInitializationHandler.getInstance().initNetworkChangeNotifier();
-                            if (legacyShouldStartBrowser) mWarmupHasBeenFinished.set(true);
                         }
                     });
         }
@@ -505,17 +514,6 @@ public class CustomTabsConnection {
                     () -> {
                         if (mHiddenTabHolder.hasHiddenTab()) return;
 
-                        // TODO(https://crbug.com/423415329): I'm pretty sure this is fixed, just
-                        // rolling this out with the flagged change in case it isn't fixed.
-                        if (!fixWarmupEnabled) {
-                            // Temporary fix for https://crbug.com/797832.
-                            // TODO(lizeb): Properly fix instead of papering over the bug, this code
-                            // should not be scheduled unless startup is done. See
-                            // https://crbug.com/797832.
-                            if (!BrowserStartupController.getInstance().isFullBrowserStarted()) {
-                                return;
-                            }
-                        }
                         try (TraceEvent e = TraceEvent.scoped("CreateSpareTab")) {
                             createSpareTab(ProfileManager.getLastUsedRegularProfile());
                         }
@@ -527,10 +525,7 @@ public class CustomTabsConnection {
                 TaskTraits.UI_DEFAULT,
                 () -> {
                     try (TraceEvent e = TraceEvent.scoped("InitializeViewHierarchy")) {
-                        int toolbarLayoutId =
-                                ChromeFeatureList.sCctToolbarRefactor.isEnabled()
-                                        ? R.layout.new_custom_tab_toolbar
-                                        : R.layout.custom_tabs_toolbar;
+                        int toolbarLayoutId = R.layout.new_custom_tab_toolbar;
                         WarmupManager.getInstance()
                                 .initializeViewHierarchy(
                                         ContextUtils.getApplicationContext(),
@@ -596,7 +591,7 @@ public class CustomTabsConnection {
             // `IntentHandler.hasAnyIncognitoExtra` check:
             // Hidden tabs are created always with regular profile, so we need to block hidden tab
             // creation in incognito mode not to have inconsistent modes between tab model and
-            // hidden tab. (crbug.com/1190971)
+            // hidden tab. (crbug.com/40174356)
             // The incognito check is already performed in the entrypoint
             // `mayLaunchUrlInternal`,
             // but also performed here to be safe against future callers.
@@ -677,7 +672,7 @@ public class CustomTabsConnection {
             final @Nullable List<Bundle> otherLikelyBundles) {
         // mayLaunchUrl should not be executed for Incognito CCT since all setup is created with
         // regular profile. If we need to enable mayLaunchUrl for off-the-record profiles, we need
-        // to update the profile used. Please see crbug.com/1106757.
+        // to update the profile used. Please see crbug.com/40706528.
         if (IntentHandler.hasAnyIncognitoExtra(extras)) return false;
 
         final boolean lowConfidence =
@@ -701,11 +696,9 @@ public class CustomTabsConnection {
                     doMayLaunchUrlOnUiThread(
                             lowConfidence,
                             session,
-                            uid,
                             urlString,
                             extras,
-                            otherLikelyBundles,
-                            true);
+                            otherLikelyBundles);
                 });
         return true;
     }
@@ -796,42 +789,11 @@ public class CustomTabsConnection {
     private void doMayLaunchUrlOnUiThread(
             final boolean lowConfidence,
             final SessionHolder<?> session,
-            final int uid,
             final @Nullable String urlString,
             final @Nullable Bundle extras,
-            final @Nullable List<Bundle> otherLikelyBundles,
-            boolean retryIfNotLoaded) {
+            final @Nullable List<Bundle> otherLikelyBundles) {
         ThreadUtils.assertOnUiThread();
         try (TraceEvent e = TraceEvent.scoped("CustomTabsConnection.mayLaunchUrlOnUiThread")) {
-            // TODO(https://crbug.com/423415329): I'm pretty sure this is fixed, just
-            // rolling this out with the flagged change in case it isn't fixed.
-            if (!ChromeFeatureList.sCctFixWarmup.isEnabled()) {
-                // doMayLaunchUrlInternal() is always called once the native level initialization is
-                // done, at least the initial profile load. However, at that stage the startup
-                // callback
-                // may not have run, which causes ProfileManager.getLastUsedRegularProfile() to
-                // throw an
-                // exception. But the tasks have been posted by then, so reschedule ourselves, only
-                // once.
-                if (!BrowserStartupController.getInstance().isFullBrowserStarted()) {
-                    if (retryIfNotLoaded) {
-                        PostTask.postTask(
-                                TaskTraits.UI_DEFAULT,
-                                () -> {
-                                    doMayLaunchUrlOnUiThread(
-                                            lowConfidence,
-                                            session,
-                                            uid,
-                                            urlString,
-                                            extras,
-                                            otherLikelyBundles,
-                                            false);
-                                });
-                    }
-                    return;
-                }
-            }
-
             enableExperimentIdsIfNecessary(extras);
 
             if (lowConfidence) {
@@ -852,8 +814,7 @@ public class CustomTabsConnection {
     public @Nullable Bundle extraCommand(String commandName, @Nullable Bundle args) {
         if (commandName.equals(IS_AUTH_TAB_SUPPORTED)) {
             var bundle = new Bundle();
-            boolean supported = ChromeFeatureList.sCctAuthTab.isEnabled();
-            bundle.putBoolean(AUTH_TAB_SUPPORTED_KEY, supported);
+            bundle.putBoolean(AUTH_TAB_SUPPORTED_KEY, true);
             return bundle;
         }
         return null;
@@ -1046,10 +1007,23 @@ public class CustomTabsConnection {
      * @param intent The intent to verify.
      */
     public boolean isFirstPartyOriginForIntent(Intent intent) {
+        return isFirstPartyOriginForIntent(intent, IntentHandler.getUrlFromIntent(intent));
+    }
+
+    /**
+     * Returns whether an intent is first-party with respect to its session, that is if the
+     * application linked to the session has a relation with the provided origin.
+     *
+     * @param intent The intent to verify.
+     * @param url The url to verify against.
+     */
+    public boolean isFirstPartyOriginForIntent(Intent intent, @Nullable String url) {
         SessionHolder<?> session = SessionHolder.getSessionHolderFromIntent(intent);
         if (session == null) return false;
 
-        Origin origin = Origin.create(intent.getData());
+        if (url == null) return false;
+
+        Origin origin = Origin.create(url);
         if (origin == null) return false;
 
         return mClientManager.isFirstPartyOriginForSession(session, origin);
@@ -1059,13 +1033,16 @@ public class CustomTabsConnection {
             CustomTabsSessionToken session, String message, @Nullable Bundle extras) {
         var sessionHolder = new SessionHolder<>(session);
         int result;
-        if (!mWarmupHasBeenCalled.get()) result = CustomTabsService.RESULT_FAILURE_DISALLOWED;
-        if (!isCallerForegroundOrSelf() && !mSessionDataHolder.isActiveSession(sessionHolder)) {
+        if (!mWarmupHasBeenCalled.get()) {
             result = CustomTabsService.RESULT_FAILURE_DISALLOWED;
+        } else if (!isCallerForegroundOrSelf()
+                && !mSessionDataHolder.isActiveSession(sessionHolder)) {
+            result = CustomTabsService.RESULT_FAILURE_DISALLOWED;
+        } else {
+            // If called before a validatePostMessageOrigin, the post message origin will be invalid
+            // and will return a failure result here.
+            result = mClientManager.postMessage(sessionHolder, message);
         }
-        // If called before a validatePostMessageOrigin, the post message origin will be invalid and
-        // will return a failure result here.
-        result = mClientManager.postMessage(sessionHolder, message);
         logCall("postMessage", result);
         return result;
     }
@@ -1114,7 +1091,7 @@ public class CustomTabsConnection {
      *     Custom Tabs Intent.
      * @return The hidden tab, or null.
      */
-    public HiddenTabHolder.@Nullable HiddenTab takeHiddenTab(
+    public @Nullable HiddenTab takeHiddenTab(
             @Nullable SessionHolder<?> session,
             String url,
             BrowserServicesIntentDataProvider intentDataProvider) {
@@ -1176,6 +1153,11 @@ public class CustomTabsConnection {
             @Nullable SessionHolder<?> session, String url, Intent intent) {
         // For the preconnection to not be a no-op, we need more than just the native library.
         if (!ChromeBrowserInitializer.getInstance().isFullBrowserInitialized()) {
+            return;
+        }
+
+        if (IntentHandler.hasAnyIncognitoExtra(intent.getExtras())) {
+            // The prewarming logic below is hard-coded to the regular profile.
             return;
         }
 
@@ -1252,10 +1234,12 @@ public class CustomTabsConnection {
         if (!ChromeBrowserInitializer.getInstance().isFullBrowserInitialized()) {
             return ParallelRequestStatus.FAILURE_NOT_INITIALIZED;
         }
-        if (intent.hasExtra(PARALLEL_REQUEST_URL_LIST_KEY)
-                && !ChromeFeatureList.isEnabled(ChromeFeatureList.CCT_MULTIPLE_PARALLEL_REQUESTS)) {
+
+        if (IntentHandler.hasAnyIncognitoExtra(intent.getExtras())) {
+            // The prewarming logic below is hard-coded to the regular profile.
             return ParallelRequestStatus.NO_REQUEST;
         }
+
         String packageName = mClientManager.getClientPackageNameForSession(session);
         if (session == null
                 || packageName == null
@@ -1328,6 +1312,11 @@ public class CustomTabsConnection {
         ThreadUtils.assertOnUiThread();
 
         if (!mClientManager.getAllowResourcePrefetchForSession(session)) return 0;
+
+        if (IntentHandler.hasAnyIncognitoExtra(intent.getExtras())) {
+            // The prewarming logic below is hard-coded to the regular profile.
+            return 0;
+        }
 
         List<Uri> resourceList = intent.getParcelableArrayListExtra(RESOURCE_PREFETCH_URL_LIST_KEY);
         Uri referrer = intent.getParcelableExtra(PARALLEL_REQUEST_REFERRER_KEY);
@@ -1417,6 +1406,57 @@ public class CustomTabsConnection {
         return mClientManager.getClientPackageNameForSession(session);
     }
 
+    /** See {@link ClientManager#getClientUidForSession(SessionHolder)} */
+    public int getClientUidForSession(@Nullable SessionHolder<?> session) {
+        return mClientManager.getClientUidForSession(session);
+    }
+
+    /** See {@link ClientManager#getClientPidForSession(SessionHolder)} */
+    public int getClientPidForSession(@Nullable SessionHolder<?> session) {
+        return mClientManager.getClientPidForSession(session);
+    }
+
+    /**
+     * Extracts the target network from the intent if the caller has the required permissions.
+     * Package-private to be used by {@link CustomTabIntentDataProvider}.
+     */
+    @Nullable Network extractTargetNetwork(Intent intent, @Nullable SessionHolder<?> session) {
+        Network network =
+                IntentUtils.safeGetParcelableExtra(intent, CustomTabsIntent.EXTRA_NETWORK);
+        if (network == null) return null;
+
+        int uid = mClientManager.getClientUidForSession(session);
+        int pid = mClientManager.getClientPidForSession(session);
+        String callerPackageName = mClientManager.getClientPackageNameForSession(session);
+        String callerIdentity =
+                callerPackageName != null
+                        ? String.format(
+                                Locale.US, "%s (UID %d, PID %d)", callerPackageName, uid, pid)
+                        : String.format(Locale.US, "UID %d, PID %d", uid, pid);
+
+        Context context = ContextUtils.getApplicationContext();
+        boolean hasPermission =
+                context.checkPermission("android.permission.MAINLINE_NETWORK_STACK", pid, uid)
+                                == PackageManager.PERMISSION_GRANTED
+                        || context.checkPermission("android.permission.NETWORK_SETTINGS", pid, uid)
+                                == PackageManager.PERMISSION_GRANTED;
+
+        if (!hasPermission) {
+            Log.w(
+                    TAG,
+                    "Stripping EXTRA_NETWORK: caller %s does not have the required network"
+                            + " permission. The Custom Tab will use the default network.",
+                    callerIdentity);
+            return null;
+        }
+
+        Log.i(
+                TAG,
+                "Allowed to use EXTRA_NETWORK: caller %s has required network permission.",
+                callerIdentity);
+        return network;
+    }
+
     /**
      * @return Whether the given package name is that of a first-party application.
      */
@@ -1466,7 +1506,7 @@ public class CustomTabsConnection {
      *
      * @param intent The intent that launched the custom tab.
      */
-    boolean isAppForAccountMismatchNotification(Intent intent) {
+    boolean isAppForAccountMismatchNotification(@Nullable Intent intent) {
         return false;
     }
 
@@ -1481,7 +1521,7 @@ public class CustomTabsConnection {
      * @return Whether the notification was shown or not.
      */
     boolean shouldShowAccountMismatchNotification(
-            Intent intent,
+            @Nullable Intent intent,
             Profile profile,
             String accountId,
             long lastShownTime,
@@ -1497,6 +1537,16 @@ public class CustomTabsConnection {
     @Nullable String getAppAccountName(Intent intent) {
         return null;
     }
+
+    /**
+     * Updates the account currently used by the external app for account preview.
+     *
+     * @param profile The current profile.
+     * @param intent The intent that launched the custom tab.
+     * @param clientPackageName The package name of the client app.
+     */
+    public void updateAppAccountForAccountPreview(
+            Profile profile, Intent intent, @Nullable String clientPackageName) {}
 
     /**
      * Sends a callback using {@link CustomTabsCallback} with the first run result if necessary.
@@ -1537,6 +1587,20 @@ public class CustomTabsConnection {
         }
     }
 
+    /**
+     * Adds additional content to the Intent, if present.
+     *
+     * @param tabProvider The tab provider for which the content should be retrieved.
+     * @param dataProvider The data provider for which the content should be retrieved.
+     * @param outboundIntent The intent to add the content to.
+     * @param viewId The ID of the view clicked.
+     */
+    public void maybeAddAdditionalContentExtrasToOutboundIntent(
+            Supplier<@Nullable Tab> tabProvider,
+            BrowserServicesIntentDataProvider dataProvider,
+            Intent outboundIntent,
+            int viewId) {}
+
     /** Called when a resizable Custom Tab is resized. */
     public void onResized(@Nullable SessionHolder<?> session, int height, int width) {
         Bundle args = new Bundle();
@@ -1557,7 +1621,7 @@ public class CustomTabsConnection {
         } catch (Exception e) {
             // Catching all exceptions is really bad, but we need it here,
             // because Android exposes us to client bugs by throwing a variety
-            // of exceptions. See crbug.com/517023.
+            // of exceptions. See crbug.com/40429993.
             return;
         }
         logCallback("onActivityResized()", "(" + height + "x" + width + ")");
@@ -1574,7 +1638,7 @@ public class CustomTabsConnection {
         } catch (Exception e) {
             // Catching all exceptions is really bad, but we need it here,
             // because Android exposes us to client bugs by throwing a variety
-            // of exceptions. See crbug.com/517023.
+            // of exceptions. See crbug.com/40429993.
             return;
         }
         logCallback("onUnminimized()", args);
@@ -1591,7 +1655,7 @@ public class CustomTabsConnection {
         } catch (Exception e) {
             // Catching all exceptions is really bad, but we need it here,
             // because Android exposes us to client bugs by throwing a variety
-            // of exceptions. See crbug.com/517023.
+            // of exceptions. See crbug.com/40429993.
             return;
         }
         logCallback("onMinimized()", args);
@@ -1631,7 +1695,7 @@ public class CustomTabsConnection {
         } catch (Exception e) {
             // Catching all exceptions is really bad, but we need it here,
             // because Android exposes us to client bugs by throwing a variety
-            // of exceptions. See crbug.com/517023.
+            // of exceptions. See crbug.com/40429993.
             return;
         }
     }
@@ -1665,7 +1729,7 @@ public class CustomTabsConnection {
         } catch (Exception e) {
             // Catching all exceptions is really bad, but we need it here,
             // because Android exposes us to client bugs by throwing a variety
-            // of exceptions. See crbug.com/517023.
+            // of exceptions. See crbug.com/40429993.
             return false;
         }
         logCallback("onNavigationEvent()", navigationEvent);
@@ -1705,7 +1769,7 @@ public class CustomTabsConnection {
             } catch (Exception e) {
                 // Catching all exceptions is really bad, but we need it here,
                 // because Android exposes us to client bugs by throwing a variety
-                // of exceptions. See crbug.com/517023.
+                // of exceptions. See crbug.com/40429993.
             }
         }
 
@@ -1800,7 +1864,7 @@ public class CustomTabsConnection {
 
     /**
      * Wraps calling extraCallback in a try/catch so exceptions thrown by the host app don't crash
-     * Chrome. See https://crbug.com/517023.
+     * Chrome. See https://crbug.com/40429993.
      */
     // The string passed is safe since it is a method name.
     @SuppressWarnings("NoDynamicStringsInTraceEventCheck")
@@ -1921,7 +1985,7 @@ public class CustomTabsConnection {
         // optimistically assume it is. Otherwise we would effectively disable CCT warmup
         // on these devices.
         if (!workaroundAvailable) return true;
-        return isBackgroundProcess(pid);
+        return !isBackgroundProcess(pid);
     }
 
     void cleanupAllForTesting() {
@@ -2092,8 +2156,7 @@ public class CustomTabsConnection {
         }
     }
 
-    @VisibleForTesting
-    HiddenTabHolder.@Nullable SpeculationParams getSpeculationParamsForTesting() {
+    @Nullable SpeculationParams getSpeculationParamsForTesting() {
         return mHiddenTabHolder.getSpeculationParamsForTesting();
     }
 
@@ -2105,8 +2168,20 @@ public class CustomTabsConnection {
 
     public boolean receiveFile(
             CustomTabsSessionToken sessionToken, Uri uri, int purpose, @Nullable Bundle extras) {
+        if (ContextUtils.getApplicationContext()
+                        .checkUriPermission(
+                                uri,
+                                Binder.getCallingPid(),
+                                Binder.getCallingUid(),
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                != PackageManager.PERMISSION_GRANTED) {
+            logCall("receiveFile()", false);
+            return false;
+        }
+        SessionHolder<?> session = new SessionHolder<>(sessionToken);
+        if (!mClientManager.isSessionValid(session)) return false;
         return CustomTabsClientFileProcessor.getInstance()
-                .processFile(new SessionHolder<>(sessionToken), uri, purpose, extras);
+                .processFile(session, uri, purpose, extras);
     }
 
     public void setCustomTabIsInForeground(
@@ -2222,27 +2297,6 @@ public class CustomTabsConnection {
     }
 
     /**
-     * Called when text fragment lookups on the current page has completed.
-     *
-     * @param session session object.
-     * @param stateKey unique key for the embedder to keep track of the request.
-     * @param foundTextFragments text fragments from the initial request that were found on the
-     *     page.
-     */
-    @CalledByNative
-    private static void notifyClientOfTextFragmentLookupCompletion(
-            SessionHolder<?> session,
-            @JniType("std::string") String stateKey,
-            String[] foundTextFragments) {
-        getInstance()
-                .notifyClientOfTextFragmentLookupCompletionReportApp(
-                        session, stateKey, new ArrayList(Arrays.asList(foundTextFragments)));
-    }
-
-    protected void notifyClientOfTextFragmentLookupCompletionReportApp(
-            SessionHolder<?> session, String stateKey, ArrayList<String> foundTextFragments) {}
-
-    /**
      * @return The CalledWarmup state for the session.
      */
     public @CalledWarmup int getWarmupState(@Nullable SessionHolder<?> session) {
@@ -2289,16 +2343,5 @@ public class CustomTabsConnection {
                 @DetachedResourceRequestMotivation int motivation);
 
         void setClientDataHeader(WebContents webContents, @JniType("std::string") String header);
-
-        void textFragmentLookup(
-                SessionHolder<?> session,
-                WebContents webContents,
-                @JniType("std::string") String stateKey,
-                String[] textFragment);
-
-        void textFragmentFindScrollAndHighlight(
-                SessionHolder<?> session,
-                WebContents webContents,
-                @JniType("std::string") String textFragment);
     }
 }

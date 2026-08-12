@@ -21,7 +21,7 @@ export const AppManagementEntryPointsHistogramName =
     'AppManagement.EntryPoints';
 
 /**
- * These values are persisted to logs and should not be renumbered or re-used.
+ * These values are persisted to logs and should not be renumbered or reused.
  * See tools/metrics/histograms/enums.xml.
  */
 export enum AppManagementEntryPoint {
@@ -35,13 +35,13 @@ export enum AppManagementEntryPoint {
   MAIN_VIEW_CHROME_APP = 7,
   MAIN_VIEW_WEB_APP = 8,
   OS_SETTINGS_MAIN_PAGE = 9,
-  MAIN_VIEW_PLUGIN_VM = 10,
-  D_BUS_SERVICE_PLUGIN_VM = 11,
+  DEPRECATED_MAIN_VIEW_PLUGIN_VM = 10,
+  DEPRECATED_D_BUS_SERVICE_PLUGIN_VM = 11,
   MAIN_VIEW_BOREALIS = 12,
 }
 
 /**
- * These values are persisted to logs and should not be renumbered or re-used.
+ * These values are persisted to logs and should not be renumbered or reused.
  * See tools/metrics/histograms/enums.xml.
  */
 export enum AppManagementUserAction {

@@ -57,6 +57,8 @@ class SigninUI {
   virtual void ShowNewTermsForFlexUsers() = 0;
   // Show the password selection screen for the user.
   virtual void ShowPasswordSelectionScreen() = 0;
+  // Show the remove local auth factors screen for the user.
+  virtual void ShowRemoveLocalAuthFactorsScreen() = 0;
 
   virtual void StartEncryptionMigration(
       std::unique_ptr<UserContext> user_context,
@@ -91,6 +93,9 @@ class SigninUI {
   // that (or show the error screen).
   virtual void SAMLConfirmPassword(
       ::login::StringList scraped_passwords,
+      std::unique_ptr<UserContext> user_context) = 0;
+
+  virtual void ShowSamlConfirmPassword(
       std::unique_ptr<UserContext> user_context) = 0;
 };
 

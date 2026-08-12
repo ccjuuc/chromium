@@ -27,8 +27,8 @@
 #include "chrome/browser/extensions/chrome_content_verifier_delegate.h"
 #include "chrome/browser/extensions/content_verifier_test_utils.h"
 #include "chrome/browser/extensions/corrupted_extension_reinstaller.h"
-#include "chrome/browser/extensions/crx_installer.h"
 #include "chrome/browser/extensions/devtools_util.h"
+#include "chrome/browser/extensions/extension_browser_test_util.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_management_test_util.h"
 #include "chrome/browser/extensions/external_provider_manager.h"
@@ -46,6 +46,7 @@
 #include "extensions/browser/content_verifier/content_verify_job.h"
 #include "extensions/browser/content_verifier/test_utils.h"
 #include "extensions/browser/crx_file_info.h"
+#include "extensions/browser/crx_installer.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
@@ -116,7 +117,6 @@ void ExtensionUpdateComplete(base::OnceClosure callback,
   std::move(callback).Run();
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 // A helper override to force generation of hashes for all extensions, not just
 // those from the webstore.
 ChromeContentVerifierDelegate::VerifyInfo GetVerifyInfoAndForceHashes(
@@ -125,7 +125,6 @@ ChromeContentVerifierDelegate::VerifyInfo GetVerifyInfoAndForceHashes(
       ChromeContentVerifierDelegate::VerifyInfo::Mode::ENFORCE_STRICT,
       extension.from_webstore(), /*should_repair=*/false);
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 }  // namespace
 
@@ -266,22 +265,6 @@ class ContentVerifierTest : public ExtensionBrowserTest {
         testing::UnorderedElementsAre(disable_reason::DISABLE_CORRUPTED));
   }
 
-  // Reads private key from |private_key_path| and generates extension id using
-  // it.
-  std::string GetExtensionIdFromPrivateKeyFile(
-      const base::FilePath& private_key_path) {
-    std::string private_key_contents;
-    EXPECT_TRUE(
-        base::ReadFileToString(private_key_path, &private_key_contents));
-    std::string private_key_bytes;
-    EXPECT_TRUE(
-        Extension::ParsePEMKeyBytes(private_key_contents, &private_key_bytes));
-    auto signing_key = crypto::keypair::PrivateKey::FromPrivateKeyInfo(
-        base::as_byte_span(private_key_bytes));
-    std::vector<uint8_t> public_key = signing_key->ToSubjectPublicKeyInfo();
-    return crx_file::id_util::GenerateId(public_key);
-  }
-
   // Creates a random signing key and sets |extension_id| according to it.
   crypto::keypair::PrivateKey CreateExtensionSigningKey(
       std::string& extension_id) {
@@ -325,9 +308,6 @@ class ContentVerifierTest : public ExtensionBrowserTest {
   testing::NiceMock<MockUpdateService> update_service_;
 };
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-// TODO(crbug.com/371432155): Port to desktop Android when the tabs API is
-// supported.
 IN_PROC_BROWSER_TEST_F(ContentVerifierTest, DotSlashPaths) {
   TestContentVerifyJobObserver job_observer;
   std::string id = "hoipipabpcoomfapcecilckodldhmpgl";
@@ -384,7 +364,6 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTest, DotSlashPaths) {
 
   EXPECT_TRUE(job_observer.WaitForExpectedJobs());
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // Make sure that `VerifierObserver` doesn't crash on destruction.
 //
@@ -417,7 +396,7 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTest, ContentScriptsInLocales) {
 
 // Tests that a deleted content_script results in content verification failure.
 //
-// Regression test for crbug.com/1296310.
+// Regression test for crbug.com/40214734.
 IN_PROC_BROWSER_TEST_F(ContentVerifierTest,
                        DeletedContentScriptFailsContentVerification) {
   TestContentScriptExtension("content_verifier/content_script.crx",
@@ -434,7 +413,6 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTest,
                              ScriptModificationAction::kMakeUnreadable);
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 // A class that forces all installed extensions to generate hashes (normally,
 // we'd only generate hashes for policy-installed extensions with the
 // appropriate enterprise policy applied). This makes it easier to test the
@@ -453,8 +431,6 @@ class ContentVerifierTestWithForcedHashes : public ContentVerifierTest {
 };
 
 // Tests detection of corruption in an extension's service worker file.
-// TODO(crbug.com/371432155): Port to desktop Android when the tabs API is
-// supported.
 IN_PROC_BROWSER_TEST_F(ContentVerifierTestWithForcedHashes,
                        TestServiceWorkerCorruption_DisableAndEnable) {
   static constexpr char kManifest[] =
@@ -515,8 +491,13 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTestWithForcedHashes,
   job_observer.ExpectJobResult(extension->id(), background_script_relative_path,
                                TestContentVerifyJobObserver::Result::FAILURE);
 
+  // Set up an observer to wait for the extension to be disabled.
+  TestExtensionRegistryObserver disable_observer(
+      ExtensionRegistry::Get(profile()), extension->id());
+
   EnableExtension(extension->id());
   EXPECT_TRUE(job_observer.WaitForExpectedJobs());
+  EXPECT_TRUE(disable_observer.WaitForExtensionUnloaded());
 
   // The extension should be disabled...
   ExtensionRegistry* registry = ExtensionRegistry::Get(profile());
@@ -543,8 +524,6 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTestWithForcedHashes,
 }
 
 // Tests service worker corruption detection across browser starts.
-// TODO(crbug.com/371432155): Port to desktop Android when the tabs API is
-// supported.
 IN_PROC_BROWSER_TEST_F(ContentVerifierTest,
                        PRE_TestServiceWorker_AcrossSession) {
   // Force-enable content verification for every extension.
@@ -605,8 +584,6 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTest,
   // is preserved by the PRE_ test.)
 }
 
-// TODO(crbug.com/371432155): Port to desktop Android when the tabs API is
-// supported.
 IN_PROC_BROWSER_TEST_F(ContentVerifierTest, TestServiceWorker_AcrossSession) {
   // Force-enable content verification for every extension.
   ChromeContentVerifierDelegate::GetVerifyInfoTestOverride verify_info_override(
@@ -641,7 +618,7 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTest, TestServiceWorker_AcrossSession) {
     std::string file_contents;
     ASSERT_TRUE(base::ReadFileToString(
         extension->path().AppendASCII("background.js"), &file_contents));
-    EXPECT_TRUE(base::Contains(file_contents, "self.didModifyScript = true;"));
+    EXPECT_TRUE(file_contents.contains("self.didModifyScript = true;"));
   }
 
   // Now for the fun part. Start up the extension by opening a new tab,
@@ -676,8 +653,13 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTest, TestServiceWorker_AcrossSession) {
   job_observer.ExpectJobResult(extension->id(), background_script_relative_path,
                                TestContentVerifyJobObserver::Result::FAILURE);
 
+  // Set up an observer to wait for the extension to be disabled.
+  TestExtensionRegistryObserver disable_observer(
+      ExtensionRegistry::Get(profile()), extension->id());
+
   EnableExtension(extension->id());
   EXPECT_TRUE(job_observer.WaitForExpectedJobs());
+  EXPECT_TRUE(disable_observer.WaitForExtensionUnloaded());
 
   // The extension should be disabled...
   EXPECT_FALSE(registry->enabled_extensions().Contains(extension->id()));
@@ -697,7 +679,6 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTest, TestServiceWorker_AcrossSession) {
       "Extensions.ContentVerification.VerifyFailedOnFileTypeMV3",
       kServiceWorkerScriptFileType, 1);
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // Tests the case of a corrupt extension that is force-installed by policy and
 // should not be allowed to be manually uninstalled/disabled by the user.
@@ -1016,8 +997,9 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_TRUE(extension);
   EXPECT_EQ(extension->id(), extension_id);
 
-  ContentHashReader::InitStatus hashes_status = observer.WaitForOnHashesReady();
-  EXPECT_EQ(ContentHashReader::InitStatus::SUCCESS, hashes_status);
+  std::optional<ContentHashReaderInitStatus> hashes_status =
+      observer.WaitForOnHashesReady();
+  EXPECT_EQ(std::nullopt, hashes_status);
 }
 
 // Verifies that CRX with malformed verified contents injected into the header
@@ -1049,8 +1031,9 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTest,
       test_data_dir_.AppendASCII("content_verifier/storage_permission");
   base::FilePath crx_path = PackExtension(unpacked_path);
   ASSERT_TRUE(base::PathExists(crx_path.DirName().AppendASCII("temp.pem")));
-  const std::string extension_id = GetExtensionIdFromPrivateKeyFile(
-      crx_path.DirName().AppendASCII("temp.pem"));
+  const std::string extension_id =
+      browser_test_util::GetExtensionIdFromPrivateKeyFile(
+          crx_path.DirName().AppendASCII("temp.pem"));
 
   TestContentVerifySingleJobObserver observer(
       extension_id, base::FilePath().AppendASCII("background.js"));
@@ -1059,15 +1042,16 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTest,
   ASSERT_TRUE(extension);
   EXPECT_EQ(extension->id(), extension_id);
 
-  ContentHashReader::InitStatus hashes_status = observer.WaitForOnHashesReady();
-  EXPECT_EQ(ContentHashReader::InitStatus::HASHES_MISSING, hashes_status);
+  std::optional<ContentHashReaderInitStatus> hashes_status =
+      observer.WaitForOnHashesReady();
+  EXPECT_EQ(ContentHashReaderInitStatus::HASHES_MISSING, hashes_status);
 }
 
 // Tests that tampering with a large resource fails content verification as
 // expected. The size of the resource is such that it would trigger
 // FileLoaderObserver::OnSeekComplete in extension_protocols.cc.
 //
-// Regression test for: http://crbug.com/965043.
+// Regression test for: http://crbug.com/41459929.
 IN_PROC_BROWSER_TEST_F(ContentVerifierTest, TamperLargeSizedResource) {
   // This test extension is copied from the webstore that has actual
   // signatures.
@@ -1093,7 +1077,7 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTest, TamperLargeSizedResource) {
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 // Tests that a resource reading failure due to FileURLLoader cancellation
 // does not incorrectly result in content verificaton failure.
-// Regression test for: http://crbug.com/977805.
+// Regression test for: http://crbug.com/41467403.
 // TODO(crbug.com/413122584): Port to desktop Android. The cross platform
 // navigation utilities we have don't support new tab + no wait.
 IN_PROC_BROWSER_TEST_F(ContentVerifierTest,
@@ -1144,7 +1128,7 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTest,
 // Tests that navigating to an extension resource with '/' at end does not
 // disable the extension.
 //
-// Regression test for: https://crbug.com/929578.
+// Regression test for: https://crbug.com/40093979.
 IN_PROC_BROWSER_TEST_F(ContentVerifierTest,
                        RemainsEnabledOnNavigateToPathEndingWithSlash) {
   const Extension* extension = InstallExtensionFromWebstore(
@@ -1165,7 +1149,7 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTest,
 // Tests that navigating to an extension resource with '.' at end does not
 // disable the extension.
 //
-// Regression test for https://crbug.com/696208.
+// Regression test for https://crbug.com/40086896.
 IN_PROC_BROWSER_TEST_F(ContentVerifierTest,
                        RemainsEnabledOnNavigateToPathEndingWithDot) {
   const Extension* extension = InstallExtensionFromWebstore(
@@ -1186,7 +1170,7 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTest,
 // Tests that navigating to an extension resource with incorrect case does not
 // disable the extension, both in case-sensitive and case-insensitive systems.
 //
-// Regression test for https://crbug.com/1033294.
+// Regression test for https://crbug.com/40111280.
 IN_PROC_BROWSER_TEST_F(ContentVerifierTest,
                        RemainsEnabledOnNavigateToPathWithIncorrectCase) {
   const Extension* extension = InstallExtensionFromWebstore(
@@ -1271,8 +1255,9 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTest,
 }
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-// TODO(crbug.com/394876083): Port these tests to desktop Android when more of
-// the policy/management stack is ported.
+// TODO(crbug.com/394876083): These tests crash on startup on desktop Android
+// because they trigger an OnUpdateCheck() call very early in setup, before the
+// Android test base classes are able to access the Profile.
 class ContentVerifierPolicyTest : public ContentVerifierTest {
  public:
   // We need to do this work here because the force-install policy values are

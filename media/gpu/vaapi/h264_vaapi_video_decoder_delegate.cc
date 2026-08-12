@@ -2,17 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/gpu/vaapi/h264_vaapi_video_decoder_delegate.h"
 
 #include <va/va.h>
 
 #include <array>
 
+#include "base/compiler_specific.h"
 #include "base/memory/aligned_memory.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/trace_event/trace_event.h"
@@ -104,7 +100,7 @@ scoped_refptr<H264Picture> H264VaapiVideoDecoderDelegate::CreateH264Picture() {
 
 // Fill |va_pic| with default/neutral values.
 static void InitVAPicture(VAPictureH264* va_pic) {
-  memset(va_pic, 0, sizeof(*va_pic));
+  UNSAFE_TODO(memset(va_pic, 0, sizeof(*va_pic)));
   va_pic->picture_id = VA_INVALID_ID;
   va_pic->flags = VA_PICTURE_H264_INVALID;
 }
@@ -135,9 +131,9 @@ DecodeStatus H264VaapiVideoDecoderDelegate::SubmitFrameMetadata(
   TRACE_EVENT0("media,gpu",
                "H264VaapiVideoDecoderDelegate::SubmitFrameMetadata");
   VAPictureParameterBufferH264 pic_param;
-  memset(&pic_param, 0, sizeof(pic_param));
+  UNSAFE_TODO(memset(&pic_param, 0, sizeof(pic_param)));
 #if BUILDFLAG(IS_CHROMEOS)
-  memset(&crypto_params_, 0, sizeof(crypto_params_));
+  UNSAFE_TODO(memset(&crypto_params_, 0, sizeof(crypto_params_)));
 #endif  // BUILDFLAG(IS_CHROMEOS)
   full_sample_ = false;
 
@@ -199,40 +195,41 @@ DecodeStatus H264VaapiVideoDecoderDelegate::SubmitFrameMetadata(
 
   // Init reference pictures' array.
   for (int i = 0; i < 16; ++i)
-    InitVAPicture(&pic_param.ReferenceFrames[i]);
+    InitVAPicture(UNSAFE_TODO(&pic_param.ReferenceFrames[i]));
 
   // And fill it with our reference frames.
   for (size_t i = 0; i < ref_pic_listp0.size(); i++) {
-    FillVAPicture(pic_param.ReferenceFrames + i, ref_pic_listp0[i]);
+    FillVAPicture(UNSAFE_TODO(pic_param.ReferenceFrames + i),
+                  ref_pic_listp0[i]);
   }
 
   pic_param.num_ref_frames = sps->max_num_ref_frames;
 
   VAIQMatrixBufferH264 iq_matrix_buf;
-  memset(&iq_matrix_buf, 0, sizeof(iq_matrix_buf));
+  UNSAFE_TODO(memset(&iq_matrix_buf, 0, sizeof(iq_matrix_buf)));
 
   if (pps->pic_scaling_matrix_present_flag) {
     for (int i = 0; i < 6; ++i) {
       for (int j = 0; j < 16; ++j)
-        iq_matrix_buf.ScalingList4x4[i][kZigzagScan4x4[j]] =
+        UNSAFE_TODO(iq_matrix_buf.ScalingList4x4[i][kZigzagScan4x4[j]]) =
             pps->scaling_list4x4[i][j];
     }
 
     for (int i = 0; i < 2; ++i) {
       for (int j = 0; j < 64; ++j)
-        iq_matrix_buf.ScalingList8x8[i][kZigzagScan8x8[j]] =
+        UNSAFE_TODO(iq_matrix_buf.ScalingList8x8[i][kZigzagScan8x8[j]]) =
             pps->scaling_list8x8[i][j];
     }
   } else {
     for (int i = 0; i < 6; ++i) {
       for (int j = 0; j < 16; ++j)
-        iq_matrix_buf.ScalingList4x4[i][kZigzagScan4x4[j]] =
+        UNSAFE_TODO(iq_matrix_buf.ScalingList4x4[i][kZigzagScan4x4[j]]) =
             sps->scaling_list4x4[i][j];
     }
 
     for (int i = 0; i < 2; ++i) {
       for (int j = 0; j < 64; ++j)
-        iq_matrix_buf.ScalingList8x8[i][kZigzagScan8x8[j]] =
+        UNSAFE_TODO(iq_matrix_buf.ScalingList8x8[i][kZigzagScan8x8[j]]) =
             sps->scaling_list8x8[i][j];
     }
   }
@@ -265,7 +262,7 @@ DecodeStatus H264VaapiVideoDecoderDelegate::ParseEncryptedSliceHeader(
     }
     const AMD_SLICE_PARAMS* amd_slice_params =
         reinterpret_cast<const AMD_SLICE_PARAMS*>(
-            data.back().data() + subsamples.back().clear_bytes);
+            UNSAFE_TODO(data.back().data() + subsamples.back().clear_bytes));
     // Fill in the AMD specific params.
     slice_header_out->bottom_field_flag =
         amd_slice_params->va_param.bottom_field_flag;
@@ -274,8 +271,8 @@ DecodeStatus H264VaapiVideoDecoderDelegate::ParseEncryptedSliceHeader(
     slice_header_out->num_ref_idx_l1_active_minus1 =
         amd_slice_params->va_param.num_ref_idx_l1_active_minus1;
     // Copy the common parameters that we will fill in below.
-    memcpy(slice_param_buf.get(), &amd_slice_params->cenc_param,
-           sizeof(VACencSliceParameterBufferH264));
+    UNSAFE_TODO(memcpy(slice_param_buf.get(), &amd_slice_params->cenc_param,
+                       sizeof(VACencSliceParameterBufferH264)));
   } else {
     // For Intel, this is done by sending in the encryption parameters and the
     // encrypted slice header. Then the vaEndPicture call is blocking while it
@@ -369,6 +366,11 @@ DecodeStatus H264VaapiVideoDecoderDelegate::ParseEncryptedSliceHeader(
       full_data.insert(full_data.end(), start_code.begin(), start_code.end());
       full_data.insert(full_data.end(), nalu.begin(), nalu.end());
     }
+    if (total_size != full_data.size()) {
+      LOG(ERROR) << "CENCv1 segment/NALU size mismatch: segments cover "
+                 << total_size << " bytes, buffer is " << full_data.size();
+      return DecodeStatus::kFail;
+    }
     if (!vaapi_wrapper_->SubmitBuffers(
             {{VAEncryptionParameterBufferType, sizeof(crypto_params),
               &crypto_params},
@@ -428,18 +430,20 @@ DecodeStatus H264VaapiVideoDecoderDelegate::ParseEncryptedSliceHeader(
     DVLOG(1) << "Invalid number of dec_ref_pics: " << num_dec_ref_pics;
     return DecodeStatus::kFail;
   }
-  for (size_t i = 0; i < num_dec_ref_pics; ++i) {
-    slice_header_out->ref_pic_marking[i].memory_mgmnt_control_operation =
-        slice_param_buf->memory_management_control_operation[i];
-    slice_header_out->ref_pic_marking[i].difference_of_pic_nums_minus1 =
-        slice_param_buf->difference_of_pic_nums_minus1[i];
-    slice_header_out->ref_pic_marking[i].long_term_pic_num =
-        slice_param_buf->long_term_pic_num[i];
-    slice_header_out->ref_pic_marking[i].long_term_frame_idx =
-        slice_param_buf->long_term_frame_idx[i];
-    slice_header_out->ref_pic_marking[i].max_long_term_frame_idx_plus1 =
-        slice_param_buf->max_long_term_frame_idx_plus1[i];
-  }
+  UNSAFE_TODO({
+    for (size_t i = 0; i < num_dec_ref_pics; ++i) {
+      slice_header_out->ref_pic_marking[i].memory_mgmnt_control_operation =
+          slice_param_buf->memory_management_control_operation[i];
+      slice_header_out->ref_pic_marking[i].difference_of_pic_nums_minus1 =
+          slice_param_buf->difference_of_pic_nums_minus1[i];
+      slice_header_out->ref_pic_marking[i].long_term_pic_num =
+          slice_param_buf->long_term_pic_num[i];
+      slice_header_out->ref_pic_marking[i].long_term_frame_idx =
+          slice_param_buf->long_term_frame_idx[i];
+      slice_header_out->ref_pic_marking[i].max_long_term_frame_idx_plus1 =
+          slice_param_buf->max_long_term_frame_idx_plus1[i];
+    }
+  });
   slice_header_out->full_sample_encryption = true;
   return DecodeStatus::kOk;
 #else  // BUILDFLAG(IS_CHROMEOS)
@@ -487,7 +491,7 @@ DecodeStatus H264VaapiVideoDecoderDelegate::SubmitSlice(
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
   VASliceParameterBufferH264 slice_param;
-  memset(&slice_param, 0, sizeof(slice_param));
+  UNSAFE_TODO(memset(&slice_param, 0, sizeof(slice_param)));
 
   slice_param.slice_data_size = slice_hdr->nalu_size;
   slice_param.slice_data_offset = 0;
@@ -522,30 +526,30 @@ DecodeStatus H264VaapiVideoDecoderDelegate::SubmitSlice(
     SHDRToSP(chroma_weight_l1_flag);
 
     for (int i = 0; i <= slice_param.num_ref_idx_l0_active_minus1; ++i) {
-      slice_param.luma_weight_l0[i] =
+      UNSAFE_TODO(slice_param.luma_weight_l0[i]) =
           slice_hdr->pred_weight_table_l0.luma_weight[i];
-      slice_param.luma_offset_l0[i] =
+      UNSAFE_TODO(slice_param.luma_offset_l0[i]) =
           slice_hdr->pred_weight_table_l0.luma_offset[i];
 
       for (int j = 0; j < 2; ++j) {
-        slice_param.chroma_weight_l0[i][j] =
+        UNSAFE_TODO(slice_param.chroma_weight_l0[i][j]) =
             slice_hdr->pred_weight_table_l0.chroma_weight[i][j];
-        slice_param.chroma_offset_l0[i][j] =
+        UNSAFE_TODO(slice_param.chroma_offset_l0[i][j]) =
             slice_hdr->pred_weight_table_l0.chroma_offset[i][j];
       }
     }
 
     if (slice_hdr->IsBSlice()) {
       for (int i = 0; i <= slice_param.num_ref_idx_l1_active_minus1; ++i) {
-        slice_param.luma_weight_l1[i] =
+        UNSAFE_TODO(slice_param.luma_weight_l1[i]) =
             slice_hdr->pred_weight_table_l1.luma_weight[i];
-        slice_param.luma_offset_l1[i] =
+        UNSAFE_TODO(slice_param.luma_offset_l1[i]) =
             slice_hdr->pred_weight_table_l1.luma_offset[i];
 
         for (int j = 0; j < 2; ++j) {
-          slice_param.chroma_weight_l1[i][j] =
+          UNSAFE_TODO(slice_param.chroma_weight_l1[i][j]) =
               slice_hdr->pred_weight_table_l1.chroma_weight[i][j];
-          slice_param.chroma_offset_l1[i][j] =
+          UNSAFE_TODO(slice_param.chroma_offset_l1[i][j]) =
               slice_hdr->pred_weight_table_l1.chroma_offset[i][j];
         }
       }
@@ -557,21 +561,21 @@ DecodeStatus H264VaapiVideoDecoderDelegate::SubmitSlice(
       "Invalid RefPicList sizes");
 
   for (size_t i = 0; i < std::size(slice_param.RefPicList0); ++i) {
-    InitVAPicture(&slice_param.RefPicList0[i]);
-    InitVAPicture(&slice_param.RefPicList1[i]);
+    InitVAPicture(UNSAFE_TODO(&slice_param.RefPicList0[i]));
+    InitVAPicture(UNSAFE_TODO(&slice_param.RefPicList1[i]));
   }
 
   for (size_t i = 0;
        i < ref_pic_list0.size() && i < std::size(slice_param.RefPicList0);
        ++i) {
     if (ref_pic_list0[i])
-      FillVAPicture(&slice_param.RefPicList0[i], ref_pic_list0[i]);
+      FillVAPicture(UNSAFE_TODO(&slice_param.RefPicList0[i]), ref_pic_list0[i]);
   }
   for (size_t i = 0;
        i < ref_pic_list1.size() && i < std::size(slice_param.RefPicList1);
        ++i) {
     if (ref_pic_list1[i])
-      FillVAPicture(&slice_param.RefPicList1[i], ref_pic_list1[i]);
+      FillVAPicture(UNSAFE_TODO(&slice_param.RefPicList1[i]), ref_pic_list1[i]);
   }
   if (IsTranscrypted()) {
     CHECK_EQ(subsamples.size(), 1u);
@@ -583,7 +587,7 @@ DecodeStatus H264VaapiVideoDecoderDelegate::SubmitSlice(
                 {VASliceParameterBufferType, sizeof(slice_param), &slice_param},
                 {VASliceDataBufferType,
                  subsamples[0].cypher_bytes - cypher_skip,
-                 data + subsamples[0].clear_bytes + cypher_skip}})
+                 UNSAFE_TODO(data + subsamples[0].clear_bytes + cypher_skip)}})
                ? DecodeStatus::kOk
                : DecodeStatus::kFail;
   }
@@ -628,7 +632,8 @@ bool H264VaapiVideoDecoderDelegate::OutputPicture(
   const VaapiH264Picture* vaapi_pic = pic->AsVaapiH264Picture();
   vaapi_dec_->SurfaceReady(vaapi_pic->va_surface_id(),
                            vaapi_pic->bitstream_id(), vaapi_pic->visible_rect(),
-                           vaapi_pic->get_colorspace());
+                           vaapi_pic->get_colorspace(),
+                           vaapi_pic->dynamic_hdr_metadata());
   return true;
 }
 

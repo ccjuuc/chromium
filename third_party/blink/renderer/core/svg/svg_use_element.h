@@ -46,6 +46,10 @@ class SVGUseElement final : public SVGGraphicsElement,
   explicit SVGUseElement(Document&);
   ~SVGUseElement() override;
 
+  ElementType GetElementType() const final {
+    return ElementType::kSVGUseElement;
+  }
+
   void InvalidateShadowTree();
   void InvalidateTargetReference();
 
@@ -123,7 +127,12 @@ class SVGUseElement final : public SVGGraphicsElement,
   Member<SVGAnimatedLength> height_;
 
   TaskHandle pending_event_;
-  std::unique_ptr<IncrementLoadEventDelayCount> load_event_delayer_;
+  // For delaying any 'load' event dispatch until after an external resource
+  // load completed.
+  std::unique_ptr<IncrementLoadEventDelayCount> resource_load_event_delayer_;
+  // For delaying any 'load' event dispatch until after the shadow tree has
+  // been attached after an external resource load completed.
+  std::unique_ptr<IncrementLoadEventDelayCount> attach_load_event_delayer_;
   KURL element_url_;
   bool element_url_is_local_;
   bool needs_shadow_tree_recreation_;
@@ -139,6 +148,7 @@ class SVGUseElement final : public SVGGraphicsElement,
                            NullInstanceRootWhenConnectedToInactiveDocument);
   FRIEND_TEST_ALL_PREFIXES(SVGUseElementTest,
                            NullInstanceRootWhenShadowTreePendingRebuild);
+  FRIEND_TEST_ALL_PREFIXES(AnimationCompositorAnimationsTest, SVGUseInstancesIndependentlyAnimate);
 };
 
 }  // namespace blink

@@ -7,17 +7,15 @@
 #include <string>
 #include <utility>
 
+#include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/child_accounts/parent_access_controller.h"
 #include "base/check.h"
 #include "base/check_deref.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/common/pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
@@ -59,7 +57,7 @@ bool IsDeviceOwnedByChild() {
 
 // static
 void ParentAccessService::RegisterProfilePrefs(PrefRegistrySimple* registry) {
-  registry->RegisterDictionaryPref(prefs::kParentAccessCodeConfig);
+  registry->RegisterDictionaryPref(ash::prefs::kParentAccessCodeConfig);
 }
 
 // static
@@ -103,7 +101,7 @@ ParentCodeValidationResult ParentAccessService::ValidateParentAccessCode(
 
   if (config_source_.config_map().empty() ||
       (account_id.is_valid() &&
-       !base::Contains(config_source_.config_map(), account_id))) {
+       !config_source_.config_map().contains(account_id))) {
     result = ParentCodeValidationResult::kNoConfig;
     NotifyObservers(result, account_id);
     return result;
@@ -127,7 +125,7 @@ ParentCodeValidationResult ParentAccessService::ValidateParentAccessCode(
 
 void ParentAccessService::UpdateConfigForUser(
     const AccountId& account_id,
-    std::optional<base::Value::Dict> config) {
+    std::optional<base::DictValue> config) {
   if (config) {
     config_source_.UpdateConfigForUser(account_id, std::move(config.value()));
   } else {

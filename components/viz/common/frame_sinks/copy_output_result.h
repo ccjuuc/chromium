@@ -14,11 +14,11 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/threading/thread_checker.h"
 #include "components/viz/common/resources/release_callback.h"
+#include "components/viz/common/surfaces/tracked_element_rects.h"
 #include "components/viz/common/viz_common_export.h"
 #include "gpu/command_buffer/client/client_shared_image.h"
 #include "gpu/command_buffer/client/shared_image_interface.h"
 #include "gpu/command_buffer/common/mailbox.h"
-#include "gpu/command_buffer/common/mailbox_holder.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/rect.h"
@@ -71,6 +71,15 @@ class VIZ_COMMON_EXPORT CopyOutputResult {
     kSharedImage,
   };
 
+  // A CopyOutputResult may be empty and this enum can provide some reasoning
+  // why the result might be empty.
+  enum class Error : uint8_t {
+    kNone,
+    kUnknown,
+    kTimeout,
+    kEmbeddingTokenChanged,
+  };
+
   // Maximum number of planes allowed when returning software NV12 results.
   static constexpr size_t kNV12MaxPlanes = 2;
 
@@ -89,6 +98,9 @@ class VIZ_COMMON_EXPORT CopyOutputResult {
                    const gfx::Rect& rect,
                    bool needs_lock_for_bitmap);
 
+  // Constructor for when we have an error.
+  CopyOutputResult(Format format, Destination destination, Error error);
+
   CopyOutputResult(const CopyOutputResult&) = delete;
   CopyOutputResult& operator=(const CopyOutputResult&) = delete;
 
@@ -102,6 +114,8 @@ class VIZ_COMMON_EXPORT CopyOutputResult {
   Format format() const { return format_; }
   // Returns the destination of this result.
   Destination destination() const { return destination_; }
+  // Returns the error code of this result.
+  Error error() const { return error_; }
 
   // Returns the result Rect, which is the position and size of the image data
   // within the surface/layer (see CopyOutputRequest::set_area()). If a scale
@@ -195,6 +209,14 @@ class VIZ_COMMON_EXPORT CopyOutputResult {
   // Returns the color space of the image data returned by ReadRGBAPlane().
   virtual gfx::ColorSpace GetRGBAColorSpace() const;
 
+  void SetTrackedElementRects(TrackedElementRects tracked_element_rects) {
+    tracked_element_rects_ = std::move(tracked_element_rects);
+  }
+
+  const TrackedElementRects& GetTrackedElementRects() const {
+    return tracked_element_rects_;
+  }
+
  protected:
   // Lock the content of SkBitmap returned from AsSkBitmap() call.
   // Return true, if lock operation is successful, implementations should
@@ -214,13 +236,22 @@ class VIZ_COMMON_EXPORT CopyOutputResult {
   SkBitmap* cached_bitmap() const { return &cached_bitmap_; }
 
  private:
+  CopyOutputResult(Format format,
+                   Destination destination,
+                   const gfx::Rect& rect,
+                   bool needs_lock_for_bitmap,
+                   Error error);
+
   const Format format_;
   const Destination destination_;
   const gfx::Rect rect_;
   const bool needs_lock_for_bitmap_;
+  const Error error_;
 
   // Cached bitmap returned by the default implementation of AsSkBitmap().
   mutable SkBitmap cached_bitmap_;
+
+  TrackedElementRects tracked_element_rects_;
 };
 
 // Subclass of CopyOutputResult that provides a RGBA result from an
@@ -282,7 +313,17 @@ class VIZ_COMMON_EXPORT CopyOutputSharedImageResult : public CopyOutputResult {
 
 // Output bitmap and metadata.
 struct VIZ_COMMON_EXPORT CopyOutputBitmapWithMetadata {
+  CopyOutputBitmapWithMetadata();
+  explicit CopyOutputBitmapWithMetadata(SkBitmap bitmap);
+  CopyOutputBitmapWithMetadata(SkBitmap bitmap,
+                               TrackedElementRects tracked_element_rects);
+  CopyOutputBitmapWithMetadata(const CopyOutputBitmapWithMetadata& other);
+  CopyOutputBitmapWithMetadata& operator=(
+      const CopyOutputBitmapWithMetadata& other);
+  ~CopyOutputBitmapWithMetadata();
+
   SkBitmap bitmap;
+  TrackedElementRects tracked_element_rects;
 };
 
 // Scoped class for accessing SkBitmap in CopyOutputRequest.
@@ -306,12 +347,13 @@ class VIZ_COMMON_EXPORT CopyOutputResult::ScopedSkBitmap {
   // It makes a copy of the content in CopyOutputResult if it is needed.
   SkBitmap GetOutScopedBitmap() const;
 
-  // Returns a base::expected<CopyOutputBitmapWithMetadata, std::string>.
-  // On success, the expected value contains a CopyOutputBitmapWithMetadata,
-  // where the encapsulated SkBitmap is guaranteed to be non-empty.
-  // On failure, the expected value contains a std::string describing the error.
-  // This function makes a copy of the content in CopyOutputResult if needed.
-  base::expected<CopyOutputBitmapWithMetadata, std::string>
+  // Returns a base::expected<CopyOutputBitmapWithMetadata,
+  // CopyOutputResult::Error>. On success, the expected value contains a
+  // CopyOutputBitmapWithMetadata, where the encapsulated SkBitmap is guaranteed
+  // to be non-empty. On failure, the expected value contains an enum describing
+  // the error. This function makes a copy of the content in CopyOutputResult if
+  // needed.
+  base::expected<CopyOutputBitmapWithMetadata, CopyOutputResult::Error>
   GetOutScopedBitmapAndMetadata() const;
 
  private:

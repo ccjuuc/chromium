@@ -4,34 +4,37 @@
 
 #include "chrome/browser/actor/ui/actor_ui_interactive_browser_test.h"
 
-#include "chrome/browser/actor/actor_policy_checker.h"
 #include "chrome/browser/actor/actor_task_metadata.h"
+#include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/common/chrome_switches.h"
 
 using actor::ExpectOkResult;
 using actor::TaskId;
 using base::test::TestFuture;
 
+ActorUiInteractiveBrowserTest::ActorUiInteractiveBrowserTest() = default;
+
+ActorUiInteractiveBrowserTest::~ActorUiInteractiveBrowserTest() = default;
+
 void ActorUiInteractiveBrowserTest::SetUpCommandLine(
     base::CommandLine* command_line) {
   InteractiveBrowserTest::SetUpCommandLine(command_line);
-#if BUILDFLAG(ENABLE_GLIC)
   command_line->AppendSwitch(switches::kGlicDev);
   // Skips FRE experience.
   command_line->AppendSwitch(switches::kGlicAutomation);
-#endif
 }
 
-void ActorUiInteractiveBrowserTest::SetUpOnMainThread() {
-  InteractiveBrowserTest::SetUpOnMainThread();
-  actor_keyed_service()->GetPolicyChecker().set_act_on_web_for_testing(true);
-}
-
-void ActorUiInteractiveBrowserTest::StartActingOnTab() {
-  task_id_ = actor_keyed_service()->CreateTask();
+void ActorUiInteractiveBrowserTest::StartActingOnTab(
+    actor::webui::mojom::TaskDuration duration) {
+  auto task_options = actor::webui::mojom::TaskOptions::New();
+  task_options->duration = duration;
+  task_id_ = actor_keyed_service()->CreateTaskWithOptions(
+      actor::TestTaskSourceInfo(), actor::NoEnterprisePolicyChecker(),
+      std::move(task_options), nullptr);
   TestFuture<actor::mojom::ActionResultPtr> future;
   actor_keyed_service()->GetTask(task_id_)->AddTab(
-      browser()->GetActiveTabInterface()->GetHandle(), future.GetCallback());
+      browser()->GetActiveTabInterface()->GetHandle(),
+      /*stop_task_on_detach=*/true, future.GetCallback());
   ASSERT_TRUE(future.Wait());
   ExpectOkResult(future);
   actor::PerformActionsFuture result_future;

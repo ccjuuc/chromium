@@ -6,6 +6,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/mojom/context_type.mojom.h"
 #include "extensions/renderer/api/messaging/message_target.h"
@@ -16,6 +17,8 @@
 #include "extensions/renderer/native_extension_bindings_system.h"
 #include "extensions/renderer/native_extension_bindings_system_test_base.h"
 #include "extensions/renderer/script_context.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -130,27 +133,29 @@ TEST_F(TabsHooksDelegateTest, SendMessage) {
 
   SendMessageTester tester(ipc_message_sender(), script_context(), 0, "tabs");
 
+  // We expect the port to remain OPEN for all these cases, as even when a
+  // callback isn't supplied we return a promise which may be fulfilled with a
+  // response if any of the associated event listeners choose to reply.
   tester.TestSendMessage("1, ''", R"("")",
                          MessageTarget::ForTab(1, messaging_util::kNoFrameId),
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
 
   constexpr char kStandardMessage[] = R"({"data":"hello"})";
   tester.TestSendMessage("1, {data: 'hello'}", kStandardMessage,
                          MessageTarget::ForTab(1, messaging_util::kNoFrameId),
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendMessage("-0, {data: 'hello'}", kStandardMessage,
                          MessageTarget::ForTab(0, messaging_util::kNoFrameId),
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendMessage("1, {data: 'hello'}, function() {}", kStandardMessage,
                          MessageTarget::ForTab(1, messaging_util::kNoFrameId),
                          SendMessageTester::OPEN);
   tester.TestSendMessage("1, {data: 'hello'}, {frameId: null}",
                          kStandardMessage,
                          MessageTarget::ForTab(1, messaging_util::kNoFrameId),
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendMessage("1, {data: 'hello'}, {frameId: 10}", kStandardMessage,
-                         MessageTarget::ForTab(1, 10),
-                         SendMessageTester::CLOSED);
+                         MessageTarget::ForTab(1, 10), SendMessageTester::OPEN);
   tester.TestSendMessage("1, {data: 'hello'}, {frameId: 10}, function() {}",
                          kStandardMessage, MessageTarget::ForTab(1, 10),
                          SendMessageTester::OPEN);
@@ -165,14 +170,17 @@ TEST_F(TabsHooksDelegateTest, SendRequest) {
 
   SendMessageTester tester(ipc_message_sender(), script_context(), 0, "tabs");
 
+  // We expect the port to remain OPEN for all these cases, as even when a
+  // callback isn't supplied we return a promise which may be fulfilled with a
+  // response if any of the associated event listeners choose to reply.
   tester.TestSendRequest("1, ''", R"("")",
                          MessageTarget::ForTab(1, messaging_util::kNoFrameId),
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
 
   constexpr char kStandardMessage[] = R"({"data":"hello"})";
   tester.TestSendRequest("1, {data: 'hello'}", kStandardMessage,
                          MessageTarget::ForTab(1, messaging_util::kNoFrameId),
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendRequest("1, {data: 'hello'}, function() {}", kStandardMessage,
                          MessageTarget::ForTab(1, messaging_util::kNoFrameId),
                          SendMessageTester::OPEN);

@@ -10,6 +10,8 @@
 #include "base/callback_list.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/views/frame/multi_contents_drop_target_view.h"
 #include "chrome/browser/ui/views/tabs/dragging/tab_drag_target.h"
 #include "components/prefs/pref_change_registrar.h"
@@ -21,6 +23,7 @@ struct DropData;
 }  // namespace content
 
 class PrefService;
+class TabStripModel;
 
 // `MultiContentsViewDropTargetController` is responsible for handling
 // the drag-entrypoint of a single `MultiContentsView`. This includes dragging
@@ -29,14 +32,21 @@ class PrefService;
 // `MultiContentesView`.
 class MultiContentsViewDropTargetController final
     : public TabDragTarget,
-      public MultiContentsDropTargetView::DragDelegate {
+      public MultiContentsDropTargetView::DragDelegate,
+      public TabStripModelObserver {
  public:
-  static constexpr base::TimeDelta kShowDropTargetForTabDelay =
-      base::Milliseconds(500);
   static constexpr base::TimeDelta kShowDropTargetForLinkDelay =
       base::Milliseconds(500);
   static constexpr base::TimeDelta kShowDropTargetForLinkAfterHideDelay =
       base::Milliseconds(3000);
+  static constexpr double kNudgeShowRatio = 0.4;
+  static constexpr int kNudgeShownLimit = 6;
+  static constexpr int kNudgeUsedLimit = 1;
+
+  struct DropTargetConstants {
+    static int GetHideWidth();
+    static double GetHidePercentage();
+  };
 
   // Delegate for handling the drop callback.
   class DropDelegate {
@@ -55,7 +65,8 @@ class MultiContentsViewDropTargetController final
   MultiContentsViewDropTargetController(
       MultiContentsDropTargetView& drop_target_view,
       DropDelegate& drop_delegate,
-      PrefService* prefs);
+      PrefService* prefs,
+      TabStripModel* tab_strip_model);
   ~MultiContentsViewDropTargetController() override;
   MultiContentsViewDropTargetController(
       const MultiContentsViewDropTargetController&) = delete;
@@ -66,7 +77,7 @@ class MultiContentsViewDropTargetController final
   TabDragContext* OnTabDragUpdated(TabDragTarget::DragController& controller,
                                    const gfx::Point& point_in_screen) override;
   void OnTabDragEntered() override;
-  void OnTabDragExited() override;
+  void OnTabDragExited(const gfx::Point& point_in_screen) override;
   void OnTabDragEnded() override;
   bool CanDropTab() override;
   void HandleTabDrop(TabDragTarget::DragController& controller) override;
@@ -92,6 +103,12 @@ class MultiContentsViewDropTargetController final
   views::View::DropCallback GetDropCallback(
       const ui::DropTargetEvent& event) override;
 
+  // TabStripModelObserver:
+  void OnTabStripModelChanged(
+      TabStripModel* tab_strip_model,
+      const TabStripModelChange& change,
+      const TabStripSelectionChange& selection) override;
+
   bool IsDropTimerRunningForTesting();
 
  private:
@@ -112,10 +129,11 @@ class MultiContentsViewDropTargetController final
   // Assumes the dragged data is droppable (e.g. tab or link).
   void HandleDragUpdate(const gfx::Point& point_in_view,
                         MultiContentsDropTargetView::DragType drag_type);
-  void HandleDragUpdateForNudge(const gfx::Point& point_in_view);
 
   // Starts or updates a running timer to show `target_to_show`.
   void StartOrUpdateDropTargetTimer(
+      const gfx::Point& point_in_view,
+      int drop_entry_point_size,
       MultiContentsDropTargetView::DropSide drop_side,
       MultiContentsDropTargetView::DragType drag_type);
   void ResetDropTargetTimers();
@@ -138,8 +156,8 @@ class MultiContentsViewDropTargetController final
 
   // Used to determine if the drop target should be hidden because the OS drop
   // target would be visible. Estimation based on when OS drop targets typically
-  // show. Only returns true if the browser is maximized.
-  bool PointOverlapsWithOSDropTarget(const gfx::Point& point_in_view);
+  // show.
+  bool PointOverlapsWithOSDropTarget(const gfx::Point& point_in_screen);
 
   // Keeps the value of nudge_shown_count_ in sync with the pref.
   void OnDragAndDropNudgeShownCountChange();
@@ -153,11 +171,11 @@ class MultiContentsViewDropTargetController final
 
   // This timer is used for showing the drop target a delay, and may be
   // canceled in case a drag exits the drop area before the target is shown.
-  std::optional<DropTargetShowTimer> show_drop_target_timer_ = std::nullopt;
+  std::optional<DropTargetShowTimer> show_drop_target_timer_;
 
   base::OneShotTimer hide_drop_target_timer_;
 
-  std::optional<DropTargetShowTimer> show_nudge_timer_ = std::nullopt;
+  std::optional<DropTargetShowTimer> show_nudge_timer_;
 
   // Stores the most recent time the drop target was hidden. Used to calculate
   // the show timer for link drags.
@@ -178,6 +196,12 @@ class MultiContentsViewDropTargetController final
   int nudge_shown_count_;
   // Tracks the value of prefs::kSplitViewDragAndDropNudgeUsedCount.
   int nudge_used_count_;
+
+  // The last point where the drag was updated while in the drop area.
+  gfx::Point drag_point_at_timer_start_;
+
+  base::ScopedObservation<TabStripModel, MultiContentsViewDropTargetController>
+      tab_strip_model_observer_{this};
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_MULTI_CONTENTS_VIEW_DROP_TARGET_CONTROLLER_H_

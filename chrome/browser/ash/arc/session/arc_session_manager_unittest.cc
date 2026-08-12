@@ -25,6 +25,7 @@
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/run_until.h"
+#include "base/test/scoped_amount_of_physical_memory_override.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
@@ -45,6 +46,7 @@
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ash/policy/arc/fake_android_management_client.h"
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/prefs/browser_prefs.h"
@@ -57,14 +59,13 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
-#include "chromeos/ash/components/dbus/arc/arcvm_data_migrator_client.h"
-#include "chromeos/ash/components/dbus/arc/fake_arcvm_data_migrator_client.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
 #include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
 #include "chromeos/ash/components/dbus/dlcservice/fake_dlcservice_client.h"
 #include "chromeos/ash/components/dbus/resourced/fake_resourced_client.h"
 #include "chromeos/ash/components/dbus/resourced/resourced_client.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
+#include "chromeos/ash/components/dbus/upstart/fake_upstart_client.h"
 #include "chromeos/ash/components/dbus/upstart/upstart_client.h"
 #include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
 #include "chromeos/ash/components/login/auth/auth_events_recorder.h"
@@ -83,6 +84,7 @@
 #include "components/policy/proto/chrome_device_policy.pb.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/services/app_service/public/cpp/app_service_registry.h"
 #include "components/session_manager/core/fake_session_manager_delegate.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
@@ -319,11 +321,16 @@ class ArcSessionManagerTestBase : public testing::Test {
         TestingBrowserProcess::GetGlobal()->local_state()));
     session_manager_->OnUserManagerCreated(user_manager_.Get());
 
-    ash::ArcVmDataMigratorClient::InitializeFake();
     ash::ConciergeClient::InitializeFake(/*fake_cicerone_client=*/nullptr);
     ash::DlcserviceClient::InitializeFake();
     chromeos::PowerManagerClient::InitializeFake();
     ash::SessionManagerClient::InitializeFakeInMemory();
+    // Default physical memory to 8GB so tests run deterministically regardless
+    // of host test runner RAM size.
+    memory_override_ =
+        std::make_unique<base::test::ScopedAmountOfPhysicalMemoryOverride>(
+            base::GiBU(8));
+
     ash::UpstartClient::InitializeFake();
 
     SetArcAvailableCommandLineForTesting(
@@ -373,7 +380,6 @@ class ArcSessionManagerTestBase : public testing::Test {
     chromeos::PowerManagerClient::Shutdown();
     ash::DlcserviceClient::Shutdown();
     ash::ConciergeClient::Shutdown();
-    ash::ArcVmDataMigratorClient::Shutdown();
     // UserManager is created after SessionManager, but destroyed after it.
     session_manager_.reset();
     user_manager_.Reset();
@@ -422,6 +428,26 @@ class ArcSessionManagerTestBase : public testing::Test {
         /*new_user=*/false, /*has_active_session=*/false);
   }
 
+  // Helper method to simulate successful ARC OOBE provisioning for testing.
+  void SimulateOobeProvisioning() {
+    PrefService* const prefs = profile()->GetPrefs();
+    prefs->SetBoolean(prefs::kArcTermsAccepted, true);
+    prefs->SetBoolean(prefs::kArcProvisioningInitiatedFromOobe, true);
+
+    arc_session_manager()->SetProfile(profile());
+    arc_session_manager()->Initialize();
+    arc_session_manager()->RequestEnable();
+    arc_session_manager()->StartArcForTesting();
+
+    EXPECT_EQ(ArcSessionManager::State::ACTIVE, arc_session_manager()->state());
+
+    arc::mojom::ArcSignInResultPtr result =
+        arc::mojom::ArcSignInResult::NewSuccess(
+            arc::mojom::ArcSignInSuccess::SUCCESS);
+    arc_session_manager()->OnProvisioningFinished(
+        ArcProvisioningResult(std::move(result)));
+  }
+
  private:
   void StartPreferenceSyncing() const {
     PrefServiceSyncableFromProfile(profile_.get())
@@ -432,6 +458,8 @@ class ArcSessionManagerTestBase : public testing::Test {
   }
 
   content::BrowserTaskEnvironment task_environment_;
+
+  apps::AppServiceRegistry app_service_registry_;
   TestingProfileManager profile_manager_;
   std::unique_ptr<session_manager::SessionManager> session_manager_;
   user_manager::ScopedUserManager user_manager_;
@@ -441,6 +469,8 @@ class ArcSessionManagerTestBase : public testing::Test {
   std::unique_ptr<ArcDlcInstaller> arc_dlc_installer_;
   std::unique_ptr<ArcSessionManager> arc_session_manager_;
   std::unique_ptr<ash::AuthEventsRecorder> auth_events_recorder_;
+  std::unique_ptr<base::test::ScopedAmountOfPhysicalMemoryOverride>
+      memory_override_;
 };
 
 class ArcSessionManagerTest : public ArcSessionManagerTestBase {
@@ -553,6 +583,7 @@ TEST_F(ArcSessionManagerTest, SignedInWorkflowWithArcOnDemand) {
 
   // When signed-in, enabling ARC results in the READY state.
   arc_session_manager()->RequestEnable();
+  task_environment().RunUntilIdle();
   ASSERT_EQ(ArcSessionManager::State::READY, arc_session_manager()->state());
   ASSERT_TRUE(arc_session_manager()->IsActivationDelayed());
 
@@ -682,7 +713,7 @@ TEST_F(ArcSessionManagerTest,
   {
     // Emulate the situation that ARC is activated during user session start up
     // in recent three sessions, which exceeds the threshold.
-    base::Value::List history;
+    base::ListValue history;
     for (size_t i = 0; i < kHistoryThreshold; ++i) {
       history.Append(base::Value(true));
     }
@@ -1099,6 +1130,60 @@ TEST_F(ArcSessionManagerTest, PlayStoreSuppressed) {
   arc_session_manager()->Shutdown();
 }
 
+TEST_F(ArcSessionManagerTest, PostOobeProvisioningShutdown_4GbDevice) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(arc::kShutDownArcPostOobeProvisioning);
+  base::CommandLine::ForCurrentProcess()->AppendSwitch(
+      ash::switches::kEnableArcVm);
+  base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
+      base::GiBU(4));
+
+  SimulateOobeProvisioning();
+
+  // On 4GB device, provisioning initiated from OOBE shuts down ARCVM and
+  // transitions state to READY.
+  EXPECT_EQ(ArcSessionManager::State::READY, arc_session_manager()->state());
+
+  // Subsequent user action (e.g. launching Play Store) activates ARCVM.
+  arc_session_manager()->AllowActivation(
+      ArcSessionManager::AllowActivationReason::kUserLaunchAction);
+  EXPECT_EQ(ArcSessionManager::State::ACTIVE, arc_session_manager()->state());
+
+  arc_session_manager()->Shutdown();
+}
+
+TEST_F(ArcSessionManagerTest, PostOobeProvisioningShutdown_8GbDevice) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(arc::kShutDownArcPostOobeProvisioning);
+  base::CommandLine::ForCurrentProcess()->AppendSwitch(
+      ash::switches::kEnableArcVm);
+  base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
+      base::GiBU(8));
+
+  SimulateOobeProvisioning();
+
+  // On 8GB device, ARCVM remains active after OOBE provisioning.
+  EXPECT_EQ(ArcSessionManager::State::ACTIVE, arc_session_manager()->state());
+
+  arc_session_manager()->Shutdown();
+}
+
+TEST_F(ArcSessionManagerTest, PostOobeProvisioningShutdown_FeatureDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(arc::kShutDownArcPostOobeProvisioning);
+  base::CommandLine::ForCurrentProcess()->AppendSwitch(
+      ash::switches::kEnableArcVm);
+  base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
+      base::GiBU(4));
+
+  SimulateOobeProvisioning();
+
+  // When feature is disabled, ARCVM remains active even on 4GB device.
+  EXPECT_EQ(ArcSessionManager::State::ACTIVE, arc_session_manager()->state());
+
+  arc_session_manager()->Shutdown();
+}
+
 TEST_F(ArcSessionManagerTest, InitiatedFromOobeIsResetOnOptOut) {
   // Set up the situation that terms were accepted in the previous session.
   PrefService* const prefs = profile()->GetPrefs();
@@ -1208,164 +1293,53 @@ TEST_F(ArcSessionManagerTest, RemoveDataDir_Restart) {
   arc_session_manager()->Shutdown();
 }
 
-TEST_F(ArcSessionManagerTest, ArcVmDataMigrationInProgress_RequestEnable) {
-  int restart_count = 0;
-  // Replace chrome::AttemptRestart() for testing.
-  arc_session_manager()->SetAttemptRestartCallbackForTesting(
-      base::BindLambdaForTesting([&restart_count]() { ++restart_count; }));
+TEST_F(ArcSessionManagerTest, ArcVmDataMigrationInProgress_WipeData) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kEnableArcVmDataMigration);
+
+  ash::FakeUpstartClient::Get()->StartRecordingUpstartOperations();
 
   PrefService* const prefs = profile()->GetPrefs();
   prefs->SetBoolean(prefs::kArcTermsAccepted, true);
   prefs->SetBoolean(prefs::kArcSignedIn, true);
   SetArcVmDataMigrationStatus(prefs, ArcVmDataMigrationStatus::kStarted);
 
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(kEnableArcVmDataMigration);
-
-  EXPECT_EQ(prefs->GetInteger(prefs::kArcVmDataMigrationAutoResumeCount), 0);
-
   arc_session_manager()->SetProfile(profile());
   arc_session_manager()->Initialize();
   base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(prefs->GetInteger(prefs::kArcVmDataMigrationAutoResumeCount), 1);
-  EXPECT_EQ(restart_count, 1);
 
-  arc_session_manager()->RequestEnable();
-  base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(arc_session_manager()->state(), ArcSessionManager::State::STOPPED);
-  EXPECT_EQ(prefs->GetInteger(prefs::kArcVmDataMigrationAutoResumeCount), 1);
-  EXPECT_EQ(restart_count, 1);
-
-  arc_session_manager()->Shutdown();
-}
-
-TEST_F(ArcSessionManagerTest,
-       ArcVmDataMigrationInProgress_RequestArcDataRemoval) {
-  int restart_count = 0;
-  // Replace chrome::AttemptRestart() for testing.
-  arc_session_manager()->SetAttemptRestartCallbackForTesting(
-      base::BindLambdaForTesting([&restart_count]() { ++restart_count; }));
-
-  PrefService* const prefs = profile()->GetPrefs();
-  prefs->SetBoolean(prefs::kArcTermsAccepted, true);
-  prefs->SetBoolean(prefs::kArcSignedIn, true);
-  SetArcVmDataMigrationStatus(prefs, ArcVmDataMigrationStatus::kStarted);
-
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(kEnableArcVmDataMigration);
-
-  EXPECT_EQ(prefs->GetInteger(prefs::kArcVmDataMigrationAutoResumeCount), 0);
-
-  arc_session_manager()->SetProfile(profile());
-  arc_session_manager()->Initialize();
-  base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(prefs->GetInteger(prefs::kArcVmDataMigrationAutoResumeCount), 1);
-  EXPECT_EQ(restart_count, 1);
-
-  arc_session_manager()->RequestArcDataRemoval();
-  base::RunLoop().RunUntilIdle();
-  // /data removal request should persist, i.e., /data should not be removed.
-  EXPECT_TRUE(prefs->GetBoolean(prefs::kArcDataRemoveRequested));
-  EXPECT_EQ(arc_session_manager()->state(), ArcSessionManager::State::STOPPED);
-  EXPECT_EQ(prefs->GetInteger(prefs::kArcVmDataMigrationAutoResumeCount), 1);
-  EXPECT_EQ(restart_count, 1);
-
-  arc_session_manager()->Shutdown();
-}
-
-TEST_F(ArcSessionManagerTest, ArcVmDataMigration_MaxAutoResumeCountReached) {
-  int restart_count = 0;
-  // Replace chrome::AttemptRestart() for testing.
-  arc_session_manager()->SetAttemptRestartCallbackForTesting(
-      base::BindLambdaForTesting([&restart_count]() { ++restart_count; }));
-
-  PrefService* const prefs = profile()->GetPrefs();
-  prefs->SetBoolean(prefs::kArcTermsAccepted, true);
-  prefs->SetBoolean(prefs::kArcSignedIn, true);
-  SetArcVmDataMigrationStatus(prefs, ArcVmDataMigrationStatus::kStarted);
-  prefs->SetInteger(prefs::kArcVmDataMigrationAutoResumeCount,
-                    kArcVmDataMigrationMaxAutoResumeCount);
-
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(kEnableArcVmDataMigration);
-
-  arc_session_manager()->SetProfile(profile());
-  arc_session_manager()->Initialize();
-  base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(prefs->GetInteger(prefs::kArcVmDataMigrationAutoResumeCount),
-            kArcVmDataMigrationMaxAutoResumeCount + 1);
-
-  arc_session_manager()->RequestEnable();
-  base::RunLoop().RunUntilIdle();
-  // ARC should be blocked and auto-resume should not be triggered.
-  EXPECT_EQ(arc_session_manager()->state(), ArcSessionManager::State::STOPPED);
-  EXPECT_EQ(restart_count, 0);
-  EXPECT_EQ(prefs->GetInteger(prefs::kArcVmDataMigrationAutoResumeCount),
-            kArcVmDataMigrationMaxAutoResumeCount + 1);
-
-  arc_session_manager()->Shutdown();
-}
-
-TEST_F(ArcSessionManagerTest, ArcVmDataMigrationNecessityChecker_Necessary) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(kEnableArcVmDataMigration);
-  SetArcVmDataMigrationStatus(profile()->GetPrefs(),
-                              ArcVmDataMigrationStatus::kUnnotified);
-  ash::FakeArcVmDataMigratorClient::Get()->set_has_data_to_migrate(true);
-
-  arc_session_manager()->SetProfile(profile());
-  arc_session_manager()->Initialize();
-  arc_session_manager()->RequestEnable();
-  base::RunLoop().RunUntilIdle();
-
-  EXPECT_FALSE(arc_session_manager()
-                   ->GetArcSessionRunnerForTesting()
-                   ->use_virtio_blk_data());
-  EXPECT_EQ(GetArcVmDataMigrationStatus(profile()->GetPrefs()),
-            ArcVmDataMigrationStatus::kUnnotified);
-
-  arc_session_manager()->Shutdown();
-}
-
-TEST_F(ArcSessionManagerTest, ArcVmDataMigrationNecessityChecker_Unnecessary) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(kEnableArcVmDataMigration);
-  SetArcVmDataMigrationStatus(profile()->GetPrefs(),
-                              ArcVmDataMigrationStatus::kUnnotified);
-  ash::FakeArcVmDataMigratorClient::Get()->set_has_data_to_migrate(false);
-
-  arc_session_manager()->SetProfile(profile());
-  arc_session_manager()->Initialize();
-  arc_session_manager()->RequestEnable();
-  base::RunLoop().RunUntilIdle();
-
-  EXPECT_TRUE(arc_session_manager()
-                  ->GetArcSessionRunnerForTesting()
-                  ->use_virtio_blk_data());
-  EXPECT_EQ(GetArcVmDataMigrationStatus(profile()->GetPrefs()),
+  // The migration status should be reset to finished and data removal
+  // requested. Because the fake Upstart client handles the removal immediately
+  // in tests, the requested pref will automatically evaluate to false after
+  // completion.
+  EXPECT_EQ(GetArcVmDataMigrationStatus(prefs),
             ArcVmDataMigrationStatus::kFinished);
+  EXPECT_FALSE(prefs->GetBoolean(prefs::kArcDataRemoveRequested));
+
+  const auto ops =
+      ash::FakeUpstartClient::Get()->GetRecordedUpstartOperationsForJob(
+          "arc_2dremove_2ddata");
+  ASSERT_EQ(1u, ops.size());
+  EXPECT_EQ(ash::FakeUpstartClient::UpstartOperationType::START, ops[0].type);
 
   arc_session_manager()->Shutdown();
 }
 
-TEST_F(ArcSessionManagerTest, ArcVmDataMigrationNecessityChecker_Undetermined) {
+TEST_F(ArcSessionManagerTest, ArcVmDataMigration_Unprovisioned_ForcedFinished) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(kEnableArcVmDataMigration);
-  SetArcVmDataMigrationStatus(profile()->GetPrefs(),
-                              ArcVmDataMigrationStatus::kUnnotified);
-  ash::FakeArcVmDataMigratorClient::Get()->set_has_data_to_migrate(
-      std::nullopt);
+
+  PrefService* const prefs = profile()->GetPrefs();
+  EXPECT_FALSE(prefs->GetBoolean(prefs::kArcSignedIn));
+  SetArcVmDataMigrationStatus(prefs, ArcVmDataMigrationStatus::kUnnotified);
 
   arc_session_manager()->SetProfile(profile());
   arc_session_manager()->Initialize();
-  arc_session_manager()->RequestEnable();
   base::RunLoop().RunUntilIdle();
 
-  EXPECT_FALSE(arc_session_manager()
-                   ->GetArcSessionRunnerForTesting()
-                   ->use_virtio_blk_data());
-  EXPECT_EQ(GetArcVmDataMigrationStatus(profile()->GetPrefs()),
-            ArcVmDataMigrationStatus::kUnnotified);
+  // Migration status should be forced to finished for unprovisioned users.
+  EXPECT_EQ(GetArcVmDataMigrationStatus(prefs),
+            ArcVmDataMigrationStatus::kFinished);
 
   arc_session_manager()->Shutdown();
 }
@@ -2070,21 +2044,11 @@ TEST_F(ArcSessionManagerPublicSessionTest, AuthFailure) {
   arc_session_manager()->RequestEnable();
   EXPECT_EQ(ArcSessionManager::State::ACTIVE, arc_session_manager()->state());
 
-  // Replace chrome::AttemptUserExit() for testing.
-  // At the end of test, leave the dangling pointer |terminated|,
-  // assuming the callback is never invoked in OnProvisioningFinished()
-  // and not invoked then, including TearDown().
-  bool terminated = false;
-  arc_session_manager()->SetAttemptUserExitCallbackForTesting(
-      base::BindRepeating([](bool* terminated) { *terminated = true; },
-                          &terminated));
-
   arc::mojom::ArcSignInResultPtr result = arc::mojom::ArcSignInResult::NewError(
       arc::mojom::ArcSignInError::NewGeneralError(
           arc::mojom::GeneralSignInError::CHROME_SERVER_COMMUNICATION_ERROR));
   arc_session_manager()->OnProvisioningFinished(
       ArcProvisioningResult(std::move(result)));
-  EXPECT_FALSE(terminated);
   EXPECT_EQ(ArcSessionManager::State::ACTIVE, arc_session_manager()->state());
 }
 
@@ -2101,6 +2065,10 @@ class ArcSessionOobeOptInNegotiatorTest
   void SetUp() override {
     ArcSessionManagerTest::SetUp();
 
+    TestingBrowserProcess::GetGlobal()
+        ->platform_part()
+        ->InitializeComponentManager();
+
     ArcSessionManager::SetArcTermsOfServiceOobeNegotiatorEnabledForTesting(
         true);
 
@@ -2110,6 +2078,11 @@ class ArcSessionOobeOptInNegotiatorTest
     std::unique_ptr<ash::ConsolidatedConsentScreen>
         fake_consolidated_consent_screen =
             std::make_unique<ash::ConsolidatedConsentScreen>(
+                TestingBrowserProcess::GetGlobal()->local_state(),
+                TestingBrowserProcess::GetGlobal()
+                    ->GetFeatures()
+                    ->application_locale_storage(),
+                TestingBrowserProcess::GetGlobal()->metrics_service(),
                 std::make_unique<ash::ConsolidatedConsentScreenHandler>()
                     ->AsWeakPtr(),
                 base::DoNothing());
@@ -2141,6 +2114,10 @@ class ArcSessionOobeOptInNegotiatorTest
 
     ArcSessionManager::SetArcTermsOfServiceOobeNegotiatorEnabledForTesting(
         false);
+
+    TestingBrowserProcess::GetGlobal()
+        ->platform_part()
+        ->ShutdownComponentManager();
 
     ArcSessionManagerTest::TearDown();
   }

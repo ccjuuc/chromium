@@ -8,33 +8,48 @@
 #include <stddef.h>
 
 #include <array>
+#include <memory>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
 
+#include "base/compiler_specific.h"
+#include "base/containers/flat_map.h"
 #include "base/types/optional_ref.h"
 #include "base/types/pass_key.h"
+#include "components/autofill/core/browser/autofill_format_string.h"
 #include "components/autofill/core/browser/autofill_type.h"
+#include "components/autofill/core/browser/data_quality/addresses/profile_token_quality.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/filling/filling_product.h"
-#include "components/autofill/core/browser/form_parsing/regex_patterns.h"
+#include "components/autofill/core/browser/form_parsing/autofill_parsing_utils.h"
 #include "components/autofill/core/browser/heuristic_source.h"
 #include "components/autofill/core/browser/metrics/log_event.h"
 #include "components/autofill/core/browser/proto/password_requirements.pb.h"
+#include "components/autofill/core/browser/suggestions/suggestion_util.h"
+#include "components/autofill/core/common/dense_set.h"
 #include "components/autofill/core/common/form_field_data.h"
+#include "components/autofill/core/common/html_field_types.h"
 #include "components/autofill/core/common/signatures.h"
+#include "components/autofill/core/common/unique_ids.h"
 
 namespace autofill {
 
 class AutofillQueryResponse_FormSuggestion_FieldSuggestion_FieldPrediction;
-enum FormatString_Type : int;
+class FormAutofillHistory;
+class FormFiller;
+class FormStructure;
 
 using FieldPrediction =
     AutofillQueryResponse_FormSuggestion_FieldSuggestion_FieldPrediction;
 
+// LINT.IfChange(AutofillPredictionSource)
+
+// Values are persisted in UMA logs, values should not be reused/renumbered.
 // Enum representing prediction sources that are recognized.
 enum class AutofillPredictionSource {
   kServerCrowdsourcing = 0,
@@ -42,8 +57,12 @@ enum class AutofillPredictionSource {
   kHeuristics = 2,
   kAutocomplete = 3,
   kRationalization = 4,
+  // Please update `tools/metrics/histograms/enums.xml` by executing
+  // `tools/metrics/histograms/update_autofill_enums.py` when this enum changes.
   kMaxValue = kRationalization
 };
+
+// LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:AutofillPredictionSource2)
 
 std::string_view AutofillPredictionSourceToStringView(
     AutofillPredictionSource source);
@@ -123,37 +142,6 @@ class Section {
 LogBuffer& operator<<(LogBuffer& buffer, const Section& section);
 std::ostream& operator<<(std::ostream& os, const Section& section);
 
-// Describes formatting information for a field. Currently used only for
-// filling Autofill AI data.
-//
-// Currently, the following kinds of format stings are supported:
-// - Affix format strings: data_util::IsValidAffixFormat().
-// - Date format strings: data_util::IsValidDateFormat().
-// - Date format strings: ICU format.
-// - Flight number format strings (data_util::IsValidFlightNumberFormat().
-struct AutofillFormatString final {
-  AutofillFormatString();
-  AutofillFormatString(std::u16string value, FormatString_Type type);
-
-  AutofillFormatString(const AutofillFormatString&);
-  AutofillFormatString& operator=(const AutofillFormatString&);
-  AutofillFormatString(AutofillFormatString&&);
-  AutofillFormatString& operator=(AutofillFormatString&&);
-  ~AutofillFormatString();
-
-  static bool IsValid(std::u16string_view value, FormatString_Type type);
-
-  friend bool operator==(const AutofillFormatString&,
-                         const AutofillFormatString&) = default;
-
-  // The actual format string.
-  std::u16string value;
-
-  // Format strings can have different types: They can specify a date
-  // format, an affix format, etc. See `FormatString_Type` for allowed values.
-  FormatString_Type type{};
-};
-
 // The ordering matters: higher values overrule lower values (e.g., kServer
 // overrules kHeuristics).
 enum class AutofillFormatStringSource {
@@ -161,6 +149,21 @@ enum class AutofillFormatStringSource {
   kHeuristics = 1,   // Set by local heuristics.
   kModelResult = 2,  // Set by a direct model response
   kServer = 3,       // Set by an (Autofill) server response.
+};
+
+// Defines the way a field's value was modified.
+enum class FieldModifier {
+  kUser = 0,
+  kAutofill = 1,
+  kMaxValue = kAutofill,
+};
+
+class FormStructure;
+
+class AutofillFieldCopyKey {
+ private:
+  friend class FormStructure;
+  AutofillFieldCopyKey() = default;
 };
 
 class AutofillField : public FormFieldData {
@@ -179,8 +182,6 @@ class AutofillField : public FormFieldData {
   AutofillField();
   explicit AutofillField(const FormFieldData& field);
 
-  AutofillField(const AutofillField&) = delete;
-  AutofillField& operator=(const AutofillField&) = delete;
   AutofillField(AutofillField&&);
   AutofillField& operator=(AutofillField&&);
 
@@ -191,6 +192,9 @@ class AutofillField : public FormFieldData {
   // since it is likely missing some fields.
   static std::unique_ptr<AutofillField> CreateForPasswordManagerUpload(
       FieldSignature field_signature);
+
+  static std::unique_ptr<AutofillField> Clone(const AutofillField& other,
+                                              AutofillFieldCopyKey pass_key);
 
   // The unique identifier of the section (e.g. billing vs. shipping address)
   // of this field.
@@ -208,7 +212,6 @@ class AutofillField : public FormFieldData {
   HtmlFieldType html_type() const { return html_type_; }
   HtmlFieldMode html_mode() const { return html_mode_; }
   const FieldTypeSet& possible_types() const { return possible_types_; }
-  bool previously_autofilled() const { return previously_autofilled_; }
   bool only_fill_when_focused() const { return only_fill_when_focused_; }
 
   void set_heuristic_type(HeuristicSource s, FieldType t);
@@ -228,8 +231,40 @@ class AutofillField : public FormFieldData {
 
   void SetHtmlType(HtmlFieldType type, HtmlFieldMode mode);
 
-  void set_previously_autofilled(bool previously_autofilled) {
-    previously_autofilled_ = previously_autofilled;
+  // This is deprecated. Please use `AutofillField::AddFieldModifier()` instead.
+  void set_previously_autofilled_deprecated(
+      bool previously_autofilled_deprecated) {
+    previously_autofilled_deprecated_ = previously_autofilled_deprecated;
+  }
+  // This is deprecated. Please use `AutofillField::all_modifiers()` instead.
+  bool previously_autofilled_deprecated() const {
+    return previously_autofilled_deprecated_;
+  }
+
+  // This is deprecated. Please use `AutofillField::AddFieldModifier()` instead.
+  void set_is_user_edited_deprecated(bool is_user_edited_deprecated) {
+    is_user_edited_deprecated_ = is_user_edited_deprecated;
+  }
+  // This is deprecated. Please use `AutofillField::all_modifiers()` instead.
+  bool is_user_edited_deprecated() const { return is_user_edited_deprecated_; }
+
+  // Returns all the modifiers to have acted on the field, in no particular
+  // order.
+  DenseSet<FieldModifier> all_modifiers() const;
+  // Returns the last `FieldModifier` to have acted on the field.
+  std::optional<FieldModifier> last_modifier() const;
+  // Adds `modifier` as the most recent field modifier.
+  void AddFieldModifier(FieldModifier modifier);
+  void RemoveFieldModifier(FieldModifier modifier,
+                           base::PassKey<FormFiller> pass_key);
+
+  const std::vector<FieldModifier>& field_modifiers(
+      base::PassKey<FormAutofillHistory>) const {
+    return field_modifiers_;
+  }
+  void set_field_modifiers(std::vector<FieldModifier> field_modifiers,
+                           base::PassKey<FormFiller>) {
+    field_modifiers_ = std::move(field_modifiers);
   }
 
   void set_only_fill_when_focused(bool fill_when_focused) {
@@ -308,7 +343,12 @@ class AutofillField : public FormFieldData {
   // suggestions and filling are suppressed on Desktop. This function can be
   // used to determine whether suggestions and filling should be suppressed for
   // this field (independently of the predicted type).
-  bool ShouldSuppressSuggestionsAndFillingByDefault() const;
+  // `ac_unrecognized_behavior` describes the general behavior (as per
+  // `AutofillClient`) whether fields with unrecognized autocomplete value can
+  // have suppressed suggestions in general. The concrete behavior is influenced
+  // by the concrete `AutofillField` and the operating system.
+  bool ShouldSuppressSuggestionsAndFillingByDefault(
+      AutocompleteUnrecognizedBehavior ac_unrecognized_behavior) const;
 
   // Returns the current value, formatted as desired for import:
   // (1) If the field value hasn't changed since it was seen and the field is a
@@ -439,12 +479,27 @@ class AutofillField : public FormFieldData {
   void set_was_focused(bool was_focused) { was_focused_ = was_focused; }
   bool was_focused() const { return was_focused_; }
 
+  void set_did_trigger_javascript_autofill(
+      bool did_trigger_javascript_autofill) {
+    did_trigger_javascript_autofill_ = did_trigger_javascript_autofill;
+  }
+  bool did_trigger_javascript_autofill() const {
+    return did_trigger_javascript_autofill_;
+  }
+
   void set_ml_supported_types(const FieldTypeSet& s) {
     ml_supported_types_ = s;
   }
 
   const std::optional<FieldTypeSet>& ml_supported_types() const {
     return ml_supported_types_;
+  }
+
+  void set_regex_match_info(std::optional<MatchInfo> match_info) {
+    regex_match_info_ = std::move(match_info);
+  }
+  const std::optional<MatchInfo>& regex_match_info() const LIFETIME_BOUND {
+    return regex_match_info_;
   }
 
   void UpdateFieldData(const FormFieldData& field_data,
@@ -462,6 +517,9 @@ class AutofillField : public FormFieldData {
 
  private:
   friend class AutofillFieldTestApi;
+
+  using FormFieldData::set_is_autofilled_according_to_renderer;
+
   struct PredictionResult {
     // The type may be a union type, i.e., hold multiple FieldTypes.
     AutofillType type;
@@ -474,6 +532,9 @@ class AutofillField : public FormFieldData {
   };
 
   explicit AutofillField(FieldSignature field_signature);
+
+  AutofillField(const AutofillField&);
+  AutofillField& operator=(const AutofillField&);
 
   // Copies the information from `field_data` into the members of
   // `AutofillField` that were inherited from `FormFieldData`.
@@ -528,6 +589,13 @@ class AutofillField : public FormFieldData {
   std::array<FieldType, static_cast<size_t>(HeuristicSource::kMaxValue) + 1>
       local_type_predictions_;
 
+  // Structure that holds the additional information on the regex match (e.g.
+  // matched attribute). The value will be std::nullopt before local heuristics
+  // were executed or there were no matches.
+  // TODO(crbug.com/430258039): Remove once the feature
+  // `AutofillBetterLocalHeuristicPlaceholderSupport` is launched.
+  std::optional<MatchInfo> regex_match_info_;
+
   // The rationalized `GetComputedPredictionResult()`. This is the type used for
   // all autofilling operations. It defaults to `GetComputedPredictionResult()`
   // and is invalidated when `set_heuristic_type()`, `set_server_predictions()`
@@ -559,7 +627,32 @@ class AutofillField : public FormFieldData {
   size_t credit_card_number_offset_ = 0;
 
   // Whether the field was autofilled then later edited.
-  bool previously_autofilled_ = false;
+  // TODO(crbug.com/393114125): Remove after fully launching
+  // `AutofillField::field_modifiers_`.
+  bool previously_autofilled_deprecated_ = false;
+
+  // This is deprecated, please use `field_modifiers_` instead.
+  // Whether or not the user edited the field. It corresponds to whether the
+  // field is seen by `AutofillManager` in an `OnTextFieldValueChanged()`
+  // signal.
+  bool is_user_edited_deprecated_ = false;
+
+  // Tracks the relative order of all the modifiers of the field. Each
+  // `FieldModifier` value is present at most once in the list, and the order of
+  // the list depends on the order of events that modified the field's value.
+  //
+  // Only `FillingProduct`s in //components/autofill/ do mutate this, meaning
+  // that products like Password Manager do not append `kAutofill` to this list.
+  //
+  // This attribute is slightly similar to
+  // `FormFieldData::is_autofill_according_to_renderer` with the following
+  // difference in definition:
+  // - `field_modifiers_` is tracked by the browser process using the
+  //   autofill/user-edit signals there.
+  // - `is_autofill_according_to_renderer` is the exact copy of the
+  //   `blink::WebFormControlElement`'s `WebAutofillState` at form extraction
+  //   time in the renderer process.
+  std::vector<FieldModifier> field_modifiers_;
 
   // Whether the field should be filled when it is not the highlighted field.
   bool only_fill_when_focused_ = false;
@@ -574,9 +667,6 @@ class AutofillField : public FormFieldData {
   // The autofill profile's GUID that was used for field filling. It corresponds
   // to the autofill profile's GUID for the last address filling value of the
   // field. nullopt means the field was never autofilled with address data.
-  // Note: `is_autofilled` is true for autocompleted fields. So `is_autofilled`
-  // is not a sufficient condition for `autofill_source_profile_guid_` to have a
-  // value. This is not tracked for fields filled with field by field filling.
   std::optional<std::string> autofill_source_profile_guid_;
 
   // Denotes the type that was used to fill the field in its last autofill
@@ -599,6 +689,9 @@ class AutofillField : public FormFieldData {
 
   // True iff the field was ever focused.
   bool was_focused_ = false;
+
+  // Denotes whether this field triggered a custom JS autofill.
+  bool did_trigger_javascript_autofill_ = false;
 
   // Field types that the ML model is able to output.
   // Assigned by the model when it has classified the field.

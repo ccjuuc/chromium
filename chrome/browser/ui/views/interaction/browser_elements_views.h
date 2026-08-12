@@ -12,21 +12,22 @@
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
+#include "ui/base/identifier/typed_identifier.h"
 #include "ui/base/interaction/element_identifier.h"
-#include "ui/base/interaction/framework_specific_implementation.h"
-#include "ui/base/interaction/typed_identifier.h"
+#include "ui/base/interaction/safe_castable.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/view.h"
 
-DECLARE_TYPED_IDENTIFIER_VALUE(views::WebView,
+DECLARE_TYPED_IDENTIFIER_VALUE(ui::ElementIdentifier,
+                               views::WebView,
                                kActiveContentsWebViewRetrievalId);
 
 // Provides Views-specific extensions to `BrowserElements` so it can
 // provide a context, elements, and Views.
 class BrowserElementsViews : public BrowserElements {
  public:
-  DECLARE_FRAMEWORK_SPECIFIC_METADATA()
+  DECLARE_SAFE_CAST_TARGET()
 
   explicit BrowserElementsViews(BrowserWindowInterface& browser);
   ~BrowserElementsViews() override;
@@ -36,16 +37,22 @@ class BrowserElementsViews : public BrowserElements {
   // Desktop Chrome and Webium builds.
   static BrowserElementsViews* From(BrowserWindowInterface* browser);
 
+  // Retrieves the `BrowserElementsViews` associated with the window containing
+  // `view`, or null if none. This is somewhat less efficient than using
+  // `From(BrowserWindowInterface*)` and should only be used if the current
+  // browser is not known.
+  static BrowserElementsViews* From(views::View* view);
+
   // These provide convenience access to ElementTrackerViews without having to
   // specify context:
 
   using ViewList = views::ElementTrackerViews::ViewList;
-  views::View* GetView(ui::ElementIdentifier id);
-  ViewList GetAllViews(ui::ElementIdentifier id);
+  views::View* GetView(ui::ElementIdentifier id, bool require_visible = false);
+  ViewList GetAllViews(ui::ElementIdentifier id, bool require_visible = false);
 
   template <typename T>
     requires std::derived_from<T, views::View>
-  T* GetViewAs(ui::ElementIdentifier id);
+  T* GetViewAs(ui::ElementIdentifier id, bool require_visible = false);
 
   // Returns the widget of the primary window. Default implementation uses
   // context and `ElementTrackerViews`.
@@ -76,15 +83,16 @@ class BrowserElementsViews : public BrowserElements {
   // TearDown().
   template <typename T>
     requires std::derived_from<T, views::View>
-  void AddRetrievalCallback(ui::TypedIdentifier<T> retrieval_id,
-                            RetrievalCallback<T> callback);
+  void AddRetrievalCallback(
+      ui::TypedIdentifier<ui::ElementIdentifier, T> retrieval_id,
+      RetrievalCallback<T> callback);
 
   // Retrieves a view using a callback registered with `retrieval_id`. Will
   // return null if no callback is registered, this object is in an invalid
   // state, or the view is not present or is the wrong type.
   template <typename T>
     requires std::derived_from<T, views::View>
-  T* RetrieveView(ui::TypedIdentifier<T> retrieval_id);
+  T* RetrieveView(ui::TypedIdentifier<ui::ElementIdentifier, T> retrieval_id);
 
  private:
   virtual bool IsInitialized() const = 0;
@@ -97,15 +105,16 @@ class BrowserElementsViews : public BrowserElements {
 
 template <typename T>
   requires std::derived_from<T, views::View>
-T* BrowserElementsViews::GetViewAs(ui::ElementIdentifier id) {
+T* BrowserElementsViews::GetViewAs(ui::ElementIdentifier id,
+                                   bool require_visible) {
   return views::ElementTrackerViews::GetInstance()->GetFirstMatchingViewAs<T>(
-      id, GetContext());
+      id, GetContext(), require_visible);
 }
 
 template <typename T>
   requires std::derived_from<T, views::View>
 void BrowserElementsViews::AddRetrievalCallback(
-    ui::TypedIdentifier<T> retrieval_id,
+    ui::TypedIdentifier<ui::ElementIdentifier, T> retrieval_id,
     RetrievalCallback<T> callback) {
   CHECK(IsInitialized());
   const auto result = retrieval_callbacks_.emplace(
@@ -119,7 +128,8 @@ void BrowserElementsViews::AddRetrievalCallback(
 
 template <typename T>
   requires std::derived_from<T, views::View>
-T* BrowserElementsViews::RetrieveView(ui::TypedIdentifier<T> id) {
+T* BrowserElementsViews::RetrieveView(
+    ui::TypedIdentifier<ui::ElementIdentifier, T> id) {
   if (const auto it = retrieval_callbacks_.find(id.identifier());
       it != retrieval_callbacks_.end()) {
     return views::AsViewClass<T>(it->second.Run());

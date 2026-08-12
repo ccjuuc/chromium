@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/notreached.h"
 
 @interface CRBProtocolObservers () {
@@ -107,7 +106,7 @@ id Iterator::GetNext() {
   DCHECK(observer);
   DCHECK([observer conformsToProtocol:self.protocol]);
 
-  if (base::Contains(_observers, observer)) {
+  if (std::ranges::contains(_observers, observer)) {
     return;
   }
 
@@ -127,13 +126,26 @@ id Iterator::GetNext() {
 }
 
 - (BOOL)empty {
-  int count = 0;
   for (id observer : _observers) {
     if (observer != nil) {
-      ++count;
+      return NO;
     }
   }
-  return count == 0;
+  return YES;
+}
+
+- (void)executeOnObservers:(ExecutionWithObserverBlock)callback {
+  DCHECK(callback);
+  if (_observers.empty()) {
+    return;
+  }
+  Iterator it(self);
+  @autoreleasepool {
+    id observer;
+    while ((observer = it.GetNext()) != nil) {
+      callback(observer);
+    }
+  }
 }
 
 #pragma mark - NSObject
@@ -173,23 +185,13 @@ id Iterator::GetNext() {
   }
   SEL selector = [invocation selector];
   Iterator it(self);
-  id observer;
-  while ((observer = it.GetNext()) != nil) {
-    if ([observer respondsToSelector:selector]) {
-      [invocation invokeWithTarget:observer];
+  @autoreleasepool {
+    id observer;
+    while ((observer = it.GetNext()) != nil) {
+      if ([observer respondsToSelector:selector]) {
+        [invocation invokeWithTarget:observer];
+      }
     }
-  }
-}
-
-- (void)executeOnObservers:(ExecutionWithObserverBlock)callback {
-  DCHECK(callback);
-  if (_observers.empty()) {
-    return;
-  }
-  Iterator it(self);
-  id observer;
-  while ((observer = it.GetNext()) != nil) {
-    callback(observer);
   }
 }
 

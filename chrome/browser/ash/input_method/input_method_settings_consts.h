@@ -8,6 +8,15 @@
 namespace ash {
 namespace input_method {
 
+inline constexpr std::string_view kPkAutocorrectLevelPrefName =
+    "physicalKeyboardAutoCorrectionLevel";
+inline constexpr std::string_view kPkAutocorrectEnabledByDefaultPrefName =
+    "physicalKeyboardAutoCorrectionEnabledByDefault";
+inline constexpr std::string_view kPkEnablePredictiveWritingPrefName =
+    "physicalKeyboardEnablePredictiveWriting";
+inline constexpr std::string_view kVkAutocorrectLevelPrefName =
+    "virtualKeyboardAutoCorrectionLevel";
+
 // Top level option categories:
 // LINT.IfChange(JpOptionCategories)
 inline constexpr std::string_view kJpPrefAutomaticallySwitchToHalfwidth =
@@ -39,18 +48,87 @@ inline constexpr std::string_view kJpPrefDisablePersonalizedSuggestions =
 inline constexpr std::string_view kJpPrefAutomaticallySendStatisticsToGoogle =
     "AutomaticallySendStatisticsToGoogle";
 // LINT.ThenChange(/chrome/browser/resources/ash/settings/os_languages_page/input_method_prefs_consts.ts:JpOptionCategories)
+
+inline constexpr std::string_view kKrPrefEnableSyllableInput =
+    "koreanEnableSyllableInput";
+inline constexpr std::string_view kKrPrefKeyboardLayout =
+    "koreanKeyboardLayout";
+
+inline constexpr std::string_view kPinyinPrefXkbLayout = "xkbLayout";
+inline constexpr std::string_view kPinyinPrefChinesePunctuation =
+    "pinyinChinesePunctuation";
+inline constexpr std::string_view kPinyinPrefDefaultChinese =
+    "pinyinDefaultChinese";
+inline constexpr std::string_view kPinyinPrefEnableFuzzy = "pinyinEnableFuzzy";
+inline constexpr std::string_view kPinyinPrefEnableLowerPaging =
+    "pinyinEnableLowerPaging";
+inline constexpr std::string_view kPinyinPrefEnableUpperPaging =
+    "pinyinEnableUpperPaging";
+inline constexpr std::string_view kPinyinPrefFullWidthCharacter =
+    "pinyinFullWidthCharacter";
+inline constexpr std::string_view kPinyinPrefFuzzyEnEng = "en:eng";
+inline constexpr std::string_view kPinyinPrefFuzzyAnAng = "an:ang";
+inline constexpr std::string_view kPinyinPrefFuzzyIanIang = "ian:iang";
+inline constexpr std::string_view kPinyinPrefFuzzyKG = "k:g";
+inline constexpr std::string_view kPinyinPrefFuzzyRL = "r:l";
+inline constexpr std::string_view kPinyinPrefFuzzyUanUang = "uan:uang";
+inline constexpr std::string_view kPinyinPrefFuzzyCCh = "c:ch";
+inline constexpr std::string_view kPinyinPrefFuzzyFH = "f:h";
+inline constexpr std::string_view kPinyinPrefFuzzyInIng = "in:ing";
+inline constexpr std::string_view kPinyinPrefFuzzyLN = "l:n";
+inline constexpr std::string_view kPinyinPrefFuzzySSh = "s:sh";
+inline constexpr std::string_view kPinyinPrefFuzzyZZh = "z:zh";
+
+inline constexpr std::string_view kZhuyinPrefKeyboardLayout =
+    "zhuyinKeyboardLayout";
+inline constexpr std::string_view kZhuyinPrefPageSize = "zhuyinPageSize";
+inline constexpr std::string_view kZhuyinPrefSelectKeys = "zhuyinSelectKeys";
+
+inline constexpr std::string_view kVnPrefVniAllowFlexibleDiacritics =
+    "vietnameseVniAllowFlexibleDiacritics";
+inline constexpr std::string_view kVnPrefVniNewStyleToneMarkPlacement =
+    "vietnameseVniNewStyleToneMarkPlacement";
+inline constexpr std::string_view kVnPrefVniInsertDoubleHornOnUo =
+    "vietnameseVniInsertDoubleHornOnUo";
+inline constexpr std::string_view kVnPrefVniShowUnderline =
+    "vietnameseVniShowUnderline";
+inline constexpr std::string_view kVnPrefTelexAllowFlexibleDiacritics =
+    "vietnameseTelexAllowFlexibleDiacritics";
+inline constexpr std::string_view kVnPrefTelexNewStyleToneMarkPlacement =
+    "vietnameseTelexNewStyleToneMarkPlacement";
+inline constexpr std::string_view kVnPrefTelexInsertDoubleHornOnUo =
+    "vietnameseTelexInsertDoubleHornOnUo";
+inline constexpr std::string_view kVnPrefTelexInsertUHornOnW =
+    "vietnameseTelexInsertUHornOnW";
+inline constexpr std::string_view kVnPrefTelexShowUnderline =
+    "vietnameseTelexShowUnderline";
+
 // Options values for the above option categories:
 // LINT.IfChange(JpOptionValues)
 inline constexpr std::string_view kJpPrefInputModeKana = "Kana";
 inline constexpr std::string_view kJpPrefInputModeRomaji = "Romaji";
-inline constexpr std::string_view kJpPrefPunctuationStyleKutenTouten =
+
+// "KutenTouten" string value is a misnomer originating from Japanese IME Mozc
+// lib (where it's now been fixed), but this string is persisted in CrOS Prefs
+// storage so must NOT be adapted unless user data are migrated first.
+inline constexpr std::string_view kJpPrefPunctuationStyleToutenKuten =
     "KutenTouten";
+
 inline constexpr std::string_view kJpPrefPunctuationStyleCommaPeriod =
     "CommaPeriod";
-inline constexpr std::string_view kJpPrefPunctuationStyleKutenPeriod =
+
+// "KutenPeriod" string value is a misnomer originating from Japanese IME Mozc
+// lib (where it's now been fixed), but this string is persisted in CrOS Prefs
+// storage so must NOT be adapted unless user data are migrated first.
+inline constexpr std::string_view kJpPrefPunctuationStyleToutenPeriod =
     "KutenPeriod";
-inline constexpr std::string_view kJpPrefPunctuationStyleCommaTouten =
+
+// "CommaTouten" string value is a misnomer originating from Japanese IME Mozc
+// lib (where it's now been fixed), but this string is persisted in CrOS Prefs
+// storage so must NOT be adapted unless user data are migrated first.
+inline constexpr std::string_view kJpPrefPunctuationStyleCommaKuten =
     "CommaTouten";
+
 inline constexpr std::string_view kJpPrefSymbolStyleCornerBracketMiddleDot =
     "CornerBracketMiddleDot";
 inline constexpr std::string_view kJpPrefSymbolStyleSquareBracketSlash =

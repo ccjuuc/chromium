@@ -8,6 +8,7 @@ import static org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeBottomChinPr
 import static org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeBottomChinProperties.DIVIDER_COLOR;
 import static org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeBottomChinProperties.HAS_CONSTRAINT;
 import static org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeBottomChinProperties.HEIGHT;
+import static org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeBottomChinProperties.IS_VISIBLE;
 import static org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeBottomChinProperties.OFFSET_TAG;
 import static org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeBottomChinProperties.Y_OFFSET;
 import static org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils.isBottomChinAllowed;
@@ -19,7 +20,6 @@ import org.chromium.chrome.browser.browser_controls.BottomControlsStacker.LayerS
 import org.chromium.chrome.browser.browser_controls.BottomControlsStacker.LayerType;
 import org.chromium.chrome.browser.browser_controls.BottomControlsStacker.LayerVisibility;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsOffsetTagsInfo;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.fullscreen.FullscreenManager;
 import org.chromium.chrome.browser.fullscreen.FullscreenOptions;
 import org.chromium.chrome.browser.layouts.LayoutManager;
@@ -43,7 +43,6 @@ class EdgeToEdgeBottomChinMediator
     /** The model for the bottom controls component that holds all of its view state. */
     private final PropertyModel mModel;
 
-    private int mEdgeToEdgeBottomInsetDp;
     private int mEdgeToEdgeBottomInsetPx;
     private boolean mIsDrawingToEdge;
     private boolean mIsPagedOptedIntoEdgeToEdge;
@@ -125,6 +124,7 @@ class EdgeToEdgeBottomChinMediator
                 mEdgeToEdgeController.isDrawingToEdge(),
                 mEdgeToEdgeController.isPageOptedIntoEdgeToEdge());
         if (!mDefaultVisibility) mModel.set(Y_OFFSET, mModel.get(HEIGHT));
+        mModel.set(IS_VISIBLE, isVisible());
         updateHeightAndVisibility();
     }
 
@@ -146,7 +146,7 @@ class EdgeToEdgeBottomChinMediator
 
     private boolean isVisible() {
         // This assumes the chin is at the very bottom, or all layers below the chin are scrollable.
-        if (ChromeFeatureList.sBcivBottomControls.isEnabled() && mModel.get(OFFSET_TAG) != null) {
+        if (mModel.get(OFFSET_TAG) != null) {
             return mBottomControlsStacker.getBrowserControls().getBottomControlOffset()
                     < mModel.get(HEIGHT);
         } else {
@@ -184,7 +184,7 @@ class EdgeToEdgeBottomChinMediator
         boolean newVisibility =
                 mIsDrawingToEdge
                         && isBottomChinAllowed(
-                                mLayoutManager.getActiveLayoutType(), mEdgeToEdgeBottomInsetDp)
+                                mLayoutManager.getActiveLayoutType(), mEdgeToEdgeBottomInsetPx)
                         && !mFullscreenManager.getPersistentFullscreenMode()
                         && !isKeyboardVisible;
 
@@ -193,6 +193,8 @@ class EdgeToEdgeBottomChinMediator
 
         if (heightChanged) mModel.set(HEIGHT, newHeight);
         if (visibilityChanged) mModel.set(CAN_SHOW, newVisibility);
+
+        mModel.set(IS_VISIBLE, isVisible());
 
         boolean layerVisibilityChanged = mLatestLayerVisibility != getLayerVisibility();
         mLatestLayerVisibility = getLayerVisibility();
@@ -214,14 +216,13 @@ class EdgeToEdgeBottomChinMediator
     @Override
     public void onToEdgeChange(
             int bottomInset, boolean isDrawingToEdge, boolean isPageOptInToEdge) {
-        if (mEdgeToEdgeBottomInsetDp == bottomInset
+        if (mEdgeToEdgeBottomInsetPx == bottomInset
                 && mIsDrawingToEdge == isDrawingToEdge
                 && mIsPagedOptedIntoEdgeToEdge == isPageOptInToEdge) {
             return;
         }
 
-        mEdgeToEdgeBottomInsetDp = bottomInset;
-        mEdgeToEdgeBottomInsetPx = mEdgeToEdgeController.getSystemBottomInsetPx();
+        mEdgeToEdgeBottomInsetPx = bottomInset;
         mIsDrawingToEdge = isDrawingToEdge;
         mIsPagedOptedIntoEdgeToEdge = isPageOptInToEdge;
         updateHeightAndVisibility();
@@ -311,6 +312,7 @@ class EdgeToEdgeBottomChinMediator
             changeBottomChinDividerColor(mDividerColor);
         }
 
+        mModel.set(IS_VISIBLE, isVisible());
         mModel.set(Y_OFFSET, layerYOffset);
     }
 

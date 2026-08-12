@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_ASH_LOGIN_SCREENS_CONSOLIDATED_CONSENT_SCREEN_H_
 #define CHROME_BROWSER_ASH_LOGIN_SCREENS_CONSOLIDATED_CONSENT_SCREEN_H_
 
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "chrome/browser/ash/arc/optin/arc_optin_preference_handler_observer.h"
@@ -12,9 +13,16 @@
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/ui/webui/ash/login/consolidated_consent_screen_handler.h"
 
+class ApplicationLocaleStorage;
+class PrefService;
+
 namespace arc {
 class ArcOptInPreferenceHandler;
-}
+}  // namespace arc
+
+namespace metrics {
+class MetricsService;
+}  // namespace metrics
 
 namespace ash {
 
@@ -43,6 +51,7 @@ class ConsolidatedConsentScreen
   // These values are logged to UMA
   // ("OOBE.ConsolidatedConsentScreen.RecoveryOptInResult"). Entries should not
   // be renumbered and numeric values should never be reused.
+  // LINT.IfChange(RecoveryOptInResult)
   enum class RecoveryOptInResult {
     kNotSupported = 0,
     kUserOptIn = 1,
@@ -51,6 +60,7 @@ class ConsolidatedConsentScreen
     kPolicyOptOut = 4,
     kMaxValue = kPolicyOptOut,
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/enums.xml:RecoveryOptInResult)
 
   class Observer : public base::CheckedObserver {
    public:
@@ -62,8 +72,16 @@ class ConsolidatedConsentScreen
   using TView = ConsolidatedConsentScreenView;
   using ScreenExitCallback = base::RepeatingCallback<void(Result result)>;
 
-  ConsolidatedConsentScreen(base::WeakPtr<ConsolidatedConsentScreenView> view,
-                            const ScreenExitCallback& exit_callback);
+  // `local_state` and `application_locale_storage` must be non-null and must
+  // outlive `this`.
+  // `metrics_service` may be null in tests, but must outlive `this` if it's
+  // non-null.
+  ConsolidatedConsentScreen(
+      PrefService* local_state,
+      const ApplicationLocaleStorage* application_locale_storage,
+      ::metrics::MetricsService* metrics_service,
+      base::WeakPtr<ConsolidatedConsentScreenView> view,
+      const ScreenExitCallback& exit_callback);
   ~ConsolidatedConsentScreen() override;
   ConsolidatedConsentScreen(const ConsolidatedConsentScreen&) = delete;
   ConsolidatedConsentScreen& operator=(const ConsolidatedConsentScreen&) =
@@ -102,7 +120,7 @@ class ConsolidatedConsentScreen
   bool MaybeSkip(WizardContext& context) override;
   void ShowImpl() override;
   void HideImpl() override;
-  void OnUserAction(const base::Value::List& args) override;
+  void OnUserAction(const base::ListValue& args) override;
   ScreenExitCallback* exit_callback() { return &exit_callback_; }
 
  private:
@@ -129,6 +147,10 @@ class ConsolidatedConsentScreen
 
   // Updates the state of the metrics toggle.
   void UpdateMetricsMode(bool enabled, bool managed);
+
+  const raw_ref<PrefService> local_state_;
+  const raw_ref<const ApplicationLocaleStorage> application_locale_storage_;
+  const raw_ptr<::metrics::MetricsService> metrics_service_;
 
   std::optional<bool> is_owner_;
 

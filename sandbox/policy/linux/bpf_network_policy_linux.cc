@@ -52,6 +52,13 @@ using sandbox::syscall_broker::BrokerProcess;
 #define F2FS_IOC_GET_FEATURES _IOR(0xf5, 12, uint32_t)
 #endif
 
+#ifndef SOL_UDP
+#define SOL_UDP 17
+#endif
+#ifndef UDP_GRO
+#define UDP_GRO 104
+#endif
+
 namespace sandbox::policy {
 
 namespace {
@@ -121,30 +128,38 @@ ResultExpr RestrictSetSockoptForNetworkService() {
   // IPV6_JOIN_GROUP, IPV6_LEAVE_GROUP are for mDNS and extensions.
   //
   // IP_TOS and IPV6_TCLASS are for P2P sockets.
+  //
+  // MCAST_JOIN_SOURCE_GROUP, MCAST_LEAVE_SOURCE_GROUP are for source-specific
+  // multicast (SSM/IGMPv3) used by the Direct Sockets API.
   ResultExpr ipv4_optname_switch =
       Switch(optname)
           .Cases({IP_RECVERR, IP_MTU_DISCOVER, IP_MULTICAST_LOOP,
                   IP_MULTICAST_TTL, IP_MULTICAST_IF, IP_ADD_MEMBERSHIP,
-                  IP_DROP_MEMBERSHIP, IP_TOS, IP_RECVTOS},
+                  IP_DROP_MEMBERSHIP, IP_TOS, IP_RECVTOS,
+                  MCAST_JOIN_SOURCE_GROUP, MCAST_LEAVE_SOURCE_GROUP},
                  Allow())
           .Default(CrashSIGSYSSockopt());
   ResultExpr ipv6_optname_switch =
       Switch(optname)
           .Cases({IPV6_RECVERR, IPV6_MTU_DISCOVER, IPV6_MULTICAST_LOOP,
                   IPV6_MULTICAST_HOPS, IPV6_MULTICAST_IF, IPV6_JOIN_GROUP,
-                  IPV6_LEAVE_GROUP, IPV6_TCLASS, IPV6_V6ONLY, IPV6_RECVTCLASS},
+                  IPV6_LEAVE_GROUP, IPV6_TCLASS, IPV6_V6ONLY, IPV6_RECVTCLASS,
+                  MCAST_JOIN_SOURCE_GROUP, MCAST_LEAVE_SOURCE_GROUP},
                  Allow())
           .Default(CrashSIGSYSSockopt());
   ResultExpr tcp_optname_switch =
       Switch(optname)
           .Cases({TCP_KEEPIDLE, TCP_KEEPINTVL, TCP_NODELAY}, Allow())
           .Default(CrashSIGSYSSockopt());
+  ResultExpr udp_optname_switch =
+      Switch(optname).Case(UDP_GRO, Allow()).Default(CrashSIGSYSSockopt());
 
   return Switch(level)
       .Case(SOL_SOCKET, socket_optname_switch)
       .Case(SOL_IP, ipv4_optname_switch)
       .Case(SOL_IPV6, ipv6_optname_switch)
       .Case(SOL_TCP, tcp_optname_switch)
+      .Case(SOL_UDP, udp_optname_switch)
       .Default(CrashSIGSYSSockopt());
 }
 

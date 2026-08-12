@@ -51,6 +51,7 @@ class QuicSessionAttemptManager::Job : public QuicSessionAttempt::Delegate {
     if (!requests_.empty()) {
       NotifyRequests(ERR_ABORTED, /*session=*/nullptr, NetErrorDetails());
     }
+    CancelAttempts();
   }
 
   Job(const Job&) = delete;
@@ -69,6 +70,7 @@ class QuicSessionAttemptManager::Job : public QuicSessionAttempt::Delegate {
       int cert_verify_flags,
       base::TimeTicks dns_resolution_start_time,
       base::TimeTicks dns_resolution_end_time,
+      std::optional<ResolutionDetails> dns_resolution_details,
       bool use_dns_aliases,
       std::set<std::string> dns_aliases,
       MultiplexedSessionCreationInitiator session_creation_initiator,
@@ -82,7 +84,8 @@ class QuicSessionAttemptManager::Job : public QuicSessionAttempt::Delegate {
     std::unique_ptr<QuicSessionAttempt> attempt =
         manager_->pool_->CreateSessionAttempt(
             this, key_.session_key(), endpoint, cert_verify_flags,
-            dns_resolution_start_time, dns_resolution_end_time, use_dns_aliases,
+            dns_resolution_start_time, dns_resolution_end_time,
+            std::move(dns_resolution_details), use_dns_aliases,
             std::move(dns_aliases), session_creation_initiator,
             std::move(connection_management_config));
     QuicSessionAttempt* raw_attempt = attempt.get();
@@ -132,6 +135,9 @@ class QuicSessionAttemptManager::Job : public QuicSessionAttempt::Delegate {
     NetErrorDetails error_details;
     if (rv == OK) {
       QuicChromiumClientSession* session = raw_attempt->session();
+      // Remove the successful attempt before cancelling the others. Its result
+      // may be an already-active pooled session and must not be closed by
+      // CancelAttempts().
       attempts_.erase(it);
       NotifyRequestsAndComplete(rv, session, std::move(error_details));
       return;
@@ -167,7 +173,7 @@ class QuicSessionAttemptManager::Job : public QuicSessionAttempt::Delegate {
                       QuicChromiumClientSession* session,
                       NetErrorDetails error_details) {
     // Cancel other attempts.
-    attempts_.clear();
+    CancelAttempts();
 
     while (!requests_.empty()) {
       raw_ptr<QuicSessionAttemptRequest> request =
@@ -176,6 +182,13 @@ class QuicSessionAttemptManager::Job : public QuicSessionAttempt::Delegate {
       request.ExtractAsDangling()->Complete(rv, session, error_details);
     }
     CHECK(requests_.empty());
+  }
+
+  void CancelAttempts() {
+    for (const auto& attempt : attempts_) {
+      attempt->Cancel();
+    }
+    attempts_.clear();
   }
 
   void NotifyRequestsAndComplete(int rv,
@@ -219,6 +232,7 @@ int QuicSessionAttemptManager::RequestSession(
     int cert_verify_flags,
     base::TimeTicks dns_resolution_start_time,
     base::TimeTicks dns_resolution_end_time,
+    std::optional<ResolutionDetails> dns_resolution_details,
     bool use_dns_aliases,
     std::set<std::string> dns_aliases,
     MultiplexedSessionCreationInitiator session_creation_initiator,
@@ -234,8 +248,9 @@ int QuicSessionAttemptManager::RequestSession(
 
   return it->second->MaybeAttemptEndpoint(
       request, endpoint, cert_verify_flags, dns_resolution_start_time,
-      dns_resolution_end_time, use_dns_aliases, std::move(dns_aliases),
-      session_creation_initiator, std::move(connection_management_config));
+      dns_resolution_end_time, std::move(dns_resolution_details),
+      use_dns_aliases, std::move(dns_aliases), session_creation_initiator,
+      std::move(connection_management_config));
 }
 
 void QuicSessionAttemptManager::RemoveRequest(

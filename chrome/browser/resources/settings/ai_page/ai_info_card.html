@@ -10,6 +10,11 @@
     }
   }
 
+  :host-context([webui-refresh-2026]) {
+    --info-card-background-color: var(--color-settings-info-card-background);
+    --iron-icon-fill-color: var(--cr-secondary-text-color);
+  }
+
   .settings-columned-section {
     background-color: var(--info-card-background-color);
   }
@@ -52,7 +57,7 @@
         <div class="secondary">$i18n{aiPageMainSublabel1}</div>
       </li>
       <li>
-        <cr-icon icon="settings20:googleg" aria-hidden="true"></cr-icon>
+        <cr-icon icon="settings20:google" aria-hidden="true"></cr-icon>
         <div class="secondary">$i18n{aiPageMainSublabel2}</div>
       </li>
       <li>

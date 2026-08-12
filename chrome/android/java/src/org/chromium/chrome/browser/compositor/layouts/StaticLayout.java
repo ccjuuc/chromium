@@ -10,6 +10,7 @@ import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.RectF;
 
+import androidx.annotation.Px;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Callback;
@@ -34,7 +35,7 @@ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorTabModelObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorTabObserver;
 import org.chromium.chrome.browser.theme.ThemeUtils;
-import org.chromium.chrome.browser.theme.TopUiThemeColorProvider;
+import org.chromium.chrome.browser.theme.ToolbarThemeColorProvider;
 import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.DeviceFormFactor;
@@ -79,7 +80,7 @@ public class StaticLayout extends Layout {
     private final BrowserControlsStateProvider mBrowserControlsStateProvider;
     private final BrowserControlsStateProvider.Observer mBrowserControlsStateProviderObserver;
 
-    private final Supplier<TopUiThemeColorProvider> mTopUiThemeColorProvider;
+    private final Supplier<ToolbarThemeColorProvider> mToolbarThemeColorProvider;
 
     private boolean mIsShowing;
     private @Nullable BrowserControlsOffsetTagsInfo mOffsetTagsInfo;
@@ -95,11 +96,12 @@ public class StaticLayout extends Layout {
      * @param updateHost The {@link LayoutUpdateHost} view for this layout.
      * @param renderHost The {@link LayoutRenderHost} view for this layout.
      * @param viewHost The {@link LayoutManagerHost} view for this layout.
-     * @param requestSupplier Frame request supplier for Compositor MCP.
+     * @param frameRequestSupplier Frame request supplier for Compositor MCP.
+     * @param requestFrameRunnable Frame request runnable for Compositor MCP.
      * @param tabModelSelector {@link TabModelSelector} instance.
      * @param tabContentManager {@link TabContentsManager} instance.
      * @param browserControlsStateProvider A {@link BrowserControlsStateProvider}.
-     * @param topUiThemeColorProvider {@link ThemeColorProvider} for top UI.
+     * @param toolbarThemeColorProvider {@link ThemeColorProvider} for the toolbar.
      * @param needsOffsetTag Whether or not this layout needs an OffsetTag.
      */
     public StaticLayout(
@@ -112,7 +114,7 @@ public class StaticLayout extends Layout {
             TabModelSelector tabModelSelector,
             TabContentManager tabContentManager,
             BrowserControlsStateProvider browserControlsStateProvider,
-            Supplier<TopUiThemeColorProvider> topUiThemeColorProvider,
+            Supplier<ToolbarThemeColorProvider> toolbarThemeColorProvider,
             NonNullObservableSupplier<Boolean> needsOffsetTag) {
         this(
                 context,
@@ -124,7 +126,7 @@ public class StaticLayout extends Layout {
                 tabModelSelector,
                 tabContentManager,
                 browserControlsStateProvider,
-                topUiThemeColorProvider,
+                toolbarThemeColorProvider,
                 null,
                 needsOffsetTag);
     }
@@ -141,7 +143,7 @@ public class StaticLayout extends Layout {
             TabModelSelector tabModelSelector,
             TabContentManager tabContentManager,
             BrowserControlsStateProvider browserControlsStateProvider,
-            Supplier<TopUiThemeColorProvider> topUiThemeColorProvider,
+            Supplier<ToolbarThemeColorProvider> toolbarThemeColorProvider,
             @Nullable StaticTabSceneLayer testSceneLayer,
             NonNullObservableSupplier<Boolean> needsOffsetTag) {
         super(context, updateHost, renderHost);
@@ -173,17 +175,17 @@ public class StaticLayout extends Layout {
                         .with(LayoutTab.IS_ACTIVE_LAYOUT, false)
                         .build();
 
-        mTopUiThemeColorProvider = topUiThemeColorProvider;
+        mToolbarThemeColorProvider = toolbarThemeColorProvider;
 
         Resources res = context.getResources();
         float dpToPx = res.getDisplayMetrics().density;
         mPxToDp = 1.0f / dpToPx;
 
         mBrowserControlsStateProvider = browserControlsStateProvider;
-        mModel.set(LayoutTab.CONTENT_OFFSET, mBrowserControlsStateProvider.getContentOffset());
+        mModel.set(LayoutTab.CONTENT_OFFSET_Y, mBrowserControlsStateProvider.getContentOffset());
 
         mUpdateOffsetTagsCallback = (ignored) -> updateOffsetTag();
-        mNeedsOffsetTag.addObserver(mUpdateOffsetTagsCallback);
+        mNeedsOffsetTag.addSyncObserverAndPostIfNonNull(mUpdateOffsetTagsCallback);
 
         mBrowserControlsStateProviderObserver =
                 new BrowserControlsStateProvider.Observer() {
@@ -193,15 +195,13 @@ public class StaticLayout extends Layout {
                             BrowserControlsOffsetTagsInfo offsetTagsInfo,
                             @BrowserControlsState int constraints,
                             boolean shouldUpdateOffsets) {
-                        if (ChromeFeatureList.sBrowserControlsInViz.isEnabled()) {
-                            mOffsetTagsInfo = offsetTagsInfo;
-                            updateOffsetTag();
+                        mOffsetTagsInfo = offsetTagsInfo;
+                        updateOffsetTag();
 
-                            if (shouldUpdateOffsets) {
-                                mModel.set(
-                                        LayoutTab.CONTENT_OFFSET,
-                                        mBrowserControlsStateProvider.getContentOffset());
-                            }
+                        if (shouldUpdateOffsets) {
+                            mModel.set(
+                                    LayoutTab.CONTENT_OFFSET_Y,
+                                    mBrowserControlsStateProvider.getContentOffset());
                         }
                     }
 
@@ -215,17 +215,15 @@ public class StaticLayout extends Layout {
                             boolean bottomControlsMinHeightChanged,
                             boolean requestNewFrame,
                             boolean isVisibilityForced) {
-                        if (!ChromeFeatureList.sBrowserControlsInViz.isEnabled()
-                                || requestNewFrame
-                                || isVisibilityForced) {
+                        if (requestNewFrame || isVisibilityForced) {
                             int contentOffset = mBrowserControlsStateProvider.getContentOffset();
-                            mModel.set(LayoutTab.CONTENT_OFFSET, contentOffset);
+                            mModel.set(LayoutTab.CONTENT_OFFSET_Y, contentOffset);
                         } else {
                             // We need to set the height, as it would have changed if this is the
                             // first frame of an animation. Any existing offsets from scrolling and
                             // animations will be applied by OffsetTags.
                             int height = mBrowserControlsStateProvider.getTopControlsHeight();
-                            mModel.set(LayoutTab.CONTENT_OFFSET, height);
+                            mModel.set(LayoutTab.CONTENT_OFFSET_Y, height);
                         }
                     }
                 };
@@ -358,7 +356,7 @@ public class StaticLayout extends Layout {
 
         // Call super last because it might re-show this layout. If we do any work after
         // super.doneHiding() the layout might become unexpectedly inactive or have an
-        // incorrect tab id. See crbug/1468214.
+        // incorrect tab id. See crbug.com/40068199.
         super.doneHiding();
     }
 
@@ -412,9 +410,9 @@ public class StaticLayout extends Layout {
             updateVisibleIdsCheckingLiveLayer(tab.getId(), useLiveTexture);
         }
 
-        TopUiThemeColorProvider topUiTheme = mTopUiThemeColorProvider.get();
-        mModel.set(LayoutTab.BACKGROUND_COLOR, topUiTheme.getBackgroundColor(tab));
-        mModel.set(LayoutTab.TOOLBAR_BACKGROUND_COLOR, topUiTheme.getSceneLayerBackground(tab));
+        ToolbarThemeColorProvider toolbarTheme = mToolbarThemeColorProvider.get();
+        mModel.set(LayoutTab.BACKGROUND_COLOR, ThemeUtils.getBackgroundColor(tab));
+        mModel.set(LayoutTab.TOOLBAR_BACKGROUND_COLOR, toolbarTheme.getToolbarBackgroundColor(tab));
         mModel.set(LayoutTab.TEXT_BOX_BACKGROUND_COLOR, getToolbarTextBoxBackgroundColor(tab));
         mModel.set(LayoutTab.CAN_USE_LIVE_TEXTURE, useLiveTexture);
     }
@@ -425,9 +423,7 @@ public class StaticLayout extends Layout {
         }
 
         return ThemeUtils.getTextBoxColorForToolbarBackground(
-                mContext,
-                tab,
-                mTopUiThemeColorProvider.get().calculateColor(tab, tab.getThemeColor()));
+                mContext, tab, mToolbarThemeColorProvider.get().getToolbarBackgroundColor(tab));
     }
 
     void setTextBoxBackgroundColorForTesting(Integer color) {
@@ -512,6 +508,11 @@ public class StaticLayout extends Layout {
     protected void setIsActive(boolean active) {
         super.setIsActive(active);
         mModel.set(LayoutTab.IS_ACTIVE_LAYOUT, active);
+    }
+
+    /** Sets the {@link LayoutTab#CONTENT_OFFSET_X} for this layout. */
+    protected void setContentOffsetX(@Px int contentOffsetX) {
+        mModel.set(LayoutTab.CONTENT_OFFSET_X, contentOffsetX);
     }
 
     @Override

@@ -30,6 +30,7 @@
 
 import io
 import json
+import platform
 import re
 import unittest
 from unittest import mock
@@ -240,6 +241,7 @@ class RunTest(unittest.TestCase, StreamTestingMixin):
                            '/tmp/layout-test-results/results.html')
         ])
 
+    @unittest.skip("Flaky hang - crbug.com/496616520")
     def test_max_locked_shards(self):
         # Tests for the default of using one locked shard even in the case of more than one child process.
         _, regular_output, _ = logging_run(
@@ -2408,6 +2410,12 @@ class RunTest(unittest.TestCase, StreamTestingMixin):
                 '--ignore-default-expectations', 'failures/expected/text.html'
             ]))
 
+    def test_timeout_multiplier(self):
+        # Tests that --timeout-multiplier is reflected in the logs.
+        _, regular_output, _ = logging_run(['--timeout-multiplier', '2'])
+        self.assertRegex(regular_output.getvalue(),
+                         r'Regular timeout: 12000\b')
+
 
 class RebaselineTest(unittest.TestCase, StreamTestingMixin):
     """Tests for flags which cause new baselines to be written.
@@ -2985,6 +2993,9 @@ class RebaselineTest(unittest.TestCase, StreamTestingMixin):
 
 
 class MainTest(unittest.TestCase):
+
+    @unittest.skipIf(platform.mac_ver()[0].startswith('12'),
+                     "Failing on macOS 12; see crbug.com/474036848")
     def test_exception_handling(self):
         orig_run_fn = run_web_tests.run
 

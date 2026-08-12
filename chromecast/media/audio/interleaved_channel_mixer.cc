@@ -22,7 +22,8 @@ InterleavedChannelMixer::InterleavedChannelMixer(
       output_layout_(output_layout),
       output_channel_count_(output_channel_count),
       max_frames_(max_frames) {
-  if (input_layout_ == output_layout_) {
+  if (input_layout_ == output_layout_ &&
+      input_channel_count_ == output_channel_count_) {
     return;
   }
 
@@ -30,8 +31,8 @@ InterleavedChannelMixer::InterleavedChannelMixer(
 
   std::vector<std::vector<float>> matrix;
   ::media::ChannelMixingMatrix matrix_builder(
-      input_layout_, input_channel_count_, output_layout_,
-      output_channel_count_);
+      ::media::ChannelLayoutConfig(input_layout_, input_channel_count_),
+      ::media::ChannelLayoutConfig(output_layout_, output_channel_count_));
   matrix_builder.CreateTransformationMatrix(&matrix);
 
   transform_.reserve(input_channel_count_ * output_channel_count_);
@@ -44,7 +45,8 @@ InterleavedChannelMixer::InterleavedChannelMixer(
 InterleavedChannelMixer::~InterleavedChannelMixer() = default;
 
 float* InterleavedChannelMixer::Transform(const float* input, int num_frames) {
-  if (input_layout_ == output_layout_) {
+  if (input_layout_ == output_layout_ &&
+      input_channel_count_ == output_channel_count_) {
     return const_cast<float*>(input);
   }
 

@@ -16,6 +16,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
+#include "ui/color/color_provider.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
@@ -26,13 +27,12 @@
 
 namespace {
 
-constexpr int kQrCodeMargin = 40;
-constexpr int kQrCodeImageSize = 240;
-
 }  // namespace
 
 AuthenticatorQrCenteredView::AuthenticatorQrCenteredView(
-    const std::string& qr_string) {
+    const std::string& qr_string,
+    int qr_size,
+    int qr_margin) {
   views::BoxLayout* layout =
       SetLayoutManager(std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal));
@@ -42,9 +42,9 @@ AuthenticatorQrCenteredView::AuthenticatorQrCenteredView(
   qr_code_image_ = AddChildViewAt(std::make_unique<views::ImageView>(), 0);
   qr_code_image_->SetHorizontalAlignment(views::ImageView::Alignment::kCenter);
   qr_code_image_->SetVerticalAlignment(views::ImageView::Alignment::kCenter);
-  qr_code_image_->SetImageSize(qrCodeImageSize());
-  qr_code_image_->SetPreferredSize(qrCodeImageSize() +
-                                   gfx::Size(kQrCodeMargin, kQrCodeMargin));
+  qr_code_image_->SetImageSize(gfx::Size(qr_size, qr_size));
+  qr_code_image_->SetPreferredSize(gfx::Size(qr_size, qr_size) +
+                                   gfx::Size(qr_margin, qr_margin));
   qr_code_image_->GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(IDS_WEBAUTHN_QR_CODE_ALT_TEXT));
 
@@ -77,10 +77,6 @@ void AuthenticatorQrCenteredView::OnThemeChanged() {
       views::Emphasis::kHigh);
   qr_code_image_->SetBackground(views::CreateRoundedRectBackground(
       GetColorProvider()->GetColor(kColorQrCodeBackground), border_radius, 2));
-}
-
-gfx::Size AuthenticatorQrCenteredView::qrCodeImageSize() const {
-  return gfx::Size(kQrCodeImageSize, kQrCodeImageSize);
 }
 
 BEGIN_METADATA(AuthenticatorQrCenteredView)

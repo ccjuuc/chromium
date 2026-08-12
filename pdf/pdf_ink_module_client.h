@@ -5,12 +5,16 @@
 #ifndef PDF_PDF_INK_MODULE_CLIENT_H_
 #define PDF_PDF_INK_MODULE_CLIENT_H_
 
+#include <stdint.h>
+
 #include <map>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "pdf/buildflags.h"
 #include "pdf/page_orientation.h"
 #include "pdf/pdf_ink_ids.h"
+#include "pdf/pdf_ink_text.h"
 #include "pdf/pdf_rect.h"
 #include "pdf/ui/thumbnail.h"
 #include "third_party/ink/src/ink/geometry/partitioned_mesh.h"
@@ -54,12 +58,29 @@ class PdfInkModuleClient {
 
   virtual ~PdfInkModuleClient() = default;
 
+  // Tells the client about a new font. The data is a serialized SkTypeface.
+  virtual void AddFont(FontId font_id,
+                       const std::string& font_name,
+                       base::span<const uint8_t> serialized_typeface) {}
+
   // Notifies the client to clear the current text selection.
   virtual void ClearSelection() {}
+
+  // Notifies the client to draw `text_info` with `attributes` into the page
+  // at `page_index`, identified as `id`.
+  virtual void DrawText(int page_index,
+                        InkTextId id,
+                        base::span<const InkTextInfo> text_info,
+                        float ascent,
+                        double pdf_zoom,
+                        const InkTextBoxAttributes& attributes) {}
 
   // Asks the client to discard the stroke identified by `id` on the page at
   // `page_index`.
   virtual void DiscardStroke(int page_index, InkStrokeId id) {}
+
+  // Asks the client to discard the text identified by `id`.
+  virtual void DiscardText(InkTextId id) {}
 
   // Extends the current text selection to the nearest page and character to
   // `point`. `point` must be in device coordinates.
@@ -117,6 +138,9 @@ class PdfInkModuleClient {
   // `point` must be in device coordinates.
   virtual bool IsSelectableTextOrLinkArea(const gfx::PointF& point) = 0;
 
+  // Returns the saved text annotations across the document.
+  virtual DocumentInkTextBoxesMap LoadTextAnnotationsFromPdf() = 0;
+
   // Asks the client to load Ink data from the PDF.
   virtual DocumentV2InkPathShapesMap LoadV2InkPathsFromPdf() = 0;
 
@@ -136,7 +160,7 @@ class PdfInkModuleClient {
   virtual int PageIndexFromPoint(const gfx::PointF& point) = 0;
 
   // Asks the client to post `message`.
-  virtual void PostMessage(base::Value::Dict message) {}
+  virtual void PostMessage(base::DictValue message) {}
 
   // Asks the client to update the page thumbnail for `page_index`. Note that
   // this is the regular page thumbnail, and not the thumbnail with the Ink
@@ -171,6 +195,11 @@ class PdfInkModuleClient {
   // `page_index` should update its active state.
   virtual void UpdateStrokeActive(int page_index, InkStrokeId id, bool active) {
   }
+
+  // Notifies that an existing text annotation identified by `id` should update
+  // its active state and then invalidate the rect that corresponds to the union
+  // of all text in the text annotation.
+  virtual void UpdateTextActiveAndInvalidate(TextId id, bool active) {}
 
   // Same as `PageIndexFromPoint()`, but `point` must be on a visible page,
   // otherwise returns -1.

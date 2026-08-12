@@ -5,7 +5,6 @@
 #import <XCTest/XCTest.h>
 
 #import "base/apple/foundation_util.h"
-#import "base/containers/contains.h"
 #import "base/functional/bind.h"
 #import "base/ios/ios_util.h"
 #import "base/strings/stringprintf.h"
@@ -14,7 +13,7 @@
 #import "components/feature_engagement/public/feature_constants.h"
 #import "components/omnibox/browser/omnibox_pref_names.h"
 #import "components/strings/grit/components_strings.h"
-#import "ios/chrome/browser/browser_container/ui_bundled/edit_menu_app_interface.h"
+#import "ios/chrome/browser/browser_content/ui_bundled/edit_menu_app_interface.h"
 #import "ios/chrome/browser/content_suggestions/public/ntp_home_constants.h"
 #import "ios/chrome/browser/omnibox/eg_tests/omnibox_app_interface.h"
 #import "ios/chrome/browser/omnibox/eg_tests/omnibox_earl_grey.h"
@@ -117,7 +116,7 @@ std::unique_ptr<net::test_server::HttpResponse> StandardResponse(
 
   if (request.relative_url == kHeaderPageURL) {
     std::string result = kHeaderPageFailure;
-    if (base::Contains(request.headers, "X-Client-Data")) {
+    if (request.headers.contains("X-Client-Data")) {
       result = kHeaderPageSuccess;
     }
     http_response->set_content("<html><body>" + result + "</body></html>");
@@ -230,6 +229,11 @@ id<GREYMatcher> SearchCopiedImageWithLensContextMenuButton() {
                         IDS_IOS_SEARCH_COPIED_IMAGE_WITH_LENS),
                     grey_accessibilityTrait(UIAccessibilityTraitButton),
                     grey_hidden(NO), nil);
+}
+// Returns a matcher for the visible DSE icon.
+id<GREYMatcher> VisibleDSEIcon() {
+  return grey_allOf(grey_accessibilityID(@"DSEIconNonEmpty"),
+                    grey_sufficientlyVisible(), nil);
 }
 
 // Taps the fake omnibox and waits for the real omnibox to be visible.
@@ -441,8 +445,12 @@ void FocusFakebox() {
 @implementation LocationBarSteadyStateTestCase
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
-  AppLaunchConfiguration config = [super appConfigurationForTestCase];
+  AppLaunchConfiguration config;
   config.relaunch_policy = ForceRelaunchByCleanShutdown;
+  if ([self isRunningTest:@selector(testShareButtonInContextMenu)]) {
+    config.features_enabled_and_params.push_back(
+        {kChromeNextIa, {{"chrome_next_ia_share_icon_visible", "false"}}});
+  }
   return config;
 }
 
@@ -489,6 +497,13 @@ void FocusFakebox() {
   [self openPage1];
 
   if ([ChromeEarlGrey isCompactWidth]) {
+    // Under Chrome Next IA, the share button is not visible on the steady state
+    // location bar by default.
+    if ([ChromeEarlGrey isChromeNextEnabled]) {
+      [[EarlGrey selectElementWithMatcher:chrome_test_util::TabShareButton()]
+          assertWithMatcher:grey_notVisible()];
+      return;
+    }
     [[EarlGrey selectElementWithMatcher:chrome_test_util::TabShareButton()]
         assertWithMatcher:grey_sufficientlyVisible()];
   }
@@ -656,6 +671,51 @@ void FocusFakebox() {
   [ChromeEarlGrey closeAllTabs];
 }
 
+// Tests that the DSE icon is visible in Incognito mode on the NTP and persists.
+- (void)testDSEIconInIncognito {
+  [ChromeEarlGrey closeAllTabs];
+
+  [ChromeEarlGrey openNewIncognitoTab];
+  [ChromeEarlGrey waitForIncognitoTabCount:1];
+
+  // Verify the DSE icon is visible using the accessibilityIdentifier.
+  [[EarlGrey selectElementWithMatcher:VisibleDSEIcon()]
+      assertWithMatcher:grey_sufficientlyVisible()];
+
+  // Focus the omnibox.
+  [ChromeEarlGreyUI focusOmnibox];
+
+  // Defocus the omnibox.
+  [OmniboxEarlGrey defocusOmnibox];
+
+  // Verify the DSE icon is still visible.
+  [[EarlGrey selectElementWithMatcher:VisibleDSEIcon()]
+      assertWithMatcher:grey_sufficientlyVisible()];
+
+  // Open a second Incognito tab.
+  [ChromeEarlGrey openNewIncognitoTab];
+  [ChromeEarlGrey waitForIncognitoTabCount:2];
+
+  // Verify the icon in the new tab.
+  [[EarlGrey selectElementWithMatcher:VisibleDSEIcon()]
+      assertWithMatcher:grey_sufficientlyVisible()];
+
+  // Open a normal tab (switches to normal mode).
+  [ChromeEarlGrey openNewTab];
+  [ChromeEarlGrey waitForMainTabCount:1];
+
+  // Open another Incognito tab to switch back and check.
+  [ChromeEarlGrey openNewIncognitoTab];
+  [ChromeEarlGrey waitForIncognitoTabCount:3];
+
+  // Verify the icon is still there.
+  [[EarlGrey selectElementWithMatcher:VisibleDSEIcon()]
+      assertWithMatcher:grey_sufficientlyVisible()];
+
+  // Clean up.
+  [ChromeEarlGrey closeAllTabs];
+}
+
 #pragma mark - Helpers
 
 // Navigates to Page 1 in a tab and waits for it to load.
@@ -681,6 +741,30 @@ void FocusFakebox() {
 // Checks that the location bar is currently in edit state.
 - (void)checkLocationBarEditState {
   [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
+      assertWithMatcher:grey_sufficientlyVisible()];
+}
+
+// Tests that the Share button is visible in the context menu of the location
+// bar.
+- (void)testShareButtonInContextMenu {
+  if ([ChromeEarlGrey isIPadIdiom]) {
+    EARL_GREY_TEST_SKIPPED(@"Share is not in the menu on iPad.");
+  }
+
+  [self openPage1];
+
+  // Long pressing should allow copying and sharing.
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::DefocusedLocationView()]
+      performAction:grey_longPress()];
+
+  // Verify that the Share button is displayed.
+  id<GREYMatcher> shareButton =
+      grey_allOf(chrome_test_util::ContextMenuItemWithAccessibilityLabelId(
+                     IDS_IOS_TOOLS_MENU_SHARE_THIS_PAGE),
+                 grey_accessibilityTrait(UIAccessibilityTraitButton),
+                 grey_hidden(NO), nil);
+
+  [[EarlGrey selectElementWithMatcher:shareButton]
       assertWithMatcher:grey_sufficientlyVisible()];
 }
 

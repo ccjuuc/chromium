@@ -9,7 +9,7 @@
 #include "base/check.h"
 #include "base/path_service.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/chrome_select_file_policy.h"
+#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -55,7 +55,7 @@ UserImageFileSelector::~UserImageFileSelector() {
 
 void UserImageFileSelector::SelectFile(
     base::OnceCallback<void(const base::FilePath&)> selected_cb,
-    base::OnceCallback<void(void)> canceled_cb) {
+    base::OnceClosure canceled_cb) {
   // Early return if the select file dialog is already active.
   if (select_file_dialog_) {
     std::move(canceled_cb).Run();

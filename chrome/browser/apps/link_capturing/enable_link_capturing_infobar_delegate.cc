@@ -30,13 +30,14 @@
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/vector_icon_types.h"
 
 namespace apps {
 namespace {
 void IncrementIgnoreCount(webapps::AppId app_id,
                           web_app::AppLock& app_lock,
-                          base::Value::Dict& debug_result) {
+                          base::DictValue& debug_result) {
   web_app::ScopedRegistryUpdate update = app_lock.sync_bridge().BeginUpdate();
   web_app::WebApp* app = update->UpdateApp(app_id);
 
@@ -54,7 +55,7 @@ void IncrementIgnoreCount(webapps::AppId app_id,
 
 void IncrementDismissCount(webapps::AppId app_id,
                            web_app::AppLock& app_lock,
-                           base::Value::Dict& debug_result) {
+                           base::DictValue& debug_result) {
   web_app::ScopedRegistryUpdate update = app_lock.sync_bridge().BeginUpdate();
   web_app::WebApp* app = update->UpdateApp(app_id);
 
@@ -190,7 +191,8 @@ std::u16string EnableLinkCapturingInfoBarDelegate::GetButtonLabel(
 
 const gfx::VectorIcon& EnableLinkCapturingInfoBarDelegate::GetVectorIcon()
     const {
-  return vector_icons::kSettingsIcon;
+  return features::IsRoundedIconsEnabled() ? vector_icons::kSettingsFilledIcon
+                                           : vector_icons::kSettingsOldIcon;
 }
 
 bool EnableLinkCapturingInfoBarDelegate::IsCloseable() const {

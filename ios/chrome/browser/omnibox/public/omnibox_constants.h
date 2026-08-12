@@ -40,4 +40,11 @@ extern const CGFloat kOmniboxTextFieldLeadingOffsetImage;
 // kOmniboxLeadingImageSize, and kOmniboxTextFieldLeadingOffsetImage.
 extern const CGFloat kOmniboxEditOffset;
 
+// The top padding of the omnibox popup tableview.
+extern const CGFloat kOmniboxPopupTopPadding;
+
+/// Minimum vertical inset for omnibox text view, defaults from UITextView.
+extern const CGFloat kOmniboxTextViewMinVerticalInset;
+extern const CGFloat kOmniboxTextViewMinVerticalInsetIPadComposebox;
+
 #endif  // IOS_CHROME_BROWSER_OMNIBOX_PUBLIC_OMNIBOX_CONSTANTS_H_

@@ -7,6 +7,7 @@
 
 #include "remoting/host/win/wts_session_process_delegate.h"
 
+#include <atomic>
 #include <memory>
 #include <utility>
 
@@ -14,8 +15,10 @@
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/notreached.h"
 #include "base/process/process_handle.h"
 #include "base/rand_util.h"
@@ -35,31 +38,37 @@
 #include "mojo/public/cpp/platform/platform_handle.h"
 #include "mojo/public/cpp/system/invitation.h"
 #include "remoting/host/base/switches.h"
-#include "remoting/host/host_main.h"
 #include "remoting/host/ipc_constants.h"
 #include "remoting/host/mojom/desktop_session.mojom.h"
 #include "remoting/host/win/launch_process_with_token.h"
 #include "remoting/host/win/security_descriptor.h"
-#include "remoting/host/win/worker_process_launcher.h"
 #include "remoting/host/win/wts_terminal_monitor.h"
 #include "remoting/host/worker_process_ipc_delegate.h"
-
-using base::win::ScopedHandle;
+#include "remoting/host/worker_process_launcher.h"
 
 // Name of the default session desktop.
 const char kDefaultDesktopName[] = "winsta0\\default";
 
 namespace remoting {
 
+using base::win::ScopedHandle;
+
 // A private class actually implementing the functionality provided by
 // |WtsSessionProcessDelegate|. This class is ref-counted and implements
 // asynchronous fire-and-forget shutdown.
+//
+// Most methods of this class run on the caller's thread (the thread that
+// created the Core object). However, it also uses an I/O task runner (the
+// `io_task_runner_` member) to receive and handle job object notifications
+// (e.g., process creation and exit events). The class coordinates between
+// these two threads.
 class WtsSessionProcessDelegate::Core
     : public base::RefCountedThreadSafe<Core>,
       public base::MessagePumpForIO::IOHandler,
       public IPC::Listener {
  public:
-  Core(scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
+  Core(base::WeakPtr<WtsSessionProcessDelegate> delegate,
+       scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
        std::unique_ptr<base::CommandLine> target,
        bool launch_elevated,
        const std::string& channel_security);
@@ -80,6 +89,9 @@ class WtsSessionProcessDelegate::Core
   void CloseChannel();
   void CrashProcess(const base::Location& location);
   void KillProcess();
+
+  bool AssignProcessToJobForTesting(base::ProcessHandle process);
+  void SetCoreDeletedCallbackForTesting(base::OnceClosure callback);
 
  private:
   friend class base::RefCountedThreadSafe<Core>;
@@ -123,6 +135,9 @@ class WtsSessionProcessDelegate::Core
   void ReportFatalError();
   void ReportProcessLaunched(base::win::ScopedHandle worker_process);
 
+  // The delegate object.
+  base::WeakPtr<WtsSessionProcessDelegate> delegate_;
+
   // The task runner all public methods of this class should be called on.
   const scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner_;
 
@@ -161,23 +176,38 @@ class WtsSessionProcessDelegate::Core
   mojo::PlatformChannelServerEndpoint elevated_server_endpoint_;
 
   // If launching elevated, this is the pid of the launcher process.
-  base::ProcessId elevated_launcher_pid_ = base::kNullProcessId;
+  std::atomic<base::ProcessId> elevated_launcher_pid_ = base::kNullProcessId;
 
   // Tracks the id of the worker process.
-  base::ProcessId worker_process_pid_ = base::kNullProcessId;
+  std::atomic<base::ProcessId> worker_process_pid_ = base::kNullProcessId;
 
   // The pending process connection for the process being launched.
   mojo::OutgoingInvitation mojo_invitation_;
 
   mojo::AssociatedRemote<mojom::WorkerProcessControl> worker_process_control_;
+
+  // Keeps this object alive until all job object notifications are received.
+  scoped_refptr<Core> self_;
+
+  // True if Stop() has been called.
+  bool stopped_ = false;
+
+  // True if a process has been assigned to the job object and the resulting
+  // JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO notification has not yet been delivered
+  // by the I/O thread.
+  bool job_process_assigned_ = false;
+
+  base::OnceClosure deleted_callback_for_testing_;
 };
 
 WtsSessionProcessDelegate::Core::Core(
+    base::WeakPtr<WtsSessionProcessDelegate> delegate,
     scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
     std::unique_ptr<base::CommandLine> target_command,
     bool launch_elevated,
     const std::string& channel_security)
     : base::MessagePumpForIO::IOHandler(FROM_HERE),
+      delegate_(delegate),
       caller_task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()),
       io_task_runner_(std::move(io_task_runner)),
       channel_security_(channel_security),
@@ -229,6 +259,8 @@ bool WtsSessionProcessDelegate::Core::Initialize(uint32_t session_id) {
 void WtsSessionProcessDelegate::Core::Stop() {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
 
+  stopped_ = true;
+
   KillProcess();
 
   // Drain the completion queue to make sure all job object notifications have
@@ -242,6 +274,9 @@ void WtsSessionProcessDelegate::Core::LaunchProcess(
   DCHECK(!event_handler_);
 
   event_handler_ = event_handler;
+  if (delegate_) {
+    delegate_->event_handler_ = event_handler;
+  }
   DoLaunchProcess();
 }
 
@@ -295,10 +330,28 @@ void WtsSessionProcessDelegate::Core::KillProcess() {
   worker_process_.Close();
 }
 
+bool WtsSessionProcessDelegate::Core::AssignProcessToJobForTesting(
+    base::ProcessHandle process) {
+  DCHECK(caller_task_runner_->BelongsToCurrentThread());
+  if (!job_.is_valid() || !::AssignProcessToJobObject(job_.Get(), process)) {
+    return false;
+  }
+  job_process_assigned_ = true;
+  return true;
+}
+
+void WtsSessionProcessDelegate::Core::SetCoreDeletedCallbackForTesting(
+    base::OnceClosure callback) {
+  deleted_callback_for_testing_ = std::move(callback);
+}
+
 WtsSessionProcessDelegate::Core::~Core() {
   DCHECK(!channel_);
   DCHECK(!event_handler_);
   DCHECK(!worker_process_.is_valid());
+  if (deleted_callback_for_testing_) {
+    std::move(deleted_callback_for_testing_).Run();
+  }
 }
 
 void WtsSessionProcessDelegate::Core::OnIOCompleted(
@@ -318,27 +371,27 @@ void WtsSessionProcessDelegate::Core::OnIOCompleted(
       break;
     }
     case JOB_OBJECT_MSG_NEW_PROCESS: {
-      if (elevated_launcher_pid_ == base::kNullProcessId) {
+      if (elevated_launcher_pid_.load() == base::kNullProcessId) {
         // Ignore process launch events when we don't have a valid launcher pid.
         return;
       }
 
-      if (process_id != elevated_launcher_pid_) {
-        DCHECK_EQ(worker_process_pid_, base::kNullProcessId);
+      if (process_id != elevated_launcher_pid_.load()) {
+        DCHECK_EQ(worker_process_pid_.load(), base::kNullProcessId);
         worker_process_pid_ = process_id;
       }
       break;
     }
     case JOB_OBJECT_MSG_EXIT_PROCESS: {
-      if (process_id == worker_process_pid_) {
+      if (process_id == worker_process_pid_.load()) {
         // In official builds the first launch of a UiAccess enabled binary
         // will fail due to 'STATUS_ELEVATION_REQUIRED'.  This is an artifact of
         // using ShellExecuteEx() to launch the process.  In this scenario, we
         // will clear out the previously stored value for |worker_process_pid_|
         // and retry after the subsequent relaunch of the worker process.
         worker_process_pid_ = base::kNullProcessId;
-      } else if (process_id == elevated_launcher_pid_) {
-        if (worker_process_pid_ == base::kNullProcessId) {
+      } else if (process_id == elevated_launcher_pid_.load()) {
+        if (worker_process_pid_.load() == base::kNullProcessId) {
           // The elevated launcher process can fail to launch without attemping
           // to launch the worker.  In this scenario, the failure will be
           // detected outside this method and the elevated launcher will be
@@ -348,7 +401,7 @@ void WtsSessionProcessDelegate::Core::OnIOCompleted(
 
         caller_task_runner_->PostTask(
             FROM_HERE, base::BindOnce(&Core::OnProcessLaunchDetected, this,
-                                      worker_process_pid_));
+                                      worker_process_pid_.load()));
       }
       break;
     }
@@ -409,7 +462,7 @@ void WtsSessionProcessDelegate::Core::DoLaunchProcess() {
 
   std::string mojo_pipe_token = base::NumberToString(base::RandUint64());
   channel_ = IPC::ChannelProxy::Create(
-      mojo_invitation_.AttachMessagePipe(mojo_pipe_token).release(),
+      mojo_invitation_.AttachMessagePipe(mojo_pipe_token),
       IPC::Channel::MODE_SERVER, this, io_task_runner_,
       base::SingleThreadTaskRunner::GetCurrentDefault());
   command_line.AppendSwitchASCII(kMojoPipeToken, mojo_pipe_token);
@@ -436,8 +489,9 @@ void WtsSessionProcessDelegate::Core::DoLaunchProcess() {
   if (!LaunchProcessWithToken(
           command_line.GetProgram(), command_line.GetCommandLineString(),
           session_token_.Get(), /*security_attributes=*/nullptr,
-          /* thread_attributes= */ nullptr, handles_to_inherit,
-          /* creation_flags= */ CREATE_SUSPENDED | CREATE_BREAKAWAY_FROM_JOB,
+          /*thread_attributes=*/nullptr, handles_to_inherit,
+          /*security_capabilities=*/nullptr,
+          /*creation_flags=*/CREATE_SUSPENDED | CREATE_BREAKAWAY_FROM_JOB,
           base::UTF8ToWide(kDefaultDesktopName).c_str(), &worker_process,
           &worker_thread)) {
     ReportFatalError();
@@ -445,11 +499,13 @@ void WtsSessionProcessDelegate::Core::DoLaunchProcess() {
   }
 
   if (launch_elevated_) {
+    elevated_launcher_pid_ = GetProcessId(worker_process.Get());
     if (!AssignProcessToJobObject(job_.Get(), worker_process.Get())) {
       PLOG(ERROR) << "Failed to assign the worker to the job object";
       ReportFatalError();
       return;
     }
+    job_process_assigned_ = true;
   }
 
   if (!ResumeThread(worker_thread.Get())) {
@@ -464,7 +520,6 @@ void WtsSessionProcessDelegate::Core::DoLaunchProcess() {
     // worker process launch is detected. Until then, store the values needed in
     // fields. See OnProcessLaunchDetected for their use.
     elevated_server_endpoint_ = elevated_mojo_channel->TakeServerEndpoint();
-    elevated_launcher_pid_ = GetProcessId(worker_process.Get());
     DCHECK(elevated_server_endpoint_.is_valid());
   } else {
     mojo::OutgoingInvitation::Send(std::move(mojo_invitation_),
@@ -488,12 +543,25 @@ void WtsSessionProcessDelegate::Core::DrainJobNotificationsCompleted() {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
 
   if (job_.is_valid()) {
+    // Closing the last handle to the job destroys the kernel job object only
+    // once every process in the job has terminated. TerminateJobObject() does
+    // not wait for the processes to exit, so defer closing the handle until
+    // OnActiveProcessZero() has run so that no further notifications will be
+    // posted to the completion port after the handle is closed.
+    if (job_process_assigned_) {
+      return;
+    }
+
     job_.Close();
 
-    // Drain the completion queue to make sure all job object notification have
+    // Drain the completion queue to make sure all job object notifications have
     // been received.
     io_task_runner_->PostTask(
         FROM_HERE, base::BindOnce(&Core::DrainJobNotifications, this));
+  } else {
+    // The job object has been closed and the completion port queue has been
+    // drained.
+    self_ = nullptr;
   }
 }
 
@@ -516,7 +584,22 @@ void WtsSessionProcessDelegate::Core::InitializeJobCompleted(ScopedHandle job) {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
   DCHECK(!job_.is_valid());
 
+  if (stopped_) {
+    // If Stop() was called before the job was initialized, we must still ensure
+    // the completion port is drained because InitializeJob() has already
+    // called RegisterJobObject().
+    job_ = std::move(job);
+    self_ = this;
+    DrainJobNotificationsCompleted();
+    return;
+  }
+
   job_ = std::move(job);
+
+  // Keep this object alive until the job object notifications have been
+  // drained. This ensures that OnIOCompleted() is not called with a dangling
+  // pointer.
+  self_ = this;
 
   if (launch_pending_) {
     DoLaunchProcess();
@@ -525,6 +608,26 @@ void WtsSessionProcessDelegate::Core::InitializeJobCompleted(ScopedHandle job) {
 
 void WtsSessionProcessDelegate::Core::OnActiveProcessZero() {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
+
+  if (job_.is_valid()) {
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info;
+    if (QueryInformationJobObject(job_.Get(),
+                                  JobObjectBasicAccountingInformation, &info,
+                                  sizeof(info), nullptr)) {
+      if (info.ActiveProcesses > 0) {
+        return;
+      }
+    }
+  }
+
+  job_process_assigned_ = false;
+
+  if (stopped_) {
+    // The I/O thread has now processed all pending job object notifications,
+    // so it is safe to close the job handle and release |self_|.
+    DrainJobNotificationsCompleted();
+    return;
+  }
 
   if (launch_pending_) {
     LOG(ERROR) << "The worker process exited before connecting via IPC.";
@@ -536,7 +639,7 @@ void WtsSessionProcessDelegate::Core::OnActiveProcessZero() {
 void WtsSessionProcessDelegate::Core::OnProcessLaunchDetected(
     base::ProcessId pid) {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
-  DCHECK_NE(pid, elevated_launcher_pid_);
+  DCHECK_NE(pid, elevated_launcher_pid_.load());
 
   if (!elevated_server_endpoint_.is_valid()) {
     return;
@@ -589,7 +692,9 @@ void WtsSessionProcessDelegate::Core::ReportProcessLaunched(
   }
   ScopedHandle limited_handle(temp_handle);
 
-  event_handler_->OnProcessLaunched(std::move(limited_handle));
+  if (delegate_) {
+    delegate_->WatchProcess(std::move(limited_handle));
+  }
 }
 
 WtsSessionProcessDelegate::WtsSessionProcessDelegate(
@@ -597,8 +702,9 @@ WtsSessionProcessDelegate::WtsSessionProcessDelegate(
     std::unique_ptr<base::CommandLine> target_command,
     bool launch_elevated,
     const std::string& channel_security) {
-  core_ = new Core(io_task_runner, std::move(target_command), launch_elevated,
-                   channel_security);
+  core_ = base::MakeRefCounted<Core>(weak_ptr_factory_.GetWeakPtr(),
+                                     io_task_runner, std::move(target_command),
+                                     launch_elevated, channel_security);
 }
 
 WtsSessionProcessDelegate::~WtsSessionProcessDelegate() {
@@ -630,6 +736,16 @@ void WtsSessionProcessDelegate::CrashProcess(const base::Location& location) {
 
 void WtsSessionProcessDelegate::KillProcess() {
   core_->KillProcess();
+}
+
+bool WtsSessionProcessDelegate::AssignProcessToJobForTesting(
+    base::ProcessHandle process) {
+  return core_->AssignProcessToJobForTesting(process);  // IN-TEST
+}
+
+void WtsSessionProcessDelegate::SetCoreDeletedCallbackForTesting(
+    base::OnceClosure callback) {
+  core_->SetCoreDeletedCallbackForTesting(std::move(callback));  // IN-TEST
 }
 
 }  // namespace remoting

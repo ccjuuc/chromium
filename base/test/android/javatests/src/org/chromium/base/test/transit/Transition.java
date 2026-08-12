@@ -164,7 +164,7 @@ public abstract class Transition {
 
     protected List<Condition> getTransitionConditions() {
         if (mOptions.mTransitionConditions == null) {
-            return Collections.EMPTY_LIST;
+            return Collections.emptyList();
         } else {
             return mOptions.mTransitionConditions;
         }
@@ -242,7 +242,7 @@ public abstract class Transition {
 
         static final TransitionOptions DEFAULT = new TransitionOptions();
         private @Nullable List<Condition> mTransitionConditions;
-        private @Nullable Long mTimeoutMs;
+        @Nullable Long mTimeoutMs;
         private @Nullable Integer mTries;
         private @Nullable Boolean mPossiblyAlreadyFulfilled;
         private @Nullable Boolean mRunTriggerOnUiThread;

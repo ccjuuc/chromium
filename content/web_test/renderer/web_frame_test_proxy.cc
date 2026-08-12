@@ -484,7 +484,7 @@ void WebFrameTestProxy::FinalizeRequest(blink::WebURLRequest& request) {
   if (test_runner()->HttpHeadersToClear()) {
     for (const std::string& header : *test_runner()->HttpHeadersToClear()) {
       DCHECK(!base::EqualsCaseInsensitiveASCII(header, "referer"));
-      request.ClearHttpHeaderField(blink::WebString::FromUTF8(header));
+      request.ClearHttpHeaderField(blink::WebString::FromUtf8(header));
     }
   }
 
@@ -545,7 +545,7 @@ void WebFrameTestProxy::BeginNavigation(
     for (const std::string& header : *test_runner()->HttpHeadersToClear()) {
       DCHECK(!base::EqualsCaseInsensitiveASCII(header, "referer"));
       info->url_request.ClearHttpHeaderField(
-          blink::WebString::FromUTF8(header));
+          blink::WebString::FromUtf8(header));
     }
   }
 
@@ -692,8 +692,9 @@ void WebFrameTestProxy::HandleWebAccessibilityEventForTest(
     case ax::mojom::Event::kChildrenChanged:
     case ax::mojom::Event::kControlsChanged:
     case ax::mojom::Event::kEndOfTest:
+    case ax::mojom::Event::kEnabledChanged:
     case ax::mojom::Event::kFocusAfterMenuClose:
-    case ax::mojom::Event::kFocusContext:
+    case ax::mojom::Event::kFocusContextDeprecated:
     case ax::mojom::Event::kHitTestResult:
     case ax::mojom::Event::kImageFrameUpdated:
     case ax::mojom::Event::kLiveRegionCreated:
@@ -884,12 +885,12 @@ void WebFrameTestProxy::ProcessWorkItem(mojom::WorkItemPtr work_item) {
 }
 
 void WebFrameTestProxy::ReplicateWorkQueueStates(
-    base::Value::Dict work_queue_states) {
+    base::DictValue work_queue_states) {
   test_runner_->ReplicateWorkQueueStates(std::move(work_queue_states), *this);
 }
 
 void WebFrameTestProxy::ReplicateWebTestRuntimeFlagsChanges(
-    base::Value::Dict changed_layout_test_runtime_flags) {
+    base::DictValue changed_layout_test_runtime_flags) {
   test_runner_->ReplicateWebTestRuntimeFlagsChanges(
       std::move(changed_layout_test_runtime_flags));
 }

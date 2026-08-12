@@ -22,6 +22,7 @@
 
 #include "third_party/blink/renderer/core/svg/svg_resource_document_content.h"
 
+#include "base/auto_reset.h"
 #include "base/notreached.h"
 #include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -41,22 +42,9 @@ namespace blink {
 
 namespace {
 
-bool CanReuseContent(const SVGResourceDocumentContent& content) {
-  // Don't reuse if loading failed.
-  return !content.ErrorOccurred();
-}
-
 bool AllowedRequestMode(const ResourceRequest& request) {
-  // Same-origin
-  if (request.GetMode() == network::mojom::blink::RequestMode::kSameOrigin) {
-    return true;
-  }
-  // CORS with same-origin credentials mode ("CORS anonymous").
-  if (request.GetMode() == network::mojom::blink::RequestMode::kCors) {
-    return request.GetCredentialsMode() ==
-           network::mojom::CredentialsMode::kSameOrigin;
-  }
-  return false;
+  return request.GetMode() == network::mojom::blink::RequestMode::kSameOrigin ||
+         request.GetMode() == network::mojom::blink::RequestMode::kCors;
 }
 
 }  // namespace
@@ -76,6 +64,7 @@ class SVGResourceDocumentContent::ChromeClient final
   void ChromeDestroyed() override { content_.Clear(); }
   void InvalidateContainer() override { content_->ContentChanged(); }
   void ScheduleAnimation(const LocalFrameView*,
+                         cc::BeginMainFrameReason,
                          base::TimeDelta,
                          bool) override {
     content_->ContentChanged();
@@ -142,6 +131,9 @@ SVGResourceDocumentContent::UpdateDocument(scoped_refptr<SharedBuffer> data,
   auto* chrome_client = MakeGarbageCollected<ChromeClient>(this);
   document_host_ = MakeGarbageCollected<IsolatedSVGDocumentHost>(
       *chrome_client, *agent_group_scheduler_, std::move(data),
+      RuntimeEnabledFeatures::SvgUseNestedResourceDocumentsEnabled()
+          ? request_url
+          : NullUrl(),
       BindOnce(&SVGResourceDocumentContent::AsyncLoadingFinished,
                WrapWeakPersistent(this)),
       /* inherited_settings */ nullptr, /* inherited_color_maps */ nullptr,
@@ -157,9 +149,7 @@ SVGResourceDocumentContent::UpdateDocument(scoped_refptr<SharedBuffer> data,
 }
 
 void SVGResourceDocumentContent::LoadingFinished() {
-  LocalFrame* frame = document_host_->GetFrame();
-  frame->View()->UpdateAllLifecyclePhasesExceptPaint(
-      DocumentUpdateReason::kSVGImage);
+  UpdateLifecycleForUse();
   UpdateStatus(ResourceStatus::kCached);
 }
 
@@ -244,7 +234,22 @@ SVGResourceTarget* SVGResourceDocumentContent::GetResourceTarget(
   return &svg_target->EnsureResourceTarget();
 }
 
+void SVGResourceDocumentContent::UpdateLifecycleForUse() {
+  if (!document_host_) {
+    return;
+  }
+  // Temporarily disable content-changed notifications triggered by the
+  // lifecycle update.
+  base::AutoReset validate_scope(&inhibit_content_change_, true);
+  LocalFrame* frame = document_host_->GetFrame();
+  frame->View()->UpdateAllLifecyclePhasesExceptPaint(
+      DocumentUpdateReason::kSVGImage);
+}
+
 void SVGResourceDocumentContent::ContentChanged() {
+  if (inhibit_content_change_) {
+    return;
+  }
   for (auto& observer : observers_) {
     observer->ResourceContentChanged(this);
   }
@@ -273,9 +278,7 @@ SVGResourceDocumentContent* SVGResourceDocumentContent::Fetch(
     FetchParameters& params,
     Document& document) {
   CHECK(!params.Url().IsNull());
-  // Callers need to set the request and credentials mode to something suitably
-  // restrictive. This limits the actual modes (simplifies caching) that we
-  // allow and avoids accidental creation of overly privileged requests.
+  // Callers need to set a CORS-enabled request mode (kSameOrigin or kCors).
   CHECK(AllowedRequestMode(params.GetResourceRequest()));
 
   DCHECK_EQ(params.GetResourceRequest().GetRequestContext(),
@@ -285,16 +288,6 @@ SVGResourceDocumentContent* SVGResourceDocumentContent::Fetch(
 
   Page* page = document.GetPage();
   auto& cache = page->GetSVGDocumentResourceTracker();
-  const SVGDocumentResourceTracker::CacheKey key =
-      SVGDocumentResourceTracker::MakeCacheKey(params);
-
-  if (!RuntimeEnabledFeatures::
-          SvgPartitionSVGDocumentResourcesInMemoryCacheEnabled()) {
-    auto* cached_content = cache.Get(key);
-    if (cached_content && CanReuseContent(*cached_content)) {
-      return cached_content;
-    }
-  }
 
   SVGDocumentResource* resource = SVGDocumentResource::Fetch(
       params, document.Fetcher(), page->GetAgentGroupScheduler());
@@ -302,13 +295,8 @@ SVGResourceDocumentContent* SVGResourceDocumentContent::Fetch(
     return nullptr;
   }
 
-  if (RuntimeEnabledFeatures::
-          SvgPartitionSVGDocumentResourcesInMemoryCacheEnabled()) {
-    cache.AddResource(resource);
-    UseCounter::Count(document, WebFeature::kExternalSVGDocumentResources);
-  } else {
-    cache.Put(key, resource->GetContent());
-  }
+  cache.AddResource(resource);
+  UseCounter::Count(document, WebFeature::kExternalSVGDocumentResources);
 
   return resource->GetContent();
 }

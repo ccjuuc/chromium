@@ -9,7 +9,7 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -30,16 +30,16 @@ import org.chromium.components.search_engines.TemplateUrlService.TemplateUrlServ
  */
 @NullMarked
 public class DseNewTabUrlManager {
-    private ObservableSupplier<Profile> mProfileSupplier;
+    private MonotonicObservableSupplier<Profile> mProfileSupplier;
     private @Nullable Callback<Profile> mProfileCallback;
     private @MonotonicNonNull RegionalCapabilitiesService mRegionalCapabilities;
     private @MonotonicNonNull TemplateUrlService mTemplateUrlService;
     private @MonotonicNonNull TemplateUrlServiceObserver mTemplateUrlServiceObserver;
 
-    public DseNewTabUrlManager(ObservableSupplier<Profile> profileSupplier) {
+    public DseNewTabUrlManager(MonotonicObservableSupplier<Profile> profileSupplier) {
         mProfileSupplier = profileSupplier;
         mProfileCallback = this::onProfileAvailable;
-        mProfileSupplier.addObserver(mProfileCallback);
+        mProfileSupplier.addSyncObserverAndPostIfNonNull(mProfileCallback);
     }
 
     @SuppressWarnings("NullAway")
@@ -71,14 +71,14 @@ public class DseNewTabUrlManager {
     }
 
     /**
-     * Returns the new Tab URL of the default search engine:
-     * 1. Returns the cached value ChromePreferenceKeys.DSE_NEW_TAB_URL in the SharedPreference if
-     *    the templateUrlService is null.
-     * 2. Returns null if the DSE is Google.
-     * 3. Returns the default search engine's URL if the DSE doesn't provide a new Tab Url.
+     * Returns the new Tab URL of the default search engine: 1. Returns the cached value
+     * ChromePreferenceKeys.DSE_NEW_TAB_URL in the SharedPreference if the templateUrlService is
+     * null. 2. Returns null if the DSE is Google. 3. Returns the default search engine's URL if the
+     * DSE doesn't provide a new Tab Url.
+     *
      * @param templateUrlService The instance of {@link TemplateUrlService}.
      */
-    public static @Nullable String getDSENewTabUrl(TemplateUrlService templateUrlService) {
+    public static @Nullable String getDseNewTabUrl(TemplateUrlService templateUrlService) {
         if (templateUrlService == null) {
             return ChromeSharedPreferences.getInstance()
                     .readString(ChromePreferenceKeys.DSE_NEW_TAB_URL, null);
@@ -110,20 +110,20 @@ public class DseNewTabUrlManager {
     private void onTemplateURLServiceChanged() {
         assumeNonNull(mRegionalCapabilities);
         assumeNonNull(mTemplateUrlService);
-        boolean isDSEGoogle = mTemplateUrlService.isDefaultSearchEngineGoogle();
+        boolean isDseGoogle = mTemplateUrlService.isDefaultSearchEngineGoogle();
         ChromeSharedPreferences.getInstance()
-                .writeBoolean(ChromePreferenceKeys.IS_DSE_GOOGLE, isDSEGoogle);
+                .writeBoolean(ChromePreferenceKeys.IS_DSE_GOOGLE, isDseGoogle);
         ChromeSharedPreferences.getInstance()
                 .writeBoolean(
                         ChromePreferenceKeys.IS_EEA_CHOICE_COUNTRY,
                         mRegionalCapabilities.isInEeaCountry());
-        if (isDSEGoogle) {
+        if (isDseGoogle) {
             ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.DSE_NEW_TAB_URL);
         } else {
             ChromeSharedPreferences.getInstance()
                     .writeString(
                             ChromePreferenceKeys.DSE_NEW_TAB_URL,
-                            getDSENewTabUrl(mTemplateUrlService));
+                            getDseNewTabUrl(mTemplateUrlService));
         }
     }
 

@@ -4,16 +4,22 @@
 
 #include "services/network/public/cpp/header_util.h"
 
+#include <map>
 #include <string>
 #include <vector>
 
 #include "base/containers/fixed_flat_map.h"
+#include "base/feature_list.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "net/base/mime_sniffer.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
+#include "net/http/http_util.h"
+#include "services/network/public/cpp/cors/cors.h"
+#include "services/network/public/cpp/features.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/gurl.h"
 
@@ -39,7 +45,8 @@ const char* kUnsafeHeaders[] = {
     net::HttpRequestHeaders::kHost,
 
     // Trailers are not supported.
-    "Trailer", "Te",
+    "Trailer",
+    "Te",
 
     // Websockets use a different API.
     "Upgrade",
@@ -57,19 +64,7 @@ const char* kUnsafeHeaders[] = {
     "Set-Cookie",
 
     // TODO(mmenke): Figure out what to do about the remaining headers:
-    // Connection, Cookie, Date, Expect, Referer, Via.
-};
-
-// Headers that consumers are currently allowed to set, with the exception of
-// certain values could cause problems.
-// TODO(mmenke): Gather stats on these, and see if these headers can be banned
-// outright instead.
-const struct {
-  const char* name;
-  const char* value;
-} kUnsafeHeaderValues[] = {
-    // Websockets use a different API.
-    {net::HttpRequestHeaders::kConnection, "Upgrade"},
+    // Cookie, Date, Expect, Referer, Via.
 };
 
 }  // namespace
@@ -80,16 +75,36 @@ bool IsRequestHeaderSafe(std::string_view key, std::string_view value) {
       return false;
   }
 
-  for (const auto& header : kUnsafeHeaderValues) {
-    if (base::EqualsCaseInsensitiveASCII(header.name, key) &&
-        base::EqualsCaseInsensitiveASCII(header.value, value)) {
-      return false;
+  // The Connection header is a comma-separated list of tokens. Per RFC 9110
+  // section 7.6.1, intermediaries treat each listed token as the name of a
+  // header to remove before forwarding, so only allow the connection-management
+  // options that the network stack itself uses. Websockets use a different API,
+  // so "upgrade" is not needed here.
+  if (base::EqualsCaseInsensitiveASCII(key,
+                                       net::HttpRequestHeaders::kConnection)) {
+    net::HttpUtil::ValuesIterator tokens(value, ',');
+    while (tokens.GetNext()) {
+      if (!base::EqualsCaseInsensitiveASCII(tokens.value(), "close") &&
+          !base::EqualsCaseInsensitiveASCII(tokens.value(), "keep-alive")) {
+        return false;
+      }
     }
   }
 
   // Proxy headers are destined for the proxy, so shouldn't be set by callers.
   if (base::StartsWith(key, "Proxy-", base::CompareCase::INSENSITIVE_ASCII))
     return false;
+
+  if (base::EqualsCaseInsensitiveASCII(key, "X-HTTP-Method") ||
+      base::EqualsCaseInsensitiveASCII(key, "X-HTTP-Method-Override") ||
+      base::EqualsCaseInsensitiveASCII(key, "X-Method-Override")) {
+    net::HttpUtil::ValuesIterator method_iterator(value, ',');
+    while (method_iterator.GetNext()) {
+      if (cors::IsForbiddenMethod(method_iterator.value())) {
+        return false;
+      }
+    }
+  }
 
   return true;
 }
@@ -103,6 +118,90 @@ bool AreRequestHeadersSafe(const net::HttpRequestHeaders& request_headers) {
   }
 
   return true;
+}
+
+bool ContainsForbiddenSecurityHeader(net::HttpRequestHeaders& headers,
+                                     std::string* out_forbidden_header_name) {
+  static const bool enabled =
+      base::FeatureList::IsEnabled(features::kRestrictForbiddenSecurityHeaders);
+  if (!enabled) {
+    return false;
+  }
+
+  std::map<std::string, std::string> headers_to_truncate;
+
+  auto sanitize_and_check_security_header = [&](std::string_view name,
+                                                std::string_view value) {
+    // Client Hints are harmless and set by the renderer.
+    if (base::StartsWith(name, "Sec-CH-",
+                         base::CompareCase::INSENSITIVE_ASCII)) {
+      size_t size = value.size();
+      base::UmaHistogramCounts10000("NetworkService.SecCHHeaderSize", size);
+      if (size > 1024) {
+        headers_to_truncate[std::string(name)] =
+            std::string(value.substr(0, 1024));
+      }
+      return true;
+    }
+    // Sec-Purpose is used for prefetch hints and contains short strings.
+    if (base::EqualsCaseInsensitiveASCII(name, "Sec-Purpose")) {
+      return value.size() < 256;
+    }
+    // Sec-GPC is allowed with value "1".
+    // https://w3c.github.io/gpc/#the-sec-gpc-header-field-for-http-requests
+    if (base::EqualsCaseInsensitiveASCII(name, "Sec-GPC")) {
+      return value == "1";
+    }
+    // Browsing Topics API headers contain structured interest tokens.
+    if (base::EqualsCaseInsensitiveASCII(name, "Sec-Browsing-Topics")) {
+      return value.size() < 1024;
+    }
+    // Shared Storage fetch headers use structured boolean "?1".
+    if (base::EqualsCaseInsensitiveASCII(name, "Sec-Shared-Storage-Writable")) {
+      return value == "?1";
+    }
+    // Shared Storage data origin headers contain origin URLs.
+    if (base::EqualsCaseInsensitiveASCII(name,
+                                         "Sec-Shared-Storage-Data-Origin")) {
+      return value.size() <= 267;
+    }
+    // Speculation Rules headers contain comma-separated tokens.
+    if (base::EqualsCaseInsensitiveASCII(name, "Sec-Speculation-Tags")) {
+      size_t size = value.size();
+      base::UmaHistogramCounts10000(
+          "NetworkService.SecSpeculationTagsHeaderSize", size);
+      if (size > 2048) {
+        std::string_view truncated_value = value.substr(0, 2048);
+        size_t last_comma = truncated_value.rfind(',');
+        if (last_comma != std::string_view::npos) {
+          truncated_value = truncated_value.substr(0, last_comma);
+        }
+        headers_to_truncate[std::string(name)] = std::string(truncated_value);
+      }
+      return true;
+    }
+
+    return false;
+  };
+
+  net::HttpRequestHeaders::Iterator it(headers);
+  while (it.GetNext()) {
+    if (base::StartsWith(it.name(), "Sec-",
+                         base::CompareCase::INSENSITIVE_ASCII)) {
+      if (!sanitize_and_check_security_header(it.name(), it.value())) {
+        if (out_forbidden_header_name) {
+          *out_forbidden_header_name = std::string(it.name());
+        }
+        return true;
+      }
+    }
+  }
+
+  for (const auto& [name, value] : headers_to_truncate) {
+    headers.SetHeader(name, value);
+  }
+
+  return false;
 }
 
 mojom::ReferrerPolicy ParseReferrerPolicy(
@@ -146,18 +245,8 @@ mojom::ReferrerPolicy ParseReferrerPolicy(
 
 bool ShouldSniffContent(const GURL& url,
                         const mojom::URLResponseHead& response) {
-  std::string content_type_options;
-  if (response.headers) {
-    content_type_options =
-        response.headers->GetNormalizedHeader("x-content-type-options")
-            .value_or(std::string());
-  }
-  bool sniffing_blocked =
-      base::EqualsCaseInsensitiveASCII(content_type_options, "nosniff");
-  bool we_would_like_to_sniff =
-      net::ShouldSniffMimeType(url, response.mime_type);
-
-  return !sniffing_blocked && we_would_like_to_sniff;
+  return net::ShouldSniffMimeType(url, response.headers.get(),
+                                  response.mime_type);
 }
 
 bool IsSuccessfulStatus(int status) {

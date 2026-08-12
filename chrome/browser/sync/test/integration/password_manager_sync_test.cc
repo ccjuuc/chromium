@@ -18,13 +18,12 @@
 #include "chrome/browser/affiliations/affiliation_service_factory.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
-#include "chrome/browser/password_manager/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/password_manager/password_manager_test_base.h"
 #include "chrome/browser/password_manager/passwords_navigation_observer.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/test/integration/passwords_helper.h"
-#include "chrome/browser/sync/test/integration/secondary_account_helper.h"
 #include "chrome/browser/sync/test/integration/single_client_status_change_checker.h"
 #include "chrome/browser/sync/test/integration/status_change_checker.h"
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
@@ -39,7 +38,9 @@
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/features/password_manager_features_util.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_form_manager.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/password_manager/core/browser/password_store/password_store_results_observer.h"
 #include "components/password_manager/core/browser/password_sync_util.h"
@@ -65,6 +66,7 @@
 #include "content/public/browser/browser_context.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/content_mock_cert_verifier.h"
+#include "content/public/test/test_utils.h"
 #include "google_apis/gaia/gaia_switches.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "net/dns/mock_host_resolver.h"
@@ -80,14 +82,14 @@ using testing::NiceMock;
 using testing::UnorderedElementsAre;
 
 MATCHER_P2(MatchesLogin, username, password, "") {
-  return arg->username_value == base::UTF8ToUTF16(username) &&
-         arg->password_value == base::UTF8ToUTF16(password);
+  return arg.username_value == base::UTF8ToUTF16(username) &&
+         arg.password_value == base::UTF8ToUTF16(password);
 }
 
 MATCHER_P3(MatchesLoginAndRealm, username, password, signon_realm, "") {
-  return arg->username_value == base::UTF8ToUTF16(username) &&
-         arg->password_value == base::UTF8ToUTF16(password) &&
-         arg->signon_realm == signon_realm;
+  return arg.username_value == base::UTF8ToUTF16(username) &&
+         arg.password_value == base::UTF8ToUTF16(password) &&
+         arg.signon_realm == signon_realm;
 }
 
 const char kExampleHostname[] = "www.example.com";
@@ -162,6 +164,12 @@ content::WebContents* GetNewTab(Browser* browser) {
 class PasswordManagerSyncTest : public SyncTest {
  public:
   PasswordManagerSyncTest() : SyncTest(SINGLE_CLIENT) {
+    // Avoid waiting for server predictions in browser tests, to keep filling
+    // behavior deterministic. Server-prediction-specific behavior is covered
+    // in PasswordFormManager unit tests.
+    password_manager::PasswordFormManager::
+        set_wait_for_server_predictions_for_filling(false);
+
     // Note: Enabling kFillOnAccountSelect effectively *disables* autofilling on
     // page load. This is important because if a password is autofilled, then
     // all Javascript changes to it are discarded, and thus any tests that cover
@@ -219,8 +227,6 @@ class PasswordManagerSyncTest : public SyncTest {
   void SetUpOnMainThread() override {
     SyncTest::SetUpOnMainThread();
 
-    ASSERT_TRUE(embedded_test_server()->Start());
-
     host_resolver()->AddRule("*", "127.0.0.1");
 
     // Allowlist all certs for the HTTPS server.
@@ -241,45 +247,29 @@ class PasswordManagerSyncTest : public SyncTest {
     SyncTest::TearDownOnMainThread();
   }
 
-  // Implicit browser signin, disables passwords account storage by default.
-  void SignIn(SyncTestAccount account = SyncTestAccount::kDefaultAccount,
-              bool explicit_signin = true) {
+  void SignIn(SyncTestAccount account = SyncTestAccount::kDefaultAccount) {
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
     auto enable_disclaimer_on_primary_account_change_resetter =
         enterprise_util::DisableAutomaticManagementDisclaimerUntilReset(
             GetProfile(0));
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
-    if (explicit_signin) {
-      ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount(account));
-    } else {
-      // Setup Sync for an unconsented account (i.e. in transport mode).
-      secondary_account_helper::ImplicitSignInUnconsentedAccount(
-          GetProfile(0), &test_url_loader_factory_,
-          GetClient(0)->GetEmailForAccount(account));
-    }
+    ASSERT_TRUE(GetClient(0)->SignInNoWaitForCompletion(account));
     ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
     ASSERT_FALSE(GetSyncService(0)->IsSyncFeatureEnabled());
   }
 
-  void SetupSyncTransportWithPasswordAccountStorage(
-      bool explicit_signin = true) {
-    SignIn(SyncTestAccount::kDefaultAccount, explicit_signin);
+  void SetupSyncTransportWithPasswordAccountStorage() {
+    SignIn(SyncTestAccount::kDefaultAccount);
 
-    if (!explicit_signin) {
-      // Enable the account-scoped password storage, and wait for it to become
-      // active.
-      GetSyncService(0)->GetUserSettings()->SetSelectedType(
-          syncer::UserSelectableType::kPasswords, true);
-    }
     PasswordSyncActiveChecker(GetSyncService(0)).Wait();
     ASSERT_TRUE(GetSyncService(0)->GetActiveDataTypes().Has(syncer::PASSWORDS));
   }
 
+#if !BUILDFLAG(IS_CHROMEOS)
   // Should only be called after SetupSyncTransportWithPasswordAccountStorage().
-  void SignOut() {
-    secondary_account_helper::SignOut(GetProfile(0), &test_url_loader_factory_);
-  }
+  void SignOut() { GetClient(0)->SignOutPrimaryAccount(); }
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
   GURL GetWWWOrigin() {
     return embedded_test_server()->GetURL(kExampleHostname, "/");
@@ -342,7 +332,7 @@ class PasswordManagerSyncTest : public SyncTest {
   void AddLocalCredential(const password_manager::PasswordForm& form) {
     scoped_refptr<password_manager::PasswordStoreInterface> password_store =
         passwords_helper::GetProfilePasswordStoreInterface(0);
-    password_store->AddLogin(form);
+    password_store->AddLogin(password_manager::FromPasswordForm(form));
     // Do a roundtrip to the DB thread, to make sure the new password is stored
     // before doing anything else that might depend on it.
     GetAllLoginsFromProfilePasswordStore();
@@ -350,26 +340,26 @@ class PasswordManagerSyncTest : public SyncTest {
 
   // Synchronously reads all credentials from the profile password store and
   // returns them.
-  std::vector<std::unique_ptr<password_manager::PasswordForm>>
+  std::vector<password_manager::PasswordForm>
   GetAllLoginsFromProfilePasswordStore() {
     scoped_refptr<password_manager::PasswordStoreInterface> password_store =
         passwords_helper::GetProfilePasswordStoreInterface(0);
     password_manager::PasswordStoreResultsObserver syncer;
     password_store->GetAllLoginsWithAffiliationAndBrandingInformation(
         syncer.GetWeakPtr());
-    return syncer.WaitForResults();
+    return password_manager::ToPasswordForms(syncer.WaitForResults());
   }
 
   // Synchronously reads all credentials from the account password store and
   // returns them.
-  std::vector<std::unique_ptr<password_manager::PasswordForm>>
+  std::vector<password_manager::PasswordForm>
   GetAllLoginsFromAccountPasswordStore() {
     scoped_refptr<password_manager::PasswordStoreInterface> password_store =
         passwords_helper::GetAccountPasswordStoreInterface(0);
     password_manager::PasswordStoreResultsObserver syncer;
     password_store->GetAllLoginsWithAffiliationAndBrandingInformation(
         syncer.GetWeakPtr());
-    return syncer.WaitForResults();
+    return password_manager::ToPasswordForms(syncer.WaitForResults());
   }
 
   void NavigateToFile(content::WebContents* web_contents,
@@ -406,6 +396,7 @@ class PasswordManagerSyncTest : public SyncTest {
     ASSERT_EQ(web_contents,
               GetBrowser(0)->tab_strip_model()->GetActiveWebContents());
     PasswordsNavigationObserver observer(web_contents);
+    observer.set_wait_for_password_forms_parsed(true);
     ASSERT_TRUE(ui_test_utils::NavigateToURL(GetBrowser(0), url));
     ASSERT_TRUE(observer.Wait());
     // After navigation, the password manager retrieves any matching credentials
@@ -730,8 +721,9 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerSyncTest,
   EXPECT_FALSE(bubble_observer.IsSavePromptAvailable());
 }
 
+// TODO(crbug.com/500570908): Flaky on linux-rel-cft and mac-rel-cft.
 IN_PROC_BROWSER_TEST_F(PasswordManagerSyncTest,
-                       OfferToSaveNonPrimaryAccountCredential) {
+                       DISABLED_OfferToSaveNonPrimaryAccountCredential) {
   // Disable signin interception, because it suppresses the password bubble.
   // See PasswordManagerBrowserTestWithSigninInterception for tests with
   // interception enabled.
@@ -797,24 +789,6 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerSyncTest,
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
 
-// TODO(b/327118794): Delete this test once implicit signin no longer exists.
-IN_PROC_BROWSER_TEST_F(PasswordManagerSyncTest, EnabledSettingSurvivesSignout) {
-  ASSERT_TRUE(SetupClients());
-  SignIn(SyncTestAccount::kDefaultAccount, /*explicit_signin=*/false);
-  ASSERT_FALSE(GetSyncService(0)->GetActiveDataTypes().Has(syncer::PASSWORDS));
-
-  GetSyncService(0)->GetUserSettings()->SetSelectedType(
-      syncer::UserSelectableType::kPasswords, true);
-  PasswordSyncActiveChecker(GetSyncService(0)).Wait();
-
-  SignOut();
-  PasswordSyncInactiveChecker(GetSyncService(0)).Wait();
-
-  // The enabling should be remembered.
-  SignIn(SyncTestAccount::kDefaultAccount, /*explicit_signin=*/false);
-  PasswordSyncActiveChecker(GetSyncService(0)).Wait();
-}
-
 IN_PROC_BROWSER_TEST_F(PasswordManagerSyncTest,
                        DisabledSettingSurvivesSignout) {
   ASSERT_TRUE(SetupClients());
@@ -830,31 +804,6 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerSyncTest,
   // The disabling should be remembered.
   SignIn();
   PasswordSyncInactiveChecker(GetSyncService(0)).Wait();
-}
-
-IN_PROC_BROWSER_TEST_F(PasswordManagerSyncTest,
-                       KeepAccountStorageEnabledSettingOnlyForUsers) {
-  ASSERT_TRUE(SetupClients());
-  SignIn(SyncTestAccount::kConsumerAccount1, /*explicit_signin=*/false);
-  GetSyncService(0)->GetUserSettings()->SetSelectedType(
-      syncer::UserSelectableType::kPasswords, true);
-  const GaiaId first_gaia_id = GetSyncService(0)->GetAccountInfo().gaia;
-  SignOut();
-  SignIn(SyncTestAccount::kConsumerAccount2, /*explicit_signin=*/false);
-  GetSyncService(0)->GetUserSettings()->SetSelectedType(
-      syncer::UserSelectableType::kPasswords, true);
-  SignOut();
-
-  GetSyncService(0)->GetUserSettings()->KeepAccountSettingsPrefsOnlyForUsers(
-      {first_gaia_id});
-
-  SignIn(SyncTestAccount::kConsumerAccount1, /*explicit_signin=*/false);
-  EXPECT_TRUE(password_manager::features_util::IsAccountStorageEnabled(
-      GetSyncService(0)));
-  SignOut();
-  SignIn(SyncTestAccount::kConsumerAccount2, /*explicit_signin=*/false);
-  EXPECT_FALSE(password_manager::features_util::IsAccountStorageEnabled(
-      GetSyncService(0)));
 }
 
 IN_PROC_BROWSER_TEST_F(PasswordManagerSyncTest,
@@ -874,11 +823,11 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerSyncTest,
       {first_gaia_id});
 
   SignIn(SyncTestAccount::kConsumerAccount1);
-  EXPECT_FALSE(password_manager::features_util::IsAccountStorageEnabled(
+  EXPECT_FALSE(password_manager::features_util::IsAccountStorageActive(
       GetSyncService(0)));
   SignOut();
   SignIn(SyncTestAccount::kConsumerAccount2);
-  EXPECT_TRUE(password_manager::features_util::IsAccountStorageEnabled(
+  EXPECT_TRUE(password_manager::features_util::IsAccountStorageActive(
       GetSyncService(0)));
 }
 
@@ -988,7 +937,7 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerSyncTestWithPolicy,
   SetupSyncTransportWithPasswordAccountStorage();
 
   // Disable passwords via the kSyncTypesListDisabled policy.
-  base::Value::List disabled_types;
+  base::ListValue disabled_types;
   disabled_types.Append("passwords");
   policy::PolicyMap policies;
   policies.Set(policy::key::kSyncTypesListDisabled,
@@ -1026,82 +975,6 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerSyncTest,
     SavedPasswordsPresenterWaiter waiter(&presenter, 0);
     waiter.Wait();
   }
-}
-
-class PasswordManagerSyncTestWithForcedDiceMigrationDisabled
-    : public PasswordManagerSyncTest {
- public:
-  PasswordManagerSyncTestWithForcedDiceMigrationDisabled() {
-    feature_list_.InitAndDisableFeature(switches::kForcedDiceMigration);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-// TODO(b/327118794): Delete this test once implicit signin no longer exists.
-IN_PROC_BROWSER_TEST_F(PasswordManagerSyncTestWithForcedDiceMigrationDisabled,
-                       PRE_ClearAccountStoreOnStartup) {
-  ASSERT_TRUE(SetupClients());
-
-  // Add a credential to the server.
-  AddCredentialToFakeServer(
-      CreateTestPasswordForm("accountuser", "accountpass"));
-
-  SetupSyncTransportWithPasswordAccountStorage(/*explicit_signin=*/false);
-
-  // Also add a credential to the profile store.
-  AddLocalCredential("localuser", "localpass");
-
-  ASSERT_THAT(GetAllLoginsFromProfilePasswordStore(),
-              ElementsAre(MatchesLogin("localuser", "localpass")));
-  ASSERT_THAT(GetAllLoginsFromAccountPasswordStore(),
-              ElementsAre(MatchesLogin("accountuser", "accountpass")));
-}
-
-// TODO(b/327118794): Delete this test once implicit signin no longer exists.
-IN_PROC_BROWSER_TEST_F(PasswordManagerSyncTestWithForcedDiceMigrationDisabled,
-                       ClearAccountStoreOnStartup) {
-  // Before setting up the client (aka profile), manually set account storage to
-  // off in the profile's prefs file. This simulates the case where the user
-  // disabled account storage, but the account store was not cleared correctly,
-  // e.g. due to a poorly-timed crash.
-  base::FilePath user_data_dir;
-  base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
-  base::FilePath profile_path = user_data_dir.Append(GetProfileBaseName(0));
-  base::FilePath json_path = profile_path.Append(chrome::kPreferencesFilename);
-  {
-    base::ScopedAllowBlockingForTesting allow_blocking;
-    std::string json;
-    ASSERT_TRUE(base::ReadFileToString(json_path, &json));
-    std::optional<base::Value> prefs =
-        base::JSONReader::Read(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
-    ASSERT_TRUE(prefs.has_value());
-    ASSERT_TRUE(prefs->is_dict());
-    ASSERT_TRUE(prefs->GetDict().RemoveByDottedPath(
-        syncer::prefs::internal::kSelectedTypesPerAccount));
-    std::optional<std::string> new_json = base::WriteJson(prefs.value());
-    ASSERT_TRUE(new_json.has_value());
-    ASSERT_TRUE(base::WriteFile(json_path, new_json.value()));
-  }
-
-  ASSERT_TRUE(SetupClients());
-
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
-
-  // Since we mangled the prefs file, account storage should be disabled.
-  ASSERT_FALSE(password_manager::features_util::IsAccountStorageEnabled(
-      GetSyncService(0)));
-  ASSERT_FALSE(GetSyncService(0)->GetActiveDataTypes().Has(syncer::PASSWORDS));
-
-  // The account-scoped store should have been cleared during startup, and the
-  // credential added by the PRE_ test should be gone.
-  EXPECT_THAT(GetAllLoginsFromAccountPasswordStore(), IsEmpty());
-
-  // Just as a sanity check: The credential in the profile-scoped store should
-  // still be there.
-  ASSERT_THAT(GetAllLoginsFromProfilePasswordStore(),
-              ElementsAre(MatchesLogin("localuser", "localpass")));
 }
 
 #endif  // !BUILDFLAG(IS_CHROMEOS)

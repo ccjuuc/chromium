@@ -12,8 +12,6 @@
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/values.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/image_fetcher/image_fetcher_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
@@ -143,8 +141,7 @@ void EduAccountLoginHandler::OnJavascriptDisallowed() {
   parent_signin_callback_id_.clear();
 }
 
-void EduAccountLoginHandler::HandleIsNetworkReady(
-    const base::Value::List& args) {
+void EduAccountLoginHandler::HandleIsNetworkReady(const base::ListValue& args) {
   AllowJavascript();
 
   bool is_network_ready =
@@ -152,7 +149,7 @@ void EduAccountLoginHandler::HandleIsNetworkReady(
   ResolveJavascriptCallback(args[0], base::Value(is_network_ready));
 }
 
-void EduAccountLoginHandler::HandleGetParents(const base::Value::List& args) {
+void EduAccountLoginHandler::HandleGetParents(const base::ListValue& args) {
   AllowJavascript();
 
   CHECK_EQ(args.size(), 1u);
@@ -167,7 +164,7 @@ void EduAccountLoginHandler::HandleGetParents(const base::Value::List& args) {
   FetchFamilyMembers();
 }
 
-void EduAccountLoginHandler::HandleParentSignin(const base::Value::List& args) {
+void EduAccountLoginHandler::HandleParentSignin(const base::ListValue& args) {
   CHECK_EQ(args.size(), 3u);
   CHECK(args[0].is_string());
 
@@ -178,7 +175,7 @@ void EduAccountLoginHandler::HandleParentSignin(const base::Value::List& args) {
   }
   parent_signin_callback_id_ = args[0].GetString();
 
-  const base::Value::Dict& parent = args[1].GetDict();
+  const base::DictValue& parent = args[1].GetDict();
   const std::string* obfuscated_gaia_id =
       parent.FindString(kObfuscatedGaiaIdKey);
   DCHECK(obfuscated_gaia_id);
@@ -202,7 +199,7 @@ void EduAccountLoginHandler::FetchFamilyMembers() {
 }
 
 void EduAccountLoginHandler::FetchParentImages(
-    base::Value::List parents,
+    base::ListValue parents,
     std::map<GaiaId, GURL> profile_image_urls) {
   DCHECK(!profile_image_fetcher_);
   image_fetcher::ImageFetcher* fetcher =
@@ -260,7 +257,7 @@ void EduAccountLoginHandler::OnListFamilyMembersResponse(
 void EduAccountLoginHandler::OnListFamilyMembersSuccess(
     const kidsmanagement::ListMembersResponse& response) {
   list_family_members_fetcher_.reset();
-  base::Value::List parents;
+  base::ListValue parents;
   std::map<GaiaId, GURL> profile_image_urls;
 
   for (const auto& member : response.members()) {
@@ -269,7 +266,7 @@ void EduAccountLoginHandler::OnListFamilyMembersSuccess(
       continue;
     }
 
-    base::Value::Dict parent;
+    base::DictValue parent;
     parent.Set("email", member.profile().email());
     parent.Set("displayName", member.profile().display_name());
     parent.Set(kObfuscatedGaiaIdKey, member.user_id());
@@ -286,12 +283,12 @@ void EduAccountLoginHandler::OnListFamilyMembersFailure(
     const supervised_user::ProtoFetcherStatus& status) {
   list_family_members_fetcher_.reset();
   RejectJavascriptCallback(base::Value(get_parents_callback_id_),
-                           base::Value::List());
+                           base::ListValue());
   get_parents_callback_id_.clear();
 }
 
 void EduAccountLoginHandler::OnParentProfileImagesFetched(
-    base::Value::List parents,
+    base::ListValue parents,
     std::map<GaiaId, gfx::Image> profile_images) {
   profile_image_fetcher_.reset();
 
@@ -330,7 +327,7 @@ void EduAccountLoginHandler::CreateReAuthProofTokenForParent(
     LOG(ERROR)
         << "Could not get access token to create ReAuthProofToken for parent"
         << error.ToString();
-    base::Value::Dict result;
+    base::DictValue result;
     result.Set("isWrongPassword", false);
     RejectJavascriptCallback(base::Value(parent_signin_callback_id_), result);
     parent_signin_callback_id_.clear();
@@ -355,7 +352,7 @@ void EduAccountLoginHandler::OnReAuthProofTokenFailure(
              << static_cast<int>(error);
   gaia_auth_fetcher_.reset();
 
-  base::Value::Dict result;
+  base::DictValue result;
   result.Set("isWrongPassword",
              error == GaiaAuthConsumer::ReAuthProofTokenStatus::kInvalidGrant);
   RejectJavascriptCallback(base::Value(parent_signin_callback_id_), result);

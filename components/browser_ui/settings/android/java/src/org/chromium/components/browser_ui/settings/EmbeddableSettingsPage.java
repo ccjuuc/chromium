@@ -4,10 +4,9 @@
 
 package org.chromium.components.browser_ui.settings;
 
-import androidx.annotation.Nullable;
-
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 /**
  * The base interface for embeddable settings page fragments.
@@ -31,7 +30,7 @@ public interface EmbeddableSettingsPage extends SettingsFragment {
      *
      * <p>The activity will observe changes to this value and update the UI as necessary.
      */
-    ObservableSupplier<String> getPageTitle();
+    MonotonicObservableSupplier<String> getPageTitle();
 
     /**
      * Returns the "key" tag of the main_preference, or null.

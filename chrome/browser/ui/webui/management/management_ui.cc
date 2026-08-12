@@ -6,11 +6,16 @@
 
 #include <memory>
 
+#include "base/feature_list.h"
+#include "base/memory/ref_counted_memory.h"
 #include "base/strings/utf_string_conversions.h"
+#include "build/android_buildflags.h"
+#include "build/build_config.h"
+#include "chrome/browser/enterprise/browser_management/management_identity.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/managed_ui.h"
 #include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/webui/current_channel_logo.h"
 #include "chrome/browser/ui/webui/management/management_ui_constants.h"
 #include "chrome/browser/ui/webui/management/management_ui_handler.h"
 #include "chrome/common/url_constants.h"
@@ -28,18 +33,23 @@
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/webui/webui_util.h"
 
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/webui/theme_source.h"
+#endif
+
 #if BUILDFLAG(IS_CHROMEOS)
+#include "ash/strings/grit/ash_strings.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager_factory.h"
 #include "chrome/browser/enterprise/data_controls/dlp_reporting_manager.h"
-#include "chrome/grit/branded_strings.h"
 #include "ui/chromeos/devicetype_utils.h"
 #else  // BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
+#include "chrome/browser/ui/managed_ui.h"  // nogncheck crbug.com/40147906
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace {
@@ -74,21 +84,27 @@ content::WebUIDataSource* CreateAndAddManagementUIHtmlSource(Profile* profile) {
   source->AddString(kManagementReportDlpEvents,
                     l10n_util::GetPluralStringFUTF16(
                         IDS_MANAGEMENT_REPORT_DLP_EVENTS, dlp_events_count));
-  source->AddString("pluginVmDataCollection",
-                    l10n_util::GetStringFUTF16(
-                        IDS_MANAGEMENT_REPORT_PLUGIN_VM,
-                        l10n_util::GetStringUTF16(IDS_PLUGIN_VM_APP_NAME)));
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+  source->AddString("webuiRefresh2026", features::IsWebuiRefresh2026Enabled()
+                                            ? "webui-refresh-2026"
+                                            : "");
 
   webui::SetupWebUIDataSource(source, kManagementResources,
                               IDR_MANAGEMENT_MANAGEMENT_HTML);
+
+#if BUILDFLAG(IS_ANDROID)
+  source->AddResourcePath("images/product_logo.png",
+                          webui::CurrentChannelLogoResourceId());
+#endif
+
   return source;
 }
 
 }  // namespace
 
 // static
-base::RefCountedMemory* ManagementUI::GetFaviconResourceBytes(
+scoped_refptr<base::RefCountedMemory> ManagementUI::GetFaviconResourceBytes(
     ui::ResourceScaleFactor scale_factor) {
   return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
       IDR_MANAGEMENT_FAVICON, scale_factor);
@@ -204,7 +220,7 @@ void ManagementUI::GetLocalizedStrings(
       {"applicationPermissions", IDS_MANAGEMENT_APPLICATIONS_PERMISSIONS},
       {"title", IDS_MANAGEMENT_TITLE},
       {"toolbarTitle", IDS_MANAGEMENT_TOOLBAR_TITLE},
-      {"searchPrompt", IDS_SETTINGS_SEARCH_PROMPT},
+      {"searchPrompt", IDS_MANAGEMENT_SEARCH_PROMPT},
       {"clearSearch", IDS_CLEAR_SEARCH},
       {"backButton", IDS_ACCNAME_BACK},
       {"managedWebsites", IDS_MANAGEMENT_MANAGED_WEBSITES},
@@ -297,9 +313,13 @@ void ManagementUI::GetLocalizedStrings(
   }
 }
 
-ManagementUI::ManagementUI(content::WebUI* web_ui) : WebUIController(web_ui) {
+ManagementUI::ManagementUI(content::WebUI* web_ui)
+    : ui::MojoWebUIController(web_ui, /*enable_chrome_send=*/true) {
   Profile* profile = Profile::FromWebUI(web_ui);
-  CreateAndAddManagementUIHtmlSource(Profile::FromWebUI(web_ui));
+  CreateAndAddManagementUIHtmlSource(profile);
+#if !BUILDFLAG(IS_ANDROID)
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
+#endif
 
   web_ui->AddMessageHandler(ManagementUIHandler::Create(profile));
 }
@@ -311,3 +331,14 @@ void ManagementUI::RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(
       policy::policy_prefs::kHasDismissedManagementPagePromotionBanner, false);
 }
+
+// Mobile Android is the only platform without extensions support.
+// On Mobile, chrome://management WebUI is guarded behind the
+// `features::kMigrateManagementPageToWebUIOnMobile` experiment flag.
+#if !BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+bool ManagementUIConfig::IsWebUIEnabled(
+    content::BrowserContext* browser_context) {
+  return base::FeatureList::IsEnabled(
+      features::kMigrateManagementPageToWebUIOnMobile);
+}
+#endif

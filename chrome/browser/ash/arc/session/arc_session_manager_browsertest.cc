@@ -176,7 +176,7 @@ class ArcSessionManagerTest : public MixinBasedInProcessBrowserTest {
     base::RunLoop().RunUntilIdle();
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   signin::IdentityTestEnvironment* identity_test_env() {
     return identity_test_environment_adaptor_->identity_test_env();
@@ -261,7 +261,7 @@ IN_PROC_BROWSER_TEST_P(ArcSessionManagerLockedFullscreenWithMuteAudioTest,
 
   // ARC should remain enabled when entering fullscreen mode. This is because
   // we attempt to mute ARC VM audio instead.
-  ash::PinWindow(browser()->window()->GetNativeWindow(), /*trusted=*/true);
+  ash::PinWindow(browser()->GetWindow()->GetNativeWindow(), /*trusted=*/true);
   content::RunAllTasksUntilIdle();
   ASSERT_EQ(ArcSessionManager::State::ACTIVE,
             ArcSessionManager::Get()->state());
@@ -270,7 +270,7 @@ IN_PROC_BROWSER_TEST_P(ArcSessionManagerLockedFullscreenWithMuteAudioTest,
                                       IsMuteArcVMAudioSuccess(), 1);
 
   // ARC should remain enabled once we exit locked fullscreen mode.
-  ash::UnpinWindow(browser()->window()->GetNativeWindow());
+  ash::UnpinWindow(browser()->GetWindow()->GetNativeWindow());
   content::RunAllTasksUntilIdle();
   EXPECT_EQ(ArcSessionManager::State::ACTIVE,
             ArcSessionManager::Get()->state());

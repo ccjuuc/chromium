@@ -36,7 +36,6 @@
 
 #if BUILDFLAG(IS_WIN)
 #include "base/threading/thread_restrictions.h"
-#include "chrome/browser/printing/xps_features.h"
 #include "printing/printed_page_win.h"
 #endif
 
@@ -58,14 +57,21 @@ void FailedNotificationCallback(PrintJob* print_job) {
 
 }  // namespace
 
+bool PrintJobWorkerThread::IsRunning() const {
+  return Thread::IsRunning() && !is_cleaned_up_.IsSet();
+}
+
+void PrintJobWorkerThread::CleanUp() {
+  is_cleaned_up_.Set();
+}
+
 PrintJobWorker::PrintJobWorker(
     std::unique_ptr<PrintingContext::Delegate> printing_context_delegate,
     std::unique_ptr<PrintingContext> printing_context,
     PrintJob* print_job)
     : printing_context_delegate_(std::move(printing_context_delegate)),
       printing_context_(std::move(printing_context)),
-      print_job_(print_job),
-      thread_("Printing_Worker") {
+      print_job_(print_job) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 }
 
@@ -156,30 +162,24 @@ void PrintJobWorker::PostWaitForPage() {
 void PrintJobWorker::OnNewPage() {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
 
-  if (!document_)
+  if (!document_) {
     return;
+  }
 
-  bool do_spool_document = true;
 #if BUILDFLAG(IS_WIN)
-  const bool source_is_pdf =
-      !print_job_->document()->settings().is_modifiable();
-  if (!ShouldPrintUsingXps(source_is_pdf)) {
-    // Using the Windows GDI print API.
-    if (!OnNewPageHelperGdi())
-      return;
-
-    do_spool_document = false;
+  // Using the Windows GDI print API.
+  if (!OnNewPageHelperGdi()) {
+    return;
+  }
+#else
+  if (!document_->HasDocument()) {
+    PostWaitForPage();
+    return;
+  }
+  if (!SpoolDocument()) {
+    return;
   }
 #endif  // BUILDFLAG(IS_WIN)
-
-  if (do_spool_document) {
-    if (!document_->GetMetafile()) {
-      PostWaitForPage();
-      return;
-    }
-    if (!SpoolDocument())
-      return;
-  }
 
   OnDocumentDone();
   // Don't touch `this` anymore since the instance could be destroyed.

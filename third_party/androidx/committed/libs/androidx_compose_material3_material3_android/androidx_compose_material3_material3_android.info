@@ -5,7 +5,7 @@ aidl = []
 assets = []
 has_classes_jar = true
 has_native_libraries = false
-has_proguard_flags = true
+has_proguard_flags = false
 has_r_text_file = true
 is_manifest_empty = true
 manifest_package = "androidx.compose.material3"
@@ -92,6 +92,8 @@ resources = [
   "res/values-ur/values-ur.xml",
   "res/values-uz/values-uz.xml",
   "res/values-v30/values-v30.xml",
+  "res/values-v31/values-v31.xml",
+  "res/values-v34/values-v34.xml",
   "res/values-vi/values-vi.xml",
   "res/values-zh-rCN/values-zh-rCN.xml",
   "res/values-zh-rHK/values-zh-rHK.xml",

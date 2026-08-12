@@ -7,10 +7,15 @@
 
 #include <vector>
 
-#include "base/memory/weak_ptr.h"
+#include "base/functional/bind_internal.h"
+#include "base/functional/callback_forward.h"
+#include "components/autofill/core/browser/data_quality/addresses/profile_token_quality.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
+#include "components/autofill/core/browser/integrators/password_form_classification.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/browser/suggestions/suggestion_generator.h"
+#include "components/autofill/core/common/form_data.h"
+#include "components/autofill/core/common/form_field_data.h"
 
 class GURL;
 
@@ -28,72 +33,54 @@ std::vector<Suggestion> GetSuggestionsForLoyaltyCards(
     const FormStructure* form_structure,
     const FormFieldData& field,
     const AutofillField* autofill_field,
-    const AutofillClient& client);
+    const PasswordFormClassification& password_form_classification,
+    AutofillClient& client);
 
 // Extends `email_suggestions` with loyalty cards suggestions.
 // TODO(crbug.com/409962888): Remove after new suggestion generation logic is
 // launched.
-void ExtendEmailSuggestionsWithLoyaltyCardSuggestions(
+void MergeLoyaltyCardsAndAddressSuggestions(
+    std::vector<Suggestion>& email_suggestions,
+    std::vector<Suggestion> loyalty_card_suggestions);
+
+// Creates loyalty card suggestions specifically for the merge with the email
+// suggestions. We cannot use GetLoyaltyCardSuggestions() here because merging
+// requires constructing the suggestions directly, rather than using the full
+// LoyaltyCardSuggestionGenerator flow.
+// TODO(crbug.com/409962888): Remove after new suggestion generation logic is
+// launched.
+std::vector<Suggestion> CreateLoyaltyCardSuggestionsForMerge(
     const ValuablesDataManager& valuables_manager,
-    const GURL& url,
-    bool trigger_field_is_autofilled,
-    std::vector<Suggestion>& email_suggestions);
+    const GURL& url);
 
 class LoyaltyCardSuggestionGenerator : public SuggestionGenerator {
  public:
-  LoyaltyCardSuggestionGenerator();
+  explicit LoyaltyCardSuggestionGenerator(
+      const PasswordFormClassification& password_form_classification);
   ~LoyaltyCardSuggestionGenerator() override;
-
-  void FetchSuggestionData(
-      const FormData& form,
-      const FormFieldData& trigger_field,
-      const FormStructure* form_structure,
-      const AutofillField* trigger_autofill_field,
-      const AutofillClient& client,
-      base::OnceCallback<
-          void(std::pair<SuggestionDataSource,
-                         std::vector<SuggestionGenerator::SuggestionData>>)>
-          callback) override;
 
   void GenerateSuggestions(
       const FormData& form,
       const FormFieldData& trigger_field,
       const FormStructure* form_structure,
       const AutofillField* trigger_autofill_field,
-      const AutofillClient& client,
-      const base::flat_map<SuggestionDataSource, std::vector<SuggestionData>>&
-          all_suggestion_data,
+      AutofillClient& client,
       base::OnceCallback<void(ReturnedSuggestions)> callback) override;
 
   // Like SuggestionGenerator override, but takes a base::FunctionRef instead of
   // a base::OnceCallback. Calls that callback exactly once.
-  // TODO(crbug.com/409962888): Clean up after launch.
-  void FetchSuggestionData(
-      const FormData& form,
-      const FormFieldData& trigger_field,
-      const FormStructure* form_structure,
-      const AutofillField* trigger_autofill_field,
-      const AutofillClient& client,
-      base::FunctionRef<
-          void(std::pair<SuggestionDataSource,
-                         std::vector<SuggestionGenerator::SuggestionData>>)>
-          callback);
-
-  // Like SuggestionGenerator override, but takes a base::FunctionRef instead of
-  // a base::OnceCallback. Calls that callback exactly once.
-  // TODO(crbug.com/409962888): Clean up after launch.
   void GenerateSuggestions(
       const FormData& form,
       const FormFieldData& trigger_field,
       const FormStructure* form_structure,
       const AutofillField* trigger_autofill_field,
-      const AutofillClient& client,
-      const base::flat_map<SuggestionDataSource, std::vector<SuggestionData>>&
-          all_suggestion_data,
+      AutofillClient& client,
       base::FunctionRef<void(ReturnedSuggestions)> callback);
 
  private:
-  base::WeakPtrFactory<LoyaltyCardSuggestionGenerator> weak_ptr_factory_{this};
+  // Contains the password form classification for which the generator is
+  // currently building suggestions.
+  PasswordFormClassification password_form_classification_;
 };
 
 }  // namespace autofill

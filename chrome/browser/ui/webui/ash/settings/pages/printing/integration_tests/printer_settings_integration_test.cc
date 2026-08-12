@@ -7,24 +7,27 @@
 
 #include "ash/constants/ash_switches.h"
 #include "ash/webui/settings/public/constants/routes.mojom-forward.h"
+#include "ash/webui/settings/public/constants/routes_util.h"
+#include "base/check.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/json/string_escape.h"
 #include "base/strings/pattern.h"
 #include "base/strings/strcat.h"
-#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ash/login/test/session_manager_state_waiter.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
-#include "chrome/browser/ui/chrome_pages.h"
-#include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/test/base/chromeos/crosier/ash_integration_test.h"
 #include "chrome/test/base/chromeos/crosier/chromeos_integration_login_mixin.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "chromeos/ash/components/dbus/printscanmgr/printscanmgr_client.h"
+#include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
+#include "components/user_manager/user_manager.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
-#include "printing/printing_features.h"
 
 namespace ash {
 
@@ -139,8 +142,6 @@ class PrinterSettingsIntegrationTest : public AshIntegrationTest {
       kPrinterSettingsPage + "#noSavedPrinters";
 
   PrinterSettingsIntegrationTest() {
-    feature_list_.InitAndEnableFeature(
-        ::printing::features::kAddPrinterViaPrintscanmgr);
     // Keep test running after dismissing login screen.
     set_exit_when_last_browser_closes(false);
     login_mixin().SetMode(ChromeOSIntegrationLoginMixin::Mode::kTestLogin);
@@ -228,14 +229,19 @@ class PrinterSettingsIntegrationTest : public AshIntegrationTest {
   auto LaunchOsPrinterSettings() {
     return Steps(
         InstrumentNextTab(kSettingsWebContentsId, AnyBrowser()), Do([&]() {
-          chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
-              GetActiveUserProfile(),
-              chromeos::settings::mojom::kPrintingDetailsSubpagePath);
+          auto* session =
+              session_manager::SessionManager::Get()->GetActiveSession();
+          CHECK(session);
+          ash::SettingsAppManager::Get()->Open(
+              CHECK_DEREF(user_manager::UserManager::Get()->FindUser(
+                  session->account_id())),
+              {.sub_page =
+                   chromeos::settings::mojom::kPrintingDetailsSubpagePath});
         }),
         WaitForShow(kSettingsWebContentsId),
         WaitForWebContentsReady(
             kSettingsWebContentsId,
-            chrome::GetOSSettingsUrl(
+            chromeos::settings::GetOSSettingsUrl(
                 chromeos::settings::mojom::kPrintingDetailsSubpagePath)));
   }
 
@@ -250,7 +256,7 @@ class PrinterSettingsIntegrationTest : public AshIntegrationTest {
         WaitForShow(kSettingsWebContentsId),
         WaitForWebContentsReady(
             kSettingsWebContentsId,
-            chrome::GetOSSettingsUrl(
+            chromeos::settings::GetOSSettingsUrl(
                 chromeos::settings::mojom::kPrintingDetailsSubpagePath)));
   }
 
@@ -324,8 +330,6 @@ class PrinterSettingsIntegrationTest : public AshIntegrationTest {
         Log("Saving the edited printer"),
         ClickElement(kSettingsWebContentsId, kEditSaveButtonQuery));
   }
-
-  base::test::ScopedFeatureList feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(PrinterSettingsIntegrationTest, ViewPpd) {

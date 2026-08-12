@@ -66,26 +66,25 @@ NSString* GetTitleWithoutCount(ImportDataItemType type) {
 
 /// Returns the leading icon at the start of the cell for the given `type`.
 UIImage* GetImageForItemType(ImportDataItemType type) {
-  NSString* symbol_name;
+  Symbol symbol;
   switch (type) {
     case ImportDataItemType::kPasswords:
-      symbol_name = kKeySymbol;
+      symbol = SymbolKey;
       break;
     case ImportDataItemType::kBookmarks:
-      symbol_name = kBookSymbol;
+      symbol = SymbolBook;
       break;
     case ImportDataItemType::kHistory:
-      symbol_name = kClockSymbol;
+      symbol = SymbolClock;
       break;
     case ImportDataItemType::kPayment:
-      symbol_name = kCreditCardSymbol;
+      symbol = SymbolCreditCard;
       break;
     case ImportDataItemType::kPasskeys:
-      symbol_name = kPersonBadgeKeyFillSymbol;
+      symbol = SymbolPersonBadgeKeyFill;
       break;
   }
-  return DefaultSymbolTemplateWithPointSize(symbol_name,
-                                            kLeadingSymbolImagePointSize);
+  return SymbolTemplateWithPointSize(symbol, kLeadingSymbolImagePointSize);
 }
 
 /// Returns the localized title text for the given `type` with `count` of items.
@@ -150,8 +149,7 @@ UIView* GetCheckmark() {
   UIImageSymbolConfiguration* config = [UIImageSymbolConfiguration
       configurationWithWeight:UIImageSymbolWeightMedium];
   UIImageView* checkmark = [[UIImageView alloc]
-      initWithImage:DefaultSymbolWithConfiguration(kCheckmarkCircleFillSymbol,
-                                                   config)];
+      initWithImage:SymbolWithConfiguration(SymbolCheckmarkCircleFill, config)];
   checkmark.tintColor = [UIColor colorNamed:kGreen500Color];
   return checkmark;
 }
@@ -324,9 +322,12 @@ UIView* GetCheckmark() {
   symbolConfiguration.symbolImage = GetImageForItemType(item.type);
 
   if (item.status == ImportDataItemImportStatus::kBlockedByPolicy) {
-    symbolConfiguration.symbolTintColor = [UIColor colorNamed:kGrey500Color];
-    configuration.titleColor = [UIColor colorNamed:kTextSecondaryColor];
-    configuration.subtitleColor = [UIColor colorNamed:kTextSecondaryColor];
+    symbolConfiguration.symbolTintColor =
+        [[UIColor colorNamed:kBlueColor] colorWithAlphaComponent:0.5];
+    configuration.titleColor =
+        [[UIColor colorNamed:kTextPrimaryColor] colorWithAlphaComponent:0.5];
+    configuration.subtitleColor =
+        [[UIColor colorNamed:kTextSecondaryColor] colorWithAlphaComponent:0.5];
   } else {
     symbolConfiguration.symbolTintColor = [UIColor colorNamed:kBlueColor];
   }

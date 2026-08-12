@@ -17,12 +17,12 @@ callback DecodeSuccessCallback = void (AudioBuffer decodedData);
     Exposed=Window,
     ActiveScriptWrappable
 ] interface BaseAudioContext : EventTarget {
-    readonly attribute AudioDestinationNode destination;
+    [ImplementedAs=destinationNode] readonly attribute AudioDestinationNode destination;
     [Measure] readonly attribute float sampleRate;
     readonly attribute double currentTime;
     readonly attribute AudioListener listener;
     readonly attribute AudioContextState state;
-    [RuntimeEnabled=WebAudioConfigurableRenderQuantum] readonly attribute unsigned long renderQuantumSize;
+    [RuntimeEnabled=WebAudioConfigurableRenderQuantum, MeasureAs=WebAudioRenderQuantumSize] readonly attribute unsigned long renderQuantumSize;
     [SecureContext] readonly attribute AudioWorklet audioWorklet;
     attribute EventHandler onstatechange;
 

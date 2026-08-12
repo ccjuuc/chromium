@@ -47,10 +47,9 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
-import org.robolectric.annotation.LooperMode.Mode;
 
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.chrome.R;
@@ -62,7 +61,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /** Tests for {@link PartialCustomTabSideSheetStrategy}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
-@LooperMode(Mode.PAUSED)
 public class PartialCustomTabSideSheetStrategyTest {
     private static final float MINIMAL_WIDTH_RATIO_EXPANDED = 0.33f;
     private static final float MINIMAL_WIDTH_RATIO_MEDIUM = 0.5f;
@@ -796,9 +794,9 @@ public class PartialCustomTabSideSheetStrategyTest {
     public void handleCloseAnimation() {
         var strategy = createPcctSideSheetStrategy(2000);
         strategy.setSheetOnRightForTesting(true);
-        var invoked = new ObservableSupplierImpl<Boolean>();
+        SettableNonNullObservableSupplier<Boolean> invoked =
+                ObservableSuppliers.createNonNull(false);
 
-        invoked.set(false);
         assertEquals(0, mPCCTTestRule.getWindowAttributes().x);
         strategy.handleCloseAnimation(() -> invoked.set(true)); // Slide out to right
         PartialCustomTabTestRule.waitForAnimationToFinish();

@@ -4,24 +4,15 @@
 
 import {assert, assertInstanceof, assertString} from '../../assert.js';
 import * as dom from '../../dom.js';
-import {
-  Point,
-  PolarVector,
-  Vector,
-  vectorFromPoints,
-} from '../../geometry.js';
+import {Point, PolarVector, Vector, vectorFromPoints} from '../../geometry.js';
 import {I18nString} from '../../i18n_string.js';
 import {DeviceOperator} from '../../mojo/device_operator.js';
-import {
-  PointF,
-} from '../../mojo/type.js';
-import {
-  closeEndpoint,
-  MojoEndpoint,
-} from '../../mojo/util.js';
+import type {PointF} from '../../mojo/type.js';
+import type {MojoEndpoint} from '../../mojo/util.js';
+import {closeEndpoint} from '../../mojo/util.js';
 import {speak} from '../../spoken_msg.js';
-import * as util from '../../util.js';
 import * as state from '../../state.js';
+import * as util from '../../util.js';
 
 /**
  * Base length of line without scaling in px.

@@ -25,8 +25,6 @@ import {ClearBrowsingDataBrowserProxyImpl} from '../../clear_browsing_data_dialo
 import {loadTimeData} from '../../i18n_setup.js';
 import type {MetricsBrowserProxy} from '../../metrics_browser_proxy.js';
 import {MetricsBrowserProxyImpl, PrivacyGuideInteractions, PrivacyGuideStepsEligibleAndReached} from '../../metrics_browser_proxy.js';
-import type {PrivacySandboxBrowserProxy} from '../../privacy_sandbox/privacy_sandbox_browser_proxy.js';
-import {PrivacySandboxBrowserProxyImpl} from '../../privacy_sandbox/privacy_sandbox_browser_proxy.js';
 import {HatsBrowserProxyImpl, TrustSafetyInteraction} from '../hats_browser_proxy.js';
 
 import {getTemplate} from './privacy_guide_completion_fragment.html.js';
@@ -55,8 +53,7 @@ export class PrivacyGuideCompletionFragmentElement extends
       isNoLinkLayout_: {
         reflectToAttribute: true,
         type: Boolean,
-        computed: 'computeIsNoLinkLayout_(shouldShowWaa_,' +
-            'shouldShowPrivacySandbox_)',
+        computed: 'computeIsNoLinkLayout_(shouldShowWaa_)',
       },
 
       shouldShowAiSettings_: {
@@ -64,18 +61,7 @@ export class PrivacyGuideCompletionFragmentElement extends
         value: () => loadTimeData.getBoolean('showAiPage'),
       },
 
-      shouldShowPrivacySandbox_: {
-        type: Boolean,
-        value: () => !loadTimeData.getBoolean('isPrivacySandboxRestricted') ||
-            loadTimeData.getBoolean('isPrivacySandboxRestrictedNoticeEnabled'),
-      },
-
       shouldShowWaa_: {
-        type: Boolean,
-        value: false,
-      },
-
-      shouldShowV2AdPrivacySubLabel_: {
         type: Boolean,
         value: false,
       },
@@ -84,13 +70,9 @@ export class PrivacyGuideCompletionFragmentElement extends
 
   declare private isNoLinkLayout_: boolean;
   declare private shouldShowAiSettings_: boolean;
-  declare private shouldShowPrivacySandbox_: boolean;
   declare private shouldShowWaa_: boolean;
   private metricsBrowserProxy_: MetricsBrowserProxy =
       MetricsBrowserProxyImpl.getInstance();
-  declare private shouldShowV2AdPrivacySubLabel_: boolean;
-  private privacySandboxBrowserProxy_: PrivacySandboxBrowserProxy =
-      PrivacySandboxBrowserProxyImpl.getInstance();
 
   override ready() {
     super.ready();
@@ -101,11 +83,6 @@ export class PrivacyGuideCompletionFragmentElement extends
         (event: UpdateSyncStateEvent) => this.updateWaaLink_(event.signedIn));
     ClearBrowsingDataBrowserProxyImpl.getInstance().getSyncState().then(
         (status: UpdateSyncStateEvent) => this.updateWaaLink_(status.signedIn));
-    this.privacySandboxBrowserProxy_
-        .shouldShowPrivacySandboxAdTopicsContentParity()
-        .then(state => {
-          this.shouldShowV2AdPrivacySubLabel_ = state;
-        });
   }
 
   override focus() {
@@ -124,7 +101,7 @@ export class PrivacyGuideCompletionFragmentElement extends
   }
 
   private computeIsNoLinkLayout_() {
-    return !this.shouldShowWaa_ && !this.shouldShowPrivacySandbox_;
+    return !this.shouldShowWaa_;
   }
 
   private getSubheader_(): string {
@@ -154,19 +131,6 @@ export class PrivacyGuideCompletionFragmentElement extends
         new CustomEvent('close', {bubbles: true, composed: true}));
   }
 
-  private onPrivacySandboxClick_() {
-    this.metricsBrowserProxy_.recordPrivacyGuideEntryExitHistogram(
-        PrivacyGuideInteractions.PRIVACY_SANDBOX_COMPLETION_LINK);
-    this.metricsBrowserProxy_.recordAction(
-        'Settings.PrivacyGuide.CompletionPSClick');
-    // Create a MouseEvent directly to avoid Polymer failing to synthesise a
-    // click event if this function was called in response to a touch event.
-    // See crbug.com/1253883 for details.
-    // TODO(crbug.com/40162029): Replace this with an ordinary OpenWindowProxy call.
-    this.shadowRoot!.querySelector<HTMLAnchorElement>('#privacySandboxLink')!
-        .dispatchEvent(new MouseEvent('click'));
-  }
-
   private onAiRowClick_() {
     this.metricsBrowserProxy_.recordPrivacyGuideEntryExitHistogram(
         PrivacyGuideInteractions.AI_SETTINGS_COMPLETION_LINK);
@@ -185,13 +149,6 @@ export class PrivacyGuideCompletionFragmentElement extends
         'Settings.PrivacyGuide.CompletionSWAAClick');
     OpenWindowProxyImpl.getInstance().openUrl(
         loadTimeData.getString('activityControlsUrlInPrivacyGuide'));
-  }
-
-  private computePrivacySandboxRowSubLabel_(): string {
-    return this.i18n(
-        this.shouldShowV2AdPrivacySubLabel_ ?
-            'privacyGuideCompletionCardPrivacySandboxSubLabelAdTopics' :
-            'privacyGuideCompletionCardPrivacySandboxSubLabel');
   }
 }
 

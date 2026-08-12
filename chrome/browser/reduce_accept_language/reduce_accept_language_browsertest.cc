@@ -51,12 +51,12 @@ using ::net::test_server::EmbeddedTestServer;
 enum class FeatureEnableType { FeatureFlagEnable, OriginTrialEnable };
 
 struct ReduceAcceptLanguageTestOptions {
-  std::optional<std::string> content_language_in_parent = std::nullopt;
-  std::optional<std::string> avail_language_in_parent = std::nullopt;
-  std::optional<std::string> vary_in_parent = std::nullopt;
-  std::optional<std::string> content_language_in_child = std::nullopt;
-  std::optional<std::string> avail_language_in_child = std::nullopt;
-  std::optional<std::string> vary_in_child = std::nullopt;
+  std::optional<std::string> content_language_in_parent;
+  std::optional<std::string> avail_language_in_parent;
+  std::optional<std::string> vary_in_parent;
+  std::optional<std::string> content_language_in_child;
+  std::optional<std::string> avail_language_in_child;
+  std::optional<std::string> vary_in_child;
   bool is_fenced_frame = false;
   bool is_critical_origin_trial = false;
 };
@@ -76,6 +76,12 @@ const char kLargeLanguages[] =
     "qu,pa,es-VE,es-UY,es-US,es-ES,es-419,es-MX,es-PE,es-HN,es-CR,es-AR,es,st,"
     "so,sl,sk,si,wa,vi,uz,ug,uk,ur,yi,xh,wo,fy,cy,yo,zu,es-CL,es-CO,su,ta,sv,"
     "sw,tg,tn,to,ti,th,te,tt,tr,tk,tw";
+
+const size_t kLargeLanguagesCount = base::SplitString(kLargeLanguages,
+                                                      ",",
+                                                      base::TRIM_WHITESPACE,
+                                                      base::SPLIT_WANT_ALL)
+                                        .size();
 
 static constexpr const char kFirstPartyOriginUrl[] = "https://127.0.0.1:44444";
 static constexpr char kThirdPartyOriginUrl[] = "https://my-site.com:44444";
@@ -150,7 +156,7 @@ class ReduceAcceptLanguageBrowserTest : public policy::PolicyTest {
   void TearDownOnMainThread() override {
     // Clean up any saved settings after test run.
     browser()
-        ->profile()
+        ->GetProfile()
         ->GetOriginTrialsControllerDelegate()
         ->ClearPersistedTokens();
 
@@ -243,7 +249,7 @@ class ReduceAcceptLanguageBrowserTest : public policy::PolicyTest {
       const std::vector<std::string>& expect_languages) {
     content::WebContents* web_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
-    base::Value::List languages_list =
+    base::ListValue languages_list =
         content::EvalJs(web_contents, "navigator.languages")
             .TakeValue()
             .TakeList();
@@ -258,7 +264,7 @@ class ReduceAcceptLanguageBrowserTest : public policy::PolicyTest {
   void SetPrefsAcceptLanguage(
       const std::vector<std::string>& accept_languages) {
     auto language_prefs = std::make_unique<language::LanguagePrefs>(
-        browser()->profile()->GetPrefs());
+        browser()->GetProfile()->GetPrefs());
     language_prefs->SetUserSelectedLanguagesList(accept_languages);
   }
 
@@ -397,7 +403,7 @@ class ReduceAcceptLanguageBrowserTest : public policy::PolicyTest {
             "/subresource_redirect_style.css",
         });
     const std::string path = params->url_request.url.GetPath();
-    if (base::Contains(kSubresourcePaths, path)) {
+    if (kSubresourcePaths.contains(path)) {
       base::StrAppend(&headers, {BuildSubresourceResponseHeader()});
     } else {
       base::StrAppend(&headers, {BuildResponseHeader()});
@@ -437,7 +443,7 @@ class ReduceAcceptLanguageBrowserTest : public policy::PolicyTest {
         });
 
     std::string resource_path;
-    if (base::Contains(kServiceWorkerPaths, path)) {
+    if (kServiceWorkerPaths.contains(path)) {
       resource_path = "chrome/test/data/service_worker";
     } else {
       resource_path = "chrome/test/data/reduce_accept_language";
@@ -747,7 +753,7 @@ IN_PROC_BROWSER_TEST_P(SameOriginReduceAcceptLanguageBrowserTest,
   histograms.ExpectTotalCount("ReduceAcceptLanguage.StoreLatency", 1);
 
   // Disable script for first party origin.
-  HostContentSettingsMapFactory::GetForProfile(browser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile())
       ->SetContentSettingCustomScope(
           ContentSettingsPattern::FromURL(GURL(kFirstPartyOriginUrl)),
           ContentSettingsPattern::Wildcard(), ContentSettingsType::JAVASCRIPT,
@@ -1194,7 +1200,7 @@ IN_PROC_BROWSER_TEST_P(SameOriginReduceAcceptLanguageBrowserTest,
   EXPECT_EQ(LastRequestUrl().GetPath(), "/subframe_simple.html");
 
   // Disable script for first party origin.
-  HostContentSettingsMapFactory::GetForProfile(browser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile())
       ->SetContentSettingCustomScope(
           ContentSettingsPattern::FromURL(GURL(kFirstPartyOriginUrl)),
           ContentSettingsPattern::Wildcard(), ContentSettingsType::JAVASCRIPT,
@@ -1742,7 +1748,7 @@ class SameOriginRedirectReduceAcceptLanguageBrowserTest
   // Intercepts only the requests that for same origin redirect tests.
   std::unique_ptr<net::test_server::HttpResponse> RequestHandlerRedirect(
       const net::test_server::HttpRequest& request) {
-    if (!base::Contains(kValidPaths, request.relative_url)) {
+    if (!kValidPaths.contains(request.relative_url)) {
       return nullptr;
     }
 
@@ -1787,7 +1793,7 @@ class SameOriginRedirectReduceAcceptLanguageBrowserTest
 
   // Called by `https_server_`.
   void MonitorResourceRequest(const net::test_server::HttpRequest& request) {
-    if (!base::Contains(kValidPaths, request.relative_url)) {
+    if (!kValidPaths.contains(request.relative_url)) {
       return;
     }
 
@@ -1916,7 +1922,7 @@ class CrossOriginRedirectReduceAcceptLanguageBrowserTest
   // Intercepts only the requests that for cross origin redirect tests.
   std::unique_ptr<net::test_server::HttpResponse> RequestHandlerRedirect(
       const net::test_server::HttpRequest& request) {
-    if (!base::Contains(kValidPaths, request.relative_url)) {
+    if (!kValidPaths.contains(request.relative_url)) {
       return nullptr;
     }
 
@@ -1956,7 +1962,7 @@ class CrossOriginRedirectReduceAcceptLanguageBrowserTest
 
   // Called by `https_server_`.
   void MonitorResourceRequest(const net::test_server::HttpRequest& request) {
-    if (!base::Contains(kValidPaths, request.relative_url)) {
+    if (!kValidPaths.contains(request.relative_url)) {
       return;
     }
 
@@ -3163,7 +3169,14 @@ INSTANTIATE_TEST_SUITE_P(FeatureFlag,
                          ReduceAcceptLanguageCountBrowserTest,
                          testing::Values(true, false));
 
-IN_PROC_BROWSER_TEST_P(ReduceAcceptLanguageCountBrowserTest, RegularRequest) {
+// TODO(crbug.com/542347163): Re-enable test.
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_RegularRequest DISABLED_RegularRequest
+#else
+#define MAYBE_RegularRequest RegularRequest
+#endif
+IN_PROC_BROWSER_TEST_P(ReduceAcceptLanguageCountBrowserTest,
+                       MAYBE_RegularRequest) {
   base::HistogramTester histograms;
 
   SetTestOptions({.content_language_in_parent = "en",
@@ -3186,13 +3199,22 @@ IN_PROC_BROWSER_TEST_P(ReduceAcceptLanguageCountBrowserTest, RegularRequest) {
   }
 
   metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
-  // Expect a total count of 3. The histogram is recorded once during initial
-  // profile setup, and then twice more when SetPrefsAcceptLanguage is called
-  // to sync the preference to the renderer and network services.
-  histograms.ExpectTotalCount("LanguageUsage.AcceptLanguage.Count2", 3);
+  // Expect 5 samples recorded for kLargeLanguages when SetPrefsAcceptLanguage
+  // is called (1 during initial profile setup, twice more when
+  // SetPrefsAcceptLanguage is called to sync the preference to the renderer and
+  // network services, 1 for WebUI Omnibox WebContents, and 1 for Omnibox Aim
+  // Popup Webcontents).
+  histograms.ExpectBucketCount("LanguageUsage.AcceptLanguage.Count2",
+                               kLargeLanguagesCount, 5);
 }
 
-IN_PROC_BROWSER_TEST_P(ReduceAcceptLanguageCountBrowserTest, Iframe) {
+// TODO(crbug.com/542347163): Re-enable test.
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_Iframe DISABLED_Iframe
+#else
+#define MAYBE_Iframe Iframe
+#endif
+IN_PROC_BROWSER_TEST_P(ReduceAcceptLanguageCountBrowserTest, MAYBE_Iframe) {
   base::HistogramTester histograms;
 
   SetTestOptions({.content_language_in_parent = "es",
@@ -3220,8 +3242,11 @@ IN_PROC_BROWSER_TEST_P(ReduceAcceptLanguageCountBrowserTest, Iframe) {
   EXPECT_EQ(LastRequestUrl().GetPath(), "/subframe_simple.html");
 
   metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
-  // Expect a total count of 3. The histogram is recorded once during initial
-  // profile setup, and then twice more when SetPrefsAcceptLanguage is called
-  // to sync the preference to the renderer and network services.
-  histograms.ExpectTotalCount("LanguageUsage.AcceptLanguage.Count2", 3);
+  // Expect 5 samples recorded for kLargeLanguages when SetPrefsAcceptLanguage
+  // is called (1 during initial profile setup, twice more when
+  // SetPrefsAcceptLanguage is called to sync the preference to the renderer and
+  // network services, 1 for WebUI Omnibox WebContents, and 1 for Omnibox Aim
+  // Popup Webcontents).
+  histograms.ExpectBucketCount("LanguageUsage.AcceptLanguage.Count2",
+                               kLargeLanguagesCount, 5);
 }

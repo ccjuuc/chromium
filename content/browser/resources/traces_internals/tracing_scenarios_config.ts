@@ -47,6 +47,7 @@ export class TracingScenariosConfigElement extends CrLitElement {
       privacyFilterEnabled_: {type: Boolean},
       toastMessage_: {type: String},
       // <if expr="is_win">
+      securityShieldIconUrl_: {type: String},
       tracingServiceSupported_: {type: Boolean},
       tracingServiceRegistered_: {type: Boolean},
       // </if>
@@ -67,7 +68,7 @@ export class TracingScenariosConfigElement extends CrLitElement {
   // <if expr="is_win">
   protected accessor tracingServiceSupported_: boolean = false;
   protected accessor tracingServiceRegistered_: boolean = false;
-  protected securityShieldIconUrl_: string = '';
+  protected accessor securityShieldIconUrl_: string = '';
   // </if>
 
   override connectedCallback(): void {
@@ -101,7 +102,7 @@ export class TracingScenariosConfigElement extends CrLitElement {
     if (this.tracingServiceSupported_) {
       this.securityShieldIconUrl_ =
           (await this.traceReportProxy_.handler.getSecurityShieldIconUrl())
-              .shieldIconUrl.url;
+              .shieldIconUrl;
     }
     // </if>
 
@@ -129,7 +130,7 @@ export class TracingScenariosConfigElement extends CrLitElement {
     return this.enabledScenarios_[scenario.scenarioName] ?? scenario.isEnabled;
   }
 
-  protected async privacyFilterDidChange_(event: CustomEvent<boolean>):
+  protected async onPrivacyFilterChange_(event: CustomEvent<boolean>):
       Promise<void> {
     if (this.privacyFilterEnabled_ === event.detail) {
       return;
@@ -139,7 +140,7 @@ export class TracingScenariosConfigElement extends CrLitElement {
         this.privacyFilterEnabled_);
   }
 
-  protected valueDidChange_(event: CustomEvent<{value: boolean}>): void {
+  protected onValueChanged_(event: CustomEvent<{value: boolean}>): void {
     const key = (event.currentTarget as HTMLElement).dataset['key'];
     if (key === undefined) {
       return;
@@ -169,8 +170,8 @@ export class TracingScenariosConfigElement extends CrLitElement {
     this.enabledScenarios_ = {};
   }
 
-  protected async onAddConfig_(e: Event&
-                               {target: HTMLInputElement}): Promise<void> {
+  protected async onAddConfigChange_(e: Event&{target: HTMLInputElement}):
+      Promise<void> {
     const files = e.target.files;
     if (!files) {
       this.toastMessage_ = `Failed to open config file.`;
@@ -198,13 +199,12 @@ export class TracingScenariosConfigElement extends CrLitElement {
       return handler.setScenariosConfigFromString(text);
     } else {
       const bytes = await file.arrayBuffer();
-      const buffer: BigBuffer = {bytes: Array.from(new Uint8Array(bytes))} as
-          any;
+      const buffer: BigBuffer = {bytes: Array.from(new Uint8Array(bytes))};
       return handler.setScenariosConfigFromBuffer(buffer);
     }
   }
 
-  protected async resetAllClick_(): Promise<void> {
+  protected async onResetAllClick_(): Promise<void> {
     const {success} =
         await this.traceReportProxy_.handler.setEnabledScenarios([]);
     if (!success) {
@@ -235,6 +235,14 @@ export class TracingScenariosConfigElement extends CrLitElement {
     }
   }
   // </if>
+
+  protected shouldShowPresetConfig_(): boolean {
+    return this.localConfig_ !== null && this.localConfig_.length > 0;
+  }
+
+  protected shouldShowFieldConfig_(): boolean {
+    return this.fieldConfig_ !== null && this.fieldConfig_.length > 0;
+  }
 }
 
 declare global {

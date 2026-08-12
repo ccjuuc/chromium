@@ -8,6 +8,7 @@
 #include <set>
 
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/metrics_hashes.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/browser/renderer_host/navigation_throttle_registry_impl.h"
@@ -197,9 +198,7 @@ class NavigationThrottleRunnerTest : public RenderViewHostTestHarness,
       std::unique_ptr<NavigationThrottle> navigation_throttle) override {
     throttles_.push_back(std::move(navigation_throttle));
   }
-  bool IsHTTPOrHTTPS() override {
-    return handle_.GetURL().SchemeIsHTTPOrHTTPS();
-  }
+
   MOCK_METHOD(bool, HasThrottle, (const std::string& name), (override));
   MOCK_METHOD(bool, EraseThrottleForTesting, (const std::string& name),
               (override));
@@ -224,7 +223,8 @@ class NavigationThrottleRunnerTest : public RenderViewHostTestHarness,
     EXPECT_LT(index, throttles_.size());
     return *throttles_[index];
   }
-  const std::set<NavigationThrottle*>& GetDeferringThrottles() const override {
+  const std::set<raw_ptr<NavigationThrottle>>& GetDeferringThrottles()
+      const override {
     return deferring_throttles_;
   }
 
@@ -232,7 +232,7 @@ class NavigationThrottleRunnerTest : public RenderViewHostTestHarness,
 
   MockNavigationHandle handle_;
   std::vector<std::unique_ptr<NavigationThrottle>> throttles_;
-  std::set<NavigationThrottle*> deferring_throttles_;
+  std::set<raw_ptr<NavigationThrottle>> deferring_throttles_;
   std::unique_ptr<NavigationThrottleRunner> runner_;
   NavigationThrottleEvent observer_last_event_ =
       NavigationThrottleEvent::kNoEvent;

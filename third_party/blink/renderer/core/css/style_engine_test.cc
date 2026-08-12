@@ -105,7 +105,8 @@ class StyleEngineTest : public PageTestBase {
   }
 
   const CSSValue* ComputedValue(Element* element, String property_name) {
-    CSSPropertyRef ref(property_name, GetDocument());
+    AtomicString atomic_name(property_name);
+    CSSPropertyRef ref(&atomic_name, GetDocument());
     DCHECK(ref.IsValid());
     return ref.GetProperty().CSSValueFromComputedStyle(
         element->ComputedStyleRef(),
@@ -162,6 +163,13 @@ class StyleEngineTest : public PageTestBase {
 
   wtf_size_t FunctionalMediaQueryResultsSize() {
     return GetStyleEngine().functional_media_query_results_.size();
+  }
+
+  // Returns the total size of the random() base value caches (element-shared
+  // and element-dependent).
+  wtf_size_t GetRandomBaseValueCacheSize() {
+    return GetStyleEngine().random_base_value_cache_.size() +
+           GetStyleEngine().element_shared_random_base_value_cache_.size();
   }
 };
 
@@ -461,10 +469,11 @@ TEST_F(StyleEngineTest, AnalyzedInject) {
   ASSERT_TRUE(t5);
 
   // There's no @keyframes rule named dummy-animation
-  ASSERT_FALSE(GetStyleEngine()
-                   .GetStyleResolver()
-                   .FindKeyframesRule(t5, t5, AtomicString("dummy-animation"))
-                   .rule);
+  ASSERT_FALSE(
+      GetStyleEngine()
+          .GetStyleResolver()
+          .FindKeyframesRule(t5, t5, AtomicString("dummy-animation"), nullptr)
+          .rule);
 
   auto* keyframes_parsed_sheet = MakeGarbageCollected<StyleSheetContents>(
       MakeGarbageCollected<CSSParserContext>(GetDocument()));
@@ -479,7 +488,7 @@ TEST_F(StyleEngineTest, AnalyzedInject) {
   StyleRuleKeyframes* keyframes =
       GetStyleEngine()
           .GetStyleResolver()
-          .FindKeyframesRule(t5, t5, AtomicString("dummy-animation"))
+          .FindKeyframesRule(t5, t5, AtomicString("dummy-animation"), nullptr)
           .rule;
   ASSERT_TRUE(keyframes);
   EXPECT_EQ(1u, keyframes->Keyframes().size());
@@ -492,20 +501,22 @@ TEST_F(StyleEngineTest, AnalyzedInject) {
 
   // Author @keyframes rules take precedence; now there are two keyframes (from
   // and to).
-  keyframes = GetStyleEngine()
-                  .GetStyleResolver()
-                  .FindKeyframesRule(t5, t5, AtomicString("dummy-animation"))
-                  .rule;
+  keyframes =
+      GetStyleEngine()
+          .GetStyleResolver()
+          .FindKeyframesRule(t5, t5, AtomicString("dummy-animation"), nullptr)
+          .rule;
   ASSERT_TRUE(keyframes);
   EXPECT_EQ(2u, keyframes->Keyframes().size());
 
   GetDocument().body()->RemoveChild(style_element);
   UpdateAllLifecyclePhases();
 
-  keyframes = GetStyleEngine()
-                  .GetStyleResolver()
-                  .FindKeyframesRule(t5, t5, AtomicString("dummy-animation"))
-                  .rule;
+  keyframes =
+      GetStyleEngine()
+          .GetStyleResolver()
+          .FindKeyframesRule(t5, t5, AtomicString("dummy-animation"), nullptr)
+          .rule;
   ASSERT_TRUE(keyframes);
   EXPECT_EQ(1u, keyframes->Keyframes().size());
 
@@ -513,10 +524,11 @@ TEST_F(StyleEngineTest, AnalyzedInject) {
   UpdateAllLifecyclePhases();
 
   // Injected @keyframes rules are no longer available once removed.
-  ASSERT_FALSE(GetStyleEngine()
-                   .GetStyleResolver()
-                   .FindKeyframesRule(t5, t5, AtomicString("dummy-animation"))
-                   .rule);
+  ASSERT_FALSE(
+      GetStyleEngine()
+          .GetStyleResolver()
+          .FindKeyframesRule(t5, t5, AtomicString("dummy-animation"), nullptr)
+          .rule);
 
   // Custom properties
 
@@ -2923,7 +2935,7 @@ TEST_F(StyleEngineTest, ColorSchemeBaseBackgroundChange) {
   Color system_background_color = LayoutTheme::GetTheme().SystemColor(
       CSSValueID::kCanvas, color_scheme,
       GetDocument().GetColorProviderForPainting(color_scheme),
-      GetDocument().IsInWebAppScope());
+      GetDocument().IsInWebAppScope() && GetDocument().IsInitialProfile());
 
   EXPECT_EQ(system_background_color,
             GetDocument().View()->BaseBackgroundColor());
@@ -3100,6 +3112,8 @@ TEST_F(StyleEngineTest, RecalcPropagatedWritingMode) {
 }
 
 TEST_F(StyleEngineTest, GetComputedStyleOutsideFlatTree) {
+  ScopedGetComputedStyleOutsideFlatTreeForTest scoped_feature(true);
+
   GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(
       R"HTML(<div id="host"><div id="outer"><div id="inner"><div id="innermost"></div></div></div></div>)HTML");
 
@@ -3273,6 +3287,8 @@ TEST_F(StyleEngineTest, RemoveStyleRecalcRootFromFlatTree) {
 }
 
 TEST_F(StyleEngineTest, SlottedWithEnsuredStyleOutsideFlatTree) {
+  ScopedGetComputedStyleOutsideFlatTreeForTest scoped_feature(true);
+
   GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <div id="host"><span></span></div>
   )HTML");
@@ -4118,13 +4134,13 @@ TEST_F(StyleEngineTest, HasViewportUnitFlags) {
     auto holder = std::make_unique<DummyPageHolder>(gfx::Size(800, 600));
     Document& document = holder->GetDocument();
     document.body()->SetInnerHTMLWithoutTrustedTypes(
-        String::Format(R"HTML(
+        UNSAFE_TODO(String::Format(R"HTML(
       <style>
         div { width: %s; }
       </style>
       <div id=target></div>
     )HTML",
-                       data.value));
+                                   data.value)));
     document.View()->UpdateAllLifecyclePhasesForTest();
 
     Element* target = document.getElementById(AtomicString("target"));
@@ -4662,6 +4678,51 @@ TEST_F(StyleEngineContainerQueryTest,
   EXPECT_EQ(6u, GetStyleEngine().StyleForElementCount() - start_count);
 }
 
+TEST_F(StyleEngineContainerQueryTest,
+       UpdateStyleAndLayoutTreeForContainerNameChange) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <style>
+      #container {
+        container-type: size;
+        width: 100px;
+        height: 100px;
+      }
+      @container --foo (width = 100px) {
+        .affected { background-color: green; }
+      }
+      .foo { container-name: --foo; }
+    </style>
+    <div id="container">
+      <span class="affected"></span>
+      <div>
+        <span class="affected"></span>
+        <span></span>
+        <span></span>
+        <span></span>
+        <span></span>
+        <span class="affected"></span>
+        <span>
+          <span></span>
+          <span class="affected"></span></span>
+          <span></span>
+        </span>
+      </div>
+    </div>
+  )HTML");
+
+  UpdateAllLifecyclePhases();
+
+  Element* container = GetDocument().getElementById(AtomicString("container"));
+  ASSERT_TRUE(container);
+  unsigned start_count = GetStyleEngine().StyleForElementCount();
+
+  container->setAttribute(html_names::kClassAttr, AtomicString("foo"));
+  UpdateAllLifecyclePhases();
+
+  // Recalc the four  .affected elements + #container
+  EXPECT_EQ(5u, GetStyleEngine().StyleForElementCount() - start_count);
+}
+
 TEST_F(StyleEngineContainerQueryTest, ContainerQueriesContainmentNotApplying) {
   GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <style>
@@ -4777,8 +4838,8 @@ TEST_F(StyleEngineContainerQueryTest, MarkStyleDirtyFromContainerRecalc) {
   auto* container = GetDocument().getElementById(AtomicString("container"));
   auto* input = GetDocument().getElementById(AtomicString("input"));
   ASSERT_TRUE(container);
-  ASSERT_TRUE(input);
-  auto* inner_editor = DynamicTo<HTMLInputElement>(input)->InnerEditorElement();
+  ASSERT_TRUE(IsA<HTMLInputElement>(input));
+  auto* inner_editor = To<HTMLInputElement>(*input).InnerEditorElement();
   ASSERT_TRUE(inner_editor);
 
   const ComputedStyle* old_inner_style = inner_editor->GetComputedStyle();
@@ -5892,6 +5953,8 @@ TEST_F(StyleEngineTest, CascadeLayersSheetsRemoved) {
 }
 
 TEST_F(StyleEngineTest, NonSlottedStyleDirty) {
+  ScopedGetComputedStyleOutsideFlatTreeForTest scoped_feature(true);
+
   GetDocument().body()->SetInnerHTMLWithoutTrustedTypes("<div id=host></div>");
   auto* host = GetDocument().getElementById(AtomicString("host"));
   ASSERT_TRUE(host);
@@ -6317,8 +6380,8 @@ TEST_F(StyleEngineTest, ScrollbarStyleNoExcessiveCaching) {
   UpdateAllLifecyclePhases();
   EXPECT_FALSE(container->GetComputedStyle()->GetPseudoElementStyleCache());
   EXPECT_EQ("rgb(255, 0, 0)", custom_scrollbar->GetPart(kThumbPart)
-                                  ->Style()
-                                  ->BackgroundColor()
+                                  ->StyleRef()
+                                  .BackgroundColor()
                                   .GetColor()
                                   .SerializeAsCSSColor());
 
@@ -6326,8 +6389,8 @@ TEST_F(StyleEngineTest, ScrollbarStyleNoExcessiveCaching) {
   UpdateAllLifecyclePhases();
   EXPECT_FALSE(container->GetComputedStyle()->GetPseudoElementStyleCache());
   EXPECT_EQ("rgb(0, 128, 0)", custom_scrollbar->GetPart(kThumbPart)
-                                  ->Style()
-                                  ->BackgroundColor()
+                                  ->StyleRef()
+                                  .BackgroundColor()
                                   .GetColor()
                                   .SerializeAsCSSColor());
 }
@@ -7175,6 +7238,62 @@ TEST_F(StyleEngineTest, BorderWidthsAreRecalculatedWhenZoomChanges) {
   checkBorderWidth(1.0f);
 }
 
+TEST_F(StyleEngineTest, InitialBorderAndOutlineWidthsUpdateWhenZoomChanges) {
+  frame_test_helpers::WebViewHelper web_view_helper;
+  WebViewImpl* web_view_impl = web_view_helper.Initialize();
+  WebFrameWidget* main_frame_widget = web_view_impl->MainFrameWidget();
+
+  const auto set_zoom = [&](float zoom_factor) {
+    main_frame_widget->SetZoomLevelForTesting(
+        ZoomFactorToZoomLevel(zoom_factor));
+    main_frame_widget->UpdateAllLifecyclePhases(DocumentUpdateReason::kTest);
+  };
+
+  const auto set_device_scale_factor = [&](float device_scale_factor) {
+    main_frame_widget->SetDeviceScaleFactorForTesting(device_scale_factor);
+    main_frame_widget->UpdateAllLifecyclePhases(DocumentUpdateReason::kTest);
+  };
+
+  Document* document =
+      To<LocalFrame>(web_view_impl->GetPage()->MainFrame())->GetDocument();
+  document->body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <style>
+      #target {
+        border-top-style: solid;
+        outline-style: solid;
+      }
+    </style>
+    <div id="target"></div>
+  )HTML");
+
+  set_zoom(1.0f);
+  set_device_scale_factor(1.0f);
+
+  const Element* target = document->getElementById(AtomicString("target"));
+  ASSERT_NE(target, nullptr);
+
+  const auto check_widths = [&](int expected_width) {
+    const ComputedStyle* style = target->GetComputedStyle();
+    ASSERT_NE(style, nullptr);
+    EXPECT_EQ(expected_width, style->BorderTopWidth());
+    EXPECT_EQ(expected_width, style->OutlineWidth());
+  };
+
+  check_widths(3);
+
+  set_zoom(2.0f);
+  check_widths(6);
+
+  set_device_scale_factor(2.0f);
+  check_widths(12);
+
+  set_zoom(1.0f);
+  check_widths(6);
+
+  set_device_scale_factor(1.0f);
+  check_widths(3);
+}
+
 TEST_F(StyleEngineTest, InitialStyle_Recalc) {
   GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <style>
@@ -7623,7 +7742,7 @@ TEST_F(StyleEngineTest, UpdateRootFontRelativeUnits_NoRecalcForNonInherited) {
   UpdateAllLifecyclePhasesForTest();
 
   // Verify that the document is using root font-relative units (rem).
-  ASSERT_TRUE(GetStyleEngine().UsesRootFontRelativeUnits())
+  ASSERT_TRUE(GetStyleEngine().UsesRootRelativeUnits())
       << "Document should be using root font-relative units (rem)";
   // Also verify glyph-relative units (ch) are tracked.
   ASSERT_TRUE(GetStyleEngine().UsesGlyphRelativeUnits())
@@ -7644,6 +7763,95 @@ TEST_F(StyleEngineTest, UpdateRootFontRelativeUnits_NoRecalcForNonInherited) {
   EXPECT_EQ(1u, after_count - before_count)
       << "Changing root background-color should not trigger recalc cascade for "
          "descendant elements using rem/ch units";
+}
+
+TEST_F(StyleEngineTest, TestRandomValueCacheCleanedWhenElementIsGone) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <div id='test'></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+
+  Element* element = GetDocument().getElementById(AtomicString("test"));
+
+  RandomCacheKey* random_value_sharing = MakeGarbageCollected<RandomCacheKey>(
+      AtomicString("--ident"), RandomCacheKey::ElementScoped(false),
+      g_null_atom);
+  GetStyleEngine().GetCachedRandomBaseValue(*random_value_sharing, element);
+  RandomCacheKey* random_value_sharing_element_shared =
+      MakeGarbageCollected<RandomCacheKey>(AtomicString("--ident"),
+                                           RandomCacheKey::ElementScoped(true),
+                                           g_null_atom);
+  GetStyleEngine().GetCachedRandomBaseValue(
+      *random_value_sharing_element_shared, element);
+
+  EXPECT_EQ(GetRandomBaseValueCacheSize(), 2);
+
+  element->remove();
+  ThreadState::Current()->CollectAllGarbageForTesting(
+      ThreadState::StackState::kNoHeapPointers);
+
+  EXPECT_EQ(GetRandomBaseValueCacheSize(), 1);
+}
+
+// Regression test for crbug.com/406525485: SetActive() on a display:contents
+// element without :active rules should not trigger unnecessary style recalc.
+TEST_F(StyleEngineTest, DisplayContentsSetActiveNoUnnecessaryRecalc) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      ::highlight(test-highlight) { background-color: yellow; }
+    </style>
+    <div id="container" style="display: contents">
+      <span id="child">Highlighted text</span>
+    </div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+
+  Element* container = GetDocument().getElementById(AtomicString("container"));
+  Element* child = GetDocument().getElementById(AtomicString("child"));
+  ASSERT_TRUE(container);
+  ASSERT_TRUE(child);
+  ASSERT_FALSE(container->GetLayoutObject());
+  ASSERT_TRUE(child->GetLayoutObject());
+
+  unsigned start_count = GetStyleEngine().StyleForElementCount();
+  container->SetActive(true);
+  UpdateAllLifecyclePhasesForTest();
+  unsigned element_count =
+      GetStyleEngine().StyleForElementCount() - start_count;
+  // No :active rules match the container, so no style resolutions should occur.
+  EXPECT_EQ(0U, element_count);
+
+  start_count = GetStyleEngine().StyleForElementCount();
+  container->SetActive(false);
+  UpdateAllLifecyclePhasesForTest();
+  element_count = GetStyleEngine().StyleForElementCount() - start_count;
+  EXPECT_EQ(0U, element_count);
+}
+
+// Verify that SetActive() still works correctly for display:contents elements
+// when :active rules DO match.
+TEST_F(StyleEngineTest, DisplayContentsSetActiveWithActiveRules) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #container:active { color: red; }
+    </style>
+    <div id="container" style="display: contents">
+      <span id="child">Text</span>
+    </div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+
+  Element* container = GetDocument().getElementById(AtomicString("container"));
+  ASSERT_TRUE(container);
+  ASSERT_FALSE(container->GetLayoutObject());
+
+  unsigned start_count = GetStyleEngine().StyleForElementCount();
+  container->SetActive(true);
+  UpdateAllLifecyclePhasesForTest();
+  unsigned element_count =
+      GetStyleEngine().StyleForElementCount() - start_count;
+  // :active rule matches container, so style resolution should happen.
+  EXPECT_GT(element_count, 0U);
 }
 
 }  // namespace blink

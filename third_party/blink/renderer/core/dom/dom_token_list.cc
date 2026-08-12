@@ -84,7 +84,7 @@ void DOMTokenList::Trace(Visitor* visitor) const {
   visitor->Trace(token_set_);
   visitor->Trace(element_);
   ScriptWrappable::Trace(visitor);
-  ElementRareDataField::Trace(visitor);
+  NodeRareDataField::Trace(visitor);
 }
 
 // https://dom.spec.whatwg.org/#concept-domtokenlist-validation
@@ -231,7 +231,7 @@ bool DOMTokenList::replace(const AtomicString& token,
 
 bool DOMTokenList::supports(const AtomicString& token,
                             ExceptionState& exception_state) {
-  return ValidateTokenValue(token.LowerASCII(), exception_state);
+  return ValidateTokenValue(token.ToAsciiLower(), exception_state);
 }
 
 // https://dom.spec.whatwg.org/#dom-domtokenlist-add

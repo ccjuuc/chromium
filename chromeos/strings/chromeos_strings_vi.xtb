@@ -44,7 +44,6 @@
 <translation id="1155154308031262006">Nhập câu lệnh</translation>
 <translation id="115705039208660697">quả dứa</translation>
 <translation id="1164939766849482256">Trình bảo vệ màn hình Sáng đến tối</translation>
-<translation id="1167755866710282443">Mở trình đơn để tuỳ chỉnh các phím. Kéo trình đơn để di chuyển.</translation>
 <translation id="1171349345463658120">đầm phá phủ cát</translation>
 <translation id="1174073918202301297">Đã thêm phím tắt</translation>
 <translation id="11743817593307477">Dùng các phím mũi tên để di chuyển chế độ điều khiển này đến hành động mong muốn trong trò chơi. Dùng phím Enter để đặt chế độ điều khiển. Dùng phím Escape để huỷ.</translation>
@@ -167,6 +166,7 @@
 <translation id="1621067168122174824">Chạy quá trình Kiểm tra sạc</translation>
 <translation id="1622402072367425417">bong bóng toả sáng</translation>
 <translation id="1626590945318984973">Không có phím tắt này. Nhấn một phím tắt mới không dùng phím chức năng và phím <ph name="META_KEY" />.</translation>
+<translation id="163774412591892664">Quản trị viên đã vô hiệu hoá thiết bị của bạn và có thể truy cập vào thông tin vị trí của thiết bị.</translation>
 <translation id="1639239467298939599">Đang tải</translation>
 <translation id="1641857168437328880">Khay nạp tài liệu (1 mặt)</translation>
 <translation id="1642396894598555413">xe đạp</translation>
@@ -272,7 +272,6 @@
 <translation id="200669432486043882">Thay thế tệp</translation>
 <translation id="2006864819935886708">Kết nối</translation>
 <translation id="2008685064673031089">Tìm kiếm quan trọng</translation>
-<translation id="2011174342667534258">Phiên bản SDK:</translation>
 <translation id="2016697457005847575">Thử các bước khắc phục vấn đề</translation>
 <translation id="202500043506723828">EID</translation>
 <translation id="2045814230297767491">dao kéo</translation>
@@ -404,6 +403,7 @@
 <translation id="2618015542787108131">cồn cát</translation>
 <translation id="2619761439309613843">Làm mới hàng ngày</translation>
 <translation id="2620436844016719705">Hệ thống</translation>
+<translation id="2626848494898563581">Không kết nối được với các dịch vụ của Google</translation>
 <translation id="2637303424821734920">ĐANG TẮT – Để hiển thị thông tin thời tiết địa phương, hãy <ph name="BEGIN_LINK" />bật quyền truy cập thông tin vị trí của hệ thống<ph name="END_LINK" /></translation>
 <translation id="2638662041295312666">Hình ảnh đăng nhập</translation>
 <translation id="2640549051766135490">Đã chọn album <ph name="TITLE" /> <ph name="DESC" /></translation>
@@ -507,7 +507,6 @@
 <translation id="3211671540163313381">Ánh xạ phím cho d-pad</translation>
 <translation id="3217462202230355157">Đảm bảo rằng micrô của bạn đã được kết nối hoặc thử khởi động lại <ph name="DEVICE_TYPE" /></translation>
 <translation id="3226405216343213872">Đang tìm máy quét</translation>
-<translation id="3226657629376379887">Trình đơn thao tác của bố cục</translation>
 <translation id="3227186760713762082">Lấy giá trị <ph name="CATEGORY_TEXT" /> chia cho <ph name="CONVERSION_RATE" /></translation>
 <translation id="3242622575335502454">nghệ thuật kỹ thuật số</translation>
 <translation id="3246869037381808805">Các lệnh in quá 1 ngày sẽ bị xóa</translation>
@@ -522,7 +521,6 @@
 <translation id="3291996639387199448">Hướng khoá</translation>
 <translation id="3294437725009624529">Khách</translation>
 <translation id="3303855915957856445">Không tìm thấy kết quả tìm kiếm nào</translation>
-<translation id="3305294846493618482">xem thêm</translation>
 <translation id="3310640316857623290">Độ trễ của Hệ thống tên miền (DNS) vượt ngưỡng cho phép đáng kể</translation>
 <translation id="3316495615885967552">Đã tải xong mô hình tạo tiêu đề và nội dung tóm tắt xuống</translation>
 <translation id="3321030238473337787">Tốc độ phát</translation>
@@ -581,6 +579,7 @@
 <translation id="3577473026931028326">Đã xảy ra lỗi. Hãy thử lại.</translation>
 <translation id="357889014807611375">mạng Wi‑Fi có giới hạn dữ liệu</translation>
 <translation id="3583278742022654445">Cường độ tín hiệu yếu. Hãy thử di chuyển đến gần nguồn tín hiệu Wi-Fi hơn.</translation>
+<translation id="3586931643579894722">Ẩn chi tiết</translation>
 <translation id="3588034708467091142">Hãy kiểm tra để chắc chắn rằng bạn đã kết nối Internet, rồi thử lại.</translation>
 <translation id="3594280220611906414"><ph name="USER_FRIENDLY_APN_NAME" /> là tên thân thiện với người dùng của <ph name="APN_NAME" />.</translation>
 <translation id="3595596368722241419">Pin đầy</translation>
@@ -690,7 +689,7 @@
 <translation id="4086271957099059213">Tạo chế độ điều khiển khác</translation>
 <translation id="4091002263446255071">lãng mạn</translation>
 <translation id="4093865285251893588">Ảnh hồ sơ</translation>
-<translation id="409427325554347132">Lưu thông tin chi tiết của quá trình kiểm tra</translation>
+<translation id="409427325554347132">Lưu chi tiết kiểm tra</translation>
 <translation id="409469431304488632">Thử nghiệm</translation>
 <translation id="4095155732125588500">Đang tải mô hình tạo tiêu đề và nội dung tóm tắt xuống</translation>
 <translation id="4095829376260267438">WPA2WPA3</translation>
@@ -701,7 +700,6 @@
 <translation id="4126551873361000548">Tua lại 10 giây</translation>
 <translation id="4128271910628504223">Nhập một câu lệnh như "vẽ khu rừng mờ sương"</translation>
 <translation id="4130035430755296270">Tiếp tục di chuột để xem thêm tuỳ chọn bố cục</translation>
-<translation id="4130750466177569591">Tôi đồng ý</translation>
 <translation id="4131410914670010031">Đen và trắng</translation>
 <translation id="4137700675046373159">thứ Bảy</translation>
 <translation id="4139326893730851150">Các bản cập nhật chương trình cơ sở</translation>
@@ -727,6 +725,7 @@
 <translation id="4212169537710712814">Đã tải xong mô hình chép lời <ph name="LANGUAGE_NAME" /> xuống</translation>
 <translation id="42126664696688958">Xuất</translation>
 <translation id="4213104098953699324">Bàn phím USB</translation>
+<translation id="4217571870635786043">Nhập bằng giọng nói</translation>
 <translation id="4227825898293920515">Mật khẩu sẽ hết hạn sau <ph name="TIME" /></translation>
 <translation id="4238516577297848345">Không có lệnh in nào đang xử lý</translation>
 <translation id="4239069858505860023">GPRS</translation>
@@ -1049,7 +1048,6 @@
 <translation id="5606865426897221650">Phím Tab</translation>
 <translation id="5612205513582918357">Công cụ cho lớp học đang chia sẻ màn hình của bạn với <ph name="RECEIVER_NAME" /></translation>
 <translation id="5613201299517339763">Bạn đã bị đăng xuất</translation>
-<translation id="5620281292257375798">Chỉ sử dụng nội bộ</translation>
 <translation id="5628106863521633649">Ngôn ngữ có sẵn</translation>
 <translation id="5630438231335788050">phong trào nghệ thuật bauhaus</translation>
 <translation id="5631759159893697722">bản tóm tắt</translation>
@@ -1165,6 +1163,7 @@
 <translation id="6136285399872347291">phím xóa lùi</translation>
 <translation id="6137614725462089991">viễn tưởng công nghệ cao</translation>
 <translation id="6137767437444130246">Chứng chỉ người dùng</translation>
+<translation id="6140948187512243695">Hiển thị chi tiết</translation>
 <translation id="6146993107019042706">Để hoàn tất, hãy nhập mật khẩu mới của bạn</translation>
 <translation id="6147514244879357420">PNG</translation>
 <translation id="6149015141270619212">Không thể kết nối Internet</translation>
@@ -1185,6 +1184,7 @@
 <translation id="6234024205316847054">Hiển thị các điểm chính</translation>
 <translation id="6243280677745499710">Hiện đã được đặt</translation>
 <translation id="6250316632541035980">thịt xông khói và trứng</translation>
+<translation id="6262413940100821797">một người nhận không xác định</translation>
 <translation id="6265268291107409527">Phím được chọn là <ph name="KEYS" />. <ph name="ASSIGN_INSTRUCTION" /></translation>
 <translation id="6275224645089671689">Mũi tên phải</translation>
 <translation id="6278428485366576908">Chủ đề</translation>
@@ -1410,11 +1410,8 @@
 <translation id="7177485034254901881"><ph name="DEVICE_TYPE" /> này do <ph name="MANAGER" /> quản lý. Quản trị viên có thể định cấu hình từ xa thiết bị này.</translation>
 <translation id="7180611975245234373">Làm mới</translation>
 <translation id="7180865173735832675">Tùy chỉnh</translation>
-<translation id="7182063559013288142">Điểm phát sóng tức thì</translation>
-<translation id="7184043045742675738">Nhấp vào phím bất kỳ để tuỳ chỉnh nút. Đặt lại phím bằng phím chuột hoặc mũi tên.</translation>
 <translation id="7187669805838282391">thứ Tư</translation>
 <translation id="7205318498545665455">Chọn micrô</translation>
-<translation id="7206979415662233817">Điều khoản dịch vụ</translation>
 <translation id="7210635925306941239">màu lục lam</translation>
 <translation id="7212547870105584639">Quản lý chế độ cài đặt APN của mạng. APN thiết lập kết nối giữa mạng di động và Internet. <ph name="BEGIN_LINK_LEARN_MORE" />Tìm hiểu thêm<ph name="END_LINK_LEARN_MORE" /></translation>
 <translation id="7212734716605298123">Cập nhật chương trình cơ sở cho thiết bị bên ngoài</translation>
@@ -1445,11 +1442,6 @@
 <translation id="7319430975418800333">A3</translation>
 <translation id="7321055305895875150">xanh lục và xanh mòng két</translation>
 <translation id="7328475450575141167">chim thiên đường</translation>
-<translation id="7331297744262591636">Bạn phải đủ 18 tuổi trở lên và đồng ý rằng việc bạn sử dụng hình nền AI phải tuân theo <ph name="GOOGLE_TERMS_OF_SERVICE_LINK" />Điều khoản dịch vụ của Google<ph name="END_LINK_GOOGLE_TERMS_OF_SERVICE" /> cũng như <ph name="BEGIN_LINK_GEN_AI_TERMS_OF_SERVICE" />Điều khoản dịch vụ bổ sung của AI tạo sinh<ph name="END_LINK_GEN_AI_TERMS_OF_SERVICE" />.
-          <ph name="LINE_BREAK" />
-          <ph name="LINE_BREAK" />
-          Bạn chỉ có thể tạo hình nền bằng AI để sử dụng cho mục đích cá nhân và phi thương mại. Khi bạn yêu cầu Google trợ giúp bạn tạo hình nền, văn bản bạn nhập sẽ được gửi đến các máy chủ AI của Google nhằm đề xuất hình nền cho bạn, tuân theo <ph name="BEGIN_LINK_GOOGLE_PRIVACY_POLICY" />Chính sách quyền riêng tư của Google<ph name="END_LINK_GOOGLE_PRIVACY_POLICY" />. <ph name="BEGIN_LINK_LEARN_MORE" />Tìm hiểu thêm<ph name="END_LINK_LEARN_MORE" /></translation>
-<translation id="7343581795491695942"><ph name="QUERY_TEXT" />; <ph name="RESULT_TEXT" />; Hãy nhấn phím Tìm kiếm + Phím cách để xem kết quả trong Google Tìm kiếm.</translation>
 <translation id="7343649194310845056">Thiết bị mạng</translation>
 <translation id="7344788170842919262">nâu đất</translation>
 <translation id="7346768383111016081">Thiết lập chế độ điều khiển cho hành động trong trò chơi để chơi bằng bàn phím</translation>
@@ -1506,7 +1498,6 @@ Hãy tải mô hình chép lời xuống (tối đa 100 MB) để nhận các b�
 <translation id="7590883480672980941">Cài đặt phương thức nhập</translation>
 <translation id="7595982850646262331">Còn <ph name="TIME_VALUE" /></translation>
 <translation id="7600430297804876776">Quản trị viên <ph name="MANAGER" /> đã thiết lập thời điểm bạn có thể sử dụng <ph name="DEVICE_TYPE" /> này.</translation>
-<translation id="7613724632293948900">Đặt lại vị trí bằng phím chuột hoặc mũi tên.</translation>
 <translation id="7618216277886673749">Chọn <ph name="LANGUAGE_NAME" /></translation>
 <translation id="7618774594543487847">Trung tính</translation>
 <translation id="7620771111601174153">Tìm hiểu thêm trong Trung tâm trợ giúp</translation>
@@ -1640,6 +1631,7 @@ Hãy tải mô hình chép lời xuống (tối đa 100 MB) để nhận các b�
 <translation id="819278132617411009">Dùng AI của Google để tăng năng suất</translation>
 <translation id="8200772114523450471">Tiếp tục</translation>
 <translation id="8206859287963243715">Di động</translation>
+<translation id="8208043093301544621">Trang chủ</translation>
 <translation id="8208861521865154048">Đặc quyền</translation>
 <translation id="8226628635270268143">Chọn ảnh và album bạn yêu thích</translation>
 <translation id="8227119283605456246">Đính kèm tệp</translation>
@@ -1686,6 +1678,7 @@ Hãy tải mô hình chép lời xuống (tối đa 100 MB) để nhận các b�
 <translation id="8420955526972171689">Chạy các bài kiểm tra và khắc phục sự cố phần cứng</translation>
 <translation id="8422748173858722634">IMEI</translation>
 <translation id="8424039430705546751">xuống</translation>
+<translation id="8427213022735114808">Tính năng nhập bằng giọng nói gửi giọng nói của bạn tới Google để cho phép nhập liệu bằng giọng nói vào bất kỳ trường văn bản nào.</translation>
 <translation id="8428213095426709021">Cài đặt</translation>
 <translation id="8431300646573772016">ChromeOS có gì mới</translation>
 <translation id="8433186206711564395">Cài đặt mạng</translation>
@@ -1724,6 +1717,7 @@ Hãy tải mô hình chép lời xuống (tối đa 100 MB) để nhận các b�
 <translation id="8584654835905316966">Bạn cần khởi động lại để hoàn tất quá trình cài đặt phiên bản <ph name="VERSION" /> cho chương trình cơ sở của <ph name="DEVICE_NAME" />. Máy tính của bạn có thể khởi động lại nhiều lần. Hành vi này nằm trong dự kiến.</translation>
 <translation id="8593058461203131755">tạm dừng nội dung nghe nhìn</translation>
 <translation id="8620617069779373398">Trạng thái chuyển vùng</translation>
+<translation id="8624524972189162859">Quản trị viên <ph name="DOMAIN_NAME" /> đã vô hiệu hoá thiết bị của bạn và có thể truy cập vào thông tin vị trí của thiết bị.</translation>
 <translation id="8626489604350149811">Thao tác khác cho <ph name="APN_NAME" /></translation>
 <translation id="86356131183441916">Tím nhạt</translation>
 <translation id="8647595191512746911">Bản chép lời</translation>
@@ -1835,10 +1829,8 @@ Hãy tải mô hình chép lời xuống (tối đa 100 MB) để nhận các b�
 <translation id="9073281213608662541">PAP</translation>
 <translation id="9074739597929991885">Bluetooth</translation>
 <translation id="9082718469794970195">Dùng video này</translation>
-<translation id="9087578468327036362">Báo lỗi truy vấn này</translation>
 <translation id="9088306295921699330">Mức sử dụng hiện tại</translation>
 <translation id="9088994563996376283">Rút gọn</translation>
-<translation id="9095775724867566971">PluginVm</translation>
 <translation id="909856219855259344">Thông tin khác về nút Đặt lại ngày</translation>
 <translation id="9100765901046053179">Cài đặt nâng cao</translation>
 <translation id="910415269708673980">Làm mới phiếu cho <ph name="PRINCIPAL_NAME" /></translation>
@@ -1868,7 +1860,6 @@ Hãy tải mô hình chép lời xuống (tối đa 100 MB) để nhận các b�
 <translation id="921080052717160800">Đã đặt hình ảnh làm nền camera</translation>
 <translation id="9211490828691860325">Tất cả các không gian làm việc</translation>
 <translation id="9218016617214286986">Hiện các APN đã biết</translation>
-<translation id="932327136139879170">Nhà riêng</translation>
 <translation id="939519157834106403">SSID</translation>
 <translation id="945522503751344254">Gửi phản hồi</translation>
 <translation id="950520315903467048">Thiếu phím cho <ph name="DIRECTION" />. <ph name="ASSIGN_INSTRUCTION" /></translation>

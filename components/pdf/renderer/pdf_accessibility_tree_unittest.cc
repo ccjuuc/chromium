@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "components/pdf/renderer/pdf_accessibility_tree_builder.h"
 #include "pdf/accessibility_structs.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/geometry/rect_f.h"
@@ -15,14 +16,12 @@ namespace pdf {
 const chrome_pdf::AccessibilityTextRunInfo kFirstTextRun = {
     /*start_index=*/0,
     /*len=*/15,
-    "Span",
     gfx::RectF(26.0f, 189.0f, 84.0f, 13.0f),
     chrome_pdf::AccessibilityTextDirection::kNone,
     chrome_pdf::AccessibilityTextStyleInfo()};
 const chrome_pdf::AccessibilityTextRunInfo kSecondTextRun = {
     /*start_index=*/15,
     /*len=*/15,
-    "Span",
     gfx::RectF(28.0f, 117.0f, 152.0f, 19.0f),
     chrome_pdf::AccessibilityTextDirection::kNone,
     chrome_pdf::AccessibilityTextStyleInfo()};
@@ -580,6 +579,40 @@ TEST(PdfAccessibilityTreeUnitTest, InvalidChoiceFieldType) {
 
   EXPECT_FALSE(PdfAccessibilityTree::IsDataFromPluginValid(text_runs, chars,
                                                            page_objects));
+}
+
+TEST(PdfAccessibilityTreeUnitTest, AreStylesEquivalent) {
+  chrome_pdf::AccessibilityTextStyleInfo style1;
+  style1.font_name = "Arial";
+  style1.is_italic = false;
+  style1.font_weight = 400;
+
+  chrome_pdf::AccessibilityTextStyleInfo style2;
+  style2.font_name = "TimesNewRoman";
+  style2.is_italic = false;
+  style2.font_weight = 400;
+
+  // Font family names differ, but styling (bold/italic/font_weight) is
+  // identical.
+  EXPECT_TRUE(PdfAccessibilityTreeBuilder::AreStylesEquivalent(style1, style2));
+
+  // Font weights differ.
+  style2.font_weight = 700;
+  EXPECT_FALSE(
+      PdfAccessibilityTreeBuilder::AreStylesEquivalent(style1, style2));
+
+  // Both font weights identical.
+  style1.font_weight = 700;
+  EXPECT_TRUE(PdfAccessibilityTreeBuilder::AreStylesEquivalent(style1, style2));
+
+  // Italic states differ.
+  style2.is_italic = true;
+  EXPECT_FALSE(
+      PdfAccessibilityTreeBuilder::AreStylesEquivalent(style1, style2));
+
+  // Both bold and italic.
+  style1.is_italic = true;
+  EXPECT_TRUE(PdfAccessibilityTreeBuilder::AreStylesEquivalent(style1, style2));
 }
 
 }  // namespace pdf

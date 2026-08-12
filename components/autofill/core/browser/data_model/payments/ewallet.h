@@ -5,12 +5,20 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_PAYMENTS_EWALLET_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_PAYMENTS_EWALLET_H_
 
-#include <cstdint>
+#include <stdint.h>
+
+#include <compare>
 #include <string>
 #include <string_view>
 
 #include "base/containers/flat_set.h"
+#include "build/buildflag.h"
 #include "components/autofill/core/browser/data_model/payments/payment_instrument.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/jni_string.h"
+#include "base/android/scoped_java_ref.h"
+#endif
 
 class GURL;
 
@@ -25,6 +33,15 @@ namespace autofill {
 // are typically already linked to a user's bank account. This class consists of
 // the details for a user's ewallet, and this data is synced from the Google
 // Payments server.
+//
+// Note: This class is reused to represent two distinct states:
+// 1. **Linked Account**: An already linked user account containing valid
+// details
+//    (possessing a non-zero server `instrument_id` and `account_display_name`).
+// 2. **Unlinked Creation Option**: An eligible provider that the user can link
+// to
+//    (where `instrument_id` is `0`, and fields like `account_display_name` and
+//    `nickname` are empty placeholder defaults).
 class Ewallet {
  public:
   Ewallet(int64_t instrument_id,
@@ -60,10 +77,12 @@ class Ewallet {
   bool SupportsPaymentLink(std::string_view payment_link) const;
 
  private:
-  // Name of the ewallet provider.
+  // Name of the eWallet provider. For unlinked creation options, this
+  // represents the issuer's display name (e.g., "ShopeePay").
   std::u16string ewallet_name_;
 
-  // Display name of the ewallet account.
+  // Display name of the eWallet account. Empty/ignored for unlinked creation
+  // options.
   std::u16string account_display_name_;
 
   // Chrome matches the payment links on web pages against the list of payment
@@ -73,10 +92,42 @@ class Ewallet {
   // https://github.com/aneeshali/paymentlink/blob/main/docs/explainer.md.
   base::flat_set<std::u16string> supported_payment_link_uris_;
 
-  // Fields common for all types of payment instruments.
+  // Fields common for all types of payment instruments. If the contained
+  // `payment_instrument_.instrument_id()` is `0`, this instance represents an
+  // unlinked creation option rather than a linked account.
   PaymentInstrument payment_instrument_;
 };
 
+#if BUILDFLAG(IS_ANDROID)
+base::android::ScopedJavaLocalRef<jobject> CreateJavaEwalletFromNative(
+    JNIEnv* env,
+    const Ewallet& ewallet);
+
+Ewallet CreateNativeEwalletFromJava(
+    JNIEnv* env,
+    const base::android::JavaRef<jobject>& jewallet);
+#endif
+
 }  // namespace autofill
+
+#if BUILDFLAG(IS_ANDROID)
+namespace jni_zero {
+
+template <>
+inline ScopedJavaLocalRef<jobject> ToJniType<autofill::Ewallet>(
+    JNIEnv* env,
+    const autofill::Ewallet& input) {
+  return autofill::CreateJavaEwalletFromNative(env, input);
+}
+
+template <>
+inline autofill::Ewallet FromJniType<autofill::Ewallet>(
+    JNIEnv* env,
+    const JavaRef<jobject>& input) {
+  return autofill::CreateNativeEwalletFromJava(env, input);
+}
+
+}  // namespace jni_zero
+#endif
 
 #endif  // COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_PAYMENTS_EWALLET_H_

@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/check_deref.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -21,7 +22,6 @@
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service.h"
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service_factory.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/login/auth/challenge_response/cert_utils.h"
@@ -62,11 +62,9 @@ base::flat_set<std::string> GetLoginScreenPolicyExtensionIds() {
     return {};
   }
 
-  base::flat_set<std::string> extension_ids;
-  for (const auto item : pref->GetValue()->GetDict()) {
-    extension_ids.insert(item.first);
-  }
-  return extension_ids;
+  return base::MakeFlatSet<std::string>(
+      pref->GetValue()->GetDict(), /*comp=*/{},
+      [](const auto& item) { return item.first; });
 }
 
 Profile* GetProfile() {
@@ -84,11 +82,12 @@ extensions::ProcessManager* GetProcessManager() {
 // Loads the persistently stored information about the challenge-response keys
 // that can be used for authenticating the user.
 void LoadStoredChallengeResponseSpkiKeysForUser(
+    PrefService& local_state,
     const AccountId& account_id,
     std::vector<std::string>* spki_items,
     base::flat_set<std::string>* extension_ids) {
-  const base::Value::List known_user_value =
-      user_manager::KnownUser(g_browser_process->local_state())
+  const base::ListValue known_user_value =
+      user_manager::KnownUser(&local_state)
           .GetChallengeResponseKeys(account_id);
   std::vector<DeserializedChallengeResponseKey>
       deserialized_challenge_response_keys;
@@ -366,16 +365,20 @@ class ExtensionLoadObserver final
 
 // static
 bool ChallengeResponseAuthKeysLoader::CanAuthenticateUser(
+    PrefService& local_state,
     const AccountId& account_id) {
   std::vector<std::string> suitable_public_key_spki_items;
   base::flat_set<std::string> extension_ids_ignored;
-  LoadStoredChallengeResponseSpkiKeysForUser(
-      account_id, &suitable_public_key_spki_items, &extension_ids_ignored);
+  LoadStoredChallengeResponseSpkiKeysForUser(local_state, account_id,
+                                             &suitable_public_key_spki_items,
+                                             &extension_ids_ignored);
   return !suitable_public_key_spki_items.empty();
 }
 
-ChallengeResponseAuthKeysLoader::ChallengeResponseAuthKeysLoader()
-    : maximum_extension_load_waiting_time_(
+ChallengeResponseAuthKeysLoader::ChallengeResponseAuthKeysLoader(
+    PrefService* local_state)
+    : local_state_(CHECK_DEREF(local_state)),
+      maximum_extension_load_waiting_time_(
           kDefaultMaximumExtensionLoadWaitingTime) {
   profile_subscription_.Observe(GetProfile());
 }
@@ -394,8 +397,9 @@ void ChallengeResponseAuthKeysLoader::LoadAvailableKeys(
   // for authenticating the user.
   std::vector<std::string> suitable_public_key_spki_items;
   base::flat_set<std::string> extension_ids;
-  LoadStoredChallengeResponseSpkiKeysForUser(
-      account_id, &suitable_public_key_spki_items, &extension_ids);
+  LoadStoredChallengeResponseSpkiKeysForUser(local_state_.get(), account_id,
+                                             &suitable_public_key_spki_items,
+                                             &extension_ids);
   if (suitable_public_key_spki_items.empty()) {
     // This user's profile doesn't support challenge-response authentication.
     std::move(callback).Run(/*challenge_response_keys=*/{});

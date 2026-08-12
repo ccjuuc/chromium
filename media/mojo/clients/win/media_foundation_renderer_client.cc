@@ -317,8 +317,9 @@ void MediaFoundationRendererClient::OnSetOutputRectDone(
   if (!success) {
     DLOG(ERROR) << "Failed to SetOutputRect";
     MEDIA_LOG(WARNING, media_log_) << "Failed to SetOutputRect";
-    // Ignore this error as video can possibly be seen but displayed incorrectly
-    // against the video output area.
+    // Fatal error or hardware context reset should've already been handled in
+    // MediaFoundationRenderer. Ignore other errors as video can possibly be
+    // seen but displayed incorrectly against the video output area.
     return;
   }
 
@@ -400,13 +401,13 @@ void MediaFoundationRendererClient::OnDCOMPSurfaceHandleSet(bool success) {
 }
 
 void MediaFoundationRendererClient::OnVideoFrameCreated(
-    scoped_refptr<VideoFrame> video_frame,
-    const gpu::Mailbox& mailbox) {
+    scoped_refptr<VideoFrame> video_frame) {
   DVLOG_FUNC(1);
   DCHECK(media_task_runner_->RunsTasksInCurrentSequence());
   DCHECK(has_video_);
-
-  video_frame->metadata().allow_overlay = true;
+  CHECK(video_frame->HasSharedImage());
+  video_frame->metadata().allow_overlay =
+      video_frame->shared_image()->usage().Has(gpu::SHARED_IMAGE_USAGE_SCANOUT);
 
   if (cdm_context_) {
     video_frame->metadata().protected_video = true;

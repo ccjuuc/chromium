@@ -14,6 +14,7 @@
 #include "ash/wm/toplevel_window_event_handler.h"
 #include "ash/wm/window_state.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
@@ -30,6 +31,7 @@
 #include "components/exo/test/exo_test_base.h"
 #include "components/exo/test/exo_test_data_exchange_delegate.h"
 #include "components/exo/test/exo_test_helper.h"
+#include "components/exo/test/mock_security_delegate.h"
 #include "components/exo/test/shell_surface_builder.h"
 #include "components/exo/test/test_data_device_delegate.h"
 #include "components/exo/test/test_data_source_delegate.h"
@@ -90,11 +92,17 @@ class TestExtendedDragSourceDelegate : public ExtendedDragSource::Delegate {
 
   bool ShouldLockCursor() const override { return lock_cursor_; }
 
-  void OnDataSourceDestroying() override { delete this; }
+  void OnDataSourceDestroying() override {}
+
+  base::WeakPtr<ExtendedDragSource::Delegate> GetWeakPtr() override {
+    return weak_factory_.GetWeakPtr();
+  }
 
  private:
   const bool allow_drap_no_target_;
   const bool lock_cursor_;
+
+  base::WeakPtrFactory<TestExtendedDragSourceDelegate> weak_factory_{this};
 };
 
 class ExtendedDragSourceTest : public test::ExoTestBase {
@@ -118,18 +126,23 @@ class ExtendedDragSourceTest : public test::ExoTestBase {
         std::make_unique<DataDevice>(&data_device_delegate_, seat_.get());
     data_source_delegate_ = std::make_unique<TestDataSourceDelegate>();
     data_source_ = std::make_unique<DataSource>(data_source_delegate_.get());
+    extended_drag_source_delegate_ =
+        std::make_unique<TestExtendedDragSourceDelegate>(
+            /*allow_drop_no_target=*/true,
+            /*lock_cursor=*/true);
     extended_drag_source_ = std::make_unique<ExtendedDragSource>(
-        data_source_.get(), new TestExtendedDragSourceDelegate(
-                                /*allow_drop_no_target=*/true,
-                                /*lock_cursor=*/true));
+        data_source_.get(), extended_drag_source_delegate_.get());
   }
 
   void TearDown() override {
+    drag_drop_controller_->set_toplevel_window_drag_delegate(nullptr);
     extended_drag_source_.reset();
+    extended_drag_source_delegate_.reset();
     data_source_.reset();
     data_source_delegate_.reset();
     data_device_.reset();
     seat_.reset();
+    drag_drop_controller_ = nullptr;
     test::ExoTestBase::TearDown();
   }
 
@@ -151,11 +164,12 @@ class ExtendedDragSourceTest : public test::ExoTestBase {
     return test::ExoTestHelper::CreateBuffer(size);
   }
 
-  raw_ptr<ash::DragDropController, DanglingUntriaged> drag_drop_controller_ =
-      nullptr;
+  raw_ptr<ash::DragDropController> drag_drop_controller_ = nullptr;
   std::unique_ptr<Seat> seat_;
   std::unique_ptr<DataSource> data_source_;
   std::unique_ptr<ExtendedDragSource> extended_drag_source_;
+  std::unique_ptr<TestExtendedDragSourceDelegate>
+      extended_drag_source_delegate_;
   std::unique_ptr<TestDataSourceDelegate> data_source_delegate_;
   test::TestDataDeviceDelegate data_device_delegate_;
   std::unique_ptr<DataDevice> data_device_;
@@ -676,8 +690,13 @@ TEST_F(ExtendedDragSourceTest, DragToAnotherDisplay) {
 
   // Create and map a toplevel shell surface, with the size larger than 2nd
   // display to test if configure uses the adjusted size.
+  test::MockSecurityDelegate security_delegate;
+  ON_CALL(security_delegate, CanSelfActivate(testing::_))
+      .WillByDefault(testing::Return(true));
+
   auto shell_surface =
       exo::test::ShellSurfaceBuilder(kOriginalWindowBounds.size())
+          .SetSecurityDelegate(&security_delegate)
           .SetOrigin(kOriginalWindowBounds.origin())
           .SetNoCommit()
           .BuildShellSurface();
@@ -863,6 +882,17 @@ TEST_F(ExtendedDragSourceTest,
             shell_surface->GetWidget()->GetWindowBoundsInScreen().size());
   EXPECT_EQ(kOriginalWindowBounds.origin() + gfx::Vector2d(kXTargetMovement, 0),
             client_window_origin);
+}
+
+TEST_F(ExtendedDragSourceTest, TestDelegateDestroyed) {
+  // Destroy the delegate. extended_drag_source_ now has a dead delegate.
+  extended_drag_source_delegate_.reset();
+
+  // Call methods on extended_drag_source_. They should not crash.
+  extended_drag_source_->OnToplevelWindowDragDropped();
+
+  extended_drag_source_->OnToplevelWindowDragStarted(
+      gfx::PointF(), ui::mojom::DragEventSource::kMouse, nullptr);
 }
 
 }  // namespace exo

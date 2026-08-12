@@ -66,7 +66,7 @@ const tests = {
     const credentials = await chrome.loginScreenStorage.retrieveCredentials();
     chrome.test.assertEq(loginScreenStorageResult, credentials);
     chrome.test.succeed();
-  }
+  },
 };
 
 // |waitForTestName()| waits for the browser test to reply with a test name
@@ -75,7 +75,7 @@ const tests = {
 function waitForTestName(testName) {
   if (!tests.hasOwnProperty(testName) ||
       typeof tests[testName] !== 'function') {
-    chrome.test.fail('Test not found: ' + testName);
+    chrome.test.fail(`Test not found: ${testName}`);
     return;
   }
 

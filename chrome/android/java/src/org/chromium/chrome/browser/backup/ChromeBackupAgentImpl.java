@@ -46,7 +46,6 @@ import org.chromium.components.signin.AccountManagerFacadeProvider;
 import org.chromium.components.signin.AccountUtils;
 import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.base.CoreAccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
 import org.chromium.components.user_prefs.UserPrefs;
@@ -64,7 +63,10 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -137,7 +139,7 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
         // User already signed-in with an account.
         int ALREADY_SIGNED_IN = 10;
 
-        int NUM_ENTRIES = ALREADY_SIGNED_IN;
+        int NUM_ENTRIES = ALREADY_SIGNED_IN + 1;
     }
 
     // LINT.ThenChange(/tools/metrics/histograms/metadata/android/enums.xml:AndroidRestoreResult)
@@ -150,25 +152,23 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
     @VisibleForTesting static final int MAX_BACKUP_FAILURES = 5;
 
     // Bool entries from SharedPreferences that should be backed up / restored.
-    static final String[] BACKUP_ANDROID_BOOL_PREFS = {
-        ChromePreferenceKeys.FIRST_RUN_FLOW_COMPLETE,
-        ChromePreferenceKeys.FIRST_RUN_LIGHTWEIGHT_FLOW_COMPLETE,
-        ChromePreferenceKeys.PRIVACY_METRICS_REPORTING_PERMITTED_BY_POLICY,
-        ChromePreferenceKeys.PRIVACY_METRICS_REPORTING_PERMITTED_BY_USER,
-    };
+    static final Set<String> BACKUP_ANDROID_BOOL_PREFS =
+            Collections.unmodifiableSet(
+                    new LinkedHashSet<>(
+                            List.of(
+                                    ChromePreferenceKeys.FIRST_RUN_FLOW_COMPLETE,
+                                    ChromePreferenceKeys.FIRST_RUN_LIGHTWEIGHT_FLOW_COMPLETE,
+                                    ChromePreferenceKeys
+                                            .PRIVACY_METRICS_REPORTING_PERMITTED_BY_POLICY,
+                                    ChromePreferenceKeys
+                                            .PRIVACY_METRICS_REPORTING_PERMITTED_BY_USER,
+                                    ChromePreferenceKeys
+                                            .PRIVACY_SHOULD_USE_METRICS_CHOICE_RESTRUCTURE)));
 
     // The supported PrefBackupSerializers, each responsible for allowlisting certain prefs for
     // backup & restore.
     static final List<PrefBackupSerializer> NATIVE_PREFS_SERIALIZERS =
-            List.of(
-                    new BoolPrefBackupSerializer(),
-                    new DictPrefBackupSerializer(),
-                    new IntPrefBackupSerializer());
-
-    // TODO(crbug.com/40066949): Remove key once all sync users are migrated to signed-in users.
-    // Key used to store the email of the syncing account. This email is obtained from
-    // IdentityManager during the backup.
-    static final String SYNCING_ACCOUNT_KEY = "google.services.username";
+            List.of(new DictPrefBackupSerializer(), new IntPrefBackupSerializer());
 
     // Key used to store the email of the signed-in account. This email is obtained from
     // IdentityManager during the backup.
@@ -205,9 +205,9 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
                 mValues = new ArrayList<>();
                 return;
             }
-            try {
-                FileInputStream instream = new FileInputStream(parceledState.getFileDescriptor());
-                ObjectInputStream in = new ObjectInputStream(instream);
+            try (FileInputStream instream =
+                            new FileInputStream(parceledState.getFileDescriptor());
+                    ObjectInputStream in = new ObjectInputStream(instream)) {
                 mNames = (ArrayList<String>) in.readObject();
                 mValues = (ArrayList<byte[]>) in.readObject();
             } catch (ClassNotFoundException e) {
@@ -222,17 +222,18 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
 
         @Override
         public boolean equals(Object other) {
-            if (!(other instanceof BackupState)) return false;
-            BackupState otherBackupState = (BackupState) other;
+            if (!(other instanceof BackupState otherBackupState)) return false;
             return mNames.equals(otherBackupState.mNames)
                     && Arrays.deepEquals(mValues.toArray(), otherBackupState.mValues.toArray());
         }
 
         public void save(ParcelFileDescriptor parceledState) throws IOException {
-            FileOutputStream outstream = new FileOutputStream(parceledState.getFileDescriptor());
-            ObjectOutputStream out = new ObjectOutputStream(outstream);
-            out.writeObject(mNames);
-            out.writeObject(mValues);
+            try (FileOutputStream outstream =
+                            new FileOutputStream(parceledState.getFileDescriptor());
+                    ObjectOutputStream out = new ObjectOutputStream(outstream)) {
+                out.writeObject(mNames);
+                out.writeObject(mValues);
+            }
         }
     }
 
@@ -240,8 +241,8 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
     // private again.
     @VisibleForTesting
     boolean initializeBrowser() {
-        // Workaround for https://crbug.com/718166. The backup agent is sometimes being started in a
-        // child process, before the child process loads its native library. If backup then loads
+        // Workaround for https://crbug.com/40518724. The backup agent is sometimes being started in
+        // a child process, before the child process loads its native library. If backup then loads
         // the native library the child process is left in a very confused state and crashes.
         if (ContentProcessInfo.inChildProcess()) {
             Log.e(TAG, "Backup agent started from child process");
@@ -284,8 +285,7 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
                             IdentityManager identityManager =
                                     IdentityServicesProvider.get().getIdentityManager(profile);
                             assumeNonNull(identityManager);
-                            signedInAccount.set(
-                                    identityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN));
+                            signedInAccount.set(identityManager.getPrimaryAccountInfo());
 
                             PrefService prefService = UserPrefs.get(profile);
                             for (PrefBackupSerializer serializer : NATIVE_PREFS_SERIALIZERS) {
@@ -398,16 +398,13 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
         final ArrayList<String> backupNames = new ArrayList<>();
         final ArrayList<byte[]> backupValues = new ArrayList<>();
 
-        @Nullable String restoredSyncUserEmail = null;
         @Nullable GaiaId restoredSignedInUserID = null;
         while (data.readNextHeader()) {
             String key = data.getKey();
             int dataSize = data.getDataSize();
             byte[] buffer = new byte[dataSize];
             data.readEntityData(buffer, 0, dataSize);
-            if (key.equals(ANDROID_DEFAULT_PREFIX + SYNCING_ACCOUNT_KEY)) {
-                restoredSyncUserEmail = new String(buffer);
-            } else if (key.equals(ANDROID_DEFAULT_PREFIX + SIGNED_IN_ACCOUNT_ID_KEY)) {
+            if (key.equals(ANDROID_DEFAULT_PREFIX + SIGNED_IN_ACCOUNT_ID_KEY)) {
                 String signedInUserId = new String(buffer);
                 restoredSignedInUserID =
                         TextUtils.isEmpty(signedInUserId) ? null : new GaiaId(signedInUserId);
@@ -418,7 +415,7 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
         }
 
         // If the backup contains no signed-in user, then don't restore anything.
-        if (restoredSignedInUserID == null && TextUtils.isEmpty(restoredSyncUserEmail)) {
+        if (restoredSignedInUserID == null) {
             setRestoreStatus(RestoreStatus.NO_SIGNED_IN_ACCOUNT_IN_BACKUP);
             Log.i(TAG, "The backup doesn't contain any signed-in user, not restoring");
             return;
@@ -470,13 +467,9 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
 
         // Chrome has to be running before it can check if the account exists. Because the native
         // library is already loaded Chrome startup should be fast.
+        // Start the browser if necessary.
         boolean browserStarted =
-                PostTask.runSynchronously(
-                        TaskTraits.UI_DEFAULT,
-                        () -> {
-                            // Start the browser if necessary.
-                            return initializeBrowser();
-                        });
+                PostTask.runSynchronously(TaskTraits.UI_DEFAULT, this::initializeBrowser);
         if (!browserStarted) {
             // Something went wrong starting Chrome, skip the restore.
             setRestoreStatus(RestoreStatus.BROWSER_STARTUP_FAILED);
@@ -511,12 +504,9 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
         @Nullable CoreAccountInfo signedInAccountInfo =
                 getDeviceAccountWithGaiaId(restoredSignedInUserID);
 
-        @Nullable CoreAccountInfo syncAccountInfo =
-                getDeviceAccountWithEmail(restoredSyncUserEmail);
-
         // If the previously signed-in account not found on the device, then don't restore
         // anything.
-        if (syncAccountInfo == null && signedInAccountInfo == null) {
+        if (signedInAccountInfo == null) {
             setRestoreStatus(RestoreStatus.ACCOUNT_NOT_FOUND);
             Log.i(TAG, "Previously signed-in account is not found on the device, not restoring");
             return;
@@ -538,18 +528,6 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
                         }
                     }
 
-                    // Migrate global sync settings to account settings when necessary.
-                    // It should be done after the restoration of the existing per-account settings
-                    // from the backup to avoid override, as mentioned above.
-                    final boolean shouldRestoreSelectedTypesAsAccountSettings =
-                            syncAccountInfo != null;
-                    if (shouldRestoreSelectedTypesAsAccountSettings) {
-                        assumeNonNull(syncAccountInfo);
-                        ChromeBackupAgentImplJni.get()
-                                .migrateGlobalDataTypePrefsToAccount(
-                                        prefService, syncAccountInfo.getGaiaId());
-                    }
-
                     // TODO(crbug.com/332710541): Another commit is done for signed-in users in
                     // SigninManager.SignInCallback.onPrefsCommitted(). Do a single one instead.
                     ChromeBackupAgentImplJni.get().commitPendingPrefWrites(prefService);
@@ -562,11 +540,11 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
         int prefixLength = ANDROID_DEFAULT_PREFIX.length();
         for (int i = 0; i < backupNames.size(); i++) {
             String name = backupNames.get(i);
-            if (name.startsWith(ANDROID_DEFAULT_PREFIX)
-                    && Arrays.asList(BACKUP_ANDROID_BOOL_PREFS)
-                            .contains(name.substring(prefixLength))) {
-                editor.putBoolean(
-                        name.substring(prefixLength), bytesToBoolean(backupValues.get(i)));
+            if (name.startsWith(ANDROID_DEFAULT_PREFIX)) {
+                String prefName = name.substring(prefixLength);
+                if (BACKUP_ANDROID_BOOL_PREFS.contains(prefName)) {
+                    editor.putBoolean(prefName, bytesToBoolean(backupValues.get(i)));
+                }
             }
         }
 
@@ -578,18 +556,11 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
                             return assertNonNull(
                                             IdentityServicesProvider.get()
                                                     .getIdentityManager(profile))
-                                    .hasPrimaryAccount(ConsentLevel.SIGNIN);
+                                    .hasPrimaryAccount();
                         });
         if (!hasPrimaryAccount) {
-            if (signedInAccountInfo != null) {
-                editor.apply();
-                signInAndWaitForResult(signedInAccountInfo);
-            } else {
-                // syncAccountInfo must be non-null at this point.
-                assertNonNull(syncAccountInfo);
-                editor.apply();
-                signInAndWaitForResult(syncAccountInfo);
-            }
+            editor.apply();
+            signInAndWaitForResult(signedInAccountInfo);
         } else {
             setRestoreStatus(RestoreStatus.ALREADY_SIGNED_IN);
         }
@@ -670,18 +641,6 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
         };
     }
 
-    private @Nullable CoreAccountInfo getDeviceAccountWithEmail(@Nullable String accountEmail) {
-        if (accountEmail == null) {
-            return null;
-        }
-
-        return PostTask.<@Nullable CoreAccountInfo>runSynchronously(
-                TaskTraits.UI_DEFAULT,
-                () -> {
-                    return AccountUtils.findAccountByEmail(getAccounts(), accountEmail);
-                });
-    }
-
     private @Nullable CoreAccountInfo getDeviceAccountWithGaiaId(@Nullable GaiaId accountGaiaId) {
         if (accountGaiaId == null) {
             return null;
@@ -747,7 +706,7 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
                     IdentityManager identityManager =
                             assertNonNull(
                                     IdentityServicesProvider.get().getIdentityManager(profile));
-                    if (identityManager.hasPrimaryAccount(ConsentLevel.SIGNIN)) {
+                    if (identityManager.hasPrimaryAccount()) {
                         // This may happen if the user is supervised as they will be signed in via
                         // {@link SigninChecker}.
                         callback.onSignInAborted();
@@ -761,13 +720,12 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
                                 // ability to re-show the confirmation dialog here anyways.
                                 if (isManaged) signinManager.setUserAcceptedAccountManagement(true);
                                 signinManager.runAfterOperationInProgress(
-                                        () -> {
-                                            signinManager.signin(
-                                                    accountInfo,
-                                                    SigninAccessPoint
-                                                            .POST_DEVICE_RESTORE_BACKGROUND_SIGNIN,
-                                                    callback);
-                                        });
+                                        () ->
+                                                signinManager.signin(
+                                                        accountInfo,
+                                                        SigninAccessPoint
+                                                                .POST_DEVICE_RESTORE_BACKGROUND_SIGNIN,
+                                                        callback));
                             };
 
                     signinManager.isAccountManaged(accountInfo, accountManagedCallback);
@@ -846,10 +804,5 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
     interface Natives {
         // See PrefService::CommitPendingWrite().
         void commitPendingPrefWrites(@JniType("PrefService*") PrefService prefService);
-
-        // Calls syncer::MigrateGlobalDataTypePrefsToAccount() to migrate global boolean sync prefs
-        // to account settings.
-        void migrateGlobalDataTypePrefsToAccount(
-                @JniType("PrefService*") PrefService prefService, @JniType("GaiaId") GaiaId gaiaId);
     }
 }

@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/file_system_provider/operations/get_metadata.h"
 
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -209,6 +210,26 @@ TEST_F(FileSystemProviderOperationsGetMetadataTest, ValidateIDLEntryMetadata) {
         /*root_entry=*/false));
   }
 
+  // `size` max - due to double precision, we need subtract quite a lot from
+  // int64_t's max to get a value that converts back to below int64_t's max.
+  {
+    EntryMetadata metadata;
+    metadata.size.emplace(double(std::numeric_limits<int64_t>::max()) - 513);
+    EXPECT_TRUE(ValidateIDLEntryMetadata(
+        metadata, ProvidedFileSystemInterface::METADATA_FIELD_SIZE,
+        /*root_entry=*/false));
+  }
+
+  // `size` too large - due to double precision, even `max()` converts to a
+  // value that is out of range.
+  {
+    EntryMetadata metadata;
+    metadata.size.emplace(double(std::numeric_limits<int64_t>::max()));
+    EXPECT_FALSE(ValidateIDLEntryMetadata(
+        metadata, ProvidedFileSystemInterface::METADATA_FIELD_SIZE,
+        /*root_entry=*/false));
+  }
+
   // Missing last modification time.
   {
     EntryMetadata metadata;
@@ -285,7 +306,7 @@ TEST_F(FileSystemProviderOperationsGetMetadataTest, Execute) {
   EXPECT_EQ(
       extensions::api::file_system_provider::OnGetMetadataRequested::kEventName,
       event->event_name);
-  const base::Value::List& event_args = event->event_args;
+  const base::ListValue& event_args = event->event_args;
   ASSERT_EQ(1u, event_args.size());
 
   const base::Value* options_as_value = &event_args[0];

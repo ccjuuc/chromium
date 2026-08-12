@@ -5,13 +5,13 @@
 #ifndef XENON_OVERLAY_CHROME_BROWSER_UI_VIEWS_SIDE_PANEL_XENON_AI_SIDE_PANEL_REGISTRATION_H_
 #define XENON_OVERLAY_CHROME_BROWSER_UI_VIEWS_SIDE_PANEL_XENON_AI_SIDE_PANEL_REGISTRATION_H_
 
-class Browser;
+class BrowserWindowInterface;
 class SidePanelRegistry;
 
 namespace xenon {
 
 // Registers the global Xenon AI side panel entry (before WebUI-browser return).
-void RegisterXenonAiGlobalSidePanelEntry(Browser* browser,
+void RegisterXenonAiGlobalSidePanelEntry(BrowserWindowInterface* browser,
                                          SidePanelRegistry* window_registry);
 
 }  // namespace xenon

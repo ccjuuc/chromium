@@ -6,6 +6,7 @@
 
 #include "base/run_loop.h"
 #include "base/test/gtest_util.h"
+#include "base/time/time_override.h"
 #include "media/base/media_content_type.h"
 #include "media/base/media_switches.h"
 #include "media/base/media_track.h"
@@ -19,17 +20,22 @@
 #include "third_party/blink/renderer/core/css/css_default_style_sheets.h"
 #include "third_party/blink/renderer/core/dom/dom_implementation.h"
 #include "third_party/blink/renderer/core/dom/element.h"
+#include "third_party/blink/renderer/core/dom/events/native_event_listener.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
 #include "third_party/blink/renderer/core/html/html_document.h"
+#include "third_party/blink/renderer/core/html/html_head_element.h"
 #include "third_party/blink/renderer/core/html/media/html_audio_element.h"
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
 #include "third_party/blink/renderer/core/html/media/media_error.h"
+#include "third_party/blink/renderer/core/html/media/media_source_attachment.h"
 #include "third_party/blink/renderer/core/html/media/media_video_visibility_tracker.h"
 #include "third_party/blink/renderer/core/html/time_ranges.h"
 #include "third_party/blink/renderer/core/html/track/audio_track_list.h"
+#include "third_party/blink/renderer/core/html/track/text_track.h"
+#include "third_party/blink/renderer/core/html/track/text_track_list.h"
 #include "third_party/blink/renderer/core/html/track/video_track_list.h"
 #include "third_party/blink/renderer/core/loader/empty_clients.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
@@ -53,6 +59,12 @@ using ::testing::Return;
 namespace blink {
 
 namespace {
+
+// Helper to simulate a Mojo IPC message from the Browser process.
+void SimulateRequestPlay(HTMLMediaElement* element, bool triggered_by_user) {
+  static_cast<media::mojom::blink::MediaPlayer*>(element)->RequestPlay(
+      triggered_by_user);
+}
 
 enum class TestURLScheme {
   kHttp,
@@ -83,10 +95,38 @@ AtomicString SrcSchemeToURL(TestURLScheme scheme) {
   }
 }
 
+class StubMediaSourceAttachment : public MediaSourceAttachment {
+ public:
+  StubMediaSourceAttachment() = default;
+  void Unregister() override {}
+  MediaSourceTracer* StartAttachingToMediaElement(HTMLMediaElement*,
+                                                  bool* success) override {
+    *success = true;
+    return nullptr;
+  }
+  void CompleteAttachingToMediaElement(
+      MediaSourceTracer* tracer,
+      std::unique_ptr<WebMediaSource>) override {}
+  void Close(MediaSourceTracer* tracer) override {}
+  WebTimeRanges BufferedInternal(MediaSourceTracer* tracer) const override {
+    return {};
+  }
+  WebTimeRanges SeekableInternal(MediaSourceTracer* tracer) const override {
+    return {};
+  }
+  void OnTrackChanged(MediaSourceTracer* tracer, TrackBase*) override {}
+  void OnElementTimeUpdate(double time) override {}
+  void OnElementError() override {}
+  void OnElementContextDestroyed() override {}
+};
+
 class MockWebMediaPlayer : public EmptyWebMediaPlayer {
  public:
+  MOCK_METHOD0(Play, void());
+  MOCK_METHOD0(UnlockBackgroundPlayback, void());
   MOCK_METHOD1(Pause, void(PauseReason));
   MOCK_METHOD0(OnTimeUpdate, void());
+  MOCK_CONST_METHOD0(Paused, bool());
   MOCK_CONST_METHOD0(Seekable, WebTimeRanges());
   MOCK_METHOD0(OnFrozen, void());
   MOCK_CONST_METHOD0(HasAudio, bool());
@@ -94,7 +134,9 @@ class MockWebMediaPlayer : public EmptyWebMediaPlayer {
   MOCK_CONST_METHOD0(Duration, double());
   MOCK_CONST_METHOD0(CurrentTime, double());
   MOCK_CONST_METHOD0(IsEnded, bool());
+  MOCK_METHOD0(DidLoadingProgress, bool());
   MOCK_CONST_METHOD0(GetNetworkState, NetworkState());
+  MOCK_CONST_METHOD0(GetReadyState, ReadyState());
   MOCK_CONST_METHOD0(WouldTaintOrigin, bool());
   MOCK_METHOD1(SetLatencyHint, void(double));
   MOCK_METHOD1(SetWasPlayedWithUserActivationAndHighMediaEngagement,
@@ -110,6 +152,9 @@ class MockWebMediaPlayer : public EmptyWebMediaPlayer {
   MOCK_CONST_METHOD0(DidLazyLoad, bool());
 
   MOCK_METHOD0(GetSrcAfterRedirects, GURL());
+
+  MOCK_CONST_METHOD0(HasAvailableVideoFrame, bool());
+  MOCK_CONST_METHOD0(HasReadableVideoFrame, bool());
 };
 
 class WebMediaStubLocalFrameClient : public EmptyLocalFrameClient {
@@ -253,6 +298,29 @@ class TestMediaPlayerObserver final
 
   void OnVideoVisibilityChanged(bool meets_visibility_threshold) override {}
 
+  void OnVideoFrameAvailabilityChanged(bool available) override {
+    received_video_frame_availability_ = available;
+    if (run_loop_) {
+      run_loop_->Quit();
+    }
+  }
+
+  void WaitForVideoFrameAvailability() {
+    if (received_video_frame_availability_.has_value()) {
+      return;
+    }
+    run_loop_ = std::make_unique<base::RunLoop>();
+    run_loop_->Run();
+  }
+
+  const std::optional<bool>& received_video_frame_availability() const {
+    return received_video_frame_availability_;
+  }
+
+  void ClearVideoFrameAvailability() {
+    received_video_frame_availability_.reset();
+  }
+
   // Getters used from HTMLMediaElementTest.
   bool received_media_playing() const { return received_media_playing_; }
 
@@ -289,6 +357,7 @@ class TestMediaPlayerObserver final
   std::optional<OnMetadataChangedResult> received_metadata_changed_result_;
   gfx::Size received_media_size_{0, 0};
   std::optional<bool> received_uses_audio_service_;
+  std::optional<bool> received_video_frame_availability_;
   media_session::mojom::blink::RemotePlaybackMetadataPtr
       received_remote_playback_metadata_;
 };
@@ -325,7 +394,8 @@ class HTMLMediaElementTest : public testing::TestWithParam<MediaTestParam> {
  protected:
   void SetUp() override {
     // Sniff the media player pointer to facilitate mocking.
-    auto mock_media_player = std::make_unique<MockWebMediaPlayer>();
+    auto mock_media_player =
+        std::make_unique<testing::NiceMock<MockWebMediaPlayer>>();
     media_player_weak_ = mock_media_player->AsWeakPtr();
     media_player_ = mock_media_player.get();
 
@@ -394,12 +464,20 @@ class HTMLMediaElementTest : public testing::TestWithParam<MediaTestParam> {
 
   bool ShouldDelayLoadEvent() { return Media()->should_delay_load_event_; }
 
+  void SetNetworkState(WebMediaPlayer::NetworkState state) {
+    Media()->SetNetworkState(state);
+  }
+
+  void NetworkStateChanged() { Media()->NetworkStateChanged(); }
+
   void SetReadyState(HTMLMediaElement::ReadyState state) {
     Media()->SetReadyState(state);
   }
 
-  void SetNetworkState(WebMediaPlayer::NetworkState state) {
-    Media()->SetNetworkState(state);
+  void ReadyStateChanged() { Media()->ReadyStateChanged(); }
+
+  TestMediaPlayerObserver& media_player_observer() {
+    return media_player_host_.observer();
   }
 
   bool MediaIsPlaying() const { return Media()->playing_; }
@@ -421,7 +499,22 @@ class HTMLMediaElementTest : public testing::TestWithParam<MediaTestParam> {
   }
 
   bool HasLazyLoadObserver() const {
-    return !!Media()->lazy_load_intersection_observer_;
+    return !!Media()->player_lazy_load_intersection_observer_;
+  }
+
+  void SetLazyMediaLoadStateToFullMediaForTesting() {
+    Media()->lazy_media_load_state_ =
+        decltype(Media()->lazy_media_load_state_)::kFullMedia;
+  }
+
+  void SetLazyMediaLoadStateToDeferredForTesting() {
+    Media()->lazy_media_load_state_ =
+        decltype(Media()->lazy_media_load_state_)::kDeferred;
+  }
+
+  bool IsLazyMediaLoadStateNoneForTesting() const {
+    return Media()->lazy_media_load_state_ ==
+           decltype(Media()->lazy_media_load_state_)::kNone;
   }
 
   bool ControlsVisible() const { return Media()->ShouldShowControls(); }
@@ -459,6 +552,39 @@ class HTMLMediaElementTest : public testing::TestWithParam<MediaTestParam> {
   }
 
   void ClearMediaPlayer() { Media()->ClearMediaPlayer(); }
+
+  bool TextTracksAreReady() const { return Media()->TextTracksAreReady(); }
+
+  bool PendingTextTracksContains(const TextTrack* track) const {
+    return Media()->text_tracks_when_resource_selection_began_.Contains(track);
+  }
+
+  size_t PendingTextTracksCount(const TextTrack* track) const {
+    size_t count = 0;
+    for (const auto& t : Media()->text_tracks_when_resource_selection_began_) {
+      if (t == track) {
+        ++count;
+      }
+    }
+    return count;
+  }
+
+  void AddPendingTextTracksFromCurrentList() {
+    Media()->AddPendingTextTracksFromCurrentList();
+  }
+
+  void FinishParsingChildren() { Media()->FinishParsingChildren(); }
+
+  void SetPreviousProgressTime() {
+    Media()->previous_progress_time_ = base::ElapsedTimer();
+  }
+
+  void CallProgressEventTimerFired() { Media()->ProgressEventTimerFired(); }
+
+  void SetMediaSourceAttachment(
+      scoped_refptr<MediaSourceAttachment> attachment) {
+    Media()->media_source_attachment_ = std::move(attachment);
+  }
 
  protected:
   // Helpers to call MediaPlayerObserver mojo methods and check their results.
@@ -547,16 +673,40 @@ class HTMLMediaElementTest : public testing::TestWithParam<MediaTestParam> {
 
   bool WasPlayerDestroyed() const { return !media_player_weak_; }
 
-  // Create a dummy page holder with the given security origin.
+  // Create a dummy page holder with the given security origin. If
+  // `with_mock_player` is true, the page is wired up with a fresh
+  // MockWebMediaPlayer so the load algorithm can complete after the element is
+  // moved into this page; otherwise the page has no injected player and any
+  // attempt to create one will DCHECK.
   std::unique_ptr<DummyPageHolder> CreatePageWithSecurityOrigin(
       const char* origin,
-      bool is_picture_in_picture) {
+      bool is_picture_in_picture,
+      bool with_mock_player = false) {
     // Make another document with the same security origin.
+    std::unique_ptr<WebMediaPlayer> player;
+    if (with_mock_player) {
+      auto mock_player =
+          std::make_unique<testing::NiceMock<MockWebMediaPlayer>>();
+      EXPECT_CALL(*mock_player, Seekable())
+          .WillRepeatedly(Return(WebTimeRanges()));
+      EXPECT_CALL(*mock_player, HasAudio()).WillRepeatedly(Return(true));
+      EXPECT_CALL(*mock_player, HasVideo()).WillRepeatedly(Return(true));
+      EXPECT_CALL(*mock_player, Duration()).WillRepeatedly(Return(1.0));
+      EXPECT_CALL(*mock_player, CurrentTime()).WillRepeatedly(Return(0));
+      EXPECT_CALL(*mock_player, Load(_, _, _, _))
+          .Times(AnyNumber())
+          .WillRepeatedly(Return(WebMediaPlayer::LoadTiming::kImmediate));
+      EXPECT_CALL(*mock_player, DidLazyLoad).WillRepeatedly(Return(false));
+      EXPECT_CALL(*mock_player, WouldTaintOrigin).WillRepeatedly(Return(true));
+      EXPECT_CALL(*mock_player, GetNetworkState)
+          .WillRepeatedly(Return(WebMediaPlayer::kNetworkStateIdle));
+      EXPECT_CALL(*mock_player, SetLatencyHint(_)).Times(AnyNumber());
+      player = std::move(mock_player);
+    }
 
     auto dummy_page_holder = std::make_unique<DummyPageHolder>(
         gfx::Size(), nullptr,
-        MakeGarbageCollected<WebMediaStubLocalFrameClient>(
-            /*player=*/nullptr));
+        MakeGarbageCollected<WebMediaStubLocalFrameClient>(std::move(player)));
     Document& document = dummy_page_holder->GetDocument();
     document.domWindow()->GetSecurityContext().SetSecurityOriginForTesting(
         SecurityOrigin::CreateFromString(origin));
@@ -684,10 +834,6 @@ class HTMLMediaElementTest : public testing::TestWithParam<MediaTestParam> {
   std::unique_ptr<DummyPageHolder> dummy_page_holder_;
 
  private:
-  TestMediaPlayerObserver& media_player_observer() {
-    return media_player_host_.observer();
-  }
-
   Persistent<HTMLMediaElement> media_;
   Persistent<FullscreenMockChromeClient> chrome_client_;
 
@@ -706,6 +852,50 @@ INSTANTIATE_TEST_SUITE_P(Audio,
 INSTANTIATE_TEST_SUITE_P(Video,
                          HTMLMediaElementTest,
                          testing::Values(MediaTestParam::kVideo));
+
+TEST_P(HTMLMediaElementTest, VideoFrameAvailability) {
+  if (GetParam() != MediaTestParam::kVideo) {
+    return;
+  }
+
+  Media()->SetSrc(AtomicString("http://example.com/foo.mp4"));
+  test::RunPendingTasks();
+
+  auto* video = To<HTMLVideoElement>(Media());
+  auto* player = static_cast<MockWebMediaPlayer*>(video->GetWebMediaPlayer());
+
+  // Initially, video frame should be available.
+  EXPECT_CALL(*player, HasAvailableVideoFrame()).WillRepeatedly(Return(true));
+  EXPECT_CALL(*player, HasReadableVideoFrame()).WillRepeatedly(Return(true));
+  video->UpdateVideoFrameAvailabilityForTest();
+  media_player_observer().WaitForVideoFrameAvailability();
+  EXPECT_TRUE(
+      media_player_observer().received_video_frame_availability().value());
+
+  // If encrypted, video frame should not be available.
+  media_player_observer().ClearVideoFrameAvailability();
+  video->SetIsEncryptedForTesting(true);
+  video->UpdateVideoFrameAvailabilityForTest();
+  media_player_observer().WaitForVideoFrameAvailability();
+  EXPECT_FALSE(
+      media_player_observer().received_video_frame_availability().value());
+
+  // If not encrypted, video frame should be available again.
+  media_player_observer().ClearVideoFrameAvailability();
+  video->SetIsEncryptedForTesting(false);
+  video->UpdateVideoFrameAvailabilityForTest();
+  media_player_observer().WaitForVideoFrameAvailability();
+  EXPECT_TRUE(
+      media_player_observer().received_video_frame_availability().value());
+
+  // If no readable frame, video frame should not be available.
+  media_player_observer().ClearVideoFrameAvailability();
+  EXPECT_CALL(*player, HasReadableVideoFrame()).WillRepeatedly(Return(false));
+  video->UpdateVideoFrameAvailabilityForTest();
+  media_player_observer().WaitForVideoFrameAvailability();
+  EXPECT_FALSE(
+      media_player_observer().received_video_frame_availability().value());
+}
 
 TEST_P(HTMLMediaElementTest, effectiveMediaVolume) {
   struct TestData {
@@ -1144,6 +1334,132 @@ TEST_P(HTMLMediaElementTest, SetTrackStateFromDemuxer) {
   testing::Mock::VerifyAndClearExpectations(MockMediaPlayer());
 }
 
+// Builds a non-loadable text track in the given mode/readiness, appends it to
+// the media element, and marks it configured so AutomaticTrackSelection
+// leaves its mode alone.
+namespace {
+TextTrack* AppendConfiguredTextTrack(HTMLMediaElement* media,
+                                     TextTrackMode mode,
+                                     TextTrack::ReadinessState readiness) {
+  auto* track = MakeGarbageCollected<TextTrack>(
+      V8TextTrackKind(V8TextTrackKind::Enum::kCaptions), g_empty_atom,
+      g_empty_atom, *media);
+  track->SetReadinessState(readiness);
+  media->textTracks()->Append(track);
+  track->SetModeEnum(mode);
+  track->SetHasBeenConfigured(true);
+  return track;
+}
+}  // namespace
+
+// LoadInternal populates the pending-text-track snapshot with non-disabled,
+// still-loading tracks.
+TEST_P(HTMLMediaElementTest, TextTrackSnapshotPopulatedByLoadInternal) {
+  TextTrack* track = AppendConfiguredTextTrack(Media(), TextTrackMode::kHidden,
+                                               TextTrack::kLoading);
+
+  Media()->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+
+  EXPECT_TRUE(PendingTextTracksContains(track));
+  EXPECT_FALSE(TextTracksAreReady());
+
+  // The ready-state gate lifts once the track finishes loading.
+  track->SetReadinessState(TextTrack::kLoaded);
+  EXPECT_TRUE(TextTracksAreReady());
+}
+
+// Disabled tracks are skipped by the snapshot.
+TEST_P(HTMLMediaElementTest, TextTrackSnapshotSkipsDisabledTracks) {
+  TextTrack* track = AppendConfiguredTextTrack(
+      Media(), TextTrackMode::kDisabled, TextTrack::kLoading);
+
+  Media()->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+
+  EXPECT_FALSE(PendingTextTracksContains(track));
+  EXPECT_TRUE(TextTracksAreReady());
+}
+
+// Tracks already loaded (or failed to load) are skipped by the snapshot.
+TEST_P(HTMLMediaElementTest, TextTrackSnapshotSkipsAlreadyLoadedTracks) {
+  TextTrack* track = AppendConfiguredTextTrack(Media(), TextTrackMode::kHidden,
+                                               TextTrack::kLoaded);
+
+  Media()->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+
+  EXPECT_FALSE(PendingTextTracksContains(track));
+  EXPECT_TRUE(TextTracksAreReady());
+}
+
+// While the blocked-on-parser flag is set, TextTracksAreReady() must return
+// false even when the pending list is empty.
+TEST_P(HTMLMediaElementTest, TextTracksAreReadyFalseWhileBlockedOnParser) {
+  ASSERT_TRUE(TextTracksAreReady());
+
+  Media()->BeginParsingChildren();
+  EXPECT_FALSE(TextTracksAreReady());
+
+  FinishParsingChildren();
+  EXPECT_TRUE(TextTracksAreReady());
+}
+
+// On parser pop, FinishParsingChildren must populate the pending text tracks
+// list, so a default <track> that was just promoted gates ReadyState until it
+// finishes loading.
+TEST_P(HTMLMediaElementTest, FinishParsingChildrenPopulatesPendingTracks) {
+  Media()->BeginParsingChildren();
+  TextTrack* track = AppendConfiguredTextTrack(Media(), TextTrackMode::kHidden,
+                                               TextTrack::kLoading);
+  ASSERT_FALSE(PendingTextTracksContains(track));
+  ASSERT_FALSE(TextTracksAreReady());
+
+  FinishParsingChildren();
+
+  EXPECT_TRUE(PendingTextTracksContains(track));
+  EXPECT_FALSE(TextTracksAreReady());
+}
+
+// Repeated AddPendingTextTracksFromCurrentList calls do not duplicate entries.
+TEST_P(HTMLMediaElementTest, AddPendingTextTracksFromCurrentListIsIdempotent) {
+  TextTrack* track = AppendConfiguredTextTrack(Media(), TextTrackMode::kHidden,
+                                               TextTrack::kLoading);
+
+  AddPendingTextTracksFromCurrentList();
+  AddPendingTextTracksFromCurrentList();
+  AddPendingTextTracksFromCurrentList();
+
+  EXPECT_EQ(1u, PendingTextTracksCount(track));
+  EXPECT_FALSE(TextTracksAreReady());
+}
+
+// Each resource selection cycle clears the snapshot, so a previously-captured
+// track that is no longer eligible (e.g. now disabled) is not retained.
+TEST_P(HTMLMediaElementTest,
+       ResourceSelectionAlgorithmClearsTextTrackSnapshot) {
+  TextTrack* track = AppendConfiguredTextTrack(Media(), TextTrackMode::kHidden,
+                                               TextTrack::kLoading);
+
+  // First load cycle captures the track.
+  Media()->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+  ASSERT_TRUE(PendingTextTracksContains(track));
+  EXPECT_FALSE(TextTracksAreReady());
+
+  // Disable the track and start a new load cycle. The clear runs synchronously
+  // from load(); avoid pumping tasks so we don't create a second player.
+  track->SetModeEnum(TextTrackMode::kDisabled);
+  Media()->load();
+  EXPECT_FALSE(PendingTextTracksContains(track));
+  EXPECT_TRUE(TextTracksAreReady());
+
+  // The later populate step must also skip the now-disabled track.
+  AddPendingTextTracksFromCurrentList();
+  EXPECT_FALSE(PendingTextTracksContains(track));
+  EXPECT_TRUE(TextTracksAreReady());
+}
+
 // Ensure a visibility observer is created for lazy loading.
 TEST_P(HTMLMediaElementTest, VisibilityObserverCreatedForLazyLoad) {
   Media()->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
@@ -1153,6 +1469,24 @@ TEST_P(HTMLMediaElementTest, VisibilityObserverCreatedForLazyLoad) {
 
   SetReadyState(HTMLMediaElement::kHaveFutureData);
   EXPECT_EQ(HasLazyLoadObserver(), GetParam() == MediaTestParam::kVideo);
+}
+
+TEST_P(HTMLMediaElementTest, LoadAlgorithmResetsLazyMediaLoadState) {
+  ScopedLazyLoadVideoAndAudioForTest scoped_feature(true);
+
+  SetLazyMediaLoadStateToFullMediaForTesting();
+  Media()->load();
+
+  EXPECT_TRUE(IsLazyMediaLoadStateNoneForTesting());
+}
+
+TEST_P(HTMLMediaElementTest, ClearMediaPlayerResetsLazyMediaLoadState) {
+  ScopedLazyLoadVideoAndAudioForTest scoped_feature(true);
+
+  SetLazyMediaLoadStateToDeferredForTesting();
+  ClearMediaPlayer();
+
+  EXPECT_TRUE(IsLazyMediaLoadStateNoneForTesting());
 }
 
 TEST_P(HTMLMediaElementTest, DomInteractive) {
@@ -1795,6 +2129,127 @@ TEST_P(HTMLMediaElementTest,
   EXPECT_NE(old_frame, Media()->LocalFrameForPlayer());
 }
 
+// Listener that counts how many times an event of the given type fires, used
+// by the document-move tests below to assert presence/absence of play/pause.
+class EventCountingListener final : public NativeEventListener {
+ public:
+  void Invoke(ExecutionContext*, Event*) override { ++count_; }
+  int count() const { return count_; }
+
+ private:
+  int count_ = 0;
+};
+
+// A document move that doesn't keep the player (same-origin without
+// kDocumentPictureInPictureAPI) re-runs the load algorithm. The HTML spec
+// does not treat a cross-document move as a pause trigger, so the element
+// must remain unpaused. Verify the script-visible state (paused IDL attribute
+// and the :paused / :playing pseudo-classes) is preserved.
+TEST_P(HTMLMediaElementTest,
+       PseudoClassesAndPausedStatePreservedAfterDocumentMove) {
+  ScopedDocumentPictureInPictureAPIForTest scoped_feature(false);
+  ScopedCSSMediaElementPseudosForTest scoped_pseudos(true);
+
+  const char* origin = "https://a.com";
+  SetSecurityOrigin(origin);
+  Media()->GetDocument().body()->AppendChild(Media());
+  WaitForPlayer();
+  ASSERT_FALSE(Media()->paused());
+  ASSERT_TRUE(Media()->matches(AtomicString(":playing")));
+  ASSERT_FALSE(Media()->matches(AtomicString(":paused")));
+
+  auto new_dummy_page_holder =
+      CreatePageWithSecurityOrigin(origin, /*is_picture_in_picture=*/false);
+  new_dummy_page_holder->GetDocument().body()->AppendChild(Media());
+
+  EXPECT_FALSE(Media()->paused());
+  EXPECT_TRUE(Media()->matches(AtomicString(":playing")));
+  EXPECT_FALSE(Media()->matches(AtomicString(":paused")));
+}
+
+// Moving a playing element to a new document must route the playback restore
+// through PlayInternal(), which schedules a "play" event. Verifying that the
+// event fires confirms the canonical state transition ran.
+//
+// The element is inserted into both documents' trees so that RemovedFrom()
+// fires on the move and OnRemovedFromDocumentTimerFired() observes the
+// element as connected to the destination document, exercising the realistic
+// flow that the companion isConnected() guard depends on.
+TEST_P(HTMLMediaElementTest, PlayEventFiredAfterDocumentMoveOfPlayingElement) {
+  ScopedDocumentPictureInPictureAPIForTest scoped_feature(false);
+
+  const char* origin = "https://a.com";
+  SetSecurityOrigin(origin);
+  Media()->GetDocument().body()->AppendChild(Media());
+  WaitForPlayer();
+  ASSERT_FALSE(Media()->paused());
+
+  auto* play_listener = MakeGarbageCollected<EventCountingListener>();
+  Media()->addEventListener(event_type_names::kPlay, play_listener);
+
+  auto new_dummy_page_holder = CreatePageWithSecurityOrigin(
+      origin, /*is_picture_in_picture=*/false, /*with_mock_player=*/true);
+  new_dummy_page_holder->GetDocument().body()->AppendChild(Media());
+  test::RunPendingTasks();
+
+  EXPECT_GE(play_listener->count(), 1);
+}
+
+// The companion to the test above: a cross-document move is not a pause
+// trigger, so no "pause" event must fire on the element even though the
+// implementation tears down the player and re-runs the load algorithm.
+//
+// Inserting the element into both documents' trees is what makes the test
+// realistic: RemovedFrom() fires on removal from the old document and
+// schedules OnRemovedFromDocumentTimer; the isConnected() guard in that
+// timer must observe the element as still connected to the destination
+// document and skip its PauseInternal() call.
+TEST_P(HTMLMediaElementTest,
+       PauseEventNotFiredAfterDocumentMoveOfPlayingElement) {
+  ScopedDocumentPictureInPictureAPIForTest scoped_feature(false);
+
+  const char* origin = "https://a.com";
+  SetSecurityOrigin(origin);
+  Media()->GetDocument().body()->AppendChild(Media());
+  WaitForPlayer();
+  ASSERT_FALSE(Media()->paused());
+
+  auto* pause_listener = MakeGarbageCollected<EventCountingListener>();
+  Media()->addEventListener(event_type_names::kPause, pause_listener);
+
+  auto new_dummy_page_holder = CreatePageWithSecurityOrigin(
+      origin, /*is_picture_in_picture=*/false, /*with_mock_player=*/true);
+  new_dummy_page_holder->GetDocument().body()->AppendChild(Media());
+  test::RunPendingTasks();
+
+  EXPECT_EQ(pause_listener->count(), 0);
+}
+
+// Moving an already paused element must not silently flip the IDL paused
+// attribute back to false. Only elements that were playing at the time of the
+// move should be re-played; paused elements stay paused.
+TEST_P(HTMLMediaElementTest, PausedElementStaysPausedAfterDocumentMove) {
+  ScopedDocumentPictureInPictureAPIForTest scoped_feature(false);
+
+  const char* origin = "https://a.com";
+  SetSecurityOrigin(origin);
+  Media()->GetDocument().body()->AppendChild(Media());
+  WaitForPlayer();
+  Media()->pause();
+  ASSERT_TRUE(Media()->paused());
+
+  auto* play_listener = MakeGarbageCollected<EventCountingListener>();
+  Media()->addEventListener(event_type_names::kPlay, play_listener);
+
+  auto new_dummy_page_holder = CreatePageWithSecurityOrigin(
+      origin, /*is_picture_in_picture=*/false, /*with_mock_player=*/true);
+  new_dummy_page_holder->GetDocument().body()->AppendChild(Media());
+  test::RunPendingTasks();
+
+  EXPECT_TRUE(Media()->paused());
+  EXPECT_EQ(play_listener->count(), 0);
+}
+
 TEST_P(HTMLMediaElementTest, PlayedWithoutUserActivation) {
   Media()->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
   test::RunPendingTasks();
@@ -1805,6 +2260,43 @@ TEST_P(HTMLMediaElementTest, PlayedWithoutUserActivation) {
   EXPECT_CALL(*MockMediaPlayer(),
               SetWasPlayedWithUserActivationAndHighMediaEngagement(false));
   Media()->Play();
+}
+
+TEST_P(HTMLMediaElementTest, RequestPlay_UserTriggered) {
+  Media()->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+  SetReadyState(HTMLMediaElement::kHaveEnoughData);
+  test::RunPendingTasks();
+
+  // It should just play directly when triggered by the user.
+  EXPECT_CALL(*MockMediaPlayer(),
+              SetWasPlayedWithUserActivationAndHighMediaEngagement(testing::_));
+  EXPECT_CALL(*MockMediaPlayer(), Paused()).WillRepeatedly(Return(true));
+  EXPECT_CALL(*MockMediaPlayer(), Play());
+  SimulateRequestPlay(Media(), /*triggered_by_user=*/true);
+
+  // The frame should be granted transient user activation.
+  EXPECT_TRUE(LocalFrame::HasTransientUserActivation(
+      Media()->GetDocument().GetFrame()));
+}
+
+TEST_P(HTMLMediaElementTest, RequestPlay_SystemTriggered) {
+  Media()->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+  SetReadyState(HTMLMediaElement::kHaveEnoughData);
+  test::RunPendingTasks();
+
+  // It should call UnlockBackgroundPlayback when triggered by the system.
+  EXPECT_CALL(*MockMediaPlayer(),
+              SetWasPlayedWithUserActivationAndHighMediaEngagement(testing::_));
+  EXPECT_CALL(*MockMediaPlayer(), UnlockBackgroundPlayback());
+  EXPECT_CALL(*MockMediaPlayer(), Paused()).WillRepeatedly(Return(true));
+  EXPECT_CALL(*MockMediaPlayer(), Play());
+  SimulateRequestPlay(Media(), /*triggered_by_user=*/false);
+
+  // The frame should NOT be granted transient user activation.
+  EXPECT_FALSE(LocalFrame::HasTransientUserActivation(
+      Media()->GetDocument().GetFrame()));
 }
 
 TEST_P(HTMLMediaElementTest, PlayedWithUserActivation) {
@@ -2645,6 +3137,301 @@ TEST_P(HTMLMediaElementTest, StartVideoWithDoubleTrackSelection) {
   if (!audio_only) {
     EXPECT_TRUE(Media()->videoTracks().AnonymousIndexedGetter(0)->selected());
   }
+}
+
+// crbug.com/497011407. AddTrack() crashed by invalid UTF-8.
+TEST_P(HTMLMediaElementTest, AddTrackCrash) {
+  auto* element = Media();
+  element->AddTrackForTesting(media::MediaTrack::CreateAudioTrack(
+      "audio1", media::MediaTrack::AudioKind::kMain, "label\x80", "lang\x80",
+      true, 0));
+  if (GetParam() == MediaTestParam::kVideo) {
+    element->AddTrackForTesting(media::MediaTrack::CreateVideoTrack(
+        "video1", media::MediaTrack::VideoKind::kMain, "label\x80", "lang\x80",
+        true, 0));
+  }
+}
+
+TEST_P(HTMLMediaElementTest, PlayingAndPausedPseudo) {
+  ScopedCSSMediaElementPseudosForTest scoped_pseudos(true);
+
+  // Initially paused.
+  EXPECT_TRUE(Media()->matches(AtomicString(":paused")));
+  EXPECT_FALSE(Media()->matches(AtomicString(":playing")));
+
+  // Play.
+  Media()->Play();
+  EXPECT_FALSE(Media()->matches(AtomicString(":paused")));
+  EXPECT_TRUE(Media()->matches(AtomicString(":playing")));
+
+  // Pause.
+  Media()->pause();
+  EXPECT_TRUE(Media()->matches(AtomicString(":paused")));
+  EXPECT_FALSE(Media()->matches(AtomicString(":playing")));
+}
+
+TEST_P(HTMLMediaElementTest, SeekingPseudo) {
+  ScopedCSSMediaElementPseudosForTest scoped_pseudos(true);
+
+  // Set the element up to be seekable to 0.5.
+  Media()->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+  SetReadyState(HTMLMediaElement::kHaveMetadata);
+  WebTimeRanges seekable;
+  seekable.Add(0, 1.0);
+  EXPECT_CALL(*MockMediaPlayer(), Seekable()).WillRepeatedly(Return(seekable));
+
+  // Start seek.
+  EXPECT_FALSE(Media()->matches(AtomicString(":seeking")));
+  Media()->setCurrentTime(0.5);
+  EXPECT_TRUE(Media()->matches(AtomicString(":seeking")));
+
+  // Finish seek.
+  SetReadyState(HTMLMediaElement::kHaveCurrentData);
+  TimeChanged();
+  EXPECT_FALSE(Media()->matches(AtomicString(":seeking")));
+}
+
+TEST_P(HTMLMediaElementTest, BufferingAndStalledPseudoTransitions) {
+  ScopedCSSMediaElementPseudosForTest scoped_pseudos(true);
+
+  // Insert the element and some style so that there's a need to recalculate
+  // style.
+  Media()->GetDocument().body()->AppendChild(Media());
+  Media()->GetDocument().head()->SetInnerHTMLWithoutTrustedTypes(
+      "<style>:buffering { outline: 1px solid blue } "
+      ":stalled { outline: 1px solid green }</style>");
+  UpdateLifecyclePhases();
+
+  // Initially neither pseudo-class matches as none of the conditions hold.
+  ASSERT_TRUE(Media()->paused());
+  ASSERT_EQ(Media()->getNetworkState(), HTMLMediaElement::kNetworkEmpty);
+  ASSERT_EQ(Media()->getReadyState(), HTMLMediaElement::kHaveNothing);
+  EXPECT_FALSE(Media()->MatchesBufferingPseudo());
+  EXPECT_FALSE(Media()->MatchesStalledPseudo());
+
+  // Loading a source and playing makes :buffering match, but not :stalled.
+  EXPECT_FALSE(Media()->NeedsStyleRecalc());
+  WaitForPlayer();
+  ASSERT_FALSE(Media()->paused());
+  ASSERT_EQ(Media()->getNetworkState(), HTMLMediaElement::kNetworkLoading);
+  ASSERT_EQ(Media()->getReadyState(), HTMLMediaElement::kHaveNothing);
+  EXPECT_TRUE(Media()->MatchesBufferingPseudo());
+  EXPECT_FALSE(Media()->MatchesStalledPseudo());
+  EXPECT_TRUE(Media()->NeedsStyleRecalc());
+  UpdateLifecyclePhases();
+
+  // Pin networkState to NETWORK_LOADING to prevent it from going to
+  // NETWORK_IDLE when the underlying source is fully loaded.
+  EXPECT_CALL(*MockMediaPlayer(), GetNetworkState())
+      .WillRepeatedly(Return(WebMediaPlayer::kNetworkStateLoading));
+
+  // Advancing readyState to HAVE_CURRENT_DATA and :buffering still matches,
+  // with all three conditions at the edge condition.
+  EXPECT_CALL(*MockMediaPlayer(), GetReadyState())
+      .WillRepeatedly(Return(WebMediaPlayer::kReadyStateHaveCurrentData));
+  ReadyStateChanged();
+  ASSERT_FALSE(Media()->paused());
+  ASSERT_EQ(Media()->getNetworkState(), HTMLMediaElement::kNetworkLoading);
+  ASSERT_EQ(Media()->getReadyState(), HTMLMediaElement::kHaveCurrentData);
+  EXPECT_TRUE(Media()->MatchesBufferingPseudo());
+  EXPECT_FALSE(Media()->MatchesStalledPseudo());
+  EXPECT_FALSE(Media()->NeedsStyleRecalc());
+
+  // Trigger :stalled by reporting no loading progress during 10 seconds.
+  EXPECT_FALSE(Media()->MatchesStalledPseudo());
+  {
+    static thread_local base::TimeTicks mock_time_ticks;
+    mock_time_ticks = base::TimeTicks::Now();
+    base::subtle::ScopedTimeClockOverrides time_override(
+        nullptr, []() { return mock_time_ticks; }, nullptr);
+
+    SetPreviousProgressTime();
+    EXPECT_CALL(*MockMediaPlayer(), DidLoadingProgress())
+        .WillRepeatedly(Return(false));
+    mock_time_ticks += base::Seconds(10);
+    CallProgressEventTimerFired();
+  }
+  EXPECT_TRUE(Media()->MatchesBufferingPseudo());
+  EXPECT_TRUE(Media()->MatchesStalledPseudo());
+  EXPECT_TRUE(Media()->NeedsStyleRecalc());
+  UpdateLifecyclePhases();
+  EXPECT_FALSE(Media()->NeedsStyleRecalc());
+
+  // Invalidate :buffering and :stalled through paused state.
+  Media()->pause();
+  EXPECT_FALSE(Media()->MatchesBufferingPseudo());
+  EXPECT_FALSE(Media()->MatchesStalledPseudo());
+  EXPECT_TRUE(Media()->NeedsStyleRecalc());
+  UpdateLifecyclePhases();
+  EXPECT_FALSE(Media()->NeedsStyleRecalc());
+  // Restore paused state.
+  Media()->Play();
+  EXPECT_TRUE(Media()->MatchesBufferingPseudo());
+  EXPECT_TRUE(Media()->MatchesStalledPseudo());
+  EXPECT_TRUE(Media()->NeedsStyleRecalc());
+  UpdateLifecyclePhases();
+  EXPECT_FALSE(Media()->NeedsStyleRecalc());
+
+  // Invalidate :buffering and :stalled through networkState.
+  EXPECT_CALL(*MockMediaPlayer(), GetNetworkState())
+      .WillRepeatedly(Return(WebMediaPlayer::kNetworkStateIdle));
+  NetworkStateChanged();
+  EXPECT_FALSE(Media()->MatchesBufferingPseudo());
+  EXPECT_FALSE(Media()->MatchesStalledPseudo());
+  EXPECT_TRUE(Media()->NeedsStyleRecalc());
+  UpdateLifecyclePhases();
+  EXPECT_FALSE(Media()->NeedsStyleRecalc());
+  // Restore networkState.
+  EXPECT_CALL(*MockMediaPlayer(), GetNetworkState())
+      .WillRepeatedly(Return(WebMediaPlayer::kNetworkStateLoading));
+  NetworkStateChanged();
+  EXPECT_TRUE(Media()->MatchesBufferingPseudo());
+  EXPECT_TRUE(Media()->MatchesStalledPseudo());
+  EXPECT_TRUE(Media()->NeedsStyleRecalc());
+  UpdateLifecyclePhases();
+  EXPECT_FALSE(Media()->NeedsStyleRecalc());
+
+  // Invalidate :buffering and :stalled through readyState.
+  EXPECT_CALL(*MockMediaPlayer(), GetReadyState())
+      .WillRepeatedly(Return(WebMediaPlayer::kReadyStateHaveFutureData));
+  ReadyStateChanged();
+  EXPECT_FALSE(Media()->MatchesBufferingPseudo());
+  EXPECT_FALSE(Media()->MatchesStalledPseudo());
+  EXPECT_TRUE(Media()->NeedsStyleRecalc());
+  UpdateLifecyclePhases();
+  EXPECT_FALSE(Media()->NeedsStyleRecalc());
+  // Restore readyState.
+  EXPECT_CALL(*MockMediaPlayer(), GetReadyState())
+      .WillRepeatedly(Return(WebMediaPlayer::kReadyStateHaveCurrentData));
+  ReadyStateChanged();
+  EXPECT_TRUE(Media()->MatchesBufferingPseudo());
+  EXPECT_TRUE(Media()->MatchesStalledPseudo());
+  EXPECT_TRUE(Media()->NeedsStyleRecalc());
+  UpdateLifecyclePhases();
+  EXPECT_FALSE(Media()->NeedsStyleRecalc());
+
+  // Make :stalled no longer match by reporting loading progress.
+  {
+    static thread_local base::TimeTicks mock_time_ticks;
+    mock_time_ticks = base::TimeTicks::Now();
+    base::subtle::ScopedTimeClockOverrides time_override(
+        nullptr, []() { return mock_time_ticks; }, nullptr);
+
+    EXPECT_CALL(*MockMediaPlayer(), DidLoadingProgress())
+        .WillRepeatedly(Return(true));
+    CallProgressEventTimerFired();
+  }
+  EXPECT_TRUE(Media()->MatchesBufferingPseudo());
+  EXPECT_FALSE(Media()->MatchesStalledPseudo());
+  EXPECT_TRUE(Media()->NeedsStyleRecalc());
+  UpdateLifecyclePhases();
+  EXPECT_FALSE(Media()->NeedsStyleRecalc());
+}
+
+TEST_P(HTMLMediaElementTest, BufferingAndStalledPseudoClearedByLoad) {
+  ScopedCSSMediaElementPseudosForTest scoped_pseudos(true);
+
+  // Insert the element and some style so that there's a need to recalculate
+  // style.
+  Media()->GetDocument().body()->AppendChild(Media());
+  Media()->GetDocument().head()->SetInnerHTMLWithoutTrustedTypes(
+      "<style>:buffering { outline: 1px solid blue } "
+      ":stalled { outline: 1px solid green }</style>");
+  UpdateLifecyclePhases();
+
+  // Set the states that make :buffering match.
+  WaitForPlayer();
+  EXPECT_CALL(*MockMediaPlayer(), GetNetworkState())
+      .WillRepeatedly(Return(WebMediaPlayer::kNetworkStateLoading));
+  EXPECT_CALL(*MockMediaPlayer(), GetReadyState())
+      .WillRepeatedly(Return(WebMediaPlayer::kReadyStateHaveCurrentData));
+  NetworkStateChanged();
+  ReadyStateChanged();
+  EXPECT_TRUE(Media()->MatchesBufferingPseudo());
+  UpdateLifecyclePhases();
+
+  // Trigger :stalled by reporting no loading progress during 10 seconds.
+  {
+    static thread_local base::TimeTicks mock_time_ticks;
+    mock_time_ticks = base::TimeTicks::Now();
+    base::subtle::ScopedTimeClockOverrides time_override(
+        nullptr, []() { return mock_time_ticks; }, nullptr);
+
+    SetPreviousProgressTime();
+    EXPECT_CALL(*MockMediaPlayer(), DidLoadingProgress())
+        .WillRepeatedly(Return(false));
+    mock_time_ticks += base::Seconds(10);
+    CallProgressEventTimerFired();
+  }
+  EXPECT_TRUE(Media()->MatchesBufferingPseudo());
+  EXPECT_TRUE(Media()->MatchesStalledPseudo());
+  UpdateLifecyclePhases();
+
+  // Invoke the load algorithm and confirm style is invalidated and :buffering
+  // and :stalled don't match.
+  EXPECT_FALSE(Media()->NeedsStyleRecalc());
+  Media()->load();
+  EXPECT_TRUE(Media()->NeedsStyleRecalc());
+  EXPECT_FALSE(Media()->MatchesBufferingPseudo());
+  EXPECT_FALSE(Media()->MatchesStalledPseudo());
+}
+
+TEST_P(HTMLMediaElementTest, MutedPseudo) {
+  ScopedCSSMediaElementPseudosForTest scoped_pseudos(true);
+
+  EXPECT_FALSE(Media()->matches(AtomicString(":muted")));
+
+  Media()->setMuted(true);
+  EXPECT_TRUE(Media()->matches(AtomicString(":muted")));
+
+  Media()->setMuted(false);
+  EXPECT_FALSE(Media()->matches(AtomicString(":muted")));
+}
+
+TEST_P(HTMLMediaElementTest, VolumeLockedPseudo) {
+  ScopedCSSMediaElementPseudosForTest scoped_pseudos(true);
+
+  // :volume-locked never matches so this test isn't very interesting:
+  EXPECT_FALSE(Media()->matches(AtomicString(":volume-locked")));
+}
+
+TEST_P(HTMLMediaElementTest, MediaShouldBeOpaque_MSE) {
+  Media()->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  test::RunPendingTasks();
+  ASSERT_TRUE(Media()->GetWebMediaPlayer());
+
+  // MSE content should never be opaque.
+  SetMediaSourceAttachment(base::MakeRefCounted<StubMediaSourceAttachment>());
+
+  // Set some state that would normally make it opaque.
+  EXPECT_CALL(*MockMediaPlayer(), WouldTaintOrigin())
+      .WillRepeatedly(Return(true));
+  SetReadyState(HTMLMediaElement::kHaveNothing);
+  SetNetworkState(WebMediaPlayer::kNetworkStateLoading);
+
+  EXPECT_FALSE(MediaShouldBeOpaque());
+}
+
+TEST_P(HTMLMediaElementTest, MediaShouldBeOpaque_NetworkState) {
+  Media()->SetSrc(SrcSchemeToURL(TestURLScheme::kHttp));
+  EXPECT_CALL(*MockMediaPlayer(), WouldTaintOrigin())
+      .WillRepeatedly(Return(true));
+
+  // SRC content without loading should not be opaque.
+  EXPECT_FALSE(MediaShouldBeOpaque());
+
+  // This will kick off loading and increase network state through loading.
+  test::RunPendingTasks();
+  ASSERT_TRUE(Media()->GetWebMediaPlayer());
+
+  SetNetworkState(WebMediaPlayer::kNetworkStateLoading);
+  EXPECT_TRUE(MediaShouldBeOpaque());
+
+  // Even if state moves back to Idle, it was once loading, so it remains
+  // opaque.
+  SetNetworkState(WebMediaPlayer::kNetworkStateIdle);
+  EXPECT_TRUE(MediaShouldBeOpaque());
 }
 
 }  // namespace blink

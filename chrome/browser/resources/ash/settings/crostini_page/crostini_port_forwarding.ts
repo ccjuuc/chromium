@@ -31,7 +31,8 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 import type {ContainerInfo, GuestId} from '../guest_os/guest_os_browser_proxy.js';
 import {containerLabel, equalContainerId} from '../guest_os/guest_os_container_select.js';
 
-import {type CrostiniBrowserProxy, CrostiniBrowserProxyImpl, type CrostiniPortActiveSetting, type CrostiniPortSetting, DEFAULT_CROSTINI_CONTAINER, DEFAULT_CROSTINI_GUEST_ID, DEFAULT_CROSTINI_VM, DEFAULT_CROSTINI_VM_TYPE} from './crostini_browser_proxy.js';
+import {CrostiniBrowserProxyImpl, DEFAULT_CROSTINI_CONTAINER, DEFAULT_CROSTINI_GUEST_ID, DEFAULT_CROSTINI_VM, DEFAULT_CROSTINI_VM_TYPE} from './crostini_browser_proxy.js';
+import type {CrostiniBrowserProxy, CrostiniPortActiveSetting, CrostiniPortSetting} from './crostini_browser_proxy.js';
 import {getTemplate} from './crostini_port_forwarding.html.js';
 
 type HtmlElementWithData<T extends HTMLElement = HTMLElement> = T&{
@@ -111,13 +112,13 @@ export class CrostiniPortForwardingElement extends CrostiniPortForwardingBase {
   }
 
   private activePorts_: CrostiniPortActiveSetting[];
-  private allContainers_: ContainerInfo[];
-  private allPorts_: CrostiniPortSetting[];
-  private activeInterface_: string;
-  private activeIpAddress_: string;
+  declare private allContainers_: ContainerInfo[];
+  declare private allPorts_: CrostiniPortSetting[];
+  declare private activeInterface_: string;
+  declare private activeIpAddress_: string;
   private browserProxy_: CrostiniBrowserProxy;
   private lastMenuOpenedPort_: CrostiniPortActiveSetting|null;
-  private showAddPortDialog_: boolean;
+  declare private showAddPortDialog_: boolean;
 
   constructor() {
     super();

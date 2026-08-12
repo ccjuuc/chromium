@@ -7,9 +7,10 @@ use crate::lifetime::Lifetime;
 use crate::punctuated::Punctuated;
 use crate::token;
 use crate::ty::{ReturnType, Type};
+use alloc::boxed::Box;
 
 ast_struct! {
-    /// A path at which a named item is exported (e.g. `std::collections::HashMap`).
+    /// A path at which a named item is exported (e.g. `alloc::collections::HashMap`).
     #[cfg_attr(docsrs, doc(cfg(any(feature = "full", feature = "derive"))))]
     pub struct Path {
         pub leading_colon: Option<Token![::]>,
@@ -22,10 +23,7 @@ where
     T: Into<PathSegment>,
 {
     fn from(segment: T) -> Self {
-        let mut path = Path {
-            leading_colon: None,
-            segments: Punctuated::new(),
-        };
+        let mut path = Path { leading_colon: None, segments: Punctuated::new() };
         path.segments.push_value(segment.into());
         path
     }
@@ -39,8 +37,8 @@ impl Path {
     ///
     /// - the path has no leading colon,
     /// - the number of path segments is 1,
-    /// - the first path segment has no angle bracketed or parenthesized
-    ///   path arguments, and
+    /// - the first path segment has no angle bracketed or parenthesized path
+    ///   arguments, and
     /// - the ident of the first path segment is equal to the given one.
     ///
     /// # Example
@@ -77,8 +75,8 @@ impl Path {
     ///
     /// - the path has no leading colon,
     /// - the number of path segments is 1, and
-    /// - the first path segment has no angle bracketed or parenthesized
-    ///   path arguments.
+    /// - the first path segment has no angle bracketed or parenthesized path
+    ///   arguments.
     pub fn get_ident(&self) -> Option<&Ident> {
         if self.leading_colon.is_none()
             && self.segments.len() == 1
@@ -118,10 +116,7 @@ where
     T: Into<Ident>,
 {
     fn from(ident: T) -> Self {
-        PathSegment {
-            ident: ident.into(),
-            arguments: PathArguments::None,
-        }
+        PathSegment { ident: ident.into(), arguments: PathArguments::None }
     }
 }
 
@@ -130,7 +125,7 @@ ast_enum! {
     ///
     /// ## Angle bracketed
     ///
-    /// The `<'a, T>` in `std::slice::iter<'a, T>`.
+    /// The `<'a, T>` in `core::slice::iter<'a, T>`.
     ///
     /// ## Parenthesized
     ///
@@ -138,7 +133,7 @@ ast_enum! {
     #[cfg_attr(docsrs, doc(cfg(any(feature = "full", feature = "derive"))))]
     pub enum PathArguments {
         None,
-        /// The `<'a, T>` in `std::slice::iter<'a, T>`.
+        /// The `<'a, T>` in `core::slice::iter<'a, T>`.
         AngleBracketed(AngleBracketedGenericArguments),
         /// The `(A, B) -> C` in `Fn(A, B) -> C`.
         Parenthesized(ParenthesizedGenericArguments),
@@ -287,16 +282,13 @@ pub(crate) mod parsing {
     use crate::expr::ExprBlock;
     use crate::expr::{Expr, ExprPath};
     use crate::ext::IdentExt as _;
-    #[cfg(feature = "full")]
     use crate::generics::TypeParamBound;
     use crate::ident::Ident;
     use crate::lifetime::Lifetime;
     use crate::lit::Lit;
     use crate::parse::{Parse, ParseStream};
-    #[cfg(feature = "full")]
-    use crate::path::Constraint;
     use crate::path::{
-        AngleBracketedGenericArguments, AssocConst, AssocType, GenericArgument,
+        AngleBracketedGenericArguments, AssocConst, AssocType, Constraint, GenericArgument,
         ParenthesizedGenericArguments, Path, PathArguments, PathSegment, QSelf,
     };
     use crate::punctuated::Punctuated;
@@ -304,6 +296,8 @@ pub(crate) mod parsing {
     use crate::ty::{ReturnType, Type};
     #[cfg(not(feature = "full"))]
     use crate::verbatim;
+    use alloc::boxed::Box;
+    use alloc::vec::Vec;
 
     #[cfg_attr(docsrs, doc(cfg(feature = "parsing")))]
     impl Parse for Path {
@@ -360,7 +354,6 @@ pub(crate) mod parsing {
                         };
                     }
 
-                    #[cfg(feature = "full")]
                     if let Some(colon_token) = input.parse::<Option<Token![:]>>()? {
                         let segment = ty.path.segments.pop().unwrap().into_value();
                         return Ok(GenericArgument::Constraint(Constraint {
@@ -432,11 +425,11 @@ pub(crate) mod parsing {
 
             #[cfg(not(feature = "full"))]
             {
-                let begin = input.fork();
+                let begin = input.cursor();
                 let content;
                 braced!(content in input);
                 content.parse::<Expr>()?;
-                let verbatim = verbatim::between(&begin, input);
+                let verbatim = verbatim::between(begin, input.cursor());
                 return Ok(Expr::Verbatim(verbatim));
             }
         }
@@ -534,10 +527,7 @@ pub(crate) mod parsing {
                 && !input.peek(Token![<<=])
                 || input.peek(Token![::]) && input.peek3(Token![<])
             {
-                Ok(PathSegment {
-                    ident,
-                    arguments: PathArguments::AngleBracketed(input.parse()?),
-                })
+                Ok(PathSegment { ident, arguments: PathArguments::AngleBracketed(input.parse()?) })
             } else {
                 Ok(PathSegment::from(ident))
             }
@@ -555,7 +545,7 @@ pub(crate) mod parsing {
         ///
         /// // A simplified single `use` statement like:
         /// //
-        /// //     use std::collections::HashMap;
+        /// //     use alloc::collections::HashMap;
         /// //
         /// // Note that generic parameters are not allowed in a `use` statement
         /// // so the following must not be accepted.
@@ -637,9 +627,7 @@ pub(crate) mod parsing {
         }
 
         pub(crate) fn is_mod_style(&self) -> bool {
-            self.segments
-                .iter()
-                .all(|segment| segment.arguments.is_none())
+            self.segments.iter().all(|segment| segment.arguments.is_none())
         }
     }
 
@@ -674,20 +662,11 @@ pub(crate) mod parsing {
                     (pos, Some(as_token), path)
                 }
                 None => {
-                    let path = Path {
-                        leading_colon: Some(colon2_token),
-                        segments: rest,
-                    };
+                    let path = Path { leading_colon: Some(colon2_token), segments: rest };
                     (0, None, path)
                 }
             };
-            let qself = QSelf {
-                lt_token,
-                ty: Box::new(this),
-                position,
-                as_token,
-                gt_token,
-            };
+            let qself = QSelf { lt_token, ty: Box::new(this), position, as_token, gt_token };
             Ok((Some(qself), path))
         } else {
             let path = Path::parse_helper(input, expr_style)?;
@@ -706,11 +685,11 @@ pub(crate) mod printing {
     use crate::print::TokensOrDefault;
     #[cfg(feature = "parsing")]
     use crate::spanned::Spanned;
+    use core::cmp;
     #[cfg(feature = "parsing")]
     use proc_macro2::Span;
     use proc_macro2::TokenStream;
     use quote::ToTokens;
-    use std::cmp;
 
     pub(crate) enum PathStyle {
         Expr,

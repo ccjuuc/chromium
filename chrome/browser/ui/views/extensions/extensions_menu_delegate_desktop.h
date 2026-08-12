@@ -6,23 +6,21 @@
 #define CHROME_BROWSER_UI_VIEWS_EXTENSIONS_EXTENSIONS_MENU_DELEGATE_DESKTOP_H_
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
+#include "chrome/browser/ui/extensions/extensions_menu_handler.h"
 #include "chrome/browser/ui/extensions/extensions_menu_view_model.h"
-#include "chrome/browser/ui/views/extensions/extensions_menu_handler.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/permissions_manager.h"
 #include "extensions/common/extension.h"
 #include "ui/views/view_tracker.h"
-
-namespace content {
-class WebContents;
-}  // namespace content
+#include "url/origin.h"
 
 namespace views {
 class View;
 }  // namespace views
 
 class ExtensionsMenuViewModel;
-class Browser;
+class BrowserWindowInterface;
 class ExtensionsContainerViews;
 class ExtensionsMenuMainPageView;
 class ExtensionsMenuSitePermissionsPageView;
@@ -35,9 +33,11 @@ class ExtensionsMenuDelegateDesktop : public ExtensionsMenuViewModel::Delegate,
                                       public ExtensionsMenuViewModel::Observer,
                                       public ExtensionsMenuHandler {
  public:
-  ExtensionsMenuDelegateDesktop(Browser* browser,
-                                ExtensionsContainerViews* extensions_container,
-                                views::View* bubble_contents);
+  ExtensionsMenuDelegateDesktop(
+      BrowserWindowInterface* browser,
+      ExtensionsContainer* extensions_container,
+      ExtensionsContainerViews* extensions_container_views,
+      views::View* bubble_contents);
   ExtensionsMenuDelegateDesktop(const ExtensionsMenuDelegateDesktop&) = delete;
   const ExtensionsMenuDelegateDesktop& operator=(
       const ExtensionsMenuDelegateDesktop&) = delete;
@@ -48,15 +48,14 @@ class ExtensionsMenuDelegateDesktop : public ExtensionsMenuViewModel::Delegate,
       const extensions::ExtensionId& extension_id) override;
 
   // ExtensionsMenuViewModel::Observer:
-  void OnActiveWebContentsChanged(content::WebContents* web_contents) override;
-  void OnHostAccessRequestAddedOrUpdated(
-      const extensions::ExtensionId& extension_id,
-      content::WebContents* web_contents) override;
-  void OnHostAccessRequestRemoved(
-      const extensions::ExtensionId& extension_id) override;
+  void OnPageNavigation() override;
+  void OnHostAccessRequestAdded(const extensions::ExtensionId& extension_id,
+                                int index) override;
+  void OnHostAccessRequestUpdated(const extensions::ExtensionId& extension_id,
+                                  int index) override;
+  void OnHostAccessRequestRemoved(const extensions::ExtensionId& extension_id,
+                                  int index) override;
   void OnHostAccessRequestsCleared() override;
-  void OnHostAccessRequestDismissedByUser(
-      const extensions::ExtensionId& extension_id) override;
   void OnShowHostAccessRequestsInToolbarChanged(
       const extensions::ExtensionId& extension_id,
       bool can_show_requests) override;
@@ -64,7 +63,10 @@ class ExtensionsMenuDelegateDesktop : public ExtensionsMenuViewModel::Delegate,
                      int index) override;
   void OnActionRemoved(const ToolbarActionsModel::ActionId& action_id,
                        int index) override;
-  void OnActionUpdated() override;
+  void OnActionUpdated(const ToolbarActionsModel::ActionId& action_id,
+                       int index) override;
+  void OnActionIconUpdated(const ToolbarActionsModel::ActionId& action_id,
+                           int index) override;
   void OnActionsInitialized() override;
   void OnToolbarPinnedActionsChanged() override;
   void OnUserPermissionsSettingsChanged() override;
@@ -74,11 +76,15 @@ class ExtensionsMenuDelegateDesktop : public ExtensionsMenuViewModel::Delegate,
   void OpenSitePermissionsPage(
       const extensions::ExtensionId& extension_id) override;
   void CloseBubble() override;
+  void OnActionButtonClicked(
+      const extensions::ExtensionId& extension_id) override;
   void OnSiteSettingsToggleButtonPressed(bool is_on) override;
   void OnSiteAccessSelected(
       const extensions::ExtensionId& extension_id,
+      const url::Origin& origin,
       extensions::PermissionsManager::UserSiteAccess site_access) override;
   void OnExtensionToggleSelected(const extensions::ExtensionId& extension_id,
+                                 const url::Origin& origin,
                                  bool is_on) override;
   void OnReloadPageButtonClicked() override;
   void OnAllowExtensionClicked(
@@ -98,39 +104,24 @@ class ExtensionsMenuDelegateDesktop : public ExtensionsMenuViewModel::Delegate,
   // Switches the current page to `page`.
   void SwitchToPage(std::unique_ptr<views::View> page);
 
-  // Updates current_page for the given `web_contents`.
-  void UpdatePage(content::WebContents* web_contents);
+  // Updates the menu's main page.
+  void UpdateMainPage(ExtensionsMenuMainPageView* main_page);
 
-  // Updates `main_page` for the given `web_contents`.
-  void UpdateMainPage(ExtensionsMenuMainPageView* main_page,
-                      content::WebContents* web_contents);
-
-  // Updates `site_permissions_page` for the given `web_contents`.
+  // Updates the menu's site permissions page.
   void UpdateSitePermissionsPage(
-      ExtensionsMenuSitePermissionsPageView* site_permissions_page,
-      content::WebContents* web_contents);
+      ExtensionsMenuSitePermissionsPageView* site_permissions_page);
 
-  // Populates menu items in `main_page`.
+  // Populates menu entries in `main_page`.
   void PopulateMainPage(ExtensionsMenuMainPageView* main_page);
 
-  // Inserts a menu item for `extension_id` in `main_page` at `index`.
-  void InsertMenuItemMainPage(ExtensionsMenuMainPageView* main_page,
-                              ExtensionActionViewModel* action_model,
-                              int index);
+  // Inserts an entry for `extension_id` in `main_page` at `index`.
+  void InsertMenuEntry(ExtensionsMenuMainPageView* main_page,
+                       ExtensionActionViewModel* action_model,
+                       int index);
 
-  // Adds or updates a request access entry for `extension_id` in `main_page` at
-  // `index`.
-  void AddOrUpdateExtensionRequestingAccess(
-      ExtensionsMenuMainPageView* main_page,
-      const extensions::ExtensionId& extension_id,
-      int index,
-      content::WebContents* web_contents);
-
-  // Returns the currently active web contents.
-  content::WebContents* GetActiveWebContents() const;
-
-  const raw_ptr<Browser> browser_;
-  const raw_ptr<ExtensionsContainerViews> extensions_container_;
+  const raw_ptr<BrowserWindowInterface> browser_;
+  const raw_ref<ExtensionsContainer> extensions_container_;
+  const raw_ptr<ExtensionsContainerViews> extensions_container_views_;
   const raw_ptr<views::View> bubble_contents_;
 
   // The platform-agnostic menu view model.

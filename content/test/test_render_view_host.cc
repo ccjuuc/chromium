@@ -137,26 +137,11 @@ bool TestRenderWidgetHostView::IsShowing() {
   return is_showing_;
 }
 
-void TestRenderWidgetHostView::WasUnOccluded() {
-  // Can't be unoccluded unless the page is visible.
-  page_visibility_ = PageVisibilityState::kVisible;
-  OnShowWithPageVisibility(page_visibility_);
-  is_occluded_ = false;
-}
-
 void TestRenderWidgetHostView::WasOccluded() {
   if (!host()->IsHidden()) {
     host()->WasHidden();
   }
   is_occluded_ = true;
-}
-
-void TestRenderWidgetHostView::EnsureSurfaceSynchronizedForWebTest() {
-  ++latest_capture_sequence_number_;
-}
-
-uint32_t TestRenderWidgetHostView::GetCaptureSequenceNumber() const {
-  return latest_capture_sequence_number_;
 }
 
 void TestRenderWidgetHostView::UpdateCursor(const ui::Cursor& cursor) {
@@ -175,8 +160,16 @@ void TestRenderWidgetHostView::Destroy() {
   delete this;
 }
 
+void TestRenderWidgetHostView::SetSize(const gfx::Size& size) {
+  bounds_.set_size(size);
+}
+
+void TestRenderWidgetHostView::SetBounds(const gfx::Rect& rect) {
+  bounds_ = rect;
+}
+
 gfx::Rect TestRenderWidgetHostView::GetViewBounds() {
-  return gfx::Rect();
+  return bounds_;
 }
 
 #if BUILDFLAG(IS_MAC)
@@ -207,7 +200,7 @@ bool TestRenderWidgetHostView::IsTouchSequencePotentiallyActiveOnViz() {
 }
 #endif
 
-gfx::Rect TestRenderWidgetHostView::GetBoundsInRootWindow() {
+gfx::Rect TestRenderWidgetHostView::GetBoundsInScreen() {
   return gfx::Rect();
 }
 
@@ -254,6 +247,10 @@ viz::SurfaceId TestRenderWidgetHostView::GetCurrentSurfaceId() const {
   return viz::SurfaceId();
 }
 
+bool TestRenderWidgetHostView::HasSavedCompositorFrame() const {
+  return false;
+}
+
 void TestRenderWidgetHostView::OnFirstSurfaceActivation(
     const viz::SurfaceInfo& surface_info) {
   // TODO(fsamuel): Once surface synchronization is turned on, the fallback
@@ -292,7 +289,8 @@ void TestRenderWidgetHostView::OverrideDisplayFeatureForEmulation(
 }
 
 void TestRenderWidgetHostView::NotifyHostAndDelegateOnWasShown(
-    blink::mojom::RecordContentToVisibleTimeRequestPtr visible_time_request) {
+    std::optional<blink::RecordContentToVisibleTimeRequest>
+        visible_time_request) {
   // Should only be called if the view was not already shown.
   EXPECT_TRUE(!is_showing_ || is_occluded_);
   switch (page_visibility_) {
@@ -309,14 +307,13 @@ void TestRenderWidgetHostView::NotifyHostAndDelegateOnWasShown(
   if (host()->IsHidden()) {
     // Do not pass on `visible_time_request` because there is no compositing to
     // measure.
-    host()->WasShown({});
+    host()->WasShown(std::nullopt);
   }
 }
 
 void TestRenderWidgetHostView::
     RequestSuccessfulPresentationTimeFromHostOrDelegate(
-        blink::mojom::RecordContentToVisibleTimeRequestPtr
-            visible_time_request) {
+        blink::RecordContentToVisibleTimeRequest visible_time_request) {
   // Should only be called if the view was already shown.
 #if !BUILDFLAG(IS_ANDROID)
   // TODO(jonross): Update the constructor to determine showing state
@@ -332,7 +329,6 @@ void TestRenderWidgetHostView::
 #endif
   EXPECT_FALSE(is_occluded_);
   EXPECT_EQ(page_visibility_, PageVisibilityState::kVisible);
-  EXPECT_TRUE(visible_time_request);
 }
 
 void TestRenderWidgetHostView::

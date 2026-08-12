@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include <atomic>
 #include <optional>
 #include <string>
 #include <vector>
@@ -15,6 +16,7 @@
 #include "base/numerics/checked_math.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "media/base/audio_glitch_info.h"
 #include "media/base/audio_latency.h"
 #include "media/base/audio_point.h"
 #include "media/base/channel_layout.h"
@@ -50,11 +52,39 @@ struct MEDIA_EXPORT alignas(kParametersAlignment) AudioInputBufferParameters {
 struct MEDIA_EXPORT alignas(kParametersAlignment) AudioOutputBufferParameters {
   int64_t delay_us;            // base::TimeDelta in microseconds.
   int64_t delay_timestamp_us;  // base::TimeTicks in microseconds.
-  int64_t glitch_duration_us;  // base::TimeDelta in microseconds.
-  uint32_t glitch_count;
+
+  // `cumulative_glitch_duration_us` and `cumulative_glitch_count` are
+  // atomically accumulated on the AudioService side, and are differentiated on
+  // the Renderer side to produce AudioGlitchInfo.
+  int64_t cumulative_glitch_duration_us;  // base::TimeDelta in microseconds.
+  static_assert(std::atomic_ref<int64_t>::is_always_lock_free);
+  uint64_t cumulative_glitch_count;
+  static_assert(std::atomic_ref<uint64_t>::is_always_lock_free);
+
   uint32_t bitstream_data_size;
   uint32_t bitstream_frames;
 };
+
+// Helper class for writing and reading from an AudioOutputBufferParameters
+// living in shared memory. The helper takes care of converting the difference
+// in the cumulative counters from the buffer into an AudioGlitchInfo, which
+// contains the glitches accrued since the last call to
+// GetGlitchIncrementSinceLastCall().
+class MEDIA_EXPORT AudioOutputBufferParametersHelper {
+ public:
+  AudioOutputBufferParametersHelper();
+  ~AudioOutputBufferParametersHelper();
+
+  AudioGlitchInfo GetGlitchIncrementSinceLastCall(
+      AudioOutputBufferParameters& params);
+  static void AddGlitchIncrementToBuffer(AudioOutputBufferParameters& params,
+                                         AudioGlitchInfo glitch_info);
+
+ private:
+  base::TimeDelta previous_glitch_duration_ = {};
+  uint64_t previous_glitch_count_ = 0;
+};
+
 #if BUILDFLAG(IS_WIN)
 #pragma warning(pop)
 #endif
@@ -114,42 +144,6 @@ ComputeAudioOutputBufferSize(const AudioParameters& parameters);
 
 MEDIA_EXPORT uint32_t ComputeAudioOutputBufferSize(int channels, int frames);
 
-// Channel count and ChannelLayout pair, with helper methods to enforce safe
-// construction.
-class MEDIA_EXPORT ChannelLayoutConfig {
- public:
-  ChannelLayoutConfig(const ChannelLayoutConfig& other);
-  ChannelLayoutConfig& operator=(const ChannelLayoutConfig& other);
-  ChannelLayoutConfig();
-  ChannelLayoutConfig(ChannelLayout channel_layout, int channels);
-  ~ChannelLayoutConfig();
-
-  template <ChannelLayout layout>
-  static ChannelLayoutConfig FromLayout() {
-    return ChannelLayoutConfig(layout, ChannelLayoutToChannelCount(layout));
-  }
-
-  static ChannelLayoutConfig Mono();
-
-  static ChannelLayoutConfig Stereo();
-
-  static ChannelLayoutConfig Guess(int channels);
-
-  ChannelLayout channel_layout() const { return channel_layout_; }
-
-  int channels() const { return channels_; }
-
- private:
-  ChannelLayout channel_layout_;  // Order of surround sound channels.
-  int channels_;                  // Number of channels.
-};
-
-// For |CHANNEL_LAYOUT_DISCRETE|, we have to explicitly set the number of
-// channels, so we need to use the normal constructor.
-template <>
-ChannelLayoutConfig ChannelLayoutConfig::FromLayout<CHANNEL_LAYOUT_DISCRETE>() =
-    delete;
-
 class MEDIA_EXPORT AudioParameters {
  public:
   // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.media
@@ -203,44 +197,50 @@ class MEDIA_EXPORT AudioParameters {
     ALLOW_DSP_NOISE_SUPPRESSION = 1 << 10,
     ALLOW_DSP_AUTOMATIC_GAIN_CONTROL = 1 << 11,
 
-    FUCHSIA_RENDER_USAGE_BACKGROUND = 1 << 12,
-    FUCHSIA_RENDER_USAGE_MEDIA = 1 << 13,
-    FUCHSIA_RENDER_USAGE_INTERRUPTION = 1 << 14,
-    FUCHSIA_RENDER_USAGE_SYSTEM_AGENT = 1 << 15,
-    FUCHSIA_RENDER_USAGE_COMMUNICATION = 1 << 16,
+    // Bits 12-15 are used to store the "usage" value describing an audio
+    // stream.
+    FUCHSIA_RENDER_USAGE_SHIFT = 12,
+    FUCHSIA_RENDER_USAGE_MASK = 0xF << FUCHSIA_RENDER_USAGE_SHIFT,
+    FUCHSIA_RENDER_USAGE_BACKGROUND = 1 << FUCHSIA_RENDER_USAGE_SHIFT,
+    FUCHSIA_RENDER_USAGE_MEDIA = 2 << FUCHSIA_RENDER_USAGE_SHIFT,
+    FUCHSIA_RENDER_USAGE_INTERRUPTION = 3 << FUCHSIA_RENDER_USAGE_SHIFT,
+    FUCHSIA_RENDER_USAGE_SYSTEM_AGENT = 4 << FUCHSIA_RENDER_USAGE_SHIFT,
+    FUCHSIA_RENDER_USAGE_COMMUNICATION = 5 << FUCHSIA_RENDER_USAGE_SHIFT,
 
-    IGNORE_UI_GAINS = 1 << 17,
+    IGNORE_UI_GAINS = 1 << 16,
 
-    VOICE_ISOLATION_SUPPORTED = 1 << 18,  // Set when system voice isolation is
+    VOICE_ISOLATION_SUPPORTED = 1 << 17,  // Set when system voice isolation is
                                           // supported.
     CLIENT_CONTROLLED_VOICE_ISOLATION =
-        1 << 19,                // Set when client forces to
+        1 << 18,                // Set when client forces to
                                 // enable/disable the platform voice
                                 // isolation effects. False indicates
                                 // to use platform default state.
-    VOICE_ISOLATION = 1 << 20,  // Enable/Disable platform voice isolation.
+    VOICE_ISOLATION = 1 << 19,  // Enable/Disable platform voice isolation.
                                 // Only meaningful when
                                 // CLIENT_CONTROLLED_VOICE_ISOLATION is set.
 
-    DEEP_NOISE_SUPPRESSION = 1 << 21,  // Also called Voice Focus on Windows.
+    DEEP_NOISE_SUPPRESSION = 1 << 20,  // Also called Voice Focus on Windows.
   };
 
   struct HardwareCapabilities {
-    HardwareCapabilities(int min_frames_per_buffer,
-                         int max_frames_per_buffer,
-                         int default_frames_per_buffer,
-                         bool require_offload)
+    constexpr HardwareCapabilities(int min_frames_per_buffer,
+                                   int max_frames_per_buffer,
+                                   int default_frames_per_buffer,
+                                   bool require_offload)
         : min_frames_per_buffer(min_frames_per_buffer),
           max_frames_per_buffer(max_frames_per_buffer),
           default_frames_per_buffer(default_frames_per_buffer),
           require_audio_offload(require_offload) {}
-    HardwareCapabilities(int min_frames_per_buffer, int max_frames_per_buffer)
+    constexpr HardwareCapabilities(int min_frames_per_buffer,
+                                   int max_frames_per_buffer)
         : min_frames_per_buffer(min_frames_per_buffer),
           max_frames_per_buffer(max_frames_per_buffer) {}
-    HardwareCapabilities(int bitstream_formats, bool require_encapsulation)
+    constexpr HardwareCapabilities(int bitstream_formats,
+                                   bool require_encapsulation)
         : bitstream_formats(bitstream_formats),
           require_encapsulation(require_encapsulation) {}
-    HardwareCapabilities() = default;
+    constexpr HardwareCapabilities() = default;
 
     // Minimum and maximum buffer sizes supported by the audio hardware. Opening
     // a device with frames_per_buffer set to a value between min and max should
@@ -261,6 +261,7 @@ class MEDIA_EXPORT AudioParameters {
     bool require_encapsulation = false;
     // Require audio processing offload.
     bool require_audio_offload = false;
+    bool operator==(const HardwareCapabilities& other) const = default;
   };
 
   // Returns a string which contains the full bitmask for the given `mask`.
@@ -302,12 +303,6 @@ class MEDIA_EXPORT AudioParameters {
   // Returns the number of bytes representing a frame of audio when using |fmt|
   // for samples.
   int GetBytesPerFrame(SampleFormat fmt) const;
-
-  // Returns the number of microseconds per frame of audio. Intentionally
-  // reported as a double to surface of partial microseconds per frame, which
-  // is common for many sample rates. Failing to account for these nanoseconds
-  // can lead to audio/video sync drift.
-  double GetMicrosecondsPerFrame() const;
 
   // Returns the duration of this buffer as calculated from frames_per_buffer()
   // and sample_rate().

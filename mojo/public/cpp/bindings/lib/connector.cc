@@ -15,7 +15,6 @@
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/field_trial_params.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
@@ -30,7 +29,6 @@
 #include "mojo/public/cpp/bindings/lib/may_auto_lock.h"
 #include "mojo/public/cpp/bindings/mojo_buildflags.h"
 #include "mojo/public/cpp/bindings/sync_handle_watcher.h"
-#include "mojo/public/cpp/bindings/tracing_helpers.h"
 #include "mojo/public/cpp/system/wait.h"
 #include "third_party/perfetto/protos/perfetto/trace/track_event/chrome_mojo_event_info.pbzero.h"
 
@@ -468,6 +466,11 @@ void Connector::WaitToReadMore() {
   handle_watcher_ = std::make_unique<SimpleWatcher>(
       FROM_HERE, SimpleWatcher::ArmingPolicy::MANUAL, task_runner_,
       interface_name_);
+  // Safe to use Unretained: this callback is stored inside |handle_watcher_|,
+  // which is owned by this Connector. When ~Connector destroys the watcher,
+  // it invalidates the watcher's weak pointers, preventing any further
+  // invocations. The callback is never posted directly — SimpleWatcher
+  // guards delivery through its own weak pointer mechanism.
   MojoResult rv = handle_watcher_->Watch(
       message_pipe_.get(), MOJO_HANDLE_SIGNAL_READABLE,
       base::BindRepeating(&Connector::OnWatcherHandleReady,
@@ -708,6 +711,11 @@ void Connector::EnsureSyncWatcherExists() {
   if (sync_watcher_) {
     return;
   }
+  // Safe to use Unretained: this callback is stored inside |sync_watcher_|,
+  // which is owned by this Connector. The callback is only invoked
+  // synchronously from SyncHandleRegistry::Wait() on the bound sequence,
+  // never posted. When ~Connector destroys the watcher, the callback is
+  // destroyed with it.
   sync_watcher_ = std::make_unique<SyncHandleWatcher>(
       message_pipe_.get(), MOJO_HANDLE_SIGNAL_READABLE,
       base::BindRepeating(&Connector::OnSyncHandleWatcherHandleReady,

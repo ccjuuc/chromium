@@ -14,11 +14,17 @@
 #include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "base/time/time.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/default_browser/default_browser_features.h"
 #include "chrome/browser/default_browser/default_browser_monitor.h"
+#include "chrome/browser/default_browser/default_browser_notification_observer.h"
+#include "chrome/browser/default_browser/setters/default_browser_visual_guided_setter.h"
 #include "chrome/browser/default_browser/setters/shell_integration_default_browser_setter.h"
 #include "chrome/browser/shell_integration.h"
 #include "url/gurl.h"
@@ -27,10 +33,11 @@
 #include "base/win/registry.h"
 #endif  // BUILDFLAG(IS_WIN)
 
+namespace default_browser {
+
 namespace {
 
-class ShellDelegateImpl
-    : public default_browser::DefaultBrowserManager::ShellDelegate {
+class ShellDelegateImpl : public DefaultBrowserManager::ShellDelegate {
  public:
   ShellDelegateImpl() = default;
   ~ShellDelegateImpl() override = default;
@@ -108,10 +115,9 @@ constexpr bool IsProgIdChrome(const std::u16string& prog_id) {
 
 // Reports whether the default browser state matches the current default program
 // ID for HTTP.
-void CompareHttpProgIdWithDefaultState(
-    default_browser::DefaultBrowserState default_state,
-    const std::string_view histogram_name,
-    const std::u16string& http_prog_id) {
+void CompareHttpProgIdWithDefaultState(DefaultBrowserState default_state,
+                                       const std::string_view histogram_name,
+                                       const std::u16string& http_prog_id) {
   CHECK(default_state == shell_integration::IS_DEFAULT ||
         default_state == shell_integration::NOT_DEFAULT);
   const bool is_http_prog_id_chrome = IsProgIdChrome(http_prog_id);
@@ -134,28 +140,80 @@ void CompareHttpProgIdWithDefaultState(
 
 }  // namespace
 
-namespace default_browser {
-
 DefaultBrowserManager::ShellDelegate::~ShellDelegate() = default;
 
-// Static
+DEFINE_USER_DATA(DefaultBrowserManager);
+
+DefaultBrowserManager::DefaultBrowserManager(
+    BrowserProcess* browser_process,
+    std::unique_ptr<ShellDelegate> shell_delegate,
+    ProfileProviderCallback profile_provider_callback,
+    std::unique_ptr<DefaultBrowserMonitor> monitor)
+    : shell_delegate_(std::move(shell_delegate)),
+      profile_provider_callback_(std::move(profile_provider_callback)),
+      scoped_unowned_user_data_(browser_process->GetUnownedUserDataHost(),
+                                *this) {
+  CHECK(!profile_provider_callback_.is_null());
+  if (IsDefaultBrowserFrameworkEnabled()) {
+    monitor_ = monitor ? std::move(monitor)
+                       : std::make_unique<DefaultBrowserMonitor>();
+
+    monitor_subscription_ = monitor_->RegisterDefaultBrowserChanged(
+        base::BindRepeating(&DefaultBrowserManager::OnMonitorDetectedChange,
+                            base::Unretained(this)));
+    if (IsDefaultBrowserChangedOsNotificationEnabled()) {
+      notification_observer_ =
+          std::make_unique<DefaultBrowserNotificationObserver>(
+              base::BindOnce(
+                  &DefaultBrowserManager::RegisterDefaultBrowserChanged,
+                  base::Unretained(this)),
+              base::BindOnce(&DefaultBrowserManager::GetDefaultBrowserState,
+                             base::Unretained(this)),
+              *this);
+    }
+
+    monitor_->StartMonitor();
+  }
+}
+
+DefaultBrowserManager::~DefaultBrowserManager() = default;
+
+// static
+DefaultBrowserManager* DefaultBrowserManager::From(
+    BrowserProcess* browser_process) {
+  return browser_process ? Get(browser_process->GetUnownedUserDataHost())
+                         : nullptr;
+}
+
+// static
 std::unique_ptr<DefaultBrowserManager::ShellDelegate>
 DefaultBrowserManager::CreateDefaultDelegate() {
   return std::make_unique<ShellDelegateImpl>();
 }
 
-DefaultBrowserManager::DefaultBrowserManager(
-    std::unique_ptr<ShellDelegate> shell_delegate)
-    : shell_delegate_(std::move(shell_delegate)) {}
-
-DefaultBrowserManager::~DefaultBrowserManager() = default;
-
-// Static
+// static
 std::unique_ptr<DefaultBrowserController>
 DefaultBrowserManager::CreateControllerFor(
     DefaultBrowserEntrypointType entrypoint) {
-  return std::make_unique<DefaultBrowserController>(
-      std::make_unique<ShellIntegrationDefaultBrowserSetter>(), entrypoint);
+  std::unique_ptr<DefaultBrowserSetter> setter;
+  switch (GetDefaultBrowserSetterType()) {
+    case DefaultBrowserSetterType::kShellIntegration:
+      setter = std::make_unique<ShellIntegrationDefaultBrowserSetter>();
+      break;
+    case DefaultBrowserSetterType::kVisualGuide:
+      setter = std::make_unique<DefaultBrowserVisualGuidedSetter>(
+          DefaultBrowserManager::From(g_browser_process)->GetProfile());
+      break;
+    default:
+      NOTREACHED();
+  }
+
+  return std::make_unique<DefaultBrowserController>(std::move(setter),
+                                                    entrypoint);
+}
+
+Profile& DefaultBrowserManager::GetProfile() {
+  return *profile_provider_callback_.Run();
 }
 
 void DefaultBrowserManager::GetDefaultBrowserState(
@@ -166,22 +224,20 @@ void DefaultBrowserManager::GetDefaultBrowserState(
 }
 
 void DefaultBrowserManager::OnDefaultBrowserCheckResult(
-    default_browser::DefaultBrowserCheckCompletionCallback callback,
-    default_browser::DefaultBrowserState default_state) {
-  // Only consider performing the secondary check for telemetry if there was a
-  // definitive result on default browser state.
+    DefaultBrowserCheckCompletionCallback callback,
+    DefaultBrowserState default_state) {
   if (default_state == shell_integration::IS_DEFAULT ||
       default_state == shell_integration::NOT_DEFAULT) {
-    if (base::FeatureList::IsEnabled(
-            default_browser::kPerformDefaultBrowserCheckValidations)) {
+    if (base::FeatureList::IsEnabled(kPerformDefaultBrowserCheckValidations)) {
       PerformDefaultBrowserCheckValidations(default_state);
     }
   }
+
   std::move(callback).Run(default_state);
 }
 
 void DefaultBrowserManager::PerformDefaultBrowserCheckValidations(
-    default_browser::DefaultBrowserState default_state) {
+    DefaultBrowserState default_state) {
 #if BUILDFLAG(IS_WIN)
   shell_delegate_->StartCheckDefaultClientProgId(
       GURL("http://"),
@@ -190,7 +246,7 @@ void DefaultBrowserManager::PerformDefaultBrowserCheckValidations(
   base::ThreadPool::PostTask(
       FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
       base::BindOnce(
-          [](default_browser::DefaultBrowserState default_state) {
+          [](DefaultBrowserState default_state) {
             std::wstring prog_id_from_registry =
                 GetProgIdFromRegistry(kHttpUserChoiceKeyPath);
             CompareHttpProgIdWithDefaultState(
@@ -204,13 +260,42 @@ void DefaultBrowserManager::PerformDefaultBrowserCheckValidations(
 
 base::CallbackListSubscription
 DefaultBrowserManager::RegisterDefaultBrowserChanged(
-    base::RepeatingClosure callback) {
-  if (!monitor_) {
-    monitor_ = std::make_unique<DefaultBrowserMonitor>();
-    monitor_->StartMonitor();
-  }
+    DefaultBrowserChangedCallback callback) {
+  return observers_.Add(std::move(callback));
+}
 
-  return monitor_->RegisterDefaultBrowserChanged(std::move(callback));
+void DefaultBrowserManager::OnMonitorDetectedChange() {
+  GetDefaultBrowserState(base::BindOnce(&DefaultBrowserManager::NotifyObservers,
+                                        base::Unretained(this)));
+}
+
+void DefaultBrowserManager::NotifyObservers(DefaultBrowserState state) {
+  observers_.Notify(state);
+}
+
+void DefaultBrowserManager::TrackTimeAfterSetterFailure(
+    DefaultBrowserEntrypointType entrypoint,
+    DefaultBrowserSetterType setter) {
+  tracker_subscription_ = {};
+  tracker_ =
+      std::make_unique<TimeAfterSetterFailureTracker>(entrypoint, setter);
+
+  tracker_subscription_ = RegisterDefaultBrowserChanged(base::BindRepeating(
+      &DefaultBrowserManager::OnDefaultBrowserStateChangedForTracker,
+      base::Unretained(this)));
+
+  GetDefaultBrowserState(base::BindOnce(
+      &DefaultBrowserManager::OnDefaultBrowserStateChangedForTracker,
+      base::Unretained(this)));
+}
+
+void DefaultBrowserManager::OnDefaultBrowserStateChangedForTracker(
+    DefaultBrowserState state) {
+  if (tracker_ && state == DefaultBrowserState::IS_DEFAULT) {
+    tracker_->OnDefaultBrowserSet();
+    tracker_subscription_ = {};
+    tracker_.reset();
+  }
 }
 
 }  // namespace default_browser

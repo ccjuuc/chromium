@@ -10,7 +10,6 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "components/reading_list/core/offline_url_utils.h"
@@ -201,10 +200,6 @@ void ReadingListEntry::SetRead(bool read, const base::Time& now) {
   }
   if (FirstReadTime() == 0 && read) {
     int64_t time_to_us = TimeToUS(now);
-    int64_t time_since_creation =
-        (time_to_us - creation_time_us_) / base::Time::kMicrosecondsPerHour;
-    base::UmaHistogramCounts1000("ReadingList.Read.AgeOnFirstRead",
-                                 time_since_creation);
     first_read_time_us_ = time_to_us;
   }
   if (!(previous_state == UNSEEN && state_ == UNREAD)) {
@@ -229,7 +224,7 @@ bool ReadingListEntry::IsSpecificsValid(
     return false;
   }
   GURL url(pb_entry.url());
-  if (url.is_empty() || !url.is_valid()) {
+  if (url.is_empty() || !url.is_valid() || !url.SchemeIsHTTPOrHTTPS()) {
     return false;
   }
   // Some crash reports indicate that some users have reading list entries with
@@ -613,7 +608,7 @@ ReadingListEntry::AsReadingListLocal(const base::Time& now) const {
   pb_entry->set_failed_download_counter(failed_download_counter_);
 
   if (backoff_) {
-    base::Value::List backoff =
+    base::ListValue backoff =
         net::BackoffEntrySerializer::SerializeToList(*backoff_, now);
 
     std::string output;

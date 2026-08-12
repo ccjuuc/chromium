@@ -7,15 +7,12 @@ package org.chromium.chrome.test.transit.hub;
 import static androidx.test.espresso.matcher.ViewMatchers.withContentDescription;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 
-import static org.hamcrest.Matchers.allOf;
-import static org.hamcrest.Matchers.anyOf;
-
 import android.view.View;
 
 import org.chromium.base.test.transit.Facility;
 import org.chromium.base.test.transit.ViewElement;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeActivityTabModelBoundStation;
 import org.chromium.chrome.test.transit.page.CtaPageStation;
 import org.chromium.components.tab_groups.TabGroupColorId;
@@ -31,6 +28,7 @@ public class TabGroupColorPickerFacility<
         extends Facility<HostStationT> {
 
     private final TabGroupDialogFacility<HostStationT> mTabGroupDialog;
+    public ViewElement<View> colorPickerElement;
     private ViewElement<View>[] mChipElements;
 
     public TabGroupColorPickerFacility(TabGroupDialogFacility<HostStationT> tabGroupDialog) {
@@ -58,17 +56,14 @@ public class TabGroupColorPickerFacility<
     }
 
     /** Initializes and declares all the {@link ViewElement}s for the color chips in the palette. */
+    @SuppressWarnings("unchecked") // Generic array creation for parameterized ViewElement[].
     private void declareChipElements() {
+        colorPickerElement = declareView(withId(R.id.color_picker_container));
         mChipElements = new ViewElement[TabGroupColorId.NUM_ENTRIES];
         for (int i = 0; i < TabGroupColorId.NUM_ENTRIES; i++) {
             String colorName = getColorNameString(i);
             mChipElements[i] =
-                    declareView(
-                            allOf(
-                                    withId(R.id.color_picker_icon),
-                                    anyOf(
-                                            withContentDescription(colorName + " Selected"),
-                                            withContentDescription(colorName + " Not selected"))));
+                    declareView(colorPickerElement.descendant(withContentDescription(colorName)));
         }
     }
 

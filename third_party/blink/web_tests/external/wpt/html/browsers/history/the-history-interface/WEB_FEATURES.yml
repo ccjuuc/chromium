@@ -1,4 +1,4 @@
-features:
-- name: history
-  files:
-  - "*"
+rules:
+- 004.html: [hashchange]
+- history_pushstate_url.html: [hashchange]
+- "*": [history]

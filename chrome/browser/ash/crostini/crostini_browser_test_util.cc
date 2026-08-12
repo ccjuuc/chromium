@@ -78,7 +78,7 @@ class CrostiniBrowserTestChromeBrowserMainExtraParts
     }
 
     connection_change_simulator_.SetConnectionType(
-        network::mojom::ConnectionType::CONNECTION_WIFI);
+        net::NetworkChangeNotifier::ConnectionType::CONNECTION_WIFI);
   }
   void PostMainMessageLoopRun() override {
     component_manager_ash_ptr_ = nullptr;
@@ -133,12 +133,12 @@ void CrostiniBrowserTestBase::CreatedBrowserMainParts(
 }
 
 void CrostiniBrowserTestBase::SetUpOnMainThread() {
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       crostini::prefs::kCrostiniEnabled, true);
 }
 
 void CrostiniBrowserTestBase::SetConnectionType(
-    network::mojom::ConnectionType connection_type) {
+    net::NetworkChangeNotifier::ConnectionType connection_type) {
   extra_parts_->connection_change_simulator()->SetConnectionType(
       connection_type);
 }

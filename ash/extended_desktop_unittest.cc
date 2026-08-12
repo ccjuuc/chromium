@@ -14,9 +14,9 @@
 #include "ash/wm/window_properties.h"
 #include "ash/wm/window_util.h"
 #include "base/memory/raw_ptr.h"
-#include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/run_until.h"
 #include "ui/aura/client/capture_client.h"
 #include "ui/aura/client/focus_client.h"
 #include "ui/aura/test/test_windows.h"
@@ -31,6 +31,7 @@
 #include "ui/display/screen.h"
 #include "ui/events/event_handler.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/test/test_widget_builder.h"
 #include "ui/views/widget/widget.h"
@@ -623,7 +624,8 @@ TEST_F(ExtendedDesktopTest, MoveWindowWithTransient) {
   aura::Window::Windows root_windows = Shell::GetAllRootWindows();
   // Create and activate a normal window |w1|.
   aura::Window* w1 =
-      CreateTestWindowInShell({.bounds = {10, 10, 100, 100}, .window_id = 0});
+      CreateTestWindowInShell({.bounds = {10, 10, 100, 100}, .window_id = 0})
+          .release();
   wm::ActivateWindow(w1);
   // |w1_t1| is a transient child window of |w1|.
   std::unique_ptr<aura::Window> w1_t1 =
@@ -683,7 +685,8 @@ TEST_F(ExtendedDesktopTest, PostMoveParentTransientChild) {
   aura::Window::Windows root_windows = Shell::GetAllRootWindows();
   // Create and activate a normal window.
   aura::Window* window =
-      CreateTestWindowInShell({.bounds = {10, 10, 100, 100}, .window_id = 0});
+      CreateTestWindowInShell({.bounds = {10, 10, 100, 100}, .window_id = 0})
+          .release();
   wm::ActivateWindow(window);
   // Create a transient child window of |window| without parenting to |window|
   // yet.
@@ -792,9 +795,7 @@ TEST_F(ExtendedDesktopTest, OpenSystemTray) {
   // Closes the tray and again makes sure that adding/removing displays doesn't
   // break anything.
   event_generator->ClickLeftButton();
-  base::RunLoop().RunUntilIdle();
-
-  EXPECT_FALSE(IsBubbleShown());
+  ASSERT_TRUE(base::test::RunUntil([&] { return !IsBubbleShown(); }));
 
   UpdateDisplay("500x600");
   EXPECT_FALSE(IsBubbleShown());
@@ -862,6 +863,7 @@ TEST_F(ExtendedDesktopTest, KeyEventsOnLockScreen) {
   views::Widget* lock_widget =
       CreateTestWidget(display::Screen::Get()->GetPrimaryDisplay().bounds());
   views::Textfield* textfield = new views::Textfield;
+  textfield->GetViewAccessibility().SetName(u"Textfield");
   lock_widget->client_view()->AddChildViewRaw(textfield);
 
   Shell::GetContainer(Shell::GetPrimaryRootWindow(),

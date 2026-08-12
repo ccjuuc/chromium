@@ -11,11 +11,8 @@
 #include "base/strings/strcat.h"
 #include "chrome/browser/ui/views/accessibility/non_accessible_image_view.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/chrome_typography.h"
-#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/compositor/layer.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
@@ -128,7 +125,7 @@ std::u16string_view RichHoverButton::GetTitleText() const {
 }
 
 void RichHoverButton::SetTitleText(std::u16string_view title_text) {
-  title_->SetText(std::u16string(title_text));
+  title_->SetText(title_text);
   UpdateAccessibleName();
 }
 
@@ -175,7 +172,7 @@ void RichHoverButton::SetSubtitleText(std::u16string_view subtitle_text) {
       subtitle_->SetAutoColorReadabilityEnabled(false);
       base::Extend(subtitle_row_views_, AddFillerViews(children().size()));
     }
-    subtitle_->SetText(std::u16string(subtitle_text));
+    subtitle_->SetText(subtitle_text);
   }
   RecreateLayout();
   UpdateAccessibleName();
@@ -315,9 +312,9 @@ std::vector<raw_ptr<views::View>> RichHoverButton::AddFillerViews(
 
 BEGIN_METADATA(RichHoverButton)
 ADD_PROPERTY_METADATA(ui::ImageModel, Icon)
-ADD_PROPERTY_METADATA(std::u16string_view, TitleText)
+ADD_PROPERTY_METADATA(std::u16string, TitleText)
 ADD_PROPERTY_METADATA(ui::ImageModel, StateIcon)
 ADD_PROPERTY_METADATA(ui::ImageModel, ActionIcon)
-ADD_PROPERTY_METADATA(std::u16string_view, SubtitleText)
+ADD_PROPERTY_METADATA(std::u16string, SubtitleText)
 ADD_PROPERTY_METADATA(bool, SubtitleMultiline)
 END_METADATA

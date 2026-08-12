@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
+#include "base/observer_list.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chromeos/ash/components/mojo_service_manager/mojom/mojo_service_manager.mojom.h"
@@ -94,6 +95,14 @@ class FakeCrosHealthd final : public mojom::CrosHealthdDiagnosticsService,
     bool include_output;
   };
 
+  class Observer : public base::CheckedObserver {
+   public:
+    ~Observer() override = default;
+
+    virtual void OnRoutineCreated() {}
+    virtual void OnEventObserverAdded() {}
+  };
+
   FakeCrosHealthd(const FakeCrosHealthd&) = delete;
   FakeCrosHealthd& operator=(const FakeCrosHealthd&) = delete;
 
@@ -115,39 +124,42 @@ class FakeCrosHealthd final : public mojom::CrosHealthdDiagnosticsService,
   // initialized.
   static FakeCrosHealthd* Get();
 
+  void AddObserver(Observer* observer);
+  void RemoveObserver(Observer* observer);
+
   // Set the list of routines that will be used in the response to any
   // GetAvailableRoutines IPCs received.
   void SetAvailableRoutinesForTesting(
-      const std::vector<mojom::DiagnosticRoutineEnum>& available_routines);
+      std::vector<mojom::DiagnosticRoutineEnum> available_routines);
 
   // Set the RunRoutine response that will be used in the response to any
   // RunSomeRoutine IPCs received.
-  void SetRunRoutineResponseForTesting(mojom::RunRoutineResponsePtr& response);
+  void SetRunRoutineResponseForTesting(mojom::RunRoutineResponsePtr response);
 
   // Set the GetRoutineUpdate response that will be used in the response to any
   // GetRoutineUpdate IPCs received.
-  void SetGetRoutineUpdateResponseForTesting(mojom::RoutineUpdatePtr& response);
+  void SetGetRoutineUpdateResponseForTesting(mojom::RoutineUpdatePtr response);
 
   // Set the TelemetryInfoPtr that will be used in the response to any
   // ProbeTelemetryInfo IPCs received.
   void SetProbeTelemetryInfoResponseForTesting(
-      mojom::TelemetryInfoPtr& response_info);
+      mojom::TelemetryInfoPtr response_info);
 
   // Set the ProcessResultPtr that will be used in the response to any
   // ProbeProcessInfo IPCs received.
-  void SetProbeProcessInfoResponseForTesting(mojom::ProcessResultPtr& result);
+  void SetProbeProcessInfoResponseForTesting(mojom::ProcessResultPtr result);
 
   // Set the MultipleProcessResultPtr that will be used in the response to any
   // ProbeMultipleProcessInfo IPCs received.
   void SetProbeMultipleProcessInfoResponseForTesting(
-      mojom::MultipleProcessResultPtr& result);
+      mojom::MultipleProcessResultPtr result);
 
   // Set the result for a call to `IsEventSupported`.
-  void SetIsEventSupportedResponseForTesting(mojom::SupportStatusPtr& result);
+  void SetIsEventSupportedResponseForTesting(mojom::SupportStatusPtr result);
 
   // Set the result for a call to `IsRoutineArgumentSupported`.
   void SetIsRoutineArgumentSupportedResponseForTesting(
-      mojom::SupportStatusPtr& result);
+      mojom::SupportStatusPtr result);
 
   // Flushes the service provider for routines.
   void FlushRoutineServiceForTesting();
@@ -163,7 +175,7 @@ class FakeCrosHealthd final : public mojom::CrosHealthdDiagnosticsService,
   // Set expectation about the parameter that is passed to a call of
   // a Diagnostics routine (`Run*Routine`) and `GetRoutineUpdate`.
   void SetExpectedLastPassedDiagnosticsParametersForTesting(
-      base::Value::Dict expected_parameters);
+      base::DictValue expected_parameters);
 
   // Verifies that the actual passed parameters to Diagnostic
   // routines match the previously set expectations.
@@ -365,6 +377,8 @@ class FakeCrosHealthd final : public mojom::CrosHealthdDiagnosticsService,
       mojom::RoutineArgumentPtr arg,
       IsRoutineArgumentSupportedCallback callback) override;
 
+  base::ObserverList<Observer> observers_;
+
   // Used as the response to any GetAvailableRoutines IPCs received.
   std::vector<mojom::DiagnosticRoutineEnum> available_routines_;
   // Used to store last created routine by any Run*Routine method.
@@ -413,9 +427,9 @@ class FakeCrosHealthd final : public mojom::CrosHealthdDiagnosticsService,
   std::optional<RoutineUpdateParams> routine_update_params_;
 
   // Expectation of the passed parameters.
-  base::Value::Dict expected_passed_parameters_;
+  base::DictValue expected_passed_parameters_;
   // Actually passed parameter.
-  base::Value::Dict actual_passed_parameters_;
+  base::DictValue actual_passed_parameters_;
 
   base::TimeDelta callback_delay_;
 };

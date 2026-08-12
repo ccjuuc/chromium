@@ -12,6 +12,7 @@
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/ash/login/lock/screen_locker.h"
+#include "chrome/browser/ash/login/lock/screen_locker_controller.h"
 #include "chrome/browser/ash/login/lock/screen_locker_tester.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
@@ -22,7 +23,6 @@
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/prefs/pref_service.h"
 #include "components/session_manager/core/session_manager.h"
@@ -348,7 +348,7 @@ IN_PROC_BROWSER_TEST_F(UserAddingScreenTest, InfoBubbleVisible) {
 }
 
 // Makes sure Chrome doesn't crash if we lock the screen during an add-user
-// flow. Regression test for crbug.com/467111.
+// flow. Regression test for crbug.com/40409495.
 // Note that this test has been moved from ScreenLockerTest because it is easier
 // to login a user here; and without any logged user on the user adding screen,
 // a OOBE dialog would appear, making the test crash.
@@ -370,7 +370,7 @@ IN_PROC_BROWSER_TEST_F(UserAddingScreenTest, LockScreenWhileAddingUser) {
             session_manager::SessionState::LOGIN_SECONDARY);
   base::RunLoop().RunUntilIdle();
 
-  ScreenLocker::HandleShowLockScreenRequest();
+  ScreenLockerController::Get().HandleShowLockScreenRequest();
 }
 
 }  // namespace ash

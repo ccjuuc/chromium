@@ -6,10 +6,9 @@
 
 #include <string_view>
 
-#include "base/metrics/histogram_functions.h"
 #include "chrome/browser/download/bubble/download_bubble_prefs.h"
 #include "chrome/browser/download/bubble/download_bubble_ui_controller.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
@@ -19,8 +18,6 @@
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/compositor/compositor.h"
-#include "ui/gfx/color_palette.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
@@ -53,11 +50,11 @@ class SuppressBubbleSettingRow : public views::View,
 
  public:
   SuppressBubbleSettingRow(
-      base::WeakPtr<Browser> browser,
+      BrowserWindowInterface* browser,
       bool should_show_settings_link,
       base::WeakPtr<DownloadBubbleUIController> bubble_controller,
       base::WeakPtr<DownloadBubbleNavigationHandler> navigation_handler)
-      : browser_(std::move(browser)),
+      : browser_(browser),
         bubble_controller_(std::move(bubble_controller)),
         navigation_handler_(std::move(navigation_handler)) {
     // Because this view appears directly below the download rows, we want to
@@ -90,7 +87,7 @@ class SuppressBubbleSettingRow : public views::View,
     checkbox_->GetViewAccessibility().SetName(
         l10n_util::GetStringUTF16(IDS_DOWNLOAD_BUBBLE_SUPPRESS_PARTIAL_VIEW));
     checkbox_->SetChecked(
-        !download::IsDownloadBubblePartialViewEnabled(browser_->profile()));
+        !download::IsDownloadBubblePartialViewEnabled(browser_->GetProfile()));
     auto targeter = std::make_unique<CheckboxTargeter>();
     checkbox_->SetEventTargeter(
         std::make_unique<views::ViewTargeter>(std::move(targeter)));
@@ -151,7 +148,7 @@ class SuppressBubbleSettingRow : public views::View,
  private:
   void CheckboxClicked() {
     if (navigation_handler_) {
-      download::SetDownloadBubblePartialViewEnabled(browser_->profile(),
+      download::SetDownloadBubblePartialViewEnabled(browser_->GetProfile(),
                                                     !checkbox_->GetChecked());
       settings_text_->SetVisible(true);
     }
@@ -159,11 +156,11 @@ class SuppressBubbleSettingRow : public views::View,
 
   void SettingsLinkClicked() {
     if (bubble_controller_ && browser_) {
-      chrome::ShowSettingsSubPage(browser_.get(), chrome::kDownloadsSubPage);
+      chrome::ShowSettingsSubPage(browser_, chrome::kDownloadsSubPage);
     }
   }
 
-  base::WeakPtr<Browser> browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface> browser_ = nullptr;
   base::WeakPtr<DownloadBubbleUIController> bubble_controller_ = nullptr;
   base::WeakPtr<DownloadBubbleNavigationHandler> navigation_handler_ = nullptr;
   raw_ptr<views::Checkbox> checkbox_ = nullptr;
@@ -199,20 +196,20 @@ void MaybeRecordImpression(Profile* profile, int impressions) {
 }  // namespace
 
 DownloadBubblePartialView::DownloadBubblePartialView(
-    base::WeakPtr<Browser> browser,
+    BrowserWindowInterface* browser,
     base::WeakPtr<DownloadBubbleUIController> bubble_controller,
     base::WeakPtr<DownloadBubbleNavigationHandler> navigation_handler,
     const DownloadBubbleRowListViewInfo& info,
     base::OnceClosure on_interacted_closure)
     : on_interacted_closure_(std::move(on_interacted_closure)) {
-  MaybeAddOtrInfoRow(browser.get());
+  MaybeAddOtrInfoRow(browser);
 
-  Profile* profile = browser->profile();
+  Profile* profile = browser ? browser->GetProfile() : nullptr;
   const int impressions =
-      download::DownloadBubblePartialViewImpressions(profile) + 1;
+      profile ? download::DownloadBubblePartialViewImpressions(profile) + 1 : 1;
   int preferred_width = DefaultPreferredWidth();
   std::unique_ptr<SuppressBubbleSettingRow> setting_row;
-  if (ShouldShowSuppressSetting(profile, impressions)) {
+  if (profile && ShouldShowSuppressSetting(profile, impressions)) {
     setting_row = std::make_unique<SuppressBubbleSettingRow>(
         browser, ShouldShowSettingsLink(impressions), bubble_controller,
         navigation_handler);
@@ -220,9 +217,7 @@ DownloadBubblePartialView::DownloadBubblePartialView(
         std::max(preferred_width, setting_row->GetPreferredSize().width());
   }
 
-  last_download_completed_time_ = info.last_completed_time();
-
-  BuildAndAddScrollView(std::move(browser), std::move(bubble_controller),
+  BuildAndAddScrollView(browser, std::move(bubble_controller),
                         std::move(navigation_handler), info, preferred_width);
 
   if (setting_row) {
@@ -238,7 +233,9 @@ DownloadBubblePartialView::DownloadBubblePartialView(
     AddChildView(std::move(setting_row));
   }
 
-  MaybeRecordImpression(profile, impressions);
+  if (profile) {
+    MaybeRecordImpression(profile, impressions);
+  }
 }
 
 DownloadBubblePartialView::~DownloadBubblePartialView() = default;
@@ -247,21 +244,6 @@ void DownloadBubblePartialView::AddedToWidget() {
   auto* focus_manager = GetFocusManager();
   if (focus_manager) {
     focus_manager->AddFocusChangeListener(this);
-  }
-
-  if (last_download_completed_time_.has_value()) {
-    GetWidget()->GetCompositor()->RequestSuccessfulPresentationTimeForNextFrame(
-        base::BindOnce(
-            [](base::Time download_completed_time_,
-               const viz::FrameTimingDetails& frame_timing_details) {
-              base::TimeTicks presentation_time =
-                  frame_timing_details.presentation_feedback.timestamp;
-              UmaHistogramTimes(
-                  "Download.Bubble.DownloadCompletionToPartialViewShownLatency",
-                  (presentation_time - base::TimeTicks::UnixEpoch()) -
-                      (download_completed_time_ - base::Time::UnixEpoch()));
-            },
-            *last_download_completed_time_));
   }
 }
 

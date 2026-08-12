@@ -45,10 +45,10 @@
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/safe_browsing/android/download_protection_metrics_data.h"
 #else
-#include "chrome/browser/safe_browsing/cloud_content_scanning/deep_scanning_utils.h"
 #include "chrome/browser/safe_browsing/download_protection/download_feedback.h"
 #include "chrome/browser/safe_browsing/download_protection/download_feedback_service.h"
 #include "components/enterprise/connectors/core/cloud_content_scanning/binary_upload_service.h"
+#include "components/enterprise/connectors/core/cloud_content_scanning/deep_scanning_utils.h"
 #endif
 
 namespace safe_browsing {
@@ -79,6 +79,7 @@ bool ShouldUploadToDownloadFeedback(DownloadCheckResult result) {
     case DownloadCheckResult::BLOCKED_TOO_LARGE:
     case DownloadCheckResult::SENSITIVE_CONTENT_BLOCK:
     case DownloadCheckResult::FORCE_SAVE_TO_GDRIVE:
+    case DownloadCheckResult::FORCE_SAVE_TO_ONEDRIVE:
     case DownloadCheckResult::ALLOWLISTED_BY_POLICY:
     case DownloadCheckResult::BLOCKED_SCAN_FAILED:
       return false;
@@ -132,7 +133,7 @@ void CheckClientDownloadRequest::OnDownloadUpdated(
     auto settings = ShouldUploadBinaryForDeepScanning(item_);
 #if !BUILDFLAG(IS_ANDROID)
     if (settings.has_value()) {
-      RecordDeepScanMetrics(
+      enterprise_connectors::RecordDeepScanMetrics(
           settings->cloud_or_local_settings.is_cloud_analysis(),
           /*access_point=*/enterprise_connectors::DeepScanAccessPoint::DOWNLOAD,
           /*duration=*/base::TimeTicks::Now() - upload_start_time_,
@@ -309,7 +310,9 @@ void CheckClientDownloadRequest::UploadBinary(
     DownloadCheckResult result,
     DownloadCheckResultReason reason,
     enterprise_connectors::AnalysisSettings settings) {
-#if !BUILDFLAG(IS_ANDROID)
+  if (!IsDeepScanningEnabled()) {
+    return;
+  }
   auto metadata = std::make_unique<DownloadItemMetadata>(item_);
   metadata->SetCallback(callback_);
   auto weak_metadata = metadata->GetWeakPtr();
@@ -321,7 +324,6 @@ void CheckClientDownloadRequest::UploadBinary(
       DownloadItemWarningData::DeepScanTrigger::TRIGGER_POLICY, result,
       std::move(settings),
       /*password=*/std::nullopt);
-#endif
 }
 
 void CheckClientDownloadRequest::NotifyRequestFinished(

@@ -8,7 +8,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/trace_event/trace_id_helper.h"
 #include "base/trace_event/typed_macros.h"
@@ -83,11 +82,8 @@ const char kInvalidRequiredFeatures[] =
 const char kNoDevicesMessage[] = "No XR hardware found.";
 
 const char kImmersiveArModeNotValid[] =
-    "Failed to execute '%s' on 'XRSystem': The provided value 'immersive-ar' "
-    "is not a valid enum value of type XRSessionMode.";
-
-const char kTrackedImageWidthInvalid[] =
-    "trackedImages[%d].widthInMeters invalid, must be a positive number.";
+    "Failed to execute 'requestSession' on 'XRSystem': The provided value "
+    "'immersive-ar' is not a valid enum value of type XRSessionMode.";
 
 constexpr device::mojom::XRSessionFeature kDefaultImmersiveVrFeatures[] = {
     device::mojom::XRSessionFeature::REF_SPACE_VIEWER,
@@ -202,6 +198,7 @@ bool IsFeatureValidForMode(device::mojom::XRSessionFeature feature,
     case device::mojom::XRSessionFeature::CAMERA_ACCESS:
     case device::mojom::XRSessionFeature::PLANE_DETECTION:
     case device::mojom::XRSessionFeature::FRONT_FACING:
+    case device::mojom::XRSessionFeature::MESH_DETECTION:
       return mode == device::mojom::blink::XRSessionMode::kImmersiveAr;
     case device::mojom::XRSessionFeature::DEPTH:
       if (!session_init->hasDepthSensing()) {
@@ -232,6 +229,7 @@ bool HasRequiredPermissionsPolicy(ExecutionContext* context,
     case device::mojom::XRSessionFeature::LIGHT_ESTIMATION:
     case device::mojom::XRSessionFeature::ANCHORS:
     case device::mojom::XRSessionFeature::PLANE_DETECTION:
+    case device::mojom::XRSessionFeature::MESH_DETECTION:
     case device::mojom::XRSessionFeature::DEPTH:
     case device::mojom::XRSessionFeature::IMAGE_TRACKING:
     case device::mojom::XRSessionFeature::HAND_INPUT:
@@ -594,6 +592,8 @@ void XRSystem::PendingRequestSessionQuery::ReportRequestSessionResult(
       GetFeatureRequestStatus(XRSessionFeature::ANCHORS, session);
   auto feature_request_hit_test =
       GetFeatureRequestStatus(XRSessionFeature::HIT_TEST, session);
+  auto feature_request_mesh_detection =
+      GetFeatureRequestStatus(XRSessionFeature::MESH_DETECTION, session);
 
   ukm::builders::XR_WebXR_SessionRequest(ukm_source_id_)
       .SetMode(static_cast<int64_t>(mode_))
@@ -627,6 +627,13 @@ void XRSystem::PendingRequestSessionQuery::ReportRequestSessionResult(
                << ": plane detection was requested, logging a UseCounter";
       UseCounter::Count(session->GetExecutionContext(),
                         WebFeature::kXRPlaneDetection);
+    }
+
+    if (IsFeatureRequested(feature_request_mesh_detection)) {
+      DVLOG(2) << __func__
+               << ": mesh detection was requested, logging a UseCounter";
+      UseCounter::Count(session->GetExecutionContext(),
+                        WebFeature::kXRMeshDetection);
     }
 
     if (IsFeatureRequested(feature_request_image_tracking)) {
@@ -1257,8 +1264,7 @@ ScriptPromise<XRSession> XRSystem::requestSession(
   if (session_mode == device::mojom::blink::XRSessionMode::kImmersiveAr &&
       !IsImmersiveArAllowed()) {
     DVLOG(1) << __func__ << ": Immersive AR not allowed";
-    exception_state.ThrowTypeError(
-        String::Format(kImmersiveArModeNotValid, "requestSession"));
+    exception_state.ThrowTypeError(kImmersiveArModeNotValid);
 
     // We haven't created the query yet, so we can't use it to implicitly log
     // our metrics for us, so explicitly log it here, as the query requires the
@@ -1347,7 +1353,9 @@ ScriptPromise<XRSession> XRSystem::requestSession(
       DCHECK(image->hasWidthInMeters()) << "required in IDL";
       if (std::isnan(image->widthInMeters()) ||
           image->widthInMeters() <= 0.0f) {
-        String message = String::Format(kTrackedImageWidthInvalid, index);
+        String message =
+            StrCat({"trackedImages[", String::Number(index),
+                    "].widthInMeters invalid, must be a positive number."});
         query->RejectWithTypeError(message, &exception_state);
         return promise;
       }
@@ -1483,8 +1491,8 @@ void XRSystem::OnRequestSessionReturned(
   Element* fullscreen_element = nullptr;
   const auto& enabled_features =
       result->get_success()->session->enabled_features;
-  if (base::Contains(enabled_features,
-                     device::mojom::XRSessionFeature::DOM_OVERLAY)) {
+  if (std::ranges::contains(enabled_features,
+                            device::mojom::XRSessionFeature::DOM_OVERLAY)) {
     fullscreen_element = query->DOMOverlayElement();
   }
 
@@ -1508,7 +1516,7 @@ void XRSystem::OnRequestSessionReturned(
     return;
   }
 
-  const bool session_has_camera_access = base::Contains(
+  const bool session_has_camera_access = std::ranges::contains(
       enabled_features, device::mojom::XRSessionFeature::CAMERA_ACCESS);
 
   // At this point, we know that we have an element that we need to make
@@ -1563,8 +1571,8 @@ void XRSystem::FinishSessionCreation(
     }
 
     String error_message =
-        String::Format("Could not create a session because: %s",
-                       GetConsoleMessage(result->get_failure_reason()));
+        StrCat({"Could not create a session because: ",
+                GetConsoleMessage(result->get_failure_reason())});
     AddConsoleMessage(mojom::blink::ConsoleMessageLevel::kError, error_message);
     query->RejectWithDOMException(DOMExceptionCode::kNotSupportedError,
                                   kSessionNotSupported, nullptr);
@@ -1598,10 +1606,10 @@ void XRSystem::FinishSessionCreation(
 
   if (query->mode() == device::mojom::blink::XRSessionMode::kImmersiveVr ||
       query->mode() == device::mojom::blink::XRSessionMode::kImmersiveAr) {
-    const bool anchors_enabled = base::Contains(
-        enabled_features, device::mojom::XRSessionFeature::ANCHORS);
-    const bool hit_test_enabled = base::Contains(
-        enabled_features, device::mojom::XRSessionFeature::HIT_TEST);
+    const bool anchors_enabled =
+        enabled_features.Contains(device::mojom::XRSessionFeature::ANCHORS);
+    const bool hit_test_enabled =
+        enabled_features.Contains(device::mojom::XRSessionFeature::HIT_TEST);
     const bool environment_integration = hit_test_enabled || anchors_enabled;
     if (environment_integration) {
       // See Task Sources spreadsheet for more information:
@@ -1622,7 +1630,7 @@ void XRSystem::FinishSessionCreation(
     auto dom_overlay_feature = device::mojom::XRSessionFeature::DOM_OVERLAY;
     if (query->mode() == device::mojom::blink::XRSessionMode::kImmersiveAr &&
         query->HasFeature(dom_overlay_feature) &&
-        base::Contains(enabled_features, dom_overlay_feature)) {
+        enabled_features.Contains(dom_overlay_feature)) {
       DCHECK(query->DOMOverlayElement());
       // The session is using DOM overlay mode. At this point the overlay
       // element is already in fullscreen mode, and the session can proceed.
@@ -1704,7 +1712,7 @@ XRSession* XRSystem::CreateSensorlessInlineSession() {
                        mojo::NullReceiver() /* client receiver */,
                        std::move(device_config),
                        {device::mojom::XRSessionFeature::REF_SPACE_VIEWER},
-                       true, kInvalidTraceId /* sensorless_session */);
+                       kInvalidTraceId, true /* sensorless_session */);
 }
 
 void XRSystem::Dispose(DisposeType dispose_type) {

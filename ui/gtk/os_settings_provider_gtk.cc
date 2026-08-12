@@ -9,7 +9,6 @@
 
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
@@ -28,6 +27,13 @@ OsSettingsProviderGtk::~OsSettingsProviderGtk() = default;
 
 ui::NativeTheme::PreferredColorScheme
 OsSettingsProviderGtk::PreferredColorScheme() const {
+  // The xdg-desktop-portal color-scheme preference (pushed in via
+  // GtkUi::SetColorScheme) takes precedence when it expresses one.
+  if (prefer_dark_) {
+    return *prefer_dark_ ? ui::NativeTheme::PreferredColorScheme::kDark
+                         : ui::NativeTheme::PreferredColorScheme::kLight;
+  }
+
   // GTK has a dark mode setting called "gtk-application-prefer-dark-theme", but
   // this is really only used for themes that have a dark or light variant that
   // gets toggled based on this setting (eg. Adwaita).  Most dark themes do not
@@ -49,10 +55,21 @@ ui::NativeTheme::PreferredContrast OsSettingsProviderGtk::PreferredContrast()
   const std::string theme_name =
       base::ToLowerASCII(GetGtkSettingsStringProperty(
           gtk_settings_get_default(), "gtk-theme-name"));
-  const bool high_contrast = base::Contains(theme_name, "high") &&
-                             base::Contains(theme_name, "contrast");
+  const bool high_contrast =
+      theme_name.contains("high") && theme_name.contains("contrast");
   return high_contrast ? ui::NativeTheme::PreferredContrast::kMore
                        : ui::NativeTheme::PreferredContrast::kNoPreference;
+}
+
+bool OsSettingsProviderGtk::PrefersOverlayScrollbars() const {
+  gboolean overlay_scrolling = TRUE;
+  GtkSettings* settings = gtk_settings_get_default();
+  if (settings && g_object_class_find_property(G_OBJECT_GET_CLASS(settings),
+                                               "gtk-overlay-scrolling")) {
+    g_object_get(settings, "gtk-overlay-scrolling", &overlay_scrolling,
+                 nullptr);
+  }
+  return overlay_scrolling;
 }
 
 base::TimeDelta OsSettingsProviderGtk::CaretBlinkInterval() const {
@@ -64,6 +81,27 @@ base::TimeDelta OsSettingsProviderGtk::CaretBlinkInterval() const {
                &cursor_blink_time, "gtk-cursor-blink", &cursor_blink, nullptr);
   return cursor_blink ? base::Milliseconds(cursor_blink_time / 2)
                       : base::TimeDelta();
+}
+
+std::optional<SkColor> OsSettingsProviderGtk::AccentColor() const {
+  return accent_color_;
+}
+
+void OsSettingsProviderGtk::SetAccentColor(
+    std::optional<SkColor> accent_color) {
+  if (accent_color_ == accent_color) {
+    return;
+  }
+  accent_color_ = accent_color;
+  NotifyOnSettingsChanged();
+}
+
+void OsSettingsProviderGtk::SetColorScheme(std::optional<bool> prefer_dark) {
+  if (prefer_dark_ == prefer_dark) {
+    return;
+  }
+  prefer_dark_ = prefer_dark;
+  NotifyOnSettingsChanged();
 }
 
 ScopedGSignal OsSettingsProviderGtk::ConnectSignal(const gchar* name) {

@@ -8,17 +8,26 @@
 
 #import "base/apple/foundation_util.h"
 #import "base/ios/ios_util.h"
+#import "base/memory/raw_ptr.h"
 #import "base/run_loop.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/test/ios/wait_util.h"
+#import "base/test/run_until.h"
 #import "base/test/scoped_feature_list.h"
+#import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/download/model/document_download_tab_helper.h"
 #import "ios/chrome/browser/download/model/download_directory_util.h"
 #import "ios/chrome/browser/download/model/download_manager_tab_helper.h"
 #import "ios/chrome/browser/download/model/external_app_util.h"
+#import "ios/chrome/browser/drive/model/drive_tab_helper.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/signin/model/authentication_service_factory.h"
+#import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/fakes/fake_download_manager_consumer.h"
+#import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/test/fakes/fake_download_task.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
 #import "ios/web/public/test/web_task_environment.h"
@@ -48,15 +57,24 @@ const base::FilePath::CharType kTestSuggestedFileName[] =
 class DownloadManagerMediatorTest : public PlatformTest {
  protected:
   DownloadManagerMediatorTest()
-      : consumer_([[FakeDownloadManagerConsumer alloc] init]),
+      : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME),
+        consumer_([[FakeDownloadManagerConsumer alloc] init]),
         application_(OCMClassMock([UIApplication class])) {
     OCMStub([application_ sharedApplication]).andReturn(application_);
-    profile_ = TestProfileIOS::Builder().Build();
+    TestProfileIOS::Builder builder;
+    builder.AddTestingFactory(
+        AuthenticationServiceFactory::GetInstance(),
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
+            std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
+    profile_ = std::move(builder).Build();
 
     web_state_ = std::make_unique<web::FakeWebState>();
     web_state_->SetBrowserState(profile_.get());
     DocumentDownloadTabHelper::CreateForWebState(web_state_.get());
     DownloadManagerTabHelper::CreateForWebState(web_state_.get());
+    DriveTabHelper::CreateForWebState(web_state_.get());
 
     std::unique_ptr<web::FakeDownloadTask> task =
         std::make_unique<web::FakeDownloadTask>(GURL(kTestUrl), kTestMimeType);
@@ -65,21 +83,42 @@ class DownloadManagerMediatorTest : public PlatformTest {
     task_ = task.get();
     DownloadManagerTabHelper::FromWebState(web_state_.get())
         ->SetCurrentDownload(std::move(task));
+
+    delegate_ = OCMProtocolMock(@protocol(DownloadManagerTabHelperDelegate));
+    DownloadManagerTabHelper::FromWebState(web_state_.get())
+        ->SetDelegate(delegate_);
+    OCMStub(
+        [delegate_
+            downloadManagerTabHelperDidChangeState:(DownloadManagerTabHelper*)
+                                                       [OCMArg any]])
+        .andDo(^(NSInvocation* invocation) {
+          mediator_.UpdateConsumer();
+        });
   }
-  ~DownloadManagerMediatorTest() override { [application_ stopMocking]; }
+  ~DownloadManagerMediatorTest() override {
+    // Ensure all background tasks complete before destroying test fixtures.
+    // This is necessary when kDownloadList is enabled, as DownloadRecordService
+    // initializes on a background thread.
+    if (IsDownloadListEnabled()) {
+      task_environment_.RunUntilIdle();
+    }
+    [application_ stopMocking];
+  }
 
   web::FakeDownloadTask* task() { return task_; }
 
  protected:
+  // ScopedTestingLocalState needed for the authentication service.
+  IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   web::WebTaskEnvironment task_environment_;
   std::unique_ptr<TestProfileIOS> profile_;
   std::unique_ptr<web::FakeWebState> web_state_;
   DownloadManagerMediator mediator_;
   FakeDownloadManagerConsumer* consumer_;
   id application_;
+  id delegate_;
   raw_ptr<web::FakeDownloadTask> task_;
 };
-
 // Tests starting the download and immediately destroying the task.
 // DownloadManagerMediator should not crash.
 TEST_F(DownloadManagerMediatorTest, DestoryTaskAfterStart) {
@@ -114,9 +153,11 @@ TEST_F(DownloadManagerMediatorTest, StartTempDownload) {
 
   // Once downloaded, the file should be located in download directory.
   task()->SetDone(true);
+  mediator_.UpdateConsumer();
   base::FilePath download_dir;
   GetDownloadsDirectory(&download_dir);
-  EXPECT_EQ(DownloadManagerState::kSucceeded, consumer_.state);
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return consumer_.state == DownloadManagerState::kSucceeded; }));
   ASSERT_TRUE(WaitUntilConditionOrTimeout(
       base::test::ios::kWaitForDownloadTimeout, true, ^{
         return !mediator_.GetDownloadPath().empty();
@@ -141,7 +182,9 @@ TEST_F(DownloadManagerMediatorTest, StartDownload) {
       }));
 
   task()->SetDone(true);
-  EXPECT_EQ(DownloadManagerState::kSucceeded, consumer_.state);
+  mediator_.UpdateConsumer();
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return consumer_.state == DownloadManagerState::kSucceeded; }));
   // Download file should be located in download directory.
   base::FilePath download_dir;
   GetDownloadsDirectory(&download_dir);
@@ -179,7 +222,8 @@ TEST_F(DownloadManagerMediatorTest, ConsumerInstantUpdate) {
   mediator_.SetDownloadTask(task());
   mediator_.SetConsumer(consumer_);
 
-  EXPECT_EQ(DownloadManagerState::kSucceeded, consumer_.state);
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return consumer_.state == DownloadManagerState::kSucceeded; }));
   EXPECT_FALSE(consumer_.installDriveButtonVisible);
   EXPECT_EQ(base::FilePath(kTestSuggestedFileName),
             base::apple::NSStringToFilePath(consumer_.fileName));
@@ -217,7 +261,9 @@ TEST_F(DownloadManagerMediatorTest, ConsumerSuceededStateUpdate) {
       }));
 
   task()->SetDone(true);
-  EXPECT_EQ(DownloadManagerState::kSucceeded, consumer_.state);
+  mediator_.UpdateConsumer();
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return consumer_.state == DownloadManagerState::kSucceeded; }));
   EXPECT_FALSE(consumer_.installDriveButtonVisible);
 }
 
@@ -240,7 +286,9 @@ TEST_F(DownloadManagerMediatorTest,
       }));
 
   task()->SetDone(true);
-  EXPECT_EQ(DownloadManagerState::kSucceeded, consumer_.state);
+  mediator_.UpdateConsumer();
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return consumer_.state == DownloadManagerState::kSucceeded; }));
   EXPECT_TRUE(consumer_.installDriveButtonVisible);
 }
 
@@ -253,6 +301,26 @@ TEST_F(DownloadManagerMediatorTest, ConsumerInProgressStateUpdate) {
   task()->Start(base::FilePath());
   EXPECT_EQ(DownloadManagerState::kInProgress, consumer_.state);
   EXPECT_EQ(0.0, consumer_.progress);
+}
+
+// Tests that consumer stays in DownloadManagerState::kInProgress if the task is
+// complete but the scanner is still processing.
+TEST_F(DownloadManagerMediatorTest, ConsumerInProgressStateWhileScanning) {
+  mediator_.SetDownloadTask(task());
+  mediator_.SetConsumer(consumer_);
+
+  task()->SetDone(true);
+  DownloadManagerTabHelper::FromWebState(web_state_.get())
+      ->SetIsScannerProcessingForTesting(true);
+
+  mediator_.UpdateConsumer();
+  EXPECT_EQ(DownloadManagerState::kInProgress, consumer_.state);
+
+  DownloadManagerTabHelper::FromWebState(web_state_.get())
+      ->SetIsScannerProcessingForTesting(false);
+  mediator_.UpdateConsumer();
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return consumer_.state == DownloadManagerState::kSucceeded; }));
 }
 
 // Tests that setting the consumer twice when the download is complete will only
@@ -277,9 +345,11 @@ TEST_F(DownloadManagerMediatorTest, SetConsumerAfterDownloadComplete) {
 
   // Once downloaded, the file should be located in download directory.
   task()->SetDone(true);
+  mediator_.UpdateConsumer();
   base::FilePath download_dir;
   GetDownloadsDirectory(&download_dir);
-  EXPECT_EQ(DownloadManagerState::kSucceeded, consumer_.state);
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return consumer_.state == DownloadManagerState::kSucceeded; }));
   ASSERT_TRUE(WaitUntilConditionOrTimeout(
       base::test::ios::kWaitForDownloadTimeout, true, ^{
         return !mediator_.GetDownloadPath().empty();
@@ -289,7 +359,8 @@ TEST_F(DownloadManagerMediatorTest, SetConsumerAfterDownloadComplete) {
 
   // Set the consumer a second time.
   mediator_.SetConsumer(consumer_);
-  EXPECT_EQ(DownloadManagerState::kSucceeded, consumer_.state);
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return consumer_.state == DownloadManagerState::kSucceeded; }));
   EXPECT_TRUE(download_dir.IsParent(file_path));
   EXPECT_EQ(file_path, mediator_.GetDownloadPath());
 }
@@ -316,6 +387,23 @@ TEST_F(DownloadManagerMediatorTest, SetGoogleDriveAppInstalled) {
   EXPECT_FALSE(consumer_.installDriveButtonVisible);
 }
 
+// Tests that calling `UpdateConsumer()` rechecks whether Google Drive app is
+// installed.
+TEST_F(DownloadManagerMediatorTest,
+       UpdateConsumerRechecksGoogleDriveAppInstalled) {
+  mediator_.SetDownloadTask(task());
+  mediator_.SetConsumer(consumer_);
+
+  mediator_.SetGoogleDriveAppInstalled(YES);
+  EXPECT_FALSE(consumer_.installDriveButtonVisible);
+
+  mediator_.SetGoogleDriveAppInstalled(NO);
+  EXPECT_TRUE(consumer_.installDriveButtonVisible);
+
+  mediator_.SetGoogleDriveAppInstalled(YES);
+  EXPECT_FALSE(consumer_.installDriveButtonVisible);
+}
+
 // Tests the diplay origin logic.
 TEST_F(DownloadManagerMediatorTest, DisplayOrigin) {
   if (!base::ios::IsRunningOnOrLater(18, 2, 0)) {
@@ -331,21 +419,18 @@ TEST_F(DownloadManagerMediatorTest, DisplayOrigin) {
   mediator->UpdateConsumer();
   EXPECT_NSEQ(consumer_.originatingHost,
               base::SysUTF8ToNSString(GURL(kSameDomainURL).GetHost()));
-  EXPECT_FALSE(consumer_.originatingHostDisplayed);
 
   // WebState and task have different domains.
   web_state_->SetCurrentURL(GURL(kCrossDomainURL));
   mediator->UpdateConsumer();
   EXPECT_NSEQ(consumer_.originatingHost,
               base::SysUTF8ToNSString(GURL(kSameDomainURL).GetHost()));
-  EXPECT_TRUE(consumer_.originatingHostDisplayed);
 
   // Navigate back, origin should still be visible.
   web_state_->SetCurrentURL(GURL(kSameDomainURL));
   mediator->UpdateConsumer();
   EXPECT_NSEQ(consumer_.originatingHost,
               base::SysUTF8ToNSString(GURL(kSameDomainURL).GetHost()));
-  EXPECT_TRUE(consumer_.originatingHostDisplayed);
 
   // Reset Mediator.
   web_state_->SetCurrentURL(GURL(kSameDomainURL));
@@ -360,19 +445,27 @@ TEST_F(DownloadManagerMediatorTest, DisplayOrigin) {
   mediator->UpdateConsumer();
   EXPECT_NSEQ(consumer_.originatingHost,
               base::SysUTF8ToNSString(GURL(kCrossDomainURL).GetHost()));
-  EXPECT_TRUE(consumer_.originatingHostDisplayed);
+}
 
-  // Reset Mediator.
-  web_state_->SetCurrentURL(GURL(kSameDomainURL));
-  mediator = std::make_unique<DownloadManagerMediator>();
-  mediator->SetDownloadTask(task());
-  mediator->SetConsumer(consumer_);
+// Tests that rapid progress updates are throttled so consumer is not updated
+// on every single progress change.
+TEST_F(DownloadManagerMediatorTest, ConsumerProgressThrottling) {
+  mediator_.SetDownloadTask(task());
+  mediator_.SetConsumer(consumer_);
 
-  // Check that if no URL is available, the placeholder is displayed.
-  task()->SetRedirectedURL(GURL("data:"));
-  task()->SetOriginatingHost(@"");
-  web_state_->SetCurrentURL(GURL("data:"));
-  mediator->UpdateConsumer();
-  EXPECT_NSEQ(consumer_.originatingHost, nil);
-  EXPECT_TRUE(consumer_.originatingHostDisplayed);
+  task()->Start(base::FilePath());
+  EXPECT_EQ(0.0f, consumer_.progress);
+
+  // First progress update triggers consumer immediately.
+  task()->SetPercentComplete(10);
+  EXPECT_EQ(0.1f, consumer_.progress);
+
+  // Immediate subsequent progress update while timer is running should be
+  // throttled.
+  task()->SetPercentComplete(20);
+  EXPECT_EQ(0.1f, consumer_.progress);
+
+  // Fast forward past the throttling interval (100ms).
+  task_environment_.FastForwardBy(base::Milliseconds(100));
+  EXPECT_EQ(0.2f, consumer_.progress);
 }

@@ -47,8 +47,8 @@ class TimingFunctionTest : public testing::Test {
 
   void NotEqualHelperLoop(
       Vector<std::pair<std::string, scoped_refptr<TimingFunction>>>& v) {
-    for (size_t i = 0; i < v.size(); ++i) {
-      for (size_t j = 0; j < v.size(); ++j) {
+    for (wtf_size_t i = 0; i < v.size(); ++i) {
+      for (wtf_size_t j = 0; j < v.size(); ++j) {
         if (i == j)
           continue;
         EXPECT_NE(v[i], v[j])
@@ -394,6 +394,20 @@ TEST_F(TimingFunctionTest, CubicRange) {
   end = 10;
   cubic_custom_timing->Range(&start, &end);
   EXPECT_NEAR(-3.94, start, 0.01);
+  EXPECT_NEAR(1.0, end, 0.01);
+}
+
+// Regression test for crbug.com/536936875
+TEST_F(TimingFunctionTest, CubicRangeWithLargeEpsilon) {
+  // Using Horner's method, a,b,c coefficients will not equal 1 due to
+  // floating-point errors, making it difficult to resolve the range to within
+  // std::numeric_limits<double>::epsilon()
+  scoped_refptr<TimingFunction> cubic_custom_timing =
+      CubicBezierTimingFunction::Create(0.55, 0.085, 0, 0.99);
+  double start = 0;
+  double end = 1;
+  cubic_custom_timing->Range(&start, &end);
+  EXPECT_NEAR(0, start, 0.01);
   EXPECT_NEAR(1.0, end, 0.01);
 }
 

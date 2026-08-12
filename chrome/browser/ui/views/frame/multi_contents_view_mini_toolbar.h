@@ -9,33 +9,31 @@
 
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
-#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/view.h"
 
+class BrowserView;
 class ContentsWebView;
-struct TabRendererData;
+class TabUIHelper;
+
+namespace content {
+class WebContents;
+}
 
 namespace tabs {
 enum class TabAlert;
-}
-
-namespace ui {
-class MenuModel;
 }
 
 namespace views {
 class ImageButton;
 class ImageView;
 class Label;
-class MenuRunner;
 class WebView;
 }  // namespace views
 
 // MultiContentsViewMiniToolbar is shown for the inactive side of a split and
-// displays the favicon, domain, tab alert state, and a menu button.
-class MultiContentsViewMiniToolbar : public views::View,
-                                     public TabStripModelObserver {
+// displays the favicon, domain, tab alert state, and a close button.
+class MultiContentsViewMiniToolbar : public views::View {
   METADATA_HEADER(MultiContentsViewMiniToolbar, views::View)
 
  public:
@@ -49,14 +47,9 @@ class MultiContentsViewMiniToolbar : public views::View,
   void UpdateContents();
 
   views::Label* domain_label_for_testing() { return domain_label_; }
-  views::ImageButton* image_button_for_testing() { return image_button_; }
+  views::ImageButton* close_button_for_testing() { return close_button_; }
 
  private:
-  // TabStripModelObserver:
-  void OnTabChangedAt(tabs::TabInterface* tab,
-                      int index,
-                      TabChangeType change_type) override;
-
   // View:
   void OnPaint(gfx::Canvas* canvas) override;
   void OnThemeChanged() override;
@@ -64,31 +57,24 @@ class MultiContentsViewMiniToolbar : public views::View,
   void UpdateWebContents(views::WebView* web_view);
   void ClearWebContents(views::WebView*);
 
-  void RegisterTabAlertSubscription();
+  void RegisterTabSubscriptions();
   void OnAlertStatusIndicatorChanged(std::optional<tabs::TabAlert> new_alert);
 
-  std::optional<TabRendererData> GetTabData();
-  // Updates the favicon and domain based on the provided |tab_data|.
-  void UpdateContents(TabRendererData tab_data);
-  void UpdateFavicon(TabRendererData tab_data);
+  void UpdateFavicon(TabUIHelper* tab_ui_helper);
 
-  void OpenSplitViewMenu();
   void CloseCurrentView();
 
   raw_ptr<views::ImageView> favicon_;
   raw_ptr<views::Label> domain_label_;
   raw_ptr<views::ImageView> alert_state_indicator_;
-  raw_ptr<views::ImageButton> image_button_;
-  // Model for the split view menu.
-  std::unique_ptr<ui::MenuModel> menu_model_;
-  // Runner for the split view menu.
-  std::unique_ptr<views::MenuRunner> menu_runner_;
+  raw_ptr<views::ImageButton> close_button_;
 
   raw_ptr<BrowserView> browser_view_;
   raw_ptr<content::WebContents> web_contents_;
   base::CallbackListSubscription web_contents_attached_subscription_;
   base::CallbackListSubscription web_contents_detached_subscription_;
   std::optional<base::CallbackListSubscription> tab_alert_status_subscription_;
+  std::optional<base::CallbackListSubscription> tab_ui_updated_subscription_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_MULTI_CONTENTS_VIEW_MINI_TOOLBAR_H_

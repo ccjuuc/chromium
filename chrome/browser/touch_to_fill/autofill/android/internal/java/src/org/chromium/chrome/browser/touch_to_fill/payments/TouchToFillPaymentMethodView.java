@@ -10,6 +10,7 @@ import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaym
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ScreenId.ERROR_SCREEN;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ScreenId.HOME_SCREEN;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ScreenId.PROGRESS_SCREEN;
+import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ScreenId.TABBED_HOME_SCREEN;
 
 import android.content.Context;
 import android.view.LayoutInflater;
@@ -19,20 +20,21 @@ import android.widget.RelativeLayout;
 import android.widget.ViewFlipper;
 
 import androidx.annotation.IdRes;
-import androidx.annotation.NonNull;
 import androidx.annotation.Px;
 import androidx.annotation.StringRes;
 
+import com.google.android.material.tabs.TabLayout;
+
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.touch_to_fill.common.ItemDividerBase;
-import org.chromium.chrome.browser.touch_to_fill.common.TouchToFillViewBase;
 import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType;
 import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ScreenId;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetListViewBase;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
 import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
+import org.chromium.components.browser_ui.bottomsheet.ItemDividerBase;
 
 import java.util.Set;
 
@@ -42,7 +44,7 @@ import java.util.Set;
  * inherit but holds Android Views.
  */
 @NullMarked
-class TouchToFillPaymentMethodView extends TouchToFillViewBase {
+class TouchToFillPaymentMethodView extends BottomSheetListViewBase {
 
     private @StringRes int mSheetContentDescriptionId;
     private @StringRes int mSheetFullHeightDescriptionId;
@@ -83,6 +85,7 @@ class TouchToFillPaymentMethodView extends TouchToFillViewBase {
                 case ItemType.TOS_FOOTER:
                 case ItemType.TEXT_BUTTON:
                 case ItemType.BNPL_TOS_TEXT:
+                case ItemType.TOS_HEADER:
                     return true;
                 case ItemType.CREDIT_CARD:
                 case ItemType.IBAN:
@@ -142,7 +145,36 @@ class TouchToFillPaymentMethodView extends TouchToFillViewBase {
     void setBackPressHandler(Runnable backPressHandler) {
         getContentView()
                 .findViewById(R.id.all_loyalty_cards_back_image_button)
-                .setOnClickListener((unused) -> backPressHandler.run());
+                .setOnClickListener(_ -> backPressHandler.run());
+    }
+
+    void setTabSelectionHandler(org.chromium.base.Callback<Integer> tabSelectionHandler) {
+        TabLayout tabLayout = getContentView().findViewById(R.id.tab_layout);
+        if (tabLayout == null) return;
+
+        tabLayout.addOnTabSelectedListener(
+                new TabLayout.OnTabSelectedListener() {
+                    @Override
+                    public void onTabSelected(TabLayout.Tab tab) {
+                        tabSelectionHandler.onResult(tab.getPosition());
+                    }
+
+                    @Override
+                    public void onTabUnselected(TabLayout.Tab tab) {}
+
+                    @Override
+                    public void onTabReselected(TabLayout.Tab tab) {}
+                });
+    }
+
+    void setSelectedTab(int tabIndex) {
+        TabLayout tabLayout = getContentView().findViewById(R.id.tab_layout);
+        if (tabLayout != null && tabLayout.getSelectedTabPosition() != tabIndex) {
+            TabLayout.Tab tab = tabLayout.getTabAt(tabIndex);
+            if (tab != null) {
+                tab.select();
+            }
+        }
     }
 
     public void setSheetContentDescriptionId(@StringRes int sheetContentDescriptionId) {
@@ -167,7 +199,7 @@ class TouchToFillPaymentMethodView extends TouchToFillViewBase {
     }
 
     @Override
-    public @NonNull String getSheetContentDescription(Context context) {
+    public String getSheetContentDescription(Context context) {
         return getContentView().getContext().getString(mSheetContentDescriptionId);
     }
 
@@ -199,6 +231,9 @@ class TouchToFillPaymentMethodView extends TouchToFillViewBase {
                 == getDisplayedChildForScreenId(ALL_LOYALTY_CARDS_SCREEN)) {
             // Only the all loyalty cards screen has a static header;
             return getContentView().findViewById(R.id.all_loyalty_cards_toolbar);
+        }
+        if (viewFlipper.getDisplayedChild() == getDisplayedChildForScreenId(TABBED_HOME_SCREEN)) {
+            return getContentView().findViewById(R.id.tabbed_header_container);
         }
         return null;
     }
@@ -245,6 +280,8 @@ class TouchToFillPaymentMethodView extends TouchToFillViewBase {
                 return 4;
             case BNPL_ISSUER_TOS_SCREEN:
                 return 5;
+            case TABBED_HOME_SCREEN:
+                return 6;
         }
         assert false : "Undefined ScreenId: " + screenId;
         return 0;
@@ -264,6 +301,8 @@ class TouchToFillPaymentMethodView extends TouchToFillViewBase {
                 return R.id.touch_to_fill_error_screen;
             case BNPL_ISSUER_TOS_SCREEN:
                 return R.id.touch_to_fill_bnpl_issuer_tos_screen;
+            case TABBED_HOME_SCREEN:
+                return R.id.touch_to_fill_payment_method_tabbed_recycler_view;
         }
         assert false : "Undefined ScreenId: " + screenId;
         return 0;
@@ -278,6 +317,7 @@ class TouchToFillPaymentMethodView extends TouchToFillViewBase {
             case HOME_SCREEN:
             case ALL_LOYALTY_CARDS_SCREEN:
             case BNPL_ISSUER_SELECTION_SCREEN:
+            case TABBED_HOME_SCREEN:
                 return false;
         }
         assert false : "Undefined ScreenId: " + screenId;

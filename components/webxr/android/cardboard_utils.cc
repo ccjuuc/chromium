@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/android/jni_android.h"
+#include "base/logging.h"
 #include "components/webxr/android/cardboard_device_provider.h"
 #include "device/vr/android/cardboard/cardboard_device_params.h"
 #include "device/vr/android/cardboard/mock_cardboard_sdk.h"
@@ -24,8 +25,8 @@ static void JNI_CardboardUtils_NativeUseCardboardMockForTesting(JNIEnv* env) {
   CardboardDeviceProvider::set_use_cardboard_mock_for_testing(true);
 }
 
-static jboolean
-JNI_CardboardUtils_NativeCheckQrCodeScannerWasLaunchedForTesting(JNIEnv* env) {
+static bool JNI_CardboardUtils_NativeCheckQrCodeScannerWasLaunchedForTesting(
+    JNIEnv* env) {
   DVLOG(1) << __func__;
   return device::MockCardboardSdk::
       check_qr_code_scanner_was_launched_for_testing();

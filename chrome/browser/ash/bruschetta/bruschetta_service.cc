@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
+#include "base/check_deref.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
@@ -46,7 +47,8 @@ BruschettaService::VmRegistration& BruschettaService::VmRegistration::operator=(
     BruschettaService::VmRegistration&&) = default;
 BruschettaService::VmRegistration::~VmRegistration() = default;
 
-BruschettaService::BruschettaService(Profile* profile) : profile_(profile) {
+BruschettaService::BruschettaService(PrefService* local_state, Profile* profile)
+    : local_state_(CHECK_DEREF(local_state)), profile_(profile) {
   if (auto* concierge = ash::ConciergeClient::Get(); concierge) {
     concierge->AddVmObserver(this);
   }
@@ -104,7 +106,7 @@ void BruschettaService::OnPolicyChanged() {
       continue;
     }
 
-    std::optional<const base::Value::Dict*> config_opt =
+    std::optional<const base::DictValue*> config_opt =
         GetRunnableConfig(profile_, config_id);
     if (!config_opt.has_value()) {
       // config is either unset or explicitly blocked from running.
@@ -132,7 +134,7 @@ void BruschettaService::OnPolicyChanged() {
 void BruschettaService::StopVmIfRequiredByPolicy(
     std::string vm_name,
     std::string config_id,
-    const base::Value::Dict* config) {
+    const base::DictValue* config) {
   auto it = running_vms_.find(vm_name);
   if (it != running_vms_.end()) {
     auto old_policy = it->second;
@@ -167,7 +169,7 @@ void BruschettaService::AllowLaunch(guest_os::GuestId guest_id) {
   auto mount_id = guest_os::GuestOsServiceFactory::GetForProfile(profile_)
                       ->MountProviderRegistry()
                       ->Register(std::make_unique<BruschettaMountProvider>(
-                          profile_, std::move(guest_id)));
+                          &local_state_.get(), profile_, std::move(guest_id)));
 
   runnable_vms_.insert(
       {std::move(vm_name), VmRegistration{std::move(launcher), mount_id}});
@@ -228,7 +230,7 @@ void BruschettaService::StopVm(std::string vm_name) {
 
 void BruschettaService::RegisterInPrefs(const guest_os::GuestId& guest_id,
                                         const std::string& config_id) {
-  base::Value::Dict properties;
+  base::DictValue properties;
   properties.Set(guest_os::prefs::kBruschettaConfigId, config_id);
   guest_os::AddContainerToPrefs(profile_, guest_id, std::move(properties));
 

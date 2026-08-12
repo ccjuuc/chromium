@@ -19,7 +19,6 @@
 #include "chrome/browser/ash/app_mode/kiosk_app_types.h"
 #include "chrome/browser/ash/app_mode/test/kiosk_mixin.h"
 #include "chrome/browser/ash/app_mode/test/kiosk_test_utils.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "components/policy/core/common/cloud/test/policy_builder.h"
@@ -39,7 +38,7 @@ bool IsChromeApp(const KioskApp& app) {
 }
 
 std::string ToJsonString(const keyboard::KeyboardConfig& config) {
-  auto dict = base::Value::Dict()
+  auto dict = base::DictValue()
                   .Set("auto_complete_enabled", config.auto_complete)
                   .Set("auto_correct_enabled", config.auto_correct)
                   .Set("handwriting_enabled", config.handwriting)

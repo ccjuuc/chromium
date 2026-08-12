@@ -20,6 +20,7 @@
 #include "chrome/browser/signin/bound_session_credentials/bound_session_params_util.h"
 #include "chrome/browser/signin/bound_session_credentials/bound_session_registration_fetcher.h"
 #include "components/signin/public/base/session_binding_test_utils.h"
+#include "components/unexportable_keys/background_task_origin.h"
 #include "components/unexportable_keys/service_error.h"
 #include "components/unexportable_keys/unexportable_key_service.h"
 #include "components/unexportable_keys/unexportable_key_service_impl.h"
@@ -41,7 +42,7 @@ namespace {
 using ::testing::UnorderedPointwise;
 
 using unexportable_keys::ServiceErrorOr;
-using unexportable_keys::UnexportableKeyId;
+using unexportable_keys::UnexportableSigningKeyId;
 using RegistrationError =
     BoundSessionRegistrationFetcherImpl::RegistrationError;
 using RegistrationResultFuture = base::test::TestFuture<
@@ -233,7 +234,10 @@ class BoundSessionRegistrationFetcherImplTest : public testing::Test {
       scoped_key_provider_;
   unexportable_keys::UnexportableKeyTaskManager task_manager_;
   unexportable_keys::UnexportableKeyServiceImpl unexportable_key_service_{
-      task_manager_, crypto::UnexportableKeyProvider::Config()};
+      task_manager_,
+      unexportable_keys::BackgroundTaskOrigin::
+          kDeviceBoundSessionCredentialsPrototype,
+      crypto::UnexportableKeyProvider::Config()};
   network::TestURLLoaderFactory url_loader_factory_;
   base::HistogramTester histogram_tester_;
 
@@ -266,7 +270,8 @@ TEST_F(BoundSessionRegistrationFetcherImplTest, ValidInput) {
 
   // Verify the wrapped key.
   std::string wrapped_key = future.Get<>()->wrapped_key();
-  base::test::TestFuture<ServiceErrorOr<UnexportableKeyId>>
+  base::test::TestFuture<
+      ServiceErrorOr<unexportable_keys::UnexportableSigningKeyId>>
       wrapped_key_to_key_id;
   unexportable_key_service().FromWrappedSigningKeySlowlyAsync(
       base::as_byte_span(wrapped_key),
@@ -276,7 +281,7 @@ TEST_F(BoundSessionRegistrationFetcherImplTest, ValidInput) {
   EXPECT_TRUE(wrapped_key_to_key_id.Get().has_value());
 
   // Verify that the request body contains a valid registration token.
-  UnexportableKeyId key_id = wrapped_key_to_key_id.Get().value();
+  UnexportableSigningKeyId key_id = wrapped_key_to_key_id.Get().value();
   EXPECT_TRUE(signin::VerifyJwtSignature(
       GetRequestBody(), *unexportable_key_service().GetAlgorithm(key_id),
       *unexportable_key_service().GetSubjectPublicKeyInfo(key_id)));

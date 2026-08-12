@@ -15,7 +15,10 @@
 #include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/bookmarks/browser/bookmark_client.h"
+#include "components/os_crypt/async/browser/os_crypt_async.h"
+#include "components/os_crypt/async/common/encryptor.h"
 
 namespace gfx {
 class Image;
@@ -27,7 +30,8 @@ class BookmarkModel;
 
 class TestBookmarkClient : public BookmarkClient {
  public:
-  TestBookmarkClient();
+  explicit TestBookmarkClient(
+      os_crypt_async::OSCryptAsync* os_crypt_async = nullptr);
 
   TestBookmarkClient(const TestBookmarkClient&) = delete;
   TestBookmarkClient& operator=(const TestBookmarkClient&) = delete;
@@ -36,6 +40,9 @@ class TestBookmarkClient : public BookmarkClient {
 
   // Returns a new BookmarkModel using a TestBookmarkClient.
   static std::unique_ptr<BookmarkModel> CreateModel();
+
+  // Returns true if the test environment defaults to a desktop form factor.
+  static bool IsDesktopFormFactorByDefault();
 
   // Returns a new BookmarkModel using `client`.
   static std::unique_ptr<BookmarkModel> CreateModelWithClient(
@@ -94,6 +101,7 @@ class TestBookmarkClient : public BookmarkClient {
   bool IsSyncFeatureEnabledIncludingBookmarks() override;
   bool CanSetPermanentNodeTitle(const BookmarkNode* permanent_node) override;
   bool IsNodeManaged(const BookmarkNode* node) override;
+  BookmarkFormFactor GetBookmarkFormFactor() override;
   std::string EncodeLocalOrSyncableBookmarkSyncMetadata() override;
   std::string EncodeAccountBookmarkSyncMetadata() override;
   void DecodeLocalOrSyncableBookmarkSyncMetadata(
@@ -112,6 +120,9 @@ class TestBookmarkClient : public BookmarkClient {
       std::unique_ptr<BookmarkNode> node) override;
   void SchedulePersistentTimerForDailyMetrics(
       base::RepeatingClosure metrics_callback) override;
+  void GetEncryptor(base::OnceCallback<
+                    void(scoped_refptr<os_crypt_async::Encryptor> encryptor)>
+                        callback) override;
 
  private:
   // Helpers for GetLoadManagedNodeCallback().
@@ -129,7 +140,7 @@ class TestBookmarkClient : public BookmarkClient {
   std::map<GURL, std::list<favicon_base::FaviconImageCallback>>
       requests_per_page_url_;
 
-  bool is_sync_feature_enabled_including_bookmarks_for_uma = false;
+  bool is_sync_feature_enabled_including_bookmarks_ = false;
 
   std::string account_bookmark_sync_metadata_;
   base::RepeatingClosure account_bookmark_sync_metadata_save_closure_ =
@@ -140,6 +151,7 @@ class TestBookmarkClient : public BookmarkClient {
           DecodeAccountBookmarkSyncMetadataResult::kSuccess;
 
   base::RepeatingClosure metrics_callback_;
+  raw_ptr<os_crypt_async::OSCryptAsync> os_crypt_async_;
 };
 
 }  // namespace bookmarks

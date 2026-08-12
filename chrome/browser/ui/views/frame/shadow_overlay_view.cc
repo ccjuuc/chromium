@@ -6,33 +6,36 @@
 
 #include <memory>
 
+#include "base/functional/bind.h"
+#include "base/i18n/rtl.h"
+#include "chrome/browser/ui/animation/browser_animation_controller.h"
+#include "chrome/browser/ui/animation/browser_animation_types.h"
+#include "chrome/browser/ui/views/animations/side_panel_animations.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/top_container_background.h"
+#include "chrome/browser/ui/views/frame/shadow_frame_view.h"
+#include "chrome/browser/ui/views/frame/themed_background.h"
 #include "chrome/browser/ui/views/side_panel/side_panel.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_animation_coordinator.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_animation_ids.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "third_party/skia/include/core/SkPathBuilder.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/compositor/layer.h"
-#include "ui/compositor_extra/shadow.h"
-#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/layout/delegating_layout_manager.h"
 #include "ui/views/layout/layout_provider.h"
 #include "ui/views/layout/proposed_layout.h"
 #include "ui/views/view.h"
-#include "ui/views/view_shadow.h"
 
 // Implements the opaque corners that overlay the main area of the browser and
 // sync with the shadow box.
 class ShadowOverlayView::CornerView : public views::View {
   METADATA_HEADER(CornerView, views::View)
  public:
+  // Which corner this is. Numeric values are assigned to make RTL conversion
+  // simpler (do not reorder).
   enum class Corner {
-    kTopLeading,
-    kTopTrailing,
-    kBottomLeading,
-    kBottomTrailing
+    kTopLeading = 0,
+    kTopTrailing = 1,
+    kBottomLeading = 2,
+    kBottomTrailing = 3
   };
 
   // Because of subpixel rounding issues between the overlay and the content
@@ -40,8 +43,13 @@ class ShadowOverlayView::CornerView : public views::View {
   // of the overlay. They will render correctly by virtue of being on a layer.
   static constexpr int kCornerOutset = 1;
 
+  // Additional amount to overpaint the border to prevent subpixel issues with
+  // antialiasing and alignment between webcontents and corners.
+  static constexpr float kCornerSubpixelOverpaint = 0.5f;
+
   CornerView(Corner corner, BrowserView& browser_view) : corner_(corner) {
-    SetBackground(std::make_unique<TopContainerBackground>(&browser_view));
+    SetBackground(std::make_unique<ThemedBackground>(
+        &browser_view, ThemedBackground::ThemeChoice::kToolbarTheme));
   }
   ~CornerView() override = default;
 
@@ -57,9 +65,16 @@ class ShadowOverlayView::CornerView : public views::View {
   }
 
  private:
+  static Corner MaybeMirrorForRtl(Corner corner) {
+    if (base::i18n::IsRTL()) {
+      return static_cast<Corner>(static_cast<int>(corner) ^ 1);
+    }
+    return corner;
+  }
+
   // Returns the clip path for the corner.
   //
-  // The contents need to be drawn by `TopContainerBackground` to ensure that
+  // The contents need to be drawn by `ThemedBackground` to ensure that
   // the correct content is drawn in all themes (including themes that e.g. use
   // an image background). However, the corner shape still needs to be drawn; in
   // order to ensure that only the opaque portion of the corner is painted a
@@ -79,44 +94,46 @@ class ShadowOverlayView::CornerView : public views::View {
   SkPath GetClipPath() const {
     gfx::Rect visible_area = GetLocalBounds();
     visible_area.Inset(kCornerOutset);
+    gfx::RectF clip_area = gfx::RectF(GetLocalBounds());
+    clip_area.Outset(kCornerSubpixelOverpaint);
 
     SkPathBuilder path;
-    switch (corner_) {
+    switch (MaybeMirrorForRtl(corner_)) {
       case Corner::kTopLeading:
-        path.moveTo(0, 0);
-        path.lineTo(visible_area.right(), 0);
+        path.moveTo(clip_area.x(), clip_area.y());
+        path.lineTo(visible_area.right(), clip_area.y());
         path.lineTo(visible_area.right(), visible_area.y());
         path.arcTo(SkVector(visible_area.width(), visible_area.height()), 0,
                    SkPathBuilder::kSmall_ArcSize, SkPathDirection::kCCW,
                    SkPoint(visible_area.x(), visible_area.bottom()));
-        path.lineTo(0, visible_area.bottom());
+        path.lineTo(clip_area.x(), visible_area.bottom());
         break;
       case Corner::kTopTrailing:
-        path.moveTo(width(), 0);
-        path.lineTo(width(), visible_area.bottom());
+        path.moveTo(clip_area.right(), clip_area.y());
+        path.lineTo(clip_area.right(), visible_area.bottom());
         path.lineTo(visible_area.right(), visible_area.bottom());
         path.arcTo(SkVector(visible_area.width(), visible_area.height()), 0,
                    SkPathBuilder::kSmall_ArcSize, SkPathDirection::kCCW,
                    SkPoint(visible_area.x(), visible_area.y()));
-        path.lineTo(visible_area.x(), 0);
+        path.lineTo(visible_area.x(), clip_area.y());
         break;
       case Corner::kBottomLeading:
-        path.moveTo(0, height());
-        path.lineTo(0, visible_area.y());
+        path.moveTo(clip_area.x(), clip_area.bottom());
+        path.lineTo(clip_area.x(), visible_area.y());
         path.lineTo(visible_area.x(), visible_area.y());
         path.arcTo(SkVector(visible_area.width(), visible_area.height()), 0,
                    SkPathBuilder::kSmall_ArcSize, SkPathDirection::kCCW,
                    SkPoint(visible_area.right(), visible_area.bottom()));
-        path.lineTo(visible_area.right(), height());
+        path.lineTo(visible_area.right(), clip_area.bottom());
         break;
       case Corner::kBottomTrailing:
-        path.moveTo(width(), height());
-        path.lineTo(visible_area.x(), height());
+        path.moveTo(clip_area.right(), clip_area.bottom());
+        path.lineTo(visible_area.x(), clip_area.bottom());
         path.lineTo(visible_area.x(), visible_area.bottom());
         path.arcTo(SkVector(visible_area.width(), visible_area.height()), 0,
                    SkPathBuilder::kSmall_ArcSize, SkPathDirection::kCCW,
                    SkPoint(visible_area.right(), visible_area.y()));
-        path.lineTo(width(), visible_area.y());
+        path.lineTo(clip_area.right(), visible_area.y());
         break;
     }
 
@@ -132,54 +149,6 @@ using CornerView = ShadowOverlayView::CornerView;
 BEGIN_METADATA(CornerView)
 END_METADATA
 
-// Implements the shadow box that surrounds the main area of the browser.
-class ShadowOverlayView::ShadowBox : public views::View {
-  METADATA_HEADER(ShadowBox, views::View)
-
- public:
-  ShadowBox() { SetCanProcessEventsWithinSubtree(false); }
-  ~ShadowBox() override = default;
-
-  void SetShadowVisible(bool visible) {
-    // No-op if visible set is the same as current state.
-    if ((visible && layer()) || (!visible && !layer())) {
-      return;
-    }
-
-    if (visible) {
-      const int rounded_corner_radius =
-          GetLayoutProvider()->GetCornerRadiusMetric(views::Emphasis::kHigh);
-      const int elevation =
-          GetLayoutProvider()->GetShadowElevationMetric(views::Emphasis::kHigh);
-
-      view_shadow_ = std::make_unique<views::ViewShadow>(this, elevation);
-      view_shadow_->SetRoundedCornerRadius(rounded_corner_radius);
-    } else {
-      view_shadow_.reset();
-      DestroyLayer();
-    }
-  }
-
-  void SetShadowOpacity(double opacity) {
-    if (!view_shadow_) {
-      return;
-    }
-
-    view_shadow_->shadow()->shadow_layer()->SetOpacity(opacity);
-  }
-
- private:
-  // The shadow and elevation around main_container to visually separate the
-  // container from MainRegionBackground when the toolbar_height_side_panel is
-  // visible.
-  std::unique_ptr<views::ViewShadow> view_shadow_;
-};
-
-using ShadowBox = ShadowOverlayView::ShadowBox;
-
-BEGIN_METADATA(ShadowBox)
-END_METADATA
-
 ShadowOverlayView::ShadowOverlayView(BrowserView& browser_view)
     : browser_view_(browser_view) {
   SetCanProcessEventsWithinSubtree(false);
@@ -191,7 +160,27 @@ ShadowOverlayView::ShadowOverlayView(BrowserView& browser_view)
       CornerView::Corner::kBottomLeading, browser_view));
   bottom_trailing_corner_ = AddChildView(std::make_unique<CornerView>(
       CornerView::Corner::kBottomTrailing, browser_view));
-  shadow_box_ = AddChildView(std::make_unique<ShadowBox>());
+
+  // These are the UX targets:
+  // light: 0 0 4px 0 rgba(0, 0, 0, 0.10),
+  //        0 2px 6px 0 rgba(0, 0, 0, 0.17)
+  // dark:  0 0 4px 0 rgba(0, 0, 0, 0.20),
+  //        0 2px 6px 0 rgba(0, 0, 0, 0.40)
+  //
+  // These are the defaults for the MD shadow at 4 height. The directionality of
+  // the shadow cannot be changed, only the color.
+  // box-shadow: 0 0 4px rgba(0, 0, 0, .12),
+  //             0 4px 8px rgba(0, 0, 0, .24)
+  //
+  // This is an attempt to approximate the target values with only color.
+  static constexpr ShadowFrameView::ShadowAlpha kShadowAlpha{
+      .light_key = 0.10,
+      .light_ambient = 0.17,
+      .dark_key = 0.20,
+      .dark_ambient = 0.40};
+
+  shadow_box_ =
+      AddChildView(std::make_unique<ShadowFrameView>(4, kShadowAlpha));
 
   SetLayoutManager(std::make_unique<views::DelegatingLayoutManager>(this));
 
@@ -200,6 +189,13 @@ ShadowOverlayView::ShadowOverlayView(BrowserView& browser_view)
 
   // Starts hidden; visibility set by layout.
   SetVisible(false);
+
+  animation_subscription_ =
+      BrowserAnimationController::From(browser_view_->browser())
+          ->Subscribe(
+              SidePanelAnimations::kSidePanel,
+              base::BindRepeating(&ShadowOverlayView::OnAnimationProgressed,
+                                  base::Unretained(this)));
 }
 
 ShadowOverlayView::~ShadowOverlayView() = default;
@@ -210,35 +206,13 @@ void ShadowOverlayView::VisibilityChanged(View* starting_from, bool visible) {
 
     // Ensure the opacity matches the current animation value in cases where the
     // panel should not animate but is open such as swapping between tabs.
-    if (side_panel_observer_.IsObserving()) {
-      shadow_box_->SetShadowOpacity(
-          side_panel_observer_.GetSource()
-              ->animation_coordinator()
-              ->GetAnimationValueFor(kShadowOverlayOpacityAnimation));
-    }
+    shadow_box_->SetShadowOpacity(GetShadowValue());
   }
 }
 
 void ShadowOverlayView::AddedToWidget() {
-  side_panel_observer_.Observe(browser_view_->toolbar_height_side_panel());
-  side_panel_observer_.GetSource()->animation_coordinator()->AddObserver(
-      kShadowOverlayOpacityAnimation, this);
-}
-
-void ShadowOverlayView::RemovedFromWidget() {
-  if (side_panel_observer_.IsObserving()) {
-    side_panel_observer_.GetSource()->animation_coordinator()->RemoveObserver(
-        kShadowOverlayOpacityAnimation, this);
-    side_panel_observer_.Reset();
-  }
-}
-
-void ShadowOverlayView::OnViewIsDeleting(views::View* observed_view) {
-  CHECK(observed_view == side_panel_observer_.GetSource());
-
-  side_panel_observer_.GetSource()->animation_coordinator()->RemoveObserver(
-      kShadowOverlayOpacityAnimation, this);
-  side_panel_observer_.Reset();
+  shadow_box_->SetShadowCornerRadius(
+      GetLayoutProvider()->GetCornerRadiusMetric(views::Emphasis::kHigh));
 }
 
 views::ProposedLayout ShadowOverlayView::CalculateProposedLayout(
@@ -292,23 +266,25 @@ views::ProposedLayout ShadowOverlayView::CalculateProposedLayout(
   return layout;
 }
 
-void ShadowOverlayView::OnAnimationSequenceProgressed(
-    const SidePanelAnimationCoordinator::SidePanelAnimationId& animation_id,
-    double animation_value) {
-  CHECK_EQ(kShadowOverlayOpacityAnimation, animation_id);
-
-  shadow_box_->SetShadowOpacity(animation_value);
+double ShadowOverlayView::GetShadowValue() const {
+  // Get the current animation value (if any).
+  const auto animation_value =
+      BrowserAnimationController::From(browser_view_->browser())
+          ->GetCurrentValue(SidePanelAnimations::kSidePanel,
+                            SidePanelAnimations::kMainAreaShadow);
+  if (animation_value) {
+    return *animation_value;
+  }
+  if (const auto* panel = browser_view_->side_panel()) {
+    return panel->state() == SidePanel::State::kOpen ? 1.0 : 0.0;
+  }
+  return 0.0;
 }
 
-void ShadowOverlayView::OnAnimationSequenceEnded(
-    const SidePanelAnimationCoordinator::SidePanelAnimationId& animation_id) {
-  // When the animation ends, set the final opacity based on whether the side
-  // panel is closing or opening.
-  const double ending_opacity =
-      side_panel_observer_.GetSource()->animation_coordinator()->IsClosing()
-          ? 0.0f
-          : 1.0f;
-  shadow_box_->SetShadowOpacity(ending_opacity);
+void ShadowOverlayView::OnAnimationProgressed(
+    const BrowserAnimationController* controller,
+    BrowserAnimationUpdate status) {
+  shadow_box_->SetShadowOpacity(GetShadowValue());
 }
 
 BEGIN_METADATA(ShadowOverlayView)

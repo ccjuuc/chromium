@@ -5,6 +5,7 @@
 package org.chromium.components.browser_ui.widget.selectable_list;
 
 import android.content.Context;
+import android.content.res.Resources;
 import android.text.TextUtils;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -51,6 +52,7 @@ public class InlineSearchBox {
     private final KeyboardVisibilityDelegate mKeyboardVisibilityDelegate;
 
     public InlineSearchBox(
+            Context context,
             SearchDelegate searchDelegate,
             SettableNonNullObservableSupplier<Boolean> hasSearchTextSupplier,
             KeyboardVisibilityDelegate keyboardVisibilityDelegate) {
@@ -88,7 +90,17 @@ public class InlineSearchBox {
         initializeSearchText(hintStringResId, onEditorActionListener);
         initializeClearTextButton();
 
-        mInlineSearchBoxContainer.setBackgroundResource(R.drawable.search_toolbar_modern_bg);
+        Resources resources = context.getResources();
+        mInlineSearchBoxContainer.setBackgroundResource(R.drawable.search_row_modern_bg);
+        int paddingStart = Math.round(16 * resources.getDisplayMetrics().density);
+        mInlineSearchBoxContainer.setPaddingRelative(paddingStart, 0, 0, 0);
+
+        int height = Math.round(40 * resources.getDisplayMetrics().density);
+        int marginBottom = Math.round(8 * resources.getDisplayMetrics().density);
+        ViewGroup.MarginLayoutParams params =
+                new ViewGroup.MarginLayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height);
+        params.bottomMargin = marginBottom;
+        mInlineSearchBoxContainer.setLayoutParams(params);
     }
 
     /**
@@ -112,16 +124,6 @@ public class InlineSearchBox {
                         mSearchDelegate.onSearchTextChanged(s.toString());
                     }
                 });
-        mInlineSearchEditText.addOnAttachStateChangeListener(
-                new View.OnAttachStateChangeListener() {
-                    @Override
-                    public void onViewAttachedToWindow(View v) {
-                        v.requestFocus();
-                    }
-
-                    @Override
-                    public void onViewDetachedFromWindow(View v) {}
-                });
         requestSearchFocus(true);
     }
 
@@ -137,26 +139,20 @@ public class InlineSearchBox {
     }
 
     /**
-     * In SelectableListToolbar, the padding/margin of the original search box is dynamically
-     * calculated(in onDisplayStyleChanged()), so dynamical adjustment is needed for the inline
-     * search box too.
+     * Updates the lateral margins of the inline search box based on the current display style.
+     *
+     * @param padding The lateral padding calculated for the current display style.
+     * @param paddingTop The top padding to apply (currently unused for margins).
      */
-    public void setInlinePadding(int left, int top, int right, int bottom) {
+    public void updatePadding(int padding, int paddingTop) {
         if (mInlineSearchBoxContainer == null) return;
-        mInlineSearchBoxContainer.post(
-                () -> {
-                    int[] appLocation = new int[2];
-                    int[] location = new int[2];
-                    View contentView =
-                            mInlineSearchBoxContainer
-                                    .getRootView()
-                                    .findViewById(android.R.id.content);
-                    if (contentView == null) return;
-                    contentView.getLocationOnScreen(appLocation);
-                    mInlineSearchBoxContainer.getLocationOnScreen(location);
-                    mInlineSearchBoxContainer.setPaddingRelative(
-                            left - (location[0] - appLocation[0]), top, right, bottom);
-                });
+        ViewGroup.MarginLayoutParams params =
+                (ViewGroup.MarginLayoutParams) mInlineSearchBoxContainer.getLayoutParams();
+        if (params != null) {
+            params.setMarginStart(padding);
+            params.setMarginEnd(padding);
+            mInlineSearchBoxContainer.setLayoutParams(params);
+        }
     }
 
     /**

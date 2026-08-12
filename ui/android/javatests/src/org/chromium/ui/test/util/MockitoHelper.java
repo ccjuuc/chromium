@@ -6,6 +6,7 @@ package org.chromium.ui.test.util;
 
 import static org.mockito.ArgumentMatchers.any;
 
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.mockito.stubbing.Answer;
 import org.mockito.stubbing.Stubber;
@@ -27,7 +28,7 @@ public class MockitoHelper {
      *
      * <p>This often allows us to verify the functionality inside the provided object, trigger it
      * exactly when we want to, or verify that a sequences of events happen in the order we expect.
-     * However this does not allow access to multiple arguments or to specify the return value, in
+     * However, this does not allow access to multiple arguments or to specify the return value, in
      * which case using the original doAnswer is likely better.
      *
      * <p>Note that users of this should be careful when invoking functionality directly in their
@@ -43,6 +44,7 @@ public class MockitoHelper {
         return Mockito.doAnswer(
                 (Answer<Void>)
                         invocation -> {
+                            @SuppressWarnings("unchecked") // Mockito args are Object[].
                             T arg = (T) invocation.getArguments()[index];
                             callback.onResult(arg);
                             return null;
@@ -66,7 +68,7 @@ public class MockitoHelper {
                 });
     }
 
-    /** Similar to {@link #doCallback(Callback)} but able to return a value as well. */
+    /** Similar to {@link #doCallback(Callback)} but able to return a value. */
     public static <T, R> Stubber doFunction(Function<T, R> function) {
         return doFunction(function, 0);
     }
@@ -77,6 +79,7 @@ public class MockitoHelper {
     }
 
     /** Forwards {@link Callback#bind} back to the callback object, allowing mocks to work. */
+    @SuppressWarnings("CallbackBind") // Would cause infinite recursion.
     public static <T> void forwardBind(Callback<T> callback) {
         Mockito.doAnswer(
                         (Answer<Runnable>)
@@ -94,5 +97,50 @@ public class MockitoHelper {
                 mock,
                 Mockito.timeout(
                         ScalableTimeout.scaleTimeout(CriteriaHelper.DEFAULT_MAX_TIME_TO_POLL)));
+    }
+
+    /**
+     * Type-safe wrapper around {@code any(Callback.class)} that avoids unchecked warnings.
+     *
+     * <p>Using {@code any(Callback.class)} directly produces an unchecked warning because {@code
+     * Callback.class} is a raw type — Java generics are erased at runtime so {@code
+     * Callback<Foo>.class} does not exist. This method centralizes the suppression and returns a
+     * properly typed {@code Callback<T>} via type inference.
+     *
+     * <p>Matches any non-null {@link Callback} argument (same behavior as {@code
+     * any(Callback.class)}).
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> Callback<T> anyCallback() {
+        return any(Callback.class);
+    }
+
+    /**
+     * Type-safe wrapper around {@code ArgumentCaptor.forClass(Callback.class)} that avoids
+     * unchecked warnings. For field-level captors, prefer the {@code @Captor} annotation.
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> ArgumentCaptor<Callback<T>> callbackCaptor() {
+        return ArgumentCaptor.forClass(Callback.class);
+    }
+
+    /**
+     * Type-safe wrapper around {@code Mockito.mock(Callback.class)} that avoids unchecked warnings.
+     * Returns a properly typed {@code Callback<T>} mock via type inference.
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> Callback<T> mockCallback() {
+        Callback<T> mock = Mockito.mock(Callback.class);
+        forwardBind(mock);
+        return mock;
+    }
+
+    /**
+     * Type-safe wrapper around {@code Mockito.clearInvocations} that avoids unchecked warnings when
+     * clearing parameterized (generic) mocks.
+     */
+    @SafeVarargs
+    public static <T> void clearInvocations(T... mocks) {
+        Mockito.clearInvocations(mocks);
     }
 }

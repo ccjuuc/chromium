@@ -21,6 +21,7 @@
 #include "content/browser/service_worker/service_worker_main_resource_handle.h"
 #include "content/browser/service_worker/service_worker_object_host.h"
 #include "content/public/common/content_client.h"
+#include "content/public/common/content_features.h"
 #include "content/public/common/origin_util.h"
 #include "content/public/common/url_constants.h"
 #include "net/base/url_util.h"
@@ -126,10 +127,57 @@ ServiceWorkerMainResourceLoaderInterceptor::CreateForPrefetch(
 }
 
 std::unique_ptr<ServiceWorkerMainResourceLoaderInterceptor>
+ServiceWorkerMainResourceLoaderInterceptor::CreateForDownload(
+    const network::ResourceRequest& resource_request,
+    base::WeakPtr<ServiceWorkerMainResourceHandle> navigation_handle) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK(
+      base::FeatureList::IsEnabled(features::kServiceWorkerInterceptDownloads));
+  // The caller must populate trusted_params with an IsolationInfo so the SW
+  // client can be created in the correct partition. The download pipeline
+  // builds its ResourceRequest via download::CreateResourceRequest which sets
+  // this; CHECK so a future caller that forgets fails loudly here instead of
+  // null-derefing inside set_service_worker_client below.
+  CHECK(resource_request.trusted_params.has_value());
+
+  if (!ShouldCreateForNavigation(
+          resource_request.url, resource_request.destination,
+          navigation_handle->context_wrapper()->browser_context())) {
+    return nullptr;
+  }
+
+  if (!navigation_handle->context_wrapper()->context()) {
+    return nullptr;
+  }
+
+  // Downloads don't have an associated FrameTreeNode, so pass an invalid
+  // FrameTreeNodeId. The client is used only for the fetch event dispatch
+  // and is never committed.
+  //
+  // TODO(crbug.com/40410035): Introduce a dedicated
+  // ServiceWorkerClientOwner::CreateServiceWorkerClientForDownload factory
+  // that constructs a frameless kWindow client without reusing the
+  // navigation-specific CreateServiceWorkerClientForWindow signature
+  // (which expects an ongoing_navigation_frame_tree_node_id) or the
+  // prefetch-specific CreateServiceWorkerClientForPrefetch signature
+  // (which carries a fallback network URLLoaderFactory we don't need).
+  navigation_handle->set_service_worker_client(
+      navigation_handle->context_wrapper()
+          ->context()
+          ->service_worker_client_owner()
+          .CreateServiceWorkerClientForWindow(
+              /*are_ancestors_secure=*/true, FrameTreeNodeId()),
+      resource_request.trusted_params->isolation_info);
+
+  return base::WrapUnique(new ServiceWorkerMainResourceLoaderInterceptor(
+      std::move(navigation_handle)));
+}
+
+std::unique_ptr<ServiceWorkerMainResourceLoaderInterceptor>
 ServiceWorkerMainResourceLoaderInterceptor::CreateForWorker(
     const network::ResourceRequest& resource_request,
     const net::IsolationInfo& isolation_info,
-    int process_id,
+    ChildProcessId process_id,
     const DedicatedOrSharedWorkerToken& worker_token,
     base::WeakPtr<ServiceWorkerMainResourceHandle> navigation_handle) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
@@ -244,6 +292,7 @@ void ServiceWorkerMainResourceLoaderInterceptor::MaybeCreateLoader(
             handle_->service_worker_client()->key()) ||
         service_worker_loader_helpers::IsEligibleForSyntheticResponse(
             handle_->context_wrapper()->browser_context(),
+            handle_->context_wrapper()->storage_partition(),
             tentative_resource_request.url));
 
   // Create and start the handler for this request. It will invoke the loader

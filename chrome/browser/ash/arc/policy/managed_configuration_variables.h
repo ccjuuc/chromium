@@ -45,12 +45,8 @@ extern const char kDeviceAnnotatedLocation[];
 // not be processed.
 void RecursivelyReplaceManagedConfigurationVariables(
     const Profile* profile,
-    base::Value::Dict& managedConfiguration);
-
-void RecursivelyReplaceManagedConfigurationVariables(
-    const Profile* profile,
-    policy::DeviceAttributes* attributes,
-    base::Value::Dict& managedConfiguration);
+    const policy::DeviceAttributes& attributes,
+    base::DictValue& managedConfiguration);
 
 }  // namespace arc
 

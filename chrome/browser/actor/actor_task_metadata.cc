@@ -4,16 +4,21 @@
 
 #include "chrome/browser/actor/actor_task_metadata.h"
 
+#include <optional>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "components/optimization_guide/proto/features/common_quality_data.pb.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace actor {
 
 ActorTaskMetadata::ActorTaskMetadata() = default;
 
 ActorTaskMetadata::ActorTaskMetadata(ActorTaskMetadata&&) = default;
-
-ActorTaskMetadata& ActorTaskMetadata::operator=(const ActorTaskMetadata&) =
-    default;
 
 ActorTaskMetadata::ActorTaskMetadata(
     const optimization_guide::proto::Actions& actions) {
@@ -34,6 +39,10 @@ ActorTaskMetadata::ActorTaskMetadata(
       added_writable_mainframe_origins_.insert(std::move(parsed_origin));
     }
   }
+  if (task_metadata.security().has_agent_container_config()) {
+    agent_container_config_.emplace(
+        task_metadata.security().agent_container_config());
+  }
 }
 
 ActorTaskMetadata::~ActorTaskMetadata() = default;
@@ -45,6 +54,13 @@ ActorTaskMetadata::WithAddedWritableMainframeOriginsForTesting(
   for (auto origin : origins) {
     metadata.added_writable_mainframe_origins_.insert(std::move(origin));
   }
+  return metadata;
+}
+
+ActorTaskMetadata ActorTaskMetadata::WithAgentContainerConfigForTesting(
+    optimization_guide::proto::AgentContainerConfig config_proto) {
+  ActorTaskMetadata metadata;
+  metadata.agent_container_config_.emplace(std::move(config_proto));
   return metadata;
 }
 

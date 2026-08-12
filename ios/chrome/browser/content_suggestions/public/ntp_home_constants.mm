@@ -23,14 +23,14 @@ const CGFloat kMostVisitedBottomMarginIPad = 80;
 const CGFloat kMostVisitedBottomMarginIPhone = 60;
 const CGFloat kSuggestionPeekingHeight = 60;
 
-const CGFloat kIdentityAvatarDimension = 32;
+const CGFloat kIdentityAvatarDiameter = 32;
 const CGFloat kHeaderIconMargin = 8;
 const CGFloat kIdentityAvatarPadding = 8;
 const CGFloat kSignedOutIdentityIconSize = 24;
-const CGFloat kCustomizationMenuIconSize = 16;
-const CGFloat kCustomizationMenuIconSizeWhenSignInButtonHasNoAvatar = 17;
-const CGFloat kCustomizationMenuButtonDimension = 37;
-const CGFloat kCustomizationMenuButtonCornerRadius = 11;
+const CGFloat kNTPMenuButtonIconSize = 17;
+const CGFloat kNTPMenuButtonDimension = 37;
+const CGFloat kNTPMenuButtonCornerRadius = 11;
+const CGFloat kNTPMenuButtonLightUnthemedAlpha = 0.75;
 
 UIColor* NTPBackgroundColor() {
   return [UIColor colorNamed:kBackgroundColor];

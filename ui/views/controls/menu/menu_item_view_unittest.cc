@@ -18,8 +18,10 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/base/themed_vector_icon.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/compositor/canvas_painter.h"
 #include "ui/gfx/canvas.h"
+#include "ui/gfx/color_utils.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -380,10 +382,9 @@ class MenuItemViewLayoutTest : public ViewsTestBase {
     // SubmenuView does not lay out its children unless it is contained in a
     // view, so make a simple container for it.
     SubmenuView* submenu = root_menu_->GetSubmenu();
-    ASSERT_TRUE(submenu->owned_by_client());
 
     submenu_parent_ = std::make_unique<View>();
-    submenu_parent_->AddChildViewRaw(submenu);
+    submenu_parent_->AddChildView(submenu);
     submenu_parent_->SetPosition(gfx::Point(0, 0));
     submenu_parent_->SetSize(submenu->GetPreferredSize({}));
   }
@@ -395,9 +396,9 @@ class MenuItemViewLayoutTest : public ViewsTestBase {
   }
 
  private:
+  std::unique_ptr<View> submenu_parent_;
   std::unique_ptr<TestMenuItemView> root_menu_;
   raw_ptr<MenuItemView> test_item_ = nullptr;
-  std::unique_ptr<View> submenu_parent_;
 };
 
 // Tests that MenuItemView takes into account the child's margins and preferred
@@ -510,18 +511,28 @@ TEST_F(MenuItemViewPaintUnitTest, MinorTextAndIconAssertionCoverage) {
           u"minor text", ui::ImageModel());
   AddItem(u"No secondary label, minor icon only", std::u16string(),
           std::u16string(),
-          ui::ImageModel::FromVectorIcon(views::kMenuCheckIcon));
+          ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                             ? kCheckIcon
+                                             : views::kMenuCheckOldIcon));
   AddItem(u"No secondary label, minor text and icon", std::u16string(),
-          u"minor text", ui::ImageModel::FromVectorIcon(views::kMenuCheckIcon));
+          u"minor text",
+          ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                             ? kCheckIcon
+                                             : views::kMenuCheckOldIcon));
   AddItem(u"Secondary label, no minor content", u"secondary label",
           std::u16string(), ui::ImageModel());
   AddItem(u"Secondary label, minor text only", u"secondary label",
           u"minor text", ui::ImageModel());
   AddItem(u"Secondary label, minor icon only", u"secondary label",
           std::u16string(),
-          ui::ImageModel::FromVectorIcon(views::kMenuCheckIcon));
+          ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                             ? kCheckIcon
+                                             : views::kMenuCheckOldIcon));
   AddItem(u"Secondary label, minor text and icon", u"secondary label",
-          u"minor text", ui::ImageModel::FromVectorIcon(views::kMenuCheckIcon));
+          u"minor text",
+          ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                             ? kCheckIcon
+                                             : views::kMenuCheckOldIcon));
 
   menu_runner()->RunMenuAt(widget(), nullptr, gfx::Rect(),
                            MenuAnchorPosition::kTopLeft,
@@ -598,6 +609,60 @@ TEST_F(MenuItemViewPaintUnitTest, DontSchedulePaintFromOnPaint) {
   gfx::Canvas canvas(submenu_item->size(), 1.f, false /* opaque */);
   submenu_item->OnPaint(&canvas);
   EXPECT_FALSE(ViewTestApi(submenu_arrow_image_view).needs_paint());
+}
+
+TEST_F(MenuItemViewPaintUnitTest, SelectionIconColors) {
+  MenuItemView* item_with_default_color =
+      menu_item_view()->AppendMenuItem(1, u"item 1");
+  item_with_default_color->SetIcon(ui::ImageModel::FromVectorIcon(
+      features::IsRoundedIconsEnabled() ? kCheckSmallIcon
+                                        : views::kMenuCheckOldIcon,
+      ui::kColorMenuIcon));
+
+  MenuItemView* item_with_colored_icon =
+      menu_item_view()->AppendMenuItem(2, u"item 2");
+  const SkColor custom_color2 = SK_ColorRED;
+  item_with_colored_icon->SetIcon(ui::ImageModel::FromVectorIcon(
+      features::IsRoundedIconsEnabled() ? kCheckSmallIcon
+                                        : views::kMenuCheckOldIcon,
+      custom_color2));
+
+  menu_runner()->RunMenuAt(widget(), nullptr, gfx::Rect(),
+                           MenuAnchorPosition::kTopLeft,
+                           ui::mojom::MenuSourceType::kKeyboard);
+  const ui::ColorProvider* color_provider =
+      item_with_default_color->GetColorProvider();
+
+  // Standard icon should change color when selected
+  item_with_default_color->SetForcedVisualSelection(false);
+  ui::ColorVariant unselected_color1 = item_with_default_color->icon_view()
+                                           ->GetImageModel()
+                                           .GetVectorIcon()
+                                           .color();
+  EXPECT_EQ(color_provider->GetColor(ui::kColorMenuIcon),
+            unselected_color1.ResolveToSkColor(color_provider));
+
+  item_with_default_color->SetForcedVisualSelection(true);
+  ui::ColorVariant selected_color1 = item_with_default_color->icon_view()
+                                         ->GetImageModel()
+                                         .GetVectorIcon()
+                                         .color();
+  const SkColor expected_selection_color = color_utils::DeriveDefaultIconColor(
+      color_provider->GetColor(ui::kColorMenuItemForegroundSelected));
+  EXPECT_EQ(expected_selection_color,
+            selected_color1.ResolveToSkColor(color_provider));
+
+  // Custom physical color persists on selection.
+  item_with_colored_icon->SetForcedVisualSelection(false);
+  EXPECT_EQ(ui::ColorVariant(custom_color2), item_with_colored_icon->icon_view()
+                                                 ->GetImageModel()
+                                                 .GetVectorIcon()
+                                                 .color());
+  item_with_colored_icon->SetForcedVisualSelection(true);
+  EXPECT_EQ(ui::ColorVariant(custom_color2), item_with_colored_icon->icon_view()
+                                                 ->GetImageModel()
+                                                 .GetVectorIcon()
+                                                 .color());
 }
 
 // Tests to ensure that selection based state is not updated if a menu item or
@@ -772,6 +837,43 @@ TEST_F(MenuItemViewPaintUnitTest, AccessibleCheckedStateChange) {
       .GetAccessibleNodeData(&data);
   EXPECT_EQ(data.GetCheckedState(), GetCheckedStatus(command, type));
   EXPECT_EQ(data.GetCheckedState(), ax::mojom::CheckedState::kNone);
+}
+
+TEST_F(MenuItemViewPaintUnitTest, VisualCheckedStateChange) {
+  int command = 1000;
+
+  // Add a checkbox item.
+  menu_item_view()->AddMenuItemAt(
+      0, command, u"Checkbox", std::u16string(), std::u16string(),
+      ui::ImageModel(), ui::ImageModel(), MenuItemView::Type::kCheckbox,
+      ui::NORMAL_SEPARATOR, std::nullopt, std::nullopt, std::nullopt);
+
+  MenuItemView* item = menu_item_view()->GetMenuItemByID(command);
+  ASSERT_TRUE(item);
+
+  ImageView* check_icon = TestMenuItemView::radio_check_image_view(item);
+  ASSERT_TRUE(check_icon);
+
+  // Initial state should be unchecked.
+  EXPECT_FALSE(check_icon->GetVisible());
+
+  // Set checked in delegate.
+  GetDelegate()->SetItemChecked(command, true);
+
+  // Call RefreshCheckmarkState to update view.
+  item->RefreshCheckmarkState();
+
+  // Now it should be visible.
+  EXPECT_TRUE(check_icon->GetVisible());
+
+  // Set unchecked in delegate.
+  GetDelegate()->SetItemChecked(command, false);
+
+  // Update again.
+  item->RefreshCheckmarkState();
+
+  // Should be hidden again.
+  EXPECT_FALSE(check_icon->GetVisible());
 }
 
 TEST_F(MenuItemViewPaintUnitTest, AccessibleHasPopup) {
@@ -980,5 +1082,21 @@ TEST_F(MenuItemViewA11yTest, TooltipTextAccessibility) {
   // When no description is explicitly set, the tooltip should be used.
   EXPECT_EQ(data.GetString16Attribute(ax::mojom::StringAttribute::kDescription),
             u"Tooltip");
+}
+
+TEST_F(MenuItemViewA11yTest, ActionViewInterfaceTest) {
+  MenuItemView* item = menu_item_view();
+  std::unique_ptr<actions::ActionItem> action_item =
+      actions::ActionItem::Builder()
+          .SetText(u"Test Action Text")
+          .SetEnabled(false)
+          .SetVisible(false)
+          .Build();
+
+  item->GetActionViewInterface()->ActionItemChangedImpl(action_item.get());
+
+  EXPECT_EQ(item->title(), u"Test Action Text");
+  EXPECT_FALSE(item->GetEnabled());
+  EXPECT_FALSE(item->GetVisible());
 }
 }  // namespace views

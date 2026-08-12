@@ -97,13 +97,16 @@ EffectPaintPropertyNode::State FrameCaret::CaretEffectNodeState(
       (CompositorElementIdFromUniqueObjectId(
           NewUniqueObjectId(), CompositorElementIdNamespace::kPrimaryEffect)));
   state.compositor_element_id = element_id;
-  state.direct_compositing_reasons = CompositingReason::kActiveOpacityAnimation;
+  if (!display_item_client_->IsInCanvasSubtree()) {
+    state.direct_compositing_reasons = {
+        CompositingReason::kActiveOpacityAnimation};
+  }
   return state;
 }
 
 const PositionWithAffinity FrameCaret::CaretPosition() const {
   const VisibleSelection& selection =
-      selection_editor_->ComputeVisibleSelectionInDOMTree();
+      selection_editor_->ComputeVisibleSelectionInDomTree();
   if (!selection.IsCaret())
     return PositionWithAffinity();
   DCHECK(selection.Start().IsValidFor(*frame_->GetDocument()));
@@ -246,6 +249,10 @@ bool FrameCaret::ShouldPaintCaret(
   return display_item_client_->ShouldPaintCaret(box_fragment);
 }
 
+const LayoutBlock* FrameCaret::GetCaretLayoutBlock() const {
+  return display_item_client_->GetLayoutBlock();
+}
+
 void FrameCaret::SetVisibleIfActive(bool visible) {
   if (visible == IsVisibleIfActive())
     return;
@@ -255,14 +262,15 @@ void FrameCaret::SetVisibleIfActive(bool visible) {
   if (!frame_->View())
     return;
 
-  auto change_type = effect_->Update(
+  effect_->Update(
       *effect_->Parent(),
       CaretEffectNodeState(visible, effect_->LocalTransformSpace()));
-  DCHECK_EQ(PaintPropertyChangeType::kChangedOnlySimpleValues, change_type);
   if (auto* compositor = frame_->View()->GetPaintArtifactCompositor()) {
-    if (compositor->DirectlyUpdateCompositedOpacityValue(*effect_)) {
-      effect_->CompositorSimpleValuesUpdated();
-      return;
+    if (!display_item_client_->IsInCanvasSubtree()) {
+      if (compositor->DirectlyUpdateCompositedOpacityValue(*effect_)) {
+        effect_->CompositorSimpleValuesUpdated();
+        return;
+      }
     }
     display_item_client_->SetNeedsNonCompositedPaintInvalidation();
   }
@@ -318,9 +326,10 @@ bool FrameCaret::ShouldShowCaret() const {
   }
 
   if (!IsEditablePosition(
-          selection_editor_->ComputeVisibleSelectionInDOMTree().Start()) &&
-      !frame_->IsCaretBrowsingEnabled())
+          selection_editor_->ComputeVisibleSelectionInDomTree().Start()) &&
+      !frame_->IsCaretBrowsingEnabled()) {
     return false;
+  }
 
   // Only show the caret if the selection has focus.
   return frame_->Selection().SelectionHasFocus();

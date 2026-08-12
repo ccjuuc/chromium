@@ -15,6 +15,7 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
+#include "base/memory/weak_ptr.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-forward.h"
 #include "ui/base/x/x11_desktop_window_move_client.h"
 #include "ui/base/x/x11_drag_drop_client.h"
@@ -70,6 +71,8 @@ class X11Window : public PlatformWindow,
 
   virtual void Initialize(PlatformWindowInitProperties properties);
 
+  base::WeakPtr<X11Window> GetWeakPtr();
+
   // X11WindowManager calls this.
   void OnXWindowLostCapture();
 
@@ -99,7 +102,7 @@ class X11Window : public PlatformWindow,
   void Maximize() override;
   void Minimize() override;
   void Restore() override;
-  void ShowWindowControlsMenu(const gfx::Point& point) override;
+  void ShowWindowControlsMenu(const gfx::Point& point_in_dip) override;
   PlatformWindowState GetPlatformWindowState() const override;
   void Activate() override;
   void Deactivate() override;
@@ -169,9 +172,11 @@ class X11Window : public PlatformWindow,
 
  private:
   FRIEND_TEST_ALL_PREFIXES(X11WindowTest, Shape);
-  FRIEND_TEST_ALL_PREFIXES(X11WindowTest, WindowManagerTogglesFullscreen);
+  FRIEND_TEST_ALL_PREFIXES(X11WindowTest,
+                           SynchronousDestructionDuringEventDispatch);
   FRIEND_TEST_ALL_PREFIXES(X11WindowTest,
                            ToggleMinimizePropogateToPlatformWindowDelegate);
+  FRIEND_TEST_ALL_PREFIXES(X11WindowTest, WindowManagerTogglesFullscreen);
 
   void UpdateDecorationInsets();
 
@@ -242,7 +247,8 @@ class X11Window : public PlatformWindow,
   void CreateXWindow(const PlatformWindowInitProperties& properties);
   void CloseXWindow();
   void Map(bool inactive = false);
-  void SetFullscreen(bool fullscreen);
+  void SetWMStateFullscreen(bool fullscreen);
+  void SetWMStateMaximize(bool maximize);
   bool IsActive() const;
   bool IsTargetedBy(const x11::Event& xev) const;
   void HandleEvent(const x11::Event& xev);

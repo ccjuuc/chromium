@@ -5,7 +5,7 @@
 // clang-format off
 import {assert} from 'chrome://resources/js/assert.js';
 import {webUIListenerCallback} from 'chrome://resources/js/cr.js';
-import type {StorageAccessSiteException, AppProtocolEntry, ChooserType, HandlerEntry, OriginFileSystemGrants, ProtocolEntry, RawChooserException, RawSiteException, RecentSitePermissions, SiteGroup, SiteSettingsBrowserProxy, ZoomLevelEntry} from 'chrome://settings/lazy_load.js';
+import type {StorageAccessSiteException, AppProtocolEntry, ChooserType, HandlerEntry, OriginFileSystemGrants, ProtocolEntry, RawChooserException, RawSiteException, RecentSitePermissions, SiteGroup, SiteSettingsBrowserProxy, SubAppsPermissionExplanationInfo, ZoomLevelEntry} from 'chrome://settings/lazy_load.js';
 import {ContentSetting, ContentSettingsTypes, SiteSettingSource} from 'chrome://settings/lazy_load.js';
 import {TestBrowserProxy} from 'chrome://webui-test/test_browser_proxy.js';
 
@@ -36,6 +36,10 @@ export class TestSiteSettingsBrowserProxy extends TestBrowserProxy implements
   private recentSitePermissions_: RecentSitePermissions[] = [];
   private fileSystemGrantsList_: OriginFileSystemGrants[] = [];
   private storageAccessExceptionList_: StorageAccessSiteException[] = [];
+  private subAppsPermissionExplanation_: SubAppsPermissionExplanationInfo = {
+    isSubApp: false,
+    hasSubApps: false,
+  };
 
   constructor() {
     super([
@@ -76,6 +80,7 @@ export class TestSiteSettingsBrowserProxy extends TestBrowserProxy implements
       'getNumCookiesString',
       'getSystemDeniedPermissions',
       'openSystemPermissionSettings',
+      'getSubAppsPermissionExplanation',
       'getExtensionName',
       'getFileSystemGrants',
       'revokeFileSystemGrant',
@@ -120,10 +125,6 @@ export class TestSiteSettingsBrowserProxy extends TestBrowserProxy implements
       ContentSettingsTypes.WINDOW_MANAGEMENT,
     ];
 
-    if (loadTimeData.getBoolean('enableWebPrintingContentSetting')) {
-      this.categoryList_.push(ContentSettingsTypes.WEB_PRINTING);
-    }
-
     if (loadTimeData.getBoolean('enableCapturedSurfaceControl')) {
       this.categoryList_.push(ContentSettingsTypes.CAPTURED_SURFACE_CONTROL);
     }
@@ -139,18 +140,17 @@ export class TestSiteSettingsBrowserProxy extends TestBrowserProxy implements
     if (loadTimeData.getBoolean('enableSmartCardReadersContentSetting')) {
       this.categoryList_.push(ContentSettingsTypes.SMART_CARD_READERS);
     }
+
+    if (loadTimeData.getBoolean('enableWebPrintingContentSetting')) {
+      this.categoryList_.push(ContentSettingsTypes.WEB_PRINTING);
+    }
     // </if>
 
-    // If LNA is enabled, we show either the LOCAL_NETWORK_ACCESS setting, or
-    // the combo of LOCAL_NETWORK and LOOPBACK_NETWORK settings.
-    // enableLocalNetworkAccessSetting and
-    // enableLocalNetworkAccessSplitPermissions are never both true; though if
-    // LNA is off they can both be false.
-    if (loadTimeData.getBoolean('enableLocalNetworkAccessSplitPermissions')) {
+    // If LNA is enabled, we show the combo of LOCAL_NETWORK and
+    // LOOPBACK_NETWORK settings.
+    if (loadTimeData.getBoolean('enableLocalNetworkAccessSetting')) {
       this.categoryList_.push(ContentSettingsTypes.LOCAL_NETWORK);
       this.categoryList_.push(ContentSettingsTypes.LOOPBACK_NETWORK);
-    } else if (loadTimeData.getBoolean('enableLocalNetworkAccessSetting')) {
-      this.categoryList_.push(ContentSettingsTypes.LOCAL_NETWORK_ACCESS);
     }
 
     this.prefs_ = createSiteSettingsPrefs([], [], []);
@@ -636,6 +636,15 @@ export class TestSiteSettingsBrowserProxy extends TestBrowserProxy implements
 
   openSystemPermissionSettings(contentType: string): void {
     this.methodCalled('openSystemPermissionSettings', contentType);
+  }
+
+  setSubAppsPermissionExplanation(info: SubAppsPermissionExplanationInfo) {
+    this.subAppsPermissionExplanation_ = info;
+  }
+
+  getSubAppsPermissionExplanation(url: string) {
+    this.methodCalled('getSubAppsPermissionExplanation', url);
+    return Promise.resolve(this.subAppsPermissionExplanation_);
   }
 
   getExtensionName(id: string) {

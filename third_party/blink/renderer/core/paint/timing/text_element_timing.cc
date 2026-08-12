@@ -18,34 +18,18 @@
 
 namespace blink {
 
-// static
-const char TextElementTiming::kSupplementName[] = "TextElementTiming";
-
-// static
-TextElementTiming& TextElementTiming::From(LocalDOMWindow& window) {
-  TextElementTiming* timing =
-      Supplement<LocalDOMWindow>::From<TextElementTiming>(window);
-  if (!timing) {
-    timing = MakeGarbageCollected<TextElementTiming>(window);
-    ProvideTo(window, timing);
-  }
-  return *timing;
-}
-
 TextElementTiming::TextElementTiming(LocalDOMWindow& window)
-    : Supplement<LocalDOMWindow>(window),
-      performance_(DOMWindowPerformance::performance(window)) {}
+    : performance_(DOMWindowPerformance::performance(window)) {}
 
 // static
 gfx::RectF TextElementTiming::ComputeIntersectionRect(
     const LayoutObject& object,
     const gfx::Rect& aggregated_visual_rect,
-    const PropertyTreeStateOrAlias& property_tree_state,
-    const LocalFrameView* frame_view) {
+    const PropertyTreeStateOrAlias& property_tree_state) {
   Node* node = object.GetNode();
   DCHECK(node);
   return ElementTimingUtils::ComputeIntersectionRect(
-      &frame_view->GetFrame(), aggregated_visual_rect, property_tree_state);
+      object.GetFrame(), aggregated_visual_rect, property_tree_state);
 }
 
 bool TextElementTiming::CanReportToElementTiming() const {
@@ -53,22 +37,41 @@ bool TextElementTiming::CanReportToElementTiming() const {
   return performance_->HasObserverFor(PerformanceEntry::kElement) ||
          !performance_->IsElementTimingBufferFull();
 }
+
 bool TextElementTiming::CanReportToContainerTiming() {
   DCHECK(performance_);
-  if (!RuntimeEnabledFeatures::ContainerTimingEnabled()) {
+  if (!performance_->IsContainerTimingEnabled()) {
     return false;
   }
   EnsureContainerTiming();
   return container_timing_->CanReportToContainerTiming();
 }
+
 bool TextElementTiming::CanReportElements() {
   return CanReportToElementTiming() || CanReportToContainerTiming();
 }
 
-void TextElementTiming::OnTextObjectPainted(
-    const TextRecord& record,
-    const DOMPaintTimingInfo& paint_timing_info) {
-  DCHECK(record.IsNeededForElementTiming());
+void TextElementTiming::OnFramePresented(
+    const HeapVector<Member<TextRecord>>& records) {
+  if (!CanReportElements()) {
+    return;
+  }
+  for (auto& record : records) {
+    if (record->IsNeededForElementTiming()) {
+      OnTextNodePresented(*record.Get());
+    }
+  }
+}
+
+void TextElementTiming::OnTextNodePresented(const TextRecord& record) {
+  CHECK(record.IsNeededForElementTiming());
+
+  // TODO(crbug.com/454082773): we should consider reporting these to
+  // ElementTiming independently of LCP.
+  if (record.WasNodeRemoved()) {
+    return;
+  }
+
   Node* node = record.GetNode();
 
   // Text aggregators need to be Elements. This will not be the case if the
@@ -90,18 +93,17 @@ void TextElementTiming::OnTextObjectPainted(
     const AtomicString& id = element->GetIdAttribute();
     performance_->AddElementTiming(
         kTextPaint, g_empty_string, record.ElementTimingRect(),
-        paint_timing_info, base::TimeTicks(),
+        record.PaintTimingInfo(), base::TimeTicks(),
         element->FastGetAttribute(html_names::kElementtimingAttr), gfx::Size(),
         id, element);
   }
   if (CanReportToContainerTiming()) {
-    container_timing_->OnElementPainted(paint_timing_info, element,
+    container_timing_->OnElementPainted(record.PaintTimingInfo(), element,
                                         record.ElementTimingRect());
   }
 }
 
 void TextElementTiming::Trace(Visitor* visitor) const {
-  Supplement<LocalDOMWindow>::Trace(visitor);
   visitor->Trace(performance_);
   visitor->Trace(container_timing_);
 }
@@ -110,7 +112,7 @@ void TextElementTiming::EnsureContainerTiming() {
   if (container_timing_) {
     return;
   }
-  LocalDOMWindow* window = GetSupplementable();
+  auto* window = To<LocalDOMWindow>(performance_->GetExecutionContext());
   DCHECK(window);
   container_timing_ = ContainerTiming::From(*window);
 }

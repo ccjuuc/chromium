@@ -39,10 +39,15 @@ class VIZ_HOST_EXPORT GpuClient : public mojom::Gpu {
 
   ~GpuClient() override;
 
+  int client_id() const { return client_id_; }
+
   // This needs to be run on the thread associated with |task_runner_|.
   void Add(mojo::PendingReceiver<mojom::Gpu> receiver);
 
-  void PreEstablishGpuChannel();
+  // Called when a new renderer process is launched. Initializes a GPU channel
+  // and passes the pipe via Mojo invitation.
+  void InitializeGpuChannelForNewRenderer(
+      mojo::ScopedMessagePipeHandle invitation_pipe);
 
   // Sets the PID of the client that will use this channel once the PID is
   // known.
@@ -54,7 +59,8 @@ class VIZ_HOST_EXPORT GpuClient : public mojom::Gpu {
 
   base::WeakPtr<GpuClient> GetWeakPtr();
   void BindWebNNContextProvider(
-      mojo::PendingReceiver<webnn::mojom::WebNNContextProvider> receiver);
+      mojo::PendingReceiver<webnn::mojom::WebNNContextProvider> receiver,
+      bool is_incognito);
 
   void EstablishGpuChannel(EstablishGpuChannelCallback callback) override;
 
@@ -78,12 +84,33 @@ class VIZ_HOST_EXPORT GpuClient : public mojom::Gpu {
     kConnectionLost
   };
   void OnError(ErrorReason reason);
+
+  enum class EstablishChannelReason {
+    // A regular channel request triggered by a client.
+    kRegular,
+    // Channel establishment for a new renderer process, using the standard
+    // connection instead of a mojo invitation. This is a fallback.
+    kInitNoInvitation,
+    // Channel establishment for a new renderer process, where the client pipe
+    // is sent via a mojo invitation.
+    kInitWithInvitation,
+  };
+  void EstablishGpuChannelWithReason(EstablishGpuChannelCallback callback,
+                                     EstablishChannelReason reason);
+
   void OnEstablishGpuChannel(
+      EstablishChannelReason reason,
+      base::TimeTicks start_time,
       mojo::ScopedMessagePipeHandle channel_handle,
       const gpu::GPUInfo& gpu_info,
       const gpu::GpuFeatureInfo& gpu_feature_info,
       const gpu::SharedImageCapabilities& shared_image_capabilities,
       GpuHostImpl::EstablishChannelStatus status);
+  void EstablishGpuChannelInternal(EstablishChannelReason reason,
+                                   GpuHostImpl* gpu_host,
+                                   mojo::ScopedMessagePipeHandle service_handle,
+                                   mojo::ScopedMessagePipeHandle client_handle,
+                                   base::TimeTicks start_time);
   void ClearCallback();
 
   std::unique_ptr<GpuClientDelegate> delegate_;
@@ -92,7 +119,19 @@ class VIZ_HOST_EXPORT GpuClient : public mojom::Gpu {
   const bool enable_extra_handles_validation_;
 
   mojo::ReceiverSet<mojom::Gpu> gpu_receivers_;
-  bool gpu_channel_requested_ = false;
+  // Whether a channel request that intends to set `channel_handle_` is
+  // in-flight (triggered by `EstablishGpuChannel()`). Either this or
+  // `init_with_invitation_pending_` must be false at any time, as only one
+  // GPU channel request can be pending at a time.
+  bool channel_handle_pending_ = false;
+
+  // Whether a channel request where the client handle is already sent via
+  // renderer mojo invitation is in-flight (triggered by
+  // `InitializeGpuChannelForNewRenderer()`). Either this or
+  // `init_with_invitation_pending_` must be false at any time, as only one
+  // GPU channel request can be pending at a time.
+  bool init_with_invitation_pending_ = false;
+
   EstablishGpuChannelCallback callback_;
   base::OnceCallback<void(bool)> callback_for_testing_;
   mojo::ScopedMessagePipeHandle channel_handle_;

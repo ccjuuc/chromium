@@ -203,12 +203,13 @@ class InspectorHighlightBase {
   virtual std::unique_ptr<protocol::DictionaryValue> AsProtocolValue()
       const = 0;
 
- protected:
   static bool BuildNodeQuads(Node*,
                              gfx::QuadF* content,
                              gfx::QuadF* padding,
                              gfx::QuadF* border,
                              gfx::QuadF* margin);
+
+ protected:
   std::unique_ptr<protocol::ListValue> highlight_paths_;
   float scale_;
 };

@@ -255,7 +255,7 @@ struct FilterResponseCookie : ResponseCookie {
   FilterResponseCookie Clone() const;
 
   // This ignores all of the fields of the base class ResponseCookie. Why?
-  // https://crbug.com/916248
+  // https://crbug.com/40607023
   auto operator<=>(const FilterResponseCookie& rhs) const = default;
 
   std::optional<int> age_lower_bound;
@@ -369,11 +369,11 @@ bool InDecreasingExtensionInstallationTimeOrder(const EventResponseDelta& a,
                                                 const EventResponseDelta& b);
 
 // Converts a string to a list of integers, each in 0..255.
-base::Value::List StringToCharList(const std::string& s);
+base::ListValue StringToCharList(const std::string& s);
 
 // Converts a list of integer values between 0 and 255 into a string |*out|.
 // Returns true if the conversion was successful.
-bool CharListToString(const base::Value::List& list, std::string* out);
+bool CharListToString(const base::ListValue& list, std::string* out);
 
 // The following functions calculate and return the modifications to requests
 // commanded by extension handlers. All functions take the id of the extension
@@ -507,8 +507,8 @@ void ClearCacheOnNavigation();
 
 // Converts the `name`, `value` pair of a http header to a HttpHeaders
 // dictionary.
-base::Value::Dict CreateHeaderDictionary(const std::string& name,
-                                         const std::string& value);
+base::DictValue CreateHeaderDictionary(const std::string& name,
+                                       const std::string& value);
 
 // Returns whether a request header should be hidden from listeners.
 bool ShouldHideRequestHeader(content::BrowserContext* browser_context,

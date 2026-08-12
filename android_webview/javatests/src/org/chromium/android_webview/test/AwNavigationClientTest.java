@@ -24,18 +24,22 @@ import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.UseParametersRunnerFactory;
 
 import org.chromium.android_webview.AwContents;
+import org.chromium.android_webview.AwPage;
 import org.chromium.base.test.util.CallbackHelper;
+import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.content_public.browser.test.util.HistoryUtils;
 import org.chromium.net.test.util.TestWebServer;
 
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 
 /** Tests for the AwNavigationClient class. */
 @RunWith(Parameterized.class)
 @UseParametersRunnerFactory(AwJUnit4ClassRunnerWithParameters.Factory.class)
 @DoNotBatch(reason = "Tests that need browser start are incompatible with @Batch")
+@CommandLineFlags.Add("enable-features=WebViewWebPerformanceMetricsReporting")
 public class AwNavigationClientTest extends AwParameterizedTest {
     @Rule public AwActivityTestRule mActivityTestRule;
 
@@ -56,6 +60,14 @@ public class AwNavigationClientTest extends AwParameterizedTest {
                 <body>
                         <div style="font-size: 0.5em">First LCP Trigger</div>
                         <div id="second-lcp" style="font-size: 1.5em"></div>
+                </body>
+                </html>
+            """;
+    private static final String SIMPLE_PAGE_HTML =
+            """
+                <html>
+                <body>
+                        <div>Hello</div>
                 </body>
                 </html>
             """;
@@ -253,13 +265,17 @@ public class AwNavigationClientTest extends AwParameterizedTest {
                 mContentsClient.getOnPageFinishedHelper(),
                 testPage);
 
+        // First, wait for the native callbacks to ensure they are all processed.
+        int expectedNumMarks = 3;
+        // We expect 3 callbacks from performance.mark() calls, plus one for the FCP event.
+        mCallbackHelper.waitForCallback(0, expectedNumMarks + 1);
+
         // Wait for performance marks data to be returned via postmessage
         TestWebMessageListener.Data data = listener.waitForOnPostMessage();
         JSONArray jsPerformanceMarks = new JSONArray(data.getAsString());
         List<TestAwNavigationListener.PerformanceMark> listenerPerformanceMarks =
                 mNavigationListener.getPerformanceMarks();
 
-        int expectedNumMarks = 3;
         Assert.assertEquals(
                 "Number of marks observered via js is incorrect",
                 expectedNumMarks,
@@ -305,6 +321,7 @@ public class AwNavigationClientTest extends AwParameterizedTest {
                 awContents, JS_OBJECT_NAME, new String[] {"*"}, listener);
 
         // Load initial page
+        int callBackCount = mCallbackHelper.getCallCount();
         String testPageInitial =
                 mWebServer.setResponse(
                         "/web_performance_metrics_initial.html",
@@ -313,10 +330,13 @@ public class AwNavigationClientTest extends AwParameterizedTest {
         mActivityTestRule.loadUrlSync(
                 awContents, mContentsClient.getOnPageFinishedHelper(), testPageInitial);
 
+        // We expect 1 callback from performance.mark() called at the pageshow event, and one FCP
+        // event.
+        mCallbackHelper.waitForCallback(callBackCount, 2);
         // Wait for post message to verify page has been shown and mark should have been set
         listener.waitForOnPostMessage();
 
-        // Check we obseve the first performance mark
+        // Check we observe the first performance mark
         List<TestAwNavigationListener.PerformanceMark> listenerPerformanceMarks =
                 mNavigationListener.getPerformanceMarks();
         Assert.assertEquals(
@@ -339,6 +359,9 @@ public class AwNavigationClientTest extends AwParameterizedTest {
                 awContents.getWebContents(),
                 mContentsClient.getOnPageStartedHelper());
 
+        // We expect another callback from performance.mark(). Now 3 events in total.
+        mCallbackHelper.waitForCallback(callBackCount, 3);
+
         // Wait for post message to verify page has been shown again and mark should have been set
         listener.waitForOnPostMessage();
 
@@ -356,5 +379,147 @@ public class AwNavigationClientTest extends AwParameterizedTest {
                     expectedMarkName,
                     listenerMark.markName);
         }
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView"})
+    public void testPageGetUrl() throws Throwable {
+        final String url = mWebServer.setResponse("/page.html", SIMPLE_PAGE_HTML, null);
+
+        // Load the page
+        mActivityTestRule.loadUrlSync(
+                mTestContainerView.getAwContents(), mContentsClient.getOnPageFinishedHelper(), url);
+
+        // Verify the page URL
+        AwPage page = mNavigationListener.getLastPageWithLoadEventFired();
+        Assert.assertNotNull(page);
+        Assert.assertEquals(url, page.getUrl());
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView"})
+    public void testPageGetUrlSameDocument() throws Throwable {
+        final String url = mWebServer.setResponse("/page.html", SIMPLE_PAGE_HTML, null);
+        final String fragmentUrl = url + "#ref";
+
+        // Load the page
+        mActivityTestRule.loadUrlSync(
+                mTestContainerView.getAwContents(), mContentsClient.getOnPageFinishedHelper(), url);
+        AwPage page = mNavigationListener.getLastPageWithLoadEventFired();
+        Assert.assertNotNull(page);
+
+        // Verify the page URL
+        Assert.assertEquals(url, page.getUrl());
+
+        // Load the page with a fragment
+        mActivityTestRule.loadUrlSync(
+                mTestContainerView.getAwContents(),
+                mContentsClient.getOnPageFinishedHelper(),
+                fragmentUrl);
+
+        // Verify the page URL is the fragment URL
+        Assert.assertEquals(fragmentUrl, page.getUrl());
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView", "Preferences"})
+    @CommandLineFlags.Add(
+            "enable-features=IgnoreDuplicateNavs,WebViewIgnoreDuplicateNavs:duplicate_nav_threshold/3s")
+    public void testIgnoreDuplicateNavsEnabled() throws Throwable {
+        final AwContents awContents = mTestContainerView.getAwContents();
+
+        // Load an empty page to exit the initial empty document state. Without this, the initial
+        // navigation would have 'should_replace_current_entry' set to true, causing a mismatch with
+        // the second navigation's flag and making those navs non-duplicate.
+        final String emptyUrl = mWebServer.setResponse("/empty.html", "empty", null);
+        mActivityTestRule.loadUrlSync(
+                awContents, mContentsClient.getOnPageFinishedHelper(), emptyUrl);
+
+        int onPageStartedCallCount = mContentsClient.getOnPageStartedHelper().getCallCount();
+        int onPageFinishedCallCount = mContentsClient.getOnPageFinishedHelper().getCallCount();
+
+        final String htmlPath = "/testIgnoreDuplicateNav.html";
+        final CountDownLatch latch1 = new CountDownLatch(1);
+        final CountDownLatch latch2 = new CountDownLatch(1);
+        final String url =
+                mWebServer.setResponseWithRunnableAction(
+                        htmlPath,
+                        "response",
+                        null,
+                        () -> {
+                            latch1.countDown();
+                            try {
+                                latch2.await();
+                            } catch (InterruptedException e) {
+                            }
+                        });
+
+        // Trigger two navigations to the same URL.
+        mActivityTestRule.loadUrlAsync(awContents, url);
+        latch1.await();
+        mActivityTestRule.loadUrlAsync(awContents, url);
+        latch2.countDown();
+
+        // The second navigation is ignored, but we still expect onPageFinished to be called for it.
+        mContentsClient.getOnPageFinishedHelper().waitForCallback(onPageFinishedCallCount, 2);
+
+        // onPageStarted is called only once, and the server received only one request.
+        Assert.assertEquals(
+                onPageStartedCallCount + 1,
+                mContentsClient.getOnPageStartedHelper().getCallCount());
+        Assert.assertEquals(1, mWebServer.getRequestCount(htmlPath));
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView", "Preferences"})
+    @CommandLineFlags.Add("disable-features=WebViewIgnoreDuplicateNavs")
+    public void testIgnoreDuplicateNavsDisabled() throws Throwable {
+        final AwContents awContents = mTestContainerView.getAwContents();
+
+        // Load an empty page to exit the initial empty document state. Without this, the initial
+        // navigation would have 'should_replace_current_entry' set to true, causing a mismatch with
+        // the second navigation's flag and making those navs non-duplicate.
+        final String emptyUrl = mWebServer.setResponse("/empty.html", "empty", null);
+        mActivityTestRule.loadUrlSync(
+                awContents, mContentsClient.getOnPageFinishedHelper(), emptyUrl);
+
+        int onPageStartedCallCount = mContentsClient.getOnPageStartedHelper().getCallCount();
+        int onPageFinishedCallCount = mContentsClient.getOnPageFinishedHelper().getCallCount();
+
+        final String htmlPath = "/testIgnoreDuplicateNav.html";
+        final CountDownLatch latch1 = new CountDownLatch(1);
+        final CountDownLatch latch2 = new CountDownLatch(1);
+        final String url =
+                mWebServer.setResponseWithRunnableAction(
+                        htmlPath,
+                        "response",
+                        null,
+                        () -> {
+                            latch1.countDown();
+                            try {
+                                latch2.await();
+                            } catch (InterruptedException e) {
+                            }
+                        });
+
+        // Trigger two navigations to the same URL.
+        mActivityTestRule.loadUrlAsync(awContents, url);
+        latch1.await();
+        mActivityTestRule.loadUrlAsync(awContents, url);
+        latch2.countDown();
+
+        // Wait for both: Nav 1 (canceled) and Nav 2 (completed). Both trigger onPageFinished.
+        mContentsClient.getOnPageFinishedHelper().waitForCallback(onPageFinishedCallCount, 2);
+
+        // Nav 1 is canceled before it commits, so only Nav 2 triggers onPageStarted.
+        Assert.assertEquals(
+                onPageStartedCallCount + 1,
+                mContentsClient.getOnPageStartedHelper().getCallCount());
+        // Both requests reach the server.
+        Assert.assertEquals(2, mWebServer.getRequestCount(htmlPath));
     }
 }

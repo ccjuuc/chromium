@@ -19,15 +19,20 @@ import org.chromium.build.annotations.Nullable;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.util.Objects;
 
 /**
- * An interface defining content that can be displayed inside of the bottom sheet for Chrome
- * Home.
+ * An interface defining content that can be displayed inside of the bottom sheet for Chrome Home.
  */
 @NullMarked
 public interface BottomSheetContent {
     /** The different possible height modes for a given state. */
-    @IntDef({HeightMode.DEFAULT, HeightMode.WRAP_CONTENT, HeightMode.DISABLED})
+    @IntDef({
+        HeightMode.DEFAULT,
+        HeightMode.WRAP_CONTENT,
+        HeightMode.RESIZE_CONTENT,
+        HeightMode.DISABLED
+    })
     @Retention(RetentionPolicy.SOURCE)
     @interface HeightMode {
         /**
@@ -44,18 +49,70 @@ public interface BottomSheetContent {
         int WRAP_CONTENT = -1;
 
         /**
+         * The sheet will dynamically resize the sheet content to match the sheet offset at FULL /
+         * HALF state. Only intended to be used for `getFullHeightRatio`.
+         *
+         * <p>If half-height is disabled, this mode will just be treated as {@link
+         * HeightMode#DEFAULT}.
+         */
+        int RESIZE_CONTENT = -2;
+
+        /**
          * The state this mode is used for will be disabled. For example, disabling the peek state
          * would cause the sheet to automatically expand when triggered.
          */
-        int DISABLED = -2;
+        int DISABLED = -3;
     }
 
     /** The different priorities that the sheet's content can have. */
-    @IntDef({ContentPriority.HIGH, ContentPriority.LOW})
+    @IntDef({ContentPriority.HIGH, ContentPriority.LOW, ContentPriority.COBROWSE})
     @Retention(RetentionPolicy.SOURCE)
     @interface ContentPriority {
         int HIGH = 0;
         int LOW = 1;
+        // This priority level is for cobrowse only and should not be used outside of that feature.
+        int COBROWSE = 2;
+    }
+
+    /** Carrier class for background glow specifications. */
+    public static class GlowSpec {
+        /** The different possible shadow sizes for the background glow. */
+        @IntDef({ShadowSize.DEFAULT, ShadowSize.LONG})
+        @Retention(RetentionPolicy.SOURCE)
+        public @interface ShadowSize {
+            int DEFAULT = 0;
+            int LONG = 1;
+        }
+
+        /** The color of the background glow. */
+        public final @ColorInt int color;
+
+        /** The size of the background glow. */
+        public final @ShadowSize int size;
+
+        /**
+         * Creates a new background glow spec.
+         *
+         * @param color The color of the background glow.
+         * @param size The size of the background glow.
+         */
+        public GlowSpec(@ColorInt int color, @ShadowSize int size) {
+            this.color = color;
+            this.size = size;
+        }
+
+        @Override
+        public boolean equals(@Nullable Object obj) {
+            if (obj == this) return true;
+            if (!(obj instanceof GlowSpec)) return false;
+            GlowSpec other = (GlowSpec) obj;
+            return color == other.color && size == other.size;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(color, size);
+        }
     }
 
     /**
@@ -132,6 +189,14 @@ public interface BottomSheetContent {
     }
 
     /**
+     * @return Whether this content covers the bottom controls (e.g. bottom navigation bar)
+     *         from the bottom of the screen with zero bottom margin, even when unscrimmed.
+     */
+    default boolean coversBottomControls() {
+        return false;
+    }
+
+    /**
      * Returns whether this sheet content has a solid background color. Return false when the sheet
      * is showing complex content like tab content / a page preview.
      */
@@ -153,6 +218,14 @@ public interface BottomSheetContent {
     }
 
     /**
+     * Returns the custom background glow spec of the sheet. If spec is not overridden (default to
+     * null), the BottomSheetController will use default glow settings.
+     */
+    default @Nullable GlowSpec getSheetBackgroundGlowSpecOverride() {
+        return null;
+    }
+
+    /**
      * The height of bottom sheet in PEEK mode. The sheet content that wants to show content as PEEK
      * can override this method and provide a non-negative height. This interface by default
      * supplies {@link HeightMode#DISABLED}.
@@ -167,24 +240,34 @@ public interface BottomSheetContent {
     }
 
     /**
-     * @return The height of the half state for the content as a ratio of the height of the
-     *         content area (ex. 1.f would be full-screen, 0.5f would be half-screen). The
-     *         returned value can also be one of {@link HeightMode}. If
-     *         {@link HeightMode#DEFAULT} is returned, the ratio will be a predefined value. If
-     *         {@link HeightMode#WRAP_CONTENT} is returned by {@link #getFullHeightRatio()}, the
-     *         half height will be disabled. Half height will also be disabled on small screens.
-     *         This method cannot return {@link HeightMode#WRAP_CONTENT}.
+     * Gets the height of the half state for the content as a ratio of the height of the content
+     * area (ex. 1.f would be full-screen, 0.5f would be half-screen). The returned value can also
+     * be one of {@link HeightMode}.
+     *
+     * <p>If {@link HeightMode#DEFAULT} is returned, the ratio will be a predefined value.
+     *
+     * <p>If {@link HeightMode#WRAP_CONTENT} is returned by {@link #getFullHeightRatio()}, the half
+     * height will be disabled. Half height will also be disabled on small screens. This method
+     * cannot return {@link HeightMode#WRAP_CONTENT} or {@link HeightMode#RESIZE_CONTENT}.
      */
     default float getHalfHeightRatio() {
         return HeightMode.DEFAULT;
     }
 
     /**
-     * @return The height of the full state for the content as a ratio of the height of the
-     *         content area (ex. 1.f would be full-screen, 0.5f would be half-screen). The
-     *         returned value can also be one of {@link HeightMode}. If
-     *         {@link HeightMode#DEFAULT}, the ratio will be a predefined value. This height
-     *         cannot be disabled. This method cannot return {@link HeightMode#DISABLED}.
+     * Gets the height of the full state for the content as a ratio of the height of the content
+     * area (ex. 1.f would be full-screen, 0.5f would be half-screen). The returned value can also
+     * be one of {@link HeightMode}.
+     *
+     * <p>If {@link HeightMode#DEFAULT}, the ratio will be a predefined value. This height cannot be
+     * disabled.
+     *
+     * <p>If {@link HeightMode#RESIZE_CONTENT} is returned, the sheet will dynamically resize the
+     * sheet content to match the sheet offset. The maximum height will be {@link
+     * BottomSheet#MAX_HEIGHT_RATIO} and the minimum height will be the height of the half height
+     * ratio.
+     *
+     * <p>This method cannot return {@link HeightMode#DISABLED}.
      */
     default float getFullHeightRatio() {
         return HeightMode.DEFAULT;
@@ -224,11 +307,15 @@ public interface BottomSheetContent {
     default void onBackPressed() {}
 
     /**
-     * Returns the content description for the bottom sheet. This is generally the name of the
-     * feature/content that is showing. It can be a dynamic string. 'Swipe down to close.' will be
-     * automatically appended after the content description.
+     * @deprecated Container-level content descriptions on the bottom sheet cause screen readers
+     *     (like TalkBack) to mask and skip non-interactive descendant views. Use {@link
+     *     #getSheetFullHeightAccessibilityStringId()} or {@link
+     *     #getSheetHalfHeightAccessibilityStringId()} for accessibility pane titles instead.
      */
-    @Nullable String getSheetContentDescription(Context context);
+    @Deprecated
+    default @Nullable String getSheetContentDescription(Context context) {
+        return null;
+    }
 
     /**
      * @return The resource id of the string announced when the sheet is opened at half height. This
@@ -252,11 +339,35 @@ public interface BottomSheetContent {
     int getSheetClosedAccessibilityStringId();
 
     /**
-     * @return True if this content should hide when higher-priority content is requested to be
-     *     shown, even if the sheet is expanded. Otherwise the new content will only be shown after
-     *     the sheet is dismissed. If returning true here, this content's priority should be LOW.
+     * @return The resource id of the string announced when the sheet is hidden. This is typically
+     *     the name of your feature followed by 'hidden' (e.g. 'Tab bottom sheet hidden').
+     *     <p><b>Important note on screen reader deduplication:</b> By default, this falls back to
+     *     {@link #getSheetClosedAccessibilityStringId()}, which is also announced when entering the
+     *     peeking state. If your bottom sheet supports peeking and can be dismissed from peek to
+     *     hidden, you <b>must</b> override this method to return a distinct string ID from your
+     *     closed/peek string. Otherwise, Android screen readers (e.g., TalkBack) will treat the
+     *     consecutive identical strings as duplicate announcements and silently drop the speech
+     *     when transitioning from peek to hidden.
      */
-    default boolean canSuppressInAnyState() {
+    default @StringRes int getSheetHiddenAccessibilityStringId() {
+        return getSheetClosedAccessibilityStringId();
+    }
+
+    /**
+     * @param nextContent The content that is requesting to be shown.
+     * @return True if this content should hide when another content is requested to be shown.
+     */
+    default boolean canBeSuppressed(BottomSheetContent nextContent) {
+        return false;
+    }
+
+    /**
+     * Whether the bottom sheet should act as a bottom browser control in the PEEK state,
+     * pushing web content up rather than overlaying it.
+     *
+     * @return True if the bottom sheet should act as a browser control.
+     */
+    default boolean actsAsBrowserControls() {
         return false;
     }
 
@@ -271,5 +382,34 @@ public interface BottomSheetContent {
      */
     default boolean shouldLongPressMoveSheet() {
         return false;
+    }
+
+    /**
+     * Whether snackbars should be shown inside the bottom sheet.
+     *
+     * <p>This should only be set to false if the bottom sheet is rarely or never full screen height
+     * (as otherwise the snackbar will be offscreen) and should only be set when the bottom sheet
+     * does not have a scrim in half or full height.
+     *
+     * @return True if snackbars should be shown inside the bottom sheet.
+     */
+    default boolean allowInSheetContentSnackbars() {
+        return true;
+    }
+
+    /**
+     * @return Whether the sheet should restore its previous state when returning from suppression.
+     *     If false, it will return to its opening state.
+     */
+    default boolean shouldRestoreStateOnUnsuppress() {
+        return true;
+    }
+
+    /**
+     * @return Whether this content supports rendering specifically configured for large form factor
+     *     devices (e.g., width constraints, specific background styling).
+     */
+    default boolean supportsLargeFormFactor() {
+        return true;
     }
 }

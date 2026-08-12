@@ -9,14 +9,12 @@ import static org.junit.Assert.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.app.Activity;
 import android.content.Intent;
 
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -32,28 +30,29 @@ import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.app.feed.FeedActionDelegateImpl;
 import org.chromium.chrome.browser.bookmarks.BookmarkModel;
-import org.chromium.chrome.browser.feed.webfeed.WebFeedBridge;
-import org.chromium.chrome.browser.feed.webfeed.WebFeedBridgeJni;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.native_page.NativePageNavigationDelegate;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.signin.SigninAndHistorySyncActivityLauncherImpl;
-import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncConfig;
 import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncConfig.NoAccountSigninMode;
 import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncConfig.WithAccountSigninMode;
+import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncCoordinator;
 import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncActivityLauncher;
 import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncConfig;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.components.browser_ui.device_lock.DeviceLockActivityLauncher;
+import org.chromium.components.signin.SigninFeatures;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
+import org.chromium.ui.base.ActivityResultTracker;
+import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.modaldialog.ModalDialogManager;
 
 /** Tests for FeedActionDelegateImpl. */
 @RunWith(BaseRobolectricTestRunner.class)
 public final class FeedActionDelegateImplTest {
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
-    @Mock private WebFeedBridge.Natives mWebFeedBridgeJniMock;
 
     @Mock private SigninAndHistorySyncActivityLauncher mMockSigninAndHistorySyncActivityLauncher;
 
@@ -65,13 +64,21 @@ public final class FeedActionDelegateImplTest {
 
     @Mock private Activity mActivity;
 
-    @Mock private TabModelSelector mTabModelSelector;
+    @Mock private WindowAndroid mWindowAndroid;
+
+    @Mock private ActivityResultTracker mActivityResultTracker;
+
+    @Mock private DeviceLockActivityLauncher mDeviceLockActivityLauncher;
+
+    @Mock private ModalDialogManager mModalDialogManager;
 
     @Mock private Profile mProfile;
 
     @Mock private BottomSheetController mBottomSheetController;
 
     @Mock private Intent mSigninIntent;
+
+    @Mock private BottomSheetSigninAndHistorySyncCoordinator mSigninCoordinator;
 
     @Captor ArgumentCaptor<Intent> mIntentCaptor;
 
@@ -82,21 +89,14 @@ public final class FeedActionDelegateImplTest {
 
         SigninAndHistorySyncActivityLauncherImpl.setLauncherForTest(
                 mMockSigninAndHistorySyncActivityLauncher);
-        mFeedActionDelegateImpl =
-                new FeedActionDelegateImpl(
-                        mActivity,
-                        mMockSnackbarManager,
-                        mMockNavigationDelegate,
-                        mMockBookmarkModel,
-                        mTabModelSelector,
-                        mProfile,
-                        mBottomSheetController);
-        WebFeedBridgeJni.setInstanceForTesting(mWebFeedBridgeJniMock);
-
-        when(mWebFeedBridgeJniMock.isCormorantEnabledForLocale()).thenReturn(true);
+        mFeedActionDelegateImpl = buildFeedActionDelegateImpl();
     }
 
     @Test
+    @DisableFeatures({
+        SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
+        SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT
+    })
     public void testStartSigninFlow_shownWhenFlagEnabled() {
         when(mActivity.getString(anyInt())).thenReturn("string");
         when(mMockSigninAndHistorySyncActivityLauncher.createBottomSheetSigninIntentOrShowError(
@@ -123,6 +123,10 @@ public final class FeedActionDelegateImplTest {
     }
 
     @Test
+    @DisableFeatures({
+        SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
+        SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT
+    })
     public void testShowSigninInterstitial() {
         when(mActivity.getString(anyInt())).thenReturn("string");
         when(mMockSigninAndHistorySyncActivityLauncher.createBottomSheetSigninIntentOrShowError(
@@ -149,24 +153,58 @@ public final class FeedActionDelegateImplTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.CORMORANT)
-    public void testOpenWebFeed_enabledWhenCormorantFlagEnabled() {
-        String webFeedName = "SomeFeedName";
+    @EnableFeatures({
+        SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
+        SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT
+    })
+    public void testStartSigninFlow_seamlessEnabled() {
+        when(mMockSigninAndHistorySyncActivityLauncher
+                        .createBottomSheetSigninCoordinatorAndObserveAddAccountResult(
+                                any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                                anyInt()))
+                .thenReturn(mSigninCoordinator);
+        mFeedActionDelegateImpl = buildFeedActionDelegateImpl();
 
-        mFeedActionDelegateImpl.openWebFeed(webFeedName, SingleWebFeedEntryPoint.OTHER);
+        when(mActivity.getString(anyInt())).thenReturn("string");
 
-        verify(mActivity).startActivity(mIntentCaptor.capture());
-        Assert.assertArrayEquals(
-                "Feed ID not passed correctly.",
-                webFeedName.getBytes(),
-                mIntentCaptor.getValue().getByteArrayExtra("CREATOR_WEB_FEED_ID"));
+        mFeedActionDelegateImpl.startSigninFlow(SigninAccessPoint.NTP_FEED_BOTTOM_PROMO);
+
+        verify(mSigninCoordinator).startSigninFlow(any());
     }
 
     @Test
-    @DisableFeatures(ChromeFeatureList.CORMORANT)
-    public void testOpenWebFeed_disabledWhenCormorantFlagDisabled() {
-        when(mWebFeedBridgeJniMock.isCormorantEnabledForLocale()).thenReturn(false);
-        mFeedActionDelegateImpl.openWebFeed("SomeFeedName", SingleWebFeedEntryPoint.OTHER);
-        verify(mActivity, never()).startActivity(any());
+    @EnableFeatures({
+        SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
+        SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT
+    })
+    public void testShowSigninInterstitial_seamlessEnabled() {
+        when(mMockSigninAndHistorySyncActivityLauncher
+                        .createBottomSheetSigninCoordinatorAndObserveAddAccountResult(
+                                any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                                anyInt()))
+                .thenReturn(mSigninCoordinator);
+        mFeedActionDelegateImpl = buildFeedActionDelegateImpl();
+
+        when(mActivity.getString(anyInt())).thenReturn("string");
+
+        mFeedActionDelegateImpl.showSignInInterstitial(
+                SigninAccessPoint.NTP_FEED_CARD_MENU_PROMO, null);
+
+        verify(mSigninCoordinator).startSigninFlow(any());
+    }
+
+    private FeedActionDelegateImpl buildFeedActionDelegateImpl() {
+        return new FeedActionDelegateImpl(
+                mActivity,
+                mWindowAndroid,
+                mActivityResultTracker,
+                mMockSigninAndHistorySyncActivityLauncher,
+                mDeviceLockActivityLauncher,
+                mMockSnackbarManager,
+                mModalDialogManager,
+                mMockNavigationDelegate,
+                mMockBookmarkModel,
+                mProfile,
+                mBottomSheetController);
     }
 }

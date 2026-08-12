@@ -19,11 +19,31 @@ namespace webauthn {
 NSArray<FormSuggestion*>* FormSuggestionsFromPasskeyCredentials(
     const std::vector<password_manager::PasskeyCredential>& passkeys);
 
+// Returns the encoded credential ID associated with the provided
+// `passkey_suggestion`. Returns an empty string if the ID cannot be retrieved.
+// This function should only be called on suggestions of type
+// autofill::SuggestionType::kWebauthnCredential.
+std::string GetPasskeySuggestionEncodedCredentialId(
+    FormSuggestion* passkey_suggestion);
+
+// Returns the username associated with the passkey matching `suggestion`.
+// Returns nil if no matching passkey is found or if the suggestion is not a
+// passkey.
+NSString* GetPasskeyUsernameForSuggestion(
+    FormSuggestion* suggestion,
+    const std::vector<password_manager::PasskeyCredential>& passkeys);
+
 // Merges passkey and password suggestions into a single array.
 NSArray<FormSuggestion*>* MergePasskeyAndPasswordSuggestions(
     NSArray<FormSuggestion*>* passkey_suggestions,
     NSArray<FormSuggestion*>* password_suggestions);
 
+// Formats the user-visible description for a passkey suggestion.
+NSString* FormatPasskeySuggestionDescription(NSString* username,
+                                             NSString* display_name);
+
+// Formats the user-visible subtext for a passkey Manual Fill cell.
+NSString* FormatPasskeyManualFillSubtitle(NSString* display_name);
 }  // namespace webauthn
 
 #endif  // COMPONENTS_WEBAUTHN_IOS_PASSKEY_SUGGESTION_UTILS_H_

@@ -18,6 +18,8 @@
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "components/viz/common/surfaces/frame_sink_id_allocator.h"
 #include "content/browser/renderer_host/browser_compositor_ios.h"
+#include "content/browser/renderer_host/frame_tree.h"
+#include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/renderer_host/input/motion_event_web.h"
 #include "content/browser/renderer_host/input/synthetic_gesture_target_ios.h"
 #include "content/browser/renderer_host/render_view_host_delegate_view.h"
@@ -91,11 +93,11 @@ class UIViewHolder {
 
 RenderWidgetHostViewIOS::RenderWidgetHostViewIOS(RenderWidgetHost* widget)
     : RenderWidgetHostViewBase(widget),
-      gesture_provider_(
+      gesture_provider_(base::MakeRefCounted<ui::FilteredGestureProvider>(
           ui::GetGestureProviderConfig(
               ui::GestureProviderConfigType::CURRENT_PLATFORM,
               GetUIThreadTaskRunner({BrowserTaskType::kUserInput})),
-          this) {
+          this)) {
   ui_view_ = std::make_unique<UIViewHolder>();
   ui_view_->view_ =
       [[RenderWidgetUIView alloc] initWithWidget:weak_factory_.GetWeakPtr()];
@@ -134,7 +136,9 @@ RenderWidgetHostViewIOS::RenderWidgetHostViewIOS(RenderWidgetHost* widget)
   host()->SetView(this);
 }
 
-RenderWidgetHostViewIOS::~RenderWidgetHostViewIOS() = default;
+RenderWidgetHostViewIOS::~RenderWidgetHostViewIOS() {
+  gesture_provider_->Shutdown();
+}
 
 void RenderWidgetHostViewIOS::Destroy() {
   [ui_view_->view_ removeView];
@@ -158,22 +162,28 @@ bool RenderWidgetHostViewIOS::IsSurfaceAvailableForCopy() {
 void RenderWidgetHostViewIOS::CopyFromSurface(
     const gfx::Rect& src_rect,
     const gfx::Size& dst_size,
+    base::TimeDelta timeout,
     base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback) {
   base::WeakPtr<RenderWidgetHostImpl> popup_host;
   base::WeakPtr<DelegatedFrameHost> popup_frame_host;
   RenderWidgetHostViewBase::CopyMainAndPopupFromSurface(
       host()->GetWeakPtr(),
       browser_compositor_->GetDelegatedFrameHost()->GetWeakPtr(), popup_host,
-      popup_frame_host, src_rect, dst_size, GetDeviceScaleFactor(),
+      popup_frame_host, src_rect, dst_size, GetDeviceScaleFactor(), timeout,
       std::move(callback));
 }
 
 ui::FilteredGestureProvider*
 RenderWidgetHostViewIOS::GetFilteredGestureProviderForTesting() {
-  return &gesture_provider_;
+  return gesture_provider_.get();
 }
 
-void RenderWidgetHostViewIOS::InitAsChild(gfx::NativeView parent_view) {}
+void RenderWidgetHostViewIOS::InitAsChild(gfx::NativeView parent_view) {
+  // Attach to the parent view tree if provided.
+  if (parent_view) {
+    UpdateNativeViewTree(parent_view);
+  }
+}
 void RenderWidgetHostViewIOS::SetSize(const gfx::Size& size) {}
 void RenderWidgetHostViewIOS::SetBounds(const gfx::Rect& rect) {}
 
@@ -217,14 +227,6 @@ blink::mojom::PointerLockResult RenderWidgetHostViewIOS::ChangePointerLock(
 }
 void RenderWidgetHostViewIOS::UnlockPointer() {}
 
-uint32_t RenderWidgetHostViewIOS::GetCaptureSequenceNumber() const {
-  return latest_capture_sequence_number_;
-}
-
-void RenderWidgetHostViewIOS::EnsureSurfaceSynchronizedForWebTest() {
-  ++latest_capture_sequence_number_;
-  browser_compositor_->ForceNewSurfaceId();
-}
 
 void RenderWidgetHostViewIOS::TakeFallbackContentFrom(
     RenderWidgetHostView* view) {}
@@ -263,6 +265,11 @@ viz::SurfaceId RenderWidgetHostViewIOS::GetCurrentSurfaceId() const {
   return browser_compositor_->GetDelegatedFrameHost()->GetCurrentSurfaceId();
 }
 
+bool RenderWidgetHostViewIOS::HasSavedCompositorFrame() const {
+  return browser_compositor_ &&
+         browser_compositor_->GetDelegatedFrameHost()->HasSavedFrame();
+}
+
 void RenderWidgetHostViewIOS::InitAsPopup(
     RenderWidgetHostView* parent_host_view,
     const gfx::Rect& pos,
@@ -285,30 +292,31 @@ void RenderWidgetHostViewIOS::ShowWithVisibility(
 }
 
 void RenderWidgetHostViewIOS::NotifyHostAndDelegateOnWasShown(
-    blink::mojom::RecordContentToVisibleTimeRequestPtr visible_time_request) {
+    std::optional<blink::RecordContentToVisibleTimeRequest>
+        visible_time_request) {
   // SetRenderWidgetHostIsHidden may cause a state transition that switches to
-  // a new instance of DelegatedFrameHost and calls WasShown, which causes
-  // HasSavedFrame to always return true. So cache the HasSavedFrame result
-  // before the transition, and do not save this DelegatedFrameHost* locally.
-  bool has_saved_frame =
-      browser_compositor_->GetDelegatedFrameHost()->HasSavedFrame();
-
+  // a new instance of DelegatedFrameHost and calls WasShown without a
+  // RecordContentToVisibleTimeRequest. So if there's a saved frame (meaning the
+  // tab switch measurement should go through DelegatedFrameHost) it's important
+  // to call RequestSuccessfulPresentationTimeForNextFrame to register the
+  // request before the compositor has a chance to commit.
   browser_compositor_->SetRenderWidgetHostIsHidden(false);
-
-  const bool renderer_should_record_presentation_time = !has_saved_frame;
-  host()->WasShown(renderer_should_record_presentation_time
-                       ? visible_time_request.Clone()
-                       : blink::mojom::RecordContentToVisibleTimeRequestPtr());
 
   // If the frame for the renderer is already available, then the
   // tab-switching time is the presentation time for the browser-compositor.
   // SetRenderWidgetHostIsHidden above will show the DelegatedFrameHost
   // in this state, but doesn't include the presentation time request.
-  if (has_saved_frame && visible_time_request) {
-    browser_compositor_->GetDelegatedFrameHost()
-        ->RequestSuccessfulPresentationTimeForNextFrame(
-            std::move(visible_time_request));
+  if (visible_time_request) {
+    if (std::optional<blink::RecordContentToVisibleTimeRequest>
+            delegated_visible_time_request =
+                visible_time_request->ExtractTabSwitchEventsWithSavedFrame()) {
+      browser_compositor_->GetDelegatedFrameHost()
+          ->RequestSuccessfulPresentationTimeForNextFrame(
+              std::move(*delegated_visible_time_request));
+    }
   }
+
+  host()->WasShown(std::move(visible_time_request));
 }
 
 void RenderWidgetHostViewIOS::Hide() {
@@ -332,13 +340,28 @@ bool RenderWidgetHostViewIOS::IsShowing() {
   return is_visible_ && [ui_view_->view_ window];
 }
 
-gfx::Rect RenderWidgetHostViewIOS::GetBoundsInRootWindow() {
+gfx::Rect RenderWidgetHostViewIOS::GetBoundsInScreen() {
   return GetViewBounds();
 }
 
 gfx::Size RenderWidgetHostViewIOS::GetRequestedRendererSize() {
   return GetViewBounds().size();
 }
+
+#if !BUILDFLAG(IS_IOS_TVOS)
+gfx::Size RenderWidgetHostViewIOS::GetVisibleViewportSize() {
+  int bottom_adjust =
+      std::max(0, static_cast<int>([ui_view_->view_ keyboardHeight]));
+  gfx::Rect requested_rect(GetRequestedRendererSize());
+  requested_rect.Inset(gfx::Insets::TLBR(0, 0, bottom_adjust, 0));
+  return requested_rect.size();
+}
+
+gfx::Size RenderWidgetHostViewIOS::GetVisibleViewportSizeDevicePx() {
+  return gfx::ScaleToCeiledSize(GetVisibleViewportSize(),
+                                GetDeviceScaleFactor());
+}
+#endif  // !BUILDFLAG(IS_IOS_TVOS)
 
 std::optional<DisplayFeature> RenderWidgetHostViewIOS::GetDisplayFeature() {
   return display_feature_;
@@ -370,17 +393,18 @@ void RenderWidgetHostViewIOS::UpdateBackgroundColor() {}
 
 void RenderWidgetHostViewIOS::
     RequestSuccessfulPresentationTimeFromHostOrDelegate(
-        blink::mojom::RecordContentToVisibleTimeRequestPtr
-            visible_time_request) {
-  // No state transition here so don't use
-  // has_saved_frame_before_state_transition.
-  if (browser_compositor_->GetDelegatedFrameHost()->HasSavedFrame()) {
-    // If the frame for the renderer is already available, then the
-    // tab-switching time is the presentation time for the browser-compositor.
+        blink::RecordContentToVisibleTimeRequest visible_time_request) {
+  // If the frame for the renderer is already available, then the tab-switching
+  // time is the presentation time for the browser-compositor.
+  if (std::optional<blink::RecordContentToVisibleTimeRequest>
+          delegated_visible_time_request =
+              visible_time_request.ExtractTabSwitchEventsWithSavedFrame()) {
     browser_compositor_->GetDelegatedFrameHost()
         ->RequestSuccessfulPresentationTimeForNextFrame(
-            std::move(visible_time_request));
-  } else {
+            std::move(*delegated_visible_time_request));
+  }
+
+  if (!visible_time_request.events.empty()) {
     host()->RequestSuccessfulPresentationTimeForNextFrame(
         std::move(visible_time_request));
   }
@@ -455,16 +479,16 @@ void RenderWidgetHostViewIOS::OnSynchronizedDisplayPropertiesChanged(
 }
 
 void RenderWidgetHostViewIOS::UpdateCALayerTree(
-    const gfx::CALayerParams& ca_layer_params) {}
+    gfx::CALayerParams ca_layer_params) {}
 
 void RenderWidgetHostViewIOS::OnOldViewDidNavigatePreCommit() {
   CHECK(browser_compositor_) << "Shouldn't be called during destruction!";
   browser_compositor_->DidNavigateMainFramePreCommit();
-  gesture_provider_.ResetDetection();
+  gesture_provider_->ResetDetection();
 }
 
 void RenderWidgetHostViewIOS::OnNewViewDidNavigatePostCommit() {
-  gesture_provider_.ResetDetection();
+  gesture_provider_->ResetDetection();
 }
 
 void RenderWidgetHostViewIOS::DidEnterBackForwardCache() {
@@ -587,8 +611,13 @@ bool RenderWidgetHostViewIOS::ShouldRouteEvents() const {
 }
 
 void RenderWidgetHostViewIOS::OnTouchEvent(blink::WebTouchEvent web_event) {
+  auto weak_this = weak_factory_.GetWeakPtr();
+  scoped_refptr<ui::FilteredGestureProvider> protector(gesture_provider_);
   ui::FilteredGestureProvider::TouchHandlingResult result =
-      gesture_provider_.OnTouchEvent(MotionEventWeb(web_event));
+      protector->OnTouchEvent(MotionEventWeb(web_event));
+  if (!weak_this) {
+    return;
+  }
   if (!result.succeeded) {
     return;
   }
@@ -610,9 +639,14 @@ void RenderWidgetHostViewIOS::ProcessAckedTouchEvent(
     blink::mojom::InputEventResultState ack_result) {
   const bool event_consumed =
       ack_result == blink::mojom::InputEventResultState::kConsumed;
-  gesture_provider_.OnTouchEventAck(
+  auto weak_this = weak_factory_.GetWeakPtr();
+  scoped_refptr<ui::FilteredGestureProvider> protector(gesture_provider_);
+  protector->OnTouchEventAck(
       touch.event.unique_touch_event_id, event_consumed,
       input::InputEventResultStateIsSetBlocking(ack_result));
+  if (!weak_this) {
+    return;
+  }
   if (touch.event.touch_start_or_first_touch_move && event_consumed &&
       ShouldRouteEvents()) {
     host()
@@ -649,8 +683,13 @@ void RenderWidgetHostViewIOS::SendGestureEvent(
 void RenderWidgetHostViewIOS::InjectTouchEvent(
     const blink::WebTouchEvent& event,
     const ui::LatencyInfo& latency_info) {
+  auto weak_this = weak_factory_.GetWeakPtr();
+  scoped_refptr<ui::FilteredGestureProvider> protector(gesture_provider_);
   ui::FilteredGestureProvider::TouchHandlingResult result =
-      gesture_provider_.OnTouchEvent(MotionEventWeb(event));
+      protector->OnTouchEvent(MotionEventWeb(event));
+  if (!weak_this) {
+    return;
+  }
   if (!result.succeeded) {
     return;
   }
@@ -889,17 +928,19 @@ void RenderWidgetHostViewIOS::ChildDidAckGestureEvent(
 }
 
 void RenderWidgetHostViewIOS::OnUnconfirmedTapConvertedToTap() {
-  gesture_provider_.OnUnconfirmedTapConvertedToTap();
+  gesture_provider_->OnUnconfirmedTapConvertedToTap();
 }
 
 void RenderWidgetHostViewIOS::UpdateFrameBounds() {
   const gfx::PointF scrollOffset =
       last_root_scroll_offset_.value_or(gfx::PointF());
-  const CGRect parentBounds = [[ui_view_->view_ superview] bounds];
+  UIScrollView* scrollView = (UIScrollView*)[ui_view_->view_ superview];
+  const CGRect parentBounds = [scrollView bounds];
+  const UIEdgeInsets parentInset = [scrollView contentInset];
 
-  CGRect frameBounds;
-  frameBounds.origin = scrollOffset.ToCGPoint();
-  frameBounds.size = parentBounds.size;
+  CGRect frameBounds = UIEdgeInsetsInsetRect(parentBounds, parentInset);
+  frameBounds.origin = CGPointMake(scrollOffset.x() + parentInset.left,
+                                   scrollOffset.y() + parentInset.top);
 
   // If we are scrolling we don't resize the WebView immediately.
   if (!is_scrolling_ && !IsTesting()) {
@@ -942,11 +983,26 @@ void RenderWidgetHostViewIOS::OnRootScrollOffsetChanged(
 void RenderWidgetHostViewIOS::ContentInsetChanged() {
   if (last_root_scroll_offset_) {
     ApplyRootScrollOffsetChanged(*last_root_scroll_offset_, /*force=*/true);
+  } else {
+    UpdateFrameBounds();
   }
   if (!is_scrolling_) {
     host()->SynchronizeVisualProperties();
   }
 }
+
+#if !BUILDFLAG(IS_IOS_TVOS)
+void RenderWidgetHostViewIOS::OnKeyboardVisibilityChanged() {
+  host()->SynchronizeVisualProperties();
+
+  if ([ui_view_->view_ keyboardHeight] > 0) {
+    auto* input_handler = GetFrameWidgetInputHandlerForFocusedWidget();
+    if (input_handler) {
+      input_handler->ScrollFocusedEditableNodeIntoView();
+    }
+  }
+}
+#endif  // !BUILDFLAG(IS_IOS_TVOS)
 
 void RenderWidgetHostViewIOS::ExtendSelectionAndDelete(int32_t before,
                                                        int32_t after) {
@@ -976,6 +1032,20 @@ void RenderWidgetHostViewIOS::ExecuteEditCommand(const std::string& command) {
   input_handler->ExecuteEditCommand(command, std::nullopt);
 }
 
+void RenderWidgetHostViewIOS::AdvanceFocusForIME(
+    blink::mojom::FocusType focus_type) {
+  auto* host = GetFocusedWidget();
+  if (!host) {
+    return;
+  }
+  auto* rfh = host->frame_tree()->GetFocusedFrame();
+  if (!rfh) {
+    return;
+  }
+  rfh->current_frame_host()->GetAssociatedLocalFrame()->AdvanceFocusForIME(
+      focus_type);
+}
+
 void RenderWidgetHostViewIOS::SendKeyEvent(
     const input::NativeWebKeyboardEvent& event) {
   auto* host = GetFocusedWidget();
@@ -985,6 +1055,19 @@ void RenderWidgetHostViewIOS::SendKeyEvent(
   ui::LatencyInfo latency_info;
   latency_info.AddLatencyNumber(ui::INPUT_EVENT_LATENCY_UI_COMPONENT);
   host->ForwardKeyboardEventWithLatencyInfo(event, latency_info);
+}
+
+void RenderWidgetHostViewIOS::ForwardKeyboardEventWithCommands(
+    const input::NativeWebKeyboardEvent& key_event,
+    std::vector<blink::mojom::EditCommandPtr> commands) {
+  auto* host = GetFocusedWidget();
+  if (!host) {
+    return;
+  }
+  ui::LatencyInfo latency_info;
+  latency_info.AddLatencyNumber(ui::INPUT_EVENT_LATENCY_UI_COMPONENT);
+  host->ForwardKeyboardEventWithCommands(key_event, latency_info,
+                                         std::move(commands));
 }
 
 blink::mojom::FrameWidgetInputHandler*

@@ -12,7 +12,7 @@
 
 #include "base/check_deref.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
+#include "base/containers/flat_set.h"
 #include "base/functional/callback.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
@@ -50,7 +50,7 @@ void IterateOverProfileAttributesImpl(
     // reference (it is not possible for the iterator to mutate to value
     // otherwise).
     if constexpr (std::is_same_v<AttributesReference, ProfileAttributesIOS&>) {
-      base::Value::Dict storage = std::move(attr).GetStorage();
+      base::DictValue storage = std::move(attr).GetStorage();
       if (storage != value) {
         value = std::move(storage);
       }
@@ -81,7 +81,7 @@ ProfileAttributesStorageIOS::ProfileAttributesStorageIOS(PrefService* prefs)
     // ... first remove them from `kProfileInfoCache`, ...
     {
       ScopedDictPrefUpdate update(&prefs_.get(), prefs::kProfileInfoCache);
-      base::Value::Dict& dict = update.Get();
+      base::DictValue& dict = update.Get();
       for (const auto& key : keys_to_remove) {
         dict.Remove(key);
       }
@@ -91,10 +91,10 @@ ProfileAttributesStorageIOS::ProfileAttributesStorageIOS(PrefService* prefs)
     // unless it was already requested.
     {
       ScopedListPrefUpdate update(&prefs_.get(), prefs::kProfilesToRemove);
-      base::Value::List& list = update.Get();
+      base::ListValue& list = update.Get();
       for (const auto& value : list) {
         const std::string& key = value.GetString();
-        if (base::Contains(keys_to_remove, key)) {
+        if (keys_to_remove.contains(key)) {
           keys_to_remove.erase(key);
         }
       }
@@ -133,8 +133,7 @@ bool ProfileAttributesStorageIOS::HasProfileWithName(
 
 bool ProfileAttributesStorageIOS::IsProfileMarkedForDeletion(
     std::string_view profile_name) const {
-  return base::Contains(prefs_->GetList(prefs::kProfilesToRemove),
-                        profile_name);
+  return prefs_->GetList(prefs::kProfilesToRemove).contains(profile_name);
 }
 
 ProfileAttributesIOS
@@ -144,7 +143,7 @@ ProfileAttributesStorageIOS::GetAttributesForProfileWithName(
     return ProfileAttributesIOS::DeletedProfile(name);
   }
 
-  const base::Value::Dict& values =
+  const base::DictValue& values =
       CHECK_DEREF(prefs_->GetDict(prefs::kProfileInfoCache).FindDict(name));
   return ProfileAttributesIOS::WithAttrs(name, values);
 }
@@ -156,14 +155,14 @@ void ProfileAttributesStorageIOS::UpdateAttributesForProfileWithName(
     return;
   }
 
-  const base::Value::Dict& values =
+  const base::DictValue& values =
       CHECK_DEREF(prefs_->GetDict(prefs::kProfileInfoCache).FindDict(name));
 
   ProfileAttributesIOS attr = ProfileAttributesIOS::WithAttrs(name, values);
   std::move(callback).Run(attr);
   CHECK(!attr.IsDeletedProfile());
 
-  base::Value::Dict updated_values = std::move(attr).GetStorage();
+  base::DictValue updated_values = std::move(attr).GetStorage();
   if (values != updated_values) {
     // Note: The block is there to ensure the pref update gets committed before
     // observers are notified, so they see the new value.
@@ -237,6 +236,20 @@ void ProfileAttributesStorageIOS::SetPersonalProfileName(
   DCHECK(!profile_name.empty());
   DCHECK(HasProfileWithName(profile_name));
   prefs_->SetString(prefs::kPersonalProfileName, profile_name);
+}
+
+// static
+base::flat_set<std::string> ProfileAttributesStorageIOS::GetAllProfileNames(
+    PrefService* local_prefs) {
+  base::flat_set<std::string> profile_names;
+
+  const base::DictValue& attribute_storage =
+      local_prefs->GetDict(prefs::kProfileInfoCache);
+  for (const auto attribute_entry : attribute_storage) {
+    profile_names.insert(attribute_entry.first);
+  }
+
+  return profile_names;
 }
 
 // static

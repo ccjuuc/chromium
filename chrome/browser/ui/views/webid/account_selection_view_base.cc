@@ -22,12 +22,13 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/web_contents.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 #include "third_party/icu/source/common/unicode/unistr.h"
 #include "third_party/icu/source/common/unicode/utypes.h"
 #include "third_party/icu/source/i18n/unicode/listformatter.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
@@ -168,7 +169,9 @@ AccountHoverButtonSecondaryView::AccountHoverButtonSecondaryView() {
   std::unique_ptr<views::ImageView> arrow_image_view =
       std::make_unique<views::ImageView>();
   arrow_image_view->SetImage(ui::ImageModel::FromVectorIcon(
-      vector_icons::kSubmenuArrowIcon, ui::kColorIcon, kArrowIconSize));
+      features::IsRoundedIconsEnabled() ? vector_icons::kArrowRightFlippableIcon
+                                        : vector_icons::kSubmenuArrowOldIcon,
+      ui::kColorIcon, kArrowIconSize));
   arrow_image_view_ = AddChildView(std::move(arrow_image_view));
 }
 
@@ -189,8 +192,9 @@ void AccountHoverButtonSecondaryView::SetDisabledOpacity() {
   }
 
   arrow_image_view_->SetImage(ui::ImageModel::FromVectorIcon(
-      vector_icons::kSubmenuArrowIcon, ui::kColorLabelForegroundDisabled,
-      kArrowIconSize));
+      features::IsRoundedIconsEnabled() ? vector_icons::kArrowRightFlippableIcon
+                                        : vector_icons::kSubmenuArrowOldIcon,
+      ui::kColorLabelForegroundDisabled, kArrowIconSize));
 }
 
 BrandIconImageView::BrandIconImageView(int image_size)
@@ -277,7 +281,11 @@ void AccountHoverButton::OnPressed(const ui::Event& event) {
   has_been_clicked_ = true;
   // If the callback |OnAccountSelected| returns false, e.g. the click is
   // blocked by input protector, reset the state to handle future |OnPressed|.
+  base::WeakPtr<AccountHoverButton> weak_this = weak_ptr_factory_.GetWeakPtr();
   if (callback_ && !callback_.Run(event)) {
+    if (!weak_this) {
+      return;
+    }
     has_been_clicked_ = false;
   }
   // If callback_.Run(event) returns true, |this| may be destructed because the

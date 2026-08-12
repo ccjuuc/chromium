@@ -43,17 +43,16 @@ class TestObjectPermissionContext : public ObjectPermissionContextBase {
             PermissionsClient::Get()->GetSettingsMap(browser_context)) {}
   ~TestObjectPermissionContext() override = default;
 
-  bool IsValidObject(const base::Value::Dict& dict) override {
+  bool IsValidObject(const base::DictValue& dict) override {
     return dict.size() == 2 && dict.Find(kRequiredKey1) &&
            dict.Find(kRequiredKey2);
   }
 
-  std::u16string GetObjectDisplayName(
-      const base::Value::Dict& object) override {
+  std::u16string GetObjectDisplayName(const base::DictValue& object) override {
     return {};
   }
 
-  std::string GetKeyForObject(const base::Value::Dict& object) override {
+  std::string GetKeyForObject(const base::DictValue& object) override {
     return *object.FindString(kRequiredKey1);
   }
 };
@@ -94,8 +93,8 @@ class ObjectPermissionContextBaseTest : public testing::Test {
   const GURL url2_;
   const url::Origin origin1_;
   const url::Origin origin2_;
-  base::Value::Dict object1_;
-  base::Value::Dict object2_;
+  base::DictValue object1_;
+  base::DictValue object2_;
   TestObjectPermissionContext context_;
   TestObjectPermissionContext file_system_access_context_;
 };
@@ -211,28 +210,6 @@ TEST_F(ObjectPermissionContextBaseTest,
   EXPECT_EQ(object2_, objects[0]->value);
 }
 
-#if !BUILDFLAG(IS_ANDROID)
-TEST_F(ObjectPermissionContextBaseTest, GrantObjectPermission_SetsConstraints) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      {features::kRecordChooserPermissionLastVisitedTimestamps}, {});
-
-  base::Time now = base::Time::Now();
-  file_system_access_context_.GrantObjectPermission(origin1_, object1_.Clone());
-
-  auto* hcsm = PermissionsClient::Get()->GetSettingsMap(browser_context());
-  content_settings::SettingInfo info;
-  ASSERT_TRUE(base::test::RunUntil([&]() {
-    hcsm->GetWebsiteSetting(
-        origin1_.GetURL(), GURL(),
-        ContentSettingsType::FILE_SYSTEM_ACCESS_CHOOSER_DATA, &info);
-    auto timestamp = info.metadata.last_visited();
-    // The last_visited should lie between today and a week ago.
-    return timestamp >= (now - base::Days(7)) && timestamp <= now;
-  })) << "Timeout waiting for saving grant object";
-}
-#endif  // !BUILDFLAG(IS_ANDROID)
-
 TEST_F(ObjectPermissionContextBaseTest, GetOriginsWithGrants) {
   MockPermissionObserver mock_observer;
   context_.AddObserver(&mock_observer);
@@ -243,8 +220,8 @@ TEST_F(ObjectPermissionContextBaseTest, GetOriginsWithGrants) {
 
   auto origins_with_grants = context_.GetOriginsWithGrants();
   EXPECT_EQ(2u, origins_with_grants.size());
-  EXPECT_TRUE(base::Contains(origins_with_grants, origin2_));
-  EXPECT_TRUE(base::Contains(origins_with_grants, origin1_));
+  EXPECT_TRUE(origins_with_grants.contains(origin2_));
+  EXPECT_TRUE(origins_with_grants.contains(origin1_));
 }
 
 TEST_F(ObjectPermissionContextBaseTest, GetAllGrantedObjects) {

@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/html/custom/custom_element_definition.h"
+
 #include "third_party/blink/renderer/core/dom/attr.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element.h"
@@ -11,6 +12,7 @@
 #include "third_party/blink/renderer/core/html/custom/custom_element_reaction_factory.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_reaction_stack.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_registry.h"
+#include "third_party/blink/renderer/core/html/custom/custom_element_registry_assignment.h"
 #include "third_party/blink/renderer/core/html/custom/element_internals.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html_element_factory.h"
@@ -43,7 +45,7 @@ CustomElementDefinition::~CustomElementDefinition() = default;
 
 void CustomElementDefinition::Trace(Visitor* visitor) const {
   visitor->Trace(registry_);
-  ElementRareDataField::Trace(visitor);
+  NodeRareDataField::Trace(visitor);
 }
 
 static String ErrorMessageForConstructorResult(Element& element,
@@ -167,9 +169,12 @@ HTMLElement* CustomElementDefinition::CreateElement(
     // We push the construction stack while creating element from scoped
     // custom element registry as we don't have access to scoped registry
     // in HTMLConstructor
-    if (RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled() &&
-        !registry_->IsGlobalRegistry()) {
+    if (!registry_->IsGlobalRegistry()) {
       Element* element = CreateElementForConstructor(document);
+      // Set the registry for the element before running the constructor,
+      // to ensure user gets the correct registry in constructor if need.
+      element->SetCustomElementRegistry(
+          CustomElementRegistryAssignment::Explicit(registry_.Get()));
       CustomElementConstructionStackScope construction_stack_scope(*this,
                                                                    *element);
       // Keeping the following creation call here to avoid the construction
@@ -186,9 +191,8 @@ HTMLElement* CustomElementDefinition::CreateElement(
   // element state set to "undefined", and node document set to document.
   auto* element = MakeGarbageCollected<HTMLElement>(tag_name, document);
   element->SetCustomElementState(CustomElementState::kUndefined);
-  if (RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled()) {
-    element->SetCustomElementRegistry(registry_);
-  }
+  element->SetCustomElementRegistry(
+      CustomElementRegistryAssignment::Explicit(registry_.Get()));
   // 5.2.2. Enqueue a custom element upgrade reaction given result and
   // definition.
   EnqueueUpgradeReaction(*element);
@@ -245,8 +249,10 @@ void CustomElementDefinition::Upgrade(Element& element) {
   if (ListedElement* listed_element = ListedElement::From(element)) {
     if (element.FastHasAttribute(html_names::kReadonlyAttr))
       listed_element->ReadonlyAttributeChanged();
-    if (element.FastHasAttribute(html_names::kDisabledAttr))
-      listed_element->DisabledAttributeChanged();
+    if (element.FastHasAttribute(html_names::kDisabledAttr)) {
+      listed_element->DisabledAttributeChanged(
+          DisabledChangedReason::kAttributeChanged);
+    }
   }
 
   if (IsFormAssociated())

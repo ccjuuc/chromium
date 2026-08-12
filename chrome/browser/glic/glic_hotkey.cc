@@ -9,6 +9,7 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "build/build_config.h"
 #include "chrome/browser/background/glic/glic_launcher_configuration.h"
 #include "ui/base/accelerators/command.h"
 
@@ -19,7 +20,7 @@ namespace {
 std::string GetHotkeyStringWithMapping(
     base::RepeatingCallback<void(std::u16string&)> token_mapping) {
   std::vector<std::u16string> hotkey_tokens =
-      glic::GlicLauncherConfiguration::GetGlobalHotkey()
+      glic::GlicLauncherConfiguration::GetToggleHotkey()
           .GetShortcutVectorRepresentation();
   // If the hotkey is unset, return an empty string as its representation.
   if (hotkey_tokens.empty()) {

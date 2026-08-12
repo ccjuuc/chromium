@@ -5,7 +5,6 @@
 package org.chromium.chrome.browser.share;
 
 import static org.chromium.build.NullUtil.assertNonNull;
-import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.app.Activity;
 import android.content.Context;
@@ -20,6 +19,7 @@ import org.chromium.base.Callback;
 import org.chromium.base.DeviceInfo;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.data_sharing.DataSharingTabManager;
@@ -30,30 +30,28 @@ import org.chromium.chrome.browser.history_clusters.HistoryClustersTabHelper;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.offlinepages.OfflinePageUtils;
 import org.chromium.chrome.browser.pdf.PdfUtils;
-import org.chromium.chrome.browser.printing.TabPrinter;
+import org.chromium.chrome.browser.printing.PrintHelper;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.share.ShareContentTypeHelper.ContentType;
 import org.chromium.chrome.browser.share.android_share_sheet.AndroidShareSheetController;
 import org.chromium.chrome.browser.share.android_share_sheet.TabGroupSharingController;
-import org.chromium.chrome.browser.share.link_to_text.LinkToTextHelper;
+import org.chromium.chrome.browser.share.send_tab_to_self.SendTabToSelfCoordinator;
+import org.chromium.chrome.browser.share.send_tab_to_self.ShareEntryPoint;
 import org.chromium.chrome.browser.share.share_sheet.ShareSheetCoordinator;
-import org.chromium.chrome.browser.tab.SadTab;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncActivityLauncher;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.share.ShareParams;
 import org.chromium.components.browser_ui.util.AutomotiveUtils;
-import org.chromium.components.embedder_support.util.UrlConstants;
-import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.components.favicon.LargeIconBridge;
-import org.chromium.components.ui_metrics.CanonicalURLResult;
 import org.chromium.content_public.browser.RenderFrameHost;
 import org.chromium.content_public.browser.WebContents;
-import org.chromium.printing.PrintManagerDelegateImpl;
-import org.chromium.printing.PrintingController;
-import org.chromium.printing.PrintingControllerImpl;
+import org.chromium.ui.base.ActivityResultTracker;
 import org.chromium.ui.base.MimeTypeUtils;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.url.GURL;
 
 import java.lang.annotation.Retention;
@@ -65,17 +63,20 @@ import java.util.function.Supplier;
 /** Implementation of share interface. Mostly a wrapper around ShareSheetCoordinator. */
 @NullMarked
 public class ShareDelegateImpl implements ShareDelegate {
-    static final String CANONICAL_URL_RESULT_HISTOGRAM = "Mobile.CanonicalURLResult";
 
     private final Context mContext;
     private final @Nullable BottomSheetController mBottomSheetController;
     private final ActivityLifecycleDispatcher mLifecycleDispatcher;
     private final Supplier<@Nullable Tab> mTabProvider;
-    private final Supplier<TabModelSelector> mTabModelSelectorProvider;
+    private final Supplier<@Nullable TabModelSelector> mTabModelSelectorProvider;
     private final Supplier<@Nullable Profile> mProfileSupplier;
     private final ShareSheetDelegate mDelegate;
     private final boolean mIsCustomTab;
     private final @Nullable DataSharingTabManager mDataSharingTabManager;
+    private final SigninAndHistorySyncActivityLauncher mSigninAndHistorySyncActivityLauncher;
+    private final ActivityResultTracker mActivityResultTracker;
+    private final MonotonicObservableSupplier<ModalDialogManager> mModalDialogManagerSupplier;
+    private final SnackbarManager mSnackbarManager;
     private long mShareStartTime;
 
     private static @Nullable Callback<Boolean> sShowShareSheetHookForTesting;
@@ -94,17 +95,25 @@ public class ShareDelegateImpl implements ShareDelegate {
      * @param delegate The ShareSheetDelegate for the current activity.
      * @param isCustomTab This share delegate is associated with a CCT.
      * @param dataSharingTabManager Tab data sharing helpers, for collaboration actions.
+     * @param signinAndHistorySyncActivityLauncher The launcher for sign-in and history sync.
+     * @param activityResultTracker The launcher to track activity results.
+     * @param mModalDialogManagerSupplier The manager supplier for modal dialogs.
+     * @param snackbarManager The manager for snackbars.
      */
     public ShareDelegateImpl(
             Context context,
             @Nullable BottomSheetController controller,
             ActivityLifecycleDispatcher lifecycleDispatcher,
             Supplier<@Nullable Tab> tabProvider,
-            Supplier<TabModelSelector> tabModelSelectorProvider,
+            Supplier<@Nullable TabModelSelector> tabModelSelectorProvider,
             Supplier<@Nullable Profile> profileSupplier,
             ShareSheetDelegate delegate,
             boolean isCustomTab,
-            @Nullable DataSharingTabManager dataSharingTabManager) {
+            @Nullable DataSharingTabManager dataSharingTabManager,
+            SigninAndHistorySyncActivityLauncher signinAndHistorySyncActivityLauncher,
+            ActivityResultTracker activityResultTracker,
+            MonotonicObservableSupplier<ModalDialogManager> modalDialogManagerSupplier,
+            SnackbarManager snackbarManager) {
         mContext = context;
         mBottomSheetController = controller;
         mLifecycleDispatcher = lifecycleDispatcher;
@@ -114,6 +123,10 @@ public class ShareDelegateImpl implements ShareDelegate {
         mDelegate = delegate;
         mIsCustomTab = isCustomTab;
         mDataSharingTabManager = dataSharingTabManager;
+        mSigninAndHistorySyncActivityLauncher = signinAndHistorySyncActivityLauncher;
+        mActivityResultTracker = activityResultTracker;
+        mModalDialogManagerSupplier = modalDialogManagerSupplier;
+        mSnackbarManager = snackbarManager;
     }
 
     // ShareDelegate implementation.
@@ -141,7 +154,11 @@ public class ShareDelegateImpl implements ShareDelegate {
                             new TabGroupSharingControllerImpl(mDataSharingTabManager),
                             shareOrigin,
                             mShareStartTime,
-                            isSharingHubEnabled());
+                            isSharingHubEnabled(),
+                            mSigninAndHistorySyncActivityLauncher,
+                            mActivityResultTracker,
+                            mModalDialogManagerSupplier,
+                            mSnackbarManager);
                     mShareStartTime = 0;
                 });
     }
@@ -222,83 +239,37 @@ public class ShareDelegateImpl implements ShareDelegate {
                         share(p, extras, shareOrigin);
                         return;
                     }
-                    // Could not share as an offline page.
-                    if (!shouldFetchCanonicalUrl(currentTab)) {
-                        assert currentTab.getWindowAndroid() != null;
-                        triggerShareWithCanonicalUrlResolved(
-                                currentTab.getWindowAndroid(),
-                                currentTab.getWebContents(),
-                                currentTab.getTitle(),
-                                currentTab.getUrl(),
-                                GURL.emptyGURL(),
-                                shareOrigin,
-                                shareDirectly);
-                    } else {
-                        triggerShareWithUnresolvedUrl(currentTab, shareOrigin, shareDirectly);
-                    }
+                    // Could not share as an offline page. Share the visible URL.
+                    assert currentTab.getWindowAndroid() != null;
+                    triggerShareWithUrl(
+                            currentTab.getWindowAndroid(),
+                            currentTab.getWebContents(),
+                            currentTab.getTitle(),
+                            currentTab.getUrl(),
+                            shareOrigin,
+                            shareDirectly);
                 });
     }
 
-    private void triggerShareWithUnresolvedUrl(
-            Tab currentTab, @ShareOrigin int shareOrigin, boolean shareDirectly) {
-        WindowAndroid window = assertNonNull(currentTab.getWindowAndroid());
-        WebContents webContents = currentTab.getWebContents();
-        String title = currentTab.getTitle();
-        GURL visibleUrl = currentTab.getUrl();
-        assumeNonNull(webContents)
-                .getMainFrame()
-                .getCanonicalUrlForSharing(
-                        (@Nullable GURL result) -> {
-                            if (!LinkToTextHelper.hasTextFragment(visibleUrl)) {
-                                logCanonicalUrlResult(visibleUrl, result);
-                                triggerShareWithCanonicalUrlResolved(
-                                        window,
-                                        webContents,
-                                        title,
-                                        visibleUrl,
-                                        result,
-                                        shareOrigin,
-                                        shareDirectly);
-                                return;
-                            }
-
-                            LinkToTextHelper.getExistingSelectorsAllFrames(
-                                    currentTab,
-                                    (selectors) -> {
-                                        GURL canonicalUrl =
-                                                new GURL(
-                                                        LinkToTextHelper.getUrlToShare(
-                                                                assumeNonNull(result).getSpec(),
-                                                                selectors));
-                                        logCanonicalUrlResult(visibleUrl, canonicalUrl);
-                                        triggerShareWithCanonicalUrlResolved(
-                                                window,
-                                                webContents,
-                                                title,
-                                                visibleUrl,
-                                                canonicalUrl,
-                                                shareOrigin,
-                                                shareDirectly);
-                                    });
-                        });
-    }
-
-    private void triggerShareWithCanonicalUrlResolved(
+    private void triggerShareWithUrl(
             final WindowAndroid window,
             final @Nullable WebContents webContents,
             final String title,
             final GURL visibleUrl,
-            @Nullable final GURL canonicalUrl,
             @ShareOrigin final int shareOrigin,
             final boolean shareDirectly) {
         ShareParams.Builder shareParamsBuilder =
-                new ShareParams.Builder(window, title, getUrlToShare(visibleUrl, canonicalUrl));
+                new ShareParams.Builder(window, title, getUrlToShare(visibleUrl, mContext));
 
         shareParamsBuilder.setOrigin(shareOrigin);
-        boolean isDownloadedPdf = PdfUtils.isDownloadedPdf(visibleUrl.getSpec());
-        if (isDownloadedPdf) {
+        String decodedUrl = PdfUtils.decodePdfPageUrl(visibleUrl.getSpec());
+        Uri pdfUri = decodedUrl != null ? Uri.parse(decodedUrl) : null;
+        boolean isDownloadedPdf =
+                PdfUtils.isDownloadedPdf(visibleUrl.getSpec())
+                        && PdfUtils.isUriSafeForSharing(pdfUri, mContext);
+        if (isDownloadedPdf && pdfUri != null) {
             ArrayList<Uri> fileToShare = new ArrayList<>();
-            fileToShare.add(Uri.parse(PdfUtils.decodePdfPageUrl(visibleUrl.getSpec())));
+            fileToShare.add(pdfUri);
             shareParamsBuilder
                     .setFileUris(fileToShare)
                     .setFileContentType(MimeTypeUtils.PDF_MIME_TYPE);
@@ -318,74 +289,19 @@ public class ShareDelegateImpl implements ShareDelegate {
     }
 
     @VisibleForTesting
-    static boolean shouldFetchCanonicalUrl(final Tab currentTab) {
-        WebContents webContents = currentTab.getWebContents();
-        if (webContents == null) return false;
-        if (webContents.getMainFrame() == null) return false;
-        if (currentTab.getUrl().isEmpty()) return false;
-        if (currentTab.isShowingErrorPage()
-                || SadTab.isShowing(currentTab)
-                || currentTab.isNativePage()) {
-            return false;
-        }
-        return true;
-    }
-
-    private static void logCanonicalUrlResult(GURL visibleUrl, @Nullable GURL canonicalUrl) {
-        @CanonicalURLResult int result = getCanonicalUrlResult(visibleUrl, canonicalUrl);
-        RecordHistogram.recordEnumeratedHistogram(
-                CANONICAL_URL_RESULT_HISTOGRAM,
-                result,
-                CanonicalURLResult.CANONICAL_URL_RESULT_COUNT);
-    }
-
-    @VisibleForTesting
-    static String getUrlToShare(GURL visibleUrl, @Nullable GURL canonicalUrl) {
-        if (PdfUtils.isDownloadedPdf(visibleUrl.getSpec())) return "";
-        if (canonicalUrl == null || canonicalUrl.isEmpty()) {
-            return visibleUrl.getSpec();
-        }
-        if (!UrlConstants.HTTPS_SCHEME.equals(visibleUrl.getScheme())) {
-            return visibleUrl.getSpec();
-        }
-        if (!UrlUtilities.isHttpOrHttps(canonicalUrl)) {
-            return visibleUrl.getSpec();
-        }
-        return canonicalUrl.getSpec();
-    }
-
-    private static @CanonicalURLResult int getCanonicalUrlResult(
-            GURL visibleUrl, @Nullable GURL canonicalUrl) {
-        if (!UrlConstants.HTTPS_SCHEME.equals(visibleUrl.getScheme())) {
-            return CanonicalURLResult.FAILED_VISIBLE_URL_NOT_HTTPS;
-        }
-        if (canonicalUrl == null || canonicalUrl.isEmpty()) {
-            return CanonicalURLResult.FAILED_NO_CANONICAL_URL_DEFINED;
-        }
-        String canonicalScheme = canonicalUrl.getScheme();
-        if (!UrlConstants.HTTPS_SCHEME.equals(canonicalScheme)) {
-            if (!UrlConstants.HTTP_SCHEME.equals(canonicalScheme)) {
-                return CanonicalURLResult.FAILED_CANONICAL_URL_INVALID;
-            } else {
-                return CanonicalURLResult.SUCCESS_CANONICAL_URL_NOT_HTTPS;
+    static String getUrlToShare(GURL visibleUrl, @Nullable Context context) {
+        if (PdfUtils.isDownloadedPdf(visibleUrl.getSpec())) {
+            String decodedUrl = PdfUtils.decodePdfPageUrl(visibleUrl.getSpec());
+            Uri pdfUri = decodedUrl != null ? Uri.parse(decodedUrl) : null;
+            if (context == null || PdfUtils.isUriSafeForSharing(pdfUri, context)) {
+                return "";
             }
         }
-        if (visibleUrl.equals(canonicalUrl)) {
-            return CanonicalURLResult.SUCCESS_CANONICAL_URL_SAME_AS_VISIBLE;
-        } else {
-            return CanonicalURLResult.SUCCESS_CANONICAL_URL_DIFFERENT_FROM_VISIBLE;
-        }
+        return visibleUrl.getSpec();
     }
 
     private void printTab(Tab tab) {
-        var tabProviderTab = assumeNonNull(mTabProvider.get());
-        Activity activity = assumeNonNull(tabProviderTab.getWindowAndroid()).getActivity().get();
-        PrintingController printingController = PrintingControllerImpl.getInstance();
-        if (printingController != null && !printingController.isBusy()) {
-            assert activity != null;
-            printingController.startPrint(
-                    new TabPrinter(mTabProvider.get()), new PrintManagerDelegateImpl(activity));
-        }
+        PrintHelper.printTab(tab);
     }
 
     @Override
@@ -394,6 +310,47 @@ public class ShareDelegateImpl implements ShareDelegate {
             return true;
         }
         return !(mIsCustomTab || Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE);
+    }
+
+    @Override
+    public void sendTabToSelf(Tab tab) {
+        // Early return if critical dependencies are missing.
+        if (mBottomSheetController == null) return;
+
+        Profile profile = mProfileSupplier.get();
+        if (profile == null) return;
+
+        // WindowAndroid hosts the STTS bottom sheet and sign-in promo.
+        WindowAndroid windowAndroid = tab.getWindowAndroid();
+        if (windowAndroid == null) return;
+
+        // Safely resolve the Activity (weak reference might be null during teardown).
+        Activity activity = windowAndroid.getActivity().get();
+        if (activity == null) {
+            if (mContext instanceof Activity) {
+                activity = (Activity) mContext;
+            } else {
+                return;
+            }
+        }
+
+        SendTabToSelfCoordinator sttsCoordinator =
+                new SendTabToSelfCoordinator(
+                        mContext,
+                        windowAndroid,
+                        tab.getUrl().getSpec(),
+                        tab.getTitle(),
+                        mBottomSheetController,
+                        profile,
+                        DeviceLockActivityLauncherImpl.get(),
+                        () -> tab,
+                        activity,
+                        mSigninAndHistorySyncActivityLauncher,
+                        mActivityResultTracker,
+                        mModalDialogManagerSupplier,
+                        mSnackbarManager,
+                        ShareEntryPoint.SHARE_SHEET);
+        sttsCoordinator.show();
     }
 
     public static void setShowShareSheetHookForTesting(Callback<Boolean> hook) {
@@ -410,13 +367,17 @@ public class ShareDelegateImpl implements ShareDelegate {
                 BottomSheetController controller,
                 ActivityLifecycleDispatcher lifecycleDispatcher,
                 Supplier<@Nullable Tab> tabProvider,
-                Supplier<TabModelSelector> tabModelSelectorSupplier,
+                Supplier<@Nullable TabModelSelector> tabModelSelectorSupplier,
                 Profile profile,
                 Callback<Tab> printCallback,
                 TabGroupSharingController tabGroupSharingController,
                 @ShareOrigin int shareOrigin,
                 long shareStartTime,
-                boolean sharingHubEnabled) {
+                boolean sharingHubEnabled,
+                SigninAndHistorySyncActivityLauncher signinAndHistorySyncActivityLauncher,
+                ActivityResultTracker activityResultTracker,
+                MonotonicObservableSupplier<ModalDialogManager> modalDialogManagerSupplier,
+                SnackbarManager snackbarManager) {
             if (chromeShareExtras.shareDirectly()) {
                 ShareHelper.shareWithLastUsedComponent(params);
                 return;
@@ -447,7 +408,11 @@ public class ShareDelegateImpl implements ShareDelegate {
                                     isIncognito,
                                     TrackerFactory.getTrackerForProfile(profile),
                                     profile,
-                                    DeviceLockActivityLauncherImpl.get());
+                                    DeviceLockActivityLauncherImpl.get(),
+                                    signinAndHistorySyncActivityLauncher,
+                                    activityResultTracker,
+                                    modalDialogManagerSupplier,
+                                    snackbarManager);
                     coordinator.showInitialShareSheet(params, chromeShareExtras, shareStartTime);
                 }
             } else {
@@ -467,7 +432,11 @@ public class ShareDelegateImpl implements ShareDelegate {
                             profile,
                             printCallback,
                             tabGroupSharingController,
-                            DeviceLockActivityLauncherImpl.get());
+                            DeviceLockActivityLauncherImpl.get(),
+                            signinAndHistorySyncActivityLauncher,
+                            activityResultTracker,
+                            modalDialogManagerSupplier,
+                            snackbarManager);
                 }
             }
             RecordHistogram.recordEnumeratedHistogram(

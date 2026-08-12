@@ -104,6 +104,11 @@ bool TipsNotificationCriteria::ShouldSendNotification(
       return ShouldSendLensOverlay();
     case TipsNotificationType::kTrustedVaultKeyRetrieval:
       return ShouldSendTrustedVaultKeyRetrieval();
+    case TipsNotificationType::kTabGroups:
+    case TipsNotificationType::kPriceTracking:
+      // kTabGroups and kPriceTracking are triggered by cross platform push
+      // notifications, so they don't go through the local scheduling.
+      NOTREACHED();
     case TipsNotificationType::kIncognitoLock:
     case TipsNotificationType::kError:
       NOTREACHED();
@@ -113,8 +118,7 @@ bool TipsNotificationCriteria::ShouldSendNotification(
 bool TipsNotificationCriteria::CanSignIn(ProfileIOS* profile) {
   AuthenticationService* auth_service =
       AuthenticationServiceFactory::GetForProfile(profile);
-  return auth_service->SigninEnabled() &&
-         !auth_service->HasPrimaryIdentity(signin::ConsentLevel::kSignin);
+  return auth_service->SigninEnabled() && !auth_service->HasPrimaryIdentity();
 }
 
 bool TipsNotificationCriteria::ShouldSendDefaultBrowser() {
@@ -160,9 +164,7 @@ bool TipsNotificationCriteria::ShouldSendSetUpListContinuation() {
 }
 
 bool TipsNotificationCriteria::ShouldSendDocking() {
-  return !FETHasEverTriggered(feature_engagement::kIPHiOSDockingPromoFeature) &&
-         !FETHasEverTriggered(
-             feature_engagement::kIPHiOSDockingPromoRemindMeLaterFeature);
+  return !FETHasEverTriggered(feature_engagement::kIPHiOSDockingPromoFeature);
 }
 
 bool TipsNotificationCriteria::ShouldSendOmniboxPosition() {

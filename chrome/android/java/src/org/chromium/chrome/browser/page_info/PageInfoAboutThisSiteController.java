@@ -13,6 +13,8 @@ import android.view.ViewGroup;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import com.google.protobuf.InvalidProtocolBufferException;
+
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.Log;
@@ -34,10 +36,12 @@ import org.chromium.components.page_info.proto.AboutThisSiteMetadataProto.SiteIn
 import org.chromium.components.security_state.ConnectionSecurityLevel;
 import org.chromium.content_public.browser.BrowserContextHandle;
 import org.chromium.content_public.browser.LoadUrlParams;
+import org.chromium.content_public.browser.NavigationHandle;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.PageTransition;
 import org.chromium.ui.base.ViewUtils;
 import org.chromium.url.GURL;
+import org.chromium.url.Origin;
 
 import java.util.function.Supplier;
 
@@ -48,7 +52,8 @@ public class PageInfoAboutThisSiteController {
     private static final String TAG = "PageInfo";
 
     private final PageInfoMainController mMainController;
-    private final @Nullable Supplier<EphemeralTabCoordinator> mEphemeralTabCoordinatorSupplier;
+    private final @Nullable Supplier<@Nullable EphemeralTabCoordinator>
+            mEphemeralTabCoordinatorSupplier;
     private final PageInfoRowView mRowView;
     private final PageInfoControllerDelegate mDelegate;
     private final WebContents mWebContents;
@@ -63,7 +68,7 @@ public class PageInfoAboutThisSiteController {
 
     public PageInfoAboutThisSiteController(
             PageInfoMainController mainController,
-            @Nullable Supplier<EphemeralTabCoordinator> ephemeralTabCoordinatorSupplier,
+            @Nullable Supplier<@Nullable EphemeralTabCoordinator> ephemeralTabCoordinatorSupplier,
             PageInfoRowView rowView,
             PageInfoControllerDelegate delegate,
             WebContents webContents,
@@ -105,7 +110,13 @@ public class PageInfoAboutThisSiteController {
                     fullPageUrl,
                     getTitle(),
                     profile,
-                    /* canPromoteToNewTab= */ true);
+                    /* canPromoteToNewTab= */ true,
+                    /* shouldHaveContextMenu= */ false,
+                    /* initiatorOrigin= */ null,
+                    () -> {
+                        assumeNonNull(mEphemeralTabCoordinator)
+                                .removeObserver(assumeNonNull(mEphemeralTabObserver));
+                    });
 
             mMainController.dismiss();
         } else {
@@ -133,12 +144,16 @@ public class PageInfoAboutThisSiteController {
                     }
 
                     @Override
-                    public void onNavigationStarted(GURL clickedUrl) {
+                    public void onNavigationStarted(NavigationHandle navigation) {
+                        GURL clickedUrl = navigation.getUrl();
                         if (!clickedUrl.equals(originUrl)) {
                             assumeNonNull(mEphemeralTabCoordinator);
                             mEphemeralTabCoordinator.close();
                             mEphemeralTabCoordinator.removeObserver(this);
-                            openInNewTab(clickedUrl.getSpec());
+                            openInNewTab(
+                                    clickedUrl.getSpec(),
+                                    navigation.isRendererInitiated(),
+                                    navigation.getInitiatorOrigin());
                         }
                     }
 
@@ -150,11 +165,17 @@ public class PageInfoAboutThisSiteController {
     }
 
     private void openInNewTab(String url) {
+        openInNewTab(url, false, null);
+    }
+
+    private void openInNewTab(
+            String url, boolean isRendererInitiated, @Nullable Origin initiatorOrigin) {
         if (mTabCreator == null) return;
+        LoadUrlParams params = new LoadUrlParams(url, PageTransition.LINK);
+        params.setIsRendererInitiated(isRendererInitiated);
+        params.setInitiatorOrigin(initiatorOrigin);
         mTabCreator.createNewTab(
-                new LoadUrlParams(url, PageTransition.LINK),
-                TabLaunchType.FROM_LINK,
-                TabUtils.fromWebContents(mWebContents));
+                params, TabLaunchType.FROM_LINK, TabUtils.fromWebContents(mWebContents));
     }
 
     private void setupRow() {
@@ -203,7 +224,7 @@ public class PageInfoAboutThisSiteController {
         SiteInfo info = null;
         try {
             info = SiteInfo.parseFrom(result);
-        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+        } catch (InvalidProtocolBufferException e) {
             Log.e(TAG, "Could not parse proto: %s", e);
             assert false;
         }

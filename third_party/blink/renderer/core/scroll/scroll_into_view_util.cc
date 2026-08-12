@@ -8,14 +8,20 @@
 #include <tuple>
 
 #include "third_party/blink/public/mojom/scroll/scroll_into_view_params.mojom-blink.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_scroll_axis.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_scroll_into_view_options.h"
+#include "third_party/blink/renderer/core/dom/column_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/dom/element.h"
+#include "third_party/blink/renderer/core/dom/scroll_marker_group_pseudo_element.h"
+#include "third_party/blink/renderer/core/dom/scroll_marker_pseudo_element.h"
 #include "third_party/blink/renderer/core/execution_context/security_context.h"
 #include "third_party/blink/renderer/core/frame/frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/root_frame_viewport.h"
 #include "third_party/blink/renderer/core/frame/visual_viewport.h"
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
+#include "third_party/blink/renderer/core/layout/geometry/axis.h"
 #include "third_party/blink/renderer/core/layout/geometry/box_strut.h"
 #include "third_party/blink/renderer/core/layout/geometry/physical_rect.h"
 #include "third_party/blink/renderer/core/layout/layout_box.h"
@@ -26,18 +32,146 @@
 #include "third_party/blink/renderer/core/page/frame_tree.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/scroll/scroll_alignment.h"
+#include "third_party/blink/renderer/core/scroll/scroll_promise_resolver.h"
 #include "third_party/blink/renderer/core/scroll/scrollable_area.h"
 #include "third_party/blink/renderer/platform/geometry/physical_offset.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "ui/gfx/geometry/rect_f.h"
 
 namespace blink {
 
 namespace {
+
+ScrollMarkerPseudoElement* FindScrollMarkerForTargetedScroll(
+    Element* target_element,
+    ScrollMarkerGroupPseudoElement* group) {
+  if (!target_element || !group) {
+    return nullptr;
+  }
+  if (auto* this_marker =
+          DynamicTo<ScrollMarkerPseudoElement>(target_element)) {
+    if (this_marker->ScrollMarkerGroup() == group) {
+      return this_marker;
+    }
+  } else if (PseudoElement* scroll_marker =
+                 target_element->GetPseudoElement(kPseudoIdScrollMarker)) {
+    auto* marker = DynamicTo<ScrollMarkerPseudoElement>(scroll_marker);
+    if (marker && marker->ScrollMarkerGroup() == group) {
+      return marker;
+    }
+  }
+
+  LayoutObject* target_obj = target_element->GetLayoutObject();
+  if (!target_obj) {
+    return nullptr;
+  }
+
+  // Search for the scroll-marker before |target_element| in pre-order.
+  ScrollMarkerPseudoElement* dom_marker = nullptr;
+  for (LayoutObject* obj = target_obj->PreviousInPreOrder(); obj;
+       obj = obj->PreviousInPreOrder()) {
+    if (obj == group->UltimateOriginatingElement().GetLayoutObject()) {
+      break;
+    }
+    auto* obj_node = obj->GetNode();
+    if (!obj_node) {
+      continue;
+    }
+    if (ScrollMarkerPseudoElement* marker_node =
+            DynamicTo<ScrollMarkerPseudoElement>(obj_node)) {
+      if (marker_node->ScrollMarkerGroup() == group) {
+        dom_marker = marker_node;
+        break;
+      }
+    } else if (auto* obj_element = DynamicTo<Element>(obj_node)) {
+      if (ScrollMarkerPseudoElement* previous_marker =
+              DynamicTo<ScrollMarkerPseudoElement>(
+                  obj_element->GetPseudoElement(kPseudoIdScrollMarker))) {
+        if (previous_marker->ScrollMarkerGroup() == group) {
+          dom_marker = previous_marker;
+          break;
+        }
+      }
+    }
+  }
+
+  // We might have found a marker before |target_element| in DOM-order, but we
+  // need to do one last check for whether the scroll target is within a
+  // scroll-marker-generating ::column which might be preferable to the
+  // already-found marker.
+  const LayoutBox* containing_box = target_obj->ContainingScrollContainer();
+  while (containing_box) {
+    if (ScrollableArea* scrollable_area = containing_box->GetScrollableArea()) {
+      if (scrollable_area->GetScrollMarkerGroup() == group) {
+        break;
+      }
+    }
+    containing_box = containing_box->ContainingScrollContainer();
+  }
+
+  if (!containing_box) {
+    return dom_marker;
+  }
+  const Element* containing_element =
+      DynamicTo<Element>(containing_box->GetNode());
+  if (!containing_element) {
+    return dom_marker;
+  }
+  const ColumnPseudoElementsVector* cols =
+      containing_element->GetColumnPseudoElements();
+  if (!cols) {
+    return dom_marker;
+  }
+  const LayoutBox* target_box = target_element->GetLayoutBox();
+  if (!target_box) {
+    return dom_marker;
+  }
+  PhysicalRect scroll_target_rect = target_box->LocalToAncestorRect(
+      target_box->PhysicalBorderBoxRect(), containing_box);
+  ScrollableArea* current_scroll_area = containing_box->GetScrollableArea();
+  if (current_scroll_area) {
+    // Account for scroll translation.
+    scroll_target_rect.Move(current_scroll_area->LocalToScrollOriginOffset());
+  } else {
+    NOTREACHED();
+  }
+  for (const ColumnPseudoElement* column_pseudo : *cols) {
+    ScrollMarkerPseudoElement* column_marker =
+        DynamicTo<ScrollMarkerPseudoElement>(
+            column_pseudo->GetPseudoElement(kPseudoIdScrollMarker));
+    const PhysicalRect& column_rect = column_pseudo->ColumnRect();
+    if (column_marker && column_marker->ScrollMarkerGroup() == group &&
+        column_rect.Intersects(scroll_target_rect)) {
+      if (!dom_marker) {
+        // We didn't have a scroll-marker from the DOM search to begin, the
+        // ::column::scroll-marker we found will have to do.
+        return column_marker;
+      }
+      // If we already had a marker from the initial DOM search,
+      // we should figure out whether |dom_marker| belongs to an element that
+      // was flowed the scroll-marker-generating ::column, in which case
+      // |dom_marker| is the preferred scroll marker. Otherwise the
+      // scroll-marker belonging to the ::column is preferred.
+      LayoutBox* dom_marker_box =
+          dom_marker->UltimateOriginatingElement().GetLayoutBox();
+      if (!dom_marker_box) {
+        return column_marker;
+      }
+      PhysicalRect dom_search_target_rect = dom_marker_box->LocalToAncestorRect(
+          dom_marker_box->PhysicalBorderBoxRect(), containing_box);
+      if (current_scroll_area) {
+        dom_search_target_rect.Move(
+            current_scroll_area->LocalToScrollOriginOffset());
+      }
+      return column_rect.Intersects(dom_search_target_rect) ? dom_marker
+                                                            : column_marker;
+    }
+  }
+  return dom_marker;
+}
 
 // Returns true if a scroll into view can continue to cause scrolling in the
 // parent frame.
@@ -142,7 +276,8 @@ ALWAYS_INLINE void AdjustRectAndParamsForParentFrame(
         *next_box->View());
 
     absolute_rect_to_scroll = current_box.View()->LocalToAncestorRect(
-        absolute_rect_to_scroll, next_box->View(), kTraverseDocumentBoundaries);
+        absolute_rect_to_scroll, next_box->View(),
+        {MapCoordinatesMode::kTraverseDocumentBoundaries});
   }
 }
 
@@ -165,12 +300,14 @@ BubblingScrollResult PerformBubblingScrollIntoViewWithResult(
     const PhysicalBoxStrut& scroll_margin,
     const LayoutObject* container,
     bool from_remote_frame,
-    bool include_self) {
+    bool include_self,
+    ScrollPromiseResolver* resolver) {
   DCHECK(params->type == mojom::blink::ScrollType::kProgrammatic ||
          params->type == mojom::blink::ScrollType::kUser);
 
-  if (!box.GetFrameView())
+  if (!box.GetFrameView()) {
     return BubblingScrollResult{};
+  }
 
   PhysicalRect absolute_rect_to_scroll = absolute_rect;
   PhysicalBoxStrut active_scroll_margin = scroll_margin;
@@ -193,6 +330,8 @@ BubblingScrollResult PerformBubblingScrollIntoViewWithResult(
       }
     }
   }
+
+  const LayoutBox* previous_current_box = &box;
   while (current_box) {
     AdjustRectToNotEmpty(absolute_rect_to_scroll);
 
@@ -215,10 +354,31 @@ BubblingScrollResult PerformBubblingScrollIntoViewWithResult(
           *current_box, params->make_visible_in_visual_viewport);
     }
     if (area_to_scroll) {
+      if (ScrollMarkerGroupPseudoElement* group =
+              area_to_scroll->GetScrollMarkerGroup()) {
+        // TODO(crbug.com/380062280): Remove this when last targeted element is
+        // properly tracked by each scrollable area.
+        Node* target_node = previous_current_box->GetNode();
+        Element* target_element = nullptr;
+        if (target_node) {
+          if (auto* element = DynamicTo<Element>(target_node)) {
+            target_element = element;
+          } else {
+            target_element = target_node->ParentOrShadowHostElement();
+          }
+        }
+        if (ScrollMarkerPseudoElement* marker =
+                FindScrollMarkerForTargetedScroll(target_element, group)) {
+          group->PinSelectedMarker(marker);
+        } else {
+          group->UnPinSelectedMarker();
+        }
+      }
       ScrollOffset scroll_before = area_to_scroll->GetScrollOffset();
 
       absolute_rect_to_scroll = area_to_scroll->ScrollIntoView(
-          absolute_rect_to_scroll, active_scroll_margin, params);
+          absolute_rect_to_scroll, active_scroll_margin, params,
+          resolver ? resolver->CreateActiveScrollTracker() : nullptr);
 
       // TODO(bokan): Temporary, to track cross-origin scroll-into-view
       // prevalence. https://crbug.com/1339003.
@@ -245,6 +405,7 @@ BubblingScrollResult PerformBubblingScrollIntoViewWithResult(
               WebFeature::kCrossOriginScrollIntoView);
         }
       }
+      previous_current_box = current_box;
     }
 
     bool is_fixed_to_frame =
@@ -269,8 +430,9 @@ BubblingScrollResult PerformBubblingScrollIntoViewWithResult(
             current_box->GetFrame()
                 ->GetPage()
                 ->GetVisualViewport()
-                .ScrollIntoView(absolute_rect_to_scroll, active_scroll_margin,
-                                params);
+                .ScrollIntoView(
+                    absolute_rect_to_scroll, active_scroll_margin, params,
+                    resolver ? resolver->CreateActiveScrollTracker() : nullptr);
         if (visual_viewport.GetScrollOffset() != viewport_scroll_before) {
           any_actual_scroll = true;
         }
@@ -302,8 +464,6 @@ BubblingScrollResult PerformBubblingScrollIntoViewWithResult(
       // TODO(crbug.com/416730010): Revisit this if we allow passing a
       // container from a different document.
       if ((area_to_scroll &&
-           (RuntimeEnabledFeatures::ScrollIntoViewSelfScrollFixEnabled() ||
-            current_box != &box) &&
            stop_at.Contains(current_box)) ||
           (next_box && next_box->GetFrame() != current_box->GetFrame())) {
         return BubblingScrollResult{std::nullopt, any_actual_scroll};
@@ -313,21 +473,85 @@ BubblingScrollResult PerformBubblingScrollIntoViewWithResult(
     AdjustRectAndParamsForParentFrame(*current_box, next_box,
                                       absolute_rect_to_scroll, params);
 
-    // Once we've taken the scroll-margin into account, don't apply it to
-    // ancestor scrollers.
-    // TODO(crbug.com/1325839): Instead of just nullifying the scroll-margin,
-    // maybe we should be applying the scroll-margin of the containing
-    // scrollers themselves? This will probably need to be spec'd as the current
-    // scroll-into-view spec[1] only refers to the bounding border box.
-    // [1] https://drafts.csswg.org/cssom-view-1/#scroll-a-target-into-view
-    if (any_actual_scroll) {
-      active_scroll_margin = PhysicalBoxStrut();
-    }
-
     current_box = next_box;
   }
 
   return BubblingScrollResult{absolute_rect_to_scroll, any_actual_scroll};
+}
+
+struct LayoutRange {
+  LayoutRange(LayoutUnit range_start, LayoutUnit range_end)
+      : start(range_start), end(range_end) {}
+
+  LayoutUnit Length() const { return end - start; }
+  LayoutUnit start;
+  LayoutUnit end;
+};
+
+LayoutRange IntersectRange(const LayoutRange& a, const LayoutRange& b) {
+  return LayoutRange(std::max(a.start, b.start), std::min(a.end, b.end));
+}
+
+// Full intersection if one range completely encapsulates the other
+bool FullyIntersects(const LayoutRange& a, const LayoutRange& b) {
+  LayoutRange intersection = IntersectRange(a, b);
+  return intersection.Length() == a.Length() ||
+         intersection.Length() == b.Length();
+}
+
+bool PartiallyIntersects(const LayoutRange& a, const LayoutRange& b) {
+  return IntersectRange(a, b).Length() > 0;
+}
+
+LayoutRange RangeFrom(const PhysicalRect& rect, PhysicalAxis axis) {
+  if (axis == PhysicalAxis::kHorizontal) {
+    return LayoutRange(rect.X(), rect.Right());
+  }
+  return LayoutRange(rect.Y(), rect.Bottom());
+}
+
+// Return the scroll behavior from |alignment| for |axis| given the
+// visible scrollport, and rectangle to be exposed with and without margins.
+// We want to include the margin for deciding whether it is fully visible,
+// but exclude it when determining if the element is partially visible or
+// completely hidden in that axis.
+mojom::blink::ScrollAlignment::Behavior CalculateScrollAlignment(
+    const mojom::blink::ScrollAlignment& alignment,
+    PhysicalAxis axis,
+    const PhysicalRect& scrollport,
+    const PhysicalRect& expose_rect_no_margin,
+    const PhysicalRect& expose_rect) {
+  LayoutRange scrollport_range = RangeFrom(scrollport, axis);
+  if (FullyIntersects(scrollport_range, RangeFrom(expose_rect, axis))) {
+    // If the rectangle is fully visible with its expected scroll margin,
+    // or is bigger than the visible area,
+    // use the specified visible behavior.
+    return alignment.rect_visible;
+  }
+  if (PartiallyIntersects(scrollport_range,
+                          RangeFrom(expose_rect_no_margin, axis))) {
+    // If the rectangle is partially visible,
+    // use the specified partial behavior.
+    return alignment.rect_partial;
+  }
+  return alignment.rect_hidden;
+}
+
+V8ScrollLogicalPosition::Enum ResolveAutoAlignment(
+    V8ScrollAxis::Enum axis,
+    cc::SnapAlignment snap_alignment) {
+  CHECK(axis == V8ScrollAxis::Enum::kBlock ||
+        axis == V8ScrollAxis::Enum::kInline);
+
+  if (RuntimeEnabledFeatures::ScrollIntoViewAlignAutoEnabled() &&
+      snap_alignment != cc::SnapAlignment::kNone) {
+    return scroll_into_view_util::SnapAlignmentToV8ScrollLogicalPosition(
+        snap_alignment);
+  }
+
+  return axis == V8ScrollAxis::Enum::kBlock
+             ? V8ScrollLogicalPosition::Enum::kStart
+             : V8ScrollLogicalPosition::Enum::kNearest;
 }
 
 }  // namespace
@@ -348,14 +572,16 @@ ScrollableArea* GetScrollableAreaForLayoutBox(
 }
 
 bool ScrollRectToVisible(const LayoutObject& layout_object,
-                         const PhysicalRect& absolute_rect,
+                         const PhysicalRect& absolute_rect_to_scroll,
                          mojom::blink::ScrollIntoViewParamsPtr params,
                          const LayoutObject* container,
                          bool from_remote_frame,
-                         bool include_self) {
+                         bool include_self,
+                         ScrollPromiseResolver* resolver) {
   LayoutBox* enclosing_box = layout_object.EnclosingBox();
-  if (!enclosing_box)
+  if (!enclosing_box) {
     return false;
+  }
   // If we've already skipped the layout object, we shouldn't skip scrolling
   // an ancestor scrolling container.
   if (layout_object != enclosing_box) {
@@ -367,14 +593,11 @@ bool ScrollRectToVisible(const LayoutObject& layout_object,
   params->is_for_scroll_sequence |=
       params->type == mojom::blink::ScrollType::kProgrammatic;
 
-  PhysicalBoxStrut scroll_margin =
-      layout_object.Style() ? layout_object.Style()->ScrollMarginStrut()
-                            : PhysicalBoxStrut();
-  PhysicalRect absolute_rect_to_scroll = absolute_rect;
-  absolute_rect_to_scroll.Expand(scroll_margin);
+  const PhysicalBoxStrut scroll_margin =
+      layout_object.StyleRef().ScrollMarginStrut();
   BubblingScrollResult result = PerformBubblingScrollIntoViewWithResult(
       *enclosing_box, absolute_rect_to_scroll, params, scroll_margin, container,
-      from_remote_frame, include_self);
+      from_remote_frame, include_self, resolver);
   // If the scroll into view stopped early (i.e. before the local root),
   // there's no need to continue bubbling or finishing a scroll focused
   // editable into view.
@@ -385,8 +608,9 @@ bool ScrollRectToVisible(const LayoutObject& layout_object,
   LocalFrame& local_root = frame->LocalFrameRoot();
   LocalFrameView* local_root_view = local_root.View();
 
-  if (!local_root_view)
+  if (!local_root_view) {
     return result.did_scroll;
+  }
 
   if (!local_root.IsOutermostMainFrame()) {
     // Continue the scroll via IPC if there's a remote ancestor.
@@ -403,6 +627,7 @@ bool ScrollRectToVisible(const LayoutObject& layout_object,
     local_root.GetPage()->GetChromeClient().FinishScrollFocusedEditableIntoView(
         caret_rect_in_root_frame, std::move(params));
   }
+
   return result.did_scroll;
 }
 
@@ -433,11 +658,11 @@ void ConvertParamsToParentFrame(mojom::blink::ScrollIntoViewParamsPtr& params,
 
   PhysicalRect editable_bounds_in_dest = src_frame.LocalToAncestorRect(
       PhysicalRect::EnclosingRect(editable_bounds_in_src), &dest_frame,
-      kTraverseDocumentBoundaries);
+      {MapCoordinatesMode::kTraverseDocumentBoundaries});
 
   PhysicalRect caret_rect_in_dest = src_frame.LocalToAncestorRect(
       PhysicalRect::EnclosingRect(caret_rect_in_src), &dest_frame,
-      kTraverseDocumentBoundaries);
+      {MapCoordinatesMode::kTraverseDocumentBoundaries});
 
   params->for_focused_editable->relative_location = gfx::Vector2dF(
       editable_bounds_in_dest.offset - caret_rect_in_dest.offset);
@@ -468,12 +693,12 @@ mojom::blink::ScrollIntoViewParamsPtr CreateScrollIntoViewParams(
 mojom::blink::ScrollAlignment ResolveToPhysicalAlignment(
     V8ScrollLogicalPosition::Enum inline_alignment,
     V8ScrollLogicalPosition::Enum block_alignment,
-    ScrollOrientation axis,
+    PhysicalAxis axis,
     const ComputedStyle& computed_style) {
   bool is_horizontal_writing_mode = computed_style.IsHorizontalWritingMode();
   V8ScrollLogicalPosition::Enum alignment =
-      ((axis == kHorizontalScroll && is_horizontal_writing_mode) ||
-       (axis == kVerticalScroll && !is_horizontal_writing_mode))
+      ((axis == PhysicalAxis::kHorizontal && is_horizontal_writing_mode) ||
+       (axis == PhysicalAxis::kVertical && !is_horizontal_writing_mode))
           ? inline_alignment
           : block_alignment;
 
@@ -488,7 +713,7 @@ mojom::blink::ScrollAlignment ResolveToPhysicalAlignment(
         computed_style.GetWritingDirection(), ScrollAlignment::TopAlways,
         ScrollAlignment::RightAlways, ScrollAlignment::BottomAlways,
         ScrollAlignment::LeftAlways);
-    if (axis == kHorizontalScroll) {
+    if (axis == PhysicalAxis::kHorizontal) {
       return is_horizontal_writing_mode ? (*to_logical.InlineStart())()
                                         : (*to_logical.BlockStart())();
     } else {
@@ -501,7 +726,7 @@ mojom::blink::ScrollAlignment ResolveToPhysicalAlignment(
         computed_style.GetWritingDirection(), ScrollAlignment::TopAlways,
         ScrollAlignment::RightAlways, ScrollAlignment::BottomAlways,
         ScrollAlignment::LeftAlways);
-    if (axis == kHorizontalScroll) {
+    if (axis == PhysicalAxis::kHorizontal) {
       return is_horizontal_writing_mode ? (*to_logical.InlineEnd())()
                                         : (*to_logical.BlockEnd())();
     } else {
@@ -512,11 +737,13 @@ mojom::blink::ScrollAlignment ResolveToPhysicalAlignment(
 
   // Default values
   if (is_horizontal_writing_mode) {
-    return (axis == kHorizontalScroll) ? ScrollAlignment::ToEdgeIfNeeded()
-                                       : ScrollAlignment::TopAlways();
+    return (axis == PhysicalAxis::kHorizontal)
+               ? ScrollAlignment::ToEdgeIfNeeded()
+               : ScrollAlignment::TopAlways();
   }
-  return (axis == kHorizontalScroll) ? ScrollAlignment::LeftAlways()
-                                     : ScrollAlignment::ToEdgeIfNeeded();
+  return (axis == PhysicalAxis::kHorizontal)
+             ? ScrollAlignment::LeftAlways()
+             : ScrollAlignment::ToEdgeIfNeeded();
 }
 
 V8ScrollLogicalPosition::Enum SnapAlignmentToV8ScrollLogicalPosition(
@@ -544,45 +771,29 @@ mojom::blink::ScrollIntoViewParamsPtr CreateScrollIntoViewParams(
     behavior = mojom::blink::ScrollBehavior::kInstant;
   }
 
-  auto align_x = ResolveToPhysicalAlignment(options.inlinePosition().AsEnum(),
-                                            options.block().AsEnum(),
-                                            kHorizontalScroll, computed_style);
-  auto align_y = ResolveToPhysicalAlignment(options.inlinePosition().AsEnum(),
-                                            options.block().AsEnum(),
-                                            kVerticalScroll, computed_style);
+  V8ScrollLogicalPosition::Enum block_align = options.block().AsEnum();
+  if (block_align == V8ScrollLogicalPosition::Enum::kAuto) {
+    block_align = ResolveAutoAlignment(
+        V8ScrollAxis::Enum::kBlock,
+        computed_style.GetScrollSnapAlign().alignment_block);
+  }
+
+  V8ScrollLogicalPosition::Enum inline_align =
+      options.inlinePosition().AsEnum();
+  if (inline_align == V8ScrollLogicalPosition::Enum::kAuto) {
+    inline_align = ResolveAutoAlignment(
+        V8ScrollAxis::Enum::kInline,
+        computed_style.GetScrollSnapAlign().alignment_inline);
+  }
+
+  auto align_x = ResolveToPhysicalAlignment(
+      inline_align, block_align, PhysicalAxis::kHorizontal, computed_style);
+  auto align_y = ResolveToPhysicalAlignment(
+      inline_align, block_align, PhysicalAxis::kVertical, computed_style);
 
   mojom::blink::ScrollIntoViewParamsPtr params =
       CreateScrollIntoViewParams(align_x, align_y);
   params->behavior = behavior;
-  return params;
-}
-
-mojom::blink::ScrollIntoViewParamsPtr CreateScrollIntoViewParams(
-    const ComputedStyle& computed_style) {
-  // Per https://www.w3.org/TR/css-overflow-5/#scroll-marker-activation
-  // default to 'start' if scroll-snap-align is 'none'.
-  cc::SnapAlignment alignment_inline =
-      computed_style.GetScrollSnapAlign().alignment_inline;
-  if (alignment_inline == cc::SnapAlignment::kNone) {
-    alignment_inline = cc::SnapAlignment::kStart;
-  }
-  V8ScrollLogicalPosition::Enum inline_alignment =
-      SnapAlignmentToV8ScrollLogicalPosition(alignment_inline);
-  cc::SnapAlignment alignment_block =
-      computed_style.GetScrollSnapAlign().alignment_block;
-  if (alignment_block == cc::SnapAlignment::kNone) {
-    alignment_block = cc::SnapAlignment::kStart;
-  }
-  V8ScrollLogicalPosition::Enum block_alignment =
-      SnapAlignmentToV8ScrollLogicalPosition(alignment_block);
-  auto align_x = ResolveToPhysicalAlignment(inline_alignment, block_alignment,
-                                            kHorizontalScroll, computed_style);
-  auto align_y = ResolveToPhysicalAlignment(inline_alignment, block_alignment,
-                                            kVerticalScroll, computed_style);
-
-  mojom::blink::ScrollIntoViewParamsPtr params =
-      CreateScrollIntoViewParams(align_x, align_y);
-  params->behavior = computed_style.GetScrollBehavior();
   return params;
 }
 
@@ -593,10 +804,13 @@ ScrollOffset GetScrollOffsetToExpose(
     const mojom::blink::ScrollAlignment& align_x,
     const mojom::blink::ScrollAlignment& align_y) {
   // Represent the rect in the container's scroll-origin coordinate.
-  PhysicalRect scroll_origin_to_expose_rect = local_expose_rect;
-  scroll_origin_to_expose_rect.Move(scroll_area.LocalToScrollOriginOffset());
+  PhysicalRect expose_rect_no_margin = local_expose_rect;
+  expose_rect_no_margin.Move(scroll_area.LocalToScrollOriginOffset());
+  PhysicalRect scroll_origin_to_expose_rect = expose_rect_no_margin;
+  scroll_origin_to_expose_rect.Expand(expose_scroll_margin);
   // Prevent degenerate cases by giving the visible rect a minimum non-0 size.
-  PhysicalRect non_zero_visible_rect = scroll_area.VisibleScrollSnapportRect();
+  PhysicalRect non_zero_visible_rect =
+      scroll_area.VisibleScrollSnapportRect(kExcludeScrollbars);
   ScrollOffset current_scroll_offset = scroll_area.GetScrollOffset();
   LayoutUnit minimum_layout_unit;
   minimum_layout_unit.SetRawValue(1);
@@ -607,33 +821,10 @@ ScrollOffset GetScrollOffsetToExpose(
     non_zero_visible_rect.SetHeight(minimum_layout_unit);
   }
 
-  // The scroll_origin_to_expose_rect includes the scroll-margin of the element
-  // that is being exposed. We want to exclude the margin for deciding whether
-  // it's already visible, but include it when calculating the scroll offset
-  // that we need to scroll to in order to achieve the desired alignment.
-  PhysicalRect expose_rect_no_margin = scroll_origin_to_expose_rect;
-  expose_rect_no_margin.Contract(expose_scroll_margin);
-
   // Determine the appropriate X behavior.
-  mojom::blink::ScrollAlignment::Behavior scroll_x;
-  PhysicalRect expose_rect_x(
-      expose_rect_no_margin.X(), non_zero_visible_rect.Y(),
-      expose_rect_no_margin.Width(), non_zero_visible_rect.Height());
-  LayoutUnit intersect_width =
-      Intersection(non_zero_visible_rect, expose_rect_x).Width();
-  if (intersect_width == expose_rect_no_margin.Width()) {
-    // If the rectangle is fully visible, use the specified visible behavior.
-    scroll_x = align_x.rect_visible;
-  } else if (intersect_width == non_zero_visible_rect.Width()) {
-    // The rect is bigger than the visible area.
-    scroll_x = align_x.rect_visible;
-  } else if (intersect_width > 0) {
-    // If the rectangle is partially visible, use the specified partial
-    // behavior.
-    scroll_x = align_x.rect_partial;
-  } else {
-    scroll_x = align_x.rect_hidden;
-  }
+  mojom::blink::ScrollAlignment::Behavior scroll_x = CalculateScrollAlignment(
+      align_x, PhysicalAxis::kHorizontal, non_zero_visible_rect,
+      expose_rect_no_margin, scroll_origin_to_expose_rect);
 
   if (scroll_x == mojom::blink::ScrollAlignment::Behavior::kClosestEdge) {
     // Closest edge is the right in two cases:
@@ -650,25 +841,9 @@ ScrollOffset GetScrollOffsetToExpose(
   }
 
   // Determine the appropriate Y behavior.
-  mojom::blink::ScrollAlignment::Behavior scroll_y;
-  PhysicalRect expose_rect_y(
-      non_zero_visible_rect.X(), expose_rect_no_margin.Y(),
-      non_zero_visible_rect.Width(), expose_rect_no_margin.Height());
-  LayoutUnit intersect_height =
-      Intersection(non_zero_visible_rect, expose_rect_y).Height();
-  if (intersect_height == expose_rect_no_margin.Height()) {
-    // If the rectangle is fully visible, use the specified visible behavior.
-    scroll_y = align_y.rect_visible;
-  } else if (intersect_height == non_zero_visible_rect.Height()) {
-    // The rect is bigger than the visible area.
-    scroll_y = align_y.rect_visible;
-  } else if (intersect_height > 0) {
-    // If the rectangle is partially visible, use the specified partial
-    // behavior.
-    scroll_y = align_y.rect_partial;
-  } else {
-    scroll_y = align_y.rect_hidden;
-  }
+  mojom::blink::ScrollAlignment::Behavior scroll_y = CalculateScrollAlignment(
+      align_y, PhysicalAxis::kVertical, non_zero_visible_rect,
+      expose_rect_no_margin, scroll_origin_to_expose_rect);
 
   if (scroll_y == mojom::blink::ScrollAlignment::Behavior::kClosestEdge) {
     // Closest edge is the bottom in two cases:
@@ -733,12 +908,12 @@ ScrollOffset GetScrollOffsetToExpose(
 
 mojom::blink::ScrollAlignment PhysicalAlignmentFromSnapAlignStyle(
     const LayoutObject& object,
-    ScrollOrientation axis) {
-  cc::ScrollSnapAlign snap = object.Style()->GetScrollSnapAlign();
+    PhysicalAxis axis) {
+  cc::ScrollSnapAlign snap = object.StyleRef().GetScrollSnapAlign();
   return ResolveToPhysicalAlignment(
       SnapAlignmentToV8ScrollLogicalPosition(snap.alignment_inline),
       SnapAlignmentToV8ScrollLogicalPosition(snap.alignment_block), axis,
-      *object.Style());
+      object.StyleRef());
 }
 
 }  // namespace scroll_into_view_util

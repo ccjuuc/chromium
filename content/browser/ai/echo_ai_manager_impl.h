@@ -14,9 +14,9 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
+#include "services/on_device_model/public/mojom/download_observer.mojom.h"
 #include "third_party/blink/public/mojom/ai/ai_language_model.mojom.h"
 #include "third_party/blink/public/mojom/ai/ai_manager.mojom.h"
-#include "third_party/blink/public/mojom/ai/model_download_progress_observer.mojom.h"
 
 namespace content {
 
@@ -48,32 +48,46 @@ class EchoAIManagerImpl : public blink::mojom::AIManager {
   void CreateLanguageModel(
       mojo::PendingRemote<blink::mojom::AIManagerCreateLanguageModelClient>
           client,
-      blink::mojom::AILanguageModelCreateOptionsPtr options) override;
+      blink::mojom::AILanguageModelCreateOptionsPtr options,
+      mojo::PendingRemote<on_device_model::mojom::DownloadObserver> monitor)
+      override;
   void CanCreateSummarizer(blink::mojom::AISummarizerCreateOptionsPtr options,
                            CanCreateSummarizerCallback callback) override;
   void CreateSummarizer(
       mojo::PendingRemote<blink::mojom::AIManagerCreateSummarizerClient> client,
-      blink::mojom::AISummarizerCreateOptionsPtr options) override;
+      blink::mojom::AISummarizerCreateOptionsPtr options,
+      mojo::PendingRemote<on_device_model::mojom::DownloadObserver> monitor)
+      override;
   void GetLanguageModelParams(GetLanguageModelParamsCallback callback) override;
   void CanCreateWriter(blink::mojom::AIWriterCreateOptionsPtr options,
                        CanCreateWriterCallback callback) override;
   void CreateWriter(
       mojo::PendingRemote<blink::mojom::AIManagerCreateWriterClient> client,
-      blink::mojom::AIWriterCreateOptionsPtr options) override;
+      blink::mojom::AIWriterCreateOptionsPtr options,
+      mojo::PendingRemote<on_device_model::mojom::DownloadObserver> monitor)
+      override;
   void CanCreateRewriter(blink::mojom::AIRewriterCreateOptionsPtr options,
                          CanCreateRewriterCallback callback) override;
   void CreateRewriter(
       mojo::PendingRemote<blink::mojom::AIManagerCreateRewriterClient> client,
-      blink::mojom::AIRewriterCreateOptionsPtr options) override;
+      blink::mojom::AIRewriterCreateOptionsPtr options,
+      mojo::PendingRemote<on_device_model::mojom::DownloadObserver> monitor)
+      override;
   void CanCreateProofreader(blink::mojom::AIProofreaderCreateOptionsPtr options,
                             CanCreateProofreaderCallback callback) override;
   void CreateProofreader(
       mojo::PendingRemote<blink::mojom::AIManagerCreateProofreaderClient>
           client,
-      blink::mojom::AIProofreaderCreateOptionsPtr options) override;
-  void AddModelDownloadProgressObserver(
-      mojo::PendingRemote<blink::mojom::ModelDownloadProgressObserver>
-          observer_remote) override;
+      blink::mojom::AIProofreaderCreateOptionsPtr options,
+      mojo::PendingRemote<on_device_model::mojom::DownloadObserver> monitor)
+      override;
+  void CanCreateSemanticEmbedder(
+      CanCreateSemanticEmbedderCallback callback) override;
+  void CreateSemanticEmbedder(
+      mojo::PendingRemote<blink::mojom::AIManagerCreateSemanticEmbedderClient>
+          client,
+      mojo::PendingRemote<on_device_model::mojom::DownloadObserver> monitor)
+      override;
 
   template <typename CanCreateCallback>
   void CanCreateClient(CanCreateCallback callback);
@@ -106,7 +120,8 @@ class EchoAIManagerImpl : public blink::mojom::AIManager {
       base::flat_set<blink::mojom::AILanguageModelPromptType>
           enabled_input_types,
       std::vector<blink::mojom::AILanguageModelPromptPtr> initial_prompts,
-      uint32_t initial_input_usage);
+      uint32_t initial_context_usage,
+      std::vector<blink::mojom::AILanguageModelToolDeclarationPtr> tools);
 
   void DoMockDownloadingAndReturn(base::OnceClosure callback);
 
@@ -116,7 +131,7 @@ class EchoAIManagerImpl : public blink::mojom::AIManager {
   // The set of mojo receivers that have triggered mock model download.
   base::flat_set<mojo::ReceiverId> model_downloaded_receivers_;
 
-  mojo::RemoteSet<blink::mojom::ModelDownloadProgressObserver>
+  mojo::RemoteSet<on_device_model::mojom::DownloadObserver>
       download_progress_observers_;
 
   mojo::ReceiverSet<blink::mojom::AIManager> receivers_;

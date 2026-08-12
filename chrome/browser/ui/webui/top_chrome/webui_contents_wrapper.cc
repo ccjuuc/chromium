@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ui/webui/top_chrome/webui_contents_wrapper.h"
 
+#include "base/debug/crash_logging.h"
+#include "base/debug/dump_without_crashing.h"
 #include "chrome/browser/page_load_metrics/page_load_metrics_initialize.h"
 #include "chrome/browser/task_manager/web_contents_tags.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -11,14 +13,15 @@
 #include "chrome/browser/ui/webui/top_chrome/webui_contents_preload_manager.h"
 #include "chrome/common/chrome_render_frame.mojom.h"
 #include "components/input/native_web_keyboard_event.h"
+#include "components/performance_manager/embedder/performance_manager_registry.h"
+#include "components/performance_manager/public/graph/page_node.h"
 #include "components/site_engagement/content/site_engagement_helper.h"
 #include "components/site_engagement/content/site_engagement_service.h"
+#include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
-#include "third_party/blink/public/common/input/web_gesture_event.h"
-#include "third_party/blink/public/common/input/web_input_event.h"
 #include "ui/base/models/menu_model.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
@@ -84,21 +87,10 @@ content::WebContents* WebUIContentsWrapper::Host::AddNewContents(
   return nullptr;
 }
 
-bool WebUIContentsWrapper::Host::PreHandleGestureEvent(
-    content::WebContents* source,
-    const blink::WebGestureEvent& event) {
-  // Block gestures that will zoom on Mac devices (i.e. pinch to zoom
-  // and double tap to zoom)
-#if BUILDFLAG(IS_MAC)
-  if (blink::WebInputEvent::IsPinchGestureEventType(event.GetType())) {
-    return true;
-  }
-
-  if (event.GetType() == blink::WebInputEvent::Type::kGestureDoubleTap) {
-    return true;
-  }
-#endif
-  return false;
+web_modal::WebContentsModalDialogHost*
+WebUIContentsWrapper::Host::GetWebContentsModalDialogHost(
+    content::WebContents* web_contents) {
+  return nullptr;
 }
 
 WebUIContentsWrapper::WebUIContentsWrapper(const GURL& webui_url,
@@ -116,8 +108,23 @@ WebUIContentsWrapper::WebUIContentsWrapper(const GURL& webui_url,
   web_contents_ = std::move(make_contents_result.web_contents);
   is_ready_to_show_ = make_contents_result.is_ready_to_show;
 
+  web_contents_->SetIgnoreZoomGestures(true);
   web_contents_->SetDelegate(this);
   WebContentsObserver::Observe(web_contents_.get());
+
+  if (auto* pm_registry =
+          performance_manager::PerformanceManagerRegistry::GetInstance()) {
+    // Flagging this web contents as a Non Tab WebUI allows the
+    // PerformanceManager to opt it out of aggressive resource management
+    // strategies (such as freezing).
+    pm_registry->SetPageType(web_contents_.get(),
+                             performance_manager::PageType::kNonTabWebUI);
+  }
+
+  web_modal::WebContentsModalDialogManager::CreateForWebContents(
+      web_contents_.get());
+  web_modal::WebContentsModalDialogManager::FromWebContents(web_contents_.get())
+      ->SetDelegate(this);
 
   PrefsTabHelper::CreateForWebContents(web_contents_.get());
   InitializePageLoadMetricsForWebContents(web_contents_.get());
@@ -157,9 +164,12 @@ WebUIContentsWrapper::PreHandleKeyboardEvent(
   DCHECK_EQ(web_contents(), source);
   // Close the bubble if an escape event is detected. Handle this here to
   // prevent the renderer from capturing the event and not propagating it up.
-  if (host_ && IsEscapeEvent(event) && esc_closes_ui_) {
-    host_->CloseUI();
-    return content::KeyboardEventProcessingResult::HANDLED;
+  if (host_ && IsEscapeEvent(event)) {
+    host_->OnPreHandleEscapeKey();
+    if (esc_closes_ui_) {
+      host_->CloseUI();
+      return content::KeyboardEventProcessingResult::HANDLED;
+    }
   }
   return content::KeyboardEventProcessingResult::NOT_HANDLED;
 }
@@ -234,6 +244,18 @@ void WebUIContentsWrapper::SetContentsBounds(content::WebContents* source,
   }
 }
 
+void WebUIContentsWrapper::FindReply(content::WebContents* web_contents,
+                                     int request_id,
+                                     int number_of_matches,
+                                     const gfx::Rect& selection_rect,
+                                     int active_match_ordinal,
+                                     bool final_update) {
+  if (host_) {
+    host_->FindReply(web_contents, request_id, number_of_matches,
+                     selection_rect, active_match_ordinal, final_update);
+  }
+}
+
 content::WebContents* WebUIContentsWrapper::AddNewContents(
     content::WebContents* source,
     std::unique_ptr<content::WebContents> new_contents,
@@ -248,10 +270,10 @@ content::WebContents* WebUIContentsWrapper::AddNewContents(
                : nullptr;
 }
 
-bool WebUIContentsWrapper::PreHandleGestureEvent(
-    content::WebContents* source,
-    const blink::WebGestureEvent& event) {
-  return host_ ? host_->PreHandleGestureEvent(source, event) : false;
+web_modal::WebContentsModalDialogHost*
+WebUIContentsWrapper::GetWebContentsModalDialogHost(
+    content::WebContents* web_contents) {
+  return host_ ? host_->GetWebContentsModalDialogHost(web_contents) : nullptr;
 }
 
 void WebUIContentsWrapper::PrimaryPageChanged(content::Page& page) {
@@ -309,21 +331,38 @@ base::WeakPtr<WebUIContentsWrapper::Host> WebUIContentsWrapper::GetHost() {
 
 void WebUIContentsWrapper::SetHost(
     base::WeakPtr<WebUIContentsWrapper::Host> host) {
-  DCHECK(!web_contents_->IsCrashed());
   host_ = std::move(host);
   if (!host_) {
+    return;
+  }
+
+  if (web_contents_->IsCrashed()) {
     return;
   }
 
   // Resize the host to the frame size. If there are new updates to the frame
   // size they will be capture by WebUIContentsWrapper::ResizeDueToAutoResize().
   content::RenderFrameHost* rfh = web_contents_->GetPrimaryMainFrame();
-  if (webui_resizes_host_ && rfh && rfh->GetFrameSize().has_value()) {
-    // RenderFrameHost::GetFrameSize() returns the actual frame size while
-    // the host view expects device-independent size.
-    const gfx::Size frame_dip_size = gfx::ScaleToCeiledSize(
-        *rfh->GetFrameSize(), 1.f / rfh->GetView()->GetDeviceScaleFactor());
-    host_->ResizeDueToAutoResize(web_contents_.get(), frame_dip_size);
+  if (webui_resizes_host_ && rfh) {
+    // TODO(crbug.com/376493192): RWHView is found to be sometimes null in the
+    // wild. This is suspected to happen when the render process is crashed.
+    // The code now early returns in that case, and hence we should not reach
+    // this point. If so, use a DumpWithoutCrashing to get more information on
+    // the state of the system.
+    if (!rfh->GetView()) {
+      SCOPED_CRASH_KEY_NUMBER("WebUIContentsWrapper", "lifecycle_state",
+                              static_cast<int>(rfh->GetLifecycleState()));
+      base::debug::DumpWithoutCrashing();
+      return;
+    }
+
+    if (rfh->GetFrameSize().has_value()) {
+      // RenderFrameHost::GetFrameSize() returns the actual frame size while
+      // the host view expects device-independent size.
+      const gfx::Size frame_dip_size = gfx::ScaleToCeiledSize(
+          *rfh->GetFrameSize(), 1.f / rfh->GetView()->GetDeviceScaleFactor());
+      host_->ResizeDueToAutoResize(web_contents_.get(), frame_dip_size);
+    }
   }
 
   if (supports_draggable_regions_ && draggable_regions_.has_value()) {

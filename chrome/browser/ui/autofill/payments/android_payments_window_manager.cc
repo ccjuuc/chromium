@@ -30,7 +30,6 @@ AndroidPaymentsWindowManager::AndroidPaymentsWindowManager(
 AndroidPaymentsWindowManager::~AndroidPaymentsWindowManager() = default;
 
 void AndroidPaymentsWindowManager::InitBnplFlow(BnplContext context) {
-  CHECK(!flow_state_.has_value());
   flow_state_ = FlowState();
 
   flow_state_->flow_type = FlowType::kBnpl;
@@ -50,7 +49,7 @@ void AndroidPaymentsWindowManager::OnWebContentsObservationStarted(
     content::WebContents& web_contents) {
   if (ContentAutofillClient* client =
           ContentAutofillClient::FromWebContents(&web_contents)) {
-    if (payments::PaymentsAutofillClient* payments_client =
+    if (PaymentsAutofillClient* payments_client =
             client->GetPaymentsAutofillClient()) {
       payments_client->DisablePaymentsAutofill();
     }
@@ -124,6 +123,30 @@ void AndroidPaymentsWindowManager::OnDidFinishNavigationForBnpl(
   flow_state_.reset();
 
   payments_window_bridge_->CloseEphemeralTab();
+}
+
+void AndroidPaymentsWindowManager::OnUserDeniedTabOpening() {
+  if (!flow_state_.has_value()) {
+    return;
+  }
+
+  switch (flow_state_->flow_type) {
+    case FlowType::kBnpl: {
+      auto context = std::move(flow_state_->bnpl_context);
+      if (context && context->completion_callback) {
+        std::move(context->completion_callback)
+            .Run(PaymentsWindowManager::BnplFlowResult::kFailure, GURL());
+        autofill_metrics::LogBnplPopupWindowResult(
+            context->issuer_id,
+            PaymentsWindowManager::BnplFlowResult::kFailure);
+      }
+      break;
+    }
+    case FlowType::kVcn3ds:
+    case FlowType::kNoFlow:
+      NOTREACHED();
+  }
+  flow_state_.reset();
 }
 
 void AndroidPaymentsWindowManager::CreateTab(const GURL& url,

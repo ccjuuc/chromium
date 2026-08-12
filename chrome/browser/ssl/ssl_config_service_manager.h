@@ -46,7 +46,8 @@ class SSLConfigServiceManager {
   // IDs.
   void UpdateTrustAnchorIDs(
       std::vector<std::vector<uint8_t>> trust_anchor_ids,
-      std::vector<std::vector<uint8_t>> mtc_trust_anchor_ids);
+      std::vector<std::vector<uint8_t>> mtc_trust_anchor_ids,
+      int64_t mtc_update_time_seconds);
 
   // Computes the SSL compliance policy settings based on the given prefs and
   // feature state, and writes those settings into the appropriate fields in
@@ -81,10 +82,6 @@ class SSLConfigServiceManager {
   StringPrefMember ssl_version_min_;
   StringPrefMember ssl_version_max_;
   StringListPrefMember h2_client_cert_coalescing_host_patterns_;
-  BooleanPrefMember post_quantum_enabled_;
-#if BUILDFLAG(IS_CHROMEOS)
-  BooleanPrefMember device_post_quantum_enabled_;
-#endif
   BooleanPrefMember ech_enabled_;
   StringPrefMember key_exchange_compliance_;
   StringPrefMember tls13_cipher_compliance_;
@@ -93,16 +90,19 @@ class SSLConfigServiceManager {
   std::vector<uint16_t> disabled_cipher_suites_;
 
   mojo::RemoteSet<network::mojom::SSLConfigClient> ssl_config_client_set_;
-  // The latest set of Trust Anchor IDs configured via UpdateTrustAnchorIDs().
-  // This is used to set the initial set of Trust Anchor IDs on newly created
-  // network contexts to the latest ones. Note that this field can be set to a
-  // non-null but empty value to override a non-empty compiled-in list of Trust
-  // Anchor IDs with an empty list from the component updater.
-  std::optional<std::vector<std::vector<uint8_t>>> trust_anchor_ids_;
 
-  // Like `trust_anchor_ids_` but for MTC signatureless certs. (This is not
-  // a std::optional since there is no built-in list of MTC ids to override.)
+  // The latest set of Trust Anchor IDs either from the compiled-in root store,
+  // or configured via UpdateTrustAnchorIDs(). This is used to set the initial
+  // set of Trust Anchor IDs on newly created network contexts to the latest
+  // ones.
+  std::vector<std::vector<uint8_t>> trust_anchor_ids_;
+
+  // Like `trust_anchor_ids_` but for MTCs.
   std::vector<std::vector<uint8_t>> mtc_trust_anchor_ids_;
+
+  // The time (in seconds since the unix epoch) that the MTC trust anchor IDs
+  // were generated.
+  int64_t mtc_update_time_seconds_ = 0;
 };
 
 #endif  // CHROME_BROWSER_SSL_SSL_CONFIG_SERVICE_MANAGER_H_

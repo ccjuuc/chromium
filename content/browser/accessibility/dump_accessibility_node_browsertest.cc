@@ -59,6 +59,7 @@ class DumpAccessibilityNodeTest : public DumpAccessibilityTestBase {
   void ChooseFeatures(
       std::vector<base::test::FeatureRef>* enabled_features,
       std::vector<base::test::FeatureRef>* disabled_features) override {
+    enabled_features->emplace_back(blink::features::kMathMLAnchorElement);
 #if BUILDFLAG(IS_ANDROID)
     disabled_features->emplace_back(
         features::kAccessibilityPopulateSupplementalDescriptionApi);
@@ -198,6 +199,10 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityNodeTest,
 // MathML tests.
 //
 
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLAnchor) {
+  RunMathMLTest(FILE_PATH_LITERAL("a.html"));
+}
+
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLAction) {
   RunMathMLTest(FILE_PATH_LITERAL("maction.html"));
 }
@@ -215,6 +220,9 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLFraction) {
 }
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLIdentifier) {
   RunMathMLTest(FILE_PATH_LITERAL("mi.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLIntent) {
+  RunMathMLTest(FILE_PATH_LITERAL("intent.html"));
 }
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLMath) {
   RunMathMLTest(FILE_PATH_LITERAL("math.html"));
@@ -403,6 +411,10 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameButtonLabelledby) {
   RunAccNameTest(FILE_PATH_LITERAL("name-button-labelledby.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameButtonLabelledbySelf) {
+  RunAccNameTest(FILE_PATH_LITERAL("name-button-labelledby-self.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,

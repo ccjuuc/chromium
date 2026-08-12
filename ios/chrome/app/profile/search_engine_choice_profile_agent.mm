@@ -7,21 +7,36 @@
 #import <memory>
 
 #import "base/check.h"
+#import "components/regional_capabilities/regional_capabilities_metrics.h"
+#import "components/regional_capabilities/regional_capabilities_service.h"
 #import "components/search_engines/search_engine_choice/search_engine_choice_service.h"
+#import "components/search_engines/template_url.h"
+#import "components/search_engines/template_url_service.h"
+#import "components/strings/grit/components_strings.h"
 #import "ios/chrome/app/application_delegate/app_state.h"
 #import "ios/chrome/app/profile/profile_init_stage.h"
 #import "ios/chrome/app/profile/profile_state.h"
 #import "ios/chrome/browser/device_orientation/ui_bundled/scoped_force_portrait_orientation.h"
+#import "ios/chrome/browser/regional_capabilities/model/regional_capabilities_service_factory.h"
 #import "ios/chrome/browser/scoped_ui_blocker/ui_bundled/scoped_ui_blocker.h"
-#import "ios/chrome/browser/search_engine_choice/coordinator/search_engine_choice_coordinator.h"
 #import "ios/chrome/browser/search_engine_choice/model/search_engine_choice_util.h"
+#import "ios/chrome/browser/search_engines/model/template_url_service_factory.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state_observer.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
+#import "ios/chrome/browser/shared/model/profile/profile_ios.h"
+#import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/search_engine_choice_commands.h"
+#import "ios/chrome/browser/shared/public/commands/settings_commands.h"
+#import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
+#import "ios/chrome/browser/shared/public/snackbar/snackbar_message.h"
+#import "ios/chrome/browser/shared/public/snackbar/snackbar_message_action.h"
 #import "ios/chrome/browser/signin/model/signin_util.h"
+#import "ios/chrome/grit/ios_strings.h"
+#import "ui/base/l10n/l10n_util.h"
 
 namespace {
 
@@ -33,15 +48,21 @@ enum class SkipScreenDecision {
   kSkip,
 };
 
+// Returns the SearchEngineChoiceCommands handler for a SceneState.
+id<SearchEngineChoiceCommands> GetSearchEngineChoiceHandler(
+    SceneState* scene_state) {
+  if (Browser* browser =
+          scene_state.browserProviderInterface.currentBrowserProvider.browser) {
+    return HandlerForProtocol(browser->GetCommandDispatcher(),
+                              SearchEngineChoiceCommands);
+  }
+
+  return nil;
+}
+
 }  // namespace
 
-@interface SearchEngineChoiceProfileAgent () <
-    SearchEngineChoiceCoordinatorDelegate>
-@end
-
 @implementation SearchEngineChoiceProfileAgent {
-  // The coordinator of the search engine choice screen.
-  SearchEngineChoiceCoordinator* _searchEngineChoiceCoordinator;
   // UI blocker used by the search engine selection screen.
   std::unique_ptr<ScopedUIBlocker> _searchEngineChoiceUIBlocker;
   // Scene state ID where the search engine choice dialog is displayed.
@@ -108,18 +129,6 @@ enum class SkipScreenDecision {
   }
 }
 
-#pragma mark - SearchEngineChoiceCoordinatorDelegate
-
-- (void)choiceScreenWasDismissed:(SearchEngineChoiceCoordinator*)coordinator {
-  DCHECK_EQ(_searchEngineChoiceCoordinator, coordinator);
-  [self stopPresentingChoiceScreen];
-
-  // Advance to the next stage when the screen is dismissed by the user.
-  if (self.profileState.initStage == ProfileInitStage::kChoiceScreen) {
-    [self.profileState queueTransitionToNextInitStage];
-  }
-}
-
 #pragma mark - Private
 
 // Returns whether the app was started via an external intent (i.e. any
@@ -161,9 +170,8 @@ enum class SkipScreenDecision {
 
   // If the Choice Screen is already presented on another SceneState, then
   // there is nothing to do.
-  if (_searchEngineChoiceCoordinator) {
+  if (!_searchEngineChoiceSceneStateID.empty()) {
     DCHECK(_searchEngineChoiceUIBlocker);
-    DCHECK(!_searchEngineChoiceSceneStateID.empty());
     return;
   }
 
@@ -179,18 +187,22 @@ enum class SkipScreenDecision {
     return;
   }
 
+  id<SearchEngineChoiceCommands> handler =
+      GetSearchEngineChoiceHandler(sceneState);
+  if (!handler) {
+    [self.profileState queueTransitionToNextInitStage];
+    return;
+  }
+
   // Present the screen.
   _searchEngineChoiceSceneStateID = sceneState.sceneSessionID;
-  _searchEngineChoiceUIBlocker = std::make_unique<ScopedUIBlocker>(sceneState);
+  _searchEngineChoiceUIBlocker = ScopedUIBlocker::ProfileScoped(sceneState);
 
-  id<BrowserProvider> browserProvider =
-      sceneState.browserProviderInterface.currentBrowserProvider;
-
-  _searchEngineChoiceCoordinator = [[SearchEngineChoiceCoordinator alloc]
-      initWithBaseViewController:browserProvider.viewController
-                         browser:browserProvider.browser];
-  _searchEngineChoiceCoordinator.delegate = self;
-  [_searchEngineChoiceCoordinator start];
+  __weak __typeof(self) weakSelf = self;
+  __weak SceneState* weakSceneState = sceneState;
+  [handler showSearchEngineChoiceScreenWithCompletion:^{
+    [weakSelf choiceScreenClosedForSceneState:weakSceneState];
+  }];
 }
 
 // Tries to dismiss the choice screen if presented by `sceneState` as the
@@ -199,21 +211,13 @@ enum class SkipScreenDecision {
 // to the next active SceneState, if any.
 - (void)sceneStateDisconnected:(SceneState*)sceneState {
   DCHECK_EQ(self.profileState.initStage, ProfileInitStage::kChoiceScreen);
-  if (!_searchEngineChoiceCoordinator) {
-    // Nothing to do if the Search Engine Choice Screen is not presented.
-    return;
-  }
-
-  DCHECK(_searchEngineChoiceUIBlocker);
-  DCHECK(!_searchEngineChoiceSceneStateID.empty());
-
   if (_searchEngineChoiceSceneStateID != sceneState.sceneSessionID) {
     // Nothing to do if the Search Engine Choice Screen is not presented
     // by `sceneState`.
     return;
   }
 
-  [self stopPresentingChoiceScreen];
+  [self stopPresentingChoiceScreenForSceneState:sceneState];
   if (SceneState* nextSceneState = self.profileState.foregroundActiveScene) {
     [self maybeShowChoiceScreen:nextSceneState];
   }
@@ -222,14 +226,72 @@ enum class SkipScreenDecision {
 // Stops presenting the choice screen. Called after it has been dismissed
 // by the user or when programmatically dismissing when a SceneState is
 // detached or disconnected while the screen is presented.
-- (void)stopPresentingChoiceScreen {
+- (void)stopPresentingChoiceScreenForSceneState:(SceneState*)sceneState {
   DCHECK(!_searchEngineChoiceSceneStateID.empty());
+  DCHECK_EQ(_searchEngineChoiceSceneStateID, sceneState.sceneSessionID);
   _searchEngineChoiceSceneStateID.clear();
   _searchEngineChoiceUIBlocker.reset();
 
-  _searchEngineChoiceCoordinator.delegate = nil;
-  [_searchEngineChoiceCoordinator stop];
-  _searchEngineChoiceCoordinator = nil;
+  id<SearchEngineChoiceCommands> handler =
+      GetSearchEngineChoiceHandler(sceneState);
+  [handler stopSearchEngineChoiceScreen];
+}
+
+- (void)choiceScreenClosedForSceneState:(SceneState*)sceneState {
+  [self stopPresentingChoiceScreenForSceneState:sceneState];
+  [self maybeShowChoiceConfirmationSnackbarForSceneState:sceneState];
+
+  // Advance to the next stage when the screen is dismissed by the user.
+  if (self.profileState.initStage == ProfileInitStage::kChoiceScreen) {
+    [self.profileState queueTransitionToNextInitStage];
+  }
+}
+
+// Displays a snackbar confirming the search engine choice if requested by the
+// regional capabilities service and `kSearchEngineChoiceScreenSnackbar` is
+// enabled.
+- (void)maybeShowChoiceConfirmationSnackbarForSceneState:
+    (SceneState*)sceneState {
+  Browser* browser =
+      sceneState.browserProviderInterface.currentBrowserProvider.browser;
+  CHECK(browser);
+  ProfileIOS* profile = browser->GetProfile();
+  regional_capabilities::RegionalCapabilitiesService*
+      regionalCapabilitiesService =
+          ios::RegionalCapabilitiesServiceFactory::GetForProfile(profile);
+  CHECK(regionalCapabilitiesService);
+  if (!regionalCapabilitiesService->ShouldShowChoiceConfirmationSnackbar()) {
+    return;
+  }
+
+  TemplateURLService* templateURLService =
+      ios::TemplateURLServiceFactory::GetForProfile(profile);
+  CHECK(templateURLService);
+  const TemplateURL* defaultSearchProvider =
+      templateURLService->GetDefaultSearchProvider();
+  if (!defaultSearchProvider) {
+    return;
+  }
+  NSString* messageText = l10n_util::GetNSStringF(
+      IDS_SEARCH_ENGINE_CHOICE_SETTINGS_CONFIRMATION_TOAST_LABEL,
+      defaultSearchProvider->short_name());
+
+  SnackbarMessageAction* action = [[SnackbarMessageAction alloc] init];
+  action.title = l10n_util::GetNSString(IDS_IOS_SETTINGS_TITLE);
+  CommandDispatcher* dispatcher = browser->GetCommandDispatcher();
+  __weak id<SettingsCommands> settingsHandler =
+      HandlerForProtocol(dispatcher, SettingsCommands);
+  action.handler = ^{
+    [settingsHandler showDefaultSearchEngineSettings];
+  };
+
+  SnackbarMessage* message =
+      [[SnackbarMessage alloc] initWithTitle:messageText];
+  message.action = action;
+
+  id<SnackbarCommands> snackbarHandler =
+      HandlerForProtocol(dispatcher, SnackbarCommands);
+  [snackbarHandler showSnackbarMessage:message];
 }
 
 @end

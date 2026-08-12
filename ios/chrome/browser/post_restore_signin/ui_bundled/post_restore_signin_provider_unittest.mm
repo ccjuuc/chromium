@@ -10,12 +10,12 @@
 #import "components/signin/public/base/signin_pref_names.h"
 #import "components/signin/public/base/signin_switches.h"
 #import "components/sync/test/sync_user_settings_mock.h"
+#import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/policy/model/policy_util.h"
 #import "ios/chrome/browser/post_restore_signin/ui_bundled/metrics.h"
 #import "ios/chrome/browser/promos_manager/model/constants.h"
 #import "ios/chrome/browser/promos_manager/model/promo_config.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
-#import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/promos_manager_commands.h"
@@ -24,7 +24,10 @@
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
+#import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/browser/signin/model/signin_util.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/grit/ios_branded_strings.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/test/web_task_environment.h"
@@ -50,16 +53,21 @@ class PostRestoreSignInProviderTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
     profile_ = std::move(builder).Build();
-    browser_ = std::make_unique<TestBrowser>(profile_.get());
     pref_service_ = profile_.get()->GetPrefs();
     auth_service_ = AuthenticationServiceFactory::GetForProfile(profile_.get());
 
     SetFakePreRestoreAccountInfo();
-    provider_ =
-        [[PostRestoreSignInProvider alloc] initForBrowser:browser_.get()];
+    provider_ = [[PostRestoreSignInProvider alloc]
+          initWithSyncService:SyncServiceFactory::GetForProfile(profile_.get())
+        authenticationService:auth_service_
+              identityManager:IdentityManagerFactory::GetForProfile(
+                                  profile_.get())
+                  prefService:pref_service_];
   }
 
   void SetFakePreRestoreAccountInfo() {
@@ -81,8 +89,12 @@ class PostRestoreSignInProviderTest : public PlatformTest {
     StorePreRestoreIdentity(pref_service_, account_info,
                             /*history_sync_enabled=*/false);
     // Reinstantiate a provider so that it picks up the changes.
-    provider_ =
-        [[PostRestoreSignInProvider alloc] initForBrowser:browser_.get()];
+    provider_ = [[PostRestoreSignInProvider alloc]
+          initWithSyncService:SyncServiceFactory::GetForProfile(profile_.get())
+        authenticationService:auth_service_
+              identityManager:IdentityManagerFactory::GetForProfile(
+                                  profile_.get())
+                  prefService:pref_service_];
   }
 
   void SetupMockHandler() {
@@ -97,18 +109,18 @@ class PostRestoreSignInProviderTest : public PlatformTest {
         FakeSystemIdentityManager::FromSystemIdentityManager(
             GetApplicationContext()->GetSystemIdentityManager());
     system_identity_manager->AddIdentity(fake_identity);
-    auth_service_->SignIn(fake_identity, signin_metrics::AccessPoint::kUnknown);
+    auth_service_->SignIn(fake_identity,
+                          signin_metrics::AccessPoint::kStartPage);
   }
 
  protected:
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   web::WebTaskEnvironment task_environment_;
-  raw_ptr<PrefService, DanglingUntriaged> pref_service_;
   std::unique_ptr<TestProfileIOS> profile_;
-  raw_ptr<AuthenticationService> auth_service_;
+  raw_ptr<PrefService> pref_service_ = nullptr;
+  raw_ptr<AuthenticationService> auth_service_ = nullptr;
   base::test::ScopedFeatureList scoped_feature_list_;
   id mock_handler_;
-  std::unique_ptr<Browser> browser_;
   PostRestoreSignInProvider* provider_;
 };
 

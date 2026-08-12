@@ -10,11 +10,12 @@
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/logging.h"
 #include "base/notreached.h"
 #include "base/run_loop.h"
 #include "base/task/current_thread.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/simple_message_box.h"
 #include "chrome/browser/ui/simple_message_box_internal.h"
 #include "chrome/grit/generated_resources.h"
@@ -250,7 +251,7 @@ void MessageBoxDialog::OnWidgetActivationChanged(views::Widget* widget,
   if (GetWidget()->GetNativeWindow()->GetProperty(
           chromeos::kIsShowingInOverviewKey)) {
     // Prevent this from closing while starting overview mode for better UX.
-    // See crbug.com/972015.
+    // See crbug.com/40631180.
     return;
   }
 #endif

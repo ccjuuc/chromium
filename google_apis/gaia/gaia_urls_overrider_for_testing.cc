@@ -6,24 +6,27 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 
-#include "base/command_line.h"
-#include "base/strings/string_util.h"
+#include "base/values.h"
 #include "google_apis/gaia/gaia_config.h"
-#include "google_apis/gaia/gaia_switches.h"
 #include "google_apis/gaia/gaia_urls.h"
 
 GaiaUrlsOverriderForTesting::GaiaUrlsOverriderForTesting(
-    base::CommandLine* command_line,
     const std::string& url_key,
     const std::string& url_value)
-    : command_line_(command_line) {
-  // Initialize `GaiaConfig` from the updated `switches::kGaiaConfigContents`.
-  command_line_->AppendSwitchASCII(
-      switches::kGaiaConfigContents,
-      base::ReplaceStringPlaceholders("{\"urls\": {\"$1\": {\"url\": \"$2\"}}}",
-                                      {url_key, url_value}, nullptr));
-  GaiaConfig::ResetInstanceForTesting();
+    : GaiaUrlsOverriderForTesting(  // IN-TEST
+          base::flat_map<std::string, std::string>{{url_key, url_value}}) {}
+
+GaiaUrlsOverriderForTesting::GaiaUrlsOverriderForTesting(  // IN-TEST
+    const base::flat_map<std::string, std::string>& overridden_urls) {
+  auto urls_dict = base::DictValue();
+  for (const auto& [url_key, url_value] : overridden_urls) {
+    urls_dict.Set(url_key, base::DictValue().Set("url", url_value));
+  }
+  auto config_dict = base::DictValue().Set("urls", std::move(urls_dict));
+  scoped_config_override_ = GaiaConfig::SetScopedConfigForTesting(
+      std::make_unique<GaiaConfig>(std::move(config_dict)));
 
   // Replace `GaiaUrls` singleton with the temporary scoped instance.
   test_gaia_urls_ = std::make_unique<GaiaUrls>();
@@ -32,8 +35,4 @@ GaiaUrlsOverriderForTesting::GaiaUrlsOverriderForTesting(
 
 GaiaUrlsOverriderForTesting::~GaiaUrlsOverriderForTesting() {
   GaiaUrls::SetInstanceForTesting(nullptr);
-
-  // Force `GaiaConfig` to re-initialize from command line switches.
-  command_line_->RemoveSwitch(switches::kGaiaConfigContents);
-  GaiaConfig::ResetInstanceForTesting();
 }

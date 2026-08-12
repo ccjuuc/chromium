@@ -37,7 +37,7 @@ class GlobalKeyboardShortcutsTest : public InProcessBrowserTest {
     // also why this test must be an interactive_ui_test rather than a browser
     // test.
     ASSERT_TRUE(ui_test_utils::ShowAndFocusNativeWindow(
-        browser()->window()->GetNativeWindow()));
+        browser()->GetWindow()->GetNativeWindow()));
   }
 };
 
@@ -51,11 +51,11 @@ void SendEvent(NSEvent* ns_event) {
 
 IN_PROC_BROWSER_TEST_F(GlobalKeyboardShortcutsTest, SwitchTabsMac) {
   NSWindow* ns_window =
-      browser()->window()->GetNativeWindow().GetNativeNSWindow();
+      browser()->GetWindow()->GetNativeWindow().GetNativeNSWindow();
   TabStripModel* tab_strip = browser()->tab_strip_model();
 
   // Set up window with 2 tabs.
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   EXPECT_EQ(2, tab_strip->count());
   EXPECT_TRUE(tab_strip->IsTabSelected(1));
 
@@ -87,7 +87,7 @@ IN_PROC_BROWSER_TEST_F(GlobalKeyboardShortcutsTest, SwitchTabsMac) {
 IN_PROC_BROWSER_TEST_F(GlobalKeyboardShortcutsTest, HistoryNavigation) {
   TabStripModel* tab_strip = browser()->tab_strip_model();
   NSWindow* ns_window =
-      browser()->window()->GetNativeWindow().GetNativeNSWindow();
+      browser()->GetWindow()->GetNativeWindow().GetNativeNSWindow();
 
   GURL test_url = chrome_test_utils::GetTestUrl(
       base::FilePath(), base::FilePath(FILE_PATH_LITERAL("title1.html")));
@@ -116,7 +116,7 @@ IN_PROC_BROWSER_TEST_F(GlobalKeyboardShortcutsTest, HistoryNavigation) {
 
 // Test that common hotkeys for editing the omnibox work.
 IN_PROC_BROWSER_TEST_F(GlobalKeyboardShortcutsTest, CopyPasteOmnibox) {
-  BrowserWindow* window = browser()->window();
+  BrowserWindow* window = BrowserWindow::FromBrowser(browser());
   ASSERT_TRUE(window);
   LocationBar* location_bar = window->GetLocationBar();
   ASSERT_TRUE(location_bar);
@@ -124,7 +124,7 @@ IN_PROC_BROWSER_TEST_F(GlobalKeyboardShortcutsTest, CopyPasteOmnibox) {
   ASSERT_TRUE(omnibox_view);
 
   NSWindow* ns_window =
-      browser()->window()->GetNativeWindow().GetNativeNSWindow();
+      browser()->GetWindow()->GetNativeWindow().GetNativeNSWindow();
 
   // Cmd+L focuses the omnibox and selects all the text.
   SendEvent(SynthesizeKeyEvent(ns_window, /*keydown=*/true, ui::VKEY_L,
@@ -169,7 +169,7 @@ IN_PROC_BROWSER_TEST_F(GlobalKeyboardShortcutsTest, ReopenPreviousTab) {
   TabStripModel* tab_strip = browser()->tab_strip_model();
 
   // Set up window with 2 tabs.
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   EXPECT_EQ(2, tab_strip->count());
 
   // Navigate the active tab to a dummy URL.
@@ -182,14 +182,14 @@ IN_PROC_BROWSER_TEST_F(GlobalKeyboardShortcutsTest, ReopenPreviousTab) {
 
   // Close a tab.
   ASSERT_TRUE(ui_test_utils::SendKeyPressToWindowSync(
-      browser()->window()->GetNativeWindow(), ui::VKEY_W, false, false, false,
-      true));
+      browser()->GetWindow()->GetNativeWindow(), ui::VKEY_W, false, false,
+      false, true));
   EXPECT_EQ(1, tab_strip->count());
   ASSERT_NE(tab_strip->GetActiveWebContents()->GetLastCommittedURL(), test_url);
 
   // Reopen a tab.
   ASSERT_TRUE(ui_test_utils::SendKeyPressToWindowSync(
-      browser()->window()->GetNativeWindow(), ui::VKEY_T, false, true, false,
+      browser()->GetWindow()->GetNativeWindow(), ui::VKEY_T, false, true, false,
       true));
   EXPECT_EQ(2, tab_strip->count());
   ASSERT_EQ(tab_strip->GetActiveWebContents()->GetLastCommittedURL(), test_url);
@@ -199,13 +199,13 @@ IN_PROC_BROWSER_TEST_F(GlobalKeyboardShortcutsTest, ReopenPreviousTab) {
 // than unconfigurable hotkeys not present in the main menu.
 IN_PROC_BROWSER_TEST_F(GlobalKeyboardShortcutsTest, MenuCommandPriority) {
   NSWindow* ns_window =
-      browser()->window()->GetNativeWindow().GetNativeNSWindow();
+      browser()->GetWindow()->GetNativeWindow().GetNativeNSWindow();
   TabStripModel* tab_strip = browser()->tab_strip_model();
 
   // Set up window with 4 tabs.
-  chrome::NewTab(browser());
-  chrome::NewTab(browser());
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   EXPECT_EQ(4, tab_strip->count());
   EXPECT_TRUE(tab_strip->IsTabSelected(3));
 
@@ -223,7 +223,7 @@ IN_PROC_BROWSER_TEST_F(GlobalKeyboardShortcutsTest, MenuCommandPriority) {
   NSMenuItem* tab_menu = [main_menu itemWithTitle:@"Tab"];
   ASSERT_NE(nil, tab_menu);
   ASSERT_TRUE(tab_menu.hasSubmenu);
-  NSMenuItem* next_item = [tab_menu.submenu itemWithTag:IDC_SELECT_NEXT_TAB];
+  NSMenuItem* next_item = [tab_menu.submenu itemWithTag:IDC_CYCLE_TO_NEXT_TAB];
   ASSERT_NE(nil, next_item);
   [next_item setKeyEquivalent:@"2"];
   [next_item setKeyEquivalentModifierMask:NSEventModifierFlagCommand];

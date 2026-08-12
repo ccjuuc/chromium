@@ -75,10 +75,10 @@ public class PartialCustomTabDisplayManager extends CustomTabHeightStrategy
     private View mToolbarCoordinatorView;
     private CustomTabToolbar mCustomTabToolbar;
     private int mToolbarCornerRadius;
-    private CustomTabToolbarButtonsCoordinator mToolbarButtonsCoordinator;
+    private @Nullable CustomTabToolbarButtonsCoordinator mToolbarButtonsCoordinator;
     private PartialCustomTabHandleStrategyFactory mHandleStrategyFactory;
     private SizeStrategyCreator mSizeStrategyCreator = this::createSizeStrategy;
-    private final Supplier<TouchEventProvider> mTouchEventProvider;
+    private final Supplier<@Nullable TouchEventProvider> mTouchEventProvider;
     private final Supplier<@Nullable Tab> mTab;
     private boolean mIsInPip;
     private final BooleanSupplier mIsEnteringPip;
@@ -86,7 +86,7 @@ public class PartialCustomTabDisplayManager extends CustomTabHeightStrategy
     public PartialCustomTabDisplayManager(
             Activity activity,
             BrowserServicesIntentDataProvider intentData,
-            Supplier<TouchEventProvider> touchEventProvider,
+            Supplier<@Nullable TouchEventProvider> touchEventProvider,
             Supplier<@Nullable Tab> tab,
             OnResizedCallback onResizedCallback,
             OnActivityLayoutCallback onActivityLayoutCallback,
@@ -193,7 +193,7 @@ public class PartialCustomTabDisplayManager extends CustomTabHeightStrategy
             View coordinatorView,
             CustomTabToolbar toolbar,
             @Px int toolbarCornerRadius,
-            CustomTabToolbarButtonsCoordinator toolbarButtonsCoordinator) {
+            @Nullable CustomTabToolbarButtonsCoordinator toolbarButtonsCoordinator) {
         mToolbarCoordinatorView = coordinatorView;
         mCustomTabToolbar = toolbar;
         mToolbarCornerRadius = toolbarCornerRadius;
@@ -311,23 +311,23 @@ public class PartialCustomTabDisplayManager extends CustomTabHeightStrategy
                         displayWidthDpSupplier,
                         calculateBreakPoint(provider.getActivityBreakPoint()));
 
-        @AnimRes int start_anim_id = defaultResId;
+        @AnimRes int startAnimId = defaultResId;
         if (type == PartialCustomTabType.BOTTOM_SHEET || type == PartialCustomTabType.FULL_SIZE) {
-            start_anim_id = R.anim.slide_in_up;
+            startAnimId = R.anim.slide_in_up;
         } else if (type == PartialCustomTabType.SIDE_SHEET) {
             int behavior = provider.getSideSheetSlideInBehavior();
             if (behavior == ACTIVITY_SIDE_SHEET_SLIDE_IN_FROM_BOTTOM) {
-                start_anim_id = R.anim.slide_in_up;
+                startAnimId = R.anim.slide_in_up;
             } else if (behavior == ACTIVITY_SIDE_SHEET_SLIDE_IN_FROM_SIDE) {
                 boolean sheetOnRight =
                         PartialCustomTabSideSheetStrategy.isSheetOnRight(
                                 provider.getSideSheetPosition());
-                start_anim_id = sheetOnRight ? R.anim.slide_in_right : R.anim.slide_in_left;
+                startAnimId = sheetOnRight ? R.anim.slide_in_right : R.anim.slide_in_left;
             } else {
                 assert false : "Invalide slide-in behavior";
             }
         }
-        return start_anim_id;
+        return startAnimId;
     }
 
     private PartialCustomTabBaseStrategy createSizeStrategy(

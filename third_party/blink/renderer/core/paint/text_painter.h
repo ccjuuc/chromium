@@ -12,6 +12,7 @@
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
+#include "third_party/blink/renderer/platform/graphics/graphics_context_state_saver.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
@@ -22,7 +23,6 @@ class Font;
 class GraphicsContext;
 class LayoutObject;
 class LayoutSVGInlineText;
-class TextDecorationInfo;
 enum class TextEmphasisPosition : unsigned;
 struct AutoDarkMode;
 struct DecorationGeometry;
@@ -106,8 +106,10 @@ class CORE_EXPORT TextPainter {
 
   virtual void ClipDecorationLine(const DecorationGeometry&,
                                   float text_baseline,
-                                  const TextFragmentPaintInfo&);
-  void PaintDecorationLine(const TextDecorationInfo& decoration_info,
+                                  const TextFragmentPaintInfo&,
+                                  ETextDecorationSkipInk skip_ink);
+  void PaintDecorationLine(const DecorationGeometry& geometry,
+                           bool has_decoration_override,
                            const Color& line_color,
                            const AutoDarkMode& auto_dark_mode);
 
@@ -129,6 +131,11 @@ class CORE_EXPORT TextPainter {
   void SetEmphasisMark(const AtomicString&,
                        LineLogicalSide,
                        const FragmentItem* text_item = nullptr);
+
+  // This should be called before calling Paint*() methods.
+  // `state_saver` can be nullptr.
+  void ApplyTextFitScale(const TextFragmentPaintInfo& paint_info,
+                         std::optional<GraphicsContextStateSaver>* state_saver);
 
  protected:
   const Font& font() const { return font_; }

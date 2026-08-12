@@ -15,7 +15,8 @@
 #include "base/no_destructor.h"
 #include "base/numerics/byte_conversions.h"
 #include "crypto/aead.h"
-#include "crypto/hkdf.h"
+#include "crypto/hash.h"
+#include "crypto/kdf.h"
 #include "crypto/random.h"
 
 namespace enterprise_obfuscation {
@@ -68,7 +69,7 @@ const std::vector<uint8_t> ComputeNonce(base::span<const uint8_t> nonce_prefix,
 
 BASE_FEATURE(kEnterpriseFileObfuscation, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kEnterpriseFileObfuscationArchiveAnalyzer,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 bool IsFileObfuscationEnabled() {
   return base::FeatureList::IsEnabled(kEnterpriseFileObfuscation);
@@ -95,8 +96,8 @@ base::expected<std::vector<uint8_t>, Error> CreateHeader(
   header.insert(header.end(), salt.begin(), salt.end());
 
   // Generate file-specific key.
-  *derived_key =
-      crypto::HkdfSha256<kKeySize>(GetBaseKey(), salt, base::span<uint8_t>());
+  *derived_key = crypto::kdf::Hkdf<kKeySize>(crypto::hash::kSha256,
+                                             GetBaseKey(), salt, {});
 
   // Generate nonce prefix.
   *nonce_prefix = crypto::RandBytesAsVector(kNoncePrefixSize);
@@ -119,11 +120,8 @@ base::expected<std::vector<uint8_t>, Error> ObfuscateDataChunk(
     return base::unexpected(Error::kDisabled);
   }
 
-  crypto::Aead aead(crypto::Aead::AES_256_GCM);
-  aead.Init(derived_key);
-
   // Compute nonce.
-  if (aead.NonceLength() != kNonceSize) {
+  if (crypto::aead::NonceSizeFor(crypto::aead::AES_256_GCM) != kNonceSize) {
     return base::unexpected(Error::kSchemeError);
   }
   std::vector<uint8_t> nonce =
@@ -131,7 +129,8 @@ base::expected<std::vector<uint8_t>, Error> ObfuscateDataChunk(
 
   // Encrypt the data and prepend the encrypted size.
   std::vector<uint8_t> encrypted_data =
-      aead.Seal(data, nonce, base::span<uint8_t>());
+      crypto::aead::Seal(crypto::aead::AES_256_GCM, derived_key, data, nonce,
+                         /*associated_data=*/{});
 
   std::array<uint8_t, kChunkSizePrefixSize> size =
       base::U32ToBigEndian(static_cast<uint32_t>(encrypted_data.size()));
@@ -149,7 +148,7 @@ base::expected<size_t, Error> GetObfuscatedChunkSize(
   std::array<uint8_t, kChunkSizePrefixSize> size;
   std::copy_n(data.begin(), kChunkSizePrefixSize, size.begin());
   size_t chunk_size = base::U32FromBigEndian(size);
-  if (chunk_size > kMaxChunkSize) {
+  if (chunk_size < kAuthTagSize || chunk_size > kMaxChunkSize) {
     return base::unexpected(Error::kDeobfuscationFailed);
   }
   return base::ok(chunk_size);
@@ -175,8 +174,8 @@ base::expected<HeaderData, Error> GetHeaderData(
   const auto& [salt, nonce_prefix] = header.split_at<kSaltSize>();
 
   // Generate file-specific key.
-  std::array<uint8_t, kKeySize> derived_key =
-      crypto::HkdfSha256<kKeySize>(GetBaseKey(), salt, {});
+  std::array<uint8_t, kKeySize> derived_key = crypto::kdf::Hkdf<kKeySize>(
+      crypto::hash::kSha256, GetBaseKey(), salt, {});
 
   return base::ok(
       HeaderData(std::move(derived_key), base::ToVector(nonce_prefix)));
@@ -191,21 +190,19 @@ base::expected<std::vector<uint8_t>, Error> DeobfuscateDataChunk(
   if (!IsFileObfuscationEnabled()) {
     return base::unexpected(Error::kDisabled);
   }
-  crypto::Aead aead(crypto::Aead::AES_256_GCM);
-  aead.Init(derived_key);
-
   if (data.size() < kAuthTagSize) {
     return base::unexpected(Error::kDeobfuscationFailed);
   }
 
   // Construct nonce.
-  if (aead.NonceLength() != kNonceSize) {
+  if (crypto::aead::NonceSizeFor(crypto::aead::AES_256_GCM) != kNonceSize) {
     return base::unexpected(Error::kSchemeError);
   }
   std::vector<uint8_t> nonce =
       ComputeNonce(nonce_prefix, counter, is_last_chunk);
 
-  auto plaintext = aead.Open(data, nonce, base::span<uint8_t>());
+  auto plaintext = crypto::aead::Open(crypto::aead::AES_256_GCM, derived_key,
+                                      data, nonce, /*associated_data=*/{});
   if (!plaintext) {
     return base::unexpected(Error::kDeobfuscationFailed);
   }
@@ -238,7 +235,7 @@ base::expected<void, Error> DeobfuscateFileInPlace(
                                base::File::FLAG_OPEN | base::File::FLAG_APPEND);
 
   // Get header data
-  if (static_cast<size_t>(file.GetLength()) < kHeaderSize) {
+  if (file.GetLength() < static_cast<int64_t>(kHeaderSize)) {
     return RecordAndReturn<void>(base::unexpected(Error::kDeobfuscationFailed));
   }
   std::vector<uint8_t> header(kHeaderSize);
@@ -252,19 +249,17 @@ base::expected<void, Error> DeobfuscateFileInPlace(
   }
 
   // Initialize cipher.
-  crypto::Aead aead(crypto::Aead::AES_256_GCM);
-  aead.Init(header_data.value().derived_key);
+  crypto::Aead aead(crypto::Aead::AES_256_GCM, header_data.value().derived_key);
   if (aead.NonceLength() != kNonceSize) {
     return RecordAndReturn<void>(base::unexpected(Error::kSchemeError));
   }
   uint32_t counter = 0;
-  size_t total_bytes_read = header_read.value();
+  int64_t total_bytes_read = header_read.value();
 
-  int64_t file_length = file.GetLength();
-  if (file_length < 0) {
+  int64_t file_size = file.GetLength();
+  if (file_size < 0) {
     return RecordAndReturn<void>(base::unexpected(Error::kFileOperationError));
   }
-  const size_t file_size = static_cast<size_t>(file_length);
 
   // Deobfuscate to temporary file.
   while (total_bytes_read < file_size) {
@@ -305,7 +300,10 @@ base::expected<void, Error> DeobfuscateFileInPlace(
       return RecordAndReturn<void>(
           base::unexpected(Error::kDeobfuscationFailed));
     }
-    deobfuscated_file.WriteAtCurrentPos(plaintext.value());
+    if (!deobfuscated_file.WriteAtCurrentPosAndCheck(plaintext.value())) {
+      return RecordAndReturn<void>(
+          base::unexpected(Error::kFileOperationError));
+    }
   }
   file.Close();
   deobfuscated_file.Close();

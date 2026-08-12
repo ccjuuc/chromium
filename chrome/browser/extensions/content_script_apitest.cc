@@ -7,12 +7,16 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/metrics/statistics_recorder.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/threading/platform_thread.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/extensions/api/permissions/permissions_api.h"
@@ -24,12 +28,15 @@
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/ssl/https_upgrades_interceptor.h"
 #include "chrome/browser/ssl/https_upgrades_util.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "components/javascript_dialogs/tab_modal_dialog_manager.h"
+#include "components/metrics/content/subprocess_metrics_provider.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "content/public/browser/javascript_dialog_manager.h"
 #include "content/public/browser/page_navigator.h"
@@ -53,6 +60,7 @@
 #include "extensions/common/extension_features.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/manifest_handlers/externally_connectable.h"
+#include "extensions/common/switches.h"
 #include "extensions/common/utils/content_script_utils.h"
 #include "extensions/strings/grit/extensions_strings.h"
 #include "extensions/test/extension_test_message_listener.h"
@@ -77,7 +85,6 @@
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/search/ntp_test_utils.h"
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
@@ -233,9 +240,6 @@ IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType, AboutBlankIframes) {
       << message_;
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-// TODO(crbug.com/371432155): Port to desktop Android when the chrome.tabs API
-// is supported.
 IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType,
                        AboutBlankAndSrcdoc) {
   // The optional "*://*/*" permission is requested after verifying that
@@ -250,7 +254,6 @@ IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType,
   ASSERT_TRUE(RunExtensionTest("content_scripts/about_blank_srcdoc"))
       << message_;
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType, ExtensionIframe) {
   ASSERT_TRUE(StartEmbeddedTestServer());
@@ -265,9 +268,6 @@ IN_PROC_BROWSER_TEST_F(ContentScriptApiTest,
       << message_;
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-// TODO(crbug.com/371432155): Port to desktop Android when the chrome.tabs API
-// is supported.
 IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType,
                        FragmentNavigation) {
   ASSERT_TRUE(StartEmbeddedTestServer());
@@ -275,8 +275,6 @@ IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType,
   ASSERT_TRUE(RunExtensionTest(extension_name)) << message_;
 }
 
-// TODO(crbug.com/371432155): Port to desktop Android when the chrome.tabs API
-// is supported.
 IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType, IsolatedWorlds) {
   // This extension runs various bits of script and tests that they all run in
   // the same isolated world.
@@ -287,7 +285,6 @@ IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType, IsolatedWorlds) {
   // shared.
   ASSERT_TRUE(RunExtensionTest("content_scripts/isolated_world2")) << message_;
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType,
                        IgnoreHostPermissions) {
@@ -296,13 +293,13 @@ IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType,
       << message_;
 }
 
-// crbug.com/39249 -- content scripts js should not run on view source.
+// crbug.com/40373984 -- content scripts js should not run on view source.
 IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType, ViewSource) {
   ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionTest("content_scripts/view_source")) << message_;
 }
 
-// crbug.com/126257 -- content scripts should not get injected into other
+// crbug.com/40799606 -- content scripts should not get injected into other
 // extensions.
 // TODO(crbug.com/40759559): Fix flakiness.
 IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType,
@@ -316,8 +313,8 @@ IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType,
       << message_;
 }
 
-// https://crbug.com/825111 -- content scripts may fetch() a blob URL from their
-// chrome-extension:// origin.
+// https://crbug.com/40568423 -- content scripts may fetch() a blob URL from
+// their chrome-extension:// origin.
 // TODO(crbug.com/40876652): This test can't run using a service worker-based
 // extension.
 IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, BlobFetch) {
@@ -356,7 +353,7 @@ IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, RunAtTimingsAllFire) {
     EXPECT_TRUE(listener_idle.WaitUntilSatisfied());
 
     // Load the page a second time to check for any issues with cached XSL
-    // resources. See: crbug.com/1041916. Note that test_xsl.xsl has
+    // resources. See: crbug.com/40668194. Note that test_xsl.xsl has
     // mock-http-headers to make sure it is cached.
     listener_start.Reset();
     listener_end.Reset();
@@ -398,8 +395,37 @@ IN_PROC_BROWSER_TEST_F(ContentScriptApiTest,
                             ".length == 2"));
 }
 
+// An extension content script matching <all_urls> injects into an ordinary tab
+// but never into a privileged WebContents (see //chrome's
+// PrivilegedWebContents) at the same URL, because user scripts are not
+// delivered to the privileged renderer process.
+IN_PROC_BROWSER_TEST_F(ContentScriptApiTest,
+                       NoInjectionIntoPrivilegedWebContents) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
+  ASSERT_TRUE(LoadExtension(
+      test_data_dir_.AppendASCII("content_scripts/privileged_web_contents")));
+
+  const GURL url = embedded_test_server()->GetURL("/title1.html");
+
+  // Ordinary tab: the content script injects and sets the title.
+  content::WebContents* ordinary = GetActiveWebContents();
+  ASSERT_TRUE(NavigateToURL(ordinary, url));
+  EXPECT_EQ("INJECTED", content::EvalJs(ordinary, "document.title"));
+
+  // Privileged WebContents at the same URL: the content script is not injected,
+  // so the title is unchanged.
+  content::WebContents::CreateParams params(profile());
+  content::WebContents::PrivilegedParams privileged_params;
+  privileged_params.feature_id = 42;
+  params.privileged_params = privileged_params;
+  std::unique_ptr<content::WebContents> privileged =
+      content::WebContents::Create(params);
+  ASSERT_TRUE(content::NavigateToURL(privileged.get(), url));
+  EXPECT_NE("INJECTED", content::EvalJs(privileged.get(), "document.title"));
+}
+
 // Tests that content scripts detaching its Window during evaluation shouldn't
-// crash. Regression test for https://crbug.com/1220761.
+// crash. Regression test for https://crbug.com/40773121.
 IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, DetachDuringEvaluation) {
   ASSERT_TRUE(StartEmbeddedTestServer());
 
@@ -430,7 +456,7 @@ IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, DetachDuringEvaluation) {
 }
 
 // Tests that fetches made by content scripts are exempt from the page's CSP.
-// Regression test for crbug.com/934819.
+// Regression test for crbug.com/40615154.
 IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, FetchExemptFromCSP) {
   ASSERT_TRUE(StartEmbeddedTestServer());
 
@@ -551,7 +577,7 @@ class ContentScriptCssInjectionTest : public ExtensionApiTest {
     // can't use the real Webstore's URL. If this changes, we could clean this
     // up.
     command_line->AppendSwitchASCII(
-        ::switches::kAppsGalleryURL,
+        extensions::switches::kAppsGalleryURL,
         base::StringPrintf("http://%s", kWebstoreDomain));
   }
 
@@ -622,7 +648,7 @@ IN_PROC_BROWSER_TEST_F(ContentScriptCssInjectionTest,
   EXPECT_EQ(0, get_style_sheet_count());
 
   // Check extensions override page styles if they have more specific rules.
-  // Regression test for https://crbug.com/1175506.
+  // Regression test for https://crbug.com/40167984.
   // This page has four divs (with ids div1, div2, div3, and div4). The page
   // specifies styles for them, but the extension has more specific styles for
   // divs 1, 2, and 3.
@@ -731,15 +757,11 @@ IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, LocalizedWithDynamicUrl) {
 
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-// TODO(crbug.com/371432155): Port to desktop Android when the chrome.tabs API
-// is supported.
 IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType,
                        ContentScriptCSSLocalization) {
   ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionTest("content_scripts/css_l10n")) << message_;
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, ContentScriptExtensionAPIs) {
   ASSERT_TRUE(StartEmbeddedTestServer());
@@ -767,9 +789,6 @@ IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, ContentScriptExtensionAPIs) {
   EXPECT_TRUE(catcher.GetNextResult());
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-// TODO(crbug.com/371432155): Port to desktop Android when the chrome.tabs API
-// is supported.
 IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, ContentScriptPermissionsApi) {
   base::AutoReset<PermissionsRequestFunction::DialogAction> dialog_action =
       PermissionsRequestFunction::SetDialogActionForTests(
@@ -778,7 +797,6 @@ IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, ContentScriptPermissionsApi) {
   ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionTest("content_scripts/permissions")) << message_;
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // TODO(crbug.com/40698663): Maybe push the ContextType into
 // ExtensionApiTestWithManagementPolicy depending on how the conversions
@@ -850,7 +868,7 @@ class ContentScriptPolicyStartupTest : public ExtensionApiTest {
   testing::NiceMock<policy::MockConfigurationPolicyProvider> policy_provider_;
 };
 
-// Regression test for: https://crbug.com/954215.
+// Regression test for: https://crbug.com/41453699.
 IN_PROC_BROWSER_TEST_F(ContentScriptPolicyStartupTest, RuntimeBlockedHosts) {
   // Tests that default scoped runtime blocked host policy values for the
   // ExtensionSettings policy are applied at startup.
@@ -1024,7 +1042,7 @@ IN_PROC_BROWSER_TEST_F(ContentScriptApiTest,
 }
 
 // There was a bug by which content scripts that blocked and ran on
-// document_idle could be injected twice (crbug.com/431263). Test for
+// document_idle could be injected twice (crbug.com/40392933). Test for
 // regression.
 IN_PROC_BROWSER_TEST_F(ContentScriptApiTest,
                        ContentScriptBlockingScriptsDontRunTwice) {
@@ -1062,7 +1080,7 @@ IN_PROC_BROWSER_TEST_F(ContentScriptApiTest,
   EXPECT_FALSE(js_dialog_manager->IsShowingDialogForTesting());
 }
 
-// Bug fix for crbug.com/507461.
+// Bug fix for crbug.com/40425600.
 IN_PROC_BROWSER_TEST_F(ContentScriptApiTest,
                        DocumentStartInjectionFromExtensionTabNavigation) {
   ASSERT_TRUE(StartEmbeddedTestServer());
@@ -1142,7 +1160,7 @@ IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType,
 
   // There are different possible NTP URLs.
   std::vector<GURL> possible_ntp_urls = {
-      GURL(chrome::kChromeUINewTabURL),
+      chrome::ChromeUINewTabURLAsGURL(),
 #if BUILDFLAG(IS_ANDROID)
       GURL(chrome::kChromeUINativeNewTabURL),
 #endif
@@ -1193,9 +1211,6 @@ IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType, SameSiteCookies) {
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-// TODO(crbug.com/371432155): Port to desktop Android when the chrome.tabs API
-// is supported.
 IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType,
                        ExecuteScriptFileSameSiteCookies) {
   ASSERT_TRUE(StartEmbeddedTestServer());
@@ -1224,8 +1239,6 @@ IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType,
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
-// TODO(crbug.com/371432155): Port to desktop Android when the chrome.tabs API
-// is supported.
 IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType,
                        ExecuteScriptCodeSameSiteCookies) {
   ASSERT_TRUE(StartEmbeddedTestServer());
@@ -1259,11 +1272,10 @@ IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType,
   EXPECT_EQ("success", result);
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // Tests that extension content scripts can execute (including asynchronously
 // through timeouts) in pages with Content-Security-Policy: sandbox.
-// See https://crbug.com/811528.
+// See https://crbug.com/41370197.
 IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, ExecuteScriptBypassingSandbox) {
   ASSERT_TRUE(StartEmbeddedTestServer());
 
@@ -1293,10 +1305,6 @@ IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, ExecuteScriptBypassingSandbox) {
   ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-// Regression test for https://crbug.com/1407986.
-// TODO(crbug.com/371432155): Port to desktop Android when the chrome.tabs API
-// is supported.
 IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, ExecuteScriptForSandboxFrame) {
   ASSERT_TRUE(StartEmbeddedTestServer());
 
@@ -1341,9 +1349,8 @@ chrome.tabs.onUpdated.addListener(function(tabId, changeInfo, tab) {
   ASSERT_TRUE(NavigateToURL(GetActiveWebContents(), url));
   ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
-// Regression test for https://crbug.com/883526.
+// Regression test for https://crbug.com/40593463.
 IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, InifiniteLoopInGetEffectiveURL) {
   // Create an extension that injects content scripts into about:blank frames
   // (and therefore has a chance to trigger an infinite loop in
@@ -1411,13 +1418,10 @@ IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType, Messaging) {
   ASSERT_TRUE(RunExtensionTest("content_scripts/messaging")) << message_;
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 // Tests that the URLs of content scripts are set to the extension URL
 // (chrome-extension://<id>/<path_to_script>) rather than the local file
 // path.
-// Regression test for https://crbug.com/714617.
-// TODO(crbug.com/371432155): Port to desktop Android when the chrome.tabs API
-// is supported.
+// Regression test for https://crbug.com/40087440.
 IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType, ContentScriptUrls) {
   ASSERT_TRUE(StartEmbeddedTestServer());
   TestExtensionDir test_dir;
@@ -1478,7 +1482,6 @@ IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType, ContentScriptUrls) {
   load_page_and_check_error("content-script.example");
   load_page_and_check_error("inject-script.example");
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // Verifies how the storage API works with content scripts with default access
 // level.
@@ -1536,7 +1539,7 @@ IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, StorageApiAllowMixedAccessTest) {
   ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
-// Regression test for https://crbug.com/1449796 - verifying that the IPC
+// Regression test for https://crbug.com/40915015 - verifying that the IPC
 // verification doesn't incorrectly think that an IPC from a content script
 // running in an MHTML frame is malicious (in this scenario the `source_url`
 // field of the IPC may be a bit unusual and doesn't necessarily match the
@@ -1953,17 +1956,14 @@ IN_PROC_BROWSER_TEST_F(ContentScriptRelatedFrameTest,
   EXPECT_FALSE(DidScriptRunInFrame(tab->GetPrimaryMainFrame()));
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 // Tests injecting a content script when the iframe rewrites the parent to be
 // null. This re-write causes the parent to itself become an about:blank frame
-// without a parent. Regression test for https://crbug.com/963347 and
-// https://crbug.com/963420.
-// TODO(crbug.com/371432155): Port to desktop Android when we have cross
-// platform utilities for Navigate/NavigateParams. Attempting to use
-// NavigateToURLInNewTab() causes crashes in the navigation stack.
+// without a parent. Regression test for https://crbug.com/40627511 and
+// https://crbug.com/41459000.
 IN_PROC_BROWSER_TEST_F(ContentScriptRelatedFrameTest,
                        MatchAboutBlank_NullParent) {
-  NavigateParams navigate_params(browser(), null_document_url(),
+  NavigateParams navigate_params(browser_window_interface(),
+                                 null_document_url(),
                                  ui::PAGE_TRANSITION_TYPED);
   navigate_params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
 
@@ -1995,7 +1995,6 @@ IN_PROC_BROWSER_TEST_F(ContentScriptRelatedFrameTest,
   // no-parent about:blank case well when there was a non-about:blank
   // precursor origin, which caused a crash during the document writing.
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // Tests that match_about_blank does not allow extensions to inject into blob:
 // URLs.
@@ -2285,7 +2284,7 @@ IN_PROC_BROWSER_TEST_F(ContentScriptMatchOriginAsFallbackTest,
     EXPECT_TRUE(data_url_host->GetParent());
     EXPECT_EQ(data_url(), data_url_host->GetLastCommittedURL());
     // The extension should be allowed to inject since it has access to the
-    // related frame. https://crbug.com/1111028.
+    // related frame. https://crbug.com/40142417.
     EXPECT_TRUE(DidScriptRunInFrame(data_url_host));
   }
 }
@@ -2329,7 +2328,7 @@ INSTANTIATE_TEST_SUITE_P(ServiceWorker,
                          ::testing::Values(ContextType::kServiceWorker));
 
 // Ensure extensions can't inject a content script into the New Tab page.
-// Regression test for crbug.com/844428.
+// Regression test for crbug.com/40091421.
 IN_PROC_BROWSER_TEST_P(NTPInterceptionTest, ContentScript) {
   // Load an extension which tries to inject a script into every frame.
   ExtensionTestMessageListener listener("ready");
@@ -2338,7 +2337,7 @@ IN_PROC_BROWSER_TEST_P(NTPInterceptionTest, ContentScript) {
   ASSERT_TRUE(listener.WaitUntilSatisfied());
 
   // Create a corresponding off the record profile for the current profile. This
-  // is necessary to reproduce crbug.com/844428, which occurs in part due to
+  // is necessary to reproduce crbug.com/40091421, which occurs in part due to
   // incorrect handling of multiple profiles by the NTP code.
   Browser* incognito_browser = CreateIncognitoBrowser(profile());
   ASSERT_TRUE(incognito_browser);
@@ -2346,7 +2345,7 @@ IN_PROC_BROWSER_TEST_P(NTPInterceptionTest, ContentScript) {
   // Ensure that the extension isn't able to inject the script into the New Tab
   // Page.
   content::WebContents* web_contents = GetActiveWebContents();
-  ASSERT_TRUE(NavigateToURL(web_contents, GURL(chrome::kChromeUINewTabURL)));
+  ASSERT_TRUE(NavigateToURL(web_contents, chrome::ChromeUINewTabURLAsGURL()));
   ASSERT_TRUE(search::IsInstantNTP(web_contents));
 
   EXPECT_EQ(false, EvalJs(web_contents, "document.title !== 'Fake NTP';"));
@@ -2388,8 +2387,7 @@ IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, CoepFrameTest) {
 }
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-// TODO(crbug.com/371432155): Port to desktop Android when the chrome.tabs API
-// is supported.
+// TODO(crbug.com/441557607): These tests time out on desktop Android.
 class ContentScriptApiPrerenderingTest
     : public ContentScriptApiTestWithContextType {
  private:
@@ -2405,8 +2403,7 @@ INSTANTIATE_TEST_SUITE_P(ServiceWorker,
                          ContentScriptApiPrerenderingTest,
                          ::testing::Values(ContextType::kServiceWorkerMV2));
 
-// TODO(crbug.com/371432155): Port to desktop Android when the chrome.tabs API
-// is supported.
+// TODO(crbug.com/441557607): Times out on desktop Android.
 IN_PROC_BROWSER_TEST_P(ContentScriptApiPrerenderingTest, Prerendering) {
   ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionTest("content_scripts/prerendering")) << message_;
@@ -2421,8 +2418,7 @@ INSTANTIATE_TEST_SUITE_P(ServiceWorker,
 
 // Checks if injecting inline speculation rules are permitted in the manifest v3
 // content_scripts.
-// TODO(crbug.com/371432155): Port to desktop Android when the chrome.tabs API
-// is supported.
+// TODO(crbug.com/441557607): Times out on desktop Android.
 IN_PROC_BROWSER_TEST_P(ContentScriptApiPrerenderingMV3Test, SpeculationRules) {
   ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionTest("content_scripts/speculation_rules"))
@@ -2533,13 +2529,13 @@ IN_PROC_BROWSER_TEST_F(ContentScriptApiFencedFrameTest,
 
 class ContentScriptApiTestWithActivityLog : public ContentScriptApiTest {
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    command_line->AppendSwitch(switches::kEnableExtensionActivityLogging);
+    command_line->AppendSwitch(::switches::kEnableExtensionActivityLogging);
     ContentScriptApiTest::SetUpCommandLine(command_line);
   }
 };
 
 // Tests Activity Log for content script executions.
-// Regression test for https://crbug.com/1519380.
+// Regression test for https://crbug.com/41492360.
 IN_PROC_BROWSER_TEST_F(ContentScriptApiTestWithActivityLog,
                        ActivityLogRecorded) {
   ASSERT_TRUE(StartEmbeddedTestServer());
@@ -2560,4 +2556,260 @@ IN_PROC_BROWSER_TEST_F(ContentScriptApiTestWithActivityLog,
   ASSERT_TRUE(RunExtensionTest("content_scripts/activity_log/"));
 }
 
+class ContentScriptApiTestWithBackgroundCompilation
+    : public ContentScriptApiTest,
+      public testing::WithParamInterface<int> {
+ public:
+  static constexpr char kMainThreadScript[] = R"(
+    if (!!document.body) {
+      chrome.test.sendMessage('not at document start');
+    } else {
+      let cont = '';
+      for (let i = 0; i < 10; i++) {
+        cont += ' ' + i;
+      }
+      chrome.test.sendMessage('compiled on main thread');
+    }
+  )";
+
+  static constexpr char kSmallScript[] = R"(
+    if (!!document.body) {
+      chrome.test.sendMessage('not at document start');
+    } else {
+      chrome.test.sendMessage('done');
+    }
+  )";
+
+ protected:
+  ContentScriptApiTestWithBackgroundCompilation() {
+    int timeout = GetParam();
+    std::string min_size = base::NumberToString(std::strlen(kSmallScript));
+    // Set the max_size to be the size of the main-thread script, so that
+    // only the small script is eligible for background compilation.
+    std::string max_size =
+        base::NumberToString(std::strlen(kMainThreadScript) - 1);
+    feature_list_.InitAndEnableFeatureWithParameters(
+        extensions_features::kExtensionsBackgroundCompilation,
+        {{"timeout", base::NumberToString(timeout)},
+         {"min_script_size", min_size},
+         {"max_script_size", max_size}});
+  }
+
+  void WaitForBackgroundCompilationTimeHistograms() {
+    constexpr char kTimedOutHistogram[] =
+        "Extensions.BackgroundCompileInjectedScripts."
+        "ScriptCompilationTimeTimedOut";
+    constexpr char kSuccessHistogram[] =
+        "Extensions.BackgroundCompileInjectedScripts."
+        "ScriptCompilationTimeSuccess";
+    constexpr char kTimedOutSizeHistogram[] =
+        "Extensions.BackgroundCompileInjectedScripts.ScriptSizeTimedOut";
+    constexpr char kSuccessSizeHistogram[] =
+        "Extensions.BackgroundCompileInjectedScripts.ScriptSizeSuccess";
+
+    ASSERT_TRUE(base::test::RunUntil([&]() {
+      content::FetchHistogramsFromChildProcesses();
+      metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
+
+      const int32_t timed_out_time_count =
+          GetHistogramSampleCount(kTimedOutHistogram);
+      const int32_t success_time_count =
+          GetHistogramSampleCount(kSuccessHistogram);
+
+      if (timed_out_time_count > 0 || success_time_count > 0) {
+        EXPECT_EQ(GetHistogramSampleCount(kTimedOutSizeHistogram),
+                  timed_out_time_count)
+            << "Timed-out compilation recorded time and size mismatch.";
+        EXPECT_EQ(GetHistogramSampleCount(kSuccessSizeHistogram),
+                  success_time_count)
+            << "Successful compilation recorded time and size mismatch.";
+        return true;
+      }
+      return false;
+    }));
+  }
+
+ private:
+  int32_t GetHistogramSampleCount(const char* histogram_name) const {
+    base::HistogramBase* histogram =
+        base::StatisticsRecorder::FindHistogram(histogram_name);
+    if (!histogram) {
+      return 0;
+    }
+    return static_cast<int32_t>(histogram->SnapshotSamples()->TotalCount());
+  }
+  base::test::ScopedFeatureList feature_list_;
+};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         ContentScriptApiTestWithBackgroundCompilation,
+                         ::testing::ValuesIn({0, 10000}));
+
+// Test that scripts injected at document start that are eligible for background
+// compilation are indeed compiled in the background.
+// TODO(https://crbug.com/436274244): Functionality tests shouldn't rely on
+// histograms, find a better way to test this if experimentation is successful
+// and before the feature ships.
+IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithBackgroundCompilation,
+                       InjectedAtDocumentStart) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
+
+  base::HistogramTester histogram_tester;
+
+  constexpr char kManifest1[] = R"({
+        "name": "ext1",
+        "version": "0.1",
+        "manifest_version": 3,
+        "content_scripts": [{
+          "matches": ["*://*/*"],
+          "js": ["script1.js", "script2.js"],
+          "run_at": "document_start",
+          "all_frames": true
+        }]
+      })";
+
+  constexpr char kManifest2[] = R"({
+        "name": "ext2",
+        "version": "0.1",
+        "manifest_version": 3,
+        "content_scripts": [{
+          "matches": ["*://*/*"],
+          "js": ["script2.js"],
+          "run_at": "document_start",
+          "all_frames": true
+        }]
+      })";
+
+  // The first extension has two scripts, one that is eligible for background
+  // compilation and one that isn't.
+  TestExtensionDir ext_dir;
+  ext_dir.WriteManifest(kManifest1);
+  ext_dir.WriteFile(FILE_PATH_LITERAL("script1.js"), kSmallScript);
+  ext_dir.WriteFile(FILE_PATH_LITERAL("script2.js"), kMainThreadScript);
+  const Extension* ext = LoadExtension(ext_dir.UnpackedPath());
+  ASSERT_TRUE(ext);
+
+  ExtensionTestMessageListener listener1_1("done");
+  listener1_1.set_failure_message("not at document start");
+  listener1_1.set_extension_id(ext->id());
+  ExtensionTestMessageListener listener1_2("compiled on main thread");
+  listener1_2.set_failure_message("not at document start");
+  listener1_2.set_extension_id(ext->id());
+
+  // The second extension only has a script that isn't eligible for background
+  // compilation.
+  TestExtensionDir ext_dir2;
+  ext_dir2.WriteManifest(kManifest2);
+  ext_dir2.WriteFile(FILE_PATH_LITERAL("script2.js"), kMainThreadScript);
+  const Extension* ext2 = LoadExtension(ext_dir2.UnpackedPath());
+  ASSERT_TRUE(ext2);
+
+  ExtensionTestMessageListener listener2("compiled on main thread");
+  listener2.set_failure_message("not at document start");
+  listener2.set_extension_id(ext2->id());
+
+  // Navigate, the script will be injected.
+  content::WebContents* web_contents = GetActiveWebContents();
+  content::OpenURLParams params(
+      embedded_test_server()->GetURL("/empty.html"), content::Referrer(),
+      WindowOpenDisposition::CURRENT_TAB, ui::PAGE_TRANSITION_TYPED,
+      /*is_renderer_initiated=*/false);
+  web_contents->OpenURL(params,
+                        /*navigation_handle_callback=*/{});
+
+  // All scripts are successfully executed, regardless of whether they were
+  // compiled in the background or not.
+  EXPECT_TRUE(listener1_1.WaitUntilSatisfied());
+  EXPECT_TRUE(listener1_2.WaitUntilSatisfied());
+  EXPECT_TRUE(listener2.WaitUntilSatisfied());
+
+  content::FetchHistogramsFromChildProcesses();
+  metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
+
+  // Verify that only one of the scripts (33%) was eligible for background
+  // compilation.
+  EXPECT_EQ(histogram_tester.GetBucketCount(
+                "Extensions.BackgroundCompileInjectedScripts."
+                "EligibleScriptsPercentage",
+                33),
+            1);
+  EXPECT_EQ(histogram_tester.GetBucketCount(
+                "Extensions.BackgroundCompileInjectedScripts."
+                "EligibleScriptsCount",
+                1),
+            1);
+
+  // The background thread post a task to the main thread when the compilation
+  // is done to emit the histograms. Wait for that task to be executed before
+  // finishing the test.
+  WaitForBackgroundCompilationTimeHistograms();
+}
+
+// Tests that extension resources requested by content scripts are correctly
+// attributed and not blocked or mismatched by the browser. Regression test for
+// crbug.com/461167648.
+IN_PROC_BROWSER_TEST_F(ContentScriptApiTest,
+                       CrossWorldExtensionResourceMismatch) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
+
+  // Created an extension with a content script that will fetch `injected.js`
+  // and report back the contents of that fetch.
+  static constexpr char kCrossWorldManifest[] =
+      R"({
+        "name": "Cross World Mismatch test",
+        "version": "1.0",
+        "manifest_version": 2,
+        "content_scripts": [
+          {
+            "matches": ["*://*/*"],
+            "js": ["content_script.js"],
+            "run_at": "document_start"
+          }
+        ],
+        "web_accessible_resources": ["injected.js"]
+      })";
+
+  static constexpr char kContentScript[] = R"(
+    window.addEventListener('message', function(e) {
+      if (e.data === 'INJECT_NOW') {
+        fetch(chrome.runtime.getURL('injected.js'))
+          .then(r => r.text())
+          .then(text => {
+            if (text.includes('REPLACEMENT')) {
+              chrome.test.sendMessage('REPLACEMENT_SCRIPT');
+            } else {
+              chrome.test.sendMessage('ORIGINAL_SCRIPT');
+            }
+          });
+      }
+    });
+  )";
+
+  static constexpr char kInjectedScript[] = R"(
+    window.postMessage('ORIGINAL_SCRIPT', '*');
+  )";
+  TestExtensionDir test_dir;
+  test_dir.WriteManifest(kCrossWorldManifest);
+  test_dir.WriteFile(FILE_PATH_LITERAL("content_script.js"), kContentScript);
+  test_dir.WriteFile(FILE_PATH_LITERAL("injected.js"), kInjectedScript);
+  const Extension* extension = LoadExtension(test_dir.UnpackedPath());
+  ASSERT_TRUE(extension);
+
+  ExtensionTestMessageListener listener("ORIGINAL_SCRIPT");
+
+  // Navigate to `cross_world_mismatch.html`'s which will initiate the resource
+  // fetch.
+  GURL url = embedded_test_server()->GetURL(
+      "127.0.0.1",
+      "/extensions/api_test/content_scripts/cross_world_mismatch.html?id=" +
+          extension->id());
+  auto* web_contents = GetActiveWebContents();
+  ASSERT_TRUE(NavigateToURL(web_contents, url));
+
+  // Confirms the original extension content script was injected, and not the
+  // replacement script provided by `cross_world_mismatch.html`'s service
+  // worker. This ensures that the resource from a different world is not
+  // reused.
+  EXPECT_TRUE(listener.WaitUntilSatisfied());
+}
 }  // namespace extensions

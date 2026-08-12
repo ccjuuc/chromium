@@ -8,12 +8,13 @@
 #include <windows.h>
 
 #include <d3d11.h>
-#include <dxgi1_2.h>
+#include <dxgi1_4.h>
 #include <wrl/client.h>
 
 #include <utility>
 
 #include "gpu/command_buffer/common/mailbox.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/service/shared_image/d3d_image_backing.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_backing.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_representation.h"
@@ -37,14 +38,8 @@ class GPU_GLES2_EXPORT DXGISwapChainImageBacking
   static std::unique_ptr<DXGISwapChainImageBacking> Create(
       Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device,
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
-      DXGI_FORMAT internal_format,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      gpu::SharedImageUsageSet usage,
-      std::string debug_label);
+      const SharedImageInfo& si_info,
+      DXGI_FORMAT internal_format);
 
   DXGISwapChainImageBacking(const DXGISwapChainImageBacking&) = delete;
   DXGISwapChainImageBacking& operator=(const DXGISwapChainImageBacking&) =
@@ -74,19 +69,13 @@ class GPU_GLES2_EXPORT DXGISwapChainImageBacking
  private:
   DXGISwapChainImageBacking(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      gpu::SharedImageUsageSet usage,
-      std::string debug_label,
+      const SharedImageInfo& si_info,
       Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device,
-      Microsoft::WRL::ComPtr<IDXGISwapChain1> dxgi_swap_chain,
+      Microsoft::WRL::ComPtr<IDXGISwapChain3> dxgi_swap_chain,
       int buffers_need_alpha_initialization_count);
 
   friend class DXGISwapChainOverlayImageRepresentation;
-  bool Present(bool should_synchronize_present_with_vblank);
+  bool Present();
   std::optional<gl::DCLayerOverlayImage> GetDCLayerOverlayImage() {
     return std::make_optional<gl::DCLayerOverlayImage>(size(),
                                                        dxgi_swap_chain_);
@@ -106,7 +95,7 @@ class GPU_GLES2_EXPORT DXGISwapChainImageBacking
   std::optional<gfx::Rect> pending_swap_rect_;
 
   Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device_;
-  Microsoft::WRL::ComPtr<IDXGISwapChain1> dxgi_swap_chain_;
+  Microsoft::WRL::ComPtr<IDXGISwapChain3> dxgi_swap_chain_;
 
   // Holds a gles2::TexturePassthrough and corresponding egl image.
   scoped_refptr<D3DImageBacking::GLTextureHolder> gl_texture_holder_;

@@ -4,6 +4,8 @@
 
 #include "chrome/enterprise_companion/installer.h"
 
+#include <shlobj.h>
+
 #include <memory>
 #include <optional>
 #include <string>
@@ -47,7 +49,7 @@ bool WaitForFileWritable(const base::FilePath& path) {
   base::TimeTicks next_logging_time = base::TimeTicks::Now() + kLoggingInterval;
   base::TimeTicks deadline = base::TimeTicks::Now() + kMaxWait;
   while (base::TimeTicks::Now() < deadline) {
-    // The file is writeable if it can be opened for exclusive write access or
+    // The file is writable if it can be opened for exclusive write access or
     // if it does not exist.
     if (base::File file(path, base::File::FLAG_OPEN | base::File::FLAG_WRITE |
                                   base::File::FLAG_WIN_EXCLUSIVE_WRITE |
@@ -92,7 +94,11 @@ bool Install() {
   }
 
   base::ScopedTempDir temp_dir;
-  if (!temp_dir.CreateUniqueTempDir()) {
+  base::FilePath system_temp;
+  if (::IsUserAnAdmin()
+          ? !base::PathService::Get(base::DIR_SYSTEM_TEMP, &system_temp) ||
+                !temp_dir.CreateUniqueTempDirUnderPath(system_temp)
+          : !temp_dir.CreateUniqueTempDir()) {
     VLOG(1) << "Failed to create temporary directory.";
     return false;
   }
@@ -102,14 +108,13 @@ bool Install() {
 
   install_list->AddCopyTreeWorkItem(
       source_exe_path, install_directory->AppendUTF8(kExecutableName),
-      temp_dir.GetPath(), WorkItem::ALWAYS);
+      temp_dir.GetPath());
 #if ENTERPRISE_COMPANION_USE_ICU_DATA_FILE
   if (base::PathExists(source_exe_path.DirName().Append(kIcuDataFileName))) {
     if (WaitForFileWritable(install_directory->Append(kIcuDataFileName))) {
       install_list->AddCopyTreeWorkItem(
           source_exe_path.DirName().Append(kIcuDataFileName),
-          install_directory->Append(kIcuDataFileName), temp_dir.GetPath(),
-          WorkItem::ALWAYS);
+          install_directory->Append(kIcuDataFileName), temp_dir.GetPath());
     } else {
       VLOG(1) << "ICU data file is not writable. It will be omitted from the "
                  "installation.";

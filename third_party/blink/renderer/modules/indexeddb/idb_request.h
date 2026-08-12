@@ -153,7 +153,6 @@ class MODULES_EXPORT IDBRequest : public EventTarget,
       other.start_time_ = base::TimeTicks();
       id_ = other.id_;
       other.id_ = 0;
-      is_fg_client_ = other.is_fg_client_;
     }
     AsyncTraceState& operator=(AsyncTraceState&& rhs) {
       DCHECK(IsEmpty());
@@ -163,7 +162,6 @@ class MODULES_EXPORT IDBRequest : public EventTarget,
       rhs.start_time_ = base::TimeTicks();
       id_ = rhs.id_;
       rhs.id_ = 0;
-      is_fg_client_ = rhs.is_fg_client_;
       return *this;
     }
 
@@ -185,12 +183,10 @@ class MODULES_EXPORT IDBRequest : public EventTarget,
     // the dispatch result is not an error.
     void WillDispatchResult(bool success);
 
-    void set_is_fg_client(bool is_fg_client) { is_fg_client_ = is_fg_client; }
-
    protected:  // For testing
     std::optional<TypeForMetrics> type() const { return type_; }
     const base::TimeTicks& start_time() const { return start_time_; }
-    size_t id() const { return id_; }
+    uint64_t id() const { return id_; }
 
    private:
     friend class IDBRequest;
@@ -198,13 +194,8 @@ class MODULES_EXPORT IDBRequest : public EventTarget,
     std::optional<TypeForMetrics> type_;
     base::TimeTicks start_time_;
 
-    // This tracks whether the request is associated with a highest-priority
-    // ExecutionContext (i.e. foreground tab), **as of when the request was
-    // issued**.
-    bool is_fg_client_ = false;
-
     // Uniquely generated ID that ties an async trace's begin and end events.
-    size_t id_ = 0;
+    uint64_t id_ = 0;
   };
 
   static IDBRequest* Create(ScriptState*,
@@ -309,6 +300,7 @@ class MODULES_EXPORT IDBRequest : public EventTarget,
   void OnGet(mojom::blink::IDBDatabaseGetResultPtr result);
   void OnGetAll(
       mojom::blink::IDBGetAllResultType result_type,
+      Vector<mojom::blink::IDBRecordPtr> initial_records,
       mojo::PendingAssociatedReceiver<mojom::blink::IDBDatabaseGetAllResultSink>
           receiver);
   void OnOpenCursor(mojom::blink::IDBDatabaseOpenCursorResultPtr result);

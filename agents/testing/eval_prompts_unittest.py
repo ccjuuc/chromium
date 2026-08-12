@@ -124,6 +124,10 @@ class DiscoverTestcaseFilesUnittest(fake_filesystem_unittest.TestCase):
             contents='tests: [{}]')
         self.fs.create_file('/chromium/src/agents/prompts/eval/test5.yaml',
                             contents='tests: [{}]')
+        self.fs.create_file(
+            '/chromium/src/internal/agents/prompts/eval/'
+            'test_internal.promptfoo.yaml',
+            contents='tests: [{}]')
 
         expected_files = [
             pathlib.Path('/chromium/src/agents/extensions/ext1/tests/'
@@ -134,6 +138,8 @@ class DiscoverTestcaseFilesUnittest(fake_filesystem_unittest.TestCase):
                 '/chromium/src/agents/prompts/eval/test3.promptfoo.yaml'),
             pathlib.Path(
                 '/chromium/src/agents/prompts/eval/sub/test4.promptfoo.yaml'),
+            pathlib.Path('/chromium/src/internal/agents/prompts/eval/'
+                         'test_internal.promptfoo.yaml'),
         ]
 
         found_files = eval_prompts._discover_testcase_files()
@@ -584,7 +590,8 @@ class FetchSandboxImageUnittest(unittest.TestCase):
     def test_fetch_sandbox_image_success(self):
         """Tests that _fetch_sandbox_image returns true on success."""
         with self.assertLogs(level='INFO') as cm:
-            result = eval_prompts._fetch_sandbox_image()
+            result = eval_prompts._fetch_sandbox_image(
+                gemini_cli_cmd=['gemini'])
             self.assertTrue(result)
             self.assertIn('Pre-fetching sandbox image', cm.output[0])
 
@@ -601,7 +608,8 @@ class FetchSandboxImageUnittest(unittest.TestCase):
         """Tests that _fetch_sandbox_image returns false on failure."""
         self.mock_get_gemini_version.return_value = None
         with self.assertLogs(level='ERROR') as cm:
-            result = eval_prompts._fetch_sandbox_image()
+            result = eval_prompts._fetch_sandbox_image(
+                gemini_cli_cmd=['gemini'])
             self.assertFalse(result)
             self.assertIn('Failed to get gemini version', cm.output[0])
 
@@ -611,7 +619,8 @@ class FetchSandboxImageUnittest(unittest.TestCase):
         error.stdout = 'mocked output'
         self.mock_subprocess_run.side_effect = error
         with self.assertLogs(level='ERROR') as cm:
-            result = eval_prompts._fetch_sandbox_image()
+            result = eval_prompts._fetch_sandbox_image(
+                gemini_cli_cmd=['gemini'])
             self.assertFalse(result)
             self.assertIn('Failed to pre-fetch sandbox image', cm.output[0])
             self.assertIn('mocked output', cm.output[0])

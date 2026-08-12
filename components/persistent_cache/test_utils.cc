@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/test/gmock_expected_support.h"
 #include "components/persistent_cache/persistent_cache.h"
 #include "components/persistent_cache/persistent_cache_collection.h"
@@ -21,7 +22,7 @@ Entry::~Entry() = default;
 
 base::expected<std::optional<Entry>, TransactionError> FindEntry(
     PersistentCache& cache,
-    std::string_view key) {
+    base::span<const uint8_t> key) {
   std::optional<Entry> result;
   ASSIGN_OR_RETURN(
       auto metadata,
@@ -39,7 +40,7 @@ base::expected<std::optional<Entry>, TransactionError> FindEntry(
 base::expected<std::optional<Entry>, TransactionError> FindEntry(
     PersistentCacheCollection& collection,
     const std::string& cache_id,
-    std::string_view key) {
+    base::span<const uint8_t> key) {
   std::optional<Entry> result;
   ASSIGN_OR_RETURN(
       auto metadata,

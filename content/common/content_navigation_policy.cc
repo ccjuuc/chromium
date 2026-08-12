@@ -6,8 +6,10 @@
 
 #include <bitset>
 
+#include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/system/sys_info.h"
 #include "build/build_config.h"
 #include "content/common/features.h"
@@ -39,8 +41,8 @@ bool DeviceHasEnoughMemoryForBackForwardCache() {
         features::kBackForwardCacheMemoryControls,
         "memory_threshold_for_back_forward_cache_in_mb",
         default_memory_threshold_mb);
-    return base::SysInfo::AmountOfPhysicalMemory().InMiB() >
-           memory_threshold_mb;
+    return base::SysInfo::AmountOfTotalPhysicalMemory() >
+           base::MiBU(base::saturated_cast<uint64_t>(memory_threshold_mb));
   }
 
   // If the feature kBackForwardCacheMemoryControls is not enabled, all the
@@ -93,11 +95,7 @@ constexpr base::FeatureParam<RenderDocumentLevel>::Option
         {RenderDocumentLevel::kAllFrames, "all-frames"}};
 const base::FeatureParam<RenderDocumentLevel> render_document_level{
     &features::kRenderDocument, kRenderDocumentLevelParameterName,
-#if BUILDFLAG(IS_ANDROID)
     RenderDocumentLevel::kAllFrames,
-#else
-    RenderDocumentLevel::kSubframe,
-#endif
     &render_document_levels};
 
 RenderDocumentLevel GetRenderDocumentLevel() {
@@ -147,41 +145,6 @@ bool ShouldSkipEarlyCommitPendingForCrashedFrame() {
       base::FeatureList::IsEnabled(
           features::kSkipEarlyCommitPendingForCrashedFrame);
   return skip_early_commit_pending_for_crashed_frame;
-}
-
-static constexpr base::FeatureParam<NavigationQueueingFeatureLevel>::Option
-    kNavigationQueueingFeatureLevels[] = {
-        {NavigationQueueingFeatureLevel::kNone, "none"},
-        {NavigationQueueingFeatureLevel::kAvoidRedundantCancellations,
-         "avoid-redundant"},
-        {NavigationQueueingFeatureLevel::kFull, "full"}};
-const base::FeatureParam<NavigationQueueingFeatureLevel>
-    kNavigationQueueingFeatureLevelParam{
-        &features::kQueueNavigationsWhileWaitingForCommit, "queueing_level",
-        NavigationQueueingFeatureLevel::kFull,
-        &kNavigationQueueingFeatureLevels};
-
-NavigationQueueingFeatureLevel GetNavigationQueueingFeatureLevel() {
-  if (GetRenderDocumentLevel() >= RenderDocumentLevel::kNonLocalRootSubframe) {
-    // When RenderDocument is enabled with a level of "non-local-root-subframe"
-    // or more, navigation queueing needs to be enabled too, to avoid crashes.
-    return NavigationQueueingFeatureLevel::kFull;
-  }
-  if (base::FeatureList::IsEnabled(
-          features::kQueueNavigationsWhileWaitingForCommit)) {
-    return kNavigationQueueingFeatureLevelParam.Get();
-  }
-  return NavigationQueueingFeatureLevel::kNone;
-}
-
-bool ShouldAvoidRedundantNavigationCancellations() {
-  return GetNavigationQueueingFeatureLevel() >=
-         NavigationQueueingFeatureLevel::kAvoidRedundantCancellations;
-}
-
-bool ShouldQueueNavigationsWhenPendingCommitRFHExists() {
-  return GetNavigationQueueingFeatureLevel() ==
-         NavigationQueueingFeatureLevel::kFull;
 }
 
 bool ShouldCreateSiteInstanceForDataUrls() {

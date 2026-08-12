@@ -41,6 +41,7 @@ class NavigationHandle;
 namespace web_app {
 
 class AppLock;
+class FinalizeInstallOrUpdateJob;
 class WebAppDataRetriever;
 
 using ScreenshotInfo = std::tuple<SkBitmap, std::optional<std::u16string>>;
@@ -129,14 +130,14 @@ class FetchManifestAndInstallCommand
 
   void ShowInstallDialog();
 
-  void OnDialogCompleted(bool user_accepted,
-                         std::unique_ptr<WebAppInstallInfo> web_app_info);
+  void OnDialogCompleted(
+      bool user_accepted,
+      std::unique_ptr<WebAppInstallInfo> web_app_info,
+      WebAppInstallationAcceptanceResultCallback result_callback);
   void OnInstallFinalizedMaybeReparentTab(const webapps::AppId& app_id,
                                           webapps::InstallResultCode code);
 
-  void OnInstallCompleted(const webapps::AppId& app_id,
-                          webapps::InstallResultCode code);
-  void MeasureUserInstalledAppHistogram(webapps::InstallResultCode code);
+  void MeasureUserInstalledAppHistograms(webapps::InstallResultCode code);
 
   // Start downloading screenshots if the manifest has them, so that the
   // detailed install dialog can show them.
@@ -154,6 +155,7 @@ class FetchManifestAndInstallCommand
   const webapps::WebappInstallSource install_surface_;
   const base::WeakPtr<content::WebContents> web_contents_;
   WebAppInstallDialogCallback dialog_callback_;
+  WebAppInstallationAcceptanceResultCallback acceptance_result_callback_;
   const FallbackBehavior fallback_behavior_;
   const base::WeakPtr<WebAppUiManager> ui_manager_;
 
@@ -177,6 +179,8 @@ class FetchManifestAndInstallCommand
       int,
       base::OnceCallback<void(SkBitmap, std::optional<std::u16string>)>>
       pending_screenshot_callbacks_;
+
+  std::unique_ptr<FinalizeInstallOrUpdateJob> install_job_;
 
   base::WeakPtrFactory<FetchManifestAndInstallCommand> weak_ptr_factory_{this};
 };

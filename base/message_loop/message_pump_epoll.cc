@@ -19,6 +19,7 @@
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/message_loop/message_pump_wakeup_counter.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/posix/eintr_wrapper.h"
@@ -185,7 +186,7 @@ bool MessagePumpEpoll::WatchFileDescriptor(int fd,
       .one_shot = !persistent,
   };
 
-  auto [it, is_new_fd_entry] = entries_.emplace(fd, fd);
+  auto [it, is_new_fd_entry] = entries_.try_emplace(fd, fd);
   EpollEventEntry& entry = it->second;
   scoped_refptr<Interest> existing_interest = controller->interest();
   if (existing_interest && existing_interest->params().IsEqual(params)) {
@@ -422,7 +423,7 @@ void MessagePumpEpoll::UnregisterInterest(
 
   EpollEventEntry& entry = entry_it->second;
   auto& interests = entry.interests;
-  auto* it = std::ranges::find(interests, interest);
+  auto it = std::ranges::find(interests, interest);
   CHECK(it != interests.end());
   interests.erase(it);
 
@@ -479,6 +480,10 @@ bool MessagePumpEpoll::WaitForEpollEvents(TimeDelta timeout) {
         span(epoll_events).first(base::checked_cast<size_t>(epoll_result));
   }
 
+  if (!ready_events.empty()) {
+    MessagePumpWakeupCounter::GetForCurrentThread().RecordWakeup();
+  }
+
   for (epoll_event& e : ready_events) {
     if (e.data.ptr == &wake_event_) {
       // Wake-up events are always safe to handle immediately. Unlike other
@@ -511,9 +516,9 @@ bool MessagePumpEpoll::WaitForEpollEvents(TimeDelta timeout) {
 }
 
 std::vector<struct pollfd>::iterator MessagePumpEpoll::FindPollEntry(int fd) {
-  return std::find_if(
-      pollfds_.begin(), pollfds_.end(),
-      [fd](const struct pollfd poll_entry) { return poll_entry.fd == fd; });
+  return std::ranges::find_if(pollfds_, [fd](const struct pollfd poll_entry) {
+    return poll_entry.fd == fd;
+  });
 }
 
 void MessagePumpEpoll::RemovePollEntry(int fd) {

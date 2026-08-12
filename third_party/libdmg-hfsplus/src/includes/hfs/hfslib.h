@@ -45,7 +45,7 @@ extern "C" {
 	   symlinks in the input are handled, and `assignSpecialPermissions` controls
 	   whether to assign alternate permissions to some specific paths associated
 	   with system image installers, BootNeuter, and/or system binaries. */
-	void addAllInFolder2(
+	void addAllInFolderWithPolicies(
 			HFSCatalogNodeID folderID, Volume* volume, const char* parentName,
 			IncomingSymlinksPolicy symlinkPolicy, char assignSpecialPermissions);
 
@@ -58,7 +58,7 @@ extern "C" {
 	   input are handled, and `assignSpecialPermissions` controls whether to
 	   assign alternate permisisons to some specific paths associated with system
 	   image installers, BootNeuter, and/or system binaries. */
-	void addall_hfs_2(
+	void addall_hfs_with_policies(
 			Volume* volume, const char* dirToMerge, const char* dest,
 			IncomingSymlinksPolicy symlinkPolicy, char assignSpecialPermissions);
 	void extractAllInFolder(HFSCatalogNodeID folderID, Volume* volume);
@@ -66,6 +66,11 @@ extern "C" {
 
 	void hfs_untar(Volume* volume, AbstractFile* tarFile);
 	void hfs_ls(Volume* volume, const char* path);
+
+	/* Configure a path to automatically open in Finder when mounting the volume.
+	   path must be a valid path within the volume. Exits with a failure code if
+	   unsuccessful. */
+	void hfs_set_openfolder(Volume* volume, const char* path);
 	void hfs_setsilence(int s);
 #ifdef __cplusplus
 }

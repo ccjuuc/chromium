@@ -35,6 +35,7 @@ enum ActionId {
   kSplitTab,
   kContextualTasks,
   kShowXenonAI,
+  kShowTabsFromOtherDevices,
 };
 
 // Unique identifiers for categories the actions can belong to.
@@ -71,8 +72,9 @@ struct Category {
 // Used by the WebUI page to bootstrap bidirectional communication.
 interface CustomizeToolbarHandlerFactory {
   // The WebUI calls this method when the page is first initialized.
-  CreateCustomizeToolbarHandler(pending_remote<CustomizeToolbarClient> client,
-                    pending_receiver<CustomizeToolbarHandler> handler);
+  CreateCustomizeToolbarHandler(
+      pending_remote<CustomizeToolbarClient> client,
+      pending_receiver<CustomizeToolbarHandler> handler);
 };
 
 // Browser-side handler for requests from WebUI page.

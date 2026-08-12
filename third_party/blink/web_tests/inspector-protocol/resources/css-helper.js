@@ -50,6 +50,12 @@
     await this._logMessage(message, expectError, styleSheetId);
   }
 
+  async setContainerQueryConditionText(styleSheetId, expectError, options) {
+    options.styleSheetId = styleSheetId;
+    var message = await this._dp.CSS.setContainerQueryConditionText(options);
+    await this._logMessage(message, expectError, styleSheetId);
+  }
+
   async setSupportsText(styleSheetId, expectError, options) {
     options.styleSheetId = styleSheetId;
     var message = await this._dp.CSS.setSupportsText(options);
@@ -59,6 +65,12 @@
   async setScopeText(styleSheetId, expectError, options) {
     options.styleSheetId = styleSheetId;
     var message = await this._dp.CSS.setScopeText(options);
+    await this._logMessage(message, expectError, styleSheetId);
+  }
+
+  async setNavigationText(styleSheetId, expectError, options) {
+    options.styleSheetId = styleSheetId;
+    var message = await this._dp.CSS.setNavigationText(options);
     await this._logMessage(message, expectError, styleSheetId);
   }
 

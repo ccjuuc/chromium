@@ -13,6 +13,7 @@
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/functional/callback.h"
+#include "chrome/android/chrome_jni_headers/UsbChooserDialog_shared_jni.h"
 #include "components/permissions/chooser_controller.h"
 #include "third_party/jni_zero/jni_zero.h"
 
@@ -32,7 +33,7 @@ class UsbChooserDialogAndroid : public permissions::ChooserController::View {
           const std::u16string&,
           JniIntWrapper,
           const base::android::JavaRef<jobject>&,
-          jlong)>;
+          int64_t)>;
 
   // Creates and shows the dialog. Will return nullptr if the dialog was not
   // displayed. Otherwise |on_close| will be called when the user closes the
@@ -67,7 +68,7 @@ class UsbChooserDialogAndroid : public permissions::ChooserController::View {
   void OnRefreshStateChanged(bool refreshing) override;
 
   // Report the dialog's result.
-  void OnItemSelected(JNIEnv* env, std::string& item_id);
+  void OnItemSelected(JNIEnv* env, const std::string& item_id);
   void OnDialogCancelled(JNIEnv* env);
   void LoadUsbHelpPage(JNIEnv* env);
 

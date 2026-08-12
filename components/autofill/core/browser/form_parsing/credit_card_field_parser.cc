@@ -5,28 +5,33 @@
 #include "components/autofill/core/browser/form_parsing/credit_card_field_parser.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
+#include <algorithm>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
+#include "base/check.h"
+#include "base/feature_list.h"
+#include "base/functional/function_ref.h"
+#include "base/memory/raw_ptr.h"
+#include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
-#include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_parsing/autofill_scanner.h"
+#include "components/autofill/core/browser/form_parsing/field_candidates.h"
 #include "components/autofill/core/browser/form_parsing/form_field_parser.h"
-#include "components/autofill/core/browser/form_parsing/regex_patterns.h"
 #include "components/autofill/core/common/autofill_clock.h"
 #include "components/autofill/core/common/autofill_features.h"
-#include "components/autofill/core/common/autofill_regex_constants.h"
 #include "components/autofill/core/common/autofill_regexes.h"
 #include "components/autofill/core/common/autofill_util.h"
+#include "components/autofill/core/common/form_field_data.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -336,7 +341,7 @@ bool CreditCardFieldParser::LikelyCardYearSelectField(
     // While 23 is a valid expiration year, the selector is not a expiration
     // year selector. In case we find a single-digit entry, we reject this as
     // an expiration year selector.
-    if (base::Contains(field.options(), u"2", option_projection)) {
+    if (std::ranges::contains(field.options(), u"2", option_projection)) {
       return false;
     }
     auto is_substring = [](std::u16string_view option,
@@ -405,14 +410,14 @@ CreditCardFieldParser::~CreditCardFieldParser() = default;
 void CreditCardFieldParser::AddClassifications(
     FieldCandidatesMap& field_candidates) const {
   for (const FieldAndMatchInfo& number : numbers_) {
-    AddClassification(number, CREDIT_CARD_NUMBER, kBaseCreditCardParserScore,
+    AddClassification(number, CREDIT_CARD_NUMBER, HeuristicParser::kCreditCard,
                       field_candidates);
   }
 
-  AddClassification(type_, CREDIT_CARD_TYPE, kBaseCreditCardParserScore,
+  AddClassification(type_, CREDIT_CARD_TYPE, HeuristicParser::kCreditCard,
                     field_candidates);
   AddClassification(verification_, CREDIT_CARD_VERIFICATION_CODE,
-                    kBaseCreditCardParserScore, field_candidates);
+                    HeuristicParser::kCreditCard, field_candidates);
 
   // If the heuristics detected first and last name in separate fields,
   // then ignore both fields. Putting them into separate fields is probably
@@ -420,12 +425,12 @@ void CreditCardFieldParser::AddClassifications(
   // initial.
   if (!cardholder_last_.has_value()) {
     AddClassification(cardholder_, CREDIT_CARD_NAME_FULL,
-                      kBaseCreditCardParserScore, field_candidates);
+                      HeuristicParser::kCreditCard, field_candidates);
   } else {
     AddClassification(cardholder_, CREDIT_CARD_NAME_FIRST,
-                      kBaseCreditCardParserScore, field_candidates);
+                      HeuristicParser::kCreditCard, field_candidates);
     AddClassification(cardholder_last_, CREDIT_CARD_NAME_LAST,
-                      kBaseCreditCardParserScore, field_candidates);
+                      HeuristicParser::kCreditCard, field_candidates);
   }
 
   if (expiration_date_) {
@@ -449,16 +454,16 @@ void CreditCardFieldParser::AddClassifications(
                         format.digits_in_expiration_year == 2
                             ? CREDIT_CARD_EXP_DATE_2_DIGIT_YEAR
                             : CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR,
-                        kBaseCreditCardParserScore, field_candidates);
+                        HeuristicParser::kCreditCard, field_candidates);
     } else {
       AddClassification(expiration_date_, GetExpirationYearType(),
-                        kBaseCreditCardParserScore, field_candidates);
+                        HeuristicParser::kCreditCard, field_candidates);
     }
   } else {
     AddClassification(expiration_month_, CREDIT_CARD_EXP_MONTH,
-                      kBaseCreditCardParserScore, field_candidates);
+                      HeuristicParser::kCreditCard, field_candidates);
     AddClassification(expiration_year_, GetExpirationYearType(),
-                      kBaseCreditCardParserScore, field_candidates);
+                      HeuristicParser::kCreditCard, field_candidates);
   }
 }
 
@@ -627,7 +632,7 @@ FieldType CreditCardFieldParser::DetermineExpirationYearType(
     // While 23 is a valid expiration year, the selector is not a expiration
     // year selector. In case we find a single-digit entry, we reject this as
     // an expiration year selector.
-    if (base::Contains(field.options(), u"2", option_projection)) {
+    if (std::ranges::contains(field.options(), u"2", option_projection)) {
       return false;
     }
     auto is_substring = [&year_needle](std::u16string_view option) {
@@ -759,7 +764,7 @@ CreditCardFieldParser::DetermineExpirationDateFormat(
   }
   // Add generic fallbacks.
   for (const char16_t* fallback : {u"/", u""}) {
-    if (!base::Contains(separator_candidates, fallback)) {
+    if (!std::ranges::contains(separator_candidates, fallback)) {
       separator_candidates.emplace_back(fallback);
     }
   }

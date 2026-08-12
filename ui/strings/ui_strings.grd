@@ -437,6 +437,13 @@ need to be translated for each locale.-->
                desc="Message appended to screen reader description of UI elements which have the 'New' badge">
         This is a new feature
       </message>
+      <message name="IDS_PREVIEW_BADGE" desc="Appears as a badge on UI elements like menus, denoting features that are currently in preview, in uppercase">
+        PREVIEW
+      </message>
+      <message name="IDS_PREVIEW_BADGE_SCREEN_READER_MESSAGE" is_accessibility_with_no_ui="true"
+               desc="Message appended to screen reader description of UI elements which have the 'PREVIEW' badge">
+        This is a feature in preview
+      </message>
 
       <!-- General application strings -->
       <message name="IDS_SENTENCE_END" desc="The symbol that is used to end a sentence.">
@@ -697,7 +704,7 @@ need to be translated for each locale.-->
       <message name="IDS_APP_INSERT_KEY" desc="Insert key">
         Ins
       </message>
-      <message name="IDS_APP_HOME_KEY" desc="Home key">
+      <message name="IDS_APP_HOME_KEY" desc="Home key" meaning="Home key on the keyboard">
         Home
       </message>
       <message name="IDS_APP_DELETE_KEY" desc="Delete key">
@@ -732,6 +739,9 @@ need to be translated for each locale.-->
       </message>
       <message name="IDS_APP_F1_KEY" desc="F1 key">
         F1
+      </message>
+      <message name="IDS_APP_F4_KEY" desc="F4 key">
+        F4
       </message>
       <message name="IDS_APP_F5_KEY" desc="F5 key">
         F5
@@ -930,18 +940,13 @@ need to be translated for each locale.-->
       <message name="IDS_MESSAGE_NOTIFICATION_ACCESSIBLE_NAME" desc="The spoken feedback text when focusing a notification using ChromeVox.">
         Notification
       </message>
-      <message name="IDS_MESSAGE_NOTIFICATION_SEND_TAB_TO_SELF_DEVICE_INFO" desc="The message text for the notification when the user receive a shared tab from another device. It shows the name of the device which shared the tab.">
-        Shared from <ph name="DEVICE_NAME">$1<ex>Ted's Pixel 2</ex></ph>
-      </message>
-      <message name="IDS_MESSAGE_NOTIFICATION_SEND_TAB_TO_SELF_CONFIRMATION_SUCCESS" desc="The title text for the comformation notification when the user successfully share a tab to other devices.">
-        Sending to <ph name="DEVICE_NAME">$1<ex>Ted's Pixel 2</ex></ph>...
-      </message>
-      <message name="IDS_MESSAGE_NOTIFICATION_SEND_TAB_TO_SELF_CONFIRMATION_FAILURE_TITLE" desc="The title text for the comformation notification when the user failed to share a tab to other devices.">
+      <message name="IDS_MESSAGE_NOTIFICATION_SEND_TAB_TO_SELF_CONFIRMATION_FAILURE_TITLE" desc="The title text for the confirmation notification when the user failed to share a tab to another device.">
         Failed to send
       </message>
-      <message name="IDS_MESSAGE_NOTIFICATION_SEND_TAB_TO_SELF_CONFIRMATION_FAILURE_MESSAGE" desc="The message text for the comformation notification when the user failed to share a tab to other devices.">
+      <message name="IDS_MESSAGE_NOTIFICATION_SEND_TAB_TO_SELF_CONFIRMATION_FAILURE_MESSAGE" desc="The message text for the confirmation notification when the user failed to share a tab to another device.">
         Please try again
       </message>
+
       <if expr="is_chromeos">
         <message name="IDS_MESSAGE_CENTER_NOTIFIER_HATS_NAME" desc="The name of hats notifier that is a system component">
           Survey
@@ -1008,17 +1013,6 @@ need to be translated for each locale.-->
         Built-in display
       </message>
 
-      <!-- Crostini app context menu item names, dialog message and button strings -->
-      <message name="IDS_CROSTINI_USE_LOW_DENSITY" desc="The Crostini app Shelf item context menu item to use low display density for app windows.">
-        Use low density
-      </message>
-      <message name="IDS_CROSTINI_USE_HIGH_DENSITY" desc="The Crostini app Shelf item context menu item to use high display density for app windows.">
-        Use high density
-      </message>
-      <message name="IDS_CROSTINI_APP_RESTART_BODY" desc="Description for the Crostini app restart dialog.">
-        Your application's display settings will take effect when it is next restarted.
-      </message>
-
       <!-- Badging -->
       <message name="IDS_SATURATED_BADGE_CONTENT" desc="The content to display when the application's badge is too large to display to indicate that the badge is more than a given maximum. This string should be as short as possible, preferably only one character beyond the content">
         <ph name="MAXIMUM_VALUE">$1<ex>99</ex></ph>+
@@ -1077,14 +1071,6 @@ need to be translated for each locale.-->
       </message>
       <message name="IDS_BROWSER_SHARING_ERROR_DIALOG_TEXT_INTERNAL_ERROR" desc="The text to be shown on the dialog when an internal error occurred while sending the message.">
         Something went wrong. Try again later.
-      </message>
-
-      <!-- Shared clipboard error message. Could potentially be made generic -->
-      <message name="IDS_BROWSER_SHARING_SHARED_CLIPBOARD_ERROR_DIALOG_TITLE_PAYLOAD_TOO_LARGE" desc="The label to be shown as the title of the dialog when the text shared is too large.">
-        Text is too large
-      </message>
-      <message name="IDS_BROWSER_SHARING_SHARED_CLIPBOARD_ERROR_DIALOG_TEXT_PAYLOAD_TOO_LARGE" desc="The text to be shown on the dialog when the text shared is too large.">
-        Try sharing the text in smaller chunks.
       </message>
 
       <if expr="is_android">

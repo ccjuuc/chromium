@@ -7,7 +7,6 @@ package org.chromium.components.browser_ui.share;
 import static org.mockito.ArgumentMatchers.notNull;
 import static org.mockito.Mockito.doAnswer;
 
-import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipDescription;
 import android.content.ClipboardManager;
@@ -29,10 +28,12 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.ClassRule;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
@@ -64,6 +65,7 @@ public class ShareImageFileUtilsTest {
     private static final String TEST_GIF_IMAGE_FILE_EXTENSION = ".gif";
     private static final String TEST_JPG_IMAGE_FILE_EXTENSION = ".jpg";
     private static final String TEST_PNG_IMAGE_FILE_EXTENSION = ".png";
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     private static class GenerateUriCallback extends CallbackHelper implements Callback<Uri> {
         private Uri mImageUri;
@@ -106,8 +108,6 @@ public class ShareImageFileUtilsTest {
     public static final BaseActivityTestRule<BlankUiTestActivity> sActivityTestRule =
             new BaseActivityTestRule<>(BlankUiTestActivity.class);
 
-    private static Activity sActivity;
-
     @Mock ClipboardManager mMockClipboardManager;
 
     @Nullable ClipData mPrimaryClip;
@@ -115,14 +115,13 @@ public class ShareImageFileUtilsTest {
 
     @BeforeClass
     public static void setupSuite() {
-        sActivity = sActivityTestRule.launchActivity(null);
+        sActivityTestRule.launchActivity(null);
 
         Looper.prepare();
     }
 
     @Before
     public void setUp() throws Exception {
-        MockitoAnnotations.openMocks(this);
         FileProviderUtils.setFileProviderUtil(new FileProviderHelper());
         ClipboardImpl clipboard = (ClipboardImpl) Clipboard.getInstance();
         clipboard.setImageFileProvider(new ClipboardImageFileProvider());
@@ -242,7 +241,10 @@ public class ShareImageFileUtilsTest {
     }
 
     public void deleteExternalStorageFiles() {
-        File externalStorageDir = sActivity.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+        File externalStorageDir =
+                sActivityTestRule
+                        .getActivity()
+                        .getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
         String[] children = externalStorageDir.list();
         for (int i = 0; i < children.length; i++) {
             new File(externalStorageDir, children[i]).delete();
@@ -290,7 +292,10 @@ public class ShareImageFileUtilsTest {
     @SmallTest
     public void testGetNextAvailableFile() throws IOException {
         String fileName = TEST_IMAGE_FILE_NAME + "_next_availble";
-        File externalStorageDir = sActivity.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+        File externalStorageDir =
+                sActivityTestRule
+                        .getActivity()
+                        .getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
         File imageFile =
                 ShareImageFileUtils.getNextAvailableFile(
                         externalStorageDir.getPath(), fileName, TEST_JPG_IMAGE_FILE_EXTENSION);

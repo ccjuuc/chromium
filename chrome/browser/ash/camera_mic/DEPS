@@ -17,11 +17,9 @@ include_rules = [
   "+chrome/app/vector_icons",
   "+chrome/browser/ash/borealis",
   "+chrome/browser/ash/login/users",
-  "+chrome/browser/ash/plugin_vm",
   "+chrome/browser/ash/video_conference",
   "+chrome/browser/notifications",
-  "+chrome/browser/ui/chrome_pages.h",
-  "+chrome/browser/ui/settings_window_manager_chromeos.h",
+  "+chrome/browser/profiles/profile.h",
   "+chrome/browser/ui/webui/ash/settings/app_management",
   "+chrome/grit",
   "+chrome/test/base",
@@ -29,7 +27,7 @@ include_rules = [
 
 specific_include_rules = {
   # Testing
-  ".*_unittest\.cc": [
+  ".*_unittest\\.cc": [
     "+ui/message_center/message_center.h"
   ],
 }

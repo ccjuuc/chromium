@@ -20,6 +20,7 @@
 #include "third_party/blink/renderer/core/svg/svg_view_spec.h"
 
 #include "base/containers/span.h"
+#include "third_party/blink/renderer/core/html/media/media_fragment_uri_parser.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_preserve_aspect_ratio.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_rect.h"
 #include "third_party/blink/renderer/core/svg/svg_parser_utilities.h"
@@ -75,6 +76,66 @@ bool SVGViewSpec::ParseViewSpec(const String& spec) {
     return false;
   return VisitCharacters(
       spec, [&](auto chars) { return ParseViewSpecInternal(chars); });
+}
+
+const SVGViewSpec* SVGViewSpec::CreateFromSpatialFragment(
+    const String& fragment,
+    const NaturalSizingInfo& sizing_info) {
+  // Use MediaFragmentURIParser for spatial dimension parsing.
+  MediaFragmentURIParser media_parser(fragment);
+
+  // Check for spatial media fragment (xywh=...).
+  // https://www.w3.org/TR/media-frags/#naming-space
+  const SpatialClip spatial_clip = media_parser.SpatialFragment();
+  if (!spatial_clip.IsValid()) {
+    return nullptr;
+  }
+
+  gfx::RectF clip_rect(spatial_clip.rect);
+
+  if (spatial_clip.unit == SpatialClip::Unit::kPercent) {
+    // For percent-based fragments, resolve against the concrete object size
+    // using the default object size of 300x150 [1].
+    //
+    // [1] https://www.w3.org/TR/css-images-3/#default-sizing
+    const gfx::SizeF percent_base =
+        blink::ConcreteObjectSize(sizing_info, gfx::SizeF(300, 150));
+    clip_rect.Scale(percent_base.width() / 100.0f,
+                    percent_base.height() / 100.0f);
+  } else {
+    // Compute the concrete object size without any fallback — this represents
+    // the SVG's actual resolved dimensions and is used for clamping.
+    const gfx::SizeF natural_size =
+        blink::ConcreteObjectSize(sizing_info, gfx::SizeF());
+
+    // Clamp the clip rect to the SVG's natural bounds per the Media
+    // Fragments spec, 6.1.2 [1] and 6.3.3 [2]. This prevents the
+    // viewBox from mapping an oversized coordinate region into the
+    // rendering box, which would distort the aspect ratio.
+    //
+    // Skip the clamp when the concrete object size is empty. This covers
+    // both "no natural size" (no width/height attributes) and "explicit
+    // zero size" (width="0" height="0"). These cases could in theory be
+    // distinguished via NaturalSizingInfo::has_width/has_height, but we
+    // treat them the same for simplicity.
+    //
+    // [1] https://www.w3.org/TR/media-frags/#valid-uri-spatial
+    // [2] https://www.w3.org/TR/media-frags/#error-media-spatial
+    if (!natural_size.IsEmpty()) {
+      clip_rect.Intersect(gfx::RectF(natural_size));
+    }
+  }
+
+  if (clip_rect.IsEmpty()) {
+    return nullptr;
+  }
+
+  // Per SVG2 §16.3.2, a spatial media fragment overrides the viewBox.
+  // https://svgwg.org/svg2-draft/linking.html#SVGFragmentIdentifiersDefinitions
+  SVGViewSpec* view_spec = MakeGarbageCollected<SVGViewSpec>();
+  view_spec->view_box_ = MakeGarbageCollected<SVGRect>(
+      clip_rect.x(), clip_rect.y(), clip_rect.width(), clip_rect.height());
+  return view_spec;
 }
 
 namespace {

@@ -73,7 +73,7 @@ IN_PROC_BROWSER_TEST_P(PolicyTestWindowManagement, DefaultSetting) {
   auto* tab = browser()->tab_strip_model()->GetActiveWebContents();
 
   HostContentSettingsMap* host_content_settings_map =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
   EXPECT_EQ(CONTENT_SETTING_ASK,
             host_content_settings_map->GetDefaultContentSetting(
                 ContentSettingsType::WINDOW_MANAGEMENT, nullptr));
@@ -117,14 +117,14 @@ IN_PROC_BROWSER_TEST_P(PolicyTestWindowManagement, AllowedForUrlsSettings) {
   auto* tab = browser()->tab_strip_model()->GetActiveWebContents();
 
   PolicyMap policies;
-  base::Value::List list;
+  base::ListValue list;
   list.Append(url.spec());
   SetPolicy(&policies, PolicySet().allowed_for_urls_setting,
             base::Value(std::move(list)));
   UpdateProviderPolicy(policies);
 
   HostContentSettingsMap* host_content_settings_map =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
   EXPECT_EQ(CONTENT_SETTING_ASK,
             host_content_settings_map->GetDefaultContentSetting(
                 ContentSettingsType::WINDOW_MANAGEMENT, nullptr));
@@ -142,14 +142,14 @@ IN_PROC_BROWSER_TEST_P(PolicyTestWindowManagement, BlockedForUrlsSettings) {
   auto* tab = browser()->tab_strip_model()->GetActiveWebContents();
 
   PolicyMap policies;
-  base::Value::List list;
+  base::ListValue list;
   list.Append(url.spec());
   SetPolicy(&policies, PolicySet().blocked_for_urls_setting,
             base::Value(std::move(list)));
   UpdateProviderPolicy(policies);
 
   HostContentSettingsMap* host_content_settings_map =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
   EXPECT_EQ(CONTENT_SETTING_ASK,
             host_content_settings_map->GetDefaultContentSetting(
                 ContentSettingsType::WINDOW_MANAGEMENT, nullptr));

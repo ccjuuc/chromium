@@ -21,7 +21,6 @@
 #include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "chrome/browser/browser_features.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/engagement/site_engagement_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
@@ -37,7 +36,6 @@
 #include "chrome/browser/ui/safety_hub/abusive_notification_permissions_manager.h"
 #include "chrome/browser/ui/safety_hub/disruptive_notification_permissions_manager.h"
 #include "chrome/browser/ui/safety_hub/safety_hub_util.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/history/core/browser/history_service.h"
@@ -65,14 +63,14 @@
 #include "ui/gfx/image/image_skia_rep.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "base/values.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
@@ -634,7 +632,7 @@ TEST_F(PlatformNotificationServiceTest_WebApps, PopulateWebAppId_NotInScope) {
 
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 TEST_F(PlatformNotificationServiceTest, DisplayNameForContextMessage) {
   std::u16string display_name =
@@ -646,7 +644,7 @@ TEST_F(PlatformNotificationServiceTest, DisplayNameForContextMessage) {
   scoped_refptr<const extensions::Extension> extension =
       extensions::ExtensionBuilder()
           .SetID("honijodknafkokifofgiaalefdiedpko")
-          .SetManifest(base::Value::Dict()
+          .SetManifest(base::DictValue()
                            .Set("name", "NotificationTest")
                            .Set("version", "1.0")
                            .Set("manifest_version", 2)
@@ -677,7 +675,7 @@ TEST_F(PlatformNotificationServiceTest, CreateNotificationFromData) {
   scoped_refptr<const extensions::Extension> extension =
       extensions::ExtensionBuilder()
           .SetID("honijodknafkokifofgiaalefdiedpko")
-          .SetManifest(base::Value::Dict()
+          .SetManifest(base::DictValue()
                            .Set("name", "NotificationTest")
                            .Set("version", "1.0")
                            .Set("manifest_version", 2)
@@ -696,7 +694,7 @@ TEST_F(PlatformNotificationServiceTest, CreateNotificationFromData) {
             base::UTF16ToUTF8(notification.context_message()));
 }
 
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 #if BUILDFLAG(IS_CHROMEOS)
 using PlatformNotificationServiceTest_WebAppNotificationIconAndTitle =
@@ -903,7 +901,7 @@ TEST_F(PlatformNotificationServiceTest_ReportNotificationContentDetectionData,
   base::Value cur_value(hcsm->GetWebsiteSetting(
       origin, origin, ContentSettingsType::SUSPICIOUS_NOTIFICATION_IDS));
 #if BUILDFLAG(IS_ANDROID)
-  const base::Value::List* suspicious_notification_ids =
+  const base::ListValue* suspicious_notification_ids =
       cur_value.GetDict().FindList(
           safe_browsing::kSuspiciousNotificationIdsKey);
   ASSERT_EQ(1u, suspicious_notification_ids->size());
@@ -945,12 +943,12 @@ class PlatformNotificationServiceTest_AutoRevokeSuspiciousNotification
   void RecordSuspiciousNotifications(const GURL& url, int count) {
     HostContentSettingsMap* hcsm =
         HostContentSettingsMapFactory::GetForProfile(profile_.get());
-    base::Value::Dict engagement;
+    base::DictValue engagement;
     std::string date =
         permissions::NotificationsEngagementService::GetBucketLabel(
             base::Time::Now());
-    base::Value::Dict* bucket =
-        &engagement.Set(date, base::Value::Dict())->GetDict();
+    base::DictValue* bucket =
+        &engagement.Set(date, base::DictValue())->GetDict();
     bucket->Set("suspicious_count", count);
     hcsm->SetWebsiteSettingDefaultScope(
         url, GURL(), ContentSettingsType::NOTIFICATION_INTERACTIONS,
@@ -998,7 +996,7 @@ TEST_F(PlatformNotificationServiceTest_AutoRevokeSuspiciousNotification,
       notification, std::move(metadata), /*should_show_warning=*/true,
       /* serialized_content_detection_metadata*/ std::nullopt);
 
-  base::Value::Dict notification_engagement_dict =
+  base::DictValue notification_engagement_dict =
       hcsm->GetWebsiteSetting(origin, GURL(),
                               ContentSettingsType::NOTIFICATION_INTERACTIONS)
           .GetDict()

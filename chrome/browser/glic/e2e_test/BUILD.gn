@@ -17,6 +17,7 @@ source_set("e2e_test_support") {
   sources = [
     "glic_e2e_test.cc",
     "glic_e2e_test.h",
+    "glic_e2e_test_symbol_reference.cc",
   ]
   if (checkout_glic_e2e_tests) {
     defines += [ "ENABLE_GLIC_INTERNAL_TESTS=1" ]
@@ -27,10 +28,9 @@ source_set("e2e_test_support") {
     "//chrome/browser",
     "//chrome/browser:browser_process",
     "//chrome/browser/autofill:test_support_ui",
-    "//chrome/browser/contextual_cueing",
     "//chrome/browser/glic",
     "//chrome/browser/glic:impl",
-    "//chrome/browser/glic/fre",
+    "//chrome/browser/glic/suggestions",
     "//chrome/browser/glic/test_support",
     "//chrome/browser/signin/e2e_tests:test_support",
     "//chrome/browser/ui:ui_features",
@@ -54,13 +54,7 @@ source_set("e2e_test_support") {
 test("glic_internal_e2e_interactive_ui_tests") {
   use_xvfb = use_xvfb_in_this_config
   configs += [ "//build/config:precompiled_headers" ]
-  sources = [
-    # TODO(crbug.com/399665693): This is needed because we are using WPR
-    # definition in autofill test utilities. This can be removed when WPR
-    # utilities is separated.
-    "../../../browser/ui/views/translate/translate_bubble_test_utils_views.cc",
-    "../../../test/base/interactive_ui_tests_main.cc",
-  ]
+  sources = [ "../../../test/base/interactive_ui_tests_main.cc" ]
   data = [
     "//chrome/browser/internal/resources/signin/test_accounts.json",
 
@@ -68,24 +62,15 @@ test("glic_internal_e2e_interactive_ui_tests") {
     # Used in wpr utilities.
     "//chrome/test/data/web_page_replay_go_helper_scripts/automation_helper.js",
     "//components/test/data/autofill/web_page_replay_support_files/",
-
-    # WPR binary.
-    "//third_party/catapult/telemetry/telemetry/bin/",
-
-    # Used in WPR command.
-    "//third_party/catapult/web_page_replay_go/deterministic.js",
+    "//third_party/webpagereplay/",
   ]
   defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
   deps = [
     ":e2e_test_support",
-
-    # TODO(crbug.com/399665693): Remove unneeded deps after refactoring.
-    # Required for translate_bubble_test_utils_views.cc
-    "//chrome/browser/ui/browser_window",
-    "//chrome/browser/ui/translate:test_support",
-    "//chrome/test:chrome_test_launcher",
+    "//chrome/browser/ui/views/translate:test_support",
     "//chrome/test:test_support",
     "//chrome/test:test_support_ui",
+    "//chrome/test/base:chrome_test_launcher",
   ]
 
   if (checkout_glic_e2e_tests) {
@@ -108,15 +93,24 @@ test("glic_internal_e2e_interactive_ui_tests") {
     ]
   }
 
+  if (is_linux) {
+    deps += [ "//ui/linux:display_server_utils" ]
+  }
+
+  deps += [
+    "//chrome:browser_tests_pak",
+    "//chrome:packed_resources",
+    "//chrome:resources",
+    "//chrome:strings",
+    "//ui/resources:ui_test_pak",
+  ]
+  data_deps = [
+    "//chrome:browser_tests_pak",
+    "//chrome:packed_resources",
+    "//ui/resources:ui_test_pak_data",
+  ]
+
   if (is_win) {
-    deps += [
-      "//chrome:browser_tests_pak",
-      "//chrome:packed_resources",
-      "//chrome:resources",
-      "//chrome:strings",
-      "//chrome/installer/util:strings",
-      "//ui/resources:ui_test_pak",
-      "//ui/resources:ui_test_pak_data",
-    ]
+    deps += [ "//chrome/installer/util:strings" ]
   }
 }

@@ -13,22 +13,24 @@ import androidx.test.filters.SmallTest;
 
 import org.junit.Assert;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.build.BuildConfig;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.ProfileManager;
-import org.chromium.chrome.browser.search_engines.settings.SearchEngineAdapter;
-import org.chromium.chrome.test.ChromeBrowserTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.components.search_engines.PrepopulatedAndRecentlyVisitedTemplateURLs;
 import org.chromium.components.search_engines.TemplateUrl;
 import org.chromium.components.search_engines.TemplateUrlService;
 import org.chromium.components.search_engines.TemplateUrlService.LoadListener;
+import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.url.GURL;
 
@@ -44,9 +46,8 @@ import java.util.stream.Collectors;
 
 /** Tests for Chrome on Android's usage of the TemplateUrlService API. */
 @RunWith(ChromeJUnit4ClassRunner.class)
+@DoNotBatch(reason = "AI automated batching attempt was unsuccessful.")
 public class TemplateUrlServiceTest {
-    @Rule public final ChromeBrowserTestRule mChromeBrowserTestRule = new ChromeBrowserTestRule();
-
     private static final String QUERY_PARAMETER = "q";
     private static final String QUERY_VALUE = "cat";
 
@@ -74,6 +75,7 @@ public class TemplateUrlServiceTest {
 
     @Before
     public void setUp() {
+        NativeLibraryTestUtils.loadNativeLibraryAndInitBrowserProcess();
         mTemplateUrlService =
                 ThreadUtils.runOnUiThreadBlocking(
                         () ->
@@ -156,7 +158,7 @@ public class TemplateUrlServiceTest {
     @Test
     @SmallTest
     @Feature({"SearchEngines"})
-    @Restriction(DeviceFormFactor.PHONE) // see crbug.com/581268
+    @Restriction(DeviceFormFactor.PHONE) // see crbug.com/40453883
     public void testLoadUrlService() {
         waitForTemplateUrlServiceToLoad();
 
@@ -192,14 +194,13 @@ public class TemplateUrlServiceTest {
     @Test
     @SmallTest
     @Feature({"SearchEngines"})
+    @EnableFeatures(ChromeFeatureList.SEARCH_SETTINGS_UPDATE_V2)
     public void testSetAndGetSearchEngine() {
         waitForTemplateUrlServiceToLoad();
 
         List<TemplateUrl> searchEngines = getSearchEngines(mTemplateUrlService);
         // Ensure known state of default search index before running test.
         TemplateUrl defaultSearchEngine = getDefaultSearchEngine(mTemplateUrlService);
-        SearchEngineAdapter.sortAndFilterUnnecessaryTemplateUrl(
-                searchEngines, defaultSearchEngine, /* isEeaChoiceCountry= */ false);
 
         // Outside of the EEA, where prepopulated engines are always sorted by ID, Google has the
         // lowest ID and will be at the index 0 in the sorted list.
@@ -217,6 +218,31 @@ public class TemplateUrlServiceTest {
 
         defaultSearchEngine = getDefaultSearchEngine(mTemplateUrlService);
         Assert.assertEquals(searchEngines.get(1), defaultSearchEngine);
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"SearchEngines"})
+    @EnableFeatures(ChromeFeatureList.SEARCH_SETTINGS_UPDATE_V2)
+    public void testGetPrepopulatedAndRecentlyVisitedTemplateURLs() {
+        waitForTemplateUrlServiceToLoad();
+
+        PrepopulatedAndRecentlyVisitedTemplateURLs result =
+                ThreadUtils.runOnUiThreadBlocking(
+                        mTemplateUrlService::getPrepopulatedAndRecentlyVisitedTemplateURLs);
+
+        Assert.assertNotNull(result);
+        List<TemplateUrl> prepopulated = result.getPrepopulatedUrls();
+        List<TemplateUrl> recent = result.getRecentlyVisitedUrls();
+
+        Assert.assertNotNull(prepopulated);
+        Assert.assertNotNull(recent);
+
+        // At least the default search engine should be in the prepopulated list.
+        Assert.assertFalse(prepopulated.isEmpty());
+
+        TemplateUrl defaultSearchEngine = getDefaultSearchEngine(mTemplateUrlService);
+        Assert.assertTrue(prepopulated.contains(defaultSearchEngine));
     }
 
     @Test
@@ -370,7 +396,7 @@ public class TemplateUrlServiceTest {
                         }));
 
         validateSearchQuery("cat", null, null);
-        Map<String, String> params = new HashMap();
+        Map<String, String> params = new HashMap<>();
         params.put("xyz", "a");
         validateSearchQuery("cat", new ArrayList<>(Arrays.asList("xyz=a")), params);
         params.put("abc", "b");

@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ui/webui/discards/site_data_provider_impl.h"
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/functional/callback_helpers.h"
 #include "base/sequence_checker.h"
 #include "components/performance_manager/persistence/site_data/site_data.pb.h"
@@ -84,7 +84,8 @@ discards::mojom::SiteDataEntryPtr ConvertEntryFromProto(SiteDataProto* proto) {
 
 }  // namespace
 
-SiteDataProviderImpl::SiteDataProviderImpl(const std::string& profile_id)
+SiteDataProviderImpl::SiteDataProviderImpl(
+    const base::UnguessableToken& profile_id)
     : profile_id_(profile_id) {}
 
 SiteDataProviderImpl::~SiteDataProviderImpl() = default;
@@ -92,7 +93,7 @@ SiteDataProviderImpl::~SiteDataProviderImpl() = default;
 // static
 void SiteDataProviderImpl::CreateAndBind(
     mojo::PendingReceiver<discards::mojom::SiteDataProvider> receiver,
-    const std::string& profile_id_,
+    const base::UnguessableToken& profile_id_,
     performance_manager::Graph* graph) {
   std::unique_ptr<SiteDataProviderImpl> site_data_provider =
       std::make_unique<SiteDataProviderImpl>(profile_id_);
@@ -175,7 +176,7 @@ void SiteDataProviderImpl::GetSiteDataDatabaseSize(
   auto inspector_callback = base::BindOnce(
       [](GetSiteDataDatabaseSizeCallback callback,
          std::optional<int64_t> num_rows,
-         std::optional<base::ByteCount> on_disk_size) {
+         std::optional<base::ByteSize> on_disk_size) {
         discards::mojom::SiteDataDatabaseSizePtr result =
             discards::mojom::SiteDataDatabaseSize::New();
         result->num_rows = num_rows.has_value() ? num_rows.value() : -1;

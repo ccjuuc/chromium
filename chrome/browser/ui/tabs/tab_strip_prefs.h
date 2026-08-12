@@ -9,14 +9,13 @@ namespace user_prefs {
 class PrefRegistrySyncable;
 }
 
-class Profile;
+class PrefService;
+class BrowserWindowInterface;
 
 namespace tabs {
 
 enum class TabSearchPosition {
   kLeadingHorizontalTabstrip,
-  kTrailingHorizontalTabstrip,
-  kToolbarButton,
   kVerticalTabstrip,
 };
 
@@ -26,10 +25,16 @@ bool GetDefaultTabSearchRightAligned();
 // Registers Tab Strip specific prefs.
 void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
-// Return the value of the preference for TabSearchPosition.
-TabSearchPosition GetTabSearchPosition(const Profile* profile);
+// Ensures the hover card memory usage preference stays disabled if
+// it was disabled before.
+void MigrateHoverCardMemoryPref(PrefService* local_prefs);
 
-void SetTabSearchRightAlignedForTesting(bool is_right_aligned);
+// Migrates kEverythingMenuPinnedToTabstrip once per profile.
+void MigrateEverythingMenuPinnedToTabstripPref(PrefService* profile_prefs);
+
+// Return the value of the preference for TabSearchPosition.
+TabSearchPosition GetTabSearchPosition(
+    const BrowserWindowInterface* browser_window);
 
 }  // namespace tabs
 

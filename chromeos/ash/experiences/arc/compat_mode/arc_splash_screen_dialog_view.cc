@@ -18,12 +18,10 @@
 #include "base/task/sequenced_task_runner.h"
 #include "chromeos/ash/experiences/arc/compat_mode/overlay_dialog.h"
 #include "chromeos/ash/experiences/arc/compat_mode/style/arc_color_provider.h"
-#include "chromeos/ash/experiences/arc/vector_icons/vector_icons.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "chromeos/ui/frame/caption_buttons/frame_center_button.h"
 #include "chromeos/ui/frame/default_frame_header.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/vector_icons/vector_icons.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -38,8 +36,6 @@
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rrect_f.h"
-#include "ui/gfx/image/image_skia_operations.h"
-#include "ui/gfx/paint_vector_icon.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
@@ -165,8 +161,7 @@ ArcSplashScreenDialogView::ArcSplashScreenDialogView(
   SetArrow(views::BubbleBorder::Arrow::BOTTOM_CENTER);
   SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   set_parent_window(parent);
-  set_title_margins(gfx::Insets());
-  set_margins(gfx::Insets());
+  set_frame_margins({.contents = gfx::Insets(), .title = gfx::Insets()});
   SetAnchorView(anchor_);
   SetTitle(l10n_util::GetStringUTF16(IDS_ARC_COMPAT_MODE_SPLASH_SCREEN_TITLE));
   SetShowTitle(false);

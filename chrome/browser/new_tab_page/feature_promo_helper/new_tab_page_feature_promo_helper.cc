@@ -13,14 +13,15 @@
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/side_panel/side_panel_action_callback.h"
+#include "chrome/browser/ui/side_panel/side_panel_enums.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/signin/signin_view_controller.h"
 #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_action_callback.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_enums.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/common/pref_names.h"
@@ -74,9 +75,7 @@ void ShowCustomizeChromeSidePanel(Profile* profile) {
           actions::ActionInvocationContext::Builder()
               .SetProperty(
                   kSidePanelOpenTriggerKey,
-                  static_cast<std::underlying_type_t<SidePanelOpenTrigger>>(
-                      SidePanelOpenTrigger::
-                          kNewTabPageAutomaticCustomizeChrome))
+                  SidePanelOpenTrigger::kNewTabPageAutomaticCustomizeChrome)
               .Build());
 }
 
@@ -184,7 +183,8 @@ void NewTabPageFeaturePromoHelper::MaybeShowFeaturePromo(
 
 bool NewTabPageFeaturePromoHelper::IsSigninModalDialogOpen(
     content::WebContents* web_contents) {
-  auto* browser = chrome::FindBrowserWithTab(web_contents);
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
   // `browser` might be NULL if the new tab is immediately dragged out of the
   // window.
   return browser ? browser->GetFeatures()
@@ -198,7 +198,7 @@ void NewTabPageFeaturePromoHelper::MaybeTriggerAutomaticCustomizeChromePromo(
   auto* browser_interface = webui::GetBrowserWindowInterface(web_contents);
   if (!browser_interface ||
       browser_interface->GetFeatures().side_panel_ui()->IsSidePanelEntryShowing(
-          SidePanelEntry::Key(SidePanelEntry::Id::kCustomizeChrome))) {
+          SidePanelEntryKey(SidePanelEntryId::kCustomizeChrome))) {
     return;
   }
 

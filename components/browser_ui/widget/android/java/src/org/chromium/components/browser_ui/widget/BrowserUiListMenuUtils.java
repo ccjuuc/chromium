@@ -8,6 +8,7 @@ import android.content.Context;
 
 import androidx.annotation.ColorInt;
 import androidx.annotation.ColorRes;
+import androidx.annotation.DrawableRes;
 import androidx.annotation.StyleRes;
 
 import org.chromium.build.annotations.NullMarked;
@@ -21,15 +22,13 @@ import org.chromium.ui.modelutil.MVCListAdapter;
 @NullMarked
 public class BrowserUiListMenuUtils {
 
-    /** @return The default icon tint color state list for list menu item icons. */
-    @ColorRes
-    public static int getDefaultIconTintColorStateListId() {
+    /** Returns the default icon tint color state list for list menu item icons. */
+    public static @ColorRes int getDefaultIconTintColorStateListId() {
         return R.color.default_icon_color_secondary_tint_list;
     }
 
-    /** @return The default text appearance style for list menu item text. */
-    @StyleRes
-    public static int getDefaultTextAppearanceStyle() {
+    /** Returns the default text appearance style for list menu item text. */
+    public static @StyleRes int getDefaultTextAppearanceStyle() {
         return R.style.TextAppearance_BrowserUIListMenuItem;
     }
 
@@ -72,6 +71,33 @@ public class BrowserUiListMenuUtils {
                 data,
                 delegate,
                 R.drawable.default_popup_menu_bg,
+                backgroundTintColorRes,
+                bottomHairlineColor);
+    }
+
+    /**
+     * Convenience method for constructing a {@link BasicListMenu} with the preferred content view.
+     *
+     * @param context The Android context.
+     * @param data The data to display in the list.
+     * @param delegate The {@link Delegate} used to handle menu clicks. If not provided, the item's
+     *     CLICK_LISTENER or listMenu's onMenuItemSelected method will be used.
+     * @param backgroundResId The background of the menu.
+     * @param backgroundTintColorRes tint for the menu background.
+     * @param bottomHairlineColor Color for the bottom hairline of the unscrollable header.
+     */
+    public static BasicListMenu getBasicListMenu(
+            Context context,
+            MVCListAdapter.ModelList data,
+            @Nullable Delegate delegate,
+            @DrawableRes int backgroundResId,
+            @ColorRes int backgroundTintColorRes,
+            @Nullable @ColorInt Integer bottomHairlineColor) {
+        return new BasicListMenu(
+                context,
+                data,
+                delegate,
+                backgroundResId,
                 backgroundTintColorRes,
                 bottomHairlineColor);
     }

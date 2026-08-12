@@ -21,6 +21,7 @@ IdentityRequestAccount::IdentityRequestAccount(
     const GURL& picture,
     const std::string& phone,
     const std::string& username,
+    std::vector<std::string> potentially_approved_site_hashes,
     std::vector<std::string> login_hints,
     std::vector<std::string> domain_hints,
     std::vector<std::string> labels,
@@ -36,6 +37,8 @@ IdentityRequestAccount::IdentityRequestAccount(
       picture{picture},
       phone{phone},
       username{username},
+      potentially_approved_site_hashes(
+          std::move(potentially_approved_site_hashes)),
       login_hints(std::move(login_hints)),
       domain_hints(std::move(domain_hints)),
       labels(std::move(labels)),
@@ -62,5 +65,21 @@ IdentityRequestAccount::IdentityRequestAccount(
       last_used_timestamp{std::nullopt} {}
 
 IdentityRequestAccount::~IdentityRequestAccount() = default;
+
+// static
+void IdentityRequestAccount::ComputeIdpClaimedLoginStates(
+    const std::string& client_id,
+    std::vector<scoped_refptr<IdentityRequestAccount>>& accounts) {
+  for (auto& account : accounts) {
+    if (!account->approved_clients) {
+      continue;
+    }
+    const bool is_approved =
+        std::ranges::contains(*account->approved_clients, client_id);
+    account->idp_claimed_login_state =
+        is_approved ? IdentityRequestAccount::LoginState::kSignIn
+                    : IdentityRequestAccount::LoginState::kSignUp;
+  }
+}
 
 }  // namespace content

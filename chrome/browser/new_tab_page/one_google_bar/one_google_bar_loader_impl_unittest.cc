@@ -21,9 +21,9 @@
 #include "components/signin/core/browser/signin_header_helper.h"
 #include "components/variations/scoped_variations_ids_provider.h"
 #include "content/public/test/browser_task_environment.h"
+#include "net/base/url_util.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_status_code.h"
-#include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
@@ -133,9 +133,6 @@ class OneGoogleBarLoaderImplTest : public testing::Test {
   variations::test::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
       variations::VariationsIdsProvider::Mode::kUseSignedInState};
 
-  // Supports JSON decoding in the loader implementation.
-  data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
-
   network::TestURLLoaderFactory test_url_loader_factory_;
   scoped_refptr<network::SharedURLLoaderFactory> test_shared_loader_factory_;
   bool account_consistency_mirror_required_;
@@ -179,6 +176,36 @@ TEST_F(OneGoogleBarLoaderImplTest, RequestUrlWithAdditionalQueryParams) {
   one_google_bar_loader()->SetAdditionalQueryParams(
       {{"test", ""}, {"async", ""}});
   EXPECT_EQ(base::StringPrintf("hl=%s&async=&test=", kApplicationLocale),
+            one_google_bar_loader()->GetLoadURLForTesting().GetQuery());
+}
+
+TEST_F(OneGoogleBarLoaderImplTest, AsyncParamInjectionIsNeutralized) {
+  one_google_bar_loader()->SetAdditionalQueryParams(
+      {{"hl", ""}, {"async", "fixed:0&authuser=1&INJECTED_PARAM=1"}});
+
+  GURL url = one_google_bar_loader()->GetLoadURLForTesting();
+
+  std::string value;
+  EXPECT_FALSE(net::GetValueForKeyInQuery(url, "authuser", &value));
+  EXPECT_FALSE(net::GetValueForKeyInQuery(url, "INJECTED_PARAM", &value));
+
+  EXPECT_EQ("async=fixed:0%26authuser%3D1%26INJECTED_PARAM%3D1&hl=",
+            url.GetQuery());
+}
+
+TEST_F(OneGoogleBarLoaderImplTest, AsyncParamPreservesColonAndComma) {
+  one_google_bar_loader()->SetAdditionalQueryParams(
+      {{"hl", ""}, {"async", "fixed:0,abp:1"}});
+
+  EXPECT_EQ("async=fixed:0,abp:1&hl=",
+            one_google_bar_loader()->GetLoadURLForTesting().GetQuery());
+}
+
+TEST_F(OneGoogleBarLoaderImplTest, NonAsyncParamColonStaysEscaped) {
+  one_google_bar_loader()->SetAdditionalQueryParams(
+      {{"hl", ""}, {"async", "fixed:0"}, {"foo", "a:b"}});
+
+  EXPECT_EQ("async=fixed:0&foo=a%3Ab&hl=",
             one_google_bar_loader()->GetLoadURLForTesting().GetQuery());
 }
 

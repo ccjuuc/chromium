@@ -20,15 +20,17 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "mojo/public/cpp/base/big_buffer.h"
+#include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
+#include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/self_owned_associated_receiver.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
-#include "mojo/public/cpp/bindings/unique_associated_receiver_set.h"
+#include "mojo/public/cpp/bindings/unique_receiver_set.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 #include "services/webnn/public/cpp/context_properties.h"
 #include "services/webnn/public/cpp/operand_descriptor.h"
+#include "services/webnn/public/cpp/webnn_buildflags.h"
 #include "services/webnn/public/mojom/features.mojom-blink.h"
 #include "services/webnn/public/mojom/webnn_context_provider.mojom-blink.h"
 #include "services/webnn/public/mojom/webnn_device.mojom-blink-forward.h"
@@ -64,7 +66,6 @@
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer_view.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_typed_array.h"
-#include "third_party/blink/renderer/modules/ml/buildflags.h"
 #include "third_party/blink/renderer/modules/ml/ml.h"
 #include "third_party/blink/renderer/modules/ml/ml_context.h"
 #include "third_party/blink/renderer/modules/ml/webnn/ml_graph_builder.h"
@@ -370,26 +371,8 @@ class WebNNContextHelper {
  private:
   std::map<blink::WebNNTensorToken, std::unique_ptr<FakeWebNNTensor>>
       tensor_impls_;
-
-  mojo::UniqueAssociatedReceiverSet<blink_mojom::WebNNGraphBuilder> builders_;
 };
 
-class FakeWebNNGraph : public blink_mojom::WebNNGraph {
- public:
-  explicit FakeWebNNGraph(MLGraphTest& helper) : helper_(helper) {}
-  FakeWebNNGraph(const FakeWebNNGraph&) = delete;
-  FakeWebNNGraph(FakeWebNNGraph&&) = delete;
-  ~FakeWebNNGraph() override = default;
-
- private:
-  // Just return for testing the validation of inputs and outputs.
-  void Dispatch(
-      const HashMap<String, blink::WebNNTensorToken>& named_inputs,
-      const HashMap<String, blink::WebNNTensorToken>& named_outputs) override {}
-
-  // TODO(crbug.com/354741414): Fix this dangling pointer.
-  const raw_ref<MLGraphTest, DanglingUntriaged> helper_;
-};
 
 class FakeWebNNTensor : public blink_mojom::WebNNTensor {
  public:
@@ -426,11 +409,17 @@ class FakeWebNNTensor : public blink_mojom::WebNNTensor {
     base::span(buffer_).copy_prefix_from(src_buffer);
   }
 
-  void ExportTensor(ExportTensorCallback callback) override {
+  void ExportTensor(uint64_t flow_id, uint64_t release_count) override {
     NOTIMPLEMENTED();
   }
 
-  void ImportTensor(const gpu::SyncToken& sync_token_fence) override {
+  void ExportTensorSync(uint64_t flow_id,
+                        uint64_t release_count,
+                        ExportTensorSyncCallback callback) override {
+    NOTIMPLEMENTED();
+  }
+
+  void ImportTensor(uint64_t flow_id, uint64_t release_count) override {
     NOTIMPLEMENTED();
   }
 
@@ -477,14 +466,8 @@ class FakeWebNNGraphBuilder : public blink_mojom::WebNNGraphBuilder {
                    CreateGraphCallback callback) override {
     helper_->SetGraphInfo(std::move(graph_info));
 
-    mojo::PendingAssociatedRemote<blink_mojom::WebNNGraph> blink_remote;
-    // The receiver bind to FakeWebNNGraph.
-    mojo::MakeSelfOwnedAssociatedReceiver<blink_mojom::WebNNGraph>(
-        std::make_unique<FakeWebNNGraph>(*helper_),
-        blink_remote.InitWithNewEndpointAndPassReceiver());
-
     auto success = blink_mojom::CreateGraphSuccess::New(
-        std::move(blink_remote), Vector<blink_mojom::Device>());
+        blink::WebNNGraphToken(), Vector<blink_mojom::Device>());
     std::move(callback).Run(std::move(success));
   }
 
@@ -515,14 +498,12 @@ class FakeWebNNContext : public blink_mojom::WebNNContext {
  private:
   // Override methods from webnn::mojom::WebNNContext.
   void CreateGraphBuilder(
-      mojo::PendingAssociatedReceiver<blink_mojom::WebNNGraphBuilder> receiver)
-      override {
-    mojo::MakeSelfOwnedAssociatedReceiver<blink_mojom::WebNNGraphBuilder>(
+      mojo::PendingReceiver<blink_mojom::WebNNGraphBuilder> receiver) override {
+    mojo::MakeSelfOwnedReceiver<blink_mojom::WebNNGraphBuilder>(
         std::make_unique<FakeWebNNGraphBuilder>(*helper_), std::move(receiver));
   }
 
   void CreateTensor(blink_mojom::TensorInfoPtr tensor_info,
-                    mojo_base::BigBuffer tensor_data,
                     CreateTensorCallback callback) override {
     mojo::PendingAssociatedRemote<blink_mojom::WebNNTensor> blink_remote;
     auto blink_receiver = blink_remote.InitWithNewEndpointAndPassReceiver();
@@ -543,6 +524,23 @@ class FakeWebNNContext : public blink_mojom::WebNNContext {
                                const gpu::SyncToken& fence,
                                CreateTensorCallback callback) override {
     NOTIMPLEMENTED();
+  }
+
+  void Dispatch(
+      const blink::WebNNGraphToken& graph,
+      const HashMap<String, blink::WebNNTensorToken>& named_inputs,
+      const HashMap<String, blink::WebNNTensorToken>& named_outputs) override {
+    // No-op for testing.
+  }
+
+  void RequestCompilerContext(
+      mojo::PendingReceiver<blink_mojom::WebNNCompilerContext>
+          compiler_context_receiver) override {
+    // No-op for testing; drop the receiver so the peer endpoint disconnects.
+  }
+
+  void DestroyGraph(const blink::WebNNGraphToken& graph_handle) override {
+    // No-op for testing.
   }
 
   // TODO(crbug.com/354741414): Fix this dangling pointer.
@@ -611,8 +609,6 @@ class FakeWebNNContextProvider : public blink_mojom::WebNNContextProvider {
          /*dequantize_linear_input=*/
          {webnn::SupportedDataTypes::All(), kMaxRank},
          /*dequantize_linear_scale=*/
-         {webnn::SupportedDataTypes::All(), kMaxRank},
-         /*dequantize_linear_zero_point=*/
          {webnn::SupportedDataTypes::All(), kMaxRank},
          /*add_input=*/{webnn::SupportedDataTypes::All(), kMaxRank},
          /*sub_input=*/{webnn::SupportedDataTypes::All(), kMaxRank},
@@ -774,9 +770,11 @@ class FakeWebNNContextProvider : public blink_mojom::WebNNContextProvider {
          /*where_condition=*/{webnn::SupportedDataTypes::All(), kMaxRank},
          /*where_value=*/{webnn::SupportedDataTypes::All(), kMaxRank}});
     auto success = blink_mojom::CreateContextSuccess::New(
-        std::move(blink_remote), std::move(context_properties),
-        blink::WebNNContextToken(), mojo::ScopedDataPipeProducerHandle(),
-        mojo::ScopedDataPipeConsumerHandle());
+        std::move(blink_remote),
+        /*compiler_context_remote=*/mojo::NullRemote(),
+        std::move(context_properties), blink::WebNNContextToken(),
+        mojo::ScopedDataPipeProducerHandle(),
+        mojo::ScopedDataPipeConsumerHandle(), /*command_buffer_id=*/0);
     std::move(callback).Run(
         blink_mojom::CreateContextResult::NewSuccess(std::move(success)));
   }
@@ -906,7 +904,8 @@ Vector<uint8_t> GetMLTensorValues(V8TestingScope& scope,
   auto* array_buffer = V8ToObject<DOMArrayBuffer>(&scope, tester.Value());
   return GetArrayBufferViewValues<uint8_t>(
       MaybeShared<DOMArrayBufferView>(blink::DOMUint8Array::Create(
-          array_buffer, /*byte_offset=*/0, ml_tensor->PackedByteLength())));
+          array_buffer, /*byte_offset=*/0,
+          base::checked_cast<wtf_size_t>(ml_tensor->PackedByteLength()))));
 }
 
 TEST_F(MLGraphTest, BuildTest) {
@@ -1165,7 +1164,8 @@ TEST_F(MLGraphTest, WriteWebNNTensorThenDestroyTest) {
 
   auto* src_data =
       MakeGarbageCollected<AllowSharedBufferSource>(CreateDOMArrayBufferView(
-          ml_tensor->PackedByteLength(), V8MLOperandDataType::Enum::kUint8));
+          base::checked_cast<wtf_size_t>(ml_tensor->PackedByteLength()),
+          V8MLOperandDataType::Enum::kUint8));
   ml_context->writeTensor(script_state, ml_tensor, src_data,
                           scope.GetExceptionState());
 }
@@ -2124,6 +2124,71 @@ TEST_F(MLGraphTest, MLTransposeEliminationTransformerTest) {
     EXPECT_EQ(*outputs.at("transpose5"), add1_updated->Descriptor());
     EXPECT_EQ(*outputs.at("transpose7"), gelu_updated->Descriptor());
   }
+
+  {
+    DummyExceptionStateForTesting exception_state;
+    auto* builder = MLGraphBuilder::Create(scope.GetScriptState(), context,
+                                           exception_state);
+    ASSERT_THAT(builder, testing::NotNull());
+
+    // Test that TransposeEliminationTransformer correctly eliminates transposes
+    // when a transpose output is used multiple times by the same operator.
+    //
+    //                        / \
+    // [a] -> transpose -> [b]   add -> [c] -> transpose -> [d]
+    //                        \ /
+    //
+    // Should be simplified to:
+    // [a] -> add -> [d]
+
+    auto* a = BuildInput(scope.GetScriptState(), builder, "a", {3, 4, 5},
+                         V8MLOperandDataType::Enum::kFloat32, exception_state);
+    auto* transpose_options = MLTransposeOptions::Create();
+    transpose_options->setPermutation({0, 2, 1});
+    auto* b = builder->transpose(a, transpose_options, exception_state);
+    ASSERT_THAT(b, testing::NotNull());
+
+    auto* add_options = MLOperatorOptions::Create();
+    auto* add = builder->add(b, b, add_options, exception_state);
+    ASSERT_THAT(add, testing::NotNull());
+
+    auto* transpose_options2 = MLTransposeOptions::Create();
+    transpose_options2->setPermutation({0, 2, 1});
+    auto* d = builder->transpose(add, transpose_options2, exception_state);
+    ASSERT_THAT(d, testing::NotNull());
+
+    MLNamedOperands named_outputs = {{"d", d}};
+
+    auto [graph, error_name, error_message] =
+        BuildGraph(scope, builder, named_outputs);
+    ASSERT_THAT(graph, testing::NotNull());
+
+    // Verify the graph output has the expected descriptor (shape {3, 4, 5}).
+    const auto& outputs = graph->GetOutputConstraints();
+    EXPECT_EQ(outputs.size(), static_cast<uint32_t>(1));
+    // The output name "d" should still be present, but its descriptor should
+    // match the original input "a" (because transposes are eliminated).
+    EXPECT_EQ(*outputs.at("d"), a->Descriptor());
+
+    // Verify that the transposes have been eliminated in the Mojo graph.
+    auto graph_info = GetGraphInfo();
+    ASSERT_FALSE(graph_info.is_null());
+
+    // Expect only 1 operation (the add operator), transposes should be
+    // eliminated.
+    ASSERT_EQ(graph_info->operations.size(), 1u);
+    auto& operation = graph_info->operations[0];
+    ASSERT_TRUE(operation->is_element_wise_binary());
+    auto& element_wise_binary = operation->get_element_wise_binary();
+    EXPECT_EQ(element_wise_binary->kind,
+              blink_mojom::ElementWiseBinary::Kind::kAdd);
+
+    // Expect the inputs to the add operator to be the graph input "a".
+    ASSERT_EQ(graph_info->input_operands.size(), 1u);
+    auto input_operand_id = graph_info->input_operands[0];
+    EXPECT_EQ(element_wise_binary->lhs_operand_id, input_operand_id);
+    EXPECT_EQ(element_wise_binary->rhs_operand_id, input_operand_id);
+  }
 }
 
 TEST_F(MLGraphTest, MLQDQDetectionTest) {
@@ -2433,26 +2498,26 @@ TEST_F(MLGraphTest, MLGraphDumpTest) {
     MLGraphDumper* graph_dumper = MakeGarbageCollected<MLGraphDumper>();
     graph_dumper->RecordGraph("test_graph", named_outputs);
 
-    const base::Value::Dict& json_root = graph_dumper->GetRoot();
-    const base::Value::List* graphs = json_root.FindList("graphs");
+    const base::DictValue& json_root = graph_dumper->GetRoot();
+    const base::ListValue* graphs = json_root.FindList("graphs");
     ASSERT_TRUE(graphs);
     EXPECT_EQ(graphs->size(), 1u);
-    const base::Value::Dict& graph_json = (*graphs)[0].GetDict();
+    const base::DictValue& graph_json = (*graphs)[0].GetDict();
     EXPECT_TRUE(graph_json.FindString("id"));
-    const base::Value::List* nodes = graph_json.FindList("nodes");
+    const base::ListValue* nodes = graph_json.FindList("nodes");
     ASSERT_TRUE(nodes);
     EXPECT_EQ(nodes->size(), 7u);  // 2 inputs + 1 add + 2 relu + 2 outputs
 
-    const base::Value::Dict* json_output0 = nullptr;
-    const base::Value::Dict* json_output1 = nullptr;
-    const base::Value::Dict* json_relu0 = nullptr;
-    const base::Value::Dict* json_relu1 = nullptr;
-    const base::Value::Dict* json_add = nullptr;
+    const base::DictValue* json_output0 = nullptr;
+    const base::DictValue* json_output1 = nullptr;
+    const base::DictValue* json_relu0 = nullptr;
+    const base::DictValue* json_relu1 = nullptr;
+    const base::DictValue* json_add = nullptr;
 
-    std::map<std::string, const base::Value::Dict*> id_to_node_json;
+    std::map<std::string, const base::DictValue*> id_to_node_json;
 
     for (const auto& node_val : *nodes) {
-      const base::Value::Dict& node_json = node_val.GetDict();
+      const base::DictValue& node_json = node_val.GetDict();
       const std::string* id = node_json.FindString("id");
       ASSERT_TRUE(id);
       id_to_node_json[*id] = &node_json;
@@ -2460,10 +2525,10 @@ TEST_F(MLGraphTest, MLGraphDumpTest) {
       const std::string* label = node_json.FindString("label");
       ASSERT_TRUE(label);
       if (*label == "Output") {
-        const base::Value::List* attrs = node_json.FindList("attrs");
+        const base::ListValue* attrs = node_json.FindList("attrs");
         ASSERT_TRUE(attrs);
         for (const auto& attr_val : *attrs) {
-          const base::Value::Dict& attr = attr_val.GetDict();
+          const base::DictValue& attr = attr_val.GetDict();
           const std::string* key = attr.FindString("key");
           const std::string* value = attr.FindString("value");
           ASSERT_TRUE(key);
@@ -2485,95 +2550,94 @@ TEST_F(MLGraphTest, MLGraphDumpTest) {
     ASSERT_TRUE(json_output1);
 
     {
-      const base::Value::List* incoming_edges =
+      const base::ListValue* incoming_edges =
           json_output0->FindList("incomingEdges");
       ASSERT_TRUE(incoming_edges);
       EXPECT_EQ(incoming_edges->size(), 1u);
-      const base::Value::Dict& incoming_edge_json =
+      const base::DictValue& incoming_edge_json =
           (*incoming_edges)[0].GetDict();
       const std::string* source_node_id =
           incoming_edge_json.FindString("sourceNodeId");
       ASSERT_TRUE(source_node_id);
       ASSERT_TRUE(id_to_node_json.count(*source_node_id));
-      const base::Value::Dict* relu_node_json =
-          id_to_node_json[*source_node_id];
+      const base::DictValue* relu_node_json = id_to_node_json[*source_node_id];
       EXPECT_EQ(*relu_node_json->FindString("label"), "relu");
       json_relu1 = relu_node_json;
     }
 
     {
-      const base::Value::List* incoming_edges =
+      const base::ListValue* incoming_edges =
           json_output1->FindList("incomingEdges");
       ASSERT_TRUE(incoming_edges);
       EXPECT_EQ(incoming_edges->size(), 1u);
-      const base::Value::Dict& incoming_edge_json =
+      const base::DictValue& incoming_edge_json =
           (*incoming_edges)[0].GetDict();
       const std::string* source_node_id =
           incoming_edge_json.FindString("sourceNodeId");
       ASSERT_TRUE(source_node_id);
       ASSERT_TRUE(id_to_node_json.count(*source_node_id));
-      const base::Value::Dict* add_node_json = id_to_node_json[*source_node_id];
+      const base::DictValue* add_node_json = id_to_node_json[*source_node_id];
       EXPECT_EQ(*add_node_json->FindString("label"), "add");
       json_add = add_node_json;
     }
 
     {
-      const base::Value::List* incoming_edges =
+      const base::ListValue* incoming_edges =
           json_relu1->FindList("incomingEdges");
       ASSERT_TRUE(incoming_edges);
       EXPECT_EQ(incoming_edges->size(), 1u);
-      const base::Value::Dict& incoming_edge_json =
+      const base::DictValue& incoming_edge_json =
           (*incoming_edges)[0].GetDict();
       const std::string* source_node_id =
           incoming_edge_json.FindString("sourceNodeId");
       ASSERT_TRUE(source_node_id);
       ASSERT_TRUE(id_to_node_json.count(*source_node_id));
-      const base::Value::Dict* add_node_json = id_to_node_json[*source_node_id];
+      const base::DictValue* add_node_json = id_to_node_json[*source_node_id];
       EXPECT_EQ(*add_node_json->FindString("label"), "add");
     }
 
     {
-      const base::Value::List* incoming_edges =
+      const base::ListValue* incoming_edges =
           json_add->FindList("incomingEdges");
       ASSERT_TRUE(incoming_edges);
       EXPECT_EQ(incoming_edges->size(), 2u);
       {
-        const base::Value::Dict& incoming_edge_json =
+        const base::DictValue& incoming_edge_json =
             (*incoming_edges)[0].GetDict();
         const std::string* source_node_id =
             incoming_edge_json.FindString("sourceNodeId");
         ASSERT_TRUE(source_node_id);
         ASSERT_TRUE(id_to_node_json.count(*source_node_id));
-        const base::Value::Dict* relu0_node_json =
+        const base::DictValue* relu0_node_json =
             id_to_node_json[*source_node_id];
         EXPECT_EQ(*relu0_node_json->FindString("label"), "relu");
         json_relu0 = relu0_node_json;
       }
       {
-        const base::Value::Dict& incoming_edge_json =
+        const base::DictValue& incoming_edge_json =
             (*incoming_edges)[1].GetDict();
         const std::string* source_node_id =
             incoming_edge_json.FindString("sourceNodeId");
         ASSERT_TRUE(source_node_id);
         ASSERT_TRUE(id_to_node_json.count(*source_node_id));
-        const base::Value::Dict* input1_node_json =
+        const base::DictValue* input1_node_json =
             id_to_node_json[*source_node_id];
         EXPECT_EQ(*input1_node_json->FindString("label"), "Input");
       }
     }
 
     {
-      const base::Value::List* incoming_edges =
+      const base::ListValue* incoming_edges =
           json_relu0->FindList("incomingEdges");
       ASSERT_TRUE(incoming_edges);
       EXPECT_EQ(incoming_edges->size(), 1u);
-      const base::Value::Dict& incoming_edge_json =
+      const base::DictValue& incoming_edge_json =
           (*incoming_edges)[0].GetDict();
       const std::string* source_node_id =
           incoming_edge_json.FindString("sourceNodeId");
       ASSERT_TRUE(source_node_id);
       ASSERT_TRUE(id_to_node_json.count(*source_node_id));
-      const base::Value::Dict* input0_node_json =
+      const base::DictValue* input0_node_json =
           id_to_node_json[*source_node_id];
       EXPECT_EQ(*input0_node_json->FindString("label"), "Input");
     }

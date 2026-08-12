@@ -2,11 +2,14 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
 import("//components/guest_view/buildflags/buildflags.gni")
 import("//extensions/buildflags/buildflags.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
 import("//testing/libfuzzer/fuzzer_test.gni")
+
+if (is_android) {
+  import("//build/config/android/rules.gni")
+}
 
 assert(enable_extensions_core)
 
@@ -306,11 +309,15 @@ static_library("common") {
     "api/speech/tts_engine_manifest_handler.h",
     "api/web_request/web_request_activity_log_constants.cc",
     "api/web_request/web_request_activity_log_constants.h",
+    "api/web_request/web_request_constants.h",
+    "api/web_request/web_request_filter.cc",
+    "api/web_request/web_request_filter.h",
+    "api/web_request/web_request_resource_type.cc",
+    "api/web_request/web_request_resource_type.h",
     "command.cc",
     "command.h",
     "common_manifest_handlers.cc",
     "common_manifest_handlers.h",
-    "common_param_traits.h",
     "content_script_injection_url_getter.cc",
     "content_script_injection_url_getter.h",
     "context_data.h",
@@ -402,6 +409,8 @@ static_library("common") {
     "manifest_handler_registry.h",
     "manifest_handlers/app_display_info.cc",
     "manifest_handlers/app_display_info.h",
+    "manifest_handlers/app_urls_handler.cc",
+    "manifest_handlers/app_urls_handler.h",
     "manifest_handlers/automation.cc",
     "manifest_handlers/automation.h",
     "manifest_handlers/background_info.cc",
@@ -418,6 +427,8 @@ static_library("common") {
     "manifest_handlers/csp_info.h",
     "manifest_handlers/default_locale_handler.cc",
     "manifest_handlers/default_locale_handler.h",
+    "manifest_handlers/description_info.cc",
+    "manifest_handlers/description_info.h",
     "manifest_handlers/devtools_page_handler.cc",
     "manifest_handlers/devtools_page_handler.h",
     "manifest_handlers/extension_action_handler.cc",
@@ -434,6 +445,10 @@ static_library("common") {
     "manifest_handlers/incognito_info.h",
     "manifest_handlers/kiosk_mode_info.cc",
     "manifest_handlers/kiosk_mode_info.h",
+    "manifest_handlers/manifest_url_handlers.cc",
+    "manifest_handlers/manifest_url_handlers.h",
+    "manifest_handlers/message_serialization_info.cc",
+    "manifest_handlers/message_serialization_info.h",
     "manifest_handlers/mime_types_handler.cc",
     "manifest_handlers/mime_types_handler.h",
     "manifest_handlers/oauth2_manifest_handler.cc",
@@ -456,16 +471,18 @@ static_library("common") {
     "manifest_handlers/shared_module_info.h",
     "manifest_handlers/trial_tokens_handler.cc",
     "manifest_handlers/trial_tokens_handler.h",
+    "manifest_handlers/version_name_info.cc",
+    "manifest_handlers/version_name_info.h",
     "manifest_handlers/web_accessible_resources_info.cc",
     "manifest_handlers/web_accessible_resources_info.h",
     "manifest_handlers/web_file_handlers_info.cc",
     "manifest_handlers/web_file_handlers_info.h",
     "manifest_handlers/webview_info.cc",
     "manifest_handlers/webview_info.h",
-    "manifest_url_handlers.cc",
-    "manifest_url_handlers.h",
     "message_bundle.cc",
     "message_bundle.h",
+    "mime_handler_availability.cc",
+    "mime_handler_availability.h",
     "permissions/api_permission.cc",
     "permissions/api_permission.h",
     "permissions/api_permission_set.cc",
@@ -534,6 +551,8 @@ static_library("common") {
     "view_type_util.cc",
     "view_type_util.h",
     "web_file_handler_constants.h",
+    "webstore_override.cc",
+    "webstore_override.h",
   ]
 
   configs += [
@@ -589,7 +608,6 @@ static_library("common") {
     "//ui/gfx/geometry",
     "//ui/gfx/ipc",
     "//ui/gfx/ipc/geometry",
-    "//ui/gfx/ipc/skia",
     "//url",
   ]
 
@@ -617,6 +635,13 @@ source_set("core_api_provider") {
     "//extensions/common/api",
     "//extensions/common/api:extensions_features",
   ]
+}
+
+if (is_android) {
+  java_cpp_features("java_features_srcjar") {
+    sources = [ "extension_features.cc" ]
+    class_name = "org.chromium.extensions.common.ExtensionFeatures"
+  }
 }
 
 source_set("test_support") {
@@ -669,6 +694,7 @@ source_set("unit_tests") {
     "feature_switch_unittest.cc",
     "features/complex_feature_unittest.cc",
     "features/feature_provider_unittest.cc",
+    "features/simple_feature_test_constants.h",
     "features/simple_feature_unittest.cc",
     "file_util_unittest.cc",
     "hashed_extension_id_unittest.cc",
@@ -680,6 +706,7 @@ source_set("unit_tests") {
     "manifest_handlers/content_capabilities_manifest_unittest.cc",
     "manifest_handlers/csp_info_unittest.cc",
     "manifest_handlers/default_locale_manifest_unittest.cc",
+    "manifest_handlers/description_unittest.cc",
     "manifest_handlers/devtools_page_unittest.cc",
     "manifest_handlers/extension_action_handler_unittest.cc",
     "manifest_handlers/extension_action_page_action_unittest.cc",
@@ -691,6 +718,7 @@ source_set("unit_tests") {
     "manifest_handlers/kiosk_mode_info_unittest.cc",
     "manifest_handlers/manifest_url_about_unittest.cc",
     "manifest_handlers/manifest_v3_permissions_unittest.cc",
+    "manifest_handlers/message_serialization_manifest_unittest.cc",
     "manifest_handlers/mime_types_handler_unittest.cc",
     "manifest_handlers/oauth2_manifest_unittest.cc",
     "manifest_handlers/protocol_handler_manifest_unittest.cc",
@@ -699,6 +727,8 @@ source_set("unit_tests") {
     "manifest_handlers/shared_module_manifest_unittest.cc",
     "manifest_handlers/trial_tokens_unittest.cc",
     "manifest_handlers/update_url_unittest.cc",
+    "manifest_handlers/version_name_unittest.cc",
+    "manifest_handlers/web_urls_unittest.cc",
     "manifest_unittest.cc",
     "message_bundle_unittest.cc",
     "mojom/event_router_mojom_unittest.cc",
@@ -755,7 +785,10 @@ source_set("unit_tests") {
   ]
 
   if (is_chromeos) {
-    sources += [ "manifest_handlers/file_handler_manifest_unittest.cc" ]
+    sources += [
+      "manifest_handlers/file_handler_manifest_unittest.cc",
+      "manifest_handlers/input_components_handler_unittest.cc",
+    ]
   }
 
   data = [
@@ -784,9 +817,6 @@ if (enable_extensions) {
       "//content/test:test_support",
       "//extensions:test_support",
     ]
-
-    # The fuzzed code needs more RAM that the default limit.
-    libfuzzer_options = [ "rss_limit_mb=4096" ]
   }
 
   fuzzer_test("extension_url_pattern_fuzzer") {
@@ -804,9 +834,6 @@ if (enable_extensions) {
       "//base",
       "//third_party/icu/fuzzers:fuzzer_support",
     ]
-
-    # The fuzzed code needs more RAM that the default limit.
-    libfuzzer_options = [ "rss_limit_mb=4096" ]
   }
 
   fuzzer_test("extension_api_scripts_internal_serialization_fuzzer") {
@@ -819,8 +846,5 @@ if (enable_extensions) {
       "//third_party/abseil-cpp:absl",
       "//third_party/icu/fuzzers:fuzzer_support",
     ]
-
-    # The fuzzed code needs more RAM that the default limit.
-    libfuzzer_options = [ "rss_limit_mb=4096" ]
   }
 }

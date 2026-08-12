@@ -10,7 +10,6 @@
 #include "chrome/browser/ui/views/save_to_drive/mock_account_chooser_view_delegate.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/gfx/image/image_unittest_util.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/test/views_test_base.h"
 
@@ -129,8 +128,9 @@ TEST_F(AccountChooserRadioGroupViewTest,
        AccountChooserRadioButtonRowClickInvokesDelegate) {
   MockAccountChooserRadioButtonDelegate delegate;
   AccountInfo account = GetTestAccount("account", kTestDomain, /*gaia_id=*/1);
-  AccountChooserRadioButtonRow* row_view = anchor_view_->AddChildView(
-      std::make_unique<AccountChooserRadioButtonRow>(&delegate, account));
+  AccountChooserRadioButtonRow* row_view =
+      anchor_view_->AddChildView(std::make_unique<AccountChooserRadioButtonRow>(
+          &delegate, account, /*pos_in_set=*/1, /*set_size=*/1));
 
   EXPECT_CALL(delegate, SelectAccount(Field(&AccountInfo::account_id,
                                             account.account_id)));
@@ -174,8 +174,9 @@ TEST_F(AccountChooserRadioGroupViewTest,
        AccountChooserRadioButtonClickInvokesDelegate) {
   MockAccountChooserRadioButtonDelegate delegate;
   AccountInfo account = GetTestAccount("account", kTestDomain, /*gaia_id=*/1);
-  AccountChooserRadioButtonRow* row_view = anchor_view_->AddChildView(
-      std::make_unique<AccountChooserRadioButtonRow>(&delegate, account));
+  AccountChooserRadioButtonRow* row_view =
+      anchor_view_->AddChildView(std::make_unique<AccountChooserRadioButtonRow>(
+          &delegate, account, /*pos_in_set=*/1, /*set_size=*/1));
 
   EXPECT_CALL(delegate, SelectAccount(Field(&AccountInfo::account_id,
                                             account.account_id)));

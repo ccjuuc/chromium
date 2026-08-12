@@ -25,6 +25,7 @@
 
 #include "third_party/blink/public/mojom/css/preferred_color_scheme.mojom-blink.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
+#include "third_party/blink/renderer/core/layout/svg/layout_svg_container.h"
 #include "third_party/blink/renderer/core/paint/paint_info.h"
 #include "third_party/blink/renderer/core/paint/svg_object_painter.h"
 #include "third_party/blink/renderer/core/svg/graphics/svg_image.h"
@@ -38,12 +39,57 @@
 #include "third_party/blink/renderer/platform/graphics/paint/paint_record_builder.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_recorder.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/transforms/affine_transform.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder_stream.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 
 namespace blink {
+
+namespace {
+
+// Returns true if any visible (non-hidden-container) descendant of
+// `layout_object` has viewport dependence. Hidden containers like
+// <linearGradient>, <radialGradient>, <pattern>, <filter>, etc. report
+// viewport dependence but never produce visible paint output, so their
+// viewport dependence should not trigger ComputeViewportAdjustmentScale().
+bool HasVisibleViewportDependence(const LayoutObject& layout_object) {
+  if (!layout_object.HasViewportDependence()) {
+    return false;
+  }
+  const LayoutObject* current = &layout_object;
+  while (current) {
+    if (current->IsSVGHiddenContainer()) {
+      current = current->NextInPreOrderAfterChildren(&layout_object);
+      continue;
+    }
+    if (!current->HasViewportDependence()) {
+      current = current->NextInPreOrderAfterChildren(&layout_object);
+      continue;
+    }
+    // Only LayoutSVGContainer subtypes can have hidden container children
+    // (gradients, patterns, filters, masks) whose viewport dependence should
+    // be ignored. For all other visible nodes (shapes, text, foreignObject),
+    // viewport dependence is always from the node itself.
+    auto* container = DynamicTo<LayoutSVGContainer>(current);
+    if (!container) {
+      return true;
+    }
+    // For containers, check if the container itself has viewport dependence
+    // (e.g. <svg width="50%">), as opposed to only inheriting it from
+    // hidden children like gradients or patterns.
+    if (container->SelfHasViewportDependence()) {
+      return true;
+    }
+    // The container's viewport dependence comes only from its children.
+    // Descend to find visible children with viewport dependence.
+    current = current->NextInPreOrder(&layout_object);
+  }
+  return false;
+}
+
+}  // namespace
 
 FEImage::FEImage(Filter* filter,
                  scoped_refptr<Image> image,
@@ -97,7 +143,12 @@ AffineTransform FEImage::SourceToDestinationTransform(
     const LayoutObject& layout_object,
     const gfx::RectF& dest_rect) const {
   gfx::SizeF viewport_scale(GetFilter()->Scale(), GetFilter()->Scale());
-  if (layout_object.HasViewportDependence()) {
+  const bool viewport_dependent =
+      RuntimeEnabledFeatures::
+              SvgFeImageSkipHiddenContainerViewportDependenceEnabled()
+          ? HasVisibleViewportDependence(layout_object)
+          : layout_object.HasViewportDependence();
+  if (viewport_dependent) {
     viewport_scale =
         ComputeViewportAdjustmentScale(layout_object, dest_rect.size());
   }
@@ -119,7 +170,11 @@ gfx::RectF FEImage::MapInputs(const gfx::RectF&) const {
     return dest_rect;
   }
   if (scoped_refptr<Image> image = GetImage(dest_rect.size())) {
-    gfx::RectF src_rect(image->SizeAsFloat(kDoNotRespectImageOrientation));
+    RespectImageOrientationEnum orientation = kDoNotRespectImageOrientation;
+    if (RuntimeEnabledFeatures::SvgFeImageEXIFOrientationEnabled()) {
+      orientation = kRespectImageOrientation;
+    }
+    gfx::RectF src_rect(image->SizeAsFloat(orientation));
     preserve_aspect_ratio_->TransformRect(dest_rect, src_rect);
     return dest_rect;
   }
@@ -209,14 +264,33 @@ sk_sp<PaintFilter> FEImage::CreateImageFilter() {
   scoped_refptr<Image> image = GetImage(dst_rect.size());
   if (PaintImage paint_image =
           image ? image->PaintImageForCurrentFrame() : PaintImage()) {
-    gfx::RectF src_rect(image->SizeAsFloat(kDoNotRespectImageOrientation));
+    RespectImageOrientationEnum orientation = kDoNotRespectImageOrientation;
+    if (RuntimeEnabledFeatures::SvgFeImageEXIFOrientationEnabled()) {
+      orientation = kRespectImageOrientation;
+    }
+    gfx::RectF src_rect(image->SizeAsFloat(orientation));
     preserve_aspect_ratio_->TransformRect(dst_rect, src_rect);
 
     // Adjust the source rectangle if the primitive has been cropped.
     if (crop_rect != dst_rect)
       src_rect = gfx::MapRect(crop_rect, dst_rect, src_rect);
+
+    // Always apply image orientation, because we must for cross-origin images
+    // to respect privacy, and the filter may be applied to multiple elements
+    // with different CSS properties. The filter appearance might then vary
+    // across elements in non-obvious ways.
+    PaintImage oriented_image =
+        orientation == kDoNotRespectImageOrientation
+            ? paint_image
+            : Image::ResizeAndOrientImage(
+                  paint_image,
+                  image ? image->Orientation() : ImageOrientationEnum::kDefault,
+                  gfx::Vector2dF(1, 1), 1, kInterpolationNone, nullptr);
+    if (!oriented_image) {
+      return CreateTransparentBlack();
+    }
     return sk_make_sp<ImagePaintFilter>(
-        std::move(paint_image), gfx::RectFToSkRect(src_rect),
+        std::move(oriented_image), gfx::RectFToSkRect(src_rect),
         gfx::RectFToSkRect(crop_rect), cc::PaintFlags::FilterQuality::kHigh);
   }
   // "A href reference that is an empty image (zero width or zero height),

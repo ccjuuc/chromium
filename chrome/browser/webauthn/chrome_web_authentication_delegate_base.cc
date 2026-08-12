@@ -8,11 +8,13 @@
 #include "base/feature_list.h"
 #include "base/notimplemented.h"
 #include "build/buildflag.h"
+#include "chrome/browser/enterprise/util/affiliation.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/webauthn/webauthn_pref_names.h"
 #include "chrome/browser/webauthn/webauthn_switches.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
+#include "components/webapps/isolated_web_apps/scheme.h"
 #include "device/fido/public/features.h"
 
 namespace {
@@ -59,12 +61,16 @@ bool IsGoogleCorpCrdOrigin(content::BrowserContext* browser_context,
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-bool IsAllowedByPlatformEnterprisePolicy(
+bool RemoteDesktopClientOverrideAllowedByPolicy(
     content::BrowserContext* browser_context,
     const url::Origin& caller_origin) {
-  const Profile* profile = Profile::FromBrowserContext(browser_context);
+  Profile* profile = Profile::FromBrowserContext(browser_context);
+
+  if (!enterprise_util::IsProfileAffiliated(profile)) {
+    return false;
+  }
   const PrefService* prefs = profile->GetPrefs();
-  const base::Value::List& allowed_origins =
+  const base::ListValue& allowed_origins =
       prefs->GetList(webauthn::pref_names::kRemoteDesktopAllowedOrigins);
   if (std::ranges::any_of(
           allowed_origins, [&caller_origin](const base::Value& origin_value) {
@@ -92,6 +98,14 @@ bool ChromeWebAuthenticationDelegateBase::
     OriginMayUseRemoteDesktopClientOverride(
         content::BrowserContext* browser_context,
         const url::Origin& caller_origin) {
+  // Isolated Web Apps may be configured to use the
+  // remoteDesktopClientOverride extension only if the feature flag is
+  // enabled.
+  if (caller_origin.scheme() == webapps::kIsolatedAppScheme &&
+      !base::FeatureList::IsEnabled(
+          device::kWebAuthnIWARemoteDesktopAllowedOriginsPolicy)) {
+    return false;
+  }
   // Allow an origin access to the RemoteDesktopClientOverride extension and
   // make WebAuthn requests on behalf of other origins, if a any of the
   // following are true:
@@ -106,7 +120,8 @@ bool ChromeWebAuthenticationDelegateBase::
 
   // Check if the origin is explicitly allowed by (device/platform level)
   // enterprise policy, (or allowed by the command-line flag for testing).
-  if (IsAllowedByPlatformEnterprisePolicy(browser_context, caller_origin)) {
+  if (RemoteDesktopClientOverrideAllowedByPolicy(browser_context,
+                                                 caller_origin)) {
     // TODO(crbug.com/391132173): Record UMA to track how often this policy is
     // used.
     return true;

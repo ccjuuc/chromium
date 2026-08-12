@@ -4,7 +4,8 @@
 
 #include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container_layout.h"
 
-#include "base/containers/adapters.h"
+#include <ranges>
+
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.h"
 #include "ui/gfx/geometry/rect.h"
@@ -78,7 +79,7 @@ PinnedToolbarActionsContainerLayout::CalculateProposedLayout(
   size_t index = host_view()->children().size() - 1;
   size_t divider_index = 0;
   int divider_width = 0;
-  for (const auto& i : base::Reversed(host_view()->children())) {
+  for (const auto& i : std::views::reverse(host_view()->children())) {
     if (!IsChildIncludedInLayout(i)) {
       index--;
       continue;
@@ -140,7 +141,7 @@ PinnedToolbarActionsContainerLayout::CalculateProposedLayout(
   int total_width = interior_margin_.width();
   int left = interior_margin_.left();
   index = 0;
-  const int height = GetLayoutConstant(LayoutConstant::TOOLBAR_BUTTON_HEIGHT);
+  const int height = GetLayoutConstant(LayoutConstant::kToolbarButtonHeight);
   for (auto view : host_view()->children()) {
     if (visible_child_indices.size() && index == visible_child_indices.back()) {
       const gfx::Size preferred_size = view->GetPreferredSize();

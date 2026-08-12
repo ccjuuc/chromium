@@ -5,6 +5,7 @@
 #include "services/on_device_model/android/backend_session_impl_android.h"
 
 #include <algorithm>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <variant>
@@ -33,13 +34,49 @@
 
 namespace on_device_model {
 
+namespace {
+
+// Converts mojom input pieces to Java InputPiece objects. Only token and text
+// pieces are supported on Android.
+std::vector<base::android::ScopedJavaLocalRef<jobject>>
+ConvertInputPiecesToJava(
+    JNIEnv* env,
+    const std::vector<on_device_model::mojom::InputPiecePtr>& pieces) {
+  std::vector<base::android::ScopedJavaLocalRef<jobject>> java_inputs;
+  using Tag = on_device_model::mojom::InputPiece::Tag;
+  for (const auto& piece : pieces) {
+    switch (piece->which()) {
+      case Tag::kToken:
+        java_inputs.push_back(Java_InputPieceHelper_fromToken(
+            env, static_cast<int>(piece->get_token())));
+        break;
+      case Tag::kText:
+        java_inputs.push_back(Java_InputPieceHelper_fromText(
+            env,
+            base::android::ConvertUTF8ToJavaString(env, piece->get_text())));
+        break;
+      case Tag::kBitmap:
+      case Tag::kAudio:
+      case Tag::kToolDeclaration:
+      case Tag::kToolResponse:
+      case Tag::kUnknownType:
+        // TODO(crbug.com/425408635): Support image, audio, and other input
+        // types.
+        NOTREACHED();
+    }
+  }
+  return java_inputs;
+}
+
+}  // namespace
+
 BackendSessionImplAndroid::BackendSessionImplAndroid(
     optimization_guide::proto::ModelExecutionFeature feature,
     on_device_model::mojom::SessionParamsPtr params,
-    const std::vector<ml::InputPiece>& context_input_pieces)
+    std::vector<on_device_model::mojom::InputPiecePtr> context_input_pieces)
     : java_session_(
           OnDeviceModelBridge::CreateSession(feature, params.Clone())),
-      context_input_pieces_(context_input_pieces),
+      context_input_pieces_(std::move(context_input_pieces)),
       feature_(feature),
       params_(std::move(params)) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -62,10 +99,25 @@ BackendSessionImplAndroid::~BackendSessionImplAndroid() {
 void BackendSessionImplAndroid::Append(
     on_device_model::mojom::AppendOptionsPtr options,
     mojo::PendingRemote<on_device_model::mojom::ContextClient> client,
+    mojo::ReportBadMessageCallback bad_message_callback,
     base::OnceClosure on_complete) {
-  context_input_pieces_.insert(context_input_pieces_.end(),
-                               options->input->pieces.begin(),
-                               options->input->pieces.end());
+  context_input_pieces_.insert(
+      context_input_pieces_.end(),
+      std::make_move_iterator(options->input->pieces.begin()),
+      std::make_move_iterator(options->input->pieces.end()));
+  if (client) {
+    // Bind the context client and signal completion to prevent the caller's
+    // mojo pipe disconnect handler which invokes OnError from firing.
+    // Temporarily pass 0 for tokens_processed which is used for UMA histograms
+    // and context window bookkeeping, neither of which affects model execution
+    // correctness on Android where each Generate call sends the full input
+    // independently.
+    // TODO(crbug.com/477033510): Report actual token count if Android supports
+    // stateful context window for prompt API in the future.
+    mojo::Remote<on_device_model::mojom::ContextClient> context_client(
+        std::move(client));
+    context_client->OnComplete(/*tokens_processed=*/0);
+  }
   std::move(on_complete).Run();
 }
 
@@ -85,20 +137,8 @@ void BackendSessionImplAndroid::Generate(
   base::android::ScopedJavaLocalRef<jobject> java_generate_options =
       Java_GenerateOptionsHelper_create(env, input->max_output_tokens);
 
-  std::vector<base::android::ScopedJavaLocalRef<jobject>> java_inputs;
-  for (const auto& piece : context_input_pieces_) {
-    if (std::holds_alternative<ml::Token>(piece)) {
-      java_inputs.push_back(Java_InputPieceHelper_fromToken(
-          env, static_cast<int>(std::get<ml::Token>(piece))));
-    } else if (std::holds_alternative<std::string>(piece)) {
-      java_inputs.push_back(Java_InputPieceHelper_fromText(
-          env, base::android::ConvertUTF8ToJavaString(
-                   env, std::get<std::string>(piece))));
-    } else {
-      // TODO(crbug.com/425408635): Support image and audio input.
-      NOTREACHED();
-    }
-  }
+  std::vector<base::android::ScopedJavaLocalRef<jobject>> java_inputs =
+      ConvertInputPiecesToJava(env, context_input_pieces_);
 
   Java_AiCoreSessionWrapper_generate(
       env, java_session_, reinterpret_cast<intptr_t>(this),
@@ -109,9 +149,26 @@ void BackendSessionImplAndroid::Generate(
 
 void BackendSessionImplAndroid::SizeInTokens(
     on_device_model::mojom::InputPtr input,
+    mojo::ReportBadMessageCallback bad_message_callback,
     base::OnceCallback<void(uint32_t)> callback) {
-  NOTIMPLEMENTED();
-  std::move(callback).Run(0);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK(!size_in_tokens_callback_)
+      << "Caller should not call SizeInTokens() again before the previous "
+         "callback is invoked.";
+  // Store the callback to be invoked from Java.
+  size_in_tokens_callback_ = std::move(callback);
+
+  JNIEnv* env = base::android::AttachCurrentThread();
+
+  // Convert input pieces to Java objects.
+  std::vector<base::android::ScopedJavaLocalRef<jobject>> java_inputs =
+      ConvertInputPiecesToJava(env, input->pieces);
+
+  // Call Java method to count tokens. The result will be returned via
+  // OnSizeInTokensResult callback.
+  Java_AiCoreSessionWrapper_getSizeInTokens(
+      env, java_session_, reinterpret_cast<int64_t>(this),
+      base::android::ToJavaArrayOfObjects(env, java_inputs));
 }
 
 void BackendSessionImplAndroid::Score(
@@ -135,7 +192,7 @@ std::unique_ptr<BackendSession> BackendSessionImplAndroid::Clone() {
   // Use `base::WrapUnique` because the constructor is private and
   // `std::make_unique` cannot access it.
   return base::WrapUnique(new BackendSessionImplAndroid(
-      feature_, params_.Clone(), context_input_pieces_));
+      feature_, params_.Clone(), mojo::Clone(context_input_pieces_)));
 }
 
 void BackendSessionImplAndroid::AsrStream(
@@ -149,11 +206,13 @@ void BackendSessionImplAndroid::AsrAddAudioChunk(
   NOTIMPLEMENTED();
 }
 
+void BackendSessionImplAndroid::Hint(mojom::HintOptionsPtr options) {}
+
 void BackendSessionImplAndroid::OnResponse(const std::string& response) {
   sequence_checker_helper_.PostTask(
       FROM_HERE,
-      base::BindOnce(&BackendSessionImplAndroid::OnResponseOnSequence, weak_ptr_,
-                     response));
+      base::BindOnce(&BackendSessionImplAndroid::OnResponseOnSequence,
+                     weak_ptr_, response));
 }
 
 void BackendSessionImplAndroid::OnResponseOnSequence(
@@ -167,8 +226,8 @@ void BackendSessionImplAndroid::OnResponseOnSequence(
 void BackendSessionImplAndroid::OnComplete(GenerateResult generate_result) {
   sequence_checker_helper_.PostTask(
       FROM_HERE,
-      base::BindOnce(&BackendSessionImplAndroid::OnCompleteOnSequence, weak_ptr_,
-                     generate_result));
+      base::BindOnce(&BackendSessionImplAndroid::OnCompleteOnSequence,
+                     weak_ptr_, generate_result));
 }
 
 void BackendSessionImplAndroid::OnCompleteOnSequence(
@@ -185,9 +244,23 @@ void BackendSessionImplAndroid::OnCompleteOnSequence(
   responder_.reset();
 }
 
+void BackendSessionImplAndroid::OnSizeInTokensResult(uint32_t size) {
+  sequence_checker_helper_.PostTask(
+      FROM_HERE,
+      base::BindOnce(&BackendSessionImplAndroid::OnSizeInTokensResultOnSequence,
+                     weak_ptr_, size));
+}
+
+void BackendSessionImplAndroid::OnSizeInTokensResultOnSequence(uint32_t size) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (size_in_tokens_callback_) {
+    std::move(size_in_tokens_callback_).Run(size);
+  }
+}
+
 static void JNI_AiCoreSessionWrapper_OnComplete(JNIEnv* env,
-                                                jlong backend_session,
-                                                jint j_generate_result) {
+                                                int64_t backend_session,
+                                                int32_t j_generate_result) {
   reinterpret_cast<BackendSessionImplAndroid*>(backend_session)
       ->OnComplete(static_cast<BackendSessionImplAndroid::GenerateResult>(
           j_generate_result));
@@ -195,10 +268,20 @@ static void JNI_AiCoreSessionWrapper_OnComplete(JNIEnv* env,
 
 static void JNI_AiCoreSessionWrapper_OnResponse(
     JNIEnv* env,
-    jlong backend_session,
+    int64_t backend_session,
     const jni_zero::JavaRef<jstring>& j_response) {
   reinterpret_cast<BackendSessionImplAndroid*>(backend_session)
       ->OnResponse(base::android::ConvertJavaStringToUTF8(env, j_response));
+}
+
+static void JNI_AiCoreSessionWrapper_OnSizeInTokensResult(
+    JNIEnv* env,
+    int64_t backend_session,
+    int32_t j_token_count) {
+  // j_token_count cannot be negative, but just in case, clamp it to 0 as
+  // OnSizeInTokensResult expects a uint32_t value.
+  reinterpret_cast<BackendSessionImplAndroid*>(backend_session)
+      ->OnSizeInTokensResult(std::max(0, j_token_count));
 }
 
 }  // namespace on_device_model

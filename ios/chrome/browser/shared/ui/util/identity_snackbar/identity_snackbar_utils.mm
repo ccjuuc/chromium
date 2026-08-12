@@ -19,7 +19,7 @@
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
-#import "ios/chrome/browser/signin/model/avatar_provider.h"
+#import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service_factory.h"
 #import "ios/chrome/browser/signin/model/constants.h"
@@ -44,10 +44,10 @@ constexpr CGFloat kSymbolsPointSize = 24;
 UIImage* GetBrandedGoogleServicesSymbol() {
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
   return MakeSymbolMulticolor(
-      CustomSymbolWithPointSize(kGoogleIconSymbol, kSymbolsPointSize));
+      SymbolWithPointSize(SymbolGoogleIcon, kSymbolsPointSize));
 #else
   return MakeSymbolMulticolor(
-      DefaultSymbolWithPointSize(kGearshape2Symbol, kSymbolsPointSize));
+      SymbolWithPointSize(SymbolGearshape2, kSymbolsPointSize));
 #endif
 }
 
@@ -55,14 +55,17 @@ UIImage* GetBrandedGoogleServicesSymbol() {
 UIImage* GetEnterpriseIcon() {
   UIColor* color = [UIColor colorNamed:kTextSecondaryColor];
   return SymbolWithPalette(
-      CustomSymbolWithPointSize(kEnterpriseSymbol, kSymbolsPointSize),
-      @[ color ]);
+      SymbolWithPointSize(SymbolEnterprise, kSymbolsPointSize), @[ color ]);
 }
 
 }  // namespace
 
-SnackbarMessage* CreateIdentitySnackbarMessage(id<SystemIdentity> identity,
-                                               Browser* browser) {
+// Creates and returns a snackbar message with the user's identity information,
+// using the given custom title.
+SnackbarMessage* CreateIdentitySnackbarMessageWithCustomTitle(
+    id<SystemIdentity> identity,
+    Browser* browser,
+    NSString* title) {
   CHECK(identity, base::NotFatalUntil::M151);
   // Retrieve necessary services and profile information.
   ProfileIOS* profile = browser->GetProfile()->GetOriginalProfile();
@@ -77,14 +80,6 @@ SnackbarMessage* CreateIdentitySnackbarMessage(id<SystemIdentity> identity,
       /*name=*/kIdentitySnackbarHadUserName,
       /*sample=*/(identity.userGivenName != nil));
 
-  // Determine the main title of the snackbar.
-  NSString* title =
-      (identity.userGivenName)
-          ? l10n_util::GetNSStringF(
-                IDS_IOS_ACCOUNT_MENU_SWITCH_CONFIRMATION_TITLE,
-                base::SysNSStringToUTF16(identity.userGivenName))
-          : l10n_util::GetNSString(IDS_IOS_SIGNIN_ACCOUNT_NOTIFICATION_TITLE);
-
   SnackbarMessage* message = [[SnackbarMessage alloc] initWithTitle:title];
 
   // Configure subtitles based on management state and screen width.
@@ -93,28 +88,19 @@ SnackbarMessage* CreateIdentitySnackbarMessage(id<SystemIdentity> identity,
     // status.
     if (IsCompactWidth(browser->GetSceneState().window.rootViewController)) {
       message.subtitle = identity.userEmail;
-      if (AreSeparateProfilesForManagedAccountsEnabled()) {
-        message.secondarySubtitle =
-            l10n_util::GetNSString(management_state.is_browser_managed()
-                                       ? IDS_IOS_ENTERPRISE_BROWSER_MANAGED
-                                       : IDS_IOS_ENTERPRISE_ACCOUNT_MANAGED);
-      } else {
-        message.secondarySubtitle = l10n_util::GetNSString(
-            IDS_IOS_ENTERPRISE_MANAGED_BY_YOUR_ORGANIZATION);
-      }
+      message.secondarySubtitle =
+          l10n_util::GetNSString(management_state.is_browser_managed()
+                                     ? IDS_IOS_ENTERPRISE_BROWSER_MANAGED
+                                     : IDS_IOS_ENTERPRISE_ACCOUNT_MANAGED);
     } else {
       // On regular screens, combine email and management status into one line.
       if (management_state.is_browser_managed()) {
         message.subtitle = l10n_util::GetNSStringF(
             IDS_IOS_ENTERPRISE_SWITCH_TO_MANAGED_BROWSER_WIDE_SCREEN,
             base::SysNSStringToUTF16(identity.userEmail));
-      } else if (AreSeparateProfilesForManagedAccountsEnabled()) {
-        message.subtitle = l10n_util::GetNSStringF(
-            IDS_IOS_ENTERPRISE_SWITCH_TO_MANAGED_ACCOUNT_WIDE_SCREEN,
-            base::SysNSStringToUTF16(identity.userEmail));
       } else {
         message.subtitle = l10n_util::GetNSStringF(
-            IDS_IOS_ENTERPRISE_SWITCH_TO_MANAGED_WIDE_SCREEN,
+            IDS_IOS_ENTERPRISE_SWITCH_TO_MANAGED_ACCOUNT_WIDE_SCREEN,
             base::SysNSStringToUTF16(identity.userEmail));
       }
     }
@@ -137,9 +123,35 @@ SnackbarMessage* CreateIdentitySnackbarMessage(id<SystemIdentity> identity,
   return message;
 }
 
+SnackbarMessage* CreateIdentitySnackbarMessage(id<SystemIdentity> identity,
+                                               Browser* browser) {
+  CHECK(identity, base::NotFatalUntil::M151);
+  // Determine the main title of the snackbar.
+  NSString* title =
+      (identity.userGivenName)
+          ? l10n_util::GetNSStringF(
+                IDS_IOS_ACCOUNT_MENU_SWITCH_CONFIRMATION_TITLE,
+                base::SysNSStringToUTF16(identity.userGivenName))
+          : l10n_util::GetNSString(IDS_IOS_SIGNIN_ACCOUNT_NOTIFICATION_TITLE);
+
+  return CreateIdentitySnackbarMessageWithCustomTitle(identity, browser, title);
+}
+
 void TriggerAccountSwitchSnackbarWithIdentity(id<SystemIdentity> identity,
                                               Browser* browser) {
   SnackbarMessage* message = CreateIdentitySnackbarMessage(identity, browser);
+  CommandDispatcher* dispatcher = browser->GetCommandDispatcher();
+  id<SnackbarCommands> snackbar_commands_handler =
+      HandlerForProtocol(dispatcher, SnackbarCommands);
+  [snackbar_commands_handler showSnackbarMessageOverBrowserToolbar:message];
+}
+
+void TriggerSigninConfirmationSnackbarWithCustomTitle(
+    id<SystemIdentity> identity,
+    Browser* browser,
+    NSString* custom_title) {
+  SnackbarMessage* message = CreateIdentitySnackbarMessageWithCustomTitle(
+      identity, browser, custom_title);
   CommandDispatcher* dispatcher = browser->GetCommandDispatcher();
   id<SnackbarCommands> snackbar_commands_handler =
       HandlerForProtocol(dispatcher, SnackbarCommands);

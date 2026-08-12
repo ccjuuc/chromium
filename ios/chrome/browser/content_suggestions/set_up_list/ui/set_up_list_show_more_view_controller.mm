@@ -138,7 +138,7 @@ NSString* const kSetUpListTitleAxId = @"kSetUpListTitleAxId";
     [setUpListItemStackView addArrangedSubview:separator];
     [NSLayoutConstraint activateConstraints:@[
       [separator.heightAnchor
-          constraintEqualToConstant:AlignValueToPixel(kSeparatorHeight)],
+          constraintEqualToConstant:AlignValueToLowerPixel(kSeparatorHeight)],
       [separator.leadingAnchor
           constraintEqualToAnchor:setUpListItemStackView.leadingAnchor],
       [separator.trailingAnchor
@@ -165,8 +165,7 @@ NSString* const kSetUpListTitleAxId = @"kSetUpListTitleAxId";
         constraintEqualToAnchor:subtitle.bottomAnchor
                        constant:kSetUpListStackViewDescriptionSpacing],
     [scrollView.bottomAnchor
-        constraintLessThanOrEqualToAnchor:self.view.safeAreaLayoutGuide
-                                              .bottomAnchor],
+        constraintLessThanOrEqualToAnchor:self.view.bottomAnchor],
   ]];
 
   AddSameConstraints(setUpListItemStackView, scrollView);

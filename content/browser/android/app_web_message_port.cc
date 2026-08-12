@@ -3,11 +3,14 @@
 // found in the LICENSE file.
 
 #include "content/browser/android/app_web_message_port.h"
+
 #include <memory>
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
+#include "base/check.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "content/public/browser/android/message_payload.h"
@@ -64,8 +67,8 @@ std::vector<blink::MessagePortDescriptor> AppWebMessagePort::Release(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   std::vector<blink::MessagePortDescriptor> ports;
   if (!jports.is_null()) {
-    for (auto jport : jports.ReadElements<jobject>()) {
-      jlong port_ptr = Java_AppWebMessagePort_getNativeObj(env, jport);
+    for (auto jport : jports.CreateView(env)) {
+      int64_t port_ptr = Java_AppWebMessagePort_getNativeObj(env, jport);
       // Ports are heap allocated native objects. Since we are taking ownership
       // of the object from the Java code we are responsible for cleaning it up.
       std::unique_ptr<AppWebMessagePort> port =

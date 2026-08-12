@@ -22,7 +22,7 @@
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
-#include "ash/webui/system_apps/public/system_web_app_type.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #endif
 
 namespace content {
@@ -40,11 +40,24 @@ using OnceInstallCallback =
 using OnceUninstallCallback =
     base::OnceCallback<void(const webapps::AppId& app_id, bool uninstalled)>;
 
+using WebAppInstallationAcceptanceResultCallback =
+    base::OnceCallback<void(bool install_success,
+                            base::OnceClosure reparent_closure)>;
+
 // Callback used to indicate whether a user has accepted the installation of a
-// web app.
-using WebAppInstallationAcceptanceCallback =
-    base::OnceCallback<void(bool user_accepted,
-                            std::unique_ptr<WebAppInstallInfo>)>;
+// web app. The `result_callback` will be called when the installation is
+// complete, providing a success flag and a closure to handle reparenting or
+// launching.
+using WebAppInstallationAcceptanceCallback = base::OnceCallback<void(
+    bool user_accepted,
+    std::unique_ptr<WebAppInstallInfo>,
+    WebAppInstallationAcceptanceResultCallback result_callback)>;
+
+// Adapts a WebAppInstallationAcceptanceCallback to a callback that takes
+// only 2 arguments (the old signature), automatically running the reparent
+// closure on success.
+base::OnceCallback<void(bool, std::unique_ptr<WebAppInstallInfo>)>
+AdaptToLaunchOnInstallSuccess(WebAppInstallationAcceptanceCallback callback);
 
 // Callback to show the WebApp installation confirmation bubble in UI.
 // |web_app_info| is the WebAppInstallInfo to be installed.
@@ -66,7 +79,7 @@ struct WebAppInstallParams {
   bool force_reinstall = false;
 
   // See `WebAppInstallTask::ApplyParamsToWebAppInstallInfo`
-  std::optional<mojom::UserDisplayMode> user_display_mode = std::nullopt;
+  std::optional<mojom::UserDisplayMode> user_display_mode;
 
   // URL to be used as start_url if manifest is unavailable.
   GURL fallback_start_url;
@@ -81,7 +94,12 @@ struct WebAppInstallParams {
   // proto::INSTALLED_WITH_OS_INTEGRATION.
   bool add_to_applications_menu = true;
   bool add_to_desktop = true;
-  bool add_to_quick_launch_bar = true;
+  // Pinning to Shelf on ChromeOS is not done by default and should be
+  // explicitly triggered (e.g. via the user-accepted install dialog). So, this
+  // defaults to false on ChromeOS, while remaining true by default on other
+  // desktop platforms where it has the expected native shortcut-creation
+  // effect.
+  bool add_to_quick_launch_bar = !BUILDFLAG(IS_CHROMEOS);
 
   // These have no effect outside of Chrome OS.
   bool add_to_search = true;

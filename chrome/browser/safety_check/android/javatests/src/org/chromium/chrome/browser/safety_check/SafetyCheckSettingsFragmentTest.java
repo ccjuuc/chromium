@@ -93,7 +93,7 @@ public class SafetyCheckSettingsFragmentTest {
         PasswordManagerTestHelper.setUpGmsCoreFakeBackends();
 
         when(mBackendSupportHelperMock.isBackendPresent()).thenReturn(true);
-        // The password manger is always available in Safety Check after login db deprecation.
+        // The password manager is always available in Safety Check after login db deprecation.
         configurePasswordManagerUtilBridge();
     }
 
@@ -167,12 +167,11 @@ public class SafetyCheckSettingsFragmentTest {
     }
 
     private void configureMockSyncService(boolean isPasswordSyncEnabled) {
-        when(mSyncService.isSyncFeatureEnabled()).thenReturn(true);
         Set<Integer> selectedTypes;
         selectedTypes =
                 isPasswordSyncEnabled
                         ? Set.of(UserSelectableType.PASSWORDS)
-                        : Collections.EMPTY_SET;
+                        : Collections.emptySet();
         when(mSyncService.getSelectedTypes()).thenReturn(selectedTypes);
         when(mSyncService.getAccountInfo())
                 .thenReturn(

@@ -5,6 +5,7 @@
 #ifndef COMPONENTS_WEBAPPS_ISOLATED_WEB_APPS_BUNDLE_OPERATIONS_BUNDLE_OPERATIONS_H_
 #define COMPONENTS_WEBAPPS_ISOLATED_WEB_APPS_BUNDLE_OPERATIONS_BUNDLE_OPERATIONS_H_
 
+#include "base/component_export.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
 #include "base/types/expected.h"
@@ -21,26 +22,25 @@ namespace web_app {
 // bundle at `path`. This is an insecure operation as it does NOT verify the
 // bundle's signatures. It should only be used to discover the ID of a bundle
 // from an untrusted source before it can be validated.
+COMPONENT_EXPORT(ISOLATED_WEB_APPS)
 void ReadSignedWebBundleIdInsecurely(
     const base::FilePath& path,
     base::OnceCallback<void(
         base::expected<web_package::SignedWebBundleId, std::string>)> callback);
 
-// Asynchronously validates the integrity and trust of a Signed Web Bundle.
+// Asynchronously validates the integrity of a Signed Web Bundle.
 //
 // This function performs a full security check, including:
 //  - Verifying that the bundle's ID matches the `expected_web_bundle_id`.
 //  - Verifying the bundle's cryptographic signatures.
-//  - Validating that the bundle is trusted for the given `browser_context`
-//    by checking enterprise policies, dev mode status, etc.
 //
 // On success, the callback is run with the parsed integrity block.
 // On failure, the callback is run with a descriptive error message.
-void ValidateSignedWebBundleTrustAndSignatures(
+COMPONENT_EXPORT(ISOLATED_WEB_APPS)
+void ValidateSignedWebBundleSignatures(
     content::BrowserContext* browser_context,
     const base::FilePath& path,
     const web_package::SignedWebBundleId& expected_web_bundle_id,
-    bool is_dev_mode_bundle,
     base::OnceCallback<
         void(base::expected<web_package::SignedWebBundleIntegrityBlock,
                             std::string>)> callback);
@@ -49,6 +49,7 @@ void ValidateSignedWebBundleTrustAndSignatures(
 // any resources (like open file handles) that the browser may be holding for
 // it. The callback is run once the bundle has been closed. This should be
 // called before attempting to delete the bundle file from disk.
+COMPONENT_EXPORT(ISOLATED_WEB_APPS)
 void CloseBundle(content::BrowserContext* browser_context,
                  const base::FilePath& path,
                  base::OnceClosure callback);

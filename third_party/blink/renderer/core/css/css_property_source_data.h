@@ -97,7 +97,8 @@ class CSSRuleSourceData final : public GarbageCollected<CSSRuleSourceData> {
            type == StyleRule::kPage || type == StyleRule::kPageMargin ||
            type == StyleRule::kProperty || type == StyleRule::kKeyframe ||
            type == StyleRule::kFontPaletteValues ||
-           type == StyleRule::kFontFeature || type == StyleRule::kPositionTry;
+           type == StyleRule::kFontFeature || type == StyleRule::kPositionTry ||
+           type == StyleRule::kCounterStyle;
   }
 
   bool HasMedia() const {
@@ -109,6 +110,8 @@ class CSSRuleSourceData final : public GarbageCollected<CSSRuleSourceData> {
   bool HasSupports() const { return type == StyleRule::kSupports; }
 
   bool HasScope() const { return type == StyleRule::kScope; }
+
+  bool HasNavigation() const { return type == StyleRule::kNavigation; }
 
   StyleRule::RuleType type;
 

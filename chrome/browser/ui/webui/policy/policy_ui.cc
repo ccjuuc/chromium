@@ -7,11 +7,13 @@
 #include <memory>
 
 #include "base/check.h"
+#include "base/command_line.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/json/json_writer.h"
 #include "base/strings/stringprintf.h"
 #include "base/system/sys_info.h"
 #include "base/values.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
@@ -25,9 +27,11 @@
 #include "components/embedder_support/user_agent_utils.h"
 #include "components/grit/policy_resources.h"
 #include "components/grit/policy_resources_map.h"
+#include "components/policy/core/browser/webui/policy_webui_constants.h"
 #include "components/policy/core/common/features.h"
 #include "components/policy/core/common/management/management_service.h"
 #include "components/policy/core/common/policy_loader_common.h"
+#include "components/policy/core/common/policy_logger.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/policy/core/common/policy_utils.h"
 #include "components/policy/core/common/schema_registry.h"
@@ -39,9 +43,15 @@
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_controller.h"
 #include "content/public/browser/web_ui_message_handler.h"
+#include "content/public/browser/webui_config.h"
+#include "content/public/common/url_constants.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/webui/webui_util.h"
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/enterprise/reporting/browser_launch/scoped_initial_command_line.h"
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
 
 // LINT.IfChange
 
@@ -69,8 +79,8 @@ std::string GetOsInfo() {
 
 // Returns the version information to be displayed on the chrome://policy/logs
 // page.
-base::Value::Dict GetVersionInfo() {
-  base::Value::Dict version_info;
+base::DictValue GetVersionInfo() {
+  base::DictValue version_info;
 
   version_info.Set("revision", version_info::GetLastChange());
   version_info.Set("version", version_info::GetVersionNumber());
@@ -87,6 +97,7 @@ void CreateAndAddPolicyUIHtmlSource(Profile* profile) {
 
   static constexpr webui::LocalizedString kStrings[] = {
       // Localized strings (alphabetical order).
+      {"clearSearch", IDS_CLEAR},
       {"copyPoliciesJSON", IDS_COPY_POLICIES_JSON},
       {"exportPoliciesJSON", IDS_EXPORT_POLICIES_JSON},
       {"filterPlaceholder", IDS_POLICY_FILTER_PLACEHOLDER},
@@ -116,6 +127,9 @@ void CreateAndAddPolicyUIHtmlSource(Profile* profile) {
       {"labelPrecedence", IDS_POLICY_LABEL_PRECEDENCE},
       {"labelProfileId", IDS_POLICY_LABEL_PROFILE_ID},
       {"labelRefreshInterval", IDS_POLICY_LABEL_REFRESH_INTERVAL},
+      {"labelPolicyFetch", IDS_POLICY_LABEL_POLICY_FETCH},
+      {"labelExtensionInstallPolicyFetch",
+       IDS_POLICY_LABEL_EXTENSION_INSTALL_POLICY_FETCH},
       {"labelStatus", IDS_POLICY_LABEL_STATUS},
       {"labelTimeSinceLastFetchAttempt",
        IDS_POLICY_LABEL_TIME_SINCE_LAST_FETCH_ATTEMPT},
@@ -142,15 +156,16 @@ void CreateAndAddPolicyUIHtmlSource(Profile* profile) {
       {"statusFlexOrgNoPolicy", IDS_POLICY_STATUS_FLEX_ORG_NO_POLICY},
       {"statusDevice", IDS_POLICY_STATUS_DEVICE},
       {"statusMachine", IDS_POLICY_STATUS_MACHINE},
-#if BUILDFLAG(IS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
       {"statusUpdater", IDS_POLICY_STATUS_UPDATER},
-#endif
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
       {"statusUser", IDS_POLICY_STATUS_USER},
 #if !BUILDFLAG(IS_CHROMEOS)
       {"uploadReport", IDS_UPLOAD_REPORT},
 #endif  // !BUILDFLAG(IS_CHROMEOS)
       {"viewLogs", IDS_VIEW_POLICY_LOGS},
 #if !BUILDFLAG(IS_ANDROID)
+      {"commandLineFlagsWarning", IDS_POLICY_COMMAND_LINE_FLAGS_WARNING},
       {"promotionBannerTitle", IDS_POLICY_BANNER_PROMOTION_TITLE},
       {"promotionBannerDesc", IDS_POLICY_BANNER_PROMOTION_DESC},
       {"promotionBannerBtn", IDS_POLICY_BANNER_PROMOTION_BTN},
@@ -162,6 +177,7 @@ void CreateAndAddPolicyUIHtmlSource(Profile* profile) {
   static constexpr webui::LocalizedString kPolicyLogsStrings[] = {
       {"browserName", IDS_PRODUCT_NAME},
       {"exportLogsJSON", IDS_EXPORT_POLICY_LOGS_JSON},
+      {"filterLogs", IDS_POLICY_LOGS_FILTER_PLACEHOLDER},
       {"logsTitle", IDS_POLICY_LOGS_TITLE},
       {"os", IDS_VERSION_UI_OS},
       {"refreshLogs", IDS_REFRESH_POLICY_LOGS},
@@ -174,8 +190,10 @@ void CreateAndAddPolicyUIHtmlSource(Profile* profile) {
   source->AddString("versionInfo",
                     base::WriteJson(GetVersionInfo()).value_or(""));
 
-  source->AddResourcePath("logs/", IDR_POLICY_LOGS_POLICY_LOGS_HTML);
-  source->AddResourcePath("logs", IDR_POLICY_LOGS_POLICY_LOGS_HTML);
+  if (policy::PolicyLogger::IsPolicyLoggingEnabled()) {
+    source->AddResourcePath("logs/", IDR_POLICY_LOGS_POLICY_LOGS_HTML);
+    source->AddResourcePath("logs", IDR_POLICY_LOGS_POLICY_LOGS_HTML);
+  }
 
   const bool allow_policy_test_page = PolicyUI::ShouldLoadTestPage(profile);
   if (allow_policy_test_page) {
@@ -233,21 +251,58 @@ void CreateAndAddPolicyUIHtmlSource(Profile* profile) {
     source->AddLocalizedStrings(kPolicyTestTypes);
   }
 
-  source->AddString("acceptedPaths",
-                    allow_policy_test_page ? "/|/test|/logs" : "/|/logs");
+  if (policy::PolicyLogger::IsPolicyLoggingEnabled()) {
+    source->AddString("acceptedPaths",
+                      allow_policy_test_page ? "/|/test|/logs" : "/|/logs");
+  } else {
+    source->AddString("acceptedPaths",
+                      allow_policy_test_page ? "/|/test" : "/");
+  }
   webui::SetupWebUIDataSource(source, kPolicyResources, IDR_POLICY_POLICY_HTML);
 
   webui::EnableTrustedTypesCSP(source);
+
+  source->AddBoolean(
+      "policyPageMojoMigrationEnabled",
+      base::FeatureList::IsEnabled(policy::features::kPolicyPageMojoMigration));
+
+  source->AddBoolean("hideUploadReportButton", profile->IsOffTheRecord());
+#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_CHROMEOS)
+  source->AddBoolean(
+      policy::kHasCustomCommandLineFlags,
+      HasUserSpecifiedCommandLineSwitches(&GetInitialBrowserCommandLine()));
+#else
+  source->AddBoolean(policy::kHasCustomCommandLineFlags, false);
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+#endif  // !BUILDFLAG(IS_ANDROID)
 }
 
 }  // namespace
 
-PolicyUI::PolicyUI(content::WebUI* web_ui) : WebUIController(web_ui) {
-  web_ui->AddMessageHandler(std::make_unique<PolicyUIHandler>());
+PolicyUI::PolicyUI(content::WebUI* web_ui)
+    : ui::MojoWebUIController(web_ui, /*enable_chrome_send=*/true) {
+  web_ui->AddMessageHandler(
+      std::make_unique<PolicyUIHandler>(Profile::FromWebUI(web_ui)));
   CreateAndAddPolicyUIHtmlSource(Profile::FromWebUI(web_ui));
 }
 
 PolicyUI::~PolicyUI() = default;
+
+void PolicyUI::BindInterface(
+    mojo::PendingReceiver<policy::mojom::PolicyPageHandlerFactory> receiver) {
+  factory_receiver_.reset();
+  factory_receiver_.Bind(std::move(receiver));
+}
+
+void PolicyUI::CreateHandler(
+    mojo::PendingReceiver<policy::mojom::PolicyPageHandler> handler,
+    mojo::PendingRemote<policy::mojom::PolicyPageClient> client) {
+  page_handler_ = std::make_unique<PolicyUIHandler>(
+      std::move(handler), std::move(client), Profile::FromWebUI(web_ui()));
+}
+
+WEB_UI_CONTROLLER_TYPE_IMPL(PolicyUI)
 
 // static
 void PolicyUI::RegisterProfilePrefs(PrefRegistrySimple* registry) {
@@ -300,7 +355,7 @@ base::Value PolicyUI::GetSchema(Profile* profile) {
   //   },
   //   ...
   // }
-  base::Value::Dict dict;
+  base::DictValue dict;
   for (const auto domain : kDomains) {
     const policy::ComponentMap* components =
         registry->schema_map()->GetComponents(domain);
@@ -309,7 +364,7 @@ base::Value PolicyUI::GetSchema(Profile* profile) {
     }
     for (const auto& [component_id, schema] : *components) {
       DCHECK_EQ(schema.type(), base::Value::Type::DICT);
-      base::Value::List policy_names;
+      base::ListValue policy_names;
       auto it = schema.GetPropertiesIterator();
       for (; !it.IsAtEnd(); it.Advance()) {
         if (it.schema().IsSensitiveValue() ||

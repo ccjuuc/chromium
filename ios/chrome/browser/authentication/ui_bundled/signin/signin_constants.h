@@ -44,6 +44,12 @@ enum class CancelationReason {
   kUserCanceled,
   // Canceled, but not by the user.
   kFailed,
+  // Canceled due to age mismatch.
+  kAgeMismatchCanceled,
+  // Canceled due to age mismatch, user wants to stay signed out.
+  kAgeMismatchCanceledStaySignedOut,
+  // Sign-in is not allowed.
+  kSignInNotAllowed,
 };
 
 }  // namespace signin_ui
@@ -86,6 +92,16 @@ using SigninCoordinatorCompletionCallback =
     void (^)(SigninCoordinator* coordinator,
              SigninCoordinatorResult result,
              id<SystemIdentity> identity);
+
+// Callback called to notify whether a profile change can proceed.
+using SigninChangeProfileCallback = void (^)(BOOL canProceed);
+
+// Block called to check whether a profile change can occur. The result is
+// sent, synchronously or not, to the callback provided as argument.
+// nil represents the case where the user always accepts, that is,
+// `canProceed` is YES.
+using SigninChangeProfileConfirmationBlock =
+    void (^)(SigninChangeProfileCallback callback);
 
 // Name of the accessibility identifier for the History Sync view.
 extern NSString* const kHistorySyncViewAccessibilityIdentifier;
@@ -174,6 +190,10 @@ extern const char* const kUMASSORecallPromoSeenCount;
 // Default timeout to wait for fetching account capabilities, which determine
 // minor mode restrictions status.
 inline constexpr base::TimeDelta kMinorModeRestrictionsFetchDeadline =
+    base::Milliseconds(500);
+
+// Default timeout to wait for fetching the CanSignInToChrome capability.
+inline constexpr base::TimeDelta kCanSignInToChromeCapabilityFetchTimeout =
     base::Milliseconds(500);
 
 // URL to the learn more screen about managed profiles.

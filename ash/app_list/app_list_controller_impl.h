@@ -34,6 +34,7 @@
 #include "ash/wm/splitview/split_view_observer.h"
 #include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
+#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
@@ -353,6 +354,9 @@ class ASH_EXPORT AppListControllerImpl
   void MaybeShowSunfishLauncherNudge(views::View* launcher_button);
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(AppListControllerImplTest,
+                           ShowAppListOnPrimaryDisplay);
+
   // Convenience methods for getting models from `model_provider_`.
   AppListModel* GetModel();
   SearchModel* GetSearchModel();
@@ -506,7 +510,12 @@ class ASH_EXPORT AppListControllerImpl
   // The last time the app list was shown.
   std::optional<base::TimeTicks> last_show_timestamp_;
 
-  base::ObserverList<AppListControllerObserver> observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      AppListControllerObserver,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers_;
 
   // Sub-controller to handle app item badges. Must be constructed after
   // `model_provider_`.

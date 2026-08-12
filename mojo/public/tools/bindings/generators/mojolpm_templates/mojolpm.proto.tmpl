@@ -66,7 +66,16 @@ enum {{enum_name}} {
 {%-     endif %}
 
   message {{name}} {
-    repeated {{entry_name}} values = 1;
+    {% if kind.length is none %}
+      repeated {{entry_name}} values = 1;
+    {% else %}
+    // Fixed-size arrays must always have a set number of elements.
+    // Repeated fields do not support specifying a number of elements,
+    // so this loop generates fields equal to the number of elements required.
+    {%- for i in range(kind.length) %}
+       required {{entry_name}} value_{{i}} = {{loop.index}};
+   {%- endfor %}
+   {% endif %}
   }
 
 {%-   elif kind|is_map_kind %}
@@ -132,8 +141,8 @@ message {{struct_name}}_ProtoStruct {
 {%-         if pf|is_primary_nullable_value_kind_packed_field %}
 {%-           set original_field = pf.original_field %}
 {%-           set kind = original_field.kind %}
-{%-           set name = original_field.name %}
-  {{kind|proto_field_type}} m_{{name}} = {{name|proto_id(kind)}};
+{%-           set name = original_field.name|camel_to_under %}
+  {{kind|proto_field_type(field=original_field)}} m_{{name}} = {{name|proto_id(kind)}};
 {%-         endif %}
 {%-       else %}
 {%-         set name = pf.field.name|camel_to_under %}
@@ -143,7 +152,7 @@ message {{struct_name}}_ProtoStruct {
 {%-         elif kind|is_map_kind %}
   {{optional_or_required(kind)}} {{name|under_to_camel}}_Map m_{{name}} = {{name|proto_id(kind)}};
 {%-         else %}
-  {{kind|proto_field_type}} m_{{name}} = {{name|proto_id(kind)}};
+  {{kind|proto_field_type(field=pf.field)}} m_{{name}} = {{name|proto_id(kind)}};
 {%-         endif %}
 {%-       endif %}
 {%-     endfor %}

@@ -70,6 +70,7 @@
 #include "third_party/blink/public/web/web_navigation_type.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/weak_identifier_map.h"
+#include "third_party/blink/renderer/core/execution_context/agent_cluster_key.h"
 #include "third_party/blink/renderer/core/frame/frame_types.h"
 #include "third_party/blink/renderer/core/frame/policy_container.h"
 #include "third_party/blink/renderer/core/frame/use_counter_impl.h"
@@ -81,6 +82,7 @@
 #include "third_party/blink/renderer/core/page/viewport_description.h"
 #include "third_party/blink/renderer/core/permissions_policy/policy_helper.h"
 #include "third_party/blink/renderer/core/speculation_rules/speculation_rule_set.h"
+#include "third_party/blink/renderer/core/timing/performance_timeline_entry_id_generator.h"
 #include "third_party/blink/renderer/platform/allow_discouraged_type.h"
 #include "third_party/blink/renderer/platform/bindings/source_location.h"
 #include "third_party/blink/renderer/platform/exported/wrapped_resource_response.h"
@@ -113,7 +115,6 @@ class Element;
 class Frame;
 class FrameLoader;
 class HistoryItem;
-class LocalDOMWindow;
 class LocalFrame;
 class LocalFrameClient;
 class MHTMLArchive;
@@ -248,9 +249,12 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
       WebFrameLoadType,
       FirePopstate,
       bool should_skip_screenshot,
+      UserNavigationInvolvement involvement,
+      PerformanceTimelineEntryIdInfo interaction_id =
+          PerformanceTimelineEntryIdInfo::kNone,
       bool is_browser_initiated = false,
       bool is_synchronously_committed = true,
-      std::optional<scheduler::TaskAttributionId> task_state_id = std::nullopt);
+      const SecurityOrigin* initiator_origin = nullptr);
 
   // |is_synchronously_committed| is described in comment for
   // CommitSameDocumentNavigation.
@@ -264,10 +268,12 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
       const SecurityOrigin* initiator_origin,
       bool is_browser_initiated,
       bool is_synchronously_committed,
-      std::optional<scheduler::TaskAttributionId> task_state_id,
       bool has_transient_user_activation,
+      UserNavigationInvolvement involvement,
       bool has_ua_visual_transition,
-      bool should_skip_screenshot);
+      bool should_skip_screenshot,
+      PerformanceTimelineEntryIdInfo interaction_id =
+          PerformanceTimelineEntryIdInfo::kNone);
 
   const ResourceResponse& GetResponse() const { return response_; }
 
@@ -289,6 +295,8 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
 
   void StartLoading();
   void StopLoading();
+
+  void InheritXsltUseCountersFrom(DocumentLoader* other);
 
   // CommitNavigation() does the work of creating a Document and
   // DocumentParser, as well as creating a new LocalDOMWindow if needed. It also
@@ -412,6 +420,18 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
   // to ensure the token can only be used to invoke a single text fragment.
   bool ConsumeTextFragmentToken();
 
+  // Returns the text fragment to scroll to and clears it.
+  std::optional<String> TakeInternalScrollToTextFragment();
+
+  bool HasInternalScrollToTextFragment() const {
+    return internal_scroll_to_text_fragment_.has_value();
+  }
+
+  // For testing purposes.
+  void SetInternalScrollToTextFragment(const String& text_fragment) {
+    internal_scroll_to_text_fragment_ = text_fragment;
+  }
+
   // Notifies that the prerendering document this loader is working for is
   // activated.
   void NotifyPrerenderingDocumentActivated(
@@ -425,6 +445,19 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
   mojo::PendingRemote<mojom::blink::CodeCacheHost> CreateCodeCacheHost();
 
   HashMap<KURL, EarlyHintsPreloadEntry> GetEarlyHintsPreloadedResources();
+
+  // An origin preconnected to via an Early Hints response, for the
+  // SpeculationMeasurement API. `early_hint` is true if the preconnect came
+  // from a 103 Early Hints response, false if from a `Link: rel=preconnect`
+  // header on the final navigation response. The crossorigin attribute is
+  // converted to a CrossOriginAttributeValue when recorded on the fetcher.
+  struct Preconnect {
+    KURL url;
+    network::mojom::CrossOriginAttribute cross_origin =
+        network::mojom::CrossOriginAttribute::kUnspecified;
+    bool early_hint = false;
+  };
+  const Vector<Preconnect>& GetPreconnects() const { return preconnects_; }
 
   const std::optional<Vector<KURL>>& AdAuctionComponents() const {
     return ad_auction_components_;
@@ -483,6 +516,8 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
   const mojom::RendererContentSettingsPtr& GetContentSettings();
 
   void ReportTotalTakenTimeToUpdateSubresourceLoadMetrics();
+
+  bool IsInCommitDataForTesting() const { return in_commit_data_; }
 
  protected:
   // Based on its MIME type, if the main document's response corresponds to an
@@ -546,9 +581,11 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
       bool is_browser_initiated,
       bool is_synchronously_committed,
       mojom::blink::TriggeringEventInfo,
-      std::optional<scheduler::TaskAttributionId> task_state_id,
+      UserNavigationInvolvement involvement,
       bool has_ua_visual_transition,
-      bool should_skip_screenshot);
+      bool should_skip_screenshot,
+      PerformanceTimelineEntryIdInfo interaction_id =
+          PerformanceTimelineEntryIdInfo::kNone);
 
   // Use these method only where it's guaranteed that |m_frame| hasn't been
   // cleared.
@@ -640,9 +677,10 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
   // conversion.
   std::unique_ptr<PolicyContainer> policy_container_;
 
-  // The permissions policy to be applied to the window at initialization time.
-  const std::optional<network::ParsedPermissionsPolicy>
-      initial_permissions_policy_;
+  // The permissions policy to be applied to the window at initialization time,
+  // after merging it with headers.
+  const std::optional<Vector<IsolatedAppPermissionPolicyEntry>>
+      isolated_app_policy_;
 
   // These fields are copied from WebNavigationParams, see there for definition.
   DocumentToken token_;
@@ -661,6 +699,7 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
   const std::optional<blink::mojom::FetchCacheMode> force_fetch_cache_mode_;
   const FramePolicy frame_policy_;
   std::optional<uint64_t> visited_link_salt_;
+  base::UnguessableToken initiator_state_token_;
 
   Member<LocalFrame> frame_;
 
@@ -743,6 +782,11 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
   // current document or was browser-initiated.
   bool last_navigation_had_trusted_initiator_ = false;
 
+  // Secure-context-root bit (see
+  // `ContentBrowserClient::IsSecureContextRoot()`), applied to the
+  // window's SecurityContext.
+  bool is_secure_context_root_ = false;
+
   // Whether this load request comes with a sticky user activation. For
   // prerendered pages, this is initially false but could be updated on
   // prerender page activation.
@@ -759,6 +803,10 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
   // to invoke. This token may be instead consumed to pass this permission
   // through a redirect.
   bool has_text_fragment_token_ = false;
+
+  // If set, the document should attempt to scroll this text fragment into view
+  // upon load, without highlighting it.
+  std::optional<String> internal_scroll_to_text_fragment_;
 
   // See WebNavigationParams for definition.
   const bool was_discarded_ = false;
@@ -795,8 +843,8 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
   // Whether the document can be scrolled on load
   bool navigation_scroll_allowed_ = true;
 
-  bool origin_agent_cluster_ = false;
-  bool origin_agent_cluster_left_as_default_ = true;
+  // The AgentClusterKey to use to select an Agent for the document.
+  AgentClusterKey agent_cluster_key_;
 
   // Whether this load request is from a cross-site navigation that swaps
   // BrowsingContextGroup.
@@ -819,6 +867,7 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
       pending_code_cache_host_for_background_;
 
   HashMap<KURL, EarlyHintsPreloadEntry> early_hints_preloaded_resources_;
+  Vector<Preconnect> preconnects_;
 
   // If this is a navigation to fenced frame from an interest group auction,
   // contains URNs to the ad components returned by the winning bid. Null,
@@ -879,6 +928,24 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
   // Stores the total time taken by `UpdateSubresourceLoadMetrics()` for the
   // measurement purpose.
   base::TimeDelta total_taken_time_to_update_subresource_load_metrics_;
+
+  // Special case for same-document navigations initiated by a cross-origin
+  // frame: When a same-document navigation occurs in an iframe, we call
+  // FrameOwner::DispatchLoad() to fire a load event on the iframe that is
+  // embedding this frame. The parent frame containing that iframe might be
+  // cross-origin, and therefore shouldn't know whether the navigation was
+  // same-document or cross-document. We therefore schedule the DispatchLoad
+  // on a timer, which allows us to coalesce repeated same-document navigations
+  // into a single DispatchLoad, emulating the behavior of repeated
+  // cross-document navigations that will cancel each other if one doesn't have
+  // time to finish before the next one begins.
+  TaskHandle cross_origin_parent_load_event_task_;
+
+  // Token used to derive a consistent opaque origin for the initial empty
+  // document of a newly created sandboxed frame or window. Non-null only
+  // when committing the initial empty document with the `kOrigin` sandbox
+  // flag set, null for all cross-document navigations.
+  std::unique_ptr<base::UnguessableToken> sandbox_origin_token_;
 };
 
 DECLARE_WEAK_IDENTIFIER_MAP(DocumentLoader);

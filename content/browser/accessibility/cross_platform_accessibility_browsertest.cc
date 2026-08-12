@@ -10,9 +10,9 @@
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/functional/callback_helpers.h"
 #include "base/strings/escape.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
@@ -20,6 +20,7 @@
 #include "base/timer/elapsed_timer.h"
 #include "build/build_config.h"
 #include "build/chromecast_buildflags.h"
+#include "content/browser/accessibility/accessibility_test_helpers.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
@@ -32,6 +33,7 @@
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/scoped_accessibility_mode_override.h"
 #include "content/shell/browser/shell.h"
+#include "net/dns/mock_host_resolver.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/blink/public/common/features.h"
@@ -40,6 +42,7 @@
 #include "ui/accessibility/ax_node.h"
 #include "ui/accessibility/ax_tree.h"
 #include "ui/accessibility/ax_tree_id.h"
+#include "ui/accessibility/platform/ax_platform_node_base.h"
 #include "ui/accessibility/platform/browser_accessibility.h"
 #include "ui/accessibility/platform/browser_accessibility_manager.h"
 #include "ui/base/buildflags.h"
@@ -48,6 +51,14 @@
 #include "base/win/atl.h"
 #include "base/win/scoped_com_initializer.h"
 #include "ui/base/win/atl_module.h"
+#endif
+
+#if BUILDFLAG(IS_MAC)
+#include "base/mac/mac_util.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+#include "content/browser/accessibility/browser_accessibility_android.h"
 #endif
 
 using ::testing::ElementsAre;
@@ -78,7 +89,7 @@ class CrossPlatformAccessibilityBrowserTest : public ContentBrowserTest {
   void RecursiveAssertUniqueIds(const ui::AXNode* node,
                                 absl::flat_hash_set<int>* ids) const {
     ASSERT_TRUE(ids);
-    ASSERT_FALSE(base::Contains(*ids, node->id()));
+    ASSERT_FALSE(ids->contains(node->id()));
     ids->insert(node->id());
     for (const ui::AXNode* child : node->children()) {
       RecursiveAssertUniqueIds(child, ids);
@@ -138,67 +149,33 @@ class CrossPlatformAccessibilityBrowserTest : public ContentBrowserTest {
   }
 
   ui::BrowserAccessibility* FindNode(const std::string& name_or_value) {
-    return FindNodeInSubtree(*GetManager()->GetBrowserAccessibilityRoot(),
-                             name_or_value);
-  }
-
-  ui::BrowserAccessibility* FindNodeInSubtree(
-      ui::BrowserAccessibility& node,
-      const std::string& name_or_value) {
-    const std::string& name =
-        node.GetStringAttribute(ax::mojom::StringAttribute::kName);
-    // Note that in the case of a text field,
-    // "BrowserAccessibility::GetValueForControl" has the added functionality
-    // of computing the value of an ARIA text box from its inner text.
-    //
-    // <div contenteditable="true" role="textbox">Hello world.</div>
-    // Will expose no HTML value attribute, but some screen readers, such as
-    // Jaws, VoiceOver and Talkback, require one to be computed.
-    const std::string& value = base::UTF16ToUTF8(node.GetValueForControl());
-    if (name == name_or_value || value == name_or_value) {
-      return &node;
-    }
-
-    for (unsigned int i = 0; i < node.PlatformChildCount(); ++i) {
-      ui::BrowserAccessibility* result =
-          FindNodeInSubtree(*node.PlatformGetChild(i), name_or_value);
-      if (result) {
-        return result;
-      }
-    }
-
-    return nullptr;
+    return FindFirstAccessibilityNodeWithNameOrValue(
+        *GetManager()->GetBrowserAccessibilityRoot(), name_or_value);
   }
 
   ui::BrowserAccessibility* FindFirstNodeWithRole(ax::mojom::Role role_value) {
-    return FindFirstNodeWithRoleInSubtree(
+    return FindFirstAccessibilityNodeWithRole(
         *GetManager()->GetBrowserAccessibilityRoot(), role_value);
   }
 
-  ui::BrowserAccessibility* FindFirstNodeWithRoleInSubtree(
-      ui::BrowserAccessibility& node,
-      ax::mojom::Role role_value) {
-    if (node.GetRole() == role_value) {
-      return &node;
-    }
-
-    for (unsigned int i = 0; i < node.PlatformChildCount(); ++i) {
-      ui::BrowserAccessibility* result =
-          FindFirstNodeWithRoleInSubtree(*node.PlatformGetChild(i), role_value);
-      if (result) {
-        return result;
-      }
-    }
-
-    return nullptr;
-  }
-
-  void PressTabAndWaitForFocusChange() {
+  // Repeatedly presses Tab until `target_name` is focused, waiting for the
+  // accessibility focus node to change and settle on a named element after
+  // each keypress.
+  void PressTabUntilFocused(std::string_view target_name) {
     AccessibilityNotificationWaiter waiter(
         shell()->web_contents(), ui::AXEventGenerator::Event::FOCUS_CHANGED);
-    SimulateKeyPress(shell()->web_contents(), ui::DomKey::TAB, ui::DomCode::TAB,
-                     ui::VKEY_TAB, false, false, false, false);
-    ASSERT_TRUE(waiter.WaitForNotification());
+    while (GetNameOfFocusedNode() != target_name) {
+      std::string previous_focus = GetNameOfFocusedNode();
+      SimulateKeyPress(shell()->web_contents(), ui::DomKey::TAB,
+                       ui::DomCode::TAB, ui::VKEY_TAB, false, false, false,
+                       false);
+      // Wait for focus to change away from `previous_focus` and settle past
+      // transient iframe document root focus events, which have empty names.
+      while (GetNameOfFocusedNode() == previous_focus ||
+             GetNameOfFocusedNode().empty()) {
+        ASSERT_TRUE(waiter.WaitForNotification());
+      }
+    }
   }
 
   std::string GetNameOfFocusedNode() {
@@ -297,6 +274,8 @@ void CrossPlatformAccessibilityBrowserTest::SetUpOnMainThread() {
   com_initializer_ = std::make_unique<base::win::ScopedCOMInitializer>();
   ui::win::CreateATLModuleIfNeeded();
 #endif
+  // For OOPIF tests.
+  host_resolver()->AddRule("*", "127.0.0.1");
   accessibility_mode_.emplace(ui::kAXModeComplete);
 }
 
@@ -328,12 +307,10 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
                        DownloadImageFromAxNode) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(embedded_test_server()->GetURL("/single_face.jpg"));
-  EXPECT_TRUE(NavigateToURL(shell(), url));
-
-  WebContentsImpl* web_contents =
-      static_cast<WebContentsImpl*>(shell()->web_contents());
-  ASSERT_TRUE(web_contents);
-  WaitForAccessibilityTreeToChange(web_contents);
+  AccessibilityNotificationWaiter waiter(shell()->web_contents(),
+                                         ax::mojom::Event::kLoadComplete);
+  ASSERT_TRUE(NavigateToURL(shell(), url));
+  ASSERT_TRUE(waiter.WaitForNotification());
 
   ui::BrowserAccessibility* image =
       FindFirstNodeWithRole(ax::mojom::Role::kImage);
@@ -347,12 +324,10 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
                        DownloadImageFromAxNode_NodeNotFound) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(embedded_test_server()->GetURL("/page_with_lazy_image.html"));
-  EXPECT_TRUE(NavigateToURL(shell(), url));
-
-  WebContentsImpl* web_contents =
-      static_cast<WebContentsImpl*>(shell()->web_contents());
-  ASSERT_TRUE(web_contents);
-  WaitForAccessibilityTreeToChange(web_contents);
+  AccessibilityNotificationWaiter waiter(shell()->web_contents(),
+                                         ax::mojom::Event::kLoadComplete);
+  ASSERT_TRUE(NavigateToURL(shell(), url));
+  ASSERT_TRUE(waiter.WaitForNotification());
 
   ui::BrowserAccessibility* paragraph =
       FindFirstNodeWithRole(ax::mojom::Role::kParagraph);
@@ -366,12 +341,10 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
                        DownloadImageFromAxNode_LazyLoaded) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(embedded_test_server()->GetURL("/page_with_lazy_image.html"));
-  EXPECT_TRUE(NavigateToURL(shell(), url));
-
-  WebContentsImpl* web_contents =
-      static_cast<WebContentsImpl*>(shell()->web_contents());
-  ASSERT_TRUE(web_contents);
-  WaitForAccessibilityTreeToChange(web_contents);
+  AccessibilityNotificationWaiter waiter(shell()->web_contents(),
+                                         ax::mojom::Event::kLoadComplete);
+  ASSERT_TRUE(NavigateToURL(shell(), url));
+  ASSERT_TRUE(waiter.WaitForNotification());
 
   ui::BrowserAccessibility* image =
       FindFirstNodeWithRole(ax::mojom::Role::kImage);
@@ -386,12 +359,10 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(
       embedded_test_server()->GetURL("/page_with_custom_lazy_image.html"));
-  EXPECT_TRUE(NavigateToURL(shell(), url));
-
-  WebContentsImpl* web_contents =
-      static_cast<WebContentsImpl*>(shell()->web_contents());
-  ASSERT_TRUE(web_contents);
-  WaitForAccessibilityTreeToChange(web_contents);
+  AccessibilityNotificationWaiter waiter(shell()->web_contents(),
+                                         ax::mojom::Event::kLoadComplete);
+  ASSERT_TRUE(NavigateToURL(shell(), url));
+  ASSERT_TRUE(waiter.WaitForNotification());
 
   ui::BrowserAccessibility* image =
       FindFirstNodeWithRole(ax::mojom::Role::kImage);
@@ -1160,6 +1131,63 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
 }
 #endif  // !BUILDFLAG(IS_MAC)
 
+#if !BUILDFLAG(IS_ANDROID)
+IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
+                       ContenteditableBRFrameChildDoesNotCrash) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  const std::string image_url =
+      embedded_test_server()->GetURL("/blank.jpg").spec();
+  const std::string html = R"HTML(
+      <!DOCTYPE html>
+      <html>
+      <body>
+      <br id="br" contenteditable="plaintext-only"></br>
+      <div id="status"></div>
+      </body>
+      </html>)HTML";
+  GURL html_data_url("data:text/html," +
+                     base::EscapeExternalHandlerValue(html));
+
+  ASSERT_TRUE(NavigateToURL(shell(), html_data_url));
+  const std::string script = JsReplace(
+      R"JS(
+        new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => {
+            document.getElementById('br').appendChild(
+                document.createElement('frame'));
+            requestAnimationFrame(() => {
+              document.getElementById('status').textContent = 'Done';
+              resolve();
+            });
+          };
+          img.onerror = reject;
+          img.src = $1;
+        });
+      )JS",
+      image_url);
+  ASSERT_TRUE(ExecJs(shell()->web_contents(), script));
+  // The DOM mutation has run, but the crash occurs during a subsequent
+  // accessibility serialization update. The kEndOfTest sentinel is only sent
+  // after Blink serializes pending AX updates and the document is clean.
+  AccessibilityNotificationWaiter ax_waiter(shell()->web_contents(),
+                                            ax::mojom::Event::kEndOfTest);
+  WebContentsImpl* web_contents =
+      static_cast<WebContentsImpl*>(shell()->web_contents());
+  ui::BrowserAccessibilityManager* manager =
+      web_contents->GetPrimaryMainFrame()
+          ->GetOrCreateBrowserAccessibilityManager();
+  ASSERT_NE(manager, nullptr);
+  manager->SignalEndOfTest();
+  ASSERT_TRUE(ax_waiter.WaitForNotificationWithTimeout(base::Seconds(3)));
+
+  ui::BrowserAccessibility* line_break =
+      FindFirstNodeWithRole(ax::mojom::Role::kLineBreak);
+  ASSERT_NE(line_break, nullptr);
+  EXPECT_EQ(0u, line_break->PlatformChildCount());
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
+
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_MAC) && \
     !(BUILDFLAG(IS_IOS) && BUILDFLAG(USE_BLINK))
 IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
@@ -1186,6 +1214,157 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
   WaitForAccessibilityTreeToContainNodeWithName(shell()->web_contents(),
                                                 "Select");
 
+  ui::AXNode* root = GetManager()->GetRoot();
+  ASSERT_NE(nullptr, root);
+
+  ui::AXNode* iframe_node = root->children()[0]->children()[0]->children()[2];
+  ASSERT_NE(nullptr, iframe_node);
+  ASSERT_EQ(iframe_node->GetRole(), ax::mojom::Role::kIframe);
+
+  ui::AXTreeID iframe_tree_id =
+      ui::AXTreeID::FromString(iframe_node->GetStringAttribute(
+          ax::mojom::StringAttribute::kChildTreeId));
+  ui::BrowserAccessibilityManager* first_iframe_manager =
+      ui::BrowserAccessibilityManager::FromID(iframe_tree_id);
+  ASSERT_NE(nullptr, first_iframe_manager);
+
+  ui::AXNode* first_iframe_root = first_iframe_manager->GetRoot();
+  ASSERT_NE(nullptr, first_iframe_root);
+
+  ui::AXNode* second_iframe_node =
+      first_iframe_root->children()[0]->children()[0]->children()[0];
+  ASSERT_NE(nullptr, second_iframe_node);
+  ASSERT_EQ(second_iframe_node->GetRole(), ax::mojom::Role::kIframe);
+
+  iframe_tree_id =
+      ui::AXTreeID::FromString(second_iframe_node->GetStringAttribute(
+          ax::mojom::StringAttribute::kChildTreeId));
+  ui::BrowserAccessibilityManager* second_iframe_manager =
+      ui::BrowserAccessibilityManager::FromID(iframe_tree_id);
+  ASSERT_NE(nullptr, second_iframe_manager);
+
+  ui::AXNode* select_node = second_iframe_manager->GetRoot()
+                                ->children()[0]
+                                ->children()[0]
+                                ->children()[0];
+  ASSERT_NE(nullptr, select_node);
+  ASSERT_EQ(select_node->GetRole(), ax::mojom::Role::kComboBoxSelect);
+  ui::BrowserAccessibility* select =
+      second_iframe_manager->GetFromAXNode(select_node);
+
+  ui::AXNode* first_list_item_node = select_node->children()[0]->children()[0];
+  ASSERT_EQ(first_list_item_node->GetRole(), ax::mojom::Role::kMenuListOption);
+  ui::AXNode* second_list_item_node = select_node->children()[0]->children()[1];
+  ASSERT_EQ(second_list_item_node->GetRole(), ax::mojom::Role::kMenuListOption);
+  ui::BrowserAccessibility* first_list_item =
+      second_iframe_manager->GetFromAXNode(first_list_item_node);
+  ui::BrowserAccessibility* second_list_item =
+      second_iframe_manager->GetFromAXNode(second_list_item_node);
+
+  gfx::Rect select_bounds =
+      select->GetBoundsRect(ui::AXCoordinateSystem::kScreenPhysicalPixels,
+                            ui::AXClippingBehavior::kUnclipped);
+
+  {
+    AccessibilityNotificationWaiter waiter(
+
+        shell()->web_contents(), ui::AXEventGenerator::Event::EXPANDED);
+    ui::AXActionData action_data;
+    action_data.action = ax::mojom::Action::kDoDefault;
+    select->AccessibilityPerformAction(action_data);
+    ASSERT_TRUE(waiter.WaitForNotification());
+  }
+
+  gfx::Rect first_list_item_bounds = first_list_item->GetBoundsRect(
+      ui::AXCoordinateSystem::kScreenPhysicalPixels,
+      ui::AXClippingBehavior::kUnclipped);
+  gfx::Rect second_list_item_bounds = second_list_item->GetBoundsRect(
+      ui::AXCoordinateSystem::kScreenPhysicalPixels,
+      ui::AXClippingBehavior::kUnclipped);
+
+  // Both options have the same height, width and left edge.
+  EXPECT_EQ(first_list_item_bounds.height(), second_list_item_bounds.height());
+  EXPECT_EQ(first_list_item_bounds.width(), second_list_item_bounds.width());
+  EXPECT_EQ(first_list_item_bounds.x(), second_list_item_bounds.x());
+
+  // We are making sure that the difference between the select element and the
+  // pop up menu options are (an arbitrary) amount of px away. This is
+  // to account for differences between platforms. Because for the test the
+  // border widths for both of the iframes are set to 80px, if this behavior
+  // were to regress to what it was before this fix, the test would fail even
+  // with the arbitrary buffers.
+  EXPECT_LT(first_list_item_bounds.x() - select_bounds.x(), 20);
+  EXPECT_LT(second_list_item_bounds.x() - select_bounds.x(), 20);
+
+  EXPECT_LT(first_list_item_bounds.y() - select_bounds.y(), 70);
+  EXPECT_LT(second_list_item_bounds.y() - select_bounds.y(), 70);
+
+  // The top of option #2 is option #1's top + the height, within 2 pixels.
+  EXPECT_LT(
+      std::abs(first_list_item_bounds.y() + first_list_item_bounds.height() -
+               second_list_item_bounds.y()),
+      2);
+}
+
+IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
+                       GetBoundsRectOOPIFAndIframe) {
+  // Dynamically serve HTML strings for specified URLs
+  embedded_test_server()->RegisterRequestHandler(base::BindRepeating(
+      [](const net::test_server::HttpRequest& request)
+          -> std::unique_ptr<net::test_server::HttpResponse> {
+        auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+        response->set_content_type("text/html");
+        if (request.relative_url == "/main.html") {
+          GURL::Replacements replace_host;
+          replace_host.SetHostStr("b.com");
+          GURL subframe_url = request.base_url.Resolve("/subframe.html")
+                                  .ReplaceComponents(replace_host);
+          constexpr const char* kSubframeHTML = R"HTML(
+            <!DOCTYPE html>
+            <br>
+            <select name="opts" id="opts">
+              <option value="one">one</option>
+              <option value="two">two</option>
+            </select>
+            <iframe style="border-width: 80px; padding: 20px;" id="iframeRes"
+                    src="%s">
+            </iframe>
+          )HTML";
+          response->set_content(
+              base::StringPrintf(kSubframeHTML, subframe_url.spec().c_str()));
+          return response;
+        }
+        if (request.relative_url == "/subframe.html") {
+          response->set_content(R"HTML(
+            <!DOCTYPE html>
+            <iframe style="border-width: 80px; padding: 20px;"
+                    srcdoc="<!DOCTYPE html>
+                      <select aria-label='Select'>
+                        <option value='three'>three</option>
+                        <option value='four'>four</option>
+                      </select>">
+            </iframe>
+          )HTML");
+          return response;
+        }
+        return nullptr;
+      }));
+
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  GURL main_url = embedded_test_server()->GetURL("a.com", "/main.html");
+  ASSERT_TRUE(NavigateToURL(shell(), main_url));
+
+  content::RenderFrameHost* main_frame =
+      shell()->web_contents()->GetPrimaryMainFrame();
+  content::RenderFrameHost* child_frame = content::ChildFrameAt(main_frame, 0);
+  ASSERT_TRUE(child_frame);
+  ASSERT_TRUE(child_frame->IsCrossProcessSubframe());
+
+  WaitForAccessibilityTreeToContainNodeWithName(shell()->web_contents(),
+                                                "Select");
+
+  // 4. Perform your AX bounds checks...
   ui::AXNode* root = GetManager()->GetRoot();
   ASSERT_NE(nullptr, root);
 
@@ -2770,9 +2949,9 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
-                       AccessibilityEventsImmediateRefresh) {
+                       AccessibilityEventsConstantRefresh) {
   LoadInitialAccessibilityTreeFromHtmlFilePath(
-      "/accessibility/event/immediate-refresh.html");
+      "/accessibility/event/constant-refresh.html");
   AccessibilityNotificationWaiter waiter(shell()->web_contents(),
                                          ax::mojom::Event::kLoadComplete);
   ASSERT_TRUE(waiter.WaitForNotification());
@@ -2795,9 +2974,7 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
 
   // Keep pressing Tab until we get to the "Go to Inner 2" link in the
   // inner iframe.
-  while (GetNameOfFocusedNode() != "Go to Inner 2") {
-    PressTabAndWaitForFocusChange();
-  }
+  PressTabUntilFocused("Go to Inner 2");
 
   // Press enter to activate the link, wait for the second iframe to load.
   {
@@ -2811,9 +2988,7 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
 
   // Press Tab, we should eventually land on the last button within the
   // second iframe.
-  while (GetNameOfFocusedNode() != "Bottom of Inner 2") {
-    PressTabAndWaitForFocusChange();
-  }
+  PressTabUntilFocused("Bottom of Inner 2");
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -3104,14 +3279,22 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
 IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
                        TestNotificationTextDeletedInTextfield) {
   LoadInitialAccessibilityTreeFromHtml(
-      "<input autofocus id='input' aria-label='Input' type='text' value='old "
-      "value'/>");
+      "<input id='input' aria-label='Input' type='text' value='old value'/>");
 
   WaitForAccessibilityTreeToContainNodeWithName(shell()->web_contents(),
                                                 "Input");
 
   ui::BrowserAccessibility* input_node = FindNode("Input");
   ASSERT_NE(input_node, nullptr);
+
+  // Ensure focus so the synthetic keypress is delivered to the textfield.
+  {
+    AccessibilityNotificationWaiter waiter(
+        shell()->web_contents(), ui::AXEventGenerator::Event::FOCUS_CHANGED);
+    input_node->manager()->SetFocus(*input_node);
+    ASSERT_TRUE(waiter.WaitForNotification());
+    ASSERT_EQ(input_node, GetManager()->GetFocus());
+  }
 
   // We select an arbitrary portion of the text.
   {
@@ -3197,6 +3380,36 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
   manager->ScrollToMakeVisible(*button_node, gfx::Rect());
 
   EXPECT_EQ(manager->GetAccessibilityFocus(), button_node);
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+#if !BUILDFLAG(IS_ANDROID)
+IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
+                       TestAccessibilityFocusInIframe) {
+  LoadInitialAccessibilityTreeFromHtml(R"HTML(
+      <!DOCTYPE html>
+      <html>
+      <body>
+        <iframe srcdoc="
+          <!DOCTYPE html>
+          <html>
+          <body>
+            <button>ok</button>
+          </body>
+          </html>
+        "></iframe>
+      </body>
+      </html>)HTML");
+
+  WaitForAccessibilityTreeToContainNodeWithName(shell()->web_contents(), "ok");
+
+  ui::BrowserAccessibility* button_node = FindNode("ok");
+  ASSERT_NE(button_node, nullptr);
+
+  ui::BrowserAccessibilityManager* manager = button_node->manager();
+  manager->ScrollToMakeVisible(*button_node, gfx::Rect());
+
+  EXPECT_EQ(GetManager()->GetAccessibilityFocus(), button_node);
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
@@ -3633,5 +3846,73 @@ IN_PROC_BROWSER_TEST_F(AriaNotifyV2CrossPlatformAccessibilityBrowserTest,
             ax::mojom::IntListAttribute::kAriaNotificationPriorityProperties));
   }
 }
+
+#if BUILDFLAG(HAS_NATIVE_ACCESSIBILITY) || BUILDFLAG(IS_ANDROID)
+class CanvasAccessibilityBrowserTest
+    : public CrossPlatformAccessibilityBrowserTest {
+ public:
+  CanvasAccessibilityBrowserTest() = default;
+  ~CanvasAccessibilityBrowserTest() override = default;
+
+ protected:
+  void ChooseFeatures(
+      std::vector<base::test::FeatureRef>* enabled_features,
+      std::vector<base::test::FeatureRef>* disabled_features) override {
+    enabled_features->push_back(features::kAccessibilityCanvas);
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(CanvasAccessibilityBrowserTest,
+                       CanvasAnnotationExposed) {
+  LoadInitialAccessibilityTreeFromHtml(R"HTML(
+      <!DOCTYPE html>
+      <html>
+      <body>
+        <canvas id="canvas" width="200" height="200"></canvas>
+      </body>
+      </html>
+  )HTML");
+
+  // Verify canvas exists and is ready.
+  ui::BrowserAccessibility* canvas_node =
+      FindFirstNodeWithRole(ax::mojom::Role::kCanvas);
+  ASSERT_NE(canvas_node, nullptr);
+
+  // Draw text now that layout should be ready. Use ExecJs to catch errors.
+  ASSERT_TRUE(ExecJs(shell(),
+                     "const canvas = document.getElementById('canvas');"
+                     "const ctx = canvas.getContext('2d');"
+                     "ctx.fillText('Hello World', 10, 50);"
+                     "ctx.getImageData(0, 0, 1, 1);"));
+
+  // Wait for the AX tree to update with the new canvas annotation.
+  WaitForAccessibilityTreeToContainNodeWithName(shell()->web_contents(),
+                                                "Hello World");
+
+  // Verify that the platform node indeed has the name.
+  canvas_node = FindFirstNodeWithRole(ax::mojom::Role::kCanvas);
+  ASSERT_NE(canvas_node, nullptr);
+  EXPECT_EQ(canvas_node->GetStringAttribute(
+                ax::mojom::StringAttribute::kCanvasAnnotation),
+            "Hello World");
+
+#if BUILDFLAG(HAS_NATIVE_ACCESSIBILITY)
+  gfx::NativeViewAccessible native_canvas =
+      canvas_node->GetNativeViewAccessible();
+  ui::AXPlatformNode* platform_node =
+      ui::AXPlatformNode::FromNativeViewAccessible(native_canvas);
+  ASSERT_NE(platform_node, nullptr);
+
+  ui::AXPlatformNodeBase* platform_node_base =
+      static_cast<ui::AXPlatformNodeBase*>(platform_node);
+  EXPECT_EQ(platform_node_base->GetName(), "Hello World");
+#elif BUILDFLAG(IS_ANDROID)
+  BrowserAccessibilityAndroid* android_canvas =
+      static_cast<BrowserAccessibilityAndroid*>(canvas_node);
+  EXPECT_EQ(android_canvas->GetAndroidContentDescription(), u"Hello World");
+  EXPECT_EQ(android_canvas->GetAndroidSupplementalDescription(), u"");
+#endif
+}
+#endif  // BUILDFLAG(HAS_NATIVE_ACCESSIBILITY) || BUILDFLAG(IS_ANDROID)
 
 }  // namespace content

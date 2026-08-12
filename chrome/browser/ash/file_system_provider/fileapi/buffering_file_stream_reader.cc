@@ -33,6 +33,10 @@ BufferingFileStreamReader::~BufferingFileStreamReader() = default;
 int BufferingFileStreamReader::Read(net::IOBuffer* buffer,
                                     int buffer_length,
                                     net::CompletionOnceCallback callback) {
+  if (!buffer || (buffer_length < 0)) {
+    return net::ERR_INVALID_ARGUMENT;
+  }
+
   // Return as much as available in the internal buffer. It may be less than
   // |buffer_length|, what is valid.
   const int bytes_read =
@@ -63,8 +67,7 @@ int BufferingFileStreamReader::Read(net::IOBuffer* buffer,
   return net::ERR_IO_PENDING;
 }
 
-int64_t BufferingFileStreamReader::GetLength(
-    net::Int64CompletionOnceCallback callback) {
+int64_t BufferingFileStreamReader::GetLength(GetLengthCallback callback) {
   const int64_t result = file_stream_reader_->GetLength(std::move(callback));
   DCHECK_EQ(net::ERR_IO_PENDING, result);
 
@@ -74,6 +77,8 @@ int64_t BufferingFileStreamReader::GetLength(
 int BufferingFileStreamReader::CopyFromPreloadingBuffer(
     scoped_refptr<net::IOBuffer> buffer,
     int buffer_length) {
+  DCHECK_LE(0, buffer_length);
+  DCHECK_LE(static_cast<size_t>(buffer_length), buffer->span().size());
   const int read_bytes = std::min(buffer_length, preloaded_bytes_);
 
   UNSAFE_TODO(memcpy(buffer->data(),

@@ -5,30 +5,34 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_SUGGESTIONS_PAYMENTS_PAYMENTS_SUGGESTION_GENERATOR_UTIL_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_SUGGESTIONS_PAYMENTS_PAYMENTS_SUGGESTION_GENERATOR_UTIL_H_
 
-#include <cstdint>
+#include <stddef.h>
+#include <stdint.h>
+
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/check_deref.h"
 #include "base/containers/flat_map.h"
-#include "base/memory/raw_ptr.h"
+#include "base/containers/flat_set.h"
+#include "base/containers/span.h"
 #include "base/types/optional_ref.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #include "components/autofill/core/browser/data_model/payments/autofill_wallet_usage_data.h"
+#include "components/autofill/core/browser/data_quality/addresses/profile_token_quality.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/browser/metrics/log_event.h"
 #include "components/autofill/core/browser/metrics/payments/card_metadata_metrics.h"
 #include "components/autofill/core/browser/metrics/suggestions_list_metrics.h"
 #include "components/autofill/core/browser/payments/amount_extraction_manager.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/browser/suggestions/suggestion_type.h"
-#include "components/autofill/core/common/aliases.h"
+#include "components/autofill/core/common/unique_ids.h"
+#include "url/origin.h"
 
 namespace autofill {
 
 class AutofillClient;
-class AutofillOfferData;
 class BrowserAutofillManager;
 class CreditCard;
 class FormFieldData;
@@ -40,6 +44,13 @@ struct CreditCardSuggestionSummary {
   bool with_cvc = false;
   // True if any card is card info retrieval enrolled.
   bool with_card_info_retrieval_enrolled = false;
+  // True if there is a pay later tab suggestion.
+  bool with_pay_later_tab_suggestion = false;
+  // True if there is a card saved through other Google services outside of
+  // Chrome.
+  bool with_externally_saved_card = false;
+  // True if there is a card that has not been used before.
+  bool with_never_used_card = false;
   // Contains card metadata related information used for metrics logging.
   autofill_metrics::CardMetadataLoggingContext metadata_logging_context;
 };
@@ -97,13 +108,22 @@ Suggestion CreateBnplSuggestion(
     std::optional<int64_t> extracted_amount_in_micros,
     const payments::AmountExtractionStatus& amount_extraction_status = {});
 
+// Check whether to add a BNPL suggestion for Touch-To-Fill based on eligibility
+// for the purchase and whether the card number field is empty when AI-based
+// amount extraction is enabled.
+bool ShouldCreateBnplSuggestionForTouchToFill(BrowserAutofillManager& manager,
+                                              const FormGlobalId& form_id);
+
 // Generates touch-to-fill suggestions for all available credit cards to be
 // used in the bottom sheet. Benefits information, containing instrument IDs and
 // issuer IDs, will be added to the `metadata_logging_context` and assigned to
-// the BrowserAutofillManager's `credit_card_form_event_logger`.
+// the BrowserAutofillManager's `credit_card_form_event_logger`. Also add a BNPL
+// suggestion if eligible for the purchase and the card number field is empty
+// for AI-based amount extraction.
 std::vector<Suggestion> GetCreditCardSuggestionsForTouchToFill(
     base::span<const CreditCard> credit_cards,
-    BrowserAutofillManager& manager);
+    BrowserAutofillManager& manager,
+    const FormGlobalId& form_id);
 
 // Generates a footer suggestion "Manage payment methods..." menu item which
 // will redirect to Chrome payment settings page. `with_gpay_logo` is used to
@@ -136,8 +156,7 @@ bool IsCreditCardFooterSuggestion(
 
 // Helper function to decide whether to show the virtual card option for
 // `candidate_card`.
-// TODO(crbug.com/326950201): Pass the argument by reference.
-bool ShouldShowVirtualCardOption(const CreditCard* candidate_card,
+bool ShouldShowVirtualCardOption(const CreditCard& candidate_card,
                                  const AutofillClient& client);
 
 // Determines whether the "Save and Fill" suggestion should be shown in the
@@ -147,33 +166,11 @@ bool ShouldShowCreditCardSaveAndFill(AutofillClient& client,
                                      bool is_complete_form,
                                      const FormFieldData& trigger_field);
 
-// Returns non credit card suggestions which are displayed below credit card
-// suggestions in the Autofill popup. `should_show_scan_credit_card` is used
-// to conditionally add scan credit card suggestion. `is_autofilled` is used to
-// conditionally add suggestion for clearing all autofilled fields.
-// `should_show_bnpl_suggestion` is used to conditionally append a BNPL
-// suggestion to the end of the payment methods suggestions.
-// `with_gpay_logo` is used to conditionally add GPay logo icon to the manage
-// payment methods suggestion.
-// `has_timed_out_for_page_load` indicates whether
-// the AI amount extraction request timed out. If true, the returned BNPL
-// suggestion is deactivated for the remainder of this page load.
-// `seen_unsupported_currency_for_page_load` indicates whether the AI amount
-// extraction has seen an unsupported currency. If true, the returned BNPL
-// suggestion is deactivated for the remainder of this page load.
-std::vector<Suggestion> GetCreditCardFooterSuggestions(
-    const AutofillClient& client,
-    bool should_show_bnpl_suggestion,
-    bool should_show_scan_credit_card,
-    bool is_autofilled,
-    bool with_gpay_logo,
-    const payments::AmountExtractionStatus& amount_extraction_status);
 
 // Creates a suggestion for the given `credit_card`. `virtual_card_option`
 // suggests whether the suggestion is a virtual card option.
-// `card_linked_offer_available` indicates whether a card-linked offer is
-// attached to the `credit_card`. `metadata_logging_context` contains card
-// metadata related information used for metrics logging.
+// `metadata_logging_context` contains card metadata related information used
+// for metrics logging.
 // TODO(crbug.com/40232456): Separate logic for desktop, Android dropdown, and
 // Keyboard Accessory.
 Suggestion CreateCreditCardSuggestion(
@@ -181,7 +178,6 @@ Suggestion CreateCreditCardSuggestion(
     const AutofillClient& client,
     FieldType trigger_field_type,
     bool virtual_card_option,
-    bool card_linked_offer_available,
     autofill_metrics::CardMetadataLoggingContext& metadata_logging_context);
 
 // Returns a mapping of credit card guid values to virtual card last fours for
@@ -210,18 +206,9 @@ Suggestion CreateCreditCardSuggestionForTest(
     const AutofillClient& client,
     FieldType trigger_field_type,
     bool virtual_card_option,
-    bool card_linked_offer_available,
     base::optional_ref<autofill_metrics::CardMetadataLoggingContext>
         metadata_logging_context = std::nullopt);
 
-// Exposes `GetCreditCardFooterSuggestions` in tests.
-std::vector<Suggestion> GetCreditCardFooterSuggestionsForTest(
-    const AutofillClient& client,
-    bool should_show_bnpl_suggestion,
-    bool should_show_scan_credit_card,
-    bool is_autofilled,
-    bool with_gpay_logo,
-    const payments::AmountExtractionStatus& amount_extraction_status);
 
 // Exposes `GetBnplPriceLowerBound` in tests.
 std::u16string GetBnplPriceLowerBoundForTest(
@@ -230,7 +217,7 @@ std::u16string GetBnplPriceLowerBoundForTest(
 void SetCreditCardUploadEnabledForTest(bool credit_card_upload_enabled);
 
 // Exposes `ShouldShowVirtualCardOption` in tests.
-bool ShouldShowVirtualCardOptionForTest(const CreditCard* candidate_card,
+bool ShouldShowVirtualCardOptionForTest(const CreditCard& candidate_card,
                                         const AutofillClient& client);
 
 // Filter `cards_to_suggest` for CVC fields based on parameters such as field
@@ -276,7 +263,9 @@ std::u16string GetDisplayNicknameForCreditCard(
 // available.
 std::optional<Suggestion::Text> GetCreditCardBenefitSuggestionLabel(
     const CreditCard& credit_card,
-    const AutofillClient& client);
+    const AutofillClient& client,
+    autofill_metrics::CardMetadataLoggingContext* metadata_logging_context =
+        nullptr);
 
 Suggestion CreateManagePaymentMethodsEntry(SuggestionType suggestion_type,
                                            bool with_gpay_logo);
@@ -284,14 +273,23 @@ Suggestion CreateManagePaymentMethodsEntry(SuggestionType suggestion_type,
 // Returns true if the new FOP (form-of-payment) display is enabled.
 bool ShouldUseNewFopDisplay();
 
-// Returns the card-linked offers map with credit card guid as the key and the
-// pointer to the linked AutofillOfferData as the value.
-std::map<std::string, const AutofillOfferData*> GetCardLinkedOffers(
-    const AutofillClient& autofill_client);
-
 // Returns the obfuscation length to be used for credit cards during suggestion
 // generation.
 int GetCreditCardObfuscationLength();
+
+// Whether the `trigger_field` should show an entry to scan a credit card.
+bool ShouldShowScanCreditCard(const FormStructure& form,
+                              const AutofillField& trigger_field,
+                              const AutofillClient& client);
+
+// Returns an obfuscated IBAN string using the provided prefix and suffix.
+// Format: "Prefix \u2006 \u2022\u2022 Suffix"
+std::u16string GetObfuscatedIban(std::u16string_view prefix,
+                                 std::u16string_view suffix);
+
+// Returns an obfuscated IBAN string by extracting the prefix (first 2 chars)
+// and suffix (last 4 chars) from the full `iban_value`.
+std::u16string GetObfuscatedIban(std::u16string_view iban_value);
 
 }  // namespace autofill
 

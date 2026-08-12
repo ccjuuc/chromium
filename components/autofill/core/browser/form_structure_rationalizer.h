@@ -6,14 +6,13 @@
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_FORM_STRUCTURE_RATIONALIZER_H_
 
 #include <memory>
-#include <vector>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/memory/raw_span.h"
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/country_type.h"
-#include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/common/form_field_data.h"
+#include "components/autofill/core/common/language_code.h"
 #include "url/origin.h"
 
 namespace autofill {
@@ -104,10 +103,12 @@ class FormStructureRationalizer {
   // 2 and 3.
   void RationalizeRepeatedStreetAddressFields(LogManager* log_manager);
 
-  // Rewrites sequence of visible (zip, zip) fields into
-  // (ADDRESS_HOME_ZIP_PREFIX, ADDRESS_HOME_ZIP_SUFFIX) if a small max_length
-  // value is set for both fields or the second zip field type is
-  // ADDRESS_HOME_ZIP_SUFFIX.
+  // Rewrites a sequence of exactly two consecutive visible (zip, zip) fields
+  // into (ADDRESS_HOME_ZIP_PREFIX, ADDRESS_HOME_ZIP_SUFFIX) if a small
+  // max_length value is set for both fields or the second zip field type is
+  // ADDRESS_HOME_ZIP_SUFFIX. If none of these conditions are met and the
+  // source of prediction for the second zip field is heuristic,
+  // rationalizes the second zip field to UNKNOWN_TYPE.
   void RationalizeRepeatedZipCodeFields(LogManager* log_manager);
 
   // Rewrites all ADDRESS_HOME_ZIP_SUFFIX fields into ADDRESS_HOME_ZIP

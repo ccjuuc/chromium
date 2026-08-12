@@ -7,14 +7,15 @@
 #import <objc/runtime.h>
 
 #import "base/test/metrics/histogram_tester.h"
+#import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/app/change_profile_continuation.h"
 #import "ios/chrome/browser/authentication/ui_bundled/authentication_flow/authentication_flow_in_profile_performer_delegate.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/browser_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
@@ -22,6 +23,8 @@
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/testing/protocol_fake.h"
 #import "ios/web/public/test/web_task_environment.h"
@@ -39,14 +42,16 @@ class AuthenticationFlowInProfilePerformerTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
     profile_ = std::move(builder).Build();
     browser_ = std::make_unique<TestBrowser>(profile_.get());
     fake_identity_ = [FakeSystemIdentity fakeIdentity1];
 
     NSArray<Protocol*>* command_protocols = @[
-      @protocol(ApplicationCommands), @protocol(BrowserCommands),
+      @protocol(SceneCommands), @protocol(BrowserCommands),
       @protocol(SettingsCommands), @protocol(SnackbarCommands)
     ];
     fake_command_endpoint_ =
@@ -108,8 +113,7 @@ TEST_F(AuthenticationFlowInProfilePerformerTest, SignoutForSwitch) {
   [authentication_flow_in_profile_performer_
       signOutForAccountSwitchWithProfile:profile_.get()];
   run_loop_->Run();
-  EXPECT_FALSE(authentication_service->HasPrimaryIdentity(
-      signin::ConsentLevel::kSignin));
+  EXPECT_FALSE(authentication_service->HasPrimaryIdentity());
   histogram_tester.ExpectUniqueSample(
       "Signin.SignoutProfile",
       signin_metrics::ProfileSignout::kSignoutForAccountSwitching, 1);

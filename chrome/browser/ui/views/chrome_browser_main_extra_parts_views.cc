@@ -7,22 +7,37 @@
 #include <utility>
 
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/path_service.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
+#include "build/buildflag.h"
+#include "chrome/browser/bookmarks/bookmark_merged_surface_service.h"
+#include "chrome/browser/bookmarks/bookmark_merged_surface_service_factory.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/net/system_network_context_manager.h"
+#include "chrome/browser/ui/infobars/browser_infobar_registry.h"
+#include "chrome/browser/ui/views/bookmarks/bookmark_account_storage_move_dialog.h"
 #include "chrome/browser/ui/views/chrome_constrained_window_views_client.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_views_delegate.h"
 #include "chrome/browser/ui/views/media_router/media_router_dialog_controller_views.h"
 #include "chrome/browser/ui/views/relaunch_notification/relaunch_notification_controller.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
+#include "components/infobars/core/infobar_delegate.h"
 #include "components/media_router/browser/media_router_dialog_controller.h"
+#include "components/strings/grit/components_strings.h"
 #include "components/ui_devtools/devtools_server.h"
 #include "components/ui_devtools/switches.h"
 #include "components/ui_devtools/views/server_holder.h"
+#include "components/vector_icons/vector_icons.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/web_contents.h"
 #include "sandbox/policy/switches.h"
+#include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 
 #if defined(USE_AURA)
 #include "base/run_loop.h"
@@ -78,10 +93,6 @@ void ChromeBrowserMainExtraPartsViews::ToolkitInitialized() {
     views_delegate_ = std::make_unique<ChromeViewsDelegate>();
   }
 
-  // Set our raw pointer to the views delegate. This should never be nullptr.
-  views_delegate_ptr_ = views::ViewsDelegate::GetInstance();
-  CHECK(views_delegate_ptr_);
-
   SetConstrainedWindowViewsClient(CreateChromeConstrainedWindowViewsClient());
 
 #if defined(USE_AURA)
@@ -89,14 +100,10 @@ void ChromeBrowserMainExtraPartsViews::ToolkitInitialized() {
 #endif
 
   // TODO(pkasting): Try to move ViewsDelegate creation here as well;
-  // see https://crbug.com/691894#c1
+  // see https://crbug.com/41301678#comment2
   if (!views::LayoutProvider::Get()) {
     layout_provider_ = ChromeLayoutProvider::CreateLayoutProvider();
   }
-}
-
-void ChromeBrowserMainExtraPartsViews::PostCreateMainMessageLoop() {
-  views_delegate_ptr_->InitializeViewsAXManager();
 }
 
 void ChromeBrowserMainExtraPartsViews::PreCreateThreads() {
@@ -109,6 +116,9 @@ void ChromeBrowserMainExtraPartsViews::PreCreateThreads() {
 }
 
 void ChromeBrowserMainExtraPartsViews::PreProfileInit() {
+#if BUILDFLAG(CHROME_FOR_TESTING)
+  infobars::RegisterChromeForTestingInfoBar();
+#endif
   if (ui_devtools::UiDevToolsServer::IsUiDevToolsEnabled(
           ui_devtools::switches::kEnableUiDevTools)) {
     base::FilePath output_dir;
@@ -168,10 +178,26 @@ void ChromeBrowserMainExtraPartsViews::PreProfileInit() {
 #endif  // BUILDFLAG(IS_LINUX)
 }
 
+void ChromeBrowserMainExtraPartsViews::PostProfileInit(
+    Profile* profile,
+    bool is_initial_profile) {
+  auto* service = BookmarkMergedSurfaceServiceFactory::GetForProfile(profile);
+  if (service) {
+    service->SetShowMoveStorageDialogCallback(base::BindRepeating(
+        [](BrowserWindowInterface* browser, const bookmarks::BookmarkNode* node,
+           const bookmarks::BookmarkNode* target_folder, size_t index) {
+          ShowBookmarkAccountStorageMoveDialog(browser, node, target_folder,
+                                               index);
+        }));
+  }
+}
+
 void ChromeBrowserMainExtraPartsViews::PostBrowserStart() {
   relaunch_notification_controller_ =
       std::make_unique<RelaunchNotificationController>(
           UpgradeDetector::GetInstance());
+
+  infobars::RegisterInfoBars();
 }
 
 void ChromeBrowserMainExtraPartsViews::PostMainMessageLoopRun() {

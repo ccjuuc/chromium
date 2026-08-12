@@ -120,6 +120,14 @@ AX_BASE_EXPORT bool IsImage(const ax::mojom::Role role);
 // Returns true if the provided role is for any kind of image or video.
 AX_BASE_EXPORT bool IsImageOrVideo(const ax::mojom::Role role);
 
+// Returns true if the role is a live region by default -- alert (assertive),
+// log and status (polite) -- so its updates are announced without an explicit
+// aria-live attribute. Like IsLandmark(), this is role-based; the role may be
+// sourced from ARIA or native HTML (e.g. <output> -> status). A non-live-region
+// role bearing an explicit aria-live attribute is a separate, node-level signal
+// not covered here.
+AX_BASE_EXPORT bool IsLiveRegion(const ax::mojom::Role role);
+
 // Returns true if the provided role is item-like, specifically if it can hold
 // pos_in_set and set_size values. Roles that are item-like are not set-like.
 AX_BASE_EXPORT bool IsItemLike(const ax::mojom::Role role);
@@ -138,6 +146,9 @@ AX_BASE_EXPORT bool IsList(const ax::mojom::Role role);
 
 // Returns true if the provided role belongs to a list item.
 AX_BASE_EXPORT bool IsListItem(const ax::mojom::Role role);
+
+// Returns true if the provided role is a MathML-related role.
+AX_BASE_EXPORT bool IsMath(const ax::mojom::Role role);
 
 // Returns true if the provided role belongs to a menu item, including menu item
 // checkbox and menu item radio buttons.

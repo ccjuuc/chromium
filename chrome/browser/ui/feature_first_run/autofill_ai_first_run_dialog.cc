@@ -6,7 +6,8 @@
 
 #include "build/branding_buildflags.h"
 #include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/feature_first_run/feature_first_run_helper.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
@@ -24,6 +25,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_features.h"
 
 namespace feature_first_run {
 
@@ -39,7 +41,8 @@ const gfx::VectorIcon& kGoogleGLogoIcon =
 void OnLearnMoreClicked(content::WebContents* web_contents) {
   autofill::LogOptInFunnelEvent(
       autofill::AutofillAiOptInFunnelEvents::kFFRLearnMoreButtonClicked);
-  Browser* browser = chrome::FindBrowserWithTab(web_contents);
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
   chrome::ShowSettingsSubPage(browser, chrome::kAutofillAiSubPage);
 }
 
@@ -64,7 +67,9 @@ std::unique_ptr<views::View> CreateDialogContentView(
   container_view->AddChildView(CreateInfoBoxContainer(
       l10n_util::GetStringUTF16(IDS_AUTOFILL_AI_FFR_WHEN_ON_TITLE),
       l10n_util::GetStringUTF16(IDS_AUTOFILL_AI_FFR_WHEN_ON_DESCRIPTION),
-      kTextAnalysisIcon, InfoBoxPosition::kStart));
+      features::IsRoundedIconsEnabled() ? kTextAnalysisIcon
+                                        : kTextAnalysisOldIcon,
+      InfoBoxPosition::kStart));
 
   container_view->AddChildView(CreateInfoBoxContainerWithLearnMore(
       l10n_util::GetStringUTF16(IDS_SETTINGS_COLUMN_HEADING_CONSIDER),

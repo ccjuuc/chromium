@@ -6,6 +6,7 @@
 
 #include "third_party/blink/public/mojom/frame/frame.mojom-blink.h"
 #include "third_party/blink/public/mojom/permissions/permission.mojom-blink.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_throw_dom_exception.h"
@@ -26,19 +27,20 @@ using mojom::blink::PermissionName;
 namespace {
 
 using AdditionalWindowingControlsActionCallback =
-    base::OnceCallback<void(mojom::blink::PermissionStatus)>;
+    base::OnceCallback<void(mojom::blink::PermissionStatusWithDetailsPtr)>;
 using ui::mojom::blink::WindowShowState;
 
-bool IsPermissionGranted(ScriptPromiseResolver<IDLUndefined>* resolver,
-                         mojom::blink::PermissionStatus status) {
+bool IsPermissionGranted(
+    ScriptPromiseResolver<IDLUndefined>* resolver,
+    const mojom::blink::PermissionStatusWithDetails& status) {
   if (!resolver->GetScriptState()->ContextIsValid()) {
     return false;
   }
 
-  if (status != mojom::blink::PermissionStatus::GRANTED) {
+  if (status.status != mojom::blink::PermissionStatus::GRANTED) {
     resolver->RejectWithDOMException(
         DOMExceptionCode::kNotAllowedError,
-        status == mojom::blink::PermissionStatus::DENIED
+        status.status == mojom::blink::PermissionStatus::DENIED
             ? "Permission denied."
             : "Permission decision deferred.");
     return false;
@@ -56,24 +58,41 @@ bool CanUseWindowingControls(LocalDOMWindow* window,
         "API is only supported in primary top-level browsing contexts.");
     return false;
   }
+  if (!window->document()->IsInWebAppScope()) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      "API is only supported in web apps.");
+    return false;
+  }
   return true;
 }
 
 bool IsMaximized(LocalDOMWindow* window) {
-  return window->GetFrame()->GetWidgetForLocalRoot()->WindowShowState() ==
-         WindowShowState::kMaximized;
+  if (auto* frame = window->GetFrame()) {
+    if (auto* widget = frame->GetWidgetForLocalRoot()) {
+      return widget->WindowShowState() == WindowShowState::kMaximized;
+    }
+  }
+  return false;
 }
 
 bool IsMinimized(LocalDOMWindow* window) {
-  return window->GetFrame()->GetWidgetForLocalRoot()->WindowShowState() ==
-         WindowShowState::kMinimized;
+  if (auto* frame = window->GetFrame()) {
+    if (auto* widget = frame->GetWidgetForLocalRoot()) {
+      return widget->WindowShowState() == WindowShowState::kMinimized;
+    }
+  }
+  return false;
 }
 
 bool IsNormal(LocalDOMWindow* window) {
-  WindowShowState show_state =
-      window->GetFrame()->GetWidgetForLocalRoot()->WindowShowState();
-  return show_state == WindowShowState::kDefault ||
-         show_state == WindowShowState::kNormal;
+  if (auto* frame = window->GetFrame()) {
+    if (auto* widget = frame->GetWidgetForLocalRoot()) {
+      WindowShowState show_state = widget->WindowShowState();
+      return show_state == WindowShowState::kDefault ||
+             show_state == WindowShowState::kNormal;
+    }
+  }
+  return false;
 }
 
 ScriptPromise<IDLUndefined> MaybePromptWindowManagementPermission(
@@ -92,7 +111,6 @@ ScriptPromise<IDLUndefined> MaybePromptWindowManagementPermission(
   if (LocalFrame::HasTransientUserActivation(window->GetFrame())) {
     LocalFrame::ConsumeTransientUserActivation(window->GetFrame());
     permission_service->RequestPermission(std::move(permission_descriptor),
-                                          /*user_gesture=*/true,
                                           std::move(callback));
   } else {
     permission_service->HasPermission(std::move(permission_descriptor),
@@ -133,11 +151,19 @@ base::OnceCallback<void(bool)> GetRestoreCallback(
   return GetWindowEventCallback(resolver, "Could not restore the window.");
 }
 
+base::OnceCallback<void(bool)> GetSetResizableCallback(
+    bool resizable,
+    ScriptPromiseResolver<IDLUndefined>* resolver) {
+  return GetWindowEventCallback(
+      resolver, resizable ? "Could not set the window to be resizable."
+                          : "Could not set the window to be non-resizable.");
+}
+
 void OnMaximizePermissionRequestComplete(
     ScriptPromiseResolver<IDLUndefined>* resolver,
     LocalDOMWindow* window,
-    mojom::blink::PermissionStatus status) {
-  if (!IsPermissionGranted(resolver, status)) {
+    mojom::blink::PermissionStatusWithDetailsPtr status) {
+  if (!IsPermissionGranted(resolver, *status)) {
     return;
   }
 
@@ -152,8 +178,8 @@ void OnMaximizePermissionRequestComplete(
 void OnMinimizePermissionRequestComplete(
     ScriptPromiseResolver<IDLUndefined>* resolver,
     LocalDOMWindow* window,
-    mojom::blink::PermissionStatus status) {
-  if (!IsPermissionGranted(resolver, status)) {
+    mojom::blink::PermissionStatusWithDetailsPtr status) {
+  if (!IsPermissionGranted(resolver, *status)) {
     return;
   }
 
@@ -168,8 +194,8 @@ void OnMinimizePermissionRequestComplete(
 void OnRestorePermissionRequestComplete(
     ScriptPromiseResolver<IDLUndefined>* resolver,
     LocalDOMWindow* window,
-    mojom::blink::PermissionStatus status) {
-  if (!IsPermissionGranted(resolver, status)) {
+    mojom::blink::PermissionStatusWithDetailsPtr status) {
+  if (!IsPermissionGranted(resolver, *status)) {
     return;
   }
 
@@ -185,18 +211,14 @@ void OnSetResizablePermissionRequestComplete(
     ScriptPromiseResolver<IDLUndefined>* resolver,
     LocalDOMWindow* window,
     bool resizable,
-    mojom::blink::PermissionStatus status) {
-  if (!IsPermissionGranted(resolver, status)) {
+    mojom::blink::PermissionStatusWithDetailsPtr status) {
+  if (!IsPermissionGranted(resolver, *status)) {
     return;
   }
 
-  ChromeClient& chrome_client = window->GetFrame()->GetChromeClient();
-  chrome_client.SetResizable(resizable, *window->GetFrame());
-
-  // TODO(crbug.com/1505666): Add wait for the resizability change to be
-  // completed before resolving the promise.
-
-  resolver->Resolve();
+  window->GetFrame()->GetChromeClient().SetResizable(
+      resizable, *window->GetFrame(),
+      GetSetResizableCallback(resizable, resolver));
 }
 
 }  // namespace

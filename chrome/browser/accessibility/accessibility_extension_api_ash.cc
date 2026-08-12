@@ -6,17 +6,18 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <memory>
 #include <set>
 #include <vector>
 
 #include "ash/accessibility/accessibility_controller.h"
+#include "ash/constants/ash_extension_constants.h"
 #include "ash/public/cpp/accessibility_controller_enums.h"
 #include "ash/public/cpp/accessibility_focus_ring_info.h"
 #include "ash/public/cpp/event_rewriter_controller.h"
 #include "ash/public/cpp/window_tree_host_lookup.h"
 #include "ash/webui/settings/public/constants/routes_util.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/notreached.h"
@@ -33,7 +34,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/common/extensions/api/accessibility_private.h"
-#include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
@@ -44,6 +44,7 @@
 #include "extensions/browser/extension_event_histogram_value.h"
 #include "extensions/browser/extension_function.h"
 #include "extensions/browser/extension_system.h"
+#include "extensions/common/constants.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/manifest_handlers/background_info.h"
 #include "services/accessibility/public/mojom/assistive_technology_type.mojom.h"
@@ -259,7 +260,7 @@ ExtensionFunction::ResponseAction
 AccessibilityPrivateGetDisplayBoundsFunction::Run() {
   const std::vector<display::Display>& displays =
       display::Screen::Get()->GetAllDisplays();
-  base::Value::List result;
+  base::ListValue result;
   for (auto& display : displays) {
     const gfx::Rect& bounds = display.bounds();
     auto screen_rect = accessibility_private::ScreenRect();
@@ -281,6 +282,23 @@ AccessibilityPrivateForwardKeyEventsToSwitchAccessFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(params);
 
   return RespondNow(Error("Forwarding key events is no longer supported."));
+}
+
+ExtensionFunction::ResponseAction
+AccessibilityPrivateInstallTenjiFunction::Run() {
+  AccessibilityManager::Get()->InstallTenji(base::BindOnce(
+      &AccessibilityPrivateInstallTenjiFunction::OnInstallFinished, this));
+  return RespondLater();
+}
+
+void AccessibilityPrivateInstallTenjiFunction::OnInstallFinished(
+    std::optional<::extensions::api::accessibility_private::TenjiData> data) {
+  if (!data.has_value()) {
+    Respond(Error("Could not install Tenji DLC"));
+    return;
+  }
+
+  Respond(WithArguments(data->ToValue()));
 }
 
 AccessibilityPrivateGetBatteryDescriptionFunction::
@@ -403,7 +421,7 @@ AccessibilityPrivateProcessPendingSpokenFeedbackEventFunction::Run() {
           Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
   ash::EventRewriterController::Get()->ProcessPendingSpokenFeedbackEvent(
-      params->id, params->propagate);
+      params->id, params->propagate, static_cast<int64_t>(params->session_id));
   return RespondNow(NoArguments());
 }
 
@@ -493,8 +511,7 @@ AccessibilityPrivateIsFeatureEnabledFunction::Run() {
   switch (params_feature) {
     case accessibility_private::AccessibilityFeature::
         kGoogleTtsHighQualityVoices:
-      enabled = ::features::
-          IsExperimentalAccessibilityGoogleTtsHighQualityVoicesEnabled();
+      enabled = true;
       break;
     case accessibility_private::AccessibilityFeature::kDictationContextChecking:
       enabled = ::features::
@@ -502,6 +519,10 @@ AccessibilityPrivateIsFeatureEnabledFunction::Run() {
       break;
     case accessibility_private::AccessibilityFeature::kCaptionsOnBrailleDisplay:
       enabled = ::features::IsAccessibilityCaptionsOnBrailleDisplayEnabled();
+      break;
+    case accessibility_private::AccessibilityFeature::
+        kGoogleTtsAutomaticReconnect:
+      enabled = ::features::IsAccessibilityGoogleTtsAutomaticReconnectEnabled();
       break;
     case accessibility_private::AccessibilityFeature::kNone:
       return RespondNow(Error("Unrecognized feature"));
@@ -964,7 +985,8 @@ AccessibilityPrivateSetNativeAccessibilityEnabledFunction::Run() {
   if (enabled) {
     scoped_accessibility_mode_ =
         content::BrowserAccessibilityState::GetInstance()
-            ->CreateScopedModeForProcess(ui::kAXModeComplete);
+            ->CreateScopedModeForProcess(ui::kAXModeComplete |
+                                         ui::AXMode::kFromPlatform);
   } else {
     scoped_accessibility_mode_.reset();
   }
@@ -1060,8 +1082,13 @@ AccessibilityPrivateSetSelectToSpeakStateFunction::Run() {
 ExtensionFunction::ResponseAction
 AccessibilityPrivateEnableSpokenFeedbackMv3KeyHandlingFunction::Run() {
   CHECK_EQ(extension_misc::kChromeVoxExtensionId, extension_id());
+  std::optional<
+      accessibility_private::EnableSpokenFeedbackMv3KeyHandling::Params>
+      params = accessibility_private::EnableSpokenFeedbackMv3KeyHandling::
+          Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
   ash::EventRewriterController::Get()->SetSpokenFeedbackMv3KeyHandlingEnabled(
-      true);
+      true, static_cast<int64_t>(params->session_id));
   return RespondNow(NoArguments());
 }
 
@@ -1273,7 +1300,7 @@ AccessibilityPrivateUpdateSwitchAccessBubbleFunction::Run() {
        *(params->actions)) {
     std::string action = accessibility_private::ToString(extension_action);
     // Check that this action is not already in our actions list.
-    if (base::Contains(actions_to_show, action)) {
+    if (std::ranges::contains(actions_to_show, action)) {
       continue;
     }
     actions_to_show.push_back(action);

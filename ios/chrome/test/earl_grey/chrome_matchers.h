@@ -9,6 +9,8 @@
 
 #include <string>
 
+#import "ios/chrome/browser/shared/ui/symbols/symbols.h"
+
 @protocol GREYMatcher;
 class GURL;
 
@@ -96,6 +98,11 @@ id<GREYMatcher> ImageViewWithImageNamed(NSString* imageName);
 id<GREYMatcher> ImageViewWithCustomSymbolNameAndPointSize(NSString* symbolName,
                                                           CGFloat pointSize);
 
+// Returns a matcher for an element with a symbol defined by `symbol` and
+// `pointSize`.
+id<GREYMatcher> ImageViewWithSymbolAndPointSize(Symbol symbol,
+                                                CGFloat pointSize);
+
 // Returns a matcher for element with an image corresponding to `image_id` and
 // accessibility trait UIAccessibilityTraitButton.
 id<GREYMatcher> ButtonWithImage(int image_id);
@@ -133,6 +140,9 @@ id<GREYMatcher> IconViewForCellWithLabelId(int message_id, NSString* icon_type);
 
 // Returns a matcher for the primary toolbar.
 id<GREYMatcher> PrimaryToolbar();
+
+// Returns a matcher for the secondary toolbar.
+id<GREYMatcher> SecondaryToolbar();
 
 // Returns a matcher for a cancel button.
 id<GREYMatcher> CancelButton();
@@ -183,6 +193,9 @@ id<GREYMatcher> OmniboxPopupRow();
 // Returns a matcher for a popup row containing `string` as accessibility label.
 id<GREYMatcher> OmniboxPopupRowWithString(NSString* string);
 
+// Same as `OmniboxPopupRowWithString`, but sufficiently visible.
+id<GREYMatcher> OmniboxPopupRowVisibleWithString(NSString* string);
+
 // Returns matcher for the omnibox popup list view.
 id<GREYMatcher> OmniboxPopupList();
 
@@ -214,6 +227,9 @@ id<GREYMatcher> LocationViewEmpty();
 // Returns a matcher for Tools menu button.
 id<GREYMatcher> ToolsMenuButton();
 
+// Returns a matcher for the Tools menu button on the NTP.
+id<GREYMatcher> ToolsMenuNTPButton();
+
 // Returns a matcher for the New Tab button, which can be long-pressed for a
 // menu.
 id<GREYMatcher> NewTabButton();
@@ -228,10 +244,16 @@ id<GREYMatcher> ContextMenuButtonContainingText(NSString* text);
 // toolbar).
 id<GREYMatcher> TabShareButton();
 
+// Returns a matcher for the Share button in the overflow menu.
+id<GREYMatcher> OverflowMenuShareButton();
+
 // Returns a matcher for show tabs button.
 // DO NOT use this matcher to open the tab grid. Instead use one of the helpers:
 // `[ChromeEarlGrey  showTabSwitcher]` or `[ChromeEarlGreyUI openTabGrid]`.
 id<GREYMatcher> ShowTabsButton();
+
+// Returns a matcher for the Show Tabs button with a specific count.
+id<GREYMatcher> ShowTabsButtonWithCount(NSString* count);
 
 // Returns a matcher for the blue dot on the show tabs button.
 id<GREYMatcher> BlueDotOnShowTabsButton();
@@ -433,8 +455,8 @@ id<GREYMatcher> SettingsCollectionView();
 // Returns the matcher for the quick delete browsing data button.
 id<GREYMatcher> BrowsingDataButtonMatcher();
 
-// Returns the matcher for the quick delete browsing data confirmation button.
-id<GREYMatcher> BrowsingDataConfirmButtonMatcher();
+// Returns the matcher for the quick delete browsing data done button.
+id<GREYMatcher> BrowsingDataDoneButtonMatcher();
 
 // Returns a matcher for the clear browsing history cell on the clear browsing
 // data panel.
@@ -449,10 +471,6 @@ id<GREYMatcher> ClearCookiesButton();
 
 // Returns a matcher for the clear cache cell on the clear browsing data panel.
 id<GREYMatcher> ClearCacheButton();
-
-// Returns a matcher for the clear saved passwords cell on the clear browsing
-// data panel.
-id<GREYMatcher> ClearSavedPasswordsButton();
 
 // Returns a matcher for the clear saved passwords cell on the clear browsing
 // data panel.
@@ -617,12 +635,6 @@ id<GREYMatcher> TabGroupActivityLabelOnGridCellAtIndex(unsigned int index);
 // Returns a matcher for the button that closes the tab grid.
 id<GREYMatcher> TabGridDoneButton();
 
-// Returns a matcher for the tab grid overflow menu button.
-id<GREYMatcher> TabGridOverflowMenuButton();
-
-// Returns a matcher for the button that reverts the close all tabs action
-// in the tab grid.
-id<GREYMatcher> TabGridUndoCloseAllButton();
 
 // Returns a matcher for the cell that opens History in Recent Tabs.
 id<GREYMatcher> TabGridSelectShowHistoryCell();
@@ -709,6 +721,10 @@ id<GREYMatcher> SettingsSearchEngineButton();
 
 // Returns a matcher for the address bar button in the main settings view.
 id<GREYMatcher> SettingsAddressBarButton();
+
+// Returns a matcher for the 'Gemini in Chrome' button in the main settings
+// view.
+id<GREYMatcher> SettingsGeminiInChromeButton();
 
 // Returns a matcher for an autofill suggestion view.
 id<GREYMatcher> AutofillSuggestionViewMatcher();
@@ -815,17 +831,17 @@ id<GREYMatcher> WhatsNewDestinationButton();
 // Returns a matcher for the settings action button in the overflow menu.
 id<GREYMatcher> SettingsActionButton();
 
-#pragma mark - Tab Grid Edit Mode
+#pragma mark - Tab Grid Overflow Menu
 
-// Returns a matcher for the button to open the context menu for edit actions.
-id<GREYMatcher> TabGridEditButton();
+// Returns a matcher for the tab grid overflow menu button.
+id<GREYMatcher> TabGridOverflowMenuButton();
 
-// Returns a matcher for the context menu button to close all tabs.
-id<GREYMatcher> TabGridEditMenuCloseAllButton();
+// Returns a matcher for the overflow menu button to close all tabs.
+id<GREYMatcher> TabGridOverflowMenuCloseAllButton();
 
-// Returns a matcher for the context menu button to enter the tab grid tab
+// Returns a matcher for the overflow menu button to enter the tab grid tab
 // selection mode.
-id<GREYMatcher> TabGridSelectTabsMenuButton();
+id<GREYMatcher> TabGridOverflowMenuSelectTabsButton();
 
 // Returns a matcher for the button to act on the selected tabs.
 id<GREYMatcher> TabGridEditAddToButton();

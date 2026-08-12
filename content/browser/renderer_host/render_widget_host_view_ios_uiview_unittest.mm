@@ -4,11 +4,15 @@
 
 #include "content/browser/renderer_host/render_widget_host_view_ios_uiview.h"
 
+#include "base/apple/foundation_util.h"
 #include "testing/platform_test.h"
 #include "third_party/blink/public/common/input/web_keyboard_event.h"
+#include "ui/base/ime/mojom/text_input_state.mojom.h"
+#include "ui/base/ime/text_input_flags.h"
 
 @interface RenderWidgetUIView (Testing)
 - (BOOL)shouldInsertCharacter:(const blink::WebKeyboardEvent&)webKeyboardEvent;
+- (BOOL)isEditable;
 - (std::string)moveSelectionCommand:(UITextLayoutDirection)direction;
 - (std::string)extendSelectionCommand:(UITextLayoutDirection)direction;
 - (std::vector<std::string>)
@@ -348,6 +352,93 @@ TEST_F(RenderWidgetHostViewIOSUIViewTest, DeleteSelectionCommands) {
       EXPECT_EQ(commands[i], test_case.expected_commands[i]);
     }
   }
+}
+
+TEST_F(RenderWidgetHostViewIOSUIViewTest,
+       InputAccessoryButtonsFollowFocusableFlags) {
+  UIBarButtonItem* previousButton;
+  UIBarButtonItem* nextButton;
+
+  if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+    NSArray<UIBarButtonItemGroup*>* trailingGroups =
+        uiview_.inputAssistantItem.trailingBarButtonGroups;
+    ASSERT_EQ(trailingGroups.count, 1u);
+    ASSERT_GE(trailingGroups[0].barButtonItems.count, 2u);
+    previousButton = trailingGroups[0].barButtonItems[0];
+    nextButton = trailingGroups[0].barButtonItems[1];
+  } else {
+    UIView* inputAccessoryView = [uiview_ inputAccessoryView];
+    ASSERT_NE(inputAccessoryView, nil);
+
+    UIToolbar* toolbar = base::apple::ObjCCast<UIToolbar>(
+        inputAccessoryView.subviews.firstObject);
+    ASSERT_NE(toolbar, nil);
+    ASSERT_GE(toolbar.items.count, 2u);
+    EXPECT_EQ(
+        CGRectGetHeight(inputAccessoryView.frame),
+        CGRectGetHeight(toolbar.frame) + kInputAccessoryToolbarBottomMargin);
+    previousButton = toolbar.items[0];
+    nextButton = toolbar.items[1];
+  }
+
+  ui::mojom::TextInputState state;
+  state.type = ui::TextInputType::TEXT_INPUT_TYPE_TEXT;
+  state.mode = ui::TextInputMode::TEXT_INPUT_MODE_TEXT;
+
+  state.flags = 0;
+  [uiview_ onUpdateTextInputState:state withBounds:CGRectZero];
+  EXPECT_FALSE(previousButton.enabled);
+  EXPECT_FALSE(nextButton.enabled);
+
+  state.flags = ui::TEXT_INPUT_FLAG_HAVE_PREVIOUS_FOCUSABLE_ELEMENT;
+  [uiview_ onUpdateTextInputState:state withBounds:CGRectZero];
+  EXPECT_TRUE(previousButton.enabled);
+  EXPECT_FALSE(nextButton.enabled);
+
+  state.flags = ui::TEXT_INPUT_FLAG_HAVE_NEXT_FOCUSABLE_ELEMENT;
+  [uiview_ onUpdateTextInputState:state withBounds:CGRectZero];
+  EXPECT_FALSE(previousButton.enabled);
+  EXPECT_TRUE(nextButton.enabled);
+
+  state.flags = ui::TEXT_INPUT_FLAG_HAVE_PREVIOUS_FOCUSABLE_ELEMENT |
+                ui::TEXT_INPUT_FLAG_HAVE_NEXT_FOCUSABLE_ELEMENT;
+  [uiview_ onUpdateTextInputState:state withBounds:CGRectZero];
+  EXPECT_TRUE(previousButton.enabled);
+  EXPECT_TRUE(nextButton.enabled);
+}
+
+TEST_F(RenderWidgetHostViewIOSUIViewTest,
+       OnUpdateTextInputStateSetsEditableBeforeKeyboard) {
+  EXPECT_FALSE([uiview_ isEditable]);
+
+  // Editable text input type sets isEditable to YES.
+  ui::mojom::TextInputState state;
+  state.type = ui::TextInputType::TEXT_INPUT_TYPE_TEXT;
+  state.mode = ui::TextInputMode::TEXT_INPUT_MODE_TEXT;
+  [uiview_ onUpdateTextInputState:state withBounds:CGRectZero];
+  EXPECT_TRUE([uiview_ isEditable]);
+
+  // TEXT_INPUT_TYPE_NONE sets isEditable to NO.
+  state.type = ui::TextInputType::TEXT_INPUT_TYPE_NONE;
+  [uiview_ onUpdateTextInputState:state withBounds:CGRectZero];
+  EXPECT_FALSE([uiview_ isEditable]);
+
+  // TEXT_INPUT_MODE_NONE sets isEditable to NO.
+  state.type = ui::TextInputType::TEXT_INPUT_TYPE_TEXT;
+  state.mode = ui::TextInputMode::TEXT_INPUT_MODE_NONE;
+  [uiview_ onUpdateTextInputState:state withBounds:CGRectZero];
+  EXPECT_FALSE([uiview_ isEditable]);
+
+  // TEXT_AREA type sets isEditable to YES.
+  state.type = ui::TextInputType::TEXT_INPUT_TYPE_TEXT_AREA;
+  state.mode = ui::TextInputMode::TEXT_INPUT_MODE_TEXT;
+  [uiview_ onUpdateTextInputState:state withBounds:CGRectZero];
+  EXPECT_TRUE([uiview_ isEditable]);
+
+  // always_hide_ime does not affect isEditable (only keyboard visibility).
+  state.always_hide_ime = true;
+  [uiview_ onUpdateTextInputState:state withBounds:CGRectZero];
+  EXPECT_TRUE([uiview_ isEditable]);
 }
 
 }  // namespace content

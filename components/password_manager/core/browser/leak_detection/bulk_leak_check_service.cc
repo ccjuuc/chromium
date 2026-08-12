@@ -4,8 +4,8 @@
 
 #include "components/password_manager/core/browser/leak_detection/bulk_leak_check_service.h"
 
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/observer_list.h"
 #include "base/timer/elapsed_timer.h"
 #include "components/password_manager/core/browser/leak_detection/bulk_leak_check.h"
@@ -78,7 +78,7 @@ BulkLeakCheckService::~BulkLeakCheckService() = default;
 
 void BulkLeakCheckService::CheckUsernamePasswordPairs(
     LeakDetectionInitiator initiator,
-    std::vector<password_manager::LeakCheckCredential> credentials) {
+    std::vector<LeakCheckCredential> credentials) {
   DVLOG(0) << "Bulk password check, start " << credentials.size();
   if (credentials.empty()) {
     // Nothing to check. Still important to go through the running state, so the

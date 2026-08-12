@@ -13,14 +13,16 @@
 #include "ash/system/magic_boost/magic_boost_constants.h"
 #include "ash/system/magic_boost/magic_boost_disclaimer_view.h"
 #include "ash/test/ash_test_util.h"
+#include "base/check_deref.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "base/version_info/channel.h"
 #include "chrome/browser/ash/mahi/mahi_test_util.h"
 #include "chrome/browser/manta/manta_service_factory.h"
-#include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/browser/ui/views/mahi/mahi_menu_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "chromeos/constants/chromeos_switches.h"
 #include "components/manta/mahi_provider.h"
@@ -59,12 +61,11 @@ class MockMahiProvider : public manta::MahiProvider {
                           manta::MantaGenericCallback done_callback) {
           base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
               FROM_HERE,
-              base::BindOnce(
-                  std::move(done_callback),
-                  base::Value::Dict().Set(/*key=*/"outputData",
-                                          GetMahiDefaultTestSummary()),
-                  manta::MantaStatus{.status_code =
-                                         manta::MantaStatusCode::kOk}));
+              base::BindOnce(std::move(done_callback),
+                             base::DictValue().Set(/*key=*/"outputData",
+                                                   GetMahiDefaultTestSummary()),
+                             manta::MantaStatus{
+                                 .status_code = manta::MantaStatusCode::kOk}));
         });
 
     ON_CALL(*this, QuestionAndAnswer)
@@ -78,8 +79,8 @@ class MockMahiProvider : public manta::MahiProvider {
                   FROM_HERE,
                   base::BindOnce(
                       std::move(done_callback),
-                      base::Value::Dict().Set(/*key=*/"outputData",
-                                              GetMahiDefaultTestAnswer()),
+                      base::DictValue().Set(/*key=*/"outputData",
+                                            GetMahiDefaultTestAnswer()),
                       manta::MantaStatus{.status_code =
                                              manta::MantaStatusCode::kOk}));
             });
@@ -140,9 +141,8 @@ std::unique_ptr<KeyedService> CreateMockMantaService(
 }  // namespace
 
 MahiUiBrowserTestBase::MahiUiBrowserTestBase() {
-  feature_list_.InitWithFeatures(
-      {chromeos::features::kMahi, chromeos::features::kFeatureManagementMahi},
-      {});
+  feature_list_.InitWithFeatures({chromeos::features::kFeatureManagementMahi},
+                                 {});
 }
 
 MahiUiBrowserTestBase::~MahiUiBrowserTestBase() = default;
@@ -160,7 +160,7 @@ void MahiUiBrowserTestBase::SetUpOnMainThread() {
       std::make_unique<ui::test::EventGenerator>(Shell::GetPrimaryRootWindow());
 
   manta::MantaServiceFactory::GetInstance()->SetTestingFactory(
-      browser()->profile(), base::BindRepeating(&CreateMockMantaService));
+      browser()->GetProfile(), base::BindRepeating(&CreateMockMantaService));
 
   // Configure `https_server_` so that the test page is accessible.
   https_server_.AddDefaultHandlers(GetChromeTestDataDir());
@@ -211,8 +211,10 @@ void MahiUiBrowserTestBase::TypeStringToMahiMenuTextfield(
 void MahiUiBrowserTestBase::WaitForSettingsToLoad() {
   // Wait until the Settings app finishes loading.
   ui_test_utils::AllBrowserTabAddedWaiter waiter;
-  chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
-      browser()->profile());
+  ash::SettingsAppManager::Get()->Open(
+      CHECK_DEREF(ash::BrowserContextHelper::Get()->GetUserByBrowserContext(
+          browser()->GetProfile())),
+      {});
   auto* const web_contents = waiter.Wait();
   ASSERT_TRUE(web_contents);
   content::WaitForLoadStop(web_contents);

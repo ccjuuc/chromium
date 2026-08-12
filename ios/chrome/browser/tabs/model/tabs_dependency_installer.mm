@@ -13,36 +13,17 @@
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list_observer.h"
 #import "ios/chrome/browser/tabs/model/tabs_dependency_installer_manager.h"
-#import "ios/web/common/features.h"
 #import "ios/web/public/web_state.h"
 #import "ios/web/public/web_state_observer.h"
 
-namespace {
-
-// Returns whether TabsDependencyInstaller should be notified about
-// unrealized WebState insertion/removal or not.
-bool WaitForRealizationToInstallDependencies(
-    TabsDependencyInstaller::Policy policy) {
-  switch (policy) {
-    case TabsDependencyInstaller::Policy::kOnlyRealized:
-      return true;
-
-    case TabsDependencyInstaller::Policy::kAccordingToFeature:
-      return web::features::CreateTabHelperOnlyForRealizedWebStates();
-  }
-}
-
-}  // namespace
-
 // Helper observing the WebStateList and the unrealized WebStates events and
-// forwaring them to the owning TabsDependencyInstaller instance.
+// forwarding them to the owning TabsDependencyInstaller instance.
 class TabsDependencyInstallationHelper : public WebStateListObserver,
                                          public web::WebStateObserver {
  public:
   TabsDependencyInstallationHelper(
       Browser& browser,
-      TabsDependencyInstaller& dependency_installer,
-      TabsDependencyInstaller::Policy policy);
+      TabsDependencyInstaller& dependency_installer);
   ~TabsDependencyInstallationHelper() override;
 
   // WebStateListObserver:
@@ -61,7 +42,7 @@ class TabsDependencyInstallationHelper : public WebStateListObserver,
  private:
   // Invoked when a WebState is inserted/removed. They handle the fact that
   // the WebState may be unrealized (by observing it) or realized (invokes
-  // the correct method of TabDependencyInstaller).
+  // the correct method of TabsDependencyInstaller).
   void OnWebStateAdded(web::WebState* web_state);
   void OnWebStateRemoved(web::WebState* web_state);
 
@@ -79,20 +60,14 @@ class TabsDependencyInstallationHelper : public WebStateListObserver,
   // Observation of the unrealized WebStates in the list.
   base::ScopedMultiSourceObservation<web::WebState, web::WebStateObserver>
       web_state_observations_{this};
-  // Whether the TabsDependencyInstaller should be notified of insertions
-  // and removals of unrealized WebStates.
-  const bool wait_for_realization_to_install_dependencies_;
 };
 
 TabsDependencyInstallationHelper::TabsDependencyInstallationHelper(
     Browser& browser,
-    TabsDependencyInstaller& dependency_installer,
-    TabsDependencyInstaller::Policy policy)
+    TabsDependencyInstaller& dependency_installer)
     : browser_(browser),
       web_state_list_(CHECK_DEREF(browser.GetWebStateList())),
-      dependency_installer_(dependency_installer),
-      wait_for_realization_to_install_dependencies_(
-          WaitForRealizationToInstallDependencies(policy)) {
+      dependency_installer_(dependency_installer) {
   web_state_list_observation_.Observe(&(web_state_list_.get()));
   for (int i = 0; i < web_state_list_->count(); i++) {
     OnWebStateAdded(web_state_list_->GetWebStateAt(i));
@@ -196,14 +171,12 @@ void TabsDependencyInstallationHelper::WebStateListDestroyed(
 
 void TabsDependencyInstallationHelper::WebStateRealized(
     web::WebState* web_state) {
-  CHECK(wait_for_realization_to_install_dependencies_);
   web_state_observations_.RemoveObservation(web_state);
   OnWebStateAdded(web_state);
 }
 
 void TabsDependencyInstallationHelper::WebStateDestroyed(
     web::WebState* web_state) {
-  CHECK(wait_for_realization_to_install_dependencies_);
   web_state_observations_.RemoveObservation(web_state);
 }
 
@@ -211,26 +184,20 @@ void TabsDependencyInstallationHelper::WebStateDestroyed(
 
 void TabsDependencyInstallationHelper::OnWebStateAdded(
     web::WebState* web_state) {
-  if (wait_for_realization_to_install_dependencies_) {
-    if (!web_state->IsRealized()) {
-      web_state_observations_.AddObservation(web_state);
-      return;
-    }
+  if (!web_state->IsRealized()) {
+    web_state_observations_.AddObservation(web_state);
+  } else {
+    dependency_installer_->OnWebStateInserted(web_state);
   }
-
-  dependency_installer_->OnWebStateInserted(web_state);
 }
 
 void TabsDependencyInstallationHelper::OnWebStateRemoved(
     web::WebState* web_state) {
-  if (wait_for_realization_to_install_dependencies_) {
-    if (!web_state->IsRealized()) {
-      web_state_observations_.RemoveObservation(web_state);
-      return;
-    }
+  if (!web_state->IsRealized()) {
+    web_state_observations_.RemoveObservation(web_state);
+  } else {
+    dependency_installer_->OnWebStateRemoved(web_state);
   }
-
-  dependency_installer_->OnWebStateRemoved(web_state);
 }
 
 #pragma mark - TabsDependencyInstaller
@@ -251,9 +218,9 @@ TabsDependencyInstaller::~TabsDependencyInstaller() {
                                   "destroying a TabsDependencyInstaller.";
 }
 
-void TabsDependencyInstaller::StartObserving(Browser* browser, Policy policy) {
+void TabsDependencyInstaller::StartObserving(Browser* browser) {
   installation_helper_ = std::make_unique<TabsDependencyInstallationHelper>(
-      CHECK_DEREF(browser), *this, policy);
+      CHECK_DEREF(browser), *this);
 }
 
 void TabsDependencyInstaller::StopObserving() {

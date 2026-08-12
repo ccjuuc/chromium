@@ -5,15 +5,12 @@
 #ifndef UI_GFX_SWAP_RESULT_H_
 #define UI_GFX_SWAP_RESULT_H_
 
-#include <memory>
-
 #include "base/component_export.h"
 #include "base/time/time.h"
+#include "ui/gfx/ca_layer_params.h"
 #include "ui/gfx/gpu_fence_handle.h"
 
 namespace gfx {
-
-struct CALayerParams;
 
 enum class SwapResult {
   SWAP_ACK,
@@ -28,10 +25,7 @@ enum class SwapResult {
   // SWAP_SKIPPED.
   SWAP_SKIPPED,
   SWAP_NAK_RECREATE_BUFFERS,
-  // This swap result identifies cases when flipping non-simple overlay planes
-  // fails.
-  SWAP_NON_SIMPLE_OVERLAYS_FAILED,
-  SWAP_RESULT_LAST = SWAP_NON_SIMPLE_OVERLAYS_FAILED,
+  SWAP_RESULT_LAST = SWAP_NAK_RECREATE_BUFFERS,
 };
 
 struct SwapTimings {
@@ -55,6 +49,9 @@ struct SwapTimings {
 
   // When GPU scheduler removed the last required dependency.
   base::TimeTicks gpu_task_ready;
+
+  // When the GPU thread started scheduling overlays.
+  base::TimeTicks gpu_started_overlay;
 
   bool is_null() const { return swap_start.is_null() && swap_end.is_null(); }
 };
@@ -82,7 +79,7 @@ struct COMPONENT_EXPORT(GFX) SwapCompletionResult {
   SwapCompletionResult(gfx::SwapResult swap_result,
                        gfx::GpuFenceHandle release_fence);
   SwapCompletionResult(gfx::SwapResult swap_result,
-                       std::unique_ptr<gfx::CALayerParams> ca_layer_params);
+                       gfx::CALayerParams ca_layer_params);
   SwapCompletionResult(SwapCompletionResult&& other);
   ~SwapCompletionResult();
 
@@ -91,7 +88,7 @@ struct COMPONENT_EXPORT(GFX) SwapCompletionResult {
 
   gfx::SwapResult swap_result = SwapResult::SWAP_FAILED;
   gfx::GpuFenceHandle release_fence;
-  std::unique_ptr<CALayerParams> ca_layer_params;
+  CALayerParams ca_layer_params;
 };
 
 }  // namespace gfx

@@ -58,12 +58,18 @@ static_library("performance_manager") {
     "execution_context_priority/execution_context_priority.cc",
     "execution_context_priority/extension_service_worker_voter.cc",
     "execution_context_priority/extension_service_worker_voter.h",
+    "execution_context_priority/force_foreground_voter.cc",
+    "execution_context_priority/force_foreground_voter.h",
+    "execution_context_priority/force_foreground_voter_for_urls.cc",
+    "execution_context_priority/force_foreground_voter_for_urls.h",
     "execution_context_priority/frame_audible_voter.cc",
     "execution_context_priority/frame_audible_voter.h",
     "execution_context_priority/frame_capturing_media_stream_voter.cc",
     "execution_context_priority/frame_capturing_media_stream_voter.h",
     "execution_context_priority/frame_visibility_voter.cc",
     "execution_context_priority/frame_visibility_voter.h",
+    "execution_context_priority/glic_actuation_priority_voter.cc",
+    "execution_context_priority/glic_actuation_priority_voter.h",
     "execution_context_priority/inherit_client_priority_voter.cc",
     "execution_context_priority/inherit_client_priority_voter.h",
     "execution_context_priority/inherit_parent_priority_voter.cc",
@@ -115,8 +121,8 @@ static_library("performance_manager") {
     "graph/page_node_impl.h",
     "graph/page_node_impl_describer.cc",
     "graph/page_node_impl_describer.h",
-    "graph/policies/bfcache_policy.cc",
-    "graph/policies/bfcache_policy.h",
+    "graph/policies/process_priority_policy.cc",
+    "graph/policies/process_priority_policy.h",
     "graph/process_node.cc",
     "graph/process_node_impl.cc",
     "graph/process_node_impl.h",
@@ -211,6 +217,7 @@ static_library("performance_manager") {
     "public/persistence/site_data/feature_usage.h",
     "public/persistence/site_data/site_data_reader.h",
     "public/power/battery_level_provider_creator.h",
+    "public/process_priority_policy_settings.h",
     "public/render_frame_host_proxy.h",
     "public/render_process_host_id.h",
     "public/render_process_host_proxy.h",
@@ -317,6 +324,7 @@ static_library("performance_manager") {
     "//components/pref_registry",
     "//components/prefs",
     "//components/system_cpu",
+    "//components/url_matcher",
     "//third_party/blink/public/common:headers",
   ]
 
@@ -337,13 +345,6 @@ static_library("performance_manager") {
 
   if (enable_guest_view) {
     deps += [ "//components/guest_view/browser" ]
-  }
-
-  if (!is_android) {
-    sources += [
-      "graph/policies/process_priority_policy.cc",
-      "graph/policies/process_priority_policy.h",
-    ]
   }
 
   if (is_chromeos) {
@@ -382,9 +383,12 @@ source_set("unit_tests") {
     "execution_context_priority/closing_page_voter_unittest.cc",
     "execution_context_priority/execution_context_priority_unittest.cc",
     "execution_context_priority/extension_service_worker_voter_unittest.cc",
+    "execution_context_priority/force_foreground_voter_for_urls_unittest.cc",
+    "execution_context_priority/force_foreground_voter_unittest.cc",
     "execution_context_priority/frame_audible_voter_unittest.cc",
     "execution_context_priority/frame_capturing_media_stream_voter_unittest.cc",
     "execution_context_priority/frame_visibility_voter_unittest.cc",
+    "execution_context_priority/glic_actuation_priority_voter_unittest.cc",
     "execution_context_priority/inherit_client_priority_voter_unittest.cc",
     "execution_context_priority/inherit_parent_priority_voter_unittest.cc",
     "execution_context_priority/loading_page_voter_unittest.cc",
@@ -453,11 +457,11 @@ source_set("unit_tests") {
     "test_support:test_support_common",
     "//base/test:test_support",
     "//components/input",
-    "//components/memory_pressure:test_support",
     "//components/performance_manager/scenario_api",
     "//components/prefs:test_support",
     "//components/services/storage/public/cpp",
     "//components/ukm:test_support",
+    "//components/url_matcher",
     "//content/test:test_support",
     "//testing/gmock",
     "//testing/gtest",
@@ -483,9 +487,6 @@ source_set("unit_tests") {
       "persistence/site_data/site_data_impl_unittest.cc",
       "persistence/site_data/site_data_reader_unittest.cc",
       "persistence/site_data/site_data_writer_unittest.cc",
-
-      # TODO(crbug.com/40188246): Consider using this policy on Android.
-      "graph/policies/bfcache_policy_unittest.cc",
     ]
   }
 

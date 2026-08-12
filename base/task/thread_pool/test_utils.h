@@ -43,8 +43,8 @@ class MockWorkerThreadObserver : public WorkerThreadObserver {
   void WaitCallsOnMainExit();
 
   // WorkerThreadObserver:
-  MOCK_METHOD0(OnWorkerThreadMainEntry, void());
-  // This doesn't use MOCK_METHOD0 because some tests need to wait for all calls
+  MOCK_METHOD(void, OnWorkerThreadMainEntry, (), (override));
+  // This doesn't use MOCK_METHOD because some tests need to wait for all calls
   // to happen, which isn't possible with gmock.
   void OnWorkerThreadMainExit() override;
 
@@ -136,11 +136,13 @@ scoped_refptr<TaskRunner> CreatePooledTaskRunnerWithExecutionMode(
 
 scoped_refptr<TaskRunner> CreatePooledTaskRunner(
     const TaskTraits& traits,
-    MockPooledTaskRunnerDelegate* mock_pooled_task_runner_delegate);
+    MockPooledTaskRunnerDelegate* mock_pooled_task_runner_delegate,
+    bool inherit_task_importance_by_default = false);
 
 scoped_refptr<SequencedTaskRunner> CreatePooledSequencedTaskRunner(
     const TaskTraits& traits,
-    MockPooledTaskRunnerDelegate* mock_pooled_task_runner_delegate);
+    MockPooledTaskRunnerDelegate* mock_pooled_task_runner_delegate,
+    bool inherit_task_importance_by_default = false);
 
 RegisteredTaskSource QueueAndRunTaskSource(
     TaskTracker* task_tracker,

@@ -14,11 +14,11 @@
 #include "base/lazy_instance.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/observer_list.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
+#include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
 #include "content/browser/devtools/devtools_instrumentation.h"
 #include "content/browser/fenced_frame/fenced_frame.h"
@@ -32,7 +32,9 @@
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/common/navigation_params_utils.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/site_isolation_policy.h"
+#include "content/public/common/content_client.h"
 #include "content/public/common/content_features.h"
 #include "services/network/public/cpp/web_sandbox_flags.h"
 #include "services/network/public/mojom/web_sandbox_flags.mojom-shared.h"
@@ -42,6 +44,7 @@
 #include "third_party/blink/public/common/loader/loader_constants.h"
 #include "third_party/blink/public/mojom/frame/user_activation_update_types.mojom.h"
 #include "third_party/blink/public/mojom/security_context/insecure_request_policy.mojom.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace content {
 
@@ -59,7 +62,7 @@ FencedFrame* FindFencedFrame(const FrameTreeNode* frame_tree_node) {
   // `FrameTreeNode` or having a map between them.
 
   // Try and find the `FencedFrame` that `frame_tree_node` represents.
-  DCHECK(frame_tree_node->parent());
+  CHECK(frame_tree_node->parent(), base::NotFatalUntil::M152);
   std::vector<FencedFrame*> fenced_frames =
       frame_tree_node->parent()->GetFencedFrames();
   for (FencedFrame* fenced_frame : fenced_frames) {
@@ -121,6 +124,8 @@ FrameTreeNodeId::Generator FrameTreeNode::frame_tree_node_id_generator_;
 // static
 FrameTreeNode* FrameTreeNode::GloballyFindByID(
     FrameTreeNodeId frame_tree_node_id) {
+  // TODO(crbug.com/541051793): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   FrameTreeNodeIdMap* nodes = g_frame_tree_node_id_map.Pointer();
   auto it = nodes->find(frame_tree_node_id);
@@ -171,7 +176,7 @@ FrameTreeNode::FrameTreeNode(
           ComputeFencedFrameStatus(frame_tree, parent_, frame_policy)),
       render_manager_(this, frame_tree.manager_delegate()) {
   TRACE_EVENT_BEGIN("navigation.debug", "FrameTreeNode",
-                    perfetto::Track::FromPointer(this),
+                    perfetto::NamedTrack::FromPointer("FrameTreeNode", this),
                     "frame_tree_node_when_created", this);
   std::pair<FrameTreeNodeIdMap::iterator, bool> result =
       g_frame_tree_node_id_map.Get().insert(
@@ -232,8 +237,10 @@ FrameTreeNode::~FrameTreeNode() {
 
     current_frame_host()->ResetLoadingState();
   } else {
-    DCHECK(!parent());  // Only main documents can be activated.
-    DCHECK(!opener());  // Prerendered frame trees can't have openers.
+    CHECK(!parent(),
+          base::NotFatalUntil::M152);  // Only main documents can be activated.
+    CHECK(!opener(), base::NotFatalUntil::M152);  // Prerendered frame trees
+                                                  // can't have openers.
 
     // Activation is not allowed during ongoing navigations.
     CHECK(!navigation_request_);
@@ -293,7 +300,7 @@ FrameTreeNode::~FrameTreeNode() {
     // `FrameTree::Shutdown()` has special handling for the main frame's
     // speculative RenderFrameHost, and the speculative RenderFrameHost should
     // already be reset for main frames.
-    DCHECK(!IsMainFrame());
+    CHECK(!IsMainFrame(), base::NotFatalUntil::M152);
 
     // This does not use `UnsetSpeculativeRenderFrameHost()`: if the speculative
     // RenderFrameHost has already reached kPendingCommit, it would needlessly
@@ -305,10 +312,11 @@ FrameTreeNode::~FrameTreeNode() {
     DidStopLoading();
 
   // IsLoading() requires that current_frame_host() is non-null.
-  DCHECK(!current_frame_host() || !IsLoading());
+  CHECK(!current_frame_host() || !IsLoading(), base::NotFatalUntil::M152);
 
   // Matches the TRACE_EVENT_BEGIN in the constructor.
-  TRACE_EVENT_END("navigation.debug", perfetto::Track::FromPointer(this));
+  TRACE_EVENT_END("navigation.debug",
+                  perfetto::NamedTrack::FromPointer("FrameTreeNode", this));
 }
 
 void FrameTreeNode::MaybeRemoveFromLastCommittedEntry() {
@@ -425,14 +433,15 @@ void FrameTreeNode::SetOpener(FrameTreeNode* opener) {
 
 void FrameTreeNode::SetOpenerDevtoolsFrameToken(
     base::UnguessableToken opener_devtools_frame_token) {
-  DCHECK(!opener_devtools_frame_token_ ||
-         opener_devtools_frame_token_->is_empty());
+  CHECK(
+      !opener_devtools_frame_token_ || opener_devtools_frame_token_->is_empty(),
+      base::NotFatalUntil::M152);
   opener_devtools_frame_token_ = std::move(opener_devtools_frame_token);
 }
 
 void FrameTreeNode::SetOriginalOpener(FrameTreeNode* opener) {
   // The original opener tracks main frames only.
-  DCHECK(opener == nullptr || !opener->parent());
+  CHECK(opener == nullptr || !opener->parent(), base::NotFatalUntil::M152);
 
   if (first_live_main_frame_in_original_opener_chain_) {
     first_live_main_frame_in_original_opener_chain_->RemoveObserver(
@@ -451,7 +460,7 @@ void FrameTreeNode::SetOriginalOpener(FrameTreeNode* opener) {
 }
 
 void FrameTreeNode::SetCollapsed(bool collapsed) {
-  DCHECK(!IsMainFrame() || IsFencedFrameRoot());
+  CHECK(!IsMainFrame() || IsFencedFrameRoot(), base::NotFatalUntil::M152);
   if (is_collapsed_ == collapsed)
     return;
 
@@ -461,7 +470,7 @@ void FrameTreeNode::SetCollapsed(bool collapsed) {
 
 void FrameTreeNode::SetFrameTree(FrameTree& frame_tree) {
   frame_tree_ = frame_tree;
-  DCHECK(current_frame_host());
+  CHECK(current_frame_host(), base::NotFatalUntil::M152);
   current_frame_host()->SetFrameTree(frame_tree);
   RenderFrameHostImpl* speculative_frame_host =
       render_manager_.speculative_frame_host();
@@ -508,8 +517,10 @@ void FrameTreeNode::SetPendingFramePolicy(blink::FramePolicy frame_policy) {
   // still allow a fenced frame to properly set its container policy. The
   // required document policy and sandbox flags should stay unmodified.
   if (IsFencedFrameRoot()) {
-    DCHECK(pending_frame_policy_.required_document_policy.empty());
-    DCHECK_EQ(pending_frame_policy_.sandbox_flags, frame_policy.sandbox_flags);
+    CHECK(pending_frame_policy_.required_document_policy.empty(),
+          base::NotFatalUntil::M152);
+    CHECK_EQ(pending_frame_policy_.sandbox_flags, frame_policy.sandbox_flags,
+             base::NotFatalUntil::M152);
     pending_frame_policy_.container_policy = frame_policy.container_policy;
   }
 }
@@ -531,7 +542,7 @@ bool FrameTreeNode::IsLoading() const {
 LoadingState FrameTreeNode::GetLoadingState() const {
   RenderFrameHostImpl* current_frame_host =
       render_manager_.current_frame_host();
-  DCHECK(current_frame_host);
+  CHECK(current_frame_host, base::NotFatalUntil::M152);
 
   if (navigation_request_) {
     // If navigation_request_ is non-null, the navigation has not been moved to
@@ -582,8 +593,9 @@ void FrameTreeNode::TakeNavigationRequest(
   // This is never called when navigating to a Javascript URL. For the loading
   // state, this matches what Blink is doing: Blink doesn't send throbber
   // notifications for Javascript URLS.
-  DCHECK(!navigation_request->common_params().url.SchemeIs(
-      url::kJavaScriptScheme));
+  CHECK(
+      !navigation_request->common_params().url.SchemeIs(url::kJavaScriptScheme),
+      base::NotFatalUntil::M152);
 
   LoadingState previous_frame_tree_loading_state =
       frame_tree().LoadingTree()->GetLoadingState();
@@ -645,15 +657,6 @@ void FrameTreeNode::ResetNavigationRequest(NavigationDiscardReason reason) {
   // it created for the navigation. Also register that the load stopped.
   DidStopLoading();
   render_manager_.DiscardSpeculativeRFHIfUnused(reason);
-
-  // An ancestor's network revocation status could've changed as a result of
-  // the NavigationRequest getting reset. When fenced frames revoke network
-  // access by calling `window.fence.disableUntrustedNetwork`, the returned
-  // promise cannot be resolved until ongoing navigations in descendant frames
-  // complete.
-  current_frame_host()
-      ->GetOutermostMainFrame()
-      ->CalculateUntrustedNetworkStatus();
 }
 
 void FrameTreeNode::ResetNavigationRequestButKeepState(
@@ -735,8 +738,9 @@ void FrameTreeNode::DidStopLoading() {
 }
 
 void FrameTreeNode::DidChangeLoadProgress(double load_progress) {
-  DCHECK_GE(load_progress, blink::kInitialLoadProgress);
-  DCHECK_LE(load_progress, blink::kFinalLoadProgress);
+  CHECK_GE(load_progress, blink::kInitialLoadProgress,
+           base::NotFatalUntil::M152);
+  CHECK_LE(load_progress, blink::kFinalLoadProgress, base::NotFatalUntil::M152);
   current_frame_host()->DidChangeLoadProgress(load_progress);
 }
 
@@ -767,7 +771,7 @@ void FrameTreeNode::BeforeUnloadCanceled() {
 
   RenderFrameHostImpl* current_frame_host =
       render_manager_.current_frame_host();
-  DCHECK(current_frame_host);
+  CHECK(current_frame_host, base::NotFatalUntil::M152);
   current_frame_host->ResetLoadingState();
 
   RenderFrameHostImpl* speculative_frame_host =
@@ -796,33 +800,23 @@ bool FrameTreeNode::NotifyUserActivation(
   // User Activation V2 requires activating all ancestor frames in addition to
   // the current frame. See
   // https://html.spec.whatwg.org/multipage/interaction.html#tracking-user-activation.
+  // This propagation is spec-mandated to cross origin boundaries (e.g., from
+  // a cross-origin subframe to its parent), so no same-origin check is
+  // performed here.
   for (RenderFrameHostImpl* rfh = current_frame_host(); rfh;
        rfh = rfh->GetParent()) {
     rfh->DidReceiveUserActivation();
     rfh->ActivateUserActivation(notification_type, sticky_only);
   }
 
-  // If we're in a picture-in-picture frame tree, then also activate the opener
-  // frame of the picture-in-picture root.
-  FrameTree* pip_opener =
-      frame_tree().delegate()->GetDocumentPictureInPictureOpenerFrameTree();
-  if (base::FeatureList::IsEnabled(
-          blink::features::kDocumentPictureInPictureUserActivation) &&
-      pip_opener) {
-    RenderFrameHostImpl* opener_frame_host =
-        pip_opener->root()->current_frame_host();
-
-    opener_frame_host->DidReceiveUserActivation();
-    opener_frame_host->ActivateUserActivation(notification_type, sticky_only);
-  }
-
-  current_frame_host()->browsing_context_state()->set_has_active_user_gesture(
-      true);
-
   // See the "Same-origin Visibility" section in |UserActivationState| class
   // doc.
   const url::Origin& current_origin =
       this->current_frame_host()->GetLastCommittedOrigin();
+
+  current_frame_host()->browsing_context_state()->set_has_active_user_gesture(
+      true);
+
   for (FrameTreeNode* node : frame_tree().Nodes()) {
     if (node->current_frame_host()->GetLastCommittedOrigin().IsSameOriginWith(
             current_origin)) {
@@ -833,6 +827,22 @@ bool FrameTreeNode::NotifyUserActivation(
 
   if (base::FeatureList::IsEnabled(
           blink::features::kDocumentPictureInPictureUserActivation)) {
+    // If we're in a picture-in-picture frame tree, then also activate the
+    // opener frame of the picture-in-picture root if it is same-origin with the
+    // activated frame.
+    FrameTree* pip_opener =
+        frame_tree().delegate()->GetDocumentPictureInPictureOpenerFrameTree();
+    if (pip_opener) {
+      RenderFrameHostImpl* opener_frame_host =
+          pip_opener->root()->current_frame_host();
+      if (opener_frame_host->GetLastCommittedOrigin().IsSameOriginWith(
+              current_origin)) {
+        opener_frame_host->DidReceiveUserActivation();
+        opener_frame_host->ActivateUserActivation(notification_type,
+                                                  sticky_only);
+      }
+    }
+
     // If we own a picture-in-picture window, then also activate same-origin
     // frames within the picture-in-picture window.
     FrameTree* picture_in_picture_frame_tree =
@@ -861,6 +871,13 @@ bool FrameTreeNode::AreAncestorsSecure() {
     if (!network::IsOriginPotentiallyTrustworthy(
             frame->GetLastCommittedOrigin())) {
       return false;
+    }
+    // Stop walking at an embedder-identified secure-context root; see
+    // `ContentBrowserClient::IsSecureContextRoot()`.
+    if (GetContentClient()->browser()->IsSecureContextRoot(
+            frame->GetParent(), frame->GetFrameTreeNodeId(),
+            frame->GetLastCommittedURL())) {
+      return true;
     }
     frame = frame->GetParent();
   }
@@ -960,14 +977,14 @@ void FrameTreeNode::PruneChildFrameNavigationEntries(
 }
 
 void FrameTreeNode::SetInitialPopupURL(const GURL& initial_popup_url) {
-  DCHECK(initial_popup_url_.is_empty());
-  DCHECK(is_on_initial_empty_document());
+  CHECK(initial_popup_url_.is_empty(), base::NotFatalUntil::M152);
+  CHECK(is_on_initial_empty_document(), base::NotFatalUntil::M152);
   initial_popup_url_ = initial_popup_url;
 }
 
 void FrameTreeNode::SetPopupCreatorOrigin(
     const url::Origin& popup_creator_origin) {
-  DCHECK(is_on_initial_empty_document());
+  CHECK(is_on_initial_empty_document(), base::NotFatalUntil::M152);
   popup_creator_origin_ = popup_creator_origin;
 }
 
@@ -1049,7 +1066,8 @@ std::optional<FencedFrameProperties>& FrameTreeNode::GetFencedFrameProperties(
 
 size_t FrameTreeNode::GetFencedFrameDepth(
     size_t& shared_storage_fenced_frame_root_count) {
-  DCHECK_EQ(shared_storage_fenced_frame_root_count, 0u);
+  CHECK_EQ(shared_storage_fenced_frame_root_count, 0u,
+           base::NotFatalUntil::M152);
 
   size_t depth = 0;
   FrameTreeNode* node = this;
@@ -1065,11 +1083,12 @@ size_t FrameTreeNode::GetFencedFrameDepth(
         shared_storage_fenced_frame_root_count += 1;
       }
     } else {
-      DCHECK_EQ(node->fenced_frame_status(),
-                FencedFrameStatus::kIframeNestedWithinFencedFrame);
+      CHECK_EQ(node->fenced_frame_status(),
+               FencedFrameStatus::kIframeNestedWithinFencedFrame,
+               base::NotFatalUntil::M152);
     }
 
-    DCHECK(node->GetParentOrOuterDocument());
+    CHECK(node->GetParentOrOuterDocument(), base::NotFatalUntil::M152);
     node = node->GetParentOrOuterDocument()->frame_tree_node();
   }
 
@@ -1175,7 +1194,7 @@ FrameTreeNode::GetEmbedderSharedStorageContextIfAllowed() {
 
 const scoped_refptr<BrowsingContextState>&
 FrameTreeNode::GetBrowsingContextStateForSubframe() const {
-  DCHECK(!IsMainFrame());
+  CHECK(!IsMainFrame(), base::NotFatalUntil::M152);
   return current_frame_host()->browsing_context_state();
 }
 
@@ -1238,6 +1257,7 @@ FrameTreeNode::CreateNavigationRequestForSynchronousRendererCommit(
     bool is_same_document,
     const GURL& url,
     const url::Origin& origin,
+    const std::optional<url::Origin>& initiator_origin,
     const std::optional<GURL>& initiator_base_url,
     const net::IsolationInfo& isolation_info_for_subresources,
     blink::mojom::ReferrerPtr referrer,
@@ -1253,7 +1273,7 @@ FrameTreeNode::CreateNavigationRequestForSynchronousRendererCommit(
     int http_response_code,
     base::TimeTicks actual_navigation_start) {
   return NavigationRequest::CreateForSynchronousRendererCommit(
-      this, render_frame_host, is_same_document, url, origin,
+      this, render_frame_host, is_same_document, url, origin, initiator_origin,
       initiator_base_url, isolation_info_for_subresources, std::move(referrer),
       transition, should_replace_current_entry, method,
       has_transient_activation, is_overriding_user_agent, redirects,

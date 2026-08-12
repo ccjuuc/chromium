@@ -7,6 +7,8 @@
 #import <Foundation/Foundation.h>
 
 #import "base/memory/raw_ptr.h"
+#import "base/test/bind.h"
+#import "base/test/run_until.h"
 #import "base/test/scoped_feature_list.h"
 #import "components/safe_browsing/core/common/features.h"
 #import "components/safe_browsing/ios/browser/safe_browsing_url_allow_list.h"
@@ -38,11 +40,14 @@ enum class SafeBrowsingDecisionTimingWithAsync {
 }
 
 class SafeBrowsingTabHelperTest
-    : public testing::TestWithParam<SafeBrowsingDecisionTimingWithAsync> {
+    : public testing::TestWithParam<
+          std::tuple<SafeBrowsingDecisionTimingWithAsync, bool>> {
  protected:
   SafeBrowsingTabHelperTest()
       : browser_state_(std::make_unique<web::FakeBrowserState>()),
         client_(/*pref_service=*/nullptr) {
+    feature_list_.InitWithFeatureState(safe_browsing::kLocalListsUseSBv5,
+                                       UseV5());
     SafeBrowsingQueryManager::CreateForWebState(&web_state_, &client_);
     SafeBrowsingTabHelper::CreateForWebState(&web_state_, &client_);
     SafeBrowsingUrlAllowList::CreateForWebState(&web_state_);
@@ -53,12 +58,18 @@ class SafeBrowsingTabHelperTest
     web_state_.SetBrowserState(browser_state_.get());
   }
 
+  SafeBrowsingDecisionTimingWithAsync GetTiming() const {
+    return std::get<0>(GetParam());
+  }
+
+  bool UseV5() const { return std::get<1>(GetParam()); }
+
   // Whether Safe Browsing decisions arrive before calls to
   // ShouldAllowResponseUrl().
   bool SafeBrowsingDecisionArrivesBeforeResponse() const {
-    return GetParam() == SafeBrowsingDecisionTimingWithAsync::
-                             kBeforeResponseAsyncDisabled ||
-           GetParam() ==
+    return GetTiming() == SafeBrowsingDecisionTimingWithAsync::
+                              kBeforeResponseAsyncDisabled ||
+           GetTiming() ==
                SafeBrowsingDecisionTimingWithAsync::kBeforeResponseAsyncEnabled;
   }
 
@@ -171,6 +182,7 @@ class SafeBrowsingTabHelperTest
     }
   }
 
+  base::test::ScopedFeatureList feature_list_;
   web::WebTaskEnvironment task_environment_{
       web::WebTaskEnvironment::MainThreadType::IO};
   std::unique_ptr<web::FakeBrowserState> browser_state_;
@@ -328,8 +340,8 @@ TEST_P(SafeBrowsingTabHelperTest, MultipleRequestsSingleResponse) {
 }
 
 // Tests the case of repeated requests for the same unsafe URL, ensuring that
-// responses are not re-used.
-TEST_P(SafeBrowsingTabHelperTest, RepeatedRequestsGetDistinctResponse) {
+// request decisions are not re-used and distinct errors are returned.
+TEST_P(SafeBrowsingTabHelperTest, RepeatedRequestsGetDistinctError) {
   // Compare the NSError objects.
   GURL url("http://" + FakeSafeBrowsingService::kUnsafeHost);
   EXPECT_TRUE(ShouldAllowRequestUrl(url).ShouldAllowNavigation());
@@ -339,14 +351,10 @@ TEST_P(SafeBrowsingTabHelperTest, RepeatedRequestsGetDistinctResponse) {
       ShouldAllowResponseUrl(url);
   EXPECT_TRUE(response_decision.ShouldDisplayError());
 
-  EXPECT_TRUE(ShouldAllowRequestUrl(url).ShouldAllowNavigation());
-  RunSyncCallbacksThenAsyncCallbacks();
-
-  web::WebStatePolicyDecider::PolicyDecision response_decision2 =
-      ShouldAllowResponseUrl(url);
-  EXPECT_TRUE(response_decision2.ShouldDisplayError());
+  auto request_decision2 = ShouldAllowRequestUrl(url);
+  EXPECT_TRUE(request_decision2.ShouldDisplayError());
   EXPECT_NE(response_decision.GetDisplayError(),
-            response_decision2.GetDisplayError());
+            request_decision2.GetDisplayError());
 }
 
 // Tests the case of a request and response with URLs that have an unsupported
@@ -371,9 +379,32 @@ TEST_P(SafeBrowsingTabHelperTest, RequestAndResponseWithOnlyMatchingHost) {
   EXPECT_TRUE(ShouldAllowRequestUrl(request_url).ShouldAllowNavigation());
   RunSyncCallbacksThenAsyncCallbacks();
 
-  web::WebStatePolicyDecider::PolicyDecision response_decision =
-      ShouldAllowResponseUrl(response_url);
-  EXPECT_TRUE(response_decision.ShouldAllowNavigation());
+  // We cannot use `ShouldAllowResponseUrl` directly because the verification
+  // check now begins during ShouldAllowResponse, requiring manual invocation of
+  // test callbacks to fulfill it.
+  NSURLResponse* response =
+      [[NSURLResponse alloc] initWithURL:net::NSURLWithGURL(response_url)
+                                MIMEType:@"text/html"
+                   expectedContentLength:0
+                        textEncodingName:nil];
+  bool callback_called = false;
+  web::WebStatePolicyDecider::PolicyDecision policy_decision =
+      web::WebStatePolicyDecider::PolicyDecision::Allow();
+  auto callback = base::BindLambdaForTesting(
+      [&](web::WebStatePolicyDecider::PolicyDecision decision) {
+        policy_decision = decision;
+        callback_called = true;
+      });
+  web::WebStatePolicyDecider::ResponseInfo response_info(
+      /*for_main_frame=*/true);
+  web_state_.ShouldAllowResponse(response, response_info, std::move(callback));
+
+  // Fulfill the queued on-demand Safe Browsing check for response_url.
+  client_.run_sync_callbacks();
+  client_.run_async_callbacks();
+  ASSERT_TRUE(base::test::RunUntil([&] { return callback_called; }));
+
+  EXPECT_TRUE(policy_decision.ShouldAllowNavigation());
 }
 
 // Tests the case of a single sub frame navigation request and response, for a
@@ -765,13 +796,20 @@ TEST_P(SafeBrowsingTabHelperTest, UnsafeRedirectChainWithRepeatedURL) {
   RunSyncCallbacksThenAsyncCallbacks();
   SimulateMainFrameRedirect();
 
-  EXPECT_TRUE(ShouldAllowRequestUrl(url2).ShouldAllowNavigation());
-  RunSyncCallbacksThenAsyncCallbacks();
-  SimulateMainFrameRedirect();
+  if (SafeBrowsingDecisionArrivesBeforeResponse()) {
+    EXPECT_TRUE(ShouldAllowRequestUrl(url2).ShouldAllowNavigation());
+    RunSyncCallbacksThenAsyncCallbacks();
+    SimulateMainFrameRedirect();
 
-  web::WebStatePolicyDecider::PolicyDecision response_decision =
-      ShouldAllowResponseUrl(url2);
-  EXPECT_TRUE(response_decision.ShouldCancelNavigation());
+    web::WebStatePolicyDecider::PolicyDecision response_decision =
+        ShouldAllowResponseUrl(url2);
+    EXPECT_TRUE(response_decision.ShouldCancelNavigation());
+    EXPECT_TRUE(response_decision.ShouldDisplayError());
+  } else {
+    auto request_decision = ShouldAllowRequestUrl(url2);
+    EXPECT_TRUE(request_decision.ShouldCancelNavigation());
+    EXPECT_TRUE(request_decision.ShouldDisplayError());
+  }
 }
 
 // Tests the case of a redirection where ShouldAllowRequest is not called on
@@ -786,13 +824,82 @@ TEST_P(SafeBrowsingTabHelperTest, RedirectWithMissingShouldAllowRequest) {
   RunSyncCallbacksThenAsyncCallbacks();
 
   SimulateMainFrameRedirect();
-  if (SafeBrowsingDecisionArrivesBeforeResponse()) {
-    base::RunLoop().RunUntilIdle();
-  }
 
-  web::WebStatePolicyDecider::PolicyDecision response_decision =
-      ShouldAllowResponseUrl(url2);
-  EXPECT_TRUE(response_decision.ShouldAllowNavigation());
+  // We cannot use `ShouldAllowResponseUrl` directly because the verification
+  // check now begins during ShouldAllowResponse, requiring manual invocation of
+  // test callbacks to fulfill it.
+  NSURLResponse* response =
+      [[NSURLResponse alloc] initWithURL:net::NSURLWithGURL(url2)
+                                MIMEType:@"text/html"
+                   expectedContentLength:0
+                        textEncodingName:nil];
+  bool callback_called = false;
+  web::WebStatePolicyDecider::PolicyDecision policy_decision =
+      web::WebStatePolicyDecider::PolicyDecision::Allow();
+  auto callback = base::BindLambdaForTesting(
+      [&](web::WebStatePolicyDecider::PolicyDecision decision) {
+        policy_decision = decision;
+        callback_called = true;
+      });
+  web::WebStatePolicyDecider::ResponseInfo response_info(
+      /*for_main_frame=*/true);
+  web_state_.ShouldAllowResponse(response, response_info, std::move(callback));
+
+  // Fulfill the queued on-demand Safe Browsing check for url2.
+  client_.run_sync_callbacks();
+  client_.run_async_callbacks();
+  ASSERT_TRUE(base::test::RunUntil([&] { return callback_called; }));
+
+  EXPECT_TRUE(callback_called);
+  EXPECT_TRUE(policy_decision.ShouldAllowNavigation());
+}
+
+// Tests the case of a redirection where ShouldAllowRequest is skipped for an
+// unsafe target URL, ensuring that Safe Browsing identifies the mismatch and
+// blocks it.
+TEST_P(SafeBrowsingTabHelperTest, RedirectWithMissingShouldAllowRequestUnsafe) {
+  GURL url1("http://chromium1.test/page1.html");
+  GURL url2("http://" + FakeSafeBrowsingService::kUnsafeHost);
+  EXPECT_TRUE(ShouldAllowRequestUrl(url1).ShouldAllowNavigation());
+  RunSyncCallbacksThenAsyncCallbacks();
+
+  // Simulate quirk: ShouldAllowRequest is called on source again instead of
+  // target.
+  EXPECT_TRUE(ShouldAllowRequestUrl(url1).ShouldAllowNavigation());
+  RunSyncCallbacksThenAsyncCallbacks();
+
+  SimulateMainFrameRedirect();
+
+  // We cannot use `ShouldAllowResponseUrl` directly because it expects
+  // completion. In this edge case, the check begins during ShouldAllowResponse.
+  NSURLResponse* response =
+      [[NSURLResponse alloc] initWithURL:net::NSURLWithGURL(url2)
+                                MIMEType:@"text/html"
+                   expectedContentLength:0
+                        textEncodingName:nil];
+  bool callback_called = false;
+  web::WebStatePolicyDecider::PolicyDecision policy_decision =
+      web::WebStatePolicyDecider::PolicyDecision::Allow();
+  auto callback = base::BindLambdaForTesting(
+      [&](web::WebStatePolicyDecider::PolicyDecision decision) {
+        policy_decision = decision;
+        callback_called = true;
+      });
+  web::WebStatePolicyDecider::ResponseInfo response_info(
+      /*for_main_frame=*/true);
+  web_state_.ShouldAllowResponse(response, response_info, std::move(callback));
+
+  // Verify callback was NOT called yet, as the on-demand check was just queued.
+  EXPECT_FALSE(callback_called);
+
+  // Run the queued Safe Browsing checks.
+  client_.run_sync_callbacks();
+  client_.run_async_callbacks();
+  ASSERT_TRUE(base::test::RunUntil([&] { return callback_called; }));
+
+  EXPECT_TRUE(callback_called);
+  EXPECT_TRUE(policy_decision.ShouldCancelNavigation());
+  EXPECT_TRUE(policy_decision.ShouldDisplayError());
 }
 
 // Tests that client is notified when URL loaded in the main frame is unsafe.
@@ -835,7 +942,7 @@ TEST_P(SafeBrowsingTabHelperTest, SafeMainFrameRequestDoesNotNotifyClient) {
 
 // Tests sync check and ShouldAllowResponse() complete, but async
 // check returns after a page loads. Tests that the async check forcefully
-// reloads the page.
+// reloads the page, and the reload request is directly cancelled.
 TEST_P(SafeBrowsingTabHelperTest,
        UnsafeCommittedRedirectChainReloadAndResponse) {
   GURL url("http://" + FakeSafeBrowsingService::kAsyncUnsafeHost);
@@ -868,16 +975,14 @@ TEST_P(SafeBrowsingTabHelperTest,
   // Simulate forced reload and triggers blocking page logic.
   auto main_frame_reload_request_decision = ShouldAllowRequestUrl(
       url, /*for_main_frame=*/true, ui::PageTransition::PAGE_TRANSITION_RELOAD);
-  EXPECT_TRUE(main_frame_reload_request_decision.ShouldAllowNavigation());
-  RunSyncCallbacksThenAsyncCallbacks();
-  auto main_frame_reload_response_decision = ShouldAllowResponseUrl(url);
-  EXPECT_TRUE(main_frame_reload_response_decision.ShouldCancelNavigation());
-  EXPECT_TRUE(main_frame_reload_response_decision.ShouldDisplayError());
+  EXPECT_TRUE(main_frame_reload_request_decision.ShouldCancelNavigation());
+  EXPECT_TRUE(main_frame_reload_request_decision.ShouldDisplayError());
 }
 
 // Tests sync check and ShouldAllowResponse() complete, and async
 // check completes before a page committed. Tests that the async check allows
-// the navigation to go through and reloads when the page commits.
+// the navigation to go through and reloads when the page commits, with the
+// reload request being directly cancelled.
 TEST_P(SafeBrowsingTabHelperTest,
        UnsafeToBeCommittedRedirectChainReloadAndResponse) {
   GURL url("http://" + FakeSafeBrowsingService::kAsyncUnsafeHost);
@@ -910,18 +1015,177 @@ TEST_P(SafeBrowsingTabHelperTest,
   // Simulate reload and triggers blocking page logic.
   auto main_frame_reload_request_decision = ShouldAllowRequestUrl(
       url, /*for_main_frame=*/true, ui::PageTransition::PAGE_TRANSITION_RELOAD);
-  EXPECT_TRUE(main_frame_reload_request_decision.ShouldAllowNavigation());
+  EXPECT_TRUE(main_frame_reload_request_decision.ShouldCancelNavigation());
+  EXPECT_TRUE(main_frame_reload_request_decision.ShouldDisplayError());
+}
+
+// Tests that an early navigation failure (simulating a local error) correctly
+// caches the Safe Browsing state for a subsequent back/forward navigation.
+TEST_P(SafeBrowsingTabHelperTest,
+       UnsafeNavigationFailureFollowedByBackForward) {
+  GURL unsafe_url("http://" + FakeSafeBrowsingService::kUnsafeHost);
+
+  // Start navigation to unsafe URL.
+  EXPECT_TRUE(ShouldAllowRequestUrl(unsafe_url).ShouldAllowNavigation());
+
+  // Navigation fails pre-commit.
+  web::FakeNavigationContext fail_context;
+  fail_context.SetUrl(unsafe_url);
+  fail_context.SetHasCommitted(false);
+  web_state_.OnNavigationFinished(&fail_context);
+
+  // Error page navigation begins (same URL).
+  EXPECT_TRUE(ShouldAllowRequestUrl(unsafe_url).ShouldAllowNavigation());
+
+  // Query finishes (unsafe). It sets reload_page_on_commit_.
   RunSyncCallbacksThenAsyncCallbacks();
-  auto main_frame_reload_response_decision = ShouldAllowResponseUrl(url);
-  EXPECT_TRUE(main_frame_reload_response_decision.ShouldCancelNavigation());
-  EXPECT_TRUE(main_frame_reload_response_decision.ShouldDisplayError());
+  base::RunLoop().RunUntilIdle();
+
+  // The error page commits.
+  navigation_manager_->AddItem(unsafe_url, ui::PAGE_TRANSITION_LINK);
+  web::NavigationItem* item = navigation_manager_->GetItemAtIndex(
+      navigation_manager_->GetItemCount() - 1);
+  navigation_manager_->SetLastCommittedItem(item);
+
+  web::FakeNavigationContext commit_context;
+  commit_context.SetUrl(unsafe_url);
+  commit_context.SetHasCommitted(true);
+  web_state_.OnNavigationFinished(&commit_context);
+
+  // Clear reload flag by checking it, because this test simulates going forward
+  // right away (ignoring the programmatic reload).
+  // Wait, if it reloads, FakeNavigationManager just records
+  // LoadURLWithParamsWasCalled. The test can just proceed.
+
+  // Start another navigation (to safe URL).
+  GURL safe_url("http://chromium.test");
+  EXPECT_TRUE(ShouldAllowRequestUrl(safe_url).ShouldAllowNavigation());
+  RunSyncCallbacksThenAsyncCallbacks();
+  ShouldAllowResponseUrl(safe_url);
+  navigation_manager_->AddItem(safe_url, ui::PAGE_TRANSITION_LINK);
+  web::NavigationItem* safe_item = navigation_manager_->GetItemAtIndex(
+      navigation_manager_->GetItemCount() - 1);
+  navigation_manager_->SetLastCommittedItem(safe_item);
+
+  web::FakeNavigationContext safe_context;
+  safe_context.SetUrl(safe_url);
+  safe_context.SetHasCommitted(true);
+  web_state_.OnNavigationFinished(&safe_context);
+
+  // Go back to the unsafe URL.
+  auto back_request_decision =
+      ShouldAllowRequestUrl(unsafe_url, /*for_main_frame=*/true,
+                            ui::PageTransition::PAGE_TRANSITION_FORWARD_BACK);
+  EXPECT_TRUE(back_request_decision.ShouldCancelNavigation());
+  EXPECT_TRUE(back_request_decision.ShouldDisplayError());
+}
+
+// Tests that an early navigation failure (simulating a local error page load)
+// correctly sets up a reload of the page when the async safe browsing check
+// completes.
+TEST_P(SafeBrowsingTabHelperTest, UnsafeNavigationFailureImmediateReload) {
+  GURL unsafe_url("http://" + FakeSafeBrowsingService::kUnsafeHost);
+
+  // Start navigation to unsafe URL.
+  EXPECT_TRUE(ShouldAllowRequestUrl(unsafe_url).ShouldAllowNavigation());
+
+  // Navigation fails pre-commit.
+  web::FakeNavigationContext fail_context;
+  fail_context.SetUrl(unsafe_url);
+  fail_context.SetHasCommitted(false);
+  web_state_.OnNavigationFinished(&fail_context);
+
+  // Error page navigation begins (same URL).
+  EXPECT_TRUE(ShouldAllowRequestUrl(unsafe_url).ShouldAllowNavigation());
+
+  // Query finishes (unsafe). Because the error page navigation is pending
+  // with the same URL, it matches the query and sets reload_page_on_commit_.
+  RunSyncCallbacksThenAsyncCallbacks();
+  base::RunLoop().RunUntilIdle();
+
+  // The error page commits.
+  navigation_manager_->AddItem(unsafe_url, ui::PAGE_TRANSITION_LINK);
+  web::NavigationItem* item = navigation_manager_->GetItemAtIndex(
+      navigation_manager_->GetItemCount() - 1);
+  navigation_manager_->SetLastCommittedItem(item);
+
+  web::FakeNavigationContext commit_context;
+  commit_context.SetUrl(unsafe_url);
+  commit_context.SetHasCommitted(true);
+  web_state_.OnNavigationFinished(&commit_context);
+
+  // Check if ReloadPage() triggered LoadURLWithParams.
+  EXPECT_TRUE(navigation_manager_->LoadURLWithParamsWasCalled());
+  auto last_params = navigation_manager_->GetLastLoadURLWithParams();
+  ASSERT_TRUE(last_params.has_value());
+  EXPECT_EQ(unsafe_url, last_params->url);
+  EXPECT_EQ(static_cast<int>(ui::PAGE_TRANSITION_RELOAD),
+            static_cast<int>(last_params->transition_type));
+
+  // Simulate the reload intercept by Safe Browsing.
+  auto reload_decision = ShouldAllowRequestUrl(unsafe_url);
+  EXPECT_TRUE(reload_decision.ShouldCancelNavigation());
+  EXPECT_TRUE(reload_decision.ShouldDisplayError());
+}
+
+// Tests that if an asynchronous Safe Browsing check finishes after a local
+// error page has already fully committed, the page is immediately reloaded to
+// show the warning.
+TEST_P(SafeBrowsingTabHelperTest, UnsafeNavigationFailureLateVerdict) {
+  GURL unsafe_url("http://" + FakeSafeBrowsingService::kUnsafeHost);
+
+  // Start navigation to unsafe URL.
+  EXPECT_TRUE(ShouldAllowRequestUrl(unsafe_url).ShouldAllowNavigation());
+
+  // Navigation fails pre-commit.
+  web::FakeNavigationContext fail_context;
+  fail_context.SetUrl(unsafe_url);
+  fail_context.SetHasCommitted(false);
+  web_state_.OnNavigationFinished(&fail_context);
+
+  // Error page navigation begins (same URL).
+  EXPECT_TRUE(ShouldAllowRequestUrl(unsafe_url).ShouldAllowNavigation());
+
+  // The error page commits BEFORE the Safe Browsing query finishes.
+  navigation_manager_->AddItem(unsafe_url, ui::PAGE_TRANSITION_LINK);
+  web::NavigationItem* item = navigation_manager_->GetItemAtIndex(
+      navigation_manager_->GetItemCount() - 1);
+  navigation_manager_->SetLastCommittedItem(item);
+
+  web::FakeNavigationContext commit_context;
+  commit_context.SetUrl(unsafe_url);
+  commit_context.SetHasCommitted(true);
+  web_state_.OnNavigationFinished(&commit_context);
+
+  // Ensure no reload has happened yet.
+  EXPECT_FALSE(navigation_manager_->LoadURLWithParamsWasCalled());
+
+  // Now the Query finishes (unsafe). Since the error page is currently visible,
+  // it should trigger an immediate reload.
+  RunSyncCallbacksThenAsyncCallbacks();
+  base::RunLoop().RunUntilIdle();
+
+  // Check if ReloadPage() triggered LoadURLWithParams.
+  EXPECT_TRUE(navigation_manager_->LoadURLWithParamsWasCalled());
+  auto last_params = navigation_manager_->GetLastLoadURLWithParams();
+  ASSERT_TRUE(last_params.has_value());
+  EXPECT_EQ(unsafe_url, last_params->url);
+  EXPECT_EQ(static_cast<int>(ui::PAGE_TRANSITION_RELOAD),
+            static_cast<int>(last_params->transition_type));
+
+  // Simulate the reload intercept by Safe Browsing.
+  auto reload_decision = ShouldAllowRequestUrl(unsafe_url);
+  EXPECT_TRUE(reload_decision.ShouldCancelNavigation());
+  EXPECT_TRUE(reload_decision.ShouldDisplayError());
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    /* No InstantiationName */,
+    All,
     SafeBrowsingTabHelperTest,
-    testing::Values(
-        SafeBrowsingDecisionTimingWithAsync::kBeforeResponseAsyncDisabled,
-        SafeBrowsingDecisionTimingWithAsync::kBeforeResponseAsyncEnabled,
-        SafeBrowsingDecisionTimingWithAsync::kAfterResponseAsyncDisabled,
-        SafeBrowsingDecisionTimingWithAsync::kAfterResponseAsyncEnabled));
+    testing::Combine(
+        testing::Values(
+            SafeBrowsingDecisionTimingWithAsync::kBeforeResponseAsyncDisabled,
+            SafeBrowsingDecisionTimingWithAsync::kBeforeResponseAsyncEnabled,
+            SafeBrowsingDecisionTimingWithAsync::kAfterResponseAsyncDisabled,
+            SafeBrowsingDecisionTimingWithAsync::kAfterResponseAsyncEnabled),
+        testing::Bool()));

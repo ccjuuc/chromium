@@ -31,6 +31,11 @@ BnplTosViewDesktop::BnplTosViewDesktop(
                                       weak_ptr_factory_.GetWeakPtr()));
   TabInterface* tab_interface = TabInterface::GetFromContents(web_contents_);
   CHECK(tab_interface);
+
+  tab_detach_subscription_ =
+      tab_interface->RegisterWillDetach(base::BindRepeating(
+          &BnplTosDialog::OnTabDetached, dialog_view->GetWeakPtr()));
+
   dialog_widget_ = tab_interface->GetTabFeatures()
                        ->tab_dialog_manager()
                        ->CreateAndShowDialog(

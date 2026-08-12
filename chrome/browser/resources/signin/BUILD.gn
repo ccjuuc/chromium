@@ -11,9 +11,15 @@ assert(!is_android)
 build_webui("build") {
   grd_prefix = "signin"
 
+  mojo_files_deps = [ "//chrome/browser/ui/webui/signin/cross_device_signin_qr_bubble:mojo_bindings_ts__generator" ]
+  mojo_files = [ "$root_gen_dir/chrome/browser/ui/webui/signin/cross_device_signin_qr_bubble/cross_device_signin_qr_bubble.mojom-webui.ts" ]
+
   static_files = [
-    # The shared images are used on the first run experience, sync confirmation
-    # and the profile picker.
+    "images/profile_picker_dark_background.svg",
+    "images/profile_picker_light_background.svg",
+
+    # The shared images are used on the first run experience, sync confirmation,
+    # DSE screen, history opt-in and the profile picker.
     "images/shared_dialog_illustration.svg",
     "images/shared_dialog_illustration_dark.svg",
     "images/shared_left_banner.svg",
@@ -27,15 +33,19 @@ build_webui("build") {
     "managed_user_profile_notice/images/enrollment_success_dark.svg",
     "managed_user_profile_notice/images/enrollment_timeout.svg",
     "managed_user_profile_notice/images/enrollment_timeout_dark.svg",
+    "animations/avatar_sign_in_celebration.json",
+    "animations/avatar_sign_in_celebration_dark.json",
     "profile_customization/images/profile_customization_illustration.svg",
     "profile_customization/images/profile_customization_illustration_dark.svg",
     "sync_confirmation/sync_confirmation.html",
+    "sync_confirmation/sync_confirmation_refresh.html",
     "sync_confirmation/sync_disabled_confirmation.html",
     "sync_confirmation/sync_loading_confirmation.html",
   ]
   if (!is_chromeos) {
     static_files += [
       "managed_user_profile_notice/managed_user_profile_notice.html",
+      "managed_user_profile_notice/managed_user_profile_notice_refresh.html",
       "profile_customization/profile_customization.html",
       "signin_email_confirmation/signin_email_confirmation.html",
       "signin_error/signin_error.html",
@@ -43,16 +53,22 @@ build_webui("build") {
   }
   if (enable_dice_support) {
     static_files += [
+      "cross_device_signin_qr_bubble/cross_device_signin_qr_bubble.css",
+      "cross_device_signin_qr_bubble/cross_device_signin_qr_bubble.html",
       "dice_web_signin_intercept/chrome_signin/chrome_signin.html",
       "dice_web_signin_intercept/dice_web_signin_intercept.html",
       "dice_web_signin_intercept/images/split_header.svg",
+      "dice_web_signin_intercept/images/v2_profile_switch.svg",
     ]
   }
 
   ts_files = [
     "sync_confirmation/sync_confirmation.ts",
+    "sync_confirmation/sync_confirmation_refresh.ts",
     "sync_confirmation/sync_confirmation_app.html.ts",
+    "sync_confirmation/sync_confirmation_app_refresh.html.ts",
     "sync_confirmation/sync_confirmation_app.ts",
+    "sync_confirmation/sync_confirmation_app_refresh.ts",
     "sync_confirmation/sync_confirmation_browser_proxy.ts",
     "sync_confirmation/sync_disabled_confirmation_app.html.ts",
     "sync_confirmation/sync_disabled_confirmation_app.ts",
@@ -62,15 +78,21 @@ build_webui("build") {
     ts_files += [
       "managed_user_profile_notice/managed_user_profile_notice_app.html.ts",
       "managed_user_profile_notice/managed_user_profile_notice_app.ts",
+      "managed_user_profile_notice/managed_user_profile_notice_app_refresh.html.ts",
+      "managed_user_profile_notice/managed_user_profile_notice_app_refresh.ts",
       "managed_user_profile_notice/managed_user_profile_notice_browser_proxy.ts",
       "managed_user_profile_notice/managed_user_profile_notice_data_handling.html.ts",
       "managed_user_profile_notice/managed_user_profile_notice_data_handling.ts",
       "managed_user_profile_notice/managed_user_profile_notice_disclosure.html.ts",
       "managed_user_profile_notice/managed_user_profile_notice_disclosure.ts",
+      "managed_user_profile_notice/managed_user_profile_notice_disclosure_refresh.html.ts",
+      "managed_user_profile_notice/managed_user_profile_notice_disclosure_refresh.ts",
       "managed_user_profile_notice/managed_user_profile_notice_state.html.ts",
       "managed_user_profile_notice/managed_user_profile_notice_state.ts",
       "managed_user_profile_notice/managed_user_profile_notice_value_prop.html.ts",
       "managed_user_profile_notice/managed_user_profile_notice_value_prop.ts",
+      "managed_user_profile_notice/signals_disclaimer.html.ts",
+      "managed_user_profile_notice/signals_disclaimer.ts",
       "profile_customization/profile_customization_app.html.ts",
       "profile_customization/profile_customization_app.ts",
       "profile_customization/profile_customization_browser_proxy.ts",
@@ -83,6 +105,8 @@ build_webui("build") {
   }
   if (enable_dice_support) {
     ts_files += [
+      "cross_device_signin_qr_bubble/cross_device_signin_qr_bubble_app.html.ts",
+      "cross_device_signin_qr_bubble/cross_device_signin_qr_bubble_app.ts",
       "dice_web_signin_intercept/chrome_signin/chrome_signin_app.html.ts",
       "dice_web_signin_intercept/chrome_signin/chrome_signin_app.ts",
       "dice_web_signin_intercept/dice_web_signin_intercept_app.html.ts",
@@ -97,6 +121,7 @@ build_webui("build") {
     "signin_shared.css",
     "signin_vars.css",
     "sync_confirmation/sync_confirmation_app.css",
+    "sync_confirmation/sync_confirmation_app_refresh.css",
     "sync_confirmation/sync_disabled_confirmation_app.css",
     "tangible_sync_style_shared.css",
   ]
@@ -104,10 +129,13 @@ build_webui("build") {
   if (!is_chromeos) {
     css_files += [
       "managed_user_profile_notice/managed_user_profile_notice_app.css",
+      "managed_user_profile_notice/managed_user_profile_notice_app_refresh.css",
       "managed_user_profile_notice/managed_user_profile_notice_data_handling.css",
       "managed_user_profile_notice/managed_user_profile_notice_disclosure.css",
+      "managed_user_profile_notice/managed_user_profile_notice_disclosure_refresh.css",
       "managed_user_profile_notice/managed_user_profile_notice_state.css",
       "managed_user_profile_notice/managed_user_profile_notice_value_prop.css",
+      "managed_user_profile_notice/signals_disclaimer.css",
       "profile_customization/profile_customization_app.css",
       "signin_email_confirmation/signin_email_confirmation_app.css",
       "signin_error/signin_error_app.css",
@@ -115,6 +143,7 @@ build_webui("build") {
   }
   if (enable_dice_support) {
     css_files += [
+      "cross_device_signin_qr_bubble/cross_device_signin_qr_bubble_app.css",
       "dice_web_signin_intercept/chrome_signin/chrome_signin_app.css",
       "dice_web_signin_intercept/dice_web_signin_intercept_app.css",
     ]
@@ -124,10 +153,12 @@ build_webui("build") {
   ts_definitions = [ "//tools/typescript/definitions/chrome_send.d.ts" ]
   ts_deps = [
     "//third_party/lit/v3_0:build_ts",
+    "//ui/webui/resources/cr_components/color_change_listener:build_ts",
     "//ui/webui/resources/cr_components/localized_link:build_ts",
     "//ui/webui/resources/cr_components/theme_color_picker:build_ts",
     "//ui/webui/resources/cr_elements:build_ts",
     "//ui/webui/resources/js:build_ts",
+    "//ui/webui/resources/mojo:build_ts",
   ]
 
   ts_path_mappings = [

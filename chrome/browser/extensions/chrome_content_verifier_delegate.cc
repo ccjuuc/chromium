@@ -11,7 +11,6 @@
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/escape.h"
@@ -39,7 +38,7 @@
 #include "extensions/common/extension_urls.h"
 #include "extensions/common/extensions_client.h"
 #include "extensions/common/manifest.h"
-#include "extensions/common/manifest_url_handlers.h"
+#include "extensions/common/manifest_handlers/manifest_url_handlers.h"
 #include "extensions/common/switches.h"
 #include "net/base/backoff_entry.h"
 
@@ -239,10 +238,10 @@ void ChromeContentVerifierDelegate::VerifyFailed(
 
     // If a non-webstore extension has no computed hashes for content
     // verification, leave it as is for now.
-    // See https://crbug.com/958794#c22 for more details.
+    // See https://crbug.com/40625642#comment23 for more details.
     // TODO(crbug.com/40669814): Schedule the extension for reinstall.
     if (!info.is_from_webstore) {
-      if (!base::Contains(would_be_reinstalled_ids_, extension_id)) {
+      if (!would_be_reinstalled_ids_.contains(extension_id)) {
         corrupted_extension_reinstaller->RecordPolicyReinstallReason(
             CorruptedExtensionReinstaller::PolicyReinstallReason::
                 NO_UNSIGNED_HASHES_FOR_NON_WEBSTORE_SKIP);
@@ -265,7 +264,7 @@ void ChromeContentVerifierDelegate::VerifyFailed(
   DCHECK(!info.should_repair || should_disable);
 
   if (!should_disable) {
-    if (!base::Contains(would_be_disabled_ids_, extension_id)) {
+    if (!would_be_disabled_ids_.contains(extension_id)) {
       would_be_disabled_ids_.insert(extension_id);
     }
     return;
@@ -304,7 +303,7 @@ bool ChromeContentVerifierDelegate::IsFromWebstore(
     const Extension& extension) const {
   // Use the InstallVerifier's |IsFromStore| method to avoid discrepancies
   // between which extensions are considered in-store.
-  // See https://crbug.com/766806 for details.
+  // See https://crbug.com/40540778 for details.
   if (!InstallVerifier::IsFromStore(extension, context_)) {
     // It's possible that the webstore update url was overridden for testing
     // so also consider extensions with the default (production) update url

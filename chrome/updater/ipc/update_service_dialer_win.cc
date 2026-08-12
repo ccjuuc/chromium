@@ -14,8 +14,12 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
+#include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "base/win/access_token.h"
+#include "base/win/scoped_handle.h"
+#include "base/win/sid.h"
 #include "chrome/updater/app/server/win/updater_idl.h"
 #include "chrome/updater/app/server/win/updater_internal_idl.h"
 #include "chrome/updater/constants.h"
@@ -58,6 +62,33 @@ Microsoft::WRL::ComPtr<IUnknown> DialUpdateService(UpdaterScope scope,
   return server;
 }
 
+bool IsServerElevated(HANDLE pipe_handle) {
+  DWORD pid = 0;
+  if (!::GetNamedPipeServerProcessId(pipe_handle, &pid)) {
+    PLOG(ERROR) << "Failed to get named pipe server process ID";
+    return false;
+  }
+
+  base::win::ScopedHandle process(
+      ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
+  if (!process.is_valid()) {
+    PLOG(ERROR) << "Failed to open named pipe server process " << pid;
+    return false;
+  }
+
+  std::optional<base::win::AccessToken> server_token =
+      base::win::AccessToken::FromProcess(process.get());
+  if (!server_token) {
+    LOG(ERROR) << "Failed to get access token for server process " << pid;
+    return false;
+  }
+
+  const base::win::Sid owner = server_token->Owner();
+  return owner == base::win::Sid(base::win::WellKnownSid::kLocalSystem) ||
+         owner ==
+             base::win::Sid(base::win::WellKnownSid::kBuiltinAdministrators);
+}
+
 void ConnectMojoImpl(
     UpdaterScope scope,
     bool is_internal_service,
@@ -83,12 +114,20 @@ void ConnectMojoImpl(
     }
 
     server = result;
-    return named_mojo_ipc_server::ConnectToServer({
-        .server_name = is_internal_service
-                           ? GetUpdateServiceInternalServerName(scope)
-                           : GetUpdateServiceServerName(scope),
-        .allow_impersonation = true,
-    });
+    mojo::NamedPlatformChannel::Options options;
+    options.server_name = is_internal_service
+                              ? GetUpdateServiceInternalServerName(scope)
+                              : GetUpdateServiceServerName(scope);
+    options.allow_impersonation = true;
+    options.verify_server_privilege = true;
+    mojo::PlatformChannelEndpoint connected_endpoint =
+        named_mojo_ipc_server::ConnectToServer(options);
+    if (IsSystemInstall(scope) && connected_endpoint.is_valid() &&
+        !IsServerElevated(
+            connected_endpoint.platform_handle().GetHandle().get())) {
+      return std::nullopt;
+    }
+    return connected_endpoint;
   }();
 
   if (tries >= 1 && !endpoint) {

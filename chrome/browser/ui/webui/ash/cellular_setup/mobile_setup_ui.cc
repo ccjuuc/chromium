@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "ash/constants/webui_url_constants.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted_memory.h"
@@ -21,7 +22,6 @@
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/url_constants.h"
 #include "chrome/grit/browser_resources.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/network/device_state.h"
@@ -58,8 +58,7 @@ void DataRequestFailed(const std::string& service_path,
                        content::URLDataSource::GotDataCallback callback) {
   NET_LOG(ERROR) << "Data Request Failed for Mobile Setup: "
                  << NetworkPathId(service_path);
-  scoped_refptr<base::RefCountedBytes> html_bytes(new base::RefCountedBytes);
-  std::move(callback).Run(html_bytes.get());
+  std::move(callback).Run(base::MakeRefCounted<base::RefCountedBytes>());
 }
 
 // Keys for the dictionary that is set to activation UI and that contains the
@@ -86,7 +85,7 @@ constexpr char kMdn[] = "MDN";
 // return an empty dictionary if either is not set.
 base::Value GetCellularNetworkInfoValue(const NetworkState* network,
                                         const DeviceState* device) {
-  base::Value::Dict info;
+  base::DictValue info;
   if (!device || !network) {
     return base::Value(std::move(info));
   }
@@ -164,7 +163,7 @@ class MobileSetupHandler : public content::WebUIMessageHandler,
   void Reset();
 
   // Handlers for JS WebUI messages.
-  void HandleGetDeviceInfo(const base::Value::List& args);
+  void HandleGetDeviceInfo(const base::ListValue& args);
 
   // NetworkStateHandlerObserver implementation.
   void NetworkConnectionStateChanged(const NetworkState* network) override;
@@ -200,7 +199,7 @@ class MobileSetupHandler : public content::WebUIMessageHandler,
 MobileSetupUIHTMLSource::MobileSetupUIHTMLSource() = default;
 
 std::string MobileSetupUIHTMLSource::GetSource() {
-  return chrome::kChromeUIMobileSetupHost;
+  return ash::kChromeUIMobileSetupHost;
 }
 
 void MobileSetupUIHTMLSource::StartDataRequest(
@@ -246,7 +245,7 @@ void MobileSetupUIHTMLSource::StartDataRequest(
   }
 
   NET_LOG(EVENT) << "Starting mobile setup: " << NetworkId(network);
-  base::Value::Dict strings;
+  base::DictValue strings;
 
   strings.Set("view_account_error_title",
               l10n_util::GetStringUTF16(IDS_MOBILE_VIEW_ACCOUNT_ERROR_TITLE));
@@ -305,7 +304,7 @@ void MobileSetupHandler::RegisterMessages() {
                           base::Unretained(this)));
 }
 
-void MobileSetupHandler::HandleGetDeviceInfo(const base::Value::List& args) {
+void MobileSetupHandler::HandleGetDeviceInfo(const base::ListValue& args) {
   if (!web_ui()) {
     return;
   }

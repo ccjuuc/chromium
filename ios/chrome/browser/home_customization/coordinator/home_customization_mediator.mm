@@ -4,7 +4,6 @@
 
 #import "ios/chrome/browser/home_customization/coordinator/home_customization_mediator.h"
 
-#import "base/containers/contains.h"
 #import "base/memory/raw_ptr.h"
 #import "components/commerce/core/commerce_feature_list.h"
 #import "components/commerce/core/pref_names.h"
@@ -29,9 +28,9 @@
 
 @implementation HomeCustomizationMediator {
   // Pref service to handle preference changes.
-  raw_ptr<PrefService, DanglingUntriaged> _prefService;
+  raw_ptr<PrefService> _prefService;
   // Browser agent to be notified of Discover eligibility.
-  raw_ptr<DiscoverFeedVisibilityBrowserAgent, DanglingUntriaged>
+  raw_ptr<DiscoverFeedVisibilityBrowserAgent>
       _discoverFeedVisibilityBrowserAgent;
   // ShoppingService used to determine ShopCard toggle
   // eligibility.
@@ -50,6 +49,12 @@
     _shoppingService = shoppingService;
   }
   return self;
+}
+
+- (void)disconnect {
+  _prefService = nullptr;
+  _discoverFeedVisibilityBrowserAgent = nullptr;
+  _shoppingService = nullptr;
 }
 
 #pragma mark - Public

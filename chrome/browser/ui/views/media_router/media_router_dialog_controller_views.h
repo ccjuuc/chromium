@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_multi_source_observation.h"
@@ -17,7 +18,7 @@
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
 
-class MediaToolbarButtonView;
+class MediaToolbarButton;
 
 namespace media_router {
 
@@ -91,11 +92,15 @@ class MediaRouterDialogControllerViews
   // open the dialog. Returns nullptr if:
   // (1) the browser does not have a media button (i.e. the browser is
   // running a PWA.) or (2) |hide_media_button_for_testing_| is true.
-  MediaToolbarButtonView* GetMediaButton();
+  MediaToolbarButton* GetMediaButton();
 
   // CastToolbarButtonController is responsible for showing and hiding the
   // toolbar action. It's owned by MediaRouterUIService and it may be nullptr.
   CastToolbarButtonController* GetActionController();
+
+  // Called after the dialog is created to complete post-creation steps.
+  void OnDialogCreated(MediaRouterDialogActivationLocation activation_location,
+                       ShowCastDialogStatus status);
 
   MediaRouterUI* ui() { return ui_.get(); }
 
@@ -115,6 +120,8 @@ class MediaRouterDialogControllerViews
   const raw_ptr<MediaRouterUIService> media_router_ui_service_;
 
   bool hide_media_button_for_testing_ = false;
+
+  base::ScopedClosureRunner fullscreen_blocker_;
 
   base::WeakPtrFactory<MediaRouterDialogControllerViews> weak_ptr_factory_{
       this};

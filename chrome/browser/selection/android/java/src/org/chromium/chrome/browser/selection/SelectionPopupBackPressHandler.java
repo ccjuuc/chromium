@@ -38,7 +38,7 @@ public class SelectionPopupBackPressHandler extends EmptyTabObserver
      * @param tabModelSelector A {@link TabModelSelector}.
      */
     public SelectionPopupBackPressHandler(TabModelSelector tabModelSelector) {
-        tabModelSelector.addTabGroupModelFilterObserver(this);
+        tabModelSelector.addObserverToAllModels(this);
     }
 
     @Override
@@ -94,7 +94,9 @@ public class SelectionPopupBackPressHandler extends EmptyTabObserver
         if (webContents == null) return;
         tab.addObserver(this);
         mPopupController = SelectionPopupController.fromWebContents(webContents);
-        mPopupController.isSelectActionBarShowingSupplier().addObserver(mCallback);
+        mPopupController
+                .isSelectActionBarShowingSupplier()
+                .addSyncObserverAndPostIfNonNull(mCallback);
     }
 
     private void onActionBarShowingChanged(boolean isShowing) {

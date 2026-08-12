@@ -16,7 +16,6 @@
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/common/extensions/api/document_scan.h"
-#include "chromeos/crosapi/mojom/document_scan.mojom-forward.h"
 #include "content/public/browser/browser_context.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/browser/extension_registry.h"
@@ -29,6 +28,12 @@ class PrefRegistrySimple;
 namespace content {
 class BrowserContext;
 }  // namespace content
+
+namespace lorgnette {
+class CloseScannerResponse;
+class OpenScannerResponse;
+class StartPreparedScanResponse;
+}  // namespace lorgnette
 
 namespace extensions {
 
@@ -61,10 +66,6 @@ class DocumentScanAPIHandler : public BrowserContextKeyedAPI,
   using ReadScanDataCallback =
       base::OnceCallback<void(api::document_scan::ReadScanDataResponse)>;
 
-  static std::unique_ptr<DocumentScanAPIHandler> CreateForTesting(
-      content::BrowserContext* browser_context,
-      crosapi::mojom::DocumentScan* document_scan);
-
   explicit DocumentScanAPIHandler(content::BrowserContext* browser_context);
   DocumentScanAPIHandler(const DocumentScanAPIHandler&) = delete;
   DocumentScanAPIHandler& operator=(const DocumentScanAPIHandler&) = delete;
@@ -84,9 +85,6 @@ class DocumentScanAPIHandler : public BrowserContextKeyedAPI,
 
   // KeyedService implementation:
   void Shutdown() override;
-
-  // Replaces the DocumentScan service with a mock.
-  void SetDocumentScanForTesting(crosapi::mojom::DocumentScan* document_scan);
 
   // Scans one page from the first available scanner on the system and passes
   // the result to `callback`.  `mime_types` is a list of MIME types the caller
@@ -223,10 +221,6 @@ class DocumentScanAPIHandler : public BrowserContextKeyedAPI,
   static const bool kServiceIsNULLWhileTesting = true;
   static const bool kServiceHasOwnInstanceInIncognito = true;
 
-  // Used by CreateForTesting:
-  DocumentScanAPIHandler(content::BrowserContext* browser_context,
-                         crosapi::mojom::DocumentScan* document_scan);
-
   // Cleanup all handles and state for the given extension.
   void ExtensionCleanup(const ExtensionId& id);
 
@@ -240,30 +234,23 @@ class DocumentScanAPIHandler : public BrowserContextKeyedAPI,
       std::unique_ptr<ScannerDiscoveryRunner> discovery_runner,
       GetScannerListCallback callback,
       api::document_scan::GetScannerListResponse response);
-  void OnOpenScannerResponse(const ExtensionId& extension_id,
-                             const std::string& scanner_id,
-                             OpenScannerCallback callback,
-                             crosapi::mojom::OpenScannerResponsePtr response);
-  void OnGetOptionGroupsResponse(
-      GetOptionGroupsCallback callback,
-      crosapi::mojom::GetOptionGroupsResponsePtr response);
-  void OnCloseScannerResponse(const ExtensionId& extension_id,
-                              CloseScannerCallback callback,
-                              crosapi::mojom::CloseScannerResponsePtr response);
-  void OnSetOptionsResponse(SetOptionsCallback callback,
-                            crosapi::mojom::SetOptionsResponsePtr response);
+  void OnOpenScannerResponse(
+      const ExtensionId& extension_id,
+      const std::string& scanner_id,
+      OpenScannerCallback callback,
+      const std::optional<lorgnette::OpenScannerResponse>& response);
+  void OnCloseScannerResponse(
+      const ExtensionId& extension_id,
+      const std::string& scanner_handle,
+      CloseScannerCallback callback,
+      const std::optional<lorgnette::CloseScannerResponse>& response);
   void OnStartScanResponse(
+      const std::string& scanner_handle,
       std::unique_ptr<StartScanRunner> runner,
       StartScanCallback callback,
-      crosapi::mojom::StartPreparedScanResponsePtr response);
-  void OnCancelScanResponse(const ExtensionId& extension_id,
-                            CancelScanCallback callback,
-                            crosapi::mojom::CancelScanResponsePtr response);
-  void OnReadScanDataResponse(ReadScanDataCallback callback,
-                              crosapi::mojom::ReadScanDataResponsePtr response);
+      const std::optional<lorgnette::StartPreparedScanResponse>& response);
 
   raw_ptr<content::BrowserContext> browser_context_;
-  raw_ptr<crosapi::mojom::DocumentScan> document_scan_;
   std::map<ExtensionId, ExtensionState> extension_state_;
 
   base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>

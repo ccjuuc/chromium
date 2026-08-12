@@ -5,6 +5,8 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_INTEGRATORS_OPTIMIZATION_GUIDE_AUTOFILL_OPTIMIZATION_GUIDE_DECIDER_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_INTEGRATORS_OPTIMIZATION_GUIDE_AUTOFILL_OPTIMIZATION_GUIDE_DECIDER_H_
 
+#include <string_view>
+
 #include "base/memory/raw_ptr.h"
 #include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card_benefit.h"
@@ -101,6 +103,13 @@ class AutofillOptimizationGuideDecider : public KeyedService {
   // Returns whether the `ActorFormFillingService` may trigger autofill on a
   // field in a cross-origin iframe hosted at `url`.
   virtual bool IsIframeUrlAllowlistedForActor(const GURL& url) const;
+
+  // Returns whether omnibox-triggered autofill may appear for an iframe hosted
+  // at `url`.
+  virtual bool IsUrlEligibleForOmniboxAutofill(const GURL& url) const;
+
+  // Returns whether Autofill AtMemory should be blocked on `url`.
+  virtual bool ShouldBlockAtMemory(const GURL& url) const;
 
  private:
   // Raw pointer to a decider which is owned by the decider's factory.

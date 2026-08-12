@@ -44,8 +44,6 @@
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/ui_base_types.h"
 
-// TODO(michaelpg): Port these tests to app_shell: crbug.com/505926.
-
 using file_manager::VolumeManager;
 
 namespace extensions {
@@ -109,8 +107,9 @@ class ScopedAddListenerObserver : public EventRouter::Observer {
   // EventRouter::Observer overrides.
   void OnListenerAdded(const EventListenerInfo& details) override {
     // Call the callback only once, as the listener may be added multiple times.
-    if (details.extension_id != extension_id_ || !callback_)
+    if (details.extension_id != extension_id_ || !callback_) {
       return;
+    }
 
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, std::move(callback_));
@@ -329,7 +328,7 @@ IN_PROC_BROWSER_TEST_F(FileSystemApiTestForDrive,
   ASSERT_TRUE(base::PathService::OverrideAndCreateIfNeeded(
       chrome::DIR_USER_DOCUMENTS, test_file.DirName(), true, false));
   const FileSystemChooseEntryFunction::TestOptions test_options{
-      .use_suggested_path = true};
+      .path_to_be_picked = &test_file};
   auto reset_options =
       FileSystemChooseEntryFunction::SetOptionsForTesting(test_options);
   ASSERT_TRUE(

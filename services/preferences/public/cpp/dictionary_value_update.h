@@ -11,13 +11,13 @@
 #include <vector>
 
 #include "base/functional/callback.h"
-#include "base/memory/raw_ptr_exclusion.h"
+#include "base/memory/raw_ptr.h"
 #include "base/values.h"
 #include "services/preferences/public/cpp/scoped_pref_update.h"
 
 namespace prefs {
 
-// A wrapper around base::Value::Dict that reports changes to its contents
+// A wrapper around base::DictValue that reports changes to its contents
 // via a callback.
 class DictionaryValueUpdate {
  public:
@@ -25,7 +25,7 @@ class DictionaryValueUpdate {
       base::RepeatingCallback<void(std::vector<std::string>)>;
 
   DictionaryValueUpdate(UpdateCallback report_update,
-                        base::Value::Dict* value,
+                        base::DictValue* value,
                         std::vector<std::string> path);
 
   DictionaryValueUpdate(const DictionaryValueUpdate&) = delete;
@@ -61,7 +61,7 @@ class DictionaryValueUpdate {
   void SetString(std::string_view path, const std::u16string& in_value);
   std::unique_ptr<DictionaryValueUpdate> SetDictionary(
       std::string_view path,
-      base::Value::Dict in_value);
+      base::DictValue in_value);
 
   // Like Set(), but without special treatment of '.'.  This allows e.g. URLs to
   // be used as paths. Returns a pointer to the set `value`.
@@ -71,7 +71,7 @@ class DictionaryValueUpdate {
   // Convenience forms of SetWithoutPathExpansion().
   std::unique_ptr<DictionaryValueUpdate> SetDictionaryWithoutPathExpansion(
       std::string_view path,
-      base::Value::Dict in_value);
+      base::DictValue in_value);
 
   // These are convenience forms of Get().  The value will be retrieved
   // and the return value will be true if the path is valid and the value at
@@ -84,7 +84,7 @@ class DictionaryValueUpdate {
   bool GetDouble(std::string_view path, double* out_value) const;
   bool GetString(std::string_view path, std::string* out_value) const;
   bool GetDictionary(std::string_view path,
-                     const base::Value::Dict** out_value) const;
+                     const base::DictValue** out_value) const;
   bool GetDictionary(std::string_view path,
                      std::unique_ptr<DictionaryValueUpdate>* out_value);
 
@@ -92,7 +92,7 @@ class DictionaryValueUpdate {
       std::string_view key,
       std::unique_ptr<DictionaryValueUpdate>* out_value);
   bool GetListWithoutPathExpansion(std::string_view key,
-                                   base::Value::List** out_value);
+                                   base::ListValue** out_value);
 
   // Removes the Value with the specified path from this dictionary (or one
   // of its child dictionaries, if the path is more than just a local key).
@@ -104,8 +104,8 @@ class DictionaryValueUpdate {
   // to be used as paths.
   bool RemoveWithoutPathExpansion(std::string_view key, base::Value* out_value);
 
-  base::Value::Dict* AsDict();
-  const base::Value::Dict* AsConstDict() const;
+  base::DictValue* AsDict();
+  const base::DictValue* AsConstDict() const;
 
  private:
   void RecordPath(std::string_view path);
@@ -120,9 +120,10 @@ class DictionaryValueUpdate {
       const std::vector<std::string_view>& path);
 
   UpdateCallback report_update_;
-  // `value_` is not a raw_ptr<...> for performance reasons (based on analysis
-  // of sampling profiler data).
-  RAW_PTR_EXCLUSION base::Value::Dict* const value_;
+  // `value_` uses UnprotectedInRelease | DanglingUntriaged for performance
+  // reasons (based on analysis of sampling profiler data).
+  const raw_ptr<base::DictValue, UnprotectedInRelease | DanglingUntriaged>
+      value_;
   const std::vector<std::string> path_;
 };
 

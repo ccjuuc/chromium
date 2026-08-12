@@ -16,14 +16,16 @@
 #include "base/i18n/rtl.h"
 #include "base/message_loop/message_pump.h"
 #include "base/message_loop/message_pump_type.h"
+#include "base/message_loop/message_pump_wakeup_counter.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/pending_task.h"
 #include "base/process/current_process.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/synchronization/lock_metrics_recorder.h"
 #include "base/system/sys_info.h"
 #include "base/task/sequence_manager/sequence_manager.h"
+#include "base/task/thread_pool.h"
 #include "base/threading/hang_watcher.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/platform_thread_metrics.h"
@@ -32,7 +34,7 @@
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "components/performance_manager/scenario_api/performance_scenario_memory.h"
-#include "content/child/memory_coordinator/child_memory_consumer_registry.h"
+#include "content/child/memory_coordinator/child_memory_coordinator.h"
 #include "content/common/content_constants_internal.h"
 #include "content/common/content_switches_internal.h"
 #include "content/common/features.h"
@@ -41,7 +43,7 @@
 #include "content/public/common/main_function_params.h"
 #include "content/public/renderer/content_renderer_client.h"
 #include "content/public/renderer/render_thread.h"
-#include "content/renderer/memory_coordinator/renderer_memory_coordinator_policy.h"
+#include "content/renderer/memory_coordinator/last_resort_gc_policy.h"
 #include "content/renderer/render_process_impl.h"
 #include "content/renderer/render_thread_impl.h"
 #include "content/renderer/renderer_main_platform_delegate.h"
@@ -51,9 +53,11 @@
 #include "mojo/public/cpp/bindings/mojo_buildflags.h"
 #include "sandbox/policy/switches.h"
 #include "services/tracing/public/cpp/trace_startup.h"
+#include "skia/ext/font_utils.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
+#include "third_party/skia/include/core/SkFontMgr.h"
 #include "third_party/webrtc_overrides/init_webrtc.h"  // nogncheck
 #include "ui/base/ui_base_switches.h"
 
@@ -74,10 +78,6 @@
 #include "base/message_loop/message_pump_apple.h"
 #include "third_party/blink/public/web/web_view.h"
 #endif  // BUILDFLAG(IS_MAC)
-
-#if BUILDFLAG(IS_CHROMEOS) && defined(ARCH_CPU_X86_64)
-#include "chromeos/ash/components/memory/userspace_swap/userspace_swap_renderer_initialization_impl.h"
-#endif  // BUILDFLAG(IS_CHROMEOS) && defined(ARCH_CPU_X86_64)
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/system/core_scheduling.h"
@@ -144,7 +144,7 @@ void LogTimeToStartRunLoop(const base::CommandLine& command_line,
 int RendererMain(MainFunctionParams parameters) {
   // Don't use the TRACE_EVENT0 macro because the tracing infrastructure doesn't
   // expect synchronous events around the main loop of a thread.
-  TRACE_EVENT_INSTANT0("startup", "RendererMain", TRACE_EVENT_SCOPE_THREAD);
+  TRACE_EVENT_INSTANT("startup", "RendererMain");
 
 #if BUILDFLAG(IS_MAC)
   // Declare that this process has CPU security mitigations enabled (see
@@ -177,21 +177,17 @@ int RendererMain(MainFunctionParams parameters) {
   // When we start the renderer on ChromeOS if the system has core scheduling
   // available we want to turn it on.
   chromeos::system::EnableCoreSchedulingIfAvailable();
-
-#if defined(ARCH_CPU_X86_64)
-  using UserspaceSwapInit =
-      ash::memory::userspace_swap::UserspaceSwapRendererInitializationImpl;
-  std::optional<UserspaceSwapInit> swap_init;
-  if (UserspaceSwapInit::UserspaceSwapSupportedAndEnabled()) {
-    swap_init.emplace();
-
-    PLOG_IF(ERROR, !swap_init->PreSandboxSetup())
-        << "Unable to complete presandbox userspace swap initialization";
-  }
-#endif  // defined(ARCH_CPU_X86_64)
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   InitializeSkia();
+
+#if !BUILDFLAG(IS_WIN) && !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS)
+  // On Linux, Windows, and ChromeOS, the font manager is overridden or
+  // specially handled in RendererBlinkPlatformImpl(). On other platforms,
+  // initialise the default one on a thread pool, to avoid blocking on it later.
+  base::ThreadPool::PostTask(FROM_HERE,
+                             base::BindOnce([] { skia::DefaultFontMgr(); }));
+#endif
 
   // This function allows pausing execution using the --renderer-startup-dialog
   // flag allowing us to attach a debugger.
@@ -203,6 +199,7 @@ int RendererMain(MainFunctionParams parameters) {
 
   base::PlatformThread::SetName("CrRendererMain");
   mojo::InterfaceEndpointClient::SetThreadNameSuffixForMetrics("RendererMain");
+  base::MessagePumpWakeupCounter::InitializeForCurrentThread("RendererMain");
 
   // Force main thread initialization. When the implementation is based on a
   // better means of determining which is the main thread, remove.
@@ -212,11 +209,14 @@ int RendererMain(MainFunctionParams parameters) {
   // can install observers.
   performance_scenarios::ScopedScenarioObserverList scenario_observer_list;
 
-  blink::Platform::InitializeBlink();
+  // This scope is used to reduce the number of stack frames needed to be
+  // scanned during conservative stack scanning in cppgc. It allows us to skip
+  // scanning the caller frames of this function.
+  cppgc::StackStartMarker cppgc_stack_start_marker;
+  blink::Platform::InitializeBlink(std::move(cppgc_stack_start_marker));
   std::unique_ptr<blink::scheduler::WebThreadScheduler> main_thread_scheduler =
       blink::scheduler::WebThreadScheduler::CreateMainThreadScheduler(
           CreateMainThreadMessagePump());
-
   platform.PlatformInitialize();
 
   // Initialize WebRTC before engaging the sandbox.
@@ -225,9 +225,11 @@ int RendererMain(MainFunctionParams parameters) {
   // is OK.
   InitializeWebRtcModuleBeforeSandbox();
 
-  RendererMemoryCoordinatorPolicy render_memory_coordinator_policy(
-      static_cast<ChildMemoryConsumerRegistry&>(
-          base::MemoryConsumerRegistry::Get()));
+  std::optional<LastResortGCPolicy> last_resort_gc_policy;
+  if (base::FeatureList::IsEnabled(kMemoryCoordinatorLastResortGC)) {
+    last_resort_gc_policy.emplace(
+        ChildMemoryCoordinator::Get().policy_manager());
+  }
 
   {
     content::ContentRendererClient* client = GetContentClient()->renderer();
@@ -262,11 +264,6 @@ int RendererMain(MainFunctionParams parameters) {
     // which may race with application of the sandbox.
     SandboxedProcessThreadTypeHandler::Create();
 #endif
-    // Consider CrRendererMain a display critical thread. While some Javascript
-    // running on the main thread might not be, experiments demonstrated that
-    // overall this improves user-perceived performance.
-    base::PlatformThread::SetCurrentThreadType(
-        base::ThreadType::kDisplayCritical);
 
     // Startup tracing creates a tracing thread, which is incompatible on
     // platforms that require single-threaded sandbox initialization. In these
@@ -274,8 +271,8 @@ int RendererMain(MainFunctionParams parameters) {
     if (parameters.needs_startup_tracing_after_sandbox_init) {
       tracing::InitTracingPostFeatureList(/*enable_consumer=*/false,
                                           /*will_trace_thread_restart=*/false);
-      TRACE_EVENT_INSTANT1("startup", "RendererMain", TRACE_EVENT_SCOPE_THREAD,
-                           "needs_startup_tracing_after_sandbox_init", true);
+      TRACE_EVENT_INSTANT("startup", "RendererMain",
+                          "needs_startup_tracing_after_sandbox_init", true);
     }
 
     std::unique_ptr<RenderProcess> render_process = RenderProcessImpl::Create();
@@ -284,22 +281,6 @@ int RendererMain(MainFunctionParams parameters) {
     base::RunLoop run_loop;
     new RenderThreadImpl(run_loop.QuitClosure(),
                          std::move(main_thread_scheduler));
-
-#if BUILDFLAG(IS_CHROMEOS) && defined(ARCH_CPU_X86_64)
-    // Once the sandbox has been entered and initialization of render threads
-    // complete we will transfer FDs to the browser, or close them on failure.
-    // This should always be called because it will also transfer the errno that
-    // prevented the creation of the userfaultfd if applicable.
-    if (swap_init) {
-      swap_init->TransferFDsOrCleanup(base::BindOnce(
-          &RenderThread::BindHostReceiver,
-          // Unretained is safe because TransferFDsOrCleanup is synchronous.
-          base::Unretained(RenderThread::Get())));
-
-      // No need to leave this around any further.
-      swap_init.reset();
-    }
-#endif
 
 #if BUILDFLAG(IS_WIN)
     // Now that Mojo is initialized, but before the sandbox is enabled, set up
@@ -332,6 +313,8 @@ int RendererMain(MainFunctionParams parameters) {
       base::HangWatcher::GetInstance()->Start();
     }
 
+    base::LockMetricsRecorder::EnableRecordingOnCurrentThread("CrRendererMain");
+
 #if BUILDFLAG(IS_ANDROID)
     base::PlatformThreadPriorityMonitor::Get().RegisterCurrentThread(
         "RendererMain");
@@ -352,8 +335,7 @@ int RendererMain(MainFunctionParams parameters) {
       if (pool)
         pool->Recycle();
 #endif
-      TRACE_EVENT_INSTANT0("toplevel", "RendererMain.START_MSG_LOOP",
-                           TRACE_EVENT_SCOPE_THREAD);
+      TRACE_EVENT_INSTANT("toplevel", "RendererMain.START_MSG_LOOP");
       const base::TimeTicks run_loop_start_time = base::TimeTicks::Now();
       RenderThreadImpl::current()->set_run_loop_start_time(run_loop_start_time);
       LogTimeToStartRunLoop(command_line, run_loop_start_time);

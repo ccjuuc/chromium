@@ -23,9 +23,9 @@ struct PhysicalStaticPosition;
 // `align_self_direction` represents what direction 'align-self' applies in,
 // with 'justify-self' applying in the opposite direction.
 struct CORE_EXPORT LogicalStaticPosition {
-  enum InlineEdge { kInlineStart, kInlineCenter, kInlineEnd };
-  enum BlockEdge { kBlockStart, kBlockCenter, kBlockEnd };
-  enum LogicalAlignmentDirection { kBlock, kInline };
+  enum InlineEdge : uint8_t { kInlineStart, kInlineCenter, kInlineEnd };
+  enum BlockEdge : uint8_t { kBlockStart, kBlockCenter, kBlockEnd };
+  enum LogicalAlignmentDirection : uint8_t { kBlock, kInline };
 
   LogicalStaticPosition() = default;
   explicit LogicalStaticPosition(LogicalOffset offset) : offset(offset) {}
@@ -49,14 +49,23 @@ struct CORE_EXPORT LogicalStaticPosition {
 
 // Similar to `LogicalStaticPosition` but in the physical coordinate space.
 struct CORE_EXPORT PhysicalStaticPosition {
-  enum HorizontalEdge { kLeft, kHorizontalCenter, kRight };
-  enum VerticalEdge { kTop, kVerticalCenter, kBottom };
-  enum PhysicalAlignmentDirection { kHorizontal, kVertical };
+  enum HorizontalEdge : uint8_t { kLeft, kHorizontalCenter, kRight };
+  enum VerticalEdge : uint8_t { kTop, kVerticalCenter, kBottom };
+  enum PhysicalAlignmentDirection : uint8_t { kHorizontal, kVertical };
 
   PhysicalOffset offset;
   HorizontalEdge horizontal_edge;
   VerticalEdge vertical_edge;
   PhysicalAlignmentDirection align_self_direction;
+
+  PhysicalStaticPosition(PhysicalOffset offset,
+                         HorizontalEdge horizontal_edge,
+                         VerticalEdge vertical_edge,
+                         PhysicalAlignmentDirection align_self_direction)
+      : offset(offset),
+        horizontal_edge(horizontal_edge),
+        vertical_edge(vertical_edge),
+        align_self_direction(align_self_direction) {}
 
   LogicalStaticPosition ConvertToLogical(
       const WritingModeConverter& converter) const {
@@ -217,8 +226,8 @@ inline PhysicalStaticPosition LogicalStaticPosition::ConvertToPhysical(
       break;
   }
 
-  return {physical_offset, horizontal_edge, vertical_edge,
-          physical_align_self_direction};
+  return PhysicalStaticPosition(physical_offset, horizontal_edge, vertical_edge,
+                                physical_align_self_direction);
 }
 
 }  // namespace blink

@@ -54,7 +54,10 @@ enum WebCryptoOperation {
   kWebCryptoOperationDeriveBits,
   kWebCryptoOperationWrapKey,
   kWebCryptoOperationUnwrapKey,
-  kWebCryptoOperationLast = kWebCryptoOperationUnwrapKey,
+  kWebCryptoOperationEncapsulate,
+  kWebCryptoOperationDecapsulate,
+  kWebCryptoOperationGetPublicKey,
+  kWebCryptoOperationLast = kWebCryptoOperationGetPublicKey,
 };
 
 enum WebCryptoAlgorithmId {
@@ -82,7 +85,8 @@ enum WebCryptoAlgorithmId {
   kWebCryptoAlgorithmIdMlDsa87,
   kWebCryptoAlgorithmIdMlKem768,
   kWebCryptoAlgorithmIdMlKem1024,
-  kWebCryptoAlgorithmIdLast = kWebCryptoAlgorithmIdMlKem1024,
+  kWebCryptoAlgorithmIdMlKem768X25519,
+  kWebCryptoAlgorithmIdLast = kWebCryptoAlgorithmIdMlKem768X25519,
 };
 
 enum WebCryptoNamedCurve {
@@ -111,6 +115,7 @@ enum WebCryptoAlgorithmParamsType {
   kWebCryptoAlgorithmParamsTypeAesDerivedKeyParams,
   kWebCryptoAlgorithmParamsTypeHkdfParams,
   kWebCryptoAlgorithmParamsTypePbkdf2Params,
+  kWebCryptoAlgorithmParamsTypeContextParams,
 };
 
 struct WebCryptoAlgorithmInfo {
@@ -144,6 +149,7 @@ class WebCryptoEcdhKeyDeriveParams;
 class WebCryptoAesDerivedKeyParams;
 class WebCryptoHkdfParams;
 class WebCryptoPbkdf2Params;
+class WebCryptoContextParams;
 
 class WebCryptoAlgorithmParams;
 class WebCryptoAlgorithmPrivate;
@@ -204,12 +210,19 @@ class BLINK_PLATFORM_EXPORT WebCryptoAlgorithm {
   const WebCryptoAesDerivedKeyParams* AesDerivedKeyParams() const;
   const WebCryptoHkdfParams* HkdfParams() const;
   const WebCryptoPbkdf2Params* Pbkdf2Params() const;
+  const WebCryptoContextParams* ContextParams() const;
 
   // Returns true if the provided algorithm ID is for a hash (in other words,
   // SHA-*)
   static bool IsHash(WebCryptoAlgorithmId);
   // Returns true if the provided algorithm ID is for a key derivation function
   static bool IsKdf(WebCryptoAlgorithmId);
+  // Returns true if the provided algorithm ID is for a ML-DSA algorithm
+  static bool IsMlDsa(WebCryptoAlgorithmId);
+  // Returns true if the provided algorithm ID is for a ML-KEM algorithm
+  static bool IsMlKem(WebCryptoAlgorithmId);
+
+  static bool IsAsymmetric(WebCryptoAlgorithmId);
 
  private:
   void Assign(const WebCryptoAlgorithm& other);

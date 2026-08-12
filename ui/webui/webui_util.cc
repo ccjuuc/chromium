@@ -42,7 +42,8 @@ void SetJSModuleDefaults(content::WebUIDataSource* source) {
   if (scheme == content::kChromeUIScheme) {
     source->OverrideContentSecurityPolicy(
         network::mojom::CSPDirectiveName::ConnectSrc,
-        "connect-src chrome://resources chrome://theme 'self';");
+        "connect-src chrome://webui-test chrome://resources chrome://theme "
+        "'self';");
     source->OverrideContentSecurityPolicy(
         network::mojom::CSPDirectiveName::ImgSrc,
         "img-src chrome://resources chrome://theme chrome://image "
@@ -64,8 +65,10 @@ void SetJSModuleDefaults(content::WebUIDataSource* source) {
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::FontSrc,
       base::StringPrintf("font-src %s://resources 'self';", scheme.c_str()));
-  // unsafe-inline is required for Polymer. Allow styles to be imported from
-  // //resources and //theme.
+  // unsafe-inline is required for Polymer and for CSS shims, which
+  // require <style> tags directly in the main .html file. Also
+  // required by some Lit elements that set style= in HTML.
+  // Allow styles to be imported from  //resources and //theme.
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::StyleSrc,
       base::StringPrintf(
@@ -86,7 +89,7 @@ void SetupWebUIDataSource(content::WebUIDataSource* source,
   SetJSModuleDefaults(source);
   EnableTrustedTypesCSP(source);
   source->AddResourcePaths(resources);
-  source->AddResourcePath("", default_resource);
+  source->SetDefaultResource(default_resource);
 }
 
 // There is another method, ash::EnableTrustedTypesCSP, used by ash-only WebUIs.

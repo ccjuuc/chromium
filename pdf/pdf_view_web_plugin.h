@@ -8,12 +8,14 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "base/containers/flat_set.h"
 #include "base/containers/queue.h"
+#include "base/containers/span.h"
 #include "base/functional/callback_forward.h"
 #include "base/i18n/rtl.h"
 #include "base/memory/raw_ptr.h"
@@ -151,7 +153,7 @@ class PdfViewWebPlugin final : public PDFiumEngineClient,
     // Enqueues a "message" event carrying `message` to the embedder.
     // Messages are guaranteed to be received in the order that they are sent.
     // This method is non-blocking.
-    virtual void PostMessage(base::Value::Dict message) {}
+    virtual void PostMessage(base::DictValue message) {}
 
     // Invalidates the entire web plugin container and schedules a paint of the
     // page in it.
@@ -314,6 +316,8 @@ class PdfViewWebPlugin final : public PDFiumEngineClient,
   bool CanUndo() const override;
   bool CanRedo() const override;
   bool CanCopy() const override;
+  std::optional<base::i18n::TextDirection> GetFocusedFormTextDirection()
+      const override;
   bool ExecuteEditCommand(const blink::WebString& name,
                           const blink::WebString& value) override;
   blink::WebURL LinkAtPosition(const gfx::Point& /*position*/) const override;
@@ -387,8 +391,7 @@ class PdfViewWebPlugin final : public PDFiumEngineClient,
              const std::string& body) override;
   void Print() override;
   void SubmitForm(const std::string& url,
-                  const void* data,
-                  int length) override;
+                  base::span<const uint8_t> data) override;
   std::unique_ptr<UrlLoader> CreateUrlLoader() override;
   v8::Isolate* GetIsolate() override;
   std::vector<SearchStringResult> SearchString(const std::u16string& needle,
@@ -427,6 +430,9 @@ class PdfViewWebPlugin final : public PDFiumEngineClient,
   void GetPageText(int32_t page_index, GetPageTextCallback callback) override;
   void GetMostVisiblePageIndex(
       GetMostVisiblePageIndexCallback callback) override;
+  void HasMeaningfulText(HasMeaningfulTextCallback callback) override;
+  void HasJavaScript(HasJavaScriptCallback callback) override;
+  void IsPasswordProtected(IsPasswordProtectedCallback callback) override;
 #if BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
   void GetSaveDataBufferHandlerForDrive(
       pdf::mojom::SaveRequestType request_type,
@@ -443,13 +449,15 @@ class PdfViewWebPlugin final : public PDFiumEngineClient,
       const blink::WebAssociatedURLLoaderOptions& options) override;
 
   // PostMessageReceiver::Client:
-  void OnMessage(const base::Value::Dict& message) override;
+  void OnMessage(const base::DictValue& message) override;
 
   // PaintManager::Client:
   void InvalidatePluginContainer() override;
   void OnPaint(const std::vector<gfx::Rect>& paint_rects,
                std::vector<PaintReadyRect>& ready,
                std::vector<gfx::Rect>& pending) override;
+  SkBitmap* InstallBuffer(SkImageInfo image_info,
+                          base::span<uint8_t> data) override;
   void UpdateSnapshot(sk_sp<SkImage> snapshot) override;
   void UpdateScale(float scale) override;
   void UpdateLayerTransform(float scale,
@@ -484,7 +492,7 @@ class PdfViewWebPlugin final : public PDFiumEngineClient,
 
   float GetDeviceScaleForTesting() const { return device_scale_; }
 
-  void SendThumbnailForTesting(base::Value::Dict reply,
+  void SendThumbnailForTesting(base::DictValue reply,
                                int page_index,
                                Thumbnail thumbnail);
 
@@ -624,28 +632,27 @@ class PdfViewWebPlugin final : public PDFiumEngineClient,
   int GetContentRestrictions() const;
 
   // Message handlers.
-  void HandleDisplayAnnotationsMessage(const base::Value::Dict& message);
-  void HandleGetNamedDestinationMessage(const base::Value::Dict& message);
-  void HandleGetPageBoundingBoxMessage(const base::Value::Dict& message);
-  void HandleGetPasswordCompleteMessage(const base::Value::Dict& message);
-  void HandleGetSaveDataBlockMessage(const base::Value::Dict& message);
-  void HandleGetSelectedTextMessage(const base::Value::Dict& message);
-  void HandleGetSuggestedFileName(const base::Value::Dict& message);
-  void HandleGetThumbnailMessage(const base::Value::Dict& message);
-  void HandleHighlightTextFragmentsMessage(const base::Value::Dict& message);
-  void HandlePrintMessage(const base::Value::Dict& /*message*/);
-  void HandleReleaseSaveInBlockBuffers(const base::Value::Dict& /*message*/);
-  void HandleRotateClockwiseMessage(const base::Value::Dict& /*message*/);
-  void HandleRotateCounterclockwiseMessage(
-      const base::Value::Dict& /*message*/);
-  void HandleSaveAttachmentMessage(const base::Value::Dict& message);
-  void HandleSaveMessage(const base::Value::Dict& message);
-  void HandleSelectAllMessage(const base::Value::Dict& /*message*/);
-  void HandleSetBackgroundColorMessage(const base::Value::Dict& message);
-  void HandleSetPresentationModeMessage(const base::Value::Dict& message);
-  void HandleSetTwoUpViewMessage(const base::Value::Dict& message);
-  void HandleStopScrollingMessage(const base::Value::Dict& message);
-  void HandleViewportMessage(const base::Value::Dict& message);
+  void HandleDisplayAnnotationsMessage(const base::DictValue& message);
+  void HandleGetNamedDestinationMessage(const base::DictValue& message);
+  void HandleGetPageBoundingBoxMessage(const base::DictValue& message);
+  void HandleGetPasswordCompleteMessage(const base::DictValue& message);
+  void HandleGetSaveDataBlockMessage(const base::DictValue& message);
+  void HandleGetSelectedTextMessage(const base::DictValue& message);
+  void HandleGetSuggestedFileName(const base::DictValue& message);
+  void HandleGetThumbnailMessage(const base::DictValue& message);
+  void HandleHighlightTextFragmentsMessage(const base::DictValue& message);
+  void HandlePrintMessage(const base::DictValue& /*message*/);
+  void HandleReleaseSaveInBlockBuffers(const base::DictValue& /*message*/);
+  void HandleRotateClockwiseMessage(const base::DictValue& /*message*/);
+  void HandleRotateCounterclockwiseMessage(const base::DictValue& /*message*/);
+  void HandleSaveAttachmentMessage(const base::DictValue& message);
+  void HandleSaveMessage(const base::DictValue& message);
+  void HandleSelectAllMessage(const base::DictValue& /*message*/);
+  void HandleSetBackgroundColorMessage(const base::DictValue& message);
+  void HandleSetPresentationModeMessage(const base::DictValue& message);
+  void HandleSetTwoUpViewMessage(const base::DictValue& message);
+  void HandleStopScrollingMessage(const base::DictValue& message);
+  void HandleViewportMessage(const base::DictValue& message);
 
   void SaveToBuffer(pdf::mojom::SaveRequestType request_type,
                     const std::string& token);
@@ -725,6 +732,8 @@ class PdfViewWebPlugin final : public PDFiumEngineClient,
   bool Undo();
   bool Redo();
 
+  bool SetFocusedFormTextDirection(base::i18n::TextDirection direction);
+
   bool HandleWebInputEvent(const blink::WebInputEvent& event);
 
   // Helper method for converting IME text to input events.
@@ -763,10 +772,10 @@ class PdfViewWebPlugin final : public PDFiumEngineClient,
   void SendLoadingProgress(double percentage);
 
   // Handles message for resetting Print Preview.
-  void HandleResetPrintPreviewModeMessage(const base::Value::Dict& message);
+  void HandleResetPrintPreviewModeMessage(const base::DictValue& message);
 
   // Handles message for loading a preview page.
-  void HandleLoadPreviewPageMessage(const base::Value::Dict& message);
+  void HandleLoadPreviewPageMessage(const base::DictValue& message);
 
   // Starts loading the next available preview page into a blank page.
   void LoadAvailablePreviewPage();
@@ -781,7 +790,7 @@ class PdfViewWebPlugin final : public PDFiumEngineClient,
   void SendPrintPreviewLoadedNotification();
 
   // Sends the thumbnail image data.
-  void SendThumbnail(base::Value::Dict reply,
+  void SendThumbnail(base::DictValue reply,
                      int page_index,
                      Thumbnail thumbnail);
 

@@ -2,16 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "content/browser/child_process_launcher_helper.h"
 
 #import <BrowserEngineKit/BrowserEngineKit.h>
 
+#include <atomic>
 #include <list>
+#include <string_view>
 
 #include "base/apple/mach_port_rendezvous_ios.h"
 #include "base/files/file.h"
@@ -158,12 +155,18 @@ class ProcessStorage : public ProcessStorageBase {
 
   ~ProcessStorage() override { [grant_ invalidate]; }
 
-  void ReleaseProcess() override { process_ = nullptr; }
+  void ReleaseProcess() override {
+    terminated_ = true;
+    process_ = nullptr;
+  }
 
   NSObject* Process() { return process_; }
 
+  bool IsTerminated() const { return terminated_; }
+
  private:
   NSObject* process_;
+  std::atomic<bool> terminated_ = false;
   [[maybe_unused]] xpc_connection_t ipc_channel_;
   id<BEProcessCapabilityGrant> grant_;
 };
@@ -307,7 +310,7 @@ void ChildProcessLauncherHelper::OnChildProcessStarted(
         }
 
         const char* message_type = xpc_dictionary_get_string(event, "message");
-        if (message_type && strcmp(message_type, "layerHandle") == 0) {
+        if (message_type && std::string_view(message_type) == "layerHandle") {
           // We only expect this message from the GPU process.
           if (!is_gpu_process) {
             xpc_connection_cancel(xpc_connection);
@@ -432,7 +435,7 @@ void ChildProcessLauncherHelper::OnChildProcessStarted(
       // Add the process to the global table.
       {
         base::AutoLock guard(*g_process_table_lock_);
-        CHECK(!base::Contains(*g_process_table_, process_id));
+        CHECK(!g_process_table_->contains(process_id));
         g_process_table_->emplace(process_id, this);
       }
 
@@ -464,8 +467,8 @@ ChildProcessTerminationInfo ChildProcessLauncherHelper::GetTerminationInfo(
   ChildProcessTerminationInfo info;
   if (!process_storage_) {
     info.status = base::TERMINATION_STATUS_LAUNCH_FAILED;
-  } else if (static_cast<ProcessStorage*>(process_storage_.get())->Process() ==
-             nullptr) {
+  } else if (static_cast<ProcessStorage*>(process_storage_.get())
+                 ->IsTerminated()) {
     if (exit_code_.has_value()) {
       if (exit_code_.value() == RESULT_CODE_NORMAL_EXIT) {
         info.status = base::TERMINATION_STATUS_NORMAL_TERMINATION;

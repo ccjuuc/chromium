@@ -17,7 +17,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import static org.chromium.chrome.browser.customtabs.features.minimizedcustomtab.CustomTabMinimizationManager.KEY_IS_CCT_MINIMIZED;
-import static org.chromium.chrome.browser.tab.TabLoadIfNeededCaller.ON_ACTIVITY_SHOWN_THEN_SHOW;
 import static org.chromium.chrome.browser.tab.TabSelectionType.FROM_USER;
 
 import android.app.PictureInPictureParams;
@@ -58,6 +57,8 @@ import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.InflationObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabHidingType;
+import org.chromium.chrome.browser.toolbar.top.ResourceFactory;
+import org.chromium.chrome.browser.toolbar.top.ResourceFactoryJni;
 import org.chromium.components.dom_distiller.core.DomDistillerUrlUtilsJni;
 import org.chromium.components.url_formatter.UrlFormatter;
 import org.chromium.content_public.browser.WebContents;
@@ -95,6 +96,7 @@ public class CustomTabMinimizationManagerUnitTest {
     @Mock private CustomTabsConnection mConnection;
     @Mock private Runnable mCloseTabRunnable;
     @Mock private DomDistillerUrlUtilsJni mDomDistillerUrlUtilsJni;
+    @Mock private ResourceFactory.Natives mResourceFactoryNatives;
     @Mock private CustomTabMinimizeDelegate.Observer mMinimizationObserver;
     @Mock private CustomTabMinimizeDelegate mOtherMinimizeDelegate;
     @Mock private ActivityLifecycleDispatcher mLifecycleDispatcher;
@@ -107,6 +109,7 @@ public class CustomTabMinimizationManagerUnitTest {
     public void setUp() {
         mActivityScenarioRule.getScenario().onActivity(activity -> mActivity = spy(activity));
         DomDistillerUrlUtilsJni.setInstanceForTesting(mDomDistillerUrlUtilsJni);
+        ResourceFactoryJni.setInstanceForTesting(mResourceFactoryNatives);
 
         CustomTabsConnection.setInstanceForTesting(mConnection);
         mActivityTabProvider.setForTesting(mTab);
@@ -160,7 +163,7 @@ public class CustomTabMinimizationManagerUnitTest {
         // Now, simulate Activity exiting PiP.
         mManager.accept(new PictureInPictureModeChangedInfo(false));
 
-        verify(mTab).show(eq(FROM_USER), eq(ON_ACTIVITY_SHOWN_THEN_SHOW));
+        verify(mTab).show(eq(FROM_USER));
         verify(mWebContents).setAudioMuted(false);
         verify(mConnection).onUnminimized(any());
         verify(mMinimizationObserver).onMinimizationChanged(false);
@@ -175,7 +178,7 @@ public class CustomTabMinimizationManagerUnitTest {
         mActivityScenarioRule.getScenario().moveToState(State.CREATED);
         mManager.accept(new PictureInPictureModeChangedInfo(false));
 
-        verify(mTab, never()).show(anyInt(), anyInt());
+        verify(mTab, never()).show(anyInt());
         verify(mCloseTabRunnable).run();
     }
 
@@ -230,7 +233,7 @@ public class CustomTabMinimizationManagerUnitTest {
         mManager.accept(new PictureInPictureModeChangedInfo(true));
         // Dismiss using #dismiss().
         mManager.dismiss();
-        verify(mTab, never()).show(anyInt(), anyInt());
+        verify(mTab, never()).show(anyInt());
         verify(mCloseTabRunnable).run();
     }
 

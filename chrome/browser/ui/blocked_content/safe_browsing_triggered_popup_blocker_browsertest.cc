@@ -10,7 +10,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/path_service.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -71,11 +70,11 @@ void RoundTripAndVerifyLogMessages(
 
   for (size_t i = 0u; i < observer.messages().size(); ++i) {
     std::string message = observer.GetMessageAt(i);
-    if (base::Contains(messages_expected, message)) {
+    if (messages_expected.contains(message)) {
       messages_expected.erase(message);
       continue;
     }
-    if (base::Contains(messages_not_expected, message)) {
+    if (messages_not_expected.contains(message)) {
       ADD_FAILURE() << "Saw anti-expected message: " << message;
     }
   }
@@ -230,7 +229,7 @@ class SafeBrowsingTriggeredInterceptingBrowserTest
     threat_match.set_threat_entry_type(safe_browsing::URL);
 
     safe_browsing::FullHashStr enforce_full_hash =
-        safe_browsing::V4ProtocolManagerUtil::GetFullHash(url);
+        safe_browsing::SBProtocolManagerUtil::GetFullHash(url);
     threat_match.mutable_threat()->set_hash(enforce_full_hash);
     threat_match.mutable_cache_duration()->set_seconds(300);
 
@@ -316,7 +315,7 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingTriggeredPopupBlockerBrowserTest,
 
   // Open a new tab to make sure the SafeBrowsingTriggeredPopupBlocker gets
   // created for the new tab.
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
 
   // Navigate to a_url, should trigger the popup blocker.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), a_url));
@@ -457,7 +456,7 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingTriggeredPopupBlockerBrowserTest,
 
   // Allow popups on |a_url|.
   HostContentSettingsMap* settings_map =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
   settings_map->SetContentSettingDefaultScope(
       a_url, a_url, ContentSettingsType::POPUPS, CONTENT_SETTING_ALLOW);
 
@@ -580,7 +579,7 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingTriggeredPopupBlockerBrowserTest,
 
   // Allow popups on |a_url|.
   HostContentSettingsMap* settings_map =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
   settings_map->SetContentSettingDefaultScope(
       a_url, a_url, ContentSettingsType::POPUPS, CONTENT_SETTING_ALLOW);
 
@@ -751,7 +750,7 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingTriggeredPopupBlockerPrerenderingBrowserTest,
   {
     ConfigureAsAbusiveWarn(prerendering_url);
     content::WebContentsConsoleObserver console_observer(web_contents());
-    content::FrameTreeNodeId host_id =
+    content::PrerenderHostId host_id =
         prerender_helper_.AddPrerender(prerendering_url);
     content::test::PrerenderHostObserver host_observer(*web_contents(),
                                                        host_id);
@@ -787,7 +786,7 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingTriggeredPopupBlockerPrerenderingBrowserTest,
   ConfigureAsAbusive(prerendering_url);
 
   // Loads a page in the prerender.
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_helper_.AddPrerender(prerendering_url);
   auto* prerendered_frame_host =
       prerender_helper_.GetPrerenderedMainFrameHost(host_id);

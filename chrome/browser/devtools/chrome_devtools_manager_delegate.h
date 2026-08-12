@@ -10,6 +10,7 @@
 #include <set>
 #include <string>
 
+#include "base/gtest_prod_util.h"
 #include "chrome/browser/devtools/device/devtools_device_discovery.h"
 #include "chrome/browser/devtools/global_confirm_info_bar.h"
 #include "chrome/browser/devtools/protocol/protocol.h"
@@ -45,8 +46,11 @@ class ChromeDevToolsManagerDelegate : public content::DevToolsManagerDelegate,
   // Resets |device_manager_|.
   void ResetAndroidDeviceManagerForTesting();
 
-  std::vector<content::BrowserContext*> GetBrowserContexts() override;
+  std::vector<base::WeakPtr<content::BrowserContext>> GetBrowserContexts()
+      override;
   content::BrowserContext* GetDefaultBrowserContext() override;
+  content::BrowserContext* GetBrowserContext(
+      const std::string& context_id) override;
 
   // Closes browser soon, not in the current task.
   static void CloseBrowserSoon();
@@ -56,6 +60,10 @@ class ChromeDevToolsManagerDelegate : public content::DevToolsManagerDelegate,
 
  private:
   friend class DevToolsManagerDelegateTest;
+  FRIEND_TEST_ALL_PREFIXES(DevToolsRemoteServerInfobarBrowserTest,
+                           NoCrashWhenAllBrowsersClosedBeforeDisconnect);
+  FRIEND_TEST_ALL_PREFIXES(DevToolsRemoteServerInfobarBrowserTest,
+                           AcceptAfterBrowserClosedUsesActiveBrowser);
 
   // content::DevToolsManagerDelegate implementation.
   void Inspect(content::DevToolsAgentHost* agent_host) override;
@@ -71,6 +79,8 @@ class ChromeDevToolsManagerDelegate : public content::DevToolsManagerDelegate,
                      NotHandledCallback callback) override;
   std::string GetTargetType(content::WebContents* web_contents) override;
   std::string GetTargetTitle(content::WebContents* web_contents) override;
+  std::unique_ptr<base::DictValue> GetTargetEmbedderData(
+      content::DevToolsAgentHost* agent_host) override;
   std::optional<bool> ShouldReportAsTabTarget(
       content::WebContents* web_contents) override;
 
@@ -79,6 +89,7 @@ class ChromeDevToolsManagerDelegate : public content::DevToolsManagerDelegate,
                              DisposeCallback callback) override;
 
   bool AllowInspectingRenderFrameHost(content::RenderFrameHost* rfh) override;
+  bool AllowInspectingTarget(content::DevToolsAgentHost* agent_host) override;
   void ClientAttached(
       content::DevToolsAgentHostClientChannel* channel) override;
   void ClientDetached(

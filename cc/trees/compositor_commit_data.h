@@ -9,18 +9,20 @@
 #include <optional>
 #include <vector>
 
+#include "base/containers/flat_set.h"
 #include "cc/cc_export.h"
 #include "cc/input/browser_controls_state.h"
 #include "cc/input/scroll_snap_data.h"
 #include "cc/input/snap_selection_strategy.h"
 #include "cc/paint/element_id.h"
-#include "cc/trees/layer_tree_host_client.h"
+#include "cc/trees/layer_tree_host_delegate.h"
 #include "cc/trees/scroll_source_type.h"
 #include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/geometry/vector2d.h"
 
 namespace cc {
 
+class AnimatedImageFrameIndexMap;
 class SwapPromise;
 
 struct CC_EXPORT CompositorCommitData {
@@ -129,6 +131,11 @@ struct CC_EXPORT CompositorCommitData {
   // Tracks type of the last latched scroll: absolute, relative or stationary.
   // https://drafts.csswg.org/css-scroll-snap-1/#scroll-types.
   ScrollSourceType scroll_type = ScrollSourceType::kNone;
+
+  // Clients of image animations that have advanced since the last commit.
+  base::flat_set<ElementId> advanced_image_animation_clients;
+  scoped_refptr<const AnimatedImageFrameIndexMap>
+      animated_image_frame_index_map;
 };
 
 }  // namespace cc

@@ -5,17 +5,14 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_PAYMENTS_NETWORK_INTERFACE_BASE_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_PAYMENTS_NETWORK_INTERFACE_BASE_H_
 
+#include <memory>
 #include <optional>
 #include <string>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/values.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
-#include "components/autofill/core/browser/payments/client_behavior_constants.h"
 #include "google_apis/gaia/google_service_auth_error.h"
-#include "url/origin.h"
 
 namespace signin {
 class AccessTokenFetcher;
@@ -43,7 +40,7 @@ class PaymentsRequest;
 class PaymentsNetworkInterfaceBase {
  public:
   // Cancels and clears the current `request_`.
-  void CancelRequest();
+  virtual void CancelRequest();
 
   // Exposed for testing.
   void set_url_loader_factory_for_testing(

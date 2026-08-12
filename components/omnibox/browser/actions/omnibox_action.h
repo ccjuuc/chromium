@@ -36,6 +36,13 @@ struct VectorIcon;
 class AutocompleteInput;
 class AutocompleteProviderClient;
 
+// How the action should be presented in the UI.
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.omnibox.action
+enum class ActionPresentationMode {
+  CHIP = 1,
+  BUTTON = 2,
+};
+
 // Omnibox Actions are additional actions associated with matches. They appear
 // in the suggestion button row and are not matches themselves.
 //
@@ -76,6 +83,8 @@ class OmniboxAction : public base::RefCountedThreadSafe<OmniboxAction> {
   // Actions such as Pedals may require various capabilities from an embedding
   // client context and this interface can be used to invert the dependency.
   struct Client {
+    virtual ~Client() = default;
+
     // Opens the Sharing Hub as if the "Share this page" airplane button
     // were clicked.
     virtual void OpenSharingHub() = 0;
@@ -100,6 +109,19 @@ class OmniboxAction : public base::RefCountedThreadSafe<OmniboxAction> {
     // Opens the lens overlay. If `show` is true, the overlay UI is presented
     // and if it's false then lens is used to contextualize without showing UI.
     virtual void OpenLensOverlay(bool show) = 0;
+
+    // Returns true if the client should open the Cobrowse panel (bypassing
+    // Lens).
+    virtual bool ShouldOpenCoBrowsePanel() const = 0;
+
+    // Opens the CoBrowse side panel.
+    virtual void OpenCoBrowsePanel() = 0;
+
+    // Returns true if the client should open the Composebox for AskG.
+    virtual bool ShouldOpenComposeboxForAskG() const = 0;
+
+    // Opens the Composebox for AskG.
+    virtual void OpenComposeboxForAskG() = 0;
 
     // Passes the contextual search request to Lens to handle fulfillment. Lens
     // uses the destination URL to grab the query and keep any additional
@@ -148,18 +170,12 @@ class OmniboxAction : public base::RefCountedThreadSafe<OmniboxAction> {
     OpenUrlCallback open_url_callback_;
     base::TimeTicks match_selection_timestamp_;
     WindowOpenDisposition disposition_;
-
-    // When this is set to a nonzero `StarterPackId`, the omnibox will
-    // transition to the given starter pack's keyword mode after execution
-    // completes. An ID is used instead of a keyword string because keywords may
-    // change and template URLs may become unavailable, but the IDs remain
-    // constant.
-    int enter_starter_pack_id_;
   };
 
-  OmniboxAction(LabelStrings strings,
-                GURL url,
-                bool show_as_action_button = false);
+  OmniboxAction(
+      LabelStrings strings,
+      GURL url,
+      ActionPresentationMode presentation_mode = ActionPresentationMode::CHIP);
 
   // Provides read access to labels associated with this Action.
   const LabelStrings& GetLabelStrings() const;
@@ -213,8 +229,8 @@ class OmniboxAction : public base::RefCountedThreadSafe<OmniboxAction> {
   // For navigation Actions, this holds the destination URL. Otherwise, empty.
   GURL url_;
 
-  // Whether to show as action button.
-  bool show_as_action_button_;
+  // How the action should be presented in the UI.
+  ActionPresentationMode presentation_mode_;
 
 #if BUILDFLAG(IS_ANDROID)
   mutable base::android::ScopedJavaGlobalRef<jobject> j_omnibox_action_;

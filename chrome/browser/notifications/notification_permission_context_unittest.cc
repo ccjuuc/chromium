@@ -21,6 +21,7 @@
 #include "chrome/test/base/testing_profile.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/permissions/permission_decision.h"
+#include "components/permissions/permission_prompt_decision.h"
 #include "components/permissions/permission_request_data.h"
 #include "components/permissions/permission_request_id.h"
 #include "components/permissions/resolvers/content_setting_permission_resolver.h"
@@ -31,13 +32,15 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
+#include "content/public/test/navigation_simulator.h"
+#include "content/public/test/test_renderer_host.h"
 #include "extensions/buildflags/buildflags.h"
+#include "net/http/http_response_headers.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/mojom/permissions/permission_status.mojom.h"
 #include "url/gurl.h"
 
-
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/browser/notifications/notifier_state_tracker.h"
 #include "chrome/browser/notifications/notifier_state_tracker_factory.h"
@@ -47,7 +50,7 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
 #include "ui/message_center/public/cpp/notifier_id.h"
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 namespace {
 
@@ -84,14 +87,14 @@ class TestNotificationPermissionContext : public NotificationPermissionContext {
       const permissions::PermissionRequestData& request_data,
       permissions::BrowserPermissionCallback callback,
       bool persist,
-      PermissionDecision decision,
-      bool is_final_decision) override {
+      const content::PermissionResult* permission_result,
+      const permissions::PermissionPromptDecision& decision) override {
     permission_set_count_++;
     last_permission_set_persisted_ = persist;
-    last_set_decision_ = decision;
+    last_set_decision_ = decision.overall_decision;
     NotificationPermissionContext::NotifyPermissionSet(
-        request_data, std::move(callback), persist, decision,
-        is_final_decision);
+        request_data, std::move(callback), persist, permission_result,
+        decision);
   }
 
   int permission_set_count_ = 0;
@@ -121,15 +124,14 @@ class NotificationPermissionContextTest
                             const GURL& requesting_origin,
                             const GURL& embedding_origin,
                             ContentSetting setting) {
-    context->UpdateContentSetting(
+    context->UpdateSetting(
         permissions::PermissionRequestData(
-            std::make_unique<permissions::ContentSettingPermissionResolver>(
-                ContentSettingsType::NOTIFICATIONS),
+            permissions::RequestType::kNotifications,
             /*user_gesture=*/true, requesting_origin, embedding_origin),
         setting, /*is_one_time=*/false);
   }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // Registers the given |extension| with the extension registrar and returns
   // the extension if it could be registered appropriately.
   scoped_refptr<const extensions::Extension> RegisterExtension(
@@ -318,8 +320,9 @@ TEST_F(NotificationPermissionContextTest, WebNotificationsTopLevelOriginOnly) {
   auto permission_status = PermissionStatus::ASK;
   context.DecidePermission(
       std::make_unique<permissions::PermissionRequestData>(
-          std::make_unique<permissions::ContentSettingPermissionResolver>(
-              ContentSettingsType::NOTIFICATIONS),
+          content::PermissionDescriptorUtil::
+              CreatePermissionDescriptorForPermissionType(
+                  blink::PermissionType::NOTIFICATIONS),
           request_id,
           /*user_gesture=*/true, requesting_origin, embedding_origin),
       base::BindOnce(&StorePermissionStatus, &permission_status));
@@ -391,7 +394,7 @@ TEST_F(NotificationPermissionContextTest, SecureOriginRequirement) {
 }
 
 #if BUILDFLAG(IS_MAC) && defined(ARCH_CPU_ARM64)
-// Bulk-disabled for arm64 bot stabilization: https://crbug.com/1154345
+// Bulk-disabled for arm64 bot stabilization: https://crbug.com/40734863
 #define MAYBE_TestDenyInIncognitoAfterDelay \
   DISABLED_TestDenyInIncognitoAfterDelay
 #else
@@ -417,8 +420,9 @@ TEST_F(NotificationPermissionContextTest, MAYBE_TestDenyInIncognitoAfterDelay) {
 
   permission_context.RequestPermission(
       std::make_unique<permissions::PermissionRequestData>(
-          std::make_unique<permissions::ContentSettingPermissionResolver>(
-              ContentSettingsType::NOTIFICATIONS),
+          content::PermissionDescriptorUtil::
+              CreatePermissionDescriptorForPermissionType(
+                  blink::PermissionType::NOTIFICATIONS),
           id, /*user_gesture=*/true, url),
       base::DoNothing());
 
@@ -437,10 +441,10 @@ TEST_F(NotificationPermissionContextTest, MAYBE_TestDenyInIncognitoAfterDelay) {
   // Time elapsed whilst hidden is not counted.
   // n.b. This line also clears out any old scheduled timer tasks. This is
   // important, because otherwise Timer::Reset (triggered by
-  // VisibilityTimerTabHelper::WasShown) may choose to re-use an existing
-  // scheduled task, and when it fires Timer::RunScheduledTask will call
-  // TimeTicks::Now() (which unlike task_runner->NowTicks(), we can't fake),
-  // and miscalculate the remaining delay at which to fire the timer.
+  // visibility_timer::VisibilityTimerTabHelper::WasShown) may choose to re-use
+  // an existing scheduled task, and when it fires Timer::RunScheduledTask will
+  // call TimeTicks::Now() (which unlike task_runner->NowTicks(), we can't
+  // fake), and miscalculate the remaining delay at which to fire the timer.
   task_runner->FastForwardBy(base::Days(1));
 
   EXPECT_EQ(0, permission_context.permission_set_count());
@@ -490,15 +494,17 @@ TEST_F(NotificationPermissionContextTest, TestParallelDenyInIncognito) {
 
   permission_context.RequestPermission(
       std::make_unique<permissions::PermissionRequestData>(
-          std::make_unique<permissions::ContentSettingPermissionResolver>(
-              ContentSettingsType::NOTIFICATIONS),
+          content::PermissionDescriptorUtil::
+              CreatePermissionDescriptorForPermissionType(
+                  blink::PermissionType::NOTIFICATIONS),
           id1,
           /*user_gesture=*/true, url),
       base::DoNothing());
   permission_context.RequestPermission(
       std::make_unique<permissions::PermissionRequestData>(
-          std::make_unique<permissions::ContentSettingPermissionResolver>(
-              ContentSettingsType::NOTIFICATIONS),
+          content::PermissionDescriptorUtil::
+              CreatePermissionDescriptorForPermissionType(
+                  blink::PermissionType::NOTIFICATIONS),
           id2,
           /*user_gesture=*/true, url),
       base::DoNothing());
@@ -516,7 +522,7 @@ TEST_F(NotificationPermissionContextTest, TestParallelDenyInIncognito) {
     }
   }
 
-  // Only the first permission request receives a response (crbug.com/577336).
+  // Only the first permission request receives a response (crbug.com/40452210).
   EXPECT_EQ(1, permission_context.permission_set_count());
   EXPECT_TRUE(permission_context.last_permission_set_persisted());
   EXPECT_EQ(PermissionDecision::kDeny, permission_context.last_set_decision());
@@ -583,7 +589,7 @@ TEST_F(NotificationPermissionContextTest, GetNotificationsSettings) {
   EXPECT_EQ(CONTENT_SETTING_ASK, settings[4].GetContentSetting());
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 TEST_F(NotificationPermissionContextTest, ExtensionPermissionAskByDefault) {
   // Verifies that notification permission is not granted to extensions by
   // default. They need to explicitly declare this in their manifest.
@@ -669,3 +675,114 @@ TEST_F(NotificationPermissionContextTest, ExtensionPermissionOverrideDenied) {
           .status);
 }
 #endif
+
+TEST_F(NotificationPermissionContextTest, SandboxedIFrameSameOrigin) {
+  // Set default notification permission to ALLOW.
+  HostContentSettingsMapFactory::GetForProfile(profile())
+      ->SetDefaultContentSetting(ContentSettingsType::NOTIFICATIONS,
+                                 CONTENT_SETTING_ALLOW);
+
+  GURL main_url("https://example.com");
+  NavigateAndCommit(main_url);
+
+  NotificationPermissionContext context(profile());
+
+  // Verify main frame is allowed.
+  EXPECT_EQ(
+      PermissionStatus::GRANTED,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               main_rfh(), main_url, main_url)
+          .status);
+
+  // Create child frame.
+  content::RenderFrameHost* child_rfh =
+      content::RenderFrameHostTester::For(main_rfh())->AppendChild("child");
+
+  // Navigate child frame with CSP sandbox.
+  // Same-origin URL, but sandbox will make it opaque.
+  auto simulator = content::NavigationSimulator::CreateRendererInitiated(
+      main_url, child_rfh);
+  simulator->SetResponseHeaders(
+      net::HttpResponseHeaders::Builder(net::HttpVersion(1, 1), "200 OK")
+          .AddHeader("Content-Security-Policy", "sandbox")
+          .Build());
+  simulator->Start();
+  simulator->Commit();
+  child_rfh = simulator->GetFinalRenderFrameHost();
+
+  // The child frame should have an opaque origin.
+  EXPECT_TRUE(child_rfh->GetLastCommittedOrigin().opaque());
+
+  // Expect DENIED for the sandboxed child frame.
+  EXPECT_EQ(
+      PermissionStatus::DENIED,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               child_rfh, main_url, main_url)
+          .status);
+}
+
+TEST_F(NotificationPermissionContextTest, SandboxedIFrameCrossOrigin) {
+  // Set default notification permission to ALLOW.
+  HostContentSettingsMapFactory::GetForProfile(profile())
+      ->SetDefaultContentSetting(ContentSettingsType::NOTIFICATIONS,
+                                 CONTENT_SETTING_ALLOW);
+
+  GURL main_url("https://example.com");
+  GURL cross_origin_url("https://example.org");
+  NavigateAndCommit(main_url);
+
+  NotificationPermissionContext context(profile());
+
+  // Create normal child frame.
+  content::RenderFrameHost* normal_child_rfh =
+      content::RenderFrameHostTester::For(main_rfh())
+          ->AppendChild("normal_child");
+  auto simulator = content::NavigationSimulator::CreateRendererInitiated(
+      cross_origin_url, normal_child_rfh);
+  simulator->Commit();
+  normal_child_rfh = simulator->GetFinalRenderFrameHost();
+
+  // Verify normal cross-origin child frame is allowed (because default is
+  // ALLOW).
+  EXPECT_EQ(
+      PermissionStatus::GRANTED,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               normal_child_rfh, cross_origin_url, main_url)
+          .status);
+
+  // Create sandboxed child frame.
+  content::RenderFrameHost* sandboxed_child_rfh =
+      content::RenderFrameHostTester::For(main_rfh())
+          ->AppendChild("sandboxed_child");
+  auto simulator2 = content::NavigationSimulator::CreateRendererInitiated(
+      cross_origin_url, sandboxed_child_rfh);
+  simulator2->SetResponseHeaders(
+      net::HttpResponseHeaders::Builder(net::HttpVersion(1, 1), "200 OK")
+          .AddHeader("Content-Security-Policy", "sandbox")
+          .Build());
+  simulator2->Start();
+  simulator2->Commit();
+  sandboxed_child_rfh = simulator2->GetFinalRenderFrameHost();
+
+  // The child frame should have an opaque origin.
+  EXPECT_TRUE(sandboxed_child_rfh->GetLastCommittedOrigin().opaque());
+
+  // Expect DENIED for the sandboxed child frame.
+  EXPECT_EQ(
+      PermissionStatus::DENIED,
+      context
+          .GetPermissionStatus(content::PermissionDescriptorUtil::
+                                   CreatePermissionDescriptorForPermissionType(
+                                       blink::PermissionType::NOTIFICATIONS),
+                               sandboxed_child_rfh, cross_origin_url, main_url)
+          .status);
+}

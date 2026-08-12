@@ -9,7 +9,6 @@
 #include "base/feature_list.h"
 #include "base/functional/callback.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
@@ -23,6 +22,7 @@
 #include "url/gurl.h"
 
 #if BUILDFLAG(ENABLE_HLS_DEMUXER)
+#include "base/time/time.h"
 #include "media/filters/hls_manifest_demuxer_engine.h"
 #include "media/filters/manifest_demuxer.h"
 #endif  // BUILDFLAG(ENABLE_HLS_DEMUXER)
@@ -67,26 +67,25 @@ bool IsLocalFile(const GURL& url) {
 
 DemuxerManager::DemuxerManager(
     Client* client,
+    url::Origin security_origin,
     scoped_refptr<base::SequencedTaskRunner> media_task_runner,
     MediaLog* log,
     std::unique_ptr<Demuxer> demuxer_override)
     : client_(client),
       media_task_runner_(std::move(media_task_runner)),
       media_log_(log->Clone()),
+      security_origin_(std::move(security_origin)),
       demuxer_override_(std::move(demuxer_override)) {
   DCHECK(client_);
 }
 
 DemuxerManager::~DemuxerManager() {
-  // ManifestDemuxer has multiple outstanding weak pointers bound to the media
-  // thread, and needs to be deleted there.
-  if (GetDemuxerType() == DemuxerType::kManifestDemuxer) {
+  // ManifestDemuxer and FrameInjectingDemuxer have multiple outstanding weak
+  // pointers bound to the media thread, and need to be deleted there.
+  if (GetDemuxerType() == DemuxerType::kManifestDemuxer ||
+      GetDemuxerType() == DemuxerType::kFrameInjectingDemuxer) {
     media_task_runner_->DeleteSoon(FROM_HERE, std::move(demuxer_));
   }
-}
-
-void DemuxerManager::InvalidateWeakPtrs() {
-  weak_factory_.InvalidateWeakPtrs();
 }
 
 void DemuxerManager::RestartClientForHLS() {
@@ -228,8 +227,7 @@ PipelineStatus DemuxerManager::CreateDemuxer(
     bool load_media_source,
     DataSource::Preload preload,
     bool needs_first_frame,
-    DemuxerManager::DemuxerCreatedCB on_demuxer_created,
-    base::flat_map<std::string, std::string> headers) {
+    DemuxerManager::DemuxerCreatedCB on_demuxer_created) {
   // TODO(crbug.com/40243452) return a better error
   if (!client_) {
     return DEMUXER_ERROR_COULD_NOT_OPEN;
@@ -242,7 +240,7 @@ PipelineStatus DemuxerManager::CreateDemuxer(
   }
 
 #if BUILDFLAG(ENABLE_HLS_DEMUXER)
-  if (hls_fallback_ || loaded_url_.path().ends_with(".m3u8")) {
+  if (hls_fallback_ || IsManifestDemuxerURL()) {
     std::unique_ptr<Demuxer> demuxer;
     std::tie(data_source_info_, demuxer) = CreateHlsDemuxer();
     SetDemuxer(std::move(demuxer));
@@ -315,6 +313,7 @@ void DemuxerManager::StopAndResetClient() {
     data_source_->Stop();
   }
   client_ = nullptr;
+  weak_factory_.InvalidateWeakPtrsAndDoom();
 }
 
 int64_t DemuxerManager::GetDataSourceMemoryUsage() {
@@ -335,12 +334,6 @@ void DemuxerManager::DurationChanged() {
 }
 
 bool DemuxerManager::WouldTaintOrigin() const {
-  if (hls_fallback_) {
-    // TODO(crbug.com/410588476): return data_source_info_->WouldTaintOrigin();
-    // For now, we should continue to assume that tainting is always true with
-    // HLS content.
-    return true;
-  }
   return data_source_info_ && data_source_info_->WouldTaintOrigin();
 }
 
@@ -380,6 +373,14 @@ bool DemuxerManager::IsLiveContent() const {
     return !demuxer_->IsSeekable();
   }
   return false;
+}
+
+bool DemuxerManager::IsManifestDemuxerURL() const {
+#if BUILDFLAG(ENABLE_HLS_DEMUXER)
+  return loaded_url_.path().ends_with(".m3u8");
+#else
+  return false;
+#endif
 }
 
 std::unique_ptr<Demuxer> DemuxerManager::CreateChunkDemuxer() {
@@ -451,7 +452,7 @@ DemuxerManager::CreateHlsDemuxer() {
           &DemuxerManager::SetTrackState, weak_factory_.GetWeakPtr())));
   auto engine = std::make_unique<HlsManifestDemuxerEngine>(
       client_->GetHlsDataSourceProvider(), media_task_runner_, std::move(m),
-      would_taint_origin, loaded_url_, media_log_.get());
+      would_taint_origin, security_origin_, loaded_url_, media_log_.get());
 
   raw_ptr<DataSourceInfo> datasource_info = engine.get();
   return std::make_tuple(

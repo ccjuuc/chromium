@@ -153,7 +153,7 @@ scoped_refptr<Extension> TestExtensionPrefs::AddExtension(
 }
 
 scoped_refptr<Extension> TestExtensionPrefs::AddApp(const std::string& name) {
-  base::Value::Dict dictionary;
+  base::DictValue dictionary;
   AddDefaultManifestKeys(name, dictionary);
 
   dictionary.SetByDottedPath(manifest_keys::kLaunchWebURL,
@@ -165,20 +165,20 @@ scoped_refptr<Extension> TestExtensionPrefs::AddApp(const std::string& name) {
 scoped_refptr<Extension> TestExtensionPrefs::AddExtensionWithLocation(
     const std::string& name,
     ManifestLocation location) {
-  base::Value::Dict dictionary;
+  base::DictValue dictionary;
   AddDefaultManifestKeys(name, dictionary);
   return AddExtensionWithManifest(dictionary, location);
 }
 
 scoped_refptr<Extension> TestExtensionPrefs::AddExtensionWithManifest(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     ManifestLocation location) {
   return AddExtensionWithManifestAndFlags(manifest, location,
                                           Extension::NO_FLAGS);
 }
 
 scoped_refptr<Extension> TestExtensionPrefs::AddExtensionWithManifestAndFlags(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     ManifestLocation location,
     int extra_flags) {
   const std::string* name = manifest.FindString(manifest_keys::kName);
@@ -216,7 +216,9 @@ void TestExtensionPrefs::AddExtension(const Extension* extension) {
 std::unique_ptr<PrefService> TestExtensionPrefs::CreateIncognitoPrefService()
     const {
   return pref_service_->CreateIncognitoPrefService(
-      new ExtensionPrefStore(extension_pref_value_map_.get(), true), {});
+      base::MakeRefCounted<ExtensionPrefStore>(extension_pref_value_map_.get(),
+                                               true),
+      {});
 }
 
 void TestExtensionPrefs::set_extensions_disabled(bool extensions_disabled) {
@@ -224,7 +226,7 @@ void TestExtensionPrefs::set_extensions_disabled(bool extensions_disabled) {
 }
 
 void TestExtensionPrefs::AddDefaultManifestKeys(const std::string& name,
-                                                base::Value::Dict& dict) {
+                                                base::DictValue& dict) {
   dict.Set(manifest_keys::kName, name);
   dict.Set(manifest_keys::kVersion, "0.1");
   dict.Set(manifest_keys::kManifestVersion, 2);

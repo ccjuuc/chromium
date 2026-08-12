@@ -30,6 +30,10 @@ class DataTypeControllerDelegate;
 class SyncService;
 }  // namespace syncer
 
+namespace sync_sessions {
+class SessionSyncService;
+}  // namespace sync_sessions
+
 namespace send_tab_to_self {
 class SendTabToSelfBridge;
 class SendTabToSelfModel;
@@ -43,12 +47,16 @@ class SendTabToSelfSyncService : public KeyedService,
       syncer::OnceDataTypeStoreFactory create_store_callback,
       history::HistoryService* history_service,
       PrefService* pref_service,
-      syncer::DeviceInfoTracker* device_info_tracker);
+      syncer::DeviceInfoTracker* device_info_tracker,
+      sync_sessions::SessionSyncService* session_sync_service);
 
   SendTabToSelfSyncService(const SendTabToSelfSyncService&) = delete;
   SendTabToSelfSyncService& operator=(const SendTabToSelfSyncService&) = delete;
 
   ~SendTabToSelfSyncService() override;
+
+  // KeyedService implementation.
+  void Shutdown() override;
 
   // Hooks the cyclic dependency.
   void OnSyncServiceInitialized(syncer::SyncService* sync_service);
@@ -71,7 +79,7 @@ class SendTabToSelfSyncService : public KeyedService,
   // SyncServiceObserver implementation.
   void OnSyncShutdown(syncer::SyncService* sync_service) override;
 
-  std::unique_ptr<SendTabToSelfBridge> const bridge_;
+  std::unique_ptr<SendTabToSelfBridge> bridge_;
   raw_ptr<PrefService> const pref_service_;
 
   // Cyclic dependency, initialized in OnSyncServiceInitialized(), reset in

@@ -7,13 +7,13 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/typed_macros.h"
 #include "media/capture/video/chromeos/camera_metadata_utils.h"
 #include "media/capture/video/chromeos/camera_trace_utils.h"
 #include "third_party/perfetto/include/perfetto/tracing/track.h"
+#include "ui/gfx/geometry/rect.h"
 
 namespace media {
 
@@ -109,7 +109,7 @@ Camera3AController::Camera3AController(
     if (available_modes.empty()) {
       return false;
     }
-    if (!base::Contains(
+    if (!std::ranges::contains(
             available_modes,
             base::checked_cast<uint8_t>(
                 cros::mojom::AndroidControlMode::ANDROID_CONTROL_MODE_AUTO))) {
@@ -168,8 +168,8 @@ Camera3AController::Camera3AController(
   // mode should be enough.
   const auto face_mode_simple = cros::mojom::AndroidStatisticsFaceDetectMode::
       ANDROID_STATISTICS_FACE_DETECT_MODE_SIMPLE;
-  if (base::Contains(face_modes,
-                     base::checked_cast<uint8_t>(face_mode_simple))) {
+  if (std::ranges::contains(face_modes,
+                            base::checked_cast<uint8_t>(face_mode_simple))) {
     SetRepeatingCaptureMetadata(
         cros::mojom::CameraMetadataTag::ANDROID_STATISTICS_FACE_DETECT_MODE,
         face_mode_simple);
@@ -178,7 +178,7 @@ Camera3AController::Camera3AController(
   auto request_keys = GetMetadataEntryAsSpan<int32_t>(
       *static_metadata_,
       cros::mojom::CameraMetadataTag::ANDROID_REQUEST_AVAILABLE_REQUEST_KEYS);
-  zero_shutter_lag_supported_ = base::Contains(
+  zero_shutter_lag_supported_ = std::ranges::contains(
       request_keys,
       static_cast<int32_t>(
           cros::mojom::CameraMetadataTag::ANDROID_CONTROL_ENABLE_ZSL));

@@ -26,19 +26,21 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.IntentUtils;
 import org.chromium.base.Token;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.SupportedProfileType;
+import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.multiwindow.MultiWindowTestUtils;
 import org.chromium.chrome.browser.price_tracking.PriceTrackingFeatures;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.MockTab;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.MultiTabMetadata;
+import org.chromium.chrome.browser.tabmodel.SupportedProfileType;
 import org.chromium.chrome.browser.tabmodel.TabGroupMetadata;
 import org.chromium.chrome.browser.tabwindow.TabWindowManager;
 import org.chromium.ui.dragdrop.DragDropMetricUtils.UrlIntentSource;
@@ -186,6 +188,7 @@ public class DragAndDropLauncherActivityUnitTest {
     @Config(qualifiers = "sw600dp")
     @Features.EnableFeatures({ChromeFeatureList.ANDROID_OPEN_INCOGNITO_AS_WINDOW})
     public void testGetTabOrGroupIntent_sourceActivityHasIncognitoProfileType() {
+        IncognitoUtils.setShouldOpenIncognitoAsWindowForTesting(true);
         Tab tab = MockTab.createAndInitialize(1, mProfile);
         tab.setIsPinned(true);
         ChromeDropDataAndroid dropData =
@@ -205,6 +208,7 @@ public class DragAndDropLauncherActivityUnitTest {
     @Test
     @Features.EnableFeatures({ChromeFeatureList.ANDROID_OPEN_INCOGNITO_AS_WINDOW})
     public void testGetTabOrGroupIntent_sourceActivityRegularProfileType() {
+        IncognitoUtils.setShouldOpenIncognitoAsWindowForTesting(true);
         Tab tab = MockTab.createAndInitialize(1, mProfile);
         tab.setIsPinned(true);
         ChromeDropDataAndroid dropData =
@@ -238,6 +242,7 @@ public class DragAndDropLauncherActivityUnitTest {
             dropData = createTabDropData(tab, /* allowDragToCreateNewInstance= */ true);
         }
         int sourceWindowId = 1;
+        IntentUtils.setForceIsTrustedIntentForTesting(true);
         Intent intent =
                 DragAndDropLauncherActivity.buildTabOrGroupIntent(
                         dropData, mActivity, sourceWindowId, destWindowId);

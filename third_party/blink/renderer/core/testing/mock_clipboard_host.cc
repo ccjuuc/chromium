@@ -4,7 +4,8 @@
 
 #include "third_party/blink/renderer/core/testing/mock_clipboard_host.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/numerics/byte_conversions.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/base/big_buffer.h"
@@ -27,7 +28,7 @@ void MockClipboardHost::Bind(
   receivers_.Add(this, std::move(receiver));
 }
 
-void MockClipboardHost::Reset() {
+void MockClipboardHost::ResetForTesting() {
   plain_text_ = g_empty_string;
   html_text_ = g_empty_string;
   svg_text_ = g_empty_string;
@@ -38,18 +39,25 @@ void MockClipboardHost::Reset() {
   custom_data_.clear();
   write_smart_paste_ = false;
   needs_reset_ = false;
+  forced_formats_for_testing_.clear();
+
+  // Reset call tracking
+  read_text_call_count_for_testing_ = 0;
+  read_html_call_count_for_testing_ = 0;
+  read_available_formats_call_count_for_testing_ = 0;
 }
 
-void MockClipboardHost::WriteRtf(const String& rtf_text) {
+void MockClipboardHost::WriteRtfForTesting(const String& rtf_text) {
   if (needs_reset_) {
-    Reset();
+    ResetForTesting();
   }
   rtf_text_ = rtf_text;
 }
 
-void MockClipboardHost::WriteFiles(mojom::blink::ClipboardFilesPtr files) {
+void MockClipboardHost::WriteFilesForTesting(
+    mojom::blink::ClipboardFilesPtr files) {
   if (needs_reset_) {
-    Reset();
+    ResetForTesting();
   }
   files_ = std::move(files);
 }
@@ -74,8 +82,13 @@ Vector<String> MockClipboardHost::ReadStandardFormatNames() {
   if (!png_.empty())
     types.push_back(ui::kMimeTypePng);
   for (auto& it : custom_data_) {
-    CHECK(!base::Contains(types, it.key));
+    CHECK(!std::ranges::contains(types, it.key));
     types.push_back(it.key);
+  }
+  for (const String& fmt : forced_formats_for_testing_) {
+    if (!std::ranges::contains(types, fmt)) {
+      types.push_back(fmt);
+    }
   }
   return types;
 }
@@ -111,11 +124,27 @@ void MockClipboardHost::IsFormatAvailable(
 
 void MockClipboardHost::ReadText(mojom::ClipboardBuffer clipboard_buffer,
                                  ReadTextCallback callback) {
+  ++read_text_call_count_for_testing_;
+  if (defer_read_text_callback_for_testing_) {
+    // Stash the reply callback so the test can verify that the renderer
+    // does not block on this IPC. The callback will be invoked later via
+    // RunDeferredReadTextCallbackForTesting().
+    deferred_read_text_callback_for_testing_ = std::move(callback);
+    return;
+  }
   std::move(callback).Run(plain_text_);
+}
+
+void MockClipboardHost::RunDeferredReadTextCallbackForTesting() {
+  CHECK(deferred_read_text_callback_for_testing_)
+      << "RunDeferredReadTextCallbackForTesting called with no pending "
+         "callback";
+  std::move(deferred_read_text_callback_for_testing_).Run(plain_text_);
 }
 
 void MockClipboardHost::ReadHtml(mojom::ClipboardBuffer clipboard_buffer,
                                  ReadHtmlCallback callback) {
+  ++read_html_call_count_for_testing_;
   std::move(callback).Run(html_text_, url_, 0, html_text_.length());
 }
 
@@ -131,6 +160,7 @@ void MockClipboardHost::ReadRtf(mojom::ClipboardBuffer clipboard_buffer,
 
 void MockClipboardHost::ReadPng(mojom::ClipboardBuffer clipboard_buffer,
                                 ReadPngCallback callback) {
+  last_read_png_buffer_ = clipboard_buffer;
   std::move(callback).Run(mojo_base::BigBuffer(png_));
 }
 
@@ -150,33 +180,33 @@ void MockClipboardHost::ReadDataTransferCustomData(
 
 void MockClipboardHost::WriteText(const String& text) {
   if (needs_reset_)
-    Reset();
+    ResetForTesting();
   plain_text_ = text;
 }
 
 void MockClipboardHost::WriteHtml(const String& markup, const KURL& url) {
   if (needs_reset_)
-    Reset();
+    ResetForTesting();
   html_text_ = markup;
   url_ = url;
 }
 
 void MockClipboardHost::WriteSvg(const String& markup) {
   if (needs_reset_)
-    Reset();
+    ResetForTesting();
   svg_text_ = markup;
 }
 
 void MockClipboardHost::WriteSmartPasteMarker() {
   if (needs_reset_)
-    Reset();
+    ResetForTesting();
   write_smart_paste_ = true;
 }
 
 void MockClipboardHost::WriteDataTransferCustomData(
     const HashMap<String, String>& data) {
   if (needs_reset_)
-    Reset();
+    ResetForTesting();
   for (auto& it : data)
     custom_data_.Set(it.key, it.value);
 }
@@ -185,7 +215,7 @@ void MockClipboardHost::WriteBookmark(const String& url, const String& title) {}
 
 void MockClipboardHost::WriteImage(const SkBitmap& bitmap) {
   if (needs_reset_)
-    Reset();
+    ResetForTesting();
   SkPixmap pixmap;
   bitmap.peekPixels(&pixmap);
   // Use encoding options that favor speed over size.
@@ -199,9 +229,15 @@ void MockClipboardHost::CommitWrite() {
 
 void MockClipboardHost::ReadAvailableCustomAndStandardFormats(
     ReadAvailableCustomAndStandardFormatsCallback callback) {
+  ++read_available_formats_call_count_for_testing_;
   Vector<String> format_names = ReadStandardFormatNames();
   for (const auto& item : unsanitized_custom_data_map_)
     format_names.emplace_back(item.key);
+  // TOCTOU race hook: lets tests mutate clipboard state inside the async
+  // gap. See crbug.com/498411773.
+  if (read_available_formats_hook_for_testing_) {
+    read_available_formats_hook_for_testing_.Run(this);
+  }
   std::move(callback).Run(std::move(format_names));
 }
 
@@ -220,7 +256,7 @@ void MockClipboardHost::WriteUnsanitizedCustomFormat(
     const String& format,
     mojo_base::BigBuffer data) {
   if (needs_reset_)
-    Reset();
+    ResetForTesting();
   // Simulate the underlying platform copying this data.
   Vector<uint8_t> data_copy(base::saturated_cast<wtf_size_t>(data.size()),
                             *data.data());
@@ -235,7 +271,7 @@ void MockClipboardHost::RegisterClipboardListener(
   clipboard_listener_.Bind(std::move(listener));
 }
 
-void MockClipboardHost::OnClipboardDataChanged() {
+void MockClipboardHost::OnClipboardDataChangedForTesting() {
   if (clipboard_listener_) {
     auto sequence_number_bytes = sequence_number_.value().AsBytes();
     clipboard_listener_->OnClipboardDataChanged(
@@ -251,7 +287,7 @@ void MockClipboardHost::WriteStringToFindPboard(const String& text) {}
 
 void MockClipboardHost::GetPlatformPermissionState(
     GetPlatformPermissionStateCallback callback) {
-  std::move(callback).Run(platform_permission_state_);
+  std::move(callback).Run(platform_permission_state_for_testing_);
 }
 #endif
 

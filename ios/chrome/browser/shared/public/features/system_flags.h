@@ -176,11 +176,21 @@ bool EnableAIPrototypingMenu();
 // there is no alternative URL specified.
 NSString* GetLensResultPanelGwsURL();
 
+// Gets GWS URL base used to generate Cobrowse URLs. Returns nil if there is no
+// alternative URL specified.
+NSString* GetCobrowseGwsURL();
+
 // Returns true if Composebox AIM eligibility should be disabled.
 bool ShouldForceDisableComposeboxAIM();
 
 // Returns true if Composebox Create Images eligibility should be disabled.
 bool ShouldForceDisableComposeboxCreateImages();
+
+// Returns true if Canvas eligibility should be disabled.
+bool ShouldForceDisableComposeboxCanvas();
+
+// Returns true if Deep Search eligibility should be disabled.
+bool ShouldForceDisableComposeboxDeepSearch();
 
 // Returns true if Composebox Pdf Upload eligibility should be disabled.
 bool ShouldForceDisableComposeboxPdfUpload();
@@ -188,6 +198,18 @@ bool ShouldForceDisableComposeboxPdfUpload();
 // Returns true if the Catalog items should be shown in Settings. Always true
 // in debug builds.
 bool ShouldShowCatalogItems();
+
+// Returns true if multi-profile forced migration should be considered done.
+bool ShouldForceMultiProfileForcedMigrationDone();
+
+// Returns true if Backend Promo debug tools should be shown in Settings.
+bool ShouldShowBackendPromoDebugTools();
+
+// Returns the selected push notification type to be force triggered.
+int GetForcedPushNotificationType();
+
+// Returns the delay in seconds before triggering the forced push notification.
+int GetForcedPushNotificationDelay();
 
 }  // namespace experimental_flags
 

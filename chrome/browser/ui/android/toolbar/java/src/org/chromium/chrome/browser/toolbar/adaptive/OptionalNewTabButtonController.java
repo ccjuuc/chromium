@@ -6,15 +6,13 @@ package org.chromium.chrome.browser.toolbar.adaptive;
 
 import android.content.Context;
 import android.content.res.Configuration;
-import android.content.res.Resources;
 import android.graphics.drawable.Drawable;
 import android.view.View;
 
-import androidx.annotation.VisibleForTesting;
-
 import org.chromium.base.Callback;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.metrics.RecordUserAction;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -23,10 +21,10 @@ import org.chromium.chrome.browser.lifecycle.ConfigurationChangedObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
 import org.chromium.chrome.browser.tabmodel.TabCreatorUtil;
-import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabstrip.StripVisibilityState;
 import org.chromium.chrome.browser.toolbar.R;
 import org.chromium.chrome.browser.toolbar.optional_button.BaseButtonDataProvider;
+import org.chromium.chrome.browser.toolbar.optional_button.ButtonData.ButtonSpec;
 import org.chromium.chrome.browser.user_education.IphCommandBuilder;
 import org.chromium.components.browser_ui.widget.highlight.ViewHighlighter.HighlightParams;
 import org.chromium.components.browser_ui.widget.highlight.ViewHighlighter.HighlightShape;
@@ -45,50 +43,19 @@ import java.util.function.Supplier;
 @NullMarked
 public class OptionalNewTabButtonController extends BaseButtonDataProvider
         implements ConfigurationChangedObserver {
-    /**
-     * Set of methods used to interact with dependencies which may require native libraries to
-     * function. Robolectric tests can use shadows to inject dependencies in tests.
-     */
-    @VisibleForTesting
-    /* package */ static class Delegate {
-        private final Supplier<@Nullable TabCreatorManager> mTabCreatorManagerSupplier;
-        private final Supplier<@Nullable Tab> mActiveTabSupplier;
-
-        public Delegate(
-                Supplier<@Nullable TabCreatorManager> tabCreatorManagerSupplier,
-                Supplier<@Nullable Tab> activeTabSupplier) {
-            mTabCreatorManagerSupplier = tabCreatorManagerSupplier;
-            mActiveTabSupplier = activeTabSupplier;
-        }
-
-        /** Returns a {@link TabCreatorManager} used for creating the new tab. */
-        @Nullable TabCreatorManager getTabCreatorManager() {
-            return mTabCreatorManagerSupplier.get();
-        }
-
-        /**
-         * Returns a {@link TabModelSelector} used for obtaining the current tab and the incognito
-         * state.
-         *
-         * <p>Not using {@link IncognitoStateProvider} because ISP is created in the {@link
-         * ToolbarManager} and not in {@link RootUiCoordinator}.
-         *
-         * <p>TODO(crbug.com/40753461): Make IncognitoStateProvider available in RootUiCooridnator.
-         */
-        Supplier<@Nullable Tab> getActiveTabSupplier() {
-            return mActiveTabSupplier;
-        }
-    }
+    private static @Nullable TabCreatorManager sTabCreatorManagerForTesting;
+    private static @Nullable Supplier<@Nullable Tab> sActiveTabSupplierForTesting;
 
     /** Context used for fetching resources and window size. */
     private final Context mContext;
 
-    private final Delegate mDelegate;
+    private final Supplier<@Nullable TabCreatorManager> mTabCreatorManagerSupplier;
     private final Supplier<@Nullable Tracker> mTrackerSupplier;
 
     private boolean mIsTablet;
     private final ActivityLifecycleDispatcher mActivityLifecycleDispatcher;
-    private final ObservableSupplier<@StripVisibilityState Integer> mTabStripVisibilitySupplier;
+    private final MonotonicObservableSupplier<@StripVisibilityState Integer>
+            mTabStripVisibilitySupplier;
     private final Callback<Integer> mOnTabStripVisibilityStateChanged =
             this::onTabStripVisibilityStateChanged;
 
@@ -111,21 +78,21 @@ public class OptionalNewTabButtonController extends BaseButtonDataProvider
             Supplier<@Nullable TabCreatorManager> tabCreatorManagerSupplier,
             Supplier<@Nullable Tab> activeTabSupplier,
             Supplier<@Nullable Tracker> trackerSupplier,
-            ObservableSupplier<@StripVisibilityState Integer> tabStripVisibilitySupplier) {
+            MonotonicObservableSupplier<@StripVisibilityState Integer> tabStripVisibilitySupplier) {
         super(
                 activeTabSupplier,
                 /* modalDialogManager= */ null,
-                buttonDrawable,
-                context.getString(R.string.button_new_tab),
-                /* actionChipLabelResId= */ Resources.ID_NULL,
-                /* supportsTinting= */ true,
-                /* iphCommandBuilder= */ null,
-                AdaptiveToolbarButtonVariant.NEW_TAB,
-                /* tooltipTextResId= */ R.string.new_tab_title);
+                new ButtonSpec.Builder(
+                                buttonDrawable,
+                                context.getString(R.string.button_new_tab),
+                                /* supportsTinting= */ true)
+                        .setButtonVariant(AdaptiveToolbarButtonVariant.NEW_TAB)
+                        .setHoverTooltipTextId(R.string.new_tab_title)
+                        .build());
         setShouldShowOnIncognitoTabs(true);
 
         mContext = context;
-        mDelegate = new Delegate(tabCreatorManagerSupplier, activeTabSupplier);
+        mTabCreatorManagerSupplier = tabCreatorManagerSupplier;
         mTrackerSupplier = trackerSupplier;
         mActivityLifecycleDispatcher = activityLifecycleDispatcher;
         mActivityLifecycleDispatcher.register(this);
@@ -133,19 +100,31 @@ public class OptionalNewTabButtonController extends BaseButtonDataProvider
         mIsTablet = DeviceFormFactor.isNonMultiDisplayContextOnTablet(mContext);
         mTabStripVisibilitySupplier = tabStripVisibilitySupplier;
         if (ChromeFeatureList.sToolbarTabletResizeRefactor.isEnabled()) {
-            mTabStripVisibilitySupplier.addObserver(mOnTabStripVisibilityStateChanged);
+            mTabStripVisibilitySupplier.addSyncObserverAndPostIfNonNull(
+                    mOnTabStripVisibilityStateChanged);
         }
+    }
+
+    public static void setTabCreatorManagerForTesting(
+            @Nullable TabCreatorManager tabCreatorManager) {
+        sTabCreatorManagerForTesting = tabCreatorManager;
+        ResettersForTesting.register(() -> sTabCreatorManagerForTesting = null);
+    }
+
+    public static void setActiveTabSupplierForTesting(@Nullable Supplier<@Nullable Tab> supplier) {
+        sActiveTabSupplierForTesting = supplier;
+        ResettersForTesting.register(() -> sActiveTabSupplierForTesting = null);
     }
 
     @Override
     public void onClick(View view) {
-        Supplier<@Nullable Tab> activeTabSupplier = mDelegate.getActiveTabSupplier();
-        if (activeTabSupplier == null || activeTabSupplier.get() == null) return;
+        Tab activeTab = getActiveTab();
+        TabCreatorManager tabCreatorManager = getTabCreatorManager();
+        if (activeTab == null || tabCreatorManager == null) {
+            return;
+        }
 
-        TabCreatorManager tabCreatorManager = mDelegate.getTabCreatorManager();
-        if (tabCreatorManager == null) return;
-
-        boolean isIncognito = activeTabSupplier.get().isIncognito();
+        boolean isIncognito = activeTab.isIncognito();
         RecordUserAction.record("MobileTopToolbarOptionalButtonNewTab");
         TabCreatorUtil.launchNtp(tabCreatorManager.getTabCreator(isIncognito));
 
@@ -153,6 +132,20 @@ public class OptionalNewTabButtonController extends BaseButtonDataProvider
         if (tracker != null) {
             tracker.notifyEvent(EventConstants.ADAPTIVE_TOOLBAR_CUSTOMIZATION_NEW_TAB_OPENED);
         }
+    }
+
+    private @Nullable TabCreatorManager getTabCreatorManager() {
+        if (sTabCreatorManagerForTesting != null) {
+            return sTabCreatorManagerForTesting;
+        }
+        return mTabCreatorManagerSupplier.get();
+    }
+
+    private @Nullable Tab getActiveTab() {
+        if (sActiveTabSupplierForTesting != null) {
+            return sActiveTabSupplierForTesting.get();
+        }
+        return mActiveTabSupplier.get();
     }
 
     private void onTabStripVisibilityStateChanged(@StripVisibilityState int tabStripVisibility) {
@@ -217,9 +210,5 @@ public class OptionalNewTabButtonController extends BaseButtonDataProvider
             mTabStripVisibilitySupplier.removeObserver(mOnTabStripVisibilityStateChanged);
         }
         super.destroy();
-    }
-
-    void setIsTabletForTesting(boolean isTablet) {
-        mIsTablet = isTablet;
     }
 }

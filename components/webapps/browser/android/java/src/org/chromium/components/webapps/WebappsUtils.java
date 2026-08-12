@@ -4,9 +4,9 @@
 
 package org.chromium.components.webapps;
 
-import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ShortcutInfo;
@@ -21,6 +21,7 @@ import androidx.annotation.WorkerThread;
 import org.jni_zero.CalledByNative;
 
 import org.chromium.base.AconfigFlaggedApiDelegate;
+import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
 import org.chromium.base.StrictModeContext;
@@ -48,6 +49,8 @@ public class WebappsUtils {
     // Synchronization locks for thread-safe access to variables
     // sCheckedIfRequestPinShortcutSupported and sIsRequestPinShortcutSupported.
     private static final Object sLock = new Object();
+
+    private static @Nullable Boolean sIsTwaInstallerPackage;
 
     /**
      * Creates an intent that will add a shortcut to the home screen.
@@ -81,9 +84,47 @@ public class WebappsUtils {
             return;
         }
 
+        String targetPackage = getShortcutReceiverPackageName();
+        if (targetPackage == null) {
+            Log.w(TAG, "ShortcutManager is not supported and no package found to target.");
+            return;
+        }
         Intent intent = createAddToHomeIntent(title, icon, shortcutIntent);
+        intent.setPackage(targetPackage);
         ContextUtils.getApplicationContext().sendBroadcast(intent);
         showAddedToHomescreenToast(title);
+    }
+
+    private static @Nullable String getShortcutReceiverPackageName() {
+        PackageManager pm = ContextUtils.getApplicationContext().getPackageManager();
+        String defaultLauncher = getDefaultLauncherPackageName();
+        if (defaultLauncher != null) {
+            Intent intent = new Intent(INSTALL_SHORTCUT);
+            intent.setPackage(defaultLauncher);
+            List<ResolveInfo> receivers = pm.queryBroadcastReceivers(intent, 0);
+            if (!receivers.isEmpty()) {
+                return defaultLauncher;
+            }
+        }
+
+        // On some devices, the receiver for the INSTALL_SHORTCUT broadcast resides in a system
+        // package that is different from the default launcher package. To support shortcut
+        // installation on these devices while maintaining security, we query all packages for the
+        // receiver and target the first trusted system package.
+        Intent i = new Intent(INSTALL_SHORTCUT);
+        List<ResolveInfo> receivers = pm.queryBroadcastReceivers(i, 0);
+        for (ResolveInfo resolveInfo : receivers) {
+            if (resolveInfo.activityInfo == null
+                    || resolveInfo.activityInfo.applicationInfo == null) {
+                continue;
+            }
+            int flags = resolveInfo.activityInfo.applicationInfo.flags;
+            if ((flags & (ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP))
+                    != 0) {
+                return resolveInfo.activityInfo.packageName;
+            }
+        }
+        return null;
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
@@ -152,14 +193,27 @@ public class WebappsUtils {
      *
      * @return if a shortcut can be added to the home screen under the current profile.
      */
-    @SuppressLint("WrongConstant")
     public static boolean isAddToHomeIntentSupported() {
         if (isRequestPinShortcutSupported()) return true;
+        return getShortcutReceiverPackageName() != null;
+    }
+
+    private static @Nullable String getDefaultLauncherPackageName() {
+        Intent intent = new Intent(Intent.ACTION_MAIN);
+        intent.addCategory(Intent.CATEGORY_HOME);
         PackageManager pm = ContextUtils.getApplicationContext().getPackageManager();
-        Intent i = new Intent(INSTALL_SHORTCUT);
-        List<ResolveInfo> receivers =
-                pm.queryBroadcastReceivers(i, PackageManager.GET_INTENT_FILTERS);
-        return !receivers.isEmpty();
+        ResolveInfo resolveInfo = pm.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY);
+        if (resolveInfo == null || resolveInfo.activityInfo == null) {
+            return null;
+        }
+        String packageName = resolveInfo.activityInfo.packageName;
+        // If the resolveInfo is the system resolver (e.g., if there are multiple launchers
+        // and the user hasn't selected a default), we treat it as no default launcher.
+        if ("android".equals(packageName)
+                || "com.android.internal.app.ResolverActivity".equals(packageName)) {
+            return null;
+        }
+        return packageName;
     }
 
     /** Prepares whether Android O's ShortcutManager.requestPinShortcut() is supported. */
@@ -222,5 +276,29 @@ public class WebappsUtils {
             return false;
         }
         return aconfigFlaggedApiDelegate.isWebAppServiceEnabled();
+    }
+
+    public static void isTwaInstallerPackage(String title, Callback<Boolean> callback) {
+        if (sIsTwaInstallerPackage != null) {
+            callback.onResult(sIsTwaInstallerPackage);
+            return;
+        }
+        var aconfigFlaggedApiDelegate = AconfigFlaggedApiDelegate.getInstance();
+        if (aconfigFlaggedApiDelegate == null) {
+            Log.e(TAG, "Failed to get AconfigFlaggedApiDelegate in isWebAppServiceEnabled()");
+            callback.onResult(false);
+            return;
+        }
+
+        aconfigFlaggedApiDelegate.isInstalled(title).then(callback);
+    }
+
+    /**
+     * Override whether TwaInstallerPackage is installed for testing.
+     *
+     * @param installed Whether TwaInstallerPackage is installed.
+     */
+    public static void setIsTwaInstallerPackageForTesting(Boolean installed) {
+        sIsTwaInstallerPackage = installed;
     }
 }

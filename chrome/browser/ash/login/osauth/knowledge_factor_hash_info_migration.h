@@ -8,12 +8,14 @@
 #include <memory>
 #include <optional>
 
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/login/osauth/auth_factor_migration.h"
-#include "chrome/browser/ash/login/quick_unlock/pin_salt_storage.h"
 #include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
 #include "chromeos/ash/components/login/auth/auth_factor_editor.h"
 #include "chromeos/ash/components/login/auth/public/auth_callbacks.h"
+
+class PrefService;
 
 namespace ash {
 
@@ -23,13 +25,15 @@ class UserContext;
 // have hash information inside the metadata, and if not, update their metadata.
 class KnowledgeFactorHashInfoMigration : public AuthFactorMigration {
  public:
-  explicit KnowledgeFactorHashInfoMigration(UserDataAuthClient* user_data_auth);
-  ~KnowledgeFactorHashInfoMigration() override;
+  // `local_state` must be non-null and must outlive `this`.
+  KnowledgeFactorHashInfoMigration(PrefService* local_state,
+                                   UserDataAuthClient* user_data_auth);
 
   KnowledgeFactorHashInfoMigration(const KnowledgeFactorHashInfoMigration&) =
       delete;
   KnowledgeFactorHashInfoMigration& operator=(
       const KnowledgeFactorHashInfoMigration&) = delete;
+  ~KnowledgeFactorHashInfoMigration() override;
 
   // Backfills the hash information for knowledge factors (PIN and password).
   void Run(std::unique_ptr<UserContext> context,
@@ -60,9 +64,10 @@ class KnowledgeFactorHashInfoMigration : public AuthFactorMigration {
                                   std::unique_ptr<UserContext> context,
                                   std::optional<AuthenticationError> error);
 
+  const raw_ref<PrefService> local_state_;
+
   bool was_skipped_ = false;
   std::unique_ptr<AuthFactorEditor> editor_;
-  std::unique_ptr<quick_unlock::PinSaltStorage> pin_salt_storage_;
   // Must be the last member.
   base::WeakPtrFactory<KnowledgeFactorHashInfoMigration> weak_factory_{this};
 };

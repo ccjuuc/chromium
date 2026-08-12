@@ -6,6 +6,7 @@
 #define BASE_MEMORY_COORDINATOR_ASYNC_MEMORY_CONSUMER_REGISTRATION_H_
 
 #include <memory>
+#include <optional>
 #include <string_view>
 
 #include "base/base_export.h"
@@ -24,15 +25,12 @@ class SingleThreadTaskRunner;
 class BASE_EXPORT AsyncMemoryConsumerRegistration {
  public:
   using CheckUnregister = MemoryConsumerRegistration::CheckUnregister;
-  using CheckRegistryExists = MemoryConsumerRegistration::CheckRegistryExists;
 
   AsyncMemoryConsumerRegistration(
-      std::string_view consumer_id,
-      MemoryConsumerTraits traits,
+      std::string_view consumer_name,
+      std::optional<MemoryConsumerTraits> traits,
       MemoryConsumer* consumer,
-      CheckUnregister check_unregister = CheckUnregister::kEnabled,
-      CheckRegistryExists check_registry_exists =
-          CheckRegistryExists::kEnabled);
+      CheckUnregister check_unregister = CheckUnregister::kEnabled);
   ~AsyncMemoryConsumerRegistration();
 
  private:

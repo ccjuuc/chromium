@@ -27,8 +27,9 @@ namespace base::internal {
 namespace {
 
 bool g_job_priority_boosting = false;
+bool g_inherit_task_importance_by_default = false;
 
-BASE_FEATURE(kJobPriorityBoosting, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kJobPriorityBoosting, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Capped to allow assigning task_ids from a bitfield.
 constexpr size_t kMaxWorkersPerJob = 32;
@@ -93,14 +94,20 @@ bool JobTaskSource::JoinFlag::ShouldWorkerSignal() {
 // static
 void JobTaskSource::InitializeFeatures() {
   g_job_priority_boosting = FeatureList::IsEnabled(kJobPriorityBoosting);
+  g_inherit_task_importance_by_default =
+      FeatureList::IsEnabled(kInheritTaskImportanceByDefault);
 }
 
 JobTaskSource::JobTaskSource(const Location& from_here,
                              const TaskTraits& traits,
+                             ThreadType originating_thread_type,
                              RepeatingCallback<void(JobDelegate*)> worker_task,
                              MaxConcurrencyCallback max_concurrency_callback,
                              PooledTaskRunnerDelegate* delegate)
-    : TaskSource(traits, TaskSourceExecutionMode::kJob),
+    : TaskSource(traits,
+                 TaskSourceExecutionMode::kJob,
+                 originating_thread_type,
+                 g_inherit_task_importance_by_default),
       max_concurrency_callback_(std::move(max_concurrency_callback)),
       worker_task_(std::move(worker_task)),
       primary_task_(base::BindRepeating(
@@ -152,7 +159,8 @@ bool JobTaskSource::WillJoin() {
     return true;
   }
   for (auto& [_, worker_priority] : workers_priority_) {
-    worker_priority.BoostPriority(PlatformThread::GetCurrentThreadType());
+    worker_priority.BoostPriority(std::min(
+        PlatformThread::GetCurrentThreadType(), ThreadType::kAudioProcessing));
   }
   return WaitForParticipationOpportunity();
 }
@@ -425,7 +433,7 @@ bool JobTaskSource::OnBecomeReady() {
 }
 
 TaskSourceSortKey JobTaskSource::GetSortKey() const {
-  return TaskSourceSortKey(priority_racy(), ready_time_,
+  return TaskSourceSortKey(thread_type_racy(), ready_time_,
                            TS_UNCHECKED_READ(state_).Load().worker_count());
 }
 

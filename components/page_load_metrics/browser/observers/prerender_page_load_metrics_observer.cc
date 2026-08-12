@@ -66,11 +66,6 @@ const char kHistogramPrerenderCumulativeShiftScore[] =
 const char kHistogramPrerenderCumulativeShiftScoreMainFrame[] =
     "PageLoad.Clients.Prerender.LayoutInstability.CumulativeShiftScore."
     "MainFrame";
-const char
-    kHistogramPrerenderMaxCumulativeShiftScoreSessionWindowGap1000msMax5000ms2
-        [] = "PageLoad.Clients.Prerender.LayoutInstability."
-             "MaxCumulativeShiftScore.SessionWindow."
-             "Gap1000ms.Max5000ms2";
 
 // Responsiveness metrics.
 const char kHistogramPrerenderNumInteractions[] =
@@ -141,8 +136,7 @@ void PrerenderPageLoadMetricsObserver::DidActivatePrerenderedPage(
   // be lost after NavigationRequest is destroyed.
   DCHECK(!trigger_type_.has_value());
   trigger_type_ = navigation_handle->GetPrerenderTriggerType();
-  embedder_histogram_suffix_ =
-      navigation_handle->GetPrerenderEmbedderHistogramSuffix();
+  histogram_suffix_ = navigation_handle->GetPrerenderHistogramSuffix();
 
   const net::HttpResponseHeaders* response_headers =
       navigation_handle->GetResponseHeaders();
@@ -168,7 +162,7 @@ void PrerenderPageLoadMetricsObserver::DidActivatePrerenderedPage(
   }
 
   auto prerender_trigger_type =
-      page_load_metrics::NavigationHandleUserData::InitiatorLocation::kOther;
+      page_load_metrics::NavigationHandleUserData::kInitiatorLocationOther;
   auto* navigation_userdata =
       page_load_metrics::NavigationHandleUserData::GetForNavigationHandle(
           *navigation_handle);
@@ -222,6 +216,91 @@ void PrerenderPageLoadMetricsObserver::OnFirstContentfulPaintInPage(
   EmitPaintingMetricsTraceEvent(
       PrerenderPageLoadMetricsObserver::PaintingTimeType::kFirstContentfulPaint,
       timing.paint_timing->first_contentful_paint.value());
+}
+
+void PrerenderPageLoadMetricsObserver::
+    RecordLargestContentfulPaintBeforeSoftNavigation() {
+  CHECK(GetDelegate().WasPrerenderedThenActivatedInForeground());
+  CHECK(navigation_to_activation_time_.has_value());
+  const page_load_metrics::ContentfulPaintTimingInfo& lcp =
+      GetDelegate()
+          .GetLargestContentfulPaintHandler()
+          .MergeMainFrameAndSubframes();
+  if (lcp.ContainsValidTime() &&
+      WasActivatedInForegroundOptionalEventInForeground(lcp.Time(),
+                                                        GetDelegate())) {
+    base::TimeDelta activation_to_lcp =
+        lcp.Time().value() - navigation_to_activation_time_.value();
+    ukm::builders::PrerenderPageLoad(GetDelegate().GetPageUkmSourceId())
+        .SetTimingBeforeSoftNavigation_ActivationToLargestContentfulPaint(
+            activation_to_lcp.InMilliseconds())
+        .Record(ukm::UkmRecorder::Get());
+  }
+}
+
+void PrerenderPageLoadMetricsObserver::
+    RecordResponsivenessMetricsBeforeSoftNavigation() {
+  CHECK(GetDelegate().WasPrerenderedThenActivatedInForeground());
+  CHECK(navigation_to_activation_time_.has_value());
+
+  const page_load_metrics::InteractionToNextPaintCalculator& calculator =
+      GetDelegate().GetSoftNavigationIntervalInteractionToNextPaintCalculator();
+  std::optional<
+      page_load_metrics::InteractionToNextPaintCalculator::InteractionData>
+      inp_data = calculator.ApproximateHighPercentile();
+  if (!inp_data.has_value()) {
+    return;
+  }
+  const page_load_metrics::mojom::EventTiming& inp = inp_data->max_event;
+  ukm::builders::PrerenderPageLoad builder(GetDelegate().GetPageUkmSourceId());
+  builder
+      .SetInteractiveTimingBeforeSoftNavigation_UserInteractionLatency_HighPercentile2_MaxEventDuration(
+          inp.duration.InMilliseconds());
+  builder.SetInteractiveTimingBeforeSoftNavigation_NumInteractions(
+      ukm::GetExponentialBucketMinForCounts1000(
+          calculator.num_user_interactions()));
+  builder.Record(ukm::UkmRecorder::Get());
+}
+
+void PrerenderPageLoadMetricsObserver::RecordLayoutShiftBeforeSoftNavigation() {
+  CHECK(GetDelegate().WasPrerenderedThenActivatedInForeground());
+  CHECK(navigation_to_activation_time_.has_value());
+
+  const page_load_metrics::NormalizedCLSData& normalized_cls_data =
+      GetDelegate().GetSoftNavigationIntervalNormalizedCLSData();
+  if (normalized_cls_data.data_tainted) {
+    return;
+  }
+  const float max_cls =
+      normalized_cls_data.session_windows_gap1000ms_max5000ms_max_cls;
+  ukm::builders::PrerenderPageLoad builder(GetDelegate().GetPageUkmSourceId());
+  builder
+      .SetLayoutInstabilityBeforeSoftNavigation_MaxCumulativeShiftScore_MainFrame_SessionWindow_Gap1000ms_Max5000ms(
+          page_load_metrics::LayoutShiftUkmValue(max_cls));
+  builder.Record(ukm::UkmRecorder::Get());
+}
+
+void PrerenderPageLoadMetricsObserver::OnSoftNavigation() {
+  CHECK_GE(soft_navigation_count_, 0);
+  soft_navigation_count_++;
+
+  // When the 1st soft navigation comes in, we record the CWVs before then, so
+  // that we can blend them. We also require:
+  //
+  // * Must have been prerendered and activated in the foreground.
+  //
+  // * activation time must have been captured; note:
+  //   navigation_to_activation_time is the same value as is
+  //   |main_frame_timing.activation_start| used elsewhere in this file.
+  if (soft_navigation_count_ == 1 &&
+      GetDelegate().GetPrerenderingState() ==
+          page_load_metrics::PrerenderingState::kActivated &&
+      GetDelegate().WasPrerenderedThenActivatedInForeground() &&
+      navigation_to_activation_time_.has_value()) {
+    RecordLargestContentfulPaintBeforeSoftNavigation();
+    RecordResponsivenessMetricsBeforeSoftNavigation();
+    RecordLayoutShiftBeforeSoftNavigation();
+  }
 }
 
 void PrerenderPageLoadMetricsObserver::OnFirstInputInPage(
@@ -361,6 +440,11 @@ void PrerenderPageLoadMetricsObserver::RecordSessionEndHistograms(
       page_load_metrics::PrerenderingState::kActivated) {
     RecordLayoutShiftScoreMetrics(main_frame_timing);
     RecordNormalizedResponsivenessMetrics();
+
+    ukm::builders::PrerenderPageLoad builder(
+        GetDelegate().GetPageUkmSourceId());
+    builder.SetSoftNavigationCount(soft_navigation_count_);
+    builder.Record(ukm::UkmRecorder::Get());
   }
 }
 
@@ -386,11 +470,6 @@ void PrerenderPageLoadMetricsObserver::RecordLayoutShiftScoreMetrics(
     return;
   }
 
-  page_load_metrics::UmaMaxCumulativeShiftScoreHistogram10000x(
-      AppendSuffix(
-          internal::
-              kHistogramPrerenderMaxCumulativeShiftScoreSessionWindowGap1000msMax5000ms2),
-      normalized_cls_data);
   const float max_cls =
       normalized_cls_data.session_windows_gap1000ms_max5000ms_max_cls;
   ukm::builders::PrerenderPageLoad(GetDelegate().GetPageUkmSourceId())
@@ -402,45 +481,39 @@ void PrerenderPageLoadMetricsObserver::RecordLayoutShiftScoreMetrics(
 void PrerenderPageLoadMetricsObserver::RecordNormalizedResponsivenessMetrics() {
   DCHECK(GetDelegate().WasPrerenderedThenActivatedInForeground());
 
-  const page_load_metrics::ResponsivenessMetricsNormalization&
-      responsiveness_metrics_normalization =
-          GetDelegate().GetResponsivenessMetricsNormalization();
-  if (!responsiveness_metrics_normalization.num_user_interactions()) {
+  const page_load_metrics::InteractionToNextPaintCalculator& inp_calculator =
+      GetDelegate().GetInteractionToNextPaintCalculator();
+  if (!inp_calculator.num_user_interactions()) {
     return;
   }
 
   base::TimeDelta high_percentile2_max_event_duration =
-      responsiveness_metrics_normalization.ApproximateHighPercentile()
-          .value()
-          .interaction_latency;
+      inp_calculator.ApproximateHighPercentile().value().max_event.duration;
 
   UmaHistogramCustomTimes(
       internal::kHistogramPrerenderWorstUserInteractionLatencyMaxEventDuration,
-      responsiveness_metrics_normalization.worst_latency()
-          .value()
-          .interaction_latency,
+      inp_calculator.worst_latency().value().max_event.duration,
       base::Milliseconds(1), base::Seconds(60), 50);
   UmaHistogramCustomTimes(
       internal::
           kHistogramPrerenderUserInteractionLatencyHighPercentile2MaxEventDuration,
       high_percentile2_max_event_duration, base::Milliseconds(1),
       base::Seconds(60), 50);
-  base::UmaHistogramCounts1000(
-      internal::kHistogramPrerenderNumInteractions,
-      responsiveness_metrics_normalization.num_user_interactions());
+  base::UmaHistogramCounts1000(internal::kHistogramPrerenderNumInteractions,
+                               inp_calculator.num_user_interactions());
 
   ukm::builders::PrerenderPageLoad builder(GetDelegate().GetPageUkmSourceId());
   builder.SetInteractiveTiming_WorstUserInteractionLatency_MaxEventDuration(
-      responsiveness_metrics_normalization.worst_latency()
+      inp_calculator.worst_latency()
           .value()
-          .interaction_latency.InMilliseconds());
+          .max_event.duration.InMilliseconds());
 
   builder
       .SetInteractiveTiming_UserInteractionLatency_HighPercentile2_MaxEventDuration(
           high_percentile2_max_event_duration.InMilliseconds());
   builder.SetInteractiveTiming_NumInteractions(
       ukm::GetExponentialBucketMinForCounts1000(
-          responsiveness_metrics_normalization.num_user_interactions()));
+          inp_calculator.num_user_interactions()));
 
   builder.Record(ukm::UkmRecorder::Get());
 }
@@ -493,18 +566,18 @@ std::string PrerenderPageLoadMetricsObserver::AppendSuffix(
   DCHECK(trigger_type_.has_value());
   switch (trigger_type_.value()) {
     case content::PreloadingTriggerType::kSpeculationRule:
-      DCHECK(embedder_histogram_suffix_.empty());
+      DCHECK(histogram_suffix_.empty());
       return histogram_name + ".SpeculationRule";
     case content::PreloadingTriggerType::kSpeculationRuleFromIsolatedWorld:
-      DCHECK(embedder_histogram_suffix_.empty());
+      DCHECK(histogram_suffix_.empty());
       return histogram_name + ".SpeculationRuleFromIsolatedWorld";
     case content::PreloadingTriggerType::
         kSpeculationRuleFromAutoSpeculationRules:
-      DCHECK(embedder_histogram_suffix_.empty());
+      DCHECK(histogram_suffix_.empty());
       return histogram_name + ".SpeculationRuleFromAutoSpeculationRules";
     case content::PreloadingTriggerType::kEmbedder:
-      DCHECK(!embedder_histogram_suffix_.empty());
-      return histogram_name + ".Embedder_" + embedder_histogram_suffix_;
+      DCHECK(!histogram_suffix_.empty());
+      return histogram_name + ".Embedder_" + histogram_suffix_;
   }
   NOTREACHED();
 }

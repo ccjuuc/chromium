@@ -24,7 +24,8 @@ import org.junit.runner.RunWith;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
-import org.chromium.chrome.test.R;
+import org.chromium.base.test.util.DisabledTest;
+import org.chromium.chrome.R;
 import org.chromium.components.browser_ui.settings.BlankUiTestActivitySettingsTestRule;
 import org.chromium.components.browser_ui.settings.PlaceholderSettingsForTest;
 import org.chromium.components.browser_ui.site_settings.TwoActionSwitchPreference;
@@ -32,6 +33,7 @@ import org.chromium.components.browser_ui.site_settings.TwoActionSwitchPreferenc
 /** Tests for {@link TwoActionSwitchPreference}. */
 @RunWith(BaseJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
+@DisabledTest(message = "b/524422264")
 public class TwoActionSwitchPreferenceTest {
     private static final String TITLE = "Preference Title";
     private static final String SUMMARY = "Preference Summary.";

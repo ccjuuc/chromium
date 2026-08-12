@@ -4,8 +4,6 @@
 
 package org.chromium.chrome.browser.contextualsearch;
 
-import static org.chromium.base.test.util.Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE;
-
 import android.view.KeyEvent;
 
 import androidx.test.filters.SmallTest;
@@ -29,9 +27,9 @@ import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanel.PanelState;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
+import org.chromium.chrome.browser.overlay_panel.PanelState;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
@@ -43,8 +41,8 @@ import org.chromium.ui.base.DeviceFormFactor;
 // NOTE: Disable online detection so we we'll default to online on test bots with no network.
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @EnableFeatures(ChromeFeatureList.CONTEXTUAL_SEARCH_DISABLE_ONLINE_DETECTION)
-@Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
 @Batch(Batch.PER_CLASS)
+@DisableIf.Device(DeviceFormFactor.DESKTOP) // Explicitly not supported.
 public class ContextualSearchSystemTest extends ContextualSearchInstrumentationBase {
     @Override
     @Before
@@ -93,7 +91,7 @@ public class ContextualSearchSystemTest extends ContextualSearchInstrumentationB
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
-    @DisabledTest(message = "Please see crbug.com/832539 for all the details.")
+    @DisabledTest(message = "Please see crbug.com/40571592 for all the details.")
     public void testContextualSearchDismissedOnForegroundTabCrash() throws Exception {
         triggerResolve(SEARCH_NODE);
         Assert.assertEquals(SEARCH_NODE_TERM, getSelectedText());
@@ -119,9 +117,9 @@ public class ContextualSearchSystemTest extends ContextualSearchInstrumentationB
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
-    @DisableIf.Device(DeviceFormFactor.ONLY_TABLET) // See https://crbug.com/382637778
-    // Revived 6/2022 based on reviver: https://crbug.com/1333277
-    // Previously disabled: https://crbug.com/1192285, https://crbug.com/1192561
+    @DisableIf.Device(DeviceFormFactor.TABLET_OR_DESKTOP) // See https://crbug.com/382637778
+    // Revived 6/2022 based on reviver: https://crbug.com/40845543
+    // Previously disabled: https://crbug.com/40757167, https://crbug.com/40757310
     public void testContextualSearchNotDismissedOnBackgroundTabCrash() throws Exception {
         ChromeTabUtils.newTabFromMenu(
                 InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());

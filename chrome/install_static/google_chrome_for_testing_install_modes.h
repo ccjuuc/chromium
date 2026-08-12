@@ -15,6 +15,17 @@
 
 namespace install_static {
 
+// The brand-specific company name to be included as a component of the install
+// and user data directory paths. May be empty if no such dir is to be used.
+inline constexpr wchar_t kCompanyPathName[] = L"Google";
+
+// The brand-specific product name to be included as a component of the install
+// and user data directory paths.
+inline constexpr wchar_t kProductPathName[] = L"Chrome for Testing";
+
+// The brand-specific safe browsing client name.
+inline constexpr char kSafeBrowsingName[] = "googlechromefortesting";
+
 // Note: This list of indices must be kept in sync with the brand-specific
 // resource strings in chrome/installer/util/prebuild/create_string_rc.
 enum InstallConstantIndex {
@@ -49,7 +60,6 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
         .active_setup_guid =
             L"{E25CFD4E-D9D4-4123-936A-286FBB19BA5B}",  // Active Setup
                                                         // GUID.
-        .legacy_command_execute_clsid = L"",  // CommandExecuteImpl CLSID.
         .toast_activator_clsid = {0x77ED8F9B,
                                   0xE27A,
                                   0x499F,

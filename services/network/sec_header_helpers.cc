@@ -41,9 +41,6 @@ constexpr std::string_view kSecFetchStorageAccess = "Sec-Fetch-Storage-Access";
 constexpr std::string_view kSecFetchFrameTop = "Sec-Fetch-Frame-Top";
 constexpr std::string_view kSecFetchAncestors = "Sec-Fetch-Frame-Ancestors";
 
-constexpr char kSecFetchStorageAccessOutcomeHistogram[] =
-    "API.StorageAccessHeader.SecFetchStorageAccessOutcome";
-
 std::string_view OriginRelationString(
     std::optional<net::OriginRelation> relation) {
   if (!relation.has_value()) {
@@ -114,7 +111,7 @@ std::optional<net::OriginRelation> GetInitiatorRelation(
   if (!request.initiator().has_value()) {
     // CorsURLLoaderFactory::IsValidRequest verifies that only the browser
     // process may initiate requests with no request initiator.
-    DCHECK_EQ(factory_params.process_id, mojom::kBrowserProcessId);
+    DCHECK(factory_params.process_id.is_browser());
 
     return std::nullopt;
   }
@@ -151,31 +148,6 @@ char const* GetSecFetchStorageAccessHeaderValue(
       return "active";
     case net::cookie_util::StorageAccessStatus::kNone:
       return "none";
-  }
-  NOTREACHED();
-}
-
-net::cookie_util::SecFetchStorageAccessOutcome
-ComputeSecFetchStorageAccessOutcome(const net::URLRequest& request,
-                                    mojom::CredentialsMode credentials_mode) {
-  if (request.storage_access_status().IsSet() &&
-      !request.storage_access_status().GetStatusForThirdPartyContext()) {
-    return net::cookie_util::SecFetchStorageAccessOutcome::
-        kOmittedStatusMissing;
-  }
-  if (credentials_mode != mojom::CredentialsMode::kInclude) {
-    return net::cookie_util::SecFetchStorageAccessOutcome::
-        kOmittedRequestOmitsCredentials;
-  }
-  CHECK(request.storage_access_status().IsSet());
-  switch (
-      request.storage_access_status().GetStatusForThirdPartyContext().value()) {
-    case net::cookie_util::StorageAccessStatus::kInactive:
-      return net::cookie_util::SecFetchStorageAccessOutcome::kValueInactive;
-    case net::cookie_util::StorageAccessStatus::kActive:
-      return net::cookie_util::SecFetchStorageAccessOutcome::kValueActive;
-    case net::cookie_util::StorageAccessStatus::kNone:
-      return net::cookie_util::SecFetchStorageAccessOutcome::kValueNone;
   }
   NOTREACHED();
 }
@@ -223,10 +195,6 @@ void SetSecFetchDestHeader(net::URLRequest& request,
 // Sec-Fetch-Storage-Access
 void SetSecFetchStorageAccessHeader(net::URLRequest& request,
                                     mojom::CredentialsMode credentials_mode) {
-  base::UmaHistogramEnumeration(
-      kSecFetchStorageAccessOutcomeHistogram,
-      ComputeSecFetchStorageAccessOutcome(request, credentials_mode));
-
   if (credentials_mode != mojom::CredentialsMode::kInclude ||
       (request.storage_access_status().IsSet() &&
        !request.storage_access_status().GetStatusForThirdPartyContext())) {

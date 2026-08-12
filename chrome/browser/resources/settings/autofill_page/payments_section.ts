@@ -24,7 +24,7 @@ import './iban_edit_dialog.js';
 import './passwords_shared.css.js';
 import './payments_list.js';
 import './virtual_card_unenroll_dialog.js';
-import './your_saved_info_shared.css.js';
+import './autofill_shared.css.js';
 
 import type {CrActionMenuElement} from 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.js';
 import {AnchorAlignment} from 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.js';
@@ -35,6 +35,8 @@ import {focusWithoutInk} from 'chrome://resources/js/focus_without_ink.js';
 import {OpenWindowProxyImpl} from 'chrome://resources/js/open_window_proxy.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
+import {CrSettingsPrefs} from '/shared/settings/prefs/prefs_types.js';
 import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 import {loadTimeData} from '../i18n_setup.js';
 import {CvcDeletionUserAction, MetricsBrowserProxyImpl, PrivacyElementInteractions} from '../metrics_browser_proxy.js';
@@ -65,10 +67,6 @@ declare global {
   }
 }
 
-// TODO(crbug.com/447113309): This file along with all of its dependencies
-// should be moved to .../settings/your_saved_info_page directory after
-// full release of the `Your Saved Info` page.
-
 export interface SettingsPaymentsSectionElement {
   $: {
     autofillCreditCardToggle: SettingsToggleButtonElement,
@@ -86,7 +84,7 @@ export interface SettingsPaymentsSectionElement {
 }
 
 const SettingsPaymentsSectionElementBase =
-    SettingsViewMixin(I18nMixin(PolymerElement));
+    PrefsMixin(SettingsViewMixin(I18nMixin(PolymerElement)));
 
 export class SettingsPaymentsSectionElement extends
     SettingsPaymentsSectionElementBase {
@@ -138,6 +136,18 @@ export class SettingsPaymentsSectionElement extends
       },
 
       /**
+       * Whether Google Wallet branding should be used instead of Google Pay
+       * branding.
+       */
+      autofillEnableWalletBrandingEnabled_: {
+        type: Boolean,
+        value() {
+          return loadTimeData.getBoolean('autofillEnableWalletBranding');
+        },
+        readOnly: true,
+      },
+
+      /**
        * The model for any credit card-related action menus or dialogs.
        */
       activeCreditCard_: Object,
@@ -173,16 +183,6 @@ export class SettingsPaymentsSectionElement extends
         type: Boolean,
         value() {
           return loadTimeData.getBoolean('cvcStorageAvailable');
-        },
-      },
-
-      /**
-       * Checks if a card benefits feature flag is enabled.
-       */
-      cardBenefitsFlagEnabled_: {
-        type: Boolean,
-        value() {
-          return loadTimeData.getBoolean('autofillCardBenefitsAvailable');
         },
       },
 
@@ -229,23 +229,19 @@ export class SettingsPaymentsSectionElement extends
         },
       },
 
-      /**
-       * Indicates if this element is used as a Your saved info subpage. Causes
-       * slight adjustments like different title, no page shadow, cards being
-       * visible.
-       */
-      isYourSavedInfoSubpage_: {
+      prefsInitialized_: {
         type: Boolean,
-        value: () => loadTimeData.getBoolean('enableYourSavedInfoSettingsPage'),
+        value: false,
       },
     };
   }
 
-  declare prefs: {[key: string]: any};
+  declare prefs: Record<string, unknown>;
   declare creditCards: chrome.autofillPrivate.CreditCardEntry[];
   declare ibans: chrome.autofillPrivate.IbanEntry[];
   declare payOverTimeIssuers: chrome.autofillPrivate.PayOverTimeIssuerEntry[];
   declare private showIbanSettingsEnabled_: boolean;
+  declare private autofillEnableWalletBrandingEnabled_: boolean;
   declare private activeCreditCard_: chrome.autofillPrivate.CreditCardEntry|
       null;
   declare private activeIban_: chrome.autofillPrivate.IbanEntry|null;
@@ -262,15 +258,18 @@ export class SettingsPaymentsSectionElement extends
   private paymentsManager_: PaymentsManagerProxy =
       PaymentsManagerImpl.getInstance();
   private setPersonalDataListener_: PersonalDataChangedListener|null = null;
-  declare private cardBenefitsFlagEnabled_: boolean;
   declare private cardBenefitsSublabel_: string;
   declare private shouldShowPayOverTimeSettings_: boolean;
   declare private payOverTimeSublabel_: string;
-  declare private isYourSavedInfoSubpage_: boolean;
   declare private mandatoryReauthFeatureFlagEnabled_: boolean;
+  declare private prefsInitialized_: boolean;
 
   override connectedCallback() {
     super.connectedCallback();
+
+    CrSettingsPrefs.initialized.then(() => {
+      this.prefsInitialized_ = true;
+    });
 
     // Create listener function.
     const setCreditCardsListener =
@@ -335,22 +334,13 @@ export class SettingsPaymentsSectionElement extends
     this.setPersonalDataListener_ = null;
   }
 
-  private getMultiCardClass_(): string {
-    return this.isYourSavedInfoSubpage_ ? 'multi-card' : '';
-  }
-
-  private getPageTitleLabel_(): string {
-    return this.i18n(
-      this.isYourSavedInfoSubpage_ ? 'paymentsTitle' : 'creditCards');
-  }
-
   private setCreditCards_(cardList: chrome.autofillPrivate.CreditCardEntry[]) {
     this.creditCards = cardList;
 
     // To align with Android, only record this histogram when the pref is
     // enabled.
-    const autofillEnabledPref = this.get('prefs.autofill.credit_card_enabled');
-    if (!!autofillEnabledPref && autofillEnabledPref.value) {
+    if (this.prefsInitialized_ &&
+        this.getPref<boolean>('autofill.credit_card_enabled').value) {
       MetricsBrowserProxyImpl.getInstance().recordBooleanHistogram(
           'Autofill.PaymentMethodsSettingsPage.CardsViewedWithoutExistingCards',
           this.creditCards.length === 0);
@@ -606,7 +596,12 @@ export class SettingsPaymentsSectionElement extends
   }
 
   private getMenuEditCardText_(isLocalCard: boolean): string {
-    return this.i18n(isLocalCard ? 'edit' : 'editServerCard');
+    if (isLocalCard) {
+      return this.i18n('edit');
+    }
+    return this.i18n(
+        this.autofillEnableWalletBrandingEnabled_ ? 'editServerCardInWallet' :
+                                                    'editServerCard');
   }
 
   private shouldShowAddVirtualCardButton_(): boolean {
@@ -641,7 +636,13 @@ export class SettingsPaymentsSectionElement extends
    * Under any of these circumstances, we should display a disabled mandatory
    * re-auth toggle to the user.
    */
-  private shouldDisableAuthToggle_(creditCardEnabled: boolean): boolean {
+  private shouldDisableAuthToggle_(): boolean {
+    if (!this.prefsInitialized_) {
+      return true;
+    }
+
+    const creditCardEnabled =
+        this.getPref<boolean>('autofill.credit_card_enabled').value;
     return !creditCardEnabled || !this.deviceAuthAvailable_;
   }
   // </if>
@@ -714,9 +715,9 @@ export class SettingsPaymentsSectionElement extends
    * hyperlink is returned else return the regular sublabel.
    * @returns Cvc storage toggle sublabel string.
    */
-  private getCvcStorageSublabel_(): TrustedHTML {
+  private getCvcStorageSublabel_(): string {
     const card = this.creditCards.find(cc => !!cc.cvc);
-    return this.i18nAdvanced(
+    return loadTimeData.getStringF(
         card === undefined ? 'enableCvcStorageSublabel' :
                              'enableCvcStorageDeleteDataSublabel');
   }
@@ -739,6 +740,17 @@ export class SettingsPaymentsSectionElement extends
     return this.i18n(
         card === undefined ? 'enableCvcStorageAriaLabelForNoCvcSaved' :
                              'enableCvcStorageLabel');
+  }
+
+  /**
+   * Get the body text for the CVC deletion dialog, depending on whether Google
+   * Wallet branding is enabled or not.
+   */
+  private getCvcDeletionDialogBodyText_(): string {
+    return this.i18n(
+        this.autofillEnableWalletBrandingEnabled_ ?
+            'bulkRemoveCvcFromWalletConfirmationDescription' :
+            'bulkRemoveCvcConfirmationDescription');
   }
 
   /**

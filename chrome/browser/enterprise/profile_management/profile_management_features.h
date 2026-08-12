@@ -27,9 +27,6 @@ BASE_DECLARE_FEATURE(kOidcAuthResponseInterception);
 // Controls whether OIDC enrollment process can time out (and after how long).
 BASE_DECLARE_FEATURE(kOidcEnrollmentTimeout);
 
-// Controls whether the generic OIDC-response profile management is enabled.
-BASE_DECLARE_FEATURE(kEnableGenericOidcAuthProfileManagement);
-
 // Controls whether to add a list of hosts that are eligible for OIDC profile
 // enrollments.
 BASE_DECLARE_FEATURE(kOidcEnrollmentAuthSource);
@@ -38,8 +35,9 @@ BASE_DECLARE_FEATURE(kOidcEnrollmentAuthSource);
 // usual URL params is permitted. This flag only works on Chrome Canary or Dev.
 BASE_DECLARE_FEATURE(kOidcAuthHeaderInterception);
 
-// Controls whether remote commands is enabled for OIDC profiles.
-BASE_DECLARE_FEATURE(kEnableOidcProfileRemoteCommands);
+// Controls OIDC navigation throttle execution mode (async/non-blocking if
+// enabled).
+BASE_DECLARE_FEATURE(kOidcNavigationThrottleAsyncMode);
 
 // Oidc authentication related feature params.
 extern const base::FeatureParam<std::string> kOidcAuthStubDmToken;

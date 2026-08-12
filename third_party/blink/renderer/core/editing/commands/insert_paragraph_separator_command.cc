@@ -48,6 +48,7 @@
 #include "third_party/blink/renderer/core/mathml_names.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -278,10 +279,10 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
   Position canonical_pos =
       CreateVisiblePosition(insertion_position).DeepEquivalent();
   if (!start_block || !start_block->NonShadowBoundaryParentNode() ||
-      (RuntimeEnabledFeatures::InsertLineBreakIfPhrasingContentEnabled() &&
-       IsEditableRootPhrasingContent(insertion_position)) ||
+      IsEditableRootPhrasingContent(insertion_position) ||
       IsDisplayInlineType(list_child) || IsTableCell(start_block) ||
       IsA<HTMLFormElement>(*start_block) ||
+      start_block->HasTagName(html_names::kPreTag) ||
       // FIXME: If the node is hidden, we don't have a canonical position so we
       // will do the wrong thing for tables and <hr>.
       // https://bugs.webkit.org/show_bug.cgi?id=40342
@@ -372,8 +373,9 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
       if (paste_blockquote_into_unquoted_area_) {
         if (auto* highest_blockquote =
                 To<HTMLQuoteElement>(HighestEnclosingNodeOfType(
-                    canonical_pos, &IsMailHTMLBlockquoteElement)))
+                    canonical_pos, &IsMailHtmlBlockquoteElement))) {
           start_block = highest_blockquote;
+        }
       }
 
       if (list_child && list_child != start_block) {
@@ -411,9 +413,15 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
       return;
 
     SetEndingSelection(SelectionForUndoStep::From(
-        SelectionInDOMTree::Builder()
+        SelectionInDomTree::Builder()
             .Collapse(Position::FirstPositionInNode(*parent))
             .Build()));
+    if (RuntimeEnabledFeatures::EditingUseDomPositionApiEnabled()) {
+      SetEndingDomSelection(SelectionForUndoStep::From(
+          SelectionInDomTree::Builder()
+              .Collapse(Position::FirstPositionInNode(*parent))
+              .Build()));
+    }
     return;
   }
 
@@ -483,9 +491,11 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
 
     // In this case, we need to set the new ending selection.
     SetEndingSelection(SelectionForUndoStep::From(
-        SelectionInDOMTree::Builder()
-            .Collapse(insertion_position)
-            .Build()));
+        SelectionInDomTree::Builder().Collapse(insertion_position).Build()));
+    if (RuntimeEnabledFeatures::EditingUseDomPositionApiEnabled()) {
+      SetEndingDomSelection(SelectionForUndoStep::From(
+          SelectionInDomTree::Builder().Collapse(insertion_position).Build()));
+    }
     return;
   }
 
@@ -510,9 +520,13 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
     if (visible_pos.IsNotNull() &&
         visible_pos.DeepEquivalent().AnchorNode()->GetLayoutObject()->IsBR()) {
       SetEndingSelection(SelectionForUndoStep::From(
-          SelectionInDOMTree::Builder()
-              .Collapse(insertion_position)
-              .Build()));
+          SelectionInDomTree::Builder().Collapse(insertion_position).Build()));
+      if (RuntimeEnabledFeatures::EditingUseDomPositionApiEnabled()) {
+        SetEndingDomSelection(
+            SelectionForUndoStep::From(SelectionInDomTree::Builder()
+                                           .Collapse(insertion_position)
+                                           .Build()));
+      }
       return;
     }
   }
@@ -552,12 +566,14 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
   // causing the newline to be turned into a nbsp.
   if (leading_whitespace.IsNotNull()) {
     if (auto* text_node = DynamicTo<Text>(leading_whitespace.AnchorNode())) {
-      DCHECK(!text_node->GetLayoutObject() ||
-             text_node->GetLayoutObject()->Style()->ShouldCollapseWhiteSpaces())
+      DCHECK(
+          !text_node->GetLayoutObject() ||
+          text_node->GetLayoutObject()->StyleRef().ShouldCollapseWhiteSpaces())
           << text_node;
       ReplaceTextInNode(text_node,
                         leading_whitespace.ComputeOffsetInContainerNode(), 1,
-                        NonBreakingSpaceString());
+                        NonBreakingSpaceString(),
+                        EditCommand::PasswordEchoBehavior::kDoNotEcho);
       GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
     }
   }
@@ -567,8 +583,8 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
   if (insertion_position.IsOffsetInAnchor()) {
     if (auto* text_node =
             DynamicTo<Text>(insertion_position.ComputeContainerNode())) {
-      int text_offset = insertion_position.OffsetInContainerNode();
-      bool at_end = static_cast<unsigned>(text_offset) >= text_node->length();
+      wtf_size_t text_offset = insertion_position.OffsetInContainerNode();
+      bool at_end = text_offset >= text_node->length();
       if (text_offset > 0 && !at_end) {
         SplitTextNode(text_node, text_offset);
         GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
@@ -655,22 +671,28 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
       DCHECK(!position_after_split.ComputeContainerNode()->GetLayoutObject() ||
              position_after_split.ComputeContainerNode()
                  ->GetLayoutObject()
-                 ->Style()
-                 ->ShouldCollapseWhiteSpaces())
+                 ->StyleRef()
+                 .ShouldCollapseWhiteSpaces())
           << position_after_split;
       DeleteInsignificantTextDownstream(position_after_split);
       if (position_after_split.AnchorNode()->IsTextNode()) {
         InsertTextIntoNode(
             To<Text>(position_after_split.ComputeContainerNode()), 0,
-            NonBreakingSpaceString());
+            NonBreakingSpaceString(), PasswordEchoBehavior::kDoNotEcho);
       }
     }
   }
 
   SetEndingSelection(SelectionForUndoStep::From(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .Collapse(Position::FirstPositionInNode(*block_to_insert))
           .Build()));
+  if (RuntimeEnabledFeatures::EditingUseDomPositionApiEnabled()) {
+    SetEndingDomSelection(SelectionForUndoStep::From(
+        SelectionInDomTree::Builder()
+            .Collapse(Position::FirstPositionInNode(*block_to_insert))
+            .Build()));
+  }
   ApplyStyleAfterInsertion(start_block, editing_state);
 }
 

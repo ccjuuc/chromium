@@ -166,16 +166,12 @@ TEST_F(PaintWorkletTest, SinglyRegisteredDocumentDefinitionNotUsed) {
       static_cast<CSSPaintImageGeneratorImpl*>(
           CSSPaintImageGeneratorImpl::Create("foo", GetDocument(), nullptr));
   EXPECT_TRUE(generator);
+  EXPECT_FALSE(generator->IsImageGeneratorReady());
   EXPECT_EQ(generator->GetRegisteredDefinitionCountForTesting(), 1u);
   DocumentPaintDefinition* definition;
   // Please refer to CSSPaintImageGeneratorImpl::GetValidDocumentDefinition for
   // the logic.
-  if (RuntimeEnabledFeatures::OffMainThreadCSSPaintEnabled()) {
-    EXPECT_TRUE(generator->GetValidDocumentDefinitionForTesting(definition));
-  } else {
-    EXPECT_FALSE(generator->GetValidDocumentDefinitionForTesting(definition));
-    EXPECT_FALSE(definition);
-  }
+  EXPECT_TRUE(generator->GetValidDocumentDefinitionForTesting(definition));
 }
 
 // In this test, we set a list of "paints_to_switch" numbers, and in each frame,
@@ -192,7 +188,6 @@ TEST_F(PaintWorkletTest, GlobalScopeSelection) {
 }
 
 TEST_F(PaintWorkletTest, NativeAndCustomProperties) {
-  ScopedOffMainThreadCSSPaintForTest off_main_thread_css_paint(true);
   Vector<CSSPropertyID> native_invalidation_properties = {
       CSSPropertyID::kColor,
       CSSPropertyID::kZoom,
@@ -219,11 +214,10 @@ TEST_F(PaintWorkletTest, NativeAndCustomProperties) {
 
 class MainOrOffThreadPaintWorkletTest
     : public PageTestBase,
-      public ::testing::WithParamInterface<bool>,
-      private ScopedOffMainThreadCSSPaintForTest {
+      public ::testing::WithParamInterface<bool> {
  public:
-  MainOrOffThreadPaintWorkletTest()
-      : ScopedOffMainThreadCSSPaintForTest(GetParam()) {}
+  MainOrOffThreadPaintWorkletTest() = default;
+  bool IsOffMain() { return GetParam(); }
 };
 
 INSTANTIATE_TEST_SUITE_P(All,
@@ -238,7 +232,7 @@ class MockObserver final : public CSSPaintImageGenerator::Observer {
 TEST_P(MainOrOffThreadPaintWorkletTest, ConsistentGlobalScopeOnMainThread) {
   PaintWorklet* paint_worklet_to_test =
       PaintWorklet::From(*GetFrame().GetDocument()->domWindow());
-  paint_worklet_to_test->ResetIsPaintOffThreadForTesting();
+  paint_worklet_to_test->ResetIsPaintOffThreadForTesting(IsOffMain());
 
   MockObserver* observer = MakeGarbageCollected<MockObserver>();
   CSSPaintImageGeneratorImpl* generator_foo =
@@ -288,6 +282,11 @@ TEST_P(MainOrOffThreadPaintWorkletTest, ConsistentGlobalScopeOnMainThread) {
   // foo0 and foo1 have the same name but different definitions, therefore
   // this definition must become invalid.
   EXPECT_FALSE(paint_worklet_to_test->GetDocumentDefinitionMap().at("foo"));
+  DocumentPaintDefinition* invalid_definition = nullptr;
+  EXPECT_FALSE(
+      generator_foo->GetValidDocumentDefinitionForTesting(invalid_definition));
+  EXPECT_FALSE(invalid_definition);
+  EXPECT_FALSE(generator_foo->IsImageGeneratorReady());
 
   ClassicScript::CreateUnspecifiedScript(bar)->RunScriptOnScriptState(
       global_scopes[0]->ScriptController()->GetScriptState());
@@ -298,8 +297,9 @@ TEST_P(MainOrOffThreadPaintWorkletTest, ConsistentGlobalScopeOnMainThread) {
   // When running in main-thread mode, the generator is now ready after this
   // call. For off-thread, we are still waiting on the cross-thread
   // registration.
-  if (!RuntimeEnabledFeatures::OffMainThreadCSSPaintEnabled())
+  if (!IsOffMain()) {
     EXPECT_CALL(*observer, PaintImageGeneratorReady).Times(1);
+  }
 
   ClassicScript::CreateUnspecifiedScript(bar)->RunScriptOnScriptState(
       global_scopes[1]->ScriptController()->GetScriptState());
@@ -317,7 +317,7 @@ TEST_P(MainOrOffThreadPaintWorkletTest, ConsistentGlobalScopeOnMainThread) {
 TEST_P(MainOrOffThreadPaintWorkletTest, MAYBE_AllGlobalScopesMustBeCreated) {
   PaintWorklet* paint_worklet_to_test =
       MakeGarbageCollected<PaintWorklet>(*GetFrame().DomWindow());
-  paint_worklet_to_test->ResetIsPaintOffThreadForTesting();
+  paint_worklet_to_test->ResetIsPaintOffThreadForTesting(IsOffMain());
 
   EXPECT_TRUE(paint_worklet_to_test->GetGlobalScopesForTesting().empty());
 
@@ -334,7 +334,7 @@ TEST_P(MainOrOffThreadPaintWorkletTest, MAYBE_AllGlobalScopesMustBeCreated) {
     paint_worklet_to_test->AddGlobalScopeForTesting();
   }
 
-  if (RuntimeEnabledFeatures::OffMainThreadCSSPaintEnabled()) {
+  if (IsOffMain()) {
     EXPECT_EQ(paint_worklet_to_test->GetGlobalScopesForTesting().size(),
               2 * PaintWorklet::kNumGlobalScopesPerThread);
   } else {
@@ -344,10 +344,9 @@ TEST_P(MainOrOffThreadPaintWorkletTest, MAYBE_AllGlobalScopesMustBeCreated) {
 }
 
 TEST_F(PaintWorkletTest, ConsistentGlobalScopeCrossThread) {
-  ScopedOffMainThreadCSSPaintForTest off_main_thread_css_paint(true);
   PaintWorklet* paint_worklet_to_test =
       PaintWorklet::From(*GetFrame().GetDocument()->domWindow());
-  paint_worklet_to_test->ResetIsPaintOffThreadForTesting();
+  paint_worklet_to_test->ResetIsPaintOffThreadForTesting(true);
 
   MockObserver* observer = MakeGarbageCollected<MockObserver>();
   CSSPaintImageGeneratorImpl* generator_foo =
@@ -508,10 +507,9 @@ TEST_F(PaintWorkletTest, ConsistentGlobalScopeCrossThread) {
 }
 
 TEST_F(PaintWorkletTest, GeneratorNotifiedAfterAllRegistrations) {
-  ScopedOffMainThreadCSSPaintForTest off_main_thread_css_paint(true);
   PaintWorklet* paint_worklet_to_test =
       PaintWorklet::From(*GetFrame().GetDocument()->domWindow());
-  paint_worklet_to_test->ResetIsPaintOffThreadForTesting();
+  paint_worklet_to_test->ResetIsPaintOffThreadForTesting(true);
 
   MockObserver* observer = MakeGarbageCollected<MockObserver>();
   CSSPaintImageGeneratorImpl* generator =
@@ -546,6 +544,7 @@ TEST_F(PaintWorkletTest, GeneratorNotifiedAfterAllRegistrations) {
       global_scopes[1]->ScriptController()->GetScriptState());
 
   EXPECT_TRUE(paint_worklet_to_test->GetDocumentDefinitionMap().at("foo"));
+  EXPECT_FALSE(generator->IsImageGeneratorReady());
 
   CSSPaintDefinition* definition = global_scopes[0]->FindDefinition("foo");
 
@@ -559,6 +558,7 @@ TEST_F(PaintWorkletTest, GeneratorNotifiedAfterAllRegistrations) {
       definition->GetPaintRenderingContext2DSettings()->alpha());
 
   EXPECT_TRUE(paint_worklet_to_test->GetDocumentDefinitionMap().at("foo"));
+  EXPECT_TRUE(generator->IsImageGeneratorReady());
 }
 
 }  // namespace blink

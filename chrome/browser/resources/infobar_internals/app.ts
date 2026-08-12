@@ -7,7 +7,7 @@ import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import {getCss} from './app.css.js';
 import {getHtml} from './app.html.js';
-import {BrowserProxy} from './browser_proxy.js';
+import {browserProxyFactory} from './infobar_internals.mojom-webui.js';
 import type {InfoBarType} from './infobar_internals.mojom-webui.js';
 
 
@@ -35,11 +35,11 @@ export class InfobarInternalsAppElement extends CrLitElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    BrowserProxy.getInstance().handler.getInfoBars().then(
+    browserProxyFactory.getInstance().handler.getInfoBars().then(
         ({infobars}) => this.infobars = infobars);
   }
 
-  protected onTrigger(e: Event) {
+  protected onTriggerClick(e: Event) {
     const target = e.currentTarget as HTMLElement;
     const typeStr = target.dataset['type'];
     assert(typeStr);
@@ -53,7 +53,7 @@ export class InfobarInternalsAppElement extends CrLitElement {
 
   private async trigger(id: InfoBarType) {
     const {success} =
-        await BrowserProxy.getInstance().handler.triggerInfoBar(id);
+        await browserProxyFactory.getInstance().handler.triggerInfoBar(id);
     if (!success) {
       console.warn('Failed to trigger infobar', id);
     }

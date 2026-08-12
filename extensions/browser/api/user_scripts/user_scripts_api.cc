@@ -152,10 +152,7 @@ ConvertRegisteredUserScriptToSerializedUserScript(
   serialized_script.run_at = std::move(user_script.run_at);
   serialized_script.world = convert_execution_world(user_script.world);
 
-  if (base::FeatureList::IsEnabled(
-          extensions_features::kApiUserScriptsMultipleWorlds)) {
-    serialized_script.world_id = std::move(user_script.world_id);
-  }
+  serialized_script.world_id = std::move(user_script.world_id);
 
   return serialized_script;
 }
@@ -328,6 +325,8 @@ ExtensionFunction::ResponseAction UserScriptsRegisterFunction::Run() {
   return RespondLater();
 }
 
+UserScriptsRegisterFunction::~UserScriptsRegisterFunction() = default;
+
 void UserScriptsRegisterFunction::OnUserScriptFilesValidated(
     scripting::ValidateScriptsResult result) {
   // We cannot proceed if the `browser_context` is not valid as the
@@ -409,8 +408,7 @@ ExtensionFunction::ResponseAction UserScriptsGetScriptsFunction::Run() {
     }
 
     std::string id_without_prefix = script->GetIDWithoutPrefix();
-    if (filter && filter->ids &&
-        !base::Contains(id_filter, id_without_prefix)) {
+    if (filter && filter->ids && !id_filter.contains(id_without_prefix)) {
       continue;
     }
 
@@ -625,11 +623,7 @@ ExtensionFunction::ResponseAction UserScriptsConfigureWorldFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(params);
   EXTENSION_FUNCTION_VALIDATE(extension());
 
-  std::optional<std::string> world_id;
-  if (base::FeatureList::IsEnabled(
-          extensions_features::kApiUserScriptsMultipleWorlds)) {
-    world_id = std::move(params->properties.world_id);
-  }
+  std::optional<std::string> world_id = std::move(params->properties.world_id);
 
   std::string error;
   if (!IsValidWorldId(api::user_scripts::ExecutionWorld::kUserScript, world_id,
@@ -695,19 +689,6 @@ ExtensionFunction::ResponseAction UserScriptsExecuteFunction::Run() {
     return RespondNow(Error(std::move(error)));
   }
 
-  // Validate injection target.
-  scripting::InjectionTarget internal_injection_target =
-      ConvertToInternalInjectionTarget(std::move(injection_.target));
-  ScriptExecutor* script_executor = nullptr;
-  ScriptExecutor::FrameScope frame_scope = ScriptExecutor::SPECIFIED_FRAMES;
-  std::set<int> frame_ids;
-  if (!scripting::CanAccessTarget(
-          *extension()->permissions_data(), internal_injection_target,
-          browser_context(), include_incognito_information(), &script_executor,
-          &frame_scope, &frame_ids, &error)) {
-    return RespondNow(Error(std::move(error)));
-  }
-
   // Retrieve injection sources in order. Since file sources need to be loaded,
   // we use a nullopt for placeholder in the source list. After files are
   // successfully loaded, they should be converted to js source too.
@@ -726,25 +707,24 @@ ExtensionFunction::ResponseAction UserScriptsExecuteFunction::Run() {
   if (!file_sources.empty()) {
     // JS files don't require localization.
     constexpr bool kRequiresLocalization = false;
-    scripting::CheckAndLoadFiles(
-        std::move(file_sources), script_parsing::ContentScriptType::kJs,
-        *extension(), kRequiresLocalization,
-        base::BindOnce(&UserScriptsExecuteFunction::DidLoadResources, this,
-                       script_executor, frame_scope, std::move(frame_ids),
-                       std::move(sources)),
-        &error);
+    if (!scripting::CheckAndLoadFiles(
+            std::move(file_sources), script_parsing::ContentScriptType::kJs,
+            *extension(), kRequiresLocalization,
+            base::BindOnce(&UserScriptsExecuteFunction::DidLoadResources, this,
+                           std::move(sources)),
+            &error)) {
+      return RespondNow(Error(std::move(error)));
+    }
   } else {
-    Execute(std::move(sources), script_executor, frame_scope, frame_ids,
-            &error);
+    if (!Execute(std::move(sources), &error)) {
+      return RespondNow(Error(std::move(error)));
+    }
   }
 
   return RespondLater();
 }
 
 void UserScriptsExecuteFunction::DidLoadResources(
-    ScriptExecutor* script_executor,
-    ScriptExecutor::FrameScope frame_scope,
-    std::set<int> frame_ids,
     std::vector<std::optional<mojom::JSSourcePtr>> sources,
     std::vector<scripting::InjectedFileSource> file_sources,
     std::optional<std::string> load_error) {
@@ -774,15 +754,26 @@ void UserScriptsExecuteFunction::DidLoadResources(
   CHECK_EQ(file_index, static_cast<int>(file_sources.size()));
 
   std::string error;
-  Execute(std::move(sources), script_executor, frame_scope, frame_ids, &error);
+  if (!Execute(std::move(sources), &error)) {
+    Respond(Error(std::move(error)));
+  }
 }
 
-void UserScriptsExecuteFunction::Execute(
+bool UserScriptsExecuteFunction::Execute(
     std::vector<std::optional<mojom::JSSourcePtr>> sources,
-    ScriptExecutor* script_executor,
-    ScriptExecutor::FrameScope frame_scope,
-    std::set<int> frame_ids,
     std::string* error) {
+  scripting::InjectionTarget internal_injection_target =
+      ConvertToInternalInjectionTarget(std::move(injection_.target));
+  ScriptExecutor* script_executor = nullptr;
+  ScriptExecutor::FrameScope frame_scope = ScriptExecutor::SPECIFIED_FRAMES;
+  std::set<int> frame_ids;
+  if (!scripting::CanAccessTarget(
+          *extension()->permissions_data(), internal_injection_target,
+          browser_context(), include_incognito_information(), &script_executor,
+          &frame_scope, &frame_ids, error)) {
+    return false;
+  }
+
   mojom::ExecutionWorld execution_world =
       ConvertExecutionWorld(injection_.world);
   std::optional<std::string> execution_world_id = injection_.world_id;
@@ -800,6 +791,8 @@ void UserScriptsExecuteFunction::Execute(
       execution_world_id, script_executor, frame_scope, frame_ids,
       inject_immediately, user_gesture(),
       base::BindOnce(&UserScriptsExecuteFunction::OnScriptExecuted, this));
+
+  return true;
 }
 
 void UserScriptsExecuteFunction::OnScriptExecuted(

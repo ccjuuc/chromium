@@ -4,52 +4,45 @@
 
 package org.chromium.content_public.browser;
 
-import org.jni_zero.CalledByNative;
-import org.jni_zero.JNINamespace;
-
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.build.annotations.Nullable;
+import org.chromium.url.GURL;
 
 /** JNI bridge with content::Page */
-@JNINamespace("content")
 @NullMarked
-public class Page {
-    private boolean mIsPrerendering;
-
-    private @Nullable PageDeletionListener mListener;
-
-    public static Page createForTesting() {
-        return new Page(/* isPrerendering= */ false);
-    }
-
-    // Listener for when the native C++ Page object is destructed.
-    public interface PageDeletionListener {
+public interface Page {
+    /** Listener for when the native C++ Page object is destructed. */
+    interface PageDeletionListener {
         void onWillDeletePage(Page page);
     }
 
-    public void setPageDeletionListener(PageDeletionListener listener) {
-        mListener = listener;
-    }
+    /**
+     * Sets a listener to be notified when the native C++ Page object is destructed.
+     *
+     * @param listener The listener to set.
+     */
+    void setPageDeletionListener(PageDeletionListener listener);
 
-    @CalledByNative
-    private Page(boolean isPrerendering) {
-        mIsPrerendering = isPrerendering;
-    }
+    /**
+     * @return Whether the page is currently prerendering.
+     */
+    boolean isPrerendering();
 
-    /** The C++ page is about to be deleted. */
-    @CalledByNative
-    private void willDeletePage(boolean isPrerendering) {
-        mIsPrerendering = isPrerendering;
-        if (mListener != null) {
-            mListener.onWillDeletePage(this);
-        }
-    }
+    /**
+     * Sets whether the page is currently prerendering.
+     *
+     * @param isPrerendering Whether the page is prerendering.
+     */
+    void setIsPrerendering(boolean isPrerendering);
 
-    public boolean isPrerendering() {
-        return mIsPrerendering;
-    }
+    /**
+     * @return The URL of the page.
+     */
+    GURL getUrl();
 
-    public void setIsPrerendering(boolean isPrerendering) {
-        mIsPrerendering = isPrerendering;
-    }
+    /**
+     * Sets the URL of the page.
+     *
+     * @param url The URL to set.
+     */
+    void setUrl(GURL url);
 }

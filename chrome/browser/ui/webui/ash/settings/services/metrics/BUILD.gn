@@ -27,7 +27,9 @@ static_library("metrics") {
   deps = [
     "//chrome/browser:browser_process",
     "//chrome/browser/ash/login",
+    "//chrome/browser/metrics",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/profiles:profile_manager",
     "//chrome/browser/ui/webui/ash/settings/pages",
     "//chrome/browser/ui/webui/ash/settings/search",
     "//chrome/common:constants",

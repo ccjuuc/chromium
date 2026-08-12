@@ -15,11 +15,13 @@
 
 #include "base/atomic_sequence_num.h"
 #include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/observer_list.h"
 #include "base/rand_util.h"
 #include "base/synchronization/lock.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/types/pass_key.h"
 #include "gpu/config/gpu_feature_info.h"
 #include "gpu/config/gpu_info.h"
 #include "gpu/ipc/client/gpu_channel_observer.h"
@@ -35,6 +37,10 @@
 
 namespace IPC {
 class Channel;
+}
+
+namespace viz {
+class Gpu;
 }
 
 namespace gpu {
@@ -60,13 +66,68 @@ class GPU_IPC_CLIENT_EXPORT GpuChannelEstablishFactory {
 class GPU_IPC_CLIENT_EXPORT GpuChannelHost
     : public base::RefCountedThreadSafe<GpuChannelHost> {
  public:
-  GpuChannelHost(
+  // Factory for the standard GPU channel path (info provided upfront). This
+  // will never return nullptr.
+  static scoped_refptr<GpuChannelHost> Create(
       int channel_id,
       const gpu::GPUInfo& gpu_info,
       const gpu::GpuFeatureInfo& gpu_feature_info,
       const gpu::SharedImageCapabilities& shared_image_capabilities,
       mojo::ScopedMessagePipeHandle handle,
       scoped_refptr<base::SingleThreadTaskRunner> io_task_runner = nullptr);
+
+  // A builder for GpuChannelHost used during asynchronous initialization.
+  // The underlying Mojo remote / IPC channel communicates on the IO thread,
+  // while this builder is used on the main thread. This prevents access to the
+  // channel handle or a partially initialized GpuChannelHost until SetInfo() is
+  // called, guaranteeing that consumers cannot access the channel in an
+  // incomplete state.
+  class GPU_IPC_CLIENT_EXPORT Builder final {
+   public:
+    static Builder CreateAndGetGPUInfo(
+        base::PassKey<viz::Gpu> pass_key,
+        int channel_id,
+        mojo::ScopedMessagePipeHandle handle,
+        scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
+        base::OnceCallback<void(const gpu::GPUInfo&,
+                                const gpu::GpuFeatureInfo&,
+                                const gpu::SharedImageCapabilities&)> callback);
+
+    ~Builder();
+    Builder(const Builder&) = delete;
+    Builder& operator=(const Builder&) = delete;
+    Builder(Builder&&);
+    Builder& operator=(Builder&&);
+
+    // Sets the info and returns the completed GpuChannelHost.
+    scoped_refptr<GpuChannelHost> SetInfo(
+        const gpu::GPUInfo& gpu_info,
+        const gpu::GpuFeatureInfo& gpu_feature_info,
+        const gpu::SharedImageCapabilities& shared_image_capabilities);
+
+    bool GetGPUInfoSync(
+        gpu::GPUInfo* gpu_info,
+        gpu::GpuFeatureInfo* gpu_feature_info,
+        gpu::SharedImageCapabilities* shared_image_capabilities);
+
+    // Checks if the channel is lost.
+    bool IsLost() const;
+
+   private:
+    friend class GpuChannelHost;
+
+    Builder(int channel_id,
+            mojo::ScopedMessagePipeHandle handle,
+            scoped_refptr<base::SingleThreadTaskRunner> io_task_runner);
+
+    void GetGPUInfo(
+        base::OnceCallback<void(const gpu::GPUInfo&,
+                                const gpu::GpuFeatureInfo&,
+                                const gpu::SharedImageCapabilities&)> callback);
+
+    scoped_refptr<GpuChannelHost> host_;
+  };
+
   GpuChannelHost(const GpuChannelHost&) = delete;
   GpuChannelHost& operator=(const GpuChannelHost&) = delete;
 
@@ -176,12 +237,22 @@ class GPU_IPC_CLIENT_EXPORT GpuChannelHost
 
  protected:
   friend class base::RefCountedThreadSafe<GpuChannelHost>;
+
+  GpuChannelHost(
+      int channel_id,
+      mojo::ScopedMessagePipeHandle handle,
+      scoped_refptr<base::SingleThreadTaskRunner> io_task_runner = nullptr);
+
   virtual ~GpuChannelHost();
 
   // Clears its SharedAssociatedRemote.
   void ResetChannelRemoteForTesting();
 
  private:
+  void SetInfo(const gpu::GPUInfo& gpu_info,
+               const gpu::GpuFeatureInfo& gpu_feature_info,
+               const gpu::SharedImageCapabilities& shared_image_capabilities);
+
   // Establishes shared memory communication with the GPU process. This memory
   // is used to keep track of flushed items and avoid unnecessary IPCs.
   void EstablishSharedMemoryForFlushVerification()
@@ -220,7 +291,7 @@ class GPU_IPC_CLIENT_EXPORT GpuChannelHost
     // The GpuChannelLost Monitor for LayerTreeFrameSink.
     base::Lock channel_obs_lock_;
     // Note that ObserverList is sequence checked so we can't use that here.
-    std::vector<GpuChannelLostObserver*> GUARDED_BY(channel_obs_lock_)
+    std::vector<raw_ptr<GpuChannelLostObserver>> GUARDED_BY(channel_obs_lock_)
         observer_list_;
   };
 
@@ -282,8 +353,8 @@ class GPU_IPC_CLIENT_EXPORT GpuChannelHost
   const scoped_refptr<base::SingleThreadTaskRunner> io_thread_;
 
   const int channel_id_;
-  const gpu::GPUInfo gpu_info_;
-  const gpu::GpuFeatureInfo gpu_feature_info_;
+  gpu::GPUInfo gpu_info_;
+  gpu::GpuFeatureInfo gpu_feature_info_;
 
   // Lifetime/threading notes: Listener only operates on the IO thread, and
   // outlives |this|. It is therefore safe to PostTask calls to the IO thread
@@ -300,15 +371,12 @@ class GPU_IPC_CLIENT_EXPORT GpuChannelHost
       mojo::SharedAssociatedRemote<mojom::GpuChannel>;
   std::variant<SharedRemote, SharedAssociatedRemote> gpu_channel_;
 
-  SharedImageInterfaceProxy shared_image_interface_;
+  std::unique_ptr<SharedImageInterfaceProxy> shared_image_interface_;
 
   mutable base::Lock shared_memory_version_lock_;
   // Used to synchronize flushed request ids with the GPU process.
   std::optional<mojo::SharedMemoryVersionClient> shared_memory_version_client_
       GUARDED_BY(shared_memory_version_lock_);
-
-  // Used to reduce frequency of metrics logging.
-  base::MetricsSubSampler metrics_sub_sampler_;
 
   // Image IDs are allocated in sequence.
   base::AtomicSequenceNumber next_image_id_;

@@ -10,15 +10,14 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/ui/views/autofill/autofill_bubble_utils.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/grit/theme_resources.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/ui/addresses/autofill_address_util.h"
-#include "components/autofill/core/common/autofill_features.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/controls/button/image_button.h"
@@ -42,13 +41,18 @@ base::optional_ref<const gfx::VectorIcon> GetVectorIconForType(FieldType type) {
     case AddressUIComponentIconType::kNoIcon:
       return std::nullopt;
     case AddressUIComponentIconType::kName:
-      return kAccountCircleIcon;
+      return ::features::IsRoundedIconsEnabled() ? kAccountCircleFilledIcon
+                                                 : kAccountCircleOldIcon;
     case AddressUIComponentIconType::kAddress:
-      return vector_icons::kLocationOnIcon;
+      return ::features::IsRoundedIconsEnabled()
+                 ? vector_icons::kLocationOnIcon
+                 : vector_icons::kLocationOnOldIcon;
     case AddressUIComponentIconType::kEmail:
-      return vector_icons::kEmailIcon;
+      return ::features::IsRoundedIconsEnabled() ? vector_icons::kMailFilledIcon
+                                                 : vector_icons::kEmailOldIcon;
     case AddressUIComponentIconType::kPhone:
-      return vector_icons::kCallIcon;
+      return ::features::IsRoundedIconsEnabled() ? vector_icons::kCallFilledIcon
+                                                 : vector_icons::kCallOldIcon;
   }
 }
 
@@ -179,6 +183,10 @@ UpdateAddressProfileView::UpdateAddressProfileView(
   std::vector<ProfileValueDifference> profile_diff = GetProfileDifferenceForUi(
       controller_->GetProfileToSave(), controller_->GetOriginalProfile(),
       g_browser_process->GetApplicationLocale());
+  // TODO(crbug.com/481234059): Convert this to CHECK after investigation.
+  // Based of hypothesis in crbug.com/477044258, `GetProfileDifferenceForUi` is
+  // returning empty.
+  DUMP_WILL_BE_CHECK(!profile_diff.empty());
   has_empty_original_values_ = !HasNonEmptySecondValues(profile_diff);
 
   SetAcceptCallback(

@@ -26,8 +26,9 @@ import android.widget.Spinner;
 
 import androidx.fragment.app.Fragment;
 
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -48,10 +49,7 @@ public abstract class AutofillEditorBase extends Fragment
     /** We know which profile to edit based on the GUID stuffed in extras. */
     public static final String AUTOFILL_GUID = "guid";
 
-    /** Needs to be in sync with autofill::kSettingsOrigin[]. */
-    public static final String SETTINGS_ORIGIN = "Chrome settings";
-
-    /** GUID of the profile we are editing.  Empty if creating a new profile. */
+    /** GUID of the profile we are editing. Empty if creating a new profile. */
     protected String mGUID;
 
     /** Whether or not the editor is creating a new entry. */
@@ -60,7 +58,8 @@ public abstract class AutofillEditorBase extends Fragment
     /** Context for the app. */
     protected Context mContext;
 
-    private final ObservableSupplierImpl<String> mPageTitle = new ObservableSupplierImpl<>();
+    private final SettableMonotonicObservableSupplier<String> mPageTitle =
+            ObservableSuppliers.createMonotonic();
 
     @Override
     public View onCreateView(
@@ -99,7 +98,7 @@ public abstract class AutofillEditorBase extends Fragment
                         SettingsUtils.getShowShadowOnScrollListener(
                                 scrollView, baseView.findViewById(R.id.shadow)));
         // Inflate the editor and buttons into the "content" LinearLayout.
-        LinearLayout contentLayout = (LinearLayout) scrollView.findViewById(R.id.content);
+        LinearLayout contentLayout = scrollView.findViewById(R.id.content);
         inflater.inflate(getLayoutId(), contentLayout, true);
         inflater.inflate(R.layout.autofill_editor_base_buttons, contentLayout, true);
 
@@ -112,7 +111,7 @@ public abstract class AutofillEditorBase extends Fragment
     }
 
     @Override
-    public ObservableSupplier<String> getPageTitle() {
+    public MonotonicObservableSupplier<String> getPageTitle() {
         return mPageTitle;
     }
 
@@ -136,6 +135,8 @@ public abstract class AutofillEditorBase extends Fragment
 
         MenuItem deleteItem = menu.findItem(R.id.delete_menu_id);
         if (deleteItem != null) deleteItem.setVisible(!mIsNewEntry && getIsDeletable());
+        MenuItem brandingIcon = menu.findItem(R.id.branding_icon_id);
+        brandingIcon.setVisible(false);
     }
 
     /** @return True if the item is deletable. Can be false for server credit cards, for example. */
@@ -145,23 +146,14 @@ public abstract class AutofillEditorBase extends Fragment
 
     /** Initializes the buttons within the layout. */
     protected void initializeButtons(View layout) {
-        Button button = (Button) layout.findViewById(R.id.button_secondary);
-        button.setOnClickListener(
-                new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        finishPage();
-                    }
-                });
+        Button button = layout.findViewById(R.id.button_secondary);
+        button.setOnClickListener(_ -> finishPage());
 
         button = (Button) layout.findViewById(R.id.button_primary);
         button.setOnClickListener(
-                new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        if (saveEntry()) {
-                            finishPage();
-                        }
+                _ -> {
+                    if (saveEntry()) {
+                        finishPage();
                     }
                 });
         button.setEnabled(false);

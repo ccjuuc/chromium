@@ -7,10 +7,13 @@
 #include <memory>
 #include <string>
 
+#include "base/files/file.h"
+#include "base/files/file_util.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/gmock_expected_support.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "content/browser/indexed_db/indexed_db_value.h"
 #include "content/browser/indexed_db/instance/backing_store_test_base.h"
 #include "content/browser/indexed_db/instance/backing_store_util.h"
@@ -64,9 +67,9 @@ TEST_P(BackingStoreTest, PutGetConsistency) {
   const IndexedDBKey& key = key1_;
   IndexedDBValue& value = value1_;
 
-  auto db_creation_result = backing_store()->CreateOrOpenDatabase(u"name");
-  ASSERT_TRUE(db_creation_result.has_value());
-  BackingStore::Database& db = **db_creation_result;
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<BackingStore::Database> db_ptr,
+                       backing_store()->CreateOrOpenDatabase(u"name"));
+  BackingStore::Database& db = *db_ptr;
 
   {
     std::unique_ptr<BackingStore::Transaction> transaction1 =
@@ -75,7 +78,7 @@ TEST_P(BackingStoreTest, PutGetConsistency) {
 
     transaction1->Begin(CreateDummyLock());
     EXPECT_TRUE(transaction1->PutRecord(1, key, value.Clone()).has_value());
-    CommitTransactionAndVerify(*transaction1);
+    CommitTransactionAndVerify(std::move(transaction1));
   }
 
   {
@@ -86,7 +89,7 @@ TEST_P(BackingStoreTest, PutGetConsistency) {
     transaction2->Begin(CreateDummyLock());
     auto result = transaction2->GetRecord(1, key);
     EXPECT_TRUE(result.has_value());
-    CommitTransactionAndVerify(*transaction2);
+    CommitTransactionAndVerify(std::move(transaction2));
     EXPECT_EQ(base::span(value.bits), base::span(result->bits));
   }
 }
@@ -101,9 +104,9 @@ TEST_P(BackingStoreTest, PutBrokenBlob) {
   value.external_objects.emplace_back(
       CreateBlobInfo(u"text/plain", std::nullopt));
 
-  auto db_creation_result = backing_store()->CreateOrOpenDatabase(u"name");
-  ASSERT_TRUE(db_creation_result.has_value());
-  BackingStore::Database& db = **db_creation_result;
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<BackingStore::Database> db_ptr,
+                       backing_store()->CreateOrOpenDatabase(u"name"));
+  BackingStore::Database& db = *db_ptr;
 
   std::unique_ptr<BackingStore::Transaction> transaction =
       db.CreateTransaction(blink::mojom::IDBTransactionDurability::Relaxed,
@@ -160,25 +163,13 @@ TEST_P(BackingStoreTest, RollbackDuringBlobWrite) {
 }
 
 TEST_P(BackingStoreTest, Snapshots) {
-  auto db_creation_result = backing_store()->CreateOrOpenDatabase(u"name");
-  ASSERT_TRUE(db_creation_result.has_value());
-  BackingStore::Database& db = **db_creation_result;
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<BackingStore::Database> db_ptr,
+                       backing_store()->CreateOrOpenDatabase(u"name"));
+  BackingStore::Database& db = *db_ptr;
 
-  StatusOr<base::DictValue> empty_snapshot = SnapshotDatabase(db);
-  ASSERT_TRUE(empty_snapshot.has_value());
+  ASSERT_OK_AND_ASSIGN(base::DictValue empty_snapshot, SnapshotDatabase(db));
 
-  {
-    std::unique_ptr<BackingStore::Transaction> transaction =
-        CreateAndBeginTransaction(
-            db, blink::mojom::IDBTransactionMode::VersionChange);
-
-    EXPECT_TRUE(transaction
-                    ->CreateObjectStore(1, u"object_store_name",
-                                        IndexedDBKeyPath(u"object_store_key"),
-                                        /*auto_increment=*/true)
-                    .ok());
-    CommitTransactionAndVerify(*transaction);
-  }
+  CreateObjectStore(db);
 
   int total_record_count = 0;
   auto add_records = [&](size_t num_records) {
@@ -191,21 +182,20 @@ TEST_P(BackingStoreTest, Snapshots) {
     for (size_t i = 0; i < num_records; ++i) {
       IndexedDBKey key(i + total_record_count,
                        blink::mojom::IDBKeyType::Number);
-      EXPECT_TRUE(transaction->PutRecord(1, key, value1_.Clone()).has_value());
+      EXPECT_TRUE(transaction->PutRecord(kObjectStoreId1, key, value1_.Clone())
+                      .has_value());
     }
     total_record_count += num_records;
-    CommitTransactionAndVerify(*transaction);
+    CommitTransactionAndVerify(std::move(transaction));
   };
   add_records(100);
 
-  StatusOr<base::DictValue> snapshot = SnapshotDatabase(db);
-  ASSERT_TRUE(snapshot.has_value());
+  ASSERT_OK_AND_ASSIGN(base::DictValue snapshot, SnapshotDatabase(db));
 
   // Adding a record changes the snapshot.
   add_records(3);
-  StatusOr<base::DictValue> snapshot2 = SnapshotDatabase(db);
-  ASSERT_TRUE(snapshot2.has_value());
-  EXPECT_NE(*snapshot, *snapshot2);
+  ASSERT_OK_AND_ASSIGN(base::DictValue snapshot2, SnapshotDatabase(db));
+  EXPECT_NE(snapshot, snapshot2);
 
   // Updating a value changes the snapshot.
   {
@@ -216,13 +206,13 @@ TEST_P(BackingStoreTest, Snapshots) {
     transaction->Begin(CreateDummyLock());
 
     IndexedDBKey key(15, blink::mojom::IDBKeyType::Number);
-    EXPECT_TRUE(transaction->PutRecord(1, key, value2_.Clone()).has_value());
-    CommitTransactionAndVerify(*transaction);
+    EXPECT_TRUE(transaction->PutRecord(kObjectStoreId1, key, value2_.Clone())
+                    .has_value());
+    CommitTransactionAndVerify(std::move(transaction));
   };
 
-  StatusOr<base::DictValue> snapshot3 = SnapshotDatabase(db);
-  ASSERT_TRUE(snapshot3.has_value());
-  EXPECT_NE(*snapshot2, *snapshot3);
+  ASSERT_OK_AND_ASSIGN(base::DictValue snapshot3, SnapshotDatabase(db));
+  EXPECT_NE(snapshot2, snapshot3);
 
   // Changing the updated value back to the original, snapshot should revert
   // too.
@@ -234,28 +224,26 @@ TEST_P(BackingStoreTest, Snapshots) {
     transaction->Begin(CreateDummyLock());
 
     IndexedDBKey key(15, blink::mojom::IDBKeyType::Number);
-    EXPECT_TRUE(transaction->PutRecord(1, key, value1_.Clone()).has_value());
-    CommitTransactionAndVerify(*transaction);
+    EXPECT_TRUE(transaction->PutRecord(kObjectStoreId1, key, value1_.Clone())
+                    .has_value());
+    CommitTransactionAndVerify(std::move(transaction));
   };
-  StatusOr<base::DictValue> snapshot4 = SnapshotDatabase(db);
-  ASSERT_TRUE(snapshot4.has_value());
-  EXPECT_EQ(*snapshot2, *snapshot4);
+  ASSERT_OK_AND_ASSIGN(base::DictValue snapshot4, SnapshotDatabase(db));
+  EXPECT_EQ(snapshot2, snapshot4);
 
   // Exercise the whole-store hashing code.
   add_records(1000);
-  StatusOr<base::DictValue> snapshot5 = SnapshotDatabase(db);
-  ASSERT_TRUE(snapshot5.has_value());
-  EXPECT_LT(snapshot5->DebugString().size(), snapshot4->DebugString().size());
+  ASSERT_OK_AND_ASSIGN(base::DictValue snapshot5, SnapshotDatabase(db));
+  EXPECT_LT(snapshot5.DebugString().size(), snapshot4.DebugString().size());
 
   add_records(2);
-  StatusOr<base::DictValue> snapshot6 = SnapshotDatabase(db);
-  ASSERT_TRUE(snapshot6.has_value());
-  EXPECT_NE(*snapshot5, *snapshot6);
+  ASSERT_OK_AND_ASSIGN(base::DictValue snapshot6, SnapshotDatabase(db));
+  EXPECT_NE(snapshot5, snapshot6);
   // Size should not have changed since the row would change the digest but not
   // the size of the digest. Note that this sort of cheats because the digest is
   // actually omitted from the debug string due to being a binary, but even if
   // we were to encode it as a string (e.g. with base64), this check would pass.
-  EXPECT_EQ(snapshot6->DebugString().size(), snapshot5->DebugString().size());
+  EXPECT_EQ(snapshot6.DebugString().size(), snapshot5.DebugString().size());
 
   // Delete all records and verify the snapshot works, and is distinct from the
   // one for a database that lacks object stores/indices.
@@ -266,12 +254,14 @@ TEST_P(BackingStoreTest, Snapshots) {
 
     transaction->Begin(CreateDummyLock());
 
-    EXPECT_TRUE(transaction->DeleteRange(1, blink::IndexedDBKeyRange()).ok());
-    CommitTransactionAndVerify(*transaction);
+    EXPECT_TRUE(
+        transaction->DeleteRange(kObjectStoreId1, blink::IndexedDBKeyRange())
+            .ok());
+    CommitTransactionAndVerify(std::move(transaction));
   };
-  StatusOr<base::DictValue> no_record_snapshot = SnapshotDatabase(db);
-  ASSERT_TRUE(no_record_snapshot.has_value());
-  EXPECT_NE(*empty_snapshot, *no_record_snapshot);
+  ASSERT_OK_AND_ASSIGN(base::DictValue no_record_snapshot,
+                       SnapshotDatabase(db));
+  EXPECT_NE(empty_snapshot, no_record_snapshot);
 }
 
 // Deleting an index should delete the index metadata and the index data.
@@ -282,13 +272,13 @@ TEST_P(BackingStoreTest, CreateAndDeleteIndex) {
   const int64_t index_id = 999;
   const IndexedDBKeyPath index_key_path(u"index_key");
 
-  auto db = backing_store()->CreateOrOpenDatabase(u"database_name");
-  ASSERT_TRUE(db.has_value());
+  ASSERT_OK_AND_ASSIGN(auto db,
+                       backing_store()->CreateOrOpenDatabase(u"database_name"));
 
   {
     std::unique_ptr<BackingStore::Transaction> transaction =
         CreateAndBeginTransaction(
-            **db, blink::mojom::IDBTransactionMode::VersionChange);
+            *db, blink::mojom::IDBTransactionMode::VersionChange);
     EXPECT_TRUE(transaction
                     ->CreateObjectStore(object_store_id, u"object_store_name",
                                         object_store_key_path,
@@ -303,19 +293,18 @@ TEST_P(BackingStoreTest, CreateAndDeleteIndex) {
                                                /*multi_entry=*/true))
             .ok());
 
-    CommitTransactionAndVerify(*transaction);
+    CommitTransactionAndVerify(std::move(transaction));
   }
 
-  EXPECT_EQ((*db)->GetMetadata().object_stores.size(), 1U);
-  auto object_store_it =
-      (*db)->GetMetadata().object_stores.find(object_store_id);
-  ASSERT_NE(object_store_it, (*db)->GetMetadata().object_stores.end());
+  EXPECT_EQ(db->GetMetadata().object_stores.size(), 1U);
+  auto object_store_it = db->GetMetadata().object_stores.find(object_store_id);
+  ASSERT_NE(object_store_it, db->GetMetadata().object_stores.end());
   const IndexedDBObjectStoreMetadata& object_store = object_store_it->second;
   EXPECT_NE(object_store.indexes.end(), object_store.indexes.find(index_id));
 
   {
     auto transaction = CreateAndBeginTransaction(
-        **db, blink::mojom::IDBTransactionMode::VersionChange);
+        *db, blink::mojom::IDBTransactionMode::VersionChange);
 
     auto record =
         transaction->PutRecord(object_store_id, key1_, value1_.Clone());
@@ -340,7 +329,7 @@ TEST_P(BackingStoreTest, CreateAndDeleteIndex) {
       EXPECT_FALSE(pk->IsValid());
     }
 
-    CommitTransactionAndVerify(*transaction);
+    CommitTransactionAndVerify(std::move(transaction));
   }
 
   EXPECT_EQ(object_store.indexes.end(), object_store.indexes.find(index_id));
@@ -362,14 +351,13 @@ TEST_P(BackingStoreTest, CreateDatabase) {
   const IndexedDBKeyPath index_key_path(u"index_key");
 
   {
-    auto db1 = backing_store()->CreateOrOpenDatabase(database_name);
-    ASSERT_TRUE(db1.has_value());
-    UpdateDatabaseVersion(**db1, version);
+    ASSERT_OK_AND_ASSIGN(auto db1,
+                         backing_store()->CreateOrOpenDatabase(database_name));
+    UpdateDatabaseVersion(*db1, version);
 
     std::unique_ptr<indexed_db::BackingStore::Transaction> transaction =
-        (*db1)->CreateTransaction(
-            blink::mojom::IDBTransactionDurability::Relaxed,
-            blink::mojom::IDBTransactionMode::VersionChange);
+        db1->CreateTransaction(blink::mojom::IDBTransactionDurability::Relaxed,
+                               blink::mojom::IDBTransactionMode::VersionChange);
     transaction->Begin(CreateDummyLock());
 
     Status s =
@@ -378,7 +366,7 @@ TEST_P(BackingStoreTest, CreateDatabase) {
     EXPECT_TRUE(s.ok());
 
     const IndexedDBObjectStoreMetadata& object_store =
-        (*db1)->GetMetadata().object_stores.find(object_store_id)->second;
+        db1->GetMetadata().object_stores.find(object_store_id)->second;
     EXPECT_EQ(object_store.id, object_store_id);
 
     s = transaction->CreateIndex(
@@ -390,14 +378,17 @@ TEST_P(BackingStoreTest, CreateDatabase) {
     const IndexedDBIndexMetadata& index =
         object_store.indexes.find(index_id)->second;
     EXPECT_EQ(index.id, index_id);
-    CommitTransactionAndVerify(*transaction);
+    CommitTransactionAndVerify(std::move(transaction));
   }
 
-  {
-    auto db1 = backing_store()->CreateOrOpenDatabase(database_name);
-    EXPECT_TRUE(db1.has_value());
+  // Wait for the database to be unlocked before reopening it.
+  AcquireDatabaseLocks(database_name);
 
-    const blink::IndexedDBDatabaseMetadata& database = (*db1)->GetMetadata();
+  {
+    ASSERT_OK_AND_ASSIGN(auto db1,
+                         backing_store()->CreateOrOpenDatabase(database_name));
+
+    const blink::IndexedDBDatabaseMetadata& database = db1->GetMetadata();
 
     EXPECT_EQ(1UL, database.object_stores.size());
     const IndexedDBObjectStoreMetadata& object_store =
@@ -417,23 +408,21 @@ TEST_P(BackingStoreTest, CreateDatabase) {
 }
 
 TEST_P(BackingStoreTest, DatabaseExists) {
-  auto db1 = backing_store()->CreateOrOpenDatabase(u"db1");
-  ASSERT_TRUE(db1.has_value());
+  ASSERT_OK_AND_ASSIGN(auto db1, backing_store()->CreateOrOpenDatabase(u"db1"));
 
-  auto db2 = backing_store()->CreateOrOpenDatabase(u"db2");
-  ASSERT_TRUE(db2.has_value());
+  ASSERT_OK_AND_ASSIGN(auto db2, backing_store()->CreateOrOpenDatabase(u"db2"));
 
   // Only databases with non-default versions should be counted as existing by
   // `DatabaseExists()`.
-  UpdateDatabaseVersion(*db1.value(), 1);
+  UpdateDatabaseVersion(*db1, 1);
 
-  StatusOr<bool> db1_exists = backing_store()->DatabaseExists(u"db1");
-  ASSERT_TRUE(db1_exists.has_value());
-  EXPECT_TRUE(*db1_exists);
+  ASSERT_OK_AND_ASSIGN(bool db1_exists,
+                       backing_store()->DatabaseExists(u"db1"));
+  EXPECT_TRUE(db1_exists);
 
-  StatusOr<bool> db2_exists = backing_store()->DatabaseExists(u"db2");
-  ASSERT_TRUE(db2_exists.has_value());
-  EXPECT_FALSE(*db2_exists);
+  ASSERT_OK_AND_ASSIGN(bool db2_exists,
+                       backing_store()->DatabaseExists(u"db2"));
+  EXPECT_FALSE(db2_exists);
 }
 
 TEST_P(BackingStoreTest, DatabaseNamesAreSorted) {
@@ -510,9 +499,9 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 TEST_P(BackingStoreTestWithExternalObjects, PutGetConsistency) {
-  auto db_creation_result = backing_store()->CreateOrOpenDatabase(u"name");
-  ASSERT_TRUE(db_creation_result.has_value());
-  BackingStore::Database& db = **db_creation_result;
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<BackingStore::Database> db_ptr,
+                       backing_store()->CreateOrOpenDatabase(u"name"));
+  BackingStore::Database& db = *db_ptr;
   {
     // Initiate transaction1 - writing blobs.
     auto transaction1 =
@@ -521,7 +510,7 @@ TEST_P(BackingStoreTestWithExternalObjects, PutGetConsistency) {
 
     transaction1->Begin(CreateDummyLock());
     EXPECT_TRUE(transaction1->PutRecord(1, key3_, value3_.Clone()).has_value());
-    CommitTransactionAndVerify(*transaction1);
+    CommitTransactionAndVerify(std::move(transaction1));
   }
 
   // Initiate transaction2, reading blobs.
@@ -529,13 +518,12 @@ TEST_P(BackingStoreTestWithExternalObjects, PutGetConsistency) {
     auto transaction2 =
         db.CreateTransaction(blink::mojom::IDBTransactionDurability::Relaxed,
                              blink::mojom::IDBTransactionMode::ReadWrite);
-    // auto& transaction2 = *txn2;
     transaction2->Begin(CreateDummyLock());
     auto result = transaction2->GetRecord(1, key3_);
     EXPECT_TRUE(result.has_value());
     IndexedDBValue result_value = std::move(result.value());
 
-    CommitTransactionAndVerify(*transaction2);
+    CommitTransactionAndVerify(std::move(transaction2));
     EXPECT_EQ(base::span(value3_.bits), base::span(result_value.bits));
 
     EXPECT_TRUE(CheckBlobInfoMatches(result_value.external_objects));
@@ -554,7 +542,7 @@ TEST_P(BackingStoreTestWithExternalObjects, PutGetConsistency) {
                                                /*lower_open=*/false,
                                                /*upper_open=*/false))
             .ok());
-    CommitTransactionAndVerify(*transaction3);
+    CommitTransactionAndVerify(std::move(transaction3));
   }
 
   // Verify deletes
@@ -568,15 +556,15 @@ TEST_P(BackingStoreTestWithExternalObjects, PutGetConsistency) {
     EXPECT_TRUE(result.has_value());
     IndexedDBValue result_value = std::move(result.value());
 
-    CommitTransactionAndVerify(*transaction4);
+    CommitTransactionAndVerify(std::move(transaction4));
     EXPECT_TRUE(result_value.empty());
   }
 }
 
 TEST_P(BackingStoreTestWithExternalObjects, DeleteRange) {
-  auto db_creation_result = backing_store()->CreateOrOpenDatabase(u"name");
-  ASSERT_TRUE(db_creation_result.has_value());
-  BackingStore::Database& db = **db_creation_result;
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<BackingStore::Database> db_ptr,
+                       backing_store()->CreateOrOpenDatabase(u"name"));
+  BackingStore::Database& db = *db_ptr;
 
   const auto keys =
       std::to_array({IndexedDBKey(u"key0"), IndexedDBKey(u"key1"),
@@ -632,7 +620,7 @@ TEST_P(BackingStoreTestWithExternalObjects, DeleteRange) {
       }
 
       // Start committing transaction1.
-      CommitTransactionAndVerify(*transaction1);
+      CommitTransactionAndVerify(std::move(transaction1));
     }
 
     {
@@ -644,7 +632,7 @@ TEST_P(BackingStoreTestWithExternalObjects, DeleteRange) {
       EXPECT_TRUE(transaction2->DeleteRange(object_store_id, range).ok());
 
       // Start committing transaction2.
-      CommitTransactionAndVerify(*transaction2);
+      CommitTransactionAndVerify(std::move(transaction2));
     }
 
     // Verify deletes
@@ -658,7 +646,7 @@ TEST_P(BackingStoreTestWithExternalObjects, DeleteRange) {
         EXPECT_TRUE(result.has_value());
         IndexedDBValue result_value = std::move(result.value());
 
-        CommitTransactionAndVerify(*transaction);
+        CommitTransactionAndVerify(std::move(transaction));
 
         if (j == 1 || j == 2) {
           EXPECT_TRUE(result_value.empty());
@@ -672,9 +660,9 @@ TEST_P(BackingStoreTestWithExternalObjects, DeleteRange) {
 }
 
 TEST_P(BackingStoreTestWithExternalObjects, DeleteRangeEmptyRange) {
-  auto db_creation_result = backing_store()->CreateOrOpenDatabase(u"name");
-  ASSERT_TRUE(db_creation_result.has_value());
-  BackingStore::Database& db = **db_creation_result;
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<BackingStore::Database> db_ptr,
+                       backing_store()->CreateOrOpenDatabase(u"name"));
+  BackingStore::Database& db = *db_ptr;
 
   const auto keys = std::to_array({
       IndexedDBKey(u"key0"),
@@ -729,7 +717,7 @@ TEST_P(BackingStoreTestWithExternalObjects, DeleteRangeEmptyRange) {
                 .has_value());
       }
       // Start committing transaction1.
-      CommitTransactionAndVerify(*transaction1);
+      CommitTransactionAndVerify(std::move(transaction1));
     }
 
     // Initiate transaction 2 - delete range.
@@ -740,7 +728,7 @@ TEST_P(BackingStoreTestWithExternalObjects, DeleteRangeEmptyRange) {
       transaction2->Begin(CreateDummyLock());
       EXPECT_TRUE(transaction2->DeleteRange(object_store_id, range).ok());
 
-      CommitTransactionAndVerify(*transaction2);
+      CommitTransactionAndVerify(std::move(transaction2));
     }
 
     // Verify that no records were deleted.
@@ -754,7 +742,7 @@ TEST_P(BackingStoreTestWithExternalObjects, DeleteRangeEmptyRange) {
         EXPECT_TRUE(result.has_value());
         IndexedDBValue result_value = std::move(result.value());
 
-        CommitTransactionAndVerify(*transaction3);
+        CommitTransactionAndVerify(std::move(transaction3));
 
         // No records should have been deleted.
         EXPECT_FALSE(result_value.empty());
@@ -790,9 +778,9 @@ TEST_P(BackingStoreTestWithExternalObjects, ClearObjectStoreObjects) {
 
   const int64_t object_store_id = 999;
 
-  auto db_creation_result = backing_store()->CreateOrOpenDatabase(u"name");
-  ASSERT_TRUE(db_creation_result.has_value());
-  BackingStore::Database& db = **db_creation_result;
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<BackingStore::Database> db_ptr,
+                       backing_store()->CreateOrOpenDatabase(u"name"));
+  BackingStore::Database& db = *db_ptr;
 
   // Create two object stores, to verify that only one gets deleted.
   for (size_t i = 0; i < 2; ++i) {
@@ -810,7 +798,7 @@ TEST_P(BackingStoreTestWithExternalObjects, ClearObjectStoreObjects) {
                 .has_value());
       }
 
-      CommitTransactionAndVerify(*transaction1);
+      CommitTransactionAndVerify(std::move(transaction1));
     }
   }
 
@@ -824,7 +812,7 @@ TEST_P(BackingStoreTestWithExternalObjects, ClearObjectStoreObjects) {
     EXPECT_TRUE(transaction2->ClearObjectStore(object_store_id).ok());
 
     // Start committing transaction2.
-    CommitTransactionAndVerify(*transaction2);
+    CommitTransactionAndVerify(std::move(transaction2));
   }
 
   // Verify that all blobs were removed.
@@ -838,10 +826,62 @@ TEST_P(BackingStoreTestWithExternalObjects, ClearObjectStoreObjects) {
       EXPECT_TRUE(result.has_value());
       IndexedDBValue result_value = std::move(result.value());
 
-      CommitTransactionAndVerify(*transaction3);
+      CommitTransactionAndVerify(std::move(transaction3));
       EXPECT_TRUE(result_value.empty());
     }
   }
+}
+
+class BackingStoreMigrationTest
+    : public BackingStoreWithExternalObjectsTestBase {
+ public:
+  BackingStoreMigrationTest()
+      : BackingStoreWithExternalObjectsTestBase(
+            /*use_sqlite=*/false) {}
+  ~BackingStoreMigrationTest() override = default;
+
+  bool IncludesBlobs() override { return true; }
+  bool IncludesFileSystemAccessHandles() override { return true; }
+};
+
+TEST_F(BackingStoreMigrationTest, Migrate) {
+  base::HistogramTester histogram_tester;
+  blob_context_->SetWriteFilesToDisk(true);
+  ASSERT_OK_AND_ASSIGN(auto db,
+                       backing_store()->CreateOrOpenDatabase(u"test_db"));
+  CreateObjectStore(*db);
+
+  {
+    auto transaction =
+        db->CreateTransaction(blink::mojom::IDBTransactionDurability::Relaxed,
+                              blink::mojom::IDBTransactionMode::ReadWrite);
+    transaction->Begin(CreateDummyLock());
+    EXPECT_TRUE(transaction->PutRecord(kObjectStoreId1, key1_, value1_.Clone())
+                    .has_value());
+    EXPECT_TRUE(transaction->PutRecord(kObjectStoreId1, key2_, value2_.Clone())
+                    .has_value());
+    EXPECT_TRUE(transaction->PutRecord(kObjectStoreId1, key3_, value3_.Clone())
+                    .has_value());
+    CommitTransactionAndVerify(std::move(transaction));
+  }
+  db.reset();
+
+  // Delete one of the blob files before migration.
+  ASSERT_GE(blob_context_->writes().size(), 1u);
+  ASSERT_TRUE(base::DeleteFile(blob_context_->writes()[0].path));
+
+  // Migration should still succeed despite the missing file.
+  MigrateAndVerifyBackingStore();
+
+  // Verify the histogram records both success and failure.
+  EXPECT_EQ(
+      histogram_tester.GetBucketCount(
+          "IndexedDB.SqliteMigration.RenameBlobResult", -base::File::FILE_OK),
+      2);
+  EXPECT_EQ(histogram_tester.GetBucketCount(
+                "IndexedDB.SqliteMigration.RenameBlobResult",
+                -base::File::FILE_ERROR_NOT_FOUND),
+            1);
 }
 
 }  // namespace content::indexed_db

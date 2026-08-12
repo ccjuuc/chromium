@@ -11,6 +11,8 @@
 #include <string>
 
 #include "base/containers/span.h"
+#include "base/debug/crash_logging.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/trace_event/trace_event.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_context.h"
@@ -338,6 +340,8 @@ void DisplayExtensionsEGL::InitializeExtensionSettings(EGLDisplay display) {
       extensions, "EGL_ANGLE_create_context_backwards_compatible");
   b_EGL_ANGLE_create_context_client_arrays =
       gfx::HasExtension(extensions, "EGL_ANGLE_create_context_client_arrays");
+  b_EGL_ANGLE_create_context_extensions_enabled = gfx::HasExtension(
+      extensions, "EGL_ANGLE_create_context_extensions_enabled");
   b_EGL_ANGLE_create_context_passthrough_shaders = gfx::HasExtension(
       extensions, "EGL_ANGLE_create_context_passthrough_shaders");
   b_EGL_ANGLE_create_context_webgl_compatibility = gfx::HasExtension(

@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/modules/mediastream/media_devices.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
@@ -29,6 +30,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_tester.h"
 #include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_dom_exception.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_boolean_string.h"
@@ -48,8 +50,12 @@
 #include "third_party/blink/renderer/core/dom/events/native_event_listener.h"
 #include "third_party/blink/renderer/core/event_type_names.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+#include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
+#include "third_party/blink/renderer/core/html/html_iframe_element.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
+#include "third_party/blink/renderer/core/testing/sim/sim_request.h"
+#include "third_party/blink/renderer/core/testing/sim/sim_test.h"
 #include "third_party/blink/renderer/modules/mediastream/crop_target.h"
 #include "third_party/blink/renderer/modules/mediastream/input_device_info.h"
 #include "third_party/blink/renderer/modules/mediastream/media_device_info.h"
@@ -541,13 +547,13 @@ void VerifyAudioInputCapabilities(
     for (auto value : capabilities->echoCancellation()) {
       echo_cancellation.push_back(ToEchoCancellationMode(value));
     }
-    EXPECT_TRUE(base::Contains(echo_cancellation,
-                               EchoCancellationMode::kBrowserDecides));
-    EXPECT_TRUE(
-        base::Contains(echo_cancellation, EchoCancellationMode::kDisabled));
+    EXPECT_TRUE(std::ranges::contains(echo_cancellation,
+                                      EchoCancellationMode::kBrowserDecides));
+    EXPECT_TRUE(std::ranges::contains(echo_cancellation,
+                                      EchoCancellationMode::kDisabled));
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-    EXPECT_TRUE(
-        base::Contains(echo_cancellation, EchoCancellationMode::kRemoteOnly));
+    EXPECT_TRUE(std::ranges::contains(echo_cancellation,
+                                      EchoCancellationMode::kRemoteOnly));
 #endif
     int effects = expected_capabilities->parameters.effects();
     // On some platforms, capabilities are not queried because it is costly.
@@ -558,7 +564,7 @@ void VerifyAudioInputCapabilities(
     }
     if (EchoCanceller::IsSystemWideAecAvailable(effects)) {
       EXPECT_TRUE(
-          base::Contains(echo_cancellation, EchoCancellationMode::kAll));
+          std::ranges::contains(echo_cancellation, EchoCancellationMode::kAll));
     }
   }
 }
@@ -1528,6 +1534,33 @@ TEST_P(ProduceSubCaptureTargetTest, IdRejectedIfDifferentWindow) {
       String("The Element and the MediaDevices object must be same-window."));
 }
 
+TEST_P(ProduceSubCaptureTargetTest, RejectsIfFencedFrame) {
+  V8TestingScope scope;
+  auto* media_devices = GetMediaDevices(*GetDocument().domWindow());
+  ASSERT_TRUE(media_devices);
+
+  // Set the page to behave as a fenced frame root.
+  GetDocument().GetPage()->SetIsMainFrameFencedFrameRoot();
+  ASSERT_TRUE(GetDocument().GetFrame()->IsInFencedFrameTree());
+
+  SetBodyContent("<div id='test-div'></div>");
+  Element* const div = GetDocument().getElementById(AtomicString("test-div"));
+
+  bool got_promise =
+      ProduceSubCaptureTargetAndGetPromise(scope, type_, media_devices, div);
+  EXPECT_FALSE(got_promise);
+  EXPECT_TRUE(scope.GetExceptionState().HadException());
+  EXPECT_EQ(scope.GetExceptionState().CodeAs<DOMExceptionCode>(),
+            DOMExceptionCode::kNotAllowedError);
+  EXPECT_EQ(
+      scope.GetExceptionState().Message(),
+      type_ == SubCaptureTarget::Type::kCropTarget
+          ? String(
+                "CropTarget.fromElement is not allowed in a fenced frame tree.")
+          : String("RestrictionTarget.fromElement is not allowed in a fenced "
+                   "frame tree."));
+}
+
 TEST_P(ProduceSubCaptureTargetTest, DuplicateId) {
   V8TestingScope scope;
   auto* media_devices = GetMediaDevices(*GetDocument().domWindow());
@@ -1627,8 +1660,44 @@ TEST_P(ProduceSubCaptureTargetTest, IdStringFormat) {
 
   const SubCaptureTarget* const target = ToSubCaptureTarget(tester->Value());
   const String& id = target->GetId();
-  EXPECT_TRUE(id.ContainsOnlyASCIIOrEmpty());
+  EXPECT_TRUE(id.ContainsOnlyAsciiOrEmpty());
   EXPECT_TRUE(base::Uuid::ParseLowercase(id.Ascii()).is_valid());
+}
+
+class MediaDevicesSimTest : public SimTest {};
+
+TEST_F(MediaDevicesSimTest, SetPreferredSinkIdRejectsInIframe) {
+  SimRequest main_resource("https://example.com", "text/html");
+  LoadURL("https://example.com");
+  main_resource.Complete(R"(
+    <iframe id="test-iframe" src="about:blank"></iframe>
+  )");
+
+  auto* iframe = To<HTMLIFrameElement>(
+      GetDocument().getElementById(AtomicString("test-iframe")));
+  ASSERT_TRUE(iframe);
+  auto* child_frame = To<LocalFrame>(iframe->ContentFrame());
+  ASSERT_TRUE(child_frame);
+
+  LocalDOMWindow* child_window = child_frame->DomWindow();
+  ASSERT_TRUE(child_window);
+  ASSERT_FALSE(child_frame->IsOutermostMainFrame());
+
+  ScriptState* child_script_state = ToScriptStateForMainWorld(child_frame);
+  ScriptState::Scope child_scope(child_script_state);
+
+  MediaDevices* child_media_devices =
+      MakeGarbageCollected<MediaDevices>(*child_window->navigator());
+
+  DummyExceptionStateForTesting exception_state;
+  child_media_devices->setPreferredSinkId(child_script_state, kValidSinkId,
+                                          exception_state);
+
+  EXPECT_TRUE(exception_state.HadException());
+  EXPECT_EQ(exception_state.Code(),
+            ToExceptionCode(DOMExceptionCode::kInvalidStateError));
+  EXPECT_EQ(exception_state.Message(),
+            "Can only be called from the top-level document.");
 }
 
 // TODO(crbug.com/1418194): Add tests after MediaDevicesDispatcherHost

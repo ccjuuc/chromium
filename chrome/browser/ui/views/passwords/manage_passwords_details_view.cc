@@ -17,10 +17,8 @@
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/controls/rich_hover_button.h"
 #include "chrome/browser/ui/views/passwords/manage_passwords_view_ids.h"
-#include "chrome/browser/ui/views/passwords/password_bubble_view_base.h"
 #include "chrome/browser/ui/views/passwords/views_utils.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/password_ui_utils.h"
 #include "components/password_manager/core/browser/ui/credential_ui_entry.h"
@@ -30,6 +28,7 @@
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/controls/button/image_button.h"
@@ -240,10 +239,16 @@ std::unique_ptr<views::View> CreatePasswordLabelWithEyeIconView(
   eye_icon->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
   eye_icon->SetID(
       static_cast<int>(ManagePasswordsViewIDs::kRevealPasswordButton));
-  views::SetImageFromVectorIconWithColorId(
-      eye_icon, views::kEyeIcon, ui::kColorIcon, ui::kColorIconDisabled);
-  views::SetToggledImageFromVectorIconWithColorId(
-      eye_icon, views::kEyeCrossedIcon, ui::kColorIcon, ui::kColorIconDisabled);
+  views::SetImageFromVectorIconWithColor(
+      eye_icon,
+      features::IsRoundedIconsEnabled() ? views::kVisibilityFilledIcon
+                                        : views::kEyeOldIcon,
+      {ui::kColorIcon, ui::kColorIconDisabled});
+  views::SetToggledImageFromVectorIconWithColor(
+      eye_icon,
+      features::IsRoundedIconsEnabled() ? views::kVisibilityOffFilledIcon
+                                        : views::kEyeCrossedOldIcon,
+      {ui::kColorIcon, ui::kColorIconDisabled});
   views::InstallCircleHighlightPathGenerator(eye_icon);
   eye_icon->SetCallback(
       base::BindRepeating(
@@ -390,7 +395,9 @@ std::unique_ptr<views::View> CreateEditUsernameRow(
       gfx::Insets::VH(0, layout_provider->GetDistanceMetric(
                              views::DISTANCE_RELATED_CONTROL_HORIZONTAL)));
   row->SetCrossAxisAlignment(views::LayoutAlignment::kStart);
-  row->AddChildView(CreateWrappedView(CreateIconView(kAccountCircleIcon)));
+  row->AddChildView(CreateWrappedView(CreateIconView(
+      features::IsRoundedIconsEnabled() ? kAccountCircleFilledIcon
+                                        : kAccountCircleOldIcon)));
   auto* username_with_error_label_view =
       row->AddChildView(std::make_unique<views::BoxLayoutView>());
   username_with_error_label_view->SetOrientation(
@@ -435,7 +442,8 @@ std::unique_ptr<views::View> CreateEditNoteRow(
                              views::DISTANCE_RELATED_CONTROL_HORIZONTAL)));
   row->SetCrossAxisAlignment(views::LayoutAlignment::kStart);
 
-  row->AddChildView(CreateWrappedView(CreateIconView(kNotesIcon)));
+  row->AddChildView(CreateWrappedView(CreateIconView(
+      features::IsRoundedIconsEnabled() ? kNotesIcon : kNotesOldIcon)));
   auto* note_with_error_label_view =
       row->AddChildView(std::make_unique<views::BoxLayoutView>());
   note_with_error_label_view->SetOrientation(
@@ -478,15 +486,19 @@ std::unique_ptr<RichHoverButton> CreateManagePasswordRow(
       /*callback=*/
       std::move(on_manage_password_clicked_callback),
       /*main_image_icon=*/
-      ui::ImageModel::FromVectorIcon(vector_icons::kSettingsIcon,
+      ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                         ? vector_icons::kSettingsFilledIcon
+                                         : vector_icons::kSettingsOldIcon,
                                      ui::kColorIcon),
       /*title_text=*/
       l10n_util::GetStringUTF16(IDS_PASSWORD_MANAGER_MANAGE_PASSWORD_BUTTON),
       /*subtitle_text=*/std::u16string(),
       /*action_image_icon=*/
-      ui::ImageModel::FromVectorIcon(vector_icons::kLaunchIcon,
-                                     ui::kColorIconSecondary,
-                                     GetLayoutConstant(PAGE_INFO_ICON_SIZE)));
+      ui::ImageModel::FromVectorIcon(
+          features::IsRoundedIconsEnabled() ? views::kOpenInNewIcon
+                                            : vector_icons::kLaunchOldIcon,
+          ui::kColorIconSecondary,
+          GetLayoutConstant(LayoutConstant::kPageInfoIconSize)));
   manage_password_row->SetID(static_cast<int>(
       password_manager::ManagePasswordsViewIDs::kManagePasswordButton));
   manage_password_row->SetTooltipText(
@@ -516,7 +528,9 @@ std::unique_ptr<views::View> ManagePasswordsDetailsView::CreateTitleView(
 
   if (on_back_clicked_callback) {
     auto back_button = views::CreateVectorImageButtonWithNativeTheme(
-        *on_back_clicked_callback, vector_icons::kArrowBackIcon);
+        *on_back_clicked_callback, features::IsRoundedIconsEnabled()
+                                       ? vector_icons::kArrowBackIcon
+                                       : vector_icons::kArrowBackOldIcon);
     back_button->SetTooltipText(l10n_util::GetStringUTF16(IDS_ACCNAME_BACK));
     views::InstallCircleHighlightPathGenerator(back_button.get());
     back_button->SetProperty(views::kElementIdentifierKey, kBackButton);
@@ -566,13 +580,21 @@ ManagePasswordsDetailsView::ManagePasswordsDetailsView(
                 PasswordManagementBubbleInteractions::
                     kUsernameCopyButtonClicked));
     AddChildView(CreateDetailsRowWithActionButton(
-        kAccountCircleIcon, std::move(username_label), kCopyIcon,
+        features::IsRoundedIconsEnabled() ? kAccountCircleFilledIcon
+                                          : kAccountCircleOldIcon,
+        std::move(username_label),
+        features::IsRoundedIconsEnabled() ? vector_icons::kContentCopyIcon
+                                          : kCopyOldIcon,
         l10n_util::GetStringUTF16(IDS_PASSWORD_MANAGER_UI_COPY_USERNAME),
         std::move(copy_username_button_callback),
         ManagePasswordsViewIDs::kCopyUsernameButton));
   } else if (allow_empty_username_edit) {
     read_username_row_ = AddChildView(CreateDetailsRowWithActionButton(
-        kAccountCircleIcon, std::move(username_label), vector_icons::kEditIcon,
+        features::IsRoundedIconsEnabled() ? kAccountCircleFilledIcon
+                                          : kAccountCircleOldIcon,
+        std::move(username_label),
+        features::IsRoundedIconsEnabled() ? vector_icons::kEditFilledIcon
+                                          : vector_icons::kEditOldIcon,
         l10n_util::GetStringUTF16(IDS_MANAGE_PASSWORDS_EDIT_USERNAME_TOOLTIP),
         base::BindRepeating(
             &ManagePasswordsDetailsView::SwitchToEditUsernameMode,
@@ -586,8 +608,10 @@ ManagePasswordsDetailsView::ManagePasswordsDetailsView(
                                 base::Unretained(this))));
     edit_username_row_->SetVisible(false);
   } else {
-    AddChildView(
-        CreateDetailsRow(kAccountCircleIcon, std::move(username_label)));
+    AddChildView(CreateDetailsRow(features::IsRoundedIconsEnabled()
+                                      ? kAccountCircleFilledIcon
+                                      : kAccountCircleOldIcon,
+                                  std::move(username_label)));
   }
 
   std::unique_ptr<views::Label> password_label =
@@ -596,7 +620,9 @@ ManagePasswordsDetailsView::ManagePasswordsDetailsView(
       static_cast<int>(ManagePasswordsViewIDs::kPasswordLabel));
   if (password_form.IsFederatedCredential()) {
     // Federated credentials, there is no note and no copy password button.
-    AddChildView(CreateDetailsRow(vector_icons::kPasswordManagerIcon,
+    AddChildView(CreateDetailsRow(features::IsRoundedIconsEnabled()
+                                      ? vector_icons::kPasswordManagerIcon
+                                      : vector_icons::kPasswordManagerOldIcon,
                                   std::move(password_label)));
     return;
   }
@@ -610,10 +636,12 @@ ManagePasswordsDetailsView::ManagePasswordsDetailsView(
               PasswordManagementBubbleInteractions::
                   kPasswordCopyButtonClicked));
   AddChildView(CreateDetailsRowWithActionButton(
-      vector_icons::kPasswordManagerIcon,
+      features::IsRoundedIconsEnabled() ? vector_icons::kPasswordManagerIcon
+                                        : vector_icons::kPasswordManagerOldIcon,
       CreatePasswordLabelWithEyeIconView(std::move(password_label),
                                          on_activity_callback_),
-      kCopyIcon,
+      features::IsRoundedIconsEnabled() ? vector_icons::kContentCopyIcon
+                                        : kCopyOldIcon,
       l10n_util::GetStringUTF16(IDS_PASSWORD_MANAGER_UI_COPY_PASSWORD),
       std::move(copy_password_button_callback),
       ManagePasswordsViewIDs::kCopyPasswordButton));
@@ -622,7 +650,10 @@ ManagePasswordsDetailsView::ManagePasswordsDetailsView(
   // another to edit the note, which is hidden by default. Clicking the Edit
   // icon next to the note row will hide the read row, and show the edit row.
   read_note_row_ = AddChildView(CreateDetailsRowWithActionButton(
-      kNotesIcon, CreateNoteLabel(password_form), vector_icons::kEditIcon,
+      features::IsRoundedIconsEnabled() ? kNotesIcon : kNotesOldIcon,
+      CreateNoteLabel(password_form),
+      features::IsRoundedIconsEnabled() ? vector_icons::kEditFilledIcon
+                                        : vector_icons::kEditOldIcon,
       l10n_util::GetStringUTF16(IDS_MANAGE_PASSWORDS_EDIT_NOTE_TOOLTIP),
       base::BindRepeating(&ManagePasswordsDetailsView::SwitchToEditNoteMode,
                           base::Unretained(this)),
@@ -634,26 +665,15 @@ ManagePasswordsDetailsView::ManagePasswordsDetailsView(
                           base::Unretained(this))));
   edit_note_row_->SetVisible(false);
 
-  if (base::FeatureList::IsEnabled(
-          password_manager::features::kPasswordManualFallbackAvailable)) {
-    separator_row_ =
-        AddChildView(views::Builder<views::Separator>()
-                         .SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(
-                             ChromeLayoutProvider::Get()->GetDistanceMetric(
-                                 DISTANCE_CONTENT_LIST_VERTICAL_SINGLE),
-                             0)))
-                         .Build());
-
-    manage_password_row_ = AddChildView(CreateManagePasswordRow(
-        std::move(on_manage_password_clicked_callback)));
-  } else {
-    // We need the bottom padding only if the "Manage password" button is not
-    // added to the layout.
-    SetInsideBorderInsets(
-        gfx::Insets().set_bottom(ChromeLayoutProvider::Get()
-                                     ->GetInsetsMetric(views::INSETS_DIALOG)
-                                     .bottom()));
-  }
+  separator_row_ =
+      AddChildView(views::Builder<views::Separator>()
+                       .SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(
+                           ChromeLayoutProvider::Get()->GetDistanceMetric(
+                               DISTANCE_CONTENT_LIST_VERTICAL_SINGLE),
+                           0)))
+                       .Build());
+  manage_password_row_ = AddChildView(
+      CreateManagePasswordRow(std::move(on_manage_password_clicked_callback)));
 
   SetProperty(views::kElementIdentifierKey, kTopView);
   RequestFocus();
@@ -664,15 +684,12 @@ ManagePasswordsDetailsView::~ManagePasswordsDetailsView() = default;
 void ManagePasswordsDetailsView::SwitchToReadingMode() {
   read_note_row_->SetVisible(true);
   edit_note_row_->SetVisible(false);
-  if (base::FeatureList::IsEnabled(
-          password_manager::features::kPasswordManualFallbackAvailable)) {
-    // The "Manage password" button should be visible only in the reading mode.
-    // The bottom padding should be absent in this mode to achieve the same
-    // appearance of the button as in the `ManagerPasswordsView`.
-    separator_row_->SetVisible(true);
-    manage_password_row_->SetVisible(true);
-    SetInsideBorderInsets(gfx::Insets());
-  }
+  // The "Manage password" button should be visible only in the reading mode.
+  // The bottom padding should be absent in this mode to achieve the same
+  // appearance of the button as in the `ManagerPasswordsView`.
+  separator_row_->SetVisible(true);
+  manage_password_row_->SetVisible(true);
+  SetInsideBorderInsets(gfx::Insets());
 
   on_activity_callback_.Run();
 }
@@ -696,18 +713,15 @@ void ManagePasswordsDetailsView::SwitchToEditUsernameMode() {
   DCHECK(edit_username_row_);
   read_username_row_->SetVisible(false);
   edit_username_row_->SetVisible(true);
-  if (base::FeatureList::IsEnabled(
-          password_manager::features::kPasswordManualFallbackAvailable)) {
-    // The "Manage passwords" button should not be visible in the editor mode.
-    // The bottom padding is added to offset the dialog buttons shown by the
-    // `ManagePasswordsView`.
-    separator_row_->SetVisible(false);
-    manage_password_row_->SetVisible(false);
-    SetInsideBorderInsets(
-        gfx::Insets().set_bottom(ChromeLayoutProvider::Get()
-                                     ->GetInsetsMetric(views::INSETS_DIALOG)
-                                     .bottom()));
-  }
+  // The "Manage passwords" button should not be visible in the editor mode.
+  // The bottom padding is added to offset the dialog buttons shown by the
+  // `ManagePasswordsView`.
+  separator_row_->SetVisible(false);
+  manage_password_row_->SetVisible(false);
+  SetInsideBorderInsets(
+      gfx::Insets().set_bottom(ChromeLayoutProvider::Get()
+                                   ->GetInsetsMetric(views::INSETS_DIALOG)
+                                   .bottom()));
 
   switched_to_edit_mode_callback_.Run();
   DCHECK(username_textfield_);
@@ -720,18 +734,15 @@ void ManagePasswordsDetailsView::SwitchToEditUsernameMode() {
 void ManagePasswordsDetailsView::SwitchToEditNoteMode() {
   read_note_row_->SetVisible(false);
   edit_note_row_->SetVisible(true);
-  if (base::FeatureList::IsEnabled(
-          password_manager::features::kPasswordManualFallbackAvailable)) {
-    // The "Manage passwords" button should not be visible in the editor mode.
-    // The bottom padding is added to offset the dialog buttons shown by the
-    // `ManagePasswordsView`.
-    separator_row_->SetVisible(false);
-    manage_password_row_->SetVisible(false);
-    SetInsideBorderInsets(
-        gfx::Insets().set_bottom(ChromeLayoutProvider::Get()
-                                     ->GetInsetsMetric(views::INSETS_DIALOG)
-                                     .bottom()));
-  }
+  // The "Manage passwords" button should not be visible in the editor mode.
+  // The bottom padding is added to offset the dialog buttons shown by the
+  // `ManagePasswordsView`.
+  separator_row_->SetVisible(false);
+  manage_password_row_->SetVisible(false);
+  SetInsideBorderInsets(
+      gfx::Insets().set_bottom(ChromeLayoutProvider::Get()
+                                   ->GetInsetsMetric(views::INSETS_DIALOG)
+                                   .bottom()));
 
   switched_to_edit_mode_callback_.Run();
   DCHECK(note_textarea_);

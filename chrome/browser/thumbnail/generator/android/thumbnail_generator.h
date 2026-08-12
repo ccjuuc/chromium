@@ -10,7 +10,7 @@
 #include "base/android/jni_android.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/thumbnail/generator/image_thumbnail_request.h"
-#include "chrome/services/media_gallery_util/public/mojom/media_parser.mojom.h"
+#include "components/media_gallery_util/public/mojom/media_parser.mojom.h"
 
 class ThumbnailMediaParser;
 
@@ -36,7 +36,7 @@ class ThumbnailGenerator {
                          const base::android::JavaRef<jstring>& jcontent_id,
                          const base::android::JavaRef<jstring>& jfile_path,
                          const base::android::JavaRef<jstring>& jmime_type,
-                         jint icon_size,
+                         int32_t icon_size,
                          const base::android::JavaRef<jobject>& callback);
 
  private:

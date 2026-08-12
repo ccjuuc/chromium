@@ -8,9 +8,9 @@
 #include <vector>
 
 #include "components/sync/base/time.h"
-#include "components/sync/engine/nigori/cross_user_sharing_public_private_key_pair.h"
-#include "components/sync/engine/nigori/key_derivation_params.h"
-#include "components/sync/engine/nigori/nigori.h"
+#include "components/sync/model/crypto/key_derivation_params.h"
+#include "components/sync/model/crypto/nigori.h"
+#include "components/sync/nigori/cross_user_sharing_public_private_key_pair.h"
 #include "components/sync/nigori/cryptographer_impl.h"
 #include "components/sync/nigori/keystore_keys_cryptographer.h"
 #include "components/sync/protocol/nigori_local_data.pb.h"
@@ -126,7 +126,7 @@ TEST(NigoriStateTest, ShouldContainPublicKeyInLocalProto) {
       state.cryptographer->EmplaceKey(kDefaultEncryptionKey,
                                       KeyDerivationParams::CreateForPbkdf2());
   state.cryptographer->SelectDefaultEncryptionKey(default_encryption_key_name);
-  state.cryptographer->SetKeyPair(
+  state.cryptographer->SetCrossUserSharingKeyPair(
       CrossUserSharingPublicPrivateKeyPair::GenerateNewKeyPair(),
       kKeyPairVersion);
   const std::vector<uint8_t> key(32, 0xDE);
@@ -164,13 +164,13 @@ TEST(
   sync_pb::NigoriModel nigori_model;
   std::unique_ptr<CryptographerImpl> cryptographer =
       CryptographerImpl::CreateEmpty();
-  cryptographer->SetKeyPair(
+  cryptographer->SetCrossUserSharingKeyPair(
       CrossUserSharingPublicPrivateKeyPair::GenerateNewKeyPair(), 5);
-  cryptographer->SetKeyPair(
+  cryptographer->SetCrossUserSharingKeyPair(
       CrossUserSharingPublicPrivateKeyPair::GenerateNewKeyPair(), 6);
-  ASSERT_TRUE(cryptographer->HasKeyPair(5));
-  ASSERT_TRUE(cryptographer->HasKeyPair(6));
-  *nigori_model.mutable_cryptographer_data() = cryptographer->ToProto();
+  ASSERT_TRUE(cryptographer->HasCrossUserSharingKeyPair(5));
+  ASSERT_TRUE(cryptographer->HasCrossUserSharingKeyPair(6));
+  *nigori_model.mutable_cryptographer_data() = cryptographer->ToLocalProto();
 
   const auto raw_public_key =
       cryptographer->GetCrossUserSharingKeyPair(/*version=*/5)
@@ -195,13 +195,13 @@ TEST(NigoriStateTest,
   sync_pb::NigoriModel nigori_model;
   std::unique_ptr<CryptographerImpl> cryptographer =
       CryptographerImpl::CreateEmpty();
-  cryptographer->SetKeyPair(
+  cryptographer->SetCrossUserSharingKeyPair(
       CrossUserSharingPublicPrivateKeyPair::GenerateNewKeyPair(), 5);
-  cryptographer->SetKeyPair(
+  cryptographer->SetCrossUserSharingKeyPair(
       CrossUserSharingPublicPrivateKeyPair::GenerateNewKeyPair(), 6);
-  ASSERT_TRUE(cryptographer->HasKeyPair(5));
-  ASSERT_TRUE(cryptographer->HasKeyPair(6));
-  *nigori_model.mutable_cryptographer_data() = cryptographer->ToProto();
+  ASSERT_TRUE(cryptographer->HasCrossUserSharingKeyPair(5));
+  ASSERT_TRUE(cryptographer->HasCrossUserSharingKeyPair(6));
+  *nigori_model.mutable_cryptographer_data() = cryptographer->ToLocalProto();
 
   NigoriState state = NigoriState::CreateFromLocalProto(nigori_model);
 
@@ -230,7 +230,7 @@ TEST(NigoriStateTest, ShouldReturnNeedsGenerateCrossUserSharingKeyPair) {
   state.cross_user_sharing_public_key =
       CrossUserSharingPublicKey::CreateByImport(key_pair.GetRawPublicKey());
   state.cross_user_sharing_key_pair_version = 0;
-  state.cryptographer->SetKeyPair(std::move(key_pair), 0);
+  state.cryptographer->SetCrossUserSharingKeyPair(std::move(key_pair), 0);
   EXPECT_FALSE(state.NeedsGenerateCrossUserSharingKeyPair());
 
   // Corrupt the key pair.

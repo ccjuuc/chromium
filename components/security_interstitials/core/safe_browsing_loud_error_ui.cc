@@ -72,7 +72,7 @@ SafeBrowsingLoudErrorUI::~SafeBrowsingLoudErrorUI() {
 }
 
 void SafeBrowsingLoudErrorUI::PopulateStringsForHtml(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   load_time_data.Set("type", "SAFEBROWSING");
   load_time_data.Set("tabTitle",
                      l10n_util::GetStringUTF16(IDS_SAFEBROWSING_V3_TITLE));
@@ -86,6 +86,7 @@ void SafeBrowsingLoudErrorUI::PopulateStringsForHtml(
       "primaryButtonText",
       l10n_util::GetStringUTF16(IDS_SAFEBROWSING_OVERRIDABLE_SAFETY_BUTTON));
   load_time_data.Set("overridable", !is_proceed_anyway_disabled());
+  load_time_data.Set("disableKeyboardOverride", is_proceed_anyway_disabled());
   load_time_data.Set(
       security_interstitials::kOptInLink,
       l10n_util::GetStringUTF16(IDS_SAFE_BROWSING_SCOUT_REPORTING_AGREE));
@@ -131,8 +132,8 @@ void SafeBrowsingLoudErrorUI::HandleCommand(
   switch (command) {
     case CMD_PROCEED: {
       // User pressed on the button to proceed.
-      user_made_decision_ = true;
       if (!is_proceed_anyway_disabled()) {
+        user_made_decision_ = true;
         controller()->metrics_helper()->RecordUserDecision(
             MetricsHelper::PROCEED);
         controller()->Proceed();
@@ -143,7 +144,11 @@ void SafeBrowsingLoudErrorUI::HandleCommand(
     }
     case CMD_DONT_PROCEED: {
       // User pressed on the button to return to safety.
-      user_made_decision_ = true;
+      // Only record a user decision if the command was actually
+      // CMD_DONT_PROCEED (not a fallthrough from a policy-blocked CMD_PROCEED).
+      if (command == CMD_DONT_PROCEED) {
+        user_made_decision_ = true;
+      }
       // Don't record the user action here because there are other ways of
       // triggering DontProceed, like clicking the back button.
       if (is_main_frame_load_pending()) {
@@ -246,7 +251,7 @@ void SafeBrowsingLoudErrorUI::HandleCommand(
 }
 
 void SafeBrowsingLoudErrorUI::PopulateMalwareLoadTimeData(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   load_time_data.Set("phishing", false);
   load_time_data.Set("heading",
                      l10n_util::GetStringUTF16(IDS_SAFEBROWSING_HEADING));
@@ -260,7 +265,7 @@ void SafeBrowsingLoudErrorUI::PopulateMalwareLoadTimeData(
 }
 
 void SafeBrowsingLoudErrorUI::PopulateHarmfulLoadTimeData(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   load_time_data.Set("phishing", false);
   load_time_data.Set("heading",
                      l10n_util::GetStringUTF16(IDS_SAFEBROWSING_HEADING));
@@ -274,7 +279,7 @@ void SafeBrowsingLoudErrorUI::PopulateHarmfulLoadTimeData(
 }
 
 void SafeBrowsingLoudErrorUI::PopulatePhishingLoadTimeData(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   load_time_data.Set("phishing", true);
   load_time_data.Set("heading",
                      l10n_util::GetStringUTF16(IDS_SAFEBROWSING_HEADING));
@@ -289,7 +294,7 @@ void SafeBrowsingLoudErrorUI::PopulatePhishingLoadTimeData(
 }
 
 void SafeBrowsingLoudErrorUI::PopulateExtendedReportingOption(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   bool can_show_extended_reporting_option = CanShowExtendedReportingOption();
   bool can_show_enhanced_protection_message =
       CanShowEnhancedProtectionMessage();
@@ -305,7 +310,7 @@ void SafeBrowsingLoudErrorUI::PopulateExtendedReportingOption(
 }
 
 void SafeBrowsingLoudErrorUI::PopulateEnhancedProtectionMessage(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   bool can_show_enhanced_protection_message =
       CanShowEnhancedProtectionMessage();
   if (can_show_enhanced_protection_message) {
@@ -317,7 +322,7 @@ void SafeBrowsingLoudErrorUI::PopulateEnhancedProtectionMessage(
 }
 
 void SafeBrowsingLoudErrorUI::PopulateBillingLoadTimeData(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   load_time_data.Set("phishing", false);
   load_time_data.Set("overridable", true);
 

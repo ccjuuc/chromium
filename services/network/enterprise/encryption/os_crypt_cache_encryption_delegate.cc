@@ -4,12 +4,20 @@
 
 #include "services/network/enterprise/encryption/os_crypt_cache_encryption_delegate.h"
 
+#include <memory>
 #include <string>
 #include <utility>
 
+#include "base/check_is_test.h"
 #include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/metrics/histogram_functions.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/net_errors.h"
+#include "services/network/enterprise/encryption/chunked_encryptor.h"
+#include "services/network/enterprise/encryption/encrypted_backend_file_operations_factory.h"
+#include "services/network/enterprise/encryption/encrypted_cache_entry_hasher.h"
 
 namespace network::enterprise_encryption {
 
@@ -23,36 +31,58 @@ OSCryptCacheEncryptionDelegate::~OSCryptCacheEncryptionDelegate() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
-bool OSCryptCacheEncryptionDelegate::EncryptData(
-    base::span<const uint8_t> plaintext,
-    std::vector<uint8_t>* ciphertext) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (state_ != State::kInitialized) {
-    return false;
+disk_cache::BackendFileOperationsFactory*
+OSCryptCacheEncryptionDelegate::GetEncryptionFileOperationsFactory(
+    scoped_refptr<disk_cache::BackendFileOperationsFactory>
+        file_operations_factory) {
+  // This method should only be called if the delegate is initialized.
+  CHECK(instance_);
+  // This method should only be called once.
+  CHECK(!encrypted_file_operations_factory_);
+
+  // If the caller did not provide a file operations factory, use a trivial
+  // one.
+  if (!file_operations_factory) {
+    CHECK_IS_TEST();
+    file_operations_factory =
+        base::MakeRefCounted<disk_cache::TrivialFileOperationsFactory>();
   }
-  std::string plaintext_string(plaintext.begin(), plaintext.end());
-  std::string ciphertext_string;
-  if (!instance_->EncryptString(plaintext_string, &ciphertext_string)) {
-    return false;
+
+  std::optional<std::string> decrypted_primary_key =
+      instance_->DecryptData(encrypted_primary_key_);
+  if (!decrypted_primary_key.has_value()) {
+    base::UmaHistogramBoolean(
+        "Enterprise.EncryptedCache.FactoryCreationSuccess", false);
+    LOG(ERROR) << "Failed to decrypt the primary key.";
+    return nullptr;
   }
-  *ciphertext =
-      std::vector<uint8_t>(ciphertext_string.begin(), ciphertext_string.end());
-  return true;
+  crypto::ProcessBoundString primary_key(std::move(*decrypted_primary_key));
+
+  base::UmaHistogramBoolean("Enterprise.EncryptedCache.FactoryCreationSuccess",
+                            true);
+  encrypted_file_operations_factory_ =
+      base::MakeRefCounted<EncryptedBackendFileOperationsFactory>(
+          file_operations_factory, std::move(primary_key));
+
+  return encrypted_file_operations_factory_.get();
 }
 
-bool OSCryptCacheEncryptionDelegate::DecryptData(
-    base::span<const uint8_t> ciphertext,
-    std::vector<uint8_t>* plaintext) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (state_ != State::kInitialized) {
-    return false;
+std::unique_ptr<disk_cache::CacheEntryHasher>
+OSCryptCacheEncryptionDelegate::GetCacheEntryHasher() {
+  CHECK(instance_);
+  std::optional<std::string> decrypted_primary_key =
+      instance_->DecryptData(encrypted_primary_key_);
+  if (!decrypted_primary_key.has_value()) {
+    base::UmaHistogramBoolean(
+        "Enterprise.EncryptedCache.KeyHasherObtainSuccess", false);
+    LOG(ERROR) << "Failed to decrypt the primary key.";
+    return nullptr;
   }
-  std::optional<std::string> result = instance_->DecryptData(ciphertext);
-  if (!result.has_value()) {
-    return false;
-  }
-  *plaintext = std::vector<uint8_t>(result->begin(), result->end());
-  return true;
+  crypto::ProcessBoundString primary_key(std::move(*decrypted_primary_key));
+
+  base::UmaHistogramBoolean("Enterprise.EncryptedCache.KeyHasherObtainSuccess",
+                            true);
+  return std::make_unique<EncryptedCacheEntryHasher>(std::move(primary_key));
 }
 
 void OSCryptCacheEncryptionDelegate::OnDisconnect() {
@@ -83,21 +113,26 @@ void OSCryptCacheEncryptionDelegate::Init(
   remote_.set_disconnect_handler(
       base::BindOnce(&OSCryptCacheEncryptionDelegate::OnDisconnect,
                      weak_ptr_factory_.GetWeakPtr()));
-  remote_->GetEncryptor(
-      base::BindOnce(&OSCryptCacheEncryptionDelegate::InitCallback,
+
+  remote_->GetEncryptedCacheEncryptionKey(
+      base::BindOnce(&OSCryptCacheEncryptionDelegate::OnKeyAndEncryptorReceived,
                      weak_ptr_factory_.GetWeakPtr()));
 }
 
-void OSCryptCacheEncryptionDelegate::InitCallback(
-    os_crypt_async::Encryptor encryptor) {
+void OSCryptCacheEncryptionDelegate::OnKeyAndEncryptorReceived(
+    const std::vector<uint8_t>& key,
+    scoped_refptr<os_crypt_async::Encryptor> encryptor) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (state_ != State::kInitializing) {
     // OnDisconnect() was called during initialization. Callbacks have been
     // notified of failure already.
     return;
   }
-  instance_.emplace(std::move(encryptor));
-  if (!instance_->IsEncryptionAvailable()) {
+  encrypted_primary_key_ = key;
+  instance_ = std::move(encryptor);
+
+  if (!instance_ || !instance_->IsEncryptionAvailable() ||
+      encrypted_primary_key_.empty()) {
     state_ = State::kUninitialized;
     instance_.reset();
     callbacks_.Notify(net::ERR_FAILED);

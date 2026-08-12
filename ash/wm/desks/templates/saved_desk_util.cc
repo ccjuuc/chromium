@@ -4,6 +4,8 @@
 
 #include "ash/wm/desks/templates/saved_desk_util.h"
 
+#include <ranges>
+
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/session/session_types.h"
@@ -16,7 +18,6 @@
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/overview/overview_session.h"
 #include "ash/wm/window_util.h"
-#include "base/containers/adapters.h"
 #include "components/app_restore/full_restore_utils.h"
 #include "components/app_restore/window_properties.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -39,20 +40,6 @@ bool IsGuestSession() {
   const UserSession* const user_session =
       Shell::Get()->session_controller()->GetUserSession(user_index);
   return user_session->user_info.type == user_manager::UserType::kGuest;
-}
-
-// Returns true if all windows have bounds.
-bool DoesAllWindowsHaveActivationIndices(const DeskTemplate& admin_template) {
-  const auto& app_id_to_launch_list =
-      admin_template.desk_restore_data()->app_id_to_launch_list();
-  for (auto& [app_id, launch_list] : app_id_to_launch_list) {
-    for (auto& [window_id, app_restore_data] : launch_list) {
-      if (!app_restore_data->window_info.activation_index.has_value()) {
-        return false;
-      }
-    }
-  }
-  return true;
 }
 
 }  // namespace
@@ -147,6 +134,21 @@ bool IsWindowOnTopForTemplate(aura::Window* window) {
          *activation_index <= kTemplateStartingActivationIndex;
 }
 
+bool AreAllTemplateWindowsSatisfied(
+    const DeskTemplate& saved_desk,
+    base::FunctionRef<bool(const app_restore::WindowInfo&)> predicate) {
+  const auto& app_id_to_launch_list =
+      saved_desk.desk_restore_data()->app_id_to_launch_list();
+  for (const auto& [app_id, launch_list] : app_id_to_launch_list) {
+    for (const auto& [window_id, app_restore_data] : launch_list) {
+      if (!predicate(app_restore_data->window_info)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 void UpdateTemplateActivationIndices(DeskTemplate& saved_desk) {
   auto& app_id_to_launch_list =
       saved_desk.mutable_desk_restore_data()->mutable_app_id_to_launch_list();
@@ -154,7 +156,8 @@ void UpdateTemplateActivationIndices(DeskTemplate& saved_desk) {
   // that the window with the lowest id gets the lowest activation index. NB:
   // for now, we expect admin templates to only contain a single app.
   for (auto& [app_id, launch_list] : app_id_to_launch_list) {
-    for (auto& [window_id, app_restore_data] : base::Reversed(launch_list)) {
+    for (auto& [window_id, app_restore_data] :
+         std::views::reverse(launch_list)) {
       app_restore_data->window_info.activation_index =
           g_template_next_activation_index--;
     }
@@ -163,7 +166,10 @@ void UpdateTemplateActivationIndices(DeskTemplate& saved_desk) {
 
 void UpdateTemplateActivationIndicesRelativeOrder(DeskTemplate& saved_desk) {
   // Use relative ordering iff every window has an activation index.
-  if (!DoesAllWindowsHaveActivationIndices(saved_desk)) {
+  if (!AreAllTemplateWindowsSatisfied(
+          saved_desk, [](const app_restore::WindowInfo& window_info) {
+            return window_info.activation_index.has_value();
+          })) {
     UpdateTemplateActivationIndices(saved_desk);
     return;
   }

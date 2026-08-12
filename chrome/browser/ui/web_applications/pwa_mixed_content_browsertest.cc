@@ -8,9 +8,9 @@
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/ssl_test_utils.h"
@@ -73,19 +73,19 @@ namespace web_app {
 class PWAMixedContentBrowserTest : public WebAppBrowserTestBase {
  public:
   GURL GetMixedContentAppURL() {
-    return https_server()->GetURL("app.com",
-                                  "/ssl/page_displays_insecure_content.html");
+    return embedded_https_test_server().GetURL(
+        "app.com", "/ssl/page_displays_insecure_content.html");
   }
 
   // This URL is on app.com, and the page contains a secure iframe that points
   // to foo.com/simple.html.
   GURL GetSecureIFrameAppURL() {
     net::HostPortPair host_port_pair = net::HostPortPair::FromURL(
-        https_server()->GetURL("foo.com", "/simple.html"));
+        embedded_https_test_server().GetURL("foo.com", "/simple.html"));
     const std::string path = GetPathWithHostAndPortReplaced(
         "/ssl/page_with_cross_site_frame.html", host_port_pair);
 
-    return https_server()->GetURL("app.com", path);
+    return embedded_https_test_server().GetURL("app.com", path);
   }
 };
 
@@ -140,7 +140,8 @@ IN_PROC_BROWSER_TEST_F(PWAMixedContentBrowserTestWithAutoupgradesDisabled,
   CheckMixedContentLoaded(app_browser);
 
   chrome::OpenInChrome(app_browser);
-  ASSERT_EQ(browser(), chrome::FindLastActive());
+  ASSERT_EQ(browser(),
+            GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser());
   ASSERT_EQ(GetMixedContentAppURL(), browser()
                                          ->tab_strip_model()
                                          ->GetActiveWebContents()
@@ -243,7 +244,7 @@ IN_PROC_BROWSER_TEST_F(
 
 // Tests that iframes can't dynamically load mixed content in a regular browser
 // tab, when the iframe was created in a PWA window.
-// https://crbug.com/1087382: Flaky on Windows, CrOS and ASAN
+// https://crbug.com/40694836: Flaky on Windows, CrOS and ASAN
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || defined(ADDRESS_SANITIZER)
 #define MAYBE_IFrameDynamicMixedContentInPWAOpenInChrome \
   DISABLED_IFrameDynamicMixedContentInPWAOpenInChrome

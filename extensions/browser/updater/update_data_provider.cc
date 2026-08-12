@@ -8,10 +8,12 @@
 #include <utility>
 
 #include "base/base64.h"
+#include "base/check_op.h"
 #include "base/containers/to_vector.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "base/task/thread_pool.h"
 #include "components/crx_file/crx_verifier.h"
@@ -102,8 +104,6 @@ void UpdateDataProvider::GetData(
           extension_data.pending_version
               ? base::Version(*extension_data.pending_version)
               : extension->version();
-      crx_component->fingerprint = extension_data.pending_fingerprint.value_or(
-          extension->DifferentialFingerprint());
     }
     bool allow_dev = extension_urls::GetWebstoreUpdateUrl() !=
                      extension_urls::GetDefaultWebstoreUpdateUrl();
@@ -112,7 +112,7 @@ void UpdateDataProvider::GetData(
         extension->from_webstore() ? GetWebstoreVerifierFormat(allow_dev)
                                    : GetPolicyVerifierFormat();
     crx_component->installer = base::MakeRefCounted<ExtensionInstaller>(
-        id, extension->path(), install_immediately,
+        id, install_immediately,
         base::BindRepeating(&UpdateDataProvider::RunInstallCallback, this));
     if (!ExtensionsBrowserClient::Get()->IsExtensionEnabled(id,
                                                             browser_context_)) {

@@ -12,6 +12,10 @@
 
 class TabAndroid;
 
+namespace tab_groups {
+class TabGroupId;
+}  // namespace tab_groups
+
 // An interface to be notified about changes to a TabModel. Notifications are
 // routed to instances of this class via TabModelObserverJniBridge. See
 // TabModelObserver.java for more details about individual notifications.
@@ -27,8 +31,17 @@ class TabModelObserver {
   // Called when a |tab| is selected.
   virtual void DidSelectTab(TabAndroid* tab, TabModel::TabSelectionType type);
 
+  // Called before tabs are removed from the TabModel for closure.
+  virtual void WillCloseTabs(const std::vector<TabAndroid*>& tabs,
+                             bool is_all_tabs,
+                             bool allow_undo);
+
   // Called when a |tab| starts closing.
   virtual void WillCloseTab(TabAndroid* tab);
+
+  // Called after a tab has been removed due to closure. At this point the tab
+  // is no longer in the TabModel.
+  virtual void DidRemoveTabForClosure(TabAndroid* tab);
 
   // Called right before a |tab| has been destroyed.
   virtual void OnFinishingTabClosure(TabAndroid* tab,
@@ -58,6 +71,9 @@ class TabModelObserver {
   // Called when all |tabs| closure is undone.
   virtual void OnTabCloseUndone(const std::vector<TabAndroid*>& tabs);
 
+  // Called when the set of multi-selected tabs has changed.
+  virtual void OnTabsSelectionsChanged();
+
   // Called when a |tab| closure is undone.
   virtual void TabClosureUndone(TabAndroid* tab);
 
@@ -68,9 +84,27 @@ class TabModelObserver {
   // anymore.
   virtual void AllTabsClosureCommitted();
 
+  // Called when tabs are being closed and there are no more tabs left.
+  virtual void AllTabsAreClosing();
+
   // Called after a tab has been removed. At this point the tab is no longer in
   // the TabModel.
   virtual void TabRemoved(TabAndroid* tab);
+
+  // Called after a tab group has been created.
+  virtual void OnTabGroupCreated(tab_groups::TabGroupId group_id);
+
+  // Called before a tab group will be removed.
+  virtual void OnTabGroupRemoving(tab_groups::TabGroupId group_id);
+
+  // Called after a tab group has been moved to a new position.
+  virtual void OnTabGroupMoved(tab_groups::TabGroupId group_id, int old_index);
+
+  // Called after a tab group's visual data has been changed.
+  virtual void OnTabGroupVisualsChanged(tab_groups::TabGroupId group_id);
+
+  // Called when the TabModel is destroyed.
+  virtual void OnTabModelDestroyed(TabModel& tab_model);
 };
 
 #endif  // CHROME_BROWSER_UI_ANDROID_TAB_MODEL_TAB_MODEL_OBSERVER_H_

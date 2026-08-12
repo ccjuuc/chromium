@@ -23,8 +23,6 @@ import org.chromium.base.ResettersForTesting;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.Features;
-import org.chromium.content_public.common.ContentFeatures;
 import org.chromium.device.geolocation.LocationProviderOverrider;
 import org.chromium.device.geolocation.MockLocationProvider;
 import org.chromium.net.test.util.TestWebServer;
@@ -39,7 +37,6 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 @RunWith(Parameterized.class)
 @UseParametersRunnerFactory(AwJUnit4ClassRunnerWithParameters.Factory.class)
-@Features.EnableFeatures({ContentFeatures.WEB_PERMISSIONS_API})
 @Batch(Batch.PER_CLASS)
 public class AwPermissionQueryApiTest extends AwParameterizedTest {
 
@@ -56,7 +53,7 @@ public class AwPermissionQueryApiTest extends AwParameterizedTest {
                       resultListener.postMessage("not_enabled");
                   }
                   else if (e instanceof TypeError &&
-                           e.message.includes("isn't available on Android")) {
+                           e.message.includes("isn't available on this platform")) {
                       resultListener.postMessage("not_available");
                   }
                   else {

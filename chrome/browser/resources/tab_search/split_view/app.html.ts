@@ -11,26 +11,20 @@ import type {SplitNewTabPageAppElement} from './app.js';
 
 export function getHtml(this: SplitNewTabPageAppElement) {
   return html`<!--_html_template_start_-->
-<div id="header">
+<div id="header" ?hidden="${this.allEligibleTabs_.length === 0}">
   <cr-icon-button id="closeButton"
-      iron-icon="tab-search:close"
+      iron-icon="${
+      this.webuiRoundedIconsEnabled_ ? 'tab-search:close' :
+                                       'tab-search:close-old'}"
       title="$i18n{splitViewCloseButtonAriaLabel}"
-      @click="${this.onClose_}">
+      @click="${this.onCloseClick_}"
+      @focus="${this.onCloseButtonFocus_}"
+      @blur="${this.onCloseButtonBlur_}">
   </cr-icon-button>
-  ${
-      this.allEligibleTabs_.length === 0 ? html`
-        <picture>
-          <source media="(prefers-color-scheme: dark)"
-              srcset="./split_view/images/empty_dark.svg">
-          <img id="product-logo" srcset="./split_view/images/empty.svg" alt="">
-        </picture>
-      ` :
-                                           html``}
-  <h1 class="title">${this.title_}</h1>
-  ${
-      this.allEligibleTabs_.length === 0 ?
-          html`<div class="body">$i18n{splitViewEmptyBody}</div>` :
-          html``}
+  <cr-tooltip for="closeButton" position="top" offset="0"
+      fit-to-visible-bounds manual-mode>
+    $i18n{splitViewCloseButtonAriaLabel}
+  </cr-tooltip>
 </div>
 <div class="tab-list" ?hidden="${this.allEligibleTabs_.length === 0}">
   <selectable-lazy-list id="splitTabsList" class="scroller"
@@ -48,8 +42,8 @@ export function getHtml(this: SplitNewTabPageAppElement) {
           data-index="${index}"
           @click="${this.onTabClick_}"
           @focus="${this.onTabFocus_}"
-          @focusout="${this.onTabFocusOut_}"
-          @keydown="${this.onTabKeyDown_}"
+          @focusout="${this.onTabFocusout_}"
+          @keydown="${this.onTabKeydown_}"
           role="option"
           aria-label="${ariaLabel(item)}"
           tabindex="0">

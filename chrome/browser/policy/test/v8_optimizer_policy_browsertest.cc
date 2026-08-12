@@ -14,7 +14,6 @@
 #include "chrome/browser/site_protection/site_familiarity_utils.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "components/content_settings/core/common/content_settings.h"
-#include "components/content_settings/core/common/features.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
@@ -59,7 +58,7 @@ class V8OptimizerPolicyTest
   }
 
   void SetPolicyValue(PolicyMap* map, const char* key, const char* value) {
-    base::Value::List value_list;
+    base::ListValue value_list;
     if (value) {
       value_list.Append(value);
     }
@@ -174,7 +173,8 @@ IN_PROC_BROWSER_TEST_P(V8OptimizerPolicyTest, V8OptimizerHostnameMatching) {
   NavigateAndExpectPolicyResult("foo.com", true);
 
   NavigateToFreshBrowsingInstance();
-  if (content::SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault()) {
+  if (content::SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault(
+          chrome_test_utils::GetProfile(this))) {
     // Under origin isolation, the origin is passed into
     // AreV8OptimizationsDisabledForSite(), and the origin does not match the
     // site-level policy.
@@ -221,9 +221,7 @@ class V8OptimizerPolicyTest_UseSiteFamiliarity : public V8OptimizerPolicyTest {
   V8OptimizerPolicyTest_UseSiteFamiliarity() {
     feature_list_
         .InitWithFeatures(/*enabled_features=*/
-                          {features::kProcessSelectionDeferringConditions,
-                           content_settings::features::
-                               kBlockV8OptimizerOnUnfamiliarSitesSetting},
+                          {features::kProcessSelectionDeferringConditions},
                           /*disabled_features=*/{});
   }
 

@@ -5,15 +5,18 @@
 #import "ios/chrome/browser/overlays/model/overlay_presenter_impl.h"
 
 #import "base/check_op.h"
-#import "base/containers/contains.h"
 #import "base/memory/ptr_util.h"
+#import "base/not_fatal_until.h"
+#import "ios/chrome/app/application_delegate/startup_information.h"
+#import "ios/chrome/app/profile/profile_state.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_callback_manager.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_presentation_context.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_presenter_observer.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_request.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_request_support.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
+#import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
-#import "ios/web/common/features.h"
 
 #pragma mark - Factory method
 
@@ -47,13 +50,22 @@ OverlayPresenterImpl* OverlayPresenterImpl::Container::PresenterForModality(
 
 OverlayPresenterImpl::OverlayPresenterImpl(Browser* browser,
                                            OverlayModality modality)
-    : modality_(modality), web_state_list_(browser->GetWebStateList()) {
-  StartObserving(browser, Policy::kAccordingToFeature);
+    : modality_(modality),
+      web_state_list_(browser->GetWebStateList()),
+      profile_state_(browser->GetSceneState().profileState) {
+  if (profile_state_) {
+    profile_state_observer_bridge_ =
+        [[ProfileStateObserverBridge alloc] initWithObserver:this];
+    [profile_state_ addObserver:profile_state_observer_bridge_];
+  }
+  StartObserving(browser);
   DCHECK(web_state_list_);
   SetActiveWebState(web_state_list_->GetActiveWebState());
 }
 
 OverlayPresenterImpl::~OverlayPresenterImpl() {
+  [profile_state_observer_bridge_ resetObserver];
+
   // Notify all observers that the current OverlayPresenter will be destroyed.
   for (auto& observer : observers_) {
     observer.OverlayPresenterDestroyed(this);
@@ -117,6 +129,21 @@ bool OverlayPresenterImpl::IsShowingOverlayUI() const {
   return presenting_;
 }
 
+#pragma mark - ProfileStateObserver
+
+void OverlayPresenterImpl::OnProfileStateDidTransitionToInitStage(
+    ProfileState* profile_state,
+    ProfileInitStage next_init_stage,
+    ProfileInitStage from_init_stage) {
+  if (next_init_stage < ProfileInitStage::kNormalUI) {
+    return;
+  }
+  if (!presenting_) {
+    PresentOverlayForActiveRequest();
+    return;
+  }
+}
+
 #pragma mark - Private
 
 #pragma mark Accessors
@@ -152,10 +179,11 @@ void OverlayPresenterImpl::SetActiveWebState(web::WebState* web_state) {
     return;
   }
 
-  // If presenting_ is true and there is no previously active request, this
-  // is likely because the presenting overlay is still in the process of being
-  // dismissed and multiple tabs have been opened in the process.
-  if (!previously_active_request) {
+  // If presenting_ is true and the previously active request is not the
+  // currently presented request, this is likely because the presenting overlay
+  // is still in the process of being dismissed and multiple tabs have been
+  // opened in the process.
+  if (previously_active_request != presented_request_) {
     return;
   }
 
@@ -175,14 +203,10 @@ void OverlayPresenterImpl::SetActiveWebState(web::WebState* web_state) {
 
 OverlayRequestQueueImpl* OverlayPresenterImpl::GetQueueForWebState(
     web::WebState* web_state) const {
-  if (!web_state) {
+  if (!web_state || !web_state->IsRealized()) {
     return nullptr;
   }
-  if (web::features::CreateTabHelperOnlyForRealizedWebStates()) {
-    if (!web_state->IsRealized()) {
-      return nullptr;
-    }
-  }
+
   OverlayRequestQueueImpl::Container::CreateForWebState(web_state);
   return OverlayRequestQueueImpl::Container::FromWebState(web_state)
       ->QueueForModality(modality_);
@@ -205,6 +229,14 @@ OverlayRequest* OverlayPresenterImpl::GetActiveRequest() const {
 #pragma mark UI Presentation and Dismissal helpers
 
 void OverlayPresenterImpl::PresentOverlayForActiveRequest() {
+  // Don't show an infobar if the profile isn't in its normal state, or if the
+  // application is terminating.
+  if (profile_state_ &&
+      (profile_state_.initStage < ProfileInitStage::kNormalUI ||
+       profile_state_.startupInformation.isTerminating)) {
+    return;
+  }
+
   // Overlays cannot be shown without a presentation context or if the
   // presentation context is already showing overlay UI.
   if (!presentation_context_ || presentation_context_->IsShowingOverlayUI()) {
@@ -238,8 +270,7 @@ void OverlayPresenterImpl::PresentOverlayForActiveRequest() {
   presented_request_ = request;
 
   // Notify the observers that the overlay UI is about to be shown.
-  bool initial_presentation =
-      !base::Contains(previously_presented_requests_, request);
+  bool initial_presentation = !previously_presented_requests_.contains(request);
   for (auto& observer : observers_) {
     if (observer.GetRequestSupport(this)->IsRequestSupported(request)) {
       observer.WillShowOverlay(this, request, initial_presentation);
@@ -257,11 +288,10 @@ void OverlayPresenterImpl::PresentOverlayForActiveRequest() {
   OverlayPresentationCallback presentation_callback = base::BindOnce(
       &OverlayPresenterImpl::OverlayWasPresented, weak_factory_.GetWeakPtr(),
       presentation_context_, request);
-  OverlayDismissalCallback dismissal_callback = base::BindOnce(
-      &OverlayPresenterImpl::OverlayWasDismissed, weak_factory_.GetWeakPtr(),
-      // TODO(crbug.com/40061562): Remove `UnsafeDanglingUntriaged`
-      presentation_context_, base::UnsafeDanglingUntriaged(request),
-      GetActiveQueue()->GetWeakPtr());
+  OverlayDismissalCallback dismissal_callback =
+      base::BindOnce(&OverlayPresenterImpl::OverlayWasDismissed,
+                     weak_factory_.GetWeakPtr(), presentation_context_,
+                     request->GetRequestId(), GetActiveQueue()->GetWeakPtr());
   presentation_context_->ShowOverlayUI(
       request, std::move(presentation_callback), std::move(dismissal_callback));
 }
@@ -280,7 +310,7 @@ void OverlayPresenterImpl::OverlayWasPresented(
 
 void OverlayPresenterImpl::OverlayWasDismissed(
     OverlayPresentationContext* presentation_context,
-    OverlayRequest* request,
+    OverlayRequestId request_id,
     base::WeakPtr<OverlayRequestQueueImpl> queue,
     OverlayDismissalReason reason) {
   // If the UI delegate is reset while presenting an overlay, that overlay will
@@ -304,7 +334,14 @@ void OverlayPresenterImpl::OverlayWasDismissed(
     return;
   }
 
-  DCHECK_EQ(presented_request_, request);
+  OverlayRequest* request = presented_request_;
+  if (!request && removed_request_awaiting_dismissal_ &&
+      removed_request_awaiting_dismissal_->GetRequestId() == request_id) {
+    request = removed_request_awaiting_dismissal_.get();
+  }
+
+  CHECK(request, base::NotFatalUntil::M156);
+  DCHECK_EQ(request->GetRequestId(), request_id);
 
   // Pop the request for overlays dismissed by the user.  The check against
   // `removed_request_awaiting_dismissal_` prevents the queue's front request

@@ -20,6 +20,8 @@ source_set("ui") {
     "//components/password_manager/core/browser/ui",
     "//components/strings",
     "//ios/chrome/app/strings",
+    "//ios/chrome/browser/credential_exchange/public",
+    "//ios/chrome/browser/credential_exchange/public:metrics",
     "//ios/chrome/browser/credential_exchange/ui/resources",
     "//ios/chrome/browser/data_import/public",
     "//ios/chrome/browser/data_import/ui",
@@ -44,4 +46,18 @@ source_set("constants") {
     "credential_export_constants.mm",
   ]
   frameworks = [ "Foundation.framework" ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  sources = [ "credential_group_identifier_unittest.mm" ]
+  deps = [
+    ":ui",
+    "//base",
+    "//components/affiliations/core/browser:affiliations",
+    "//components/password_manager/core/browser:password_form",
+    "//components/password_manager/core/browser/ui",
+    "//testing/gtest",
+    "//url",
+  ]
 }

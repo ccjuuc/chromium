@@ -58,6 +58,8 @@
 
 namespace ash {
 
+using chromeos::AppType;
+
 namespace {
 
 // Returns the pref service to use for Birch bar prefs.
@@ -405,14 +407,18 @@ TEST_F(BirchBarTest, RecordsHistogramWhenChipsShown) {
                      std::string(), /*all_day_event=*/false);
   birch_client_->SetCalendarItems(items);
 
-  // Entering overview shows the birch bar.
+  base::RunLoop data_fetch_run_loop;
+  Shell::Get()->birch_model()->SetDataFetchCallbackForTest(
+      data_fetch_run_loop.QuitClosure());
+
+  // Entering overview shows the birch bar and starts the data fetch.
   EnterOverview();
-  base::RunLoop().RunUntilIdle();  // Wait for data fetch callback.
+  data_fetch_run_loop.Run();
 
   // One impression was recorded for the birch bar.
   histograms.ExpectBucketCount("Ash.Birch.Bar.Impression", true, 1);
 
-  // Four chips were shown.
+  // Two chips were shown.
   histograms.ExpectBucketCount("Ash.Birch.ChipCount", 2, 1);
 
   // One impression was recorded for each chip type.
@@ -488,10 +494,10 @@ TEST_F(BirchBarTest, RecordsHistogramForCoralChips) {
 // screen.
 TEST_F(BirchBarTest, HideBirchBarInPartialSplitScreen) {
   // Create two windows.
-  auto window_1 = CreateAppWindow(gfx::Rect(100, 100));
+  auto window_1 = CreateWindowWithAppType(AppType::SYSTEM_APP, {100, 100});
   // Need another window to keep partial Overview when `window_1` is snapped in
   // Overview session.
-  auto window_2 = CreateAppWindow(gfx::Rect(100, 200));
+  auto window_2 = CreateWindowWithAppType(AppType::SYSTEM_APP, {100, 200});
 
   EnterOverview();
 

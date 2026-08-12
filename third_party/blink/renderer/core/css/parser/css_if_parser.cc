@@ -32,8 +32,7 @@ const ConditionalExpNode* CSSIfParser::ConsumeLeaf(CSSParserTokenStream&) {
 const ConditionalExpNode* CSSIfParser::ConsumeFunction(
     CSSParserTokenStream& stream) {
   DCHECK_EQ(stream.Peek().GetType(), kFunctionToken);
-  if (RuntimeEnabledFeatures::CSSInlineIfForSupportsQueriesEnabled() &&
-      stream.Peek().FunctionId() == CSSValueID::kSupports) {
+  if (stream.Peek().FunctionId() == CSSValueID::kSupports) {
     CSSParserTokenStream::RestoringBlockGuard guard(stream);
     stream.ConsumeWhitespace();
     CSSParserImpl supports_query_parser(&parser_context_);
@@ -52,8 +51,7 @@ const ConditionalExpNode* CSSIfParser::ConsumeFunction(
       return MakeGarbageCollected<IfTestSupports>(true);
     }
   }
-  if (RuntimeEnabledFeatures::CSSInlineIfForMediaQueriesEnabled() &&
-      stream.Peek().FunctionId() == CSSValueID::kMedia) {
+  if (stream.Peek().FunctionId() == CSSValueID::kMedia) {
     CSSParserTokenStream::RestoringBlockGuard guard(stream);
     stream.ConsumeWhitespace();
     // `MediaQueryParser::ConsumeFeature` does not restore the stream,
@@ -87,7 +85,7 @@ const ConditionalExpNode* CSSIfParser::ConsumeFunction(
       RuntimeEnabledFeatures::RouteMatchingEnabled()) {
     CSSParserTokenStream::RestoringBlockGuard guard(stream);
     stream.ConsumeWhitespace();
-    NavigationParser navigation_parser(*parser_context_.GetDocument());
+    NavigationParser navigation_parser;
     CSSParserTokenStream::State savepoint = stream.Save();
     // We're inside the function's parentheses. Don't require any additional
     // ones. Look for <navigation-test>.

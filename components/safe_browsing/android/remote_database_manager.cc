@@ -8,11 +8,14 @@
 #include <utility>
 #include <vector>
 
+#include "base/check.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/timer/elapsed_timer.h"
@@ -57,7 +60,8 @@ class RemoteSafeBrowsingDatabaseManager::ClientRequest {
  public:
   ClientRequest(Client* client,
                 RemoteSafeBrowsingDatabaseManager* db_manager,
-                const GURL& url);
+                const GURL& url,
+                bool is_subresource_filter);
 
   void OnRequestDone(SBThreatType matched_threat_type,
                      const ThreatMetadata& metadata);
@@ -73,6 +77,7 @@ class RemoteSafeBrowsingDatabaseManager::ClientRequest {
   raw_ptr<Client, DanglingUntriaged> client_;
   raw_ptr<RemoteSafeBrowsingDatabaseManager, DanglingUntriaged> db_manager_;
   GURL url_;
+  bool is_subresource_filter_ = false;
   base::ElapsedTimer timer_;
   base::WeakPtrFactory<ClientRequest> weak_factory_{this};
 };
@@ -80,15 +85,24 @@ class RemoteSafeBrowsingDatabaseManager::ClientRequest {
 RemoteSafeBrowsingDatabaseManager::ClientRequest::ClientRequest(
     Client* client,
     RemoteSafeBrowsingDatabaseManager* db_manager,
-    const GURL& url)
-    : client_(client), db_manager_(db_manager), url_(url) {}
+    const GURL& url,
+    bool is_subresource_filter)
+    : client_(client),
+      db_manager_(db_manager),
+      url_(url),
+      is_subresource_filter_(is_subresource_filter) {}
 
 void RemoteSafeBrowsingDatabaseManager::ClientRequest::OnRequestDone(
     SBThreatType matched_threat_type,
     const ThreatMetadata& metadata) {
   DVLOG(1) << "OnRequestDone took " << timer_.Elapsed().InMilliseconds()
            << " ms for client " << client_ << " and URL " << url_;
-  client_->OnCheckBrowseUrlResult(url_, matched_threat_type, metadata);
+  if (is_subresource_filter_) {
+    client_->OnCheckSubresourceFilterUrlResult(
+        url_, matched_threat_type, metadata.subresource_filter_match);
+  } else {
+    client_->OnCheckBrowseUrlResult(url_, matched_threat_type);
+  }
   UMA_HISTOGRAM_TIMES("SB2.RemoteCall.Elapsed", timer_.Elapsed());
   // CancelCheck() will delete *this.
   db_manager_->CancelCheck(client_);
@@ -142,7 +156,8 @@ bool RemoteSafeBrowsingDatabaseManager::CheckBrowseUrl(
     return true;  // Safe, continue right away.
   }
 
-  auto req = std::make_unique<ClientRequest>(client, this, url);
+  auto req = std::make_unique<ClientRequest>(client, this, url,
+                                             /*is_subresource_filter=*/false);
 
   DVLOG(1) << "Checking for client " << client << " and URL " << url;
   auto callback =
@@ -209,7 +224,8 @@ bool RemoteSafeBrowsingDatabaseManager::CheckUrlForSubresourceFilter(
     return true;
   }
 
-  auto req = std::make_unique<ClientRequest>(client, this, url);
+  auto req = std::make_unique<ClientRequest>(client, this, url,
+                                             /*is_subresource_filter=*/true);
 
   DVLOG(1) << "Checking for client " << client << " and URL " << url;
   auto callback =

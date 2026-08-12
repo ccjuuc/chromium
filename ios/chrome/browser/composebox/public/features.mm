@@ -6,6 +6,7 @@
 
 #import "base/metrics/field_trial_params.h"
 #import "base/time/time.h"
+#import "components/omnibox/common/omnibox_features.h"
 
 BASE_FEATURE(kComposeboxDevTools, base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -46,13 +47,35 @@ bool AlignComposeboxCloseButtonToInputPlateTop() {
   return base::FeatureList::IsEnabled(kComposeboxCloseButtonTopAlign);
 }
 
-BASE_FEATURE(kComposeboxCompactMode, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kComposeboxAdditionalAdvancedTools,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool ShowComposeboxAdditionalAdvancedTools() {
+  if (!EnableComposeboxServerSideState()) {
+    return NO;
+  }
+  return base::FeatureList::IsEnabled(kComposeboxAdditionalAdvancedTools);
+}
+
+BASE_FEATURE(kComposeboxCompactMode, base::FEATURE_ENABLED_BY_DEFAULT);
+
+bool ShowDeepSearchTool() {
+  return base::FeatureList::IsEnabled(kComposeboxDeepSearch);
+}
+
+BASE_FEATURE(kComposeboxDeepSearch, base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool EnableComposeboxServerSideState() {
+  return base::FeatureList::IsEnabled(kComposeboxServerSideState);
+}
+
+BASE_FEATURE(kComposeboxServerSideState, base::FEATURE_DISABLED_BY_DEFAULT);
 
 bool IsComposeboxCompactModeEnabled() {
   return base::FeatureList::IsEnabled(kComposeboxCompactMode);
 }
 
-BASE_FEATURE(kComposeboxForceTop, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kComposeboxForceTop, base::FEATURE_ENABLED_BY_DEFAULT);
 
 bool IsComposeboxForceTopEnabled() {
   return base::FeatureList::IsEnabled(kComposeboxForceTop);
@@ -65,24 +88,55 @@ bool IsComposeboxAIMNudgeEnabled() {
   return base::FeatureList::IsEnabled(kComposeboxAIMNudge);
 }
 
-BASE_FEATURE(kComposeboxMenuTitle, base::FEATURE_DISABLED_BY_DEFAULT);
-
-bool IsComposeboxMenuTitleEnabled() {
-  return base::FeatureList::IsEnabled(kComposeboxMenuTitle);
-}
-
-BASE_FEATURE(kComposeboxFetchContextualSuggestionsForImage,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-bool IsComposeboxFetchContextualSuggestionsForImageEnabled() {
-  return base::FeatureList::IsEnabled(
-      kComposeboxFetchContextualSuggestionsForImage);
-}
-
 BASE_FEATURE(kComposeboxFetchContextualSuggestionsForMultipleAttachments,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 bool IsComposeboxFetchContextualSuggestionsForMultiAttachmentsEnabled() {
   return base::FeatureList::IsEnabled(
       kComposeboxFetchContextualSuggestionsForMultipleAttachments);
+}
+
+BASE_FEATURE(kComposeboxConditionalPlusButton,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+const char kComposeboxConditionalPlusButtonParam[] =
+    "ComposeboxConditionalPlusButtonParam";
+
+ComposeboxConditionalPlusButtonVariant
+GetComposeboxConditionalPlusButtonVariant() {
+  return static_cast<ComposeboxConditionalPlusButtonVariant>(
+      base::GetFieldTrialParamByFeatureAsInt(
+          kComposeboxConditionalPlusButton,
+          kComposeboxConditionalPlusButtonParam,
+          static_cast<int>(ComposeboxConditionalPlusButtonVariant::kDefault)));
+}
+
+bool IsComposeboxConditionalPlusButtonEnabled() {
+  return base::FeatureList::IsEnabled(kComposeboxConditionalPlusButton);
+}
+
+bool IsComposeboxDriveOptionEnabled() {
+  return base::FeatureList::IsEnabled(
+      omnibox::kComposeboxDriveContextMenuOption);
+}
+
+BASE_FEATURE(kComposeboxPhysicalKeyboardReturnKeys,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool IsComposeboxPhysicalKeyboardReturnKeysEnabled() {
+  return base::FeatureList::IsEnabled(kComposeboxPhysicalKeyboardReturnKeys);
+}
+
+BASE_FEATURE(kComposeboxAimRichAPCExtraction,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool IsComposeboxAimRichAPCExtractionEnabled() {
+  return base::FeatureList::IsEnabled(kComposeboxAimRichAPCExtraction);
+}
+
+BASE_FEATURE(kComposeboxConnectedAppsSetting,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool IsComposeboxConnectedAppsSettingEnabled() {
+  return base::FeatureList::IsEnabled(kComposeboxConnectedAppsSetting);
 }

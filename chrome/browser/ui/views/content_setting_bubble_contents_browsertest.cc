@@ -34,11 +34,11 @@ class ContentSettingBubbleContentsBrowserTest : public InProcessBrowserTest {
   }
 };
 
-// Flaky: https://crbug.com/1073516
+// Flaky: https://crbug.com/40127597
 IN_PROC_BROWSER_TEST_F(ContentSettingBubbleContentsBrowserTest,
                        DISABLED_HidesAtWebContentsClose) {
   // Create a second tab, so closing the test tab doesn't close the browser.
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
 
   // Navigate to the test page, and have it request and be denied geolocation
   // permissions.
@@ -51,17 +51,18 @@ IN_PROC_BROWSER_TEST_F(ContentSettingBubbleContentsBrowserTest,
   permissions::PermissionRequestObserver(GetWebContents()).Wait();
 
   // Press the geolocation icon and make sure its content setting bubble shows.
-  LocationBarTesting* bar =
-      browser()->window()->GetLocationBar()->GetLocationBarForTesting();
+  LocationBarTesting* bar = BrowserWindow::FromBrowser(browser())
+                                ->GetLocationBar()
+                                ->GetLocationBarForTesting();
   EXPECT_TRUE(bar->TestContentSettingImagePressed(
-      static_cast<size_t>(ContentSettingImageModel::ImageType::GEOLOCATION)));
+      static_cast<size_t>(ContentSettingImageModel::ImageType::kGeolocation)));
   EXPECT_TRUE(bar->IsContentSettingBubbleShowing(
-      static_cast<size_t>(ContentSettingImageModel::ImageType::GEOLOCATION)));
+      static_cast<size_t>(ContentSettingImageModel::ImageType::kGeolocation)));
 
   // Close the tab, and make sure the bubble is gone. Note that window closure
   // in Aura is asynchronous, so it's necessary to spin the run loop here.
   chrome::CloseTab(browser());
   base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(bar->IsContentSettingBubbleShowing(
-      static_cast<size_t>(ContentSettingImageModel::ImageType::GEOLOCATION)));
+      static_cast<size_t>(ContentSettingImageModel::ImageType::kGeolocation)));
 }

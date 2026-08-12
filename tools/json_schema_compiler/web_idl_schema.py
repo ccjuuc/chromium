@@ -38,6 +38,10 @@ finally:
 
 IDLNode = idl_node.IDLNode  # Used for type hints.
 
+# Currently we only explicitly support these buffer source types, but more could
+# be added here if there was a use case for them.
+_SUPPORTED_BUFFER_SOURCE_TYPES = ['ArrayBuffer', 'Uint8Array']
+
 
 class SchemaCompilerError(Exception):
 
@@ -151,6 +155,29 @@ def AddCommonExtendedAttributeProperties(node: IDLNode, properties: dict):
     properties['nocompile'] = True
 
 
+def AddEventOptionsExtendedAttributes(node: IDLNode, properties: dict):
+  """Looks for event option extended attributes and adds them to properties.
+
+  Extracts extended attributes that are only specific to Event definitions.
+  TODO(crbug.com/487746350): Add support for declarative event related
+  properties (`supportsListeners`, `supportsRules`) to this function as
+  required for WebIDL schema conversions.
+
+  Args:
+    node: The IDLNode to look for the extended attributes on.
+    properties: The object to add the associated key value pairs to.
+  """
+  if (value := GetExtendedAttributeValue(node, 'maxListeners')) is not None:
+    if 'options' not in properties:
+      properties['options'] = {}
+    properties['options']['maxListeners'] = int(value)
+
+  if HasExtendedAttribute(node, 'supportsFilters'):
+    if 'options' not in properties:
+      properties['options'] = {}
+    properties['options']['supportsFilters'] = True
+
+
 def _ExtractNodeComment(node: IDLNode) -> str:
   """Extract contiguous file comments above a node and return them as a string.
 
@@ -181,9 +208,20 @@ def _ExtractNodeComment(node: IDLNode) -> str:
   if ext_attribute_node is not None:
     return _ExtractNodeComment(ext_attribute_node)
 
-  # Since we do the logic above for extended attributes, the 'parent' is
-  # actually the grandparent for them.
-  if node.GetClass() == 'ExtAttributes':
+  # Similarly to extended attributes, the type can also be on a preceding line
+  # from the identifier, so we also check for it. However, in some cases (like
+  # callback definitions) the type can be after the identifier, so we only use
+  # it if it's on a preceding or the same line.
+  type_node = node.GetOneOf('Type')
+  if type_node is not None:
+    _, type_line_number = type_node.GetFileAndLine()
+    _, node_line_number = node.GetFileAndLine()
+    if type_line_number <= node_line_number:
+      return _ExtractNodeComment(type_node)
+
+  # Since we do the logic above for extended attributes and types, the 'parent'
+  # is actually the grandparent for them.
+  if node.GetClass() in ['ExtAttributes', 'Type']:
     parent_node = node.GetParent().GetParent()
   else:
     parent_node = node.GetParent()
@@ -380,9 +418,9 @@ class Type():
     elif type_details.IsA('Typeref'):
       # Some common types don't actually have a custom class backing them and
       # are just Typerefs with a string name.
-      if type_details.GetName() == 'ArrayBuffer':
+      if type_details.GetName() in _SUPPORTED_BUFFER_SOURCE_TYPES:
         properties['type'] = 'binary'
-        properties['isInstanceOf'] = 'ArrayBuffer'
+        properties['isInstanceOf'] = type_details.GetName()
       else:
         # Other Typerefs will either be referencing a custom type defined as a
         # Dictionary/Enum or a function defined as a Callback in the schema
@@ -397,9 +435,6 @@ class Type():
           parent = parent.GetParent()
 
         referenced_type = GetChildWithName(parent, type_name)
-        # TODO(crbug.com/450443604): Add support for shared types, which are
-        # defined in a separate file that is referenced by several different
-        # schemas.
         if referenced_type is None:
           raise SchemaCompilerError(
               'Could not find definition of referenced type "%s" for node.' %
@@ -411,6 +446,26 @@ class Type():
           properties['$ref'] = type_name
         elif referenced_type.GetClass() == 'Callback':
           properties = Operation(referenced_type).process()
+        elif referenced_type.GetClass() == 'Typedef':
+          # Typedefs can be used for declaring shared Types referencing Types
+          # defined in other API namespaces, or for defining local aliases
+          # with specific extended attributes like [instanceOf].
+          if shared_type_name := GetExtendedAttributeValue(
+              referenced_type, 'ExternalExtensionType'):
+            # TODO(crbug.com/486928682): Eventually it would be good to follow
+            # the way Blink does this, by having shared types use globally
+            # unique names and be defined in their own files. Then all the
+            # relevant type files for an API schema could also be passed to the
+            # IDL parser and our `referenced_type` code above could search
+            # through those.
+            properties['$ref'] = shared_type_name
+          else:
+            # If it's not an external type, we process the underlying type of
+            # the typedef and apply any extended attributes from the typedef
+            # itself.
+            typedef_type_node = referenced_type.GetOneOf('Type')
+            properties.update(Type(typedef_type_node).Process())
+
         else:
           raise SchemaCompilerError(
               'Found a Typeref node referencing a node of type "%s", but we'
@@ -597,7 +652,13 @@ class DictionaryMember(TypedProperty):
   def Process(self) -> dict:
     # TODO(crbug.com/340297705): Add support for extended attributes on custom
     # type members.
-    self.properties['name'] = self.node.GetName()
+    name = self.node.GetName()
+    self.properties['name'] = name
+    # If this member is for a callback with a return (e.g. has a 'returns'
+    # property) the name specified on the 'returns' is actually inherited from
+    # the member name.
+    if 'returns' in self.properties:
+      self.properties['returns']['name'] = name
 
     if not self.node.GetProperty('REQUIRED'):
       self.properties['optional'] = True
@@ -648,31 +709,45 @@ class Operation:
     # Return type processing.
     return_type = FunctionReturn(
         self.node, description_data.parameter_descriptions).Process()
-    if 'type' in return_type and return_type['type'] is UndefinedType:
-      # This is an Undefined return, so we don't add anything.
-      pass
-    # If no type was specified but there is a parameters property, we can infer
-    # this is a promise definition for an asynchronous return.
-    elif 'type' not in return_type and 'parameters' in return_type:
-      # TODO(tjudkins): The optionality of the callback is only relevant for
-      # contexts that don't support promise based calls and for the few
-      # functions which don't support promise based calls, as the callback is
-      # always inherently optional when using a promise based call instead. It
-      # would be nice to just get rid of the 'optional' property here and always
-      # treat it as optional when we remove the context restrictions for promise
-      # based calls.
-      if not HasExtendedAttribute(self.node, 'requiredCallback'):
-        return_type['optional'] = True
-      # For legacy reasons Promise based returns are represented on a
-      # "returns_async" property.
-      # TODO(crbug.com/428187556): Once we've migrated schemas to WebIDL, we
-      # should be able to just use the 'returns' field with 'type' = 'promise'
-      # instead of the 'returns_async' property.
-      properties['returns_async'] = return_type
+
+    # A few functions with asynchronous returns don't support promises and
+    # instead use a trailing callback parameter. We need to pop this off and put
+    # it into the `returns_async` field.
+    # Note: We only do this for normal Operation definitions which are not
+    # marked with the `trailingCallbackIsFunctionParameter` extended attribute.
+    if (self.node.GetClass() == 'Operation' and not HasExtendedAttribute(
+        self.node, 'trailingCallbackIsFunctionParameter')
+        and len(parameters) > 0 and parameters[-1].get('type') == 'function'):
+      # Pop the callback from the parameters and format it as returns_async.
+      returns_async = parameters.pop()
+      returns_async.pop('type')
+      returns_async['does_not_support_promises'] = True
+
+      properties['returns_async'] = returns_async
+
+      # Add any synchronous return if it's not Undefined for functions with both
+      # a synchronous and asynchronous return.
+      if 'type' not in return_type or return_type['type'] is not UndefinedType:
+        properties['returns'] = return_type
+
+    # Otherwise we process the returns/returns_async normally.
     else:
-      # Otherwise this is a typed return using either the 'type' key or '$ref'
-      # key to reference the underlying type.
-      properties['returns'] = return_type
+      if 'type' in return_type and return_type['type'] is UndefinedType:
+        # This is an Undefined return, so we don't add anything.
+        pass
+      # If no type was specified but there is a parameters property, we can
+      # infer this is a promise definition for an asynchronous return.
+      elif 'type' not in return_type and 'parameters' in return_type:
+        # For legacy reasons Promise based returns are represented on a
+        # "returns_async" property.
+        # TODO(crbug.com/428187556): Once we've migrated schemas to WebIDL, we
+        # should be able to just use the 'returns' field with 'type' = 'promise'
+        # instead of the 'returns_async' property.
+        properties['returns_async'] = return_type
+      else:
+        # Otherwise this is a typed return using either the 'type' key or '$ref'
+        # key to reference the underlying type.
+        properties['returns'] = return_type
 
     return properties
 
@@ -796,6 +871,7 @@ class Event:
     properties['parameters'] = parameters
 
     AddCommonExtendedAttributeProperties(self.node, properties)
+    AddEventOptionsExtendedAttributes(self.node, properties)
 
     return properties
 
@@ -1043,7 +1119,7 @@ class IDLSchema:
       namespace_node = GetChildWithName(self.idl, 'ExtensionManifest')
       if namespace_node is None or namespace_node.GetClass() != 'Dictionary':
         raise SchemaCompilerError(
-            'Schema must contain either a paritial Browser interface (for '
+            'Schema must contain either a partial Browser interface (for '
             'APIs) or a partial ExtensionManifest dictionary (for manifest '
             'stubs).', self.idl)
 

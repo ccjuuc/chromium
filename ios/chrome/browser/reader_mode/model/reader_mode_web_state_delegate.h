@@ -33,7 +33,10 @@ class ReaderModeWebStateDelegate : public web::WebStateDelegate {
   void OnAuthRequired(web::WebState* source,
                       NSURLProtectionSpace* protection_space,
                       NSURLCredential* proposed_credential,
-                      AuthCallback callback) override;
+                      HTTPAuthCallback callback) override;
+  void OnAuthRequired(web::WebState* source,
+                      NSURLProtectionSpace* protection_space,
+                      ClientCertAuthCallback callback) override;
   void HandlePermissionsDecisionRequest(
       web::WebState* source,
       NSArray<NSNumber*>* permissions,
@@ -47,6 +50,11 @@ class ReaderModeWebStateDelegate : public web::WebStateDelegate {
       id<UIContextMenuInteractionCommitAnimating> animator) override;
   void ShouldAllowCopy(web::WebState* source,
                        base::OnceCallback<void(bool)> callback) override;
+  void ShouldAllowPaste(web::WebState* source,
+                        base::OnceCallback<void(bool)> callback) override;
+  void ShouldAllowCut(web::WebState* source,
+                      base::OnceCallback<void(bool)> callback) override;
+  void DidFinishClipboardRead(web::WebState* source) override;
 
  private:
   raw_ptr<web::WebState> original_web_state_ = nullptr;

@@ -6,16 +6,18 @@
 
 #include <optional>
 
-#include "base/environment.h"
+#include "base/base_paths.h"
 #include "base/logging.h"
 #include "base/notimplemented.h"
+#include "base/path_service.h"
 #include "base/process/process_handle.h"
-#include "base/strings/cstring_view.h"
-#include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX)
 #include "base/containers/fixed_flat_set.h"
+#endif
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 #include "base/files/file_path.h"
 #include "remoting/host/base/process_util.h"
 #endif
@@ -23,12 +25,8 @@
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
 
-#include <memory>
-#include <string>
-
-#include "base/logging.h"
 #include "base/win/scoped_handle.h"
-#include "remoting/host/win/trust_util.h"
+#include "base/win/trust_util.h"
 #endif
 
 #if BUILDFLAG(IS_MAC)
@@ -60,31 +58,6 @@ constexpr auto kAllowedCallerPrograms =
 
 #elif BUILDFLAG(IS_WIN)
 
-// Names of environment variables that store the path to directories where apps
-// are installed.
-constexpr auto kAppsDirectoryEnvVars =
-    base::MakeFixedFlatSet<base::cstring_view>({
-        "PROGRAMFILES",
-
-        // May happen if Chrome is upgraded from a 32-bit version.
-        "PROGRAMFILES(X86)",
-
-        // Refers to "C:\Program Files" if current process is 32-bit.
-        "ProgramW6432",
-
-        // For per-user installations.
-        "LOCALAPPDATA",
-    });
-
-// Relative to the Program Files directory.
-constexpr auto kAllowedCallerPrograms =
-    base::MakeFixedFlatSet<base::FilePath::StringViewType>({
-        L"Google\\Chrome\\Application\\chrome.exe",
-        L"Google\\Chrome Beta\\Application\\chrome.exe",
-        L"Google\\Chrome SxS\\Application\\chrome.exe",
-        L"Google\\Chrome Dev\\Application\\chrome.exe",
-    });
-
 #elif BUILDFLAG(IS_MAC)
 
 constexpr auto kAllowedIdentifiers = std::to_array<const std::string_view>(
@@ -109,66 +82,19 @@ bool IsLaunchedByTrustedProcess() {
   base::FilePath parent_image_path = GetProcessImagePath(parent_pid);
   return kAllowedCallerPrograms.contains(parent_image_path.value());
 #elif BUILDFLAG(IS_WIN)
-  auto environment = base::Environment::Create();
-
-  base::ProcessId parent_pid =
-      base::GetParentProcessId(base::GetCurrentProcessHandle());
-  base::FilePath parent_image_path = GetProcessImagePath(parent_pid);
-
-  // On Windows, Chrome launches native messaging hosts via cmd for stdio
-  // communication. See:
-  //   chrome/browser/extensions/api/messaging/native_process_launcher_win.cc
-  // Therefore, we check if the parent is cmd and skip to the grandparent if
-  // that's the case. It's possible to do stdio communications without cmd, so
-  // we don't require the parent to always be cmd.
-
-  // COMSPEC is generally "C:\WINDOWS\system32\cmd.exe". Note that the casing
-  // does not match the actual file path's casing.
-  std::optional<std::string> comspec_utf8 = environment->GetVar("COMSPEC");
-  if (comspec_utf8.has_value()) {
-    base::FilePath::StringType comspec = base::UTF8ToWide(comspec_utf8.value());
-    if (base::FilePath::CompareEqualIgnoreCase(parent_image_path.value(),
-                                               comspec)) {
-      // Skip to the grandparent.
-      base::win::ScopedHandle parent_handle(
-          OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, parent_pid));
-      if (parent_handle.is_valid()) {
-        parent_pid = base::GetParentProcessId(parent_handle.Get());
-        parent_image_path = GetProcessImagePath(parent_pid);
-      } else {
-        PLOG(ERROR) << "Failed to query parent info.";
-      }
-    }
-  } else {
-    LOG(ERROR) << "COMSPEC is not set";
+  base::ProcessId launcher_pid = GetLauncherProcessIdFromStdioPipes();
+  if (launcher_pid == base::kNullProcessId) {
+    LOG(ERROR) << "Failed to resolve launcher PID from stdio pipes.";
+    return false;
   }
 
-  // Check if the caller's image path is allowlisted.
-  for (base::cstring_view apps_dir_env_var : kAppsDirectoryEnvVars) {
-    std::optional<std::string> apps_dir_path_utf8 =
-        environment->GetVar(apps_dir_env_var);
-    if (!apps_dir_path_utf8.has_value()) {
-      continue;
-    }
-    auto apps_dir_path =
-        base::FilePath::FromUTF8Unsafe(apps_dir_path_utf8.value());
-    if (!apps_dir_path.IsParent(parent_image_path)) {
-      continue;
-    }
-    for (const base::FilePath::StringViewType& allowed_caller_program :
-         kAllowedCallerPrograms) {
-      base::FilePath allowed_caller_program_full_path =
-          apps_dir_path.Append(allowed_caller_program);
-      if (base::FilePath::CompareEqualIgnoreCase(
-              parent_image_path.value(),
-              allowed_caller_program_full_path.value())) {
-        // Caller's path is allowlisted, now also check if it's properly signed.
-        return IsBinaryTrusted(parent_image_path);
-      }
-    }
+  base::FilePath launcher_image_path = GetProcessImagePath(launcher_pid);
+  if (launcher_image_path.empty()) {
+    LOG(ERROR) << "Failed to get launcher process image path.";
+    return false;
   }
-  // Caller's path is not allowlisted.
-  return false;
+
+  return base::win::IsBinaryTrusted(launcher_image_path);
 #elif BUILDFLAG(IS_MAC)
   // TODO: crbug.com/410903981 - move away from PID-based security checks, which
   // might be susceptible of PID reuse attacks, if Apple provides APIs to query

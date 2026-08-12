@@ -8,7 +8,6 @@
 #include "base/strings/sys_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
 #import "chrome/browser/ui/cocoa/test/cocoa_test_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -88,8 +87,13 @@ class ShareMenuControllerTest : public InProcessBrowserTest {
 // TODO(crbug.com/439676515): Renable this test once the flakiness is addressed.
 IN_PROC_BROWSER_TEST_F(ShareMenuControllerTest, DISABLED_PopulatesMenu) {
   NSMenu* menu = [[NSMenu alloc] initWithTitle:@"Share"];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  // See the comment in -[ShareMenuController menuNeedsUpdate:] for more info on
+  // this usage of deprecated API.
   NSArray* sharing_services_for_url = [NSSharingService
       sharingServicesForItems:@[ [NSURL URLWithString:@"http://example.com"] ]];
+#pragma clang diagnostic pop
   EXPECT_GT(sharing_services_for_url.count, 0U);
 
   [controller_ menuNeedsUpdate:menu];
@@ -163,8 +167,10 @@ IN_PROC_BROWSER_TEST_F(ShareMenuControllerTest, SharingDelegate) {
                // methods is nonnull and circular references could get hairy.
                MockSharingService* mockService = MakeMockSharingService();
 
-               NSWindow* browser_window =
-                   browser()->window()->GetNativeWindow().GetNativeNSWindow();
+               NSWindow* browser_window = browser()
+                                              ->GetWindow()
+                                              ->GetNativeWindow()
+                                              .GetNativeNSWindow();
                EXPECT_NSNE([controller_ sharingService:mockService
                                sourceFrameOnScreenForShareItem:url],
                            NSZeroRect);
@@ -215,7 +221,8 @@ IN_PROC_BROWSER_TEST_F(ShareMenuControllerTest, MenuHasKeyEquivalent) {
                            (menuHasKeyEquivalent:forEvent:target:action:)]);
 
   // Ensure that calling |menuHasKeyEquivalent:...| the first time populates the
-  // menu.
+  // menu. It should only populate the static "Email Link" item to avoid
+  // blocking on sharing service lookup.
   NSMenu* menu = [[NSMenu alloc] initWithTitle:@"Share"];
   EXPECT_EQ(menu.numberOfItems, 0);
   NSEvent* event = cocoa_test_event_utils::KeyEventWithKeyCode(
@@ -227,7 +234,8 @@ IN_PROC_BROWSER_TEST_F(ShareMenuControllerTest, MenuHasKeyEquivalent) {
                                         forEvent:event
                                           target:&ignored_target
                                           action:&ignored_action]);
-  EXPECT_GT([menu numberOfItems], 0);
+  EXPECT_EQ([menu numberOfItems], 1);
+  EXPECT_EQ([[menu itemAtIndex:0] action], @selector(emailLink:));
 
   NSMenuItem* item = [menu itemAtIndex:0];
   // |menuHasKeyEquivalent:....| shouldn't populate the menu after the first

@@ -18,6 +18,7 @@ static_library("profiling_host") {
     "//base",
     "//chrome/browser:browser_process",
     "//chrome/browser:main_extra_parts",
+    "//chrome/browser/loader",
     "//chrome/browser/profiles:profile",
     "//chrome/common:non_code_constants",
     "//components/heap_profiling/multi_process",
@@ -59,4 +60,19 @@ source_set("profiling_browsertests") {
     # For `InProcessBrowserTest`.
     deps += [ "//chrome/test:test_support_ui" ]
   }
+}
+
+source_set("unit_tests") {
+  testonly = true
+
+  sources = [ "chrome_client_connection_manager_unittest.cc" ]
+
+  deps = [
+    ":profiling_host",
+    "//base",
+    "//chrome/test:test_support",
+    "//components/services/heap_profiling/public/cpp",
+    "//content/test:test_support",
+    "//testing/gtest",
+  ]
 }

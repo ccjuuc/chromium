@@ -23,7 +23,7 @@
 #include "content/public/browser/web_contents_observer.h"
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/resource_coordinator/lifecycle_unit_observer.h"
+#include "chrome/browser/resource_coordinator/lifecycle_unit_observer.h"  // nogncheck
 #endif
 
 class PrefRegistrySimple;
@@ -133,6 +133,25 @@ class TabStatsTracker :
     // The name of the histogram that records each window's width, in DIPs.
     static const char kWindowWidthHistogramName[];
 
+    // The name of the histogram that records if a window's vertical tab strip
+    // is collapsed.
+    static const char kVerticalTabStripCollapseStateHistogramName[];
+
+    // The name of the histogram that records the keyboard tab switch mode.
+    static const char kKeyboardTabSwitchModeHistogramName[];
+
+    // The name of the histogram that records if a window's tab strip is in
+    // focus mode.
+    static const char kFocusModeIsActiveHistogramName[];
+
+    // The name of the histogram that records the number of pinned tabs in the
+    // tab strip.
+    static const char kPinnedTabCountHistogramName[];
+
+    // The name of the histogram that records if the tab search button is pinned
+    // in the tab strip.
+    static const char kTabSearchIsPinnedHistogramName[];
+
     // The names of the histograms that record daily discard/reload counts
     // caused for each discard reason.
     static const char kDailyDiscardsExternalHistogramName[];
@@ -175,6 +194,17 @@ class TabStatsTracker :
     // Called once per day to report the metrics.
     void ReportDailyMetrics(const TabStatsDataStore::TabsStats& tab_stats);
 
+    // Enumerates the keyboard tab switch mode.
+    // These values are persisted to logs. Entries should not be renumbered and
+    // numeric values should never be reused.
+    // LINT.IfChange(KeyboardTabSwitchMode)
+    enum class KeyboardTabSwitchMode {
+      kStandard = 0,
+      kMRU = 1,
+      kMaxValue = kMRU,
+    };
+    // LINT.ThenChange(//tools/metrics/histograms/metadata/tab/enums.xml:KeyboardTabSwitchMode)
+
     // Report the tab heartbeat metrics.
     void ReportHeartbeatMetrics(const TabStatsDataStore::TabsStats& tab_stats);
 
@@ -184,6 +214,12 @@ class TabStatsTracker :
     // URL apart from trailing fragments as duplicates, otherwise will only
     // treat exact URL matches as duplicates.
     void ReportTabDuplicateMetrics(bool exclude_fragments);
+
+#if !BUILDFLAG(IS_ANDROID)
+    // Calculate and report metrics on the number of split tabs within the tab
+    // strips.
+    void ReportSplitTabMetrics();
+#endif
 
    protected:
     // Checks if Chrome is running in background with no visible windows,
@@ -361,6 +397,14 @@ class TabStatsTracker::TabStripInterface {
   // Returns the count of tabs in this tab strip.
   size_t GetTabCount() const;
 
+  // Returns the count of pinned tabs in this tab strip.
+  size_t GetPinnedTabCount() const;
+
+#if !BUILDFLAG(IS_ANDROID)
+  // Returns the count of tabs within Split Views in this tab strip.
+  size_t GetSplitTabCount() const;
+#endif
+
   // Returns the active tab for this tab strip. On Android this may return
   // nullptr if the tab's WebContents isn't initialized yet.
   content::WebContents* GetActiveWebContents() const;
@@ -370,7 +414,8 @@ class TabStatsTracker::TabStripInterface {
   content::WebContents* GetWebContentsAt(size_t index) const;
 
   // Returns the profile this tab strip is attached to.
-  Profile* GetProfile() const;
+  Profile* GetProfile();
+  const Profile* GetProfile() const;
 
   // Returns true if this tab strip is attached to a TYPE_NORMAL Browser.
   // Always returns true on Android.

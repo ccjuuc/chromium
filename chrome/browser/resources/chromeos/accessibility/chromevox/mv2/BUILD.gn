@@ -2,7 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
 import(
     "//chrome/browser/resources/chromeos/accessibility/tools/generate_message_formatting_data.gni")
 import(
@@ -180,11 +179,11 @@ js_modules = [
 ]
 
 # Root dir must be the parent directory so it can reach common/.
-ts_library("ts_build") {
+ts_library("build_ts") {
   root_dir = "$ts_build_staging_dir"
   out_dir = tsc_out_dir
 
-  deps = [ "../../common:ts_build" ]
+  deps = [ "../../common:build_ts" ]
 
   extra_deps = [
     #copied files
@@ -251,11 +250,11 @@ bundle_js("bundle_js_background") {
   out_folder = "$target_gen_dir/bundle/background"
 
   deps = [
+    ":build_ts",
     ":chromevox_phonetic_dictionaries_js",
     ":minify_js_messageformat",
-    ":ts_build",
+    "../../common:build_ts",
     "../../common:copied_files",
-    "../../common:ts_build",
   ]
 }
 
@@ -280,9 +279,9 @@ bundle_js("bundle_js_panel") {
   out_folder = "$target_gen_dir/bundle/panel"
 
   deps = [
-    ":ts_build",
+    ":build_ts",
+    "../../common:build_ts",
     "../../common:copied_files",
-    "../../common:ts_build",
   ]
 }
 
@@ -303,11 +302,11 @@ run_jsbundler("copied_files") {
   mode = "copy"
   dest_dir = chromevox_out_dir
   deps = [
+    ":build_ts",
     ":copy_sre",
     ":minify_js_messageformat",
-    ":ts_build",
+    "../../common:build_ts",
     "../../common:copied_files",
-    "../../common:ts_build",
   ]
 
   clear_dest_dirs = [
@@ -342,7 +341,7 @@ run_jsbundler("copied_files") {
   # panel, since we bundle, minify, and write those separately (see
   # minfy_js_background and minify_js_panel).
   sources += filter_exclude(
-          filter_include(get_target_outputs(":ts_build"), [ "*.js" ]),
+          filter_include(get_target_outputs(":build_ts"), [ "*.js" ]),
           [
             "*/panel/*",
             "*/background/*",
@@ -524,7 +523,6 @@ js2gtest("chromevox_extension_js_tests") {
     "//ash",
     "//base",
     "//chrome/browser/ash/accessibility",
-    "//chrome/browser/ash/crosapi",
     "//chrome/browser/ash/system_web_apps",
     "//chrome/common",
   ]

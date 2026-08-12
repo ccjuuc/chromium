@@ -45,7 +45,7 @@ void URLInputType::CountUsage() {
 }
 
 bool URLInputType::TypeMismatchFor(const String& value) const {
-  return !value.empty() && !KURL(NullURL(), value).IsValid();
+  return !value.empty() && !KURL(NullUrl(), value).IsValid();
 }
 
 bool URLInputType::TypeMismatch() const {
@@ -58,7 +58,7 @@ String URLInputType::TypeMismatchText() const {
 
 String URLInputType::SanitizeValue(const String& proposed_value) const {
   return BaseTextInputType::SanitizeValue(
-      StripLeadingAndTrailingHTMLSpaces(proposed_value));
+      StripLeadingAndTrailingHtmlSpaces(proposed_value).ToString());
 }
 
 String URLInputType::SanitizeUserInputValue(

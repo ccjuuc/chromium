@@ -73,7 +73,7 @@ void OnPaymentAppCreationError(
   JNIEnv* env = AttachCurrentThread();
   Java_PaymentAppServiceCallback_onPaymentAppCreationError(
       env, jcallback, ConvertUTF8ToJavaString(env, error_message),
-      static_cast<jint>(error_reason));
+      static_cast<int32_t>(error_reason));
 }
 
 void OnDoneCreatingPaymentApps(const JavaRef<jobject>& jcallback) {
@@ -107,9 +107,9 @@ static void JNI_PaymentAppServiceBridge_Create(
     const JavaRef<jstring>& jtwa_package_name,
     // TODO(crbug.com/40182225): Remove jmay_crawl_for_installable_payment_apps,
     // as it is no longer used.
-    jboolean jmay_crawl_for_installable_payment_apps,
-    jboolean jis_off_the_record,
-    jlong native_csp_checker_android,
+    bool jmay_crawl_for_installable_payment_apps,
+    bool jis_off_the_record,
+    int64_t native_csp_checker_android,
     const JavaRef<jobject>& jcallback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
@@ -311,6 +311,8 @@ void PaymentAppServiceBridge::ShowProcessingSpinner() {
   // Java UI determines when the show a spinner itself.
 }
 
+void PaymentAppServiceBridge::ShowLoadingView() {}
+
 base::WeakPtr<PaymentRequestSpec> PaymentAppServiceBridge::GetSpec() const {
   return spec_;
 }
@@ -360,11 +362,6 @@ base::WeakPtr<CSPChecker> PaymentAppServiceBridge::GetCSPChecker() {
 
 void PaymentAppServiceBridge::SetOptOutOffered() {
   set_opt_out_offered_callback_.Run();
-}
-
-std::optional<base::UnguessableToken>
-PaymentAppServiceBridge::GetChromeOSTWAInstanceId() const {
-  return std::nullopt;
 }
 
 PaymentAppServiceBridge::PaymentAppServiceBridge(

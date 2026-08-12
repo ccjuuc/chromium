@@ -7,8 +7,8 @@
 #import "components/dom_distiller/core/distilled_page_prefs.h"
 #import "ios/chrome/browser/dom_distiller/model/distiller_service.h"
 #import "ios/chrome/browser/dom_distiller/model/distiller_service_factory.h"
-#import "ios/chrome/browser/intelligence/bwg/model/bwg_service.h"
-#import "ios/chrome/browser/intelligence/bwg/model/bwg_service_factory.h"
+#import "ios/chrome/browser/intelligence/bwg/model/gemini_service.h"
+#import "ios/chrome/browser/intelligence/bwg/model/gemini_service_factory.h"
 #import "ios/chrome/browser/reader_mode/coordinator/reader_mode_mediator.h"
 #import "ios/chrome/browser/reader_mode/coordinator/reader_mode_options_coordinator.h"
 #import "ios/chrome/browser/reader_mode/ui/reader_mode_view_controller.h"
@@ -17,6 +17,7 @@
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/page_action_menu_commands.h"
+#import "ios/chrome/browser/shared/public/commands/reader_mode_commands.h"
 #import "ios/chrome/browser/shared/public/commands/reader_mode_options_commands.h"
 
 @interface ReaderModeCoordinator () <ReaderModeOptionsCommands>
@@ -33,16 +34,18 @@
 - (void)startAnimated:(BOOL)animated {
   _viewController = [[ReaderModeViewController alloc] init];
   _viewController.overscrollDelegate = self.overscrollDelegate;
+  _viewController.readerModeHandler = HandlerForProtocol(
+      self.browser->GetCommandDispatcher(), ReaderModeCommands);
   _viewController.delegate = self;
   ProfileIOS* profile = self.browser->GetProfile();
-  BwgService* BWGService = BwgServiceFactory::GetForProfile(profile);
+  GeminiService* geminiService = GeminiServiceFactory::GetForProfile(profile);
   DistillerService* distiller_service =
       DistillerServiceFactory::GetForProfile(self.browser->GetProfile());
   dom_distiller::DistilledPagePrefs* distilledPagePrefs =
       distiller_service ? distiller_service->GetDistilledPagePrefs() : nullptr;
   _mediator = [[ReaderModeMediator alloc]
       initWithWebStateList:self.browser->GetWebStateList()
-                BWGService:BWGService
+             geminiService:geminiService
         distilledPagePrefs:distilledPagePrefs];
   _mediator.consumer = _viewController;
   _viewController.mutator = _mediator;
@@ -88,14 +91,6 @@
 #pragma mark - ReaderModeOptionsCommands
 
 - (void)showReaderModeOptions {
-  if ([_mediator BWGAvailableForProfile]) {
-    id<PageActionMenuCommands> pageActionMenuHandler = HandlerForProtocol(
-        self.browser->GetCommandDispatcher(), PageActionMenuCommands);
-    // The flow when Page Action is available is to show the Page action menu.
-    // The user will have to tap RM options button again from there.
-    [pageActionMenuHandler showPageActionMenu];
-    return;
-  }
   if (_optionsCoordinator) {
     // If the Reader mode options UI is already presented then there is nothing
     // to do.
@@ -108,12 +103,6 @@
 }
 
 - (void)hideReaderModeOptions {
-  if ([_mediator BWGAvailableForProfile]) {
-    id<PageActionMenuCommands> pageActionMenuHandler = HandlerForProtocol(
-        self.browser->GetCommandDispatcher(), PageActionMenuCommands);
-    [pageActionMenuHandler dismissPageActionMenuWithCompletion:nil];
-    return;
-  }
   if (!_optionsCoordinator) {
     // If the Reader mode options UI is already dismissed then there is nothing
     // to do.

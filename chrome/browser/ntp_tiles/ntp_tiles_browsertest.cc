@@ -9,9 +9,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/ntp_tiles/chrome_most_visited_sites_factory.h"
-#include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -19,8 +17,6 @@
 #include "components/history/core/browser/top_sites.h"
 #include "components/ntp_tiles/most_visited_sites.h"
 #include "components/ntp_tiles/ntp_tile.h"
-#include "components/supervised_user/core/browser/supervised_user_utils.h"
-#include "components/supervised_user/core/common/supervised_user_constants.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -88,7 +84,7 @@ class NTPTilesTest : public InProcessBrowserTest {
  protected:
   void SetUpOnMainThread() override {
     most_visited_sites_ =
-        ChromeMostVisitedSitesFactory::NewForProfile(browser()->profile());
+        ChromeMostVisitedSitesFactory::NewForProfile(browser()->GetProfile());
   }
 
   void TearDownOnMainThread() override {
@@ -107,7 +103,7 @@ class NTPTilesForSupervisedUsersTest : public MixinBasedInProcessBrowserTest {
 
     ASSERT_TRUE(embedded_test_server()->Started());
     most_visited_sites_ =
-        ChromeMostVisitedSitesFactory::NewForProfile(browser()->profile());
+        ChromeMostVisitedSitesFactory::NewForProfile(browser()->GetProfile());
   }
 
   void TearDownOnMainThread() override {
@@ -179,7 +175,7 @@ IN_PROC_BROWSER_TEST_F(NTPTilesTest, ServerRedirect) {
 
 // Tests usage of MostVisitedSites mimicking Chrome Home, where an observer is
 // installed early and once and navigations follow afterwards.
-// Flaky on several platforms: https://crbug.com/1487047.
+// Flaky on several platforms: https://crbug.com/40933946.
 IN_PROC_BROWSER_TEST_F(NTPTilesTest, DISABLED_NavigateAfterSettingObserver) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL page_url = embedded_test_server()->GetURL("/simple.html");

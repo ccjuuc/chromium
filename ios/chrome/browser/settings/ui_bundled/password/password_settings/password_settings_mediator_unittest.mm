@@ -10,6 +10,7 @@
 #import "components/affiliations/core/browser/fake_affiliation_service.h"
 #import "components/keyed_service/core/service_access_type.h"
 #import "components/password_manager/core/browser/password_manager_test_utils.h"
+#import "components/password_manager/core/browser/password_store/password_form_converters.h"
 #import "components/password_manager/core/browser/password_store/test_password_store.h"
 #import "components/password_manager/core/browser/ui/saved_passwords_presenter.h"
 #import "components/signin/public/identity_manager/objc/identity_manager_observer_bridge.h"
@@ -23,8 +24,8 @@
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
-#import "ios/chrome/browser/signin/model/trusted_vault_client_backend.h"
-#import "ios/chrome/browser/signin/model/trusted_vault_client_backend_factory.h"
+#import "ios/chrome/browser/signin/model/trusted_vault/trusted_vault_client_backend.h"
+#import "ios/chrome/browser/signin/model/trusted_vault/trusted_vault_client_backend_factory.h"
 #import "ios/chrome/browser/sync/model/sync_observer_bridge.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/browser/webauthn/model/ios_passkey_model_factory.h"
@@ -185,15 +186,15 @@ class PasswordSettingsMediatorTest : public PlatformTest {
   void AddPassword(std::string url,
                    std::u16string password,
                    PasswordForm::Store store) {
-    auto form = std::make_unique<PasswordForm>();
-    form->username_value = u"user@gmail.com";
-    form->password_value = password;
-    form->url = GURL(url);
-    form->signon_realm = "https://www.example.com/";
-    form->in_store = store;
+    password_manager::StoredCredential cred;
+    cred.username_value = u"user@gmail.com";
+    cred.password_value = password_manager::PasswordString(std::move(password));
+    cred.url = GURL(url);
+    cred.signon_realm = "https://www.example.com/";
+    cred.in_store = store;
 
     base::RunLoop run_loop;
-    profile_store_->AddLogin(*form, run_loop.QuitClosure());
+    profile_store_->AddLogin(std::move(cred), run_loop.QuitClosure());
     run_loop.Run();
   }
 
@@ -268,12 +269,11 @@ TEST_F(PasswordSettingsMediatorTest,
   CreateMediator();
   ASSERT_TRUE(
       [mediator_ conformsToProtocol:@protocol(SyncObserverModelBridge)]);
-  PasswordSettingsMediator<IdentityManagerObserverBridgeDelegate>*
-      syncObserver = static_cast<
-          PasswordSettingsMediator<IdentityManagerObserverBridgeDelegate>*>(
+  PasswordSettingsMediator<IdentityManagerObserving>* syncObserver =
+      static_cast<PasswordSettingsMediator<IdentityManagerObserving>*>(
           mediator_);
   const signin::PrimaryAccountChangeEvent event;
-  [syncObserver onPrimaryAccountChanged:event];
+  [syncObserver primaryAccountDidChange:event];
   [[consumer_ verify] setOnDeviceEncryptionState:
                           PasswordSettingsOnDeviceEncryptionStateNotShown];
 }
@@ -364,7 +364,6 @@ TEST_F(PasswordSettingsMediatorTest, CountsProfileStorePasswordsAsLocal) {
   [[consumer_ verify] setCanBulkMove:NO localPasswordsCount:2];
 }
 
-#if BUILDFLAG(IOS_CREDENTIAL_EXCHANGE_ENABLED)
 // Tests that the export button is enabled/disabled based on passkey presence
 // when the Credential Exchange feature is enabled.
 TEST_F(PasswordSettingsMediatorTest, UpdatesExportStateWhenPasskeysChange) {
@@ -375,4 +374,3 @@ TEST_F(PasswordSettingsMediatorTest, UpdatesExportStateWhenPasskeysChange) {
   AddPasskey();
   [[consumer_ verify] setCanExportCredentials:YES];
 }
-#endif

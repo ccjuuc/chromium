@@ -25,11 +25,9 @@
 #import "components/optimization_guide/core/model_execution/on_device_model_component.h"  // nogncheck
 #import "components/optimization_guide/core/model_execution/on_device_model_execution_proto_descriptors.h"  // nogncheck
 #import "components/optimization_guide/core/model_execution/optimization_guide_model_execution_error.h"  // nogncheck
-#import "components/optimization_guide/core/optimization_guide_constants.h"  // nogncheck
 #import "components/optimization_guide/core/optimization_guide_features.h"  // nogncheck
 #import "components/optimization_guide/core/optimization_guide_switches.h"  // nogncheck
 #import "components/optimization_guide/core/optimization_guide_util.h"  // nogncheck
-#import "components/optimization_guide/machine_learning_tflite_buildflags.h"  // nogncheck
 #import "components/optimization_guide/proto/model_execution.pb.h"  // nogncheck
 #import "components/optimization_guide/proto/model_validation.pb.h"  // nogncheck
 #import "components/optimization_guide/proto/string_value.pb.h"  // nogncheck
@@ -61,8 +59,8 @@ class OnDeviceLlmInternalsHandler : public web::WebUIIOSMessageHandler {
   void RegisterMessages() override;
 
  private:
-  void HandleRequestModelInformation(const base::Value::List& args);
-  void InitAndGenerateResponse(const base::Value::List& args);
+  void HandleRequestModelInformation(const base::ListValue& args);
+  void InitAndGenerateResponse(const base::ListValue& args);
 
 #if BUILDFLAG(BUILD_WITH_INTERNAL_OPTIMIZATION_GUIDE)
   void OnServerModelExecuteResponse(
@@ -99,7 +97,7 @@ void OnDeviceLlmInternalsHandler::RegisterMessages() {
 }
 
 void OnDeviceLlmInternalsHandler::HandleRequestModelInformation(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   // TODO(crbug.com/387510419): Load model name.
   std::string model_name = "";
   if (model_name.empty()) {
@@ -111,7 +109,7 @@ void OnDeviceLlmInternalsHandler::HandleRequestModelInformation(
 }
 
 void OnDeviceLlmInternalsHandler::InitAndGenerateResponse(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   CHECK(args.size() == 1);
 #if BUILDFLAG(BUILD_WITH_INTERNAL_OPTIMIZATION_GUIDE)
 

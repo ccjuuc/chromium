@@ -44,10 +44,10 @@ struct CONTENT_EXPORT PendingConnection {
   base::WeakPtr<Transaction> transaction;
   mojo::PendingAssociatedReceiver<blink::mojom::IDBTransaction>
       pending_mojo_receiver;
-  bool was_cold_open = false;
   mojo::Remote<storage::mojom::IndexedDBClientStateChecker>
       client_state_checker;
   base::UnguessableToken client_token;
+  bool request_shared_connection = false;
 };
 
 }  // namespace content::indexed_db

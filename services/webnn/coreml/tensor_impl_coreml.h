@@ -22,23 +22,22 @@ namespace coreml {
 
 class BufferContent;
 
-class API_AVAILABLE(macos(12.3)) TensorImplCoreml final
-    : public WebNNTensorImpl {
+class TensorImplCoreml final : public WebNNTensorImpl {
  public:
   static base::expected<scoped_refptr<WebNNTensorImpl>, mojom::ErrorPtr> Create(
       mojo::PendingAssociatedReceiver<mojom::WebNNTensor> receiver,
-      base::WeakPtr<WebNNContextImpl> context,
+      WebNNContextImpl& context,
       mojom::TensorInfoPtr tensor_info);
 
   static base::expected<scoped_refptr<WebNNTensorImpl>, mojom::ErrorPtr> Create(
       mojo::PendingAssociatedReceiver<mojom::WebNNTensor> receiver,
-      base::WeakPtr<WebNNContextImpl> context,
+      WebNNContextImpl& context,
       mojom::TensorInfoPtr tensor_info,
       RepresentationPtr representation);
 
   TensorImplCoreml(
       mojo::PendingAssociatedReceiver<mojom::WebNNTensor> receiver,
-      base::WeakPtr<WebNNContextImpl> context,
+      WebNNContextImpl& context,
       mojom::TensorInfoPtr tensor_info,
       scoped_refptr<QueueableResourceState<BufferContent>> buffer_state,
       RepresentationPtr representation,
@@ -51,17 +50,22 @@ class API_AVAILABLE(macos(12.3)) TensorImplCoreml final
   void ReadTensorImpl(mojom::WebNNTensor::ReadTensorCallback callback) override;
   void WriteTensorImpl(mojo_base::BigBuffer src_buffer) override;
   bool ImportTensorImpl(ScopedAccessPtr access) override;
-  void ExportTensorImpl(ScopedAccessPtr access,
-                        ExportTensorCallback callback) override;
+  void ExportTensorImpl(ScopedAccessPtr access) override;
 
   const scoped_refptr<QueueableResourceState<BufferContent>>& GetBufferState()
       const;
+
+  // mojom::WebNNTensor
+  void ExportTensor(uint64_t flow_id, uint64_t release_count) override;
+  void ExportTensorSync(uint64_t flow_id,
+                        uint64_t release_count,
+                        ExportTensorSyncCallback callback) override;
 
  private:
   ~TensorImplCoreml() override;
 
   scoped_refptr<QueueableResourceState<BufferContent>> buffer_state_
-      GUARDED_BY_CONTEXT(gpu_sequence_checker_);
+      GUARDED_BY_CONTEXT(sequence_checker_);
 };
 
 }  // namespace coreml

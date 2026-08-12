@@ -11,6 +11,7 @@
 
 #include "base/json/json_writer.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notimplemented.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -144,7 +145,7 @@ std::string ConvertToPatternString(const blink::SafeUrlPattern& url_pattern,
 
 base::Value RequestToValue(
     const blink::ServiceWorkerRouterRequestCondition& request) {
-  base::Value::Dict ret;
+  base::DictValue ret;
   if (request.method) {
     ret.Set("method", *request.method);
   }
@@ -172,7 +173,7 @@ std::string RunningStatusToString(
 
 base::Value OrConditionToValue(
     const blink::ServiceWorkerRouterOrCondition& or_condition) {
-  base::Value::List ret;
+  base::ListValue ret;
   ret.reserve(or_condition.conditions.size());
   for (const auto& c : or_condition.conditions) {
     ret.Append(ConditionToValue(c));
@@ -186,29 +187,33 @@ base::Value NotConditionToValue(
   return ConditionToValue(*not_condition.condition);
 }
 
+base::DictValue SafeURLPatternToValue(const blink::SafeUrlPattern& pattern) {
+  base::DictValue url_pattern_value;
+#define TO_VALUE(type, type_name)                       \
+  do {                                                  \
+    auto value = ConvertToPatternString(pattern, type); \
+    url_pattern_value.Set(type_name, value);            \
+  } while (0)
+
+  TO_VALUE(URLPatternFieldType::kProtocol, "protocol");
+  TO_VALUE(URLPatternFieldType::kUsername, "username");
+  TO_VALUE(URLPatternFieldType::kPassword, "password");
+  TO_VALUE(URLPatternFieldType::kHostname, "hostname");
+  TO_VALUE(URLPatternFieldType::kPort, "port");
+  TO_VALUE(URLPatternFieldType::kPathname, "pathname");
+  TO_VALUE(URLPatternFieldType::kSearch, "search");
+  TO_VALUE(URLPatternFieldType::kHash, "hash");
+#undef TO_VALUE
+  return url_pattern_value;
+}
+
 base::Value ConditionToValue(
     const blink::ServiceWorkerRouterCondition& condition) {
-  base::Value::Dict out_c;
+  base::DictValue out_c;
   const auto& [url_pattern, request, running_status, or_condition,
                not_condition] = condition.get();
   if (url_pattern) {
-    base::Value::Dict url_pattern_value;
-#define TO_VALUE(type, type_name)                            \
-  do {                                                       \
-    auto value = ConvertToPatternString(*url_pattern, type); \
-    url_pattern_value.Set(type_name, value);                 \
-  } while (0)
-
-    TO_VALUE(URLPatternFieldType::kProtocol, "protocol");
-    TO_VALUE(URLPatternFieldType::kUsername, "username");
-    TO_VALUE(URLPatternFieldType::kPassword, "password");
-    TO_VALUE(URLPatternFieldType::kHostname, "hostname");
-    TO_VALUE(URLPatternFieldType::kPort, "port");
-    TO_VALUE(URLPatternFieldType::kPathname, "pathname");
-    TO_VALUE(URLPatternFieldType::kSearch, "search");
-    TO_VALUE(URLPatternFieldType::kHash, "hash");
-#undef TO_VALUE
-      out_c.Set("urlPattern", std::move(url_pattern_value));
+    out_c.Set("urlPattern", SafeURLPatternToValue(*url_pattern));
   }
   if (request) {
     out_c.Set("request", RequestToValue(*request));
@@ -656,6 +661,10 @@ bool NotCondition::Match(
 
 namespace content {
 
+std::string SafeURLPatternToJsonString(const blink::SafeUrlPattern& pattern) {
+  return base::WriteJson(SafeURLPatternToValue(pattern)).value_or("");
+}
+
 class ServiceWorkerRouterEvaluator::RouterRule {
  public:
   ServiceWorkerRouterEvaluatorErrorEnums SetRule(
@@ -748,6 +757,8 @@ void ServiceWorkerRouterEvaluator::Compile() {
       has_non_fetch_event_source_ |= !has_fetch_event;
     }
     compiled_rules_.emplace_back(std::move(rule));
+    UpdateMaxConditionDepthAndWidth(r.condition, max_rule_depth_,
+                                    max_rule_width_);
   }
   RecordSetupError(ServiceWorkerRouterEvaluatorErrorEnums::kNoError);
   is_valid_ = true;
@@ -790,13 +801,13 @@ ServiceWorkerRouterEvaluator::EvaluateWithoutRunningStatus(
 }
 
 base::Value ServiceWorkerRouterEvaluator::ToValue() const {
-  base::Value::List out;
+  base::ListValue out;
   CHECK_EQ(rules_.rules.size(), compiled_rules_.size());
   for (size_t idx = 0; idx < rules_.rules.size(); ++idx) {
     const auto& r = rules_.rules[idx];
-    base::Value::Dict rule;
+    base::DictValue rule;
     base::Value condition = ConditionToValue(r.condition);
-    base::Value::List source;
+    base::ListValue source;
     for (const auto& s : r.sources) {
       switch (s.type) {
         case network::mojom::ServiceWorkerRouterSourceType::kNetwork:
@@ -811,7 +822,7 @@ base::Value ServiceWorkerRouterEvaluator::ToValue() const {
           break;
         case network::mojom::ServiceWorkerRouterSourceType::kCache:
           if (s.cache_source->cache_name) {
-            base::Value::Dict out_s;
+            base::DictValue out_s;
             out_s.Set("cache_name", *s.cache_source->cache_name);
             source.Append(std::move(out_s));
           } else {
@@ -821,7 +832,7 @@ base::Value ServiceWorkerRouterEvaluator::ToValue() const {
         case network::mojom::ServiceWorkerRouterSourceType::
             kRaceNetworkAndCache:
           if (s.race_network_and_cache_source->cache_source.cache_name) {
-            base::Value::Dict out_s;
+            base::DictValue out_s;
             out_s.Set(
                 "race_network_and_cache_cache_name",
                 *s.race_network_and_cache_source->cache_source.cache_name);
@@ -844,24 +855,16 @@ std::string ServiceWorkerRouterEvaluator::ToString() const {
   return base::WriteJson(ToValue()).value_or("");
 }
 
+std::vector<ServiceWorkerRouterRule>
+ServiceWorkerRouterEvaluator::CalculateRouterRulesForDevTools() const {
+  // TODO(crbug.com/540469610): Implement this.
+  NOTIMPLEMENTED();
+  return {};
+}
+
 void ServiceWorkerRouterEvaluator::RecordRouterRuleInfo() const {
   base::UmaHistogramCounts1000("ServiceWorker.RouterEvaluator.RuleCount",
                                compiled_rules_.size());
-  size_t depth, width;
-  std::tie(depth, width) = GetMaxDepthAndWidth();
-  base::UmaHistogramCounts1000("ServiceWorker.RouterEvaluator.ConditionDepth",
-                               depth);
-  base::UmaHistogramCounts1000("ServiceWorker.RouterEvaluator.OrConditionWidth",
-                               width);
-}
-
-std::tuple<size_t, size_t> ServiceWorkerRouterEvaluator::GetMaxDepthAndWidth()
-    const {
-  size_t depth = 0, width = 0;
-  for (const auto& r : rules_.rules) {
-    UpdateMaxConditionDepthAndWidth(r.condition, depth, width);
-  }
-  return {depth, width};
 }
 
 }  // namespace content

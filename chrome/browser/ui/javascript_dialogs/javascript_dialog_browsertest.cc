@@ -19,7 +19,8 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/tabs/tab_icon.h"
+#include "chrome/browser/ui/views/tabs/tab/tab_icon.h"
+#include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/embedder_support/switches.h"
@@ -385,15 +386,24 @@ IN_PROC_BROWSER_TEST_F(JavaScriptDialogTest,
 IN_PROC_BROWSER_TEST_F(JavaScriptDialogTest, DismissalCausePromptTabHidden) {
   JavaScriptDialogDismissalCauseTester tester(this);
   tester.PopupDialog(content::JAVASCRIPT_DIALOG_TYPE_PROMPT);
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   EXPECT_EQ(DismissalCause::kTabHidden, tester.GetLastDismissalCause());
 }
 
+// TODO(crbug.com/541131636): Re-enable test after fixing flakiness on Mac.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_DismissalCausePromptBrowserSwitched \
+  DISABLED_DismissalCausePromptBrowserSwitched
+#else
+#define MAYBE_DismissalCausePromptBrowserSwitched \
+  DismissalCausePromptBrowserSwitched
+#endif
 IN_PROC_BROWSER_TEST_F(JavaScriptDialogTest,
-                       DismissalCausePromptBrowserSwitched) {
+                       MAYBE_DismissalCausePromptBrowserSwitched) {
   JavaScriptDialogDismissalCauseTester tester(this);
   tester.PopupDialog(content::JAVASCRIPT_DIALOG_TYPE_PROMPT);
-  ui_test_utils::OpenNewEmptyWindowAndWaitUntilActivated(browser()->profile());
+  ui_test_utils::OpenNewEmptyWindowAndWaitUntilActivated(
+      browser()->GetProfile());
   EXPECT_EQ(DismissalCause::kBrowserSwitched, tester.GetLastDismissalCause());
 }
 
@@ -416,7 +426,7 @@ IN_PROC_BROWSER_TEST_F(JavaScriptDialogTest,
 IN_PROC_BROWSER_TEST_F(JavaScriptDialogTest, NoDismissalAlertTabHidden) {
   JavaScriptDialogDismissalCauseTester tester(this);
   tester.PopupDialog(content::JAVASCRIPT_DIALOG_TYPE_ALERT);
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   EXPECT_EQ(std::nullopt, tester.GetLastDismissalCause());
 }
 
@@ -453,7 +463,8 @@ INSTANTIATE_TEST_SUITE_P(
 
 // Tests that the title for a dialog generated from a page with a non-HTTP URL
 // that was spawned by an HTTP URL has that HTTP URL used for the title.
-IN_PROC_BROWSER_TEST_P(JavaScriptDialogOriginTest, TitleForNonHTTPOrigin) {
+IN_PROC_BROWSER_TEST_P(JavaScriptDialogOriginTest,
+                       TitleForNonHTTPOriginInSubframe) {
   GURL url = embedded_test_server()->GetURL("a.com", "/title1.html");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   content::WebContents* tab =
@@ -486,12 +497,63 @@ IN_PROC_BROWSER_TEST_P(JavaScriptDialogOriginTest, TitleForNonHTTPOrigin) {
             dialog_manager->GetTitle(tab, subframe->GetLastCommittedOrigin()));
 }
 
+IN_PROC_BROWSER_TEST_P(JavaScriptDialogOriginTest,
+                       TitleForNonHTTPOriginInMainFrame) {
+  GURL url = embedded_test_server()->GetURL("a.com", "/title1.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  content::WebContents* tab =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  // Create a popup / new tab.
+  content::TestNavigationObserver opened_tab_observer(nullptr);
+  opened_tab_observer.StartWatchingNewWebContents();
+  GURL test_url(GetParam());
+  std::string script = content::JsReplace(R"(
+      let a = document.createElement("a");
+      a.href = $1;
+      a.target = "_blank";
+      a.id = "link";
+      a.textContent = "Open a new tab";
+      document.body.appendChild(a);)",
+                                          test_url);
+  ASSERT_TRUE(content::ExecJs(tab, script));
+  content::SimulateMouseClickOrTapElementWithId(tab, "link");
+  opened_tab_observer.Wait();
+  ASSERT_EQ(2, browser()->tab_strip_model()->count());
+
+  content::WebContents* opened_tab =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  // Wait until newly opened tab is fully loaded.
+  ASSERT_TRUE(WaitForLoadStop(opened_tab));
+
+  // Verify the title that would be used for a dialog spawned by the new tab.
+  javascript_dialogs::AppModalDialogManager* dialog_manager =
+      javascript_dialogs::AppModalDialogManager::GetInstance();
+  EXPECT_EQ(base::UTF8ToUTF16(
+                test_url.SchemeIs("data")
+                    ? "This page says"
+                    : base::StringPrintf("a.com:%d says",
+                                         embedded_test_server()->port())),
+            dialog_manager->GetTitle(
+                opened_tab,
+                opened_tab->GetPrimaryMainFrame()->GetLastCommittedOrigin()));
+}
+
+#if BUILDFLAG(IS_MAC)
+// Flaky: https://crbug.com/468829956
+#define MAYBE_HandlesSwappingTabWithDialogIntoSplitView \
+  DISABLED_HandlesSwappingTabWithDialogIntoSplitView
+#else
+#define MAYBE_HandlesSwappingTabWithDialogIntoSplitView \
+  HandlesSwappingTabWithDialogIntoSplitView
+#endif
 IN_PROC_BROWSER_TEST_F(JavaScriptDialogTest,
-                       HandlesSwappingTabWithDialogIntoSplitView) {
+                       MAYBE_HandlesSwappingTabWithDialogIntoSplitView) {
   // Create three tabs with the first two in a split view.
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   tab_strip_model()->ActivateTabAt(0);
-  chrome::NewSplitTab(browser(),
+  chrome::NewSplitTab(browser(), split_tabs::SplitTabLayout::kSideBySide,
                       split_tabs::SplitTabCreatedSource::kToolbarButton);
 
   // Open a alert dialog from the third tab.
@@ -511,9 +573,8 @@ IN_PROC_BROWSER_TEST_F(JavaScriptDialogTest,
   // Switch to the split view which should hide the dialog and show tab
   // attention indicator.
   tab_strip_model()->ActivateTabAt(0);
-  ASSERT_TRUE(browser()
-                  ->GetBrowserView()
-                  .tabstrip()
+  ASSERT_TRUE(BrowserView::GetBrowserViewForBrowser(browser())
+                  ->horizontal_tab_strip_for_testing()
                   ->tab_at(2)
                   ->GetTabIconForTesting()
                   ->GetShowingAttentionIndicator());

@@ -8,9 +8,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.verify;
 
 import android.app.Activity;
 
+import androidx.lifecycle.Lifecycle;
+import androidx.lifecycle.LifecycleObserver;
 import androidx.lifecycle.LifecycleOwner;
 import androidx.test.ext.junit.rules.ActivityScenarioRule;
 
@@ -19,21 +22,25 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.robolectric.ParameterizedRobolectricTestRunner;
+import org.robolectric.ParameterizedRobolectricTestRunner.Parameters;
 
 import org.chromium.base.Callback;
+import org.chromium.base.FeatureOverrides;
 import org.chromium.base.supplier.OneshotSupplierImpl;
-import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.chrome.browser.device_reauth.ReauthenticatorBridge;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.chrome.browser.sync.ui.batch_upload_card.BatchUploadCardCoordinator.EntryPoint;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+import org.chromium.components.signin.SigninFeatures;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.sync.DataType;
 import org.chromium.components.sync.LocalDataDescription;
@@ -41,14 +48,29 @@ import org.chromium.components.sync.SyncService;
 import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.ui.test.util.MockitoHelper;
 
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Set;
 
-/** Unit tests for {@link BatchUploadCardMediator}. */
-@RunWith(BaseRobolectricTestRunner.class)
-@EnableFeatures({ChromeFeatureList.UNO_PHASE_2_FOLLOW_UP})
+/**
+ * Unit tests for {@link BatchUploadCardMediator}.
+ *
+ * <p>TODO(crbug.com/493130564): Revert to regular runner after
+ * MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS launch.
+ */
+@RunWith(ParameterizedRobolectricTestRunner.class)
 public class BatchUploadCardMediatorTest {
+    @Rule(order = Rule.DEFAULT_ORDER - 1)
+    public final BaseRobolectricTestRule mBaseRule = new BaseRobolectricTestRule();
+
+    @Parameters(name = "{index}_isIdentityMgr={0}")
+    public static Collection parameters() {
+        return Arrays.asList(false, true);
+    }
+
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Rule
@@ -66,9 +88,17 @@ public class BatchUploadCardMediatorTest {
 
     private Activity mActivity;
     private BatchUploadCardMediator mMediator;
+    private final boolean mIsIdentityManagerSourceOfAccounts;
+
+    public BatchUploadCardMediatorTest(boolean isIdentityManagerSourceOfAccounts) {
+        mIsIdentityManagerSourceOfAccounts = isIdentityManagerSourceOfAccounts;
+    }
 
     @Before
     public void setUp() {
+        FeatureOverrides.overrideFlag(
+                SigninFeatures.MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS,
+                mIsIdentityManagerSourceOfAccounts);
         // Setup service mocks.
         IdentityServicesProvider.setInstanceForTests(mIdentityServicesProvider);
         SyncServiceFactory.setInstanceForTesting(mSyncService);
@@ -92,13 +122,15 @@ public class BatchUploadCardMediatorTest {
                             localDataDescription.put(
                                     DataType.READING_LIST,
                                     new LocalDataDescription(0, new String[] {}, 0));
-                            args.getArgument(1, Callback.class).onResult(localDataDescription);
+                            Callback<HashMap<Integer, LocalDataDescription>> callback =
+                                    args.getArgument(1);
+                            callback.onResult(localDataDescription);
                             return null;
                         })
                 .when(mSyncService)
                 .getLocalDataDescriptions(
                         eq(Set.of(DataType.BOOKMARKS, DataType.PASSWORDS, DataType.READING_LIST)),
-                        any(Callback.class));
+                        MockitoHelper.anyCallback());
 
         mActivityScenarioRule
                 .getScenario()
@@ -133,13 +165,15 @@ public class BatchUploadCardMediatorTest {
                             localDataDescription.put(
                                     DataType.READING_LIST,
                                     new LocalDataDescription(0, new String[] {}, 0));
-                            args.getArgument(1, Callback.class).onResult(localDataDescription);
+                            Callback<HashMap<Integer, LocalDataDescription>> callback =
+                                    args.getArgument(1);
+                            callback.onResult(localDataDescription);
                             return null;
                         })
                 .when(mSyncService)
                 .getLocalDataDescriptions(
                         eq(Set.of(DataType.BOOKMARKS, DataType.PASSWORDS, DataType.READING_LIST)),
-                        any(Callback.class));
+                        MockitoHelper.anyCallback());
 
         mActivityScenarioRule
                 .getScenario()
@@ -174,13 +208,15 @@ public class BatchUploadCardMediatorTest {
                             localDataDescription.put(
                                     DataType.READING_LIST,
                                     new LocalDataDescription(0, new String[] {}, 0));
-                            args.getArgument(1, Callback.class).onResult(localDataDescription);
+                            Callback<HashMap<Integer, LocalDataDescription>> callback =
+                                    args.getArgument(1);
+                            callback.onResult(localDataDescription);
                             return null;
                         })
                 .when(mSyncService)
                 .getLocalDataDescriptions(
                         eq(Set.of(DataType.BOOKMARKS, DataType.PASSWORDS, DataType.READING_LIST)),
-                        any(Callback.class));
+                        MockitoHelper.anyCallback());
 
         mActivityScenarioRule
                 .getScenario()
@@ -215,13 +251,15 @@ public class BatchUploadCardMediatorTest {
                             localDataDescription.put(
                                     DataType.READING_LIST,
                                     new LocalDataDescription(1, new String[] {"example.com"}, 1));
-                            args.getArgument(1, Callback.class).onResult(localDataDescription);
+                            Callback<HashMap<Integer, LocalDataDescription>> callback =
+                                    args.getArgument(1);
+                            callback.onResult(localDataDescription);
                             return null;
                         })
                 .when(mSyncService)
                 .getLocalDataDescriptions(
                         eq(Set.of(DataType.BOOKMARKS, DataType.PASSWORDS, DataType.READING_LIST)),
-                        any(Callback.class));
+                        MockitoHelper.anyCallback());
 
         mActivityScenarioRule
                 .getScenario()
@@ -256,13 +294,15 @@ public class BatchUploadCardMediatorTest {
                             localDataDescription.put(
                                     DataType.READING_LIST,
                                     new LocalDataDescription(0, new String[] {}, 0));
-                            args.getArgument(1, Callback.class).onResult(localDataDescription);
+                            Callback<HashMap<Integer, LocalDataDescription>> callback =
+                                    args.getArgument(1);
+                            callback.onResult(localDataDescription);
                             return null;
                         })
                 .when(mSyncService)
                 .getLocalDataDescriptions(
                         eq(Set.of(DataType.BOOKMARKS, DataType.PASSWORDS, DataType.READING_LIST)),
-                        any(Callback.class));
+                        MockitoHelper.anyCallback());
 
         mActivityScenarioRule
                 .getScenario()
@@ -297,13 +337,15 @@ public class BatchUploadCardMediatorTest {
                             localDataDescription.put(
                                     DataType.READING_LIST,
                                     new LocalDataDescription(0, new String[] {}, 0));
-                            args.getArgument(1, Callback.class).onResult(localDataDescription);
+                            Callback<HashMap<Integer, LocalDataDescription>> callback =
+                                    args.getArgument(1);
+                            callback.onResult(localDataDescription);
                             return null;
                         })
                 .when(mSyncService)
                 .getLocalDataDescriptions(
                         eq(Set.of(DataType.BOOKMARKS, DataType.PASSWORDS, DataType.READING_LIST)),
-                        any(Callback.class));
+                        MockitoHelper.anyCallback());
 
         mActivityScenarioRule
                 .getScenario()
@@ -338,13 +380,15 @@ public class BatchUploadCardMediatorTest {
                             localDataDescription.put(
                                     DataType.READING_LIST,
                                     new LocalDataDescription(0, new String[] {}, 0));
-                            args.getArgument(1, Callback.class).onResult(localDataDescription);
+                            Callback<HashMap<Integer, LocalDataDescription>> callback =
+                                    args.getArgument(1);
+                            callback.onResult(localDataDescription);
                             return null;
                         })
                 .when(mSyncService)
                 .getLocalDataDescriptions(
                         eq(Set.of(DataType.BOOKMARKS, DataType.PASSWORDS, DataType.READING_LIST)),
-                        any(Callback.class));
+                        MockitoHelper.anyCallback());
 
         mActivityScenarioRule
                 .getScenario()
@@ -379,13 +423,15 @@ public class BatchUploadCardMediatorTest {
                             localDataDescription.put(
                                     DataType.READING_LIST,
                                     new LocalDataDescription(1, new String[] {"example.com"}, 1));
-                            args.getArgument(1, Callback.class).onResult(localDataDescription);
+                            Callback<HashMap<Integer, LocalDataDescription>> callback =
+                                    args.getArgument(1);
+                            callback.onResult(localDataDescription);
                             return null;
                         })
                 .when(mSyncService)
                 .getLocalDataDescriptions(
                         eq(Set.of(DataType.BOOKMARKS, DataType.PASSWORDS, DataType.READING_LIST)),
-                        any(Callback.class));
+                        MockitoHelper.anyCallback());
 
         mActivityScenarioRule
                 .getScenario()
@@ -403,5 +449,36 @@ public class BatchUploadCardMediatorTest {
                                             EntryPoint.SETTINGS);
                         });
         Assert.assertTrue(mMediator.shouldBeVisible());
+    }
+
+    @Test
+    public void testDestroyRemovesLifecycleObserver() {
+        LifecycleOwner mockLifecycleOwner = Mockito.mock(LifecycleOwner.class);
+        Lifecycle mockLifecycle = Mockito.mock(Lifecycle.class);
+        doReturn(mockLifecycle).when(mockLifecycleOwner).getLifecycle();
+
+        mActivityScenarioRule
+                .getScenario()
+                .onActivity(
+                        (activity) -> {
+                            mMediator =
+                                    new BatchUploadCardMediator(
+                                            activity,
+                                            mockLifecycleOwner,
+                                            mModalDialogManager,
+                                            mProfile,
+                                            mModel,
+                                            mSnackbarManager,
+                                            () -> {},
+                                            EntryPoint.BOOKMARK_MANAGER);
+                        });
+
+        ArgumentCaptor<LifecycleObserver> observerCaptor =
+                ArgumentCaptor.forClass(LifecycleObserver.class);
+        verify(mockLifecycle).addObserver(observerCaptor.capture());
+
+        mMediator.destroy();
+
+        verify(mockLifecycle).removeObserver(observerCaptor.getValue());
     }
 }

@@ -11,7 +11,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/intent_picker_tab_helper.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -44,19 +44,9 @@ namespace {
 
 // Helper function to generate test names for IntentChipButton tests.
 std::string GenerateIntentChipTestName(
-    const testing::TestParamInfo<
-        std::tuple<apps::test::LinkCapturingFeatureVersion, bool>>&
+    const testing::TestParamInfo<apps::test::LinkCapturingFeatureVersion>&
         param_info) {
-  std::string test_name;
-  test_name.append(apps::test::ToString(
-      std::get<apps::test::LinkCapturingFeatureVersion>(param_info.param)));
-  test_name.append("_");
-  if (std::get<bool>(param_info.param)) {
-    test_name.append("page_action_on");
-  } else {
-    test_name.append("page_action_off");
-  }
-  return test_name;
+  return apps::test::ToString(param_info.param);
 }
 
 }  // namespace
@@ -71,18 +61,11 @@ std::string GenerateIntentChipTestName(
 class DefaultLinkCapturingInteractiveUiTest
     : public web_app::WebAppNavigationBrowserTest,
       public testing::WithParamInterface<
-          std::tuple<apps::test::LinkCapturingFeatureVersion, bool>> {
+          apps::test::LinkCapturingFeatureVersion> {
  public:
   DefaultLinkCapturingInteractiveUiTest() {
     std::vector<base::test::FeatureRefAndParams> features_to_enable =
-        apps::test::GetFeaturesToEnableLinkCapturingUX(
-            std::get<apps::test::LinkCapturingFeatureVersion>(GetParam()));
-
-    if (IsMigrationEnabled()) {
-      features_to_enable.push_back(
-          {::features::kPageActionsMigration,
-           {{::features::kPageActionsMigrationIntentPicker.name, "true"}}});
-    }
+        apps::test::GetFeaturesToEnableLinkCapturingUX(GetParam());
 
     feature_list_.InitWithFeaturesAndParameters(features_to_enable, {});
   }
@@ -116,15 +99,12 @@ class DefaultLinkCapturingInteractiveUiTest
   std::tuple<webapps::AppId, webapps::AppId> InstallOuterAppAndInnerApp() {
     // The inner app must be installed first so that it is installable.
     webapps::AppId inner_app_id =
-        web_app::InstallWebAppFromPageAndCloseAppBrowser(browser(),
-                                                         GetInnerNestedUrl());
+        web_app::InstallWebAppInNewTabAndClose(browser(), GetInnerNestedUrl());
     webapps::AppId outer_app_id =
-        web_app::InstallWebAppFromPageAndCloseAppBrowser(browser(),
-                                                         GetOuterUrl());
+        web_app::InstallWebAppInNewTabAndClose(browser(), GetOuterUrl());
     return {outer_app_id, inner_app_id};
   }
 
-  bool IsMigrationEnabled() const { return std::get<bool>(GetParam()); }
 
  private:
   base::test::ScopedFeatureList feature_list_;
@@ -175,7 +155,7 @@ IN_PROC_BROWSER_TEST_P(DefaultLinkCapturingInteractiveUiTest, BubbleCancel) {
   EXPECT_EQ(1, user_action_tester.GetActionCount(
                    "IntentPickerViewClosedStayInChrome"));
   // Verify no new browsers have opened.
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
 }
 
 IN_PROC_BROWSER_TEST_P(DefaultLinkCapturingInteractiveUiTest, BubbleIgnored) {
@@ -185,11 +165,11 @@ IN_PROC_BROWSER_TEST_P(DefaultLinkCapturingInteractiveUiTest, BubbleIgnored) {
   base::UserActionTester user_action_tester;
   EXPECT_TRUE(web_app::ClickIntentPickerAndWaitForBubble(browser()));
   // Opening a new tab should ignore the current intent picker view.
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
 
   EXPECT_EQ(1, user_action_tester.GetActionCount("IntentPickerViewIgnored"));
   // Verify no new browsers have opened.
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
 }
 
 #if BUILDFLAG(IS_MAC)
@@ -239,8 +219,6 @@ IN_PROC_BROWSER_TEST_P(DefaultLinkCapturingInteractiveUiTest,
 INSTANTIATE_TEST_SUITE_P(
     All,
     DefaultLinkCapturingInteractiveUiTest,
-    testing::Combine(
-        testing::Values(apps::test::LinkCapturingFeatureVersion::kV2DefaultOff,
-                        apps::test::LinkCapturingFeatureVersion::kV2DefaultOn),
-        testing::Bool()),
+    testing::Values(apps::test::LinkCapturingFeatureVersion::kV2DefaultOff,
+                    apps::test::LinkCapturingFeatureVersion::kV2DefaultOn),
     GenerateIntentChipTestName);

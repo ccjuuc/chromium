@@ -8,12 +8,11 @@
 #include <array>
 #include <map>
 #include <memory>
-#include <set>
-#include <vector>
 #include <optional>
+#include <set>
 #include <string_view>
+#include <vector>
 
-#include "absl/container/flat_hash_map.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -27,6 +26,7 @@
 #include "components/policy/core/common/policy_service.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/policy_export.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace policy {
 
@@ -203,6 +203,7 @@ class POLICY_EXPORT PolicyServiceImpl
   // This will only contain hashes for policies that are marked as not
   // supporting dynamic_refresh.
   absl::flat_hash_map<std::string, size_t> startup_chrome_policy_hash_map_;
+  bool initial_snapshot_taken_ = false;
 
   // Maps each policy domain to its observer list.
   std::map<PolicyDomain,

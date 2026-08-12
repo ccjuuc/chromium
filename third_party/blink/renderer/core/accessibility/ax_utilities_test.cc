@@ -71,8 +71,7 @@ TEST(AXUtilitiesTest, TestIsAriaStringAttribute) {
         attr == &html_names::kAriaPlaceholderAttr ||
         attr == &html_names::kAriaRoledescriptionAttr ||
         attr == &html_names::kAriaRowindextextAttr ||
-        attr == &html_names::kAriaValuetextAttr ||
-        attr == &html_names::kAriaVirtualcontentAttr) {
+        attr == &html_names::kAriaValuetextAttr) {
       EXPECT_TRUE(IsAriaStringAttribute(*attr));
     } else {
       EXPECT_FALSE(IsAriaStringAttribute(*attr));
@@ -1153,8 +1152,6 @@ TEST(AXUtilitiesTest, TestGetImplicitAriaLive) {
       EXPECT_EQ(result, "polite") << "Role: " << role;
     } else if (role == "alert") {
       EXPECT_EQ(result, "assertive") << "Role: " << role;
-    } else if (role == "marquee" || role == "timer") {
-      EXPECT_EQ(result, "off") << "Role: " << role;
     } else {
       EXPECT_EQ(result, "undefined") << "Role: " << role;
     }

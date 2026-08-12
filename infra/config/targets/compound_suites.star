@@ -29,7 +29,7 @@ targets.legacy_compound_suite(
 targets.legacy_compound_suite(
     name = "chromium_linux_blink_rel_isolated_scripts",
     basic_suites = [
-        "chromium_webkit_isolated_scripts",
+        "chromium_blink_isolated_scripts",
         "linux_specific_chromium_isolated_scripts",
         "vulkan_swiftshader_isolated_scripts",
         "chromium_web_tests_high_dpi_isolated_scripts",
@@ -40,7 +40,6 @@ targets.legacy_compound_suite(
     name = "devtools_gtests",
     basic_suites = [
         "devtools_browser_tests_suite",
-        "blink_unittests_suite",
     ],
 )
 
@@ -48,10 +47,10 @@ targets.legacy_compound_suite(
 
 # TODO(jonross): remove this once Vulkan Swiftshader and Vulkan GL interop
 # paths are merged. This should mirror
-# `gpu_fyi_linux_release_telemetry_tests` but with additional
+# `gpu_all_linux_release_telemetry_tests` but with additional
 # `gpu_skia_renderer_vulkan_passthrough_telemetry_tests`
 targets.legacy_compound_suite(
-    name = "gpu_fyi_linux_release_vulkan_telemetry_tests",
+    name = "gpu_all_linux_release_vulkan_telemetry_tests",
     basic_suites = [
         "gpu_common_and_optional_telemetry_tests",
         "gpu_passthrough_telemetry_tests",
@@ -66,26 +65,19 @@ targets.legacy_compound_suite(
     name = "gpu_fyi_only_mac_release_telemetry_tests",
     basic_suites = [
         "gpu_common_and_optional_telemetry_tests",
-        "gpu_gl_passthrough_ganesh_telemetry_tests",
-        "gpu_metal_passthrough_ganesh_telemetry_tests",
         "gpu_metal_passthrough_graphite_telemetry_tests",
-        "gpu_webcodecs_gl_passthrough_ganesh_telemetry_test",
-        "gpu_webcodecs_metal_passthrough_ganesh_telemetry_test",
         "gpu_webcodecs_metal_passthrough_graphite_telemetry_test",
-        "gpu_webrtc_gl_passthrough_ganesh_telemetry_test",
-        "gpu_webrtc_metal_passthrough_ganesh_telemetry_test",
         "gpu_webrtc_metal_passthrough_graphite_telemetry_test",
-        "gpu_webgl2_conformance_gl_passthrough_ganesh_telemetry_tests",
         "gpu_webgl2_conformance_metal_passthrough_graphite_telemetry_tests",
-        "gpu_webgl_conformance_gl_passthrough_ganesh_telemetry_tests",
-        "gpu_webgl_conformance_metal_passthrough_ganesh_telemetry_tests",
         "gpu_webgl_conformance_metal_passthrough_graphite_telemetry_tests",
         "gpu_webgl_conformance_swangle_passthrough_representative_telemetry_tests",
     ],
 )
 
+# This is functionally equivalent to the gpu_all_win_release_telemetry_tests
+# bundle, but is defined separately since V8 needs to use legacy suites for now.
 targets.legacy_compound_suite(
-    name = "gpu_fyi_win_release_telemetry_tests",
+    name = "gpu_v8_win_release_telemetry_tests",
     basic_suites = [
         "gpu_common_and_optional_telemetry_tests",
         "gpu_passthrough_graphite_telemetry_tests",
@@ -94,7 +86,6 @@ targets.legacy_compound_suite(
         "gpu_webrtc_telemetry_test",
         "gpu_webgl2_conformance_d3d11_passthrough_telemetry_tests",
         "gpu_webgl_conformance_d3d11_passthrough_telemetry_tests",
-        "gpu_webgl_conformance_d3d9_passthrough_telemetry_tests",
         "gpu_webgl_conformance_vulkan_passthrough_telemetry_tests",
     ],
 )
@@ -149,11 +140,3 @@ targets.legacy_compound_suite(
 #         'telemetry_perf_unittests_isolated_scripts_android',
 #     ],
 # )
-
-targets.legacy_compound_suite(
-    name = "win_specific_isolated_scripts_and_sizes",
-    basic_suites = [
-        "chrome_sizes_suite",
-        "win_specific_isolated_scripts",
-    ],
-)

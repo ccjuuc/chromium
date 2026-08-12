@@ -54,6 +54,9 @@ class DesktopNativeCursorManager;
 class DesktopWindowTreeHost;
 class FocusManagerEventHandler;
 class TooltipManagerAura;
+namespace legacy {
+class WindowReorderer;
+}
 class WindowReorderer;
 
 // DesktopNativeWidgetAura is a NativeWidgetPrivate implementation that owns
@@ -197,11 +200,11 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
   void SetAspectRatio(const gfx::SizeF& aspect_ratio,
                       const gfx::Size& excluded_margin) override;
   void FlashFrame(bool flash_frame) override;
-  void RunShellDrag(std::unique_ptr<ui::OSExchangeData> data,
-                    const gfx::Point& location,
-                    int operation,
-                    ui::mojom::DragEventSource source) override;
-  void CancelShellDrag(View* view) override;
+  void RunDragDropLoop(std::unique_ptr<ui::OSExchangeData> data,
+                       const gfx::Point& location,
+                       int operation,
+                       ui::mojom::DragEventSource source) override;
+  void CancelDragDropLoop(View* view) override;
   void SchedulePaintInRect(const gfx::Rect& rect) override;
   void ScheduleLayout() override;
   void SetCursor(const ui::Cursor& cursor) override;
@@ -226,6 +229,9 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
   void OnNativeViewHierarchyChanged() override;
   bool SetAllowScreenshots(bool allow) override;
   bool AreScreenshotsAllowed() override;
+#if BUILDFLAG(IS_WIN)
+  void SetExcludeFromScreenCapture(bool exclude) override;
+#endif
   bool IsDesktopNativeWidget() const override;
   std::string GetName() const override;
 
@@ -364,6 +370,7 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
 
   // Reorders child windows of |window_| associated with a view based on the
   // order of the associated views in the widget's view hierarchy.
+  std::unique_ptr<legacy::WindowReorderer> legacy_window_reorderer_;
   std::unique_ptr<WindowReorderer> window_reorderer_;
 
   // See class documentation for Widget in widget.h for a note about type.

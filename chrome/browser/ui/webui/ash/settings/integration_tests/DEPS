@@ -8,17 +8,13 @@ include_rules = [
   # Whenever possible, avoid adding new //chrome dependencies to this list.
   "+chrome/browser/ash/login/quick_unlock",
   "+chrome/browser/ash/login/test",
-  "+chrome/browser/ash/profiles",
   "+chrome/browser/profiles/profile.h",
-  "+chrome/browser/ui/chrome_pages.h",
-  "+chrome/browser/ui/settings_window_manager_chromeos.h",
   "+chrome/browser/ui/webui/ash/settings/test_support",
-  "+chrome/common",
   "+chrome/test",
 ]
 
 specific_include_rules = {
-  '.*interactive_uitest\.cc': [
+  '.*interactive_uitest\\.cc': [
     '+ash/ash_element_identifiers.h',
   ],
 }

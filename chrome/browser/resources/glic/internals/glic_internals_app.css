@@ -9,7 +9,7 @@
  * #import=//resources/cr_elements/cr_shared_vars.css.js
  * #css_wrapper_metadata_end */
 
-#contents {
+.tab-contents {
   background-color: var(--cr-fallback-color-surface);
   border-radius: var(--cr-card-border-radius);
   border: 1px solid var(--cr-fallback-color-outline);
@@ -19,10 +19,41 @@
   width: calc(100% - 4*var(--cr-card-border-radius));
 }
 
-td {
-  padding: 2px;
-}
-
 tr:nth-child(even) {
   background-color: var(--cr-fallback-color-surface-variant);
+}
+
+td {
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+td.status-true {
+  text-align: center;
+}
+
+td.status-false {
+  text-align: center;
+}
+
+.presets-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 600px;
+}
+
+.web-continuity-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 600px;
+}
+
+cr-button {
+  width: fit-content;
+}
+
+.hiddenElement {
+  visibility: hidden;
 }

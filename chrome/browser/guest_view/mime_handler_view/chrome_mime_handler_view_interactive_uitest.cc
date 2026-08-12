@@ -51,7 +51,7 @@ class ChromeMimeHandlerViewInteractiveUITest : public ExtensionApiTest {
 
   TestGuestViewManager* GetGuestViewManager() {
     return factory_.GetOrCreateTestGuestViewManager(
-        browser()->profile(),
+        browser()->GetProfile(),
         ExtensionsAPIClient::Get()->CreateGuestViewManagerDelegate());
   }
 
@@ -89,7 +89,7 @@ class ChromeMimeHandlerViewInteractiveUITest : public ExtensionApiTest {
   guest_view::TestGuestViewManagerFactory factory_;
 };
 
-// Test is flaky on Linux.  https://crbug.com/877627
+// Test is flaky on Linux.  https://crbug.com/41409998
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_Fullscreen DISABLED_Fullscreen
 #else

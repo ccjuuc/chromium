@@ -34,6 +34,7 @@
 
 #include "base/memory/memory_pressure_listener.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "base/unguessable_token.h"
 #include "services/metrics/public/cpp/mojo_ukm_recorder.h"
 #include "third_party/blink/public/common/features.h"
@@ -47,6 +48,7 @@
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/heap/prefinalizer.h"
+#include "third_party/blink/renderer/platform/loader/fetch/cross_origin_attribute_value.h"
 #include "third_party/blink/renderer/platform/loader/fetch/early_hints_preload_entry.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
 #include "third_party/blink/renderer/platform/loader/fetch/loader_freeze_mode.h"
@@ -254,6 +256,44 @@ class PLATFORM_EXPORT ResourceFetcher
   void ScheduleWarnUnusedPreloads(
       base::OnceCallback<void(Vector<KURL> unused_preloads)> callback);
 
+  // Information about a <link rel=preload> for the SpeculationMeasurement API.
+  struct PreloadInfo {
+    String as;
+    CrossOriginAttributeValue crossorigin = kCrossOriginAttributeNotSet;
+    bool early_hints = false;
+    // Timestamp when the preload was matched/used, or nullopt if unused.
+    std::optional<base::TimeTicks> used_time;
+  };
+
+  // Returns a map from URL to PreloadInfo for all <link rel=preload> preloads.
+  const HashMap<KURL, PreloadInfo>& GetPreloadRecords() const {
+    return preload_records_;
+  }
+
+  // Information about a preconnect for the SpeculationMeasurement API.
+  struct PreconnectInfo {
+    // The serialized origin the connection was opened to.
+    String origin;
+    // The reflected crossorigin attribute value of the preconnect.
+    CrossOriginAttributeValue crossorigin = kCrossOriginAttributeNotSet;
+    // Whether the preconnect was delivered via an Early Hints response.
+    bool early_hints = false;
+  };
+
+  // Records a developer-initiated preconnect for the SpeculationMeasurement
+  // API. `crossorigin` is the reflected crossorigin attribute value.
+  // Preconnects are deduped by (origin, crossorigin); a duplicate that arrives
+  // via Early Hints upgrades the existing entry's `early_hints` flag to true.
+  void RecordPreconnect(const KURL& url,
+                        CrossOriginAttributeValue crossorigin,
+                        bool early_hints);
+
+  // Returns a map keyed by (origin, crossorigin) to PreconnectInfo for all
+  // developer-initiated preconnects.
+  const HashMap<String, PreconnectInfo>& GetPreconnectRecords() const {
+    return preconnect_records_;
+  }
+
   MHTMLArchive* Archive() const { return archive_.Get(); }
 
   // Set the deferring state of each loader owned by this ResourceFetcher. This
@@ -365,9 +405,7 @@ class PLATFORM_EXPORT ResourceFetcher
   }
 
   void SetEarlyHintsPreloadedResources(
-      HashMap<KURL, EarlyHintsPreloadEntry> resources) {
-    unused_early_hints_preloaded_resources_ = std::move(resources);
-  }
+      HashMap<KURL, EarlyHintsPreloadEntry> resources);
 
   // Access the UKMRecorder.
   ukm::MojoUkmRecorder* UkmRecorder();
@@ -652,6 +690,14 @@ class PLATFORM_EXPORT ResourceFetcher
 
   HeapHashMap<PreloadKey, Member<Resource>> preloads_;
   HeapVector<Member<Resource>> matched_preloads_;
+
+  // Records of all preloads (used and unused) for the SpeculationMeasurement
+  // API.
+  HashMap<KURL, PreloadInfo> preload_records_;
+
+  // Records of all developer-initiated preconnects for the
+  // SpeculationMeasurement API, keyed by (origin, credentials).
+  HashMap<String, PreconnectInfo> preconnect_records_;
 
   // Keeps preloads which are deferred to start loading based on the LCPP
   // signal of potentially unused preloads, in order to prevent subsequent

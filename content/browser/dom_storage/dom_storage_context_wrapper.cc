@@ -9,25 +9,19 @@
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
-#include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/numerics/safe_conversions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/syslog_logging.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
-#include "base/task/thread_pool.h"
 #include "build/build_config.h"
 #include "components/services/storage/dom_storage/local_storage_impl.h"
 #include "components/services/storage/dom_storage/session_storage_impl.h"
-#include "components/services/storage/public/cpp/constants.h"
 #include "components/services/storage/public/mojom/storage_policy_update.mojom.h"
 #include "components/services/storage/public/mojom/storage_service.mojom.h"
 #include "components/services/storage/public/mojom/storage_usage_info.mojom.h"
@@ -102,41 +96,17 @@ scoped_refptr<DOMStorageContextWrapper> DOMStorageContextWrapper::Create(
 DOMStorageContextWrapper::DOMStorageContextWrapper(
     StoragePartitionImpl* partition)
     : partition_(partition) {
-  memory_pressure_listener_registration_ =
-      std::make_unique<base::MemoryPressureListenerRegistration>(
-          FROM_HERE, base::MemoryPressureListenerTag::kDOMStorageContextWrapper,
-          this);
-
   // `partition_` can be null in test environments.
   if (!partition_) {
     return;
   }
 
-  MaybeBindSessionStorageControl();
+  bool clear_session_storage = partition_->ShouldClearSessionStorageOnStartup();
+  base::UmaHistogramBoolean(
+      "Storage.SessionStorage.ClearDiskStateAtStoragePartitionInit",
+      clear_session_storage);
+  MaybeBindSessionStorageControl(clear_session_storage);
   MaybeBindLocalStorageControl();
-
-  // Report on disk LocalStorage db size.
-  if (partition_->GetStoragePartitionPath()) {
-    // Path to the LocalStorage leveldb directory.
-    base::FilePath db_path =
-        partition_->GetStoragePartitionPath()
-            ->Append(storage::kLocalStoragePath)
-            .AppendASCII(storage::kLocalStorageLeveldbName);
-
-    // Offload the blocking file operation and report the result.
-    base::ThreadPool::PostTaskAndReplyWithResult(
-        FROM_HERE, {base::MayBlock()},
-        base::BindOnce(
-            [](const base::FilePath& path) -> int64_t {
-              return base::ComputeDirectorySize(path);
-            },
-            db_path),
-        base::BindOnce([](int64_t db_size) {
-          int size_kb = base::saturated_cast<int>(db_size / 1024);
-          base::UmaHistogramMemoryKB("LocalStorage.DatabaseOnDiskSizeKB",
-                                     size_kb);
-        }));
-  }
 }
 
 DOMStorageContextWrapper::~DOMStorageContextWrapper() {
@@ -262,7 +232,6 @@ void DOMStorageContextWrapper::Shutdown() {
   // Signals the implementation to perform shutdown operations.
   session_storage_control_.reset();
   local_storage_control_.reset();
-  memory_pressure_listener_registration_.reset();
 
   // Make sure the observer drops its reference to |this|.
   storage_policy_observer_.reset();
@@ -363,7 +332,7 @@ bool DOMStorageContextWrapper::IsRequestValid(
 
 void DOMStorageContextWrapper::OnSessionStorageDisconnected() {
   DCHECK(partition_);
-  MaybeBindSessionStorageControl();
+  MaybeBindSessionStorageControl(/*clear_on_open=*/false);
 
   // Make sure the service is aware of namespaces we asked a previous instance
   // to create, so it can properly service renderers trying to manipulate those
@@ -376,12 +345,13 @@ void DOMStorageContextWrapper::OnSessionStorageDisconnected() {
   partition_->ResetSessionStorageConnections();
 }
 
-void DOMStorageContextWrapper::MaybeBindSessionStorageControl() {
+void DOMStorageContextWrapper::MaybeBindSessionStorageControl(
+    bool clear_on_open) {
   if (!partition_)
     return;
   session_storage_control_.reset();
   partition_->GetStorageService()->BindSessionStorageControl(
-      partition_->GetStoragePartitionPath(),
+      partition_->GetStoragePartitionPath(), clear_on_open,
       session_storage_control_.BindNewPipeAndPassReceiver());
   session_storage_control_.set_disconnect_handler(
       base::BindOnce(&DOMStorageContextWrapper::OnSessionStorageDisconnected,
@@ -420,28 +390,15 @@ void DOMStorageContextWrapper::AddNamespace(
     const std::string& namespace_id,
     SessionStorageNamespaceImpl* session_namespace) {
   base::AutoLock lock(alive_namespaces_lock_);
-  DCHECK(!base::Contains(alive_namespaces_, namespace_id));
+  DCHECK(!alive_namespaces_.contains(namespace_id));
   alive_namespaces_[namespace_id] = session_namespace;
 }
 
 void DOMStorageContextWrapper::RemoveNamespace(
     const std::string& namespace_id) {
   base::AutoLock lock(alive_namespaces_lock_);
-  DCHECK(base::Contains(alive_namespaces_, namespace_id));
+  DCHECK(alive_namespaces_.contains(namespace_id));
   alive_namespaces_.erase(namespace_id);
-}
-
-void DOMStorageContextWrapper::OnMemoryPressure(
-    base::MemoryPressureLevel memory_pressure_level) {
-  if (memory_pressure_level == base::MEMORY_PRESSURE_LEVEL_NONE) {
-    return;
-  }
-
-  PurgeOption purge_option = PURGE_UNOPENED;
-  if (memory_pressure_level == base::MEMORY_PRESSURE_LEVEL_CRITICAL) {
-    purge_option = PURGE_AGGRESSIVE;
-  }
-  PurgeMemory(purge_option);
 }
 
 void DOMStorageContextWrapper::PurgeMemory(PurgeOption purge_option) {

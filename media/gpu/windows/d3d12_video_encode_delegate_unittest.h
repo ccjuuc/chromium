@@ -23,6 +23,14 @@ class MockD3D12VideoProcessorWrapper : public D3D12VideoProcessorWrapper {
 
   MOCK_METHOD(bool, Init, ());
   MOCK_METHOD(bool,
+              CheckVideoProcessorSupport,
+              (UINT,
+               UINT,
+               DXGI_FORMAT,
+               const gfx::ColorSpace&,
+               DXGI_FORMAT,
+               const gfx::ColorSpace&));
+  MOCK_METHOD(D3D12FenceAndValue,
               ProcessFrames,
               (ID3D12Resource*,
                UINT,
@@ -40,6 +48,7 @@ class MockD3D12VideoEncoderWrapper : public D3D12VideoEncoderWrapper {
   ~MockD3D12VideoEncoderWrapper() override;
 
   MOCK_METHOD(bool, Initialize, (uint32_t));
+  MOCK_METHOD(bool, Wait, (D3D12FenceAndValue));
   MOCK_METHOD2(
       Encode,
       EncoderStatus(const D3D12_VIDEO_ENCODER_ENCODEFRAME_INPUT_ARGUMENTS&,

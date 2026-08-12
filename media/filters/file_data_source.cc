@@ -55,11 +55,11 @@ void FileDataSource::Read(int64_t position,
 }
 
 bool FileDataSource::GetSize(int64_t* size_out) {
-  *size_out = file_.length();
+  *size_out = file_.bytes().size();
   return true;
 }
 
-bool FileDataSource::IsStreaming() {
+bool FileDataSource::IsStreaming() const {
   return force_streaming_;
 }
 
@@ -72,7 +72,7 @@ bool FileDataSource::PassedTimingAllowOriginCheck() {
   return true;
 }
 
-bool FileDataSource::WouldTaintOrigin() {
+bool FileDataSource::WouldTaintOrigin() const {
   // There are no HTTP responses, so this can safely return false.
   return false;
 }

@@ -28,6 +28,9 @@ code.
 raw_ptr<T, DisableDanglingPtrDetection> ptr_may_dangle;
 ```
 
+For more details on available traits, see
+[RawPtrTraits](../base/memory/raw_ptr.md#RawPtrTraits).
+
 The `DanglingUntriaged` option has been used to annotate pre-existing dangling
 pointers in Chrome:
 ```cpp
@@ -149,6 +152,8 @@ memory regions. The GN arguments to enable it are:
 enable_backup_ref_ptr_support=false
 is_asan=true
 is_component_build=false
+is_debug=false
+dcheck_always_on = true
 use_asan_backup_ref_ptr=false
 use_raw_ptr_asan_unowned_impl=true
 ```

@@ -298,7 +298,7 @@ class PasswordSaveManagerImplTestBase : public testing::Test {
 
     metrics_recorder_ = base::MakeRefCounted<PasswordFormMetricsRecorder>(
         client_.IsCommittedMainFrameSecure(), client_.GetUkmSourceId(),
-        /*pref_service=*/nullptr);
+        /*pref_service=*/nullptr, client_.GetProfileMetricsService());
 
     auto mock_profile_form_saver = std::make_unique<NiceMock<MockFormSaver>>();
     mock_profile_form_saver_ = mock_profile_form_saver.get();
@@ -320,7 +320,7 @@ class PasswordSaveManagerImplTestBase : public testing::Test {
         .WillByDefault(Return(&mock_autofill_crowdsourcing_manager_));
     ON_CALL(mock_autofill_crowdsourcing_manager_, StartUploadRequest)
         .WillByDefault(Return(true));
-    ON_CALL(*client_.GetPasswordFeatureManager(), IsAccountStorageEnabled)
+    ON_CALL(*client_.GetPasswordFeatureManager(), IsAccountStorageActive)
         .WillByDefault(Return(false));
   }
   PasswordSaveManagerImplTestBase(const PasswordSaveManagerImplTestBase&) =
@@ -377,7 +377,7 @@ class PasswordSaveManagerImplTestBase : public testing::Test {
   }
 
   void SetAccountStoreEnabled(bool is_enabled) {
-    ON_CALL(*client()->GetPasswordFeatureManager(), IsAccountStorageEnabled())
+    ON_CALL(*client()->GetPasswordFeatureManager(), IsAccountStorageActive())
         .WillByDefault(Return(is_enabled));
     ON_CALL(*client()->GetPasswordFeatureManager(),
             ComputePasswordAccountStorageUsageLevel)
@@ -822,9 +822,18 @@ TEST_P(PasswordSaveManagerImplTest, SaveNewCredentials) {
   EXPECT_TRUE(password_save_manager_impl()->IsNewLogin());
 
   PasswordForm saved_form;
-  std::vector<raw_ptr<const PasswordForm, VectorExperimental>> best_matches;
+  std::vector<PasswordForm> best_matches;
   EXPECT_CALL(*mock_profile_form_saver(), Save)
-      .WillOnce(DoAll(SaveArg<0>(&saved_form), SaveArg<1>(&best_matches)));
+      .WillOnce(
+          [&](PasswordForm pending,
+              const std::vector<
+                  raw_ptr<const PasswordForm, VectorExperimental>>& matches,
+              const std::u16string& old_password) {
+            saved_form = std::move(pending);
+            for (const auto& match : matches) {
+              best_matches.push_back(*match);
+            }
+          });
 
   password_save_manager_impl()->Save(&observed_form_, parsed_submitted_form);
 
@@ -840,7 +849,7 @@ TEST_P(PasswordSaveManagerImplTest, SaveNewCredentials) {
   EXPECT_EQ(submitted_form.fields()[kPasswordFieldIndex].name(),
             saved_form.password_element);
   ASSERT_EQ(best_matches.size(), 1u);
-  EXPECT_EQ(*best_matches[0], saved_match_);
+  EXPECT_EQ(best_matches[0], saved_match_);
 
   // Check histograms.
   histogram_tester.ExpectUniqueSample(
@@ -848,6 +857,7 @@ TEST_P(PasswordSaveManagerImplTest, SaveNewCredentials) {
       SubmissionIndicatorEvent::HTML_FORM_SUBMISSION, 1);
 
   // Check UKM metrics.
+  best_matches.clear();
   DestroySaveManagerAndMetricsRecorder();
   ExpectedGenerationUKM expected_metrics = {
       {} /* shown manually */,
@@ -881,9 +891,18 @@ TEST_P(PasswordSaveManagerImplTest, SavePSLToAlreadySaved) {
             password_save_manager_impl()->GetPendingCredentials().match_type);
 
   PasswordForm saved_form;
-  std::vector<raw_ptr<const PasswordForm, VectorExperimental>> best_matches;
+  std::vector<PasswordForm> best_matches;
   EXPECT_CALL(*mock_profile_form_saver(), Save)
-      .WillOnce(DoAll(SaveArg<0>(&saved_form), SaveArg<1>(&best_matches)));
+      .WillOnce(
+          [&](PasswordForm pending,
+              const std::vector<
+                  raw_ptr<const PasswordForm, VectorExperimental>>& matches,
+              const std::u16string& old_password) {
+            saved_form = std::move(pending);
+            for (const auto& match : matches) {
+              best_matches.push_back(*match);
+            }
+          });
 
   password_save_manager_impl()->Save(&observed_form_, Parse(submitted_form));
 
@@ -895,7 +914,8 @@ TEST_P(PasswordSaveManagerImplTest, SavePSLToAlreadySaved) {
   EXPECT_EQ(psl_saved_match_.password_element, saved_form.password_element);
 
   ASSERT_EQ(best_matches.size(), 1u);
-  EXPECT_EQ(*best_matches[0], psl_saved_match_);
+  EXPECT_EQ(best_matches[0], psl_saved_match_);
+  best_matches.clear();
 }
 
 // Tests that when credentials with already saved username but with a new
@@ -2301,7 +2321,7 @@ TEST_F(MultiStorePasswordSaveManagerTest, BlockMovingWhenExistsInBothStores) {
 
 TEST_F(MultiStorePasswordSaveManagerTest,
        PresaveGeneratedPasswordInAccountStoreIfAccountStorageEnabled) {
-  ON_CALL(*client()->GetPasswordFeatureManager(), IsAccountStorageEnabled)
+  ON_CALL(*client()->GetPasswordFeatureManager(), IsAccountStorageActive)
       .WillByDefault(Return(true));
 
   EXPECT_CALL(*mock_profile_form_saver(), Save).Times(0);
@@ -2316,7 +2336,7 @@ TEST_F(MultiStorePasswordSaveManagerTest,
   // Generation is offered only to users who are either syncing or have account
   // storage enabled. Therefore, if account storage is disabled, it's guaranteed
   // they are syncing and the password should be stored in the profile store.
-  ON_CALL(*client()->GetPasswordFeatureManager(), IsAccountStorageEnabled)
+  ON_CALL(*client()->GetPasswordFeatureManager(), IsAccountStorageActive)
       .WillByDefault(Return(false));
 
   EXPECT_CALL(*mock_profile_form_saver(), Save);

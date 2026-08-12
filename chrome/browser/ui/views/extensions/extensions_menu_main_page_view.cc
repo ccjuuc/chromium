@@ -14,37 +14,37 @@
 #include "base/metrics/user_metrics.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/extensions/extension_action_view_model.h"
+#include "chrome/browser/ui/extensions/extensions_menu_handler.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/controls/hover_button.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_entry_view.h"
-#include "chrome/browser/ui/views/extensions/extensions_menu_handler.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/vector_icons/vector_icons.h"
 #include "extensions/common/extension_id.h"
+#include "ui/base/class_property.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/text_constants.h"
-#include "ui/gfx/vector_icon_types.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/bubble/tooltip_icon.h"
 #include "ui/views/controls/button/button.h"
-#include "ui/views/controls/button/image_button.h"
-#include "ui/views/controls/button/image_button_factory.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/button/toggle_button.h"
 #include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/scroll_view.h"
-#include "ui/views/controls/separator.h"
+#include "ui/views/input_event_activation_protector.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/flex_layout_view.h"
 #include "ui/views/layout/layout_types.h"
@@ -81,6 +81,56 @@ ExtensionsMenuEntryView* GetAsMenuEntry(views::View* view) {
 
 }  // namespace
 
+// A view property key used to store the extension ID on the "requests access"
+// menu entries. This allows identifying the specific extension associated with
+// a view, primarily for testing purposes.
+struct ExtensionIdWrapper {
+  std::string id;
+};
+DEFINE_UI_CLASS_PROPERTY_TYPE(ExtensionIdWrapper*)
+DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(ExtensionIdWrapper, kExtensionIdKey)
+
+// A button in the extensions menu requesting access section that grants one
+// time site access to the extension. It uses an input event activation
+// protector to prevent unintended clicks.
+class ExtensionsMenuAllowButton : public views::MdTextButton {
+ public:
+  ExtensionsMenuAllowButton() = default;
+  ExtensionsMenuAllowButton(const ExtensionsMenuAllowButton&) = delete;
+  ExtensionsMenuAllowButton& operator=(const ExtensionsMenuAllowButton&) =
+      delete;
+  ~ExtensionsMenuAllowButton() override = default;
+
+  // views::View:
+  void VisibilityChanged(views::View* starting_from, bool is_visible) override {
+    views::MdTextButton::VisibilityChanged(starting_from, is_visible);
+    input_protector_.VisibilityChanged(is_visible);
+  }
+
+  void OnBoundsChanged(const gfx::Rect& previous_bounds) override {
+    views::MdTextButton::OnBoundsChanged(previous_bounds);
+    input_protector_.MaybeUpdateViewProtectedTimeStamp();
+  }
+
+  void NotifyClick(const ui::Event& event) override {
+    if (input_protector_.IsPossiblyUnintendedInteraction(
+            event, /*allow_key_events=*/false)) {
+      return;
+    }
+    views::MdTextButton::NotifyClick(event);
+  }
+
+ private:
+  views::InputEventActivationProtector input_protector_;
+};
+
+BEGIN_VIEW_BUILDER(/* No Export */,
+                   ExtensionsMenuAllowButton,
+                   views::MdTextButton)
+END_VIEW_BUILDER
+
+DEFINE_VIEW_BUILDER(/* No Export */, ExtensionsMenuAllowButton)
+
 // Base class for a container inside the extensions menu.
 class SectionContainer : public views::BoxLayoutView {
  public:
@@ -107,7 +157,7 @@ END_VIEW_BUILDER
 DEFINE_VIEW_BUILDER(/* No Export */, SectionContainer)
 
 ExtensionsMenuMainPageView::ExtensionsMenuMainPageView(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     ExtensionsMenuHandler* menu_handler)
     : browser_(browser), menu_handler_(menu_handler) {
   views::FlexSpecification stretch_specification =
@@ -157,7 +207,7 @@ ExtensionsMenuMainPageView::ExtensionsMenuMainPageView(
               /*contents_margins=*/gfx::Insets::VH(0, dialog_insets.left()),
               /*reload_button_margins=*/
               gfx::Insets::TLBR(control_vertical_spacing, 0, 0, 0),
-              /*menu_items_margins=*/
+              /*menu_entries_margins=*/
               gfx::Insets::TLBR(control_vertical_spacing, 0, 0, 0)),
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
           CreateWebstoreButtonBuilder(),
@@ -193,13 +243,16 @@ void ExtensionsMenuMainPageView::CreateAndInsertMenuEntry(
   // tied to this view lifetime by the extensions menu coordinator.
   auto item = std::make_unique<ExtensionsMenuEntryView>(
       browser_, entry_state.is_enterprise, action_model,
-      base::BindRepeating(&ExtensionsMenuHandler::OnExtensionToggleSelected,
+      base::BindRepeating(&ExtensionsMenuHandler::OnActionButtonClicked,
                           base::Unretained(menu_handler_), extension_id),
+      base::BindRepeating(&ExtensionsMenuHandler::OnExtensionToggleSelected,
+                          base::Unretained(menu_handler_), extension_id,
+                          entry_state.origin),
       base::BindRepeating(&ExtensionsMenuHandler::OpenSitePermissionsPage,
                           base::Unretained(menu_handler_), extension_id));
   item->Update(entry_state);
 
-  // Add vertical spacing in between menu items.
+  // Add vertical spacing in between menu entries.
   if (index > 0) {
     ChromeLayoutProvider* const chrome_layout_provider =
         ChromeLayoutProvider::Get();
@@ -210,11 +263,11 @@ void ExtensionsMenuMainPageView::CreateAndInsertMenuEntry(
         gfx::Insets::TLBR(control_vertical_spacing, 0, 0, 0));
   }
 
-  menu_items_->AddChildViewAt(std::move(item), index);
+  menu_entries_->AddChildViewAt(std::move(item), index);
 }
 
-void ExtensionsMenuMainPageView::RemoveMenuItem(int index) {
-  menu_items_->RemoveChildViewT(menu_items_->children().at(index));
+void ExtensionsMenuMainPageView::RemoveMenuEntry(int index) {
+  menu_entries_->RemoveChildViewT(menu_entries_->children().at(index));
 }
 
 void ExtensionsMenuMainPageView::UpdateSiteSettings(
@@ -229,38 +282,9 @@ void ExtensionsMenuMainPageView::UpdateSiteSettings(
       site_settings_state.toggle.tooltip_text);
 }
 
-void ExtensionsMenuMainPageView::ShowReloadSection() {
-  reload_section_->SetVisible(true);
-  requests_section_->SetVisible(false);
-  SizeToPreferredSize();
-}
-
-void ExtensionsMenuMainPageView::MaybeShowRequestsSection() {
-  reload_section_->SetVisible(false);
-  requests_section_->SetVisible(!requests_entries_.empty());
-  SizeToPreferredSize();
-}
-
-void ExtensionsMenuMainPageView::AddOrUpdateExtensionRequestingAccess(
-    const extensions::ExtensionId& id,
-    const std::u16string& name,
-    const ui::ImageModel& icon,
+void ExtensionsMenuMainPageView::AddExtensionRequestingAccess(
+    ExtensionsMenuViewModel::HostAccessRequest request,
     int index) {
-  // Update request entry if existent.
-  views::View* request_entry = GetExtensionRequestEntry(id);
-  if (request_entry) {
-    std::vector<raw_ptr<View, VectorExperimental>> extension_items =
-        request_entry->children();
-    views::AsViewClass<views::ImageView>(
-        extension_items[kRequestEntryIconIndex])
-        ->SetImage(icon);
-    views::AsViewClass<views::Label>(extension_items[kRequestEntryLabelIndex])
-        ->SetText(name);
-    requests_entries_view_->ReorderChildView(request_entry, index);
-    return;
-  }
-
-  // Otherwise, add a new request entry.
   auto* layout_provider = ChromeLayoutProvider::Get();
   const int control_vertical_margin = layout_provider->GetDistanceMetric(
       DISTANCE_RELATED_CONTROL_VERTICAL_SMALL);
@@ -271,12 +295,15 @@ void ExtensionsMenuMainPageView::AddOrUpdateExtensionRequestingAccess(
   auto item =
       views::Builder<views::FlexLayoutView>()
           .SetOrientation(views::LayoutOrientation::kHorizontal)
+          .SetProperty(kExtensionIdKey,
+                       ExtensionIdWrapper{request.extension_id})
           .SetProperty(views::kMarginsKey,
                        gfx::Insets::TLBR(control_vertical_margin, 0, 0, 0))
           .AddChildren(
-              views::Builder<views::ImageView>().SetImage(icon),
+              views::Builder<views::ImageView>().SetImage(
+                  request.extension_icon),
               views::Builder<views::Label>()
-                  .SetText(name)
+                  .SetText(request.extension_name)
                   .SetTextStyle(views::style::STYLE_BODY_3_EMPHASIS)
                   .SetEnabledColor(kColorExtensionsMenuText)
                   .SetHorizontalAlignment(gfx::ALIGN_LEFT)
@@ -288,7 +315,7 @@ void ExtensionsMenuMainPageView::AddOrUpdateExtensionRequestingAccess(
               views::Builder<views::MdTextButton>()
                   .SetCallback(base::BindRepeating(
                       &ExtensionsMenuHandler::OnDismissExtensionClicked,
-                      base::Unretained(menu_handler_), id))
+                      base::Unretained(menu_handler_), request.extension_id))
                   .SetStyle(ui::ButtonStyle::kText)
                   .SetBgColorIdOverride(kColorExtensionsMenuContainerBackground)
                   .SetText(l10n_util::GetStringUTF16(
@@ -297,11 +324,11 @@ void ExtensionsMenuMainPageView::AddOrUpdateExtensionRequestingAccess(
                       IDS_EXTENSIONS_MENU_REQUESTS_ACCESS_SECTION_DISMISS_BUTTON_TOOLTIP))
                   .SetAccessibleName(l10n_util::GetStringFUTF16(
                       IDS_EXTENSIONS_MENU_REQUESTS_ACCESS_SECTION_DISMISS_BUTTON_ACCESSIBLE_NAME,
-                      name)),
-              views::Builder<views::MdTextButton>()
+                      request.extension_name)),
+              views::Builder<ExtensionsMenuAllowButton>()
                   .SetCallback(base::BindRepeating(
                       &ExtensionsMenuHandler::OnAllowExtensionClicked,
-                      base::Unretained(menu_handler_), id))
+                      base::Unretained(menu_handler_), request.extension_id))
                   .SetStyle(ui::ButtonStyle::kText)
                   .SetBgColorIdOverride(kColorExtensionsMenuContainerBackground)
                   .SetText(l10n_util::GetStringUTF16(
@@ -310,42 +337,79 @@ void ExtensionsMenuMainPageView::AddOrUpdateExtensionRequestingAccess(
                       IDS_EXTENSIONS_MENU_REQUESTS_ACCESS_SECTION_ALLOW_BUTTON_TOOLTIP))
                   .SetAccessibleName(l10n_util::GetStringFUTF16(
                       IDS_EXTENSIONS_MENU_REQUESTS_ACCESS_SECTION_ALLOW_BUTTON_ACCESSIBLE_NAME,
-                      name))
+                      request.extension_name))
                   .SetProperty(views::kMarginsKey,
                                gfx::Insets::TLBR(
                                    0, related_control_horizontal_margin, 0, 0)))
           .Build();
 
-  requests_entries_.insert({id, item.get()});
   requests_entries_view_->AddChildViewAt(std::move(item), index);
 }
 
-void ExtensionsMenuMainPageView::RemoveExtensionRequestingAccess(
-    const extensions::ExtensionId& id) {
-  views::View* request_entry = GetExtensionRequestEntry(id);
-  if (!request_entry) {
-    return;
-  }
+void ExtensionsMenuMainPageView::UpdateExtensionRequestingAccess(
+    ExtensionsMenuViewModel::HostAccessRequest request,
+    int index) {
+  // Verify the index is valid for the current layout.
+  CHECK_GE(index, 0);
+  CHECK_LT(static_cast<size_t>(index),
+           requests_entries_view_->children().size());
 
-  requests_entries_view_->RemoveChildViewT(request_entry);
-  requests_entries_.erase(id);
+  views::View* request_view = requests_entries_view_->children().at(index);
+  CHECK(request_view);
+
+  std::vector<raw_ptr<View, VectorExperimental>> extension_items =
+      request_view->children();
+  views::AsViewClass<views::ImageView>(extension_items[kRequestEntryIconIndex])
+      ->SetImage(request.extension_icon);
+  views::AsViewClass<views::Label>(extension_items[kRequestEntryLabelIndex])
+      ->SetText(request.extension_name);
+  requests_entries_view_->ReorderChildView(request_view, index);
+}
+
+void ExtensionsMenuMainPageView::RemoveExtensionRequestingAccess(
+    const extensions::ExtensionId& id,
+    int index) {
+  // Verify the index is valid for the current layout.
+  CHECK_GE(index, 0);
+  CHECK_LT(static_cast<size_t>(index),
+           requests_entries_view_->children().size());
+
+  views::View* request_view = requests_entries_view_->children().at(index);
+  requests_entries_view_->RemoveChildViewT(request_view);
 }
 
 void ExtensionsMenuMainPageView::ClearExtensionsRequestingAccess() {
   requests_entries_view_->RemoveAllChildViews();
-  requests_entries_.clear();
+}
 
-  requests_section_->SetVisible(false);
+void ExtensionsMenuMainPageView::SetOptionalSectionVisibility(
+    ExtensionsMenuViewModel::OptionalSection optional_section) {
+  switch (optional_section) {
+    case ExtensionsMenuViewModel::OptionalSection::kReloadPage:
+      reload_section_->SetVisible(true);
+      requests_section_->SetVisible(false);
+      break;
+    case ExtensionsMenuViewModel::OptionalSection::kHostAccessRequests:
+      reload_section_->SetVisible(false);
+      requests_section_->SetVisible(
+          !requests_entries_view_->children().empty());
+      break;
+    case ExtensionsMenuViewModel::OptionalSection::kNone:
+      reload_section_->SetVisible(false);
+      requests_section_->SetVisible(false);
+      break;
+  }
+
   SizeToPreferredSize();
 }
 
 std::vector<ExtensionsMenuEntryView*>
 ExtensionsMenuMainPageView::GetMenuEntries() const {
-  std::vector<ExtensionsMenuEntryView*> menu_item_views;
-  for (views::View* view : menu_items_->children()) {
-    menu_item_views.push_back(GetAsMenuEntry(view));
+  std::vector<ExtensionsMenuEntryView*> menu_entry_views;
+  for (views::View* view : menu_entries_->children()) {
+    menu_entry_views.push_back(GetAsMenuEntry(view));
   }
-  return menu_item_views;
+  return menu_entry_views;
 }
 
 std::u16string_view ExtensionsMenuMainPageView::GetSiteSettingLabelForTesting()
@@ -373,9 +437,12 @@ std::vector<extensions::ExtensionId>
 ExtensionsMenuMainPageView::GetExtensionsRequestingAccessForTesting() {
   CHECK_IS_TEST();
   std::vector<extensions::ExtensionId> extensions;
-  extensions.reserve(requests_entries_.size());
-  for (const auto& entry : requests_entries_) {
-    extensions.push_back(entry.first);
+  extensions.reserve(requests_entries_view_->children().size());
+
+  for (views::View* view : requests_entries_view_->children()) {
+    const ExtensionIdWrapper* id_wrapper = view->GetProperty(kExtensionIdKey);
+    CHECK(id_wrapper);
+    extensions.push_back(id_wrapper->id);
   }
   return extensions;
 }
@@ -384,17 +451,14 @@ views::View*
 ExtensionsMenuMainPageView::GetExtensionRequestingAccessEntryForTesting(
     const extensions::ExtensionId& extension_id) {
   CHECK_IS_TEST();
-  return GetExtensionRequestEntry(extension_id);
-}
 
-content::WebContents* ExtensionsMenuMainPageView::GetActiveWebContents() const {
-  return browser_->tab_strip_model()->GetActiveWebContents();
-}
-
-views::View* ExtensionsMenuMainPageView::GetExtensionRequestEntry(
-    const extensions::ExtensionId& extension_id) const {
-  auto iter = requests_entries_.find(extension_id);
-  return iter == requests_entries_.end() ? nullptr : iter->second;
+  for (views::View* view : requests_entries_view_->children()) {
+    const ExtensionIdWrapper* id_wrapper = view->GetProperty(kExtensionIdKey);
+    if (id_wrapper && id_wrapper->id == extension_id) {
+      return view;
+    }
+  }
+  return nullptr;
 }
 
 views::Builder<views::FlexLayoutView>
@@ -453,6 +517,8 @@ ExtensionsMenuMainPageView::CreateSiteSettingsBuilder(
                           views::BubbleBorder::Arrow::TOP_RIGHT)),
           views::Builder<views::ToggleButton>()
               .CopyAddressTo(&site_settings_toggle_)
+              .SetProperty(views::kElementIdentifierKey,
+                           kExtensionsMenuSiteSettingsToggleElementId)
               .SetProperty(views::kMarginsKey,
                            gfx::Insets::TLBR(0, menu_button_margin, 0, 0))
               .SetCallback(base::BindRepeating(
@@ -471,9 +537,9 @@ ExtensionsMenuMainPageView::CreateContentsBuilder(
     gfx::Insets scroll_margins,
     gfx::Insets contents_margins,
     gfx::Insets reload_button_margins,
-    gfx::Insets menu_items_margins) {
+    gfx::Insets menu_entries_margins) {
   // This is set so that the extensions menu doesn't fall outside the monitor in
-  // a maximized window in 1024x768. See https://crbug.com/1096630.
+  // a maximized window in 1024x768. See https://crbug.com/40700838.
   // TODO(crbug.com/40891805): Consider making the height dynamic.
   constexpr int kMaxExtensionButtonsHeightDp = 448;
 
@@ -493,6 +559,8 @@ ExtensionsMenuMainPageView::CreateContentsBuilder(
                   // Reload section.
                   views::Builder<SectionContainer>()
                       .CopyAddressTo(&reload_section_)
+                      .SetProperty(views::kElementIdentifierKey,
+                                   kExtensionsMenuReloadSectionElementId)
                       .SetVisible(false)
                       .SetCrossAxisAlignment(
                           views::BoxLayout::CrossAxisAlignment::kCenter)
@@ -508,6 +576,9 @@ ExtensionsMenuMainPageView::CreateContentsBuilder(
                                   kColorExtensionsMenuSecondaryText)
                               .SetMultiLine(true),
                           views::Builder<views::MdTextButton>()
+                              .SetProperty(
+                                  views::kElementIdentifierKey,
+                                  kExtensionsMenuReloadPageButtonElementId)
                               .SetCallback(base::BindRepeating(
                                   &ExtensionsMenuHandler::
                                       OnReloadPageButtonClicked,
@@ -540,10 +611,10 @@ ExtensionsMenuMainPageView::CreateContentsBuilder(
                               .CopyAddressTo(&requests_entries_view_)
                               .SetOrientation(
                                   views::BoxLayout::Orientation::kVertical)),
-                  // Menu items section.
+                  // menu entries section.
                   views::Builder<SectionContainer>()
-                      .CopyAddressTo(&menu_items_)
-                      .SetProperty(views::kMarginsKey, menu_items_margins)));
+                      .CopyAddressTo(&menu_entries_)
+                      .SetProperty(views::kMarginsKey, menu_entries_margins)));
 }
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
@@ -563,7 +634,7 @@ ExtensionsMenuMainPageView::CreateManageButtonBuilder() {
   return views::Builder<HoverButton>(
              std::make_unique<HoverButton>(
                  base::BindRepeating(
-                     [](Browser* browser) {
+                     [](BrowserWindowInterface* browser) {
                        base::RecordAction(
                            base::UserMetricsAction("Extensions.Menu."
                                                    "ExtensionsSettingsOpened"));
@@ -571,7 +642,9 @@ ExtensionsMenuMainPageView::CreateManageButtonBuilder() {
                      },
                      browser_),
                  ui::ImageModel::FromVectorIcon(
-                     vector_icons::kSettingsChromeRefreshIcon),
+                     features::IsRoundedIconsEnabled()
+                         ? vector_icons::kSettingsIcon
+                         : vector_icons::kSettingsChromeRefreshOldIcon),
                  l10n_util::GetStringUTF16(IDS_MANAGE_EXTENSIONS)))
       .SetProperty(views::kElementIdentifierKey,
                    kExtensionsMenuManageExtensionsElementId);

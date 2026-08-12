@@ -8,6 +8,7 @@
 #include "base/memory/raw_ptr.h"
 #include "components/enterprise/connectors/core/analysis_settings.h"
 #include "components/enterprise/connectors/core/common.h"
+#include "components/prefs/pref_service.h"
 
 namespace enterprise_connectors::test {
 
@@ -59,6 +60,19 @@ AnalysisSettings* NormalDlpAndMalwareSettings();
 AnalysisSettings* NormalSettingsWithCustomMessage();
 AnalysisSettings* NormalSettingsDlpRequiresBypassJustification();
 AnalysisSettings* NoSettings();
+
+// Set the Analysis Connectors prefs for testing according to rules.
+//
+// - machine_scope: The scope of a policy flag whether it is meant to be applied
+//                  to the machine(true) or the current user(false).
+void SetAnalysisConnectorsPrefs(PrefService* prefs,
+                                AnalysisConnector connector,
+                                std::vector<std::string> rules,
+                                bool machine_scope);
+
+// Clears all rules for the specific analysis connector.
+void ClearAnalysisConnectorsPrefs(PrefService* prefs,
+                                  AnalysisConnector connector);
 
 }  // namespace enterprise_connectors::test
 

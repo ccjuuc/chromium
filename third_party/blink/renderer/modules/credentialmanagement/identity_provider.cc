@@ -4,7 +4,8 @@
 
 #include "third_party/blink/renderer/modules/credentialmanagement/identity_provider.h"
 
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom-blink.h"
+#include "third_party/blink/public/common/messaging/message_port_descriptor.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_v8_value_converter.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
@@ -12,6 +13,7 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_identity_provider_token.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_identity_resolve_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_identity_user_info.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_resolve_redirect_request_method.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
@@ -35,34 +37,27 @@ using mojom::blink::RequestUserInfoStatus;
 
 void OnRequestUserInfo(
     ScriptPromiseResolver<IDLSequence<IdentityUserInfo>>* resolver,
-    RequestUserInfoStatus status,
-    std::optional<Vector<mojom::blink::IdentityUserInfoPtr>>
-        all_user_info_ptr) {
-  switch (status) {
-    case RequestUserInfoStatus::kError: {
-      resolver->Reject(MakeGarbageCollected<DOMException>(
-          DOMExceptionCode::kNetworkError, "Error retrieving user info."));
-      return;
-    }
-    case RequestUserInfoStatus::kSuccess: {
-      HeapVector<Member<IdentityUserInfo>> all_user_info;
-      for (const auto& user_info_ptr : all_user_info_ptr.value()) {
-        IdentityUserInfo* user_info = IdentityUserInfo::Create();
-        user_info->setEmail(user_info_ptr->email);
-        user_info->setGivenName(user_info_ptr->given_name);
-        user_info->setName(user_info_ptr->name);
-        user_info->setPicture(user_info_ptr->picture);
-        all_user_info.push_back(user_info);
-      }
-
-      DCHECK_GT(all_user_info.size(), 0u);
-      resolver->Resolve(all_user_info);
-      return;
-    }
-    default: {
-      NOTREACHED();
-    }
+    mojom::blink::RequestUserInfoResultPtr result) {
+  if (result->is_status()) {
+    DCHECK_EQ(result->get_status(), RequestUserInfoStatus::kError);
+    resolver->Reject(MakeGarbageCollected<DOMException>(
+        DOMExceptionCode::kNetworkError, "Error retrieving user info."));
+    return;
   }
+
+  DCHECK(result->is_user_info());
+  HeapVector<Member<IdentityUserInfo>> all_user_info;
+  for (const auto& user_info_ptr : result->get_user_info()) {
+    IdentityUserInfo* user_info = IdentityUserInfo::Create();
+    user_info->setEmail(user_info_ptr->email);
+    user_info->setGivenName(user_info_ptr->given_name);
+    user_info->setName(user_info_ptr->name);
+    user_info->setPicture(user_info_ptr->picture);
+    all_user_info.push_back(user_info);
+  }
+
+  DCHECK_GT(all_user_info.size(), 0u);
+  resolver->Resolve(all_user_info);
 }
 
 }  // namespace
@@ -92,7 +87,7 @@ ScriptPromise<IDLSequence<IdentityUserInfo>> IdentityProvider::getUserInfo(
   if (!provider_url.IsValid() || client_id == "") {
     resolver->Reject(MakeGarbageCollected<DOMException>(
         DOMExceptionCode::kInvalidStateError,
-        String::Format("Provider information is incomplete.")));
+        "Provider information is incomplete."));
     return promise;
   }
 
@@ -120,9 +115,9 @@ ScriptPromise<IDLSequence<IdentityUserInfo>> IdentityProvider::getUserInfo(
   mojom::blink::IdentityProviderConfigPtr identity_provider =
       blink::mojom::blink::IdentityProviderConfig::From(*provider);
 
-  auto* user_info_request =
-      CredentialManagerProxy::From(script_state)->FederatedAuthRequest();
-  user_info_request->RequestUserInfo(
+  auto* service =
+      CredentialManagerProxy::From(script_state)->FederatedRequestService();
+  service->RequestUserInfo(
       std::move(identity_provider),
       BindOnce(&OnRequestUserInfo, WrapPersistent(resolver)));
 
@@ -130,9 +125,9 @@ ScriptPromise<IDLSequence<IdentityUserInfo>> IdentityProvider::getUserInfo(
 }
 
 void IdentityProvider::close(ScriptState* script_state) {
-  auto* request =
-      CredentialManagerProxy::From(script_state)->FederatedAuthRequest();
-  request->CloseModalDialogView();
+  auto* service =
+      CredentialManagerProxy::From(script_state)->FederatedRequestService();
+  service->CloseModalDialogView();
 }
 
 void OnRegisterIdP(ScriptPromiseResolver<IDLBoolean>* resolver,
@@ -183,9 +178,9 @@ ScriptPromise<IDLBoolean> IdentityProvider::registerIdentityProvider(
       MakeGarbageCollected<ScriptPromiseResolver<IDLBoolean>>(script_state);
   auto promise = resolver->Promise();
 
-  auto* request =
-      CredentialManagerProxy::From(script_state)->FederatedAuthRequest();
-  request->RegisterIdP(KURL(configURL),
+  auto* service =
+      CredentialManagerProxy::From(script_state)->FederatedRequestService();
+  service->RegisterIdP(KURL(configURL),
                        BindOnce(&OnRegisterIdP, WrapPersistent(resolver)));
 
   return promise;
@@ -209,9 +204,9 @@ ScriptPromise<IDLUndefined> IdentityProvider::unregisterIdentityProvider(
       MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
   auto promise = resolver->Promise();
 
-  auto* request =
-      CredentialManagerProxy::From(script_state)->FederatedAuthRequest();
-  request->UnregisterIdP(KURL(configURL),
+  auto* service =
+      CredentialManagerProxy::From(script_state)->FederatedRequestService();
+  service->UnregisterIdP(KURL(configURL),
                          BindOnce(&OnUnregisterIdP, WrapPersistent(resolver)));
 
   return promise;
@@ -242,35 +237,81 @@ ScriptPromise<IDLUndefined> IdentityProvider::resolve(
       MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
   auto promise = resolver->Promise();
 
-  auto* request =
-      CredentialManagerProxy::From(script_state)->FederatedAuthRequest();
+  std::unique_ptr<WebV8ValueConverter> converter =
+      Platform::Current()->CreateWebV8ValueConverter();
 
-  std::unique_ptr<base::Value> token_base_value;
-  if (RuntimeEnabledFeatures::FedCmNonStringTokenEnabled()) {
-    std::unique_ptr<WebV8ValueConverter> converter =
-        Platform::Current()->CreateWebV8ValueConverter();
-
-    token_base_value = converter->FromV8Value(token_value.V8Value(),
-                                              script_state->GetContext());
-    if (!token_base_value) {
-      resolver->RejectWithDOMException(DOMExceptionCode::kDataError,
-                                       "Failed to convert token value.");
-      return promise;
-    }
-  } else {
-    String token_string;
-    if (!token_value.ToString(token_string)) {
-      resolver->RejectWithDOMException(
-          DOMExceptionCode::kDataError,
-          "Failed to convert token value to string.");
-      return promise;
-    }
-
-    token_base_value = std::make_unique<base::Value>(token_string.Utf8());
+  std::unique_ptr<base::Value> token_base_value =
+      converter->FromV8Value(token_value.V8Value(), script_state->GetContext());
+  if (!token_base_value) {
+    resolver->RejectWithDOMException(DOMExceptionCode::kDataError,
+                                     "Failed to convert token value.");
+    return promise;
   }
 
-  request->ResolveTokenRequest(
-      account_id, std::move(*token_base_value),
+  ExecutionContext* context = ExecutionContext::From(script_state);
+  mojom::blink::ResolveTokenParamsPtr params;
+  if (options->redirect()) {
+    String url_string;
+    if (!token_value.ToString(url_string)) {
+      resolver->RejectWithDOMException(DOMExceptionCode::kDataError,
+                                       "Failed to convert value to string.");
+      return promise;
+    }
+
+    std::optional<KURL> redirect_to = context->CompleteURL(url_string);
+    if (!redirect_to->IsValid()) {
+      resolver->RejectWithDOMException(DOMExceptionCode::kDataError,
+                                       "Invalid redirect URL.");
+      return promise;
+    }
+
+    String request_body = options->body();
+    if (request_body.IsNull()) {
+      request_body = g_empty_string;
+    }
+
+    V8ResolveRedirectRequestMethod::Enum method = options->method().AsEnum();
+    if (method == blink::V8ResolveRedirectRequestMethod::Enum::kGET) {
+      if (!request_body.empty()) {
+        resolver->RejectWithDOMException(DOMExceptionCode::kDataError,
+                                         "GET redirects must not have a body.");
+        return promise;
+      }
+      auto get_params = mojom::blink::RedirectGetParams::New();
+      get_params->url = *redirect_to;
+      params = mojom::blink::ResolveTokenParams::NewRedirectTo(
+          mojom::blink::RedirectParams::NewGet(std::move(get_params)));
+    } else {
+      DCHECK_EQ(method, blink::V8ResolveRedirectRequestMethod::Enum::kPOST);
+      if (request_body.empty()) {
+        resolver->RejectWithDOMException(DOMExceptionCode::kDataError,
+                                         "POST redirects must have a body.");
+        return promise;
+      }
+      auto post_params = mojom::blink::RedirectPostParams::New();
+      post_params->url = *redirect_to;
+      post_params->request_body = request_body;
+      params = mojom::blink::ResolveTokenParams::NewRedirectTo(
+          mojom::blink::RedirectParams::NewPost(std::move(post_params)));
+    }
+  } else {
+    params = mojom::blink::ResolveTokenParams::NewToken(
+        std::move(*token_base_value));
+  }
+
+  if (!script_state->ContextIsValid()) {
+    // This can happen if converting the `token` parameter had side effects
+    // that destroyed the document. With an invalid context, we also can't
+    // reject the promise.
+    return promise;
+  }
+
+  // There must not be JavaScript execution between getting the request pointer
+  // and using it.
+  auto* service =
+      CredentialManagerProxy::From(script_state)->FederatedRequestService();
+  service->ResolveTokenRequest(
+      account_id, std::move(params),
       BindOnce(&OnResolveTokenRequest, WrapPersistent(resolver)));
 
   return promise;

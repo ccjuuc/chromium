@@ -8,6 +8,7 @@
 #include <memory>
 #include <vector>
 
+#include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
 #include "build/build_config.h"
 #include "components/favicon_base/favicon_callback.h"
@@ -33,7 +34,7 @@ class ChromeWebUIControllerFactory : public content::WebUIControllerFactory {
 
   static ChromeWebUIControllerFactory* GetInstance();
 
-  // http://crbug.com/829412
+  // http://crbug.com/40091019
   // Renderers with WebUI bindings shouldn't make http(s) requests for security
   // reasons (e.g. to avoid malicious responses being able to run code in
   // priviliged renderers). Fix these webui's to make requests through C++
@@ -68,9 +69,14 @@ class ChromeWebUIControllerFactory : public content::WebUIControllerFactory {
   // The returned favicon data must be
   // |gfx::kFaviconSize| x |gfx::kFaviconSize| DIP. GetFaviconForURL() should
   // be updated if this changes.
-  base::RefCountedMemory* GetFaviconResourceBytes(
+  scoped_refptr<base::RefCountedMemory> GetFaviconResourceBytes(
       const GURL& page_url,
       ui::ResourceScaleFactor scale_factor) const;
+
+#if BUILDFLAG(IS_ANDROID)
+  // Checks if the given page URL is a chrome native page that has a favicon.
+  bool HasFaviconForNativePage(const GURL& page_url) const;
+#endif
 };
 
 #endif  // CHROME_BROWSER_UI_WEBUI_CHROME_WEB_UI_CONTROLLER_FACTORY_H_

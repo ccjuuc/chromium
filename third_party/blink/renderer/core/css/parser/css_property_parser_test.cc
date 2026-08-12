@@ -227,79 +227,6 @@ TEST(CSSPropertyParserTest, GridTrackLimit16) {
   EXPECT_EQ(ComputeNumberOfTracks(To<CSSValueList>(value)), 9999997);
 }
 
-static int GetGridPositionInteger(const CSSValue& value) {
-  const auto& list = To<CSSValueList>(value);
-  DCHECK_EQ(list.length(), static_cast<size_t>(1));
-  const auto& primitive_value = To<CSSPrimitiveValue>(list.Item(0));
-  DCHECK(primitive_value.IsNumber());
-  return primitive_value.ComputeInteger(
-      CSSToLengthConversionData(/*element=*/nullptr));
-}
-
-TEST(CSSPropertyParserTest, GridPositionLimit1) {
-  const CSSValue* value = CSSParser::ParseSingleValue(
-      CSSPropertyID::kGridColumnStart, "999",
-      StrictCSSParserContext(SecureContextMode::kSecureContext));
-  DCHECK(value);
-  EXPECT_EQ(GetGridPositionInteger(*value), 999);
-}
-
-TEST(CSSPropertyParserTest, GridPositionLimit2) {
-  const CSSValue* value = CSSParser::ParseSingleValue(
-      CSSPropertyID::kGridColumnEnd, "1000000",
-      StrictCSSParserContext(SecureContextMode::kSecureContext));
-  DCHECK(value);
-  EXPECT_EQ(GetGridPositionInteger(*value), 1000000);
-}
-
-TEST(CSSPropertyParserTest, GridPositionLimit3) {
-  const CSSValue* value = CSSParser::ParseSingleValue(
-      CSSPropertyID::kGridRowStart, "1000001",
-      StrictCSSParserContext(SecureContextMode::kSecureContext));
-  DCHECK(value);
-  EXPECT_EQ(GetGridPositionInteger(*value), 1000001);
-}
-
-TEST(CSSPropertyParserTest, GridPositionLimit4) {
-  const CSSValue* value = CSSParser::ParseSingleValue(
-      CSSPropertyID::kGridRowEnd, "5000000000",
-      StrictCSSParserContext(SecureContextMode::kSecureContext));
-  DCHECK(value);
-  EXPECT_EQ(GetGridPositionInteger(*value), 10000000);
-}
-
-TEST(CSSPropertyParserTest, GridPositionLimit5) {
-  const CSSValue* value = CSSParser::ParseSingleValue(
-      CSSPropertyID::kGridColumnStart, "-999",
-      StrictCSSParserContext(SecureContextMode::kSecureContext));
-  DCHECK(value);
-  EXPECT_EQ(GetGridPositionInteger(*value), -999);
-}
-
-TEST(CSSPropertyParserTest, GridPositionLimit6) {
-  const CSSValue* value = CSSParser::ParseSingleValue(
-      CSSPropertyID::kGridColumnEnd, "-1000000",
-      StrictCSSParserContext(SecureContextMode::kSecureContext));
-  DCHECK(value);
-  EXPECT_EQ(GetGridPositionInteger(*value), -1000000);
-}
-
-TEST(CSSPropertyParserTest, GridPositionLimit7) {
-  const CSSValue* value = CSSParser::ParseSingleValue(
-      CSSPropertyID::kGridRowStart, "-1000001",
-      StrictCSSParserContext(SecureContextMode::kSecureContext));
-  DCHECK(value);
-  EXPECT_EQ(GetGridPositionInteger(*value), -1000001);
-}
-
-TEST(CSSPropertyParserTest, GridPositionLimit8) {
-  const CSSValue* value = CSSParser::ParseSingleValue(
-      CSSPropertyID::kGridRowEnd, "-5000000000",
-      StrictCSSParserContext(SecureContextMode::kSecureContext));
-  DCHECK(value);
-  EXPECT_EQ(GetGridPositionInteger(*value), -10000000);
-}
-
 TEST(CSSPropertyParserTest, ColorFunction) {
   const CSSValue* value = CSSParser::ParseSingleValue(
       CSSPropertyID::kBackgroundColor, "rgba(0, 0, 0, 1)",
@@ -334,6 +261,44 @@ TEST(CSSPropertyParserTest, ClipPathEllipse) {
   EXPECT_FALSE(doc->IsUseCounted(WebFeature::kBasicShapeEllipseNoRadius));
   CSSParser::ParseSingleValue(CSSPropertyID::kClipPath, "ellipse()", context);
   EXPECT_TRUE(doc->IsUseCounted(WebFeature::kBasicShapeEllipseNoRadius));
+}
+
+TEST(CSSPropertyParserTest, ListStyleTypeSymbolsFunctionUseCounter) {
+  ScopedCSSCounterStyleSymbolsFunctionForTest scoped_feature(true);
+  test::TaskEnvironment task_environment;
+  auto dummy_holder = std::make_unique<DummyPageHolder>(gfx::Size(500, 500));
+  Document* doc = &dummy_holder->GetDocument();
+  Page::InsertOrdinaryPageForTesting(&dummy_holder->GetPage());
+  auto* context = MakeGarbageCollected<CSSParserContext>(
+      kHTMLStandardMode, SecureContextMode::kSecureContext, doc);
+
+  // A non-symbols() list-style-type value does not trigger the use counter.
+  CSSParser::ParseSingleValue(CSSPropertyID::kListStyleType, "disc", context);
+  EXPECT_FALSE(doc->IsWebDXFeatureCounted(WebDXFeature::kDRAFT_Symbols));
+
+  // Parsing a symbols() value triggers the use counter.
+  CSSParser::ParseSingleValue(CSSPropertyID::kListStyleType, "symbols(\"a\")",
+                              context);
+  EXPECT_TRUE(doc->IsWebDXFeatureCounted(WebDXFeature::kDRAFT_Symbols));
+}
+
+TEST(CSSPropertyParserTest, CounterWithSymbolsFunctionUseCounter) {
+  ScopedCSSCounterStyleSymbolsFunctionForTest scoped_feature(true);
+  test::TaskEnvironment task_environment;
+  auto dummy_holder = std::make_unique<DummyPageHolder>(gfx::Size(500, 500));
+  Document* doc = &dummy_holder->GetDocument();
+  Page::InsertOrdinaryPageForTesting(&dummy_holder->GetPage());
+  auto* context = MakeGarbageCollected<CSSParserContext>(
+      kHTMLStandardMode, SecureContextMode::kSecureContext, doc);
+
+  // A counter() without symbols() does not trigger the use counter.
+  CSSParser::ParseSingleValue(CSSPropertyID::kContent, "counter(c)", context);
+  EXPECT_FALSE(doc->IsWebDXFeatureCounted(WebDXFeature::kDRAFT_Symbols));
+
+  // A counter() using symbols() as its counter style triggers the use counter.
+  CSSParser::ParseSingleValue(CSSPropertyID::kContent,
+                              "counter(c, symbols(\"a\"))", context);
+  EXPECT_TRUE(doc->IsWebDXFeatureCounted(WebDXFeature::kDRAFT_Symbols));
 }
 
 TEST(CSSPropertyParserTest, GradientUseCount) {
@@ -916,10 +881,39 @@ TEST(CSSPropertyParserTest, LightDarkAuthor) {
       CSSPropertyID::kColor, "light-dark(#000000, #ffffff)", context));
   ASSERT_TRUE(CSSParser::ParseSingleValue(CSSPropertyID::kColor,
                                           "light-dark(red, green)", context));
-  // light-dark() is only valid for background-image in UA sheets.
+  // light-dark() for background-image requires CSSLightDarkImage flag.
+  ScopedCSSLightDarkImageForTest scoped_feature(false);
   ASSERT_FALSE(CSSParser::ParseSingleValue(
       CSSPropertyID::kBackgroundImage,
       "light-dark(url(light.png), url(dark.png))", context));
+}
+
+TEST(CSSPropertyParserTest, LightDarkImageAuthor) {
+  ScopedCSSLightDarkImageForTest scoped_feature(true);
+  auto* context = MakeGarbageCollected<CSSParserContext>(
+      kHTMLStandardMode, SecureContextMode::kInsecureContext);
+
+  const struct {
+    const char* value;
+    bool valid;
+  } tests[] = {
+      {"light-dark()", false},
+      {"light-dark(url(light.png))", false},
+      {"light-dark(url(light.png) url(dark.png))", false},
+      {"light-dark(url(light.png),,url(dark.png))", false},
+      {"light-dark(url(light.png), url(dark.png))", true},
+      {"light-dark(url(light.png), none)", true},
+      {"light-dark(none, image-set(url(dark.png) 1x))", true},
+      {"light-dark(  none  ,  none   )", true},
+      {"light-dark(  url(light.png)  ,  url(dark.png)   )", true},
+  };
+
+  for (const auto& test : tests) {
+    EXPECT_EQ(!!CSSParser::ParseSingleValue(CSSPropertyID::kBackgroundImage,
+                                            test.value, context),
+              test.valid)
+        << test.value;
+  }
 }
 
 TEST(CSSPropertyParserTest, UALightDarkBackgroundImage) {
@@ -1112,7 +1106,7 @@ void TestRepeatStyleViaShorthandParsing(const String& testValue,
       MakeGarbageCollected<MutableCSSPropertyValueSet>(kHTMLStandardMode);
   CSSParser::ParseValue(style, propID, testValue, false /* important */);
   ASSERT_NE(style, nullptr);
-  EXPECT_TRUE(style->AsText().Contains(expectedCssText));
+  EXPECT_TRUE(style->AsText().contains(expectedCssText));
 }
 
 void TestRepeatStyleViaShorthandsParsing(const String& testValue,
@@ -1142,7 +1136,7 @@ void TestMaskPositionParsing(const String& testValue,
   CSSParser::ParseValue(style, CSSPropertyID::kMaskPosition, testValue,
                         false /* important */);
   ASSERT_NE(style, nullptr);
-  EXPECT_TRUE(style->AsText().Contains(expectedCssText));
+  EXPECT_TRUE(style->AsText().contains(expectedCssText));
 }
 
 TEST(CSSPropertyParserTest, MaskPositionCenter) {

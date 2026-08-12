@@ -51,7 +51,7 @@ chromium-metrics-reviews@google.com.
 </variants>
 
 <histogram name="Renderer.BrowserLaunchToRunLoopStart" units="ms"
-    expires_after="2026-05-24">
+    expires_after="2027-01-31">
   <owner>sky@chromium.org</owner>
   <owner>jam@chromium.org</owner>
   <summary>
@@ -60,76 +60,8 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="Renderer.ContentProduction.CommitToUnhideDelay" units="ms"
-    expires_after="2026-03-08">
-  <owner>mustaq@chromium.org</owner>
-  <owner>blink-interactions-team@google.com</owner>
-  <summary>
-    Records the timespan between the widget host getting a navigation commit and
-    the renderer host becoming visible (unhidden) for the first time. Records a
-    zero if navigation commit is not tracked.
-  </summary>
-</histogram>
-
-<histogram name="Renderer.ContentProduction.DelayFromUnhide" units="ms"
-    expires_after="2026-03-08">
-  <owner>mustaq@chromium.org</owner>
-  <owner>blink-interactions-team@google.com</owner>
-  <summary>
-    Records the timespan between the renderer host becoming visible (unhidden)
-    for the first time and the host receiving the first metadata signal
-    indicating content push from the renderer. Records a zero if the first
-    metadata signal arrives before.
-  </summary>
-</histogram>
-
-<histogram name="Renderer.ContentProduction.LifespanFromCommit" units="ms"
-    expires_after="2026-05-10">
-  <owner>mustaq@chromium.org</owner>
-  <owner>blink-interactions-team@google.com</owner>
-  <summary>
-    Records the timespan between the widget host getting a navigation commit and
-    it getting destroyed. Records a zero if navigation commit is not tracked.
-  </summary>
-</histogram>
-
-<histogram name="Renderer.ContentProduction.LifespanFromUnhide" units="ms"
-    expires_after="2026-05-10">
-  <owner>mustaq@chromium.org</owner>
-  <owner>blink-interactions-team@google.com</owner>
-  <summary>
-    Records the timespan between the renderer host becoming visible (unhidden)
-    for the first time and the widget host getting destroyed.
-  </summary>
-</histogram>
-
-<histogram name="Renderer.ContentProduction.SignalReceived" enum="Boolean"
-    expires_after="2026-05-10">
-  <owner>mustaq@chromium.org</owner>
-  <owner>blink-interactions-team@google.com</owner>
-  <summary>
-    Records whether the renderer host has received the first metadata indicating
-    content push from the renderer at a correct time (i.e. after the host became
-    visible for the first time).
-  </summary>
-</histogram>
-
-<histogram
-    name="Renderer.Core.Timing.Performance.SwapsPerPerformanceEntryInsertion"
-    units="swaps" expires_after="2026-05-10">
-  <owner>iclelland@chromium.org</owner>
-  <owner>speed-metrics-dev@chromium.org</owner>
-  <summary>
-    Records the number of 'swaps' performed when inserting a single new
-    Performance Entry into its respective buffer. Recorded each time a new
-    performance entry is inserted into a sorted PerformanceEntryVector. Note
-    that this does not include singleton entries such as NavigationTiming or
-    PaintTiming.
-  </summary>
-</histogram>
-
 <histogram name="Renderer.CriticalFonts.BlockingResourcesLoadTime" units="ms"
-    expires_after="2026-07-06">
+    expires_after="2027-01-17">
   <owner>iclelland@chromium.org</owner>
   <owner>sullivan@chromium.org</owner>
   <owner>speed-metrics-dev@chromium.org</owner>
@@ -142,7 +74,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.CriticalFonts.CriticalFontDelay" units="ms"
-    expires_after="2026-07-06">
+    expires_after="2026-11-15">
   <owner>iclelland@chromium.org</owner>
   <owner>sullivan@chromium.org</owner>
   <owner>speed-metrics-dev@chromium.org</owner>
@@ -156,7 +88,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.CriticalFonts.PreloadedFontsLoadTime" units="ms"
-    expires_after="2026-07-06">
+    expires_after="2027-01-17">
   <owner>iclelland@chromium.org</owner>
   <owner>sullivan@chromium.org</owner>
   <owner>speed-metrics-dev@chromium.org</owner>
@@ -169,7 +101,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Renderer.DelegatedInkTrail.LatencyImprovement.{Renderer}.{Prediction}"
-    units="ms" expires_after="2026-08-01">
+    units="ms" expires_after="2027-08-01">
   <owner>jonross@chromium.org</owner>
   <owner>sahir.vellani@microsoft.com</owner>
   <owner>gastonr@microsoft.com</owner>
@@ -193,7 +125,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.DelegatedInkTrail.Prediction.{Direction}Prediction"
-    units="pixels" expires_after="2026-08-01">
+    units="pixels" expires_after="2027-08-01">
   <owner>jonross@chromium.org</owner>
   <owner>sahir.vellani@microsoft.com</owner>
   <owner>gastonr@microsoft.com</owner>
@@ -211,7 +143,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.DelegatedInkTrail.Prediction.{Type}Jitter"
-    units="pixels" expires_after="2026-08-01">
+    units="pixels" expires_after="2027-08-01">
   <owner>jonross@chromium.org</owner>
   <owner>sahir.vellani@microsoft.com</owner>
   <owner>gastonr@microsoft.com</owner>
@@ -231,7 +163,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.DelegatedInkTrail.{Renderer}.OutstandingPointsToDraw"
-    units="count" expires_after="2026-08-01">
+    units="count" expires_after="2027-08-01">
   <owner>jonross@chromium.org</owner>
   <owner>gastonr@microsoft.com</owner>
   <owner>gerchiko@microsoft.com</owner>
@@ -247,7 +179,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Renderer.DelegatedInkTrail.{Renderer}.TimeFromDelegatedInkToApiPaint"
-    units="ms" expires_after="2026-08-01">
+    units="ms" expires_after="2027-08-01">
   <owner>jonross@chromium.org</owner>
   <owner>gastonr@microsoft.com</owner>
   <owner>gerchiko@microsoft.com</owner>
@@ -266,7 +198,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.DelegatedInkTrail.{Renderer}.TimeToDrawPointsMillis"
-    units="ms" expires_after="2026-08-01">
+    units="ms" expires_after="2027-08-01">
   <owner>jonross@chromium.org</owner>
   <owner>gastonr@microsoft.com</owner>
   <owner>gerchiko@microsoft.com</owner>
@@ -280,7 +212,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.Font.PrimaryFont.DomContentLoaded" units="ms"
-    expires_after="2026-05-24">
+    expires_after="2026-11-29">
   <owner>kojii@chromium.org</owner>
   <owner>tkent@chromium.org</owner>
   <owner>layout-dev@chromium.org</owner>
@@ -292,7 +224,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.Font.PrimaryFont.DomContentLoaded.Style" units="ms"
-    expires_after="2026-05-08">
+    expires_after="2027-01-17">
   <owner>kojii@chromium.org</owner>
   <owner>tkent@chromium.org</owner>
   <owner>layout-dev@chromium.org</owner>
@@ -304,7 +236,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.Font.PrimaryFont.FCP" units="ms"
-    expires_after="2026-05-24">
+    expires_after="2026-11-29">
   <owner>kojii@chromium.org</owner>
   <owner>tkent@chromium.org</owner>
   <owner>layout-dev@chromium.org</owner>
@@ -316,7 +248,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.Font.PrimaryFont.FCP.Style" units="ms"
-    expires_after="2026-05-08">
+    expires_after="2027-01-17">
   <owner>kojii@chromium.org</owner>
   <owner>tkent@chromium.org</owner>
   <owner>layout-dev@chromium.org</owner>
@@ -328,7 +260,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.Font.SystemFallback.DomContentLoaded" units="ms"
-    expires_after="2026-05-24">
+    expires_after="2026-11-29">
   <owner>kojii@chromium.org</owner>
   <owner>tkent@chromium.org</owner>
   <owner>layout-dev@chromium.org</owner>
@@ -343,7 +275,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.Font.SystemFallback.FCP" units="ms"
-    expires_after="2026-05-24">
+    expires_after="2026-11-29">
   <owner>kojii@chromium.org</owner>
   <owner>tkent@chromium.org</owner>
   <owner>layout-dev@chromium.org</owner>
@@ -355,7 +287,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.HungRendererDialog.UserAction"
-    enum="HungRendererDialogUserAction" expires_after="2026-05-03">
+    enum="HungRendererDialogUserAction" expires_after="2026-11-15">
   <owner>kerenzhu@chromium.org</owner>
   <owner>chrome-views-alerts@google.com</owner>
   <summary>
@@ -366,8 +298,8 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.Images.HasOverfetchedCappedPixels" enum="Boolean"
-    expires_after="2026-03-03">
-  <owner>iclelland@chromium.org</owner>
+    expires_after="2027-03-03">
+  <owner>mmocny@chromium.org</owner>
   <owner>speed-metrics-dev@chromium.org</owner>
   <summary>
     Boolean indicating that OverfetchedCappedPixels was a positive integer.
@@ -376,8 +308,8 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.Images.HasOverfetchedPixels" enum="Boolean"
-    expires_after="2026-03-03">
-  <owner>iclelland@chromium.org</owner>
+    expires_after="2027-03-03">
+  <owner>mmocny@chromium.org</owner>
   <owner>speed-metrics-dev@chromium.org</owner>
   <summary>
     Boolean indicating that OverfetchedPixels was a positive integer. Reported
@@ -386,8 +318,8 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.Images.HasSizesAttributeMiss" enum="Boolean"
-    expires_after="2026-03-03">
-  <owner>iclelland@chromium.org</owner>
+    expires_after="2027-03-03">
+  <owner>mmocny@chromium.org</owner>
   <owner>speed-metrics-dev@chromium.org</owner>
   <summary>
     Boolean indicating that SizesAttributeMiss was a positive integer. Only set
@@ -397,8 +329,8 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.Images.OverfetchedCappedPixels" units="px^2"
-    expires_after="2026-03-03">
-  <owner>iclelland@chromium.org</owner>
+    expires_after="2027-03-03">
+  <owner>mmocny@chromium.org</owner>
   <owner>speed-metrics-dev@chromium.org</owner>
   <summary>
     The amount of HTMLImageElement image pixels squared (width * height) that
@@ -410,8 +342,8 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.Images.OverfetchedPixels" units="px^2"
-    expires_after="2026-03-03">
-  <owner>iclelland@chromium.org</owner>
+    expires_after="2027-03-03">
+  <owner>mmocny@chromium.org</owner>
   <owner>speed-metrics-dev@chromium.org</owner>
   <summary>
     The amount of HTMLImageElement image pixels squared (width * height) that
@@ -423,8 +355,8 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.Images.SizesAttributeMiss" units="px"
-    expires_after="2026-03-03">
-  <owner>iclelland@chromium.org</owner>
+    expires_after="2027-03-03">
+  <owner>mmocny@chromium.org</owner>
   <owner>speed-metrics-dev@chromium.org</owner>
   <summary>
     The amount of HTMLImageElement pixels by which the eventual layout width was
@@ -433,21 +365,21 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.Layout.TextWrapBalance" units="ms"
-    expires_after="2026-02-01">
+    expires_after="2027-08-01">
   <owner>kojii@chromium.org</owner>
   <owner>layout-dev@chromium.org</owner>
   <summary>The time spent to balance lines of paragraphs.</summary>
 </histogram>
 
 <histogram name="Renderer.Layout.TextWrapPretty" units="ms"
-    expires_after="2026-02-01">
+    expires_after="2027-08-01">
   <owner>kojii@chromium.org</owner>
   <owner>layout-dev@chromium.org</owner>
   <summary>The time spent to optimize line breaks.</summary>
 </histogram>
 
 <histogram name="Renderer.PaintPreview.Capture.MainFrameBlinkCaptureDuration"
-    units="ms" expires_after="2026-02-10">
+    units="ms" expires_after="2026-08-10">
   <owner>ckitagawa@chromium.org</owner>
   <owner>fredmello@chromium.org</owner>
   <owner>chrome-fdt@google.com</owner>
@@ -458,7 +390,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.PaintPreview.Capture.MainFrameSuccess"
-    enum="BooleanSuccess" expires_after="2026-02-10">
+    enum="BooleanSuccess" expires_after="2026-12-16">
   <owner>ckitagawa@chromium.org</owner>
   <owner>fredmello@chromium.org</owner>
   <owner>chrome-fdt@google.com</owner>
@@ -468,7 +400,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.PaintPreview.Capture.SubframeBlinkCaptureDuration"
-    units="ms" expires_after="2026-02-10">
+    units="ms" expires_after="2026-08-10">
   <owner>ckitagawa@chromium.org</owner>
   <owner>fredmello@chromium.org</owner>
   <owner>chrome-fdt@google.com</owner>
@@ -479,7 +411,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.PaintPreview.Capture.SubframeSuccess"
-    enum="BooleanSuccess" expires_after="2026-02-10">
+    enum="BooleanSuccess" expires_after="2026-08-10">
   <owner>ckitagawa@chromium.org</owner>
   <owner>fredmello@chromium.org</owner>
   <owner>chrome-fdt@google.com</owner>
@@ -489,7 +421,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.Preload.UnusedResource" enum="BooleanSuccess"
-    expires_after="2025-02-16">
+    expires_after="2026-12-27">
   <owner>iclelland@chromium.org</owner>
   <owner>speed-metrics-dev@chromium.org</owner>
   <summary>
@@ -503,7 +435,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.Preload.UnusedResource2{Trigger}" enum="ResourceType"
-    expires_after="2026-06-21">
+    expires_after="2027-01-03">
   <owner>sisidovski@chromium.org</owner>
   <owner>chrome-loading@google.com</owner>
   <summary>
@@ -521,7 +453,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.Preload.UnusedResourceCount" units="count"
-    expires_after="2026-06-28">
+    expires_after="2027-01-03">
   <owner>sisidovski@chromium.org</owner>
   <owner>chrome-loading@google.com</owner>
   <summary>
@@ -532,7 +464,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.ProcessLifetime3{RendererHostedContentType}"
-    units="ms" expires_after="2026-06-28">
+    units="ms" expires_after="2026-11-29">
   <owner>fdoray@chromium.org</owner>
   <owner>olivierli@chromium.org</owner>
   <owner>catan-team@chromium.org</owner>
@@ -541,28 +473,6 @@ chromium-metrics-reviews@google.com.
     Recorded for {RendererHostedContentType}.
   </summary>
   <token key="RendererHostedContentType" variants="RendererHostedContentType"/>
-</histogram>
-
-<histogram name="Renderer.ProcessReadyWaitRequired.{ProcessType}"
-    enum="Boolean" expires_after="2026-08-08">
-  <owner>toyoshim@chromium.org</owner>
-  <owner>wangsongjin@microsoft.com</owner>
-  <owner>lzhao@microsoft.com</owner>
-  <summary>
-    Whether the caller has to wait for the corresponding {ProcessType} to become
-    ready. Records true when security settings have not yet been applied to the
-    {ProcessType}, requiring a wait. Records false when the {ProcessType} is
-    already ready. Extension processes may require waiting more frequently than
-    regular processes.
-
-    Currently, this is used when service worker threads start and must wait for
-    the corresponding renderer process to become ready. This metric is emitted
-    right before the {ProcessType} starts a service worker thread.
-  </summary>
-  <token key="ProcessType">
-    <variant name="ExtensionProcess" summary="extension renderer process"/>
-    <variant name="RegularProcess" summary="non extension renderer process"/>
-  </token>
 </histogram>
 
 <histogram name="Renderer.ReduceSubresourceResponseIPC.DidNotifyBrowser"
@@ -579,7 +489,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.RenderThreadImpl.Init" units="ms"
-    expires_after="2026-05-17">
+    expires_after="2027-01-24">
   <owner>jam@chromium.org</owner>
   <owner>sky@chromium.org</owner>
   <summary>
@@ -589,7 +499,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Renderer.Unresponsive.Reason{WidgetVisibility}"
-    enum="RendererIsUnresponsiveReason" expires_after="2026-06-28">
+    enum="RendererIsUnresponsiveReason" expires_after="2026-11-29">
   <owner>pmonette@chromium.org</owner>
   <owner>catan-team@chromium.org</owner>
   <summary>
@@ -615,7 +525,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Renderer.Unresponsive.{UIElementVisible}.RenderProcessHostPriority"
-    enum="RenderProcessHostPriority" expires_after="2026-06-28">
+    enum="RenderProcessHostPriority" expires_after="2026-11-29">
   <owner>pmonette@chromium.org</owner>
   <owner>catan-team@chromium.org</owner>
   <summary>
@@ -629,31 +539,47 @@ chromium-metrics-reviews@google.com.
   </token>
 </histogram>
 
-<histogram name="Renderer.WaitTimeForProcessReady.{ProcessType}" units="ms"
-    expires_after="2026-08-08">
-  <owner>toyoshim@chromium.org</owner>
-  <owner>wangsongjin@microsoft.com</owner>
-  <owner>lzhao@microsoft.com</owner>
+<histogram name="Renderer.WebSandboxSupportLinux.GetFallbackFontForCharacter"
+    enum="BooleanFound" expires_after="2027-01-03">
+  <owner>andresrperez@chromium.org</owner>
+  <owner>anthonyvd@chromium.org</owner>
+  <owner>chrome-catan@google.com</owner>
   <summary>
-    The time taken for the corresponding {ProcessType} to become ready when a
-    wait is required. Records the duration from when the caller requests the
-    {ProcessType} to be ready until security settings are fully processed and
-    the {ProcessType} becomes ready. Extension processes are likely to show
-    longer wait times than regular processes.
-
-    Currently, this measures the time from when a service worker attempts to
-    start its thread until the corresponding renderer process becomes ready.
-    This metric is emitted right before the {ProcessType} starts a service
-    worker thread.
+    Records when WebSandboxSupportLinux::GetFallbackFontForCharacter() is
+    called, which uses the FontLoader instead of the Font Manager, and whether a
+    fallback font was found. Recorded once per function call.
   </summary>
-  <token key="ProcessType">
-    <variant name="ExtensionProcess" summary="extension renderer process"/>
-    <variant name="RegularProcess" summary="non extension renderer process"/>
-  </token>
+</histogram>
+
+<histogram
+    name="Renderer.WebSandboxSupportLinux.GetWebFontRenderStyleForStrike"
+    enum="BooleanFound" expires_after="2027-01-03">
+  <owner>andresrperez@chromium.org</owner>
+  <owner>anthonyvd@chromium.org</owner>
+  <owner>chrome-catan@google.com</owner>
+  <summary>
+    Records when WebSandboxSupportLinux::GetWebFontRenderStyleForStrike() is
+    called, which uses the FontLoader instead of the Font Manager, and whether
+    style information was found. Recorded once per function call.
+  </summary>
+</histogram>
+
+<histogram
+    name="Renderer.WebSandboxSupportLinux.MatchFontByPostscriptNameOrFullFontName"
+    enum="BooleanFound" expires_after="2027-01-03">
+  <owner>andresrperez@chromium.org</owner>
+  <owner>anthonyvd@chromium.org</owner>
+  <owner>chrome-catan@google.com</owner>
+  <summary>
+    Records when
+    WebSandboxSupportLinux::MatchFontByPostscriptNameOrFullFontName() is called,
+    which uses the FontLoader instead of the Font Manager, and whether a
+    matching font was found. Recorded once per function call.
+  </summary>
 </histogram>
 
 <histogram name="RendererScheduler.DiscreteInputResponseDuration" units="ms"
-    expires_after="2026-05-10">
+    expires_after="2027-01-17">
   <owner>shaseley@chromium.org</owner>
   <owner>speed-metrics-dev@chromium.org</owner>
   <summary>
@@ -662,7 +588,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="RendererScheduler.QueueingDuration.{Priority}Priority"
-    units="microseconds" expires_after="2026-05-24">
+    units="microseconds" expires_after="2026-11-29">
   <owner>szager@chromium.org</owner>
   <owner>paint-dev@chromium.org</owner>
   <summary>
@@ -690,7 +616,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="RendererScheduler.RendererMain.TaskOffCpuDuration" units="ms"
-    expires_after="2026-05-03">
+    expires_after="2027-01-17">
   <owner>anandrv@google.com</owner>
   <owner>clank-performance-team@google.com</owner>
   <summary>
@@ -701,7 +627,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="RendererScheduler.RendererMain.TaskOnCpuDuration" units="ms"
-    expires_after="2026-05-03">
+    expires_after="2027-01-17">
   <owner>anandrv@google.com</owner>
   <owner>clank-performance-team@google.com</owner>
   <summary>
@@ -712,7 +638,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="RendererScheduler.RendererMain.TaskOnCpuPercentage" units="%"
-    expires_after="2026-05-03">
+    expires_after="2027-01-17">
   <owner>anandrv@google.com</owner>
   <owner>clank-performance-team@google.com</owner>
   <summary>
@@ -723,7 +649,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="RendererScheduler.RendererMainThreadLoad6" units="%"
-    expires_after="2026-06-28">
+    expires_after="2027-01-03">
   <owner>lizeb@chromium.org</owner>
   <owner>shaseley@chromium.org</owner>
   <summary>
@@ -738,7 +664,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="RendererScheduler.RendererMainThreadLoad6.Foreground"
-    units="%" expires_after="2026-06-28">
+    units="%" expires_after="2027-01-03">
   <owner>lizeb@chromium.org</owner>
   <owner>shaseley@chromium.org</owner>
   <summary>

@@ -27,9 +27,25 @@ source_set("wm") {
     "//base",
     "//chrome/browser/profiles:profile",
     "//chrome/common/extensions/api",
-    "//chromeos/crosapi/mojom",
     "//components/keyed_service/content",
     "//content/public/browser",
     "//extensions/browser",
+  ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  sources = [ "wm_desks_private_events_unittest.cc" ]
+  deps = [
+    ":wm",
+    "//base",
+    "//chrome/common/extensions/api",
+    "//chrome/test:test_support",
+    "//components/crx_file",
+    "//content/public/browser",
+    "//content/test:test_support",
+    "//extensions/browser",
+    "//extensions/browser:test_support",
+    "//testing/gtest",
   ]
 }

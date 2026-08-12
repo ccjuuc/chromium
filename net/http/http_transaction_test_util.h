@@ -13,6 +13,7 @@
 #include <string_view>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/compiler_specific.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
@@ -69,6 +70,8 @@ using MockTransactionHandler =
                                  std::string* response_status,
                                  std::string* response_headers,
                                  std::string* response_data)>;
+using MockTransactionStartHandler =
+    base::RepeatingCallback<Error(const HttpRequestInfo* request)>;
 
 // Default TransportInfo suitable for most MockTransactions.
 // Describes a direct connection to (127.0.0.1, 80).
@@ -106,6 +109,9 @@ struct MockTransaction {
   // Value returned by MockNetworkTransaction::Read (potentially
   // asynchronously if |!(test_mode & TEST_MODE_SYNC_NET_START)|.)
   Error read_return_code;
+  bool is_shared_resource = false;
+  bool did_use_shared_dictionary = false;
+  MockTransactionStartHandler start_handler;
 };
 
 extern const MockTransaction kSimpleGET_Transaction;
@@ -212,11 +218,11 @@ class MockNetworkTransaction final : public HttpTransaction {
 
   void StopCaching() override;
 
-  int64_t GetTotalReceivedBytes() const override;
+  base::ByteSize GetTotalReceivedBytes() const override;
 
-  int64_t GetTotalSentBytes() const override;
+  base::ByteSize GetTotalSentBytes() const override;
 
-  int64_t GetReceivedBodyBytes() const override;
+  base::ByteSize GetReceivedBodyBytes() const override;
 
   void DoneReading() override;
 
@@ -264,13 +270,13 @@ class MockNetworkTransaction final : public HttpTransaction {
 
   // Bogus value that will be returned by GetTotalReceivedBytes() if the
   // MockNetworkTransaction was started.
-  static const int64_t kTotalReceivedBytes;
+  static const base::ByteSize kTotalReceivedBytes;
   // Bogus value that will be returned by GetTotalSentBytes() if the
   // MockNetworkTransaction was started.
-  static const int64_t kTotalSentBytes;
+  static const base::ByteSize kTotalSentBytes;
   // Bogus value that will be returned by GetReceivedBodyBytes() if the
   // MockNetworkTransaction was started.
-  static const int64_t kReceivedBodyBytes;
+  static const base::ByteSize kReceivedBodyBytes;
 
  private:
   enum class State {
@@ -323,9 +329,9 @@ class MockNetworkTransaction final : public HttpTransaction {
   raw_ptr<CreateHelper> websocket_handshake_stream_create_helper_ = nullptr;
   ConnectedCallback connected_callback_;
   base::WeakPtr<MockNetworkLayer> transaction_factory_;
-  int64_t received_bytes_ = 0;
-  int64_t sent_bytes_ = 0;
-  int64_t received_body_bytes_ = 0;
+  base::ByteSize received_bytes_;
+  base::ByteSize sent_bytes_;
+  base::ByteSize received_body_bytes_;
 
   // NetLog ID of the fake / non-existent underlying socket used by the
   // connection. Requires Start() be passed a NetLogWithSource with a real

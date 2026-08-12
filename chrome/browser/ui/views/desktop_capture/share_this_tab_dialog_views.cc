@@ -12,14 +12,12 @@
 #include "build/config/chromebox_for_meetings/buildflags.h"  // PLATFORM_CFM
 #include "chrome/browser/media/webrtc/desktop_media_list.h"
 #include "chrome/browser/media/webrtc/desktop_media_picker_manager.h"
-#include "chrome/browser/media/webrtc/desktop_media_picker_utils.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/color/chrome_color_id.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/extensions/extensions_container.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/desktop_capture/desktop_media_picker_views.h"
 #include "chrome/browser/ui/views/desktop_capture/share_this_tab_source_view.h"
 #include "chrome/browser/ui/views/media_picker_utils.h"
 #include "chrome/common/chrome_switches.h"
@@ -35,10 +33,8 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
-#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
-#include "ui/gfx/color_palette.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
@@ -188,11 +184,15 @@ ShareThisTabDialogView::ShareThisTabDialogView(
   // Make sure web modal dialogs are supported before trying to show the picker
   // as a web model dialog.
   if (MediaPickerCanShowAsWebModal(params.web_contents)) {
-    const Browser* browser = chrome::FindBrowserWithTab(params.web_contents);
+    BrowserWindowInterface* browser =
+        GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+            params.web_contents);
     // Close the extension popup to prevent spoofing.
-    if (browser && browser->window() &&
-        browser->window()->GetExtensionsContainer()) {
-      browser->window()->GetExtensionsContainer()->HideActivePopup();
+    if (browser) {
+      ExtensionsContainer* container = ExtensionsContainer::From(*browser);
+      if (container) {
+        container->HideActivePopup();
+      }
     }
     constrained_window::ShowWebModalDialogViews(this, params.web_contents);
   } else {
@@ -305,8 +305,9 @@ void ShareThisTabDialogView::SetupAudioToggle() {
   views::ImageView* audio_icon_view = audio_toggle_container->AddChildView(
       std::make_unique<views::ImageView>());
   audio_icon_view->SetImage(ui::ImageModel::FromVectorIcon(
-      vector_icons::kVolumeUpIcon, ui::kColorIcon,
-      GetLayoutConstant(PAGE_INFO_ICON_SIZE)));
+      features::IsRoundedIconsEnabled() ? vector_icons::kVolumeUpFilledIcon
+                                        : vector_icons::kVolumeUpOldIcon,
+      ui::kColorIcon, GetLayoutConstant(LayoutConstant::kPageInfoIconSize)));
 
   views::Label* audio_toggle_label =
       audio_toggle_container->AddChildView(std::make_unique<views::Label>());

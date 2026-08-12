@@ -26,10 +26,10 @@ public class CustomTabAppMenuHelper {
 
     /** Returns {@link CustomTabHistoryIphController} if history menu is enabled on CCT. */
     public static @Nullable CustomTabHistoryIphController maybeCreateHistoryIphController(
-            AppMenuCoordinator appMenuCoordinator,
+            @Nullable AppMenuCoordinator appMenuCoordinator,
             Activity activity,
             ActivityTabProvider activityTabProvider,
-            Supplier<Profile> profileSupplier,
+            Supplier<@Nullable Profile> profileSupplier,
             BrowserServicesIntentDataProvider intentDataProvider) {
         if (appMenuCoordinator == null) return null;
 
@@ -50,11 +50,11 @@ public class CustomTabAppMenuHelper {
         }
         return switch (uiType) {
             case CustomTabsUiType.MEDIA_VIEWER,
-                    CustomTabsUiType.READER_MODE,
                     CustomTabsUiType.MINIMAL_UI_WEBAPP,
                     CustomTabsUiType.OFFLINE_PAGE,
                     CustomTabsUiType.AUTH_TAB,
-                    CustomTabsUiType.POPUP -> false;
+                    CustomTabsUiType.POPUP ->
+                    false;
             default -> true;
         };
     }

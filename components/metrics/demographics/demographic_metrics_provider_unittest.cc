@@ -70,7 +70,7 @@ class TestProfileClient : public DemographicMetricsProvider::ProfileClient {
         break;
 
       case SYNC_FEATURE_ENABLED:
-        // TestSyncService by default behaves as everything enabled/active.
+        // Set TestSyncService to syncing with everything enabled/active.
         sync_service_ = std::make_unique<syncer::TestSyncService>();
 
         CHECK(sync_service_->GetDisableReasons().empty());
@@ -104,7 +104,11 @@ class TestProfileClient : public DemographicMetricsProvider::ProfileClient {
         sync_service_->GetUserSettings()->SetSelectedTypes(
             /*sync_everything=*/false,
             /*types=*/{});
-        CHECK(sync_service_->IsSyncFeatureEnabled());
+        if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
+          CHECK(!sync_service_->IsSyncFeatureEnabled());
+        } else {
+          CHECK(sync_service_->IsSyncFeatureEnabled());
+        }
         CHECK(sync_service_->GetDisableReasons().empty());
         CHECK_EQ(syncer::SyncService::TransportState::ACTIVE,
                  sync_service_->GetTransportState());
@@ -116,10 +120,21 @@ class TestProfileClient : public DemographicMetricsProvider::ProfileClient {
         sync_service_->GetUserSettings()->SetSyncFeatureDisabledViaDashboard();
 
         // On ChromeOS Ash, IsInitialSyncFeatureSetupComplete always returns
-        // true but IsSyncFeatureEnabled() stays false because the user needs to
-        // manually resume sync the feature.
-        CHECK(sync_service_->GetUserSettings()
-                  ->IsInitialSyncFeatureSetupComplete());
+        // true (in SyncPrefs::IsInitialSyncFeatureSetupComplete()) but
+        // IsSyncFeatureEnabled() stays false because the user needs to manually
+        // resume sync the feature.
+        //
+        // However TestSyncService::SetSignedIn forces
+        // TestSyncUserSettings::IsInitialSyncFeatureSetupComplete() to return
+        // false when sync is in transport mode.
+        if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
+          CHECK(!sync_service_->GetUserSettings()
+                     ->IsInitialSyncFeatureSetupComplete());
+        } else {
+          CHECK(sync_service_->GetUserSettings()
+                    ->IsInitialSyncFeatureSetupComplete());
+        }
+
         CHECK(!sync_service_->IsSyncFeatureEnabled());
         break;
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -143,7 +158,7 @@ class TestProfileClient : public DemographicMetricsProvider::ProfileClient {
 
   void SetDemographicsInPrefs(int birth_year,
                               metrics::UserDemographicsProto_Gender gender) {
-    base::Value::Dict dict;
+    base::DictValue dict;
     dict.Set(kSyncDemographicsBirthYearPath, birth_year);
     dict.Set(kSyncDemographicsGenderPath, static_cast<int>(gender));
     pref_service_.SetDict(kSyncDemographicsPrefName, std::move(dict));
@@ -156,8 +171,31 @@ class TestProfileClient : public DemographicMetricsProvider::ProfileClient {
   base::SimpleTestClock clock_;
 };
 
-TEST(DemographicMetricsProviderTest,
-     ProvideSyncedUserNoisedBirthYearAndGender_FeatureEnabled) {
+class DemographicMetricsProviderTest : public testing::TestWithParam<bool> {
+ public:
+  DemographicMetricsProviderTest() {
+    if (GetParam()) {
+      scoped_feature_list_.InitAndEnableFeature(
+          syncer::kReplaceSyncPromosWithSignInPromos);
+    } else {
+      scoped_feature_list_.InitAndDisableFeature(
+          syncer::kReplaceSyncPromosWithSignInPromos);
+    }
+  }
+
+  DemographicMetricsProviderTest(const DemographicMetricsProviderTest&) =
+      delete;
+  DemographicMetricsProviderTest& operator=(
+      const DemographicMetricsProviderTest&) = delete;
+
+  ~DemographicMetricsProviderTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+TEST_P(DemographicMetricsProviderTest,
+       ProvideSyncedUserNoisedBirthYearAndGender_FeatureEnabled) {
   base::HistogramTester histogram;
 
   auto client = std::make_unique<TestProfileClient>(/*number_of_profiles=*/1,
@@ -185,8 +223,8 @@ TEST(DemographicMetricsProviderTest,
                                UserDemographicsStatus::kSuccess, 1);
 }
 
-TEST(DemographicMetricsProviderTest,
-     ProvideSyncedUserNoisedBirthYearAndGender_NoSyncService) {
+TEST_P(DemographicMetricsProviderTest,
+       ProvideSyncedUserNoisedBirthYearAndGender_NoSyncService) {
   base::HistogramTester histogram;
 
   auto client = std::make_unique<TestProfileClient>(/*number_of_profiles=*/1,
@@ -207,8 +245,8 @@ TEST(DemographicMetricsProviderTest,
                                UserDemographicsStatus::kNoSyncService, 1);
 }
 
-TEST(DemographicMetricsProviderTest,
-     ProvideSyncedUserNoisedBirthYearAndGender_SyncEnabledButPaused) {
+TEST_P(DemographicMetricsProviderTest,
+       ProvideSyncedUserNoisedBirthYearAndGender_SyncEnabledButPaused) {
   base::HistogramTester histogram;
 
   auto client = std::make_unique<TestProfileClient>(
@@ -229,45 +267,9 @@ TEST(DemographicMetricsProviderTest,
                                UserDemographicsStatus::kSyncNotEnabled, 1);
 }
 
-TEST(
-    DemographicMetricsProviderTest,
-    ProvideSyncedUserNoisedBirthYearAndGender_SyncFeatureDisabledButPreferencesEnabled) {
-  // Disable `kSyncSupportAlwaysSyncingPriorityPreferences` since it decouples
-  // the PRIORITY_PREFERENCES type from the sync toggle, and makes the test
-  // redundant.
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(
-      syncer::kSyncSupportAlwaysSyncingPriorityPreferences);
-
-  base::HistogramTester histogram;
-
-  auto client = std::make_unique<TestProfileClient>(
-      /*number_of_profiles=*/1, SYNC_FEATURE_DISABLED_BUT_PREFERENCES_ENABLED);
-  client->SetDemographicsInPrefs(kTestBirthYear, kTestGender);
-
-  // Set birth year noise offset to not have it randomized.
-  const int kBirthYearOffset = 3;
-  client->GetLocalState()->SetInteger(kUserDemographicsBirthYearOffsetPrefName,
-                                      kBirthYearOffset);
-
-  // Run demographics provider.
-  DemographicMetricsProvider provider(
-      std::move(client), MetricsLogUploader::MetricServiceType::UMA);
-  ChromeUserMetricsExtension uma_proto;
-  provider.ProvideSyncedUserNoisedBirthYearAndGender(&uma_proto);
-
-  // Verify provided demographics.
-  EXPECT_EQ(kTestBirthYear + kBirthYearOffset,
-            uma_proto.user_demographics().birth_year());
-  EXPECT_EQ(kTestGender, uma_proto.user_demographics().gender());
-
-  // Verify histograms: Demographics should be provided.
-  histogram.ExpectUniqueSample("UMA.UserDemographics.Status",
-                               UserDemographicsStatus::kSuccess, 1);
-}
 
 #if BUILDFLAG(IS_CHROMEOS)
-TEST(
+TEST_P(
     DemographicMetricsProviderTest,
     ProvideSyncedUserNoisedBirthYearAndGender_SyncFeatureDisabledOnChromeOsAshViaSyncDashboard) {
   base::HistogramTester histogram;
@@ -292,8 +294,8 @@ TEST(
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-TEST(DemographicMetricsProviderTest,
-     ProvideSyncedUserNoisedBirthYearAndGender_SyncNotEnabled) {
+TEST_P(DemographicMetricsProviderTest,
+       ProvideSyncedUserNoisedBirthYearAndGender_SyncNotEnabled) {
   base::HistogramTester histogram;
 
   auto client = std::make_unique<TestProfileClient>(/*number_of_profiles=*/1,
@@ -314,8 +316,8 @@ TEST(DemographicMetricsProviderTest,
                                UserDemographicsStatus::kSyncNotEnabled, 1);
 }
 
-TEST(DemographicMetricsProviderTest,
-     ProvideSyncedUserNoisedBirthYearAndGender_FeatureDisabled) {
+TEST_P(DemographicMetricsProviderTest,
+       ProvideSyncedUserNoisedBirthYearAndGender_FeatureDisabled) {
   // Disable demographics reporting feature.
   base::test::ScopedFeatureList local_feature;
   local_feature.InitAndDisableFeature(kDemographicMetricsReporting);
@@ -340,8 +342,8 @@ TEST(DemographicMetricsProviderTest,
   histogram.ExpectTotalCount("UMA.UserDemographics.Status", 0);
 }
 
-TEST(DemographicMetricsProviderTest,
-     ProvideSyncedUserNoisedBirthYearAndGender_NotExactlyOneProfile) {
+TEST_P(DemographicMetricsProviderTest,
+       ProvideSyncedUserNoisedBirthYearAndGender_NotExactlyOneProfile) {
   base::HistogramTester histogram;
 
   auto client = std::make_unique<TestProfileClient>(/*number_of_profiles=*/2,
@@ -374,8 +376,8 @@ TEST(DemographicMetricsProviderTest,
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 }
 
-TEST(DemographicMetricsProviderTest,
-     ProvideSyncedUserNoisedBirthYearAndGender_NoUserDemographics) {
+TEST_P(DemographicMetricsProviderTest,
+       ProvideSyncedUserNoisedBirthYearAndGender_NoUserDemographics) {
   base::HistogramTester histogram;
 
   auto client = std::make_unique<TestProfileClient>(/*number_of_profiles=*/1,
@@ -401,8 +403,8 @@ TEST(DemographicMetricsProviderTest,
       UserDemographicsStatus::kIneligibleDemographicsData, 1);
 }
 
-TEST(DemographicMetricsProviderTest,
-     ProvideSyncedUserNoisedBirthYearAndGenderToUkmReport) {
+TEST_P(DemographicMetricsProviderTest,
+       ProvideSyncedUserNoisedBirthYearAndGenderToUkmReport) {
   base::HistogramTester histogram;
 
   auto client = std::make_unique<TestProfileClient>(/*number_of_profiles=*/1,
@@ -426,39 +428,8 @@ TEST(DemographicMetricsProviderTest,
   EXPECT_EQ(kTestGender, report.user_demographics().gender());
 }
 
-TEST(
-    DemographicMetricsProviderTest,
-    ProvideSyncedUserNoisedBirthYearAndGender_PreferencesSyncNotSelected_WithoutAlwaysSyncingFeature) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(
-      syncer::kSyncSupportAlwaysSyncingPriorityPreferences);
-  base::HistogramTester histogram;
-
-  auto client = std::make_unique<TestProfileClient>(
-      /*number_of_profiles=*/1,
-      SYNC_FEATURE_ENABLED_BUT_PREFERENCES_NOT_SELECTED);
-  client->SetDemographicsInPrefs(kTestBirthYear, kTestGender);
-
-  // Run demographics provider.
-  DemographicMetricsProvider provider(
-      std::move(client), MetricsLogUploader::MetricServiceType::UMA);
-  ChromeUserMetricsExtension uma_proto;
-  provider.ProvideSyncedUserNoisedBirthYearAndGender(&uma_proto);
-
-  // Expect the proto fields to be not set and left to default.
-  EXPECT_FALSE(uma_proto.user_demographics().has_birth_year());
-  EXPECT_FALSE(uma_proto.user_demographics().has_gender());
-
-  // Verify histograms.
-  histogram.ExpectUniqueSample("UMA.UserDemographics.Status",
-                               UserDemographicsStatus::kSyncNotEnabled, 1);
-}
-
-TEST(
-    DemographicMetricsProviderTest,
-    ProvideSyncedUserNoisedBirthYearAndGender_PreferencesSyncNotSelected_WithAlwaysSyncingFeature) {
-  base::test::ScopedFeatureList feature_list(
-      syncer::kSyncSupportAlwaysSyncingPriorityPreferences);
+TEST_P(DemographicMetricsProviderTest,
+       ProvideSyncedUserNoisedBirthYearAndGender_PreferencesSyncNotSelected) {
   base::HistogramTester histogram;
 
   auto client = std::make_unique<TestProfileClient>(
@@ -487,6 +458,8 @@ TEST(
   histogram.ExpectUniqueSample("UMA.UserDemographics.Status",
                                UserDemographicsStatus::kSuccess, 1);
 }
+
+INSTANTIATE_TEST_SUITE_P(All, DemographicMetricsProviderTest, testing::Bool());
 
 }  // namespace
 }  // namespace metrics

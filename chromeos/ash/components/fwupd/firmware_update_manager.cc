@@ -15,7 +15,6 @@
 #include "base/base_paths.h"
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
@@ -77,7 +76,7 @@ static constexpr auto FwupdStatusStringMap =
          {FwupdStatus::kWaitingForUser, "Waiting for user action"}});
 
 const char* GetFwupdStatusString(FwupdStatus enum_val) {
-  DCHECK(base::Contains(FwupdStatusStringMap, enum_val));
+  DCHECK(FwupdStatusStringMap.contains(enum_val));
   return FwupdStatusStringMap.at(enum_val);
 }
 
@@ -328,12 +327,12 @@ std::string GetFirmwareFileNameFromJsonString(const std::string& json_content) {
                         << value.error().ToString();
     return "";
   }
-  base::Value::Dict* dict = value->GetIfDict();
+  base::DictValue* dict = value->GetIfDict();
   if (!dict) {
     FIRMWARE_LOG(ERROR) << "Parsed JSON is not a dictionary";
     return "";
   }
-  base::Value::List* items = dict->FindList("Items");
+  base::ListValue* items = dict->FindList("Items");
   if (items == nullptr || items->empty()) {
     FIRMWARE_LOG(ERROR) << "Couldn't find 'Items' key in checksum json file";
     return "";
@@ -871,7 +870,7 @@ void FirmwareUpdateManager::OnDeviceListResponse(FwupdDeviceList* devices) {
 void FirmwareUpdateManager::ShowNotificationIfRequired() {
   for (const auto& update : updates_) {
     if (update->priority == firmware_update::mojom::UpdatePriority::kCritical &&
-        !base::Contains(devices_already_notified_, update->device_id)) {
+        !devices_already_notified_.contains(update->device_id)) {
       devices_already_notified_.insert(update->device_id);
       NotifyCriticalFirmwareUpdateReceived();
     }
@@ -881,7 +880,7 @@ void FirmwareUpdateManager::ShowNotificationIfRequired() {
 void FirmwareUpdateManager::OnUpdateListResponse(const std::string& device_id,
                                                  FwupdUpdateList* updates) {
   DCHECK(updates);
-  DCHECK(base::Contains(devices_pending_update_, device_id));
+  DCHECK(devices_pending_update_.contains(device_id));
 
   // If there are updates, then choose the first one.
   if (!updates->empty()) {
@@ -1197,16 +1196,25 @@ void FirmwareUpdateManager::TriggerDownloadOfFirmwareFile(
     RefreshRemoteComplete(MethodResult::kFailedToGetFirmwareFilename);
     return;
   }
-  FIRMWARE_LOG(DEBUG) << "Got firmware filename: " << firmware_filename;
+
   const base::FilePath cache_path = GetCacheDirPath();
+  const base::FilePath firmware_path(firmware_filename);
+  if (firmware_path.ReferencesParent() || firmware_path.IsAbsolute()) {
+    FIRMWARE_LOG(ERROR) << "Path traversal detected: " << firmware_filename;
+    RefreshRemoteComplete(MethodResult::kFailedToGetFirmwareFilename);
+    return;
+  }
+  const base::FilePath appended_path = cache_path.Append(firmware_path);
+
+  FIRMWARE_LOG(DEBUG) << "Got firmware filename: " << firmware_filename;
+
   task_runner_->PostTaskAndReplyWithResult(
       FROM_HERE,
       base::BindOnce(
           [](const base::FilePath& path) { return CreateDirIfNotExists(path); },
           cache_path),
       base::BindOnce(&FirmwareUpdateManager::CreateTempFileAndDownload,
-                     weak_ptr_factory_.GetWeakPtr(),
-                     cache_path.Append(firmware_filename),
+                     weak_ptr_factory_.GetWeakPtr(), appended_path,
                      std::move(firmware_filename),
                      base::BindOnce(&FirmwareUpdateManager::UpdateMetadata,
                                     weak_ptr_factory_.GetWeakPtr())));

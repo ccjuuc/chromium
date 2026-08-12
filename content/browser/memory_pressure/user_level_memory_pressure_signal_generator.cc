@@ -9,18 +9,18 @@
 #include <unistd.h>
 
 #include "base/android/child_process_binding_types.h"
-#include "base/byte_count.h"
 #include "base/byte_size.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_file.h"
 #include "base/functional/bind.h"
-#include "base/memory/memory_pressure_listener.h"
+#include "base/memory/memory_pressure_listener_registry.h"
+#include "base/memory/ptr_util.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/process/process.h"
 #include "base/strings/string_number_conversions.h"
@@ -45,56 +45,60 @@ constexpr base::TimeDelta kDefaultMinimumInterval = base::Minutes(10);
 // The memory threshold: 458 was selected at around the 99th percentile of
 // the Memory.Total.PrivateMemoryFootprint reported by Android devices whose
 // system memory were 4GB.
-constexpr base::ByteCount kMemoryThresholdOf4GbDevices = base::MiB(458);
+constexpr base::ByteSize kMemoryThresholdOf4GbDevices = base::MiBU(458);
 
 // The memory threshold: 494 was selected at around the 99th percentile of
 // the Memory.Total.PrivateMemoryFootprint reported by Android devices whose
 // system memory were 6GB.
-constexpr base::ByteCount kMemoryThresholdOf6GbDevices = base::MiB(494);
+constexpr base::ByteSize kMemoryThresholdOf6GbDevices = base::MiBU(494);
+
+UserLevelMemoryPressureSignalGenerator* g_instance = nullptr;
 
 }  // namespace
 
 // static
-void UserLevelMemoryPressureSignalGenerator::Initialize() {
+std::unique_ptr<UserLevelMemoryPressureSignalGenerator>
+UserLevelMemoryPressureSignalGenerator::MaybeCreate(
+    std::unique_ptr<memory_pressure::MemoryPressureVoter> voter) {
+  std::unique_ptr<UserLevelMemoryPressureSignalGenerator> generator;
+
   if (base::SysInfo::Is4GbDevice() || base::SysInfo::Is6GbDevice()) {
-    auto memory_threshold = base::SysInfo::Is4GbDevice()
-                                ? kMemoryThresholdOf4GbDevices
-                                : kMemoryThresholdOf6GbDevices;
-    UserLevelMemoryPressureSignalGenerator::Get().Start(
-        memory_threshold, kDefaultMeasurementInterval, kDefaultMinimumInterval);
+    generator = base::WrapUnique(
+        new UserLevelMemoryPressureSignalGenerator(std::move(voter)));
   }
+
+  return generator;
+}
+
+UserLevelMemoryPressureSignalGenerator::
+    ~UserLevelMemoryPressureSignalGenerator() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK_EQ(g_instance, this);
+  g_instance = nullptr;
 }
 
 // static
 std::optional<UserLevelMemoryPressureMetrics>
 UserLevelMemoryPressureSignalGenerator::GetLatestMemoryMetrics() {
-  return Get().latest_metrics_;
+  return g_instance ? g_instance->GetLatestMemoryMetricsImpl() : std::nullopt;
 }
 
-// static
-UserLevelMemoryPressureSignalGenerator&
-UserLevelMemoryPressureSignalGenerator::Get() {
-  static base::NoDestructor<UserLevelMemoryPressureSignalGenerator> instance;
-  return *instance.get();
-}
+UserLevelMemoryPressureSignalGenerator::UserLevelMemoryPressureSignalGenerator(
+    std::unique_ptr<memory_pressure::MemoryPressureVoter> voter)
+    : memory_pressure::SystemMemoryPressureEvaluator(std::move(voter)),
+      memory_threshold_(base::SysInfo::Is4GbDevice()
+                            ? kMemoryThresholdOf4GbDevices
+                            : kMemoryThresholdOf6GbDevices),
+      measure_interval_(kDefaultMeasurementInterval),
+      minimum_interval_(kDefaultMinimumInterval) {
+  CHECK(!g_instance);
+  g_instance = this;
 
-UserLevelMemoryPressureSignalGenerator::
-    UserLevelMemoryPressureSignalGenerator() = default;
-UserLevelMemoryPressureSignalGenerator::
-    ~UserLevelMemoryPressureSignalGenerator() = default;
-
-void UserLevelMemoryPressureSignalGenerator::Start(
-    base::ByteCount memory_threshold,
-    base::TimeDelta measure_interval,
-    base::TimeDelta minimum_interval) {
-  memory_threshold_ = memory_threshold;
-  measure_interval_ = measure_interval;
-  minimum_interval_ = minimum_interval;
-  UserLevelMemoryPressureSignalGenerator::Get().StartPeriodicTimer(
-      kFirstMeasurementInterval);
+  StartPeriodicTimer(kFirstMeasurementInterval);
 }
 
 void UserLevelMemoryPressureSignalGenerator::StartMetricsCollection() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   periodic_measuring_timer_.Start(
       FROM_HERE, kDefaultMeasurementInterval,
       base::BindRepeating(
@@ -103,6 +107,7 @@ void UserLevelMemoryPressureSignalGenerator::StartMetricsCollection() {
 }
 
 void UserLevelMemoryPressureSignalGenerator::CollectMemoryMetrics() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   base::SystemMemoryInfo meminfo;
   base::GetSystemMemoryInfo(&meminfo);
 
@@ -128,16 +133,30 @@ void UserLevelMemoryPressureSignalGenerator::CollectMemoryMetrics() {
   latest_metrics_ = UserLevelMemoryPressureMetrics{
       .total_private_footprint =
           GetTotalPrivateFootprintVisibleOrHigherPriorityRenderers(),
-      .available_memory =
-          base::ByteCount::FromUnsigned(meminfo.available.InBytes()),
+      .available_memory = meminfo.available,
       .total_process_count = total_process_count,
       .visible_renderer_count = visible_renderer_count,
   };
 }
 
+void UserLevelMemoryPressureSignalGenerator::StartPeriodicTimer(
+    base::TimeDelta interval) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Don't try to start the timer in tests that don't support it.
+  if (!base::SequencedTaskRunner::HasCurrentDefault()) {
+    return;
+  }
+  periodic_measuring_timer_.Start(
+      FROM_HERE, interval,
+      base::BindOnce(&UserLevelMemoryPressureSignalGenerator::OnTimerFired,
+                     // Unretained is safe because |this| owns this timer.
+                     base::Unretained(this)));
+}
+
 void UserLevelMemoryPressureSignalGenerator::OnTimerFired() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   base::TimeDelta interval = measure_interval_;
-  base::ByteCount total_pmf =
+  base::ByteSize total_pmf =
       GetTotalPrivateFootprintVisibleOrHigherPriorityRenderers();
 
   base::MemoryPressureLevel level = base::MEMORY_PRESSURE_LEVEL_NONE;
@@ -153,20 +172,8 @@ void UserLevelMemoryPressureSignalGenerator::OnTimerFired() {
   StartPeriodicTimer(interval);
 }
 
-void UserLevelMemoryPressureSignalGenerator::StartPeriodicTimer(
-    base::TimeDelta interval) {
-  // Don't try to start the timer in tests that don't support it.
-  if (!base::SequencedTaskRunner::HasCurrentDefault()) {
-    return;
-  }
-  periodic_measuring_timer_.Start(
-      FROM_HERE, interval,
-      base::BindOnce(&UserLevelMemoryPressureSignalGenerator::OnTimerFired,
-                     // Unretained is safe because |this| owns this timer.
-                     base::Unretained(this)));
-}
-
 void UserLevelMemoryPressureSignalGenerator::StartReportingTimer() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // Don't try to start the timer in tests that don't support it.
   if (!base::SequencedTaskRunner::HasCurrentDefault()) {
     return;
@@ -179,21 +186,22 @@ void UserLevelMemoryPressureSignalGenerator::StartReportingTimer() {
 }
 
 void UserLevelMemoryPressureSignalGenerator::OnReportingTimerFired() {
-  base::ByteCount total_pmf =
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  base::ByteSize total_pmf =
       GetTotalPrivateFootprintVisibleOrHigherPriorityRenderers();
   ReportBeforeAfterMetrics(total_pmf, "After");
 }
 
 // static
-base::ByteCount UserLevelMemoryPressureSignalGenerator::
+base::ByteSize UserLevelMemoryPressureSignalGenerator::
     GetTotalPrivateFootprintVisibleOrHigherPriorityRenderers() {
-  base::ByteCount total_pmf_visible_or_higher_priority_renderers_bytes =
-      base::ByteCount(0u);
+  base::ByteSize total_pmf_visible_or_higher_priority_renderers_bytes =
+      base::ByteSize(0u);
 
-  auto add_process_private_footprint = [&](base::ByteCount& pmf,
+  auto add_process_private_footprint = [&](base::ByteSize& pmf,
                                            const base::Process& process) {
     if (process.IsValid()) {
-      pmf += GetPrivateFootprint(process).value_or(base::ByteCount(0));
+      pmf += GetPrivateFootprint(process).value_or(base::ByteSize(0));
     }
   };
 
@@ -241,7 +249,7 @@ base::ByteCount UserLevelMemoryPressureSignalGenerator::
     // status, i.e. no such file or directory. So each renderer process
     // provides its private memory footprint for the browser process and
     // the browser process gets the (cached) value via RenderProcessHostImpl.
-    total_pmf_visible_or_higher_priority_renderers_bytes += base::ByteCount(
+    total_pmf_visible_or_higher_priority_renderers_bytes += base::ByteSize(
         static_cast<RenderProcessHostImpl*>(host)->GetPrivateMemoryFootprint());
   }
 
@@ -250,6 +258,7 @@ base::ByteCount UserLevelMemoryPressureSignalGenerator::
 
 void UserLevelMemoryPressureSignalGenerator::HandleMemoryPressureLevel(
     base::MemoryPressureLevel level) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // MODERATE level is not used.
   CHECK_NE(level, base::MEMORY_PRESSURE_LEVEL_MODERATE);
 
@@ -261,42 +270,13 @@ void UserLevelMemoryPressureSignalGenerator::HandleMemoryPressureLevel(
   }
 
   current_level_ = level;
-  NotifyMemoryPressure(level);
-}
-
-// static
-void UserLevelMemoryPressureSignalGenerator::NotifyMemoryPressure(
-    base::MemoryPressureLevel level) {
-  // Notifies GPU process and Utility processes.
-  for (BrowserChildProcessHostIterator iter; !iter.Done(); ++iter) {
-    if (!iter.GetData().GetProcess().IsValid())
-      continue;
-
-    ChildProcessHostImpl* host =
-        static_cast<ChildProcessHostImpl*>(iter.GetHost());
-    host->NotifyMemoryPressureToChildProcess(level);
-  }
-
-  // Notifies renderer processes.
-  for (RenderProcessHost::iterator iter = RenderProcessHost::AllHostsIterator();
-       !iter.IsAtEnd(); iter.Advance()) {
-    RenderProcessHost* host = iter.GetCurrentValue();
-    if (!host || !host->IsInitializedAndNotDead())
-      continue;
-    if (!host->GetProcess().IsValid())
-      continue;
-
-    static_cast<RenderProcessHostImpl*>(host)->NotifyMemoryPressureToRenderer(
-        level);
-  }
-
-  // Notifies browser process.
-  base::MemoryPressureListener::NotifyMemoryPressure(level);
+  SetCurrentVote(level);
+  SendCurrentVote(true);
 }
 
 // static
 void UserLevelMemoryPressureSignalGenerator::ReportBeforeAfterMetrics(
-    base::ByteCount total_pmf_visible_or_higher_priority_renderers,
+    base::ByteSize total_pmf_visible_or_higher_priority_renderers,
     const char* suffix_name) {
   std::string metric_name_total_pmf_visible_or_higher_priority_renderers =
       base::StringPrintf(
@@ -313,52 +293,67 @@ namespace {
 // TODO(crbug.com/40248151): if this feature is approved, refactor the duplicate
 // code under //third_party/blink/renderer/controller. If not approved,
 // remove the code as soon as possible.
-std::optional<base::ByteCount> CalculateProcessMemoryFootprint(
+std::optional<base::ByteSize> CalculateProcessMemoryFootprint(
     base::File& statm_file,
     base::File& status_file) {
+  static const int page_size_bytes = getpagesize();
+  // getpagesize() should always return > 0, but some Android devices return
+  // unexpected values from various system calls.
+  if (page_size_bytes <= 0) {
+    return std::nullopt;
+  }
+  const base::ByteSize page_size(base::as_unsigned(page_size_bytes));
+
   // Get total resident and shared sizes from statm file.
-  static size_t page_size = getpagesize();
   uint64_t resident_pages = 0;
   uint64_t shared_pages = 0;
   uint64_t vm_size_pages = 0;
-  uint64_t swap_footprint = 0;
+  uint64_t swap_footprint_kb = 0;
   constexpr uint32_t kMaxLineSize = 4096;
   char line[kMaxLineSize];
+  auto line_span = base::as_writable_byte_span(line);
 
-  int n = UNSAFE_TODO(statm_file.ReadAtCurrentPos(line, sizeof(line) - 1));
-  if (n <= 0)
+  std::optional<size_t> n =
+      statm_file.ReadAtCurrentPos(line_span.first<kMaxLineSize - 1>());
+  if (!n.has_value()) {
     return std::nullopt;
-  UNSAFE_TODO(line[n]) = '\0';
+  }
+  line_span[*n] = '\0';
 
   int num_scanned =
       UNSAFE_TODO(sscanf(line, "%" SCNu64 " %" SCNu64 " %" SCNu64,
                          &vm_size_pages, &resident_pages, &shared_pages));
   if (num_scanned != 3)
     return std::nullopt;
+  if (resident_pages < shared_pages) {
+    // Invalid: supposedly `resident_pages` = VmRss = RssAnon + RssFile +
+    // RssShmem >= RssFile + RssShmem = `shared_pages`.
+    return std::nullopt;
+  }
 
   // Get swap size from status file. The format is: VmSwap :  10 kB.
-  n = UNSAFE_TODO(status_file.ReadAtCurrentPos(line, sizeof(line) - 1));
-  if (n <= 0)
+  n = status_file.ReadAtCurrentPos(line_span.first<kMaxLineSize - 1>());
+  if (!n.has_value()) {
     return std::nullopt;
-  UNSAFE_TODO(line[n]) = '\0';
+  }
+  line_span[*n] = '\0';
 
   char* swap_line = UNSAFE_TODO(strstr(line, "VmSwap"));
   if (!swap_line)
     return std::nullopt;
-  num_scanned =
-      UNSAFE_TODO(sscanf(swap_line, "VmSwap: %" SCNu64 " kB", &swap_footprint));
+  num_scanned = UNSAFE_TODO(
+      sscanf(swap_line, "VmSwap: %" SCNu64 " kB", &swap_footprint_kb));
   if (num_scanned != 1)
     return std::nullopt;
+  const base::ByteSize swap_footprint = base::KiBU(swap_footprint_kb);
 
-  swap_footprint *= 1024;
-  return base::ByteCount((resident_pages - shared_pages) * page_size +
-                         swap_footprint);
+  return (resident_pages - shared_pages) * page_size + swap_footprint;
 }
 
 }  // namespace
 
 // static
-std::optional<base::ByteCount>
+std::optional<base::ByteSize>
 UserLevelMemoryPressureSignalGenerator::GetPrivateFootprint(
     const base::Process& process) {
   // ScopedAllowBlocking is required to use base::File, but /proc/{pid}/status
@@ -381,6 +376,12 @@ UserLevelMemoryPressureSignalGenerator::GetPrivateFootprint(
     return std::nullopt;
 
   return CalculateProcessMemoryFootprint(statm_file, status_file);
+}
+
+std::optional<content::UserLevelMemoryPressureMetrics>
+UserLevelMemoryPressureSignalGenerator::GetLatestMemoryMetricsImpl() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return latest_metrics_;
 }
 
 }  // namespace content

@@ -99,7 +99,8 @@ grit("help_app_resources") {
   ]
 }
 
-# Resources automatically served by the chrome://help-app bundle, obtained via DEPS.
+# Resources automatically served by the chrome://help-app bundle, obtained via
+# DEPS.
 grit("help_app_bundle_resources") {
   if (enable_cros_help_app) {
     # Obtained via an internal CIPD package in src/DEPS.
@@ -144,6 +145,24 @@ grit("help_app_kids_magazine_bundle_resources") {
 grit("media_app_resources") {
   source = "//ash/webui/media_app_ui/resources/media_app_resources.grd"
 
+  inputs = [
+    "//ash/webui/media_app_ui/resources/app.html",
+    "//ash/webui/media_app_ui/resources/assets/audio_icon.svg",
+    "//ash/webui/media_app_ui/resources/assets/audio_icon_dark.svg",
+    "//ash/webui/media_app_ui/resources/assets/file_icon.svg",
+    "//ash/webui/media_app_ui/resources/assets/file_icon_dark.svg",
+    "//ash/webui/media_app_ui/resources/assets/image_icon.svg",
+    "//ash/webui/media_app_ui/resources/assets/image_icon_dark.svg",
+    "//ash/webui/media_app_ui/resources/assets/pdf_icon.svg",
+    "//ash/webui/media_app_ui/resources/assets/pdf_icon_dark.svg",
+    "//ash/webui/media_app_ui/resources/assets/video_icon.svg",
+    "//ash/webui/media_app_ui/resources/assets/video_icon_dark.svg",
+    "//ash/webui/media_app_ui/resources/index_dark_light.html",
+    "//ash/webui/media_app_ui/resources/js/first_message_received.js",
+    "//ash/webui/media_app_ui/resources/js/viewpdfhost.js",
+    "//ash/webui/media_app_ui/resources/viewpdfhost.html",
+  ]
+
   outputs = [
     "grit/ash_media_app_resources.h",
     "ash_media_app_resources.pak",
@@ -160,7 +179,8 @@ grit("media_app_resources") {
   ]
 }
 
-# Resources automatically served by the chrome://media-app bundle, obtained via DEPS.
+# Resources automatically served by the chrome://media-app bundle, obtained via
+# DEPS.
 grit("media_app_bundle_resources") {
   if (enable_cros_media_app) {
     # Obtained via an internal CIPD package in src/DEPS.
@@ -182,15 +202,8 @@ grit("media_app_bundle_resources") {
   output_dir = "$root_gen_dir/chromeos"
 }
 
-# Resources used by chrome-untrusted://projector SWA.
-ash_generated_grit("projector_app_untrusted_resources") {
-  source = "$root_gen_dir/ash/webui/projector_app/resources/app/untrusted/ash_projector_app_untrusted_resources.grd"
-  deps = [
-    "//ash/webui/projector_app/resources/app/untrusted:build_untrusted_grd",
-  ]
-}
-
-# Resources automatically served by the chrome-untrusted://projector bundle, obtained via DEPS.
+# Resources automatically served by the chrome-untrusted://projector bundle,
+# obtained via DEPS.
 grit("projector_app_bundle_resources") {
   if (enable_cros_projector_app) {
     # Obtained via an internal CIPD package in src/DEPS.
@@ -222,7 +235,8 @@ ash_generated_grit("eche_app_resources") {
   deps = [ "//ash/webui/eche_app_ui:build_grd" ]
 }
 
-# Resources automatically served by the chrome://eche-app bundle, obtained via DEPS.
+# Resources automatically served by the chrome://eche-app bundle, obtained via
+# DEPS.
 grit("eche_bundle_resources") {
   # Obtained via an internal CIPD package in src/DEPS.
   if (enable_cros_eche_app) {

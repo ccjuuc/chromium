@@ -5,14 +5,15 @@
 #ifndef CHROME_UPDATER_EXTERNAL_CONSTANTS_BUILDER_H_
 #define CHROME_UPDATER_EXTERNAL_CONSTANTS_BUILDER_H_
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
 
-#include "base/files/file_path.h"
 #include "base/values.h"
 
 namespace base {
+class FilePath;
 class TimeDelta;
 }
 
@@ -81,7 +82,7 @@ class ExternalConstantsBuilder {
   ExternalConstantsBuilder& ClearCrxPublicKeyHash();
 
   ExternalConstantsBuilder& SetDictPolicies(
-      const base::Value::Dict& dict_policies);
+      const base::DictValue& dict_policies);
   ExternalConstantsBuilder& ClearDictPolicies();
 
   ExternalConstantsBuilder& SetOverinstallTimeout(
@@ -113,7 +114,7 @@ class ExternalConstantsBuilder {
   bool Modify();
 
  private:
-  base::Value::Dict overrides_;
+  base::DictValue overrides_;
   bool written_ = false;
 };
 

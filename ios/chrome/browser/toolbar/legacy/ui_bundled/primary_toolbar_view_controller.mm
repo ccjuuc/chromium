@@ -11,26 +11,26 @@
 #import "base/metrics/user_metrics_action.h"
 #import "ios/chrome/browser/banner_promo/model/default_browser_banner_promo_app_agent.h"
 #import "ios/chrome/browser/content_suggestions/ui/content_suggestions_collection_utils.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_animator.h"
 #import "ios/chrome/browser/keyboard/ui_bundled/UIKeyCommand+Chrome.h"
 #import "ios/chrome/browser/omnibox/public/omnibox_ui_features.h"
-#import "ios/chrome/browser/shared/public/commands/omnibox_commands.h"
+#import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
-#import "ios/chrome/browser/shared/ui/util/dynamic_type_util.h"
 #import "ios/chrome/browser/shared/ui/util/layout_guide_names.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/shared/ui/util/util_swift.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/adaptive_toolbar_view_controller+subclassing.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/banner_promo_view.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_button.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_button_factory.h"
+#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/legacy_toolbar_button.h"
+#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/legacy_toolbar_button_factory.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_configuration.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/primary_toolbar_view.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/primary_toolbar_view_controller_delegate.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_constants.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_height_delegate.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_utils.h"
 #import "ios/chrome/browser/toolbar/tab_group/ui/tab_group_indicator_view.h"
+#import "ios/chrome/browser/toolbar/ui/toolbar_height_delegate.h"
 #import "ios/chrome/common/ui/util/ui_util.h"
 
 namespace {
@@ -108,7 +108,9 @@ BASE_FEATURE(kPrimaryToolbarViewDidLoadUpdateViews,
   [super setScrollProgressForTabletOmnibox:progress];
 
   // Sometimes an NTP may make a delegate call when it's no longer visible.
-  if (!self.isNTP) {
+  if (!self.isNTP ||
+      (!IsComposeboxIpadEnabled() &&
+       (!self.shouldHideOmniboxOnNTP || self.locationBarFocused))) {
     progress = 1;
   }
 
@@ -126,8 +128,8 @@ BASE_FEATURE(kPrimaryToolbarViewDidLoadUpdateViews,
   if (progress == 0 && !self.view.fakeOmniboxTarget) {
     [self.view addFakeOmniboxTarget];
     UITapGestureRecognizer* tapRecognizer = [[UITapGestureRecognizer alloc]
-        initWithTarget:self.omniboxCommandsHandler
-                action:@selector(focusOmnibox)];
+        initWithTarget:self.browserCoordinatorHandler
+                action:@selector(showComposebox)];
     [self.view.fakeOmniboxTarget addGestureRecognizer:tapRecognizer];
   } else if (progress > 0 && self.view.fakeOmniboxTarget) {
     [self.view removeFakeOmniboxTarget];
@@ -204,6 +206,10 @@ BASE_FEATURE(kPrimaryToolbarViewDidLoadUpdateViews,
   self.view.tabGroupIndicatorView = view;
 }
 
+- (UIView*)shareButton {
+  return self.view.shareButton;
+}
+
 #pragma mark - Property accessors
 
 - (void)setIsNTP:(BOOL)isNTP {
@@ -225,18 +231,39 @@ BASE_FEATURE(kPrimaryToolbarViewDidLoadUpdateViews,
   [self setScrollProgressForTabletOmnibox:(isNTP ? 0 : 1)];
 }
 
+- (void)setLocationBarFocused:(BOOL)locationBarFocused {
+  if (self.locationBarFocused == locationBarFocused) {
+    return;
+  }
+  [super setLocationBarFocused:locationBarFocused];
+
+  if (!IsComposeboxIpadEnabled()) {
+    [self setScrollProgressForTabletOmnibox:(self.isNTP &&
+                                             self.shouldHideOmniboxOnNTP)
+                                                ? 0
+                                                : 1];
+  }
+}
+
 - (BOOL)locationBarIsExpanded {
   return self.view.expanded;
 }
 
-#pragma mark - SharingPositioner
+#pragma mark - FullscreenBrowserAgentObserving
 
-- (UIView*)sourceView {
-  return self.view.shareButton;
+- (void)fullscreenWillUpdateObscuredInsetRange:(FullscreenBrowserAgent*)agent {
+  agent->AddObscuredInsetRange(UIRectEdgeTop, [self minHeight],
+                               [self maxHeight]);
 }
 
-- (CGRect)sourceRect {
-  return self.view.shareButton.bounds;
+- (void)fullscreenWillUpdateState:(FullscreenBrowserAgent*)agent {
+  [self updateForFullscreenProgress:agent->top_progress()];
+  [self.view layoutIfNeeded];
+  CGFloat minHeight = [self minHeight];
+  CGFloat maxHeight = [self maxHeight];
+  CGFloat currentHeight =
+      minHeight + (maxHeight - minHeight) * agent->top_progress();
+  agent->AddObscuredInset(UIRectEdgeTop, currentHeight);
 }
 
 #pragma mark - FullscreenUIElement
@@ -271,7 +298,6 @@ BASE_FEATURE(kPrimaryToolbarViewDidLoadUpdateViews,
 }
 
 - (void)showCancelButton {
-  self.view.cancelButtonStyle = [self.delegate styleForCancelButtonInToolbar];
   self.view.cancelButton.hidden = NO;
 }
 
@@ -280,13 +306,13 @@ BASE_FEATURE(kPrimaryToolbarViewDidLoadUpdateViews,
 }
 
 - (void)showControlButtons {
-  for (ToolbarButton* button in self.view.allButtons) {
+  for (LegacyToolbarButton* button in self.view.allButtons) {
     button.alpha = 1;
   }
 }
 
 - (void)hideControlButtons {
-  for (ToolbarButton* button in self.view.allButtons) {
+  for (LegacyToolbarButton* button in self.view.allButtons) {
     button.alpha = 0;
   }
 }
@@ -305,13 +331,9 @@ BASE_FEATURE(kPrimaryToolbarViewDidLoadUpdateViews,
 }
 
 - (void)setLocationBarHeightExpanded {
-  // Avoid resetting the location bar height to its steady state when focused
-  // with multiline enabled, since its height may have been adjusted.
-  if (!IsMultilineBrowserOmniboxEnabled() || !self.locationBarFocused) {
-    [self setLocationBarContainerHeight:LocationBarHeight(
-                                            self.traitCollection
-                                                .preferredContentSizeCategory)];
-  }
+  [self setLocationBarContainerHeight:LocationBarHeight(
+                                          self.traitCollection
+                                              .preferredContentSizeCategory)];
   self.view.matchNTPHeight = NO;
 }
 
@@ -398,11 +420,12 @@ BASE_FEATURE(kPrimaryToolbarViewDidLoadUpdateViews,
   // 3pt in all other configurations.
   CGFloat fullscreenVerticalMargin =
       IsCompactHeight(self) ? 0 : kAdaptiveLocationBarVerticalMarginFullscreen;
-  return -AlignValueToPixel((kAdaptiveLocationBarVerticalMargin * progress +
-                             fullscreenVerticalMargin * (1 - progress)) *
-                                [self clampedFontSizeMultiplier] +
-                            ([self clampedFontSizeMultiplier] - 1) *
-                                kLocationBarVerticalMarginDynamicType);
+  return -AlignValueToLowerPixel(
+      (kAdaptiveLocationBarVerticalMargin * progress +
+       fullscreenVerticalMargin * (1 - progress)) *
+          [self clampedFontSizeMultiplier] +
+      ([self clampedFontSizeMultiplier] - 1) *
+          kLocationBarVerticalMarginDynamicType);
 }
 
 // Sets the height of the location bar container.
@@ -410,6 +433,22 @@ BASE_FEATURE(kPrimaryToolbarViewDidLoadUpdateViews,
   PrimaryToolbarView* view = self.view;
   view.locationBarContainerHeight.constant = height;
   view.locationBarContainer.layer.cornerRadius = height / 2;
+}
+
+// The minimum height of this toolbar.
+- (CGFloat)minHeight {
+  UIContentSizeCategory category =
+      self.traitCollection.preferredContentSizeCategory;
+  return [self hasOmnibox] ? ToolbarCollapsedHeight(category) : 0;
+}
+
+// The maximum height of this toolbar.
+- (CGFloat)maxHeight {
+  CGFloat maxHeight = self.view.intrinsicContentSize.height;
+  if (!IsSplitToolbarMode(self) || CanShowTabStrip(self)) {
+    maxHeight += kTopToolbarUnsplitMargin;
+  }
+  return maxHeight;
 }
 
 #pragma mark - TabGroupIndicatorViewDelegate

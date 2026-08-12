@@ -68,9 +68,10 @@ public class SessionDataHolder {
      * @param sessionHandler {@link SessionHandler} to set.
      */
     public void setActiveHandler(SessionHandler sessionHandler) {
-        mActiveSessionHandler = sessionHandler;
         SessionHolder<?> session = sessionHandler.getSession();
         if (session == null) return;
+
+        mActiveSessionHandler = sessionHandler;
 
         mTaskIdToSessionData.append(
                 sessionHandler.getTaskId(),
@@ -134,7 +135,11 @@ public class SessionDataHolder {
         return mActiveSessionHandler;
     }
 
-    private @Nullable SessionHandler getActiveHandlerForIntent(Intent intent) {
+    /**
+     * Returns the active session handler if it is associated with the session in the given intent,
+     * null otherwise.
+     */
+    public @Nullable SessionHandler getActiveHandlerForIntent(Intent intent) {
         return getActiveHandler(SessionHolder.getSessionHolderFromIntent(intent));
     }
 

@@ -6,13 +6,13 @@
 
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <string_view>
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
-#include "base/containers/adapters.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/input_method/mock_input_method_engine.h"
 #include "chrome/browser/browser_process.h"
@@ -85,7 +85,8 @@ class AccessibilityHandlerTest : public InProcessBrowserTest {
   }
 
   void SetUpOnMainThread() override {
-    handler_ = std::make_unique<TestAccessibilityHandler>(browser()->profile());
+    handler_ =
+        std::make_unique<TestAccessibilityHandler>(browser()->GetProfile());
     handler_->set_web_ui(&web_ui_);
     handler_->RegisterMessages();
     handler_->AllowJavascriptForTesting();
@@ -110,7 +111,7 @@ class AccessibilityHandlerTest : public InProcessBrowserTest {
       const std::string& expected_listener,
       const std::string& expected_argument) {
     for (const std::unique_ptr<content::TestWebUI::CallData>& data :
-         base::Reversed(web_ui_.call_data())) {
+         std::views::reverse(web_ui_.call_data())) {
       std::string listener = data->arg1()->GetString();
       if (!data->arg2()->is_string()) {
         // Only look for listeners with a single string argument. Continue
@@ -130,9 +131,9 @@ class AccessibilityHandlerTest : public InProcessBrowserTest {
   }
 
   bool GetWebUIListenerArgumentListValue(const std::string& expected_listener,
-                                         const base::Value::List*& argument) {
+                                         const base::ListValue*& argument) {
     for (const std::unique_ptr<content::TestWebUI::CallData>& data :
-         base::Reversed(web_ui_.call_data())) {
+         std::views::reverse(web_ui_.call_data())) {
       std::string listener;
       if (data->arg1()->is_string()) {
         listener = data->arg1()->GetString();
@@ -288,16 +289,16 @@ IN_PROC_BROWSER_TEST_F(AccessibilityHandlerTest, DictationLocalesCalculation) {
     }
 
     // Set up fake preferred languages.
-    browser()->profile()->GetPrefs()->SetString(
+    browser()->GetProfile()->GetPrefs()->SetString(
         language::prefs::kPreferredLanguages, testcase.preferred_languages);
 
     MaybeAddDictationLocales();
 
-    const base::Value::List* argument = nullptr;
+    const base::ListValue* argument = nullptr;
     ASSERT_TRUE(
         GetWebUIListenerArgumentListValue("dictation-locales-set", argument));
     for (const base::Value& it : *argument) {
-      const base::Value::Dict& dict = it.GetDict();
+      const base::DictValue& dict = it.GetDict();
       std::string_view language_code =
           language::SplitIntoMainAndTail(*(dict.FindString("value"))).first;
       // Only expect some locales to be recommended based on application and
@@ -318,12 +319,12 @@ IN_PROC_BROWSER_TEST_F(AccessibilityHandlerTest,
   speech::SodaInstaller::GetInstance()->NotifySodaInstalledForTesting();
   speech::SodaInstaller::GetInstance()->NotifySodaInstalledForTesting(en_us());
   MaybeAddDictationLocales();
-  const base::Value::List* argument = nullptr;
+  const base::ListValue* argument = nullptr;
   ASSERT_TRUE(
       GetWebUIListenerArgumentListValue("dictation-locales-set", argument));
 
   for (auto& it : *argument) {
-    const base::Value::Dict& dict = it.GetDict();
+    const base::DictValue& dict = it.GetDict();
     const std::string locale = *dict.FindString("value");
     bool works_offline = dict.FindBool("worksOffline").value();
     bool installed = dict.FindBool("installed").value();
@@ -343,7 +344,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityHandlerTest, GetStartupSoundEnabled) {
 
   size_t call_data_count_before_call = web_ui()->call_data().size();
 
-  base::Value::List empty_args;
+  base::ListValue empty_args;
   web_ui()->HandleReceivedMessage("getStartupSoundEnabled", empty_args);
 
   ASSERT_EQ(call_data_count_before_call + 1u, web_ui()->call_data().size());

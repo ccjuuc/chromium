@@ -10,7 +10,6 @@
 #import "base/metrics/user_metrics.h"
 #import "base/strings/string_number_conversions.h"
 #import "base/time/time.h"
-#import "base/timer/elapsed_timer.h"
 #import "components/application_locale_storage/application_locale_storage.h"
 #import "components/google/core/common/google_util.h"
 #import "components/strings/grit/components_strings.h"
@@ -38,9 +37,6 @@ namespace {
 
 // Height of the image used as a header for the table view.
 constexpr CGFloat kHeaderImageHeight = 99;
-
-// Duration of the cooldown period during which user interactions are ignored.
-constexpr base::TimeDelta kCooldownDuration = base::Milliseconds(500);
 
 // Sections of the Password Checkup Homepage UI.
 typedef NS_ENUM(NSInteger, SectionIdentifier) {
@@ -216,9 +212,8 @@ NSString* NotificationsOptInItemText(BOOL enabled) {
   // of the view controller.
   UIView* _headerBackgroundView;
 
-  // Timer used to track the cooldown period. If not set, there is no active
-  // cooldown.
-  std::optional<base::ElapsedTimer> _cooldownTimer;
+  // Whether a navigation is underway.
+  BOOL _navigating;
 }
 
 @end
@@ -226,10 +221,6 @@ NSString* NotificationsOptInItemText(BOOL enabled) {
 @implementation PasswordCheckupViewController
 
 #pragma mark - Public
-
-- (void)startCooldown {
-  _cooldownTimer.emplace();
-}
 
 #pragma mark - UIViewController
 
@@ -248,10 +239,13 @@ NSString* NotificationsOptInItemText(BOOL enabled) {
 
   [self loadModel];
 
-  NSArray<UITrait>* traits =
-      TraitCollectionSetForTraits(@[ UITraitVerticalSizeClass.class ]);
-  [self registerForTraitChanges:traits
+  [self registerForTraitChanges:@[ UITraitVerticalSizeClass.class ]
                      withAction:@selector(updateUIOnTraitChange)];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+  [super viewWillAppear:animated];
+  _navigating = NO;
 }
 
 - (void)didMoveToParentViewController:(UIViewController*)parent {
@@ -312,24 +306,23 @@ NSString* NotificationsOptInItemText(BOOL enabled) {
       forSectionWithIdentifier:SectionIdentifierLastPasswordCheckup];
 
   // Notifications opt-in section.
-  if (IsSafetyCheckNotificationsEnabled()) {
-    [model addSectionWithIdentifier:SectionIdentifierNotificationsOptIn];
 
-    if (!_notificationsOptInItem) {
-      _notificationsOptInItem = [self notificationsOptInItem];
-    }
+  [model addSectionWithIdentifier:SectionIdentifierNotificationsOptIn];
 
-    [model addItem:_notificationsOptInItem
-        toSectionWithIdentifier:SectionIdentifierNotificationsOptIn];
-
-    if (!_notificationsDescriptionFooterItem) {
-      _notificationsDescriptionFooterItem =
-          [self notificationsDescriptionFooterItem];
-    }
-
-    [model setFooter:_notificationsDescriptionFooterItem
-        forSectionWithIdentifier:SectionIdentifierNotificationsOptIn];
+  if (!_notificationsOptInItem) {
+    _notificationsOptInItem = [self notificationsOptInItem];
   }
+
+  [model addItem:_notificationsOptInItem
+      toSectionWithIdentifier:SectionIdentifierNotificationsOptIn];
+
+  if (!_notificationsDescriptionFooterItem) {
+    _notificationsDescriptionFooterItem =
+        [self notificationsDescriptionFooterItem];
+  }
+
+  [model setFooter:_notificationsDescriptionFooterItem
+      forSectionWithIdentifier:SectionIdentifierNotificationsOptIn];
 
   if (_consumerHasBeenUpdated) {
     [self updateItemsDependingOnPasswordCheckupState];
@@ -392,8 +385,6 @@ NSString* NotificationsOptInItemText(BOOL enabled) {
 }
 
 - (TableViewTextItem*)notificationsOptInItem {
-  CHECK(IsSafetyCheckNotificationsEnabled());
-
   TableViewTextItem* notificationsOptInItem =
       [[TableViewTextItem alloc] initWithType:ItemTypeNotificationsOptIn];
   notificationsOptInItem.text =
@@ -405,8 +396,6 @@ NSString* NotificationsOptInItemText(BOOL enabled) {
 }
 
 - (TableViewLinkHeaderFooterItem*)notificationsDescriptionFooterItem {
-  CHECK(IsSafetyCheckNotificationsEnabled());
-
   TableViewLinkHeaderFooterItem* footerItem =
       [[TableViewLinkHeaderFooterItem alloc]
           initWithType:ItemTypeNotificationsDescriptionFooter];
@@ -487,8 +476,6 @@ NSString* NotificationsOptInItemText(BOOL enabled) {
 }
 
 - (void)setSafetyCheckNotificationsEnabled:(BOOL)enabled {
-  CHECK(IsSafetyCheckNotificationsEnabled());
-
   _safetyCheckNotificationsEnabled = enabled;
 
   [self updateNotificationsOptInItem];
@@ -528,15 +515,12 @@ NSString* NotificationsOptInItemText(BOOL enabled) {
 
 - (void)tableView:(UITableView*)tableView
     didSelectRowAtIndexPath:(NSIndexPath*)indexPath {
-  if ([self inCooldown]) {
-    // Ignore row selection if in the cooldown period.
+  if (_navigating) {
+    // Ignore row selection if navigating.
     base::RecordAction(base::UserMetricsAction(
-        "MobilePasswordCheckupInteractionIgnoredOnCooldown"));
+        "MobilePasswordCheckupInteractionIgnoredDuringNavigation"));
     return;
   }
-
-  // Start the cooldown to debounce actions (e.g. double tap).
-  [self startCooldown];
 
   [super tableView:tableView didSelectRowAtIndexPath:indexPath];
 
@@ -580,7 +564,6 @@ NSString* NotificationsOptInItemText(BOOL enabled) {
       }
       break;
     case ItemTypeNotificationsOptIn:
-      CHECK(IsSafetyCheckNotificationsEnabled());
       [self.delegate toggleSafetyCheckNotifications];
   }
   [tableView deselectRowAtIndexPath:indexPath animated:YES];
@@ -630,12 +613,6 @@ NSString* NotificationsOptInItemText(BOOL enabled) {
 }
 
 #pragma mark - Private
-
-// Returns YES if the cooldown period is active.
-- (BOOL)inCooldown {
-  return _cooldownTimer.has_value() &&
-         _cooldownTimer->Elapsed() <= kCooldownDuration;
-}
 
 // Creates the header image view.
 - (UIImageView*)createHeaderImageView {
@@ -844,8 +821,6 @@ NSString* NotificationsOptInItemText(BOOL enabled) {
 
 // Updates the `_notificationsOptInItem`.
 - (void)updateNotificationsOptInItem {
-  CHECK(IsSafetyCheckNotificationsEnabled());
-
   _notificationsOptInItem.text =
       NotificationsOptInItemText(_safetyCheckNotificationsEnabled);
 
@@ -873,7 +848,18 @@ NSString* NotificationsOptInItemText(BOOL enabled) {
 // navigation bar background color to what it was before getting to the
 // PasswordCheckupViewController.
 - (void)showPasswordIssuesWithWarningType:(WarningType)warningType {
+  UINavigationController* nav = self.navigationController;
+  UIViewController* topBefore = nav ? nav.topViewController : nil;
+
   [self.handler showPasswordIssuesWithWarningType:warningType];
+
+  // If the navigation controller's top view controller changed after
+  // executing the block, it means a navigation push actually succeeded.
+  // In that case, we set `_navigating` to YES to block subsequent taps
+  // until this view controller appears again.
+  if (nav && nav.topViewController != topBefore) {
+    _navigating = YES;
+  }
 }
 
 // Notifies accessibility to focus on the cell for the given ItemType and

@@ -7,7 +7,7 @@
 #include <memory>
 #include <vector>
 
-#include "base/containers/contains.h"
+#include "ash/constants/ash_pref_names.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
@@ -20,7 +20,6 @@
 #include "base/values.h"
 #include "chrome/browser/ash/printing/print_server.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
@@ -126,8 +125,7 @@ TaskResults ParseData(int task_id, std::unique_ptr<std::string> data) {
     }
     // Checks if server's ID and URL is not already used. If yes, a warning is
     // emitted and the record is skipped.
-    if (base::Contains(print_server_ids, *id) ||
-        base::Contains(print_server_urls, gurl)) {
+    if (print_server_ids.contains(*id) || print_server_urls.contains(gurl)) {
       LOG(WARNING) << "Entry in print servers policy skipped. There is "
                    << "already a record with the same ID (" << *id << ") or "
                    << "the same URL (" << gurl.spec() << ")";
@@ -279,7 +277,7 @@ class PrintServersProviderImpl : public PrintServersProvider {
       new_servers = servers_;
     } else {
       for (auto& print_server : servers_) {
-        if (base::Contains(allowlist_.value(), print_server.GetId())) {
+        if (allowlist_.value().contains(print_server.GetId())) {
           new_servers.push_back(print_server);
         }
       }
@@ -324,7 +322,7 @@ class PrintServersProviderImpl : public PrintServersProvider {
   // The current input list of servers.
   std::vector<PrintServer> servers_;
   // The current allowlist.
-  std::optional<std::set<std::string>> allowlist_ = std::nullopt;
+  std::optional<std::set<std::string>> allowlist_;
   // The current resultant list of servers.
   std::vector<PrintServer> result_servers_;
 
@@ -343,13 +341,13 @@ class PrintServersProviderImpl : public PrintServersProvider {
 // static
 void PrintServersProvider::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
-  registry->RegisterListPref(prefs::kExternalPrintServersAllowlist);
+  registry->RegisterListPref(ash::prefs::kExternalPrintServersAllowlist);
 }
 
 // static
 void PrintServersProvider::RegisterLocalStatePrefs(
     PrefRegistrySimple* registry) {
-  registry->RegisterListPref(prefs::kDeviceExternalPrintServersAllowlist);
+  registry->RegisterListPref(ash::prefs::kDeviceExternalPrintServersAllowlist);
 }
 
 // static

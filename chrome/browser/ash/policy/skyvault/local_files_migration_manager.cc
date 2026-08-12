@@ -8,6 +8,8 @@
 #include <string>
 #include <string_view>
 
+#include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "base/check_is_test.h"
 #include "base/feature_list.h"
 #include "base/files/file_enumerator.h"
@@ -31,13 +33,12 @@
 #include "chrome/browser/ash/policy/skyvault/migration_coordinator.h"
 #include "chrome/browser/ash/policy/skyvault/migration_notification_manager.h"
 #include "chrome/browser/ash/policy/skyvault/policy_utils.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/extensions/login_screen/login/cleanup/cleanup_handler.h"
 #include "chrome/browser/chromeos/extensions/login_screen/login/cleanup/files_cleanup_handler.h"
 #include "chrome/browser/chromeos/upload_office_to_cloud/upload_office_to_cloud.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_selections.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/cryptohome/error_util.h"
@@ -189,12 +190,14 @@ bool IsMigrationMisconfigured(Profile* profile, MigrationDestination provider) {
 }  // namespace
 
 LocalFilesMigrationManager::LocalFilesMigrationManager(
+    PrefService* local_state,
     content::BrowserContext* context)
-    : context_(context),
+    : LocalUserFilesPolicyObserver(local_state),
+      context_(context),
       coordinator_(std::make_unique<MigrationCoordinator>(
           Profile::FromBrowserContext(context))),
       scheduling_timer_(std::make_unique<base::WallClockTimer>()) {
-  CHECK(base::FeatureList::IsEnabled(features::kSkyVaultV2));
+  CHECK(base::FeatureList::IsEnabled(ash::features::kSkyVaultV2));
 
   notification_manager_ =
       MigrationNotificationManagerFactory::GetForBrowserContext(context);
@@ -269,12 +272,12 @@ void LocalFilesMigrationManager::InitializeFromPrefs() {
   Profile* profile = Profile::FromBrowserContext(context_);
   PrefService* pref_service = profile->GetPrefs();
   state_ = static_cast<State>(
-      pref_service->GetInteger(prefs::kSkyVaultMigrationState));
+      pref_service->GetInteger(ash::prefs::kSkyVaultMigrationState));
 
   VLOG(1) << "Loaded migration state: " << StateToString(state_);
 
   current_retry_count_ =
-      pref_service->GetInteger(prefs::kSkyVaultMigrationRetryCount);
+      pref_service->GetInteger(ash::prefs::kSkyVaultMigrationRetryCount);
   VLOG(1) << "Loaded retry count: " << current_retry_count_;
   if (current_retry_count_ > kMaxRetryCount) {
     // Loaded state should be kFailed, but set it explicitly just in case.
@@ -282,15 +285,15 @@ void LocalFilesMigrationManager::InitializeFromPrefs() {
     SetState(State::kFailure);
   }
 
-  local_user_files_allowed_ = LocalUserFilesAllowed();
-  migration_destination_ = GetMigrationDestination();
+  local_user_files_allowed_ = LocalUserFilesAllowed(local_state_.get());
+  migration_destination_ = GetMigrationDestination(local_state_.get());
 
   // For kDelete, retry cleanup even after kMaxRetryCount failures to ensure
   // policy-enforced deletion. Other destinations treat kFailure as final.
   if (state_ == State::kFailure &&
       migration_destination_ == MigrationDestination::kDelete) {
     current_retry_count_ = 0;
-    pref_service->SetInteger(prefs::kSkyVaultMigrationRetryCount,
+    pref_service->SetInteger(ash::prefs::kSkyVaultMigrationRetryCount,
                              current_retry_count_);
     SetState(State::kCleanup);
   }
@@ -347,9 +350,9 @@ void LocalFilesMigrationManager::InitializeFromPrefs() {
 
 void LocalFilesMigrationManager::OnLocalUserFilesPolicyChanged() {
   bool local_user_files_allowed_old = local_user_files_allowed_;
-  local_user_files_allowed_ = LocalUserFilesAllowed();
+  local_user_files_allowed_ = LocalUserFilesAllowed(local_state_.get());
   MigrationDestination migration_destination_old = migration_destination_;
-  migration_destination_ = GetMigrationDestination();
+  migration_destination_ = GetMigrationDestination(local_state_.get());
 
   if (local_user_files_allowed_ == local_user_files_allowed_old &&
       migration_destination_ == migration_destination_old) {
@@ -484,14 +487,14 @@ void LocalFilesMigrationManager::InformUser() {
 
   const base::Time now = base::Time::Now();
   base::Time scheduled_start_time = now + kTotalMigrationTimeout;
-  if (base::FeatureList::IsEnabled(features::kSkyVaultV3)) {
+  if (base::FeatureList::IsEnabled(ash::features::kSkyVaultV3)) {
     PrefService* pref_service =
         Profile::FromBrowserContext(context_)->GetPrefs();
     scheduled_start_time =
-        pref_service->GetTime(prefs::kSkyVaultMigrationScheduledStartTime);
+        pref_service->GetTime(ash::prefs::kSkyVaultMigrationScheduledStartTime);
     if (scheduled_start_time.is_null()) {
       scheduled_start_time = now + kTotalMigrationTimeout;
-      pref_service->SetTime(prefs::kSkyVaultMigrationScheduledStartTime,
+      pref_service->SetTime(ash::prefs::kSkyVaultMigrationScheduledStartTime,
                             scheduled_start_time);
     }
   }
@@ -657,9 +660,9 @@ void LocalFilesMigrationManager::StartMigration(
 
   PrefService* pref_service = Profile::FromBrowserContext(context_)->GetPrefs();
   const base::Time start_time =
-      pref_service->GetTime(prefs::kSkyVaultMigrationStartTime);
+      pref_service->GetTime(ash::prefs::kSkyVaultMigrationStartTime);
   if (start_time.is_null()) {
-    pref_service->SetTime(prefs::kSkyVaultMigrationStartTime,
+    pref_service->SetTime(ash::prefs::kSkyVaultMigrationStartTime,
                           base::Time::Now());
   }
 
@@ -683,7 +686,7 @@ void LocalFilesMigrationManager::OnMigrationDone(
 
   const base::Time start_time =
       Profile::FromBrowserContext(context_)->GetPrefs()->GetTime(
-          prefs::kSkyVaultMigrationStartTime);
+          ash::prefs::kSkyVaultMigrationStartTime);
   const base::TimeDelta duration = base::Time::Now() - start_time;
 
   if (errors.empty()) {
@@ -700,7 +703,7 @@ void LocalFilesMigrationManager::OnMigrationDone(
 
   bool failed = ShouldFail(errors, ++current_retry_count_);
   Profile::FromBrowserContext(context_)->GetPrefs()->SetInteger(
-      prefs::kSkyVaultMigrationRetryCount, current_retry_count_);
+      ash::prefs::kSkyVaultMigrationRetryCount, current_retry_count_);
 
   if (failed) {
     SkyVaultMigrationDoneHistograms(migration_destination_, /*success=*/false,
@@ -779,7 +782,7 @@ void LocalFilesMigrationManager::OnCleanupDone(
 
     bool failed_too_many_times = ++current_retry_count_ > kMaxRetryCount;
     Profile::FromBrowserContext(context_)->GetPrefs()->SetInteger(
-        prefs::kSkyVaultMigrationRetryCount, current_retry_count_);
+        ash::prefs::kSkyVaultMigrationRetryCount, current_retry_count_);
     if (failed_too_many_times) {
       SkyVaultDeletionDoneHistogram(/*success=*/false);
       SetState(State::kFailure);
@@ -857,17 +860,17 @@ void LocalFilesMigrationManager::SetState(State new_state) {
   }
   state_ = new_state;
   Profile::FromBrowserContext(context_)->GetPrefs()->SetInteger(
-      prefs::kSkyVaultMigrationState, static_cast<int>(new_state));
+      ash::prefs::kSkyVaultMigrationState, static_cast<int>(new_state));
 }
 
 void LocalFilesMigrationManager::ResetMigrationPrefs() {
   SetState(State::kUninitialized);
   current_retry_count_ = 0;
   PrefService* pref_service = Profile::FromBrowserContext(context_)->GetPrefs();
-  pref_service->SetInteger(prefs::kSkyVaultMigrationRetryCount,
+  pref_service->SetInteger(ash::prefs::kSkyVaultMigrationRetryCount,
                            current_retry_count_);
-  pref_service->SetTime(prefs::kSkyVaultMigrationStartTime, base::Time());
-  pref_service->SetTime(prefs::kSkyVaultMigrationScheduledStartTime,
+  pref_service->SetTime(ash::prefs::kSkyVaultMigrationStartTime, base::Time());
+  pref_service->SetTime(ash::prefs::kSkyVaultMigrationScheduledStartTime,
                         base::Time());
 }
 
@@ -921,12 +924,15 @@ bool LocalFilesMigrationManagerFactory::ServiceIsNULLWhileTesting() const {
 std::unique_ptr<KeyedService>
 LocalFilesMigrationManagerFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  if (!base::FeatureList::IsEnabled(features::kSkyVaultV2)) {
+  if (!base::FeatureList::IsEnabled(ash::features::kSkyVaultV2)) {
     return nullptr;
   }
 
+  // NOTE: Allow g_browser_process here as this class is initialized lazily with
+  // base::NoDestructor.
   std::unique_ptr<LocalFilesMigrationManager> instance =
-      std::make_unique<LocalFilesMigrationManager>(context);
+      std::make_unique<LocalFilesMigrationManager>(
+          g_browser_process->local_state(), context);
   instance->Initialize();
   return instance;
 }

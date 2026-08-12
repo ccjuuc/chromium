@@ -10,6 +10,8 @@
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/grid_cell.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/grid_layout.h"
 
+@class TabSwitcherItem;
+
 // To ease the use of generics with the diffable data source, define a Snapshot
 // type.
 typedef NSDiffableDataSourceSnapshot<NSString*, GridItemIdentifier*>
@@ -18,18 +20,14 @@ typedef UICollectionViewDiffableDataSource<NSString*, GridItemIdentifier*>
     GridDiffableDataSource;
 
 @interface BaseGridViewController (Subclassing) <GridCellDelegate,
-                                                 UICollectionViewDragDelegate,
-                                                 UICollectionViewDelegate>
+                                                 UICollectionViewDelegate,
+                                                 UICollectionViewDragDelegate>
 
 // A collection view of items in a grid format.
 @property(nonatomic, weak, readonly) UICollectionView* collectionView;
 
 // The collection view's data source.
 @property(nonatomic, strong) GridDiffableDataSource* diffableDataSource;
-
-// Tracks if the items are in a batch action, which are the "Close All" or
-// "Undo" the close all.
-@property(nonatomic, readonly) BOOL isClosingAllOrUndoRunning;
 
 // The current mode for the grid.
 @property(nonatomic, assign, readonly) TabGridMode mode;
@@ -80,6 +78,10 @@ typedef UICollectionViewDiffableDataSource<NSString*, GridItemIdentifier*>
 // Returns the scenario histogram to be used to display a context menu.
 - (MenuScenarioHistogram)scenarioForContextMenu;
 
+// Provides an opportunity to forward a TabGroupColorPalette to the GridCell.
+- (void)configureCell:(GridCell*)cell
+             withItem:(TabSwitcherItem*)item
+              atIndex:(NSUInteger)index;
 @end
 
 #endif  // IOS_CHROME_BROWSER_TAB_SWITCHER_TAB_GRID_BASE_GRID_UI_BASE_GRID_VIEW_CONTROLLER_SUBCLASSING_H_

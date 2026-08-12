@@ -28,6 +28,8 @@ std::string_view GetAISessionTypeName(AIMetrics::AISessionType session_type) {
       return "LanguageDetector";
     case AIMetrics::AISessionType::kProofreader:
       return "Proofreader";
+    case AIMetrics::AISessionType::kSemanticEmbedder:
+      return "SemanticEmbedder";
   }
   NOTREACHED();
 }
@@ -74,6 +76,34 @@ std::string AIMetrics::GetAISessionResponseCallbackCountMetricName(
 }
 
 // static
+std::string AIMetrics::GetAISessionFirstResponseTimeMetricName(
+    AISessionType session_type) {
+  return base::StrCat({"AI.Session.", GetAISessionTypeName(session_type),
+                       ".FirstResponseTime"});
+}
+
+// static
+std::string AIMetrics::GetAISessionResponseCompleteTimeMetricName(
+    AISessionType session_type) {
+  return base::StrCat({"AI.Session.", GetAISessionTypeName(session_type),
+                       ".ResponseCompleteTime"});
+}
+
+// static
+std::string AIMetrics::GetAISessionContextTokensMetricName(
+    AISessionType session_type) {
+  return base::StrCat(
+      {"AI.Session.", GetAISessionTypeName(session_type), ".ContextTokens"});
+}
+
+// static
+std::string AIMetrics::GetAISessionCrashedMetricName(
+    AISessionType session_type) {
+  return base::StrCat(
+      {"AI.Session.", GetAISessionTypeName(session_type), ".Crashed"});
+}
+
+// static
 AIMetrics::LanguageModelInputType AIMetrics::ToLanguageModelInputType(
     mojom::blink::AILanguageModelPromptContent::Tag type) {
   using MojoEnum = mojom::blink::AILanguageModelPromptContent::Tag;
@@ -85,6 +115,10 @@ AIMetrics::LanguageModelInputType AIMetrics::ToLanguageModelInputType(
       return MetricsEnum::kImage;
     case MojoEnum::kAudio:
       return MetricsEnum::kAudio;
+    case MojoEnum::kToolCall:
+      return MetricsEnum::kToolCall;
+    case MojoEnum::kToolResponse:
+      return MetricsEnum::kToolResponse;
   }
   NOTREACHED();
 }
@@ -121,10 +155,6 @@ AIMetrics::LanguageModelInputRole AIMetrics::ToLanguageModelInputRole(
       return MetricsEnum::kUser;
     case MojoEnum::kAssistant:
       return MetricsEnum::kAssistant;
-    case MojoEnum::kToolCall:
-      return MetricsEnum::kToolCall;
-    case MojoEnum::kToolResponse:
-      return MetricsEnum::kToolResponse;
   }
   NOTREACHED();
 }

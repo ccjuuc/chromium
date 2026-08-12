@@ -5,16 +5,23 @@
 #ifndef IOS_CHROME_BROWSER_DRIVE_MODEL_DRIVE_TAB_HELPER_H_
 #define IOS_CHROME_BROWSER_DRIVE_MODEL_DRIVE_TAB_HELPER_H_
 
+#import "base/memory/raw_ptr.h"
 #import "base/scoped_observation.h"
 #import "ios/chrome/browser/drive/model/upload_task_observer.h"
 #import "ios/web/public/download/download_task.h"
 #import "ios/web/public/download/download_task_observer.h"
-#import "ios/web/public/lazy_web_state_user_data.h"
 #import "ios/web/public/web_state_observer.h"
+#import "ios/web/public/web_state_user_data.h"
 
 class DriveUploadTask;
+class DriveTabHelperTest;
 @protocol SystemIdentity;
 class UploadTask;
+
+namespace enterprise_connectors {
+class FilesRequestHandlerBase;
+class ContentAnalysisInfo;
+}  // namespace enterprise_connectors
 
 // Manages Save to Drive tab-scoped state i.e. if a `DownloadTask` is received
 // through AddDownloadToSaveToDrive(...) then this tab helper
@@ -24,7 +31,7 @@ class UploadTask;
 // Drive service upon completion of the download task.
 // - 3 - observes the `UploadTask` and removes the local copy of the downloaded
 // file upon completion of the upload task.
-class DriveTabHelper : public web::LazyWebStateUserData<DriveTabHelper>,
+class DriveTabHelper : public web::WebStateUserData<DriveTabHelper>,
                        public web::DownloadTaskObserver,
                        public UploadTaskObserver {
  public:
@@ -40,7 +47,8 @@ class DriveTabHelper : public web::LazyWebStateUserData<DriveTabHelper>,
   UploadTask* GetUploadTaskForDownload(web::DownloadTask* task);
 
  private:
-  friend class web::LazyWebStateUserData<DriveTabHelper>;
+  friend class DriveTabHelperTest;
+  friend class web::WebStateUserData<DriveTabHelper>;
   explicit DriveTabHelper(web::WebState* web_state);
 
   // web::DownloadTaskObserver overrides:
@@ -64,6 +72,14 @@ class DriveTabHelper : public web::LazyWebStateUserData<DriveTabHelper>,
   // Checks if the remove has been completed.
   void RemoveComplete(bool remove_completed);
 
+  // Process the complete download task and upload the download item to Google
+  // Drive.
+  void ProcessCompleteDownloadTask(web::DownloadTask* task);
+
+  // Upload the download item to google drive if `should_proceed` is true,
+  // otherwise cancel the task.
+  void MaybeUploadDownloadToDrive(web::DownloadTask* task, bool should_proceed);
+
   // Associated WebState.
   raw_ptr<web::WebState> web_state_;
 
@@ -78,6 +94,13 @@ class DriveTabHelper : public web::LazyWebStateUserData<DriveTabHelper>,
   // Drive upload task associated with the observed download task. Should be
   // started as soon as the download task is completed.
   std::unique_ptr<DriveUploadTask> upload_task_;
+
+  // Enterprise content scanning metadata.
+  std::unique_ptr<enterprise_connectors::ContentAnalysisInfo>
+      content_analysis_info_;
+  // Request handler for enterprise content scanning.
+  std::unique_ptr<enterprise_connectors::FilesRequestHandlerBase>
+      files_request_handler_;
 
   base::WeakPtrFactory<DriveTabHelper> weak_ptr_factory_{this};
 };

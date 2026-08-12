@@ -18,7 +18,7 @@ export function getHtml(this: ExtensionsSectionElement) {
       <!-- Make the icon focusable since it has a tooltip. cr-icon is used here
       to support custom tooltip widths. -->
       <cr-icon id="tooltip-icon"
-          icon="cr:info-outline"
+          icon="cr:info"
           tabindex="0"
           role="img"
           aria-label="${this.tooltip_}">
@@ -26,7 +26,7 @@ export function getHtml(this: ExtensionsSectionElement) {
     </div>
     <cr-expand-button id="expandButton" no-hover
         ?expanded="${this.expanded_}"
-        @expanded-changed="${this.onExpandChanged_}"
+        @expanded-changed="${this.onExpandedChanged_}"
         role="button"
         aria-label="${this.title_}">
     </cr-expand-button>

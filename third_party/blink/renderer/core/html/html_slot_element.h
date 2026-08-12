@@ -48,9 +48,22 @@ class CORE_EXPORT HTMLSlotElement final : public HTMLElement {
  public:
   HTMLSlotElement(Document&);
 
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLSlotElement;
+  }
+
   const HeapVector<Member<Node>>& AssignedNodes() const;
   const HeapVector<Member<Node>> AssignedNodesForBinding(
       const AssignedNodesOptions*);
+  // Use AssignedNodes() in almost all cases. Only use AssignedNodesNoRecalc()
+  // when calling RecalcAssignment() is forbidden or dangerous (e.g., during
+  // tree modifications, moveBefore semantics, or state propagation like
+  // Element::SetIsCanvasOrInCanvasSubtree where eventual consistency is
+  // guaranteed by subsequent FlatTreeParentChanged/RemovedFromFlatTree
+  // hooks).
+  const HeapVector<Member<Node>>& AssignedNodesNoRecalc() const {
+    return assigned_nodes_;
+  }
   const HeapVector<Member<Element>> AssignedElements();
   const HeapVector<Member<Element>> AssignedElementsForBinding(
       const AssignedNodesOptions*);
@@ -97,6 +110,11 @@ class CORE_EXPORT HTMLSlotElement final : public HTMLElement {
   // recalc. Used by FlatTreeParentForChildDirty() which needs to avoid doing
   // slot assignments while marking the tree style-dirty.
   bool HasAssignedNodesNoRecalc() const { return !assigned_nodes_.empty(); }
+
+  // Returns true if FlattenedAssignedNodes() would be non-empty, without
+  // doing assignment recalc. Used for :has-slotted matching during style
+  // resolution.
+  bool HasFlattenedAssignedNodesNoRecalc() const;
 
   bool SupportsAssignment() const { return IsInShadowTree(); }
 

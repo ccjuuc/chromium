@@ -94,9 +94,9 @@ constexpr CGFloat kTableViewHorizontalPadding = 6.0f;
   } else {
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
     UIImage* logo = MakeSymbolMulticolor(
-        CustomSymbolWithPointSize(kMulticolorChromeballSymbol, kIconSize));
+        SymbolWithPointSize(SymbolMulticolorChromeball, kIconSize));
 #else
-    UIImage* logo = CustomSymbolWithPointSize(kChromeProductSymbol, kIconSize);
+    UIImage* logo = SymbolWithPointSize(SymbolChromeProduct, kIconSize);
 #endif  // BUILDFLAG(IOS_USE_BRANDED_ASSETS)
     self.image = logo;
     self.imageBackgroundColor = [UIColor colorNamed:kBackgroundColor];
@@ -135,11 +135,12 @@ constexpr CGFloat kTableViewHorizontalPadding = 6.0f;
 
 - (void)viewWillLayoutSubviews {
   [super viewWillLayoutSubviews];
-  [self updateTableViewHeightConstraint];
-  __weak __typeof(self) weakSelf = self;
-  [weakSelf.sheetPresentationController animateChanges:^{
-    [weakSelf.sheetPresentationController invalidateDetents];
-  }];
+  if ([self updateTableViewHeightConstraint]) {
+    __weak __typeof(self) weakSelf = self;
+    [weakSelf.sheetPresentationController animateChanges:^{
+      [weakSelf.sheetPresentationController invalidateDetents];
+    }];
+  }
 }
 
 #pragma mark - ConfirmationAlertViewController
@@ -280,20 +281,24 @@ constexpr CGFloat kTableViewHorizontalPadding = 6.0f;
                            indexPath:(NSIndexPath*)indexPath
                       itemIdentifier:(BestFeaturesItem*)itemIdentifier {
   BestFeaturesCell* cell = DequeueTableViewCell<BestFeaturesCell>(tableView);
+  cell.backgroundColor = [UIColor colorNamed:kPrimaryBackgroundColor];
   [cell setBestFeaturesItem:itemIdentifier];
   cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+  cell.selectionStyle = UITableViewCellSelectionStyleNone;
 
   return cell;
 }
 
 // Updates the tableView's height constraint based on its content size.
 // This is necessary because scrolling is disabled.
-- (void)updateTableViewHeightConstraint {
+- (BOOL)updateTableViewHeightConstraint {
   [_tableView layoutIfNeeded];
   CGFloat newHeight = _tableView.contentSize.height;
   if (_tableViewHeightConstraint.constant != newHeight) {
     _tableViewHeightConstraint.constant = newHeight;
+    return YES;
   }
+  return NO;
 }
 
 @end

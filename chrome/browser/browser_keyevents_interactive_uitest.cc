@@ -2,31 +2,34 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/containers/span.h"
-
-
 #include <stddef.h>
 
 #include <array>
 
 #include "base/check.h"
+#include "base/containers/span.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/run_until.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/render_widget_host_view.h"
+#include "content/public/browser/visibility.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/text_input_test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/blink/public/common/switches.h"
+#include "ui/base/ime/text_input_type.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 
 using content::NavigationController;
@@ -496,7 +499,6 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, CtrlKeyEvents) {
   EXPECT_NO_FATAL_FAILURE(TestKeyEvent(tab_index, kTestCtrlEnter));
 }
 #elif BUILDFLAG(IS_MAC)
-// http://crbug.com/81451
 IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, CommandKeyEvents) {
   static const KeyEventTestData kTestCmdF = {
     ui::VKEY_F, false, false, false, true,
@@ -505,14 +507,23 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, CommandKeyEvents) {
       "D 70 0 false false false true" }
   };
 
-  // On Mac we don't send key up events when command modifier is down.
   static const KeyEventTestData kTestCmdFSuppressKeyDown = {
-    ui::VKEY_F, false, false, false, true,
-    true, false, false, false, 3,
-    { "D 91 0 false false false true",
-      "D 70 0 false false false true",
-      "U 91 0 false false false true" }
-  };
+      ui::VKEY_F,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      3,
+      {
+          "D 91 0 false false false true",
+          "D 70 0 false false false true",
+          "U 70 0 false false false true",
+          "U 91 0 false false false true",
+      }};
 
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -539,7 +550,7 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, CommandKeyEvents) {
 }
 #endif
 
-// https://crbug.com/81451 for mac
+// https://crbug.com/40564036 for mac
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_AccessKeys DISABLED_AccessKeys
 #else
@@ -624,7 +635,7 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, MAYBE_AccessKeys) {
   EXPECT_NO_FATAL_FAILURE(TestKeyEvent(tab_index, kTestAccessD));
 
   // TODO(isherman): This is an experimental change to help diagnose
-  // http://crbug.com/55713
+  // http://crbug.com/41219367
   content::RunAllPendingInMessageLoop();
   EXPECT_TRUE(IsViewFocused(VIEW_ID_OMNIBOX));
   // No element should be focused, as Alt+D was handled by the browser.
@@ -695,8 +706,8 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, ReservedAccelerators) {
   EXPECT_EQ(2, browser()->tab_strip_model()->count());
   ASSERT_EQ(1, browser()->tab_strip_model()->active_index());
 
-  // Because of issue <http://crbug.com/65375>, switching back to the first tab
-  // may cause the focus to be grabbed by omnibox. So instead, we load our
+  // Because of issue <http://crbug.com/41279531>, switching back to the first
+  // tab may cause the focus to be grabbed by omnibox. So instead, we load our
   // testing page in the newly created tab and try Cmd-W here.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
@@ -725,7 +736,8 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, ReservedAccelerators) {
 }
 
 #if BUILDFLAG(IS_MAC)
-IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, EditorKeyBindings) {
+// TODO(crbug.com/542810322): This test is flaky.
+IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, DISABLED_EditorKeyBindings) {
   static const KeyEventTestData kTestCtrlA = {
     ui::VKEY_A, true, false, false, false,
     false, false, false, false, 4,
@@ -763,7 +775,13 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, EditorKeyBindings) {
   ASSERT_TRUE(IsViewFocused(VIEW_ID_TAB_CONTAINER));
 
   int tab_index = browser()->tab_strip_model()->active_index();
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetWebContentsAt(tab_index);
+  content::TextInputManagerTypeObserver type_observer(web_contents,
+                                                      ui::TEXT_INPUT_TYPE_TEXT);
   ASSERT_NO_FATAL_FAILURE(SetFocusedElement(tab_index, "A"));
+  type_observer.Wait();
+
   ASSERT_NO_FATAL_FAILURE(SetTextBoxValue(tab_index, "A", "Hello"));
   // Move the caret to the beginning of the line.
   EXPECT_NO_FATAL_FAILURE(TestKeyEvent(tab_index, kTestCtrlA));
@@ -806,9 +824,9 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, PageUpDownKeys) {
   EXPECT_NO_FATAL_FAILURE(CheckTextBoxValue(tab_index, "A", ""));
 }
 
-// AltKey is enabled only on Windows. See crbug.com/114537.
+// AltKey is enabled only on Windows. See crbug.com/40155843.
 #if BUILDFLAG(IS_WIN)
-// If this flakes, disable and log details in http://crbug.com/523255.
+// If this flakes, disable and log details in http://crbug.com/40432443.
 // TODO(sky): remove comment if proves stable and reenable other tests.
 IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, FocusMenuBarByAltKey) {
   static const KeyEventTestData kTestAltKey = {
@@ -860,5 +878,63 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, FocusMenuBarByAltKey) {
   ASSERT_TRUE(IsViewFocused(VIEW_ID_TAB_CONTAINER));
 }
 #endif
+
+// Regression test for crbug.com/407601713. When the content area is in focus,
+// hiding and then re-showing the browser window should restore the focus. The
+// test sends keyboard events to the browser window and verifies that the
+// webpage receives the keystrokes.
+IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, FocusAfterHideAndShow) {
+  static const KeyEventTestData kTestKeystrokes = {
+      ui::VKEY_A,
+      false,
+      false,
+      false,
+      false,  // modifiers
+      false,
+      false,
+      false,
+      false,  // suppress
+      3,      // result length
+      {"D 65 0 false false false false", "P 97 97 false false false false",
+       "U 65 0 false false false false"}};
+
+  ASSERT_TRUE(embedded_test_server()->Start());
+  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
+  GURL url = embedded_test_server()->GetURL(kTestingPage);
+
+  // Open the 2nd tab. This is critical to reproduce the loss of focus issue.
+  // On macOS, the issue happens because the RenderWidgetHostViewCocoa
+  // incorrectly loses focus (aka resign from first responder) when the window
+  // is hidden or miniaturized. If there is no 2nd tab, there is no 2nd RWHV to
+  // focus, hence the 1st RWHV won't lose focus.
+  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
+      browser(), url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
+  ASSERT_EQ(2, browser()->tab_strip_model()->count());
+
+  ASSERT_NO_FATAL_FAILURE(ClickOnView(VIEW_ID_TAB_CONTAINER));
+  ASSERT_TRUE(IsViewFocused(VIEW_ID_TAB_CONTAINER));
+
+  int tab_index = browser()->tab_strip_model()->active_index();
+
+  // Verify initial key event.
+  EXPECT_NO_FATAL_FAILURE(TestKeyEvent(tab_index, kTestKeystrokes));
+
+  // Hide the window.
+  gfx::NativeWindow window = browser()->GetWindow()->GetNativeWindow();
+  ui_test_utils::HideNativeWindow(window);
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return browser()
+               ->tab_strip_model()
+               ->GetWebContentsAt(tab_index)
+               ->GetVisibility() != content::Visibility::VISIBLE;
+  }));
+
+  // Show and focus the window.
+  ASSERT_TRUE(ui_test_utils::ShowAndFocusNativeWindow(window));
+
+  // Verify key event after hide/show.
+  EXPECT_NO_FATAL_FAILURE(TestKeyEvent(tab_index, kTestKeystrokes));
+}
 
 }  // namespace

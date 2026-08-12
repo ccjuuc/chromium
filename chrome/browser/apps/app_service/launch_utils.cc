@@ -4,6 +4,7 @@
 
 #include "chrome/browser/apps/app_service/launch_utils.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -19,12 +20,12 @@
 #include "chrome/browser/apps/app_service/intent_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
-#include "chrome/browser/web_applications/link_capturing_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
@@ -35,6 +36,7 @@
 #include "components/sessions/core/session_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_features.h"
 #include "extensions/common/constants.h"
 #include "mojo/public/cpp/bindings/struct_ptr.h"
 #include "storage/browser/file_system/file_system_url.h"
@@ -93,16 +95,17 @@ std::vector<base::FilePath> GetLaunchFilesFromCommandLine(
 }
 
 Browser* CreateBrowserWithNewTabPage(Profile* profile) {
-  Browser::CreateParams create_params(profile, /*user_gesture=*/false);
-  Browser* browser = Browser::Create(create_params);
+  BrowserWindowCreateParams create_params(profile, /*from_user_gesture=*/false);
+  Browser* browser = CreateBrowserWindow(std::move(create_params))
+                         ->GetBrowserForMigrationOnly();
 
-  NavigateParams params(browser, GURL(chrome::kChromeUINewTabURL),
+  NavigateParams params(browser, chrome::ChromeUINewTabURLAsGURL(),
                         ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
   params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
   params.tabstrip_add_types = AddTabTypes::ADD_ACTIVE;
   Navigate(&params);
 
-  browser->window()->Show();
+  browser->GetWindow()->Show();
   return browser;
 }
 
@@ -242,6 +245,7 @@ extensions::AppLaunchSource GetAppLaunchSource(LaunchSource launch_source) {
     case LaunchSource::kFromInstaller:
     case LaunchSource::kFromNavigationCapturing:
     case LaunchSource::kFromWebInstallApi:
+    case LaunchSource::kFromMigration:
       return extensions::AppLaunchSource::kSourceNone;
   }
 }
@@ -302,7 +306,8 @@ AppIdsToLaunchForUrl::~AppIdsToLaunchForUrl() = default;
 AppIdsToLaunchForUrl FindAppIdsToLaunchForUrl(AppServiceProxy* proxy,
                                               const GURL& url) {
   // Navigation Capturing also enables launching of browser-tab apps.
-  bool exclude_browser_tab_apps = !features::IsNavigationCapturingReimplEnabled();
+  bool exclude_browser_tab_apps =
+      !base::FeatureList::IsEnabled(features::kPwaNavigationCapturing);
   AppIdsToLaunchForUrl result;
   result.candidates =
       proxy->GetAppIdsForUrl(url, /*exclude_browsers=*/true, exclude_browser_tab_apps);
@@ -312,7 +317,7 @@ AppIdsToLaunchForUrl FindAppIdsToLaunchForUrl(AppServiceProxy* proxy,
 
   std::optional<std::string> preferred =
       proxy->PreferredAppsList().FindPreferredAppForUrl(url);
-  if (preferred && base::Contains(result.candidates, *preferred)) {
+  if (preferred && std::ranges::contains(result.candidates, *preferred)) {
     result.preferred = std::move(preferred);
   }
 

@@ -87,7 +87,7 @@ export class HistoryToolbarElement extends CrLitElement {
   accessor hasDrawer: boolean = false;
   accessor hasMoreResults: boolean = false;
   accessor querying: boolean = false;
-  accessor queryInfo: HistoryQuery|undefined;
+  accessor queryInfo: HistoryQuery|null = null;
   accessor spinnerActive: boolean = false;
   accessor showMenuPromo: boolean = false;
   protected accessor itemsSelected_: boolean = false;
@@ -112,12 +112,24 @@ export class HistoryToolbarElement extends CrLitElement {
     return this.$.mainToolbar.getSearchField();
   }
 
+  protected onDeleteSelectedItemsClick_() {
+    this.deleteSelectedItems();
+  }
+
   deleteSelectedItems() {
     this.fire('delete-selected');
   }
 
+  protected onOpenSelectedItemsClick_() {
+    this.openSelectedItems();
+  }
+
   openSelectedItems() {
     this.fire('open-selected');
+  }
+
+  protected onClearSelectedItems_() {
+    this.clearSelectedItems();
   }
 
   clearSelectedItems() {
@@ -144,10 +156,6 @@ export class HistoryToolbarElement extends CrLitElement {
     }
   }
 
-  private canShowMenuPromo_(): boolean {
-    return this.showMenuPromo && !loadTimeData.getBoolean('isGuestSession');
-  }
-
   protected onSearchChanged_(event: CustomEvent<string>) {
     this.fire(
         'change-query',
@@ -161,7 +169,9 @@ export class HistoryToolbarElement extends CrLitElement {
   protected computeSearchIconOverride_(): string|undefined {
     if (loadTimeData.getBoolean('enableHistoryEmbeddings') &&
         TABBED_PAGES.includes(this.selectedPage)) {
-      return 'history-embeddings:search';
+      return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+          'history-embeddings:search-spark' :
+          'history-embeddings:search-old';
     }
 
     return undefined;
@@ -188,7 +198,7 @@ export class HistoryToolbarElement extends CrLitElement {
           'historyEmbeddingsAnswersSearchAlternativePrompt4',
         ];
         const randomIndex = Math.floor(Math.random() * possiblePrompts.length);
-        return loadTimeData.getString(possiblePrompts[randomIndex]);
+        return loadTimeData.getString(possiblePrompts[randomIndex]!);
       }
 
       return loadTimeData.getString('historyEmbeddingsSearchPrompt');

@@ -6,6 +6,7 @@
 
 #include <string_view>
 
+#include "ash/constants/chrome_pref_names.h"
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/json/json_reader.h"
@@ -14,7 +15,6 @@
 #include "chrome/browser/about_flags.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/site_isolation/about_flags.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
@@ -101,7 +101,7 @@ bool OwnerFlagsStorage::SetFlags(const std::set<std::string>& flags) {
   // Also write the flags to device settings so they get applied to the Chrome
   // OS login screen. The device setting is read by session_manager and passed
   // to Chrome via a command line flag on startup.
-  base::Value::List feature_flags_list;
+  base::ListValue feature_flags_list;
   for (const auto& flag : flags) {
     feature_flags_list.Append(flag);
   }
@@ -149,6 +149,17 @@ std::string ReadOnlyFlagsStorage::GetStringFlag(
 
 void ReadOnlyFlagsStorage::SetStringFlag(const std::string& internal_entry_name,
                                          const std::string& string_value) {}
+
+base::DictValue ReadOnlyFlagsStorage::GetCustomizedFlags() const {
+  base::DictValue customized_flags;
+  for (const auto& [name, value] : origin_list_flags_) {
+    customized_flags.Set(name, value);
+  }
+  return customized_flags;
+}
+
+void ReadOnlyFlagsStorage::SetCustomizedFlags(
+    const base::DictValue& customized_flags) {}
 
 FeatureFlagsUpdate::FeatureFlagsUpdate(
     const ::flags_ui::FlagsStorage& flags_storage,
@@ -218,7 +229,7 @@ void FeatureFlagsUpdate::ApplyUserPolicyToFlags(PrefService* user_profile_prefs,
   // policy. If it is supposed to be enabled, make sure it can not be disabled
   // using flags-induced command-line switches.
   const PrefService::Preference* site_per_process_pref =
-      user_profile_prefs->FindPreference(::prefs::kSitePerProcess);
+      user_profile_prefs->FindPreference(ash::chrome_prefs::kSitePerProcess);
   if (site_per_process_pref->IsManaged() &&
       site_per_process_pref->GetValue()->GetBool()) {
     flags->erase(::about_flags::SiteIsolationTrialOptOutChoiceEnabled());

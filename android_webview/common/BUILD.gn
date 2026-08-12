@@ -45,6 +45,8 @@ source_set("common") {
     "//components/crash/core/common:crash_key",
     "//components/embedder_support/origin_trials",
     "//components/gwp_asan/common:crash_keys",
+    "//components/heap_profiling/in_process",
+    "//components/heap_profiling/in_process:mojom",
     "//components/safe_browsing/core/common:features",
     "//components/sensitive_content:features",
     "//components/services/heap_profiling/public/cpp",
@@ -61,9 +63,9 @@ source_set("common") {
     "//ui/base",
     "//ui/gfx/geometry",
     "//ui/gfx/ipc/geometry",
-    "//ui/gfx/ipc/skia",
-    "//url",
   ]
+
+  public_deps = [ "//url" ]
 }
 
 mojom("mojom") {

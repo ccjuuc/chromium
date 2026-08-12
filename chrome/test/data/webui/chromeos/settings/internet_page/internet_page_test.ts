@@ -47,6 +47,11 @@ suite('<settings-internet-page>', () => {
     arc: {
       vpn: {
         always_on: {
+          lockdown: {
+            key: 'lockdown',
+            type: chrome.settingsPrivate.PrefType.BOOLEAN,
+            value: false,
+          },
           vpn_package: {
             key: 'vpn_package',
             type: chrome.settingsPrivate.PrefType.STRING,
@@ -951,7 +956,7 @@ suite('<settings-internet-page>', () => {
         'settings-internet-detail-subpage');
     assertTrue(!!detailPage);
     assertTrue(!!detailPage.globalPolicy);
-    assertFalse(!!detailPage.globalPolicy.allowOnlyPolicyCellularNetworks);
+    assertFalse(detailPage.globalPolicy.allowOnlyPolicyCellularNetworks);
 
     // Set global policy should also update the global policy
     mojoApi.setGlobalPolicy({

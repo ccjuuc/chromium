@@ -132,7 +132,7 @@ class PromotionalTabsEnabledPolicyWhatsNewTest
     base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
 
     std::string json;
-    base::Value::Dict prefs;
+    base::DictValue prefs;
     // Set the session startup pref to NewTab. This enables consistent test
     // expectations across platforms - we should always expect to see the NTP.
     // Without this line, on ChromeOS only, the default type is LAST, which
@@ -156,7 +156,7 @@ class PromotionalTabsEnabledPolicyWhatsNewTest
     }
 
     // Also set the version for What's New in the local state.
-    base::Value::Dict local_state;
+    base::DictValue local_state;
     local_state.SetByDottedPath(prefs::kLastWhatsNewVersion,
                                 WhatsNewVersionForPref());
     std::string local_state_string = base::WriteJson(local_state).value_or("");
@@ -171,7 +171,7 @@ class PromotionalTabsEnabledPolicyWhatsNewTest
   }
 };
 
-// This is disabled due to flakiness: https://crbug.com/1362518
+// This is disabled due to flakiness: https://crbug.com/40864308
 #define MAYBE_RunTest DISABLED_RunTest
 IN_PROC_BROWSER_TEST_P(PromotionalTabsEnabledPolicyWhatsNewTest,
                        MAYBE_RunTest) {
@@ -188,8 +188,8 @@ IN_PROC_BROWSER_TEST_P(PromotionalTabsEnabledPolicyWhatsNewTest,
   if (promotions_disabled) {
     // Only the NTP should show.
     EXPECT_EQ(tab_strip->count(), 1);
-    if (url.possibly_invalid_spec() != chrome::kChromeUINewTabURL) {
-      EXPECT_PRED2(search::IsNTPOrRelatedURL, url, browser()->profile());
+    if (url != chrome::ChromeUINewTabURLAsGURL()) {
+      EXPECT_PRED2(search::IsNTPOrRelatedURL, url, browser()->GetProfile());
     }
   } else {
     EXPECT_EQ(tab_strip->count(), 2);
@@ -199,7 +199,7 @@ IN_PROC_BROWSER_TEST_P(PromotionalTabsEnabledPolicyWhatsNewTest,
     // The second tab should be the NTP.
     const auto& url_tab1 =
         tab_strip->GetWebContentsAt(1)->GetLastCommittedURL();
-    EXPECT_EQ(url_tab1.possibly_invalid_spec(), chrome::kChromeUINewTabURL);
+    EXPECT_EQ(url_tab1, chrome::ChromeUINewTabURLAsGURL());
   }
 }
 
@@ -246,8 +246,8 @@ IN_PROC_BROWSER_TEST_P(PromotionalTabsEnabledPolicyWhatsNewInvalidTest,
   // Only the NTP should show. There are no other relevant tabs since
   // What's New has already been shown or promotional tabs are disabled.
   EXPECT_EQ(tab_strip->count(), 1);
-  if (url.possibly_invalid_spec() != chrome::kChromeUINewTabURL) {
-    EXPECT_PRED2(search::IsNTPOrRelatedURL, url, browser()->profile());
+  if (url != chrome::ChromeUINewTabURLAsGURL()) {
+    EXPECT_PRED2(search::IsNTPOrRelatedURL, url, browser()->GetProfile());
   }
 }
 

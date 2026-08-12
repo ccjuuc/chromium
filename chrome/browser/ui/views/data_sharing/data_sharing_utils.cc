@@ -11,7 +11,6 @@
 #include "base/functional/bind.h"
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/token.h"
 #include "chrome/browser/collaboration/collaboration_service_factory.h"
 #include "chrome/browser/data_sharing/data_sharing_service_factory.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
@@ -21,7 +20,6 @@
 #include "components/collaboration/public/collaboration_service.h"
 #include "components/collaboration/public/service_status.h"
 #include "components/data_sharing/public/group_data.h"
-#include "components/saved_tab_groups/public/saved_tab_group_tab.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/saved_tab_groups/public/types.h"
 #include "components/tab_groups/tab_group_id.h"
@@ -81,11 +79,12 @@ GURL CreateJoinUrl(const GURL& url,
   return updated_url;
 }
 
-GURL CreateManageUrl(const GURL& url,
-                     const std::variant<tab_groups::LocalTabGroupID,
-                                        data_sharing::GroupToken>& group_id,
-                     const std::optional<tab_groups::SavedTabGroup> saved_group,
-                     bool is_disabled_for_policy) {
+GURL CreateManageUrl(
+    const GURL& url,
+    const std::variant<tab_groups::LocalTabGroupID, data_sharing::GroupToken>&
+        group_id,
+    const std::optional<tab_groups::SavedTabGroup>& saved_group,
+    bool is_disabled_for_policy) {
   GURL updated_url = url;
   CHECK(saved_group->is_shared_tab_group());
   if (std::holds_alternative<tab_groups::LocalTabGroupID>(group_id)) {
@@ -138,7 +137,7 @@ GURL CreateLeaveUrl(const GURL& url,
 
 GURL CreateDeleteUrl(
     const GURL& url,
-    const std::optional<tab_groups::SavedTabGroup> saved_group) {
+    const std::optional<tab_groups::SavedTabGroup>& saved_group) {
   CHECK(saved_group);
   CHECK(saved_group->collaboration_id());
 
@@ -156,7 +155,7 @@ GURL CreateDeleteUrl(
 
 GURL CreateCloseUrl(
     const GURL& url,
-    const std::optional<tab_groups::SavedTabGroup> saved_group) {
+    const std::optional<tab_groups::SavedTabGroup>& saved_group) {
   CHECK(saved_group);
   CHECK(saved_group->collaboration_id());
 
@@ -182,7 +181,7 @@ std::optional<GURL> data_sharing::GenerateWebUIUrl(RequestInfo request_info,
   }
 
   // Find the saved group for the request.
-  std::optional<tab_groups::SavedTabGroup> saved_group = std::nullopt;
+  std::optional<tab_groups::SavedTabGroup> saved_group;
 
   if (std::holds_alternative<tab_groups::LocalTabGroupID>(request_info.id)) {
     saved_group = tab_group_service->GetGroup(std::get<0>(request_info.id));

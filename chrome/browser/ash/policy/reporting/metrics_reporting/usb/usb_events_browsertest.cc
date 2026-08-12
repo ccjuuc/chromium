@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <memory>
 #include <string>
 
 #include "ash/constants/ash_switches.h"
-#include "base/containers/contains.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/test/scoped_policy_update.h"
@@ -83,8 +83,8 @@ class UsbEventsBrowserTest : public ::policy::DevicePolicyCrosBrowserTest {
   }
 
   bool NoUsbEventsEnqueued(const std::vector<Record>& records) {
-    return !base::Contains(records, Destination::PERIPHERAL_EVENTS,
-                           &Record::destination);
+    return !std::ranges::contains(records, Destination::PERIPHERAL_EVENTS,
+                                  &Record::destination);
   }
 
   void LoginAffiliatedUser() {
@@ -158,9 +158,8 @@ IN_PROC_BROWSER_TEST_F(UsbEventsBrowserTest,
   LoginAffiliatedUser();
 
   // Setup fake telemetry to be collected
-  auto usb_telemetry = CreateUsbTelemetry();
   cros_healthd::FakeCrosHealthd::Get()->SetProbeTelemetryInfoResponseForTesting(
-      usb_telemetry);
+      CreateUsbTelemetry());
 
   // Any USB event should trigger event driven telemetry collection
   EmitUsbAddEventForTesting();
@@ -232,9 +231,8 @@ IN_PROC_BROWSER_TEST_F(
   SetUsbPolicy(true);
 
   // Setup fake telemetry.
-  auto usb_telemetry = CreateUsbTelemetry();
   cros_healthd::FakeCrosHealthd::Get()->SetProbeTelemetryInfoResponseForTesting(
-      usb_telemetry);
+      CreateUsbTelemetry());
 
   // This triggers USB telemetry collection, a.k.a USB status updates
   LoginAffiliatedUser();
@@ -287,9 +285,8 @@ IN_PROC_BROWSER_TEST_F(
       Destination::PERIPHERAL_EVENTS);
 
   // Setup fake telemetry.
-  auto usb_telemetry = CreateUsbTelemetry();
   cros_healthd::FakeCrosHealthd::Get()->SetProbeTelemetryInfoResponseForTesting(
-      usb_telemetry);
+      CreateUsbTelemetry());
 
   SetUsbPolicy(false);
 
@@ -309,9 +306,8 @@ IN_PROC_BROWSER_TEST_F(
       Destination::PERIPHERAL_EVENTS);
 
   // Setup fake telemetry.
-  auto usb_telemetry = CreateUsbTelemetry();
   cros_healthd::FakeCrosHealthd::Get()->SetProbeTelemetryInfoResponseForTesting(
-      usb_telemetry);
+      CreateUsbTelemetry());
 
   SetUsbPolicy(false);
 

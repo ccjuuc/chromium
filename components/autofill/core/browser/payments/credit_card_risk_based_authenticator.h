@@ -6,8 +6,15 @@
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_CREDIT_CARD_RISK_BASED_AUTHENTICATOR_H_
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
+#include "base/memory/raw_ref.h"
+#include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
+#include "base/values.h"
 #include "components/autofill/core/browser/payments/autofill_error_dialog_context.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/payments_request_details.h"
@@ -55,7 +62,7 @@ class CreditCardRiskBasedAuthenticator {
       return *this;
     }
     RiskBasedAuthenticationResponse& with_fido_request_options(
-        base::Value::Dict v) {
+        base::DictValue v) {
       fido_request_options = std::move(v);
       return *this;
     }
@@ -81,7 +88,7 @@ class CreditCardRiskBasedAuthenticator {
     // The items below will be set when the server response was successful and
     // the card's real pan was not returned from the server side.
     // FIDO request options will be present only when FIDO is available.
-    base::Value::Dict fido_request_options;
+    base::DictValue fido_request_options;
     // Stores the latest version of the context token, passed between Payments
     // calls and unmodified by Chrome.
     std::string context_token;

@@ -77,8 +77,21 @@ GraphImpl* PerformanceManagerImpl::GetGraphImpl() {
 }
 
 // static
-std::unique_ptr<PerformanceManagerImpl> PerformanceManagerImpl::Create() {
-  return base::WrapUnique(new PerformanceManagerImpl());
+std::unique_ptr<PerformanceManagerImpl> PerformanceManagerImpl::Create(
+    ProcessPriorityPolicySettings process_priority_policy_settings) {
+  return base::WrapUnique(
+      new PerformanceManagerImpl(process_priority_policy_settings));
+}
+
+// static
+ProcessPriorityPolicySettings
+PerformanceManagerImpl::GetProcessPriorityPolicySettings() {
+  // If the singleton is uninitialized (e.g. in unit tests that don't spin up a
+  // full PerformanceManager environment), fall back to default policy settings.
+  if (!g_performance_manager) {
+    return {};
+  }
+  return g_performance_manager->process_priority_policy_settings_;
 }
 
 // static
@@ -95,6 +108,7 @@ std::unique_ptr<FrameNodeImpl> PerformanceManagerImpl::CreateFrameNode(
     FrameNodeImpl* outer_document_for_fenced_frame,
     int render_frame_id,
     const blink::LocalFrameToken& frame_token,
+    const perfetto::Track& tracing_track,
     content::BrowsingInstanceId browsing_instance_id,
     content::SiteInstanceGroupId site_instance_group_id,
     bool is_current,
@@ -102,19 +116,23 @@ std::unique_ptr<FrameNodeImpl> PerformanceManagerImpl::CreateFrameNode(
   return CreateNodeImpl<FrameNodeImpl>(
       process_node, page_node, parent_frame_node,
       outer_document_for_fenced_frame, render_frame_id, frame_token,
-      browsing_instance_id, site_instance_group_id, is_current, is_active);
+      tracing_track, browsing_instance_id, site_instance_group_id, is_current,
+      is_active);
 }
 
 // static
 std::unique_ptr<PageNodeImpl> PerformanceManagerImpl::CreatePageNode(
     base::WeakPtr<content::WebContents> web_contents,
-    const std::string& browser_context_id,
+    const content::WebContents::UniqueToken& web_contents_token,
+    const base::UnguessableToken& browser_context_id,
     const GURL& visible_url,
     PagePropertyFlags initial_property_flags,
-    base::TimeTicks visibility_change_time) {
-  return CreateNodeImpl<PageNodeImpl>(
-      std::move(web_contents), browser_context_id, visible_url,
-      initial_property_flags, visibility_change_time);
+    base::TimeTicks visibility_change_time,
+    const perfetto::Track& tracing_track) {
+  return CreateNodeImpl<PageNodeImpl>(std::move(web_contents),
+                                      web_contents_token, browser_context_id,
+                                      visible_url, initial_property_flags,
+                                      visibility_change_time, tracing_track);
 }
 
 // static
@@ -126,7 +144,7 @@ std::unique_ptr<ProcessNodeImpl> PerformanceManagerImpl::CreateProcessNode(
 // static
 std::unique_ptr<ProcessNodeImpl> PerformanceManagerImpl::CreateProcessNode(
     RenderProcessHostProxy render_process_host_proxy,
-    base::TaskPriority priority) {
+    base::Process::Priority priority) {
   return CreateNodeImpl<ProcessNodeImpl>(std::move(render_process_host_proxy),
                                          priority);
 }
@@ -141,7 +159,7 @@ std::unique_ptr<ProcessNodeImpl> PerformanceManagerImpl::CreateProcessNode(
 
 // static
 std::unique_ptr<WorkerNodeImpl> PerformanceManagerImpl::CreateWorkerNode(
-    const std::string& browser_context_id,
+    const base::UnguessableToken& browser_context_id,
     WorkerNode::WorkerType worker_type,
     ProcessNodeImpl* process_node,
     const blink::WorkerToken& worker_token,
@@ -205,7 +223,9 @@ void PerformanceManagerImpl::BatchDeleteNodes(
   // When |nodes| goes out of scope, all nodes are deleted.
 }
 
-PerformanceManagerImpl::PerformanceManagerImpl() {
+PerformanceManagerImpl::PerformanceManagerImpl(
+    ProcessPriorityPolicySettings process_priority_policy_settings)
+    : process_priority_policy_settings_(process_priority_policy_settings) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
   CHECK(!g_performance_manager);
   g_performance_manager = this;

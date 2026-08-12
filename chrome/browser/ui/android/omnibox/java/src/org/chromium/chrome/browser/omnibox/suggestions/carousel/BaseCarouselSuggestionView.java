@@ -15,6 +15,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import org.chromium.build.annotations.CheckDiscard;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.omnibox.suggestions.ActivatableSuggestionView;
 import org.chromium.chrome.browser.omnibox.suggestions.RecyclerViewSelectionController;
 import org.chromium.chrome.browser.omnibox.suggestions.SelectionController;
 import org.chromium.chrome.browser.omnibox.suggestions.base.SpacingRecyclerViewItemDecoration;
@@ -31,8 +32,12 @@ public class BaseCarouselSuggestionView extends RecyclerView {
      * Constructs a new carousel suggestion view.
      *
      * @param context Current context.
+     * @param adapter Adapter to use for the RecyclerView which can be null if async view inflation
+     *     is enabled b/c the adapter creation will be delayed to when control is returned to the UI
+     *     thread during binding.
      */
-    public BaseCarouselSuggestionView(Context context, SimpleRecyclerViewAdapter adapter) {
+    public BaseCarouselSuggestionView(
+            Context context, @Nullable SimpleRecyclerViewAdapter adapter) {
         super(context);
 
         setLayoutParams(new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
@@ -48,7 +53,9 @@ public class BaseCarouselSuggestionView extends RecyclerView {
                         layoutManager, SelectionController.Mode.SATURATING_WITH_SENTINEL);
         addOnChildAttachStateChangeListener(mSelectionController);
 
-        setAdapter(adapter);
+        if (adapter != null) {
+            setAdapter(adapter);
+        }
     }
 
     @Override
@@ -59,7 +66,12 @@ public class BaseCarouselSuggestionView extends RecyclerView {
             return mSelectionController.selectNextItem();
         } else if (KeyNavigationUtil.isEnter(event)) {
             var tile = mSelectionController.getSelectedView();
-            if (tile != null) return tile.performClick();
+            if (tile != null) {
+                if (tile instanceof ActivatableSuggestionView) {
+                    return ((ActivatableSuggestionView) tile).activate(event.getMetaState());
+                }
+                return tile.performClick();
+            }
         }
         return superOnKeyDown(keyCode, event);
     }

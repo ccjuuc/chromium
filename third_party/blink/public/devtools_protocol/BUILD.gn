@@ -6,6 +6,7 @@ _protocol_out_dir = "$root_gen_dir/third_party/blink/public/devtools_protocol"
 
 domains = [
   "domains/Accessibility.pdl",
+  "domains/Ads.pdl",
   "domains/Animation.pdl",
   "domains/Audits.pdl",
   "domains/Autofill.pdl",
@@ -15,12 +16,14 @@ domains = [
   "domains/CSS.pdl",
   "domains/CacheStorage.pdl",
   "domains/Cast.pdl",
+  "domains/CrashReportContext.pdl",
   "domains/DOM.pdl",
   "domains/DOMDebugger.pdl",
   "domains/DOMSnapshot.pdl",
   "domains/DOMStorage.pdl",
   "domains/DeviceAccess.pdl",
   "domains/DeviceOrientation.pdl",
+  "domains/DigitalCredentials.pdl",
   "domains/Emulation.pdl",
   "domains/EventBreakpoints.pdl",
   "domains/Extensions.pdl",
@@ -45,6 +48,7 @@ domains = [
   "domains/Preload.pdl",
   "domains/Security.pdl",
   "domains/ServiceWorker.pdl",
+  "domains/SmartCardEmulation.pdl",
   "domains/Storage.pdl",
   "domains/SystemInfo.pdl",
   "domains/Target.pdl",
@@ -52,6 +56,7 @@ domains = [
   "domains/Tracing.pdl",
   "domains/WebAudio.pdl",
   "domains/WebAuthn.pdl",
+  "domains/WebMCP.pdl",
 ]
 
 action("protocol_compatibility_check") {
@@ -78,6 +83,7 @@ action("protocol_version") {
   script = _inspector_protocol_dir + "/concatenate_protocols.py"
 
   inputs = [
+             "$_inspector_protocol_dir/pdl.py",
              "browser_protocol.pdl",
              v8_inspector_js_protocol,
            ] + domains

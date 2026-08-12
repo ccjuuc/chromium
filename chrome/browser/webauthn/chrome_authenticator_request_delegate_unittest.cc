@@ -37,6 +37,11 @@
 #include "chrome/browser/webauthn/webauthn_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
+#include "components/signin/public/base/signin_buildflags.h"
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+#include "chrome/browser/signin/dice_tab_helper.h"
+#include "chrome/browser/ui/signin/signin_qrcode_model.h"
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/consent_level.h"
@@ -44,7 +49,7 @@
 #include "components/sync/base/user_selectable_type.h"
 #include "components/sync/protocol/webauthn_credential_specifics.pb.h"
 #include "components/sync/test/test_sync_service.h"
-#include "components/webauthn/core/browser/immediate_request_rate_limiter.h"
+#include "components/webauthn/content/browser/immediate_request_rate_limiter.h"
 #include "components/webauthn/core/browser/passkey_model.h"
 #include "components/webauthn/core/browser/test_passkey_model.h"
 #include "content/public/browser/authenticator_request_client_delegate.h"
@@ -55,7 +60,6 @@
 #include "device/fido/discoverable_credential_metadata.h"
 #include "device/fido/fido_discovery_factory.h"
 #include "device/fido/fido_request_handler_base.h"
-#include "device/fido/public/cable_discovery_data.h"
 #include "device/fido/public/features.h"
 #include "device/fido/public/fido_constants.h"
 #include "device/fido/public/fido_types.h"
@@ -103,10 +107,6 @@ class Observer : public testing::NiceMock<
               UIShown,
               (ChromeAuthenticatorRequestDelegate * delegate),
               (override));
-  MOCK_METHOD(void,
-              CableV2ExtensionSeen,
-              (base::span<const uint8_t> server_link_data),
-              (override));
 };
 
 class MockPasswordCredentialUIController
@@ -128,14 +128,11 @@ class MockCableDiscoveryFactory : public device::FidoDiscoveryFactory {
  public:
   void set_cable_data(
       device::FidoRequestType request_type,
-      std::vector<device::CableDiscoveryData> data,
       const std::optional<std::array<uint8_t, device::cablev2::kQRKeySize>>&
           qr_generator_key) override {
-    cable_data = std::move(data);
     qr_key = qr_generator_key;
   }
 
-  std::vector<device::CableDiscoveryData> cable_data;
   std::optional<std::array<uint8_t, device::cablev2::kQRKeySize>> qr_key;
 };
 
@@ -201,57 +198,19 @@ class TestAuthenticatorModelObserver final
 };
 
 TEST_F(ChromeAuthenticatorRequestDelegateTest, CableConfiguration) {
-  const std::array<uint8_t, 16> eid = {1, 2, 3, 4};
-  const std::array<uint8_t, 32> prekey = {5, 6, 7, 8};
-  const device::CableDiscoveryData v1_extension(
-      device::CableDiscoveryData::Version::V1, eid, eid, prekey);
-
-  device::CableDiscoveryData v2_extension;
-  v2_extension.version = device::CableDiscoveryData::Version::V2;
-  v2_extension.v2.emplace(std::vector<uint8_t>(prekey.begin(), prekey.end()),
-                          std::vector<uint8_t>());
-
   enum class Result {
     kNone,
-    kV1,
-    kServerLink,
     k3rdParty,
   };
 
-#if BUILDFLAG(IS_LINUX)
-  // On Linux, some configurations aren't supported because of bluez
-  // limitations. This macro maps the expected result in that case.
-#define NONE_ON_LINUX(r) (Result::kNone)
-#else
-#define NONE_ON_LINUX(r) (r)
-#endif
-
   const struct {
     const char* origin;
-    std::vector<device::CableDiscoveryData> extensions;
     device::FidoRequestType request_type;
     std::optional<device::ResidentKeyRequirement> resident_key_requirement;
     Result expected_result;
   } kTests[] = {
       {
           "https://example.com",
-          {},
-          device::FidoRequestType::kGetAssertion,
-          std::nullopt,
-          Result::k3rdParty,
-      },
-      {
-          // Extensions should be ignored on a 3rd-party site.
-          "https://example.com",
-          {v1_extension},
-          device::FidoRequestType::kGetAssertion,
-          std::nullopt,
-          Result::k3rdParty,
-      },
-      {
-          // Extensions should be ignored on a 3rd-party site.
-          "https://example.com",
-          {v2_extension},
           device::FidoRequestType::kGetAssertion,
           std::nullopt,
           Result::k3rdParty,
@@ -260,23 +219,20 @@ TEST_F(ChromeAuthenticatorRequestDelegateTest, CableConfiguration) {
           // a.g.c should still be able to get 3rd-party caBLE
           // if it doesn't send an extension in an assertion request.
           "https://accounts.google.com",
-          {},
           device::FidoRequestType::kGetAssertion,
           std::nullopt,
           Result::k3rdParty,
       },
       {
-          // ... but not for non-discoverable registration.
+          // ... for non-discoverable registration.
           "https://accounts.google.com",
-          {},
           device::FidoRequestType::kMakeCredential,
           device::ResidentKeyRequirement::kDiscouraged,
-          Result::kNone,
+          Result::k3rdParty,
       },
       {
-          // ... but yes for rk=preferred
+          // ... for rk=preferred
           "https://accounts.google.com",
-          {},
           device::FidoRequestType::kMakeCredential,
           device::ResidentKeyRequirement::kPreferred,
           Result::k3rdParty,
@@ -284,24 +240,9 @@ TEST_F(ChromeAuthenticatorRequestDelegateTest, CableConfiguration) {
       {
           // ... or rk=required.
           "https://accounts.google.com",
-          {},
           device::FidoRequestType::kMakeCredential,
           device::ResidentKeyRequirement::kRequired,
           Result::k3rdParty,
-      },
-      {
-          "https://accounts.google.com",
-          {v1_extension},
-          device::FidoRequestType::kGetAssertion,
-          std::nullopt,
-          NONE_ON_LINUX(Result::kV1),
-      },
-      {
-          "https://accounts.google.com",
-          {v2_extension},
-          device::FidoRequestType::kGetAssertion,
-          std::nullopt,
-          Result::kServerLink,
       },
   };
 
@@ -319,36 +260,18 @@ TEST_F(ChromeAuthenticatorRequestDelegateTest, CableConfiguration) {
             kWebAuthentication,
         test.request_type, test.resident_key_requirement,
         device::UserVerificationRequirement::kRequired,
-        /*user_name=*/std::nullopt, test.extensions,
+        /*cmtg_key_requested=*/false,
+        /*user_name=*/std::nullopt,
         /*is_enclave_authenticator_available=*/false, &discovery_factory);
 
     switch (test.expected_result) {
       case Result::kNone:
         EXPECT_FALSE(discovery_factory.qr_key.has_value());
-        EXPECT_TRUE(discovery_factory.cable_data.empty());
-        break;
-
-      case Result::kV1:
-        EXPECT_FALSE(discovery_factory.qr_key.has_value());
-        EXPECT_FALSE(discovery_factory.cable_data.empty());
-        EXPECT_EQ(delegate.dialog_model()->cable_ui_type,
-                  AuthenticatorRequestDialogModel::CableUIType::CABLE_V1);
-        break;
-
-      case Result::kServerLink:
-        EXPECT_TRUE(discovery_factory.qr_key.has_value());
-        EXPECT_FALSE(discovery_factory.cable_data.empty());
-        EXPECT_EQ(
-            delegate.dialog_model()->cable_ui_type,
-            AuthenticatorRequestDialogModel::CableUIType::CABLE_V2_SERVER_LINK);
         break;
 
       case Result::k3rdParty:
         EXPECT_TRUE(discovery_factory.qr_key.has_value());
-        EXPECT_TRUE(discovery_factory.cable_data.empty());
-        EXPECT_EQ(
-            delegate.dialog_model()->cable_ui_type,
-            AuthenticatorRequestDialogModel::CableUIType::CABLE_V2_2ND_FACTOR);
+        EXPECT_TRUE(delegate.dialog_model()->cable_qr_string.has_value());
         break;
     }
   }
@@ -371,7 +294,8 @@ TEST_F(ChromeAuthenticatorRequestDelegateTest, NoExtraDiscoveriesWithoutUI) {
         device::FidoRequestType::kMakeCredential,
         device::ResidentKeyRequirement::kPreferred,
         device::UserVerificationRequirement::kRequired,
-        /*user_name=*/std::nullopt, {},
+        /*cmtg_key_requested=*/false,
+        /*user_name=*/std::nullopt,
         /*is_enclave_authenticator_available=*/false, &discovery_factory);
 
     EXPECT_EQ(discovery_factory.qr_key.has_value(), !disable_ui);
@@ -730,7 +654,8 @@ TEST_P(ChromeAuthenticatorRequestDelegateTestWithPassword, DiscoverPasswords) {
                                 device::FidoRequestType::kGetAssertion,
                                 device::ResidentKeyRequirement::kPreferred,
                                 device::UserVerificationRequirement::kRequired,
-                                /*user_name=*/std::nullopt, {},
+                                /*cmtg_key_requested=*/false,
+                                /*user_name=*/std::nullopt,
                                 /*is_enclave_authenticator_available=*/false,
                                 &discovery_factory);
   EXPECT_EQ(password_fetcher->fetch_passwords_called(), enable_password);
@@ -773,7 +698,8 @@ TEST_F(ChromeAuthenticatorRequestDelegateTest,
                                 device::FidoRequestType::kGetAssertion,
                                 device::ResidentKeyRequirement::kPreferred,
                                 device::UserVerificationRequirement::kRequired,
-                                /*user_name=*/std::nullopt, {},
+                                /*cmtg_key_requested=*/false,
+                                /*user_name=*/std::nullopt,
                                 /*is_enclave_authenticator_available=*/false,
                                 &discovery_factory);
   TransportAvailabilityInfo transports_info;
@@ -815,7 +741,8 @@ TEST_F(ChromeAuthenticatorRequestDelegateTest,
                                 device::FidoRequestType::kGetAssertion,
                                 device::ResidentKeyRequirement::kPreferred,
                                 device::UserVerificationRequirement::kRequired,
-                                /*user_name=*/std::nullopt, {},
+                                /*cmtg_key_requested=*/false,
+                                /*user_name=*/std::nullopt,
                                 /*is_enclave_authenticator_available=*/false,
                                 &discovery_factory);
   TransportAvailabilityInfo transports_info;
@@ -874,7 +801,8 @@ TEST_F(ChromeAuthenticatorRequestDelegateTest,
                                 device::FidoRequestType::kGetAssertion,
                                 device::ResidentKeyRequirement::kPreferred,
                                 device::UserVerificationRequirement::kRequired,
-                                /*user_name=*/std::nullopt, {},
+                                /*cmtg_key_requested=*/false,
+                                /*user_name=*/std::nullopt,
                                 /*is_enclave_authenticator_available=*/false,
                                 &discovery_factory);
 
@@ -894,11 +822,16 @@ TEST_F(ChromeAuthenticatorRequestDelegateTest, ImmediateMediationRateLimit) {
   constexpr base::TimeDelta kWindowSize = base::Minutes(1);
   constexpr int kMaxRequestsPerWindow = 2;
 
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeatureWithParameters(
-      device::kWebAuthnImmediateRequestRateLimit,
-      {{"max_requests", base::NumberToString(kMaxRequestsPerWindow)},
-       {"window_seconds", "60"}});
+  ImmediateRequestRateLimiterFactory::GetInstance()->SetTestingFactoryAndUse(
+      profile(), base::BindRepeating([](content::BrowserContext* context)
+                                         -> std::unique_ptr<KeyedService> {
+        webauthn::ImmediateRequestRateLimiter::Limits limits;
+        limits.max_requests_long = 2;  // kMaxRequestsPerWindow
+        limits.window_seconds_long = 60;
+        limits.max_requests_short = 2;
+        limits.window_seconds_short = 5;
+        return std::make_unique<webauthn::ImmediateRequestRateLimiter>(limits);
+      }));
   // Navigate to commit the origin.
   content::WebContentsTester::For(web_contents())
       ->NavigateAndCommit(GURL(kOrigin));
@@ -962,6 +895,60 @@ TEST_F(ChromeAuthenticatorRequestDelegateTest, ImmediateMediationRateLimit) {
         &mock_immediate_not_found_callback);
   }
 }
+
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+TEST_F(ChromeAuthenticatorRequestDelegateTest, SigninQRCodeModelPopulation) {
+  // 1. Initialize the sign-in flow on the DiceTabHelper of the WebContents.
+  // This makes `IsChromeSigninPage(main_rfh())` return `true`.
+  DiceTabHelper::CreateForWebContents(web_contents());
+  DiceTabHelper::FromWebContents(web_contents())
+      ->InitializeSigninFlow(
+          GURL(kOrigin), signin_metrics::AccessPoint::kSettings,
+          signin_metrics::Reason::kSigninPrimaryAccount,
+          signin_metrics::PromoAction::PROMO_ACTION_NO_SIGNIN_PROMO, GURL(),
+          /*record_signin_started_metrics=*/false, base::DoNothing(),
+          base::DoNothing(), base::DoNothing(), base::DoNothing());
+
+  // 2. Instantiate the delegate.
+  MockCableDiscoveryFactory discovery_factory;
+  std::unique_ptr<ChromeAuthenticatorRequestDelegate> delegate =
+      std::make_unique<ChromeAuthenticatorRequestDelegate>(main_rfh());
+  delegate->SetRelyingPartyId(kRpId);
+
+  // Verify that the model is initially empty/does not exist.
+  EXPECT_FALSE(SigninQRCodeModel::FromWebContents(web_contents()));
+
+  // 3. Configure discoveries, which triggers caBLEv2 QR code generation and
+  // populates the SigninQRCodeModel.
+  delegate->ConfigureDiscoveries(url::Origin::Create(GURL(kOrigin)), kOrigin,
+                                 content::AuthenticatorRequestClientDelegate::
+                                     RequestSource::kWebAuthentication,
+                                 device::FidoRequestType::kGetAssertion,
+                                 device::ResidentKeyRequirement::kRequired,
+                                 device::UserVerificationRequirement::kRequired,
+                                 /*cmtg_key_requested=*/false,
+                                 /*user_name=*/std::nullopt,
+                                 /*is_enclave_authenticator_available=*/false,
+                                 &discovery_factory);
+
+  // 4. Verify that the model has been successfully created and populated!
+  SigninQRCodeModel* model = SigninQRCodeModel::FromWebContents(web_contents());
+  ASSERT_TRUE(model);
+  EXPECT_TRUE(model->qr_code_string().has_value());
+
+  // Verify that the QR code string in the model matches the one in the dialog
+  // model.
+  std::optional<std::string> qr_string =
+      delegate->dialog_model()->cable_qr_string;
+  ASSERT_TRUE(qr_string.has_value());
+  EXPECT_EQ(model->qr_code_string(), *qr_string);
+
+  // 5. Destroy the delegate and verify that the model's QR code is successfully
+  // reset/cleared!
+  delegate.reset();
+  EXPECT_FALSE(model->qr_code_string().has_value());
+}
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
 }  // namespace
 

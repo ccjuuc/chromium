@@ -17,8 +17,9 @@ import androidx.preference.Preference;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -36,7 +37,6 @@ import org.chromium.components.browser_ui.settings.TextMessagePreference;
 import org.chromium.components.prefs.PrefChangeRegistrar;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.signin.base.CoreAccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.ui.text.ChromeClickableSpan;
 import org.chromium.ui.text.SpanApplier;
@@ -52,7 +52,8 @@ public class PriceNotificationSettingsFragment extends ChromeBaseSettingsFragmen
     private PrefService mPrefService;
     private @Nullable TextMessagePreference mMobileNotificationsText;
     private ChromeSwitchPreference mEmailNotificationsSwitch;
-    private final ObservableSupplierImpl<String> mPageTitle = new ObservableSupplierImpl<>();
+    private final SettableMonotonicObservableSupplier<String> mPageTitle =
+            ObservableSuppliers.createMonotonic();
 
     @Override
     @Initializer
@@ -71,7 +72,7 @@ public class PriceNotificationSettingsFragment extends ChromeBaseSettingsFragmen
         mEmailNotificationsSwitch.setOnPreferenceChangeListener(this::onPreferenceChange);
         CoreAccountInfo info =
                 assumeNonNull(IdentityServicesProvider.get().getIdentityManager(getProfile()))
-                        .getPrimaryAccountInfo(ConsentLevel.SIGNIN);
+                        .getPrimaryAccountInfo();
         if (info != null) {
             String email = info.getEmail();
             mEmailNotificationsSwitch.setSummary(
@@ -86,7 +87,7 @@ public class PriceNotificationSettingsFragment extends ChromeBaseSettingsFragmen
     }
 
     @Override
-    public ObservableSupplier<String> getPageTitle() {
+    public MonotonicObservableSupplier<String> getPageTitle() {
         return mPageTitle;
     }
 
@@ -205,9 +206,8 @@ public class PriceNotificationSettingsFragment extends ChromeBaseSettingsFragmen
         return AnimationType.PROPERTY;
     }
 
-    // TODO(crbug.com/444470792): Determine what pieces of logic are dynamic and need handling.
     public static final ChromeBaseSearchIndexProvider SEARCH_INDEX_DATA_PROVIDER =
             new ChromeBaseSearchIndexProvider(
                     PriceNotificationSettingsFragment.class.getName(),
-                    R.xml.price_notification_preferences);
+                    ChromeBaseSearchIndexProvider.INDEX_OPT_OUT);
 }

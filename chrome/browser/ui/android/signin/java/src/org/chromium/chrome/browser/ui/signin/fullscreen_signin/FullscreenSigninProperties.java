@@ -23,10 +23,8 @@ import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
 class FullscreenSigninProperties {
     static final ReadableObjectPropertyKey<OnClickListener> ON_SELECTED_ACCOUNT_CLICKED =
             new ReadableObjectPropertyKey<>("on_selected_account_clicked");
-    static final WritableObjectPropertyKey<DisplayableProfileData> SELECTED_ACCOUNT_DATA =
+    static final WritableObjectPropertyKey<DisplayableProfileData> BOTTOM_GROUP_ACCOUNT_DATA =
             new WritableObjectPropertyKey<>("selected_account_data");
-    static final WritableBooleanPropertyKey IS_SELECTED_ACCOUNT_SUPERVISED =
-            new WritableBooleanPropertyKey("is_selected_account_supervised");
 
     // PropertyKey for the button |Continue as ...|
     static final ReadableObjectPropertyKey<OnClickListener> ON_CONTINUE_AS_CLICKED =
@@ -52,6 +50,15 @@ class FullscreenSigninProperties {
     static final WritableBooleanPropertyKey SHOW_ENTERPRISE_MANAGEMENT_NOTICE =
             new WritableBooleanPropertyKey("show_enterprise_management_notice");
 
+    static final WritableBooleanPropertyKey SHOW_ACCOUNT_SUPERVISION_NOTICE =
+            new WritableBooleanPropertyKey("is_selected_account_supervised");
+
+    static final WritableBooleanPropertyKey SHOULD_HIDE_DISMISS_BUTTON =
+            new WritableBooleanPropertyKey("should_hide_dismiss_button");
+    static final WritableBooleanPropertyKey ENABLE_ACCOUNT_SELECTION =
+            new WritableBooleanPropertyKey("enable_account_selection");
+
+    // TODO(crbug.com/489365330): Consider replacing this property with view-scoped logic.
     static final WritableBooleanPropertyKey IS_SIGNIN_SUPPORTED =
             new WritableBooleanPropertyKey("is_signin_supported");
 
@@ -91,14 +98,16 @@ class FullscreenSigninProperties {
     static final PropertyKey[] ALL_KEYS =
             new PropertyKey[] {
                 ON_SELECTED_ACCOUNT_CLICKED,
-                SELECTED_ACCOUNT_DATA,
-                IS_SELECTED_ACCOUNT_SUPERVISED,
+                BOTTOM_GROUP_ACCOUNT_DATA,
+                SHOW_ACCOUNT_SUPERVISION_NOTICE,
                 ON_CONTINUE_AS_CLICKED,
                 ON_DISMISS_CLICKED,
                 SHOW_SIGNIN_PROGRESS_SPINNER_WITH_TEXT,
                 SHOW_SIGNIN_PROGRESS_SPINNER,
                 SHOW_INITIAL_LOAD_PROGRESS_SPINNER,
                 SHOW_ENTERPRISE_MANAGEMENT_NOTICE,
+                SHOULD_HIDE_DISMISS_BUTTON,
+                ENABLE_ACCOUNT_SELECTION,
                 IS_SIGNIN_SUPPORTED,
                 LOGO_DRAWABLE_ID,
                 PROFILE_PICTURE,
@@ -124,12 +133,14 @@ class FullscreenSigninProperties {
             boolean showInitialLoadProgressSpinner) {
         return new PropertyModel.Builder(ALL_KEYS)
                 .with(ON_SELECTED_ACCOUNT_CLICKED, v -> onSelectedAccountClicked.run())
-                .with(SELECTED_ACCOUNT_DATA, null)
-                .with(IS_SELECTED_ACCOUNT_SUPERVISED, false)
+                .with(BOTTOM_GROUP_ACCOUNT_DATA, null)
+                .with(SHOW_ACCOUNT_SUPERVISION_NOTICE, false)
                 .with(ON_CONTINUE_AS_CLICKED, v -> onContinueAsClicked.run())
                 .with(ON_DISMISS_CLICKED, v -> onDismissClicked.run())
                 .with(SHOW_INITIAL_LOAD_PROGRESS_SPINNER, showInitialLoadProgressSpinner)
                 .with(SHOW_ENTERPRISE_MANAGEMENT_NOTICE, false)
+                .with(SHOULD_HIDE_DISMISS_BUTTON, false)
+                .with(ENABLE_ACCOUNT_SELECTION, false)
                 .with(IS_SIGNIN_SUPPORTED, isSigninSupported)
                 .with(LOGO_DRAWABLE_ID, logoDrawableId)
                 .with(TITLE_STRING, titleString)

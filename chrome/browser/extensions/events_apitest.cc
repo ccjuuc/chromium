@@ -98,8 +98,11 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, EventsAreUnregistered) {
       event_router->ExtensionHasEventListener(id, "webNavigation.onCompleted"));
 }
 
+// The following test is executed as Chrome App, which is only supported on
+// ChromeOS.
+#if BUILDFLAG(IS_CHROMEOS)
 // Test that listeners for webview-related events are not stored (even for lazy
-// contexts). See crbug.com/736381.
+// contexts). See crbug.com/41327043.
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, WebViewEventRegistration) {
   ASSERT_TRUE(RunExtensionTest("events/webview_events",
                                {.launch_as_platform_app = true}))
@@ -132,10 +135,11 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, WebViewEventRegistration) {
   EXPECT_TRUE(
       event_router->HasLazyEventListenerForTesting("app.runtime.onLaunched"));
 }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // Tests that registering a listener for an event that requires a permission and
 // then removing that permission using the permissions API does not lead to a
-// crash. Regression test for crbug.com/1402642.
+// crash. Regression test for crbug.com/40884929.
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, EventAfterPermissionRemoved) {
   // Add an extension which registers an event on a permission which it has
   // declared as optional.
@@ -279,8 +283,14 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, EventAfterPermissionRemoved) {
 }
 
 // Tests that events broadcast right after a profile has started to be destroyed
-// do not cause a crash. Regression test for crbug.com/1335837.
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DispatchEventDuringShutdown) {
+// do not cause a crash. Regression test for crbug.com/40847328.
+// TODO(crbug.com/505759503): Enable the test.
+#if BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_DispatchEventDuringShutdown DISABLED_DispatchEventDuringShutdown
+#else
+#define MAYBE_DispatchEventDuringShutdown DispatchEventDuringShutdown
+#endif
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_DispatchEventDuringShutdown) {
   // Minimize background page expiration time for testing purposes.
   ProcessManager::SetEventPageIdleTimeForTesting(1);
   ProcessManager::SetEventPageSuspendingTimeForTesting(1);
@@ -322,7 +332,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DispatchEventDuringShutdown) {
   // Broadcast an event to the event router. Since a shutdown is occurring, it
   // should be ignored and cause no problems.
   event_router->BroadcastEvent(std::make_unique<Event>(
-      events::FOR_TEST, "tabs.onActivated", base::Value::List()));
+      events::FOR_TEST, "tabs.onActivated", base::ListValue()));
 }
 
 class EventsApiTest : public ExtensionApiTest {
@@ -435,7 +445,7 @@ IN_PROC_BROWSER_TEST_F(EventsApiTest,
 }
 
 // This test is OK on Windows, but times out on other platforms.
-// https://crbug.com/833854
+// https://crbug.com/41383852
 #if BUILDFLAG(IS_WIN)
 #define MAYBE_NewlyIntroducedListener NewlyIntroducedListener
 #else
@@ -1022,6 +1032,106 @@ IN_PROC_BROWSER_TEST_F(ServiceWorkerEventAckBrowserTest,
   // Confirm we no longer have the `EventInfo` for the unacked event.
   EXPECT_FALSE(event_router->event_ack_data()->HasUnackedEventForTesting(
       /*event_id=*/1));
+}
+
+// Tests that an unfiltered, top-level listener will receive events that are
+// essentially dispatched to a filtered event listener.
+IN_PROC_BROWSER_TEST_F(
+    EventsApiTest,
+    UnfilteredListenersReceiveEventsForRegisteredFilteredListeners) {
+  static constexpr char kManifest[] =
+      R"({
+           "name": "Test",
+           "manifest_version": 3,
+           "version": "0.1",
+           "background": {"service_worker": "background.js"},
+           "permissions": ["webNavigation"]
+         })";
+  // An extension background script that:
+  // * Registers a top-level, unfiltered event listener for all incoming
+  //   events.
+  // * Registers a non-top-level (async) event listener for a set of filters.
+  // * Unregisters the top-level listener when the async listener has been
+  //   registered.
+  // This simulates an extension that has a set of filters that it
+  // asynchronously loads, and uses those, but registers a listener
+  // synchronously as a workaround to receive the events.
+  // (This will be unnecessary -- but should still work -- once we have a better
+  // way for extensions to register listeners asynchronously at startup.)
+  static constexpr char kBackgroundJs[] =
+      R"(function unfilteredListener() {
+           chrome.test.sendMessage('received unfiltered');
+         }
+         chrome.webNavigation.onBeforeNavigate.addListener(unfilteredListener);
+         (async function() {
+           // Send an async message and wait for the reply. This simulates an
+           // asynchronous bootstrapping process in the extension.
+           await chrome.test.sendMessage('async');
+           chrome.webNavigation.onBeforeNavigate.addListener(
+               () => { },
+               {url: [{hostContains: 'example'}]});
+           chrome.webNavigation.onBeforeNavigate.removeListener(
+                unfilteredListener);
+           chrome.test.sendMessage('registered async');
+         })();)";
+
+  TestExtensionDir test_dir;
+  test_dir.WriteManifest(kManifest);
+  test_dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackgroundJs);
+
+  ExtensionTestMessageListener async_handler("async",
+                                             ReplyBehavior::kWillReply);
+  ExtensionTestMessageListener unfiltered_listener("received unfiltered");
+  ExtensionTestMessageListener registered_async("registered async");
+
+  // Load the extension and wait for the async handler to kick off.
+  const Extension* extension = LoadExtension(
+      test_dir.UnpackedPath(), {.wait_for_registration_stored = true});
+  ASSERT_TRUE(extension);
+  ASSERT_TRUE(async_handler.WaitUntilSatisfied());
+  // Let the async registration continue, and wait for the event to register.
+  async_handler.Reply("");
+
+  ASSERT_TRUE(registered_async.WaitUntilSatisfied());
+
+  // Validate the registered listener. It should only be the filtered listener.
+  {
+    EventRouter* event_router = EventRouter::Get(profile());
+    std::vector<const EventListener*> registered_listeners;
+    const EventListenerMap::ListenerList& all_listeners =
+        event_router->listeners().GetEventListenersByName(
+            "webNavigation.onBeforeNavigate");
+    // Find registered listeners for the extension. There will be both active
+    // and lazy listeners; we only look at lazy listeners so we avoid the
+    // conceptual "duplicates".
+    for (const auto& listener : all_listeners) {
+      if (listener->extension_id() == extension->id() && listener->IsLazy()) {
+        registered_listeners.push_back(listener.get());
+      }
+    }
+    // There should only be one registered listener, which has a filter.
+    ASSERT_EQ(1u, registered_listeners.size());
+    ASSERT_TRUE(!!registered_listeners[0]->filter());
+  }
+
+  // Stop the service worker.
+  browsertest_util::StopServiceWorkerForExtensionGlobalScope(profile(),
+                                                             extension->id());
+
+  // Reset the async handler (so we can use it again). So far, we shouldn't
+  // have fired the unfiltered listener.
+  async_handler.Reset();
+  EXPECT_FALSE(unfiltered_listener.was_satisfied());
+
+  // Now, trigger the event (via a navigation to example.com).
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("example.com", "/empty.html")));
+
+  // The unfiltered listener should fire...
+  ASSERT_TRUE(unfiltered_listener.WaitUntilSatisfied());
+  // And we should reach the bootstrapping code again.
+  ASSERT_TRUE(async_handler.WaitUntilSatisfied());
+  async_handler.Reply("");
 }
 
 }  // namespace

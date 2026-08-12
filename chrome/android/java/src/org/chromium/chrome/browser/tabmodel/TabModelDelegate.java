@@ -14,7 +14,7 @@ import org.chromium.chrome.browser.tab.TabSelectionType;
 
 /**
  * This class serves as a callback from TabModel to TabModelSelector. Avoid adding unnecessary
- * methods that expose too much access to TabModel. http://crbug.com/263579
+ * methods that expose too much access to TabModel. http://crbug.com/40326216
  */
 @NullMarked
 public interface TabModelDelegate {
@@ -55,9 +55,6 @@ public interface TabModelDelegate {
     /** Provides the top level tab manager object for the current scope. */
     TabModel getModel(boolean incognito);
 
-    /** Provides the top level tab group manager object for the current scope. */
-    TabGroupModelFilter getFilter(boolean incognito);
-
     /**
      * Whether all the tabs in the tab model have been restored from disk. If this is false session
      * restore is still ongoing.
@@ -82,7 +79,10 @@ public interface TabModelDelegate {
      * @param activity The activity to move the tab group to.
      * @param newIndex The index to move the tab group to.
      * @param isIncognito Whether the tab group is in the incognito model.
+     * @return Whether the move succeeded.
      */
-    default void moveTabGroupToWindow(
-            Token tabGroupId, Activity activity, int newIndex, boolean isIncognito) {}
+    default boolean moveTabGroupToWindow(
+            Token tabGroupId, Activity activity, int newIndex, boolean isIncognito) {
+        return false;
+    }
 }

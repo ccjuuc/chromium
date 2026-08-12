@@ -11,6 +11,7 @@
 #include "base/functional/callback_helpers.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "net/device_bound_sessions/session_display.h"
 #include "net/device_bound_sessions/session_error.h"
 #include "services/network/public/mojom/device_bound_sessions.mojom.h"
 
@@ -49,18 +50,25 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) DeviceBoundSessionManager
       const GURL& url,
       mojo::PendingRemote<network::mojom::DeviceBoundSessionAccessObserver>
           observer) override;
+  void AddEventObserver(
+      mojo::PendingRemote<network::mojom::DeviceBoundSessionEventObserver>
+          observer) override;
   void CreateBoundSessions(
       std::vector<net::device_bound_sessions::SessionParams> params,
       const std::vector<uint8_t>& wrapped_key,
       const std::vector<net::CanonicalCookie>& cookies_to_set,
       const net::CookieOptions& cookie_options,
       CreateBoundSessionsCallback callback) override;
+  // Evaluates and prewarms DBSC sessions matching `url` by delegating to the
+  // underlying SessionService.
+  void PrewarmSessionsForUrl(const GURL& url,
+                             PrewarmSessionsForUrlCallback callback) override;
 
  private:
   // State associated with a DeviceBoundSessionAccessObserver.
-  struct ObserverRegistration {
-    ObserverRegistration();
-    ~ObserverRegistration();
+  struct AccessObserverRegistration {
+    AccessObserverRegistration();
+    ~AccessObserverRegistration();
 
     // Mojo interface
     mojo::Remote<network::mojom::DeviceBoundSessionAccessObserver> remote;
@@ -69,12 +77,32 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) DeviceBoundSessionManager
     base::ScopedClosureRunner subscription;
   };
 
+  // State associated with a DeviceBoundSessionEventObserver.
+  struct EventObserverRegistration {
+    EventObserverRegistration();
+    ~EventObserverRegistration();
+
+    // Mojo interface
+    mojo::Remote<network::mojom::DeviceBoundSessionEventObserver> remote;
+
+    // Subscription for inclusion in the SessionService's CallbackList.
+    base::CallbackListSubscription subscription;
+
+    base::WeakPtrFactory<EventObserverRegistration> weak_factory{this};
+  };
+
   explicit DeviceBoundSessionManager(
       net::device_bound_sessions::SessionService* service,
       CookieManager* cookie_manager);
 
   // Remove an observer by its registration.
-  void RemoveObserver(ObserverRegistration* registration);
+  void RemoveAccessObserver(AccessObserverRegistration* registration);
+  void RemoveEventObserver(EventObserverRegistration* registration);
+
+  void PopulateSessionDisplays(
+      base::WeakPtr<EventObserverRegistration> registration,
+      const std::vector<net::device_bound_sessions::SessionDisplay>&
+          session_displays);
 
   void OnCreateBoundSessionsAdded(
       const std::vector<net::CanonicalCookie>& cookies_to_set,
@@ -88,7 +116,10 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) DeviceBoundSessionManager
   // owned by the `NetworkContext`.
   raw_ptr<CookieManager> cookie_manager_;
   mojo::ReceiverSet<network::mojom::DeviceBoundSessionManager> receivers_;
-  std::vector<std::unique_ptr<ObserverRegistration>> observer_registrations_;
+  std::vector<std::unique_ptr<AccessObserverRegistration>>
+      access_observer_registrations_;
+  std::vector<std::unique_ptr<EventObserverRegistration>>
+      event_observer_registrations_;
 
   base::WeakPtrFactory<DeviceBoundSessionManager> weak_factory_{this};
 };

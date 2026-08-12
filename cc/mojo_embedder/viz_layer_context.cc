@@ -4,6 +4,7 @@
 
 #include "cc/mojo_embedder/viz_layer_context.h"
 
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -14,8 +15,8 @@
 
 #include "base/check.h"
 #include "base/check_deref.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
+#include "base/logging.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/time/time.h"
@@ -49,62 +50,36 @@
 #include "ui/gfx/animation/keyframe/timing_function.h"
 #include "ui/gfx/geometry/cubic_bezier.h"
 #include "ui/gfx/geometry/transform_operation.h"
+#include "ui/latency/latency_info.h"
 
 namespace cc::mojo_embedder {
 
 namespace {
 
-void ComputePropertyTreeNodeUpdate(
-    const TransformNode* old_node,
-    const TransformNode& new_node,
-    std::vector<viz::mojom::TransformNodePtr>& container) {
-  // TODO(https://crbug.com/40902503): This is a subset of the properties we
-  // need to sync.
-  if (old_node && old_node->id == new_node.id &&
-      old_node->parent_id == new_node.parent_id &&
-      old_node->parent_frame_id == new_node.parent_frame_id &&
-      old_node->element_id == new_node.element_id &&
-      old_node->local == new_node.local &&
-      old_node->origin == new_node.origin &&
-      old_node->post_translation == new_node.post_translation &&
-      old_node->to_parent == new_node.to_parent &&
-      old_node->sticky_position_constraint_id ==
-          new_node.sticky_position_constraint_id &&
-      old_node->anchor_position_scroll_data_id ==
-          new_node.anchor_position_scroll_data_id &&
-      old_node->sorting_context_id == new_node.sorting_context_id &&
-      old_node->scroll_offset() == new_node.scroll_offset() &&
-      old_node->snap_amount == new_node.snap_amount &&
-      old_node->has_potential_animation == new_node.has_potential_animation &&
-      old_node->is_currently_animating == new_node.is_currently_animating &&
-      old_node->flattens_inherited_transform ==
-          new_node.flattens_inherited_transform &&
-      old_node->scrolls == new_node.scrolls &&
-      old_node->should_undo_overscroll == new_node.should_undo_overscroll &&
-      old_node->should_be_snapped == new_node.should_be_snapped &&
-      old_node->moved_by_outer_viewport_bounds_delta_y ==
-          new_node.moved_by_outer_viewport_bounds_delta_y &&
-      old_node->in_subtree_of_page_scale_layer ==
-          new_node.in_subtree_of_page_scale_layer &&
-      old_node->delegates_to_parent_for_backface ==
-          new_node.delegates_to_parent_for_backface &&
-      old_node->will_change_transform == new_node.will_change_transform &&
-      old_node->maximum_animation_scale == new_node.maximum_animation_scale &&
-      old_node->node_and_ancestors_are_animated_or_invertible ==
-          new_node.node_and_ancestors_are_animated_or_invertible &&
-      old_node->is_invertible == new_node.is_invertible &&
-      old_node->ancestors_are_invertible == new_node.ancestors_are_invertible &&
-      old_node->node_and_ancestors_are_flat ==
-          new_node.node_and_ancestors_are_flat &&
-      old_node->node_or_ancestors_will_change_transform ==
-          new_node.node_or_ancestors_will_change_transform &&
-      // Since |transform_changed| is transient, we only need to check for it's
-      // current state instead of comparing to old one.
-      !new_node.transform_changed() &&
-      old_node->visible_frame_element_id == new_node.visible_frame_element_id) {
+template <typename TreeType>
+void CheckPropertyTreeIndexValid(const TreeType& tree, int32_t index) {
+  CHECK_GE(index, 0);
+  CHECK_LT(index, static_cast<int32_t>(tree.size()));
+}
+
+template <typename TreeType>
+void CheckOptionalPropertyTreeIndexValid(const TreeType& tree, int32_t index) {
+  if (index == cc::kInvalidPropertyNodeId) {
     return;
   }
+  CheckPropertyTreeIndexValid(tree, index);
+}
 
+void AddTransformNodeUpdate(
+    const TransformTree& tree,
+    const TransformNode& new_node,
+    std::vector<viz::mojom::TransformNodePtr>& container) {
+  CheckPropertyTreeIndexValid(tree, new_node.id);
+  CheckOptionalPropertyTreeIndexValid(tree, new_node.parent_id);
+  CheckOptionalPropertyTreeIndexValid(tree, new_node.parent_frame_id);
+
+  // TODO(https://crbug.com/40902503): This is a subset of the properties we
+  // need to sync.
   auto wire = viz::mojom::TransformNode::New();
   wire->id = new_node.id;
   wire->parent_id = new_node.parent_id;
@@ -115,10 +90,18 @@ void ComputePropertyTreeNodeUpdate(
   wire->post_translation = new_node.post_translation;
   wire->to_parent = new_node.to_parent;
   if (new_node.sticky_position_constraint_id >= 0) {
+    // TODO(zork): Remove these after 2026-07-01
+    DUMP_WILL_BE_CHECK_LT(
+        static_cast<size_t>(new_node.sticky_position_constraint_id),
+        tree.sticky_position_data().size());
     wire->sticky_position_constraint_id =
         base::checked_cast<uint32_t>(new_node.sticky_position_constraint_id);
   }
   if (new_node.anchor_position_scroll_data_id >= 0) {
+    // TODO(zork): Remove these after 2026-07-01
+    DUMP_WILL_BE_CHECK_LT(
+        static_cast<size_t>(new_node.anchor_position_scroll_data_id),
+        tree.anchor_position_scroll_data().size());
     wire->anchor_position_scroll_data_id =
         base::checked_cast<uint32_t>(new_node.anchor_position_scroll_data_id);
   }
@@ -154,6 +137,7 @@ void ComputePropertyTreeNodeUpdate(
 }
 
 void ComputePropertyTreeNodeUpdate(
+    const PropertyTrees& trees,
     const ClipNode* old_node,
     const ClipNode& new_node,
     std::vector<viz::mojom::ClipNodePtr>& container) {
@@ -165,6 +149,12 @@ void ComputePropertyTreeNodeUpdate(
     return;
   }
 
+  CheckPropertyTreeIndexValid(trees.clip_tree(), new_node.id);
+  CheckOptionalPropertyTreeIndexValid(trees.clip_tree(), new_node.parent_id);
+  CheckPropertyTreeIndexValid(trees.transform_tree(), new_node.transform_id);
+  CheckOptionalPropertyTreeIndexValid(trees.effect_tree(),
+                                      new_node.pixel_moving_filter_id);
+
   auto wire = viz::mojom::ClipNode::New();
   wire->id = new_node.id;
   wire->parent_id = new_node.parent_id;
@@ -175,6 +165,7 @@ void ComputePropertyTreeNodeUpdate(
 }
 
 void ComputePropertyTreeNodeUpdate(
+    const PropertyTrees& trees,
     const EffectNode* old_node,
     const EffectNode& new_node,
     std::vector<viz::mojom::EffectNodePtr>& container,
@@ -244,6 +235,21 @@ void ComputePropertyTreeNodeUpdate(
     return;
   }
 
+  CheckPropertyTreeIndexValid(trees.effect_tree(), new_node.id);
+  CheckOptionalPropertyTreeIndexValid(trees.effect_tree(), new_node.parent_id);
+  CheckPropertyTreeIndexValid(trees.transform_tree(), new_node.transform_id);
+  CheckPropertyTreeIndexValid(trees.clip_tree(), new_node.clip_id);
+  CheckPropertyTreeIndexValid(trees.effect_tree(), new_node.target_id);
+  CheckOptionalPropertyTreeIndexValid(
+      trees.effect_tree(),
+      new_node.closest_ancestor_with_cached_render_surface_id);
+  CheckOptionalPropertyTreeIndexValid(
+      trees.effect_tree(), new_node.closest_ancestor_with_copy_request_id);
+  CheckOptionalPropertyTreeIndexValid(
+      trees.effect_tree(), new_node.closest_ancestor_being_captured_id);
+  CheckOptionalPropertyTreeIndexValid(
+      trees.effect_tree(), new_node.closest_ancestor_with_shared_element_id);
+
   auto wire = viz::mojom::EffectNode::New();
   wire->id = new_node.id;
   wire->parent_id = new_node.parent_id;
@@ -292,11 +298,13 @@ void ComputePropertyTreeNodeUpdate(
   wire->may_have_backdrop_effect = new_node.may_have_backdrop_effect;
   wire->needs_effect_for_2d_scale_transform =
       new_node.needs_effect_for_2d_scale_transform;
+  wire->only_draws_visible_content = new_node.only_draws_visible_content;
 
   container.push_back(std::move(wire));
 }
 
 void ComputePropertyTreeNodeUpdate(
+    const PropertyTrees& trees,
     const ScrollNode* old_node,
     const ScrollNode& new_node,
     std::vector<viz::mojom::ScrollNodePtr>& container) {
@@ -319,6 +327,11 @@ void ComputePropertyTreeNodeUpdate(
     return;
   }
 
+  CheckPropertyTreeIndexValid(trees.scroll_tree(), new_node.id);
+  CheckOptionalPropertyTreeIndexValid(trees.scroll_tree(), new_node.parent_id);
+  CheckOptionalPropertyTreeIndexValid(trees.transform_tree(),
+                                      new_node.transform_id);
+
   auto wire = viz::mojom::ScrollNode::New();
   wire->id = new_node.id;
   wire->parent_id = new_node.parent_id;
@@ -339,28 +352,69 @@ void ComputePropertyTreeNodeUpdate(
 }
 
 template <typename TreeType, typename ContainerType>
-void ComputePropertyTreeUpdate(const TreeType& old_tree,
+void ComputePropertyTreeUpdate(const PropertyTrees& trees,
+                               const TreeType& old_tree,
                                const TreeType& new_tree,
                                ContainerType& updates,
                                uint32_t& new_num_nodes) {
+  CHECK(!(new_tree.size() == 0 && old_tree.size() > 0));
   using NodeType = typename TreeType::NodeType;
   new_num_nodes = base::checked_cast<uint32_t>(new_tree.size());
   for (size_t i = 0; i < new_tree.size(); ++i) {
-    const NodeType* old_node = old_tree.size() > i ? old_tree.Node(i) : nullptr;
-    ComputePropertyTreeNodeUpdate(old_node, *new_tree.Node(i), updates);
+    const NodeType* old_node =
+        old_tree.size() > i ? &old_tree.Node(i) : nullptr;
+    ComputePropertyTreeNodeUpdate(trees, old_node, new_tree.Node(i), updates);
   }
 }
 
-void ComputeEffectTreeUpdate(const EffectTree& old_tree,
+void ComputeTransformTreeUpdate(
+    TransformTree& old_tree,
+    const TransformTree& new_tree,
+    std::vector<viz::mojom::TransformNodePtr>& updates,
+    uint32_t& new_num_nodes) {
+  CHECK(!(new_tree.size() == 0 && old_tree.size() > 0));
+  new_num_nodes = base::checked_cast<uint32_t>(new_tree.size());
+
+  const auto& new_nodes = new_tree.nodes();
+  auto& old_nodes = old_tree.nodes();
+
+  for (size_t i = 0; i < new_nodes.size(); ++i) {
+    bool changed = false;
+    auto& new_node = new_nodes[i];
+    if (i >= old_nodes.size()) {
+      changed = true;
+      old_nodes.push_back(new_node);
+    } else {
+      // Since |transform_changed| is transient, we need to check for its
+      // current state instead of comparing to the old one.
+      if (new_node.transform_changed() || new_node != old_nodes[i]) {
+        changed = true;
+        old_nodes[i] = new_node;
+      }
+    }
+
+    if (changed) {
+      AddTransformNodeUpdate(new_tree, new_node, updates);
+    }
+  }
+
+  if (old_nodes.size() > new_nodes.size()) {
+    old_nodes.resize(new_nodes.size());
+  }
+}
+
+void ComputeEffectTreeUpdate(const PropertyTrees& trees,
+                             const EffectTree& old_tree,
                              EffectTree& new_tree,
                              std::vector<::viz::mojom::EffectNodePtr>& updates,
                              uint32_t& new_num_nodes) {
+  CHECK(!(new_tree.size() == 0 && old_tree.size() > 0));
   // Take any copy output requests from `new_tree` to push over the wire.
   auto copy_requests = new_tree.TakeCopyRequests();
 
   new_num_nodes = base::checked_cast<uint32_t>(new_tree.size());
   for (size_t i = 0; i < new_tree.size(); ++i) {
-    const auto* old_node = old_tree.size() > i ? old_tree.Node(i) : nullptr;
+    const auto* old_node = old_tree.size() > i ? &old_tree.Node(i) : nullptr;
 
     // Push any copy output requests for this node.
     auto range = copy_requests.equal_range(i);
@@ -369,17 +423,27 @@ void ComputeEffectTreeUpdate(const EffectTree& old_tree,
       copy_requests_for_node.push_back(std::move(it->second));
     }
 
-    ComputePropertyTreeNodeUpdate(old_node, *new_tree.Node(i), updates,
+    ComputePropertyTreeNodeUpdate(trees, old_node, new_tree.Node(i), updates,
                                   std::move(copy_requests_for_node));
   }
 }
 
 std::vector<viz::mojom::StickyPositionNodeDataPtr> SerializeStickyPositionData(
+    const ScrollTree& scroll_tree,
+    const TransformTree& transform_tree,
     const std::vector<StickyPositionNodeData>& entries) {
   std::vector<viz::mojom::StickyPositionNodeDataPtr> wire_data;
   for (const auto& data : entries) {
+    CheckOptionalPropertyTreeIndexValid(scroll_tree, data.x_scroll_ancestor);
+    CheckOptionalPropertyTreeIndexValid(scroll_tree, data.y_scroll_ancestor);
+    CheckOptionalPropertyTreeIndexValid(transform_tree,
+                                        data.nearest_node_shifting_sticky_box);
+    CheckOptionalPropertyTreeIndexValid(
+        transform_tree, data.nearest_node_shifting_containing_block);
+
     auto wire = viz::mojom::StickyPositionNodeData::New();
-    wire->scroll_ancestor = data.scroll_ancestor;
+    wire->x_scroll_ancestor = data.x_scroll_ancestor;
+    wire->y_scroll_ancestor = data.y_scroll_ancestor;
     wire->is_anchored_left = data.constraints.is_anchored_left;
     wire->is_anchored_right = data.constraints.is_anchored_right;
     wire->is_anchored_top = data.constraints.is_anchored_top;
@@ -422,6 +486,7 @@ SerializeAnchorPositionScrollData(
 }
 
 viz::mojom::TransformTreeUpdatePtr ComputeTransformTreePropertiesUpdate(
+    const ScrollTree& scroll_tree,
     const TransformTree& old_tree,
     const TransformTree& new_tree) {
   if (old_tree.page_scale_factor() == new_tree.page_scale_factor() &&
@@ -442,15 +507,28 @@ viz::mojom::TransformTreeUpdatePtr ComputeTransformTreePropertiesUpdate(
 
   auto wire = viz::mojom::TransformTreeUpdate::New();
   wire->page_scale_factor = new_tree.page_scale_factor();
+  DUMP_WILL_BE_CHECK_GT(wire->page_scale_factor, 0.f);
+  DUMP_WILL_BE_CHECK(std::isfinite(wire->page_scale_factor));
   wire->device_scale_factor = new_tree.device_scale_factor();
+  DUMP_WILL_BE_CHECK_GT(wire->device_scale_factor, 0.f);
+  DUMP_WILL_BE_CHECK(std::isfinite(wire->device_scale_factor));
   wire->device_transform_scale_factor =
       new_tree.device_transform_scale_factor();
+  DUMP_WILL_BE_CHECK_GT(wire->device_transform_scale_factor, 0.f);
+  DUMP_WILL_BE_CHECK(std::isfinite(wire->device_transform_scale_factor));
+  for (int id : new_tree.nodes_affected_by_outer_viewport_bounds_delta()) {
+    CheckOptionalPropertyTreeIndexValid(new_tree, id);
+  }
+  for (int id : new_tree.nodes_affected_by_safe_area_bottom()) {
+    CheckOptionalPropertyTreeIndexValid(new_tree, id);
+  }
+
   wire->nodes_affected_by_outer_viewport_bounds_delta =
       new_tree.nodes_affected_by_outer_viewport_bounds_delta();
   wire->nodes_affected_by_safe_area_bottom =
       new_tree.nodes_affected_by_safe_area_bottom();
-  wire->sticky_position_data =
-      SerializeStickyPositionData(new_tree.sticky_position_data());
+  wire->sticky_position_data = SerializeStickyPositionData(
+      scroll_tree, new_tree, new_tree.sticky_position_data());
   wire->anchor_position_scroll_data =
       SerializeAnchorPositionScrollData(new_tree.anchor_position_scroll_data());
   wire->drawn_elastic_overscroll = new_tree.drawn_elastic_overscroll();
@@ -840,6 +918,7 @@ void SerializeSurfaceLayerExtra(SurfaceLayerImpl& layer,
   extra->surface_hit_testable = layer.surface_hit_testable();
   extra->has_pointer_events_none = layer.has_pointer_events_none();
   extra->is_reflection = layer.is_reflection();
+  // TODO(zmo): This is never `true` on the active tree
   extra->will_draw_needs_reset = layer.will_draw_needs_reset();
   extra->override_child_paint_flags = layer.override_child_paint_flags();
 }
@@ -851,177 +930,226 @@ void SerializeLayer(LayerImpl& layer,
                     bool needs_full_sync) {
   auto& wire = *update.layers.emplace_back(viz::mojom::Layer::New());
   wire.id = layer.id();
-  wire.element_id = layer.element_id();
-  wire.type = layer.GetLayerType();
-  wire.bounds = layer.bounds();
-  wire.is_drawable = layer.draws_content();
-  wire.layer_property_changed_not_from_property_trees =
-      layer.LayerPropertyChangedNotFromPropertyTrees();
-  wire.layer_property_changed_from_property_trees =
-      layer.LayerPropertyChangedFromPropertyTrees();
-  wire.contents_opaque = layer.contents_opaque();
-  wire.contents_opaque_for_text = layer.contents_opaque_for_text();
-  wire.hit_test_opaqueness = layer.hit_test_opaqueness();
-  wire.background_color = layer.background_color();
-  wire.safe_opaque_background_color = layer.safe_opaque_background_color();
-  wire.update_rect = layer.update_rect();
-  wire.offset_to_transform_parent = layer.offset_to_transform_parent();
+
+  switch (layer.GetLayerType()) {
+    // The following layer types map directly to Viz layer types.
+    case mojom::LayerType::kLayer:
+    case mojom::LayerType::kMirror:
+    case mojom::LayerType::kNinePatch:
+    case mojom::LayerType::kNinePatchThumbScrollbar:
+    case mojom::LayerType::kPaintedScrollbar:
+    case mojom::LayerType::kSolidColorScrollbar:
+    case mojom::LayerType::kSolidColor:
+    case mojom::LayerType::kSurface:
+    case mojom::LayerType::kTexture:
+    case mojom::LayerType::kUIResource:
+    case mojom::LayerType::kViewTransitionContent:
+      wire.type = layer.GetLayerType();
+      break;
+
+    // The following layer types are mapped to different types in Viz.
+    case mojom::LayerType::kHeadsUpDisplay:
+      wire.type = mojom::LayerType::kTexture;
+      break;
+    case mojom::LayerType::kPicture:
+      wire.type = mojom::LayerType::kTileDisplay;
+      break;
+
+    // Unhandled layer types: set them to SolidColor. This is because
+    // Viz side defaults to SolidColor. Avoid a layer type mismatch
+    // in LayerContextImpl which leads to mojo error and test failure.
+    default:
+      wire.type = mojom::LayerType::kSolidColor;
+  }
+
+  const PropertyTrees& property_trees =
+      *layer.layer_tree_impl()->property_trees();
+  CheckOptionalPropertyTreeIndexValid(property_trees.transform_tree(),
+                                      layer.transform_tree_index());
+  CheckOptionalPropertyTreeIndexValid(property_trees.clip_tree(),
+                                      layer.clip_tree_index());
+  CheckOptionalPropertyTreeIndexValid(property_trees.effect_tree(),
+                                      layer.effect_tree_index());
+  CheckOptionalPropertyTreeIndexValid(property_trees.scroll_tree(),
+                                      layer.scroll_tree_index());
+
   wire.transform_tree_index = layer.transform_tree_index();
   wire.clip_tree_index = layer.clip_tree_index();
   wire.effect_tree_index = layer.effect_tree_index();
   wire.scroll_tree_index = layer.scroll_tree_index();
-  wire.should_check_backface_visibility =
-      layer.should_check_backface_visibility();
-  if (layer.HasAnyRarePropertySet()) {
-    auto rare_properties = viz::mojom::RareProperties::New();
-    rare_properties->filter_quality = layer.GetFilterQuality();
-    rare_properties->dynamic_range_limit = layer.GetDynamicRangeLimit();
+  if (needs_full_sync ||
+      layer.GetChangeFlag(LayerImpl::kChangedGeneralProperty)) {
+    auto general = viz::mojom::LayerGeneralProperties::New();
+    general->element_id = layer.element_id();
+    general->bounds = layer.bounds();
+    general->is_drawable = layer.draws_content();
+    general->layer_property_changed_not_from_property_trees =
+        layer.LayerPropertyChangedNotFromPropertyTrees();
+    general->layer_property_changed_from_property_trees =
+        layer.LayerPropertyChangedFromPropertyTrees();
+    general->contents_opaque = layer.contents_opaque();
+    general->contents_opaque_for_text = layer.contents_opaque_for_text();
+    general->hit_test_opaqueness = layer.hit_test_opaqueness();
+    general->background_color = layer.background_color();
+    general->safe_opaque_background_color =
+        layer.safe_opaque_background_color();
+    general->update_rect = layer.update_rect();
+    general->offset_to_transform_parent = layer.offset_to_transform_parent();
+    general->should_check_backface_visibility =
+        layer.should_check_backface_visibility();
+    if (layer.HasAnyRarePropertySet()) {
+      auto rare_properties = viz::mojom::RareProperties::New();
+      rare_properties->filter_quality = layer.GetFilterQuality();
+      rare_properties->dynamic_range_limit = layer.GetDynamicRangeLimit();
 
-    // NOTE: If the layer's RareProperties is present, then `capture_bounds()`
-    // is guaranteed to be non-null.
-    rare_properties->capture_bounds = CHECK_DEREF(layer.capture_bounds());
-    wire.rare_properties = std::move(rare_properties);
-  }
-  switch (layer.GetLayerType()) {
-    case mojom::LayerType::kLayer: {
-      // This is intentionally empty, as there are no extra properties
-      // to serialize.
-      break;
+      // NOTE: If the layer's RareProperties is present, then `capture_bounds()`
+      // is guaranteed to be non-null.
+      rare_properties->capture_bounds = CHECK_DEREF(layer.capture_bounds());
+      general->rare_properties = std::move(rare_properties);
     }
-    case mojom::LayerType::kHeadsUpDisplay: {
-      // For Viz, this should look like a Texture layer.
-      wire.type = mojom::LayerType::kTexture;
-      auto texture_layer_extra = viz::mojom::TextureLayerExtra::New();
-      SerializeHudLayerExtra(static_cast<HeadsUpDisplayLayerImpl&>(layer),
-                             texture_layer_extra, resource_provider,
-                             shared_image_interface);
-      wire.layer_extra = viz::mojom::LayerExtra::NewTextureLayerExtra(
-          std::move(texture_layer_extra));
-      break;
-    }
-    case mojom::LayerType::kMirror: {
-      auto mirror_layer_extra = viz::mojom::MirrorLayerExtra::New();
-      SerializeMirrorLayerExtra(static_cast<MirrorLayerImpl&>(layer),
-                                mirror_layer_extra);
-      wire.layer_extra = viz::mojom::LayerExtra::NewMirrorLayerExtra(
-          std::move(mirror_layer_extra));
-      break;
-    }
-    case mojom::LayerType::kNinePatchThumbScrollbar: {
-      auto nine_patch_thumb_scrollbar_layer_extra =
-          viz::mojom::NinePatchThumbScrollbarLayerExtra::New();
-      SerializeNinePatchThumbScrollbarLayerExtra(
-          static_cast<NinePatchThumbScrollbarLayerImpl&>(layer),
-          nine_patch_thumb_scrollbar_layer_extra);
-      wire.layer_extra =
-          viz::mojom::LayerExtra::NewNinePatchThumbScrollbarLayerExtra(
-              std::move(nine_patch_thumb_scrollbar_layer_extra));
-      break;
-    }
-    case mojom::LayerType::kNinePatch: {
-      auto nine_patch_layer_extra = viz::mojom::NinePatchLayerExtra::New();
-      SerializeNinePatchLayerExtra(static_cast<NinePatchLayerImpl&>(layer),
-                                   nine_patch_layer_extra);
-      wire.layer_extra = viz::mojom::LayerExtra::NewNinePatchLayerExtra(
-          std::move(nine_patch_layer_extra));
-      break;
-    }
-    case mojom::LayerType::kPaintedScrollbar: {
-      auto painted_scrollbar_layer_extra =
-          viz::mojom::PaintedScrollbarLayerExtra::New();
-      SerializePaintedScrollbarLayerExtra(
-          static_cast<PaintedScrollbarLayerImpl&>(layer),
-          painted_scrollbar_layer_extra);
-      wire.layer_extra = viz::mojom::LayerExtra::NewPaintedScrollbarLayerExtra(
-          std::move(painted_scrollbar_layer_extra));
-      break;
-    }
-    case mojom::LayerType::kSolidColorScrollbar: {
-      auto solid_color_scrollbar_layer_extra =
-          viz::mojom::SolidColorScrollbarLayerExtra::New();
-      SerializeSolidColorScrollbarLayerExtra(
-          static_cast<SolidColorScrollbarLayerImpl&>(layer),
-          solid_color_scrollbar_layer_extra);
-      wire.layer_extra =
-          viz::mojom::LayerExtra::NewSolidColorScrollbarLayerExtra(
-              std::move(solid_color_scrollbar_layer_extra));
-      break;
-    }
-    case mojom::LayerType::kSolidColor: {
-      // This is intentionally empty, as there are no extra properties
-      // to serialize for SolidColorLayerImpls.
-      break;
-    }
-    case mojom::LayerType::kSurface: {
-      auto surface_layer_extra = viz::mojom::SurfaceLayerExtra::New();
-      SerializeSurfaceLayerExtra(static_cast<SurfaceLayerImpl&>(layer),
-                                 surface_layer_extra);
-      wire.layer_extra = viz::mojom::LayerExtra::NewSurfaceLayerExtra(
-          std::move(surface_layer_extra));
-      break;
-    }
-    case mojom::LayerType::kPicture: {
-      // kPicture layers become kTileDisplay layers in Viz.
-      wire.type = mojom::LayerType::kTileDisplay;
-      auto& picture_layer = static_cast<PictureLayerImpl&>(layer);
-      auto tile_display_extra = viz::mojom::TileDisplayLayerExtra::New();
-      if (picture_layer.GetRasterSource()->IsSolidColor()) {
-        tile_display_extra->solid_color =
-            picture_layer.GetRasterSource()->GetSolidColor();
+    switch (layer.GetLayerType()) {
+      case mojom::LayerType::kLayer: {
+        // This is intentionally empty, as there are no extra properties
+        // to serialize.
+        break;
       }
-      tile_display_extra->is_backdrop_filter_mask =
-          picture_layer.is_backdrop_filter_mask();
-      tile_display_extra->is_directly_composited_image =
-          picture_layer.IsDirectlyCompositedImage();
-      tile_display_extra->nearest_neighbor = picture_layer.nearest_neighbor();
-      tile_display_extra->content_color_usage =
-          picture_layer.GetContentColorUsage();
-      tile_display_extra->recorded_bounds =
-          picture_layer.GetRasterSource()->recorded_bounds();
-      tile_display_extra->proposed_tiling_scales_for_deletion =
-          picture_layer.TakeProposedTilingScalesForDeletion();
-      wire.layer_extra = viz::mojom::LayerExtra::NewTileDisplayLayerExtra(
-          std::move(tile_display_extra));
-      SerializePictureLayerTileUpdates(picture_layer, resource_provider,
-                                       shared_image_interface, update.tilings,
-                                       needs_full_sync);
-      break;
+      case mojom::LayerType::kHeadsUpDisplay: {
+        auto texture_layer_extra = viz::mojom::TextureLayerExtra::New();
+        SerializeHudLayerExtra(static_cast<HeadsUpDisplayLayerImpl&>(layer),
+                               texture_layer_extra, resource_provider,
+                               shared_image_interface);
+        general->layer_extra = viz::mojom::LayerExtra::NewTextureLayerExtra(
+            std::move(texture_layer_extra));
+        break;
+      }
+      case mojom::LayerType::kMirror: {
+        auto mirror_layer_extra = viz::mojom::MirrorLayerExtra::New();
+        SerializeMirrorLayerExtra(static_cast<MirrorLayerImpl&>(layer),
+                                  mirror_layer_extra);
+        general->layer_extra = viz::mojom::LayerExtra::NewMirrorLayerExtra(
+            std::move(mirror_layer_extra));
+        break;
+      }
+      case mojom::LayerType::kNinePatchThumbScrollbar: {
+        auto nine_patch_thumb_scrollbar_layer_extra =
+            viz::mojom::NinePatchThumbScrollbarLayerExtra::New();
+        SerializeNinePatchThumbScrollbarLayerExtra(
+            static_cast<NinePatchThumbScrollbarLayerImpl&>(layer),
+            nine_patch_thumb_scrollbar_layer_extra);
+        general->layer_extra =
+            viz::mojom::LayerExtra::NewNinePatchThumbScrollbarLayerExtra(
+                std::move(nine_patch_thumb_scrollbar_layer_extra));
+        break;
+      }
+      case mojom::LayerType::kNinePatch: {
+        auto nine_patch_layer_extra = viz::mojom::NinePatchLayerExtra::New();
+        SerializeNinePatchLayerExtra(static_cast<NinePatchLayerImpl&>(layer),
+                                     nine_patch_layer_extra);
+        general->layer_extra = viz::mojom::LayerExtra::NewNinePatchLayerExtra(
+            std::move(nine_patch_layer_extra));
+        break;
+      }
+      case mojom::LayerType::kPaintedScrollbar: {
+        auto painted_scrollbar_layer_extra =
+            viz::mojom::PaintedScrollbarLayerExtra::New();
+        SerializePaintedScrollbarLayerExtra(
+            static_cast<PaintedScrollbarLayerImpl&>(layer),
+            painted_scrollbar_layer_extra);
+        general->layer_extra =
+            viz::mojom::LayerExtra::NewPaintedScrollbarLayerExtra(
+                std::move(painted_scrollbar_layer_extra));
+        break;
+      }
+      case mojom::LayerType::kSolidColorScrollbar: {
+        auto solid_color_scrollbar_layer_extra =
+            viz::mojom::SolidColorScrollbarLayerExtra::New();
+        SerializeSolidColorScrollbarLayerExtra(
+            static_cast<SolidColorScrollbarLayerImpl&>(layer),
+            solid_color_scrollbar_layer_extra);
+        general->layer_extra =
+            viz::mojom::LayerExtra::NewSolidColorScrollbarLayerExtra(
+                std::move(solid_color_scrollbar_layer_extra));
+        break;
+      }
+      case mojom::LayerType::kSolidColor: {
+        // This is intentionally empty, as there are no extra properties
+        // to serialize for SolidColorLayerImpls.
+        break;
+      }
+      case mojom::LayerType::kSurface: {
+        auto surface_layer_extra = viz::mojom::SurfaceLayerExtra::New();
+        SerializeSurfaceLayerExtra(static_cast<SurfaceLayerImpl&>(layer),
+                                   surface_layer_extra);
+        general->layer_extra = viz::mojom::LayerExtra::NewSurfaceLayerExtra(
+            std::move(surface_layer_extra));
+        break;
+      }
+      case mojom::LayerType::kPicture: {
+        auto& picture_layer = static_cast<PictureLayerImpl&>(layer);
+        auto tile_display_extra = viz::mojom::TileDisplayLayerExtra::New();
+        if (picture_layer.GetRasterSource()->IsSolidColor()) {
+          tile_display_extra->solid_color =
+              picture_layer.GetRasterSource()->GetSolidColor();
+        }
+        tile_display_extra->is_backdrop_filter_mask =
+            picture_layer.is_backdrop_filter_mask();
+        tile_display_extra->is_directly_composited_image =
+            picture_layer.IsDirectlyCompositedImage();
+        tile_display_extra->nearest_neighbor =
+            picture_layer.GetNearestNeighbor();
+        tile_display_extra->has_animated_image_update_rect =
+            picture_layer.has_animated_image_update_rect();
+        tile_display_extra->has_non_animated_image_update_rect =
+            picture_layer.has_non_animated_image_update_rect();
+        tile_display_extra->content_color_usage =
+            picture_layer.GetContentColorUsage();
+        tile_display_extra->recorded_bounds =
+            picture_layer.GetRasterSource()->recorded_bounds();
+        tile_display_extra->proposed_tiling_scales_for_deletion =
+            picture_layer.TakeProposedTilingScalesForDeletion();
+        general->layer_extra = viz::mojom::LayerExtra::NewTileDisplayLayerExtra(
+            std::move(tile_display_extra));
+        break;
+      }
+      case mojom::LayerType::kTexture: {
+        auto texture_layer_extra = viz::mojom::TextureLayerExtra::New();
+        SerializeTextureLayerExtra(static_cast<TextureLayerImpl&>(layer),
+                                   texture_layer_extra, resource_provider,
+                                   shared_image_interface);
+        general->layer_extra = viz::mojom::LayerExtra::NewTextureLayerExtra(
+            std::move(texture_layer_extra));
+        break;
+      }
+      case mojom::LayerType::kUIResource: {
+        auto ui_resource_layer_extra = viz::mojom::UIResourceLayerExtra::New();
+        SerializeUIResourceLayerExtra(static_cast<UIResourceLayerImpl&>(layer),
+                                      ui_resource_layer_extra);
+        general->layer_extra = viz::mojom::LayerExtra::NewUiResourceLayerExtra(
+            std::move(ui_resource_layer_extra));
+        break;
+      }
+      case mojom::LayerType::kViewTransitionContent: {
+        auto view_transition_content_layer_extra =
+            viz::mojom::ViewTransitionContentLayerExtra::New();
+        SerializeViewTransitionContentLayerExtra(
+            static_cast<ViewTransitionContentLayerImpl&>(layer),
+            view_transition_content_layer_extra);
+        general->layer_extra =
+            viz::mojom::LayerExtra::NewViewTransitionContentLayerExtra(
+                std::move(view_transition_content_layer_extra));
+        break;
+      }
+      default:
+        // TODO(zmo): handle other types of LayerImpl.
     }
-    case mojom::LayerType::kTexture: {
-      auto texture_layer_extra = viz::mojom::TextureLayerExtra::New();
-      SerializeTextureLayerExtra(static_cast<TextureLayerImpl&>(layer),
-                                 texture_layer_extra, resource_provider,
-                                 shared_image_interface);
-      wire.layer_extra = viz::mojom::LayerExtra::NewTextureLayerExtra(
-          std::move(texture_layer_extra));
-      break;
-    }
-    case mojom::LayerType::kUIResource: {
-      auto ui_resource_layer_extra = viz::mojom::UIResourceLayerExtra::New();
-      SerializeUIResourceLayerExtra(static_cast<UIResourceLayerImpl&>(layer),
-                                    ui_resource_layer_extra);
-      wire.layer_extra = viz::mojom::LayerExtra::NewUiResourceLayerExtra(
-          std::move(ui_resource_layer_extra));
-      break;
-    }
-    case mojom::LayerType::kViewTransitionContent: {
-      auto view_transition_content_layer_extra =
-          viz::mojom::ViewTransitionContentLayerExtra::New();
-      SerializeViewTransitionContentLayerExtra(
-          static_cast<ViewTransitionContentLayerImpl&>(layer),
-          view_transition_content_layer_extra);
-      wire.layer_extra =
-          viz::mojom::LayerExtra::NewViewTransitionContentLayerExtra(
-              std::move(view_transition_content_layer_extra));
-      break;
-    }
-    default:
-      // TODO(zmo): handle other types of LayerImpl.
-      // Unhandled layer types: set it to SolidColor. This is because
-      // viz side defaults to SolidColor. Avoid a layer type mismatch
-      // in LayerContextImpl which leads to mojo error and test failure.
-      wire.type = mojom::LayerType::kSolidColor;
-      break;
+    wire.general_properties = std::move(general);
+  }
+  if (layer.GetLayerType() == mojom::LayerType::kPicture &&
+      (needs_full_sync || layer.GetChangeFlag(LayerImpl::kChangedTile))) {
+    auto& picture_layer = static_cast<PictureLayerImpl&>(layer);
+    SerializePictureLayerTileUpdates(picture_layer, resource_provider,
+                                     shared_image_interface, update.tilings,
+                                     needs_full_sync);
   }
 }
 
@@ -1194,7 +1322,8 @@ void SerializeAnimationCurve(const KeyframeModel& model,
   wire.playback_rate = model.playback_rate();
   wire.iterations = model.iterations();
   wire.iteration_start = model.iteration_start();
-  wire.time_offset = model.time_offset();
+  wire.start_delay = model.start_delay();
+  wire.hold_time = model.hold_time();
   wire.keyframes.reserve(curve.keyframes().size());
   for (const auto& keyframe : curve.keyframes()) {
     auto wire_keyframe = viz::mojom::AnimationKeyframe::New();
@@ -1229,11 +1358,9 @@ viz::mojom::AnimationKeyframeModelPtr SerializeAnimationKeyframeModel(
                                                                      *wire);
       break;
     case gfx::AnimationCurve::SIZE:
-      SerializeAnimationCurve<gfx::KeyframedSizeAnimationCurve>(model, *wire);
-      break;
     case gfx::AnimationCurve::RECT:
-      SerializeAnimationCurve<gfx::KeyframedRectAnimationCurve>(model, *wire);
-      break;
+      // SIZE and RECT are not supported by the compositor.
+      return nullptr;
     case gfx::AnimationCurve::FILTER:
     case gfx::AnimationCurve::SCROLL_OFFSET:
       // TODO(rockot): Support these curve types too.
@@ -1324,6 +1451,8 @@ VizLayerContext::VizLayerContext(viz::mojom::CompositorFrameSink& frame_sink,
       host_impl.settings().enable_fluent_scrollbar;
   settings->enable_fluent_overlay_scrollbar =
       host_impl.settings().enable_fluent_overlay_scrollbar;
+  settings->enable_unbounded_element =
+      host_impl.settings().enable_unbounded_element;
   frame_sink.BindLayerContext(std::move(context), std::move(settings));
 }
 
@@ -1333,41 +1462,71 @@ void VizLayerContext::SetVisible(bool visible) {
   service_->SetVisible(visible);
 }
 
+void VizLayerContext::SetTargetLocalSurfaceId(
+    const viz::LocalSurfaceId& target_local_surface_id) {
+  service_->SetTargetLocalSurfaceId(target_local_surface_id);
+}
+
 base::TimeTicks VizLayerContext::UpdateDisplayTreeFrom(
     LayerTreeImpl& tree,
     viz::ClientResourceProvider& resource_provider,
     gpu::SharedImageInterface* shared_image_interface,
     const gfx::Rect& viewport_damage_rect,
-    const viz::LocalSurfaceId& target_local_surface_id,
-    bool frame_has_damage) {
+    bool frame_has_damage,
+    bool is_flush,
+    std::vector<ui::LatencyInfo> latency_info,
+    viz::TrackedElementRects tracked_element_rects) {
   TRACE_EVENT0("viz", "VizLayerContext::UpdateDisplayTreeFrom");
 
   auto& property_trees = *tree.property_trees();
   auto update = viz::mojom::LayerTreeUpdate::New();
-  update->begin_frame_args = tree.CurrentBeginFrameArgs();
+  update->begin_frame_args =
+      is_flush ? viz::BeginFrameArgs() : tree.CurrentBeginFrameArgs();
   update->source_frame_number = tree.source_frame_number();
   update->trace_id = tree.trace_id().value();
   update->primary_main_frame_item_sequence_number =
       tree.primary_main_frame_item_sequence_number();
   update->selection = tree.selection();
   update->page_scale_factor = tree.page_scale_factor()->Current(true);
+  DUMP_WILL_BE_CHECK_GT(update->page_scale_factor, 0.f);
+  DUMP_WILL_BE_CHECK(std::isfinite(update->page_scale_factor));
   update->min_page_scale_factor = tree.min_page_scale_factor();
+  DUMP_WILL_BE_CHECK_GT(update->min_page_scale_factor, 0.f);
+  DUMP_WILL_BE_CHECK(std::isfinite(update->min_page_scale_factor));
   update->max_page_scale_factor = tree.max_page_scale_factor();
+  DUMP_WILL_BE_CHECK_GT(update->max_page_scale_factor, 0.f);
+  DUMP_WILL_BE_CHECK(std::isfinite(update->max_page_scale_factor));
+  DUMP_WILL_BE_CHECK_GE(update->max_page_scale_factor,
+                        update->min_page_scale_factor);
   update->external_page_scale_factor = tree.external_page_scale_factor();
+  DUMP_WILL_BE_CHECK_GT(update->external_page_scale_factor, 0.f);
+  DUMP_WILL_BE_CHECK(std::isfinite(update->external_page_scale_factor));
   update->frame_has_damage = frame_has_damage;
-  if (frame_has_damage) {
-    update->damage_reasons_bit_mask = host_impl_->LastFrameHasDamageData();
-  }
+
+  // The is_flush flag is propagated to Viz to indicate whether this is a
+  // synchronization-only update.
+  update->is_flush = is_flush;
+
+  update->latency_info = std::move(latency_info);
+  update->tracked_element_rects = std::move(tracked_element_rects);
   update->device_viewport = tree.GetDeviceViewport();
   update->device_scale_factor = tree.device_scale_factor();
+  DUMP_WILL_BE_CHECK_GT(update->device_scale_factor, 0.f);
+  DUMP_WILL_BE_CHECK(std::isfinite(update->device_scale_factor));
   update->painted_device_scale_factor = tree.painted_device_scale_factor();
+  DUMP_WILL_BE_CHECK_GT(update->painted_device_scale_factor, 0.f);
+  DUMP_WILL_BE_CHECK(std::isfinite(update->painted_device_scale_factor));
   update->display_color_spaces = tree.display_color_spaces();
   if (tree.local_surface_id_from_parent().is_valid()) {
     update->local_surface_id_from_parent = tree.local_surface_id_from_parent();
   }
-  update->current_local_surface_id = host_impl_->GetCurrentLocalSurfaceId();
-  if (target_local_surface_id.is_valid()) {
-    update->target_local_surface_id = target_local_surface_id;
+
+  // The current LocalSurfaceId is optional because an invalid LocalSurfaceId
+  // (specifically one with an empty UnguessableToken) cannot be serialized.
+  // We omit it here if invalid, and the service will verify its presence
+  // for non-flush updates.
+  if (host_impl_->GetCurrentLocalSurfaceId().is_valid()) {
+    update->current_local_surface_id = host_impl_->GetCurrentLocalSurfaceId();
   }
   DCHECK_NE(host_impl_->next_frame_token(), viz::kInvalidFrameToken);
   update->next_frame_token = host_impl_->next_frame_token();
@@ -1376,6 +1535,18 @@ base::TimeTicks VizLayerContext::UpdateDisplayTreeFrom(
   update->background_color = tree.background_color();
 
   const ViewportPropertyIds& property_ids = tree.viewport_property_ids();
+  CheckOptionalPropertyTreeIndexValid(
+      property_trees.transform_tree(),
+      property_ids.overscroll_elasticity_transform);
+  CheckOptionalPropertyTreeIndexValid(property_trees.transform_tree(),
+                                      property_ids.page_scale_transform);
+  CheckOptionalPropertyTreeIndexValid(property_trees.scroll_tree(),
+                                      property_ids.inner_scroll);
+  CheckOptionalPropertyTreeIndexValid(property_trees.clip_tree(),
+                                      property_ids.outer_clip);
+  CheckOptionalPropertyTreeIndexValid(property_trees.scroll_tree(),
+                                      property_ids.outer_scroll);
+
   update->overscroll_elasticity_transform =
       property_ids.overscroll_elasticity_transform;
   update->page_scale_transform = property_ids.page_scale_transform;
@@ -1386,8 +1557,18 @@ base::TimeTicks VizLayerContext::UpdateDisplayTreeFrom(
         std::make_unique<gfx::DelegatedInkMetadata>(
             *tree.delegated_ink_metadata());
   }
+
+  if (auto token = host_impl_->TakeScreenshotDestinationToken();
+      !token.is_empty()) {
+    update->screenshot_destination =
+        blink::SameDocNavigationScreenshotDestinationToken(token);
+  }
+
   update->may_throttle_if_undrawn_frames =
       host_impl_->may_throttle_if_undrawn_frames();
+  update->is_viewport_mobile_optimized =
+      host_impl_->viewport_mobile_optimized();
+  update->is_animating_hud_contents = tree.IsAnimatingHUDContents();
   update->max_safe_area_inset_bottom = tree.max_safe_area_inset_bottom();
   update->browser_controls_params = tree.browser_controls_params();
   update->browser_controls_offset_tag_modifications =
@@ -1399,8 +1580,40 @@ base::TimeTicks VizLayerContext::UpdateDisplayTreeFrom(
   update->inner_scroll = property_ids.inner_scroll;
   update->outer_clip = property_ids.outer_clip;
   update->outer_scroll = property_ids.outer_scroll;
+  update->inner_viewport_container_bounds_delta =
+      property_trees.inner_viewport_container_bounds_delta();
+  update->outer_viewport_container_bounds_delta =
+      property_trees.outer_viewport_container_bounds_delta();
 
-  update->viewport_damage_rect = viewport_damage_rect;
+  // During a flush update, we don't want to propagate any damage to Viz,
+  // as the update is for synchronization only and won't trigger a draw.
+  update->viewport_damage_rect = is_flush ? gfx::Rect() : viewport_damage_rect;
+
+  // We only compute root layer damage if the tree is not empty and property
+  // trees are initialized. This prevents crashes or invalid damage reports
+  // during initialization or backgrounding.
+  // The property tree must have a size greater than kContentsRootPropertyNodeId
+  // (which is index 1) to ensure the content root node exists. An "empty" tree
+  // has a size of 1 (containing only the root node at index 0).
+  // The content root node at index 1 is the owner of the root render surface;
+  // if it doesn't exist, there is no root damage to compute.
+  // We also skip this for flushes, as Viz will ignore damage during a
+  // synchronization-only update.
+  if (!is_flush && !tree.LayerListIsEmpty() &&
+      property_trees.effect_tree().size() > cc::kContentsRootPropertyNodeId &&
+      tree.RootRenderSurface()) {
+    // Store the damage rect of the root render surface in the update.  This
+    // allows us to verify that it matches the viz service calculation.
+    // Note: The client might report damage outside the root surface content
+    // rect (e.g. from a filter), so we must intersect with the content rect.
+    gfx::Rect damage_rect;
+    if (frame_has_damage) {
+      damage_rect = tree.RootRenderSurface()->GetDamageRect();
+      damage_rect.Subtract(viewport_damage_rect);
+      damage_rect.Intersect(tree.RootRenderSurface()->content_rect());
+    }
+    update->root_layer_damage_rect = damage_rect;
+  }
   update->full_tree_damaged = property_trees.full_tree_damaged();
   update->debug_state = host_impl_->debug_state();
 
@@ -1444,7 +1657,8 @@ base::TimeTicks VizLayerContext::UpdateDisplayTreeFrom(
                        /*needs_full_sync=*/true);
       }
     } else {
-      for (LayerImpl* layer : tree.LayersThatShouldPushProperties()) {
+      for (auto* layer : tree.LayersThatShouldPushProperties()) {
+        DCHECK(layer);
         SerializeLayer(*layer, resource_provider, shared_image_interface,
                        *update,
                        /*needs_full_sync=*/false);
@@ -1462,32 +1676,38 @@ base::TimeTicks VizLayerContext::UpdateDisplayTreeFrom(
       last_committed_property_trees_.clear();
     }
     PropertyTrees& old_trees = last_committed_property_trees_;
-    ComputePropertyTreeUpdate(
-        old_trees.transform_tree(), property_trees.transform_tree(),
+    ComputeTransformTreeUpdate(
+        old_trees.transform_tree_mutable(), property_trees.transform_tree(),
         update->transform_nodes, update->num_transform_nodes);
-    ComputePropertyTreeUpdate(old_trees.clip_tree(), property_trees.clip_tree(),
-                              update->clip_nodes, update->num_clip_nodes);
-    ComputeEffectTreeUpdate(old_trees.effect_tree(),
+
+    ComputePropertyTreeUpdate(property_trees, old_trees.clip_tree(),
+                              property_trees.clip_tree(), update->clip_nodes,
+                              update->num_clip_nodes);
+    ComputeEffectTreeUpdate(property_trees, old_trees.effect_tree(),
                             property_trees.effect_tree_mutable(),
                             update->effect_nodes, update->num_effect_nodes);
-    ComputePropertyTreeUpdate(old_trees.scroll_tree(),
+    ComputePropertyTreeUpdate(property_trees, old_trees.scroll_tree(),
                               property_trees.scroll_tree(),
                               update->scroll_nodes, update->num_scroll_nodes);
     update->transform_tree_update = ComputeTransformTreePropertiesUpdate(
-        old_trees.transform_tree(), property_trees.transform_tree());
+        property_trees.scroll_tree(), old_trees.transform_tree(),
+        property_trees.transform_tree());
 
     update->scroll_tree_update = ComputeScrollTreePropertiesUpdate(
         old_trees.scroll_tree(), property_trees.scroll_tree());
 
-    last_committed_property_trees_ = property_trees;
+    old_trees.transform_tree_mutable().CopyFromPreservingNodes(
+        property_trees.transform_tree());
+    old_trees.clip_tree_mutable() = property_trees.clip_tree();
+    old_trees.effect_tree_mutable() = property_trees.effect_tree();
+    old_trees.scroll_tree_mutable() = property_trees.scroll_tree();
 
     // Some deltas are normally not copied when adopting a new pending tree.
     // See details in ScrollTree::operator=(const ScrollTree& from).
     // However, we want to remember the last updates committed to viz.
-    last_committed_property_trees_.scroll_tree_mutable()
-        .synced_scroll_offset_map() =
+    old_trees.scroll_tree_mutable().synced_scroll_offset_map() =
         property_trees.scroll_tree().synced_scroll_offset_map();
-    last_committed_property_trees_.scroll_tree_mutable().elastic_overscroll() =
+    old_trees.scroll_tree_mutable().elastic_overscroll() =
         property_trees.scroll_tree().elastic_overscroll();
   }
 
@@ -1513,6 +1733,24 @@ base::TimeTicks VizLayerContext::UpdateDisplayTreeFrom(
   if (base::FeatureList::IsEnabled(features::kTreeAnimationsInViz)) {
     SerializeAnimationUpdates(tree, *update);
   }
+
+#if DCHECK_IS_ON()
+  // Validate that any effect node referencing a backdrop mask actually points
+  // to a layer that exists in the active tree we are about to serialize.
+  for (const auto& effect_node : update->effect_nodes) {
+    if (effect_node->backdrop_mask_element_id) {
+      bool layer_exists_in_tree =
+          tree.LayerByElementId(effect_node->backdrop_mask_element_id) !=
+          nullptr;
+
+      DUMP_WILL_BE_CHECK(layer_exists_in_tree)
+          << "Sending LayerTreeUpdate with invalid backdrop_mask_element_id ("
+          << effect_node->backdrop_mask_element_id.GetInternalValue()
+          << ") on effect node " << effect_node->id
+          << ". Total layers in tree: " << tree.NumLayers();
+    }
+  }
+#endif
 
   base::TimeTicks time_sent_to_service = base::TimeTicks::Now();
   {
@@ -1585,7 +1823,7 @@ void VizLayerContext::SerializeAnimationUpdates(
   auto& pushed_timelines = pushed_animation_timelines_;
   std::vector<int32_t> removed_timelines;
   for (auto it = pushed_timelines.begin(); it != pushed_timelines.end();) {
-    if (!base::Contains(current_timelines, it->first)) {
+    if (!current_timelines.contains(it->first)) {
       removed_timelines.push_back(it->first);
       it = pushed_timelines.erase(it);
     } else {
@@ -1613,7 +1851,7 @@ VizLayerContext::MaybeSerializeAnimationTimeline(
   auto& pushed_animations = pushed_animation_timelines_[timeline.id()];
   std::vector<int32_t> removed_animations;
   for (auto it = pushed_animations.begin(); it != pushed_animations.end();) {
-    if (!base::Contains(current_animations, *it)) {
+    if (!current_animations.contains(*it)) {
       removed_animations.push_back(*it);
       it = pushed_animations.erase(it);
     } else {
@@ -1639,6 +1877,10 @@ VizLayerContext::MaybeSerializeAnimationTimeline(
   return wire;
 }
 
+void VizLayerContext::FlushReceiverForTesting() {
+  client_receiver_.FlushForTesting();  // IN-TEST
+}
+
 void VizLayerContext::OnMojoConnectionError(uint32_t custom_reason,
                                             const std::string& description) {
   if (!custom_reason) {
@@ -1651,6 +1893,21 @@ void VizLayerContext::OnMojoConnectionError(uint32_t custom_reason,
 
   DLOG(ERROR) << description;
   host_impl_->DidLoseLayerTreeFrameSink();
+}
+
+void VizLayerContext::SetUnboundedFrameSinkId(
+    const viz::FrameSinkId& frame_sink_id,
+    const viz::LocalSurfaceId& local_surface_id) {
+  service_->SetUnboundedFrameSinkId(frame_sink_id, local_surface_id);
+}
+
+void VizLayerContext::SetUnboundedLocalSurfaceId(
+    const viz::LocalSurfaceId& local_surface_id) {
+  service_->SetUnboundedLocalSurfaceId(local_surface_id);
+}
+
+void VizLayerContext::DismissUnboundedFrameSink() {
+  service_->DismissUnboundedFrameSink();
 }
 
 }  // namespace cc::mojo_embedder

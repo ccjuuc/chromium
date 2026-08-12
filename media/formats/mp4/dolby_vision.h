@@ -12,6 +12,10 @@ namespace media {
 
 namespace mp4 {
 
+inline constexpr uint8_t kDolbyVisionCompatibilityIdHDR10 = 1;
+inline constexpr uint8_t kDolbyVisionCompatibilityIdSDR = 2;
+inline constexpr uint8_t kDolbyVisionCompatibilityIdHLG = 4;
+
 struct MEDIA_EXPORT DOVIDecoderConfigurationRecord {
   uint8_t dv_version_major = 0;
   uint8_t dv_version_minor = 0;
@@ -31,7 +35,7 @@ struct MEDIA_EXPORT DOVIDecoderConfigurationRecord {
   //       context and therefore the box header is not expected to be present
   //       in |data|.
   // Returns true if |data| was successfully parsed.
-  bool ParseForTesting(const uint8_t* data, int data_size);
+  bool ParseForTesting(base::span<const uint8_t> data);
 };
 
 // The structures of the configuration is defined in Dolby Streams Within the
@@ -50,6 +54,9 @@ struct MEDIA_EXPORT DolbyVisionConfiguration8 : Box {
 
   DOVIDecoderConfigurationRecord dovi_config;
 };
+
+MEDIA_EXPORT VideoColorSpace
+ParseDolbyVisionColorSpace(VideoCodecProfile profile, uint8_t compatibility_id);
 
 }  // namespace mp4
 }  // namespace media

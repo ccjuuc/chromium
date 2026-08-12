@@ -7,6 +7,8 @@
 #include <windows.h>
 
 #include <tlhelp32.h>
+#include <wincrypt.h>
+#include <wintrust.h>
 
 #include <cstdint>
 #include <limits>
@@ -27,8 +29,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/win/pe_image_reader.h"
 #include "base/win/scoped_handle.h"
-#include "base/win/wincrypt_shim.h"
-#include "base/win/wintrust_shim.h"
 #include "crypto/scoped_capi_types.h"
 
 // This must be after wincrypt and wintrust.
@@ -172,14 +172,14 @@ void GetCatalogCertificateInfo(const base::FilePath& filename,
 
   // Get the size we need for our hash.
   DWORD hash_size = 0;
-  CryptCATAdminCalcHashFromFileHandle(file_handle.Get(), &hash_size, nullptr,
+  CryptCATAdminCalcHashFromFileHandle(file_handle.get(), &hash_size, nullptr,
                                       0);
   if (hash_size == 0)
     return;
 
   // Calculate the hash. If this fails then bail.
   std::vector<BYTE> buffer(hash_size);
-  if (!CryptCATAdminCalcHashFromFileHandle(file_handle.Get(), &hash_size,
+  if (!CryptCATAdminCalcHashFromFileHandle(file_handle.get(), &hash_size,
                                            buffer.data(), 0)) {
     return;
   }

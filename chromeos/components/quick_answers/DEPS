@@ -6,7 +6,6 @@ include_rules = [
   "+content/public/browser",
   "+content/public/test",
   "+google_apis",
-  "+services/data_decoder/public",
   "+third_party/hunspell",
   "+ui/base/l10n",
   "+ui/base/resource/resource_bundle.h",
@@ -15,7 +14,7 @@ include_rules = [
 ]
 
 specific_include_rules = {
-  ".+_unittest\.cc": [
+  ".+_unittest\\.cc": [
     "+components/user_manager",
   ]
 }

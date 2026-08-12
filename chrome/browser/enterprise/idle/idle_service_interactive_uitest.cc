@@ -24,6 +24,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/focus/browser_focus_controller.h"
 #include "chrome/browser/ui/idle_bubble.h"
 #include "chrome/browser/ui/profiles/profile_picker.h"
 #include "chrome/browser/ui/profiles/profile_ui_test_utils.h"
@@ -54,6 +55,10 @@
 #include "ui/base/idle/idle_time_provider.h"
 #include "ui/base/ozone_buildflags.h"
 #include "ui/base/test/idle_test_utils.h"
+
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
 
 using base::TestMockTimeTaskRunner;
 using testing::_;
@@ -191,7 +196,7 @@ class IdleServiceTest : public InProcessBrowserTest {
       int idle_timeout,
       const std::vector<std::string>& idle_timeout_actions = {
           "close_browsers", "show_profile_picker"}) {
-    base::Value::List actions_list;
+    base::ListValue actions_list;
     for (const std::string& action : idle_timeout_actions) {
       actions_list.Append(action);
     }
@@ -234,12 +239,14 @@ class IdleServiceTest : public InProcessBrowserTest {
   }
 
   void ActivateBrowser(BrowserWindowInterface* browser_window_interface) {
-#if BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE_WAYLAND)
+#if BUILDFLAG(IS_OZONE)
     // TODO(nicolaso): BrowserActivationWaiter times out on Wayland. Figure out
     // why.
-#else
+    if (::ui::OzonePlatform::RunningOnWaylandForTest()) {
+      return;
+    }
+#endif
     ActivateBrowserImpl(browser_window_interface);
-#endif  // BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE_WAYLAND)
   }
 
   void ActivateBrowserImpl(BrowserWindowInterface* browser_window_interface) {
@@ -313,11 +320,12 @@ IN_PROC_BROWSER_TEST_F(IdleServiceTest, Basic) {
           base::Bucket(metrics::IdleTimeoutDialogEvent::kDialogExpired, 1)));
   // Check that the success of idle timeout actions is recorded.
   histogram_tester->ExpectUniqueSample(
-      "Enterprise.IdleTimeoutPolicies.Success.ShowProfilePicker", true, 1);
+      "Enterprise.IdleTimeoutPolicies.ActionSuccess.ShowProfilePicker", true,
+      1);
   histogram_tester->ExpectUniqueSample(
-      "Enterprise.IdleTimeoutPolicies.Success.CloseBrowsers", true, 1);
+      "Enterprise.IdleTimeoutPolicies.ActionSuccess.CloseBrowsers", true, 1);
   histogram_tester->ExpectUniqueSample(
-      "Enterprise.IdleTimeoutPolicies.Success.AllActions", true, 1);
+      "Enterprise.IdleTimeoutPolicies.ActionSuccess.AllActions", true, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(IdleServiceTest, DidNotClose) {
@@ -601,7 +609,7 @@ IN_PROC_BROWSER_TEST_F(IdleServiceTest, NoActions) {
   SetIdleTimeoutPolicies(policy_provider(0), /*idle_timeout=*/1,
                          /*idle_timeout_actions=*/{});
 
-  base::Value::List actions;
+  base::ListValue actions;
   profile->GetPrefs()->SetList(prefs::kIdleTimeoutActions, std::move(actions));
 
   EXPECT_EQ(1, GetBrowserCount(profile));
@@ -637,7 +645,7 @@ IN_PROC_BROWSER_TEST_F(IdleServiceTest, JustCloseBrowsers) {
   SetIdleTimeoutPolicies(policy_provider(0), /*idle_timeout=*/1,
                          /*idle_timeout_actions=*/{"close_browsers"});
 
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(static_cast<int>(ActionType::kCloseBrowsers));
   profile->GetPrefs()->SetList(prefs::kIdleTimeoutActions, std::move(actions));
 
@@ -674,7 +682,7 @@ IN_PROC_BROWSER_TEST_F(IdleServiceTest, JustShowProfilePicker) {
   SetIdleTimeoutPolicies(policy_provider(0), /*idle_timeout=*/1,
                          /*idle_timeout_actions=*/{"show_profile_picker"});
 
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(static_cast<int>(ActionType::kShowProfilePicker));
   profile->GetPrefs()->SetList(prefs::kIdleTimeoutActions, std::move(actions));
 
@@ -826,7 +834,8 @@ IN_PROC_BROWSER_TEST_F(IdleServiceTest,
   EXPECT_FALSE(bubble->GetWidget()->IsActive());
 
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
-  browser_view->FocusInactivePopupForAccessibility();
+  BrowserFocusController::From(browser_view->browser())
+      ->FocusInactivePopupForAccessibility();
   EXPECT_TRUE(bubble->GetWidget()->IsActive());
 }
 
@@ -879,10 +888,10 @@ IN_PROC_BROWSER_TEST_F(IdleServiceTest,
   EXPECT_FALSE(bubble->GetWidget()->IsActive());
 
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
-  browser_view->RotatePaneFocus(true);
+  BrowserFocusController::From(browser_view->browser())->RotatePaneFocus(true);
   // Rotate pane focus is expected to keep the bubble focused until the user
   // deals with it, so a second call should have no effect.
-  browser_view->RotatePaneFocus(true);
+  BrowserFocusController::From(browser_view->browser())->RotatePaneFocus(true);
   EXPECT_TRUE(bubble->GetWidget()->IsActive());
 }
 

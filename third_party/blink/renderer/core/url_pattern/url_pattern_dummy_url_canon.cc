@@ -6,6 +6,7 @@
 
 #include <ranges>
 
+#include "base/strings/strcat.h"
 #include "components/url_pattern/url_pattern_util.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
@@ -24,16 +25,16 @@ constexpr char kDummyUrl[] = "https://dummy.invalid/";
 
 String MaybeStripPrefix(const String& value, StringView prefix) {
   CHECK_EQ(prefix.length(), 1u);
-  if (value.StartsWith(prefix)) {
-    return value.Substring(1, value.length() - 1);
+  if (value.starts_with(prefix)) {
+    return value.substr(1, value.length() - 1);
   }
   return value;
 }
 
 String MaybeStripSuffix(const String& value, StringView suffix) {
   CHECK_EQ(suffix.length(), 1u);
-  if (value.EndsWith(suffix)) {
-    return value.Substring(0, value.length() - 1);
+  if (value.ends_with(suffix)) {
+    return value.substr(0, value.length() - 1);
   }
   return value;
 }
@@ -59,7 +60,7 @@ String MaybeStripAfterFirstDelimiter(const String& value,
   if (first_delim == kNotFound) {
     return value;
   }
-  return value.Substring(0, first_delim);
+  return value.substr(0, first_delim);
 }
 
 bool ContainsForbiddenHostnameCodePoint(const String& input,
@@ -71,7 +72,7 @@ bool ContainsForbiddenHostnameCodePoint(const String& input,
 
 String StringFromCanonOutput(const url::CanonOutput& output,
                              const url::Component& component) {
-  return String::FromUTF8(output.view().substr(component.begin, component.len));
+  return String::FromUtf8(output.view().substr(component.begin, component.len));
 }
 
 // Convert from the output of the CanonicalizeInternal* functions to
@@ -136,7 +137,7 @@ base::expected<String, String> CanonicalizeProtocolInternal(
       // If we do this with a single letter it looks to KURL like a Windows
       // file path and is turned into a file URL. Canonicalizing 'a' should
       // not return 'file'.
-      return base::ok(input.LowerASCII());
+      return base::ok(input.ToAsciiLower());
     } else {
       return base::ok(dummy_url.Protocol());
     }
@@ -227,16 +228,16 @@ base::expected<String, String> CanonicalizeIPv6HostnameInternal(
   // hostname parser wants to completely parse IPv6 hostnames, this will always
   // trigger an error.  Therefore, to allow pattern syntax within IPv6 brackets
   // we simply check for valid characters and lowercase any hex digits.
-  for (size_t i = 0; i < input.length(); ++i) {
+  for (wtf_size_t i = 0; i < input.length(); ++i) {
     char c = input[i];
-    if (!blink::IsASCIIHexDigit(c) && c != '[' && c != ']' && c != ':') {
+    if (!blink::IsAsciiHexDigit(c) && c != '[' && c != ']' && c != ':') {
       return base::unexpected(blink::StrCat(
           {"Invalid IPv6 hostname character '", String(std::string_view(&c, 1)),
            "' in '", input, "'."}));
     }
-    result += blink::ToASCIILower(c);
+    result += blink::ToAsciiLower(c);
   }
-  return base::ok(String::FromUTF8(result));
+  return base::ok(String::FromUtf8(result));
 }
 
 base::expected<String, String> CanonicalizePortInternal(const String& protocol,
@@ -245,7 +246,14 @@ base::expected<String, String> CanonicalizePortInternal(const String& protocol,
     return base::ok(input);
   }
 
-  KURL dummy_url(kDummyUrl);
+  // Using the HTTPS dummy URL results in deletion of the default port number
+  // (443), use a dummy scheme to avoid this.
+  // In spec, the default scheme of the fake URL is the empty string.
+  // (https://urlpattern.spec.whatwg.org/#canonicalize-a-port) However, GURL
+  // refuses the empty scheme. Use "dummy:" as a workaround.
+  // TODO(crbug.com/528332878): Consider how to align with the spec.
+  constexpr const char kDummyNonSpecialScheme[] = "dummy";
+  KURL dummy_url(StrCat({kDummyNonSpecialScheme, kDummyUrlWithoutSchemeName}));
   if (!protocol.empty() && !dummy_url.SetProtocol(protocol)) {
     return base::unexpected(
         blink::StrCat({"Invalid protocol '", protocol, "'."}));
@@ -271,7 +279,7 @@ base::expected<String, String> CanonicalizePathnameInternal(
   // produce a match when the exact same fixed pathname string is passed
   // to both the constructor and test()/exec()
   if (standard) {
-    bool leading_slash = input.StartsWith("/");
+    bool leading_slash = input.starts_with('/');
     KURL dummy_url(kDummyUrl);
     String maybe_preprended_input = input;
 
@@ -292,10 +300,10 @@ base::expected<String, String> CanonicalizePathnameInternal(
         dummy_url.HasPath() ? dummy_url.GetPath().ToString() : String();
 
     if (!leading_slash) {
-      if (canonicalized_path.StartsWith("/-")) {
+      if (canonicalized_path.starts_with("/-")) {
         // If we prepended a slash then we need to remove it again since the
         // pathname canonicalization should not add a leading slash.
-        canonicalized_path = canonicalized_path.Substring(2);
+        canonicalized_path = canonicalized_path.substr(2);
       } else {
         return base::unexpected(
             blink::StrCat({"Invalid pathname '", input, "'."}));
@@ -475,61 +483,66 @@ String CanonicalizeHash(const String& input,
 base::expected<std::string, absl::Status> ProtocolEncodeCallback(
     std::string_view input) {
   return EncodeCallbackHelper(
-      CanonicalizeProtocolInternal(String::FromUTF8(input)));
+      CanonicalizeProtocolInternal(String::FromUtf8(input)));
 }
 
 base::expected<std::string, absl::Status> UsernameEncodeCallback(
     std::string_view input) {
   return EncodeCallbackHelper(
-      CanonicalizeUsernameInternal(String::FromUTF8(input)));
+      CanonicalizeUsernameInternal(String::FromUtf8(input)));
 }
 
 base::expected<std::string, absl::Status> PasswordEncodeCallback(
     std::string_view input) {
   return EncodeCallbackHelper(
-      CanonicalizePasswordInternal(String::FromUTF8(input)));
+      CanonicalizePasswordInternal(String::FromUtf8(input)));
 }
 
 base::expected<std::string, absl::Status> HostnameEncodeCallback(
     std::string_view input) {
   return EncodeCallbackHelper(
-      CanonicalizeHostnameInternal(String::FromUTF8(input), false));
+      CanonicalizeHostnameInternal(String::FromUtf8(input), false));
 }
 
 base::expected<std::string, absl::Status> IPv6HostnameEncodeCallback(
     std::string_view input) {
   return EncodeCallbackHelper(
-      CanonicalizeIPv6HostnameInternal(String::FromUTF8(input)));
+      CanonicalizeIPv6HostnameInternal(String::FromUtf8(input)));
 }
 
 base::expected<std::string, absl::Status> PortEncodeCallback(
     std::string_view input) {
-  return EncodeCallbackHelper(
-      CanonicalizePortInternal(String(), String::FromUTF8(input)));
+  base::expected<std::string, absl::Status> result = EncodeCallbackHelper(
+      CanonicalizePortInternal(String(), String::FromUtf8(input)));
+  if (!input.empty() && result.has_value()) {
+    CHECK(!result.value().empty()) << "Non-empty string in port component "
+                                      "should also be non-empty after encoding";
+  }
+  return result;
 }
 
 base::expected<std::string, absl::Status> StandardPathnameEncodeCallback(
     std::string_view input) {
   return EncodeCallbackHelper(
-      CanonicalizePathnameInternal(true, String::FromUTF8(input)));
+      CanonicalizePathnameInternal(true, String::FromUtf8(input)));
 }
 
 base::expected<std::string, absl::Status> OpaquePathnameEncodeCallback(
     std::string_view input) {
   return EncodeCallbackHelper(
-      CanonicalizePathnameInternal(false, String::FromUTF8(input)));
+      CanonicalizePathnameInternal(false, String::FromUtf8(input)));
 }
 
 base::expected<std::string, absl::Status> SearchEncodeCallback(
     std::string_view input) {
   return EncodeCallbackHelper(
-      CanonicalizeSearchInternal(String::FromUTF8(input)));
+      CanonicalizeSearchInternal(String::FromUtf8(input)));
 }
 
 base::expected<std::string, absl::Status> HashEncodeCallback(
     std::string_view input) {
   return EncodeCallbackHelper(
-      CanonicalizeHashInternal(String::FromUTF8(input)));
+      CanonicalizeHashInternal(String::FromUtf8(input)));
 }
 
 }  // namespace blink::url_pattern_dummy_url_canon

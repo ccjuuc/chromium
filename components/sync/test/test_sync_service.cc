@@ -7,18 +7,19 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "components/sync/base/features.h"
 #include "components/sync/base/progress_marker_map.h"
+#include "components/sync/base/user_selectable_type.h"
 #include "components/sync/engine/cycle/model_neutral_state.h"
 #include "components/sync/protocol/sync_enums.pb.h"
 #include "components/sync/service/sync_error.h"
 #include "components/sync/service/sync_token_status.h"
 #include "google_apis/gaia/gaia_id.h"
 #include "google_apis/gaia/google_service_auth_error.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace syncer {
 
@@ -48,7 +49,9 @@ CoreAccountInfo GetDefaultAccountInfo() {
 
 TestSyncService::TestSyncService()
     : user_settings_(this), last_cycle_snapshot_(MakeDefaultCycleSnapshot()) {
-  SetSignedIn(signin::ConsentLevel::kSync);
+  SetSignedIn(IsReplaceSyncPromosWithSignInPromosEnabled()
+                  ? signin::ConsentLevel::kSignin
+                  : signin::ConsentLevel::kSync);
 }
 
 TestSyncService::~TestSyncService() = default;
@@ -59,6 +62,9 @@ void TestSyncService::SetSignedIn(signin::ConsentLevel consent_level) {
 
 void TestSyncService::SetSignedIn(signin::ConsentLevel consent_level,
                                   const CoreAccountInfo& account_info) {
+  CHECK(!local_sync_enabled_)
+      << "Cannot set signed in while local sync is enabled.";
+
   disable_reasons_.Remove(DISABLE_REASON_NOT_SIGNED_IN);
   account_info_ = account_info;
   if (consent_level == signin::ConsentLevel::kSync) {
@@ -108,7 +114,20 @@ void TestSyncService::SetMaxTransportState(TransportState max_transport_state) {
 }
 
 void TestSyncService::SetLocalSyncEnabled(bool local_sync_enabled) {
+  if (local_sync_enabled == local_sync_enabled_) {
+    return;
+  }
+
   local_sync_enabled_ = local_sync_enabled;
+  if (local_sync_enabled_) {
+    SetSignedOut();
+    disable_reasons_.Remove(DISABLE_REASON_NOT_SIGNED_IN);
+    disable_reasons_.Remove(DISABLE_REASON_ENTERPRISE_POLICY);
+  } else {
+    SetSignedIn(IsReplaceSyncPromosWithSignInPromosEnabled()
+                    ? signin::ConsentLevel::kSignin
+                    : signin::ConsentLevel::kSync);
+  }
 }
 
 void TestSyncService::SetPersistentAuthError() {
@@ -230,7 +249,7 @@ SyncService::TransportState TestSyncService::GetTransportState() const {
 
 SyncService::UserActionableError TestSyncService::GetUserActionableError()
     const {
-#if !BUILDFLAG(IS_IOS)
+#if !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
   if (HasSyncConsent()) {
     if (!user_settings_.IsInitialSyncFeatureSetupComplete()) {
       return UserActionableError::kNeedsSettingsConfirmation;
@@ -243,7 +262,7 @@ SyncService::UserActionableError TestSyncService::GetUserActionableError()
       return UserActionableError::kUnrecoverableError;
     }
   }
-#endif  // !BUILDFLAG(IS_IOS)
+#endif  // !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
 
   if (GetAuthError().state() != GoogleServiceAuthError::NONE) {
     return UserActionableError::kSignInNeedsUpdate;
@@ -362,6 +381,16 @@ void TestSyncService::TriggerRefresh(TriggerRefreshSource source,
 
 void TestSyncService::DataTypePreconditionChanged(DataType type) {}
 
+base::flat_set<std::string>
+TestSyncService::GetCurrentDeviceCacheGuidsForAllGaiaIds() const {
+  return current_device_cache_guids_for_all_gaia_ids_;
+}
+
+void TestSyncService::SetCurrentDeviceCacheGuidsForAllGaiaIds(
+    base::flat_set<std::string> guids) {
+  current_device_cache_guids_for_all_gaia_ids_ = std::move(guids);
+}
+
 void TestSyncService::AddObserver(SyncServiceObserver* observer) {
   observers_.AddObserver(observer);
 }
@@ -420,7 +449,7 @@ void TestSyncService::RemoveProtocolEventObserver(
     ProtocolEventObserver* observer) {}
 
 void TestSyncService::GetAllNodesForDebugging(
-    base::OnceCallback<void(base::Value::List)> callback) {}
+    base::OnceCallback<void(base::ListValue)> callback) {}
 
 SyncService::DataTypeDownloadStatus TestSyncService::GetDownloadStatusFor(
     DataType type) const {
@@ -490,9 +519,26 @@ void TestSyncService::TriggerLocalDataMigrationForItems(
 
 void TestSyncService::SelectTypeAndMigrateLocalDataItemsWhenActive(
     DataType data_type,
-    std::vector<LocalDataItemModel::DataId> items) {}
+    std::vector<LocalDataItemModel::DataId> items) {
+  // Using `SyncUserSettings::ResetSelectedType()` to be aligned with the
+  // implementation in
+  // `SyncServiceImpl::SelectTypeAndMigrateLocalDataItemsWhenActive()`.
+  GetUserSettings()->ResetSelectedType(
+      GetUserSelectableTypeFromDataType(data_type).value());
 
-void TestSyncService::AcknowledgeBookmarksLimitExceededError() {
+  if (auto it = local_data_descriptions_.find(data_type);
+      it != local_data_descriptions_.end()) {
+    const absl::flat_hash_set<LocalDataItemModel::DataId> items_to_remove(
+        items.begin(), items.end());
+    std::erase_if(it->second.local_data_models,
+                  [&items_to_remove](const LocalDataItemModel& model) {
+                    return items_to_remove.contains(model.id);
+                  });
+  }
+}
+
+void TestSyncService::AcknowledgeBookmarksLimitExceededError(
+    BookmarksLimitExceededHelpClickedSource source) {
   bookmarks_limit_exceeded_ = false;
 }
 

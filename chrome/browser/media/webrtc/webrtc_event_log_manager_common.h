@@ -12,8 +12,9 @@
 #include "base/files/file_path.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "content/public/browser/child_process_id.h"
-#include "ipc/constants.mojom.h"
+#include "components/webrtc_logging/browser/text_log_list.h"
+#include "content/public/common/child_process_id.h"
+#include "ipc/constants.mojom-forward.h"
 
 class Profile;
 
@@ -51,6 +52,9 @@ extern const size_t kWebRtcEventLogIdLength;
 extern const size_t kMinWebRtcEventLogWebAppId;
 extern const size_t kMaxWebRtcEventLogWebAppId;
 
+extern const size_t kSameSiteWebAppId;
+extern const size_t kCrossSiteWebAppId;
+
 // Sentinel value, guaranteed not to fall inside the range of min-max valid IDs.
 extern const size_t kInvalidWebRtcEventLogWebAppId;
 
@@ -59,13 +63,13 @@ extern const size_t kInvalidWebRtcEventLogWebAppId;
 // applied globally (all browser contexts are limited together).
 extern const size_t kMaxActiveRemoteBoundWebRtcEventLogs;
 
-// Limit over the number of pending logs (logs stored on disk and awaiting to
-// be uploaded to a remote server). This limit avoids excessive storage. If a
+// Limit over the number of logs stored on disk, local-only or awaiting to
+// be uploaded to a remote server. This limit avoids excessive storage. If a
 // user chooses to have multiple profiles (and hence browser contexts) on a
 // system, it is assumed that the user has enough storage to accommodate
 // the increased storage consumption that comes with it. Therefore, this
 // limit is applied per browser context.
-extern const size_t kMaxPendingRemoteBoundWebRtcEventLogs;
+extern const size_t kMaxPendingAndLocalOnlyRemoteBoundWebRtcEventLogs;
 
 // Max number of history files that may be kept; after this number is exceeded,
 // the oldest logs should be pruned.
@@ -115,6 +119,8 @@ extern const char kStartRemoteLoggingFailureOutputPeriodMsTooLarge[];
 extern const char kStartRemoteLoggingFailureUnknownOrInactivePeerConnection[];
 extern const char kStartRemoteLoggingFailureUnlimitedSizeDisallowed[];
 extern const char kBrowserContextNotFound[];
+
+enum class StopLoggingAction { kStore, kDelete };
 
 // Values for the histogram for the result of the API call to collect
 // a WebRTC event log.
@@ -566,6 +572,10 @@ base::FilePath WebRtcEventLogPath(const base::FilePath& remote_logs_dir,
 bool IsValidRemoteBoundLogFilename(const std::string& filename);
 bool IsValidRemoteBoundLogFilePath(const base::FilePath& path);
 
+// Checks whether the path/filename refers to a local-only remote-bound log.
+bool IsLocalOnlyRemoteBoundLogFilename(const std::string& filename);
+bool IsLocalOnlyRemoteBoundLogFilePath(const base::FilePath& path);
+
 // Given WebRTC event log's path, return the path to the history file that
 // is, or would be, associated with it.
 base::FilePath GetWebRtcEventLogHistoryFilePath(const base::FilePath& path);
@@ -581,7 +591,8 @@ size_t ExtractRemoteBoundWebRtcEventLogWebAppIdFromPath(
     const base::FilePath& path);
 
 // Used to determine the default value for the policy controlling event logging.
-bool DoesProfileDefaultToLoggingEnabled(const Profile* const profile);
+bool DoesProfileDefaultToLoggingEnabled(const Profile* const profile,
+                                        webrtc_logging::ApiType api_type);
 
 }  // namespace webrtc_event_logging
 

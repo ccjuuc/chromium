@@ -5,8 +5,7 @@
 #include "chrome/browser/ui/autofill/autofill_client_provider.h"
 
 #include "base/check_deref.h"
-#include "base/memory/ptr_util.h"
-#include "chrome/browser/password_manager/chrome_password_manager_client.h"
+#include "base/metrics/histogram_functions.h"
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_prefs.h"
@@ -36,33 +35,17 @@ void RecordAvailabilityStatus(AndroidAutofillAvailabilityStatus availability) {
 void RecordWhetherAndroidPrefResets(PrefService& prefs,
                                     bool uses_platform_autofill) {
   const bool will_reset_pref =
-      prefs.GetBoolean(prefs::kAutofillUsingVirtualViewStructure) &&
+      prefs.GetBoolean(prefs::kAutofillUsingPlatformAutofill) &&
       !uses_platform_autofill;
   base::UmaHistogramBoolean("Autofill.ResetAutofillPrefToChrome",
                             will_reset_pref);
 }
 
-// Sets a ahread pref that allows to learn whether deep-links into Chrome's
-// settings are available to use.
-void SetSharedPrefForDeepLink() {
-  Java_AutofillClientProviderUtils_setAutofillOptionsDeepLinkPref(
-      base::android::AttachCurrentThread(),
-
-      base::FeatureList::IsEnabled(
-          autofill::features::kAutofillDeepLinkAutofillOptions));
-}
-
 // Sets a shared pref that allows external apps to use a ContentResolver to
 // figure out whether Chrome is using platform autofill over the default.
 void SetSharedPrefForSettingsContentProvider(bool uses_platform_autofill) {
-  if (base::FeatureList::IsEnabled(
-          autofill::features::kAutofillThirdPartyModeContentProvider)) {
-    Java_AutofillClientProviderUtils_setThirdPartyModePref(
-        base::android::AttachCurrentThread(), uses_platform_autofill);
-  } else {
-    Java_AutofillClientProviderUtils_unsetThirdPartyModePref(
-        base::android::AttachCurrentThread());
-  }
+  Java_AutofillClientProviderUtils_setThirdPartyModePref(
+      base::android::AttachCurrentThread(), uses_platform_autofill);
 }
 
 AndroidAutofillAvailabilityStatus GetAndroidAutofillAvailabilityStatus(
@@ -92,10 +75,16 @@ AutofillClientProvider::AutofillClientProvider(PrefService* prefs)
 #if BUILDFLAG(IS_ANDROID)
   RecordWhetherAndroidPrefResets(*prefs, uses_platform_autofill_);
   // Ensure the pref is reset if platform autofill is restricted.
-  prefs->SetBoolean(prefs::kAutofillUsingVirtualViewStructure,
+  prefs->SetBoolean(prefs::kAutofillUsingPlatformAutofill,
                     uses_platform_autofill_);
+  if (uses_platform_autofill_) {
+    // Update the package of the actively used Autofill Service while platform
+    // autofill is used. This allows restoring platform autofill later if it's
+    // temporarily unavailable. Calling this for AwG would reset the pref.
+    Java_AutofillClientProviderUtils_updatePackageUsedForAutofill(
+        base::android::AttachCurrentThread(), prefs, uses_platform_autofill_);
+  }
   SetSharedPrefForSettingsContentProvider(uses_platform_autofill_);
-  SetSharedPrefForDeepLink();
 #endif  // BUILDFLAG(IS_ANDROID)
 }
 

@@ -160,22 +160,16 @@ export class FeedbackFlowElement extends PolymerElement {
   }
 
   /**  The id of an element on the page that is currently shown. */
-  protected currentState: FeedbackFlowState = FeedbackFlowState.SEARCH;
+  declare protected currentState: FeedbackFlowState;
 
   /**  The feedback context. */
-  protected feedbackContext: FeedbackContext|null;
+  declare protected feedbackContext: FeedbackContext|null;
 
   /**  Whether to show the bluetooth Logs checkbox in share data page. */
   shouldShowBluetoothCheckbox: boolean = false;
 
   /**  Whether to show the Wifi debug Logs checkbox in share data page. */
   shouldShowWifiDebugLogsCheckbox = false;
-
-  /**
-   * Whether to show the Link Cross Device Dogfood Feedback checkbox in share
-   * data page.
-   */
-  shouldShowLinkCrossDeviceDogfoodFeedbackCheckbox = false;
 
   /**  Whether to show the autofill checkbox in share data page. */
   protected shouldShowAutofillCheckbox = false;
@@ -227,6 +221,7 @@ export class FeedbackFlowElement extends PolymerElement {
 
   constructor() {
     super();
+    this.currentState = FeedbackFlowState.SEARCH;
     this.dialogArgs = chrome.getVariableValue('dialogArguments');
     this.feedbackServiceProvider = getFeedbackServiceProvider();
   }
@@ -338,13 +333,11 @@ export class FeedbackFlowElement extends PolymerElement {
       isInternalAccount: feedbackInfo.isInternalAccount ?? false,
       wifiDebugLogsAllowed: false,
       traceId: feedbackInfo.traceId ?? 0,
-      pageUrl: {url: feedbackInfo.pageUrl ?? ''},
+      pageUrl: feedbackInfo.pageUrl ?? '',
       fromAutofill: feedbackInfo.fromAutofill ?? false,
       autofillMetadata: feedbackInfo.autofillMetadata ?
           JSON.stringify(feedbackInfo.autofillMetadata) :
           '{}',
-      hasLinkedCrossDevicePhone:
-          feedbackInfo.hasLinkedCrossDevicePhone ?? false,
       categoryTag: feedbackInfo.categoryTag ?? '',
       email: '',
       extraDiagnostics: '',
@@ -436,7 +429,7 @@ export class FeedbackFlowElement extends PolymerElement {
         categoryTag ? decodeURIComponent(categoryTag) : '';
     const pageUrl = params.get(AdditionalContextQueryParam.PAGE_URL);
     if (pageUrl) {
-      this.set('feedbackContext.pageUrl', {url: pageUrl});
+      this.set('feedbackContext.pageUrl', pageUrl);
     }
     const settingsSearchDoNotRecordMetrics = params.get(
         AdditionalContextQueryParam.SETTINGS_SEARCH_DO_NOT_RECORD_METRICS);
@@ -464,13 +457,6 @@ export class FeedbackFlowElement extends PolymerElement {
             this.isDescriptionRelatedToBluetooth(this.description);
         this.shouldShowWifiDebugLogsCheckbox =
             this.computeShouldShowWifiDebugLogsCheckbox();
-        this.shouldShowLinkCrossDeviceDogfoodFeedbackCheckbox =
-            this.feedbackContext !== null &&
-            loadTimeData.getBoolean(
-                'enableLinkCrossDeviceDogfoodFeedbackFlag') &&
-            this.feedbackContext.isInternalAccount &&
-            this.feedbackContext.hasLinkedCrossDevicePhone &&
-            this.isDescriptionRelatedToCrossDevice(this.description);
         this.fetchScreenshot();
         const shareDataPage = strictQuery(
             'share-data-page', this.shadowRoot, ShareDataPageElement);
@@ -634,24 +620,11 @@ export class FeedbackFlowElement extends PolymerElement {
      * bluetooth checkbox should be hidden and skip the relative check.
      */
     const isRelatedToBluetooth = btRegEx.test(textInput) ||
-        cantConnectRegEx.test(textInput) ||
-        this.isDescriptionRelatedToCrossDevice(textInput) ||
-        fastPairRegEx.test(textInput) || btDeviceRegEx.test(textInput);
-    return isRelatedToBluetooth;
-  }
-
-  /**
-   * If the user is not signed in with a internal google account, the Cross
-   * Device checkbox should be hidden and skip the relative check.
-   *
-   * Checks if any keywords related to Cross Device have been typed. If they
-   * are, we show the cross device checkbox, otherwise hide it.
-   */
-  protected isDescriptionRelatedToCrossDevice(textInput: string): boolean {
-    const isRelatedToCrossDevice = phoneHubRegEx.test(textInput) ||
+        cantConnectRegEx.test(textInput) || phoneHubRegEx.test(textInput) ||
         tetherRegEx.test(textInput) || smartLockRegEx.test(textInput) ||
-        nearbyShareRegEx.test(textInput);
-    return isRelatedToCrossDevice;
+        nearbyShareRegEx.test(textInput) || fastPairRegEx.test(textInput) ||
+        btDeviceRegEx.test(textInput);
+    return isRelatedToBluetooth;
   }
 }
 

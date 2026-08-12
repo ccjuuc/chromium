@@ -20,6 +20,8 @@ import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.BrowserRestartActivity;
 import org.chromium.chrome.browser.lifetime.ApplicationLifetime;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.LastSessionExitType;
+import org.chromium.chrome.browser.multiwindow.TabbedStartupWindowPolicyDelegate;
 
 /**
  * Answers requests to kill and (potentially) restart Chrome's main browser process.
@@ -27,9 +29,9 @@ import org.chromium.chrome.browser.lifetime.ApplicationLifetime;
  * <p>This class fires an Intent to start the {@link BrowserRestartActivity}, which will ultimately
  * kill the main browser process from its own process.
  *
- * <p>https://crbug.com/515919 details why another Activity is used instead of using the
- * AlarmManager. https://crbug.com/545453 details why the BrowserRestartActivity handles the process
- * killing.
+ * <p>https://crbug.com/41191765 details why another Activity is used instead of using the
+ * AlarmManager. https://crbug.com/40441017 details why the BrowserRestartActivity handles the
+ * process killing.
  */
 @NullMarked
 class ChromeLifetimeController
@@ -65,18 +67,14 @@ class ChromeLifetimeController
 
     private ChromeLifetimeController() {
         mHandler = new Handler(Looper.getMainLooper());
-        mRestartRunnable =
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        fireBrowserRestartActivityIntent();
-                    }
-                };
+        mRestartRunnable = this::fireBrowserRestartActivityIntent;
     }
 
     @Override
     public void onTerminate(boolean restart) {
         mRestartChromeOnDestroy = restart;
+        TabbedStartupWindowPolicyDelegate.getInstance()
+                .maybeSaveWindowStateOnSessionTermination(LastSessionExitType.QUIT);
 
         // Tell all Chrome Activities to finish themselves.
         for (Activity activity : ApplicationStatus.getRunningActivities()) {

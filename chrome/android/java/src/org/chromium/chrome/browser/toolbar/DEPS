@@ -4,7 +4,7 @@ include_rules = [
   # Allow dependencies on chrome/browser modules
   "+chrome/browser",
 
-  # Restrict dependencies to xsurface by default (crbug.com/1115137)
+  # Restrict dependencies to xsurface by default (crbug.com/40144215)
   "-chrome/browser/xsurface",
 
   "-chrome/android/java/src/org/chromium/chrome/browser",
@@ -19,6 +19,8 @@ include_rules = [
   "+components/feature_engagement",
   "+components/browser_ui/bottomsheet/android/java",
   "+components/browser_ui/desktop_windowing/android",
+  "+components/browser_ui/device_lock/android/java",
+  "+components/omnibox/browser",
   "+content/public/android/java/src/org/chromium/content_public",
 ]
 
@@ -33,6 +35,7 @@ specific_include_rules = {
     "+components/browser_ui/accessibility/android/java/src/org/chromium/components/browser_ui/accessibility/PageZoomManager.java",
     "+components/omnibox/browser/android/java/src/org/chromium/components/omnibox/action/OmniboxActionDelegate.java",
     "+components/omnibox/browser/android/java/src/org/chromium/components/omnibox/AutocompleteRequestType.java",
+    "+components/embedder_support/android/java/src/org/chromium/components/embedder_support/contextmenu",
   ],
   'ToolbarButtonInProductHelpController.java': [
     "+chrome/android/java/src/org/chromium/chrome/browser",
@@ -43,5 +46,11 @@ specific_include_rules = {
   ],
   'ToolbarColors.java': [
     "+chrome/android/java/src/org/chromium/chrome/browser/tasks/ReturnToChromeUtil.java"
+  ],
+  '.*Test\\.java': [
+    "+chrome/android",
+    "+ui/android",
+    "+components",
+    "+base",
   ],
 }

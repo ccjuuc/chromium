@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ash/login/demo_mode/demo_login_controller.h"
 
+#include <utility>
+
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/metrics/demo_session_metrics_recorder.h"
@@ -21,9 +23,11 @@
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
+#include "chrome/browser/ash/settings/scoped_test_device_settings_service.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/ui/ash/login/mock_login_display_host.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
@@ -36,6 +40,7 @@
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "chromeos/dbus/power/power_policy_controller.h"
 #include "components/account_id/account_id.h"
+#include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_client.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_manager.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_service.h"
@@ -144,27 +149,43 @@ class DemoLoginControllerTest : public testing::Test {
     chromeos::PowerManagerClient::InitializeFake();
     chromeos::PowerPolicyController::Initialize(
         chromeos::FakePowerManagerClient::Get());
-    policy_controller_ = chromeos::PowerPolicyController::Get();
+    std::ignore = chromeos::PowerPolicyController::Get();
 
-    base::Value::Dict account;
+    base::DictValue account;
     account.Set(kAccountsPrefDeviceLocalAccountsKeyId, kPublicAccountUserId);
     account.Set(
         kAccountsPrefDeviceLocalAccountsKeyType,
         static_cast<int>(policy::DeviceLocalAccountType::kPublicSession));
-    base::Value::List accounts;
+    base::ListValue accounts;
     accounts.Append(std::move(account));
     settings_helper_.Set(kAccountsPrefDeviceLocalAccounts,
                          base::Value(std::move(accounts)));
 
     auth_events_recorder_ = ash::AuthEventsRecorder::CreateForTesting();
 
-    existing_user_controller_ = std::make_unique<ExistingUserController>();
-
     TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(
         test_url_loader_factory_.GetSafeWeakWrapper());
+
+    existing_user_controller_ = std::make_unique<ExistingUserController>(
+        TestingBrowserProcess::GetGlobal()->local_state(),
+        TestingBrowserProcess::GetGlobal()
+            ->GetFeatures()
+            ->application_locale_storage(),
+        TestingBrowserProcess::GetGlobal()->shared_url_loader_factory(),
+        TestingBrowserProcess::GetGlobal()
+            ->platform_part()
+            ->browser_policy_connector_ash());
+
     system::StatisticsProvider::SetTestProvider(&statistics_provider_);
 
     ExpectGetExistingController();
+  }
+
+  void TearDown() override {
+    existing_user_controller_.reset();
+    TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(nullptr);
+    chromeos::PowerPolicyController::Shutdown();
+    chromeos::PowerManagerClient::Shutdown();
   }
 
   // This will trigger `ExistingUserController:ConfigureAutoLogin` since the
@@ -179,9 +200,11 @@ class DemoLoginControllerTest : public testing::Test {
   void SetUpPolicyClient(std::string dm_token = "fake-dm-token",
                          std::string client_id = "fake-client-id") {
     std::unique_ptr<policy::MockCloudPolicyStore> store =
-        std::make_unique<policy::MockCloudPolicyStore>();
+        std::make_unique<policy::MockCloudPolicyStore>(
+            policy::dm_protocol::GetChromeUserPolicyType());
     std::unique_ptr<policy::MockCloudPolicyStore> extension_install_store =
-        std::make_unique<policy::MockCloudPolicyStore>();
+        std::make_unique<policy::MockCloudPolicyStore>(
+            policy::dm_protocol::kChromeExtensionInstallUserCloudPolicyType);
     std::unique_ptr<policy::MockCloudPolicyClient> cloud_policy_client =
         std::make_unique<policy::MockCloudPolicyClient>();
     policy::CloudPolicyClient* client_ptr = cloud_policy_client.get();
@@ -199,14 +222,6 @@ class DemoLoginControllerTest : public testing::Test {
 
     GetDemoLoginController()->SetDeviceCloudPolicyManagerForTesting(
         cloud_policy_manager_.get());
-  }
-
-  void TearDown() override {
-    existing_user_controller_.reset();
-    if (chromeos::PowerPolicyController::IsInitialized()) {
-      chromeos::PowerPolicyController::Shutdown();
-    }
-    chromeos::PowerManagerClient::Shutdown();
   }
 
   GURL GetSetupUrl() {
@@ -280,16 +295,8 @@ class DemoLoginControllerTest : public testing::Test {
   base::test::ScopedFeatureList features_;
   content::BrowserTaskEnvironment task_environment_;
 
-  // We don't own the destruction of `PowerPolicyController` which causes it
-  // dangling.
-  raw_ptr<chromeos::PowerPolicyController, DisableDanglingPtrDetection>
-      policy_controller_;
-
   testing::NiceMock<ash::MockLoginDisplayHost> mock_login_display_host_;
   system::FakeStatisticsProvider statistics_provider_;
-
-  // Required for `user_manager::UserList`:
-  std::unique_ptr<ash::AuthEventsRecorder> auth_events_recorder_;
 
   // Dependencies for `ExistingUserController`:
   FakeSessionManagerClient fake_session_manager_client_;
@@ -301,6 +308,9 @@ class DemoLoginControllerTest : public testing::Test {
   session_manager::SessionManager session_manager_{
       std::make_unique<session_manager::FakeSessionManagerDelegate>()};
   std::unique_ptr<ExistingUserController> existing_user_controller_;
+
+  // Required for `user_manager::UserList`:
+  std::unique_ptr<ash::AuthEventsRecorder> auth_events_recorder_;
 
   std::unique_ptr<policy::MockCloudPolicyManager> cloud_policy_manager_;
 };
@@ -371,7 +381,7 @@ TEST_F(DemoLoginControllerTest,
   // `policy_connector_ash->GetDeviceCloudPolicyManager()` is null. We remove
   // the fake one here so `DemoLoginController::GetDeviceIntegrity()` cannot
   // find any policy managers, and it will return failure (an empty
-  // base::Value::Dict), causing the request to fail.
+  // base::DictValue), causing the request to fail.
   GetDemoLoginController()->SetDeviceCloudPolicyManagerForTesting(nullptr);
 
   // Verify demo account login gets triggered by `ExistingUserController`.
@@ -779,46 +789,94 @@ TEST_F(DemoLoginControllerTest, SetupDemoAccountErrorRetriable) {
 
 class DemoLoginControllerCloudPolicyConnectionTest : public testing::Test {
  public:
-  DemoLoginControllerCloudPolicyConnectionTest() {}
+  // DeviceSettingsService and InstallAttribute should outlive BrowserProcess.
+  // In unit tests, TestingBrowserProcess is created before testing::Test and
+  // destroyed after it. To meet the lifetime requirements, this fixture uses
+  // SetUpTestSuite() as a chance to initialize objects before
+  // TestingBrowserProcess is created.
+  //
+  // WARNING: This depends on the fact that this fixture only has a single test
+  // case. Do not add new test cases to this fixture!
+  static void SetUpTestSuite() {
+    CHECK(!test_device_settings_service_);
+    test_device_settings_service_ = new ScopedTestDeviceSettingsService();
+
+    CHECK(!test_install_attributes_);
+    test_install_attributes_ = new ScopedStubInstallAttributes();
+  }
+
+  // See the comment for SetUpTestSuite() above.
+  static void TearDownTestSuite() {
+    CHECK(test_install_attributes_);
+    delete test_install_attributes_;
+    test_install_attributes_ = nullptr;
+
+    CHECK(test_device_settings_service_);
+    delete test_device_settings_service_;
+    test_device_settings_service_ = nullptr;
+  }
+
+  DemoLoginControllerCloudPolicyConnectionTest() {
+    features_.InitAndEnableFeature(features::kDemoModeSignIn);
+  }
   ~DemoLoginControllerCloudPolicyConnectionTest() override = default;
 
   void SetUp() override {
-    features_.InitAndEnableFeature(features::kDemoModeSignIn);
+    task_environment_.emplace(
+        base::test::TaskEnvironment::TimeSource::MOCK_TIME);
     DBusThreadManager::Initialize();
-    DeviceSettingsService::Initialize();
-    demo_login_controller_ = std::make_unique<
-        DemoLoginController>(base::BindRepeating(
-        &DemoLoginControllerCloudPolicyConnectionTest::MockConfigureAutoLogin,
-        base::Unretained(this)));
+    TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(
+        test_url_loader_factory_.GetSafeWeakWrapper());
+    auto* device_cloud_policy_manager_ash = TestingBrowserProcess::GetGlobal()
+                                                ->platform_part()
+                                                ->browser_policy_connector_ash()
+                                                ->GetDeviceCloudPolicyManager();
+    ASSERT_TRUE(device_cloud_policy_manager_ash);
+    demo_login_controller_ = std::make_unique<DemoLoginController>(
+        TestingBrowserProcess::GetGlobal()->local_state(),
+        TestingBrowserProcess::GetGlobal()->shared_url_loader_factory(),
+        device_cloud_policy_manager_ash,
+        base::BindRepeating(&DemoLoginControllerCloudPolicyConnectionTest::
+                                MockConfigureAutoLogin,
+                            base::Unretained(this)));
   }
 
   void TearDown() override {
     demo_login_controller_.reset();
-    DeviceSettingsService::Shutdown();
     DBusThreadManager::Shutdown();
+    task_environment_.reset();
   }
 
   void MockConfigureAutoLogin() { is_auto_login_trigger_ = true; }
 
+  // These are created before BrowserProcess and destroyed after BrowserProcess.
+  static ScopedTestDeviceSettingsService* test_device_settings_service_;
+  static ScopedStubInstallAttributes* test_install_attributes_;
+
   base::test::ScopedFeatureList features_;
 
-  // InstallAttributes is created before ThreadPool and destroyed after
-  // ThreadPool.
-  ScopedStubInstallAttributes test_install_attributes_;
-
-  content::BrowserTaskEnvironment task_environment_{
-      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+  std::optional<content::BrowserTaskEnvironment> task_environment_;
+  network::TestURLLoaderFactory test_url_loader_factory_;
   std::unique_ptr<DemoLoginController> demo_login_controller_;
   bool is_auto_login_trigger_ = false;
   base::UserActionTester user_action_tester_;
 };
 
+// static
+ScopedTestDeviceSettingsService* DemoLoginControllerCloudPolicyConnectionTest::
+    test_device_settings_service_ = nullptr;
+
+// static
+ScopedStubInstallAttributes*
+    DemoLoginControllerCloudPolicyConnectionTest::test_install_attributes_ =
+        nullptr;
+
 TEST_F(DemoLoginControllerCloudPolicyConnectionTest,
        ConnectPolicyManagerTimeout) {
   EXPECT_EQ(demo_login_controller_->state(),
             DemoLoginController::State::kLoadingAvailibility);
-  task_environment_.FastForwardBy(kConnectPolicyManagerTimeout +
-                                  base::Seconds(1));
+  task_environment_->FastForwardBy(kConnectPolicyManagerTimeout +
+                                   base::Seconds(1));
 
   // Expect cloud policy manager is disconnected:
   auto* policy_manager = g_browser_process->platform_part()
@@ -834,5 +892,9 @@ TEST_F(DemoLoginControllerCloudPolicyConnectionTest,
       user_action_tester_.GetActionCount(kCloudPolicyConnectionTimeoutAction),
       1);
 }
+
+// WARNING: Do not add a new test case to
+// DemoLoginControllerCloudPolicyConnectionTest. See the comment for
+// SetUpTestSuite() for details.
 
 }  // namespace ash

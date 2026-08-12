@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
@@ -59,7 +59,7 @@ class WebAppProtocolHandlingBrowserTest : public WebAppNavigationBrowserTest {
   }
 
   web_app::WebAppProvider* provider() {
-    return WebAppProvider::GetForTest(browser()->profile());
+    return WebAppProvider::GetForTest(browser()->GetProfile());
   }
 
   web_app::WebAppProtocolHandlerManager& protocol_handler_manager() {
@@ -93,8 +93,8 @@ IN_PROC_BROWSER_TEST_F(WebAppProtocolHandlingBrowserTest,
       "/banners/manifest_protocol_handlers.json?testing=%s"));
 
   ASSERT_EQ(2u, protocol_handlers.size());
-  EXPECT_TRUE(base::Contains(protocol_handlers, protocol_handler1));
-  EXPECT_TRUE(base::Contains(protocol_handlers, protocol_handler2));
+  EXPECT_TRUE(std::ranges::contains(protocol_handlers, protocol_handler1));
+  EXPECT_TRUE(std::ranges::contains(protocol_handlers, protocol_handler2));
 
   histogram_tester_.ExpectBucketCount(kUseCounterHistogram,
                                       protocol_handling_feature, 1);

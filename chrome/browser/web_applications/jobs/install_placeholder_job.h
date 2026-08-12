@@ -13,6 +13,7 @@
 #include "chrome/browser/web_applications/external_install_options.h"
 #include "chrome/browser/web_applications/externally_managed_app_manager.h"
 #include "chrome/browser/web_applications/web_app_install_utils.h"
+#include "components/webapps/browser/web_contents/web_app_url_loader.h"
 
 class Profile;
 
@@ -27,6 +28,8 @@ enum class WebAppUrlLoaderResult;
 
 namespace web_app {
 
+class CustomIconFetcher;
+class FinalizeInstallOrUpdateJob;
 class SharedWebContentsWithAppLock;
 class WebAppDataRetriever;
 
@@ -39,7 +42,7 @@ class InstallPlaceholderJob {
       base::OnceCallback<void(webapps::InstallResultCode code,
                               webapps::AppId app_id)>;
   InstallPlaceholderJob(Profile* profile,
-                        base::Value::Dict& debug_value,
+                        base::DictValue& debug_value,
                         const ExternalInstallOptions& install_options,
                         InstallAndReplaceCallback callback,
                         SharedWebContentsWithAppLock& lock);
@@ -49,17 +52,20 @@ class InstallPlaceholderJob {
 
   void SetDataRetrieverForTesting(
       std::unique_ptr<WebAppDataRetriever> data_retriever);
+  void SetUrlLoaderForTesting(
+      std::unique_ptr<webapps::WebAppUrlLoader> url_loader);
 
  private:
   void Abort(webapps::InstallResultCode code);
   void FetchCustomIcon(const GURL& url, int retries_left);
+  void MaybeRetryFetchCustomIcon(const GURL& url, int retries_left);
 
   void OnUrlLoaded(webapps::WebAppUrlLoaderResult load_url_result);
-  void OnCustomIconFetched(const GURL& image_url,
+  // Asynchronous callback for custom icon downloading and out-of-process
+  // decoding.
+  void OnCustomIconDecoded(const GURL& url,
                            int retries_left,
-                           IconsDownloadedResult result,
-                           IconsMap icons_map,
-                           DownloadedIconsHttpResults icons_http_results);
+                           std::optional<SkBitmap> bitmap);
 
   void FinalizeInstall(
       std::optional<std::reference_wrapper<const std::vector<SkBitmap>>>
@@ -69,7 +75,7 @@ class InstallPlaceholderJob {
                           webapps::InstallResultCode code);
 
   const raw_ref<Profile> profile_;
-  const raw_ref<base::Value::Dict> debug_value_;
+  const raw_ref<base::DictValue> debug_value_;
   const webapps::AppId app_id_;
 
   // `this` must exist within the scope of a WebCommand's
@@ -82,6 +88,14 @@ class InstallPlaceholderJob {
   raw_ptr<content::WebContents> web_contents_;
   std::unique_ptr<webapps::WebAppUrlLoader> url_loader_;
   std::unique_ptr<WebAppDataRetriever> data_retriever_;
+
+  std::unique_ptr<FinalizeInstallOrUpdateJob> install_job_;
+
+  // Caches the downloaded custom icon bitmaps to be passed to the installer.
+  std::vector<SkBitmap> custom_icon_bitmaps_;
+  // Handles downloading the custom icon securely via SimpleURLLoader and
+  // decoding it out-of-process via ImageDecoder.
+  std::unique_ptr<CustomIconFetcher> custom_icon_fetcher_;
 
   base::WeakPtrFactory<InstallPlaceholderJob> weak_factory_{this};
 };

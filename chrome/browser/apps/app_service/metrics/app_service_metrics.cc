@@ -20,9 +20,7 @@
 #include "ash/public/cpp/app_list/internal_app_id_constants.h"
 #include "ash/user_education/user_education_util.h"
 #include "ash/user_education/welcome_tour/welcome_tour_metrics.h"
-#include "ash/webui/projector_app/public/cpp/projector_app_constants.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
 #include "chromeos/ash/components/file_manager/app_id.h"
 #include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -177,6 +175,10 @@ void RecordDefaultAppLaunch(apps::DefaultAppName default_app_name,
       break;
     case apps::LaunchSource::kFromWebInstallApi:
       base::UmaHistogramEnumeration("Apps.DefaultAppLaunch.FromWebInstallApi",
+                                    default_app_name);
+      break;
+    case apps::LaunchSource::kFromMigration:
+      base::UmaHistogramEnumeration("Apps.DefaultAppLaunch.FromMigration",
                                     default_app_name);
       break;
     case apps::LaunchSource::kFromCommandLine:

@@ -631,8 +631,7 @@ void TapButton(id<GREYMatcher> button) {
   [cameraControllerMock verify];
 
   NSError* error = [QRScannerAppInterface
-      assertQueryLoaded:base::SysUTF8ToNSString(sanitizedResult)
-            immediately:NO];
+      assertQueryLoaded:base::SysUTF8ToNSString(sanitizedResult)];
   GREYAssertNil(error, error.localizedDescription);
 
   error = [QRScannerAppInterface
@@ -677,8 +676,7 @@ void TapButton(id<GREYMatcher> button) {
   [cameraControllerMock verify];
 
   NSError* error = [QRScannerAppInterface
-      assertQueryLoaded:base::SysUTF8ToNSString(_testURL.GetContent())
-            immediately:NO];
+      assertQueryLoaded:base::SysUTF8ToNSString(_testURL.GetContent())];
   GREYAssertNil(error, error.localizedDescription);
 }
 
@@ -705,6 +703,25 @@ void TapButton(id<GREYMatcher> button) {
 - (void)testReceivingQRScannerLoadDataResult {
   [self doTestReceivingResult:kTestDataURL
               sanitizedResult:kTestSanitizedDataURL];
+}
+
+// Test that whitespace is trimmed and duplicate spaces are removed.
+- (void)testQueryWhitespaceSanitized {
+  [self doTestReceivingResult:" \t a \n b  " sanitizedResult:"a b"];
+}
+
+// Test that whitespace is trimmed from URLs.
+- (void)testURLWhitespaceTrimmed {
+  std::string input = " \t\u3000 " + _testURL.spec() + " \n ";
+  [self doTestReceivingResult:input
+              sanitizedResult:"\"" + _testURL.spec() + "\""];
+}
+
+// Test that whitespace is trimmed from not http/https URLs and quotes are
+// added.
+- (void)testDataURLWhitespaceTrimmed {
+  std::string input = " \t\u3000 " + std::string(kTestDataURL) + " \n ";
+  [self doTestReceivingResult:input sanitizedResult:kTestSanitizedDataURL];
 }
 
 @end

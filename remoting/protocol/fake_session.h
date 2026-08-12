@@ -15,10 +15,9 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
-#include "remoting/protocol/fake_stream_socket.h"
-#include "remoting/protocol/jingle_messages.h"
 #include "remoting/protocol/session.h"
 #include "remoting/protocol/transport.h"
+#include "remoting/signaling/jingle_data_structures.h"
 
 namespace remoting::protocol {
 
@@ -50,14 +49,13 @@ class FakeSession : public Session {
 
   // Adds an |attachment| to |round|, which will be sent to plugins added by
   // AddPlugin() function.
-  void SetAttachment(size_t round,
-                     std::unique_ptr<jingle_xmpp::XmlElement> attachment);
+  void SetAttachment(size_t round, const Attachment& attachment);
 
   // Session interface.
+  void StartTransport();
   void SetEventHandler(EventHandler* event_handler) override;
   ErrorCode error() const override;
   const std::string& jid() override;
-  const SessionConfig& config() override;
   const Authenticator& authenticator() const override;
   void SetTransport(Transport* transport) override;
   void Close(ErrorCode error,
@@ -67,15 +65,13 @@ class FakeSession : public Session {
 
  private:
   // Callback provided to the |transport_|.
-  void SendTransportInfo(
-      std::unique_ptr<jingle_xmpp::XmlElement> transport_info);
+  void SendTransportInfo(std::unique_ptr<JingleTransportInfo> transport_info);
 
   // Called by the |peer_| to deliver incoming |transport_info|.
   void ProcessTransportInfo(
-      std::unique_ptr<jingle_xmpp::XmlElement> transport_info);
+      std::unique_ptr<JingleTransportInfo> transport_info);
 
   raw_ptr<EventHandler> event_handler_ = nullptr;
-  std::unique_ptr<SessionConfig> config_;
 
   std::string jid_;
 
@@ -84,11 +80,12 @@ class FakeSession : public Session {
 
   ErrorCode error_ = ErrorCode::OK;
   bool closed_ = false;
+  bool transport_started_ = false;
 
   base::WeakPtr<FakeSession> peer_;
   base::TimeDelta signaling_delay_;
 
-  std::vector<std::unique_ptr<jingle_xmpp::XmlElement>> attachments_;
+  std::vector<Attachment> attachments_;
 
   base::WeakPtrFactory<FakeSession> weak_factory_{this};
 };

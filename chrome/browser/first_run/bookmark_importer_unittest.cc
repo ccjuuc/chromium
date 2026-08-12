@@ -22,6 +22,7 @@
 #include "components/bookmarks/browser/base_bookmark_model_observer.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node.h"
+#include "components/bookmarks/test/bookmark_test_helpers.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -31,8 +32,8 @@ namespace first_run {
 
 namespace {
 
-base::Value::Dict ParseJSONIfValid(std::string_view json) {
-  std::optional<base::Value::Dict> parsed_json =
+base::DictValue ParseJSONIfValid(std::string_view json) {
+  std::optional<base::DictValue> parsed_json =
       base::JSONReader::ReadDict(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!parsed_json.has_value()) {
     ADD_FAILURE() << "JSON parsing failed";
@@ -85,7 +86,7 @@ class BookmarkDictImporterTest : public testing::Test {
 };
 
 TEST_F(BookmarkDictImporterTest, SucceedsWithValidDict) {
-  base::Value::Dict bookmarks_dict = ParseJSONIfValid(
+  base::DictValue bookmarks_dict = ParseJSONIfValid(
       R"(
         {
           "first_run_bookmarks": {
@@ -119,6 +120,7 @@ TEST_F(BookmarkDictImporterTest, SucceedsWithValidDict) {
   bookmark_model->AddObserver(&observer);
 
   StartBookmarkImportFromDict(profile(), std::move(bookmarks_dict));
+
   ASSERT_TRUE(future.Wait());
 
   bookmark_model->RemoveObserver(&observer);
@@ -144,8 +146,46 @@ TEST_F(BookmarkDictImporterTest, SucceedsWithValidDict) {
                                       1);
 }
 
+TEST_F(BookmarkDictImporterTest, ImportStartsAfterModelLoadIsComplete) {
+  base::DictValue bookmarks_dict = ParseJSONIfValid(
+      R"(
+        {
+          "first_run_bookmarks": {
+            "children": [
+              {
+                "name": "Google",
+                "type": "url",
+                "url": "https://www.google.com"
+              }
+            ]
+          }
+        }
+      )");
+  bookmarks::BookmarkModel* bookmark_model =
+      BookmarkModelFactory::GetForBrowserContext(profile());
+
+  base::test::TestFuture<void> future;
+  BookmarkImportObserver observer(future.GetCallback());
+  bookmark_model->AddObserver(&observer);
+
+  StartBookmarkImportFromDict(profile(), std::move(bookmarks_dict));
+  bookmarks::test::WaitForBookmarkModelToLoad(bookmark_model);
+  const bookmarks::BookmarkNode* bar = bookmark_model->bookmark_bar_node();
+  // Bookmark model has just finished loading, no nodes should have been
+  // imported yet.
+  ASSERT_EQ(0u, bookmark_model->bookmark_bar_node()->children().size());
+
+  ASSERT_TRUE(future.Wait());
+  bookmark_model->RemoveObserver(&observer);
+
+  ASSERT_EQ(1u, bookmark_model->bookmark_bar_node()->children().size());
+  const bookmarks::BookmarkNode* node1 = bar->children()[0].get();
+  EXPECT_EQ(u"Google", node1->GetTitle());
+  EXPECT_EQ(GURL("https://www.google.com"), node1->url());
+}
+
 TEST_F(BookmarkDictImporterTest, FailsWithInvalidDict) {
-  base::Value::Dict bookmarks_dict =
+  base::DictValue bookmarks_dict =
       ParseJSONIfValid(R"({"invalid_key": "invalid_value"})");
 
   base::HistogramTester histogram_tester;
@@ -164,7 +204,7 @@ TEST_F(BookmarkDictImporterTest, FailsWithInvalidDict) {
 }
 
 TEST_F(BookmarkDictImporterTest, FailsIfBookmarkModelIsMissing) {
-  base::Value::Dict bookmarks_dict = ParseJSONIfValid(
+  base::DictValue bookmarks_dict = ParseJSONIfValid(
       R"(
         {
           "first_run_bookmarks": {
@@ -194,7 +234,7 @@ TEST_F(BookmarkDictImporterTest, FailsIfBookmarkModelIsMissing) {
 }
 #if !BUILDFLAG(IS_CHROMEOS)
 TEST_F(BookmarkDictImporterTest, FailsIfProfileIsDestroyed) {
-  base::Value::Dict bookmarks_dict = ParseJSONIfValid(
+  base::DictValue bookmarks_dict = ParseJSONIfValid(
       R"(
         {
           "first_run_bookmarks": {
@@ -235,7 +275,7 @@ TEST_F(BookmarkDictImporterTest, FailsIfProfileIsDestroyed) {
 #endif  // !BUILLDFLAG(IS_CHROMEOS)
 
 TEST_F(BookmarkDictImporterTest, SucceedsWithSomeMalformedNodes) {
-  base::Value::Dict bookmarks_dict = ParseJSONIfValid(
+  base::DictValue bookmarks_dict = ParseJSONIfValid(
       R"(
         {
           "first_run_bookmarks": {
@@ -306,7 +346,7 @@ TEST_F(BookmarkDictImporterTest, SucceedsWithSomeMalformedNodes) {
 }
 
 TEST_F(BookmarkDictImporterTest, SucceedsWithMalformedFolders) {
-  base::Value::Dict bookmarks_dict = ParseJSONIfValid(
+  base::DictValue bookmarks_dict = ParseJSONIfValid(
       R"(
         {
           "first_run_bookmarks": {

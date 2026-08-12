@@ -13,6 +13,7 @@
 #include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
@@ -32,21 +33,21 @@ class BlobBytesProviderTest : public testing::Test {
     for (wtf_size_t i = 0; i < test_bytes1_.size(); ++i)
       test_bytes1_[i] = i % 191;
     test_data1_ = RawData::Create();
-    test_data1_->MutableData()->AppendVector(test_bytes1_);
+    test_data1_->MutableData().append_range(test_bytes1_);
     test_bytes2_.resize(64);
     for (wtf_size_t i = 0; i < test_bytes2_.size(); ++i)
       test_bytes2_[i] = i;
     test_data2_ = RawData::Create();
-    test_data2_->MutableData()->AppendVector(test_bytes2_);
+    test_data2_->MutableData().append_range(test_bytes2_);
     test_bytes3_.resize(32);
     for (wtf_size_t i = 0; i < test_bytes3_.size(); ++i)
       test_bytes3_[i] = (i + 10) % 137;
     test_data3_ = RawData::Create();
-    test_data3_->MutableData()->AppendVector(test_bytes3_);
+    test_data3_->MutableData().append_range(test_bytes3_);
 
-    combined_bytes_.AppendVector(test_bytes1_);
-    combined_bytes_.AppendVector(test_bytes2_);
-    combined_bytes_.AppendVector(test_bytes3_);
+    combined_bytes_.append_range(test_bytes1_);
+    combined_bytes_.append_range(test_bytes2_);
+    combined_bytes_.append_range(test_bytes3_);
   }
 
   void TearDown() override {
@@ -78,15 +79,16 @@ TEST_F(BlobBytesProviderTest, Consolidation) {
   auto data = CreateProvider();
   DCHECK_CALLED_ON_VALID_SEQUENCE(data->sequence_checker_);
 
-  data->AppendData(base::span_from_cstring("abc"));
-  data->AppendData(base::span_from_cstring("def"));
-  data->AppendData(base::span_from_cstring("ps1"));
-  data->AppendData(base::span_from_cstring("ps2"));
+  data->AppendData(base::byte_span_from_cstring("abc"));
+  data->AppendData(base::byte_span_from_cstring("def"));
+  data->AppendData(base::byte_span_from_cstring("ps1"));
+  data->AppendData(base::byte_span_from_cstring("ps2"));
 
   EXPECT_EQ(1u, data->data_.size());
-  EXPECT_EQ(data->data_[0]->span(), base::span_from_cstring("abcdefps1ps2"));
+  EXPECT_EQ(base::span(*data->data_[0]),
+            base::span_from_cstring("abcdefps1ps2"));
 
-  auto large_data = base::HeapArray<char>::WithSize(
+  auto large_data = base::HeapArray<uint8_t>::WithSize(
       BlobBytesProvider::kMaxConsolidatedItemSizeInBytes);
   data->AppendData(large_data);
 
@@ -140,8 +142,7 @@ class RequestAsFile : public BlobBytesProviderTest,
 
     auto combined_bytes_span =
         base::span(combined_bytes_).subspan(GetParam().offset, GetParam().size);
-    sliced_data_.AppendRange(combined_bytes_span.begin(),
-                             combined_bytes_span.end());
+    sliced_data_.append_range(combined_bytes_span);
   }
 
   base::File DoRequestAsFile(uint64_t source_offset,
@@ -274,7 +275,7 @@ TEST_F(BlobBytesProviderTest, RequestAsFile_MultipleChunks) {
         }));
     auto combined_bytes_chunk = base::span(combined_bytes_).subspan(i, 16u);
     expected_data.insert(0, combined_bytes_chunk.data(),
-                         combined_bytes_chunk.size());
+                         static_cast<wtf_size_t>(combined_bytes_chunk.size()));
   }
 
   base::File file(path, base::File::FLAG_OPEN | base::File::FLAG_READ |
@@ -352,12 +353,12 @@ TEST_F(BlobBytesProviderTest, RequestAsStream) {
               return;
             EXPECT_EQ(MOJO_RESULT_OK, query_result);
 
-            Vector<uint8_t> bytes(num_bytes);
+            Vector<uint8_t> bytes(base::checked_cast<wtf_size_t>(num_bytes));
             EXPECT_EQ(
                 MOJO_RESULT_OK,
                 pipe.ReadData(MOJO_READ_DATA_FLAG_ALL_OR_NONE,
                               base::as_writable_byte_span(bytes), num_bytes));
-            bytes_out->AppendVector(bytes);
+            bytes_out->append_range(bytes);
           },
           consumer_handle.get(), loop.QuitClosure(),
           blink::Unretained(&received_data)));

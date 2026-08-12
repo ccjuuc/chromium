@@ -315,6 +315,23 @@ enable_web_component_missing_deps: Defaults to "false". Turns on
                                    the WebUI ESLint plugin.
 ```
 
+### **stylelint**
+
+This rule makes it possible to run Stylelint CSS checks [1] on CSS files.
+
+The list of default checks that are applied are at
+`//ui/webui/resources/tools/stylelint.config_base.mjs` and are currently not
+configurable from callers.
+
+[1] https://stylelint.io/
+
+#### **Arguments**
+```
+in_folder: The folder where all |in_files| reside.
+in_files: A list of CSS files to check. An assertion error is thrown if
+          files other than '*.css' are encountered.
+```
+
 ### **bundle_js**
 
 This rule is used to bundle larger user-facing WebUIs for improved performance.
@@ -585,22 +602,24 @@ rules described earlier.
 
 Under the cover, build_webui() defines the following targets
 
-1. `preprocess_if_expr("preprocess_ts_files")`
-2. `preprocess_if_expr("preprocess_html_css_files")`
-3. `create_js_source_maps("create_source_maps")`
-4. `html_to_wrapper("html_wrapper_files")`
-5. `css_to_wrapper("css_wrapper_files")`
-6. `copy("copy_mojo")`
-7. `webui_path_mappings("build_path_map")`
-8. `ts_library("build_ts")`
-9. `eslint_ts("lint")`
-10. `merge_js_source_maps("merge_source_maps")`
-11. `bundle_js("build_bundle")`
-12. `minify_js("build_min_js")`
-13. `generate_code_cache("build_code_cache")`
-14. `generate_grd("build_grd")`
-15. `generate_grd("build_grdp")`
-16. `grit("resources")`
+ 1. `preprocess_if_expr("preprocess_ts_files")`
+ 2. `preprocess_if_expr("preprocess_html_css_files")`
+ 3. `create_js_source_maps("create_source_maps")`
+ 4. `html_to_wrapper("html_wrapper_files")`
+ 5. `css_to_wrapper("css_wrapper_files")`
+ 6. `copy("copy_mojo")`
+ 7. `webui_path_mappings("build_path_map")`
+ 8. `ts_library("build_ts")`
+ 9. `eslint_ts("lint_ts")`
+10. `stylelint("lint_css")`
+11. `group("lint")`
+12. `merge_js_source_maps("merge_source_maps")`
+13. `bundle_js("build_bundle")`
+14. `minify_js("build_min_js")`
+15. `generate_code_cache("build_code_cache")`
+16. `generate_grd("build_grd")`
+17. `generate_grd("build_grdp")`
+18. `grit("resources")`
 
 Some targets are only conditionally defined based on `build_webui()` input
 parameters.
@@ -685,7 +704,7 @@ optimize_webui_host: See |host| in bundle_js().
 optimize_webui_excludes: See |excludes| in bundle_js(). Optional.
 optimize_webui_external_paths: See |external_paths| in optimize_webui().
                                Optional.
-optimize_webui_in_files: See |in_files| in bundle_js().
+optimize_webui_in_files: See |js_module_in_files| in bundle_js().
 generate_code_cache: Specifies whether code cache resources should be generated
                      for the minified files. Use
                      `generate_code_cache = enable_webui_generate_code_cache` to
@@ -694,6 +713,10 @@ generate_code_cache: Specifies whether code cache resources should be generated
 Other params:
 webui_context_type: See |webui_context_type| in webui_path_mappings(). Optional,
                     defaults to "relative".
+in_folder: Optional parameter. Specifies the input folder where TS, HTML, CSS,
+           and static files are located. If not specified, the current directory
+           (of the BUILD.gn file) is used. Its use is restricted to a small
+           allowlist of targets inside `build_webui.gni` to prevent misuse.
 generate_grdp: Whether to generate grdp file instead of a grd file. Defaults to
                false.
 grd_prefix: See |grd_prefix| in generate_grd(). Required parameter.
@@ -750,9 +773,9 @@ build_webui("build") {
   #  3) the HTML template is checked in as an .html.ts file and not
   #     auto-generated.
   ts_files = [
-    "app_proxy.ts",
-    "bar_proxy.ts",
-    "foo_proxy.ts",
+    "app_util.ts",
+    "bar_model.ts",
+    "foo_types.ts",
   ]
 
   # Files that are passed as input to css_to_wrapper().
@@ -795,6 +818,7 @@ Under the cover, build_webui_tests() defines the following targets
 
 * preprocess_if_expr("preprocess")
 * webui_ts_library("build_ts")
+* check_tests_referenced("check_tests_referenced")
 * generate_grd("build_grdp")
 
 The parameters passed to build_webui_tests() are forwarded as needed to
@@ -812,6 +836,11 @@ is_chrome_untrusted: Set to true if testing a chrome-untrusted:// UI. Optional
 
 List of files params:
 files: Required parameter. List of all test related files.
+cc_test_files: Required parameter. List of all C++ test files that invoke the
+               Mocha tests. When populated an additional
+               ":check_tests_referenced" target is defined which checks that
+               each Mocha test file is referenced in at least one C++ test file
+               to guard against orphan Mocha tests.
 
 TypeScript (ts_library()) related params:
 ts_tsconfig_base: See |tsconfig_base| in ts_library(). Optional parameter. If

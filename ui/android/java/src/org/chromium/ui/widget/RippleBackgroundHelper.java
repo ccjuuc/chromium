@@ -19,7 +19,6 @@ import androidx.annotation.ColorRes;
 import androidx.annotation.DimenRes;
 import androidx.annotation.IntDef;
 import androidx.annotation.Px;
-import androidx.appcompat.content.res.AppCompatResources;
 import androidx.core.graphics.ColorUtils;
 
 import org.chromium.build.annotations.EnsuresNonNull;
@@ -69,13 +68,15 @@ public class RippleBackgroundHelper {
      * @param rippleColorResId The resource id of the ripple color.
      * @param cornerRadius The corner radius in pixels of the background drawable.
      * @param verticalInset The vertical inset of the background drawable.
+     * @param horizontalInset The horizontal inset of the background drawable.
      */
     RippleBackgroundHelper(
             View view,
             @ColorRes int backgroundColorResId,
             @ColorRes int rippleColorResId,
             @Px int cornerRadius,
-            @Px int verticalInset) {
+            @Px int verticalInset,
+            @Px int horizontalInset) {
         this(
                 view,
                 backgroundColorResId,
@@ -83,7 +84,8 @@ public class RippleBackgroundHelper {
                 cornerRadius,
                 android.R.color.transparent,
                 R.dimen.default_ripple_background_border_size,
-                verticalInset);
+                verticalInset,
+                horizontalInset);
     }
 
     /**
@@ -94,13 +96,15 @@ public class RippleBackgroundHelper {
      *     corner, specified in pixels. The corners are ordered top-left, top-right, bottom-right,
      *     bottom-left.
      * @param verticalInset The vertical inset of the background drawable.
+     * @param horizontalInset The horizontal inset of the background drawable.
      */
     RippleBackgroundHelper(
             View view,
             @ColorRes int backgroundColorResId,
             @ColorRes int rippleColorResId,
             float[] cornerRadii,
-            @Px int verticalInset) {
+            @Px int verticalInset,
+            @Px int horizontalInset) {
         this(
                 view,
                 backgroundColorResId,
@@ -108,7 +112,8 @@ public class RippleBackgroundHelper {
                 cornerRadii,
                 android.R.color.transparent,
                 R.dimen.default_ripple_background_border_size,
-                verticalInset);
+                verticalInset,
+                horizontalInset);
     }
 
     /**
@@ -119,6 +124,7 @@ public class RippleBackgroundHelper {
      * @param borderColorResId The resource id of the border color.
      * @param borderSizeDimenId The resource id of the border size.
      * @param verticalInset The vertical inset of the background drawable.
+     * @param horizontalInset The horizontal inset of the background drawable.
      */
     RippleBackgroundHelper(
             View view,
@@ -127,7 +133,8 @@ public class RippleBackgroundHelper {
             @Px int cornerRadius,
             @ColorRes int borderColorResId,
             @DimenRes int borderSizeDimenId,
-            @Px int verticalInset) {
+            @Px int verticalInset,
+            @Px int horizontalInset) {
         this(
                 view,
                 backgroundColorResId,
@@ -144,7 +151,8 @@ public class RippleBackgroundHelper {
                 },
                 borderColorResId,
                 borderSizeDimenId,
-                verticalInset);
+                verticalInset,
+                horizontalInset);
     }
 
     /**
@@ -156,6 +164,7 @@ public class RippleBackgroundHelper {
      * @param borderColorResId The resource id of the border color.
      * @param borderSizeDimenId The resource id of the border size.
      * @param verticalInset The vertical inset of the background drawable.
+     * @param horizontalInset The horizontal inset of the background drawable.
      */
     public RippleBackgroundHelper(
             View view,
@@ -165,7 +174,8 @@ public class RippleBackgroundHelper {
             @Px int cornerRadius,
             @ColorRes int borderColorResId,
             @DimenRes int borderSizeDimenId,
-            @Px int verticalInset) {
+            @Px int verticalInset,
+            @Px int horizontalInset) {
         this(
                 view,
                 backgroundColorResId,
@@ -173,9 +183,9 @@ public class RippleBackgroundHelper {
                 cornerRadius,
                 borderColorResId,
                 borderSizeDimenId,
-                verticalInset);
-        setStateLayerColor(
-                AppCompatResources.getColorStateList(view.getContext(), stateLayerColorResId));
+                verticalInset,
+                horizontalInset);
+        setStateLayerColor(view.getContext().getColorStateList(stateLayerColorResId));
     }
 
     /**
@@ -188,6 +198,7 @@ public class RippleBackgroundHelper {
      * @param borderColorResId The resource id of the border color.
      * @param borderSizeDimenId The resource id of the border size.
      * @param verticalInset The vertical inset of the background drawable.
+     * @param horizontalInset The horizontal inset of the background drawable.
      */
     RippleBackgroundHelper(
             View view,
@@ -196,19 +207,20 @@ public class RippleBackgroundHelper {
             float[] cornerRadii,
             @ColorRes int borderColorResId,
             @DimenRes int borderSizeDimenId,
-            @Px int verticalInset) {
+            @Px int verticalInset,
+            @Px int horizontalInset) {
         mView = view;
-        mBorderColor = AppCompatResources.getColorStateList(view.getContext(), borderColorResId);
+        mBorderColor = view.getContext().getColorStateList(borderColorResId);
         mBorderWidth = view.getResources().getDimensionPixelSize(borderSizeDimenId);
         mView.setBackground(
                 createBackgroundDrawable(
-                        AppCompatResources.getColorStateList(view.getContext(), rippleColorResId),
+                        view.getContext().getColorStateList(rippleColorResId),
                         mBorderColor,
                         mBorderWidth,
                         cornerRadii,
-                        verticalInset));
-        setBackgroundColor(
-                AppCompatResources.getColorStateList(view.getContext(), backgroundColorResId));
+                        verticalInset,
+                        horizontalInset));
+        setBackgroundColor(view.getContext().getColorStateList(backgroundColorResId));
     }
 
     /**
@@ -219,6 +231,7 @@ public class RippleBackgroundHelper {
      * @param borderSize The border width in pixels.
      * @param cornerRadii The radius of 4 corners in pixels.
      * @param verticalInset The vertical inset of the background drawable.
+     * @param horizontalInset The horizontal inset of the background drawable.
      * @return The {@link GradientDrawable}/{@link LayerDrawable} to be used as ripple background.
      */
     @EnsuresNonNull({"mBackgroundGradient", "mStateLayerGradient"})
@@ -227,7 +240,8 @@ public class RippleBackgroundHelper {
             ColorStateList borderColorList,
             @Px int borderSize,
             float[] cornerRadii,
-            @Px int verticalInset) {
+            @Px int verticalInset,
+            @Px int horizontalInset) {
         mBackgroundGradient = new GradientDrawable();
         mBackgroundGradient.setCornerRadii(cornerRadii);
         if (borderSize > 0) mBackgroundGradient.setStroke(borderSize, borderColorList);
@@ -245,18 +259,21 @@ public class RippleBackgroundHelper {
         // Refer to crbug.com/1233720 for details.
         return new RippleDrawable(
                 convertToRippleDrawableColorList(rippleColorList),
-                wrapDrawableWithInsets(mBackgroundLayerDrawable, verticalInset),
+                wrapDrawableWithInsets(mBackgroundLayerDrawable, verticalInset, horizontalInset),
                 mask);
     }
 
     /**
      * @param drawable The {@link Drawable} that needs to be wrapped with insets.
      * @param verticalInset The vertical inset for the specified drawable.
+     * @param horizontalInset The horizontal inset of the background drawable.
      * @return A {@link Drawable} that wraps the specified drawable with the specified inset.
      */
-    private static Drawable wrapDrawableWithInsets(Drawable drawable, @Px int verticalInset) {
+    private static Drawable wrapDrawableWithInsets(
+            Drawable drawable, @Px int verticalInset, @Px int horizontalInset) {
         if (verticalInset == 0) return drawable;
-        return new InsetDrawable(drawable, 0, verticalInset, 0, verticalInset);
+        return new InsetDrawable(
+                drawable, horizontalInset, verticalInset, horizontalInset, verticalInset);
     }
 
     /**
@@ -356,7 +373,7 @@ public class RippleBackgroundHelper {
      * Adjusts the opacity of the ripple color since {@link RippleDrawable} uses about 50% opacity
      * of color for ripple effect.
      */
-    private @ColorInt static int doubleAlpha(@ColorInt int color) {
+    private static @ColorInt int doubleAlpha(@ColorInt int color) {
         int alpha = Math.min(Color.alpha(color) * 2, 255);
         return ColorUtils.setAlphaComponent(color, alpha);
     }

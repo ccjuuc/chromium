@@ -88,9 +88,10 @@ base::Value DecodeStringProto(const em::StringPolicyProto& proto) {
 // Convert a StringListPolicyProto to a List base::Value, where each list value
 // is of Type::STRING.
 base::Value DecodeStringListProto(const em::StringListPolicyProto& proto) {
-  base::Value::List list_value;
-  for (const auto& entry : proto.value().entries())
+  base::ListValue list_value;
+  for (const auto& entry : proto.value().entries()) {
     list_value.Append(entry);
+  }
   return base::Value(std::move(list_value));
 }
 
@@ -130,8 +131,9 @@ bool PerProfileMatches(bool policy_per_profile,
 
 bool UseExternalDataFetcher(const char* policy_name,
                             StringPolicyType policy_type) {
-  if (policy_type == StringPolicyType::EXTERNAL)
+  if (policy_type == StringPolicyType::EXTERNAL) {
     return true;
+  }
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   if (UNSAFE_TODO(strcmp(policy_name, key::kWebAppInstallForceList)) == 0) {
@@ -144,7 +146,7 @@ bool UseExternalDataFetcher(const char* policy_name,
 }  // namespace
 
 ExtensionInstallDecision ConvertToExtensionInstallDecision(
-    const enterprise_management::ExtensionInstallPolicies& policies,
+    const em::ExtensionInstallPolicies& policies,
     const ExtensionIdAndVersion& extension_id_and_version) {
   for (em::ExtensionInstallPolicy policy : policies.policies()) {
     if (!policy.has_extension_id()) {
@@ -170,11 +172,9 @@ ExtensionInstallDecision ConvertToExtensionInstallDecision(
     if (policy.extension_id() == extension_id_and_version.extension_id &&
         policy.extension_version() ==
             extension_id_and_version.extension_version) {
-      std::set<enterprise_management::ExtensionInstallPolicy::Reason> reasons;
+      std::set<em::ExtensionInstallPolicy::Reason> reasons;
       for (const auto& reason : policy.reasons()) {
-        reasons.insert(
-            static_cast<enterprise_management::ExtensionInstallPolicy::Reason>(
-                reason));
+        reasons.insert(static_cast<em::ExtensionInstallPolicy::Reason>(reason));
       }
       return ExtensionInstallDecision(policy.action(), std::move(reasons));
     }
@@ -186,10 +186,13 @@ ExtensionInstallDecision ConvertToExtensionInstallDecision(
   return ExtensionInstallDecision();
 }
 
-void DecodeProtoFields(const em::ExtensionInstallPolicies& policies,
-                       PolicySource source,
-                       PolicyScope scope,
-                       PolicyMap* map) {
+void DecodeProtoFields(
+    const em::ExtensionInstallPolicies& policies,
+    base::WeakPtr<CloudExternalDataManager> external_data_manager,
+    PolicySource source,
+    PolicyScope scope,
+    PolicyMap* map,
+    PolicyPerProfileFilter per_profile) {
   std::map<std::string, base::Value> extension_id_to_policy_value;
   for (const em::ExtensionInstallPolicy& policy : policies.policies()) {
     if (!policy.has_extension_id()) {
@@ -211,9 +214,15 @@ void DecodeProtoFields(const em::ExtensionInstallPolicies& policies,
       continue;
     }
     base::Value action(policy.action());
-    base::Value::List reasons;
+    base::ListValue reasons;
     for (const auto& reason : policy.reasons()) {
       reasons.Append(reason);
+    }
+
+    base::DictValue risk_levels;
+    for (const auto& risk_level : policy.risk_levels()) {
+      risk_levels.Set(risk_level.provider(),
+                      base::Value(risk_level.risk_level()));
     }
 
     VLOG_POLICY(2, POLICY_PROCESSING) << base::StringPrintf(
@@ -224,6 +233,7 @@ void DecodeProtoFields(const em::ExtensionInstallPolicies& policies,
     base::Value policy_value(base::Value::Type::DICT);
     policy_value.GetDict().Set("action", std::move(action));
     policy_value.GetDict().Set("reasons", std::move(reasons));
+    policy_value.GetDict().Set("evaluated_risk_levels", std::move(risk_levels));
 
     if (!extension_id_to_policy_value.contains(policy.extension_id())) {
       extension_id_to_policy_value.emplace(
@@ -232,8 +242,7 @@ void DecodeProtoFields(const em::ExtensionInstallPolicies& policies,
     extension_id_to_policy_value[policy.extension_id()].GetDict().Set(
         policy.extension_version(), std::move(policy_value));
   }
-  for (auto& [extension_id, policy_value] :
-       extension_id_to_policy_value) {
+  for (auto& [extension_id, policy_value] : extension_id_to_policy_value) {
     map->Set(extension_id, POLICY_LEVEL_MANDATORY, scope, source,
              std::move(policy_value), /*external_data_fetcher=*/nullptr);
   }
@@ -250,12 +259,14 @@ void DecodeProtoFields(
 
   for (const BooleanPolicyAccess& access : kBooleanPolicyAccess) {
     if (!PerProfileMatches(access.per_profile, per_profile) ||
-        !access.has_proto(policy))
+        !access.has_proto(policy)) {
       continue;
+    }
 
     const em::BooleanPolicyProto& proto = access.get_proto(policy);
-    if (!GetPolicyLevel(proto, &level))
+    if (!GetPolicyLevel(proto, &level)) {
       continue;
+    }
 
     map->Set(access.policy_key, level, scope, source, DecodeBooleanProto(proto),
              nullptr);
@@ -263,30 +274,35 @@ void DecodeProtoFields(
 
   for (const IntegerPolicyAccess& access : kIntegerPolicyAccess) {
     if (!PerProfileMatches(access.per_profile, per_profile) ||
-        !access.has_proto(policy))
+        !access.has_proto(policy)) {
       continue;
+    }
 
     const em::IntegerPolicyProto& proto = access.get_proto(policy);
-    if (!GetPolicyLevel(proto, &level))
+    if (!GetPolicyLevel(proto, &level)) {
       continue;
+    }
 
     std::string error;
     map->Set(access.policy_key, level, scope, source,
              DecodeIntegerProto(proto, &error), nullptr);
-    if (!error.empty())
+    if (!error.empty()) {
       map->AddMessage(access.policy_key, PolicyMap::MessageType::kError,
                       IDS_POLICY_PROTO_PARSING_ERROR,
                       {base::UTF8ToUTF16(error)});
+    }
   }
 
   for (const StringPolicyAccess& access : kStringPolicyAccess) {
     if (!PerProfileMatches(access.per_profile, per_profile) ||
-        !access.has_proto(policy))
+        !access.has_proto(policy)) {
       continue;
+    }
 
     const em::StringPolicyProto& proto = access.get_proto(policy);
-    if (!GetPolicyLevel(proto, &level))
+    if (!GetPolicyLevel(proto, &level)) {
       continue;
+    }
 
     std::string error;
     base::Value value = (access.type == StringPolicyType::STRING)
@@ -308,27 +324,30 @@ void DecodeProtoFields(
 
     map->Set(access.policy_key, level, scope, source, std::move(value),
              std::move(external_data_fetcher));
-    if (!error.empty())
+    if (!error.empty()) {
       map->AddMessage(access.policy_key, PolicyMap::MessageType::kError,
                       IDS_POLICY_PROTO_PARSING_ERROR,
                       {base::UTF8ToUTF16(error)});
+    }
   }
 
   for (const StringListPolicyAccess& access : kStringListPolicyAccess) {
     if (!PerProfileMatches(access.per_profile, per_profile) ||
-        !access.has_proto(policy))
+        !access.has_proto(policy)) {
       continue;
+    }
 
     const em::StringListPolicyProto& proto = access.get_proto(policy);
-    if (!GetPolicyLevel(proto, &level))
+    if (!GetPolicyLevel(proto, &level)) {
       continue;
+    }
 
     map->Set(access.policy_key, level, scope, source,
              DecodeStringListProto(proto), nullptr);
   }
 }
 
-bool ParseComponentPolicy(base::Value::Dict json_dict,
+bool ParseComponentPolicy(base::DictValue json_dict,
                           PolicyScope scope,
                           PolicySource source,
                           PolicyMap* policy,
@@ -344,7 +363,7 @@ bool ParseComponentPolicy(base::Value::Dict json_dict,
       return false;
     }
 
-    base::Value::Dict& description_dict = description.GetDict();
+    base::DictValue& description_dict = description.GetDict();
     std::optional<base::Value> value = description_dict.Extract(kValue);
     if (!value.has_value()) {
       *error = base::StrCat(
@@ -355,8 +374,9 @@ bool ParseComponentPolicy(base::Value::Dict json_dict,
 
     PolicyLevel level = POLICY_LEVEL_MANDATORY;
     const std::string* level_string = description_dict.FindString(kLevel);
-    if (level_string && *level_string == kRecommended)
+    if (level_string && *level_string == kRecommended) {
       level = POLICY_LEVEL_RECOMMENDED;
+    }
 
     policy->Set(policy_name, level, scope, source, std::move(value.value()),
                 nullptr);

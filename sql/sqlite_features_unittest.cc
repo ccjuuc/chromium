@@ -5,12 +5,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
+#include <array>
 #include <cstring>
 #include <string>
 #include <tuple>
 #include <vector>
 
-#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -19,6 +21,7 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "sql/database.h"
+#include "sql/internal_api_token.h"
 #include "sql/statement.h"
 #include "sql/statement_id.h"
 #include "sql/test/scoped_error_expecter.h"
@@ -197,23 +200,20 @@ TEST_F(SQLiteFeaturesTest, Mmap) {
 
   const uint32_t kFlags =
       base::File::FLAG_OPEN | base::File::FLAG_READ | base::File::FLAG_WRITE;
-  char buf[4096];
+  std::array<uint8_t, 4096> buf;
 
   // Create a file with a block of '0', a block of '1', and a block of '2'.
   {
     base::File f(db_path_, kFlags);
     ASSERT_TRUE(f.IsValid());
-    UNSAFE_TODO(memset(buf, '0', sizeof(buf)));
-    UNSAFE_TODO(ASSERT_EQ(f.Write(0 * sizeof(buf), buf, sizeof(buf)),
-                          (int)sizeof(buf)));
+    std::ranges::fill(buf, '0');
+    ASSERT_TRUE(f.WriteAndCheck(0 * sizeof(buf), buf));
 
-    UNSAFE_TODO(memset(buf, '1', sizeof(buf)));
-    UNSAFE_TODO(ASSERT_EQ(f.Write(1 * sizeof(buf), buf, sizeof(buf)),
-                          (int)sizeof(buf)));
+    std::ranges::fill(buf, '1');
+    ASSERT_TRUE(f.WriteAndCheck(1 * sizeof(buf), buf));
 
-    UNSAFE_TODO(memset(buf, '2', sizeof(buf)));
-    UNSAFE_TODO(ASSERT_EQ(f.Write(2 * sizeof(buf), buf, sizeof(buf)),
-                          (int)sizeof(buf)));
+    std::ranges::fill(buf, '2');
+    ASSERT_TRUE(f.WriteAndCheck(2 * sizeof(buf), buf));
   }
 
   // mmap the file and verify that everything looks right.
@@ -221,40 +221,34 @@ TEST_F(SQLiteFeaturesTest, Mmap) {
     base::MemoryMappedFile m;
     ASSERT_TRUE(m.Initialize(db_path_));
 
-    UNSAFE_TODO(memset(buf, '0', sizeof(buf)));
-    UNSAFE_TODO(
-        ASSERT_EQ(0, memcmp(buf, m.data() + 0 * sizeof(buf), sizeof(buf))));
+    std::ranges::fill(buf, '0');
+    ASSERT_EQ(buf, m.bytes().first(buf.size()));
 
-    UNSAFE_TODO(memset(buf, '1', sizeof(buf)));
-    UNSAFE_TODO(
-        ASSERT_EQ(0, memcmp(buf, m.data() + 1 * sizeof(buf), sizeof(buf))));
+    std::ranges::fill(buf, '1');
+    ASSERT_EQ(buf, m.bytes().subspan(buf.size(), buf.size()));
 
-    UNSAFE_TODO(memset(buf, '2', sizeof(buf)));
-    UNSAFE_TODO(
-        ASSERT_EQ(0, memcmp(buf, m.data() + 2 * sizeof(buf), sizeof(buf))));
+    std::ranges::fill(buf, '2');
+    ASSERT_EQ(buf, m.bytes().subspan(buf.size() * 2, buf.size()));
 
     // Scribble some '3' into the first page of the file, and verify that it
     // looks the same in the memory mapping.
     {
       base::File f(db_path_, kFlags);
       ASSERT_TRUE(f.IsValid());
-      UNSAFE_TODO(memset(buf, '3', sizeof(buf)));
-      UNSAFE_TODO(ASSERT_EQ(f.Write(0 * sizeof(buf), buf, sizeof(buf)),
-                            (int)sizeof(buf)));
+      std::ranges::fill(buf, '3');
+      ASSERT_TRUE(f.WriteAndCheck(0 * sizeof(buf), buf));
     }
-    UNSAFE_TODO(
-        ASSERT_EQ(0, memcmp(buf, m.data() + 0 * sizeof(buf), sizeof(buf))));
+    ASSERT_EQ(buf, m.bytes().first(buf.size()));
 
     // Repeat with a single '4' in case page-sized blocks are different.
-    const size_t kOffset = 1*sizeof(buf) + 123;
-    UNSAFE_TODO(ASSERT_NE('4', m.data()[kOffset]));
+    const size_t kOffset = 1 * sizeof(buf) + 123;
+    ASSERT_NE('4', m.bytes()[kOffset]);
     {
       base::File f(db_path_, kFlags);
       ASSERT_TRUE(f.IsValid());
-      buf[0] = '4';
-      UNSAFE_TODO(ASSERT_EQ(f.Write(kOffset, buf, 1), 1));
+      ASSERT_TRUE(f.WriteAndCheck(kOffset, base::byte_span_from_ref('4')));
     }
-    UNSAFE_TODO(ASSERT_EQ('4', m.data()[kOffset]));
+    ASSERT_EQ('4', m.bytes()[kOffset]);
   }
 }
 
@@ -668,9 +662,9 @@ TEST_F(SQLiteFeaturesTest, WALNoClose) {
   ASSERT_TRUE(Reopen());
   ASSERT_TRUE(db_.Execute("PRAGMA journal_mode = WAL"));
   ASSERT_TRUE(db_.Execute("ALTER TABLE foo ADD COLUMN c"));
-  ASSERT_EQ(
-      SQLITE_OK,
-      sqlite3_db_config(db_.db_, SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, 1, nullptr));
+  ASSERT_EQ(SQLITE_OK,
+            sqlite3_db_config(db_.db(InternalApiToken()),
+                              SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, 1, nullptr));
   ASSERT_TRUE(base::PathExists(wal_path));
   db_.Close();
   ASSERT_TRUE(base::PathExists(wal_path));

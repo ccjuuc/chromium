@@ -129,7 +129,7 @@ Self& AddQuads<Self>::AddRenderPassQuad(const gfx::Rect& rect,
   quad->SetAll(
       sqs, rect, visible_rect, params.needs_blending, id, kInvalidResourceId,
       gfx::RectF(), gfx::Size(), gfx::Vector2dF(1.0f, 1.0f), gfx::PointF(),
-      gfx::RectF(), params.force_anti_aliasing_off,
+      params.force_anti_aliasing_off,
       /*backdrop_filter_quality=*/1.0f, params.intersects_damage_under);
 
   return ThisRef();
@@ -149,10 +149,17 @@ Self& AddQuads<Self>::AddTextureQuad(const gfx::Rect& rect,
                                      const TextureQuadParams& params) {
   auto* sqs = AppendDefaultSharedQuadState(rect, visible_rect);
   auto* quad = pass_->CreateAndAppendDrawQuad<TextureDrawQuad>();
+
+  const auto resource_size_in_pixels =
+      params.resource_size_in_pixels.value_or(rect.size());
+
   quad->SetAll(sqs, rect, visible_rect, params.needs_blending, resource_id,
-               gfx::PointF(0.0f, 0.0f), gfx::PointF(1.0f, 1.0f),
+               gfx::PointF(0.0f, 0.0f),
+               gfx::PointF(resource_size_in_pixels.width(),
+                           resource_size_in_pixels.height()),
                params.background_color, params.nearest_neighbor,
-               params.secure_output_only, params.protected_video_type);
+               params.secure_output_only, params.protected_video_type,
+               /*is_tex_coords_normalized=*/false);
   return ThisRef();
 }
 
@@ -530,6 +537,13 @@ CompositorFrameBuilder& CompositorFrameBuilder::AddOffsetTagDefinition(
   return *this;
 }
 
+CompositorFrameBuilder& CompositorFrameBuilder::AddContentFrameIntervalInfo(
+    const ContentFrameIntervalInfo& content_frame_interval_info) {
+  frame_->metadata.frame_interval_inputs.content_interval_info.push_back(
+      content_frame_interval_info);
+  return *this;
+}
+
 CompositorFrameBuilder& CompositorFrameBuilder::SetValidTreesInVizTimestamps(
     base::TimeTicks now) {
   frame_->metadata.trees_in_viz_timing_details = {
@@ -545,6 +559,14 @@ CompositorFrame CompositorFrameBuilder::MakeInitCompositorFrame() const {
   frame.metadata.device_scale_factor = 1.f;
   frame.metadata.frame_token = ++next_token;
   return frame;
+}
+
+CompositorFrameBuilder& CompositorFrameBuilder::AddTrackedElementRect(
+    TrackedElementFeature feature,
+    const TrackedElementRect& tracked_element_rect) {
+  frame_->metadata.tracked_element_rects[feature].push_back(
+      tracked_element_rect);
+  return *this;
 }
 
 CompositorRenderPassList CopyRenderPasses(

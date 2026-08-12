@@ -15,7 +15,9 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/plural_string_handler.h"
 #include "chrome/browser/ui/webui/updater/updater_page_handler.h"
 #include "chrome/browser/ui/webui/updater/updater_ui.mojom.h"
@@ -31,6 +33,11 @@
 #include "third_party/abseil-cpp/absl/functional/overload.h"
 #include "ui/webui/mojo_web_ui_controller.h"
 #include "ui/webui/webui_util.h"
+
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#include "base/version_info/channel.h"
+#include "chrome/common/channel_info.h"
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
 namespace {
 
@@ -74,8 +81,11 @@ UpdaterUI::UpdaterUI(content::WebUI* web_ui)
       {"activationSucceeded", IDS_UPDATER_ACTIVATION_SUCCEEDED},
       {"addFilter", IDS_UPDATER_ADD_FILTER},
       {"app", IDS_UPDATER_APP},
+      {"appColumn", IDS_UPDATER_APP_COLUMN},
       {"appNameOrId", IDS_UPDATER_APP_NAME_OR_ID},
+      {"appPolicies", IDS_UPDATER_APP_POLICIES},
       {"apply", IDS_UPDATER_APPLY},
+      {"appStatesQueryFailed", IDS_UPDATER_APP_STATES_QUERY_FAILED},
       {"cancel", IDS_UPDATER_CANCEL},
       {"clearAllFilters", IDS_UPDATER_CLEAR_ALL_FILTERS},
       {"collapseAll", IDS_UPDATER_COLLAPSE_ALL},
@@ -86,8 +96,22 @@ UpdaterUI::UpdaterUI(content::WebUI* web_ui)
       {"dateFilterAfter", IDS_UPDATER_DATE_FILTER_AFTER},
       {"dateFilterBefore", IDS_UPDATER_DATE_FILTER_BEFORE},
       {"dateFilterRange", IDS_UPDATER_DATE_FILTER_RANGE},
+      {"displayedEventsCount", IDS_UPDATER_DISPLAYED_EVENTS_COUNT},
+      {"duration", IDS_UPDATER_DURATION},
       {"endDate", IDS_UPDATER_END_DATE},
-      {"errorDetails", IDS_UPDATER_ERROR_DETAILS},
+      {"updaterError-accessDenied", IDS_UPDATER_ERROR_ACCESS_DENIED},
+      {"updaterError-corrupt", IDS_UPDATER_ERROR_CORRUPT},
+      {"updaterError-disabled", IDS_UPDATER_ERROR_DISABLED},
+      {"updaterError-diskFull", IDS_UPDATER_ERROR_DISK_FULL},
+      {"updaterError-download", IDS_UPDATER_ERROR_DOWNLOAD},
+      {"updaterError-install", IDS_UPDATER_ERROR_INSTALL},
+      {"updaterError-installerFailed", IDS_UPDATER_ERROR_INSTALLER_FAILED},
+      {"updaterError-network", IDS_UPDATER_ERROR_NETWORK},
+      {"updaterError-restricted", IDS_UPDATER_ERROR_RESTRICTED},
+      {"updaterError-unpack", IDS_UPDATER_ERROR_UNPACK},
+      {"updaterError-unknown", IDS_UPDATER_ERROR_UNKNOWN},
+      {"updaterError-updateCheck", IDS_UPDATER_ERROR_UPDATE_CHECK},
+      {"eventListTitle", IDS_UPDATER_EVENT_LIST_TITLE},
       {"eventType", IDS_UPDATER_EVENT_TYPE},
       {"eventTypeACTIVATE", IDS_UPDATER_EVENT_TYPE_ACTIVATE},
       {"eventTypeAPP_COMMAND", IDS_UPDATER_EVENT_TYPE_APP_COMMAND},
@@ -100,25 +124,53 @@ UpdaterUI::UpdaterUI(content::WebUI* web_ui)
       {"eventTypeUPDATE", IDS_UPDATER_EVENT_TYPE_UPDATE},
       {"eventTypeUPDATER_PROCESS", IDS_UPDATER_EVENT_TYPE_UPDATER_PROCESS},
       {"expandAll", IDS_UPDATER_EXPAND_ALL},
+      {"exportHistoryFile", IDS_UPDATER_EXPORT_HISTORY_FILE},
       {"filterChipApp", IDS_UPDATER_FILTER_CHIP_APP},
       {"filterChipDate", IDS_UPDATER_FILTER_CHIP_DATE},
       {"filterChipEventType", IDS_UPDATER_FILTER_CHIP_EVENT_TYPE},
       {"filterChipUpdateOutcome", IDS_UPDATER_FILTER_CHIP_UPDATE_OUTCOME},
+      {"filterChipUpdaterScope", IDS_UPDATER_FILTER_CHIP_UPDATER_SCOPE},
+      {"helpCenterTooltip", IDS_UPDATER_HELP_CENTER_TOOLTIP},
+      {"inactiveVersions", IDS_UPDATER_INACTIVE_VERSIONS_LABEL},
+      {"installPath", IDS_UPDATER_INSTALL_PATH_LABEL},
       {"installSummary", IDS_UPDATER_INSTALL_SUMMARY},
+      {"installedAppsTitle", IDS_UPDATER_INSTALLED_APPS_TITLE},
       {"internal", IDS_UPDATER_INTERNAL},
+      {"lastChecked", IDS_UPDATER_LAST_CHECKED_LABEL},
+      {"lastStarted", IDS_UPDATER_LAST_STARTED_LABEL},
+      {"learnMore", IDS_UPDATER_LEARN_MORE},
+      {"loadHistoryFile", IDS_UPDATER_LOAD_HISTORY_FILE},
+      {"loadHistoryFileError", IDS_UPDATER_LOAD_HISTORY_FILE_ERROR},
+      {"never", IDS_UPDATER_NEVER},
       {"nextVersion", IDS_UPDATER_NEXT_VERSION},
+      {"noAppsFound", IDS_UPDATER_NO_APPS_FOUND},
+      {"noPolicies", IDS_UPDATER_NO_POLICIES},
       {"noUpdate", IDS_UPDATER_NO_UPDATE},
+      {"noUpdaterFound", IDS_UPDATER_NO_UPDATER_FOUND},
       {"omahaRequest", IDS_UPDATER_OMAHA_REQUEST},
       {"omahaResponse", IDS_UPDATER_OMAHA_RESPONSE},
       {"other", IDS_UPDATER_OTHER},
       {"outcome", IDS_UPDATER_OUTCOME},
       {"outcomeUnknown", IDS_UPDATER_OUTCOME_UNKNOWN},
       {"persistedDataSummary", IDS_UPDATER_PERSISTED_DATA_SUMMARY},
+      {"policyConflictWarning", IDS_UPDATER_POLICY_CONFLICT_WARNING},
+      {"policyDetails", IDS_UPDATER_EFFECTIVE_POLICY_SET},
+      {"policyIgnored", IDS_UPDATER_POLICY_IGNORED},
+      {"policyName", IDS_UPDATER_POLICY_NAME},
+      {"policyOk", IDS_UPDATER_POLICY_OK},
+      {"policySource", IDS_UPDATER_POLICY_SOURCE},
+      {"policyStatus", IDS_UPDATER_POLICY_STATUS},
+      {"policyValue", IDS_UPDATER_POLICY_VALUE},
       {"processSummary", IDS_UPDATER_PROCESS_SUMMARY},
       {"qualificationFailed", IDS_UPDATER_QUALIFICATION_FAILED},
       {"qualificationSucceeded", IDS_UPDATER_QUALIFICATION_SUCCEEDED},
       {"removeFilter", IDS_UPDATER_REMOVE_FILTER},
+      {"returnToLocal", IDS_UPDATER_RETURN_TO_LOCAL},
+      {"scope", IDS_UPDATER_SCOPE},
+      {"scopeSystem", IDS_UPDATER_SCOPE_SYSTEM},
+      {"scopeUser", IDS_UPDATER_SCOPE_USER},
       {"startDate", IDS_UPDATER_START_DATE},
+      {"title", IDS_UPDATER_PAGE_TITLE},
       {"uninstallSummary", IDS_UPDATER_UNINSTALL_SUMMARY},
       {"updateError", IDS_UPDATER_UPDATE_ERROR},
       {"updateOutcome", IDS_UPDATER_UPDATE_OUTCOME},
@@ -126,7 +178,13 @@ UpdaterUI::UpdaterUI(content::WebUI* web_ui)
       {"updateOutcomeUPDATED", IDS_UPDATER_UPDATE_OUTCOME_UPDATED},
       {"updateOutcomeUPDATE_ERROR", IDS_UPDATER_UPDATE_OUTCOME_UPDATE_ERROR},
       {"updatedTo", IDS_UPDATER_UPDATED_TO},
+      {"updaterPolicies", IDS_UPDATER_UPDATER_POLICIES},
+      {"updaterStateQueryFailed", IDS_UPDATER_QUERY_FAILED},
+      {"updaterStateTitle", IDS_UPDATER_STATE_TITLE},
       {"updaterVersion", IDS_UPDATER_UPDATER_VERSION},
+      {"versionColumn", IDS_UPDATER_VERSION_COLUMN},
+      {"versionLabel", IDS_UPDATER_VERSION_LABEL},
+      {"viewAllChromePolicies", IDS_UPDATER_VIEW_ALL_CHROME_POLICIES},
       {"viewRawDetails", IDS_UPDATER_VIEW_RAW_DETAILS},
   });
 
@@ -136,6 +194,8 @@ UpdaterUI::UpdaterUI(content::WebUI* web_ui)
                                             IDS_UPDATER_PARSE_ERROR_EVENTS);
   plural_string_handler->AddLocalizedString("undatedEvents",
                                             IDS_UPDATER_UNDATED_EVENTS);
+  plural_string_handler->AddLocalizedString("viewingHistoryFiles",
+                                            IDS_UPDATER_VIEWING_HISTORY_FILES);
   web_ui->AddMessageHandler(std::move(plural_string_handler));
 
   int32_t num_known_apps = 0;
@@ -155,7 +215,20 @@ UpdaterUI::UpdaterUI(content::WebUI* web_ui)
               {"{44FC7FE2-65CE-487C-93F4-EDEE46EEAAAB}"});
   AddKnownApp(*source, num_known_apps++, "Chrome Enterprise Companion App",
               {"{85EEDF37-756C-4972-9399-5A12A4BEE148}"});
-  source->AddLocalizedString("defaultAppFilters", IDS_PRODUCT_NAME);
+
+  source->AddLocalizedString("defaultAppFilters", [] {
+    switch (chrome::GetChannel()) {
+      case version_info::Channel::BETA:
+        return IDS_SHORTCUT_NAME_BETA;
+      case version_info::Channel::DEV:
+        return IDS_SHORTCUT_NAME_DEV;
+      case version_info::Channel::CANARY:
+        return IDS_SXS_SHORTCUT_NAME;
+      case version_info::Channel::STABLE:
+      case version_info::Channel::UNKNOWN:
+        return IDS_PRODUCT_NAME;
+    }
+  }());
 #else
   source->AddString("defaultAppFilters", "");
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
@@ -176,9 +249,7 @@ void UpdaterUI::BindInterface(
 }
 
 void UpdaterUI::CreatePageHandler(
-    mojo::PendingRemote<updater_ui::mojom::Page> page,
     mojo::PendingReceiver<updater_ui::mojom::PageHandler> receiver) {
-  CHECK(page);
-  page_handler_ = std::make_unique<UpdaterPageHandler>(std::move(receiver),
-                                                       std::move(page));
+  page_handler_ = std::make_unique<UpdaterPageHandler>(
+      Profile::FromWebUI(web_ui()), std::move(receiver));
 }

@@ -8,10 +8,6 @@
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 
-#if BUILDFLAG(IS_WIN)
-#include "chrome/browser/net/system_network_context_manager.h"
-#endif
-
 namespace features {
 
 #if BUILDFLAG(IS_ANDROID)
@@ -24,10 +20,6 @@ BASE_FEATURE(kAllowUnmutedAutoplayForTWA, base::FEATURE_ENABLED_BY_DEFAULT);
 // prerender and preconnect for autocomplete action predictor.
 BASE_FEATURE(kAutocompleteActionPredictorConfidenceCutoff,
              base::FEATURE_DISABLED_BY_DEFAULT);
-
-// This is used to enable an experiment for the bookmarks tree view in the
-// side panel, providing users with a hierarchical view of their bookmarks.
-BASE_FEATURE(kBookmarksTreeView, base::FEATURE_DISABLED_BY_DEFAULT);
 
 // This is used as a kill switch for Bookmark triggered prerendering. See
 // crbug.com/40259793 for more details of Bookmark triggered prerendering.
@@ -94,20 +86,6 @@ BASE_FEATURE(kFlexOrgManagementDisclosure,
 #else
              base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_CHROMEOS)
-
-// Enables the Incoming Call Notifications scenario. When created by an
-// installed origin, an incoming call notification should have increased
-// priority, colored buttons, a ringtone, and a default "close" button.
-// Otherwise, if the origin is not installed, it should behave like the default
-// notifications, but with the added "Close" button. See
-// https://github.com/MicrosoftEdge/MSEdgeExplainers/blob/main/Notifications/notifications_actions_customization.md
-BASE_FEATURE(kIncomingCallNotifications,
-#if BUILDFLAG(IS_WIN)
-             base::FEATURE_ENABLED_BY_DEFAULT);
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT);
-#endif  // BUILDFLAG(IS_WIN)
-
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 BASE_FEATURE(kInitialExternalExtensions, base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
@@ -123,7 +101,7 @@ BASE_FEATURE(kMuteNotificationSnoozeAction, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kNetworkAnnotationMonitoring, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // This flag is used for enabling New Tab Page triggered prerendering. See
-// crbug.com/1462832 for more details of New Tab Page triggered prerendering.
+// crbug.com/40275094 for more details of New Tab Page triggered prerendering.
 BASE_FEATURE(kNewTabPageTriggerForPrerender2, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // This flag is used for enabling New Tab Page triggered prefetch. See
@@ -147,6 +125,9 @@ BASE_FEATURE(kInstallPlatformExperienceHelperWin,
              base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
+// Enables app-menu item for reporting an unsafe site to Google.
+BASE_FEATURE(kReportUnsafeSite, base::FEATURE_ENABLED_BY_DEFAULT);
+
 // When this feature is enabled, the network service will restart unsandboxed if
 // a previous attempt to launch it sandboxed failed.
 BASE_FEATURE(kRestartNetworkServiceUnsandboxedForFailedLaunch,
@@ -167,7 +148,7 @@ BASE_FEATURE(kRestartNetworkServiceUnsandboxedForFailedLaunch,
 // this case, it makes sense to extend the scope of sandbox flags, to block
 // malvertising.
 //
-// Implementation bug: https://crbug.com/1253379
+// Implementation bug: https://crbug.com/40057420
 // I2S: https://groups.google.com/a/chromium.org/g/blink-dev/c/-t-f7I6VvOI
 //
 // Enabled in M103. Flag to be removed in M106
@@ -203,6 +184,10 @@ BASE_FEATURE(kWebUsbDeviceDetection, base::FEATURE_ENABLED_BY_DEFAULT);
 // sandbox/win/src/security_level.h. Only available on Windows 10 RS1 (1607,
 // Build 14393) onwards.
 BASE_FEATURE(kBrowserDynamicCodeDisabled, base::FEATURE_DISABLED_BY_DEFAULT);
+
+// When enabled, the browser will run with isolation enabled on the next
+// restart.
+BASE_FEATURE(kIsolatedProcess, base::FEATURE_DISABLED_BY_DEFAULT);
 
 // The Chrome DLL can be pre-read with ::PrefetchVirtualMemory() from the
 // browser or a child process. Pre-reading is supposed to bring the whole DLL in
@@ -243,19 +228,6 @@ const base::FeatureParam<base::TimeDelta>
 // the Windows Shell (explorer.exe), which is typically non-elevated.
 BASE_FEATURE(kAutoDeElevate, base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_WIN)
-
-#if !BUILDFLAG(IS_ANDROID)
-// This flag controls whether to perform Pak integrity check on startup to
-// report statistics for on-disk corruption.
-// Disabled on ChromeOS, as dm-verity enforces integrity and the check would
-// be redundant.
-BASE_FEATURE(kReportPakFileIntegrity,
-#if !BUILDFLAG(IS_CHROMEOS)
-             base::FEATURE_ENABLED_BY_DEFAULT);
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT);
-#endif  // BUILDFLAG(IS_CHROMEOS)
-#endif  // BUILDFLAG(IS_ANDROID)
 
 // This flag enables the removal of IWAs surface captures from Chrome Tabs
 // category in getDisplayMedia() API. When disabled, IWAs surface captures

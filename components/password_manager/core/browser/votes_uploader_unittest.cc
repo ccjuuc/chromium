@@ -14,6 +14,7 @@
 #include "base/rand_util.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/utf_ostream_operators.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
@@ -29,6 +30,7 @@
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_store/mock_password_store_interface.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/stub_password_manager_client.h"
 #include "components/password_manager/core/browser/vote_uploads_test_matchers.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -264,7 +266,7 @@ TEST_F(VotesUploaderTest, SendVotesOnSaveOverwrittenFlow) {
   std::vector<PasswordForm> matches = {match_form};
 
   EXPECT_TRUE(votes_uploader.FindCorrectedUsernameElement(
-      matches, u"correct_username", u"password_value"));
+      FromPasswordForms(matches), u"correct_username", u"password_value"));
 
   // SendVotesOnSave should call UploadPasswordVote and StartUploadRequest
   // twice. The first call is not the one that should be tested.
@@ -277,7 +279,7 @@ TEST_F(VotesUploaderTest, SendVotesOnSaveOverwrittenFlow) {
                                  /*is_password_manager_upload=*/true))
       .After(first_call);
   votes_uploader.SendVotesOnSave(form_to_upload_.form_data, submitted_form_,
-                                 matches, &form_to_upload_);
+                                 FromPasswordForms(matches), &form_to_upload_);
 }
 
 // Checks votes uploading when user reuses credentials on login form.
@@ -383,7 +385,8 @@ TEST_F(VotesUploaderTest, SendVotesOnSaveEditedFlow) {
   EXPECT_CALL(mock_autofill_crowdsourcing_manager_,
               StartUploadRequest(upload_contents_matcher, _,
                                  /*is_password_manager_upload=*/true));
-  votes_uploader.SendVotesOnSave(form_to_upload_.form_data, submitted_form_, {},
+  votes_uploader.SendVotesOnSave(form_to_upload_.form_data, submitted_form_,
+                                 std::vector<StoredCredential>(),
                                  &form_to_upload_);
 }
 
@@ -617,21 +620,6 @@ TEST_F(VotesUploaderTest, GeneratePasswordAttributesMetadata_NonAsciiPassword) {
   }
 }
 
-TEST_F(VotesUploaderTest, NoSingleUsernameDataNoUpload) {
-  VotesUploader votes_uploader(&client_, false);
-  EXPECT_CALL(mock_autofill_crowdsourcing_manager_, StartUploadRequest)
-      .Times(0);
-  base::HistogramTester histogram_tester;
-  votes_uploader.set_should_send_username_first_flow_votes(true);
-  votes_uploader.MaybeSendSingleUsernameVotes();
-
-  histogram_tester.ExpectUniqueSample(
-      "PasswordManager.SingleUsername.VoteDataAvailability",
-      static_cast<int>(
-          VotesUploader::SingleUsernameVoteDataAvailability::kNone),
-      1);
-}
-
 TEST_F(VotesUploaderTest, UploadSingleUsernameMultipleFieldsInUsernameForm) {
   VotesUploader votes_uploader(&client_, false);
 
@@ -652,8 +640,7 @@ TEST_F(VotesUploaderTest, UploadSingleUsernameMultipleFieldsInUsernameForm) {
   std::u16string single_username_candidate_value = u"username_candidate_value";
   votes_uploader.add_single_username_vote_data(SingleUsernameVoteData(
       kSingleUsernameRendererId, single_username_candidate_value,
-      form_predictions,
-      /*stored_credentials=*/{}, PasswordFormHadMatchingUsername(false)));
+      form_predictions, PasswordFormHadMatchingUsername(false)));
   votes_uploader.set_suggested_username(single_username_candidate_value);
   votes_uploader.CalculateUsernamePromptEditState(
       /*saved_username=*/single_username_candidate_value,
@@ -674,25 +661,18 @@ TEST_F(VotesUploaderTest, UploadSingleUsernameMultipleFieldsInUsernameForm) {
         .Times(0);
   }
 
-  base::HistogramTester histogram_tester;
   votes_uploader.MaybeSendSingleUsernameVotes();
-
-  histogram_tester.ExpectUniqueSample(
-      "PasswordManager.SingleUsername.VoteDataAvailability",
-      static_cast<int>(VotesUploader::SingleUsernameVoteDataAvailability::
-                           kUsernameFirstOnly),
-      1);
 }
 
 // Tests that a negative vote is sent if the username candidate field
 // value contained whitespaces.
 TEST_F(VotesUploaderTest, UploadNotSingleUsernameForWhitespaces) {
   VotesUploader votes_uploader(&client_, false);
-  votes_uploader.add_single_username_vote_data(SingleUsernameVoteData(
-      kSingleUsernameRendererId,
-      /*username_value=*/u"some search query",
-      MakeSimpleSingleUsernamePredictions(),
-      /*stored_credentials=*/{}, PasswordFormHadMatchingUsername(false)));
+  votes_uploader.add_single_username_vote_data(
+      SingleUsernameVoteData(kSingleUsernameRendererId,
+                             /*username_value=*/u"some search query",
+                             MakeSimpleSingleUsernamePredictions(),
+                             PasswordFormHadMatchingUsername(false)));
   votes_uploader.CalculateUsernamePromptEditState(
       /*saved_username=*/u"saved_value", /*all_alternative_usernames=*/{});
   votes_uploader.set_should_send_username_first_flow_votes(true);
@@ -721,7 +701,7 @@ TEST_F(VotesUploaderTest, UploadNotSingleUsernameForgotPasswordForWhitespaces) {
   VotesUploader votes_uploader(&client_, false);
   votes_uploader.AddForgotPasswordVoteData(SingleUsernameVoteData(
       kSingleUsernameRendererId, /*username_value=*/u"some search query",
-      MakeSimpleSingleUsernamePredictions(), /*stored_credentials=*/{},
+      MakeSimpleSingleUsernamePredictions(),
       PasswordFormHadMatchingUsername(false)));
   votes_uploader.CalculateUsernamePromptEditState(
       /*saved_username=*/u"", /*all_alternative_usernames=*/{});
@@ -746,7 +726,7 @@ TEST_F(VotesUploaderTest, SingleUsernameValueSuggestedAndAccepted) {
   std::u16string single_username_candidate_value = u"username_candidate_value";
   votes_uploader.add_single_username_vote_data(SingleUsernameVoteData(
       kSingleUsernameRendererId, single_username_candidate_value,
-      MakeSimpleSingleUsernamePredictions(), /*stored_credentials=*/{},
+      MakeSimpleSingleUsernamePredictions(),
       PasswordFormHadMatchingUsername(false)));
   votes_uploader.set_suggested_username(single_username_candidate_value);
   votes_uploader.CalculateUsernamePromptEditState(
@@ -779,7 +759,7 @@ TEST_F(VotesUploaderTest, SingleUsernameOtherValueSuggestedAndAccepted) {
   std::u16string single_username_candidate_value = u"username_candidate_value";
   votes_uploader.add_single_username_vote_data(SingleUsernameVoteData(
       kSingleUsernameRendererId, single_username_candidate_value,
-      MakeSimpleSingleUsernamePredictions(), /*stored_credentials=*/{},
+      MakeSimpleSingleUsernamePredictions(),
       PasswordFormHadMatchingUsername(false)));
   std::u16string suggested_value = u"other_value";
   votes_uploader.set_suggested_username(suggested_value);
@@ -811,7 +791,7 @@ TEST_F(VotesUploaderTest, SingleUsernameValueSetInPrompt) {
   std::u16string single_username_candidate_value = u"username_candidate_value";
   votes_uploader.add_single_username_vote_data(SingleUsernameVoteData(
       kSingleUsernameRendererId, single_username_candidate_value,
-      MakeSimpleSingleUsernamePredictions(), /*stored_credentials=*/{},
+      MakeSimpleSingleUsernamePredictions(),
       PasswordFormHadMatchingUsername(false)));
   std::u16string suggested_value = u"other_value";
   votes_uploader.set_suggested_username(suggested_value);
@@ -844,7 +824,7 @@ TEST_F(VotesUploaderTest, SingleUsernameValueDeletedInPrompt) {
   std::u16string single_username_candidate_value = u"username_candidate_value";
   votes_uploader.add_single_username_vote_data(SingleUsernameVoteData(
       kSingleUsernameRendererId, single_username_candidate_value,
-      MakeSimpleSingleUsernamePredictions(), /*stored_credentials=*/{},
+      MakeSimpleSingleUsernamePredictions(),
       PasswordFormHadMatchingUsername(false)));
   votes_uploader.set_suggested_username(single_username_candidate_value);
   votes_uploader.CalculateUsernamePromptEditState(
@@ -875,7 +855,7 @@ TEST_F(VotesUploaderTest, NotSingleUsernameValueDeletedInPrompt) {
   std::u16string single_username_candidate_value = u"username_candidate_value";
   votes_uploader.add_single_username_vote_data(SingleUsernameVoteData(
       kSingleUsernameRendererId, single_username_candidate_value,
-      MakeSimpleSingleUsernamePredictions(), /*stored_credentials=*/{},
+      MakeSimpleSingleUsernamePredictions(),
       PasswordFormHadMatchingUsername(false)));
   std::u16string other_value = u"other_value";
   votes_uploader.set_suggested_username(other_value);
@@ -893,73 +873,12 @@ TEST_F(VotesUploaderTest, NotSingleUsernameValueDeletedInPrompt) {
   votes_uploader.MaybeSendSingleUsernameVotes();
 }
 
-// Tests FieldNameCollisionInVotes metric doesn't report "true" when multiple
-// fields in the form to be uploaded have the same name.
-TEST_F(VotesUploaderTest, FieldNameCollisionInVotes) {
-  VotesUploader votes_uploader(&client_, false);
-  std::u16string password_element = GetFieldNameByIndex(5);
-  form_to_upload_.password_element = password_element;
-  form_to_upload_.password_element_renderer_id = FieldRendererId(5);
-  submitted_form_.password_element = password_element;
-  submitted_form_.password_element_renderer_id = FieldRendererId(5);
-  form_to_upload_.confirmation_password_element = password_element;
-  form_to_upload_.confirmation_password_element_renderer_id =
-      FieldRendererId(11);
-  submitted_form_.confirmation_password_element = password_element;
-  submitted_form_.confirmation_password_element_renderer_id =
-      FieldRendererId(11);
-
-  auto upload_contents_matcher = IsPasswordUpload(
-      FormSignatureIs(CalculateFormSignature(form_to_upload_.form_data)),
-      LoginFormSignatureIs(login_form_signature_),
-      FieldsContain(UploadField(5, FieldType::PASSWORD),
-                    UploadField(11, FieldType::CONFIRMATION_PASSWORD)));
-  EXPECT_CALL(mock_autofill_crowdsourcing_manager_,
-              StartUploadRequest(upload_contents_matcher, _,
-                                 /*is_password_manager_upload=*/true));
-  base::HistogramTester histogram_tester;
-  EXPECT_TRUE(votes_uploader.UploadPasswordVote(
-      form_to_upload_, submitted_form_, FieldType::PASSWORD,
-      login_form_signature_));
-
-  histogram_tester.ExpectUniqueSample(
-      "PasswordManager.FieldNameCollisionInVotes", false, 1);
-}
-
-// Tests FieldNameCollisionInVotes metric reports "false" when all fields in the
-// form to be uploaded have different names.
-TEST_F(VotesUploaderTest, NoFieldNameCollisionInVotes) {
-  VotesUploader votes_uploader(&client_, false);
-  form_to_upload_.password_element_renderer_id = FieldRendererId(5);
-  submitted_form_.password_element_renderer_id = FieldRendererId(5);
-  form_to_upload_.confirmation_password_element_renderer_id =
-      FieldRendererId(12);
-  submitted_form_.confirmation_password_element_renderer_id =
-      FieldRendererId(12);
-
-  auto upload_contents_matcher = IsPasswordUpload(
-      FormSignatureIs(CalculateFormSignature(form_to_upload_.form_data)),
-      LoginFormSignatureIs(login_form_signature_),
-      FieldsContain(UploadField(5, FieldType::PASSWORD),
-                    UploadField(12, FieldType::CONFIRMATION_PASSWORD)));
-  EXPECT_CALL(mock_autofill_crowdsourcing_manager_,
-              StartUploadRequest(upload_contents_matcher, _,
-                                 /*is_password_manager_upload=*/true));
-  base::HistogramTester histogram_tester;
-  EXPECT_TRUE(votes_uploader.UploadPasswordVote(
-      form_to_upload_, submitted_form_, FieldType::PASSWORD,
-      login_form_signature_));
-
-  histogram_tester.ExpectUniqueSample(
-      "PasswordManager.FieldNameCollisionInVotes", false, 1);
-}
-
 TEST_F(VotesUploaderTest, ForgotPasswordFormVote) {
   VotesUploader votes_uploader(&client_, false);
   std::u16string single_username_candidate_value = u"username_candidate_value";
   votes_uploader.AddForgotPasswordVoteData(SingleUsernameVoteData(
       kSingleUsernameRendererId, single_username_candidate_value,
-      MakeSimpleSingleUsernamePredictions(), /*stored_credentials=*/{},
+      MakeSimpleSingleUsernamePredictions(),
       PasswordFormHadMatchingUsername(false)));
   votes_uploader.set_suggested_username(single_username_candidate_value);
   votes_uploader.CalculateUsernamePromptEditState(
@@ -976,64 +895,9 @@ TEST_F(VotesUploaderTest, ForgotPasswordFormVote) {
               StartUploadRequest(upload_contents_matcher, _,
                                  /*is_password_manager_upload=*/true));
 
-  base::HistogramTester histogram_tester;
   votes_uploader.MaybeSendSingleUsernameVotes();
-
-  histogram_tester.ExpectUniqueSample(
-      "PasswordManager.SingleUsername.VoteDataAvailability",
-      static_cast<int>(VotesUploader::SingleUsernameVoteDataAvailability::
-                           kForgotPasswordOnly),
-      1);
 }
 
-// Tests "PasswordManager.SingleUsername.VoteDataAvailability" UMA recording
-// when both UFF and FPF data is available and has info about the same form.
-TEST_F(VotesUploaderTest, SingleUsernameVoteDataUffOverlapsWithFpf) {
-  VotesUploader votes_uploader(&client_, false);
 
-  SingleUsernameVoteData data(kSingleUsernameRendererId, u"possible_username",
-                              MakeSimpleSingleUsernamePredictions(),
-                              /*stored_credentials=*/{},
-                              PasswordFormHadMatchingUsername(false));
-
-  votes_uploader.add_single_username_vote_data(data);
-  votes_uploader.AddForgotPasswordVoteData(data);
-
-  base::HistogramTester histogram_tester;
-  votes_uploader.MaybeSendSingleUsernameVotes();
-
-  histogram_tester.ExpectUniqueSample(
-      "PasswordManager.SingleUsername.VoteDataAvailability",
-      static_cast<int>(
-          VotesUploader::SingleUsernameVoteDataAvailability::kBothWithOverlap),
-      1);
-}
-
-// Tests "PasswordManager.SingleUsername.VoteDataAvailability" UMA recording
-// when both UFF and FPF data is available and has info about different forms.
-TEST_F(VotesUploaderTest, SingleUsernameVoteDataUffNoOverlapWithFpf) {
-  VotesUploader votes_uploader(&client_, false);
-
-  SingleUsernameVoteData data1(FieldRendererId(100), u"maybe_username",
-                               MakeSimpleSingleUsernamePredictions(),
-                               /*stored_credentials=*/{},
-                               PasswordFormHadMatchingUsername(false));
-  votes_uploader.add_single_username_vote_data(data1);
-
-  SingleUsernameVoteData data2(FieldRendererId(200), u"also_maybe_username",
-                               MakeSimpleSingleUsernamePredictions(),
-                               /*stored_credentials=*/{},
-                               PasswordFormHadMatchingUsername(false));
-  votes_uploader.AddForgotPasswordVoteData(data2);
-
-  base::HistogramTester histogram_tester;
-  votes_uploader.MaybeSendSingleUsernameVotes();
-
-  histogram_tester.ExpectUniqueSample(
-      "PasswordManager.SingleUsername.VoteDataAvailability",
-      static_cast<int>(
-          VotesUploader::SingleUsernameVoteDataAvailability::kBothNoOverlap),
-      1);
-}
 
 }  // namespace password_manager

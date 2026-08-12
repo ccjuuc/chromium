@@ -20,6 +20,7 @@ class WebContents;
 
 namespace password_manager {
 class PasswordFormManagerForUI;
+struct StoredCredential;
 }
 
 namespace url {
@@ -86,20 +87,21 @@ class PasswordsClientUIDelegate {
   virtual void OnPromptEnableAutoSignin() = 0;
 
   // Called when the password will be saved automatically, but we still wish to
-  // visually inform the user that the save has occured.
+  // visually inform the user that the save has occurred.
   virtual void OnAutomaticPasswordSave(
       std::unique_ptr<password_manager::PasswordFormManagerForUI> form_manager,
       bool is_update_confirmation) = 0;
 
   // Called when a form is autofilled with login information, so we can manage
   // password credentials for the current site which are stored in
-  // |password_forms|. This stores a copy of |password_forms| and shows
-  // the manage password icon. |federated_matches| contain the matching stored
-  // federated credentials to display in the UI.
+  // |password_credentials|. This stores a copy of |password_credentials| and
+  // shows the manage password icon. |federated_matches| contain the matching
+  // stored federated credentials to display in the UI.
   virtual void OnPasswordAutofilled(
-      base::span<const password_manager::PasswordForm> password_forms,
+      base::span<const password_manager::StoredCredential> password_credentials,
       const url::Origin& origin,
-      base::span<const password_manager::PasswordForm> federated_matches) = 0;
+      base::span<const password_manager::StoredCredential>
+          federated_matches) = 0;
 
   // Called when user credentials were leaked. This triggers the UI to prompt
   // the user whether they would like to check their passwords.

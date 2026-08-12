@@ -23,14 +23,15 @@ std::atomic<bool> s_is_eligible_for_throttle_main_frame_to_60hz = false;
 BASE_FEATURE(kComputeRasterTranslateForExternalScale,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-// Whether the compositor should attempt to sync with the scroll handlers before
-// submitting a frame.
-BASE_FEATURE(kSynchronizedScrolling,
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-             base::FEATURE_DISABLED_BY_DEFAULT);
-#else
+// When enabled, non-root effect render surfaces (opacity/filter/mask) inside an
+// OOPIF magnified by its embedder are allocated at the external page scale
+// factor, matching the raster (picture layer) resolution. Without this, such a
+// surface's backing is sized at the un-magnified resolution, so the crisp
+// raster tiles drawn into it are downsampled and then upsampled again when the
+// magnified surface is composited, making text inside the effect look blurry.
+// The OOPIF's root surface is intentionally left un-magnified.
+BASE_FEATURE(kSizeOopifEffectSurfacesAtExternalScale,
              base::FEATURE_ENABLED_BY_DEFAULT);
-#endif
 
 BASE_FEATURE(kDeferImplInvalidation, base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -69,6 +70,9 @@ const base::FeatureParam<int> kReclaimDelayInSeconds{&kSmallerInterestArea,
 
 BASE_FEATURE(kTileOOMFreezeMitigation, base::FEATURE_ENABLED_BY_DEFAULT);
 
+BASE_FEATURE(kStopDeferringCommitsInCompositeForTest,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
 BASE_FEATURE(kClearCanvasResourcesInBackground,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -82,10 +86,24 @@ BASE_FEATURE(kPreserveDiscardableImageMapQuality,
 
 BASE_FEATURE(kCCSlimming, base::FEATURE_ENABLED_BY_DEFAULT);
 
+BASE_FEATURE(kWebViewMemoryMultiplier,
+             "WebViewMemoryMultiplier",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+const base::FeatureParam<int> kWebViewMemoryMultiplierParam{
+    &kWebViewMemoryMultiplier, "MemoryMultiplier", 20};
+
+const base::FeatureParam<int> kWebViewMemoryMultiplierSoftPercentageParam{
+    &kWebViewMemoryMultiplier, "MemoryMultiplierSoftPercentage", 50};
+
 bool IsCCSlimmingEnabled() {
   static const bool enabled = base::FeatureList::IsEnabled(kCCSlimming);
   return enabled;
 }
+
+// When enabled, the scheduler will use SlimSchedulerStateMachine which ensures
+// that each action is returned only once per begin frame.
+BASE_FEATURE(kSlimScheduler, base::FEATURE_DISABLED_BY_DEFAULT);
 
 constexpr const char kScrollEventDispatchModeDispatchScrollEventsImmediately[] =
     "DispatchScrollEventsImmediately";
@@ -119,13 +137,36 @@ constexpr const char kNewContentForCheckerboardedScrollsPerFrame[] =
 const base::FeatureParam<std::string> kNewContentForCheckerboardedScrollsParam(
     &kNewContentForCheckerboardedScrolls,
     "mode",
-    kNewContentForCheckerboardedScrollsPerScroll);
-
-BASE_FEATURE(kAllowLCDTextWithFilter, base::FEATURE_ENABLED_BY_DEFAULT);
+    kNewContentForCheckerboardedScrollsPerFrame);
 
 BASE_FEATURE(kPreventDuplicateImageDecodes, base::FEATURE_DISABLED_BY_DEFAULT);
 
+BASE_FEATURE(kResolveLargeImageDecodes, base::FEATURE_ENABLED_BY_DEFAULT);
+
 BASE_FEATURE(kInitImageDecodeLastUseTime, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kThrottleRepeatedNoDamageFrames,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+const base::FeatureParam<int> kThrottleRepeatedNoDamageFramesThreshold1(
+    &kThrottleRepeatedNoDamageFrames,
+    "repeated_no_damage_frame_throttling_threshold1",
+    90);
+
+const base::FeatureParam<int> kThrottleRepeatedNoDamageFramesThreshold2(
+    &kThrottleRepeatedNoDamageFrames,
+    "repeated_no_damage_frame_throttling_threshold2",
+    90);
+
+const base::FeatureParam<int> kThrottleRepeatedNoDamageFramesIntervalFactor1(
+    &kThrottleRepeatedNoDamageFrames,
+    "repeated_no_damage_frame_throttling_factor1",
+    2);
+
+const base::FeatureParam<int> kThrottleRepeatedNoDamageFramesIntervalFactor2(
+    &kThrottleRepeatedNoDamageFrames,
+    "repeated_no_damage_frame_throttling_factor2",
+    2);
 
 // Enabled on Android, after a field trial showed improvements.
 BASE_FEATURE(kThrottleMainFrameTo60Hz,
@@ -139,14 +180,17 @@ BASE_FEATURE(kThrottleMainFrameTo60Hz,
 #if BUILDFLAG(IS_ANDROID)
 BASE_FEATURE(kThrottleMainFrameTo60HzWebView,
              base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kThrottleMainFrameTo60HzDesktopAndroid,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 #endif
 
-BASE_FEATURE(kBoostFrameRateForUrgentMainFrame,
+BASE_FEATURE(kHighFramerateRequestFromClient,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 void SetIsEligibleForThrottleMainFrameTo60Hz(bool is_eligible) {
   s_is_eligible_for_throttle_main_frame_to_60hz.store(
-      true, std::memory_order_relaxed);
+      is_eligible, std::memory_order_relaxed);
 }
 
 bool IsEligibleForThrottleMainFrameTo60Hz() {
@@ -157,29 +201,7 @@ bool IsEligibleForThrottleMainFrameTo60Hz() {
 BASE_FEATURE(kViewTransitionCaptureAndDisplay,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kViewTransitionFloorTransform, base::FEATURE_ENABLED_BY_DEFAULT);
 
-// The feature is the enabled for the cc infrastructure to set the frame rate
-// throttles from the main thread.
-// The experiment will be controlled by the feature flag
-// RenderBlockingFullFrameRate. Enabling the feature will not introduce any
-// behavioral change by itself.
-BASE_FEATURE(kRenderThrottleFrameRate, base::FEATURE_ENABLED_BY_DEFAULT);
-const base::FeatureParam<int> kRenderThrottledFrameIntervalHz{
-    &kRenderThrottleFrameRate, "render-throttled-frame-interval-hz", 30};
-
-BASE_FEATURE(kFastPathNoRaster, base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kInternalBeginFrameSourceOnManyDidNotProduceFrame,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-// By default, internal begin frame source will be used when 4 consecutive
-// "did not produce frame" are observed. It stops using internal begin frame
-// source when there's a submitted compositor frame.
-const base::FeatureParam<int>
-    kNumDidNotProduceFrameBeforeInternalBeginFrameSource{
-        &kInternalBeginFrameSourceOnManyDidNotProduceFrame,
-        "num_did_not_produce_frame_before_internal_begin_frame_source", 4};
 
 BASE_FEATURE(kUseLayerListsByDefault, base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -214,14 +236,12 @@ PROGRAMMATIC_SCROLL_ANIMATION_CURVE(0.4, 0.0, 0.0, 1.0, 1500);
 
 BASE_FEATURE(kSlimDirectReceiverIpc, base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kOverscrollBehaviorRespectedOnAllScrollContainers,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 BASE_FEATURE(kOverscrollEffectOnNonRootScrollers,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kSkipFinishDuringReleaseLayerTreeFrameSink,
-             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kSnapFlingNearExtremes, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSnapFlingDecayPrediction, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kScrollJankV4Metric, base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -249,25 +269,37 @@ BASE_FEATURE_PARAM(double,
                    "fling_continuity_threshold_pixels",
                    0.2);
 
-BASE_FEATURE(kHandleNonDamagingInputsInScrollJankV4Metric,
+BASE_FEATURE(kScrollJankV4MetricFastScrollContinuityRequiresSameDirection,
              base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE_PARAM(bool,
-                   kCountNonDamagingFramesTowardsHistogramFrameCount,
-                   &kHandleNonDamagingInputsInScrollJankV4Metric,
-                   "count_non_damaging_frames_towards_histogram_frame_count",
-                   false);
 
 BASE_FEATURE(kManualBeginFrame, base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kDropMetricsFromNonProducedFramesOnlyIfTheyHadNoDamage,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kUnlockDuringGpuImageOperations,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kMainIdleBypassScheduler, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kUnlockDuringGpuImageOperations, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kBrowserControlsSmoothScroll, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kBrowserControlsHeightChangeCancelAnimations,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Killswitch for disabling Webview scheduler state machine.
+BASE_FEATURE(kWebviewSchedulerStateMachine, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kBrowserControlsScrollSnapAnimation,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSelectionEdgeVisibilityUsesFullEdge,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kResourcePoolPreferExactSizeReuse,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Killswitch for disabling SendEarlyBeginMainFrame function in cc/scheduler.
+BASE_FEATURE(kSendEarlyFinalBeginMainFrame, base::FEATURE_ENABLED_BY_DEFAULT);
+
+bool SendEarlyFinalBeginMainFrameIsEnabled() {
+  return base::FeatureList::IsEnabled(kSendEarlyFinalBeginMainFrame);
+}
+
+BASE_FEATURE(kVizHitTestRoundedCorners, base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace features

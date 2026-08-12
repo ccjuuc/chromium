@@ -15,12 +15,12 @@ import android.view.View;
 import androidx.recyclerview.widget.RecyclerView;
 
 import org.chromium.base.test.transit.ViewElement;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.tab.TabArchiveSettings;
 import org.chromium.chrome.browser.tasks.tab_management.ArchivedTabsDialogCoordinator;
 import org.chromium.chrome.browser.tasks.tab_management.TabArchiveSettingsFragment;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeActivityTabModelBoundStation;
 import org.chromium.chrome.test.transit.settings.SettingsStation;
 
@@ -74,6 +74,6 @@ public class ArchivedTabsDialogStation
     private String getIphDescription() {
         return String.valueOf(
                 ArchivedTabsDialogCoordinator.getIphDescription(
-                        getActivity(), mTabArchiveSettings));
+                        getActivity(), mTabArchiveSettings, (view) -> {}));
     }
 }

@@ -6,7 +6,7 @@ package org.chromium.chrome.browser.multiwindow;
 
 import android.app.Activity;
 
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.app.tabmodel.TabModelOrchestrator;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
@@ -18,10 +18,9 @@ import java.util.function.Supplier;
 
 /** Creates {@link MultiInstanceManager}. */
 @NullMarked
-public class MultiInstanceManagerFactory {
-
+public class MultiInstanceManagerFactory extends MultiInstanceOrchestratorFactory {
     /**
-     * Create a new {@link MultiInstanceManager}.
+     * Creates a new {@link MultiInstanceManager}.
      *
      * @param activity The activity.
      * @param tabModelOrchestratorSupplier A supplier for the {@link TabModelOrchestrator} for the
@@ -39,10 +38,10 @@ public class MultiInstanceManagerFactory {
      */
     public static MultiInstanceManager create(
             Activity activity,
-            ObservableSupplier<TabModelOrchestrator> tabModelOrchestratorSupplier,
+            MonotonicObservableSupplier<TabModelOrchestrator> tabModelOrchestratorSupplier,
             MultiWindowModeStateDispatcher multiWindowModeStateDispatcher,
             ActivityLifecycleDispatcher activityLifecycleDispatcher,
-            ObservableSupplier<ModalDialogManager> modalDialogManagerSupplier,
+            MonotonicObservableSupplier<ModalDialogManager> modalDialogManagerSupplier,
             MenuOrKeyboardActionController menuOrKeyboardActionController,
             Supplier<DesktopWindowStateManager> desktopWindowStateManagerSupplier) {
         if (MultiWindowUtils.isMultiInstanceApi31Enabled()) {
@@ -62,5 +61,10 @@ public class MultiInstanceManagerFactory {
                     activityLifecycleDispatcher,
                     menuOrKeyboardActionController);
         }
+    }
+
+    /** Instantiates the {@link MultiInstanceOrchestrator} singleton. */
+    public static void initializeMultiInstanceOrchestrator() {
+        setInstance(MultiInstanceOrchestratorImpl.getInstance());
     }
 }

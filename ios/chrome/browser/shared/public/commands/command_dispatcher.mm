@@ -11,7 +11,6 @@
 #import <vector>
 
 #import "base/check.h"
-#import "base/containers/contains.h"
 #import "base/containers/heap_array.h"
 #import "base/memory/free_deleter.h"
 #import "base/strings/sys_string_conversions.h"
@@ -96,6 +95,10 @@ GetConformingProtocols(Protocol* protocol) {
 }
 
 - (void)startDispatchingToTarget:(id)target forProtocol:(Protocol*)protocol {
+  DCHECK([target conformsToProtocol:protocol])
+      << base::SysNSStringToUTF8(NSStringFromClass([target class]))
+      << " should implement "
+      << base::SysNSStringToUTF8(NSStringFromProtocol(protocol)) << ".";
   for (const objc_method_description& method : GetRequiredMethods(protocol)) {
     [self startDispatchingToTarget:target forSelector:method.name];
   }
@@ -140,7 +143,7 @@ GetConformingProtocols(Protocol* protocol) {
   BOOL conforming = YES;
   for (const objc_method_description& method : GetRequiredMethods(protocol)) {
     SEL selector = method.name;
-    BOOL targetFound = base::Contains(_forwardingTargets, selector);
+    BOOL targetFound = _forwardingTargets.contains(selector);
     if (!targetFound && ![self shouldFailSilentlyForSelector:selector]) {
       conforming = NO;
       break;
@@ -219,8 +222,7 @@ GetConformingProtocols(Protocol* protocol) {
 }
 
 - (BOOL)shouldFailSilentlyForSelector:(SEL)selector {
-  return _preparingForShutdown &&
-         base::Contains(_silentlyFailingTargets, selector);
+  return _preparingForShutdown && _silentlyFailingTargets.contains(selector);
 }
 
 @end

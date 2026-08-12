@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/string_number_conversions.h"
@@ -104,7 +103,7 @@ bool ParseHostsFromJSON(Extension* extension,
   }
 
   // Add all permissions parsed from the manifest to |hosts|.
-  const base::Value::List& list = permissions->GetList();
+  const base::ListValue& list = permissions->GetList();
   for (size_t i = 0; i < list.size(); ++i) {
     if (list[i].is_string()) {
       hosts->push_back(list[i].GetString());
@@ -129,7 +128,7 @@ void ParseHostPermissions(Extension* extension,
 
   // Users should be able to enable file access for extensions with activeTab.
   if (!can_execute_script_everywhere &&
-      base::Contains(api_permissions, APIPermissionID::kActiveTab)) {
+      api_permissions.count(APIPermissionID::kActiveTab)) {
     extension->set_wants_file_access(true);
   }
 
@@ -247,7 +246,7 @@ bool ParseHelper(Extension* extension,
     // The feature should exist since we just got an APIPermission for it. The
     // two systems should be updated together whenever a permission is added.
     DCHECK(feature) << "Could not find feature for " << iter->name();
-    // http://crbug.com/176381
+    // http://crbug.com/40302033
     if (!feature) {
       to_remove.push_back(iter->id());
       continue;
@@ -531,19 +530,20 @@ void PermissionsParser::SetScriptableHosts(
 // static
 const PermissionSet& PermissionsParser::GetRequiredPermissions(
     const Extension* extension) {
-  DCHECK(extension->GetManifestData(keys::kPermissions));
-  return *static_cast<const ManifestPermissions*>(
-              extension->GetManifestData(keys::kPermissions))
-              ->permissions;
+  const ManifestPermissions* info =
+      extension->GetManifestData<ManifestPermissions>(keys::kPermissions);
+  DCHECK(info);
+  return *info->permissions;
 }
 
 // static
 const PermissionSet& PermissionsParser::GetOptionalPermissions(
     const Extension* extension) {
-  DCHECK(extension->GetManifestData(keys::kOptionalPermissions));
-  return *static_cast<const ManifestPermissions*>(
-              extension->GetManifestData(keys::kOptionalPermissions))
-              ->permissions;
+  const ManifestPermissions* info =
+      extension->GetManifestData<ManifestPermissions>(
+          keys::kOptionalPermissions);
+  DCHECK(info);
+  return *info->permissions;
 }
 
 }  // namespace extensions

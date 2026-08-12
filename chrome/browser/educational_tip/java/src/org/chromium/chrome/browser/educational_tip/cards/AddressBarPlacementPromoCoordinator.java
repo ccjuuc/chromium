@@ -10,12 +10,16 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.educational_tip.EducationTipModuleActionDelegate;
 import org.chromium.chrome.browser.educational_tip.EducationalTipCardProvider;
 import org.chromium.chrome.browser.educational_tip.R;
+import org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType;
 import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+import org.chromium.chrome.browser.setup_list.SetupListCompletable;
+import org.chromium.chrome.browser.setup_list.SetupListModuleUtils;
 import org.chromium.chrome.browser.toolbar.settings.AddressBarSettingsFragment;
 
 /** Coordinator for the address bar placement promo card. */
 @NullMarked
-public class AddressBarPlacementPromoCoordinator implements EducationalTipCardProvider {
+public class AddressBarPlacementPromoCoordinator
+        implements EducationalTipCardProvider, SetupListCompletable {
     private final Runnable mOnModuleClickedCallback;
     private final EducationTipModuleActionDelegate mActionDelegate;
 
@@ -53,17 +57,24 @@ public class AddressBarPlacementPromoCoordinator implements EducationalTipCardPr
 
     @Override
     public @DrawableRes int getCardImage() {
-        // TODO(crbug.com/469425754): Replace with the corresponding drawable, once available.
-        return R.drawable.default_browser_promo_logo;
+        return R.drawable.address_bar_placement_promo_logo;
     }
 
     @Override
     public void onCardClicked() {
         SettingsNavigationFactory.createSettingsNavigation()
                 .startSettings(mActionDelegate.getContext(), AddressBarSettingsFragment.class);
+
         mOnModuleClickedCallback.run();
     }
 
     @Override
-    public void destroy() {}
+    public boolean isComplete() {
+        return SetupListModuleUtils.isModuleCompleted(ModuleType.ADDRESS_BAR_PLACEMENT_PROMO);
+    }
+
+    @Override
+    public @DrawableRes int getCardImageCompletedResId() {
+        return R.drawable.address_bar_placement_promo_completed_logo;
+    }
 }

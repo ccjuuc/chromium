@@ -87,6 +87,10 @@ void VttCueLayoutAlgorithm::Layout() {
 PhysicalSize VttCueLayoutAlgorithm::FirstInlineBoxSize(
     const LayoutBox& cue_box) {
   InlineCursor cursor(To<LayoutBlockFlow>(cue_box));
+  // Avoid NOTREACHED() in MoveToFirstLine(). See crbug.com/514956430.
+  if (!cursor.HasRoot()) {
+    return {};
+  }
   cursor.MoveToFirstLine();
   if (cursor.IsNull())
     return {};
@@ -168,11 +172,13 @@ bool VttCueLayoutAlgorithm::IsOutside(const gfx::Rect& title_area) const {
 bool VttCueLayoutAlgorithm::IsOverlapping(
     const gfx::Rect& controls_rect) const {
   gfx::Rect cue_box_rect = CueBoundingBox(*cue_.GetLayoutBox());
-  for (LayoutBox* box = cue_.GetLayoutBox()->PreviousSiblingBox(); box;
-       box = box->PreviousSiblingBox()) {
-    if (IsA<VTTCueBox>(box->GetNode()) &&
-        cue_box_rect.Intersects(CueBoundingBox(*box)))
-      return true;
+  for (const LayoutObject* object = cue_.GetLayoutBox()->PreviousSibling();
+       object; object = object->PreviousSibling()) {
+    if (const auto* cue = DynamicTo<VTTCueBox>(object->GetNode())) {
+      if (cue_box_rect.Intersects(CueBoundingBox(*cue->GetLayoutBox()))) {
+        return true;
+      }
+    }
   }
   return cue_box_rect.Intersects(controls_rect);
 }

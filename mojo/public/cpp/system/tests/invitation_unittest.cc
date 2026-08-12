@@ -13,7 +13,6 @@
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -422,7 +421,7 @@ TEST_P(MAYBE_InvitationCppTest, MAYBE_ProcessErrors) {
   base::RunLoop error_loop;
   actual_error_callback =
       base::BindLambdaForTesting([&](const std::string& error_message) {
-        EXPECT_TRUE(base::Contains(error_message, kErrorMessage));
+        EXPECT_TRUE(error_message.contains(kErrorMessage));
         error_loop.Quit();
       });
   EXPECT_EQ(MOJO_RESULT_OK,
@@ -431,9 +430,8 @@ TEST_P(MAYBE_InvitationCppTest, MAYBE_ProcessErrors) {
   error_loop.Run();
   EXPECT_EQ(MOJO_RESULT_OK, MojoDestroyMessage(message));
 
-  // TODO(crbug.com/40578072): Once we can rework the C++ invitation API
-  // to also notify on disconnect, this test should cover that too. For now we
-  // just tell the process to exit and wait for it to do.
+  // The C++ invitation API doesn't notify on disconnect, so this test just tells
+  // the process to exit and waits for it. See crbug.com/40578072 for context.
   WriteMessage(pipe, kDisconnectMessage);
   WaitForChildExit();
 }

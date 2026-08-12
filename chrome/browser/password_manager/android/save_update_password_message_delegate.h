@@ -11,7 +11,9 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/password_edit_dialog/android/password_edit_dialog_bridge.h"
+#include "chrome/browser/password_manager/android/password_manager_error_message_helper_bridge.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/passwords/manage_passwords_state.h"
 #include "components/browser_ui/device_lock/android/device_lock_bridge.h"
@@ -19,6 +21,7 @@
 #include "components/messages/android/message_wrapper.h"
 #include "components/password_manager/core/browser/password_form_manager_for_ui.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
+#include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/signin/public/identity_manager/account_info.h"
 
 namespace content {
@@ -35,7 +38,8 @@ class PasswordManagerClient;
 // lifetime, saving password form in response to user interactions and recording
 // metrics.
 class SaveUpdatePasswordMessageDelegate
-    : public PasswordEditDialogBridgeDelegate {
+    : public PasswordEditDialogBridgeDelegate,
+      public password_manager::PasswordStoreInterface::Observer {
  public:
   using PasswordEditDialogFactory =
       base::RepeatingCallback<std::unique_ptr<PasswordEditDialog>(
@@ -45,11 +49,14 @@ class SaveUpdatePasswordMessageDelegate
   SaveUpdatePasswordMessageDelegate();
   ~SaveUpdatePasswordMessageDelegate() override;
 
-  // Test-only constructor. Allows test class to set device_lock_bridge_.
+  // Test-only constructor. Allows test class to set device_lock_bridge_ and
+  // password_manager_error_message_helper_bridge_.
   SaveUpdatePasswordMessageDelegate(
       base::PassKey<class SaveUpdatePasswordMessageDelegateTest>,
       PasswordEditDialogFactory password_edit_dialog_factory,
-      std::unique_ptr<DeviceLockBridge> device_lock_bridge);
+      std::unique_ptr<DeviceLockBridge> device_lock_bridge,
+      std::unique_ptr<PasswordManagerErrorMessageHelperBridge>
+          password_manager_error_message_helper_bridge);
 
   // Displays a "Save password" message for current |web_contents| and
   // |form_to_save|.
@@ -69,6 +76,17 @@ class SaveUpdatePasswordMessageDelegate
   void HandleSavePasswordFromDialog(const std::u16string& username,
                                     const std::u16string& password) override;
   bool IsUsingAccountStorage(const std::u16string& username) override;
+
+  // password_manager::PasswordStoreInterface::Observer:
+  void OnLoginsChanged(
+      password_manager::PasswordStoreInterface* store,
+      const password_manager::PasswordStoreChangeList& changes) override;
+  void OnLoginsRetained(password_manager::PasswordStoreInterface* store,
+                        const std::vector<password_manager::StoredCredential>&
+                            retained_credentials) override;
+  void OnErrorStateChanged(
+      password_manager::PasswordStoreInterface* store,
+      password_manager::ActionableError changed_error) override;
 
  private:
   friend class SaveUpdatePasswordMessageDelegateTest;
@@ -115,8 +133,9 @@ class SaveUpdatePasswordMessageDelegate
 
   // Following methods handle events associated with user interaction with UI.
   void HandleSaveButtonClicked();
-  void SavePassword();
-  void SavePasswordAfterDeviceLockUi(bool is_device_lock_set);
+  void StartSavePasswordFlow();
+  void SolveTrustedVaultCheck(bool flow_involved_device_lock_ui,
+                              bool is_device_lock_requirement_met);
   void SaveFormManager();
   void HandleNeverSaveClicked();
   void HandleUpdateButtonClicked();
@@ -151,6 +170,15 @@ class SaveUpdatePasswordMessageDelegate
   std::unique_ptr<PasswordEditDialog> password_edit_dialog_;
 
   std::unique_ptr<DeviceLockBridge> device_lock_bridge_;
+
+  std::unique_ptr<PasswordManagerErrorMessageHelperBridge>
+      password_manager_error_message_helper_bridge_;
+
+  bool waiting_for_unlocking_trusted_vault_ = false;
+
+  base::ScopedObservation<password_manager::PasswordStoreInterface,
+                          password_manager::PasswordStoreInterface::Observer>
+      account_password_store_observation_{this};
 
   base::WeakPtrFactory<SaveUpdatePasswordMessageDelegate> weak_ptr_factory_{
       this};

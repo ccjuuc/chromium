@@ -104,6 +104,8 @@ namespace {
 
 const char kIndexedDBObjectGroup[] = "indexeddb";
 const char kNoDocumentError[] = "No document for given frame found";
+const char kSessionDetachedDuringOperation[] =
+    "DevTools session detached during operation.";
 const char kOriginMismatchError[] =
     "Requested security origin does not match the target's origin.";
 
@@ -680,9 +682,10 @@ class OpenCursorCallback final : public NativeEventListener {
   ~OpenCursorCallback() override = default;
 
   void Invoke(ExecutionContext*, Event* event) override {
-    if (!agent_) {
-      request_callback_->sendFailure(protocol::Response::ServerError(
-          "DevTools session detached during operation."));
+    InspectorIndexedDBAgent* agent = agent_.Get();
+    if (!agent) {
+      request_callback_->sendFailure(
+          protocol::Response::ServerError(kSessionDetachedDuringOperation));
       return;
     }
 
@@ -737,7 +740,12 @@ class OpenCursorCallback final : public NativeEventListener {
       return;
     }
 
-    v8_inspector::V8InspectorSession* v8_session = agent_->v8_session();
+    V8SessionHolder v8_session = agent->V8Session();
+    if (!v8_session) {
+      request_callback_->sendFailure(
+          protocol::Response::ServerError(kSessionDetachedDuringOperation));
+      return;
+    }
     ScriptState::Scope scope(script_state_);
     v8::Local<v8::Context> context = script_state_->GetContext();
     v8_inspector::StringView object_group =
@@ -794,7 +802,8 @@ class DataLoader final : public ExecutableWithDatabase<RequestDataCallback> {
   ~DataLoader() override = default;
 
   void Execute(IDBDatabase* idb_database, ScriptState* script_state) override {
-    if (!agent_) {
+    InspectorIndexedDBAgent* agent = agent_.Get();
+    if (!agent) {
       request_callback_->sendFailure(protocol::Response::ServerError(
           "The DevTools session was detached before the operation could "
           "complete."));
@@ -832,7 +841,7 @@ class DataLoader final : public ExecutableWithDatabase<RequestDataCallback> {
           script_state, idb_key_range_.Get(), mojom::IDBCursorDirection::Next);
     }
     OpenCursorCallback* open_cursor_callback = OpenCursorCallback::Create(
-        agent_.Get(), script_state, std::move(request_callback_), skip_count_,
+        agent, script_state, std::move(request_callback_), skip_count_,
         page_size_);
     idb_request->addEventListener(event_type_names::kSuccess,
                                   open_cursor_callback, false);
@@ -870,16 +879,27 @@ class DataLoader final : public ExecutableWithDatabase<RequestDataCallback> {
 // static
 InspectorIndexedDBAgent::InspectorIndexedDBAgent(
     InspectedFrames* inspected_frames,
-    WorkerGlobalScope* worker_global_scope,
-    v8_inspector::V8InspectorSession* v8_session)
+    WorkerGlobalScope* worker_global_scope)
     : inspected_frames_(inspected_frames),
       worker_global_scope_(worker_global_scope),
-      v8_session_(v8_session),
       enabled_(&agent_state_, /*default_value=*/false) {
   DCHECK(worker_global_scope || inspected_frames_);
 }
 
 InspectorIndexedDBAgent::~InspectorIndexedDBAgent() = default;
+
+void InspectorIndexedDBAgent::Dispose() {
+  ReleaseObjectGroup();
+  InspectorBaseAgent<protocol::IndexedDB::Metainfo>::Dispose();
+}
+
+void InspectorIndexedDBAgent::ReleaseObjectGroup() {
+  if (!V8Session()) {
+    return;
+  }
+  V8Session()->releaseObjectGroup(
+      ToV8InspectorStringView(kIndexedDBObjectGroup));
+}
 
 void InspectorIndexedDBAgent::Restore() {
   if (enabled_.Get()) {
@@ -889,8 +909,7 @@ void InspectorIndexedDBAgent::Restore() {
 
 void InspectorIndexedDBAgent::DidCommitLoadForLocalFrame(LocalFrame* frame) {
   if (frame == inspected_frames_->Root()) {
-    v8_session_->releaseObjectGroup(
-        ToV8InspectorStringView(kIndexedDBObjectGroup));
+    ReleaseObjectGroup();
   }
 }
 
@@ -901,8 +920,7 @@ protocol::Response InspectorIndexedDBAgent::enable() {
 
 protocol::Response InspectorIndexedDBAgent::disable() {
   enabled_.Clear();
-  v8_session_->releaseObjectGroup(
-      ToV8InspectorStringView(kIndexedDBObjectGroup));
+  ReleaseObjectGroup();
   return protocol::Response::Success();
 }
 
@@ -1084,8 +1102,8 @@ class GetMetadata final : public ExecutableWithDatabase<GetMetadataCallback> {
     if (exception_state.HadException()) {
       ExceptionCode ec = exception_state.Code();
       request_callback_->sendFailure(protocol::Response::ServerError(
-          String::Format("Could not count entries in object store '%s': %d",
-                         object_store_name_.Latin1().c_str(), ec)
+          StrCat({"Could not count entries in object store '",
+                  object_store_name_, "': ", String::Number(ec)})
               .Utf8()));
       return;
     }
@@ -1310,8 +1328,8 @@ class ClearObjectStore final
     if (exception_state.HadException()) {
       ExceptionCode ec = exception_state.Code();
       request_callback_->sendFailure(protocol::Response::ServerError(
-          String::Format("Could not clear object store '%s': %d",
-                         object_store_name_.Latin1().c_str(), ec)
+          StrCat({"Could not clear object store '", object_store_name_,
+                  "': ", String::Number(ec)})
               .Utf8()));
       return;
     }

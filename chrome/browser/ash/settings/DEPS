@@ -27,11 +27,13 @@ include_rules = [
   "+chrome/browser/profiles",
   "+chrome/browser/site_isolation",
   "+chrome/common/chrome_paths.h",
-  "+chrome/common/pref_names.h",
   "+chrome/test/base",
 ]
 
 specific_include_rules = {
+  "device_settings_test_helper\\.cc": [
+    "+ui/message_center/message_center.h",
+  ],
   "scoped_cros_settings_test_helper\\.cc": [
     "+chrome/browser/browser_process.h",
   ]

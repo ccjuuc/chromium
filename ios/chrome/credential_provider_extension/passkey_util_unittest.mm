@@ -41,13 +41,13 @@ NSData* ClientDataHash() {
   return Sha256(StringToData("ClientDataHash"));
 }
 
-NSArray<NSData*>* TrustedVaultKeys() {
-  std::vector<uint8_t> sds;
-  base::HexStringToBytes(
-      "1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF", &sds);
-  return [NSArray arrayWithObjects:[NSData dataWithBytes:sds.data()
-                                                  length:sds.size()],
-                                   nil];
+std::vector<std::vector<uint8_t>> TrustedVaultKeys() {
+  const std::vector<char> key_values = {
+      '\x1f', '\xfa', '\x97', '\x98', '\xdf', '\n',   '\xc7', '\xe4',
+      '\xf6', 'G',    '\xd5', 'm',    'C',    '\xa2', 'P',    '\xe0',
+      '\xa2', 'E',    '\x90', '\xb2', '\x86', '\xbf', '\xfc', 'E',
+      '\e',   'N',    '\x15', '\xea', 'G',    '\x9b', '\x9b', '\xc8'};
+  return {std::vector<uint8_t>(key_values.begin(), key_values.end())};
 }
 
 NSArray<NSData*>* PRFInputs() {
@@ -59,10 +59,6 @@ NSArray<NSData*>* PRFInputs() {
 }
 
 ArchivableCredential* TestPasskeyCredential() {
-  std::vector<uint8_t> trusted_vault_key;
-  NSArray<NSData*>* trusted_vault_keys = TrustedVaultKeys();
-  Append(trusted_vault_key, trusted_vault_keys[0]);
-
   std::vector<uint8_t> user_id;
   Append(user_id, StringToData("userId"));
   std::string rp_id_str("rpId");
@@ -75,7 +71,7 @@ ArchivableCredential* TestPasskeyCredential() {
               rp_id_str,
               webauthn::PasskeyModel::UserEntity(user_id, user_name_str,
                                                  user_name_str),
-              trusted_vault_key,
+              TrustedVaultKeys()[0],
               /*trusted_vault_key_version=*/0, /*extension_input_data=*/{},
               /*extension_output_data=*/nullptr);
 
@@ -228,41 +224,36 @@ TEST_F(PasskeyUtilTest, PerformPasskeyCreationPropagatesUVBit) {
 
 // Tests assertion succeeds with PRF data.
 TEST_F(PasskeyUtilTest, AssertionSucceedsWithPRF) {
-  if (@available(iOS 18.0, *)) {
-    NSData* clientDataHash = ClientDataHash();
-    id<Credential> credential = TestPasskeyCredential();
+  NSData* clientDataHash = ClientDataHash();
+  id<Credential> credential = TestPasskeyCredential();
 
-    PasskeyAssertionOutput passkeyAssertionOutput = PerformPasskeyAssertion(
-        credential, clientDataHash, /*allowedCredentials=*/nil,
-        TrustedVaultKeys(), PRFInputs(),
-        /*did_complete_uv=*/true);
-    EXPECT_NSNE(passkeyAssertionOutput.credential, nil);
-    ASSERT_EQ(passkeyAssertionOutput.prf_outputs.count, 2u);
-    EXPECT_EQ(passkeyAssertionOutput.prf_outputs[0].length, 32u);
-    EXPECT_EQ(passkeyAssertionOutput.prf_outputs[1].length, 32u);
-  }
+  PasskeyAssertionOutput passkeyAssertionOutput = PerformPasskeyAssertion(
+      credential, clientDataHash, /*allowedCredentials=*/nil,
+      TrustedVaultKeys(), PRFInputs(),
+      /*did_complete_uv=*/true);
+  EXPECT_NSNE(passkeyAssertionOutput.credential, nil);
+  ASSERT_EQ(passkeyAssertionOutput.prf_outputs.count, 2u);
+  EXPECT_EQ(passkeyAssertionOutput.prf_outputs[0].length, 32u);
+  EXPECT_EQ(passkeyAssertionOutput.prf_outputs[1].length, 32u);
 }
 
 // Tests that creating a passkey works properly with PRF data.
 TEST_F(PasskeyUtilTest, CreationSucceedsWithPRF) {
-  if (@available(iOS 18.0, *)) {
-    NSData* clientDataHash = ClientDataHash();
-    id<Credential> credential = TestPasskeyCredential();
+  NSData* clientDataHash = ClientDataHash();
+  id<Credential> credential = TestPasskeyCredential();
 
-    PasskeyCreationOutput passkeyCreationOutput = PerformPasskeyCreation(
-        clientDataHash, credential.rpId, credential.username, credential.userId,
-        /*gaia=*/nil, TrustedVaultKeys(), PRFInputs(),
-        /*did_complete_uv=*/true);
+  PasskeyCreationOutput passkeyCreationOutput = PerformPasskeyCreation(
+      clientDataHash, credential.rpId, credential.username, credential.userId,
+      /*gaia=*/nil, TrustedVaultKeys(), PRFInputs(),
+      /*did_complete_uv=*/true);
 
-    EXPECT_NSEQ(clientDataHash,
-                passkeyCreationOutput.credential.clientDataHash);
-    EXPECT_EQ(passkeyCreationOutput.credential.credentialID.length, 16u);
-    EXPECT_NSEQ(credential.rpId, passkeyCreationOutput.credential.relyingParty);
-    EXPECT_NSNE(passkeyCreationOutput.credential.attestationObject, nil);
-    ASSERT_EQ(passkeyCreationOutput.prf_outputs.count, 2u);
-    EXPECT_EQ(passkeyCreationOutput.prf_outputs[0].length, 32u);
-    EXPECT_EQ(passkeyCreationOutput.prf_outputs[1].length, 32u);
-  }
+  EXPECT_NSEQ(clientDataHash, passkeyCreationOutput.credential.clientDataHash);
+  EXPECT_EQ(passkeyCreationOutput.credential.credentialID.length, 16u);
+  EXPECT_NSEQ(credential.rpId, passkeyCreationOutput.credential.relyingParty);
+  EXPECT_NSNE(passkeyCreationOutput.credential.attestationObject, nil);
+  ASSERT_EQ(passkeyCreationOutput.prf_outputs.count, 2u);
+  EXPECT_EQ(passkeyCreationOutput.prf_outputs[0].length, 32u);
+  EXPECT_EQ(passkeyCreationOutput.prf_outputs[1].length, 32u);
 }
 
 // Tests that `ShouldPerformUserVerificationForPreference` gives the expected
@@ -328,33 +319,29 @@ TEST_F(PasskeyUtilTest,
 // Tests that the 'setLargeBlobIsSupported' setter works to mark Large Blob
 // support in iOS 18.0+.
 TEST_F(PasskeyUtilTest, LargeBlobRegistrationIsSupportedWorks) {
-  if (@available(iOS 18.0, *)) {
-    NSData* clientDataHash = ClientDataHash();
-    id<Credential> seed = TestPasskeyCredential();
+  NSData* clientDataHash = ClientDataHash();
+  id<Credential> seed = TestPasskeyCredential();
 
-    PasskeyCreationOutput passkeyCreationOutput = PerformPasskeyCreation(
-        clientDataHash, seed.rpId, seed.username, seed.userId,
-        /*gaia=*/nil, TrustedVaultKeys(), /*prf_inputs=*/nil,
-        /*did_complete_uv=*/true);
-    ASSERT_NSNE(passkeyCreationOutput.credential, nil);
-    // By default there should be no Large Blob support marked.
-    ASPasskeyRegistrationCredentialExtensionOutput* ext0 =
-        passkeyCreationOutput.credential.extensionOutput;
-    if ([ext0 respondsToSelector:@selector(largeBlobRegistrationOutput)]) {
-      EXPECT_TRUE([ext0 largeBlobRegistrationOutput] == nil ||
-                  ![[ext0 largeBlobRegistrationOutput] isSupported]);
-    }
-    // Mark support and verify it propagates into the extension output.
-    [passkeyCreationOutput.credential setLargeBlobIsSupported];
-    ASPasskeyRegistrationCredentialExtensionOutput* ext =
-        passkeyCreationOutput.credential.extensionOutput;
-    ASSERT_NSNE(ext, nil);
-    ASAuthorizationPublicKeyCredentialLargeBlobRegistrationOutput*
-        large_blob_output = [ext largeBlobRegistrationOutput];
-    ASSERT_NSNE(large_blob_output, nil);
-    EXPECT_TRUE([large_blob_output isSupported]);
-  } else {
-    GTEST_SKIP() << "Large Blob requires iOS 18.0+.";
+  PasskeyCreationOutput passkeyCreationOutput = PerformPasskeyCreation(
+      clientDataHash, seed.rpId, seed.username, seed.userId,
+      /*gaia=*/nil, TrustedVaultKeys(), /*prf_inputs=*/nil,
+      /*did_complete_uv=*/true);
+  ASSERT_NSNE(passkeyCreationOutput.credential, nil);
+  // By default there should be no Large Blob support marked.
+  ASPasskeyRegistrationCredentialExtensionOutput* ext0 =
+      passkeyCreationOutput.credential.extensionOutput;
+  if ([ext0 respondsToSelector:@selector(largeBlobRegistrationOutput)]) {
+    EXPECT_TRUE([ext0 largeBlobRegistrationOutput] == nil ||
+                ![[ext0 largeBlobRegistrationOutput] isSupported]);
   }
+  // Mark support and verify it propagates into the extension output.
+  [passkeyCreationOutput.credential setLargeBlobIsSupported];
+  ASPasskeyRegistrationCredentialExtensionOutput* ext =
+      passkeyCreationOutput.credential.extensionOutput;
+  ASSERT_NSNE(ext, nil);
+  ASAuthorizationPublicKeyCredentialLargeBlobRegistrationOutput*
+      large_blob_output = [ext largeBlobRegistrationOutput];
+  ASSERT_NSNE(large_blob_output, nil);
+  EXPECT_TRUE([large_blob_output isSupported]);
 }
 }  // namespace credential_provider_extension

@@ -19,14 +19,17 @@
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_view_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "content/browser/speech/network_speech_recognition_engine_impl.h"
+#include "content/browser/speech/speech_recognition_dispatcher_host.h"
 #include "content/browser/speech/speech_recognition_manager_impl.h"
 #include "content/browser/speech/speech_recognizer_impl.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/google_streaming_api.pb.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -180,10 +183,108 @@ std::string MakeGoodResponse() {
 
   // Prepend 4 byte prefix length indication to the protobuf message as
   // envisaged by the google streaming recognition webservice protocol.
-  msg_string.insert(0u, base::as_string_view(base::U32ToBigEndian(
-                            base::checked_cast<uint32_t>(msg_string.size()))));
+  auto msg_size_bytes =
+      base::U32ToBigEndian(base::checked_cast<uint32_t>(msg_string.size()));
+  msg_string.insert(0u, base::as_string_view(msg_size_bytes));
   return msg_string;
 }
+
+class MockSpeechRecognitionSessionClient
+    : public media::mojom::SpeechRecognitionSessionClient {
+ public:
+  MockSpeechRecognitionSessionClient() = default;
+  ~MockSpeechRecognitionSessionClient() override = default;
+
+  void ResultRetrieved(std::vector<media::mojom::WebSpeechRecognitionResultPtr>
+                           results) override {}
+
+  void ErrorOccurred(media::mojom::SpeechRecognitionErrorPtr error) override {
+    event_occurred_ = true;
+    if (event_closure_) {
+      std::move(event_closure_).Run();
+    }
+  }
+
+  void Started() override {
+    started_occurred_ = true;
+    event_occurred_ = true;
+    if (started_closure_) {
+      std::move(started_closure_).Run();
+    }
+    if (event_closure_) {
+      std::move(event_closure_).Run();
+    }
+  }
+
+  void AudioStarted() override {}
+  void SoundStarted() override {}
+  void SoundEnded() override {}
+  void AudioEnded() override {}
+
+  void Ended() override {
+    ended_occurred_ = true;
+    event_occurred_ = true;
+    if (ended_closure_) {
+      std::move(ended_closure_).Run();
+    }
+    if (event_closure_) {
+      std::move(event_closure_).Run();
+    }
+  }
+
+  void WaitForStarted() {
+    if (started_occurred_) {
+      return;
+    }
+    base::RunLoop run_loop;
+    started_closure_ = run_loop.QuitClosure();
+    run_loop.Run();
+  }
+
+  void WaitForEnded() {
+    if (ended_occurred_) {
+      return;
+    }
+    base::RunLoop run_loop;
+    ended_closure_ = run_loop.QuitClosure();
+    run_loop.Run();
+  }
+
+  void WaitForEvent() {
+    if (event_occurred_) {
+      return;
+    }
+    base::RunLoop run_loop;
+    event_closure_ = run_loop.QuitClosure();
+    run_loop.Run();
+  }
+
+  void OnDisconnected() {
+    event_occurred_ = true;
+    if (event_closure_) {
+      std::move(event_closure_).Run();
+    }
+  }
+
+  mojo::PendingRemote<media::mojom::SpeechRecognitionSessionClient>
+  BindNewPipeAndPassRemote() {
+    auto remote = receiver_.BindNewPipeAndPassRemote();
+    receiver_.set_disconnect_handler(
+        base::BindOnce(&MockSpeechRecognitionSessionClient::OnDisconnected,
+                       base::Unretained(this)));
+    return remote;
+  }
+
+ private:
+  mojo::Receiver<media::mojom::SpeechRecognitionSessionClient> receiver_{this};
+  base::OnceClosure started_closure_;
+  base::OnceClosure ended_closure_;
+  base::OnceClosure event_closure_;
+
+  bool started_occurred_ = false;
+  bool ended_occurred_ = false;
+  bool event_occurred_ = false;
+};
 
 }  // namespace
 
@@ -305,9 +406,8 @@ class SpeechRecognitionBrowserTest : public ContentBrowserTest {
 
     std::unique_ptr<media::AudioBus> audio_bus =
         media::AudioBus::Create(audio_params);
-    audio_bus->FromInterleaved<media::SignedInt16SampleTypeTraits>(
-        reinterpret_cast<int16_t*>(&audio_buffer.data()[0]),
-        audio_bus->frames());
+    audio_bus->FromInterleavedBytes<media::SignedInt16SampleTypeTraits>(
+        audio_buffer);
     capture_callback->Capture(audio_bus.get(), base::TimeTicks::Now(), {}, 0.0);
   }
 
@@ -404,6 +504,125 @@ IN_PROC_BROWSER_TEST_F(SpeechRecognitionBrowserTest, MAYBE_OneShotRecognition) {
   NetworkSpeechRecognitionEngineImpl::set_web_service_base_url_for_tests(
       nullptr);
 }
+
+IN_PROC_BROWSER_TEST_F(SpeechRecognitionBrowserTest,
+                       FrameSessionTrackerMemoryLeak) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  GURL url = embedded_test_server()->GetURL("/empty.html");
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  RenderFrameHost* rfh = shell()->web_contents()->GetPrimaryMainFrame();
+  content::GlobalRenderFrameHostId global_id = rfh->GetGlobalId();
+
+  const char kTriggerLeakScript[] = R"(
+    new Promise(resolve => {
+      const SpeechRecognition = window.SpeechRecognition ||
+        window.webkitSpeechRecognition;
+      const recognition = new SpeechRecognition();
+      recognition.onend = () => { resolve("ended"); };
+      recognition.onerror = () => { resolve("error"); };
+      recognition.start();
+    });
+  )";
+
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_EQ("error", EvalJs(rfh, kTriggerLeakScript));
+  }
+  // Wait for the asynchronously posted cleanup tasks from the IO thread to
+  // execute on the UI thread.
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(0, SpeechRecognitionManagerImpl::GetSessionTrackerCountForTesting(
+                   global_id));
+}
+
+#if BUILDFLAG(IS_ANDROID)
+IN_PROC_BROWSER_TEST_F(SpeechRecognitionBrowserTest,
+                       CompromisedRendererVisibilityBypass) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  GURL url = embedded_test_server()->GetURL("/empty.html");
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  mojo::Remote<media::mojom::SpeechRecognizer> speech_recognizer;
+  content::GetIOThreadTaskRunner({})->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          &SpeechRecognitionDispatcherHost::Create,
+          shell()->web_contents()->GetPrimaryMainFrame()->GetGlobalId(),
+          speech_recognizer.BindNewPipeAndPassReceiver()));
+
+  MockSpeechRecognitionSessionClient client;
+  media::mojom::StartSpeechRecognitionRequestParamsPtr params =
+      media::mojom::StartSpeechRecognitionRequestParams::New();
+  params->client = client.BindNewPipeAndPassRemote();
+  mojo::Remote<media::mojom::SpeechRecognitionSession> session_remote;
+  params->session_receiver = session_remote.BindNewPipeAndPassReceiver();
+
+  speech_recognizer->Start(std::move(params));
+
+  // Wait for the session to be fully started and tracked by the manager.
+  client.WaitForStarted();
+
+  // Verify the session is tracked.
+  EXPECT_EQ(1,
+            SpeechRecognitionManagerImpl::GetSessionTrackerCountForTesting(
+                shell()->web_contents()->GetPrimaryMainFrame()->GetGlobalId()));
+
+  // Hide the WebContents to simulate the user switching tabs or backgrounding
+  // Chrome.
+  shell()->web_contents()->WasHidden();
+
+  // Wait for the browser process to abort the session and signal the client.
+  client.WaitForEvent();
+
+  // Without the fix, the session tracker count would NOT be 0 because
+  // SpeechRecognitionManagerImpl did not observe visibility changes.
+  // The test asserts it is 0 to ensure the secure behavior is enforced.
+  EXPECT_EQ(0,
+            SpeechRecognitionManagerImpl::GetSessionTrackerCountForTesting(
+                shell()->web_contents()->GetPrimaryMainFrame()->GetGlobalId()));
+}
+
+IN_PROC_BROWSER_TEST_F(SpeechRecognitionBrowserTest,
+                       CompromisedRendererStartWhileHiddenBypass) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  GURL url = embedded_test_server()->GetURL("/empty.html");
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  // Hide the WebContents to simulate the user switching tabs or backgrounding
+  // Chrome.
+  shell()->web_contents()->WasHidden();
+
+  mojo::Remote<media::mojom::SpeechRecognizer> speech_recognizer;
+  content::GetIOThreadTaskRunner({})->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          &SpeechRecognitionDispatcherHost::Create,
+          shell()->web_contents()->GetPrimaryMainFrame()->GetGlobalId(),
+          speech_recognizer.BindNewPipeAndPassReceiver()));
+
+  MockSpeechRecognitionSessionClient client;
+  media::mojom::StartSpeechRecognitionRequestParamsPtr params =
+      media::mojom::StartSpeechRecognitionRequestParams::New();
+  params->client = client.BindNewPipeAndPassRemote();
+  mojo::Remote<media::mojom::SpeechRecognitionSession> session_remote;
+  params->session_receiver = session_remote.BindNewPipeAndPassReceiver();
+
+  speech_recognizer->Start(std::move(params));
+
+  // Wait for the session to either start (vulnerable) or error out/end
+  // (secure).
+  client.WaitForEvent();
+
+  // Without the fix, the session tracker count would NOT be 0
+  // even though the page is hidden, because SpeechRecognitionManagerImpl
+  // did not observe visibility changes during Start.
+  // The test asserts it is 0 to ensure the secure behavior is enforced.
+  EXPECT_EQ(0,
+            SpeechRecognitionManagerImpl::GetSessionTrackerCountForTesting(
+                shell()->web_contents()->GetPrimaryMainFrame()->GetGlobalId()));
+}
+#endif
 
 #if !BUILDFLAG(IS_FUCHSIA)
 IN_PROC_BROWSER_TEST_F(SpeechRecognitionBrowserTest,
@@ -507,13 +726,17 @@ IN_PROC_BROWSER_TEST_F(SpeechRecognitionBrowserTest,
         shell->web_contents()->GetSiteInstance());
   };
 
-  EXPECT_EQ(GetSiteInstance(shell)->GetStoragePartitionConfig(),
+  EXPECT_EQ(GetSiteInstance(shell)
+                ->GetSecurityPrincipal()
+                .GetStoragePartitionConfig(),
             storage_partition_config);
   EXPECT_TRUE(GetSiteInstance(shell)->IsFixedStoragePartition());
 
   ASSERT_TRUE(
       NavigateToURL(shell, embedded_test_server()->GetURL("/title1.html")));
-  EXPECT_EQ(GetSiteInstance(shell)->GetStoragePartitionConfig(),
+  EXPECT_EQ(GetSiteInstance(shell)
+                ->GetSecurityPrincipal()
+                .GetStoragePartitionConfig(),
             storage_partition_config);
   EXPECT_TRUE(GetSiteInstance(shell)->IsFixedStoragePartition());
 
@@ -576,6 +799,156 @@ IN_PROC_BROWSER_TEST_F(SpeechRecognitionBrowserTest,
   EXPECT_THAT(shell->web_contents()->GetLastCommittedURL().GetRef(),
               testing::HasSubstr("error_service-not-allowed"));
 }
+
+class SpeechRecognitionCrossOriginBrowserTest
+    : public SpeechRecognitionBrowserTest {
+ public:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    SpeechRecognitionBrowserTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch("use-fake-device-for-media-stream");
+    command_line->AppendSwitch("use-fake-ui-for-media-stream");
+    command_line->AppendSwitchASCII("autoplay-policy",
+                                    "no-user-gesture-required");
+    command_line->AppendSwitchASCII("enable-blink-features",
+                                    "MediaStreamTrackWebSpeech");
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(SpeechRecognitionCrossOriginBrowserTest,
+                       OnDeviceWebSpeechCrossOriginIframeBypass) {
+  if (!speech::IsOnDeviceSpeechRecognitionSupported()) {
+    return;
+  }
+  mock_soda_installer_.NotifySodaInstalledForTesting();
+
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  std::string web_service_base_url =
+      embedded_test_server()->base_url().spec() + "foo";
+  NetworkSpeechRecognitionEngineImpl::set_web_service_base_url_for_tests(
+      web_service_base_url.c_str());
+
+  GURL main_url = embedded_test_server()->GetURL("127.0.0.1", "/empty.html");
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  GURL iframe_url = embedded_test_server()->GetURL("localhost", "/empty.html");
+  std::string js_add_iframe =
+      "var iframe = document.createElement('iframe');"
+      "iframe.id = 'myiframe';"
+      "iframe.allow = 'microphone';"
+      "document.body.appendChild(iframe);";
+  EXPECT_TRUE(
+      ExecJs(shell()->web_contents()->GetPrimaryMainFrame(), js_add_iframe));
+  EXPECT_TRUE(
+      NavigateIframeToURL(shell()->web_contents(), "myiframe", iframe_url));
+
+  RenderFrameHost* iframe_rfh =
+      ChildFrameAt(shell()->web_contents()->GetPrimaryMainFrame(), 0);
+  ASSERT_TRUE(iframe_rfh);
+  EXPECT_EQ(iframe_url, iframe_rfh->GetLastCommittedURL());
+
+  const char js_to_execute[] = R"(
+    new Promise(async resolve => {
+      try {
+        let stream = await navigator.mediaDevices.getUserMedia({audio: true});
+        let track = stream.getAudioTracks()[0];
+        if (!track) { resolve('no-track'); return; }
+
+        let recognition = new webkitSpeechRecognition();
+        recognition.onerror = function(event) {
+          resolve('error_' + event.error);
+        };
+        recognition.onstart = function() {
+          // do not resolve
+        };
+        recognition.onend = function() {
+          resolve('ended');
+        };
+
+        setTimeout(() => resolve('timeout_in_js'), 5000);
+
+        recognition.start(track);
+      } catch (e) {
+        resolve('exception_' + e.name);
+      }
+    })
+  )";
+
+  EXPECT_EQ("error_network", EvalJs(iframe_rfh, js_to_execute));
+
+  // Remove reference to URL string that's on the stack.
+  NetworkSpeechRecognitionEngineImpl::set_web_service_base_url_for_tests(
+      nullptr);
+}
+
+IN_PROC_BROWSER_TEST_F(SpeechRecognitionCrossOriginBrowserTest,
+                       OnDeviceWebSpeechCrossOriginIframeBypassProcessLocally) {
+  if (!speech::IsOnDeviceSpeechRecognitionSupported()) {
+    return;
+  }
+  mock_soda_installer_.NotifySodaInstalledForTesting();
+
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  std::string web_service_base_url =
+      embedded_test_server()->base_url().spec() + "foo";
+  NetworkSpeechRecognitionEngineImpl::set_web_service_base_url_for_tests(
+      web_service_base_url.c_str());
+
+  GURL main_url = embedded_test_server()->GetURL("127.0.0.1", "/empty.html");
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  GURL iframe_url = embedded_test_server()->GetURL("localhost", "/empty.html");
+  std::string js_add_iframe =
+      "var iframe = document.createElement('iframe');"
+      "iframe.id = 'myiframe';"
+      "iframe.allow = 'microphone';"
+      "document.body.appendChild(iframe);";
+  EXPECT_TRUE(
+      ExecJs(shell()->web_contents()->GetPrimaryMainFrame(), js_add_iframe));
+  EXPECT_TRUE(
+      NavigateIframeToURL(shell()->web_contents(), "myiframe", iframe_url));
+
+  RenderFrameHost* iframe_rfh =
+      ChildFrameAt(shell()->web_contents()->GetPrimaryMainFrame(), 0);
+  ASSERT_TRUE(iframe_rfh);
+  EXPECT_EQ(iframe_url, iframe_rfh->GetLastCommittedURL());
+
+  const char js_to_execute[] = R"(
+    new Promise(async resolve => {
+      try {
+        let stream = await navigator.mediaDevices.getUserMedia({audio: true});
+        let track = stream.getAudioTracks()[0];
+        if (!track) { resolve('no-track'); return; }
+
+        let recognition = new webkitSpeechRecognition();
+        recognition.processLocally = true;
+        recognition.onerror = function(event) {
+          resolve('error_' + event.error);
+        };
+        recognition.onstart = function() {
+          // do not resolve
+        };
+        recognition.onend = function() {
+          resolve('ended');
+        };
+
+        setTimeout(() => resolve('timeout_in_js'), 5000);
+
+        recognition.start(track);
+      } catch (e) {
+        resolve('exception_' + e.name);
+      }
+    })
+  )";
+
+  EXPECT_EQ("exception_NotAllowedError", EvalJs(iframe_rfh, js_to_execute));
+
+  // Remove reference to URL string that's on the stack.
+  NetworkSpeechRecognitionEngineImpl::set_web_service_base_url_for_tests(
+      nullptr);
+}
+
 #endif  // !BUILDFLAG(IS_FUCHSIA)
 
 }  // namespace content

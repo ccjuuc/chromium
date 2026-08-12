@@ -67,7 +67,7 @@ def _CheckNotificationConstructors(input_api, output_api):
   NotificationWrapperBuilderFactory.createNotificationWrapperBuilder instead,
   specifying a channel for use on Android O.
 
-  See https://crbug.com/678670 for more information.
+  See https://crbug.com/40500223 for more information.
   '''
   return _CheckReIgnoreComment(input_api, output_api, error_msg, files_to_skip,
                                NEW_NOTIFICATION_BUILDER_RE)
@@ -80,7 +80,6 @@ def _CheckCompatibleAlertDialogBuilder(input_api, output_api):
       BROWSER_ROOT + 'dom_distiller/DistilledPagePrefsView.java',
       BROWSER_ROOT + 'dom_distiller/DomDistillerUIUtils.java',
       BROWSER_ROOT + 'download/DownloadController.java',
-      BROWSER_ROOT + 'download/OMADownloadHandler.java',
       BROWSER_ROOT + 'externalnav/ExternalNavigationDelegateImpl.java',
       BROWSER_ROOT + 'payments/AndroidPaymentApp.java',
       BROWSER_ROOT + 'permissions/AndroidPermissionRequester.java',

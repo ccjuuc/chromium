@@ -3,16 +3,15 @@
 // found in the LICENSE file.
 
 import type {DestinationStore, LocalDestinationInfo, NativeInitialSettings} from 'chrome://print/print_preview.js';
-import {Destination, DestinationErrorType, DestinationOrigin, DestinationStoreEventType, GooglePromotedDestinationId, makeRecentDestination, NativeLayerImpl,
-        PrinterType} from 'chrome://print/print_preview.js';
+import {Destination, DestinationErrorType, DestinationOrigin, DestinationStoreEventType, GooglePromotedDestinationId, makeRecentDestination, NativeLayerImpl, PrinterType} from 'chrome://print/print_preview.js';
 import type {RecentDestination} from 'chrome://print/print_preview.js';
-
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {eventToPromise} from 'chrome://webui-test/test_util.js';
 
 import {NativeLayerStub} from './native_layer_stub.js';
-import {createDestinationStore, getCddTemplate, getDefaultInitialSettings, getDestinations, getSaveAsPdfDestination, setupTestListenerElement} from './print_preview_test_utils.js';
+import {createDestinationStore, getCddTemplate, getDefaultInitialSettings, getDestinations, getSaveAsPdfDestination} from './print_preview_test_utils.js';
+import {setupTestListenerElement} from './test_listener.js';
 
 suite('DestinationStoreTest', function() {
   let destinationStore: DestinationStore;
@@ -149,7 +148,7 @@ suite('DestinationStoreTest', function() {
   /**
    * Tests that if the user has multiple valid recent destinations, the
    * correct destination is selected for the preview request.
-   * For crbug.com/666595.
+   * For crbug.com/40494294.
    */
   test('MultipleRecentDestinationsOneRequest', function() {
     const recentDestinations = destinations.slice(0, 3).map(
@@ -270,7 +269,8 @@ suite('DestinationStoreTest', function() {
     return Promise
         .all([
           setInitialSettings(true),
-          eventToPromise(DestinationStoreEventType.ERROR, destinationStore),
+          eventToPromise<CustomEvent<DestinationErrorType>>(
+              DestinationStoreEventType.ERROR, destinationStore),
         ])
         .then(function(argsArray) {
           const errorEvent = argsArray[1];
@@ -282,7 +282,7 @@ suite('DestinationStoreTest', function() {
   /**
    * Tests that if the user has a recent destination that is already in the
    * store (PDF printer), the DestinationStore does not try to select a
-   * printer again later. Regression test for https://crbug.com/927162.
+   * printer again later. Regression test for https://crbug.com/40611877.
    */
   test('RecentSaveAsPdf', function() {
     const pdfPrinter = getSaveAsPdfDestination();

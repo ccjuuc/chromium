@@ -38,7 +38,10 @@ DemuxerType MockDemuxer::GetDemuxerType() const {
   return DemuxerType::kMockDemuxer;
 }
 
-MockDemuxerStream::MockDemuxerStream(DemuxerStream::Type type) : type_(type) {}
+MockDemuxerStream::MockDemuxerStream(DemuxerStream::Type type) : type_(type) {
+  ON_CALL(*this, ManagesTrackSwitchesInternally())
+      .WillByDefault(testing::Return(false));
+}
 
 MockDemuxerStream::~MockDemuxerStream() = default;
 
@@ -145,6 +148,9 @@ MockAudioRenderer::MockAudioRenderer() = default;
 MockAudioRenderer::~MockAudioRenderer() = default;
 
 MockRenderer::MockRenderer() = default;
+
+MockRenderer::MockRenderer(RendererType renderer_type)
+    : renderer_type_(renderer_type) {}
 
 MockRenderer::~MockRenderer() = default;
 

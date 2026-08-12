@@ -21,8 +21,9 @@ class SegmentationPlatformService;
 
 class AppStoreBundleService;
 class AuthenticationService;
-@class ContentSuggestionsMetricsRecorder;
+
 enum class ContentSuggestionsModuleType;
+class LevelUpService;
 @protocol HomeStartDataSource;
 @class MagicStackModule;
 @protocol MagicStackRankingModelDelegate;
@@ -39,10 +40,6 @@ class TipsManagerIOS;
 // Data Source for the Home Start state.
 @property(nonatomic, weak) id<HomeStartDataSource> homeStartDataSource;
 
-// Recorder for content suggestions metrics.
-@property(nonatomic, weak)
-    ContentSuggestionsMetricsRecorder* contentSuggestionsMetricsRecorder;
-
 // Default initializer with the module mediators passed in through
 // `moduleMediators`.
 - (instancetype)
@@ -57,6 +54,7 @@ class TipsManagerIOS;
              templateURLService:(TemplateURLService*)templateURLService
           appStoreBundleService:(AppStoreBundleService*)appStoreBundleService
                   bookmarkModel:(bookmarks::BookmarkModel*)bookmarkModel
+                 levelUpService:(LevelUpService*)levelUpService
     NS_DESIGNATED_INITIALIZER;
 
 - (instancetype)init NS_UNAVAILABLE;

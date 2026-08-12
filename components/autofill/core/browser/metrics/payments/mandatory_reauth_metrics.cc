@@ -4,6 +4,9 @@
 
 #include "components/autofill/core/browser/metrics/payments/mandatory_reauth_metrics.h"
 
+#include <string>
+#include <string_view>
+
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "components/autofill/core/browser/payments/mandatory_reauth_manager.h"
@@ -34,7 +37,7 @@ std::string_view GetSourceForOptInOrOptOutEvent(
   }
 }
 
-std::string GetHistogramStringForNonInteractivePaymentMethodType(
+std::string_view GetHistogramStringForNonInteractivePaymentMethodType(
     NonInteractivePaymentMethodType type) {
   switch (type) {
     case NonInteractivePaymentMethodType::kLocalCard:
@@ -115,9 +118,9 @@ void LogMandatoryReauthCheckoutFlowUsageEvent(
     payments::MandatoryReauthAuthenticationMethod authentication_method,
     MandatoryReauthAuthenticationFlowEvent event) {
   std::string histogram_name =
-      "Autofill.PaymentMethods.CheckoutFlow.ReauthUsage." +
-      GetHistogramStringForNonInteractivePaymentMethodType(
-          non_interactive_payment_method_type);
+      base::StrCat({"Autofill.PaymentMethods.CheckoutFlow.ReauthUsage.",
+                    GetHistogramStringForNonInteractivePaymentMethodType(
+                        non_interactive_payment_method_type)});
   switch (authentication_method) {
     case payments::MandatoryReauthAuthenticationMethod::kUnknown:
       histogram_name += ".UnknownMethod";

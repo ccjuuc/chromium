@@ -5,6 +5,7 @@
 #import "ios/chrome/browser/shared/ui/animated_promo/animated_promo_view_controller.h"
 
 #import "base/check.h"
+#import "ios/chrome/browser/shared/ui/animated_promo/animated_promo_utils.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/button_stack/button_stack_configuration.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
@@ -24,22 +25,12 @@ constexpr CGFloat kCustomSpacingAfterImageWithoutAnimation = 0;
 // Default spacing applied between elements in the alert screen layout.
 constexpr CGFloat kCustomSpacing = 8;
 
-// Offset to raise the alertScreen's top anchor for devices with a regular
-// size class.
-constexpr CGFloat kCustomTopOffsetForRegularSizeClass = -24;
+// Vertical center offset for tablets.
+constexpr CGFloat kTabletCenterOffset = 40;
 
 }  // namespace
 
-@interface AnimatedPromoViewController ()
-
-@end
-
 @implementation AnimatedPromoViewController {
-  // Custom animation view used in the full-screen promo.
-  id<LottieAnimation> _animationViewWrapper;
-
-  // Custom animation view used in the full-screen promo in dark mode.
-  id<LottieAnimation> _animationViewWrapperDarkMode;
 
   // Child view controller used to display the alert screen for the promo.
   ConfirmationAlertViewController* _alertScreen;
@@ -66,6 +57,7 @@ constexpr CGFloat kCustomTopOffsetForRegularSizeClass = -24;
   alertScreen.subtitleString = _subtitleString;
   alertScreen.configuration.primaryActionString = _primaryActionString;
   alertScreen.configuration.secondaryActionString = _secondaryActionString;
+  alertScreen.configuration.tertiaryActionString = _tertiaryActionString;
   [alertScreen reloadConfiguration];
   alertScreen.actionHandler = _actionHandler;
   alertScreen.shouldFillInformationStack = YES;
@@ -73,10 +65,10 @@ constexpr CGFloat kCustomTopOffsetForRegularSizeClass = -24;
 
   _alertScreen = alertScreen;
 
-  _animationViewWrapper = [self createAnimation:_animationName];
+  self.animationViewWrapper = [self createAnimation:_animationName];
 
   // Set the text localization.
-  [_animationViewWrapper setDictionaryTextProvider:_animationTextProvider];
+  [self.animationViewWrapper setDictionaryTextProvider:_animationTextProvider];
 
   if (self.useLegacyDarkMode) {
     _animationViewWrapperDarkMode =
@@ -86,7 +78,7 @@ constexpr CGFloat kCustomTopOffsetForRegularSizeClass = -24;
   }
 
   if (_animationBackgroundColor) {
-    _animationViewWrapper.animationView.backgroundColor =
+    self.animationViewWrapper.animationView.backgroundColor =
         _animationBackgroundColor;
     _animationViewWrapperDarkMode.animationView.backgroundColor =
         _animationBackgroundColor;
@@ -96,7 +88,7 @@ constexpr CGFloat kCustomTopOffsetForRegularSizeClass = -24;
 
   self.view.backgroundColor = [UIColor colorNamed:kBackgroundColor];
 
-  if (_animationViewWrapper) {
+  if (self.animationViewWrapper) {
     [self configureAndLayoutAnimationView];
   }
   [self configureAlertScreen];
@@ -128,8 +120,7 @@ constexpr CGFloat kCustomTopOffsetForRegularSizeClass = -24;
 // The offset from center Y to place the divider between the animation and the
 // confirmation alert screen.
 - (CGFloat)centerYOffset {
-  return CanShowTabStrip(_alertScreen) ? kCustomTopOffsetForRegularSizeClass
-                                       : 0;
+  return CanShowTabStrip(_alertScreen) ? -kTabletCenterOffset : 0;
 }
 
 // Creates and returns the LottieAnimation view for the `animationAssetName`.
@@ -166,7 +157,7 @@ constexpr CGFloat kCustomTopOffsetForRegularSizeClass = -24;
 
 // Sets the layout of the alertScreen view.
 - (void)layoutAlertScreen {
-  if (_animationViewWrapper.animationView) {
+  if (self.animationViewWrapper.animationView) {
     [self layoutAlertScreenForPromoWithAnimation];
   }
 }
@@ -204,7 +195,7 @@ constexpr CGFloat kCustomTopOffsetForRegularSizeClass = -24;
 
 // Configures the animation view and its constraints.
 - (void)configureAndLayoutAnimationView {
-  [self configureAndLayoutAnimationViewForWrapper:_animationViewWrapper];
+  [self configureAndLayoutAnimationViewForWrapper:self.animationViewWrapper];
   if (self.useLegacyDarkMode) {
     [self configureAndLayoutAnimationViewForWrapper:
               _animationViewWrapperDarkMode];
@@ -212,11 +203,11 @@ constexpr CGFloat kCustomTopOffsetForRegularSizeClass = -24;
     BOOL darkModeEnabled =
         (self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark);
 
-    _animationViewWrapper.animationView.hidden = darkModeEnabled;
+    self.animationViewWrapper.animationView.hidden = darkModeEnabled;
     _animationViewWrapperDarkMode.animationView.hidden = !darkModeEnabled;
     [self updateAnimationsPlaying];
   } else {
-    [_animationViewWrapper play];
+    [self.animationViewWrapper play];
   }
 }
 
@@ -247,7 +238,7 @@ constexpr CGFloat kCustomTopOffsetForRegularSizeClass = -24;
 // The animation view should be displayed if `animationViewWrapper` is not null
 // and the device is in portrait orientation.
 - (BOOL)shouldShowAnimation {
-  return _animationViewWrapper.animationView &&
+  return self.animationViewWrapper.animationView &&
          self.traitCollection.verticalSizeClass !=
              UIUserInterfaceSizeClassCompact;
 }
@@ -255,8 +246,9 @@ constexpr CGFloat kCustomTopOffsetForRegularSizeClass = -24;
 // Checks if the animations are hidden or unhidden and plays (or stops) them
 // accordingly.
 - (void)updateAnimationsPlaying {
-  _animationViewWrapper.animationView.hidden ? [_animationViewWrapper stop]
-                                             : [_animationViewWrapper play];
+  self.animationViewWrapper.animationView.hidden
+      ? [self.animationViewWrapper stop]
+      : [self.animationViewWrapper play];
   _animationViewWrapperDarkMode.animationView.hidden
       ? [_animationViewWrapperDarkMode stop]
       : [_animationViewWrapperDarkMode play];
@@ -271,36 +263,29 @@ constexpr CGFloat kCustomTopOffsetForRegularSizeClass = -24;
     BOOL darkModeEnabled =
         (self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark);
 
-    _animationViewWrapper.animationView.hidden = hidden || darkModeEnabled;
+    self.animationViewWrapper.animationView.hidden = hidden || darkModeEnabled;
     _animationViewWrapperDarkMode.animationView.hidden =
         hidden || !darkModeEnabled;
   } else {
-    _animationViewWrapper.animationView.hidden = hidden;
+    self.animationViewWrapper.animationView.hidden = hidden;
   }
 
   [self updateAnimationsPlaying];
   [self updateAlertScreenTopAnchorConstraint];
 }
 
-// Updates the animations for the styl used (light/dark mode).
+// Updates the animations for the style used (light/dark mode).
 - (void)updateForDarkMode {
   if (self.useLegacyDarkMode) {
     [self updateUIForSizeClass];
     return;
   }
-  if (self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark) {
-    [self updateAnimationWithColorProvider:self.darkModeColorProvider];
-  } else {
-    [self updateAnimationWithColorProvider:self.lightModeColorProvider];
-  }
-}
 
-// Updates the _animationViewWrapper with colors from `colorProvider`.
-- (void)updateAnimationWithColorProvider:
-    (NSDictionary<NSString*, UIColor*>*)colorProvider {
-  for (NSString* keypath in colorProvider.allKeys) {
-    [_animationViewWrapper setColorValue:colorProvider[keypath]
-                              forKeypath:keypath];
+  for (NSString* keypath in self.lightModeColorProvider.allKeys) {
+    UIColor* lightColor = self.lightModeColorProvider[keypath];
+    UIColor* darkColor = self.darkModeColorProvider[keypath];
+    ConfigureAnimationCustomColor(self.animationViewWrapper, keypath,
+                                  lightColor, darkColor);
   }
 }
 

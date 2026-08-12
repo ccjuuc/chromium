@@ -51,8 +51,7 @@ class DCOMPTextureMailboxResources
     if (!last_sync_token_)
       return;
 
-    gpu::SharedImageInterface* sii = factory_->SharedImageInterface();
-    sii->DestroySharedImage(last_sync_token_.value(), std::move(shared_image_));
+    shared_image_->UpdateDestructionSyncToken(last_sync_token_.value());
   }
 
   scoped_refptr<gpu::ClientSharedImage> shared_image_;
@@ -172,8 +171,7 @@ void DCOMPTextureWrapperImpl::CreateVideoFrame(
     gpu::SharedImageInterface* sii = factory_->SharedImageInterface();
 
     // The SI backing this VideoFrame will be read by the display compositor and
-    // raster. The latter will be over GL if not using OOP-R. NOTE: GL usage can
-    // be eliminated once OOP-R ships definitively.
+    // raster.
     // TODO(crbug.com/40286368): Check the potential inconsistency between the
     // |usage| passed to NotifyMailboxAdded() here and the |usage| that
     // DCOMPTextureBacking's constructor uses to initialize
@@ -190,8 +188,8 @@ void DCOMPTextureWrapperImpl::CreateVideoFrame(
                             gfx::ColorSpace::TransferID::BT709),
             kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType,
             gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
-                gpu::SHARED_IMAGE_USAGE_GLES2_READ |
-                gpu::SHARED_IMAGE_USAGE_RASTER_READ,
+                gpu::SHARED_IMAGE_USAGE_RASTER_READ |
+                gpu::SHARED_IMAGE_USAGE_SCANOUT,
             GL_TEXTURE_EXTERNAL_OES, "DCOMPTextureWrapperImpl");
 
     CHECK(shared_image);
@@ -202,19 +200,18 @@ void DCOMPTextureWrapperImpl::CreateVideoFrame(
 
   scoped_refptr<gpu::ClientSharedImage> shared_image =
       dcomp_texture_resources_->GetSharedImage();
-
+  CHECK(shared_image);
   auto frame = media::VideoFrame::WrapSharedImage(
-      media::PIXEL_FORMAT_BGRA, shared_image, gpu::SyncToken(),
+      media::PIXEL_FORMAT_ARGB, shared_image, gpu::SyncToken(),
       base::BindPostTask(
           media_task_runner_,
           base::BindOnce(&OnReleaseVideoFrame, dcomp_texture_resources_)),
-      shared_image->size(), gfx::Rect(shared_image->size()), natural_size_,
-      base::TimeDelta());
+      gfx::Rect(shared_image->size()), natural_size_, base::TimeDelta());
 
   frame->set_color_space(shared_image->color_space());
   frame->metadata().dcomp_surface = true;
 
-  std::move(create_video_frame_cb).Run(frame, mailbox_);
+  std::move(create_video_frame_cb).Run(frame);
 }
 
 void DCOMPTextureWrapperImpl::OnSharedImageMailboxBound(gpu::Mailbox mailbox) {

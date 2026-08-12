@@ -29,7 +29,10 @@ class PageInfoViewFactory {
   static constexpr int kMinBubbleWidth = 320;
   static constexpr int kMaxBubbleWidth = 1000;
 
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kBackButtonElementId);
+
   enum PageInfoViewID {
+
     VIEW_ID_PAGE_INFO_NONE = 0,
     VIEW_ID_PAGE_INFO_BUTTON_CHANGE_PASSWORD,
     VIEW_ID_PAGE_INFO_BUTTON_ALLOWLIST_PASSWORD_REUSE,
@@ -57,13 +60,11 @@ class PageInfoViewFactory {
     VIEW_ID_PAGE_INFO_PERMISSION_VIEW,
     VIEW_ID_PAGE_INFO_SECURITY_SUMMARY_LABEL,
     VIEW_ID_PAGE_INFO_SECURITY_DETAILS_LABEL,
-    VIEW_ID_PAGE_INFO_AD_PERSONALIZATION_LABEL,
     VIEW_ID_PAGE_INFO_BACK_BUTTON,
     VIEW_ID_PAGE_INFO_CLOSE_BUTTON,
     VIEW_ID_PAGE_INFO_CURRENT_VIEW,
     VIEW_ID_PAGE_INFO_RESET_PERMISSIONS_BUTTON,
     VIEW_ID_PAGE_INFO_ABOUT_THIS_SITE_BUTTON,
-    VIEW_ID_PAGE_INFO_AD_PERSONALIZATION_BUTTON,
     VIEW_ID_PAGE_INFO_MORE_ABOUT_THIS_PAGE_BUTTON,
     VIEW_ID_PERMISSION_TOGGLE_ROW_TOGGLE_BUTTON,
     VIEW_ID_PAGE_INFO_RESET_DECISIONS_LABEL,
@@ -72,6 +73,7 @@ class PageInfoViewFactory {
     VIEW_ID_PAGE_INFO_THIRD_PARTY_COOKIES_TOGGLE,
     VIEW_ID_PAGE_INFO_EXTENDED_SITE_INFO_SECTION,
     VIEW_ID_PAGE_INFO_COOKIES_SYNC,
+    VIEW_ID_PAGE_INFO_PERMISSION_SUBTITLE_LABEL,
   };
 
   // Creates a separator view with padding on top and bottom. Use with flex
@@ -128,7 +130,6 @@ class PageInfoViewFactory {
   [[nodiscard]] std::unique_ptr<views::View> CreatePermissionPageView(
       ContentSettingsType type,
       content::WebContents* web_contents);
-  [[nodiscard]] std::unique_ptr<views::View> CreateAdPersonalizationPageView();
   [[nodiscard]] std::unique_ptr<views::View> CreateCookiesPageView();
   [[nodiscard]] std::unique_ptr<views::View> CreateMerchantTrustPageView();
 

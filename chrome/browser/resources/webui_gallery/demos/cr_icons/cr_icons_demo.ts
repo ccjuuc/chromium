@@ -78,8 +78,14 @@ export class CrIconsDemoElement extends CrLitElement {
     this.iconColor_ = color;
   }
 
-  protected onIconSizeChanged_(e: CustomEvent<{value: string}>) {
+  protected onIconSizeValueChanged_(e: CustomEvent<{value: string}>) {
     this.iconSize_ = e.detail.value;
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'cr-icons-demo': CrIconsDemoElement;
   }
 }
 

@@ -10,6 +10,7 @@
 #include "base/notimplemented.h"
 #import "ui/accessibility/platform/ax_platform_node_mac.h"
 #include "ui/compositor/layer.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/native_ui_types.h"
 #import "ui/views/cocoa/native_widget_mac_ns_window_host.h"
 #include "ui/views/controls/native/native_view_host.h"
@@ -220,13 +221,23 @@ void NativeViewHostMac::RemovedFromWidget() {
   NativeViewDetaching(false);
 }
 
-bool NativeViewHostMac::SetCornerRadii(
+bool NativeViewHostMac::SetNativeViewCornerRadii(
     const gfx::RoundedCornersF& corner_radii) {
   ui::Layer* layer = GetUiLayer();
   DCHECK(layer);
   layer->SetRoundedCornerRadius(corner_radii);
   layer->SetIsFastRoundedCorner(true);
   return true;
+}
+
+gfx::RoundedCornersF NativeViewHostMac::GetNativeViewCornerRadii() const {
+  ui::Layer* layer = GetUiLayer();
+  return layer ? layer->rounded_corner_radii() : gfx::RoundedCornersF();
+}
+
+gfx::Rect NativeViewHostMac::GetNativeViewClipRect() const {
+  ui::Layer* layer = GetUiLayer();
+  return layer ? layer->clip_rect() : gfx::Rect();
 }
 
 void NativeViewHostMac::SetHitTestTopInset(int top_inset) {
@@ -250,6 +261,18 @@ void NativeViewHostMac::UninstallClip() {
   NOTIMPLEMENTED();
 }
 
+bool NativeViewHostMac::SetNativeViewClipRect(const gfx::Rect& clip_rect) {
+  ui::Layer* layer = GetUILayer();
+  if (!layer) {
+    return false;
+  }
+  if (layer->clip_rect() == clip_rect) {
+    return false;
+  }
+  layer->SetClipRect(clip_rect);
+  return true;
+}
+
 void NativeViewHostMac::ShowWidget(int x,
                                    int y,
                                    int w,
@@ -258,16 +281,18 @@ void NativeViewHostMac::ShowWidget(int x,
                                    int native_h) {
   // TODO(crbug.com/41132564): Implement host_->fast_resize().
 
+  int superview_height =
+      host_->GetWidget()->GetClientAreaBoundsInScreen().height();
+
   if (native_view_hostable_) {
-    native_view_hostable_->ViewsHostableSetBounds(gfx::Rect(x, y, w, h));
+    native_view_hostable_->ViewsHostableSetBounds(gfx::Rect(x, y, w, h),
+                                                  superview_height);
     native_view_hostable_->ViewsHostableSetVisible(true);
   } else {
     // Coordinates will be from the top left of the parent Widget. The
     // NativeView is already in the same NSWindow, so just flip to get Cocoa
     // coordinates and then convert to the containing view.
-    NSRect window_rect = NSMakeRect(
-        x, host_->GetWidget()->GetClientAreaBoundsInScreen().height() - y - h,
-        w, h);
+    NSRect window_rect = NSMakeRect(x, superview_height - y - h, w, h);
 
     // Convert window coordinates to the hosted view's superview, since that's
     // how coordinates of the hosted view's frame is based.

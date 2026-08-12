@@ -9,9 +9,10 @@
 #include <optional>
 #include <string>
 
+#include "ash/constants/ash_features.h"
 #include "base/check.h"
+#include "base/check_deref.h"
 #include "base/check_is_test.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
@@ -35,8 +36,6 @@
 #include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/common/chrome_features.h"
 #include "components/enterprise/data_controls/core/browser/dlp_histogram_helper.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/browser_context.h"
@@ -394,7 +393,7 @@ void FilesPolicyNotificationManager::ShowDialog(
   }
 
   // No window found, so open a new one. This should notify us through
-  // OnBrowserSetLastActive() to show the dialog.
+  // OnBrowserCreated() to show the dialog.
   LaunchFilesApp(std::make_unique<DialogInfo>(
       base::BindOnce(&FilesPolicyNotificationManager::ShowDialogForIOTask,
                      weak_factory_.GetWeakPtr(), task_id, type),
@@ -429,12 +428,12 @@ void FilesPolicyNotificationManager::ShowDlpWarningTimeoutNotification(
 
 bool FilesPolicyNotificationManager::HasIOTask(
     file_manager::io_task::IOTaskId task_id) const {
-  return base::Contains(io_tasks_, task_id);
+  return io_tasks_.contains(task_id);
 }
 
 void FilesPolicyNotificationManager::OnIOTaskResumed(
     file_manager::io_task::IOTaskId task_id) {
-  if (base::Contains(io_tasks_warning_timers_, task_id)) {
+  if (io_tasks_warning_timers_.contains(task_id)) {
     io_tasks_warning_timers_.erase(task_id);
   }
 
@@ -480,7 +479,7 @@ FilesPolicyNotificationManager::GetIOTaskDialogInfoMapForTesting(
 
 bool FilesPolicyNotificationManager::HasWarningTimerForTesting(
     file_manager::io_task::IOTaskId task_id) const {
-  return base::Contains(io_tasks_warning_timers_, task_id);
+  return io_tasks_warning_timers_.contains(task_id);
 }
 
 void FilesPolicyNotificationManager::HandleDlpWarningNotificationClick(
@@ -517,7 +516,7 @@ void FilesPolicyNotificationManager::HandleDlpWarningNotificationClick(
       } else {
         // Review
         // Always open the Files app. This should notify us through
-        // OnBrowserSetLastActive() to show the dialog.
+        // OnBrowserCreated() to show the dialog.
         LaunchFilesApp(std::make_unique<DialogInfo>(
             base::BindOnce(
                 &FilesPolicyNotificationManager::ShowDialogForNonIOTask,
@@ -566,7 +565,7 @@ void FilesPolicyNotificationManager::HandleDlpErrorNotificationClick(
                              std::move(dialog_info));
         non_io_tasks_.emplace(notification_id, std::move(info));
         // Always open the Files app. This should notify us through
-        // OnBrowserSetLastActive() to show the dialog.
+        // OnBrowserCreated() to show the dialog.
         LaunchFilesApp(std::make_unique<DialogInfo>(
             base::BindOnce(
                 &FilesPolicyNotificationManager::ShowDialogForNonIOTask,
@@ -951,8 +950,7 @@ void FilesPolicyNotificationManager::LaunchFilesApp(
 
 void FilesPolicyNotificationManager::OnBrowserCreated(
     ash::BrowserDelegate* browser_delegate) {
-  // TODO(crbug.com/440947120): Migrate away from using Browser* here.
-  if (!ash::IsBrowserForSystemWebApp(&browser_delegate->GetBrowser(),
+  if (!ash::IsBrowserForSystemWebApp(CHECK_DEREF(browser_delegate),
                                      ash::SystemWebAppType::FILE_MANAGER)) {
     LOG(WARNING) << "Browser did not match Files app";
     return;
@@ -1024,7 +1022,7 @@ bool FilesPolicyNotificationManager::HasWarning(
 
 bool FilesPolicyNotificationManager::HasNonIOTask(
     const std::string& notification_id) const {
-  return base::Contains(non_io_tasks_, notification_id);
+  return non_io_tasks_.contains(notification_id);
 }
 
 bool FilesPolicyNotificationManager::HasBlockedFiles(
@@ -1122,7 +1120,7 @@ void FilesPolicyNotificationManager::ShowDlpBlockNotification(
   const std::string notification_id = GetNotificationId(notification_count_++);
   std::unique_ptr<message_center::Notification> notification;
 
-  if (base::FeatureList::IsEnabled(features::kNewFilesPolicyUX)) {
+  if (base::FeatureList::IsEnabled(ash::features::kNewFilesPolicyUX)) {
     // The notification should stay visible until actioned upon.
     message_center::RichNotificationData optional_fields;
     optional_fields.never_timeout = true;
@@ -1197,7 +1195,7 @@ void FilesPolicyNotificationManager::ShowDlpWarningNotification(
     std::vector<base::FilePath> warning_files,
     const DlpFileDestination& destination,
     dlp::FileAction action) {
-  if (base::FeatureList::IsEnabled(features::kNewFilesPolicyUX)) {
+  if (base::FeatureList::IsEnabled(ash::features::kNewFilesPolicyUX)) {
     const std::string& notification_id =
         GetNotificationId(notification_count_++);
     // Store the task info.

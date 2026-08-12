@@ -23,6 +23,7 @@
 #import "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #import "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #import "components/autofill/core/browser/data_manager/personal_data_manager_test_utils.h"
+#import "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #import "components/autofill/core/browser/form_structure.h"
 #import "components/autofill/core/browser/foundations/autofill_manager_test_api.h"
 #import "components/autofill/core/browser/foundations/browser_autofill_manager.h"
@@ -45,19 +46,20 @@
 #import "components/autofill/ios/browser/test_autofill_client_ios.h"
 #import "components/autofill/ios/browser/test_autofill_manager_injector.h"
 #import "components/autofill/ios/common/field_data_manager_factory_ios.h"
+#import "components/autofill/ios/form_util/form_activity_tab_helper.h"
 #import "components/infobars/core/confirm_infobar_delegate.h"
 #import "components/infobars/core/infobar.h"
 #import "components/infobars/core/infobar_manager.h"
 #import "components/keyed_service/core/service_access_type.h"
 #import "components/password_manager/core/browser/password_manager_test_utils.h"
 #import "components/password_manager/core/browser/password_store/mock_password_store_interface.h"
+#import "ios/chrome/browser/autofill/form_input_accessory/coordinator/form_input_accessory_mediator.h"
 #import "ios/chrome/browser/autofill/model/bottom_sheet/autofill_bottom_sheet_tab_helper.h"
 #import "ios/chrome/browser/autofill/model/bottom_sheet/save_card_bottom_sheet_model.h"
 #import "ios/chrome/browser/autofill/model/features.h"
 #import "ios/chrome/browser/autofill/model/form_suggestion_controller.h"
 #import "ios/chrome/browser/autofill/model/personal_data_manager_factory.h"
 #import "ios/chrome/browser/autofill/ui_bundled/chrome_autofill_client_ios.h"
-#import "ios/chrome/browser/autofill/ui_bundled/form_input_accessory/form_input_accessory_mediator.h"
 #import "ios/chrome/browser/infobars/model/infobar_manager_impl.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_profile_password_store_factory.h"
 #import "ios/chrome/browser/passwords/model/password_controller.h"
@@ -265,9 +267,13 @@ class AutofillControllerTest : public PlatformTest {
  public:
   AutofillControllerTest() : web_client_(std::make_unique<ChromeWebClient>()) {
     TestProfileIOS::Builder builder;
-
-    scoped_feature_list_2_.InitAndEnableFeature(
-        kStatelessFormSuggestionController);
+    // TODO(crbug.com/533826510): Remove this override when
+    // kAutofillEnableBottomSheetScanCardAndFill is cleaned up. These credit
+    // card import tests need to be updated to support the save-and-fill flow.
+    scoped_feature_list_2_.InitWithFeatures(
+        /*enabled_features=*/{kStatelessFormSuggestionController},
+        /*disabled_features=*/{
+            autofill::features::kAutofillEnableBottomSheetScanCardAndFill});
 
     builder.AddTestingFactory(
         IOSChromeProfilePasswordStoreFactory::GetInstance(),
@@ -337,6 +343,9 @@ class AutofillControllerTest : public PlatformTest {
 
   void WaitForCondition(ConditionBlock condition);
 
+  // Focuses the field with 'field_id' and dispatches a focus event.
+  void FocusElement(NSString* field_id);
+
   // Simulates a text input event by focusing the field with 'field_id' and
   // dispatching a TextEvent with value 'field_value'.
   void SimulateTextInputEvent(NSString* field_id, NSString* field_value);
@@ -362,7 +371,7 @@ class AutofillControllerTest : public PlatformTest {
 
   web::ScopedTestingWebClient web_client_;
   web::WebTaskEnvironment task_environment_;
-  autofill::test::AutofillUnitTestEnvironment autofill_test_environment_{
+  test::AutofillUnitTestEnvironment autofill_test_environment_{
       {.disable_server_communication = true}};
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   std::unique_ptr<TestProfileIOS> profile_;
@@ -370,15 +379,12 @@ class AutofillControllerTest : public PlatformTest {
   bool processed_a_task_ = false;
   // Histogram tester for these tests.
   std::unique_ptr<base::HistogramTester> histogram_tester_;
-  raw_ptr<AutofillBottomSheetTabHelper, DanglingUntriaged>
-      bottomsheet_tab_helper_;
+  raw_ptr<AutofillBottomSheetTabHelper> bottomsheet_tab_helper_;
   id<AutofillCommands> autofill_commands_handler_;
-  ScopedFeatureList scoped_feature_list_{
-      features::kAutofillLocalSaveCardBottomSheet};
   ScopedFeatureList scoped_feature_list_2_;
 
  private:
-  std::unique_ptr<autofill::AutofillClient> autofill_client_;
+  std::unique_ptr<AutofillClient> autofill_client_;
 
   AutofillAgent* autofill_agent_;
 
@@ -441,14 +447,22 @@ void AutofillControllerTest::SetUp() {
   bottomsheet_tab_helper_->SetAutofillBottomSheetHandler(
       autofill_commands_handler_);
 
+  autofill::FormActivityTabHelper::GetOrCreateForWebState(web_state())
+      ->SetForceSubmittedByUserForTesting(true);
+
   histogram_tester_ = std::make_unique<base::HistogramTester>();
 }
 
 void AutofillControllerTest::TearDown() {
-  [accessory_mediator_ disconnect];
-  [suggestion_controller_ detachFromWebState];
+  @autoreleasepool {
+    [accessory_mediator_ disconnect];
+    [suggestion_controller_ detachFromWebState];
 
-  autofill_manager_injector_.reset();
+    autofill_manager_injector_.reset();
+
+    bottomsheet_tab_helper_ = nullptr;
+    autofill_agent_ = nil;
+  }
 
   web::test::WaitForBackgroundTasks();
   web_state_.reset();
@@ -495,19 +509,30 @@ void AutofillControllerTest::WaitForCondition(ConditionBlock condition) {
                                                            true, condition));
 }
 
-void AutofillControllerTest::SimulateTextInputEvent(NSString* field_id,
-                                                    NSString* field_value) {
-  // First focus the field, otherwise the input event does not get delivered to
-  // the browser process.
-  // Then create and dispatch a TextEvent from the field with the given id.
+void AutofillControllerTest::FocusElement(NSString* field_id) {
   web::test::ExecuteJavaScript(
       [NSString
           stringWithFormat:
-              @"document.getElementById('%@').focus();"
+              @"var el = document.getElementById('%@') || "
+              @"document.forms[0]['%@'];"
+              @"if (el) { el.focus(); el.dispatchEvent(new Event('focus', "
+              @"{bubbles: true})); }",
+              field_id, field_id],
+      web_state());
+}
+
+void AutofillControllerTest::SimulateTextInputEvent(NSString* field_id,
+                                                    NSString* field_value) {
+  FocusElement(field_id);
+  web::test::ExecuteJavaScript(
+      [NSString
+          stringWithFormat:
+              @"var el = document.getElementById('%@') || "
+              @"document.forms[0]['%@'];"
               @"var event = document.createEvent('TextEvent');"
               @"event.initTextEvent('textInput', true, true, window, '%@');"
-              @"document.getElementById('%@').dispatchEvent(event);",
-              field_id, field_value, field_id],
+              @"if (el) { el.dispatchEvent(event); }",
+              field_id, field_id, field_value],
       web_state());
 }
 
@@ -898,8 +923,7 @@ void AutofillControllerTest::SetUpForSuggestions(
     size_t expected_number_of_forms) {
   PersonalDataManager* personal_data_manager =
       PersonalDataManagerFactory::GetForProfile(profile_.get());
-  AutofillProfile profile(
-      autofill::i18n_model_definition::kLegacyHierarchyCountryCode);
+  AutofillProfile profile(i18n_model_definition::kLegacyHierarchyCountryCode);
   profile.SetRawInfo(NAME_FULL, u"Homer Simpson");
   profile.SetRawInfo(ADDRESS_HOME_LINE1, u"123 Main Street");
   profile.SetRawInfo(ADDRESS_HOME_CITY, u"Springfield");
@@ -989,16 +1013,14 @@ TEST_F(AutofillControllerTest, MultipleProfileSuggestions) {
       PersonalDataManagerFactory::GetForProfile(profile_.get());
   personal_data_manager->SetSyncServiceForTest(nullptr);
 
-  AutofillProfile profile(
-      autofill::i18n_model_definition::kLegacyHierarchyCountryCode);
+  AutofillProfile profile(i18n_model_definition::kLegacyHierarchyCountryCode);
   profile.SetRawInfo(NAME_FULL, u"Homer Simpson");
   profile.SetRawInfo(ADDRESS_HOME_LINE1, u"123 Main Street");
   profile.SetRawInfo(ADDRESS_HOME_CITY, u"Springfield");
   profile.SetRawInfo(ADDRESS_HOME_STATE, u"IL");
   profile.SetRawInfo(ADDRESS_HOME_ZIP, u"55123");
 
-  AutofillProfile profile2(
-      autofill::i18n_model_definition::kLegacyHierarchyCountryCode);
+  AutofillProfile profile2(i18n_model_definition::kLegacyHierarchyCountryCode);
   profile2.SetRawInfo(NAME_FULL, u"Larry Page");
   profile2.SetRawInfo(ADDRESS_HOME_LINE1, u"1600 Amphitheatre Parkway");
   profile2.SetRawInfo(ADDRESS_HOME_CITY, u"Mountain View");
@@ -1098,8 +1120,7 @@ TEST_F(AutofillControllerTest, KeyValueSuggestions) {
   // Focus element.
   web::test::ExecuteJavaScript(@"document.forms[0].greeting.value='B'",
                                web_state());
-  web::test::ExecuteJavaScript(@"document.forms[0].greeting.focus()",
-                               web_state());
+  FocusElement(@"greeting");
   WaitForSuggestionRetrieval(/*wait_for_trigger=*/YES);
   EXPECT_EQ(1U, [suggestion_controller() suggestions].count);
   FormSuggestion* suggestion = [suggestion_controller() suggestions][0];
@@ -1112,8 +1133,7 @@ TEST_F(AutofillControllerTest, KeyValueSuggestions) {
 TEST_F(AutofillControllerTest, KeyValueTypedSuggestions) {
   SetUpKeyValueData();
   ResetWaitForSuggestionRetrieval();
-  web::test::ExecuteJavaScript(@"document.forms[0].greeting.focus()",
-                               web_state());
+  FocusElement(@"greeting");
   WaitForSuggestionRetrieval(/*wait_for_trigger=*/YES);
   ResetWaitForSuggestionRetrieval();
   SimulateTextInputEvent(/*field_id=*/@"greeting", /*field_value=*/@"B");
@@ -1131,7 +1151,7 @@ TEST_F(AutofillControllerTest, KeyValueFocusChange) {
 
   // Focus the dummy field and confirm no suggestions are presented.
   ResetWaitForSuggestionRetrieval();
-  web::test::ExecuteJavaScript(@"document.forms[0].dummy.focus()", web_state());
+  FocusElement(@"dummy");
   WaitForSuggestionRetrieval(/*wait_for_trigger=*/YES);
   ASSERT_EQ(0U, [suggestion_controller() suggestions].count);
   ResetWaitForSuggestionRetrieval();
@@ -1145,8 +1165,7 @@ TEST_F(AutofillControllerTest, KeyValueFocusChange) {
 
   // Enter 'B' in the greeting field and confirm that one suggestion ("Bonjour")
   // is presented.
-  web::test::ExecuteJavaScript(@"document.forms[0].greeting.focus()",
-                               web_state());
+  FocusElement(@"greeting");
   WaitForSuggestionRetrieval(/*wait_for_trigger=*/YES);
   ResetWaitForSuggestionRetrieval();
   web::test::ExecuteJavaScript(
@@ -1161,19 +1180,6 @@ TEST_F(AutofillControllerTest, KeyValueFocusChange) {
   ASSERT_EQ(1U, [suggestion_controller() suggestions].count);
   FormSuggestion* suggestion = [suggestion_controller() suggestions][0];
   EXPECT_NSEQ(@"Bonjour", suggestion.value);
-}
-
-// Checks that focusing on an element of a key/value type form without typing
-// won't result in suggestions being sent to the AutofillAgent, once data has
-// been loaded into a test data manager.
-TEST_F(AutofillControllerTest, NoKeyValueSuggestionsWithoutTyping) {
-  SetUpKeyValueData();
-  ResetWaitForSuggestionRetrieval();
-  // Focus element.
-  web::test::ExecuteJavaScript(@"document.forms[0].greeting.focus()",
-                               web_state());
-  WaitForSuggestionRetrieval(/*wait_for_trigger=*/YES);
-  EXPECT_EQ(0U, [suggestion_controller() suggestions].count);
 }
 
 // Checks that an HTML page containing a credit card-type form which is
@@ -1312,8 +1318,7 @@ TEST_F(AutofillControllerTest,
       AutofillJavaScriptFeature::GetInstance()->GetWebFramesManager(
           web_state());
   auto* main_frame = frames_manager->GetMainWebFrame();
-  auto* fieldDataManager =
-      autofill::FieldDataManagerFactoryIOS::FromWebFrame(main_frame);
+  auto* fieldDataManager = FieldDataManagerFactoryIOS::FromWebFrame(main_frame);
   // Name.
   fieldDataManager->UpdateFieldDataMap(FieldRendererId(2), u"Chuck",
                                        FieldPropertiesFlags::kAutofilled);
@@ -1417,76 +1422,6 @@ TEST_F(AutofillControllerTest, ProfileImportAfterFormlessFormRemoval) {
   histogram_tester_->ExpectUniqueSample(
       /*name=*/kAutofillSubmissionDetectionSourceHistogram,
       /*sample=*/mojom::SubmissionSource::XHR_SUCCEEDED,
-      /*expected_count=*/1);
-}
-
-class AutofillControllerWithoutLocalSaveCardBottomSheetTest
-    : public AutofillControllerTest {
- protected:
-  AutofillControllerWithoutLocalSaveCardBottomSheetTest() {
-    scoped_feature_list_.InitAndDisableFeature(
-        features::kAutofillLocalSaveCardBottomSheet);
-  }
-  ScopedFeatureList scoped_feature_list_;
-};
-
-// Checks that an HTML page containing a credit card-type form which is
-// submitted with scripts (simulating user form submission) results in a credit
-// card being successfully imported into the PersonalDataManager.
-// TODO(crbug.com/422148854): Remove this test post local save card bottomsheet
-// is launched.
-TEST_F(AutofillControllerWithoutLocalSaveCardBottomSheetTest,
-       CreditCardImport) {
-  InfoBarManagerImpl::CreateForWebState(web_state());
-  PersonalDataManager* personal_data_manager =
-      PersonalDataManagerFactory::GetForProfile(profile_.get());
-  personal_data_manager->SetSyncServiceForTest(nullptr);
-
-  // Check there are no registered profiles already.
-  EXPECT_EQ(
-      0U,
-      personal_data_manager->payments_data_manager().GetCreditCards().size());
-
-  LoadAndFillCreditCardForm();
-  web::test::ExecuteJavaScript(@"submit.click()", web_state());
-  infobars::InfoBarManager* infobar_manager =
-      InfoBarManagerImpl::FromWebState(web_state());
-  WaitForCondition(^bool() {
-    return infobar_manager->infobars().size();
-  });
-  ExpectMetric("Autofill.CreditCardInfoBar.Local",
-               AutofillMetrics::INFOBAR_SHOWN);
-  ExpectMetric("Autofill.SaveCreditCardPromptResult.IOS.Local.Banner."
-               "NumStrikes.0.NoFixFlow",
-               static_cast<int>(
-                   autofill_metrics::SaveCreditCardPromptResultIOS::kShown));
-  ASSERT_EQ(1U, infobar_manager->infobars().size());
-  infobars::InfoBarDelegate* infobar =
-      infobar_manager->infobars()[0]->delegate();
-  ConfirmInfoBarDelegate* confirm_infobar = infobar->AsConfirmInfoBarDelegate();
-
-  {
-    // This call cause a modification of the PersonalDataManager, so wait until
-    // the asynchronous task completes in addition to waiting for the UI update.
-    PersonalDataChangedWaiter waiter(*personal_data_manager);
-    confirm_infobar->Accept();
-    std::move(waiter).Wait();
-  }
-
-  const std::vector<const CreditCard*>& credit_cards =
-      personal_data_manager->payments_data_manager().GetCreditCards();
-  ASSERT_EQ(1U, credit_cards.size());
-  const CreditCard& credit_card = *credit_cards[0];
-  EXPECT_EQ(u"Superman", credit_card.GetInfo(CREDIT_CARD_NAME_FULL, "en-US"));
-  EXPECT_EQ(u"4000444444444444",
-            credit_card.GetInfo(CREDIT_CARD_NUMBER, "en-US"));
-  EXPECT_EQ(u"11", credit_card.GetInfo(CREDIT_CARD_EXP_MONTH, "en-US"));
-  EXPECT_EQ(u"2999",
-            credit_card.GetInfo(CREDIT_CARD_EXP_4_DIGIT_YEAR, "en-US"));
-
-  histogram_tester_->ExpectUniqueSample(
-      /*name=*/kAutofillSubmissionDetectionSourceHistogram,
-      /*sample=*/mojom::SubmissionSource::FORM_SUBMISSION,
       /*expected_count=*/1);
 }
 

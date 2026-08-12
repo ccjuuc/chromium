@@ -71,7 +71,7 @@ webrtc::VideoFrameMetadata MockVP9Metadata(MockTransformableVideoFrame* frame) {
 webrtc::VideoFrameMetadata MockVP8Metadata(MockTransformableVideoFrame* frame) {
   webrtc::VideoFrameMetadata webrtc_metadata;
   webrtc_metadata.SetFrameId(2);
-  webrtc_metadata.SetFrameDependencies(std::vector<int64_t>{1});
+  webrtc_metadata.SetDependencies(std::vector<int64_t>{1});
   webrtc_metadata.SetWidth(800);
   webrtc_metadata.SetHeight(600);
   webrtc_metadata.SetSpatialIndex(3);
@@ -152,7 +152,9 @@ TEST_F(RTCEncodedVideoFrameTest, GetMetadataReturnsMetadata) {
 
   EXPECT_CALL(*frame, Metadata()).WillOnce(Return(webrtc_metadata));
   EXPECT_CALL(*frame, GetPayloadType()).WillRepeatedly(Return(13));
-  EXPECT_CALL(*frame, GetTimestamp()).WillRepeatedly(Return(17));
+  EXPECT_CALL(*frame, GetRtpTimestampInfo())
+      .WillRepeatedly(Return(
+          webrtc::RtpTimestampInfo(webrtc::RtpTimestampWithOffset(17u))));
 
   RTCEncodedVideoFrame* encoded_frame =
       MakeGarbageCollected<RTCEncodedVideoFrame>(std::move(frame));
@@ -306,11 +308,11 @@ TEST_F(RTCEncodedVideoFrameTest, SetMetadataWithFeatureAllowsModifications) {
   EXPECT_FALSE(exception_state.HadException()) << exception_state.Message();
 
   EXPECT_EQ(actual_metadata.GetFrameId(), new_metadata->frameId());
-  Vector<int64_t> actual_dependencies;
-  for (const auto& dependency : actual_metadata.GetFrameDependencies()) {
-    actual_dependencies.push_back(dependency);
+  if (auto webrtc_deps = actual_metadata.GetDependencies()) {
+    Vector<int64_t> actual_dependencies;
+    actual_dependencies.append_range(*webrtc_deps);
+    EXPECT_EQ(actual_dependencies, new_metadata->dependencies());
   }
-  EXPECT_EQ(actual_dependencies, new_metadata->dependencies());
   EXPECT_EQ(actual_metadata.GetWidth(), new_metadata->width());
   EXPECT_EQ(actual_metadata.GetHeight(), new_metadata->height());
   EXPECT_THAT(actual_metadata.GetSpatialIndex(),
@@ -442,7 +444,9 @@ TEST_F(RTCEncodedVideoFrameTest, SetMetadataModifiesRtpTimestamp) {
 
   const uint32_t new_timestamp = 7;
 
-  EXPECT_CALL(*frame, GetTimestamp()).WillRepeatedly(Return(1));
+  EXPECT_CALL(*frame, GetRtpTimestampInfo())
+      .WillRepeatedly(
+          Return(webrtc::RtpTimestampInfo(webrtc::RtpTimestampWithOffset(1u))));
 
   EXPECT_CALL(*frame, SetMetadata(_));
   EXPECT_CALL(*frame, SetRTPTimestamp(new_timestamp));
@@ -714,7 +718,9 @@ TEST_F(RTCEncodedVideoFrameTest, ConstructorCopiesMetadata) {
   std::unique_ptr<MockTransformableVideoFrame> frame =
       std::make_unique<NiceMock<MockTransformableVideoFrame>>();
   MockVP8Metadata(frame.get());
-  EXPECT_CALL(*frame, GetTimestamp()).WillRepeatedly(Return(1));
+  EXPECT_CALL(*frame, GetRtpTimestampInfo())
+      .WillRepeatedly(
+          Return(webrtc::RtpTimestampInfo(webrtc::RtpTimestampWithOffset(1u))));
 
   RTCEncodedVideoFrame* encoded_frame =
       MakeGarbageCollected<RTCEncodedVideoFrame>(std::move(frame));

@@ -11,6 +11,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/rand_util.h"
+#include "base/strings/strcat.h"
 #include "base/time/default_tick_clock.h"
 #include "cc/metrics/begin_main_frame_metrics.h"
 #include "cc/metrics/frame_sequence_tracker_collection.h"
@@ -20,7 +21,6 @@
 #include "third_party/blink/public/common/metrics/document_update_reason.h"
 #include "third_party/blink/renderer/platform/instrumentation/histogram.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
-#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace {
@@ -59,8 +59,11 @@ LocalFrameUkmAggregator::ScopedUkmHierarchicalTimer::ScopedUkmHierarchicalTimer(
       start_time_(aggregator && aggregator->ShouldMeasureMetric(metric_index)
                       ? clock_->NowTicks()
                       : base::TimeTicks()) {
-  if (aggregator_ && !start_time_.is_null())
-    TRACE_EVENT_BEGIN0("blink", aggregator_->metrics_data()[metric_index].name);
+  if (aggregator_ && !start_time_.is_null()) {
+    TRACE_EVENT_BEGIN(
+        "blink",
+        perfetto::StaticString(aggregator_->metrics_data()[metric_index].name));
+  }
 }
 
 LocalFrameUkmAggregator::ScopedUkmHierarchicalTimer::ScopedUkmHierarchicalTimer(
@@ -79,8 +82,8 @@ LocalFrameUkmAggregator::ScopedUkmHierarchicalTimer::
       aggregator_->RecordTimerSample(metric_index_, start_time_,
                                      clock_->NowTicks());
     }
-    TRACE_EVENT_END1("blink", aggregator_->metrics_data()[metric_index_].name,
-                     "preFCP", aggregator_->fcp_state_ == kBeforeFCPSignal);
+    TRACE_EVENT_END("blink", "preFCP",
+                    aggregator_->fcp_state_ == kBeforeFCPSignal);
   }
 }
 
@@ -212,24 +215,21 @@ LocalFrameUkmAggregator::LocalFrameUkmAggregator()
     absolute_record.reset();
     absolute_record.pre_fcp_aggregate = 0;
     if (metric_data.has_uma) {
-      StringBuilder pre_fcp_uma_name;
-      pre_fcp_uma_name.Append(metric_data.name);
-      pre_fcp_uma_name.Append(uma_prefcp_postscript);
+      const std::string pre_fcp_uma_name =
+          base::StrCat({metric_data.name, uma_prefcp_postscript});
       absolute_record.pre_fcp_uma_counter =
-          std::make_unique<CustomCountHistogram>(
-              pre_fcp_uma_name.ToString().Utf8().c_str(), 1, 10000000, 50);
-      StringBuilder post_fcp_uma_name;
-      post_fcp_uma_name.Append(metric_data.name);
-      post_fcp_uma_name.Append(uma_postfcp_postscript);
+          std::make_unique<CustomCountHistogram>(pre_fcp_uma_name.c_str(), 1,
+                                                 10000000, 50);
+      const std::string post_fcp_uma_name =
+          base::StrCat({metric_data.name, uma_postfcp_postscript});
       absolute_record.post_fcp_uma_counter =
-          std::make_unique<CustomCountHistogram>(
-              post_fcp_uma_name.ToString().Utf8().c_str(), 1, 10000000, 50);
-      StringBuilder aggregated_uma_name;
-      aggregated_uma_name.Append(metric_data.name);
-      aggregated_uma_name.Append(uma_pre_fcp_aggregated_postscript);
+          std::make_unique<CustomCountHistogram>(post_fcp_uma_name.c_str(), 1,
+                                                 10000000, 50);
+      const std::string aggregated_uma_name =
+          base::StrCat({metric_data.name, uma_pre_fcp_aggregated_postscript});
       absolute_record.uma_aggregate_counter =
-          std::make_unique<CustomCountHistogram>(
-              aggregated_uma_name.ToString().Utf8().c_str(), 1, 10000000, 50);
+          std::make_unique<CustomCountHistogram>(aggregated_uma_name.c_str(), 1,
+                                                 10000000, 50);
     }
 
     metric_index++;
@@ -274,8 +274,8 @@ LocalFrameUkmAggregator::GetScopedForcedLayoutTimer(
   // avoid overflowing the counters.
   bool should_report_uma_this_frame = !calls_to_next_forced_style_layout_uma_;
   if (should_report_uma_this_frame) {
-    calls_to_next_forced_style_layout_uma_ =
-        base::RandInt(0, mean_calls_between_forced_style_layout_uma_ * 2);
+    calls_to_next_forced_style_layout_uma_ = base::RandIntInclusive(
+        0, mean_calls_between_forced_style_layout_uma_ * 2);
   } else {
     DCHECK_GT(calls_to_next_forced_style_layout_uma_, 0u);
     --calls_to_next_forced_style_layout_uma_;
@@ -373,7 +373,7 @@ void LocalFrameUkmAggregator::RecordCountSample(size_t metric_index,
     record.pre_fcp_aggregate += count;
 
   // Subsampling these metrics reduced CPU utilization (crbug.com/1295441).
-  if (!metrics_subsampler_.ShouldSample(0.001)) {
+  if (!base::ShouldRecordSubsampledMetric(0.001)) {
     return;
   }
 
@@ -625,7 +625,8 @@ void LocalFrameUkmAggregator::ResetAllMetrics() {
 }
 
 void LocalFrameUkmAggregator::BeginForcedLayout() {
-  TRACE_EVENT_BEGIN0("blink", metrics_data()[kForcedStyleAndLayout].name);
+  TRACE_EVENT_BEGIN("blink", perfetto::StaticString(
+                                 metrics_data()[kForcedStyleAndLayout].name));
 }
 
 void LocalFrameUkmAggregator::EndForcedLayout(
@@ -634,8 +635,7 @@ void LocalFrameUkmAggregator::EndForcedLayout(
     bool avoid_unnecessary_forced_layout_measurements,
     bool should_report_uma_this_frame,
     bool is_pre_fcp) {
-  TRACE_EVENT_END1("blink", metrics_data()[kForcedStyleAndLayout].name,
-                   "preFCP", fcp_state_ == kBeforeFCPSignal);
+  TRACE_EVENT_END("blink", "preFCP", fcp_state_ == kBeforeFCPSignal);
 
   if (avoid_unnecessary_forced_layout_measurements &&
       !(should_report_uma_this_frame || is_pre_fcp ||

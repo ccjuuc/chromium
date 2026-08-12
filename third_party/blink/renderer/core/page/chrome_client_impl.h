@@ -55,6 +55,7 @@ namespace blink {
 class PagePopup;
 class PagePopupClient;
 class WebAutofillClient;
+class WebRecordReplayClient;
 class WebViewImpl;
 
 // Handles window-level notifications from core on behalf of a WebView.
@@ -68,14 +69,21 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
   WebViewImpl* GetWebView() const override;
   void ChromeDestroyed() override;
   void SetWindowRect(const gfx::Rect&, LocalFrame&) override;
+  void MoveWindowTo(const gfx::Point&, LocalFrame&) override;
+  void ResizeWindowTo(const gfx::Size&, LocalFrame&) override;
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-  void Minimize(LocalFrame&, WindowShowStateChangeCallback) override;
-  void Maximize(LocalFrame&, WindowShowStateChangeCallback) override;
-  void Restore(LocalFrame&, WindowShowStateChangeCallback) override;
-  void SetResizable(bool resizable, LocalFrame& frame) override;
+  void Minimize(LocalFrame&, WindowingControlsChangeCallback) override;
+  void Maximize(LocalFrame&, WindowingControlsChangeCallback) override;
+  void Restore(LocalFrame&, WindowingControlsChangeCallback) override;
+  void SetResizable(bool resizable,
+                    LocalFrame& frame,
+                    WindowingControlsChangeCallback) override;
 #endif
   gfx::Rect RootWindowRect(LocalFrame&) override;
   void DidAccessInitialMainDocument() override;
+  void DidChangeThemeColor(std::optional<SkColor> theme_color) override;
+  void DidChangeBackgroundColor(SkColor4f background_color,
+                                bool color_adjust) override;
   void FocusPage() override;
   void DidFocusPage() override;
   bool CanTakeFocus(mojom::blink::FocusType) override;
@@ -87,12 +95,11 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
   void RegisterForCommitObservation(CommitObserver*) override;
   void UnregisterFromCommitObservation(CommitObserver*) override;
   void WillCommitCompositorFrame() override;
+  void RequestFrameWithoutVSyncFromRoot(LocalFrame& frame) override;
   bool StartDeferringCommits(LocalFrame& main_frame,
                              base::TimeDelta timeout,
                              cc::PaintHoldingReason reason) override;
-  void StopDeferringCommits(LocalFrame& main_frame,
-                            cc::PaintHoldingCommitTrigger) override;
-  void SetShouldThrottleFrameRate(bool flag, LocalFrame& main_frame) override;
+  void StopDeferringCommits(LocalFrame& main_frame) override;
   void RequestMainFrameOnCompositorAnimation(
       LocalFrame&,
       cc::PropertyChangeForcesCommitCriteria criteria,
@@ -115,10 +122,6 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
                              network::mojom::blink::WebSandboxFlags,
                              const SessionStorageNamespaceId&,
                              bool& consumed_user_gesture) override;
-  void Show(LocalFrame& frame,
-            LocalFrame& opener_frame,
-            NavigationPolicy navigation_policy,
-            bool user_gesture) override;
   void SetOverscrollBehavior(LocalFrame& main_frame,
                              const cc::OverscrollBehavior&) override;
   void InjectScrollbarGestureScroll(
@@ -158,6 +161,7 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
   bool TabsToLinks() override;
   void InvalidateContainer() override;
   void ScheduleAnimation(const LocalFrameView*,
+                         cc::BeginMainFrameReason,
                          base::TimeDelta delay,
                          bool urgent) override;
   gfx::Rect LocalRootToScreenDIPs(const gfx::Rect&,
@@ -231,7 +235,6 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
                             const gfx::Rect& rect) override;
 
   // ChromeClient methods:
-  String AcceptLanguages() override;
   void SetCursorForPlugin(const ui::Cursor&, LocalFrame*) override;
   void SetDelegatedInkMetadata(
       LocalFrame* frame,
@@ -276,8 +279,8 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
       LocalFrame*,
       HTMLElement*,
       WebFormRelatedChangeType) override;
-  void HandleKeyboardEventOnTextField(HTMLInputElement&,
-                                      KeyboardEvent&) override;
+  bool HandleKeyboardEventOnEditableElement(HTMLElement&,
+                                            KeyboardEvent&) override;
   void DidChangeValueInTextField(HTMLFormControlElement&) override;
   void DidClearValueInTextField(HTMLFormControlElement&) override;
   void DidUserChangeContentEditableContent(Element&) override;
@@ -287,15 +290,18 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
   void DidChangeSelectionInSelectControl(HTMLFormControlElement&) override;
   void SelectFieldOptionsChanged(HTMLFormControlElement&) override;
   void AjaxSucceeded(LocalFrame*) override;
-  void JavaScriptChangedValue(HTMLFormControlElement&,
-                              const String& old_value,
-                              bool was_autofilled) override;
+  void JavaScriptSetValue(HTMLFormControlElement&,
+                          const String& old_value,
+                          bool was_autofilled,
+                          bool value_changed) override;
+  bool IsAutofillableElement(const HTMLFormControlElement&) override;
 
   void ShowVirtualKeyboardOnElementFocus(LocalFrame&) override;
 
   gfx::Transform GetDeviceEmulationTransform() const override;
 
-  void OnMouseDown(Node&) override;
+  void WillDispatchPointerDown(Node&) override;
+  void DidDispatchMouseDown(Node&) override;
   void DidUpdateBrowserControls() const override;
 
   void DidUpdateMaxSafeAreaInsets(
@@ -316,10 +322,6 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
 
   void NotifyPresentationTime(LocalFrame& frame,
                               ReportTimeCallback callback) override;
-
-  void DidUpdateTextAutosizerPageInfo(
-      const mojom::blink::TextAutosizerPageInfo& page_info) override;
-
   int GetLayerTreeId(LocalFrame& frame) override;
 
   void DocumentDetached(Document&) override;
@@ -332,7 +334,11 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
 
   float ZoomFactorForViewportLayout() override;
 
-  void OnFirstContentfulPaint(const base::TimeDelta& duration) override;
+  void OnFirstContentfulPaint(
+      const base::TimeTicks& presentation_time) override;
+
+  void OnLargestContentfulPaint(
+      const base::TimeTicks& presentation_time) override;
 
  private:
   bool IsChromeClientImpl() const override { return true; }
@@ -342,6 +348,10 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
   // Returns WebAutofillClient associated with the WebLocalFrame. This takes and
   // returns nullable.
   WebAutofillClient* AutofillClientFromFrame(LocalFrame*);
+
+  // Returns WebRecordReplayClient associated with the WebLocalFrame. This takes
+  // and returns nullable.
+  WebRecordReplayClient* RecordReplayClientFromFrame(LocalFrame*);
 
   // Returns a copy of |pending_rect|, adjusted for available screen area
   // constraints. This is used to synchronously estimate, or preemptively apply,

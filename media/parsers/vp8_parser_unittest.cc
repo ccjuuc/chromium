@@ -23,8 +23,7 @@ TEST(Vp8ParserTest, StreamFileParsing) {
 
   IvfParser ivf_parser;
   IvfFileHeader ivf_file_header = {};
-  ASSERT_TRUE(
-      ivf_parser.Initialize(stream.data(), stream.length(), &ivf_file_header));
+  ASSERT_TRUE(ivf_parser.Initialize(stream.bytes(), &ivf_file_header));
   ASSERT_EQ(ivf_file_header.fourcc, 0x30385056u);  // VP80
 
   Vp8Parser vp8_parser;
@@ -32,12 +31,11 @@ TEST(Vp8ParserTest, StreamFileParsing) {
   size_t num_parsed_frames = 0;
 
   // Parse until the end of stream/unsupported stream/error in stream is found.
-  const uint8_t* payload = nullptr;
-  while (ivf_parser.ParseNextFrame(&ivf_frame_header, &payload)) {
+  for (auto bytes = ivf_parser.ParseNextFrame(&ivf_frame_header);
+       !bytes.empty(); bytes = ivf_parser.ParseNextFrame(&ivf_frame_header)) {
     Vp8FrameHeader fhdr;
 
-    ASSERT_TRUE(
-        vp8_parser.ParseFrame(payload, ivf_frame_header.frame_size, &fhdr));
+    ASSERT_TRUE(vp8_parser.ParseFrame(bytes, &fhdr));
 
     ++num_parsed_frames;
   }

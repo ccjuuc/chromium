@@ -6,11 +6,11 @@
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_INTEGRATORS_AUTOFILL_AI_AUTOFILL_AI_IMPORT_UTILS_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/containers/span.h"
-#include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
 #include "components/autofill/core/common/dense_set.h"
@@ -21,6 +21,9 @@ class AutofillClient;
 class AutofillField;
 class EntityInstance;
 
+// Returns whether `attributes` satisfy at least one import constraint of
+// `entity_type`. If `entity_type` specifies no import constraints, returns
+// true.
 bool AttributesMeetImportConstraints(EntityType entity_type,
                                      DenseSet<AttributeType> attributes);
 
@@ -38,7 +41,7 @@ std::vector<EntityInstance> GetPossibleEntitiesFromSubmittedForm(
 // For example, if the attribute value is "2025-01-31" and the currently set ICU
 // locale is "en_US", the returned string is "Jan 31, 2025".
 std::optional<std::u16string> MaybeGetLocalizedDate(
-    const autofill::AttributeInstance& attribute);
+    const AttributeInstance& attribute);
 
 }  // namespace autofill
 

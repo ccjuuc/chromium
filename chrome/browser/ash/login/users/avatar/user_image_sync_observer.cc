@@ -14,7 +14,6 @@
 #include "chrome/browser/ash/login/users/default_user_image/default_user_images.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/prefs/pref_service_syncable_util.h"
-#include "chrome/common/pref_names.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/sync_preferences/pref_service_syncable.h"
@@ -146,7 +145,7 @@ void UserImageSyncObserver::UpdateSyncedImageFromLocal() {
     return;
   }
   ScopedDictPrefUpdate update(prefs_, kUserImageInfo);
-  base::Value::Dict& dict = update.Get();
+  base::DictValue& dict = update.Get();
   dict.Set(kImageIndex, local_index);
   VLOG(1) << "Saved avatar index " << local_index << " to sync.";
 }
@@ -170,7 +169,7 @@ void UserImageSyncObserver::UpdateLocalImageFromSynced() {
 
 bool UserImageSyncObserver::GetSyncedImageIndex(int* index) {
   *index = user_manager::UserImage::Type::kInvalid;
-  const base::Value::Dict& dict = prefs_->GetDict(kUserImageInfo);
+  const base::DictValue& dict = prefs_->GetDict(kUserImageInfo);
   std::optional<int> maybe_index = dict.FindInt(kImageIndex);
   if (!maybe_index.has_value()) {
     *index = user_manager::UserImage::Type::kInvalid;

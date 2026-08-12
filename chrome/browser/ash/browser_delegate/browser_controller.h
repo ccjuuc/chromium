@@ -12,6 +12,7 @@
 #include "base/observer_list_types.h"
 #include "chrome/browser/ash/browser_delegate/browser_type.h"
 #include "components/webapps/common/web_app_id.h"
+#include "ui/views/controls/webview/simple_web_view.h"
 #include "url/gurl.h"
 
 class AccountId;
@@ -24,6 +25,10 @@ class Window;
 namespace content {
 class WebContents;
 }  // namespace content
+
+namespace views {
+class SimpleWebViewDialogDelegate;
+}
 
 namespace ash {
 
@@ -150,13 +155,36 @@ class BrowserController {
                                         BrowserType browser_type,
                                         const CreateParams& params) = 0;
 
-  // Creates a "custom tab" browser with the given contents.
-  // TODO(crbug.com/369689187): This is a special kind of popup only used by
-  // ARC. It's based on the Browser::TYPE_CUSTOM_TAB type that only exists on
-  // ChromeOS. Consider getting rid of this special type.
-  virtual BrowserDelegate* CreateCustomTab(
-      const AccountId& account_id,
-      std::unique_ptr<content::WebContents> contents) = 0;
+  // Closes all browsers. It may fail.
+  // Note: conceptually this should be equivalent to
+  //
+  // ForEachBrowser(..., [](BrowserDelegate& browser) {
+  //   browser.Close();
+  // });
+  //
+  // but currently it has different implementation with some additional work
+  // for historical reason.
+  // Nice to revisit here to migrate in the future.
+  virtual void MayCloseAllBrowsers() = 0;
+
+  // Closes all browsers and if successful, quits BrowserController
+  // (i.e., the Chrome as a whole encapsulated by BrowserController).
+  // Note: In ChromeOS, it also means to shut down the chromeos-chrome
+  // including OS system UI.
+  // Note: this is currently used only by Kiosk app updating. We should see
+  // if this can be consolidated with CloseAllBrowsers() declared above.
+  virtual void MayCloseAllBrowsersAndQuit() = 0;
+
+  // Returns whether the BrowserController is trying to quit.
+  virtual bool IsTryingToQuit() = 0;
+
+  // Returns whether BrowserController shutdown is started.
+  // Conceptually this is closer to IsTryingToQuit, but run in different
+  // context. Please find chrome/browser/lifetime for details of the
+  // implementation difference.
+  // Note: currently these carries the complexity from Chrome implementation
+  // just to be transparent, but later it'd be great to consolidate closer APIs.
+  virtual bool HasShutdownStarted() = 0;
 
   // Facilitates observation of browser events.
   virtual void AddObserver(Observer* observer) = 0;
@@ -165,6 +193,11 @@ class BrowserController {
   // Encapsulates the creation of AutofillClient instances.
   virtual void CreateAutofillClientForWebContents(
       content::WebContents* web_contents) = 0;
+
+  // Creates a SimpleWebView.
+  virtual std::unique_ptr<views::SimpleWebView>
+  CreateSimpleWebViewForSigninScreen(
+      views::SimpleWebViewDialogDelegate* delegate) = 0;
 
  protected:
   BrowserController();

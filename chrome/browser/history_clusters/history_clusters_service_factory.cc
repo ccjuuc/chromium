@@ -14,7 +14,6 @@
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "components/history_clusters/core/history_clusters_service.h"
 #include "components/keyed_service/core/service_access_type.h"
-#include "components/optimization_guide/core/hints/optimization_guide_decider.h"
 #include "components/site_engagement/content/site_engagement_service.h"
 #include "content/public/browser/storage_partition.h"
 
@@ -61,7 +60,7 @@ HistoryClustersServiceFactory::HistoryClustersServiceFactory()
     : ProfileKeyedServiceFactory(
           "HistoryClustersService",
           ProfileSelections::Builder()
-              .WithRegular(ProfileSelection::kOwnInstance)
+              .WithRegular(ProfileSelection::kOriginalOnly)
               // TODO(crbug.com/40257657): Check if this service is needed in
               // Guest mode.
               .WithGuest(ProfileSelection::kOwnInstance)

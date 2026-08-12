@@ -5,6 +5,7 @@
 #include "components/omnibox/browser/test_location_bar_model.h"
 
 #include "base/strings/utf_string_conversions.h"
+#include "ui/base/ui_base_features.h"
 
 #if defined(TOOLKIT_VIEWS)
 #include "components/omnibox/browser/vector_icons.h"  // nogncheck
@@ -13,7 +14,8 @@
 TestLocationBarModel::TestLocationBarModel()
     : security_level_(security_state::NONE),
 #if defined(TOOLKIT_VIEWS)
-      icon_(&omnibox::kHttpIcon),
+      icon_(&(features::IsRoundedIconsEnabled() ? omnibox::kInfoIcon
+                                                : omnibox::kHttpOldIcon)),
 #endif
       should_display_url_(true) {
 }
@@ -38,6 +40,14 @@ GURL TestLocationBarModel::GetURL() const {
   return url_;
 }
 
+bool TestLocationBarModel::IsContextualTasksPage() const {
+  return is_contextual_tasks_page_;
+}
+
+GURL TestLocationBarModel::GetContextualTasksInnerFrameURL() const {
+  return GURL();
+}
+
 security_state::SecurityLevel TestLocationBarModel::GetSecurityLevel() const {
   return security_level_;
 }
@@ -48,12 +58,12 @@ net::CertStatus TestLocationBarModel::GetCertStatus() const {
 
 metrics::OmniboxEventProto::PageClassification
 TestLocationBarModel::GetPageClassification(bool is_prefetch) const {
-  return metrics::OmniboxEventProto::OTHER;
+  return page_classification_;
 }
 
 metrics::OmniboxEventProto::PageClassification
 TestLocationBarModel::GetOmniboxComposeboxPageClassification() const {
-  return metrics::OmniboxEventProto::OTHER;
+  return page_classification_;
 }
 
 const gfx::VectorIcon& TestLocationBarModel::GetVectorIcon() const {
@@ -65,7 +75,7 @@ std::u16string TestLocationBarModel::GetSecureDisplayText() const {
 }
 
 std::u16string TestLocationBarModel::GetSecureAccessibilityText() const {
-  return std::u16string();
+  return secure_accessibility_text_;
 }
 
 bool TestLocationBarModel::ShouldDisplayURL() const {

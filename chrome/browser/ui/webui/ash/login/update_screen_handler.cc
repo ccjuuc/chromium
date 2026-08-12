@@ -8,9 +8,9 @@
 #include <string_view>
 
 #include "ash/constants/ash_features.h"
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "base/values.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
-#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/login/localized_values_builder.h"
 #include "ui/chromeos/devicetype_utils.h"
@@ -41,7 +41,7 @@ UpdateScreenHandler::UpdateScreenHandler() : BaseScreenHandler(kScreenId) {}
 UpdateScreenHandler::~UpdateScreenHandler() = default;
 
 void UpdateScreenHandler::Show(bool is_opt_out_enabled) {
-  base::Value::Dict data;
+  base::DictValue data;
   data.Set("isOptOutEnabled", is_opt_out_enabled);
   ShowInWebUI(std::move(data));
 }

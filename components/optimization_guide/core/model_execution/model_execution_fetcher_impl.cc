@@ -10,10 +10,8 @@
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/strings/strcat.h"
 #include "components/optimization_guide/core/access_token_helper.h"
 #include "components/optimization_guide/core/model_execution/feature_keys.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_logger.h"
 #include "components/optimization_guide/core/optimization_guide_switches.h"
@@ -33,7 +31,10 @@ namespace optimization_guide {
 
 namespace {
 
-constexpr char kGoogleAPITypeName[] = "type.googleapis.com/";
+// The name of the model execution debug logs header.
+constexpr char kOptimizationGuideModelExecutionDebugLogsHeaderKey[] =
+    "X-Model-Execution-Debug-Logs";
+
 
 net::NetworkTrafficAnnotationTag GetNetworkTrafficAnnotation(
     ModelBasedCapabilityKey feature) {
@@ -68,40 +69,6 @@ net::NetworkTrafficAnnotationTag GetNetworkTrafficAnnotation(
           chrome_policy {
             CreateThemesSettings {
               CreateThemesSettings: 2
-            }
-          }
-        })");
-    case ModelBasedCapabilityKey::kTabOrganization:
-      return net::DefineNetworkTrafficAnnotation(
-          "tab_organizer_model_execution", R"(
-        semantics {
-          sender: "Tab organizer"
-          description:
-            "Automatically creates tab groups based on the open tabs."
-          trigger:
-            "User right-clicks on a tab and clicks Organize Similar Tabs."
-          destination: GOOGLE_OWNED_SERVICE
-          data:
-            "URL and title of the tabs to organize."
-          internal {
-            contacts {
-              email: "chrome-intelligence-core@google.com"
-            }
-          }
-          user_data {
-            type: ACCESS_TOKEN
-            type: SENSITIVE_URL
-            type: WEB_CONTENT
-          }
-          last_reviewed: "2024-01-11"
-        }
-        policy {
-          cookies_allowed: NO
-          setting:
-            "Users can control this by signing-in to Chrome, and from Settings."
-          chrome_policy {
-            TabOrganizerSettings {
-              TabOrganizerSettings: 2
             }
           }
         })");
@@ -352,15 +319,265 @@ net::NetworkTrafficAnnotationTag GetNetworkTrafficAnnotation(
         }
       }
     })");
+    case ModelBasedCapabilityKey::kSkills:
+      // TODO(xinyuqian): Update the email address to the team email once the
+      // feature is launched or ready for launch.
+      return net::DefineNetworkTrafficAnnotation("skills_model_execution", R"(
+      semantics {
+        sender: "Skills in Chrome"
+        description:
+          "Skills are page-aware, reusable AI workflows built on top of Gemini "
+          "in Chrome. They enable users to save, create, reuse, and discover "
+          "high-value AI workflows directly in the browser."
+        trigger:
+          "The user interacts with a feature that refines a skill. "
+        destination: GOOGLE_OWNED_SERVICE
+        data:
+          "The current page content or user-provided text relevant to skills."
+        internal {
+          contacts {
+            email: "xinyuqian@google.com"
+          }
+        }
+        user_data {
+          type: SENSITIVE_URL
+          type: WEB_CONTENT
+          type: USER_CONTENT
+        }
+        last_reviewed: "2026-01-29"
+      }
+      policy {
+        cookies_allowed: YES
+        cookies_store: "user"
+        setting:
+          "This feature can be disabled by turning off the relevant AI "
+          "feature in Chrome settings."
+        chrome_policy {
+          GeminiSettings {
+            GeminiSettings: 1
+          }
+        }
+      }
+    )");
+    case ModelBasedCapabilityKey::kGeminiAntiscamProtection:
+      return net::DefineNetworkTrafficAnnotation(
+          "gemini_antiscam_protection_model_execution",
+          R"(
+    semantics {
+      sender: "Gemini Antiscam Protection"
+      description:
+        "Uses server-side AI model to learn more about the scamminess of a "
+        "page."
+      trigger:
+        "User navigates to a suspicious web page and force request client side "
+        "detection ping is triggered."
+      destination: GOOGLE_OWNED_SERVICE
+      data:
+        "The URL and visible text content of the suspicious page the user is "
+        "currently visiting."
+      internal {
+        contacts {
+          email: "skrakowi@chromium.org"
+        }
+        contacts {
+          email: "chrome-counter-abuse-alerts@google.com"
+        }
+      }
+      user_data {
+        type: SENSITIVE_URL
+        type: WEB_CONTENT
+        type: USER_CONTENT
+      }
+      last_reviewed: "2026-01-28"
+    }
+    policy {
+      cookies_allowed: NO
+      setting:
+        "Users can enable this feature via the enhanced protection setting "
+        "in Chrome Settings > Privacy and security > Security > Safe Browsing."
+        "This feature is disabled by default."
+      chrome_policy {
+        SafeBrowsingProtectionLevel {
+          SafeBrowsingProtectionLevel: 1
+        }
+      }
+    })");
+    case ModelBasedCapabilityKey::kContentAnnotation:
+      // TODO(crbug.com/486232932): Add network traffic annotation.
+      return MISSING_TRAFFIC_ANNOTATION;
+    case ModelBasedCapabilityKey::kFinds:
+      return net::DefineNetworkTrafficAnnotation("finds_model_execution", R"(
+        semantics {
+          sender: "Finds"
+          description:
+            "Suggests URLs based on user browsing history and interests."
+          trigger:
+            "The only way for end-users to access finds is by opting into the "
+            "feature when prompted."
+          destination: GOOGLE_OWNED_SERVICE
+          data:
+            "The user's browsing history over the past week, including URLs, "
+            "page titles, and visit timestamps."
+          internal {
+            contacts {
+              email: "wylieb@google.com"
+            }
+            contacts {
+              email: "chrome-finds-team@google.com"
+            }
+          }
+          user_data {
+            type: ACCESS_TOKEN
+            type: SENSITIVE_URL
+            type: WEB_CONTENT
+            type: USER_CONTENT
+          }
+          last_reviewed: "2026-03-19"
+        }
+        policy {
+          cookies_allowed: NO
+          setting:
+            "This feature is only available to users who explicitly opt-in. It"
+            " can be disabled through android notification settings, and also "
+            "controlled by the GenAI policy and the Finds policy."
+          chrome_policy {
+            FindsSettings {
+              FindsSettings: 2
+            }
+          }
+        })");
+    case ModelBasedCapabilityKey::kAnnotationReducerOnePResolver:
+      // TODO(crbug.com/487416734): Add network traffic annotation.
+      return MISSING_TRAFFIC_ANNOTATION;
+    case ModelBasedCapabilityKey::kAnnotationReducerQueryClassifier:
+      // TODO(crbug.com/492168146): Add network traffic annotation.
+      return MISSING_TRAFFIC_ANNOTATION;
+    case ModelBasedCapabilityKey::kContextualCueing:
+      return net::DefineNetworkTrafficAnnotation("suggestions_powered_by_ai",
+                                                 R"(
+        semantics {
+          sender: "Suggestions, powered by AI"
+          description:
+            "Generates contextual suggestions to the user at relevant moments."
+          trigger:
+            "User navigates to a page that is a part of one of the target "
+            "CUJs (ex: shopping and education)."
+          destination: GOOGLE_OWNED_SERVICE
+          data:
+            "Title and URL of the main frame page the user has navigated too."
+          internal {
+            contacts {
+              email: "sophiechang@google.com"
+            }
+          }
+          user_data {
+            type: SENSITIVE_URL
+            type: WEB_CONTENT
+          }
+          last_reviewed: "2026-04-28"
+        }
+        policy {
+          cookies_allowed: NO
+          setting:
+            "Administrators can control this feature via the "
+            "ChromeSuggestionsSettings policy. Users must also have history "
+            "sync enabled to use this feature."
+          chrome_policy {
+            ChromeSuggestionsSettings {
+              ChromeSuggestionsSettings: 1
+            }
+          }
+        })");
+    case ModelBasedCapabilityKey::kUpdaterChat:
+      // TODO(crbug.com/512194219): Add network traffic annotation.
+      return MISSING_TRAFFIC_ANNOTATION;
+    case ModelBasedCapabilityKey::kCardRecommendations:
+      // TODO(crbug.com/534406694): Add network traffic annotation.
+      return MISSING_TRAFFIC_ANNOTATION;
+    case ModelBasedCapabilityKey::kContextHub:
+      // TODO(crbug.com/532549697): Add network traffic annotation.
+      return MISSING_TRAFFIC_ANNOTATION;
+    case ModelBasedCapabilityKey::kReadAloudGenerateText:
+      return net::DefineNetworkTrafficAnnotation("read_aloud_generate_text", R"(
+        semantics {
+          sender: "Read Aloud AI Playback Text Generation"
+          description:
+            "Generates conversational, distilled text from a webpage for "
+            "the Read Aloud conversational audio playback feature."
+          trigger:
+            "User triggers the Read Aloud conversational playback mode."
+          destination: GOOGLE_OWNED_SERVICE
+          data:
+            "The webpage title, main distilled content segments, and "
+            "sanitized page URL."
+          internal {
+            contacts {
+              email: "ericchao@google.com"
+            }
+            contacts {
+              email: "andresmolina@google.com"
+            }
+          }
+          user_data {
+            type: SENSITIVE_URL
+            type: WEB_CONTENT
+          }
+          last_reviewed: "2026-07-10"
+        }
+        policy {
+          cookies_allowed: NO
+          setting:
+            "This feature cannot be disabled directly by a settings toggle. "
+            "It is enabled for users who have 'Make searches and browsing "
+            "better' enabled in Chrome settings."
+          chrome_policy {
+            UrlKeyedAnonymizedDataCollectionEnabled {
+              policy_options {mode: MANDATORY}
+              UrlKeyedAnonymizedDataCollectionEnabled: false
+            }
+          }
+        })");
+    case ModelBasedCapabilityKey::kReadAloudSynthesize:
+      return net::DefineNetworkTrafficAnnotation("read_aloud_synthesize", R"(
+        semantics {
+          sender: "Read Aloud AI Playback Speech Synthesis"
+          description:
+            "Sends text chunks to Google servers to synthesize and stream back "
+            "audio speech bytes for Read Aloud playback."
+          trigger:
+            "User plays or seeks in Read Aloud playback mode, or when "
+            "pre-fetching the next audio segment."
+          destination: GOOGLE_OWNED_SERVICE
+          data:
+            "The text chunk to be synthesized, target voice identifier, and "
+            "BCP-47 language code."
+          internal {
+            contacts {
+              email: "ericchao@google.com"
+            }
+            contacts {
+              email: "andresmolina@google.com"
+            }
+          }
+          user_data {
+            type: WEB_CONTENT
+          }
+          last_reviewed: "2026-07-10"
+        }
+        policy {
+          cookies_allowed: NO
+          setting:
+            "This feature cannot be disabled directly by a settings toggle. "
+            "It is enabled for users who have 'Make searches and browsing "
+            "better' enabled in Chrome settings."
+          chrome_policy {
+            UrlKeyedAnonymizedDataCollectionEnabled {
+              policy_options {mode: MANDATORY}
+              UrlKeyedAnonymizedDataCollectionEnabled: false
+            }
+          }
+        })");
   }
-}
-
-void RecordRequestStatusHistogram(ModelBasedCapabilityKey feature,
-                                  FetcherRequestStatus status) {
-  base::UmaHistogramEnumeration(
-      base::StrCat({"OptimizationGuide.ModelExecutionFetcher.RequestStatus.",
-                    GetStringNameForModelExecutionFeature(feature)}),
-      status);
 }
 
 // Appends headers as specified by the command line arguments.
@@ -373,27 +590,41 @@ void AppendHeadersIfNeeded(network::ResourceRequest& request) {
       kOptimizationGuideModelExecutionDebugLogsHeaderKey, "");
 }
 
+
 // Returns whether model executions for the `feature` require an access token.
 bool IsAccessTokenRequiredForFeature(ModelBasedCapabilityKey feature) {
   switch (feature) {
     case ModelBasedCapabilityKey::kCompose:
-    case ModelBasedCapabilityKey::kTabOrganization:
     case ModelBasedCapabilityKey::kWallpaperSearch:
     case ModelBasedCapabilityKey::kTest:
     case ModelBasedCapabilityKey::kHistorySearch:
     case ModelBasedCapabilityKey::kBlingPrototyping:
-    case ModelBasedCapabilityKey::kPasswordChangeSubmission:
     case ModelBasedCapabilityKey::kEnhancedCalendar:
     case ModelBasedCapabilityKey::kZeroStateSuggestions:
     case ModelBasedCapabilityKey::kWalletablePassExtraction:
-    case ModelBasedCapabilityKey::kAmountExtraction:
     case ModelBasedCapabilityKey::kIosSmartTabGrouping:
+    case ModelBasedCapabilityKey::kSkills:
+    case ModelBasedCapabilityKey::kContentAnnotation:
+    case ModelBasedCapabilityKey::kFinds:
+    case ModelBasedCapabilityKey::kAnnotationReducerOnePResolver:
+    case ModelBasedCapabilityKey::kAnnotationReducerQueryClassifier:
+    case ModelBasedCapabilityKey::kContextualCueing:
+    case ModelBasedCapabilityKey::kUpdaterChat:
+    case ModelBasedCapabilityKey::kContextHub:
       return true;
     case ModelBasedCapabilityKey::kFormsClassifications:
       return !base::FeatureList::IsEnabled(
           features::kOptimizationGuideBypassFormsClassificationAuth);
     case ModelBasedCapabilityKey::kScamDetection:
+    case ModelBasedCapabilityKey::kGeminiAntiscamProtection:
+    case ModelBasedCapabilityKey::kAmountExtraction:
+    case ModelBasedCapabilityKey::kCardRecommendations:
+    case ModelBasedCapabilityKey::kReadAloudGenerateText:
+    case ModelBasedCapabilityKey::kReadAloudSynthesize:
       return false;
+    case ModelBasedCapabilityKey::kPasswordChangeSubmission:
+      return !base::FeatureList::IsEnabled(
+          features::kOptimizationGuideBypassPasswordChangeAuth);
   }
 }
 
@@ -446,12 +677,8 @@ void ModelExecutionFetcherImpl::ExecuteModel(
   model_execution_feature_ = feature;
   model_execution_callback_ = std::move(callback);
 
-  proto::ExecuteRequest execute_request;
-  execute_request.set_feature(ToModelExecutionFeatureProto(feature));
-  proto::Any* any_metadata = execute_request.mutable_request_metadata();
-  any_metadata->set_type_url(
-      base::StrCat({kGoogleAPITypeName, request_metadata.GetTypeName()}));
-  request_metadata.SerializeToString(any_metadata->mutable_value());
+  proto::ExecuteRequest execute_request =
+      ToExecuteRequest(feature, request_metadata);
   std::string serialized_request;
   execute_request.SerializeToString(&serialized_request);
 
@@ -479,14 +706,19 @@ void ModelExecutionFetcherImpl::OnAccessTokenReceived(
   }
 
   auto resource_request = std::make_unique<network::ResourceRequest>();
-  if (!access_token.empty()) {
+  // Use API key if no access token is attached.
+  resource_request->url = optimization_guide_service_url_;
+  if (access_token.empty()) {
+    resource_request->url = net::AppendOrReplaceQueryParameter(
+        resource_request->url, "key",
+        features::GetOptimizationGuideServiceAPIKey());
+  } else {
     PopulateAuthorizationRequestHeader(resource_request.get(), access_token);
   }
   if (timeout && timeout->is_positive()) {
     PopulateServerTimeoutRequestHeader(resource_request.get(), *timeout);
   }
 
-  resource_request->url = optimization_guide_service_url_;
   resource_request->method = "POST";
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
   AppendHeadersIfNeeded(*resource_request);
@@ -550,11 +782,7 @@ void ModelExecutionFetcherImpl::OnURLLoadComplete(
                 ModelExecutionError::kGenericFailure)));
     return;
   }
-  base::UmaHistogramMediumTimes(
-      base::StrCat(
-          {"OptimizationGuide.ModelExecutionFetcher.FetchLatency.",
-           GetStringNameForModelExecutionFeature(*model_execution_feature_)}),
-      base::TimeTicks::Now() - fetch_start_time_);
+
   RecordRequestStatusHistogram(*model_execution_feature_,
                                FetcherRequestStatus::kSuccess);
   // This should be the last call, since the callback could be deleting `this`.

@@ -12,6 +12,7 @@
 #import "components/omnibox/browser/aim_eligibility_service.h"
 #import "components/prefs/pref_service.h"
 #import "components/regional_capabilities/regional_capabilities_service.h"
+#import "components/subscription_eligibility/subscription_eligibility_service.h"
 #import "ios/chrome/browser/aim/model/ios_chrome_aim_eligibility_service_factory.h"
 #import "ios/chrome/browser/browser_view/model/browser_view_visibility_notifier_browser_agent.h"
 #import "ios/chrome/browser/content_suggestions/coordinator/content_suggestions_coordinator.h"
@@ -23,12 +24,13 @@
 #import "ios/chrome/browser/home_customization/model/home_background_customization_service_factory.h"
 #import "ios/chrome/browser/home_customization/model/user_uploaded_image_manager_factory.h"
 #import "ios/chrome/browser/image_fetcher/model/image_fetcher_service_factory.h"
+#import "ios/chrome/browser/ntp/model/ntp_background_image_cache_service_factory.h"
 #import "ios/chrome/browser/ntp/shared/metrics/feed_metrics_recorder.h"
 #import "ios/chrome/browser/ntp/shared/metrics/new_tab_page_metrics_constants.h"
 #import "ios/chrome/browser/ntp/ui_bundled/feed_header_view_controller.h"
 #import "ios/chrome/browser/ntp/ui_bundled/feed_wrapper_view_controller.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_constants.h"
-#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_header_view_controller.h"
+#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_header_view.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_mediator.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_view_controller.h"
 #import "ios/chrome/browser/regional_capabilities/model/regional_capabilities_service_factory.h"
@@ -41,6 +43,7 @@
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service_factory.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
+#import "ios/chrome/browser/subscription_eligibility/model/subscription_eligibility_service_factory.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_browser_agent.h"
 
@@ -61,8 +64,7 @@
   return discoverFeedService->GetFeedMetricsRecorder();
 }
 
-- (NewTabPageHeaderViewController*)headerViewControllerForProfile:
-    (ProfileIOS*)profile {
+- (NewTabPageHeaderView*)headerViewForProfile:(ProfileIOS*)profile {
   feature_engagement::Tracker* tracker =
       feature_engagement::TrackerFactory::GetForProfile(profile);
   CHECK(tracker);
@@ -78,7 +80,7 @@
 
   // The actual notification of dismissal (tracker->Dismissed(...)) *must*
   // happen after the badge is displayed, from within the UI layer.
-  return [[NewTabPageHeaderViewController alloc]
+  return [[NewTabPageHeaderView alloc]
       initWithUseNewBadgeForLensButton:showLensBadge
        useNewBadgeForCustomizationMenu:showCustomizationBadge];
 }
@@ -106,6 +108,8 @@
           ios::RegionalCapabilitiesServiceFactory::GetForProfile(profile);
   HomeBackgroundCustomizationService* backgroundCustomizationService =
       HomeBackgroundCustomizationServiceFactory::GetForProfile(profile);
+  NTPBackgroundImageCacheService* backgroundImageCacheService =
+      NTPBackgroundImageCacheServiceFactory::GetForProfile(profile);
   image_fetcher::ImageFetcherService* imageFetcherService =
       ImageFetcherServiceFactory::GetForProfile(profile);
   UserUploadedImageManager* userUploadedImageManager =
@@ -128,9 +132,12 @@
                 identityDiscImageUpdater:imageUpdater
                      discoverFeedService:discoverFeedService
                              prefService:prefService
+          subscriptionEligibilityService:SubscriptionEligibilityServiceFactory::
+                                             GetForProfile(profile)
                              syncService:syncService
              regionalCapabilitiesService:regionalCapabilitiesService
           backgroundCustomizationService:backgroundCustomizationService
+             backgroundImageCacheService:backgroundImageCacheService
                      imageFetcherService:imageFetcherService
                 userUploadedImageManager:userUploadedImageManager
            browserViewVisibilityNotifier:

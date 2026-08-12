@@ -6,6 +6,7 @@
 
 #include <objbase.h>
 
+#include "base/compiler_specific.h"
 #include "base/trace_event/trace_event.h"
 #include "third_party/angle/include/EGL/egl.h"
 #include "third_party/angle/include/EGL/eglext.h"
@@ -42,7 +43,7 @@ void* QueryDeviceObjectFromANGLE(EGLDisplay egl_display,
   if (required_extension != nullptr) {
     const char* extensions = static_cast<const char*>(eglQueryDeviceStringEXT(
         reinterpret_cast<EGLDeviceEXT>(egl_device), EGL_EXTENSIONS));
-    if (strstr(extensions, required_extension) == nullptr) {
+    if (UNSAFE_TODO(strstr(extensions, required_extension)) == nullptr) {
       DVLOG(1) << "Unable to retrieve ANGLE device due to missing extension: "
                << required_extension;
       return nullptr;
@@ -70,18 +71,6 @@ Microsoft::WRL::ComPtr<ID3D11Device> QueryD3D11DeviceObjectFromANGLE() {
           display->GetDisplay(), EGL_D3D11_DEVICE_ANGLE,
           "EGL_ANGLE_device_d3d11"));
   return d3d11_device;
-}
-
-Microsoft::WRL::ComPtr<IDirect3DDevice9> QueryD3D9DeviceObjectFromANGLE() {
-  auto* display = GLSurfaceEGL::GetGLDisplayEGL();
-  if (!display) {
-    return nullptr;
-  }
-  Microsoft::WRL::ComPtr<IDirect3DDevice9> d3d9_device =
-      reinterpret_cast<IDirect3DDevice9*>(QueryDeviceObjectFromANGLE(
-          display->GetDisplay(), EGL_D3D9_DEVICE_ANGLE,
-          "EGL_ANGLE_device_d3d9"));
-  return d3d9_device;
 }
 
 }  // namespace gl

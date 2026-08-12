@@ -60,7 +60,7 @@ void AddSecurityDomainMembership(
       trusted_vault_pb::RotationProof* rotation_proof =
           membership->add_rotation_proofs();
       rotation_proof->set_new_epoch(trusted_vault_keys_versions[i]);
-      AssignBytesToProtoString(ComputeRotationProofForTesting(
+      AssignBytesToProtoString(ComputeRotationProof(
                                    /*trusted_vault_key=*/trusted_vault_keys[i],
                                    /*prev_trusted_vault_key=*/signing_keys[i]),
                                rotation_proof->mutable_rotation_proof());
@@ -440,6 +440,64 @@ TEST_F(DownloadKeysResponseHandlerTest, ShouldHandleMultipleSecurityDomains) {
               ElementsAre(kTrustedVaultKey1));
   EXPECT_THAT(processed_response.last_key_version,
               Eq(kKnownTrustedVaultKeyVersion + 1));
+}
+
+TEST_F(DownloadKeysResponseHandlerTest,
+       ShouldHandleSameVersionWithDifferentKey) {
+  // Server sends a different key at same version, with no rotation proof.
+  const std::vector<uint8_t> kDifferentKey = {9, 9, 9, 9};
+  const DownloadKeysResponseHandler::ProcessedResponse processed_response =
+      handler().ProcessResponse(
+          /*http_status=*/TrustedVaultRequest::HttpStatus::kSuccess,
+          /*response_body=*/
+          CreateGetSecurityDomainMemberResponseWithSyncMembership(
+              /*trusted_vault_keys=*/{kDifferentKey},
+              /*trusted_vault_keys_versions=*/{kKnownTrustedVaultKeyVersion},
+              /*signing_keys=*/{{}}));
+
+  EXPECT_THAT(processed_response.status,
+              Eq(TrustedVaultDownloadKeysStatus::kMembershipCorrupted));
+  EXPECT_THAT(processed_response.downloaded_keys, IsEmpty());
+}
+
+TEST_F(DownloadKeysResponseHandlerTest, ShouldHandleVersionRegression) {
+  // Server sends key with a lower version, no rotation proof.
+  const std::vector<uint8_t> kLowerVersionKey = {9, 9, 9, 9};
+  const DownloadKeysResponseHandler::ProcessedResponse processed_response =
+      handler().ProcessResponse(
+          /*http_status=*/TrustedVaultRequest::HttpStatus::kSuccess,
+          /*response_body=*/
+          CreateGetSecurityDomainMemberResponseWithSyncMembership(
+              /*trusted_vault_keys=*/{kLowerVersionKey},
+              /*trusted_vault_keys_versions=*/
+              {kKnownTrustedVaultKeyVersion - 1},
+              /*signing_keys=*/{{}}));
+
+  EXPECT_THAT(processed_response.status,
+              Eq(TrustedVaultDownloadKeysStatus::kMembershipCorrupted));
+  EXPECT_THAT(processed_response.downloaded_keys, IsEmpty());
+}
+
+TEST_F(DownloadKeysResponseHandlerTest, ShouldHandleRotationsToNewKeys) {
+  const DownloadKeysResponseHandler::ProcessedResponse processed_response =
+      handler().ProcessResponse(
+          /*http_status=*/TrustedVaultRequest::HttpStatus::kSuccess,
+          /*response_body=*/
+          CreateGetSecurityDomainMemberResponseWithSyncMembership(
+              /*trusted_vault_keys=*/
+              {kTrustedVaultKey1, kTrustedVaultKey2},
+              /*trusted_vault_keys_versions=*/
+              {kKnownTrustedVaultKeyVersion + 1,
+               kKnownTrustedVaultKeyVersion + 2},
+              /*signing_keys=*/
+              {kKnownTrustedVaultKey, kTrustedVaultKey1}));
+
+  EXPECT_THAT(processed_response.status,
+              Eq(TrustedVaultDownloadKeysStatus::kSuccess));
+  EXPECT_THAT(processed_response.downloaded_keys,
+              ElementsAre(kTrustedVaultKey1, kTrustedVaultKey2));
+  EXPECT_THAT(processed_response.last_key_version,
+              Eq(kKnownTrustedVaultKeyVersion + 2));
 }
 
 }  // namespace

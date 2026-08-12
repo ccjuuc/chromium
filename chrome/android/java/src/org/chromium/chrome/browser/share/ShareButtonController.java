@@ -5,12 +5,11 @@
 package org.chromium.chrome.browser.share;
 
 import android.content.Context;
-import android.content.res.Resources;
 import android.graphics.drawable.Drawable;
 import android.view.View;
 
 import org.chromium.base.metrics.RecordUserAction;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
@@ -19,6 +18,7 @@ import org.chromium.chrome.browser.share.ShareDelegate.ShareOrigin;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonVariant;
 import org.chromium.chrome.browser.toolbar.optional_button.BaseButtonDataProvider;
+import org.chromium.chrome.browser.toolbar.optional_button.ButtonData.ButtonSpec;
 import org.chromium.chrome.browser.user_education.IphCommandBuilder;
 import org.chromium.components.browser_ui.widget.highlight.ViewHighlighter.HighlightParams;
 import org.chromium.components.browser_ui.widget.highlight.ViewHighlighter.HighlightShape;
@@ -36,7 +36,7 @@ import java.util.function.Supplier;
  */
 @NullMarked
 public class ShareButtonController extends BaseButtonDataProvider {
-    private final ObservableSupplier<ShareDelegate> mShareDelegateSupplier;
+    private final MonotonicObservableSupplier<ShareDelegate> mShareDelegateSupplier;
     private final Supplier<@Nullable Tracker> mTrackerSupplier;
     private final Runnable mOnShareRunnable;
 
@@ -57,20 +57,20 @@ public class ShareButtonController extends BaseButtonDataProvider {
             Context context,
             Drawable buttonDrawable,
             ActivityTabProvider tabProvider,
-            ObservableSupplier<ShareDelegate> shareDelegateSupplier,
+            MonotonicObservableSupplier<ShareDelegate> shareDelegateSupplier,
             Supplier<@Nullable Tracker> trackerSupplier,
             ModalDialogManager modalDialogManager,
             Runnable onShareRunnable) {
         super(
                 tabProvider,
                 modalDialogManager,
-                buttonDrawable,
-                context.getString(R.string.share),
-                /* actionChipLabelResId= */ Resources.ID_NULL,
-                /* supportsTinting= */ true,
-                /* iphCommandBuilder= */ null,
-                AdaptiveToolbarButtonVariant.SHARE,
-                /* tooltipTextResId= */ R.string.adaptive_toolbar_button_preference_share);
+                new ButtonSpec.Builder(
+                                buttonDrawable,
+                                context.getString(R.string.share),
+                                /* supportsTinting= */ true)
+                        .setButtonVariant(AdaptiveToolbarButtonVariant.SHARE)
+                        .setHoverTooltipTextId(R.string.adaptive_toolbar_button_preference_share)
+                        .build());
 
         mShareDelegateSupplier = shareDelegateSupplier;
         mTrackerSupplier = trackerSupplier;

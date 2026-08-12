@@ -133,6 +133,7 @@ class MODULES_EXPORT MediaStreamTrack
   virtual void RegisterMediaStream(MediaStream*) = 0;
   virtual void UnregisterMediaStream(MediaStream*) = 0;
   virtual void RegisterSink(SpeechRecognitionMediaStreamAudioSink* sink) = 0;
+  virtual void UnregisterSink(SpeechRecognitionMediaStreamAudioSink* sink) = 0;
 
   // EventTarget
   const AtomicString& InterfaceName() const override = 0;
@@ -145,7 +146,8 @@ class MODULES_EXPORT MediaStreamTrack
 
   virtual std::unique_ptr<AudioSourceProvider> CreateWebAudioSource(
       int context_sample_rate,
-      base::TimeDelta platform_buffer_duration) = 0;
+      base::TimeDelta platform_buffer_duration,
+      uint32_t render_quantum_frames) = 0;
 
   virtual ImageCapture* GetImageCapture() = 0;
   virtual std::optional<const MediaStreamDevice> device() const = 0;

@@ -4,8 +4,11 @@
 
 #include "ash/system/status_area_widget.h"
 
+#include <cstdint>
 #include <memory>
+#include <ranges>
 #include <string>
+#include <utility>
 
 #include "ash/annotator/annotation_tray.h"
 #include "ash/capture_mode/stop_recording_button_tray.h"
@@ -36,6 +39,7 @@
 #include "ash/system/session/logout_button_tray.h"
 #include "ash/system/status_area_animation_controller.h"
 #include "ash/system/status_area_widget_delegate.h"
+#include "ash/system/tray/imaged_tray_icon.h"
 #include "ash/system/tray/status_area_overflow_button_tray.h"
 #include "ash/system/tray/tray_background_view.h"
 #include "ash/system/tray/tray_constants.h"
@@ -47,20 +51,34 @@
 #include "ash/system/virtual_keyboard/virtual_keyboard_tray.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "ash/wm/window_pin_util.h"
-#include "ash/wm_mode/wm_mode_button_tray.h"
+#include "base/check.h"
 #include "base/command_line.h"
-#include "base/containers/adapters.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_forward.h"
 #include "base/i18n/time_formatting.h"
 #include "base/metrics/histogram_macros.h"
 #include "chromeos/ui/base/window_pin_type.h"
+#include "components/session_manager/session_manager_types.h"
+#include "ui/base/models/image_model.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/message_center_types.h"
+#include "ui/views/accessibility/view_accessibility.h"
 
 namespace ash {
+namespace {
+
+// Ensures that there is no id collision within the subtree of StatusAreaWidget.
+constexpr uint64_t kCustomIconsBaseId = 10000;
+
+uint64_t GetCustomIconId(const TrayIconConfiguration& configuration) {
+  return configuration.id + kCustomIconsBaseId;
+}
+
+}  // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
 // StatusAreaWidget
@@ -124,11 +142,6 @@ void StatusAreaWidget::Initialize() {
 
   if (features::IsPhoneHubEnabled()) {
     phone_hub_tray_ = AddTrayButton(std::make_unique<PhoneHubTray>(shelf_));
-  }
-
-  if (features::IsWmModeEnabled()) {
-    wm_mode_button_tray_ =
-        AddTrayButton(std::make_unique<WmModeButtonTray>(shelf_));
   }
 
   if (features::IsScalableShelfPodsEnabled()) {
@@ -272,6 +285,9 @@ void StatusAreaWidget::LogVisiblePodCountMetric() {
   int visible_pod_count = 0;
   for (ash::TrayBackgroundView* tray_button : tray_buttons_) {
     switch (tray_button->catalog_name()) {
+      case TrayBackgroundViewCatalogName::kWmMode_DEPRECATED:
+        NOTREACHED();
+
       case TrayBackgroundViewCatalogName::kUnifiedSystem:
       case TrayBackgroundViewCatalogName::kStatusAreaOverflowButton:
       case TrayBackgroundViewCatalogName::kDateTray:
@@ -300,10 +316,10 @@ void StatusAreaWidget::LogVisiblePodCountMetric() {
       case TrayBackgroundViewCatalogName::kPodsOverflow:
       case TrayBackgroundViewCatalogName::kLogoutButton:
       case TrayBackgroundViewCatalogName::kVirtualKeyboardStatusArea:
-      case TrayBackgroundViewCatalogName::kWmMode:
       case TrayBackgroundViewCatalogName::kVideoConferenceTray:
       case TrayBackgroundViewCatalogName::kFocusMode:
       case TrayBackgroundViewCatalogName::kMouseKeysStatusArea:
+      case TrayBackgroundViewCatalogName::kChromeCustom:
         if (!tray_button->GetVisible()) {
           continue;
         }
@@ -454,7 +470,7 @@ void StatusAreaWidget::CalculateButtonVisibilityForCollapsedState() {
   TrayBackgroundView* previous_tray = nullptr;
   bool show_overflow_button = false;
   int used_width = 0;
-  for (TrayBackgroundView* tray : base::Reversed(tray_buttons_)) {
+  for (TrayBackgroundView* tray : std::views::reverse(tray_buttons_)) {
     // Skip non-enabled tray buttons.
     if (!tray->visible_preferred()) {
       continue;
@@ -502,6 +518,27 @@ void StatusAreaWidget::EnsureTrayOrder() {
   }
   status_area_widget_delegate_->ReorderChildView(stop_recording_button_tray_,
                                                  annotation_tray_ ? 2 : 1);
+
+  auto reorder_before = [&](views::View* view_to_move, views::View* ref_view) {
+    size_t target_index =
+        status_area_widget_delegate_->GetIndexOf(ref_view).value();
+
+    // If the view is currently BEFORE the target, moving it to 'target_index'
+    // would actually place it AFTER the target (because the target shifts
+    // left). We must decrement the target index in this case.
+    if (status_area_widget_delegate_->GetIndexOf(view_to_move).value() <
+        target_index) {
+      target_index--;
+    }
+
+    status_area_widget_delegate_->ReorderChildView(view_to_move, target_index);
+  };
+
+  // The custom tray button should come before fixed pods.
+  for (auto id : custom_tray_buttons_ids_) {
+    reorder_before(status_area_widget_delegate_->GetViewByID(id),
+                   notification_center_tray_);
+  }
 }
 
 StatusAreaWidget::CollapseState StatusAreaWidget::CalculateCollapseState()
@@ -541,7 +578,7 @@ StatusAreaWidget::CollapseState StatusAreaWidget::CalculateCollapseState()
     const int available_width = GetCollapseAvailableWidth(force_collapsible);
 
     int used_width = 0;
-    for (TrayBackgroundView* tray : base::Reversed(tray_buttons_)) {
+    for (TrayBackgroundView* tray : std::views::reverse(tray_buttons_)) {
       // If we reach the final overflow tray button, then all the tray buttons
       // fit and there is no need for a collapse state.
       if (tray == overflow_button_tray_) {
@@ -644,6 +681,99 @@ void StatusAreaWidget::InitializeTrayButtonsAccessibleNavFocus() {
   for (TrayBackgroundView* tray_button : tray_buttons_) {
     tray_button->UpdateAccessibleNavFocus(shelf_);
   }
+}
+
+bool StatusAreaWidget::AddTrayIcon(const TrayIconConfiguration& configuration,
+                                   base::RepeatingClosure callback) {
+  const int64_t icon_id = GetCustomIconId(configuration);
+  CHECK(!custom_tray_buttons_ids_.contains(icon_id));
+
+  std::u16string tooltip_text = configuration.tool_tip.value_or(u"");
+  ui::ImageModel image_model =
+      configuration.image ? ui::ImageModel::FromImageSkia(*configuration.image)
+                          : ui::ImageModel();
+
+  auto icon = std::make_unique<ImagedTrayIcon>(
+      shelf_, std::move(image_model), /*tooltip=*/tooltip_text,
+      /*accessibility_name=*/tooltip_text,
+      TrayBackgroundViewCatalogName::kChromeCustom);
+  icon->SetID(icon_id);
+  icon->SetCallback(std::move(callback));
+  icon->SetVisiblePreferred(true);
+  icon->set_icon_visibility_callback(
+      base::BindRepeating([](session_manager::SessionState state) -> bool {
+        return !Shell::Get()->session_controller()->IsUserSessionBlocked();
+      }));
+
+  custom_tray_buttons_ids_.insert(icon_id);
+
+  auto* icon_ptr = AddTrayButton(std::move(icon));
+  icon_ptr->Initialize();
+
+  EnsureTrayOrder();
+  CalculateTargetBounds();
+  UpdateLayout(/*animate=*/true);
+  UpdateCollapseState();
+  return true;
+}
+
+bool StatusAreaWidget::UpdateTrayIcon(
+    const TrayIconConfiguration& configuration) {
+  const int64_t icon_id = GetCustomIconId(configuration);
+  if (!custom_tray_buttons_ids_.contains(icon_id)) {
+    return false;
+  }
+
+  auto* icon = static_cast<ImagedTrayIcon*>(
+      status_area_widget_delegate_->GetViewByID(icon_id));
+  CHECK(icon);
+
+  auto* image_view = icon->image_view();
+  CHECK(image_view);
+  if (configuration.tool_tip) {
+    const std::u16string& new_tooltip = *configuration.tool_tip;
+    if (new_tooltip != image_view->GetTooltipText()) {
+      icon->SetTooltip(new_tooltip);
+      icon->SetAccessibilityName(new_tooltip);
+    }
+  }
+
+  if (configuration.image) {
+    ui::ImageModel model = ui::ImageModel::FromImageSkia(*configuration.image);
+    if (model != image_view->GetImageModel()) {
+      image_view->SetImage(model);
+    }
+  }
+
+  return true;
+}
+
+bool StatusAreaWidget::RemoveTrayIcon(
+    const TrayIconConfiguration& configuration) {
+  const int64_t icon_id = GetCustomIconId(configuration);
+  if (!custom_tray_buttons_ids_.contains(icon_id)) {
+    return false;
+  }
+
+  auto* icon = static_cast<ImagedTrayIcon*>(
+      status_area_widget_delegate_->GetViewByID(icon_id));
+  CHECK(icon);
+
+  icon->SetVisiblePreferred(false);
+
+  auto position = std::find(tray_buttons_.begin(), tray_buttons_.end(), icon);
+  if (position != tray_buttons_.end()) {
+    tray_buttons_.erase(position);
+  }
+
+  custom_tray_buttons_ids_.erase(icon_id);
+  status_area_widget_delegate_->RemoveChildViewT(icon);
+
+  EnsureTrayOrder();
+  CalculateTargetBounds();
+  UpdateLayout(/*animate=*/true);
+  UpdateCollapseState();
+  return true;
 }
 
 void StatusAreaWidget::SetOpenShelfPodBubble(

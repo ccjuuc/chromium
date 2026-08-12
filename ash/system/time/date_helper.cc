@@ -9,9 +9,9 @@
 #include "ash/system/model/clock_model.h"
 #include "ash/system/model/system_tray_model.h"
 #include "ash/system/time/calendar_utils.h"
-#include "base/containers/contains.h"
 #include "base/i18n/unicodestring.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/singleton.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
 #include "third_party/icu/source/common/unicode/dtintrv.h"
@@ -43,28 +43,28 @@ icu::UnicodeString getHoursPattern(const icu::UnicodeString& unicode_pattern) {
   std::string pattern;
   unicode_pattern.toUTF8String(pattern);
 
-  if (base::Contains(pattern, "hh")) {
+  if (pattern.contains("hh")) {
     return icu::UnicodeString("hh");
   }
-  if (base::Contains(pattern, "h")) {
+  if (pattern.contains("h")) {
     return icu::UnicodeString("h");
   }
-  if (base::Contains(pattern, "HH")) {
+  if (pattern.contains("HH")) {
     return icu::UnicodeString("HH");
   }
-  if (base::Contains(pattern, "H")) {
+  if (pattern.contains("H")) {
     return icu::UnicodeString("H");
   }
-  if (base::Contains(pattern, "KK")) {
+  if (pattern.contains("KK")) {
     return icu::UnicodeString("KK");
   }
-  if (base::Contains(pattern, "K")) {
+  if (pattern.contains("K")) {
     return icu::UnicodeString("K");
   }
-  if (base::Contains(pattern, "kk")) {
+  if (pattern.contains("kk")) {
     return icu::UnicodeString("kk");
   }
-  if (base::Contains(pattern, "k")) {
+  if (pattern.contains("k")) {
     return icu::UnicodeString("k");
   }
 
@@ -133,7 +133,7 @@ icu::SimpleDateFormat DateHelper::CreateHoursFormatter(const char* pattern) {
   // pattern.
   std::string gen_string;
   generated_pattern.toUTF8String(gen_string);
-  if (base::Contains(gen_string, "├")) {
+  if (gen_string.contains("├")) {
     // Fallback to the suggested pattern.
     generated_pattern = icu::UnicodeString(pattern);
   }
@@ -208,16 +208,7 @@ base::Time DateHelper::GetLocalMidnight(base::Time date) {
 }
 
 DateHelper::DateHelper()
-    : day_of_month_formatter_(CreateSimpleDateFormatter("d")),
-      month_day_formatter_(CreateSimpleDateFormatter("MMMMd")),
-      month_day_year_formatter_(CreateSimpleDateFormatter("MMMMdyyyy")),
-      month_day_year_week_formatter_(
-          CreateSimpleDateFormatter("MMMMEEEEdyyyy")),
-      month_name_formatter_(CreateSimpleDateFormatter("MMMM")),
-      month_name_year_formatter_(CreateSimpleDateFormatter("MMMM yyyy")),
-      time_zone_formatter_(CreateSimpleDateFormatter("zzzz")),
-      twelve_hour_clock_formatter_(CreateSimpleDateFormatter("h:mm a")),
-      twenty_four_hour_clock_formatter_(CreateSimpleDateFormatter("HH:mm")),
+    : twenty_four_hour_clock_formatter_(CreateSimpleDateFormatter("HH:mm")),
       day_of_week_formatter_(CreateSimpleDateFormatter("ee")),
       week_title_formatter_(CreateSimpleDateFormatter("EEEEE")),
       // Note: "yyyy" represents a four-digit calendar year (e.g. "2023"),
@@ -254,14 +245,6 @@ DateHelper::~DateHelper() {
 }
 
 void DateHelper::ResetFormatters() {
-  day_of_month_formatter_ = CreateSimpleDateFormatter("d");
-  month_day_formatter_ = CreateSimpleDateFormatter("MMMMd");
-  month_day_year_formatter_ = CreateSimpleDateFormatter("MMMMdyyyy");
-  month_day_year_week_formatter_ = CreateSimpleDateFormatter("MMMMEEEEdyyyy");
-  month_name_formatter_ = CreateSimpleDateFormatter("MMMM");
-  month_name_year_formatter_ = CreateSimpleDateFormatter("MMMM yyyy");
-  time_zone_formatter_ = CreateSimpleDateFormatter("zzzz");
-  twelve_hour_clock_formatter_ = CreateSimpleDateFormatter("h:mm a");
   twenty_four_hour_clock_formatter_ = CreateSimpleDateFormatter("HH:mm");
   day_of_week_formatter_ = CreateSimpleDateFormatter("ee");
   week_title_formatter_ = CreateSimpleDateFormatter("EEEEE");

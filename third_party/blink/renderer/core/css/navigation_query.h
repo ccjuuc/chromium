@@ -6,61 +6,51 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_NAVIGATION_QUERY_H_
 
 #include "third_party/blink/renderer/core/css/conditional_exp_node.h"
+#include "third_party/blink/renderer/core/route_matching/navigation_phase.h"
 #include "third_party/blink/renderer/core/route_matching/navigation_preposition.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/wtf/casting.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
 
 class Document;
+class Element;
 class Route;
-class URLPattern;
 
 // <navigation-location>
 //
 // https://drafts.csswg.org/css-navigation-1/#typedef-navigation-location
 class NavigationLocation : public GarbageCollected<NavigationLocation> {
  public:
-  explicit NavigationLocation(const AtomicString& navigation_name)
-      : string_(navigation_name) {}
-  NavigationLocation(URLPattern* url_pattern,
-                     const AtomicString& original_url_pattern_string)
-      : url_pattern_(url_pattern), string_(original_url_pattern_string) {}
+  enum Type {
+    kLocationName,
+    kUrlPattern,
+    kUrl,
+  };
 
-  void Trace(Visitor*) const;
+  NavigationLocation(Type type, const AtomicString& value)
+      : type_(type), value_(value) {}
 
-  URLPattern* GetURLPattern() const { return url_pattern_; }
+  void Trace(Visitor*) const {}
 
-  const AtomicString& OriginalURLPatternString() const {
-    if (url_pattern_) {
-      return string_;
-    }
-    return g_null_atom;
-  }
-
-  const AtomicString& GetRouteName() const {
-    if (url_pattern_) {
-      return g_null_atom;
-    }
-    return string_;
-  }
+  Type GetType() const { return type_; }
+  const AtomicString& GetValue() const { return value_; }
 
   // Look for a `Route` entry in the route map. Additionally, if this
-  // <route-location> is a URLPattern, an entry will be inserted if it's
+  // <navigation-location> is a URLPattern, an entry will be inserted if it's
   // missing.
   const Route* FindOrCreateRoute(Document&) const;
 
+  bool CheckSelectorMatch(
+      const Element&,
+      std::optional<NavigationPreposition> = std::nullopt) const;
   void SerializeTo(StringBuilder&) const;
 
  private:
-  Member<URLPattern> url_pattern_;
-
-  // Route name, or, if `url_pattern_` is set, the original URLPattern
-  // string. The reason for storing the original string is for
-  // serialization. The URLPattern API deliberately doesn't support
-  // serialization.
-  AtomicString string_;
+  Type type_;
+  AtomicString value_;
 };
 
 // <navigation-test>
@@ -69,22 +59,106 @@ class NavigationLocation : public GarbageCollected<NavigationLocation> {
 class NavigationTestExpression
     : public GarbageCollected<NavigationTestExpression> {
  public:
-  NavigationTestExpression(NavigationLocation& location,
-                           NavigationPreposition preposition)
+  virtual void Trace(Visitor*) const {}
+
+  // TODO(crbug.com/436805487): Do we need this? Only used by unit tests.
+  virtual bool IsNavigationLocationTestExpression() const { return false; }
+
+  virtual bool Matches(Document&) const = 0;
+  virtual void SerializeTo(StringBuilder&) const = 0;
+};
+
+// <navigation-location-test>
+//
+// https://drafts.csswg.org/css-navigation-1/#typedef-navigation-location-test
+class NavigationLocationTestExpression : public NavigationTestExpression {
+ public:
+  NavigationLocationTestExpression(NavigationLocation& location,
+                                   NavigationPreposition preposition)
       : navigation_location_(&location), preposition_(preposition) {}
 
-  void Trace(Visitor* v) const { v->Trace(navigation_location_); }
+  void Trace(Visitor* visitor) const override;
+
+  bool IsNavigationLocationTestExpression() const override { return true; }
 
   NavigationLocation& GetLocation() const { return *navigation_location_; }
   NavigationPreposition GetPreposition() const { return preposition_; }
 
-  bool Matches(Document&) const;
+  bool Matches(Document&) const override;
+  void SerializeTo(StringBuilder&) const override;
 
-  void SerializeTo(StringBuilder&) const;
+  static void SerializePrepositionTo(NavigationPreposition, StringBuilder&);
 
  private:
   Member<NavigationLocation> navigation_location_;
   NavigationPreposition preposition_;
+};
+
+// TODO(crbug.com/436805487): Do we need to keep this? Only used by unit tests.
+template <>
+struct DowncastTraits<NavigationLocationTestExpression> {
+  static bool AllowFrom(const NavigationTestExpression& exp) {
+    return exp.IsNavigationLocationTestExpression();
+  }
+};
+
+// <navigation-location-between-test>
+//
+// https://drafts.csswg.org/css-navigation-1/#typedef-navigation-location-between-test
+class NavigationLocationBetweenTestExpression
+    : public NavigationTestExpression {
+ public:
+  NavigationLocationBetweenTestExpression(NavigationLocation& location1,
+                                          NavigationLocation& location2)
+      : navigation_location1_(&location1), navigation_location2_(location2) {}
+
+  void Trace(Visitor* visitor) const override;
+
+  bool Matches(Document&) const override;
+  void SerializeTo(StringBuilder&) const override;
+
+ private:
+  Member<NavigationLocation> navigation_location1_;
+  Member<NavigationLocation> navigation_location2_;
+};
+
+// <navigation-phase-test>
+//
+// https://drafts.csswg.org/css-navigation-1/#typedef-navigation-phase-test
+class NavigationPhaseTestExpression : public NavigationTestExpression {
+ public:
+  explicit NavigationPhaseTestExpression(NavigationPhase phase)
+      : phase_(phase) {}
+
+  bool Matches(Document&) const override;
+  void SerializeTo(StringBuilder&) const override;
+
+ private:
+  NavigationPhase phase_;
+};
+
+// <navigation-type-test>
+//
+// https://drafts.csswg.org/css-navigation-1/#typedef-navigation-type-test
+class NavigationTypeTestExpression : public NavigationTestExpression {
+ public:
+  enum Type { kTraverse, kBack, kForward, kReload };
+
+  explicit NavigationTypeTestExpression(Type type) : type_(type) {}
+
+  bool Matches(Document&) const override;
+  void SerializeTo(StringBuilder&) const override;
+
+ private:
+  Type type_;
+};
+
+class NavigationPreviewTestExpression : public NavigationTestExpression {
+ public:
+  NavigationPreviewTestExpression() = default;
+
+  bool Matches(Document&) const override;
+  void SerializeTo(StringBuilder&) const override;
 };
 
 class NavigationExpNode : public ConditionalExpNode {

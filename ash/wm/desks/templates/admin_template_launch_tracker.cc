@@ -4,6 +4,8 @@
 
 #include "ash/wm/desks/templates/admin_template_launch_tracker.h"
 
+#include <algorithm>
+#include <ranges>
 #include <vector>
 
 #include "ash/public/cpp/saved_desk_delegate.h"
@@ -14,7 +16,6 @@
 #include "ash/wm/desks/templates/saved_desk_constants.h"
 #include "ash/wm/desks/templates/saved_desk_util.h"
 #include "ash/wm/work_area_insets.h"
-#include "base/containers/adapters.h"
 #include "base/logging.h"
 #include "base/scoped_observation.h"
 #include "components/app_restore/window_properties.h"
@@ -48,7 +49,8 @@ void UpdateWindowBounds(DeskTemplate& saved_desk,
       saved_desk.mutable_desk_restore_data()->mutable_app_id_to_launch_list();
 
   for (auto& [app_id, launch_list] : app_id_to_launch_list) {
-    for (auto& [window_id, app_restore_data] : base::Reversed(launch_list)) {
+    for (auto& [window_id, app_restore_data] :
+         std::views::reverse(launch_list)) {
       CHECK(app_restore_data->window_info.current_bounds.has_value());
 
       // The bounds as found in the template are in display-local
@@ -222,20 +224,6 @@ app_restore::AppRestoreData* GetAppRestoreData(DeskTemplate& admin_template,
   return nullptr;
 }
 
-// Returns true if all windows have bounds.
-bool DoesAllWindowsHaveBounds(const DeskTemplate& admin_template) {
-  const auto& app_id_to_launch_list =
-      admin_template.desk_restore_data()->app_id_to_launch_list();
-  for (auto& [app_id, launch_list] : app_id_to_launch_list) {
-    for (auto& [window_id, app_restore_data] : launch_list) {
-      if (!app_restore_data->window_info.current_bounds.has_value()) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
 struct BoundsCoeff {
   float x;
   float y;
@@ -271,7 +259,7 @@ void AdjustAdminTemplateWindowBounds(
     gfx::Rect& bounds) {
   bounds.AdjustToFit(work_area);
 
-  while (base::Contains(existing_bounds, bounds)) {
+  while (std::ranges::contains(existing_bounds, bounds)) {
     // There's an exact match for bounds, so we need to adjust it. We move it
     // down and to the right, while staying within the work area.
     int xoffset = std::min(kWindowOffset, work_area.right() - bounds.right());
@@ -390,7 +378,10 @@ void AdminTemplateLaunchTracker::LaunchTemplate(SavedDeskDelegate* delegate,
   // If all windows in the template have bounds, then we will use those when
   // launching. If that's not the case, we will auto-generate a placement for
   // the windows.
-  if (DoesAllWindowsHaveBounds(*admin_template)) {
+  if (saved_desk_util::AreAllTemplateWindowsSatisfied(
+          *admin_template, [](const app_restore::WindowInfo& window_info) {
+            return window_info.current_bounds.has_value();
+          })) {
     auto& app_id_to_launch_list = admin_template->mutable_desk_restore_data()
                                       ->mutable_app_id_to_launch_list();
     for (auto& [app_id, launch_list] : app_id_to_launch_list) {

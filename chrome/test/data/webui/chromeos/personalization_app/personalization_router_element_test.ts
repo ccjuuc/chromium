@@ -92,13 +92,12 @@ suite('PersonalizationRouterElementTest', function() {
   });
 
   test('puts googlePhotosAlbumIsShared query param in url', async () => {
-    loadTimeData.overrideValues({isGooglePhotosSharedAlbumsEnabled: true});
     const isSharedParam = 'googlePhotosAlbumIsShared';
     const sharedAlbum: GooglePhotosAlbum = {
       id: 'aaa',
       isShared: true,
       photoCount: 5,
-      preview: {url: ''},
+      preview: '',
       timestamp: {internalValue: 0n},
       title: 'fake album',
     };
@@ -109,7 +108,7 @@ suite('PersonalizationRouterElementTest', function() {
       dedupKey: '2d0d1595-14af-4471-b2db-b9c8eae3a491',
       name: 'foo',
       date: '',
-      url: {url: 'foo.com'},
+      url: 'foo.com',
       location: 'home',
     };
     wallpaperProvider.setGooglePhotosSharedAlbums([sharedAlbum]);
@@ -227,8 +226,8 @@ suite('PersonalizationRouterElementTest', function() {
         getComputedStyle(wallpaperSelected).display, 'none',
         'sea-pen-router shows wallpaper-selected');
     assertFalse(
-        !!routerElement.shadowRoot!.getElementById('wallpaperSelected')!
-              .classList.contains('wallpaperSelectedHidden'),
+        routerElement.shadowRoot!.getElementById('wallpaperSelected')!.classList
+            .contains('wallpaperSelectedHidden'),
         'wallpaper-selected should be displayed on template home page');
   });
 
@@ -253,16 +252,16 @@ suite('PersonalizationRouterElementTest', function() {
 
     // No wallpaper-selected in Template results page.
     assertTrue(
-        !!routerElement.shadowRoot!.getElementById('wallpaperSelected')!
-              .classList.contains('wallpaperSelectedHidden'),
+        routerElement.shadowRoot!.getElementById('wallpaperSelected')!.classList
+            .contains('wallpaperSelectedHidden'),
         'wallpaper-selected should not be displayed in template results page');
 
     // No wallpaper-selected in Freeform subpage.
     routerElement.goToRoute(Paths.SEA_PEN_FREEFORM);
     await waitAfterNextRender(routerElement);
     assertTrue(
-        !!routerElement.shadowRoot!.getElementById('wallpaperSelected')!
-              .classList.contains('wallpaperSelectedHidden'),
+        routerElement.shadowRoot!.getElementById('wallpaperSelected')!.classList
+            .contains('wallpaperSelectedHidden'),
         'wallpaper-selected should not be displayed in freeform subpage');
   });
 

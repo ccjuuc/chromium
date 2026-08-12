@@ -18,6 +18,7 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_executor.h"
@@ -151,8 +152,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   test_api.SyncDisplay();
 
   base::FilePath temp_dir, temp_path;
-  base::ScopedFD fd =
-      base::CreateAndOpenFdForTemporaryFileInDir(temp_dir, &temp_path);
+  base::ScopedFD fd = base::CreateAndOpenFdForTemporaryFileInDir(
+      temp_dir, /*name_prefix=*/{}, &temp_path);
   EXPECT_TRUE(fd.is_valid());
 
   // 10K screens are reality these days.

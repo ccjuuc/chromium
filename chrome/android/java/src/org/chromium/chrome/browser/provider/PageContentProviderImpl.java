@@ -16,7 +16,6 @@ import android.os.ParcelFileDescriptor.AutoCloseOutputStream;
 import android.util.Pair;
 
 import androidx.annotation.GuardedBy;
-import androidx.annotation.NonNull;
 import androidx.annotation.VisibleForTesting;
 
 import org.json.JSONException;
@@ -35,7 +34,6 @@ import org.chromium.build.annotations.EnsuresNonNull;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.build.annotations.UsedByReflection;
-import org.chromium.chrome.browser.ActivityTabProvider;
 import org.chromium.chrome.browser.base.SplitCompatContentProvider;
 import org.chromium.chrome.browser.content_extraction.InnerTextBridge;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -56,6 +54,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 
 /**
  * ContentProvider that returns the InnerText of the current web page. It generates a URI for the
@@ -69,6 +68,13 @@ import java.util.concurrent.TimeoutException;
 public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
 
     private static final String TAG = "PageContentProvider";
+    private static final String GSA_PACKAGE_NAME = "com.google.android.googlequicksearchbox";
+
+    // JSON keys for the data returned by the content provider.
+    static final String JSON_KEY_PAGE_METADATA = "page_metadata";
+    static final String JSON_KEY_PROTO_CONTENT_URI = "proto_content_uri";
+    static final String JSON_KEY_IS_WORK_PROFILE = "is_work_profile";
+    static final String JSON_KEY_CONTENT_URI = "content_uri";
 
     private static final int INVALIDATE_URI_DELAY_MS = 60_000;
     private static final int PAGE_EXTRACTION_TIMEOUT_MS = 10_000;
@@ -76,19 +82,38 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
     static final class PageContentInvocationState {
 
         PageContentInvocationState(
-                String invocationId, String invokedUrl, ActivityTabProvider activityTabProvider) {
+                String invocationId,
+                String invokedUrl,
+                Supplier<@Nullable Tab> tabSupplier,
+                boolean isGsa) {
             mInvocationId = invocationId;
             mInvokedUrl = invokedUrl;
-            mActivityTabProvider = activityTabProvider;
+            mTabSupplier = tabSupplier;
+            mIsGsa = isGsa;
             mInvocationStartTimestampMs = TimeUtils.elapsedRealtimeMillis();
         }
 
         private final String mInvocationId;
         private final String mInvokedUrl;
-        private final ActivityTabProvider mActivityTabProvider;
+        private final Supplier<@Nullable Tab> mTabSupplier;
+        private final boolean mIsGsa;
 
         private long mInvocationStartTimestampMs;
         private long mExtractionStartTimestampMs;
+    }
+
+    /**
+     * Checks if the request is from GSA.
+     *
+     * @param invocationId The invocation ID of the request.
+     * @return True if the request is from GSA, false otherwise.
+     */
+    @GuardedBy("sLock")
+    private boolean isGsaRequest(@Nullable String invocationId) {
+        if (sInvocationState != null && sInvocationState.mInvocationId.equals(invocationId)) {
+            return sInvocationState.mIsGsa;
+        }
+        return false;
     }
 
     private static final String AUTHORITY_SUFFIX = ".PageContentProvider";
@@ -153,6 +178,7 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
                 ensureUriMatcherInitialized();
                 final int match = mUriMatcher.match(uri);
                 var invocationId = uri.getLastPathSegment();
+                boolean isGsa = isGsaRequest(invocationId);
                 if (match == UriMatcher.NO_MATCH) {
                     setErrorToCursor(cursor, "Invalid URI");
                     //  There's no way to tell which format was requested, record this event in the
@@ -160,14 +186,15 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
                     PageContentProviderMetrics.recordPageProviderEvent(
                             RequestType.QUERY,
                             Format.PROTO,
-                            PageContentProviderEvent.REQUEST_FAILED_INVALID_URL);
+                            PageContentProviderEvent.REQUEST_FAILED_INVALID_URL,
+                            isGsa);
                     return cursor;
                 }
 
                 var format = match == URI_MATCH_TEXT_FORMAT ? Format.TEXT : Format.PROTO;
 
                 PageContentProviderMetrics.recordPageProviderEvent(
-                        RequestType.QUERY, format, PageContentProviderEvent.REQUEST_STARTED);
+                        RequestType.QUERY, format, PageContentProviderEvent.REQUEST_STARTED, isGsa);
 
                 var pageContentFuture =
                         getPageContentsBytesAsync(invocationId, RequestType.QUERY, format);
@@ -175,7 +202,7 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
                     var pageContentBytes =
                             pageContentFuture.get(
                                     PAGE_EXTRACTION_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-                    recordExtractionStartToEndLatency(RequestType.QUERY, format);
+                    recordExtractionStartToEndLatency(RequestType.QUERY, format, isGsa);
                     assert sInvocationState != null;
                     if (format == Format.TEXT) {
                         var contentsString = new String(pageContentBytes, StandardCharsets.UTF_8);
@@ -186,21 +213,24 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
                     PageContentProviderMetrics.recordPageProviderEvent(
                             RequestType.QUERY,
                             format,
-                            PageContentProviderEvent.REQUEST_SUCCEEDED_RETURNED_EXTRACTED);
+                            PageContentProviderEvent.REQUEST_SUCCEEDED_RETURNED_EXTRACTED,
+                            isGsa);
                     return cursor;
 
                 } catch (InterruptedException e) {
                     PageContentProviderMetrics.recordPageProviderEvent(
                             RequestType.QUERY,
                             format,
-                            PageContentProviderEvent.REQUEST_FAILED_INTERRUPTED);
+                            PageContentProviderEvent.REQUEST_FAILED_INTERRUPTED,
+                            isGsa);
                     setErrorToCursor(cursor, "Extraction process was interrupted");
                     return cursor;
                 } catch (TimeoutException e) {
                     PageContentProviderMetrics.recordPageProviderEvent(
                             RequestType.QUERY,
                             format,
-                            PageContentProviderEvent.REQUEST_FAILED_TIMED_OUT);
+                            PageContentProviderEvent.REQUEST_FAILED_TIMED_OUT,
+                            isGsa);
                     setErrorToCursor(cursor, "Timed out during extraction");
                     return cursor;
                 } catch (ExecutionException e) {
@@ -210,7 +240,8 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
                         PageContentProviderMetrics.recordPageProviderEvent(
                                 RequestType.QUERY,
                                 format,
-                                PageContentProviderEvent.REQUEST_FAILED_EXCEPTION);
+                                PageContentProviderEvent.REQUEST_FAILED_EXCEPTION,
+                                isGsa);
                         setErrorToCursor(cursor, "ExecutionException during extraction");
                     }
                     return cursor;
@@ -256,8 +287,7 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
      * FileNotFoundException} is thrown.
      */
     @Override
-    public ParcelFileDescriptor openFile(@NonNull Uri uri, @NonNull String mode)
-            throws FileNotFoundException {
+    public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
         try (var t = TraceEvent.scoped("PageContentProviderImpl.openFile")) {
             ThreadUtils.assertOnBackgroundThread();
             if (!ChromeFeatureList.isEnabled(ChromeFeatureList.PAGE_CONTENT_PROVIDER)) {
@@ -270,15 +300,24 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
                 if (match == UriMatcher.NO_MATCH) {
                     //  There's no way to tell which format was requested, record this event in the
                     // "proto" histogram.
+                    // There's no way to tell if the request is from GSA or not, record as not GSA.
                     PageContentProviderMetrics.recordPageProviderEvent(
                             RequestType.OPEN_FILE,
                             Format.PROTO,
-                            PageContentProviderEvent.REQUEST_FAILED_INVALID_URL);
+                            PageContentProviderEvent.REQUEST_FAILED_INVALID_URL,
+                            false);
                     throw new FileNotFoundException("Invalid URI");
                 }
 
                 var format = match == URI_MATCH_TEXT_FORMAT ? Format.TEXT : Format.PROTO;
                 var invocationId = uri.getLastPathSegment();
+                boolean isGsa = isGsaRequest(invocationId);
+
+                PageContentProviderMetrics.recordPageProviderEvent(
+                        RequestType.OPEN_FILE,
+                        format,
+                        PageContentProviderEvent.REQUEST_STARTED,
+                        isGsa);
 
                 var pageContentFuture =
                         getPageContentsBytesAsync(invocationId, RequestType.OPEN_FILE, format);
@@ -286,17 +325,19 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
                     var pageContentBytes =
                             pageContentFuture.get(
                                     PAGE_EXTRACTION_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-                    recordExtractionStartToEndLatency(RequestType.OPEN_FILE, format);
+                    recordExtractionStartToEndLatency(RequestType.OPEN_FILE, format, isGsa);
                     PageContentProviderMetrics.recordPageProviderEvent(
                             RequestType.OPEN_FILE,
                             format,
-                            PageContentProviderEvent.REQUEST_SUCCEEDED_RETURNED_EXTRACTED);
+                            PageContentProviderEvent.REQUEST_SUCCEEDED_RETURNED_EXTRACTED,
+                            isGsa);
                     return createOutputFileDescriptorForBytes(pageContentBytes);
                 } catch (IOException e) {
                     PageContentProviderMetrics.recordPageProviderEvent(
                             RequestType.OPEN_FILE,
                             format,
-                            PageContentProviderEvent.REQUEST_FAILED_EXCEPTION);
+                            PageContentProviderEvent.REQUEST_FAILED_EXCEPTION,
+                            isGsa);
                     throw new FileNotFoundException("IO Exception");
                 } catch (ExecutionException e) {
                     if (e.getCause() != null && e.getCause().getMessage() != null) {
@@ -305,20 +346,23 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
                         PageContentProviderMetrics.recordPageProviderEvent(
                                 RequestType.OPEN_FILE,
                                 format,
-                                PageContentProviderEvent.REQUEST_FAILED_EXCEPTION);
+                                PageContentProviderEvent.REQUEST_FAILED_EXCEPTION,
+                                isGsa);
                     }
                     throw new FileNotFoundException("ExecutionException during extraction");
                 } catch (InterruptedException e) {
                     PageContentProviderMetrics.recordPageProviderEvent(
                             RequestType.OPEN_FILE,
                             format,
-                            PageContentProviderEvent.REQUEST_FAILED_INTERRUPTED);
+                            PageContentProviderEvent.REQUEST_FAILED_INTERRUPTED,
+                            isGsa);
                     throw new FileNotFoundException("Extraction process was interrupted");
                 } catch (TimeoutException e) {
                     PageContentProviderMetrics.recordPageProviderEvent(
                             RequestType.OPEN_FILE,
                             format,
-                            PageContentProviderEvent.REQUEST_FAILED_TIMED_OUT);
+                            PageContentProviderEvent.REQUEST_FAILED_TIMED_OUT,
+                            isGsa);
                     throw new FileNotFoundException("Timed out during extraction");
                 }
             }
@@ -329,17 +373,21 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
             @Nullable String invocationId, @RequestType int requestType, @Format int format) {
         synchronized (sLock) {
             var future = new CompletableFuture<byte[]>();
+            boolean isGsa = isGsaRequest(invocationId);
 
             if (invocationId == null
                     || sInvocationState == null
                     || !invocationId.equals(sInvocationState.mInvocationId)) {
                 PageContentProviderMetrics.recordPageProviderEvent(
-                        requestType, format, PageContentProviderEvent.REQUEST_FAILED_INVALID_ID);
+                        requestType,
+                        format,
+                        PageContentProviderEvent.REQUEST_FAILED_INVALID_ID,
+                        isGsa);
                 future.completeExceptionally(new Exception("Invalid ID"));
                 return future;
             }
 
-            ActivityTabProvider tabProvider = sInvocationState.mActivityTabProvider;
+            Supplier<@Nullable Tab> tabProvider = sInvocationState.mTabSupplier;
             Pair<String, WebContents> currentTabUrlAndWebContents =
                     ThreadUtils.runOnUiThreadBlocking(
                             () -> {
@@ -349,8 +397,10 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
                                     Tab currentTab = tabProvider.get();
 
                                     if (currentTab == null
+                                            || currentTab.isDestroyed()
                                             || currentTab.getUrl() == null
                                             || currentTab.getWebContents() == null
+                                            || currentTab.getWebContents().isDestroyed()
                                             || currentTab.getWebContents().getMainFrame() == null) {
                                         return null;
                                     }
@@ -368,27 +418,29 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
                     PageContentProviderMetrics.recordPageProviderEvent(
                             requestType,
                             format,
-                            PageContentProviderEvent.REQUEST_FAILED_TO_GET_CURRENT_TAB);
+                            PageContentProviderEvent.REQUEST_FAILED_TO_GET_CURRENT_TAB,
+                            isGsa);
                     future.completeExceptionally(new Exception("Failed to get current tab"));
                 } else {
                     PageContentProviderMetrics.recordPageProviderEvent(
                             requestType,
                             format,
-                            PageContentProviderEvent.REQUEST_FAILED_CURRENT_TAB_CHANGED);
+                            PageContentProviderEvent.REQUEST_FAILED_CURRENT_TAB_CHANGED,
+                            isGsa);
                     future.completeExceptionally(
                             new Exception("Current tab changed before extraction"));
                 }
                 return future;
             }
 
-            recordCreateToExtractionStartLatency(requestType, format);
+            recordCreateToExtractionStartLatency(requestType, format, isGsa);
 
             if (format == Format.TEXT) {
                 return requestStringPageContentsAsync(
-                        requestType, currentTabUrlAndWebContents.second);
+                        requestType, currentTabUrlAndWebContents.second, isGsa);
             } else {
                 return requestProtoPageContentsAsync(
-                        requestType, currentTabUrlAndWebContents.second);
+                        requestType, currentTabUrlAndWebContents.second, isGsa);
             }
         }
     }
@@ -432,7 +484,12 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
     }
 
     private static @Nullable String getIdForUrl(
-            String url, ActivityTabProvider activityTabProvider) {
+            String url,
+            Supplier<@Nullable Tab> tabSupplier,
+            @Nullable String targetPackage,
+            boolean addTextUri,
+            boolean addProtoUri,
+            boolean isGsa) {
         if (!ChromeFeatureList.isEnabled(ChromeFeatureList.PAGE_CONTENT_PROVIDER)) {
             return null;
         }
@@ -447,9 +504,10 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
 
                 sInvocationState =
                         new PageContentInvocationState(
-                                UUID.randomUUID().toString(), url, activityTabProvider);
+                                UUID.randomUUID().toString(), url, tabSupplier, isGsa);
 
-                grantAccessToId(sInvocationState.mInvocationId);
+                grantAccessToId(
+                        sInvocationState.mInvocationId, targetPackage, addTextUri, addProtoUri);
 
                 // Invalidate this ID after 60 seconds.
                 String invocationId = sInvocationState.mInvocationId;
@@ -483,43 +541,120 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
      *
      * @param url The URL of the currently active page, the returned URI will only work for this
      *     URL.
-     * @param activityTabProvider Provider used to ensure that {@code url} is still active on all
-     *     calls to {@code query()}
+     * @param tabSupplier Supplier used to ensure that {@code url} is still active on all calls to
+     *     {@code query()}
      * @param isManagedProfile Whether the current profile has an enterprise owner.
      * @return A JSON string containing a URI to be used with the {@code query()} method to extract
      *     the text of {@code url}.
      */
     public static @Nullable String getAssistContentStructuredDataForUrl(
-            String url, ActivityTabProvider activityTabProvider, boolean isManagedProfile) {
-        String invocationId = getIdForUrl(url, activityTabProvider);
+            String url, Supplier<@Nullable Tab> tabSupplier, boolean isManagedProfile) {
+        return getAssistContentStructuredDataForUrl(
+                url,
+                tabSupplier,
+                isManagedProfile,
+                /* addTextUri= */ true,
+                /* addProtoUri= */ true,
+                /* targetPackage= */ null);
+    }
+
+    /**
+     * Generates a URI for the proto format to be shared with the specified package. Only one URI is
+     * valid at a time, and only the result from the most recent call to either this or {@link
+     * #getAssistContentStructuredDataForUrl} will be valid.
+     *
+     * @param url The URL of the currently active page, the returned URI will only work for this
+     *     URL.
+     * @param tabSupplier Supplier used to ensure that {@code url} is still active on all calls to
+     *     {@code query()}
+     * @param targetPackage The package to grant access to. If null, the default assistant package
+     *     will be used.
+     * @return A URI to be used with the {@code openFile()} method to extract the contents of {@code
+     *     url}.
+     */
+    public static @Nullable Uri getProtoContentUriForUrl(
+            String url, Supplier<@Nullable Tab> tabSupplier, @Nullable String targetPackage) {
+        boolean isGsa = GSA_PACKAGE_NAME.equals(targetPackage);
+        RecordHistogram.recordBooleanHistogram(
+                "Android.AssistContent.WebPageContentProvider.TargetPackageProvided",
+                targetPackage != null);
+        String invocationId =
+                getIdForUrl(
+                        url,
+                        tabSupplier,
+                        targetPackage,
+                        /* addTextUri= */ false,
+                        /* addProtoUri= */ true,
+                        isGsa);
         if (invocationId == null) {
             PageContentProviderMetrics.recordPageProviderEvent(
-                    PageContentProviderEvent.GET_CONTENT_URI_FAILED);
+                    PageContentProviderEvent.GET_CONTENT_URI_FAILED, isGsa);
+            return null;
+        }
+
+        PageContentProviderMetrics.recordPageProviderEvent(
+                PageContentProviderEvent.GET_CONTENT_URI_SUCCESS, isGsa);
+        return buildProtoFormatUri(invocationId);
+    }
+
+    /**
+     * Generates a JSON string to be attached to AssistContent to be shared with the specified
+     * package. Only one URI is valid at a time, and only the result from the most recent call to
+     * either this or {@link #getProtoContentUriForUrl} will be valid.
+     *
+     * @param url The URL of the currently active page, the returned URI will only work for this
+     *     URL.
+     * @param tabSupplier Supplier used to ensure that {@code url} is still active on all calls to
+     *     {@code query()}
+     * @param isManagedProfile Whether the current profile has an enterprise owner.
+     * @param addTextUri Whether to include a URI for the text format.
+     * @param addProtoUri Whether to include a URI for the proto format.
+     * @param targetPackage The package to grant access to. If null, the default assistant package
+     *     will be used.
+     * @return A JSON string containing a URI to be used with the {@code query()} method to extract
+     *     the text of {@code url}.
+     */
+    public static @Nullable String getAssistContentStructuredDataForUrl(
+            String url,
+            Supplier<@Nullable Tab> tabSupplier,
+            boolean isManagedProfile,
+            boolean addTextUri,
+            boolean addProtoUri,
+            @Nullable String targetPackage) {
+        boolean isGsa = false;
+        RecordHistogram.recordBooleanHistogram(
+                "Android.AssistContent.WebPageContentProvider.TargetPackageProvided",
+                targetPackage != null);
+        if (!addTextUri && !addProtoUri) {
+            return null;
+        }
+        String invocationId =
+                getIdForUrl(url, tabSupplier, targetPackage, addTextUri, addProtoUri, false);
+        if (invocationId == null) {
+            PageContentProviderMetrics.recordPageProviderEvent(
+                    PageContentProviderEvent.GET_CONTENT_URI_FAILED, isGsa);
             return null;
         }
 
         String structuredData;
 
         try {
-            structuredData =
-                    new JSONObject()
-                            .put(
-                                    "page_metadata",
-                                    new JSONObject()
-                                            .put("is_work_profile", isManagedProfile)
-                                            .put("content_uri", buildTextFormatUri(invocationId))
-                                            .put(
-                                                    "proto_content_uri",
-                                                    buildProtoFormatUri(invocationId)))
-                            .toString();
+            JSONObject metadata = new JSONObject().put(JSON_KEY_IS_WORK_PROFILE, isManagedProfile);
+            if (addTextUri) {
+                metadata.put(JSON_KEY_CONTENT_URI, buildTextFormatUri(invocationId));
+            }
+            if (addProtoUri) {
+                metadata.put(JSON_KEY_PROTO_CONTENT_URI, buildProtoFormatUri(invocationId));
+            }
+            structuredData = new JSONObject().put(JSON_KEY_PAGE_METADATA, metadata).toString();
         } catch (JSONException e) {
             PageContentProviderMetrics.recordPageProviderEvent(
-                    PageContentProviderEvent.GET_CONTENT_URI_FAILED);
+                    PageContentProviderEvent.GET_CONTENT_URI_FAILED, isGsa);
             return null;
         }
 
         PageContentProviderMetrics.recordPageProviderEvent(
-                PageContentProviderEvent.GET_CONTENT_URI_SUCCESS);
+                PageContentProviderEvent.GET_CONTENT_URI_SUCCESS, isGsa);
         return structuredData;
     }
 
@@ -544,28 +679,43 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
         return buildContentUri(PROTO_FORMAT_PATH, invocationId);
     }
 
-    private static void grantAccessToId(String invocationId) {
-        var assistantPackageName =
-                PackageUtils.getDefaultAssistantPackageName(ContextUtils.getApplicationContext());
-        RecordHistogram.recordBooleanHistogram(
-                "Android.AssistContent.WebPageContentProvider.GetAssistantPackageResult",
-                assistantPackageName != null);
-        if (assistantPackageName == null) {
-            return;
+    private static void grantAccessToId(
+            String invocationId,
+            @Nullable String packageName,
+            boolean addTextUri,
+            boolean addProtoUri) {
+        if (packageName == null) {
+            // Use the default assistant package if not provided.
+            packageName =
+                    PackageUtils.getDefaultAssistantPackageName(
+                            ContextUtils.getApplicationContext());
+            boolean isGsa = GSA_PACKAGE_NAME.equals(packageName);
+            RecordHistogram.recordBooleanHistogram(
+                    isGsa
+                            ? "Android.Aga.AssistContent.WebPageContentProvider.GetAssistantPackageResult"
+                            : "Android.AssistContent.WebPageContentProvider.GetAssistantPackageResult",
+                    packageName != null);
+            if (packageName == null) {
+                return;
+            }
         }
 
         // TODO: Calls to grantUriPermission seem to cause ANRs, maybe call this asynchronously or
         // grant the permission before AssistContent is requested.
-        ContextUtils.getApplicationContext()
-                .grantUriPermission(
-                        assistantPackageName,
-                        buildTextFormatUri(invocationId),
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        ContextUtils.getApplicationContext()
-                .grantUriPermission(
-                        assistantPackageName,
-                        buildProtoFormatUri(invocationId),
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        if (addTextUri) {
+            ContextUtils.getApplicationContext()
+                    .grantUriPermission(
+                            packageName,
+                            buildTextFormatUri(invocationId),
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        }
+        if (addProtoUri) {
+            ContextUtils.getApplicationContext()
+                    .grantUriPermission(
+                            packageName,
+                            buildProtoFormatUri(invocationId),
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        }
     }
 
     private static void revokeAccessToId(String invocationId) {
@@ -593,19 +743,20 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
             }
 
             revokeAccessToId(sInvocationState.mInvocationId);
+            boolean isGsa = sInvocationState.mIsGsa;
             sInvocationState = null;
             if (invocationId != null) {
                 PageContentProviderMetrics.recordPageProviderEvent(
-                        PageContentProviderEvent.URI_INVALIDATED_TIMEOUT);
+                        PageContentProviderEvent.URI_INVALIDATED_TIMEOUT, isGsa);
             } else {
                 PageContentProviderMetrics.recordPageProviderEvent(
-                        PageContentProviderEvent.URI_INVALIDATED_NEW_REQUEST);
+                        PageContentProviderEvent.URI_INVALIDATED_NEW_REQUEST, isGsa);
             }
         }
     }
 
     private Future<byte[]> requestStringPageContentsAsync(
-            @RequestType int requestType, WebContents webContents) {
+            @RequestType int requestType, WebContents webContents, boolean isGsa) {
         var pageContentFuture = new CompletableFuture<byte[]>();
 
         try (var t = TraceEvent.scoped("PageContentProvider.requestStringPageContentsAsync")) {
@@ -617,6 +768,18 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
                             try (var u =
                                     TraceEvent.scoped(
                                             "PageContentProvider.requestStringPageContentsAsyncOnUiThread")) {
+                                if (webContents == null
+                                        || webContents.isDestroyed()
+                                        || webContents.getMainFrame() == null) {
+                                    PageContentProviderMetrics.recordPageProviderEvent(
+                                            requestType,
+                                            Format.TEXT,
+                                            PageContentProviderEvent.REQUEST_FAILED_EMPTY_RESULT,
+                                            isGsa);
+                                    pageContentFuture.completeExceptionally(
+                                            new Exception("WebContents destroyed"));
+                                    return;
+                                }
                                 InnerTextBridge.getInnerText(
                                         webContents.getMainFrame(),
                                         result -> {
@@ -625,7 +788,8 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
                                                         requestType,
                                                         Format.TEXT,
                                                         PageContentProviderEvent
-                                                                .REQUEST_FAILED_EMPTY_RESULT);
+                                                                .REQUEST_FAILED_EMPTY_RESULT,
+                                                        isGsa);
                                                 pageContentFuture.completeExceptionally(
                                                         new Exception("Error during extraction"));
                                             } else {
@@ -641,7 +805,7 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
     }
 
     private Future<byte[]> requestProtoPageContentsAsync(
-            @RequestType int requestType, WebContents webContents) {
+            @RequestType int requestType, WebContents webContents, boolean isGsa) {
         var pageContentFuture = new CompletableFuture<byte[]>();
 
         try (var t = TraceEvent.scoped("PageContentProvider.requestProtoPageContentsAsync")) {
@@ -652,6 +816,18 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
                             try (var u =
                                     TraceEvent.scoped(
                                             "PageContentProvider.requestProtoPageContentsAsyncOnUiThread")) {
+                                if (webContents == null
+                                        || webContents.isDestroyed()
+                                        || webContents.getMainFrame() == null) {
+                                    PageContentProviderMetrics.recordPageProviderEvent(
+                                            requestType,
+                                            Format.PROTO,
+                                            PageContentProviderEvent.REQUEST_FAILED_EMPTY_RESULT,
+                                            isGsa);
+                                    pageContentFuture.completeExceptionally(
+                                            new Exception("WebContents destroyed"));
+                                    return;
+                                }
                                 PageContentProtoProviderBridge.getAiPageContent(
                                         webContents,
                                         result -> {
@@ -660,7 +836,8 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
                                                         requestType,
                                                         Format.PROTO,
                                                         PageContentProviderEvent
-                                                                .REQUEST_FAILED_EMPTY_RESULT);
+                                                                .REQUEST_FAILED_EMPTY_RESULT,
+                                                        isGsa);
                                                 pageContentFuture.completeExceptionally(
                                                         new Exception("Error during extraction"));
                                             } else {
@@ -675,7 +852,7 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
     }
 
     private static void recordCreateToExtractionStartLatency(
-            @RequestType int requestType, @Format int format) {
+            @RequestType int requestType, @Format int format, boolean isGsa) {
         synchronized (sLock) {
             if (sInvocationState == null) return;
 
@@ -684,14 +861,15 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
                         requestType,
                         format,
                         TimeUtils.elapsedRealtimeMillis()
-                                - sInvocationState.mInvocationStartTimestampMs);
+                                - sInvocationState.mInvocationStartTimestampMs,
+                        isGsa);
                 sInvocationState.mExtractionStartTimestampMs = TimeUtils.elapsedRealtimeMillis();
             }
         }
     }
 
     private static void recordExtractionStartToEndLatency(
-            @RequestType int requestType, @Format int format) {
+            @RequestType int requestType, @Format int format, boolean isGsa) {
         synchronized (sLock) {
             if (sInvocationState == null) return;
 
@@ -700,7 +878,8 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
                         requestType,
                         format,
                         TimeUtils.elapsedRealtimeMillis()
-                                - sInvocationState.mExtractionStartTimestampMs);
+                                - sInvocationState.mExtractionStartTimestampMs,
+                        isGsa);
                 sInvocationState.mExtractionStartTimestampMs = 0;
             }
 
@@ -709,7 +888,8 @@ public class PageContentProviderImpl extends SplitCompatContentProvider.Impl {
                         requestType,
                         format,
                         TimeUtils.elapsedRealtimeMillis()
-                                - sInvocationState.mInvocationStartTimestampMs);
+                                - sInvocationState.mInvocationStartTimestampMs,
+                        isGsa);
                 sInvocationState.mInvocationStartTimestampMs = 0;
             }
         }

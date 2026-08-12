@@ -9,7 +9,6 @@
 #include "chrome/browser/sync/sessions/sync_sessions_web_contents_router_factory.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -152,7 +151,7 @@ IN_PROC_BROWSER_TEST_F(SyncSessionsRouterTabHelperBrowserTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   sync_sessions::SyncSessionsWebContentsRouterFactory::GetInstance()
-      ->GetForProfile(browser()->profile())
+      ->GetForProfile(browser()->GetProfile())
       ->StartRoutingTo(GetSessionEventHandler());
   // Wait for OnLanguageDetermined().
   GetTranslateDriverObserver()->WaitForLanguageDetermined();
@@ -165,7 +164,7 @@ IN_PROC_BROWSER_TEST_F(SyncSessionsRouterTabHelperBrowserTest,
   // it, SyncSessionsRouterTabHelper doesn't trigger OnLocalTabModified() on
   // prerendering.
   GURL prerender_url = embedded_test_server()->GetURL("/title1.html");
-  content::FrameTreeNodeId prerender_id =
+  content::PrerenderHostId prerender_id =
       prerender_helper()->AddPrerender(prerender_url);
   content::test::PrerenderHostObserver host_observer(*web_contents(),
                                                      prerender_id);
@@ -182,7 +181,7 @@ IN_PROC_BROWSER_TEST_F(SyncSessionsRouterTabHelperBrowserTest,
   RemoveLanguageDetectionObserver();
   // Stop Routing.
   sync_sessions::SyncSessionsWebContentsRouterFactory::GetInstance()
-      ->GetForProfile(browser()->profile())
+      ->GetForProfile(browser()->GetProfile())
       ->Stop();
 
   // Make sure that the prerender was activated when the main frame was

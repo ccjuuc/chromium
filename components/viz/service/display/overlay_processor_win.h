@@ -30,10 +30,6 @@ class OverlayCandidateFactory;
 class VIZ_SERVICE_EXPORT OverlayProcessorWin
     : public OverlayProcessorInterface {
  public:
-  // TODO(crbug.com/444264038): Delete this declaration when the RPDQ refactor
-  // is finished. Need to avoid hiding the base class' overload.
-  using OverlayProcessorInterface::ProcessForOverlays;
-
   OverlayProcessorWin(
       OutputSurface::DCSupportLevel dc_support_level,
       bool disable_direct_composition_letterbox_video_optimization,
@@ -63,13 +59,10 @@ class VIZ_SERVICE_EXPORT OverlayProcessorWin
       DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_passes,
       const SkM44& output_color_matrix,
-      const FilterOperationsMap& render_pass_filters,
-      const FilterOperationsMap& render_pass_backdrop_filters,
       SurfaceDamageRectList surface_damage_rect_list_in_root_space,
       const PrimaryPlaneParams& primary_plane_params,
       OverlayCandidateList* overlay_candidates,
-      gfx::Rect* root_damage_rect,
-      std::vector<gfx::Rect>* content_bounds) override;
+      gfx::Rect* root_damage_rect) override;
 
   void SetFrameHasDelegatedInk() override;
 
@@ -110,9 +103,6 @@ class VIZ_SERVICE_EXPORT OverlayProcessorWin
       DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_passes,
       const SkM44& output_color_matrix,
-      const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
-      const OverlayProcessorInterface::FilterOperationsMap&
-          render_pass_backdrop_filters,
       const SurfaceDamageRectList& surface_damage_rect_list_in_root_space,
       CandidateList* candidates,
       gfx::Rect* root_damage_rect);
@@ -124,9 +114,6 @@ class VIZ_SERVICE_EXPORT OverlayProcessorWin
       DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_passes,
       const SkM44& output_color_matrix,
-      const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
-      const OverlayProcessorInterface::FilterOperationsMap&
-          render_pass_backdrop_filters,
       const SurfaceDamageRectList& surface_damage_rect_list_in_root_space,
       CandidateList* candidates,
       gfx::Rect* root_damage_rect);
@@ -168,8 +155,6 @@ class VIZ_SERVICE_EXPORT OverlayProcessorWin
       bool is_full_delegated_compositing,
       const AggregatedRenderPassList& render_passes,
       const OverlayCandidateFactory& factory,
-      const OverlayProcessorInterface::FilterOperationsMap&
-          render_pass_backdrop_filters,
       const DisplayResourceProvider* resource_provider) const;
 
   // Remove the primary plane overlay from this frame. Ensure that the frame's

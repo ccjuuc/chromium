@@ -9,11 +9,13 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "mojo/public/cpp/bindings/generic_pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+#include "mojo/public/cpp/bindings/tests/binder_map_unittest.test-mojom-features.h"
 #include "mojo/public/cpp/bindings/tests/binder_map_unittest.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -74,6 +76,30 @@ class TestInterface2Impl : public mojom::TestInterface2 {
 
  private:
   mojo::Receiver<mojom::TestInterface2> receiver_{this};
+};
+
+class SequenceCheckingContext {
+ public:
+  SequenceCheckingContext()
+      : creation_sequence_(base::SequencedTaskRunner::GetCurrentDefault()) {}
+
+  ~SequenceCheckingContext() {
+    EXPECT_TRUE(creation_sequence_->RunsTasksInCurrentSequence());
+  }
+
+  SequenceCheckingContext(SequenceCheckingContext&& other)
+      : creation_sequence_(other.creation_sequence_) {
+    EXPECT_TRUE(creation_sequence_->RunsTasksInCurrentSequence());
+  }
+
+  SequenceCheckingContext& operator=(SequenceCheckingContext&& other) {
+    EXPECT_TRUE(other.creation_sequence_->RunsTasksInCurrentSequence());
+    creation_sequence_ = other.creation_sequence_;
+    return *this;
+  }
+
+ private:
+  scoped_refptr<base::SequencedTaskRunner> creation_sequence_;
 };
 
 namespace {
@@ -139,6 +165,31 @@ TEST_F(BinderMapTest, BasicMatchWithFunctor) {
   loop.Run();
 }
 
+TEST_F(BinderMapTest, RuntimeFeature) {
+  BinderMap map;
+  map.Add<mojom::TestRuntimeFeatureInterface>(
+      base::BindLambdaForTesting(
+          [&](mojo::PendingReceiver<mojom::TestRuntimeFeatureInterface>
+                  receiver) {}),
+      base::SequencedTaskRunner::GetCurrentDefault());
+
+  EXPECT_TRUE(map.Contains<mojom::TestRuntimeFeatureInterface>());
+}
+
+TEST_F(BinderMapTest, RuntimeFeature_Disabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(mojom::TestRuntimeFeature);
+
+  BinderMap map;
+  map.Add<mojom::TestRuntimeFeatureInterface>(
+      base::BindLambdaForTesting(
+          [&](mojo::PendingReceiver<mojom::TestRuntimeFeatureInterface>
+                  receiver) {}),
+      base::SequencedTaskRunner::GetCurrentDefault());
+
+  EXPECT_FALSE(map.Contains<mojom::TestRuntimeFeatureInterface>());
+}
+
 TEST_F(BinderMapTest, WithContext) {
   Remote<mojom::TestInterface1> remote;
   GenericPendingReceiver receiver(remote.BindNewPipeAndPassReceiver());
@@ -167,6 +218,26 @@ TEST_F(BinderMapTest, FunctorWithContext) {
   BinderMapWithContext<int> map;
   map.Add<mojom::TestInterface1>(&Interface1Functor42);
   EXPECT_TRUE(map.TryBind(42, &receiver));
+  remote.FlushForTesting();
+  EXPECT_TRUE(remote.is_connected());
+
+  // Allow the self-owned receiver to be destroyed.
+  remote.reset();
+  loop.Run();
+}
+
+TEST_F(BinderMapTest, ContextDroppedOnCallingSequence) {
+  Remote<mojom::TestInterface1> remote;
+  GenericPendingReceiver receiver(remote.BindNewPipeAndPassReceiver());
+
+  auto loop = base::RunLoop();
+  g_destruction_closure_for_testing = loop.QuitClosure();
+  BinderMapWithContext<SequenceCheckingContext> map;
+  map.Add<mojom::TestInterface1>(
+      &Interface1Functor, base::ThreadPool::CreateSequencedTaskRunner({}));
+  // If SequenceCheckingContext is moved to or dropped on any sequence other
+  // than this one then it will fail the test.
+  EXPECT_TRUE(map.TryBind(SequenceCheckingContext(), &receiver));
   remote.FlushForTesting();
   EXPECT_TRUE(remote.is_connected());
 
@@ -219,6 +290,14 @@ TEST_F(BinderMapTest, CorrectSequence) {
                            destroy_impl2_loop.Quit();
                          }));
   destroy_impl2_loop.Run();
+}
+
+// TODO(crbug.com/485920240) Disabled until M152 when the CHECK is enabled
+// in mojo/public/cpp/bindings/lib/binder_map_internal.h.
+TEST_F(BinderMapTest, DISABLED_TaskRunnerMustBeSet) {
+  mojo::BinderMap map;
+  EXPECT_DEATH_IF_SUPPORTED(
+      { map.Add<mojom::TestInterface1>(&Interface1Functor, nullptr); }, "");
 }
 
 }  // namespace binder_map_unittest

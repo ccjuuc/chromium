@@ -27,7 +27,6 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ActivityTabProvider;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
-import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider.CustomTabProfileType;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider.TitleVisibility;
 import org.chromium.chrome.browser.browserservices.intents.CustomButtonParams;
 import org.chromium.chrome.browser.customtabs.features.CustomTabDimensionUtils;
@@ -36,7 +35,7 @@ import org.chromium.chrome.browser.customtabs.features.partialcustomtab.PartialC
 import org.chromium.chrome.browser.customtabs.features.toolbar.CustomTabToolbarButtonsProperties.CloseButtonData;
 import org.chromium.chrome.browser.customtabs.features.toolbar.CustomTabToolbarButtonsProperties.MinimizeButtonData;
 import org.chromium.chrome.browser.customtabs.features.toolbar.CustomTabToolbarButtonsProperties.SideSheetMaximizeButtonData;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.flags.CustomTabProfileType;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.toolbar.menu_button.MenuButtonCoordinator;
 import org.chromium.chrome.browser.toolbar.optional_button.ButtonData;
@@ -69,7 +68,7 @@ public class CustomTabToolbarButtonsCoordinator
             BrowserServicesIntentDataProvider intentDataProvider,
             Callback<CustomButtonParams> customButtonClickCallback,
             CustomTabMinimizeDelegate minimizeDelegate,
-            Supplier<AppMenuHandler> appMenuHandler,
+            Supplier<@Nullable AppMenuHandler> appMenuHandler,
             CustomTabToolbar.@Nullable OmniboxParams omniboxParams,
             ActivityLifecycleDispatcher lifecycleDispatcher,
             ActivityTabProvider tabProvider) {
@@ -167,20 +166,17 @@ public class CustomTabToolbarButtonsCoordinator
      */
     public void showSideSheetMaximizeButton(
             boolean isMaximized, MaximizeButtonCallback toggleMaximize) {
-        assert ChromeFeatureList.sCctToolbarRefactor.isEnabled();
         var buttonData =
                 new SideSheetMaximizeButtonData(/* visible= */ true, isMaximized, toggleMaximize);
         mModel.set(SIDE_SHEET_MAXIMIZE_BUTTON, buttonData);
     }
 
     public void removeSideSheetMaximizeButton() {
-        assert ChromeFeatureList.sCctToolbarRefactor.isEnabled();
         var buttonData = new SideSheetMaximizeButtonData();
         mModel.set(SIDE_SHEET_MAXIMIZE_BUTTON, buttonData);
     }
 
     public void setMinimizeButtonEnabled(boolean enabled) {
-        assert ChromeFeatureList.sCctToolbarRefactor.isEnabled();
         mMediator.setMinimizeButtonEnabled(enabled);
     }
 

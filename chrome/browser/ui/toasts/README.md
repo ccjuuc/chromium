@@ -82,6 +82,28 @@ Also note that toasts with a menu cannot have a "X" close button. If this
 behavior is needed, please consult with UX on how to design this in a way
 that supports both.
 
+#### Registering a Toast that Persists on Navigation
+By default, tab-scoped toasts will disappear when the user navigates to a new
+page or switches tabs.
+
+Toasts that persist on navigation are still tab-scoped, meaning they will
+disappear if the user switches to a different tab, but they will survive
+navigation events (like form submissions) within the same tab. This is
+different from global toasts, which are not tied to any specific tab and will
+persist across both tab switches and navigations until they are explicitly
+closed or time out.
+
+```
+void ToastService::RegisterToast(BrowserWindowInterface* interface) {
+  ...
+  toast_registry_->RegisterToast(
+    ToastId,
+    ToastSpecification::Builder(vector_icon, string_id)
+        .SetPersistOnNavigation()
+        .Build());
+}
+```
+
 ### 3. Trigger your Toast
 When you want to trigger your toast to show, you will need to retrieve the
 [ToastController](toast_controller.h) through
@@ -104,9 +126,9 @@ if (toast_controller) {
 ToastController* const toast_controller = browser_window_features->toast_controller();
 if (toast_controller) {
   ToastParams params = ToastParams(ToastId);
-  params.body_string_replacement_params_ = {string_1, string_2};
-  params.action_button_string_replacement_params_ = {string_3};
-  toast_controller->MaybeShowToast(ToastParams(std::move(params)));
+  params.body_string_replacement_params = {string_1, string_2};
+  params.action_button_string_replacement_params = {string_3};
+  toast_controller->MaybeShowToast(std::move(params));
 }
 ```
 
@@ -117,6 +139,19 @@ if (toast_controller) {
   std::unique_ptr<MyCustomMenuModel> menu_model = ...
   ToastParams params = ToastParams(ToastId);
   params.menu_model = std::move(menu_model);
+  toast_controller->MaybeShowToast(std::move(params));
+}
+```
+
+#### Triggering a Toast with a Callback on Close
+When the toast gets destroyed, the callback will be called.
+```
+ToastController* const toast_controller = browser_window_features->toast_controller();
+if (toast_controller) {
+  ToastParams params = ToastParams(ToastId);
+  params.toast_close_callback = base::ScopedClosureRunner(
+      base::BindOnce(&MyClass::OnToastClosed,
+                     weak_factory_.GetWeakPtr(), extra_variable_1));
   toast_controller->MaybeShowToast(ToastParams(std::move(params)));
 }
 ```

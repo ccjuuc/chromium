@@ -23,9 +23,11 @@ import org.chromium.base.ContextUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.customtabs.CustomTabActivityTestRule;
 import org.chromium.chrome.browser.customtabs.CustomTabsIntentTestUtils;
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
@@ -33,13 +35,16 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.util.browser.contextmenu.ContextMenuUtils;
+import org.chromium.content_public.browser.ContentFeatureList;
+import org.chromium.content_public.browser.ContentFeatureMap;
 import org.chromium.net.test.EmbeddedTestServer;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.listmenu.ListMenuItemProperties;
 import org.chromium.ui.test.util.DeviceRestriction;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeoutException;
 
@@ -51,6 +56,7 @@ import java.util.concurrent.TimeoutException;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @Batch(Batch.PER_CLASS)
 @Restriction(DeviceRestriction.RESTRICTION_TYPE_NON_AUTO)
+@DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/481445755
 public class CustomTabContextMenuTest {
 
     private static final String TEST_PATH =
@@ -114,6 +120,7 @@ public class CustomTabContextMenuTest {
             R.id.contextmenu_share_link,
             ChromeContextMenuPopulator.getCustomMenuItemIdStartForTesting()
         };
+        expectedItems = maybeAddInspectElementItem(expectedItems);
 
         assertMenuItemsAreEqual(menuCoordinator, expectedItems);
     }
@@ -135,6 +142,7 @@ public class CustomTabContextMenuTest {
             R.id.contextmenu_read_later,
             R.id.contextmenu_share_link,
         };
+        expectedItems = maybeAddInspectElementItem(expectedItems);
 
         assertMenuItemsAreEqual(menuCoordinator, expectedItems);
     }
@@ -168,5 +176,35 @@ public class CustomTabContextMenuTest {
             }
         }
         return items.toString();
+    }
+
+    /**
+     * Adds items to the baseItems if the given condition is true.
+     *
+     * @param condition The condition to check for whether to add items or not.
+     * @param baseItems The base list of items to add to.
+     * @param additionalItems The additional items to add.
+     * @return An array of items that has the additional items added if the condition is true.
+     */
+    private Integer[] addItemsIf(
+            boolean condition, Integer[] baseItems, Integer[] additionalItems) {
+        List<Integer> variableItems = new ArrayList<>();
+        variableItems.addAll(Arrays.asList(baseItems));
+        if (condition) {
+            for (int i = 0; i < additionalItems.length; i++) variableItems.add(additionalItems[i]);
+        }
+        return variableItems.toArray(baseItems);
+    }
+
+    private Integer[] maybeAddInspectElementItem(Integer[] baseItems) {
+        return addItemsIf(
+                ThreadUtils.runOnUiThreadBlocking(
+                        () ->
+                                ContentFeatureMap.isEnabled(
+                                                ContentFeatureList.ANDROID_DEV_TOOLS_FRONTEND)
+                                        && DeviceFormFactor.isNonMultiDisplayContextOnTablet(
+                                                mCustomTabActivityTestRule.getActivity())),
+                baseItems,
+                new Integer[] {R.id.contextmenu_inspect_element});
     }
 }

@@ -79,10 +79,12 @@ class SecHeaderHelpersTestBase : public PlatformTest {
   SecHeaderHelpersTestBase()
       : task_environment_(base::test::TaskEnvironment::MainThreadType::IO),
         context_(net::CreateTestURLRequestContextBuilder()->Build()),
-        url_request_(context_->CreateRequest(GURL(kSecureSite),
-                                             net::DEFAULT_PRIORITY,
-                                             /*delegate=*/nullptr,
-                                             TRAFFIC_ANNOTATION_FOR_TESTS)) {
+        url_request_(
+            context_->CreateRequest(GURL(kSecureSite),
+                                    net::DEFAULT_PRIORITY,
+                                    /*delegate=*/nullptr,
+                                    TRAFFIC_ANNOTATION_FOR_TESTS,
+                                    net::handles::kInvalidNetworkHandle)) {
     url_request_->set_initiator(
         url::Origin::Create(GURL(kPrivilegedInitiator)));
 
@@ -310,10 +312,12 @@ class SecHeaderHelpersFileSchemeTest
   SecHeaderHelpersFileSchemeTest()
       : task_environment_(base::test::TaskEnvironment::MainThreadType::IO),
         context_(net::CreateTestURLRequestContextBuilder()->Build()),
-        url_request_(context_->CreateRequest(GURL(kFile),
-                                             net::DEFAULT_PRIORITY,
-                                             /*delegate=*/nullptr,
-                                             TRAFFIC_ANNOTATION_FOR_TESTS)) {}
+        url_request_(
+            context_->CreateRequest(GURL(kFile),
+                                    net::DEFAULT_PRIORITY,
+                                    /*delegate=*/nullptr,
+                                    TRAFFIC_ANNOTATION_FOR_TESTS,
+                                    net::handles::kInvalidNetworkHandle)) {}
 
   net::URLRequest* url_request() const { return url_request_.get(); }
 
@@ -391,7 +395,6 @@ struct StorageAccessTestData {
   net::StorageAccessStatusCache status;
   mojom::CredentialsMode credentials_mode;
   std::optional<std::string> expected_value;
-  net::cookie_util::SecFetchStorageAccessOutcome expected_sample;
 };
 
 class StorageAccessSecHeaderHelpersTest
@@ -414,10 +417,6 @@ TEST_P(StorageAccessSecHeaderHelpersTest, Serialization) {
   EXPECT_EQ(current_url_request.extra_request_headers().GetHeader(
                 kKnownSecFetchStorageAccessHeader),
             test_data.expected_value);
-  histogram_tester.ExpectUniqueSample(
-      "API.StorageAccessHeader.SecFetchStorageAccessOutcome",
-      /*sample=*/test_data.expected_sample,
-      /*expected_bucket_count=*/1);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -428,105 +427,80 @@ INSTANTIATE_TEST_SUITE_P(
             net::StorageAccessStatusCache(),
             mojom::CredentialsMode::kOmit,
             std::nullopt,
-            net::cookie_util::SecFetchStorageAccessOutcome::
-                kOmittedRequestOmitsCredentials,
         },
         StorageAccessTestData{
             net::StorageAccessStatusCache(),
             mojom::CredentialsMode::kSameOrigin,
             std::nullopt,
-            net::cookie_util::SecFetchStorageAccessOutcome::
-                kOmittedRequestOmitsCredentials,
         },
         StorageAccessTestData{
             net::StorageAccessStatusCache(std::nullopt),
             mojom::CredentialsMode::kOmit,
             std::nullopt,
-            net::cookie_util::SecFetchStorageAccessOutcome::
-                kOmittedStatusMissing,
         },
         StorageAccessTestData{
             net::StorageAccessStatusCache(std::nullopt),
             mojom::CredentialsMode::kSameOrigin,
             std::nullopt,
-            net::cookie_util::SecFetchStorageAccessOutcome::
-                kOmittedStatusMissing,
         },
         StorageAccessTestData{
             net::StorageAccessStatusCache(std::nullopt),
             mojom::CredentialsMode::kInclude,
             std::nullopt,
-            net::cookie_util::SecFetchStorageAccessOutcome::
-                kOmittedStatusMissing,
         },
         StorageAccessTestData{
             net::StorageAccessStatusCache(
                 net::cookie_util::StorageAccessStatus::kNone),
             mojom::CredentialsMode::kOmit,
             std::nullopt,
-            net::cookie_util::SecFetchStorageAccessOutcome::
-                kOmittedRequestOmitsCredentials,
         },
         StorageAccessTestData{
             net::StorageAccessStatusCache(
                 net::cookie_util::StorageAccessStatus::kNone),
             mojom::CredentialsMode::kSameOrigin,
             std::nullopt,
-            net::cookie_util::SecFetchStorageAccessOutcome::
-                kOmittedRequestOmitsCredentials,
         },
         StorageAccessTestData{
             net::StorageAccessStatusCache(
                 net::cookie_util::StorageAccessStatus::kNone),
             mojom::CredentialsMode::kInclude,
             "none",
-            net::cookie_util::SecFetchStorageAccessOutcome::kValueNone,
         },
         StorageAccessTestData{
             net::StorageAccessStatusCache(
                 net::cookie_util::StorageAccessStatus::kInactive),
             mojom::CredentialsMode::kOmit,
             std::nullopt,
-            net::cookie_util::SecFetchStorageAccessOutcome::
-                kOmittedRequestOmitsCredentials,
         },
         StorageAccessTestData{
             net::StorageAccessStatusCache(
                 net::cookie_util::StorageAccessStatus::kInactive),
             mojom::CredentialsMode::kSameOrigin,
             std::nullopt,
-            net::cookie_util::SecFetchStorageAccessOutcome::
-                kOmittedRequestOmitsCredentials,
         },
         StorageAccessTestData{
             net::StorageAccessStatusCache(
                 net::cookie_util::StorageAccessStatus::kInactive),
             mojom::CredentialsMode::kInclude,
             "inactive",
-            net::cookie_util::SecFetchStorageAccessOutcome::kValueInactive,
         },
         StorageAccessTestData{
             net::StorageAccessStatusCache(
                 net::cookie_util::StorageAccessStatus::kActive),
             mojom::CredentialsMode::kOmit,
             std::nullopt,
-            net::cookie_util::SecFetchStorageAccessOutcome::
-                kOmittedRequestOmitsCredentials,
         },
         StorageAccessTestData{
             net::StorageAccessStatusCache(
                 net::cookie_util::StorageAccessStatus::kActive),
             mojom::CredentialsMode::kSameOrigin,
             std::nullopt,
-            net::cookie_util::SecFetchStorageAccessOutcome::
-                kOmittedRequestOmitsCredentials,
         },
         StorageAccessTestData{
             net::StorageAccessStatusCache(
                 net::cookie_util::StorageAccessStatus::kActive),
             mojom::CredentialsMode::kInclude,
             "active",
-            net::cookie_util::SecFetchStorageAccessOutcome::kValueActive,
         }));
 
 #ifdef GTEST_HAS_DEATH_TEST
@@ -555,10 +529,12 @@ class FrameTopSecHeaderHelpersTest : public PlatformTest,
   FrameTopSecHeaderHelpersTest()
       : task_environment_(base::test::TaskEnvironment::MainThreadType::IO),
         context_(net::CreateTestURLRequestContextBuilder()->Build()),
-        url_request_(context_->CreateRequest(GetParam(),
-                                             net::DEFAULT_PRIORITY,
-                                             /*delegate=*/nullptr,
-                                             TRAFFIC_ANNOTATION_FOR_TESTS)) {
+        url_request_(
+            context_->CreateRequest(GetParam(),
+                                    net::DEFAULT_PRIORITY,
+                                    /*delegate=*/nullptr,
+                                    TRAFFIC_ANNOTATION_FOR_TESTS,
+                                    net::handles::kInvalidNetworkHandle)) {
     url_request_->set_initiator(
         url::Origin::Create(GURL(kPrivilegedInitiator)));
     url_request_->set_storage_access_status(net::StorageAccessStatusCache(
@@ -703,10 +679,12 @@ class FrameAncestorsSecHeaderHelpersTest
  public:
   FrameAncestorsSecHeaderHelpersTest()
       : context_(net::CreateTestURLRequestContextBuilder()->Build()),
-        url_request_(context_->CreateRequest(GetParam().url_request_dest,
-                                             net::DEFAULT_PRIORITY,
-                                             /*delegate=*/nullptr,
-                                             TRAFFIC_ANNOTATION_FOR_TESTS)) {
+        url_request_(
+            context_->CreateRequest(GetParam().url_request_dest,
+                                    net::DEFAULT_PRIORITY,
+                                    /*delegate=*/nullptr,
+                                    TRAFFIC_ANNOTATION_FOR_TESTS,
+                                    net::handles::kInvalidNetworkHandle)) {
     url_request_->set_initiator(
         url::Origin::Create(GURL(kPrivilegedInitiator)));
     url_request_->set_storage_access_status(net::StorageAccessStatusCache(

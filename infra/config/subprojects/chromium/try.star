@@ -41,6 +41,10 @@ luci.bucket(
             users = [
                 "dawn-automated-expectations@chops-service-accounts.iam.gserviceaccount.com",
                 "findit-for-me@appspot.gserviceaccount.com",
+                # Need to add project-scoped accounts here to trigger builders
+                # in Turbo CI mode. The "projects" field below only applies to
+                # builders triggered fully through LUCI.
+                "v8-scoped@luci-project-accounts.iam.gserviceaccount.com",
             ],
             projects = [p for p in [
                 branches.value(branch_selector = branches.selector.MAIN, value = "angle"),
@@ -160,6 +164,11 @@ luci.cq_group(
             name = "chromium-src-emergency-quota",
             groups = ["chromium-src-emergency-quota"],
             run = cq.run_limits(max_active = None),
+        ),
+        cq.user_limit(
+            name = "chromium-src-increased-quota",
+            groups = ["chromium-src-increased-quota"],
+            run = cq.run_limits(max_active = 20),
         ),
         cq.user_limit(
             name = "bots",

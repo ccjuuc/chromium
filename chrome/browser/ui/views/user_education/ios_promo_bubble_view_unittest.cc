@@ -6,14 +6,13 @@
 
 #include <memory>
 
-#include "base/containers/contains.h"
 #include "base/memory/weak_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/promos/ios_promo_trigger_service.h"
-#include "chrome/browser/ui/promos/ios_promo_trigger_service_factory.h"
+#include "chrome/browser/ui/desktop_to_mobile_promos/ios_promo_trigger_service.h"
+#include "chrome/browser/ui/desktop_to_mobile_promos/ios_promo_trigger_service_factory.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "components/desktop_to_mobile_promos/desktop_to_mobile_promos_metrics.h"
@@ -21,6 +20,7 @@
 #include "components/desktop_to_mobile_promos/promos_types.h"
 #include "components/sync/protocol/sync_enums.pb.h"
 #include "components/sync_device_info/fake_device_info_tracker.h"
+#include "components/sync_device_info/test_device_info_builder.h"
 #include "components/sync_preferences/features.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/common/referrer.h"
@@ -40,12 +40,15 @@ class MockIOSPromoTriggerService : public IOSPromoTriggerService {
  public:
   explicit MockIOSPromoTriggerService(Profile* profile)
       : IOSPromoTriggerService(profile) {
+    syncer::TestDeviceInfoBuilder builder(syncer::DeviceInfo::OsType::kIOS);
+    fake_device_info_ = builder.Build();
+
     // Add a fake iOS device.
-    fake_device_info_tracker_.Add(&fake_device_info_);
+    fake_device_info_tracker_.Add(fake_device_info_.get());
   }
 
   const syncer::DeviceInfo* GetIOSDeviceToRemind() override {
-    return &fake_device_info_;
+    return fake_device_info_.get();
   }
 
   MOCK_METHOD(void,
@@ -53,32 +56,13 @@ class MockIOSPromoTriggerService : public IOSPromoTriggerService {
               (PromoType promo_type, const std::string& device_guid),
               (override));
 
-  const syncer::DeviceInfo* GetFakeDeviceInfo() { return &fake_device_info_; }
+  const syncer::DeviceInfo* GetFakeDeviceInfo() {
+    return fake_device_info_.get();
+  }
 
  private:
   syncer::FakeDeviceInfoTracker fake_device_info_tracker_;
-  syncer::DeviceInfo fake_device_info_{
-      "guid",
-      "iPhone",
-      "Chrome 100",
-      "User Agent",
-      sync_pb::SyncEnums::TYPE_PHONE,
-      syncer::DeviceInfo::OsType::kIOS,
-      syncer::DeviceInfo::FormFactor::kPhone,
-      "device_id",
-      "manufacturer",
-      "model",
-      "full_hardware_class",
-      base::Time::Now(),
-      base::TimeDelta(),
-      /*send_tab_to_self_receiving_enabled=*/true,
-      sync_pb::SyncEnums::SEND_TAB_RECEIVING_TYPE_CHROME_OR_UNSPECIFIED,
-      /*sharing_info=*/std::nullopt,
-      /*paask_info=*/std::nullopt,
-      /*fcm_registration_token=*/"token",
-      /*interested_data_types=*/syncer::DataTypeSet::All(),
-      /*auto_sign_out_last_signin_timestamp=*/std::nullopt,
-      /*desktop_to_ios_promo_receiving_enabled=*/false};
+  std::unique_ptr<syncer::DeviceInfo> fake_device_info_;
 };
 
 std::unique_ptr<KeyedService> CreateMockIOSPromoTriggerService(
@@ -136,10 +120,9 @@ class IOSPromoBubbleViewTest : public ChromeViewsTestBase {
   void CreateAndShowBubble(PromoType promo_type = PromoType::kLens,
                            BubbleType bubble_type = BubbleType::kQRCode) {
     auto bubble = std::make_unique<IOSPromoBubbleView>(
-        GetProfile(), promo_type, bubble_type, anchor_view_,
+        nullptr, GetProfile(), promo_type, bubble_type, anchor_view_,
         views::BubbleBorder::TOP_RIGHT);
     bubble_view_ = bubble.get();
-
     user_action_subscription_ =
         bubble_view_->AddUserActionCallback(user_action_callback_.Get());
 
@@ -271,8 +254,8 @@ TEST_F(IOSPromoBubbleViewTest, AcceptOpensUrl_QRCode) {
       .WillOnce([](const content::OpenURLParams& params) {
         EXPECT_EQ(params.url.host(), "www.google.com");
         EXPECT_EQ(params.url.path(), "/chrome/go-mobile/");
-        EXPECT_TRUE(base::Contains(params.url.query(), "ios-campaign"));
-        EXPECT_TRUE(base::Contains(params.url.query(), "android-campaign"));
+        EXPECT_TRUE(params.url.query().contains("ios-campaign"));
+        EXPECT_TRUE(params.url.query().contains("android-campaign"));
         EXPECT_EQ(params.disposition,
                   WindowOpenDisposition::NEW_FOREGROUND_TAB);
       });

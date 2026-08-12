@@ -7,27 +7,85 @@
 
 #include <appmodel.h>
 
+#include <string_view>
+
 #include "base/containers/fixed_flat_map.h"
 #include "base/memory/raw_span.h"
 #include "base/strings/cstring_view.h"
+#include "services/webnn/public/mojom/webnn_device.mojom.h"
 
 namespace webnn {
 
-inline constexpr base::cstring_view kCpuExecutionProvider =
+// Specifies if an execution provider supports offline compilation and the
+// related information needed for offline compilation.
+struct OfflineCompilationSupport {
+  // The supported device type.
+  mojom::Device device_type;
+  // Supported device IDs corresponding to the device type. An empty span means
+  // all device IDs of `device_type` are supported.
+  base::raw_span<const uint32_t> device_ids;
+  // Libraries that must be preloaded before sandbox lockdown. This list should
+  // only contain workarounds when compiling a graph has issues to load a
+  // particular library.
+  // TODO(crbug.com/529544314): Remove once EPs load all required libraries
+  // internally by compiling a trivial graph.
+  base::raw_span<const std::string_view> preload_libraries_workaround;
+};
+
+namespace internal {
+
+inline constexpr OfflineCompilationSupport kOpenVINOOfflineCompilation[] = {
+    {
+        .device_type = mojom::Device::kNpu,
+        .device_ids =
+            (const uint32_t[]){
+                0x643E,  // Lunarlake
+                0xB03E,  // Pantherlake
+                0xFD3E,  // Wildcatlake
+            },
+        .preload_libraries_workaround =
+            (const std::string_view[]){
+                // This library is loaded on a worker thread internally in the
+                // NPU compiler, which triggers an ERROR_ACCESS_DENIED error
+                // since the worker thread runs on a lockdown token. Preloading
+                // this library before sandbox lockdown is a workaround for this
+                // issue.
+                "openvino_intel_npu_compiler.dll",
+            },
+    },
+};
+
+// The WebGPU EP is vendor-agnostic and backs a generic virtual GPU device, so
+// it supports offline compilation for any GPU regardless of device ID. The
+// default empty `device_ids` span expresses that "any device ID" support.
+// Combined with the EP-level `vendor_id` of 0, this represents a
+// vendor-agnostic generic virtual device, which is only registered when the
+// environment is created with "allow_virtual_devices" enabled; device matching
+// in the sandboxed Compiler process then resolves the target to that virtual
+// device.
+inline constexpr OfflineCompilationSupport kWebGpuOfflineCompilation[] = {
+    {
+        .device_type = mojom::Device::kGpu,
+    },
+};
+
+}  // namespace internal
+
+inline constexpr std::string_view kCPUExecutionProvider =
     "CPUExecutionProvider";
-inline constexpr base::cstring_view kDmlExecutionProvider =
+inline constexpr std::string_view kDmlExecutionProvider =
     "DmlExecutionProvider";
-inline constexpr base::cstring_view kMIGraphXExecutionProvider =
+inline constexpr std::string_view kMIGraphXExecutionProvider =
     "MIGraphXExecutionProvider";
-inline constexpr base::cstring_view kNvTensorRTRTXExecutionProvider =
+inline constexpr std::string_view kNvTensorRTRTXExecutionProvider =
     "NvTensorRTRTXExecutionProvider";
-inline constexpr base::cstring_view kOpenVINOExecutionProvider =
+inline constexpr std::string_view kOpenVINOExecutionProvider =
     "OpenVINOExecutionProvider";
-inline constexpr base::cstring_view kQNNExecutionProvider =
+inline constexpr std::string_view kQNNExecutionProvider =
     "QNNExecutionProvider";
-inline constexpr base::cstring_view kVitisAIExecutionProvider =
+inline constexpr std::string_view kVitisAIExecutionProvider =
     "VitisAIExecutionProvider";
-inline constexpr base::cstring_view kWebGpuExecutionProvider =
+inline constexpr std::string_view kWebGpuExecutionProvider =
     "WebGpuExecutionProvider";
 
 // Describes the workarounds needed for execution provider limitations.
@@ -41,6 +99,15 @@ struct EpWorkarounds {
   // NCHW layout. `ContextProperties.resample_2d_axes` will be updated to
   // respect this limit.
   bool resample2d_limit_to_nchw = false;
+
+  // The maximum K dimension size of batched MatMul on certain NPU devices.
+  // It is unnecessary to compute `|=` operation result across EP devices,
+  // because there will be only one NPU device EP.
+  std::optional<uint32_t> npu_batched_matmul_k_dimension_limit;
+
+  // Whether the EP may report the NPU driver version in legacy concatenated
+  // format (e.g., "1004404") instead of 4-part dot-separated format.
+  bool npu_concatenated_driver_version = false;
 
   EpWorkarounds& operator|=(const EpWorkarounds& other) {
     resample2d_limit_to_nchw |= other.resample2d_limit_to_nchw;
@@ -66,12 +133,22 @@ struct EpInfo {
   bool enabled;
   EpWorkarounds workarounds;
   base::raw_span<const SessionConfigEntry> config_entries;
+  // The minimum driver versions required by the NPU device for this EP to work.
+  // Empty value means no version check is needed (default allow).
+  std::string_view min_npu_driver_version;
+  // Optional session config key for dumping models. When set,
+  // `SetOptimizedModelFilePath` is not used; instead, the dump path is passed
+  // via this config entry. Empty value means the EP uses the default
+  // `SetOptimizedModelFilePath` approach.
+  base::cstring_view model_dump_config_key;
+  // The information of offline compilation support.
+  base::raw_span<const OfflineCompilationSupport> offline_compilation_support;
 };
 
 // The listed EPs must match the names of the histogram variants
 // WebNNOrtExecutionProvider in
 // tools/metrics/histograms/metadata/webnn/histograms.xml.
-inline constexpr auto kKnownEPs = base::MakeFixedFlatMap<base::cstring_view,
+inline constexpr auto kKnownEPs = base::MakeFixedFlatMap<std::string_view,
                                                          EpInfo>({
     // AMD
     {
@@ -81,7 +158,7 @@ inline constexpr auto kKnownEPs = base::MakeFixedFlatMap<base::cstring_view,
                 {
                     .Major = 1,
                     .Minor = 8,
-                    .Build = 35,
+                    .Build = 53,
                     .Revision = 0,
                 },
             .vendor_id = 0x1002,
@@ -94,24 +171,26 @@ inline constexpr auto kKnownEPs = base::MakeFixedFlatMap<base::cstring_view,
         {
             .min_package_version =
                 {
-                    .Major = 1,
-                    .Minor = 8,
-                    .Build = 14,
+                    .Major = 0,
+                    .Minor = 0,
+                    .Build = 26,
                     .Revision = 0,
                 },
             .vendor_id = 0x10de,
-            .enabled = true,
+            .enabled = false,
         },
     },
     // Intel
     {
         kOpenVINOExecutionProvider,
         {
+            // The package version 1.8.69.0 maps to the EP
+            // version 1.3.0+b130ce1.
             .min_package_version =
                 {
                     .Major = 1,
                     .Minor = 8,
-                    .Build = 15,
+                    .Build = 69,
                     .Revision = 0,
                 },
             .vendor_id = 0x8086,
@@ -119,6 +198,14 @@ inline constexpr auto kKnownEPs = base::MakeFixedFlatMap<base::cstring_view,
             .workarounds =
                 {
                     .resample2d_limit_to_nchw = true,
+                    // The OpenVINO NPU limits the batched MatMul K dimension
+                    // size to 8192.
+                    // For more details, see GraphBuilderOrt::AddMatMulOperation
+                    // in src/services/webnn/graph_builder_ort.cc.
+                    .npu_batched_matmul_k_dimension_limit = 8192,
+                    // The OpenVINO EP currently reports NPU driver versions in
+                    // legacy concatenated format (e.g., "1004404").
+                    .npu_concatenated_driver_version = true,
                 },
             // OpenVINO EP configuration. Keys and values must align with the
             // ORT OpenVINO EP implementation. See:
@@ -151,6 +238,14 @@ inline constexpr auto kKnownEPs = base::MakeFixedFlatMap<base::cstring_view,
                             }
                         })"},
                 },
+            // The minimum NPU driver version in 4-part dot-separated format.
+            .min_npu_driver_version = "32.0.100.4404",
+            // `SetOptimizedModelFilePath` does not work for the OpenVINO EP.
+            // Dump models via its own session config entry.
+            .model_dump_config_key =
+                "ep.openvinoexecutionprovider.dump_subgraphs",
+            .offline_compilation_support =
+                internal::kOpenVINOOfflineCompilation,
         },
     },
     // Qualcomm
@@ -159,9 +254,9 @@ inline constexpr auto kKnownEPs = base::MakeFixedFlatMap<base::cstring_view,
         {
             .min_package_version =
                 {
-                    .Major = 1,
-                    .Minor = 8,
-                    .Build = 13,
+                    .Major = 2,
+                    .Minor = 2420,
+                    .Build = 40,
                     .Revision = 0,
                 },
             .vendor_id = 0x4d4f4351,
@@ -176,11 +271,38 @@ inline constexpr auto kKnownEPs = base::MakeFixedFlatMap<base::cstring_view,
                 {
                     .Major = 1,
                     .Minor = 8,
-                    .Build = 31,
+                    .Build = 57,
                     .Revision = 0,
                 },
             .vendor_id = 0x1022,
             .enabled = false,
+        },
+    },
+    {
+        kWebGpuExecutionProvider,
+        {
+            .min_package_version =
+                {
+                    .Major = 0,
+                    .Minor = 2,
+                    .Build = 0,
+                    .Revision = 26194,
+                },
+            // The WebGPU EP is vendor-agnostic, so the vendor ID is set to 0
+            // to match ORT's convention.
+            // https://github.com/microsoft/onnxruntime/blob/a91b0b4/onnxruntime/core/providers/webgpu/ep/factory.cc#L66
+            .vendor_id = 0,
+            .enabled = false,
+            // The WebGPU EP does not enable int64 ops by default. WebNN
+            // requires int64 support, so enable it explicitly. Key and value
+            // must align with the ORT WebGPU EP implementation. See:
+            // https://github.com/microsoft/onnxruntime/blob/47faa11b035d53c49f3f93e815d004e616d360ca/onnxruntime/core/providers/webgpu/webgpu_provider_options.h#L18
+            .config_entries =
+                (const SessionConfigEntry[]){
+                    {.key = "ep.webgpuexecutionprovider.enableInt64",
+                     .value = "1"},
+                },
+            .offline_compilation_support = internal::kWebGpuOfflineCompilation,
         },
     },
 });

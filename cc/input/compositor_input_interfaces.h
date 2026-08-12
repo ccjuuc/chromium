@@ -13,6 +13,7 @@
 #include "cc/input/actively_scrolling_type.h"
 #include "cc/input/browser_controls_offset_tag_modifications.h"
 #include "cc/input/browser_controls_state.h"
+#include "cc/metrics/begin_main_frame_metrics.h"
 #include "cc/metrics/events_metrics_manager.h"
 #include "cc/metrics/frame_sequence_metrics.h"
 #include "cc/paint/element_id.h"
@@ -134,7 +135,8 @@ class CompositorDelegateForInput {
   virtual void ScrollAnimationAbort(ElementId element_id) const = 0;
   virtual float GetBrowserControlsTopOffset() const = 0;
   virtual void ScrollBegin() const = 0;
-  virtual void ScrollEnd() const = 0;
+  virtual void ScrollEnd(
+      const gfx::Vector2dF& compensated_scroll_delta) const = 0;
   virtual void StartScrollSequence(
       FrameSequenceTrackerType type,
       FrameInfo::SmoothEffectDrivingThread scrolling_thread) = 0;
@@ -170,8 +172,8 @@ class CompositorDelegateForInput {
       base::TimeDelta delayed_by,
       ElementId element_id) const = 0;
   virtual bool HasAnimatedScrollbars() const = 0;
-  virtual void SetNeedsCommit() = 0;
-  virtual void SetNeedsFullViewportRedraw() = 0;
+  virtual void SetNeedsCommit(
+      BeginMainFrameReason reason = BeginMainFrameReason::kOther) = 0;
   virtual void SetDeferBeginMainFrame(bool defer_begin_main_frame) const = 0;
   virtual void DidUpdateScrollAnimationCurve() = 0;
   virtual void DidStartPinchZoom() = 0;

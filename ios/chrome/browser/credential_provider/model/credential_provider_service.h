@@ -5,6 +5,7 @@
 #ifndef IOS_CHROME_BROWSER_CREDENTIAL_PROVIDER_MODEL_CREDENTIAL_PROVIDER_SERVICE_H_
 #define IOS_CHROME_BROWSER_CREDENTIAL_PROVIDER_MODEL_CREDENTIAL_PROVIDER_SERVICE_H_
 
+#include "base/functional/callback.h"
 #import "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "components/keyed_service/core/keyed_service.h"
@@ -29,6 +30,7 @@ class AffiliationService;
 
 namespace password_manager {
 class AffiliatedMatchHelper;
+struct StoredCredential;
 }  // namespace password_manager
 
 namespace syncer {
@@ -79,8 +81,8 @@ class CredentialProviderService
       password_manager::PasswordStoreInterface* store,
       const password_manager::PasswordStoreChangeList& changes) override;
   void OnLoginsRetained(password_manager::PasswordStoreInterface* store,
-                        const std::vector<password_manager::PasswordForm>&
-                            retained_passwords) override;
+                        const std::vector<password_manager::StoredCredential>&
+                            retained_credentials) override;
 
  private:
   // Request all the credentials to sync them. Before adding the fresh ones,
@@ -91,6 +93,11 @@ class CredentialProviderService
   // syncs to disk. Errors are treated as an empty list of credentials.
   void SyncAllCredentials(password_manager::PasswordStoreInterface* store,
                           password_manager::LoginsResultOrError forms_or_error);
+
+  // Helper for completion of `AddCredentials` in `SyncAllCredentials`.
+  void CompleteSyncAllCredentials(
+      MemoryCredentialStore* memory_credential_store,
+      password_manager::PasswordStoreInterface* store);
 
   // Syncs the credential store to disk.
   void SyncStore();
@@ -104,17 +111,27 @@ class CredentialProviderService
   // Add credentials from `forms`. Currently simply calls either the legacy or
   // refactored version of this function.
   void AddCredentials(MemoryCredentialStore* store,
-                      std::vector<password_manager::PasswordForm> forms);
+                      std::vector<password_manager::StoredCredential> forms,
+                      base::OnceClosure completion);
 
   // Add credentials from `forms`. This is the original legacy version.
-  void AddCredentialsLegacy(MemoryCredentialStore* store,
-                            std::vector<password_manager::PasswordForm> forms);
+  void AddCredentialsLegacy(
+      MemoryCredentialStore* store,
+      std::vector<password_manager::StoredCredential> forms);
 
   // Add credentials from `forms`. This is the refactored version for better
   // performance.
   void AddCredentialsRefactored(
       MemoryCredentialStore* store,
-      std::vector<password_manager::PasswordForm> forms);
+      std::vector<password_manager::StoredCredential> forms,
+      base::OnceClosure completion);
+
+  // Helper for asynchronous portion of `AddCredentialsRefactored`.
+  void ContinueAddCredentialsRefactored(
+      MemoryCredentialStore* store,
+      std::vector<password_manager::StoredCredential> forms,
+      base::OnceClosure completion,
+      NSDictionary<NSString*, NSDate*>* favicon_dict);
 
   // Add credentials from passkeys.
   void AddCredentials(
@@ -123,7 +140,7 @@ class CredentialProviderService
 
   // Removes credentials from `forms`.
   void RemoveCredentials(MemoryCredentialStore* store,
-                         std::vector<password_manager::PasswordForm> forms);
+                         std::vector<password_manager::StoredCredential> forms);
 
   // Removes credentials from `passkeys`.
   void RemoveCredentials(
@@ -144,14 +161,8 @@ class CredentialProviderService
   // Syncs whether or not automatic passkey upgrade is enabled.
   void UpdateAutomaticPasskeyUpgradeSetting();
 
-  // Syncs whether or not PRF is enabled.
-  void UpdatePasskeyPRFSetting();
-
   // Syncs whether or not Large Blob is enabled.
   void UpdatePasskeyLargeBlobSetting();
-
-  // Syncs whether or not signal API is enabled.
-  void UpdateSignalAPISetting();
 
   // PasswordStoreConsumer:
   void OnGetPasswordStoreResultsOrErrorFrom(
@@ -209,7 +220,7 @@ class CredentialProviderService
   const raw_ptr<signin::IdentityManager> identity_manager_;
 
   // Sync Service to observe.
-  const raw_ptr<syncer::SyncService> sync_service_;
+  raw_ptr<syncer::SyncService> sync_service_;
 
   // Helper which injects branding information from affiliation service.
   const std::unique_ptr<password_manager::AffiliatedMatchHelper>

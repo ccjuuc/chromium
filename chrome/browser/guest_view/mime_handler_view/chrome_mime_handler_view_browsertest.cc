@@ -121,7 +121,7 @@ class ChromeMimeHandlerViewTest : public extensions::ExtensionApiTest,
  protected:
   TestGuestViewManager* GetGuestViewManager() {
     return factory_.GetOrCreateTestGuestViewManager(
-        browser()->profile(),
+        browser()->GetProfile(),
         ExtensionsAPIClient::Get()->CreateGuestViewManagerDelegate());
   }
 
@@ -250,7 +250,7 @@ IN_PROC_BROWSER_TEST_P(ChromeMimeHandlerViewTest,
 // potential race between the cross-origin renderer initiated navigation and
 // the navigation to "about:blank" started from the browser.
 //
-// Disabled on all platforms due to flakiness: https://crbug.com/1182355.
+// Disabled on all platforms due to flakiness: https://crbug.com/40751404.
 IN_PROC_BROWSER_TEST_P(ChromeMimeHandlerViewTest,
                        DISABLED_NavigationRaceFromEmbedder) {
   const std::string kTestName = "test_navigation_race_embedder";
@@ -266,7 +266,7 @@ IN_PROC_BROWSER_TEST_P(ChromeMimeHandlerViewTest,
 
 // TODO(ekaramad): Without proper handling of navigation to 'about:blank', this
 // test would be flaky. Use TestNavigationManager class and possibly break the
-// test into more sub-tests for various scenarios (https://crbug.com/659750).
+// test into more sub-tests for various scenarios (https://crbug.com/40490789).
 // This test verifies that (almost) concurrent navigations in a cross-process
 // frame inside an <embed> which is transitioning to a MimeHandlerView will
 // not block creation of MimeHandlerView. The test will load some cross-origin
@@ -291,7 +291,7 @@ IN_PROC_BROWSER_TEST_P(ChromeMimeHandlerViewTest,
 }
 
 // This test verifies that removing embedder RenderFrame will not crash the
-// renderer (for context see https://crbug.com/930803).
+// renderer (for context see https://crbug.com/40613417).
 IN_PROC_BROWSER_TEST_P(ChromeMimeHandlerViewTest, EmbedderFrameRemovedNoCrash) {
   RunTest("test_iframe_basic.html");
   auto* guest_view = GetGuestViewManager()->WaitForSingleGuestViewCreated();
@@ -322,7 +322,7 @@ IN_PROC_BROWSER_TEST_P(ChromeMimeHandlerViewTest, EmbedderFrameRemovedNoCrash) {
 // about:blank from both the browser side and the embedder side in the method
 // HTMLPlugInElement::RequestObjectInternal. Find out the issue and add another
 // test here where the dialog is dismissed and the guest not created.
-// (https://crbug.com/659750).
+// (https://crbug.com/40490789).
 // This test verifies that transitioning a plugin element from text/html to
 // application/pdf respects 'beforeunload'. The test specifically checks that
 // 'beforeunload' dialog is shown to the user and if the user decides to
@@ -405,7 +405,7 @@ IN_PROC_BROWSER_TEST_P(ChromeMimeHandlerViewTest, EmbeddedDataUrlLong) {
   RunTest("test_embedded_data_url_long.html");
 }
 
-// Regression test for crbug.com/587709.
+// Regression test for crbug.com/41239959.
 IN_PROC_BROWSER_TEST_P(ChromeMimeHandlerViewTest, SingleRequest) {
   GURL url(embedded_test_server()->GetURL("/testBasic.csv"));
   RunTest("testBasic.csv");
@@ -658,7 +658,7 @@ IN_PROC_BROWSER_TEST_P(ChromeMimeHandlerViewTest,
 
 // This test verifies that a display:none frame loading a MimeHandlerView type
 // will end up creating a MimeHandlerview. NOTE: this is an exception to support
-// printing in Google docs (see https://crbug.com/978240).
+// printing in Google docs (see https://crbug.com/41467620).
 IN_PROC_BROWSER_TEST_P(ChromeMimeHandlerViewTest,
                        MimeHandlerViewInDisplayNoneFrameForGoogleApps) {
   GURL data_url(
@@ -703,7 +703,7 @@ IN_PROC_BROWSER_TEST_P(ChromeMimeHandlerViewTest, FrameIterationBeforeAttach) {
   base::OnceClosure resume_attach;
   auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
   auto* mime_handler_view_helper = extensions::MimeHandlerViewAttachHelper::Get(
-      web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID());
+      web_contents->GetPrimaryMainFrame()->GetProcess()->GetID());
   mime_handler_view_helper->set_resume_attach_callback_for_testing(
       base::BindLambdaForTesting([&](base::OnceClosure resume_closure) {
         resume_attach = std::move(resume_closure);
@@ -746,4 +746,131 @@ IN_PROC_BROWSER_TEST_P(ChromeMimeHandlerViewTest, FrameIterationBeforeAttach) {
             guest_main_frame->GetParentOrOuterDocumentOrEmbedder());
   EXPECT_EQ(expected_outermost_rfh,
             guest_main_frame->GetOutermostMainFrameOrEmbedder());
+}
+
+// Regression test for crbug.com/506375731.
+// PostMessageSupport::SetActive() would flush pending messages by iterating
+// over a member vector. Malicious JavaScript execution during this flush could
+// synchronously detach the frame and delete the PostMessageSupport instance,
+// leading to a Use-After-Free during iteration.
+IN_PROC_BROWSER_TEST_P(ChromeMimeHandlerViewTest, SetActiveUAF) {
+  TestGuestViewManager* manager = GetGuestViewManager();
+  TestMimeHandlerViewGuest::RegisterTestGuestViewType(manager);
+  ASSERT_TRUE(LoadTestExtension());
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/title1.html")));
+
+  auto* web_contents = GetEmbedderWebContents();
+
+  // 1. Create a "keeper" embed to keep MimeHandlerViewContainerManager alive.
+  // 2. Create a "victim" embed.
+  // 3. Queue messages with a malicious getter that detaches the victim.
+  // 4. When SetActive() flushes the queue, the first message detaches the
+  //    frame, which synchronously deletes the PostMessageSupport instance.
+  //    Subsequent messages would then access freed memory without the fix.
+  // We keep 'e' in window.e to avoid immediate destruction and potential
+  // DCHECKs in ~HTMLPlugInElement during the test, focusing on the UAF in
+  // PostMessageSupport.
+  const char kReproScript[] = R"(
+    (async () => {
+      const keeper = document.createElement('embed');
+      keeper.type = 'text/csv';
+      keeper.src = 'testEmbedded.csv';
+      document.body.appendChild(keeper);
+
+      const e = document.createElement('embed');
+      window.e = e;
+      e.type = 'text/csv';
+      e.src = 'testEmbedded.csv';
+      document.body.appendChild(e);
+
+      while (typeof e.postMessage !== 'function') {
+        await new Promise(r => requestAnimationFrame(r));
+      }
+
+      e.postMessage({
+        get a() {
+          window.e.remove();
+          return 1;
+        }
+      });
+      e.postMessage(1);
+      e.postMessage(2);
+      e.postMessage(3);
+    })();
+  )";
+
+  ASSERT_TRUE(content::ExecJs(web_contents, kReproScript));
+
+  // We expect at least the keeper guest view to be created and loaded.
+  guest_view::GuestViewBase* keeper_guest = manager->WaitForNextGuestViewCreated();
+  ASSERT_TRUE(keeper_guest);
+  ASSERT_TRUE(manager->WaitUntilAttachedAndLoaded(keeper_guest));
+
+  // The victim guest's creation and SetActive() call happen asynchronously.
+  // If the fix for crbug.com/506375731 is missing, the renderer will crash
+  // with a Use-After-Free during the message flush. If fixed, it returns
+  // safely.
+  ASSERT_TRUE(content::ExecJs(web_contents, "true"));
+}
+
+IN_PROC_BROWSER_TEST_P(ChromeMimeHandlerViewTest, PostMessageGetterOverwrite) {
+  TestGuestViewManager* manager = GetGuestViewManager();
+  TestMimeHandlerViewGuest::RegisterTestGuestViewType(manager);
+  ASSERT_TRUE(LoadTestExtension());
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/title1.html")));
+
+  auto* web_contents = GetEmbedderWebContents();
+
+  const char kSetupScript[] = R"(
+    (() => {
+      const iframe = document.createElement('iframe');
+      iframe.src = 'testEmbedded.csv';
+      document.body.appendChild(iframe);
+    })();
+  )";
+
+  ASSERT_TRUE(content::ExecJs(web_contents, kSetupScript));
+
+  guest_view::GuestViewBase* guest = manager->WaitForNextGuestViewCreated();
+  ASSERT_TRUE(guest);
+  ASSERT_TRUE(manager->WaitUntilAttachedAndLoaded(guest));
+
+  // This replaces the internal embed element with our own frame of the same
+  // name. The new frame has a custom getter for the postMessage property, which
+  // destroys the parent iframe when accessed. Then we trigger a postMessage.
+  // The implementation should be robust to this manipulation.
+  // See https://crbug.com/516910450
+  const char kReproScript[] = R"(
+    (async () => {
+      const iframe = document.querySelector('iframe');
+      while (typeof iframe.contentDocument.querySelector('embed')?.postMessage
+                 !== 'function') {
+        await new Promise(r => setTimeout(r));
+      }
+      let innerEmbed = iframe.contentDocument.querySelector('embed');
+      let internalid = innerEmbed.getAttribute('internalid');
+      let savedPostMessage = innerEmbed.postMessage;
+
+      innerEmbed.remove();
+      let evilFrame = iframe.contentDocument.createElement('iframe');
+      evilFrame.name = internalid;
+      iframe.contentDocument.body.appendChild(evilFrame);
+
+      Object.defineProperty(evilFrame.contentWindow, 'postMessage', {
+        configurable: true,
+        get() {
+          iframe.remove();
+          return function() {};
+        }
+      });
+
+      savedPostMessage({});
+    })();
+  )";
+
+  ASSERT_TRUE(content::ExecJs(web_contents, kReproScript));
 }

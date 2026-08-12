@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "base/component_export.h"
 #include "base/types/expected.h"
 #include "base/version.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_id.h"
@@ -27,20 +28,17 @@ class IwaRuntimeDataProvider;
 
 // This singleton acts as a bridge between the browser-independent IWA layer and
 // the embedder layer (i.e. Chrome).
-class IwaClient {
+class COMPONENT_EXPORT(ISOLATED_WEB_APPS) IwaClient {
  public:
+  struct SourceRequestError {
+    net::Error net_error;
+    std::string error_description;
+  };
+
   IwaClient(const IwaClient&) = delete;
   IwaClient& operator=(const IwaClient&) = delete;
 
   static IwaClient* GetInstance();
-
-  // Tells whether the IWA identifier by `web_bundle_id` comes from a trusted
-  // source and can thus be used/installed according to the embedder-defined
-  // rules.
-  virtual base::expected<void, std::string> ValidateTrust(
-      content::BrowserContext* browser_context,
-      const web_package::SignedWebBundleId& web_bundle_id,
-      bool dev_mode) = 0;
 
   // Tells the embedder (who manages the app system) to run the supplied
   // `callback` once all windows of the app defined by `web_bundle_id` are
@@ -52,17 +50,17 @@ class IwaClient {
 
   // Attempts to look up the correct source (bundle of proxy) for the given
   // `web_bundle_id` and `request.url` (it's guaranteed that `request.url`
-  // corresponds to `web_bundle_id`); returns an unexpected if there's no app
-  // installed. The embedder might also choose to provide a generated response
-  // instead of a source.
+  // corresponds to `web_bundle_id`); might return unexpected if there's no app
+  // installed or if the embedder doesn't consider it trusted. The embedder
+  // might also choose to provide a generated response instead of a source.
   virtual void GetIwaSourceForRequest(
       content::BrowserContext* browser_context,
       const web_package::SignedWebBundleId& web_bundle_id,
       const network::ResourceRequest& request,
       const std::optional<content::FrameTreeNodeId>& frame_tree_node,
-      base::OnceCallback<void(
-          base::expected<IwaSourceWithModeOrGeneratedResponse, std::string>)>
-          callback) = 0;
+      base::OnceCallback<
+          void(base::expected<IwaSourceWithModeOrGeneratedResponse,
+                              SourceRequestError>)> callback) = 0;
 
   virtual IwaRuntimeDataProvider* GetRuntimeDataProvider() = 0;
 

@@ -32,14 +32,14 @@ const char kParamsParam[] = "params";
 TestDevToolsProtocolClient::TestDevToolsProtocolClient() = default;
 TestDevToolsProtocolClient::~TestDevToolsProtocolClient() = default;
 
-const base::Value::Dict* TestDevToolsProtocolClient::SendSessionCommand(
+const base::DictValue* TestDevToolsProtocolClient::SendSessionCommand(
     const std::string method,
-    base::Value::Dict params,
+    base::DictValue params,
     const std::string session_id,
     bool wait) {
   response_.clear();
   base::AutoReset<bool> reset_in_dispatch(&in_dispatch_, true);
-  base::Value::Dict command;
+  base::DictValue command;
   command.Set(kIdParam, ++last_sent_id_);
   command.Set(kMethodParam, std::move(method));
   if (params.size())
@@ -47,8 +47,7 @@ const base::Value::Dict* TestDevToolsProtocolClient::SendSessionCommand(
   if (!session_id.empty())
     command.Set(kSessionIdParam, std::move(session_id));
 
-  std::string json_command =
-      base::WriteJson(base::Value(std::move(command))).value_or("");
+  std::string json_command = base::WriteJson(command).value_or("");
   agent_host_->DispatchProtocolMessage(this, base::as_byte_span(json_command));
   // Some messages are dispatched synchronously.
   // Only run loop if we are not finished yet.
@@ -89,13 +88,13 @@ void TestDevToolsProtocolClient::AttachToBrowserTarget() {
 bool TestDevToolsProtocolClient::HasExistingNotification(
     const std::string& search) const {
   return HasExistingNotificationMatching(
-      [&search](const base::Value::Dict& notification) {
+      [&search](const base::DictValue& notification) {
         return *notification.FindString(kMethodParam) == search;
       });
 }
 
 bool TestDevToolsProtocolClient::HasExistingNotificationMatching(
-    base::FunctionRef<bool(const base::Value::Dict&)> pred) const {
+    base::FunctionRef<bool(const base::DictValue&)> pred) const {
   for (const auto& notification : notifications_) {
     if (pred(notification)) {
       return true;
@@ -104,16 +103,17 @@ bool TestDevToolsProtocolClient::HasExistingNotificationMatching(
   return false;
 }
 
-base::Value::Dict TestDevToolsProtocolClient::WaitForNotification(
+base::DictValue TestDevToolsProtocolClient::WaitForNotification(
     const std::string& notification,
     bool allow_existing) {
   if (allow_existing) {
     for (auto it = notifications_.begin(); it != notifications_.end(); ++it) {
       if (*it->FindString(kMethodParam) != notification)
         continue;
-      base::Value::Dict result;
-      if (base::Value::Dict* params = it->FindDict(kParamsParam))
+      base::DictValue result;
+      if (base::DictValue* params = it->FindDict(kParamsParam)) {
         result = std::move(*params);
+      }
       notifications_.erase(it);
       return result;
     }
@@ -124,7 +124,7 @@ base::Value::Dict TestDevToolsProtocolClient::WaitForNotification(
   return std::move(received_notification_params_);
 }
 
-base::Value::Dict TestDevToolsProtocolClient::WaitForMatchingNotification(
+base::DictValue TestDevToolsProtocolClient::WaitForMatchingNotification(
     const std::string& notification,
     const NotificationMatcher& matcher) {
   for (auto it = notifications_.begin(); it != notifications_.end(); ++it) {
@@ -133,7 +133,7 @@ base::Value::Dict TestDevToolsProtocolClient::WaitForMatchingNotification(
     base::Value* params = it->Find(kParamsParam);
     if (!params || !matcher.Run(params->GetDict()))
       continue;
-    base::Value::Dict result = std::move(*params).TakeDict();
+    base::DictValue result = std::move(*params).TakeDict();
     notifications_.erase(it);
     return result;
   }
@@ -144,11 +144,11 @@ base::Value::Dict TestDevToolsProtocolClient::WaitForMatchingNotification(
   return std::move(received_notification_params_);
 }
 
-const base::Value::Dict* TestDevToolsProtocolClient::result() const {
+const base::DictValue* TestDevToolsProtocolClient::result() const {
   return response_.FindDict("result");
 }
 
-const base::Value::Dict* TestDevToolsProtocolClient::error() const {
+const base::DictValue* TestDevToolsProtocolClient::error() const {
   return response_.FindDict("error");
 }
 
@@ -217,6 +217,10 @@ bool TestDevToolsProtocolClient::MayAttachToURL(const GURL& url,
                                                 bool is_webui) {
   return not_attachable_hosts_.find(url.GetHost()) ==
          not_attachable_hosts_.end();
+}
+
+bool TestDevToolsProtocolClient::MayAccessAllCookies() {
+  return not_attachable_hosts_.empty();
 }
 
 std::optional<url::Origin>

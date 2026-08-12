@@ -67,9 +67,8 @@ const CGFloat kFlashDuration = 0.5;
   }
   DCHECK(delegate);
   _delegate = delegate;
-  NSArray<UITrait>* traits =
-      TraitCollectionSetForTraits(@[ UITraitVerticalSizeClass.class ]);
-  [self registerForTraitChanges:traits withAction:@selector(maybeHideCaptions)];
+  [self registerForTraitChanges:@[ UITraitVerticalSizeClass.class ]
+                     withAction:@selector(maybeHideCaptions)];
 
   return self;
 }
@@ -210,8 +209,7 @@ const CGFloat kFlashDuration = 0.5;
 
 // Adds the subviews.
 - (void)addSubviews {
-  UIImage* closeIcon =
-      DefaultSymbolWithPointSize(kXMarkSymbol, kSymbolActionPointSize);
+  UIImage* closeIcon = SymbolWithPointSize(SymbolXMark, kSymbolActionPointSize);
   UIBarButtonItem* close =
       [[UIBarButtonItem alloc] initWithImage:closeIcon
                                        style:UIBarButtonItemStylePlain

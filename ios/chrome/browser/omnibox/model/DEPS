@@ -1,5 +1,6 @@
 include_rules = [
-  "+components/history_embeddings",
+  # keep-sorted start
+  "+components/history_embeddings/core",
   "+extensions/buildflags/buildflags.h",
   "+extensions/common/constants.h",
   "+extensions/common/extension_features.h",
@@ -17,4 +18,5 @@ include_rules = [
   "+ios/chrome/browser/prerender/model/prerender_browser_agent.h",
   "+ios/chrome/browser/search_engines/model",
   "+third_party/omnibox_proto",
+  # keep-sorted end
 ]

@@ -91,10 +91,17 @@ UpdateHandler::NudgedUpdateResult SyncerErrorToNudgedUpdateResult(
     case SyncerError::Type::kNetworkError:
       return UpdateHandler::NudgedUpdateResult::kDownloadRequestNetworkError;
     case SyncerError::Type::kHttpError:
+      if (error.GetHttpErrorOrDie() >= 400 && error.GetHttpErrorOrDie() < 500) {
+        return UpdateHandler::NudgedUpdateResult::
+            kDownloadRequestClientHttpError;
+      }
+      // In practice, this error should be for the 5xx HTTP errors but record it
+      // for any non-4xx HTTP error.
+      return UpdateHandler::NudgedUpdateResult::kDownloadRequestServerHttpError;
     case SyncerError::Type::kProtocolError:
     case SyncerError::Type::kProtocolViolationError:
       // Return server error for all non-network errors.
-      return UpdateHandler::NudgedUpdateResult::kDownloadRequestServerError;
+      return UpdateHandler::NudgedUpdateResult::kDownloadRequestProtocolError;
     case SyncerError::Type::kSuccess:
       NOTREACHED();
   }
@@ -281,7 +288,7 @@ SyncerError Syncer::BuildAndPostCommits(const DataTypeSet& request_types,
     std::unique_ptr<Commit> commit = Commit::Init(
         cycle->context()->GetConnectedTypes(),
         cycle->context()->max_commit_batch_size(),
-        cycle->context()->account_name(), cycle->context()->cache_guid(),
+        cycle->context()->account_email(), cycle->context()->cache_guid(),
         cycle->context()->cookie_jar_mismatch(), GetInvalidationInfo(cycle),
         &commit_processor, cycle->context()->extensions_activity());
     if (!commit) {

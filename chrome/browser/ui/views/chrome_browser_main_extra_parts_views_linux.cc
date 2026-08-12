@@ -5,7 +5,6 @@
 #include "chrome/browser/ui/views/chrome_browser_main_extra_parts_views_linux.h"
 
 #include "chrome/browser/themes/theme_service_aura_linux.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/views/theme_profile_key.h"
 #include "ui/base/buildflags.h"
 #include "ui/base/cursor/cursor_factory.h"
@@ -18,7 +17,7 @@
 #include "ui/ozone/public/ozone_platform.h"
 
 #if BUILDFLAG(USE_DBUS)
-#include "chrome/browser/ui/views/dark_mode_manager_linux.h"
+#include "ui/linux/dark_mode_manager_linux.h"
 #endif
 
 #if BUILDFLAG(ENABLE_PRINTING)
@@ -80,6 +79,4 @@ void ChromeBrowserMainExtraPartsViewsLinux::PreCreateThreads() {
 }
 
 void ChromeBrowserMainExtraPartsViewsLinux::OnCurrentWorkspaceChanged(
-    const std::string& new_workspace) {
-  BrowserList::MoveBrowsersInWorkspaceToFront(new_workspace);
-}
+    const std::string& /*new_workspace*/) {}

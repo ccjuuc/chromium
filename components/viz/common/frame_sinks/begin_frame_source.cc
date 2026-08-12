@@ -12,7 +12,6 @@
 
 #include "base/atomic_sequence_num.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
@@ -110,16 +109,17 @@ BeginFrameSource::BeginFrameArgsGenerator::GenerateBeginFrameArgs(
     uint64_t source_id,
     base::TimeTicks frame_time,
     base::TimeTicks deadline,
-    base::TimeDelta vsync_interval) {
+    base::TimeDelta vsync_interval,
+    base::TimeDelta unthrottled_interval) {
   uint64_t sequence_number =
       next_sequence_number_ +
       EstimateTickCountsBetween(frame_time, next_expected_frame_time_,
                                 vsync_interval);
   next_expected_frame_time_ = deadline;
   next_sequence_number_ = sequence_number + 1;
-  return BeginFrameArgs::Create(BEGINFRAME_FROM_HERE, source_id,
-                                sequence_number, frame_time, deadline,
-                                vsync_interval, BeginFrameArgs::NORMAL);
+  return BeginFrameArgs::Create(
+      BEGINFRAME_FROM_HERE, source_id, sequence_number, frame_time, deadline,
+      vsync_interval, BeginFrameArgs::NORMAL, unthrottled_interval);
 }
 
 uint64_t BeginFrameSource::BeginFrameArgsGenerator::EstimateTickCountsBetween(
@@ -175,6 +175,16 @@ void BeginFrameSource::SetSchedulerClient(SchedulerClient* scheduler_client) {
   scheduler_client_ = scheduler_client;
 }
 
+void BeginFrameSource::SetInputClient(InputClient* input_client) {
+  input_client_ = input_client;
+}
+
+// static
+base::flat_set<base::TimeDelta>
+BeginFrameSource::GetDefaultSupportedFrameIntervals(base::TimeDelta interval) {
+  return {interval, interval * 2};
+}
+
 bool BeginFrameSource::RequestCallbackOnGpuAvailable() {
   if (!is_gpu_busy_) {
     DCHECK_EQ(gpu_busy_response_state_, GpuBusyThrottlingState::kIdle);
@@ -205,6 +215,13 @@ void BeginFrameSource::AsProtozeroInto(
 
 #if BUILDFLAG(IS_MAC)
 void BeginFrameSource::RecordBeginFrameSourceAccuracy(base::TimeDelta delta) {
+  if (base::ShouldRecordSubsampledMetric(0.001)) {
+    UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
+        "Viz.BeginFrameSource.Accuracy.CallbackTimeError", delta,
+        /*min=*/base::Microseconds(100),
+        /*max=*/base::Milliseconds(33), /*bucket_count=*/30);
+  }
+
   total_delta_ += delta.magnitude();
   frames_since_last_recording_++;
 
@@ -228,6 +245,13 @@ void BeginFrameSource::IssueBeginFrameToSchedulerClient(
     const BeginFrameArgs& args) {
   if (scheduler_client_) {
     scheduler_client_->OnBeginFrameForScheduling(args);
+  }
+}
+
+void BeginFrameSource::IssueBeginFrameToInputClient(
+    const BeginFrameArgs& args) {
+  if (input_client_) {
+    input_client_->OnBeginFrameForInput(args);
   }
 }
 
@@ -257,7 +281,7 @@ BackToBackBeginFrameSource::~BackToBackBeginFrameSource() = default;
 
 void BackToBackBeginFrameSource::AddObserver(BeginFrameObserver* obs) {
   DCHECK(obs);
-  DCHECK(!base::Contains(observers_, obs));
+  DCHECK(!observers_.contains(obs));
   observers_.insert(obs);
   pending_begin_frame_observers_.insert(obs);
   obs->OnBeginFrameSourcePausedChanged(false);
@@ -266,7 +290,7 @@ void BackToBackBeginFrameSource::AddObserver(BeginFrameObserver* obs) {
 
 void BackToBackBeginFrameSource::RemoveObserver(BeginFrameObserver* obs) {
   DCHECK(obs);
-  DCHECK(base::Contains(observers_, obs));
+  DCHECK(observers_.contains(obs));
   observers_.erase(obs);
   pending_begin_frame_observers_.erase(obs);
   if (pending_begin_frame_observers_.empty()) {
@@ -274,8 +298,16 @@ void BackToBackBeginFrameSource::RemoveObserver(BeginFrameObserver* obs) {
   }
 }
 
-void BackToBackBeginFrameSource::DidFinishFrame(BeginFrameObserver* obs) {
-  if (base::Contains(observers_, obs)) {
+void BackToBackBeginFrameSource::DidFinishFrame(
+    BeginFrameObserver* obs,
+    DisplaySchedulerDrawResult result) {
+  if (result == DisplaySchedulerDrawResult::kDrawnLate ||
+      result == DisplaySchedulerDrawResult::kMayDrawLate) {
+    // BackToBackBeginFrameSource does not support multiple deadlines, so it
+    // should never receive late draw results.
+    NOTREACHED();
+  }
+  if (observers_.contains(obs)) {
     pending_begin_frame_observers_.insert(obs);
     time_source_->SetActive(true);
   }
@@ -310,7 +342,7 @@ void BackToBackBeginFrameSource::OnTimerTick() {
   base::TimeDelta interval = max_vrr_interval_.value_or(vsync_interval_);
   BeginFrameArgs args = BeginFrameArgs::Create(
       BEGINFRAME_FROM_HERE, source_id(), next_sequence_number_, frame_time,
-      frame_time + interval, interval, BeginFrameArgs::NORMAL);
+      frame_time + interval, interval, BeginFrameArgs::NORMAL, vsync_interval_);
   next_sequence_number_++;
 
   // This must happen after getting the LastTickTime() from the time source.
@@ -320,6 +352,8 @@ void BackToBackBeginFrameSource::OnTimerTick() {
       pending_observers;
   pending_observers.swap(pending_begin_frame_observers_);
   DCHECK(!pending_observers.empty());
+
+  IssueBeginFrameToInputClient(args);
   for (BeginFrameObserver* obs : pending_observers)
     FilterAndIssueBeginFrame(obs, args);
   IssueBeginFrameToSchedulerClient(args);
@@ -363,12 +397,12 @@ BeginFrameArgs DelayBasedBeginFrameSource::CreateBeginFrameArgs(
   base::TimeTicks deadline =
       time_source_->NextTickTime() - time_source_->Interval() + interval;
   return begin_frame_args_generator_.GenerateBeginFrameArgs(
-      source_id(), frame_time, deadline, interval);
+      source_id(), frame_time, deadline, interval, time_source_->Interval());
 }
 
 void DelayBasedBeginFrameSource::AddObserver(BeginFrameObserver* obs) {
   DCHECK(obs);
-  DCHECK(!base::Contains(observers_, obs));
+  DCHECK(!observers_.contains(obs));
 
   observers_.insert(obs);
   obs->OnBeginFrameSourcePausedChanged(false);
@@ -401,7 +435,7 @@ void DelayBasedBeginFrameSource::AddObserver(BeginFrameObserver* obs) {
 
 void DelayBasedBeginFrameSource::RemoveObserver(BeginFrameObserver* obs) {
   DCHECK(obs);
-  DCHECK(base::Contains(observers_, obs));
+  DCHECK(observers_.contains(obs));
 
   observers_.erase(obs);
   if (observers_.empty())
@@ -442,6 +476,8 @@ void DelayBasedBeginFrameSource::OnTimerTick() {
   if (max_vrr_interval_.has_value()) {
     vrr_tick_count_++;
   }
+
+  IssueBeginFrameToInputClient(last_begin_frame_args_);
   base::flat_set<raw_ptr<BeginFrameObserver, CtnExperimental>> observers(
       observers_);
   for (BeginFrameObserver* obs : observers) {
@@ -509,7 +545,7 @@ void ExternalBeginFrameSource::AsProtozeroInto(
 
 void ExternalBeginFrameSource::AddObserver(BeginFrameObserver* obs) {
   DCHECK(obs);
-  DCHECK(!base::Contains(observers_, obs));
+  DCHECK(!observers_.contains(obs));
 
   if (observers_.empty()) {
     client_->OnNeedsBeginFrames(true);
@@ -531,7 +567,7 @@ void ExternalBeginFrameSource::AddObserver(BeginFrameObserver* obs) {
 
 void ExternalBeginFrameSource::RemoveObserver(BeginFrameObserver* obs) {
   DCHECK(obs);
-  DCHECK(base::Contains(observers_, obs));
+  DCHECK(observers_.contains(obs));
 
   observers_.erase(obs);
   if (observers_.empty()) {
@@ -570,11 +606,19 @@ void ExternalBeginFrameSource::OnBeginFrame(const BeginFrameArgs& args) {
     return;
   }
 
-  TRACE_EVENT2("viz,input.scrolling", "ExternalBeginFrameSource::OnBeginFrame",
-               "frame_time", args.frame_time.since_origin().InMicroseconds(),
-               "interval", args.interval.InMicroseconds());
+  TRACE_EVENT(
+      "viz,input.scrolling", "ExternalBeginFrameSource::OnBeginFrame",
+      [&](perfetto::EventContext context) {
+        // Not using `BeginFrameArgs::AsProtozeroInto()` so that we would only
+        // log the relevant pieces of information and save trace space.
+        auto* event =
+            context.event<perfetto::protos::pbzero::ChromeTrackEvent>();
+        auto* out = event->set_begin_frame_args();
+        out->set_frame_time_us(args.frame_time.since_origin().InMicroseconds());
+        out->set_interval_delta_us(args.interval.InMicroseconds());
+      });
 
-  if (metrics_sub_sampler_.ShouldSample(0.01)) {
+  if (base::ShouldRecordSubsampledMetric(0.01)) {
     // We do not expect anything more than 1/24th of a second, but let's support
     // up to 1/10th.
     //
@@ -585,6 +629,8 @@ void ExternalBeginFrameSource::OnBeginFrame(const BeginFrameArgs& args) {
   }
 
   last_begin_frame_args_ = args;
+
+  IssueBeginFrameToInputClient(args);
   base::flat_set<raw_ptr<BeginFrameObserver, CtnExperimental>> observers(
       observers_);
 
@@ -614,7 +660,7 @@ base::TimeDelta ExternalBeginFrameSource::GetMinimumFrameInterval() {
 
 base::flat_set<base::TimeDelta>
 ExternalBeginFrameSource::GetSupportedFrameIntervals(base::TimeDelta interval) {
-  return {interval, interval * 2};
+  return GetDefaultSupportedFrameIntervals(interval);
 }
 
 }  // namespace viz

@@ -16,6 +16,7 @@
 #include "ash/public/cpp/session/session_observer.h"
 #include "ash/session/test_session_controller_client.h"
 #include "ash/shell.h"
+#include "ash/system/privacy/screen_switch_check_controller.h"
 #include "ash/system/tray/system_tray_notifier.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/window_state.h"
@@ -135,7 +136,6 @@ class FakeSessionControllerClient : public SessionControllerClient {
   void SwitchActiveUser(const AccountId& account_id) override {}
   void CycleActiveUser(CycleUserDirection direction) override {}
   void ShowMultiProfileLogin() override {}
-  void EmitAshInitialized() override {}
   PrefService* GetSigninScreenPrefService() override { return nullptr; }
   PrefService* GetUserPrefService(const AccountId& account_id) override {
     return &pref_service_;
@@ -237,7 +237,7 @@ class SessionControllerImplWithShellTest : public AshTestBase {
   }
 
   void CreateFullscreenWindow() {
-    window_ = CreateTestWindow();
+    window_ = CreateWindowWithAppType();
     window_->SetProperty(aura::client::kShowStateKey,
                          ui::mojom::WindowShowState::kFullscreen);
     window_state_ = WindowState::Get(window_.get());
@@ -860,6 +860,25 @@ class CanSwitchUserTest : public AshTestBase {
 
   ~CanSwitchUserTest() override = default;
 
+  void SetUp() override {
+    AshTestBase::SetUp();
+    auto account1 = Shell::Get()
+                        ->session_controller()
+                        ->GetUserSessions()[0]
+                        ->user_info.account_id;
+    SimulateUserLogin(AccountId::FromUserEmail("user2@test.com"));
+
+    // Switch back to the first user so that SwitchCallback actually triggers a
+    // change.
+    Shell::Get()
+        ->screen_switch_check_controller()
+        ->set_skip_cancel_dialog_for_testing(true);
+    GetSessionControllerClient()->SwitchActiveUser(account1);
+    Shell::Get()
+        ->screen_switch_check_controller()
+        ->set_skip_cancel_dialog_for_testing(false);
+  }
+
   void TearDown() override {
     base::RunLoop().RunUntilIdle();
     AshTestBase::TearDown();
@@ -911,8 +930,17 @@ class CanSwitchUserTest : public AshTestBase {
 
   // Called when the user will get actually switched.
   void SwitchCallback(bool switch_user) {
-    if (switch_user)
+    if (switch_user) {
       switch_callback_hit_count_++;
+      Shell::Get()
+          ->screen_switch_check_controller()
+          ->set_skip_cancel_dialog_for_testing(true);
+      GetSessionControllerClient()->SwitchActiveUser(
+          AccountId::FromUserEmail("user2@test.com"));
+      Shell::Get()
+          ->screen_switch_check_controller()
+          ->set_skip_cancel_dialog_for_testing(false);
+    }
   }
 
   // Various counter accessors.

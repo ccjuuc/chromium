@@ -15,6 +15,7 @@ class Profile;
 
 #if !BUILDFLAG(IS_ANDROID)
 class Browser;
+class BrowserWindowInterface;
 #endif
 
 namespace syncer {
@@ -61,6 +62,8 @@ struct SyncStatusLabels {
   SyncStatusActionType action_type = SyncStatusActionType::kNoAction;
 };
 
+extern const char kBookmarksLimitExceededHelpCenter[];
+
 #if !BUILDFLAG(IS_ANDROID)
 SyncStatusLabels GetSyncStatusLabelsForSettings(
     const syncer::SyncService* service);
@@ -93,24 +96,31 @@ bool ShouldRequestSyncConfirmation(const syncer::SyncService* service);
 // whether a missing passphrase is preventing Sync from fully starting up.
 bool ShouldShowSyncPassphraseError(const syncer::SyncService* service);
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+#if !BUILDFLAG(IS_ANDROID)
 // Shows the sync passphrase dialog and attempts decrypting the data using the
 // provided passphrase.
 void ShowSyncPassphraseDialogAndDecryptData(Browser& browser);
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 #if !BUILDFLAG(IS_ANDROID)
 // Opens a tab for the purpose of retrieving the trusted vault keys, which
 // usually requires a reauth.
 void OpenTabForSyncKeyRetrieval(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     trusted_vault::TrustedVaultUserActionTriggerForUMA trigger);
 
 // Opens a tab for the purpose of improving the recoverability of the trusted
 // vault keys, which usually requires a reauth.
 void OpenTabForSyncKeyRecoverabilityDegraded(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     trusted_vault::TrustedVaultUserActionTriggerForUMA trigger);
+
+// Opens a new tab with the help page for bookmarks count limit exceeded error
+// and acknowledges the error.
+void ShowBookmarksLimitExceededHelp(
+    BrowserWindowInterface* browser,
+    syncer::SyncService* sync_service,
+    syncer::SyncService::BookmarksLimitExceededHelpClickedSource source);
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 #endif  // CHROME_BROWSER_SYNC_SYNC_UI_UTIL_H_

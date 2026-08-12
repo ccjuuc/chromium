@@ -114,6 +114,9 @@ class MockNativeWidget : public internal::NativeWidgetPrivate {
               (bool always_visible),
               (override));
   MOCK_METHOD(bool, IsVisibleOnAllWorkspaces, (), (const override));
+#if BUILDFLAG(IS_MAC)
+  MOCK_METHOD(void, MoveToActiveFullscreenSpace, (), (override));
+#endif  // BUILDFLAG(IS_MAC)
   MOCK_METHOD(void, Maximize, (), (override));
   MOCK_METHOD(void, Minimize, (), (override));
   MOCK_METHOD(bool, IsMaximized, (), (const override));
@@ -136,13 +139,13 @@ class MockNativeWidget : public internal::NativeWidgetPrivate {
               (override));
   MOCK_METHOD(void, FlashFrame, (bool flash), (override));
   MOCK_METHOD(void,
-              RunShellDrag,
+              RunDragDropLoop,
               (std::unique_ptr<ui::OSExchangeData> data,
                const gfx::Point& location,
                int operation,
                ui::mojom::DragEventSource source),
               (override));
-  MOCK_METHOD(void, CancelShellDrag, (View * view), (override));
+  MOCK_METHOD(void, CancelDragDropLoop, (View * view), (override));
   MOCK_METHOD(void, SchedulePaintInRect, (const gfx::Rect& rect), (override));
   MOCK_METHOD(void, ScheduleLayout, (), (override));
   MOCK_METHOD(void, SetCursor, (const ui::Cursor& cursor), (override));
@@ -176,6 +179,9 @@ class MockNativeWidget : public internal::NativeWidgetPrivate {
   MOCK_METHOD(void, OnSizeConstraintsChanged, (), (override));
   MOCK_METHOD(void, OnNativeViewHierarchyWillChange, (), (override));
   MOCK_METHOD(void, OnNativeViewHierarchyChanged, (), (override));
+#if BUILDFLAG(IS_WIN)
+  MOCK_METHOD(void, SetExcludeFromScreenCapture, (bool exclude), (override));
+#endif
   MOCK_METHOD(bool, SetAllowScreenshots, (bool allow), (override));
   MOCK_METHOD(bool, AreScreenshotsAllowed, (), (override));
   MOCK_METHOD(std::string, GetName, (), (const override));

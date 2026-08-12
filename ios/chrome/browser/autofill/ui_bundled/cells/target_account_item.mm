@@ -5,7 +5,9 @@
 #import "ios/chrome/browser/autofill/ui_bundled/cells/target_account_item.h"
 
 #import "base/apple/foundation_util.h"
+#import "base/feature_list.h"
 #import "build/branding_buildflags.h"
+#import "components/autofill/core/common/autofill_payments_features.h"
 #import "components/grit/components_scaled_resources.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/legacy_table_view_cell.h"
@@ -34,9 +36,8 @@ const CGFloat kAccountCellSpacing = 7;
   return self;
 }
 
-- (void)configureCell:(LegacyTableViewCell*)cell
-           withStyler:(ChromeTableViewStyler*)styler {
-  [super configureCell:cell withStyler:styler];
+- (void)configureCell:(LegacyTableViewCell*)cell {
+  [super configureCell:cell];
   TargetAccountCell* accountCell =
       base::apple::ObjCCastStrict<TargetAccountCell>(cell);
   accountCell.avatarBadge.image = self.avatar;
@@ -74,8 +75,12 @@ const CGFloat kAccountCellSpacing = 7;
   googlePayBadge.translatesAutoresizingMaskIntoConstraints = NO;
   googlePayBadge.contentMode = UIViewContentModeScaleAspectFit;
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  googlePayBadge.image = MakeSymbolMulticolor(
-      CustomSymbolWithPointSize(kGooglePaySymbol, kAccountCellBadgeSize));
+  Symbol symbol = base::FeatureList::IsEnabled(
+                      autofill::features::kAutofillEnableGradientGoogleLogos)
+                      ? SymbolGooglePayV2
+                      : SymbolGooglePay;
+  googlePayBadge.image =
+      MakeSymbolMulticolor(SymbolWithPointSize(symbol, kAccountCellBadgeSize));
 #else
   googlePayBadge.image = NativeImage(IDR_AUTOFILL_GOOGLE_PAY);
 #endif

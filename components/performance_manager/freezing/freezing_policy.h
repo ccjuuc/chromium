@@ -12,7 +12,7 @@
 #include <set>
 #include <string_view>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/gtest_prod_util.h"
@@ -120,7 +120,7 @@ class FreezingPolicy : public PageNodeObserver,
     // Pages that have frames in this browsing instance (typically only 1 page,
     // but may contain an unbounded amount of pages connected via opener
     // relationship).
-    base::flat_set<const PageNode*> pages;
+    base::flat_set<raw_ptr<const PageNode>> pages;
     // Highest CPU measurement for a group of same-origin frames/workers
     // associated with this browsing instance, over the last measurement period.
     // (1.0 = 100% of 1 core)
@@ -137,7 +137,7 @@ class FreezingPolicy : public PageNodeObserver,
     // First per-origin Private Memory Footprint measurement taken after this
     // browsing instance became frozen. Empty if not all pages in this browsing
     // instance are frozen.
-    base::flat_map<url::Origin, base::ByteCount> per_origin_pmf_after_freezing;
+    base::flat_map<url::Origin, base::ByteSize> per_origin_pmf_after_freezing;
   };
 
   // Returns pages connected to `page`, including `page` itself. See
@@ -156,7 +156,7 @@ class FreezingPolicy : public PageNodeObserver,
   // (including `page_node`) are added to `connected_pages_out` if not nullptr.
   void UpdateFrozenState(
       const PageNode* page_node,
-      base::TimeTicks now = base::TimeTicks::Now(),
+      base::LiveTicks now = base::LiveTicks::Now(),
       base::flat_set<raw_ptr<const PageNode>>* connected_pages_out = nullptr);
 
   // Helper to add or remove a `CannotFreezeReason` for `page_node`.
@@ -217,7 +217,7 @@ class FreezingPolicy : public PageNodeObserver,
   void OnIsCapturingDisplayChanged(const PageNode* page_node) override;
 
   // NodeDataDescriber:
-  base::Value::Dict DescribePageNodeData(const PageNode* node) const override;
+  base::DictValue DescribePageNodeData(const PageNode* node) const override;
 
   // resource_attribution::QueryResultObserver:
   void OnResourceUsageUpdated(
@@ -235,7 +235,7 @@ class FreezingPolicy : public PageNodeObserver,
 
   // Invoked by the OptOutChecker when the opt-out policy for
   // `browser_context_id` changes.
-  void OnOptOutPolicyChanged(std::string_view browser_context_id);
+  void OnOptOutPolicyChanged(const base::UnguessableToken& browser_context_id);
 
   // Removes the last page from the most recently used list if needed, to keep
   // its size below the limit.
@@ -249,7 +249,7 @@ class FreezingPolicy : public PageNodeObserver,
   // OnPeriodicUnfreezeTimer() at the next time when the tab must be unfrozen or
   // re-frozen.
   void StartPeriodicUnfreezeTimer(const PageNode* page_node,
-                                  base::TimeTicks now);
+                                  base::LiveTicks now);
 
   // Method invoked when when it's time to unfreeze or re-freeze a tab frozen
   // for `FreezingContext::kInfiniteTabs`.
@@ -279,7 +279,7 @@ class FreezingPolicy : public PageNodeObserver,
 
   // Returns a random periodic unfreeze phase. Can be overridden in test to
   // eliminate randomness.
-  virtual base::TimeTicks GenerateRandomPeriodicUnfreezePhase() const;
+  virtual base::LiveTicks GenerateRandomPeriodicUnfreezePhase() const;
 
   // Called when the memory pressure state of the system is updated. Triggers a
   // policy-wide re-evaluation of page freezing.
@@ -318,9 +318,6 @@ class FreezingPolicy : public PageNodeObserver,
   // belong to the same [browsing instance, origin] over an interval, based on
   // cumulative measurements from `resource_usage_query_`.
   resource_attribution::CPUProportionTracker cpu_proportion_tracker_;
-
-  // Used to subsample the emission of UKM events.
-  base::MetricsSubSampler metrics_subsampler_;
 
   // List of most recently used hidden tabs. A tab becomes the most recently
   // used when it transitions from visible to hidden, or when it's created in a

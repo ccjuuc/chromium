@@ -9,6 +9,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "base/containers/heap_array.h"
 #include "base/synchronization/waitable_event.h"
@@ -107,8 +108,9 @@ DWORD WINAPI NotificationHandler(LPVOID parameter) {
 
   do {
     if (!args->notification_event->TimedWait(
-            base::Milliseconds(kWaitTimeoutMs)))
+            base::Milliseconds(std::to_underlying(kWaitTimeoutMs)))) {
       break;
+    }
 
     bytes_written = DrainLog(buffer.data(), buffer_size, nullptr);
     log_counter += GetLogCount(buffer.data(), bytes_written);
@@ -181,10 +183,10 @@ TEST(ThirdParty, LogNotifications) {
                    kTestLogs[i].time_date_stamp, std::string());
   }
 
-  EXPECT_EQ(::WaitForSingleObject(thread.Get(), kWaitTimeoutMs * 2),
+  EXPECT_EQ(::WaitForSingleObject(thread.get(), kWaitTimeoutMs * 2),
             WAIT_OBJECT_0);
   DWORD exit_code = 1;
-  EXPECT_TRUE(::GetExitCodeThread(thread.Get(), &exit_code));
+  EXPECT_TRUE(::GetExitCodeThread(thread.get(), &exit_code));
   EXPECT_EQ(exit_code, DWORD{0});
 
   DeinitLogs();

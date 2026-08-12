@@ -4,6 +4,8 @@
 
 #include "gls_runner_test_base.h"
 
+#include <shlobj.h>
+
 #include <memory>
 
 #include "base/base_switches.h"
@@ -99,7 +101,7 @@ MULTIPROCESS_TEST_MAIN(gls_main) {
     expected_gaia_id = gaia_id_override;
   }
 
-  base::Value::Dict dict;
+  base::DictValue dict;
   if (!gaia_id_override.empty() && gaia_id_override != expected_gaia_id) {
     dict.Set(kKeyExitCode, kUiecEMailMissmatch);
   } else {
@@ -167,6 +169,10 @@ void GlsRunnerTestBase::SetUp() {
   ASSERT_TRUE(scoped_temp_progdata_dir_.CreateUniqueTempDir());
   programdata_override_ = std::make_unique<base::ScopedPathOverride>(
       base::DIR_COMMON_APP_DATA, scoped_temp_progdata_dir_.GetPath());
+
+  if (!::IsUserAnAdmin()) {
+    GTEST_SKIP() << "Test requires administrative privileges.";
+  }
 }
 
 void GlsRunnerTestBase::TearDown() {

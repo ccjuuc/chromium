@@ -15,7 +15,6 @@
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 
 namespace blink {
-namespace {
 
 class XMLHttpRequestTest : public PageTestBase {
  protected:
@@ -35,5 +34,4 @@ TEST_F(XMLHttpRequestTest, ForbiddenRequestHeaderWithLocalOrigin) {
   EXPECT_FALSE(xhr->HasRequestHeaderForTesting(AtomicString("host")));
 }
 
-}  // namespace
 }  // namespace blink

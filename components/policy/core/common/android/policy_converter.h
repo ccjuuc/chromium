@@ -47,16 +47,17 @@ class POLICY_EXPORT PolicyConverter {
   // To be called from Java:
   void SetPolicyBoolean(JNIEnv* env,
                         const base::android::JavaRef<jstring>& policyKey,
-                        jboolean value);
+                        bool value);
   void SetPolicyInteger(JNIEnv* env,
                         const base::android::JavaRef<jstring>& policyKey,
-                        jint value);
+                        int32_t value);
   void SetPolicyString(JNIEnv* env,
                        const base::android::JavaRef<jstring>& policyKey,
                        const base::android::JavaRef<jstring>& value);
-  void SetPolicyStringArray(JNIEnv* env,
-                            const base::android::JavaRef<jstring>& policyKey,
-                            const base::android::JavaRef<jobjectArray>& value);
+  void SetPolicyStringArray(
+      JNIEnv* env,
+      const base::android::JavaRef<jstring>& policyKey,
+      const base::android::JavaRef<JArray<jstring>>& value);
 
   // Converts the passed in value to the type desired by the schema. If the
   // value is not convertible, it is returned unchanged, so the policy system
@@ -69,9 +70,9 @@ class POLICY_EXPORT PolicyConverter {
                                                          const Schema& schema);
 
   // Public for testing.
-  static base::Value::List ConvertJavaStringArrayToListValue(
+  static base::ListValue ConvertJavaStringArrayToListValue(
       JNIEnv* env,
-      const base::android::JavaRef<jobjectArray>& array);
+      const base::android::JavaRef<JArray<jstring>>& array);
 
   // Exposes `SetPolicyValue` for testing purposes.
   void SetPolicyValueForTesting(const std::string& key, base::Value raw_value);

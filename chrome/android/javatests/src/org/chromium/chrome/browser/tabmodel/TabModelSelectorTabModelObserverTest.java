@@ -18,6 +18,8 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorObserverTestRule.TabModelSelectorTestTabModel;
@@ -83,6 +85,11 @@ public class TabModelSelectorTabModelObserverTest {
                             boolean incognito) {
                         return null;
                     }
+
+                    @Override
+                    public @Nullable Profile getProfile(boolean offTheRecord) {
+                        return null;
+                    }
                 };
         final CallbackHelper registrationCompleteCallback = new CallbackHelper();
         TabModelSelectorTabModelObserver observer =
@@ -92,10 +99,7 @@ public class TabModelSelectorTabModelObserverTest {
                         registrationCompleteCallback.notifyCalled();
                     }
                 };
-        mSelector.initialize(
-                TabModelHolderFactory.createTabModelHolderForTesting(sTestRule.getNormalTabModel()),
-                TabModelHolderFactory.createIncognitoTabModelHolderForTesting(
-                        sTestRule.getIncognitoTabModel()));
+        mSelector.initialize(sTestRule.getNormalTabModel(), sTestRule.getIncognitoTabModel());
         registrationCompleteCallback.waitForCallback(0);
         assertAllModelsHaveObserver(mSelector, observer);
     }

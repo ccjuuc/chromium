@@ -44,6 +44,12 @@ namespace policy_prefs {
 inline constexpr char kAzureActiveDirectoryManagement[] =
     "management.platform.azure_active_directory";
 
+// TODO(crbug.com/531448879): Revert this change when AzureAD logic migration is
+// complete.
+// Integer pref that stores Azure Active Directory device management authority.
+inline constexpr char kAzureActiveDirectoryDeviceManagement[] =
+    "management.platform.azure_active_directory_device";
+
 // Integer pref that stores the Windows enterprise MDM management authority.
 inline constexpr char kEnterpriseMDMManagementWindows[] =
     "management.platform.enterprise_mdm_win";
@@ -51,6 +57,10 @@ inline constexpr char kEnterpriseMDMManagementWindows[] =
 // Integer pref that stores the Mac enterprise MDM management authority.
 inline constexpr char kEnterpriseMDMManagementMac[] =
     "management.platform.enterprise_mdm_mac";
+#elif BUILDFLAG(IS_ANDROID)
+// Integer pref that stores the Android enterprise MDM/ownership management authority.
+inline constexpr char kEnterpriseMDMManagementAndroid[] =
+    "management.platform.enterprise_mdm_android";
 #endif
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
@@ -83,12 +93,6 @@ inline constexpr char kSystemFeaturesDisableList[] =
 // See the SystemFeaturesDisableMode policy for details.
 inline constexpr char kSystemFeaturesDisableMode[] =
     "policy.system_features_disable_mode";
-
-// Blocks access to the listed host patterns.
-inline constexpr char kUrlBlocklist[] = "policy.url_blocklist";
-
-// Allows access to the listed host patterns, as exceptions to the blacklist.
-inline constexpr char kUrlAllowlist[] = "policy.url_allowlist";
 
 // Integer that specifies the policy refresh rate for user-policy in
 // milliseconds. Not all values are meaningful, so it is clamped to a sane range
@@ -200,10 +204,18 @@ inline constexpr char
 inline constexpr char kLocalTestPoliciesForNextStartup[] =
     "local_test_policies_for_next_startup";
 
+// A boolean pref that controls XSLT.
+inline constexpr char kXSLTEnabled[] = "policy.xslt_enabled";
+
 // Enables the deprecated :--foo syntax of CSS custom state. The :--foo syntax
 // was deprecated and replaced by :state(foo).
 inline constexpr char kCSSCustomStateDeprecatedSyntaxEnabled[] =
     "policy.css_custom_state_deprecated_syntax_enabled";
+
+// A boolean pref indicating whether the background fetch restriction is enabled
+// when called from a service worker context.
+inline constexpr char kRestrictBackgroundFetchFromServiceWorkerEnabled[] =
+    "policy.restrict_background_fetch_from_service_worker_enabled";
 
 // A boolean pref indicating whether the new HTML parser for the <select>
 // element is enabled. When enabled, the HTML parser allows more tags to be used
@@ -241,13 +253,16 @@ inline constexpr char kFloatingWorkspaceEnabled[] =
 inline constexpr char kBuiltInAIAPIsEnabled[] =
     "policy.built_in_ai_apis_enabled";
 
-// Blocks access to the listed host patterns for incognito mode.
-inline constexpr char kIncognitoModeUrlBlocklist[] =
-    "policy.incognito_mode_url_blocklist";
+// A boolean pref indicating whether to default allow Local Network
+// Access permissions policy features.
+// If false, explicit permission delegation is required.
+inline constexpr char kLocalNetworkAccessPermissionsPolicyDefaultEnabled[] =
+    "policy.local_network_access_permissions_policy_default_enabled";
 
-// Allows access to the listed host patterns for incognito mode.
-inline constexpr char kIncognitoModeUrlAllowlist[] =
-    "policy.incognito_mode_url_allowlist";
+// A boolean pref indicating whether WebSockets are disconnected when a page
+// enters the Back/Forward Cache.
+inline constexpr char kBackForwardCacheForWebSocketsAllowed[] =
+    "policy.back_forward_cache_for_web_sockets_allowed";
 
 }  // namespace policy_prefs
 }  // namespace policy

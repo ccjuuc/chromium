@@ -5,6 +5,7 @@
 #import "ios/chrome/browser/omnibox/ui/popup/row/omnibox_popup_row_trailing_button.h"
 
 #import "base/check.h"
+#import "base/metrics/histogram_functions.h"
 #import "ios/chrome/browser/omnibox/public/omnibox_popup_accessibility_identifier_constants.h"
 #import "ios/chrome/browser/omnibox/ui/popup/row/omnibox_popup_row_util.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
@@ -40,6 +41,7 @@ const CGFloat kTrailingButtonIconPointSizeMedium = 15.0f;
   }
 
   _trailingIconType = trailingIconType;
+
   [self updateButtonImageForCurrentState];
 }
 
@@ -82,18 +84,18 @@ const CGFloat kTrailingButtonIconPointSizeMedium = 15.0f;
         return;
       case TrailingIconType::kRefineQuery: {
         // The arrow should point in the direction of the omnibox.
-        NSString* iconName = self.refineQueryArrowDirectionDown
-                                 ? kRefineQueryDownSymbol
-                                 : kRefineQuerySymbol;
-        icon = DefaultSymbolWithPointSize(
-            iconName, kTrailingButtonIconPointSizeMedium * multiplier);
+        Symbol symbol = self.refineQueryArrowDirectionDown
+                            ? SymbolRefineQueryDown
+                            : SymbolRefineQuery;
+        icon = SymbolWithPointSize(
+            symbol, kTrailingButtonIconPointSizeMedium * multiplier);
         self.accessibilityIdentifier =
             kOmniboxPopupRowAppendAccessibilityIdentifier;
         break;
       }
       case TrailingIconType::kOpenExistingTab:
-        icon = DefaultSymbolWithPointSize(
-            kNavigateToTabSymbol,
+        icon = SymbolWithPointSize(
+            SymbolNavigateToTab,
             kTrailingButtonIconPointSizeMedium * multiplier);
         self.accessibilityIdentifier =
             kOmniboxPopupRowSwitchTabAccessibilityIdentifier;

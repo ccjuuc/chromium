@@ -55,29 +55,6 @@ source_set("lib") {
     "//media/capture:capture_lib",
     "//media/capture:capture_switches",
   ]
-
-  if (is_chromeos) {
-    deps += [ "//chromeos/crosapi/mojom" ]
-  }
-
-  if (is_chromeos) {
-    sources += [
-      "ash/video_capture_device_ash.cc",
-      "ash/video_capture_device_ash.h",
-      "ash/video_capture_device_factory_ash.cc",
-      "ash/video_capture_device_factory_ash.h",
-      "ash/video_frame_handler_ash.cc",
-      "ash/video_frame_handler_ash.h",
-    ]
-
-    deps += [
-      "//base",
-      "//services/video_capture/public/cpp",
-      "//services/video_capture/public/mojom",
-    ]
-
-    public_deps += [ "//media/capture/video/chromeos/mojom:cros_camera" ]
-  }
 }
 
 source_set("tests") {
@@ -88,6 +65,7 @@ source_set("tests") {
     "device_media_to_mojo_adapter_unittest.cc",
     "devices_changed_notifier_unittest.cc",
     "gpu_memory_buffer_virtual_device_mojo_adapter_unittest.cc",
+    "shared_memory_virtual_device_mojo_adapter_unittest.cc",
     "test/fake_device_descriptor_test.cc",
     "test/fake_device_descriptor_test.h",
     "test/fake_video_capture_device_test.cc",

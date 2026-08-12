@@ -7,7 +7,6 @@
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/json/json_writer.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/metrics/histogram_macros_local.h"
 #include "base/observer_list.h"
 #include "base/time/default_tick_clock.h"
@@ -27,9 +26,9 @@ void WritePredictionToConsoleLog(
   if (!prediction.web_contents())
     return;
 
-  base::Value::Dict message;
+  base::DictValue message;
 
-  base::Value::List url_list;
+  base::ListValue url_list;
   for (const GURL& url : prediction.sorted_predicted_urls()) {
     url_list.Append(url.spec());
   }

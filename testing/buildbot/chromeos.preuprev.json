@@ -12,7 +12,7 @@
         "dut_pool": "vmlab",
         "module_name": "//base:base_unittests",
         "module_scheme": "gtest",
-        "name": "base_unittests RELEASE_LKGM",
+        "name": "base_unittests LKGM",
         "resultdb": {
           "result_format": "gtest"
         },
@@ -20,14 +20,15 @@
         "test": "base_unittests",
         "test_id_prefix": "ninja://base:base_unittests/",
         "use_lkgm": true,
-        "variant_id": "RELEASE_LKGM"
+        "variant_id": "LKGM"
       },
       {
         "cros_board": "betty",
         "cros_ctp_suite_name": "chrome-uprev-hw",
         "cros_test_max_in_shard": 40,
         "cros_test_names_exclude_from_file": [
-          "chromeos/tast_control_disabled_tests.txt"
+          "chromeos/tast_control_disabled_tests.txt",
+          "chromeos/tast_control_flaky_tests.txt"
         ],
         "cros_test_tags": [
           "group:mainline",
@@ -40,7 +41,7 @@
         "dut_pool": "vmlab",
         "module_name": "//chromeos:chrome_all_tast_tests",
         "module_scheme": "tast",
-        "name": "chrome_all_tast_tests RELEASE_LKGM",
+        "name": "chrome_all_tast_tests LKGM",
         "resultdb": {
           "result_format": "tast"
         },
@@ -49,7 +50,7 @@
         "test_id_prefix": "ninja://chromeos:chrome_all_tast_tests/",
         "timeout_sec": 14400,
         "use_lkgm": true,
-        "variant_id": "RELEASE_LKGM"
+        "variant_id": "LKGM"
       },
       {
         "autotest_name": "chromium",
@@ -57,15 +58,16 @@
         "dut_pool": "vmlab",
         "module_name": "//chrome/test:chromeos_integration_tests",
         "module_scheme": "gtest",
-        "name": "chromeos_integration_tests RELEASE_LKGM",
+        "name": "chromeos_integration_tests LKGM",
         "resultdb": {
           "result_format": "gtest"
         },
         "shard_level_retries_on_ctp": 1,
         "test": "chromeos_integration_tests",
         "test_id_prefix": "ninja://chrome/test:chromeos_integration_tests/",
+        "timeout_sec": 5400,
         "use_lkgm": true,
-        "variant_id": "RELEASE_LKGM"
+        "variant_id": "LKGM"
       }
     ]
   },
@@ -80,7 +82,7 @@
         "cros_model": "kano",
         "module_name": "//base:base_unittests",
         "module_scheme": "gtest",
-        "name": "base_unittests RELEASE_LKGM",
+        "name": "base_unittests LKGM",
         "resultdb": {
           "result_format": "gtest"
         },
@@ -88,7 +90,7 @@
         "test": "base_unittests",
         "test_id_prefix": "ninja://base:base_unittests/",
         "use_lkgm": true,
-        "variant_id": "RELEASE_LKGM"
+        "variant_id": "LKGM"
       },
       {
         "cros_board": "brya",
@@ -96,7 +98,8 @@
         "cros_model": "kano",
         "cros_test_max_in_shard": 40,
         "cros_test_names_exclude_from_file": [
-          "chromeos/tast_control_disabled_tests.txt"
+          "chromeos/tast_control_disabled_tests.txt",
+          "chromeos/tast_control_flaky_tests.txt"
         ],
         "cros_test_tags": [
           "group:mainline",
@@ -108,7 +111,7 @@
         ],
         "module_name": "//chromeos:chrome_all_tast_tests",
         "module_scheme": "tast",
-        "name": "chrome_all_tast_tests RELEASE_LKGM",
+        "name": "chrome_all_tast_tests LKGM",
         "resultdb": {
           "result_format": "tast"
         },
@@ -117,7 +120,7 @@
         "test_id_prefix": "ninja://chromeos:chrome_all_tast_tests/",
         "timeout_sec": 14400,
         "use_lkgm": true,
-        "variant_id": "RELEASE_LKGM"
+        "variant_id": "LKGM"
       },
       {
         "autotest_name": "chromium",
@@ -125,15 +128,16 @@
         "cros_model": "kano",
         "module_name": "//chrome/test:chromeos_integration_tests",
         "module_scheme": "gtest",
-        "name": "chromeos_integration_tests RELEASE_LKGM",
+        "name": "chromeos_integration_tests LKGM",
         "resultdb": {
           "result_format": "gtest"
         },
         "shard_level_retries_on_ctp": 1,
         "test": "chromeos_integration_tests",
         "test_id_prefix": "ninja://chrome/test:chromeos_integration_tests/",
+        "timeout_sec": 5400,
         "use_lkgm": true,
-        "variant_id": "RELEASE_LKGM"
+        "variant_id": "LKGM"
       }
     ]
   },
@@ -147,7 +151,7 @@
         "cros_board": "jacuzzi",
         "module_name": "//base:base_unittests",
         "module_scheme": "gtest",
-        "name": "base_unittests RELEASE_LKGM",
+        "name": "base_unittests LKGM",
         "resultdb": {
           "result_format": "gtest"
         },
@@ -155,14 +159,15 @@
         "test": "base_unittests",
         "test_id_prefix": "ninja://base:base_unittests/",
         "use_lkgm": true,
-        "variant_id": "RELEASE_LKGM"
+        "variant_id": "LKGM"
       },
       {
         "cros_board": "jacuzzi",
         "cros_ctp_suite_name": "chrome-uprev-hw",
         "cros_test_max_in_shard": 20,
         "cros_test_names_exclude_from_file": [
-          "chromeos/tast_control_disabled_tests.txt"
+          "chromeos/tast_control_disabled_tests.txt",
+          "chromeos/tast_control_flaky_tests.txt"
         ],
         "cros_test_tags": [
           "group:mainline",
@@ -174,7 +179,7 @@
         ],
         "module_name": "//chromeos:chrome_all_tast_tests",
         "module_scheme": "tast",
-        "name": "chrome_all_tast_tests RELEASE_LKGM",
+        "name": "chrome_all_tast_tests LKGM",
         "resultdb": {
           "result_format": "tast"
         },
@@ -183,22 +188,23 @@
         "test_id_prefix": "ninja://chromeos:chrome_all_tast_tests/",
         "timeout_sec": 14400,
         "use_lkgm": true,
-        "variant_id": "RELEASE_LKGM"
+        "variant_id": "LKGM"
       },
       {
         "autotest_name": "chromium",
         "cros_board": "jacuzzi",
         "module_name": "//chrome/test:chromeos_integration_tests",
         "module_scheme": "gtest",
-        "name": "chromeos_integration_tests RELEASE_LKGM",
+        "name": "chromeos_integration_tests LKGM",
         "resultdb": {
           "result_format": "gtest"
         },
         "shard_level_retries_on_ctp": 1,
         "test": "chromeos_integration_tests",
         "test_id_prefix": "ninja://chrome/test:chromeos_integration_tests/",
+        "timeout_sec": 5400,
         "use_lkgm": true,
-        "variant_id": "RELEASE_LKGM"
+        "variant_id": "LKGM"
       }
     ]
   },
@@ -213,7 +219,7 @@
         "dut_pool": "vmlab",
         "module_name": "//base:base_unittests",
         "module_scheme": "gtest",
-        "name": "base_unittests RELEASE_LKGM",
+        "name": "base_unittests LKGM",
         "resultdb": {
           "result_format": "gtest"
         },
@@ -221,14 +227,15 @@
         "test": "base_unittests",
         "test_id_prefix": "ninja://base:base_unittests/",
         "use_lkgm": true,
-        "variant_id": "RELEASE_LKGM"
+        "variant_id": "LKGM"
       },
       {
         "cros_board": "reven-vmtest",
         "cros_ctp_suite_name": "chrome-uprev-hw",
         "cros_test_max_in_shard": 40,
         "cros_test_names_exclude_from_file": [
-          "chromeos/tast_control_disabled_tests.txt"
+          "chromeos/tast_control_disabled_tests.txt",
+          "chromeos/tast_control_flaky_tests.txt"
         ],
         "cros_test_tags": [
           "group:mainline",
@@ -241,7 +248,7 @@
         "dut_pool": "vmlab",
         "module_name": "//chromeos:chrome_all_tast_tests",
         "module_scheme": "tast",
-        "name": "chrome_all_tast_tests RELEASE_LKGM",
+        "name": "chrome_all_tast_tests LKGM",
         "resultdb": {
           "result_format": "tast"
         },
@@ -250,7 +257,7 @@
         "test_id_prefix": "ninja://chromeos:chrome_all_tast_tests/",
         "timeout_sec": 14400,
         "use_lkgm": true,
-        "variant_id": "RELEASE_LKGM"
+        "variant_id": "LKGM"
       },
       {
         "args": [
@@ -261,15 +268,16 @@
         "dut_pool": "vmlab",
         "module_name": "//chrome/test:chromeos_integration_tests",
         "module_scheme": "gtest",
-        "name": "chromeos_integration_tests RELEASE_LKGM",
+        "name": "chromeos_integration_tests LKGM",
         "resultdb": {
           "result_format": "gtest"
         },
         "shard_level_retries_on_ctp": 1,
         "test": "chromeos_integration_tests",
         "test_id_prefix": "ninja://chrome/test:chromeos_integration_tests/",
+        "timeout_sec": 5400,
         "use_lkgm": true,
-        "variant_id": "RELEASE_LKGM"
+        "variant_id": "LKGM"
       }
     ]
   },
@@ -283,7 +291,7 @@
         "cros_board": "volteer",
         "module_name": "//base:base_unittests",
         "module_scheme": "gtest",
-        "name": "base_unittests RELEASE_LKGM",
+        "name": "base_unittests LKGM",
         "resultdb": {
           "result_format": "gtest"
         },
@@ -291,14 +299,15 @@
         "test": "base_unittests",
         "test_id_prefix": "ninja://base:base_unittests/",
         "use_lkgm": true,
-        "variant_id": "RELEASE_LKGM"
+        "variant_id": "LKGM"
       },
       {
         "cros_board": "volteer",
         "cros_ctp_suite_name": "chrome-uprev-hw",
         "cros_test_max_in_shard": 40,
         "cros_test_names_exclude_from_file": [
-          "chromeos/tast_control_disabled_tests.txt"
+          "chromeos/tast_control_disabled_tests.txt",
+          "chromeos/tast_control_flaky_tests.txt"
         ],
         "cros_test_tags": [
           "group:mainline",
@@ -310,7 +319,7 @@
         ],
         "module_name": "//chromeos:chrome_all_tast_tests",
         "module_scheme": "tast",
-        "name": "chrome_all_tast_tests RELEASE_LKGM",
+        "name": "chrome_all_tast_tests LKGM",
         "resultdb": {
           "result_format": "tast"
         },
@@ -319,22 +328,23 @@
         "test_id_prefix": "ninja://chromeos:chrome_all_tast_tests/",
         "timeout_sec": 14400,
         "use_lkgm": true,
-        "variant_id": "RELEASE_LKGM"
+        "variant_id": "LKGM"
       },
       {
         "autotest_name": "chromium",
         "cros_board": "volteer",
         "module_name": "//chrome/test:chromeos_integration_tests",
         "module_scheme": "gtest",
-        "name": "chromeos_integration_tests RELEASE_LKGM",
+        "name": "chromeos_integration_tests LKGM",
         "resultdb": {
           "result_format": "gtest"
         },
         "shard_level_retries_on_ctp": 1,
         "test": "chromeos_integration_tests",
         "test_id_prefix": "ninja://chrome/test:chromeos_integration_tests/",
+        "timeout_sec": 5400,
         "use_lkgm": true,
-        "variant_id": "RELEASE_LKGM"
+        "variant_id": "LKGM"
       }
     ]
   },
@@ -400,24 +410,6 @@
         "test": "angle_unittests",
         "test_id_prefix": "ninja://third_party/angle/src/tests:angle_unittests/",
         "use_isolated_scripts_api": true
-      },
-      {
-        "merge": {
-          "script": "//testing/merge_scripts/standard_gtest_merge.py"
-        },
-        "module_name": "//extensions/shell:app_shell_unittests",
-        "module_scheme": "gtest",
-        "name": "app_shell_unittests",
-        "swarming": {
-          "dimensions": {
-            "os": "Ubuntu-22.04",
-            "pool": "chrome.tests",
-            "ssd": "0"
-          },
-          "service_account": "chrome-tester@chops-service-accounts.iam.gserviceaccount.com"
-        },
-        "test": "app_shell_unittests",
-        "test_id_prefix": "ninja://extensions/shell:app_shell_unittests/"
       },
       {
         "merge": {
@@ -603,7 +595,8 @@
             "pool": "chrome.tests",
             "ssd": "0"
           },
-          "service_account": "chrome-tester@chops-service-accounts.iam.gserviceaccount.com"
+          "service_account": "chrome-tester@chops-service-accounts.iam.gserviceaccount.com",
+          "shards": 2
         },
         "test": "blink_unittests",
         "test_id_prefix": "ninja://third_party/blink/renderer/controller:blink_unittests/"
@@ -995,24 +988,6 @@
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
         },
-        "module_name": "//extensions:extensions_browsertests",
-        "module_scheme": "gtest",
-        "name": "extensions_browsertests",
-        "swarming": {
-          "dimensions": {
-            "os": "Ubuntu-22.04",
-            "pool": "chrome.tests",
-            "ssd": "0"
-          },
-          "service_account": "chrome-tester@chops-service-accounts.iam.gserviceaccount.com"
-        },
-        "test": "extensions_browsertests",
-        "test_id_prefix": "ninja://extensions:extensions_browsertests/"
-      },
-      {
-        "merge": {
-          "script": "//testing/merge_scripts/standard_gtest_merge.py"
-        },
         "module_name": "//extensions:extensions_unittests",
         "module_scheme": "gtest",
         "name": "extensions_unittests",
@@ -1375,6 +1350,42 @@
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
         },
+        "module_name": "//chromeos/ash/components/mojo_proxy/mojo_core:mojo_legacy_unittests",
+        "module_scheme": "gtest",
+        "name": "mojo_legacy_unittests",
+        "swarming": {
+          "dimensions": {
+            "os": "Ubuntu-22.04",
+            "pool": "chrome.tests",
+            "ssd": "0"
+          },
+          "service_account": "chrome-tester@chops-service-accounts.iam.gserviceaccount.com"
+        },
+        "test": "mojo_legacy_unittests",
+        "test_id_prefix": "ninja://chromeos/ash/components/mojo_proxy/mojo_core:mojo_legacy_unittests/"
+      },
+      {
+        "merge": {
+          "script": "//testing/merge_scripts/standard_gtest_merge.py"
+        },
+        "module_name": "//chromeos/ash/components/mojo_proxy/service:mojo_proxy_unittests",
+        "module_scheme": "gtest",
+        "name": "mojo_proxy_unittests",
+        "swarming": {
+          "dimensions": {
+            "os": "Ubuntu-22.04",
+            "pool": "chrome.tests",
+            "ssd": "0"
+          },
+          "service_account": "chrome-tester@chops-service-accounts.iam.gserviceaccount.com"
+        },
+        "test": "mojo_proxy_unittests",
+        "test_id_prefix": "ninja://chromeos/ash/components/mojo_proxy/service:mojo_proxy_unittests/"
+      },
+      {
+        "merge": {
+          "script": "//testing/merge_scripts/standard_gtest_merge.py"
+        },
         "module_name": "//mojo:mojo_unittests",
         "module_scheme": "gtest",
         "name": "mojo_unittests",
@@ -1557,6 +1568,24 @@
         },
         "test": "pthreadpool_unittests",
         "test_id_prefix": "ninja://third_party/pthreadpool:pthreadpool_unittests/"
+      },
+      {
+        "merge": {
+          "script": "//testing/merge_scripts/standard_gtest_merge.py"
+        },
+        "module_name": "//third_party/puffin:puffin_unittests",
+        "module_scheme": "gtest",
+        "name": "puffin_unittests",
+        "swarming": {
+          "dimensions": {
+            "os": "Ubuntu-22.04",
+            "pool": "chrome.tests",
+            "ssd": "0"
+          },
+          "service_account": "chrome-tester@chops-service-accounts.iam.gserviceaccount.com"
+        },
+        "test": "puffin_unittests",
+        "test_id_prefix": "ninja://third_party/puffin:puffin_unittests/"
       },
       {
         "merge": {
@@ -1827,7 +1856,8 @@
             "pool": "chrome.tests",
             "ssd": "0"
           },
-          "service_account": "chrome-tester@chops-service-accounts.iam.gserviceaccount.com"
+          "service_account": "chrome-tester@chops-service-accounts.iam.gserviceaccount.com",
+          "shards": 2
         },
         "test": "unit_tests",
         "test_id_prefix": "ninja://chrome/test:unit_tests/"

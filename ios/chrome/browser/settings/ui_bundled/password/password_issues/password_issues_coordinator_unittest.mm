@@ -6,12 +6,16 @@
 
 #import <UIKit/UIKit.h>
 
+#import "base/apple/foundation_util.h"
 #import "base/memory/scoped_refptr.h"
 #import "base/test/bind.h"
 #import "base/test/ios/wait_util.h"
 #import "base/test/metrics/histogram_tester.h"
 #import "components/password_manager/core/browser/password_manager_test_utils.h"
 #import "components/password_manager/core/browser/password_store/test_password_store.h"
+#import "ios/chrome/browser/device_reauth/model/fake_reauthentication_service_util.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service_factory.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_password_check_manager.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_password_check_manager_factory.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_profile_password_store_factory.h"
@@ -23,8 +27,8 @@
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/sync/model/mock_sync_service_utils.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
@@ -54,8 +58,11 @@ class PasswordIssuesCoordinatorTest : public PlatformTest {
     builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
                               base::BindOnce(&CreateMockSyncService));
 
+    builder.AddTestingFactory(ReauthenticationServiceFactory::GetInstance(),
+                              base::BindOnce(&CreateFakeReauthService));
+
     // Create scene state for reauthentication coordinator.
-    scene_state_ = [[SceneState alloc] initWithAppState:nil];
+    scene_state_ = [[SceneState alloc] init];
     scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
     profile_ = std::move(builder).Build();
@@ -67,13 +74,12 @@ class PasswordIssuesCoordinatorTest : public PlatformTest {
     password_check_manager_ =
         IOSChromePasswordCheckManagerFactory::GetForProfile(profile_.get());
 
-    // Mock ApplicationCommands. Since ApplicationCommands conforms to
+    // Mock SceneCommands. Since SceneCommands conforms to
     // SettingsCommands, it must be mocked as well.
-    mocked_application_commands_handler_ =
-        OCMStrictProtocolMock(@protocol(ApplicationCommands));
+    mocked_scene_handler_ = OCMStrictProtocolMock(@protocol(SceneCommands));
     [browser_->GetCommandDispatcher()
-        startDispatchingToTarget:mocked_application_commands_handler_
-                     forProtocol:@protocol(ApplicationCommands)];
+        startDispatchingToTarget:mocked_scene_handler_
+                     forProtocol:@protocol(SceneCommands)];
     id mocked_application_settings_command_handler =
         OCMProtocolMock(@protocol(SettingsCommands));
     [browser_->GetCommandDispatcher()
@@ -83,7 +89,11 @@ class PasswordIssuesCoordinatorTest : public PlatformTest {
     // Init navigation controller with a root vc.
     base_navigation_controller_ = [[UINavigationController alloc]
         initWithRootViewController:[[UIViewController alloc] init]];
-    mock_reauth_module_ = [[MockReauthenticationModule alloc] init];
+    mock_reauth_module_ =
+        base::apple::ObjCCastStrict<MockReauthenticationModule>(
+            ReauthenticationServiceFactory::GetForProfile(profile_.get())
+                ->GetReauthModule());
+
     // Delay auth result so auth doesn't pass right after starting coordinator.
     // Needed for verifying behavior when auth is required.
     mock_reauth_module_.shouldSkipReAuth = NO;
@@ -94,8 +104,6 @@ class PasswordIssuesCoordinatorTest : public PlatformTest {
                                      kCompromisedPasswordsWarning
         baseNavigationController:base_navigation_controller_
                          browser:browser_.get()];
-
-    coordinator_.reauthModule = mock_reauth_module_;
 
     scoped_window_.Get().rootViewController = base_navigation_controller_;
   }
@@ -150,14 +158,15 @@ class PasswordIssuesCoordinatorTest : public PlatformTest {
   ScopedKeyWindow scoped_window_;
   UINavigationController* base_navigation_controller_ = nil;
   MockReauthenticationModule* mock_reauth_module_ = nil;
-  id mocked_application_commands_handler_;
+  id mocked_scene_handler_;
   base::HistogramTester histogram_tester_;
   PasswordIssuesCoordinator* coordinator_ = nil;
 };
 
 // Tests that Password Issues is presented only after passing authentication.
 // TODO(crbug.com/409972100): Deflake test.
-TEST_F(PasswordIssuesCoordinatorTest, FLAKY_PasswordIssuesPresentedWithAuth) {
+TEST_F(PasswordIssuesCoordinatorTest,
+       DISABLED_PasswordIssuesPresentedWithAuth) {
   StartCoordinatorSkippingAuth(/*skip_auth_on_start=*/NO);
 
   // Password Issues should be covered until auth is passed.

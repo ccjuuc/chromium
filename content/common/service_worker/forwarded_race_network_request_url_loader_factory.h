@@ -5,6 +5,7 @@
 #ifndef CONTENT_COMMON_SERVICE_WORKER_FORWARDED_RACE_NETWORK_REQUEST_URL_LOADER_FACTORY_H_
 #define CONTENT_COMMON_SERVICE_WORKER_FORWARDED_RACE_NETWORK_REQUEST_URL_LOADER_FACTORY_H_
 
+#include "content/common/content_export.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -28,12 +29,13 @@ namespace content {
 // with using |fallback_factory|. Specifically, this happens when the request is
 // proxied by the extension then respond with the internal redirect, and the new
 // request url starts with chrome-extension://.
-class ServiceWorkerForwardedRaceNetworkRequestURLLoaderFactory
+class CONTENT_EXPORT ServiceWorkerForwardedRaceNetworkRequestURLLoaderFactory
     : network::mojom::URLLoaderFactory {
  public:
   ServiceWorkerForwardedRaceNetworkRequestURLLoaderFactory(
       mojo::PendingReceiver<network::mojom::URLLoaderClient> client_receiver,
-      scoped_refptr<network::SharedURLLoaderFactory> fallback_factory);
+      scoped_refptr<network::SharedURLLoaderFactory> fallback_factory,
+      bool is_main_resource);
   ServiceWorkerForwardedRaceNetworkRequestURLLoaderFactory(
       const ServiceWorkerForwardedRaceNetworkRequestURLLoaderFactory&) = delete;
   ServiceWorkerForwardedRaceNetworkRequestURLLoaderFactory& operator=(
@@ -60,6 +62,7 @@ class ServiceWorkerForwardedRaceNetworkRequestURLLoaderFactory
   mojo::PendingReceiver<network::mojom::URLLoaderClient> client_receiver_;
   mojo::PendingRemote<network::mojom::URLLoader> loader_;
   scoped_refptr<network::SharedURLLoaderFactory> fallback_factory_;
+  const bool is_main_resource_;
   bool is_data_pipe_fused_ = false;
 };
 }  // namespace content

@@ -55,14 +55,7 @@ FirstPartySetsHandler* g_test_instance = nullptr;
 FirstPartySetsHandlerImpl* g_impl_test_instance = nullptr;
 
 base::TaskPriority GetTaskPriority() {
-  return base::FeatureList::IsEnabled(net::features::kWaitForFirstPartySetsInit)
-             ? base::TaskPriority::USER_BLOCKING
-             : base::TaskPriority::BEST_EFFORT;
-}
-
-void RecordSitesToClearCount(int count) {
-  base::UmaHistogramCounts1000(
-      "FirstPartySets.Initialization.SitesToClear.Count", count);
+  return base::TaskPriority::BEST_EFFORT;
 }
 
 }  // namespace
@@ -102,8 +95,7 @@ FirstPartySetsHandlerImpl* FirstPartySetsHandlerImpl::GetInstance() {
 // static
 std::pair<base::expected<void, FirstPartySetsHandler::ParseError>,
           std::vector<FirstPartySetsHandler::ParseWarning>>
-FirstPartySetsHandler::ValidateEnterprisePolicy(
-    const base::Value::Dict& policy) {
+FirstPartySetsHandler::ValidateEnterprisePolicy(const base::DictValue& policy) {
   auto [parsed, warnings] =
       FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy);
 
@@ -124,7 +116,7 @@ FirstPartySetsHandlerImplInstance::CreateForTesting(
 }
 
 void FirstPartySetsHandlerImplInstance::GetContextConfigForPolicy(
-    base::optional_ref<const base::Value::Dict> policy,
+    base::optional_ref<const base::DictValue> policy,
     base::OnceCallback<void(net::FirstPartySetsContextConfig)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!policy) {
@@ -132,8 +124,7 @@ void FirstPartySetsHandlerImplInstance::GetContextConfigForPolicy(
     return;
   }
   if (global_sets_.has_value()) {
-    std::move(callback).Run(
-        GetContextConfigForPolicyInternal(*policy, std::nullopt));
+    std::move(callback).Run(GetContextConfigForPolicyInternal(*policy));
     return;
   }
   // Add to the deque of callbacks that will be processed once the list
@@ -143,7 +134,7 @@ void FirstPartySetsHandlerImplInstance::GetContextConfigForPolicy(
           &FirstPartySetsHandlerImplInstance::GetContextConfigForPolicyInternal,
           // base::Unretained(this) is safe here because this is a static
           // singleton.
-          base::Unretained(this), policy->Clone(), base::ElapsedTimer())
+          base::Unretained(this), policy->Clone())
           .Then(std::move(callback)));
 }
 
@@ -220,7 +211,6 @@ void FirstPartySetsHandlerImplInstance::SetPublicFirstPartySets(
     return;
   }
 
-  // TODO(crbug.com/40186153): Use the version to compute sets diff.
   sets_loader_->SetComponentSets(version, std::move(sets_file));
 }
 
@@ -426,8 +416,6 @@ void FirstPartySetsHandlerImplInstance::OnGetSitesToClear(
     return;
   }
 
-  RecordSitesToClearCount(sites_to_clear->first.size());
-
   BrowserContext* browser_context = browser_context_getter.Run();
   if (!browser_context) {
     DVLOG(1) << "Invalid Browser Context. Failed to clear site data for "
@@ -461,14 +449,7 @@ void FirstPartySetsHandlerImplInstance::DidClearSiteDataOnChangedSetsForContext(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(!db_helper_.is_null());
 
-  // Only measures the successful rate without parsing the failed types, since
-  // `failed_data_types` only has value if the failure is related to passwords
-  // or is for all data types if the task is dropped at shutdown, which is not
-  // for our interest.
-  bool success = failed_data_types == 0;
-  base::UmaHistogramBoolean(
-      "FirstPartySets.Initialization.ClearSiteDataOutcome", success);
-  if (success) {
+  if (failed_data_types == 0) {
     db_helper_
         .AsyncCall(
             &FirstPartySetsHandlerDatabaseHelper::UpdateClearStatusForContext)
@@ -488,11 +469,11 @@ void FirstPartySetsHandlerImplInstance::ComputeFirstPartySetMetadata(
     base::OnceCallback<void(net::FirstPartySetMetadata)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!global_sets_.has_value()) {
-    EnqueuePendingTask(base::BindOnce(
-        &FirstPartySetsHandlerImplInstance::
-            ComputeFirstPartySetMetadataInternal,
-        base::Unretained(this), site, top_frame_site.CopyAsOptional(),
-        config.Clone(), base::ElapsedTimer(), std::move(callback)));
+    EnqueuePendingTask(base::BindOnce(&FirstPartySetsHandlerImplInstance::
+                                          ComputeFirstPartySetMetadataInternal,
+                                      base::Unretained(this), site,
+                                      top_frame_site.CopyAsOptional(),
+                                      config.Clone(), std::move(callback)));
     return;
   }
 
@@ -504,14 +485,9 @@ void FirstPartySetsHandlerImplInstance::ComputeFirstPartySetMetadataInternal(
     const net::SchemefulSite& site,
     base::optional_ref<const net::SchemefulSite> top_frame_site,
     const net::FirstPartySetsContextConfig& config,
-    const base::ElapsedTimer& timer,
     base::OnceCallback<void(net::FirstPartySetMetadata)> callback) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(global_sets_.has_value());
-
-  base::UmaHistogramTimes(
-      "Cookie.FirstPartySets.EnqueueingDelay.ComputeMetadata3",
-      timer.Elapsed());
 
   std::move(callback).Run(
       global_sets_->ComputeMetadata(site, top_frame_site, config));
@@ -519,16 +495,9 @@ void FirstPartySetsHandlerImplInstance::ComputeFirstPartySetMetadataInternal(
 
 net::FirstPartySetsContextConfig
 FirstPartySetsHandlerImplInstance::GetContextConfigForPolicyInternal(
-    const base::Value::Dict& policy,
-    base::optional_ref<const base::ElapsedTimer> timer) const {
+    const base::DictValue& policy) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(global_sets_.has_value());
-
-  if (timer.has_value()) {
-    base::UmaHistogramTimes(
-        "Cookie.FirstPartySets.EnqueueingDelay.ContextConfig2",
-        timer->Elapsed());
-  }
 
   if (!enabled_) {
     return net::FirstPartySetsContextConfig();

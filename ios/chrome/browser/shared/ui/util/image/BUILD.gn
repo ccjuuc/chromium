@@ -8,6 +8,21 @@ source_set("image") {
     "image_util.mm",
   ]
   deps = [ "//ui/base" ]
+  frameworks = [
+    "ImageIO.framework",
+    "UniformTypeIdentifiers.framework",
+  ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  sources = [ "image_util_unittest.mm" ]
+  deps = [
+    ":image",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
   frameworks = [ "UniformTypeIdentifiers.framework" ]
 }
 

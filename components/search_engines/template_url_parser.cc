@@ -183,7 +183,7 @@ void SafeTemplateURLParser::OnXmlParseComplete(
 
     // Get the namespaces used in the XML document, which will be used
     // to access nodes by tag name in GetChildElementsByTag().
-    if (const base::Value::Dict* namespaces = root.GetDict().FindDict(
+    if (const base::DictValue* namespaces = root.GetDict().FindDict(
             data_decoder::mojom::XmlParser::kNamespacesKey)) {
       for (auto item : *namespaces) {
         namespaces_.push_back(item.first);
@@ -373,7 +373,8 @@ void SafeTemplateURLParser::ParseAliases(
     const std::vector<const base::Value*>& aliases) {
   for (auto* alias : aliases) {
     std::string alias_value;
-    if (data_decoder::GetXmlElementText(*alias, &alias_value)) {
+    if (data_decoder::GetXmlElementText(*alias, &alias_value) &&
+        !alias_value.empty()) {
       data_.SetKeyword(base::UTF8ToUTF16(alias_value));
       has_custom_keyword_ = true;
     }

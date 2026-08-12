@@ -4,19 +4,22 @@
 
 package org.chromium.chrome.browser.omnibox.suggestions.answer;
 
+import static org.junit.Assert.assertEquals;
+
 import android.content.Context;
 import android.text.SpannableStringBuilder;
 import android.text.style.TextAppearanceSpan;
+import android.view.ContextThemeWrapper;
 
 import androidx.test.filters.SmallTest;
 
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.chrome.browser.omnibox.R;
 
 /** Tests for {@link CalculatorAnswerTextLayout}. */
 @RunWith(BaseRobolectricTestRunner.class)
@@ -27,17 +30,11 @@ public class CalculatorAnswerTextLayoutUnitTest {
 
     @Before
     public void setUp() {
-        mContext = ContextUtils.getApplicationContext();
-        mPrimaryText =
-                new TextAppearanceSpan(
-                        mContext,
-                        org.chromium.chrome.browser.omnibox.R.style
-                                .TextAppearance_TextLarge_Primary);
-        mMediumText =
-                new TextAppearanceSpan(
-                        mContext,
-                        org.chromium.chrome.browser.omnibox.R.style
-                                .TextAppearance_TextMedium_Secondary);
+        mContext =
+                new ContextThemeWrapper(
+                        ContextUtils.getApplicationContext(), R.style.Theme_BrowserUI_DayNight);
+        mPrimaryText = new TextAppearanceSpan(mContext, R.style.TextAppearance_TextLarge_Primary);
+        mMediumText = new TextAppearanceSpan(mContext, R.style.TextAppearance_TextMedium_Secondary);
     }
 
     @Test
@@ -49,19 +46,19 @@ public class CalculatorAnswerTextLayoutUnitTest {
         CalculatorAnswerTextLayout displayTextLayout =
                 new CalculatorAnswerTextLayout(mContext, "text", /* isAnswerLine= */ false);
 
-        Assert.assertEquals("answer", answerLayout.getText().toString());
-        Assert.assertEquals("text", displayTextLayout.getText().toString());
+        assertEquals("answer", answerLayout.getText().toString());
+        assertEquals("text", displayTextLayout.getText().toString());
 
         SpannableStringBuilder answerLayoutText = answerLayout.getText();
         TextAppearanceSpan[] answerTextAppearanceSpans =
                 answerLayoutText.getSpans(0, answerLayoutText.length(), TextAppearanceSpan.class);
-        Assert.assertEquals(1, answerTextAppearanceSpans.length);
-        Assert.assertEquals(answerTextAppearanceSpans[0].getTextSize(), mPrimaryText.getTextSize());
+        assertEquals(1, answerTextAppearanceSpans.length);
+        assertEquals(answerTextAppearanceSpans[0].getTextSize(), mPrimaryText.getTextSize());
 
         SpannableStringBuilder displayLayoutText = displayTextLayout.getText();
         TextAppearanceSpan[] displayTextAppearanceSpans =
                 displayLayoutText.getSpans(0, displayLayoutText.length(), TextAppearanceSpan.class);
-        Assert.assertEquals(1, displayTextAppearanceSpans.length);
-        Assert.assertEquals(displayTextAppearanceSpans[0].getTextSize(), mMediumText.getTextSize());
+        assertEquals(1, displayTextAppearanceSpans.length);
+        assertEquals(displayTextAppearanceSpans[0].getTextSize(), mMediumText.getTextSize());
     }
 }

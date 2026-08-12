@@ -30,6 +30,7 @@
 #import "ios/web/public/webui/web_ui_ios.h"
 #import "ios/web/public/webui/web_ui_ios_data_source.h"
 #import "ios/web/public/webui/web_ui_ios_message_handler.h"
+#import "net/log/file_net_log_observer.h"
 #import "net/log/net_log_capture_mode.h"
 #import "net/url_request/url_request_context_getter.h"
 
@@ -63,19 +64,19 @@ class NetExportMessageHandler
   void RegisterMessages() override;
 
   // Messages.
-  void OnEnableNotifyUIWithState(const base::Value::List& list);
-  void OnStartNetLog(const base::Value::List& list);
-  void OnStopNetLog(const base::Value::List& list);
-  void OnSendNetLog(const base::Value::List& list);
+  void OnEnableNotifyUIWithState(const base::ListValue& list);
+  void OnStartNetLog(const base::ListValue& list);
+  void OnStopNetLog(const base::ListValue& list);
+  void OnSendNetLog(const base::ListValue& list);
 
   // net_log::NetExportFileWriter::StateObserver implementation.
-  void OnNewState(const base::Value::Dict& state) override;
+  void OnNewState(const base::DictValue& state) override;
 
  private:
   // Send NetLog data via email.
   void SendEmail(const base::FilePath& file_to_send);
 
-  void NotifyUIWithState(const base::Value::Dict& file_writer_state);
+  void NotifyUIWithState(const base::DictValue& file_writer_state);
 
   // Cache of GetApplicationContext()->GetNetExportFileWriter().
   // This is owned by the ApplicationContext.
@@ -119,7 +120,7 @@ void NetExportMessageHandler::RegisterMessages() {
 }
 
 void NetExportMessageHandler::OnEnableNotifyUIWithState(
-    const base::Value::List& list) {
+    const base::ListValue& list) {
   DCHECK_CURRENTLY_ON(web::WebThread::UI);
   if (!state_observation_manager_.IsObserving()) {
     state_observation_manager_.Observe(file_writer_.get());
@@ -127,7 +128,7 @@ void NetExportMessageHandler::OnEnableNotifyUIWithState(
   NotifyUIWithState(file_writer_->GetState());
 }
 
-void NetExportMessageHandler::OnStartNetLog(const base::Value::List& params) {
+void NetExportMessageHandler::OnStartNetLog(const base::ListValue& params) {
   DCHECK_CURRENTLY_ON(web::WebThread::UI);
 
   // Determine the capture mode.
@@ -135,6 +136,13 @@ void NetExportMessageHandler::OnStartNetLog(const base::Value::List& params) {
   if (params.size() > 0 && params[0].is_string()) {
     capture_mode = net_log::NetExportFileWriter::CaptureModeFromString(
         params[0].GetString());
+  }
+
+  // Determine the file format.
+  net::NetLogFileFormat file_format = net::NetLogFileFormat::kJson;
+  if (params.size() > 2 && params[2].is_string()) {
+    file_format = net_log::NetExportFileWriter::FileFormatFromString(
+        params[2].GetString());
   }
 
   // Determine the max file size.
@@ -148,23 +156,23 @@ void NetExportMessageHandler::OnStartNetLog(const base::Value::List& params) {
   }
 
   file_writer_->StartNetLog(
-      base::FilePath(), capture_mode, max_log_file_size,
+      base::FilePath(), capture_mode, file_format, max_log_file_size,
       base::CommandLine::ForCurrentProcess()->GetCommandLineString(),
       GetChannelString(), GetApplicationContext()->GetSystemNetworkContext());
 }
 
-void NetExportMessageHandler::OnStopNetLog(const base::Value::List& list) {
+void NetExportMessageHandler::OnStopNetLog(const base::ListValue& list) {
   DCHECK_CURRENTLY_ON(web::WebThread::UI);
   file_writer_->StopNetLog();
 }
 
-void NetExportMessageHandler::OnSendNetLog(const base::Value::List& list) {
+void NetExportMessageHandler::OnSendNetLog(const base::ListValue& list) {
   DCHECK_CURRENTLY_ON(web::WebThread::UI);
   file_writer_->GetFilePathToCompletedLog(base::BindOnce(
       &NetExportMessageHandler::SendEmail, weak_factory_.GetWeakPtr()));
 }
 
-void NetExportMessageHandler::OnNewState(const base::Value::Dict& state) {
+void NetExportMessageHandler::OnNewState(const base::DictValue& state) {
   NotifyUIWithState(state);
 }
 
@@ -189,12 +197,11 @@ void NetExportMessageHandler::SendEmail(const base::FilePath& file_to_send) {
   context.textFileToAttach = file_to_send;
 
   web::WebState* web_state = web_ui()->GetWebState();
-  NetExportTabHelper::GetOrCreateForWebState(web_state)->ShowMailComposer(
-      context);
+  NetExportTabHelper::FromWebState(web_state)->ShowMailComposer(context);
 }
 
 void NetExportMessageHandler::NotifyUIWithState(
-    const base::Value::Dict& file_writer_state) {
+    const base::DictValue& file_writer_state) {
   DCHECK_CURRENTLY_ON(web::WebThread::UI);
   DCHECK(web_ui());
 

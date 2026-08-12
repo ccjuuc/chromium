@@ -6,17 +6,18 @@ import {html} from '//resources/lit/v3_0/lit.rollup.js';
 
 import {asyncMap} from './async_map_directive.js';
 import type {ExtensionsItemListElement} from './item_list.js';
+import type {ServiceInterface} from './service.js';
 
 export function getHtml(this: ExtensionsItemListElement) {
   // clang-format off
   return html`<!--_html_template_start_-->
 <div id="container">
-  <managed-footnote ?hidden="${this.filter}"></managed-footnote>
+  <managed-footnote ?hidden="${!!this.filter}"></managed-footnote>
   <div id="content-wrapper" .style="--max-columns: ${this.maxColumns_};">
     ${this.showSafetyCheckReviewPanel_ ? html`
       <div class="items-container panel">
         <extensions-review-panel .extensions="${this.unsafeExtensions_}"
-            .delegate="${this.delegate}">
+            .delegate="${this.delegate as ServiceInterface}">
         </extensions-review-panel>
       </div>` : ''}
 
@@ -24,8 +25,7 @@ export function getHtml(this: ExtensionsItemListElement) {
       <div class="items-container panel">
         <extensions-mv2-deprecation-panel
             .extensions="${this.mv2DeprecatedExtensions_}"
-            .delegate="${this.delegate}"
-            .mv2ExperimentStage="${this.mv2ExperimentStage_}"
+            .delegate="${this.delegate as ServiceInterface}"
             ?show-title="${this.showSafetyCheckReviewPanel_}">
         </extensions-mv2-deprecation-panel>
       </div>` : ''}
@@ -45,7 +45,17 @@ export function getHtml(this: ExtensionsItemListElement) {
       <!-- section-header needs to left-align with the grid content below, and
            the easiest way to achieve this is to make it a grid as well. -->
       <h2 class="section-header items-container">
-        $i18n{extensionsSectionHeader}
+        <span class="section-header-contents">
+          <span>$i18n{extensionsSectionHeader}</span>
+          <span id="pinned-toggle-container" ?hidden="${!this.showExtensionsPinnedByDefault_}">
+            <span id="pinned-toggle-label">$i18n{pinNewExtensions}</span>
+            <cr-toggle id="pinned-toggle"
+                ?checked="${this.extensionsPinnedByDefault}"
+                @change="${this.onExtensionsPinnedByDefaultChange_}"
+                aria-labelledby="pinned-toggle-label">
+            </cr-toggle>
+          </span>
+        </span>
       </h2>
       <div class="items-container">
         <!-- Render only a few items first, to improve initial render time,
@@ -56,8 +66,8 @@ export function getHtml(this: ExtensionsItemListElement) {
           <extensions-item id="${item.id}" .data="${item}"
               ?safety-check-showing="${
                   this.hasSafetyCheckTriggeringExtension_()}"
-              .delegate="${this.delegate}" ?in-dev-mode="${this.inDevMode}"
-              .mv2ExperimentStage="${this.mv2ExperimentStage_}">
+              .delegate="${this.delegate as ServiceInterface}"
+              ?in-dev-mode="${this.inDevMode}">
           </extensions-item>`, 6)}
       </div>
     </div>
@@ -69,7 +79,8 @@ export function getHtml(this: ExtensionsItemListElement) {
       <div class="items-container">
         ${asyncMap(this.filteredApps_, item => html`
           <extensions-item id="${item.id}" .data="${item}"
-              .delegate="${this.delegate}" ?in-dev-mode="${this.inDevMode}">
+              .delegate="${this.delegate as ServiceInterface}"
+              ?in-dev-mode="${this.inDevMode}">
           </extensions-item>`, 6)}
       </div>
     </div>

@@ -45,18 +45,18 @@ struct PasswordAndMetadata {
 // Minimal struct that describes and identifies a form field which triggered a
 // `PasswordSuggestionRequest`. Should be a password or username field.
 struct TriggeringField {
+  TriggeringField();
   TriggeringField(const FormFieldData& field,
                   AutofillSuggestionTriggerSource trigger_source,
                   const std::u16string& typed_username,
                   const gfx::RectF& bounds);
-  TriggeringField(FieldRendererId element_id,
+  TriggeringField(FieldGlobalId element_id,
                   AutofillSuggestionTriggerSource trigger_source,
                   base::i18n::TextDirection text_direction,
                   const std::u16string& typed_username,
                   bool show_webauthn_credentials,
                   bool show_identity_credentials,
                   const gfx::RectF& bounds);
-  TriggeringField();
   TriggeringField(const TriggeringField&);
   TriggeringField& operator=(const TriggeringField&);
   TriggeringField(TriggeringField&&);
@@ -64,19 +64,20 @@ struct TriggeringField {
   ~TriggeringField();
 
   // The unique renderer id of the field that the user has clicked.
-  FieldRendererId element_id;
+  FieldGlobalId element_id;
   // Describes the way suggestion generation for this field was triggered.
-  AutofillSuggestionTriggerSource trigger_source;
+  AutofillSuggestionTriggerSource trigger_source =
+      AutofillSuggestionTriggerSource ::kUnspecified;
   // Direction of the text for the triggering field.
-  base::i18n::TextDirection text_direction;
+  base::i18n::TextDirection text_direction = base::i18n::UNKNOWN_DIRECTION;
   // The value of the username field. This will be empty if the suggestion
   // generation is triggered on a password field.
   std::u16string typed_username;
   // Specifies whether the field is suitable to show webauthn credentials.
-  bool show_webauthn_credentials;
+  bool show_webauthn_credentials = false;
   // Specifies whether the field is suitable to show federated identity
   // credentials.
-  bool show_identity_credentials;
+  bool show_identity_credentials = false;
   // Location at which to display the popup.
   gfx::RectF bounds;
 };
@@ -85,8 +86,8 @@ struct TriggeringField {
 struct PasswordSuggestionRequest {
   PasswordSuggestionRequest(TriggeringField field,
                             const FormData& form_data,
-                            uint64_t username_field_index,
-                            uint64_t password_field_index);
+                            FieldGlobalId username_field_id,
+                            FieldGlobalId password_field_id);
 
   PasswordSuggestionRequest();
   PasswordSuggestionRequest(const PasswordSuggestionRequest&);
@@ -99,16 +100,14 @@ struct PasswordSuggestionRequest {
   TriggeringField field;
   // A web form extracted from the DOM that contains the triggering field.
   FormData form_data;
-  // The index of the username field in the `form_data.fields`. If the password
-  // form doesn't contain the username field, this value will be equal to
-  // `form_data.fields.size()`. Either this or `password_field_index` should be
-  // available.
-  uint64_t username_field_index;
-  // The index of the password field in the `form_data.fields`. If the password
-  // form doesn't contain the password field, this value will be equal to
-  // `form_data.fields.size()`. Either this or `username_field_index` should be
-  // available.
-  uint64_t password_field_index;
+  // The username field in the `form_data.fields`. If the password form doesn't
+  // contain the username field, this value is the null FieldGlobalId. Either
+  // this or `password_field_index` should be non-null.
+  FieldGlobalId username_field_id;
+  // The password field in the `form_data.fields`. If the password form doesn't
+  // contain the password field, this value is the null FieldGlobalId. Either
+  // this or `username_field_index` should be non-null.
+  FieldGlobalId password_field_id;
 };
 
 // Structure used for autofilling password forms. Note that the realms in this
@@ -153,9 +152,6 @@ struct PasswordFormFillData {
 
   // Fields that are banned from Password Manager filling suggestion.
   std::vector<FieldRendererId> suggestion_banned_fields;
-
-  // Instructs renderer to notify about successful filling on pageload.
-  bool notify_browser_of_successful_filling = false;
 };
 
 // If |data.wait_for_username| is set, the renderer does not need to receive

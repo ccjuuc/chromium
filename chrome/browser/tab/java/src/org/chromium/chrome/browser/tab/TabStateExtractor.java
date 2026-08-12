@@ -4,6 +4,9 @@
 
 package org.chromium.chrome.browser.tab;
 
+import androidx.annotation.ColorInt;
+
+import org.chromium.base.ThreadUtils;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.content_public.browser.LoadUrlParams;
@@ -24,6 +27,7 @@ public class TabStateExtractor {
      * @return The state object, or null if the tab is not initialized.
      */
     public static @Nullable TabState from(Tab tab) {
+        ThreadUtils.assertOnUiThread();
         if (sTabStatesForTesting != null && sTabStatesForTesting.containsKey(tab.getId())) {
             return sTabStatesForTesting.get(tab.getId());
         }
@@ -37,10 +41,7 @@ public class TabStateExtractor {
         tabState.tabLaunchTypeAtCreation = tab.getTabLaunchTypeAtCreation();
         // Don't save the actual default theme color because it could change on night mode state
         // changed.
-        tabState.themeColor =
-                tab.isThemingAllowed() && !tab.isNativePage()
-                        ? tab.getThemeColor()
-                        : TabState.UNSPECIFIED_THEME_COLOR;
+        tabState.themeColor = getThemeColorForSerialization(tab);
         tabState.rootId = tab.getRootId();
         tabState.userAgent = tab.getUserAgent();
         tabState.lastNavigationCommittedTimestampMillis =
@@ -48,6 +49,7 @@ public class TabStateExtractor {
         tabState.tabGroupId = tab.getTabGroupId();
         tabState.tabHasSensitiveContent = tab.getTabHasSensitiveContent();
         tabState.isPinned = tab.getIsPinned();
+        tabState.url = tab.getUrl();
         return tabState;
     }
 
@@ -96,6 +98,14 @@ public class TabStateExtractor {
         // state with just the pending load.
         return WebContentsState.createSingleNavigationWebContentsState(
                 tab.getProfile(), tab.getTitle(), pendingLoadParams);
+    }
+
+    private static @ColorInt int getThemeColorForSerialization(Tab tab) {
+        if (!tab.isThemingAllowed() || tab.isNativePage()) {
+            return TabState.UNSPECIFIED_THEME_COLOR;
+        }
+        WebContents webContents = tab.getWebContents();
+        return webContents != null ? webContents.getThemeColor() : tab.getThemeColor();
     }
 
     public static void setTabStateForTesting(int tabId, TabState tabState) {

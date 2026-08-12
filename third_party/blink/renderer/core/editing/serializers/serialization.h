@@ -33,6 +33,7 @@
 #include "third_party/blink/renderer/core/editing/forward.h"
 #include "third_party/blink/renderer/core/editing/serializers/create_markup_options.h"
 #include "third_party/blink/renderer/core/editing/serializers/html_interchange.h"
+#include "third_party/blink/renderer/core/trustedtypes/trusted_types_names.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
@@ -42,16 +43,11 @@ namespace blink {
 class ContainerNode;
 class Document;
 class DocumentFragment;
-class Element;
 class ExceptionState;
 class Node;
 class CSSPropertyValueSet;
 
 enum ChildrenOnly { kIncludeNode, kChildrenOnly };
-
-// ForceInertTemplate specifies whether the HTML parser should parse into an
-// inert (non-active) template document.
-enum class ForceInertTemplate { kDontForce, kForce };
 
 using ShadowRootSet = HeapHashSet<Member<ShadowRoot>>;
 struct ShadowRootInclusion final {
@@ -87,27 +83,14 @@ DocumentFragment* CreateFragmentFromMarkup(
     ParserContentPolicy = kAllowScriptingContent);
 DocumentFragment* CreateFragmentFromMarkupWithContext(Document&,
                                                       const String& markup,
-                                                      unsigned fragment_start,
-                                                      unsigned fragment_end,
+                                                      wtf_size_t fragment_start,
+                                                      wtf_size_t fragment_end,
                                                       const String& base_url,
                                                       ParserContentPolicy);
-DocumentFragment* CreateFragmentForInnerOuterHTML(
-    const String&,
-    Element*,
-    ParserContentPolicy,
-    Element::ParseDeclarativeShadowRoots parse_declarative_shadows,
-    Element::ForceHtml force_html,
-    ForceInertTemplate force_inert,
-    CustomElementRegistry* registry,
-    ExceptionState&);
 DocumentFragment* CreateFragmentForTransformToFragment(
     const String&,
     const String& source_mime_type,
     Document& output_doc);
-DocumentFragment* CreateContextualFragment(const String&,
-                                           Element*,
-                                           ParserContentPolicy,
-                                           ExceptionState&);
 
 bool IsPlainTextMarkup(Node*);
 
@@ -121,7 +104,7 @@ void ReplaceChildrenWithText(ContainerNode*, const String&, ExceptionState&);
 CORE_EXPORT String
 CreateMarkup(const Node*,
              ChildrenOnly = kIncludeNode,
-             AbsoluteURLs = kDoNotResolveURLs,
+             ResolveUrls = ResolveUrls::kNone,
              const ShadowRootInclusion& = ShadowRootInclusion());
 
 CORE_EXPORT String
@@ -141,8 +124,8 @@ CreateMarkup(const PositionInFlatTree& start,
 CORE_EXPORT DocumentFragment*
 CreateStrictlyProcessedFragmentFromMarkupWithContext(Document&,
                                                      const String& raw_markup,
-                                                     unsigned fragment_start,
-                                                     unsigned fragment_end,
+                                                     wtf_size_t fragment_start,
+                                                     wtf_size_t fragment_end,
                                                      const String& base_url);
 
 // Processes the HTML string and strips out certain security sensitive tags if
@@ -155,11 +138,11 @@ CreateStrictlyProcessedFragmentFromMarkupWithContext(Document&,
 CORE_EXPORT String CreateStrictlyProcessedMarkupWithContext(
     Document&,
     const String& raw_markup,
-    unsigned fragment_start,
-    unsigned fragment_end,
+    wtf_size_t fragment_start,
+    wtf_size_t fragment_end,
     const String& base_url,
     ChildrenOnly = kIncludeNode,
-    AbsoluteURLs = kDoNotResolveURLs,
+    ResolveUrls = ResolveUrls::kNone,
     const ShadowRootInclusion& = ShadowRootInclusion());
 
 void MergeWithNextTextNode(Text*, ExceptionState&);

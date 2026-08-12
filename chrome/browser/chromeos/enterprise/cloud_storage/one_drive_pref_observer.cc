@@ -4,6 +4,8 @@
 
 #include "chrome/browser/chromeos/enterprise/cloud_storage/one_drive_pref_observer.h"
 
+#include "ash/constants/ash_extension_constants.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/web_app_id_constants.h"
 #include "base/check_deref.h"
 #include "base/check_is_test.h"
@@ -17,8 +19,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_selections.h"
 #include "chrome/common/extensions/api/odfs_config_private.h"
-#include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
@@ -64,12 +64,14 @@ class OneDrivePrefObserver : public KeyedService,
   void OnAppRegistryCacheWillBeDestroyed(
       apps::AppRegistryCache* cache) override;
 
+  void MaybeSetSupportedLinksPreference();
+
   // Serves as callback for pref changes.
   void OnMicrosoftOneDriveMountPrefChanged();
   void OnMicrosoftOneDriveAccountRestrictionsPrefChanged();
 
   void BroadcastModeChanged(Mount mode);
-  void BroadcastAccountRestrictionsChanged(base::Value::List restrictions);
+  void BroadcastAccountRestrictionsChanged(base::ListValue restrictions);
 
   void MaybeUninstallOdfsExtension(Mount mode);
 
@@ -108,12 +110,12 @@ std::unique_ptr<OneDrivePrefObserver> OneDrivePrefObserver::Create(
 void OneDrivePrefObserver::Init() {
   pref_change_registrar_->Init(profile_->GetPrefs());
   pref_change_registrar_->Add(
-      prefs::kMicrosoftOneDriveMount,
+      ash::prefs::kMicrosoftOneDriveMount,
       base::BindRepeating(
           &OneDrivePrefObserver::OnMicrosoftOneDriveMountPrefChanged,
           base::Unretained(this)));
   pref_change_registrar_->Add(
-      prefs::kMicrosoftOneDriveAccountRestrictions,
+      ash::prefs::kMicrosoftOneDriveAccountRestrictions,
       base::BindRepeating(&OneDrivePrefObserver::
                               OnMicrosoftOneDriveAccountRestrictionsPrefChanged,
                           base::Unretained(this)));
@@ -125,6 +127,14 @@ void OneDrivePrefObserver::Init() {
         apps::AppServiceProxyFactory::GetForProfile(profile_)
             ->AppRegistryCache();
     app_registry_cache_observer_.Observe(&cache);
+
+    // Check if the app is already ready on startup.
+    cache.ForOneApp(ash::kMicrosoft365AppId,
+                    [this](const apps::AppUpdate& update) {
+                      if (update.Readiness() == apps::Readiness::kReady) {
+                        MaybeSetSupportedLinksPreference();
+                      }
+                    });
   }
 }
 
@@ -216,7 +226,7 @@ void OneDrivePrefObserver::BroadcastModeChanged(Mount mode) {
 }
 
 void OneDrivePrefObserver::BroadcastAccountRestrictionsChanged(
-    base::Value::List restrictions) {
+    base::ListValue restrictions) {
   if (!event_router_) {
     CHECK_IS_TEST();
     return;
@@ -248,21 +258,23 @@ void OneDrivePrefObserver::OnAppUpdate(const apps::AppUpdate& update) {
   // the automated Clippy flow. This will only be done once when the M365 PWA is
   // ready (either on install or after user session start) to allow the user to
   // modify this behavior.
-  if (update.AppId() != ash::kMicrosoft365AppId || !update.ReadinessChanged() ||
-      update.Readiness() != apps::Readiness::kReady) {
-    return;
+  if (update.AppId() == ash::kMicrosoft365AppId && update.ReadinessChanged() &&
+      update.Readiness() == apps::Readiness::kReady) {
+    MaybeSetSupportedLinksPreference();
   }
+}
 
+void OneDrivePrefObserver::MaybeSetSupportedLinksPreference() {
   if (!cloud_upload::IsMicrosoftOfficeOneDriveIntegrationAutomated(profile_)) {
     return;
   }
 
   PrefService* pref_service = profile_->GetPrefs();
-  if (pref_service->GetBoolean(prefs::kM365SupportedLinkDefaultSet)) {
+  if (pref_service->GetBoolean(ash::prefs::kM365SupportedLinkDefaultSet)) {
     return;
   }
 
-  pref_service->SetBoolean(prefs::kM365SupportedLinkDefaultSet, true);
+  pref_service->SetBoolean(ash::prefs::kM365SupportedLinkDefaultSet, true);
   apps::AppServiceProxyFactory::GetForProfile(profile_)
       ->SetSupportedLinksPreference(ash::kMicrosoft365AppId);
 }

@@ -6,8 +6,9 @@
 
 #include <memory>
 
+#include "ash/resources/vector_icons/vector_icons.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/notifications/notification_display_service.h"
 #include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -51,9 +52,9 @@ std::unique_ptr<message_center::Notification> NewNotification(
 LorgnetteNotificationController::LorgnetteNotificationController(
     Profile* profile)
     : dlc_observer_(this),
-      supported_dlc_ids_(
-          std::set<std::string>({lorgnette::kSaneBackendsPfuDlcId,
-                                 lorgnette::kSaneBackendsCanonDlcId})),
+      supported_dlc_ids_(std::set<std::string>(
+          {lorgnette::kSaneBackendsPfuDlcId, lorgnette::kSaneBackendsCanonDlcId,
+           lorgnette::kSaneBackendsBrother5DlcId})),
       profile_(profile) {
   DCHECK(profile);
   dlc_observer_.Observe(DlcserviceClient::Get());
@@ -108,16 +109,16 @@ LorgnetteNotificationController::CreateNotification(const std::string& dlc_id) {
     case DlcState::kInstalledSuccessfully:
       return NewNotification(IDS_SCANNING_DLC_NOTIFICATION_INSTALLED_TITLE,
                              IDS_EMPTY_STRING, cros_tokens::kCrosSysPrimary,
-                             kNotificationPrintingIcon);
+                             ash::kNotificationPrintingIcon);
     case DlcState::kInstalling:
       return NewNotification(IDS_SCANNING_DLC_NOTIFICATION_INSTALLING_TITLE,
                              IDS_EMPTY_STRING, cros_tokens::kCrosSysPrimary,
-                             kNotificationPrintingIcon);
+                             ash::kNotificationPrintingIcon);
     case DlcState::kInstallError:
       return NewNotification(
           IDS_SCANNING_DLC_NOTIFICATION_INSTALL_FAILED_TITLE,
           IDS_SCANNING_DLC_NOTIFICATION_INSTALL_FAILED_MESSAGE,
-          cros_tokens::kCrosSysError, kNotificationPrintingWarningIcon);
+          cros_tokens::kCrosSysError, ash::kNotificationPrintingWarningIcon);
     case DlcState::kIdle:
       return nullptr;
   }

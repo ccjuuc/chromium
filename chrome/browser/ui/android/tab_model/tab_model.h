@@ -6,13 +6,14 @@
 #define CHROME_BROWSER_UI_ANDROID_TAB_MODEL_TAB_MODEL_H_
 
 #include <memory>
+#include <optional>
 
 #include "base/android/scoped_java_ref.h"
 #include "base/memory/raw_ptr.h"
 #include "build/android_buildflags.h"
 #include "chrome/browser/flags/android/chrome_session_state.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/android/tab_model/android_live_tab_context.h"
-#include "chrome/browser/ui/tabs/tab_list_interface.h"
 #include "components/omnibox/browser/location_bar_model.h"
 #include "components/omnibox/browser/location_bar_model_delegate.h"
 #include "components/sessions/core/session_id.h"
@@ -33,6 +34,14 @@ namespace sync_sessions {
 class SyncedWindowDelegate;
 }
 
+namespace tabs {
+class TabStripCollection;
+}
+
+namespace tabs_api {
+class AndroidTabStripModelAdapter;
+}
+
 class Profile;
 class TabAndroid;
 class TabModelObserver;
@@ -42,13 +51,29 @@ class TabModelObserver;
 // with Android's Tabs and Tab Model.
 class TabModel : public TabListInterface {
  public:
-  DECLARE_USER_DATA(TabModel);
-
   // LINT.IfChange(kInvalidIndex)
   // Keep this in sync with
   // chrome/browser/tabmodel/android/java/src/org/chromium/chrome/browser/tabmodel/TabList.java
   static constexpr int kInvalidIndex = -1;
   // LINT.ThenChange(//chrome/browser/tabmodel/android/java/src/org/chromium/chrome/browser/tabmodel/TabList.java:INVALID_TAB_INDEX)
+
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.tabmodel
+  enum class TabModelType {
+    // A standard tab model that contains tabs from a profile.
+    kStandard,
+    // An empty tab model that contains no tabs.
+    kEmpty,
+    // A tab model that contains archived tabs from the regular profile. These
+    // tabs will never have a WebContents unless restored to another tab model.
+    kArchived,
+    // Similar to a standard tab model, but used for a set of tabs that are not
+    // associated with any open window. The tabs in this model are intended to
+    // be "read-only" and cannot be navigated or have a WebContents. If the
+    // window associated with this tab model is opened the headless tab model
+    // will be destroyed and the tabs will be re-created in a standard tab
+    // model.
+    kHeadless,
+  };
 
   // LINT.IfChange(TabLaunchType)
   // Various ways tabs can be launched.
@@ -162,6 +187,8 @@ class TabModel : public TabListInterface {
     FROM_LINK_CREATING_NEW_WINDOW,
     // Like FROM_CHROME_UI, and opens a tip notification, creating a new tab.
     FROM_TIPS_NOTIFICATIONS,
+    // Open tab using the TabListInterface API in the background.
+    FROM_TAB_LIST_INTERFACE_BACKGROUND,
     // Must be last.
     SIZE
   };
@@ -210,6 +237,9 @@ class TabModel : public TabListInterface {
     FROM_OMNIBOX,
     // Selection of a previously closed tab when closure is undone.
     FROM_UNDO,
+    // Selection of a tab when an item is dragged in the UI, requiring an active
+    // tab representation.
+    FROM_DRAG,
     // Must be last.
     SIZE
   };
@@ -234,7 +264,8 @@ class TabModel : public TabListInterface {
   TabModel(const TabModel&) = delete;
   TabModel& operator=(const TabModel&) = delete;
 
-  virtual Profile* GetProfile() const;
+  virtual Profile* GetProfile();
+  virtual const Profile* GetProfile() const;
   virtual bool IsOffTheRecord() const;
   virtual sync_sessions::SyncedWindowDelegate* GetSyncedWindowDelegate() const;
   virtual SessionID GetSessionId() const;
@@ -244,17 +275,22 @@ class TabModel : public TabListInterface {
   virtual content::WebContents* GetWebContentsAt(int index) const = 0;
   // This will return NULL if the tab has not yet been initialized.
   virtual TabAndroid* GetTabAt(int index) const = 0;
+  virtual bool HasTab(TabAndroid* tab) const = 0;
+  virtual std::vector<tabs::TabHandle> GetOrderedMultiSelectedTabs() const = 0;
   virtual base::android::ScopedJavaLocalRef<jobject> GetJavaObject() const = 0;
 
   virtual void SetActiveIndex(int index) = 0;
   virtual void ForceCloseAllTabs() = 0;
   virtual void CloseTabAt(int index) = 0;
+  std::unique_ptr<content::WebContents> DetachWebContents(
+      tabs::TabHandle tab) override = 0;
 
-  virtual void CreateTab(TabAndroid* parent,
-                         content::WebContents* web_contents,
-                         int index,
-                         TabLaunchType type,
-                         bool should_pin) = 0;
+  virtual tabs::TabInterface* CreateTab(
+      TabAndroid* parent,
+      std::unique_ptr<content::WebContents> web_contents,
+      int index,
+      TabLaunchType type,
+      bool should_pin) = 0;
 
   virtual void HandlePopupNavigation(TabAndroid* parent,
                                      NavigateParams* params) = 0;
@@ -288,10 +324,23 @@ class TabModel : public TabListInterface {
   virtual void CloseTabsNavigatedInTimeWindow(const base::Time& begin_time,
                                               const base::Time& end_time) = 0;
 
+  virtual tabs::TabStripCollection* GetTabStripCollection(
+      base::PassKey<tabs_api::AndroidTabStripModelAdapter>) = 0;
+
   chrome::android::ActivityType activity_type() const { return activity_type_; }
+  const std::optional<chrome::android::CustomTabProfileType>&
+  custom_tab_profile_type() const {
+    return custom_tab_profile_type_;
+  }
+  TabModelType GetTabModelType() const { return tab_model_type_; }
+  bool IsEmptyRegularModelForEphemeralOrIncognitoCct() const;
 
  protected:
-  TabModel(Profile* profile, chrome::android::ActivityType activity_type);
+  TabModel(Profile* profile,
+           chrome::android::ActivityType activity_type,
+           std::optional<chrome::android::CustomTabProfileType>
+               custom_tab_profile_type,
+           TabModelType tab_model_type);
   ~TabModel() override;
 
   // Instructs the TabModel to broadcast a notification that all tabs are now
@@ -300,22 +349,19 @@ class TabModel : public TabListInterface {
 
   LocationBarModel* GetLocationBarModel();
 
-#if BUILDFLAG(IS_DESKTOP_ANDROID)
-  // Sets the |SessionID|.
+  // Sets the `SessionID`.
   //
-  // This is only needed on desktop Android, where |BrowserWindowInterface|
-  // should be the source of truth for |SessionID|. This function will be
-  // called when |TabModel| is associated with a |BrowserWindowInterface|.
-  //
-  // TODO(http://crbug.com/444518651): remove the if-def when
-  // |BrowserWindowInterface| is compiled into all Android builds.
+  // `BrowserWindowInterface` is the source of truth for `SessionID`. This
+  // method will be called when the `TabModel` becomes associated or dissociated
+  // with a `BrowserWindowInterface`.
   void SetSessionId(SessionID sessionId);
-#endif
 
  private:
   raw_ptr<Profile, DanglingUntriaged> profile_;
 
   chrome::android::ActivityType activity_type_;
+  std::optional<chrome::android::CustomTabProfileType> custom_tab_profile_type_;
+  TabModelType tab_model_type_;
 
   // The LiveTabContext associated with TabModel.
   // Used to restore closed tabs through the TabRestoreService.

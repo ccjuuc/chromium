@@ -22,19 +22,16 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLooper;
 
-import org.chromium.base.Callback;
 import org.chromium.base.UserDataHost;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.dom_distiller.DistillerHeuristicsType;
@@ -49,6 +46,8 @@ import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.segmentation_platform.ContextualPageActionController.ActionProvider;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonVariant;
+import org.chromium.components.dom_distiller.content.DistillablePageUtils;
+import org.chromium.components.dom_distiller.content.DistillablePageUtilsJni;
 import org.chromium.components.dom_distiller.core.DomDistillerFeatures;
 import org.chromium.components.dom_distiller.core.DomDistillerUrlUtilsJni;
 import org.chromium.components.prefs.PrefService;
@@ -66,7 +65,6 @@ import java.util.concurrent.TimeoutException;
 /** Unit tests for {@link ReaderModeActionProvider} */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
-@DisableFeatures(DomDistillerFeatures.READER_MODE_USE_READABILITY)
 public class ReaderModeActionProviderTest {
 
     private static final GURL TEST_URL = new GURL("https://test.com");
@@ -87,22 +85,24 @@ public class ReaderModeActionProviderTest {
     @Mock private DomDistillerUrlUtilsJni mDomDistillerUrlUtilsJni;
     @Mock private OneshotSupplier<Boolean> mButtonVisibilitySupplier;
     @Mock private ReaderModeActionRateLimiter mReaderModeActionRateLimiter;
+    @Mock private DistillablePageUtils.Natives mDistillablePageUtilsJniMock;
 
     @Before
     @SuppressWarnings("DirectInvocationOnMock")
     public void setUp() {
+        UkmRecorderJni.setInstanceForTesting(mUkmRecorderJniMock);
+        DomDistillerTabUtilsJni.setInstanceForTesting(mDomDistillerTabUtilsJni);
+        DomDistillerUrlUtilsJni.setInstanceForTesting(mDomDistillerUrlUtilsJni);
+        DistillablePageUtilsJni.setInstanceForTesting(mDistillablePageUtilsJniMock);
+
+        when(mMockTab.getWebContents()).thenReturn(mMockWebContents);
         initializeReaderModeBackend();
         ReaderModeActionRateLimiter.setInstanceForTesting(mReaderModeActionRateLimiter);
 
         mMockTab.getUserDataHost()
                 .setUserData(ReaderModeManager.USER_DATA_KEY, mMockReaderModeManager);
-        when(mMockTab.getWebContents()).thenReturn(mMockWebContents);
         when(mMockTab.getUrl()).thenReturn(TEST_URL);
         when(mMockWebContents.getNavigationController()).thenReturn(mMockNavigationController);
-
-        UkmRecorderJni.setInstanceForTesting(mUkmRecorderJniMock);
-        DomDistillerTabUtilsJni.setInstanceForTesting(mDomDistillerTabUtilsJni);
-        DomDistillerUrlUtilsJni.setInstanceForTesting(mDomDistillerUrlUtilsJni);
     }
 
     private void initializeReaderModeBackend() {
@@ -113,7 +113,7 @@ public class ReaderModeActionProviderTest {
         when(mUserPrefsJniMock.get(mProfile)).thenReturn(mPrefService);
         when(mPrefService.getBoolean(Pref.READER_FOR_ACCESSIBILITY)).thenReturn(false);
 
-        TabDistillabilityProvider.createForTab(mMockTab);
+        TabDistillabilityProvider.from(mMockTab);
         DomDistillerTabUtils.setExcludeMobileFriendlyForTesting(true);
     }
 
@@ -133,10 +133,10 @@ public class ReaderModeActionProviderTest {
         HashMap<Integer, ActionProvider> providers = new HashMap<>();
         var provider = new ReaderModeActionProvider(mButtonVisibilitySupplier);
         providers.put(AdaptiveToolbarButtonVariant.READER_MODE, provider);
-        SignalAccumulator accumulator = new SignalAccumulator(new Handler(), mMockTab, providers);
+        SignalAccumulator accumulator = new SignalAccumulator(new Handler(), providers);
         setReaderModeBackendSignal(true);
         provider.getAction(mMockTab, accumulator);
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         Assert.assertTrue(accumulator.getSignal(AdaptiveToolbarButtonVariant.READER_MODE));
     }
@@ -148,9 +148,9 @@ public class ReaderModeActionProviderTest {
         HashMap<Integer, ActionProvider> providers = new HashMap<>();
         var provider = new ReaderModeActionProvider(mButtonVisibilitySupplier);
         providers.put(AdaptiveToolbarButtonVariant.READER_MODE, provider);
-        SignalAccumulator accumulator = new SignalAccumulator(new Handler(), mMockTab, providers);
+        SignalAccumulator accumulator = new SignalAccumulator(new Handler(), providers);
         provider.getAction(mMockTab, accumulator);
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         Assert.assertFalse(accumulator.getSignal(AdaptiveToolbarButtonVariant.READER_MODE));
     }
@@ -161,7 +161,7 @@ public class ReaderModeActionProviderTest {
         var provider = new ReaderModeActionProvider(mButtonVisibilitySupplier);
         // Get action before distillability is determined.
         provider.getAction(mMockTab, mMockSignalAccumulator);
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mMockSignalAccumulator, never())
                 .setSignal(eq(AdaptiveToolbarButtonVariant.READER_MODE), anyBoolean());
@@ -192,7 +192,7 @@ public class ReaderModeActionProviderTest {
                         .build();
         setReaderModeBackendSignal(true);
         provider.getAction(mMockTab, mMockSignalAccumulator);
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mMockSignalAccumulator).setSignal(AdaptiveToolbarButtonVariant.READER_MODE, true);
         watcher.assertExpected();
@@ -216,7 +216,7 @@ public class ReaderModeActionProviderTest {
                         .build();
         setReaderModeBackendSignal(true);
         provider.getAction(mMockTab, mMockSignalAccumulator);
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mMockSignalAccumulator).setSignal(AdaptiveToolbarButtonVariant.READER_MODE, true);
         watcher.assertExpected();
@@ -231,7 +231,7 @@ public class ReaderModeActionProviderTest {
 
         setReaderModeBackendSignal(true);
         provider.getAction(mMockTab, mMockSignalAccumulator);
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mMockSignalAccumulator).setSignal(AdaptiveToolbarButtonVariant.READER_MODE, false);
     }
@@ -252,7 +252,7 @@ public class ReaderModeActionProviderTest {
 
         setReaderModeBackendSignal(true);
         provider.getAction(mMockTab, mMockSignalAccumulator);
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mMockSignalAccumulator).setSignal(AdaptiveToolbarButtonVariant.READER_MODE, true);
     }
@@ -271,7 +271,7 @@ public class ReaderModeActionProviderTest {
         when(mMockSignalAccumulator.hasTimedOut()).thenReturn(true);
         var provider = new ReaderModeActionProvider(mButtonVisibilitySupplier);
         provider.getAction(mMockTab, mMockSignalAccumulator);
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         provider.onActionShown(mMockTab, AdaptiveToolbarButtonVariant.UNKNOWN);
         shadowOf(Looper.getMainLooper()).runOneTask();
 
@@ -285,36 +285,11 @@ public class ReaderModeActionProviderTest {
         var provider = new ReaderModeActionProvider(mButtonVisibilitySupplier);
         provider.getAction(mMockTab, mMockSignalAccumulator);
         provider.destroy();
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         setReaderModeBackendSignal(true);
         verify(mMockSignalAccumulator, never())
                 .setSignal(eq(AdaptiveToolbarButtonVariant.READER_MODE), anyBoolean());
-    }
-
-    @Test
-    @EnableFeatures(DomDistillerFeatures.READER_MODE_USE_READABILITY + ":use_heuristic/true")
-    public void testReadabiltyHeuristicUsed() throws TimeoutException {
-        ArgumentCaptor<Callback<Boolean>> readabilityHeuristicCallbackCaptor =
-                ArgumentCaptor.forClass(Callback.class);
-
-        var provider = new ReaderModeActionProvider(mButtonVisibilitySupplier);
-        provider.getAction(mMockTab, mMockSignalAccumulator);
-        ShadowLooper.idleMainLooper();
-        verify(mDomDistillerTabUtilsJni)
-                .runReadabilityHeuristicsOnWebContents(
-                        any(), readabilityHeuristicCallbackCaptor.capture());
-        Assert.assertNotNull(readabilityHeuristicCallbackCaptor.getValue());
-
-        verify(mMockSignalAccumulator, never())
-                .setSignal(eq(AdaptiveToolbarButtonVariant.READER_MODE), anyBoolean());
-
-        // When using the readability heurisitic, the distillability provider should be ignored.
-        setReaderModeBackendSignal(true);
-        verify(mMockSignalAccumulator, Mockito.times(0))
-                .setSignal(AdaptiveToolbarButtonVariant.READER_MODE, true);
-        readabilityHeuristicCallbackCaptor.getValue().onResult(true);
-        verify(mMockSignalAccumulator).setSignal(AdaptiveToolbarButtonVariant.READER_MODE, true);
     }
 
     @Test
@@ -324,45 +299,8 @@ public class ReaderModeActionProviderTest {
         var provider = new ReaderModeActionProvider(mButtonVisibilitySupplier);
         // Get action before distillability is determined.
         provider.getAction(mMockTab, mMockSignalAccumulator);
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         setReaderModeBackendSignal(true);
-        verify(mMockSignalAccumulator, Mockito.times(0))
-                .setSignal(AdaptiveToolbarButtonVariant.READER_MODE, true);
-    }
-
-    @Test
-    @EnableFeatures({
-        DomDistillerFeatures.READER_MODE_DISTILL_IN_APP,
-        DomDistillerFeatures.READER_MODE_USE_READABILITY + ":use_heuristic/true"
-    })
-    public void testDistillableButSupressed_ReadabiltyHeuristicUsed() throws TimeoutException {
-        when(mReaderModeActionRateLimiter.isActionSuppressed()).thenReturn(true);
-        ArgumentCaptor<Callback<Boolean>> readabilityHeuristicCallbackCaptor =
-                ArgumentCaptor.forClass(Callback.class);
-
-        var provider = new ReaderModeActionProvider(mButtonVisibilitySupplier);
-        provider.getAction(mMockTab, mMockSignalAccumulator);
-        ShadowLooper.idleMainLooper();
-        verify(mDomDistillerTabUtilsJni)
-                .runReadabilityHeuristicsOnWebContents(
-                        any(), readabilityHeuristicCallbackCaptor.capture());
-        Assert.assertNotNull(readabilityHeuristicCallbackCaptor.getValue());
-
-        HistogramWatcher watcher =
-                HistogramWatcher.newBuilder()
-                        .expectIntRecord(
-                                ReaderModeMetrics
-                                        .READER_MODE_CONTEXTUAL_PAGE_ACTION_EVENT_HISTOGRAM,
-                                ReaderModeMetrics.ReaderModeContextualPageActionEvent.ELIGIBLE)
-                        .expectIntRecord(
-                                ReaderModeMetrics
-                                        .READER_MODE_CONTEXTUAL_PAGE_ACTION_EVENT_HISTOGRAM,
-                                ReaderModeMetrics.ReaderModeContextualPageActionEvent.SUPPRESSED)
-                        .build();
-
-        readabilityHeuristicCallbackCaptor.getValue().onResult(true);
-
-        watcher.assertExpected();
         verify(mMockSignalAccumulator, Mockito.times(0))
                 .setSignal(AdaptiveToolbarButtonVariant.READER_MODE, true);
     }
@@ -374,24 +312,72 @@ public class ReaderModeActionProviderTest {
 
         setReaderModeBackendSignal(false);
         provider.getAction(mMockTab, mMockSignalAccumulator);
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mMockSignalAccumulator).setSignal(AdaptiveToolbarButtonVariant.READER_MODE, false);
 
         when(mMockTab.getUrl()).thenReturn(TEST_DISTILLER_URL);
         when(mDomDistillerUrlUtilsJni.isDistilledPage(any())).thenReturn(true);
         provider.getAction(mMockTab, mMockSignalAccumulator);
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mMockSignalAccumulator).setSignal(AdaptiveToolbarButtonVariant.READER_MODE, true);
     }
 
     @Test
-    @EnableFeatures(DomDistillerFeatures.READER_MODE_DISTILL_IN_APP + ":show_cpa/false")
-    public void testActionNotVisibleWhenParamDisabled() {
-        when(mReaderModeActionRateLimiter.isActionSuppressed()).thenReturn(true);
+    public void testExitReaderMode_suppressesSignal() {
         var provider = new ReaderModeActionProvider(mButtonVisibilitySupplier);
+
+        setReaderModeBackendSignal(true);
+        provider.getAction(mMockTab, mMockSignalAccumulator);
+        RobolectricUtil.runAllBackgroundAndUi();
+        verify(mMockSignalAccumulator).setSignal(AdaptiveToolbarButtonVariant.READER_MODE, true);
+        clearInvocations(mMockSignalAccumulator);
+
+        when(mMockTab.getUrl()).thenReturn(TEST_DISTILLER_URL);
+        when(mDomDistillerUrlUtilsJni.isDistilledPage(any()))
+                .thenAnswer(
+                        inv -> {
+                            String url = inv.getArgument(0);
+                            return url != null && url.startsWith("chrome-distiller:");
+                        });
+        when(mDomDistillerUrlUtilsJni.getOriginalUrlFromDistillerUrl(any())).thenReturn(TEST_URL);
+        provider.getAction(mMockTab, mMockSignalAccumulator);
+        verify(mMockSignalAccumulator).setSignal(AdaptiveToolbarButtonVariant.READER_MODE, true);
+        clearInvocations(mMockSignalAccumulator);
+
+        when(mMockTab.getUrl()).thenReturn(TEST_URL);
         provider.getAction(mMockTab, mMockSignalAccumulator);
         verify(mMockSignalAccumulator).setSignal(AdaptiveToolbarButtonVariant.READER_MODE, false);
+    }
+
+    @Test
+    public void testExitReaderMode_navigatingToDifferentUrl_doesNotSuppressSignal() {
+        var provider = new ReaderModeActionProvider(mButtonVisibilitySupplier);
+
+        setReaderModeBackendSignal(true);
+        provider.getAction(mMockTab, mMockSignalAccumulator);
+        RobolectricUtil.runAllBackgroundAndUi();
+        verify(mMockSignalAccumulator).setSignal(AdaptiveToolbarButtonVariant.READER_MODE, true);
+        clearInvocations(mMockSignalAccumulator);
+
+        when(mMockTab.getUrl()).thenReturn(TEST_DISTILLER_URL);
+        when(mDomDistillerUrlUtilsJni.isDistilledPage(any()))
+                .thenAnswer(
+                        inv -> {
+                            String url = inv.getArgument(0);
+                            return url != null && url.startsWith("chrome-distiller:");
+                        });
+        when(mDomDistillerUrlUtilsJni.getOriginalUrlFromDistillerUrl(any())).thenReturn(TEST_URL);
+        provider.getAction(mMockTab, mMockSignalAccumulator);
+        verify(mMockSignalAccumulator).setSignal(AdaptiveToolbarButtonVariant.READER_MODE, true);
+        clearInvocations(mMockSignalAccumulator);
+
+        GURL otherUrl = new GURL("https://other.com");
+        when(mMockTab.getUrl()).thenReturn(otherUrl);
+        setReaderModeBackendSignal(true);
+        provider.getAction(mMockTab, mMockSignalAccumulator);
+        RobolectricUtil.runAllBackgroundAndUi();
+        verify(mMockSignalAccumulator).setSignal(AdaptiveToolbarButtonVariant.READER_MODE, true);
     }
 }

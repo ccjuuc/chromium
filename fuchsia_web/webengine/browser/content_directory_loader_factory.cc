@@ -13,9 +13,11 @@
 #include <string_view>
 #include <utility>
 
+#include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/files/memory_mapped_file.h"
+#include "base/fuchsia/file_utils.h"
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/json/json_reader.h"
 #include "base/lazy_instance.h"
@@ -23,6 +25,7 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "fuchsia_web/common/fuchsia_dir_scheme.h"
@@ -115,7 +118,17 @@ bool GetRangeForRequest(const net::HttpRequestHeaders& headers,
 class ContentDirectoryURLLoader final : public network::mojom::URLLoader {
  public:
   ContentDirectoryURLLoader() = default;
-  ~ContentDirectoryURLLoader() override = default;
+  ~ContentDirectoryURLLoader() override {
+    // As we destruct, the `body_writer_` will postTask to cancel the
+    // SequenceState, however the SequenceState can refer to the `mmap_` file.
+    // To avoid a use-after-free, reset the data_pipe_producer_ first
+    // (triggering the PostTask) and then PostTask the deletion of the mmap_.
+    // TODO(b/497400727): Remove this once this bug is fixed or the code is
+    // refactored to avoid the dependency.
+    body_writer_.reset();
+    base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(
+        FROM_HERE, std::move(mmap_));
+  }
 
   ContentDirectoryURLLoader(const ContentDirectoryURLLoader&) = delete;
   ContentDirectoryURLLoader& operator=(const ContentDirectoryURLLoader&) =
@@ -168,7 +181,7 @@ class ContentDirectoryURLLoader final : public network::mojom::URLLoader {
              fidl::InterfaceHandle<fuchsia::io::Node> metadata_channel) {
     client_.Bind(std::move(client_remote));
 
-    if (!MapFile(std::move(file_channel), &mmap_)) {
+    if (!MapFile(std::move(file_channel), mmap_.get())) {
       client_->OnComplete(network::URLLoaderCompletionStatus(net::ERR_FAILED));
       return;
     }
@@ -181,10 +194,9 @@ class ContentDirectoryURLLoader final : public network::mojom::URLLoader {
     std::optional<std::string> mime_type;
     base::MemoryMappedFile metadata_mmap;
     if (MapFile(std::move(metadata_channel), &metadata_mmap)) {
-      std::optional<base::Value> metadata_parsed = base::JSONReader::Read(
-          std::string_view(reinterpret_cast<char*>(metadata_mmap.data()),
-                           metadata_mmap.length()),
-          base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+      std::optional<base::Value> metadata_parsed =
+          base::JSONReader::Read(base::as_string_view(metadata_mmap.bytes()),
+                                 base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
       if (metadata_parsed && metadata_parsed->is_dict()) {
         const auto& dict = metadata_parsed->GetDict();
@@ -201,12 +213,12 @@ class ContentDirectoryURLLoader final : public network::mojom::URLLoader {
     // If a MIME type wasn't specified, then fall back on inferring the type
     // from the file's contents.
     if (!mime_type) {
-      if (!net::SniffMimeType(
-              std::string_view(reinterpret_cast<char*>(mmap_.data()),
-                               std::min(mmap_.length(), kMaxBytesToSniff)),
-              request.url, {} /* type_hint */,
-              net::ForceSniffFileUrlsForHtml::kDisabled,
-              &mime_type.emplace())) {
+      if (auto bytes = mmap_->bytes();
+          !net::SniffMimeType(base::as_string_view(bytes.first(
+                                  std::min(bytes.size(), kMaxBytesToSniff))),
+                              request.url, /*type_hint=*/{},
+                              net::ForceSniffFileUrlsForHtml::kDisabled,
+                              &mime_type.emplace())) {
         if (!mime_type) {
           // Only set the fallback type if SniffMimeType completely gave up on
           // generating a suggestion.
@@ -217,8 +229,8 @@ class ContentDirectoryURLLoader final : public network::mojom::URLLoader {
 
     size_t start_offset;
     size_t content_length;
-    if (!GetRangeForRequest(request.headers, mmap_.length(), &start_offset,
-                            &content_length)) {
+    if (!GetRangeForRequest(request.headers, mmap_->bytes().size(),
+                            &start_offset, &content_length)) {
       client_->OnComplete(network::URLLoaderCompletionStatus(
           net::ERR_REQUEST_RANGE_NOT_SATISFIABLE));
       return;
@@ -247,9 +259,8 @@ class ContentDirectoryURLLoader final : public network::mojom::URLLoader {
         std::make_unique<mojo::DataPipeProducer>(std::move(producer_handle));
     body_writer_->Write(
         std::make_unique<mojo::StringDataSource>(
-            std::string_view(reinterpret_cast<char*>(
-                                 UNSAFE_TODO(mmap_.data() + start_offset)),
-                             content_length),
+            base::as_string_view(
+                mmap_->bytes().subspan(start_offset, content_length)),
             mojo::StringDataSource::AsyncWritingMode::
                 STRING_STAYS_VALID_UNTIL_COMPLETION),
         base::BindOnce(&ContentDirectoryURLLoader::OnWriteComplete,
@@ -258,9 +269,7 @@ class ContentDirectoryURLLoader final : public network::mojom::URLLoader {
 
   // network::mojom::URLLoader implementation:
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_request_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_request_headers,
+      network::HttpRequestHeadersUpdateParams headers_update_params,
       const std::optional<GURL>& new_url) override {}
   void SetPriority(net::RequestPriority priority,
                    int32_t intra_priority_value) override {}
@@ -277,9 +286,10 @@ class ContentDirectoryURLLoader final : public network::mojom::URLLoader {
     }
 
     network::URLLoaderCompletionStatus status(net::OK);
-    status.encoded_data_length = mmap_.length();
-    status.encoded_body_length = mmap_.length();
-    status.decoded_body_length = mmap_.length();
+    const auto content_length = base::ByteSize(mmap_->bytes().size());
+    status.encoded_data_length = content_length;
+    status.encoded_body_length = content_length;
+    status.decoded_body_length = content_length;
     client_->OnComplete(std::move(status));
   }
 
@@ -287,35 +297,12 @@ class ContentDirectoryURLLoader final : public network::mojom::URLLoader {
   mojo::Remote<network::mojom::URLLoaderClient> client_;
 
   // A read-only, memory mapped view of the file being loaded.
-  base::MemoryMappedFile mmap_;
+  std::unique_ptr<base::MemoryMappedFile> mmap_ =
+      std::make_unique<base::MemoryMappedFile>();
 
   // Manages chunked data transfer over the response DataPipe.
   std::unique_ptr<mojo::DataPipeProducer> body_writer_;
 };
-
-net::Error OpenFileFromDirectory(
-    const std::string& content_directory_name,
-    const base::FilePath& relative_file_path,
-    fidl::InterfaceRequest<fuchsia::io::Node> file_request) {
-  DCHECK(file_request);
-  DCHECK(!relative_file_path.IsAbsolute());
-
-  auto absolute_file_path =
-      base::FilePath(ContentDirectoryLoaderFactory::kContentDirectoriesPath)
-          .Append(content_directory_name)
-          .Append(relative_file_path);
-
-  const zx_status_t status =
-      fdio_open3(absolute_file_path.value().c_str(),
-                 static_cast<uint64_t>(fuchsia::io::PERM_READABLE),
-                 file_request.TakeChannel().release());
-  if (status != ZX_OK) {
-    ZX_DLOG(WARNING, status) << "fdio_open3";
-    return net::ERR_FILE_NOT_FOUND;
-  }
-
-  return net::OK;
-}
 
 }  // namespace
 
@@ -331,20 +318,68 @@ ContentDirectoryLoaderFactory::Create() {
   // The ContentDirectoryLoaderFactory will delete itself when there are no more
   // receivers - see the network::SelfDeletingURLLoaderFactory::OnDisconnect
   // method.
-  new ContentDirectoryLoaderFactory(
+  base::MakeSelfDeleting<ContentDirectoryLoaderFactory>(
       pending_remote.InitWithNewPipeAndPassReceiver());
 
   return pending_remote;
 }
 
 ContentDirectoryLoaderFactory::ContentDirectoryLoaderFactory(
-    mojo::PendingReceiver<network::mojom::URLLoaderFactory> factory_receiver)
-    : network::SelfDeletingURLLoaderFactory(std::move(factory_receiver)),
+    mojo::PendingReceiver<network::mojom::URLLoaderFactory> factory_receiver,
+    base::SelfDeletingPassKey key)
+    : network::SelfDeletingURLLoaderFactory(std::move(factory_receiver), key),
       task_runner_(base::ThreadPool::CreateSequencedTaskRunner(
           {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
-           base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN})) {}
+           base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN})) {
+  content_directories_handle_ =
+      base::OpenDirectoryHandle(base::FilePath(kContentDirectoriesPath));
+}
 
 ContentDirectoryLoaderFactory::~ContentDirectoryLoaderFactory() = default;
+
+net::Error ContentDirectoryLoaderFactory::OpenFileFromDirectory(
+    const std::string& content_directory_name,
+    const base::FilePath& relative_file_path,
+    fidl::InterfaceRequest<fuchsia::io::Node> file_request) {
+  DCHECK(file_request);
+  DCHECK(!relative_file_path.IsAbsolute());
+  DCHECK(!content_directory_name.empty());
+
+  if (!IsValidContentDirectoryName(content_directory_name)) {
+    return net::ERR_FILE_NOT_FOUND;
+  }
+
+  if (!content_directories_handle_.is_valid()) {
+    return net::ERR_FILE_NOT_FOUND;
+  }
+
+  if (content_directory_name != cached_directory_name_ ||
+      !cached_directory_.is_valid()) {
+    fidl::InterfaceHandle<fuchsia::io::Directory> directory_handle;
+    const zx_status_t status =
+        fdio_open3_at(content_directories_handle_.channel().get(),
+                      content_directory_name.c_str(),
+                      static_cast<uint64_t>(fuchsia::io::PERM_READABLE),
+                      directory_handle.NewRequest().TakeChannel().release());
+    if (status != ZX_OK) {
+      ZX_LOG(WARNING, status) << "fdio_open3_at " << content_directory_name;
+      return net::ERR_FILE_NOT_FOUND;
+    }
+    cached_directory_ = std::move(directory_handle);
+    cached_directory_name_ = content_directory_name;
+  }
+
+  const zx_status_t status = fdio_open3_at(
+      cached_directory_.channel().get(), relative_file_path.value().c_str(),
+      static_cast<uint64_t>(fuchsia::io::PERM_READABLE),
+      file_request.TakeChannel().release());
+  if (status != ZX_OK) {
+    ZX_LOG(WARNING, status) << "fdio_open3_at " << relative_file_path;
+    return net::ERR_FILE_NOT_FOUND;
+  }
+
+  return net::OK;
+}
 
 void ContentDirectoryLoaderFactory::CreateLoaderAndStart(
     mojo::PendingReceiver<network::mojom::URLLoader> loader,
@@ -373,9 +408,9 @@ void ContentDirectoryLoaderFactory::CreateLoaderAndStart(
   requested_path.remove_prefix(1);
 
   fidl::InterfaceHandle<fuchsia::io::Node> file_handle;
-  net::Error open_result = OpenFileFromDirectory(
-      request.url.DeprecatedGetOriginAsURL().GetHost(),
-      base::FilePath(requested_path), file_handle.NewRequest());
+  net::Error open_result = OpenFileFromDirectory(request.url.GetHost(),
+                                                 base::FilePath(requested_path),
+                                                 file_handle.NewRequest());
   if (open_result != net::OK) {
     mojo::Remote<network::mojom::URLLoaderClient>(std::move(client))
         ->OnComplete(network::URLLoaderCompletionStatus(open_result));
@@ -388,7 +423,7 @@ void ContentDirectoryLoaderFactory::CreateLoaderAndStart(
   // ContentDirectoryURLLoader::Start().
   fidl::InterfaceHandle<fuchsia::io::Node> metadata_handle;
   open_result = OpenFileFromDirectory(
-      request.url.DeprecatedGetOriginAsURL().GetHost(),
+      request.url.GetHost(),
       base::FilePath(base::StrCat({requested_path, "._metadata"})),
       metadata_handle.NewRequest());
   if (open_result != net::OK) {

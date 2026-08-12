@@ -11,7 +11,6 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "components/gcm_driver/instance_id/instance_id.h"
-#include "components/sync/protocol/device_info_specifics.pb.h"
 #include "components/sync_device_info/device_info.h"
 
 enum class SharingDeviceRegistrationResult;
@@ -32,12 +31,6 @@ class SharingDeviceRegistration {
   // Un-registers device with sharing sync preferences.
   virtual void UnregisterDevice(RegistrationCallback callback) = 0;
 
-  // Returns if device can handle receiving phone numbers for calling.
-  virtual bool IsClickToCallSupported() const = 0;
-
-  // Returns if device can handle receiving of shared clipboard contents.
-  virtual bool IsSharedClipboardSupported() const = 0;
-
   // Returns if device can handle receiving of sms fetcher requests.
   virtual bool IsSmsFetcherSupported() const = 0;
 
@@ -48,10 +41,16 @@ class SharingDeviceRegistration {
   // notification.
   virtual bool IsOptimizationGuidePushNotificationSupported() const = 0;
 
+  // Returns if device can handle receiving notifications about new one time
+  // tokens.
+  virtual bool IsOneTimeTokenBackendNotificationSupported() const = 0;
+
+  // Returns if device can handle receiving of glic experimental triggering.
+  virtual bool IsGlicExperimentalTriggeringSupported() const = 0;
+
   // For testing
   virtual void SetEnabledFeaturesForTesting(
-      std::set<sync_pb::SharingSpecificFields_EnabledFeatures>
-          enabled_features) = 0;
+      std::set<syncer::DeviceInfo::SharingFeature> enabled_features) = 0;
 };
 
 #endif  // COMPONENTS_SHARING_MESSAGE_SHARING_DEVICE_REGISTRATION_H_

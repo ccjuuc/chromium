@@ -6,7 +6,6 @@
 
 #include "base/check_op.h"
 #include "base/functional/callback.h"
-#include "base/metrics/histogram_macros.h"
 #include "chrome/browser/extensions/api/notifications/extension_notification_display_helper.h"
 #include "chrome/browser/extensions/api/notifications/extension_notification_display_helper_factory.h"
 #include "chrome/browser/notifications/notification_common.h"
@@ -14,28 +13,27 @@
 #include "chrome/browser/notifications/notifier_state_tracker_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/notifications.h"
-#include "extensions/browser/app_window/app_window.h"
-#include "extensions/browser/app_window/app_window_registry.h"
-#include "extensions/browser/app_window/native_app_window.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_id.h"
 #include "ui/message_center/public/cpp/notifier_id.h"
 #include "url/gurl.h"
 
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
 namespace extensions {
 
 namespace {
 
-base::Value::List CreateBaseEventArgs(
-    const ExtensionId& extension_id,
-    const std::string& scoped_notification_id) {
+base::ListValue CreateBaseEventArgs(const ExtensionId& extension_id,
+                                    const std::string& scoped_notification_id) {
   // Unscope the notification id before returning it.
   size_t index_of_separator = extension_id.length() + 1;
   DCHECK_LT(index_of_separator, scoped_notification_id.length());
   std::string unscoped_notification_id =
       scoped_notification_id.substr(index_of_separator);
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append(unscoped_notification_id);
   return args;
 }
@@ -66,15 +64,16 @@ void ExtensionNotificationHandler::OnClose(
   ExtensionId extension_id(GetExtensionId(GURL(origin)));
   DCHECK(!extension_id.empty());
 
-  base::Value::List args = CreateBaseEventArgs(extension_id, notification_id);
+  base::ListValue args = CreateBaseEventArgs(extension_id, notification_id);
   args.Append(by_user);
   SendEvent(profile, extension_id, events::NOTIFICATIONS_ON_CLOSED,
             api::notifications::OnClosed::kEventName, gesture, std::move(args));
 
   ExtensionNotificationDisplayHelper* display_helper =
       ExtensionNotificationDisplayHelperFactory::GetForProfile(profile);
-  if (display_helper)
+  if (display_helper) {
     display_helper->EraseDataForNotificationId(notification_id);
+  }
 
   std::move(completed_closure).Run();
 }
@@ -89,9 +88,10 @@ void ExtensionNotificationHandler::OnClick(
   DCHECK(!reply.has_value());
 
   ExtensionId extension_id(GetExtensionId(GURL(origin)));
-  base::Value::List args = CreateBaseEventArgs(extension_id, notification_id);
-  if (action_index.has_value())
+  base::ListValue args = CreateBaseEventArgs(extension_id, notification_id);
+  if (action_index.has_value()) {
     args.Append(action_index.value());
+  }
   events::HistogramValue histogram_value =
       action_index.has_value() ? events::NOTIFICATIONS_ON_BUTTON_CLICKED
                                : events::NOTIFICATIONS_ON_CLICKED;
@@ -129,13 +129,15 @@ void ExtensionNotificationHandler::SendEvent(
     events::HistogramValue histogram_value,
     const std::string& event_name,
     EventRouter::UserGestureState user_gesture,
-    base::Value::List args) {
-  if (extension_id.empty())
+    base::ListValue args) {
+  if (extension_id.empty()) {
     return;
+  }
 
   EventRouter* event_router = EventRouter::Get(profile);
-  if (!event_router)
+  if (!event_router) {
     return;
+  }
 
   auto event =
       std::make_unique<Event>(histogram_value, event_name, std::move(args));

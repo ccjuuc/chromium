@@ -53,6 +53,10 @@ class BrowserContext;
 class WebContents;
 }  // namespace content
 
+namespace network {
+class TestNetworkConnectionTracker;
+}  // namespace network
+
 #if defined(TOOLKIT_VIEWS)
 namespace views {
 class ViewsDelegate;
@@ -73,6 +77,7 @@ class Browser;
 class BrowserWindowInterface;
 class PrefService;
 class Profile;
+class TabListInterface;
 #if BUILDFLAG(IS_MAC)
 class ScopedBundleSwizzlerMac;
 #endif  // BUILDFLAG(IS_MAC)
@@ -186,22 +191,40 @@ class InProcessBrowserTest : public content::BrowserTestBase {
   // created at a later time and `SetBrowser()` is called.
   Browser* browser() const { return browser_; }
 
+#if !BUILDFLAG(IS_ANDROID)
+  // Similar to browser(), but it returns BrowserWindowInterface, instead.
+  // On Android platform, the compatible API is defined in AndroidBrowserTest.
+  BrowserWindowInterface* GetBrowserWindowInterface() const {
+    return browser_.get();
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
+
   // Sets the default `browser_` instance for the fixture.
   void SetBrowser(BrowserWindowInterface* browser);
 
   // This function is used to record a set of properties for a test case in
   // gtest result and that will be used by resultDB. The map's key value pair
   // are defined by each test case. For use case check this bug:
-  // https://crbug.com/1365899
+  // https://crbug.com/40239544
   // The final value of the result is the format of key1=value1;key2=value2.
   void RecordPropertyFromMap(const std::map<std::string, std::string>& tags);
 
   // Tests can override this to customize the initial local_state.
   virtual void SetUpLocalStatePrefService(PrefService* local_state);
 
-  // Returns the profile. Prefer this method to browser()->profile() for
+  // Returns the profile. Prefer this method to browser()->GetProfile() for
   // cross-platform compatibility.
   Profile* GetProfile() const;
+
+  // Returns the TabListInterface for the test. On Desktop this calls
+  // TabListInterface::From(browser()).
+  TabListInterface* GetTabListInterface() const;
+
+  // Set to true if the test shouldn't exit when no browser exists.
+  // This is public so that mixins can use this.
+  void set_exit_when_last_browser_closes(bool value) {
+    exit_when_last_browser_closes_ = value;
+  }
 
  protected:
   // Closes the given browser and waits for it to release all its resources.
@@ -223,7 +246,7 @@ class InProcessBrowserTest : public content::BrowserTestBase {
 
   // Convenience methods for adding tabs to a Browser. Returns true if the
   // navigation succeeded. |check_navigation_success| is ignored and will be
-  // removed as part of check_navigation_success http://crbug.com/1014186.
+  // removed as part of check_navigation_success http://crbug.com/40103169.
   // Do not add new usages of the version with |check_navigation_success|.
   [[nodiscard]] bool AddTabAtIndexToBrowser(BrowserWindowInterface* bwi,
                                             int index,
@@ -302,7 +325,11 @@ class InProcessBrowserTest : public content::BrowserTestBase {
 
   // Called from the various CreateBrowser methods to add a blank tab, wait for
   // the navigation to complete, and show the browser's window.
-  void AddBlankTabAndShow(Browser* browser);
+  // `wait_for_activation` indicates if this method should wait until the
+  // browser activation happens, which should be true in most of the case unless
+  // the caller knows that it won't happen (e.g. when the browser is created
+  // with minimized window).
+  void AddBlankTabAndShow(Browser* browser, bool wait_for_activation = true);
 
 #if !BUILDFLAG(IS_MAC)
   // Return a CommandLine object that is used to relaunch the browser_test
@@ -323,10 +350,6 @@ class InProcessBrowserTest : public content::BrowserTestBase {
 
   // Returns the test data path used by the embedded test server.
   base::FilePath GetChromeTestDataDir() const;
-
-  void set_exit_when_last_browser_closes(bool value) {
-    exit_when_last_browser_closes_ = value;
-  }
 
   void set_open_about_blank_on_browser_launch(bool value) {
     open_about_blank_on_browser_launch_ = value;
@@ -365,6 +388,9 @@ class InProcessBrowserTest : public content::BrowserTestBase {
 
   static SetUpBrowserFunction* global_browser_set_up_function_;
 
+  std::unique_ptr<network::TestNetworkConnectionTracker>
+      test_network_connection_tracker_;
+
   // Usually references the browser created in BrowserMain().
   // If no browser is created in BrowserMain(), then `browser_` will remain
   // nullptr unless `SetBrowser()` is called at a later time.
@@ -394,13 +420,13 @@ class InProcessBrowserTest : public content::BrowserTestBase {
   //
   // This was previously done by disabling all IPH features, but that destroyed
   // all field trials that included an IPH because overriding any feature
-  // touched by a field trial disables the field trial (see crbug.com/1381669).
+  // touched by a field trial disables the field trial (see crbug.com/40245312).
   //
   // Individual tests can re-enable IPH using another ScopedIphFeatureList.
   feature_engagement::test::ScopedIphFeatureList block_all_iph_feature_list_;
 
 #if BUILDFLAG(IS_MAC)
-  STACK_ALLOCATED_IGNORE("https://crbug.com/1424190")
+  STACK_ALLOCATED_IGNORE("https://crbug.com/40260311")
   std::optional<base::apple::ScopedNSAutoreleasePool> autorelease_pool_;
   std::unique_ptr<ScopedBundleSwizzlerMac> bundle_swizzler_;
 

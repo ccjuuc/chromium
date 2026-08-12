@@ -91,7 +91,7 @@ class WindowedNetworkObserver {
     static const char kDefaultAutofillServerURL[] =
         "https://content-autofill.googleapis.com/";
     DCHECK(params);
-    network::ResourceRequest resource_request = params->url_request;
+    const network::ResourceRequest& resource_request = params->url_request;
     if (resource_request.url.spec().find(kDefaultAutofillServerURL) ==
         std::string::npos) {
       return false;
@@ -122,7 +122,7 @@ class AutofillServerTest : public InProcessBrowserTest {
 
     // Wait for Personal Data Manager to be fully loaded as the events about
     // being loaded may throw off the tests and cause flakiness.
-    WaitForPersonalDataManagerToBeLoaded(browser()->profile());
+    WaitForPersonalDataManagerToBeLoaded(browser()->GetProfile());
 
     // Set up the HTTPS (!) server (embedded_test_server() is an HTTP server).
     // Every hostname is handled by that server.

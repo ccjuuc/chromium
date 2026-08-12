@@ -4,27 +4,36 @@
 
 #include "media/gpu/chromeos/perf_test_util.h"
 
-#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace media {
 
 media::test::VideoTestEnvironment* g_env;
-base::FilePath g_output_directory =
-    base::FilePath(base::FilePath::kCurrentDirectory);
-base::FilePath g_source_directory =
-    base::FilePath(base::FilePath::kCurrentDirectory);
+
+base::FilePath& GetOutputDir() {
+  static base::NoDestructor<base::FilePath> dir(
+      base::FilePath::kCurrentDirectory);
+  return *dir;
+}
+
+base::FilePath& GetSourceDir() {
+  static base::NoDestructor<base::FilePath> dir(
+      base::FilePath::kCurrentDirectory);
+  return *dir;
+}
 
 void WriteJsonResult(std::vector<std::pair<std::string, double>> data) {
-  base::Value::Dict metrics;
+  base::DictValue metrics;
   for (auto i : data) {
     metrics.Set(i.first, i.second);
   }
 
-  const auto output_folder_path = base::FilePath(g_output_directory);
+  const auto output_folder_path = GetOutputDir();
   std::string metrics_str;
   ASSERT_TRUE(base::JSONWriter::WriteWithOptions(
       metrics, base::JSONWriter::OPTIONS_PRETTY_PRINT, &metrics_str));
@@ -35,9 +44,8 @@ void WriteJsonResult(std::vector<std::pair<std::string, double>> data) {
   base::File metrics_output_file(
       base::FilePath(metrics_file_path),
       base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE);
-  const int bytes_written = UNSAFE_TODO(metrics_output_file.WriteAtCurrentPos(
-      metrics_str.data(), metrics_str.length()));
-  ASSERT_EQ(bytes_written, static_cast<int>(metrics_str.length()));
+  ASSERT_TRUE(metrics_output_file.WriteAtCurrentPosAndCheck(
+      base::as_byte_span(metrics_str)));
   LOG(INFO) << "Wrote performance metrics to: " << metrics_file_path;
 }
 

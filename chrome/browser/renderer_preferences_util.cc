@@ -26,7 +26,6 @@
 #include "components/language/core/browser/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/renderer_preferences_util.h"
-#include "content/public/common/content_features.h"
 #include "media/media_buildflags.h"
 #include "third_party/blink/public/common/peerconnection/webrtc_ip_handling_policy.h"
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
@@ -34,6 +33,7 @@
 #include "third_party/blink/public/public_buildflags.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/accessibility/platform/ax_platform.h"
+#include "ui/base/accelerators/command.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/native_theme/native_theme.h"
 
@@ -43,6 +43,8 @@
 #endif
 
 #if BUILDFLAG(IS_LINUX)
+#include "base/environment.h"
+#include "base/nix/xdg_util.h"
 #include "ui/linux/linux_ui.h"
 #endif
 
@@ -86,7 +88,7 @@ void ParsePortRange(const std::string& range,
 
 // Extracts the string representation of URLs allowed for local IP exposure.
 std::vector<std::string> GetLocalIpsAllowedUrls(
-    const base::Value::List& allowed_urls) {
+    const base::ListValue& allowed_urls) {
   std::vector<std::string> ret;
   for (const auto& url : allowed_urls)
     ret.push_back(url.GetString());
@@ -95,12 +97,10 @@ std::vector<std::string> GetLocalIpsAllowedUrls(
 
 std::string GetLanguageListForProfile(Profile* profile,
                                       const std::string& language_list) {
-  if (profile->IsOffTheRecord()) {
-    // In incognito mode return only the first language.
-    return language::GetFirstLanguage(language_list);
-  }
   return content::ReduceAcceptLanguageUtils::GetLanguagesWithMaxCount(
-      language_list);
+      profile->IsOffTheRecord()
+          ? language::GetIncognitoLanguageList(language_list)
+          : language_list);
 }
 
 }  // namespace
@@ -154,12 +154,13 @@ void UpdateFromSystemSettings(blink::RendererPreferences* prefs,
       pref_service->GetBoolean(prefs::kEnableDoNotTrack);
   prefs->enable_encrypted_media =
       pref_service->GetBoolean(prefs::kEnableEncryptedMedia);
+
   prefs->webrtc_ip_handling_policy = blink::ToWebRTCIPHandlingPolicy(
       pref_service->GetString(prefs::kWebRTCIPHandlingPolicy));
 
   for (const base::Value& entry :
        pref_service->GetList(prefs::kWebRTCIPHandlingUrl)) {
-    const base::Value::Dict& dict = entry.GetDict();
+    const base::DictValue& dict = entry.GetDict();
     const std::string* url = dict.FindString("url");
     if (!url) {
       DVLOG(1) << "Malformed WebRtcIPHandlingUrl entry: Missing 'url' value.";
@@ -198,17 +199,38 @@ void UpdateFromSystemSettings(blink::RendererPreferences* prefs,
       pref_service->GetBoolean(prefs::kFullscreenAllowed);
 #endif
 #if BUILDFLAG(IS_ANDROID)
-  prefs->uses_platform_autofill = pref_service->GetBoolean(
-      autofill::prefs::kAutofillUsingVirtualViewStructure);
+  prefs->uses_platform_autofill =
+      pref_service->GetBoolean(autofill::prefs::kAutofillUsingPlatformAutofill);
 #endif
   prefs->caret_browsing_enabled =
       pref_service->GetBoolean(prefs::kCaretBrowsingEnabled);
-#if BUILDFLAG(IS_ANDROID)
-  if (!base::FeatureList::IsEnabled(features::kAndroidCaretBrowsing)) {
-    // ensures caret browsing is disabled on Clank if the feature flag is off
-    prefs->caret_browsing_enabled = false;
+
+  // Trigger strings (e.g. "@@") and keyboard shortcuts for AtMemory are not
+  // supported on Android.
+  if constexpr (!BUILDFLAG(IS_ANDROID)) {
+    const base::DictValue& autofill_trigger_info =
+        pref_service->GetDict(autofill::prefs::kAutofillAtMemoryTriggerInfo);
+    if (autofill_trigger_info.FindBool("is_shortcut").value_or(false)) {
+      if (const std::string* trigger_string =
+              autofill_trigger_info.FindString("trigger")) {
+        ui::Accelerator accelerator =
+            ui::Command::StringToAccelerator(*trigger_string);
+        prefs->autofill_shortcut_key_code = accelerator.key_code();
+        prefs->autofill_shortcut_modifiers = accelerator.modifiers();
+        prefs->autofill_trigger_string = "";
+      }
+    } else {
+      prefs->autofill_shortcut_key_code = ui::VKEY_UNKNOWN;
+      prefs->autofill_shortcut_modifiers = 0;
+      if (const std::string* trigger_string =
+              autofill_trigger_info.FindString("trigger")) {
+        prefs->autofill_trigger_string = *trigger_string;
+      } else {
+        prefs->autofill_trigger_string = "";
+      }
+    }
   }
-#endif
+
   ui::AXPlatform::GetInstance().SetCaretBrowsingState(
       prefs->caret_browsing_enabled);
   if (PrefService* const local_state = g_browser_process->local_state()) {
@@ -221,6 +243,16 @@ void UpdateFromSystemSettings(blink::RendererPreferences* prefs,
 
   prefs->view_source_line_wrap_enabled =
       pref_service->GetBoolean(prefs::kViewSourceLineWrappingEnabled);
+
+#if BUILDFLAG(IS_LINUX)
+  // Check the session type from the environment variable (XDG_SESSION_TYPE)
+  // instead of the Ozone platform, because XWayland sessions still require
+  // the portal eye dropper for reliable screen capture.
+  static const bool is_wayland =
+      base::nix::GetSessionType(*base::Environment::Create()) ==
+      base::nix::SessionType::kWayland;
+  prefs->system_color_chooser_is_modal = is_wayland;
+#endif
 }
 
 }  // namespace renderer_preferences_util

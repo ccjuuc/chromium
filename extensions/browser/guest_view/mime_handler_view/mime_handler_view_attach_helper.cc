@@ -9,38 +9,22 @@
 #include <string>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
-#include "base/strings/stringprintf.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/buildflags.h"
-#include "content/public/common/webplugininfo.h"
+#include "content/public/common/child_process_id.h"
 #include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_embedder.h"
 #include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.h"
+#include "extensions/browser/mime_handler/mime_handler_page.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
-#include "pdf/buildflags.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
-#include "third_party/skia/include/core/SkColor.h"
-
-#if BUILDFLAG(ENABLE_PDF)
-#include "base/strings/string_util.h"
-#include "components/grit/components_resources.h"
-#include "components/pdf/common/constants.h"
-#include "pdf/pdf_features.h"
-#include "ui/base/resource/resource_bundle.h"
-#endif
-
-#if BUILDFLAG(ENABLE_PLUGINS)
-#include "content/public/browser/plugin_service.h"
-#endif
 
 using content::BrowserThread;
 using content::RenderFrameHost;
@@ -49,31 +33,9 @@ namespace extensions {
 
 namespace {
 
-// TODO(crbug.com/40490789): Make this a proper resource.
-constexpr char kFullPageMimeHandlerViewHTML[] =
-    "<!doctype html><html><body style='height: 100%%; width: 100%%; overflow: "
-    "hidden; margin:0px; background-color: rgb(%d, %d, %d);'><embed "
-    "name='%s' "
-    "style='position:absolute; left: 0; top: 0;'width='100%%' height='100%%'"
-    " src='about:blank' type='%s' "
-    "internalid='%s'></body></html>";
-
-SkColor GetBackgroundColorStringForMimeType(const GURL& url,
-                                            const std::string& mime_type) {
-#if BUILDFLAG(ENABLE_PLUGINS)
-  std::vector<content::WebPluginInfo> web_plugin_info_array;
-  std::vector<std::string> unused_actual_mime_types;
-  content::PluginService::GetInstance()->GetPluginInfoArray(
-      url, mime_type, &web_plugin_info_array, &unused_actual_mime_types);
-  if (!web_plugin_info_array.empty()) {
-    return web_plugin_info_array.front().background_color;
-  }
-#endif
-  return content::WebPluginInfo::kDefaultBackgroundColor;
-}
-
 using ProcessIdToHelperMap =
-    base::flat_map<int32_t, std::unique_ptr<MimeHandlerViewAttachHelper>>;
+    base::flat_map<content::ChildProcessId,
+                   std::unique_ptr<MimeHandlerViewAttachHelper>>;
 ProcessIdToHelperMap* GetProcessIdToHelperMap() {
   static base::NoDestructor<ProcessIdToHelperMap> instance;
   return instance.get();
@@ -81,13 +43,12 @@ ProcessIdToHelperMap* GetProcessIdToHelperMap() {
 
 }  // namespace
 
-
 // static
 MimeHandlerViewAttachHelper* MimeHandlerViewAttachHelper::Get(
-    int32_t render_process_id) {
+    content::ChildProcessId render_process_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   auto& map = *GetProcessIdToHelperMap();
-  if (!base::Contains(map, render_process_id)) {
+  if (!map.contains(render_process_id)) {
     auto* process_host = content::RenderProcessHost::FromID(render_process_id);
     if (!process_host) {
       return nullptr;
@@ -96,29 +57,6 @@ MimeHandlerViewAttachHelper* MimeHandlerViewAttachHelper::Get(
         new MimeHandlerViewAttachHelper(process_host));
   }
   return map[render_process_id].get();
-}
-
-// static
-std::string MimeHandlerViewAttachHelper::CreateTemplateMimeHandlerPage(
-    const GURL& resource_url,
-    const std::string& mime_type,
-    const std::string& internal_id) {
-#if BUILDFLAG(ENABLE_PDF)
-  if (chrome_pdf::features::IsOopifPdfEnabled() &&
-      mime_type == pdf::kPDFMimeType) {
-    std::string pdf_embedder_html =
-        ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
-            IDR_PDF_EMBEDDER_HTML);
-    return base::ReplaceStringPlaceholders(
-        pdf_embedder_html, {internal_id, mime_type, internal_id},
-        /*offsets=*/nullptr);
-  }
-#endif
-  auto color = GetBackgroundColorStringForMimeType(resource_url, mime_type);
-  return base::StringPrintf(kFullPageMimeHandlerViewHTML, SkColorGetR(color),
-                            SkColorGetG(color), SkColorGetB(color),
-                            internal_id.c_str(), mime_type.c_str(),
-                            internal_id.c_str());
 }
 
 // static
@@ -135,7 +73,9 @@ std::string MimeHandlerViewAttachHelper::OverrideBodyForInterceptedResponse(
                      navigating_frame_tree_node_id, resource_url, stream_id,
                      internal_id),
       std::move(resume_load));
-  return CreateTemplateMimeHandlerPage(resource_url, mime_type, internal_id);
+  return CreateTemplateMimeHandlerPage(resource_url, mime_type, internal_id,
+                                       /*use_oopif=*/false,
+                                       /*is_oopif_pdf=*/false);
 }
 
 void MimeHandlerViewAttachHelper::RenderProcessHostDestroyed(
@@ -144,12 +84,11 @@ void MimeHandlerViewAttachHelper::RenderProcessHostDestroyed(
     return;
   }
   render_process_host->RemoveObserver(this);
-  GetProcessIdToHelperMap()->erase(render_process_host_->GetDeprecatedID());
+  GetProcessIdToHelperMap()->erase(render_process_host_->GetID());
 }
 
 void MimeHandlerViewAttachHelper::AttachToOuterWebContents(
     std::unique_ptr<MimeHandlerViewGuest> guest_view,
-    int32_t embedder_render_process_id,
     content::RenderFrameHost* outer_contents_frame,
     int32_t element_instance_id,
     bool is_full_page_plugin) {

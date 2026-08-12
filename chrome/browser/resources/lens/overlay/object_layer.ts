@@ -12,11 +12,11 @@ import type {DomRepeat} from '//resources/polymer/v3_0/polymer/polymer_bundled.m
 
 import {BrowserProxyImpl} from './browser_proxy.js';
 import type {BrowserProxy} from './browser_proxy.js';
-import {getFallbackTheme, skColorToRgbaWithCustomAlpha} from './color_utils.js';
-import {type CursorTooltipData, CursorTooltipType} from './cursor_tooltip.js';
+import {CursorTooltipType} from './cursor_tooltip.js';
+import type {CursorTooltipData} from './cursor_tooltip.js';
 import {CenterRotatedBox_CoordinateType} from './geometry.mojom-webui.js';
 import type {CenterRotatedBox} from './geometry.mojom-webui.js';
-import type {LensPageCallbackRouter, OverlayTheme} from './lens.mojom-webui.js';
+import type {LensPageCallbackRouter} from './lens.mojom-webui.js';
 import {UserAction} from './lens.mojom-webui.js';
 import {INVOCATION_SOURCE} from './lens_overlay_app.js';
 import {recordLensOverlayInteraction} from './metrics_utils.js';
@@ -27,8 +27,9 @@ import type {Vertex} from './polygon.mojom-webui.js';
 import type {PostSelectionBoundingBox} from './post_selection_renderer.js';
 import {ScreenshotBitmapBrowserProxyImpl} from './screenshot_bitmap_browser_proxy.js';
 import {renderScreenshot} from './screenshot_utils.js';
-import type {CursorData} from './selection_overlay.js';
-import {CursorType, focusShimmerOnRegion, type GestureEvent, ShimmerControlRequester, unfocusShimmer} from './selection_utils.js';
+import type {CursorData} from './selection_overlay_base.js';
+import {CursorType, focusShimmerOnRegion, ShimmerControlRequester, unfocusShimmer} from './selection_utils.js';
+import type {GestureEvent} from './selection_utils.js';
 import {toPercent} from './values_converter.js';
 
 // The percent of the selection layer width and height the object needs to take
@@ -187,10 +188,6 @@ export class ObjectLayerElement extends PolymerElement {
         value: () => loadTimeData.getBoolean('enableDebuggingMode'),
         reflectToAttribute: true,
       },
-      theme: {
-        type: Object,
-        value: getFallbackTheme,
-      },
     };
   }
 
@@ -206,8 +203,6 @@ export class ObjectLayerElement extends PolymerElement {
   // layer.
   private lastPostSelection: PostSelectionBoundingBox|null = null;
   declare private debugMode: boolean;
-  // The overlay theme.
-  declare private theme: OverlayTheme;
   private fadeOutAnimations: Animation[] = [];
   private fadeOutTimeoutIds: number[] = [];
   private postSelectionComparisonThreshold: number =
@@ -471,8 +466,7 @@ export class ObjectLayerElement extends PolymerElement {
         right,
         bottom,
     );
-    const segmentationColor =
-        skColorToRgbaWithCustomAlpha(this.theme.selectionElement, 0.65);
+    const segmentationColor = 'rgba(238, 240, 249, 0.65)';
     gradient.addColorStop(0, segmentationColor);
     gradient.addColorStop(1, segmentationColor);
     context.strokeStyle = gradient;

@@ -345,7 +345,7 @@ void VerifyGenericMessageData(const collaboration_pb::Message& message,
                               DirtyType dirty_type,
                               time_t event_timestamp) {
   EXPECT_NE("", message.uuid());
-  EXPECT_EQ(message.event_timestamp(), message.event_timestamp());
+  EXPECT_EQ(event_timestamp, message.event_timestamp());
   EXPECT_EQ(message.collaboration_id(), collaboration_id);
   EXPECT_EQ(message.event_type(), event_type);
   EXPECT_EQ(message.dirty(), static_cast<int>(dirty_type));
@@ -619,13 +619,14 @@ TEST_F(MessagingBackendServiceImplTest, TestStoringTabGroupEventsFromRemote) {
       CreateSharedTabGroup(collaboration_group_id);
   tab_group.SetCreatedByAttribution(gaia1);
   tab_group.SetUpdatedByAttribution(gaia2);
+  tab_group.SetUpdateTime(now + base::Seconds(1));
 
   tg_notifier_observer_->OnTabGroupAdded(tab_group,
                                          tab_groups::TriggerSource::REMOTE);
   auto message = GetLastMessageFromDB();
   VerifyGenericMessageData(message, collaboration_group_id.value(),
                            collaboration_pb::TAB_GROUP_ADDED, DirtyType::kNone,
-                           now.ToTimeT());
+                           tab_group.update_time().ToTimeT());
   EXPECT_EQ(gaia1, GaiaId(message.triggering_user_gaia_id()));
 
   tg_notifier_observer_->OnTabGroupRemoved(tab_group,
@@ -634,7 +635,7 @@ TEST_F(MessagingBackendServiceImplTest, TestStoringTabGroupEventsFromRemote) {
   VerifyGenericMessageData(message, collaboration_group_id.value(),
                            collaboration_pb::TAB_GROUP_REMOVED,
                            DirtyType::kTombstonedAndInstantMessage,
-                           now.ToTimeT());
+                           tab_group.update_time().ToTimeT());
   EXPECT_EQ(gaia2, GaiaId(message.triggering_user_gaia_id()));
 
   tg_notifier_observer_->OnTabGroupNameUpdated(
@@ -642,7 +643,7 @@ TEST_F(MessagingBackendServiceImplTest, TestStoringTabGroupEventsFromRemote) {
   message = GetLastMessageFromDB();
   VerifyGenericMessageData(message, collaboration_group_id.value(),
                            collaboration_pb::TAB_GROUP_NAME_UPDATED,
-                           DirtyType::kNone, now.ToTimeT());
+                           DirtyType::kNone, tab_group.update_time().ToTimeT());
   EXPECT_EQ(gaia2, GaiaId(GetLastMessageFromDB().triggering_user_gaia_id()));
 
   tg_notifier_observer_->OnTabGroupColorUpdated(
@@ -650,7 +651,7 @@ TEST_F(MessagingBackendServiceImplTest, TestStoringTabGroupEventsFromRemote) {
   message = GetLastMessageFromDB();
   VerifyGenericMessageData(message, collaboration_group_id.value(),
                            collaboration_pb::TAB_GROUP_COLOR_UPDATED,
-                           DirtyType::kNone, now.ToTimeT());
+                           DirtyType::kNone, tab_group.update_time().ToTimeT());
   EXPECT_EQ(gaia2, GaiaId(message.triggering_user_gaia_id()));
 }
 
@@ -828,6 +829,7 @@ TEST_F(MessagingBackendServiceImplTest, TestReceivingTabEventsFromSync) {
                                     tab3_sync_id);
   tab3.SetCreatedByAttribution(gaia1);
   tab3.SetUpdatedByAttribution(gaia2);
+  tab3.SetUpdateTime(now + base::Seconds(1));
 
   EXPECT_CALL(*mock_tab_group_sync_service_, GetGroup(tab_group.saved_guid()))
       .WillRepeatedly(Return(tab_group));
@@ -861,7 +863,7 @@ TEST_F(MessagingBackendServiceImplTest, TestReceivingTabEventsFromSync) {
   auto message = GetLastMessageFromDB();
   VerifyGenericMessageData(message, collaboration_group_id.value(),
                            collaboration_pb::TAB_ADDED, DirtyType::kDotAndChip,
-                           now.ToTimeT());
+                           tab1->creation_time().ToTimeT());
   EXPECT_EQ(gaia1, GaiaId(message.triggering_user_gaia_id()));
   EXPECT_EQ(tab1->saved_tab_guid().AsLowercaseString(),
             message.tab_data().sync_tab_id());
@@ -911,9 +913,9 @@ TEST_F(MessagingBackendServiceImplTest, TestReceivingTabEventsFromSync) {
   tg_notifier_observer_->OnTabUpdated(*tab2, *tab2,
                                       tab_groups::TriggerSource::REMOTE, false);
   message = GetLastMessageFromDB();
-  VerifyGenericMessageData(message, collaboration_group_id.value(),
-                           collaboration_pb::TAB_UPDATED,
-                           DirtyType::kDotAndChip, now.ToTimeT());
+  VerifyGenericMessageData(
+      message, collaboration_group_id.value(), collaboration_pb::TAB_UPDATED,
+      DirtyType::kDotAndChip, tab2->update_time().ToTimeT());
   EXPECT_EQ(gaia2, GaiaId(message.triggering_user_gaia_id()));
   EXPECT_EQ(tab2->saved_tab_guid().AsLowercaseString(),
             message.tab_data().sync_tab_id());
@@ -968,9 +970,9 @@ TEST_F(MessagingBackendServiceImplTest, TestReceivingTabEventsFromSync) {
   tg_notifier_observer_->OnTabRemoved(tab3, tab_groups::TriggerSource::REMOTE,
                                       false);
   message = GetLastMessageFromDB();
-  VerifyGenericMessageData(message, collaboration_group_id.value(),
-                           collaboration_pb::TAB_REMOVED,
-                           DirtyType::kTombstoned, now.ToTimeT());
+  VerifyGenericMessageData(
+      message, collaboration_group_id.value(), collaboration_pb::TAB_REMOVED,
+      DirtyType::kTombstoned, tab3.update_time().ToTimeT());
   EXPECT_EQ(gaia2, GaiaId(message.triggering_user_gaia_id()));
   EXPECT_EQ(tab3.saved_tab_guid().AsLowercaseString(),
             message.tab_data().sync_tab_id());
@@ -1035,7 +1037,7 @@ TEST_F(MessagingBackendServiceImplTest, TestOnTabAddedFromLocal) {
   // Verify that a message is created for local tab addition.
   auto message = GetLastMessageFromDB();
   VerifyGenericMessageData(message, "my group id", collaboration_pb::TAB_ADDED,
-                           DirtyType::kNone, now.ToTimeT());
+                           DirtyType::kNone, tab1->creation_time().ToTimeT());
 
   EXPECT_EQ(gaia1, GaiaId(message.triggering_user_gaia_id()));
   EXPECT_EQ(tab1->saved_tab_guid().AsLowercaseString(),
@@ -1044,7 +1046,7 @@ TEST_F(MessagingBackendServiceImplTest, TestOnTabAddedFromLocal) {
             message.tab_data().sync_tab_group_id());
   EXPECT_EQ(tab_group.saved_guid().AsLowercaseString(),
             message.tab_data().sync_tab_group_id());
-  EXPECT_EQ(now.ToTimeT(), message.event_timestamp());
+  EXPECT_EQ(tab1->creation_time().ToTimeT(), message.event_timestamp());
 }
 
 TEST_F(MessagingBackendServiceImplTest, TestOnTabAddedFromRemote_AlreadySeen) {
@@ -1088,7 +1090,7 @@ TEST_F(MessagingBackendServiceImplTest, TestOnTabAddedFromRemote_AlreadySeen) {
   // Verify that a message is created for local tab addition.
   auto message = GetLastMessageFromDB();
   VerifyGenericMessageData(message, "my group id", collaboration_pb::TAB_ADDED,
-                           DirtyType::kNone, now.ToTimeT());
+                           DirtyType::kNone, tab1.creation_time().ToTimeT());
 
   EXPECT_EQ(gaia1, GaiaId(message.triggering_user_gaia_id()));
   EXPECT_EQ(tab1.saved_tab_guid().AsLowercaseString(),
@@ -1097,7 +1099,7 @@ TEST_F(MessagingBackendServiceImplTest, TestOnTabAddedFromRemote_AlreadySeen) {
             message.tab_data().sync_tab_group_id());
   EXPECT_EQ(tab_group.saved_guid().AsLowercaseString(),
             message.tab_data().sync_tab_group_id());
-  EXPECT_EQ(now.ToTimeT(), message.event_timestamp());
+  EXPECT_EQ(tab1.creation_time().ToTimeT(), message.event_timestamp());
 }
 
 TEST_F(MessagingBackendServiceImplTest,
@@ -1155,7 +1157,7 @@ TEST_F(MessagingBackendServiceImplTest,
   auto message = GetLastMessageFromDB();
   VerifyGenericMessageData(message, "my group id",
                            collaboration_pb::TAB_UPDATED, DirtyType::kChip,
-                           now.ToTimeT());
+                           tab1.update_time().ToTimeT());
 
   EXPECT_EQ(gaia2, GaiaId(message.triggering_user_gaia_id()));
   EXPECT_EQ(tab1.saved_tab_guid().AsLowercaseString(),
@@ -1219,7 +1221,7 @@ TEST_F(MessagingBackendServiceImplTest, TestOnTabUpdatedFromLocal) {
   EXPECT_NE(db_message.uuid(), message.uuid());
   VerifyGenericMessageData(message, "my group id",
                            collaboration_pb::TAB_UPDATED, DirtyType::kNone,
-                           now.ToTimeT());
+                           tab2->update_time().ToTimeT());
 
   EXPECT_EQ(gaia2, GaiaId(message.triggering_user_gaia_id()));
   EXPECT_EQ(tab2->saved_tab_guid().AsLowercaseString(),
@@ -1250,6 +1252,7 @@ TEST_F(MessagingBackendServiceImplTest, TestOnTabRemovedFromLocal) {
                                     tab3_sync_id);
   tab3.SetCreatedByAttribution(gaia1);
   tab3.SetUpdatedByAttribution(gaia2);
+  tab3.SetUpdateTime(now + base::Seconds(1));
 
   EXPECT_CALL(*mock_tab_group_sync_service_, GetGroup(tab_group.saved_guid()))
       .WillRepeatedly(Return(tab_group));
@@ -1268,7 +1271,7 @@ TEST_F(MessagingBackendServiceImplTest, TestOnTabRemovedFromLocal) {
   auto message = GetLastMessageFromDB();
   VerifyGenericMessageData(message, "my group id",
                            collaboration_pb::TAB_REMOVED, DirtyType::kNone,
-                           now.ToTimeT());
+                           tab3.update_time().ToTimeT());
 
   EXPECT_EQ(gaia2, GaiaId(message.triggering_user_gaia_id()));
   EXPECT_EQ(tab3.saved_tab_guid().AsLowercaseString(),
@@ -1277,7 +1280,7 @@ TEST_F(MessagingBackendServiceImplTest, TestOnTabRemovedFromLocal) {
             message.tab_data().sync_tab_group_id());
   EXPECT_EQ(tab_group.saved_guid().AsLowercaseString(),
             message.tab_data().sync_tab_group_id());
-  EXPECT_EQ(now.ToTimeT(), message.event_timestamp());
+  EXPECT_EQ(tab3.update_time().ToTimeT(), message.event_timestamp());
 }
 
 TEST_F(MessagingBackendServiceImplTest, TestOnTabAddedFromRemoteByYourself) {
@@ -1295,8 +1298,8 @@ TEST_F(MessagingBackendServiceImplTest, TestOnTabAddedFromRemoteByYourself) {
   base::Uuid tab1_sync_id = tab_group.saved_tabs().at(0).saved_tab_guid();
   tab_groups::SavedTabGroupTab* tab1 = tab_group.GetTab(tab1_sync_id);
   // Make creation and update GaiaId unique.
-  tab1->SetCreatedByAttribution(account_info_.gaia);
-  tab1->SetUpdatedByAttribution(account_info_.gaia);
+  tab1->SetCreatedByAttribution(account_info_.GetGaiaId());
+  tab1->SetUpdatedByAttribution(account_info_.GetGaiaId());
   // Make creation and update time unique.
   tab1->SetUpdateTime(now + base::Seconds(1));
 
@@ -1314,16 +1317,17 @@ TEST_F(MessagingBackendServiceImplTest, TestOnTabAddedFromRemoteByYourself) {
   // Verify that a message is created for local tab addition.
   auto message = GetLastMessageFromDB();
   VerifyGenericMessageData(message, "my group id", collaboration_pb::TAB_ADDED,
-                           DirtyType::kNone, now.ToTimeT());
+                           DirtyType::kNone, tab1->creation_time().ToTimeT());
 
-  EXPECT_EQ(account_info_.gaia, GaiaId(message.triggering_user_gaia_id()));
+  EXPECT_EQ(account_info_.GetGaiaId(),
+            GaiaId(message.triggering_user_gaia_id()));
   EXPECT_EQ(tab1->saved_tab_guid().AsLowercaseString(),
             message.tab_data().sync_tab_id());
   EXPECT_EQ(tab1->saved_group_guid().AsLowercaseString(),
             message.tab_data().sync_tab_group_id());
   EXPECT_EQ(tab_group.saved_guid().AsLowercaseString(),
             message.tab_data().sync_tab_group_id());
-  EXPECT_EQ(now.ToTimeT(), message.event_timestamp());
+  EXPECT_EQ(tab1->creation_time().ToTimeT(), message.event_timestamp());
 }
 
 TEST_F(MessagingBackendServiceImplTest, TestOnTabUpdatedFromRemoteByYourself) {
@@ -1342,8 +1346,8 @@ TEST_F(MessagingBackendServiceImplTest, TestOnTabUpdatedFromRemoteByYourself) {
   base::Uuid tab2_sync_id = tab_group.saved_tabs().at(1).saved_tab_guid();
   tab_groups::SavedTabGroupTab* tab2 = tab_group.GetTab(tab2_sync_id);
   // Make creation and update GaiaId unique.
-  tab2->SetCreatedByAttribution(account_info_.gaia);
-  tab2->SetUpdatedByAttribution(account_info_.gaia);
+  tab2->SetCreatedByAttribution(account_info_.GetGaiaId());
+  tab2->SetUpdatedByAttribution(account_info_.GetGaiaId());
   // Make creation and update time unique.
   tab2->SetUpdateTime(now + base::Seconds(1));
 
@@ -1381,9 +1385,10 @@ TEST_F(MessagingBackendServiceImplTest, TestOnTabUpdatedFromRemoteByYourself) {
   EXPECT_NE(db_message.uuid(), message.uuid());
   VerifyGenericMessageData(message, "my group id",
                            collaboration_pb::TAB_UPDATED, DirtyType::kNone,
-                           now.ToTimeT());
+                           tab2->update_time().ToTimeT());
 
-  EXPECT_EQ(account_info_.gaia, GaiaId(message.triggering_user_gaia_id()));
+  EXPECT_EQ(account_info_.GetGaiaId(),
+            GaiaId(message.triggering_user_gaia_id()));
   EXPECT_EQ(tab2->saved_tab_guid().AsLowercaseString(),
             message.tab_data().sync_tab_id());
   EXPECT_EQ(tab2->saved_group_guid().AsLowercaseString(),
@@ -1409,8 +1414,9 @@ TEST_F(MessagingBackendServiceImplTest, TestOnTabRemovedFromRemoteByYourself) {
   tab_groups::SavedTabGroupTab tab3(GURL("https://www.example3.com/"), u"Tab 3",
                                     tab_group.saved_guid(), std::nullopt,
                                     tab3_sync_id);
-  tab3.SetCreatedByAttribution(account_info_.gaia);
-  tab3.SetUpdatedByAttribution(account_info_.gaia);
+  tab3.SetCreatedByAttribution(account_info_.GetGaiaId());
+  tab3.SetUpdatedByAttribution(account_info_.GetGaiaId());
+  tab3.SetUpdateTime(now + base::Seconds(1));
 
   EXPECT_CALL(*mock_tab_group_sync_service_, GetGroup(tab_group.saved_guid()))
       .WillRepeatedly(Return(tab_group));
@@ -1433,16 +1439,17 @@ TEST_F(MessagingBackendServiceImplTest, TestOnTabRemovedFromRemoteByYourself) {
   auto message = GetLastMessageFromDB();
   VerifyGenericMessageData(message, "my group id",
                            collaboration_pb::TAB_REMOVED, DirtyType::kNone,
-                           now.ToTimeT());
+                           tab3.update_time().ToTimeT());
 
-  EXPECT_EQ(account_info_.gaia, GaiaId(message.triggering_user_gaia_id()));
+  EXPECT_EQ(account_info_.GetGaiaId(),
+            GaiaId(message.triggering_user_gaia_id()));
   EXPECT_EQ(tab3.saved_tab_guid().AsLowercaseString(),
             message.tab_data().sync_tab_id());
   EXPECT_EQ(tab3.saved_group_guid().AsLowercaseString(),
             message.tab_data().sync_tab_group_id());
   EXPECT_EQ(tab_group.saved_guid().AsLowercaseString(),
             message.tab_data().sync_tab_group_id());
-  EXPECT_EQ(now.ToTimeT(), message.event_timestamp());
+  EXPECT_EQ(tab3.update_time().ToTimeT(), message.event_timestamp());
 }
 
 TEST_F(MessagingBackendServiceImplTest, TestActivityLogTabEvents) {
@@ -2329,9 +2336,9 @@ TEST_F(MessagingBackendServiceImplTest,
   data_sharing::GroupData group_data;
   group_data.group_token.group_id = collaboration_group_id;
   data_sharing::GroupMember member1;
-  member1.gaia_id = account_info_.gaia;
-  member1.display_name = account_info_.full_name;
-  member1.given_name = account_info_.given_name;
+  member1.gaia_id = account_info_.GetGaiaId();
+  member1.display_name = std::string(account_info_.GetFullName().value_or(""));
+  member1.given_name = std::string(account_info_.GetGivenName().value_or(""));
   member1.role = data_sharing::MemberRole::kOwner;
   group_data.members.emplace_back(member1);
   EXPECT_CALL(*mock_data_sharing_service_,

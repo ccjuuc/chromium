@@ -1958,15 +1958,6 @@ TEST(AutocompleteGrouperSectionsTest, IOSNTPZpsSection) {
 
 // Tests the groups and limits for DesktopSecondaryNTPZpsSection.
 TEST(AutocompleteGrouperSectionsTest, DesktopSecondaryNTPZpsSection) {
-  // Explicitly enable RealboxContextualAndTrendingSuggestions feature and set
-  // params.
-  omnibox_feature_configs::ScopedConfigForTesting<
-      omnibox_feature_configs::RealboxContextualAndTrendingSuggestions>
-      scoped_config;
-  scoped_config.Get().enabled = true;
-  scoped_config.Get().total_limit = 4;
-  scoped_config.Get().contextual_suggestions_limit = 4;
-  scoped_config.Get().trending_suggestions_limit = 4;
   auto test = [](ACMatches matches, std::vector<int> expected_relevances) {
     PSections sections;
     omnibox::GroupConfigMap group_configs;
@@ -2031,45 +2022,12 @@ TEST(AutocompleteGrouperSectionsTest, DesktopSecondaryNTPZpsSection) {
           CreateMatch(98, omnibox::GROUP_PERSONALIZED_ZERO_SUGGEST)},
          {});
   }
-  // Test groups and limits when RealboxContextualAndTrendingSuggestions feature
-  // is disabled.
-  scoped_config.Reset();
-  scoped_config.Get().enabled = false;
-  {
-    SCOPED_TRACE(
-        "Matches should be added up to their group limit. "
-        "(RealboxContextualAndTrendingSuggestions feature disabled)");
-    test({CreateMatch(100, omnibox::GROUP_PREVIOUS_SEARCH_RELATED_ENTITY_CHIPS),
-          CreateMatch(99, omnibox::GROUP_PREVIOUS_SEARCH_RELATED_ENTITY_CHIPS),
-          CreateMatch(98, omnibox::GROUP_PREVIOUS_SEARCH_RELATED_ENTITY_CHIPS),
-          CreateMatch(97, omnibox::GROUP_PREVIOUS_SEARCH_RELATED_ENTITY_CHIPS)},
-         {100, 99, 98});
-  }
-  {
-    SCOPED_TRACE(
-        "Given no matches that can be added to this section because of their "
-        "Group limit, should return no matches. "
-        "(RealboxContextualAndTrendingSuggestions feature disabled)");
-    test({CreateMatch(100, omnibox::GROUP_PREVIOUS_SEARCH_RELATED),
-          CreateMatch(99, omnibox::GROUP_PREVIOUS_SEARCH_RELATED),
-          CreateMatch(98, omnibox::GROUP_TRENDS)},
-         {});
-  }
 }
 
 // Tests the behavior when DesktopNTPZpsSection and
 // DesktopSecondaryNTPZpsSection are both created.
 TEST(AutocompleteGrouperSectionsTest,
      DesktopNTPZpsSectionAndDesktopSecondaryNTPZpsSection) {
-  // Explicitly enable RealboxContextualAndTrendingSuggestions feature and set
-  // params.
-  omnibox_feature_configs::ScopedConfigForTesting<
-      omnibox_feature_configs::RealboxContextualAndTrendingSuggestions>
-      scoped_config;
-  scoped_config.Get().enabled = true;
-  scoped_config.Get().total_limit = 4;
-  scoped_config.Get().contextual_suggestions_limit = 4;
-  scoped_config.Get().trending_suggestions_limit = 4;
   auto test = [](ACMatches matches, std::vector<int> expected_relevances,
                  bool trends_has_default_side_type = true) {
     PSections sections;
@@ -2140,32 +2098,6 @@ TEST(AutocompleteGrouperSectionsTest,
                         omnibox::GROUP_PREVIOUS_SEARCH_RELATED_ENTITY_CHIPS),
         },
         {200, 199, 198, 197, 100, 99, 98, 97, 92, 91, 90});
-  }
-  // Test groups and limits when RealboxContextualAndTrendingSuggestions feature
-  // is disabled.
-  scoped_config.Reset();
-  scoped_config.Get().enabled = false;
-  {
-    SCOPED_TRACE(
-        "Given 8 psuggest matches, and trending matches with a secondary side "
-        "type, but RealboxContextualAndTrendingSuggestions"
-        "feature disabled, do not show trending on the RHS.");
-    test(
-        {
-            CreateMatch(100, omnibox::GROUP_PERSONALIZED_ZERO_SUGGEST),
-            CreateMatch(99, omnibox::GROUP_PERSONALIZED_ZERO_SUGGEST),
-            CreateMatch(98, omnibox::GROUP_PERSONALIZED_ZERO_SUGGEST),
-            CreateMatch(97, omnibox::GROUP_PERSONALIZED_ZERO_SUGGEST),
-            CreateMatch(96, omnibox::GROUP_PERSONALIZED_ZERO_SUGGEST),
-            CreateMatch(95, omnibox::GROUP_PERSONALIZED_ZERO_SUGGEST),
-            CreateMatch(94, omnibox::GROUP_PERSONALIZED_ZERO_SUGGEST),
-            CreateMatch(93, omnibox::GROUP_PERSONALIZED_ZERO_SUGGEST),
-            CreateMatch(92, omnibox::GROUP_TRENDS),
-            CreateMatch(91, omnibox::GROUP_TRENDS),
-            CreateMatch(90, omnibox::GROUP_TRENDS),
-            CreateMatch(89, omnibox::GROUP_TRENDS),
-        },
-        {100, 99, 98, 97, 96, 95, 94, 93}, false);
   }
 }
 
@@ -2473,6 +2405,17 @@ TEST(AutocompleteGrouperSectionsTest, DesktopComposeboxZpsSection) {
         // Nothing but personalized zero suggest and aim recommendations.
         {103, 102, 97, 101, 96});
   }
+  {
+    SCOPED_TRACE("All contextual search with one verbatim match");
+    test(
+        {
+            CreateMatch(96, omnibox::GROUP_SEARCH),
+            CreateMatch(95, omnibox::GROUP_CONTEXTUAL_SEARCH),
+            CreateMatch(93, omnibox::GROUP_CONTEXTUAL_SEARCH),
+        },
+        // Group search gets in along with contextual searches.
+        {96, 95, 93});
+  }
 }
 #endif  // !(BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS))
 
@@ -2616,5 +2559,75 @@ TEST(AutocompleteGrouperSectionsTest, AndroidComposeboxZpsSection) {
         // Nothing but personalized zero suggest and aim recommendations.
         {103, 102, 97, 101, 96});
   }
+}
+
+TEST(AutocompleteGrouperSectionsTest, AndroidHubZPSSection) {
+  PSections sections;
+  omnibox::GroupConfigMap group_configs;
+  sections.push_back(std::make_unique<AndroidHubZPSSection>(group_configs));
+  ACMatches matches;
+  for (int i = 0; i < 10; ++i) {
+    matches.push_back(CreateMatch(100 - i, omnibox::GROUP_MOBILE_OPEN_TABS));
+  }
+  auto out_matches = Section::GroupMatches(std::move(sections), matches);
+  VerifyMatches(out_matches, {100, 99, 98, 97, 96});
+}
+
+TEST(AutocompleteGrouperSectionsTest, AndroidTabSearchZPSSection) {
+  PSections sections;
+  omnibox::GroupConfigMap group_configs;
+  sections.push_back(
+      std::make_unique<AndroidTabSearchZPSSection>(group_configs));
+  ACMatches matches;
+  for (int i = 0; i < 40; ++i) {
+    matches.push_back(CreateMatch(100 - i, omnibox::GROUP_MOBILE_OPEN_TABS));
+  }
+  auto out_matches = Section::GroupMatches(std::move(sections), matches);
+
+  std::vector<int> expected_relevances;
+  for (int i = 0; i < 35; ++i) {
+    expected_relevances.push_back(100 - i);
+  }
+  VerifyMatches(out_matches, expected_relevances);
+}
+
+TEST(AutocompleteGrouperSectionsTest, AndroidHubNonZPSSection) {
+  PSections sections;
+  omnibox::GroupConfigMap group_configs;
+  sections.push_back(std::make_unique<AndroidHubNonZPSSection>(group_configs));
+  ACMatches matches = {
+      CreateMatch(100, omnibox::GROUP_MOBILE_OPEN_TABS),
+      CreateMatch(99, omnibox::GROUP_MOBILE_BOOKMARKS),
+      CreateMatch(98, omnibox::GROUP_MOBILE_HISTORY),
+      CreateMatch(97, omnibox::GROUP_SEARCH),
+  };
+  auto out_matches = Section::GroupMatches(std::move(sections), matches);
+  VerifyMatches(out_matches, {100, 99, 98, 97});
+}
+
+TEST(AutocompleteGrouperSectionsTest, AndroidTabSearchNonZPSSection) {
+  PSections sections;
+  omnibox::GroupConfigMap group_configs;
+  sections.push_back(
+      std::make_unique<AndroidTabSearchNonZPSSection>(group_configs));
+  ACMatches matches;
+  // AndroidTabSearchNonZPSSection allows up to 30 open tabs and 5 history
+  // matches.
+  for (int i = 0; i < 35; ++i) {
+    matches.push_back(CreateMatch(100 - i, omnibox::GROUP_MOBILE_OPEN_TABS));
+  }
+  for (int i = 0; i < 10; ++i) {
+    matches.push_back(CreateMatch(65 - i, omnibox::GROUP_MOBILE_HISTORY));
+  }
+  auto out_matches = Section::GroupMatches(std::move(sections), matches);
+
+  std::vector<int> expected_relevances;
+  for (int i = 0; i < 30; ++i) {
+    expected_relevances.push_back(100 - i);
+  }
+  for (int i = 0; i < 5; ++i) {
+    expected_relevances.push_back(65 - i);
+  }
+  VerifyMatches(out_matches, expected_relevances);
 }
 #endif

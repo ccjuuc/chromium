@@ -42,6 +42,7 @@ namespace blink {
 
 class GraphicsContext;
 class LayoutBlock;
+class Node;
 class PhysicalBoxFragment;
 struct PaintInvalidatorContext;
 
@@ -73,11 +74,15 @@ class CORE_EXPORT CaretDisplayItemClient final
   // Invalidate paint if a cc property tree update is not available.
   void SetNeedsNonCompositedPaintInvalidation();
 
+  bool IsInCanvasSubtree() const { return is_in_canvas_subtree_; }
+
   bool ShouldPaintCaret(const LayoutBlock& block) const {
     return &block == layout_block_;
   }
 
   bool ShouldPaintCaret(const PhysicalBoxFragment& box_fragment) const;
+
+  const LayoutBlock* GetLayoutBlock() const { return layout_block_; }
 
   void PaintCaret(GraphicsContext&,
                   const PhysicalOffset& paint_offset,
@@ -125,8 +130,15 @@ class CORE_EXPORT CaretDisplayItemClient final
 
   WeakMember<const PhysicalBoxFragment> box_fragment_;
 
+  // The text node at the current block-caret position.
+  // It is used to invalidate its LayoutObject when the caret moves so the
+  // character is repainted with the second value of caret-color if it's
+  // non-auto.
+  WeakMember<Node> block_caret_anchor_;
+
   bool is_active_ = false;
   bool needs_paint_invalidation_ = false;
+  bool is_in_canvas_subtree_ = false;
 };
 
 }  // namespace blink

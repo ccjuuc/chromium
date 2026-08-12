@@ -21,7 +21,7 @@ bool InMemoryPrefStore::GetValue(std::string_view key,
   return prefs_.GetValue(key, value);
 }
 
-base::Value::Dict InMemoryPrefStore::GetValues() const {
+base::DictValue InMemoryPrefStore::GetValues() const {
   return prefs_.AsDict();
 }
 
@@ -86,8 +86,8 @@ void InMemoryPrefStore::ReadPrefsAsync(ReadErrorDelegate* error_delegate) {
 
 void InMemoryPrefStore::ReportValueChanged(std::string_view key,
                                            uint32_t flags) {
-  for (Observer& observer : observers_)
-    observer.OnPrefValueChanged(key);
+  observers_.NotifyAllowReentrancy(&PrefStore::Observer::OnPrefValueChanged,
+                                   key);
 }
 
 bool InMemoryPrefStore::IsInMemoryPrefStore() const {

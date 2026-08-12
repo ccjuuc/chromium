@@ -25,7 +25,7 @@
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/test/test_io_thread.h"
-#include "base/test/trace_test_utils.h"
+#include "base/test/tracing/trace_test_utils.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread.h"
 #include "base/trace_event/memory_dump_manager_test_utils.h"
@@ -113,9 +113,11 @@ void PostTaskAndWait(const Location& from_here,
 
 class MockMemoryDumpProvider : public MemoryDumpProvider {
  public:
-  MOCK_METHOD0(Destructor, void());
-  MOCK_METHOD2(OnMemoryDump,
-               bool(const MemoryDumpArgs& args, ProcessMemoryDump* pmd));
+  MOCK_METHOD(void, Destructor, ());
+  MOCK_METHOD(bool,
+              OnMemoryDump,
+              (const MemoryDumpArgs& args, ProcessMemoryDump* pmd),
+              (override));
 
   MockMemoryDumpProvider() {
     ON_CALL(*this, OnMemoryDump(_, _))

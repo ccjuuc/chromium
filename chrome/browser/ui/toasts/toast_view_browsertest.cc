@@ -15,6 +15,7 @@
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/image/image_unittest_util.h"
 #include "ui/menus/simple_menu_model.h"
 #include "ui/strings/grit/ui_strings.h"
@@ -52,16 +53,18 @@ class ToastViewTest : public DialogBrowserTest {
     if (!options_.text.empty()) {
       toast_text = options_.text;
     }
+    std::optional<ui::ImageModel> image_override;
     if (options_.add_image_override) {
       int size = toasts::ToastView::GetIconSize();
-      image_override_ =
-          std::make_unique<ui::ImageModel>(ui::ImageModel::FromImage(
-              gfx::test::CreateImage(size, size, 0xff0000)));
+      image_override = ui::ImageModel::FromImage(
+          gfx::test::CreateImage(size, size, 0xff0000));
     }
     std::unique_ptr<toasts::ToastView> toast =
         std::make_unique<toasts::ToastView>(
-            anchor_view_, toast_text, vector_icons::kLinkIcon,
-            image_override_.get(), false, base::DoNothing());
+            anchor_view_, toast_text,
+            features::IsRoundedIconsEnabled() ? vector_icons::kLinkIcon
+                                              : vector_icons::kLinkOldIcon,
+            std::move(image_override), false, base::DoNothing());
     if (options_.add_close_button) {
       toast->AddCloseButton(base::DoNothing());
     }
@@ -99,7 +102,6 @@ class ToastViewTest : public DialogBrowserTest {
 
  private:
   raw_ptr<views::View> anchor_view_;
-  std::unique_ptr<ui::ImageModel> image_override_;
   raw_ptr<toasts::ToastView> toast_;
   raw_ptr<views::Widget> widget_;
   ToastOptions options_;
@@ -168,9 +170,11 @@ IN_PROC_BROWSER_TEST_F(ToastViewTest, InvokeUi_ShrinkToFitWindow) {
                               views::BubbleBorder::kShadowBlur;
   EXPECT_GT(bubble->GetPreferredSize().width(), bubble->width());
   EXPECT_EQ(bubble->GetBoundsInScreen().x(),
-            anchor_view()->GetBoundsInScreen().x() + expected_margin);
+            anchor_view()->GetWidget()->GetWindowBoundsInScreen().x() +
+                expected_margin);
   EXPECT_EQ(bubble->GetBoundsInScreen().right(),
-            anchor_view()->GetBoundsInScreen().right() - expected_margin);
+            anchor_view()->GetWidget()->GetWindowBoundsInScreen().right() -
+                expected_margin);
   DismissUi();
 }
 

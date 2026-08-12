@@ -6,19 +6,20 @@
 
 namespace client_certificates::features {
 
-BASE_FEATURE(kManagedBrowserClientCertificateEnabled,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-bool IsManagedBrowserClientCertificateEnabled() {
-  return base::FeatureList::IsEnabled(kManagedBrowserClientCertificateEnabled);
-}
-
 BASE_FEATURE(kEnableClientCertificateProvisioningOnAndroid,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 bool IsClientCertificateProvisioningOnAndroidEnabled() {
   return base::FeatureList::IsEnabled(
       kEnableClientCertificateProvisioningOnAndroid);
+}
+
+BASE_FEATURE(kEnableClientCertificateProvisioningOnIOS,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+bool IsClientCertificateProvisioningOnIOSEnabled() {
+  return base::FeatureList::IsEnabled(
+      kEnableClientCertificateProvisioningOnIOS);
 }
 
 BASE_FEATURE(kManagedUserClientCertificateInPrefs,
@@ -33,6 +34,12 @@ BASE_FEATURE(kWindowsSoftwareKeysEnabled, base::FEATURE_ENABLED_BY_DEFAULT);
 
 bool AreWindowsSoftwareKeysEnabled() {
   return base::FeatureList::IsEnabled(kWindowsSoftwareKeysEnabled);
+}
+
+BASE_FEATURE(kWindowsTpmTls13Check, base::FEATURE_ENABLED_BY_DEFAULT);
+
+bool IsWindowsTpmTls13CheckEnabled() {
+  return base::FeatureList::IsEnabled(kWindowsTpmTls13Check);
 }
 #endif  // BUILDFLAG(IS_WIN)
 

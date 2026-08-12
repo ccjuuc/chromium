@@ -26,6 +26,10 @@ class TestURLLoaderNetworkObserver
     ignore_certificate_errors_ = ignore_certificate_errors;
   }
 
+  void set_platform_local_network_permission_response(bool granted) {
+    platform_local_network_permission_response_ = granted;
+  }
+
   void FlushReceivers();
 
   // mojom::URLLoaderNetworkServiceObserver overrides:
@@ -52,6 +56,8 @@ class TestURLLoaderNetworkObserver
       mojom::TransportType type,
       network::mojom::IPAddressSpace ip_address_space,
       OnLocalNetworkAccessPermissionRequiredCallback callback) override;
+  void OnPlatformLocalNetworkPermissionRequired(
+      OnPlatformLocalNetworkPermissionRequiredCallback callback) override;
   void OnClearSiteData(
       const GURL& url,
       const std::string& header_value,
@@ -64,21 +70,12 @@ class TestURLLoaderNetworkObserver
   void OnDataUseUpdate(int32_t network_traffic_annotation_id_hash,
                        base::ByteSize recv_bytes,
                        base::ByteSize sent_bytes) override;
-  void OnSharedStorageHeaderReceived(
-      const url::Origin& request_origin,
-      std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
-          methods_with_options,
-      const std::optional<std::string>& with_lock,
-      OnSharedStorageHeaderReceivedCallback callback) override;
-  void OnAdAuctionEventRecordHeaderReceived(
-      network::AdAuctionEventRecord event_record,
-      const std::optional<url::Origin>& top_frame_origin) override;
   void Clone(
       mojo::PendingReceiver<URLLoaderNetworkServiceObserver> observer) override;
-  void OnWebSocketConnectedToPrivateNetwork(
+  void OnWebSocketConnectedToLocalNetwork(
       const GURL& request_url,
       network::mojom::IPAddressSpace ip_address_space) override;
-  void OnUrlLoaderConnectedToPrivateNetwork(
+  void OnUrlLoaderConnectedToLocalNetwork(
       const GURL& request_url,
       network::mojom::IPAddressSpace response_address_space,
       network::mojom::IPAddressSpace client_address_space,
@@ -87,6 +84,7 @@ class TestURLLoaderNetworkObserver
  private:
   mojo::ReceiverSet<mojom::URLLoaderNetworkServiceObserver> receivers_;
   bool ignore_certificate_errors_ = false;
+  bool platform_local_network_permission_response_ = false;
 };
 
 }  // namespace network

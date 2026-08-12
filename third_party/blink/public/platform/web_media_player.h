@@ -40,6 +40,7 @@
 #include "media/base/picture_in_picture_events_info.h"
 #include "media/base/video_frame.h"
 #include "media/base/video_frame_metadata.h"
+#include "media/base/video_spatial_format.h"
 #include "third_party/blink/public/platform/web_audio_source_provider_impl.h"
 #include "third_party/blink/public/platform/web_content_decryption_module.h"
 #include "third_party/blink/public/platform/web_media_source.h"
@@ -56,6 +57,11 @@ class PaintFlags;
 
 namespace media {
 class PaintCanvasVideoRenderer;
+class VideoFrameSharedImageCache;
+}
+
+namespace viz {
+class FrameSinkId;
 }
 
 namespace blink {
@@ -168,9 +174,6 @@ class WebMediaPlayer {
     // when a muted HTMLMediaElement has started autoplaying and is not rendered
     // in the viewport anymore.
     kAutoplayAutoPause,
-    // The audio description track is lagging behind and we need to pause for it
-    // to catch up.
-    kLetAudioDescriptionFinish,
   };
 
   // For video.requestVideoFrameCallback(). https://wicg.github.io/video-rvfc/
@@ -188,6 +191,11 @@ class WebMediaPlayer {
 
   virtual ~WebMediaPlayer() = default;
 
+  // Called just before the WebMediaPlayer is posted for destruction such that
+  // the WebMediaPlayer can clear any references to WebMediaPlayerClient and
+  // perform any other necessary cleanup.
+  virtual void Shutdown() = 0;
+
   virtual LoadTiming Load(LoadType,
                           const WebMediaPlayerSource&,
                           CorsMode,
@@ -195,6 +203,9 @@ class WebMediaPlayer {
 
   // Playback controls.
   virtual void Play() = 0;
+  // Unlocks background video playback without requiring a user activation token
+  // when authorized by the system (e.g. audio focus regain).
+  virtual void UnlockBackgroundPlayback() {}
   virtual void Pause(PauseReason pause_reason) = 0;
   virtual void Seek(double seconds) = 0;
   virtual void SetRate(double) = 0;
@@ -254,10 +265,25 @@ class WebMediaPlayer {
   virtual bool HasVideo() const = 0;
   virtual bool HasAudio() const = 0;
 
+  // Returns true if the video decoder configuration specifies an HDR color
+  // space (e.g., PQ or HLG).
+  virtual bool IsHDR() const { return false; }
+
+  // Returns true if video frames from this player have recently been consumed
+  // by an external caller, such as canvas drawImage() or captureStream().
+  virtual bool IsVideoBeingCaptured() const = 0;
+
   // Dimension of the video.
   virtual gfx::Size NaturalSize() const = 0;
 
   virtual gfx::Size VisibleSize() const = 0;
+
+  virtual media::VideoTransformation GetVideoTransformation() const {
+    return media::kNoTransformation;
+  }
+
+  // Spatial format of the video.
+  virtual media::VideoSpatialFormat GetSpatialFormat() const { return {}; }
 
   // Getters of playback state.
   virtual bool Paused() const = 0;
@@ -322,7 +348,8 @@ class WebMediaPlayer {
   // Renders the current frame into the provided cc::PaintCanvas.
   virtual void Paint(cc::PaintCanvas*,
                      const gfx::Rect&,
-                     const cc::PaintFlags&) = 0;
+                     const cc::PaintFlags&,
+                     bool force_pixel_readback) = 0;
 
   // Similar to Paint(), but just returns the frame directly instead of trying
   // to upload or convert it. Note: This may kick off a process to update the
@@ -341,6 +368,14 @@ class WebMediaPlayer {
   // the underlying frame is unchanged). May only be used on the main thread and
   // should not be held outside the scope of a single call site.
   virtual media::PaintCanvasVideoRenderer* GetPaintCanvasVideoRenderer() {
+    return nullptr;
+  }
+
+  virtual media::VideoFrameSharedImageCache* GetRGBSharedImageCache() {
+    return nullptr;
+  }
+
+  virtual media::VideoFrameSharedImageCache* GetYUVSharedImageCache() {
     return nullptr;
   }
 
@@ -440,10 +475,21 @@ class WebMediaPlayer {
   virtual void RegisterFrameSinkHierarchy() {}
   virtual void UnregisterFrameSinkHierarchy() {}
 
+  // Reparents the video frame's SurfaceLayer to a new compositor FrameSink.
+  // This is used by Document Picture-in-Picture to ensure the video
+  // continues receiving vsyncs from the active PiP window's compositor,
+  // rather than relying on the opener window which may be backgrounded
+  // or suspended.
+  virtual void ReparentFrameSinkHierarchy(
+      const viz::FrameSinkId& new_parent_frame_sink_id) {}
+
   // Records the `MediaVideoVisibilityTracker` occlusion state, at the time that
   // HTMLVideoElement visibility is reported. The state is recorded using
   // `MediaLogEvent` s.
   virtual void RecordVideoOcclusionState(std::string_view occlusion_state) {}
+
+  // Sets the occlusion ratio of the video element at playback start.
+  virtual void SetVisibilityRatioAtPlaybackStart(double ratio) {}
 
   // Request the media player to record auto picture in picture related
   // information. This information helps identify why a request to enter picture
@@ -451,6 +497,15 @@ class WebMediaPlayer {
   virtual void RecordAutoPictureInPictureInfo(
       const media::PictureInPictureEventsInfo::AutoPipInfo&
           auto_picture_in_picture_info) = 0;
+
+  // Called when the media element's frame becomes hidden. This happens when:
+  // - The frame visibility property is set to "hidden";
+  // - The frame display property is set to "none";
+  // - The frame rendered area is 0 (width or height is 0).
+  virtual void OnFrameHidden() {}
+  // Called when the media element's frame becomes visible. See the comment for
+  // `OnFrameHidden()` for details.
+  virtual void OnFrameShown() {}
 };
 
 }  // namespace blink

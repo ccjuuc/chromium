@@ -10,6 +10,8 @@
 #include <memory>
 
 #import "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
+#import "base/types/optional_ref.h"
 #import "components/autofill/core/browser/logging/log_manager.h"
 #import "components/password_manager/core/browser/password_feature_manager.h"
 #import "components/password_manager/core/browser/password_form_manager_for_ui.h"
@@ -27,6 +29,7 @@
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/sync/service/sync_service.h"
 #import "ios/web/public/web_state.h"
+#import "ios/web/public/web_state_observer.h"
 #import "ios/web_view/internal/passwords/web_view_password_feature_manager.h"
 #import "ios/web_view/internal/web_view_browser_state.h"
 #import "url/gurl.h"
@@ -35,11 +38,27 @@ namespace autofill {
 class LogRouter;
 }  // namespace autofill
 
+class PrefRegistrySimple;
+
 namespace ios_web_view {
+
+// Preference key for hardening WebViewPasswordManagerClient against WebState
+// destruction.
+extern const char kPasswordManagerSafeLifecycleEnabled[];
+
+// Registers the WebViewPasswordManager preferences for this `pref_registry`.
+void RegisterWebViewPasswordManagerPrefs(PrefRegistrySimple* pref_registry);
+
+void SetPasswordManagerSafeLifecycleEnabled(PrefService* prefs, bool value);
+
+bool IsPasswordManagerSafeLifecycleEnabled(const PrefService* prefs);
+
 // An //ios/web_view implementation of password_manager::PasswordManagerClient.
 class WebViewPasswordManagerClient
-    : public password_manager::PasswordManagerClient {
+    : public password_manager::PasswordManagerClient,
+      public web::WebStateObserver {
  public:
+  using password_manager::PasswordManagerClient::IsSavingAndFillingEnabled;
   // Convenience factory method for creating a WebViewPasswordManagerClient.
   static std::unique_ptr<WebViewPasswordManagerClient> Create(
       web::WebState* web_state,
@@ -93,6 +112,7 @@ class WebViewPasswordManagerClient
       const override;
   PrefService* GetPrefs() const override;
   PrefService* GetLocalStatePrefs() const override;
+  metrics::ProfileMetricsService* GetProfileMetricsService() override;
   const syncer::SyncService* GetSyncService() const override;
   affiliations::AffiliationService* GetAffiliationService() override;
   password_manager::PasswordStoreInterface* GetProfilePasswordStore()
@@ -116,7 +136,9 @@ class WebViewPasswordManagerClient
   void NotifyUserCredentialsWereLeaked(
       password_manager::LeakedPasswordDetails details) override;
   void NotifyKeychainError() override;
-  bool IsSavingAndFillingEnabled(const GURL& url) const override;
+  bool IsSavingAndFillingEnabled(
+      const url::Origin& origin,
+      base::optional_ref<const GURL> url) const override;
   bool IsCommittedMainFrameSecure() const override;
   const GURL& GetLastCommittedURL() const override;
   url::Origin GetLastCommittedOrigin() const override;
@@ -141,6 +163,9 @@ class WebViewPasswordManagerClient
 
   password_manager::LeakDetectionInitiator GetLeakDetectionInitiator() override;
 
+  // web::WebStateObserver implementation.
+  void WebStateDestroyed(web::WebState* web_state) override;
+
  private:
   __weak id<PasswordManagerClientBridge> bridge_;
 
@@ -164,6 +189,9 @@ class WebViewPasswordManagerClient
   // Helper for performing logic that is common between
   // ChromePasswordManagerClient and IOSChromePasswordManagerClient.
   password_manager::PasswordManagerClientHelper helper_;
+
+  base::ScopedObservation<web::WebState, web::WebStateObserver>
+      scoped_observation_{this};
 };
 }  // namespace ios_web_view
 

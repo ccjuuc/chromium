@@ -4,9 +4,20 @@
 
 #include "components/autofill/core/browser/payments/payments_requests/unmask_card_request.h"
 
-#include <string_view>
+#include <stddef.h>
 
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
+#include "base/notreached.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -15,7 +26,9 @@
 #include "components/autofill/core/browser/payments/autofill_error_dialog_context.h"
 #include "components/autofill/core/browser/payments/autofill_payments_feature_availability.h"
 #include "components/autofill/core/browser/payments/card_unmask_challenge_option.h"
-#include "components/autofill/core/common/autofill_payments_features.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
+#include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "url/gurl.h"
@@ -44,7 +57,7 @@ constexpr size_t kDefaultCvcLength = 3U;
 // Parses the `defined_challenge_option` as a 3ds challenge option, and sets the
 // appropriate fields in `parsed_challenge_option`.
 void ParseAs3dsChallengeOption(
-    const base::Value::Dict& defined_challenge_option,
+    const base::DictValue& defined_challenge_option,
     CardUnmaskChallengeOption& parsed_challenge_option) {
   parsed_challenge_option.type =
       CardUnmaskChallengeOptionType::kThreeDomainSecure;
@@ -84,7 +97,7 @@ void ParseAs3dsChallengeOption(
 // Parses the `defined_challenge_option` as an  OTP challenge option, and sets
 // the appropriate fields in `parsed_challenge_option`.
 void ParseAsOtpChallengeOption(
-    const base::Value::Dict& defined_challenge_option,
+    const base::DictValue& defined_challenge_option,
     CardUnmaskChallengeOption& parsed_challenge_option,
     CardUnmaskChallengeOptionType otp_challenge_option_type) {
   parsed_challenge_option.type = otp_challenge_option_type;
@@ -120,7 +133,7 @@ void ParseAsOtpChallengeOption(
 // Parses the `defined_challenge_option` as a CVC challenge option, and sets the
 // appropriate fields in `parsed_challenge_option`.
 void ParseAsCvcChallengeOption(
-    const base::Value::Dict& defined_challenge_option,
+    const base::DictValue& defined_challenge_option,
     CardUnmaskChallengeOption& parsed_challenge_option) {
   parsed_challenge_option.type = CardUnmaskChallengeOptionType::kCvc;
 
@@ -177,8 +190,8 @@ void ParseAsCvcChallengeOption(
 }
 
 CardUnmaskChallengeOption ParseCardUnmaskChallengeOption(
-    const base::Value::Dict& challenge_option) {
-  const base::Value::Dict* defined_challenge_option;
+    const base::DictValue& challenge_option) {
+  const base::DictValue* defined_challenge_option;
   CardUnmaskChallengeOption parsed_challenge_option;
 
   // Check if it's an SMS OTP challenge option, and if it is, set
@@ -249,7 +262,7 @@ std::string UnmaskCardRequest::GetRequestContent() {
   // Either non-legacy instrument id or legacy server id must be provided.
   DCHECK(!request_details_.card.server_id().empty() ||
          request_details_.card.instrument_id() != 0);
-  base::Value::Dict request_dict;
+  base::DictValue request_dict;
   if (!request_details_.card.server_id().empty()) {
     request_dict.Set("credit_card_id", request_details_.card.server_id());
   }
@@ -260,7 +273,7 @@ std::string UnmaskCardRequest::GetRequestContent() {
   }
   request_dict.Set("risk_data_encoded",
                    BuildRiskDictionary(request_details_.risk_data));
-  base::Value::Dict context;
+  base::DictValue context;
   context.Set("billable_service", kUnmaskPaymentMethodBillableServiceNumber);
   if (request_details_.billing_customer_number != 0) {
     context.Set("customer_context",
@@ -287,8 +300,8 @@ std::string UnmaskCardRequest::GetRequestContent() {
                    request_details_.user_response.enable_fido_auth);
 
   if (request_details_.selected_challenge_option) {
-    base::Value::Dict selected_idv_challenge_option;
-    base::Value::Dict challenge_option;
+    base::DictValue selected_idv_challenge_option;
+    base::DictValue challenge_option;
     // TODO(crbug.com/356665737): fix selected challenge option for cvc and otp
     if (request_details_.selected_challenge_option->type ==
         CardUnmaskChallengeOptionType::kCvc) {
@@ -353,14 +366,14 @@ std::string UnmaskCardRequest::GetRequestContent() {
             .spec();
     if (request_details_.card.record_type() ==
         CreditCard::RecordType::kVirtualCard) {
-      base::Value::Dict virtual_card_request_info;
+      base::DictValue virtual_card_request_info;
       virtual_card_request_info.Set("merchant_domain", merchant_domain);
       request_dict.Set("virtual_card_request_info",
                        std::move(virtual_card_request_info));
     } else if (request_details_.card.card_info_retrieval_enrollment_state() ==
                CreditCard::CardInfoRetrievalEnrollmentState::
                    kRetrievalEnrolled) {
-      base::Value::Dict card_retrieval_request_info;
+      base::DictValue card_retrieval_request_info;
       card_retrieval_request_info.Set("merchant_domain", merchant_domain);
       request_dict.Set("card_retrieval_request_info",
                        std::move(card_retrieval_request_info));
@@ -372,36 +385,34 @@ std::string UnmaskCardRequest::GetRequestContent() {
   if (is_cvc_auth) {
     request_content = base::StringPrintf(
         kUnmaskCardRequestFormatWithCvc,
-        base::EscapeUrlEncodedData(json_request, true).c_str(),
+        base::EscapeUrlEncodedData(json_request, true),
         base::EscapeUrlEncodedData(
-            base::UTF16ToASCII(request_details_.user_response.cvc), true)
-            .c_str());
+            base::UTF16ToASCII(request_details_.user_response.cvc), true));
   } else if (is_otp_auth) {
-    request_content = base::StringPrintf(
-        kUnmaskCardRequestFormatWithOtp,
-        base::EscapeUrlEncodedData(json_request, true).c_str(),
-        base::EscapeUrlEncodedData(base::UTF16ToASCII(request_details_.otp),
-                                   true)
-            .c_str());
+    request_content =
+        base::StringPrintf(kUnmaskCardRequestFormatWithOtp,
+                           base::EscapeUrlEncodedData(json_request, true),
+                           base::EscapeUrlEncodedData(
+                               base::UTF16ToASCII(request_details_.otp), true));
   } else {
     // If neither cvc nor otp request, use the normal request format.
-    request_content = base::StringPrintf(
-        kUnmaskCardRequestFormat,
-        base::EscapeUrlEncodedData(json_request, true).c_str());
+    request_content =
+        base::StringPrintf(kUnmaskCardRequestFormat,
+                           base::EscapeUrlEncodedData(json_request, true));
   }
 
   DVLOG(3) << "getrealpan request body: " << request_content;
   return request_content;
 }
 
-void UnmaskCardRequest::ParseResponse(const base::Value::Dict& response) {
+void UnmaskCardRequest::ParseResponse(const base::DictValue& response) {
   const std::string* pan = response.FindString("pan");
   response_details_.real_pan = pan ? *pan : std::string();
 
   const std::string* dcvv = response.FindString("dcvv");
   response_details_.dcvv = dcvv ? *dcvv : std::string();
 
-  const base::Value::Dict* expiration = response.FindDict("expiration");
+  const base::DictValue* expiration = response.FindDict("expiration");
   if (expiration) {
     if (std::optional<int> month = expiration->FindInt("month")) {
       response_details_.expiration_month = base::NumberToString(month.value());
@@ -412,12 +423,12 @@ void UnmaskCardRequest::ParseResponse(const base::Value::Dict& response) {
     }
   }
 
-  const base::Value::Dict* request_options =
+  const base::DictValue* request_options =
       response.FindDict("fido_request_options");
   if (request_options)
     response_details_.fido_request_options = request_options->Clone();
 
-  const base::Value::List* challenge_option_list =
+  const base::ListValue* challenge_option_list =
       response.FindList("idv_challenge_options");
   if (challenge_option_list) {
     std::vector<CardUnmaskChallengeOption> card_unmask_challenge_options;
@@ -458,8 +469,7 @@ void UnmaskCardRequest::ParseResponse(const base::Value::Dict& response) {
     NOTREACHED();
   }
 
-  const base::Value::Dict* decline_details =
-      response.FindDict("decline_details");
+  const base::DictValue* decline_details = response.FindDict("decline_details");
   if (decline_details) {
     AutofillErrorDialogContext autofill_error_dialog_context;
 
@@ -544,15 +554,6 @@ bool UnmaskCardRequest::IsRetryableFailure(const std::string& error_code) {
 
 std::string UnmaskCardRequest::GetHistogramName() const {
   return "UnmaskCardRequest";
-}
-
-std::optional<base::TimeDelta> UnmaskCardRequest::GetTimeout() const {
-  if (!base::FeatureList::IsEnabled(
-          features::kAutofillUnmaskCardRequestTimeout)) {
-    return std::nullopt;
-  }
-  // Hardcode 30s to be consistent with the server side timeout.
-  return base::Seconds(30);
 }
 
 bool UnmaskCardRequest::IsAllCardInformationValidIncludingDcvv() {

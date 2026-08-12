@@ -40,6 +40,8 @@ class DisplayWebView : public viz::Display, public viz::FrameSinkObserver {
   // viz::FrameSinkObserver implenentation:
   void OnFrameSinkDidFinishFrame(const viz::FrameSinkId& frame_sink_id,
                                  const viz::BeginFrameArgs& args) override;
+  void OnDestroyedCompositorFrameSink(
+      const viz::FrameSinkId& frame_sink_id) override;
 
  private:
   DisplayWebView(
@@ -61,8 +63,6 @@ class DisplayWebView : public viz::Display, public viz::FrameSinkObserver {
 
   base::ScopedObservation<viz::FrameSinkManagerImpl, viz::FrameSinkObserver>
       frame_sink_manager_observation_{this};
-
-  const bool use_new_invalidate_heuristic_;
 };
 
 }  // namespace android_webview

@@ -7,10 +7,11 @@
 #include <utility>
 
 #include "base/check_deref.h"
+#include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
+#include "base/test/with_feature_override.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/global_features.h"
 #include "chrome/browser/profiles/profile.h"
@@ -23,6 +24,7 @@
 #include "components/supervised_user/core/common/features.h"
 #include "components/supervised_user/core/common/pref_names.h"
 #include "components/supervised_user/core/common/supervised_user_constants.h"
+#include "components/supervised_user/test_support/features.h"
 #include "components/url_matcher/url_util.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -79,8 +81,6 @@ class SupervisedUserServiceBootstrapAndroidBrowserTestBase
   }
 
   base::HistogramTester histogram_tester_;
-  base::test::ScopedFeatureList scoped_feature_list_{
-      kPropagateDeviceContentFiltersToSupervisedUser};
 };
 
 struct BootstrapServiceTestCase {
@@ -102,15 +102,19 @@ struct BootstrapServiceTestCase {
 // content filters are set.
 class SupervisedUserServiceBootstrapAndroidBrowserTest
     : public SupervisedUserServiceBootstrapAndroidBrowserTestBase,
-      public ::testing::WithParamInterface<BootstrapServiceTestCase> {
+      public testing::WithParamInterface<BootstrapServiceTestCase> {
  protected:
   SupervisedUserServiceBootstrapAndroidBrowserTest() {
     SetInitialSupervisedUserState(
         {.android_parental_controls = {
-             .browser_filter = GetParam().initial_browser_content_filters_value,
-             .search_filter = GetParam().initial_search_content_filters_value,
+             .browser_filter =
+                 GetTestCase().initial_browser_content_filters_value,
+             .search_filter =
+                 GetTestCase().initial_search_content_filters_value,
          }});
   }
+
+  const BootstrapServiceTestCase& GetTestCase() const { return GetParam(); }
 };
 
 IN_PROC_BROWSER_TEST_P(SupervisedUserServiceBootstrapAndroidBrowserTest,
@@ -118,7 +122,7 @@ IN_PROC_BROWSER_TEST_P(SupervisedUserServiceBootstrapAndroidBrowserTest,
   ASSERT_NE(nullptr, GetSupervisedUserService());
 
   policy::IncognitoModeAvailability expected_incognito_mode_availability =
-      GetParam().ShouldBlockIncognito()
+      GetTestCase().ShouldBlockIncognito()
           ? policy::IncognitoModeAvailability::kDisabled
           : policy::IncognitoModeAvailability::kEnabled;
 
@@ -134,11 +138,11 @@ IN_PROC_BROWSER_TEST_P(SupervisedUserServiceBootstrapAndroidBrowserTest,
                        SafeSearchIsEnforcedWhenSearchFilterIsEnabled) {
   GURL request_url =
       embedded_test_server()->GetURL("google.com", "/search?q=cat");
-  GURL expected_url = GetParam().initial_search_content_filters_value
+  GURL expected_url = GetTestCase().initial_search_content_filters_value
                           ? GURL(request_url.spec() + "&safe=active&ssui=on")
                           : request_url;
 
-  if (GetParam().initial_browser_content_filters_value) {
+  if (GetTestCase().initial_browser_content_filters_value) {
     // Google search is not on the exempt list of the URL Filter: search
     // requests must be explicitly allowed.
     EXPECT_CALL(GetMockUrlCheckerClient(),
@@ -158,7 +162,7 @@ IN_PROC_BROWSER_TEST_P(SupervisedUserServiceBootstrapAndroidBrowserTest,
   GURL request_url =
       embedded_test_server()->GetURL("/supervised_user/simple.html");
 
-  if (GetParam().initial_browser_content_filters_value) {
+  if (GetTestCase().initial_browser_content_filters_value) {
     EXPECT_CALL(GetMockUrlCheckerClient(),
                 CheckURL(url_matcher::util::Normalize(request_url), _))
         .WillOnce([](const GURL& url,
@@ -180,7 +184,7 @@ IN_PROC_BROWSER_TEST_P(SupervisedUserServiceBootstrapAndroidBrowserTest,
 
 IN_PROC_BROWSER_TEST_P(SupervisedUserServiceBootstrapAndroidBrowserTest,
                        SafeSitesBlocksPagesWhenEnabled) {
-  if (!GetParam().initial_browser_content_filters_value) {
+  if (!GetTestCase().initial_browser_content_filters_value) {
     GTEST_SKIP() << "This test requires the browser filter to be enabled.";
   }
 
@@ -203,14 +207,18 @@ IN_PROC_BROWSER_TEST_P(SupervisedUserServiceBootstrapAndroidBrowserTest,
 
 IN_PROC_BROWSER_TEST_P(SupervisedUserServiceBootstrapAndroidBrowserTest,
                        WebFilterTypeIsRecordedOnceWhenBrowserFilterIsEnabled) {
-  if (GetParam().initial_browser_content_filters_value) {
+  if (GetTestCase().initial_browser_content_filters_value) {
     histogram_tester().ExpectBucketCount(
         "SupervisedUsers.WebFilterType.LocallySupervised",
         WebFilterType::kTryToBlockMatureSites, 1);
-  } else if (GetParam().initial_search_content_filters_value) {
+  } else if (GetTestCase().initial_search_content_filters_value) {
+    // With url service enabled, when the search filter is enabled and the
+    // browser filter is disabled, the web filter type indicates that it allows
+    // all sites.
+    WebFilterType expected_web_filter_type = WebFilterType::kAllowAllSites;
     histogram_tester().ExpectBucketCount(
         "SupervisedUsers.WebFilterType.LocallySupervised",
-        WebFilterType::kDisabled, 1);
+        expected_web_filter_type, 1);
   } else {
     histogram_tester().ExpectTotalCount(
         "SupervisedUsers.WebFilterType.LocallySupervised", 0);
@@ -221,25 +229,39 @@ IN_PROC_BROWSER_TEST_P(SupervisedUserServiceBootstrapAndroidBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_P(SupervisedUserServiceBootstrapAndroidBrowserTest,
-                       FamilyLinkOverridesLocalSupervision) {
+                       FamilyLinkOverridesDeviceSupervision) {
   bool is_initially_supervised_locally =
-      GetParam().initial_browser_content_filters_value ||
-      GetParam().initial_search_content_filters_value;
+      GetTestCase().initial_browser_content_filters_value ||
+      GetTestCase().initial_search_content_filters_value;
 
-  // Local supervision is initially enabled/disabled based on the test case, but
-  // Family Link supervision is always disabled.
+  // Device supervision is initially enabled/disabled based on the test case,
+  // but Family Link supervision is always disabled.
   ASSERT_EQ(is_initially_supervised_locally,
-            GetSupervisedUserService()->IsSupervisedLocally());
+            GetDeviceParentalControls().IsEnabled());
   ASSERT_FALSE(IsSubjectToParentalControls(*GetProfile()->GetPrefs()));
+
+  // So far there is no trace of any supervision systems conflict.
+  EXPECT_EQ(0, histogram_tester().GetBucketCount(
+                   "SupervisedUsers.FamilyLinkSupervisionConflict", 1));
 
   EnableParentalControls(*GetProfile()->GetPrefs());
 
-  // Finally, local supervision is always disabled, Family Link supervision is
-  // always enabled, and if there was a conflict, it's recorded.
-  histogram_tester().ExpectBucketCount(
-      "SupervisedUsers.FamilyLinkSupervisionConflict", 1,
-      is_initially_supervised_locally ? 1 : 0);
-  EXPECT_FALSE(GetSupervisedUserService()->IsSupervisedLocally());
+  // Finally, local supervision is overridden (browser sees it as disabled),
+  // Family Link supervision is always enabled, and if there was a conflict,
+  // it's recorded (possibly multiple times, because changes to both
+  // SupervisedUserSettingsService and AndroidParentalControls trigger pref
+  // calculations)
+  if (is_initially_supervised_locally) {
+    EXPECT_GT(histogram_tester().GetBucketCount(
+                  "SupervisedUsers.FamilyLinkSupervisionConflict", 1),
+              0);
+  } else {
+    EXPECT_EQ(histogram_tester().GetBucketCount(
+                  "SupervisedUsers.FamilyLinkSupervisionConflict", 1),
+              0);
+  }
+  EXPECT_FALSE(
+      AreAndroidParentalControlsEffectiveForTesting(*GetProfile()->GetPrefs()));
   EXPECT_TRUE(IsSubjectToParentalControls(*GetProfile()->GetPrefs()));
 }
 
@@ -261,7 +283,8 @@ INSTANTIATE_TEST_SUITE_P(
     ,
     SupervisedUserServiceBootstrapAndroidBrowserTest,
     testing::ValuesIn(kBootstrapServiceTestCases),
-    [](const testing::TestParamInfo<BootstrapServiceTestCase>& info) {
+    [](const testing::TestParamInfo<
+        SupervisedUserServiceBootstrapAndroidBrowserTest::ParamType>& info) {
       return info.param.test_name;
     });
 
@@ -318,26 +341,24 @@ IN_PROC_BROWSER_TEST_F(
 
 IN_PROC_BROWSER_TEST_F(
     SupervisedUserServiceBootstrapAndroidBrowserWithSupervisedUserTest,
-    FamilyLinkIsImmuneToLocalSupervision) {
-  // Local supervision is initially disabled and Family Link supervision is
+    FamilyLinkIsImmuneToDeviceSupervision) {
+  // Device supervision is initially disabled and Family Link supervision is
   // initially enabled.
-  ASSERT_FALSE(GetSupervisedUserService()->IsSupervisedLocally());
+  ASSERT_FALSE(GetDeviceParentalControls().IsEnabled());
   ASSERT_TRUE(IsSubjectToParentalControls(*GetProfile()->GetPrefs()));
 
   // Try turning the knob on the local supervision (browser filtering).
-  g_browser_process->GetFeatures()
-      ->GetAndroidParentalControls()
-      ->SetBrowserContentFiltersEnabledForTesting(true);
-  EXPECT_FALSE(GetSupervisedUserService()->IsSupervisedLocally());
+  GetDeviceParentalControls().SetBrowserContentFiltersEnabledForTesting(true);
+  EXPECT_FALSE(
+      AreAndroidParentalControlsEffectiveForTesting(*GetProfile()->GetPrefs()));
   EXPECT_TRUE(IsSubjectToParentalControls(*GetProfile()->GetPrefs()));
   histogram_tester().ExpectBucketCount(
       "SupervisedUsers.FamilyLinkSupervisionConflict", 1, 1);
 
   // Try turning the knob on the local supervision (search filtering).
-  g_browser_process->GetFeatures()
-      ->GetAndroidParentalControls()
-      ->SetSearchContentFiltersEnabledForTesting(true);
-  EXPECT_FALSE(GetSupervisedUserService()->IsSupervisedLocally());
+  GetDeviceParentalControls().SetSearchContentFiltersEnabledForTesting(true);
+  EXPECT_FALSE(
+      AreAndroidParentalControlsEffectiveForTesting(*GetProfile()->GetPrefs()));
   EXPECT_TRUE(IsSubjectToParentalControls(*GetProfile()->GetPrefs()));
   histogram_tester().ExpectBucketCount(
       "SupervisedUsers.FamilyLinkSupervisionConflict", 1, 2);

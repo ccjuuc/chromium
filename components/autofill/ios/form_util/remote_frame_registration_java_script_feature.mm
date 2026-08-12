@@ -6,9 +6,7 @@
 
 #import <optional>
 
-#import "base/feature_list.h"
 #import "components/autofill/core/common/autofill_features.h"
-#import "components/autofill/ios/common/features.h"
 #import "components/autofill/ios/common/javascript_feature_util.h"
 #import "components/autofill/ios/form_util/autofill_form_features_java_script_feature.h"
 #import "components/autofill/ios/form_util/child_frame_registrar.h"
@@ -37,7 +35,7 @@ RemoteFrameRegistrationJavaScriptFeature::
               FeatureScript::ReinjectionBehavior::
                   kReinjectOnDocumentRecreation)},
           {
-              autofill::AutofillFormFeaturesJavaScriptFeature::GetInstance(),
+              AutofillFormFeaturesJavaScriptFeature::GetInstance(),
           }) {}
 
 RemoteFrameRegistrationJavaScriptFeature::
@@ -51,19 +49,13 @@ RemoteFrameRegistrationJavaScriptFeature::GetScriptMessageHandlerName() const {
 void RemoteFrameRegistrationJavaScriptFeature::ScriptMessageReceived(
     web::WebState* web_state,
     const web::ScriptMessage& message) {
-  if (!base::FeatureList::IsEnabled(
-          autofill::features::kAutofillAcrossIframesIos) &&
-      !base::FeatureList::IsEnabled(kAutofillIsolatedWorldForJavascriptIos)) {
-    return;
-  }
-
-  if (!message.body() || !message.body()->is_dict()) {
+  if (!message.legacy_body() || !message.legacy_body()->is_dict()) {
     return;
   }
 
   if (auto* registrar =
           ChildFrameRegistrar::GetOrCreateForWebState(web_state)) {
-    registrar->ProcessRegistrationMessage(message.body());
+    registrar->ProcessRegistrationMessage(message.legacy_body());
   }
 }
 

@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "base/barrier_closure.h"
-#include "base/containers/contains.h"
 #include "base/debug/crash_logging.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -288,7 +287,7 @@ BackgroundSyncType GetBackgroundSyncType(
                                     : BackgroundSyncType::PERIODIC;
 }
 
-std::string GetSyncEventName(const BackgroundSyncType sync_type) {
+std::string_view GetSyncEventName(const BackgroundSyncType sync_type) {
   if (sync_type == BackgroundSyncType::ONE_SHOT)
     return "sync";
   else
@@ -1354,8 +1353,9 @@ void BackgroundSyncManager::AddOrUpdateActiveRegistration(
     devtools_context_->LogBackgroundServiceEvent(
         sw_registration_id, blink::StorageKey::CreateFirstParty(origin),
         GetDevToolsBackgroundService(sync_type),
-        /* event_name= */ "Registered " + GetSyncEventName(sync_type),
-        /* instance_id= */ sync_registration.options()->tag, event_metadata);
+        /*event_name=*/
+        base::StrCat({"Registered ", GetSyncEventName(sync_type)}),
+        /*instance_id=*/sync_registration.options()->tag, event_metadata);
   }
 }
 
@@ -1531,7 +1531,7 @@ bool BackgroundSyncManager::AllConditionsExceptConnectivitySatisfied(
   if (registration.is_suspended())
     return false;
 
-  if (base::Contains(emulated_offline_sw_, service_worker_id))
+  if (emulated_offline_sw_.contains(service_worker_id))
     return false;
 
   return true;
@@ -2225,8 +2225,9 @@ void BackgroundSyncManager::EventCompleteDidGetDelay(
     registration_completed = false;
     registration->set_delay_until(clock_->Now() + delay);
 
-    std::string event_name = GetSyncEventName(registration->sync_type()) +
-                             (succeeded ? " event completed" : " event failed");
+    std::string event_name =
+        base::StrCat({GetSyncEventName(registration->sync_type()),
+                      (succeeded ? " event completed" : " event failed")});
     base::TimeDelta display_delay =
         registration->sync_type() == BackgroundSyncType::ONE_SHOT
             ? delay
@@ -2247,8 +2248,7 @@ void BackgroundSyncManager::EventCompleteDidGetDelay(
   }
 
   if (registration_completed) {
-    BackgroundSyncMetrics::RecordRegistrationComplete(
-        succeeded, registration->num_attempts());
+    BackgroundSyncMetrics::RecordRegistrationComplete(succeeded);
 
     if (ShouldLogToDevTools(registration->sync_type())) {
       devtools_context_->LogBackgroundServiceEvent(
@@ -2373,7 +2373,7 @@ blink::ServiceWorkerStatusCode BackgroundSyncManager::CanEmulateSyncEvent(
   if (!network_observer_->NetworkSufficient())
     return blink::ServiceWorkerStatusCode::kErrorEventWaitUntilRejected;
   int64_t registration_id = active_version->registration_id();
-  if (base::Contains(emulated_offline_sw_, registration_id))
+  if (emulated_offline_sw_.contains(registration_id))
     return blink::ServiceWorkerStatusCode::kErrorEventWaitUntilRejected;
   return blink::ServiceWorkerStatusCode::kOk;
 }

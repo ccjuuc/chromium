@@ -4,13 +4,81 @@
 
 package org.chromium.chrome.browser.ui.default_browser_promo;
 
+import androidx.annotation.IntDef;
+
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.chrome.browser.ui.default_browser_promo.DefaultBrowserPromoUtils.DefaultBrowserPromoEntryPoint;
 import org.chromium.chrome.browser.util.DefaultBrowserInfo.DefaultBrowserState;
 
-/** Helper class to record histograms related to the default browser promo. */
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
+/** Helper class to record histograms. */
 @NullMarked
-class DefaultBrowserPromoMetrics {
+public class DefaultBrowserPromoMetrics {
+    /**
+     * The source/location of the default browser promo that was clicked.
+     *
+     * <p>Note: this should be kept in sync with DefaultBrowserPromoSourceType in
+     * tools/metrics/histograms/metadata/android/enums.xml.
+     */
+    // LINT.IfChange(DefaultBrowserPromoSourceType)
+    @IntDef({
+        DefaultBrowserPromoSourceType.MESSAGES_PROMO,
+        DefaultBrowserPromoSourceType.SETTING_CARD_PROMO,
+        DefaultBrowserPromoSourceType.EDUCATIONAL_TIP_PROMO,
+        // Deprecated: DefaultBrowserPromoSourceType.FRE_PROMO,
+        DefaultBrowserPromoSourceType.APP_MENU_DEEPLINK,
+        DefaultBrowserPromoSourceType.SETTINGS_ROW_DEEPLINK
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface DefaultBrowserPromoSourceType {
+        int MESSAGES_PROMO = 0;
+        int SETTING_CARD_PROMO = 1;
+        int EDUCATIONAL_TIP_PROMO = 2;
+        // Deprecated: int FRE_PROMO = 3;
+        int APP_MENU_DEEPLINK = 4;
+        int SETTINGS_ROW_DEEPLINK = 5;
+
+        int NUM_ENTRIES = 6;
+    }
+
+    // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:DefaultBrowserPromoSourceType)
+
+    private static String getSourceSuffix(@DefaultBrowserPromoEntryPoint int source) {
+        if (source == DefaultBrowserPromoEntryPoint.APP_MENU) {
+            return "AppMenu";
+        } else if (source == DefaultBrowserPromoEntryPoint.APP_MENU_RMD) {
+            return "AppMenu.RoleManagerDialog";
+        } else if (source == DefaultBrowserPromoEntryPoint.APP_MENU_DEEP_LINK) {
+            return "AppMenu.DeepLink";
+        } else if (source == DefaultBrowserPromoEntryPoint.SETTINGS) {
+            return "Settings";
+        } else if (source == DefaultBrowserPromoEntryPoint.FRE) {
+            return "FRE";
+        }
+        return "";
+    }
+
+    /**
+     * Record the click event on an entry point.
+     *
+     * @param source The source of the click ("AppMenu" or "Settings").
+     * @param currentState The state of the browser (OTHER_DEFAULT, CHROME_DEFAULT, etc.) at the
+     *     moment of the click.
+     */
+    static void recordEntrypointClick(
+            @DefaultBrowserPromoEntryPoint int source, @DefaultBrowserState int currentState) {
+        String suffix = getSourceSuffix(source);
+        if (suffix.isEmpty()) return;
+
+        RecordHistogram.recordEnumeratedHistogram(
+                "Android.DefaultBrowserPromo.EntryPoint." + suffix,
+                currentState,
+                DefaultBrowserState.NUM_ENTRIES);
+    }
+
     /**
      * Record {@link DefaultBrowserState} when role manager dialog is shown.
      *
@@ -21,6 +89,23 @@ class DefaultBrowserPromoMetrics {
         RecordHistogram.recordEnumeratedHistogram(
                 "Android.DefaultBrowserPromo.RoleManagerShown",
                 currentState,
+                DefaultBrowserState.NUM_ENTRIES);
+    }
+
+    /**
+     * Record the outcome of the default browser promo for a specific source.
+     *
+     * @param newState The {@link DefaultBrowserState} after the user changes the default.
+     * @param source The source of the promo (e.g. "AppMenu").
+     */
+    static void recordOutcome(
+            @DefaultBrowserState int newState, @DefaultBrowserPromoEntryPoint int source) {
+        String suffix = getSourceSuffix(source);
+        if (suffix.isEmpty()) return;
+
+        RecordHistogram.recordEnumeratedHistogram(
+                "Android.DefaultBrowserPromo.Outcome." + suffix,
+                newState,
                 DefaultBrowserState.NUM_ENTRIES);
     }
 
@@ -59,5 +144,17 @@ class DefaultBrowserPromoMetrics {
         }
         name += postFix;
         RecordHistogram.recordEnumeratedHistogram(name, newState, DefaultBrowserState.NUM_ENTRIES);
+    }
+
+    /**
+     * Record the click event on a default browser promo.
+     *
+     * @param promoType The source/type of promo that was clicked.
+     */
+    public static void recordPromoClick(@DefaultBrowserPromoSourceType int promoType) {
+        RecordHistogram.recordEnumeratedHistogram(
+                "Android.DefaultBrowserPromo.Click",
+                promoType,
+                DefaultBrowserPromoSourceType.NUM_ENTRIES);
     }
 }

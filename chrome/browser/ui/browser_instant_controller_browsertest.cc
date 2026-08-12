@@ -98,14 +98,10 @@ class FakeWebContentsObserver : public content::WebContentsObserver {
   int num_reloads_ = 0;
 };
 
-// TODO(crbug.com/428088800): Test is flaky on Windows.
-#if BUILDFLAG(IS_WIN)
-#define MAYBE_DefaultSearchProviderChanged DISABLED_DefaultSearchProviderChanged
-#else
-#define MAYBE_DefaultSearchProviderChanged DefaultSearchProviderChanged
-#endif
+// TODO(crbug.com/511943029): Flaky on all platforms because
+// `observer->current_url()` is `chrome://newtab/`.
 IN_PROC_BROWSER_TEST_F(BrowserInstantControllerTest,
-                       MAYBE_DefaultSearchProviderChanged) {
+                       DISABLED_DefaultSearchProviderChanged) {
   size_t num_tests = std::size(kTabReloadTestCasesFinalProviderNotGoogle);
   std::vector<std::unique_ptr<FakeWebContentsObserver>> observers;
   for (size_t i = 0; i < num_tests; ++i) {
@@ -131,7 +127,7 @@ IN_PROC_BROWSER_TEST_F(BrowserInstantControllerTest,
     // Tests for which tabs finish in the NTP should start in the default NTP
     // before the provider is changed.
     if (test.end_in_ntp) {
-      EXPECT_EQ(GURL(chrome::kChromeUINewTabPageURL),
+      EXPECT_EQ(chrome::ChromeUINewTabPageURLAsGURL(),
                 observers.back()->current_url());
     }
   }

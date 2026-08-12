@@ -4,6 +4,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/web_app_id_constants.h"
+#include "ash/constants/webui_url_constants.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
@@ -102,7 +103,7 @@ class SystemFeaturesPolicyTestBase : public MixinBasedInProcessBrowserTest {
   }
 
   void EnableExtensions(bool skip_session_components) {
-    auto* profile = browser()->profile();
+    auto* profile = browser()->GetProfile();
     extensions::ComponentLoader::EnableBackgroundExtensionsForTesting();
     extensions::ComponentLoader::Get(profile)->AddDefaultComponentExtensions(
         skip_session_components);
@@ -131,8 +132,8 @@ class SystemFeaturesPolicyTestBase : public MixinBasedInProcessBrowserTest {
   }
 
   // Convenience overload of UpdateSystemFeaturesDisableList() that allows
-  // callers to provide a base::Value::List instead of a base::Value.
-  void UpdateSystemFeaturesDisableList(base::Value::List system_features,
+  // callers to provide a base::ListValue instead of a base::Value.
+  void UpdateSystemFeaturesDisableList(base::ListValue system_features,
                                        const char* disabled_mode) {
     UpdateSystemFeaturesDisableList(base::Value(std::move(system_features)),
                                     disabled_mode);
@@ -142,7 +143,7 @@ class SystemFeaturesPolicyTestBase : public MixinBasedInProcessBrowserTest {
                                apps::Readiness expected_readiness,
                                bool blocked_icon,
                                const VisibilityFlags& expected_visibility) {
-    auto* profile = browser()->profile();
+    auto* profile = browser()->GetProfile();
     extensions::ExtensionRegistry* registry =
         extensions::ExtensionRegistry::Get(profile);
     ASSERT_TRUE(registry->enabled_extensions().GetByID(app_id));
@@ -154,7 +155,7 @@ class SystemFeaturesPolicyTestBase : public MixinBasedInProcessBrowserTest {
                       apps::Readiness expected_readiness,
                       bool blocked_icon,
                       const VisibilityFlags& expected_visibility) {
-    auto* profile = browser()->profile();
+    auto* profile = browser()->GetProfile();
     auto* proxy = apps::AppServiceProxyFactory::GetForProfile(profile);
 
     bool exist = proxy->AppRegistryCache().ForOneApp(
@@ -177,7 +178,7 @@ class SystemFeaturesPolicyTestBase : public MixinBasedInProcessBrowserTest {
   }
 
   void InstallSWAs() {
-    ash::SystemWebAppManager::GetForTest(browser()->profile())
+    ash::SystemWebAppManager::GetForTest(browser()->GetProfile())
         ->InstallSystemAppsForTesting();
   }
 
@@ -186,7 +187,7 @@ class SystemFeaturesPolicyTestBase : public MixinBasedInProcessBrowserTest {
         web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(app_url);
     web_app_info->scope = app_url.GetWithoutFilename();
     webapps::AppId installed_app_id = web_app::test::InstallWebApp(
-        browser()->profile(), std::move(web_app_info));
+        browser()->GetProfile(), std::move(web_app_info));
     EXPECT_EQ(app_id, installed_app_id);
   }
 
@@ -216,7 +217,7 @@ class SystemFeaturesPolicyTestBase : public MixinBasedInProcessBrowserTest {
 
     // The URL navigation is still allowed because the app is not installed,
     // though it is disabled by policy.
-    base::Value::List system_features;
+    base::ListValue system_features;
     system_features.Append(feature);
     UpdateSystemFeaturesDisableList(std::move(system_features), nullptr);
     EXPECT_EQ(base::UTF8ToUTF16(app_title), GetWebUITitle(app_url, true));
@@ -256,7 +257,7 @@ class SystemFeaturesPolicyTest : public SystemFeaturesPolicyTestBase {
 
  protected:
   void VerifyAppDisableMode(const char* app_id, const char* feature) override {
-    base::Value::List system_features;
+    base::ListValue system_features;
     system_features.Append(feature);
     VisibilityFlags expected_visibility =
         GetVisibilityFlags(true /* is_hidden */);
@@ -291,7 +292,7 @@ class SystemFeaturesPolicyTest : public SystemFeaturesPolicyTestBase {
 
     // The URL navigation is still allowed because the app is not installed,
     // though it is disabled by policy.
-    base::Value::List system_features;
+    base::ListValue system_features;
     system_features.Append(feature);
     UpdateSystemFeaturesDisableList(std::move(system_features), nullptr);
     EXPECT_EQ(base::UTF8ToUTF16(app_title), GetWebUITitle(app_url, true));
@@ -312,7 +313,7 @@ class SystemFeaturesPolicyTest : public SystemFeaturesPolicyTestBase {
 };
 
 IN_PROC_BROWSER_TEST_F(SystemFeaturesPolicyTest, DisableWebStoreBeforeInstall) {
-  base::Value::List system_features;
+  base::ListValue system_features;
   system_features.Append(kWebStoreFeature);
   VisibilityFlags expected_visibility =
       GetVisibilityFlags(true /* is_hidden */);
@@ -337,7 +338,7 @@ IN_PROC_BROWSER_TEST_F(SystemFeaturesPolicyTest, DisableWebStoreBeforeInstall) {
 IN_PROC_BROWSER_TEST_F(SystemFeaturesPolicyTest,
                        DisableWebStoreAfterInstallWithModes) {
   EnableExtensions(false);
-  base::Value::List system_features;
+  base::ListValue system_features;
   system_features.Append(kWebStoreFeature);
   VisibilityFlags expected_visibility =
       GetVisibilityFlags(true /* is_hidden */);
@@ -410,17 +411,17 @@ IN_PROC_BROWSER_TEST_F(SystemFeaturesPolicyTest,
   InstallPWA(GURL(kCanvasAppURL), ash::kCanvasAppId);
 
   // Disable app with hidden mode.
-  const base::Value::List system_features = base::Value::List()
-                                                .Append(kCameraFeature)
-                                                .Append(kScanningFeature)
-                                                .Append(kWebStoreFeature)
-                                                .Append(kCanvasFeature)
-                                                .Append(kCroshFeature)
-                                                .Append(kGalleryFeature)
-                                                .Append(kTerminalFeature)
-                                                .Append(kPrintJobsFeature)
-                                                .Append(kKeyShortcutsFeature)
-                                                .Append(kRecorderFeature);
+  const base::ListValue system_features = base::ListValue()
+                                              .Append(kCameraFeature)
+                                              .Append(kScanningFeature)
+                                              .Append(kWebStoreFeature)
+                                              .Append(kCanvasFeature)
+                                              .Append(kCroshFeature)
+                                              .Append(kGalleryFeature)
+                                              .Append(kTerminalFeature)
+                                              .Append(kPrintJobsFeature)
+                                              .Append(kKeyShortcutsFeature)
+                                              .Append(kRecorderFeature);
   UpdateSystemFeaturesDisableList(system_features.Clone(),
                                   kSystemFeaturesDisableModeHidden);
 
@@ -504,17 +505,17 @@ IN_PROC_BROWSER_TEST_F(SystemFeaturesPolicyTest,
 
 IN_PROC_BROWSER_TEST_F(SystemFeaturesPolicyTest,
                        DisableMultipleAppsWithBlockedModeBeforeInstall) {
-  const base::Value::List system_features = base::Value::List()
-                                                .Append(kCameraFeature)
-                                                .Append(kScanningFeature)
-                                                .Append(kWebStoreFeature)
-                                                .Append(kCanvasFeature)
-                                                .Append(kCroshFeature)
-                                                .Append(kGalleryFeature)
-                                                .Append(kTerminalFeature)
-                                                .Append(kPrintJobsFeature)
-                                                .Append(kKeyShortcutsFeature)
-                                                .Append(kRecorderFeature);
+  const base::ListValue system_features = base::ListValue()
+                                              .Append(kCameraFeature)
+                                              .Append(kScanningFeature)
+                                              .Append(kWebStoreFeature)
+                                              .Append(kCanvasFeature)
+                                              .Append(kCroshFeature)
+                                              .Append(kGalleryFeature)
+                                              .Append(kTerminalFeature)
+                                              .Append(kPrintJobsFeature)
+                                              .Append(kKeyShortcutsFeature)
+                                              .Append(kRecorderFeature);
   UpdateSystemFeaturesDisableList(system_features.Clone(),
                                   kSystemFeaturesDisableModeHidden);
 
@@ -549,7 +550,7 @@ IN_PROC_BROWSER_TEST_F(SystemFeaturesPolicyTest,
 }
 
 IN_PROC_BROWSER_TEST_F(SystemFeaturesPolicyTest, RedirectChromeSettingsURL) {
-  base::Value::List system_features;
+  base::ListValue system_features;
   system_features.Append(kBrowserSettingsFeature);
   UpdateSystemFeaturesDisableList(std::move(system_features), nullptr);
 
@@ -563,11 +564,11 @@ IN_PROC_BROWSER_TEST_F(SystemFeaturesPolicyTest, RedirectChromeSettingsURL) {
 }
 
 IN_PROC_BROWSER_TEST_F(SystemFeaturesPolicyTest, RedirectCroshURL) {
-  base::Value::List system_features;
+  base::ListValue system_features;
   system_features.Append(kCroshFeature);
   UpdateSystemFeaturesDisableList(std::move(system_features), nullptr);
 
-  GURL crosh_url = GURL(chrome::kChromeUIUntrustedCroshURL);
+  GURL crosh_url = GURL(ash::kChromeUIUntrustedCroshURL);
   EXPECT_EQ(l10n_util::GetStringUTF16(IDS_CHROME_URLS_DISABLED_PAGE_HEADER),
             GetWebUITitle(crosh_url, false));
 
@@ -596,7 +597,7 @@ class MgsSystemFeaturesPolicyTest : public SystemFeaturesPolicyTestBase {
   ~MgsSystemFeaturesPolicyTest() override = default;
 
   void VerifyAppDisableMode(const char* app_id, const char* feature) override {
-    base::Value::List system_features;
+    base::ListValue system_features;
     system_features.Append(feature);
     VisibilityFlags expected_visibility =
         GetVisibilityFlags(false /* is_hidden */);
@@ -628,7 +629,7 @@ class MgsSystemFeaturesPolicyTest : public SystemFeaturesPolicyTestBase {
 
 IN_PROC_BROWSER_TEST_F(MgsSystemFeaturesPolicyTest,
                        DisableWebStoreBeforeInstall) {
-  base::Value::List system_features;
+  base::ListValue system_features;
   system_features.Append(kWebStoreFeature);
   VisibilityFlags expected_visibility =
       GetVisibilityFlags(false /* is_hidden */);
@@ -653,7 +654,7 @@ IN_PROC_BROWSER_TEST_F(MgsSystemFeaturesPolicyTest,
 IN_PROC_BROWSER_TEST_F(MgsSystemFeaturesPolicyTest,
                        DisableWebStoreAfterInstallWithModes) {
   EnableExtensions(false);
-  base::Value::List system_features;
+  base::ListValue system_features;
   system_features.Append(kWebStoreFeature);
   VisibilityFlags expected_visibility =
       GetVisibilityFlags(false /* is_hidden */);
@@ -727,17 +728,17 @@ IN_PROC_BROWSER_TEST_F(MgsSystemFeaturesPolicyTest,
   InstallPWA(GURL(kCanvasAppURL), ash::kCanvasAppId);
 
   // Disable app with hidden mode.
-  const base::Value::List system_features = base::Value::List()
-                                                .Append(kCameraFeature)
-                                                .Append(kScanningFeature)
-                                                .Append(kWebStoreFeature)
-                                                .Append(kCanvasFeature)
-                                                .Append(kCroshFeature)
-                                                .Append(kGalleryFeature)
-                                                .Append(kTerminalFeature)
-                                                .Append(kPrintJobsFeature)
-                                                .Append(kKeyShortcutsFeature)
-                                                .Append(kRecorderFeature);
+  const base::ListValue system_features = base::ListValue()
+                                              .Append(kCameraFeature)
+                                              .Append(kScanningFeature)
+                                              .Append(kWebStoreFeature)
+                                              .Append(kCanvasFeature)
+                                              .Append(kCroshFeature)
+                                              .Append(kGalleryFeature)
+                                              .Append(kTerminalFeature)
+                                              .Append(kPrintJobsFeature)
+                                              .Append(kKeyShortcutsFeature)
+                                              .Append(kRecorderFeature);
   UpdateSystemFeaturesDisableList(system_features.Clone(),
                                   kSystemFeaturesDisableModeHidden);
 
@@ -821,17 +822,17 @@ IN_PROC_BROWSER_TEST_F(MgsSystemFeaturesPolicyTest,
 
 IN_PROC_BROWSER_TEST_F(MgsSystemFeaturesPolicyTest,
                        DisableMultipleAppsWithHiddenModeBeforeInstall) {
-  const base::Value::List system_features = base::Value::List()
-                                                .Append(kCameraFeature)
-                                                .Append(kScanningFeature)
-                                                .Append(kWebStoreFeature)
-                                                .Append(kCanvasFeature)
-                                                .Append(kCroshFeature)
-                                                .Append(kGalleryFeature)
-                                                .Append(kTerminalFeature)
-                                                .Append(kPrintJobsFeature)
-                                                .Append(kKeyShortcutsFeature)
-                                                .Append(kRecorderFeature);
+  const base::ListValue system_features = base::ListValue()
+                                              .Append(kCameraFeature)
+                                              .Append(kScanningFeature)
+                                              .Append(kWebStoreFeature)
+                                              .Append(kCanvasFeature)
+                                              .Append(kCroshFeature)
+                                              .Append(kGalleryFeature)
+                                              .Append(kTerminalFeature)
+                                              .Append(kPrintJobsFeature)
+                                              .Append(kKeyShortcutsFeature)
+                                              .Append(kRecorderFeature);
   UpdateSystemFeaturesDisableList(system_features.Clone(),
                                   kSystemFeaturesDisableModeHidden);
 

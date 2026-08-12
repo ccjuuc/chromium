@@ -24,6 +24,7 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.MinAndroidSdkLevel;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -45,6 +46,7 @@ import java.util.List;
     NotificationFeatureMap.CACHE_NOTIIFICATIONS_ENABLED,
     ChromeFeatureList.SAFETY_HUB_DISRUPTIVE_NOTIFICATION_REVOCATION + ":shadow_run/false"
 })
+@DisableFeatures(ChromeFeatureList.SETTINGS_IN_TAB) // crbug.com/521895796
 @Batch(Batch.PER_CLASS)
 @Restriction(DeviceRestriction.RESTRICTION_TYPE_NON_AUTO)
 // For some reason these tests are flaky on earlier versions of Android.
@@ -56,7 +58,11 @@ public final class UnsubscribedNotificationsNotificationTest {
     @SmallTest
     @Feature({"SafetyHubNotification"})
     public void testReviewNotification() throws Exception {
-        UnsubscribedNotificationsNotificationManager.displayNotification(1);
+        UnsubscribedNotificationsNotificationManager.displayNotification(
+                /* numRevokedPermissions= */ 1,
+                "example.com",
+                /* anySuspiciousRevocations= */ false,
+                /* anyDisruptiveRevocations= */ true);
         List<MockNotificationManagerProxy.NotificationEntry> notifications =
                 mNotificationTestRule.getNotificationEntries();
         assertEquals(1, notifications.size());
@@ -91,7 +97,11 @@ public final class UnsubscribedNotificationsNotificationTest {
     @SmallTest
     @Feature({"SafetyHubNotification"})
     public void testReviewNotificationClickingOnContent() throws Exception {
-        UnsubscribedNotificationsNotificationManager.displayNotification(1);
+        UnsubscribedNotificationsNotificationManager.displayNotification(
+                /* numRevokedPermissions= */ 1,
+                "example.com",
+                /* anySuspiciousRevocations= */ true,
+                /* anyDisruptiveRevocations= */ false);
         List<MockNotificationManagerProxy.NotificationEntry> notifications =
                 mNotificationTestRule.getNotificationEntries();
         assertEquals(1, notifications.size());

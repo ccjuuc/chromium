@@ -21,6 +21,7 @@
 #include "base/strings/string_view_util.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
+#include "media/base/channel_layout.h"
 #include "media/base/media_log.h"
 #include "media/base/media_util.h"
 #include "media/base/mock_filters.h"
@@ -426,16 +427,17 @@ class FrameProcessorTest : public ::testing::TestWithParam<bool> {
                                                       MediaTrack::Id("1"));
         AudioDecoderConfig decoder_config;
         static constexpr int kSampleRate = 3000;
+        static constexpr ChannelLayoutConfig kChannelLayoutConfig =
+            ChannelLayoutConfig::Stereo();
         if (support_audio_nonkeyframes) {
           decoder_config = AudioDecoderConfig(
-              AudioCodec::kAAC, kSampleFormatPlanarF32, CHANNEL_LAYOUT_STEREO,
+              AudioCodec::kAAC, kSampleFormatPlanarF32, kChannelLayoutConfig,
               kSampleRate, EmptyExtraData(), EncryptionScheme::kUnencrypted);
           decoder_config.set_profile(AudioCodecProfile::kXHE_AAC);
         } else {
           decoder_config = AudioDecoderConfig(
-              AudioCodec::kVorbis, kSampleFormatPlanarF32,
-              CHANNEL_LAYOUT_STEREO, kSampleRate, EmptyExtraData(),
-              EncryptionScheme::kUnencrypted);
+              AudioCodec::kVorbis, kSampleFormatPlanarF32, kChannelLayoutConfig,
+              kSampleRate, EmptyExtraData(), EncryptionScheme::kUnencrypted);
         }
         frame_processor_->OnPossibleAudioConfigUpdate(decoder_config);
         ASSERT_TRUE(
@@ -1917,6 +1919,55 @@ TEST_P(FrameProcessorTest, OnlyKeyframes_ContinuousDts_ContinuousPts_2) {
   CheckReadsThenReadStalls(audio_.get(), "0 10 20 30");
 }
 
+TEST_P(FrameProcessorTest, Audio_FilterDuplicateZeroDurationBuffers) {
+  // Verifies that duplicate zero-duration audio frames appended in a single
+  // process call are filtered, keeping only the last one.
+  InSequence s;
+  AddTestTracks(HAS_AUDIO | OBSERVE_APPENDS_AND_GROUP_STARTS);
+  if (use_sequence_mode_) {
+    frame_processor_->SetSequenceMode(true);
+  }
+
+  frame_duration_ = base::TimeDelta();
+
+  base::TimeDelta expected_timestamp =
+      use_sequence_mode_ ? timestamp_offset_ : Milliseconds(497);
+
+  EXPECT_CALL(callbacks_, OnGroupStart(DemuxerStream::AUDIO, _, _));
+  EXPECT_CALL(callbacks_, OnAppend(DemuxerStream::AUDIO, _));
+  EXPECT_CALL(callbacks_, PossibleDurationIncrease(expected_timestamp));
+
+  EXPECT_TRUE(ProcessFrames("497K 497K 497K", ""));
+
+  std::string expected_read = use_sequence_mode_ ? "0:497K" : "497K";
+  CheckReadsAndKeyframenessThenReadStalls(audio_.get(), expected_read);
+}
+
+TEST_P(FrameProcessorTest, Video_KeepDuplicateZeroDurationBuffers) {
+  // Verifies that duplicate zero-duration video frames appended in a single
+  // process call are kept (not filtered) to preserve decode dependencies.
+  InSequence s;
+  AddTestTracks(HAS_VIDEO | OBSERVE_APPENDS_AND_GROUP_STARTS);
+  if (use_sequence_mode_) {
+    frame_processor_->SetSequenceMode(true);
+  }
+
+  frame_duration_ = base::TimeDelta();
+
+  base::TimeDelta expected_timestamp =
+      use_sequence_mode_ ? timestamp_offset_ : Milliseconds(497);
+
+  EXPECT_CALL(callbacks_, OnGroupStart(DemuxerStream::VIDEO, _, _));
+  EXPECT_CALL(callbacks_, OnAppend(DemuxerStream::VIDEO, _));
+  EXPECT_CALL(callbacks_, PossibleDurationIncrease(expected_timestamp));
+
+  EXPECT_TRUE(ProcessFrames("", "497K 497K 497K"));
+
+  std::string expected_read =
+      use_sequence_mode_ ? "0:497K 0:497K 0:497K" : "497K 497K 497K";
+  CheckReadsAndKeyframenessThenReadStalls(video_.get(), expected_read);
+}
+
 TEST_P(FrameProcessorTest,
        OnlyKeyframes_ContinuousDts_DiscontinuousPtsJustBeyondFudgeRoom) {
   // Verifies that multiple group starts and distinct appends occur
@@ -2574,6 +2625,49 @@ TEST_P(FrameProcessorTest, FrameEndTimestamp_kInfiniteDuration_Fails) {
   SetTimestampOffset(kInfiniteDuration - Milliseconds(5));
   EXPECT_MEDIA_LOG(FrameEndTimestampOutOfRange("audio"));
   EXPECT_FALSE(ProcessFrames("0|0K", ""));
+}
+
+TEST_P(FrameProcessorTest, Audio_OverwriteDuplicateZeroDurationBuffers) {
+  // Verifies that duplicate zero-duration audio frames appended across
+  // separate process calls do not accumulate and are overwritten.
+  InSequence s;
+  AddTestTracks(HAS_AUDIO | OBSERVE_APPENDS_AND_GROUP_STARTS);
+  if (use_sequence_mode_) {
+    frame_processor_->SetSequenceMode(true);
+  }
+
+  frame_duration_ = base::TimeDelta();  // Set duration to 0 for these buffers
+
+  base::TimeDelta expected_timestamp =
+      use_sequence_mode_ ? timestamp_offset_ : Milliseconds(497);
+
+  EXPECT_CALL(callbacks_, OnGroupStart(DemuxerStream::AUDIO, _, _));
+  EXPECT_CALL(callbacks_, OnAppend(DemuxerStream::AUDIO, _))
+      .WillOnce([expected_timestamp](const DemuxerStream::Type type,
+                                     const BufferQueue* buffers) {
+        EXPECT_EQ(buffers->size(), 1u);
+        EXPECT_EQ((*buffers)[0]->timestamp(), expected_timestamp);
+      });
+  EXPECT_CALL(callbacks_, PossibleDurationIncrease(expected_timestamp));
+
+  EXPECT_TRUE(ProcessFrames("497K", ""));
+
+  // Second append: 1 frame at the same timestamp.
+  // MseTrackBuffer will not filter it since they are in separate calls,
+  // but SourceBufferStream should overwrite the existing one.
+  EXPECT_CALL(callbacks_, OnAppend(DemuxerStream::AUDIO, _))
+      .WillOnce([expected_timestamp](const DemuxerStream::Type type,
+                                     const BufferQueue* buffers) {
+        EXPECT_EQ(buffers->size(), 1u);
+        EXPECT_EQ((*buffers)[0]->timestamp(), expected_timestamp);
+      });
+  EXPECT_CALL(callbacks_, PossibleDurationIncrease(expected_timestamp));
+
+  EXPECT_TRUE(ProcessFrames("497K", ""));
+
+  // Verify that only a single frame exists in the stream (no accumulation).
+  std::string expected_read = use_sequence_mode_ ? "0:497K" : "497K";
+  CheckReadsAndKeyframenessThenReadStalls(audio_.get(), expected_read);
 }
 
 INSTANTIATE_TEST_SUITE_P(SequenceMode, FrameProcessorTest, Values(true));

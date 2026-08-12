@@ -7,10 +7,15 @@
 
 #include "base/memory/raw_ptr.h"
 #include "chrome/common/chrome_render_frame.mojom.h"
+#include "components/actor/public/mojom/actor_types.mojom-forward.h"
 #include "components/optimization_guide/core/model_quality/model_quality_log_entry.h"
 #include "components/optimization_guide/core/model_quality/model_quality_logs_uploader_service.h"
 
 class Profile;
+namespace autofill {
+class PasswordRequirementsSpec;
+}  // namespace autofill
+
 namespace content {
 class WebContents;
 }
@@ -18,12 +23,23 @@ class WebContents;
 namespace password_manager {
 enum class LogInWithChangedPasswordOutcome;
 struct PasswordForm;
-}
+}  // namespace password_manager
 
 // Helper class which handles Model Logging Quality logic and uploads the
 // logs to the Server.
 class ModelQualityLogsUploader {
  public:
+  enum class FormDiscardReason {
+    kUnknown = 0,
+    kNoNewPasswordField = 1,
+    kNewPasswordFieldDisabled = 2,
+    kUsernameFieldEmptyAndFocusable = 3,
+    kFieldToIgnore = 4,
+    kNoDriver = 5,
+    kFormNotVisible = 6,
+    kNotInPrimaryMainFrame = 7,
+  };
+
   using LoggingData =
       optimization_guide::proto::PasswordChangeSubmissionLoggingData;
   using QualityStatus = optimization_guide::proto::
@@ -93,6 +109,14 @@ class ModelQualityLogsUploader {
   // information, e. g. form signature, fields & buttons texts.
   void SetChangePasswordFormData(
       const password_manager::PasswordForm& password_form);
+
+  // Called when APC flow discards a parsed form.
+  void RecordDiscardedForm(const password_manager::PasswordForm* password_form,
+                           FormDiscardReason discard_reason);
+
+  // Called when generating a password. Logs password requirements spec.
+  void SetPasswordRequirementsSpec(
+      const autofill::PasswordRequirementsSpec& spec);
 
   void SetStepDuration(FlowStep step, base::TimeDelta duration);
 

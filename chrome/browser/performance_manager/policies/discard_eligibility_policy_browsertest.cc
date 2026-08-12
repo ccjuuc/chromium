@@ -4,11 +4,12 @@
 
 #include "chrome/browser/performance_manager/policies/discard_eligibility_policy.h"
 
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "base/containers/contains.h"
+#include "base/base_switches.h"
 #include "base/memory/weak_ptr.h"
 #include "base/types/expected.h"
 #include "chrome/browser/apps/link_capturing/link_capturing_feature_test_support.h"
@@ -30,7 +31,9 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/no_renderer_crashes_assertion.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/chrome_debug_urls.h"
 #include "url/gurl.h"
 
 namespace performance_manager::policies {
@@ -38,6 +41,7 @@ namespace performance_manager::policies {
 using DiscardReason = DiscardEligibilityPolicy::DiscardReason;
 using CanDiscardResult::kEligible;
 using CanDiscardResult::kProtected;
+using performance_manager::testing::ExpectCanDiscardDisallowedAllReasons;
 using performance_manager::testing::ExpectCanDiscardEligibleAllReasons;
 using performance_manager::testing::ExpectCanDiscardProtected;
 
@@ -86,8 +90,10 @@ IN_PROC_BROWSER_TEST_F(DiscardEligibilityPolicyBrowserTest,
   // When another tab is activated, both tabs in the split view can be
   // discarded.
   tab_strip_model->ActivateTabAt(index3);
-  ExpectCanDiscardEligibleAllReasons(page_node1, base::TimeDelta());
-  ExpectCanDiscardEligibleAllReasons(page_node2, base::TimeDelta());
+  ExpectCanDiscardEligibleAllReasons(page_node1,
+                                     /*ignore_recent_visibility=*/true);
+  ExpectCanDiscardEligibleAllReasons(page_node2,
+                                     /*ignore_recent_visibility=*/true);
 
   // When a tab in the split view is activated, both tabs in the split view can
   // not be discarded.
@@ -109,18 +115,29 @@ IN_PROC_BROWSER_TEST_F(DiscardEligibilityPolicyBrowserTest,
   // When another tab is activated, both tabs in the split view can be
   // discarded.
   tab_strip_model->ActivateTabAt(index3);
-  ExpectCanDiscardEligibleAllReasons(page_node1, base::TimeDelta());
-  ExpectCanDiscardEligibleAllReasons(page_node2, base::TimeDelta());
+  ExpectCanDiscardEligibleAllReasons(page_node1,
+                                     /*ignore_recent_visibility=*/true);
+  ExpectCanDiscardEligibleAllReasons(page_node2,
+                                     /*ignore_recent_visibility=*/true);
 }
 
 // Test DiscardEligibilityPolicy behavior with web application.
 class DiscardEligibilityPolicyWebAppBrowserTest
-    : public web_app::WebAppBrowserTestBase {
+    : public web_app::WebAppBrowserTestBase,
+      public ::testing::WithParamInterface<
+          apps::test::LinkCapturingFeatureVersion> {
  public:
   constexpr static std::string_view kTestAppUrl =
       "https://www.example.com/app/";
 
-  DiscardEligibilityPolicyWebAppBrowserTest() = default;
+  DiscardEligibilityPolicyWebAppBrowserTest() {
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        apps::test::GetFeaturesToEnableLinkCapturingUX(GetParam()), {});
+  }
+
+  bool LinkCapturingEnabledByDefault() const {
+    return GetParam() == apps::test::LinkCapturingFeatureVersion::kV2DefaultOn;
+  }
 
   // Convenience wrappers for DiscardEligibilityPolicy::CanDiscard().
   CanDiscardResult CanDiscard(
@@ -129,18 +146,24 @@ class DiscardEligibilityPolicyWebAppBrowserTest
       std::vector<CannotDiscardReason>* cannot_discard_reasons = nullptr) {
     return DiscardEligibilityPolicy::GetFromGraph(page_node->GetGraph())
         ->CanDiscard(page_node, discard_reason,
-                     kNonVisiblePagesUrgentProtectionTime,
+                     /*ignore_recent_visibility=*/false,
                      cannot_discard_reasons);
   }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_F(DiscardEligibilityPolicyWebAppBrowserTest,
+IN_PROC_BROWSER_TEST_P(DiscardEligibilityPolicyWebAppBrowserTest,
                        CannotDiscardWebApp) {
   // Set up the web application.
   webapps::AppId app_id =
       web_app::test::InstallDummyWebApp(profile(), "App", GURL(kTestAppUrl));
-  ASSERT_EQ(apps::test::EnableLinkCapturingByUser(profile(), app_id),
-            base::ok());
+
+  if (!LinkCapturingEnabledByDefault()) {
+    ASSERT_EQ(apps::test::EnableLinkCapturingByUser(profile(), app_id),
+              base::ok());
+  }
 
   content::WebContents* browser_tab =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -164,17 +187,66 @@ IN_PROC_BROWSER_TEST_F(DiscardEligibilityPolicyWebAppBrowserTest,
   std::vector<CannotDiscardReason> reasons_vec;
   EXPECT_EQ(kProtected,
             CanDiscard(page_node.get(), DiscardReason::URGENT, &reasons_vec));
-  EXPECT_TRUE(base::Contains(reasons_vec, CannotDiscardReason::kWebApp));
+  EXPECT_TRUE(std::ranges::contains(reasons_vec, CannotDiscardReason::kWebApp));
 
   reasons_vec.clear();
   EXPECT_EQ(kProtected, CanDiscard(page_node.get(), DiscardReason::PROACTIVE,
                                    &reasons_vec));
-  EXPECT_TRUE(base::Contains(reasons_vec, CannotDiscardReason::kWebApp));
+  EXPECT_TRUE(std::ranges::contains(reasons_vec, CannotDiscardReason::kWebApp));
 
   reasons_vec.clear();
   EXPECT_EQ(kEligible,
             CanDiscard(page_node.get(), DiscardReason::EXTERNAL, &reasons_vec));
   EXPECT_TRUE(reasons_vec.empty());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    DiscardEligibilityPolicyWebAppBrowserTest,
+    ::testing::Values(apps::test::LinkCapturingFeatureVersion::kV2DefaultOff,
+                      apps::test::LinkCapturingFeatureVersion::kV2DefaultOn),
+    apps::test::LinkCapturingVersionToString);
+
+class DiscardEligibilityPolicyCrashBrowserTest
+    : public DiscardEligibilityPolicyBrowserTest {
+ private:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    command_line->AppendSwitch(switches::kDisableBreakpad);
+  }
+
+  content::ScopedAllowRendererCrashes scoped_allow_renderer_crashes_;
+};
+
+// Verify a crashed tab cannot be discarded.
+IN_PROC_BROWSER_TEST_F(DiscardEligibilityPolicyCrashBrowserTest,
+                       CannotDiscardCrashed) {
+  // Open tabs for testing.
+  const int index1 = 1, index2 = 2;
+  ASSERT_TRUE(
+      AddTabAtIndex(index1, GetTestingURL(), ui::PAGE_TRANSITION_TYPED));
+  ASSERT_TRUE(
+      AddTabAtIndex(index2, GetTestingURL(), ui::PAGE_TRANSITION_TYPED));
+
+  TabStripModel* tab_strip_model = browser()->tab_strip_model();
+  content::WebContents* contents1 = tab_strip_model->GetWebContentsAt(index1);
+  PageNode* page_node1 =
+      PerformanceManager::GetPrimaryPageNodeForWebContents(contents1).get();
+  ASSERT_TRUE(page_node1);
+
+  ExpectCanDiscardEligibleAllReasons(page_node1,
+                                     /*ignore_recent_visibility=*/true);
+
+  content::CrashTab(contents1);
+
+  ExpectCanDiscardDisallowedAllReasons(page_node1,
+                                       CannotDiscardReason::kNoMainFrame);
+
+  ui_test_utils::UrlLoadObserver url_observer((GetTestingURL()));
+  contents1->GetController().Reload(content::ReloadType::NORMAL, false);
+  url_observer.Wait();
+
+  ExpectCanDiscardEligibleAllReasons(page_node1,
+                                     /*ignore_recent_visibility=*/true);
 }
 
 }  // namespace

@@ -5,9 +5,12 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_INTEGRATORS_AUTOFILL_AI_METRICS_AUTOFILL_AI_UKM_LOGGER_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_INTEGRATORS_AUTOFILL_AI_METRICS_AUTOFILL_AI_UKM_LOGGER_H_
 
-#include <cstddef>
+#include <stddef.h>
+
+#include <map>
 
 #include "base/memory/raw_ref.h"
+#include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
 #include "components/autofill/core/browser/form_structure.h"
@@ -39,7 +42,7 @@ class AutofillAiUkmLogger {
       AutofillClient::AutofillAiImportPromptType prompt_type,
       EntityType entity_type,
       EntityInstance::RecordType record_type,
-      AutofillClient::AutofillAiBubbleClosedReason close_reason,
+      AutofillClient::AutofillAiBubbleResult result,
       ukm::SourceId ukm_source_id);
 
   // These values are persisted to logs. Entries should not be renumbered and

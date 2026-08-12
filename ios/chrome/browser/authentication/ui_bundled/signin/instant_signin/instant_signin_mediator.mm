@@ -5,6 +5,7 @@
 #import "ios/chrome/browser/authentication/ui_bundled/signin/instant_signin/instant_signin_mediator.h"
 
 #import "base/memory/raw_ptr.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/objc/identity_manager_observer_bridge.h"
 #import "ios/chrome/browser/authentication/ui_bundled/authentication_flow/authentication_flow.h"
 #import "ios/chrome/browser/authentication/ui_bundled/authentication_flow/authentication_flow_delegate.h"
@@ -19,7 +20,7 @@ using signin_metrics::PromoAction;
 
 @interface InstantSigninMediator () <AuthenticationFlowDelegate,
                                      AuthenticationServiceObserving,
-                                     IdentityManagerObserverBridgeDelegate>
+                                     IdentityManagerObserving>
 @end
 
 @implementation InstantSigninMediator {
@@ -64,7 +65,7 @@ using signin_metrics::PromoAction;
 }
 
 - (void)dealloc {
-  CHECK(!_authServiceObserverBridge, base::NotFatalUntil::M145);
+  CHECK(!_authServiceObserverBridge);
 }
 
 #pragma mark - Public
@@ -89,15 +90,18 @@ using signin_metrics::PromoAction;
 
 #pragma mark - AuthenticationFlowDelegate
 
-- (void)
-    authenticationFlowDidSignInInSameProfileWithCancelationReason:
-        (signin_ui::CancelationReason)cancelationReason
-                                                         identity:
-                                                             (id<SystemIdentity>)
-                                                                 identity {
+- (void)authenticationFlowDidSignInInSameProfileWithIdentity:
+            (id<SystemIdentity>)identity
+                                           cancelationReason:
+                                               (signin_ui::CancelationReason)
+                                                   cancelationReason
+                                                  completion:(ProceduralBlock)
+                                                                 completion {
+  CHECK(completion);
   _authenticationFlow = nil;
   [self.delegate instantSigninMediator:self
         didSigninWithCancelationResult:cancelationReason];
+  completion();
 }
 
 - (void)authenticationFlowWillSwitchProfileWithReadyCompletion:
@@ -117,9 +121,9 @@ using signin_metrics::PromoAction;
   }
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
   if (_authenticationFlow) {
     // Authentication is started. The instant signin will be stopped by the

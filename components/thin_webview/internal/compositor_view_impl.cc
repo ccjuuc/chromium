@@ -6,9 +6,11 @@
 
 #include <memory>
 
+#include "base/android/callback_android.h"
 #include "base/android/jni_android.h"
 #include "cc/slim/layer.h"
 #include "cc/slim/solid_color_layer.h"
+#include "components/thin_webview/features.h"
 #include "content/public/browser/android/compositor.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/android/color_utils_android.h"
@@ -25,16 +27,21 @@ namespace {
 const int kPixelFormatUnknown = 0;
 }  // namespace
 
-static jlong JNI_CompositorViewImpl_Init(
+static int64_t JNI_CompositorViewImpl_Init(
     JNIEnv* env,
     const JavaRef<jobject>& obj,
     const JavaRef<jobject>& jwindow_android,
-    jint java_background_color) {
+    int32_t java_background_color) {
   ui::WindowAndroid* window_android =
       ui::WindowAndroid::FromJavaWindowAndroid(jwindow_android);
   auto compositor_view = std::make_unique<CompositorViewImpl>(
       env, obj, window_android, java_background_color);
   return reinterpret_cast<intptr_t>(compositor_view.release());
+}
+
+static bool JNI_CompositorViewImpl_ShouldUseSurfaceView(JNIEnv* env) {
+  return base::FeatureList::IsEnabled(
+      thin_webview::android::kUseSurfaceViewForThinWebView);
 }
 
 // static
@@ -88,9 +95,9 @@ void CompositorViewImpl::SurfaceDestroyed(JNIEnv* env) {
 }
 
 void CompositorViewImpl::SurfaceChanged(JNIEnv* env,
-                                        jint format,
-                                        jint width,
-                                        jint height,
+                                        int32_t format,
+                                        int32_t width,
+                                        int32_t height,
                                         bool can_be_used_with_surface_control,
                                         const JavaRef<jobject>& surface) {
   DCHECK(surface);
@@ -106,6 +113,15 @@ void CompositorViewImpl::SurfaceChanged(JNIEnv* env,
 
 void CompositorViewImpl::SetNeedsComposite(JNIEnv* env) {
   compositor_->SetNeedsComposite();
+}
+
+void CompositorViewImpl::RunOnNextFrame(JNIEnv* env,
+                                        base::OnceClosure callback) {
+  compositor_->RequestSuccessfulPresentationTimeForNextFrame(base::BindOnce(
+      [](base::OnceClosure cb, const viz::FrameTimingDetails& details) {
+        std::move(cb).Run();
+      },
+      std::move(callback)));
 }
 
 void CompositorViewImpl::SetRootLayer(scoped_refptr<cc::slim::Layer> layer) {

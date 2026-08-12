@@ -64,7 +64,7 @@ ScheduledAction::ScheduledAction(ScriptState* script_state,
           To<LocalDOMWindow>(&target))) {
     function_ = handler;
     arguments_ = arguments;
-    task_state_ = CaptureCurrentTaskStateIfMainWorld(script_state);
+    task_state_ = CaptureCurrentTaskState(ExecutionContext::From(script_state));
   } else {
     UseCounter::Count(target, WebFeature::kScheduledActionIgnored);
   }
@@ -80,7 +80,7 @@ ScheduledAction::ScheduledAction(ScriptState* script_state,
           EnteredDOMWindow(script_state->GetIsolate()),
           To<LocalDOMWindow>(&target))) {
     code_ = handler;
-    task_state_ = CaptureCurrentTaskStateIfMainWorld(script_state);
+    task_state_ = CaptureCurrentTaskState(ExecutionContext::From(script_state));
   } else {
     UseCounter::Count(target, WebFeature::kScheduledActionIgnored);
   }
@@ -156,7 +156,7 @@ void ScheduledAction::Execute(ExecutionContext* context) {
   // TODO(crbug.com/1133238): Plumb base URL etc. from the initializing script.
   DVLOG(1) << "ScheduledAction::execute " << this << ": executing from source";
   ClassicScript* script =
-      ClassicScript::Create(code_, KURL(), KURL(), ScriptFetchOptions(),
+      ClassicScript::Create(code_, NullUrl(), NullUrl(), ScriptFetchOptions(),
                             ScriptSourceLocationType::kEvalForScheduledAction,
                             SanitizeScriptErrors::kDoNotSanitize);
   script->RunScriptOnScriptState(script_state);

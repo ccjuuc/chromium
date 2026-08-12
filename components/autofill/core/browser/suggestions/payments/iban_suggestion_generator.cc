@@ -4,16 +4,32 @@
 
 #include "components/autofill/core/browser/suggestions/payments/iban_suggestion_generator.h"
 
-#include "base/containers/contains.h"
-#include "base/containers/to_vector.h"
+#include <algorithm>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/functional/callback.h"
 #include "base/functional/function_ref.h"
 #include "base/strings/string_util.h"
+#include "build/buildflag.h"
+#include "components/autofill/core/browser/autofill_browser_util.h"
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
+#include "components/autofill/core/browser/data_model/payments/iban.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/integrators/optimization_guide/autofill_optimization_guide_decider.h"
+#include "components/autofill/core/browser/metrics/payments/iban_metrics.h"
 #include "components/autofill/core/browser/payments/iban_manager.h"
 #include "components/autofill/core/browser/suggestions/payments/payments_suggestion_generator_util.h"
+#include "components/autofill/core/browser/suggestions/suggestion.h"
+#include "components/autofill/core/browser/suggestions/suggestion_type.h"
+#include "components/autofill/core/common/form_data.h"
 #include "components/grit/components_scaled_resources.h"
+#include "components/strings/grit/components_strings.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 
 namespace autofill {
@@ -85,27 +101,47 @@ std::vector<Suggestion> GetSuggestionsForIbans(const std::vector<Iban>& ibans) {
   return suggestions;
 }
 
+// Filter out IBAN-based suggestions based on the following criteria:
+// For local IBANs: Filter out the IBAN value which does not starts with the
+// provided `field_value`.
+// For server IBANs: Filter out IBAN suggestion if any of the following
+// conditions are satisfied:
+// 1. If the IBAN's `prefix` is absent and the length of the `field_value` is
+// less than `kFieldLengthLimitOnServerIbanSuggestion` characters.
+// 2. If the IBAN's prefix is present and prefix matches the `field_value`.
+void FilterIbansToSuggest(const std::u16string& field_value,
+                          std::vector<Iban>& ibans) {
+  std::erase_if(ibans, [&](const Iban& iban) {
+    if (iban.record_type() == Iban::kLocalIban) {
+      return !base::StartsWith(iban.value(), field_value);
+    } else {
+      CHECK_EQ(iban.record_type(), Iban::kServerIban);
+      if (iban.prefix().empty()) {
+        return field_value.length() >= kFieldLengthLimitOnServerIbanSuggestion;
+      } else {
+        return !(iban.prefix().starts_with(field_value) ||
+                 field_value.starts_with(iban.prefix()));
+      }
+    }
+  });
+}
+
 }  // namespace
 
 IbanSuggestionGenerator::IbanSuggestionGenerator() = default;
 IbanSuggestionGenerator::~IbanSuggestionGenerator() = default;
 
-void IbanSuggestionGenerator::FetchSuggestionData(
+void IbanSuggestionGenerator::GenerateSuggestions(
     const FormData& form,
     const FormFieldData& trigger_field,
     const FormStructure* form_structure,
     const AutofillField* trigger_autofill_field,
-    const AutofillClient& client,
-    base::OnceCallback<
-        void(std::pair<SuggestionDataSource,
-                       std::vector<SuggestionGenerator::SuggestionData>>)>
-        callback) {
-  FetchSuggestionData(
+    AutofillClient& client,
+    base::OnceCallback<void(ReturnedSuggestions)> callback) {
+  GenerateSuggestions(
       form, trigger_field, form_structure, trigger_autofill_field, client,
-      [&callback](std::pair<SuggestionDataSource,
-                            std::vector<SuggestionGenerator::SuggestionData>>
-                      suggestion_data) {
-        std::move(callback).Run(std::move(suggestion_data));
+      [&callback](ReturnedSuggestions returned_suggestions) {
+        std::move(callback).Run(std::move(returned_suggestions));
       });
 }
 
@@ -114,28 +150,15 @@ void IbanSuggestionGenerator::GenerateSuggestions(
     const FormFieldData& trigger_field,
     const FormStructure* form_structure,
     const AutofillField* trigger_autofill_field,
-    const AutofillClient& client,
-    const base::flat_map<SuggestionDataSource, std::vector<SuggestionData>>&
-        all_suggestion_data,
-    base::OnceCallback<void(ReturnedSuggestions)> callback) {
-  GenerateSuggestions(
-      form, trigger_field, form_structure, trigger_autofill_field, client,
-      all_suggestion_data,
-      [&callback](ReturnedSuggestions returned_suggestions) {
-        std::move(callback).Run(std::move(returned_suggestions));
-      });
-}
+    AutofillClient& client,
+    base::FunctionRef<void(ReturnedSuggestions)> callback) {
+  if (client.IsAutofillTypeBlockedByPolicy(
+          client.GetLastCommittedPrimaryMainFrameURL(),
+          AutofillClient::AutofillPolicyDataCategory::kPayments)) {
+    callback({SuggestionDataSource::kIban, {}});
+    return;
+  }
 
-void IbanSuggestionGenerator::FetchSuggestionData(
-    const FormData& form,
-    const FormFieldData& trigger_field,
-    const FormStructure* form_structure,
-    const AutofillField* trigger_autofill_field,
-    const AutofillClient& client,
-    base::FunctionRef<
-        void(std::pair<SuggestionDataSource,
-                       std::vector<SuggestionGenerator::SuggestionData>>)>
-        callback) {
   // The field is eligible only if it's focused on an IBAN field.
   if (!trigger_autofill_field ||
       !trigger_autofill_field->Type().GetTypes().contains(IBAN_VALUE)) {
@@ -175,60 +198,27 @@ void IbanSuggestionGenerator::FetchSuggestionData(
   // assume the IBAN has been filled, and don't show any suggestions.
   if (!trigger_autofill_field ||
       (!trigger_autofill_field->value().empty() &&
-       base::Contains(ibans, trigger_autofill_field->value(), &Iban::value))) {
+       std::ranges::contains(ibans, trigger_autofill_field->value(),
+                             &Iban::value))) {
     callback({SuggestionDataSource::kIban, {}});
     return;
   }
 
   FilterIbansToSuggest(trigger_autofill_field->value(), ibans);
-  std::vector<SuggestionData> suggestion_data = base::ToVector(
-      std::move(ibans),
-      [](Iban& iban) { return SuggestionData(std::move(iban)); });
-  callback({SuggestionDataSource::kIban, std::move(suggestion_data)});
-}
+  std::vector<Suggestion> suggestions = GetSuggestionsForIbans(ibans);
 
-void IbanSuggestionGenerator::GenerateSuggestions(
-    const FormData& form,
-    const FormFieldData& trigger_field,
-    const FormStructure* form_structure,
-    const AutofillField* trigger_autofill_field,
-    const AutofillClient& client,
-    const base::flat_map<SuggestionDataSource, std::vector<SuggestionData>>&
-        all_suggestion_data,
-    base::FunctionRef<void(ReturnedSuggestions)> callback) {
-  auto it = all_suggestion_data.find(SuggestionDataSource::kIban);
-  std::vector<SuggestionData> iban_suggestion_data =
-      it != all_suggestion_data.end() ? it->second
-                                      : std::vector<SuggestionData>();
-  if (iban_suggestion_data.empty()) {
-    callback({FillingProduct::kIban, {}});
-    return;
+  // Don't provide IBAN suggestions for non-secure pages, but do provide them
+  // for secure pages with passive mixed content (see implementation of
+  // IsContextSecure).
+  if (!suggestions.empty() && !client.IsContextSecure()) {
+    // Replace the suggestion content with a warning message explaining why
+    // Autofill is disabled for a website.
+    suggestions = {Suggestion(
+        l10n_util::GetStringUTF16(IDS_AUTOFILL_WARNING_INSECURE_CONNECTION),
+        SuggestionType::kInsecureContextPaymentDisabledMessage)};
   }
 
-  std::vector<Iban> ibans = base::ToVector(
-      std::move(iban_suggestion_data), [](SuggestionData& suggestion_data) {
-        return std::get<autofill::Iban>(std::move(suggestion_data));
-      });
-
-  callback({FillingProduct::kIban, GetSuggestionsForIbans(ibans)});
-}
-
-void IbanSuggestionGenerator::FilterIbansToSuggest(
-    const std::u16string& field_value,
-    std::vector<Iban>& ibans) {
-  std::erase_if(ibans, [&](const Iban& iban) {
-    if (iban.record_type() == Iban::kLocalIban) {
-      return !base::StartsWith(iban.value(), field_value);
-    } else {
-      CHECK_EQ(iban.record_type(), Iban::kServerIban);
-      if (iban.prefix().empty()) {
-        return field_value.length() >= kFieldLengthLimitOnServerIbanSuggestion;
-      } else {
-        return !(iban.prefix().starts_with(field_value) ||
-                 field_value.starts_with(iban.prefix()));
-      }
-    }
-  });
+  callback({SuggestionDataSource::kIban, std::move(suggestions)});
 }
 
 }  // namespace autofill

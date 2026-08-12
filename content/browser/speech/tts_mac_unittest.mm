@@ -11,7 +11,10 @@
 
 namespace content {
 
-TEST(TtsMacTest, CachedVoiceData) {
+// TODO(crbug.com/438118294): Re-enable this test.
+TEST(TtsMacTest, DISABLED_CachedVoiceData) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(
+      TtsPlatformImplMac::GetInstance()->sequence_checker_);
   std::vector<VoiceData> voices;
   TtsPlatformImplMac::GetInstance()->GetVoices(&voices);
 
@@ -29,7 +32,7 @@ TEST(TtsMacTest, CachedVoiceData) {
                     object:nil];
 
   // Switching away should have emptied the cache.
-  EXPECT_TRUE(TtsPlatformImplMac::VoicesRefForTesting().empty());
+  EXPECT_TRUE(TtsPlatformImplMac::GetInstance()->voices_.empty());
 
   // Reload.
   voices.clear();

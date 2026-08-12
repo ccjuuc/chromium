@@ -33,7 +33,7 @@
 namespace blink::unicode {
 
 typedef enum {
-  kConversionOK,     // conversion successful
+  kSuccess,          // Conversion successful.
   kSourceExhausted,  // partial character in source, but hit end
   kTargetExhausted,  // insuff. room in target for conversion
   kSourceIllegal     // source sequence is illegal/malformed
@@ -44,6 +44,8 @@ struct ConversionResult {
   base::span<const CharType> converted;
   size_t consumed;
   ConversionStatus status;
+
+  bool IsSuccess() const { return status == kSuccess; }
 };
 
 // These conversion functions take a "strict" argument. When this flag is set to
@@ -74,6 +76,10 @@ WTF_EXPORT ConversionResult<uint8_t> ConvertLatin1ToUtf8(
     base::span<const LChar> source,
     base::span<uint8_t> target);
 
+// To hit the fast path, ensure `target.size()` is at least 3x `source.size()`.
+// For example, an input of 2 UChars (4 bytes) requires a target of at least
+// 2 * 3 = 6 uint8_ts (6 bytes) to guarantee sufficient space for any
+// UTF-8 encoding.
 WTF_EXPORT ConversionResult<uint8_t> ConvertUtf16ToUtf8(
     base::span<const UChar> source,
     base::span<uint8_t> target,

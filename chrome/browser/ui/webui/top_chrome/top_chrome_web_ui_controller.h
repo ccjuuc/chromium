@@ -8,6 +8,10 @@
 #include "base/memory/weak_ptr.h"
 #include "ui/webui/mojo_web_ui_controller.h"
 
+namespace zoom {
+class ZoomDisableLock;
+}
+
 namespace gfx {
 class Point;
 }
@@ -34,16 +38,24 @@ class TopChromeWebUIController : public ui::MojoWebUIController {
   // By default TopChromeWebUIController do not have normal WebUI bindings.
   // Pass |enable_chrome_send| as true if these are needed.
   explicit TopChromeWebUIController(content::WebUI* contents,
-                                    bool enable_chrome_send = false);
+                                    bool enable_chrome_send = false,
+                                    bool enable_chrome_histograms = false);
   TopChromeWebUIController(const TopChromeWebUIController&) = delete;
   TopChromeWebUIController& operator=(const TopChromeWebUIController&) = delete;
   ~TopChromeWebUIController() override;
+
+  content::WebUIController::DisplayDisposition GetDisplayDisposition()
+      const override;
+
+  // ui::MojoWebUIController overrides:
+  void WebUIPrimaryPageChanged(content::Page& page) override;
 
   void set_embedder(base::WeakPtr<Embedder> embedder) { embedder_ = embedder; }
   base::WeakPtr<Embedder> embedder() { return embedder_; }
 
  private:
   base::WeakPtr<Embedder> embedder_;
+  std::unique_ptr<zoom::ZoomDisableLock> zoom_lock_;
 };
 
 #endif  // CHROME_BROWSER_UI_WEBUI_TOP_CHROME_TOP_CHROME_WEB_UI_CONTROLLER_H_

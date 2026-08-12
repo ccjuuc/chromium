@@ -158,16 +158,10 @@ AlsaPcmOutputStream::AlsaPcmOutputStream(const std::string& device_name,
           AudioTimestampHelper::FramesToTime(params.frames_per_buffer() * 2,
                                              sample_rate_))),
       bytes_per_output_frame_(bytes_per_frame_),
-      alsa_buffer_frames_(0),
-      stop_stream_(false),
       wrapper_(wrapper),
-      manager_(manager),
+      manager_(*manager),
       task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()),
-      playback_handle_(nullptr),
       frames_per_packet_(packet_size_ / bytes_per_frame_),
-      state_(kCreated),
-      volume_(1.0f),
-      source_callback_(nullptr),
       audio_bus_(AudioBus::Create(params)),
       tick_clock_(base::DefaultTickClock::GetInstance()) {
   DCHECK(manager_->GetTaskRunner()->BelongsToCurrentThread());
@@ -268,7 +262,7 @@ void AlsaPcmOutputStream::Close() {
                           // uses the flag to verify that stream was closed.
   }
 
-  weak_factory_.InvalidateWeakPtrs();
+  weak_factory_.InvalidateWeakPtrsAndDoom();
 
   // Signal to the manager that we're closed and can be removed.
   // Should be last call in the method as it deletes "this".
@@ -385,7 +379,7 @@ void AlsaPcmOutputStream::BufferPacket(bool* source_exhausted) {
         AudioTimestampHelper::FramesToTime(GetCurrentDelay(), sample_rate_);
 
     auto packet = base::MakeRefCounted<DataBuffer>(packet_size_);
-    int frames_filled =
+    const int frames_filled =
         RunDataCallback(delay, tick_clock_->NowTicks(), audio_bus_.get());
 
     size_t packet_size = frames_filled * bytes_per_frame_;
@@ -400,7 +394,7 @@ void AlsaPcmOutputStream::BufferPacket(bool* source_exhausted) {
       channel_mixer_->Transform(audio_bus_.get(), output_bus);
       output_channel_layout = kDefaultOutputChannelLayout;
       // Adjust packet size for downmix.
-      packet_size = packet_size / bytes_per_frame_ * bytes_per_output_frame_;
+      packet_size = frames_filled * bytes_per_output_frame_;
     }
 
     // Reorder channels for 5.0, 5.1, and 7.1 to match ALSA's channel order,
@@ -424,10 +418,11 @@ void AlsaPcmOutputStream::BufferPacket(bool* source_exhausted) {
 
     // Note: If this ever changes to output raw float the data must be clipped
     // and sanitized since it may come from an untrusted source such as NaCl.
+    // Note: Use the "partial" variant, in case `frames_filled` is less than
+    // `output_bus->frames()`
     output_bus->Scale(volume_);
-    output_bus->ToInterleaved<SignedInt16SampleTypeTraits>(
-        frames_filled,
-        reinterpret_cast<int16_t*>(packet->writable_data().data()));
+    output_bus->ToInterleavedBytesPartial<SignedInt16SampleTypeTraits>(
+        /*read_offset=*/0u, packet->writable_data().first(packet_size));
 
     if (packet_size > 0) {
       packet->set_size(packet_size);
@@ -745,9 +740,9 @@ snd_pcm_t* AlsaPcmOutputStream::AutoSelectDevice(unsigned int latency) {
   uint32_t default_channels = channels_;
   if (default_channels > 2) {
     default_channels = 2;
-    channel_mixer_ = std::make_unique<ChannelMixer>(channel_layout_, channels_,
-                                                    kDefaultOutputChannelLayout,
-                                                    default_channels);
+    channel_mixer_ = std::make_unique<ChannelMixer>(
+        ChannelLayoutConfig(channel_layout_, channels_),
+        ChannelLayoutConfig(kDefaultOutputChannelLayout, default_channels));
     mixed_audio_bus_ = AudioBus::Create(
         default_channels, audio_bus_->frames());
   }

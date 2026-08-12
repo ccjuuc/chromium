@@ -20,10 +20,10 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 
 /** Unit tests for {@link UnwrapObservableSupplier}. */
 @RunWith(BaseRobolectricTestRunner.class)
@@ -48,7 +48,7 @@ public class UnwrapObservableSupplierTest {
             };
 
     private static NullableObservableSupplier<Integer> make(
-            ObservableSupplier<Object> parentSupplier) {
+            NullableObservableSupplier<Object> parentSupplier) {
         return parentSupplier.createDerivedNullable(UnwrapObservableSupplierTest::unwrap);
     }
 
@@ -58,7 +58,8 @@ public class UnwrapObservableSupplierTest {
 
     @Test
     public void testGetWithoutObservers() {
-        ObservableSupplierImpl<Object> parentSupplier = new ObservableSupplierImpl<>();
+        SettableNullableObservableSupplier<Object> parentSupplier =
+                ObservableSuppliers.createNullable();
         NullableObservableSupplier<Integer> unwrapSupplier = make(parentSupplier);
         assertEquals(0, unwrapSupplier.get().intValue());
         assertFalse(parentSupplier.hasObservers());
@@ -78,11 +79,12 @@ public class UnwrapObservableSupplierTest {
 
     @Test
     public void testGetWithObserver() {
-        ObservableSupplierImpl<Object> parentSupplier = new ObservableSupplierImpl<>();
+        SettableNullableObservableSupplier<Object> parentSupplier =
+                ObservableSuppliers.createNullable();
         NullableObservableSupplier<Integer> unwrapSupplier = make(parentSupplier);
-        unwrapSupplier.addObserver(mOnChangeCallback);
+        unwrapSupplier.addSyncObserverAndPostIfNonNull(mOnChangeCallback);
 
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertTrue(parentSupplier.hasObservers());
         verify(mOnChangeCallback, never()).onResult(anyInt());
 
@@ -101,24 +103,25 @@ public class UnwrapObservableSupplierTest {
 
     @Test
     public void testAlreadyHasValueWhenObserverAdded() {
-        ObservableSupplierImpl<Object> parentSupplier = new ObservableSupplierImpl<>(mObject1);
+        SettableNonNullObservableSupplier<Object> parentSupplier =
+                ObservableSuppliers.createNonNull(mObject1);
         NullableObservableSupplier<Integer> unwrapSupplier = make(parentSupplier);
 
-        unwrapSupplier.addObserver(mOnChangeCallback);
+        unwrapSupplier.addSyncObserverAndPostIfNonNull(mOnChangeCallback);
         assertTrue(parentSupplier.hasObservers());
 
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mOnChangeCallback).onResult(eq(1));
     }
 
     @Test
     public void testAddObserver_ShouldNotifyOnAdd() {
-        ObservableSupplierImpl<Object> parentSupplier = new ObservableSupplierImpl<>();
-        parentSupplier.set(3);
+        SettableNonNullObservableSupplier<Object> parentSupplier =
+                ObservableSuppliers.createNonNull(3);
         NullableObservableSupplier<Integer> unwrapSupplier = make(parentSupplier);
-        unwrapSupplier.addObserver(mOnChangeCallback);
+        unwrapSupplier.addSyncObserverAndPostIfNonNull(mOnChangeCallback);
 
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mOnChangeCallback).onResult(eq(3));
 
         parentSupplier.set(mObject1);
@@ -127,11 +130,12 @@ public class UnwrapObservableSupplierTest {
 
     @Test
     public void testAddObserver_ShouldNotNotifyOnAdd() {
-        ObservableSupplierImpl<Object> parentSupplier = new ObservableSupplierImpl<>();
+        SettableMonotonicObservableSupplier<Object> parentSupplier =
+                ObservableSuppliers.createMonotonic();
         NullableObservableSupplier<Integer> unwrapSupplier = make(parentSupplier);
         unwrapSupplier.addSyncObserver(mOnChangeCallback);
 
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         verifyNoInteractions(mOnChangeCallback);
 
         parentSupplier.set(mObject1);

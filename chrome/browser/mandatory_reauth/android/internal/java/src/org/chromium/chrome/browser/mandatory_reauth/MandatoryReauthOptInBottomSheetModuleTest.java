@@ -26,14 +26,12 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.mockito.quality.Strictness;
 import org.robolectric.Robolectric;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.components.autofill.PaymentsUiClosedReason;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
@@ -42,7 +40,6 @@ import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
 
 /** Tests for {@link MandatoryReauthOptInBottomSheetViewBridge} */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.PER_CLASS)
 public class MandatoryReauthOptInBottomSheetModuleTest {
     private MandatoryReauthOptInBottomSheetViewBridge mViewBridge;
     ArgumentCaptor<BottomSheetContent> mContentCaptor =
@@ -59,7 +56,6 @@ public class MandatoryReauthOptInBottomSheetModuleTest {
 
     @Before
     public void setUp() {
-        MockitoAnnotations.openMocks(this);
         MandatoryReauthOptInBottomSheetControllerBridgeJni.setInstanceForTesting(
                 mControllerBridgeJniMock);
         setUpBottomSheetController();

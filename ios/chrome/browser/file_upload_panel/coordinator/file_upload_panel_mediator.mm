@@ -123,6 +123,17 @@ std::optional<base::FilePath> WriteImageToTemporaryLocationForTab(
 
 }  // namespace
 
+UTType* UTTypeInvalid() {
+  static UTType* invalidType;
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    invalidType = [UTType typeWithTag:@"invalid"
+                             tagClass:@"invalid"
+                     conformingToType:nil];
+  });
+  return invalidType;
+}
+
 @interface FileUploadPanelMediator () <ChooseFileControllerObserving>
 @end
 
@@ -196,8 +207,11 @@ std::optional<base::FilePath> WriteImageToTemporaryLocationForTab(
   if (!_acceptedDocumentTypes) {
     if (self.allowsDirectorySelection) {
       // If the input allows directory selection, then folders should be the
-      // only accepted document type.
-      _acceptedDocumentTypes = @[ UTTypeFolder ];
+      // only accepted document type. However since this app declaratively
+      // supports viewing PDFs, another "invalid" type is provided so that no
+      // other items beside folders will be considered accepted by
+      // UIDocumentPickerViewController.
+      _acceptedDocumentTypes = @[ UTTypeFolder, UTTypeInvalid() ];
     } else if (self.acceptedMediaTypes.count == 0) {
       // If the list of accepted media types is empty, then any document type
       // can be selected.
@@ -265,6 +279,14 @@ std::optional<base::FilePath> WriteImageToTemporaryLocationForTab(
   return self.event.allow_multiple_files;
 }
 
+- (BOOL)isPresentingFilePicker {
+  return _chooseFileController->IsPresentingFilePicker();
+}
+
+- (void)setIsPresentingFilePicker:(BOOL)isPresentingFilePicker {
+  _chooseFileController->SetIsPresentingFilePicker(isPresentingFilePicker);
+}
+
 #pragma mark - Public
 
 - (void)adjustCaptureTypeToAvailableDevices {
@@ -301,8 +323,42 @@ std::optional<base::FilePath> WriteImageToTemporaryLocationForTab(
   CHECK_EQ(nil, mediaInfo[UIImagePickerControllerImageURL])
       << "FileUploadPanelMediator: Image URL should not be set.";
   UIImage* image = mediaInfo[UIImagePickerControllerOriginalImage];
-  CHECK_NE(nil, image)
-      << "FileUploadPanelMediator: Image should have image data.";
+  if (!image) {
+    base::UmaHistogramBoolean(
+        "IOS.FileUploadPanel.NilImageInfo.MediaType",
+        mediaInfo[UIImagePickerControllerMediaType] != nil);
+    base::UmaHistogramBoolean(
+        "IOS.FileUploadPanel.NilImageInfo.OriginalImage",
+        mediaInfo[UIImagePickerControllerOriginalImage] != nil);
+    base::UmaHistogramBoolean(
+        "IOS.FileUploadPanel.NilImageInfo.EditedImage",
+        mediaInfo[UIImagePickerControllerEditedImage] != nil);
+    base::UmaHistogramBoolean(
+        "IOS.FileUploadPanel.NilImageInfo.CropRect",
+        mediaInfo[UIImagePickerControllerCropRect] != nil);
+    base::UmaHistogramBoolean(
+        "IOS.FileUploadPanel.NilImageInfo.MediaURL",
+        mediaInfo[UIImagePickerControllerMediaURL] != nil);
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    base::UmaHistogramBoolean(
+        "IOS.FileUploadPanel.NilImageInfo.ReferenceURL",
+        mediaInfo[UIImagePickerControllerReferenceURL] != nil);
+#pragma clang diagnostic pop
+    base::UmaHistogramBoolean(
+        "IOS.FileUploadPanel.NilImageInfo.MediaMetadata",
+        mediaInfo[UIImagePickerControllerMediaMetadata] != nil);
+    base::UmaHistogramBoolean(
+        "IOS.FileUploadPanel.NilImageInfo.LivePhoto",
+        mediaInfo[UIImagePickerControllerLivePhoto] != nil);
+    base::UmaHistogramBoolean("IOS.FileUploadPanel.NilImageInfo.PHAsset",
+                              mediaInfo[UIImagePickerControllerPHAsset] != nil);
+    base::UmaHistogramBoolean(
+        "IOS.FileUploadPanel.NilImageInfo.ImageURL",
+        mediaInfo[UIImagePickerControllerImageURL] != nil);
+    [self cancelFileSelection];
+    return;
+  }
 
   __weak __typeof(self) weakSelf = self;
   base::ThreadPool::PostTaskAndReplyWithResult(
@@ -331,10 +387,13 @@ std::optional<base::FilePath> WriteImageToTemporaryLocationForTab(
 }
 
 - (void)disconnect {
-  // If the controller still exists when the UI is being disconnect, cancel the
-  // selection.
-  [self cancelFileSelection];
+  // Disconnecting `_fileUploadPanelHandler` first so that cancelling the file
+  // selection will not trigger another dismissal of the file upload panel.
+  _fileUploadPanelHandler = nil;
   _pickerResultLoader.reset();
+  // If the controller still exists when the UI is being disconnect, cancel the
+  // selection. This should be done last.
+  [self cancelFileSelection];
 }
 
 #pragma mark - ChooseFileControllerObserving

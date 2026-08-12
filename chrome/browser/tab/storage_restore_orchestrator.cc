@@ -4,40 +4,169 @@
 
 #include "chrome/browser/tab/storage_restore_orchestrator.h"
 
+#include <cstddef>
+#include <memory>
+
+#include "base/check.h"
+#include "base/types/pass_key.h"
 #include "chrome/browser/tab/collection_storage_observer.h"
+#include "chrome/browser/tab/restore_entity_tracker.h"
+#include "chrome/browser/tab/storage_collection_synchronizer.h"
+#include "chrome/browser/tab/storage_id.h"
+#include "chrome/browser/tab/storage_loaded_data.h"
+#include "chrome/browser/tab/tab_state_storage_service.h"
+#include "chrome/browser/tab/tab_storage_type.h"
 #include "chrome/browser/tab/tab_storage_util.h"
+#include "components/tabs/public/direct_child_walker.h"
 #include "components/tabs/public/pinned_tab_collection.h"
 #include "components/tabs/public/tab_collection.h"
 #include "components/tabs/public/tab_interface.h"
+#include "components/tabs/public/unpinned_tab_collection.h"
 
 namespace tabs {
 
-namespace {
+// Recursively crawls the entire tree and saves all descendants' child vectors
+// to the service. The traversal order is determined by DirectChildWalker.
+class CollectionChildSaveCrawler : public DirectChildWalker::Processor {
+ public:
+  explicit CollectionChildSaveCrawler(TabStateStorageService* service)
+      : service_(service) {}
 
-void OnAddChildTab(
-    absl::flat_hash_set<TabCollectionNodeHandle>& restored_nodes_,
-    const TabCollection::NodeHandle& handle,
-    TabStateStorageService* service,
-    StorageLoadedData* loaded_data) {
-  if (!std::holds_alternative<TabHandle>(handle)) {
-    return;
+  void ProcessTab(const TabInterface* tab) override {}
+
+  void ProcessCollection(const TabCollection* collection) override {
+    service_->SaveChildren(collection);
+    DirectChildWalker walker(collection, this);
+    walker.Walk();
   }
 
-  TabHandle tab_handle = std::get<TabHandle>(handle);
-  bool was_tab_on_disk =
-      loaded_data->GetTracker()->AssociateTabAndAncestors(tab_handle.Get());
-  if (!was_tab_on_disk || restored_nodes_.contains(handle)) {
-    service->Save(tab_handle.Get());
-  } else if (was_tab_on_disk) {
-    restored_nodes_.insert(handle);
+ private:
+  raw_ptr<TabStateStorageService> service_;
+};
+
+// Recursively crawls the entire tree and associates or saves changes made prior
+// to restore orchestration. The traversal order is determined by
+// DirectChildWalker.
+class PreRestoreChangesCrawler : public DirectChildWalker::Processor {
+ public:
+  PreRestoreChangesCrawler(RestoreEntityTracker* tracker,
+                           TabStateStorageService* service,
+                           base::PassKey<StorageRestoreOrchestrator> passkey)
+      : tracker_(tracker), service_(service), passkey_(passkey) {}
+
+  void ProcessTab(const TabInterface* tab) override {
+    if (!tracker_->AssociateTab(tab)) {
+      service_->Save(tab);
+      service_->SaveDivergentChildren(tab->GetParentCollection(), passkey_);
+    }
+  }
+
+  void ProcessCollection(const TabCollection* collection) override {
+    DirectChildWalker walker(collection, this);
+    walker.Walk();
+    if (!tracker_->AssociateCollection(collection) &&
+        ShouldSaveOnRestoreStart(collection)) {
+      service_->Save(collection);
+      service_->SaveDivergentChildren(collection, passkey_);
+      service_->SaveDivergentChildren(collection->GetParentCollection(),
+                                      passkey_);
+    }
+  }
+
+  bool ShouldSaveOnRestoreStart(const TabCollection* collection) {
+    TabStorageType type = TabCollectionTypeToTabStorageType(collection->type());
+    return type != TabStorageType::kPinned && type != TabStorageType::kUnpinned;
+  }
+
+ private:
+  raw_ptr<RestoreEntityTracker> tracker_;
+  raw_ptr<TabStateStorageService> service_;
+  base::PassKey<StorageRestoreOrchestrator> passkey_;
+};
+
+// ObserverImpl implementation.
+StorageRestoreOrchestrator::ObserverImpl::ObserverImpl(
+    StorageRestoreOrchestrator* orchestrator)
+    : orchestrator_(orchestrator) {}
+
+StorageRestoreOrchestrator::ObserverImpl::~ObserverImpl() = default;
+
+void StorageRestoreOrchestrator::ObserverImpl::OnNodeRejected(StorageId node) {
+  orchestrator_->OnNodeRejected(node);
+}
+
+// StorageRestoreOrchestrator implementation.
+StorageRestoreOrchestrator::StorageRestoreOrchestrator(
+    TabStripCollection* collection,
+    TabStateStorageService* service,
+    StorageLoadedData* loaded_data)
+    : data_observer_(this),
+      collection_(collection),
+      service_(service),
+      loaded_data_(loaded_data) {
+  loaded_data_->RegisterObserver(&data_observer_);
+
+  auto batch = service_->CreateScopedBatch();
+  RestoreEntityTracker* tracker = loaded_data_->GetTracker();
+  // This is required to save the unique collections that do not emit observable
+  // events on creation.
+  if (tracker->HasNothingToAssociate()) {
+    StorageCollectionSynchronizer synchronizer(collection_, service_);
+    synchronizer.FullSave(base::NullCallback());
+  } else {
+    tracker->AssociateCollection(collection_);
+    PreRestoreChangesCrawler crawler(
+        tracker, service_, base::PassKey<StorageRestoreOrchestrator>());
+    DirectChildWalker walker(collection_, &crawler);
+    walker.Walk();
   }
 }
 
-void OnAddChildCollection(
-    absl::flat_hash_set<TabCollectionNodeHandle>& restored_nodes_,
+StorageRestoreOrchestrator::~StorageRestoreOrchestrator() {
+  DCHECK(loaded_data_)
+      << "StorageLoadedData must be alive when the orchestrator is destroyed.";
+  loaded_data_->UnregisterObserver(&data_observer_);
+
+  if (!is_restore_cancelled_) {
+    auto batch = service_->CreateScopedBatch();
+    service_->ClearDivergentNodesForWindow(loaded_data_->GetWindowTag(),
+                                           loaded_data_->IsOffTheRecord());
+    service_->SaveChildren(collection_);
+    CollectionChildSaveCrawler crawler(service_);
+    DirectChildWalker walker(collection_, &crawler);
+    walker.Walk();
+  }
+}
+
+void StorageRestoreOrchestrator::OnSaveChildTab(
     const TabCollection::NodeHandle& handle,
-    TabStateStorageService* service,
-    StorageLoadedData* loaded_data) {
+    bool was_inserted) {
+  if (!std::holds_alternative<TabHandle>(handle)) {
+    return;
+  }
+  const TabInterface* tab = std::get<TabHandle>(handle).Get();
+  const TabCollection* parent = tab->GetParentCollection();
+  if (!parent) {
+    return;
+  }
+
+  RestoreEntityTracker* tracker = loaded_data_->GetTracker();
+  bool was_associated = tracker->AssociateTab(tab);
+  if (was_inserted && was_associated) {
+    TabCollectionHandle parent_handle = parent->GetHandle();
+    DCHECK(tracker->HasCollectionBeenAssociated(parent_handle));
+  } else {
+    // Nodes not previously persisted will be marked as divergent.
+    service_->Save(tab);
+  }
+
+  service_->SaveDivergentChildren(parent,
+                                  base::PassKey<StorageRestoreOrchestrator>());
+}
+
+void StorageRestoreOrchestrator::OnSaveChildCollection(
+    const TabCollection::NodeHandle& handle,
+    bool was_inserted) {
   if (!std::holds_alternative<TabCollection::Handle>(handle)) {
     return;
   }
@@ -45,33 +174,32 @@ void OnAddChildCollection(
   TabCollection::Handle collection_handle =
       std::get<TabCollection::Handle>(handle);
   const TabCollection* collection = collection_handle.Get();
-  TabStorageType type = TabCollectionTypeToTabStorageType(collection->type());
-  if (type == TabStorageType::kPinned) {
-    loaded_data->GetTracker()->AssociatePinnedCollection(
-        static_cast<const PinnedTabCollection*>(collection));
+  const TabCollection* parent = collection->GetParentCollection();
+  if (!parent) {
+    return;
   }
 
-  bool was_collection_on_disk =
-      loaded_data->GetTracker()->HasCollectionBeenAssociated(collection_handle);
-  if (!was_collection_on_disk || restored_nodes_.contains(handle)) {
-    service->Save(collection_handle.Get());
-  } else if (was_collection_on_disk) {
-    restored_nodes_.insert(handle);
+  RestoreEntityTracker* tracker = loaded_data_->GetTracker();
+  bool was_associated = tracker->AssociateCollection(collection);
+  if (was_inserted && was_associated) {
+    TabCollectionHandle parent_handle = parent->GetHandle();
+    DCHECK(tracker->HasCollectionBeenAssociated(parent_handle));
+  } else {
+    // Nodes not previously persisted will be marked as divergent.
+    service_->Save(collection);
   }
+
+  service_->SaveDivergentChildren(parent,
+                                  base::PassKey<StorageRestoreOrchestrator>());
 }
 
-}  // namespace
+void StorageRestoreOrchestrator::OnNodeRejected(StorageId node) {
+  service_->Remove(node);
+}
 
-StorageRestoreOrchestrator::StorageRestoreOrchestrator(
-    TabStripCollection* collection,
-    TabStateStorageService* service,
-    StorageLoadedData* loaded_data)
-    : default_observer_(service),
-      collection_(collection),
-      service_(service),
-      loaded_data_(loaded_data) {}
-
-StorageRestoreOrchestrator::~StorageRestoreOrchestrator() = default;
+void StorageRestoreOrchestrator::OnRestoreCancelled() {
+  is_restore_cancelled_ = true;
+}
 
 void StorageRestoreOrchestrator::OnChildrenAdded(
     const TabCollection::Position& position,
@@ -79,26 +207,50 @@ void StorageRestoreOrchestrator::OnChildrenAdded(
     bool insert_from_detached) {
   // Associating a tab also associates its ancestors.
   for (const auto& handle : handles) {
-    OnAddChildTab(restored_nodes_, handle, service_, loaded_data_);
+    OnSaveChildTab(handle, /*was_inserted=*/true);
   }
 
   // Any collection not already associated by the tab-filtered pass is new and
   // must be saved.
   for (const auto& handle : handles) {
-    OnAddChildCollection(restored_nodes_, handle, service_, loaded_data_);
+    OnSaveChildCollection(handle, /*was_inserted=*/true);
   }
 }
 
 void StorageRestoreOrchestrator::OnChildrenRemoved(
     const TabCollection::Position& position,
     const TabCollectionNodes& handles) {
-  default_observer_.OnChildrenRemoved(position, handles);
+  auto batch = service_->CreateScopedBatch();
+
+  // Cannot remove without adding first, so we can assume that these nodes are
+  // already associated.
+  for (const auto& handle : handles) {
+    if (std::holds_alternative<TabCollection::Handle>(handle)) {
+      CollectionStorageObserver::ClearSubTree(
+          std::get<TabCollection::Handle>(handle).Get(), service_);
+    } else if (std::holds_alternative<TabHandle>(handle)) {
+      service_->Remove(std::get<TabHandle>(handle).Get());
+    }
+  }
+  service_->SaveDivergentChildren(position.parent_handle.Get(),
+                                  base::PassKey<StorageRestoreOrchestrator>());
 }
 
 void StorageRestoreOrchestrator::OnChildMoved(
     const TabCollection::Position& to_position,
     const NodeData& node_data) {
-  default_observer_.OnChildMoved(to_position, node_data);
+  service_->SaveDivergentChildren(to_position.parent_handle.Get(),
+                                  base::PassKey<StorageRestoreOrchestrator>());
+  service_->SaveDivergentChildren(node_data.position.parent_handle.Get(),
+                                  base::PassKey<StorageRestoreOrchestrator>());
+}
+
+void StorageRestoreOrchestrator::SaveChildNodeOnly(TabCollectionNodeHandle handle) {
+  if (std::holds_alternative<TabHandle>(handle)) {
+    OnSaveChildTab(handle, /*was_inserted=*/false);
+  } else {
+    OnSaveChildCollection(handle, /*was_inserted=*/false);
+  }
 }
 
 }  // namespace tabs

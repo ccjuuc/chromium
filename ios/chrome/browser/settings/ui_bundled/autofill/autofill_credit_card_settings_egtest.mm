@@ -11,6 +11,7 @@
 #import "components/autofill/core/common/autofill_payments_features.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/autofill/ui_bundled/autofill_app_interface.h"
+#import "ios/chrome/browser/device_reauth/test/reauthentication_app_interface.h"
 #import "ios/chrome/browser/metrics/model/metrics_app_interface.h"
 #import "ios/chrome/browser/settings/ui_bundled/autofill/autofill_settings_constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_root_table_constants.h"
@@ -33,7 +34,6 @@ using chrome_test_util::PaymentMethodsButton;
 using chrome_test_util::SettingsDoneButton;
 using chrome_test_util::SettingsMenuBackButton;
 using chrome_test_util::SettingsToolbarAddButton;
-using chrome_test_util::TabGridEditButton;
 
 namespace {
 
@@ -74,7 +74,6 @@ NSString* const kMandatoryReauthDeleteCardHistogramName =
 id<GREYMatcher> NavigationBarEditButton() {
   return grey_allOf(
       ButtonWithAccessibilityLabelId(IDS_IOS_NAVIGATION_BAR_EDIT_BUTTON),
-      grey_not(TabGridEditButton()),
       grey_not(grey_accessibilityTrait(UIAccessibilityTraitNotEnabled)), nil);
 }
 
@@ -96,8 +95,7 @@ id<GREYMatcher> BottomToolbar() {
   [super setUp];
 
   [AutofillAppInterface clearCreditCardStore];
-  [AutofillAppInterface setUpMockReauthenticationModule];
-  [AutofillAppInterface mockReauthenticationModuleCanAttempt:YES];
+  [ReauthenticationAppInterface mockReauthenticationModuleCanAttempt:YES];
   [AutofillAppInterface setMandatoryReauthEnabled:YES];
 
   chrome_test_util::GREYAssertErrorNil(
@@ -107,7 +105,6 @@ id<GREYMatcher> BottomToolbar() {
 
 - (void)tearDownHelper {
   [AutofillAppInterface clearCreditCardStore];
-  [AutofillAppInterface clearMockReauthenticationModule];
 
   [MetricsAppInterface stopOverridingMetricsAndCrashReportingForTesting];
   chrome_test_util::GREYAssertErrorNil(
@@ -125,7 +122,16 @@ id<GREYMatcher> BottomToolbar() {
 // Helper to open the settings page for Autofill credit cards.
 - (void)openCreditCardsSettings {
   [ChromeEarlGreyUI openSettingsMenu];
-  [ChromeEarlGreyUI tapSettingsMenuButton:PaymentMethodsButton()];
+  if ([ChromeEarlGrey isYourSavedInfoSettingsPageIosEnabled]) {
+    [ChromeEarlGreyUI
+        tapSettingsMenuButton:grey_accessibilityID(
+                                  @"kSettingsAutofillAndPasswordsCellId")];
+    [[EarlGrey
+        selectElementWithMatcher:PaymentMethodsButton()]
+        performAction:grey_tap()];
+  } else {
+    [ChromeEarlGreyUI tapSettingsMenuButton:PaymentMethodsButton()];
+  }
 }
 
 // Helper to open the settings page for the Autofill credit card with `label`.
@@ -176,8 +182,8 @@ id<GREYMatcher> BottomToolbar() {
 // Test that the page for viewing Autofill credit card details is as expected
 // when Mandatory Reauth is enabled.
 - (void)testCreditCardViewPageMandatoryReauthEnabled {
-  [AutofillAppInterface mockReauthenticationModuleExpectedResult:
-                            ReauthenticationResult::kSuccess];
+  [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
+                                    ReauthenticationResult::kSuccess];
   NSString* lastDigits = [AutofillAppInterface saveLocalCreditCard];
   [self openEditCreditCard:[self creditCardLabel:lastDigits]];
 
@@ -250,8 +256,8 @@ id<GREYMatcher> BottomToolbar() {
 // if the Mandatory Reauth feature is enabled and the user fails the
 // authentication prompt.
 - (void)testCreditCardViewPageMandatoryReauthFailed {
-  [AutofillAppInterface mockReauthenticationModuleExpectedResult:
-                            ReauthenticationResult::kFailure];
+  [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
+                                    ReauthenticationResult::kFailure];
   NSString* lastDigits = [AutofillAppInterface saveLocalCreditCard];
   [self openEditCreditCard:[self creditCardLabel:lastDigits]];
 
@@ -300,7 +306,15 @@ id<GREYMatcher> BottomToolbar() {
 
 // Test that reaching the credit card details page for a server card does not
 // require reauthentication.
-- (void)testServerCardViewSkipsMandatoryReauth {
+// TODO(crbug.com/485239638): Test is flaky on device.
+#if !TARGET_OS_SIMULATOR
+#define MAYBE_testServerCardViewSkipsMandatoryReauth \
+  FLAKY_testServerCardViewSkipsMandatoryReauth
+#else
+#define MAYBE_testServerCardViewSkipsMandatoryReauth \
+  testServerCardViewSkipsMandatoryReauth
+#endif
+- (void)MAYBE_testServerCardViewSkipsMandatoryReauth {
   [AutofillAppInterface saveMaskedCreditCard];
   [self openEditCreditCard:kServerCardHolderName];
 
@@ -326,8 +340,8 @@ id<GREYMatcher> BottomToolbar() {
 // TODO(crbug.com/366085550): Re-enable the test.
 - (void)DISABLED_testAccessibilityOnCreditCardViewPage {
   NSString* lastDigits = [AutofillAppInterface saveLocalCreditCard];
-  [AutofillAppInterface mockReauthenticationModuleExpectedResult:
-                            ReauthenticationResult::kSuccess];
+  [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
+                                    ReauthenticationResult::kSuccess];
   [self openEditCreditCard:[self creditCardLabel:lastDigits]];
 
   [ChromeEarlGrey verifyAccessibilityForCurrentScreen];
@@ -343,8 +357,8 @@ id<GREYMatcher> BottomToolbar() {
 // TODO(crbug.com/379736649): Re-enable this test.
 - (void)FLAKY_testAccessibilityOnCreditCardEditPage {
   NSString* lastDigits = [AutofillAppInterface saveLocalCreditCard];
-  [AutofillAppInterface mockReauthenticationModuleExpectedResult:
-                            ReauthenticationResult::kSuccess];
+  [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
+                                    ReauthenticationResult::kSuccess];
   [self openEditCreditCard:[self creditCardLabel:lastDigits]];
 
   // Switch on edit mode.
@@ -378,7 +392,8 @@ id<GREYMatcher> BottomToolbar() {
 
     [self openCreditCardsSettings];
 
-    [AutofillAppInterface mockReauthenticationModuleExpectedResult:result];
+    [ReauthenticationAppInterface
+        mockReauthenticationModuleExpectedResult:result];
 
     // Switch on edit mode.
     [[EarlGrey selectElementWithMatcher:NavigationBarEditButton()]
@@ -510,8 +525,8 @@ id<GREYMatcher> BottomToolbar() {
                                    kAutofillCreditCardSwitchViewId, YES, YES)]
       performAction:chrome_test_util::TurnTableViewSwitchOn(NO)];
 
-  [AutofillAppInterface mockReauthenticationModuleExpectedResult:
-                            ReauthenticationResult::kSuccess];
+  [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
+                                    ReauthenticationResult::kSuccess];
 
   // Open Edit Mode.
   [[EarlGrey selectElementWithMatcher:NavigationBarEditButton()]
@@ -526,8 +541,8 @@ id<GREYMatcher> BottomToolbar() {
 // Checks that the toolbar always appears in edit mode.
 - (void)testToolbarInEditModeAddPaymentMethodFeatureEnabled {
   NSString* lastDigits = [AutofillAppInterface saveLocalCreditCard];
-  [AutofillAppInterface mockReauthenticationModuleExpectedResult:
-                            ReauthenticationResult::kSuccess];
+  [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
+                                    ReauthenticationResult::kSuccess];
   [self openCreditCardListInEditMode];
   [self assertToolbarIsVisible];
 
@@ -547,8 +562,8 @@ id<GREYMatcher> BottomToolbar() {
 // selected.
 - (void)testToolbarDeleteButtonWithAddPaymentMethodFeatureEnabled {
   NSString* lastDigits = [AutofillAppInterface saveLocalCreditCard];
-  [AutofillAppInterface mockReauthenticationModuleExpectedResult:
-                            ReauthenticationResult::kSuccess];
+  [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
+                                    ReauthenticationResult::kSuccess];
   [self openCreditCardListInEditMode];
 
   [[EarlGrey selectElementWithMatcher:chrome_test_util::
@@ -572,8 +587,8 @@ id<GREYMatcher> BottomToolbar() {
 // correctly.
 - (void)testDeletingCreditCardInEditMode {
   NSString* lastDigits = [AutofillAppInterface saveLocalCreditCard];
-  [AutofillAppInterface mockReauthenticationModuleExpectedResult:
-                            ReauthenticationResult::kSuccess];
+  [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
+                                    ReauthenticationResult::kSuccess];
   [self openCreditCardListInEditMode];
 
   [[EarlGrey selectElementWithMatcher:grey_accessibilityLabel(
@@ -582,9 +597,8 @@ id<GREYMatcher> BottomToolbar() {
   [[EarlGrey selectElementWithMatcher:chrome_test_util::
                                           SettingsBottomToolbarDeleteButton()]
       performAction:grey_tap()];
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::
-                                          SettingsBottomToolbarDeleteButton()]
-      assertWithMatcher:grey_nil()];
+  [ChromeEarlGrey waitForUIElementToDisappearWithMatcher:
+                      chrome_test_util::SettingsBottomToolbarDeleteButton()];
   // If the done button in the nav bar is enabled it is no longer in edit
   // mode.
   [[EarlGrey selectElementWithMatcher:SettingsDoneButton()]
@@ -595,8 +609,8 @@ id<GREYMatcher> BottomToolbar() {
 // not delete the card eventually if the reauth attempt failed.
 - (void)testDeletingCreditCardViaTableRowEditingReauthFailed {
   NSString* lastDigits = [AutofillAppInterface saveLocalCreditCard];
-  [AutofillAppInterface mockReauthenticationModuleExpectedResult:
-                            ReauthenticationResult::kFailure];
+  [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
+                                    ReauthenticationResult::kFailure];
 
   [self openCreditCardsSettings];
   [[EarlGrey selectElementWithMatcher:grey_accessibilityLabel(
@@ -614,8 +628,8 @@ id<GREYMatcher> BottomToolbar() {
 // succeeded if the reauth attempt succeeded.
 - (void)testDeletingCreditCardViaTableRowEditingReauthSucceeded {
   NSString* lastDigits = [AutofillAppInterface saveLocalCreditCard];
-  [AutofillAppInterface mockReauthenticationModuleExpectedResult:
-                            ReauthenticationResult::kSuccess];
+  [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
+                                    ReauthenticationResult::kSuccess];
 
   [self openCreditCardsSettings];
   [[EarlGrey selectElementWithMatcher:grey_accessibilityLabel(
@@ -633,7 +647,7 @@ id<GREYMatcher> BottomToolbar() {
 // reauth succeeded, reauth preference and the toggle state are updated.
 - (void)testUpdateReauthToggle {
   [AutofillAppInterface setMandatoryReauthEnabled:YES];
-  [AutofillAppInterface mockReauthenticationModuleCanAttempt:YES];
+  [ReauthenticationAppInterface mockReauthenticationModuleCanAttempt:YES];
 
   [self openCreditCardsSettings];
 
@@ -644,8 +658,8 @@ id<GREYMatcher> BottomToolbar() {
       assertWithMatcher:grey_notNil()];
 
   // Config the next reauth attempt's result to failure.
-  [AutofillAppInterface mockReauthenticationModuleExpectedResult:
-                            ReauthenticationResult::kFailure];
+  [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
+                                    ReauthenticationResult::kFailure];
 
   // Switch off the reauth toggle.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::TableViewSwitchCell(
@@ -679,8 +693,8 @@ id<GREYMatcher> BottomToolbar() {
       @"Mandatory reauth toggle flow result event count incorrect");
 
   // Config the next reauth attempt's result to success.
-  [AutofillAppInterface mockReauthenticationModuleExpectedResult:
-                            ReauthenticationResult::kSuccess];
+  [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
+                                    ReauthenticationResult::kSuccess];
 
   // Switch off the reauth toggle.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::TableViewSwitchCell(
@@ -760,7 +774,7 @@ id<GREYMatcher> BottomToolbar() {
 // available will disable the toggle and set it to switched-off state.
 - (void)testDisableReauthToggle {
   [AutofillAppInterface setMandatoryReauthEnabled:YES];
-  [AutofillAppInterface mockReauthenticationModuleCanAttempt:YES];
+  [ReauthenticationAppInterface mockReauthenticationModuleCanAttempt:YES];
   [self openCreditCardsSettings];
 
   // Check the reauth switch is there.
@@ -770,7 +784,7 @@ id<GREYMatcher> BottomToolbar() {
       assertWithMatcher:grey_notNil()];
 
   // Mock that reauth is disabled.
-  [AutofillAppInterface mockReauthenticationModuleCanAttempt:NO];
+  [ReauthenticationAppInterface mockReauthenticationModuleCanAttempt:NO];
 
   // Try to switch off reauth toggle.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::TableViewSwitchCell(

@@ -4,8 +4,10 @@
 
 #include "components/autofill/core/browser/logging/log_router.h"
 
+#include <string>
+
+#include "base/check.h"
 #include "base/observer_list.h"
-#include "base/strings/escape.h"
 #include "base/strings/string_split.h"
 #include "components/autofill/core/browser/logging/log_manager.h"
 #include "components/autofill/core/browser/logging/log_receiver.h"
@@ -20,7 +22,7 @@ LogRouter::~LogRouter() {
 }
 
 // static
-base::Value::Dict LogRouter::CreateEntryForText(const std::string& text) {
+base::DictValue LogRouter::CreateEntryForText(const std::string& text) {
   LogBuffer buffer(LogBuffer::IsActive(true));
   buffer << Tag{"div"};
   for (const auto& line : base::SplitStringPiece(
@@ -45,7 +47,7 @@ void LogRouter::ProcessLog(const std::string& text) {
   ProcessLog(CreateEntryForText(text));
 }
 
-void LogRouter::ProcessLog(const base::Value::Dict& node) {
+void LogRouter::ProcessLog(const base::DictValue& node) {
   // This may not be called when there are no receivers (i.e., the router is
   // inactive), because in that case the logs cannot be displayed.
   DCHECK(HasReceivers());

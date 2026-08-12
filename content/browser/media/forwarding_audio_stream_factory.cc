@@ -141,8 +141,8 @@ void ForwardingAudioStreamFactory::Core::CreateLoopbackStream(
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   DCHECK(loopback_source);
 
-  TRACE_EVENT_BEGIN1("audio", "CreateLoopbackStream", "group",
-                     group_id_.GetLowForSerialization());
+  TRACE_EVENT_BEGIN("audio", "CreateLoopbackStream", "group",
+                    group_id_.GetLowForSerialization());
 
   // |this| owns |inputs_|, so Unretained is safe.
   inputs_
@@ -154,15 +154,15 @@ void ForwardingAudioStreamFactory::Core::CreateLoopbackStream(
           std::move(renderer_factory_client)))
       .first->get()
       ->CreateStream(GetFactory());
-  TRACE_EVENT_END1("audio", "CreateLoopbackStream", "source",
-                   loopback_source->GetGroupID().GetLowForSerialization());
+  TRACE_EVENT_END("audio", "source",
+                  loopback_source->GetGroupID().GetLowForSerialization());
 }
 
 void ForwardingAudioStreamFactory::Core::SetMuted(bool muted) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   DCHECK_NE(muted, !!muter_);
-  TRACE_EVENT_INSTANT2("audio", "SetMuted", TRACE_EVENT_SCOPE_THREAD, "group",
-                       group_id_.GetLowForSerialization(), "muted", muted);
+  TRACE_EVENT_INSTANT("audio", "SetMuted", "group",
+                      group_id_.GetLowForSerialization(), "muted", muted);
 
   if (!muted) {
     muter_.reset();
@@ -305,9 +305,9 @@ void ForwardingAudioStreamFactory::Core::CleanupStreamsBelongingTo(
     int render_frame_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
-  TRACE_EVENT_BEGIN2("audio", "CleanupStreamsBelongingTo", "group",
-                     group_id_.GetLowForSerialization(), "process id",
-                     render_process_id);
+  TRACE_EVENT_BEGIN("audio", "CleanupStreamsBelongingTo", "group",
+                    group_id_.GetLowForSerialization(), "process id",
+                    render_process_id);
 
   auto match_rfh =
       [render_process_id, render_frame_id](
@@ -321,8 +321,7 @@ void ForwardingAudioStreamFactory::Core::CleanupStreamsBelongingTo(
 
   ResetRemoteFactoryPtrIfIdle();
 
-  TRACE_EVENT_END1("audio", "CleanupStreamsBelongingTo", "frame_id",
-                   render_frame_id);
+  TRACE_EVENT_END("audio", "frame_id", render_frame_id);
 }
 
 void ForwardingAudioStreamFactory::Core::RemoveInput(
@@ -347,9 +346,9 @@ media::mojom::AudioStreamFactory*
 ForwardingAudioStreamFactory::Core::GetFactory() {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   if (!remote_factory_) {
-    TRACE_EVENT_INSTANT1(
-        "audio", "ForwardingAudioStreamFactory: Binding new factory",
-        TRACE_EVENT_SCOPE_THREAD, "group", group_id_.GetLowForSerialization());
+    TRACE_EVENT_INSTANT("audio",
+                        "ForwardingAudioStreamFactory: Binding new factory",
+                        "group", group_id_.GetLowForSerialization());
     GetUIThreadTaskRunner({})->PostTask(
         FROM_HERE,
         base::BindOnce(&BindStreamFactoryFromUIThread,
@@ -376,9 +375,9 @@ void ForwardingAudioStreamFactory::Core::ResetRemoteFactoryPtrIfIdle() {
 void ForwardingAudioStreamFactory::Core::ResetRemoteFactoryPtr() {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   if (remote_factory_) {
-    TRACE_EVENT_INSTANT1(
-        "audio", "ForwardingAudioStreamFactory: Resetting factory",
-        TRACE_EVENT_SCOPE_THREAD, "group", group_id_.GetLowForSerialization());
+    TRACE_EVENT_INSTANT("audio",
+                        "ForwardingAudioStreamFactory: Resetting factory",
+                        "group", group_id_.GetLowForSerialization());
   }
   remote_factory_.reset();
   // The stream brokers will call a callback to be deleted soon, give them a

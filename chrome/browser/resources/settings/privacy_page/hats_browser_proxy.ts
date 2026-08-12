@@ -26,6 +26,22 @@ export enum TrustSafetyInteraction {
 }
 
 /**
+ * All interactions from the security settings page which may result in a HaTS
+ * survey. Must be kept in sync with the enum of the same name located in:
+ * chrome/browser/ui/webui/settings/hats_handler.h
+ */
+// LINT.IfChange(SecurityPageInteraction)
+export enum SecurityPageInteraction {
+  RADIO_BUTTON_ENHANCED_CLICK = 0,
+  RADIO_BUTTON_STANDARD_CLICK = 1,
+  RADIO_BUTTON_DISABLE_CLICK = 2,
+  EXPAND_BUTTON_ENHANCED_CLICK = 3,
+  EXPAND_BUTTON_STANDARD_CLICK = 4,
+  NO_INTERACTION = 5,
+}
+// LINT.ThenChange(/chrome/browser/ui/webui/settings/hats_handler.h:SecurityPageInteraction)
+
+/**
  * Enumeration of interactions with the security settings v2 page. Must be kept
  * in sync with the enum of the same name located in:
  * chrome/browser/ui/webui/settings/hats_handler.h
@@ -36,6 +52,17 @@ export enum SecurityPageV2Interaction {
   SAFE_BROWSING_ROW_EXPANDED = 2,
   STANDARD_SAFE_BROWSING_RADIO_BUTTON_CLICK = 3,
   ENHANCED_SAFE_BROWSING_RADIO_BUTTON_CLICK = 4,
+  SAFE_BROWSING_TOGGLE_CLICK = 5,
+  SECURE_DNS_V2_ROW_EXPANDED = 6,
+  SECURE_DNS_V2_AUTOMATIC_RADIO_BUTTON_CLICK = 7,
+  SECURE_DNS_V2_FALLBACK_RADIO_BUTTON_CLICK = 8,
+  SECURE_DNS_V2_CUSTOM_RADIO_BUTTON_CLICK = 9,
+  SECURE_DNS_V2_TOGGLE_CLICK = 10,
+  HTTPS_FIRST_MODE_TOGGLE_CLICK = 11,
+  BALANCED_HTTPS_FIRST_MODE_RADIO_BUTTON_CLICK = 12,
+  STRICT_HTTPS_FIRST_MODE_RADIO_BUTTON_CLICK = 13,
+  PASSWORD_LEAK_DETECTION_TOGGLE_CLICK = 14,
+  SECURE_DNS_TOGGLE_CLICK = 15,
 }
 
 /** Enumeration of all security settings bundle modes.*/
@@ -60,6 +87,19 @@ export interface HatsBrowserProxy {
   trustSafetyInteractionOccurred(interaction: TrustSafetyInteraction): void;
 
   /**
+   * Inform HaTS that the user performed an interaction on security page.
+   * @param securityPageInteraction The type of interaction performed on the
+   *     security page.
+   * @param safeBrowsingSetting The type of safe browsing settings the user was
+   *     on prior to the interaction.
+   * @param totalTimeOnPage The amount of time the user spent on the security
+   *     page.
+   */
+  securityPageHatsRequest(
+      securityPageInteraction: SecurityPageInteraction,
+      safeBrowsingSetting: SafeBrowsingSetting, totalTimeOnPage: number): void;
+
+  /**
    * Inform HaTS that the user visited the security page.
    * @param securityPageInteractions The interactions performed on the security
    *     page.
@@ -70,7 +110,7 @@ export interface HatsBrowserProxy {
    * @param securitySettingsBundleSetting The security settings bundle the user
    *     had when they opened the security page.
    */
-  securityPageHatsRequest(
+  securityPageV2HatsRequest(
       securityPageInteractions: SecurityPageV2Interaction[],
       safeBrowsingSetting: SafeBrowsingSetting, totalTimeOnPage: number,
       securitySettingsBundleSetting: SecuritySettingsBundleSetting): void;
@@ -87,10 +127,18 @@ export class HatsBrowserProxyImpl implements HatsBrowserProxy {
   }
 
   securityPageHatsRequest(
+      securityPageInteraction: SecurityPageInteraction,
+      safeBrowsingSetting: SafeBrowsingSetting, totalTimeOnPage: number) {
+    chrome.send(
+        'securityPageHatsRequest',
+        [securityPageInteraction, safeBrowsingSetting, totalTimeOnPage]);
+  }
+
+  securityPageV2HatsRequest(
       securityPageInteractions: SecurityPageV2Interaction[],
       safeBrowsingSetting: SafeBrowsingSetting, totalTimeOnPage: number,
       securitySettingsBundleSetting: SecuritySettingsBundleSetting) {
-    chrome.send('securityPageHatsRequest', [
+    chrome.send('securityPageV2HatsRequest', [
       securityPageInteractions,
       safeBrowsingSetting,
       totalTimeOnPage,

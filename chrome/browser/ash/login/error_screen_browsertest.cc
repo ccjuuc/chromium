@@ -6,9 +6,11 @@
 
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/login_screen_test_api.h"
+#include "base/check_deref.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "base/test/bind.h"
+#include "base/test/run_until.h"
 #include "chrome/browser/ash/app_mode/test/kiosk_mixin.h"
 #include "chrome/browser/ash/app_mode/test/kiosk_test_utils.h"
 #include "chrome/browser/ash/app_mode/test/network_state_mixin.h"
@@ -24,6 +26,7 @@
 #include "chrome/browser/ash/login/test/scoped_policy_update.h"
 #include "chrome/browser/ash/login/wizard_context.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/ui/webui/ash/login/app_launch_splash_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/error_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/welcome_screen_handler.h"
@@ -34,6 +37,7 @@
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/components/dbus/shill/shill_profile_client.h"
+#include "chromeos/ash/components/network/network_state_handler.h"
 #include "chromeos/ash/components/network/network_state_test_helper.h"
 #include "components/policy/proto/chrome_device_policy.pb.h"
 #include "components/user_manager/user_manager.h"
@@ -156,9 +160,11 @@ class NetworkErrorScreenTest : public InProcessBrowserTest {
     network_helper_->profile_test()->AddService(
         ShillProfileClient::GetSharedProfilePath(), kWifiServiceName);
 
-    // Network modification notifications are posted asynchronously. Wait until
-    // idle to ensure observers are notified.
-    base::RunLoop().RunUntilIdle();
+    ASSERT_TRUE(base::test::RunUntil([&] {
+      return network_helper_->network_state_handler()
+                 ->GetNetworkStateFromServicePath(
+                     kWifiServiceName, /*configured_only=*/false) != nullptr;
+    }));
   }
 
   std::unique_ptr<WizardContext> wizard_context_;
@@ -296,7 +302,7 @@ IN_PROC_BROWSER_TEST_P(GuestErrorScreenTest, GuestLogin) {
 // Test that guest signin option is shown when enabled and that clicking on it
 // directly starts a guest session if EULA was already accepted.
 IN_PROC_BROWSER_TEST_P(GuestErrorScreenTest, PRE_GuestLoginWithEulaAccepted) {
-  StartupUtils::MarkEulaAccepted();
+  StartupUtils::MarkEulaAccepted(CHECK_DEREF(g_browser_process->local_state()));
   ShowErrorScreenWithGuestSignin();
   OobeScreenWaiter(ErrorScreenView::kScreenId).Wait();
   test::OobeJS().ExpectVisiblePath(kErrorMessageGuestSigninLink);

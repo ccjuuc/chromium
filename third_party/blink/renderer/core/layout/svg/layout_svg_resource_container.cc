@@ -66,9 +66,7 @@ float ObjectBoundingBoxUnitToUserUnits(const Length& length,
 }  // namespace
 
 LayoutSVGResourceContainer::LayoutSVGResourceContainer(SVGElement* node)
-    : LayoutSVGHiddenContainer(node),
-      completed_invalidations_mask_(0),
-      is_invalidating_(false) {}
+    : LayoutSVGHiddenContainer(node) {}
 
 LayoutSVGResourceContainer::~LayoutSVGResourceContainer() = default;
 
@@ -176,7 +174,7 @@ gfx::RectF LayoutSVGResourceContainer::ResolveRectangle(
 void LayoutSVGResourceContainer::InvalidateClientsIfActiveResource() {
   NOT_DESTROYED();
   // Avoid doing unnecessary work if the document is being torn down.
-  if (DocumentBeingDestroyedActual()) {
+  if (GetDocument().Lifecycle().GetState() >= DocumentLifecycle::kStopping) {
     return;
   }
   // If this is the 'active' resource (the first element with the specified 'id'
@@ -198,9 +196,10 @@ void LayoutSVGResourceContainer::WillBeDestroyed() {
 void LayoutSVGResourceContainer::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutSVGHiddenContainer::StyleDidChange(diff, old_style,
+  LayoutSVGHiddenContainer::StyleDidChange(diff, old_style, new_style,
                                            style_change_context);
   if (old_style)
     return;
@@ -377,7 +376,7 @@ void LayoutSVGResourceContainer::MarkForLayoutAndParentResourceInvalidation(
     bool needs_layout) {
   DCHECK(object.GetNode());
 
-  if (needs_layout && !object.DocumentBeingDestroyed()) {
+  if (needs_layout) {
     object.SetNeedsLayoutAndFullPaintInvalidation(
         layout_invalidation_reason::kSvgResourceInvalidated);
   }

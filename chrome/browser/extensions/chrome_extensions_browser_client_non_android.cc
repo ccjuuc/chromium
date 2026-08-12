@@ -21,6 +21,7 @@
 #include "components/safe_browsing/buildflags.h"
 #include "components/webapps/isolated_web_apps/scheme.h"
 #include "components/webapps/isolated_web_apps/url_loading/url_loader_factory.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_instance.h"
 #include "extensions/browser/safe_browsing_delegate.h"
 #include "ipc/constants.mojom.h"
@@ -46,6 +47,11 @@ void ChromeExtensionsBrowserClient::Init() {
 #endif
 }
 
+void ChromeExtensionsBrowserClient::StartTearDown() {
+  user_script_listener_->StartTearDown();
+  process_manager_delegate_->StartTearDown();
+}
+
 ProcessManagerDelegate*
 ChromeExtensionsBrowserClient::GetProcessManagerDelegate() const {
   return process_manager_delegate_.get();
@@ -56,8 +62,12 @@ ChromeExtensionsBrowserClient::GetControlledFrameEmbedderURLLoader(
     const url::Origin& app_origin,
     content::FrameTreeNodeId frame_tree_node_id,
     content::BrowserContext* browser_context) {
+  // For ControlledFrame, the request initiator is typically the content inside
+  // the frame (cross-origin to the embedder IWA). Thus, strict same-origin
+  // enforcement must be disabled to allow access to the embedder's resources.
   return web_app::IsolatedWebAppURLLoaderFactory::CreateForFrame(
-      browser_context, app_origin, frame_tree_node_id);
+      browser_context, app_origin, frame_tree_node_id,
+      /*enforce_same_origin=*/false);
 }
 
 void ChromeExtensionsBrowserClient::ReportError(
@@ -95,10 +105,10 @@ void ChromeExtensionsBrowserClient::GetWebViewStoragePartitionConfig(
     bool in_memory,
     base::OnceCallback<void(std::optional<content::StoragePartitionConfig>)>
         callback) {
-  const GURL& owner_site_url = owner_site_instance->GetSiteURL();
-  if (owner_site_url.SchemeIs(webapps::kIsolatedAppScheme)) {
-    base::expected<web_app::IsolatedWebAppUrlInfo, std::string> url_info =
-        web_app::IsolatedWebAppUrlInfo::Create(owner_site_url);
+  if (owner_site_instance->GetSecurityPrincipal().SchemeIs(
+          webapps::kIsolatedAppScheme)) {
+    auto url_info = web_app::IsolatedWebAppUrlInfo::CreateFromHost(
+        owner_site_instance->GetSecurityPrincipal().GetHost());
     DCHECK(url_info.has_value()) << url_info.error();
 
     auto* profile = Profile::FromBrowserContext(browser_context);

@@ -25,6 +25,7 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
 #include "chrome/common/extensions/api/context_menus.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/crx_file/id_util.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
@@ -235,6 +236,12 @@ void VerifyItems(const ExtensionContextMenuModel& model,
   EXPECT_EQ(item_number.size(), j);
 }
 
+// A stub popup delegate to use with the ExtensionContextMenuModel.
+class TestPopupDelegate : public ExtensionContextMenuModel::PopupDelegate {
+ public:
+  void InspectPopup() override {}
+};
+
 }  // namespace
 
 class ExtensionContextMenuModelTest : public ExtensionBrowserTest {
@@ -324,14 +331,14 @@ const Extension* ExtensionContextMenuModelTest::AddExtensionWithHostPermission(
     const char* action_key,
     ManifestLocation location,
     const std::string& host_permission) {
-  auto manifest = base::Value::Dict()
+  auto manifest = base::DictValue()
                       .Set("name", name)
                       .Set("version", "1")
                       .Set("manifest_version", 2);
   if (action_key)
-    manifest.Set(action_key, base::Value::Dict());
+    manifest.Set(action_key, base::DictValue());
   if (!host_permission.empty())
-    manifest.Set("permissions", base::Value::List().Append(host_permission));
+    manifest.Set("permissions", base::ListValue().Append(host_permission));
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
           .SetManifest(std::move(manifest))
@@ -437,7 +444,7 @@ bool ExtensionContextMenuModelTest::HasCantAccessPageEntry(
 void ExtensionContextMenuModelTest::ForcePinExtension(
     const extensions::ExtensionId& extension_id) {
   std::string policy_item_key = base::StringPrintf("%s", extension_id.c_str());
-  base::Value::Dict policy_item_value;
+  base::DictValue policy_item_value;
   policy_item_value.Set("toolbar_pin", "force_pinned");
 
   policy::PolicyMap policy_map =
@@ -454,7 +461,7 @@ void ExtensionContextMenuModelTest::ForcePinExtension(
                                   std::move(policy_item_value));
   } else {
     // Set the new policy value.
-    base::Value::Dict policy_value;
+    base::DictValue policy_value;
     policy_value.Set(policy_item_key, std::move(policy_item_value));
     policy_map.Set(policy::key::kExtensionSettings,
                    policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
@@ -530,11 +537,11 @@ IN_PROC_BROWSER_TEST_F(ExtensionContextMenuModelTest,
 IN_PROC_BROWSER_TEST_F(ExtensionContextMenuModelTest,
                        ComponentExtensionContextMenu) {
   std::string name("component");
-  base::Value::Dict manifest = base::Value::Dict()
-                                   .Set("name", name)
-                                   .Set("version", "1")
-                                   .Set("manifest_version", 2)
-                                   .Set("browser_action", base::Value::Dict());
+  base::DictValue manifest = base::DictValue()
+                                 .Set("name", name)
+                                 .Set("version", "1")
+                                 .Set("manifest_version", 2)
+                                 .Set("browser_action", base::DictValue());
 
   {
     scoped_refptr<const Extension> extension =
@@ -673,7 +680,6 @@ IN_PROC_BROWSER_TEST_F(ExtensionContextMenuModelTest,
 
   scoped_refptr<const Extension> extension =
       ExtensionBuilder("Extension")
-          .SetManifestVersion(2)
           .SetID(crx_file::id_util::GenerateId("extension"))
           .Build();
   extension_registrar()->AddExtension(extension.get());
@@ -690,7 +696,6 @@ IN_PROC_BROWSER_TEST_F(ExtensionContextMenuModelTest,
 
   scoped_refptr<const Extension> extension_with_options =
       ExtensionBuilder("Extension with options page")
-          .SetManifestVersion(2)
           .SetID(crx_file::id_util::GenerateId("extension_with_options_page"))
           .SetManifestKey("options_page", "options_page.html")
           .Build();
@@ -714,41 +719,70 @@ IN_PROC_BROWSER_TEST_F(ExtensionContextMenuModelTest,
   }
 }
 
-// TODO(emiliapaz): Currently, the test scenarios always have "inspect popup"
-// hidden since the context menu doesn't have a popup delegate and the developer
-// mode pref is not set. Add a popup delegate and developer mode pref to
-// properly test the "inspect popup" entry visibility.
 IN_PROC_BROWSER_TEST_F(ExtensionContextMenuModelTest,
                        ExtensionContextMenuInspectPopupEntryVisibility) {
+  TestPopupDelegate popup_delegate;
+
+  // TODO(https://crbug.com/40804030): Update the test extensions in this suite
+  // to MV3.
+  const Extension* action =
+      AddExtension("browser_action", manifest_keys::kBrowserAction,
+                   ManifestLocation::kInternal);
+  ASSERT_TRUE(action);
+
+  const Extension* no_action =
+      AddExtension("no_action", nullptr, ManifestLocation::kInternal);
+  ASSERT_TRUE(no_action);
+
+  // 1. Developer mode is NOT enabled and no PopupDelegate provided.
   {
-    const Extension* page_action = AddExtension(
-        "page_action", manifest_keys::kPageAction, ManifestLocation::kInternal);
-    ASSERT_TRUE(page_action);
-    ExtensionContextMenuModel menu(page_action, browser_window_interface(),
+    ExtensionContextMenuModel menu(action, browser_window_interface(),
                                    /*is_pinned=*/true, nullptr, true,
                                    ContextMenuSource::kToolbarAction);
     EXPECT_EQ(GetCommandState(menu, ExtensionContextMenuModel::INSPECT_POPUP),
               CommandState::kAbsent);
   }
 
+  // 2. Developer mode is NOT enabled, but PopupDelegate IS provided.
   {
-    const Extension* browser_action =
-        AddExtension("browser_action", manifest_keys::kBrowserAction,
-                     ManifestLocation::kInternal);
-    ExtensionContextMenuModel menu(browser_action, browser_window_interface(),
+    ExtensionContextMenuModel menu(action, browser_window_interface(),
+                                   /*is_pinned=*/true, &popup_delegate, true,
+                                   ContextMenuSource::kToolbarAction);
+    EXPECT_EQ(GetCommandState(menu, ExtensionContextMenuModel::INSPECT_POPUP),
+              CommandState::kAbsent);
+  }
+
+  // Enable developer mode.
+  profile()->GetPrefs()->SetBoolean(prefs::kExtensionsUIDeveloperMode, true);
+
+  // 3. Developer mode IS enabled, but NO PopupDelegate provided.
+  {
+    ExtensionContextMenuModel menu(action, browser_window_interface(),
                                    /*is_pinned=*/true, nullptr, true,
                                    ContextMenuSource::kToolbarAction);
     EXPECT_EQ(GetCommandState(menu, ExtensionContextMenuModel::INSPECT_POPUP),
+              CommandState::kAbsent);
+  }
+
+  // 4. Developer mode IS enabled AND PopupDelegate IS provided.
+  {
+    ExtensionContextMenuModel menu(action, browser_window_interface(),
+                                   /*is_pinned=*/true, &popup_delegate, true,
+                                   ContextMenuSource::kToolbarAction);
+    // NOTE: Ideally, we'd verify this were CommandState::kEnabled. However,
+    // the model only allows that if there's an associated active web contents,
+    // which isn't the case in these dynamically-constructed menus. As such, we
+    // just verify its presence in the menu (i.e., != kAbsent); since this test
+    // exercises its visibility, that's sufficient for our use case.
+    EXPECT_NE(GetCommandState(menu, ExtensionContextMenuModel::INSPECT_POPUP),
               CommandState::kAbsent);
   }
 
   {
     // An extension with no specified action has one synthesized. However,
     // there will never be a popup to inspect, so we shouldn't add a menu item.
-    const Extension* no_action =
-        AddExtension("no_action", nullptr, ManifestLocation::kInternal);
     ExtensionContextMenuModel menu(no_action, browser_window_interface(),
-                                   /*is_pinned=*/true, nullptr, true,
+                                   /*is_pinned=*/true, &popup_delegate, true,
                                    ContextMenuSource::kToolbarAction);
     EXPECT_EQ(GetCommandState(menu, ExtensionContextMenuModel::INSPECT_POPUP),
               CommandState::kAbsent);
@@ -1560,8 +1594,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionContextMenuModelTest,
   // Update kOriginalUrl to have "on site" site access. This will make all other
   // non-restricted urls to have "on click" site access.
   SitePermissionsHelper permissions(profile());
-  permissions.UpdateSiteAccess(*extension, web_contents,
-                               PermissionsManager::UserSiteAccess::kOnSite);
+  permissions.UpdateSiteAccess(
+      *extension, web_contents, PermissionsManager::UserSiteAccess::kOnSite,
+      web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
 
   PermissionsManager* permissions_manager = PermissionsManager::Get(profile());
   EXPECT_EQ(permissions_manager->GetUserSiteAccess(*extension, kOriginalUrl),

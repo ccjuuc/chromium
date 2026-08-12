@@ -21,6 +21,7 @@
 #include "base/trace_event/trace_event.h"
 #include "components/viz/common/features.h"
 #include "gpu/command_buffer/common/swap_buffers_complete_params.h"
+#include "gpu/config/gpu_finch_features.h"
 #include "gpu/ipc/service/gpu_channel_manager.h"
 #include "gpu/ipc/service/gpu_channel_manager_delegate.h"
 #include "ui/accelerated_widget_mac/ca_layer_tree_coordinator.h"
@@ -36,10 +37,6 @@
 
 #if BUILDFLAG(SKIA_USE_DAWN)
 #include "gpu/command_buffer/service/dawn_context_provider.h"
-#endif
-
-#if BUILDFLAG(SKIA_USE_METAL)
-#include "gpu/command_buffer/service/metal_context_provider.h"
 #endif
 
 // From ANGLE's EGL/eglext_angle.h. This should be included instead of being
@@ -62,7 +59,6 @@ BASE_FEATURE(kAVFoundationOverlays,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 #if BUILDFLAG(IS_MAC)
-
 // Record the delay from the system CVDisplayLink or CADisplaylink source to
 // CrGpuMain OnVSyncPresentation().
 void RecordVSyncCallbackDelay(base::TimeDelta delay) {
@@ -81,12 +77,6 @@ id<MTLDevice> GetMTLDevice(scoped_refptr<SharedContextState> context_state) {
         context_state->dawn_context_provider()->GetDevice().Get());
   }
 #endif
-#if BUILDFLAG(SKIA_USE_METAL)
-  if (context_state->IsGraphiteMetal()) {
-    CHECK(context_state->metal_context_provider());
-    return context_state->metal_context_provider()->GetMTLDevice();
-  }
-#endif
   if (context_state->GrContextIsGL()) {
     EGLAttrib angle_device_attrib = 0;
     if (eglQueryDisplayAttribEXT(context_state->display()->GetDisplay(),
@@ -103,6 +93,18 @@ id<MTLDevice> GetMTLDevice(scoped_refptr<SharedContextState> context_state) {
   return nil;
 }
 
+void BufferPresented(base::WeakPtr<gpu::ImageTransportSurfaceOverlayMacEGL>
+                         image_transfer_weak_ptr,
+                     gl::GLSurface::PresentationCallback callback,
+                     const gfx::PresentationFeedback& feedback) {
+  if (!image_transfer_weak_ptr) {
+    return;
+  }
+
+  DCHECK(!callback.is_null());
+  std::move(callback).Run(feedback);
+}
+
 }  // namespace
 
 ImageTransportSurfaceOverlayMacEGL::ImageTransportSurfaceOverlayMacEGL(
@@ -113,8 +115,7 @@ ImageTransportSurfaceOverlayMacEGL::ImageTransportSurfaceOverlayMacEGL(
       !base::FeatureList::IsEnabled(kAVFoundationOverlays);
 
   auto buffer_presented_callback =
-      base::BindRepeating(&ImageTransportSurfaceOverlayMacEGL::BufferPresented,
-                          weak_ptr_factory_.GetWeakPtr());
+      base::BindRepeating(&BufferPresented, weak_ptr_factory_.GetWeakPtr());
 
   auto gl_make_current_callback =
       base::BindRepeating(&SharedContextState::MakeCurrent, context_state,
@@ -175,13 +176,6 @@ ImageTransportSurfaceOverlayMacEGL::~ImageTransportSurfaceOverlayMacEGL() {
 #endif
 }
 
-void ImageTransportSurfaceOverlayMacEGL::BufferPresented(
-    PresentationCallback callback,
-    const gfx::PresentationFeedback& feedback) {
-  DCHECK(!callback.is_null());
-  std::move(callback).Run(feedback);
-}
-
 void ImageTransportSurfaceOverlayMacEGL::Present(
     SwapCompletionCallback completion_callback,
     PresentationCallback presentation_callback,
@@ -213,14 +207,15 @@ void ImageTransportSurfaceOverlayMacEGL::Present(
   }
 
   bool delay_presentation_until_next_vsync =
-      features::IsVSyncAlignedPresentEnabled() && data.is_handling_interaction;
+      features::IsVSyncAligned() ||
+      (features::IsVSyncAlignedForScrolling() && data.is_handling_interaction);
 
   // The current frame has been added to
   // ca_layer_tree_coordinator_->NumPendingSwaps() after calling
   // ca_layer_tree_coordinator_->Present(). Check NumPendingSwaps() > 1 to see
   // whether there is any previous pending frame. The current frame must wait in
   // the queue if there is already one before this.
-  if (features::IsVSyncAlignedPresentEnabled() &&
+  if ((features::IsVSyncAligned() || features::IsVSyncAlignedForScrolling()) &&
       ca_layer_tree_coordinator_->NumPendingSwaps() > 1) {
     delay_presentation_until_next_vsync = true;
   }
@@ -292,19 +287,23 @@ void ImageTransportSurfaceOverlayMacEGL::SetMaxPendingSwaps(
 }
 
 #if BUILDFLAG(IS_MAC)
-void ImageTransportSurfaceOverlayMacEGL::SetVSyncDisplayID(int64_t display_id) {
-  if (!display_link_mac_ || display_id != display_id_) {
-    vsync_callback_mac_ = nullptr;
-
-    // Commit all pending frames before switching to the new monitor.
-    while (ca_layer_tree_coordinator_->NumPendingSwaps()) {
-      vsync_callback_mac_keep_alive_counter_ =
-          std::max(vsync_callback_mac_keep_alive_counter_, 1);
-      OnVSyncPresentation(ui::VSyncParamsMac());
-    }
-
-    display_link_mac_ = ui::DisplayLinkMac::GetForDisplay(display_id);
+void ImageTransportSurfaceOverlayMacEGL::SetVSyncDisplayID(int64_t display_id,
+                                                           bool force_update) {
+  if (display_id_ == display_id && !force_update) {
+    return;
   }
+
+  vsync_callback_mac_ = nullptr;
+
+  // Commit all pending frames before switching to the new monitor.
+  while (ca_layer_tree_coordinator_->NumPendingSwaps()) {
+    vsync_callback_mac_keep_alive_counter_ =
+        std::max(vsync_callback_mac_keep_alive_counter_, 1);
+    OnVSyncPresentation(ui::VSyncParamsMac());
+  }
+
+  display_link_mac_ = ui::DisplayLinkMac::GetForDisplay(display_id);
+
   display_id_ = display_id;
 }
 
@@ -379,6 +378,5 @@ void ImageTransportSurfaceOverlayMacEGL::OnVSyncPresentation(
     vsync_callback_mac_ = nullptr;
   }
 }
-
 #endif
 }  // namespace gpu

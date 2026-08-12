@@ -14,6 +14,10 @@
 #include <setupapi.h>
 // clang-format on
 
+// LogSeverity is both a macro in setupapi.h and an enum in absl, which is used
+// indirectly via //base.
+#undef LogSeverity
+
 #include <optional>
 
 #include "base/memory/free_deleter.h"
@@ -133,7 +137,7 @@ void CredentialProviderBrokerWin::OpenDevice(
         break;
       }
 
-      std::optional<uint16_t> usage_page = GetUsagePage(device_handle.Get());
+      std::optional<uint16_t> usage_page = GetUsagePage(device_handle.get());
 
       // Only if the input device path is corresponding to a FIDO
       // device, we will return appropriate device handle. Otherwise,

@@ -22,7 +22,6 @@
 #include "base/test/task_environment.h"
 #include "base/test/test_discardable_memory_allocator.h"
 #include "base/threading/thread_checker_impl.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/publishers/app_publisher.h"
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
@@ -34,6 +33,7 @@
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_integration_test.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/test/base/chrome_test_utils.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "content/public/browser/webui_config_map.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -105,6 +105,10 @@ class DemoModeAppIntegrationTest : public DemoModeAppIntegrationTestBase {
     scoped_feature_list_.InitWithFeatures(
         /*enabled_features=*/{features::kDemoModeAppLandscapeLocked},
         /*disabled_features=*/{});
+    // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox is
+    // enabled and then remove this.
+    webui_omnibox_feature_list_.InitFromCommandLine(
+        "", "WebUIOmniboxPopup,WebUIOmniboxAimPopup");
   }
 
  protected:
@@ -147,6 +151,7 @@ class DemoModeAppIntegrationTest : public DemoModeAppIntegrationTestBase {
   DeviceStateMixin device_state_{
       &mixin_host_, ash::DeviceStateMixin::State::OOBE_COMPLETED_DEMO_MODE};
   base::test::ScopedFeatureList scoped_feature_list_;
+  base::test::ScopedFeatureList webui_omnibox_feature_list_;
 };
 
 // Class that waits for, then asserts, that a widget has entered or exited

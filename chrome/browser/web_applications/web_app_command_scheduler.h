@@ -12,30 +12,48 @@
 
 #include "base/files/file_path.h"
 #include "base/types/expected.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
+#include "chrome/browser/web_applications/commands/fetch_manifest_and_update_result.h"
 #include "chrome/browser/web_applications/commands/internal/callback_command.h"
-#include "chrome/browser/web_applications/isolated_web_apps/commands/isolated_web_app_apply_update_command.h"
+#include "chrome/browser/web_applications/model/iwa_update_info.h"
+#include "chrome/browser/web_applications/model/migration_behavior.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_sub_manager.h"
+#include "chrome/browser/web_applications/scheduler/apply_manifest_migration_result.h"
+#include "chrome/browser/web_applications/scheduler/apply_pending_manifest_update_result.h"
+#include "chrome/browser/web_applications/scheduler/fetch_install_info_from_install_url_result.h"
+#include "chrome/browser/web_applications/scheduler/fetch_installability_for_chrome_management_result.h"
+#include "chrome/browser/web_applications/scheduler/install_migrate_to_app_result.h"
+#include "chrome/browser/web_applications/scheduler/isolated_web_app_apply_update_result.h"
+#include "chrome/browser/web_applications/scheduler/manifest_silent_update_result.h"
+#include "chrome/browser/web_applications/scheduler/navigate_and_trigger_install_dialog_result.h"
+#include "chrome/browser/web_applications/scheduler/update_validated_origin_associations_result.h"
+#include "chrome/browser/web_applications/scheduler/web_app_install_from_migrate_from_field_result.h"
 #include "chrome/browser/web_applications/ui_manager/update_dialog_types.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
 #include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_install_params.h"
 #include "chrome/browser/web_applications/web_app_management_type.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_id.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "components/webapps/browser/uninstall_result_code.h"
 #include "components/webapps/isolated_web_apps/types/iwa_version.h"
+#include "third_party/blink/public/mojom/manifest/manifest.mojom-forward.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/web_applications/isolated_web_apps/policy/isolated_web_app_cache_client.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
+#if BUILDFLAG(IS_MAC)
+#include "chrome/browser/web_applications/scheduler/rewrite_diy_icons_result.h"
+#endif  // BUILDFLAG(IS_MAC)
+
 class GURL;
 class Profile;
-class Browser;
+class BrowserWindowInterface;
 
 namespace content {
+class Page;
 class StoragePartitionConfig;
 class WebContents;
 }  // namespace content
@@ -66,10 +84,9 @@ enum class ApplyPendingManifestUpdateResult;
 enum class FallbackBehavior;
 enum class InstallableCheckResult;
 enum class IsolatedInstallabilityCheckResult;
+enum class LaunchOrReparentResult;
 enum class LaunchWebAppWindowSetting;
 enum class RunOnOsLoginMode;
-enum class ManifestUpdateCheckResult;
-enum class ManifestUpdateResult;
 enum class ManifestSilentUpdateCheckResult;
 enum class NavigateAndTriggerInstallDialogCommandResult;
 struct CleanupOrphanedIsolatedWebAppsCommandError;
@@ -83,8 +100,6 @@ struct IsolatedWebAppUpdatePrepareAndStoreCommandSuccess;
 struct SynchronizeOsOptions;
 struct WebAppIconDiagnosticResult;
 struct WebAppInstallInfo;
-struct ManifestSilentUpdateCompletionInfo;
-enum class FetchManifestAndUpdateResult;
 
 #if BUILDFLAG(IS_CHROMEOS)
 class CleanupBundleCacheSuccess;
@@ -97,9 +112,6 @@ class RemoveObsoleteBundleVersionsError;
 class RemoveObsoleteBundleVersionsSuccess;
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(IS_MAC)
-enum class RewriteIconResult;
-#endif  // BUILDFLAG(IS_MAC)
 // The command scheduler is the main API to access the web app system. The
 // scheduler internally ensures:
 // * Operations occur after the WebAppProvider is ready (so you don't have to
@@ -109,14 +121,13 @@ enum class RewriteIconResult;
 //   reading/writing from the various data storage of the system.
 // * Operations have the necessary dependencies from the WebAppProvider system.
 //
-// Note: When adding new commands to this scheduler, please avoid including them
-// in this file, and instead forward declare needed types above.
+// Note: When adding new commands to this scheduler, either:
+// - have a dedicated file in scheduler/ which is just for result and callback
+//   types (forward declaring everything possible to reduce compile size), or
+// - forward declare needed types above and redefine the callback type in the
+//   scheduler class.
 class WebAppCommandScheduler {
  public:
-  using ManifestWriteCallback =
-      base::OnceCallback<void(const GURL& url,
-                              const webapps::AppId& app_id,
-                              ManifestUpdateResult result)>;
   using InstallIsolatedWebAppCallback = base::OnceCallback<void(
       base::expected<InstallIsolatedWebAppCommandSuccess,
                      InstallIsolatedWebAppCommandError>)>;
@@ -128,14 +139,17 @@ class WebAppCommandScheduler {
   using WebInstallFromUrlCommandCallback =
       base::OnceCallback<void(const webapps::AppId& app_id,
                               webapps::InstallResultCode code)>;
+  using WebInstallFromManifestCommandCallback =
+      base::OnceCallback<void(const webapps::AppId& app_id,
+                              webapps::InstallResultCode code)>;
   using UninstallCallback =
       base::OnceCallback<void(webapps::UninstallResultCode)>;
   using LaunchWebAppCallback =
-      base::OnceCallback<void(base::WeakPtr<Browser> browser,
+      base::OnceCallback<void(base::WeakPtr<BrowserWindowInterface> browser,
                               base::WeakPtr<content::WebContents> web_contents,
                               apps::LaunchContainer container)>;
   using LaunchWebAppDebugValueCallback =
-      base::OnceCallback<void(base::WeakPtr<Browser> browser,
+      base::OnceCallback<void(base::WeakPtr<BrowserWindowInterface> browser,
                               base::WeakPtr<content::WebContents> web_contents,
                               apps::LaunchContainer container,
                               base::Value debug_value)>;
@@ -166,13 +180,13 @@ class WebAppCommandScheduler {
       webapps::ManifestId manifest_id,
       GURL install_url,
       webapps::ManifestId parent_manifest_id,
-      base::OnceCallback<void(std::unique_ptr<WebAppInstallInfo>)> callback);
+      FetchInstallInfoFromInstallUrlCallback callback);
 
   // Same as the overload above, but without parent_manifest_id.
   void FetchInstallInfoFromInstallUrl(
       webapps::ManifestId manifest_id,
       GURL install_url,
-      base::OnceCallback<void(std::unique_ptr<WebAppInstallInfo>)> callback);
+      FetchInstallInfoFromInstallUrlCallback callback);
 
   // Installs a web app from a pre-filled `WebAppInstallInfo` struct, bypassing
   // the manifest fetching step. This is for programmatic installations where
@@ -215,35 +229,16 @@ class WebAppCommandScheduler {
       base::OnceClosure callback,
       const base::Location& location = FROM_HERE);
 
-  using ManifestUpdateCheckCompletedCallback = base::OnceCallback<void(
-      ManifestUpdateCheckResult check_result,
-      std::unique_ptr<WebAppInstallInfo> new_install_info)>;
-  // Checks if an installed web app has an updated manifest. It fetches the new
-  // manifest from the app's `url`, compares it with the existing one, and if
-  // there are changes, it may prompt the user for confirmation before applying
-  // them.
-  void ScheduleManifestUpdateCheck(
-      const GURL& url,
-      const webapps::AppId& app_id,
-      base::Time check_time,
-      base::WeakPtr<content::WebContents> contents,
-      ManifestUpdateCheckCompletedCallback callback,
-      const base::Location& location = FROM_HERE);
-
-  using ManifestSilentUpdateCompletedCallback = base::OnceCallback<void(
-      ManifestSilentUpdateCompletionInfo completion_info)>;
-  // A newer version of `ScheduleManifestUpdateCheck` that uses a more
-  // predictable app updating algorithm. This will eventually replace the
-  // original.
-  // For more details, go/predictable-app-updating-design-doc.
+  // Start the predictable app updating algorithm by fetching the manifest and
+  // choosing to either apply the manifest update silently or store it to be
+  // surfaced later to the user. For more details,
+  // go/predictable-app-updating-design-doc.
   void ScheduleManifestSilentUpdate(
       content::WebContents& contents,
       std::optional<base::Time> previous_time_for_silent_icon_update,
-      ManifestSilentUpdateCompletedCallback callback,
+      ManifestSilentUpdateCallback callback,
       const base::Location& location = FROM_HERE);
 
-  using ApplyPendingManifestUpdateCallback =
-      base::OnceCallback<void(ApplyPendingManifestUpdateResult check_result)>;
   // Applies any stored pending update metadata to the web app, updating its
   // security sensitive fields in accordance to a more predictable app updating
   // algorithm as defined in go/predictable-app-updating-design-doc.
@@ -251,25 +246,9 @@ class WebAppCommandScheduler {
       const webapps::AppId& app_id,
       std::unique_ptr<ScopedKeepAlive> keep_alive,
       std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive,
-      ApplyPendingManifestUpdateCallback callback,
+      ApplyPendingManifestUpdateCompletedCallback callback,
       const base::Location& location = FROM_HERE);
 
-  // Finalizes a manifest update by writing the new `install_info` to the
-  // database. This is often called after all app windows are closed to avoid
-  // conflicts. The keep-alives ensure the browser doesn't shut down during the
-  // write. `install_info` must be non-null.
-  void ScheduleManifestUpdateFinalize(
-      const GURL& url,
-      const webapps::AppId& app_id,
-      std::unique_ptr<WebAppInstallInfo> install_info,
-      std::unique_ptr<ScopedKeepAlive> keep_alive,
-      std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive,
-      ManifestWriteCallback callback,
-      const base::Location& location = FROM_HERE);
-
-  using FetchInstallabilityForChromeManagementCallback =
-      base::OnceCallback<void(InstallableCheckResult result,
-                              std::optional<webapps::AppId> app_id)>;
   // Checks if a URL is installable as a web app, used for enterprise policy
   // checks. Returns whether it's installable, not installable, or already
   // installed, along with the app ID if applicable.
@@ -283,9 +262,6 @@ class WebAppCommandScheduler {
   // command was able to trigger the install dialog. This opens a new tab,
   // navigates to `install_url`, and if the site is installable, it triggers
   // the install dialog for the user.
-  using NavigateAndTriggerInstallDialogCommandCallback =
-      base::OnceCallback<void(
-          NavigateAndTriggerInstallDialogCommandResult result)>;
   void ScheduleNavigateAndTriggerInstallDialog(
       const GURL& install_url,
       const GURL& origin_url,
@@ -303,6 +279,7 @@ class WebAppCommandScheduler {
       std::unique_ptr<ScopedKeepAlive> optional_keep_alive,
       std::unique_ptr<ScopedProfileKeepAlive> optional_profile_keep_alive,
       InstallIsolatedWebAppCallback callback,
+      std::optional<IwaUpdateInfo> optional_update_info = std::nullopt,
       const base::Location& call_location = FROM_HERE);
 
   // Finds and removes any Isolated Web App data directories on disk that are
@@ -340,11 +317,12 @@ class WebAppCommandScheduler {
       base::OnceCallback<void(IsolatedWebAppApplyUpdateCommandResult)> callback,
       const base::Location& call_location = FROM_HERE);
 
-  // Checks if a Signed Web Bundle is a valid and installable Isolated Web App.
-  // It compares the version from the bundle's metadata with an already
-  // installed app (if one exists) to determine if the bundle is a new install,
-  // an update, or outdated.
-  virtual void CheckIsolatedWebAppBundleInstallability(
+  // Checks if a Signed Web Bundle is a valid and an Isolated Web App that can
+  // be installed by the user. It compares the version from the bundle's
+  // metadata with an already installed app (if one exists) to determine if the
+  // bundle is a new install, an update, or outdated. It also checks if the app
+  // is allowlisted to be installed by the user.
+  virtual void CheckIsolatedWebAppBundleUserInstallability(
       const SignedWebBundleMetadata& bundle_metadata,
       base::OnceCallback<void(IsolatedInstallabilityCheckResult,
                               std::optional<IwaVersion>)> callback,
@@ -390,11 +368,6 @@ class WebAppCommandScheduler {
       const base::Location& call_location = FROM_HERE);
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-  // Calculates the total browsing data size for all installed Isolated Web
-  // Apps.
-  void GetIsolatedWebAppBrowsingData(
-      base::OnceCallback<void(base::flat_map<url::Origin, uint64_t>)> callback,
-      const base::Location& call_location = FROM_HERE);
 
   // Gets the StoragePartitionConfig for a <controlledframe> within the given
   // Isolated Web App. If the partition is persistent (not `in_memory`), it is
@@ -405,6 +378,13 @@ class WebAppCommandScheduler {
       bool in_memory,
       base::OnceCallback<void(std::optional<content::StoragePartitionConfig>)>
           callback,
+      const base::Location& location = FROM_HERE);
+
+  // Decoupled post-install action to reparent or launch the app.
+  void LaunchOrReparentWebContentsIntoApp(
+      const webapps::AppId& app_id,
+      base::WeakPtr<content::WebContents> web_contents,
+      base::OnceCallback<void(LaunchOrReparentResult)> callback,
       const base::Location& location = FROM_HERE);
 
   // Installs a web app using data from a sync update. It first tries to fetch a
@@ -524,7 +504,7 @@ class WebAppCommandScheduler {
   template <typename LockType, typename ReturnType>
   using CallbackCommand =
       base::OnceCallback<ReturnType(LockType& lock,
-                                    base::Value::Dict& debug_value)>;
+                                    base::DictValue& debug_value)>;
   // `ScheduleCallback*` methods provide convenient way to do operations
   // on the WebAppProvider system that don't require any async work, but still
   // have all of the safety guarantees of commands. All require a:
@@ -578,14 +558,15 @@ class WebAppCommandScheduler {
 
   // Launches the given app. This call also uses keep-alives to guarantee that
   // the browser and profile will not destruct before the launch is complete.
-  void LaunchApp(const webapps::AppId& app_id,
-                 const base::CommandLine& command_line,
-                 const base::FilePath& current_directory,
-                 const std::optional<GURL>& protocol_handler_launch_url,
-                 const std::optional<GURL>& file_launch_url,
-                 const std::vector<base::FilePath>& launch_files,
-                 LaunchWebAppCallback callback,
-                 const base::Location& location = FROM_HERE);
+  void LaunchAppFromCommandLine(
+      const webapps::AppId& app_id,
+      const base::CommandLine& command_line,
+      const base::FilePath& current_directory,
+      const std::optional<GURL>& protocol_handler_launch_url,
+      const std::optional<GURL>& file_launch_url,
+      const std::vector<base::FilePath>& launch_files,
+      LaunchWebAppCallback callback,
+      const base::Location& location = FROM_HERE);
 
   // Launches the given app to the given url if specified, or the app
   // `start_url` if not. This uses keep-alives to guarantee the
@@ -593,6 +574,7 @@ class WebAppCommandScheduler {
   void LaunchApp(const webapps::AppId& app_id,
                  const std::optional<GURL>& url,
                  LaunchWebAppCallback callback,
+                 std::optional<apps::LaunchSource> launch_source = std::nullopt,
                  const base::Location& location = FROM_HERE);
 
   // Used to launch apps with a custom launch params. This does not respect the
@@ -634,13 +616,13 @@ class WebAppCommandScheduler {
   // `WebApp::diy_app_icons_masked_on_mac()` to true when
   // complete.
   void RewriteDiyIcons(const webapps::AppId& app_id,
-                       base::OnceCallback<void(RewriteIconResult)> callback,
+                       RewriteIconResultCallback callback,
                        const base::Location& location = FROM_HERE);
 #endif  // BUILDFLAG(IS_MAC)
 
   // Finds web apps that share the same install URLs (possibly across different
   // install sources) and dedupes the install URL configs into the most
-  // recently installed non-placeholder-like web app. See crbug.com/1427340.
+  // recently installed non-placeholder-like web app. See crbug.com/40261748.
   void ScheduleDedupeInstallUrls(base::OnceClosure callback,
                                  const base::Location& location = FROM_HERE);
 
@@ -663,6 +645,7 @@ class WebAppCommandScheduler {
       WebAppIconDiagnosticResultCallback result_callback,
       const base::Location& location = FROM_HERE);
 
+  // TODO(crbug.com/520025525): Remove install_url code.
   // Implements the Web Install API (`navigator.install()`).
   // Calls `installed_callback` with the `InstallResultCode` and the computed
   // manifest id if successful. Used by Web Install API.
@@ -674,10 +657,30 @@ class WebAppCommandScheduler {
                          WebInstallFromUrlCommandCallback installed_callback,
                          const base::Location& location = FROM_HERE);
 
-  // Feches the install_url, validates that an installable manifest with a
-  // manifest id exists and matches the given one. Then, locks the app lock for
-  // the app and and updates the app if it is installed. This assumes it is a
-  // trusted update, so trusted icons are copied from all manifest icons.
+  // Implements the Web Install API manifest_url flow
+  // (`navigator.install({manifest_url})`). Installs a web app from a
+  // pre-parsed manifest, downloading icons via the shared web contents.
+  void InstallAppFromManifest(
+      blink::mojom::ManifestPtr manifest,
+      const GURL& manifest_url,
+      base::WeakPtr<content::WebContents> initiating_web_contents,
+      base::WeakPtr<content::Page> initiating_page,
+      const GURL& requesting_page_url,
+      WebAppInstallDialogCallback dialog_callback,
+      WebInstallFromManifestCommandCallback installed_callback,
+      const base::Location& location = FROM_HERE);
+
+  // Fetches the `install_url`, validates that an installable manifest with a
+  // manifest ID exists and matches the given one. Then, locks the app lock for
+  // the app and updates the app if it is installed.
+  //
+  // If `force_trusted_silent_update` is true, the update is assumed to be for
+  // a trusted manifest (e.g. policy, preinstalled), and all manifest icons
+  // will be saved as trusted icons. Identity changes will be applied silently.
+  //
+  // If `force_trusted_silent_update` is false, the update is treated as a
+  // normal user-installed app update. Identity changes will be recorded as
+  // pending updates.
   //
   // Note: Callers may want to check if the app is installed first before
   // calling this to not waste resources loading the install url in the
@@ -685,7 +688,9 @@ class WebAppCommandScheduler {
   void FetchManifestAndUpdate(
       const GURL& install_url,
       const webapps::ManifestId& manifest_id,
-      base::OnceCallback<void(FetchManifestAndUpdateResult)> callback,
+      std::optional<base::Time> previous_time_for_silent_icon_update,
+      bool force_trusted_silent_update,
+      FetchManifestAndUpdateCallback callback,
       const base::Location& location = FROM_HERE);
 
   base::WeakPtr<WebAppCommandScheduler> GetWeakPtr();
@@ -707,11 +712,74 @@ class WebAppCommandScheduler {
       base::OnceCallback<void(std::optional<WebAppIdentityUpdate>)> callback,
       const base::Location& location = FROM_HERE);
 
+  // Reads pending app migration information like icons to show on the dialog
+  // from disk, and uses that with web app metadata to construct a
+  // WebAppIdentityUpdate instance.
+  void ReadAppMigrationDataFromDisk(
+      const webapps::AppId& old_app_id,
+      const webapps::AppId& new_app_id,
+      bool is_forced_migration_on_startup,
+      base::OnceCallback<void(std::optional<WebAppIdentityUpdate>)> callback,
+      const base::Location& location = FROM_HERE);
+
   // Marks whether the pending update available for the app is ignored by the
   // user, and notifies changes to the WebAppRegistrar.
   void MarkAppPendingUpdateAsIgnored(
       const webapps::AppId& app_id,
       base::OnceClosure done,
+      const base::Location& location = FROM_HERE);
+
+  // Marks that the pending migration available for the app is ignored by the
+  // user, and notifies changes to the WebAppRegistrar.
+  void MarkAppPendingMigrationAsIgnored(
+      const webapps::AppId& app_id,
+      base::OnceClosure done,
+      const base::Location& location = FROM_HERE);
+
+  // Schedules the ResolveWebAppPendingMigrationInfoCommand to resolve pending
+  // migration info for all apps.
+  virtual void ScheduleResolveWebAppPendingMigrationInfo(
+      base::OnceClosure callback,
+      const base::Location& location = FROM_HERE);
+
+  void UpdateValidatedOriginAssociations(
+      const webapps::AppId& app_id,
+      base::OnceCallback<void(UpdateValidatedOriginAssociationsResult)>
+          callback,
+      const base::Location& location = FROM_HERE);
+
+  // Schedules a command to install a web app from a "migrate_from" field in
+  // a manifest.
+  void ScheduleWebAppInstallFromMigrateFromField(
+      base::WeakPtr<content::WebContents> web_contents,
+      blink::mojom::ManifestPtr manifest,
+      WebAppInstallFromMigrateFromFieldCallback callback,
+      const base::Location& location = FROM_HERE);
+
+  // Schedules a command to install an app from a "migrate_to" field in a
+  // manifest.
+  void ScheduleInstallMigrateToApp(
+      const webapps::ManifestId& source_manifest_id,
+      const webapps::ManifestId& target_manifest_id,
+      const GURL& target_install_url,
+      InstallMigrateToAppResultCallback callback,
+      const base::Location& location = FROM_HERE);
+
+  // Schedules the command to finish an app migration by removing the source app
+  // and fully installing the migrated app.
+  void ApplyManifestMigration(
+      const webapps::AppId& source_app_id,
+      const webapps::AppId& destination_app_id,
+      const MigrationBehavior migration_behavior,
+      std::unique_ptr<ScopedKeepAlive> keep_alive,
+      std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive,
+      ApplyManifestMigrationResultCallback callback,
+      const base::Location& location = FROM_HERE);
+
+  // Schedules the command to run garbage collection on unused storage
+  // partitions.
+  void GarbageCollectStoragePartitions(
+      base::OnceClosure callback,
       const base::Location& location = FROM_HERE);
 
   // TODO(crbug.com/40215411): expose all commands for web app

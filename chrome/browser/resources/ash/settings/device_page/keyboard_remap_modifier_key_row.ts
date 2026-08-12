@@ -16,7 +16,6 @@ import 'chrome://resources/ash/common/shortcut_input_ui/icons.html.js';
 
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {assertNotReached} from 'chrome://resources/js/assert.js';
-import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import type {PolymerElementProperties} from 'chrome://resources/polymer/v3_0/polymer/interfaces.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
@@ -103,17 +102,17 @@ export class KeyboardRemapModifierKeyRowElement extends
     };
   }
 
-  protected keyLabel: string;
-  private metaKeyLabel: string;
-  private keyMapTargets: DropdownMenuOptionList;
-  private keyIcon: KeyIcon;
-  private hasFunctionKey: boolean;
-  keyState: KeyState;
-  pref: chrome.settingsPrivate.PrefObject;
-  metaKey: MetaKey;
-  key: ModifierKey;
-  defaultRemappings: {[key: number]: ModifierKey};
-  removeTopBorder: boolean;
+  declare protected keyLabel: string;
+  declare private metaKeyLabel: string;
+  declare private keyMapTargets: DropdownMenuOptionList;
+  declare private keyIcon: KeyIcon;
+  declare private hasFunctionKey: boolean;
+  declare keyState: KeyState;
+  declare pref: chrome.settingsPrivate.PrefObject;
+  declare metaKey: MetaKey;
+  declare key: ModifierKey;
+  declare defaultRemappings: {[key: number]: ModifierKey};
+  declare removeTopBorder: boolean;
 
   override ready(): void {
     super.ready();
@@ -227,12 +226,10 @@ export class KeyboardRemapModifierKeyRowElement extends
         },
       ];
 
-      if (loadTimeData.getBoolean('enableModifierSplit')) {
-        keyMapTargets.push({
-          value: ModifierKey.kQuickInsert,
-          name: this.i18n('perDeviceKeyboardKeyQuickInsert'),
-        });
-      }
+      keyMapTargets.push({
+        value: ModifierKey.kQuickInsert,
+        name: this.i18n('perDeviceKeyboardKeyQuickInsert'),
+      });
 
       if (this.hasFunctionKey) {
         keyMapTargets.push({

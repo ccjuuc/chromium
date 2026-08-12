@@ -11,7 +11,7 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/webui/top_chrome/top_chrome_web_ui_controller.h"
 #include "components/feature_engagement/public/feature_constants.h"
-#include "components/history_embeddings/history_embeddings_service.h"
+#include "components/history_embeddings/content/history_embeddings_service.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -39,6 +39,7 @@ class HistoryEmbeddingsHandler : public history_embeddings::mojom::PageHandler {
   HistoryEmbeddingsHandler(
       mojo::PendingReceiver<history_embeddings::mojom::PageHandler>
           pending_page_handler,
+      mojo::PendingRemote<history_embeddings::mojom::Page> pending_page,
       base::WeakPtr<Profile> profile,
       content::WebUI* web_ui,
       bool for_side_panel);
@@ -47,8 +48,6 @@ class HistoryEmbeddingsHandler : public history_embeddings::mojom::PageHandler {
   ~HistoryEmbeddingsHandler() override;
 
   // history_embeddings::mojom::PageHandler:
-  void SetPage(mojo::PendingRemote<history_embeddings::mojom::Page>
-                   pending_page) override;
   void Search(history_embeddings::mojom::SearchQueryPtr query) override;
   void RecordSearchResultsMetrics(bool non_empty_results,
                                   bool user_clicked_results,

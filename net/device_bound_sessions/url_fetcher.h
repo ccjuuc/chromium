@@ -5,22 +5,29 @@
 #ifndef NET_DEVICE_BOUND_SESSIONS_URL_FETCHER_H_
 #define NET_DEVICE_BOUND_SESSIONS_URL_FETCHER_H_
 
+#include "base/memory/weak_ptr.h"
+#include "net/base/net_export.h"
 #include "net/url_request/url_request.h"
 
 namespace net {
 class URLRequestContext;
+class SSLCertRequestInfo;
+class X509Certificate;
+class SSLPrivateKey;
 }
 
 namespace net::device_bound_sessions {
 
-class URLFetcher : public URLRequest::Delegate {
+class NET_EXPORT URLFetcher : public URLRequest::Delegate {
  public:
   URLFetcher(const URLRequestContext* context,
              GURL url,
-             std::optional<net::NetLogSource> net_log_source);
+             std::optional<net::NetLogSource> net_log_source,
+             bool is_refresh);
   ~URLFetcher() override;
 
   void Start(base::OnceClosure complete_callback);
+  std::string TakeDataReceived();
 
   URLRequest& request() { return *request_; }
   const std::string& data_received() const { return data_received_; }
@@ -35,9 +42,6 @@ class URLFetcher : public URLRequest::Delegate {
   // TODO(crbug.com/438783632): Look into if OnAuthRequired might need to be
   // customize for DBSC
 
-  // TODO(crbug.com/438783633): Think about what to do for DBSC with
-  // OnCertificateRequested, leaning towards not supporting it but not sure.
-
   // Always cancel requests on SSL errors, this is the default implementation
   // of OnSSLCertificateError.
 
@@ -46,11 +50,20 @@ class URLFetcher : public URLRequest::Delegate {
 
   void OnReadCompleted(URLRequest* request, int bytes_read_or_error) override;
 
+  void OnCertificateRequested(URLRequest* request,
+                              SSLCertRequestInfo* cert_request_info) override;
+
+  void ContinueWithSelectedCertificate(scoped_refptr<X509Certificate> cert,
+                                       scoped_refptr<SSLPrivateKey> key,
+                                       bool cancel);
+
   std::unique_ptr<URLRequest> request_;
   scoped_refptr<IOBuffer> buf_;
   std::string data_received_;
   int net_error_ = OK;
   base::OnceClosure callback_;
+
+  base::WeakPtrFactory<URLFetcher> weak_factory_{this};
 };
 
 }  // namespace net::device_bound_sessions

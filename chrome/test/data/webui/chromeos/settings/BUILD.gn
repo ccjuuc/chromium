@@ -18,6 +18,11 @@ mojom("test_api_mojom") {
 }
 
 build_webui_tests("build") {
+  cc_test_files = [
+    "os_settings_browsertest.cc",
+    "os_settings_focus_interactive_uitest.cc",
+  ]
+
   files = [
     "fake_canvas_context.ts",
     "fake_in_session_auth.ts",
@@ -33,6 +38,7 @@ build_webui_tests("build") {
     "fake_user_action_recorder.ts",
     "fake_users_private.ts",
     "lock_screen_subpage_test.ts",
+    "lock_state_mixin_test.ts",
     "onc_mojo_test.ts",
     "os_page_availability_test.ts",
     "os_settings_routes_test.ts",
@@ -67,8 +73,8 @@ build_webui_tests("build") {
     "controls/v2/settings_slider_v2_test.ts",
     "controls/v2/settings_toggle_v2_test.ts",
     "crostini_page/bruschetta_subpage_test.ts",
+    "crostini_page/crostini_arc_adb_test.ts",
     "crostini_page/crostini_export_import_test.ts",
-    "crostini_page/crostini_extra_containers_subpage_test.ts",
     "crostini_page/crostini_port_forwarding_test.ts",
     "crostini_page/crostini_settings_card_test.ts",
     "crostini_page/crostini_shared_usb_devices_test.ts",
@@ -208,10 +214,8 @@ build_webui_tests("build") {
     "os_about_page/channel_switcher_dialog_test.ts",
     "os_about_page/consumer_auto_update_toggle_dialog_test.ts",
     "os_about_page/detailed_build_info_subpage_test.ts",
-    "os_about_page/edit_hostname_dialog_test.ts",
     "os_about_page/os_about_page_test.ts",
     "os_about_page/test_about_page_browser_proxy.ts",
-    "os_about_page/test_device_name_browser_proxy.ts",
     "os_apps_page/app_management_page/app_detail_view_test.ts",
     "os_apps_page/app_management_page/app_details_item_test.ts",
     "os_apps_page/app_management_page/app_item_test.ts",
@@ -225,12 +229,10 @@ build_webui_tests("build") {
     "os_apps_page/app_management_page/main_view_test.ts",
     "os_apps_page/app_management_page/permission_item_test.ts",
     "os_apps_page/app_management_page/pin_to_shelf_item_test.ts",
-    "os_apps_page/app_management_page/plugin_vm_detail_view_test.ts",
     "os_apps_page/app_management_page/pwa_detail_view_test.ts",
     "os_apps_page/app_management_page/reducers_test.ts",
     "os_apps_page/app_management_page/resize_lock_item_test.ts",
     "os_apps_page/app_management_page/supported_links_item_test.ts",
-    "os_apps_page/app_management_page/test_plugin_vm_browser_proxy.ts",
     "os_apps_page/app_management_page/uninstall_button_test.ts",
     "os_apps_page/app_notifications_page/app_notification_row_test.ts",
     "os_apps_page/app_notifications_page/app_notifications_manager_subpage_test.ts",
@@ -242,7 +244,7 @@ build_webui_tests("build") {
     "os_apps_page/app_parental_controls_page/block_app_item_test.ts",
     "os_apps_page/app_parental_controls_page/fake_app_parental_controls_handler.ts",
     "os_apps_page/app_parental_controls_page/test_utils.ts",
-    "os_apps_page/manage_isolated_web_apps_page/manage_isolated_web_apps_subpage_test.ts",
+
     "os_apps_page/os_apps_page_test.ts",
     "os_apps_page/test_android_apps_browser_proxy.ts",
     "os_bluetooth_page/os_bluetooth_change_device_name_dialog_test.ts",
@@ -319,6 +321,7 @@ build_webui_tests("build") {
     "os_privacy_page/test_peripheral_data_access_browser_proxy.ts",
     "os_privacy_page/test_privacy_hub_browser_proxy.ts",
     "os_privacy_page/test_privacy_page_browser_proxy.ts",
+    "os_privacy_page/test_security_page_browser_proxy.ts",
     "os_reset_page/reset_settings_card_test.ts",
     "os_reset_page/test_os_reset_browser_proxy.ts",
     "os_search_page/search_and_assistant_settings_card_test.ts",
@@ -370,7 +373,10 @@ build_webui_tests("build") {
     "//ash/webui/common/resources/cr_elements:build_ts",
     "//chrome/browser/resources/ash/settings:build_ts",
     "//chrome/test/data/webui/chromeos:build_ts",
+    "//chrome/test/data/webui/chromeos/bluetooth:build_ts",
+    "//chrome/test/data/webui/chromeos/cellular_setup:build_ts",
     "//chrome/test/data/webui/chromeos/nearby_share:build_ts",
+    "//chrome/test/data/webui/chromeos/network:build_ts",
     "//third_party/polymer/v3_0:library",
     "//ui/webui/resources/cr_components/app_management:build_ts",
     "//ui/webui/resources/js:build_ts",
@@ -389,9 +395,20 @@ build_webui_tests("build") {
     "chrome://webui-test/chromeos/*|" +
         rebase_path("$root_gen_dir/chrome/test/data/webui/chromeos/tsc/*",
                     target_gen_dir),
+    "chrome://webui-test/chromeos/bluetooth/*|" +
+        rebase_path(
+            "$root_gen_dir/chrome/test/data/webui/chromeos/bluetooth/tsc/*",
+            target_gen_dir),
+    "chrome://webui-test/chromeos/cellular_setup/*|" + rebase_path(
+            "$root_gen_dir/chrome/test/data/webui/chromeos/cellular_setup/tsc/*",
+            target_gen_dir),
     "chrome://webui-test/chromeos/nearby_share/*|" +
         rebase_path(
             "$root_gen_dir/chrome/test/data/webui/chromeos/nearby_share/tsc/*",
+            target_gen_dir),
+    "chrome://webui-test/chromeos/network/*|" +
+        rebase_path(
+            "$root_gen_dir/chrome/test/data/webui/chromeos/network/tsc/*",
             target_gen_dir),
   ]
 

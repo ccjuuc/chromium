@@ -92,10 +92,16 @@ class PaymentRequestBrowserTestBase
     CVC_PROMPT_SHOWN,
     NOT_SUPPORTED_ERROR,
     ABORT_CALLED,
+    INTERNAL_ERROR,
     PROCESSING_SPINNER_SHOWN,
     PROCESSING_SPINNER_HIDDEN,
+    LOADING_VIEW_SHOWN,
+    LOADING_VIEW_HIDDEN,
     PAYMENT_HANDLER_WINDOW_OPENED,
+    // Note that this is a merchant html title set event, and the signal is
+    // provided by WebcontentsObserver::TitleWasSet.
     PAYMENT_HANDLER_TITLE_SET,
+    DIALOG_SIZE_CHECK_AFTER_BROWSER_RESIZE,
   };
 
   PaymentRequestBrowserTestBase(const PaymentRequestBrowserTestBase&) = delete;
@@ -119,6 +125,13 @@ class PaymentRequestBrowserTestBase
   void SetIncognito();
   void SetInvalidSsl();
   void SetBrowserWindowInactive();
+  void SetBrowserWindowSizeCheckEnabled();
+
+  // WARNING: Bypassing user interaction checks in browser tests is discouraged.
+  // Tests should prefer simulating real user interactions (e.g., mouse clicks
+  // or keyboard input) with the payment app window whenever possible instead of
+  // bypassing the check.
+  void SetBypassUserInteractionForTesting();
 
   // PaymentRequest::ObserverForTest:
   void OnCanMakePaymentCalled() override;
@@ -129,6 +142,8 @@ class PaymentRequestBrowserTestBase
   void OnConnectionTerminated() override;
   void OnPayCalled() override;
   void OnAbortCalled() override;
+  void OnInternalError() override;
+  void OnPaymentRequestStateInitDone(PaymentRequestState* state) override;
 
   // PaymentRequestDialogView::ObserverForTest:
   void OnDialogOpened() override;
@@ -147,8 +162,11 @@ class PaymentRequestBrowserTestBase
   void OnSpecDoneUpdating() override;
   void OnProcessingSpinnerShown() override;
   void OnProcessingSpinnerHidden() override;
+  void OnLoadingViewShown() override;
+  void OnLoadingViewHidden() override;
   void OnPaymentHandlerWindowOpened() override;
   void OnPaymentHandlerTitleSet() override;
+  void OnDialogSizeCheckAfterBrowserResize() override;
 
   void InstallPaymentApp(const std::string& hostname,
                          const std::string& service_worker_filename,
@@ -311,8 +329,7 @@ class PaymentRequestBrowserTestBase
   std::unique_ptr<autofill::EventWaiter<DialogEvent>> event_waiter_;
   std::unique_ptr<net::EmbeddedTestServer> https_server_;
   // Weak, owned by the PaymentRequest object.
-  raw_ptr<TestChromePaymentRequestDelegate, AcrossTasksDanglingUntriaged>
-      delegate_ = nullptr;
+  base::WeakPtr<TestChromePaymentRequestDelegate> delegate_;
   syncer::TestSyncService sync_service_;
   sync_preferences::TestingPrefServiceSyncable prefs_;
   bool is_incognito_ = false;
@@ -320,6 +337,15 @@ class PaymentRequestBrowserTestBase
   bool is_browser_window_active_ = true;
   std::vector<base::WeakPtr<PaymentRequest>> requests_;
   ConstCSPChecker const_csp_checker_{/*allow=*/true};
+
+  // Determines whether or not PaymentRequest will enforce the minimum window
+  // size check. Most tests should run with this disabled, as bots often have
+  // small virtual displays that will fail the check.
+  bool is_browser_window_size_check_enabled_ = false;
+
+  // Determines whether to bypass the user interaction check in browser tests.
+  // Discouraged: tests should simulate real user interaction where possible.
+  bool bypass_user_interaction_for_testing_ = false;
 
   base::WeakPtrFactory<PaymentRequestBrowserTestBase> weak_ptr_factory_{this};
 };

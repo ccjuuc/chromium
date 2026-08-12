@@ -10,6 +10,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import android.content.Context;
 
@@ -24,11 +25,20 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.chrome.browser.feed.FeedServiceBridge;
+import org.chromium.chrome.browser.feed.FeedServiceBridgeJni;
+import org.chromium.chrome.browser.magic_stack.ModuleRegistry;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
-
-import java.util.function.Supplier;
+import org.chromium.components.prefs.PrefService;
+import org.chromium.components.search_engines.TemplateUrlService;
+import org.chromium.components.user_prefs.UserPrefs;
+import org.chromium.ui.base.WindowAndroid;
 
 /** Unit tests for {@link NtpCustomizationCoordinatorFactory}. */
 @RunWith(BaseRobolectricTestRunner.class)
@@ -38,14 +48,29 @@ public class NtpCustomizationCoordinatorFactoryUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private BottomSheetController mMockBottomSheetController;
-    @Mock private Supplier<Profile> mMockProfileSupplier;
+    @Mock private Profile mMockProfile;
+    @Mock private TemplateUrlService mMockTemplateUrlService;
+    @Mock private PrefService mMockPrefService;
+    @Mock private FeedServiceBridge.Natives mMockFeedServiceBridgeJni;
+    @Mock private WindowAndroid mWindowAndroid;
+    @Mock private ModuleRegistry mModuleRegistry;
+    @Mock private SnackbarManager mSnackbarManager;
 
     private Context mContext;
     private NtpCustomizationCoordinatorFactory mFactory;
 
+    private final SettableMonotonicObservableSupplier<Profile> mProfileSupplier =
+            ObservableSuppliers.createMonotonic();
+
     @Before
     public void setUp() {
         mContext = ApplicationProvider.getApplicationContext();
+        mProfileSupplier.set(mMockProfile);
+        when(mMockProfile.getOriginalProfile()).thenReturn(mMockProfile);
+        TemplateUrlServiceFactory.setInstanceForTesting(mMockTemplateUrlService);
+        UserPrefs.setPrefServiceForTesting(mMockPrefService);
+        FeedServiceBridgeJni.setInstanceForTesting(mMockFeedServiceBridgeJni);
+        when(mMockFeedServiceBridgeJni.isEnabled()).thenReturn(true);
         mFactory = new NtpCustomizationCoordinatorFactory();
         NtpCustomizationCoordinatorFactory.setInstanceForTesting(mFactory);
     }
@@ -76,8 +101,11 @@ public class NtpCustomizationCoordinatorFactoryUnitTest {
                 mFactory.create(
                         mContext,
                         mMockBottomSheetController,
-                        mMockProfileSupplier,
-                        NtpCustomizationCoordinator.BottomSheetType.MAIN);
+                        mProfileSupplier,
+                        NtpCustomizationCoordinator.BottomSheetType.MAIN,
+                        mWindowAndroid,
+                        mModuleRegistry,
+                        mSnackbarManager);
 
         // Verifies it was created and is now stored.
         assertNotNull("create() should return a non-null coordinator", coordinator);
@@ -94,8 +122,11 @@ public class NtpCustomizationCoordinatorFactoryUnitTest {
         mFactory.create(
                 mContext,
                 mMockBottomSheetController,
-                mMockProfileSupplier,
-                NtpCustomizationCoordinator.BottomSheetType.MAIN);
+                mProfileSupplier,
+                NtpCustomizationCoordinator.BottomSheetType.MAIN,
+                mWindowAndroid,
+                mModuleRegistry,
+                mSnackbarManager);
 
         verify(coordinator).dismissBottomSheet();
         assertNotSame(
@@ -111,8 +142,11 @@ public class NtpCustomizationCoordinatorFactoryUnitTest {
                 mFactory.create(
                         mContext,
                         mMockBottomSheetController,
-                        mMockProfileSupplier,
-                        NtpCustomizationCoordinator.BottomSheetType.MAIN);
+                        mProfileSupplier,
+                        NtpCustomizationCoordinator.BottomSheetType.MAIN,
+                        mWindowAndroid,
+                        mModuleRegistry,
+                        mSnackbarManager);
         assertNotNull(
                 "Coordinator should be active in the factory", mFactory.getCoordinatorForTesting());
 
@@ -131,16 +165,22 @@ public class NtpCustomizationCoordinatorFactoryUnitTest {
                 mFactory.create(
                         mContext,
                         mMockBottomSheetController,
-                        mMockProfileSupplier,
-                        NtpCustomizationCoordinator.BottomSheetType.MAIN);
+                        mProfileSupplier,
+                        NtpCustomizationCoordinator.BottomSheetType.MAIN,
+                        mWindowAndroid,
+                        mModuleRegistry,
+                        mSnackbarManager);
 
         // Creates a second coordinator, making the first one stale.
         NtpCustomizationCoordinator coordinator2 =
                 mFactory.create(
                         mContext,
                         mMockBottomSheetController,
-                        mMockProfileSupplier,
-                        NtpCustomizationCoordinator.BottomSheetType.MAIN);
+                        mProfileSupplier,
+                        NtpCustomizationCoordinator.BottomSheetType.MAIN,
+                        mWindowAndroid,
+                        mModuleRegistry,
+                        mSnackbarManager);
 
         assertSame(
                 "Factory should hold the latest coordinator",

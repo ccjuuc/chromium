@@ -41,6 +41,7 @@ source_set("lib") {
     "//services/device/fingerprint",
     "//services/device/generic_sensor",
     "//services/device/geolocation",
+    "//services/device/hid",
     "//services/device/power_monitor",
     "//services/device/public/cpp:device_features",
     "//services/device/public/cpp/compute_pressure:buildflags",
@@ -66,8 +67,6 @@ source_set("lib") {
   if (is_android) {
     deps += [ ":device_service_jni_headers" ]
   } else {
-    deps += [ "//services/device/hid" ]
-
     if (!(is_ios && target_platform == "tvos")) {
       deps += [ "//services/device/battery" ]
     }
@@ -207,6 +206,13 @@ source_set("tests") {
       "battery/battery_status_manager_win_unittest.cc",
       "generic_sensor/platform_sensor_and_provider_unittest_win.cc",
       "geolocation/wifi_data_provider_win_unittest.cc",
+      "hid/hid_service_win_unittest.cc",
+      "public/cpp/device_features_win_unittest.cc",
+      "public/cpp/geolocation/system_geolocation_source_win_unittest.cc",
+    ]
+    deps += [
+      "//services/device/public/proto:hid_gcpw_proto",
+      "//third_party/protobuf:protobuf_lite",
     ]
   }
 
@@ -229,12 +235,15 @@ source_set("tests") {
   }
 
   if (is_linux && use_dbus) {
-    sources += [ "battery/battery_status_manager_linux_unittest.cc" ]
-    deps += [ "//dbus:test_support" ]
-
-    if (is_linux) {
-      sources += [ "geolocation/wifi_data_provider_linux_unittest.cc" ]
-    }
+    sources += [
+      "battery/battery_status_manager_linux_unittest.cc",
+      "geolocation/location_provider_linux_portal_unittest.cc",
+      "geolocation/wifi_data_provider_linux_unittest.cc",
+    ]
+    deps += [
+      "//components/dbus",
+      "//dbus:test_support",
+    ]
   }
 
   if (is_chromeos) {
@@ -259,51 +268,51 @@ source_set("tests") {
     ]
     deps += [ ":device_service_jni_headers" ]
   } else {
-    sources += [
-      "hid/hid_device_info_unittest.cc",
-      "hid/hid_manager_unittest.cc",
-      "public/cpp/hid/hid_blocklist_unittest.cc",
-    ]
-    deps += [
-      "//components/variations:test_support",
-      "//services/device/hid",
-    ]
-
     if (!(is_ios && target_platform == "tvos")) {
       sources += [ "battery/battery_monitor_impl_unittest.cc" ]
       deps += [ "//services/device/battery" ]
     }
+  }
 
-    if ((!is_linux && !is_chromeos) || use_udev) {
+  sources += [
+    "hid/hid_device_info_unittest.cc",
+    "hid/hid_manager_unittest.cc",
+    "public/cpp/hid/hid_blocklist_unittest.cc",
+  ]
+  deps += [
+    "//components/variations:test_support",
+    "//services/device/hid",
+  ]
+
+  if ((!is_linux && !is_chromeos) || use_udev) {
+    sources += [
+      "hid/hid_connection_impl_unittest.cc",
+      "public/cpp/hid/hid_device_filter_unittest.cc",
+      "public/cpp/hid/hid_report_descriptor_unittest.cc",
+    ]
+    if (is_linux || is_chromeos) {
       sources += [
-        "hid/hid_connection_impl_unittest.cc",
-        "public/cpp/hid/hid_device_filter_unittest.cc",
-        "public/cpp/hid/hid_report_descriptor_unittest.cc",
+        "hid/hid_service_linux_unittest.cc",
+        "hid/input_service_linux_unittest.cc",
       ]
-      if (is_linux || is_chromeos) {
-        sources += [
-          "hid/hid_service_linux_unittest.cc",
-          "hid/input_service_linux_unittest.cc",
-        ]
-      }
-      if (!is_fuchsia && !is_ios) {
-        # Fuchsia and iOS do not currently implement HidService.
-        sources += [ "hid/hid_service_unittest.cc" ]
-      }
-      if (!is_ios) {
-        sources += [ "hid/hid_connection_unittest.cc" ]
-        deps += [
-          ":usb_test_gadget",
-          "//net:test_support",
-          "//services/device/usb",
-        ]
-      }
+    }
+    if (!is_fuchsia && !is_ios && !is_android) {
+      # Fuchsia, iOS, and Android do not currently implement HidService.
+      sources += [ "hid/hid_service_unittest.cc" ]
+    }
+    if (!is_ios && !is_android) {
+      sources += [ "hid/hid_connection_unittest.cc" ]
+      deps += [
+        ":usb_test_gadget",
+        "//net:test_support",
+        "//services/device/usb",
+      ]
     }
   }
 
   if (is_serial_enabled_platform) {
     sources += [
-      "serial/bluetooth_serial_device_enumerator_unittests.cc",
+      "serial/bluetooth_serial_device_enumerator_unittest.cc",
       "serial/bluetooth_serial_port_impl_unittest.cc",
       "serial/serial_device_enumerator_unittest.cc",
       "serial/serial_port_impl_unittest.cc",
@@ -316,6 +325,18 @@ source_set("tests") {
 
     if (is_posix) {
       sources += [ "serial/serial_io_handler_posix_unittest.cc" ]
+    }
+
+    if (is_android) {
+      sources += [ "serial/serial_device_enumerator_android_unittest.cc" ]
+      deps += [
+        "//services/device/serial:native_unittests_jni_headers",
+        "//third_party/jni_zero:jni_zero_java",
+      ]
+    }
+
+    if (is_win) {
+      sources += [ "serial/serial_device_enumerator_win_unittest.cc" ]
     }
 
     if (is_linux || is_chromeos) {
@@ -352,6 +373,7 @@ source_set("tests") {
       "//services/device/usb",
       "//services/device/usb:test_support",
       "//services/device/usb/mojo",
+      "//third_party/fuzztest",
     ]
 
     if (!is_android) {
@@ -395,7 +417,7 @@ source_set("tests") {
   if (is_win) {
     sources += [
       "generic_sensor/platform_sensor_provider_winrt_unittest.cc",
-      "generic_sensor/platform_sensor_reader_winrt_unittests.cc",
+      "generic_sensor/platform_sensor_reader_winrt_unittest.cc",
       "geolocation/win/fake_geocoordinate_winrt.cc",
       "geolocation/win/fake_geocoordinate_winrt.h",
       "geolocation/win/fake_geolocator_winrt.cc",
@@ -485,6 +507,7 @@ if (is_android) {
       "//services/device/public/java:nfc_java",
       "//services/device/public/mojom:mojom_java",
       "//services/device/screen_orientation:java",
+      "//services/device/serial:java",
       "//services/device/time_zone_monitor:java",
       "//services/device/usb:java",
       "//services/device/vibration/android:vibration_manager_java",
@@ -520,6 +543,14 @@ source_set("utility") {
       "utils/mac_utils.cc",
       "utils/mac_utils.h",
     ]
+  }
+  if (is_win) {
+    sources += [
+      "utils/setupdi_utils_win.cc",
+      "utils/setupdi_utils_win.h",
+    ]
+    libs = [ "setupapi.lib" ]
+    public_deps = [ "//components/device_event_log" ]
   }
   deps = [ "//base" ]
 }

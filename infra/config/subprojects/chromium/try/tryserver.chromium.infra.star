@@ -28,6 +28,17 @@ try_.builder(
     builderless = False,
     cores = 8,
     os = os.LINUX_DEFAULT,
+    cq_settings = try_.cq_settings(
+        location_filters = [
+            # Enable for CLs touching files under "3pp" directories which are
+            # two level deep or more from the repo root.
+            ".+/3pp/.+",
+            # Also enable for cls that affect fetch_all.py or the groovy scripts
+            # it runs unders buildSrc.
+            "third_party/android_deps/fetch_all.py",
+            "third_party/android_deps/buildSrc/src/main/groovy/.+",
+        ],
+    ),
     execution_timeout = 6 * time.hour,
     properties = {
         "$build/chromium_3pp": {
@@ -44,24 +55,14 @@ try_.builder(
             "gclient_apply_config": ["android"],
         },
     },
-    tryjob = try_.job(
-        location_filters = [
-            # Enable for CLs touching files under "3pp" directories which are
-            # two level deep or more from the repo root.
-            ".+/3pp/.+",
-            # Also enable for cls that affect fetch_all.py or the groovy scripts
-            # it runs unders buildSrc.
-            "third_party/android_deps/fetch_all.py",
-            "third_party/android_deps/buildSrc/src/main/groovy/.+",
-        ],
-    ),
 )
 
 try_.builder(
     name = "3pp-mac-amd64-packager",
     executable = "recipe:chromium_3pp",
     builderless = True,
-    os = os.MAC_DEFAULT,
+    # TODO(crbug.com/543006750): Revert to MAC_DEFAULT after arm migration.
+    os = os.MAC_15,
     properties = {
         "$build/chromium_3pp": {
             "platform": "mac-amd64",
@@ -114,11 +115,12 @@ try_.builder(
     cores = 2,
     os = os.LINUX_DEFAULT,
     contact_team_email = "chrome-browser-infra-team@google.com",
+    cq_settings = try_.cq_settings(
+        custom_cq_run_modes = [try_.MEGA_CQ_DRY_RUN_NAME, try_.MEGA_CQ_FULL_RUN_NAME],
+        on_default_cq = True,
+    ),
     execution_timeout = 36 * time.hour,  # We expect it can take a while.
     service_account = try_constants.DEFAULT_SERVICE_ACCOUNT,
-    tryjob = try_.job(
-        custom_cq_run_modes = [try_.MEGA_CQ_DRY_RUN_NAME, try_.MEGA_CQ_FULL_RUN_NAME],
-    ),
 )
 
 try_.builder(
@@ -151,6 +153,14 @@ try_.builder(
     cores = 8,
     os = os.LINUX_DEFAULT,
     contact_team_email = "chrome-dev-infra-team@google.com",
+    cq_settings = try_.cq_settings(
+        location_filters = [
+            # Run on depot_tools for testing telemetry
+            "third_party/depot_tools/.+",
+            "tools/utr/.+",
+            "tools/mb/.+",
+        ],
+    ),
     execution_timeout = 2 * time.hour,
     properties = {
         "builder_suites": [
@@ -160,7 +170,6 @@ try_.builder(
                 "test_names": [
                     "url_unittests",
                 ],
-                "build_dir": "out/linux-rel",
             },
             {
                 "bucket": "ci",
@@ -168,20 +177,12 @@ try_.builder(
                 "test_names": [
                     "telemetry_gpu_unittests",
                 ],
-                "build_dir": "out/linux-rel",
             },
         ],
     },
     service_account = try_constants.DEFAULT_SERVICE_ACCOUNT,
+    siso_keep_going = siso.KEEP_GOING,
     siso_project = siso.project.DEFAULT_UNTRUSTED,
-    tryjob = try_.job(
-        location_filters = [
-            # Run on depot_tools for testing telemetry
-            "third_party/depot_tools/.+",
-            "tools/utr/.+",
-            "tools/mb/.+",
-        ],
-    ),
 )
 
 try_.builder(
@@ -214,6 +215,14 @@ try_.builder(
     cores = 8,
     os = os.WINDOWS_DEFAULT,
     contact_team_email = "chrome-dev-infra-team@google.com",
+    cq_settings = try_.cq_settings(
+        location_filters = [
+            # Run on depot_tools for testing telemetry
+            "third_party/depot_tools/.+",
+            "tools/utr/.+",
+            "tools/mb/.+",
+        ],
+    ),
     execution_timeout = 2 * time.hour,
     properties = {
         "builder_suites": [
@@ -223,7 +232,6 @@ try_.builder(
                 "test_names": [
                     "url_unittests",
                 ],
-                "build_dir": "out/win-rel",
             },
             {
                 "bucket": "ci",
@@ -231,20 +239,12 @@ try_.builder(
                 "test_names": [
                     "telemetry_gpu_unittests",
                 ],
-                "build_dir": "out/win-rel",
             },
         ],
     },
     service_account = try_constants.DEFAULT_SERVICE_ACCOUNT,
+    siso_keep_going = siso.KEEP_GOING,
     siso_project = siso.project.DEFAULT_UNTRUSTED,
-    tryjob = try_.job(
-        location_filters = [
-            # Run on depot_tools for testing telemetry
-            "third_party/depot_tools/.+",
-            "tools/utr/.+",
-            "tools/mb/.+",
-        ],
-    ),
 )
 
 try_.builder(
@@ -291,5 +291,135 @@ try_.builder(
         ],
     },
     service_account = try_constants.DEFAULT_SERVICE_ACCOUNT,
+    siso_keep_going = siso.KEEP_GOING,
     siso_project = siso.project.DEFAULT_UNTRUSTED,
+)
+
+# TODO(crbug.com/479225938) Transition to own autotest recipe once we've confirmed these builders
+# are stable
+try_.builder(
+    name = "linux-autotest-tester",
+    description_html = "Make sure tools/autotest.py remains functional on Linux",
+    executable = "recipe:chromium/autotest_runner",
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(
+            config = "chromium",
+        ),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium",
+            target_platform = builder_config.target_platform.LINUX,
+        ),
+    ),
+    builderless = True,
+    os = os.LINUX_DEFAULT,
+    contact_team_email = "pdeio-chrome-test-infra-mx@google.com",
+    execution_timeout = 2 * time.hour,
+    properties = {
+        "tests": [
+            {
+                "step_name": "Run all tests in a directory",
+                "args": ["base/strings"],
+            },
+            {
+                "step_name": "Run a specific file",
+                "args": ["base/pickle_unittest.cc"],
+            },
+            {
+                "step_name": "Run by test name",
+                "args": ["StringUtilTest.IsStringUTF8"],
+            },
+        ],
+    },
+    # TODO(crbug.com/479225938) Uncomment once we've confirmed these builders are stable
+    # cq_settings = try_.cq_settings(
+    #     location_filters = [
+    #         "tools/autotest/.+",
+    #         "tools/autotest.py",
+    #     ],
+    # ),
+)
+
+try_.builder(
+    name = "win-autotest-tester",
+    description_html = "Make sure tools/autotest.py remains functional on Windows",
+    executable = "recipe:chromium/autotest_runner",
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(
+            config = "chromium",
+        ),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium",
+            target_platform = builder_config.target_platform.WIN,
+        ),
+    ),
+    builderless = True,
+    os = os.WINDOWS_DEFAULT,
+    contact_team_email = "pdeio-chrome-test-infra-mx@google.com",
+    execution_timeout = 2 * time.hour,
+    properties = {
+        "tests": [
+            {
+                "step_name": "Run all tests in a directory",
+                "args": ["base/strings"],
+            },
+            {
+                "step_name": "Run a specific file",
+                "args": ["base/pickle_unittest.cc"],
+            },
+            {
+                "step_name": "Run by test name",
+                "args": ["StringUtilTest.IsStringUTF8"],
+            },
+        ],
+    },
+    # TODO(crbug.com/479225938) Uncomment once we've confirmed these builders are stable
+    # cq_settings = try_.cq_settings(
+    #     location_filters = [
+    #         "tools/autotest/.+",
+    #         "tools/autotest.py",
+    #     ],
+    # ),
+)
+
+try_.builder(
+    name = "mac-autotest-tester",
+    description_html = "Make sure tools/autotest.py remains functional on Mac",
+    executable = "recipe:chromium/autotest_runner",
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(
+            config = "chromium",
+        ),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium",
+            target_platform = builder_config.target_platform.MAC,
+        ),
+    ),
+    builderless = True,
+    os = os.MAC_DEFAULT,
+    cpu = cpu.ARM64,
+    contact_team_email = "pdeio-chrome-test-infra-mx@google.com",
+    execution_timeout = 2 * time.hour,
+    properties = {
+        "tests": [
+            {
+                "step_name": "Run all tests in a directory",
+                "args": ["base/strings"],
+            },
+            {
+                "step_name": "Run a specific file",
+                "args": ["base/pickle_unittest.cc"],
+            },
+            {
+                "step_name": "Run by test name",
+                "args": ["StringUtilTest.IsStringUTF8"],
+            },
+        ],
+    },
+    # TODO(crbug.com/479225938) Uncomment once we've confirmed these builders are stable
+    # cq_settings = try_.cq_settings(
+    #     location_filters = [
+    #         "tools/autotest/.+",
+    #         "tools/autotest.py",
+    #     ],
+    # ),
 )

@@ -22,6 +22,7 @@ class GURL;
 
 namespace content {
 
+class BackForwardCacheImpl;
 class RenderFrameHostImpl;
 class RenderFrameProxyHost;
 class WebContentsImpl;
@@ -73,6 +74,7 @@ class CONTENT_EXPORT FencedFrame : public blink::mojom::FencedFrameOwnerHost,
   bool OnRenderFrameProxyVisibilityChanged(
       RenderFrameProxyHost* render_frame_proxy_host,
       blink::mojom::FrameVisibility visibility) override;
+  PrerenderHostId GetPrerenderHostId() override;
 
   // Returns the devtools frame token of the fenced frame's inner FrameTree's
   // main frame.
@@ -82,6 +84,7 @@ class CONTENT_EXPORT FencedFrame : public blink::mojom::FencedFrameOwnerHost,
 
  private:
   // NavigationControllerDelegate
+  BackForwardCacheImpl& GetBackForwardCache() override;
   void NotifyNavigationStateChangedFromController(
       InvalidateTypes changed_flags) override {}
   void NotifyBeforeFormRepostWarningShow() override;

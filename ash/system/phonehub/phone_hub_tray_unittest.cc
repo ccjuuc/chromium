@@ -78,9 +78,7 @@ class PhoneHubTrayTest : public AshTestBase {
   // AshTestBase:
   void SetUp() override {
     feature_list_.InitWithFeatures(
-        /*enabled_features=*/{features::kPhoneHub,
-                              features::kPhoneHubCameraRoll,
-                              features::kEcheSWA},
+        /*enabled_features=*/{features::kPhoneHub, features::kEcheSWA},
         /*disabled_features=*/{});
     AshTestBase::SetUp();
 
@@ -102,6 +100,7 @@ class PhoneHubTrayTest : public AshTestBase {
   }
 
   void TearDown() override {
+    phone_hub_tray_ = nullptr;
     AshTestBase::TearDown();
   }
 
@@ -185,7 +184,7 @@ class PhoneHubTrayTest : public AshTestBase {
   }
 
  protected:
-  raw_ptr<PhoneHubTray, DanglingUntriaged> phone_hub_tray_ = nullptr;
+  raw_ptr<PhoneHubTray> phone_hub_tray_ = nullptr;
   phonehub::FakePhoneHubManager phone_hub_manager_;
   base::test::ScopedFeatureList feature_list_;
   MockNewWindowDelegate new_window_delegate_;

@@ -23,11 +23,7 @@
 #include "media/parsers/h264_bit_reader.h"
 #include "media/parsers/h264_parser.h"
 #include "media/parsers/h265_nalu_parser.h"
-
-namespace gfx {
-struct HdrMetadataCta861_3;
-struct HdrMetadataSmpteSt2086;
-}  // namespace gfx
+#include "media/parsers/h26x_parser.h"
 
 namespace media {
 
@@ -43,6 +39,7 @@ enum {
 
 struct MEDIA_EXPORT H265ProfileTierLevel {
   H265ProfileTierLevel();
+  bool operator==(const H265ProfileTierLevel&) const = default;
 
   enum H265ProfileIdc {
     kProfileIdcMain = 1,
@@ -76,6 +73,7 @@ struct MEDIA_EXPORT H265ProfileTierLevel {
 
 struct MEDIA_EXPORT H265ScalingListData {
   H265ScalingListData();
+  bool operator==(const H265ScalingListData&) const = default;
 
   enum {
     kDefaultScalingListSize0Values = 16,  // Table 7-5, all values are 16
@@ -117,6 +115,8 @@ struct MEDIA_EXPORT H265ScalingListData {
 };
 
 struct MEDIA_EXPORT H265StRefPicSet {
+  bool operator==(const H265StRefPicSet&) const = default;
+
   // Syntax elements.
   int num_negative_pics = 0;
   int num_positive_pics = 0;
@@ -132,7 +132,11 @@ struct MEDIA_EXPORT H265StRefPicSet {
 
 struct MEDIA_EXPORT H265VUIParameters {
   H265VUIParameters();
+  H265VUIParameters(const H265VUIParameters&);
+  H265VUIParameters& operator=(const H265VUIParameters&);
   H265VUIParameters(H265VUIParameters&&) noexcept;
+  H265VUIParameters& operator=(H265VUIParameters&&) noexcept;
+  bool operator==(const H265VUIParameters&) const = default;
 
   // Syntax elements.
   int sar_width = 0;
@@ -179,7 +183,11 @@ struct MEDIA_EXPORT H265VPS {
 
 struct MEDIA_EXPORT H265SPS {
   H265SPS();
+  H265SPS(const H265SPS&);
+  H265SPS& operator=(const H265SPS&);
   H265SPS(H265SPS&&) noexcept;
+  H265SPS& operator=(H265SPS&&) noexcept;
+  bool operator==(const H265SPS&) const = default;
 
   // Syntax elements.
   int sps_video_parameter_set_id = 0;
@@ -213,8 +221,8 @@ struct MEDIA_EXPORT H265SPS {
   bool amp_enabled_flag = false;
   bool sample_adaptive_offset_enabled_flag = false;
   bool pcm_enabled_flag = false;
-  int pcm_sample_bit_depth_luma_minus1 = {};
-  int pcm_sample_bit_depth_chroma_minus1 = {};
+  int pcm_sample_bit_depth_luma_minus1 = 0;
+  int pcm_sample_bit_depth_chroma_minus1 = 0;
   int log2_min_pcm_luma_coding_block_size_minus3 = 0;
   int log2_diff_max_min_pcm_luma_coding_block_size = 0;
   bool pcm_loop_filter_disabled_flag = false;
@@ -391,6 +399,7 @@ struct MEDIA_EXPORT H265SliceHeader {
   int slice_pic_parameter_set_id = 0;
   bool dependent_slice_segment_flag = false;
   int slice_segment_address = 0;
+  int nuh_layer_id = 0;
   // Do not move any of the above fields below or vice-versa, everything after
   // this is copied as a block.
   int slice_type = 0;
@@ -462,33 +471,11 @@ struct MEDIA_EXPORT H265SEIAlphaChannelInfo {
   bool alpha_channel_clip_type_flag = false;
 };
 
-struct MEDIA_EXPORT H265SEIContentLightLevelInfo {
-  uint16_t max_content_light_level;
-  uint16_t max_picture_average_light_level;
-
-  gfx::HdrMetadataCta861_3 ToGfx() const;
-};
-
-struct MEDIA_EXPORT H265SEIMasteringDisplayInfo {
-  enum {
-    kNumDisplayPrimaries = 3,
-    kDisplayPrimaryComponents = 2,
-  };
-
-  std::array<std::array<uint16_t, kDisplayPrimaryComponents>,
-             kNumDisplayPrimaries>
-      display_primaries;
-  std::array<uint16_t, 2> white_points;
-  uint32_t max_luminance;
-  uint32_t min_luminance;
-
-  gfx::HdrMetadataSmpteSt2086 ToGfx() const;
-};
-
 using H265SEIMessage = std::variant<std::monostate,
                                     H265SEIAlphaChannelInfo,
-                                    H265SEIContentLightLevelInfo,
-                                    H265SEIMasteringDisplayInfo>;
+                                    H26xSEIContentLightLevelInfo,
+                                    H26xSEIMasteringDisplayInfo,
+                                    H26xSEIUserDataRegisteredT35>;
 
 struct MEDIA_EXPORT H265SEI {
   H265SEI();

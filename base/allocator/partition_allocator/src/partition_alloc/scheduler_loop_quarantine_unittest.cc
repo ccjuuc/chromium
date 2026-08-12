@@ -2,23 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "partition_alloc/slot_start.h"
-
 #include "partition_alloc/scheduler_loop_quarantine.h"
 
 #include "partition_alloc/extended_api.h"
+#include "partition_alloc/internal/partition_root_internal.h"
 #include "partition_alloc/partition_alloc_base/check.h"
 #include "partition_alloc/partition_alloc_for_testing.h"
 #include "partition_alloc/partition_page.h"
-#include "partition_alloc/partition_root.h"
 #include "partition_alloc/partition_stats.h"
 #include "partition_alloc/scheduler_loop_quarantine_support.h"
+#include "partition_alloc/slot_start.h"
 #include "partition_alloc/thread_cache.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace partition_alloc {
 
-#if !defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+#if !PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)
 
 namespace {
 
@@ -29,15 +28,16 @@ GetBranchFromAllocatorRoot(PartitionRoot* root);
 template <>
 internal::GlobalSchedulerLoopQuarantineBranch*
 GetBranchFromAllocatorRoot<false>(PartitionRoot* root) {
-  return &root->scheduler_loop_quarantine;
+  return &root->scheduler_loop_quarantine_;
 }
 
 template <>
 internal::ThreadBoundSchedulerLoopQuarantineBranch*
 GetBranchFromAllocatorRoot<true>(PartitionRoot* root) {
-  ThreadCache* tcache = ThreadCache::Get();
-  PA_CHECK(ThreadCache::IsValid(tcache));
-  PA_CHECK(root->settings.with_thread_cache);
+  PA_CHECK(root->settings_.with_thread_cache);
+  PA_CHECK(root->settings_.thread_cache_index == 0);
+  internal::ThreadCache* tcache = root->thread_cache_for_testing();
+  PA_CHECK(internal::ThreadCache::IsValid(tcache));
   return &tcache->GetSchedulerLoopQuarantineBranch();
 }
 
@@ -86,7 +86,9 @@ class SchedulerLoopQuarantineTest : public testing::Test {
     internal::SlotStart slot_start = internal::SlotStart::Unchecked(object);
     auto* slot_span = internal::SlotSpanMetadata::FromSlotStart(
         slot_start.Untag(), GetPartitionRoot());
-    GetQuarantineBranch()->Quarantine(slot_start, slot_span);
+    auto size_details =
+        GetPartitionRoot()->SlotSpanToBucketSizeDetails(slot_span);
+    GetQuarantineBranch()->Quarantine(slot_start, slot_span, size_details);
   }
 
   size_t GetObjectSize(void* object) {
@@ -153,6 +155,16 @@ using SchedulerLoopQuarantineTestParams =
                      SchedulerLoopQuarantineTestParamLargeThreadBound>;
 TYPED_TEST_SUITE(SchedulerLoopQuarantineTest,
                  SchedulerLoopQuarantineTestParams);
+
+template <typename Param>
+class ThreadBoundSchedulerLoopQuarantineTest
+    : public SchedulerLoopQuarantineTest<Param> {};
+
+using ThreadBoundSchedulerLoopQuarantineTestParams =
+    ::testing::Types<SchedulerLoopQuarantineTestParamSmallThreadBound,
+                     SchedulerLoopQuarantineTestParamLargeThreadBound>;
+TYPED_TEST_SUITE(ThreadBoundSchedulerLoopQuarantineTest,
+                 ThreadBoundSchedulerLoopQuarantineTestParams);
 
 TYPED_TEST(SchedulerLoopQuarantineTest, Basic) {
   constexpr size_t kObjectSize = 1;
@@ -228,8 +240,84 @@ TYPED_TEST(SchedulerLoopQuarantineTest, ScopedOptOut) {
   ASSERT_TRUE(this->GetQuarantineBranch()->IsQuarantinedForTesting(object2));
 }
 
+TYPED_TEST(ThreadBoundSchedulerLoopQuarantineTest,
+           TaskControlledPurgeAndPause) {
+  auto* branch = this->GetQuarantineBranch();
+  auto* root = this->GetQuarantineRoot();
+  auto* allocator_root = this->GetPartitionRoot();
+
+  // Test 1: pause_in_between_tasks = true, enable_task_controlled_purge = true
+  QuarantineConfig config = this->GetConfig();
+  config.enable_task_controlled_purge = true;
+  config.pause_in_between_tasks = true;
+  branch->Configure(*root, config);
+
+  // Starts paused.
+  EXPECT_EQ(1, branch->PausedCountForTesting());
+
+  void* object1 = allocator_root->Alloc(1);
+  this->Quarantine(object1);
+  EXPECT_FALSE(branch->IsQuarantinedForTesting(object1));
+
+  // Enter task.
+  branch->OnTaskStart();
+  EXPECT_EQ(0, branch->PausedCountForTesting());
+
+  void* object2 = allocator_root->Alloc(1);
+  this->Quarantine(object2);
+  EXPECT_TRUE(branch->IsQuarantinedForTesting(object2));
+
+  // Exit task.
+  branch->OnTaskFinish();
+  EXPECT_EQ(1, branch->PausedCountForTesting());
+
+  // Should be purged.
+  EXPECT_FALSE(branch->IsQuarantinedForTesting(object2));
+
+  // Test 2: Transition True -> False inside task
+  branch->Configure(*root, config);  // Reset to true
+  EXPECT_EQ(1, branch->PausedCountForTesting());
+
+  branch->OnTaskStart();
+  EXPECT_EQ(0, branch->PausedCountForTesting());
+
+  // Reconfigure to false.
+  config.pause_in_between_tasks = false;
+  config.enable_task_controlled_purge = false;
+  branch->Configure(*root, config);
+
+  // Should still be active (0) inside task.
+  EXPECT_EQ(0, branch->PausedCountForTesting());
+
+  branch->OnTaskFinish();
+  // Should remain active (0) after task.
+  EXPECT_EQ(0, branch->PausedCountForTesting());
+
+  // Test 3: Transition False -> True inside task
+  // (Start with false)
+  config.pause_in_between_tasks = false;
+  config.enable_task_controlled_purge = false;
+  branch->Configure(*root, config);
+  EXPECT_EQ(0, branch->PausedCountForTesting());
+
+  branch->OnTaskStart();
+  EXPECT_EQ(0, branch->PausedCountForTesting());
+
+  // Reconfigure to true.
+  config.pause_in_between_tasks = true;
+  config.enable_task_controlled_purge = true;
+  branch->Configure(*root, config);
+
+  // Should still be active (0) inside task.
+  EXPECT_EQ(0, branch->PausedCountForTesting());
+
+  branch->OnTaskFinish();
+  // Should become paused (1) after task.
+  EXPECT_EQ(1, branch->PausedCountForTesting());
+}
+
 }  // namespace
 
-#endif  // !defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+#endif  // !PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)
 
 }  // namespace partition_alloc

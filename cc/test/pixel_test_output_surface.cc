@@ -11,7 +11,6 @@
 #include "components/viz/service/display/output_surface_client.h"
 #include "components/viz/service/display/output_surface_frame.h"
 #include "gpu/command_buffer/common/swap_buffers_complete_params.h"
-#include "ui/gfx/buffer_format_util.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/presentation_feedback.h"
@@ -48,7 +47,7 @@ void PixelTestOutputSurface::SwapBuffersCallback() {
   gpu::SwapBuffersCompleteParams params;
   params.swap_response.timings = {now, now};
   params.swap_response.result = gfx::SwapResult::SWAP_ACK;
-  client_->DidReceiveSwapBuffersAck(params,
+  client_->DidReceiveSwapBuffersAck(std::move(params),
                                     /*release_fence=*/gfx::GpuFenceHandle());
   client_->DidReceivePresentationFeedback(
       gfx::PresentationFeedback(base::TimeTicks::Now(), base::TimeDelta(), 0));

@@ -32,7 +32,7 @@ namespace {
 SkBitmap ExtractImage(JNIEnv* env,
                       const JavaRef<jobjectArray>& j_resources,
                       int index) {
-  auto j_image = ScopedJavaLocalRef<jobject>::Adopt(
+  auto j_image = jni_zero::AdoptRef(
       env, env->GetObjectArrayElement(j_resources.obj(), index));
   return j_image.is_null()
              ? SkBitmap()
@@ -114,14 +114,14 @@ static void JNI_NotificationSuspender_StoreNotificationResources(
 static void JNI_NotificationSuspender_ReDisplayNotifications(
     JNIEnv* env,
     Profile* profile,
-    std::vector<std::string>& origin_strings) {
+    const std::vector<std::string>& origin_strings) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(profile);
 
   // Group origins by context.
   std::map<PlatformNotificationContext*, std::vector<GURL>> origins_by_context;
-  for (std::string& origin_string : origin_strings) {
-    GURL origin(std::move(origin_string));
+  for (const std::string& origin_string : origin_strings) {
+    GURL origin(origin_string);
     if (!origin.is_valid() || !origin.SchemeIsHTTPOrHTTPS())
       continue;
     origins_by_context[GetContext(profile, origin)].emplace_back(

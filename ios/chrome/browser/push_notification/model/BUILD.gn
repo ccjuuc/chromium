@@ -63,6 +63,7 @@ source_set("push_notification_util") {
     "push_notification_util.mm",
   ]
   deps = [
+    ":constants",
     ":push_notification_client_id",
     "//base",
     "//components/prefs",
@@ -111,7 +112,6 @@ source_set("push_notification_delegate") {
     "//ios/chrome/browser/content_notification/model:util",
     "//ios/chrome/browser/shared/coordinator/scene:scene_state_header",
     "//ios/chrome/browser/shared/coordinator/scene:scene_state_observer",
-    "//ios/chrome/browser/shared/coordinator/scene:scene_util",
     "//ios/chrome/browser/shared/model/application_context",
     "//ios/chrome/browser/shared/model/browser",
     "//ios/chrome/browser/shared/model/prefs:pref_names",
@@ -169,14 +169,15 @@ source_set("push_notification_service") {
     "//ios/chrome/browser/safety_check_notifications/model:notification_client",
     "//ios/chrome/browser/search_engines/model:template_url_service_factory",
     "//ios/chrome/browser/send_tab_to_self/model",
+    "//ios/chrome/browser/send_tab_to_self/model:push_notification_client",
     "//ios/chrome/browser/shared/coordinator/scene:scene_state_header",
     "//ios/chrome/browser/shared/model/application_context",
-    "//ios/chrome/browser/shared/model/browser",
     "//ios/chrome/browser/shared/model/prefs:pref_names",
     "//ios/chrome/browser/shared/model/profile",
     "//ios/chrome/browser/shared/model/profile:features",
     "//ios/chrome/browser/shared/model/utils",
     "//ios/chrome/browser/shared/public/features",
+    "//ios/chrome/browser/shared/public/features:system_flags",
     "//ios/chrome/browser/signin/model:authentication_service",
     "//ios/chrome/browser/signin/model:authentication_service_factory",
     "//ios/chrome/browser/sync/model:device_info_sync_service_factory",
@@ -267,6 +268,7 @@ source_set("unit_tests") {
     "//components/prefs",
     "//components/sync_preferences:test_support",
     "//google_apis",
+    "//ios/chrome/app:change_profile_commands",
     "//ios/chrome/app/application_delegate:app_state",
     "//ios/chrome/app/profile",
     "//ios/chrome/browser/affiliations/model",
@@ -276,6 +278,7 @@ source_set("unit_tests") {
     "//ios/chrome/browser/safety_check_notifications/utils",
     "//ios/chrome/browser/safety_check_notifications/utils:constants",
     "//ios/chrome/browser/send_tab_to_self/model",
+    "//ios/chrome/browser/send_tab_to_self/model:push_notification_client",
     "//ios/chrome/browser/shared/coordinator/scene/test",
     "//ios/chrome/browser/shared/model/application_context",
     "//ios/chrome/browser/shared/model/browser",
@@ -284,6 +287,7 @@ source_set("unit_tests") {
     "//ios/chrome/browser/shared/model/profile",
     "//ios/chrome/browser/shared/model/profile:features",
     "//ios/chrome/browser/shared/model/profile/test",
+    "//ios/chrome/browser/shared/public/commands",
     "//ios/chrome/browser/shared/public/features",
     "//ios/chrome/browser/signin/model:fake_system_identity",
     "//ios/chrome/browser/tips_notifications/model:utils",
@@ -293,10 +297,6 @@ source_set("unit_tests") {
     "//testing/gtest",
     "//third_party/ocmock",
   ]
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 source_set("test_support") {

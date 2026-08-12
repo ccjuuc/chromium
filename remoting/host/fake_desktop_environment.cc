@@ -17,10 +17,11 @@
 #include "base/memory/weak_ptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
+#include "remoting/base/fifo_buffer.h"
+#include "remoting/base/ipc_fifo_buffer.h"
 #include "remoting/host/audio_capturer.h"
 #include "remoting/host/base/desktop_environment_options.h"
 #include "remoting/host/base/screen_controls.h"
-#include "remoting/host/desktop_capturer_proxy.h"
 #include "remoting/host/desktop_display_info_monitor.h"
 #include "remoting/host/desktop_environment.h"
 #include "remoting/host/fake_active_display_monitor.h"
@@ -34,6 +35,7 @@
 #include "remoting/proto/event.pb.h"
 #include "remoting/protocol/clipboard_stub.h"
 #include "remoting/protocol/desktop_capturer.h"
+#include "remoting/protocol/desktop_capturer_proxy.h"
 #include "remoting/protocol/fake_desktop_capturer.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capture_types.h"
 
@@ -81,10 +83,16 @@ FakeScreenControls::~FakeScreenControls() = default;
 
 void FakeScreenControls::SetScreenResolution(
     const ScreenResolution& resolution,
-    std::optional<webrtc::ScreenId> screen_id) {}
+    std::optional<webrtc::ScreenId> screen_id) {
+  last_resolution_ = resolution;
+  set_resolution_called_ = true;
+}
 
 void FakeScreenControls::SetVideoLayout(
-    const protocol::VideoLayout& video_layout) {}
+    const protocol::VideoLayout& video_layout) {
+  last_video_layout_ = video_layout;
+  set_video_layout_called_ = true;
+}
 
 FakeDesktopEnvironment::FakeDesktopEnvironment(
     scoped_refptr<base::SingleThreadTaskRunner> capture_thread,
@@ -109,7 +117,9 @@ std::unique_ptr<InputInjector> FakeDesktopEnvironment::CreateInputInjector() {
 }
 
 std::unique_ptr<ScreenControls> FakeDesktopEnvironment::CreateScreenControls() {
-  return std::make_unique<FakeScreenControls>();
+  auto result = std::make_unique<FakeScreenControls>();
+  last_screen_controls_ = result->GetWeakPtr();
+  return result;
 }
 
 std::unique_ptr<DesktopCapturer> FakeDesktopEnvironment::CreateVideoCapturer(
@@ -164,12 +174,13 @@ void FakeDesktopEnvironment::SetCapabilities(const std::string& capabilities) {
   capabilities_ = capabilities;
 }
 
-std::uint32_t FakeDesktopEnvironment::GetDesktopSessionId() const {
-  return desktop_session_id_;
-}
-
 std::unique_ptr<RemoteWebAuthnStateChangeNotifier>
 FakeDesktopEnvironment::CreateRemoteWebAuthnStateChangeNotifier() {
+  return nullptr;
+}
+
+std::unique_ptr<AudioInjector> FakeDesktopEnvironment::CreateAudioInjector(
+    std::unique_ptr<IpcFifoBufferReader> reader) {
   return nullptr;
 }
 
@@ -192,7 +203,6 @@ void FakeDesktopEnvironmentFactory::Create(
   std::unique_ptr<FakeDesktopEnvironment> result(
       new FakeDesktopEnvironment(capture_thread_, options));
   result->set_frame_generator(frame_generator_);
-  result->set_desktop_session_id(desktop_session_id_);
   result->SetCapabilities(capabilities_);
   last_desktop_environment_ = result->weak_factory_.GetWeakPtr();
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(

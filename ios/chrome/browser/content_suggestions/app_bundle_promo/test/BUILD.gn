@@ -6,17 +6,16 @@ source_set("eg2_tests") {
   configs += [ "//build/config/ios:xctest_config" ]
   testonly = true
   sources = [ "app_bundle_promo_view_egtest.mm" ]
-
   deps = [
     "//base/test:test_support",
     "//components/segmentation_platform/embedder/home_modules:constants",
     "//components/segmentation_platform/public",
     "//ios/chrome/app/strings",
+    "//ios/chrome/browser/content_suggestions/app_bundle_promo/public:constants",
     "//ios/chrome/browser/content_suggestions/public:constants",
     "//ios/chrome/test/earl_grey:eg_test_support+eg2",
     "//ios/testing/earl_grey:eg_test_support+eg2",
     "//ui/base",
   ]
-
   frameworks = [ "UIKit.framework" ]
 }

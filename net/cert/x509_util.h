@@ -170,12 +170,10 @@ NET_EXPORT bool CreateCertBuffersFromPKCS7Bytes(
 // Returns the default ParseCertificateOptions for the net stack.
 NET_EXPORT bssl::ParseCertificateOptions DefaultParseCertificateOptions();
 
-// On success, returns true and updates |hash| to be the SHA-256 hash of the
-// subjectPublicKeyInfo of the certificate in |buffer|. If |buffer| is not a
-// valid certificate, returns false and |hash| is in an undefined state.
-[[nodiscard]] NET_EXPORT bool CalculateSha256SpkiHash(
-    const CRYPTO_BUFFER* buffer,
-    SHA256HashValue* hash);
+// Returns the SHA-256 hash of the SubjectPublicKeyInfo of the certificate in
+// |buffer|. CHECK-fails if |buffer| is not a valid certificate, so don't use
+// this to parse certificates in production code.
+NET_EXPORT SHA256HashValue CalculateSha256SpkiHash(const CRYPTO_BUFFER* buffer);
 
 // Calls |verifier->VerifyInit|, using the public key from |certificate|,
 // checking if the digitalSignature key usage bit is present, and returns true
@@ -197,9 +195,54 @@ NET_EXPORT std::vector<uint8_t> AppendOidComponent(
     base::span<const uint8_t> oid,
     uint64_t component);
 
+// Given a DER-encoded OID or relative OID that starts with |base|, returns the
+// single component of the OID that follows base. Returns nullopt if |oid| does
+// not start with |base|, if the bytes are not well-formed after |base|, if it
+// does not contain exactly one component following |base|, or if the single
+// component does not fit in a uint64_t.
+//
+// This function performs steps 1 thru 3 of the procedure described in
+// https://www.ietf.org/archive/id/draft-davidben-tls-merkle-tree-certs-09.html#section-8.1
+NET_EXPORT std::optional<uint64_t> LastOidComponentFromBase(
+    base::span<const uint8_t> oid,
+    base::span<const uint8_t> base);
+
+// Given a DER-encoded relative OID, returns a struct containing the span of
+// the encoded base OID (the input OID with the last component removed), and
+// the integer value of the last component. If the input `oid` only contains
+// one component, the base_id returned will be empty. Returns nullopt on error.
+struct NET_EXPORT BaseOidAndComponent {
+  // The base id of `oid`, referring to memory in the `oid` that was passed into
+  // SplitLastOidComponent. This is not guaranteed to be valid DER.
+  base::raw_span<const uint8_t> base_id;
+
+  // The last component of `oid`, in integer form.
+  uint64_t last_component;
+};
+NET_EXPORT std::optional<BaseOidAndComponent> SplitLastOidComponent(
+    base::span<const uint8_t> oid);
+
 // Returns the textual representation of a DER-encoded Relative-OID.
 NET_EXPORT std::string RelativeOidToString(
     base::span<const uint8_t> relative_oid);
+
+// Converts the wire format of the trust anchor ID TLS extension (see
+// https://www.ietf.org/archive/id/draft-ietf-tls-trust-anchor-ids-02.html#section-4.1)
+// into a vector of trust anchor IDs. If the input is unparsable, returns an
+// empty vector. Note that |wire_ids| should not include the 16-bit length for
+// the whole list.
+NET_EXPORT std::vector<std::vector<uint8_t>> ParseTlsTrustAnchorIDs(
+    base::span<const uint8_t> wire_ids);
+
+// Returns a string representation of the provided trust anchor IDs by
+// stringifying each ID (using RelativeOidToString) and joining them with ", ".
+NET_EXPORT std::string TrustAnchorIDsToString(
+    const std::vector<std::vector<uint8_t>>& trust_anchor_ids);
+
+NET_EXPORT std::vector<uint8_t> CreateMtcLandmarkGroupTrustAnchorID(
+    base::span<const uint8_t> ca_id,
+    uint16_t log_number,
+    uint64_t landmark_number);
 
 }  // namespace x509_util
 

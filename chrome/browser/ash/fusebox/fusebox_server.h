@@ -5,6 +5,8 @@
 #ifndef CHROME_BROWSER_ASH_FUSEBOX_FUSEBOX_SERVER_H_
 #define CHROME_BROWSER_ASH_FUSEBOX_FUSEBOX_SERVER_H_
 
+#include <functional>
+#include <map>
 #include <string>
 #include <variant>
 
@@ -72,7 +74,7 @@ class Server : public ash::FilesInternalsDebugJSONProvider {
   // It returns an invalid storage::FileSystemURL if the filename doesn't match
   // "/media/fuse/fusebox/subdir/etc" or the "subdir" wasn't registered.
   storage::FileSystemURL ResolveFilename(Profile* profile,
-                                         const std::string& filename);
+                                         std::string_view filename);
 
   // Performs the inverse of ResolveFilename. It converts a FileSystemURL like
   // "filesystem:origin/external/mount_name/xxx/yyy/p/q.txt" to a FuseBox
@@ -89,6 +91,10 @@ class Server : public ash::FilesInternalsDebugJSONProvider {
     Server* server = GetInstance();
     return server ? server->InverseResolveFSURL(fs_url) : base::FilePath();
   }
+
+  // Overrides the default "/media/fuse/fusebox/" media path for testing.
+  // If `path` is empty, resets to the default media path.
+  static void OverrideFuseBoxMediaPathForTesting(std::string_view path);
 
   // ash::FilesInternalsDebugJSONProvider overrides.
   void GetDebugJSONForKey(
@@ -273,7 +279,7 @@ class Server : public ash::FilesInternalsDebugJSONProvider {
   // storage::FileSystemURL.
   //
   // Neither subdir nor fs_url_prefix should have a trailing slash.
-  using PrefixMap = std::map<std::string, PrefixMapEntry>;
+  using PrefixMap = std::map<std::string, PrefixMapEntry, std::less<>>;
 
   struct ReadDir2MapEntry {
     explicit ReadDir2MapEntry(ReadDir2Callback callback);

@@ -5,29 +5,31 @@
 package org.chromium.chrome.browser.omnibox.status;
 
 import static org.chromium.build.NullUtil.assertNonNull;
-import static org.chromium.build.NullUtil.assumeNonNull;
 
-import android.animation.Animator;
 import android.app.Activity;
 import android.content.res.Resources;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
+import android.view.View.OnClickListener;
 
 import androidx.annotation.DrawableRes;
 import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.ContextUtils;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browser_controls.BrowserStateBrowserControlsVisibilityDelegate;
-import org.chromium.chrome.browser.merchant_viewer.MerchantTrustSignalsCoordinator;
+import org.chromium.chrome.browser.omnibox.FuseboxSessionState;
 import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
 import org.chromium.chrome.browser.omnibox.R;
-import org.chromium.chrome.browser.omnibox.UrlBarEditingTextStateProvider;
+import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxLayoutMode;
+import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxState;
+import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.page_info.ChromePageInfoHighlight;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
@@ -39,7 +41,6 @@ import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 
-import java.util.List;
 import java.util.function.Supplier;
 
 /**
@@ -47,7 +48,7 @@ import java.util.function.Supplier;
  * verbose status text.
  */
 @NullMarked
-public class StatusCoordinator implements View.OnClickListener, LocationBarDataProvider.Observer {
+public class StatusCoordinator implements LocationBarDataProvider.Observer {
 
     /** Interface for displaying page info popup on omnibox. */
     public interface PageInfoAction {
@@ -63,44 +64,41 @@ public class StatusCoordinator implements View.OnClickListener, LocationBarDataP
     private final StatusMediator mMediator;
     private final PropertyModel mModel;
     private final boolean mIsTablet;
-    private final PageInfoAction mPageInfoAction;
     private LocationBarDataProvider mLocationBarDataProvider;
-    private boolean mUrlHasFocus;
-    private View.@Nullable OnClickListener mOnStatusIconNavigateBackButtonPress;
 
     /**
      * Creates a new {@link StatusCoordinator}.
      *
+     * @param resourceProvider Provides omnibox-specific resources.
      * @param isTablet Whether the UI is shown on a tablet.
      * @param statusView The status view, used to supply and manipulate child views.
-     * @param urlBarEditingTextStateProvider The url coordinator.
      * @param templateUrlServiceSupplier A supplier for {@link TemplateUrlService} used to query the
      *     default search engine.
      * @param windowAndroid The {@link WindowAndroid} that is used by the owning {@link Activity}.
      * @param pageInfoAction Displays page info popup.
-     * @param merchantTrustSignalsCoordinatorSupplier Supplier of {@link
-     *     MerchantTrustSignalsCoordinator}. Can be null if a store icon shouldn't be shown, such as
-     *     when called from a search activity.
      * @param browserControlsVisibilityDelegate Delegate interface allowing control of the
      *     visibility of the browser controls (i.e. toolbar).
+     * @param fuseboxStateSupplier Used to decide if an plus button for fusebox should be shown.
+     * @param fuseboxLayoutModeSupplier Used to decide if the plus button should be hidden (AL).
+     * @param onPlusButtonClicked Toggle the fusebox attachments menu when plus button used.
      */
     public StatusCoordinator(
+            OmniboxResourceProvider resourceProvider,
             boolean isTablet,
             StatusView statusView,
-            UrlBarEditingTextStateProvider urlBarEditingTextStateProvider,
             LocationBarDataProvider locationBarDataProvider,
             OneshotSupplier<TemplateUrlService> templateUrlServiceSupplier,
-            ObservableSupplier<Profile> profileSupplier,
+            MonotonicObservableSupplier<Profile> profileSupplier,
             WindowAndroid windowAndroid,
             PageInfoAction pageInfoAction,
-            @Nullable Supplier<MerchantTrustSignalsCoordinator>
-                    merchantTrustSignalsCoordinatorSupplier,
             @Nullable BrowserStateBrowserControlsVisibilityDelegate
-                    browserControlsVisibilityDelegate) {
+                    browserControlsVisibilityDelegate,
+            NonNullObservableSupplier<@FuseboxState Integer> fuseboxStateSupplier,
+            NonNullObservableSupplier<@FuseboxLayoutMode Integer> fuseboxLayoutModeSupplier,
+            Runnable onPlusButtonClicked) {
         mIsTablet = isTablet;
         mStatusView = statusView;
         mLocationBarDataProvider = locationBarDataProvider;
-        mPageInfoAction = pageInfoAction;
 
         mModel = new PropertyModel(StatusProperties.ALL_KEYS);
 
@@ -118,17 +116,19 @@ public class StatusCoordinator implements View.OnClickListener, LocationBarDataP
 
         mMediator =
                 new StatusMediator(
+                        resourceProvider,
                         mModel,
                         mStatusView.getContext(),
-                        urlBarEditingTextStateProvider,
-                        isTablet,
                         locationBarDataProvider,
                         PermissionDialogController.getInstance(),
                         templateUrlServiceSupplier,
                         profileSupplier,
                         pageInfoIphController,
                         windowAndroid,
-                        merchantTrustSignalsCoordinatorSupplier);
+                        pageInfoAction,
+                        fuseboxStateSupplier,
+                        fuseboxLayoutModeSupplier,
+                        onPlusButtonClicked);
 
         Resources res = mStatusView.getResources();
         mMediator.setUrlMinWidth(
@@ -162,44 +162,34 @@ public class StatusCoordinator implements View.OnClickListener, LocationBarDataP
 
     /** Signals that native initialization has completed. */
     public void onNativeInitialized() {
+        updateSecurityIcon();
         mMediator.updateLocationBarIcon(StatusView.IconTransitionType.CROSSFADE);
-        mMediator.setStatusClickListener(
-                mOnStatusIconNavigateBackButtonPress != null
-                        ? mOnStatusIconNavigateBackButtonPress
-                        : this);
-        mMediator.updateStatusVisibility();
-        mMediator.setStoreIconController();
     }
 
     /**
-     * @param urlHasFocus Whether the url currently has focus.
+     * Signals that the Omnibox input session has begun.
+     *
+     * @param sessionState The state of the current input session.
      */
-    public void onUrlFocusChange(boolean urlHasFocus) {
-        mMediator.setUrlHasFocus(urlHasFocus);
-        mUrlHasFocus = urlHasFocus;
-        updateVerboseStatusVisibility();
+    public void beginInput(FuseboxSessionState sessionState) {
+        mMediator.beginInput(sessionState);
+    }
+
+    /** Signals that the Omnibox input session has ended. */
+    public void endInput() {
+        mMediator.endInput();
     }
 
     /**
      * @param listener The custom listener that will execute when the status view is clicked.
      */
-    public void setOnStatusIconNavigateBackButtonPress(View.OnClickListener listener) {
-        mOnStatusIconNavigateBackButtonPress = listener;
-        mMediator.setStatusClickListener(listener != null ? listener : this);
+    public void setOnStatusIconNavigateBackButtonPress(OnClickListener listener) {
+        mMediator.setOnStatusIconNavigateBackButtonPress(listener);
     }
 
     /** Toggle whether the status icon should be hidden for secure origins. */
     public void setShowStatusIconForSecureOrigins(boolean showStatusIconForSecureOrigins) {
         mMediator.setShowStatusIconForSecureOrigins(showStatusIconForSecureOrigins);
-    }
-
-    /**
-     * Set the url focus change percent.
-     *
-     * @param percent The current focus percent.
-     */
-    public void setUrlFocusChangePercent(float percent) {
-        mMediator.setUrlFocusChangePercent(percent);
     }
 
     /** Set the x translation of the status view. */
@@ -229,18 +219,8 @@ public class StatusCoordinator implements View.OnClickListener, LocationBarDataP
     }
 
     // LocationBarDataProvider.Observer implementation.
-    // Using the default empty onPrimaryColorChanged.
-    // Using the default empty onTitleChanged.
-
     @Override
-    public void onNtpStartedLoading() {
-        mMediator.updateStatusVisibility();
-    }
-
-    @Override
-    public void onIncognitoStateChanged() {
-        mMediator.onIncognitoStateChanged();
-    }
+    public void onNtpStartedLoading() {}
 
     @Override
     public void onSecurityStateChanged() {
@@ -250,7 +230,7 @@ public class StatusCoordinator implements View.OnClickListener, LocationBarDataP
 
     @Override
     public void onUrlChanged(boolean isTabChanging) {
-        mMediator.onUrlChanged(isTabChanging);
+        mMediator.onUrlChanged();
     }
 
     @Override
@@ -260,6 +240,20 @@ public class StatusCoordinator implements View.OnClickListener, LocationBarDataP
 
     public void setUseSmallWidget(boolean useSmallWidget) {
         mMediator.setUseSmallWidget(useSmallWidget);
+    }
+
+    /**
+     * Sets an icon override resource ID to replace the default status icon. For each {@link
+     * PageClassification} type, a status icon for the location bar is set up within the status
+     * mediator via #updateLocationBarIcon(), which is considered to be the default status icon. At
+     * runtime, this helper can replace that default status icon for edge cases which require the
+     * functionality of the used page classification with a different icon.
+     *
+     * @param iconOverrideResId The resource ID of the override icon, or {@link Resources#ID_NULL}
+     *     to clear.
+     */
+    public void setDefaultStatusIconOverrideResId(@DrawableRes int iconOverrideResId) {
+        mMediator.setDefaultStatusIconOverrideResId(iconOverrideResId);
     }
 
     /** Returns the resource identifier of the current security icon drawable. */
@@ -315,19 +309,6 @@ public class StatusCoordinator implements View.OnClickListener, LocationBarDataP
                 mLocationBarDataProvider.isPaintPreview());
     }
 
-    @Override
-    public void onClick(View view) {
-        if (mUrlHasFocus) return;
-
-        if (!mLocationBarDataProvider.hasTab()
-                || assumeNonNull(mLocationBarDataProvider.getTab()).getWebContents() == null) {
-            return;
-        }
-
-        mPageInfoAction.show(mLocationBarDataProvider.getTab(), mMediator.getPageInfoHighlight());
-        mMediator.onPageInfoOpened();
-    }
-
     /**
      * Called to set the width of the location bar when the url bar is not focused. This value is
      * used to determine whether the verbose status text should be visible.
@@ -358,13 +339,18 @@ public class StatusCoordinator implements View.OnClickListener, LocationBarDataP
     }
 
     /**
-     * Notifies StatusCoordinator that the default match for the currently entered autocomplete text
-     * has been classified, indicating whether the default match is a search.
+     * Sets the callback to be executed when the status view is hidden due to the Page Info removal
+     * feature.
      *
-     * @param defaultMatchIsSearch Whether the default match is a search.
+     * @param runnable The callback to run.
      */
-    public void onDefaultMatchClassified(boolean defaultMatchIsSearch) {
-        mMediator.updateLocationBarIconForDefaultMatchCategory(defaultMatchIsSearch);
+    public void setOnStatusViewHiddenForPageInfoRemoval(Runnable runnable) {
+        mMediator.setOnStatusViewHiddenForPageInfoRemoval(runnable);
+    }
+
+    @SuppressWarnings("NullAway")
+    public StatusMediator getMediatorForTesting() {
+        return mMediator;
     }
 
     @SuppressWarnings("NullAway")
@@ -379,15 +365,7 @@ public class StatusCoordinator implements View.OnClickListener, LocationBarDataP
         return mStatusView.isStatusIconAnimating();
     }
 
-    /** Returns the start time (ms) of the current or most recent status icon animation. */
     public long getAnimationStartTimeMs() {
         return mStatusView.getAnimationStartTimeMs();
     }
-
-    /**
-     * Populates an animation that fades =/unfades the entire StatusView container with the given
-     * start delay and duration, adding it to the given list of animators.
-     */
-    public void populateFadeAnimation(
-            List<Animator> animators, long startDelayMs, long durationMs, float targetAlpha) {}
 }

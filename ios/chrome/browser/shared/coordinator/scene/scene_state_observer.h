@@ -30,12 +30,6 @@
 - (void)sceneState:(SceneState*)sceneState
     profileStateConnected:(ProfileState*)profileState;
 
-// Notifies when presentingModalOverlay is being set to true.
-- (void)sceneStateWillShowModalOverlay:(SceneState*)sceneState;
-// Notifies when presentingModalOverlay is being set to false.
-- (void)sceneStateWillHideModalOverlay:(SceneState*)sceneState;
-// Notifies when presentingModalOverlay has been set to false.
-- (void)sceneStateDidHideModalOverlay:(SceneState*)sceneState;
 // Notifies when UIEnabled has been set to true. Is only fired once during the
 // scene's life period when the scene UI has initialized.
 - (void)sceneStateDidEnableUI:(SceneState*)sceneState;
@@ -48,9 +42,7 @@
 // Notifies that a new activity request has been received.
 - (void)sceneState:(SceneState*)sceneState
     receivedUserActivity:(NSUserActivity*)userActivity;
-// Notifies that the scene switched between incognito/normal mode.
-- (void)sceneState:(SceneState*)sceneState
-    isDisplayingIncognitoContent:(BOOL)incognitoContentVisible;
+
 // Notifies that prompting to sign-in did start.
 - (void)signinDidStart:(SceneState*)sceneState;
 // Notifies that prompting to sign-in and the authentication flow are done.

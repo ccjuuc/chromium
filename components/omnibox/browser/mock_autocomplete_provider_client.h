@@ -29,6 +29,10 @@
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
+namespace sync_sessions {
+class SessionSyncService;
+}  // namespace sync_sessions
+
 class AutocompleteScoringModelService;
 class OnDeviceTailModelService;
 class OmniboxTriggeredFeatureService;
@@ -138,6 +142,10 @@ class MockAutocompleteProviderClient
     return mock_tab_group_sync_service_.get();
   }
 
+  sync_sessions::SessionSyncService* GetSessionSyncService() const override {
+    return session_sync_service_;
+  }
+
   AimEligibilityService* GetAimEligibilityService() const override {
     return nullptr;
   }
@@ -153,7 +161,6 @@ class MockAutocompleteProviderClient
   MOCK_CONST_METHOD0(IsUrlDataCollectionActive, bool());
   MOCK_CONST_METHOD0(IsPersonalizedUrlDataCollectionActive, bool());
   MOCK_CONST_METHOD0(IsAuthenticated, bool());
-  MOCK_CONST_METHOD0(IsSyncActive, bool());
   MOCK_CONST_METHOD0(IsHistoryEmbeddingsEnabled, bool());
   MOCK_CONST_METHOD0(IsHistoryEmbeddingsSettingVisible, bool());
   MOCK_CONST_METHOD0(IsLensEnabled, bool());
@@ -161,6 +168,7 @@ class MockAutocompleteProviderClient
   MOCK_CONST_METHOD0(IsPagePaywalled, std::optional<bool>());
   MOCK_METHOD(bool, ShouldSendContextualUrlSuggestParam, (), (const));
   MOCK_METHOD(bool, ShouldSendPageTitleSuggestParam, (), (const));
+  MOCK_METHOD(bool, IsWebUiNtpEnabledForDesktopAndroid, (), (const, override));
   MOCK_CONST_METHOD1(GetLensSuggestInputsWhenReady,
                      base::CallbackListSubscription(
                          LensOverlaySuggestInputsCallback callback));
@@ -173,7 +181,7 @@ class MockAutocompleteProviderClient
   MOCK_METHOD6(
       Classify,
       void(const std::u16string& text,
-           bool prefer_keyword,
+           bool in_keyword_mode,
            bool allow_exact_keyword_match,
            metrics::OmniboxEventProto::PageClassification page_classification,
            AutocompleteMatch* match,
@@ -200,6 +208,11 @@ class MockAutocompleteProviderClient
     identity_manager_ = identity_manager;
   }
 
+  void set_session_sync_service(
+      sync_sessions::SessionSyncService* session_sync_service) {
+    session_sync_service_ = session_sync_service;
+  }
+
   network::TestURLLoaderFactory* test_url_loader_factory() {
     return &test_url_loader_factory_;
   }
@@ -210,6 +223,10 @@ class MockAutocompleteProviderClient
   MOCK_METHOD0(CloseIncognitoWindows, void());
   MOCK_METHOD0(PromptPageTranslation, void());
   MOCK_METHOD1(OpenLensOverlay, void(bool));
+  MOCK_METHOD(bool, ShouldOpenCoBrowsePanel, (), (const, override));
+  MOCK_METHOD(void, OpenCoBrowsePanel, (), (override));
+  MOCK_METHOD(bool, ShouldOpenComposeboxForAskG, (), (const, override));
+  MOCK_METHOD(void, OpenComposeboxForAskG, (), (override));
   MOCK_METHOD3(IssueContextualSearchRequest,
                void(const GURL& destination_url,
                     AutocompleteMatchType::Type match_type,
@@ -233,6 +250,8 @@ class MockAutocompleteProviderClient
       unscoped_extension_provider_delegate_;
   MockTabMatcher tab_matcher_;
   raw_ptr<signin::IdentityManager> identity_manager_ = nullptr;  // Not owned.
+  raw_ptr<sync_sessions::SessionSyncService> session_sync_service_ =
+      nullptr;  // Not owned.
   std::unique_ptr<tab_groups::MockTabGroupSyncService>
       mock_tab_group_sync_service_;
 };

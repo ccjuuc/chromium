@@ -3,9 +3,8 @@
 // found in the LICENSE file.
 
 import {ModuleDescriptor, ModuleRegistry} from 'chrome://new-tab-page/lazy_load.js';
-import {NewTabPageProxy, WindowProxy} from 'chrome://new-tab-page/new_tab_page.js';
-import type {ModuleIdName, PageRemote} from 'chrome://new-tab-page/new_tab_page.mojom-webui.js';
-import {PageCallbackRouter, PageHandlerRemote} from 'chrome://new-tab-page/new_tab_page.mojom-webui.js';
+import {NewTabPageProxy, PageCallbackRouter, PageHandlerRemote, WindowProxy} from 'chrome://new-tab-page/new_tab_page.js';
+import type {ModuleIdName, PageRemote} from 'chrome://new-tab-page/new_tab_page.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {PromiseResolver} from 'chrome://resources/js/promise_resolver.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
@@ -43,12 +42,12 @@ suite('NewTabPageModulesModuleRegistryTest', () => {
       new ModuleDescriptor('baz', initNullModule),
     ];
 
-    handler.setResultFor('getModulesIdNames', Promise.resolve({
+    handler.setPromiseResolveFor('getModulesIdNames', {
       data: descriptors.map(d => ({id: d.id, name: d.id} as ModuleIdName)),
-    }));
-    handler.setResultFor('getModulesOrder', Promise.resolve({
+    });
+    handler.setPromiseResolveFor('getModulesOrder', {
       moduleIds: [],
-    }));
+    });
 
     const moduleRegistry = new ModuleRegistry(descriptors);
     const modulesPromise = moduleRegistry.initializeModules(0);
@@ -75,12 +74,12 @@ suite('NewTabPageModulesModuleRegistryTest', () => {
       new ModuleDescriptor('buz', () => Promise.resolve(fooModule)),
     ];
     windowProxy.setResultFor('now', 5.0);
-    handler.setResultFor('getModulesIdNames', Promise.resolve({
+    handler.setPromiseResolveFor('getModulesIdNames', {
       data: descriptors.map(d => ({id: d.id, name: d.id} as ModuleIdName)),
-    }));
-    handler.setResultFor('getModulesOrder', Promise.resolve({
+    });
+    handler.setPromiseResolveFor('getModulesOrder', {
       moduleIds: [],
-    }));
+    });
 
     // Act.
     const moduleRegistry = new ModuleRegistry(descriptors);
@@ -125,13 +124,13 @@ suite('NewTabPageModulesModuleRegistryTest', () => {
         new ModuleDescriptor('foo', () => Promise.resolve(fooElement));
     const barDescriptor =
         new ModuleDescriptor('bar', () => Promise.resolve(barElement));
-    handler.setResultFor('getModulesOrder', Promise.resolve({
+    handler.setPromiseResolveFor('getModulesOrder', {
       moduleIds: [],
-    }));
+    });
     // Only return barDescriptor when `getModulesIdNames` is called.
-    handler.setResultFor('getModulesIdNames', Promise.resolve({
+    handler.setPromiseResolveFor('getModulesIdNames', {
       data: [{id: barDescriptor.id, name: barDescriptor.id} as ModuleIdName],
-    }));
+    });
 
     // Act - Attempt to initialize both foo and bar modules.
     const moduleRegistry = new ModuleRegistry([fooDescriptor, barDescriptor]);
@@ -211,13 +210,13 @@ suite('NewTabPageModulesModuleRegistryTest', () => {
             new ModuleDescriptor('bar', () => Promise.resolve(barModule)),
             new ModuleDescriptor('baz', () => Promise.resolve(bazModule)),
           ];
-          handler.setResultFor('getModulesIdNames', Promise.resolve({
+          handler.setPromiseResolveFor('getModulesIdNames', {
             data:
                 descriptors.map(d => ({id: d.id, name: d.id} as ModuleIdName)),
-          }));
-          handler.setResultFor('getModulesOrder', Promise.resolve({
+          });
+          handler.setPromiseResolveFor('getModulesOrder', {
             moduleIds: ['bar', 'baz', 'foo'],
-          }));
+          });
 
           // Act.
           const moduleRegistry = new ModuleRegistry(descriptors);
@@ -254,9 +253,9 @@ suite('NewTabPageModulesModuleRegistryTest', () => {
       handler.setResultFor('getModulesIdNames', Promise.resolve({
         data: descriptors.map(d => ({id: d.id, name: d.id} as ModuleIdName)),
       }));
-      handler.setResultFor('getModulesOrder', Promise.resolve({
+      handler.setPromiseResolveFor('getModulesOrder', {
         moduleIds: ['biz', 'bar'],
-      }));
+      });
 
       // Act.
       const moduleRegistry = new ModuleRegistry(descriptors);

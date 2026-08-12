@@ -2,14 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CONTENT_BROWSER_ACCESSIBILITY_HIT_TESTING_WIN_BROWSERTEST_H_
-#define CONTENT_BROWSER_ACCESSIBILITY_HIT_TESTING_WIN_BROWSERTEST_H_
-
 #include <objbase.h>
 
 #include <wrl/client.h>
 
-#include "base/test/scoped_feature_list.h"
 #include "base/win/scoped_variant.h"
 #include "content/browser/accessibility/hit_testing_browsertest.h"
 #include "content/public/test/accessibility_notification_waiter.h"
@@ -17,7 +13,6 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/shell/browser/shell.h"
-#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/platform/browser_accessibility.h"
 #include "ui/accessibility/platform/browser_accessibility_manager.h"
 
@@ -60,8 +55,6 @@ class AccessibilityHitTestingWinBrowserTest
     return text_provider;
   }
 
- private:
-  base::test::ScopedFeatureList scoped_feature_list_{::features::kUiaProvider};
 };
 
 INSTANTIATE_TEST_SUITE_P(
@@ -265,5 +258,3 @@ IN_PROC_BROWSER_TEST_P(AccessibilityHitTestingWinBrowserTest,
 }
 
 }  // namespace content
-
-#endif  // CONTENT_BROWSER_ACCESSIBILITY_HIT_TESTING_WIN_BROWSERTEST_H_

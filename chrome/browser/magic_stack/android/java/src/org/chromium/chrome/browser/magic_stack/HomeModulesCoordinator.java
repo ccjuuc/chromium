@@ -8,6 +8,7 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.app.Activity;
 import android.os.SystemClock;
+import android.view.View;
 import android.view.ViewGroup;
 
 import androidx.annotation.VisibleForTesting;
@@ -19,10 +20,13 @@ import androidx.recyclerview.widget.SnapHelper;
 import org.chromium.base.Callback;
 import org.chromium.base.CallbackController;
 import org.chromium.base.ResettersForTesting;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.magic_stack.ModuleRegistry.OnViewCreatedCallback;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils.PaddingStyle;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
@@ -43,7 +47,7 @@ public class HomeModulesCoordinator implements ModuleDelegate, OnViewCreatedCall
     private final ModuleDelegateHost mModuleDelegateHost;
     private HomeModulesMediator mMediator;
     private final HomeModulesRecyclerView mRecyclerView;
-    private final ObservableSupplier<Profile> mProfileSupplier;
+    private final MonotonicObservableSupplier<Profile> mProfileSupplier;
     private final ModuleRegistry mModuleRegistry;
 
     private ModelList mModel;
@@ -64,7 +68,7 @@ public class HomeModulesCoordinator implements ModuleDelegate, OnViewCreatedCall
 
     private @Nullable Callback<Profile> mOnProfileAvailableObserver;
     private boolean mHasHomeModulesBeenScrolled;
-    private final RecyclerView.OnScrollListener mOnScrollListener;
+    private RecyclerView.@Nullable OnScrollListener mOnScrollListener;
     private CallbackController mCallbackController;
 
     /**
@@ -81,7 +85,7 @@ public class HomeModulesCoordinator implements ModuleDelegate, OnViewCreatedCall
             ModuleDelegateHost moduleDelegateHost,
             ViewGroup parentView,
             HomeModulesConfigManager homeModulesConfigManager,
-            ObservableSupplier<Profile> profileSupplier,
+            MonotonicObservableSupplier<Profile> profileSupplier,
             ModuleRegistry moduleRegistry) {
         mModuleDelegateHost = moduleDelegateHost;
         mHomeModulesConfigManager = homeModulesConfigManager;
@@ -94,8 +98,10 @@ public class HomeModulesCoordinator implements ModuleDelegate, OnViewCreatedCall
 
                     @Override
                     public void allCardsConfigChanged(boolean isEnabled) {
-                        // TODO(crbug.com/7142982): If all cards are turned off, reflect that on the
-                        // NTP.
+                        if (ChromeFeatureList.isEnabled(
+                                ChromeFeatureList.HOME_MODULE_PREF_REFACTOR)) {
+                            mRecyclerView.setVisibility(isEnabled ? View.VISIBLE : View.GONE);
+                        }
                     }
                 };
         mHomeModulesConfigManager.addListener(mHomeModulesStateListener);
@@ -165,6 +171,16 @@ public class HomeModulesCoordinator implements ModuleDelegate, OnViewCreatedCall
                         : CirclePagerIndicatorDecoration.getItemPerScreen(
                                 mUiConfig.getCurrentDisplayStyle());
         mRecyclerView.initialize(isTablet, startMargin, mItemPerScreen);
+
+        if (NewTabPageUtils.getPaddingStyleForAurora() != PaddingStyle.DEFAULT) {
+            ViewGroup.MarginLayoutParams marginLayoutParams =
+                    (ViewGroup.MarginLayoutParams) mRecyclerView.getLayoutParams();
+            if (marginLayoutParams != null) {
+                marginLayoutParams.topMargin =
+                        NewTabPageUtils.getNtpSectionPaddingPx(activity.getResources());
+                mRecyclerView.setLayoutParams(marginLayoutParams);
+            }
+        }
 
         mPageIndicatorDecoration =
                 new CirclePagerIndicatorDecoration(
@@ -247,7 +263,7 @@ public class HomeModulesCoordinator implements ModuleDelegate, OnViewCreatedCall
 
         var profile = mProfileSupplier.get();
         if (profile != null) {
-            mMediator.showModules(callback, this);
+            mMediator.showModules(callback, this, /* useCachedSegmentationRanking= */ false);
         } else {
             long waitForProfileStartTimeMs = SystemClock.elapsedRealtime();
             mOnProfileAvailableObserver =
@@ -255,7 +271,7 @@ public class HomeModulesCoordinator implements ModuleDelegate, OnViewCreatedCall
                         onProfileAvailable(callback, waitForProfileStartTimeMs);
                     };
 
-            mProfileSupplier.addObserver(mOnProfileAvailableObserver);
+            mProfileSupplier.addSyncObserverAndPostIfNonNull(mOnProfileAvailableObserver);
         }
     }
 
@@ -282,7 +298,8 @@ public class HomeModulesCoordinator implements ModuleDelegate, OnViewCreatedCall
     private void onProfileAvailable(
             Runnable onHomeModulesChangedCallback, long waitForProfileStartTimeMs) {
         long delay = SystemClock.elapsedRealtime() - waitForProfileStartTimeMs;
-        mMediator.showModules(onHomeModulesChangedCallback, this);
+        mMediator.showModules(
+                onHomeModulesChangedCallback, this, /* useCachedSegmentationRanking= */ false);
 
         assumeNonNull(mOnProfileAvailableObserver);
         mProfileSupplier.removeObserver(mOnProfileAvailableObserver);
@@ -311,6 +328,11 @@ public class HomeModulesCoordinator implements ModuleDelegate, OnViewCreatedCall
         }
     }
 
+    /** Asks all of the modules being shown to reload their data if necessary. */
+    public void updateModules() {
+        mMediator.updateModules();
+    }
+
     /** Hides the modules and cleans up. */
     public void hide() {
         if (!mHasHomeModulesBeenScrolled) {
@@ -319,6 +341,9 @@ public class HomeModulesCoordinator implements ModuleDelegate, OnViewCreatedCall
         mHasHomeModulesBeenScrolled = false;
         mMediator.hide();
 
+        if (mIsSnapHelperAttached) {
+            mSnapHelper.attachToRecyclerView(null);
+        }
         destroyAdapter();
     }
 
@@ -392,7 +417,12 @@ public class HomeModulesCoordinator implements ModuleDelegate, OnViewCreatedCall
     @Override
     public void prepareBuildAndShow() {
         maybeSetUpAdapter();
-        mRecyclerView.addOnScrollListener(mOnScrollListener);
+        mRecyclerView.addOnScrollListener(assumeNonNull(mOnScrollListener));
+    }
+
+    @Override
+    public void refreshModules() {
+        mMediator.refreshModules();
     }
 
     // OnViewCreatedCallback implementation.
@@ -415,6 +445,8 @@ public class HomeModulesCoordinator implements ModuleDelegate, OnViewCreatedCall
                 (contextMenu, view, contextMenuInfo) -> {
                     mHomeModulesContextMenuManager.displayMenu(view, moduleProvider);
                 });
+
+        group.setFocusable(true);
 
         moduleProvider.onViewCreated();
 
@@ -453,6 +485,12 @@ public class HomeModulesCoordinator implements ModuleDelegate, OnViewCreatedCall
             mCallbackController.destroy();
             mCallbackController = null;
         }
+        if (mSnapHelper != null) {
+            mSnapHelper = null;
+        }
+        if (mOnScrollListener != null) {
+            mOnScrollListener = null;
+        }
     }
 
     public boolean getIsSnapHelperAttachedForTesting() {
@@ -465,7 +503,8 @@ public class HomeModulesCoordinator implements ModuleDelegate, OnViewCreatedCall
      */
     private void recordMagicStackScroll(boolean hasHomeModulesBeenScrolled) {
         mMediator.recordMagicStackScroll(hasHomeModulesBeenScrolled);
-        mRecyclerView.removeOnScrollListener(mOnScrollListener);
+        mRecyclerView.removeOnScrollListener(assumeNonNull(mOnScrollListener));
+        mOnScrollListener = null;
     }
 
     private void destroyAdapter() {

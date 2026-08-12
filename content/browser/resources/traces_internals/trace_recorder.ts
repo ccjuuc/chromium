@@ -4,6 +4,7 @@
 
 import '//resources/cr_elements/cr_button/cr_button.js';
 import '//resources/cr_elements/cr_toast/cr_toast.js';
+import '//resources/cr_elements/cr_toggle/cr_toggle.js';
 import '//resources/cr_elements/cr_collapse/cr_collapse.js';
 import '//resources/cr_elements/cr_expand_button/cr_expand_button.js';
 import '//resources/cr_elements/cr_slider/cr_slider.js';
@@ -36,13 +37,11 @@ enum TracingState {
 export interface TraceRecorderElement {
   $: {
     toast: CrToastElement,
-    tickedSlider: CrSliderElement,
-    select: HTMLSelectElement,
   };
 }
 
 // <if expr="is_win">
-type EtwProviderType = 'scheduler'|'memory'|'file';
+type EtwProviderType = 'scheduler'|'memory'|'system_io';
 // </if>
 
 export class TraceRecorderElement extends CrLitElement {
@@ -62,7 +61,7 @@ export class TraceRecorderElement extends CrLitElement {
     return {
       toastMessage: {type: String},
       bufferSizeMb: {type: Number},
-      bufferFillPolicy: {type: Object},
+      bufferFillPolicy: {type: Number},
       tracingState: {type: String},
       trackEventCategories: {type: Array},
       trackEventTags: {type: Array},
@@ -131,7 +130,7 @@ export class TraceRecorderElement extends CrLitElement {
       {[provider in EtwProviderType]: Set<string>} = {
         'memory': new Set(),
         'scheduler': new Set(),
-        'file': new Set(),
+        'system_io': new Set(),
       };
   protected accessor etwExpanded_: boolean = false;
   // </if>
@@ -165,19 +164,15 @@ export class TraceRecorderElement extends CrLitElement {
     }
   }
 
-  protected get isStartTracingEnabled(): boolean {
+  protected isStartTracingEnabled(): boolean {
     return this.tracingState === TracingState.IDLE && !!this.traceConfig;
   }
 
-  protected get isRecording(): boolean {
+  protected isRecording(): boolean {
     return this.tracingState === TracingState.RECORDING;
   }
 
-  protected get fillPolicyEnum() {
-    return TraceConfig_BufferConfig_FillPolicy;
-  }
-
-  protected get statusClass(): string {
+  protected getStatusClass(): string {
     switch (this.tracingState) {
       case TracingState.IDLE:
         return 'status-idle';
@@ -202,7 +197,7 @@ export class TraceRecorderElement extends CrLitElement {
     }
   }
 
-  protected async startTracing_(): Promise<void> {
+  protected async onStartTracingClick_(): Promise<void> {
     const bigBufferConfig = this.serializeTraceConfigToBigBuffer_();
     if (!bigBufferConfig) {
       return;
@@ -225,7 +220,7 @@ export class TraceRecorderElement extends CrLitElement {
     }
   }
 
-  protected async stopTracing_(): Promise<void> {
+  protected async onStopTracingClick_(): Promise<void> {
     if (this.bufferPollIntervalId_ !== null) {
       window.clearInterval(this.bufferPollIntervalId_);
       this.bufferPollIntervalId_ = null;
@@ -241,12 +236,12 @@ export class TraceRecorderElement extends CrLitElement {
     }
   }
 
-  protected async cloneTraceSession_(): Promise<void> {
+  protected async onCloneTraceSessionClick_(): Promise<void> {
     const {trace, uuid} = await this.browserProxy_.handler.cloneTraceSession();
     this.downloadData_(trace, uuid);
   }
 
-  protected privacyFilterDidChange_(event: CustomEvent<boolean>) {
+  protected onPrivacyFilterChange_(event: CustomEvent<boolean>) {
     if (this.privacyFilterEnabled_ === event.detail) {
       return;
     }
@@ -301,13 +296,13 @@ export class TraceRecorderElement extends CrLitElement {
     return this.disabledTags.has(tagName);
   }
 
-  protected onBufferSizeChanged_(e: Event): void {
+  protected onBufferSizeCrSliderValueChanged_(e: Event): void {
     const slider = e.target as CrSliderElement;
     this.bufferSizeMb = Math.floor(slider.value);
     this.updateBufferConfigField_('sizeKb', this.bufferSizeMb * 1024);
   }
 
-  protected onBufferFillPolicyChanged_(e: Event) {
+  protected onBufferFillPolicyChange_(e: Event) {
     const selectElement = e.target as HTMLSelectElement;
     const policyValue =
         Number(selectElement.value) as TraceConfig_BufferConfig_FillPolicy;
@@ -326,11 +321,12 @@ export class TraceRecorderElement extends CrLitElement {
     this.updateUrlFromConfig_();
   }
 
-  protected onCategoryChange_(event: Event, categoryName: string): void {
+  protected onCategoryChange_(event: Event): void {
     if (!this.trackEventConfig) {
       return;
     }
     const isChecked = (event.target as HTMLInputElement).checked;
+    const categoryName = (event.currentTarget as HTMLElement).dataset['name']!;
 
     if (isChecked) {
       this.enabledCategories.add(categoryName);
@@ -354,9 +350,11 @@ export class TraceRecorderElement extends CrLitElement {
     return this.enabledEtwEvents[provider].has(keyword);
   }
 
-  protected onEtwEVentChange_(
-      event: CustomEvent<boolean>, provider: EtwProviderType,
-      keyword: string): void {
+  protected onEtwEVentChange_(event: CustomEvent<boolean>) {
+    const index = Number((event.currentTarget as HTMLElement).dataset['index']);
+    const provider = this.etwEvents[index]!.provider;
+    const keyword = this.etwEvents[index]!.keyword;
+
     if (!this.traceConfig) {
       return;
     }
@@ -388,15 +386,25 @@ export class TraceRecorderElement extends CrLitElement {
           [...this.enabledEtwEvents['scheduler']];
       this.etwConfig.memoryProviderEvents =
           [...this.enabledEtwEvents['memory']];
-      this.etwConfig.fileProviderEvents = [...this.enabledEtwEvents['file']];
+      this.etwConfig.systemIoProviderEvents =
+          [...this.enabledEtwEvents['system_io']];
     }
 
     this.updateUrlFromConfig_();
   }
   // </if>
 
-  protected onTagsChange_(event: Event, tagName: string, enabled: boolean):
-      void {
+  protected onTagsTrueChange_(event: Event) {
+    const tagName = (event.currentTarget as HTMLElement).dataset['tag']!;
+    this.onTagsChange_(event, tagName, true);
+  }
+
+  protected onTagsFalseChange_(event: Event) {
+    const tagName = (event.currentTarget as HTMLElement).dataset['tag']!;
+    this.onTagsChange_(event, tagName, false);
+  }
+
+  private onTagsChange_(event: Event, tagName: string, enabled: boolean): void {
     if (!this.trackEventConfig) {
       return;
     }
@@ -482,8 +490,14 @@ export class TraceRecorderElement extends CrLitElement {
       {
         name: 'File I/O',
         keyword: 'FILE_IO',
-        provider: 'file',
+        provider: 'system_io',
         description: 'Enables file I/O events',
+      },
+      {
+        name: 'Disk I/O',
+        keyword: 'DISK_IO',
+        provider: 'system_io',
+        description: 'Enables disk I/O events',
       },
     ];
     // </if>
@@ -698,8 +712,8 @@ export class TraceRecorderElement extends CrLitElement {
           new Set(this.etwConfig.schedulerProviderEvents);
       this.enabledEtwEvents['memory'] =
           new Set(this.etwConfig.memoryProviderEvents);
-      this.enabledEtwEvents['file'] =
-          new Set(this.etwConfig.fileProviderEvents);
+      this.enabledEtwEvents['system_io'] =
+          new Set(this.etwConfig.systemIoProviderEvents);
     }
     // </if>
   }

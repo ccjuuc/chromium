@@ -18,6 +18,7 @@
 #include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/observer_list.h"
 #include "build/blink_buildflags.h"
 #include "build/build_config.h"
 #include "components/autofill/core/browser/autofill_type.h"
@@ -136,7 +137,7 @@ class PasswordManager : public PasswordManagerInterface {
       const autofill::FormData& form,
       const std::u16string& generated_password) override;
   void ProcessAutofillPredictions(
-      PasswordManagerDriver* driver,
+      PasswordManagerDriver& driver,
       const autofill::FormData& form,
       const base::flat_map<autofill::FieldGlobalId,
                            autofill::AutofillServerPrediction>&
@@ -216,6 +217,9 @@ class PasswordManager : public PasswordManagerInterface {
   // Returns true if password element is detected on the current page.
   bool IsPasswordFieldDetectedOnPage() const override;
 
+  void AddObserver(Observer* observer) override;
+  void RemoveObserver(Observer* observer) override;
+
 #if BUILDFLAG(USE_BLINK)
   // Reports the success from the renderer's PasswordAutofillAgent to fill
   // credentials into a site. This may be called multiple times, but only
@@ -227,6 +231,9 @@ class PasswordManager : public PasswordManagerInterface {
 
   // Notifies that Credential Management API function store() is called.
   void NotifyStorePasswordCalled() override;
+
+  // Notifies that a non-password login was detected (e.g. FedCM or OAuth).
+  void OnNonPasswordLoginDetected();
 
   // Returns form cache containing information about parsed password forms on
   // the web page.
@@ -253,7 +260,7 @@ class PasswordManager : public PasswordManagerInterface {
   // Returns the best matches from the manager which manages |form_id|. |driver|
   // is needed to determine the match. Returns nullptr when no matched manager
   // is found.
-  base::span<const PasswordForm> GetBestMatches(
+  base::span<const StoredCredential> GetBestMatches(
       PasswordManagerDriver* driver,
       autofill::FormRendererId form_id);
 
@@ -266,7 +273,7 @@ class PasswordManager : public PasswordManagerInterface {
     return GetSubmittedManager();
   }
 
-  const std::map<autofill::FormSignature, FormPredictions>&
+  const std::map<std::pair<autofill::FormSignature, DriverId>, FormPredictions>&
   GetServerPredictionsForTesting() const {
     return server_predictions_;
   }
@@ -346,7 +353,7 @@ class PasswordManager : public PasswordManagerInterface {
   // |form_managers_| and returns it.
   // Returns nullptr if the manager should not be created for a form (e.g. when
   // filling is disabled).
-  PasswordFormManager* CreateFormManager(PasswordManagerDriver* driver,
+  PasswordFormManager* CreateFormManager(PasswordManagerDriver& driver,
                                          const autofill::FormData& form);
 
   // Passes |form| to PasswordFormManager that manages it for using it after
@@ -395,7 +402,7 @@ class PasswordManager : public PasswordManagerInterface {
   // `field_id` and `driver_id`.
   std::optional<FormPredictions> FindServerPredictionsForField(
       autofill::FieldRendererId field_id,
-      int driver_id);
+      DriverId driver_id);
 
   //  If `possible_username_.form_predictions` is missing, this functions tries
   //  to find predictions for the forms which contains `possible_usernames_` in
@@ -475,12 +482,13 @@ class PasswordManager : public PasswordManagerInterface {
   std::unique_ptr<PasswordFormManager> owned_submitted_form_manager_;
 
   // The embedder-level client. Must outlive this class.
-  const raw_ptr<PasswordManagerClient, DanglingUntriaged> client_;
+  const raw_ptr<PasswordManagerClient> client_;
 
   const base::CallbackListSubscription account_store_cb_list_subscription_;
 
   // Server predictions for the forms on the page.
-  std::map<autofill::FormSignature, FormPredictions> server_predictions_;
+  std::map<std::pair<autofill::FormSignature, DriverId>, FormPredictions>
+      server_predictions_;
 
   // Classification model predictions for the forms on the page, keyed by
   // the combination of the driver and the renderer id of the form, that allow
@@ -505,6 +513,8 @@ class PasswordManager : public PasswordManagerInterface {
       possible_usernames_ =
           base::LRUCache<PossibleUsernameFieldIdentifier, PossibleUsernameData>(
               kMaxSingleUsernameFieldsToStore);
+
+  base::ObserverList<Observer> observers_;
 };
 
 }  // namespace password_manager

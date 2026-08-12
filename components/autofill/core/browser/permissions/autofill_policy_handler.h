@@ -6,7 +6,6 @@
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_PERMISSIONS_AUTOFILL_POLICY_HANDLER_H_
 
 #include "components/policy/core/browser/configuration_policy_handler.h"
-#include "components/policy/policy_export.h"
 
 namespace autofill {
 
@@ -21,6 +20,26 @@ class AutofillPolicyHandler : public policy::TypeCheckingPolicyHandler {
   ~AutofillPolicyHandler() override;
 
   // ConfigurationPolicyHandler methods:
+  void ApplyPolicySettings(const policy::PolicyMap& policies,
+                           PrefValueMap* prefs) override;
+};
+
+// ConfigurationPolicyHandler to reconcile AutofillAddressEnabled and
+// AutofillCreditCardEnabled boolean policies with unified AutofillSettings
+// dictionary list rules. If legacy booleans are disabled, global wildcard block
+// rules ('*') are merged into autofill::prefs::kAutofillTypesBlocked.
+class AutofillSettingsPolicyHandler
+    : public policy::SimpleSchemaValidatingPolicyHandler {
+ public:
+  explicit AutofillSettingsPolicyHandler(policy::Schema schema);
+  AutofillSettingsPolicyHandler(const AutofillSettingsPolicyHandler&) = delete;
+  AutofillSettingsPolicyHandler& operator=(
+      const AutofillSettingsPolicyHandler&) = delete;
+  ~AutofillSettingsPolicyHandler() override;
+
+  // ConfigurationPolicyHandler:
+  bool CheckPolicySettings(const policy::PolicyMap& policies,
+                           policy::PolicyErrorMap* errors) override;
   void ApplyPolicySettings(const policy::PolicyMap& policies,
                            PrefValueMap* prefs) override;
 };

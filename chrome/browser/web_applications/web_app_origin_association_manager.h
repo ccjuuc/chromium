@@ -10,13 +10,17 @@
 #include <vector>
 
 #include "base/gtest_prod_util.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
+#include "chrome/browser/web_applications/model/migration_source.h"
 #include "chrome/browser/web_applications/proto/web_app.pb.h"
 #include "chrome/browser/web_applications/scope_extension_info.h"
 #include "components/webapps/services/web_app_origin_association/web_app_origin_association_fetcher.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/blink/public/common/manifest/manifest.h"
 #include "url/origin.h"
+
+class Profile;
 
 namespace web_app {
 
@@ -32,7 +36,7 @@ struct OriginAssociations {
   bool operator==(const OriginAssociations&) const;
 
   ScopeExtensions scope_extensions;
-  std::vector<web_app::proto::WebAppMigrationSource> migration_sources;
+  std::vector<MigrationSource> migration_sources;
 };
 
 // Callback type that sends back the valid |origin_associations|.
@@ -46,7 +50,7 @@ class WebAppOriginAssociationManager {
   // extensions.
   class Task;
 
-  WebAppOriginAssociationManager();
+  explicit WebAppOriginAssociationManager(Profile& profile);
   WebAppOriginAssociationManager(const WebAppOriginAssociationManager&) =
       delete;
   WebAppOriginAssociationManager& operator=(
@@ -65,6 +69,10 @@ class WebAppOriginAssociationManager {
  private:
   FRIEND_TEST_ALL_PREFIXES(WebAppOriginAssociationManagerTest, RunTasks);
 
+  // Lazily instantiate the `WebAppOriginAssociationFetcher` instance using the
+  // profile's default `SharedUrlLoaderFactory`. Requires the storage partition
+  // instance to be initialized, which happens after the `WebAppProvider` has
+  // been started.
   webapps::WebAppOriginAssociationFetcher& GetFetcher();
   void MaybeStartNextTask();
   void OnTaskCompleted();
@@ -73,6 +81,7 @@ class WebAppOriginAssociationManager {
   bool task_in_progress_ = false;
 
   std::unique_ptr<webapps::WebAppOriginAssociationFetcher> fetcher_;
+  const raw_ref<Profile> profile_;
   base::WeakPtrFactory<WebAppOriginAssociationManager> weak_ptr_factory_{this};
 };
 

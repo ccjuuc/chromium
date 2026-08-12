@@ -19,7 +19,10 @@ export class TestAppearanceBrowserProxy extends TestBrowserProxy implements
       'isChildAccount',
       'openCustomizeChrome',
       'openCustomizeChromeToolbarSection',
+      'recordGlassFrameEnabledChanged',
       'recordHoverCardImagesEnabledChanged',
+      'recordHoverCardMemoryUsageEnabledChanged',
+      'recordVerticalTabStripModeChanged',
       'resetPinnedToolbarActions',
       'useDefaultTheme',
       // <if expr="is_linux">
@@ -67,8 +70,20 @@ export class TestAppearanceBrowserProxy extends TestBrowserProxy implements
     this.methodCalled('openCustomizeChromeToolbarSection');
   }
 
+  recordGlassFrameEnabledChanged(enabled: boolean) {
+    this.methodCalled('recordGlassFrameEnabledChanged', enabled);
+  }
+
   recordHoverCardImagesEnabledChanged(enabled: boolean) {
     this.methodCalled('recordHoverCardImagesEnabledChanged', enabled);
+  }
+
+  recordHoverCardMemoryUsageEnabledChanged(enabled: boolean) {
+    this.methodCalled('recordHoverCardMemoryUsageEnabledChanged', enabled);
+  }
+
+  recordVerticalTabStripModeChanged(enabled: boolean) {
+    this.methodCalled('recordVerticalTabStripModeChanged', enabled);
   }
 
   resetPinnedToolbarActions() {

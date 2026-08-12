@@ -21,6 +21,8 @@ namespace blink {
 class ExceptionState;
 class GPUBuffer;
 class GPUCommandBuffer;
+class GPUCopyElementImageDestination;
+class GPUCopyElementImageSource;
 class GPUImageCopyExternalImage;
 class GPUImageCopyTextureTagged;
 class GPUTexelCopyBufferLayout;
@@ -28,6 +30,7 @@ class GPUTexelCopyTextureInfo;
 class ScriptState;
 class StaticBitmapImage;
 struct ExternalTextureSource;
+class V8UnionElementOrElementImage;
 
 class GPUQueue : public DawnObject<wgpu::Queue> {
   DEFINE_WRAPPERTYPEINFO();
@@ -84,20 +87,8 @@ class GPUQueue : public DawnObject<wgpu::Queue> {
                                   GPUImageCopyTextureTagged* destination,
                                   const V8GPUExtent3D* copySize,
                                   ExceptionState& exception_state);
-  void copyElementImageToTexture(Element* element,
-                                 GPUImageCopyTextureTagged* destination,
-                                 ExceptionState& exception_state);
-  void copyElementImageToTexture(Element* element,
-                                 uint32_t width,
-                                 uint32_t height,
-                                 GPUImageCopyTextureTagged* destination,
-                                 ExceptionState& exception_state);
-  void copyElementImageToTexture(Element* element,
-                                 float sx,
-                                 float sy,
-                                 float swidth,
-                                 float sheight,
-                                 GPUImageCopyTextureTagged* destination,
+  void copyElementImageToTexture(GPUCopyElementImageSource* source,
+                                 GPUCopyElementImageDestination* destination,
                                  ExceptionState& exception_state);
   // }}} End of WebIDL binding implementation.
 
@@ -113,22 +104,16 @@ class GPUQueue : public DawnObject<wgpu::Queue> {
                             bool dst_premultiplied_alpha,
                             PredefinedColorSpace dst_color_space,
                             bool flipY);
-  bool CopyFromCanvasSourceImage(StaticBitmapImage* image,
-                                 const wgpu::Origin2D& origin,
-                                 const wgpu::Extent3D& copy_size,
-                                 const wgpu::TexelCopyTextureInfo& destination,
-                                 bool dst_premultiplied_alpha,
-                                 PredefinedColorSpace dst_color_space,
-                                 bool flipY);
-  void CopyElementImageToTextureInternal(Element* element,
-                                         std::optional<float> sx,
-                                         std::optional<float> sy,
-                                         std::optional<float> swidth,
-                                         std::optional<float> sheight,
-                                         std::optional<uint32_t> width,
-                                         std::optional<uint32_t> height,
-                                         GPUImageCopyTextureTagged* destination,
-                                         ExceptionState& exception_state);
+  void CopyElementImageToTextureInternal(
+      const V8UnionElementOrElementImage* source,
+      std::optional<float> sx,
+      std::optional<float> sy,
+      std::optional<float> swidth,
+      std::optional<float> sheight,
+      std::optional<uint32_t> width,
+      std::optional<uint32_t> height,
+      GPUImageCopyTextureTagged* destination,
+      ExceptionState& exception_state);
   void WriteBufferImpl(ScriptState* script_state,
                        GPUBuffer* buffer,
                        uint64_t buffer_offset,
@@ -144,9 +129,13 @@ class GPUQueue : public DawnObject<wgpu::Queue> {
                         const V8GPUExtent3D* write_size,
                         ExceptionState& exception_state);
 
-  void SetLabelImpl(const String& value) override {
-    std::string utf8_label = value.Utf8();
-    GetHandle().SetLabel(utf8_label.c_str());
+ public:
+  void ReferenceUntilGPUIsFinished(
+      scoped_refptr<WebGPUMailboxTexture> mailbox_texture);
+
+ private:
+  void SetLabelImpl(std::string_view value) override {
+    GetHandle().SetLabel(value);
   }
 };
 

@@ -5,6 +5,7 @@
 #include <array>
 
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -28,6 +29,10 @@
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capture_types.h"
 #include "ui/base/ozone_buildflags.h"
+
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -92,12 +97,17 @@ class DesktopCaptureApiTest : public ExtensionApiTest {
 
 // TODO(crbug.com/40805704): Fails on the linux-wayland-rel bot.
 // TODO(crbug.com/40805725): Fails on Mac.
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_OZONE_WAYLAND)
+#if BUILDFLAG(IS_MAC)
 #define MAYBE_ChooseDesktopMedia DISABLED_ChooseDesktopMedia
 #else
 #define MAYBE_ChooseDesktopMedia ChooseDesktopMedia
 #endif
 IN_PROC_BROWSER_TEST_F(DesktopCaptureApiTest, MAYBE_ChooseDesktopMedia) {
+#if BUILDFLAG(IS_OZONE)
+  if (::ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP() << "Fails on Wayland";
+  }
+#endif
   // Each element in the following array corresponds to one test in
   // chrome/test/data/extensions/api_test/desktop_capture/test.js .
   FakeDesktopMediaPickerFactory::TestFlags test_flags[] = {
@@ -183,7 +193,7 @@ IN_PROC_BROWSER_TEST_F(DesktopCaptureApiTest, MAYBE_ChooseDesktopMedia) {
        .picker_result = DesktopMediaID(DesktopMediaID::TYPE_SCREEN,
                                        webrtc::kFullDesktopScreenId)},
   };
-  picker_factory_.SetTestFlags(test_flags, std::size(test_flags));
+  picker_factory_.SetTestFlags(test_flags);
   ASSERT_TRUE(RunExtensionTest("desktop_capture")) << message_;
 }
 
@@ -192,12 +202,17 @@ IN_PROC_BROWSER_TEST_F(DesktopCaptureApiTest, MAYBE_ChooseDesktopMedia) {
 // supported (see DesktopCaptureAccessHandler).
 // TODO(crbug.com/40805704): Fails on the linux-wayland-rel bot.
 // TODO(crbug.com/40805725): Fails on Mac.
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_OZONE_WAYLAND)
+#if BUILDFLAG(IS_MAC)
 #define MAYBE_Delegation DISABLED_Delegation
 #else
 #define MAYBE_Delegation Delegation
 #endif
 IN_PROC_BROWSER_TEST_F(DesktopCaptureApiTest, MAYBE_Delegation) {
+#if BUILDFLAG(IS_OZONE)
+  if (::ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP() << "Fails on Wayland";
+  }
+#endif
   // Initialize test server.
   base::FilePath test_data;
   EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &test_data));
@@ -229,7 +244,7 @@ IN_PROC_BROWSER_TEST_F(DesktopCaptureApiTest, MAYBE_Delegation) {
            DesktopMediaID(DesktopMediaID::TYPE_SCREEN, DesktopMediaID::kNullId),
        .cancelled = true},
   };
-  picker_factory_.SetTestFlags(test_flags, std::size(test_flags));
+  picker_factory_.SetTestFlags(test_flags);
 
   content::WebContents* web_contents = GetActiveWebContents();
 
@@ -251,7 +266,7 @@ IN_PROC_BROWSER_TEST_F(DesktopCaptureApiTest, MAYBE_Delegation) {
 
 // Not specifying a tab defaults to the extension's background page.
 // Service worker-based extensions don't have one, so they must specify
-// a tab. This is a regression test for crbug.com/1271590.
+// a tab. This is a regression test for crbug.com/40205786.
 IN_PROC_BROWSER_TEST_F(DesktopCaptureApiTest, ServiceWorkerMustSpecifyTab) {
   static constexpr char kManifest[] =
       R"({
@@ -336,7 +351,7 @@ void DesktopCaptureApiMediaPickerOptionsBaseTest::FromServiceWorker(
   FakeDesktopMediaPickerFactory::TestFlags test_flags[] = {
       {.expect_tabs = true, .picker_result = MakeFakeWebContentsMediaId(true)},
   };
-  picker_factory_.SetTestFlags(test_flags, std::size(test_flags));
+  picker_factory_.SetTestFlags(test_flags);
 
   ASSERT_TRUE(RunExtensionTest(test_dir.UnpackedPath(), {}, {})) << message_;
 }

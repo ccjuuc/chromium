@@ -6,21 +6,16 @@
 #define CHROME_BROWSER_ASH_MAHI_WEB_CONTENTS_MAHI_CONTENT_EXTRACTION_DELEGATE_H_
 
 #include "base/functional/callback.h"
-#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/task/sequenced_task_runner.h"
 #include "base/unguessable_token.h"
+#include "chromeos/components/mahi/public/cpp/mahi_types.h"
 #include "chromeos/components/mahi/public/mojom/content_extraction.mojom.h"
-#include "chromeos/crosapi/mojom/mahi.mojom-forward.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "url/gurl.h"
 
 namespace mahi {
 
 struct WebContentState;
-
-using GetContentCallback =
-    base::OnceCallback<void(crosapi::mojom::MahiPageContentPtr)>;
 
 // This is the delegate of the mahi content extraction service. It is
 // responsible for the service setup, binding and requests.
@@ -38,14 +33,14 @@ class MahiContentExtractionDelegate {
   // update. Returns nullptr if the content cannot be extracted.
   void ExtractContent(const WebContentState& web_content_state,
                       const base::UnguessableToken& client_id,
-                      GetContentCallback callback);
+                      chromeos::MahiGetContentCallback callback);
 
   // Requests the content extraction service to get content from a list of a11y
   // updates.
   void ExtractContent(const WebContentState& web_content_state,
                       const std::vector<ui::AXTreeUpdate>& updates,
                       const base::UnguessableToken& client_id,
-                      GetContentCallback callback);
+                      chromeos::MahiGetContentCallback callback);
 
  private:
   // Returns true if it content extraction service is set up successfully, and
@@ -63,7 +58,7 @@ class MahiContentExtractionDelegate {
   void OnGetContent(const base::UnguessableToken& page_id,
                     const base::UnguessableToken& client_id,
                     const GURL& url,
-                    GetContentCallback callback,
+                    chromeos::MahiGetContentCallback callback,
                     mojom::ExtractionResponsePtr response);
 
   // Callback when screen ai service is initialized. If successful, binds mahi
@@ -81,10 +76,6 @@ class MahiContentExtractionDelegate {
       remote_content_extraction_service_factory_;
   mojo::Remote<mojom::ContentExtractionService>
       remote_content_extraction_service_;
-
-  // This task runner is used to save the extracted content to disk. It meant to
-  // be used for debugging purposes only, and should not be used in production.
-  const scoped_refptr<base::SequencedTaskRunner> io_task_runner_;
 
   base::WeakPtrFactory<MahiContentExtractionDelegate> weak_pointer_factory_{
       this};

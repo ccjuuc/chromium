@@ -139,22 +139,9 @@ enum VideoCodecProfile {
   HEVCPROFILE_SCREEN_EXTENDED = 34,
   HEVCPROFILE_SCALABLE_REXT = 35,
   HEVCPROFILE_HIGH_THROUGHPUT_SCREEN_EXTENDED = 36,
-  VVCPROFILE_MAIN10 = 37,
-  VVCPROFILE_MAIN12 = 38,
-  VVCPROFILE_MAIN12_INTRA = 39,
-  VVCPROIFLE_MULTILAYER_MAIN10 = 40,
-  VVCPROFILE_MAIN10_444 = 41,
-  VVCPROFILE_MAIN12_444 = 42,
-  VVCPROFILE_MAIN16_444 = 43,
-  VVCPROFILE_MAIN12_444_INTRA = 44,
-  VVCPROFILE_MAIN16_444_INTRA = 45,
-  VVCPROFILE_MULTILAYER_MAIN10_444 = 46,
-  VVCPROFILE_MAIN10_STILL_PICTURE = 47,
-  VVCPROFILE_MAIN12_STILL_PICTURE = 48,
-  VVCPROFILE_MAIN10_444_STILL_PICTURE = 49,
-  VVCPROFILE_MAIN12_444_STILL_PICTURE = 50,
-  VVCPROFILE_MAIN16_444_STILL_PICTURE = 51,
-  VIDEO_CODEC_PROFILE_MAX = VVCPROFILE_MAIN16_444_STILL_PICTURE,
+  DOLBYVISION_PROFILE10 = 37,
+  DOLBYVISION_PROFILE20 = 38,
+  VIDEO_CODEC_PROFILE_MAX = DOLBYVISION_PROFILE20,
 };
 // clang-format off
 // LINT.ThenChange(//media/base/video_codecs.h:VideoCodecProfile, //tools/metrics/histograms/enums.xml:VideoCodecProfile)
@@ -191,47 +178,6 @@ struct GPU_CONFIG_EXPORT VideoEncodeAcceleratorSupportedProfile {
 };
 using VideoEncodeAcceleratorSupportedProfiles =
     std::vector<VideoEncodeAcceleratorSupportedProfile>;
-
-enum class ImageDecodeAcceleratorType {
-  kUnknown = 0,
-  kJpeg = 1,
-  kWebP = 2,
-  kMaxValue = kWebP,
-};
-
-enum class ImageDecodeAcceleratorSubsampling {
-  k420 = 0,
-  k422 = 1,
-  k444 = 2,
-  kMaxValue = k444,
-};
-
-// Specification of an image decoding profile supported by a hardware decoder.
-struct GPU_CONFIG_EXPORT ImageDecodeAcceleratorSupportedProfile {
-  ImageDecodeAcceleratorSupportedProfile();
-  ImageDecodeAcceleratorSupportedProfile(
-      const ImageDecodeAcceleratorSupportedProfile& other);
-  ImageDecodeAcceleratorSupportedProfile(
-      ImageDecodeAcceleratorSupportedProfile&& other);
-  ~ImageDecodeAcceleratorSupportedProfile();
-  ImageDecodeAcceleratorSupportedProfile& operator=(
-      const ImageDecodeAcceleratorSupportedProfile& other);
-  ImageDecodeAcceleratorSupportedProfile& operator=(
-      ImageDecodeAcceleratorSupportedProfile&& other);
-
-  // Fields common to all image types.
-  // Type of image to which this profile applies, e.g., JPEG.
-  ImageDecodeAcceleratorType image_type;
-  // Minimum and maximum supported pixel dimensions of the encoded image.
-  gfx::Size min_encoded_dimensions;
-  gfx::Size max_encoded_dimensions;
-
-  // Fields specific to `image_type` == kJpeg.
-  // The supported chroma subsampling formats, e.g. 4:2:0.
-  std::vector<ImageDecodeAcceleratorSubsampling> subsamplings;
-};
-using ImageDecodeAcceleratorSupportedProfiles =
-    std::vector<ImageDecodeAcceleratorSupportedProfile>;
 
 #if BUILDFLAG(IS_WIN)
 enum class OverlaySupport {

@@ -13,6 +13,7 @@
 #include "components/enterprise/connectors/core/reporting_utils.h"
 #include "components/enterprise/obfuscation/core/download_obfuscator.h"
 #include "content/public/browser/download_item_utils.h"
+#include "content/public/browser/render_frame_host.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/download/bubble/download_bubble_ui_controller.h"
@@ -133,6 +134,7 @@ enterprise_connectors::EventResult DownloadItemMetadata::GetPreScanEventResult(
     case download::DOWNLOAD_DANGER_TYPE_ASYNC_LOCAL_PASSWORD_SCANNING:
     case download::DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED:
     case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE:
+    case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_ONEDRIVE:
     case download::DOWNLOAD_DANGER_TYPE_MAX:
       NOTREACHED();
   }
@@ -230,7 +232,9 @@ google::protobuf::RepeatedPtrField<std::string>
 DownloadItemMetadata::CollectFrameUrls() const {
   return enterprise_connectors::CollectFrameUrls(
       content::DownloadItemUtils::GetWebContents(item_),
-      enterprise_connectors::DeepScanAccessPoint::DOWNLOAD);
+      enterprise_connectors::DeepScanAccessPoint::DOWNLOAD,
+      std::make_optional(
+          content::DownloadItemUtils::GetRenderFrameHostId(item_)));
 }
 
 content::WebContents* DownloadItemMetadata::web_contents() const {

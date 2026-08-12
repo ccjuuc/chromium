@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #import "ui/events/keycodes/keyboard_code_conversion_mac.h"
 
 #import <Carbon/Carbon.h>
@@ -17,6 +12,7 @@
 #include "base/apple/osstatus_logging.h"
 #include "base/apple/scoped_cftyperef.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
@@ -217,6 +213,28 @@ DomKey DomKeyFromNsCharCode(char32_t char_code) {
   return DomKey::FromCharacter(char_code);
 }
 
+// Returns the last Unicode character from the given string.
+char32_t ReadLastUnicodeCharacter(NSString* characters) {
+  if (characters.length == 0) {
+    return 0;
+  }
+  // Use uint16_t instead of char16_t to suppress a compiler warning.
+  uint16_t trail = [characters characterAtIndex:characters.length - 1];
+  if (CBU16_IS_SINGLE(trail)) {
+    return trail;
+  }
+  if (characters.length == 1 || !CBU16_IS_TRAIL(trail)) {
+    return 0;
+  }
+  uint16_t lead = [characters characterAtIndex:characters.length - 2];
+  if (!CBU16_IS_LEAD(lead)) {
+    return 0;
+  }
+  return CBU16_GET_SUPPLEMENTARY(lead, trail);
+}
+
+}  // namespace
+
 // Returns a macOS key code and modifier to a character based on the current
 // keyboard layout.
 //
@@ -258,28 +276,6 @@ std::tuple<UniChar, bool> NsKeyCodeAndModifiersToCharacter(
 
   return {translated_char, is_dead_key};
 }
-
-// Returns the last Unicode character from the given string.
-char32_t ReadLastUnicodeCharacter(NSString* characters) {
-  if (characters.length == 0) {
-    return 0;
-  }
-  // Use uint16_t instead of char16_t to suppress a compiler warning.
-  uint16_t trail = [characters characterAtIndex:characters.length - 1];
-  if (CBU16_IS_SINGLE(trail)) {
-    return trail;
-  }
-  if (characters.length == 1 || !CBU16_IS_TRAIL(trail)) {
-    return 0;
-  }
-  uint16_t lead = [characters characterAtIndex:characters.length - 2];
-  if (!CBU16_IS_LEAD(lead)) {
-    return 0;
-  }
-  return CBU16_GET_SUPPLEMENTARY(lead, trail);
-}
-
-}  // namespace
 
 int MacKeyCodeForWindowsKeyCode(KeyboardCode keycode,
                                 NSUInteger flags,
@@ -484,7 +480,7 @@ int MacKeyCodeForWindowsKeyCode(KeyboardCode keycode,
   if (flags & NSEventModifierFlagShift) {
     if (keycode >= VKEY_0 && keycode <= VKEY_9) {
       *us_keyboard_shifted_character =
-          kShiftCharsForNumberKeys[keycode - VKEY_0];
+          UNSAFE_TODO(kShiftCharsForNumberKeys[keycode - VKEY_0]);
     } else if (keycode >= VKEY_A && keycode <= VKEY_Z) {
       *us_keyboard_shifted_character = 'A' + (keycode - VKEY_A);
     } else {
@@ -779,7 +775,7 @@ KeyboardCode KeyboardCodeFromKeyCode(unsigned short key_code) {
     return VKEY_UNKNOWN;
   }
 
-  return kKeyboardCodes[key_code];
+  return UNSAFE_TODO(kKeyboardCodes[key_code]);
 }
 
 KeyboardCode KeyboardCodeFromNSEvent(NSEvent* event) {

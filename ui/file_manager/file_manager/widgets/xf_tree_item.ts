@@ -183,9 +183,12 @@ export class XfTreeItem extends XfBase {
    */
   @state() private level_ = 1;
 
+  // TODO(crbug.com/493886981): Fix members asserted as non-null.
+  /* eslint-disable no-restricted-syntax */
   @query('li') private $treeItem_!: HTMLLIElement;
   @query('.tree-row') private $treeRow_!: HTMLElement;
   @query('slot:not([name])') private $childrenSlot_!: HTMLSlotElement;
+  /* eslint-enable no-restricted-syntax */
 
   /** The child tree items. */
   private items_: XfTreeItem[] = [];
@@ -218,7 +221,8 @@ export class XfTreeItem extends XfBase {
               type=${ifDefined(this.iconSet ? undefined : this.icon)}
               .iconSet=${this.iconSet}
             ></xf-icon>
-            <span class="tree-label" id="tree-label">${this.label || ''}</span>
+            <span class="tree-label" id="tree-label">${
+        (this.label || '').replace(/\r?\n|\r/g, ' ')}</span>
             <slot name="rename"></slot>
             <slot name="trailingIcon"></slot>
           </div>
@@ -227,7 +231,7 @@ export class XfTreeItem extends XfBase {
           class="tree-children"
           role="group"
         >
-          <slot @slotchange=${this.onSlotChanged_}></slot>
+          <slot role="none" @slotchange=${this.onSlotChanged_}></slot>
         </ul>
       </li>
     `;

@@ -8,13 +8,12 @@
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/toolbar/bookmark_sub_menu_model.h"
 #include "chrome/browser/ui/toolbar/reading_list_sub_menu_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_util.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "components/prefs/pref_service.h"
@@ -114,7 +113,8 @@ IN_PROC_BROWSER_TEST_F(HelpBubbleHandlerInteractiveUiTest,
 // This test is flaky on Mac; see: https://crbug.com/348242589
 // Suspect that something in the async way the combo box works is causing this
 // particular issue. Might be solved by programmatically switching panels.
-#if BUILDFLAG(IS_MAC)
+// TODO(crbug.com/524036564): flaky on Win.
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 #define MAYBE_ElementBecomesHiddenOnSecondaryUISwap \
   DISABLED_ElementBecomesHiddenOnSecondaryUISwap
 #else

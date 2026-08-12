@@ -71,6 +71,7 @@ void MediaCodecAudioDecoder::Initialize(const AudioDecoderConfig& config,
   // decode.
   DCHECK(input_queue_.empty());
   ClearInputQueue(DecoderStatus::Codes::kAborted);
+  codec_loop_.reset();
 
   if (state_ == STATE_ERROR) {
     DVLOG(1) << "Decoder is in error state.";
@@ -197,6 +198,8 @@ bool MediaCodecAudioDecoder::CreateMediaCodecLoop() {
 
 void MediaCodecAudioDecoder::Decode(scoped_refptr<DecoderBuffer> buffer,
                                     DecodeCB decode_cb) {
+  CHECK(codec_loop_);
+
   DecodeCB bound_decode_cb =
       base::BindPostTaskToCurrentDefault(std::move(decode_cb));
 
@@ -222,8 +225,6 @@ void MediaCodecAudioDecoder::Decode(scoped_refptr<DecoderBuffer> buffer,
     return;
   }
 
-  DCHECK(codec_loop_);
-
   DVLOG(3) << __func__ << " " << buffer->AsHumanReadableString();
 
   DCHECK_EQ(state_, STATE_READY) << " unexpected state " << AsString(state_);
@@ -240,6 +241,7 @@ void MediaCodecAudioDecoder::Decode(scoped_refptr<DecoderBuffer> buffer,
 
 void MediaCodecAudioDecoder::Reset(base::OnceClosure closure) {
   DVLOG(2) << __func__;
+  CHECK(codec_loop_);
 
   ClearInputQueue(DecoderStatus::Codes::kAborted);
 
@@ -420,36 +422,24 @@ bool MediaCodecAudioDecoder::OnDecodedFrame(
         sample_format_, channel_layout_, channel_count_, sample_rate_,
         frame_count, out.size, pool_);
 
-    // TODO(crbug.com/373960632): Use spans from AudioBuffer directly once that
-    // class is spanified.
-    auto dst = UNSAFE_TODO(
-        base::span<uint8_t>(audio_buffer->channel_data()[0], out.size));
-
-    MediaCodecResult result =
-        media_codec->CopyFromOutputBuffer(out.index, out.offset, dst);
+    const auto channels = audio_buffer->channels();
+    CHECK(!channels.empty());
+    MediaCodecResult result = media_codec->CopyFromOutputBuffer(
+        out.index, out.offset, channels.front());
 
     if (!result.is_ok()) {
       media_codec->ReleaseOutputBuffer(out.index, false);
       return false;
     }
 
-    // TODO(crbug.com/373960632): Use spans from AudioBuffer directly once that
-    // class is spanified.
-    auto data = UNSAFE_TODO(
-        base::span<const uint8_t>(audio_buffer->channel_data()[0], out.size));
-
     if (config_.codec() == AudioCodec::kAC3) {
-      frame_count = Ac3Util::ParseTotalAc3SampleCount(data);
+      frame_count = Ac3Util::ParseTotalAc3SampleCount(channels.front());
     } else if (config_.codec() == AudioCodec::kEAC3) {
-      frame_count = Ac3Util::ParseTotalEac3SampleCount(data);
+      frame_count = Ac3Util::ParseTotalEac3SampleCount(channels.front());
 #if BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
     } else if (config_.codec() == AudioCodec::kDTS) {
-      frame_count = media::dts::ParseTotalSampleCount(
-          // TODO(crbug.com/373960632): Use spans from AudioBuffer directly once
-          // that class is spanified.
-          UNSAFE_TODO(base::span<const uint8_t>(audio_buffer->channel_data()[0],
-                                                out.size)),
-          AudioCodec::kDTS);
+      frame_count =
+          media::dts::ParseTotalSampleCount(channels.front(), AudioCodec::kDTS);
       DVLOG(2) << ": DTS Frame Count = " << frame_count;
 #endif  // BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
     } else {
@@ -474,13 +464,10 @@ bool MediaCodecAudioDecoder::OnDecodedFrame(
   // Copy data into AudioBuffer.
   CHECK_LE(out.size, audio_buffer->data_size());
 
-  // TODO(crbug.com/373960632): Use spans from AudioBuffer directly once that
-  // class is spanified.
-  auto dst = UNSAFE_TODO(
-      base::span<uint8_t>(audio_buffer->channel_data()[0], out.size));
-
-  MediaCodecResult result =
-      media_codec->CopyFromOutputBuffer(out.index, out.offset, dst);
+  const auto channels = audio_buffer->channels();
+  CHECK(!channels.empty());
+  MediaCodecResult result = media_codec->CopyFromOutputBuffer(
+      out.index, out.offset, channels.front());
 
   // Release MediaCodec output buffer.
   media_codec->ReleaseOutputBuffer(out.index, false);
@@ -558,12 +545,8 @@ bool MediaCodecAudioDecoder::OnOutputFormatChanged() {
 }
 
 void MediaCodecAudioDecoder::SetInitialConfiguration() {
-  // Guess the channel count from |config_| in case OnOutputFormatChanged
-  // that delivers the true count is not called before the first data arrives.
-  // It seems upon certain input errors a codec may substitute silence and
-  // not call OnOutputFormatChanged in this case.
   channel_layout_ = config_.channel_layout();
-  channel_count_ = ChannelLayoutToChannelCount(channel_layout_);
+  channel_count_ = config_.channels();
 
   sample_rate_ = config_.samples_per_second();
   timestamp_helper_ = std::make_unique<AudioTimestampHelper>(sample_rate_);

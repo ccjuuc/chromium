@@ -48,17 +48,19 @@
 #include "chrome/browser/ui/ash/session/session_controller_client_impl.h"
 #include "chrome/browser/ui/ash/session/session_util.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/test/base/chrome_ash_test_base.h"
 #include "chrome/test/base/test_browser_window_aura.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "chrome/test/base/ui_test_utils.h"
 #include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
+#include "chromeos/ash/components/login/session/session_termination_manager.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/user_login_permission_tracker.h"
 #include "components/account_id/account_id.h"
@@ -330,6 +332,7 @@ class MultiUserWindowManagerBrowserAdaptorTest : public ChromeAshTestBase {
  private:
   std::string GetStatusImpl(bool follow_transients);
 
+  ash::SessionTerminationManager session_termination_manager_;
   ScopedStubInstallAttributes test_install_attributes_;
 
   // These get created for each session.
@@ -375,11 +378,12 @@ void MultiUserWindowManagerBrowserAdaptorTest::SetUp() {
       TestingBrowserProcess::GetGlobal());
   ASSERT_TRUE(profile_manager_->SetUp());
 
+  browser_controller_.emplace();
+
   multi_user_window_manager_browser_adaptor_ =
       std::make_unique<MultiUserWindowManagerBrowserAdaptor>(
-          ash::Shell::Get()->multi_user_window_manager());
-
-  browser_controller_.emplace();
+          ash::Shell::Get()->multi_user_window_manager(),
+          &browser_controller_.value());
 }
 
 void MultiUserWindowManagerBrowserAdaptorTest::SetUpForThisManyWindows(
@@ -388,7 +392,7 @@ void MultiUserWindowManagerBrowserAdaptorTest::SetUpForThisManyWindows(
 
   ASSERT_TRUE(windows_.empty());
   for (int i = 0; i < windows; i++) {
-    windows_.push_back(CreateTestWindowInShell({.window_id = i}));
+    windows_.push_back(CreateTestWindowInShell({.window_id = i}).release());
     windows_[i]->Show();
   }
 }
@@ -409,7 +413,7 @@ MultiUserWindowManagerBrowserAdaptorTest::SetUpOneWindowEachDeskForUser() {
   const int kActiveDeskIndex = 0;
   for (int i = 0; i < desks_controller->GetNumberOfDesks(); i++) {
     widgets.push_back(
-        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+        CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET,
                          nullptr, container_ids[i], gfx::Rect(700, 0, 50, 50)));
     aura::Window* win = widgets[i]->GetNativeWindow();
     windows_.push_back(win);
@@ -428,8 +432,6 @@ MultiUserWindowManagerBrowserAdaptorTest::SetUpOneWindowEachDeskForUser() {
 }
 
 void MultiUserWindowManagerBrowserAdaptorTest::TearDown() {
-  browser_controller_.reset();
-
   // Since the AuraTestBase is needed to create our assets, we have to
   // also delete them before we tear it down.
   while (!windows_.empty()) {
@@ -445,6 +447,9 @@ void MultiUserWindowManagerBrowserAdaptorTest::TearDown() {
       user_manager_->OnUserProfileWillBeDestroyed(*account_id);
     }
   }
+
+  browser_controller_.reset();
+
   ChromeAshTestBase::TearDown();
   // ProfileManager instance is destroyed in OnHelperWillBeDestroyed()
   // invoked inside ChromeAshTestBase::TearDown().
@@ -757,7 +762,7 @@ TEST_F(MultiUserWindowManagerBrowserAdaptorTest,
 }
 
 // Tests that windows in active and inactive desks show up correctly after
-// switching profile (crbug.com/1182069). This test checks the followings:
+// switching profile (crbug.com/40170645). This test checks the followings:
 // 1. window local visibility (appearance in desk miniviews) regardless
 // of its ancestors' visibility like hidden parent desk container
 // (see `Window::TargetVisibility()`).
@@ -971,7 +976,7 @@ TEST_F(MultiUserWindowManagerBrowserAdaptorTest, TransientWindows) {
 }
 
 // Verifies duplicate observers are not added for transient dialog windows.
-// https://crbug.com/937333
+// https://crbug.com/41444428
 TEST_F(MultiUserWindowManagerBrowserAdaptorTest,
        SetWindowOwnerOnTransientDialog) {
   AddLoggedInUsers({kAccountIdA});
@@ -1647,10 +1652,10 @@ TEST_F(MultiUserWindowManagerBrowserAdaptorTest, WindowsOrderPreservedTests) {
   EXPECT_EQ(mru_list[2], window(2));
 }
 
-// Tests that chrome::FindBrowserWithActiveWindow works properly in
+// Tests that GlobalBrowserCollection::GetActiveBrowser() works properly in
 // multi-user scenario, that is it should return the browser with active window
-// associated with it (crbug.com/675265).
-TEST_F(MultiUserWindowManagerBrowserAdaptorTest, FindBrowserWithActiveWindow) {
+// associated with it (crbug.com/40498682).
+TEST_F(MultiUserWindowManagerBrowserAdaptorTest, GetActiveBrowser) {
   AddLoggedInUsers({kAccountIdA, kAccountIdB});
 
   SetUpForThisManyWindows(1);
@@ -1662,20 +1667,23 @@ TEST_F(MultiUserWindowManagerBrowserAdaptorTest, FindBrowserWithActiveWindow) {
       ash::BrowserContextHelper::Get()->GetBrowserContextByAccountId(
           kAccountIdA));
   Browser::CreateParams params(profile, true);
-  std::unique_ptr<Browser> browser(CreateTestBrowser(
-      CreateTestWindowInShell({.window_id = 0}), {16, 32, 640, 320}, &params));
-  browser->window()->Activate();
+  std::unique_ptr<Browser> browser(
+      CreateTestBrowser(CreateTestWindowInShell({.window_id = 0}).release(),
+                        {16, 32, 640, 320}, &params));
+  browser->GetWindow()->Activate();
   // Manually set last active browser in BrowserList for testing.
-  BrowserList::GetInstance()->SetLastActive(browser.get());
+  ui_test_utils::DeprecatedFakeActivateBrowser(browser.get());
   EXPECT_EQ(browser.get(), GetLastActiveBrowserWindowInterfaceWithAnyProfile());
-  EXPECT_TRUE(browser->window()->IsActive());
-  EXPECT_EQ(browser.get(), chrome::FindBrowserWithActiveWindow());
+  EXPECT_TRUE(browser->GetWindow()->IsActive());
+  EXPECT_EQ(browser.get(),
+            GlobalBrowserCollection::GetInstance()->GetActiveBrowser());
 
   // Switch to another user's desktop with no active window.
   SwitchActiveUser(kAccountIdB);
   EXPECT_EQ(browser.get(), GetLastActiveBrowserWindowInterfaceWithAnyProfile());
-  EXPECT_FALSE(browser->window()->IsActive());
-  EXPECT_EQ(nullptr, chrome::FindBrowserWithActiveWindow());
+  EXPECT_FALSE(browser->GetWindow()->IsActive());
+  EXPECT_EQ(nullptr,
+            GlobalBrowserCollection::GetInstance()->GetActiveBrowser());
 }
 
 // Tests that a window's bounds get restored to their pre tablet mode bounds,

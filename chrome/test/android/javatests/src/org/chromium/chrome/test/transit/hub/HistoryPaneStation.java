@@ -16,9 +16,9 @@ import android.widget.EditText;
 
 import org.chromium.base.test.transit.Facility;
 import org.chromium.base.test.transit.ViewElement;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.history.HistoryItemView;
 import org.chromium.chrome.browser.hub.PaneId;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.SoftKeyboardFacility;
 import org.chromium.chrome.test.transit.page.CtaPageStation;
 import org.chromium.chrome.test.transit.page.WebPageStation;
@@ -39,22 +39,20 @@ public class HistoryPaneStation extends HubBaseStation {
     }
 
     /** Expect history entries to be displayed in the history pane. */
-    public HistoryWithEntriesFacility expectEntries(boolean isLLFDevice) {
-        return noopTo().enterFacility(new HistoryWithEntriesFacility(isLLFDevice));
+    public HistoryWithEntriesFacility expectEntries(boolean isLargeFormFactorDevice) {
+        return noopTo().enterFacility(new HistoryWithEntriesFacility(isLargeFormFactorDevice));
     }
 
-    /** Expect no history to be displayed in the history pane. */
-    public void expectEmptyState(boolean isLLFDevice) {
+    /**
+     * Expect that the empty placeholder is shown when there are no entries. This should only be
+     * used on phones since the behavior can be buggy on LFF with varying keyboard connections.
+     */
+    public void expectEmptyState() {
         var emptyHistory = new Facility<>("EmptyState");
 
-        emptyHistory.declareView(withText("You’ll find your history here"));
+        emptyHistory.declareView(withText(R.string.history_manager_empty_state));
         emptyHistory.declareView(
-                withText(
-                        "You can see the pages you’ve visited or delete them from your"
-                                + " history"));
-
-        if (!isLLFDevice) emptyHistory.declareNoView(withId(R.id.history_page_recycler_view));
-        else emptyHistory.declareView(withId(R.id.history_page_recycler_view));
+                withText(R.string.history_manager_empty_state_view_or_clear_page_visited));
         noopTo().enterFacility(emptyHistory);
     }
 
@@ -63,9 +61,9 @@ public class HistoryPaneStation extends HubBaseStation {
         public final ViewElement<View> recyclerViewElement;
         public final ViewElement<View> searchButtonElement;
 
-        public HistoryWithEntriesFacility(boolean isLLFDevice) {
+        public HistoryWithEntriesFacility(boolean isLargeFormFactorDevice) {
             recyclerViewElement = declareView(withId(R.id.history_page_recycler_view));
-            if (isLLFDevice) {
+            if (isLargeFormFactorDevice) {
                 searchButtonElement = null;
                 declareNoView(withId(R.id.search_menu_id));
                 return;
@@ -84,8 +82,8 @@ public class HistoryPaneStation extends HubBaseStation {
         }
 
         /** Open the history search. */
-        public HistorySearchFacility openSearch(boolean isLLFDevice) {
-            if (isLLFDevice) {
+        public HistorySearchFacility openSearch(boolean isLargeFormFactorDevice) {
+            if (isLargeFormFactorDevice) {
                 return noopTo().enterFacility(new HistorySearchFacility());
             } else {
                 SoftKeyboardFacility softKeyboard = new SoftKeyboardFacility();

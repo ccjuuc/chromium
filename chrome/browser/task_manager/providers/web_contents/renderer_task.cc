@@ -7,7 +7,7 @@
 #include <string>
 #include <utility>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/functional/callback_helpers.h"
 #include "base/i18n/rtl.h"
 #include "base/numerics/safe_conversions.h"
@@ -228,7 +228,7 @@ std::u16string RendererTask::GetTitleFromWebContents(
   } else {
     // Since the title could later be concatenated with
     // IDS_TASK_MANAGER_TAB_PREFIX (for example), we need to explicitly set the
-    // title to be LTR format if there is no strong RTL charater in it.
+    // title to be LTR format if there is no strong RTL character in it.
     // Otherwise, if IDS_TASK_MANAGER_TAB_PREFIX is an RTL word, the
     // concatenated result might be wrong. For example, http://mail.yahoo.com,
     // whose title is "Yahoo! Mail: The best web-based Email!", without setting

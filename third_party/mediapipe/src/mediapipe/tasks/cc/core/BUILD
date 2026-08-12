@@ -13,8 +13,10 @@
 # limitations under the License.
 
 load("@org_tensorflow//tensorflow/lite/core/shims:cc_library_with_tflite.bzl", "cc_library_with_tflite", "cc_test_with_tflite")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
-package(default_visibility = ["//mediapipe/tasks:internal"])
+package(default_visibility = ["//visibility:public"])
 
 licenses(["notice"])
 
@@ -22,8 +24,8 @@ cc_library(
     name = "base_options",
     srcs = ["base_options.cc"],
     hdrs = ["base_options.h"],
-    visibility = ["//visibility:public"],
     deps = [
+        ":host_environment",
         ":mediapipe_builtin_op_resolver",
         "//mediapipe/calculators/tensor:inference_calculator_cc_proto",
         "//mediapipe/tasks/cc/core/proto:acceleration_cc_proto",
@@ -34,6 +36,11 @@ cc_library(
         "@org_tensorflow//tensorflow/lite/core/api:op_resolver",
         "@org_tensorflow//tensorflow/lite/kernels:builtin_ops",
     ],
+)
+
+cc_library(
+    name = "host_environment",
+    hdrs = ["host_environment.h"],
 )
 
 cc_test(
@@ -71,10 +78,13 @@ cc_library(
     ],
 )
 
-cc_library(
+cc_library_with_tflite(
     name = "mediapipe_builtin_op_resolver",
     srcs = ["mediapipe_builtin_op_resolver.cc"],
     hdrs = ["mediapipe_builtin_op_resolver.h"],
+    tflite_deps = [
+        "@org_tensorflow//tensorflow/lite/kernels:builtin_ops",
+    ],
     deps = [
         "//mediapipe/tasks/cc/text/custom_ops/ragged:ragged_tensor_to_tensor_tflite",
         "//mediapipe/tasks/cc/text/custom_ops/sentencepiece:sentencepiece_tokenizer_tflite",
@@ -87,7 +97,6 @@ cc_library(
         "//mediapipe/util/tflite/operations:transform_landmarks",
         "//mediapipe/util/tflite/operations:transform_tensor_bilinear",
         "//mediapipe/util/tflite/operations:transpose_conv_bias",
-        "@org_tensorflow//tensorflow/lite/kernels:builtin_ops",
     ],
 )
 
@@ -99,7 +108,6 @@ cc_library_with_tflite(
         ":model_resources",
         ":model_resources_cache",
     ],
-    visibility = ["//visibility:public"],
     deps = [
         ":model_asset_bundle_resources",
         ":model_resources_calculator",
@@ -109,6 +117,7 @@ cc_library_with_tflite(
         "//mediapipe/framework:subgraph",
         "//mediapipe/framework/api2:builder",
         "//mediapipe/framework/api2:port",
+        "//mediapipe/framework/port:status",
         "//mediapipe/tasks/cc:common",
         "//mediapipe/tasks/cc/core/proto:acceleration_cc_proto",
         "//mediapipe/tasks/cc/core/proto:base_options_cc_proto",
@@ -257,8 +266,8 @@ cc_library_with_tflite(
         ":model_resources_cache",
         ":model_resources_calculator",
     ],
-    visibility = ["//visibility:public"],
     deps = [
+        ":host_environment",
         "//mediapipe/framework:calculator_cc_proto",
         "//mediapipe/framework:calculator_framework",
         "//mediapipe/framework:executor",
@@ -266,8 +275,13 @@ cc_library_with_tflite(
         "//mediapipe/framework/tool:name_util",
         "//mediapipe/gpu:gpu_shared_data_internal",
         "//mediapipe/tasks/cc:common",
+        "//mediapipe/tasks/cc/core/logging:tasks_dummy_logger",
+        "//mediapipe/tasks/cc/core/logging:tasks_logger",
+        "//mediapipe/tasks/cc/core/logging/factory:logging_factory",
+        "//mediapipe/tasks/cc/core/logging/factory:logging_factory_hdr",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
@@ -309,7 +323,6 @@ cc_library_with_tflite(
     tflite_deps = [
         ":task_runner",
     ],
-    visibility = ["//visibility:public"],
     deps = [
         "//mediapipe/calculators/core:flow_limiter_calculator",
     ],
@@ -323,7 +336,6 @@ cc_library_with_tflite(
         ":model_resources",
         ":task_runner",
     ],
-    visibility = ["//visibility:public"],
     deps = [
         ":utils",
         "//mediapipe/framework:calculator_cc_proto",
@@ -365,7 +377,6 @@ cc_library(
     name = "model_asset_bundle_resources",
     srcs = ["model_asset_bundle_resources.cc"],
     hdrs = ["model_asset_bundle_resources.h"],
-    visibility = ["//visibility:public"],
     deps = [
         ":external_file_handler",
         "//mediapipe/framework/port:status",

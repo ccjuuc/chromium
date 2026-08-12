@@ -14,15 +14,27 @@
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "build/ios_buildflags.h"
 #include "components/metrics/data_use_tracker.h"
 #include "components/metrics/log_store.h"
 #include "components/metrics/metrics_features.h"
 #include "components/metrics/metrics_log_uploader.h"
 #include "components/metrics/metrics_service_client.h"
 #include "components/metrics/metrics_upload_scheduler.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "components/background_task_scheduler/background_task_scheduler.h"
+#include "components/background_task_scheduler/background_task_scheduler_factory.h"
+#include "components/background_task_scheduler/task_info.h"
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_APP_EXTENSION)
+#include "base/ios/scoped_critical_action.h"
+#endif
 
 namespace metrics {
 
@@ -31,17 +43,19 @@ void ReportingService::RegisterPrefs(PrefRegistrySimple* registry) {
   DataUseTracker::RegisterPrefs(registry);
 }
 
-ReportingService::ReportingService(MetricsServiceClient* client,
-                                   PrefService* local_state,
-                                   size_t max_retransmit_size,
-                                   MetricsLogsEventManager* logs_event_manager)
+ReportingService::ReportingService(
+    MetricsServiceClient* client,
+    PrefService* local_state,
+    size_t max_retransmit_size,
+    MetricsLogsEventManager* logs_event_manager,
+    background_task::TaskIds background_upload_task_id)
     : client_(client),
       local_state_(local_state),
       max_retransmit_size_(max_retransmit_size),
       logs_event_manager_(logs_event_manager),
       reporting_active_(false),
-      log_upload_in_progress_(false),
-      data_use_tracker_(DataUseTracker::Create(local_state)) {
+      data_use_tracker_(DataUseTracker::Create(local_state)),
+      background_upload_task_id_(background_upload_task_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(client_);
   DCHECK(local_state);
@@ -55,8 +69,9 @@ void ReportingService::Initialize() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!upload_scheduler_);
   log_store()->LoadPersistedUnsentLogs();
-  base::RepeatingClosure send_next_log_callback = base::BindRepeating(
-      &ReportingService::SendNextLog, self_ptr_factory_.GetWeakPtr());
+  base::RepeatingClosure send_next_log_callback =
+      base::BindRepeating(&ReportingService::SendNextLogWhenPossible,
+                          self_ptr_factory_.GetWeakPtr());
   bool fast_startup = client_->ShouldStartUpFast();
   upload_scheduler_ = std::make_unique<MetricsUploadScheduler>(
       send_next_log_callback, fast_startup);
@@ -90,6 +105,24 @@ void ReportingService::DisableReporting() {
   reporting_active_ = false;
   Stop();
 }
+
+#if BUILDFLAG(IS_ANDROID)
+void ReportingService::SendNextLogNow(base::PassKey<BackgroundUploadTask>,
+                                      base::OnceClosure done_callback) {
+  CHECK(background_upload_task_scheduled_);
+  CHECK(background_upload_task_scheduled_time_.has_value());
+  background_upload_task_scheduled_ = false;
+  LogBackgroundUploadTaskPendingTime(base::TimeTicks::Now() -
+                                     *background_upload_task_scheduled_time_);
+  background_upload_task_scheduled_time_ = std::nullopt;
+  SendNextLogImpl(std::move(done_callback));
+}
+
+void ReportingService::OnStopTask(base::PassKey<BackgroundUploadTask>) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  on_stop_task_called_ = true;
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 bool ReportingService::reporting_active() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -140,8 +173,10 @@ void ReportingService::OnAppEnterForeground() {
   // but we don't want it to use backoff interval logic since uploads should now
   // start succeeding -- this is handled in OnLogUploadComplete() below.
   if (upload_scheduler_ && upload_scheduler_->IsRunning() &&
-      !log_upload_in_progress_ &&
-      failures_started_from_background_.value_or(false)) {
+      !upload_scheduler_->IsCallbackPending() &&
+      failures_started_from_background_.value_or(false) &&
+      !base::FeatureList::IsEnabled(
+          features::kNoResetMetricsUploadBackoffOnForeground)) {
     upload_scheduler_->RestartWithUnsentLogsInterval();
   }
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -152,9 +187,82 @@ void ReportingService::OnAppEnterForeground() {
 // private methods
 //------------------------------------------------------------------------------
 
-void ReportingService::SendNextLog() {
-  DVLOG(1) << "SendNextLog";
+void ReportingService::SendNextLogWhenPossible() {
+#if BUILDFLAG(IS_ANDROID)
+  // If possible, schedule the upload of the next log with the OS through a
+  // JobScheduler. See metrics::BackgroundUploadTask for implementation of the
+  // background task.
+  if (client_->IsJobSchedulerSupported()) {
+    // There should not be two upload tasks scheduled simultaneously. Note that
+    // the following fields are intentionally set *before* we call Schedule() in
+    // case that function can in-line the execution of the task immediately.
+    CHECK(!background_upload_task_scheduled_);
+    CHECK(!background_upload_task_scheduled_time_.has_value());
+    background_upload_task_scheduled_ = true;
+    background_upload_task_scheduled_time_ = base::TimeTicks::Now();
+    // We intentionally do not reset `on_stop_task_called_` before scheduling
+    // a new task here. Due to all JobScheduler-related messages being processed
+    // on the main thread, it's possible we only set `on_stop_task_called_`
+    // *after* its corresponding task was already finished (e.g. during an
+    // upload, the OS sent a notification to stop the task and OnStopTask() was
+    // scheduled to run on the main thread, but the upload already finished and
+    // its callback ran before the OnStopTask()). As a result, don't reset
+    // `on_stop_task_called_` so that the next upload will pick up the previous
+    // upload's OnStopTask() and use backoff logic.
+
+    // For consistency with other platforms, we use OneOffInfo (rather than
+    // PeriodicInfo), as we have our own scheduling mechanisms. When the task
+    // is finished, another upload will be scheduled if necessary.
+    background_task::OneOffInfo one_off;
+    // Note: it is possible to specify requirements, e.g. what kind of network
+    // connectivity is needed for the task, such that the Android OS will only
+    // run the task when the requirements are met. We don't specify such
+    // requirements here however (we have our own backoff logic for when there
+    // is no connectivity, which we want to exercise for consistency with other
+    // platforms).
+    background_task::TaskInfo task_info(background_upload_task_id_, one_off);
+    bool success =
+        background_task::BackgroundTaskSchedulerFactory::GetScheduler()
+            ->Schedule(task_info);
+    if (success) {
+      return;
+    }
+
+    // If we couldn't schedule the task for whatever reason, fall back to
+    // uploading without JobScheduler (though the network request may fail if
+    // the browser is currently in the background). Clear the "pending" fields
+    // first.
+    background_upload_task_scheduled_ = false;
+    background_upload_task_scheduled_time_ = std::nullopt;
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
+  SendNextLogImpl(base::DoNothing());
+}
+
+void ReportingService::SendNextLogImpl(base::OnceClosure done_callback) {
+  DVLOG(1) << "SendNextLogImpl";
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(upload_scheduler_);
+
+#if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_APP_EXTENSION)
+  if (base::FeatureList::IsEnabled(features::kIOSBackgroundMetrics)) {
+    // Create a ScopedCriticalAction to indicate to the OS that a critical task
+    // is being run and that it should avoid shutting down Chrome in the
+    // background.
+    done_callback =
+        std::move(done_callback)
+            .Then(base::BindOnce(
+                [](std::unique_ptr<base::ios::ScopedCriticalAction>) {
+                  // This function does nothing but keep the
+                  // ScopedCriticalAction param alive until we have
+                  // finished the upload task.
+                },
+                std::make_unique<base::ios::ScopedCriticalAction>(
+                    "NetMetricsLogUploaderUpload")));
+  }
+#endif  // BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_APP_EXTENSION)
+
+  upload_scheduler_->SetDoneCallback(std::move(done_callback));
 
   const base::TimeTicks now = base::TimeTicks::Now();
   LogActualUploadInterval(last_upload_finish_time_.is_null()
@@ -170,7 +278,7 @@ void ReportingService::SendNextLog() {
     // Should only get here if serializing the log failed somehow.
     upload_scheduler_->Stop();
     // Reset backoff interval
-    upload_scheduler_->UploadFinished(true);
+    upload_scheduler_->UploadFinished(/*backoff=*/false);
     return;
   }
   if (!log_store()->has_staged_log()) {
@@ -178,6 +286,7 @@ void ReportingService::SendNextLog() {
     log_store()->StageNextLog();
   }
 
+#if BUILDFLAG(IS_CHROMEOS)
   // Check whether the log should be uploaded based on user id. If it should not
   // be sent, then discard the log from the store and notify the scheduler.
   auto staged_user_id = log_store()->staged_log_user_id();
@@ -193,9 +302,10 @@ void ReportingService::SendNextLog() {
       DVLOG(1) << "Stopping upload_scheduler_.";
       upload_scheduler_->Stop();
     }
-    upload_scheduler_->UploadFinished(true);
+    upload_scheduler_->UploadFinished(/*backoff=*/false);
     return;
   }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Proceed to stage the log for upload if log size satisfies cellular log
   // upload constrains.
@@ -216,16 +326,11 @@ void ReportingService::SendNextLog() {
 
 void ReportingService::SendStagedLog() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(log_store()->has_staged_log());
-  if (!log_store()->has_staged_log()) {
-    return;
-  }
+  CHECK(log_store()->has_staged_log());
 
-  CHECK(!log_upload_in_progress_);
-  log_upload_in_progress_ = true;
 #if BUILDFLAG(IS_ANDROID)
   // Keep track of whether the upload was initiated from the background for the
-  // backoff reset logic (see feature kResetMetricsUploadBackoffOnForeground).
+  // backoff reset logic.
   CHECK(!log_upload_initiated_from_background_.has_value());
   log_upload_initiated_from_background_ = !is_in_foreground_;
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -357,9 +462,6 @@ void ReportingService::OnLogUploadComplete(
     upload_scheduler_->Stop();
   }
 
-  CHECK(log_upload_in_progress_);
-  log_upload_in_progress_ = false;
-
 #if BUILDFLAG(IS_ANDROID)
   // When `server_is_healthy` is false, representing a failure with the upload,
   // then we will start using the backoff logic in `upload_scheduler_`. Keep
@@ -376,7 +478,9 @@ void ReportingService::OnLogUploadComplete(
     // logic in this case since there's probably nothing wrong with the server
     // (but only if the failures started happening from the background --
     // otherwise, something wrong is probably going on).
-    if (*failures_started_from_background_ && is_in_foreground_) {
+    if (*failures_started_from_background_ && is_in_foreground_ &&
+        !base::FeatureList::IsEnabled(
+            features::kNoResetMetricsUploadBackoffOnForeground)) {
       server_is_healthy = true;
     }
   } else {
@@ -386,7 +490,25 @@ void ReportingService::OnLogUploadComplete(
   log_upload_initiated_from_background_ = std::nullopt;
 #endif  // BUILDFLAG(IS_ANDROID)
 
-  upload_scheduler_->UploadFinished(server_is_healthy);
+  bool backoff = !server_is_healthy;
+
+#if BUILDFLAG(IS_ANDROID)
+  // If the Android OS requested the background task to be stopped while an
+  // upload was in progress, schedule the next upload (if any) with a backoff,
+  // since the device is likely under pressure. The backoff will be reset when
+  // there is a successful upload where OnStopTask() is not called.
+  // Note: The feature is intentionally checked second for field trial
+  // activation purposes.
+  if (on_stop_task_called_ &&
+      base::FeatureList::IsEnabled(
+          features::kMetricsLogJobSchedulerUploadBackoffOnStopTask)) {
+    backoff = true;
+  }
+  // Reset for next uploads.
+  on_stop_task_called_ = false;
+#endif  // BUILDFLAG(IS_ANDROID)
+
+  upload_scheduler_->UploadFinished(backoff);
 }
 
 }  // namespace metrics

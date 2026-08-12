@@ -97,7 +97,6 @@ class GPU_GLES2_EXPORT GLFormatCaps {
 
   bool ext_texture_rg() const { return ext_texture_rg_; }
   bool ext_texture_norm16() const { return ext_texture_norm16_; }
-  bool disable_r8_shared_images() const { return disable_r8_shared_images_; }
   bool enable_texture_half_float_linear() const {
     return enable_texture_half_float_linear_;
   }
@@ -112,7 +111,6 @@ class GPU_GLES2_EXPORT GLFormatCaps {
   bool oes_texture_float_available_ = false;
   bool ext_texture_rg_ = false;
   bool ext_texture_norm16_ = false;
-  bool disable_r8_shared_images_ = false;
   bool enable_texture_half_float_linear_ = false;
   bool is_atleast_gles3_ = false;
 };
@@ -176,11 +174,6 @@ wgpu::TextureAspect ToDawnTextureAspect(bool is_yuv_plane, int plane_index);
 // Returns MtlPixelFormat format for given `format`.
 GPU_GLES2_EXPORT unsigned int ToMTLPixelFormat(viz::SharedImageFormat format,
                                                int plane_index = 0);
-// Return the expected four character code pixel format for an IOSurface with
-// the specified format.
-GPU_GLES2_EXPORT uint32_t
-SharedImageFormatToIOSurfacePixelFormat(viz::SharedImageFormat format,
-                                        bool override_rgba_to_bgra);
 #endif
 
 // Returns the graphite::TextureInfo for a given `format` and `plane_index`.
@@ -194,13 +187,10 @@ SharedImageFormatToIOSurfacePixelFormat(viz::SharedImageFormat format,
 GPU_GLES2_EXPORT skgpu::graphite::TextureInfo GraphiteBackendTextureInfo(
     GrContextType gr_context_type,
     viz::SharedImageFormat format,
-    bool readonly,
     int plane_index,
     bool is_yuv_plane,
     bool mipmapped,
-    bool scanout_dcomp_surface,
-    bool supports_multiplanar_rendering,
-    bool supports_multiplanar_copy);
+    bool scanout_dcomp_surface);
 
 GPU_GLES2_EXPORT skgpu::graphite::TextureInfo GraphitePromiseTextureInfo(
     GrContextType gr_context_type,
@@ -225,14 +215,6 @@ GPU_GLES2_EXPORT skgpu::graphite::DawnTextureInfo DawnBackendTextureInfo(
     bool scanout_dcomp_surface,
     bool supports_multiplanar_rendering,
     bool support_multiplanar_copy);
-#endif
-
-#if BUILDFLAG(SKIA_USE_METAL)
-GPU_GLES2_EXPORT skgpu::graphite::TextureInfo GraphiteMetalTextureInfo(
-    viz::SharedImageFormat format,
-    int plane_index = 0,
-    bool is_yuv_plane = false,
-    bool mipmapped = false);
 #endif
 
 GPU_GLES2_EXPORT

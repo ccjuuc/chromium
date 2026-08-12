@@ -11,10 +11,25 @@
 
 namespace content {
 
+class MediaSessionPlayerObserver;
+
 class MockMediaSession : public MediaSession {
  public:
   MockMediaSession();
   ~MockMediaSession() override;
+
+  MOCK_METHOD(bool,
+              AddPlayer,
+              (MediaSessionPlayerObserver * observer, int player_id),
+              (override));
+  MOCK_METHOD(void,
+              RemovePlayer,
+              (MediaSessionPlayerObserver * observer, int player_id),
+              (override));
+  MOCK_METHOD(void,
+              OnPlayerPaused,
+              (MediaSessionPlayerObserver * observer, int player_id),
+              (override));
 
   MOCK_METHOD(void,
               DidReceiveAction,
@@ -41,6 +56,10 @@ class MockMediaSession : public MediaSession {
               GetMediaSessionMetadata,
               (),
               (override));
+  MOCK_METHOD(std::vector<media_session::mojom::MediaSessionAction>,
+              GetMediaSessionActionsSync,
+              (),
+              (const, override));
   MOCK_METHOD(void, Suspend, (SuspendType suspend_type), (override));
   MOCK_METHOD(void, Resume, (SuspendType suspend_type), (override));
   MOCK_METHOD(void, StartDucking, (), (override));
@@ -89,6 +108,7 @@ class MockMediaSession : public MediaSession {
   MOCK_METHOD(void, PreviousSlide, (), (override));
   MOCK_METHOD(void, NextSlide, (), (override));
   MOCK_METHOD(void, EnterAutoPictureInPicture, (), (override));
+  MOCK_METHOD(void, SaveVideoFrame, (), (override));
 };
 
 }  // namespace content

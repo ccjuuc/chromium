@@ -25,6 +25,9 @@
 #include "third_party/blink/renderer/core/html/html_iframe_element.h"
 
 #include "base/metrics/histogram_macros.h"
+#include "components/viz/common/surfaces/tracked_element_rects.h"
+#include "services/network/public/cpp/connection_allowlist.h"
+#include "services/network/public/cpp/connection_allowlist_parser.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "services/network/public/cpp/web_sandbox_flags.h"
@@ -54,12 +57,14 @@
 #include "third_party/blink/renderer/core/permissions_policy/document_policy_parser.h"
 #include "third_party/blink/renderer/core/permissions_policy/iframe_policy.h"
 #include "third_party/blink/renderer/core/permissions_policy/permissions_policy_parser.h"
+#include "third_party/blink/renderer/platform/graphics/paint/tracked_element_data.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/json/json_parser.h"
 #include "third_party/blink/renderer/platform/network/content_security_policy_parsers.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 
 namespace blink {
 
@@ -73,7 +78,40 @@ String ConvertToReportValue(const AtomicString& value) {
     return String();
   }
   static constexpr size_t kMaxLengthToReport = 1024;
-  return value.GetString().Left(kMaxLengthToReport);
+  return value.GetString().substr(0, kMaxLengthToReport);
+}
+
+// Parses the `connectionallowlist` attribute value (already validated in
+// ParseAttribute) into a ConnectionAllowlist for Connection-Allowlist embedded
+// enforcement. Like the `csp` attribute, the framed document's response origin
+// isn't known in the renderer, so `response-origin` resolution is deferred to
+// the browser via ConnectionAllowlist::match_response_origin. Returns nullopt
+// (no requirement) for a null, over-long, or malformed value.
+std::optional<network::ConnectionAllowlist> ParseConnectionAllowlistAttribute(
+    const AtomicString& value) {
+  if (value.IsNull()) {
+    return std::nullopt;
+  }
+  // Sanity length cap, mirroring the `csp` attribute's kMaxLengthCSPAttribute.
+  static constexpr unsigned kMaxLengthConnectionAllowlistAttribute = 4096;
+  if (value.length() > kMaxLengthConnectionAllowlistAttribute) {
+    return std::nullopt;
+  }
+  std::string serialized = value.GetString().Utf8();
+  std::optional<network::ConnectionAllowlist> allowlist =
+      network::ParseConnectionAllowlist(serialized, std::nullopt);
+  // ParseAttribute rejects malformed values, but guard defensively: a value
+  // that fails the structured-field grammar (e.g. one containing CR/LF) parses
+  // to an allowlist carrying issues. Drop it rather than emit an unparseable
+  // value in the `Sec-Required-Connection-Allowlist` request header.
+  if (!allowlist || !allowlist->issues.empty()) {
+    return std::nullopt;
+  }
+  // Retain the original attribute string so the browser can re-emit it in the
+  // `Sec-Required-Connection-Allowlist` request header that advertises the
+  // requirement to the framed document (mirrors CSP embedded enforcement).
+  allowlist->serialized_value = std::move(serialized);
+  return allowlist;
 }
 
 }  // namespace
@@ -126,7 +164,7 @@ DOMFeaturePolicy* HTMLIFrameElement::featurePolicy() {
   if (!policy_ && GetExecutionContext()) {
     policy_ = MakeGarbageCollected<IFramePolicy>(
         GetExecutionContext(), GetFramePolicy().container_policy,
-        GetOriginForPermissionsPolicy());
+        *MakeOriginForPermissionsPolicy());
   }
   return policy_.Get();
 }
@@ -154,7 +192,7 @@ void HTMLIFrameElement::CollectStyleForPresentationAttribute(
     // LocalFrame border doesn't really match the HTML4 spec definition for
     // iframes. It simply adds a presentational hint that the border should be
     // off if set to zero.
-    if (!value.ToInt()) {
+    if (!StringToIntLoose(value).value_or(0)) {
       // Add a rule that nulls out our border width.
       for (CSSPropertyID property_id :
            {CSSPropertyID::kBorderTopWidth, CSSPropertyID::kBorderBottomWidth,
@@ -188,18 +226,18 @@ void HTMLIFrameElement::ParseAttribute(
       FrameOwnerPropertiesChanged();
       should_call_did_change_attributes = true;
     }
-    if (name_.Contains('\n')) {
+    if (name_.contains('\n')) {
       UseCounter::Count(GetDocument(), WebFeature::kFrameNameContainsNewline);
     }
-    if (name_.Contains('<')) {
+    if (name_.contains('<')) {
       UseCounter::Count(GetDocument(), WebFeature::kFrameNameContainsBrace);
     }
-    if (name_.Contains('\n') && name_.Contains('<')) {
+    if (name_.contains('\n') && name_.contains('<')) {
       UseCounter::Count(GetDocument(), WebFeature::kDanglingMarkupInWindowName);
-      if (!name_.EndsWith('>')) {
+      if (!name_.ends_with('>')) {
         UseCounter::Count(GetDocument(),
                           WebFeature::kDanglingMarkupInWindowNameNotEndsWithGT);
-        if (!name_.EndsWith('\n')) {
+        if (!name_.ends_with('\n')) {
           UseCounter::Count(
               GetDocument(),
               WebFeature::kDanglingMarkupInWindowNameNotEndsWithNewLineOrGT);
@@ -221,7 +259,7 @@ void HTMLIFrameElement::ParseAttribute(
             mojom::blink::ConsoleMessageSource::kOther,
             mojom::blink::ConsoleMessageLevel::kError,
             StrCat({"Error while parsing the 'sandbox' attribute: ",
-                    String::FromUTF8(parsed.error_message)})));
+                    String::FromUtf8(parsed.error_message)})));
       }
     }
     SetSandboxFlags(current_flags);
@@ -258,7 +296,7 @@ void HTMLIFrameElement::ParseAttribute(
     }
   } else if (name == html_names::kCspAttr) {
     static const size_t kMaxLengthCSPAttribute = 4096;
-    if (value && (value.Contains('\n') || value.Contains('\r') ||
+    if (value && (value.contains('\n') || value.contains('\r') ||
                   !MatchesTheSerializedCSPGrammar(value.GetString()))) {
       // TODO(antoniosartori): It would be safer to block loading iframes with
       // invalid 'csp' attribute.
@@ -282,21 +320,47 @@ void HTMLIFrameElement::ParseAttribute(
       should_call_did_change_attributes = true;
       UseCounter::Count(GetDocument(), WebFeature::kIFrameCSPAttribute);
     }
-  } else if (name == html_names::kBrowsingtopicsAttr) {
+  } else if (name == html_names::kConnectionallowlistAttr) {
+    // The `connectionallowlist` attribute lets an embedder require a
+    // Connection-Allowlist of the document it frames (Connection-Allowlist
+    // embedded enforcement). Gate on the runtime feature, validate the value by
+    // parsing it, and store the raw value for delivery to the browser. The
+    // value is parsed again into a ConnectionAllowlist when collected into
+    // IframeAttributes, where a length cap is also applied (see
+    // ParseConnectionAllowlistAttribute). See
+    // https://github.com/WICG/connection-allowlists/issues/1.
+    //
+    // `ConnectionAllowlistEmbeddedEnforcement` depends_on `ConnectionAllowlist`
+    // (see runtime_enabled_features.json5), so this accessor already returns
+    // false unless the `ConnectionAllowlist` origin trial is also enabled.
     if (GetExecutionContext() &&
-        RuntimeEnabledFeatures::TopicsAPIEnabled(GetExecutionContext()) &&
-        GetExecutionContext()->IsSecureContext()) {
-      bool old_browsing_topics = !params.old_value.IsNull();
-      bool new_browsing_topics = !params.new_value.IsNull();
-
-      if (new_browsing_topics) {
-        UseCounter::Count(GetDocument(),
-                          WebFeature::kIframeBrowsingTopicsAttribute);
-        Deprecation::CountDeprecation(GetExecutionContext(),
-                                      WebFeature::kTopicsAPIAll);
+        RuntimeEnabledFeatures::ConnectionAllowlistEmbeddedEnforcementEnabled(
+            GetExecutionContext())) {
+      // Validate by parsing: the structured-field grammar rejects values
+      // containing header-injecting control characters (e.g. CR/LF) as well as
+      // otherwise malformed input. An invalid value clears the requirement,
+      // mirroring the `csp` attribute. This prevents injection into the
+      // `Sec-Required-Connection-Allowlist` request header the browser emits
+      // from this value.
+      std::optional<network::ConnectionAllowlist> parsed;
+      if (value) {
+        parsed = network::ParseConnectionAllowlist(value.GetString().Utf8(),
+                                                   std::nullopt);
       }
-
-      if (new_browsing_topics != old_browsing_topics) {
+      if (value && (!parsed || !parsed->issues.empty())) {
+        // Fail closed: clear the requirement locally and report an error, but
+        // deliberately do NOT set `should_call_did_change_attributes` (unlike
+        // the valid branch below). Propagating the clear would let a malformed
+        // value drop the browser's enforcement; instead the last valid,
+        // stricter requirement stays in effect. This mirrors the `csp`
+        // attribute above.
+        required_connection_allowlist_ = g_null_atom;
+        GetDocument().AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
+            mojom::blink::ConsoleMessageSource::kOther,
+            mojom::blink::ConsoleMessageLevel::kError,
+            StrCat({"'connectionallowlist' attribute is invalid: ", value})));
+      } else if (required_connection_allowlist_ != value) {
+        required_connection_allowlist_ = value;
         should_call_did_change_attributes = true;
       }
     }
@@ -328,9 +392,6 @@ void HTMLIFrameElement::ParseAttribute(
           String("sharedStorageWritable: sharedStorage operations "
                  "are only available in secure contexts.")));
     } else {
-      if (params.new_value.IsNull() != params.old_value.IsNull()) {
-        should_call_did_change_attributes = true;
-      }
       if (!params.new_value.IsNull()) {
         UseCounter::Count(GetDocument(),
                           WebFeature::kSharedStorageAPI_Iframe_Attribute);
@@ -454,15 +515,15 @@ network::ParsedPermissionsPolicy HTMLIFrameElement::ConstructContainerPolicy()
   }
 
   scoped_refptr<const SecurityOrigin> src_origin =
-      GetOriginForPermissionsPolicy();
-  scoped_refptr<const SecurityOrigin> self_origin =
+      MakeOriginForPermissionsPolicy();
+  const SecurityOrigin* self_origin =
       GetExecutionContext()->GetSecurityOrigin();
 
   PolicyParserMessageBuffer logger;
 
   // Start with the allow attribute
   network::ParsedPermissionsPolicy container_policy =
-      PermissionsPolicyParser::ParseAttribute(allow_, self_origin, src_origin,
+      PermissionsPolicyParser::ParseAttribute(allow_, *self_origin, *src_origin,
                                               logger, GetExecutionContext());
 
   // Process the allow* attributes. These only take effect if the corresponding
@@ -502,7 +563,7 @@ network::ParsedPermissionsPolicy HTMLIFrameElement::ConstructContainerPolicy()
   // Update the JavaScript policy object associated with this iframe, if it
   // exists.
   if (policy_) {
-    policy_->UpdateContainerPolicy(container_policy, src_origin);
+    policy_->UpdateContainerPolicy(container_policy, *src_origin);
   }
 
   for (const auto& message : logger.GetMessages()) {
@@ -543,6 +604,12 @@ void HTMLIFrameElement::RemovedFrom(ContainerNode& insertion_point) {
   auto* html_doc = DynamicTo<HTMLDocument>(GetDocument());
   if (html_doc && insertion_point.IsInDocumentTree()) {
     html_doc->RemoveNamedItem(name_);
+  }
+
+  viz::TrackedElementFeature tracking_feature =
+      viz::TrackedElementFeature::kIframeTracking;
+  if (GetTrackedElementSubRect(tracking_feature)) {
+    ClearTrackedElementSubRect(tracking_feature);
   }
 }
 
@@ -630,29 +697,18 @@ void HTMLIFrameElement::DidChangeAttributes() {
       ParseContentSecurityPolicies(
           required_csp_,
           network::mojom::blink::ContentSecurityPolicyType::kEnforce,
-          network::mojom::blink::ContentSecurityPolicySource::kHTTP, KURL());
+          network::mojom::blink::ContentSecurityPolicySource::kHTTP, NullUrl());
   DCHECK_LE(csp.size(), 1u);
 
   auto attributes = mojom::blink::IframeAttributes::New();
   attributes->parsed_csp_attribute = csp.empty() ? nullptr : std::move(csp[0]);
+  // The `connectionallowlist` attribute (validated in ParseAttribute) is parsed
+  // into a ConnectionAllowlist here and enforced by the browser. A null value
+  // maps to an absent optional.
+  attributes->required_connection_allowlist =
+      ParseConnectionAllowlistAttribute(required_connection_allowlist_);
   attributes->credentialless = credentialless_;
 
-  if (RuntimeEnabledFeatures::TopicsAPIEnabled(GetExecutionContext()) &&
-      GetExecutionContext()->IsSecureContext()) {
-    attributes->browsing_topics =
-        FastHasAttribute(html_names::kBrowsingtopicsAttr);
-  }
-
-  if (GetExecutionContext()->IsSecureContext()) {
-    attributes->ad_auction_headers =
-        FastHasAttribute(html_names::kAdauctionheadersAttr);
-  }
-
-  if (RuntimeEnabledFeatures::SharedStorageAPIEnabled(GetExecutionContext()) &&
-      GetExecutionContext()->IsSecureContext()) {
-    attributes->shared_storage_writable_opted_in =
-        FastHasAttribute(html_names::kSharedstoragewritableAttr);
-  }
 
   attributes->id = ConvertToReportValue(id_);
   attributes->name = ConvertToReportValue(name_);
@@ -667,6 +723,31 @@ void HTMLIFrameElement::DidChangeAttributes() {
   }
   GetDocument().GetFrame()->GetLocalFrameHostRemote().DidChangeSrcDoc(
       ContentFrame()->GetFrameToken(), srcdoc_value);
+
+  if (RuntimeEnabledFeatures::AIPageContentTrackedElementsIframeEnabled()) {
+    viz::TrackedElementFeature tracking_feature =
+        viz::TrackedElementFeature::kIframeTracking;
+    const TrackedElementSubRect* tracked_element =
+        GetTrackedElementSubRect(tracking_feature);
+    if (!tracked_element ||
+        tracked_element->frame_token != ContentFrame()->GetFrameToken() ||
+        tracked_element->parent_frame_token !=
+            GetDocument().GetFrame()->GetLocalFrameToken()) {
+      if (tracked_element) {
+        ClearTrackedElementSubRect(tracking_feature);
+      }
+      SetTrackedElementSubRect(
+          tracking_feature,
+          TrackedElementSubRect(
+              TrackedElementId(base::Token::CreateRandom()),
+              /*should_add_to_compositor_frame_metadata=*/true,
+              /*should_exclude_fixed_and_sticky_occlusions=*/false,
+              /*sub_rect=*/std::nullopt,
+              /*frame_token=*/ContentFrame()->GetFrameToken(),
+              /*parent_frame_token=*/
+              GetDocument().GetFrame()->GetLocalFrameToken()));
+    }
+  }
 }
 
 void HTMLIFrameElement::CheckPotentialPermissionsPolicyViolation() {
@@ -675,7 +756,7 @@ void HTMLIFrameElement::CheckPotentialPermissionsPolicyViolation() {
   }
 
   scoped_refptr<const SecurityOrigin> src_origin =
-      GetOriginForPermissionsPolicy();
+      MakeOriginForPermissionsPolicy();
   url::Origin src = src_origin->ToUrlOrigin();
   network::ParsedPermissionsPolicy container_policy =
       ConstructContainerPolicy();
@@ -692,7 +773,7 @@ void HTMLIFrameElement::CheckPotentialPermissionsPolicyViolation() {
         !network::PermissionsPolicy::InheritedValueForFeature(
             src, permissions_policy, feature_desc, container_policy)) {
       auto endpoint =
-          String::FromUTF8(permissions_policy->GetEndpointForFeature(feature));
+          String::FromUtf8(permissions_policy->GetEndpointForFeature(feature));
       GetExecutionContext()->ReportPotentialPermissionsPolicyViolation(
           feature, mojom::blink::PolicyDisposition::kEnforce, endpoint,
           /*message*/ "", allow_, src_);
@@ -703,7 +784,7 @@ void HTMLIFrameElement::CheckPotentialPermissionsPolicyViolation() {
                    src, report_only_permissions_policy, feature_desc,
                    container_policy)) {
       auto endpoint =
-          String::FromUTF8(permissions_policy->GetEndpointForFeature(feature));
+          String::FromUtf8(permissions_policy->GetEndpointForFeature(feature));
       GetExecutionContext()->ReportPotentialPermissionsPolicyViolation(
           feature, mojom::blink::PolicyDisposition::kReport, endpoint,
           /*message*/ "", allow_, src_);
@@ -712,6 +793,7 @@ void HTMLIFrameElement::CheckPotentialPermissionsPolicyViolation() {
 }
 
 void HTMLIFrameElement::NaturalSizingInfoChanged() {
+  HTMLFrameOwnerElement::NaturalSizingInfoChanged();
   if (!RuntimeEnabledFeatures::ResponsiveIframesEnabled()) {
     return;
   }
@@ -721,9 +803,19 @@ void HTMLIFrameElement::NaturalSizingInfoChanged() {
   }
 }
 
-const V8UnionStringOrTrustedHTML* HTMLIFrameElement::srcdoc() const {
-  return MakeGarbageCollected<V8UnionStringOrTrustedHTML>(
-      getAttribute(html_names::kSrcdocAttr));
+void HTMLIFrameElement::ClearLastNaturalSizingInfo() {
+  HTMLFrameOwnerElement::ClearLastNaturalSizingInfo();
+  if (!RuntimeEnabledFeatures::ResponsiveIframesEnabled()) {
+    return;
+  }
+  if (auto* object = DynamicTo<LayoutIFrame>(GetLayoutObject())) {
+    object->SetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(
+        layout_invalidation_reason::kSizeChanged);
+  }
+}
+
+String HTMLIFrameElement::srcdoc() const {
+  return getAttribute(html_names::kSrcdocAttr);
 }
 
 void HTMLIFrameElement::setSrcdoc(const V8UnionStringOrTrustedHTML* value,

@@ -4,15 +4,12 @@
 
 #include "chrome/browser/ui/views/qrcode_generator/qrcode_generator_bubble.h"
 
-#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
-#include "components/qr_code_generator/bitmap_generator.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
-#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/label_button.h"
@@ -73,8 +70,9 @@ class QRCodeGeneratorBubbleUITest : public ChromeViewsTestBase {
         anchor_widget_->SetContentsView(std::make_unique<views::View>());
     CHECK(anchor_view_);
     auto bubble = std::make_unique<QRCodeGeneratorBubble>(
-        anchor_view_, web_contents_->GetWeakPtr(), base::DoNothing(),
-        base::DoNothing(), GURL("https://www.chromium.org/a"));
+        views::BubbleAnchor(anchor_view_), web_contents_->GetWeakPtr(),
+        base::DoNothing(), base::DoNothing(),
+        GURL("https://www.chromium.org/a"));
 
     bubble_ = bubble.get();
     // TODO(crbug.com/40232479) - We can probably clean this up and

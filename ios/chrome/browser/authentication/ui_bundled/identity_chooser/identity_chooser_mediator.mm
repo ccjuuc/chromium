@@ -4,7 +4,8 @@
 
 #import "ios/chrome/browser/authentication/ui_bundled/identity_chooser/identity_chooser_mediator.h"
 
-#import "base/containers/contains.h"
+#import <algorithm>
+
 #import "base/strings/sys_string_conversions.h"
 #import "components/signin/public/identity_manager/objc/identity_manager_observer_bridge.h"
 #import "google_apis/gaia/gaia_id.h"
@@ -14,11 +15,11 @@
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
-#import "ios/chrome/browser/signin/model/avatar_provider.h"
+#import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
 #import "ios/chrome/browser/signin/model/system_identity.h"
 
-@interface IdentityChooserMediator () <IdentityManagerObserverBridgeDelegate> {
+@interface IdentityChooserMediator () <IdentityManagerObserving> {
   std::unique_ptr<signin::IdentityManagerObserverBridge>
       _identityManagerObserver;
 }
@@ -30,20 +31,19 @@
   raw_ptr<ChromeAccountManagerService> _accountManagerService;
   // Identity manager to retrieve Chrome identities.
   raw_ptr<signin::IdentityManager> _identityManager;
+  id<SystemIdentity> _defaultIdentity;
 }
 
-@synthesize consumer = _consumer;
-@synthesize selectedIdentity = _selectedIdentity;
-
-- (instancetype)initWithIdentityManager:
-                    (signin::IdentityManager*)identityManager
-                  accountManagerService:
-                      (ChromeAccountManagerService*)accountManagerService {
+- (instancetype)
+    initWithIdentityManager:(signin::IdentityManager*)identityManager
+      accountManagerService:(ChromeAccountManagerService*)accountManagerService
+            defaultIdentity:(id<SystemIdentity>)defaultIdentity {
   if ((self = [super init])) {
     CHECK(identityManager);
     CHECK(accountManagerService);
     _identityManager = identityManager;
     _accountManagerService = accountManagerService;
+    _defaultIdentity = defaultIdentity;
   }
   return self;
 }
@@ -66,39 +66,15 @@
   _identityManager = nullptr;
 }
 
-- (void)setSelectedIdentity:(id<SystemIdentity>)selectedIdentity {
-  if ([_selectedIdentity isEqual:selectedIdentity]) {
-    return;
-  }
-  TableViewIdentityItem* previousSelectedItem =
-      [self.consumer tableViewIdentityItemWithGaiaID:_selectedIdentity.gaiaId];
-  if (previousSelectedItem) {
-    previousSelectedItem.selected = NO;
-    [self.consumer itemHasChanged:previousSelectedItem];
-  }
-  _selectedIdentity = selectedIdentity;
-  if (!_selectedIdentity) {
-    return;
-  }
-  TableViewIdentityItem* selectedItem =
-      [self.consumer tableViewIdentityItemWithGaiaID:_selectedIdentity.gaiaId];
-  DCHECK(selectedItem);
-  selectedItem.selected = YES;
-  [self.consumer itemHasChanged:selectedItem];
-}
-
-- (void)selectIdentityWithGaiaID:(const GaiaId&)gaiaID {
-  self.selectedIdentity =
-      _accountManagerService->GetIdentityOnDeviceWithGaiaID(gaiaID);
-}
 
 #pragma mark - Private
 
-- (bool)selectedIdentityIsValid {
-  if (self.selectedIdentity) {
-    GaiaId gaia(self.selectedIdentity.gaiaId);
-    return base::Contains(_identityManager->GetAccountsOnDevice(), gaia,
-                          [](const AccountInfo& info) { return info.gaia; });
+- (bool)defaultIdentityIsValid {
+  if (_defaultIdentity) {
+    GaiaId gaia(_defaultIdentity.gaiaId);
+    return std::ranges::contains(
+        _identityManager->GetAccountsOnDevice(), gaia,
+        [](const AccountInfo& info) { return info.gaia; });
   }
   return false;
 }
@@ -128,11 +104,11 @@
 // Updates an TableViewIdentityItem based on a SystemIdentity.
 - (void)updateTableViewIdentityItem:(TableViewIdentityItem*)item
                        withIdentity:(id<SystemIdentity>)identity {
-  CHECK(identity, base::NotFatalUntil::M147);
+  CHECK(identity);
   item.gaiaID = identity.gaiaId;
   item.name = identity.userFullName;
   item.email = identity.userEmail;
-  item.selected = self.selectedIdentity.gaiaId == identity.gaiaId;
+  item.selected = _defaultIdentity.gaiaId == identity.gaiaId;
   item.avatar =
       GetApplicationContext()->GetIdentityAvatarProvider()->GetIdentityAvatar(
           identity, IdentityAvatarSize::Regular);
@@ -145,7 +121,7 @@
     FetchManagedStatusForIdentity(
         identity, base::BindOnce(^(bool managed) {
           if (managed) {
-            CHECK(identity, base::NotFatalUntil::M147);
+            CHECK(identity);
             [weakSelf updateTableViewIdentityItem:item withIdentity:identity];
           }
         }));
@@ -154,28 +130,27 @@
   [self.consumer itemHasChanged:item];
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onExtendedAccountInfoUpdated:(const AccountInfo&)info {
+- (void)extendedAccountInfoDidUpdate:(const AccountInfo&)info {
   id<SystemIdentity> identity =
       _accountManagerService->GetIdentityOnDeviceWithGaiaID(info.gaia);
-  CHECK(identity, base::NotFatalUntil::M147);
+  CHECK(identity);
   TableViewIdentityItem* item =
       [self.consumer tableViewIdentityItemWithGaiaID:identity.gaiaId];
   [self updateTableViewIdentityItem:item withIdentity:identity];
 }
 
-- (void)onAccountsOnDeviceChanged {
+- (void)accountsOnDeviceDidChange {
   if (!_accountManagerService || !_identityManager) {
     return;
   }
 
   [self loadIdentitySection];
-  // Update the selection, in case no identity was chosen yet, or the currently
-  // selected identity has become unavailable (probably removed from the
-  // device).
-  if (![self selectedIdentityIsValid]) {
-    self.selectedIdentity = signin::GetDefaultIdentityOnDevice(
+  // Update the selection, in case no identity was chosen yet, or the default
+  // identity has become unavailable (probably removed from the device).
+  if (![self defaultIdentityIsValid]) {
+    _defaultIdentity = signin::GetDefaultIdentityOnDevice(
         _identityManager, _accountManagerService);
   }
 }

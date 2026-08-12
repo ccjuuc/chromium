@@ -8,6 +8,7 @@
 
 #include <iphlpapi.h>
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
@@ -201,16 +202,15 @@ class TaskRunnerWithCap : public base::TaskRunner {
   base::queue<LocationAndTask> pending_tasks_;
 };
 
-base::Value::Dict NetLogGetAdaptersDoneParams(
-    DhcpAdapterNamesLoggingInfo* info) {
-  base::Value::Dict result;
+base::DictValue NetLogGetAdaptersDoneParams(DhcpAdapterNamesLoggingInfo* info) {
+  base::DictValue result;
 
   // Add information on each of the adapters enumerated (including those that
   // were subsequently skipped).
-  base::Value::List adapters_list;
+  base::ListValue adapters_list;
   for (IP_ADAPTER_ADDRESSES* adapter = info->adapters.get(); adapter;
        adapter = adapter->Next) {
-    base::Value::Dict adapter_value;
+    base::DictValue adapter_value;
 
     adapter_value.Set("AdapterName", adapter->AdapterName);
     adapter_value.Set("IfType", static_cast<int>(adapter->IfType));
@@ -245,8 +245,8 @@ base::Value::Dict NetLogGetAdaptersDoneParams(
   return result;
 }
 
-base::Value::Dict NetLogFetcherDoneParams(int fetcher_index, int net_error) {
-  base::Value::Dict result;
+base::DictValue NetLogFetcherDoneParams(int fetcher_index, int net_error) {
+  base::DictValue result;
 
   result.Set("fetcher_index", fetcher_index);
   result.Set("net_error", net_error);
@@ -371,7 +371,7 @@ void DhcpPacFileFetcherWin::OnGetCandidateAdapterNamesDone(
 
   state_ = STATE_NO_RESULTS;
 
-  const std::set<std::string>& adapter_names = query->adapter_names();
+  const std::vector<std::string>& adapter_names = query->adapter_names();
 
   if (adapter_names.empty()) {
     TransitionToDone();
@@ -526,7 +526,7 @@ base::TimeDelta DhcpPacFileFetcherWin::ImplGetMaxWait() {
 }
 
 bool DhcpPacFileFetcherWin::GetCandidateAdapterNames(
-    std::set<std::string>* adapter_names,
+    std::vector<std::string>* adapter_names,
     DhcpAdapterNamesLoggingInfo* info) {
   DCHECK(adapter_names);
   adapter_names->clear();
@@ -568,7 +568,10 @@ bool DhcpPacFileFetcherWin::GetCandidateAdapterNames(
   for (adapter = adapters.get(); adapter; adapter = adapter->Next) {
     if (IsDhcpCapableAdapter(adapter)) {
       DCHECK(adapter->AdapterName);
-      adapter_names->insert(adapter->AdapterName);
+      if (std::ranges::find(*adapter_names, adapter->AdapterName) ==
+          adapter_names->end()) {
+        adapter_names->push_back(adapter->AdapterName);
+      }
     }
   }
 
@@ -592,13 +595,13 @@ void DhcpPacFileFetcherWin::AdapterQuery::GetCandidateAdapterNames() {
   logging_info_->worker_thread_end_time = base::TimeTicks::Now();
 }
 
-const std::set<std::string>&
+const std::vector<std::string>&
 DhcpPacFileFetcherWin::AdapterQuery::adapter_names() const {
   return adapter_names_;
 }
 
 bool DhcpPacFileFetcherWin::AdapterQuery::ImplGetCandidateAdapterNames(
-    std::set<std::string>* adapter_names,
+    std::vector<std::string>* adapter_names,
     DhcpAdapterNamesLoggingInfo* info) {
   return DhcpPacFileFetcherWin::GetCandidateAdapterNames(adapter_names,
                                                          info);

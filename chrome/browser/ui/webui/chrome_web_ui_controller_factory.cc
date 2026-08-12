@@ -16,7 +16,6 @@
 #include "base/strings/strcat.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/android_buildflags.h"
-#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/browser/about_flags.h"
 #include "chrome/browser/buildflags.h"
@@ -28,13 +27,13 @@
 #include "chrome/browser/ui/webui/crashes/crashes_ui.h"
 #include "chrome/browser/ui/webui/download_internals/download_internals_ui.h"
 #include "chrome/browser/ui/webui/flags/flags_ui.h"
+#include "chrome/browser/ui/webui/version/version_ui.h"
 #include "chrome/common/buildflags.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/webui_url_constants.h"
+#include "chrome/grit/theme_resources.h"
 #include "components/commerce/core/commerce_constants.h"
-#include "components/commerce/core/product_specifications/product_specifications_set.h"
 #include "components/favicon/core/favicon_service.h"
 #include "components/favicon_base/favicon_util.h"
 #include "components/favicon_base/select_favicon_frames.h"
@@ -61,6 +60,8 @@
 #include "url/url_constants.h"
 
 #if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/webui/bookmarks/bookmarks_ui_android.h"
+#include "chrome/browser/ui/webui/history/history_ui_android.h"
 #include "components/feed/feed_feature_list.h"
 #else  // BUILDFLAG(IS_ANDROID)
 #include "base/memory/ref_counted_memory.h"
@@ -78,8 +79,8 @@
 #include "chrome/browser/ui/webui/password_manager/password_manager_ui.h"
 #include "chrome/browser/ui/webui/settings/settings_utils.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
+#include "chrome/browser/web_applications/model/web_app_icon_types.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
-#include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "components/password_manager/core/common/password_manager_features.h"
 #include "media/base/media_switches.h"
@@ -94,6 +95,7 @@
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/url_constants.h"
+#include "ash/constants/webui_url_constants.h"
 #include "ash/webui/camera_app_ui/url_constants.h"
 #include "ash/webui/file_manager/url_constants.h"
 #include "ash/webui/files_internals/url_constants.h"
@@ -101,7 +103,6 @@
 #include "ash/webui/help_app_ui/url_constants.h"
 #include "ash/webui/mall/url_constants.h"
 #include "ash/webui/multidevice_debug/url_constants.h"
-#include "ash/webui/print_preview_cros/url_constants.h"
 #include "ash/webui/recorder_app_ui/url_constants.h"
 #include "ash/webui/vc_background_ui/url_constants.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -116,7 +117,6 @@
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS)
-#include "chrome/browser/ui/webui/commerce/product_specifications_ui.h"
 #include "components/webapps/isolated_web_apps/scheme.h"
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
         // BUILDFLAG(IS_CHROMEOS)
@@ -130,19 +130,11 @@
 #include "chrome/browser/ui/webui/whats_new/whats_new_ui.h"
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/extensions/extension_web_ui.h"
-#include "extensions/browser/extension_registry.h"  // nogncheck
-#include "extensions/browser/extension_system.h"    // nogncheck
-#include "extensions/common/constants.h"
-#include "extensions/common/extension.h"
-#include "extensions/common/feature_switch.h"
-#include "extensions/common/manifest.h"
-#endif
-
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/browser/extensions/extension_url_overrides.h"
 #include "chrome/browser/ui/webui/extensions/extensions_ui.h"
-#endif
+#include "extensions/common/constants.h"
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 using content::WebUI;
 using content::WebUIController;
@@ -285,17 +277,17 @@ void ChromeWebUIControllerFactory::GetFaviconForURL(
 
   // Before determining whether page_url is an extension url, we must handle
   // overrides. This changes urls in |kChromeUIScheme| to extension urls, and
-  // allows to use ExtensionWebUI::GetFaviconForURL.
+  // allows to use ExtensionUrlOverrides::GetFaviconForURL.
   GURL url(page_url);
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  ExtensionWebUI::HandleChromeURLOverride(&url, profile);
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  ExtensionUrlOverrides::HandleChromeURLOverride(&url, profile);
 
   // All extensions get their favicon from the icons part of the manifest.
   if (url.SchemeIs(extensions::kExtensionScheme)) {
-    ExtensionWebUI::GetFaviconForURL(profile, url, std::move(callback));
+    ExtensionUrlOverrides::GetFaviconForURL(profile, url, std::move(callback));
     return;
   }
-#endif
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
   std::vector<favicon_base::FaviconRawBitmapResult> favicon_bitmap_results;
 
@@ -321,8 +313,8 @@ void ChromeWebUIControllerFactory::GetFaviconForURL(
     ui::ResourceScaleFactor selected_resource_scale =
         resource_scale_factors[selected_index];
 
-    scoped_refptr<base::RefCountedMemory> bitmap(
-        GetFaviconResourceBytes(url, selected_resource_scale));
+    scoped_refptr<base::RefCountedMemory> bitmap =
+        GetFaviconResourceBytes(url, selected_resource_scale);
     if (bitmap.get() && bitmap->size()) {
       favicon_base::FaviconRawBitmapResult bitmap_result;
       bitmap_result.bitmap_data = bitmap;
@@ -350,25 +342,28 @@ bool ChromeWebUIControllerFactory::IsWebUIAllowedToMakeNetworkRequests(
   // Allowlist to work around exceptional cases.
   //
   // If you are adding a new host to this list, please file a corresponding bug
-  // to track its removal. See https://crbug.com/829412 for the metabug.
+  // to track its removal. See https://crbug.com/40091019 for the metabug.
   return
-      // https://crbug.com/831812
+      // https://crbug.com/40571286
       origin.host() == chrome::kChromeUISyncConfirmationHost ||
-      // https://crbug.com/831813
+      // https://crbug.com/41382586
       origin.host() == chrome::kChromeUIInspectHost ||
-      // https://crbug.com/859345
+      // https://crbug.com/40583261
       origin.host() == chrome::kChromeUIDownloadsHost ||
       // https://crbug.com/376417346
       origin.host() == chrome::kChromeUIExtensionsHost ||
       origin.host() == "xenon-login" ||
-      origin.host() == "xenon-overlay";
+      origin.host() == "xenon-overlay" ||
+      // https://crbug.com/509216218
+      origin.host() == chrome::kChromeUIDrivePickerHostHost;
 }
 
 ChromeWebUIControllerFactory::ChromeWebUIControllerFactory() = default;
 
 ChromeWebUIControllerFactory::~ChromeWebUIControllerFactory() = default;
 
-base::RefCountedMemory* ChromeWebUIControllerFactory::GetFaviconResourceBytes(
+scoped_refptr<base::RefCountedMemory>
+ChromeWebUIControllerFactory::GetFaviconResourceBytes(
     const GURL& page_url,
     ui::ResourceScaleFactor scale_factor) const {
 #if !BUILDFLAG(IS_ANDROID)
@@ -378,9 +373,18 @@ base::RefCountedMemory* ChromeWebUIControllerFactory::GetFaviconResourceBytes(
   }
 #endif
 
+#if BUILDFLAG(IS_ANDROID)
+  // For Android, we're allowing the favicon requests for chrome native pages.
+  // Now only history and bookmarks are supported.
+  if (!content::HasWebUIScheme(page_url) &&
+      !HasFaviconForNativePage(page_url)) {
+    return nullptr;
+  }
+#else
   if (!content::HasWebUIScheme(page_url)) {
     return nullptr;
   }
+#endif
 
   if (page_url.host() == chrome::kChromeUIComponentsHost) {
     return ComponentsUI::GetFaviconResourceBytes(scale_factor);
@@ -400,6 +404,30 @@ base::RefCountedMemory* ChromeWebUIControllerFactory::GetFaviconResourceBytes(
     return FlagsUI::GetFaviconResourceBytes(scale_factor);
   }
 
+  if (page_url.host() == chrome::kChromeUIVersionHost) {
+    return VersionUI::GetFaviconResourceBytes(scale_factor);
+  }
+
+  if (page_url.host() == chrome::kChromeUIBookmarksHost) {
+    return BookmarksUI::GetFaviconResourceBytes(scale_factor);
+  }
+
+  if (page_url.host() == chrome::kChromeUIHistoryHost) {
+    return HistoryUI::GetFaviconResourceBytes(scale_factor);
+  }
+
+  if (page_url.host() == chrome::kChromeUISettingsHost) {
+    // Android doesn't have settings_util.cc, so load the resource directly.
+    return ui::ResourceBundle::GetSharedInstance()
+        .LoadDataResourceBytesForScale(IDR_SETTINGS_FAVICON, scale_factor);
+  }
+
+  if (page_url.host() == chrome::kChromeUIDownloadsHost) {
+    // Android doesn't have download_ui.cc, so load the resource directly.
+    return ui::ResourceBundle::GetSharedInstance()
+        .LoadDataResourceBytesForScale(IDR_DOWNLOADS_FAVICON, scale_factor);
+  }
+
 #if !BUILDFLAG(IS_ANDROID)
 #if !BUILDFLAG(IS_CHROMEOS)
   // The chrome://apps page is not available on Android or ChromeOS.
@@ -408,7 +436,8 @@ base::RefCountedMemory* ChromeWebUIControllerFactory::GetFaviconResourceBytes(
   }
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
-  if (page_url.host() == chrome::kChromeUINewTabPageHost) {
+  if (page_url.host() == chrome::kChromeUINewTabPageHost ||
+      page_url.host() == chrome::kChromeUINewTabHost) {
     return NewTabPageUI::GetFaviconResourceBytes(scale_factor);
   }
 
@@ -418,27 +447,8 @@ base::RefCountedMemory* ChromeWebUIControllerFactory::GetFaviconResourceBytes(
   }
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
-  // Bookmarks are part of NTP on Android.
-  if (page_url.host() == chrome::kChromeUIBookmarksHost) {
-    return BookmarksUI::GetFaviconResourceBytes(scale_factor);
-  }
-
-  if (page_url.host() == chrome::kChromeUIHistoryHost) {
-    return HistoryUI::GetFaviconResourceBytes(scale_factor);
-  }
-
   if (page_url.host() == password_manager::kChromeUIPasswordManagerHost) {
     return PasswordManagerUI::GetFaviconResourceBytes(scale_factor);
-  }
-
-  // Android uses the native download manager.
-  if (page_url.host() == chrome::kChromeUIDownloadsHost) {
-    return DownloadsUI::GetFaviconResourceBytes(scale_factor);
-  }
-
-  // Android doesn't use the Options/Settings pages.
-  if (page_url.host() == chrome::kChromeUISettingsHost) {
-    return settings_utils::GetFaviconResourceBytes(scale_factor);
   }
 
   if (page_url.host() == chrome::kChromeUIManagementHost) {
@@ -452,11 +462,6 @@ base::RefCountedMemory* ChromeWebUIControllerFactory::GetFaviconResourceBytes(
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS)
-  if (page_url.host() == commerce::kChromeUICompareHost) {
-    return commerce::ProductSpecificationsUI::GetFaviconResourceBytes(
-        scale_factor);
-  }
-
   if (page_url.host() == chrome::kChromeUIContextualTasksHost) {
     return ContextualTasksUI::GetFaviconResourceBytes(scale_factor);
   }
@@ -471,10 +476,25 @@ base::RefCountedMemory* ChromeWebUIControllerFactory::GetFaviconResourceBytes(
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 #if BUILDFLAG(IS_CHROMEOS)
-  if (page_url.host() == chrome::kChromeUIOSSettingsHost) {
-    return settings_utils::GetFaviconResourceBytes(scale_factor);
+  if (page_url.host() == ash::kChromeUIOSSettingsHost) {
+    // Chrome OS uses the general settings favicon for OS settings.
+    return ui::ResourceBundle::GetSharedInstance()
+        .LoadDataResourceBytesForScale(IDR_SETTINGS_FAVICON, scale_factor);
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   return nullptr;
 }
+
+#if BUILDFLAG(IS_ANDROID)
+bool ChromeWebUIControllerFactory::HasFaviconForNativePage(
+    const GURL& page_url) const {
+  if (!page_url.SchemeIs(content::kChromeNativeScheme)) {
+    return false;
+  }
+  return page_url.host() == chrome::kChromeUIHistoryHost ||
+         page_url.host() == chrome::kChromeUIBookmarksHost ||
+         page_url.host() == chrome::kChromeUISettingsHost ||
+         page_url.host() == chrome::kChromeUIDownloadsHost;
+}
+#endif

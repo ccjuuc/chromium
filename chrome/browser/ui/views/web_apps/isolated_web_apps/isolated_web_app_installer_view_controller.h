@@ -7,16 +7,21 @@
 
 #include <string>
 
+#include "base/feature_list.h"
 #include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
+#include "base/timer/timer.h"
 #include "base/types/expected.h"
-#include "chrome/browser/ui/views/web_apps/isolated_web_apps/installability_checker.h"
 #include "chrome/browser/ui/views/web_apps/isolated_web_apps/isolated_web_app_installer_model.h"
 #include "chrome/browser/ui/views/web_apps/isolated_web_apps/isolated_web_app_installer_view.h"
-#include "chrome/browser/ui/views/web_apps/isolated_web_apps/pref_observer.h"
+#include "chrome/browser/ui/views/web_apps/isolated_web_apps/isolated_web_app_user_installability_checker.h"
 #include "chrome/browser/web_applications/isolated_web_apps/commands/install_isolated_web_app_command.h"
+#include "chrome/browser/web_applications/isolated_web_apps/update_manifest/update_manifest.h"
+#include "chrome/browser/web_applications/isolated_web_apps/update_manifest/update_manifest_fetcher.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/native_ui_types.h"
 
@@ -31,6 +36,8 @@ class Widget;
 
 namespace web_app {
 
+BASE_DECLARE_FEATURE(kIwaUpdateChannelsInInstaller);
+
 class CallbackDelayer;
 class WebAppProvider;
 
@@ -38,16 +45,14 @@ class IsolatedWebAppInstallerViewController
     : public IsolatedWebAppInstallerModel::Observer,
       public IsolatedWebAppInstallerView::Delegate {
  public:
-  IsolatedWebAppInstallerViewController(
-      Profile* profile,
-      WebAppProvider* web_app_provider,
-      IsolatedWebAppInstallerModel* model,
-      std::unique_ptr<IsolatedWebAppsEnabledPrefObserver> pref_observer);
+  IsolatedWebAppInstallerViewController(Profile* profile,
+                                        WebAppProvider* web_app_provider,
+                                        IsolatedWebAppInstallerModel* model);
   ~IsolatedWebAppInstallerViewController() override;
 
   // Starts the installer state transition. |initialized_callback| will be
   // called once the dialog is initialized and ready for display.
-  // |complete_callback| will be called when the dialog is being closed.
+  // |completion_callback| will be called when the dialog is being closed.
   void Start(base::OnceClosure initialized_callback,
              base::OnceClosure completion_callback);
 
@@ -92,13 +97,19 @@ class IsolatedWebAppInstallerViewController
   void OnComplete();
   void Close();
 
-  void OnPrefChanged(bool enabled);
+  void LoadChannelsAndShowMetadata();
+  void OnUpdateManifestFetched(
+      base::expected<UpdateManifest, UpdateManifestFetcher::Error>
+          fetch_result);
+  void OnUpdateManifestTimeout();
+
+  void OnUserInstallPreconditionsMaybeChanged();
   void OnGetMetadataProgressUpdated(double progress);
   void OnInstallabilityChecked(InstallabilityChecker::Result result);
   void OnInstallProgressUpdated(double progress);
   void OnIconMaskedUpdateShelf(SkBitmap mask_bitmap);
 
-  void OnInstallComplete(
+  void StoreIwaUpdateChannel(
       base::expected<InstallIsolatedWebAppCommandSuccess,
                      InstallIsolatedWebAppCommandError> result);
 
@@ -109,6 +120,7 @@ class IsolatedWebAppInstallerViewController
   void OnChildDialogCanceled() override;
   void OnChildDialogAccepted() override;
   void OnChildDialogDestroying() override;
+  void OnUpdateChannelSelected(std::optional<UpdateChannel> channel) override;
 
   // `IsolatedWebAppInstallerModel::Observer`:
   void OnStepChanged() override;
@@ -130,13 +142,19 @@ class IsolatedWebAppInstallerViewController
   raw_ptr<views::Widget> child_widget_ = nullptr;
 
   std::unique_ptr<CallbackDelayer> callback_delayer_;
-  std::unique_ptr<IsolatedWebAppsEnabledPrefObserver> pref_observer_;
+  PrefChangeRegistrar pref_change_registrar_;
   std::unique_ptr<InstallabilityChecker> installability_checker_;
   bool is_initialized_ = false;
 
   base::OnceClosure initialized_callback_;
   base::OnceClosure completion_callback_;
 
+  std::unique_ptr<UpdateManifestFetcher> update_manifest_fetcher_;
+  base::OneShotTimer update_manifest_timer_;
+
+  base::ScopedObservation<IsolatedWebAppInstallerModel,
+                          IsolatedWebAppInstallerModel::Observer>
+      model_observation_{this};
   base::WeakPtrFactory<IsolatedWebAppInstallerViewController> weak_ptr_factory_{
       this};
 };

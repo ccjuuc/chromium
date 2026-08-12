@@ -124,9 +124,7 @@ class ActiveSession {
     return it == event_counts_.end() ? 0 : it->second;
   }
   base::TimeTicks start_time() const { return start_time_; }
-  const base::EnumSet<mojom::WebClientMode,
-                      mojom::WebClientMode::kMinValue,
-                      mojom::WebClientMode::kMaxValue>&
+  const base::EnumSet<mojom::WebClientMode>&
   inputs_modes_used() const {
     return inputs_modes_used_;
   }
@@ -218,9 +216,7 @@ class ActiveSession {
   base::OneShotTimer activation_debounce_timer_;
 
   base::TimeTicks start_time_;
-  base::EnumSet<mojom::WebClientMode,
-                mojom::WebClientMode::kMinValue,
-                mojom::WebClientMode::kMaxValue>
+  base::EnumSet<mojom::WebClientMode>
       inputs_modes_used_;
   base::flat_map<GlicInstanceEvent, int> event_counts_;
   int pinned_tab_count_ = 0;
@@ -302,6 +298,14 @@ void GlicMetricsSessionManager::FinishSession(
   if (active_session_->is_started()) {
     base::RecordAction(base::UserMetricsAction("Glic.Instance.Session.End"));
     base::UmaHistogramEnumeration("Glic.Instance.Session.EndReason", reason);
+    if (owner_->current_ui_mode_ != EmbedderType::kUnknown) {
+      base::UmaHistogramBoolean(
+          base::StrCat(
+              {"Glic.Session.WasTurnSubmitted.",
+               GetEmbedderTypeString(owner_->current_ui_mode_), ".",
+               GetInvocationSourceString(owner_->last_invocation_source_)}),
+          !active_session_->inputs_modes_used().empty());
+    }
     active_session_->activity_tracker_.Finalize();
     active_session_->visibility_tracker_.Finalize();
 

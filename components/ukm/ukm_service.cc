@@ -9,7 +9,10 @@
 #include <unordered_set>
 #include <utility>
 
+#include "base/command_line.h"
+#include "base/dcheck_is_on.h"
 #include "base/feature_list.h"
+#include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
@@ -19,8 +22,11 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/metrics/log_decoder.h"
-#include "components/metrics/metrics_log.h"
+#include "components/metrics/metrics_pref_names.h"
+#include "components/metrics/metrics_reporting_choice_service.h"
 #include "components/metrics/metrics_service_client.h"
+#include "components/metrics/metrics_service_observer.h"
+#include "components/metrics/metrics_switches.h"
 #include "components/metrics/ukm_demographic_metrics_provider.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
@@ -237,10 +243,32 @@ UkmService::UkmService(PrefService* pref_service,
       pref_service_(pref_service),
       client_(client),
       demographics_provider_(std::move(demographics_provider)),
-      reporting_service_(client, pref_service),
+      reporting_service_(client, pref_service, &logs_event_manager_),
       task_runner_(base::SequencedTaskRunner::GetCurrentDefault()) {
   DCHECK(pref_service_);
   DCHECK(client_);
+
+  bool create_logs_event_observer;
+#ifdef NDEBUG
+  // For non-debug builds, we only create |logs_event_observer_| if the
+  // |kExportUkmLogsToFile| command line flag is passed. This is mostly for
+  // performance reasons: 1) we don't want to have to notify an observer in
+  // non-debug circumstances (there may be heavy work like copying large
+  // strings), and 2) we don't want logs to be lingering in memory.
+  create_logs_event_observer =
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
+          metrics::switches::kExportUkmLogsToFile);
+#else
+  // For debug builds, always create |logs_event_observer_|.
+  create_logs_event_observer = true;
+#endif  // NDEBUG
+
+  if (create_logs_event_observer) {
+    logs_event_observer_ = std::make_unique<metrics::MetricsServiceObserver>(
+        metrics::MetricsServiceObserver::MetricsServiceType::UKM);
+    logs_event_manager_.AddObserver(logs_event_observer_.get());
+  }
+
   DVLOG(DebuggingLogLevel::Rare) << "UkmService::Constructor";
   reporting_service_.Initialize();
 
@@ -259,15 +287,33 @@ UkmService::UkmService(PrefService* pref_service,
   bool fast_startup = client_->ShouldStartUpFast();
   scheduler_ = std::make_unique<UkmRotationScheduler>(
       rotate_callback, fast_startup, get_upload_interval_callback);
-  InitDecodeMap();
 
   DelegatingUkmRecorder::Get()->AddDelegate(self_ptr_factory_.GetWeakPtr());
 }
 
 UkmService::~UkmService() {
+  if (logs_event_observer_) {
+    logs_event_manager_.RemoveObserver(logs_event_observer_.get());
+    base::FilePath path =
+        base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
+            metrics::switches::kExportUkmLogsToFile);
+    if (!path.empty()) {
+      logs_event_observer_->ExportLogsToFile(path);
+    }
+  }
   UkmRecorder::Get()->NotifyStartShutdown();
   DisableReporting();
   DelegatingUkmRecorder::Get()->RemoveDelegate(this);
+}
+
+void UkmService::AddLogsObserver(
+    metrics::MetricsLogsEventManager::Observer* observer) {
+  logs_event_manager_.AddObserver(observer);
+}
+
+void UkmService::RemoveLogsObserver(
+    metrics::MetricsLogsEventManager::Observer* observer) {
+  logs_event_manager_.RemoveObserver(observer);
 }
 
 void UkmService::Initialize() {
@@ -406,11 +452,14 @@ void UkmService::PurgeAppsData() {
   PurgeDataFromUnsentLogStore(
       reporting_service_.ukm_log_store(),
       [&](const Source& source) {
-        if (GetSourceIdType(source.id()) == SourceIdType::APP_ID) {
+        auto source_id_type = GetSourceIdType(source.id());
+        if (source_id_type == SourceIdType::APP_ID ||
+            source_id_type == SourceIdType::IWA_BUNDLE_ID) {
           return true;
         }
         for (const auto& url_info : source.urls()) {
-          if (GURL(url_info.url()).SchemeIs(kAppScheme)) {
+          GURL url = GURL(url_info.url());
+          if (url.SchemeIs(kAppScheme) || url.SchemeIs(kIsolatedAppScheme)) {
             return true;
           }
         }
@@ -420,7 +469,9 @@ void UkmService::PurgeAppsData() {
 
   // Purge data currently in the recordings intended for the next ukm::Report.
   UkmRecorderImpl::PurgeRecordingsWithUrlScheme(kAppScheme);
+  UkmRecorderImpl::PurgeRecordingsWithUrlScheme(kIsolatedAppScheme);
   UkmRecorderImpl::PurgeRecordingsWithSourceIdType(SourceIdType::APP_ID);
+  UkmRecorderImpl::PurgeRecordingsWithSourceIdType(SourceIdType::IWA_BUNDLE_ID);
 }
 
 void UkmService::PurgeMsbbData() {
@@ -475,6 +526,11 @@ void UkmService::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterUint64Pref(prefs::kUkmClientId, 0);
   registry->RegisterIntegerPref(prefs::kUkmSessionId, 0);
   UkmReportingService::RegisterPrefs(registry);
+}
+
+bool UkmService::ShouldUseMetricsConsentRestructure() const {
+  return metrics::MetricsReportingChoiceService::
+      ShouldUseMetricsConsentRestructure();
 }
 
 void UkmService::OnRecorderParametersChanged() {

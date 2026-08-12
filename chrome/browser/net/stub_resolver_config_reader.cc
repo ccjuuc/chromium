@@ -30,6 +30,7 @@
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "components/webui/flags/pref_service_flags_storage.h"
 #include "content/public/browser/network_service_instance.h"
 #include "net/base/features.h"
@@ -41,7 +42,7 @@
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/android_info.h"
-#include "chrome/browser/enterprise/util/android_enterprise_info.h"
+#include "components/policy/core/common/management/android_enterprise_info.h"
 #endif
 
 #if BUILDFLAG(IS_WIN)
@@ -137,6 +138,35 @@ bool ShouldEnableAsyncDns() {
          base::FeatureList::IsEnabled(net::features::kAsyncDns);
 }
 
+// Returns whether the Secure DNS DoH fallback behavior should be used.
+bool ShouldUseDohFallback(net::SecureDnsMode secure_dns_mode,
+                          const DnsOverHttpsConfigSource& doh_config_source) {
+  // DoH fallback is only applicable to Automatic mode.
+  if (secure_dns_mode != net::SecureDnsMode::kAutomatic) {
+    return false;
+  }
+
+  // If the feature is enabled then return the boolean value of the pref.
+  // DoH fallback is a new setting introduced in the Bundled Security Settings
+  // for Secure DNS. If the new UI is enabled to make the setting available,
+  // then just check user choice in the pref.
+  if (base::FeatureList::IsEnabled(
+          safe_browsing::kBundledSecuritySettingsSecureDnsV2)) {
+    return doh_config_source.AutomaticModeFallbackToDohEnabled();
+  }
+
+  return false;
+}
+
+// For insecure DNS resolution in Chrome, enables the usage of platform DNS
+// APIs, instead of Chrome's built-in DNS client.
+BASE_FEATURE(kChromeEnableDnsPlatform, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE_PARAM(bool,
+                   kChromeEnableDnsPlatformNoSystem,
+                   &kChromeEnableDnsPlatform,
+                   "no_system",
+                   false);
+
 }  // namespace
 
 #if BUILDFLAG(IS_WIN)
@@ -177,8 +207,8 @@ StubResolverConfigReader::StubResolverConfigReader(PrefService* local_state,
                      base::Unretained(this)));
 
 #if BUILDFLAG(IS_ANDROID)
-  enterprise_util::AndroidEnterpriseInfo::GetInstance()
-      ->GetAndroidEnterpriseInfoState(base::BindOnce(
+  policy::AndroidEnterpriseInfo::GetInstance()->GetAndroidEnterpriseInfoState(
+      base::BindOnce(
           &StubResolverConfigReader::OnAndroidOwnedStateCheckComplete,
           weak_factory_.GetWeakPtr()));
 #endif
@@ -398,17 +428,10 @@ SecureDnsConfig StubResolverConfigReader::GetAndUpdateConfiguration(
   if (secure_dns_mode != net::SecureDnsMode::kOff) {
     doh_config = net::DnsOverHttpsConfig::FromStringLax(
         GetDnsOverHttpsConfigSource()->GetDnsOverHttpsTemplates());
-    if (secure_dns_mode == net::SecureDnsMode::kAutomatic &&
-        GetDnsOverHttpsConfigSource()->AutomaticModeFallbackToDohEnabled() &&
-        base::FeatureList::IsEnabled(
-            net::features::kAddAutomaticWithDohFallbackMode)) {
-      bool fallback_pref_managed = local_state_->IsManagedPreference(
-          prefs::kDnsOverHttpsAutomaticModeFallbackToDoh);
-      mode_details = fallback_pref_managed
-                         ? SecureDnsModeDetailsForHistogram::
-                               kAutomaticWithDohFallbackByEnterprisePolicy
-                         : SecureDnsModeDetailsForHistogram::
-                               kAutomaticWithDohFallbackByUser;
+    if (ShouldUseDohFallback(secure_dns_mode,
+                             *GetDnsOverHttpsConfigSource())) {
+      mode_details =
+          SecureDnsModeDetailsForHistogram::kAutomaticWithDohFallbackByUser;
       fallback_doh_nameservers = GetFallbackDohNameservers();
     }
   }
@@ -422,9 +445,20 @@ SecureDnsConfig StubResolverConfigReader::GetAndUpdateConfiguration(
   }
 
   if (update_network_service) {
+    net::InsecureDnsMode insecure_dns_mode = net::InsecureDnsMode::kDisabled;
+    if (GetInsecureStubResolverEnabled()) {
+      if (net::features::IsDnsPlatformSupported() &&
+          base::FeatureList::IsEnabled(kChromeEnableDnsPlatform)) {
+        insecure_dns_mode = kChromeEnableDnsPlatformNoSystem.Get()
+                                ? net::InsecureDnsMode::kEnabledPlatformNoSystem
+                                : net::InsecureDnsMode::kEnabledPlatform;
+      } else {
+        insecure_dns_mode = net::InsecureDnsMode::kEnabledBuiltIn;
+      }
+    }
     content::GetNetworkService()->ConfigureStubHostResolver(
-        GetInsecureStubResolverEnabled(), GetHappyEyeballsV3Enabled(),
-        secure_dns_mode, doh_config, additional_dns_query_types_enabled,
+        insecure_dns_mode, GetHappyEyeballsV3Enabled(), secure_dns_mode,
+        doh_config, additional_dns_query_types_enabled,
         fallback_doh_nameservers);
   }
 
@@ -435,10 +469,10 @@ SecureDnsConfig StubResolverConfigReader::GetAndUpdateConfiguration(
 
 #if BUILDFLAG(IS_ANDROID)
 void StubResolverConfigReader::OnAndroidOwnedStateCheckComplete(
-    bool has_profile_owner,
-    bool has_device_owner) {
+    bool has_device_owner,
+    bool has_profile_owner) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  android_has_owner_ = has_profile_owner || has_device_owner;
+  android_has_owner_ = has_device_owner || has_profile_owner;
   // update the network service if the actual result is "true" to save time.
   if (android_has_owner_.value())
     UpdateNetworkService(false /* record_metrics */);

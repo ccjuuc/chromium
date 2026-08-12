@@ -9,9 +9,11 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
+#include "components/autofill/core/common/unique_ids.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_form_cache.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "chrome/browser/password_manager/password_change/model_quality_logs_uploader.h"
 
 namespace password_manager {
 class PasswordFormManager;
@@ -21,6 +23,15 @@ class PasswordManagerClient;
 namespace content {
 class WebContents;
 }
+
+// Returns whether the field with `renderer_id` in `form_data` is focusable.
+bool FieldFocusable(autofill::FieldRendererId renderer_id,
+                    const autofill::FormData& form_data);
+
+// Returns whether the field with `renderer_id` in `form_data` is enabled and
+// not readonly.
+bool FieldEnabled(autofill::FieldRendererId renderer_id,
+                  const autofill::FormData& form_data);
 
 // Helper object which waits for change password parsing, invokes callback on
 // completion. If form isn't found withing
@@ -34,6 +45,10 @@ class ChangePasswordFormWaiter
   static constexpr base::TimeDelta kChangePasswordFormWaitingTimeout =
       base::Seconds(3);
 
+  // Timeout for local ML model availability before falling back to Init().
+  static constexpr base::TimeDelta kLocalMLModelDownloadTimeout =
+      base::Seconds(10);
+
   using PasswordFormFoundCallback =
       base::OnceCallback<void(password_manager::PasswordFormManager*)>;
 
@@ -46,8 +61,9 @@ class ChangePasswordFormWaiter
 
     Builder& SetTimeoutCallback(base::OnceClosure timeout_callback);
     Builder& SetFieldsToIgnore(
-        const std::vector<autofill::FieldRendererId>& fields_to_ignore);
+        const std::vector<autofill::FieldGlobalId>& fields_to_ignore);
     Builder& IgnoreHiddenForms();
+    Builder& SetLogsUploader(ModelQualityLogsUploader* logs_uploader);
 
     std::unique_ptr<ChangePasswordFormWaiter> Build();
 
@@ -66,6 +82,9 @@ class ChangePasswordFormWaiter
 
   void Init();
 
+  // Rechecks all forms in the cache periodically with exponential backoff.
+  void RecheckForms();
+
   // Delays invoking Init() until the model is fully downloaded. Model has a
   // superior performance in classifying change password forms compared to
   // existing password manager capabilities.
@@ -80,18 +99,23 @@ class ChangePasswordFormWaiter
   void DidStopLoading() override;
 
   void OnTimeout();
+  void OnLocalMLModelDownloadTimeout();
 
   static password_manager::PasswordFormManager* GetCorrespondingFormManager(
       base::WeakPtr<ChangePasswordFormWaiter> waiter,
-      autofill::FieldRendererId new_password_element_id);
+      autofill::FieldGlobalId field_global_id);
 
-  void OnCheckViewAreaVisibleCallback(
-      autofill::FieldRendererId new_password_element_id,
-      bool is_visible);
+  void OnCheckViewAreaVisibleCallback(autofill::FieldGlobalId field_global_id,
+                                      bool is_visible);
+
+  void RecordDiscardedForm(
+      const password_manager::PasswordFormManager* form_manager,
+      ModelQualityLogsUploader::FormDiscardReason discard_reason);
 
   const raw_ptr<password_manager::PasswordManagerClient> client_ = nullptr;
   PasswordFormFoundCallback callback_;
 
+  base::TimeDelta forms_recheck_delay_ = base::Seconds(1);
   base::TimeDelta timeout_ = base::TimeDelta::Max();
   base::OneShotTimer timeout_timer_;
   base::OnceClosure timeout_callback_;
@@ -99,14 +123,15 @@ class ChangePasswordFormWaiter
   // (hidden).
   bool ignore_hidden_forms_ = false;
 
-  // new_password_element_renderer_ids which ChangePasswordFormWaiter should
-  // ignore. This helps avoid detecting the same change password form over and
-  // over again.
-  std::vector<autofill::FieldRendererId> fields_to_ignore_;
+  // FieldGlobalIds which ChangePasswordFormWaiter should ignore. This helps
+  // avoid detecting the same change password form over and over again.
+  std::vector<autofill::FieldGlobalId> fields_to_ignore_;
 
   // Subscription for model updates. Should be called when model has been
   // downloaded and available for use.
   base::CallbackListSubscription model_loaded_subscription_;
+
+  raw_ptr<ModelQualityLogsUploader> logs_uploader_ = nullptr;
 
   base::WeakPtrFactory<ChangePasswordFormWaiter> weak_ptr_factory_{this};
 };

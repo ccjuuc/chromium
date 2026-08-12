@@ -72,7 +72,7 @@ class NetworkDeviceHandlerTest : public testing::Test {
                            "cellular1");
     device_test->AddDevice(kDefaultWifiDevicePath, shill::kTypeWifi, "wifi1");
 
-    base::Value::List test_ip_configs;
+    base::ListValue test_ip_configs;
     test_ip_configs.Append("ip_config1");
     device_test->SetDeviceProperty(kDefaultWifiDevicePath,
                                    shill::kIPConfigsProperty,
@@ -108,18 +108,13 @@ class NetworkDeviceHandlerTest : public testing::Test {
   void SuccessCallback() { result_ = kResultSuccess; }
 
   void GetPropertiesCallback(const std::string& device_path,
-                             std::optional<base::Value::Dict> properties) {
+                             std::optional<base::DictValue> properties) {
     if (!properties) {
       result_ = kResultFailure;
       return;
     }
     result_ = kResultSuccess;
     properties_ = std::move(properties.value());
-  }
-
-  void StringSuccessCallback(const std::string& result) {
-    VLOG(1) << "StringSuccessCallback: " << result;
-    result_ = result;
   }
 
   void GetDeviceProperties(const std::string& device_path,
@@ -148,7 +143,7 @@ class NetworkDeviceHandlerTest : public testing::Test {
   std::unique_ptr<NetworkDeviceHandler> network_device_handler_;
   std::unique_ptr<NetworkStateHandler> network_state_handler_;
   std::unique_ptr<NetworkHandlerTestHelper> network_handler_test_helper_;
-  base::Value::Dict properties_;
+  base::DictValue properties_;
 };
 
 TEST_F(NetworkDeviceHandlerTest, GetDeviceProperties) {

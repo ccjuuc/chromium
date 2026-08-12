@@ -64,7 +64,10 @@
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/core/svg/svg_text_content_element.h"
 #include "third_party/blink/renderer/core/svg/svg_tree_scope_resources.h"
+#include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
 #include "third_party/blink/renderer/platform/bindings/script_forbidden_scope.h"
+#include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "ui/gfx/geometry/point_conversions.h"
 
@@ -185,12 +188,15 @@ void TreeScope::AddImageMap(HTMLMapElement& image_map) {
   }
 }
 
-void TreeScope::RemoveImageMap(HTMLMapElement& image_map) {
+void TreeScope::RemoveImageMap(HTMLMapElement& image_map,
+                               const AtomicString& name,
+                               const AtomicString& id) {
   if (!image_maps_by_name_)
     return;
-  if (const AtomicString& name = image_map.GetName())
+  if (name) {
     image_maps_by_name_->Remove(name, image_map);
-  if (const AtomicString& id = image_map.GetIdAttribute()) {
+  }
+  if (id) {
     image_maps_by_name_->Remove(id, image_map);
   }
 }
@@ -203,7 +209,7 @@ HTMLMapElement* TreeScope::GetImageMap(const String& url) const {
   wtf_size_t hash_pos = url.find('#');
   if (hash_pos == kNotFound)
     return nullptr;
-  String name = url.Substring(hash_pos + 1);
+  String name = url.substr(hash_pos + 1);
   if (name.empty()) {
     return nullptr;
   }
@@ -226,7 +232,8 @@ static bool PointInFrameContentIfVisible(Document& document,
   document.UpdateStyleAndLayout(DocumentUpdateReason::kHitTest);
 
   auto* scrollable_area = frame_view->LayoutViewport();
-  gfx::Rect visible_frame_rect(scrollable_area->VisibleContentRect().size());
+  gfx::Rect visible_frame_rect(
+      scrollable_area->VisibleContentRect(kExcludeScrollbars).size());
   visible_frame_rect = gfx::ScaleToRoundedRect(visible_frame_rect,
                                                1 / frame->LayoutZoomFactor());
   if (!visible_frame_rect.Contains(gfx::ToRoundedPoint(point_in_frame)))
@@ -280,6 +287,10 @@ Element* TreeScope::ElementForHitTest(Node* node, HitTestPointType type) const {
   Element* element;
   if (node->IsPseudoElement() || node->IsTextNode()) {
     element = node->ParentOrShadowHostElement();
+    // Element could be inside a nested pseudo.
+    if (PseudoElement* pseudo = DynamicTo<PseudoElement>(element)) {
+      element = &pseudo->UltimateOriginatingElement();
+    }
   } else {
     element = To<Element>(node);
   }
@@ -290,15 +301,26 @@ Element* TreeScope::ElementForHitTest(Node* node, HitTestPointType type) const {
   return element;
 }
 
-CustomElementRegistry* TreeScope::customElementRegistry() const {
+CustomElementRegistry* TreeScope::customElementRegistry(
+    ScriptState* script_state) const {
   if (custom_element_registry_) {
-    CHECK(RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled());
     DCHECK(!waiting_for_registry_);
+    // A null script_state indicates an internal call that bypasses the check.
+    if (script_state &&
+        script_state->World().GetWorldId() !=
+            custom_element_registry_->GetWorldId()) {
+      return nullptr;
+    }
     return custom_element_registry_;
   }
 
-  if (RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled() &&
-      waiting_for_registry_) {
+  if (waiting_for_registry_) {
+    return nullptr;
+  }
+
+  // The global registry must only be accessible from the main world.
+  // A null script_state indicates an internal call that bypasses the check.
+  if (script_state && !script_state->World().IsMainWorld()) {
     return nullptr;
   }
 
@@ -313,20 +335,35 @@ CustomElementRegistry* TreeScope::customElementRegistry() const {
 // tree scope is using a global registry and it can be reset during cross
 // document node adoption. Otherwise, setting registry on a tree scope with
 // existing registry will fail.
-bool TreeScope::SetCustomElementRegistry(CustomElementRegistry* registry) {
-  if (!RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled() ||
-      (custom_element_registry_ &&
-       !custom_element_registry_->IsGlobalRegistry())) {
+bool TreeScope::SetCustomElementRegistry(
+    CustomElementRegistryAssignment assignment) {
+  if (custom_element_registry_ &&
+      !custom_element_registry_->IsGlobalRegistry()) {
     return false;
   }
 
-  if (registry) {
-    custom_element_registry_ = registry;
-    waiting_for_registry_ = false;
-    registry->AssociatedWith(GetDocument());
+  if (assignment.IsInherit()) {
+    DCHECK(!custom_element_registry_ && !waiting_for_registry_);
     return true;
-  } else if (!custom_element_registry_ ||
-             custom_element_registry_->IsGlobalRegistry()) {
+  }
+
+  if (assignment.IsExplicit()) {
+    // An explicit registry is only overwritten with another explicit registry
+    // during cross-document adoption, where the global registry from the
+    // previous document is replaced with the current document's registry.
+    DCHECK(!custom_element_registry_ ||
+           (custom_element_registry_->IsGlobalRegistry() &&
+            assignment.Registry()->IsGlobalRegistry()));
+    custom_element_registry_ = assignment.Registry();
+    waiting_for_registry_ = false;
+    custom_element_registry_->AssociatedWith(GetDocument());
+    return true;
+  }
+
+  // Wait for a scoped registry.
+  DCHECK(assignment.IsWait());
+  if (!custom_element_registry_ ||
+      custom_element_registry_->IsGlobalRegistry()) {
     custom_element_registry_ = nullptr;
     waiting_for_registry_ = true;
     return true;
@@ -365,7 +402,7 @@ HeapVector<Member<Element>> TreeScope::ElementsFromHitTestResult(
     if (!node->IsElementNode() && !ShouldAcceptNonElementNode(*node))
       continue;
     node = ElementForHitTest(node, HitTestPointType::kWebExposed);
-    // Prune duplicate entries. A pseduo ::before content above its parent
+    // Prune duplicate entries. A pseudo ::before content above its parent
     // node should only result in a single entry.
     if (node == last_node)
       continue;
@@ -478,18 +515,38 @@ void TreeScope::ClearAdoptedStyleSheets() {
   if (!HasAdoptedStyleSheets()) {
     return;
   }
-  HeapVector<Member<CSSStyleSheet>> removed;
-  removed.AppendRange(adopted_style_sheets_->begin(),
-                      adopted_style_sheets_->end());
+  HeapVector<Member<CSSStyleSheet>> removed(*adopted_style_sheets_);
   adopted_style_sheets_->clear();
   for (const auto& sheet : removed) {
     StyleSheetWasRemoved(sheet);
   }
 }
 
+void TreeScope::ReplaceAdoptedStyleSheet(CSSStyleSheet& old_sheet,
+                                         CSSStyleSheet& new_sheet) {
+  CHECK(new_sheet.IsConstructed());
+  CHECK_EQ(old_sheet.ConstructorDocument(), new_sheet.ConstructorDocument());
+  CHECK_EQ(new_sheet.ConstructorDocument(), GetDocument());
+
+  if (!HasAdoptedStyleSheets()) {
+    return;
+  }
+
+  for (auto& sheet : *adopted_style_sheets_) {
+    if (sheet == &old_sheet) {
+      StyleSheetWasRemoved(&old_sheet);
+      sheet = &new_sheet;
+      StyleSheetWasAdded(&new_sheet);
+      return;
+    }
+  }
+}
+
 void TreeScope::AppendAdoptedStyleSheets(
     HeapVector<Member<CSSStyleSheet>>&& adopted_style_sheets) {
   EnsureAdoptedStyleSheets();
+  adopted_style_sheets_->reserve(adopted_style_sheets_->size() +
+                                 adopted_style_sheets.size());
   for (const auto& sheet : adopted_style_sheets) {
     DCHECK(sheet->IsConstructed());
     DCHECK_EQ(sheet->ConstructorDocument(), GetDocument());
@@ -504,7 +561,7 @@ void TreeScope::SetAdoptedStyleSheetsForTesting(
   AppendAdoptedStyleSheets(std::move(adopted_style_sheets));
 }
 
-DOMSelection* TreeScope::GetSelection() const {
+DomSelection* TreeScope::GetSelection() const {
   if (!RootNode().GetDocument().GetFrame())
     return nullptr;
 
@@ -514,7 +571,7 @@ DOMSelection* TreeScope::GetSelection() const {
   // FIXME: The correct selection in Shadow DOM requires that Position can have
   // a ShadowRoot as a container.  See
   // https://bugs.webkit.org/show_bug.cgi?id=82697
-  selection_ = MakeGarbageCollected<DOMSelection>(this);
+  selection_ = MakeGarbageCollected<DomSelection>(this);
   return selection_.Get();
 }
 
@@ -527,9 +584,19 @@ Element* TreeScope::FindAnchorWithName(const String& name) {
   for (HTMLAnchorElement& anchor :
        Traversal<HTMLAnchorElement>::StartsAfter(RootNode())) {
     if (RootNode().GetDocument().InQuirksMode()) {
-      // Quirks mode, case insensitive comparison of names.
-      if (DeprecatedEqualIgnoringCase(anchor.GetName(), name))
+      // Quirks mode: Try case-sensitive matching first to align with Firefox
+      // and Safari, but fall back to case-insensitive for legacy compat.
+      // Count usage to measure impact before removing fallback.
+      // See https://crbug.com/40829784
+      if (anchor.GetName() == name) {
+        UseCounter::Count(RootNode().GetDocument(),
+                          WebFeature::kAnchorCaseSensitiveMatch);
         return &anchor;
+      } else if (DeprecatedEqualIgnoringCase(anchor.GetName(), name)) {
+        UseCounter::Count(RootNode().GetDocument(),
+                          WebFeature::kAnchorCaseInsensitiveMatch);
+        return &anchor;
+      }
     } else {
       // Strict mode, names need to match exactly.
       if (anchor.GetName() == name)
@@ -557,7 +624,7 @@ Node* TreeScope::FindAnchor(const String& fragment) {
 
   // 4. Let fragmentBytes be the percent-decoded fragment.
   // 5. Let decodedFragment be the UTF-8 decode without BOM of fragmentBytes.
-  String name = DecodeURLEscapeSequences(fragment, DecodeURLMode::kUTF8);
+  String name = DecodeUrlEscapeSequences(fragment, DecodeUrlMode::kUtf8);
   // 6. Try decodedFragment.
   anchor = FindAnchorWithName(name);
   if (anchor)
@@ -565,8 +632,9 @@ Node* TreeScope::FindAnchor(const String& fragment) {
 
   // 7. If decodedFragment is "top", top of the document.
   // TODO(1117212) Move the IsEmpty check to step 2.
-  if (fragment.empty() || EqualIgnoringASCIICase(name, "top"))
+  if (fragment.empty() || EqualIgnoringAsciiCase(name, "top")) {
     anchor = &GetDocument();
+  }
 
   return anchor;
 }
@@ -591,10 +659,10 @@ void TreeScope::AdoptIfNeeded(Node& node) {
 // This retargets |target| against the root of |this|.
 // The steps are different with the spec for performance reasons,
 // but the results should be the same.
-Element& TreeScope::Retarget(const Element& target) const {
+Node& TreeScope::Retarget(const Node& target) const {
   const TreeScope& target_scope = target.GetTreeScope();
   if (!target_scope.RootNode().IsShadowRoot())
-    return const_cast<Element&>(target);
+    return const_cast<Node&>(target);
 
   HeapVector<Member<const TreeScope>> target_ancestor_scopes;
   HeapVector<Member<const TreeScope>> context_ancestor_scopes;
@@ -615,10 +683,16 @@ Element& TreeScope::Retarget(const Element& target) const {
   }
 
   if (target_ancestor_riterator == target_ancestor_scopes.rend())
-    return const_cast<Element&>(target);
+    return const_cast<Node&>(target);
   Node& first_different_scope_root =
       (*target_ancestor_riterator).Get()->RootNode();
   return To<ShadowRoot>(first_different_scope_root).host();
+}
+
+// The result of retargeting an Element is always an Element, since the
+// retarget algorithm either returns the target itself or a shadow host.
+Element& TreeScope::Retarget(const Element& target) const {
+  return To<Element>(Retarget(static_cast<const Node&>(target)));
 }
 
 Element* TreeScope::AdjustedFocusedElementInternal(

@@ -31,6 +31,7 @@ if (is_win) {
     ]
 
     configs += [ "//xenon_overlay/buildflags:custom_install_identity" ]
+    public_configs = [ "//xenon_overlay/buildflags:custom_install_identity" ]
 
     sources = [
       "../app/chrome_dll_resource.h",
@@ -55,20 +56,11 @@ if (is_win) {
     ]
 
     if (is_chrome_branded) {
-      sources += [
-        "google_chrome_install_modes.cc",
-        "google_chrome_install_modes.h",
-      ]
+      sources += [ "google_chrome_install_modes.h" ]
     } else if (is_chrome_for_testing_branded) {
-      sources += [
-        "google_chrome_for_testing_install_modes.cc",
-        "google_chrome_for_testing_install_modes.h",
-      ]
+      sources += [ "google_chrome_for_testing_install_modes.h" ]
     } else {
-      sources += [
-        "chromium_install_modes.cc",
-        "chromium_install_modes.h",
-      ]
+      sources += [ "chromium_install_modes.h" ]
     }
 
     libs = [ "kernel32.lib" ]

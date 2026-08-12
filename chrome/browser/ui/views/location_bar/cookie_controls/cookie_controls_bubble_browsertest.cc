@@ -4,7 +4,6 @@
 
 #include <memory>
 
-#include "base/feature_list.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time_override.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
@@ -21,15 +20,12 @@
 #include "chrome/browser/ui/views/location_bar/cookie_controls/cookie_controls_bubble_view_controller.h"
 #include "chrome/browser/ui/views/location_bar/cookie_controls/cookie_controls_bubble_view_impl.h"
 #include "chrome/browser/ui/views/location_bar/cookie_controls/cookie_controls_content_view.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/content_settings/core/common/features.h"
 #include "components/privacy_sandbox/privacy_sandbox_features.h"
-#include "components/strings/grit/components_strings.h"
 #include "components/strings/grit/privacy_sandbox_strings.h"
-#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -38,8 +34,6 @@
 #include "ui/base/ui_base_features.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/vector_icons.h"
-
-const int kDaysToExpiration = 30;
 
 class MockCookieControlsBubbleView : public CookieControlsBubbleView {
  public:
@@ -82,7 +76,6 @@ class MockCookieControlsContentView : public CookieControlsContentView {
   MOCK_METHOD(void, SetToggleIsOn, (bool), (override));
   MOCK_METHOD(void, SetToggleIcon, (const gfx::VectorIcon&), (override));
   MOCK_METHOD(void, SetCookiesLabel, (const std::u16string&), (override));
-  MOCK_METHOD(void, SetFeedbackSectionVisibility, (bool), (override));
   MOCK_METHOD(void, SetContentLabelsVisible, (bool), (override));
   MOCK_METHOD(void, SetToggleVisible, (bool), (override));
   MOCK_METHOD(void,
@@ -227,12 +220,9 @@ class CookieControlsBubbleViewControllerBrowserTest
     return time;
   }
 
-  void OnStatusChanged(int days_to_expiration = 0) {
-    auto expiration = days_to_expiration
-                          ? base::Time::Now() + base::Days(days_to_expiration)
-                          : base::Time();
+  void OnStatusChanged() {
     view_controller()->OnStatusChanged(controls_state_, enforcement_,
-                                       expiration);
+                                       base::Time());
   }
 
  protected:
@@ -260,16 +250,7 @@ IN_PROC_BROWSER_TEST_F(CookieControlsBubbleViewControllerBrowserTest,
   OnStatusChanged();
 }
 
-class CookieControlsBubbleViewControllerPre3pcdBrowserTest
-    : public CookieControlsBubbleViewControllerBrowserTest {
- public:
-  CookieControlsBubbleViewControllerPre3pcdBrowserTest() {
-    feature_list_.InitAndEnableFeatureWithParameters(
-        content_settings::features::kUserBypassUI, {{"expiration", "30d"}});
-  }
-};
-
-IN_PROC_BROWSER_TEST_F(CookieControlsBubbleViewControllerPre3pcdBrowserTest,
+IN_PROC_BROWSER_TEST_F(CookieControlsBubbleViewControllerBrowserTest,
                        ThirdPartyCookiesBlocked) {
   EXPECT_CALL(*mock_bubble_view(),
               UpdateTitle(l10n_util::GetStringUTF16(
@@ -280,19 +261,21 @@ IN_PROC_BROWSER_TEST_F(CookieControlsBubbleViewControllerPre3pcdBrowserTest,
           l10n_util::GetStringUTF16(
               IDS_COOKIE_CONTROLS_BUBBLE_SITE_NOT_WORKING_TITLE),
           l10n_util::GetStringUTF16(
-              IDS_TRACKING_PROTECTION_BUBBLE_SITE_NOT_WORKING_DESCRIPTION)));
-  EXPECT_CALL(*mock_content_view(), SetFeedbackSectionVisibility(false));
+              IDS_COOKIE_CONTROLS_BUBBLE_SITE_NOT_WORKING_DESCRIPTION)));
   EXPECT_CALL(*mock_content_view(), SetToggleIsOn(false));
   EXPECT_CALL(*mock_content_view(),
               SetCookiesLabel(l10n_util::GetStringUTF16(
                   IDS_TRACKING_PROTECTION_BUBBLE_3PC_BLOCKED_SUBTITLE)));
   EXPECT_CALL(*mock_content_view(),
-              SetToggleIcon(testing::Field(
-                  &gfx::VectorIcon::name, views::kEyeCrossedRefreshIcon.name)));
+              SetToggleIcon(
+                  testing::Field(&gfx::VectorIcon::name,
+                                 features::IsRoundedIconsEnabled()
+                                     ? views::kVisibilityOffIcon.name
+                                     : views::kEyeCrossedRefreshOldIcon.name)));
   OnStatusChanged();
 }
 
-IN_PROC_BROWSER_TEST_F(CookieControlsBubbleViewControllerPre3pcdBrowserTest,
+IN_PROC_BROWSER_TEST_F(CookieControlsBubbleViewControllerBrowserTest,
                        ThirdPartyCookiesAllowedPermanent) {
   EXPECT_CALL(*mock_bubble_view(),
               UpdateTitle(l10n_util::GetStringUTF16(
@@ -304,42 +287,43 @@ IN_PROC_BROWSER_TEST_F(CookieControlsBubbleViewControllerPre3pcdBrowserTest,
               IDS_TRACKING_PROTECTION_BUBBLE_PERMANENT_ALLOWED_TITLE),
           l10n_util::GetStringUTF16(
               IDS_TRACKING_PROTECTION_BUBBLE_PERMANENT_ALLOWED_DESCRIPTION)));
-  EXPECT_CALL(*mock_content_view(), SetFeedbackSectionVisibility(true));
   EXPECT_CALL(*mock_content_view(), SetToggleIsOn(true));
   EXPECT_CALL(*mock_content_view(),
               SetCookiesLabel(l10n_util::GetStringUTF16(
                   IDS_TRACKING_PROTECTION_BUBBLE_3PC_ALLOWED_SUBTITLE)));
-  EXPECT_CALL(*mock_content_view(),
-              SetToggleIcon(testing::Field(&gfx::VectorIcon::name,
-                                           views::kEyeRefreshIcon.name)));
+  EXPECT_CALL(*mock_content_view(), SetToggleIcon(testing::Field(
+                                        &gfx::VectorIcon::name,
+                                        features::IsRoundedIconsEnabled()
+                                            ? views::kVisibilityIcon.name
+                                            : views::kEyeRefreshOldIcon.name)));
   controls_state_ = CookieControlsState::kAllowed3pc;
   OnStatusChanged();
 }
 
-IN_PROC_BROWSER_TEST_F(CookieControlsBubbleViewControllerPre3pcdBrowserTest,
-                       ThirdPartyCookiesAllowedTemporary) {
+IN_PROC_BROWSER_TEST_F(CookieControlsBubbleViewControllerBrowserTest,
+                       ThirdPartyCookiesAllowed) {
   EXPECT_CALL(*mock_bubble_view(),
               UpdateTitle(l10n_util::GetStringUTF16(
                   IDS_COOKIE_CONTROLS_BUBBLE_COOKIES_ALLOWED_TITLE)));
   EXPECT_CALL(
       *mock_content_view(),
       UpdateContentLabels(
-          l10n_util::GetPluralStringFUTF16(
-              IDS_TRACKING_PROTECTION_BUBBLE_BLOCKING_RESTART_TITLE,
-              kDaysToExpiration),
           l10n_util::GetStringUTF16(
-              IDS_TRACKING_PROTECTION_BUBBLE_BLOCKING_RESTART_DESCRIPTION)));
-  EXPECT_CALL(*mock_content_view(), SetFeedbackSectionVisibility(true));
+              IDS_TRACKING_PROTECTION_BUBBLE_PERMANENT_ALLOWED_TITLE),
+          l10n_util::GetStringUTF16(
+              IDS_TRACKING_PROTECTION_BUBBLE_PERMANENT_ALLOWED_DESCRIPTION)));
   EXPECT_CALL(*mock_content_view(), SetToggleIsOn(true));
   EXPECT_CALL(*mock_content_view(),
               SetCookiesLabel(l10n_util::GetStringUTF16(
                   IDS_TRACKING_PROTECTION_BUBBLE_3PC_ALLOWED_SUBTITLE)));
-  EXPECT_CALL(*mock_content_view(),
-              SetToggleIcon(testing::Field(&gfx::VectorIcon::name,
-                                           views::kEyeRefreshIcon.name)));
+  EXPECT_CALL(*mock_content_view(), SetToggleIcon(testing::Field(
+                                        &gfx::VectorIcon::name,
+                                        features::IsRoundedIconsEnabled()
+                                            ? views::kVisibilityIcon.name
+                                            : views::kEyeRefreshOldIcon.name)));
   controls_state_ = CookieControlsState::kAllowed3pc;
 
-  OnStatusChanged(kDaysToExpiration);
+  OnStatusChanged();
 }
 
 class CookieControlsBubbleViewImplBrowserTest : public InProcessBrowserTest {

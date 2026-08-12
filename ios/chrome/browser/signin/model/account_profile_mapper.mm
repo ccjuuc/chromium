@@ -65,6 +65,8 @@ const net::BackoffEntry::Policy kBackoffPolicy = {
 constexpr char kPersonalProfileNameForTesting[] =
     "bf09f5cf-94cc-4336-9cc2-26a5e1b8c358";
 
+constexpr base::TimeDelta kForceMigrationGracePeriod = base::Days(90);
+
 using ProfileNameToGaiaIds =
     std::map<std::string, std::set<GaiaId, std::less<>>, std::less<>>;
 
@@ -205,7 +207,7 @@ class AccountProfileMapper::Assigner
   bool IsProfileForGaiaIDFullyInitialized(const GaiaId& gaia_id);
   void MakePersonalProfileManagedWithGaiaID(
       const GaiaId& managed_gaia_id,
-      bool migrating_primary_managed_account = false);
+      bool migrating_primary_managed_account);
   void MoveManagedAccountToPersonalProfileForTesting(  // IN-TEST
       const GaiaId& managed_gaia_id);
 
@@ -682,7 +684,7 @@ SystemIdentityManager::IteratorResult
 AccountProfileMapper::Assigner::ProcessIdentityForAssignmentToProfile(
     std::set<GaiaId>& processed_gaia_ids,
     id<SystemIdentity> identity) {
-  CHECK(identity, base::NotFatalUntil::M147);
+  CHECK(identity);
   processed_gaia_ids.insert(identity.gaiaId);
 
   if (!AreSeparateProfilesForManagedAccountsEnabled()) {
@@ -750,8 +752,8 @@ void AccountProfileMapper::Assigner::FetchHostedDomainNow() {
   // `identity` to the front of the array to note it’s the identity currently
   // being fetched and, in case of failure, ensure it’s only fetched once all
   // other identities are fetched. While inserting at index 0 in an array is
-  // inneficient, the array should be small enough that the lost computation
-  // time is negligeable compared to the time taken by the fetch request.
+  // inefficient, the array should be small enough that the lost computation
+  // time is negligible compared to the time taken by the fetch request.
   [system_identities_to_fetch_ removeLastObject];
   [system_identities_to_fetch_ insertObject:identity atIndex:0];
   system_identity_manager_->GetHostedDomain(
@@ -901,21 +903,33 @@ void AccountProfileMapper::Assigner::MaybeMigratePrimaryManagedAccount(
       prefs::kWaitingForMultiProfileForcedMigrationTimestamp);
   if (recorded_at == base::Time()) {
     // Record force migration pref for managed accounts in personal profile if
-    // not recoreded yet.
+    // not recorded yet.
     local_pref_service_->SetTime(
         prefs::kWaitingForMultiProfileForcedMigrationTimestamp,
         base::Time::Now());
-    return;
+    // If the *immediate* migration is not enabled (i.e. there's a non-zero
+    // grace period), there's nothing else to do for now. Otherwise, continue
+    // so that the force-migration may run now.
+    if (!base::FeatureList::IsEnabled(
+            kSeparateProfilesForManagedAccountsImmediateForceMigration)) {
+      return;
+    }
   }
 
   if (!base::FeatureList::IsEnabled(
-          kSeparateProfilesForManagedAccountsForceMigration) ||
-      base::Time::Now() - recorded_at <
-          kMultiProfileMigrationGracePeriod.Get()) {
+          kSeparateProfilesForManagedAccountsForceMigration)) {
     return;
   }
 
-  MakePersonalProfileManagedWithGaiaID(gaia_id, true);
+  // If the grace period should be observed but is not over yet, do nothing.
+  if (!base::FeatureList::IsEnabled(
+          kSeparateProfilesForManagedAccountsImmediateForceMigration) &&
+      base::Time::Now() - recorded_at < kForceMigrationGracePeriod) {
+    return;
+  }
+
+  MakePersonalProfileManagedWithGaiaID(
+      gaia_id, /* migrating_primary_managed_account= */ true);
 }
 
 void AccountProfileMapper::Assigner::MaybeUpdateCachedMappingAndNotify() {
@@ -969,7 +983,7 @@ AccountProfileMapper::AccountProfileMapper(
       [](SystemIdentityManager* system_identity_manager,
          size_t& num_consumer_accounts, size_t& num_managed_accounts,
          size_t& num_unknown_accounts, id<SystemIdentity> identity) {
-        CHECK(identity, base::NotFatalUntil::M147);
+        CHECK(identity);
         NSString* hosted_domain =
             system_identity_manager->GetCachedHostedDomainForIdentity(identity);
         if (hosted_domain) {
@@ -1089,7 +1103,8 @@ bool AccountProfileMapper::IsProfileForGaiaIDFullyInitialized(
 
 void AccountProfileMapper::MakePersonalProfileManagedWithGaiaID(
     const GaiaId& gaia_id) {
-  assigner_->MakePersonalProfileManagedWithGaiaID(gaia_id);
+  assigner_->MakePersonalProfileManagedWithGaiaID(
+      gaia_id, /* migrating_primary_managed_account= */ false);
 }
 
 void AccountProfileMapper::MoveManagedAccountToPersonalProfileForTesting(

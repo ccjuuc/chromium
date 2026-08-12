@@ -119,6 +119,10 @@ std::string FormatUrlForDisplay(const GURL& url) {
 
 }  // namespace
 
+// static
+const char* SettingsOverrides::kManifestDataKey =
+    manifest_keys::kSettingsOverride;
+
 SettingsOverrides::SettingsOverrides() = default;
 
 SettingsOverrides::~SettingsOverrides() = default;
@@ -126,8 +130,7 @@ SettingsOverrides::~SettingsOverrides() = default;
 // static
 const SettingsOverrides* SettingsOverrides::Get(
     const Extension* extension) {
-  return static_cast<SettingsOverrides*>(
-      extension->GetManifestData(manifest_keys::kSettingsOverride));
+  return extension->GetManifestData<SettingsOverrides>();
 }
 
 SettingsOverridesHandler::SettingsOverridesHandler() = default;
@@ -136,7 +139,7 @@ SettingsOverridesHandler::~SettingsOverridesHandler() = default;
 
 bool SettingsOverridesHandler::Parse(Extension* extension,
                                      std::u16string* error) {
-  const base::Value::Dict* dict =
+  const base::DictValue* dict =
       extension->manifest()->FindDictPath(manifest_keys::kSettingsOverride);
   CHECK(dict != nullptr);
   auto settings = ChromeSettingsOverrides::FromValue(*dict);
@@ -196,7 +199,7 @@ bool SettingsOverridesHandler::Parse(Extension* extension,
             PermissionsInfo::GetInstance()->GetByID(APIPermissionID::kHomepage),
             FormatUrlForDisplay(*(info->homepage))));
   }
-  extension->SetManifestData(manifest_keys::kSettingsOverride, std::move(info));
+  extension->SetManifestData(std::move(info));
   return true;
 }
 

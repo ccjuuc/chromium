@@ -16,7 +16,9 @@
 #include "chrome/browser/glic/glic_pref_names.h"
 #include "chrome/browser/glic/host/glic.mojom.h"
 #include "chrome/browser/glic/public/context/glic_sharing_manager.h"
+#include "chrome/browser/glic/public/glic_instance_metrics_backwards_compatibility.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
+#include "chrome/browser/glic/service/metrics/glic_instance_metrics.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/chrome_features.h"
 #include "components/optimization_guide/content/browser/page_content_proto_provider.h"
@@ -39,7 +41,7 @@
 namespace glic {
 
 namespace {
-void RunScrollToCallback(mojom::WebClientHandler::ScrollToCallback callback,
+void RunScrollToCallback(mojom::AnnotationHandler::ScrollToCallback callback,
                          std::optional<mojom::ScrollToErrorReason> error) {
   if (error) {
     base::UmaHistogramEnumeration("Glic.ScrollTo.ErrorReason", *error);
@@ -71,7 +73,7 @@ GetVerifiedAnnotationTargetFrameForPDF(const mojom::ScrollToParams& params,
     return base::unexpected(mojom::ScrollToErrorReason::kNotSupported);
   }
 
-  if (params.selector->is_node_selector()) {
+  if (params.selector->is_node()) {
     return base::unexpected(mojom::ScrollToErrorReason::kNotSupported);
   }
 
@@ -86,7 +88,7 @@ GetVerifiedAnnotationTargetFrameForPDF(const mojom::ScrollToParams& params,
   }
 
   auto* pdf_helper =
-      pdf::PDFDocumentHelper::MaybeGetForWebContents(focused_contents);
+      pdf::PDFDocumentHelper::MaybeGetForWebContents(*focused_contents);
   if (!pdf_helper || !pdf_helper->IsDocumentLoadComplete()) {
     return base::unexpected(mojom::ScrollToErrorReason::kNoMatchingDocument);
   }
@@ -136,16 +138,20 @@ GetVerifiedAnnotationTargetFrame(content::WebContents* focused_contents,
 }
 }  // namespace
 
-GlicAnnotationManager::GlicAnnotationManager(GlicKeyedService* service)
-    : service_(service) {}
+GlicAnnotationManager::GlicAnnotationManager(GlicKeyedService* service,
+                                             Host* host)
+    : service_(service), host_(*host) {}
+
+void GlicAnnotationManager::Bind(
+    mojo::PendingReceiver<mojom::AnnotationHandler> receiver) {
+  receiver_.reset();
+  receiver_.Bind(std::move(receiver));
+}
 
 GlicAnnotationManager::~GlicAnnotationManager() = default;
 
-void GlicAnnotationManager::ScrollTo(
-    mojom::ScrollToParamsPtr params,
-    mojom::WebClientHandler::ScrollToCallback callback,
-    Host* host,
-    GlicWebClientAccess* access) {
+void GlicAnnotationManager::ScrollTo(mojom::ScrollToParamsPtr params,
+                                     ScrollToCallback callback) {
   CHECK(base::FeatureList::IsEnabled(features::kGlicScrollTo));
   if (annotation_task_ && annotation_task_->IsRunning()) {
     annotation_task_->FailTaskOrDropAnnotation(
@@ -153,17 +159,17 @@ void GlicAnnotationManager::ScrollTo(
   }
   annotation_task_.reset();
 
-  service_->metrics()->OnGlicScrollAttempt();
+  host_->instance_metrics().OnGlicScrollAttempt();
 
-  mojom::WebClientHandler::ScrollToCallback wrapped_callback =
+  ScrollToCallback wrapped_callback =
       base::BindOnce(&RunScrollToCallback, std::move(callback));
   mojom::ScrollToSelector* selector = params->selector.get();
   std::optional<shared_highlighting::TextFragment> text_fragment;
-  std::optional<int> search_range_start_node_id = std::nullopt;
-  std::optional<int> node_id = std::nullopt;
+  std::optional<int> search_range_start_node_id;
+  std::optional<int> node_id;
 
-  if (selector->is_exact_text_selector()) {
-    auto* exact_text_selector = selector->get_exact_text_selector().get();
+  if (selector->is_exact_text()) {
+    auto* exact_text_selector = selector->get_exact_text().get();
     const std::string& exact_text = exact_text_selector->text;
     if (exact_text.empty()) {
       std::move(wrapped_callback)
@@ -181,8 +187,8 @@ void GlicAnnotationManager::ScrollTo(
           exact_text_selector->search_range_start_node_id;
     }
     text_fragment = shared_highlighting::TextFragment(exact_text);
-  } else if (selector->is_text_fragment_selector()) {
-    auto* text_fragment_selector = selector->get_text_fragment_selector().get();
+  } else if (selector->is_text_fragment()) {
+    auto* text_fragment_selector = selector->get_text_fragment().get();
     const std::string& text_start = text_fragment_selector->text_start;
     if (text_start.empty()) {
       std::move(wrapped_callback)
@@ -208,13 +214,13 @@ void GlicAnnotationManager::ScrollTo(
     text_fragment = shared_highlighting::TextFragment(text_start, text_end,
                                                       /*prefix=*/std::string(),
                                                       /*suffix=*/std::string());
-  } else if (selector->is_node_selector()) {
+  } else if (selector->is_node()) {
     if (!params->document_id) {
       mojo::ReportBadMessage(
           "When node_id is set, document_id should be set as well.");
       return;
     }
-    node_id = selector->get_node_selector()->node_id;
+    node_id = selector->get_node()->node_id;
   } else {
     mojo::ReportBadMessage(
         "The client should have verified that one of the selector types was "
@@ -235,12 +241,14 @@ void GlicAnnotationManager::ScrollTo(
     }
   }
 
-  if (host->GetPanelState(access).kind == mojom::PanelStateKind::kHidden) {
+  if (host_->instance().GetPanelState().kind ==
+      mojom::PanelStateKind::kHidden) {
     std::move(wrapped_callback).Run(mojom::ScrollToErrorReason::kNoFocusedTab);
     return;
   }
 
-  auto focused_tab_data = host->sharing_manager().GetFocusedTabData();
+  auto focused_tab_data =
+      host_->GetSharingManagerInternal().GetFocusedTabData();
   if (!focused_tab_data.focus()) {
     std::move(wrapped_callback).Run(mojom::ScrollToErrorReason::kNoFocusedTab);
     return;
@@ -248,9 +256,12 @@ void GlicAnnotationManager::ScrollTo(
 
   content::WebContents* focused_contents =
       focused_tab_data.focus()->GetContents();
-  CHECK(focused_contents);
+  if (!focused_contents) {
+    std::move(wrapped_callback).Run(mojom::ScrollToErrorReason::kNoFocusedTab);
+    return;
+  }
   if (base::FeatureList::IsEnabled(features::kGlicDefaultTabContextSetting)) {
-    if (!host->IsContextAccessIndicatorEnabled()) {
+    if (!host_->IsContextAccessIndicatorEnabled()) {
       std::move(wrapped_callback)
           .Run(mojom::ScrollToErrorReason::kTabContextPermissionDisabled);
       return;
@@ -296,7 +307,11 @@ void GlicAnnotationManager::ScrollTo(
       search_range_start_node_id);
   annotation_task_ = std::make_unique<AnnotationTask>(
       this, std::move(agent_remote), std::move(agent_host_receiver),
-      std::move(wrapped_callback), *focused_rfh, host);
+      std::move(wrapped_callback), *focused_rfh, &host_.get());
+}
+
+void GlicAnnotationManager::DropScrollToHighlight() {
+  RemoveAnnotation(mojom::ScrollToErrorReason::kDroppedByWebClient);
 }
 
 void GlicAnnotationManager::RemoveAnnotation(
@@ -311,7 +326,7 @@ GlicAnnotationManager::AnnotationTask::AnnotationTask(
     mojo::Remote<blink::mojom::AnnotationAgent> agent_remote,
     mojo::PendingReceiver<blink::mojom::AnnotationAgentHost>
         agent_host_pending_receiver,
-    mojom::WebClientHandler::ScrollToCallback callback,
+    mojom::AnnotationHandler::ScrollToCallback callback,
     content::RenderFrameHost& render_frame_host,
     Host* host)
     : annotation_manager_(*annotation_manager),
@@ -321,13 +336,12 @@ GlicAnnotationManager::AnnotationTask::AnnotationTask(
       scroll_to_callback_(std::move(callback)),
       document_(render_frame_host.GetWeakDocumentPtr()),
       start_time_(base::TimeTicks::Now()),
-      host_(host->GetWeakPtr()) {
+      host_(*host) {
   GlicKeyedService* service = annotation_manager_->service_;
   CHECK(service);
-  CHECK(host_);
   // Using base::Unretained is safe here because `this` owns the subscription.
   tab_change_subscription_ =
-      host_->sharing_manager().AddFocusedTabChangedCallback(
+      host_->GetSharingManagerInternal().AddFocusedTabChangedCallback(
           base::BindRepeating(&AnnotationTask::OnFocusedTabChanged,
                               base::Unretained(this)));
 
@@ -336,7 +350,7 @@ GlicAnnotationManager::AnnotationTask::AnnotationTask(
       &AnnotationTask::RemoteDisconnected, base::Unretained(this)));
 
   // Listens to the panel-closing notification.
-  host_->AddPanelStateObserver(this);
+  host_->instance().AddStateObserver(this);
 
   if (base::FeatureList::IsEnabled(features::kGlicDefaultTabContextSetting)) {
     host_->AddObserver(this);
@@ -356,13 +370,9 @@ GlicAnnotationManager::AnnotationTask::~AnnotationTask() {
     std::move(scroll_to_callback_)
         .Run(mojom::ScrollToErrorReason::kNotSupported);
   }
-  if (host_) {
-    host_->RemovePanelStateObserver(this);
-  }
+  host_->instance().RemoveStateObserver(this);
   if (base::FeatureList::IsEnabled(features::kGlicDefaultTabContextSetting)) {
-    if (host_) {
-      host_->RemoveObserver(this);
-    }
+    host_->RemoveObserver(this);
   }
 }
 
@@ -414,10 +424,11 @@ void GlicAnnotationManager::AnnotationTask::SetState(State new_state) {
 
   switch (new_state) {
     case State::kActive:
-    case State::kFailed:
-      annotation_manager_->service_->metrics()->OnGlicScrollComplete(
-          new_state == State::kActive);
+    case State::kFailed: {
+      bool success = new_state == State::kActive;
+      host_->instance_metrics().OnGlicScrollComplete(success);
       break;
+    }
     case State::kRunning:
     case State::kInactive:
       break;
@@ -448,13 +459,9 @@ void GlicAnnotationManager::AnnotationTask::ResetConnections() {
   annotation_agent_host_receiver_.reset();
   tab_change_subscription_ = base::CallbackListSubscription();
   content::WebContentsObserver::Observe(nullptr);
-  if (host_) {
-    host_->RemovePanelStateObserver(this);
-  }
+  host_->instance().RemoveStateObserver(this);
   if (base::FeatureList::IsEnabled(features::kGlicDefaultTabContextSetting)) {
-    if (host_) {
-      host_->RemoveObserver(this);
-    }
+    host_->RemoveObserver(this);
   }
   pref_change_registrar_.Reset();
 }
@@ -525,8 +532,7 @@ void GlicAnnotationManager::AnnotationTask::PrimaryPageChanged(
 // the `GlicAnnotationManager` is destroyed, removing all the annotation tasks
 // as well.
 void GlicAnnotationManager::AnnotationTask::PanelStateChanged(
-    const mojom::PanelState& panel_state,
-    const GlicWindowController::PanelStateContext& context) {
+    const mojom::PanelState& panel_state) {
   if (panel_state.kind != mojom::PanelStateKind::kHidden) {
     return;
   }

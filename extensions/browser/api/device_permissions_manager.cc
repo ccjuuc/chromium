@@ -9,17 +9,15 @@
 #include <optional>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "content/public/browser/browser_thread.h"
-#include "extensions/browser/api/hid/hid_device_manager.h"
 #include "extensions/browser/api/usb/usb_device_manager.h"
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/extension_prefs.h"
@@ -92,14 +90,14 @@ void SaveDevicePermissionEntry(BrowserContext* context,
                                scoped_refptr<DevicePermissionEntry> entry) {
   ExtensionPrefs* prefs = ExtensionPrefs::Get(context);
   ExtensionPrefs::ScopedListUpdate update(prefs, extension_id, kDevices);
-  base::Value::List* devices = update.Ensure();
+  base::ListValue* devices = update.Ensure();
 
-  base::Value device_entry(entry->ToValue());
-  DCHECK(!base::Contains(*devices, device_entry));
+  base::DictValue device_entry(entry->ToValue());
+  DCHECK(!devices->contains(device_entry));
   devices->Append(std::move(device_entry));
 }
 
-bool MatchesDevicePermissionEntry(const base::Value::Dict& value,
+bool MatchesDevicePermissionEntry(const base::DictValue& value,
                                   scoped_refptr<DevicePermissionEntry> entry) {
   const std::string* type = value.FindString(kDeviceType);
   if (!type || *type != TypeToString(entry->type())) {
@@ -128,7 +126,7 @@ void UpdateDevicePermissionEntry(BrowserContext* context,
                                  scoped_refptr<DevicePermissionEntry> entry) {
   ExtensionPrefs* prefs = ExtensionPrefs::Get(context);
   ExtensionPrefs::ScopedListUpdate update(prefs, extension_id, kDevices);
-  base::Value::List* devices = update.Ensure();
+  base::ListValue* devices = update.Ensure();
 
   for (auto& value : *devices) {
     if (!value.is_dict())
@@ -148,7 +146,7 @@ void RemoveDevicePermissionEntry(BrowserContext* context,
                                  scoped_refptr<DevicePermissionEntry> entry) {
   ExtensionPrefs* prefs = ExtensionPrefs::Get(context);
   ExtensionPrefs::ScopedListUpdate update(prefs, extension_id, kDevices);
-  base::Value::List* devices = update.Get();
+  base::ListValue* devices = update.Get();
   if (!devices) {
     return;
   }
@@ -171,7 +169,7 @@ void ClearDevicePermissionEntries(ExtensionPrefs* prefs,
 }
 
 scoped_refptr<DevicePermissionEntry> ReadDevicePermissionEntry(
-    const base::Value::Dict& entry) {
+    const base::DictValue& entry) {
   std::optional<int> vendor_id = entry.FindInt(kDeviceVendorId);
   if (!vendor_id || vendor_id.value() < 0 ||
       vendor_id.value() > static_cast<int>(UINT16_MAX)) {
@@ -233,7 +231,7 @@ std::set<scoped_refptr<DevicePermissionEntry>> GetDevicePermissionEntries(
     ExtensionPrefs* prefs,
     const ExtensionId& extension_id) {
   std::set<scoped_refptr<DevicePermissionEntry>> result;
-  const base::Value::List* devices =
+  const base::ListValue* devices =
       prefs->ReadPrefAsList(extension_id, kDevices);
   if (!devices) {
     return result;
@@ -268,15 +266,6 @@ DevicePermissionEntry::DevicePermissionEntry(
 }
 
 DevicePermissionEntry::DevicePermissionEntry(
-    const device::mojom::HidDeviceInfo& device)
-    : device_guid_(device.guid),
-      type_(Type::HID),
-      vendor_id_(device.vendor_id),
-      product_id_(device.product_id),
-      serial_number_(base::UTF8ToUTF16(device.serial_number)),
-      product_string_(base::UTF8ToUTF16(device.product_name)) {}
-
-DevicePermissionEntry::DevicePermissionEntry(
     Type type,
     uint16_t vendor_id,
     uint16_t product_id,
@@ -299,13 +288,13 @@ bool DevicePermissionEntry::IsPersistent() const {
   return !serial_number_.empty();
 }
 
-base::Value::Dict DevicePermissionEntry::ToValue() const {
+base::DictValue DevicePermissionEntry::ToValue() const {
   if (!IsPersistent()) {
-    return base::Value::Dict();
+    return base::DictValue();
   }
 
   DCHECK(!serial_number_.empty());
-  base::Value::Dict entry_dict;
+  base::DictValue entry_dict;
   entry_dict.Set(kDeviceType, TypeToString(type_));
   entry_dict.Set(kDeviceVendorId, vendor_id_);
   entry_dict.Set(kDeviceProductId, product_id_);
@@ -397,21 +386,17 @@ std::u16string DevicePermissionsManager::GetPermissionMessage(
     const std::u16string& product_string,
     const std::u16string& serial_number,
     bool always_include_manufacturer) {
+  device::UsbIdNames names =
+      device::UsbIds::GetVendorAndProductName(vendor_id, product_id);
+
   std::u16string product = product_string;
-  if (product.empty()) {
-    const char* product_name =
-        device::UsbIds::GetProductName(vendor_id, product_id);
-    if (product_name) {
-      product = base::UTF8ToUTF16(product_name);
-    }
+  if (product.empty() && names.product_name) {
+    product = base::UTF8ToUTF16(names.product_name);
   }
 
   std::u16string manufacturer = manufacturer_string;
-  if (manufacturer_string.empty()) {
-    const char* vendor_name = device::UsbIds::GetVendorName(vendor_id);
-    if (vendor_name) {
-      manufacturer = base::UTF8ToUTF16(vendor_name);
-    }
+  if (manufacturer_string.empty() && names.vendor_name) {
+    manufacturer = base::UTF8ToUTF16(names.vendor_name);
   }
 
   if (serial_number.empty()) {
@@ -523,8 +508,8 @@ void DevicePermissionsManager::AllowUsbDevice(
 
     device_permissions->entries_.insert(device_entry);
     SaveDevicePermissionEntry(context_, extension_id, device_entry);
-  } else if (!base::Contains(device_permissions->ephemeral_usb_devices_,
-                             device_info.guid)) {
+  } else if (!device_permissions->ephemeral_usb_devices_.contains(
+                 device_info.guid)) {
     // Non-persistent devices cannot be reliably identified when they are
     // reconnected so such devices are only remembered until disconnect.
     // Register an observer here so that this set doesn't grow undefinitely.
@@ -538,42 +523,6 @@ void DevicePermissionsManager::AllowUsbDevice(
     UsbDeviceManager* device_manager = UsbDeviceManager::Get(context_);
     DCHECK(device_manager);
     device_manager->EnsureConnectionWithDeviceManager();
-  }
-}
-
-void DevicePermissionsManager::AllowHidDevice(
-    const ExtensionId& extension_id,
-    const device::mojom::HidDeviceInfo& device) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  DevicePermissions* device_permissions = GetForExtension(extension_id);
-
-  auto device_entry = base::MakeRefCounted<DevicePermissionEntry>(device);
-
-  if (device_entry->IsPersistent()) {
-    for (const auto& entry : device_permissions->entries()) {
-      if (entry->vendor_id() == device_entry->vendor_id() &&
-          entry->product_id() == device_entry->product_id() &&
-          entry->serial_number() == device_entry->serial_number()) {
-        return;
-      }
-    }
-
-    device_permissions->entries_.insert(device_entry);
-    SaveDevicePermissionEntry(context_, extension_id, device_entry);
-  } else if (!base::Contains(device_permissions->ephemeral_hid_devices_,
-                             device.guid)) {
-    // Non-persistent devices cannot be reliably identified when they are
-    // reconnected so such devices are only remembered until disconnect.
-    // Register an observer here so that this set doesn't grow undefinitely.
-    device_permissions->entries_.insert(device_entry);
-    device_permissions->ephemeral_hid_devices_[device.guid] = device_entry;
-
-    // Make sure the HidDeviceManager is active. HidDeviceManager is
-    // responsible for removing the permission entry for an ephemeral hid
-    // device. Only do this when an ephemeral device has been added.
-    HidDeviceManager* device_manager = HidDeviceManager::Get(context_);
-    DCHECK(device_manager);
-    device_manager->LazyInitialize();
   }
 }
 
@@ -593,7 +542,7 @@ void DevicePermissionsManager::RemoveEntry(
   DCHECK(thread_checker_.CalledOnValidThread());
   DevicePermissions* device_permissions = GetInternal(extension_id);
   DCHECK(device_permissions);
-  DCHECK(base::Contains(device_permissions->entries_, entry));
+  DCHECK(device_permissions->entries_.contains(entry));
   device_permissions->entries_.erase(entry);
   if (entry->IsPersistent()) {
     RemoveDevicePermissionEntry(context_, extension_id, entry);
@@ -667,7 +616,8 @@ DevicePermissionsManager* DevicePermissionsManagerFactory::GetForBrowserContext(
 // static
 DevicePermissionsManagerFactory*
 DevicePermissionsManagerFactory::GetInstance() {
-  return base::Singleton<DevicePermissionsManagerFactory>::get();
+  static base::NoDestructor<DevicePermissionsManagerFactory> instance;
+  return instance.get();
 }
 
 DevicePermissionsManagerFactory::DevicePermissionsManagerFactory()
@@ -676,8 +626,7 @@ DevicePermissionsManagerFactory::DevicePermissionsManagerFactory()
           BrowserContextDependencyManager::GetInstance()) {
 }
 
-DevicePermissionsManagerFactory::~DevicePermissionsManagerFactory() {
-}
+DevicePermissionsManagerFactory::~DevicePermissionsManagerFactory() = default;
 
 std::unique_ptr<KeyedService>
 DevicePermissionsManagerFactory::BuildServiceInstanceForBrowserContext(

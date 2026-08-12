@@ -9,7 +9,6 @@
 #include <string>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
@@ -109,8 +108,8 @@ PerformanceManagerTestHarness::DedicatedWorkerFactory::CreateDedicatedWorker(
     const ProcessNode* process_node,
     const FrameNode* frame_node,
     const url::Origin& origin) {
-  int worker_process_id =
-      process_node->GetRenderProcessHostId().GetUnsafeValue();
+  content::ChildProcessId worker_process_id =
+      process_node->GetRenderProcessHostId();
   content::GlobalRenderFrameHostId render_frame_host_id =
       frame_node->GetRenderFrameHostProxy().global_frame_routing_id();
 
@@ -133,8 +132,8 @@ PerformanceManagerTestHarness::DedicatedWorkerFactory::CreateDedicatedWorker(
     const ProcessNode* process_node,
     const WorkerNode* parent_dedicated_worker_node,
     const url::Origin& origin) {
-  int worker_process_id =
-      process_node->GetRenderProcessHostId().GetUnsafeValue();
+  content::ChildProcessId worker_process_id =
+      process_node->GetRenderProcessHostId();
 
   // Create a new token for the worker and add it to the map, along with its
   // client ID.
@@ -179,8 +178,8 @@ blink::SharedWorkerToken
 PerformanceManagerTestHarness::SharedWorkerFactory::CreateSharedWorker(
     const ProcessNode* process_node,
     const url::Origin& origin) {
-  int worker_process_id =
-      process_node->GetRenderProcessHostId().GetUnsafeValue();
+  content::ChildProcessId worker_process_id =
+      process_node->GetRenderProcessHostId();
 
   // Create a new SharedWorkerToken for the worker and add it to the map.
   const blink::SharedWorkerToken shared_worker_token;
@@ -296,8 +295,8 @@ PerformanceManagerTestHarness::ServiceWorkerFactory::StartServiceWorker(
     const ProcessNode* process_node,
     const GURL& worker_url,
     const GURL& scope_url) {
-  int worker_process_id =
-      process_node->GetRenderProcessHostId().GetUnsafeValue();
+  content::ChildProcessId worker_process_id =
+      process_node->GetRenderProcessHostId();
 
   // Create a new token for the worker.
   blink::ServiceWorkerToken token;
@@ -392,7 +391,7 @@ void PerformanceManagerTestHarness::ServiceWorkerFactory::
   CHECK(it != service_worker_infos_.end());
   ServiceWorkerInfo& info = it->second;
 
-  DCHECK(base::Contains(info.clients, client_uuid));
+  DCHECK(info.clients.contains(client_uuid));
 
   observer_->OnControlleeNavigationCommitted(version_id, client_uuid,
                                              render_frame_host_id);

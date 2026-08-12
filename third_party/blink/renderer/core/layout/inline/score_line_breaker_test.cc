@@ -174,7 +174,7 @@ TEST_P(BlockInInlineTest, BeforeAfter) {
   const int test_index = GetParam();
   const bool has_before = test_index & 1;
   const bool has_after = test_index & 2;
-  SetBodyInnerHTML(String::Format(
+  SetBodyInnerHTML(StrCat({
       R"HTML(
     <!DOCTYPE html>
     <style>
@@ -185,13 +185,15 @@ TEST_P(BlockInInlineTest, BeforeAfter) {
     }
     </style>
     <div id="target">
-      <span>%s<div>
-        Inside 89 1234 6789 1234 6789 1234 6789 12
-      </div>%s</span>
-    </div>
-  )HTML",
+      <span>)HTML",
       has_before ? "Before 89 1234 6789 1234 6789 1234 6789 12" : "",
-      has_after ? "After 789 1234 6789 1234 6789 1234 6789 12" : ""));
+      R"HTML(<div>
+        Inside 89 1234 6789 1234 6789 1234 6789 12
+      </div>)HTML",
+      has_after ? "After 789 1234 6789 1234 6789 1234 6789 12" : "",
+      R"HTML(</span>
+    </div>
+  )HTML"}));
   const InlineNode node = GetInlineNodeByElementId("target");
   const LayoutUnit width = FragmentWidth(node);
   ConstraintSpace space = ConstraintSpaceForAvailableSize(width);
@@ -499,6 +501,46 @@ TEST_F(ScoreLineBreakerTest, UseCountNotCountedForBalance) {
   )HTML");
   EXPECT_TRUE(GetDocument().IsUseCounted(WebFeature::kTextWrapBalance));
   EXPECT_FALSE(GetDocument().IsUseCounted(WebFeature::kTextWrapPretty));
+}
+
+TEST_F(ScoreLineBreakerTest, LineCountMismatchFallback) {
+  LoadAhem();
+  // Construct a case where the optimal layout might prefer a different line
+  // count than the greedy layout.
+  SetBodyInnerHTML(R"HTML(
+    <!DOCTYPE html>
+    <style>
+    #target {
+      font-family: Ahem;
+      font-size: 10px;
+      width: 10ch;
+      text-align: justify;
+      text-wrap: pretty;
+    }
+    </style>
+    <div id="target">
+      123 567&shy;90 123 567 90 123&shy;56 890 12 45 7890
+    </div>
+  )HTML");
+
+  const InlineNode node = GetInlineNodeByElementId("target");
+  const LayoutUnit width = FragmentWidth(node);
+  ConstraintSpace space = ConstraintSpaceForAvailableSize(width);
+  LineWidths line_widths(width);
+  ScoreLineBreakContextOf<kMaxLinesForOptimal> context;
+  const InlineBreakToken* break_token = nullptr;
+  ExclusionSpace exclusion_space;
+  ScoreLineBreaker optimizer(node, space, line_widths, break_token,
+                             &exclusion_space);
+  LeadingFloats empty_leading_floats;
+  optimizer.OptimalBreakPoints(empty_leading_floats, context);
+
+  // If a mismatch was detected, it should have safely fallen back to greedy,
+  // leaving the break points empty. If it succeeded, the sizes must match.
+  if (!context.GetLineBreakPoints().empty()) {
+    EXPECT_EQ(context.GetLineInfoList().Size(),
+              context.GetLineBreakPoints().size());
+  }
 }
 
 }  // namespace blink

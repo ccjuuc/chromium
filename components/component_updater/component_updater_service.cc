@@ -26,11 +26,11 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "build/branding_buildflags.h"
 #include "components/component_updater/component_installer.h"
 #include "components/component_updater/component_updater_service_internal.h"
 #include "components/component_updater/component_updater_utils.h"
 #include "components/component_updater/pref_names.h"
+#include "components/component_updater/required_components_controller.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/update_client/configurator.h"
@@ -118,6 +118,17 @@ CrxUpdateService::CrxUpdateService(scoped_refptr<Configurator> config,
       scheduler_(std::move(scheduler)),
       update_client_(update_client),
       brand_(brand) {
+  update_client->CleanupStaleDownloads(
+      base::Time::Now(),
+      base::BindOnce([] { VLOG(2) << "CleanupStaleDownloads done"; }));
+
+#if BUILDFLAG(CHROME_FOR_TESTING)
+  if (auto components = config_->GetRequiredComponents(); !components.empty()) {
+    required_components_controller_ =
+        std::make_unique<RequiredComponentsController>(std::move(components));
+  }
+#endif
+
   AddObserver(this);
 }
 
@@ -195,6 +206,9 @@ bool CrxUpdateService::RegisterComponent(
     return false;
   }
 
+  // Cancel any pending unregistration for this component.
+  std::erase(components_pending_unregistration_, component.app_id);
+
   // Update the registration data if the component has been registered before.
   auto it = components_.find(component.app_id);
   if (it != components_.end()) {
@@ -213,6 +227,15 @@ bool CrxUpdateService::RegisterComponent(
   const auto [unused, inserted] =
       component_states_.insert(std::make_pair(component.app_id, item));
   CHECK(inserted);
+
+#if BUILDFLAG(CHROME_FOR_TESTING)
+  if (required_components_controller_ &&
+      required_components_controller_->RequestComponentUpdate(component)) {
+    OnDemandUpdateInternal(component.app_id,
+                           OnDemandUpdater::Priority::FOREGROUND,
+                           base::DoNothing());
+  }
+#endif
 
   // Start the timer if this is the first component registered. The first timer
   // event occurs after an interval defined by the component update
@@ -283,6 +306,14 @@ OnDemandUpdater& CrxUpdateService::GetOnDemandUpdater() {
   return *this;
 }
 
+#if BUILDFLAG(CHROME_FOR_TESTING)
+void CrxUpdateService::EnsureRequiredComponentsReady(base::TimeDelta timeout) {
+  if (required_components_controller_) {
+    required_components_controller_->EnsureRequiredComponentsReady(timeout);
+  }
+}
+#endif
+
 update_client::CrxComponent CrxUpdateService::ToCrxComponent(
     const ComponentRegistration& component) const {
   update_client::CrxComponent crx;
@@ -308,11 +339,16 @@ update_client::CrxComponent CrxUpdateService::ToCrxComponent(
   // Some components should update even when enterprise policy disables
   // updates.
   bool override_component_updates_enabled =
-    !component.supports_group_policy_enable_component_updates;
+      !component.supports_group_policy_enable_component_updates;
   bool should_update =
       override_component_updates_enabled || component_updates_enabled;
   crx.updates_enabled = component.allow_updates && should_update;
 
+#if BUILDFLAG(CHROME_FOR_TESTING)
+  if (required_components_controller_) {
+    required_components_controller_->ToCrxComponent(component, crx);
+  }
+#endif
   return crx;
 }
 
@@ -386,21 +422,15 @@ void CrxUpdateService::OnDemandUpdateInternal(const std::string& id,
   UMA_HISTOGRAM_ENUMERATION("ComponentUpdater.Calls", UPDATE_TYPE_MANUAL,
                             UPDATE_TYPE_COUNT);
 
-  auto crx_data_callback = base::BindOnce(&CrxUpdateService::GetCrxComponents,
-                                          weak_ptr_factory_.GetWeakPtr());
-  auto update_complete_callback = base::BindOnce(
-      &CrxUpdateService::OnUpdateComplete, weak_ptr_factory_.GetWeakPtr(),
-      std::move(callback), base::TimeTicks::Now());
-  switch (priority) {
-    case Priority::FOREGROUND:
-      update_client_->Install(id, std::move(crx_data_callback), {},
-                              std::move(update_complete_callback));
-      break;
-    case Priority::BACKGROUND:
-      update_client_->Update({id}, std::move(crx_data_callback), {}, false,
-                             std::move(update_complete_callback));
-      break;
-  }
+  update_client_->Update(
+      {id},
+      base::BindOnce(&CrxUpdateService::GetCrxComponents,
+                     weak_ptr_factory_.GetWeakPtr()),
+      /*crx_state_change_callback=*/{},
+      /*is_foreground=*/priority == Priority::FOREGROUND,
+      base::BindOnce(&CrxUpdateService::OnUpdateComplete,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(callback),
+                     base::TimeTicks::Now()));
 }
 
 bool CrxUpdateService::CheckForUpdates(
@@ -474,12 +504,11 @@ void CrxUpdateService::OnUpdateComplete(Callback callback,
                                         const base::TimeTicks& start_time,
                                         update_client::Error error) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  VLOG(1) << "Update completed with error " << static_cast<int>(error);
+  VLOG(1) << "Update completed with error " << std::to_underlying(error);
 
   UMA_HISTOGRAM_BOOLEAN("ComponentUpdater.UpdateCompleteResult",
                         error != update_client::Error::NONE);
-  UMA_HISTOGRAM_ENUMERATION("ComponentUpdater.UpdateCompleteError", error,
-                            update_client::Error::MAX_VALUE);
+  UMA_HISTOGRAM_ENUMERATION("ComponentUpdater.UpdateCompleteError", error);
   UMA_HISTOGRAM_LONG_TIMES_100("ComponentUpdater.UpdateCompleteTime",
                                base::TimeTicks::Now() - start_time);
 
@@ -526,6 +555,12 @@ void CrxUpdateService::OnEvent(const CrxUpdateItem& update_item) {
       component_it->second.fingerprint = update_item.next_fp;
     }
   }
+
+#if BUILDFLAG(CHROME_FOR_TESTING)
+  if (required_components_controller_) {
+    required_components_controller_->OnEvent(update_item);
+  }
+#endif
 }
 
 ///////////////////////////////////////////////////////////////////////////////

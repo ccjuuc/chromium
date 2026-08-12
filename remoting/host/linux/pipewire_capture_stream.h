@@ -17,6 +17,7 @@
 #include "base/synchronization/lock.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/thread_annotations.h"
+#include "base/timer/timer.h"
 #include "remoting/host/linux/capture_stream.h"
 #include "third_party/webrtc/api/scoped_refptr.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capture_types.h"
@@ -46,11 +47,14 @@ class PipewireCaptureStream : public CaptureStream {
                          std::string_view mapping_id,
                          int pipewire_fd) override;
   void StartVideoCapture() override;
+  void StopVideoCapture() override;
   void SetCallback(
       base::WeakPtr<webrtc::DesktopCapturer::Callback> callback) override;
   void SetUseDamageRegion(bool use_damage_region) override;
   void SetResolution(const webrtc::DesktopSize& new_resolution) override;
   void SetMaxFrameRate(std::uint32_t frame_rate) override;
+  void SetSharedMemoryFactory(std::unique_ptr<webrtc::SharedMemoryFactory>
+                                  shared_memory_factory) override;
   std::unique_ptr<webrtc::MouseCursor> CaptureCursor() override;
   std::optional<webrtc::DesktopVector> CaptureCursorPosition() override;
   CursorObserver::Subscription AddCursorObserver(
@@ -78,27 +82,58 @@ class PipewireCaptureStream : public CaptureStream {
   // may potentially be deleted at that point.
   void RecaptureLatestFrameAsDirty();
   void RemoveCursorObserver(CursorObserver* observer);
+  void OnIdleFrameTimer();
 
   // Called by the callback proxy.
-  void OnFrameCaptureStart();
-  void OnCaptureResult(webrtc::DesktopCapturer::Result result,
+  void OnFrameCaptureStart(int capture_session_token);
+  void OnCaptureResult(int capture_session_token,
+                       webrtc::DesktopCapturer::Result result,
                        std::unique_ptr<webrtc::DesktopFrame> frame);
-  void OnCursorPositionChanged();
-  void OnCursorShapeChanged();
+  void OnCursorPositionChanged(int capture_session_token);
+  void OnCursorShapeChanged(int capture_session_token);
 
   int pipewire_fd_ GUARDED_BY_CONTEXT(sequence_checker_);
   std::uint32_t pipewire_node_ GUARDED_BY_CONTEXT(sequence_checker_);
 
   webrtc::DesktopSize resolution_ GUARDED_BY_CONTEXT(sequence_checker_);
+  bool video_capture_started_ GUARDED_BY_CONTEXT(sequence_checker_) = false;
+
+  // Emits periodic empty frames when no frames are received from PipeWire (e.g.
+  // on a static desktop).
+  //
+  // Why this is done in the capturer instead of the encoder-wrapper:
+  // Synthesizing keep-alive frames downstream in the video encoder wrapper
+  // bypasses WebRTC's input pipeline. When the desktop is static, WebRTC's
+  // pending key-frame requests (PLIs) are never passed to the encoder, causing
+  // the client decoder to fail to recover if a key frame was lost or dropped.
+  // Pushing idle frames through the capturer ensures they flow through WebRTC's
+  // normal pipeline so pending key-frame requests are properly consumed and
+  // encoded as key frames.
+  //
+  // Why we do not use WebRTC's ZeroHertz mode (allow_zero_hertz_video):
+  // WebRTC's ZeroHertzAdapterMode buffers and delays every captured frame by 1
+  // frame interval (1/max_fps, ~16-33 ms), to pace frames evenly at max_fps.
+  // Emitting periodic idle frames directly from the capturer preserves 0 ms
+  // passthrough latency on all active frames.
+  base::RetainingOneShotTimer idle_frame_timer_
+      GUARDED_BY_CONTEXT(sequence_checker_);
+
+  // Tracks the current active video capture session. Incremented on every
+  // StartVideoCapture() call. This serves as a token to invalidate stale,
+  // in-flight frame-capturing tasks that are already posted to the
+  // `callback_sequence_` task runner but should be discarded across stream
+  // restarts (e.g. after resizing or memory factory reconfiguration).
+  int capture_session_token_ GUARDED_BY_CONTEXT(sequence_checker_) = 0;
+
   std::string mapping_id_ GUARDED_BY_CONTEXT(sequence_checker_);
   webrtc::ScreenId screen_id_ GUARDED_BY_CONTEXT(sequence_checker_) = -1;
   base::WeakPtr<webrtc::DesktopCapturer::Callback> callback_
       GUARDED_BY_CONTEXT(sequence_checker_);
+  std::unique_ptr<CallbackProxy> callback_proxy_
+      GUARDED_BY_CONTEXT(sequence_checker_);
   webrtc::scoped_refptr<webrtc::SharedScreenCastStream> stream_
       GUARDED_BY_CONTEXT(sequence_checker_) =
           webrtc::SharedScreenCastStream::CreateDefault();
-  std::unique_ptr<CallbackProxy> callback_proxy_
-      GUARDED_BY_CONTEXT(sequence_checker_);
   base::ObserverList<CaptureStream::CursorObserver> cursor_observers_
       GUARDED_BY_CONTEXT(sequence_checker_);
   bool is_capturing_frame_ GUARDED_BY_CONTEXT(sequence_checker_) = false;

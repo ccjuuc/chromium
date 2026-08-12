@@ -12,20 +12,23 @@
 #include "base/values.h"
 #include "chrome/browser/extensions/api/developer_private/profile_info_generator.h"
 #include "chrome/browser/extensions/error_console/error_console.h"
-#include "chrome/browser/extensions/extension_allowlist.h"
+#include "chrome/browser/extensions/extension_allowlist_factory.h"
 #include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/extensions/sync/extension_sync_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/developer_private.h"
 #include "chrome/common/pref_names.h"
 #include "components/signin/public/base/signin_switches.h"
+#include "components/sync/base/features.h"
 #include "content/public/browser/render_frame_host.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/event_router.h"
+#include "extensions/browser/extension_allowlist.h"
 #include "extensions/browser/extension_error.h"
 #include "extensions/browser/extension_event_histogram_value.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/manifest_v2_handler.h"
 #include "extensions/browser/permissions_manager.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/browser/service_worker/worker_id.h"
@@ -75,7 +78,8 @@ DeveloperPrivateEventRouter::DeveloperPrivateEventRouter(Profile* profile)
   permissions_manager_observation_.Observe(PermissionsManager::Get(profile));
   extension_management_observation_.Observe(
       ExtensionManagementFactory::GetForBrowserContext(profile));
-  extension_allowlist_observer_.Observe(ExtensionAllowlist::Get(profile));
+  extension_allowlist_observer_.Observe(
+      ExtensionAllowlistFactory::GetForBrowserContext(profile));
   command_service_observation_.Observe(CommandService::Get(profile));
   toolbar_actions_model_observation_.Observe(ToolbarActionsModel::Get(profile));
 #if BUILDFLAG(ENABLE_PLATFORM_APPS)
@@ -90,19 +94,18 @@ DeveloperPrivateEventRouter::DeveloperPrivateEventRouter(Profile* profile)
       base::BindRepeating(&DeveloperPrivateEventRouter::OnProfilePrefChanged,
                           base::Unretained(this)));
   pref_change_registrar_.Add(
-      kMV2DeprecationWarningAcknowledgedGloballyPref.name,
+      prefs::kExtensionsPinnedByDefault,
       base::BindRepeating(&DeveloperPrivateEventRouter::OnProfilePrefChanged,
                           base::Unretained(this)));
   pref_change_registrar_.Add(
-      kMV2DeprecationDisabledAcknowledgedGloballyPref.name,
-      base::BindRepeating(&DeveloperPrivateEventRouter::OnProfilePrefChanged,
-                          base::Unretained(this)));
-  pref_change_registrar_.Add(
-      kMV2DeprecationUnsupportedAcknowledgedGloballyPref.name,
+      ManifestV2Handler::kMV2UnsupportedAcknowledgedGloballyPref.name,
       base::BindRepeating(&DeveloperPrivateEventRouter::OnProfilePrefChanged,
                           base::Unretained(this)));
 
-  if (switches::IsExtensionsExplicitBrowserSigninEnabled()) {
+#if BUILDFLAG(IS_CHROMEOS)
+  if (base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos))
+#endif
+  {
     account_extension_tracker_observation_.Observe(
         AccountExtensionTracker::Get(profile));
   }
@@ -152,8 +155,10 @@ void DeveloperPrivateEventRouter::OnExtensionUninstalled(
     extensions::UninstallReason reason) {
   DCHECK(
       profile_->IsSameOrParent(Profile::FromBrowserContext(browser_context)));
-  BroadcastItemStateChanged(developer::EventType::kUninstalled,
-                            extension->id());
+  if (ui_util::ShouldDisplayInExtensionSettings(*extension)) {
+    BroadcastItemStateChanged(developer::EventType::kUninstalled,
+                              extension->id());
+  }
 }
 
 void DeveloperPrivateEventRouter::OnErrorAdded(const ExtensionError* error) {
@@ -204,6 +209,7 @@ void DeveloperPrivateEventRouter::OnStartedTrackingServiceWorkerInstance(
 }
 
 void DeveloperPrivateEventRouter::OnStoppedTrackingServiceWorkerInstance(
+    content::BrowserContext& browser_context,
     const WorkerId& worker_id) {
   BroadcastItemStateChanged(developer::EventType::kServiceWorkerStopped,
                             worker_id.extension_id);
@@ -232,7 +238,7 @@ void DeveloperPrivateEventRouter::OnUserPermissionsSettingsChanged(
     const PermissionsManager::UserPermissionsSettings& settings) {
   developer::UserSiteSettings user_site_settings =
       ConvertToUserSiteSettings(settings);
-  base::Value::List args;
+  base::ListValue args;
   args.Append(user_site_settings.ToValue());
 
   auto event = std::make_unique<Event>(
@@ -250,7 +256,7 @@ void DeveloperPrivateEventRouter::OnExtensionPermissionsUpdated(
 }
 
 void DeveloperPrivateEventRouter::OnExtensionManagementSettingsChanged() {
-  base::Value::List args;
+  base::ListValue args;
   args.Append(CreateProfileInfo(profile_).ToValue());
 
   auto event = std::make_unique<Event>(
@@ -295,7 +301,7 @@ void DeveloperPrivateEventRouter::OnExtensionsUploadabilityChanged() {
 }
 
 void DeveloperPrivateEventRouter::OnProfilePrefChanged() {
-  base::Value::List args;
+  base::ListValue args;
   args.Append(CreateProfileInfo(profile_).ToValue());
   auto event = std::make_unique<Event>(
       events::DEVELOPER_PRIVATE_ON_PROFILE_STATE_CHANGED,
@@ -348,7 +354,7 @@ void DeveloperPrivateEventRouter::BroadcastItemStateChangedHelper(
     event_data.extension_info = std::move(infos[0]);
   }
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append(event_data.ToValue());
   auto event = std::make_unique<Event>(
       events::DEVELOPER_PRIVATE_ON_ITEM_STATE_CHANGED,

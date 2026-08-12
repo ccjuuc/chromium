@@ -6,11 +6,13 @@
 
 #include "components/guest_contents/browser/guest_contents_handle.h"
 #include "components/guest_contents/browser/guest_contents_host_impl.h"
+#include "components/surface_embed/common/features.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
+#include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "ui/webui/examples/browser/ui/web/browser_page_handler.h"
 #include "ui/webui/examples/resources/browser/grit/webui_examples_browser_resources.h"
 
@@ -29,6 +31,11 @@ Browser::Browser(content::WebUI* web_ui)
   content::WebUIDataSource* html_source =
       content::WebUIDataSource::CreateAndAdd(browser_context, kMainUI);
   html_source->UseStringsJs();
+  // Allow the embed element (default CSP blocks object-src with 'none')
+  if (base::FeatureList::IsEnabled(surface_embed::features::kSurfaceEmbed)) {
+    html_source->OverrideContentSecurityPolicy(
+        network::mojom::CSPDirectiveName::ObjectSrc, "object-src 'self';");
+  }
   html_source->AddResourcePath("index.js", IDR_WEBUI_EXAMPLES_BROWSER_INDEX_JS);
   html_source->AddResourcePath("index.css",
                                IDR_WEBUI_EXAMPLES_BROWSER_INDEX_CSS);
@@ -44,7 +51,7 @@ Browser::Browser(content::WebUI* web_ui)
       guest_contents_.get());
   auto* guest_handle = guest_contents::GuestContentsHandle::FromWebContents(
       guest_contents_.get());
-  html_source->AddInteger("guest-contents-id", guest_handle->id());
+  html_source->AddString("guest-contents-id", guest_handle->id().ToString());
 }
 
 Browser::~Browser() {

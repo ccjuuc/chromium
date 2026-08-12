@@ -45,10 +45,15 @@ export enum PermissionsRevocationType {
 }
 // LINT.ThenChange(//chrome/browser/ui/safety_hub/revoked_permissions_result.h:PermissionsRevocationType)
 
+export interface UnusedSitePermission {
+  type: ContentSettingsTypes;
+  settingValue: unknown;
+}
+
 // The unused site permission information passed from safety_hub_handler.cc.
 export interface UnusedSitePermissions {
   origin: string;
-  permissions: ContentSettingsTypes[];
+  permissions: UnusedSitePermission[];
   expiration: string;
   revocationType: PermissionsRevocationType;
 }
@@ -174,7 +179,8 @@ export class SafetyHubBrowserProxyImpl implements SafetyHubBrowserProxy {
   }
 
   getRevokedUnusedSitePermissionsList() {
-    return sendWithPromise('getRevokedUnusedSitePermissionsList');
+    return sendWithPromise<UnusedSitePermissions[]>(
+        'getRevokedUnusedSitePermissionsList');
   }
 
   undoAcknowledgeRevokedUnusedSitePermissionsList(unusedSitePermissionsList:
@@ -191,7 +197,8 @@ export class SafetyHubBrowserProxyImpl implements SafetyHubBrowserProxy {
   }
 
   getNotificationPermissionReview() {
-    return sendWithPromise('getNotificationPermissionReview');
+    return sendWithPromise<NotificationPermission[]>(
+        'getNotificationPermissionReview');
   }
 
   blockNotificationPermissionForOrigins(origins: string[]) {
@@ -219,31 +226,31 @@ export class SafetyHubBrowserProxyImpl implements SafetyHubBrowserProxy {
   }
 
   getPasswordCardData() {
-    return sendWithPromise('getPasswordCardData');
+    return sendWithPromise<CardInfo>('getPasswordCardData');
   }
 
   getSafeBrowsingCardData() {
-    return sendWithPromise('getSafeBrowsingCardData');
+    return sendWithPromise<CardInfo>('getSafeBrowsingCardData');
   }
 
   getVersionCardData() {
-    return sendWithPromise('getVersionCardData');
+    return sendWithPromise<CardInfo>('getVersionCardData');
   }
 
   getNumberOfExtensionsThatNeedReview() {
-    return sendWithPromise('getNumberOfExtensionsThatNeedReview');
+    return sendWithPromise<number>('getNumberOfExtensionsThatNeedReview');
   }
 
   getSafetyHubEntryPointData() {
-    return sendWithPromise('getSafetyHubEntryPointData');
+    return sendWithPromise<EntryPointInfo>('getSafetyHubEntryPointData');
   }
 
   recordSafetyHubPageVisit() {
-    return sendWithPromise('recordSafetyHubPageVisit');
+    return sendWithPromise<void>('recordSafetyHubPageVisit');
   }
 
   recordSafetyHubInteraction() {
-    return sendWithPromise('recordSafetyHubInteraction');
+    return sendWithPromise<void>('recordSafetyHubInteraction');
   }
 
   static getInstance(): SafetyHubBrowserProxy {

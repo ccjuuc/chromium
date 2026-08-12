@@ -15,8 +15,9 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/focus/browser_focus_controller.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/user_education/user_education_types.h"
 #include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/browser/user_education/user_education_service_factory.h"
@@ -107,9 +108,9 @@ class ShowPromoInPageImpl : public ShowPromoInPage {
     // opened in another window. It's an edge case but an important one since a
     // HelpBubbleFactoryRegistry is needed to create the help bubble.
     if (browser_) {
-      auto& factory =
-          UserEducationServiceFactory::GetForBrowserContext(browser_->profile())
-              ->help_bubble_factory_registry();
+      auto& factory = UserEducationServiceFactory::GetForBrowserContext(
+                          browser_->GetProfile())
+                          ->help_bubble_factory_registry();
       help_bubble_ =
           factory.CreateHelpBubble(anchor_element, std::move(bubble_params_));
       DCHECK(help_bubble_);
@@ -121,7 +122,8 @@ class ShowPromoInPageImpl : public ShowPromoInPage {
                 help_bubble_->AsA<user_education::HelpBubbleWebUI>()) {
           if (browser_->tab_strip_model()->GetActiveWebContents() ==
               bubble->GetWebContents()) {
-            browser_->window()->FocusWebContentsPane();
+            BrowserFocusController::From(browser_.get())
+                ->FocusWebContentsPane();
           }
         }
       }
@@ -132,15 +134,12 @@ class ShowPromoInPageImpl : public ShowPromoInPage {
       delete this;
       return;
     }
-    help_bubble_closed_subscription_ = help_bubble_->AddOnCloseCallback(
+    help_bubble_closed_subscription_ = help_bubble_->AddOnClosedCallback(
         base::BindOnce(&ShowPromoInPageImpl::OnBubbleClosed, GetWeakPtr()));
     std::move(callback_).Run(this, true);
   }
 
-  void OnBubbleClosed(user_education::HelpBubble*,
-                      user_education::HelpBubble::CloseReason) {
-    delete this;
-  }
+  void OnBubbleClosed(user_education::HelpBubble::CloseReason) { delete this; }
 
   void OnTimeout() {
     DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);

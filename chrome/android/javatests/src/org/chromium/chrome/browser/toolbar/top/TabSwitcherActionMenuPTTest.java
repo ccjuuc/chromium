@@ -17,9 +17,9 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Features.DisableFeatures;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
@@ -31,9 +31,9 @@ import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.hub.RegularTabSwitcherStation;
 import org.chromium.chrome.test.transit.ntp.IncognitoNewTabPageStation;
 import org.chromium.chrome.test.transit.ntp.RegularNewTabPageStation;
-import org.chromium.chrome.test.transit.page.CtaPageStation;
 import org.chromium.chrome.test.transit.page.TabSwitcherActionMenuFacility;
 import org.chromium.chrome.test.transit.page.WebPageStation;
+import org.chromium.ui.base.DeviceFormFactor;
 
 /**
  * Instrumentation tests for tab switcher long-press menu popup.
@@ -62,6 +62,7 @@ public class TabSwitcherActionMenuPTTest {
 
     @Test
     @LargeTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/538659918
     public void testOpenNewIncognitoTab() {
         mCtaTestRule.startOnBlankPage().openTabSwitcherActionMenu().selectNewIncognitoTabOrWindow();
         if (IncognitoUtils.shouldOpenIncognitoAsWindow()) {
@@ -93,6 +94,7 @@ public class TabSwitcherActionMenuPTTest {
 
     @Test
     @LargeTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // TODO(crbug.com/536995089): Re-enable once passing
     public void testOpenNewIncognitoTabFromIncognito() {
         IncognitoNewTabPageStation incognitoNtp =
                 mCtaTestRule
@@ -119,7 +121,7 @@ public class TabSwitcherActionMenuPTTest {
         assertEquals(0, getTabCountOnUiThread(getCurrentTabModel()));
     }
 
-    /** Regression test for crbug.com/1448791 */
+    /** Regression test for crbug.com/40064814 */
     @Test
     @LargeTest
     @DisableFeatures(ChromeFeatureList.ANDROID_OPEN_INCOGNITO_AS_WINDOW)
@@ -145,24 +147,6 @@ public class TabSwitcherActionMenuPTTest {
         // Only the incognito tab should still remain.
         assertEquals(0, getTabCountOnUiThread(regularTabModel));
         assertEquals(1, getTabCountOnUiThread(incognitoTabModel));
-    }
-
-    @Test
-    @EnableFeatures(ChromeFeatureList.TAB_STRIP_INCOGNITO_MIGRATION)
-    @DisableFeatures(ChromeFeatureList.ANDROID_OPEN_INCOGNITO_AS_WINDOW)
-    @LargeTest
-    public void testSwitchIntoAndOutOfIncognito() {
-        // Open 1 regular and 1 incognito tab.
-        CtaPageStation blankPage = mCtaTestRule.startOnBlankPage();
-        CtaPageStation incognitoNtp = blankPage.openNewIncognitoTabFast();
-
-        // Open action menu and switch out of incognito.
-        TabSwitcherActionMenuFacility actionMenu = incognitoNtp.openTabSwitcherActionMenu();
-        blankPage = actionMenu.selectSwitchOutOfIncognito(WebPageStation.newBuilder());
-
-        // Open action menu and switch to incognito.
-        actionMenu = blankPage.openTabSwitcherActionMenu();
-        incognitoNtp = actionMenu.selectSwitchToIncognito(IncognitoNewTabPageStation.newBuilder());
     }
 
     private TabModelSelector getTabModelSelector() {

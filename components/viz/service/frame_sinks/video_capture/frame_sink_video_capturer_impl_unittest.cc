@@ -43,7 +43,7 @@
 #include "media/base/video_util.h"
 #include "media/capture/mojom/video_capture_buffer.mojom.h"
 #include "media/capture/mojom/video_capture_types.mojom.h"
-#include "media/video/renderable_gpu_memory_buffer_video_frame_pool.h"
+#include "media/video/renderable_mappable_shared_image_video_frame_pool.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -295,7 +295,7 @@ class MockConsumer : public mojom::FrameSinkVideoConsumer {
           info->pixel_format, info->coded_size);
       // Create a mappable shared image.
       auto shared_image = test_sii_->CreateSharedImage(
-          {si_format, si_size, gfx::ColorSpace(),
+          {si_format, si_size, info->color_space,
            gpu::SharedImageUsageSet(si_usage), "FrameSinkVideoCapturerTest"},
           gpu::kNullSurfaceHandle, gfx::BufferUsage::GPU_READ);
       // The frame is only gonna tell Letterbox to skip the test.
@@ -461,11 +461,11 @@ class FakeCapturableFrameSink : public CapturableFrameSink {
 
   void OnClientCaptureStopped() override { --number_clients_capturing_; }
 
-  void RequestCopyOfOutput(
-      PendingCopyOutputRequest pending_copy_output_request) override {
-    auto& request = pending_copy_output_request.copy_output_request;
+  void RequestCopyOfOutput(std::unique_ptr<PendingCopyOutputRequest>
+                               pending_copy_output_request) override {
+    auto& request = pending_copy_output_request->copy_output_request;
     EXPECT_NE(base::UnguessableToken(), request->source());
-    if (pending_copy_output_request.subtree_capture_id.is_valid()) {
+    if (pending_copy_output_request->subtree_capture_id.is_valid()) {
       EXPECT_EQ(capture_bounds_, request->area());
     } else {
       EXPECT_TRUE(gfx::Rect(size_set_.source_size).Contains(request->area()));
@@ -754,7 +754,7 @@ class TestVideoCaptureOverlay : public VideoCaptureOverlay {
 };
 
 class TestGmbVideoFramePoolContext
-    : public media::RenderableGpuMemoryBufferVideoFramePool::Context {
+    : public media::RenderableMappableSharedImageVideoFramePool::Context {
  public:
   TestGmbVideoFramePoolContext()
       : context_provider_(TestContextProvider::CreateGLES()) {}
@@ -793,7 +793,7 @@ class TestGmbVideoFramePoolContextProvider
  public:
   ~TestGmbVideoFramePoolContextProvider() override = default;
 
-  std::unique_ptr<media::RenderableGpuMemoryBufferVideoFramePool::Context>
+  std::unique_ptr<media::RenderableMappableSharedImageVideoFramePool::Context>
   CreateContext(base::OnceClosure on_context_lost) final {
     return std::make_unique<TestGmbVideoFramePoolContext>();
   }
@@ -874,7 +874,7 @@ class FrameSinkVideoCapturerTest
 
   bool IsUsingGpuMemoryBuffer() {
     return buffer_format_preference_ ==
-           mojom::BufferFormatPreference::kPreferGpuMemoryBuffer;
+           mojom::BufferFormatPreference::kPreferMappableSharedImage;
   }
 
   base::TimeTicks GetNextVsync() const {
@@ -928,6 +928,10 @@ class FrameSinkVideoCapturerTest
 
   bool IsRefreshRetryTimerRunning() {
     return capturer_->refresh_frame_retry_timer_->IsRunning();
+  }
+
+  CapturableFrameSink* resolved_target() const {
+    return capturer_->resolved_target_;
   }
 
   void AdvanceClockForRefreshTimer() {
@@ -1025,6 +1029,80 @@ TEST_P(FrameSinkVideoCapturerTest, PostponesCaptureWithoutATarget) {
 
   StopCapture();
   EXPECT_FALSE(IsRefreshRetryTimerRunning());
+}
+
+TEST_P(FrameSinkVideoCapturerTest, RefreshRetriesWhenTargetCannotBeResolved) {
+  CapturableFrameSink* mock_target = nullptr;
+  EXPECT_CALL(frame_sink_manager_, FindCapturableFrameSink(kVideoCaptureTarget))
+      .WillRepeatedly(
+          [&mock_target](const VideoCaptureTarget&) { return mock_target; });
+
+  capturer_->ChangeTarget(kVideoCaptureTarget,
+                          /*sub_capture_target_version=*/0);
+  EXPECT_EQ(nullptr, resolved_target());
+
+  MockConsumer consumer;
+  EXPECT_CALL(consumer, OnFrameCapturedMock()).Times(0);
+  EXPECT_CALL(consumer, OnStopped()).Times(1);
+
+  StartCapture(&consumer);
+
+  // Since target failed to resolve, retry timer should be running.
+  EXPECT_TRUE(IsRefreshRetryTimerRunning());
+  EXPECT_EQ(nullptr, resolved_target());
+
+  // Now make target resolvable.
+  mock_target = &frame_sink_;
+
+  // Advance clock to trigger retry.
+  AdvanceClockForRefreshTimer();
+
+  // Now it should have resolved and captured.
+  EXPECT_EQ(&frame_sink_, resolved_target());
+  EXPECT_EQ(1, frame_sink_.num_copy_results());
+  EXPECT_FALSE(IsRefreshRetryTimerRunning());
+
+  StopCapture();
+}
+
+TEST_P(FrameSinkVideoCapturerTest, RefreshRetriesWhenRegionPropertiesEmpty) {
+  EXPECT_CALL(frame_sink_manager_, FindCapturableFrameSink(kVideoCaptureTarget))
+      .WillRepeatedly(Return(&frame_sink_));
+
+  capturer_->ChangeTarget(kVideoCaptureTarget,
+                          /*sub_capture_target_version=*/0);
+
+  MockConsumer consumer;
+  StartCapture(&consumer);
+
+  // Initial refresh.
+  ASSERT_EQ(1, frame_sink_.num_copy_results());
+  frame_sink_.SendCopyOutputResult(0);
+  ASSERT_EQ(1, consumer.num_frames_received());
+  consumer.SendDoneNotification(0);
+
+  // Set source size to empty, making region properties empty.
+  frame_sink_.set_size_set({gfx::Size(0, 0), size_set_.capture_size});
+
+  // Request refresh.
+  capturer_->RequestRefreshFrame();
+
+  // Expect timer is running because region properties are empty.
+  EXPECT_TRUE(IsRefreshRetryTimerRunning());
+
+  // Restore source size.
+  frame_sink_.set_size_set(size_set_);
+
+  // Advance clock.
+  AdvanceClockForRefreshTimer();
+
+  // Expect capture happened (resurrected, so copy results still 1, but consumer
+  // received 2 frames).
+  EXPECT_EQ(1, frame_sink_.num_copy_results());
+  EXPECT_EQ(2, consumer.num_frames_received());
+  EXPECT_FALSE(IsRefreshRetryTimerRunning());
+
+  StopCapture();
 }
 
 // An end-to-end pipeline test where compositor updates trigger the capturer to
@@ -2255,22 +2333,25 @@ TEST_P(FrameSinkVideoCapturerTest, HandlesNullSubTargetPtrCorrectly) {
 // Tests that buffer_format_preference is correctly passed to the
 // GpuVideoFramePool
 TEST_P(FrameSinkVideoCapturerTest, BufferFormatPreferencePassedToGpuFramePool) {
-  // GpuMemoryBuffer only kicks in for ARGB and NV12 pixel formats.
+  // MappableSharedImageVideoFramePool is only used for the
+  // kPreferMappableSharedImage and kPreferSharedImageWithNativeHandle format
+  // preferences.
+  if (buffer_format_preference_ == mojom::BufferFormatPreference::kDefault) {
+    return;
+  }
+
+  // Additionally, the format itself must be ARGB or NV12 for
+  // MappableSharedImageVideoFramePool to be used.
   if (pixel_format_ != media::PIXEL_FORMAT_ARGB &&
       pixel_format_ != media::PIXEL_FORMAT_NV12) {
     return;
   }
 
-  // GpuMemoryBuffer only kicks in for the kPreferGpuMemoryBuffer and
-  // kPreferSharedImageWithNativeHandle formats.
-  if (buffer_format_preference_ == mojom::BufferFormatPreference::kDefault) {
-    return;
-  }
-
   NiceMock<MockConsumer> consumer;
   StartCapture(&consumer);
-  EXPECT_EQ(capturer_->gpu_frame_pool_buffer_format_for_testing(),
-            buffer_format_preference_);
+  EXPECT_EQ(
+      capturer_->mappable_si_frame_pool_buffer_format_preference_for_testing(),
+      buffer_format_preference_);
   StopCapture();
 }
 
@@ -2282,11 +2363,11 @@ INSTANTIATE_TEST_SUITE_P(
                    media::PIXEL_FORMAT_I420),
         std::tuple(mojom::BufferFormatPreference::kDefault,
                    media::PIXEL_FORMAT_ARGB),
-        std::tuple(mojom::BufferFormatPreference::kPreferGpuMemoryBuffer,
+        std::tuple(mojom::BufferFormatPreference::kPreferMappableSharedImage,
                    media::PIXEL_FORMAT_NV12),
-        std::tuple(mojom::BufferFormatPreference::kPreferGpuMemoryBuffer,
+        std::tuple(mojom::BufferFormatPreference::kPreferMappableSharedImage,
                    media::PIXEL_FORMAT_ARGB),
-        std::tuple(mojom::BufferFormatPreference::kPreferGpuMemoryBuffer,
+        std::tuple(mojom::BufferFormatPreference::kPreferMappableSharedImage,
                    media::PIXEL_FORMAT_RGBAF16)));
 
 }  // namespace viz

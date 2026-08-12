@@ -9,6 +9,7 @@
 #include "cc/paint/paint_flags.h"
 #include "third_party/blink/renderer/core/css/properties/longhands.h"
 #include "third_party/blink/renderer/core/layout/inline/fragment_item.h"
+#include "third_party/blink/renderer/core/layout/inline/used_font.h"
 #include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_inline_text.h"
 #include "third_party/blink/renderer/core/layout/svg/svg_layout_support.h"
@@ -31,6 +32,7 @@
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context_state_saver.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_controller.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -356,6 +358,16 @@ void DrawPaintOrderPasses(const OrderedPaints& ordered_paints,
   }
 }
 
+AffineTransform ComputeTextFitTransform(float scaling_factor,
+                                        const LineRelativeOffset& text_origin) {
+  return {scaling_factor,
+          0,
+          0,
+          scaling_factor,
+          text_origin.line_left - scaling_factor * text_origin.line_left,
+          text_origin.line_over - scaling_factor * text_origin.line_over};
+}
+
 }  // namespace
 
 void TextPainter::Paint(const TextFragmentPaintInfo& fragment_paint_info,
@@ -504,32 +516,46 @@ void TextPainter::SetEmphasisMark(const AtomicString& emphasis_mark,
 
   if (!font_data || emphasis_mark.IsNull()) {
     emphasis_mark_offset_ = 0;
-  } else if (emphasis_line_side == LineLogicalSide::kOver) {
-    emphasis_mark_offset_ = -font_data->GetFontMetrics().Ascent() -
-                            font_.EmphasisMarkDescent(emphasis_mark);
-    if (RuntimeEnabledFeatures::TextEmphasisWithRubyEnabled() && text_item &&
-        text_item->HasOverAnnotation()) {
-      emphasis_mark_offset_ -= text_item->AnnotationMetrics().ascent.Ceil();
+    return;
+  }
+
+  LayoutUnit over = -font_data->GetFontMetrics().FixedAscent();
+  LayoutUnit under = font_data->GetFontMetrics().FixedDescent();
+
+  if (text_item) {
+    if (RuntimeEnabledFeatures::TextEmphasisAsRubyEnabled()) {
+      UsedFont used_font = text_item->GetUsedFont();
+      const auto metrics = text_item->AnnotationMetrics();
+      over = LayoutUnit((-used_font.FixedAscent() - metrics.ascent) /
+                        used_font.ScalingFactor());
+      under = LayoutUnit((used_font.FixedDescent() + metrics.descent) /
+                         used_font.ScalingFactor());
+    } else if (RuntimeEnabledFeatures::TextEmphasisWithRubyEnabled()) {
+      if (text_item->HasOverAnnotation()) {
+        over -= text_item->AnnotationMetrics().ascent;
+      }
+      if (text_item->HasUnderAnnotation()) {
+        under += text_item->AnnotationMetrics().descent;
+      }
     }
+  }
+
+  if (emphasis_line_side == LineLogicalSide::kOver) {
+    over -= font_.EmphasisMarkDescent(emphasis_mark);
+    emphasis_mark_offset_ = over.Floor();
   } else {
     DCHECK(emphasis_line_side == LineLogicalSide::kUnder);
-    emphasis_mark_offset_ = font_data->GetFontMetrics().Descent() +
-                            font_.EmphasisMarkAscent(emphasis_mark);
-    if (RuntimeEnabledFeatures::TextEmphasisWithRubyEnabled() && text_item &&
-        text_item->HasUnderAnnotation()) {
-      emphasis_mark_offset_ += text_item->AnnotationMetrics().descent.Ceil();
-    }
+    under += font_.EmphasisMarkAscent(emphasis_mark);
+    emphasis_mark_offset_ = under.Ceil();
   }
 }
 
-void TextPainter::PaintDecorationLine(const TextDecorationInfo& decoration_info,
+void TextPainter::PaintDecorationLine(const DecorationGeometry& geometry,
+                                      bool has_decoration_override,
                                       const Color& line_color,
                                       const AutoDarkMode& auto_dark_mode) {
-  const DecorationGeometry& geometry = decoration_info.GetGeometry();
-
   DecorationLinePainter decoration_painter(graphics_context_);
-  if (svg_text_paint_state_.has_value() &&
-      !decoration_info.HasDecorationOverride()) {
+  if (svg_text_paint_state_.has_value() && !has_decoration_override) {
     SvgPaints paints;
     const SvgTextPaintState& state = svg_text_paint_state_.value();
     PrepareSvgPaints(state, svg_context_paints_, SvgPaintMode::kTextDecoration,
@@ -548,7 +574,12 @@ void TextPainter::PaintDecorationLine(const TextDecorationInfo& decoration_info,
 void TextPainter::ClipDecorationLine(
     const DecorationGeometry& geometry,
     float text_baseline,
-    const TextFragmentPaintInfo& fragment_paint_info) {
+    const TextFragmentPaintInfo& fragment_paint_info,
+    ETextDecorationSkipInk skip_ink) {
+  if (skip_ink == ETextDecorationSkipInk::kNone) {
+    return;
+  }
+
   if (fragment_paint_info.from >= fragment_paint_info.to ||
       !fragment_paint_info.shape_result) {
     return;
@@ -561,18 +592,25 @@ void TextPainter::ClipDecorationLine(
   const float upper = decoration_bounds.y() - text_baseline;
   const float stripe_width = decoration_bounds.height();
 
+  Font::InkSkipCJKHandling ink_skip_cjk_handling =
+      Font::InkSkipCJKHandling::kExcludeCJK;
+  if (skip_ink == ETextDecorationSkipInk::kAll &&
+      RuntimeEnabledFeatures::CSSTextDecorationSkipInkAllEnabled()) {
+    ink_skip_cjk_handling = Font::InkSkipCJKHandling::kIncludeCJK;
+  }
   Vector<Font::TextIntercept> text_intercepts;
-  font_.GetTextIntercepts(fragment_paint_info, graphics_context_.FillFlags(),
-                          std::make_tuple(upper, upper + stripe_width),
-                          text_intercepts);
+  font_.GetTextIntercepts(
+      fragment_paint_info, ink_skip_cjk_handling, graphics_context_.FillFlags(),
+      std::make_tuple(upper, upper + stripe_width), text_intercepts);
 
+  const float scale = fragment_paint_info.text_fit_scaling_factor;
   const float dilation =
       std::min(geometry.Thickness(), kDecorationClipMaxDilation);
   for (auto intercept : text_intercepts) {
     gfx::PointF clip_origin(text_origin_);
     gfx::RectF clip_rect(
-        clip_origin + gfx::Vector2dF(intercept.begin_, upper),
-        gfx::SizeF(intercept.end_ - intercept.begin_, stripe_width));
+        clip_origin + gfx::Vector2dF(intercept.begin_ * scale, upper),
+        gfx::SizeF((intercept.end_ - intercept.begin_) * scale, stripe_width));
     // We need to ensure the clip rectangle is covering the full underline
     // extent. For horizontal drawing, using enclosingIntRect would be
     // sufficient, since we can clamp to full device pixels that way. However,
@@ -709,14 +747,14 @@ const LayoutObject& TextPainter::SvgTextPaintState::TextDecorationObject()
   const LayoutObject* result = InlineText().Parent();
   while (result) {
     if (style_variant_ == StyleVariant::kFirstLine) {
-      if (const ComputedStyle* style = result->FirstLineStyle()) {
-        if (style->GetTextDecorationLine() != TextDecorationLine::kNone)
-          break;
+      if (result->FirstLineStyleRef().GetTextDecorationLine() !=
+          TextDecorationLine::kNone) {
+        break;
       }
     }
-    if (const ComputedStyle* style = result->Style()) {
-      if (style->GetTextDecorationLine() != TextDecorationLine::kNone)
-        break;
+    if (result->StyleRef().GetTextDecorationLine() !=
+        TextDecorationLine::kNone) {
+      break;
     }
 
     result = result->Parent();
@@ -758,6 +796,22 @@ AffineTransform& TextPainter::SvgTextPaintState::EnsureShaderTransform() {
 const AffineTransform* TextPainter::SvgTextPaintState::GetShaderTransform()
     const {
   return base::OptionalToPtr(shader_transform_);
+}
+
+void TextPainter::ApplyTextFitScale(
+    const TextFragmentPaintInfo& paint_info,
+    std::optional<GraphicsContextStateSaver>* state_saver) {
+  if (!RuntimeEnabledFeatures::CssTextFitEnabled() ||
+      paint_info.text_fit_scaling_factor == 1.0f) {
+    return;
+  }
+
+  if (state_saver) {
+    state_saver->emplace(graphics_context_);
+  }
+
+  graphics_context_.ConcatCTM(ComputeTextFitTransform(
+      paint_info.text_fit_scaling_factor, text_origin_));
 }
 
 }  // namespace blink

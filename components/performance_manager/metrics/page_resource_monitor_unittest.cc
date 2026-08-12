@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/containers/flat_map.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
@@ -260,10 +260,10 @@ TEST_F(PageResourceMonitorUnitTest, TestResourceUsage) {
   MemoryMeasurementDelegate::MemorySummaryMap& memory_summaries =
       GetMemoryDelegate().memory_summaries();
   memory_summaries[mock_graph.process->GetResourceContext()] = {
-      .resident_set_size = base::KiB(1230)};
+      .resident_set_size = base::KiBU(1230)};
   memory_summaries[mock_graph.other_process->GetResourceContext()] = {
-      .resident_set_size = base::KiB(4560),
-      .private_footprint = base::KiB(7890)};
+      .resident_set_size = base::KiBU(4560),
+      .private_footprint = base::KiBU(7890)};
 
   const ukm::SourceId mock_source_id = ukm::AssignNewSourceId();
   mock_graph.page->SetType(performance_manager::PageType::kTab);

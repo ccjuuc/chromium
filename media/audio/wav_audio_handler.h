@@ -48,10 +48,14 @@ class MEDIA_EXPORT WavAudioHandler : public AudioHandler {
   base::TimeDelta GetDuration() const override;
   bool AtEnd() const override;
   bool CopyTo(AudioBus* bus, size_t* frames_written) override;
+  bool CopyPartialFramesTo(AudioBus* bus,
+                           int frame_count,
+                           int bus_start_frame,
+                           size_t* frames_written) override;
   void Reset() override;
 
   // Accessors.
-  base::span<const uint8_t> data() const { return audio_data_; }
+  base::span<const uint8_t> data() const { return original_data_; }
   AudioFormat audio_format() const { return audio_format_; }
 
   int total_frames_for_testing() const {
@@ -70,14 +74,13 @@ class MEDIA_EXPORT WavAudioHandler : public AudioHandler {
                   AudioFormat audio_format);
 
   // Data part of the |wav_data_|.
-  const base::raw_span<const uint8_t> audio_data_;
+  const base::raw_span<const uint8_t> original_data_;
+  base::raw_span<const uint8_t> remaining_data_;
   const uint16_t num_channels_;
   const uint32_t sample_rate_;
   const uint16_t bits_per_sample_;
   const AudioFormat audio_format_;
   uint32_t total_frames_;
-
-  size_t cursor_ = 0;
 };
 
 }  // namespace media

@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/modules/clipboard/clipboard_change_event_controller.h"
 
 #include "third_party/blink/public/mojom/permissions/permission.mojom-blink.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom-blink.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -26,6 +27,9 @@ ClipboardChangeEventController::ClipboardChangeEventController(
 
 void ClipboardChangeEventController::FocusedFrameChanged() {
   if (fire_clipboardchange_on_focus_) {
+    if (!GetExecutionContext()) {
+      return;
+    }
     UseCounter::Count(GetExecutionContext(),
                       WebFeature::kClipboardChangeEventFiredAfterFocusGain);
     fire_clipboardchange_on_focus_ = false;
@@ -61,7 +65,13 @@ void ClipboardChangeEventController::UnregisterWithDispatcher() {
 
 SystemClipboard* ClipboardChangeEventController::GetSystemClipboard() const {
   ExecutionContext* context = GetExecutionContext();
+  if (!context) {
+    return nullptr;
+  }
   LocalFrame* local_frame = To<LocalDOMWindow>(context)->GetFrame();
+  if (!local_frame) {
+    return nullptr;
+  }
   return local_frame->GetSystemClipboard();
 }
 
@@ -74,7 +84,6 @@ void ClipboardChangeEventController::Trace(Visitor* visitor) const {
 
 void ClipboardChangeEventController::OnClipboardChanged() {
   ExecutionContext* context = GetExecutionContext();
-  // TODO(roraja): revisit if this null check is really required
   if (!context) {
     return;
   }
@@ -85,8 +94,8 @@ void ClipboardChangeEventController::OnClipboardChanged() {
 }
 
 void ClipboardChangeEventController::OnPermissionResult(
-    mojom::blink::PermissionStatus status) {
-  if (status == mojom::blink::PermissionStatus::GRANTED) {
+    mojom::blink::PermissionStatusWithDetailsPtr status) {
+  if (status->status == mojom::blink::PermissionStatus::GRANTED) {
     // Note: There's a benign race condition where if the clipboard changes
     // again while waiting for permission, and the window gains sticky
     // activation, two events may fire (one from activation, one from this
@@ -101,6 +110,9 @@ void ClipboardChangeEventController::OnPermissionResult(
 
 void ClipboardChangeEventController::MaybeDispatchClipboardChangeEvent() {
   ExecutionContext* context = GetExecutionContext();
+  if (!context) {
+    return;
+  }
   LocalDOMWindow& window = *To<LocalDOMWindow>(context);
 
   // Check if document has focus
@@ -114,6 +126,9 @@ void ClipboardChangeEventController::MaybeDispatchClipboardChangeEvent() {
 
   // Check for sticky activation first
   LocalFrame* frame = window.GetFrame();
+  if (!frame) {
+    return;
+  }
   if (frame->HasStickyUserActivation()) {
     DispatchClipboardChangeEvent();
     return;
@@ -131,12 +146,11 @@ void ClipboardChangeEventController::MaybeDispatchClipboardChangeEvent() {
   permission_service->HasPermission(
       std::move(permission_descriptor),
       BindOnce(&ClipboardChangeEventController::OnPermissionResult,
-               WrapWeakPersistent(this)));
+               WrapPersistent(this)));
 }
 
 void ClipboardChangeEventController::DispatchClipboardChangeEvent() {
   SystemClipboard* clipboard = GetSystemClipboard();
-  // TODO(roraja): revisit if this null check
   if (!clipboard) {
     return;
   }

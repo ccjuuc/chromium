@@ -11,7 +11,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/containers/queue.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -77,7 +76,7 @@ std::string PpdPathInServingRoot(std::string_view ppd_basename) {
 // "ZPL" in the IEEE 1284 device id make and model.
 bool SupportsGenericZebraPPD(const PrinterSearchData& search_data) {
   return search_data.printer_id.make().starts_with("Zebra") &&
-         base::Contains(search_data.printer_id.model(), "ZPL");
+         search_data.printer_id.model().contains("ZPL");
 }
 
 // This class implements the PpdProvider interface for the v3 metadata
@@ -175,8 +174,9 @@ class PpdProviderImpl : public PpdProvider {
 
     if (!PpdReferenceIsWellFormed(lowercased_reference)) {
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce(std::move(cb),
-                                    CallbackResultCode::INTERNAL_ERROR, ""));
+          FROM_HERE,
+          base::BindOnce(std::move(cb), CallbackResultCode::INTERNAL_ERROR, "",
+                         ""));
       return;
     }
 
@@ -523,18 +523,22 @@ class PpdProviderImpl : public PpdProvider {
                               ResolvePpdCallback cb) {
     DCHECK(!ppd_contents.empty());
 
+    std::string ppd_filename =
+        base::FilePath(ppd_basename.value_or("")).BaseName().AsUTF8Unsafe();
     if (ppd_contents.size() > kMaxPpdSizeBytes) {
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE,
-          base::BindOnce(std::move(cb), CallbackResultCode::PPD_TOO_LARGE, ""));
+          base::BindOnce(std::move(cb), CallbackResultCode::PPD_TOO_LARGE, "",
+                         std::move(ppd_filename)));
       return;
     }
 
     StorePpdWithContents(ppd_contents, std::move(ppd_basename), ppd_origin,
                          std::move(reference));
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(cb), CallbackResultCode::SUCCESS,
-                                  std::move(ppd_contents)));
+        FROM_HERE,
+        base::BindOnce(std::move(cb), CallbackResultCode::SUCCESS,
+                       std::move(ppd_contents), std::move(ppd_filename)));
   }
 
   // Continues a prior call to ResolvePpd().
@@ -547,8 +551,8 @@ class PpdProviderImpl : public PpdProvider {
       const PrinterConfigCache::FetchResult& result) {
     if (!result.succeeded || result.contents.empty()) {
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE,
-          base::BindOnce(std::move(cb), CallbackResultCode::SERVER_ERROR, ""));
+          FROM_HERE, base::BindOnce(std::move(cb),
+                                    CallbackResultCode::SERVER_ERROR, "", ""));
       return;
     }
 
@@ -568,7 +572,7 @@ class PpdProviderImpl : public PpdProvider {
     if (!result.success || result.contents.empty()) {
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE,
-          base::BindOnce(std::move(cb), CallbackResultCode::NOT_FOUND, ""));
+          base::BindOnce(std::move(cb), CallbackResultCode::NOT_FOUND, "", ""));
       return;
     }
 
@@ -663,7 +667,8 @@ class PpdProviderImpl : public PpdProvider {
       const PpdCache::FindResult& result) {
     if (!result.success) {
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce(std::move(cb), result_if_unsuccessful, ""));
+          FROM_HERE,
+          base::BindOnce(std::move(cb), result_if_unsuccessful, "", ""));
       return;
     }
 

@@ -19,6 +19,11 @@
 
 class DownloadFileService;
 
+namespace enterprise_connectors {
+class FilesRequestHandlerBase;
+class ContentAnalysisInfo;
+}
+
 namespace web {
 class DownloadTask;
 class WebState;
@@ -34,15 +39,6 @@ class DownloadManagerTabHelper
   DownloadManagerTabHelper& operator=(const DownloadManagerTabHelper&) = delete;
 
   ~DownloadManagerTabHelper() override;
-
-  // Returns whether downloads should be restricted. It checks if downloads
-  // should be restricted based on the download restriction policy for files,
-  // save to drive policy, and incognito.
-  static bool ShouldRestrictDownload(web::WebState* web_state);
-
-  // Returns whether downloads to file should be restricted. It checks if
-  // downloads should be restricted based on the download restriction policy.
-  static bool ShouldRestrictDownloadToFile(web::WebState* web_state);
 
   // Set the current download task for this tab.
   virtual void SetCurrentDownload(std::unique_ptr<web::DownloadTask> task);
@@ -63,14 +59,24 @@ class DownloadManagerTabHelper
   // Sets the snackbar handler.
   void SetSnackbarHandler(id<SnackbarCommands> snackbar_handler);
 
+  // Displays a snackbar when download is restricted.
+  virtual void ShowRestrictDownloadSnackbar();
+
   // Starts the current download task. Asserts that `task == task_`.
   virtual void StartDownload(web::DownloadTask* task);
 
-  // Cleans up current download resources and notifies delegate.
+  // Cleans up current download resources if any and notifies delegate.
   void CleanupCurrentDownload();
 
   // Sets whether the Download toolbar should adapt to the fullscreen state.
   virtual void AdaptToFullscreen(bool adapt_to_fullscreen);
+
+  // Returns whether `files_request_handler_` is currently processing the
+  // download.
+  bool IsScannerProcessing() const;
+
+  // Set the scanner processing state for testing purposes.
+  void SetIsScannerProcessingForTesting(bool processing);  // IN-TEST
 
   // Returns whether `task_` still needs to be saved to Drive.
   bool WillDownloadTaskBeSavedToDrive() const;
@@ -80,6 +86,7 @@ class DownloadManagerTabHelper
   explicit DownloadManagerTabHelper(web::WebState* web_state);
 
  private:
+  friend class DownloadManagerTabHelperTest;
   friend class web::WebStateUserData<DownloadManagerTabHelper>;
 
   // web::WebStateObserver overrides:
@@ -100,9 +107,6 @@ class DownloadManagerTabHelper
   void OnDownloadPolicyDecision(std::unique_ptr<web::DownloadTask> task,
                                 NewDownloadPolicy policy);
 
-  // Displays a snackbar when download is restricted.
-  void ShowRestrictDownloadSnackbar();
-
   // Use `user_documents_path` as the download file destination.
   void UseAvailableUserDocumentsPath(base::FilePath user_documents_path);
 
@@ -116,15 +120,23 @@ class DownloadManagerTabHelper
                     const base::FilePath& source_path,
                     const base::FilePath& final_path);
 
-  // Schedules the downloaded file for Auto-deletion if enabled.
-  void MaybeScheduleFileForAutoDeletion();
+  // Begins the Auto-deletion enrollment process for the given task if enabled.
+  void MaybeEnrollFileForAutoDeletion(web::DownloadTask* task);
 
-  // Defers task destruction to avoid iterator invalidation during notification.
-  void ScheduleTaskDestruction();
+  // Sets the download path for Auto-deletion if enabled.
+  void MaybeSetDownloadPathForAutoDeletion();
 
-  // Destroys the task. Must not be called directly.
-  // See ScheduleTaskDestruction().
-  void DestroyTask();
+  // Move the download to user selected location if `shouldProceed` is set as
+  // true, otherwise clean up the current download task. The result is ignored
+  // if `task` no longer matches the current download.
+  void MaybeMoveDownloadToDownloadsDirectory(
+      base::WeakPtr<web::DownloadTask> task,
+      bool shouldProceed);
+
+  // Process the complete download task. Move the download item to the user
+  // selected location if it's not to be saved to google drive, otherwise stop
+  // the process.
+  void ProcessCompleteDownloadTask();
 
   // Returns the DownloadFileService instance.
   DownloadFileService* GetDownloadFileService();
@@ -133,8 +145,13 @@ class DownloadManagerTabHelper
   __weak id<DownloadManagerTabHelperDelegate> delegate_ = nil;
   __weak id<SnackbarCommands> snackbar_handler_ = nil;
   std::unique_ptr<web::DownloadTask> task_;
+  std::unique_ptr<enterprise_connectors::ContentAnalysisInfo>
+      content_analysis_info_;
+  std::unique_ptr<enterprise_connectors::FilesRequestHandlerBase>
+      files_request_handler_;
   base::FilePath task_final_file_path_;
   bool delegate_started_ = false;
+  bool is_processing_for_testing_ = false;
 
   base::WeakPtrFactory<DownloadManagerTabHelper> weak_ptr_factory_{this};
 };

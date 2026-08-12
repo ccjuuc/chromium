@@ -9,14 +9,11 @@
 #include <UserConsentVerifierInterop.h>
 #include <windows.foundation.h>
 #include <windows.security.credentials.ui.h>
-#include <windows.storage.streams.h>
 #include <wrl/client.h>
-#include <wrl/event.h>
 
 #include <string>
 #include <utility>
 
-#include "authenticator_win.h"
 #include "base/barrier_callback.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
@@ -34,10 +31,13 @@
 #include "base/win/scoped_winrt_initializer.h"
 #include "base/win/windows_types.h"
 #include "base/win/windows_version.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/password_manager/password_manager_util_win.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "components/prefs/pref_service.h"
 #include "ui/aura/window.h"
 #include "ui/views/win/hwnd_util.h"
 
@@ -151,7 +151,7 @@ void GetBiometricAvailabilityFromWindows(
     AvailabilityCallback callback,
     scoped_refptr<base::SequencedTaskRunner> thread) {
   // Mitigate the issues caused by loading DLLs on a background thread
-  // (http://crbug/973868).
+  // (http://crbug.com/41464781).
   SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY();
 
   ComPtr<IUserConsentVerifierStatics> factory;
@@ -177,19 +177,20 @@ void GetBiometricAvailabilityFromWindows(
 
 void AuthenticateWithLegacyApi(const std::u16string& message,
                                base::OnceCallback<void(bool)> result_callback) {
-  Browser* browser = chrome::FindLastActive();
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
   if (!browser) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(std::move(result_callback), /*success=*/false));
     return;
   }
-  gfx::NativeWindow window = browser->window()->GetNativeWindow();
+  gfx::NativeWindow window = browser->GetWindow()->GetNativeWindow();
 
   base::SequencedTaskRunner::GetCurrentDefault()->PostTaskAndReplyWithResult(
       FROM_HERE,
       base::BindOnce(&password_manager_util_win::AuthenticateUser, window,
-                     message),
+                     message, g_browser_process->local_state()),
       std::move(result_callback));
 }
 
@@ -299,7 +300,8 @@ void PerformInteropWindowsHelloAuthenticationAsync(
   }
   ComPtr<IAsyncOperation<UserConsentVerificationResult>> async_op;
 
-  Browser* browser = chrome::FindLastActive();
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
   if (!browser) {
     RecordWindowsHelloAuthenticationResult(
         AuthenticationResultStatusWin::kFailedToFindBrowser);
@@ -307,7 +309,8 @@ void PerformInteropWindowsHelloAuthenticationAsync(
     return;
   }
 
-  HWND hwnd = views::HWNDForNativeWindow(browser->window()->GetNativeWindow());
+  HWND hwnd =
+      views::HWNDForNativeWindow(browser->GetWindow()->GetNativeWindow());
   if (!hwnd) {
     RecordWindowsHelloAuthenticationResult(
         AuthenticationResultStatusWin::kFailedToFindHWNDForNativeWindow);
@@ -391,5 +394,6 @@ void AuthenticatorWin::CheckIfBiometricsAvailable(
 }
 
 bool AuthenticatorWin::CanAuthenticateWithScreenLock() {
-  return password_manager_util_win::CanAuthenticateWithScreenLock();
+  return password_manager_util_win::CanAuthenticateWithScreenLock(
+      g_browser_process->local_state());
 }

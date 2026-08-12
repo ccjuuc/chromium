@@ -8,6 +8,7 @@
 
 #include "base/containers/span_reader.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
 #include "build/build_config.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/loader/code_cache_util.h"
@@ -26,6 +27,7 @@
 #include "third_party/blink/renderer/platform/loader/fetch/cached_metadata.h"
 #include "third_party/blink/renderer/platform/loader/fetch/code_cache_host.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_encoding.h"
+#include "v8/include/v8-script.h"
 
 namespace blink {
 
@@ -355,7 +357,10 @@ V8CodeCache::GetCompileOptionsInternal(
     const KURL& url,
     bool might_generate_crowdsourced_compile_hints,
     bool can_use_crowdsourced_compile_hints) {
-  static const int kMinimalCodeLength = 1024;
+  static const int kMinimalCodeLengthForNonInlineScript = 1024;
+  // The possible cache miss reason. This value may be set even if the
+  // compilation results in a cache hit, but shall not be recorded in case of
+  // cache hit.
   v8::ScriptCompiler::NoCacheReason no_cache_reason;
 
   auto no_code_cache_compile_options = v8::ScriptCompiler::kNoCompileOptions;
@@ -407,6 +412,15 @@ V8CodeCache::GetCompileOptionsInternal(
                            no_cache_reason);
   }
 
+#if BUILDFLAG(IS_FUCHSIA) && defined(__OPTIMIZE_SIZE__)
+  // On Fuchsia size-optimized builds, default is to not cache.
+  // Note that Fuchsia doesn't use kWebUIBundledCache, so we don't need to
+  // worry about bypassing it here when overriding to kNone.
+  if (cache_options == mojom::blink::V8CacheOptions::kDefault) {
+    cache_options = mojom::blink::V8CacheOptions::kNone;
+  }
+#endif
+
   if (cache_options == mojom::blink::V8CacheOptions::kNone) {
     no_cache_reason = v8::ScriptCompiler::kNoCacheBecauseCachingDisabled;
     return std::make_tuple(no_code_cache_compile_options,
@@ -426,7 +440,19 @@ V8CodeCache::GetCompileOptionsInternal(
                            v8::ScriptCompiler::kNoCacheBecauseStaticCodeCache);
   }
 
-  if (source_text_length < kMinimalCodeLength) {
+  if (source_location_type == ScriptSourceLocationType::kInline &&
+      source_text_length < features::kInlineScriptCacheMinScriptLength.Get()) {
+    // This line is unreachable if Inline script cache is disabled because
+    // `cache_handler` is nullptr in that case.
+    CHECK(features::IsInlineScriptCacheEnabled());
+    no_cache_reason = v8::ScriptCompiler::kNoCacheBecauseScriptTooSmall;
+    return std::make_tuple(no_code_cache_compile_options,
+                           ProduceCacheOptions::kNoProduceCache,
+                           no_cache_reason);
+  }
+
+  if (source_location_type != ScriptSourceLocationType::kInline &&
+      source_text_length < kMinimalCodeLengthForNonInlineScript) {
     no_cache_reason = v8::ScriptCompiler::kNoCacheBecauseScriptTooSmall;
     return std::make_tuple(no_code_cache_compile_options,
                            ProduceCacheOptions::kNoProduceCache,
@@ -461,6 +487,11 @@ V8CodeCache::GetCompileOptionsInternal(
     case mojom::blink::V8CacheOptions::kDefault:
     case mojom::blink::V8CacheOptions::kCode: {
       if (!HasHotTimestamp(cache_handler)) {
+        no_cache_reason =
+            source_location_type == ScriptSourceLocationType::kInline &&
+                    features::IsInlineScriptCacheEnabled()
+                ? v8::ScriptCompiler::kNoCacheBecauseInlineScriptCacheTooCold
+                : v8::ScriptCompiler::kNoCacheBecauseCacheTooCold;
         if (local_compile_hints_enabled) {
           // If the resource is not yet hot for caching, set the timestamp and
           // produce compile hints. Setting the time stamp first is important,
@@ -475,14 +506,13 @@ V8CodeCache::GetCompileOptionsInternal(
           // (currently not possible in the API) and combine both compile hints.
           // 2) Ignore existing compile hints (we're anyway not creating the
           // code cache yet) and produce new ones.
-          return std::make_tuple(
-              v8::ScriptCompiler::kProduceCompileHints,
-              ProduceCacheOptions::kSetTimeStamp,
-              v8::ScriptCompiler::kNoCacheBecauseCacheTooCold);
+          return std::make_tuple(v8::ScriptCompiler::kProduceCompileHints,
+                                 ProduceCacheOptions::kSetTimeStamp,
+                                 no_cache_reason);
         }
         return std::make_tuple(no_code_cache_compile_options,
                                ProduceCacheOptions::kSetTimeStamp,
-                               v8::ScriptCompiler::kNoCacheBecauseCacheTooCold);
+                               no_cache_reason);
       }
       if (local_compile_hints_enabled && HasCompileHints(cache_handler)) {
         // In this branch, the timestamp in the compile hints is hot.
@@ -544,8 +574,9 @@ static void ProduceCacheInternal(
         break;
 
       constexpr const char* kTraceEventCategoryGroup = "v8,devtools.timeline";
-      TRACE_EVENT_BEGIN1(kTraceEventCategoryGroup, trace_name, "fileName",
-                         source_url.GetString().Utf8());
+      TRACE_EVENT_BEGIN(kTraceEventCategoryGroup,
+                        perfetto::StaticString(trace_name), "fileName",
+                        source_url.GetString().Utf8());
 
       base::ElapsedTimer timer;
       std::unique_ptr<v8::ScriptCompiler::CachedData> cached_data(
@@ -562,13 +593,13 @@ static void ProduceCacheInternal(
                                             timer.Elapsed());
       }
 
-      TRACE_EVENT_END1(kTraceEventCategoryGroup, trace_name, "data",
-                       [&](perfetto::TracedValue context) {
-                         inspector_produce_script_cache_event::Data(
-                             std::move(context), source_url.GetString(),
-                             source_start_position,
-                             cached_data ? cached_data->length : 0);
-                       });
+      TRACE_EVENT_END(kTraceEventCategoryGroup, "data",
+                      [&](perfetto::TracedValue context) {
+                        inspector_produce_script_cache_event::Data(
+                            std::move(context), source_url.GetString(),
+                            unbound_script->ScriptId(), source_start_position,
+                            cached_data ? cached_data->length : 0);
+                      });
       break;
     }
     case V8CodeCache::ProduceCacheOptions::kNoProduceCache:
@@ -653,8 +684,8 @@ scoped_refptr<CachedMetadata> V8CodeCache::GenerateFullCodeCache(
   const String file_name = source_url.GetString();
 
   constexpr const char* kTraceEventCategoryGroup = "v8,devtools.timeline";
-  TRACE_EVENT_BEGIN1(kTraceEventCategoryGroup, "v8.compile", "fileName",
-                     file_name.Utf8());
+  TRACE_EVENT_BEGIN(kTraceEventCategoryGroup, "v8.compile", "fileName",
+                    file_name.Utf8());
 
   ScriptState::Scope scope(script_state);
   v8::Isolate* isolate = script_state->GetIsolate();
@@ -681,12 +712,11 @@ scoped_refptr<CachedMetadata> V8CodeCache::GenerateFullCodeCache(
       v8::ScriptCompiler::CompileUnboundScript(
           isolate, &source, v8::ScriptCompiler::kEagerCompile);
 
-  TRACE_EVENT_END1(
-      kTraceEventCategoryGroup, "v8.compile", "data",
-      [&](perfetto::TracedValue context) {
+  TRACE_EVENT_END(
+      kTraceEventCategoryGroup, "data", [&](perfetto::TracedValue context) {
         inspector_compile_script_event::Data(
-            std::move(context), file_name, TextPosition::MinimumPosition(),
-            std::nullopt, true, false,
+            std::move(context), file_name, maybe_unbound_script,
+            TextPosition::MinimumPosition(), std::nullopt, true, false,
             ScriptStreamer::NotStreamingReason::kStreamingDisabled);
       });
 
@@ -694,8 +724,8 @@ scoped_refptr<CachedMetadata> V8CodeCache::GenerateFullCodeCache(
   // When failed to compile the script with syntax error, the exceptions is
   // suppressed by the v8::TryCatch, and returns null.
   if (maybe_unbound_script.ToLocal(&unbound_script)) {
-    TRACE_EVENT_BEGIN1(kTraceEventCategoryGroup, "v8.produceCache", "fileName",
-                       file_name.Utf8());
+    TRACE_EVENT_BEGIN(kTraceEventCategoryGroup, "v8.produceCache", "fileName",
+                      file_name.Utf8());
 
     std::unique_ptr<v8::ScriptCompiler::CachedData> cached_data(
         v8::ScriptCompiler::CreateCodeCache(unbound_script));
@@ -705,13 +735,13 @@ scoped_refptr<CachedMetadata> V8CodeCache::GenerateFullCodeCache(
           static_cast<uint64_t>(DetailFlags::kFull));
     }
 
-    TRACE_EVENT_END1(kTraceEventCategoryGroup, "v8.produceCache", "data",
-                     [&](perfetto::TracedValue context) {
-                       inspector_produce_script_cache_event::Data(
-                           std::move(context), file_name,
-                           TextPosition::MinimumPosition(),
-                           cached_data ? cached_data->length : 0);
-                     });
+    TRACE_EVENT_END(
+        kTraceEventCategoryGroup, "data", [&](perfetto::TracedValue context) {
+          inspector_produce_script_cache_event::Data(
+              std::move(context), file_name, unbound_script->ScriptId(),
+              TextPosition::MinimumPosition(),
+              cached_data ? cached_data->length : 0);
+        });
   }
 
   return cached_metadata;

@@ -29,6 +29,7 @@ import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.MathUtils;
@@ -39,6 +40,7 @@ import org.chromium.content_public.browser.bluetooth_scanning.Event;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.util.ColorUtils;
+import org.chromium.ui.util.CommonOnLayoutChangeListeners;
 import org.chromium.ui.widget.TextViewWithClickableSpans;
 
 /**
@@ -176,10 +178,10 @@ public class BluetoothScanningPermissionDialog {
         mListView.setEmptyView(emptyMessage);
         mListView.setDivider(null);
 
-        ProgressBar progressBar = (ProgressBar) dialogContainer.findViewById(R.id.progress);
+        ProgressBar progressBar = dialogContainer.findViewById(R.id.progress);
         progressBar.setVisibility(View.GONE);
 
-        Button blockButton = (Button) dialogContainer.findViewById(R.id.block);
+        Button blockButton = dialogContainer.findViewById(R.id.block);
         blockButton.setText(blockButtonText);
         blockButton.setEnabled(true);
         blockButton.setOnClickListener(
@@ -189,7 +191,7 @@ public class BluetoothScanningPermissionDialog {
                     mDialog.dismiss();
                 });
 
-        Button allowButton = (Button) dialogContainer.findViewById(R.id.allow);
+        Button allowButton = dialogContainer.findViewById(R.id.allow);
         allowButton.setText(allowButtonText);
         allowButton.setEnabled(true);
         allowButton.setOnClickListener(
@@ -204,27 +206,29 @@ public class BluetoothScanningPermissionDialog {
         showDialogForView(dialogContainer);
 
         dialogContainer.addOnLayoutChangeListener(
-                (View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) -> {
-                    if (l != ol || t != ot || r != or || b != ob) {
-                        // The list is the main element in the dialog and it should grow and
-                        // shrink according to the size of the screen available.
-                        View listViewContainer = dialogContainer.findViewById(R.id.container);
-                        listViewContainer.setLayoutParams(
-                                new LinearLayout.LayoutParams(
-                                        LayoutParams.MATCH_PARENT,
-                                        getListHeight(
-                                                mActivity.getWindow().getDecorView().getHeight(),
-                                                mContext.getResources()
-                                                        .getDisplayMetrics()
-                                                        .density)));
-                    }
-                });
+                CommonOnLayoutChangeListeners.createBoundsChangedListener(
+                        () -> {
+                            // The list is the main element in the dialog and it should grow and
+                            // shrink according to the size of the screen available.
+                            View listViewContainer = dialogContainer.findViewById(R.id.container);
+                            listViewContainer.setLayoutParams(
+                                    new LinearLayout.LayoutParams(
+                                            LayoutParams.MATCH_PARENT,
+                                            getListHeight(
+                                                    mActivity
+                                                            .getWindow()
+                                                            .getDecorView()
+                                                            .getHeight(),
+                                                    mContext.getResources()
+                                                            .getDisplayMetrics()
+                                                            .density)));
+                        }));
     }
 
     @CalledByNative
     private static BluetoothScanningPermissionDialog create(
             WindowAndroid windowAndroid,
-            String origin,
+            @JniType("std::u16string") String origin,
             int securityLevel,
             BluetoothScanningPromptAndroidDelegate delegate,
             long nativeBluetoothScanningPermissionDialogPtr) {
@@ -240,7 +244,8 @@ public class BluetoothScanningPermissionDialog {
 
     @VisibleForTesting
     @CalledByNative
-    public void addOrUpdateDevice(String deviceId, String deviceName) {
+    public void addOrUpdateDevice(
+            @JniType("std::string") String deviceId, @JniType("std::u16string") String deviceName) {
         if (TextUtils.isEmpty(deviceName)) {
             deviceName = mContext.getString(R.string.bluetooth_scanning_device_unknown, deviceId);
         }
@@ -317,6 +322,8 @@ public class BluetoothScanningPermissionDialog {
     @VisibleForTesting(otherwise = VisibleForTesting.PACKAGE_PRIVATE)
     @NativeMethods
     public interface Natives {
-        void onDialogFinished(long nativeBluetoothScanningPromptAndroid, int eventType);
+        void onDialogFinished(
+                long nativeBluetoothScanningPromptAndroid,
+                @JniType("content::BluetoothScanningPrompt::Event") int eventType);
     }
 }

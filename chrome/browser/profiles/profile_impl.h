@@ -10,9 +10,11 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
@@ -27,6 +29,10 @@
 #include "components/prefs/pref_change_registrar.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "extensions/buildflags/buildflags.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "chrome/browser/profiles/profile_load_tracker_win.h"
+#endif  // BUILDFLAG(IS_WIN)
 
 class PrefService;
 
@@ -64,6 +70,15 @@ class ProfileImpl : public Profile {
 
   static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
+#if !BUILDFLAG(IS_CHROMEOS)
+  using CloudPolicyManagerTestFactory = base::RepeatingCallback<std::variant<
+      std::unique_ptr<policy::UserCloudPolicyManager>,
+      std::unique_ptr<policy::ProfileCloudPolicyManager>>(Profile*)>;
+
+  static void SetCloudPolicyManagerFactoryForTesting(
+      CloudPolicyManagerTestFactory factory);
+#endif
+
   // content::BrowserContext implementation:
   std::unique_ptr<content::ZoomLevelDelegate> CreateZoomLevelDelegate(
       const base::FilePath& partition_path) override;
@@ -96,7 +111,6 @@ class ProfileImpl : public Profile {
   GetFederatedIdentityAutoReauthnPermissionContext() override;
   content::FederatedIdentityPermissionContextDelegate*
   GetFederatedIdentityPermissionContext() override;
-  content::KAnonymityServiceDelegate* GetKAnonymityServiceDelegate() override;
   content::OriginTrialsControllerDelegate* GetOriginTrialsControllerDelegate()
       override;
   std::unique_ptr<leveldb_proto::ProtoDatabaseProvider>
@@ -134,7 +148,6 @@ class ProfileImpl : public Profile {
   policy::ProfilePolicyConnector* GetProfilePolicyConnector() override;
   const policy::ProfilePolicyConnector* GetProfilePolicyConnector()
       const override;
-  scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory() override;
   bool IsSameOrParent(Profile* profile) override;
   base::Time GetStartTime() const override;
   ProfileKey* GetProfileKey() const override;
@@ -144,6 +157,7 @@ class ProfileImpl : public Profile {
   bool WasCreatedByVersionOrLater(const std::string& version) override;
   bool ShouldRestoreOldSessionCookies() override;
   bool ShouldPersistSessionCookies() const override;
+  bool ShouldClearSessionStorageOnStartup() override;
 
 #if BUILDFLAG(IS_CHROMEOS)
   void ChangeAppLocale(const std::string& locale, AppLocaleChangedVia) override;
@@ -155,6 +169,10 @@ class ProfileImpl : public Profile {
 
   void SetCreationTimeForTesting(base::Time creation_time) override;
   void RecordPrimaryMainFrameNavigation() override {}
+
+#if BUILDFLAG(IS_WIN)
+  void AckCrashForTracking() override;
+#endif
 
  protected:
   // Profile implementation.
@@ -193,6 +211,12 @@ class ProfileImpl : public Profile {
   // Does final prefs initialization and calls Init().
   void OnLocaleReady(CreateMode create_mode);
 
+  // Sync-to-signin migration is triggered from OnLocaleReady() but needs to be
+  // completed before the rest of the profile initialization process. This
+  // method is called once the migration is completed and resumes the
+  // initialization.
+  void OnSyncToSigninMigrationMaybeCompleted(CreateMode create_mode);
+
 #if BUILDFLAG(ENABLE_SESSION_SERVICE)
   void StopCreateSessionServiceTimer();
 
@@ -204,7 +228,7 @@ class ProfileImpl : public Profile {
   void UpdateNameInStorage();
   void UpdateAvatarInStorage();
   void UpdateIsEphemeralInStorage();
-
+  void UpdateAiSubscriptionTierInStorage();
   // Called after a profile is initialized, to record 'one per profile creation'
   // metrics relating to user prefs.
   void RecordPrefValuesAfterProfileInitialization();
@@ -234,6 +258,12 @@ class ProfileImpl : public Profile {
   //     - |user_cloud_policy_manager_|;
   //     - |user_cloud_policy_manager_ash_|;
   // - configuration_policy_provider() depends on |schema_registry_service_|
+
+#if BUILDFLAG(IS_WIN)
+  // Ideally guards all persistent state management done by the profile. Must be
+  // initialized before prefs.
+  std::unique_ptr<ProfileLoadTracker> profile_load_tracker_;
+#endif  // BUILDFLAG(IS_WIN)
 
   std::unique_ptr<policy::SchemaRegistryService> schema_registry_service_;
 
@@ -296,6 +326,8 @@ class ProfileImpl : public Profile {
   // components/keyed_service/content/browser_context_keyed_service_factory.*
 
   raw_ptr<Profile::Delegate> delegate_;
+
+  base::WeakPtrFactory<ProfileImpl> weak_ptr_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_PROFILES_PROFILE_IMPL_H_

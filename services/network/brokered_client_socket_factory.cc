@@ -29,14 +29,19 @@ namespace network {
 
 BrokeredClientSocketFactory::BrokeredClientSocketFactory(
     mojo::PendingRemote<mojom::SocketBroker> pending_remote)
-    : socket_broker_(std::move(pending_remote)) {}
+    : socket_broker_client_(std::move(pending_remote)) {}
 BrokeredClientSocketFactory::~BrokeredClientSocketFactory() = default;
 
 std::unique_ptr<net::DatagramClientSocket>
 BrokeredClientSocketFactory::CreateDatagramClientSocket(
     net::DatagramSocket::BindType bind_type,
+    net::handles::NetworkHandle target_network,
     net::NetLog* net_log,
     const net::NetLogSource& source) {
+  // Currently, multi-networking is supported only on Android, where
+  // `BrokeredClientSocketFactory` is not used. This makes it safe to ignore
+  // the `target_network` parameter. If `BrokeredClientSocketFactory` starts
+  // being used in Android, this should be revisited.
   return std::make_unique<BrokeredUdpClientSocket>(bind_type, net_log, source,
                                                    this);
 }
@@ -44,11 +49,16 @@ BrokeredClientSocketFactory::CreateDatagramClientSocket(
 std::unique_ptr<net::TransportClientSocket>
 BrokeredClientSocketFactory::CreateTransportClientSocket(
     const net::AddressList& addresses,
+    net::handles::NetworkHandle target_network,
     std::unique_ptr<net::SocketPerformanceWatcher> socket_performance_watcher,
     net::NetworkQualityEstimator* network_quality_estimator,
     net::NetLog* net_log,
     const net::NetLogSource& source) {
   if (ShouldBroker(addresses)) {
+    // Currently, multi-networking is supported only on Android, where
+    // `BrokeredClientSocketFactory` is not used. This makes it safe to ignore
+    // the `target_network` parameter. If `BrokeredClientSocketFactory` starts
+    // being used in Android, this should be revisited.
     return std::make_unique<BrokeredTcpClientSocket>(
         addresses, std::move(socket_performance_watcher),
         network_quality_estimator, net_log, source, this);
@@ -56,7 +66,7 @@ BrokeredClientSocketFactory::CreateTransportClientSocket(
 
   return std::make_unique<net::TCPClientSocket>(
       addresses, std::move(socket_performance_watcher),
-      network_quality_estimator, net_log, source);
+      network_quality_estimator, net_log, source, target_network);
 }
 
 std::unique_ptr<net::SSLClientSocket>
@@ -73,13 +83,13 @@ BrokeredClientSocketFactory::CreateSSLClientSocket(
 void BrokeredClientSocketFactory::BrokerCreateTcpSocket(
     net::AddressFamily address_family,
     mojom::SocketBroker::CreateTcpSocketCallback callback) {
-  socket_broker_->CreateTcpSocket(address_family, std::move(callback));
+  socket_broker_client_.CreateTcpSocket(address_family, std::move(callback));
 }
 
 void BrokeredClientSocketFactory::BrokerCreateUdpSocket(
     net::AddressFamily address_family,
     mojom::SocketBroker::CreateUdpSocketCallback callback) {
-  socket_broker_->CreateUdpSocket(address_family, std::move(callback));
+  socket_broker_client_.CreateUdpSocket(address_family, std::move(callback));
 }
 
 bool BrokeredClientSocketFactory::ShouldBroker(

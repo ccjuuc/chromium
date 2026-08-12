@@ -22,6 +22,9 @@ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.ui.util.ColorUtils;
 import org.chromium.ui.util.ValueUtils;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /** Helper class to handle tab group color picker related utilities. */
 @NullMarked
 public class TabGroupColorPickerUtils {
@@ -50,6 +53,34 @@ public class TabGroupColorPickerUtils {
     }
 
     /**
+     * Builds a {@link ColorStateList} for the background tint in the tab group color picker.
+     * Applies a theme-appropriate highlight color on hover so that vibrant swatches illuminate
+     * cleanly when hovered with a mouse pointer.
+     *
+     * @param context The {@link Context} used to retrieve colors and dimensions.
+     * @param baseColor The base swatch color for the button.
+     * @param isIncognito A boolean indicating whether the current mode is incognito.
+     * @return A {@link ColorStateList} configured for the button's background tint.
+     */
+    public static ColorStateList buildTabGroupColorPickerBackgroundTintList(
+            Context context, @ColorInt int baseColor, boolean isIncognito) {
+        @DimenRes int hoveredAlpha = R.dimen.tab_group_color_picker_hovered_alpha;
+        @ColorRes
+        int hoverOverlayRes =
+                isIncognito
+                        ? R.color.tab_group_color_picker_hover_color_incognito
+                        : R.color.tab_group_color_picker_hover_color;
+        @ColorInt int hoverOverlayBase = ContextCompat.getColor(context, hoverOverlayRes);
+
+        int hoverOverlayWithAlpha =
+                getColorWithAlphaApplied(context, hoverOverlayBase, hoveredAlpha);
+        int hoveredColor = ColorUtils.overlayColor(baseColor, hoverOverlayWithAlpha);
+
+        int[] colors = new int[] {hoveredColor, baseColor, baseColor, baseColor};
+        return new ColorStateList(HOVERED_FOCUSED_PRESSED_AND_NORMAL_STATES, colors);
+    }
+
+    /**
      * Builds a {@link ColorStateList} for the ripple effect in the tab group color picker. The
      * ripple color adapts based on whether the current context is incognito or not, and applies
      * different alpha values for hovered, focused, and pressed states.
@@ -63,6 +94,14 @@ public class TabGroupColorPickerUtils {
         @DimenRes int hoveredAlpha = R.dimen.tab_group_color_picker_hovered_alpha;
         @DimenRes int focusedAlpha = R.dimen.tab_group_color_picker_focused_alpha;
         @DimenRes int pressedAlpha = R.dimen.tab_group_color_picker_pressed_alpha;
+
+        @ColorRes
+        int hoverOverlayRes =
+                isIncognito
+                        ? R.color.tab_group_color_picker_hover_color_incognito
+                        : R.color.tab_group_color_picker_hover_color;
+        @ColorInt int hoverOverlayBase = ContextCompat.getColor(context, hoverOverlayRes);
+
         @ColorInt
         int onSurfaceColor =
                 isIncognito
@@ -70,7 +109,7 @@ public class TabGroupColorPickerUtils {
                                 context, R.color.tab_group_color_picker_incognito_ripple_color)
                         : SemanticColorUtils.getColorOnSurface(context);
 
-        int hoveredColor = getColorWithAlphaApplied(context, onSurfaceColor, hoveredAlpha);
+        int hoveredColor = getColorWithAlphaApplied(context, hoverOverlayBase, hoveredAlpha);
         int focusedColor = getColorWithAlphaApplied(context, onSurfaceColor, focusedAlpha);
         int pressedColor = getColorWithAlphaApplied(context, onSurfaceColor, pressedAlpha);
 
@@ -87,34 +126,92 @@ public class TabGroupColorPickerUtils {
      */
     public static @ColorRes int getTabGroupColorPickerItemColorResource(
             @TabGroupColorId int colorId, boolean isIncognito) {
+        if (TabGroupsFeatureMap.isEnabled(TabGroupsFeatureMap.UPDATE_TAB_GROUP_COLORS)) {
+            return getTabGroupColorPickerItemColorResourceRefresh(colorId, isIncognito);
+        }
         return switch (colorId) {
-            case TabGroupColorId.GREY -> isIncognito
-                    ? R.color.tab_group_color_picker_grey_incognito
-                    : R.color.tab_group_color_picker_grey;
-            case TabGroupColorId.BLUE -> isIncognito
-                    ? R.color.tab_group_color_picker_blue_incognito
-                    : R.color.tab_group_color_picker_blue;
-            case TabGroupColorId.RED -> isIncognito
-                    ? R.color.tab_group_color_picker_red_incognito
-                    : R.color.tab_group_color_picker_red;
-            case TabGroupColorId.YELLOW -> isIncognito
-                    ? R.color.tab_group_color_picker_yellow_incognito
-                    : R.color.tab_group_color_picker_yellow;
-            case TabGroupColorId.GREEN -> isIncognito
-                    ? R.color.tab_group_color_picker_green_incognito
-                    : R.color.tab_group_color_picker_green;
-            case TabGroupColorId.PINK -> isIncognito
-                    ? R.color.tab_group_color_picker_pink_incognito
-                    : R.color.tab_group_color_picker_pink;
-            case TabGroupColorId.PURPLE -> isIncognito
-                    ? R.color.tab_group_color_picker_purple_incognito
-                    : R.color.tab_group_color_picker_purple;
-            case TabGroupColorId.CYAN -> isIncognito
-                    ? R.color.tab_group_color_picker_cyan_incognito
-                    : R.color.tab_group_color_picker_cyan;
-            case TabGroupColorId.ORANGE -> isIncognito
-                    ? R.color.tab_group_color_picker_orange_incognito
-                    : R.color.tab_group_color_picker_orange;
+            case TabGroupColorId.GREY ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_grey_incognito
+                            : R.color.tab_group_color_picker_grey;
+            case TabGroupColorId.BLUE ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_blue_incognito
+                            : R.color.tab_group_color_picker_blue;
+            case TabGroupColorId.RED ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_red_incognito
+                            : R.color.tab_group_color_picker_red;
+            case TabGroupColorId.YELLOW ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_yellow_incognito
+                            : R.color.tab_group_color_picker_yellow;
+            case TabGroupColorId.GREEN ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_green_incognito
+                            : R.color.tab_group_color_picker_green;
+            case TabGroupColorId.PINK ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_pink_incognito
+                            : R.color.tab_group_color_picker_pink;
+            case TabGroupColorId.PURPLE ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_purple_incognito
+                            : R.color.tab_group_color_picker_purple;
+            case TabGroupColorId.CYAN ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_cyan_incognito
+                            : R.color.tab_group_color_picker_cyan;
+            case TabGroupColorId.ORANGE ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_orange_incognito
+                            : R.color.tab_group_color_picker_orange;
+            default -> {
+                assert false : "Invalid tab group color id " + colorId;
+                yield Resources.ID_NULL;
+            }
+        };
+    }
+
+    public static @ColorRes int getTabGroupColorPickerItemColorResourceRefresh(
+            @TabGroupColorId int colorId, boolean isIncognito) {
+        return switch (colorId) {
+            case TabGroupColorId.GREY ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_grey_refresh_incognito
+                            : R.color.tab_group_color_picker_grey_refresh;
+            case TabGroupColorId.BLUE ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_blue_refresh_incognito
+                            : R.color.tab_group_color_picker_blue_refresh;
+            case TabGroupColorId.RED ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_red_refresh_incognito
+                            : R.color.tab_group_color_picker_red_refresh;
+            case TabGroupColorId.YELLOW ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_yellow_refresh_incognito
+                            : R.color.tab_group_color_picker_yellow_refresh;
+            case TabGroupColorId.GREEN ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_green_refresh_incognito
+                            : R.color.tab_group_color_picker_green_refresh;
+            case TabGroupColorId.PINK ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_pink_refresh_incognito
+                            : R.color.tab_group_color_picker_pink_refresh;
+            case TabGroupColorId.PURPLE ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_purple_refresh_incognito
+                            : R.color.tab_group_color_picker_purple_refresh;
+            case TabGroupColorId.CYAN ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_cyan_refresh_incognito
+                            : R.color.tab_group_color_picker_cyan_refresh;
+            case TabGroupColorId.ORANGE ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_orange_refresh_incognito
+                            : R.color.tab_group_color_picker_orange_refresh;
             default -> {
                 assert false : "Invalid tab group color id " + colorId;
                 yield Resources.ID_NULL;
@@ -131,6 +228,11 @@ public class TabGroupColorPickerUtils {
      */
     public static @ColorInt int getTabGroupColorPickerItemTextColor(
             Context context, @TabGroupColorId int colorId, boolean isIncognito) {
+        if (TabGroupsFeatureMap.isEnabled(TabGroupsFeatureMap.UPDATE_TAB_GROUP_COLORS)) {
+            final @ColorRes int colorRes =
+                    getTabGroupColorPickerItemTextColorResourceRefresh(colorId, isIncognito);
+            return resolveGroupRelatedColor(context, colorRes, isIncognito);
+        }
         if (isIncognito) {
             return ContextCompat.getColor(
                     context, R.color.tab_group_tab_strip_title_text_color_incognito);
@@ -142,6 +244,52 @@ public class TabGroupColorPickerUtils {
             }
             return SemanticColorUtils.getDefaultTextColorOnAccent1(context);
         }
+    }
+
+    public static @ColorRes int getTabGroupColorPickerItemTextColorResourceRefresh(
+            @TabGroupColorId int colorId, boolean isIncognito) {
+        return switch (colorId) {
+            case TabGroupColorId.GREY ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_text_color_grey_refresh_incognito
+                            : R.color.tab_group_color_picker_text_color_grey_refresh;
+            case TabGroupColorId.BLUE ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_text_color_blue_refresh_incognito
+                            : R.color.tab_group_color_picker_text_color_blue_refresh;
+            case TabGroupColorId.RED ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_text_color_red_refresh_incognito
+                            : R.color.tab_group_color_picker_text_color_red_refresh;
+            case TabGroupColorId.YELLOW ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_text_color_yellow_refresh_incognito
+                            : R.color.tab_group_color_picker_text_color_yellow_refresh;
+            case TabGroupColorId.GREEN ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_text_color_green_refresh_incognito
+                            : R.color.tab_group_color_picker_text_color_green_refresh;
+            case TabGroupColorId.PINK ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_text_color_pink_refresh_incognito
+                            : R.color.tab_group_color_picker_text_color_pink_refresh;
+            case TabGroupColorId.PURPLE ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_text_color_purple_refresh_incognito
+                            : R.color.tab_group_color_picker_text_color_purple_refresh;
+            case TabGroupColorId.CYAN ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_text_color_cyan_refresh_incognito
+                            : R.color.tab_group_color_picker_text_color_cyan_refresh;
+            case TabGroupColorId.ORANGE ->
+                    isIncognito
+                            ? R.color.tab_group_color_picker_text_color_orange_refresh_incognito
+                            : R.color.tab_group_color_picker_text_color_orange_refresh;
+            default -> {
+                assert false : "Invalid tab group color id " + colorId;
+                yield Resources.ID_NULL;
+            }
+        };
     }
 
     /**
@@ -178,36 +326,94 @@ public class TabGroupColorPickerUtils {
      */
     public static @ColorRes int getTabGroupCardColorResource(
             @TabGroupColorId int colorId, boolean isIncognito) {
+        if (TabGroupsFeatureMap.isEnabled(TabGroupsFeatureMap.UPDATE_TAB_GROUP_COLORS)) {
+            return getTabGroupCardColorResourceRefresh(colorId, isIncognito);
+        }
         return switch (colorId) {
-            case TabGroupColorId.GREY -> isIncognito
-                    ? R.color.tab_group_card_color_grey_incognito
-                    : R.color.tab_group_card_color_grey;
-            case TabGroupColorId.BLUE -> isIncognito
-                    ? R.color.tab_group_card_color_blue_incognito
-                    : R.color.tab_group_card_color_blue;
-            case TabGroupColorId.RED -> isIncognito
-                    ? R.color.tab_group_card_color_red_incognito
-                    : R.color.tab_group_card_color_red;
-            case TabGroupColorId.YELLOW -> isIncognito
-                    ? R.color.tab_group_card_color_yellow_incognito
-                    : R.color.tab_group_card_color_yellow;
-            case TabGroupColorId.GREEN -> isIncognito
-                    ? R.color.tab_group_card_color_green_incognito
-                    : R.color.tab_group_card_color_green;
-            case TabGroupColorId.PINK -> isIncognito
-                    ? R.color.tab_group_card_color_pink_incognito
-                    : R.color.tab_group_card_color_pink;
-            case TabGroupColorId.PURPLE -> isIncognito
-                    ? R.color.tab_group_card_color_purple_incognito
-                    : R.color.tab_group_card_color_purple;
-            case TabGroupColorId.CYAN -> isIncognito
-                    ? R.color.tab_group_card_color_cyan_incognito
-                    : R.color.tab_group_card_color_cyan;
-            case TabGroupColorId.ORANGE -> isIncognito
-                    ? R.color.tab_group_card_color_orange_incognito
-                    : R.color.tab_group_card_color_orange;
+            case TabGroupColorId.GREY ->
+                    isIncognito
+                            ? R.color.tab_group_card_color_grey_incognito
+                            : R.color.tab_group_card_color_grey;
+            case TabGroupColorId.BLUE ->
+                    isIncognito
+                            ? R.color.tab_group_card_color_blue_incognito
+                            : R.color.tab_group_card_color_blue;
+            case TabGroupColorId.RED ->
+                    isIncognito
+                            ? R.color.tab_group_card_color_red_incognito
+                            : R.color.tab_group_card_color_red;
+            case TabGroupColorId.YELLOW ->
+                    isIncognito
+                            ? R.color.tab_group_card_color_yellow_incognito
+                            : R.color.tab_group_card_color_yellow;
+            case TabGroupColorId.GREEN ->
+                    isIncognito
+                            ? R.color.tab_group_card_color_green_incognito
+                            : R.color.tab_group_card_color_green;
+            case TabGroupColorId.PINK ->
+                    isIncognito
+                            ? R.color.tab_group_card_color_pink_incognito
+                            : R.color.tab_group_card_color_pink;
+            case TabGroupColorId.PURPLE ->
+                    isIncognito
+                            ? R.color.tab_group_card_color_purple_incognito
+                            : R.color.tab_group_card_color_purple;
+            case TabGroupColorId.CYAN ->
+                    isIncognito
+                            ? R.color.tab_group_card_color_cyan_incognito
+                            : R.color.tab_group_card_color_cyan;
+            case TabGroupColorId.ORANGE ->
+                    isIncognito
+                            ? R.color.tab_group_card_color_orange_incognito
+                            : R.color.tab_group_card_color_orange;
             default -> {
-                assert false : "Invalid tab group color id " + colorId;
+                assert false : "Invalid tab group card color id " + colorId;
+                yield Resources.ID_NULL;
+            }
+        };
+    }
+
+    public static @ColorRes int getTabGroupCardColorResourceRefresh(
+            @TabGroupColorId int colorId, boolean isIncognito) {
+        return switch (colorId) {
+            case TabGroupColorId.GREY ->
+                    isIncognito
+                            ? R.color.tab_group_card_color_grey_refresh_incognito
+                            : R.color.tab_group_card_color_grey_refresh;
+            case TabGroupColorId.BLUE ->
+                    isIncognito
+                            ? R.color.tab_group_card_color_blue_refresh_incognito
+                            : R.color.tab_group_card_color_blue_refresh;
+            case TabGroupColorId.RED ->
+                    isIncognito
+                            ? R.color.tab_group_card_color_red_refresh_incognito
+                            : R.color.tab_group_card_color_red_refresh;
+            case TabGroupColorId.YELLOW ->
+                    isIncognito
+                            ? R.color.tab_group_card_color_yellow_refresh_incognito
+                            : R.color.tab_group_card_color_yellow_refresh;
+            case TabGroupColorId.GREEN ->
+                    isIncognito
+                            ? R.color.tab_group_card_color_green_refresh_incognito
+                            : R.color.tab_group_card_color_green_refresh;
+            case TabGroupColorId.PINK ->
+                    isIncognito
+                            ? R.color.tab_group_card_color_pink_refresh_incognito
+                            : R.color.tab_group_card_color_pink_refresh;
+            case TabGroupColorId.PURPLE ->
+                    isIncognito
+                            ? R.color.tab_group_card_color_purple_refresh_incognito
+                            : R.color.tab_group_card_color_purple_refresh;
+            case TabGroupColorId.CYAN ->
+                    isIncognito
+                            ? R.color.tab_group_card_color_cyan_refresh_incognito
+                            : R.color.tab_group_card_color_cyan_refresh;
+            case TabGroupColorId.ORANGE ->
+                    isIncognito
+                            ? R.color.tab_group_card_color_orange_refresh_incognito
+                            : R.color.tab_group_card_color_orange_refresh;
+            default -> {
+                assert false : "Invalid tab group card color id " + colorId;
                 yield Resources.ID_NULL;
             }
         };
@@ -236,34 +442,92 @@ public class TabGroupColorPickerUtils {
      */
     public static @ColorRes int getTabGroupCardTextColorResource(
             @TabGroupColorId int colorId, boolean isIncognito) {
+        if (TabGroupsFeatureMap.isEnabled(TabGroupsFeatureMap.UPDATE_TAB_GROUP_COLORS)) {
+            return getTabGroupCardTextColorResourceRefresh(colorId, isIncognito);
+        }
         return switch (colorId) {
-            case TabGroupColorId.GREY -> isIncognito
-                    ? R.color.tab_group_card_text_color_grey_incognito
-                    : R.color.tab_group_card_text_color_grey;
-            case TabGroupColorId.BLUE -> isIncognito
-                    ? R.color.tab_group_card_text_color_blue_incognito
-                    : R.color.tab_group_card_text_color_blue;
-            case TabGroupColorId.RED -> isIncognito
-                    ? R.color.tab_group_card_text_color_red_incognito
-                    : R.color.tab_group_card_text_color_red;
-            case TabGroupColorId.YELLOW -> isIncognito
-                    ? R.color.tab_group_card_text_color_yellow_incognito
-                    : R.color.tab_group_card_text_color_yellow;
-            case TabGroupColorId.GREEN -> isIncognito
-                    ? R.color.tab_group_card_text_color_green_incognito
-                    : R.color.tab_group_card_text_color_green;
-            case TabGroupColorId.PINK -> isIncognito
-                    ? R.color.tab_group_card_text_color_pink_incognito
-                    : R.color.tab_group_card_text_color_pink;
-            case TabGroupColorId.PURPLE -> isIncognito
-                    ? R.color.tab_group_card_text_color_purple_incognito
-                    : R.color.tab_group_card_text_color_purple;
-            case TabGroupColorId.CYAN -> isIncognito
-                    ? R.color.tab_group_card_text_color_cyan_incognito
-                    : R.color.tab_group_card_text_color_cyan;
-            case TabGroupColorId.ORANGE -> isIncognito
-                    ? R.color.tab_group_card_text_color_orange_incognito
-                    : R.color.tab_group_card_text_color_orange;
+            case TabGroupColorId.GREY ->
+                    isIncognito
+                            ? R.color.tab_group_card_text_color_grey_incognito
+                            : R.color.tab_group_card_text_color_grey;
+            case TabGroupColorId.BLUE ->
+                    isIncognito
+                            ? R.color.tab_group_card_text_color_blue_incognito
+                            : R.color.tab_group_card_text_color_blue;
+            case TabGroupColorId.RED ->
+                    isIncognito
+                            ? R.color.tab_group_card_text_color_red_incognito
+                            : R.color.tab_group_card_text_color_red;
+            case TabGroupColorId.YELLOW ->
+                    isIncognito
+                            ? R.color.tab_group_card_text_color_yellow_incognito
+                            : R.color.tab_group_card_text_color_yellow;
+            case TabGroupColorId.GREEN ->
+                    isIncognito
+                            ? R.color.tab_group_card_text_color_green_incognito
+                            : R.color.tab_group_card_text_color_green;
+            case TabGroupColorId.PINK ->
+                    isIncognito
+                            ? R.color.tab_group_card_text_color_pink_incognito
+                            : R.color.tab_group_card_text_color_pink;
+            case TabGroupColorId.PURPLE ->
+                    isIncognito
+                            ? R.color.tab_group_card_text_color_purple_incognito
+                            : R.color.tab_group_card_text_color_purple;
+            case TabGroupColorId.CYAN ->
+                    isIncognito
+                            ? R.color.tab_group_card_text_color_cyan_incognito
+                            : R.color.tab_group_card_text_color_cyan;
+            case TabGroupColorId.ORANGE ->
+                    isIncognito
+                            ? R.color.tab_group_card_text_color_orange_incognito
+                            : R.color.tab_group_card_text_color_orange;
+            default -> {
+                assert false : "Invalid tab group text color id " + colorId;
+                yield Resources.ID_NULL;
+            }
+        };
+    }
+
+    public static @ColorRes int getTabGroupCardTextColorResourceRefresh(
+            @TabGroupColorId int colorId, boolean isIncognito) {
+        return switch (colorId) {
+            case TabGroupColorId.GREY ->
+                    isIncognito
+                            ? R.color.tab_group_card_text_color_grey_refresh_incognito
+                            : R.color.tab_group_card_text_color_grey_refresh;
+            case TabGroupColorId.BLUE ->
+                    isIncognito
+                            ? R.color.tab_group_card_text_color_blue_refresh_incognito
+                            : R.color.tab_group_card_text_color_blue_refresh;
+            case TabGroupColorId.RED ->
+                    isIncognito
+                            ? R.color.tab_group_card_text_color_red_refresh_incognito
+                            : R.color.tab_group_card_text_color_red_refresh;
+            case TabGroupColorId.YELLOW ->
+                    isIncognito
+                            ? R.color.tab_group_card_text_color_yellow_refresh_incognito
+                            : R.color.tab_group_card_text_color_yellow_refresh;
+            case TabGroupColorId.GREEN ->
+                    isIncognito
+                            ? R.color.tab_group_card_text_color_green_refresh_incognito
+                            : R.color.tab_group_card_text_color_green_refresh;
+            case TabGroupColorId.PINK ->
+                    isIncognito
+                            ? R.color.tab_group_card_text_color_pink_refresh_incognito
+                            : R.color.tab_group_card_text_color_pink_refresh;
+            case TabGroupColorId.PURPLE ->
+                    isIncognito
+                            ? R.color.tab_group_card_text_color_purple_refresh_incognito
+                            : R.color.tab_group_card_text_color_purple_refresh;
+            case TabGroupColorId.CYAN ->
+                    isIncognito
+                            ? R.color.tab_group_card_text_color_cyan_refresh_incognito
+                            : R.color.tab_group_card_text_color_cyan_refresh;
+            case TabGroupColorId.ORANGE ->
+                    isIncognito
+                            ? R.color.tab_group_card_text_color_orange_refresh_incognito
+                            : R.color.tab_group_card_text_color_orange_refresh;
             default -> {
                 assert false : "Invalid tab group text color id " + colorId;
                 yield Resources.ID_NULL;
@@ -295,34 +559,93 @@ public class TabGroupColorPickerUtils {
      */
     public static @ColorRes int getTabGroupCardMiniThumbnailPlaceholderColorResource(
             @TabGroupColorId int colorId, boolean isIncognito) {
+        if (TabGroupsFeatureMap.isEnabled(TabGroupsFeatureMap.UPDATE_TAB_GROUP_COLORS)) {
+            return getTabGroupCardMiniThumbnailPlaceholderColorResourceRefresh(
+                    colorId, isIncognito);
+        }
         return switch (colorId) {
-            case TabGroupColorId.GREY -> isIncognito
-                    ? R.color.tab_group_card_placeholder_color_grey_incognito
-                    : R.color.tab_group_card_placeholder_color_grey;
-            case TabGroupColorId.BLUE -> isIncognito
-                    ? R.color.tab_group_card_placeholder_color_blue_incognito
-                    : R.color.tab_group_card_placeholder_color_blue;
-            case TabGroupColorId.RED -> isIncognito
-                    ? R.color.tab_group_card_placeholder_color_red_incognito
-                    : R.color.tab_group_card_placeholder_color_red;
-            case TabGroupColorId.YELLOW -> isIncognito
-                    ? R.color.tab_group_card_placeholder_color_yellow_incognito
-                    : R.color.tab_group_card_placeholder_color_yellow;
-            case TabGroupColorId.GREEN -> isIncognito
-                    ? R.color.tab_group_card_placeholder_color_green_incognito
-                    : R.color.tab_group_card_placeholder_color_green;
-            case TabGroupColorId.PINK -> isIncognito
-                    ? R.color.tab_group_card_placeholder_color_pink_incognito
-                    : R.color.tab_group_card_placeholder_color_pink;
-            case TabGroupColorId.PURPLE -> isIncognito
-                    ? R.color.tab_group_card_placeholder_color_purple_incognito
-                    : R.color.tab_group_card_placeholder_color_purple;
-            case TabGroupColorId.CYAN -> isIncognito
-                    ? R.color.tab_group_card_placeholder_color_cyan_incognito
-                    : R.color.tab_group_card_placeholder_color_cyan;
-            case TabGroupColorId.ORANGE -> isIncognito
-                    ? R.color.tab_group_card_placeholder_color_orange_incognito
-                    : R.color.tab_group_card_placeholder_color_orange;
+            case TabGroupColorId.GREY ->
+                    isIncognito
+                            ? R.color.tab_group_card_placeholder_color_grey_incognito
+                            : R.color.tab_group_card_placeholder_color_grey;
+            case TabGroupColorId.BLUE ->
+                    isIncognito
+                            ? R.color.tab_group_card_placeholder_color_blue_incognito
+                            : R.color.tab_group_card_placeholder_color_blue;
+            case TabGroupColorId.RED ->
+                    isIncognito
+                            ? R.color.tab_group_card_placeholder_color_red_incognito
+                            : R.color.tab_group_card_placeholder_color_red;
+            case TabGroupColorId.YELLOW ->
+                    isIncognito
+                            ? R.color.tab_group_card_placeholder_color_yellow_incognito
+                            : R.color.tab_group_card_placeholder_color_yellow;
+            case TabGroupColorId.GREEN ->
+                    isIncognito
+                            ? R.color.tab_group_card_placeholder_color_green_incognito
+                            : R.color.tab_group_card_placeholder_color_green;
+            case TabGroupColorId.PINK ->
+                    isIncognito
+                            ? R.color.tab_group_card_placeholder_color_pink_incognito
+                            : R.color.tab_group_card_placeholder_color_pink;
+            case TabGroupColorId.PURPLE ->
+                    isIncognito
+                            ? R.color.tab_group_card_placeholder_color_purple_incognito
+                            : R.color.tab_group_card_placeholder_color_purple;
+            case TabGroupColorId.CYAN ->
+                    isIncognito
+                            ? R.color.tab_group_card_placeholder_color_cyan_incognito
+                            : R.color.tab_group_card_placeholder_color_cyan;
+            case TabGroupColorId.ORANGE ->
+                    isIncognito
+                            ? R.color.tab_group_card_placeholder_color_orange_incognito
+                            : R.color.tab_group_card_placeholder_color_orange;
+            default -> {
+                assert false : "Invalid tab group text color id " + colorId;
+                yield Resources.ID_NULL;
+            }
+        };
+    }
+
+    public static @ColorRes int getTabGroupCardMiniThumbnailPlaceholderColorResourceRefresh(
+            @TabGroupColorId int colorId, boolean isIncognito) {
+        return switch (colorId) {
+            case TabGroupColorId.GREY ->
+                    isIncognito
+                            ? R.color.tab_group_card_placeholder_color_grey_refresh_incognito
+                            : R.color.tab_group_card_placeholder_color_grey_refresh;
+            case TabGroupColorId.BLUE ->
+                    isIncognito
+                            ? R.color.tab_group_card_placeholder_color_blue_refresh_incognito
+                            : R.color.tab_group_card_placeholder_color_blue_refresh;
+            case TabGroupColorId.RED ->
+                    isIncognito
+                            ? R.color.tab_group_card_placeholder_color_red_refresh_incognito
+                            : R.color.tab_group_card_placeholder_color_red_refresh;
+            case TabGroupColorId.YELLOW ->
+                    isIncognito
+                            ? R.color.tab_group_card_placeholder_color_yellow_refresh_incognito
+                            : R.color.tab_group_card_placeholder_color_yellow_refresh;
+            case TabGroupColorId.GREEN ->
+                    isIncognito
+                            ? R.color.tab_group_card_placeholder_color_green_refresh_incognito
+                            : R.color.tab_group_card_placeholder_color_green_refresh;
+            case TabGroupColorId.PINK ->
+                    isIncognito
+                            ? R.color.tab_group_card_placeholder_color_pink_refresh_incognito
+                            : R.color.tab_group_card_placeholder_color_pink_refresh;
+            case TabGroupColorId.PURPLE ->
+                    isIncognito
+                            ? R.color.tab_group_card_placeholder_color_purple_refresh_incognito
+                            : R.color.tab_group_card_placeholder_color_purple_refresh;
+            case TabGroupColorId.CYAN ->
+                    isIncognito
+                            ? R.color.tab_group_card_placeholder_color_cyan_refresh_incognito
+                            : R.color.tab_group_card_placeholder_color_cyan_refresh;
+            case TabGroupColorId.ORANGE ->
+                    isIncognito
+                            ? R.color.tab_group_card_placeholder_color_orange_refresh_incognito
+                            : R.color.tab_group_card_placeholder_color_orange_refresh;
             default -> {
                 assert false : "Invalid tab group text color id " + colorId;
                 yield Resources.ID_NULL;
@@ -408,5 +731,28 @@ public class TabGroupColorPickerUtils {
         int alphaScaled = Math.round(alpha * 255);
 
         return ColorUtils.setAlphaComponent(color, alphaScaled);
+    }
+
+    /** Returns the list of tab group color IDs in the order they should be displayed in the UI. */
+    public static List<Integer> getTabGroupColorIdList() {
+        if (TabGroupsFeatureMap.isEnabled(TabGroupsFeatureMap.UPDATE_TAB_GROUP_COLORS)) {
+            return List.of(
+                    TabGroupColorId.BLUE,
+                    TabGroupColorId.PURPLE,
+                    TabGroupColorId.PINK,
+                    TabGroupColorId.RED,
+                    TabGroupColorId.ORANGE,
+                    TabGroupColorId.YELLOW,
+                    TabGroupColorId.GREEN,
+                    TabGroupColorId.CYAN,
+                    TabGroupColorId.GREY);
+        }
+        // The color ids used here can be found in {@link TabGroupColorId}. Note that it is assumed
+        // the id list is contiguous from 0 to size-1.
+        List<Integer> colors = new ArrayList<>(TabGroupColorId.NUM_ENTRIES);
+        for (int i = 0; i < TabGroupColorId.NUM_ENTRIES; i++) {
+            colors.add(i);
+        }
+        return colors;
     }
 }

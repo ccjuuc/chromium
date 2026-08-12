@@ -5,11 +5,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -46,6 +46,7 @@
 #include "cc/test/test_task_graph_runner.h"
 #include "cc/test/test_tile_priorities.h"
 #include "cc/tiles/eviction_tile_priority_queue.h"
+#include "cc/tiles/picture_layer_tiling_set.h"
 #include "cc/tiles/raster_tile_priority_queue.h"
 #include "cc/tiles/tile.h"
 #include "cc/tiles/tile_priority.h"
@@ -935,7 +936,7 @@ TEST_F(TileManagerTilePriorityQueueTest, DebugNameAppearsInMemoryDump) {
   host_impl()->resource_pool()->OnMemoryDump(dump_args, &memory_dump);
   bool found_debug_name = false;
   for (const auto& allocator_map_pair : memory_dump.allocator_dumps()) {
-    if (base::Contains(allocator_map_pair.first, "debug-name")) {
+    if (allocator_map_pair.first.contains("debug-name")) {
       found_debug_name = true;
       break;
     }
@@ -1127,7 +1128,7 @@ TEST_F(TileManagerTilePriorityQueueTest,
     const TilePriority& pending_priority = prioritized_tile.priority();
     EXPECT_NE(std::numeric_limits<float>::infinity(),
               pending_priority.distance_to_visible);
-    if (base::Contains(all_pending_child_tiles, tile)) {
+    if (all_pending_child_tiles.contains(tile)) {
       EXPECT_EQ(TilePriority::EVENTUALLY, pending_priority.priority_bin);
     } else {
       EXPECT_EQ(TilePriority::NOW, pending_priority.priority_bin);
@@ -1897,6 +1898,89 @@ TEST_F(TileManagerTest, ActivateAndDrawWhenOOM) {
   }
 }
 
+class TileManagerDeferredRedrawTest : public TestLayerTreeHostBase {
+ public:
+  // Host impl that simulates a client which removes tilings synchronously when
+  // notified of a tile state change with `set_needs_redraw` set. TileManager
+  // must defer SetNeedsRedraw() until it has finished iterating its priority
+  // queues so that it is safe for the client to do this.
+  class ReentrantHostImpl : public FakeLayerTreeHostImpl {
+   public:
+    using FakeLayerTreeHostImpl::FakeLayerTreeHostImpl;
+
+    void NotifyTileStateChanged(const Tile* tile,
+                                bool update_damage,
+                                bool set_needs_redraw) override {
+      if (set_needs_redraw && tilings_to_remove_) {
+        ++notify_with_redraw_count_;
+        PictureLayerTilingSet* tilings = tilings_to_remove_;
+        tilings_to_remove_ = nullptr;
+        tilings->RemoveAllTilings();
+      }
+    }
+
+    void SetNeedsRedraw(bool animation_only,
+                        bool skip_if_inside_draw) override {
+      ++set_needs_redraw_count_;
+    }
+
+    void set_tilings_to_remove(PictureLayerTilingSet* tilings) {
+      tilings_to_remove_ = tilings;
+    }
+    int notify_with_redraw_count() const { return notify_with_redraw_count_; }
+    int set_needs_redraw_count() const { return set_needs_redraw_count_; }
+
+   private:
+    raw_ptr<PictureLayerTilingSet> tilings_to_remove_ = nullptr;
+    int notify_with_redraw_count_ = 0;
+    int set_needs_redraw_count_ = 0;
+  };
+
+  std::unique_ptr<FakeLayerTreeHostImpl> CreateHostImpl(
+      const LayerTreeSettings& settings,
+      TaskRunnerProvider* task_runner_provider,
+      TaskGraphRunner* task_graph_runner) override {
+    return std::make_unique<ReentrantHostImpl>(settings, task_runner_provider,
+                                               task_graph_runner);
+  }
+
+  std::unique_ptr<LayerTreeFrameSink> CreateLayerTreeFrameSink() override {
+    return FakeLayerTreeFrameSink::CreateSoftware();
+  }
+
+  ReentrantHostImpl* reentrant_host_impl() {
+    return static_cast<ReentrantHostImpl*>(host_impl());
+  }
+};
+
+TEST_F(TileManagerDeferredRedrawTest, DeferRedrawWhileFreeingTileResources) {
+  const gfx::Size layer_bounds(1000, 1000);
+  host_impl()->active_tree()->SetDeviceViewportRect(gfx::Rect(layer_bounds));
+  SetupDefaultTrees(layer_bounds);
+
+  std::vector<Tile*> active_tiles =
+      active_layer()->HighResTiling()->AllTilesForTesting();
+  ASSERT_GT(active_tiles.size(), 1u);
+  host_impl()->tile_manager()->InitializeTilesWithResourcesForTesting(
+      active_tiles);
+
+  // Reduce the memory limit so that all active tiles will be evicted on the
+  // next PrepareTiles().
+  auto global_state = host_impl()->global_tile_state();
+  global_state.hard_memory_limit_in_bytes = 0u;
+  global_state.soft_memory_limit_in_bytes = 0u;
+  reentrant_host_impl()->set_tilings_to_remove(active_layer()->tilings());
+
+  // Freeing tile resources notifies the client of each tile's state change but
+  // must defer SetNeedsRedraw() until the priority queues are no longer in use.
+  // No tile state change notification should request a redraw while resources
+  // are being freed; instead a single SetNeedsRedraw() should be issued
+  // afterwards.
+  host_impl()->tile_manager()->PrepareTiles(global_state);
+  EXPECT_EQ(0, reentrant_host_impl()->notify_with_redraw_count());
+  EXPECT_LE(1, reentrant_host_impl()->set_needs_redraw_count());
+}
+
 class TileManagerOcclusionTest : public TileManagerTest {
  public:
   LayerTreeSettings CreateSettings() override {
@@ -2038,6 +2122,7 @@ TEST_F(PixelInspectTileManagerTest, ImageDrawn) {
   layer->SetRasterSourceForTesting(raster);
   PictureLayerTilingSet* tiling_set = layer->picture_layer_tiling_set();
   layer->set_contributes_to_drawn_render_surface(true);
+  host_impl()->pending_tree()->AddLayer(std::move(layer));
 
   auto* tiling = tiling_set->AddTiling(gfx::AxisTransform2d(), raster);
   tiling->set_resolution(HIGH_RESOLUTION);
@@ -2236,7 +2321,7 @@ class VerifyResourceContentIdRasterBufferProvider
 // Runs a test to ensure that partial raster is either enabled or disabled,
 // depending on |partial_raster_enabled|'s value. Takes ownership of host_impl
 // so that cleanup order can be controlled.
-void RunPartialRasterCheck(std::unique_ptr<LayerTreeHostImpl> host_impl,
+void RunPartialRasterCheck(std::unique_ptr<ClientLayerTreeHostImpl> host_impl,
                            bool partial_raster_enabled) {
   // Pick arbitrary IDs - they don't really matter as long as they're constant.
   const int kLayerId = 7;
@@ -2313,8 +2398,9 @@ void RunPartialRasterCheck(std::unique_ptr<LayerTreeHostImpl> host_impl,
   host_impl = nullptr;
 }
 
-void RunPartialTileDecodeCheck(std::unique_ptr<LayerTreeHostImpl> host_impl,
-                               bool partial_raster_enabled) {
+void RunPartialTileDecodeCheck(
+    std::unique_ptr<ClientLayerTreeHostImpl> host_impl,
+    bool partial_raster_enabled) {
   // Pick arbitrary IDs - they don't really matter as long as they're constant.
   const int kLayerId = 7;
   const uint64_t kInvalidatedId = 43;
@@ -2824,7 +2910,7 @@ TEST_F(TileManagerReadyToDrawTest, TilePrioritiesUpdated) {
         final_num_prepaint++;
       } else {
         final_num_required++;
-        if (base::Contains(prepaint_tiles, tile)) {
+        if (std::ranges::contains(prepaint_tiles, tile)) {
           found_one_prepaint_to_required_transition = true;
         }
       }
@@ -3368,7 +3454,7 @@ TEST_F(CheckerImagingTileManagerTest, BuildsImageDecodeQueueAsExpected) {
 
   // Create a new pending tree to invalidate tiles for decoded images and verify
   // that only tiles for |image1| are invalidated.
-  EXPECT_TRUE(host_impl()->client()->did_request_impl_side_invalidation());
+  EXPECT_TRUE(host_impl()->delegate()->did_request_impl_side_invalidation());
   PerformImplSideInvalidation();
   for (int i = 0; i < 2; i++) {
     for (int j = 0; j < 2; j++) {
@@ -3379,7 +3465,7 @@ TEST_F(CheckerImagingTileManagerTest, BuildsImageDecodeQueueAsExpected) {
         EXPECT_FALSE(tile);
     }
   }
-  host_impl()->client()->reset_did_request_impl_side_invalidation();
+  host_impl()->delegate()->reset_did_request_impl_side_invalidation();
 
   // Activating the tree replaces the checker-imaged tile.
   EXPECT_EQ(host_impl()->tile_manager()->num_of_tiles_with_checker_images(), 3);
@@ -3406,7 +3492,7 @@ TEST_F(CheckerImagingTileManagerTest, BuildsImageDecodeQueueAsExpected) {
 
   // Create a new pending tree to invalidate tiles for decoded images and verify
   // that only tiles for |image2| are invalidated.
-  EXPECT_TRUE(host_impl()->client()->did_request_impl_side_invalidation());
+  EXPECT_TRUE(host_impl()->delegate()->did_request_impl_side_invalidation());
   PerformImplSideInvalidation();
   for (int i = 0; i < 2; i++) {
     for (int j = 0; j < 2; j++) {
@@ -3417,7 +3503,7 @@ TEST_F(CheckerImagingTileManagerTest, BuildsImageDecodeQueueAsExpected) {
         EXPECT_FALSE(tile);
     }
   }
-  host_impl()->client()->reset_did_request_impl_side_invalidation();
+  host_impl()->delegate()->reset_did_request_impl_side_invalidation();
 
   // Activating the tree replaces the checker-imaged tile.
   EXPECT_EQ(host_impl()->tile_manager()->num_of_tiles_with_checker_images(), 2);
@@ -3435,7 +3521,7 @@ TEST_F(CheckerImagingTileManagerTest, BuildsImageDecodeQueueAsExpected) {
   host_impl()->SetVisible(false);
   host_impl()->tile_manager()->PrepareTiles(host_impl()->global_tile_state());
   FlushDecodeTasks();
-  EXPECT_FALSE(host_impl()->client()->did_request_impl_side_invalidation());
+  EXPECT_FALSE(host_impl()->delegate()->did_request_impl_side_invalidation());
 }
 
 TEST_F(CheckerImagingTileManagerTest,
@@ -3497,7 +3583,7 @@ TEST_F(CheckerImagingTileManagerTest,
                   ->tile_manager()
                   ->checker_image_tracker()
                   .no_decodes_allowed_for_testing());
-  while (!host_impl()->client()->ready_to_activate()) {
+  while (!host_impl()->delegate()->ready_to_activate()) {
     static_cast<SynchronousTaskGraphRunner*>(task_graph_runner())
         ->RunSingleTaskForTesting();
     base::RunLoop().RunUntilIdle();
@@ -3525,7 +3611,7 @@ TEST_F(CheckerImagingTileManagerTest,
       GlobalStateThatImpactsTilePriority());
   EXPECT_FALSE(host_impl()->tile_manager()->IsReadyToDraw());
 
-  host_impl()->client()->reset_ready_to_draw();
+  host_impl()->delegate()->reset_ready_to_draw();
   host_impl()->tile_manager()->PrepareTiles(host_impl()->global_tile_state());
   EXPECT_TRUE(host_impl()->tile_manager()->HasScheduledTileTasksForTesting());
   EXPECT_TRUE(host_impl()
@@ -3618,7 +3704,7 @@ TEST_F(CheckerImagingTileManagerMemoryTest, AddsAllNowTilesToImageDecodeQueue) {
   // Flush all decode tasks. The tiles with checkered images should be
   // invalidated.
   FlushDecodeTasks();
-  EXPECT_TRUE(host_impl()->client()->did_request_impl_side_invalidation());
+  EXPECT_TRUE(host_impl()->delegate()->did_request_impl_side_invalidation());
   PerformImplSideInvalidation();
   for (int i = 0; i < 2; i++) {
     for (int j = 0; j < 3; j++) {
@@ -3629,7 +3715,7 @@ TEST_F(CheckerImagingTileManagerMemoryTest, AddsAllNowTilesToImageDecodeQueue) {
         EXPECT_FALSE(tile);
     }
   }
-  host_impl()->client()->reset_did_request_impl_side_invalidation();
+  host_impl()->delegate()->reset_did_request_impl_side_invalidation();
 }
 
 class VerifyImageProviderRasterBuffer : public RasterBuffer {

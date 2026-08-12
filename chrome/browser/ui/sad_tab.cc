@@ -6,15 +6,16 @@
 
 #include <vector>
 
+#include "base/check.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notreached.h"
 #include "base/time/time.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/browser/feedback/show_feedback_page.h"
 #include "chrome/browser/net/referrer.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/url_constants.h"
@@ -48,19 +49,15 @@ constexpr char kCategoryTagCrash[] = "Crash";
 
 // Return true if this function has been called in the last 10 seconds.
 bool IsRepeatedlyCrashing() {
-  const int kMaxSecondsSinceLastCrash = 10;
+  static constexpr base::TimeDelta kMaxTimeSinceLastCrash = base::Seconds(10);
 
-  static int64_t last_called_ts = 0;
-  base::TimeTicks last_called(base::TimeTicks::UnixEpoch());
+  static base::TimeTicks last_called;
 
-  if (last_called_ts) {
-    last_called = base::TimeTicks::FromInternalValue(last_called_ts);
-  }
+  const base::TimeTicks now = base::TimeTicks::Now();
+  const bool crashed_recently =
+      !last_called.is_null() && (now - last_called) < kMaxTimeSinceLastCrash;
 
-  bool crashed_recently = (base::TimeTicks().Now() - last_called).InSeconds() <
-                          kMaxSecondsSinceLastCrash;
-
-  last_called_ts = base::TimeTicks().Now().ToInternalValue();
+  last_called = now;
   return crashed_recently;
 }
 
@@ -210,7 +207,8 @@ void SadTab::PerformAction(SadTab::Action action) {
                   ui_metrics::SadTabEvent::BUTTON_CLICKED);
       if (show_feedback_button_) {
         chrome::ShowFeedbackPage(
-            chrome::FindBrowserWithTab(web_contents_),
+            GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+                web_contents_),
             feedback::kFeedbackSourceSadTabPage,
             std::string() /* description_template */,
             l10n_util::GetStringUTF8(kind_ == SAD_TAB_KIND_CRASHED

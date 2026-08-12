@@ -6,6 +6,7 @@ package org.chromium.components.browser_ui.bottomsheet;
 
 import androidx.annotation.ColorInt;
 import androidx.annotation.IntDef;
+import androidx.annotation.Px;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -18,13 +19,20 @@ import java.lang.annotation.RetentionPolicy;
 
 /**
  * The public interface for the bottom sheet's controller. Features wishing to show content in the
- * sheet UI must implement {@link BottomSheetContent} and call
- * {@link #requestShowContent(BottomSheetContent, boolean)} which will return true if the content
- * was actually shown (see full doc on method).
+ * sheet UI must implement {@link BottomSheetContent} and call {@link
+ * #requestShowContent(BottomSheetContent, boolean)} which will return true if the content was
+ * actually shown (see full doc on method).
  */
 @NullMarked
 public interface BottomSheetController {
-    /** The different states that the bottom sheet can have. */
+    // LINT.IfChange(SheetState)
+    /**
+     * The different states that the bottom sheet can have.
+     *
+     * <p>These values are persisted to logs. Entries should not be renumbered and numeric values
+     * should never be reused. Please keep in sync with "BottomSheet.State" in
+     * tools/metrics/histograms/metadata/android/enums.xml.
+     */
     @IntDef({
         SheetState.NONE,
         SheetState.HIDDEN,
@@ -36,8 +44,8 @@ public interface BottomSheetController {
     @Retention(RetentionPolicy.SOURCE)
     @interface SheetState {
         /**
-         * NONE is for internal use only and indicates the sheet is not currently
-         * transitioning between states.
+         * NONE is for internal use only and indicates the sheet is not currently transitioning
+         * between states.
          */
         int NONE = -1;
 
@@ -52,10 +60,13 @@ public interface BottomSheetController {
         int SCROLLING = 4;
     }
 
+    // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:BottomSheet.State)
+
+    // LINT.IfChange(StateChangeReason)
     /**
      * The different reasons that the sheet's state can change.
      *
-     * Needs to stay in sync with BottomSheet.StateChangeReason in enums.xml. These values are
+     * <p>Needs to stay in sync with BottomSheet.StateChangeReason in enums.xml. These values are
      * persisted to logs. Entries should not be renumbered and numeric values should never be
      * reused.
      */
@@ -70,6 +81,7 @@ public interface BottomSheetController {
         StateChangeReason.PROMOTE_TAB,
         StateChangeReason.OMNIBOX_FOCUS,
         StateChangeReason.INTERACTION_COMPLETE,
+        StateChangeReason.CLOSE_BUTTON,
         StateChangeReason.MAX_VALUE
     })
     @Retention(RetentionPolicy.SOURCE)
@@ -84,24 +96,28 @@ public interface BottomSheetController {
         int PROMOTE_TAB = 7;
         int OMNIBOX_FOCUS = 8;
         int INTERACTION_COMPLETE = 9;
+        int CLOSE_BUTTON = 10;
 
         // STOP: Updates here require an update in enums.xml.
-        int MAX_VALUE = INTERACTION_COMPLETE;
+        int MAX_VALUE = CLOSE_BUTTON;
     }
+    // LINT.ThenChange(//tools/metrics/histograms/enums.xml:BottomSheet.StateChangeReason)
 
     /**
      * Request that some content be shown in the bottom sheet.
+     *
      * @param content The content to be shown in the bottom sheet.
      * @param animate Whether the appearance of the bottom sheet should be animated.
      * @return True if the content was shown, false if it was suppressed. Content is suppressed if
-     *         higher priority content is in the sheet, the sheet is expanded beyond the peeking
-     *         state, or the browser is in a mode that does not support showing the sheet.
+     *     higher priority content is in the sheet, the sheet is expanded beyond the peeking state,
+     *     or the browser is in a mode that does not support showing the sheet.
      */
     boolean requestShowContent(BottomSheetContent content, boolean animate);
 
     /**
      * Hide content shown in the bottom sheet. If the content is not showing, this call retracts the
      * request to show it.
+     *
      * @param content The content to be hidden.
      * @param animate Whether the sheet should animate when hiding.
      * @param hideReason The reason that the content is being hidden.
@@ -113,42 +129,59 @@ public interface BottomSheetController {
 
     void hideContent(@Nullable BottomSheetContent content, boolean animate);
 
-    /** @param observer The observer to add. */
+    /**
+     * @param observer The observer to add.
+     */
     void addObserver(BottomSheetObserver observer);
 
-    /** @param observer The observer to remove. */
+    /**
+     * @param observer The observer to remove.
+     */
     void removeObserver(BottomSheetObserver observer);
 
     /** Expand the sheet. If there is no content in the sheet, this is a noop. */
     void expandSheet();
 
     /**
-     * Collapse the current sheet to peek state. Sheet may not change the state if the state
-     * is not allowed.
+     * Expand the sheet. If there is no content in the sheet, this is a noop.
+     *
+     * @param animate {@code true} for animation effect.
+     */
+    void expandSheet(boolean animate);
+
+    /**
+     * Collapse the current sheet to peek state. Sheet may not change the state if the state is not
+     * allowed.
+     *
      * @param animate {@code true} for animation effect.
      * @return {@code true} if the sheet could go to the peek state.
      */
     boolean collapseSheet(boolean animate);
 
-    /** @return The content currently showing in the bottom sheet. */
+    /** Returns the content currently showing in the bottom sheet. */
     @Nullable BottomSheetContent getCurrentSheetContent();
 
-    /** @return The current state of the bottom sheet. */
+    /** Returns the current state of the bottom sheet. */
     @SheetState
     int getSheetState();
 
-    /** @return The target state of the bottom sheet (usually during animations). */
+    /** Returns the target state of the bottom sheet (usually during animations). */
     @SheetState
     int getTargetSheetState();
 
-    /** @return Whether the bottom sheet is currently open (expanded beyond peek state). */
+    /** Returns whether the bottom sheet is currently open (expanded beyond peek state). */
     boolean isSheetOpen();
 
-    /** @return Whether the bottom sheet is in the process of hiding. */
+    /** Returns whether the bottom sheet is in the process of hiding. */
     boolean isSheetHiding();
 
-    /** @return The current offset from the bottom of the screen that the sheet is in px. */
+    /** Returns the current offset from the bottom of the screen that the sheet is in px. */
+    @Px
     int getCurrentOffset();
+
+    /** Returns the maximum offset from the bottom of the screen that the sheet can be at in px. */
+    @Px
+    int getMaxOffset();
 
     /**
      * @return The height of the bottom sheet's parent container in px. This is not the bottom sheet
@@ -156,6 +189,10 @@ public interface BottomSheetController {
      *     requested).
      */
     int getContainerHeight();
+
+    /** Returns the resolved PEEK height in pixels for the current content. */
+    @Px
+    int getCurrentPeekHeightPx();
 
     /**
      * @return The width of the bottom sheet's parent container in px. his is not the bottom sheet
@@ -177,7 +214,7 @@ public interface BottomSheetController {
      * bottom sheet's interaction with the scrim if the default behavior is not desired -- fading in
      * behind the sheet as the sheet is expanded.
      */
-    ScrimManager getScrimManager();
+    @Nullable ScrimManager getScrimManager();
 
     /**
      * This method provides a property model that can be used to show the scrim behind the bottom
@@ -218,6 +255,16 @@ public interface BottomSheetController {
     boolean isAnchoredToBottomControls();
 
     /**
+     * @return The bottom margin of the sheet's container in pixels. This is space at the bottom of
+     *     the sheet covered by UI like the keyboard.
+     */
+    @Px
+    int getContainerBottomMargin();
+
+    /** Whether the bottom sheet has a bottom inset. */
+    boolean hasBottomInset();
+
+    /**
      * Get the current background color for the bottom sheet. If the sheet does not have a solid
      * background color, this will return null.
      */
@@ -226,4 +273,10 @@ public interface BottomSheetController {
 
     /** Called when the sheet background color override is changed. */
     void onSheetBackgroundColorOverrideChanged();
+
+    /**
+     * @param content The content prospectively being shown in the bottom sheet.
+     * @return Whether the bottom sheet should use the large form factor UI for the given content.
+     */
+    boolean isLargeFormFactorUiEnabled(BottomSheetContent content);
 }

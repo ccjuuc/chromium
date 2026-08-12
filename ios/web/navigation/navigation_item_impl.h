@@ -8,6 +8,7 @@
 #import <Foundation/Foundation.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/time/time.h"
@@ -53,6 +54,11 @@ class NavigationItemImpl : public web::NavigationItem {
   const GURL& GetVirtualURL() const override;
   void SetTitle(const std::u16string& title) override;
   const std::u16string& GetTitle() const override;
+  void SetInternalScrollToTextFragment(
+      const std::optional<std::string>& internal_scroll_to_text_fragment)
+      override;
+  const std::optional<std::string>& GetInternalScrollToTextFragment()
+      const override;
   const std::u16string& GetTitleForDisplay() const override;
   void SetTransitionType(ui::PageTransition transition_type) override;
   ui::PageTransition GetTransitionType() const override;
@@ -83,6 +89,11 @@ class NavigationItemImpl : public web::NavigationItem {
   // Whether this navigation is the result of a hash change.
   void SetIsCreatedFromHashChange(bool hash_change);
   bool IsCreatedFromHashChange() const;
+
+  // Whether this navigation is the result of an automatic navigation without
+  // any user interaction.
+  void SetWasCreatedAutomatically(bool value);
+  bool WasCreatedAutomatically() const;
 
   // Initiation type of this pending navigation. Resets to NONE after commit.
   void SetNavigationInitiationType(
@@ -140,6 +151,7 @@ class NavigationItemImpl : public web::NavigationItem {
   GURL url_;
   Referrer referrer_;
   GURL virtual_url_;
+  std::optional<std::string> internal_scroll_to_text_fragment_;
   std::u16string title_;
   ui::PageTransition transition_type_ = ui::PAGE_TRANSITION_LINK;
   FaviconStatus favicon_status_;
@@ -148,6 +160,7 @@ class NavigationItemImpl : public web::NavigationItem {
   UserAgentType user_agent_type_ = UserAgentType::NONE;
   NSData* security_scoped_file_resource_ = nil;
   NSMutableDictionary* http_request_headers_ = nil;
+  bool was_created_automatically_ = false;
 
   NSString* serialized_state_object_ = nil;
   bool is_created_from_hash_change_ = false;

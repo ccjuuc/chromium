@@ -17,7 +17,6 @@
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -26,6 +25,7 @@
 #include "net/base/net_errors.h"
 #include "net/base/net_info_source_list.h"
 #include "net/base/network_anonymization_key.h"
+#include "net/base/network_handle.h"
 #include "net/base/proxy_delegate.h"
 #include "net/base/proxy_server.h"
 #include "net/base/proxy_string_util.h"
@@ -336,10 +336,10 @@ class ProxyResolverFactoryForProxyChains : public ProxyResolverFactory {
 };
 
 // Returns NetLog parameters describing a proxy configuration change.
-base::Value::Dict NetLogProxyConfigChangedParams(
+base::DictValue NetLogProxyConfigChangedParams(
     const std::optional<ProxyConfigWithAnnotation>* old_config,
     const ProxyConfigWithAnnotation* new_config) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   // The "old_config" is optional -- the first notification will not have
   // any "previous" configuration.
   if (old_config->has_value())
@@ -348,10 +348,9 @@ base::Value::Dict NetLogProxyConfigChangedParams(
   return dict;
 }
 
-base::Value::Dict NetLogBadProxyListParams(
-    const ProxyRetryInfoMap* retry_info) {
-  base::Value::Dict dict;
-  base::Value::List list;
+base::DictValue NetLogBadProxyListParams(const ProxyRetryInfoMap* retry_info) {
+  base::DictValue dict;
+  base::ListValue list;
 
   for (const auto& retry_info_pair : *retry_info)
     list.Append(retry_info_pair.first.ToDebugString());
@@ -391,9 +390,9 @@ GURL SanitizeUrl(const GURL& url) {
   return url.ReplaceComponents(replacements);
 }
 
-base::Value::Dict CreateDnsConditionNetLogParam(
+base::DictValue CreateDnsConditionNetLogParam(
     const ProxyConfig::ProxyOverrideRule::DnsProbeCondition& dns_condition) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("dns_condition", dns_condition.ToDict());
   return dict;
 }
@@ -969,6 +968,7 @@ int ConfiguredProxyResolutionService::ResolveProxy(
     const GURL& raw_url,
     const std::string& method,
     const NetworkAnonymizationKey& network_anonymization_key,
+    handles::NetworkHandle target_network,
     ProxyInfo* result,
     CompletionOnceCallback callback,
     std::unique_ptr<ProxyResolutionRequest>* out_request,
@@ -1012,8 +1012,8 @@ int ConfiguredProxyResolutionService::ResolveProxy(
   }
 
   auto req = std::make_unique<ConfiguredProxyResolutionRequest>(
-      this, url, method, network_anonymization_key, result, std::move(callback),
-      net_log, priority);
+      this, url, method, network_anonymization_key, target_network, result,
+      std::move(callback), net_log, priority);
 
   if (IsReady()) {
     // Start the resolve request.
@@ -1281,7 +1281,7 @@ int ConfiguredProxyResolutionService::DidFinishResolvingProxy(
 
     net_log.AddEvent(
         NetLogEventType::PROXY_RESOLUTION_SERVICE_RESOLVED_PROXY_LIST, [&] {
-          base::Value::Dict dict;
+          base::DictValue dict;
           dict.Set("proxy_info", result->ToDebugString());
           return dict;
         });
@@ -1393,33 +1393,6 @@ PacFileFetcher* ConfiguredProxyResolutionService::GetPacFileFetcher() const {
   return pac_file_fetcher_.get();
 }
 
-ConfiguredProxyResolutionService::HostResolutionRequest::HostResolutionRequest(
-    std::unique_ptr<HostResolver::ResolveHostRequest> request,
-    RequestPriority initial_priority)
-    : request(std::move(request)), current_priority(initial_priority) {}
-
-ConfiguredProxyResolutionService::HostResolutionRequest::HostResolutionRequest(
-    HostResolutionRequest&&) = default;
-
-ConfiguredProxyResolutionService::HostResolutionRequest&
-ConfiguredProxyResolutionService::HostResolutionRequest::operator=(
-    HostResolutionRequest&&) = default;
-
-ConfiguredProxyResolutionService::HostResolutionRequest::
-    ~HostResolutionRequest() = default;
-
-void ConfiguredProxyResolutionService::HostResolutionRequest::AddListener(
-    base::WeakPtr<ConfiguredProxyResolutionRequest> listener,
-    RequestPriority priority) {
-  listeners.push_back(std::move(listener));
-
-  if (current_priority < priority) {
-    // If another request requiring the same DNS host resolution has a higher
-    // priority, bump the pending DNS resolution request's priority to match.
-    request->ChangeRequestPriority(priority);
-    current_priority = priority;
-  }
-}
 
 bool ConfiguredProxyResolutionService::GetLoadStateIfAvailable(
     LoadState* load_state) const {
@@ -1536,12 +1509,12 @@ bool ConfiguredProxyResolutionService::IsReady() const {
   return current_state_ == STATE_READY;
 }
 
-base::Value::Dict ConfiguredProxyResolutionService::GetProxyNetLogValues() {
-  base::Value::Dict net_info_dict;
+base::DictValue ConfiguredProxyResolutionService::GetProxyNetLogValues() {
+  base::DictValue net_info_dict;
 
   // Log Proxy Settings.
   {
-    base::Value::Dict dict;
+    base::DictValue dict;
     if (fetched_config_)
       dict.Set("original", fetched_config_->value().ToValue());
     if (config_)
@@ -1678,20 +1651,10 @@ ConfiguredProxyResolutionService::RequestHostResolution(
     const ProxyConfig::ProxyOverrideRule::DnsProbeCondition& dns_condition,
     base::WeakPtr<ConfiguredProxyResolutionRequest> listener,
     const NetworkAnonymizationKey& network_anonymization_key,
+    handles::NetworkHandle target_network,
     const NetLogWithSource& net_log,
     RequestPriority priority) {
   CHECK(host_resolver_for_override_rules_);
-  auto key = std::make_pair(dns_condition.host, network_anonymization_key);
-  auto request_it = host_resolution_requests_.find(key);
-  if (request_it != host_resolution_requests_.end()) {
-    // A DNS resolution request is already pending for this host,
-    // subscribe to it.
-    net_log.AddEvent(
-        NetLogEventType::PROXY_OVERRIDE_BEGIN_HOST_RESOLUTION,
-        [&] { return CreateDnsConditionNetLogParam(dns_condition); });
-    request_it->second.AddListener(std::move(listener), priority);
-    return std::nullopt;
-  }
 
   HostResolver::ResolveHostParameters parameters;
   parameters.initial_priority = priority;
@@ -1702,53 +1665,54 @@ ConfiguredProxyResolutionService::RequestHostResolution(
   std::unique_ptr<HostResolver::ResolveHostRequest> request;
   if (GURL::SchemeIsCryptographic(dns_condition.host.scheme())) {
     request = host_resolver_for_override_rules_->CreateRequest(
-        dns_condition.host, network_anonymization_key, sub_net_log, parameters);
+        dns_condition.host, network_anonymization_key, target_network,
+        sub_net_log, parameters);
   } else {
     // If HTTPS DNS is not specified by the rule, remove the scheme as it may
     // fail if HTTPS DNS turns out to be supported for that domain
     // (crbug.com/469064221).
     request = host_resolver_for_override_rules_->CreateRequest(
         HostPortPair::FromSchemeHostPort(dns_condition.host),
-        network_anonymization_key, sub_net_log, parameters);
+        network_anonymization_key, target_network, sub_net_log, parameters);
   }
 
   // Link the two net log sources together.
   sub_net_log.AddEventReferencingSource(
       NetLogEventType::PROXY_OVERRIDE_HOST_RESOLUTION, net_log.source());
   net_log.AddEvent(NetLogEventType::PROXY_OVERRIDE_BEGIN_HOST_RESOLUTION, [&] {
-    base::Value::Dict dict = CreateDnsConditionNetLogParam(dns_condition);
+    base::DictValue dict = CreateDnsConditionNetLogParam(dns_condition);
     sub_net_log.source().AddToEventParameters(dict);
     return dict;
   });
 
+  // `request` is owned by `this`, this makes it safe to use `base::Unretained`
+  // and pass a raw C++ pointer to `OnHostResolved`.
   int rv = request->Start(base::BindOnce(
       &ConfiguredProxyResolutionService::OnHostResolved, base::Unretained(this),
-      dns_condition.host, network_anonymization_key));
+      request.get(), std::move(listener), dns_condition.host));
   if (rv != ERR_IO_PENDING) {
     return ResolveHostResult(rv, *request);
   }
 
-  auto [inserted_request_it, inserted_unused] =
-      host_resolution_requests_.emplace(
-          key, HostResolutionRequest(std::move(request), priority));
-  inserted_request_it->second.AddListener(std::move(listener), priority);
+  host_resolution_requests_.insert(std::move(request));
   return std::nullopt;
 }
 
 void ConfiguredProxyResolutionService::OnHostResolved(
+    HostResolver::ResolveHostRequest* request,
+    base::WeakPtr<ConfiguredProxyResolutionRequest> listener,
     const url::SchemeHostPort& scheme_host_port,
-    const NetworkAnonymizationKey& network_anonymization_key,
     int net_error) {
-  auto key = std::make_pair(scheme_host_port, network_anonymization_key);
-  auto request_it = host_resolution_requests_.find(key);
+  auto request_it = host_resolution_requests_.find(request);
   CHECK(request_it != host_resolution_requests_.end());
 
-  auto map_node = host_resolution_requests_.extract(key);
-  ResolveHostResult result(net_error, *map_node.mapped().request);
-  for (auto& listener : map_node.mapped().listeners) {
-    if (listener) {
-      listener->OnDnsHostResolved(scheme_host_port, result);
-    }
+  auto node = host_resolution_requests_.extract(request_it);
+  std::unique_ptr<HostResolver::ResolveHostRequest> owned_request =
+      std::move(node.value());
+
+  ResolveHostResult result(net_error, *owned_request);
+  if (listener) {
+    listener->OnDnsHostResolved(scheme_host_port, result);
   }
 }
 

@@ -32,7 +32,7 @@ class AccessibilityLiveSiteTest : public InProcessBrowserTest {
   void SetUpOnMainThread() override {
     ASSERT_FALSE(AccessibilityManager::Get()->IsSelectToSpeakEnabled());
 
-    extensions::ExtensionHostTestHelper host_helper(browser()->profile());
+    extensions::ExtensionHostTestHelper host_helper(browser()->GetProfile());
     AccessibilityManager::Get()->SetSelectToSpeakEnabled(true);
     host_helper.WaitForHostCompletedFirstLoad();
 
@@ -52,7 +52,7 @@ class AccessibilityLiveSiteTest : public InProcessBrowserTest {
 
     // Pretend that enhanced network voices dialog has been accepted so that the
     // dialog does not block.
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         prefs::kAccessibilitySelectToSpeakEnhancedVoicesDialogShown, true);
 
     InProcessBrowserTest::SetUpInProcessBrowserTestFixture();
@@ -90,7 +90,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityLiveSiteTest,
 
   content::WaitForAccessibilityTreeToContainNodeWithName(
       web_contents, "Long-string-to-test-select-to-speak");
-  gfx::Rect bounds = browser()->window()->GetBounds();
+  gfx::Rect bounds = browser()->GetWindow()->GetBounds();
   generator_->PressKey(ui::VKEY_LWIN, 0 /* flags */);
   generator_->MoveMouseTo(bounds.x() + 8, bounds.y() + 200);
   generator_->PressLeftButton();

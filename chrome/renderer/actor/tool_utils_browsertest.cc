@@ -19,6 +19,15 @@
 
 namespace actor {
 
+TEST(ToolUtilsStandaloneTest, InvalidInteractionDisallowedReasonIsUnreachable) {
+  // The Blink enum is closed. Missing a new value must fail loudly so actor
+  // does not silently report an inaccurate fallback reason.
+  EXPECT_DEATH_IF_SUPPORTED(
+      WebElementInteractionDisallowedReasonToString(
+          static_cast<blink::WebElementInteractionDisallowedReason>(-1)),
+      "");
+}
+
 class ToolUtilsTest : public ChromeRenderViewTest {
  public:
   ToolUtilsTest() = default;
@@ -37,7 +46,7 @@ class ToolUtilsTest : public ChromeRenderViewTest {
   blink::WebNode GetNodeByHtmlId(const std::string& html_id) {
     blink::WebElement element =
         GetMainRenderFrame()->GetWebFrame()->GetDocument().GetElementById(
-            blink::WebString::FromUTF8(html_id));
+            blink::WebString::FromUtf8(html_id));
     if (element.IsNull()) {
       return blink::WebNode();
     }
@@ -48,13 +57,13 @@ class ToolUtilsTest : public ChromeRenderViewTest {
                                        const std::string& html_id_str) {
     const blink::WebElement iframe_element =
         GetMainRenderFrame()->GetWebFrame()->GetDocument().GetElementById(
-            blink::WebString::FromUTF8(iframe_id_str));
+            blink::WebString::FromUtf8(iframe_id_str));
 
     const blink::WebElement child_element =
         blink::WebFrame::FromFrameOwnerElement(iframe_element)
             ->ToWebLocalFrame()
             ->GetDocument()
-            .GetElementById(blink::WebString::FromUTF8(html_id_str));
+            .GetElementById(blink::WebString::FromUtf8(html_id_str));
     if (child_element.IsNull()) {
       return blink::WebNode();
     }

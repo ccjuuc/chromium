@@ -24,6 +24,7 @@
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/cstring_view.h"
 #include "base/strings/utf_string_conversions.h"
+#include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/perfetto/include/perfetto/protozero/message.h"
 #include "third_party/perfetto/include/perfetto/protozero/message_handle.h"
@@ -42,6 +43,12 @@ static constexpr uint8_t kFileIoDirEnumOpcode = 72u;
 static constexpr uint8_t kFileIoInfoOpcode = 70u;
 static constexpr uint8_t kFileIoReadWriteOpcode = 67u;
 static constexpr uint8_t kFileIoSimpleOpOpcode = 73u;
+static constexpr uint8_t kFileIoFltReadOpcode = 83u;
+static constexpr uint8_t kFileIoFltWriteOpcode = 84u;
+static constexpr uint8_t kFileIoFltSetInfoOpcode = 85u;
+static constexpr uint8_t kFileIoFltQueryInfoOpcode = 86u;
+static constexpr uint8_t kFileIoPathOperationDeleteOpcode = 79u;
+static constexpr uint8_t kFileIoPathOperationRenameOpcode = 80u;
 
 // A trace writer that creates TracePacket messages on the heap and sends their
 // serialized form to an owner-provided callback.
@@ -358,6 +365,24 @@ base::HeapArray<uint8_t> EncodeFileIoSimpleOp(uint32_t ttid) {
   return base::HeapArray<uint8_t>::CopiedFrom({buffer});
 }
 
+// Returns the MOF encoding of a `FileIo_FltOp` event.
+base::HeapArray<uint8_t> EncodeFileIoFltOp(uint32_t ttid,
+                                           uint32_t operation_status,
+                                           uint32_t filter_instance) {
+  std::vector<uint8_t> buffer;
+  auto iter = std::back_inserter(buffer);
+  uintptr_t a_pointer = 0;
+  std::ranges::copy(base::byte_span_from_ref(++a_pointer), iter);  // IrpPtr
+  std::ranges::copy(base::byte_span_from_ref(++a_pointer), iter);  // FileObject
+  std::ranges::copy(base::byte_span_from_ref(++a_pointer), iter);  // FileKey
+  std::ranges::copy(base::byte_span_from_ref(ttid), iter);
+  std::ranges::copy(base::byte_span_from_ref(operation_status), iter);
+  std::ranges::copy(base::byte_span_from_ref(filter_instance), iter);
+  uint32_t reserved = 0;
+  std::ranges::copy(base::byte_span_from_ref(reserved), iter);
+  return base::HeapArray<uint8_t>::CopiedFrom({buffer});
+}
+
 // Returns the MOF encoding of a `FileIo_OpEnd` event.
 base::HeapArray<uint8_t> EncodeFileIoOpEnd(uint32_t ttid, uint32_t nt_status) {
   std::vector<uint8_t> buffer;
@@ -366,6 +391,98 @@ base::HeapArray<uint8_t> EncodeFileIoOpEnd(uint32_t ttid, uint32_t nt_status) {
   std::ranges::copy(base::byte_span_from_ref(++a_pointer), iter);  // IrpPtr
   std::ranges::copy(base::byte_span_from_ref(++a_pointer), iter);  // ExtraInfo
   std::ranges::copy(base::byte_span_from_ref(nt_status), iter);
+  return base::HeapArray<uint8_t>::CopiedFrom({buffer});
+}
+
+// Returns the MOF encoding of a `FileIo_PathOperation` event.
+base::HeapArray<uint8_t> EncodeFileIoPathOperation(
+    uint32_t ttid,
+    uint32_t info_class,
+    std::wstring_view file_name) {
+  std::vector<uint8_t> buffer;
+  auto iter = std::back_inserter(buffer);
+  uintptr_t a_pointer = 0;
+  std::ranges::copy(base::byte_span_from_ref(++a_pointer), iter);  // IrpPtr
+  std::ranges::copy(base::byte_span_from_ref(++a_pointer), iter);  // FileObject
+  std::ranges::copy(base::byte_span_from_ref(++a_pointer), iter);  // FileKey
+  std::ranges::copy(base::byte_span_from_ref(++a_pointer), iter);  // ExtraInfo
+  std::ranges::copy(base::byte_span_from_ref(ttid), iter);
+  std::ranges::copy(base::byte_span_from_ref(info_class), iter);
+  std::ranges::copy(base::as_byte_span(file_name), iter);
+  buffer.insert(buffer.end(), sizeof(wchar_t), 0);  // string terminator
+  std::ranges::copy(base::byte_span_from_ref(kFileIoDirEnumOpcode), iter);
+  return base::HeapArray<uint8_t>::CopiedFrom({buffer});
+}
+
+// Returns the MOF encoding of a `DiskIo_TypeGroup1` event.
+base::HeapArray<uint8_t> EncodeDiskIo(uint32_t disk_number,
+                                      uint32_t irp_flags,
+                                      uint32_t transfer_size,
+                                      uint32_t reserved,
+                                      int64_t byte_offset,
+                                      uint64_t high_res_response_time,
+                                      uint32_t issuing_thread_id) {
+  std::vector<uint8_t> buffer;
+  auto iter = std::back_inserter(buffer);
+  uintptr_t a_pointer = 0;
+  std::ranges::copy(base::byte_span_from_ref(disk_number), iter);
+  std::ranges::copy(base::byte_span_from_ref(irp_flags), iter);
+  std::ranges::copy(base::byte_span_from_ref(transfer_size), iter);
+  std::ranges::copy(base::byte_span_from_ref(reserved), iter);
+  std::ranges::copy(base::byte_span_from_ref(byte_offset), iter);
+  std::ranges::copy(base::byte_span_from_ref(++a_pointer), iter);  // FileObject
+  std::ranges::copy(base::byte_span_from_ref(++a_pointer), iter);  // IrpPtr
+  std::ranges::copy(base::byte_span_from_ref(high_res_response_time), iter);
+  std::ranges::copy(base::byte_span_from_ref(issuing_thread_id), iter);
+  return base::HeapArray<uint8_t>::CopiedFrom({buffer});
+}
+
+// Returns the MOF encoding of a `DiskIo_TypeGroup2` event.
+base::HeapArray<uint8_t> EncodeDiskIoGroup2(uint32_t issuing_thread_id) {
+  std::vector<uint8_t> buffer;
+  auto iter = std::back_inserter(buffer);
+  uintptr_t a_pointer = 0;
+  std::ranges::copy(base::byte_span_from_ref(++a_pointer), iter);  // IrpPtr
+  std::ranges::copy(base::byte_span_from_ref(issuing_thread_id), iter);
+  return base::HeapArray<uint8_t>::CopiedFrom({buffer});
+}
+
+// Returns the MOF encoding of a `DiskIo_TypeGroup3` event.
+base::HeapArray<uint8_t> EncodeDiskIoGroup3(uint32_t disk_number,
+                                            uint32_t irp_flags,
+                                            uint64_t high_res_response_time,
+                                            uint32_t issuing_thread_id) {
+  std::vector<uint8_t> buffer;
+  auto iter = std::back_inserter(buffer);
+  uintptr_t a_pointer = 0;
+  std::ranges::copy(base::byte_span_from_ref(disk_number), iter);
+  std::ranges::copy(base::byte_span_from_ref(irp_flags), iter);
+  std::ranges::copy(base::byte_span_from_ref(high_res_response_time), iter);
+  std::ranges::copy(base::byte_span_from_ref(++a_pointer), iter);  // IrpPtr
+  std::ranges::copy(base::byte_span_from_ref(issuing_thread_id), iter);
+  return base::HeapArray<uint8_t>::CopiedFrom({buffer});
+}
+
+// Returns the MOF encoding of a `StackWalk` event.
+base::HeapArray<uint8_t> EncodeStackWalk(
+    uint64_t timestamp,
+    uint32_t process_id,
+    uint32_t thread_id,
+    const std::vector<uint64_t>& call_stack,
+    size_t pointer_size) {
+  std::vector<uint8_t> buffer;
+  auto iter = std::back_inserter(buffer);
+  std::ranges::copy(base::byte_span_from_ref(timestamp), iter);
+  std::ranges::copy(base::byte_span_from_ref(process_id), iter);
+  std::ranges::copy(base::byte_span_from_ref(thread_id), iter);
+  for (const auto& pc : call_stack) {
+    if (pointer_size == sizeof(uint64_t)) {
+      std::ranges::copy(base::byte_span_from_ref(pc), iter);
+    } else {
+      std::ranges::copy(base::byte_span_from_ref(static_cast<uint32_t>(pc)),
+                        iter);
+    }
+  }
   return base::HeapArray<uint8_t>::CopiedFrom({buffer});
 }
 
@@ -483,6 +600,10 @@ class EtwConsumerTest : public testing::Test {
     SendThreadEvent(/*version=*/2u, /*opcode=*/36u, kSystemTid, packet_data);
   }
 
+  void ProcessStackWalkEvent(base::span<const uint8_t> packet_data) {
+    SendStackWalkEvent(/*version=*/0u, /*opcode=*/32u, kSystemTid, packet_data);
+  }
+
   // Validates the TracePacket processed by `decoder` and populates `c_switch`
   // with a decoder for the first ETW event contained therein.
   void ValidateAndDecodeCSwitch(
@@ -494,6 +615,16 @@ class EtwConsumerTest : public testing::Test {
 
     ASSERT_TRUE(event->has_c_switch());
     c_switch.emplace(event->c_switch());
+  }
+
+  void ValidateAndDecodeStackWalk(
+      const MessageAndDecoder& decoder,
+      std::optional<perfetto::protos::pbzero::EtwTraceEvent::Decoder>& event,
+      std::optional<perfetto::protos::pbzero::StackWalkEtwEvent::Decoder>&
+          stack_walk) {
+    ValidateAndDecodeEtwEvent(decoder, event);
+    ASSERT_TRUE(event->has_stack_walk());
+    stack_walk.emplace(event->stack_walk());
   }
 
   // Generates an ETW ReadyThread event with `packet_data` as its payload and
@@ -566,6 +697,14 @@ class EtwConsumerTest : public testing::Test {
                     packet_data);
   }
 
+  // Generates an ETW FileIo_FltOp event with `packet_data` as its payload
+  // and sends it to the EtwConsumer for processing.
+  void ProcessFileIoFltOpEvent(uint8_t opcode,
+                               uint32_t thread_id,
+                               base::span<const uint8_t> packet_data) {
+    SendFileIoEvent(/*version=*/0u, opcode, thread_id, packet_data);
+  }
+
   // Generates an ETW FileIo_OpEnd event with `packet_data` as its payload and
   // sends it to the EtwConsumer for processing. If the EtwConsumer generates a
   // TracePacket containing a `FileIoOpEndEtwEvent`, a new decoder is
@@ -573,6 +712,25 @@ class EtwConsumerTest : public testing::Test {
   void ProcessFileIoOpEndEvent(uint32_t thread_id,
                                base::span<const uint8_t> packet_data) {
     SendFileIoEvent(/*version=*/0u, /*opcode=*/76u, thread_id, packet_data);
+  }
+
+  // Generates an ETW `FileIo_PathOperation` event with `packet_data` as its
+  // payload and sends it to the EtwConsumer for processing. If the EtwConsumer
+  // generates a TracePacket containing a `FileIoPathOperationEtwEvent`, a new
+  // decoder is constructed from it.
+  void ProcessFileIoPathOperationEvent(uint8_t opcode,
+                                       uint32_t thread_id,
+                                       base::span<const uint8_t> packet_data) {
+    SendFileIoEvent(/*version=*/0u, opcode, thread_id, packet_data);
+  }
+  // Generates an ETW DiskIo event with `packet_data` as its payload and
+  // sends it to the EtwConsumer for processing. If the EtwConsumer generates
+  // a TracePacket containing a `DiskIoEtwEvent`, a new decoder is constructed
+  // from it.
+  void ProcessDiskIoEvent(uint32_t thread_id,
+                          uint8_t opcode,
+                          base::span<const uint8_t> packet_data) {
+    SendDiskIoEvent(/*version=*/0u, opcode, thread_id, packet_data);
   }
 
   // Validates the TracePacket processed by `decoder` and populates
@@ -648,6 +806,31 @@ class EtwConsumerTest : public testing::Test {
     ValidateAndDecodeEtwEvent(decoder, event);
     ASSERT_TRUE(event->has_file_io_op_end());
     file_io_op_end.emplace(event->file_io_op_end());
+  }
+
+  // Validates the TracePacket processed by `decoder` and populates
+  // `file_io_path_operation` with a decoder for the first ETW event contained
+  // therein.
+  void ValidateAndDecodeFileIoPathOperation(
+      const MessageAndDecoder& decoder,
+      std::optional<perfetto::protos::pbzero::EtwTraceEvent::Decoder>& event,
+      std::optional<
+          perfetto::protos::pbzero::FileIoPathOperationEtwEvent::Decoder>&
+          file_io_path_operation) {
+    ValidateAndDecodeEtwEvent(decoder, event);
+    ASSERT_TRUE(event->has_file_io_path_operation());
+    file_io_path_operation.emplace(event->file_io_path_operation());
+  }
+
+  // `disk_io` with a decoder for the first ETW event contained therein.
+  void ValidateAndDecodeDiskIo(
+      const MessageAndDecoder& decoder,
+      std::optional<perfetto::protos::pbzero::EtwTraceEvent::Decoder>& event,
+      std::optional<perfetto::protos::pbzero::DiskIoEtwEvent::Decoder>&
+          disk_io) {
+    ValidateAndDecodeEtwEvent(decoder, event);
+    ASSERT_TRUE(event->has_disk_io());
+    disk_io.emplace(event->disk_io());
   }
 
   void SendProcessStartEvent(base::span<const uint8_t> packet_data) {
@@ -740,19 +923,57 @@ class EtwConsumerTest : public testing::Test {
                  version, opcode, thread_id, packet_data);
   }
 
+  // Generates an ETW DiskIo event with `packet_data` as its payload and sends
+  // it to the EtwConsumer for processing.
+  void SendDiskIoEvent(uint8_t version,
+                       uint8_t opcode,
+                       uint32_t thread_id,
+                       base::span<const uint8_t> packet_data) {
+    ProcessEvent({0x3d6fa8d4,
+                  0xfe05,
+                  0x11d0,
+                  {0x9d, 0xda, 0x00, 0xc0, 0x4f, 0xd7, 0xba, 0x7c}},
+                 version, opcode, thread_id, packet_data);
+  }
+
+  void SendStackWalkEvent(uint8_t version,
+                          uint8_t opcode,
+                          uint32_t thread_id,
+                          base::span<const uint8_t> packet_data) {
+    ProcessEvent({0xdef2fe46,
+                  0x7bd6,
+                  0x4b80,
+                  {0xbd, 0x94, 0xf5, 0x7f, 0xe2, 0xd, 0xc, 0xe3}},
+                 version, opcode, thread_id, packet_data);
+  }
+
   // Returns the MOF encoding of a Process event (v4 by default).
   base::HeapArray<uint8_t> EncodeProcess(const ProcessData& process,
                                          int version = 4) {
-    // We are using EVENT_HEADER_FLAG_64_BIT_HEADER flag, so the pointer size
-    // should be 8 bytes.
     const size_t pointer_size = EtwConsumer::GetPointerSize(kEventHeaderFlags);
-    CHECK_EQ(pointer_size, sizeof(uint64_t));
+    CHECK_EQ(pointer_size, sizeof(uintptr_t));
     return ::tracing::EncodeProcess(process, version, pointer_size);
+  }
+
+  // Returns the MOF encoding of a StackWalk event.
+  base::HeapArray<uint8_t> EncodeStackWalk(
+      uint64_t timestamp,
+      uint32_t process_id,
+      uint32_t thread_id,
+      const std::vector<uint64_t>& call_stack) {
+    const size_t pointer_size = EtwConsumer::GetPointerSize(kEventHeaderFlags);
+    CHECK_EQ(pointer_size, sizeof(uintptr_t));
+    return ::tracing::EncodeStackWalk(timestamp, process_id, thread_id,
+                                      call_stack, pointer_size);
   }
 
  private:
   static constexpr uint16_t kTestProcessorIndex = 47;
+#if defined(ARCH_CPU_64_BITS)
   static constexpr uint16_t kEventHeaderFlags = EVENT_HEADER_FLAG_64_BIT_HEADER;
+#else
+  static constexpr uint16_t kEventHeaderFlags = EVENT_HEADER_FLAG_32_BIT_HEADER;
+#endif
 
   // Generates an ETW EVENT_RECORD for a given trace provider of a particular
   // version and opcode with `packet_data` as its payload and sends it to the
@@ -860,6 +1081,43 @@ TEST_F(EtwConsumerTest, CSwitchFiltering) {
       ValidateAndDecodeCSwitch(*decoders().back(), c_switch));
   EXPECT_FALSE(c_switch->has_new_thread_id());
   EXPECT_TRUE(c_switch->has_old_thread_id());
+}
+
+// Tests that no StackWalkEtwEvent is emitted for an empty StackWalk ETW event.
+TEST_F(EtwConsumerTest, StackWalkEventIsEmpty) {
+  ProcessStackWalkEvent({});
+  ASSERT_TRUE(decoders().empty());
+}
+
+// Tests that no StackWalkEtwEvent is emitted for a small StackWalk ETW event.
+TEST_F(EtwConsumerTest, StackWalkEventIsTooShort) {
+  static constexpr uint8_t kData[] = {0x01, 23};
+  ProcessStackWalkEvent({kData});
+  ASSERT_TRUE(decoders().empty());
+}
+
+// Tests that StackWalkEtwEvent is emitted for a StackWalk ETW event.
+TEST_F(EtwConsumerTest, StackWalkEvent) {
+  ProcessStackWalkEvent(EncodeStackWalk(123456u, kClientPid, kClientTid,
+                                        {0x1111, 0x2222, 0x3333}));
+  ASSERT_EQ(decoders().size(), 1u);
+
+  std::optional<perfetto::protos::pbzero::EtwTraceEvent::Decoder> event;
+  std::optional<perfetto::protos::pbzero::StackWalkEtwEvent::Decoder>
+      stack_walk;
+  ASSERT_NO_FATAL_FAILURE(
+      ValidateAndDecodeStackWalk(*decoders().front(), event, stack_walk));
+
+  EXPECT_TRUE(event->has_timestamp());
+  EXPECT_NE(0u, event->timestamp());
+  EXPECT_EQ(kClientTid, event->thread_id());
+  EXPECT_TRUE(stack_walk->has_callstack_iid());
+}
+
+// Tests that StackWalk events are dropped if they don't belong to Chrome.
+TEST_F(EtwConsumerTest, StackWalkFiltering) {
+  ProcessStackWalkEvent(EncodeStackWalk(123456u, kOtherPid, kOtherTid, {}));
+  ASSERT_TRUE(decoders().empty());
 }
 
 // Tests that no ReadyThreadEtwEvent is emitted for an empty ReadyThread ETW
@@ -1031,6 +1289,12 @@ TEST_F(EtwConsumerTest, FileIoOpEndEventIsEmpty) {
   EXPECT_TRUE(decoders().empty());
 }
 
+// Tests that no DiskIoEtwEvent is emitted for an empty DiskIo ETW event.
+TEST_F(EtwConsumerTest, DiskIoEventIsEmpty) {
+  ProcessDiskIoEvent(kClientTid, 10, {});
+  EXPECT_TRUE(decoders().empty());
+}
+
 // Tests that no FileIoCreateEtwEvent is emitted for a too-small FileIo_Create
 // ETW event.
 TEST_F(EtwConsumerTest, FileIoCreateEventIsTooShort) {
@@ -1077,6 +1341,212 @@ TEST_F(EtwConsumerTest, FileIoOpEndEventIsTooShort) {
   static constexpr uint8_t kData[] = {0x00, 123};
   ProcessFileIoOpEndEvent(kClientTid, {kData});
   EXPECT_TRUE(decoders().empty());
+}
+
+// Tests that no DiskIoEtwEvent is emitted for a too-small DiskIo ETW event.
+TEST_F(EtwConsumerTest, DiskIoEventIsTooShort) {
+  static constexpr uint8_t kData[] = {0x00, 123};
+  ProcessDiskIoEvent(kClientTid, 10, {kData});
+  EXPECT_TRUE(decoders().empty());
+}
+
+// Tests that a DiskIoEtwEvent is emitted for a DiskIo ETW event.
+TEST_F(EtwConsumerTest, DiskIoEvent) {
+  constexpr uint32_t kDiskNumber = 1;
+  constexpr uint32_t kIrpFlags = 0x111;
+  constexpr uint32_t kTransferSize = 4096;
+  constexpr uint32_t kReserved = 0x222;
+  constexpr int64_t kByteOffset = 8192;
+  constexpr uint64_t kHighResResponseTime = 0x333;
+
+  ProcessDiskIoEvent(
+      kClientTid, 10,
+      EncodeDiskIo(kDiskNumber, kIrpFlags, kTransferSize, kReserved,
+                   kByteOffset, kHighResResponseTime, kClientTid));
+  ASSERT_EQ(decoders().size(), 1u);
+
+  std::optional<perfetto::protos::pbzero::EtwTraceEvent::Decoder> event;
+  std::optional<perfetto::protos::pbzero::DiskIoEtwEvent::Decoder> disk_io;
+  ASSERT_NO_FATAL_FAILURE(
+      ValidateAndDecodeDiskIo(*decoders().back(), event, disk_io));
+
+  EXPECT_EQ(event->thread_id(), kClientTid);
+  EXPECT_EQ(disk_io->disk_number(), kDiskNumber);
+  EXPECT_EQ(disk_io->irp_flags(), kIrpFlags);
+  EXPECT_EQ(disk_io->transfer_size(), kTransferSize);
+  EXPECT_EQ(disk_io->byte_offset(), kByteOffset);
+  EXPECT_TRUE(disk_io->has_file_object());
+  EXPECT_TRUE(disk_io->has_irp_ptr());
+  LARGE_INTEGER frequency = {};
+  ::QueryPerformanceFrequency(&frequency);
+  int64_t expected_response_time =
+      base::Time::kNanosecondsPerSecond *
+      (kHighResResponseTime / static_cast<double>(frequency.QuadPart));
+  EXPECT_EQ(disk_io->response_time(), expected_response_time);
+  EXPECT_EQ(disk_io->issuing_thread_id(), kClientTid);
+  EXPECT_EQ(disk_io->opcode(), 10u);
+}
+
+// Tests that a DiskIoEtwEvent is emitted for a DiskIo Group 2 ETW event.
+TEST_F(EtwConsumerTest, DiskIoGroup2Event) {
+  ProcessDiskIoEvent(kClientTid, 12, EncodeDiskIoGroup2(kClientTid));
+  ASSERT_EQ(decoders().size(), 1u);
+
+  std::optional<perfetto::protos::pbzero::EtwTraceEvent::Decoder> event;
+  std::optional<perfetto::protos::pbzero::DiskIoEtwEvent::Decoder> disk_io;
+  ASSERT_NO_FATAL_FAILURE(
+      ValidateAndDecodeDiskIo(*decoders().back(), event, disk_io));
+
+  EXPECT_EQ(event->thread_id(), kClientTid);
+  EXPECT_TRUE(disk_io->has_irp_ptr());
+  EXPECT_EQ(disk_io->issuing_thread_id(), kClientTid);
+  EXPECT_EQ(disk_io->opcode(), 12u);
+}
+
+// Tests that a DiskIoEtwEvent is emitted for a DiskIo Group 3 ETW event.
+TEST_F(EtwConsumerTest, DiskIoGroup3Event) {
+  constexpr uint32_t kDiskNumber = 1;
+  constexpr uint32_t kIrpFlags = 0x111;
+  constexpr uint64_t kHighResResponseTime = 0x333;
+
+  ProcessDiskIoEvent(kClientTid, 14,
+                     EncodeDiskIoGroup3(kDiskNumber, kIrpFlags,
+                                        kHighResResponseTime, kClientTid));
+  ASSERT_EQ(decoders().size(), 1u);
+
+  std::optional<perfetto::protos::pbzero::EtwTraceEvent::Decoder> event;
+  std::optional<perfetto::protos::pbzero::DiskIoEtwEvent::Decoder> disk_io;
+  ASSERT_NO_FATAL_FAILURE(
+      ValidateAndDecodeDiskIo(*decoders().back(), event, disk_io));
+
+  EXPECT_EQ(event->thread_id(), kClientTid);
+  EXPECT_EQ(disk_io->disk_number(), kDiskNumber);
+  EXPECT_EQ(disk_io->irp_flags(), kIrpFlags);
+  EXPECT_TRUE(disk_io->has_irp_ptr());
+  LARGE_INTEGER frequency = {};
+  ::QueryPerformanceFrequency(&frequency);
+  int64_t expected_response_time =
+      base::Time::kNanosecondsPerSecond *
+      (kHighResResponseTime / static_cast<double>(frequency.QuadPart));
+  EXPECT_EQ(disk_io->response_time(), expected_response_time);
+  EXPECT_EQ(disk_io->issuing_thread_id(), kClientTid);
+  EXPECT_EQ(disk_io->opcode(), 14u);
+}
+
+// Tests that DiskIo events are only recorded for Chrome processes.
+TEST_F(EtwConsumerTest, DiskIoFiltering) {
+  // An event is recorded if it belongs to Chrome.
+  ProcessDiskIoEvent(kClientTid, 10,
+                     EncodeDiskIo(1, 0, 4096, 0, 0, 0, kClientTid));
+  EXPECT_EQ(decoders().size(), 1u);
+
+  // An event is not recorded if it doesn't belong to Chrome.
+  ProcessDiskIoEvent(kSystemTid, 10,
+                     EncodeDiskIo(1, 0, 4096, 0, 0, 0, kSystemTid));
+  EXPECT_EQ(decoders().size(), 1u);
+  ProcessDiskIoEvent(kOtherTid, 10,
+                     EncodeDiskIo(1, 0, 4096, 0, 0, 0, kOtherTid));
+  EXPECT_EQ(decoders().size(), 1u);
+
+  // An event is recorded if header_thread_id is Chrome but issuing_thread_id is
+  // not. The event's thread_id should be set to the Chrome thread_id
+  // (kClientTid).
+  ProcessDiskIoEvent(kClientTid, 10,
+                     EncodeDiskIo(1, 0, 4096, 0, 0, 0, kSystemTid));
+  EXPECT_EQ(decoders().size(), 2u);
+  {
+    std::optional<perfetto::protos::pbzero::EtwTraceEvent::Decoder> event;
+    std::optional<perfetto::protos::pbzero::DiskIoEtwEvent::Decoder> disk_io;
+    ASSERT_NO_FATAL_FAILURE(
+        ValidateAndDecodeDiskIo(*decoders().back(), event, disk_io));
+    EXPECT_EQ(event->thread_id(), kClientTid);
+    EXPECT_EQ(disk_io->issuing_thread_id(), kSystemTid);
+  }
+
+  // An event is recorded if issuing_thread_id is Chrome but header_thread_id is
+  // not. The event's thread_id should be set to the Chrome thread_id
+  // (kClientTid).
+  ProcessDiskIoEvent(kSystemTid, 10,
+                     EncodeDiskIo(1, 0, 4096, 0, 0, 0, kClientTid));
+  EXPECT_EQ(decoders().size(), 3u);
+  {
+    std::optional<perfetto::protos::pbzero::EtwTraceEvent::Decoder> event;
+    std::optional<perfetto::protos::pbzero::DiskIoEtwEvent::Decoder> disk_io;
+    ASSERT_NO_FATAL_FAILURE(
+        ValidateAndDecodeDiskIo(*decoders().back(), event, disk_io));
+    EXPECT_EQ(event->thread_id(), kClientTid);
+    EXPECT_EQ(disk_io->issuing_thread_id(), kClientTid);
+  }
+
+  // An event is not recorded if neither header_thread_id nor issuing_thread_id
+  // is Chrome.
+  ProcessDiskIoEvent(kSystemTid, 10,
+                     EncodeDiskIo(1, 0, 4096, 0, 0, 0, kOtherTid));
+  EXPECT_EQ(decoders().size(), 3u);
+
+  // Group 2: An event is recorded if header_thread_id is Chrome but
+  // issuing_thread_id is not. The event's thread_id should be set to the Chrome
+  // thread_id (kClientTid).
+  ProcessDiskIoEvent(kClientTid, 12, EncodeDiskIoGroup2(kSystemTid));
+  EXPECT_EQ(decoders().size(), 4u);
+  {
+    std::optional<perfetto::protos::pbzero::EtwTraceEvent::Decoder> event;
+    std::optional<perfetto::protos::pbzero::DiskIoEtwEvent::Decoder> disk_io;
+    ASSERT_NO_FATAL_FAILURE(
+        ValidateAndDecodeDiskIo(*decoders().back(), event, disk_io));
+    EXPECT_EQ(event->thread_id(), kClientTid);
+    EXPECT_EQ(disk_io->issuing_thread_id(), kSystemTid);
+  }
+
+  // Group 2: An event is recorded if issuing_thread_id is Chrome but
+  // header_thread_id is not. The event's thread_id should be set to the Chrome
+  // thread_id (kClientTid).
+  ProcessDiskIoEvent(kSystemTid, 12, EncodeDiskIoGroup2(kClientTid));
+  EXPECT_EQ(decoders().size(), 5u);
+  {
+    std::optional<perfetto::protos::pbzero::EtwTraceEvent::Decoder> event;
+    std::optional<perfetto::protos::pbzero::DiskIoEtwEvent::Decoder> disk_io;
+    ASSERT_NO_FATAL_FAILURE(
+        ValidateAndDecodeDiskIo(*decoders().back(), event, disk_io));
+    EXPECT_EQ(event->thread_id(), kClientTid);
+    EXPECT_EQ(disk_io->issuing_thread_id(), kClientTid);
+  }
+
+  // Group 2: An event is not recorded if neither is Chrome.
+  ProcessDiskIoEvent(kSystemTid, 12, EncodeDiskIoGroup2(kOtherTid));
+  EXPECT_EQ(decoders().size(), 5u);
+
+  // Group 3: An event is recorded if header_thread_id is Chrome but
+  // issuing_thread_id is not. The event's thread_id should be set to the Chrome
+  // thread_id (kClientTid).
+  ProcessDiskIoEvent(kClientTid, 14, EncodeDiskIoGroup3(1, 0, 0, kSystemTid));
+  EXPECT_EQ(decoders().size(), 6u);
+  {
+    std::optional<perfetto::protos::pbzero::EtwTraceEvent::Decoder> event;
+    std::optional<perfetto::protos::pbzero::DiskIoEtwEvent::Decoder> disk_io;
+    ASSERT_NO_FATAL_FAILURE(
+        ValidateAndDecodeDiskIo(*decoders().back(), event, disk_io));
+    EXPECT_EQ(event->thread_id(), kClientTid);
+    EXPECT_EQ(disk_io->issuing_thread_id(), kSystemTid);
+  }
+
+  // Group 3: An event is recorded if issuing_thread_id is Chrome but
+  // header_thread_id is not. The event's thread_id should be set to the Chrome
+  // thread_id (kClientTid).
+  ProcessDiskIoEvent(kSystemTid, 14, EncodeDiskIoGroup3(1, 0, 0, kClientTid));
+  EXPECT_EQ(decoders().size(), 7u);
+  {
+    std::optional<perfetto::protos::pbzero::EtwTraceEvent::Decoder> event;
+    std::optional<perfetto::protos::pbzero::DiskIoEtwEvent::Decoder> disk_io;
+    ASSERT_NO_FATAL_FAILURE(
+        ValidateAndDecodeDiskIo(*decoders().back(), event, disk_io));
+    EXPECT_EQ(event->thread_id(), kClientTid);
+    EXPECT_EQ(disk_io->issuing_thread_id(), kClientTid);
+  }
+
+  // Group 3: An event is not recorded if neither is Chrome.
+  ProcessDiskIoEvent(kSystemTid, 14, EncodeDiskIoGroup3(1, 0, 0, kOtherTid));
+  EXPECT_EQ(decoders().size(), 7u);
 }
 
 class EtwConsumerTestWithPrivacyFiltering
@@ -1240,6 +1710,92 @@ TEST_P(EtwConsumerTestWithPrivacyFiltering, FileIoOpEndEvent) {
   EXPECT_EQ(file_io_op_end->nt_status(), kNtStatus);
 }
 
+// Tests that a FileIoInfoEtwEvent is emitted for a FileIo_FltOp ETW event.
+TEST_P(EtwConsumerTestWithPrivacyFiltering, FileIoFltOpEvent) {
+  constexpr uint32_t kOperationStatus = 0x12345678;
+  constexpr uint32_t kFilterInstance = 0x9abcdef0;
+  ProcessFileIoFltOpEvent(
+      kFileIoFltReadOpcode, kClientTid,
+      EncodeFileIoFltOp(kClientTid, kOperationStatus, kFilterInstance));
+  ASSERT_EQ(decoders().size(), 1u);
+
+  std::optional<perfetto::protos::pbzero::EtwTraceEvent::Decoder> event;
+  std::optional<perfetto::protos::pbzero::FileIoInfoEtwEvent::Decoder>
+      file_io_info;
+  ASSERT_NO_FATAL_FAILURE(
+      ValidateAndDecodeFileIoInfo(*decoders().back(), event, file_io_info));
+
+  EXPECT_EQ(event->thread_id(), kClientTid);
+  EXPECT_TRUE(file_io_info->has_irp_ptr());
+  EXPECT_TRUE(file_io_info->has_file_object());
+  EXPECT_EQ(file_io_info->ttid(), kClientTid);
+  EXPECT_EQ(file_io_info->opcode(), kFileIoFltReadOpcode);
+}
+
+// Tests that a `FileIoPathOperationEtwEvent` is emitted for a
+// `FileIo_PathOperation` ETW event.
+TEST_P(EtwConsumerTestWithPrivacyFiltering, FileIoPathOperationDeleteEvent) {
+  constexpr uint32_t kInfoClass = 0x11;
+  constexpr std::wstring_view kFileName = L"some\\path.txt";
+  ProcessFileIoPathOperationEvent(
+      kFileIoPathOperationDeleteOpcode, kClientTid,
+      EncodeFileIoPathOperation(kClientTid, kInfoClass, kFileName));
+  ASSERT_EQ(decoders().size(), 1u);
+
+  std::optional<perfetto::protos::pbzero::EtwTraceEvent::Decoder> event;
+  std::optional<perfetto::protos::pbzero::FileIoPathOperationEtwEvent::Decoder>
+      file_io_path_operation;
+  ASSERT_NO_FATAL_FAILURE(ValidateAndDecodeFileIoPathOperation(
+      *decoders().back(), event, file_io_path_operation));
+
+  EXPECT_EQ(event->thread_id(), kClientTid);
+  EXPECT_TRUE(file_io_path_operation->has_irp_ptr());
+  EXPECT_TRUE(file_io_path_operation->has_file_object());
+  EXPECT_TRUE(file_io_path_operation->has_file_key());
+  EXPECT_EQ(file_io_path_operation->ttid(), kClientTid);
+  EXPECT_EQ(file_io_path_operation->info_class(), kInfoClass);
+  EXPECT_EQ(file_io_path_operation->has_file_name(),
+            !PrivacyFilteringEnabled());
+  if (!PrivacyFilteringEnabled()) {
+    EXPECT_EQ(std::string(file_io_path_operation->file_name().data,
+                          file_io_path_operation->file_name().size),
+              base::WideToUTF8(kFileName));
+  }
+  EXPECT_EQ(file_io_path_operation->opcode(), kFileIoPathOperationDeleteOpcode);
+}
+
+// Tests that a `FileIoPathOperationEtwEvent` is emitted for a
+// `FileIo_PathOperation` ETW event.
+TEST_P(EtwConsumerTestWithPrivacyFiltering, FileIoPathOperationRename) {
+  constexpr uint32_t kInfoClass = 0x11;
+  constexpr std::wstring_view kFileName = L"some\\path.txt";
+  ProcessFileIoPathOperationEvent(
+      kFileIoPathOperationRenameOpcode, kClientTid,
+      EncodeFileIoPathOperation(kClientTid, kInfoClass, kFileName));
+  ASSERT_EQ(decoders().size(), 1u);
+
+  std::optional<perfetto::protos::pbzero::EtwTraceEvent::Decoder> event;
+  std::optional<perfetto::protos::pbzero::FileIoPathOperationEtwEvent::Decoder>
+      file_io_path_operation;
+  ASSERT_NO_FATAL_FAILURE(ValidateAndDecodeFileIoPathOperation(
+      *decoders().back(), event, file_io_path_operation));
+
+  EXPECT_EQ(event->thread_id(), kClientTid);
+  EXPECT_TRUE(file_io_path_operation->has_irp_ptr());
+  EXPECT_TRUE(file_io_path_operation->has_file_object());
+  EXPECT_TRUE(file_io_path_operation->has_file_key());
+  EXPECT_EQ(file_io_path_operation->ttid(), kClientTid);
+  EXPECT_EQ(file_io_path_operation->info_class(), kInfoClass);
+  EXPECT_EQ(file_io_path_operation->has_file_name(),
+            !PrivacyFilteringEnabled());
+  if (!PrivacyFilteringEnabled()) {
+    EXPECT_EQ(std::string(file_io_path_operation->file_name().data,
+                          file_io_path_operation->file_name().size),
+              base::WideToUTF8(kFileName));
+  }
+  EXPECT_EQ(file_io_path_operation->opcode(), kFileIoPathOperationRenameOpcode);
+}
+
 // Tests that FileIo_Create events are only recorded for Chrome processes.
 TEST_P(EtwConsumerTestWithPrivacyFiltering, FileIoCreateFiltering) {
   // An event is recorded if it belongs to Chrome.
@@ -1331,6 +1887,56 @@ TEST_P(EtwConsumerTestWithPrivacyFiltering, FileIoOpEndFiltering) {
   EXPECT_EQ(decoders().size(), 1u);
   ProcessFileIoOpEndEvent(kOtherTid, EncodeFileIoOpEnd(kOtherTid, 0x789));
   EXPECT_EQ(decoders().size(), 1u);
+}
+
+// Tests that FileIo_FltOp events are only recorded for Chrome processes.
+TEST_P(EtwConsumerTestWithPrivacyFiltering, FileIoFltOpFiltering) {
+  // An event is recorded if it belongs to Chrome.
+  ProcessFileIoFltOpEvent(kFileIoFltReadOpcode, kClientTid,
+                          EncodeFileIoFltOp(kClientTid, 0x11, 0x22));
+  EXPECT_EQ(decoders().size(), 1u);
+  ProcessFileIoFltOpEvent(kFileIoFltWriteOpcode, kClientTid,
+                          EncodeFileIoFltOp(kClientTid, 0x11, 0x22));
+  EXPECT_EQ(decoders().size(), 2u);
+  ProcessFileIoFltOpEvent(kFileIoFltSetInfoOpcode, kClientTid,
+                          EncodeFileIoFltOp(kClientTid, 0x11, 0x22));
+  EXPECT_EQ(decoders().size(), 3u);
+  ProcessFileIoFltOpEvent(kFileIoFltQueryInfoOpcode, kClientTid,
+                          EncodeFileIoFltOp(kClientTid, 0x11, 0x22));
+  EXPECT_EQ(decoders().size(), 4u);
+
+  // An event is not recorded if it doesn't belong to Chrome.
+  ProcessFileIoFltOpEvent(kFileIoFltReadOpcode, kSystemTid,
+                          EncodeFileIoFltOp(kSystemTid, 0x33, 0x44));
+  EXPECT_EQ(decoders().size(), 4u);
+  ProcessFileIoFltOpEvent(kFileIoFltReadOpcode, kOtherTid,
+                          EncodeFileIoFltOp(kOtherTid, 0x55, 0x66));
+  EXPECT_EQ(decoders().size(), 4u);
+}
+
+// Tests that `FileIo_PathOperation` events are only recorded for Chrome
+// processes.
+TEST_P(EtwConsumerTestWithPrivacyFiltering, FileIoPathOperationFiltering) {
+  constexpr uint32_t kInfoClass = 0x11;
+  constexpr std::wstring_view kFileName = L"some\\path.txt";
+  ProcessFileIoPathOperationEvent(
+      kFileIoPathOperationDeleteOpcode, kClientTid,
+      EncodeFileIoPathOperation(kClientTid, kInfoClass, kFileName));
+  EXPECT_EQ(decoders().size(), 1u);
+  ProcessFileIoPathOperationEvent(
+      kFileIoPathOperationDeleteOpcode, kClientTid,
+      EncodeFileIoPathOperation(kClientTid, kInfoClass, kFileName));
+  EXPECT_EQ(decoders().size(), 2u);
+
+  // An event is not recorded if it doesn't belong to Chrome.
+  ProcessFileIoPathOperationEvent(
+      kFileIoPathOperationDeleteOpcode, kSystemTid,
+      EncodeFileIoPathOperation(kSystemTid, kInfoClass, kFileName));
+  EXPECT_EQ(decoders().size(), 2u);
+  ProcessFileIoPathOperationEvent(
+      kFileIoPathOperationDeleteOpcode, kOtherTid,
+      EncodeFileIoPathOperation(kOtherTid, kInfoClass, kFileName));
+  EXPECT_EQ(decoders().size(), 2u);
 }
 
 INSTANTIATE_TEST_SUITE_P(All,

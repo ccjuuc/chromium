@@ -10,10 +10,10 @@
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "components/sync/protocol/sync_enums.pb.h"
 #include "components/sync_device_info/device_info.h"
 #include "components/sync_device_info/device_info_util.h"
 #include "components/sync_device_info/fake_device_info_tracker.h"
+#include "components/sync_device_info/test_device_info_builder.h"
 #include "components/sync_preferences/cross_device_pref_tracker/cross_device_pref_tracker.h"
 #include "components/sync_preferences/cross_device_pref_tracker/timestamped_pref_value.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -24,6 +24,8 @@
 #endif  // BUILDFLAG(IS_ANDROID)
 
 namespace {
+
+using ServiceStatus = ::sync_preferences::CrossDevicePrefTracker::ServiceStatus;
 
 // Test implementation of `CrossDevicePrefTracker`.
 class TestCrossDevicePrefTracker
@@ -38,6 +40,7 @@ class TestCrossDevicePrefTracker
   // `CrossDevicePrefTracker` overrides.
   void AddObserver(Observer* observer) override {}
   void RemoveObserver(Observer* observer) override {}
+  ServiceStatus GetServiceStatus() const override { return service_status_; }
 
   std::vector<sync_preferences::TimestampedPrefValue> GetValues(
       std::string_view pref_name,
@@ -73,12 +76,16 @@ class TestCrossDevicePrefTracker
     return base::android::ScopedJavaLocalRef<jobject>();
   }
 
+  int GetServiceStatus(JNIEnv* env) const override {
+    return static_cast<int>(GetServiceStatus());
+  }
+
   base::android::ScopedJavaLocalRef<jobjectArray> GetValues(
       JNIEnv* env,
       const base::android::JavaRef<jstring>& pref_name,
       std::optional<int> os_type,
       std::optional<int> form_factor,
-      std::optional<jlong> max_sync_recency_microseconds) const override {
+      std::optional<int64_t> max_sync_recency_microseconds) const override {
     return base::android::ScopedJavaLocalRef<jobjectArray>();
   }
 
@@ -87,7 +94,7 @@ class TestCrossDevicePrefTracker
       const base::android::JavaRef<jstring>& pref_name,
       std::optional<int> os_type,
       std::optional<int> form_factor,
-      std::optional<jlong> max_sync_recency_microseconds) const override {
+      std::optional<int64_t> max_sync_recency_microseconds) const override {
     return base::android::ScopedJavaLocalRef<jobject>();
   }
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -98,6 +105,7 @@ class TestCrossDevicePrefTracker
   std::map<std::string_view,
            std::vector<sync_preferences::TimestampedPrefValue>>
       pref_values_;
+  ServiceStatus service_status_ = ServiceStatus::kAvailable;
 };
 
 }  // namespace
@@ -105,50 +113,6 @@ class TestCrossDevicePrefTracker
 // Test suite for Synced Set Up utility functions.
 class SyncedSetUpUtilsTest : public PlatformTest {
  public:
-  // Creates a DeviceInfo object.
-  std::unique_ptr<syncer::DeviceInfo> CreateDeviceInfoForTesting(
-      std::string guid,
-      syncer::DeviceInfo::FormFactor form_factor,
-      syncer::DeviceInfo::OsType os_type,
-      base::Time last_updated_timestamp = base::Time::Now()) {
-    return CreateFakeDeviceInfo(guid, "Device Name", std::nullopt,
-                                sync_pb::SyncEnums::TYPE_UNSET, os_type,
-                                form_factor, "manufacturer", "model",
-                                std::string(), last_updated_timestamp);
-  }
-
-  // Helper for creating a DeviceInfo object.
-  std::unique_ptr<syncer::DeviceInfo> CreateFakeDeviceInfo(
-      const std::string& guid,
-      const std::string& name = "name",
-      const std::optional<syncer::DeviceInfo::SharingInfo>& sharing_info =
-          std::nullopt,
-      sync_pb::SyncEnums_DeviceType device_type =
-          sync_pb::SyncEnums_DeviceType_TYPE_UNSET,
-      syncer::DeviceInfo::OsType os_type = syncer::DeviceInfo::OsType::kUnknown,
-      syncer::DeviceInfo::FormFactor form_factor =
-          syncer::DeviceInfo::FormFactor::kUnknown,
-      const std::string& manufacturer_name = "manufacturer",
-      const std::string& model_name = "model",
-      const std::string& full_hardware_class = std::string(),
-      base::Time last_updated_timestamp = base::Time::Now()) {
-    return std::make_unique<syncer::DeviceInfo>(
-        guid, name, "chrome_version", "user_agent", device_type, os_type,
-        form_factor, "device_id", manufacturer_name, model_name,
-        full_hardware_class, last_updated_timestamp,
-        syncer::DeviceInfoUtil::GetPulseInterval(),
-        /*send_tab_to_self_receiving_enabled=*/
-        false,
-        sync_pb::
-            SyncEnums_SendTabReceivingType_SEND_TAB_RECEIVING_TYPE_CHROME_OR_UNSPECIFIED,
-        sharing_info,
-        /*paask_info=*/std::nullopt,
-        /*fcm_registration_token=*/std::string(),
-        /*interested_data_types=*/syncer::DataTypeSet(),
-        /*auto_sign_out_last_signin_timestamp=*/std::nullopt,
-        /*desktop_to_ios_promo_receiving_enabled=*/false);
-  }
-
   // Helper for configuring a TimestampedPrefValue.
   void ConfigureTimestampedPrefValue(
       sync_preferences::TimestampedPrefValue& timestamped_value,
@@ -172,26 +136,36 @@ namespace sync_preferences {
 // device.
 TEST_F(SyncedSetUpUtilsTest, TestMatchPrefsByFormFactor) {
   // Local device (iOS phone).
-  std::unique_ptr<syncer::DeviceInfo> local_device = CreateDeviceInfoForTesting(
-      "local_device", syncer::DeviceInfo::FormFactor::kPhone,
-      syncer::DeviceInfo::OsType::kIOS);
+  std::unique_ptr<syncer::DeviceInfo> local_device =
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid("local_device")
+          .WithClientName("Device Name")
+          .WithFormFactor(syncer::DeviceInfo::FormFactor::kPhone)
+          .Build();
 
   // Android tablet.
   std::unique_ptr<syncer::DeviceInfo> android_tablet =
-      CreateDeviceInfoForTesting("android_tablet",
-                                 syncer::DeviceInfo::FormFactor::kTablet,
-                                 syncer::DeviceInfo::OsType::kAndroid);
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kAndroid)
+          .WithGuid("android_tablet")
+          .WithClientName("Device Name")
+          .WithFormFactor(syncer::DeviceInfo::FormFactor::kTablet)
+          .Build();
 
   // Android phone (match).
   std::unique_ptr<syncer::DeviceInfo> android_phone =
-      CreateDeviceInfoForTesting("android_phone",
-                                 syncer::DeviceInfo::FormFactor::kPhone,
-                                 syncer::DeviceInfo::OsType::kAndroid);
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kAndroid)
+          .WithGuid("android_phone")
+          .WithClientName("Device Name")
+          .WithFormFactor(syncer::DeviceInfo::FormFactor::kPhone)
+          .Build();
 
   // iOS tablet.
-  std::unique_ptr<syncer::DeviceInfo> ios_tablet = CreateDeviceInfoForTesting(
-      "ios_tablet", syncer::DeviceInfo::FormFactor::kTablet,
-      syncer::DeviceInfo::OsType::kIOS);
+  std::unique_ptr<syncer::DeviceInfo> ios_tablet =
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid("ios_tablet")
+          .WithClientName("Device Name")
+          .WithFormFactor(syncer::DeviceInfo::FormFactor::kTablet)
+          .Build();
 
   device_info_tracker_.Add(local_device.get());
   device_info_tracker_.SetLocalCacheGuid(local_device.get()->guid());
@@ -275,20 +249,28 @@ TEST_F(SyncedSetUpUtilsTest, TestMatchPrefsByFormFactor) {
 // there is no device with a matching form factor.
 TEST_F(SyncedSetUpUtilsTest, TestMatchPrefsByOsType) {
   // Local device (iOS phone).
-  std::unique_ptr<syncer::DeviceInfo> local_device = CreateDeviceInfoForTesting(
-      "local_device", syncer::DeviceInfo::FormFactor::kPhone,
-      syncer::DeviceInfo::OsType::kIOS);
+  std::unique_ptr<syncer::DeviceInfo> local_device =
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid("local_device")
+          .WithClientName("Device Name")
+          .WithFormFactor(syncer::DeviceInfo::FormFactor::kPhone)
+          .Build();
 
   // Android tablet.
   std::unique_ptr<syncer::DeviceInfo> android_tablet =
-      CreateDeviceInfoForTesting("android_tablet",
-                                 syncer::DeviceInfo::FormFactor::kTablet,
-                                 syncer::DeviceInfo::OsType::kAndroid);
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kAndroid)
+          .WithGuid("android_tablet")
+          .WithClientName("Device Name")
+          .WithFormFactor(syncer::DeviceInfo::FormFactor::kTablet)
+          .Build();
 
   // iOS tablet (match).
-  std::unique_ptr<syncer::DeviceInfo> ios_tablet = CreateDeviceInfoForTesting(
-      "ios_tablet", syncer::DeviceInfo::FormFactor::kTablet,
-      syncer::DeviceInfo::OsType::kIOS);
+  std::unique_ptr<syncer::DeviceInfo> ios_tablet =
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid("ios_tablet")
+          .WithClientName("Device Name")
+          .WithFormFactor(syncer::DeviceInfo::FormFactor::kTablet)
+          .Build();
 
   device_info_tracker_.Add(local_device.get());
   device_info_tracker_.SetLocalCacheGuid(local_device.get()->guid());
@@ -358,25 +340,36 @@ TEST_F(SyncedSetUpUtilsTest, TestMatchPrefsByOsType) {
 // current device on form factor and OS.
 TEST_F(SyncedSetUpUtilsTest, TestMatchPrefsByObservedChangeCount) {
   // Local device (iOS phone).
-  std::unique_ptr<syncer::DeviceInfo> local_device = CreateDeviceInfoForTesting(
-      "local_device", syncer::DeviceInfo::FormFactor::kPhone,
-      syncer::DeviceInfo::OsType::kIOS);
+  std::unique_ptr<syncer::DeviceInfo> local_device =
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid("local_device")
+          .WithClientName("Device Name")
+          .WithFormFactor(syncer::DeviceInfo::FormFactor::kPhone)
+          .Build();
 
   // Android phone.
   std::unique_ptr<syncer::DeviceInfo> android_phone =
-      CreateDeviceInfoForTesting("android_phone",
-                                 syncer::DeviceInfo::FormFactor::kPhone,
-                                 syncer::DeviceInfo::OsType::kAndroid);
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kAndroid)
+          .WithGuid("android_phone")
+          .WithClientName("Device Name")
+          .WithFormFactor(syncer::DeviceInfo::FormFactor::kPhone)
+          .Build();
 
   // iOS phone.
-  std::unique_ptr<syncer::DeviceInfo> ios_phone = CreateDeviceInfoForTesting(
-      "ios_phone", syncer::DeviceInfo::FormFactor::kPhone,
-      syncer::DeviceInfo::OsType::kIOS);
+  std::unique_ptr<syncer::DeviceInfo> ios_phone =
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid("ios_phone")
+          .WithClientName("Device Name")
+          .WithFormFactor(syncer::DeviceInfo::FormFactor::kPhone)
+          .Build();
 
   // iOS phone (match).
-  std::unique_ptr<syncer::DeviceInfo> ios_phone_2 = CreateDeviceInfoForTesting(
-      "ios_phone_2", syncer::DeviceInfo::FormFactor::kPhone,
-      syncer::DeviceInfo::OsType::kIOS);
+  std::unique_ptr<syncer::DeviceInfo> ios_phone_2 =
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid("ios_phone_2")
+          .WithClientName("Device Name")
+          .WithFormFactor(syncer::DeviceInfo::FormFactor::kPhone)
+          .Build();
 
   device_info_tracker_.Add(local_device.get());
   device_info_tracker_.SetLocalCacheGuid(local_device.get()->guid());
@@ -468,25 +461,36 @@ TEST_F(SyncedSetUpUtilsTest, TestMatchPrefsByObservedChangeCount) {
 // device.
 TEST_F(SyncedSetUpUtilsTest, TestKeepLocalPrefsByChangeActivity) {
   // Local device (iOS phone).
-  std::unique_ptr<syncer::DeviceInfo> local_device = CreateDeviceInfoForTesting(
-      "local_device", syncer::DeviceInfo::FormFactor::kPhone,
-      syncer::DeviceInfo::OsType::kIOS);
+  std::unique_ptr<syncer::DeviceInfo> local_device =
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid("local_device")
+          .WithClientName("Device Name")
+          .WithFormFactor(syncer::DeviceInfo::FormFactor::kPhone)
+          .Build();
 
   // Android phone.
   std::unique_ptr<syncer::DeviceInfo> android_phone =
-      CreateDeviceInfoForTesting("android_phone",
-                                 syncer::DeviceInfo::FormFactor::kPhone,
-                                 syncer::DeviceInfo::OsType::kAndroid);
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kAndroid)
+          .WithGuid("android_phone")
+          .WithClientName("Device Name")
+          .WithFormFactor(syncer::DeviceInfo::FormFactor::kPhone)
+          .Build();
 
   // iOS phone.
-  std::unique_ptr<syncer::DeviceInfo> ios_phone = CreateDeviceInfoForTesting(
-      "ios_phone", syncer::DeviceInfo::FormFactor::kPhone,
-      syncer::DeviceInfo::OsType::kIOS);
+  std::unique_ptr<syncer::DeviceInfo> ios_phone =
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid("ios_phone")
+          .WithClientName("Device Name")
+          .WithFormFactor(syncer::DeviceInfo::FormFactor::kPhone)
+          .Build();
 
   // iOS phone (match).
-  std::unique_ptr<syncer::DeviceInfo> ios_phone_2 = CreateDeviceInfoForTesting(
-      "ios_phone_2", syncer::DeviceInfo::FormFactor::kPhone,
-      syncer::DeviceInfo::OsType::kIOS);
+  std::unique_ptr<syncer::DeviceInfo> ios_phone_2 =
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid("ios_phone_2")
+          .WithClientName("Device Name")
+          .WithFormFactor(syncer::DeviceInfo::FormFactor::kPhone)
+          .Build();
 
   device_info_tracker_.Add(local_device.get());
   device_info_tracker_.SetLocalCacheGuid(local_device.get()->guid());
@@ -580,15 +584,20 @@ TEST_F(SyncedSetUpUtilsTest, TestReturnsMostRecentObservedPrefChanges) {
   const base::Time kNow = base::Time::Now();
 
   // Local device (iOS phone).
-  std::unique_ptr<syncer::DeviceInfo> local_device = CreateDeviceInfoForTesting(
-      "local_device", syncer::DeviceInfo::FormFactor::kPhone,
-      syncer::DeviceInfo::OsType::kIOS);
+  std::unique_ptr<syncer::DeviceInfo> local_device =
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid("local_device")
+          .WithClientName("Device Name")
+          .WithFormFactor(syncer::DeviceInfo::FormFactor::kPhone)
+          .Build();
 
   // Android phone (match).
   std::unique_ptr<syncer::DeviceInfo> android_phone =
-      CreateDeviceInfoForTesting("android_phone",
-                                 syncer::DeviceInfo::FormFactor::kPhone,
-                                 syncer::DeviceInfo::OsType::kAndroid);
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kAndroid)
+          .WithGuid("android_phone")
+          .WithClientName("Device Name")
+          .WithFormFactor(syncer::DeviceInfo::FormFactor::kPhone)
+          .Build();
 
   device_info_tracker_.Add(local_device.get());
   device_info_tracker_.SetLocalCacheGuid(local_device.get()->guid());

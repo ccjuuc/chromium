@@ -4,30 +4,29 @@
 
 #include "services/network/public/cpp/connection_change_observer_client_mojom_traits.h"
 
+#include "base/notreached.h"
+#include "mojo/public/cpp/base/time_mojom_traits.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "net/base/reconnect_notifier.h"
+#include "services/network/public/cpp/network_ipc_param_traits.h"
 #include "services/network/public/mojom/connection_change_observer_client.mojom-shared.h"
 
 namespace mojo {
 
-bool EnumTraits<network::mojom::NetworkChangeEvent, net::NetworkChangeEvent>::
-    FromMojom(network::mojom::NetworkChangeEvent event_type,
-              net::NetworkChangeEvent* out) {
+net::NetworkChangeEvent
+EnumTraits<network::mojom::NetworkChangeEvent, net::NetworkChangeEvent>::
+    FromMojom(network::mojom::NetworkChangeEvent event_type) {
   switch (event_type) {
     case network::mojom::NetworkChangeEvent::kConnected:
-      *out = net::NetworkChangeEvent::kConnected;
-      return true;
+      return net::NetworkChangeEvent::kConnected;
     case network::mojom::NetworkChangeEvent::kSoonToDisconnect:
-      *out = net::NetworkChangeEvent::kSoonToDisconnect;
-      return true;
+      return net::NetworkChangeEvent::kSoonToDisconnect;
     case network::mojom::NetworkChangeEvent::kDisconnected:
-      *out = net::NetworkChangeEvent::kDisconnected;
-      return true;
+      return net::NetworkChangeEvent::kDisconnected;
     case network::mojom::NetworkChangeEvent::kDefaultNetworkChanged:
-      *out = net::NetworkChangeEvent::kDefaultNetworkChanged;
-      return true;
+      return net::NetworkChangeEvent::kDefaultNetworkChanged;
   }
-  return false;
+  NOTREACHED();
 }
 
 network::mojom::NetworkChangeEvent EnumTraits<
@@ -63,6 +62,49 @@ bool StructTraits<network::mojom::ConnectionKeepAliveConfigDataView,
   out->enable_connection_keep_alive = data.enable_connection_keep_alive();
 
   return data.ReadQuicConnectionOptions(&out->quic_connection_options);
+}
+
+net::ConnectionEstablishmentInitiator
+EnumTraits<network::mojom::ConnectionEstablishmentInitiator,
+           net::ConnectionEstablishmentInitiator>::
+    FromMojom(network::mojom::ConnectionEstablishmentInitiator initiator) {
+  switch (initiator) {
+    case network::mojom::ConnectionEstablishmentInitiator::kPreconnect:
+      return net::ConnectionEstablishmentInitiator::kPreconnect;
+    case network::mojom::ConnectionEstablishmentInitiator::kRequest:
+      return net::ConnectionEstablishmentInitiator::kRequest;
+  }
+  NOTREACHED();
+}
+
+network::mojom::ConnectionEstablishmentInitiator
+EnumTraits<network::mojom::ConnectionEstablishmentInitiator,
+           net::ConnectionEstablishmentInitiator>::
+    ToMojom(net::ConnectionEstablishmentInitiator initiator) {
+  switch (initiator) {
+    case net::ConnectionEstablishmentInitiator::kPreconnect:
+      return network::mojom::ConnectionEstablishmentInitiator::kPreconnect;
+    case net::ConnectionEstablishmentInitiator::kRequest:
+      return network::mojom::ConnectionEstablishmentInitiator::kRequest;
+  }
+  NOTREACHED();
+}
+
+// static
+bool StructTraits<network::mojom::EstablishedConnectionInfoDataView,
+                  net::ConnectionChangeNotifier::EstablishedConnectionInfo>::
+    Read(network::mojom::EstablishedConnectionInfoDataView data,
+         net::ConnectionChangeNotifier::EstablishedConnectionInfo* out) {
+  if (!data.ReadConnectionInfo(&out->connection_info)) {
+    return false;
+  }
+  if (!data.ReadConnectionSetupTime(&out->connection_setup_time)) {
+    return false;
+  }
+  if (!data.ReadInitiator(&out->initiator)) {
+    return false;
+  }
+  return true;
 }
 
 }  // namespace mojo

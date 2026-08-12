@@ -31,11 +31,10 @@ import {Router, routes} from '../router.js';
 import type {PrivacyHubBrowserProxy} from './privacy_hub_browser_proxy.js';
 import {PrivacyHubBrowserProxyImpl} from './privacy_hub_browser_proxy.js';
 import {GeolocationAccessLevel} from './privacy_hub_geolocation_subpage.js';
-import {PrivacyHubSensorSubpageUserAction} from './privacy_hub_metrics_util.js';
 import {getTemplate} from './privacy_hub_subpage.html.js';
 
 /**
- * These values are persisted to logs and should not be renumbered or re-used.
+ * These values are persisted to logs and should not be renumbered or reused.
  * Keep in sync with PrivacyHubNavigationOrigin in
  * tools/metrics/histograms/enums.xml and
  * ash/system/privacy_hub/privacy_hub_metrics.h.
@@ -67,6 +66,14 @@ export class SettingsPrivacyHubSubpage extends SettingsPrivacyHubSubpageBase {
         readOnly: true,
         value: function() {
           return loadTimeData.getBoolean('showPrivacyHubLocationControl');
+        },
+      },
+
+      shouldUseMetricsConsentRestructure_: {
+        type: Boolean,
+        readOnly: true,
+        value: function() {
+          return loadTimeData.getBoolean('shouldUseMetricsConsentRestructure');
         },
       },
 
@@ -157,19 +164,20 @@ export class SettingsPrivacyHubSubpage extends SettingsPrivacyHubSubpageBase {
   ]);
 
   private browserProxy_: PrivacyHubBrowserProxy;
-  private showPrivacyHubLocationControl_: boolean;
-  private locationSubLabel_: string;
-  private cameraFallbackMechanismEnabled_: boolean;
-  private cameraRowSubtext_: string;
-  private isCameraListEmpty_: boolean;
-  private isMicListEmpty_: boolean;
-  private microphoneRowSubtext_: string;
-  private microphoneHardwareToggleActive_: boolean;
-  private microphoneToggleTooltipText_: string;
-  private shouldDisableMicrophoneToggle_: boolean;
-  private cameraSwitchForceDisabled_: boolean;
-  private shouldDisableCameraToggle_: boolean;
-  private showSpeakOnMuteDetectionPage_: boolean;
+  declare private showPrivacyHubLocationControl_: boolean;
+  declare private shouldUseMetricsConsentRestructure_: boolean;
+  declare private locationSubLabel_: string;
+  declare private cameraFallbackMechanismEnabled_: boolean;
+  declare private cameraRowSubtext_: string;
+  declare private isCameraListEmpty_: boolean;
+  declare private isMicListEmpty_: boolean;
+  declare private microphoneRowSubtext_: string;
+  declare private microphoneHardwareToggleActive_: boolean;
+  declare private microphoneToggleTooltipText_: string;
+  declare private shouldDisableMicrophoneToggle_: boolean;
+  declare private cameraSwitchForceDisabled_: boolean;
+  declare private shouldDisableCameraToggle_: boolean;
+  declare private showSpeakOnMuteDetectionPage_: boolean;
 
   constructor() {
     super();
@@ -254,29 +262,14 @@ export class SettingsPrivacyHubSubpage extends SettingsPrivacyHubSubpageBase {
   }
 
   private onCameraSubpageLinkClick_(): void {
-    chrome.metricsPrivate.recordEnumerationValue(
-        'ChromeOS.PrivacyHub.CameraSubpage.UserAction',
-        PrivacyHubSensorSubpageUserAction.SUBPAGE_OPENED,
-        Object.keys(PrivacyHubSensorSubpageUserAction).length);
-
     Router.getInstance().navigateTo(routes.PRIVACY_HUB_CAMERA);
   }
 
   private onMicrophoneSubpageLinkClick_(): void {
-    chrome.metricsPrivate.recordEnumerationValue(
-        'ChromeOS.PrivacyHub.MicrophoneSubpage.UserAction',
-        PrivacyHubSensorSubpageUserAction.SUBPAGE_OPENED,
-        Object.keys(PrivacyHubSensorSubpageUserAction).length);
-
     Router.getInstance().navigateTo(routes.PRIVACY_HUB_MICROPHONE);
   }
 
   private onGeolocationAreaClick_(): void {
-    chrome.metricsPrivate.recordEnumerationValue(
-        'ChromeOS.PrivacyHub.LocationSubpage.UserAction',
-        PrivacyHubSensorSubpageUserAction.SUBPAGE_OPENED,
-        Object.keys(PrivacyHubSensorSubpageUserAction).length);
-
     Router.getInstance().navigateTo(routes.PRIVACY_HUB_GEOLOCATION);
   }
 

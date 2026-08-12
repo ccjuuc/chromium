@@ -8,6 +8,7 @@
 #import "base/files/file_path.h"
 #import "base/memory/weak_ptr.h"
 #import "base/scoped_observation.h"
+#import "base/timer/timer.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "ios/chrome/browser/download/ui/download_manager_consumer.h"
 #import "ios/chrome/browser/drive/model/upload_task_observer.h"
@@ -16,6 +17,7 @@
 
 @protocol DownloadManagerConsumer;
 
+class AuthenticationService;
 class DownloadRecordService;
 
 namespace drive {
@@ -56,6 +58,9 @@ class DownloadManagerMediator : public web::DownloadTaskObserver,
   // Sets the Drive service.
   void SetDriveService(drive::DriveService* drive_service);
 
+  // Sets the authentication service.
+  void SetAuthenticationService(AuthenticationService* auth_service);
+
   // Sets the pref service.
   void SetPrefService(PrefService* pref_service);
 
@@ -90,9 +95,6 @@ class DownloadManagerMediator : public web::DownloadTaskObserver,
   // Informs the consumer that the Google Drive app is installed.
   void SetGoogleDriveAppInstalled(bool installed);
 
-  // Start/stop listening for foregrounding notifications.
-  void StartObservingNotifications();
-  void StopObservingNotifications();
 
  private:
   // Converts DownloadTask progress [0;100] to float progress [0.0f;1.0f].
@@ -135,15 +137,16 @@ class DownloadManagerMediator : public web::DownloadTaskObserver,
       identity_manager_observation_{this};
   raw_ptr<drive::DriveService> drive_service_ = nullptr;
   raw_ptr<PrefService> pref_service_ = nullptr;
+  raw_ptr<AuthenticationService> auth_service_ = nullptr;
   raw_ptr<DownloadRecordService> download_record_service_ = nullptr;
   bool is_incognito_;
   raw_ptr<web::DownloadTask> download_task_ = nullptr;
   raw_ptr<UploadTask> upload_task_ = nullptr;
   __weak id<DownloadManagerConsumer> consumer_ = nil;
-  // Observers for NSNotificationCenter notifications.
-  __strong id<NSObject> application_foregrounding_observer_;
   bool is_google_drive_app_installed_ = false;
-  bool should_show_origin_ = false;
+
+  base::OneShotTimer progress_update_timer_;
+  DownloadManagerState last_state_ = DownloadManagerState::kNotStarted;
 
   base::WeakPtrFactory<DownloadManagerMediator> weak_ptr_factory_;
 };

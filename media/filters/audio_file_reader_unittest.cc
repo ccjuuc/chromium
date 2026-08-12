@@ -31,9 +31,24 @@ namespace media {
 class AudioFileReaderTest : public testing::TestWithParam<bool> {
  public:
   AudioFileReaderTest() {
+    std::vector<base::test::FeatureRef> features = {kDirectOpusAudioDecoding};
+
 #if BUILDFLAG(ENABLE_SYMPHONIA)
-    feature_list_.InitWithFeatureState(kSymphoniaAudioDecoding, GetParam());
+    const std::vector<base::test::FeatureRef> symphonia_features = {
+        { kSymphoniaAudioDecoding,
+          kSymphoniaMp3Decoding,
+          kSymphoniaPcmDecoding,
+          kSymphoniaVorbisDecoding }};
+    features.insert(features.end(), symphonia_features.begin(),
+                    symphonia_features.end());
 #endif
+
+    if (GetParam()) {
+      feature_list_.InitWithFeatures(features,
+                                     /*disabled_features=*/{});
+    } else {
+      feature_list_.InitWithFeatures(/*enabled_features=*/{}, features);
+    }
   }
 
   AudioFileReaderTest(const AudioFileReaderTest&) = delete;
@@ -49,7 +64,9 @@ class AudioFileReaderTest : public testing::TestWithParam<bool> {
   }
 
   // Reads and validates the entire file provided to Initialize().
-  void ReadAndVerify(const char* expected_audio_hash, int expected_frames) {
+  void ReadAndVerify(const char* expected_audio_hash,
+                     int expected_frames,
+                     double tolerance) {
     std::vector<std::unique_ptr<AudioBus>> decoded_audio_packets;
     const int actual_frames = reader_->Read(&decoded_audio_packets);
     ASSERT_GT(actual_frames, 0);
@@ -69,7 +86,9 @@ class AudioFileReaderTest : public testing::TestWithParam<bool> {
 
     AudioHash audio_hash;
     audio_hash.Update(decoded_audio_data.get(), actual_frames);
-    EXPECT_STREQ(expected_audio_hash, audio_hash.ToString().c_str());
+    EXPECT_TRUE(audio_hash.IsEquivalent(expected_audio_hash, tolerance))
+        << "Audio hashes differ. Expected: " << expected_audio_hash
+        << " Actual: " << audio_hash.ToString();
   }
 
   void ResetReader() {
@@ -114,7 +133,8 @@ class AudioFileReaderTest : public testing::TestWithParam<bool> {
                base::TimeDelta duration,
                int frames,
                int expected_frames,
-               int packet_reads = 3) {
+               int packet_reads = 3,
+               double tolerance = 0.09) {
     Initialize(fn);
     ASSERT_TRUE(reader_->Open());
     EXPECT_EQ(channels, reader_->channels());
@@ -130,7 +150,7 @@ class AudioFileReaderTest : public testing::TestWithParam<bool> {
     if (!packet_verification_disabled_) {
       ASSERT_NO_FATAL_FAILURE(VerifyPackets(fn, packet_reads));
     }
-    ReadAndVerify(hash, expected_frames);
+    ReadAndVerify(hash, expected_frames, tolerance);
   }
 
   void RunTestFailingDemux(const char* fn) {
@@ -165,6 +185,18 @@ class AudioFileReaderTest : public testing::TestWithParam<bool> {
   bool packet_verification_disabled_ = false;
 };
 
+// Note: When adding new test files it's important to double check the total
+// number of samples emitted in comparison to the corresponding reference
+// decoder. I.e.,
+//   * For opus, get opus-tools, and use the opusdec command line tool.
+//   * For vorbis, get ogg-tools, and use the oggdec command line tool.
+//
+// These will each decode to a wave file. Given a wave file you can run:
+//   * ffprobe -show_packets $wave_file | tail -10
+//
+// Adding the last `pts` and `duration` values together will give you an
+// official total sample count.
+
 TEST_P(AudioFileReaderTest, WithoutOpen) {
   Initialize("bear.ogv");
 }
@@ -179,8 +211,10 @@ TEST_P(AudioFileReaderTest, UnknownDuration) {
 }
 
 TEST_P(AudioFileReaderTest, WithVideo) {
-  RunTest("bear.ogv", "-0.73,0.92,0.48,-0.07,-0.92,-0.88,", 2, 44100,
-          base::Microseconds(1011520), 44609, 45632);
+  // The total samples should be 45568 after applying discard padding.
+  // ffprobe shows discard_padding=64 for the last packet.
+  RunTest("bear.ogv", "-2.10,-1.01,0.24,1.48,0.70,-0.68,", 2, 44100,
+          base::Microseconds(1011520), 44609, 45568);
 }
 
 TEST_P(AudioFileReaderTest, FLAC) {
@@ -188,9 +222,17 @@ TEST_P(AudioFileReaderTest, FLAC) {
           base::Microseconds(288414), 12720, 12719);
 }
 
+TEST_P(AudioFileReaderTest, FLAC_WithMask) {
+  RunTest("with_mask.flac", "9.04,3.45,11.95,4.69,10.32,2.10,", 4, 44100,
+          base::Microseconds(1875012), 82689, 82688);
+}
+
 TEST_P(AudioFileReaderTest, Vorbis) {
-  RunTest("sfx.ogg", "2.17,3.31,5.15,6.33,5.97,4.35,", 1, 44100,
-          base::Microseconds(350001), 15436, 15936);
+  // oggdec produces 15435 samples, but the last 629 samples are silence
+  // corresponding to discard padding. FFmpeg applies this discard padding,
+  // resulting in 15307 samples.
+  RunTest("sfx.ogg", "3.95,3.02,3.98,5.14,5.65,5.13,", 1, 44100,
+          base::Microseconds(350001), 15436, 15307);
 }
 
 TEST_P(AudioFileReaderTest, WaveU8) {
@@ -228,18 +270,35 @@ TEST_P(AudioFileReaderTest, CorruptMP3) {
 
 #if BUILDFLAG(USE_PROPRIETARY_CODECS)
 TEST_P(AudioFileReaderTest, AAC) {
-  RunTest("sfx.m4a", "2.47,2.30,2.45,2.80,3.06,3.56,", 1, 44100,
-          base::Microseconds(347665), 15333, 12719);
+  RunTest("sfx.m4a", "0.79,2.31,4.15,4.92,4.04,1.44,", 1, 44100,
+          base::Microseconds(347665), 15333, 12701);
 }
 
 TEST_P(AudioFileReaderTest, AAC_SinglePacket) {
-  RunTest("440hz-10ms.m4a", "3.84,4.25,4.33,3.58,3.27,3.16,", 1, 44100,
-          base::Microseconds(69660), 3073, 960);
+  RunTest("440hz-10ms.m4a", "3.77,4.53,4.75,3.48,3.67,3.76,", 1, 44100,
+          base::Microseconds(69660), 3073, 441);
+}
+
+TEST_P(AudioFileReaderTest, AAC_TinyClipRepro) {
+  RunTest("tiny-clip.mp4", "-1.77,1.15,-5.82,-1.21,-3.43,2.93,", 2, 48000,
+          base::Microseconds(680042), 32643, 30011);
 }
 
 TEST_P(AudioFileReaderTest, AAC_ADTS) {
   RunTest("sfx.adts", "1.80,1.66,2.31,3.26,4.46,3.36,", 1, 44100,
           base::Microseconds(384733), 16967, 13312);
+}
+
+TEST_P(AudioFileReaderTest, AAC_ObsRemuxVariablePacketDurations) {
+  Initialize("obs_remux_variable_aac_durations.mp4");
+  ASSERT_TRUE(reader_->Open());
+  EXPECT_EQ(2, reader_->channels());
+  EXPECT_EQ(48000, reader_->sample_rate());
+
+  // Regression test for OBS-remuxed MP4 audio with alternating AAC packet
+  // durations. Intermediate decoded buffers must not be tail-trimmed based on
+  // these packet durations.
+  ReadAndVerify("-3.33,-0.33,-0.34,0.42,-1.97,-1.96,", 301040, 0.09);
 }
 
 TEST_P(AudioFileReaderTest, MidStreamConfigChangesFail) {
@@ -248,8 +307,16 @@ TEST_P(AudioFileReaderTest, MidStreamConfigChangesFail) {
 #endif
 
 TEST_P(AudioFileReaderTest, VorbisValidChannelLayout) {
-  RunTest("9ch.ogg", "111.68,13.19,59.65,58.66,66.99,20.36,", 9, 48000,
-          base::Microseconds(100001), 4801, 4864);
+  if (GetParam()) {
+    // TODO(crbug.com/495575937): Remove this check once Symphonia supports 9
+    // channels.
+    Initialize("9ch.ogg");
+    EXPECT_FALSE(reader_->Open());
+    return;
+  }
+  // The total samples should be 4800 after applying discard padding.
+  RunTest("9ch.ogg", "102.08,12.51,57.91,56.94,63.05,17.30,", 9, 48000,
+          base::Microseconds(100001), 4801, 4800);
 }
 
 TEST_P(AudioFileReaderTest, WaveValidFourChannelLayout) {
@@ -262,18 +329,30 @@ TEST_P(AudioFileReaderTest, ReadPartialMP3) {
 }
 
 TEST_P(AudioFileReaderTest, OpusOutputsF32Samples) {
-  RunTest("bear-opus.ogg", "2.72,1.22,1.47,0.24,1.20,0.55,", 2, 48000,
-          base::Microseconds(2767022), 132818, 131857);
+  RunTest("bear-opus.ogg", "3.64,0.30,0.34,-0.25,1.70,1.68,", 2, 48000,
+          base::Microseconds(2767022), 132818, 132169);
 }
 
-TEST_P(AudioFileReaderTest, OpusTrimmingTest) {
+TEST_P(AudioFileReaderTest, OpusTrimmingTestMp4) {
   RunTest("opus-trimming-test.mp4", "-7.27,-6.96,-5.99,-5.58,-5.66,-6.27,", 1,
           48000, base::Microseconds(12840001), 616321, 550785);
 }
 
+TEST_P(AudioFileReaderTest, OpusTrimmingTestOgg) {
+  // Hash should match PipelineIntegrationTest::kOpusEndTrimmingHash_1
+  RunTest("opus-trimming-test.ogg", "-4.57,-5.67,-6.52,-6.28,-4.34,-3.58,", 1,
+          48000, base::Microseconds(12720022), 610562, 545026);
+}
+
+TEST_P(AudioFileReaderTest, OpusTrimmingTestWebm) {
+  // Hash should match PipelineIntegrationTest::kOpusEndTrimmingHash_1
+  RunTest("opus-trimming-test.webm", "-4.57,-5.67,-6.52,-6.28,-4.34,-3.58,", 1,
+          48000, base::Microseconds(12720001), 610561, 545026);
+}
+
 TEST_P(AudioFileReaderTest, OpusDecodeTest) {
-  RunTest("opus-test.opus", "1.35,-1.25,3.07,0.87,3.91,0.09,", 2, 48000,
-          base::Microseconds(1016480), 48792, 48167);
+  RunTest("opus-test.opus", "0.67,-0.92,4.13,1.95,4.16,-1.02,", 2, 48000,
+          base::Microseconds(1016480), 48792, 48479);
 }
 
 // If Symphonia build support is enabled, test with both the Symphonia

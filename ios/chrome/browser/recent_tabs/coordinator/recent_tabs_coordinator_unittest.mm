@@ -13,6 +13,7 @@
 #import "base/memory/raw_ptr.h"
 #import "base/test/ios/wait_util.h"
 #import "components/sessions/core/serialized_navigation_entry_test_helper.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/signin/public/identity_manager/identity_test_environment.h"
 #import "components/signin/public/identity_manager/primary_account_mutator.h"
@@ -21,12 +22,11 @@
 #import "components/sync/test/fake_data_type_controller_delegate.h"
 #import "components/sync/test/test_sync_service.h"
 #import "components/sync/test/test_sync_user_settings.h"
+#import "components/sync_sessions/mock_session_sync_service.h"
 #import "components/sync_sessions/open_tabs_ui_delegate.h"
 #import "components/sync_sessions/session_sync_service.h"
 #import "components/sync_sessions/synced_session.h"
 #import "components/sync_user_events/global_id_mapper.h"
-#import "ios/chrome/app/application_delegate/app_state.h"
-#import "ios/chrome/app/application_delegate/fake_startup_information.h"
 #import "ios/chrome/browser/favicon/model/favicon_service_factory.h"
 #import "ios/chrome/browser/favicon/model/ios_chrome_favicon_loader_factory.h"
 #import "ios/chrome/browser/favicon/model/ios_chrome_large_icon_service_factory.h"
@@ -41,8 +41,8 @@
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
@@ -51,6 +51,7 @@
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
 #import "ios/chrome/browser/sync/model/session_sync_service_factory.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/block_cleanup_test.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/chrome/test/scoped_key_window.h"
@@ -66,33 +67,12 @@ using testing::DoAll;
 using testing::Return;
 using testing::SetArgPointee;
 
+using MockSessionSyncService = sync_sessions::MockSessionSyncService;
+
 namespace {
 
-class SessionSyncServiceMockForRecentTabsTableCoordinator
-    : public sync_sessions::SessionSyncService {
- public:
-  SessionSyncServiceMockForRecentTabsTableCoordinator() {}
-  ~SessionSyncServiceMockForRecentTabsTableCoordinator() override {}
-
-  MOCK_CONST_METHOD0(GetGlobalIdMapper, syncer::GlobalIdMapper*());
-  MOCK_METHOD0(GetOpenTabsUIDelegate, sync_sessions::OpenTabsUIDelegate*());
-  MOCK_METHOD1(
-      SubscribeToForeignSessionsChanged,
-      base::CallbackListSubscription(const base::RepeatingClosure& cb));
-  MOCK_METHOD0(ScheduleGarbageCollection, void());
-  MOCK_METHOD0(GetControllerDelegate,
-               base::WeakPtr<syncer::DataTypeControllerDelegate>());
-};
-
-std::unique_ptr<KeyedService>
-BuildMockSessionSyncServiceForRecentTabsTableCoordinator(ProfileIOS* profile) {
-  return std::make_unique<
-      testing::NiceMock<SessionSyncServiceMockForRecentTabsTableCoordinator>>();
-}
-
-// Returns a TestSyncService.
-std::unique_ptr<KeyedService> BuildFakeSyncServiceFactory(ProfileIOS* profile) {
-  return std::make_unique<syncer::TestSyncService>();
+std::unique_ptr<KeyedService> BuildMockSessionSyncService(ProfileIOS* profile) {
+  return std::make_unique<testing::NiceMock<MockSessionSyncService>>();
 }
 
 class OpenTabsUIDelegateMock : public sync_sessions::OpenTabsUIDelegate {
@@ -103,6 +83,8 @@ class OpenTabsUIDelegateMock : public sync_sessions::OpenTabsUIDelegate {
   MOCK_METHOD1(GetAllForeignSessions,
                bool(std::vector<raw_ptr<const sync_sessions::SyncedSession,
                                         VectorExperimental>>* sessions));
+  MOCK_CONST_METHOD0(GetAllForeignSessionLastModifiedTimes,
+                     base::flat_map<std::string, base::Time>());
   MOCK_METHOD3(GetForeignTab,
                bool(const std::string& tag,
                     const SessionID tab_id,
@@ -131,7 +113,7 @@ class GlobalIdMapperMock : public syncer::GlobalIdMapper {
 class RecentTabsTableCoordinatorTest : public BlockCleanupTest {
  public:
   RecentTabsTableCoordinatorTest()
-      : no_error_(GoogleServiceAuthError::NONE),
+      : no_error_(GoogleServiceAuthError::AuthErrorNone()),
         fake_controller_delegate_(syncer::SESSIONS) {}
 
  protected:
@@ -143,7 +125,7 @@ class RecentTabsTableCoordinatorTest : public BlockCleanupTest {
                               ios::FaviconServiceFactory::GetDefaultFactory());
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
     builder.AddTestingFactory(
         IOSChromeLargeIconServiceFactory::GetInstance(),
@@ -154,24 +136,18 @@ class RecentTabsTableCoordinatorTest : public BlockCleanupTest {
     builder.AddTestingFactory(ios::HistoryServiceFactory::GetInstance(),
                               ios::HistoryServiceFactory::GetDefaultFactory());
 
-    builder.AddTestingFactory(
-        SyncServiceFactory::GetInstance(),
-        base::BindRepeating(&BuildFakeSyncServiceFactory));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
 
     builder.AddTestingFactory(
         SessionSyncServiceFactory::GetInstance(),
-        base::BindRepeating(
-            &BuildMockSessionSyncServiceForRecentTabsTableCoordinator));
+        base::BindRepeating(&BuildMockSessionSyncService));
     builder.AddTestingFactory(
         IOSChromeTabRestoreServiceFactory::GetInstance(),
         IOSChromeTabRestoreServiceFactory::GetDefaultFactory());
     profile_ = std::move(builder).Build();
 
-    FakeStartupInformation* startup_information_ =
-        [[FakeStartupInformation alloc] init];
-    app_state_ =
-        [[AppState alloc] initWithStartupInformation:startup_information_];
-    scene_state_ = [[SceneState alloc] initWithAppState:app_state_];
+    scene_state_ = [[SceneState alloc] init];
     browser_ = std::make_unique<TestBrowser>(profile_.get(), scene_state_);
   }
 
@@ -183,8 +159,8 @@ class RecentTabsTableCoordinatorTest : public BlockCleanupTest {
   }
 
   void SetupSyncState(BOOL signed_in, BOOL has_foreign_sessions) {
-    SessionSyncServiceMockForRecentTabsTableCoordinator* session_sync_service =
-        static_cast<SessionSyncServiceMockForRecentTabsTableCoordinator*>(
+    MockSessionSyncService* session_sync_service =
+        static_cast<MockSessionSyncService*>(
             SessionSyncServiceFactory::GetForProfile(profile_.get()));
 
     sync_service_ = static_cast<syncer::TestSyncService*>(
@@ -243,14 +219,14 @@ class RecentTabsTableCoordinatorTest : public BlockCleanupTest {
     coordinator_ = [[RecentTabsCoordinator alloc]
         initWithBaseViewController:base_view_controller_
                            browser:browser_.get()];
-    mock_application_commands_handler_ =
-        [OCMockObject mockForProtocol:@protocol(ApplicationCommands)];
+    mock_scene_handler_ =
+        [OCMockObject mockForProtocol:@protocol(SceneCommands)];
     mock_settings_commands_handler_ =
         [OCMockObject mockForProtocol:@protocol(SettingsCommands)];
 
     [browser_->GetCommandDispatcher()
-        startDispatchingToTarget:mock_application_commands_handler_
-                     forProtocol:@protocol(ApplicationCommands)];
+        startDispatchingToTarget:mock_scene_handler_
+                     forProtocol:@protocol(SceneCommands)];
     [browser_->GetCommandDispatcher()
         startDispatchingToTarget:mock_settings_commands_handler_
                      forProtocol:@protocol(SettingsCommands)];
@@ -274,7 +250,6 @@ class RecentTabsTableCoordinatorTest : public BlockCleanupTest {
   testing::NiceMock<GlobalIdMapperMock> global_id_mapper_;
   std::unique_ptr<TestProfileIOS> profile_;
   std::unique_ptr<Browser> browser_;
-  AppState* app_state_;
   SceneState* scene_state_;
 
   ScopedKeyWindow scoped_key_window_;
@@ -290,7 +265,7 @@ class RecentTabsTableCoordinatorTest : public BlockCleanupTest {
 
   // Must be declared *after* `profile_` so it can outlive it.
   RecentTabsCoordinator* coordinator_;
-  id<ApplicationCommands> mock_application_commands_handler_;
+  id<SceneCommands> mock_scene_handler_;
   id<SettingsCommands> mock_settings_commands_handler_;
 };
 

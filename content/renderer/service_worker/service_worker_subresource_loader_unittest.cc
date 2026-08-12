@@ -17,7 +17,9 @@
 #include "base/notimplemented.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/debug/stack_trace.h"
 #include "base/strings/stringprintf.h"
+#include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
@@ -34,6 +36,7 @@
 #include "services/network/public/cpp/wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_data_pipe_getter.h"
 #include "services/network/test/test_url_loader_client.h"
+#include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/service_worker/service_worker_router_rule.h"
 #include "third_party/blink/public/mojom/blob/blob.mojom.h"
@@ -123,11 +126,13 @@ class FakeControllerServiceWorker
       blink::mojom::SerializedBlobPtr blob_body,
       network::mojom::FetchResponseSource response_source,
       base::Time response_time,
-      std::string cache_storage_cache_name) {
+      std::string cache_storage_cache_name,
+      network::mojom::FetchResponseType response_type =
+          network::mojom::FetchResponseType::kDefault) {
     auto response = blink::mojom::FetchAPIResponse::New();
     response->status_code = 200;
     response->status_text = "OK";
-    response->response_type = network::mojom::FetchResponseType::kDefault;
+    response->response_type = response_type;
     response->response_source = response_source;
     response->response_time = response_time;
     response->cache_storage_cache_name = cache_storage_cache_name;
@@ -264,6 +269,10 @@ class FakeControllerServiceWorker
 
   void SetResponseTime(base::Time time) { response_time_ = time; }
 
+  void SetResponseType(network::mojom::FetchResponseType response_type) {
+    response_type_ = response_type;
+  }
+
   // blink::mojom::ControllerServiceWorker:
   void DispatchFetchEventForSubresource(
       blink::mojom::DispatchFetchEventParamsPtr params,
@@ -287,8 +296,9 @@ class FakeControllerServiceWorker
       case ResponseMode::kDefault:
         response_callback->OnResponse(
             OkResponse(nullptr /* blob_body */, response_source_,
-                       response_time_, cache_storage_cache_name_),
-            std::move(timing));
+                       response_time_, cache_storage_cache_name_,
+                       response_type_),
+            std::move(timing), /*errors=*/nullptr);
         std::move(callback).Run(
             blink::mojom::ServiceWorkerEventStatus::COMPLETED);
         break;
@@ -299,16 +309,17 @@ class FakeControllerServiceWorker
       case ResponseMode::kStream:
         response_callback->OnResponseStream(
             OkResponse(nullptr /* blob_body */, response_source_,
-                       response_time_, cache_storage_cache_name_),
-            std::move(stream_handle_), std::move(timing));
+                       response_time_, cache_storage_cache_name_,
+                       response_type_),
+            std::move(stream_handle_), std::move(timing), /*errors=*/nullptr);
         std::move(callback).Run(
             blink::mojom::ServiceWorkerEventStatus::COMPLETED);
         break;
       case ResponseMode::kBlob:
         response_callback->OnResponse(
             OkResponse(std::move(blob_body_), response_source_, response_time_,
-                       cache_storage_cache_name_),
-            std::move(timing));
+                       cache_storage_cache_name_, response_type_),
+            std::move(timing), /*errors=*/nullptr);
         std::move(callback).Run(
             blink::mojom::ServiceWorkerEventStatus::COMPLETED);
         break;
@@ -339,13 +350,15 @@ class FakeControllerServiceWorker
             blob->blob.InitWithNewPipeAndPassReceiver());
 
         // Respond with a 206 response.
-        auto response = OkResponse(std::move(blob), response_source_,
-                                   response_time_, cache_storage_cache_name_);
+        auto response =
+            OkResponse(std::move(blob), response_source_, response_time_,
+                       cache_storage_cache_name_, response_type_);
         response->status_code = 206;
         response->headers.emplace(
             "Content-Range", base::StringPrintf("bytes %zu-%zu/%zu", start, end,
                                                 blob_range_body_.size()));
-        response_callback->OnResponse(std::move(response), std::move(timing));
+        response_callback->OnResponse(std::move(response), std::move(timing),
+                                      /*errors=*/nullptr);
         std::move(callback).Run(
             blink::mojom::ServiceWorkerEventStatus::COMPLETED);
         break;
@@ -353,18 +366,20 @@ class FakeControllerServiceWorker
 
       case ResponseMode::kFallbackResponse:
         response_callback->OnFallback(/*request_body=*/std::nullopt,
-                                      std::move(timing));
+                                      std::move(timing), /*errors=*/nullptr);
         std::move(callback).Run(
             blink::mojom::ServiceWorkerEventStatus::COMPLETED);
         break;
       case ResponseMode::kErrorResponse:
-        response_callback->OnResponse(ErrorResponse(), std::move(timing));
+        response_callback->OnResponse(ErrorResponse(), std::move(timing),
+                                      /*errors=*/nullptr);
         std::move(callback).Run(
             blink::mojom::ServiceWorkerEventStatus::REJECTED);
         break;
       case ResponseMode::kRedirectResponse:
         response_callback->OnResponse(
-            RedirectResponse(redirect_location_header_), std::move(timing));
+            RedirectResponse(redirect_location_header_), std::move(timing),
+            /*errors=*/nullptr);
         std::move(callback).Run(
             blink::mojom::ServiceWorkerEventStatus::COMPLETED);
         break;
@@ -379,11 +394,8 @@ class FakeControllerServiceWorker
 
   void Clone(
       mojo::PendingReceiver<blink::mojom::ControllerServiceWorker> receiver,
-      const network::CrossOriginEmbedderPolicy&,
-      mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>,
-      const network::DocumentIsolationPolicy&,
-      mojo::PendingRemote<network::mojom::DocumentIsolationPolicyReporter>)
-      override {
+      blink::mojom::CrossOriginEmbedderPolicyInfoPtr,
+      blink::mojom::DocumentIsolationPolicyInfoPtr) override {
     receivers_.Add(this, std::move(receiver));
   }
 
@@ -439,6 +451,9 @@ class FakeControllerServiceWorker
   network::mojom::FetchResponseSource response_source_ =
       network::mojom::FetchResponseSource::kUnspecified;
 
+  network::mojom::FetchResponseType response_type_ =
+      network::mojom::FetchResponseType::kDefault;
+
   std::string cache_storage_cache_name_;
   base::Time response_time_;
 };
@@ -490,10 +505,7 @@ class FakeServiceWorkerContainerHost
     get_controller_service_worker_count_++;
     if (!fake_controller_)
       return;
-    fake_controller_->Clone(
-        std::move(receiver), network::CrossOriginEmbedderPolicy(),
-        mojo::NullRemote(), network::DocumentIsolationPolicy(),
-        mojo::NullRemote());
+    fake_controller_->Clone(std::move(receiver), nullptr, nullptr);
   }
   void CloneContainerHost(
       mojo::PendingReceiver<blink::mojom::ServiceWorkerContainerHost> receiver)
@@ -572,7 +584,11 @@ class ServiceWorkerSubresourceLoaderTest : public ::testing::Test {
           mojo::NullRemote() /*remote_controller*/,
           mojo::NullRemote() /*remote_cache_storage*/, "" /*client_id*/,
           blink::mojom::ServiceWorkerFetchHandlerBypassOption::kDefault,
-          std::nullopt, blink::EmbeddedWorkerStatus::kStopped,
+          std::nullopt, network::CrossOriginEmbedderPolicy(),
+          mojo::NullRemote() /*cross_origin_embedder_policy_reporter*/,
+          network::DocumentIsolationPolicy(),
+          mojo::NullRemote() /*document_isolation_policy_reporter*/,
+          blink::EmbeddedWorkerStatus::kStopped,
           mojo::NullReceiver() /*running_status_receiver*/);
     }
     mojo::Remote<network::mojom::URLLoaderFactory>
@@ -1047,6 +1063,94 @@ TEST_F(ServiceWorkerSubresourceLoaderTest,
                                       blink::ServiceWorkerStatusCode::kOk, 1);
 }
 
+TEST_F(ServiceWorkerSubresourceLoaderTest,
+       DropController_RestartFetchEvent_RaceNetworkRequest_FallbackStall) {
+  base::HistogramTester histogram_tester;
+
+  // Set up the router to race network and fetch event.
+  blink::ServiceWorkerRouterRules rules;
+  {
+    blink::ServiceWorkerRouterRule rule;
+    blink::ServiceWorkerRouterRequestCondition request_condition;
+    request_condition.method = "GET";
+    rule.condition = blink::ServiceWorkerRouterCondition::WithRequest(
+        request_condition);
+    blink::ServiceWorkerRouterSource source;
+    source.type = network::mojom::ServiceWorkerRouterSourceType::
+        kRaceNetworkAndFetchEvent;
+    source.race_network_and_fetch_event_source.emplace();
+    rule.sources.push_back(source);
+    rules.rules.push_back(rule);
+  }
+
+  mojo::PendingRemote<blink::mojom::ServiceWorkerContainerHost>
+      remote_container_host;
+  fake_container_host_.CloneContainerHost(
+      remote_container_host.InitWithNewPipeAndPassReceiver());
+  connector_ = base::MakeRefCounted<ControllerServiceWorkerConnector>(
+      std::move(remote_container_host),
+      mojo::NullRemote() /*remote_controller*/,
+      mojo::NullRemote() /*remote_cache_storage*/, "" /*client_id*/,
+      blink::mojom::ServiceWorkerFetchHandlerBypassOption::kDefault, rules,
+      network::CrossOriginEmbedderPolicy(),
+      mojo::NullRemote() /*cross_origin_embedder_policy_reporter*/,
+      network::DocumentIsolationPolicy(),
+      mojo::NullRemote() /*document_isolation_policy_reporter*/,
+      blink::EmbeddedWorkerStatus::kRunning,
+      mojo::NullReceiver() /*running_status_receiver*/);
+
+  // Initialize by calling CreateSubresourceLoaderFactory() once.
+  CreateSubresourceLoaderFactory();
+
+  network::TestURLLoaderFactory test_loader_factory;
+  mojo::Remote<network::mojom::URLLoaderFactory> factory;
+  mojo::PendingRemote<network::mojom::URLLoaderFactory> pending_test_factory;
+  test_loader_factory.Clone(
+      pending_test_factory.InitWithNewPipeAndPassReceiver());
+
+  ServiceWorkerSubresourceLoaderFactory::Create(
+      connector_,
+      base::MakeRefCounted<network::WrapperSharedURLLoaderFactory>(
+          std::move(pending_test_factory)),
+      factory.BindNewPipeAndPassReceiver(),
+      blink::scheduler::GetSequencedTaskRunnerForTesting());
+
+  fake_controller_.DontRespond();
+  network::ResourceRequest request =
+      CreateRequest(GURL("https://www.example.com/foo.png"));
+  mojo::Remote<network::mojom::URLLoader> loader;
+  std::unique_ptr<network::TestURLLoaderClient> client;
+
+  // Set an interceptor to wait for the race network request.
+  base::RunLoop race_network_loop;
+  test_loader_factory.SetInterceptor(
+      base::BindLambdaForTesting([&](const network::ResourceRequest& req) {
+        race_network_loop.Quit();
+      }));
+
+  // Start the request and drop the connection to the ControllerServiceWorker,
+  // which should cause the fetch event to be restarted.
+  StartRequest(factory, request, &loader, &client);
+  fake_controller_.RunUntilFetchEvent();
+  race_network_loop.Run();
+
+  fake_controller_.ClearReceivers();
+
+  // Respond with fallback on the restarted fetch event.
+  fake_controller_.RespondWithFallback();
+
+  // Wait for the fallback request to be dispatched to the network.
+  base::RunLoop fallback_loop;
+  test_loader_factory.SetInterceptor(
+      base::BindLambdaForTesting([&](const network::ResourceRequest& req) {
+        fallback_loop.Quit();
+      }));
+  fallback_loop.Run();
+
+  histogram_tester.ExpectUniqueSample(
+      "ServiceWorker.SubresourceLoader.FetchRequestRestarted", true, 1);
+}
+
 TEST_F(ServiceWorkerSubresourceLoaderTest, StreamResponse) {
   base::HistogramTester histogram_tester;
 
@@ -1432,7 +1536,8 @@ TEST_F(ServiceWorkerSubresourceLoaderTest, RedirectResponse) {
 
   // Redirect once more.
   fake_controller_.RespondWithRedirect("https://other.example.com/baz.png");
-  loader->FollowRedirect({}, {}, {}, std::nullopt);
+  loader->FollowRedirect(/*headers_update_params=*/{},
+                         /*new_url=*/std::nullopt);
   client->RunUntilRedirectReceived();
 
   EXPECT_EQ(net::OK, client->completion_status().error_code);
@@ -1454,7 +1559,8 @@ TEST_F(ServiceWorkerSubresourceLoaderTest, RedirectResponse) {
             MOJO_RESULT_OK);
   fake_controller_.RespondWithStream(
       stream_callback.BindNewPipeAndPassReceiver(), std::move(consumer_handle));
-  loader->FollowRedirect({}, {}, {}, std::nullopt);
+  loader->FollowRedirect(/*headers_update_params=*/{},
+                         /*new_url=*/std::nullopt);
   client->RunUntilResponseReceived();
 
   auto& info = client->response_head();
@@ -1525,7 +1631,8 @@ TEST_F(ServiceWorkerSubresourceLoaderTest, TooManyRedirects) {
     redirect_location = std::string("https://www.example.com/redirect_") +
                         base::NumberToString(count);
     fake_controller_.RespondWithRedirect(redirect_location);
-    loader->FollowRedirect({}, {}, {}, std::nullopt);
+    loader->FollowRedirect(/*headers_update_params=*/{},
+                           /*new_url=*/std::nullopt);
   }
   client->RunUntilComplete();
 
@@ -1556,7 +1663,8 @@ TEST_F(ServiceWorkerSubresourceLoaderTest, FollowNonexistentRedirect) {
 
   // Tell the loader to follow a non-existent redirect. It should complete
   // with network error.
-  loader->FollowRedirect({}, {}, {}, std::nullopt);
+  loader->FollowRedirect(/*headers_update_params=*/{},
+                         /*new_url=*/std::nullopt);
   client->RunUntilComplete();
   EXPECT_EQ(net::ERR_INVALID_REDIRECT, client->completion_status().error_code);
 }
@@ -1644,6 +1752,35 @@ TEST_F(ServiceWorkerSubresourceLoaderTest,
             "bytes 5-32/33");
   EXPECT_EQ(28, info->content_length);
   EXPECT_EQ("is sample text for the Blob.", TakeResponseBody(client.get()));
+}
+
+TEST_F(ServiceWorkerSubresourceLoaderTest, TimingAllowPassedByResponseType) {
+  struct {
+    network::mojom::FetchResponseType response_type;
+    bool expected_timing_allow_passed;
+  } kTestCases[] = {
+      {network::mojom::FetchResponseType::kBasic, true},
+      {network::mojom::FetchResponseType::kCors, false},
+      {network::mojom::FetchResponseType::kDefault, true},
+      {network::mojom::FetchResponseType::kError, false},
+      {network::mojom::FetchResponseType::kOpaque, false},
+      {network::mojom::FetchResponseType::kOpaqueRedirect, false},
+  };
+
+  for (const auto& test_case : kTestCases) {
+    fake_controller_.SetResponseType(test_case.response_type);
+    mojo::Remote<network::mojom::URLLoaderFactory> factory =
+        CreateSubresourceLoaderFactory();
+    network::ResourceRequest request =
+        CreateRequest(GURL("https://www.example.com/foo.png"));
+    mojo::Remote<network::mojom::URLLoader> loader;
+    std::unique_ptr<network::TestURLLoaderClient> client;
+    StartRequest(factory, request, &loader, &client);
+    fake_controller_.RunUntilFetchEvent();
+    client->RunUntilComplete();
+    EXPECT_EQ(test_case.expected_timing_allow_passed,
+              client->response_head()->timing_allow_passed);
+  }
 }
 
 }  // namespace service_worker_subresource_loader_unittest

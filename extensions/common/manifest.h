@@ -20,15 +20,14 @@
 namespace extensions {
 struct InstallWarning;
 
-// Wraps the base::Value::Dict form of extension's manifest. Enforces access to
+// Wraps the base::DictValue form of extension's manifest. Enforces access to
 // properties of the manifest using ManifestFeatureProvider.
 class Manifest final {
  public:
   // Do not change the order of entries or remove entries in this list as this
   // is used in ExtensionType enum in
   // tools/metrics/histograms/metadata/extensions/enums.xml.
-  // TODO(crbug.com/420858216): Add add "class" to declaration.
-  enum Type {
+  enum class Type {
     kUnknown = 0,
     kExtension = 1,
     kTheme = 2,
@@ -44,19 +43,6 @@ class Manifest final {
 
     // New enum values must go above here.
     kNumLoadTypes,
-
-    // TODO(crbug.com/420858216): Remove these legacy values/names.
-    TYPE_UNKNOWN = kUnknown,
-    TYPE_EXTENSION = kExtension,
-    TYPE_THEME = kTheme,
-    TYPE_USER_SCRIPT = kUserScript,
-    TYPE_HOSTED_APP = kHostedApp,
-    TYPE_LEGACY_PACKAGED_APP = kLegacyPackagedApp,
-    TYPE_PLATFORM_APP = kPlatformApp,
-    TYPE_SHARED_MODULE = kSharedModule,
-    TYPE_LOGIN_SCREEN_EXTENSION = kLoginScreenExtension,
-    TYPE_CHROMEOS_SYSTEM_EXTENSION = kChromeOSSystemExtension,
-    NUM_LOAD_TYPES = kNumLoadTypes
   };
 
   // Given two install sources, return the one which should take priority
@@ -117,7 +103,7 @@ class Manifest final {
   }
 
   // Returns the Manifest::Type for the given `value`.
-  static Type GetTypeFromManifestValue(const base::Value::Dict& value,
+  static Type GetTypeFromManifestValue(const base::DictValue& value,
                                        bool for_login_screen = false);
 
   // Returns true if an item with the given `location` should always be loaded,
@@ -130,11 +116,11 @@ class Manifest final {
   // (like platform apps) may be installed in the same login screen profile.
   static std::unique_ptr<Manifest> CreateManifestForLoginScreen(
       mojom::ManifestLocation location,
-      base::Value::Dict value,
+      base::DictValue value,
       ExtensionId extension_id);
 
   Manifest(mojom::ManifestLocation location,
-           base::Value::Dict value,
+           base::DictValue value,
            ExtensionId extension_id);
 
   Manifest(const Manifest&) = delete;
@@ -186,7 +172,7 @@ class Manifest final {
   std::optional<int> FindIntPath(std::string_view path) const;
   const std::string* FindStringPath(std::string_view path) const;
 
-  const base::Value::Dict* FindDictPath(std::string_view path) const;
+  const base::DictValue* FindDictPath(std::string_view path) const;
 
   // Deprecated: Use the FindDictPath(asValue) functions instead.
   bool GetList(const std::string& path, const base::Value** out_value) const;
@@ -194,19 +180,17 @@ class Manifest final {
   // Returns true if this equals the `other` manifest.
   bool EqualsForTesting(const Manifest& other) const;
 
-  // Gets the underlying base::Value::Dict representing the manifest.
+  // Gets the underlying base::DictValue representing the manifest.
   // Note: only use this when you KNOW you don't need the validation.
-  const base::Value::Dict* value() const { return &value_; }
+  const base::DictValue* value() const { return &value_; }
 
-  // Gets the underlying `base::Value::Dict` representing the manifest with all
+  // Gets the underlying `base::DictValue` representing the manifest with all
   // unavailable manifest keys removed.
-  const base::Value::Dict& available_values() const {
-    return available_values_;
-  }
+  const base::DictValue& available_values() const { return available_values_; }
 
  private:
   Manifest(mojom::ManifestLocation location,
-           base::Value::Dict value,
+           base::DictValue value,
            ExtensionId extension_id,
            bool for_login_screen);
 
@@ -224,10 +208,10 @@ class Manifest final {
   const mojom::ManifestLocation location_;
 
   // The underlying dictionary representation of the manifest.
-  const base::Value::Dict value_;
+  const base::DictValue value_;
 
   // Same as `value_` but comprises only of keys available to this manifest.
-  base::Value::Dict available_values_;
+  base::DictValue available_values_;
 
   const Type type_;
 

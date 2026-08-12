@@ -6,6 +6,7 @@
 #define CONTENT_BROWSER_WEB_CONTENTS_WEB_CONTENTS_VIEW_ANDROID_H_
 
 #include <memory>
+#include <optional>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -14,6 +15,8 @@
 #include "content/browser/web_contents/web_contents_view.h"
 #include "content/browser/web_contents/web_contents_view_drag_security_info.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/clipboard_types.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "content/public/common/drop_data.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -23,6 +26,10 @@
 #include "ui/android/view_android_observer.h"
 #include "ui/events/android/event_handler_android.h"
 #include "ui/gfx/geometry/rect_f.h"
+
+namespace cc::slim {
+class Layer;
+}
 
 namespace content {
 
@@ -35,9 +42,10 @@ class SynchronousCompositorClient;
 class WebContentsImpl;
 
 // Android-specific implementation of the WebContentsView.
-class WebContentsViewAndroid : public WebContentsView,
-                               public RenderViewHostDelegateView,
-                               public ui::EventHandlerAndroid {
+class CONTENT_EXPORT WebContentsViewAndroid : public WebContentsView,
+                                              public RenderViewHostDelegateView,
+                                              public ui::EventHandlerAndroid,
+                                              public WebContentsObserver {
  public:
   WebContentsViewAndroid(WebContentsImpl* web_contents,
                          std::unique_ptr<WebContentsViewDelegate> delegate);
@@ -92,6 +100,9 @@ class WebContentsViewAndroid : public WebContentsView,
   GetBackForwardTransitionAnimationManager() override;
   void DestroyBackForwardTransitionAnimationManager() override;
 
+  // WebContentsObserver implementation.
+  void ReadyToCommitNavigation(NavigationHandle* navigation_handle) override;
+
   // Backend implementation of RenderViewHostDelegateView.
   void ShowContextMenu(RenderFrameHost& render_frame_host,
                        const ContextMenuParams& params) override;
@@ -105,14 +116,14 @@ class WebContentsViewAndroid : public WebContentsView,
       bool right_aligned,
       bool allow_multiple_selection) override;
   ui::OverscrollRefreshHandler* GetOverscrollRefreshHandler() const override;
-  void StartDragging(const DropData& drop_data,
-                     const url::Origin& source_origin,
-                     blink::DragOperationsMask allowed_ops,
-                     const gfx::ImageSkia& image,
-                     const gfx::Vector2d& cursor_offset,
-                     const gfx::Rect& drag_obj_rect,
-                     const blink::mojom::DragEventSourceInfo& event_info,
-                     RenderWidgetHostImpl* source_rwh) override;
+  void StartDragging(
+      RenderFrameHost& source_rfh,
+      const DropData& drop_data,
+      blink::DragOperationsMask allowed_ops,
+      const gfx::ImageSkia& image,
+      const gfx::Vector2d& cursor_offset,
+      const gfx::Rect& drag_obj_rect,
+      const blink::mojom::DragEventSourceInfo& event_info) override;
   void UpdateDragOperation(ui::mojom::DragOperation operation,
                            bool document_is_handling_drag) override;
   void GotFocus(RenderWidgetHostImpl* render_widget_host) override;
@@ -143,6 +154,12 @@ class WebContentsViewAndroid : public WebContentsView,
   void NotifyVirtualKeyboardOverlayRect(
       const gfx::Rect& keyboard_rect) override;
   void ShowInterestInElement(int nodeID) override;
+
+  virtual bool ShouldShowBlurTransitionAnimation(
+      NavigationHandle* navigation_handle);
+
+  virtual bool IsDragAllowedByDataControlPolicy(const ClipboardEndpoint& source,
+                                                const DropData& drop_data);
 
   void SetFocus(bool focused);
   void set_device_orientation(int orientation) {
@@ -187,7 +204,13 @@ class WebContentsViewAndroid : public WebContentsView,
                            base::WeakPtr<RenderWidgetHostViewBase> target,
                            std::optional<gfx::PointF> transformed_pt);
   void OnDragEnded();
-  void OnSystemDragEnded(RenderWidgetHost* source_rwh);
+  virtual void OnSystemDragEnded(RenderWidgetHost* source_rwh);
+
+  // Clears internal and system drag-and-drop state when a drag attempt fails to
+  // start (e.g. due to drag failures from system/OS errors during
+  // initiation). Unlike `OnDragEnded`, this does not dispatch a final `dragend`
+  // event since the drag never officially started
+  void ClearDragStateOnStartFailure(RenderWidgetHost* source_rwh);
 
   SelectPopup* GetSelectPopup();
 
@@ -239,8 +262,6 @@ class WebContentsViewAndroid : public WebContentsView,
 
   // Source RenderWidgetHost when dragging out of this WebContents.
   base::WeakPtr<RenderWidgetHostImpl> current_source_rwh_for_drag_;
-  // base::FeatureList::IsEnabled(features::kAndroidDragDropOopif).
-  bool drag_drop_oopif_enabled_ = false;
   // Current drop data set on drop event.
   std::unique_ptr<DropData> drop_data_;
   // Metadata for the current drag.

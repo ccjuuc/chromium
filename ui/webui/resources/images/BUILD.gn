@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 import("//ui/webui/resources/tools/generate_grd.gni")
+import("//ui/webui/webui_features.gni")
 
 generate_grd("build_grdp") {
   grd_prefix = "webui_images"
@@ -10,6 +11,7 @@ generate_grd("build_grdp") {
   input_files_base_dir = rebase_path(".", "//")
   input_files = [
     "add.svg",
+    "add_old.svg",
     "apps_home_empty_238x170.svg",
     "cancel_red.svg",
     "checkbox_black.png",
@@ -30,9 +32,10 @@ generate_grd("build_grdp") {
     "icon_expand_less.svg",
     "icon_expand_more.svg",
     "icon_file.png",
-    "icon_tab.svg",
     "icon_refresh.svg",
+    "icon_refresh_old.svg",
     "icon_search.svg",
+    "icon_tab.svg",
     "open_in_new.svg",
     "select.png",
     "throbber_medium.svg",
@@ -47,39 +50,47 @@ generate_grd("build_grdp") {
     "2x/select.png",
   ]
 
-  if (!is_ios) {
-    input_files += [
-      "arrow_down.svg",
-      "chrome_logo_dark.svg",
-      "dark/arrow_down.svg",
-      "icon_arrow_back.svg",
-      "icon_delete_gray.svg",
-      "icon_edit.svg",
-      "icon_more_vert.svg",
-    ]
-  }
+  input_files += [
+    "arrow_down.svg",
+    "arrow_right.svg",
+    "chrome_logo_dark.svg",
+    "dark/arrow_down.svg",
+    "icon_arrow_back.svg",
+    "icon_arrow_back_old.svg",
+    "icon_arrow_drop_down_cr23.svg",
+    "icon_arrow_drop_up_cr23.svg",
+    "icon_arrow_forward.svg",
+    "icon_arrow_upward.svg",
+    "icon_clear.svg",
+    "icon_delete_gray.svg",
+    "icon_edit.svg",
+    "icon_edit_old.svg",
+    "icon_filetype_generic.svg",
+    "icon_folder_open.svg",
+    "icon_more_vert.svg",
+    "icon_picture_delete.svg",
+    "icon_settings.svg",
+    "icon_visibility.svg",
+    "icon_visibility_off.svg",
+  ]
 
-  if (!is_android && !is_ios) {
+  if (!is_ios) {
+    # TODO(crbug.com/527601593): Revert back to (!is_ios && (!is_android ||
+    # is_desktop_android)) if we disable composebox on mobile Android phones.
     input_files += [
-      "arrow_right.svg",
       "business.svg",
-      "colorize.svg",
       "chevron_down.svg",
+      "colorize.svg",
+      "colorize_old.svg",
       "dark/chevron_down.svg",
-      "icon_arrow_drop_down_cr23.svg",
-      "icon_arrow_drop_up_cr23.svg",
-      "icon_arrow_upward.svg",
       "icon_bookmark.svg",
-      "icon_clear.svg",
+      "icon_bookmark_old.svg",
       "icon_clock.svg",
-      "icon_filetype_generic.svg",
-      "icon_folder_open.svg",
+      "icon_clock_old.svg",
       "icon_history.svg",
+      "icon_history_old.svg",
       "icon_journeys.svg",
-      "icon_picture_delete.svg",
-      "icon_settings.svg",
-      "icon_visibility_off.svg",
-      "icon_visibility.svg",
+      "icon_journeys_old.svg",
       "promotion_banner_light.svg",
       "dark/promotion_banner_dark.svg",
       "promotion_policy_banner_close.svg",

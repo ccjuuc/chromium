@@ -4,6 +4,9 @@
 
 #include "content/browser/renderer_host/input/synthetic_gesture_target_base.h"
 
+#include "base/check.h"
+#include "base/logging.h"
+#include "base/notreached.h"
 #include "base/trace_event/trace_event.h"
 #include "components/input/events_helper.h"
 #include "components/input/render_widget_host_input_event_router.h"
@@ -33,7 +36,7 @@ const int kPointerAssumedStoppedTimeMs = 100;
 SyntheticGestureTargetBase::SyntheticGestureTargetBase(
     RenderWidgetHostImpl* host)
     : host_(host) {
-  DCHECK(host);
+  CHECK(host, base::NotFatalUntil::M152);
 }
 
 SyntheticGestureTargetBase::~SyntheticGestureTargetBase() {
@@ -83,7 +86,8 @@ void SyntheticGestureTargetBase::DispatchInputEventToPlatform(
     const WebGestureEvent& web_pinch =
         static_cast<const WebGestureEvent&>(event);
     // Touchscreen pinches should be injected as touch events.
-    DCHECK_EQ(blink::WebGestureDevice::kTouchpad, web_pinch.SourceDevice());
+    CHECK_EQ(blink::WebGestureDevice::kTouchpad, web_pinch.SourceDevice(),
+             base::NotFatalUntil::M152);
     if (event.GetType() == WebInputEvent::Type::kGesturePinchBegin &&
         !PointIsWithinContents(web_pinch.PositionInWidget())) {
       LOG(WARNING)
@@ -95,7 +99,8 @@ void SyntheticGestureTargetBase::DispatchInputEventToPlatform(
     const WebGestureEvent& web_fling =
         static_cast<const WebGestureEvent&>(event);
     // Touchscreen swipe should be injected as touch events.
-    DCHECK_EQ(blink::WebGestureDevice::kTouchpad, web_fling.SourceDevice());
+    CHECK_EQ(blink::WebGestureDevice::kTouchpad, web_fling.SourceDevice(),
+             base::NotFatalUntil::M152);
     if (event.GetType() == WebInputEvent::Type::kGestureFlingStart &&
         !PointIsWithinContents(web_fling.PositionInWidget())) {
       LOG(WARNING)

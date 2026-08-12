@@ -20,7 +20,7 @@ namespace lens {
 LensOverlayBlurLayerDelegate::LensOverlayBlurLayerDelegate(
     content::RenderWidgetHost* background_view_host)
     : background_view_host_(background_view_host) {
-  SetLayer(std::make_unique<ui::Layer>(ui::LAYER_TEXTURED));
+  SetLayer(std::make_unique<ui::LayerTextured>());
   layer()->SetFillsBoundsOpaquely(true);
   layer()->set_delegate(this);
 
@@ -134,6 +134,7 @@ void LensOverlayBlurLayerDelegate::FetchBackgroundImage() {
       /*src_rect=*/gfx::Rect(),
       /*output_size=*/
       gfx::Size(size.width() * quality, size.height() * quality),
+      base::TimeDelta(),
       base::BindOnce(&LensOverlayBlurLayerDelegate::UpdateBackgroundImage,
                      weak_factory_.GetWeakPtr()));
 }

@@ -32,17 +32,16 @@ class Longhand : public CSSProperty {
   // the caller is responsible for consuming. End-of-stream is checked
   // by the caller (after potentially consuming “!important”).
   CORE_EXPORT
-  virtual const CSSValue* ParseSingleValue(
-      CSSParserTokenStream& stream,
-      const CSSParserContext& context,
-      const CSSParserLocalContext& local_tokenizer) const {
-    return nullptr;
+  virtual const CSSValue* ParseSingleValue(CSSParserTokenStream& stream,
+                                           const CSSParserContext& context,
+                                           CSSParserLocalContext&) const {
+    NOTREACHED();
   }
   virtual void ApplyInitial(StyleResolverState&) const { NOTREACHED(); }
   virtual void ApplyInherit(StyleResolverState&) const { NOTREACHED(); }
   virtual void ApplyValue(StyleResolverState&,
                           const CSSValue&,
-                          ValueMode) const {
+                          ValueModeFlags) const {
     NOTREACHED();
   }
   void ApplyUnset(StyleResolverState& state) const {

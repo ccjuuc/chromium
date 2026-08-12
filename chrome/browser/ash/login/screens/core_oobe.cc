@@ -22,9 +22,12 @@
 
 namespace ash {
 
-CoreOobe::CoreOobe(const std::string& display_type,
-                   base::WeakPtr<CoreOobeView> view)
-    : view_(view) {
+CoreOobe::CoreOobe(
+    const PrefService& local_state,
+    policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
+    const std::string& display_type,
+    base::WeakPtr<CoreOobeView> view)
+    : version_info_updater_(browser_policy_connector_ash, this), view_(view) {
   is_oobe_display_ = display_type == OobeUI::kOobeDisplay;
 
   OobeConfiguration::Get()->AddAndFireObserver(this);
@@ -51,8 +54,8 @@ CoreOobe::CoreOobe(const std::string& display_type,
     }
   }
 
-  if (ash::system::InputDeviceSettings::Get()
-          ->ForceKeyboardDrivenUINavigation()) {
+  if (system::InputDeviceSettings::ForceKeyboardDrivenUINavigation(
+          local_state)) {
     if (view_) {
       view_->EnableKeyboardFlow();
     }
@@ -68,7 +71,7 @@ CoreOobe::~CoreOobe() {
 }
 
 void CoreOobe::ShowScreenWithData(const OobeScreenId& screen,
-                                  std::optional<base::Value::Dict> data) {
+                                  std::optional<base::DictValue> data) {
   const bool is_priority_screen =
       PriorityScreenChecker::IsPriorityScreen(screen);
 

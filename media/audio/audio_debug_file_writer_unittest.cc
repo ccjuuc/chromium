@@ -29,9 +29,9 @@ namespace media {
 
 namespace {
 
-static const uint16_t kBytesPerSample = sizeof(uint16_t);
-static const uint16_t kPcmEncoding = 1;
-static const size_t kWavHeaderSize = 44;
+static constexpr uint16_t kBytesPerSample = sizeof(uint16_t);
+static constexpr uint16_t kPcmEncoding = 1;
+static constexpr size_t kWavHeaderSize = 44;
 
 base::File OpenFile(const base::FilePath& file_path) {
   return base::File(file_path, base::File::FLAG_OPEN | base::File::FLAG_WRITE);
@@ -226,15 +226,16 @@ class AudioDebugFileWriterTest
     EXPECT_CALL(*mock_audio_bus_pool_, OnInsertAudioBus(_))
         .Times(expect_buses_returned_to_pool ? writes_ : 0);
 
+    auto remaining_data = source_interleaved_.as_span();
+    const size_t samples_per_buffer =
+        params_.frames_per_buffer() * params_.channels();
+
     for (int i = 0; i < writes_; ++i) {
       std::unique_ptr<AudioBus> bus =
           AudioBus::Create(params_.channels(), params_.frames_per_buffer());
 
       bus->FromInterleaved<media::SignedInt16SampleTypeTraits>(
-          source_interleaved_
-              .subspan(i * params_.channels() * params_.frames_per_buffer())
-              .data(),
-          params_.frames_per_buffer());
+          remaining_data.take_first(samples_per_buffer));
 
       debug_writer_->Write(*bus);
     }
@@ -325,7 +326,8 @@ TEST_P(AudioDebugFileWriterBehavioralTest, ShouldReuseAudioBusesWithPool) {
 
   std::unique_ptr<AudioBus> bus = AudioBus::Create(params_);
   bus->FromInterleaved<media::SignedInt16SampleTypeTraits>(
-      source_interleaved_.data(), params_.frames_per_buffer());
+      source_interleaved_.first(static_cast<size_t>(
+          params_.frames_per_buffer() * params_.channels())));
 
   debug_writer_->Write(*bus);
   task_environment_.RunUntilIdle();

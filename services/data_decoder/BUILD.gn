@@ -69,6 +69,8 @@ source_set("tests") {
     "public/cpp/data_decoder_unittest.cc",
     "public/cpp/safe_web_bundle_parser_unittest.cc",
     "public/cpp/safe_xml_parser_unittest.cc",
+    "public/cpp/xml_dom_unittest.cc",
+    "xml/xml_parser_rs_unittest.cc",
     "xml_parser_unittest.cc",
   ]
 
@@ -81,6 +83,7 @@ source_set("tests") {
     "//components/web_package/test_support",
     "//services/data_decoder/public/cpp",
     "//services/data_decoder/public/cpp:test_support",
+    "//services/data_decoder/xml:xml_parser_rs",
     "//skia",
     "//testing/gtest",
     "//ui/gfx",
@@ -111,20 +114,7 @@ source_set("tests") {
 # have the "deps" information propagated in order to support "fat"
 # binaries.
 source_set("xml_parser_fuzzer_deps") {
-  visibility = [
-    ":run_xml_parser_fuzzer",
-    ":xml_parser_fuzzer",
-    ":xml_parser_fuzzer__apk__compile_java",
-    ":xml_parser_fuzzer__apk__compile_resources",
-    ":xml_parser_fuzzer__apk__create",
-    ":xml_parser_fuzzer__apk__java",
-    ":xml_parser_fuzzer__apk__java__dex",
-    ":xml_parser_fuzzer__apk__java__header",
-    ":xml_parser_fuzzer__apk__java__validate",
-    ":xml_parser_fuzzer__library",
-    ":xml_parser_fuzzer__library__jni_registration__native_sources",
-    ":xml_parser_fuzzer_executable",
-  ]
+  visibility = [ ":*" ]
   public_deps = [
     ":lib",
     "//base",

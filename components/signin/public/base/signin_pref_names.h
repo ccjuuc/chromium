@@ -18,7 +18,13 @@ extern const char kAccountIdMigrationState[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const char kAccountInfo[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
-extern const char kCookieClearOnExitMigrationNoticeComplete[];
+extern const char kAccountPreviewPreference[];
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+extern const char kAccountPreviewDataLastUpdatePref[];
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+extern const char kAccountPreviewNonPeriodicFetchCountPref[];
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+extern const char kAccountPreviewDataLastFetchAccounts[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const char kGaiaCookieHash[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
@@ -29,10 +35,12 @@ COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const char kGoogleServicesAccountId[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const char kGoogleServicesConsentedToSync[];
+#if !BUILDFLAG(IS_IOS)
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const char kGoogleServicesLastSyncingGaiaId[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const char kGoogleServicesLastSyncingUsername[];
+#endif  // !BUILDFLAG(IS_IOS)
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const char kGoogleServicesLastSignedInUsername[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
@@ -41,6 +49,8 @@ COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const char kGoogleServicesSyncingGaiaIdMigratedToSignedIn[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const char kGoogleServicesSyncingUsernameMigratedToSignedIn[];
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+extern const char kGoogleServicesSyncingUserMigrationType[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const char kGoogleServicesUsernamePattern[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)

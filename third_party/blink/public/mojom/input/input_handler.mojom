@@ -8,8 +8,10 @@ import "cc/mojom/browser_controls_offset_tag_modifications.mojom";
 import "cc/mojom/browser_controls_state.mojom";
 import "cc/mojom/overscroll_behavior.mojom";
 import "cc/mojom/touch_action.mojom";
+import "mojo/public/mojom/base/big_buffer.mojom";
 import "mojo/public/mojom/base/string16.mojom";
 import "mojo/public/mojom/base/time.mojom";
+import "third_party/blink/public/mojom/dom/dom_node_id.mojom";
 import "third_party/blink/public/mojom/input/gesture_event.mojom";
 import "third_party/blink/public/mojom/input/handwriting_gesture_result.mojom";
 import "third_party/blink/public/mojom/input/input_event.mojom";
@@ -46,6 +48,8 @@ struct KeyData {
   int32 native_key_code;
   bool is_system_key;
   bool is_browser_shortcut;
+  [EnableIf=is_android]
+  bool is_confirmed_physical_keyboard_input;
   mojo_base.mojom.String16 text;
   mojo_base.mojom.String16 unmodified_text;
 };
@@ -80,6 +84,7 @@ struct WheelData {
   blink.mojom.DispatchType cancelable;
   uint8 event_action;
   uint8 delta_units;
+  blink.mojom.RailsMode rails_mode;
 };
 
 struct MouseData {
@@ -98,6 +103,15 @@ struct ScrollData {
   // Used for GestureScrollBegin type only. If this is true, we use the scroll
   // sequence to do cursor control rather than scroll.
   bool cursor_control;
+  // The scroll deltas, before axis-locking/snapping is applied.
+  // Used when `scroll-axis-lock` is `none` to allow diagonal scrolling even on
+  // nearly vertical/horizontal gestures which would normally be locked to one
+  // axis.
+  // TODO(crbug.com/535432422): Move scroll axis locking to the renderer.
+  // This would obviate the need for an extra pair of deltas in this mojo
+  // struct.
+  float delta_x_unconstrained;
+  float delta_y_unconstrained;
 };
 
 struct PinchBeginData {
@@ -234,6 +248,12 @@ enum PanAction {
   kStylusWritable,
 };
 
+// An enumeration that describes IME state.
+enum ImeState {
+  kNone,
+  kTextSuggestionSelected,
+};
+
 // Interface exposed by the browser to the renderer.
 interface WidgetInputHandlerHost {
   // When the renderer's main thread computes the touch action, send this to the
@@ -297,7 +317,6 @@ interface WidgetInputHandlerHost {
 // interface. If frame input actions are dispatched the WidgetInputHandler
 // should be fetched via the associated interface request so that input calls
 // remain in order. See https://goo.gl/x4ee8A for more details.
-[DirectReceiver]
 interface FrameWidgetInputHandler {
   // Adds text decorations between a given valid start and end offsets in the
   // currently focused editable field.
@@ -308,6 +327,9 @@ interface FrameWidgetInputHandler {
   // in the currently focused editable field.
   ClearImeTextSpansByType(
       uint32 start, uint32 end, ui.mojom.ImeTextSpanType type);
+
+  // Signals Blink to clear any active stylus gesture preview highlights.
+  CancelStylusGesturePreview();
 
   // Sets the text composition to be between the given start and end offsets in
   // the currently focused editable field.
@@ -363,6 +385,11 @@ interface FrameWidgetInputHandler {
   Paste();
 
   PasteAndMatchStyle();
+
+  // Dispatches a paste event with the given image bytes and file extension to
+  // the currently focused frame. |image_bytes| should be non-empty.
+  PasteFromImageBytes(mojo_base.mojom.BigBuffer image_bytes,
+                      string media_format);
 
   Delete();
 
@@ -452,7 +479,6 @@ enum FocusState {
 // an input interface for an associated Widget object. See
 // FrameWidgetInputHandler
 // for an interface at the frame level.
-[DirectReceiver]
 interface WidgetInputHandler {
   // Tells widget focus has been changed.
   SetFocus(FocusState state);
@@ -478,20 +504,31 @@ interface WidgetInputHandler {
   CursorVisibilityChanged(bool visible);
 
   // This message sends a string being composed with an input method.
+  // `target_dom_node_id`, if not a null value, will target composition to the
+  // specified node, adjusting and restoring focus if necessary.
+  // TODO(crbug.com/535826288): Make `DOMNodeId` optional once the typemap
+  // is nullable_is_same_type.
   // Note, the response is specifically for Devtools to learn about completion
   ImeSetComposition(mojo_base.mojom.String16 text,
                     array<ui.mojom.ImeTextSpan> ime_text_spans,
                     gfx.mojom.Range range,
                     int32 start,
-                    int32 end) => ();
+                    int32 end,
+                    ImeState ime_state,
+                    blink.mojom.DOMNodeId target_dom_node_id) => ();
 
   // This message deletes the current composition, inserts specified text, and
   // moves the cursor.
+  // `target_dom_node_id`, if not a null value, will target the text commit to
+  // the specified node, adjusting and restoring focus if necessary.
+  // TODO(crbug.com/535826288): Make `DOMNodeId` optional once the typemap
+  // is nullable_is_same_type.
   // Note, the response is specifically for Devtools to learn about completion
   ImeCommitText(mojo_base.mojom.String16 text,
                 array<ui.mojom.ImeTextSpan> ime_text_spans,
                 gfx.mojom.Range range,
-                int32 relative_cursor_position) => ();
+                int32 relative_cursor_position,
+                blink.mojom.DOMNodeId target_dom_node_id) => ();
 
   // This message inserts the ongoing composition.
   ImeFinishComposingText(bool keep_selection);
@@ -506,6 +543,15 @@ interface WidgetInputHandler {
   // updates in each compositor frame (when there is a change in composition
   // info) will lead to updates being sent to the browser.
   RequestCompositionUpdates(bool immediate_request, bool monitor_request);
+
+  // Pastes text into the target node.
+  // `target_dom_node_id`, if not a null value, will target the paste to
+  // the specified node, without changing focus. If null, the focused node will
+  // be targeted.
+  // TODO(crbug.com/535826288): Make `DOMNodeId` optional once the typemap
+  // is nullable_is_same_type.
+  PasteIntoNode(mojo_base.mojom.String16 text,
+                blink.mojom.DOMNodeId target_dom_node_id);
 
   // Sends an input event to the render widget. If |event| is a
   // GestureScrollUpdate, |original_event_for_gesture| might have the event that

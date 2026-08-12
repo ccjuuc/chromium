@@ -6,6 +6,7 @@
 
 #include "base/android/feature_map.h"
 #include "base/no_destructor.h"
+#include "base/time/time.h"
 #include "components/content_settings/core/common/features.h"
 #include "components/permissions/features.h"
 #include "media/base/media_switches.h"
@@ -25,12 +26,14 @@ namespace {
 const base::Feature* const kFeaturesExposedToJava[] = {
     &kAndroidCancelPermissionPromptOnTouchOutside,
     &kPermissionsAndroidClapperLoud,
-    &kPermissionsAndroidClapperQuiet,
+    &features::kPermissionsGestureGatedPrompts,
+    &features::kPermissionPromiseLifetimeModulationAndroid,
+    &features::kAndroidItemChooserCancelButton,
     &features::kPermissionHeuristicAutoGrant,
     &content_settings::features::kApproximateGeolocationPermission,
     &media::kAutoPictureInPictureAndroid,
-    &blink::features::kPermissionElement,
     &blink::features::kBypassPepcSecurityForTesting,
+    &blink::features::kUserMediaElement,
     &blink::features::kGeolocationElement,
 };
 
@@ -51,12 +54,12 @@ BASE_FEATURE(kAndroidCancelPermissionPromptOnTouchOutside,
 // Enables the loud version of the Clapper permission prompt.
 BASE_FEATURE(kPermissionsAndroidClapperLoud, base::FEATURE_DISABLED_BY_DEFAULT);
 
-// Enables the quiet version of the Clapper permission prompt.
-BASE_FEATURE(kPermissionsAndroidClapperQuiet,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+// Timeout for the Clapper Loud permission prompt.
+const base::FeatureParam<base::TimeDelta> kClapperLoudTimeout{
+    &kPermissionsAndroidClapperLoud, "message_timeout", base::Seconds(10)};
 
-static jlong JNI_PermissionsAndroidFeatureMap_GetNativeMap(JNIEnv* env) {
-  return reinterpret_cast<jlong>(GetFeatureMap());
+static int64_t JNI_PermissionsAndroidFeatureMap_GetNativeMap(JNIEnv* env) {
+  return reinterpret_cast<int64_t>(GetFeatureMap());
 }
 
 }  // namespace permissions

@@ -39,9 +39,6 @@ using chrome_test_util::TabGroupCreationView;
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config;
-  if ([self isRunningTest:@selector(testTabGridButton)]) {
-    config.features_enabled.push_back(kTabSwitcherOverflowMenu);
-  }
 
   return config;
 }
@@ -62,7 +59,9 @@ using chrome_test_util::TabGroupCreationView;
 - (void)displayBlockingUI {
   [ChromeEarlGrey setBoolValue:YES
              forLocalStatePref:prefs::kIncognitoAuthenticationSetting];
+  [ChromeEarlGreyUI waitForAppToIdle];
   [[AppLaunchManager sharedManager] backgroundAndForegroundApp];
+  [ChromeEarlGreyUI waitForAppToIdle];
 }
 
 // Tests that the TabGrid is correctly updated when the incognito reauth screen
@@ -211,6 +210,32 @@ using chrome_test_util::TabGroupCreationView;
   [[EarlGrey
       selectElementWithMatcher:grey_accessibilityID(kTabGroupViewIdentifier)]
       assertWithMatcher:grey_nil()];
+}
+
+// Tests that if the user opens an incognito tab, backgrounds the app and
+// foregrounds again, they will see the incognito block reauth UI, and can swipe
+// to the regular tab grid.
+- (void)testBackgroundAndForegroundFromIncognitoPageShouldShowBlockUI {
+  [ChromeEarlGrey openNewIncognitoTab];
+  [self displayBlockingUI];
+  // Verify blocking UI is displaying and bottom toolbar buttons are disabled.
+  [[EarlGrey
+      selectElementWithMatcher:chrome_test_util::TabGridNewIncognitoTabButton()]
+      assertWithMatcher:grey_not(grey_enabled())];
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridDoneButton()]
+      assertWithMatcher:grey_not(grey_enabled())];
+  [[EarlGrey selectElementWithMatcher:
+                 grey_allOf(chrome_test_util::TabGridOverflowMenuButton(),
+                            grey_sufficientlyVisible(), nil)]
+      assertWithMatcher:grey_not(grey_enabled())];
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridCellAtIndex(0)]
+      assertWithMatcher:grey_notVisible()];
+  // Verify that the regular tab grid is still accessible.
+  [[EarlGrey
+      selectElementWithMatcher:chrome_test_util::TabGridOpenTabsPanelButton()]
+      performAction:grey_tap()];
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::RegularTabGrid()]
+      assertWithMatcher:grey_sufficientlyVisible()];
 }
 
 @end

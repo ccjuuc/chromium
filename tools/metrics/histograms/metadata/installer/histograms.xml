@@ -23,7 +23,7 @@ chromium-metrics-reviews@google.com.
 <histograms>
 
 <histogram name="Installer.Postinstall.BiosType" enum="ChromeOSBiosType"
-    expires_after="2026-05-24">
+    expires_after="2026-11-29">
   <owner>tbrandston@google.com</owner>
   <owner>chromeos-flex-eng@google.com</owner>
   <summary>
@@ -40,7 +40,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Installer.Postinstall.EfiBootEntryCount" units="entries"
-    expires_after="2026-05-24">
+    expires_after="2026-11-29">
   <owner>tbrandston@google.com</owner>
   <owner>chromeos-flex-eng@google.com</owner>
   <summary>
@@ -58,7 +58,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Installer.Postinstall.EfiBootEntryFailedLoad" units="entries"
-    expires_after="2026-05-24">
+    expires_after="2026-11-29">
   <owner>tbrandston@google.com</owner>
   <owner>chromeos-flex-eng@google.com</owner>
   <summary>
@@ -74,7 +74,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Installer.Postinstall.EfiManagementEvent"
-    enum="ChromeOSEfiManagementEvent" expires_after="2026-03-29">
+    enum="ChromeOSEfiManagementEvent" expires_after="2026-12-06">
   <owner>tbrandston@google.com</owner>
   <owner>chromeos-flex-eng@google.com</owner>
   <summary>
@@ -93,7 +93,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Installer.Postinstall.ESPMountRetries" units="retries"
-    expires_after="2026-05-24">
+    expires_after="2026-11-29">
   <owner>tbrandston@google.com</owner>
   <owner>chromeos-flex-eng@google.com</owner>
   <summary>
@@ -103,7 +103,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Installer.Postinstall.ManagedEfiBootEntryCount"
-    units="entries" expires_after="2026-05-24">
+    units="entries" expires_after="2026-11-29">
   <owner>tbrandston@google.com</owner>
   <owner>chromeos-flex-eng@google.com</owner>
   <summary>
@@ -124,7 +124,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Installer.Postinstall.NonChromebookBiosSuccess.{BiosType}"
-    enum="BooleanSuccess" expires_after="2026-05-24">
+    enum="BooleanSuccess" expires_after="2027-01-15">
   <owner>tbrandston@google.com</owner>
   <owner>chromeos-flex-eng@google.com</owner>
   <summary>
@@ -148,7 +148,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Installer.PowerwashCount" units="powerwashes"
-    expires_after="2026-05-24">
+    expires_after="2026-12-31">
   <owner>kimjae@chromium.org</owner>
   <owner>chromeos-core-services@chromium.org</owner>
   <summary>
@@ -159,7 +159,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Installer.PowerwashDays" units="powerwashdays"
-    expires_after="2026-05-31">
+    expires_after="2026-08-02">
   <owner>qianwan@google.com</owner>
   <owner>chromeos-data@google.com</owner>
   <summary>
@@ -176,7 +176,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Installer.Recovery.NbrDurationMinutes" units="minutes"
-    expires_after="2026-03-11">
+    expires_after="2026-12-31">
   <owner>kimjae@chromium.org</owner>
   <owner>chromeos-core-services@google.com</owner>
   <summary>
@@ -189,7 +189,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Installer.Recovery.Reason" enum="ChromeOSRecoveryReason"
-    expires_after="2026-05-24">
+    expires_after="2026-12-31">
   <owner>kimjae@chromium.org</owner>
   <owner>chromeos-core-services@google.com</owner>
   <summary>
@@ -205,7 +205,7 @@ chromium-metrics-reviews@google.com.
     enum="UnPackStatus" expires_after="never">
 <!-- expires-never: used to monitor unpack status of setup installer. -->
 
-  <owner>waffles@chromium.org</owner>
+  <owner>ganesh@chromium.org</owner>
   <owner>grt@chromium.org</owner>
   <summary>
     Record the status of unpacking the contents of a 7z file. {UnPackConsumer}
@@ -253,7 +253,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Setup.Install.SCM.{Operation}.Result" enum="WinGetLastError"
-    expires_after="2026-10-30">
+    expires_after="2027-01-03">
   <owner>grt@chromium.org</owner>
   <owner>ganesh@chromium.org</owner>
   <summary>
@@ -275,7 +275,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Setup.Install.UnbufferedFileWriter.DeterminePhysicalSectorSizeResult"
-    enum="DeterminePhysicalSectorSizeResult" expires_after="2026-09-28">
+    enum="DeterminePhysicalSectorSizeResult" expires_after="2026-11-29">
   <owner>grt@chromium.org</owner>
   <owner>catan-team@chromium.org</owner>
   <summary>
@@ -285,7 +285,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Setup.Install.UnbufferedFileWriter.PhysicalSectorSize"
-    units="bytes" expires_after="2026-09-28">
+    units="bytes" expires_after="2026-11-29">
   <owner>grt@chromium.org</owner>
   <owner>catan-team@chromium.org</owner>
   <summary>
@@ -295,7 +295,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Setup.Install.UnbufferedFileWriter.{Operation}.Error"
-    enum="WinGetLastError" expires_after="2026-09-28">
+    enum="WinGetLastError" expires_after="2026-11-29">
   <owner>grt@chromium.org</owner>
   <owner>catan-team@chromium.org</owner>
   <summary>
@@ -311,6 +311,16 @@ chromium-metrics-reviews@google.com.
   </token>
 </histogram>
 
+<histogram name="Setup.Install.WinAppRuntime.WaitForStartInstall.TimingMs"
+    units="ms" expires_after="2026-12-16">
+  <owner>reillyg@chromium.org</owner>
+  <owner>src/services/webnn/OWNERS</owner>
+  <summary>
+    The time taken to wait for the Windows App Runtime installation to start.
+    Recorded once per process.
+  </summary>
+</histogram>
+
 <histogram name="Setup.Install.WinAppRuntime.{Operation}.Result" enum="Hresult"
     expires_after="2026-12-16">
   <owner>reillyg@chromium.org</owner>
@@ -323,6 +333,7 @@ chromium-metrics-reviews@google.com.
     <variant name="ActivateManager"/>
     <variant name="ActivateOptions"/>
     <variant name="StartInstall"/>
+    <variant name="WaitForStartInstall"/>
   </token>
 </histogram>
 

@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_frame.h"
 #include "third_party/webrtc/rtc_base/ref_counted_object.h"
 
@@ -48,8 +49,8 @@ TEST(WebrtcVideoFrameAdapter, AdapterHasCorrectSize) {
       new webrtc::RefCountedObject<WebrtcVideoFrameAdapter>(
           std::move(desktop_frame), std::move(frame_stats)));
 
-  EXPECT_EQ(100, adapter->width());
-  EXPECT_EQ(200, adapter->height());
+  EXPECT_EQ(adapter->width(), 100);
+  EXPECT_EQ(adapter->height(), 200);
 }
 
 TEST(WebrtcVideoFrameAdapter, EmptyUpdateRegionGivesFrameWithEmptyUpdateRect) {

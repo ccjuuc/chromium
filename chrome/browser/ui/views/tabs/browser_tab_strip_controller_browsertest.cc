@@ -7,6 +7,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_mock_time_task_runner.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
+#include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/tab_group_sync_service_initialized_observer.h"
 #include "chrome/browser/ui/tabs/tab_creation_metrics_controller.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
@@ -18,7 +19,6 @@
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/events/event.h"
-#include "ui/views/test/views_test_utils.h"
 
 namespace {
 ui::MouseEvent dummy_event_ = ui::MouseEvent(ui::EventType::kMousePressed,
@@ -46,9 +46,8 @@ class BrowserTabStripControllerTestBase : public InProcessBrowserTest {
 
   TabStripModel* tab_strip_model() { return browser()->tab_strip_model(); }
   TabStrip* tabstrip() {
-    return views::AsViewClass<HorizontalTabStripRegionView>(
-               browser()->GetBrowserView().tab_strip_view())
-        ->tab_strip();
+    return BrowserView::GetBrowserViewForBrowser(browser())
+        ->horizontal_tab_strip_for_testing();
   }
   TabStripController* controller() { return tabstrip()->controller(); }
 
@@ -62,7 +61,7 @@ class BrowserTabStripControllerTestBase : public InProcessBrowserTest {
     tab_groups::TabGroupSyncService* tgss_service =
         static_cast<tab_groups::TabGroupSyncService*>(
             tab_groups::TabGroupSyncServiceFactory::GetForProfile(
-                browser()->profile()));
+                browser()->GetProfile()));
     // Make the observer
     tab_groups::TabGroupSyncServiceInitializedObserver tgss_observer{
         tgss_service};
@@ -72,72 +71,10 @@ class BrowserTabStripControllerTestBase : public InProcessBrowserTest {
   scoped_refptr<base::TestMockTimeTaskRunner> task_runner_;
 };
 
-class BrowserTabStripControllerTestAddTabActiveGroupEnabled
-    : public BrowserTabStripControllerTestBase {
- public:
-  BrowserTabStripControllerTestAddTabActiveGroupEnabled() {
-    scoped_feature_list_.InitWithFeatures({features::kNewTabAddsToActiveGroup},
-                                          {});
-  }
+using BrowserTabStripControllerTest = BrowserTabStripControllerTestBase;
 
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-class BrowserTabStripControllerTestAddTabActiveGroupDisabled
-    : public BrowserTabStripControllerTestBase {
- public:
-  BrowserTabStripControllerTestAddTabActiveGroupDisabled() {
-    scoped_feature_list_.InitWithFeatures({},
-                                          {features::kNewTabAddsToActiveGroup});
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(BrowserTabStripControllerTestAddTabActiveGroupEnabled,
+IN_PROC_BROWSER_TEST_F(BrowserTabStripControllerTest,
                        AddTabsWithActiveTabGroup) {
-  controller()->CreateNewTab(NewTabTypes::kNewTabCommand);
-  controller()->CreateNewTab(NewTabTypes::kNewTabCommand);
-  controller()->CreateNewTab(NewTabTypes::kNewTabCommand);
-  EXPECT_EQ(tab_strip_model()->count(), 4);
-
-  tab_groups::TabGroupId group_id = tab_strip_model()->AddToNewGroup({1, 2});
-
-  EXPECT_EQ(group_id, tab_strip_model()->GetTabGroupForTab(1));
-  EXPECT_EQ(group_id, tab_strip_model()->GetTabGroupForTab(2));
-
-  // Select a tab in the group.
-  controller()->SelectTab(1, dummy_event_);
-  controller()->CreateNewTab(NewTabTypes::kNewTabCommand);
-
-  // Create a new tab, it should be at position 3 because
-  // there is an active tab group
-  EXPECT_EQ(std::nullopt, tab_strip_model()->GetTabGroupForTab(0));
-  EXPECT_EQ(group_id, tab_strip_model()->GetTabGroupForTab(1));
-  EXPECT_EQ(group_id, tab_strip_model()->GetTabGroupForTab(2));
-  EXPECT_EQ(group_id, tab_strip_model()->GetTabGroupForTab(3));
-  EXPECT_EQ(std::nullopt, tab_strip_model()->GetTabGroupForTab(4));
-  EXPECT_EQ(std::nullopt, tab_strip_model()->GetTabGroupForTab(5));
-
-  // Switch to the first tab, which is not in the group and then make a new
-  // tab, make sure it is at the end of the tab strip and it is not in the
-  // group.
-  controller()->SelectTab(0, dummy_event_);
-  controller()->CreateNewTab(NewTabTypes::kNewTabCommand);
-
-  EXPECT_EQ(tab_strip_model()->count(), 6);
-  EXPECT_EQ(std::nullopt, tab_strip_model()->GetTabGroupForTab(0));
-  EXPECT_EQ(group_id, tab_strip_model()->GetTabGroupForTab(1));
-  EXPECT_EQ(group_id, tab_strip_model()->GetTabGroupForTab(2));
-  EXPECT_EQ(group_id, tab_strip_model()->GetTabGroupForTab(3));
-  EXPECT_EQ(std::nullopt, tab_strip_model()->GetTabGroupForTab(4));
-  EXPECT_EQ(std::nullopt, tab_strip_model()->GetTabGroupForTab(5));
-}
-
-IN_PROC_BROWSER_TEST_F(BrowserTabStripControllerTestAddTabActiveGroupDisabled,
-                       AddTabsWithActiveTabGroupFeatureDisabled) {
   controller()->CreateNewTab(NewTabTypes::kNewTabCommand);
   controller()->CreateNewTab(NewTabTypes::kNewTabCommand);
   controller()->CreateNewTab(NewTabTypes::kNewTabCommand);
@@ -162,8 +99,8 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripControllerTestAddTabActiveGroupDisabled,
   EXPECT_EQ(std::nullopt, tab_strip_model()->GetTabGroupForTab(4));
 }
 
-IN_PROC_BROWSER_TEST_F(BrowserTabStripControllerTestAddTabActiveGroupDisabled,
-                       VerifyTabMetricsFeatureDisabled1) {
+IN_PROC_BROWSER_TEST_F(BrowserTabStripControllerTest,
+                       VerifyTabMetrics1) {
   base::HistogramTester histogram_tester;
 
   // Make a tab, put it in group A
@@ -209,8 +146,8 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripControllerTestAddTabActiveGroupDisabled,
   WaitForTabSyncServiceInitialization();
 }
 
-IN_PROC_BROWSER_TEST_F(BrowserTabStripControllerTestAddTabActiveGroupDisabled,
-                       VerifyTabMetricsFeatureDisabled2) {
+IN_PROC_BROWSER_TEST_F(BrowserTabStripControllerTest,
+                       VerifyTabMetrics2) {
   base::HistogramTester histogram_tester;
 
   controller()->CreateNewTab(NewTabTypes::kNewTabCommand);
@@ -243,71 +180,8 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripControllerTestAddTabActiveGroupDisabled,
   WaitForTabSyncServiceInitialization();
 }
 
-IN_PROC_BROWSER_TEST_F(BrowserTabStripControllerTestAddTabActiveGroupEnabled,
-                       VerifyTabMetricsFeatureEnabled) {
-  base::HistogramTester histogram_tester;
-
-  // Make 5 tabs
-  controller()->CreateNewTab(NewTabTypes::kNewTabCommand);
-  controller()->CreateNewTab(NewTabTypes::kNewTabCommand);
-  controller()->CreateNewTab(NewTabTypes::kNewTabCommand);
-  controller()->CreateNewTab(NewTabTypes::kNewTabCommand);
-  controller()->CreateNewTab(NewTabTypes::kNewTabCommand);
-
-  // Add first, third, and fourth to groups
-  tab_groups::TabGroupId group_a = tab_strip_model()->AddToNewGroup({1});
-  tab_groups::TabGroupId group_b = tab_strip_model()->AddToNewGroup({3});
-  tab_groups::TabGroupId group_c = tab_strip_model()->AddToNewGroup({4});
-
-  // For each tab group, select the tab in it and make a tab
-  controller()->SelectTab(1, dummy_event_);
-  controller()->CreateNewTab(NewTabTypes::kNewTabCommand);
-  // group B
-  controller()->SelectTab(4, dummy_event_);
-  controller()->CreateNewTab(NewTabTypes::kNewTabCommand);
-  // group C
-  controller()->SelectTab(6, dummy_event_);
-  controller()->CreateNewTab(NewTabTypes::kNewTabCommand);
-
-  // The ungrouped tab to the right of A, group it to A.
-  controller()->AddTabToGroup(3, group_a);
-
-  // The second tab in group B, group it to C
-  controller()->AddTabToGroup(5, group_c);
-
-  // Ungroup the third tab in group C
-  controller()->RemoveTabFromGroup(7);
-
-  FastForwardPastDelay();
-  histogram_tester.ExpectBucketCount(
-      kHistogramName, tabs::TabGroupingTransitionType::kUngroupedToUngrouped,
-      1);
-  histogram_tester.ExpectBucketCount(
-      kHistogramName, tabs::TabGroupingTransitionType::kUngroupedToGrouped, 4);
-  histogram_tester.ExpectBucketCount(
-      kHistogramName, tabs::TabGroupingTransitionType::kGroupedToUngrouped, 1);
-  histogram_tester.ExpectBucketCount(
-      kHistogramName,
-      tabs::TabGroupingTransitionType::kGroupedToInPreviousGroup, 1);
-  histogram_tester.ExpectBucketCount(
-      kHistogramName,
-      tabs::TabGroupingTransitionType::kGroupedToOutsidePreviousGroup, 1);
-  histogram_tester.ExpectTotalCount(kHistogramName, 8);
-
-  EXPECT_EQ(group_a, tab_strip_model()->GetTabGroupForTab(1));
-  EXPECT_EQ(group_a, tab_strip_model()->GetTabGroupForTab(2));
-  EXPECT_EQ(group_a, tab_strip_model()->GetTabGroupForTab(3));
-  EXPECT_EQ(group_b, tab_strip_model()->GetTabGroupForTab(4));
-  EXPECT_EQ(group_c, tab_strip_model()->GetTabGroupForTab(5));
-  EXPECT_EQ(group_c, tab_strip_model()->GetTabGroupForTab(6));
-  EXPECT_EQ(std::nullopt, tab_strip_model()->GetTabGroupForTab(7));
-  EXPECT_EQ(std::nullopt, tab_strip_model()->GetTabGroupForTab(8));
-
-  WaitForTabSyncServiceInitialization();
-}
-
 class BrowserTabStripControllerTestToggleTabGroupCollapsedState
-    : public BrowserTabStripControllerTestAddTabActiveGroupEnabled {
+    : public BrowserTabStripControllerTestBase {
  public:
   BrowserTabStripControllerTestToggleTabGroupCollapsedState() = default;
   ~BrowserTabStripControllerTestToggleTabGroupCollapsedState() override =
@@ -390,7 +264,8 @@ class BrowserTabStripControllerTestFocusedGroup
     : public BrowserTabStripControllerTestBase {
  public:
   BrowserTabStripControllerTestFocusedGroup() {
-    scoped_feature_list_.InitAndEnableFeature(features::kTabGroupsFocusing);
+    scoped_feature_list_.InitWithFeatures({features::kTabGroupsFocusing},
+                                          {tabs::kTabStripUnification});
   }
   ~BrowserTabStripControllerTestFocusedGroup() override = default;
 
@@ -448,7 +323,7 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripControllerTestFocusedGroup,
 IN_PROC_BROWSER_TEST_F(BrowserTabStripControllerTestFocusedGroup,
                        FocusedGroupUpdatesThemeMultipleTimes) {
   BrowserWidget* widget =
-      static_cast<BrowserView*>(browser()->window())->browser_widget();
+      BrowserView::GetBrowserViewForBrowser(browser())->browser_widget();
   EXPECT_EQ(widget->user_color_override(), std::nullopt);
 
   // Create a tab and a group.
@@ -467,4 +342,17 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripControllerTestFocusedGroup,
   // Focus on the group again.
   controller()->SetFocusedGroup(group);
   EXPECT_NE(widget->user_color_override(), std::nullopt);
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserTabStripControllerTest,
+                       CloseTabFromTabStripExecutesClose) {
+  controller()->CreateNewTab(NewTabTypes::kNewTabCommand);
+  EXPECT_EQ(tab_strip_model()->count(), 2);
+
+  EXPECT_FALSE(tabstrip()->tab_container_for_testing()->InTabClose());
+
+  tabstrip()->CloseTab(tabstrip()->tab_at(0), CloseTabSource::kFromMouse);
+
+  EXPECT_TRUE(tabstrip()->tab_container_for_testing()->InTabClose());
+  EXPECT_EQ(tab_strip_model()->count(), 1);
 }

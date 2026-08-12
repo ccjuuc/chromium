@@ -5,6 +5,7 @@
 #include "ui/gl/hdr_metadata_helper_win.h"
 
 #include "base/compiler_specific.h"
+#include "third_party/skia/include/private/SkHdrMetadata.h"
 #include "ui/gl/gpu_switching_manager.h"
 
 namespace {
@@ -19,14 +20,21 @@ static constexpr int kMinLuminanceFixedPoint = 10000;
 namespace gl {
 
 HDRMetadataHelperWin::HDRMetadataHelperWin(
-    Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device)
-    : d3d11_device_(std::move(d3d11_device)) {
+    Microsoft::WRL::ComPtr<IDXGIFactory> factory)
+    : dxgi_factory_(std::move(factory)) {
   UpdateDisplayMetadata();
   ui::GpuSwitchingManager::GetInstance()->AddObserver(this);
 }
 
 HDRMetadataHelperWin::~HDRMetadataHelperWin() {
   ui::GpuSwitchingManager::GetInstance()->RemoveObserver(this);
+}
+
+std::unique_ptr<HDRMetadataHelperWin> HDRMetadataHelperWin::Create() {
+  Microsoft::WRL::ComPtr<IDXGIFactory> dxgi_factory;
+  HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&dxgi_factory));
+  CHECK_EQ(hr, S_OK);
+  return std::make_unique<HDRMetadataHelperWin>(std::move(dxgi_factory));
 }
 
 std::optional<DXGI_HDR_METADATA_HDR10>
@@ -55,21 +63,6 @@ void HDRMetadataHelperWin::UpdateDisplayMetadata() {
   brightest_monitor_ = nullptr;
   hdr_metadatas_.clear();
 
-  if (!d3d11_device_)
-    return;
-
-  Microsoft::WRL::ComPtr<IDXGIDevice> dxgi_device;
-  const HRESULT hr = d3d11_device_.As(&dxgi_device);
-  CHECK_EQ(hr, S_OK);
-
-  Microsoft::WRL::ComPtr<IDXGIAdapter> dxgi_adapter;
-  if (FAILED(dxgi_device->GetAdapter(&dxgi_adapter)))
-    return;
-
-  Microsoft::WRL::ComPtr<IDXGIFactory> dxgi_factory;
-  if (FAILED(dxgi_adapter->GetParent(IID_PPV_ARGS(&dxgi_factory))))
-    return;
-
   FLOAT max_luminance = 0;
   HMONITOR brightest_monitor = nullptr;
   std::unordered_map<HMONITOR, DXGI_HDR_METADATA_HDR10> hdr_metadatas;
@@ -78,7 +71,7 @@ void HDRMetadataHelperWin::UpdateDisplayMetadata() {
   // brightest monitor as the one we want as default.
   Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
   for (unsigned int i = 0;
-       dxgi_factory->EnumAdapters(i, &adapter) != DXGI_ERROR_NOT_FOUND; i++) {
+       dxgi_factory_->EnumAdapters(i, &adapter) != DXGI_ERROR_NOT_FOUND; i++) {
     Microsoft::WRL::ComPtr<IDXGIOutput> output;
     for (unsigned int u = 0;
          adapter->EnumOutputs(u, &output) != DXGI_ERROR_NOT_FOUND; u++) {
@@ -112,9 +105,10 @@ DXGI_HDR_METADATA_HDR10 HDRMetadataHelperWin::HDRMetadataToDXGI(
     const gfx::HDRMetadata& hdr_metadata) {
   DXGI_HDR_METADATA_HDR10 metadata{};
 
-  const auto smpte_st_2086 =
-      hdr_metadata.smpte_st_2086.value_or(gfx::HdrMetadataSmpteSt2086());
-  const auto& primaries = smpte_st_2086.primaries;
+  const auto mdcv = hdr_metadata.HasMDCV()
+                        ? hdr_metadata.GetMDCV()
+                        : skhdr::MasteringDisplayColorVolume();
+  const auto& primaries = mdcv.fDisplayPrimaries;
   metadata.RedPrimary[0] = primaries.fRX * kPrimariesFixedPoint;
   // SAFETY: required from Windows API.
   UNSAFE_BUFFERS(metadata.RedPrimary[1]) = primaries.fRY * kPrimariesFixedPoint;
@@ -126,14 +120,15 @@ DXGI_HDR_METADATA_HDR10 HDRMetadataHelperWin::HDRMetadataToDXGI(
       primaries.fBY * kPrimariesFixedPoint;
   metadata.WhitePoint[0] = primaries.fWX * kPrimariesFixedPoint;
   UNSAFE_BUFFERS(metadata.WhitePoint[1]) = primaries.fWY * kPrimariesFixedPoint;
-  metadata.MaxMasteringLuminance = smpte_st_2086.luminance_max;
+  metadata.MaxMasteringLuminance = mdcv.fMaximumDisplayMasteringLuminance;
   metadata.MinMasteringLuminance =
-      smpte_st_2086.luminance_min * kMinLuminanceFixedPoint;
+      mdcv.fMinimumDisplayMasteringLuminance * kMinLuminanceFixedPoint;
 
-  const auto cta_861_3 =
-      hdr_metadata.cta_861_3.value_or(gfx::HdrMetadataCta861_3());
-  metadata.MaxContentLightLevel = cta_861_3.max_content_light_level;
-  metadata.MaxFrameAverageLightLevel = cta_861_3.max_frame_average_light_level;
+  const auto clli = hdr_metadata.HasCLLI()
+                        ? hdr_metadata.GetCLLI()
+                        : skhdr::ContentLightLevelInformation();
+  metadata.MaxContentLightLevel = clli.fMaxCLL;
+  metadata.MaxFrameAverageLightLevel = clli.fMaxFALL;
 
   return metadata;
 }

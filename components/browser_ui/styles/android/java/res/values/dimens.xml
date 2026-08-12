@@ -6,10 +6,13 @@ found in the LICENSE file.
 -->
 
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Standard width for overflow menu in Chrome. -->
+    <!-- Standard menu dimensions -->
     <dimen name="menu_width">258dp</dimen>
-    <dimen name="menu_width_lff">292dp</dimen>
+    <dimen name="menu_width_min">188dp</dimen>
+    <dimen name="menu_width_max">800dp</dimen>
+    <dimen name="menu_horizontal_margin">16dp</dimen>
     <dimen name="tab_group_menu_with_icons_width">225dp</dimen>
+    <dimen name="overflow_menu_item_lateral_padding">16dp</dimen>
 
     <!-- Button bar dimensions -->
     <dimen name="button_bar_stacked_margin">8dp</dimen>
@@ -50,7 +53,15 @@ found in the LICENSE file.
 
     <!-- NewTabPage dimensions -->
     <dimen name="ntp_search_box_lateral_margin_narrow_window_tablet">16dp</dimen>
+    <dimen name="ntp_search_box_top_margin_if_no_logo">24dp</dimen>
+    <dimen name="signin_promo_lateral_paddings">16dp</dimen>
+    <dimen name="ntp_search_box_lateral_margin_tablet">100dp</dimen>
+    <dimen name="mvt_container_lateral_margin">@dimen/signin_promo_lateral_paddings</dimen>
 
     <!-- Bookmark Bar chip -->
     <dimen name="bookmark_bar_chip_corner_radius">8dp</dimen>
+
+    <!-- Fusebox popover plus button dimensions -->
+    <dimen name="fusebox_popover_plus_button_start_margin">6dp</dimen>
+    <dimen name="fusebox_popover_plus_button_bottom_margin">4dp</dimen>
 </resources>

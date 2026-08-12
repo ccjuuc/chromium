@@ -72,7 +72,7 @@ void PrinterProviderInternalAPI::NotifyGetPrintersResult(
 void PrinterProviderInternalAPI::NotifyGetCapabilityResult(
     const Extension* extension,
     int request_id,
-    const base::Value::Dict& capability) {
+    const base::DictValue& capability) {
   for (auto& observer : observers_)
     observer.OnGetCapabilityResult(extension, request_id, capability.Clone());
 }
@@ -80,7 +80,7 @@ void PrinterProviderInternalAPI::NotifyGetCapabilityResult(
 void PrinterProviderInternalAPI::NotifyPrintResult(
     const Extension* extension,
     int request_id,
-    api::printer_provider_internal::PrintError error) {
+    api::printer_provider::PrintError error) {
   for (auto& observer : observers_)
     observer.OnPrintResult(extension, request_id, error);
 }
@@ -132,7 +132,7 @@ PrinterProviderInternalReportPrinterCapabilityFunction::Run() {
     PrinterProviderInternalAPI::GetFactoryInstance()
         ->Get(browser_context())
         ->NotifyGetCapabilityResult(extension(), params->request_id,
-                                    base::Value::Dict());
+                                    base::DictValue());
   }
   return RespondNow(NoArguments());
 }

@@ -21,12 +21,11 @@ struct PreviewIds {
 };
 
 // Parameters required to do print preview.
-[Stable, EnableIf=enable_print_preview]
+[EnableIf=enable_print_preview]
 struct RequestPrintPreviewParams {
   [EnableIf=is_chromeos]
   bool is_from_arc = false;
 
-  bool is_modifiable = false;
   bool webnode_only = false;
   bool has_selection = false;
   bool selection_only = false;
@@ -124,8 +123,6 @@ struct PrintParams {
   bool selection_only = false;
 
   // *** Parameters in this section are used only for Print Preview. ***
-  // The print preview ui associated with this request.
-  int32 preview_ui_id = -1;
   // The id of the preview request.
   int32 preview_request_id = 0;
   // True if this is the first preview request.
@@ -391,11 +388,10 @@ interface PrintManagerHost {
   // Tells the browser printing failed.
   PrintingFailed(int32 cookie, PrintFailureReason reason);
 
-  // Updates the current print settings with new `job_settings`. If an error
-  // occurs, return null.
+  // Gets the print settings as a `PrintPagesParams` from the browser. If an
+  // error occurs, the browser returns null.
   [EnableIf=enable_print_preview, Sync]
-  UpdatePrintSettings(mojo_base.mojom.DictionaryValue job_settings)
-      => (PrintPagesParams? current_settings);
+  GetPrintPreviewParams() => (PrintPagesParams? current_settings);
 
   // Tells the browser to set up the print preview requested by the script. It
   // runs a nested run loop in the renderer until print preview for
@@ -403,11 +399,9 @@ interface PrintManagerHost {
   [EnableIf=enable_print_preview]
   SetupScriptedPrintPreview() => ();
 
-  // Tells the browser to show the print preview, when the document is
-  // sufficiently loaded such that the renderer can determine whether it is
-  // modifiable or not.
+  // Tells the browser to show the print preview when the document is loaded.
   [EnableIf=enable_print_preview]
-  ShowScriptedPrintPreview(bool is_modifiable);
+  ShowScriptedPrintPreview();
 
   // Asks the browser to do print preview.
   [EnableIf=enable_print_preview]
@@ -417,11 +411,23 @@ interface PrintManagerHost {
   // gets true if the preview corresponding to `preview_ui_id` and `request_id`
   // has been cancelled.
   [EnableIf=enable_print_preview, Sync]
-  CheckForCancel(int32 preview_ui_id, int32 request_id) => (bool cancel);
+  CheckForCancel(
+      mojo_base.mojom.UnguessableToken preview_ui_id, int32 request_id)
+      => (bool cancel);
 
   // Sends the accessibility tree corresponding to a document being
   // printed, needed for a tagged (accessible) PDF.
   [EnableIf=enable_print_preview]
   SetAccessibilityTree(
       int32 cookie, ax.mojom.AXTreeUpdate accessibility_tree);
+
+  // Tells the browser to set up the print dialog requested by the script on
+  // Android. This is the Android-equivalent of SetupScriptedPrintPreview().
+  // It runs a nested run loop in the renderer until the print dialog
+  // for window.print() finishes.
+  // The run loop continues until the done callback is invoked, which allows
+  // the browser process to finish any UI work it needs to do to set up the
+  // print.
+  [EnableIf=is_android]
+  SetupScriptedPrintAndroid() => ();
 };

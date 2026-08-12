@@ -11,12 +11,14 @@
 #include "media/base/media_switches.h"
 #include "media/base/svc_scalability_mode.h"
 #include "media/base/video_codecs.h"
+#include "media/media_buildflags.h"
 #include "media/mojo/clients/mojo_video_encoder_metrics_provider.h"
 #include "media/video/mock_gpu_video_accelerator_factories.h"
 #include "media/webrtc/webrtc_features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_video_encoder.h"
+#include "third_party/webrtc/api/video_codecs/h264_profile_level_id.h"
 #include "third_party/webrtc/api/video_codecs/sdp_video_format.h"
 #include "third_party/webrtc/api/video_codecs/video_encoder_factory.h"
 
@@ -146,8 +148,17 @@ class MockGpuVideoEncodeAcceleratorFactories
   MockGpuVideoEncodeAcceleratorFactories()
       : MockGpuVideoAcceleratorFactories(nullptr) {}
 
+  void SetSupportedProfiles(
+      std::optional<media::VideoEncodeAccelerator::SupportedProfiles>
+          profiles) {
+    supported_profiles_ = std::move(profiles);
+  }
+
   std::optional<media::VideoEncodeAccelerator::SupportedProfiles>
   GetVideoEncodeAcceleratorSupportedProfiles() override {
+    if (supported_profiles_) {
+      return supported_profiles_;
+    }
     media::VideoEncodeAccelerator::SupportedProfiles profiles = {
         {media::H264PROFILE_BASELINE, kMaxResolution, kMaxFramerateNumerator,
          kMaxFramerateDenominator, media::VideoEncodeAccelerator::kConstantMode,
@@ -189,6 +200,10 @@ class MockGpuVideoEncodeAcceleratorFactories
   scoped_refptr<base::SequencedTaskRunner> GetTaskRunner() override {
     return base::SequencedTaskRunner::GetCurrentDefault();
   }
+
+ private:
+  std::optional<media::VideoEncodeAccelerator::SupportedProfiles>
+      supported_profiles_;
 };
 
 }  // anonymous namespace
@@ -225,7 +240,10 @@ TEST_F(RTCVideoEncoderFactoryTest, QueryCodecSupportNoSvc) {
       encoder_factory_.QueryCodecSupport(webrtc::SdpVideoFormat("VP9"),
                                          /*scalability_mode=*/std::nullopt),
       kSupportedPowerEfficient));
-#if BUILDFLAG(RTC_USE_H264)
+  // On Android, H.264 HW encoder is always available via MediaCodec regardless
+  // of the OpenH264 SW encoder build flag. On other platforms, H.264 HW encoder
+  // requires the OpenH264 SW encoder to be available as a fallback.
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_OPENH264)
   EXPECT_TRUE(Equals(
       encoder_factory_.QueryCodecSupport(
           webrtc::SdpVideoFormat("H264", {{"level-asymmetry-allowed", "1"},
@@ -233,7 +251,9 @@ TEST_F(RTCVideoEncoderFactoryTest, QueryCodecSupportNoSvc) {
                                           {"profile-level-id", "42001f"}}),
           /*scalability_mode=*/std::nullopt),
       kSupportedPowerEfficient));
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+  // CBP (Constrained Baseline Profile) is supported on platforms where
+  // kPlatformH264CbpEncoding is enabled by default: Linux, ChromeOS, Android.
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_ANDROID)
   EXPECT_TRUE(Equals(
       encoder_factory_.QueryCodecSupport(
           webrtc::SdpVideoFormat("H264", {{"level-asymmetry-allowed", "1"},
@@ -283,6 +303,26 @@ TEST_F(RTCVideoEncoderFactoryTest, QueryCodecSupportSvc) {
                      kUnsupported));
   EXPECT_TRUE(Equals(
       encoder_factory_.QueryCodecSupport(webrtc::SdpVideoFormat("VP8"), "L3T3"),
+      kUnsupported));
+}
+
+TEST_F(RTCVideoEncoderFactoryTest, QueryCodecSupportWithResolution) {
+  ClearDisabledProfilesForTesting();
+  EXPECT_CALL(mock_gpu_factories_, IsEncoderSupportKnown())
+      .WillRepeatedly(Return(true));
+
+  // VP9 supported at max resolution.
+  EXPECT_TRUE(Equals(
+      encoder_factory_.QueryCodecSupport(webrtc::SdpVideoFormat("VP9"),
+                                         /*scalability_mode=*/std::nullopt,
+                                         webrtc::Resolution{1920, 1080}),
+      kSupportedPowerEfficient));
+
+  // VP9 NOT supported above max resolution.
+  EXPECT_TRUE(Equals(
+      encoder_factory_.QueryCodecSupport(webrtc::SdpVideoFormat("VP9"),
+                                         /*scalability_mode=*/std::nullopt,
+                                         webrtc::Resolution{4096, 2160}),
       kUnsupported));
 }
 
@@ -434,5 +474,171 @@ TEST_F(RTCVideoEncoderFactoryTest, SupportedFormatsHaveScalabilityModes) {
                 testing::UnorderedElementsAreArray(kScalabilityModes));
   }
 }
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_OPENH264)
+TEST_F(RTCVideoEncoderFactoryTest, H264LevelDeduplicationKeepsHighestLevel) {
+  ClearDisabledProfilesForTesting();
+  EXPECT_CALL(mock_gpu_factories_, IsEncoderSupportKnown())
+      .WillRepeatedly(Return(true));
+
+  // Simulate fragmented buckets for H.264 Baseline.
+  media::VideoEncodeAccelerator::SupportedProfile profile1(
+      media::H264PROFILE_BASELINE, gfx::Size(320, 180), kMaxFramerateNumerator,
+      kMaxFramerateDenominator, media::VideoEncodeAccelerator::kConstantMode,
+      kSVCScalabilityModes);
+  profile1.min_resolution = gfx::Size(320, 180);
+
+  media::VideoEncodeAccelerator::SupportedProfile profile2(
+      media::H264PROFILE_BASELINE, gfx::Size(1280, 720), kMaxFramerateNumerator,
+      kMaxFramerateDenominator, media::VideoEncodeAccelerator::kConstantMode,
+      kSVCScalabilityModes);
+  profile2.min_resolution = gfx::Size(1280, 720);
+
+  media::VideoEncodeAccelerator::SupportedProfile profile3(
+      media::H264PROFILE_BASELINE, gfx::Size(2048, 1080),
+      kMaxFramerateNumerator, kMaxFramerateDenominator,
+      media::VideoEncodeAccelerator::kConstantMode, kSVCScalabilityModes);
+  profile3.min_resolution = gfx::Size(2048, 1080);
+
+  mock_gpu_factories_.SetSupportedProfiles(
+      media::VideoEncodeAccelerator::SupportedProfiles{profile1, profile2,
+                                                       profile3});
+
+  auto supported_formats = encoder_factory_.GetSupportedFormats();
+  webrtc::SdpVideoFormat h264_baseline_format("unknown");
+  int h264_baseline_count = 0;
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_ANDROID)
+  webrtc::SdpVideoFormat h264_cbp_format("unknown");
+  int h264_cbp_count = 0;
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_ANDROID)
+
+  for (const auto& format : supported_formats) {
+    if (format.name == "H264") {
+      auto profile_level_id =
+          webrtc::ParseSdpForH264ProfileLevelId(format.parameters);
+      if (profile_level_id) {
+        if (profile_level_id->profile ==
+            webrtc::H264Profile::kProfileBaseline) {
+          h264_baseline_format = format;
+          h264_baseline_count++;
+        }
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_ANDROID)
+        else if (profile_level_id->profile ==
+                 webrtc::H264Profile::kProfileConstrainedBaseline) {
+          h264_cbp_format = format;
+          h264_cbp_count++;
+        }
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_ANDROID)
+      }
+    }
+  }
+
+  // Verify exactly one entry for H.264 Baseline exists.
+  EXPECT_EQ(h264_baseline_count, 1);
+
+  // Verify that the highest capability (Level 4.1) is advertised.
+  auto profile_level_id =
+      webrtc::ParseSdpForH264ProfileLevelId(h264_baseline_format.parameters);
+  ASSERT_TRUE(profile_level_id.has_value());
+  EXPECT_EQ(profile_level_id->level, webrtc::H264Level::kLevel4_1);
+
+  // Verify tracked resolution bounds cover the min and max bounds across
+  // buckets.
+  EXPECT_TRUE(Equals(
+      encoder_factory_.QueryCodecSupport(h264_baseline_format,
+                                         /*scalability_mode=*/std::nullopt,
+                                         webrtc::Resolution{320, 180}),
+      kSupportedPowerEfficient));
+  EXPECT_TRUE(Equals(
+      encoder_factory_.QueryCodecSupport(h264_baseline_format,
+                                         /*scalability_mode=*/std::nullopt,
+                                         webrtc::Resolution{1920, 1080}),
+      kSupportedPowerEfficient));
+  EXPECT_TRUE(Equals(
+      encoder_factory_.QueryCodecSupport(h264_baseline_format,
+                                         /*scalability_mode=*/std::nullopt,
+                                         webrtc::Resolution{319, 180}),
+      kUnsupported));
+  EXPECT_TRUE(Equals(
+      encoder_factory_.QueryCodecSupport(h264_baseline_format,
+                                         /*scalability_mode=*/std::nullopt,
+                                         webrtc::Resolution{2049, 1080}),
+      kUnsupported));
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_ANDROID)
+  EXPECT_EQ(h264_cbp_count, 1);
+
+  auto cbp_profile_level_id =
+      webrtc::ParseSdpForH264ProfileLevelId(h264_cbp_format.parameters);
+  ASSERT_TRUE(cbp_profile_level_id.has_value());
+  EXPECT_EQ(cbp_profile_level_id->level, webrtc::H264Level::kLevel4_1);
+
+  EXPECT_TRUE(Equals(
+      encoder_factory_.QueryCodecSupport(h264_cbp_format,
+                                         /*scalability_mode=*/std::nullopt,
+                                         webrtc::Resolution{320, 180}),
+      kSupportedPowerEfficient));
+  EXPECT_TRUE(Equals(
+      encoder_factory_.QueryCodecSupport(h264_cbp_format,
+                                         /*scalability_mode=*/std::nullopt,
+                                         webrtc::Resolution{1920, 1080}),
+      kSupportedPowerEfficient));
+  EXPECT_TRUE(Equals(
+      encoder_factory_.QueryCodecSupport(h264_cbp_format,
+                                         /*scalability_mode=*/std::nullopt,
+                                         webrtc::Resolution{319, 180}),
+      kUnsupported));
+  EXPECT_TRUE(Equals(
+      encoder_factory_.QueryCodecSupport(h264_cbp_format,
+                                         /*scalability_mode=*/std::nullopt,
+                                         webrtc::Resolution{2049, 1080}),
+      kUnsupported));
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_ANDROID)
+}
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_OPENH264)
+
+#if BUILDFLAG(IS_ANDROID) || (BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_OPENH264))
+TEST_F(RTCVideoEncoderFactoryTest, H264MultipleProfilesParallelArraysSync) {
+  ClearDisabledProfilesForTesting();
+  EXPECT_CALL(mock_gpu_factories_, IsEncoderSupportKnown())
+      .WillRepeatedly(Return(true));
+
+  // Support both H.264 Baseline and Main profiles.
+  media::VideoEncodeAccelerator::SupportedProfile baseline_profile(
+      media::H264PROFILE_BASELINE, gfx::Size(1920, 1080),
+      kMaxFramerateNumerator, kMaxFramerateDenominator,
+      media::VideoEncodeAccelerator::kConstantMode, kSVCScalabilityModes);
+  media::VideoEncodeAccelerator::SupportedProfile main_profile(
+      media::H264PROFILE_MAIN, gfx::Size(1920, 1080), kMaxFramerateNumerator,
+      kMaxFramerateDenominator, media::VideoEncodeAccelerator::kConstantMode,
+      kSVCScalabilityModes);
+
+  mock_gpu_factories_.SetSupportedProfiles(
+      media::VideoEncodeAccelerator::SupportedProfiles{baseline_profile,
+                                                       main_profile});
+
+  auto supported_formats = encoder_factory_.GetSupportedFormats();
+
+  webrtc::SdpVideoFormat cbp_format("unknown");
+  for (const auto& format : supported_formats) {
+    if (format.name == "H264") {
+      auto profile_level_id =
+          webrtc::ParseSdpForH264ProfileLevelId(format.parameters);
+      if (profile_level_id &&
+          profile_level_id->profile ==
+              webrtc::H264Profile::kProfileConstrainedBaseline) {
+        cbp_format = format;
+      }
+    }
+  }
+
+  // Verify that QueryCodecSupport successfully indexes and queries the
+  // generated CBP format, indicating that the parallel arrays remain in sync.
+  encoder_factory_.QueryCodecSupport(cbp_format,
+                                     /*scalability_mode=*/std::nullopt,
+                                     webrtc::Resolution{1920, 1080});
+}
+#endif  // BUILDFLAG(IS_ANDROID) || (BUILDFLAG(IS_LINUX) &&
+        // BUILDFLAG(ENABLE_OPENH264))
 
 }  // namespace blink

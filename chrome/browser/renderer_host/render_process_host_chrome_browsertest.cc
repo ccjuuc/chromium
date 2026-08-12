@@ -25,6 +25,7 @@
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/performance_manager/public/features.h"
 #include "content/public/browser/child_process_launcher_utils.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
@@ -65,7 +66,7 @@ WebContents* FindFirstDevToolsContents() {
   return nullptr;
 }
 
-// TODO(rvargas) crbug.com/417532: Remove this code.
+// TODO(rvargas) crbug.com/40386210: Remove this code.
 base::Process ProcessFromHandle(base::ProcessHandle handle) {
 #if BUILDFLAG(IS_WIN)
   if (handle == GetCurrentProcess())
@@ -96,7 +97,10 @@ bool IsProcessBackgrounded(const base::Process& process) {
 
 class ChromeRenderProcessHostTest : public extensions::ExtensionBrowserTest {
  public:
-  ChromeRenderProcessHostTest() = default;
+  ChromeRenderProcessHostTest() {
+    feature_list_.InitAndDisableFeature(
+        performance_manager::features::kTransientKeepAlivePolicy);
+  }
 
   ChromeRenderProcessHostTest(const ChromeRenderProcessHostTest&) = delete;
   ChromeRenderProcessHostTest& operator=(const ChromeRenderProcessHostTest&) =
@@ -153,7 +157,7 @@ class ChromeRenderProcessHostTest : public extensions::ExtensionBrowserTest {
   // in a process of that type, even if that means creating a new process.
   void TestProcessOverflow() {
     int tab_count = 1;
-    int host_count = 1;
+    int host_count = RenderProcessHostCount();
     WebContents* tab1 = nullptr;
     WebContents* tab2 = nullptr;
     content::RenderProcessHost* rph1 = nullptr;
@@ -256,6 +260,7 @@ class ChromeRenderProcessHostTest : public extensions::ExtensionBrowserTest {
   // existing tests run with the prewarm feature enabled.
   test::ScopedPrewarmFeatureList prewarm_feature_list_{
       test::ScopedPrewarmFeatureList::PrewarmState::kDisabled};
+  base::test::ScopedFeatureList feature_list_;
 };
 
 class ChromeRenderProcessHostTestWithCommandLine
@@ -277,7 +282,8 @@ class ChromeRenderProcessHostTestWithCommandLine
   }
 };
 
-IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTest, ProcessPerTab) {
+// TODO(crbug.com/497106715): Fix and re-enable test
+IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTest, DISABLED_ProcessPerTab) {
   // Set max renderers to 1 to force running out of processes.
   content::RenderProcessHost::SetMaxRendererProcessCount(1);
 
@@ -286,7 +292,7 @@ IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTest, ProcessPerTab) {
   parsed_command_line.AppendSwitch(switches::kProcessPerTab);
 
   int tab_count = 1;
-  int host_count = 1;
+  int host_count = RenderProcessHostCount();
 
   content::RenderFrameDeletedObserver before_webui_obs(
       content::ConvertToRenderFrameHost(
@@ -413,7 +419,7 @@ class ChromeRenderProcessHostBackgroundingTest
     VerifyProcessIsForegrounded(process_or_tab);                             \
   } while (0);
 
-// Flaky on Mac: https://crbug.com/888308
+// Flaky on Mac: https://crbug.com/41416652
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_MultipleTabs DISABLED_MultipleTabs
 #else
@@ -495,7 +501,7 @@ IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTestWithCommandLine,
 }
 
 // Ensure that DevTools opened to debug DevTools is launched in a separate
-// process when --process-per-tab is set. See crbug.com/69873.
+// process when --process-per-tab is set. See crbug.com/41305755.
 IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTest,
                        DevToolsOnSelfInOwnProcessPPT) {
   base::CommandLine& parsed_command_line =
@@ -503,7 +509,7 @@ IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTest,
   parsed_command_line.AppendSwitch(switches::kProcessPerTab);
 
   int tab_count = 1;
-  int host_count = 1;
+  int host_count = RenderProcessHostCount();
 
   GURL page1("data:text/html,hello world1");
   ui_test_utils::TabAddedWaiter add_tab(browser());
@@ -540,11 +546,11 @@ IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTest,
 }
 
 // Ensure that DevTools opened to debug DevTools is launched in a separate
-// process. See crbug.com/69873.
+// process. See crbug.com/41305755.
 IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTest,
                        DevToolsOnSelfInOwnProcess) {
   int tab_count = 1;
-  int host_count = 1;
+  int host_count = RenderProcessHostCount();
 
   GURL page1("data:text/html,hello world1");
   ui_test_utils::TabAddedWaiter add_tab1(browser());
@@ -584,14 +590,17 @@ IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTest,
 // closing the passed in TabStripModel. This is used in the following test case.
 class WindowDestroyer : public content::WebContentsObserver {
  public:
-  WindowDestroyer(content::WebContents* web_contents, TabStripModel* model)
-      : content::WebContentsObserver(web_contents), tab_strip_model_(model) {}
+  WindowDestroyer(BrowserWindowInterface* browser,
+                  content::WebContents* web_contents)
+      : content::WebContentsObserver(web_contents),
+        tab_strip_model_(browser->GetTabStripModel()),
+        observer_(browser) {}
 
   WindowDestroyer(const WindowDestroyer&) = delete;
   WindowDestroyer& operator=(const WindowDestroyer&) = delete;
 
   // Wait for the browser window to be destroyed.
-  void Wait() { ui_test_utils::WaitForBrowserToClose(); }
+  void Wait() { observer_.Wait(); }
 
   void PrimaryMainFrameRenderProcessGone(
       base::TerminationStatus status) override {
@@ -600,12 +609,13 @@ class WindowDestroyer : public content::WebContentsObserver {
 
  private:
   raw_ptr<TabStripModel> tab_strip_model_;
+  ui_test_utils::BrowserDestroyedObserver observer_;
 };
 
 // Test to ensure that while iterating through all listeners in
 // RenderProcessHost and invalidating them, we remove them properly and don't
-// access already freed objects. See http://crbug.com/255524.
-// Disabled due to flakiness, see  http://crbug.com/606485.
+// access already freed objects. See http://crbug.com/40077716.
+// Disabled due to flakiness, see  http://crbug.com/41250793.
 IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTest,
                        DISABLED_CloseAllTabsDuringProcessDied) {
   GURL url(chrome::kChromeUIOmniboxURL);
@@ -627,7 +637,7 @@ IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTest,
             wc2->GetPrimaryMainFrame()->GetProcess());
 
   // Create an object that will close the window on a process crash.
-  WindowDestroyer destroyer(wc1, browser()->tab_strip_model());
+  WindowDestroyer destroyer(browser(), wc1);
 
   // Kill the renderer process, simulating a crash. This should the ProcessDied
   // method to be called. Alternatively, RenderProcessHost::OnChannelError can

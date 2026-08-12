@@ -6,7 +6,6 @@
 #include <optional>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/callback_helpers.h"
 #include "base/strings/string_split.h"
@@ -164,7 +163,7 @@ class FakeAnnotator : public image_annotation::mojom::Annotator {
     // clean-up happens correctly when combining annotation strings.
     std::string image_filename = GURL(image_id).ExtractFileName();
     std::string label_text;
-    if (base::Contains(custom_label_result_mapping_, image_filename)) {
+    if (custom_label_result_mapping_.contains(image_filename)) {
       label_text = custom_label_result_mapping_[image_filename];
     } else {
       label_text = image_filename + " '" + description_language_tag + "' Label";
@@ -264,7 +263,7 @@ class ImageAnnotationBrowserTest : public InProcessBrowserTest {
     content::WebContents* web_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
 
-    AccessibilityLabelsServiceFactory::GetForProfile(browser()->profile())
+    AccessibilityLabelsServiceFactory::GetForProfile(browser()->GetProfile())
         ->OverrideImageAnnotatorBinderForTesting(
             base::BindRepeating(&BindImageAnnotatorService));
 
@@ -276,14 +275,14 @@ class ImageAnnotationBrowserTest : public InProcessBrowserTest {
 
   void TearDownOnMainThread() override {
     scoped_accessibility_mode_.reset();
-    AccessibilityLabelsServiceFactory::GetForProfile(browser()->profile())
+    AccessibilityLabelsServiceFactory::GetForProfile(browser()->GetProfile())
         ->OverrideImageAnnotatorBinderForTesting(base::NullCallback());
     InProcessBrowserTest::TearDownOnMainThread();
   }
 
   void SetAcceptLanguages(const std::string& accept_languages) {
     content::BrowserContext* context =
-        static_cast<content::BrowserContext*>(browser()->profile());
+        static_cast<content::BrowserContext*>(browser()->GetProfile());
     DCHECK(context);
 
     PrefService* prefs = user_prefs::UserPrefs::Get(context);
@@ -535,7 +534,7 @@ IN_PROC_BROWSER_TEST_F(ImageAnnotationBrowserTest, ImageWithSrcSet) {
       "Appears to say: red.png Annotation. Appears to be: red.png 'en' Label");
 }
 
-// Disabled due to flakiness. http://crbug.com/983404
+// Disabled due to flakiness. http://crbug.com/41470410
 IN_PROC_BROWSER_TEST_F(ImageAnnotationBrowserTest,
                        DISABLED_AnnotationLanguages) {
   FakeAnnotator::SetReturnOcrResults(true);

@@ -135,8 +135,6 @@ class AccountInvestigatorTest : public testing::Test {
       histogram_tester.ExpectTotalCount(
           base::StrCat({kRelationHistogramName, suffix_[type]}), 0);
     }
-    histogram_tester.ExpectUniqueSample("Signin.IsShared" + suffix_[type],
-                                        is_shared, 1);
   }
 
  private:
@@ -277,8 +275,10 @@ TEST_F(AccountInvestigatorTest, OnGaiaAccountsInCookieUpdatedError) {
   const HistogramTester histogram_tester;
   signin::AccountsInCookieJarInfo accounts_in_cookie_jar_info(
       /*accounts_are_fresh=*/true, {one});
-  GoogleServiceAuthError error(GoogleServiceAuthError::SERVICE_UNAVAILABLE);
-  investigator()->OnAccountsInCookieUpdated(accounts_in_cookie_jar_info, error);
+  investigator()->OnAccountsInCookieUpdated(
+      accounts_in_cookie_jar_info,
+      GoogleServiceAuthError::FromServiceUnavailable(
+          "fake service unavailable"));
   EXPECT_EQ(
       0u, histogram_tester.GetTotalCountsForPrefix("Signin.CookieJar.").size());
 }
@@ -444,7 +444,7 @@ TEST_F(AccountInvestigatorTest, TryPeriodicReportWithEnterprisePrimary) {
       email, signin::ConsentLevel::kSignin);
   account_info =
       AccountInfo::Builder(account_info).SetHostedDomain("bar.com").Build();
-  AccountCapabilitiesTestMutator(&account_info.capabilities)
+  AccountCapabilitiesTestMutator(&account_info)
       .set_is_subject_to_enterprise_features(true);
   identity_test_env()->UpdateAccountInfoForAccount(account_info);
 

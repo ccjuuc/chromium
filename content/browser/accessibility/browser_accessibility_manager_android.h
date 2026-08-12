@@ -8,6 +8,7 @@
 #include <optional>
 #include <utility>
 
+#include "base/memory/raw_ptr.h"
 #include "content/common/content_export.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "ui/accessibility/platform/browser_accessibility_manager.h"
@@ -32,6 +33,12 @@ enum AndroidMovementGranularity {
   ANDROID_ACCESSIBILITY_NODE_INFO_MOVEMENT_GRANULARITY_LINE = 4
 };
 
+// From androidx.core.view.accessibility.AccessibilityNodeInfoCompat
+enum class ExtendedSelectionOffsetType {
+  OFFSET_TYPE_TEXT = 0,
+  OFFSET_TYPE_CHILD = 1,
+};
+
 // From android.view.accessibility.AccessibilityEvent in Java:
 enum {
   ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_UNDEFINED = 0,
@@ -39,6 +46,7 @@ enum {
   ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_PANE_TITLE = 8,
   ANDROID_ACCESSIBILITY_EVENT_TEXT_CHANGED = 16,
   ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_STATE_DESCRIPTION = 64,
+  ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_CONTENT_INVALID = 1024,
   ANDROID_ACCESSIBILITY_EVENT_TEXT_SELECTION_CHANGED = 8192,
   ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_EXPANDED = 16384,
   ANDROID_ACCESSIBILITY_EVENT_TEXT_TRAVERSED_AT_MOVEMENT_GRANULARITY = 131072
@@ -92,18 +100,6 @@ class CONTENT_EXPORT BrowserAccessibilityManagerAndroid
     return nodes_already_cleared_;
   }
 
-  // By default, the tree is pruned for a better screen reading experience,
-  // including:
-  //   * If the node has only static text children
-  //   * If the node is focusable and has no focusable children
-  //   * If the node is a heading
-  // This can be turned off to generate a tree that more accurately reflects
-  // the DOM and includes style changes within these nodes.
-  void set_prune_tree_for_screen_reader(bool prune) {
-    prune_tree_for_screen_reader_ = prune;
-  }
-  bool prune_tree_for_screen_reader() { return prune_tree_for_screen_reader_; }
-
   void set_web_contents_accessibility(
       base::WeakPtr<WebContentsAccessibilityAndroid> wcax) {
     web_contents_accessibility_ = std::move(wcax);
@@ -145,8 +141,9 @@ class CONTENT_EXPORT BrowserAccessibilityManagerAndroid
   // forwards or backwards by character, word, or line. This part is
   // unit-tested; the Java interfaces above are just wrappers. Both of these
   // take a single cursor index as input and return the boundaries surrounding
-  // the next word or line. If moving by character, the output start and
-  // end index will be the same.
+  // the next character, word or line.
+  // The function returns false if the cursor cannot be moved further in the
+  // given direction and granularity.
   bool NextAtGranularity(int32_t granularity,
                          int cursor_index,
                          BrowserAccessibilityAndroid* node,
@@ -165,9 +162,36 @@ class CONTENT_EXPORT BrowserAccessibilityManagerAndroid
 
   std::optional<std::vector<std::string>> GetMetadataForTree() const;
 
+  struct AndroidPosition {
+    raw_ptr<BrowserAccessibilityAndroid> node = nullptr;
+    int offset = -1;
+    ExtendedSelectionOffsetType offset_type =
+        ExtendedSelectionOffsetType::OFFSET_TYPE_TEXT;
+  };
+
+  struct SelectionRange {
+    AndroidPosition anchor;
+    AndroidPosition focus;
+  };
+
+  // Returns the selection fitted to Android accessibility tree and Selection
+  // API restrictions. If the output has value, all fields of the
+  // `SelectionRange` are populated.
+  std::optional<SelectionRange> GetSelectionRange() const;
+
+  // Creates an AXPosition for the given `node`, `offset`, and `offset_type`
+  // that are received from Android. Returns Null Position if the offset is not
+  // valid.
+  ui::BrowserAccessibility::AXPosition ConvertAndroidSelectionPositionToChrome(
+      BrowserAccessibilityAndroid* node,
+      int32_t offset,
+      ExtendedSelectionOffsetType offset_type);
+
  protected:
   std::unique_ptr<ui::BrowserAccessibility> CreateBrowserAccessibility(
       ui::AXNode* node) override;
+
+  void OnAccessibilityEventsProcessedForExperiment();
 
  private:
   // AXTreeObserver overrides.
@@ -189,13 +213,23 @@ class CONTENT_EXPORT BrowserAccessibilityManagerAndroid
   // Handle a hover event from the renderer process.
   void HandleHoverEvent(ui::BrowserAccessibility* node);
 
+  void FireDocumentSelectionChangedEvent(WebContentsAccessibilityAndroid* wcax);
+
+  // Given `node_id`, `offset`, and `affinity` which represent a selection
+  // position in Chrome accessibility tree, creates an appropriate selection
+  // position in Android accessibility tree. This is done by ensuring that the
+  // anchor node exists on Android (if not, moves to the highest leaf node which
+  // is ancestor of the node). Returns empty if conversion is not possible.
+  std::optional<AndroidPosition> ConvertChromeSelectionPositionToAndroid(
+      ui::AXNodeID node_id,
+      int offset,
+      ax::mojom::TextAffinity affinity,
+      bool is_backward) const;
+
   // A weak reference to WebContentsAccessibility for reaching Java layer.
   // Only the root manager has the reference. Should be accessed through
   // |GetWebContentsAXFromRootManager| rather than directly.
   base::WeakPtr<WebContentsAccessibilityAndroid> web_contents_accessibility_;
-
-  // See docs for set_prune_tree_for_screen_reader, above.
-  bool prune_tree_for_screen_reader_;
 
   // True if this instance should force enable the image descriptions feature
   // for testing. This allows us to mock generated image descriptions and test

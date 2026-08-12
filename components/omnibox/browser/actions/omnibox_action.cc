@@ -10,6 +10,7 @@
 #include "components/omnibox/browser/omnibox_client.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 
 #if defined(SUPPORT_PEDALS_VECTOR_ICONS)
 #include "components/omnibox/browser/vector_icons.h"  // nogncheck
@@ -59,7 +60,6 @@ size_t EstimateMemoryUsage(const OmniboxAction::LabelStrings& self) {
 bool OmniboxAction::Client::OpenJourneys(const std::string& query) {
   return false;
 }
-
 // =============================================================================
 
 OmniboxAction::ExecutionContext::ExecutionContext(
@@ -70,8 +70,7 @@ OmniboxAction::ExecutionContext::ExecutionContext(
     : client_(client),
       open_url_callback_(std::move(callback)),
       match_selection_timestamp_(match_selection_timestamp),
-      disposition_(disposition),
-      enter_starter_pack_id_(0) {}
+      disposition_(disposition) {}
 
 OmniboxAction::ExecutionContext::~ExecutionContext() = default;
 
@@ -79,10 +78,8 @@ OmniboxAction::ExecutionContext::~ExecutionContext() = default;
 
 OmniboxAction::OmniboxAction(LabelStrings strings,
                              GURL url,
-                             bool show_as_action_button)
-    : strings_(strings),
-      url_(url),
-      show_as_action_button_(show_as_action_button) {}
+                             ActionPresentationMode presentation_mode)
+    : strings_(strings), url_(url), presentation_mode_(presentation_mode) {}
 
 OmniboxAction::~OmniboxAction() {
 #if BUILDFLAG(IS_ANDROID)
@@ -112,7 +109,9 @@ bool OmniboxAction::IsReadyToTrigger(
 #if defined(SUPPORT_PEDALS_VECTOR_ICONS)
 const gfx::VectorIcon& OmniboxAction::GetVectorIcon() const {
   // TODO(tommycli): Replace with real icon.
-  return omnibox::kProductChromeRefreshIcon;
+  return features::IsRoundedIconsEnabled()
+             ? omnibox::kChromeProductIcon
+             : omnibox::kProductChromeRefreshOldIcon;
 }
 #endif
 

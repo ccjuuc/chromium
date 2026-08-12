@@ -62,16 +62,32 @@ class StartupBrowserCreatorImpl {
   // launch another instance. `restore_tabbed_browser` should only be
   // flipped false by Ash full restore code path, suppressing restoring a normal
   // browser when there were only PWAs open in previous session. See
-  // crbug.com/1463906.
+  // crbug.com/40275406.
   void Launch(Profile* profile,
               chrome::startup::IsProcessStartup process_startup,
               bool restore_tabbed_browser);
+
+  enum class TabOverWrite {
+    kYes,  // If the tab needs to be overwritten
+    kNo,   // Default behavior
+  };
 
   // Convenience for OpenTabsInBrowser that converts |urls| into a set of
   // Tabs.
   Browser* OpenURLsInBrowser(Browser* browser,
                              chrome::startup::IsProcessStartup process_startup,
                              const std::vector<GURL>& urls);
+
+  // Creates a tab for each of the Tabs in |tabs|. If browser is non-null
+  // and a tabbed browser, the tabs are added to it. Otherwise a new tabbed
+  // browser is created and the tabs are added to it. The browser the tabs
+  // are added to is returned, which is either |browser|, the newly created
+  // browser, or nullptr if browser could not be created.
+  Browser* OpenTabsInBrowser(
+      Browser* browser,
+      chrome::startup::IsProcessStartup process_startup,
+      const StartupTabs& tabs,
+      TabOverWrite is_active_tab_overwrite = TabOverWrite::kNo);
 
   void SetCurrentChromeVersionStringForTesting(
       const std::optional<std::string>& version) {
@@ -83,6 +99,8 @@ class StartupBrowserCreatorImpl {
   FRIEND_TEST_ALL_PREFIXES(BrowserTest, AppIdSwitch);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest, DetermineStartupTabs);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
+                           DetermineStartupTabs_DeduplicatePinnedTabs);
+  FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
                            DetermineStartupTabs_Incognito);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
                            DetermineStartupTabs_Crash);
@@ -90,8 +108,6 @@ class StartupBrowserCreatorImpl {
                            DetermineStartupTabs_InitialPrefs);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
                            DetermineStartupTabs_CommandLine);
-  FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
-                           DetermineStartupTabs_Crosapi);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
                            DetermineStartupTabs_NewTabPage);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
@@ -106,8 +122,6 @@ class StartupBrowserCreatorImpl {
                            DetermineBrowserOpenBehavior_NotStartup);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
                            DetermineStartupTabs_NewFeaturesPage);
-  FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
-                           DetermineStartupTabs_PrivacySandbox);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
                            DetermineNonMilestoneUpdate);
 
@@ -144,29 +158,14 @@ class StartupBrowserCreatorImpl {
     HAS_SAME_TAB_SWITCH = (1 << 4)
   };
 
-  enum class TabOverWrite {
-    kYes,  // If the tab needs to be overwritten
-    kNo,   // Default behavior
-  };
-
   using BrowserOpenBehaviorOptions = uint32_t;
-
-  // Creates a tab for each of the Tabs in |tabs|. If browser is non-null
-  // and a tabbed browser, the tabs are added to it. Otherwise a new tabbed
-  // browser is created and the tabs are added to it. The browser the tabs
-  // are added to is returned, which is either |browser|, the newly created
-  // browser, or nullptr if browser could not be created.
-  Browser* OpenTabsInBrowser(Browser* browser,
-                             chrome::startup::IsProcessStartup process_startup,
-                             const StartupTabs& tabs,
-                             TabOverWrite is_active_tab_overwrite);
 
   // Determines the URLs to be shown at startup by way of various policies
   // (welcome, pinned tabs, etc.), determines whether a session restore
   // is necessary, and opens the URLs in a new or restored browser accordingly.
   // `restore_tabbed_browser` should only be flipped false by Ash full
   // restore code path, suppressing restoring a normal browser when there were
-  // only PWAs open in previous session. See crbug.com/1463906.
+  // only PWAs open in previous session. See crbug.com/40275406.
   void DetermineURLsAndLaunch(chrome::startup::IsProcessStartup process_startup,
                               bool restore_tabbed_browser);
 
@@ -181,8 +180,7 @@ class StartupBrowserCreatorImpl {
       bool is_ephemeral_profile,
       bool is_post_crash_launch,
       bool promotional_tabs_enabled,
-      bool whats_new_enabled,
-      bool privacy_sandbox_confirmation_required);
+      bool whats_new_enabled);
 
   // Begins an asynchronous session restore if current state allows it (e.g.,
   // this is not process startup) and SessionService indicates that one is
@@ -211,7 +209,7 @@ class StartupBrowserCreatorImpl {
   // Returns the relevant bitmask options which must be passed when restoring a
   // session. `restore_tabbed_browser` should only be flipped false by Ash
   // full restore code path, suppressing restoring a normal browser when there
-  // were only PWAs open in previous session. See crbug.com/1463906.
+  // were only PWAs open in previous session. See crbug.com/40275406.
   static SessionRestore::BehaviorBitmask DetermineSynchronousRestoreOptions(
       bool has_create_browser_default,
       bool has_create_browser_switch,

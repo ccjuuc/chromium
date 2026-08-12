@@ -9,7 +9,8 @@
 #include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/autofill/payments/payments_view_factory.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/tabs/public/tab_dialog_manager.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
@@ -18,6 +19,7 @@
 #include "chrome/browser/ui/views/autofill/payments/payments_view_util.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/common/webui_url_constants.h"
+#include "components/autofill/core/browser/metrics/payments/bnpl_metrics.h"
 #include "components/autofill/core/browser/payments/bnpl_util.h"
 #include "components/autofill/core/browser/ui/payments/select_bnpl_issuer_dialog_controller.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
@@ -26,6 +28,8 @@
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/dialog_button.mojom-shared.h"
+#include "ui/base/ui_base_types.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/controls/throbber.h"
@@ -57,6 +61,10 @@ class SelectBnplIssuerViewDesktop : public SelectBnplIssuerView {
   base::WeakPtr<SelectBnplIssuerDialogController> controller_;
   std::unique_ptr<views::Widget> dialog_;
   base::WeakPtr<SelectBnplIssuerDialog> select_bnpl_issuer_dialog_;
+
+  // Subscription to watch for the tab detaching. Handles logging to
+  // SelectBnplIssuerDialogResult if the dialog's parent window is closed.
+  base::CallbackListSubscription tab_detach_subscription_;
 };
 
 SelectBnplIssuerViewDesktop::SelectBnplIssuerViewDesktop(
@@ -71,6 +79,10 @@ SelectBnplIssuerViewDesktop::SelectBnplIssuerViewDesktop(
                                                  has_seen_ai_terms);
     select_bnpl_issuer_dialog_ =
         select_bnpl_issuer_dialog_delegate->GetWeakPtr();
+
+    tab_detach_subscription_ = tab_interface->RegisterWillDetach(
+        base::BindRepeating(&SelectBnplIssuerDialog::OnTabDetached,
+                            select_bnpl_issuer_dialog_));
 
     dialog_ = tab_interface->GetTabFeatures()
                   ->tab_dialog_manager()
@@ -112,6 +124,12 @@ SelectBnplIssuerDialog::SelectBnplIssuerDialog(
   SetButtons(static_cast<int>(ui::mojom::DialogButton::kCancel));
   SetButtonLabel(ui::mojom::DialogButton::kCancel,
                  l10n_util::GetStringUTF16(IDS_CANCEL));
+  // There is no "prominent" button on this dialog. User much choose a provider
+  // or explicitly exit the dialog with "Esc" or click the "Cancel" button. This
+  // should make the cancel button always render as a non-prominent/non-default
+  // button.
+  SetButtonStyle(ui::mojom::DialogButton::kCancel, ui::ButtonStyle::kDefault);
+  SetDefaultButton(static_cast<int>(ui::mojom::DialogButton::kNone));
   SetShowCloseButton(false);
   SetModalType(ui::mojom::ModalType::kChild);
   set_fixed_width(ChromeLayoutProvider::Get()->GetDistanceMetric(
@@ -132,7 +150,7 @@ SelectBnplIssuerDialog::SelectBnplIssuerDialog(
   CreateThrobberView();
   CreateBnplIssuerView();
   if (base::FeatureList::IsEnabled(
-          ::autofill::features::kAutofillEnableAiBasedAmountExtraction) &&
+          features::kAutofillEnableAiBasedAmountExtraction) &&
       has_seen_ai_terms) {
     throbber_container_view_->SetVisible(true);
     bnpl_issuer_view_->SetVisible(false);
@@ -141,7 +159,14 @@ SelectBnplIssuerDialog::SelectBnplIssuerDialog(
     bnpl_issuer_view_->SetVisible(true);
   }
 
-  TextWithLink link_text = controller_.get()->GetLinkText();
+  TextWithLink link_text;
+  if (base::FeatureList::IsEnabled(
+          features::kAutofillEnableAiBasedAmountExtraction)) {
+    CHECK(controller_);
+    link_text = GetBnplUiFooterTextForAi(controller_->GetPaymentsDataManager());
+  } else {
+    link_text = GetBnplUiFooterText();
+  }
   TextLinkInfo link_info;
   link_info.bold_range = link_text.bold_range;
   link_info.offset = link_text.offset;
@@ -220,11 +245,22 @@ void SelectBnplIssuerDialog::OnSettingsLinkClicked() {
   if (!web_contents_) {
     return;
   }
-  Browser* browser = chrome::FindBrowserWithTab(web_contents_.get());
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_contents_.get());
   if (!browser) {
     return;
   }
   chrome::ShowSettingsSubPage(browser, chrome::kPaymentsSubPage);
+}
+
+void SelectBnplIssuerDialog::OnTabDetached(
+    tabs::TabInterface* tab,
+    tabs::TabInterface::DetachReason reason) {
+  if (reason == tabs::TabInterface::DetachReason::kDelete) {
+    autofill_metrics::LogSelectBnplIssuerDialogResult(
+        autofill_metrics::SelectBnplIssuerDialogResult::kTabOrBrowserClosed);
+  }
 }
 
 }  // namespace payments

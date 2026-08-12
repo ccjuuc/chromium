@@ -3,8 +3,7 @@
 // found in the LICENSE file.
 import {AppStyleUpdater, BrowserProxy, LineFocusType} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import type {AppElement} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
-import {assertEquals, assertNotEquals, assertStringContains} from 'chrome-untrusted://webui-test/chai_assert.js';
-import {microtasksFinished} from 'chrome-untrusted://webui-test/test_util.js';
+import {assertEquals, assertGT, assertNotEquals, assertStringContains} from 'chrome-untrusted://webui-test/chai_assert.js';
 
 import {createApp} from './common.js';
 import {FakeReadingMode} from './fake_reading_mode.js';
@@ -49,6 +48,17 @@ suite('AppStyleUpdater', () => {
     assertEquals('40ch', app.style.getPropertyValue('--max-width'));
   });
 
+  test('setPaddingForLineFocus sets top and bottom padding', () => {
+    chrome.readingMode.isLineFocusEnabled = true;
+    const padding = 50;
+
+    updater.setPaddingForLineFocus(padding);
+
+    assertEquals(`${padding}px`, computeStyle('padding-top'));
+    assertEquals(`${padding}px`, computeStyle('padding-bottom'));
+    assertEquals(padding, updater.getPaddingForLineFocus());
+  });
+
   test('line focus height depends on font scale', () => {
     chrome.readingMode.fontSize = 1;
     updater.setLineFocusHeight();
@@ -62,7 +72,7 @@ suite('AppStyleUpdater', () => {
   test('setLineFocusStyle with no line focus hides view', () => {
     chrome.readingMode.isLineFocusEnabled = true;
 
-    updater.setLineFocusStyle();
+    updater.setLineFocusStyle(LineFocusType.NONE);
 
     assertEquals('none', app.style.getPropertyValue('--line-focus-display'));
     assertEquals('', app.style.getPropertyValue('--line-focus-shadow'));
@@ -72,7 +82,7 @@ suite('AppStyleUpdater', () => {
 
   test('setLineFocusStyle with line focus off hides view', () => {
     chrome.readingMode.isLineFocusEnabled = true;
-    chrome.readingMode.colorTheme = chrome.readingMode.sepiaDarkTheme;
+    chrome.readingMode.colorTheme = chrome.readingMode.lowContrastDarkTheme;
 
     updater.setLineFocusStyle(LineFocusType.NONE);
 
@@ -84,14 +94,14 @@ suite('AppStyleUpdater', () => {
 
   test('setLineFocusStyle with line focus line shows view', () => {
     chrome.readingMode.isLineFocusEnabled = true;
-    chrome.readingMode.colorTheme = chrome.readingMode.sepiaDarkTheme;
+    chrome.readingMode.colorTheme = chrome.readingMode.lowContrastDarkTheme;
 
     updater.setLineFocusStyle(LineFocusType.LINE);
 
     assertNotEquals('none', app.style.getPropertyValue('--line-focus-display'));
     assertNotEquals('', app.style.getPropertyValue('--line-focus-shadow'));
     assertEquals(
-        'var(--color-read-anything-line-focus-sepia-dark)',
+        'var(--color-read-anything-line-focus-low-contrast-dark)',
         app.style.getPropertyValue('--line-focus-bg'));
     assertNotEquals('', app.style.getPropertyValue('--line-focus-height'));
   });
@@ -128,74 +138,121 @@ suite('AppStyleUpdater', () => {
         assertNotEquals(windowBg, lineBg);
       });
 
+  test(
+      'setLineFocusStyle does not update toolbar colors if line focus is ' +
+          'disabled',
+      () => {
+        chrome.readingMode.isLineFocusEnabled = false;
+        updater.setLineFocusStyle(LineFocusType.WINDOW);
+        assertEquals('', app.style.getPropertyValue('--toolbar-icon-color'));
+        assertEquals(
+            '', app.style.getPropertyValue('--legacy-toolbar-icon-color'));
+        assertEquals(
+            '', app.style.getPropertyValue('--legacy-audio-player-icon-color'));
+      });
+
+  test(
+      'setLineFocusStyle sets dark toolbar icon color in immersive mode for ' +
+          'window line focus',
+      () => {
+        chrome.readingMode.isLineFocusEnabled = true;
+        chrome.readingMode.isImmersiveEnabled = true;
+        updater.setLineFocusStyle(LineFocusType.WINDOW);
+        assertEquals(
+            'var(--color-read-anything-toolbar-icon-dark)',
+            app.style.getPropertyValue('--toolbar-icon-color'));
+      });
+
+  test(
+      'setLineFocusStyle sets themed toolbar icon color in immersive mode ' +
+          'for non-window line focus',
+      () => {
+        chrome.readingMode.isLineFocusEnabled = true;
+        chrome.readingMode.isImmersiveEnabled = true;
+        chrome.readingMode.colorTheme = chrome.readingMode.yellowTheme;
+        updater.setLineFocusStyle(LineFocusType.LINE);
+        assertEquals(
+            'var(--color-read-anything-toolbar-icon-yellow)',
+            app.style.getPropertyValue('--toolbar-icon-color'));
+      });
+
+  test(
+      'setLineFocusStyle sets dark legacy toolbar icon colors for window ' +
+          'line focus',
+      () => {
+        chrome.readingMode.isLineFocusEnabled = true;
+        chrome.readingMode.isImmersiveEnabled = false;
+        updater.setLineFocusStyle(LineFocusType.WINDOW);
+        assertEquals(
+            'var(--color-read-anything-toolbar-icon-dark)',
+            app.style.getPropertyValue('--legacy-toolbar-icon-color'));
+        assertEquals(
+            'var(--color-read-anything-line-focus-dark)',
+            app.style.getPropertyValue('--legacy-audio-player-icon-color'));
+      });
+
+  test(
+      'setLineFocusStyle sets default legacy toolbar icon colors for ' +
+          'non-window line focus',
+      () => {
+        chrome.readingMode.isLineFocusEnabled = true;
+        chrome.readingMode.isImmersiveEnabled = false;
+        updater.setLineFocusStyle(LineFocusType.LINE);
+        assertEquals(
+            'var(--color-sys-on-surface-subtle)',
+            app.style.getPropertyValue('--legacy-toolbar-icon-color'));
+        assertEquals(
+            'var(--color-sys-primary)',
+            app.style.getPropertyValue('--legacy-audio-player-icon-color'));
+      });
+
   test('setLineFocusPos sets y position', () => {
     const pos = 123;
 
-    updater.setLineFocusPos(pos, null, app.$.containerParent);
+    updater.setLineFocusPos(pos, 0);
 
     assertEquals(`${pos}px`, app.style.getPropertyValue('--line-focus-y'));
-    assertEquals(
-        `-${pos}px`, app.style.getPropertyValue('--line-focus-clip-top'));
     assertEquals('', app.style.getPropertyValue('--line-focus-height'));
-    assertEquals('', app.style.getPropertyValue('--line-focus-clip-bottom'));
-  });
-
-  test('setLineFocusPos offsets top', async () => {
-    const pos = 123;
-    // Ensure there's content so there is an offset.
-    app.updateContent();
-    await microtasksFinished();
-
-    updater.setLineFocusPos(pos, null, app.$.containerParent);
-
-    assertEquals(`${pos}px`, app.style.getPropertyValue('--line-focus-y'));
-    assertEquals(
-        `-${pos - app.$.containerParent.offsetTop}px`,
-        app.style.getPropertyValue('--line-focus-clip-top'));
-    assertEquals('', app.style.getPropertyValue('--line-focus-height'));
-    assertEquals('', app.style.getPropertyValue('--line-focus-clip-bottom'));
   });
 
   test('setLineFocusPos sets height', () => {
     const height = 456;
 
-    updater.setLineFocusPos(0, height, app.$.containerParent);
+    updater.setLineFocusPos(0, height);
 
     assertEquals(
         `${height}px`, app.style.getPropertyValue('--line-focus-height'));
-    assertEquals(
-        `${height}px`, app.style.getPropertyValue('--line-focus-clip-bottom'));
-  });
-
-  test('setLineFocusPos offsets bottom when height given', async () => {
-    const pos = 123;
-    // Ensure there's content so there is an offset.
-    app.updateContent();
-    await microtasksFinished();
-    const containerHeight = app.$.containerParent.offsetHeight;
-    const containerTop = app.$.containerParent.offsetTop;
-    const windowHeight = containerHeight / 10;
-    console.error('height', app.$.containerParent.offsetHeight);
-
-    updater.setLineFocusPos(pos, windowHeight, app.$.containerParent);
-
-    assertEquals(
-        `${windowHeight}px`, app.style.getPropertyValue('--line-focus-height'));
-    assertEquals(
-        `-${containerHeight - pos - windowHeight + containerTop}px`,
-        app.style.getPropertyValue('--line-focus-clip-bottom'));
   });
 
   test('line spacing depends on font size', () => {
-    setAppFontSize(10);
     chrome.readingMode.lineSpacing = 10;
+
+    setAppFontSize(10);
     updater.setLineSpacing();
-    assertEquals('100px', computeStyle('line-height'));
+    const lineHeight1 = parseInt(computeStyle('line-height'));
 
     setAppFontSize(12);
+    updater.setLineSpacing();
+    const lineHeight2 = parseInt(computeStyle('line-height'));
+
+    assertGT(lineHeight2, lineHeight1);
+  });
+
+  test('paragraph spacing depends on line spacing', () => {
+    setAppFontSize(10);
+
+    chrome.readingMode.lineSpacing = 10;
+    updater.setLineSpacing();
+    const lineSpacing1 = parseInt(computeStyle('line-height'));
+    const pSpacing1 = parseInt(computeStyle('--paragraph-spacing'));
+
     chrome.readingMode.lineSpacing = 16;
     updater.setLineSpacing();
-    assertEquals('192px', computeStyle('line-height'));
+    const lineSpacing2 = parseInt(computeStyle('line-height'));
+    const pSpacing2 = parseInt(computeStyle('--paragraph-spacing'));
+
+    assertGT(lineSpacing2, lineSpacing1);
+    assertGT(pSpacing2, pSpacing1);
   });
 
   test('letter spacing depends on font size', () => {
@@ -208,6 +265,23 @@ suite('AppStyleUpdater', () => {
     chrome.readingMode.letterSpacing = 16;
     updater.setLetterSpacing();
     assertEquals('192px', computeStyle('letter-spacing'));
+  });
+
+  test('word spacing depends on letter spacing', () => {
+    setAppFontSize(10);
+
+    chrome.readingMode.letterSpacing = 10;
+    updater.setLetterSpacing();
+    const letterSpacing1 = +computeStyle('letter-spacing').replace('px', '');
+    const wordSpacing1 = +computeStyle('word-spacing').replace('px', '');
+
+    chrome.readingMode.letterSpacing = 16;
+    updater.setLetterSpacing();
+    const letterSpacing2 = +computeStyle('letter-spacing').replace('px', '');
+    const wordSpacing2 = +computeStyle('word-spacing').replace('px', '');
+
+    assertGT(letterSpacing2, letterSpacing1);
+    assertGT(wordSpacing2, wordSpacing1);
   });
 
   test('font size scales', () => {
@@ -298,52 +372,45 @@ suite('AppStyleUpdater', () => {
     const expectedYellowBackground = 'rgb(0, 255, 0)';
     const expectedDarkBackground = 'rgb(0, 255, 255)';
     const expectedHighContrastBackground = 'rgb(255, 255, 0)';
-    const expectedLowContrastBackground = 'rgb(255, 0, 255)';
-    const expectedSepiaLightBackground = 'rgb(255, 255, 255)';
-    const expectedSepiaDarkBackground = 'rgb(0, 0, 255)';
+    const expectedLowContrastLightBackground = 'rgb(255, 255, 255)';
+    const expectedLowContrastDarkBackground = 'rgb(0, 0, 255)';
     const expectedDefaultForeground = 'rgb(255, 0, 0)';
     const expectedYellowForeground = 'rgb(255, 0, 255)';
     const expectedDarkForeground = 'rgb(255, 255, 0)';
     const expectedHighContrastForeground = 'rgb(0, 0, 0)';
-    const expectedLowContrastForeground = 'rgb(255, 0, 0)';
-    const expectedSepiaLightForeground = 'rgb(0, 255, 0)';
-    const expectedSepiaDarkForeground = 'rgb(0, 0, 255)';
+    const expectedLowContrastLightForeground = 'rgb(0, 255, 0)';
+    const expectedLowContrastDarkForeground = 'rgb(0, 0, 255)';
     const expectedDefaultSelectionBackground = 'rgb(255, 255, 255)';
     const expectedYellowCurrentHighlight = 'rgb(0, 0, 0)';
     const expectedDarkCurrentHighlight = 'rgb(5, 5, 100)';
     const expectedHighContrastCurrentHighlight = 'rgb(5, 100, 5)';
-    const expectedLowContrastCurrentHighlight = 'rgb(100, 5, 5)';
-    const expectedSepiaLightCurrentHighlight = 'rgb(100, 100, 5)';
-    const expectedSepiaDarkCurrentHighlight = 'rgb(100, 5, 100)';
+    const expectedLowContrastLightCurrentHighlight = 'rgb(100, 100, 5)';
+    const expectedLowContrastDarkCurrentHighlight = 'rgb(100, 5, 100)';
     const expectedDefaultPreviousHighlight = 'rgb(5, 100, 5)';
     const expectedYellowPreviousHighlight = 'rgb(5, 100, 100)';
     const expectedDarkPreviousHighlight = 'rgb(100, 100, 100)';
     const expectedHighContrastPreviousHighlight = 'rgb(100, 255, 255)';
-    const expectedLowContrastPreviousHighlight = 'rgb(255, 100, 255)';
-    const expectedSepiaLightPreviousHighlight = 'rgb(255, 255, 100)';
-    const expectedSepiaDarkPreviousHighlight = 'rgb(100, 100, 255)';
+    const expectedLowContrastLightPreviousHighlight = 'rgb(255, 255, 100)';
+    const expectedLowContrastDarkPreviousHighlight = 'rgb(100, 100, 255)';
     const expectedDefaultEmptyHeading = 'rgb(100, 5, 100)';
     const expectedDefaultEmptyBody = 'rgb(100, 100, 100)';
     const expectedYellowEmptyBody = 'rgb(255, 0, 255)';
     const expectedDarkEmptyBody = 'rgb(255, 255, 0)';
     const expectedHighContrastEmptyBody = 'rgb(0, 0, 0)';
-    const expectedLowContrastEmptyBody = 'rgb(255, 0, 0)';
-    const expectedSepiaLightEmptyBody = 'rgb(0, 255, 0)';
-    const expectedSepiaDarkEmptyBody = 'rgb(0, 0, 255)';
+    const expectedLowContrastLightEmptyBody = 'rgb(0, 255, 0)';
+    const expectedLowContrastDarkEmptyBody = 'rgb(0, 0, 255)';
     const expectedDefaultLink = 'rgb(6, 37, 37)';
     const expectedYellowLink = 'rgb(37, 6, 6)';
     const expectedDarkLink = 'rgb(37, 6, 37)';
     const expectedHighContrastLink = 'rgb(6, 37, 6)';
-    const expectedLowContrastLink = 'rgb(6, 37, 37)';
-    const expectedSepiaLightLink = 'rgb(6, 37, 6)';
-    const expectedSepiaDarkLink = 'rgb(37, 6, 37)';
+    const expectedLowContrastLightLink = 'rgb(6, 37, 6)';
+    const expectedLowContrastDarkLink = 'rgb(37, 6, 37)';
     const expectedDefaultLinkVisited = 'rgb(37, 37, 6)';
     const expectedYellowLinkVisited = 'rgb(37, 37, 37)';
     const expectedDarkLinkVisited = 'rgb(14, 14, 28)';
     const expectedHighContrastLinkVisited = 'rgb(14, 28, 14)';
-    const expectedLowContrastLinkVisited = 'rgb(28, 14, 14)';
-    const expectedSepiaLightLinkVisited = 'rgb(14, 28, 28)';
-    const expectedSepiaDarkLinkVisited = 'rgb(28, 14, 28)';
+    const expectedLowContrastLightLinkVisited = 'rgb(14, 28, 28)';
+    const expectedLowContrastDarkLinkVisited = 'rgb(28, 14, 28)';
     const expectedDefaultLineFocus = 'rgb(100, 100, 0)';
     const expectedDarkLineFocus = 'rgb(200, 200, 0)';
     const expectedLightLineFocus = 'rgb(50, 50, 0)';
@@ -353,33 +420,30 @@ suite('AppStyleUpdater', () => {
       '--color-read-anything-background-dark': expectedDarkBackground,
       '--color-read-anything-background-high-contrast':
           expectedHighContrastBackground,
-      '--color-read-anything-background-low-contrast':
-          expectedLowContrastBackground,
-      '--color-read-anything-background-sepia-light':
-          expectedSepiaLightBackground,
-      '--color-read-anything-background-sepia-dark':
-          expectedSepiaDarkBackground,
+      '--color-read-anything-background-low-contrast-light':
+          expectedLowContrastLightBackground,
+      '--color-read-anything-background-low-contrast-dark':
+          expectedLowContrastDarkBackground,
       '--color-sys-on-surface': expectedDefaultForeground,
       '--color-read-anything-foreground': expectedDefaultEmptyHeading,
       '--color-read-anything-foreground-yellow': expectedYellowForeground,
       '--color-read-anything-foreground-dark': expectedDarkForeground,
       '--color-read-anything-foreground-high-contrast':
           expectedHighContrastForeground,
-      '--color-read-anything-foreground-low-contrast':
-          expectedLowContrastForeground,
-      '--color-read-anything-foreground-sepia-light':
-          expectedSepiaLightForeground,
-      '--color-read-anything-foreground-sepia-dark':
-          expectedSepiaDarkForeground,
+      '--color-read-anything-foreground-low-contrast-light':
+          expectedLowContrastLightForeground,
+      '--color-read-anything-foreground-low-contrast-dark':
+          expectedLowContrastDarkForeground,
       '--color-sys-state-focus-ring': expectedDefaultLineFocus,
       '--color-read-anything-line-focus': expectedDarkLineFocus,
       '--color-read-anything-line-focus-yellow': expectedLightLineFocus,
       '--color-read-anything-line-focus-dark': expectedDarkLineFocus,
       '--color-read-anything-line-focus-light': expectedLightLineFocus,
       '--color-read-anything-line-focus-high-contrast': expectedDarkLineFocus,
-      '--color-read-anything-line-focus-low-contrast': expectedDarkLineFocus,
-      '--color-read-anything-line-focus-sepia-light': expectedLightLineFocus,
-      '--color-read-anything-line-focus-sepia-dark': expectedDarkLineFocus,
+      '--color-read-anything-line-focus-low-contrast-light':
+          expectedLightLineFocus,
+      '--color-read-anything-line-focus-low-contrast-dark':
+          expectedDarkLineFocus,
       '--color-text-selection-background': expectedDefaultSelectionBackground,
       '--color-read-anything-current-read-aloud-highlight-yellow':
           expectedYellowCurrentHighlight,
@@ -387,12 +451,10 @@ suite('AppStyleUpdater', () => {
           expectedDarkCurrentHighlight,
       '--color-read-anything-current-read-aloud-highlight-high-contrast':
           expectedHighContrastCurrentHighlight,
-      '--color-read-anything-current-read-aloud-highlight-low-contrast':
-          expectedLowContrastCurrentHighlight,
-      '--color-read-anything-current-read-aloud-highlight-sepia-light':
-          expectedSepiaLightCurrentHighlight,
-      '--color-read-anything-current-read-aloud-highlight-sepia-dark':
-          expectedSepiaDarkCurrentHighlight,
+      '--color-read-anything-current-read-aloud-highlight-low-contrast-light':
+          expectedLowContrastLightCurrentHighlight,
+      '--color-read-anything-current-read-aloud-highlight-low-contrast-dark':
+          expectedLowContrastDarkCurrentHighlight,
       '--color-sys-on-surface-subtle': expectedDefaultPreviousHighlight,
       '--color-read-anything-previous-read-aloud-highlight-yellow':
           expectedYellowPreviousHighlight,
@@ -400,12 +462,10 @@ suite('AppStyleUpdater', () => {
           expectedDarkPreviousHighlight,
       '--color-read-anything-previous-read-aloud-highlight-high-contrast':
           expectedHighContrastPreviousHighlight,
-      '--color-read-anything-previous-read-aloud-highlight-low-contrast':
-          expectedLowContrastPreviousHighlight,
-      '--color-read-anything-previous-read-aloud-highlight-sepia-light':
-          expectedSepiaLightPreviousHighlight,
-      '--color-read-anything-previous-read-aloud-highlight-sepia-dark':
-          expectedSepiaDarkPreviousHighlight,
+      '--color-read-anything-previous-read-aloud-highlight-low-contrast-light':
+          expectedLowContrastLightPreviousHighlight,
+      '--color-read-anything-previous-read-aloud-highlight-low-contrast-dark':
+          expectedLowContrastDarkPreviousHighlight,
       '--color-side-panel-card-secondary-foreground': expectedDefaultEmptyBody,
       '--google-grey-700': expectedYellowEmptyBody,
       '--google-grey-500': expectedDarkEmptyBody,
@@ -414,21 +474,20 @@ suite('AppStyleUpdater', () => {
       '--color-read-anything-link-default-dark': expectedDarkLink,
       '--color-read-anything-link-default-high-contrast':
           expectedHighContrastLink,
-      '--color-read-anything-link-default-low-contrast':
-          expectedLowContrastLink,
-      '--color-read-anything-link-default-sepia-light': expectedSepiaLightLink,
-      '--color-read-anything-link-default-sepia-dark': expectedSepiaDarkLink,
+      '--color-read-anything-link-default-low-contrast-light':
+          expectedLowContrastLightLink,
+      '--color-read-anything-link-default-low-contrast-dark':
+          expectedLowContrastDarkLink,
       '--color-read-anything-link-visited': expectedDefaultLinkVisited,
       '--color-read-anything-link-visited-yellow': expectedYellowLinkVisited,
       '--color-read-anything-link-visited-dark': expectedDarkLinkVisited,
       '--color-read-anything-link-visited-high-contrast':
           expectedHighContrastLinkVisited,
-      '--color-read-anything-link-visited-low-contrast':
-          expectedLowContrastLinkVisited,
-      '--color-read-anything-link-visited-sepia-light':
-          expectedSepiaLightLinkVisited,
-      '--color-read-anything-link-visited-sepia-dark':
-          expectedSepiaDarkLinkVisited,
+      '--color-read-anything-link-visited-low-contrast-light':
+          expectedLowContrastLightLinkVisited,
+      '--color-read-anything-link-visited-low-contrast-dark':
+          expectedLowContrastDarkLinkVisited,
+      '--line-focus-bg': expectedLightLineFocus,
     });
     chrome.readingMode.onHighlightGranularityChanged(
         chrome.readingMode.autoHighlighting);
@@ -523,77 +582,445 @@ suite('AppStyleUpdater', () => {
         expectedHighContrastLinkVisited, computeStyle('--visited-link-color'));
     assertEquals(expectedDarkLineFocus, computeStyle('--line-focus-bg'));
 
-    // Verify low contrast theme colors.
-    updateStyles({'--google-grey-700': expectedLowContrastEmptyBody});
-    chrome.readingMode.colorTheme = chrome.readingMode.lowContrastTheme;
-    updater.setTheme();
-    assertStringContains(
-        computeStyle('background'), expectedLowContrastBackground);
-    assertStringContains(computeStyle('color'), expectedLowContrastForeground);
-    assertEquals(
-        expectedLowContrastCurrentHighlight,
-        computeStyle('--current-highlight-bg-color'));
-    assertEquals(
-        expectedLowContrastPreviousHighlight,
-        computeStyle('--previous-highlight-color'));
-    assertEquals(
-        expectedLowContrastForeground,
-        computeStyle('--sp-empty-state-heading-color'));
-    assertEquals(
-        expectedLowContrastEmptyBody,
-        computeStyle('--sp-empty-state-body-color'));
-    assertEquals(expectedLowContrastLink, computeStyle('--link-color'));
-    assertEquals(
-        expectedLowContrastLinkVisited, computeStyle('--visited-link-color'));
-    assertEquals(expectedDarkLineFocus, computeStyle('--line-focus-bg'));
 
-    // Verify sepia light theme colors.
-    updateStyles({'--google-grey-700': expectedSepiaLightEmptyBody});
-    chrome.readingMode.colorTheme = chrome.readingMode.sepiaLightTheme;
+    // Verify lowContrast light theme colors.
+    updateStyles({'--google-grey-700': expectedLowContrastLightEmptyBody});
+    chrome.readingMode.colorTheme = chrome.readingMode.lowContrastLightTheme;
     updater.setTheme();
     assertStringContains(
-        computeStyle('background'), expectedSepiaLightBackground);
-    assertStringContains(computeStyle('color'), expectedSepiaLightForeground);
+        computeStyle('background'), expectedLowContrastLightBackground);
+    assertStringContains(
+        computeStyle('color'), expectedLowContrastLightForeground);
     assertEquals(
-        expectedSepiaLightCurrentHighlight,
+        expectedLowContrastLightCurrentHighlight,
         computeStyle('--current-highlight-bg-color'));
     assertEquals(
-        expectedSepiaLightPreviousHighlight,
+        expectedLowContrastLightPreviousHighlight,
         computeStyle('--previous-highlight-color'));
     assertEquals(
-        expectedSepiaLightForeground,
+        expectedLowContrastLightForeground,
         computeStyle('--sp-empty-state-heading-color'));
     assertEquals(
-        expectedSepiaLightEmptyBody,
+        expectedLowContrastLightEmptyBody,
         computeStyle('--sp-empty-state-body-color'));
-    assertEquals(expectedSepiaLightLink, computeStyle('--link-color'));
+    assertEquals(expectedLowContrastLightLink, computeStyle('--link-color'));
     assertEquals(
-        expectedSepiaLightLinkVisited, computeStyle('--visited-link-color'));
+        expectedLowContrastLightLinkVisited,
+        computeStyle('--visited-link-color'));
     assertEquals(expectedLightLineFocus, computeStyle('--line-focus-bg'));
 
-    // Verify sepia dark theme colors.
-    updateStyles({'--google-grey-700': expectedSepiaDarkEmptyBody});
-    chrome.readingMode.colorTheme = chrome.readingMode.sepiaDarkTheme;
+    // Verify lowContrast dark theme colors.
+    updateStyles({'--google-grey-700': expectedLowContrastDarkEmptyBody});
+    chrome.readingMode.colorTheme = chrome.readingMode.lowContrastDarkTheme;
     updater.setTheme();
     assertStringContains(
-        computeStyle('background'), expectedSepiaDarkBackground);
-    assertStringContains(computeStyle('color'), expectedSepiaDarkForeground);
+        computeStyle('background'), expectedLowContrastDarkBackground);
+    assertStringContains(
+        computeStyle('color'), expectedLowContrastDarkForeground);
     assertEquals(
-        expectedSepiaDarkCurrentHighlight,
+        expectedLowContrastDarkCurrentHighlight,
         computeStyle('--current-highlight-bg-color'));
     assertEquals(
-        expectedSepiaDarkPreviousHighlight,
+        expectedLowContrastDarkPreviousHighlight,
         computeStyle('--previous-highlight-color'));
     assertEquals(
-        expectedSepiaDarkForeground,
+        expectedLowContrastDarkForeground,
         computeStyle('--sp-empty-state-heading-color'));
     assertEquals(
-        expectedSepiaDarkEmptyBody,
+        expectedLowContrastDarkEmptyBody,
         computeStyle('--sp-empty-state-body-color'));
-    assertEquals(expectedSepiaDarkLink, computeStyle('--link-color'));
+    assertEquals(expectedLowContrastDarkLink, computeStyle('--link-color'));
     assertEquals(
-        expectedSepiaDarkLinkVisited, computeStyle('--visited-link-color'));
+        expectedLowContrastDarkLinkVisited,
+        computeStyle('--visited-link-color'));
     assertEquals(expectedDarkLineFocus, computeStyle('--line-focus-bg'));
+  });
+
+  test('audio player colors change with theme', () => {
+    const expectedDefaultBg = 'rgb(1, 1, 1)';
+    const expectedDefaultIcon = 'rgb(2, 2, 2)';
+    const expectedLightBg = 'rgb(3, 3, 3)';
+    const expectedLightIcon = 'rgb(4, 4, 4)';
+    const expectedDarkBg = 'rgb(5, 5, 5)';
+    const expectedDarkIcon = 'rgb(6, 6, 6)';
+    const expectedYellowBg = 'rgb(7, 7, 7)';
+    const expectedYellowIcon = 'rgb(8, 8, 8)';
+    const expectedBlueBg = 'rgb(9, 9, 9)';
+    const expectedBlueIcon = 'rgb(10, 10, 10)';
+    const expectedHighContrastBg = 'rgb(11, 11, 11)';
+    const expectedHighContrastIcon = 'rgb(12, 12, 12)';
+    const expectedLowContrastLightBg = 'rgb(15, 15, 15)';
+    const expectedLowContrastLightIcon = 'rgb(16, 16, 16)';
+    const expectedLowContrastDarkBg = 'rgb(17, 17, 17)';
+    const expectedLowContrastDarkIcon = 'rgb(18, 18, 18)';
+    const expectedDefaultControlsIcon = 'rgb(19, 19, 19)';
+    const expectedLightControlsIcon = 'rgb(20, 20, 20)';
+    const expectedDarkControlsIcon = 'rgb(21, 21, 21)';
+    const expectedYellowControlsIcon = 'rgb(22, 22, 22)';
+    const expectedBlueControlsIcon = 'rgb(23, 23, 23)';
+    const expectedHighContrastControlsIcon = 'rgb(24, 24, 24)';
+    const expectedLowContrastLightControlsIcon = 'rgb(26, 26, 26)';
+    const expectedLowContrastDarkControlsIcon = 'rgb(27, 27, 27)';
+    updateStyles({
+      '--color-read-anything-audio-player-background': expectedDefaultBg,
+      '--color-read-anything-audio-player-icon': expectedDefaultIcon,
+      '--color-read-anything-audio-player-background-light': expectedLightBg,
+      '--color-read-anything-audio-player-icon-light': expectedLightIcon,
+      '--color-read-anything-audio-player-background-dark': expectedDarkBg,
+      '--color-read-anything-audio-player-icon-dark': expectedDarkIcon,
+      '--color-read-anything-audio-player-background-yellow': expectedYellowBg,
+      '--color-read-anything-audio-player-icon-yellow': expectedYellowIcon,
+      '--color-read-anything-audio-player-background-blue': expectedBlueBg,
+      '--color-read-anything-audio-player-icon-blue': expectedBlueIcon,
+      '--color-read-anything-audio-player-background-high-contrast':
+          expectedHighContrastBg,
+      '--color-read-anything-audio-player-icon-high-contrast':
+          expectedHighContrastIcon,
+      '--color-read-anything-audio-player-background-low-contrast-light':
+          expectedLowContrastLightBg,
+      '--color-read-anything-audio-player-icon-low-contrast-light':
+          expectedLowContrastLightIcon,
+      '--color-read-anything-audio-player-background-low-contrast-dark':
+          expectedLowContrastDarkBg,
+      '--color-read-anything-audio-player-icon-low-contrast-dark':
+          expectedLowContrastDarkIcon,
+      '--color-read-anything-audio-controls-icon': expectedDefaultControlsIcon,
+      '--color-read-anything-audio-controls-icon-light':
+          expectedLightControlsIcon,
+      '--color-read-anything-audio-controls-icon-dark':
+          expectedDarkControlsIcon,
+      '--color-read-anything-audio-controls-icon-yellow':
+          expectedYellowControlsIcon,
+      '--color-read-anything-audio-controls-icon-blue':
+          expectedBlueControlsIcon,
+      '--color-read-anything-audio-controls-icon-high-contrast':
+          expectedHighContrastControlsIcon,
+      '--color-read-anything-audio-controls-icon-low-contrast-light':
+          expectedLowContrastLightControlsIcon,
+      '--color-read-anything-audio-controls-icon-low-contrast-dark':
+          expectedLowContrastDarkControlsIcon,
+    });
+
+    // Default theme
+    chrome.readingMode.colorTheme = chrome.readingMode.defaultTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedDefaultBg, computeStyle('--audio-player-background-color'));
+    assertEquals(
+        expectedDefaultIcon, computeStyle('--audio-player-icon-color'));
+    assertEquals(
+        expectedDefaultControlsIcon,
+        computeStyle('--audio-controls-icon-color'));
+
+    // Light theme
+    chrome.readingMode.colorTheme = chrome.readingMode.lightTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedLightBg, computeStyle('--audio-player-background-color'));
+    assertEquals(expectedLightIcon, computeStyle('--audio-player-icon-color'));
+    assertEquals(
+        expectedLightControlsIcon, computeStyle('--audio-controls-icon-color'));
+
+    // Dark theme
+    chrome.readingMode.colorTheme = chrome.readingMode.darkTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedDarkBg, computeStyle('--audio-player-background-color'));
+    assertEquals(expectedDarkIcon, computeStyle('--audio-player-icon-color'));
+    assertEquals(
+        expectedDarkControlsIcon, computeStyle('--audio-controls-icon-color'));
+
+    // Yellow theme
+    chrome.readingMode.colorTheme = chrome.readingMode.yellowTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedYellowBg, computeStyle('--audio-player-background-color'));
+    assertEquals(expectedYellowIcon, computeStyle('--audio-player-icon-color'));
+    assertEquals(
+        expectedYellowControlsIcon,
+        computeStyle('--audio-controls-icon-color'));
+
+    // Blue theme
+    chrome.readingMode.colorTheme = chrome.readingMode.blueTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedBlueBg, computeStyle('--audio-player-background-color'));
+    assertEquals(expectedBlueIcon, computeStyle('--audio-player-icon-color'));
+    assertEquals(
+        expectedBlueControlsIcon, computeStyle('--audio-controls-icon-color'));
+
+    // High contrast theme
+    chrome.readingMode.colorTheme = chrome.readingMode.highContrastTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedHighContrastBg,
+        computeStyle('--audio-player-background-color'));
+    assertEquals(
+        expectedHighContrastIcon, computeStyle('--audio-player-icon-color'));
+    assertEquals(
+        expectedHighContrastControlsIcon,
+        computeStyle('--audio-controls-icon-color'));
+
+
+    // LowContrast light theme
+    chrome.readingMode.colorTheme = chrome.readingMode.lowContrastLightTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedLowContrastLightBg,
+        computeStyle('--audio-player-background-color'));
+    assertEquals(
+        expectedLowContrastLightIcon,
+        computeStyle('--audio-player-icon-color'));
+    assertEquals(
+        expectedLowContrastLightControlsIcon,
+        computeStyle('--audio-controls-icon-color'));
+
+    // LowContrast dark theme
+    chrome.readingMode.colorTheme = chrome.readingMode.lowContrastDarkTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedLowContrastDarkBg,
+        computeStyle('--audio-player-background-color'));
+    assertEquals(
+        expectedLowContrastDarkIcon, computeStyle('--audio-player-icon-color'));
+    assertEquals(
+        expectedLowContrastDarkControlsIcon,
+        computeStyle('--audio-controls-icon-color'));
+  });
+
+  test('toolbar icon colors change with theme', () => {
+    const expectedDefaultToolbarIcon = 'rgb(1, 1, 1)';
+    const expectedLightToolbarIcon = 'rgb(2, 2, 2)';
+    const expectedDarkToolbarIcon = 'rgb(3, 3, 3)';
+    const expectedYellowToolbarIcon = 'rgb(4, 4, 4)';
+    const expectedBlueToolbarIcon = 'rgb(5, 5, 5)';
+    const expectedHighContrastToolbarIcon = 'rgb(6, 6, 6)';
+    const expectedLowContrastLightToolbarIcon = 'rgb(8, 8, 8)';
+    const expectedLowContrastDarkToolbarIcon = 'rgb(9, 9, 9)';
+    updateStyles({
+      '--color-read-anything-toolbar-icon': expectedDefaultToolbarIcon,
+      '--color-read-anything-toolbar-icon-light': expectedLightToolbarIcon,
+      '--color-read-anything-toolbar-icon-dark': expectedDarkToolbarIcon,
+      '--color-read-anything-toolbar-icon-yellow': expectedYellowToolbarIcon,
+      '--color-read-anything-toolbar-icon-blue': expectedBlueToolbarIcon,
+      '--color-read-anything-toolbar-icon-high-contrast':
+          expectedHighContrastToolbarIcon,
+      '--color-read-anything-toolbar-icon-low-contrast-light':
+          expectedLowContrastLightToolbarIcon,
+      '--color-read-anything-toolbar-icon-low-contrast-dark':
+          expectedLowContrastDarkToolbarIcon,
+    });
+
+    // Default theme
+    chrome.readingMode.colorTheme = chrome.readingMode.defaultTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedDefaultToolbarIcon, computeStyle('--toolbar-icon-color'));
+
+    // Light theme
+    chrome.readingMode.colorTheme = chrome.readingMode.lightTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedLightToolbarIcon, computeStyle('--toolbar-icon-color'));
+
+    // Dark theme
+    chrome.readingMode.colorTheme = chrome.readingMode.darkTheme;
+    updater.setTheme();
+    assertEquals(expectedDarkToolbarIcon, computeStyle('--toolbar-icon-color'));
+
+    // Yellow theme
+    chrome.readingMode.colorTheme = chrome.readingMode.yellowTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedYellowToolbarIcon, computeStyle('--toolbar-icon-color'));
+
+    // Blue theme
+    chrome.readingMode.colorTheme = chrome.readingMode.blueTheme;
+    updater.setTheme();
+    assertEquals(expectedBlueToolbarIcon, computeStyle('--toolbar-icon-color'));
+
+    // High contrast theme
+    chrome.readingMode.colorTheme = chrome.readingMode.highContrastTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedHighContrastToolbarIcon, computeStyle('--toolbar-icon-color'));
+
+    // LowContrast light theme
+    chrome.readingMode.colorTheme = chrome.readingMode.lowContrastLightTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedLowContrastLightToolbarIcon,
+        computeStyle('--toolbar-icon-color'));
+
+    // LowContrast dark theme
+    chrome.readingMode.colorTheme = chrome.readingMode.lowContrastDarkTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedLowContrastDarkToolbarIcon,
+        computeStyle('--toolbar-icon-color'));
+  });
+
+  test(
+      'setTheme does not update toolbar icon color if line focus is enabled ' +
+          'and a visible window',
+      () => {
+        chrome.readingMode.isLineFocusEnabled = true;
+        app.style.setProperty('--line-focus-display', 'block');
+        app.style.setProperty('--line-focus-bg', 'none');
+        const initialColor = 'rgb(255, 0, 0)';
+        app.style.setProperty('--toolbar-icon-color', initialColor);
+
+        chrome.readingMode.colorTheme = chrome.readingMode.darkTheme;
+        updater.setTheme();
+
+        assertEquals(initialColor, computeStyle('--toolbar-icon-color'));
+      });
+
+  test(
+      'setTheme updates toolbar icon color if line focus is enabled but ' +
+          'display is none',
+      () => {
+        chrome.readingMode.isLineFocusEnabled = true;
+        app.style.setProperty('--line-focus-display', 'none');
+        app.style.setProperty('--line-focus-bg', 'none');
+        const initialColor = 'rgb(255, 0, 0)';
+        app.style.setProperty('--toolbar-icon-color', initialColor);
+        const expectedDarkToolbarIcon = 'rgb(3, 3, 3)';
+        updateStyles({
+          '--color-read-anything-toolbar-icon-dark': expectedDarkToolbarIcon,
+        });
+
+        chrome.readingMode.colorTheme = chrome.readingMode.darkTheme;
+        updater.setTheme();
+
+        assertEquals(
+            expectedDarkToolbarIcon, computeStyle('--toolbar-icon-color'));
+      });
+
+  test(
+      'setTheme updates toolbar icon color if line focus is enabled and a ' +
+          'a visible line',
+      () => {
+        chrome.readingMode.isLineFocusEnabled = true;
+        app.style.setProperty('--line-focus-display', 'none');
+        app.style.setProperty(
+            '--line-focus-bg', 'var(--color-read-anything-line-focus-dark)');
+        const initialColor = 'rgb(255, 0, 0)';
+        app.style.setProperty('--toolbar-icon-color', initialColor);
+        const expectedDarkToolbarIcon = 'rgb(3, 3, 3)';
+        updateStyles({
+          '--color-read-anything-toolbar-icon-dark': expectedDarkToolbarIcon,
+        });
+
+        chrome.readingMode.colorTheme = chrome.readingMode.darkTheme;
+        updater.setTheme();
+
+        assertEquals(
+            expectedDarkToolbarIcon, computeStyle('--toolbar-icon-color'));
+      });
+
+  test('on player focus outline colors change with theme', () => {
+    const expectedDefault = 'rgb(1, 1, 1)';
+    const expectedLight = 'rgb(2, 2, 2)';
+    const expectedDark = 'rgb(3, 3, 3)';
+    const expectedYellow = 'rgb(4, 4, 4)';
+    const expectedBlue = 'rgb(5, 5, 5)';
+    const expectedHighContrast = 'rgb(6, 6, 6)';
+    const expectedLowContrastLight = 'rgb(8, 8, 8)';
+    const expectedLowContrastDark = 'rgb(9, 9, 9)';
+    updateStyles({
+      '--color-read-anything-on-audio-player-focus-outline': expectedDefault,
+      '--color-read-anything-on-audio-player-focus-outline-light':
+          expectedLight,
+      '--color-read-anything-on-audio-player-focus-outline-dark': expectedDark,
+      '--color-read-anything-on-audio-player-focus-outline-yellow':
+          expectedYellow,
+      '--color-read-anything-on-audio-player-focus-outline-blue': expectedBlue,
+      '--color-read-anything-on-audio-player-focus-outline-high-contrast':
+          expectedHighContrast,
+      '--color-read-anything-on-audio-player-focus-outline-low-contrast-light':
+          expectedLowContrastLight,
+      '--color-read-anything-on-audio-player-focus-outline-low-contrast-dark':
+          expectedLowContrastDark,
+    });
+
+    // Default theme
+    chrome.readingMode.colorTheme = chrome.readingMode.defaultTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedDefault, computeStyle('--on-audio-player-focus-outline-color'));
+
+    // Light theme
+    chrome.readingMode.colorTheme = chrome.readingMode.lightTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedLight, computeStyle('--on-audio-player-focus-outline-color'));
+
+    // Dark theme
+    chrome.readingMode.colorTheme = chrome.readingMode.darkTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedDark, computeStyle('--on-audio-player-focus-outline-color'));
+
+    // Yellow theme
+    chrome.readingMode.colorTheme = chrome.readingMode.yellowTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedYellow, computeStyle('--on-audio-player-focus-outline-color'));
+
+    // Blue theme
+    chrome.readingMode.colorTheme = chrome.readingMode.blueTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedBlue, computeStyle('--on-audio-player-focus-outline-color'));
+
+    // High contrast theme
+    chrome.readingMode.colorTheme = chrome.readingMode.highContrastTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedHighContrast,
+        computeStyle('--on-audio-player-focus-outline-color'));
+
+    // LowContrast light theme
+    chrome.readingMode.colorTheme = chrome.readingMode.lowContrastLightTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedLowContrastLight,
+        computeStyle('--on-audio-player-focus-outline-color'));
+
+    // LowContrast dark theme
+    chrome.readingMode.colorTheme = chrome.readingMode.lowContrastDarkTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedLowContrastDark,
+        computeStyle('--on-audio-player-focus-outline-color'));
+  });
+
+  test('setTheme with line focus window does not update color', () => {
+    const lineFocusColor = 'rgb(50, 21, 0)';
+    const expectedLineFocusBg = 'none';
+    updateStyles({
+      '--color-read-anything-line-focus': lineFocusColor,
+      '--color-read-anything-line-focus-yellow': lineFocusColor,
+      '--color-read-anything-line-focus-dark': lineFocusColor,
+      '--color-read-anything-line-focus-light': lineFocusColor,
+      '--color-read-anything-line-focus-high-contrast': lineFocusColor,
+      '--color-read-anything-line-focus-low-contrast-light': lineFocusColor,
+      '--color-read-anything-line-focus-low-contrast-dark': lineFocusColor,
+      '--line-focus-bg': expectedLineFocusBg,
+    });
+
+    chrome.readingMode.colorTheme = chrome.readingMode.lowContrastDarkTheme;
+    updater.setTheme();
+    assertEquals(expectedLineFocusBg, computeStyle('--line-focus-bg'));
+
+    chrome.readingMode.colorTheme = chrome.readingMode.blueTheme;
+    updater.setTheme();
+    assertEquals(expectedLineFocusBg, computeStyle('--line-focus-bg'));
+
+    chrome.readingMode.colorTheme = chrome.readingMode.defaultTheme;
+    updater.setTheme();
+    assertEquals(expectedLineFocusBg, computeStyle('--line-focus-bg'));
   });
 
   test('setAllTextStyles updates all text styles', () => {
@@ -629,7 +1056,7 @@ suite('AppStyleUpdater', () => {
     updater.setAllTextStyles();
 
     assertEquals('20px', computeStyle('font-size'));
-    assertEquals('80px', computeStyle('line-height'));
+    assertEquals('100px', computeStyle('line-height'));
     assertEquals('60px', computeStyle('letter-spacing'));
     assertStringContains(
         computeStyle('font-family'), chrome.readingMode.fontName);
@@ -648,5 +1075,80 @@ suite('AppStyleUpdater', () => {
     assertEquals(expectedBlueLink, computeStyle('--link-color'));
     assertEquals(expectedBlueLinkVisited, computeStyle('--visited-link-color'));
     assertEquals(expectedBlueLineFocus, computeStyle('--line-focus-bg'));
+  });
+
+  test('scrollbar color changes with theme', () => {
+    const expectedLightFullPageScrollbar = 'rgb(1, 1, 1)';
+    const expectedDarkFullPageScrollbar = 'rgb(2, 2, 2)';
+    const expectedYellowFullPageScrollbar = 'rgb(3, 3, 3)';
+    const expectedBlueFullPageScrollbar = 'rgb(4, 4, 4)';
+    const expectedHighContrastFullPageScrollbar = 'rgb(5, 5, 5)';
+    const expectedLowContrastLightFullPageScrollbar = 'rgb(6, 6, 6)';
+    const expectedLowContrastDarkFullPageScrollbar = 'rgb(7, 7, 7)';
+    updateStyles({
+      '--color-read-anything-full-page-scrollbar-light':
+          expectedLightFullPageScrollbar,
+      '--color-read-anything-full-page-scrollbar-dark':
+          expectedDarkFullPageScrollbar,
+      '--color-read-anything-full-page-scrollbar-yellow':
+          expectedYellowFullPageScrollbar,
+      '--color-read-anything-full-page-scrollbar-blue':
+          expectedBlueFullPageScrollbar,
+      '--color-read-anything-full-page-scrollbar-high-contrast':
+          expectedHighContrastFullPageScrollbar,
+      '--color-read-anything-full-page-scrollbar-low-contrast-light':
+          expectedLowContrastLightFullPageScrollbar,
+      '--color-read-anything-full-page-scrollbar-low-contrast-dark':
+          expectedLowContrastDarkFullPageScrollbar,
+    });
+
+    // Light theme
+    chrome.readingMode.colorTheme = chrome.readingMode.lightTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedLightFullPageScrollbar,
+        computeStyle('--color-read-anything-full-page-scrollbar'));
+
+    // Dark theme
+    chrome.readingMode.colorTheme = chrome.readingMode.darkTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedDarkFullPageScrollbar,
+        computeStyle('--color-read-anything-full-page-scrollbar'));
+
+    // Yellow theme
+    chrome.readingMode.colorTheme = chrome.readingMode.yellowTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedYellowFullPageScrollbar,
+        computeStyle('--color-read-anything-full-page-scrollbar'));
+
+    // Blue theme
+    chrome.readingMode.colorTheme = chrome.readingMode.blueTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedBlueFullPageScrollbar,
+        computeStyle('--color-read-anything-full-page-scrollbar'));
+
+    // High contrast theme
+    chrome.readingMode.colorTheme = chrome.readingMode.highContrastTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedHighContrastFullPageScrollbar,
+        computeStyle('--color-read-anything-full-page-scrollbar'));
+
+    // LowContrast light theme
+    chrome.readingMode.colorTheme = chrome.readingMode.lowContrastLightTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedLowContrastLightFullPageScrollbar,
+        computeStyle('--color-read-anything-full-page-scrollbar'));
+
+    // LowContrast dark theme
+    chrome.readingMode.colorTheme = chrome.readingMode.lowContrastDarkTheme;
+    updater.setTheme();
+    assertEquals(
+        expectedLowContrastDarkFullPageScrollbar,
+        computeStyle('--color-read-anything-full-page-scrollbar'));
   });
 });

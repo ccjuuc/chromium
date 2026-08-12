@@ -8,6 +8,7 @@
 #include <jni.h>
 
 // IWYU pragma: begin_exports
+#include "third_party/jni_zero/common_apis.h"
 #include "third_party/jni_zero/java_refs.h"
 #include "third_party/jni_zero/jni_export.h"
 #include "third_party/jni_zero/jni_methods.h"
@@ -16,10 +17,13 @@
 #include "third_party/jni_zero/type_conversions.h"
 // IWYU pragma: end_exports
 
+#define DEFINE_JNI(className) DEFINE_JNI_FOR_##className()
+
 namespace jni_zero {
 
 
 // Commonly needed jclasses:
+extern JNI_ZERO_COMPONENT_BUILD_EXPORT jclass g_class_loader_class;
 extern JNI_ZERO_COMPONENT_BUILD_EXPORT jclass g_object_class;
 extern JNI_ZERO_COMPONENT_BUILD_EXPORT jclass g_string_class;
 // Singletons for empty things.
@@ -28,9 +32,6 @@ extern JNI_ZERO_COMPONENT_BUILD_EXPORT LeakedJavaGlobalRef<jstring>
 extern JNI_ZERO_COMPONENT_BUILD_EXPORT LeakedJavaGlobalRef<jobject>
     g_empty_list;
 extern JNI_ZERO_COMPONENT_BUILD_EXPORT LeakedJavaGlobalRef<jobject> g_empty_map;
-
-// _SEE_JNI_ZERO_README is added as a hint for -Wunused-macros messages.
-#define DEFINE_JNI(className) DEFINE_JNI_FOR_##className##_SEE_JNI_ZERO_README()
 
 }  // namespace jni_zero
 

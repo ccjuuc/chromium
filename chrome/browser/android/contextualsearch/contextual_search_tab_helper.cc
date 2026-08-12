@@ -21,12 +21,8 @@ using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 using contextual_search::UnhandledTapWebContentsObserver;
 
-ContextualSearchTabHelper::ContextualSearchTabHelper(
-    JNIEnv* env,
-    const jni_zero::JavaRef<jobject>& obj,
-    Profile* profile)
-    : weak_java_ref_(env, obj),
-      pref_change_registrar_(new PrefChangeRegistrar()) {
+ContextualSearchTabHelper::ContextualSearchTabHelper(Profile* profile)
+    : pref_change_registrar_(new PrefChangeRegistrar()) {
   pref_change_registrar_->Init(profile->GetPrefs());
   pref_change_registrar_->Add(
       prefs::kContextualSearchEnabled,
@@ -46,22 +42,21 @@ ContextualSearchTabHelper::~ContextualSearchTabHelper() {
 
 void ContextualSearchTabHelper::OnContextualSearchPrefChanged() {
   JNIEnv* env = base::android::AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> jobj = weak_java_ref_.get(env);
-  Java_ContextualSearchTabHelper_onContextualSearchPrefChanged(env, jobj);
+  Java_ContextualSearchTabHelper_onContextualSearchPrefChanged(
+      env, GetJavaObject(env));
 }
 
 void ContextualSearchTabHelper::OnShowUnhandledTapUIIfNeeded(int x_px,
                                                              int y_px) {
   JNIEnv* env = base::android::AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> jobj = weak_java_ref_.get(env);
-  Java_ContextualSearchTabHelper_onShowUnhandledTapUiIfNeeded(env, jobj, x_px,
-                                                              y_px);
+  Java_ContextualSearchTabHelper_onShowUnhandledTapUiIfNeeded(
+      env, GetJavaObject(env), x_px, y_px);
 }
 
 void ContextualSearchTabHelper::InstallUnhandledTapNotifierIfNeeded(
     JNIEnv* env,
     const JavaRef<jobject>& j_base_web_contents,
-    jfloat device_scale_factor) {
+    float device_scale_factor) {
   DCHECK(j_base_web_contents);
   content::WebContents* base_web_contents =
       content::WebContents::FromJavaWebContents(j_base_web_contents);
@@ -88,13 +83,18 @@ void ContextualSearchTabHelper::Destroy(JNIEnv* env) {
   delete this;
 }
 
-static jlong JNI_ContextualSearchTabHelper_Init(JNIEnv* env,
-                                                const JavaRef<jobject>& obj,
-                                                Profile* profile) {
+ScopedJavaLocalRef<jobject> ContextualSearchTabHelper::GetJavaObject(
+    JNIEnv* env) const {
+  return Java_ContextualSearchTabHelper_getJavaObject(
+      env, reinterpret_cast<intptr_t>(this));
+}
+
+static int64_t JNI_ContextualSearchTabHelper_Init(JNIEnv* env,
+                                                  Profile* profile) {
   CHECK(profile);
-  ContextualSearchTabHelper* tab = new ContextualSearchTabHelper(
-      env, obj, profile);
-  return reinterpret_cast<intptr_t>(tab);
+  ContextualSearchTabHelper* helper =
+      new ContextualSearchTabHelper(profile);
+  return reinterpret_cast<intptr_t>(helper);
 }
 
 DEFINE_JNI(ContextualSearchTabHelper)

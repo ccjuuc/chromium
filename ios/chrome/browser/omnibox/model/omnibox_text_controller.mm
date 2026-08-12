@@ -14,9 +14,9 @@
 #import "base/strings/sys_string_conversions.h"
 #import "components/omnibox/browser/autocomplete_classifier.h"
 #import "components/omnibox/browser/autocomplete_controller.h"
-#import "components/omnibox/browser/omnibox_client.h"
 #import "components/omnibox/browser/omnibox_text_util.h"
 #import "ios/chrome/browser/omnibox/model/omnibox_autocomplete_controller.h"
+#import "ios/chrome/browser/omnibox/model/omnibox_client_ios.h"
 #import "ios/chrome/browser/omnibox/model/omnibox_text_controller_delegate.h"
 #import "ios/chrome/browser/omnibox/model/omnibox_text_model.h"
 #import "ios/chrome/browser/omnibox/model/suggestions/autocomplete_suggestion.h"
@@ -38,7 +38,7 @@ const char kOmniboxFocusResultedInNavigation[] =
 
 @implementation OmniboxTextController {
   /// Client of the omnibox.
-  raw_ptr<OmniboxClient, DanglingUntriaged> _omniboxClient;
+  raw_ptr<OmniboxClientIOS, DanglingUntriaged> _omniboxClient;
   /// Whether the popup was scrolled during this omnibox interaction.
   BOOL _suggestionsListScrolled;
   /// The omnbibox text model, holding the text state.
@@ -55,7 +55,7 @@ const char kOmniboxFocusResultedInNavigation[] =
   NSRange _oldSelection;
 }
 
-- (instancetype)initWithOmniboxClient:(OmniboxClient*)omniboxClient
+- (instancetype)initWithOmniboxClient:(OmniboxClientIOS*)omniboxClient
                      omniboxTextModel:(OmniboxTextModel*)omniboxTextModel
                   presentationContext:
                       (OmniboxPresentationContext)presentationContext {
@@ -96,6 +96,10 @@ const char kOmniboxFocusResultedInNavigation[] =
   return [self.textInput.view isFirstResponder];
 }
 
+- (BOOL)hasFocus {
+  return _omniboxTextModel && _omniboxTextModel->HasFocus();
+}
+
 - (void)focusOmnibox {
   id<OmniboxTextInput> textInput = self.textInput;
   if ([self isOmniboxFirstResponder]) {
@@ -113,6 +117,16 @@ const char kOmniboxFocusResultedInNavigation[] =
   }
 
   [textInput.view becomeFirstResponder];
+
+  if ((_presentationContext == OmniboxPresentationContext::kComposebox ||
+       _presentationContext == OmniboxPresentationContext::kCobrowse) &&
+      _omniboxTextModel && _omniboxTextModel->user_input_in_progress) {
+    // In composebox, the omnibox is refocused after using the camera
+    // attachment. If user has existing input, set the caret to the end of the
+    // text. Otherwise, skip setting the caret position crbug.com/475977756.
+    [self setCaretPos:textInput.text.length];
+  }
+
   // Ensures that the accessibility system focuses the text input instead of
   // the popup crbug.com/1469173.
   UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification,
@@ -149,22 +163,21 @@ const char kOmniboxFocusResultedInNavigation[] =
   // Exiting pre edit also shows the selections handle when animating the
   // defocus (crbug.com/458055336).
   BOOL skipExitPreEdit =
-      (IsMultilineBrowserOmniboxEnabled() &&
-       _presentationContext == OmniboxPresentationContext::kLocationBar) ||
-      (IsComposeboxIOSEnabled() &&
-       _presentationContext == OmniboxPresentationContext::kComposebox);
-  ;
+      IsComposeboxIOSEnabled() &&
+      (_presentationContext == OmniboxPresentationContext::kComposebox ||
+       _presentationContext == OmniboxPresentationContext::kCobrowse);
   if (!skipExitPreEdit) {
     [self.textInput exitPreEditState];
   }
 
   // The controller looks at the current pre-edit state, so the call to
   // OnKillFocus() must come after exiting pre-edit.
-  [self.focusDelegate omniboxDidResignFirstResponder];
+  [self.focusDelegate omniboxDidEndEditing];
 
   // Composebox is destroyed on endEditing, skip revert to avoid resizing on
   // revert.
-  if (_presentationContext != OmniboxPresentationContext::kComposebox) {
+  if (_presentationContext != OmniboxPresentationContext::kComposebox &&
+      _presentationContext != OmniboxPresentationContext::kCobrowse) {
     // Blow away any in-progress edits.
     [self revertAll];
     DCHECK(![self.textInput hasAutocompleteText]);
@@ -327,6 +340,16 @@ const char kOmniboxFocusResultedInNavigation[] =
       _omniboxTextModel->user_input_in_progress ? [self currentMatch:nullptr]
                                                 : AutocompleteMatch();
 
+  // NOTE: Suggestions are currently disabled for Cobrowse. If they are
+  // requested in the future, remove this conditional branch.
+  if (_presentationContext == OmniboxPresentationContext::kCobrowse) {
+    const AutocompleteResult result;
+    _omniboxClient->OnTextChanged(
+        current_match, _omniboxTextModel->user_input_in_progress,
+        _omniboxTextModel->user_text, result, _omniboxTextModel->HasFocus());
+    return;
+  }
+
   if (const AutocompleteResult* result =
           [self.omniboxAutocompleteController autocompleteResult]) {
     _omniboxClient->OnTextChanged(
@@ -384,7 +407,13 @@ const char kOmniboxFocusResultedInNavigation[] =
 
 - (void)removePreEditText {
   if (self.textInput.isPreEditing) {
-    [self.textInput setText:@""];
+    // Use replaceRange:withText: instead of setText:@"" to be more
+    // IME-friendly and avoid breaking active composition when exiting
+    // pre-edit state by typing. crbug.com/507828507
+    UITextRange* allTextRange =
+        [self.textInput textRangeFromPosition:self.textInput.beginningOfDocument
+                                   toPosition:self.textInput.endOfDocument];
+    [self.textInput replaceRange:allTextRange withText:@""];
     [self setUserText:u""];
     [self onTextChanged];
     // Ensure the pre-edit state is exited after the text is cleared, preventing
@@ -511,8 +540,10 @@ const char kOmniboxFocusResultedInNavigation[] =
 
   if (_omniboxTextModel) {
     _omniboxTextModel->OnSetFocus();
-
-    if (_presentationContext == OmniboxPresentationContext::kLensOverlay) {
+    if (_presentationContext == OmniboxPresentationContext::kCobrowse) {
+      [self startAutocompletePreventingInline:YES];
+    } else if (_presentationContext ==
+               OmniboxPresentationContext::kLensOverlay) {
       if (textInput.userText.length) {
         [self setUserText:textInput.userText.cr_UTF16String];
         [self startAutocompletePreventingInline:YES];
@@ -534,6 +565,10 @@ const char kOmniboxFocusResultedInNavigation[] =
     }
   }
 
+  // Don't enter pre-edit if the user has already input text.
+  BOOL userInputInProgress =
+      IsComposeboxIOSEnabled() && _omniboxTextModel->user_input_in_progress;
+
   // If the omnibox is displaying a URL and the popup is not showing, set the
   // input into pre-editing state.  If the omnibox is displaying search terms,
   // leave the default behavior of positioning the cursor at the end of the
@@ -542,16 +577,23 @@ const char kOmniboxFocusResultedInNavigation[] =
   // behavior should not be invoked. When `is_lens_overlay_` is true, the
   // omnibox only display search terms.
   if (!popupOpenBeforeEdit &&
-      _presentationContext != OmniboxPresentationContext::kLensOverlay) {
+      _presentationContext != OmniboxPresentationContext::kLensOverlay &&
+      _presentationContext != OmniboxPresentationContext::kCobrowse &&
+      !userInputInProgress) {
     [textInput enterPreEditState];
   }
 
   // `location_bar_` is only forwarding the call to the BVC. This should only
   // happen when the omnibox is being focused and it starts showing the popup;
   // if the popup was already open, no need to call this.
-  if (!popupOpenBeforeEdit) {
+  if (!popupOpenBeforeEdit ||
+      _presentationContext == OmniboxPresentationContext::kCobrowse) {
     [self.focusDelegate omniboxDidBecomeFirstResponder];
   }
+}
+
+- (void)onDidEndEditing {
+  [self.focusDelegate omniboxDidResignFirstResponder];
 }
 
 - (BOOL)shouldChangeCharactersInRange:(NSRange)range
@@ -562,7 +604,17 @@ const char kOmniboxFocusResultedInNavigation[] =
 
   if ([textInput isPreEditing]) {
     [textInput setClearingPreEditText:YES];
-    [textInput exitPreEditState];
+    if (IsComposeboxIOSEnabled() &&
+        (_presentationContext == OmniboxPresentationContext::kComposebox ||
+         _presentationContext == OmniboxPresentationContext::kCobrowse)) {
+      // Clear pre-edit text manually instead of relying on clearsOnInsertion.
+      // clearsOnInsertion calls selectAll: which can can crash when called on
+      // begin editing (crbug.com/479185287).
+      [self removePreEditText];
+    } else {
+      [textInput exitPreEditState];
+    }
+
     // Reset `range` to be of zero-length at location zero, as the input will be
     // now cleared.
     range = NSMakeRange(0, 0);
@@ -704,7 +756,10 @@ const char kOmniboxFocusResultedInNavigation[] =
       _omniboxAutocompleteController.hasSuggestions
           ? std::optional<AutocompleteMatch>([self currentMatch:nullptr])
           : std::nullopt,
-      _omniboxClient, &URL, &writeURL);
+      _omniboxClient->GetNavigationEntryURL(),
+      _omniboxClient->GetAutocompleteClassifier(),
+      _omniboxClient->GetPageClassification(/*is_prefetch=*/false),
+      _omniboxClient->GetContextualTasksInnerFrameURL(), &URL, &writeURL);
 
   // Create the pasteboard item manually because the pasteboard expects a single
   // item with multiple representations.  This is expressed as a single
@@ -786,13 +841,14 @@ const char kOmniboxFocusResultedInNavigation[] =
 }
 
 - (void)refineWithText:(const std::u16string&)text {
+  std::u16string sanitizedText = omnibox::SanitizeTextForPaste(text);
   id<OmniboxTextInput> textInput = self.textInput;
   // Exit preedit state and append the match. Refocus if necessary.
   [textInput exitPreEditState];
-  [self setUserText:text];
+  [self setUserText:sanitizedText];
 
-  [self setWindowText:text
-               caretPos:text.length()
+  [self setWindowText:sanitizedText
+               caretPos:sanitizedText.length()
       startAutocomplete:true
       notifyTextChanged:true];
 
@@ -802,7 +858,7 @@ const char kOmniboxFocusResultedInNavigation[] =
   [textInput.omniboxTextInputDelegate textInputDidChange:textInput];
   [textInput.view becomeFirstResponder];
   // Set the caret pos to the end of the text (crbug.com/331622199).
-  [self setCaretPos:text.length()];
+  [self setCaretPos:sanitizedText.length()];
 }
 
 #pragma mark - Private
@@ -860,9 +916,14 @@ const char kOmniboxFocusResultedInNavigation[] =
   // Prevent inline-autocomplete if the IME is currently composing or if the
   // cursor is not at the end of the text.
   const BOOL IMEComposing = [textInput markedTextRange] != nil;
+  // Cobrowse should not show inline-autocomplete regardless of all other
+  // conditions.
+  const BOOL isCobrowse =
+      _presentationContext == OmniboxPresentationContext::kCobrowse;
   NSRange currentSelection = [self currentSelection];
   BOOL preventInlineAutocomplete =
-      IMEComposing || NSMaxRange(currentSelection) != [textInput.text length];
+      isCobrowse || IMEComposing ||
+      NSMaxRange(currentSelection) != [textInput.text length];
   [self startAutocompletePreventingInline:preventInlineAutocomplete];
 
   [self updatePopupLayoutDirection];

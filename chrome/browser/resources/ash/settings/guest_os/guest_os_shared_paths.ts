@@ -50,7 +50,7 @@ export class SettingsGuestOsSharedPathsElement extends
   static get properties() {
     return {
       /**
-       * The type of Guest OS to share with. Should be 'crostini', 'pluginVm' or
+       * The type of Guest OS to share with. Should be 'crostini' or
        * 'bruschetta'.
        */
       guestOsType: String,
@@ -84,11 +84,11 @@ export class SettingsGuestOsSharedPathsElement extends
     ];
   }
 
-  prefs: PrefsState;
-  guestOsType: GuestOsType;
+  declare prefs: PrefsState;
+  declare guestOsType: GuestOsType;
   private browserProxy_: GuestOsBrowserProxy;
-  private sharedPaths_: PathObject[];
-  private sharedPathWhichFailedRemoval_: string|null;
+  declare private sharedPaths_: PathObject[];
+  declare private sharedPathWhichFailedRemoval_: string|null;
 
   constructor() {
     super();

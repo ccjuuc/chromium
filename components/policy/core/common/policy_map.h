@@ -117,6 +117,10 @@ class POLICY_EXPORT PolicyMap {
     // Sets |ignored_| to true.
     void SetIgnored();
 
+    // Returns true if the policy values from both machine and user scopes
+    // should be stored in prefs.
+    bool UsesLocalStateAndProfilePrefs() const;
+
     // Marks the policy as blocked because it is not supported in the current
     // environment.
     void SetBlocked();
@@ -293,7 +297,7 @@ class POLICY_EXPORT PolicyMap {
   // Loads the values in |policies| into this PolicyMap. All policies loaded
   // will have |level|, |scope| and |source| in their entries. Existing entries
   // are replaced.
-  void LoadFrom(const base::Value::Dict& policies,
+  void LoadFrom(const base::DictValue& policies,
                 PolicyLevel level,
                 PolicyScope scope,
                 PolicySource source);

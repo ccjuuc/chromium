@@ -18,6 +18,7 @@
 #include "dbus/bus.h"
 #include "printing/print_dialog_linux_interface.h"
 #include "printing/printing_context_linux.h"
+#include "ui/aura/window_tracker.h"
 #include "ui/gfx/native_ui_types.h"
 
 namespace base {
@@ -59,12 +60,9 @@ class COMPONENT_EXPORT(PRINTING) PrintDialogLinuxPortal
 
   // Response handlers for portal requests.
   void OnPreparePrintResponse(dbus_xdg::Results results);
-  void OnPrintResponse(dbus_xdg::Results results);
 
   // Instantiates and delegates to the fallback dialog.
   void UseFallback(bool has_selection);
-
-  void StartPrintRequest(const std::string& title, base::ScopedFD fd);
 
   raw_ptr<PrintingContextLinux> context_;
   PrintingContextLinux::PrintSettingsCallback callback_;
@@ -81,7 +79,8 @@ class COMPONENT_EXPORT(PRINTING) PrintDialogLinuxPortal
 
   // Temporary storage for ShowDialog arguments while checking portal
   // availability.
-  gfx::NativeView parent_view_ = nullptr;
+  aura::WindowTracker parent_view_tracker_;
+  bool parent_view_provided_ = false;
 
   scoped_refptr<dbus::Bus> bus_;
   scoped_refptr<base::SequencedTaskRunner> task_runner_;

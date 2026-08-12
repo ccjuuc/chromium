@@ -18,6 +18,7 @@
 #include <memory>
 
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
@@ -215,7 +216,7 @@ class ProcessSingletonTest : public InProcessBrowserTest {
   base::ScopedTempDir temp_profile_dir_;
 };
 
-// ChromeOS hits DCHECKS on ProcessSingleton rendezvous: crbug.com/782487
+// ChromeOS hits DCHECKS on ProcessSingleton rendezvous: crbug.com/40548646
 #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 #define MAYBE_StartupRaceCondition DISABLED_StartupRaceCondition
 #else

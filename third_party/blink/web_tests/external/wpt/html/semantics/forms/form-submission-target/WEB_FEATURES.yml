@@ -1,4 +1,3 @@
-features:
-- name: base
-  files:
-  - rel-base-target.html
+rules:
+- rel-base-target.html: [base]
+- "*": [form]

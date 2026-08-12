@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/animation/color_property_functions.h"
 
+#include "third_party/blink/renderer/core/css/style_caret_color.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 
 namespace blink {
@@ -159,7 +160,8 @@ void ColorPropertyFunctions::SetUnvisitedColor(const CSSProperty& property,
       builder.SetBorderTopColor(style_color);
       return;
     case CSSPropertyID::kCaretColor:
-      builder.SetCaretColor(StyleAutoColor(std::move(style_color)));
+      builder.SetCaretColor(StyleCaretColor(
+          StyleAutoColor(std::move(style_color)), StyleAutoColor::AutoColor()));
       return;
     case CSSPropertyID::kColor:
       builder.SetColor(style_color);
@@ -187,6 +189,9 @@ void ColorPropertyFunctions::SetUnvisitedColor(const CSSProperty& property,
       return;
     case CSSPropertyID::kRowRuleColor:
       builder.SetRowRuleColor(GapDataList<StyleColor>(style_color));
+      return;
+    case CSSPropertyID::kWebkitTextFillColor:
+      builder.SetTextFillColor(style_color);
       return;
     case CSSPropertyID::kWebkitTextStrokeColor:
       builder.SetTextStrokeColor(style_color);
@@ -220,8 +225,8 @@ void ColorPropertyFunctions::SetVisitedColor(const CSSProperty& property,
       builder.SetInternalVisitedBorderTopColor(style_color);
       return;
     case CSSPropertyID::kCaretColor:
-      builder.SetInternalVisitedCaretColor(
-          StyleAutoColor(std::move(style_color)));
+      builder.SetInternalVisitedCaretColor(StyleCaretColor(
+          StyleAutoColor(std::move(style_color)), StyleAutoColor::AutoColor()));
       return;
     case CSSPropertyID::kColor:
       builder.SetInternalVisitedColor(style_color);
@@ -251,6 +256,9 @@ void ColorPropertyFunctions::SetVisitedColor(const CSSProperty& property,
     case CSSPropertyID::kColumnRuleColor:
       builder.SetInternalVisitedColumnRuleColor(
           GapDataList<StyleColor>(style_color));
+      return;
+    case CSSPropertyID::kWebkitTextFillColor:
+      builder.SetInternalVisitedTextFillColor(style_color);
       return;
     case CSSPropertyID::kWebkitTextStrokeColor:
       builder.SetInternalVisitedTextStrokeColor(style_color);

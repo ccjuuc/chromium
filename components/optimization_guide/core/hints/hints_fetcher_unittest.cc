@@ -20,7 +20,6 @@
 #include "base/test/task_environment.h"
 #include "components/optimization_guide/core/hints/hints_processing_util.h"
 #include "components/optimization_guide/core/hints/store_update_data.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_prefs.h"
@@ -393,7 +392,7 @@ TEST_P(HintsFetcherTest, HintsFetchSuccessfulHostsRecorded) {
     return;
   }
 
-  const base::Value::Dict& hosts_fetched =
+  const base::DictValue& hosts_fetched =
       pref_service()->GetDict(prefs::kHintsFetcherHostsSuccessfullyFetched);
   std::optional<double> value;
   for (const std::string& host : hosts) {
@@ -421,7 +420,7 @@ TEST_P(HintsFetcherTest, HintsFetchFailsHostNotRecorded) {
     return;
   }
 
-  const base::Value::Dict& hosts_fetched =
+  const base::DictValue& hosts_fetched =
       pref_service()->GetDict(prefs::kHintsFetcherHostsSuccessfullyFetched);
   for (const std::string& host : hosts) {
     EXPECT_FALSE(hosts_fetched.FindDouble(HashHostForDictionary(host)));
@@ -442,7 +441,7 @@ TEST_P(HintsFetcherTest, HintsFetchClearHostsSuccessfullyFetched) {
   }
 
   {
-    const base::Value::Dict& hosts_fetched =
+    const base::DictValue& hosts_fetched =
         pref_service()->GetDict(prefs::kHintsFetcherHostsSuccessfullyFetched);
     for (const std::string& host : hosts) {
       EXPECT_TRUE(hosts_fetched.FindDouble(HashHostForDictionary(host)));
@@ -451,7 +450,7 @@ TEST_P(HintsFetcherTest, HintsFetchClearHostsSuccessfullyFetched) {
 
   HintsFetcher::ClearHostsSuccessfullyFetched(pref_service());
   {
-    const base::Value::Dict& hosts_fetched =
+    const base::DictValue& hosts_fetched =
         pref_service()->GetDict(prefs::kHintsFetcherHostsSuccessfullyFetched);
     for (const std::string& host : hosts) {
       EXPECT_FALSE(hosts_fetched.FindDouble(HashHostForDictionary(host)));
@@ -473,7 +472,7 @@ TEST_P(HintsFetcherTest, HintsFetchClearSingleFetchedHost) {
   }
 
   {
-    const base::Value::Dict& hosts_fetched =
+    const base::DictValue& hosts_fetched =
         pref_service()->GetDict(prefs::kHintsFetcherHostsSuccessfullyFetched);
     for (const std::string& host : hosts) {
       EXPECT_TRUE(hosts_fetched.FindDouble(HashHostForDictionary(host)));
@@ -482,7 +481,7 @@ TEST_P(HintsFetcherTest, HintsFetchClearSingleFetchedHost) {
 
   HintsFetcher::ClearSingleFetchedHost(pref_service(), "host1.com");
   {
-    const base::Value::Dict& hosts_fetched =
+    const base::DictValue& hosts_fetched =
         pref_service()->GetDict(prefs::kHintsFetcherHostsSuccessfullyFetched);
 
     EXPECT_FALSE(hosts_fetched.FindDouble(HashHostForDictionary("host1.com")));
@@ -529,7 +528,7 @@ TEST_P(HintsFetcherTest, HintsFetcherCoveredHostExpired) {
 
   // The first pair of hosts should be removed from the dictionary
   // pref as they have expired.
-  const base::Value::Dict& hosts_fetched =
+  const base::DictValue& hosts_fetched =
       pref_service()->GetDict(prefs::kHintsFetcherHostsSuccessfullyFetched);
   EXPECT_EQ(2u, hosts_fetched.size());
 
@@ -544,7 +543,7 @@ TEST_P(HintsFetcherTest, HintsFetcherHostNotCovered) {
   base::Time host_invalid_time = base::Time::Now() + base::Hours(1);
 
   SeedCoveredHosts(hosts, host_invalid_time);
-  const base::Value::Dict& hosts_fetched =
+  const base::DictValue& hosts_fetched =
       pref_service()->GetDict(prefs::kHintsFetcherHostsSuccessfullyFetched);
   EXPECT_EQ(2u, hosts_fetched.size());
 
@@ -577,7 +576,7 @@ TEST_P(HintsFetcherTest, HintsFetcherRemoveExpiredOnSuccessfullyFetched) {
 
   // The two expired hosts should be removed from the dictionary pref as they
   // have expired.
-  const base::Value::Dict& hosts_fetched =
+  const base::DictValue& hosts_fetched =
       pref_service()->GetDict(prefs::kHintsFetcherHostsSuccessfullyFetched);
   EXPECT_EQ(2u, hosts_fetched.size());
 
@@ -611,7 +610,7 @@ TEST_P(HintsFetcherTest, HintsFetcherSuccessfullyFetchedHostsFull) {
   EXPECT_TRUE(hints_fetched());
 
   // Navigations to both the extra hosts should be recorded.
-  const base::Value::Dict& hosts_fetched =
+  const base::DictValue& hosts_fetched =
       pref_service()->GetDict(prefs::kHintsFetcherHostsSuccessfullyFetched);
   EXPECT_EQ(200u, hosts_fetched.size());
 
@@ -647,7 +646,7 @@ TEST_P(HintsFetcherTest, MaxHostsForOptimizationGuideServiceHintsFetch) {
     return;
   }
 
-  const base::Value::Dict& hosts_fetched =
+  const base::DictValue& hosts_fetched =
       pref_service()->GetDict(prefs::kHintsFetcherHostsSuccessfullyFetched);
   EXPECT_EQ(max_hosts_in_fetch_request, hosts_fetched.size());
   EXPECT_EQ(all_hosts.size(), max_hosts_in_fetch_request + 5);

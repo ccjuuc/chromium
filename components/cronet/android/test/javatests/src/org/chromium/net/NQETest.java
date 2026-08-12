@@ -29,11 +29,13 @@ import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.net.CronetTestFramework.CronetImplementation;
 import org.chromium.net.CronetTestRule.IgnoreFor;
 import org.chromium.net.MetricsTestUtil.TestExecutor;
+import org.chromium.net.impl.NativeCronetProvider;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -59,7 +61,11 @@ public class NQETest {
         mNativeTestServer =
                 NativeTestServer.createNativeTestServer(mTestRule.getTestFramework().getContext());
         mNativeTestServer.start();
-        mUrl = mNativeTestServer.getFileURL("/echo?status=200");
+        // Use a large file (300KB+) to guarantee the response not to be contained
+        // within a single packet and to exceed the socket read buffer size.
+        // This is necessary to guarantee a throughput observation even with a
+        // deferred observation window.
+        mUrl = mNativeTestServer.getFileURL("/large_image.png");
     }
 
     @After
@@ -123,7 +129,16 @@ public class NQETest {
     public void testListenerRemoved() throws Exception {
         mTestRule
                 .getTestFramework()
-                .applyEngineBuilderPatch((builder) -> builder.enableNetworkQualityEstimator(true));
+                .applyEngineBuilderPatch(
+                        (builder) -> {
+                            builder.enableNetworkQualityEstimator(true);
+                            JSONObject nqeOptions =
+                                    new JSONObject()
+                                            .put("throughput_min_transfer_size_kilobytes", "1");
+                            JSONObject experimentalOptions =
+                                    new JSONObject().put("NetworkQualityEstimator", nqeOptions);
+                            builder.setExperimentalOptions(experimentalOptions.toString());
+                        });
         ExperimentalCronetEngine cronetEngine = mTestRule.getTestFramework().startEngine();
 
         TestExecutor networkQualityExecutor = new TestExecutor();
@@ -154,7 +169,7 @@ public class NQETest {
         byte[] data = new byte[(int) file.length()];
         fileInputStream.read(data);
         fileInputStream.close();
-        return new String(data, "UTF-8").contains(content);
+        return new String(data, StandardCharsets.UTF_8).contains(content);
     }
 
     @Test
@@ -181,7 +196,8 @@ public class NQETest {
                             // for any connection type, this ensures that the pref is written to.
                             JSONObject nqeOptions =
                                     new JSONObject()
-                                            .put("force_effective_connection_type", "Slow-2G");
+                                            .put("force_effective_connection_type", "Slow-2G")
+                                            .put("throughput_min_transfer_size_kilobytes", "1");
                             JSONObject experimentalOptions =
                                     new JSONObject().put("NetworkQualityEstimator", nqeOptions);
 
@@ -276,7 +292,9 @@ public class NQETest {
                             .build();
 
             ExperimentalCronetEngine.Builder cronetEngineBuilder =
-                    new ExperimentalCronetEngine.Builder(mTestRule.getTestFramework().getContext());
+                    (ExperimentalCronetEngine.Builder)
+                            new NativeCronetProvider(mTestRule.getTestFramework().getContext())
+                                    .createBuilder();
             assertThat(RttThroughputValues.INVALID_RTT_THROUGHPUT).isLessThan(0);
             Executor listenersExecutor =
                     Executors.newSingleThreadExecutor(new ExecutorThreadFactory());
@@ -292,7 +310,9 @@ public class NQETest {
             // "Slow-2G" is not the default ECT for any connection type, this ensures that the pref
             // is written to.
             JSONObject nqeOptions =
-                    new JSONObject().put("force_effective_connection_type", "Slow-2G");
+                    new JSONObject()
+                            .put("force_effective_connection_type", "Slow-2G")
+                            .put("throughput_min_transfer_size_kilobytes", "1");
             JSONObject experimentalOptions =
                     new JSONObject().put("NetworkQualityEstimator", nqeOptions);
 
@@ -358,6 +378,7 @@ public class NQETest {
                             // Add one more extra param two times to ensure robustness.
                             nqeOptions.put("some_other_param_1", "value1");
                             nqeOptions.put("some_other_param_2", "value2");
+                            nqeOptions.put("throughput_min_transfer_size_kilobytes", "1");
                             JSONObject experimentalOptions =
                                     new JSONObject().put("NetworkQualityEstimator", nqeOptions);
                             experimentalOptions.put("SomeOtherFieldTrialName", new JSONObject());
@@ -370,7 +391,7 @@ public class NQETest {
 
         ExperimentalCronetEngine cronetEngine = mTestRule.getTestFramework().startEngine();
 
-        cronetEngine.configureNetworkQualityEstimatorForTesting(true, true, false);
+        cronetEngine.configureNetworkQualityEstimatorForTesting(true, true, true);
 
         cronetEngine.addRttListener(rttListener);
         cronetEngine.addThroughputListener(throughputListener);

@@ -1,11 +1,11 @@
 Name: MediaPipe
 Short Name: mediapipe
 URL: https://github.com/google/mediapipe
-Version: 5910fe878cc2921b5cba4f6e6efcf6d2fc46263b
-Revision: 5910fe878cc2921b5cba4f6e6efcf6d2fc46263b
+Version: v0.10.35
+Revision: f8ef212d5c962c0e853db7e59d217056b187084b
 Update Mechanism: Manual
-Date: 2025-05-19
-License: Apache-2.0, X11-Lucent
+Date: 2026-04-30
+License: Apache-2.0, dtoa
 License File: LICENSE
 Security Critical: Yes
 Shipped: yes
@@ -76,6 +76,10 @@ Chromium binary size requirements.
 * type-map-fix-unused-variable-warning.patch - Replaces `MapName` in
 mediapipe/framework/type_map.h header to work around "unused variable" compiler
 warning (treated as error) when building.
+
+* compile-with-clang.patch - Fixes compilation errors related to clang,
+including deleting invalid move assignment operators, matching class/struct
+tags, disabling RTTI usage, and fixing implicit integer-to-float conversions.
 
 Patches which need to be upstreamed differently than they are patched
 =====================================================================

@@ -6,15 +6,13 @@
 
 #include <memory>
 
-#include "base/containers/span.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/process_memory_dump.h"
-#include "third_party/leveldatabase/env_chromium.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 
 namespace storage {
 
@@ -51,6 +49,16 @@ StorageAreaImpl::CommitBatch::CommitBatch() = default;
 
 StorageAreaImpl::CommitBatch::~CommitBatch() = default;
 
+StorageAreaImpl::OnLoadCompleteTask::OnLoadCompleteTask(
+    base::OnceClosure callback,
+    AccessMode mode)
+    : callback(std::move(callback)), mode(mode) {}
+
+StorageAreaImpl::OnLoadCompleteTask::OnLoadCompleteTask(
+    OnLoadCompleteTask&& source) = default;
+
+StorageAreaImpl::OnLoadCompleteTask::~OnLoadCompleteTask() = default;
+
 StorageAreaImpl::StorageAreaImpl(
     AsyncDomStorageDatabase* database,
     scoped_refptr<DomStorageDatabase::SharedMapLocator> map_locator,
@@ -75,9 +83,22 @@ StorageAreaImpl::StorageAreaImpl(
 }
 
 StorageAreaImpl::~StorageAreaImpl() {
-  DCHECK(!has_pending_load_tasks());
-  if (commit_batch_)
-    CommitChanges();
+  // For local storage, the map ID is unknown where `database_` must use the
+  // area's storage key to look up the map ID.
+  bool is_session_storage = map_locator_->map_id().has_value();
+
+  // Record data loss, which happens when this storage area destructs before
+  // persisting changes to `database_`.
+  //
+  // TODO(crbug.com/503422295): Monitor this histogram and if dropping changes
+  // is common then handle that here.
+  std::string histogram_name =
+      absl::StrFormat("Storage.%s.ShutdownDroppedChanges",
+                      is_session_storage ? "SessionStorage" : "LocalStorage");
+  base::UmaHistogramBoolean(histogram_name,
+                            has_pending_load_read_write_tasks());
+
+  CommitChanges();
   if (database_) {
     database_->RemoveCommitter(this);
   }
@@ -85,7 +106,11 @@ StorageAreaImpl::~StorageAreaImpl() {
 
 void StorageAreaImpl::InitializeAsEmpty() {
   DCHECK_EQ(map_state_, MapState::UNLOADED);
+
   map_state_ = MapState::LOADING_FROM_DATABASE;
+  if (loading_started_callback_for_testing_) {
+    loading_started_callback_for_testing_.Run();
+  }
   OnMapLoaded(ValueMap());
 }
 
@@ -120,15 +145,22 @@ std::unique_ptr<StorageAreaImpl> StorageAreaImpl::ForkToNewMap(
   if (IsMapLoaded()) {
     DoForkOperation(forked_area->weak_ptr_factory_.GetWeakPtr());
   } else {
-    LoadMap(base::BindOnce(&StorageAreaImpl::DoForkOperation,
-                           weak_ptr_factory_.GetWeakPtr(),
-                           forked_area->weak_ptr_factory_.GetWeakPtr()));
+    LoadMap(OnLoadCompleteTask(
+        base::BindOnce(&StorageAreaImpl::DoForkOperation,
+                       weak_ptr_factory_.GetWeakPtr(),
+                       forked_area->weak_ptr_factory_.GetWeakPtr()),
+        AccessMode::ReadWrite));
   }
   return forked_area;
 }
 
-void StorageAreaImpl::CancelAllPendingRequests() {
-  on_load_complete_tasks_.clear();
+bool StorageAreaImpl::has_pending_load_read_write_tasks() const {
+  for (const auto& task : on_load_complete_tasks_) {
+    if (task.mode == AccessMode::ReadWrite) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void StorageAreaImpl::EnableAggressiveCommitDelay() {
@@ -136,13 +168,15 @@ void StorageAreaImpl::EnableAggressiveCommitDelay() {
 }
 
 void StorageAreaImpl::ScheduleImmediateCommit() {
-  if (!on_load_complete_tasks_.empty()) {
-    LoadMap(base::BindOnce(&StorageAreaImpl::ScheduleImmediateCommit,
-                           weak_ptr_factory_.GetWeakPtr()));
+  if (has_pending_load_read_write_tasks()) {
+    LoadMap(OnLoadCompleteTask(
+        base::BindOnce(&StorageAreaImpl::ScheduleImmediateCommit,
+                       weak_ptr_factory_.GetWeakPtr()),
+        AccessMode::ReadWrite));
     return;
   }
 
-  if (!database_ || !commit_batch_) {
+  if (!database_) {
     return;
   }
   CommitChanges();
@@ -204,6 +238,11 @@ void StorageAreaImpl::SetCacheModeForTesting(CacheMode cache_mode) {
   SetCacheMode(cache_mode);
 }
 
+void StorageAreaImpl::SetLoadingStartedCallbackForTesting(
+    base::RepeatingClosure callback) {
+  loading_started_callback_for_testing_ = callback;
+}
+
 void StorageAreaImpl::AddObserver(
     mojo::PendingRemote<blink::mojom::StorageAreaObserver> observer) {
   mojo::Remote<blink::mojom::StorageAreaObserver> observer_remote(
@@ -217,12 +256,14 @@ void StorageAreaImpl::Put(
     const std::vector<uint8_t>& key,
     const std::vector<uint8_t>& value,
     const std::optional<std::vector<uint8_t>>& client_old_value,
-    const std::string& source,
+    blink::mojom::StorageAreaSourcePtr source,
     PutCallback callback) {
   if (!IsMapLoaded() || IsMapUpgradeNeeded()) {
-    LoadMap(base::BindOnce(&StorageAreaImpl::Put,
-                           weak_ptr_factory_.GetWeakPtr(), key, value,
-                           client_old_value, source, std::move(callback)));
+    LoadMap(OnLoadCompleteTask(
+        base::BindOnce(&StorageAreaImpl::Put, weak_ptr_factory_.GetWeakPtr(),
+                       key, value, client_old_value, std::move(source),
+                       std::move(callback)),
+        AccessMode::ReadWrite));
     return;
   }
 
@@ -240,7 +281,7 @@ void StorageAreaImpl::Put(
           // the change request, as clients may rely on this acknowledgement for
           // caching behavior.
           for (const auto& observer : observers_)
-            observer->KeyChanged(key, value, value, source);
+            observer->KeyChanged(key, value, value, source.Clone());
           std::move(callback).Run(true);  // Key already has this value.
           return;
         }
@@ -276,7 +317,7 @@ void StorageAreaImpl::Put(
         // the change request, as clients may rely on this acknowledgement for
         // caching behavior.
         for (const auto& observer : observers_)
-          observer->KeyChanged(key, value, value, source);
+          observer->KeyChanged(key, value, value, source.Clone());
         std::move(callback).Run(true);  // Key already has this value.
         return;
       }
@@ -299,7 +340,7 @@ void StorageAreaImpl::Put(
           "renderer.");
     } else {
       for (const auto& observer : observers_)
-        observer->KeyChangeFailed(key, source);
+        observer->KeyChangeFailed(key, source.Clone());
       std::move(callback).Run(false);
     }
     return;
@@ -324,23 +365,25 @@ void StorageAreaImpl::Put(
   storage_used_ = new_storage_used;
   memory_used_ += new_item_memory - old_item_memory;
   for (const auto& observer : observers_)
-    observer->KeyChanged(key, value, old_value, source);
+    observer->KeyChanged(key, value, old_value, source.Clone());
   std::move(callback).Run(true);
 }
 
 void StorageAreaImpl::Delete(
     const std::vector<uint8_t>& key,
     const std::optional<std::vector<uint8_t>>& client_old_value,
-    const std::string& source,
+    blink::mojom::StorageAreaSourcePtr source,
     DeleteCallback callback) {
   // Map upgrade check is required because the cache state could be changed
   // due to multiple bindings, and when multiple bindings are involved the
   // |client_old_value| can race. Thus any changes require checking for an
   // upgrade.
   if (!IsMapLoaded() || IsMapUpgradeNeeded()) {
-    LoadMap(base::BindOnce(&StorageAreaImpl::Delete,
-                           weak_ptr_factory_.GetWeakPtr(), key,
-                           client_old_value, source, std::move(callback)));
+    LoadMap(OnLoadCompleteTask(
+        base::BindOnce(&StorageAreaImpl::Delete, weak_ptr_factory_.GetWeakPtr(),
+                       key, client_old_value, std::move(source),
+                       std::move(callback)),
+        AccessMode::ReadWrite));
     return;
   }
 
@@ -355,8 +398,8 @@ void StorageAreaImpl::Delete(
       // the change request, as clients may rely on this acknowledgement for
       // caching behavior.
       for (const auto& observer : observers_)
-        observer->KeyDeleted(key, std::nullopt, source);
-      std::move(callback).Run(true);
+        observer->KeyDeleted(key, std::nullopt, source.Clone());
+      std::move(callback).Run();
       return;
     }
     if (client_old_value && client_old_value.value().size() == found->second) {
@@ -391,8 +434,8 @@ void StorageAreaImpl::Delete(
       // the change request, as clients may rely on this acknowledgement for
       // caching behavior.
       for (const auto& observer : observers_)
-        observer->KeyDeleted(key, std::nullopt, source);
-      std::move(callback).Run(true);
+        observer->KeyDeleted(key, std::nullopt, source.Clone());
+      std::move(callback).Run();
       return;
     }
     old_value.swap(found->second);
@@ -404,20 +447,22 @@ void StorageAreaImpl::Delete(
   }
 
   for (auto& observer : observers_)
-    observer->KeyDeleted(key, old_value, source);
-  std::move(callback).Run(true);
+    observer->KeyDeleted(key, old_value, source.Clone());
+  std::move(callback).Run();
 }
 
 void StorageAreaImpl::DeleteAll(
-    const std::string& source,
+    blink::mojom::StorageAreaSourcePtr source,
     mojo::PendingRemote<blink::mojom::StorageAreaObserver> new_observer,
     DeleteAllCallback callback) {
   // Don't check if a map upgrade is needed here and instead just create an
   // empty map ourself.
   if (!IsMapLoaded()) {
-    LoadMap(base::BindOnce(&StorageAreaImpl::DeleteAll,
-                           weak_ptr_factory_.GetWeakPtr(), source,
-                           std::move(new_observer), std::move(callback)));
+    LoadMap(OnLoadCompleteTask(
+        base::BindOnce(&StorageAreaImpl::DeleteAll,
+                       weak_ptr_factory_.GetWeakPtr(), std::move(source),
+                       std::move(new_observer), std::move(callback)),
+        AccessMode::ReadWrite));
     return;
   }
 
@@ -434,8 +479,8 @@ void StorageAreaImpl::DeleteAll(
 
   if (already_empty) {
     for (const auto& observer : observers_)
-      observer->AllDeleted(/*was_nonempty=*/false, source);
-    std::move(callback).Run(true);
+      observer->AllDeleted(/*was_nonempty=*/false, source.Clone());
+    std::move(callback).Run();
     return;
   }
 
@@ -452,30 +497,8 @@ void StorageAreaImpl::DeleteAll(
   storage_used_ = 0;
   memory_used_ = 0;
   for (const auto& observer : observers_)
-    observer->AllDeleted(/*was_nonempty=*/true, source);
-  std::move(callback).Run(/*success=*/true);
-}
-
-void StorageAreaImpl::Get(const std::vector<uint8_t>& key,
-                          GetCallback callback) {
-  // TODO(ssid): Remove this method since it is not supported in only keys mode,
-  // crbug.com/764127.
-  if (cache_mode_ == CacheMode::KEYS_ONLY_WHEN_POSSIBLE) {
-    NOTREACHED();
-  }
-  if (!IsMapLoaded() || IsMapUpgradeNeeded()) {
-    LoadMap(base::BindOnce(&StorageAreaImpl::Get,
-                           weak_ptr_factory_.GetWeakPtr(), key,
-                           std::move(callback)));
-    return;
-  }
-
-  auto found = keys_values_map_.find(key);
-  if (found == keys_values_map_.end()) {
-    std::move(callback).Run(false, std::vector<uint8_t>());
-    return;
-  }
-  std::move(callback).Run(true, found->second);
+    observer->AllDeleted(/*was_nonempty=*/true, source.Clone());
+  std::move(callback).Run();
 }
 
 void StorageAreaImpl::GetAll(
@@ -491,9 +514,10 @@ void StorageAreaImpl::GetAll(
 
   // The map must always be loaded for the KEYS_ONLY_WHEN_POSSIBLE mode.
   if (map_state_ != MapState::LOADED_KEYS_AND_VALUES) {
-    LoadMap(base::BindOnce(&StorageAreaImpl::GetAll,
-                           weak_ptr_factory_.GetWeakPtr(),
-                           std::move(new_observer), std::move(callback)));
+    LoadMap(OnLoadCompleteTask(
+        base::BindOnce(&StorageAreaImpl::GetAll, weak_ptr_factory_.GetWeakPtr(),
+                       std::move(new_observer), std::move(callback)),
+        AccessMode::ReadOnly));
     return;
   }
 
@@ -542,7 +566,7 @@ void StorageAreaImpl::OnConnectionError() {
   delegate_->OnNoBindings();
 }
 
-void StorageAreaImpl::LoadMap(base::OnceClosure completion_callback) {
+void StorageAreaImpl::LoadMap(OnLoadCompleteTask completion_task) {
   DCHECK_NE(map_state_, MapState::LOADED_KEYS_AND_VALUES);
   DCHECK(keys_values_map_.empty());
 
@@ -553,21 +577,23 @@ void StorageAreaImpl::LoadMap(base::OnceClosure completion_callback) {
   if (map_state_ == MapState::LOADED_KEYS_ONLY) {
     DCHECK(on_load_complete_tasks_.empty());
     DCHECK(database_);
-    if (commit_batch_)
-      CommitChanges();
+    CommitChanges();
     // Make sure the keys only map is not used when on load tasks are in queue.
     // The changes to the area will be queued to on load tasks.
     keys_only_map_.clear();
     map_state_ = MapState::UNLOADED;
   }
 
-  on_load_complete_tasks_.push_back(std::move(completion_callback));
+  on_load_complete_tasks_.push_back(std::move(completion_task));
   if (map_state_ == MapState::LOADING_FROM_DATABASE ||
       map_state_ == MapState::LOADING_FROM_FORK) {
     return;
   }
 
   map_state_ = MapState::LOADING_FROM_DATABASE;
+  if (loading_started_callback_for_testing_) {
+    loading_started_callback_for_testing_.Run();
+  }
 
   if (!database_) {
     OnMapLoaded(
@@ -601,9 +627,6 @@ void StorageAreaImpl::OnMapLoaded(StatusOr<ValueMap> map_from_database) {
   }
   CalculateStorageAndMemoryUsed();
   delegate_->OnMapLoaded();
-  if (on_load_callback_for_testing_)
-    std::move(on_load_callback_for_testing_).Run();
-
   OnLoadComplete();
 }
 
@@ -624,7 +647,7 @@ void StorageAreaImpl::CalculateStorageAndMemoryUsed() {
 void StorageAreaImpl::OnLoadComplete() {
   DCHECK(IsMapLoaded());
 
-  std::vector<base::OnceClosure> tasks;
+  std::vector<OnLoadCompleteTask> tasks;
   on_load_complete_tasks_.swap(tasks);
   for (auto it = tasks.begin(); it != tasks.end(); ++it) {
     // Some tasks (like GetAll) can require a reload if they need a different
@@ -638,7 +661,7 @@ void StorageAreaImpl::OnLoadComplete() {
       std::move(it, tasks.end(), std::back_inserter(on_load_complete_tasks_));
       return;
     }
-    std::move(*it).Run();
+    std::move(it->callback).Run();
   }
 
   // Call before |OnNoBindings| as delegate can destroy this object.
@@ -687,7 +710,7 @@ base::TimeDelta StorageAreaImpl::ComputeCommitDelay() const {
                         data_rate_limiter_.ComputeDelayNeeded(elapsed_time)));
   // TODO(mek): Rename histogram to match class name, or eliminate histogram
   // entirely.
-  UMA_HISTOGRAM_LONG_TIMES("LevelDBWrapper.CommitDelay", delay);
+  base::UmaHistogramLongTimes("LevelDBWrapper.CommitDelay", delay);
   return delay;
 }
 
@@ -820,9 +843,7 @@ void StorageAreaImpl::DoForkOperation(
   // will correctly delete the database?
   if (database_) {
     // All changes must be stored in the database before the copy operation.
-    if (has_changes_to_commit()) {
-      CommitChanges();
-    }
+    CommitChanges();
 
     // Commit the forked map to the database, which copies the source map's
     // key/value pairs.

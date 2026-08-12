@@ -23,7 +23,6 @@ namespace blink {
 class AnnotationAgentContainerImpl;
 class AnnotationAgentImplTest;
 class AnnotationSelector;
-class Document;
 class HitTestResult;
 class RangeInFlatTree;
 
@@ -124,6 +123,10 @@ class CORE_EXPORT AnnotationAgentImpl final
   const AnnotationSelector* GetSelector() const { return selector_.Get(); }
 
   mojom::blink::AnnotationType GetType() const { return type_; }
+
+  bool IsScrollOnly() const {
+    return type_ == mojom::blink::AnnotationType::kScrollOnly;
+  }
 
   // Determine if `result` represents a click on an existing annotation, and
   // returns the type of the annotation if so (or std::nullopt if not).

@@ -21,8 +21,12 @@ ${html`
             picture-url="${this.pictureUrl_}"
             email="${this.email_}" account-name="${this.accountName_}"
             ?show-enterprise-badge="${this.showEnterpriseBadge_}">
-        ` : ''}
         </managed-user-profile-notice-value-prop>
+      ` : ''}
+      ${this.showSignalsDisclaimer_ ? html`
+        <signals-disclaimer picture-url="${this.pictureUrl_}">
+        </signals-disclaimer>
+      ` : ''}
       ${this.showDisclosure_ ? html`
         <managed-user-profile-notice-disclosure id="disclosure"
             title="${this.disclosureTitle_}"
@@ -63,21 +67,22 @@ ${html`
             merge-data-choice-title="${this.mergeDataChoiceTitle_}"
             merge-data-choice-details="${this.mergeDataChoiceDetails_}"
             .selectedDataHandling="${this.selectedDataHandling_}"
-            @selected-data-handling-changed="${this.onDataHandlingChanged_}">
+            @selected-data-handling-changed="${this.onSelectedDataHandlingChanged_}">
         </managed-user-profile-notice-data-handling>
       ` : ''}
     </div>
   </div>
   <div class="action-container tangible-sync-style"
-    id="${this.showTimeout_ ? 'timeout-action-container' : ''}">
+    id="${this.getActionContainerId_()}">
     <cr-button id="proceed-button" class="action-button"
-        @click="${this.onProceed_}"
+        @click="${this.onProceedClick_}"
         ?disabled="${!this.allowProceedButton_()}"
         ?hidden="${this.showProcessing_}">
       ${this.proceedLabel_}
     </cr-button>
-    <cr-button id="cancel-button" @click="${this.onCancel_}"
-        ?hidden="${!this.allowCancel_()}">
+    <cr-button id="cancel-button"
+        class="tonal-button"
+        @click="${this.onCancelClick_}" ?hidden="${!this.allowCancel_()}">
       ${this.cancelLabel_}
     </cr-button>
   </div>

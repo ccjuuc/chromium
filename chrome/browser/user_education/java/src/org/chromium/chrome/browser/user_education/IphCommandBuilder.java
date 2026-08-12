@@ -29,9 +29,9 @@ public class IphCommandBuilder {
     private final String mFeatureName;
     private boolean mDismissOnTouch = true;
     private long mDismissOnTouchTimeout = TextBubble.NO_TIMEOUT;
-    @StringRes private int mStringId;
+    private @StringRes int mStringId;
     private Object @Nullable [] mStringArgs;
-    @StringRes private int mAccessibilityStringId;
+    private @StringRes int mAccessibilityStringId;
     private Object @Nullable [] mAccessibilityStringArgs;
     private @Nullable View mAnchorView;
     private @Nullable Runnable mOnShowCallback;
@@ -49,6 +49,11 @@ public class IphCommandBuilder {
     @AnchoredPopupWindow.VerticalOrientation
     private int mPreferredVerticalOrientation =
             AnchoredPopupWindow.VerticalOrientation.MAX_AVAILABLE_SPACE;
+
+    @AnchoredPopupWindow.HorizontalOrientation
+    private int mPreferredHorizontalOrientation = AnchoredPopupWindow.HorizontalOrientation.CENTER;
+
+    private boolean mHorizontalOverlapAnchor;
 
     /**
      * Constructor for IphCommandBuilder when you would like your strings to be resolved for you.
@@ -263,6 +268,24 @@ public class IphCommandBuilder {
     }
 
     /**
+     * @param horizontalOverlapAnchor Whether the popup should overlap the anchor view horizontally.
+     */
+    public IphCommandBuilder setHorizontalOverlapAnchor(boolean horizontalOverlapAnchor) {
+        mHorizontalOverlapAnchor = horizontalOverlapAnchor;
+        return this;
+    }
+
+    /**
+     * @param preferredHorizontalOrientation {@link AnchoredPopupWindow.HorizontalOrientation} that
+     *     determines the preferred horizontal location for the IPH.
+     */
+    public IphCommandBuilder setPreferredHorizontalOrientation(
+            @AnchoredPopupWindow.HorizontalOrientation int preferredHorizontalOrientation) {
+        mPreferredHorizontalOrientation = preferredHorizontalOrientation;
+        return this;
+    }
+
+    /**
      * @return an (@see IphCommand) containing the accumulated state of this builder.
      */
     public IphCommand build() {
@@ -301,7 +324,9 @@ public class IphCommandBuilder {
                     mShowTextBubble,
                     mPreferredVerticalOrientation,
                     mInsetRect,
-                    mEnableSnoozeMode);
+                    mEnableSnoozeMode,
+                    mPreferredHorizontalOrientation,
+                    mHorizontalOverlapAnchor);
         }
     }
 }

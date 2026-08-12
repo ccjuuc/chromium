@@ -5,12 +5,14 @@
 #include "cc/layers/surface_layer.h"
 
 #include <stdint.h>
+
 #include <memory>
 #include <utility>
 
 #include "base/trace_event/trace_event.h"
 #include "cc/layers/surface_layer_impl.h"
 #include "cc/trees/layer_tree_host.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace cc {
 
@@ -55,12 +57,11 @@ void SurfaceLayer::SetSurfaceId(const viz::SurfaceId& surface_id,
   }
   auto& surface_range = surface_range_.Write(*this);
   if (surface_id.local_surface_id().is_valid()) {
-    TRACE_EVENT_WITH_FLOW2(
+    TRACE_EVENT(
         TRACE_DISABLED_BY_DEFAULT("viz.surface_id_flow"),
         "LocalSurfaceId.Embed.Flow",
-        TRACE_ID_GLOBAL(surface_id.local_surface_id().embed_trace_id()),
-        TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT, "step",
-        "SetSurfaceId", "surface_id", surface_id.ToString());
+        perfetto::Flow::Global(surface_id.local_surface_id().embed_trace_id()),
+        "step", "SetSurfaceId", "surface_id", surface_id.ToString());
   }
 
   if (layer_tree_host() && surface_range.IsValid())
@@ -180,12 +181,10 @@ void SurfaceLayer::SetLayerTreeHost(LayerTreeHost* host) {
     layer_tree_host()->AddSurfaceRange(surface_range_.Read(*this));
 }
 
-void SurfaceLayer::PushDirtyPropertiesTo(
-    LayerImpl* layer,
-    uint8_t dirty_flag,
-    const CommitState& commit_state,
-    const ThreadUnsafeCommitState& unsafe_state) {
-  Layer::PushDirtyPropertiesTo(layer, dirty_flag, commit_state, unsafe_state);
+void SurfaceLayer::PushDirtyPropertiesTo(LayerImpl* layer,
+                                         uint8_t dirty_flag,
+                                         CommitState& commit_state) {
+  Layer::PushDirtyPropertiesTo(layer, dirty_flag, commit_state);
 
   if (dirty_flag & kChangedGeneralProperty) {
     TRACE_EVENT0("cc", "SurfaceLayer::PushPropertiesTo");

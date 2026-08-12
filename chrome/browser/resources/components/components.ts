@@ -47,7 +47,8 @@ function renderTemplate(componentsData: ComponentsData) {
  * components.
  */
 function requestComponentsData() {
-  sendWithPromise('requestComponentsData').then(returnComponentsData);
+  sendWithPromise<ComponentsData>('requestComponentsData')
+      .then(returnComponentsData);
 }
 
 /**
@@ -62,6 +63,12 @@ function returnComponentsData(componentsData: ComponentsData) {
 
   bodyContainer.style.visibility = 'hidden';
   body.className = '';
+
+  componentsData.components.sort((a, b) => {
+    const nameA = a.name || a.id;
+    const nameB = b.name || b.id;
+    return nameA.localeCompare(nameB) || a.id.localeCompare(b.id);
+  });
 
   // Initialize |currentComponentsData|, which can also be updated in
   // onComponentEvent() later.
@@ -140,11 +147,11 @@ function onComponentEvent(event: ComponentEvent) {
  *     update.
  */
 function handleCheckUpdate(node: HTMLElement) {
-  getRequiredElement('status-' + String(node.id)).textContent =
+  getRequiredElement('status-' + node.id).textContent =
       loadTimeData.getString('checkingLabel');
 
   // Tell the C++ ComponentssDOMHandler to check for update.
-  chrome.send('checkUpdate', [String(node.id)]);
+  chrome.send('checkUpdate', [node.id]);
 }
 
 // Get data and have it displayed upon loading.

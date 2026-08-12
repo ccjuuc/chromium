@@ -25,19 +25,19 @@ class MapCoordinatesTest : public RenderingTest {
   PhysicalOffset MapLocalToAncestor(const LayoutObject*,
                                     const LayoutBoxModelObject* ancestor,
                                     PhysicalOffset,
-                                    MapCoordinatesFlags = 0) const;
+                                    MapCoordinatesFlags = {}) const;
   gfx::QuadF MapLocalToAncestor(const LayoutObject*,
                                 const LayoutBoxModelObject* ancestor,
                                 gfx::QuadF,
-                                MapCoordinatesFlags = 0) const;
+                                MapCoordinatesFlags = {}) const;
   PhysicalOffset MapAncestorToLocal(const LayoutObject*,
                                     const LayoutBoxModelObject* ancestor,
                                     PhysicalOffset,
-                                    MapCoordinatesFlags = 0) const;
+                                    MapCoordinatesFlags = {}) const;
   gfx::QuadF MapAncestorToLocal(const LayoutObject*,
                                 const LayoutBoxModelObject* ancestor,
                                 gfx::QuadF,
-                                MapCoordinatesFlags = 0) const;
+                                MapCoordinatesFlags = {}) const;
 
   // Adjust point by the scroll offset of the LayoutView.  This only has an
   // effect if root layer scrolling is enabled.  The only reason for doing
@@ -165,7 +165,7 @@ TEST_F(MapCoordinatesTest, OverflowClip) {
   To<Element>(overflow->GetNode())
       ->GetLayoutBoxForScrolling()
       ->GetScrollableArea()
-      ->ScrollToAbsolutePosition(gfx::PointF(32, 54));
+      ->ScrollToAbsolutePositionForTest(gfx::PointF(32, 54));
 
   PhysicalOffset mapped_point =
       MapLocalToAncestor(target, To<LayoutBoxModelObject>(target->Parent()),
@@ -711,9 +711,9 @@ TEST_F(MapCoordinatesTest, FixedPosInIFrameWhenMainFrameScrolled) {
 
   Element* target = ChildDocument().getElementById(AtomicString("target"));
   ASSERT_TRUE(target);
-  PhysicalOffset mapped_point =
-      MapAncestorToLocal(target->GetLayoutObject(), nullptr,
-                         PhysicalOffset(10, 70), kTraverseDocumentBoundaries);
+  PhysicalOffset mapped_point = MapAncestorToLocal(
+      target->GetLayoutObject(), nullptr, PhysicalOffset(10, 70),
+      {MapCoordinatesMode::kTraverseDocumentBoundaries});
 
   // y = 70 - 8000, since the iframe is offset by 8000px from the main frame.
   // The scroll is not taken into account because the element is not fixed to
@@ -743,9 +743,9 @@ TEST_F(MapCoordinatesTest, IFrameTransformed) {
 
   Element* target = ChildDocument().getElementById(AtomicString("target"));
   ASSERT_TRUE(target);
-  PhysicalOffset mapped_point =
-      MapAncestorToLocal(target->GetLayoutObject(), nullptr,
-                         PhysicalOffset(200, 200), kTraverseDocumentBoundaries);
+  PhysicalOffset mapped_point = MapAncestorToLocal(
+      target->GetLayoutObject(), nullptr, PhysicalOffset(200, 200),
+      {MapCoordinatesMode::kTraverseDocumentBoundaries});
 
   // Derivation:
   // (200, 200) -> (-50, -50)  (Adjust for transform origin of scale, which is
@@ -780,9 +780,9 @@ TEST_F(MapCoordinatesTest, FixedPosInScrolledIFrameWithTransform) {
 
   Element* target = ChildDocument().getElementById(AtomicString("target"));
   ASSERT_TRUE(target);
-  PhysicalOffset mapped_point =
-      MapAncestorToLocal(target->GetLayoutObject(), nullptr,
-                         PhysicalOffset(0, 0), kTraverseDocumentBoundaries);
+  PhysicalOffset mapped_point = MapAncestorToLocal(
+      target->GetLayoutObject(), nullptr, PhysicalOffset(0, 0),
+      {MapCoordinatesMode::kTraverseDocumentBoundaries});
 
   EXPECT_EQ(PhysicalOffset(0, 0), mapped_point);
 }
@@ -1674,20 +1674,20 @@ TEST_F(MapCoordinatesTest, IgnoreScrollOffset) {
 
   EXPECT_EQ(PhysicalOffset(0, 10),
             MapLocalToAncestor(box, scroller, PhysicalOffset()));
-  EXPECT_EQ(
-      PhysicalOffset(0, 10),
-      MapLocalToAncestor(box, scroller, PhysicalOffset(), kIgnoreScrollOffset));
+  EXPECT_EQ(PhysicalOffset(0, 10),
+            MapLocalToAncestor(box, scroller, PhysicalOffset(),
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
 
   To<Element>(scroller->GetNode())
       ->GetLayoutBoxForScrolling()
       ->GetScrollableArea()
-      ->ScrollToAbsolutePosition(gfx::PointF(0, 50));
+      ->ScrollToAbsolutePositionForTest(gfx::PointF(0, 50));
 
   EXPECT_EQ(PhysicalOffset(0, -40),
             MapLocalToAncestor(box, scroller, PhysicalOffset()));
-  EXPECT_EQ(
-      PhysicalOffset(0, 10),
-      MapLocalToAncestor(box, scroller, PhysicalOffset(), kIgnoreScrollOffset));
+  EXPECT_EQ(PhysicalOffset(0, 10),
+            MapLocalToAncestor(box, scroller, PhysicalOffset(),
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
 }
 
 // This test verifies that the mapped location of an inline div within a
@@ -1713,20 +1713,20 @@ TEST_F(MapCoordinatesTest, IgnoreScrollOffsetForInline) {
 
   EXPECT_EQ(PhysicalOffset(0, 10),
             MapLocalToAncestor(box, scroller, PhysicalOffset()));
-  EXPECT_EQ(
-      PhysicalOffset(0, 10),
-      MapLocalToAncestor(box, scroller, PhysicalOffset(), kIgnoreScrollOffset));
+  EXPECT_EQ(PhysicalOffset(0, 10),
+            MapLocalToAncestor(box, scroller, PhysicalOffset(),
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
 
   To<Element>(scroller->GetNode())
       ->GetLayoutBoxForScrolling()
       ->GetScrollableArea()
-      ->ScrollToAbsolutePosition(gfx::PointF(0, 50));
+      ->ScrollToAbsolutePositionForTest(gfx::PointF(0, 50));
 
   EXPECT_EQ(PhysicalOffset(0, 10),
             MapLocalToAncestor(box, scroller, PhysicalOffset()));
-  EXPECT_EQ(
-      PhysicalOffset(0, 60),
-      MapLocalToAncestor(box, scroller, PhysicalOffset(), kIgnoreScrollOffset));
+  EXPECT_EQ(PhysicalOffset(0, 60),
+            MapLocalToAncestor(box, scroller, PhysicalOffset(),
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
 }
 
 // This test verifies that ignoring scroll offset works with writing modes.
@@ -1751,29 +1751,29 @@ TEST_F(MapCoordinatesTest, IgnoreScrollOffsetWithWritingModes) {
 
   EXPECT_EQ(PhysicalOffset(90, 10),
             MapLocalToAncestor(box, scroller, PhysicalOffset()));
-  EXPECT_EQ(
-      PhysicalOffset(1990, 10),
-      MapLocalToAncestor(box, scroller, PhysicalOffset(), kIgnoreScrollOffset));
+  EXPECT_EQ(PhysicalOffset(1990, 10),
+            MapLocalToAncestor(box, scroller, PhysicalOffset(),
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
 
   scroll_element->GetLayoutBoxForScrolling()
       ->GetScrollableArea()
-      ->ScrollToAbsolutePosition(gfx::PointF(0, 50));
+      ->ScrollToAbsolutePositionForTest(gfx::PointF(0, 50));
 
   EXPECT_EQ(PhysicalOffset(1990, -40),
             MapLocalToAncestor(box, scroller, PhysicalOffset()));
-  EXPECT_EQ(
-      PhysicalOffset(1990, 10),
-      MapLocalToAncestor(box, scroller, PhysicalOffset(), kIgnoreScrollOffset));
+  EXPECT_EQ(PhysicalOffset(1990, 10),
+            MapLocalToAncestor(box, scroller, PhysicalOffset(),
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
 
   scroll_element->GetLayoutBoxForScrolling()
       ->GetScrollableArea()
-      ->ScrollToAbsolutePosition(gfx::PointF(1900, 50));
+      ->ScrollToAbsolutePositionForTest(gfx::PointF(1900, 50));
 
   EXPECT_EQ(PhysicalOffset(90, -40),
             MapLocalToAncestor(box, scroller, PhysicalOffset()));
-  EXPECT_EQ(
-      PhysicalOffset(1990, 10),
-      MapLocalToAncestor(box, scroller, PhysicalOffset(), kIgnoreScrollOffset));
+  EXPECT_EQ(PhysicalOffset(1990, 10),
+            MapLocalToAncestor(box, scroller, PhysicalOffset(),
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
 }
 
 TEST_F(MapCoordinatesTest, FixedPositionWithScrollOffset) {
@@ -1787,24 +1787,26 @@ TEST_F(MapCoordinatesTest, FixedPositionWithScrollOffset) {
   EXPECT_EQ(expected, MapLocalToAncestor(target, nullptr, PhysicalOffset()));
   EXPECT_EQ(expected,
             MapLocalToAncestor(target, &GetLayoutView(), PhysicalOffset()));
-  EXPECT_EQ(expected, MapLocalToAncestor(target, nullptr, PhysicalOffset(),
-                                         kIgnoreScrollOffset));
+  EXPECT_EQ(expected,
+            MapLocalToAncestor(target, nullptr, PhysicalOffset(),
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
   EXPECT_EQ(expected,
             MapLocalToAncestor(target, &GetLayoutView(), PhysicalOffset(),
-                               kIgnoreScrollOffset));
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
 
   // Scroll offset doesn't affect MapLocalToAncestor(), regardless of
   // kIgnoreScrollOffset.
-  GetLayoutView().GetScrollableArea()->ScrollToAbsolutePosition(
+  GetLayoutView().GetScrollableArea()->ScrollToAbsolutePositionForTest(
       gfx::PointF(0, 400));
   EXPECT_EQ(expected, MapLocalToAncestor(target, nullptr, PhysicalOffset()));
   EXPECT_EQ(expected,
             MapLocalToAncestor(target, &GetLayoutView(), PhysicalOffset()));
-  EXPECT_EQ(expected, MapLocalToAncestor(target, nullptr, PhysicalOffset(),
-                                         kIgnoreScrollOffset));
+  EXPECT_EQ(expected,
+            MapLocalToAncestor(target, nullptr, PhysicalOffset(),
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
   EXPECT_EQ(expected,
             MapLocalToAncestor(target, &GetLayoutView(), PhysicalOffset(),
-                               kIgnoreScrollOffset));
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
 }
 
 TEST_F(MapCoordinatesTest, FixedPositionWithScrollOffsetVerticalRL) {
@@ -1819,24 +1821,26 @@ TEST_F(MapCoordinatesTest, FixedPositionWithScrollOffsetVerticalRL) {
   EXPECT_EQ(expected, MapLocalToAncestor(target, nullptr, PhysicalOffset()));
   EXPECT_EQ(expected,
             MapLocalToAncestor(target, &GetLayoutView(), PhysicalOffset()));
-  EXPECT_EQ(expected, MapLocalToAncestor(target, nullptr, PhysicalOffset(),
-                                         kIgnoreScrollOffset));
+  EXPECT_EQ(expected,
+            MapLocalToAncestor(target, nullptr, PhysicalOffset(),
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
   EXPECT_EQ(expected,
             MapLocalToAncestor(target, &GetLayoutView(), PhysicalOffset(),
-                               kIgnoreScrollOffset));
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
 
   // Scroll offset doesn't affect MapLocalToAncestor(), regardless of
   // kIgnoreScrollOffset.
-  GetLayoutView().GetScrollableArea()->ScrollToAbsolutePosition(
+  GetLayoutView().GetScrollableArea()->ScrollToAbsolutePositionForTest(
       gfx::PointF(400, 0));
   EXPECT_EQ(expected, MapLocalToAncestor(target, nullptr, PhysicalOffset()));
   EXPECT_EQ(expected,
             MapLocalToAncestor(target, &GetLayoutView(), PhysicalOffset()));
-  EXPECT_EQ(expected, MapLocalToAncestor(target, nullptr, PhysicalOffset(),
-                                         kIgnoreScrollOffset));
+  EXPECT_EQ(expected,
+            MapLocalToAncestor(target, nullptr, PhysicalOffset(),
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
   EXPECT_EQ(expected,
             MapLocalToAncestor(target, &GetLayoutView(), PhysicalOffset(),
-                               kIgnoreScrollOffset));
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
 }
 
 TEST_F(MapCoordinatesTest, FixedPositionUnderTransformWithScrollOffset) {
@@ -1853,26 +1857,28 @@ TEST_F(MapCoordinatesTest, FixedPositionUnderTransformWithScrollOffset) {
   EXPECT_EQ(expected, MapLocalToAncestor(target, nullptr, PhysicalOffset()));
   EXPECT_EQ(expected,
             MapLocalToAncestor(target, &GetLayoutView(), PhysicalOffset()));
-  EXPECT_EQ(expected, MapLocalToAncestor(target, nullptr, PhysicalOffset(),
-                                         kIgnoreScrollOffset));
+  EXPECT_EQ(expected,
+            MapLocalToAncestor(target, nullptr, PhysicalOffset(),
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
   EXPECT_EQ(expected,
             MapLocalToAncestor(target, &GetLayoutView(), PhysicalOffset(),
-                               kIgnoreScrollOffset));
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
 
   // Fixed position under transform is treated like absolute position, so is
   // affected by scroll offset.
-  GetLayoutView().GetScrollableArea()->ScrollToAbsolutePosition(
+  GetLayoutView().GetScrollableArea()->ScrollToAbsolutePositionForTest(
       gfx::PointF(0, 400));
   PhysicalOffset expected_scrolled(100, -200);
   EXPECT_EQ(expected_scrolled,
             MapLocalToAncestor(target, nullptr, PhysicalOffset()));
   EXPECT_EQ(expected_scrolled,
             MapLocalToAncestor(target, &GetLayoutView(), PhysicalOffset()));
-  EXPECT_EQ(expected, MapLocalToAncestor(target, nullptr, PhysicalOffset(),
-                                         kIgnoreScrollOffset));
+  EXPECT_EQ(expected,
+            MapLocalToAncestor(target, nullptr, PhysicalOffset(),
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
   EXPECT_EQ(expected,
             MapLocalToAncestor(target, &GetLayoutView(), PhysicalOffset(),
-                               kIgnoreScrollOffset));
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
 }
 
 // This test verifies that ignoring scroll offset works with writing modes and
@@ -1902,22 +1908,22 @@ TEST_F(MapCoordinatesTest,
   // affects the location of the box.
   EXPECT_EQ(PhysicalOffset(75, 10),
             MapLocalToAncestor(box, scroller, PhysicalOffset()));
-  EXPECT_EQ(
-      PhysicalOffset(1990, 10),
-      MapLocalToAncestor(box, scroller, PhysicalOffset(), kIgnoreScrollOffset));
+  EXPECT_EQ(PhysicalOffset(1990, 10),
+            MapLocalToAncestor(box, scroller, PhysicalOffset(),
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
 
   To<Element>(scroller->GetNode())
       ->GetLayoutBoxForScrolling()
       ->GetScrollableArea()
-      ->ScrollToAbsolutePosition(gfx::PointF(0, 0));
+      ->ScrollToAbsolutePositionForTest(gfx::PointF(0, 0));
 
   // The box is now on the right of the scrollbar therefore there is nothing
   // between the box and the right border of the content.
   EXPECT_EQ(PhysicalOffset(1990, 10),
             MapLocalToAncestor(box, scroller, PhysicalOffset()));
-  EXPECT_EQ(
-      PhysicalOffset(1990, 10),
-      MapLocalToAncestor(box, scroller, PhysicalOffset(), kIgnoreScrollOffset));
+  EXPECT_EQ(PhysicalOffset(1990, 10),
+            MapLocalToAncestor(box, scroller, PhysicalOffset(),
+                               {MapCoordinatesMode::kIgnoreScrollOffset}));
 }
 
 }  // namespace blink

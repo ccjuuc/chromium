@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/gpu/vaapi/h264_vaapi_video_encoder_delegate.h"
 
 #include <array>
@@ -232,7 +227,7 @@ class MockH264RateControl : public H264RateControlWrapper {
   MockH264RateControl() = default;
   ~MockH264RateControl() override = default;
 
-  MOCK_METHOD1(UpdateRateControl, void(const H264RateControlConfigRTC&));
+  MOCK_METHOD1(UpdateRateControl, bool(const H264RateControlConfigRTC&));
   MOCK_METHOD1(ComputeQP,
                H264RateCtrlRTC::FrameDropDecision(const H264FrameParamsRTC&));
   MOCK_CONST_METHOD0(GetQP, int());
@@ -342,7 +337,8 @@ void H264VaapiVideoEncoderDelegateTest::
   EXPECT_CALL(*mock_rate_ctrl_, UpdateRateControl(MatchRtcConfigWithRates(
                                     initial_bitrate_allocation,
                                     vea_config.framerate, kDefaultVisibleSize,
-                                    num_temporal_layers, kDefaultContentType)));
+                                    num_temporal_layers, kDefaultContentType)))
+      .WillOnce(Return(true));
   EXPECT_TRUE(InitializeEncoder(num_temporal_layers));
 }
 
@@ -479,7 +475,8 @@ void H264VaapiVideoEncoderDelegateTest::UpdateRatesAndEncode(
   EXPECT_CALL(*mock_rate_ctrl_,
               UpdateRateControl(MatchRtcConfigWithRates(
                   bitrate_allocation, framerate, kDefaultVisibleSize,
-                  num_temporal_layers, kDefaultContentType)));
+                  num_temporal_layers, kDefaultContentType)))
+      .WillOnce(Return(true));
   EXPECT_TRUE(encoder_->UpdateRates(bitrate_allocation, framerate));
   EXPECT_EQ(encoder_->curr_params_.bitrate_allocation, bitrate_allocation);
   EXPECT_EQ(encoder_->curr_params_.framerate, framerate);

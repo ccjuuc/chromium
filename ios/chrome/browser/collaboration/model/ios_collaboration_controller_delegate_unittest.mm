@@ -33,8 +33,8 @@
 #import "ios/chrome/browser/shared/model/web_state_list/test/fake_web_state_list_delegate.h"
 #import "ios/chrome/browser/shared/model/web_state_list/test/web_state_list_builder_from_description.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/show_signin_command.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
@@ -43,6 +43,7 @@
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/fakes/fake_ui_view_controller.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
@@ -71,10 +72,6 @@ std::unique_ptr<KeyedService> BuildTestShareKitService(ProfileIOS* profile) {
 std::unique_ptr<KeyedService> BuildFakeTabGroupSyncService(
     ProfileIOS* profile) {
   return std::make_unique<tab_groups::FakeTabGroupSyncService>();
-}
-
-std::unique_ptr<KeyedService> BuildTestSyncService(ProfileIOS* profile) {
-  return std::make_unique<syncer::TestSyncService>();
 }
 
 std::unique_ptr<KeyedService> BuildMockCollaborationService(
@@ -110,11 +107,11 @@ class IOSCollaborationControllerDelegateTest : public PlatformTest {
     TestProfileIOS::Builder test_profile_builder;
     test_profile_builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
     test_profile_builder.AddTestingFactory(
         SyncServiceFactory::GetInstance(),
-        base::BindRepeating(&BuildTestSyncService));
+        base::BindRepeating(&CreateTestSyncService));
     test_profile_builder.AddTestingFactory(
         CollaborationServiceFactory::GetInstance(),
         base::BindRepeating(&BuildMockCollaborationService));
@@ -150,11 +147,9 @@ class IOSCollaborationControllerDelegateTest : public PlatformTest {
     tab_group_sync_service_->AddGroup(saved_group);
 
     CommandDispatcher* command_dispatcher = browser_->GetCommandDispatcher();
-    application_commands_mock_ =
-        OCMStrictProtocolMock(@protocol(ApplicationCommands));
-    [command_dispatcher
-        startDispatchingToTarget:application_commands_mock_
-                     forProtocol:@protocol(ApplicationCommands)];
+    mock_scene_handler_ = OCMStrictProtocolMock(@protocol(SceneCommands));
+    [command_dispatcher startDispatchingToTarget:mock_scene_handler_
+                                     forProtocol:@protocol(SceneCommands)];
     signin_coordinator_mock_ = OCMStrictClassMock([SigninCoordinator class]);
     signin_coordinator_class_mock_ =
         OCMStrictClassMock([SigninCoordinator class]);
@@ -186,7 +181,7 @@ class IOSCollaborationControllerDelegateTest : public PlatformTest {
             GetApplicationContext()->GetSystemIdentityManager());
     system_identity_manager->AddIdentity(identity);
     AuthenticationServiceFactory::GetForProfile(profile_.get())
-        ->SignIn(identity, signin_metrics::AccessPoint::kUnknown);
+        ->SignIn(identity, signin_metrics::AccessPoint::kStartPage);
   }
 
   // Updates the selected types to pretend that the user accepted to sync
@@ -218,7 +213,7 @@ class IOSCollaborationControllerDelegateTest : public PlatformTest {
   }
 
   void TearDown() override {
-    EXPECT_OCMOCK_VERIFY(application_commands_mock_);
+    EXPECT_OCMOCK_VERIFY(mock_scene_handler_);
     EXPECT_OCMOCK_VERIFY((id)signin_coordinator_mock_);
     EXPECT_OCMOCK_VERIFY(signin_coordinator_class_mock_);
     PlatformTest::TearDown();
@@ -255,7 +250,7 @@ class IOSCollaborationControllerDelegateTest : public PlatformTest {
   raw_ptr<WebStateList, DanglingUntriaged> web_state_list_;
   id signin_coordinator_class_mock_;
   SigninCoordinator* signin_coordinator_mock_;
-  id application_commands_mock_;
+  id mock_scene_handler_;
   std::unique_ptr<Browser> browser_;
   std::unique_ptr<TestProfileIOS> profile_;
   UIViewController* base_view_controller_;

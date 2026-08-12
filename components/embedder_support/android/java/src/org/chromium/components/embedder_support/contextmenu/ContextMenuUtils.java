@@ -32,13 +32,15 @@ public final class ContextMenuUtils {
 
     /** An immutable data carrier for the title and urls shown at the top of a context menu. */
     public static final class HeaderInfo {
-        private final CharSequence mTitle;
+        private final CharSequence mPageTitle;
+        private final CharSequence mAltText;
         private final GURL mUrl;
         private final GURL mSecondaryUrl;
         private final GURL mTertiaryUrl;
 
         private HeaderInfo(Builder builder) {
-            mTitle = (builder.mTitle != null) ? builder.mTitle : "";
+            mPageTitle = (builder.mPageTitle != null) ? builder.mPageTitle : "";
+            mAltText = (builder.mAltText != null) ? builder.mAltText : "";
             mUrl = (builder.mUrl != null) ? builder.mUrl : GURL.emptyGURL();
             mSecondaryUrl =
                     (builder.mSecondaryUrl != null) ? builder.mSecondaryUrl : GURL.emptyGURL();
@@ -46,10 +48,17 @@ public final class ContextMenuUtils {
         }
 
         /**
-         * @return The title. It returns "" if not set.
+         * @return The page title. It returns "" if not set.
          */
-        public CharSequence getTitle() {
-            return mTitle;
+        public CharSequence getPageTitle() {
+            return mPageTitle;
+        }
+
+        /**
+         * @return The alt text. It returns "" if not set.
+         */
+        public CharSequence getAltText() {
+            return mAltText;
         }
 
         /**
@@ -75,19 +84,31 @@ public final class ContextMenuUtils {
 
         /** Builder for creating {@link HeaderInfo} instances. */
         public static final class Builder {
-            @Nullable private CharSequence mTitle;
-            @Nullable private GURL mUrl;
-            @Nullable private GURL mSecondaryUrl;
-            @Nullable private GURL mTertiaryUrl;
+            private @Nullable CharSequence mPageTitle;
+            private @Nullable CharSequence mAltText;
+            private @Nullable GURL mUrl;
+            private @Nullable GURL mSecondaryUrl;
+            private @Nullable GURL mTertiaryUrl;
 
             /**
-             * Sets the title to be displayed.
+             * Sets the page title to be displayed.
              *
-             * @param title The title.
+             * @param pageTitle The title.
              * @return This Builder instance for chaining.
              */
-            public Builder setTitle(CharSequence title) {
-                mTitle = title;
+            public Builder setPageTitle(CharSequence pageTitle) {
+                mPageTitle = pageTitle;
+                return this;
+            }
+
+            /**
+             * Sets the alt text to be displayed.
+             *
+             * @param altText The alt text.
+             * @return This Builder instance for chaining.
+             */
+            public Builder setAltText(CharSequence altText) {
+                mAltText = altText;
                 return this;
             }
 
@@ -140,8 +161,10 @@ public final class ContextMenuUtils {
 
     /** Returns the header info to be displayed in the context menu. */
     public static HeaderInfo getHeaderInfo(
-            ContextMenuParams params, boolean isCustomContextMenuItemPresent) {
-        CharSequence title = getTitle(params);
+            ContextMenuParams params,
+            boolean isCustomContextMenuItemPresent,
+            CharSequence pageTitle) {
+        CharSequence altText = getAltText(params);
         GURL url = params.getLinkUrl();
         GURL secondaryUrl = GURL.emptyGURL();
         GURL tertiaryUrl = GURL.emptyGURL();
@@ -157,15 +180,16 @@ public final class ContextMenuUtils {
         }
 
         return new HeaderInfo.Builder()
-                .setTitle(title)
+                .setPageTitle(pageTitle)
+                .setAltText(altText)
                 .setUrl(url)
                 .setSecondaryUrl(secondaryUrl)
                 .setTertiaryUrl(tertiaryUrl)
                 .build();
     }
 
-    /** Returns the title for the given {@link ContextMenuParams}. */
-    public static String getTitle(ContextMenuParams params) {
+    /** Returns the alt text for the given {@link ContextMenuParams}. */
+    public static String getAltText(ContextMenuParams params) {
         if (!TextUtils.isEmpty(params.getTitleText())) {
             return params.getTitleText();
         }
@@ -249,6 +273,7 @@ public final class ContextMenuUtils {
      * @param context The application {@link Context}.
      * @param webContents The {@link WebContents} instance.
      * @param params The {@link ContextMenuParams} for the context menu.
+     * @param leftContentOffsetPx The left content offset in pixels.
      * @param topContentOffsetPx The top content offset in pixels.
      * @param usePopupWindow Whether the menu should be displayed as a popup window.
      * @param containerView The container {@link View} for the context menu.
@@ -259,12 +284,19 @@ public final class ContextMenuUtils {
             Window window,
             WebContents webContents,
             ContextMenuParams params,
-            float topContentOffsetPx,
+            int leftContentOffsetPx,
+            int topContentOffsetPx,
             boolean usePopupWindow,
             View containerView) {
         Point touchPoint =
                 getTouchPointCoordinates(
-                        context, window, params, topContentOffsetPx, usePopupWindow, containerView);
+                        context,
+                        window,
+                        params,
+                        leftContentOffsetPx,
+                        topContentOffsetPx,
+                        usePopupWindow,
+                        containerView);
 
         // If drag drop is enabled, the context menu needs to be anchored next to the drag shadow.
         // Otherwise, the Rect used to display the context menu dialog can be a single point.
@@ -283,6 +315,7 @@ public final class ContextMenuUtils {
      *
      * @param context The application {@link Context}.
      * @param params The {@link ContextMenuParams} for the context menu.
+     * @param leftContentOffsetPx The left content offset in pixels.
      * @param topContentOffsetPx The top content offset in pixels.
      * @param usePopupWindow Whether the menu should be displayed as a popup window.
      * @param containerView The container {@link View} for the context menu.
@@ -293,14 +326,15 @@ public final class ContextMenuUtils {
             Context context,
             Window window,
             ContextMenuParams params,
-            float topContentOffsetPx,
+            int leftContentOffsetPx,
+            int topContentOffsetPx,
             boolean usePopupWindow,
             View containerView) {
         final float density = context.getResources().getDisplayMetrics().density;
         final float touchPointXPx = params.getTriggeringTouchXDp() * density;
         final float touchPointYPx = params.getTriggeringTouchYDp() * density;
 
-        int x = (int) touchPointXPx;
+        int x = (int) (touchPointXPx + leftContentOffsetPx);
         int y = (int) (touchPointYPx + topContentOffsetPx);
 
         // When context menu is a popup, the coordinates are expected to be screen coordinates as

@@ -4,8 +4,8 @@
 
 #include "chrome/browser/media/router/discovery/access_code/access_code_cast_discovery_interface.h"
 
+#include "base/byte_size.h"
 #include "base/command_line.h"
-#include "base/feature_list.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
@@ -203,7 +203,7 @@ class AccessCodeCastDiscoveryInterfaceTest : public testing::Test {
     // TODO(crbug.com/417950948): ConsentLevel::kSync is deprecated and should
     // be removed. See ConsentLevel::kSync documentation for details.
     signin::ConsentLevel consent_level =
-        base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos)
+        syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
             ? signin::ConsentLevel::kSignin
             : signin::ConsentLevel::kSync;
 
@@ -239,7 +239,7 @@ class AccessCodeCastDiscoveryInterfaceTest : public testing::Test {
         net::HttpUtil::AssembleRawHeaders(headers));
     head->mime_type = "application/json";
     network::URLLoaderCompletionStatus status(error);
-    status.decoded_body_length = response_data.size();
+    status.decoded_body_length = base::ByteSize(response_data.size());
     test_url_loader_factory_.AddResponse(request_url, std::move(head),
                                          response_data, status);
   }
@@ -269,7 +269,7 @@ class AccessCodeCastDiscoveryInterfaceTest : public testing::Test {
 
   void SignIn() {
     signin::ConsentLevel consent_level =
-        base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos)
+        syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
             ? signin::ConsentLevel::kSignin
             : signin::ConsentLevel::kSync;
     SetProfileConsent(consent_level);
@@ -324,7 +324,7 @@ TEST_F(AccessCodeCastDiscoveryInterfaceTest,
 
   stub_interface()->ValidateDiscoveryAccessCode(mock_callback.Get());
   identity_test_env().WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-      GoogleServiceAuthError(GoogleServiceAuthError::SERVICE_UNAVAILABLE));
+      GoogleServiceAuthError::FromServiceUnavailable("Service unavailable."));
   task_environment_.RunUntilIdle();
 }
 
@@ -346,8 +346,7 @@ TEST_F(AccessCodeCastDiscoveryInterfaceTest, ServerError) {
 #if !BUILDFLAG(IS_CHROMEOS)
 // Revoking Sync consent is not possible on ChromeOS.
 TEST_F(AccessCodeCastDiscoveryInterfaceTest, SyncError) {
-  if (base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos)) {
+  if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     GTEST_SKIP() << "RevokeSyncConsent() is no-op as Sync is deprecated";
   }
 

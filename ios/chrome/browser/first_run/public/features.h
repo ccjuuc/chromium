@@ -7,8 +7,6 @@
 
 #import "base/feature_list.h"
 
-class ProfileIOS;
-
 namespace first_run {
 
 // Defines the different experiment arms for the Animated Default Browser Promo
@@ -47,6 +45,8 @@ enum class BestFeaturesScreenVariationType {
   kSignedInUsersOnlyAfterDBPromo,
   // Show the address bar promo instead of the Best Features screen.
   kAddressBarPromoInsteadOfBestFeaturesScreen,
+  // Show the general screen to all users as a part of the Best of App FRE.
+  kBestOfApp,
 };
 
 // Enum to represent arms of feature kUpdatedFirstRunSequence.
@@ -73,6 +73,10 @@ BASE_DECLARE_FEATURE(kSkipDefaultBrowserPromoInFirstRun);
 // Feature to enable updates to the sequence of the first run screens.
 BASE_DECLARE_FEATURE(kUpdatedFirstRunSequence);
 
+// Feature flag (killswitch) to enable presenting post FRE IPH promos in
+// FirstRunProfileAgent instead of FirstRunCoordinator.
+BASE_DECLARE_FEATURE(kPostFREIphInProfileAgent);
+
 // Name of the parameter that controls the experiment type for the Animated
 // Default Browser Promo in the FRE experiment, which determines the layout of
 // the promo.
@@ -91,10 +95,8 @@ extern const char kUpdatedFirstRunSequenceParam[];
 BestFeaturesScreenVariationType GetBestFeaturesScreenVariationType();
 
 // Returns which variation of the kUpdatedFirstRunSequence feature is enabled or
-// `kDisabled` if the feature is disabled. This feature is disabled for profiles
-// that can be eligible to search engine choice screens.
-UpdatedFRESequenceVariationType GetUpdatedFRESequenceVariation(
-    ProfileIOS* profile);
+// `kDisabled` if the feature is disabled.
+UpdatedFRESequenceVariationType GetUpdatedFRESequenceVariation();
 
 // Whether the Default Browser Experiment in the FRE is enabled. This feature is
 // disabled when kUpdatedFirstRunSequence is enabled.
@@ -104,6 +106,13 @@ bool IsAnimatedDefaultBrowserPromoInFREEnabled();
 // determines the layout of the Animated DBP.
 AnimatedDefaultBrowserPromoInFREExperimentType
 AnimatedDefaultBrowserPromoInFREExperimentTypeEnabled();
+
+// Returns whether the Default Browser Promo should be skipped in the FRE.
+bool IsSkipDefaultBrowserPromoInFirstRunEnabled(bool is_in_eea_country);
+
+// Returns whether post FRE IPH promos should be presented in
+// FirstRunProfileAgent instead of FirstRunCoordinator (killswitch).
+bool IsPostFREIphInProfileAgentEnabled();
 
 }  // namespace first_run
 

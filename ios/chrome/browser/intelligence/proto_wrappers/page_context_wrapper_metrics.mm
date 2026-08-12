@@ -7,25 +7,36 @@
 #import "base/check.h"
 #import "base/metrics/histogram_functions.h"
 #import "base/notreached.h"
+#import "base/numerics/safe_conversions.h"
 #import "base/strings/strcat.h"
 #import "base/time/time.h"
 #import "ios/chrome/browser/intelligence/proto_wrappers/metrics_constants.h"
 
 namespace {
 
+// Number of bytes in a single Kilobyte (KB). Used to convert payload sizes from
+// bytes.
+constexpr int kBytesInKb = 1024;
+
+// Number of Kilobytes (KB) in a single Megabyte (MB).
+constexpr int kKbsInMb = 1024;
+
+// Maximum expected size of the Page Context APC proto (500 MB in KB).
+constexpr int kMaxApcSizeKB = 500 * kKbsInMb;
+
 // Maps a `PageContextTask` to its corresponding histogram string constant.
 const char* PageContextTaskToString(PageContextTask task) {
   switch (task) {
     case PageContextTask::kOverall:
-      return kPageContextLatencyHistogramOverallTask;
+      return kPageContextHistogramOverallTask;
     case PageContextTask::kScreenshot:
-      return kPageContextLatencyHistogramScreenshotTask;
+      return kPageContextHistogramScreenshotTask;
     case PageContextTask::kAnnotatedPageContent:
-      return kPageContextLatencyHistogramAPCTask;
+      return kPageContextHistogramAPCTask;
     case PageContextTask::kPDF:
-      return kPageContextLatencyHistogramPDFTask;
+      return kPageContextHistogramPDFTask;
     case PageContextTask::kInnerText:
-      return kPageContextLatencyHistogramInnerTextTask;
+      return kPageContextHistogramInnerTextTask;
   }
 }
 
@@ -35,13 +46,17 @@ const char* PageContextCompletionStatusToString(
     PageContextCompletionStatus status) {
   switch (status) {
     case PageContextCompletionStatus::kSuccess:
-      return kPageContextLatencyHistogramSuccessStatus;
+      return kPageContextHistogramSuccessStatus;
     case PageContextCompletionStatus::kFailure:
-      return kPageContextLatencyHistogramFailureStatus;
+      return kPageContextHistogramFailureStatus;
     case PageContextCompletionStatus::kProtected:
-      return kPageContextLatencyHistogramPageProtectedStatus;
+      return kPageContextHistogramPageProtectedStatus;
     case PageContextCompletionStatus::kTimeout:
-      return kPageContextLatencyHistogramTimeoutStatus;
+      return kPageContextHistogramTimeoutStatus;
+    case PageContextCompletionStatus::kNotExtractable:
+      return kPageContextHistogramNotExtractableStatus;
+    case PageContextCompletionStatus::kPageUnsafe:
+      return kPageContextHistogramPageUnsafeStatus;
   }
 }
 
@@ -49,12 +64,18 @@ const char* PageContextCompletionStatusToString(
 // PageContext task's execution latency.
 void LogTaskExecutionLatency(PageContextTask task,
                              PageContextCompletionStatus status,
-                             base::TimeDelta time_delta) {
-  // Construct the histogram name.
-  std::string histogram_name = base::StrCat(
-      {kPageContextLatencyHistogramPrefix, PageContextTaskToString(task),
-       PageContextCompletionStatusToString(status),
-       kPageContextLatencyHistogramSuffix});
+                             base::TimeDelta time_delta,
+                             const std::string& apc_config_variant) {
+  std::string histogram_name =
+      base::StrCat({kPageContextHistogramPrefix, PageContextTaskToString(task),
+                    PageContextCompletionStatusToString(status)});
+
+  if (task == PageContextTask::kAnnotatedPageContent) {
+    histogram_name = base::StrCat({histogram_name, apc_config_variant});
+  }
+
+  histogram_name =
+      base::StrCat({histogram_name, kPageContextLatencyHistogramSuffix});
 
   base::UmaHistogramTimes(histogram_name.c_str(), time_delta);
 }
@@ -89,11 +110,15 @@ void LogTaskExecutionLatency(PageContextTask task,
 @implementation PageContextWrapperMetrics {
   // A map of PageContextTask (NSNumber*) -> TaskTimer.
   NSMutableDictionary<NSNumber*, TaskTimer*>* _taskTrackers;
+
+  // The variant to inject into PageContext APC histograms based on the config.
+  std::string _apcConfigVariant;
 }
 
-- (instancetype)init {
+- (instancetype)initWithAPCConfigVariant:(const std::string&)apcConfigVariant {
   self = [super init];
   if (self) {
+    _apcConfigVariant = apcConfigVariant;
     // Create the task tracker dictionary with one timer for the overall task.
     NSNumber* overallKey = @(static_cast<int>(PageContextTask::kOverall));
     _taskTrackers =
@@ -141,9 +166,26 @@ void LogTaskExecutionLatency(PageContextTask task,
       PageContextTask task = static_cast<PageContextTask>([key intValue]);
       PageContextCompletionStatus completionStatus = timer.completionStatus;
       base::TimeDelta latency = timer.endTime - timer.startTime;
-      LogTaskExecutionLatency(task, completionStatus, latency);
+      LogTaskExecutionLatency(task, completionStatus, latency,
+                              _apcConfigVariant);
     }
   }
+}
+
+- (void)logAnnotatedPageContentSize:(int)sizeInBytes {
+  base::UmaHistogramCounts10M(
+      base::StrCat({kPageContextHistogramPrefix, kPageContextHistogramAPCTask,
+                    _apcConfigVariant, kPageContextByteSizeHistogramSuffix}),
+      sizeInBytes);
+}
+
+- (void)logAnnotatedPageContentHighRangeSizeInKb:(int)sizeInBytes {
+  base::UmaHistogramCustomCounts(
+      base::StrCat({kPageContextHistogramPrefix, kPageContextHistogramAPCTask,
+                    _apcConfigVariant,
+                    kPageContextHighRangeSizeInKbHistogramSuffix}),
+      sizeInBytes / kBytesInKb,
+      /*min=*/1, /*max=*/kMaxApcSizeKB, /*buckets=*/50);
 }
 
 @end

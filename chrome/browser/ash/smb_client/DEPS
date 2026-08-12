@@ -24,8 +24,15 @@ include_rules = [
   "+chrome/browser/profiles",
   "+chrome/browser/ui/webui/ash/smb_shares",
   "+chrome/common/chrome_features.h",
-  "+chrome/common/pref_names.h",
-  "+chrome/common/webui_url_constants.h",
   "+chrome/grit",
   "+chrome/test/base",
 ]
+
+specific_include_rules = {
+  ".*unittest\\.cc": [
+    "+chrome/browser/ash/settings/scoped_cros_settings_test_helper.h",
+    "+chrome/browser/ash/settings/scoped_testing_cros_settings.h",
+    "+chrome/browser/ash/login/session/user_session_manager.h",
+    "+chrome/browser/global_features.h",
+  ],
+}

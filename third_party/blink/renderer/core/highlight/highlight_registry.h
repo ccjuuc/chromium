@@ -8,6 +8,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/maplike.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_sync_iterator_highlight_registry.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/dom/live_collection_iterator.h"
 #include "third_party/blink/renderer/core/highlight/highlight.h"
 #include "third_party/blink/renderer/core/highlight/highlight_registry_map_entry.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
@@ -26,6 +27,8 @@ namespace blink {
 using HighlightRegistryMap =
     HeapLinkedHashSet<Member<HighlightRegistryMapEntry>>;
 using HighlightRegistryMapIterable = Maplike<HighlightRegistry>;
+
+class Element;
 class HighlightHitResult;
 class HighlightsFromPointOptions;
 class LocalFrame;
@@ -59,8 +62,16 @@ class CORE_EXPORT HighlightRegistry : public ScriptWrappable,
 
   const HighlightRegistryMap& GetHighlights() const { return highlights_; }
   const HashSet<AtomicString>& GetActiveHighlights(const Text& node) const;
+  // Returns the active custom highlight names for a replaced element (e.g.
+  // <img>), or a reference to a static empty set if none.
+  const HashSet<AtomicString>& GetActiveHighlightsForReplacedElement(
+      const Element& element) const;
   void ValidateHighlightMarkers();
   void ScheduleRepaint();
+
+  bool GetForceMarkersValidationForTesting() const {
+    return force_markers_validation_;
+  }
 
   enum OverlayStackingPosition {
     kOverlayStackingPositionBelow = -1,
@@ -76,10 +87,16 @@ class CORE_EXPORT HighlightRegistry : public ScriptWrappable,
       const AtomicString& highlight_name1,
       const AtomicString& highlight_name2) const;
 
-  class IterationSource final
-      : public HighlightRegistryMapIterable::IterationSource {
+  // HighlightRegistryMapIterable implements live iteration following Map
+  // semantics.
+  using RegistryLiveIterator =
+      LiveCollectionIterator<HighlightRegistryMapEntry>;
+
+  class CORE_EXPORT IterationSource final
+      : public HighlightRegistryMapIterable::IterationSource,
+        public RegistryLiveIterator {
    public:
-    explicit IterationSource(const HighlightRegistry& highlight_registry);
+    explicit IterationSource(HighlightRegistry& highlight_registry);
 
     bool FetchNextItem(ScriptState* script_state,
                        String& key,
@@ -88,8 +105,7 @@ class CORE_EXPORT HighlightRegistry : public ScriptWrappable,
     void Trace(blink::Visitor*) const override;
 
    private:
-    wtf_size_t index_;
-    HeapVector<Member<HighlightRegistryMapEntry>> highlights_snapshot_;
+    Member<HighlightRegistry> registry_;
   };
 
   HeapVector<Member<HighlightHitResult>> highlightsFromPoint(
@@ -100,11 +116,26 @@ class CORE_EXPORT HighlightRegistry : public ScriptWrappable,
  private:
   bool IsAbstractRangePaintable(AbstractRange*, Document*) const;
 
+  // Adds `highlight_name` to the set of custom highlights tracked as
+  // covering the given replaced element.
+  void TrackReplacedElementForHighlight(const Element& element,
+                                        const AtomicString& highlight_name);
+
   HighlightRegistryMap highlights_;
   Member<LocalFrame> frame_;
+  // Active iteration sources that need to be notified of mutations.
+  // WeakMember ensures GC automatically cleans up unreferenced iterators.
+  HeapHashSet<WeakMember<RegistryLiveIterator>> active_iterators_;
+  void NotifyIteratorsWillRemoveEntry(HighlightRegistryMapEntry* entry);
+  void NotifyIteratorsWillClear();
   // Only valid after ValidateHighlightMarkers(), used to optimize painting.
   HeapHashMap<WeakMember<const Text>, HashSet<AtomicString>>
       active_highlights_in_node_;
+  // Replaced elements (e.g. <img>) covered by custom highlight ranges,
+  // tracked here so ReplacedPainter::PaintCustomHighlights can look up the
+  // active highlight names at paint time.
+  HeapHashMap<WeakMember<const Element>, HashSet<AtomicString>>
+      active_highlights_in_replaced_element_;
   uint64_t dom_tree_version_for_validate_highlight_markers_ = 0;
   uint64_t style_version_for_validate_highlight_markers_ = 0;
   bool force_markers_validation_ = true;

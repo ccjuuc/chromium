@@ -109,8 +109,12 @@ struct PendingUpload {
 
 class ReportingUploaderImpl : public ReportingUploader, URLRequest::Delegate {
  public:
-  explicit ReportingUploaderImpl(const URLRequestContext* context)
-      : context_(context) {
+  ReportingUploaderImpl(
+      const URLRequestContext* context,
+      PrepareUploadRequestCallback prepare_upload_request_callback)
+      : context_(context),
+        prepare_upload_request_callback_(
+            std::move(prepare_upload_request_callback)) {
     DCHECK(context_);
   }
 
@@ -150,8 +154,11 @@ class ReportingUploaderImpl : public ReportingUploader, URLRequest::Delegate {
     DCHECK(upload->state == PendingUpload::CREATED);
 
     upload->state = PendingUpload::SENDING_PREFLIGHT;
-    upload->request = context_->CreateRequest(upload->url, IDLE, this,
-                                              kReportUploadTrafficAnnotation);
+    upload->request = context_->CreateRequest(
+        upload->url, IDLE, this, kReportUploadTrafficAnnotation,
+        // TODO(crbug.com/527774896): Support targeting a specific network for
+        // Reporting APIs.
+        net::handles::kInvalidNetworkHandle);
 
     upload->request->set_method("OPTIONS");
 
@@ -173,6 +180,10 @@ class ReportingUploaderImpl : public ReportingUploader, URLRequest::Delegate {
     // reports.)
     upload->request->set_reporting_upload_depth(upload->max_depth + 1);
 
+    if (prepare_upload_request_callback_) {
+      prepare_upload_request_callback_.Run(upload->request.get());
+    }
+
     URLRequest* raw_request = upload->request.get();
     uploads_[raw_request] = std::move(upload);
     raw_request->Start();
@@ -184,8 +195,11 @@ class ReportingUploaderImpl : public ReportingUploader, URLRequest::Delegate {
            upload->state == PendingUpload::SENDING_PREFLIGHT);
 
     upload->state = PendingUpload::SENDING_PAYLOAD;
-    upload->request = context_->CreateRequest(upload->url, IDLE, this,
-                                              kReportUploadTrafficAnnotation);
+    upload->request = context_->CreateRequest(
+        upload->url, IDLE, this, kReportUploadTrafficAnnotation,
+        // TODO(crbug.com/527774896): Support targeting a specific network for
+        // Reporting APIs.
+        net::handles::kInvalidNetworkHandle);
     upload->request->set_method("POST");
 
     upload->request->SetLoadFlags(LOAD_DISABLE_CACHE);
@@ -194,10 +208,15 @@ class ReportingUploaderImpl : public ReportingUploader, URLRequest::Delegate {
     // the site generating the report (this will be set to false either by the
     // delivery agent determining that this is a V0 report, or by `StartUpload`
     // determining that this is a cross-origin case, and taking the CORS
-    // preflight path).
-    if (!eligible_for_credentials) {
+    // preflight path). An exception to this are reports associated with a
+    // non-general NetworkIsolationPartition, since credentials should never be
+    // sent with these requests.
+    if (!eligible_for_credentials ||
+        upload->isolation_info.GetNetworkIsolationPartition() !=
+            NetworkIsolationPartition::kGeneral) {
       upload->request->set_disallow_credentials();
     }
+
     // The site for cookies is taken from the reporting source's IsolationInfo,
     // in the case of V1 reporting endpoints, and will be null for V0 reports.
     upload->request->set_site_for_cookies(
@@ -237,7 +256,9 @@ class ReportingUploaderImpl : public ReportingUploader, URLRequest::Delegate {
     //    frame origin will be created from the top-level site, losing full host
     //    and port information.
     if (upload->isolation_info.IsEmpty()) {
-      CHECK(!NetworkAnonymizationKey::IsPartitioningEnabled());
+      CHECK(!NetworkAnonymizationKey::IsPartitioningEnabled() ||
+            NetworkIsolationPartitionAlwaysAllowEmptyPartition(
+                upload->isolation_info.GetNetworkIsolationPartition()));
     }
     upload->request->set_isolation_info(upload->isolation_info);
 
@@ -258,6 +279,10 @@ class ReportingUploaderImpl : public ReportingUploader, URLRequest::Delegate {
     // reports to the same origin can cause an infinite stack of reports about
     // reports.)
     upload->request->set_reporting_upload_depth(upload->max_depth + 1);
+
+    if (prepare_upload_request_callback_) {
+      prepare_upload_request_callback_.Run(upload->request.get());
+    }
 
     URLRequest* raw_request = upload->request.get();
     uploads_[raw_request] = std::move(upload);
@@ -368,6 +393,7 @@ class ReportingUploaderImpl : public ReportingUploader, URLRequest::Delegate {
 
  private:
   raw_ptr<const URLRequestContext> context_;
+  PrepareUploadRequestCallback prepare_upload_request_callback_;
   std::map<const URLRequest*, std::unique_ptr<PendingUpload>> uploads_;
 };
 
@@ -377,8 +403,9 @@ ReportingUploader::~ReportingUploader() = default;
 
 // static
 std::unique_ptr<ReportingUploader> ReportingUploader::Create(
-    const URLRequestContext* context) {
-  return std::make_unique<ReportingUploaderImpl>(context);
+    const URLRequestContext* context,
+    PrepareUploadRequestCallback callback) {
+  return std::make_unique<ReportingUploaderImpl>(context, std::move(callback));
 }
 
 }  // namespace net

@@ -11,6 +11,7 @@
 #include "third_party/blink/public/platform/web_worker_fetch_context.h"
 #include "third_party/blink/renderer/core/frame/deprecation/deprecation.h"
 #include "third_party/blink/renderer/core/loader/mixed_content_checker.h"
+#include "third_party/blink/renderer/core/loader/resource_initiator_helper.h"
 #include "third_party/blink/renderer/core/loader/subresource_filter.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/core/timing/worker_global_scope_performance.h"
@@ -28,6 +29,7 @@
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/scheduler/public/virtual_time_controller.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
 
 namespace blink {
@@ -157,17 +159,29 @@ bool WorkerFetchContext::ShouldBlockFetchByMixedContentCheck(
 bool WorkerFetchContext::ShouldBlockFetchAsCredentialedSubresource(
     const ResourceRequest& resource_request,
     const KURL& url) const {
-  if ((!url.User().empty() || !url.Pass().empty()) &&
-      resource_request.GetRequestContext() !=
-          mojom::blink::RequestContextType::XML_HTTP_REQUEST) {
-    if (Url().User() != url.User() || Url().Pass() != url.Pass()) {
-      CountDeprecation(
-          WebFeature::kRequestedSubresourceWithEmbeddedCredentials);
-
-      return true;
-    }
+  // URLs with no embedded credentials should load correctly.
+  if (url.User().empty() && url.Pass().empty()) {
+    return false;
   }
-  return false;
+
+  if (resource_request.GetRequestContext() ==
+      mojom::blink::RequestContextType::XML_HTTP_REQUEST) {
+    return false;
+  }
+
+  // Relative URLs on worker scripts that were loaded with embedded credentials
+  // should load correctly if same-origin.
+  if (Url().User() == url.User() && Url().Pass() == url.Pass() &&
+      SecurityOrigin::Create(url)->IsSameOriginWith(
+          GetResourceFetcherProperties()
+              .GetFetchClientSettingsObject()
+              .GetSecurityOrigin())) {
+    return false;
+  }
+
+  CountDeprecation(WebFeature::kRequestedSubresourceWithEmbeddedCredentials);
+
+  return true;
 }
 
 const KURL& WorkerFetchContext::Url() const {
@@ -212,18 +226,13 @@ void WorkerFetchContext::PrepareRequest(
   }
 
   probe::PrepareRequest(Probe(), nullptr, request, options, resource_type);
-
-  request.SetAllowsDeviceBoundSessionRegistration(
-      RuntimeEnabledFeatures::DeviceBoundSessionCredentialsEnabled(
-          GetExecutionContext()) ||
-      RuntimeEnabledFeatures::DeviceBoundSessionCredentials2Enabled(
-          GetExecutionContext()));
 }
 
 void WorkerFetchContext::AddAdditionalRequestHeaders(ResourceRequest& request) {
   // The remaining modifications are only necessary for HTTP and HTTPS.
-  if (!request.Url().IsEmpty() && !request.Url().ProtocolIsInHTTPFamily())
+  if (!request.Url().IsEmpty() && !request.Url().ProtocolIsInHttpFamily()) {
     return;
+  }
 
   // TODO(crbug.com/1315612): WARNING: This bypasses the permissions policy.
   // Unfortunately, workers lack a permissions policy and to derive proper hints
@@ -231,8 +240,33 @@ void WorkerFetchContext::AddAdditionalRequestHeaders(ResourceRequest& request) {
   // Save-Data was previously included in hints for workers, thus we cannot
   // remove it for the time being. If you're reading this, consider building
   // permissions policies for workers and/or deprecating this inclusion.
-  if (save_data_enabled_)
+  bool save_data_enabled = save_data_enabled_;
+  probe::ApplyDataSaverOverride(Probe(), save_data_enabled);
+  if (save_data_enabled) {
     request.SetHttpHeaderField(http_names::kSaveData, AtomicString("on"));
+  }
+}
+
+// TODO(crbug.com/40919714): After determine exactly how we support initiator
+// for resource timing on worker threads, consider merging this function with
+// FrameFetchContext::FillInitiatorInfo().
+void WorkerFetchContext::FillInitiatorInfo(FetchInitiatorInfo& initiator_info) {
+  CHECK(RuntimeEnabledFeatures::ResourceTimingInitiatorEnabled());
+  if (initiator_info.is_imported_module && !initiator_info.referrer.empty()) {
+    // TODO(crbug.com/40919714): Fill |initiator_url|.
+    // Initiator is a referrer of an imported js file.
+    return;
+  }
+
+  v8::Isolate* isolate = ResourceInitiatorHelper::GetIsolateIfRunningScript();
+  if (isolate) {
+    // It is the currently executing JavaScript that is fetching the resource.
+    // The initiator is the JavaScript that originally dispatched currently
+    // executing JavaScript.
+    initiator_info.initiator_url =
+        ResourceInitiatorHelper::GetScriptInitiatorUrl(*isolate);
+    return;
+  }
 }
 
 void WorkerFetchContext::AddResourceTiming(

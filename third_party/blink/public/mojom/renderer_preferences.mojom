@@ -9,6 +9,7 @@ import "mojo/public/mojom/base/time.mojom";
 import "third_party/blink/public/mojom/peerconnection/webrtc_ip_handling_policy.mojom";
 import "third_party/blink/public/mojom/user_agent/user_agent_metadata.mojom";
 import "ui/gfx/mojom/font_render_params.mojom";
+import "ui/events/mojom/keyboard_codes.mojom";
 import "third_party/blink/public/mojom/peerconnection/webrtc_ip_handling_url_entry.mojom";
 
 const int64 kDefaultCaretBlinkIntervalInMilliseconds = 500;
@@ -75,8 +76,7 @@ struct RendererPreferences {
   // Whether or not to set custom colors at all.
   bool use_custom_colors = true;
 
-  // Whether or not to use overlay scrollbar.
-  [EnableIf=is_chromeos]
+  [EnableIf=is_chromeos|is_linux|is_win]
   bool use_overlay_scrollbar = false;
 
   // Set to false to not send referrers.
@@ -176,22 +176,6 @@ struct RendererPreferences {
   [EnableIf=is_win]
   int32 message_font_height = 0;
 
-  // The width of a vertical scroll bar in dips.
-  [EnableIf=is_win]
-  int32 vertical_scroll_bar_width_in_dips = 0;
-
-  // The height of a horizontal scroll bar in dips.
-  [EnableIf=is_win]
-  int32 horizontal_scroll_bar_height_in_dips = 0;
-
-  // The height of the arrow bitmap on a vertical scroll bar in dips.
-  [EnableIf=is_win]
-  int32 arrow_bitmap_height_vertical_scroll_bar_in_dips = 0;
-
-  // The width of the arrow bitmap on a horizontal scroll bar in dips.
-  [EnableIf=is_win]
-  int32 arrow_bitmap_width_horizontal_scroll_bar_in_dips = 0;
-
   // Whether the selection clipboard buffer is available.  Linux environments
   // may support this.
   [EnableIf=is_selection_clipboard_buffer_possible]
@@ -208,8 +192,20 @@ struct RendererPreferences {
   [EnableIf=is_android]
   bool uses_platform_autofill = false;
 
+  // Triggers for the Autofill AtMemory UI.
+  // Typing the trigger string or pressing keyboard shortcut in an editable DOM
+  // element (e.g., <input> or <div contenteditable>) opens a UI that lets the
+  // user search for and fill values into the field.
+  string autofill_trigger_string;         // An arbitrary string, e.g., "@@".
+  int32 autofill_shortcut_key_code = 0;   // A `ui::KeyboardCode`.
+  int32 autofill_shortcut_modifiers = 0;  // A `ui::EventFlags` bitmask.
+
   array<uint16> explicitly_allowed_network_ports;
 
   // Whether line wrapping should be enabled by default in view source pages.
   bool view_source_line_wrap_enabled = false;
+
+  // Whether the system color chooser is a modal dialog that steals focus from
+  // the browser window.
+  bool system_color_chooser_is_modal = false;
 };

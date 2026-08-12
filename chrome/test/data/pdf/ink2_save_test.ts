@@ -3,18 +3,27 @@
 // found in the LICENSE file.
 
 import {AnnotationMode, PluginController, PluginControllerEventType, UserAction} from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js';
+import type {SaveMessage} from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
-import {createTextBox, getRequiredElement, setupMockMetricsPrivate, setupTestMockPluginForInk, startFinishModifiedInkStroke} from './test_util.js';
+import {getNewTestBeforeUnloadProxy} from './test_before_unload_proxy.js';
+import {setUpTestPdfViewerPrivateProxy} from './test_pdf_viewer_private_proxy.js';
+import {createTextBox, getRequiredElement, getTextBox, setupMockMetricsPrivate, setupTestMockPluginForInk, startFinishModifiedInkStroke} from './test_util.js';
 
 const viewer = document.body.querySelector('pdf-viewer')!;
 const viewerToolbar = viewer.$.toolbar;
 const controller = PluginController.getInstance();
 const mockPlugin = setupTestMockPluginForInk();
+// Set a reply for the save message that will bypass opening a file dialog
+// and saving the data to disk.
+mockPlugin.setReplyToSave(true);
 const mockMetricsPrivate = setupMockMetricsPrivate();
 const SaveRequestType = chrome.pdfViewerPrivate.SaveRequestType;
 type SaveRequestType = chrome.pdfViewerPrivate.SaveRequestType;
+
+// Disable beforeunload to avoid hanging after tests succeed.
+getNewTestBeforeUnloadProxy();
 
 function getDownloadControls() {
   return getRequiredElement(viewerToolbar, 'viewer-download-controls');
@@ -26,10 +35,13 @@ function getFirstSaveMessageName(): string {
       'save';
 }
 
-function getSaveRequestType(message: any): SaveRequestType {
+function getSaveRequestType(message: {
+  saveRequestTypeForTesting?: SaveRequestType,
+  saveRequestType?: SaveRequestType,
+}): SaveRequestType {
   return loadTimeData.getBoolean('pdfGetSaveDataInBlocks') ?
-      message.saveRequestTypeForTesting :
-      message.saveRequestType;
+      message.saveRequestTypeForTesting! :
+      message.saveRequestType!;
 }
 
 // Test saving with annotations. The download control's action menu should be
@@ -41,10 +53,12 @@ async function testSaveWithAnnotations() {
   // The download menu should be shown.
   await eventToPromise('save-menu-shown-for-testing', downloadControls);
   chrome.test.assertTrue(
-      mockPlugin.findMessage(getFirstSaveMessageName()) === undefined);
+      mockPlugin.findMessage<SaveMessage>(getFirstSaveMessageName()) ===
+      undefined);
   chrome.test.assertTrue(actionMenu.open);
 
-  const onSave = eventToPromise('save', viewer);
+  const onSaveInitiated = eventToPromise('save-initiated-for-testing', viewer);
+  const onSaveCompleted = eventToPromise('save-completed-for-testing', viewer);
 
   // Click on "Edited".
   const buttons = actionMenu.querySelectorAll('button');
@@ -52,12 +66,15 @@ async function testSaveWithAnnotations() {
   buttons[0]!.click();
 
   // A message should be sent to the plugin to save as annotated.
-  await onSave;
-  const saveMessage = mockPlugin.findMessage(getFirstSaveMessageName());
+  await onSaveInitiated;
+  const saveMessage =
+      mockPlugin.findMessage<SaveMessage>(getFirstSaveMessageName());
   chrome.test.assertTrue(saveMessage !== undefined);
   chrome.test.assertEq(
       getSaveRequestType(saveMessage), SaveRequestType.ANNOTATION);
   chrome.test.assertFalse(actionMenu.open);
+
+  await onSaveCompleted;
 }
 
 chrome.test.runTests([
@@ -76,16 +93,23 @@ chrome.test.runTests([
     const actionMenu = downloadControls.$.menu;
     chrome.test.assertFalse(actionMenu.open);
 
+    const onSaveInitiated =
+        eventToPromise('save-initiated-for-testing', viewer);
+    const onSaveCompleted =
+        eventToPromise('save-completed-for-testing', viewer);
     downloadButton.click();
 
     // A message should be sent to the plugin to save as original.
-    await eventToPromise('save', viewer);
-    const saveMessage = mockPlugin.findMessage(getFirstSaveMessageName());
+    await onSaveInitiated;
+    const saveMessage =
+        mockPlugin.findMessage<SaveMessage>(getFirstSaveMessageName());
     chrome.test.assertTrue(saveMessage !== undefined);
     chrome.test.assertEq(
         getSaveRequestType(saveMessage), SaveRequestType.ORIGINAL);
     chrome.test.assertFalse(actionMenu.open);
     chrome.test.assertEq(AnnotationMode.DRAW, viewerToolbar.annotationMode);
+
+    await onSaveCompleted;
     mockMetricsPrivate.assertCount(UserAction.SAVE_ORIGINAL_ONLY, 1);
     chrome.test.succeed();
   },
@@ -126,23 +150,29 @@ chrome.test.runTests([
     // The download menu should be shown.
     await eventToPromise('save-menu-shown-for-testing', downloadControls);
     chrome.test.assertTrue(
-        mockPlugin.findMessage(getFirstSaveMessageName()) === undefined);
+        mockPlugin.findMessage<SaveMessage>(getFirstSaveMessageName()) ===
+        undefined);
     chrome.test.assertTrue(actionMenu.open);
 
-    const onSave = eventToPromise('save', viewer);
-
+    const onSaveInitiated =
+        eventToPromise('save-initiated-for-testing', viewer);
+    const onSaveCompleted =
+        eventToPromise('save-completed-for-testing', viewer);
     // Click on "Original".
     const buttons = actionMenu.querySelectorAll('button');
     chrome.test.assertEq(2, buttons.length);
     buttons[1]!.click();
 
     // A message should be sent to the plugin to save as annotated.
-    await onSave;
-    const saveMessage = mockPlugin.findMessage(getFirstSaveMessageName());
+    await onSaveInitiated;
+    const saveMessage =
+        mockPlugin.findMessage<SaveMessage>(getFirstSaveMessageName());
     chrome.test.assertTrue(saveMessage !== undefined);
     chrome.test.assertEq(
         getSaveRequestType(saveMessage), SaveRequestType.ORIGINAL);
     chrome.test.assertFalse(actionMenu.open);
+
+    await onSaveCompleted;
     mockMetricsPrivate.assertCount(UserAction.SAVE_ORIGINAL, 1);
     chrome.test.succeed();
   },
@@ -197,15 +227,22 @@ chrome.test.runTests([
     // be disabled.
     chrome.test.assertTrue(undoButton.disabled);
 
+    const onSaveInitiated =
+        eventToPromise('save-initiated-for-testing', viewer);
+    const onSaveCompleted =
+        eventToPromise('save-completed-for-testing', viewer);
     downloadButton.click();
 
     // A message should be sent to the plugin to save as original.
-    await eventToPromise('save', viewer);
-    const saveMessage = mockPlugin.findMessage(getFirstSaveMessageName());
+    await onSaveInitiated;
+    const saveMessage =
+        mockPlugin.findMessage<SaveMessage>(getFirstSaveMessageName());
     chrome.test.assertTrue(saveMessage !== undefined);
     chrome.test.assertEq(
         getSaveRequestType(saveMessage), SaveRequestType.ORIGINAL);
     chrome.test.assertFalse(actionMenu.open);
+
+    await onSaveCompleted;
     mockMetricsPrivate.assertCount(UserAction.SAVE_ORIGINAL_ONLY, 1);
     chrome.test.succeed();
   },
@@ -231,7 +268,8 @@ chrome.test.runTests([
     // The download menu should be shown.
     await eventToPromise('save-menu-shown-for-testing', downloadControls);
     chrome.test.assertTrue(
-        mockPlugin.findMessage(getFirstSaveMessageName()) === undefined);
+        mockPlugin.findMessage<SaveMessage>(getFirstSaveMessageName()) ===
+        undefined);
     chrome.test.assertTrue(actionMenu.open);
     chrome.test.succeed();
   },
@@ -263,15 +301,22 @@ chrome.test.runTests([
     const actionMenu = downloadControls.$.menu;
     actionMenu.close();
 
+    const onSaveInitiated =
+        eventToPromise('save-initiated-for-testing', viewer);
+    const onSaveCompleted =
+        eventToPromise('save-completed-for-testing', viewer);
     downloadButton.click();
 
     // A message should be sent to the plugin to save as original.
-    await eventToPromise('save', viewer);
-    const saveMessage = mockPlugin.findMessage(getFirstSaveMessageName());
+    await onSaveInitiated;
+    const saveMessage =
+        mockPlugin.findMessage<SaveMessage>(getFirstSaveMessageName());
     chrome.test.assertTrue(saveMessage !== undefined);
     chrome.test.assertEq(
         getSaveRequestType(saveMessage), SaveRequestType.ORIGINAL);
     chrome.test.assertFalse(actionMenu.open);
+
+    await onSaveCompleted;
     mockMetricsPrivate.assertCount(UserAction.SAVE_ORIGINAL_ONLY, 1);
     chrome.test.succeed();
   },
@@ -291,7 +336,7 @@ chrome.test.runTests([
     chrome.test.assertEq(AnnotationMode.TEXT, viewerToolbar.annotationMode);
     createTextBox();
     await microtasksFinished();
-    const textbox = viewer.shadowRoot.querySelector('ink-text-box');
+    const textbox = getTextBox(viewer);
     chrome.test.assertTrue(!!textbox);
     chrome.test.assertTrue(isVisible(textbox));
 
@@ -300,11 +345,16 @@ chrome.test.runTests([
     const actionMenu = downloadControls.$.menu;
     chrome.test.assertFalse(actionMenu.open);
 
+    const onSaveInitiated =
+        eventToPromise('save-initiated-for-testing', viewer);
+    const onSaveCompleted =
+        eventToPromise('save-completed-for-testing', viewer);
     downloadButton.click();
 
     // A message should be sent to the plugin to save as original.
-    await eventToPromise('save', viewer);
-    const saveMessage = mockPlugin.findMessage(getFirstSaveMessageName());
+    await onSaveInitiated;
+    const saveMessage =
+        mockPlugin.findMessage<SaveMessage>(getFirstSaveMessageName());
     chrome.test.assertTrue(saveMessage !== undefined);
     chrome.test.assertEq(
         getSaveRequestType(saveMessage), SaveRequestType.ORIGINAL);
@@ -314,6 +364,8 @@ chrome.test.runTests([
 
     // Textbox should be hidden.
     chrome.test.assertFalse(isVisible(textbox));
+
+    await onSaveCompleted;
     chrome.test.succeed();
   },
 
@@ -330,7 +382,7 @@ chrome.test.runTests([
 
     createTextBox();
     await microtasksFinished();
-    const textbox = viewer.shadowRoot.querySelector('ink-text-box');
+    const textbox = getTextBox(viewer);
     chrome.test.assertTrue(!!textbox);
     chrome.test.assertTrue(isVisible(textbox));
     textbox.$.textbox.value = 'Hello';
@@ -382,15 +434,22 @@ chrome.test.runTests([
     const actionMenu = downloadControls.$.menu;
     actionMenu.close();
 
+    const onSaveInitiated =
+        eventToPromise('save-initiated-for-testing', viewer);
+    const onSaveCompleted =
+        eventToPromise('save-completed-for-testing', viewer);
     downloadButton.click();
 
     // A message should be sent to the plugin to save as original.
-    await eventToPromise('save', viewer);
-    const saveMessage = mockPlugin.findMessage(getFirstSaveMessageName());
+    await onSaveInitiated;
+    const saveMessage =
+        mockPlugin.findMessage<SaveMessage>(getFirstSaveMessageName());
     chrome.test.assertTrue(saveMessage !== undefined);
     chrome.test.assertEq(
         getSaveRequestType(saveMessage), SaveRequestType.ORIGINAL);
     chrome.test.assertFalse(actionMenu.open);
+
+    await onSaveCompleted;
     mockMetricsPrivate.assertCount(UserAction.SAVE_ORIGINAL_ONLY, 1);
     chrome.test.succeed();
   },
@@ -401,10 +460,6 @@ chrome.test.runTests([
   async function testSaveMenuAfterRedoText() {
     mockPlugin.clearMessages();
     mockMetricsPrivate.reset();
-    // Set a reply for the save message that will bypass opening a file dialog
-    // and saving the data to disk.
-    mockPlugin.setReplyToSave(true);
-
     const redoButton =
         getRequiredElement<HTMLButtonElement>(viewerToolbar, '#redo');
     chrome.test.assertFalse(redoButton.disabled);
@@ -424,4 +479,128 @@ chrome.test.runTests([
     // turned off the beforeunload dialog after the successful save.
     chrome.test.succeed();
   },
+
+  async function testSaveWithTextBoxOpen() {
+    mockPlugin.clearMessages();
+    mockMetricsPrivate.reset();
+
+    // Enable text annotations.
+    loadTimeData.overrideValues({'pdfTextAnnotationsEnabled': true});
+    viewerToolbar.strings = Object.assign({}, viewerToolbar.strings);
+    await microtasksFinished();
+
+    // Switch to TEXT mode.
+    viewerToolbar.setAnnotationMode(AnnotationMode.TEXT);
+    await microtasksFinished();
+
+    // Create a textbox.
+    createTextBox();
+    await microtasksFinished();
+    const textbox = getTextBox(viewer)!;
+    chrome.test.assertTrue(!!textbox);
+
+    // Edit the textbox.
+    textbox.$.textbox.value = 'Save me';
+    textbox.$.textbox.dispatchEvent(new CustomEvent('input'));
+    await microtasksFinished();
+
+    const downloadControls = getDownloadControls();
+    const actionMenu = downloadControls.$.menu;
+
+    // Trigger save menu.
+    downloadControls.$.save.click();
+    await eventToPromise('save-menu-shown-for-testing', downloadControls);
+    chrome.test.assertTrue(actionMenu.open);
+
+    const onSaveInitiated =
+        eventToPromise('save-initiated-for-testing', viewer);
+    const onSaveCompleted =
+        eventToPromise('save-completed-for-testing', viewer);
+
+    // Click on "Edited".
+    const buttons = actionMenu.querySelectorAll('button');
+    chrome.test.assertEq(2, buttons.length);
+    buttons[0]!.click();
+
+    await onSaveInitiated;
+    chrome.test.assertFalse(actionMenu.open);
+
+    // The finishTextAnnotation message should have been sent before save.
+    const saveMessageName = getFirstSaveMessageName();
+    const setTextIndex = mockPlugin.messages.findIndex(
+        message => message.type === 'finishTextAnnotation');
+    const saveIndex = mockPlugin.messages.findIndex(
+        message => message.type === saveMessageName);
+
+    chrome.test.assertNe(-1, saveIndex);
+    chrome.test.assertNe(-1, setTextIndex);
+    chrome.test.assertTrue(setTextIndex < saveIndex);
+
+    // Textbox is closed and annotation is committed.
+    chrome.test.assertFalse(isVisible(textbox));
+
+    await onSaveCompleted;
+    chrome.test.succeed();
+  },
+
+  // <if expr="enable_pdf_save_to_drive">
+  async function testSaveToDriveWithTextBoxOpen() {
+    mockPlugin.clearMessages();
+    mockMetricsPrivate.reset();
+
+    // Enable save to drive and text annotations.
+    loadTimeData.overrideValues({
+      'pdfSaveToDrive': true,
+      'pdfTextAnnotationsEnabled': true,
+    });
+    viewerToolbar.strings = Object.assign({}, viewerToolbar.strings);
+    await microtasksFinished();
+
+    const privateProxy = setUpTestPdfViewerPrivateProxy(viewer);
+
+    // Switch to TEXT mode.
+    viewerToolbar.setAnnotationMode(AnnotationMode.TEXT);
+    await microtasksFinished();
+
+    // Create a textbox.
+    createTextBox();
+    await microtasksFinished();
+    const textbox = getTextBox(viewer)!;
+    chrome.test.assertTrue(!!textbox);
+    chrome.test.assertTrue(isVisible(textbox));
+
+    // Edit the textbox.
+    textbox.$.textbox.value = 'Drive';
+    textbox.$.textbox.dispatchEvent(new CustomEvent('input'));
+    await microtasksFinished();
+
+    const controls =
+        getRequiredElement(viewerToolbar, 'viewer-save-to-drive-controls');
+    const actionMenu = controls.$.menu;
+
+    // Click Save to Drive and the menu should open.
+    controls.$.save.click();
+    await eventToPromise('save-menu-shown-for-testing', controls);
+    chrome.test.assertTrue(actionMenu.open);
+
+    // Click on "Edited".
+    const buttons = actionMenu.querySelectorAll('button');
+    chrome.test.assertEq(2, buttons.length);
+    buttons[0]!.click();
+
+    // Wait for saveToDrive to be called on privateProxy.
+    await privateProxy.whenCalled('saveToDrive');
+    chrome.test.assertEq(false, actionMenu.open);
+
+    // The finishTextAnnotation message should have been sent.
+    const setTextIndex = mockPlugin.messages.findIndex(
+        message => message.type === 'finishTextAnnotation');
+    chrome.test.assertNe(-1, setTextIndex);
+
+    // Textbox is closed and annotation is committed.
+    chrome.test.assertFalse(isVisible(textbox));
+
+    chrome.test.succeed();
+  },
+  // </if>
 ]);

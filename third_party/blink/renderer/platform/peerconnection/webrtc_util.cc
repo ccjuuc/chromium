@@ -34,13 +34,10 @@ BASE_FEATURE(kPlatformH264CbpEncoding,
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
         // BUILDFLAG(IS_ANDROID)
 
-String WebrtcCodecNameFromMimeType(const String& mime_type,
-                                   const char* prefix) {
-  if (mime_type.StartsWith(prefix)) {
-    wtf_size_t length =
-        static_cast<wtf_size_t>(mime_type.length() - strlen(prefix) - 1);
-    const String codec_name = mime_type.Right(length);
-    return codec_name;
+StringView WebrtcCodecNameFromMimeType(const StringView& mime_type,
+                                       const StringView& prefix) {
+  if (mime_type.starts_with(prefix) && mime_type.length() > prefix.length()) {
+    return mime_type.substr(prefix.length() + 1);
   }
   return "";
 }
@@ -139,12 +136,10 @@ bool PLATFORM_EXPORT UseH264AcceleratedEncoderForWebRTC() {
   // available because of assumptions that SW fallback is always possible. This
   // check should be removed when SW implementation is always available.
   return ::features::IsOpenH264SoftwareEncoderEnabledForWebRTC();
-#elif BUILDFLAG(RTC_USE_H264)
-  // On Android, H264 HW encoder can be used without SW encoder because the SW
-  // fallback logic has been explicitly disabled.
-  return true;
 #else
-  return false;
+  // On Android, H264 HW encoder can be used without SW encoder because the SW
+  // fallback logic can be explicitly disabled.
+  return true;
 #endif
 }
 

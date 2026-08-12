@@ -13,8 +13,10 @@
 #include "content/browser/preloading/prefetch/prefetch_key.h"
 #include "content/browser/preloading/prefetch/prefetch_params.h"
 #include "content/browser/preloading/prefetch/prefetch_type.h"
+#include "content/browser/preloading/preload_pipeline_info_impl.h"
 #include "content/browser/preloading/speculation_rules/speculation_rules_tags.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/prefetch_request_status_listener.h"
 #include "content/public/browser/preloading.h"
@@ -27,6 +29,7 @@
 namespace content {
 
 class BrowserContext;
+class PrefetchContainerObserver;
 class PrefetchDocumentManager;
 class PreloadPipelineInfo;
 class PreloadPipelineInfoImpl;
@@ -87,7 +90,7 @@ class CONTENT_EXPORT PrefetchRendererInitiatorInfo final {
 class CONTENT_EXPORT PrefetchBrowserInitiatorInfo final {
  public:
   PrefetchBrowserInitiatorInfo(
-      const std::string& embedder_histogram_suffix,
+      const std::string& histogram_suffix,
       std::unique_ptr<PrefetchRequestStatusListener> request_status_listener);
   ~PrefetchBrowserInitiatorInfo();
 
@@ -97,25 +100,48 @@ class CONTENT_EXPORT PrefetchBrowserInitiatorInfo final {
       delete;
   PrefetchBrowserInitiatorInfo(PrefetchBrowserInitiatorInfo&&);
 
-  const std::string& embedder_histogram_suffix() const {
-    return embedder_histogram_suffix_;
+  PrefetchContainerObserver* request_status_listener_observer() const {
+    return request_status_listener_observer_.get();
   }
-  PrefetchRequestStatusListener* request_status_listener() const {
-    return request_status_listener_.get();
-  }
+
+  const std::string& histogram_suffix() const { return histogram_suffix_; }
 
  private:
   // The suffix string of embedder triggers used for generating histogram
   // recorded per trigger.
-  std::string embedder_histogram_suffix_;
+  std::string histogram_suffix_;
 
-  // Listener of prefetch request. Currently used for WebView initiated
-  // prefetch.
-  std::unique_ptr<PrefetchRequestStatusListener> request_status_listener_;
+  // `PrefetchContainerObserver` connected to `PrefetchStatusListener`.
+  // Currently used for WebView initiated prefetch.
+  std::unique_ptr<PrefetchContainerObserver> request_status_listener_observer_;
 };
 
-// `PrefetchRequest` represents request parameters to `PrefetchService` to
-// prefetch a URL.
+// `PrefetchRequest` represents request parameters to `PrefetchService` or
+// `PrePrefetchService` to prefetch a URL.
+//
+// Thread model:
+//
+// `PrefetchRequest` is not thread safe. Can be created/destructed on any
+// thread, and passed from non-UI thread to UI thread. Should be careful about
+// the following:
+// - `BrowserContext`, `WebContents`, `PreloadingAttempt` (WeakPtrs): these
+//   should be created on UI thread and passed to this `PrefetchRequest`.
+//   While destructing/passing them across threads is safe, checking their
+//   validity or accessing the underlying objects should only be done on the
+//   original UI thread.
+// - `PreloadPipelineInfo` (`RefCountedThreadSafe` scoped_refptr):
+//   Creating/destructing/passing `PreloadPipelineInfo` across thread
+//   should be safe.
+//   `PreloadPipelineInfo` itself is not thread safe, so shouldn't be
+//   dereferenced from non-main thread, except for exceptional cases for
+//   accessing const members
+//   (e.g. `preload_pipeline_info_planned_max_preloading_type()`).
+// - const value-type members can be safely accessed from any thread.
+//
+// TODO(crbug.com/452406598, crbug.com/452389538): Consider decoupling them
+// to clearly show this restriction and handle them more properly. Also consider
+// the model that `PrefetchRequest` is initialized without UI-thread-bound
+// members on non-UI thread, and they are inserted on the UI thread later.
 //
 // TODO(https://crbug.com/437631382): Incrementally migrate the
 // `PrefetchContainer` constructor arguments into `PrefetchRequest`, so that
@@ -145,7 +171,7 @@ class CONTENT_EXPORT PrefetchRequest final {
       WebContents& referring_web_contents,
       const GURL& url,
       const PrefetchType& prefetch_type,
-      const std::string& embedder_histogram_suffix,
+      const std::string& histogram_suffix,
       const blink::mojom::Referrer& referrer,
       const std::optional<url::Origin>& referring_origin,
       std::optional<net::HttpNoVarySearchData> no_vary_search_hint,
@@ -164,7 +190,30 @@ class CONTENT_EXPORT PrefetchRequest final {
       BrowserContext* browser_context,
       const GURL& url,
       const PrefetchType& prefetch_type,
-      const std::string& embedder_histogram_suffix,
+      const std::string& histogram_suffix,
+      const blink::mojom::Referrer& referrer,
+      bool javascript_enabled,
+      const std::optional<url::Origin>& referring_origin,
+      std::optional<net::HttpNoVarySearchData> no_vary_search_hint,
+      std::optional<PrefetchPriority> priority,
+      scoped_refptr<PreloadPipelineInfo> preload_pipeline_info,
+      base::WeakPtr<PreloadingAttempt> attempt = nullptr,
+      const net::HttpRequestHeaders& additional_headers = {},
+      std::unique_ptr<PrefetchRequestStatusListener> request_status_listener =
+          nullptr,
+      base::TimeDelta ttl = PrefetchContainerDefaultTtlInPrefetchService(),
+      bool should_append_variations_header = true,
+      bool should_disable_block_until_head_timeout = false,
+      bool should_bypass_http_cache = false);
+
+  // For browser-initiated prefetch that doesn't depend on web
+  // contents and main thread.
+  static std::unique_ptr<const PrefetchRequest>
+  CreateBrowserInitiatedWithoutWebContentsOffTheMainThread(
+      base::WeakPtr<BrowserContext> browser_context,
+      const GURL& url,
+      const PrefetchType& prefetch_type,
+      const std::string& histogram_suffix,
       const blink::mojom::Referrer& referrer,
       bool javascript_enabled,
       const std::optional<url::Origin>& referring_origin,
@@ -211,10 +260,24 @@ class CONTENT_EXPORT PrefetchRequest final {
     return no_vary_search_hint_;
   }
   const std::optional<PrefetchPriority>& priority() const { return priority_; }
+
+  // Can only be accessed its mutable methods/members on the UI thread.
   PreloadPipelineInfoImpl& preload_pipeline_info() const {
+    DCHECK_CURRENTLY_ON(BrowserThread::UI);
     return *preload_pipeline_info_;
   }
-  PreloadingAttempt* attempt() const { return attempt_.get(); }
+
+  // Const members of `PreloadPipelineInfoImpl` can be accessed from any thread.
+  PreloadingType preload_pipeline_info_planned_max_preloading_type() const {
+    return preload_pipeline_info_->planned_max_preloading_type();
+  }
+
+  // Can only be accessed its methods/members on the UI thread.
+  PreloadingAttempt* attempt() const {
+    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    return attempt_.get();
+  }
+
   bool is_javascript_enabled() const { return is_javascript_enabled_; }
   const blink::mojom::Referrer& initial_referrer() const {
     return initial_referrer_;
@@ -222,10 +285,18 @@ class CONTENT_EXPORT PrefetchRequest final {
   const std::optional<url::Origin>& referring_origin() const {
     return referring_origin_;
   }
+
+  // Can only be accessed its methods/members on the UI thread.
   const base::WeakPtr<WebContents>& referring_web_contents() const {
+    DCHECK_CURRENTLY_ON(BrowserThread::UI);
     return referring_web_contents_;
   }
-  BrowserContext* browser_context() const { return browser_context_.get(); }
+
+  // Can only be accessed its methods/members on the UI thread.
+  BrowserContext* browser_context() const {
+    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    return browser_context_.get();
+  }
 
   const std::optional<SpeculationRulesTags>& speculation_rules_tags() const {
     return speculation_rules_tags_;
@@ -251,6 +322,18 @@ class CONTENT_EXPORT PrefetchRequest final {
   // Exactly one of them returns non-null.
   const PrefetchRendererInitiatorInfo* GetRendererInitiatorInfo() const;
   const PrefetchBrowserInitiatorInfo* GetBrowserInitiatorInfo() const;
+
+  // Whether or not the prefetch proxy would be required to prefetch a URL in
+  // the given `request_url_origin` based on `prefetch_type_`.
+  bool IsProxyRequiredForURL(const url::Origin& request_url_origin) const;
+
+  // Whether or not the given origin would become a cross-site/cross-origin
+  // request.
+  bool IsCrossSiteRequest(const url::Origin& origin) const;
+  bool IsCrossOriginRequest(const url::Origin& origin) const;
+
+  // Whether or not an isolated network context is required to prefetch `url`.
+  bool IsIsolatedNetworkContextRequired(const GURL& url) const;
 
  private:
   // The type of this prefetch. This controls some specific details about how
@@ -297,8 +380,8 @@ class CONTENT_EXPORT PrefetchRequest final {
   const bool is_javascript_enabled_;
 
   // The referrer to use for the initial request.
-  // Only for initialization of `PrefetchContainer::referrer_`.
-  // For other cases, use `PrefetchContainer::referrer_` instead.
+  // Only for initialization of `PrefetchContainer::resource_request_`'s
+  // `referrer` / `referrer_policy`, which are updated upon redirects.
   const blink::mojom::Referrer initial_referrer_;
 
   // The origin and URL that initiates the prefetch request.

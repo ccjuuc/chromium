@@ -27,7 +27,6 @@ class Browser;
 class BrowserWindowInterface;
 class GURL;
 enum class WindowOpenDisposition;
-struct NavigateParams;
 
 namespace apps {
 struct AppLaunchParams;
@@ -45,7 +44,7 @@ namespace web_app {
 // required to be the active web contents in `source_browser`.
 //
 // Note: This will CHECK-fail if `contents` is not in `source_browser`.
-void ReparentWebContentsIntoBrowserImpl(Browser* source_browser,
+void ReparentWebContentsIntoBrowserImpl(BrowserWindowInterface* source_browser,
                                         content::WebContents* contents,
                                         BrowserWindowInterface* target_browser,
                                         bool insert_as_pinned_home_tab = false);
@@ -81,10 +80,10 @@ BrowserWindowInterface* ReparentWebAppForActiveTab(Browser* browser);
 // - Otherwise a new browser window is created for `contents` to be reparented
 // into.
 // Returns the browser instance where the reparenting has happened, nullptr
-// otherwise. Runs `completion_callback` synchronously with the existing
-// `contents`, if it was reparented, or with the new `web_contents` that was
-// created if the behavior deemed it necessary (like for focus existing and
-// navigate-existing use-cases).
+// otherwise. Runs `completion_callback` (synchronously or asynchronously) with
+// the existing `contents`, if it was reparented, or with the new `web_contents`
+// that was created if the behavior deemed it necessary (like for focus existing
+// and navigate-existing use-cases).
 BrowserWindowInterface* ReparentWebContentsIntoAppBrowser(
     content::WebContents* contents,
     const webapps::AppId& app_id,
@@ -120,21 +119,13 @@ Browser* CreateWebAppWindowMaybeWithHomeTab(
     const webapps::AppId& app_id,
     const Browser::CreateParams& params);
 
-content::WebContents* NavigateWebAppUsingParams(NavigateParams& nav_params);
-
-// RecordLaunchMetrics methods report UMA metrics. It shouldn't have other
-// side-effects (e.g. updating app launch time).
-void RecordLaunchMetrics(const webapps::AppId& app_id,
-                         apps::LaunchContainer container,
-                         apps::LaunchSource launch_source,
-                         const GURL& launch_url,
-                         content::WebContents* web_contents);
-
-// Updates statistics about web app launch. For example, app's last launch time
-// (populates recently launched app list) and site engagement stats.
-void UpdateLaunchStats(content::WebContents* web_contents,
-                       const webapps::AppId& app_id,
-                       const GURL& launch_url);
+// Report UMA metrics and updates  app's last launch time, site engagement
+// stats, etc.
+void UpdateLaunchMetricsAndStats(const webapps::AppId& app_id,
+                                 apps::LaunchContainer container,
+                                 apps::LaunchSource launch_source,
+                                 const GURL& launch_url,
+                                 content::WebContents* web_contents);
 
 // Locks that lock apps all have the WithAppResources mixin, allowing any
 // app-locking lock to call this method.
@@ -143,14 +134,6 @@ void LaunchWebApp(apps::AppLaunchParams params,
                   Profile& profile,
                   WithAppResources& app_resources,
                   LaunchWebAppDebugValueCallback callback);
-
-// Will enqueue the given url in the launch params for this web contents. Does
-// not check if the url is within scope of the app.
-void EnqueueLaunchParams(content::WebContents* contents,
-                         const webapps::AppId& app_id,
-                         const GURL& url,
-                         bool wait_for_navigation_to_complete,
-                         base::TimeTicks time_navigation_started);
 
 // Focus the app container depending on whether the `browser` is an app window
 // or if it is a normal tabbed browser. `browser` shouldn't be a nullptr, and

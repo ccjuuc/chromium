@@ -18,7 +18,7 @@
 #include "chrome/browser/extensions/external_provider_impl.h"
 #include "chrome/browser/extensions/forced_extensions/force_installed_test_base.h"
 #include "chrome/browser/extensions/forced_extensions/force_installed_tracker.h"
-#include "chrome/browser/extensions/forced_extensions/install_stage_tracker.h"
+#include "chrome/browser/extensions/forced_extensions/install_stage_tracker_factory.h"
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -27,6 +27,7 @@
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/forced_extensions/install_stage_tracker.h"
 #include "extensions/browser/install/crx_install_error.h"
 #include "extensions/browser/install/sandboxed_unpacker_failure_reason.h"
 #include "extensions/browser/pref_names.h"
@@ -149,10 +150,10 @@ constexpr char kManifestDownloadTimeStats[] =
 constexpr char kCRXDownloadTimeStats[] =
     "Extensions.ForceInstalledTime.ManifestDownloadCompleteTo."
     "CRXDownloadComplete";
-constexpr char kVerificationTimeStats[] =
-    "Extensions.ForceInstalledTime.VerificationStartTo.CopyingStart";
 constexpr char kCopyingTimeStats[] =
-    "Extensions.ForceInstalledTime.CopyingStartTo.UnpackingStart";
+    "Extensions.ForceInstalledTime.CopyingStartTo.VerificationStart";
+constexpr char kVerificationTimeStats[] =
+    "Extensions.ForceInstalledTime.VerificationStartTo.UnpackingStart";
 constexpr char kUnpackingTimeStats[] =
     "Extensions.ForceInstalledTime.UnpackingStartTo.CheckingExpectationsStart";
 constexpr char kCheckingExpectationsTimeStats[] =
@@ -193,13 +194,13 @@ class ForceInstalledMetricsTest : public ForceInstalledTestBase {
   }
 
   void SetupExtensionManagementPref() {
-    base::Value::Dict extension_entry =
-        base::Value::Dict()
+    base::DictValue extension_entry =
+        base::DictValue()
             .Set("installation_mode", "allowed")
             .Set(ExternalProviderImpl::kExternalUpdateUrl, kExtensionUpdateUrl);
     prefs()->SetManagedPref(
         pref_names::kExtensionManagement,
-        base::Value::Dict().Set(kExtensionId1, std::move(extension_entry)));
+        base::DictValue().Set(kExtensionId1, std::move(extension_entry)));
   }
 
   void CreateExtensionService(bool extensions_enabled) {
@@ -391,12 +392,12 @@ TEST_F(ForceInstalledMetricsTest, ExtensionsReportInstallationStageTimes) {
   ReportDownloadingManifestStage();
   ReportInstallationStarted(std::nullopt);
   install_stage_tracker()->ReportCRXInstallationStage(
-      kExtensionId1, InstallationStage::kVerification);
+      kExtensionId1, InstallationStage::kCopying);
 
   const base::TimeDelta installation_stage_time = base::Milliseconds(200);
   task_environment_.FastForwardBy(installation_stage_time);
   install_stage_tracker()->ReportCRXInstallationStage(
-      kExtensionId1, InstallationStage::kCopying);
+      kExtensionId1, InstallationStage::kVerification);
 
   task_environment_.FastForwardBy(installation_stage_time);
   install_stage_tracker()->ReportCRXInstallationStage(
@@ -421,11 +422,11 @@ TEST_F(ForceInstalledMetricsTest, ExtensionsReportInstallationStageTimes) {
   // ForceInstalledMetrics shuts down timer because all extension are either
   // loaded or failed.
   EXPECT_FALSE(fake_timer_->IsRunning());
-  histogram_tester_.ExpectTotalCount(kVerificationTimeStats, 1);
-  histogram_tester_.ExpectTimeBucketCount(kVerificationTimeStats,
-                                          installation_stage_time, 1);
   histogram_tester_.ExpectTotalCount(kCopyingTimeStats, 1);
   histogram_tester_.ExpectTimeBucketCount(kCopyingTimeStats,
+                                          installation_stage_time, 1);
+  histogram_tester_.ExpectTotalCount(kVerificationTimeStats, 1);
+  histogram_tester_.ExpectTimeBucketCount(kVerificationTimeStats,
                                           installation_stage_time, 1);
   histogram_tester_.ExpectTotalCount(kUnpackingTimeStats, 1);
   histogram_tester_.ExpectTimeBucketCount(kUnpackingTimeStats,
@@ -1368,15 +1369,14 @@ TEST_F(ForceInstalledMetricsTest,
        NonMisconfigurationFailureNotPresentDisallowedByPolicyTypeError) {
   SetupForceList(ExtensionOrigin::kWebStore);
   // Set TYPE_EXTENSION and TYPE_THEME as the allowed extension types.
-  base::Value::List list =
-      base::Value::List().Append("extension").Append("theme");
+  base::ListValue list = base::ListValue().Append("extension").Append("theme");
   prefs()->SetManagedPref(pref_names::kAllowedTypes, std::move(list));
 
   scoped_refptr<const Extension> ext1 = CreateNewExtension(
       kExtensionName1, kExtensionId1, ExtensionStatus::kLoaded);
   // Hosted app is not a valid extension type, so this should report an error.
   install_stage_tracker()->ReportExtensionType(kExtensionId2,
-                                               Manifest::Type::TYPE_HOSTED_APP);
+                                               Manifest::Type::kHostedApp);
   install_stage_tracker()->ReportCrxInstallError(
       kExtensionId2,
       InstallStageTracker::FailureReason::CRX_INSTALL_ERROR_DECLINED,
@@ -1398,14 +1398,13 @@ TEST_F(ForceInstalledMetricsTest,
   SetupForceList(ExtensionOrigin::kWebStore);
 
   // Set TYPE_EXTENSION and TYPE_THEME as the allowed extension types.
-  base::Value::List list =
-      base::Value::List().Append("extension").Append("theme");
+  base::ListValue list = base::ListValue().Append("extension").Append("theme");
   prefs()->SetManagedPref(pref_names::kAllowedTypes, std::move(list));
 
   scoped_refptr<const Extension> ext1 = CreateNewExtension(
       kExtensionName1, kExtensionId1, ExtensionStatus::kLoaded);
   install_stage_tracker()->ReportExtensionType(kExtensionId2,
-                                               Manifest::Type::TYPE_EXTENSION);
+                                               Manifest::Type::kExtension);
   install_stage_tracker()->ReportCrxInstallError(
       kExtensionId2,
       InstallStageTracker::FailureReason::CRX_INSTALL_ERROR_DECLINED,

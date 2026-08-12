@@ -54,10 +54,13 @@ class BASE_EXPORT ThreadPoolImpl : public ThreadPoolInstance,
   // For testing only. Creates a ThreadPoolImpl with a custom TaskTracker.
   // If |!use_background_threads|, background threads will run with default
   // priority.
-  ThreadPoolImpl(std::string_view histogram_label,
-                 std::unique_ptr<TaskTrackerImpl> task_tracker,
-                 bool use_background_threads = true,
-                 bool monitor_worker_thread_priorities = true);
+  ThreadPoolImpl(
+      std::string_view histogram_label,
+      std::unique_ptr<TaskTrackerImpl> task_tracker,
+      bool use_background_threads = true,
+      bool monitor_worker_thread_priorities = true,
+      ThreadPoolInstance::RecordLockContention record_lock_contention =
+          ThreadPoolInstance::RecordLockContention::kDisabled);
 
   ThreadPoolImpl(const ThreadPoolImpl&) = delete;
   ThreadPoolImpl& operator=(const ThreadPoolImpl&) = delete;
@@ -68,8 +71,7 @@ class BASE_EXPORT ThreadPoolImpl : public ThreadPoolInstance,
              WorkerThreadObserver* worker_thread_observer) override;
   bool WasStarted() const final;
   bool WasStartedUnsafe() const final;
-  size_t GetMaxConcurrentNonBlockedTasksWithTraitsDeprecated(
-      const TaskTraits& traits) const override;
+  size_t GetMaxConcurrentForegroundTasks() const override;
   void Shutdown() override;
   void FlushForTesting() override;
   void FlushAsyncForTesting(OnceClosure flush_callback) override;
@@ -175,10 +177,12 @@ class BASE_EXPORT ThreadPoolImpl : public ThreadPoolInstance,
   // workers as appropriate.
   void UpdateCanRunPolicy(CanRunPolicy can_run_policy);
 
-  const ThreadGroup* GetThreadGroupForTraits(const TaskTraits& traits) const;
+  const ThreadGroup* GetThreadGroup(ThreadType thread_type,
+                                    ThreadPolicy policy) const;
 
   // ThreadGroup::Delegate:
-  ThreadGroup* GetThreadGroupForTraits(const TaskTraits& traits) override;
+  ThreadGroup* GetThreadGroup(ThreadType thread_type,
+                              ThreadPolicy policy) override;
 
   // Posts |task| to be executed by the appropriate thread group as part of
   // |sequence|. This must only be called after |task| has gone through
@@ -199,9 +203,13 @@ class BASE_EXPORT ThreadPoolImpl : public ThreadPoolInstance,
   std::unique_ptr<ThreadGroup> foreground_thread_group_;
   std::unique_ptr<ThreadGroup> utility_thread_group_;
   std::unique_ptr<ThreadGroup> background_thread_group_;
+  std::unique_ptr<ThreadGroup> presentation_thread_group_;
+  std::unique_ptr<ThreadGroup> audio_thread_group_;
 
   // Whether this TaskScheduler was started.
   bool started_ GUARDED_BY_CONTEXT(sequence_checker_) = false;
+
+  bool inherit_task_importance_by_default_ = false;
 
   // Whether the --disable-best-effort-tasks switch is preventing execution of
   // BEST_EFFORT tasks until shutdown.

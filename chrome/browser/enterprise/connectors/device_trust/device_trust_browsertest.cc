@@ -10,7 +10,6 @@
 #include "base/functional/bind.h"
 #include "base/test/test_future.h"
 #include "base/values.h"
-#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/browser/enterprise/connectors/device_trust/common/metrics_utils.h"
 #include "chrome/browser/enterprise/connectors/device_trust/device_trust_features.h"
@@ -45,13 +44,12 @@
 #include "chrome/browser/ash/attestation/tpm_challenge_key.h"
 #include "chrome/browser/ash/attestation/tpm_challenge_key_result.h"
 #else
-#include "chrome/browser/enterprise/connectors/device_trust/key_management/browser/commands/scoped_key_rotation_command_factory.h"
-#include "chrome/browser/enterprise/connectors/device_trust/key_management/core/persistence/scoped_key_persistence_delegate_factory.h"
+#include "chrome/browser/enterprise/connectors/device_trust/key_management/browser/commands/scoped_key_rotation_command_factory.h"  // nogncheck
+#include "chrome/browser/enterprise/connectors/device_trust/key_management/core/persistence/scoped_key_persistence_delegate_factory.h"  // nogncheck
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "components/device_signals/core/browser/pref_names.h"
-#include "components/device_signals/core/common/signals_features.h"
-#include "components/enterprise/browser/device_trust/device_trust_key_manager.h"
+#include "components/enterprise/device_trust/core/device_trust_key_manager.h"
 #include "components/prefs/pref_service.h"
 #include "ui/base/interaction/element_identifier.h"
 #endif
@@ -213,7 +211,7 @@ IN_PROC_BROWSER_TEST_F(DeviceTrustBrowserTest, AttestationPrefEmptyList) {
 IN_PROC_BROWSER_TEST_F(DeviceTrustBrowserTest,
                        CreateNavigationThrottleIncognitoMode) {
   // Add incognito browser for the mock navigation handle.
-  auto* incognito_browser = CreateIncognitoBrowser(browser()->profile());
+  auto* incognito_browser = CreateIncognitoBrowser(browser()->GetProfile());
   content::MockNavigationHandle mock_nav_handle(
       web_contents(incognito_browser));
   content::MockNavigationThrottleRegistry registry(
@@ -235,9 +233,6 @@ class DeviceTrustDelayedManagementBrowserTest
     scoped_feature_list_.InitWithFeatures(
         /*enabled_features=*/
         {
-#if BUILDFLAG(IS_MAC)
-            kDTCKeyRotationUploadedBySharedAPIEnabled,
-#endif  // BUILDFLAG(IS_MAC)
             kDTCKeyUploadedBySharedAPIEnabled,
 #if BUILDFLAG(IS_CHROMEOS)
             ash::features::kUnmanagedDeviceDeviceTrustConnectorEnabled
@@ -296,20 +291,19 @@ INSTANTIATE_TEST_SUITE_P(ManagedState,
 // expect per platform.
 IN_PROC_BROWSER_TEST_F(DeviceTrustBrowserTest, SignalsContract) {
   auto* device_trust_service =
-      DeviceTrustServiceFactory::GetForProfile(browser()->profile());
+      DeviceTrustServiceFactory::GetForProfile(browser()->GetProfile());
   ASSERT_TRUE(device_trust_service);
 
-  base::test::TestFuture<base::Value::Dict> future;
+  base::test::TestFuture<base::DictValue> future;
   device_trust_service->GetSignals(future.GetCallback());
 
   // This error most likely indicates that one of the signals decorators did
   // not invoke its done_closure in time.
   ASSERT_TRUE(future.Wait()) << "Timed out while collecting signals.";
 
-  const base::Value::Dict& signals_dict = future.Get();
+  const base::DictValue& signals_dict = future.Get();
 
-  const auto signals_contract_map =
-      device_signals::test::GetSignalsContract(IsDTCAntivirusSignalEnabled());
+  const auto signals_contract_map = device_signals::test::GetSignalsContract();
   ASSERT_FALSE(signals_contract_map.empty());
   for (const auto& signals_contract_entry : signals_contract_map) {
     // First is the signal name.
@@ -489,11 +483,7 @@ class DeviceTrustBrowserTestWithConsent
     scoped_feature_list_.InitWithFeatures(
         /*enabled_features=*/
         {
-            enterprise_signals::features::kDeviceSignalsConsentDialog,
             kDTCKeyUploadedBySharedAPIEnabled,
-#if BUILDFLAG(IS_MAC)
-            kDTCKeyRotationUploadedBySharedAPIEnabled,
-#endif  // BUILDFLAG(IS_MAC)
         },
         /*disabled_features=*/{});
   }
@@ -501,7 +491,7 @@ class DeviceTrustBrowserTestWithConsent
   void SetUpOnMainThread() override {
     InteractiveBrowserTestMixin::SetUpOnMainThread();
 
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         device_signals::prefs::kUnmanagedDeviceSignalsConsentFlowEnabled,
         is_consent_policy_enabled());
   }
@@ -752,10 +742,7 @@ class DeviceTrustPolicyLevelBrowserTest
                 .is_managed = true,
                 .is_inline_policy_enabled = false,
             }),
-        })) {
-    scoped_feature_list_.InitWithFeatureState(
-        enterprise_signals::features::kDeviceSignalsConsentDialog, true);
-  }
+        })) {}
 
   bool is_affiliated() { return testing::get<0>(GetParam()); }
   bool will_trigger_device_inline_flow() { return testing::get<1>(GetParam()); }
@@ -897,21 +884,20 @@ class DeviceTrustBrowserTestSignalsContractForUnmanagedDevices
 IN_PROC_BROWSER_TEST_F(DeviceTrustBrowserTestSignalsContractForUnmanagedDevices,
                        SignalsContract) {
   auto* device_trust_service =
-      DeviceTrustServiceFactory::GetForProfile(browser()->profile());
+      DeviceTrustServiceFactory::GetForProfile(browser()->GetProfile());
   ASSERT_TRUE(device_trust_service);
 
-  base::test::TestFuture<base::Value::Dict> future;
+  base::test::TestFuture<base::DictValue> future;
   device_trust_service->GetSignals(future.GetCallback());
 
   // This error most likely indicates that one of the signals decorators did
   // not invoke its done_closure in time.
   ASSERT_TRUE(future.Wait()) << "Timed out while collecting signals.";
 
-  const base::Value::Dict& signals_dict = future.Get();
+  const base::DictValue& signals_dict = future.Get();
 
   const auto signals_contract_map =
-      device_signals::test::GetSignalsContractForUnmanagedDevices(
-          IsDTCAntivirusSignalEnabled());
+      device_signals::test::GetSignalsContractForUnmanagedDevices();
   ASSERT_FALSE(signals_contract_map.empty());
   for (const auto& signals_contract_entry : signals_contract_map) {
     // First is the signal name.

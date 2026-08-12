@@ -29,19 +29,16 @@ class TabStyle {
   // in different situations, but most (excluding |kClip|) are roughly the same
   // shape.
   enum class PathType {
-    // Interior fill outline. Extends halfway into the border so there are no
+    // File-folder tab outline. Extends halfway into the border so there are no
     // gaps between border and fill.
-    kFill,
+    kActiveTab,
     // Center of the border path. The path is guaranteed to fit into the tab
     // bounds, including the stroke thickness.
     kBorder,
     // The hit test region. May be extended into a rectangle that touches the
     // top of the bounding box when the window is maximized, for Fitts' Law.
     kHitTest,
-    // The area inside the tab where children can be rendered, used to clip
-    // child views. Does not have to be the same shape as the border.
-    kInteriorClip,
-    // The path used for focus rings.
+    // A rounded rectangle path used for things like focus rings and hover.
     kHighlight,
   };
 
@@ -143,11 +140,6 @@ class TabStyle {
   // Gets the radius of the rounded rect used to draw the separator.
   int GetSeparatorCornerRadius() const;
 
-  // Returns, for a tab of height |height|, how far the window top drag handle
-  // can extend down into inactive tabs or the new tab button. This behavior
-  // is not used in all cases.
-  int GetDragHandleExtension(int height) const;
-
   // Gets the preferred size for tab previews, which could be screencaps, hero
   // or og:image images, etc.
   gfx::Size GetPreviewImageSize() const;
@@ -185,6 +177,12 @@ class TabStyle {
                                 const bool frame_active,
                                 const ui::ColorProvider* color_provider) const;
 
+  SkColor GetTabBackgroundColor(const TabSelectionState state,
+                                const bool hovered,
+                                const bool frame_active,
+                                const bool frame_glass,
+                                const ui::ColorProvider* color_provider) const;
+
   // Returns the background color of a tab with selection state `state` and
   // hover state `hovered`. If `hovered`, this blends the hovered and unhovered
   // background colors according to the `hover_animation_value`.
@@ -194,6 +192,7 @@ class TabStyle {
       const bool hovered,
       float hover_animation_value,
       const bool frame_active,
+      const bool frame_glass,
       const ui::ColorProvider* color_provider) const;
 
   // Opacity of the active tab background painted over inactive selected tabs.
@@ -209,6 +208,11 @@ class TabStyle {
   static constexpr float kMaximumZValue = 7.0f;
 
   static constexpr float kDefaultSelectedTabOpacity = 0.75f;
+
+  // Thresholds where the tab strip may render without certain UI elements,
+  // such as separators and inactive tab close buttons.
+  static constexpr int kTabStripDeclutterMaxTabWidthForCloseHide = 100;
+  static constexpr int kTabStripDeclutterMinTabsForSeparatorHide = 20;
 
   static const TabStyle* Get();
 

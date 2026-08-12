@@ -15,8 +15,10 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.components.omnibox.AutocompleteRequestType;
 import org.chromium.components.security_state.ConnectionMaliciousContentStatus;
 import org.chromium.components.security_state.ConnectionSecurityLevel;
+import org.chromium.content_public.browser.WebContents;
 import org.chromium.url.GURL;
 
 /** Interface defining a provider for data needed by the {@link LocationBar}. */
@@ -118,8 +120,27 @@ public interface LocationBarDataProvider {
     /** Returns the currently active tab, if there is one. */
     @Nullable Tab getTab();
 
+    /**
+     * Returns the default request type for this provider. This allows the omnibox to maintain a
+     * specialized state even when not focused.
+     */
+    default @AutocompleteRequestType int getDefaultRequestType() {
+        return AutocompleteRequestType.SEARCH;
+    }
+
+    /**
+     * Returns the FuseboxSessionState linked to the current tab (if present) or context
+     * (otherwise).
+     */
+    @Nullable FuseboxSessionState getFuseboxSessionState();
+
     /** Returns whether the LocationBarDataProvider currently has an active tab. */
     boolean hasTab();
+
+    /** Returns the active WebContents. */
+    default @Nullable WebContents getWebContents() {
+        return null;
+    }
 
     /** Returns the contents of the {@link UrlBar}. */
     UrlBarData getUrlBarData();

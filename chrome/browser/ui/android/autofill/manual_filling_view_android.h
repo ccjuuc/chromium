@@ -41,28 +41,25 @@ class ManualFillingViewAndroid : public ManualFillingViewInterface {
       autofill::AccessoryAction action) override;
   void CloseAccessorySheet() override;
   void SwapSheetWithKeyboard() override;
-  void Show(WaitForKeyboard wait_for_keyboard,
-            IsCredentialFieldOrHasAutofillSuggestions
-                is_credential_field_or_has_autofill_suggestions) override;
+  void Show(
+      WaitForKeyboard wait_for_keyboard,
+      ShouldShowOnLargeFormFactor should_show_on_large_form_factor) override;
   void Hide() override;
   void ShowAccessorySheetTab(
       const autofill::AccessoryTabType& tab_type) override;
+  bool IsLargeFormFactor() const override;
 
   // Called from Java via JNI:
   void OnFillingTriggered(
       JNIEnv* env,
-      jint tab_type,
+      int32_t tab_type,
       const base::android::JavaRef<jobject>& j_user_info_field);
   void OnPasskeySelected(JNIEnv* env,
-                         jint tab_type,
-                         std::vector<uint8_t>& passkey);
-  void OnOptionSelected(JNIEnv* env,
-                        jint selected_action);
-  void OnToggleChanged(JNIEnv* env,
-                       jint selected_action,
-                       jboolean enabled);
-  void RequestAccessorySheet(JNIEnv* env,
-                             jint tab_type);
+                         int32_t tab_type,
+                         const std::vector<uint8_t>& passkey);
+  void OnOptionSelected(JNIEnv* env, int32_t selected_action);
+  void OnToggleChanged(JNIEnv* env, int32_t selected_action, bool enabled);
+  void RequestAccessorySheet(JNIEnv* env, int32_t tab_type);
   void OnViewDestroyed(JNIEnv* env);
 
  private:

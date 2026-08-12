@@ -15,6 +15,7 @@
 #include "base/process/kill.h"
 #include "base/process/memory.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/time/time.h"
 #include "base/types/fixed_array.h"
 #include "build/build_config.h"
 #include "content/common/zygote/zygote_commands_linux.h"
@@ -46,11 +47,11 @@ bool ReceiveFixedMessage(int fd,
                          base::ProcessId* sender_pid) {
   // Allocate an extra byte of buffer space so we can check that we received
   // exactly |expect_len| bytes, and the message wasn't just truncated to fit.
-  base::FixedArray<char> buf(expect_len + 1);
+  base::FixedArray<uint8_t> buf(expect_len + 1);
   std::vector<base::ScopedFD> fds_vec;
 
-  const ssize_t len = base::UnixDomainSocket::RecvMsgWithPid(
-      fd, buf.data(), buf.memsize(), &fds_vec, sender_pid);
+  const ssize_t len =
+      base::UnixDomainSocket::RecvMsgWithPid(fd, buf, &fds_vec, sender_pid);
   if (static_cast<size_t>(len) != expect_len)
     return false;
   if (UNSAFE_TODO(memcmp(buf.data(), expect_msg, expect_len)) != 0) {
@@ -203,8 +204,18 @@ pid_t ZygoteHostImpl::LaunchZygote(
 
     // First we receive a message from the zygote boot process.
     base::ProcessId boot_pid;
-    PCHECK(ReceiveFixedMessage(fds[0], kZygoteBootMessage,
-                               sizeof(kZygoteBootMessage), &boot_pid));
+    if (!ReceiveFixedMessage(fds[0], kZygoteBootMessage,
+                             sizeof(kZygoteBootMessage), &boot_pid)) {
+      int exit_code = 0;
+      bool exited =
+          process.WaitForExitWithTimeout(base::TimeDelta(), &exit_code);
+      if (exited) {
+        LOG(FATAL) << "Zygote process exited prematurely with exit code "
+                   << exit_code;
+      } else {
+        LOG(FATAL) << "Failed to receive boot message from zygote";
+      }
+    }
 
     // Within the PID namespace, the zygote boot process thinks it's PID 1,
     // but its real PID can never be 1. This gives us a reliable test that
@@ -217,8 +228,18 @@ pid_t ZygoteHostImpl::LaunchZygote(
     // Now receive the message that the zygote's ready to go, along with the
     // main zygote process's ID.
     pid_t real_pid;
-    PCHECK(ReceiveFixedMessage(fds[0], kZygoteHelloMessage,
-                               sizeof(kZygoteHelloMessage), &real_pid));
+    if (!ReceiveFixedMessage(fds[0], kZygoteHelloMessage,
+                             sizeof(kZygoteHelloMessage), &real_pid)) {
+      int exit_code = 0;
+      bool exited =
+          process.WaitForExitWithTimeout(base::TimeDelta(), &exit_code);
+      if (exited) {
+        LOG(FATAL) << "Zygote process exited prematurely with exit code "
+                   << exit_code;
+      } else {
+        LOG(FATAL) << "Failed to receive hello message from zygote";
+      }
+    }
     CHECK_GT(real_pid, 1);
 
     if (real_pid != pid) {

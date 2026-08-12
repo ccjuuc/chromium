@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "chrome/browser/performance_manager/policies/discard_eligibility_policy.h"
 #include "components/performance_manager/public/graph/frame_node.h"
 #include "content/public/common/process_type.h"
@@ -15,13 +15,13 @@
 namespace performance_manager {
 
 // Private memory footprint threshold above which a process is considered large.
-constexpr base::ByteCount kLargeProcessFootprintThreshold = base::MiB(100);
+constexpr base::ByteSize kLargeProcessFootprintThreshold = base::MiBU(100);
 
 namespace {
 
 struct PotentialTerminationTarget {
   raw_ptr<const ProcessNode> process = nullptr;
-  base::ByteCount private_footprint;
+  base::ByteSize private_footprint;
   bool can_discard = true;
   // Last time a page in the process was visible. `base::TimeTicks::Max()` if
   // currently visible. `base::TimeTicks()` if there is no visible page in the
@@ -129,7 +129,7 @@ void TerminationTargetPolicy::UpdateTerminationTarget(
       if (eligibility_policy->CanDiscard(
               page_node,
               policies::DiscardEligibilityPolicy::DiscardReason::URGENT,
-              /*minimum_time_in_background=*/base::TimeDelta()) !=
+              /*ignore_recent_visibility=*/true) !=
           policies::CanDiscardResult::kEligible) {
         target.can_discard = false;
       }

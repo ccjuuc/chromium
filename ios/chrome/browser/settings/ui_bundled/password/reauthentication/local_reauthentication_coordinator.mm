@@ -10,17 +10,18 @@
 #import "base/metrics/histogram_functions.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/strings/grit/components_strings.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service_factory.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/password_manager_ui_features.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/reauthentication/local_reauthentication_constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/reauthentication/local_reauthentication_view_controller.h"
-#import "ios/chrome/browser/settings/ui_bundled/utils/password_utils.h"
 #import "ios/chrome/browser/shared/coordinator/alert/alert_coordinator.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state_observer.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/common/ui/reauthentication/reauthentication_event.h"
 #import "ios/chrome/common/ui/reauthentication/reauthentication_module.h"
 #import "ios/chrome/common/ui/reauthentication/reauthentication_protocol.h"
@@ -63,8 +64,8 @@ enum class ReauthenticationState {
 // Module used for requesting Local Authentication.
 @property(nonatomic, strong) id<ReauthenticationProtocol> reauthModule;
 
-// Application Commands dispatcher for closing settings ui and opening tabs.
-@property(nonatomic, strong) id<ApplicationCommands> dispatcher;
+// Scene Commands dispatcher for closing settings ui and opening tabs.
+@property(nonatomic, strong) id<SceneCommands> dispatcher;
 
 // The view controller presented by the coordinator.
 @property(nonatomic, strong)
@@ -92,21 +93,13 @@ enum class ReauthenticationState {
 - (instancetype)initWithBaseNavigationController:
                     (UINavigationController*)navigationController
                                          browser:(Browser*)browser
-                          reauthenticationModule:(id<ReauthenticationProtocol>)
-                                                     reauthenticationModule
                                      authOnStart:(BOOL)authOnStart {
   self = [super initWithBaseViewController:navigationController
                                    browser:browser];
   if (self) {
-    // Build reauth module if none is supplied.
-    // Callers can supply one for testing or for reusing the authentication
-    // result. See ReauthenticationProtocol.
-    _reauthModule = reauthenticationModule
-                        ? reauthenticationModule
-                        : password_manager::BuildReauthenticationModule();
     _baseNavigationController = navigationController;
     _dispatcher =
-        static_cast<id<ApplicationCommands>>(browser->GetCommandDispatcher());
+        static_cast<id<SceneCommands>>(browser->GetCommandDispatcher());
     _reauthenticationState =
         authOnStart ? ReauthenticationState::kReauthenticationRequired
                     : ReauthenticationState::kReauthenticationIdle;
@@ -118,6 +111,8 @@ enum class ReauthenticationState {
 #pragma mark - ChromeCoordinator
 
 - (void)start {
+  _reauthModule = ReauthenticationServiceFactory::GetForProfile(self.profile)
+                      ->GetReauthModule();
   [self.browser->GetSceneState() addObserver:self];
 
   if (_reauthenticationState ==
@@ -245,9 +240,11 @@ enum class ReauthenticationState {
       }
       [[fallthrough]];
     case SceneActivationLevelForegroundInactive:
-      // Present reauth vc if not presented already.
+      // If pushing view controller fails, close the UI.
       if (!_reauthViewController) {
-        [self pushReauthenticationViewControllerWithRequestAuth:NO];
+        if (![self pushReauthenticationViewControllerWithRequestAuth:NO]) {
+          [self closeUI];
+        }
       }
       break;
 
@@ -366,6 +363,7 @@ enum class ReauthenticationState {
     // Only update the reauth state if the reauth controller was successfully
     // pushed.
     if (![self pushReauthenticationViewControllerWithRequestAuth:YES]) {
+      [self closeUI];
       return;
     }
   }

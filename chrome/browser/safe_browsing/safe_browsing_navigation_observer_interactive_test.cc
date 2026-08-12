@@ -20,6 +20,7 @@
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "net/dns/mock_host_resolver.h"
+#include "ui/base/clipboard/clipboard.h"
 
 namespace safe_browsing {
 
@@ -56,8 +57,8 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
     // Disable Safe Browsing service so we can directly control when
     // SafeBrowsingNavigationObserverManager and SafeBrowsingNavigationObserver
     // are instantiated.
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
-                                                 false);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
+                                                    false);
     ASSERT_TRUE(embedded_test_server()->Start());
     host_resolver()->AddRule("*", "127.0.0.1");
     observer_manager_ =
@@ -74,8 +75,8 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
       return false;
     }
 
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
-                                                 false);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
+                                                    false);
     return true;
   }
 
@@ -93,6 +94,24 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
     return observer_manager_->navigation_event_list();
   }
 
+  // Waits until a URL is copied to the clipboard.
+  class TestClipboardObserver : public ui::Clipboard::ClipboardWriteObserver {
+   public:
+    TestClipboardObserver() = default;
+    ~TestClipboardObserver() override = default;
+
+    void OnCopyURL(const GURL& url,
+                   const GURL& source_frame_url,
+                   const GURL& source_main_frame_url) override {
+      run_loop_.Quit();
+    }
+
+    void Wait() { run_loop_.Run(); }
+
+   private:
+    base::RunLoop run_loop_;
+  };
+
   void CopyUrlToWebClipboard(std::string urlToCopy,
                              std::optional<int> subframe_index = std::nullopt) {
     TabStripModel* tab_strip = browser()->tab_strip_model();
@@ -108,9 +127,14 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
     content::HandleMissingKeyWindow();
 #endif
     script_executing_frame->GetView()->Focus();
+
+    TestClipboardObserver observer;
+    ui::Clipboard::GetForCurrentThread()->AddObserver(&observer);
     std::string script = base::StringPrintf(
-        "navigator.clipboard.writeText('%s');", urlToCopy.c_str());
+        "navigator.clipboard.writeText('%s')", urlToCopy.c_str());
     ASSERT_TRUE(content::ExecJs(script_executing_frame, script));
+    observer.Wait();
+    ui::Clipboard::GetForCurrentThread()->RemoveObserver(&observer);
   }
 
   void IdentifyReferrerChainByEventURL(

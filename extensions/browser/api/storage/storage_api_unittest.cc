@@ -11,7 +11,6 @@
 #include <set>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
@@ -67,7 +66,7 @@ class FakeValueStore : public value_store::ValueStore {
   // Constructor for GetBytesInUseIntOverflow test.
   explicit FakeValueStore(size_t bytes_in_use) : bytes_in_use_(bytes_in_use) {}
   // Constructor for GetOperationExceedsSizeLimit test.
-  explicit FakeValueStore(base::Value::Dict large_value)
+  explicit FakeValueStore(base::DictValue large_value)
       : large_value_(std::move(large_value)) {}
 
   // value_store::ValueStore:
@@ -92,7 +91,7 @@ class FakeValueStore : public value_store::ValueStore {
     NOTREACHED();
   }
   WriteResult Set(WriteOptions options,
-                  const base::Value::Dict& values) override {
+                  const base::DictValue& values) override {
     NOTREACHED();
   }
   WriteResult Remove(const std::string& key) override { NOTREACHED(); }
@@ -103,7 +102,7 @@ class FakeValueStore : public value_store::ValueStore {
 
  private:
   size_t bytes_in_use_ = 0;
-  base::Value::Dict large_value_;
+  base::DictValue large_value_;
 };
 
 // A fake ValueStoreCache that we can assign to a storage area in the
@@ -165,9 +164,8 @@ class StorageApiUnittest : public ApiUnitTest {
     scoped_refptr<StorageStorageAreaSetFunction> function =
         base::MakeRefCounted<StorageStorageAreaSetFunction>();
     function->set_source_context_type(mojom::ContextType::kPrivilegedExtension);
-    RunFunction(function.get(),
-                base::StringPrintf("[\"local\", {\"%s\": \"%s\"}]", key.c_str(),
-                                   value.c_str()));
+    RunFunction(function, base::StringPrintf("[\"local\", {\"%s\": \"%s\"}]",
+                                             key.c_str(), value.c_str()));
   }
 
   testing::AssertionResult RunSetFunctionWithContextAndExpectSuccess(
@@ -183,7 +181,7 @@ class StorageApiUnittest : public ApiUnitTest {
                                           storage_area_name.c_str(),
                                           key.c_str(), value.c_str());
 
-    api_test_utils::RunFunction(function.get(), args, browser_context());
+    api_test_utils::RunFunction(function, args, browser_context());
     std::string error = function->GetError();
 
     if (error.empty()) {
@@ -209,7 +207,7 @@ class StorageApiUnittest : public ApiUnitTest {
                                           storage_area_name.c_str(),
                                           key.c_str(), value.c_str());
 
-    std::string error = RunFunctionAndReturnError(function.get(), args);
+    std::string error = RunFunctionAndReturnError(function, args);
     if (error.empty()) {
       return testing::AssertionFailure()
              << "Expected error containing '" << expected_error_substring
@@ -234,12 +232,12 @@ class StorageApiUnittest : public ApiUnitTest {
         base::MakeRefCounted<StorageStorageAreaGetFunction>();
     function->set_source_context_type(mojom::ContextType::kPrivilegedExtension);
     std::optional<base::Value> result = RunFunctionAndReturnValue(
-        function.get(), base::StringPrintf("[\"local\", \"%s\"]", key.c_str()));
+        function, base::StringPrintf("[\"local\", \"%s\"]", key.c_str()));
     if (!result) {
       return testing::AssertionFailure() << "No result";
     }
 
-    const base::Value::Dict* dict = result->GetIfDict();
+    const base::DictValue* dict = result->GetIfDict();
     if (!dict) {
       return testing::AssertionFailure() << *result << " was not a dictionary.";
     }
@@ -356,10 +354,9 @@ TEST_F(StorageApiUnittest, StorageAreaOnChanged) {
   RunSetFunction("key", "value");
   EXPECT_EQ(2u, event_observer.events().size());
 
-  EXPECT_TRUE(base::Contains(event_observer.events(),
-                             api::storage::OnChanged::kEventName));
   EXPECT_TRUE(
-      base::Contains(event_observer.events(), "storage.local.onChanged"));
+      event_observer.events().contains(api::storage::OnChanged::kEventName));
+  EXPECT_TRUE(event_observer.events().contains("storage.local.onChanged"));
 }
 
 // Test that no event is dispatched if no listener is added.
@@ -397,8 +394,8 @@ TEST_F(StorageApiUnittest, StorageAreaOnChangedOnlyOneListener) {
   RunSetFunction("key", "value");
   EXPECT_EQ(1u, event_observer.events().size());
 
-  EXPECT_TRUE(base::Contains(event_observer.events(),
-                             api::storage::OnChanged::kEventName));
+  EXPECT_TRUE(
+      event_observer.events().contains(api::storage::OnChanged::kEventName));
 }
 
 // This is a regression test for crbug.com/1483828.
@@ -430,8 +427,7 @@ TEST_F(StorageApiUnittest, GetBytesInUseIntOverflow) {
 
     std::optional<base::Value> result =
         api_test_utils::RunFunctionAndReturnSingleResult(
-            function.get(),
-            base::Value::List().Append("local").Append(base::Value()),
+            function, base::ListValue().Append("local").Append(base::Value()),
             browser_context());
     ASSERT_TRUE(result);
     ASSERT_TRUE(result->is_double());
@@ -445,7 +441,7 @@ TEST_F(StorageApiUnittest, GetOperationExceedsSizeLimit) {
   feature_list.InitFromCommandLine("EnforceStorageGetSizeLimit", "");
 
   constexpr size_t kMaxSingleGetSizeBytes = 512 * 1024 * 1024;
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("kKeyWithLargeValue", std::string(kMaxSingleGetSizeBytes, 'a'));
 
   StorageFrontend* frontend = StorageFrontend::Get(browser_context());
@@ -458,10 +454,10 @@ TEST_F(StorageApiUnittest, GetOperationExceedsSizeLimit) {
   function->set_source_context_type(mojom::ContextType::kPrivilegedExtension);
 
   std::string error = api_test_utils::RunFunctionAndReturnError(
-      function.get(), "[\"local\", \"kKeyWithLargeValue\"]", browser_context());
+      function, "[\"local\", \"kKeyWithLargeValue\"]", browser_context());
 
   const std::string expected_error_substring = "exceeds the maximum limit";
-  EXPECT_TRUE(base::Contains(error, expected_error_substring));
+  EXPECT_TRUE(error.contains(expected_error_substring));
 
   frontend->DisableStorageForTesting(settings_namespace::Namespace::LOCAL);
 }

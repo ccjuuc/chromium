@@ -9,9 +9,12 @@
 #include <vector>
 
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/timer/timer.h"
+#include "components/metrics/profile_metrics_service.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
+#include "components/sync/base/features.h"
 #include "components/sync/test/test_sync_service.h"
 #include "google_apis/gaia/gaia_id.h"
 #include "services/network/test/test_url_loader_factory.h"
@@ -54,8 +57,8 @@ class SyncSessionDurationsMetricsRecorderTest : public testing::Test {
     identity_test_env_.UpdatePersistentErrorOfRefreshTokenForAccount(
         identity_test_env_.identity_manager()->GetPrimaryAccountId(
             signin::ConsentLevel::kSignin),
-        GoogleServiceAuthError(
-            GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS));
+        GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+            GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN));
   }
 
   void ClearAuthError() {
@@ -82,6 +85,9 @@ class SyncSessionDurationsMetricsRecorderTest : public testing::Test {
     for (const std::string& histogram_suffix : histogram_suffixes) {
       ht.ExpectTimeBucketCount(GetSessionHistogramName(histogram_suffix),
                                expected_session_time, 1);
+      ht.ExpectTimeBucketCount(
+          GetSessionHistogramName(histogram_suffix + ".Profile1"),
+          expected_session_time, 1);
       ht.ExpectTimeBucketCount(GetSessionHistogramLegacyName(histogram_suffix),
                                expected_session_time, 1);
     }
@@ -91,6 +97,8 @@ class SyncSessionDurationsMetricsRecorderTest : public testing::Test {
                         const std::vector<std::string>& histogram_suffixes) {
     for (const std::string& histogram_suffix : histogram_suffixes) {
       ht.ExpectTotalCount(GetSessionHistogramName(histogram_suffix), 1);
+      ht.ExpectTotalCount(
+          GetSessionHistogramName(histogram_suffix + ".Profile1"), 1);
       ht.ExpectTotalCount(GetSessionHistogramLegacyName(histogram_suffix), 1);
     }
   }
@@ -99,13 +107,16 @@ class SyncSessionDurationsMetricsRecorderTest : public testing::Test {
                        const std::vector<std::string>& histogram_suffixes) {
     for (const std::string& histogram_suffix : histogram_suffixes) {
       ht.ExpectTotalCount(GetSessionHistogramName(histogram_suffix), 0);
+      ht.ExpectTotalCount(
+          GetSessionHistogramName(histogram_suffix + ".Profile1"), 0);
       ht.ExpectTotalCount(GetSessionHistogramLegacyName(histogram_suffix), 0);
     }
   }
 
   void StartAndEndSession(const base::TimeDelta& session_time) {
     SyncSessionDurationsMetricsRecorder metrics_recorder(
-        &sync_service_, identity_test_env_.identity_manager());
+        &sync_service_, identity_test_env_.identity_manager(),
+        &profile_metrics_service_);
     metrics_recorder.OnSessionStarted(base::TimeTicks::Now());
     metrics_recorder.OnSessionEnded(session_time);
   }
@@ -115,14 +126,19 @@ class SyncSessionDurationsMetricsRecorderTest : public testing::Test {
   network::TestURLLoaderFactory test_url_loader_factory_;
   signin::IdentityTestEnvironment identity_test_env_;
   TestSyncService sync_service_;
+  metrics::ProfileMetricsService profile_metrics_service_{1};
 };
 
 TEST_F(SyncSessionDurationsMetricsRecorderTest, WebSignedOut) {
+  identity_test_env_.SetCookieAccounts({});
+
   base::HistogramTester ht;
   StartAndEndSession(kSessionTime);
 
   ExpectOneSessionWithDuration(ht, {"WithoutAccount"}, kSessionTime);
   ExpectNoSession(ht, {"WithAccount"});
+  ht.ExpectTimeBucketCount(
+      "Signin.SessionWithCookieSigninStatusUnknown.Duration", kSessionTime, 0);
 }
 
 TEST_F(SyncSessionDurationsMetricsRecorderTest, WebSignedIn) {
@@ -134,9 +150,49 @@ TEST_F(SyncSessionDurationsMetricsRecorderTest, WebSignedIn) {
 
   ExpectOneSessionWithDuration(ht, {"WithAccount"}, kSessionTime);
   ExpectNoSession(ht, {"WithoutAccount"});
+  ht.ExpectTotalCount("Signin.SessionWithCookieSigninStatusUnknown.Duration",
+                      0);
 }
 
-TEST_F(SyncSessionDurationsMetricsRecorderTest, NotOptedInToSync) {
+TEST_F(SyncSessionDurationsMetricsRecorderTest,
+       WebSignedIn_StaleCookie_FeatureEnabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      kSyncFixWebSigninSessionDurationForShortLivedSessions);
+
+  identity_test_env_.SetCookieAccounts(
+      {{"foo@gmail.com", GaiaId("foo_gaia_id")}});
+  identity_test_env_.SetFreshnessOfAccountsInGaiaCookie(false);
+
+  base::HistogramTester ht;
+  StartAndEndSession(kSessionTime);
+
+  ExpectOneSessionWithDuration(ht, {"WithAccount"}, kSessionTime);
+  ExpectNoSession(ht, {"WithoutAccount"});
+  ht.ExpectTimeBucketCount(
+      "Signin.SessionWithCookieSigninStatusUnknown.Duration", kSessionTime, 1);
+}
+
+TEST_F(SyncSessionDurationsMetricsRecorderTest,
+       WebSignedIn_StaleCookie_FeatureDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      kSyncFixWebSigninSessionDurationForShortLivedSessions);
+
+  identity_test_env_.SetCookieAccounts(
+      {{"foo@gmail.com", GaiaId("foo_gaia_id")}});
+  identity_test_env_.SetFreshnessOfAccountsInGaiaCookie(false);
+
+  base::HistogramTester ht;
+  StartAndEndSession(kSessionTime);
+
+  ExpectOneSessionWithDuration(ht, {"WithoutAccount"}, kSessionTime);
+  ExpectNoSession(ht, {"WithAccount"});
+  ht.ExpectTimeBucketCount(
+      "Signin.SessionWithCookieSigninStatusUnknown.Duration", kSessionTime, 1);
+}
+
+TEST_F(SyncSessionDurationsMetricsRecorderTest, NotOptedInToSync_SignedOut) {
   base::HistogramTester ht;
   StartAndEndSession(kSessionTime);
 
@@ -148,6 +204,38 @@ TEST_F(SyncSessionDurationsMetricsRecorderTest, NotOptedInToSync) {
        "OptedInToSyncWithoutAccount", "OptedInToSyncWithAccount"});
 }
 
+TEST_F(SyncSessionDurationsMetricsRecorderTest, NotOptedInToSync_SignedIn) {
+  SignIn(signin::ConsentLevel::kSignin);
+
+  base::HistogramTester ht;
+  StartAndEndSession(kSessionTime);
+
+  ExpectOneSessionWithDuration(ht, {"NotOptedInToSyncWithAccount"},
+                               kSessionTime);
+  ExpectNoSession(
+      ht, {"NotOptedInToSyncWithAccountInAuthError",
+           "NotOptedInToSyncWithoutAccount", "OptedInToSyncWithoutAccount",
+           "OptedInToSyncWithAccount"});
+}
+
+TEST_F(SyncSessionDurationsMetricsRecorderTest,
+       SyncDisabled_PrimaryAccountInAuthError) {
+  SignIn(signin::ConsentLevel::kSignin);
+  SetInvalidCredentialsAuthError();
+
+  base::HistogramTester ht;
+  StartAndEndSession(kSessionTime);
+
+  ExpectOneSessionWithDuration(ht, {"NotOptedInToSyncWithAccountInAuthError"},
+                               kSessionTime);
+  ExpectNoSession(
+      ht, {"NotOptedInToSyncWithAccount", "NotOptedInToSyncWithoutAccount",
+           "OptedInToSyncWithoutAccount", "OptedInToSyncWithAccount"});
+}
+
+// TODO(crbug.com/40066949): Remove once kSync becomes unreachable or is
+// deleted from the codebase. See ConsentLevel::kSync documentation for
+// details.
 TEST_F(SyncSessionDurationsMetricsRecorderTest, OptedInToSync_SyncActive) {
   SignIn(signin::ConsentLevel::kSync);
 
@@ -161,6 +249,9 @@ TEST_F(SyncSessionDurationsMetricsRecorderTest, OptedInToSync_SyncActive) {
            "OptedInToSyncWithoutAccount"});
 }
 
+// TODO(crbug.com/40066949): Remove once kSync becomes unreachable or is
+// deleted from the codebase. See ConsentLevel::kSync documentation for
+// details.
 TEST_F(SyncSessionDurationsMetricsRecorderTest,
        OptedInToSync_SyncDisabledByEnterprisePolicy) {
   SignIn(signin::ConsentLevel::kSync);
@@ -179,6 +270,9 @@ TEST_F(SyncSessionDurationsMetricsRecorderTest,
                    "OptedInToSyncWithoutAccount", "OptedInToSyncWithAccount"});
 }
 
+// TODO(crbug.com/40066949): Remove once kSync becomes unreachable or is
+// deleted from the codebase. See ConsentLevel::kSync documentation for
+// details.
 TEST_F(SyncSessionDurationsMetricsRecorderTest,
        OptedInToSync_PrimaryAccountInAuthError) {
   SignIn(signin::ConsentLevel::kSync);
@@ -195,28 +289,17 @@ TEST_F(SyncSessionDurationsMetricsRecorderTest,
        "NotOptedInToSyncWithAccountInAuthError", "OptedInToSyncWithAccount"});
 }
 
-TEST_F(SyncSessionDurationsMetricsRecorderTest,
-       SyncDisabled_PrimaryAccountInAuthError) {
-  SignIn(signin::ConsentLevel::kSignin);
-  SetInvalidCredentialsAuthError();
-
-  base::HistogramTester ht;
-  StartAndEndSession(kSessionTime);
-
-  ExpectOneSessionWithDuration(ht, {"NotOptedInToSyncWithAccountInAuthError"},
-                               kSessionTime);
-  ExpectNoSession(
-      ht, {"NotOptedInToSyncWithAccount", "NotOptedInToSyncWithoutAccount",
-           "OptedInToSyncWithoutAccount", "OptedInToSyncWithAccount"});
-}
-
+// TODO(crbug.com/40066949): Remove once kSync becomes unreachable or is
+// deleted from the codebase. See ConsentLevel::kSync documentation for
+// details.
 TEST_F(SyncSessionDurationsMetricsRecorderTest,
        NotOptedInToSync_SecondaryAccountInAuthError) {
   AccountInfo account =
       identity_test_env_.MakeAccountAvailable("foo@gmail.com");
   identity_test_env_.UpdatePersistentErrorOfRefreshTokenForAccount(
       account.account_id,
-      GoogleServiceAuthError(GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS));
+      GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+          GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN));
 
   base::HistogramTester ht;
   StartAndEndSession(kSessionTime);
@@ -231,6 +314,9 @@ TEST_F(SyncSessionDurationsMetricsRecorderTest,
        "OptedInToSyncWithoutAccount", "OptedInToSyncWithAccount"});
 }
 
+// TODO(crbug.com/40066949): Remove once kSync becomes unreachable or is
+// deleted from the codebase. See ConsentLevel::kSync documentation for
+// details.
 TEST_F(SyncSessionDurationsMetricsRecorderTest, SyncUnknownOnStartup) {
   SignIn(signin::ConsentLevel::kSync);
 
@@ -249,6 +335,9 @@ TEST_F(SyncSessionDurationsMetricsRecorderTest, SyncUnknownOnStartup) {
            "OptedInToSyncWithoutAccount", "OptedInToSyncWithoutAccount"});
 }
 
+// TODO(crbug.com/40066949): Remove once kSync becomes unreachable or is
+// deleted from the codebase. See ConsentLevel::kSync documentation for
+// details.
 TEST_F(SyncSessionDurationsMetricsRecorderTest,
        SyncUnknownOnStartupThenStarts) {
   SignIn(signin::ConsentLevel::kSync);
@@ -261,7 +350,8 @@ TEST_F(SyncSessionDurationsMetricsRecorderTest,
   ASSERT_FALSE(sync_service_.HasCompletedSyncCycle());
 
   SyncSessionDurationsMetricsRecorder metrics_recorder(
-      &sync_service_, identity_test_env_.identity_manager());
+      &sync_service_, identity_test_env_.identity_manager(),
+      &profile_metrics_service_);
 
   {
     base::HistogramTester ht;
@@ -290,9 +380,13 @@ TEST_F(SyncSessionDurationsMetricsRecorderTest,
   }
 }
 
+// TODO(crbug.com/40066949): Remove once kSync becomes unreachable or is
+// deleted from the codebase. See ConsentLevel::kSync documentation for
+// details.
 TEST_F(SyncSessionDurationsMetricsRecorderTest, EnableSync) {
   SyncSessionDurationsMetricsRecorder metrics_recorder(
-      &sync_service_, identity_test_env_.identity_manager());
+      &sync_service_, identity_test_env_.identity_manager(),
+      &profile_metrics_service_);
 
   {
     base::HistogramTester ht;
@@ -339,10 +433,14 @@ TEST_F(SyncSessionDurationsMetricsRecorderTest, EnableSync) {
   }
 }
 
+// TODO(crbug.com/40066949): Remove once kSync becomes unreachable or is
+// deleted from the codebase. See ConsentLevel::kSync documentation for
+// details.
 TEST_F(SyncSessionDurationsMetricsRecorderTest, EnterAuthError) {
   SignIn(signin::ConsentLevel::kSync);
   SyncSessionDurationsMetricsRecorder metrics_recorder(
-      &sync_service_, identity_test_env_.identity_manager());
+      &sync_service_, identity_test_env_.identity_manager(),
+      &profile_metrics_service_);
 
   {
     base::HistogramTester ht;
@@ -365,11 +463,15 @@ TEST_F(SyncSessionDurationsMetricsRecorderTest, EnterAuthError) {
   }
 }
 
+// TODO(crbug.com/40066949): Remove once kSync becomes unreachable or is
+// deleted from the codebase. See ConsentLevel::kSync documentation for
+// details.
 TEST_F(SyncSessionDurationsMetricsRecorderTest, FixedAuthError) {
   SignIn(signin::ConsentLevel::kSync);
   SetInvalidCredentialsAuthError();
   SyncSessionDurationsMetricsRecorder metrics_recorder(
-      &sync_service_, identity_test_env_.identity_manager());
+      &sync_service_, identity_test_env_.identity_manager(),
+      &profile_metrics_service_);
 
   {
     base::HistogramTester ht;

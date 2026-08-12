@@ -11,7 +11,6 @@
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
@@ -20,6 +19,7 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/result_codes.h"
 #include "content/public/common/url_constants.h"
@@ -80,7 +80,7 @@ bool WaitForTabsPopupsApps(Browser* browser,
   base::TimeTicks end_time = base::TimeTicks::Now() + kWaitTime;
   while (base::TimeTicks::Now() < end_time) {
     if (extensions::browsertest_util::GetWindowControllerCountInProfile(
-            browser->profile()) == num_browsers &&
+            browser->GetProfile()) == num_browsers &&
         browser->tab_strip_model()->count() == num_tabs) {
       break;
     }
@@ -90,7 +90,7 @@ bool WaitForTabsPopupsApps(Browser* browser,
 
   EXPECT_EQ(num_browsers,
             extensions::browsertest_util::GetWindowControllerCountInProfile(
-                browser->profile()));
+                browser->GetProfile()));
   EXPECT_EQ(num_tabs, browser->tab_strip_model()->count());
 
   EXPECT_EQ(num_popups, WindowOpenApiTest::CountBrowsersForType(
@@ -100,7 +100,7 @@ bool WaitForTabsPopupsApps(Browser* browser,
 
   return ((num_browsers ==
            extensions::browsertest_util::GetWindowControllerCountInProfile(
-               browser->profile())) &&
+               browser->GetProfile())) &&
           (num_tabs == browser->tab_strip_model()->count()) &&
           (num_popups == WindowOpenApiTest::CountBrowsersForType(
                              BrowserWindowInterface::TYPE_POPUP)) &&
@@ -213,7 +213,7 @@ IN_PROC_BROWSER_TEST_F(WindowOpenApiTest, WindowOpener) {
 }
 
 // Ensure that the width and height properties of a window opened with
-// chrome.windows.create match the creation parameters. See crbug.com/173831.
+// chrome.windows.create match the creation parameters. See crbug.com/40300745.
 IN_PROC_BROWSER_TEST_F(WindowOpenApiTest, WindowOpenSized) {
   ASSERT_TRUE(RunExtensionTest("window_open/window_size")) << message_;
   EXPECT_TRUE(WaitForTabsPopupsApps(browser(), 0, 0, 1));
@@ -222,17 +222,42 @@ IN_PROC_BROWSER_TEST_F(WindowOpenApiTest, WindowOpenSized) {
 // Tests that an extension page can call window.open to an extension URL and
 // the new window has extension privileges.
 IN_PROC_BROWSER_TEST_F(ExtensionBrowserTest, WindowOpenExtension) {
-  ASSERT_TRUE(LoadExtension(
-      test_data_dir_.AppendASCII("uitest").AppendASCII("window_open")));
+  const extensions::Extension* extension = LoadExtension(
+      test_data_dir_.AppendASCII("uitest").AppendASCII("window_open"));
+  ASSERT_TRUE(extension);
 
-  GURL start_url(std::string(extensions::kExtensionScheme) +
-                     url::kStandardSchemeSeparator +
-                     last_loaded_extension_id() + "/test.html");
+  GURL start_url = extension->GetResourceURL("test.html");
   auto* web_contents = GetActiveWebContents();
   ASSERT_TRUE(NavigateToURL(web_contents, start_url));
   WebContents* newtab = nullptr;
-  ASSERT_NO_FATAL_FAILURE(OpenWindow(
-      web_contents, start_url.Resolve("newtab.html"), true, true, &newtab));
+  ASSERT_NO_FATAL_FAILURE(OpenWindow(web_contents,
+                                     extension->GetResourceURL("newtab.html"),
+                                     true, true, &newtab));
+
+  EXPECT_EQ(true, content::EvalJs(newtab, "testExtensionApi()"));
+}
+
+// Tests that an extension page can call window.open without a user gesture
+// and the new window is opened (bypassing the popup blocker) with extension
+// privileges.
+IN_PROC_BROWSER_TEST_F(ExtensionBrowserTest,
+                       WindowOpenExtensionWithoutUserGesture) {
+  const extensions::Extension* extension = LoadExtension(
+      test_data_dir_.AppendASCII("uitest").AppendASCII("window_open"));
+  ASSERT_TRUE(extension);
+
+  GURL start_url = extension->GetResourceURL("test.html");
+  auto* web_contents = GetActiveWebContents();
+  ASSERT_TRUE(NavigateToURL(web_contents, start_url));
+
+  content::WebContentsAddedObserver tab_added_observer;
+  ASSERT_TRUE(content::ExecJs(
+      web_contents,
+      "window.open('" + extension->GetResourceURL("newtab.html").spec() + "');",
+      content::EXECUTE_SCRIPT_NO_USER_GESTURE));
+  content::WebContents* newtab = tab_added_observer.GetWebContents();
+  ASSERT_TRUE(newtab);
+  EXPECT_TRUE(content::WaitForLoadStop(newtab));
 
   EXPECT_EQ(true, content::EvalJs(newtab, "testExtensionApi()"));
 }
@@ -307,13 +332,14 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowserTest,
             newtab->GetController().GetLastCommittedEntry()->GetPageType());
   EXPECT_EQ(extension_url,
             newtab->GetPrimaryMainFrame()->GetLastCommittedURL());
-  EXPECT_FALSE(
-      newtab->GetPrimaryMainFrame()->GetSiteInstance()->GetSiteURL().SchemeIs(
-          extensions::kExtensionScheme));
+  EXPECT_FALSE(newtab->GetPrimaryMainFrame()
+                   ->GetSiteInstance()
+                   ->GetSecurityPrincipal()
+                   .SchemeIs(extensions::kExtensionScheme));
 }
 
 // Test that navigating to an extension URL is allowed on chrome://.
-// See https://crbug.com/662602.
+// See https://crbug.com/41284772.
 IN_PROC_BROWSER_TEST_F(ExtensionBrowserTest,
                        NavigateToInaccessibleResourceFromChromeURL) {
   // Mint an extension URL which is not web-accessible.

@@ -20,7 +20,6 @@ import org.chromium.chrome.browser.signin.services.SigninManager;
 import org.chromium.chrome.browser.ui.signin.MinorModeHelper;
 import org.chromium.chrome.browser.ui.signin.R;
 import org.chromium.chrome.browser.ui.signin.SigninUtils;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
@@ -40,10 +39,6 @@ public class HistorySyncCoordinator {
          * @param isHistorySyncAccepted Whether the user accepted history sync.
          */
         void dismissHistorySync(boolean didSignOut, boolean isHistorySyncAccepted);
-
-        // TODO(crbug.com/453950636): inline delegate implementation directly in HistorySyncMediator
-        void recordHistorySyncOptIn(
-                @SigninAccessPoint int accessPoint, boolean isHistorySyncAccepted);
     }
 
     private final Activity mActivity;
@@ -51,6 +46,7 @@ public class HistorySyncCoordinator {
     private @Nullable HistorySyncView mView;
     private final HistorySyncMediator mMediator;
     private boolean mUseLandscapeLayout;
+    private final boolean mIsFre;
     private @Nullable PropertyModelChangeProcessor mPropertyModelChangeProcessor;
 
     /**
@@ -64,6 +60,7 @@ public class HistorySyncCoordinator {
      *     email is non-displayable, it won't be shown regardless of this value.
      * @param shouldSignOutOnDecline Whether the user should be signed out if they decline history
      *     sync.
+     * @param isFre Whether the UI is shown in the First Run Experience.
      * @param view The view that will be controlled by the coordinator. If null, the coordinator
      *     will inflate its own view.
      */
@@ -75,10 +72,12 @@ public class HistorySyncCoordinator {
             @SigninAccessPoint int accessPoint,
             boolean showEmailInFooter,
             boolean shouldSignOutOnDecline,
+            boolean isFre,
             @Nullable HistorySyncView view) {
         mActivity = activity;
         mProfile = profile;
         mView = view;
+        mIsFre = isFre;
 
         mUseLandscapeLayout = SigninUtils.shouldShowDualPanesHorizontalLayout(activity);
         mMediator =
@@ -100,13 +99,21 @@ public class HistorySyncCoordinator {
         IdentityManager identityManager = signinManager.getIdentityManager();
         MinorModeHelper.resolveMinorMode(
                 identityManager,
-                assumeNonNull(identityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN)),
+                assumeNonNull(identityManager.getPrimaryAccountInfo()).getId(),
                 mMediator::onMinorModeRestrictionStatusUpdated);
     }
 
     public void destroy() {
         setView(null, false);
         mMediator.destroy();
+    }
+
+    /**
+     * Declines the history sync flow and dismisses the UI. Signs out the user if the flow was
+     * configured to do so on decline.
+     */
+    public void declineAndDismiss() {
+        mMediator.declineAndDismiss();
     }
 
     public @Nullable HistorySyncView getView() {
@@ -145,28 +152,37 @@ public class HistorySyncCoordinator {
         }
     }
 
-    /** Creates a view if needed and and sets the view that is controlled by the coordinator. */
+    /** Creates a view if needed and sets the view that is controlled by the coordinator. */
     public @Nullable HistorySyncView maybeRecreateView() {
         HistorySyncView view = null;
         boolean useLandscapeLayout = SigninUtils.shouldShowDualPanesHorizontalLayout(mActivity);
 
         if (getView() == null || mUseLandscapeLayout != useLandscapeLayout) {
             mUseLandscapeLayout = useLandscapeLayout;
-            view = inflateView(mActivity, mUseLandscapeLayout);
+            view = inflateView(mActivity, mUseLandscapeLayout, mIsFre);
             setView(view, mUseLandscapeLayout);
         }
 
         return view;
     }
 
-    private static HistorySyncView inflateView(Activity activity, boolean useLandscapeLayout) {
+    private static HistorySyncView inflateView(
+            Activity activity, boolean useLandscapeLayout, boolean isFre) {
         LayoutInflater inflater = LayoutInflater.from(activity);
-        return (HistorySyncView)
-                inflater.inflate(
-                        useLandscapeLayout
-                                ? R.layout.history_sync_landscape_view
-                                : R.layout.history_sync_portrait_view,
-                        null,
-                        false);
+        boolean useCentered =
+                isFre && ChromeFeatureList.isEnabled(ChromeFeatureList.ANDROID_FRE_LAYOUT_UPDATE);
+        int layoutId;
+        if (useLandscapeLayout) {
+            layoutId =
+                    useCentered
+                            ? R.layout.history_sync_landscape_centered_view
+                            : R.layout.history_sync_landscape_view;
+        } else {
+            layoutId =
+                    useCentered
+                            ? R.layout.history_sync_portrait_centered_view
+                            : R.layout.history_sync_portrait_view;
+        }
+        return (HistorySyncView) inflater.inflate(layoutId, null, false);
     }
 }

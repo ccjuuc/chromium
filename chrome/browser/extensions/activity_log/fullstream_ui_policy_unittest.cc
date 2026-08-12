@@ -33,6 +33,7 @@
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/browser/extension_registrar.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_builder.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -44,6 +45,8 @@
 #include "components/user_manager/scoped_user_manager.h"
 #include "components/user_manager/user_manager_impl.h"
 #endif
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -346,7 +349,7 @@ TEST_F(FullStreamUIPolicyTest, Construct) {
   policy->Init();
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
-          .SetManifest(base::Value::Dict()
+          .SetManifest(base::DictValue()
                            .Set("name", "Test extension")
                            .Set("version", "1.0.0")
                            .Set("manifest_version", 2))
@@ -355,7 +358,7 @@ TEST_F(FullStreamUIPolicyTest, Construct) {
   scoped_refptr<Action> action =
       new Action(extension->id(), base::Time::Now(), Action::ACTION_API_CALL,
                  "tabs.testMethod");
-  action->set_args(base::Value::List());
+  action->set_args(base::ListValue());
   policy->ProcessAction(action);
   policy->Close();
 }
@@ -365,7 +368,7 @@ TEST_F(FullStreamUIPolicyTest, LogAndFetchActions) {
   policy->Init();
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
-          .SetManifest(base::Value::Dict()
+          .SetManifest(base::DictValue()
                            .Set("name", "Test extension")
                            .Set("version", "1.0.0")
                            .Set("manifest_version", 2))
@@ -377,13 +380,13 @@ TEST_F(FullStreamUIPolicyTest, LogAndFetchActions) {
   scoped_refptr<Action> action_api =
       new Action(extension->id(), base::Time::Now(), Action::ACTION_API_CALL,
                  "tabs.testMethod");
-  action_api->set_args(base::Value::List());
+  action_api->set_args(base::ListValue());
   policy->ProcessAction(action_api);
 
   scoped_refptr<Action> action_dom =
       new Action(extension->id(), base::Time::Now(), Action::ACTION_DOM_ACCESS,
                  "document.write");
-  action_dom->set_args(base::Value::List());
+  action_dom->set_args(base::ListValue());
   action_dom->set_page_url(gurl);
   policy->ProcessAction(action_dom);
 
@@ -400,7 +403,7 @@ TEST_F(FullStreamUIPolicyTest, LogAndFetchFilteredActions) {
   policy->Init();
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
-          .SetManifest(base::Value::Dict()
+          .SetManifest(base::DictValue()
                            .Set("name", "Test extension")
                            .Set("version", "1.0.0")
                            .Set("manifest_version", 2))
@@ -412,13 +415,13 @@ TEST_F(FullStreamUIPolicyTest, LogAndFetchFilteredActions) {
   scoped_refptr<Action> action_api =
       new Action(extension->id(), base::Time::Now(), Action::ACTION_API_CALL,
                  "tabs.testMethod");
-  action_api->set_args(base::Value::List());
+  action_api->set_args(base::ListValue());
   policy->ProcessAction(action_api);
 
   scoped_refptr<Action> action_dom =
       new Action(extension->id(), base::Time::Now(), Action::ACTION_DOM_ACCESS,
                  "document.write");
-  action_dom->set_args(base::Value::List());
+  action_dom->set_args(base::ListValue());
   action_dom->set_page_url(gurl);
   policy->ProcessAction(action_dom);
 
@@ -477,14 +480,14 @@ TEST_F(FullStreamUIPolicyTest, LogWithArguments) {
   policy->Init();
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
-          .SetManifest(base::Value::Dict()
+          .SetManifest(base::DictValue()
                            .Set("name", "Test extension")
                            .Set("version", "1.0.0")
                            .Set("manifest_version", 2))
           .Build();
   ExtensionRegistrar::Get(profile_.get())->AddExtension(extension);
 
-  auto args = base::Value::List().Append("hello");
+  auto args = base::ListValue().Append("hello");
   args.Append("world");
   scoped_refptr<Action> action =
       new Action(extension->id(), base::Time::Now(), Action::ACTION_API_CALL,
@@ -765,7 +768,7 @@ TEST_F(FullStreamUIPolicyTest, DeleteDatabase) {
   policy->Init();
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
-          .SetManifest(base::Value::Dict()
+          .SetManifest(base::DictValue()
                            .Set("name", "Test extension")
                            .Set("version", "1.0.0")
                            .Set("manifest_version", 2))
@@ -777,13 +780,13 @@ TEST_F(FullStreamUIPolicyTest, DeleteDatabase) {
   scoped_refptr<Action> action_api =
       new Action(extension->id(), base::Time::Now(), Action::ACTION_API_CALL,
                  "tabs.testMethod");
-  action_api->set_args(base::Value::List());
+  action_api->set_args(base::ListValue());
   policy->ProcessAction(action_api);
 
   scoped_refptr<Action> action_dom =
       new Action(extension->id(), base::Time::Now(), Action::ACTION_DOM_ACCESS,
                  "document.write");
-  action_dom->set_args(base::Value::List());
+  action_dom->set_args(base::ListValue());
   action_dom->set_page_url(gurl);
   policy->ProcessAction(action_dom);
 

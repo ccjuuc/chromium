@@ -13,6 +13,8 @@
 
 #include "base/check.h"
 #include "base/check_op.h"
+#include "base/containers/span.h"
+#include "base/files/file_tracing.h"
 #include "base/files/file_util.h"
 #include "base/immediate_crash.h"
 #include "base/metrics/histogram_functions.h"
@@ -126,10 +128,10 @@ std::optional<size_t> File::ReadNoBestEffort(int64_t offset,
   return Read(offset, data);
 }
 
-int File::ReadAtCurrentPosNoBestEffort(char* data, int size) {
+std::optional<size_t> File::ReadAtCurrentPosNoBestEffort(
+    base::span<uint8_t> data) {
   // TODO(dbeam): trace this separately?
-  // SAFETY: required from caller, enforced by UNSAFE_BUFFER_USAGE in header.
-  return UNSAFE_BUFFERS(ReadAtCurrentPos(data, size));
+  return ReadAtCurrentPos(data);
 }
 
 int File::Write(int64_t offset, const char* data, int size) {
@@ -408,7 +410,7 @@ void File::DoInitialize(const FilePath& path, uint32_t flags) {
 
   if (flags & FLAG_CREATE_ALWAYS) {
     DCHECK(!disposition);
-    DCHECK(flags & FLAG_WRITE);
+    DCHECK(flags & (FLAG_WRITE | FLAG_APPEND));
     disposition = CREATE_ALWAYS;
   }
 

@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "base/system/sys_info.h"
 
 #include <windows.h>
@@ -22,7 +17,9 @@
 
 #include "base/byte_size.h"
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
+#include "base/not_fatal_until.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/process/process_metrics.h"
@@ -64,19 +61,19 @@ std::vector<BYTE> GetCoreEfficiencyClasses() {
 
   std::vector<BYTE> efficiency_classes;
   BYTE* byte_ptr = buffer.data();
-  while (byte_ptr < buffer.data() + byte_length) {
+  while (byte_ptr < UNSAFE_TODO(buffer.data() + byte_length)) {
     const auto* structure_ptr =
         reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(byte_ptr);
     DCHECK_EQ(structure_ptr->Relationship, RelationProcessorCore);
-    DCHECK_LE(&structure_ptr->Processor.EfficiencyClass +
-                  sizeof(structure_ptr->Processor.EfficiencyClass),
-              buffer.data() + byte_length);
+    DCHECK_LE(UNSAFE_TODO(&structure_ptr->Processor.EfficiencyClass +
+                          sizeof(structure_ptr->Processor.EfficiencyClass)),
+              UNSAFE_TODO(buffer.data() + byte_length));
     efficiency_classes.push_back(structure_ptr->Processor.EfficiencyClass);
     DCHECK_GE(
         structure_ptr->Size,
         offsetof(std::remove_pointer_t<decltype(structure_ptr)>, Processor) +
             sizeof(structure_ptr->Processor));
-    byte_ptr = byte_ptr + structure_ptr->Size;
+    byte_ptr = UNSAFE_TODO(byte_ptr + structure_ptr->Size);
   }
 
   return efficiency_classes;
@@ -123,31 +120,6 @@ base::ByteSize AmountOfMemory(DWORDLONG MEMORYSTATUSEX::* memory_field) {
   }
 
   return base::ByteSize(memory_info.*memory_field);
-}
-
-bool GetDiskSpaceInfo(const base::FilePath& path,
-                      int64_t* available_bytes,
-                      int64_t* total_bytes) {
-  ULARGE_INTEGER available;
-  ULARGE_INTEGER total;
-  ULARGE_INTEGER free;
-  if (!GetDiskFreeSpaceExW(path.value().c_str(), &available, &total, &free)) {
-    return false;
-  }
-
-  if (available_bytes) {
-    *available_bytes = static_cast<int64_t>(available.QuadPart);
-    if (*available_bytes < 0) {
-      *available_bytes = std::numeric_limits<int64_t>::max();
-    }
-  }
-  if (total_bytes) {
-    *total_bytes = static_cast<int64_t>(total.QuadPart);
-    if (*total_bytes < 0) {
-      *total_bytes = std::numeric_limits<int64_t>::max();
-    }
-  }
-  return true;
 }
 
 }  // namespace
@@ -209,28 +181,35 @@ ByteSize SysInfo::AmountOfVirtualMemory() {
 
 // static
 std::optional<int64_t> SysInfo::AmountOfFreeDiskSpace(const FilePath& path) {
-  base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
-                                                base::BlockingType::MAY_BLOCK);
-
-  int64_t available;
-  if (!GetDiskSpaceInfo(path, &available, nullptr)) {
-    return std::nullopt;
-  }
-  CHECK(available >= 0, base::NotFatalUntil::M150);
-  return available;
+  return AmountOfDiskSpace(path).transform([](DiskSpaceInfo info) {
+    return static_cast<int64_t>(info.available.InBytes());
+  });
 }
 
 // static
 std::optional<int64_t> SysInfo::AmountOfTotalDiskSpace(const FilePath& path) {
+  return AmountOfDiskSpace(path).transform([](DiskSpaceInfo info) {
+    return static_cast<int64_t>(info.total.InBytes());
+  });
+}
+
+// static
+std::optional<SysInfo::DiskSpaceInfo> SysInfo::AmountOfDiskSpace(
+    const FilePath& path) {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::MAY_BLOCK);
 
-  int64_t total;
-  if (!GetDiskSpaceInfo(path, nullptr, &total)) {
+  ULARGE_INTEGER available;
+  ULARGE_INTEGER total;
+  if (!GetDiskFreeSpaceExW(path.value().c_str(), &available, &total, nullptr)) {
     return std::nullopt;
   }
-  CHECK(total >= 0, base::NotFatalUntil::M150);
-  return total;
+  constexpr uint64_t kMaxBytes = uint64_t{std::numeric_limits<int64_t>::max()};
+  CHECK_LE(total.QuadPart, kMaxBytes, NotFatalUntil::M151);
+  CHECK_LE(available.QuadPart, kMaxBytes, NotFatalUntil::M151);
+  return DiskSpaceInfo{
+      .total = ByteSize(std::min(total.QuadPart, kMaxBytes)),
+      .available = ByteSize(std::min(available.QuadPart, kMaxBytes))};
 }
 
 std::string SysInfo::OperatingSystemName() {

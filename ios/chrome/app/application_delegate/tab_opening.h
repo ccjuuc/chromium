@@ -33,8 +33,7 @@ struct UrlLoadParams;
 // After Tab is opened the virtual URL is set to the pending navigation item.
 - (void)dismissModalsAndMaybeOpenSelectedTabInMode:
             (ApplicationModeForTabOpening)targetMode
-                                 withUrlLoadParams:
-                                     (const UrlLoadParams&)urlLoadParams
+                                 withUrlLoadParams:(UrlLoadParams)urlLoadParams
                                     dismissOmnibox:(BOOL)dismissOmnibox
                                         completion:(ProceduralBlock)completion;
 
@@ -61,8 +60,11 @@ struct UrlLoadParams;
 - (ProceduralBlock)completionBlockForTriggeringAction:
     (TabOpeningPostOpeningAction)action;
 
-// Whether the `URL` is already opened, in regular mode.
-- (BOOL)URLIsOpenedInRegularMode:(const GURL&)URL;
+// Opens a new tab or reuses an existing one in `targetMode` with
+// `urlLoadParams`. `tabOpenedCompletion` is called when the tab is opened.
+- (void)openOrReuseTabInMode:(ApplicationMode)targetMode
+           withUrlLoadParams:(UrlLoadParams)urlLoadParams
+         tabOpenedCompletion:(ProceduralBlock)tabOpenedCompletion;
 
 @end
 

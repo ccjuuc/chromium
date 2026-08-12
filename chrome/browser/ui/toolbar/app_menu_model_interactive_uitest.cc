@@ -16,17 +16,15 @@
 #include "build/build_config.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/extensions/unpacked_installer.h"
 #include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/ui/accelerator_utils.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/ui_features.h"
@@ -52,6 +50,7 @@
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/supervised_user/core/common/features.h"
 #include "components/supervised_user/test_support/supervised_user_signin_test_utils.h"
+#include "components/vector_icons/vector_icons.h"
 #include "components/webapps/browser/banners/app_banner_manager.h"
 #include "components/webapps/browser/banners/installable_web_app_check_result.h"
 #include "components/webapps/browser/banners/web_app_banner_data.h"
@@ -60,6 +59,7 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/test_extension_registry_observer.h"
+#include "extensions/browser/unpacked_installer.h"
 #include "extensions/common/extension_urls.h"
 #include "extensions/test/test_extension_dir.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -121,8 +121,9 @@ class AppMenuModelInteractiveTest : public InteractiveBrowserTest {
   auto CheckIncognitoWindowOpened(const Browser* default_browser) {
     return Check(base::BindLambdaForTesting([default_browser]() {
       BrowserWindowInterface* new_browser = nullptr;
-      if (chrome::GetIncognitoBrowserCount() == 1) {
-        EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+      if (GlobalBrowserCollection::GetInstance()->GetIncognitoBrowserCount() ==
+          1) {
+        EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
         ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
             [default_browser, &new_browser](BrowserWindowInterface* browser) {
               if (browser != default_browser) {
@@ -141,8 +142,8 @@ class AppMenuModelInteractiveTest : public InteractiveBrowserTest {
   auto CheckGuestWindowOpened(const Browser* default_browser) {
     return Check(base::BindLambdaForTesting([default_browser]() {
       BrowserWindowInterface* new_browser = nullptr;
-      if (chrome::GetGuestBrowserCount() == 1) {
-        EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+      if (GlobalBrowserCollection::GetInstance()->GetGuestBrowserCount() == 1) {
+        EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
         ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
             [default_browser, &new_browser](BrowserWindowInterface* browser) {
               if (browser != default_browser) {
@@ -197,7 +198,7 @@ IN_PROC_BROWSER_TEST_F(AppMenuModelInteractiveTest,
   }
 #endif  // BUILDFLAG(IS_MAC)
 
-  if (!media_router::MediaRouterEnabled(browser()->profile())) {
+  if (!media_router::MediaRouterEnabled(browser()->GetProfile())) {
     GTEST_SKIP() << "The cast item only exists if cast is enabled.";
   }
   RunTestSequence(
@@ -279,10 +280,10 @@ class AppMenuModelExtensionsInteractiveTest
       const auto id = crx_file::id_util::GenerateIdForPath(
           base::MakeAbsoluteFilePath(dir.UnpackedPath()));
       auto* const registry =
-          extensions::ExtensionRegistry::Get(browser()->profile());
+          extensions::ExtensionRegistry::Get(browser()->GetProfile());
       CHECK(registry);
       extensions::TestExtensionRegistryObserver observer(registry, id);
-      extensions::UnpackedInstaller::Create(browser()->profile())
+      extensions::UnpackedInstaller::Create(browser()->GetProfile())
           ->Load(dir.UnpackedPath());
       observer.WaitForExtensionLoaded();
     }
@@ -384,43 +385,6 @@ IN_PROC_BROWSER_TEST_P(AppMenuModelExtensionsInteractiveTest,
                                 MENU_ACTION_FIND_EXTENSIONS, collapse ? 1 : 0);
   histograms_.ExpectBucketCount("WrenchMenu.MenuAction",
                                 MENU_ACTION_MANAGE_EXTENSIONS, 0);
-}
-
-class AppMenuModelCreateNewTabGroupTest : public AppMenuModelInteractiveTest {
- public:
-  AppMenuModelCreateNewTabGroupTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {features::kCreateNewTabGroupAppMenuTopLevel}, {});
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(AppMenuModelCreateNewTabGroupTest,
-                       CheckCreateNewTabGroupAppMenuTopLevel) {
-  RunTestSequence(InstrumentTab(kPrimaryTabPageElementId),
-                  PressButton(kToolbarAppMenuButtonElementId),
-                  EnsurePresent(AppMenuModel::kCreateNewTabGroupTopLevel));
-}
-
-class AppMenuModelCreateNewTabGroupDisabled
-    : public AppMenuModelInteractiveTest {
- public:
-  AppMenuModelCreateNewTabGroupDisabled() {
-    scoped_feature_list_.InitWithFeatures(
-        {}, {features::kCreateNewTabGroupAppMenuTopLevel});
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(AppMenuModelCreateNewTabGroupDisabled,
-                       CheckCreateNewTabGroupAppMenuTopLevelNotPresent) {
-  RunTestSequence(InstrumentTab(kPrimaryTabPageElementId),
-                  PressButton(kToolbarAppMenuButtonElementId),
-                  EnsureNotPresent(AppMenuModel::kCreateNewTabGroupTopLevel));
 }
 
 class PasswordManagerMenuItemInteractiveTest
@@ -525,8 +489,9 @@ class UniversalInstallAppMenuModelInteractiveTest
   // install icon next to them.
   auto VerifyDiyAppMenuItemViews() {
     const ui::ImageModel icon_image = ui::ImageModel::FromVectorIcon(
-        kInstallDesktopChromeRefreshIcon, ui::kColorMenuIcon,
-        ui::SimpleMenuModel::kDefaultIconSize);
+        features::IsRoundedIconsEnabled() ? vector_icons::kInstallDesktopIcon
+                                          : kInstallDesktopChromeRefreshOldIcon,
+        ui::kColorMenuIcon, ui::SimpleMenuModel::kDefaultIconSize);
     return Steps(
         EnsurePresent(AppMenuModel::kInstallAppItem),
         CheckViewProperty(
@@ -570,7 +535,8 @@ class UniversalInstallAppMenuModelInteractiveTest
     params.add_to_search = false;
     base::test::TestFuture<const webapps::AppId&, webapps::InstallResultCode>
         result;
-    auto* provider = web_app::WebAppProvider::GetForTest(browser()->profile());
+    auto* provider =
+        web_app::WebAppProvider::GetForTest(browser()->GetProfile());
     provider->scheduler().InstallFromInfoWithParams(
         std::move(install_info), /*overwrite_existing_manifest_fields=*/true,
         webapps::WebappInstallSource::SYNC, result.GetCallback(), params);
@@ -695,20 +661,7 @@ IN_PROC_BROWSER_TEST_F(UniversalInstallAppMenuModelInteractiveTest,
       EnsurePresent(AppMenuModel::kInstallAppItem));
 }
 
-class YourSavedInfoMenuItemInteractiveTest
-    : public AppMenuModelInteractiveTest {
- public:
-  YourSavedInfoMenuItemInteractiveTest() {
-    feature_list_.InitAndEnableFeature(
-        autofill::features::kYourSavedInfoSettingsPage);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(YourSavedInfoMenuItemInteractiveTest,
-                       ContactInfoNavigation) {
+IN_PROC_BROWSER_TEST_F(AppMenuModelInteractiveTest, ContactInfoNavigation) {
   base::HistogramTester histograms;
   RunTestSequence(
       InstrumentTab(kPrimaryTabPageElementId),
@@ -724,8 +677,7 @@ IN_PROC_BROWSER_TEST_F(YourSavedInfoMenuItemInteractiveTest,
                                MENU_ACTION_SHOW_CONTACT_INFO, 1);
 }
 
-IN_PROC_BROWSER_TEST_F(YourSavedInfoMenuItemInteractiveTest,
-                       IdentityDocsNavigation) {
+IN_PROC_BROWSER_TEST_F(AppMenuModelInteractiveTest, IdentityDocsNavigation) {
   base::HistogramTester histograms;
   RunTestSequence(
       InstrumentTab(kPrimaryTabPageElementId),
@@ -741,7 +693,7 @@ IN_PROC_BROWSER_TEST_F(YourSavedInfoMenuItemInteractiveTest,
                                MENU_ACTION_SHOW_IDENTITY_DOCS, 1);
 }
 
-IN_PROC_BROWSER_TEST_F(YourSavedInfoMenuItemInteractiveTest, TravelNavigation) {
+IN_PROC_BROWSER_TEST_F(AppMenuModelInteractiveTest, TravelNavigation) {
   base::HistogramTester histograms;
   RunTestSequence(InstrumentTab(kPrimaryTabPageElementId),
                   PressButton(kToolbarAppMenuButtonElementId),
@@ -782,7 +734,7 @@ class SupervisedUserAppMenuModelInteractiveTest
     InteractiveBrowserTest::SetUpOnMainThread();
     identity_test_environment_adaptor_ =
         std::make_unique<IdentityTestEnvironmentProfileAdaptor>(
-            browser()->profile());
+            browser()->GetProfile());
   }
 
   void SignIn(bool is_supervised_user) {

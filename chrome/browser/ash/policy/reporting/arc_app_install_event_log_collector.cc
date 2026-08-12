@@ -6,7 +6,6 @@
 
 #include "base/command_line.h"
 #include "base/time/time.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_state.h"
@@ -40,10 +39,11 @@ void SetTimestampFromTime(em::AppInstallReportLogEvent* event,
 }  // namespace
 
 ArcAppInstallEventLogCollector::ArcAppInstallEventLogCollector(
+    PrefService* local_state,
     Delegate* delegate,
     Profile* profile,
     const std::set<std::string>& pending_packages)
-    : InstallEventLogCollectorBase(profile),
+    : InstallEventLogCollectorBase(local_state, profile),
       delegate_(delegate),
       pending_packages_(pending_packages) {
   // Might not be available in unit test.
@@ -100,7 +100,7 @@ void ArcAppInstallEventLogCollector::SuspendDone(
 }
 
 void ArcAppInstallEventLogCollector::OnConnectionStateChanged(
-    network::mojom::ConnectionType type) {
+    net::NetworkChangeNotifier::ConnectionType type) {
   std::unique_ptr<em::AppInstallReportLogEvent> event =
       std::make_unique<em::AppInstallReportLogEvent>();
   event->set_event_type(em::AppInstallReportLogEvent::CONNECTIVITY_CHANGE);

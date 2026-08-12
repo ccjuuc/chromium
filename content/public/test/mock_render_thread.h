@@ -42,14 +42,16 @@ class MockRenderThread : public RenderThread {
   }
 
   // RenderThread implementation:
-  IPC::SyncChannel* GetChannel() override;
+  IPC::ChannelProxy* GetChannel() override;
   std::string GetLocale() override;
   scoped_refptr<base::SingleThreadTaskRunner> GetIOTaskRunner() override;
   void BindHostReceiver(mojo::GenericPendingReceiver receiver) override;
-  bool GenerateFrameRoutingID(int32_t& routing_id,
-                              blink::LocalFrameToken& frame_token,
-                              base::UnguessableToken& devtools_frame_token,
-                              blink::DocumentToken& document_token) override;
+  bool GenerateFrameRoutingID(
+      int32_t& routing_id,
+      blink::LocalFrameToken& frame_token,
+      base::UnguessableToken& devtools_frame_token,
+      blink::DocumentToken& document_token,
+      std::unique_ptr<base::UnguessableToken>& sandbox_origin_token) override;
 
   void AddObserver(RenderThreadObserver* observer) override;
   void RemoveObserver(RenderThreadObserver* observer) override;

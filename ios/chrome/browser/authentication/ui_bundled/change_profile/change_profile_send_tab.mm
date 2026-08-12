@@ -11,6 +11,7 @@
 #import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/send_tab_to_self_commands.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_browser_agent.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_params.h"
 #import "url/gurl.h"
@@ -19,10 +20,12 @@ namespace {
 
 // Implementation of the continuation that opens the URL and show the UI to send
 // tab to self.
-void ChangeProfileSendTabToOtherDevice(GURL url,
-                                       NSString* title,
-                                       SceneState* scene_state,
-                                       base::OnceClosure closure) {
+void ChangeProfileSendTabToOtherDevice(
+    GURL url,
+    NSString* title,
+    send_tab_to_self::ShareEntryPoint entry_point,
+    SceneState* scene_state,
+    base::OnceClosure closure) {
   Browser* browser =
       scene_state.browserProviderInterface.currentBrowserProvider.browser;
   CHECK(browser);
@@ -30,10 +33,12 @@ void ChangeProfileSendTabToOtherDevice(GURL url,
   UrlLoadingBrowserAgent::FromBrowser(browser)->Load(
       UrlLoadParams::InCurrentTab(url));
   CommandDispatcher* dispatcher = browser->GetCommandDispatcher();
-  id<BrowserCoordinatorCommands> browserCoordinatorHandler =
-      HandlerForProtocol(dispatcher, BrowserCoordinatorCommands);
+  id<SendTabToSelfCommands> sendTabToSelfHandler =
+      HandlerForProtocol(dispatcher, SendTabToSelfCommands);
 
-  [browserCoordinatorHandler showSendTabToSelfUI:url title:title];
+  [sendTabToSelfHandler showSendTabToSelfUI:url
+                                      title:title
+                                 entryPoint:entry_point];
 
   std::move(closure).Run();
 }
@@ -42,6 +47,8 @@ void ChangeProfileSendTabToOtherDevice(GURL url,
 
 ChangeProfileContinuation CreateChangeProfileSendTabToOtherDevice(
     GURL url,
-    NSString* title) {
-  return base::BindOnce(&ChangeProfileSendTabToOtherDevice, url, title);
+    NSString* title,
+    send_tab_to_self::ShareEntryPoint entry_point) {
+  return base::BindOnce(&ChangeProfileSendTabToOtherDevice, url, title,
+                        entry_point);
 }

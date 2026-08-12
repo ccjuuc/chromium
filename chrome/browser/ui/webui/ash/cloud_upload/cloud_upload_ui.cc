@@ -4,18 +4,20 @@
 
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_ui.h"
 
+#include "ash/constants/webui_url_constants.h"
 #include "ash/webui/common/trusted_types_util.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/chromeos/upload_office_to_cloud/upload_office_to_cloud.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_dialog.h"
-#include "chrome/common/webui_url_constants.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/grit/cloud_upload_resources.h"
 #include "chrome/grit/cloud_upload_resources_map.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/strings/grit/components_strings.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -31,8 +33,10 @@ bool CloudUploadUIConfig::IsWebUIEnabled(
 
 CloudUploadUI::CloudUploadUI(content::WebUI* web_ui)
     : ui::MojoWebDialogUI{web_ui} {
+  Profile* profile = Profile::FromWebUI(web_ui);
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
-      Profile::FromWebUI(web_ui), chrome::kChromeUICloudUploadHost);
+      profile, ash::kChromeUICloudUploadHost);
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
 
   static constexpr webui::LocalizedString kStrings[] = {
       // Dialog buttons.
@@ -141,7 +145,7 @@ void CloudUploadUI::CreatePageHandler(
 
 void CloudUploadUI::RespondWithUserActionAndCloseDialog(
     mojom::UserAction action) {
-  base::Value::List args;
+  base::ListValue args;
   switch (action) {
     case mojom::UserAction::kCancel:
       args.Append(kUserActionCancel);
@@ -172,7 +176,7 @@ void CloudUploadUI::RespondWithUserActionAndCloseDialog(
 }
 
 void CloudUploadUI::RespondWithLocalTaskAndCloseDialog(int task_position) {
-  base::Value::List args;
+  base::ListValue args;
   args.Append(base::NumberToString(task_position));
   ui::MojoWebDialogUI::CloseDialog(args);
 }

@@ -12,6 +12,11 @@ namespace omnibox {
 // Return true, if supplied page classification is a new tab page.
 bool IsNTPPage(::metrics::OmniboxEventProto::PageClassification classification);
 
+// Checks (and asserts in development builds) if Page Classification is
+// obsolete and should not be used.
+void CheckObsoletePageClass(
+    ::metrics::OmniboxEventProto::PageClassification classification);
+
 // Return true, if supplied page classification is a search results page.
 bool IsSearchResultsPage(
     ::metrics::OmniboxEventProto::PageClassification classification);
@@ -21,8 +26,26 @@ bool IsSearchResultsPage(
 bool IsOtherWebPage(
     ::metrics::OmniboxEventProto::PageClassification classification);
 
-// Return true, if supplied page classification is a Lens contextual searchbox.
-bool IsLensContextualSearchbox(
+// Return true, if supplied page classification is an omnibox on the NTP.
+bool IsNtpOmnibox(
+    ::metrics::OmniboxEventProto::PageClassification classification);
+
+// Return true, if page classification is a WebUI searchbox. This is specific
+// to WebUI searchboxes that don't use the omnibox popup view (the WebUI
+// Omnibox is not included in this).
+bool IsWebUISearchbox(
+    ::metrics::OmniboxEventProto::PageClassification classification);
+
+// Return true, if page classification is a composebox.
+bool IsComposebox(
+    ::metrics::OmniboxEventProto::PageClassification classification);
+
+// Return true, if supplied page classification is an omnibox composebox.
+bool IsOmniboxComposebox(
+    ::metrics::OmniboxEventProto::PageClassification classification);
+
+// Return true, if page classification is the NTP composebox.
+bool IsNTPComposebox(
     ::metrics::OmniboxEventProto::PageClassification classification);
 
 // Return true, if supplied page classification is a Lens unimodal, multimodal,
@@ -34,36 +57,18 @@ bool IsLensSearchbox(
 bool IsCustomTab(
     ::metrics::OmniboxEventProto::PageClassification classification);
 
-// Return true, if supplied page classification is the Android Hub searchbox.
-bool IsAndroidHub(
+// Return true, if supplied page classification is the Android Hub searchbox or
+// Tab Search overlay.
+bool IsAndroidHubOrTabSearch(
     ::metrics::OmniboxEventProto::PageClassification classification);
 
-// Return true, if page classification is a WebUI searchbox. This is specific
-// to WebUI searchboxes that don't use the omnibox popup view (the WebUI
-// Omnibox is not included in this).
-bool IsWebUISearchbox(
-    ::metrics::OmniboxEventProto::PageClassification classification);
-
-// Checks (and asserts in development builds) if Page Classification is
-// obsolete and should not be used.
-void CheckObsoletePageClass(
+// Return true, if supplied page classification applies to Android Widget.
+bool IsAndroidWidget(
     ::metrics::OmniboxEventProto::PageClassification classification);
 
 // Return true, if supplied page classification supports most visited sites
 // provider.
 bool SupportsMostVisitedSites(
-    ::metrics::OmniboxEventProto::PageClassification classification);
-
-// Return true, if supplied page classification is an omnibox composebox.
-bool IsOmniboxComposebox(
-    ::metrics::OmniboxEventProto::PageClassification classification);
-
-// Return true, if page classification is a composebox.
-bool IsComposebox(
-    ::metrics::OmniboxEventProto::PageClassification classification);
-
-// Return true, if page classification is the NTP realbox.
-bool IsNTPRealbox(
     ::metrics::OmniboxEventProto::PageClassification classification);
 
 }  // namespace omnibox

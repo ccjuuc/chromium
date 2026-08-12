@@ -16,7 +16,7 @@
 #include "base/pickle.h"
 #include "ui/base/dragdrop/os_exchange_data_provider.h"
 #include "ui/base/x/selection_owner.h"
-#include "ui/base/x/selection_requestor.h"
+#include "ui/base/x/selection_requester.h"
 #include "ui/base/x/selection_utils.h"
 #include "ui/gfx/geometry/vector2d.h"
 #include "ui/gfx/image/image_skia.h"
@@ -74,15 +74,13 @@ class COMPONENT_EXPORT(UI_BASE_X) XOSExchangeDataProvider
   void MarkAsFromPrivileged() override;
   bool IsFromPrivileged() const override;
   void SetString(std::u16string_view data) override;
-  void SetURL(const GURL& url, std::u16string_view title) override;
+  void SetURLs(base::span<const ClipboardUrlInfo> url_infos) override;
   void SetFilename(const base::FilePath& path) override;
   void SetFilenames(const std::vector<FileInfo>& filenames) override;
   void SetPickledData(const ClipboardFormatType& format,
                       const base::Pickle& pickle) override;
   std::optional<std::u16string> GetString() const override;
-  std::optional<UrlInfo> GetURLAndTitle(
-      FilenameToURLPolicy policy) const override;
-  std::optional<std::vector<GURL>> GetURLs(
+  std::vector<ClipboardUrlInfo> GetURLs(
       FilenameToURLPolicy policy) const override;
   std::optional<std::vector<FileInfo>> GetFilenames() const override;
   std::optional<base::Pickle> GetPickledData(
@@ -92,7 +90,7 @@ class COMPONENT_EXPORT(UI_BASE_X) XOSExchangeDataProvider
   bool HasFile() const override;
   bool HasCustomFormat(const ClipboardFormatType& format) const override;
   void SetFileContents(const base::FilePath& filename,
-                       const std::string& file_contents) override;
+                       base::span<const uint8_t> file_contents) override;
   std::optional<FileContentsInfo> GetFileContents() const override;
   bool HasFileContents() const override;
 

@@ -14,7 +14,7 @@
 
 @protocol AutocompleteSuggestion;
 @class OmniboxAutocompleteController;
-class OmniboxClient;
+class OmniboxClientIOS;
 @protocol OmniboxFocusDelegate;
 @protocol OmniboxTextControllerDelegate;
 @protocol OmniboxTextInput;
@@ -39,7 +39,7 @@ class OmniboxClient;
 /// Returns the current selection range.
 @property(nonatomic, assign, readonly) NSRange currentSelection;
 
-- (instancetype)initWithOmniboxClient:(OmniboxClient*)omniboxClient
+- (instancetype)initWithOmniboxClient:(OmniboxClientIOS*)omniboxClient
                      omniboxTextModel:(OmniboxTextModel*)omniboxTextModel
                   presentationContext:
                       (OmniboxPresentationContext)presentationContext
@@ -54,6 +54,9 @@ class OmniboxClient;
 
 /// Returns whether the omnibox is first responder.
 - (BOOL)isOmniboxFirstResponder;
+
+/// Returns whether the omnibox has focus.
+- (BOOL)hasFocus;
 
 /// Focuses the omnibox.
 - (void)focusOmnibox;
@@ -158,6 +161,9 @@ class OmniboxClient;
 
 /// Called when the omnibox text field starts editing.
 - (void)onDidBeginEditing;
+
+/// Called when the omnibox text field ends editing.
+- (void)onDidEndEditing;
 
 /// Called before the omnibox text field changes. `newText` will replace the
 /// text currently in `range`.

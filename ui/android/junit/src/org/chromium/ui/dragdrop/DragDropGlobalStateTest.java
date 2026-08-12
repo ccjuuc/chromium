@@ -25,22 +25,23 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.shadows.ShadowSystemClock;
 
-import org.chromium.ui.dragdrop.DragDropGlobalState.TrackerToken;
+import org.chromium.base.Token;
+import org.chromium.base.test.BaseRobolectricTestRunner;
 
 import java.util.concurrent.TimeUnit;
 
-@RunWith(org.chromium.base.test.BaseRobolectricTestRunner.class)
+@RunWith(BaseRobolectricTestRunner.class)
 public final class DragDropGlobalStateTest {
     private static final int INSTANCE_ID = 1;
     private static final int INVALID_INSTANCE_ID = -1;
     private static final String M_TEXT = "text";
     @Rule public MockitoRule mMockitoProcessorRule = MockitoJUnit.rule();
     private DropDataAndroid mDropData;
-    private TrackerToken mToken;
+    private Token mToken;
 
     @Before
     public void setup() {
-        mDropData = DropDataAndroid.create(M_TEXT, null, null, null, null);
+        mDropData = DropDataAndroid.create(M_TEXT, null, null, null, null, null, null);
     }
 
     @Test
@@ -84,14 +85,14 @@ public final class DragDropGlobalStateTest {
         mToken = DragDropGlobalState.store(INVALID_INSTANCE_ID, null, null);
 
         ShadowSystemClock.advanceBy(100, TimeUnit.SECONDS);
-        TrackerToken newToken = DragDropGlobalState.store(INSTANCE_ID, mDropData, null);
+        Token newToken = DragDropGlobalState.store(INSTANCE_ID, mDropData, null);
         try {
             DragDropGlobalState.clear(mToken);
         } catch (AssertionError error) {
             DragDropGlobalState.clear(newToken);
             return;
         }
-        Assert.fail("Clear with invalid token should throughs assertion error.");
+        Assert.fail("Clear with invalid token should through assertion error.");
     }
 
     @Test
@@ -120,5 +121,41 @@ public final class DragDropGlobalStateTest {
         assertNull(
                 "Drag shadow builder is removed after clear.",
                 DragDropGlobalState.getDragShadowBuilder());
+    }
+
+    @Test
+    public void testDidChromeHandleDrop() {
+        DragShadowBuilder builder = mock(DragShadowBuilder.class);
+        mToken = DragDropGlobalState.store(INSTANCE_ID, mDropData, builder);
+
+        // Verify false by default.
+        assertFalse(
+                "Expected that Chrome is not marked as having handled the drop event.",
+                DragDropGlobalState.didChromeHandleDrop());
+
+        // Attempt to notify with incorrect DragEvent type and expect AssertionError
+        try {
+            DragEvent dropEvent = Mockito.mock(DragEvent.class);
+            when(dropEvent.getAction()).thenReturn(DragEvent.ACTION_DRAG_ENDED);
+            DragDropGlobalState.notifyChromeHandledDrop(dropEvent);
+            throw new Error("Expected AssertionError, since the wrong DragEvent action passed.");
+        } catch (AssertionError ignored) {
+        }
+
+        // Notify that Chrome handled the drop event and verify true.
+        DragEvent dropEvent = Mockito.mock(DragEvent.class);
+        when(dropEvent.getAction()).thenReturn(DragEvent.ACTION_DROP);
+        DragDropGlobalState.notifyChromeHandledDrop(dropEvent);
+        assertTrue(
+                "Expected that Chrome is marked as having handled the drop event.",
+                DragDropGlobalState.didChromeHandleDrop());
+
+        // Clear state and expect AssertionError.
+        DragDropGlobalState.clear(mToken);
+        try {
+            DragDropGlobalState.didChromeHandleDrop();
+            throw new Error("Expected AssertionError, since the global state is not set.");
+        } catch (AssertionError ignored) {
+        }
     }
 }

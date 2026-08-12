@@ -7,11 +7,11 @@ import {getInjectedElementIds, openTab} from '/_test_resources/test_util/tabs_ut
 chrome.test.runTests([
   async function checkContentScriptInjectionResults() {
     async function getTitleForTab(tabId) {
-      let results = await chrome.scripting.executeScript(
+      const results = await chrome.scripting.executeScript(
           {target: {tabId}, func: () => document.title});
       chrome.test.assertEq(1, results.length);
       return results[0].result;
-    };
+    }
 
     const config = await chrome.test.getConfig();
     const url = `http://example.com:${config.testServer.port}/simple.html`;

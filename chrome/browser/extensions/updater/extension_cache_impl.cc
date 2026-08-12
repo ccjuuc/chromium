@@ -7,7 +7,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/singleton.h"
 #include "base/metrics/histogram_macros.h"
@@ -15,10 +14,10 @@
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/version.h"
-#include "chrome/browser/extensions/crx_installer.h"
 #include "chrome/browser/extensions/updater/chromeos_extension_cache_delegate.h"
 #include "chrome/browser/extensions/updater/local_extension_cache.h"
 #include "chrome/common/extensions/extension_constants.h"
+#include "extensions/browser/crx_installer.h"
 #include "extensions/browser/install/crx_install_error.h"
 #include "extensions/browser/install/sandboxed_unpacker_failure_reason.h"
 #include "extensions/buildflags/buildflags.h"
@@ -86,7 +85,7 @@ void ExtensionCacheImpl::PutExtension(const std::string& id,
 }
 
 bool ExtensionCacheImpl::CachingAllowed(const std::string& id) {
-  return base::Contains(allowed_extensions_, id);
+  return allowed_extensions_.contains(id);
 }
 
 void ExtensionCacheImpl::OnCacheInitialized() {

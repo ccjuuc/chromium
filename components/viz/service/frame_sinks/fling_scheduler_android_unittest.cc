@@ -7,6 +7,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "components/input/features.h"
+#include "components/viz/common/features.h"
 #include "components/viz/service/frame_sinks/external_begin_frame_source_android.h"
 #include "components/viz/service/frame_sinks/frame_sink_manager_impl.h"
 #include "components/viz/service/gl/mock_gpu_service_impl.h"
@@ -88,6 +89,7 @@ class FlingSchedulerTest : public testing::Test,
   }
 
   void TearDown() override {
+    fling_controller_.reset();
     // Cleanup hierarchy.
     frame_sink_manager_->UnregisterFrameSinkHierarchy(kFrameSinkIdRoot,
                                                       kFrameSinkIdA);
@@ -95,7 +97,6 @@ class FlingSchedulerTest : public testing::Test,
     // Invalidating should destroy the CompositorFrameSinkImpl's.
     frame_sink_manager_->InvalidateFrameSinkId(kFrameSinkIdA, {});
 
-    fling_controller_.reset();
     // Make sure that all FrameSinkSourceMappings have been deleted.
     EXPECT_TRUE(frame_sink_manager_->frame_sink_source_map_.empty());
     // Make sure test cleans up all [Root]CompositorFrameSinkImpls.
@@ -181,8 +182,8 @@ class FlingSchedulerTest : public testing::Test,
 
   // Checks if a [Root]CompositorFrameSinkImpl exists for |frame_sink_id|.
   bool CompositorFrameSinkExists(const FrameSinkId& frame_sink_id) {
-    return base::Contains(frame_sink_manager_->sink_map_, frame_sink_id) ||
-           base::Contains(frame_sink_manager_->root_sink_map_, frame_sink_id);
+    return frame_sink_manager_->sink_map_.contains(frame_sink_id) ||
+           frame_sink_manager_->root_sink_map_.contains(frame_sink_id);
   }
 
   // Creates a CompositorFrameSinkImpl.

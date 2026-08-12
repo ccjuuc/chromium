@@ -56,32 +56,31 @@ std::string NormalGetUpdatesRequestEvent::GetDetails() const {
     if (!details.empty()) {
       details.append("\n");
     }
-    details.append(base::StringPrintf(
-        "Nudged types: %s", DataTypeSetToDebugString(nudged_types_).c_str()));
+    details.append(base::StringPrintf("Nudged types: %s",
+                                      DataTypeSetToDebugString(nudged_types_)));
   }
 
   if (!notified_types_.empty()) {
     if (!details.empty()) {
       details.append("\n");
     }
-    details.append(
-        base::StringPrintf("Notified types: %s",
-                           DataTypeSetToDebugString(notified_types_).c_str()));
+    details.append(base::StringPrintf(
+        "Notified types: %s", DataTypeSetToDebugString(notified_types_)));
   }
 
   if (!refresh_requested_types_.empty()) {
     if (!details.empty()) {
       details.append("\n");
     }
-    details.append(base::StringPrintf(
-        "Refresh requested types: %s",
-        DataTypeSetToDebugString(refresh_requested_types_).c_str()));
+    details.append(
+        base::StringPrintf("Refresh requested types: %s",
+                           DataTypeSetToDebugString(refresh_requested_types_)));
   }
 
   return details;
 }
 
-base::Value::Dict NormalGetUpdatesRequestEvent::GetProtoMessage(
+base::DictValue NormalGetUpdatesRequestEvent::GetProtoMessage(
     bool include_specifics) const {
   return ClientToServerMessageToValue(
              request_, {.include_specifics = include_specifics,

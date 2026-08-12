@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <ranges>
 #include <vector>
 
 #include "ash/accessibility/accessibility_controller.h"
@@ -36,8 +37,6 @@
 #include "ash/system/tray/tray_container.h"
 #include "ash/user_education/user_education_class_properties.h"
 #include "base/check.h"
-#include "base/containers/adapters.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/task/sequenced_task_runner.h"
@@ -50,6 +49,7 @@
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
@@ -174,7 +174,9 @@ std::unique_ptr<views::ImageView> CreateDropTargetIcon(
       gfx::Size(kHoldingSpaceIconSize, kHoldingSpaceIconSize));
   icon->SetPaintToLayer();
   icon->layer()->SetFillsBoundsOpaquely(false);
-  icon->SetImage(CreateForegroundImageModel(tray, views::kUnpinIcon));
+  icon->SetImage(CreateForegroundImageModel(
+      tray, ::features::IsRoundedIconsEnabled() ? views::kKeepFilledIcon
+                                                : views::kUnpinOldIcon));
   return icon;
 }
 
@@ -549,15 +551,19 @@ HoldingSpaceTray::CreateContextMenuModel() {
         static_cast<int>(HoldingSpaceCommandId::kHidePreviews),
         l10n_util::GetStringUTF16(
             IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_HIDE_PREVIEWS),
-        ui::ImageModel::FromVectorIcon(vector_icons::kVisibilityOffIcon,
-                                       ui::kColorAshSystemUIMenuIcon,
-                                       kHoldingSpaceIconSize));
+        ui::ImageModel::FromVectorIcon(
+            ::features::IsRoundedIconsEnabled()
+                ? vector_icons::kVisibilityOffIcon
+                : vector_icons::kVisibilityOffOldIcon,
+            ui::kColorAshSystemUIMenuIcon, kHoldingSpaceIconSize));
   } else {
     context_menu_model->AddItemWithIcon(
         static_cast<int>(HoldingSpaceCommandId::kShowPreviews),
         l10n_util::GetStringUTF16(
             IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_SHOW_PREVIEWS),
-        ui::ImageModel::FromVectorIcon(vector_icons::kVisibilityIcon,
+        ui::ImageModel::FromVectorIcon(::features::IsRoundedIconsEnabled()
+                                           ? vector_icons::kVisibilityIcon
+                                           : vector_icons::kVisibilityOldIcon,
                                        ui::kColorAshSystemUIMenuIcon,
                                        kHoldingSpaceIconSize));
   }
@@ -654,7 +660,7 @@ void HoldingSpaceTray::ExecuteCommand(int command_id, int event_flags) {
   }
 }
 
-void HoldingSpaceTray::OnWidgetDragWillStart(views::Widget* widget) {
+void HoldingSpaceTray::OnWidgetDragDropWillStart(views::Widget* widget) {
   // The holding space bubble should be closed while dragging holding space
   // items so as not to obstruct drop targets. Post the task to close the bubble
   // so that we don't attempt to destroy the bubble widget before the associated
@@ -766,11 +772,11 @@ void HoldingSpaceTray::UpdatePreviewsIcon() {
   std::vector<const HoldingSpaceItem*> items_with_previews;
   std::set<base::FilePath> paths_with_previews;
   for (const auto& item :
-       base::Reversed(HoldingSpaceController::Get()->model()->items())) {
+       std::views::reverse(HoldingSpaceController::Get()->model()->items())) {
     if (!IsPreviewable(item)) {
       continue;
     }
-    if (base::Contains(paths_with_previews, item->file().file_path)) {
+    if (paths_with_previews.contains(item->file().file_path)) {
       continue;
     }
     items_with_previews.push_back(item.get());

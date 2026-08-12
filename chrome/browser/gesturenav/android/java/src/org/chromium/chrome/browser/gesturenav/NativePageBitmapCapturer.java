@@ -63,7 +63,7 @@ public class NativePageBitmapCapturer {
         int result = shouldUseFallbackUx(tab);
         BackPressMetrics.recordCaptureNativeViewResult(result);
         if (result != CaptureNativeViewResult.CAPTURE_SCREENSHOT) {
-            PostTask.postTask(TaskTraits.UI_USER_VISIBLE, () -> callback.onResult(null));
+            PostTask.postTask(TaskTraits.UI_USER_VISIBLE, callback.bind(null));
             return true;
         }
 
@@ -87,7 +87,7 @@ public class NativePageBitmapCapturer {
                     SCALE,
                     new CaptureObserver() {
                         @Override
-                        public void onCaptureStart(Canvas canvas, @Nullable Rect dirtyRect) {
+                        public void onCaptureStart(Canvas canvas, Rect dirtyRect) {
                             assumeNonNull(tab.getNativePage());
                             canvas.drawColor(tab.getNativePage().getBackgroundColor());
                             canvas.translate(

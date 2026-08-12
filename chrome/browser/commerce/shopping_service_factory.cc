@@ -6,7 +6,6 @@
 
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/commerce/product_specifications/product_specifications_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
@@ -19,7 +18,6 @@
 #include "components/commerce/content/browser/commerce_tab_helper.h"
 #include "components/commerce/content/browser/web_extractor_impl.h"
 #include "components/commerce/core/commerce_feature_list.h"
-#include "components/commerce/core/product_specifications/product_specifications_service.h"
 #include "components/commerce/core/proto/commerce_subscription_db_content.pb.h"
 #include "components/commerce/core/proto/discount_infos_db_content.pb.h"  // nogncheck
 #include "components/commerce/core/proto/parcel_tracking_db_content.pb.h"
@@ -30,7 +28,6 @@
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "components/commerce/core/proto/cart_db_content.pb.h"  // nogncheck
 #include "components/commerce/core/proto/discounts_db_content.pb.h"  // nogncheck
 #endif
@@ -86,7 +83,6 @@ ShoppingServiceFactory::ShoppingServiceFactory()
   DependsOn(SessionProtoDBFactory<
             discount_infos_db::DiscountInfosContentProto>::GetInstance());
   DependsOn(SyncServiceFactory::GetInstance());
-  DependsOn(commerce::ProductSpecificationsServiceFactory::GetInstance());
   DependsOn(TabRestoreServiceFactory::GetInstance());
 }
 
@@ -107,7 +103,6 @@ ShoppingServiceFactory::BuildServiceInstanceForBrowserContext(
                                 CommerceSubscriptionContentProto>::GetInstance()
           ->GetForProfile(context),
       PowerBookmarkServiceFactory::GetForBrowserContext(context),
-      ProductSpecificationsServiceFactory::GetForBrowserContext(context),
 #if !BUILDFLAG(IS_ANDROID)
       SessionProtoDBFactory<discounts_db::DiscountsContentProto>::GetInstance()
           ->GetForProfile(context),

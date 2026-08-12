@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/values.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
@@ -31,9 +32,11 @@ struct TtsVoice {
 };
 
 struct TtsEngine : public Extension::ManifestData {
+  static const char* kManifestDataKey;
+
   TtsEngine();
   ~TtsEngine() override;
-  static bool Parse(const base::Value::List& tts_voices,
+  static bool Parse(const base::ListValue& tts_voices,
                     TtsEngine* out_engine,
                     std::u16string* error);
 

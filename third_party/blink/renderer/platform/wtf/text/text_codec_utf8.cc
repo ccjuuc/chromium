@@ -31,12 +31,16 @@
 
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
+#include "base/feature_list.h"
+#include "base/features.h"
 #include "base/memory/ptr_util.h"
 #include "base/numerics/checked_math.h"
+#include "base/strings/string_util.h"
 #include "base/types/to_address.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_names.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_buffer.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_impl.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_codec_ascii_fast_path.h"
 
 namespace blink {
@@ -58,7 +62,7 @@ ALWAYS_INLINE size_t LengthOfNonCharacter(int character) {
   return -character;
 }
 
-constexpr std::array<uint8_t, 256> kNonASCIISequenceLength = {
+constexpr std::array<uint8_t, 256> kNonAsciiSequenceLength = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -71,8 +75,8 @@ constexpr std::array<uint8_t, 256> kNonASCIISequenceLength = {
     2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
     4, 4, 4, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
-inline int DecodeNonASCIISequence(base::span<const uint8_t> sequence) {
-  DCHECK(!IsASCII(sequence[0]));
+inline int DecodeNonAsciiSequence(base::span<const uint8_t> sequence) {
+  DCHECK(!IsAscii(sequence[0]));
 
   const size_t length = sequence.size();
   if (length == 2) {
@@ -183,7 +187,7 @@ std::unique_ptr<TextCodec> TextCodecUtf8::Create(const TextEncoding&) {
 }
 
 bool TextCodecUtf8::IsSupported(StringView canonical_name) {
-  return EqualIgnoringASCIICase(canonical_name, "UTF-8");
+  return EqualIgnoringAsciiCase(canonical_name, "UTF-8");
 }
 
 void TextCodecUtf8::RegisterEncodingNames(EncodingNameRegistrar registrar) {
@@ -241,7 +245,7 @@ void TextCodecUtf8::FillPartialSequenceBytes(
     partial_sequence_size_ += additional_bytes;
   }
   // If we still don't have `sequence_length` bytes, fill the rest with zeros
-  // (any other lead byte would do), so we can run `DecodeNonASCIISequence` to
+  // (any other lead byte would do), so we can run `DecodeNonAsciiSequence` to
   // tell if the chunk that we have is valid. These bytes are not part of the
   // partial sequence, so don't increment `partial_sequence_size`.
   if (sequence_length > partial_sequence_size_) {
@@ -275,12 +279,12 @@ bool TextCodecUtf8::HandlePartialSequence(base::span<LChar>& destination,
                                           bool flush) {
   DCHECK(partial_sequence_size_);
   do {
-    if (IsASCII(partial_sequence_[0])) {
+    if (IsAscii(partial_sequence_[0])) {
       destination.take_first<1u>()[0] = partial_sequence_[0];
       ConsumePartialSequenceBytes(1);
       continue;
     }
-    size_t count = kNonASCIISequenceLength[partial_sequence_[0]];
+    size_t count = kNonAsciiSequenceLength[partial_sequence_[0]];
     int character;
     if (!count) {
       character = kNonCharacter1;
@@ -289,7 +293,7 @@ bool TextCodecUtf8::HandlePartialSequence(base::span<LChar>& destination,
         FillPartialSequenceBytes(count, source);
       }
       character =
-          DecodeNonASCIISequence(base::span(partial_sequence_).first(count));
+          DecodeNonAsciiSequence(base::span(partial_sequence_).first(count));
       if (NeedMoreData(count, character, flush)) {
         return false;
       }
@@ -320,12 +324,12 @@ bool TextCodecUtf8::HandlePartialSequence(base::span<UChar>& destination,
                                           bool& saw_error) {
   DCHECK(partial_sequence_size_);
   do {
-    if (IsASCII(partial_sequence_[0])) {
+    if (IsAscii(partial_sequence_[0])) {
       destination.take_first<1u>()[0] = partial_sequence_[0];
       ConsumePartialSequenceBytes(1);
       continue;
     }
-    size_t count = kNonASCIISequenceLength[partial_sequence_[0]];
+    size_t count = kNonAsciiSequenceLength[partial_sequence_[0]];
     int character;
     if (!count) {
       character = kNonCharacter1;
@@ -334,7 +338,7 @@ bool TextCodecUtf8::HandlePartialSequence(base::span<UChar>& destination,
         FillPartialSequenceBytes(count, source);
       }
       character =
-          DecodeNonASCIISequence(base::span(partial_sequence_).first(count));
+          DecodeNonAsciiSequence(base::span(partial_sequence_).first(count));
       if (NeedMoreData(count, character, flush)) {
         return false;
       }
@@ -358,6 +362,8 @@ String TextCodecUtf8::Decode(base::span<const uint8_t> bytes,
                              bool stop_on_error,
                              bool& saw_error) {
   const bool do_flush = flush != FlushBehavior::kDoNotFlush;
+  const bool fast_ascii_range_copy =
+      base::FeatureList::IsEnabled(base::features::kUtfConversionAsciiFastPath);
 
   // Each input byte might turn into a character.
   // That includes all bytes in the partial-sequence buffer because
@@ -390,30 +396,40 @@ String TextCodecUtf8::Decode(base::span<const uint8_t> bytes,
     }
 
     while (!source.empty()) {
-      if (IsASCII(source[0])) {
+      if (IsAscii(source[0])) {
         // Fast path for ASCII. Most UTF-8 text will be ASCII.
-        if (IsAlignedToMachineWord(source.data())) {
-          while (source.data() < aligned_end) {
-            MachineWord chunk =
-                *reinterpret_cast_ptr<const MachineWord*>(source.data());
-            if (!IsAllAscii<LChar>(chunk)) {
-              break;
-            }
-            CopyAsciiMachineWord(
-                chunk, destination.take_first<sizeof(MachineWord)>().data());
-            source.take_first<sizeof(MachineWord)>();
-          }
+        if (fast_ascii_range_copy) {
+          size_t ascii_len = base::FindFirstNonASCII(
+              base::as_string_view(base::as_chars(source)));
+          destination.take_first(ascii_len).copy_from(
+              source.take_first(ascii_len));
           if (source.empty()) {
             break;
           }
-          if (!IsASCII(source[0])) {
-            continue;
+        } else {
+          if (IsAlignedToMachineWord(source.data())) {
+            while (source.data() < aligned_end) {
+              MachineWord chunk =
+                  *reinterpret_cast_ptr<const MachineWord*>(source.data());
+              if (!IsAllAscii<LChar>(chunk)) {
+                break;
+              }
+              CopyAsciiMachineWord(
+                  chunk, destination.take_first<sizeof(MachineWord)>().data());
+              source.take_first<sizeof(MachineWord)>();
+            }
+            if (source.empty()) {
+              break;
+            }
+            if (!IsAscii(source[0])) {
+              continue;
+            }
           }
+          destination.take_first<1u>()[0] = source.take_first_elem();
+          continue;
         }
-        destination.take_first<1u>()[0] = source.take_first_elem();
-        continue;
       }
-      size_t count = kNonASCIISequenceLength[source[0]];
+      size_t count = kNonAsciiSequenceLength[source[0]];
       int character;
       if (count == 0) {
         character = kNonCharacter1;
@@ -422,7 +438,7 @@ String TextCodecUtf8::Decode(base::span<const uint8_t> bytes,
           SavePartialSequenceBytes(source);
           break;
         }
-        character = DecodeNonASCIISequence(source.first(count));
+        character = DecodeNonAsciiSequence(source.first(count));
       }
       if (IsNonCharacter(character)) {
         saw_error = true;
@@ -450,11 +466,8 @@ upConvertTo16Bit:
   // Copy the already converted characters
   const size_t characters_converted =
       static_cast<size_t>(destination.data() - buffer.Span().data());
-  auto dest16_converted = destination16.take_first(characters_converted);
-  auto converted8_span = buffer.Span().first(characters_converted);
-  for (size_t i = 0; i < converted8_span.size(); ++i) {
-    dest16_converted[i] = converted8_span[i];
-  }
+  StringImpl::CopyChars(destination16.take_first(characters_converted),
+                        buffer.Span().first(characters_converted));
 
   do {
     if (partial_sequence_size_) {
@@ -473,31 +486,43 @@ upConvertTo16Bit:
     }
 
     while (!source.empty()) {
-      if (IsASCII(source[0])) {
+      if (IsAscii(source[0])) {
         // Fast path for ASCII. Most UTF-8 text will be ASCII.
-        if (IsAlignedToMachineWord(source.data())) {
-          while (source.data() < aligned_end) {
-            MachineWord chunk =
-                *reinterpret_cast_ptr<const MachineWord*>(source.data());
-            if (!IsAllAscii<LChar>(chunk)) {
-              break;
-            }
-
-            CopyAsciiMachineWord(
-                chunk, destination16.take_first<sizeof(MachineWord)>().data());
-            source.take_first<sizeof(MachineWord)>();
-          }
+        if (fast_ascii_range_copy) {
+          size_t ascii_len = base::FindFirstNonASCII(
+              base::as_string_view(base::as_chars(source)));
+          StringImpl::CopyChars(destination16.take_first(ascii_len),
+                                source.take_first(ascii_len));
           if (source.empty()) {
             break;
           }
-          if (!IsASCII(source[0])) {
-            continue;
+        } else {
+          if (IsAlignedToMachineWord(source.data())) {
+            while (source.data() < aligned_end) {
+              MachineWord chunk =
+                  *reinterpret_cast_ptr<const MachineWord*>(source.data());
+              if (!IsAllAscii<LChar>(chunk)) {
+                break;
+              }
+              // SAFETY: `take_first<sizeof(MachineWord)>()` ensures sufficient
+              // size.
+              UNSAFE_BUFFERS(CopyAsciiMachineWord(
+                  chunk,
+                  destination16.take_first<sizeof(MachineWord)>().data()));
+              source.take_first<sizeof(MachineWord)>();
+            }
+            if (source.empty()) {
+              break;
+            }
+            if (!IsAscii(source[0])) {
+              continue;
+            }
           }
+          destination16.take_first<1u>()[0] = source.take_first_elem();
+          continue;
         }
-        destination16.take_first<1u>()[0] = source.take_first_elem();
-        continue;
       }
-      size_t count = kNonASCIISequenceLength[source[0]];
+      size_t count = kNonAsciiSequenceLength[source[0]];
       int character;
       if (count == 0) {
         character = kNonCharacter1;
@@ -506,7 +531,7 @@ upConvertTo16Bit:
           SavePartialSequenceBytes(source);
           break;
         }
-        character = DecodeNonASCIISequence(source.first(count));
+        character = DecodeNonAsciiSequence(source.first(count));
       }
       if (IsNonCharacter(character)) {
         saw_error = true;

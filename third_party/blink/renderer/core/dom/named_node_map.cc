@@ -109,8 +109,8 @@ void NamedNodeMap::NamedPropertyEnumerator(Vector<String>& names,
   names.ReserveInitialCapacity(attributes.size());
   if (element_->IsHTMLElement() && IsA<HTMLDocument>(element_->GetDocument())) {
     for (const Attribute& attribute : attributes) {
-      if ((attribute.Prefix() == attribute.Prefix().LowerASCII()) &&
-          (attribute.LocalName() == attribute.LocalName().LowerASCII())) {
+      if (attribute.Prefix().ContainsNoAsciiUpper() &&
+          attribute.LocalName().ContainsNoAsciiUpper()) {
         names.UncheckedAppend(attribute.GetName().ToString());
       }
     }
@@ -131,7 +131,7 @@ bool NamedNodeMap::NamedPropertyQuery(const AtomicString& name,
 void NamedNodeMap::Trace(Visitor* visitor) const {
   visitor->Trace(element_);
   ScriptWrappable::Trace(visitor);
-  ElementRareDataField::Trace(visitor);
+  NodeRareDataField::Trace(visitor);
 }
 
 }  // namespace blink

@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-
 assert(is_chromeos)
 
 static_library("core") {
@@ -46,8 +44,6 @@ static_library("core") {
     "file_util.h",
     "policy_oauth2_token_fetcher.cc",
     "policy_oauth2_token_fetcher.h",
-    "policy_pref_names.cc",
-    "policy_pref_names.h",
     "reporting_user_tracker.cc",
     "reporting_user_tracker.h",
     "user_cloud_policy_manager_ash.cc",
@@ -70,6 +66,9 @@ static_library("core") {
     "//base",
     "//build:buildflag_header_h",
     "//chrome/browser:browser_process",
+    "//chrome/browser:browser_process_platform_part",
+    "//chrome/browser/ash/app_mode/auto_sleep",
+    "//chrome/browser/ash/ownership",
     "//chrome/browser/ash/policy/dev_mode",
     "//chrome/browser/ash/policy/enrollment",
     "//chrome/browser/ash/policy/networking",
@@ -86,6 +85,9 @@ static_library("core") {
     "//chrome/browser/ash/tpm",
     "//chrome/browser/chromeos/extensions/external_loader",
     "//chrome/browser/device_identity",
+    "//chrome/browser/enterprise",
+    "//chrome/browser/invalidation",
+    "//chrome/browser/net",
     "//chrome/browser/policy:policy_util",
     "//chrome/browser/policy/messaging_layer/proto:user_session_activity_proto",
     "//chrome/browser/profiles:profile",
@@ -106,6 +108,7 @@ static_library("core") {
     "//chromeos/ash/components/policy/device_local_account",
     "//chromeos/ash/components/settings",
     "//chromeos/ash/components/system",
+    "//chromeos/ash/components/timezone:util",
     "//chromeos/ash/experiences/arc:arc_features",
     "//chromeos/constants",
     "//chromeos/dbus/constants",
@@ -132,6 +135,7 @@ static_library("core") {
     "//components/variations",
     "//content/public/browser",
     "//extensions/browser",
+    "//extensions/browser:crx_installer",
     "//google_apis",
     "//net",
     "//services/network/public/cpp",
@@ -139,15 +143,18 @@ static_library("core") {
     "//ui/base",
     "//url",
 
-    # TODO: Use //chrome/browser/ash/attestation instead after fixing cyclic dependency.
+    # TODO: Use //chrome/browser/ash/attestation instead after fixing cyclic
+    # dependency.
     "//chromeos/ash/components/dbus/attestation:attestation_proto",
 
-    # TODO: Use //chrome/browser/ash/login/reporting instead after fixing cyclic dependency.
+    # TODO: Use //chrome/browser/ash/login/reporting instead after fixing cyclic
+    # dependency.
     "//chrome/browser/policy/messaging_layer/proto:lock_unlock_event_proto",
     "//chrome/browser/policy/messaging_layer/proto:login_logout_event_proto",
     "//chrome/browser/policy/messaging_layer/proto:os_events_proto",
     "//chromeos/ash/services/cros_healthd/public/mojom",
     "//components/webapps/browser",
+    "//remoting/host/mojom",
   ]
 
   allow_circular_includes_from = [
@@ -156,6 +163,9 @@ static_library("core") {
     "//chrome/browser/ash/settings",
     "//chrome/browser/ash/system",
     "//chrome/browser/ash/tpm",
+
+    # enterprise headers include device_attributes.h.
+    "//chrome/browser/enterprise",
   ]
 }
 
@@ -167,8 +177,6 @@ static_library("test_support") {
     "device_policy_cros_browser_test.h",
     "device_policy_cros_test_helper.cc",
     "device_policy_cros_test_helper.h",
-    "fake_device_cloud_policy_manager.cc",
-    "fake_device_cloud_policy_manager.h",
     "user_policy_test_helper.cc",
     "user_policy_test_helper.h",
   ]
@@ -179,7 +187,7 @@ static_library("test_support") {
     "//base",
     "//chrome/browser",
     "//chrome/browser:browser_process",
-    "//chrome/browser/ash/policy/remote_commands/crd:test_support",
+    "//chrome/browser:browser_process_platform_part",
     "//chrome/browser/ash/policy/test_support",
     "//chrome/browser/profiles:profile",
     "//chrome/common:constants",
@@ -229,6 +237,7 @@ source_set("unit_tests") {
     "//base",
     "//base/test:test_support",
     "//chrome/browser",
+    "//chrome/browser:browser_process_platform_part",
     "//chrome/browser/ash/login/users:test_support",
     "//chrome/browser/ash/login/users/avatar",
     "//chrome/browser/ash/ownership",
@@ -246,6 +255,7 @@ source_set("unit_tests") {
     "//chrome/browser/signin",
     "//chrome/browser/ui/ash/wallpaper",
     "//chrome/browser/ui/ash/wallpaper:test_support",
+    "//chrome/browser/ui/webui/certificate_manager",
     "//chrome/common:chrome_features",
     "//chrome/common:constants",
     "//chrome/common:non_code_constants",
@@ -335,6 +345,7 @@ source_set("browser_tests") {
     "//chrome/app:generated_resources",
     "//chrome/browser",
     "//chrome/browser:browser_process",
+    "//chrome/browser:browser_process_platform_part",
     "//chrome/browser/apps/app_service",
     "//chrome/browser/ash/extensions",
     "//chrome/browser/ash/login",
@@ -357,11 +368,13 @@ source_set("browser_tests") {
     "//chrome/browser/extensions:test_support",
     "//chrome/browser/policy:onc",
     "//chrome/browser/policy:test_support",
+    "//chrome/browser/prefs:util",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/signin",
     "//chrome/browser/ui",
     "//chrome/browser/ui/ash/login",
     "//chrome/browser/ui/webui/ash/login",
+    "//chrome/browser/unified_consent",
     "//chrome/browser/web_applications",
     "//chrome/common",
     "//chrome/common:constants",
@@ -376,6 +389,7 @@ source_set("browser_tests") {
     "//chromeos/ash/components/policy/device_policy:test_support",
     "//chromeos/ash/components/settings",
     "//chromeos/ash/components/system",
+    "//chromeos/ash/components/timezone:util",
     "//chromeos/ash/experiences/arc:prefs",
     "//chromeos/components/mgs",
     "//components/crx_file",
@@ -401,6 +415,7 @@ source_set("browser_tests") {
     "//crypto",
     "//extensions:test_support",
     "//extensions/browser",
+    "//extensions/browser:crx_installer",
     "//extensions/browser:test_support",
     "//extensions/common",
     "//extensions/common:common_constants",

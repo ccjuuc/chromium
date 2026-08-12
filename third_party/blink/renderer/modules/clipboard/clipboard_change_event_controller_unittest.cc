@@ -5,10 +5,21 @@
 #include "third_party/blink/renderer/modules/clipboard/clipboard_change_event_controller.h"
 
 #include "base/functional/bind.h"
+#include "mojo/public/cpp/system/message_pipe.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/mojom/clipboard/clipboard.mojom-blink.h"
 #include "third_party/blink/public/mojom/permissions/permission.mojom-blink.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom-blink.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+#include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/event_type_names.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+#include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/frame/navigator.h"
+#include "third_party/blink/renderer/core/testing/sim/sim_request.h"
+#include "third_party/blink/renderer/core/testing/sim/sim_test.h"
+#include "third_party/blink/renderer/modules/clipboard/clipboard.h"
 #include "third_party/blink/renderer/modules/clipboard/clipboard_test_utils.h"
 #include "third_party/blink/renderer/modules/clipboard/mock_clipboard_permission_service.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
@@ -22,6 +33,14 @@ class ClipboardChangeEventTest : public ClipboardTestBase {
         mojom::blink::PermissionService::Name_,
         base::BindRepeating(&MockClipboardPermissionService::BindRequest,
                             base::Unretained(&permission_service_)));
+  }
+
+  void TearDown() override {
+    // Clear the binder before `permission_service_` is destroyed; the broker
+    // holds it Unretained, so a later request would be a use-after-free.
+    GetFrame().DomWindow()->GetBrowserInterfaceBroker().SetBinderForTesting(
+        mojom::blink::PermissionService::Name_, {});
+    ClipboardTestBase::TearDown();
   }
 
  protected:
@@ -173,7 +192,9 @@ TEST_F(ClipboardChangeEventTest,
       .WillOnce(
           [](mojom::blink::PermissionDescriptorPtr,
              MockClipboardPermissionService::HasPermissionCallback callback) {
-            std::move(callback).Run(mojom::blink::PermissionStatus::DENIED);
+            std::move(callback).Run(
+                mojom::blink::PermissionStatusWithDetails::New(
+                    mojom::blink::PermissionStatus::DENIED, nullptr));
           });
 
   auto* clipboard_change_event_controller =
@@ -244,6 +265,138 @@ TEST_F(ClipboardChangeEventTest,
   // Clean up the event listener
   GetDocument().removeEventListener(event_type_names::kClipboardchange,
                                     clipboard_change_event_handler, false);
+}
+
+// Regression test: FocusedFrameChanged() must not crash when the execution
+// context has been destroyed (e.g. during frame detachment). This reproduces
+// the null dereference crash in MaybeDispatchClipboardChangeEvent() reported
+// in crbug.com/1771962050.
+//
+// The real crash path is: Frame::Detach() -> DomWindow()->FrameDestroyed()
+// (which calls NotifyContextDestroyed(), making GetExecutionContext() return
+// null) -> FocusController::FrameDetached() -> SetFocusedFrame(nullptr) ->
+// NotifyFocusChangedObservers() -> FocusedFrameChanged() ->
+// MaybeDispatchClipboardChangeEvent() -> null dereference.
+TEST_F(ClipboardChangeEventTest, NoCrashWhenFocusChangedAfterContextDestroyed) {
+  ExecutionContext* execution_context = GetFrame().DomWindow();
+  GetFrame().GetSystemClipboard()->OnClipboardDataChanged({"text/plain"}, 1);
+
+  SetSecureOrigin(execution_context);
+  // Page is not focused so that DidUpdateData() sets
+  // fire_clipboardchange_on_focus_ = true.
+  SetPageFocus(false);
+
+  auto* clipboard_change_event_controller =
+      MakeGarbageCollected<ClipboardChangeEventController>(
+          *GetFrame().DomWindow()->navigator(), &GetDocument());
+
+  // Trigger clipboard change while unfocused. OnClipboardChanged() calls
+  // MaybeDispatchClipboardChangeEvent() which sees no focus and sets
+  // fire_clipboardchange_on_focus_ = true.
+  clipboard_change_event_controller->DidUpdateData();
+  test::RunPendingTasks();
+
+  // Simulate frame detachment by calling FrameDestroyed() directly on the
+  // DomWindow. This calls NotifyContextDestroyed(), making
+  // GetExecutionContext() return null (unit tests may call FrameDestroyed()
+  // manually per the code comments in LocalDOMWindow).
+  GetFrame().DomWindow()->FrameDestroyed();
+
+  // Calling FocusedFrameChanged() with a destroyed context must not crash.
+  // Before the fix: null dereference at *To<LocalDOMWindow>(context) in
+  // MaybeDispatchClipboardChangeEvent() because fire_clipboardchange_on_focus_
+  // is true and GetExecutionContext() returns null.
+  clipboard_change_event_controller->FocusedFrameChanged();
+}
+
+// Regression test: DidUpdateData() (via OnClipboardChanged) must not crash
+// when the execution context has been destroyed during frame detachment.
+TEST_F(ClipboardChangeEventTest,
+       NoCrashWhenClipboardChangedAfterContextDestroyed) {
+  ExecutionContext* execution_context = GetFrame().DomWindow();
+  GetFrame().GetSystemClipboard()->OnClipboardDataChanged({"text/plain"}, 1);
+
+  SetSecureOrigin(execution_context);
+  SetPageFocus(true);
+
+  auto* clipboard_change_event_controller =
+      MakeGarbageCollected<ClipboardChangeEventController>(
+          *GetFrame().DomWindow()->navigator(), &GetDocument());
+
+  // Simulate frame detachment.
+  GetFrame().DomWindow()->FrameDestroyed();
+
+  // OnClipboardChanged() already has a null check, so this should not crash.
+  clipboard_change_event_controller->DidUpdateData();
+  test::RunPendingTasks();
+}
+
+// Regression test: MaybeDispatchClipboardChangeEvent must not crash during
+// page teardown when fire_clipboardchange_on_focus_ is true. This simulates
+// the exact crash path through Page::WillBeDestroyed() -> Frame::Detach() ->
+// FocusController::FrameDetached() -> NotifyFocusChangedObservers().
+TEST_F(ClipboardChangeEventTest,
+       NoCrashDuringTeardownWithPendingFocusDispatch) {
+  ExecutionContext* execution_context = GetFrame().DomWindow();
+  GetFrame().GetSystemClipboard()->OnClipboardDataChanged({"text/plain"}, 1);
+
+  SetSecureOrigin(execution_context);
+  // First set page focused to establish the focused frame in FocusController
+  // (FocusHasChanged sets focused_frame_ = main_frame when focused is true).
+  SetPageFocus(true);
+
+  auto* clipboard_change_event_controller =
+      MakeGarbageCollected<ClipboardChangeEventController>(
+          *GetFrame().DomWindow()->navigator(), &GetDocument());
+
+  // Unfocus the page. This does NOT clear focused_frame_ (only updates
+  // is_active_ and is_focused_ flags). hasFocus() will now return false.
+  SetPageFocus(false);
+
+  // Trigger clipboard change while unfocused to set
+  // fire_clipboardchange_on_focus_ = true.
+  clipboard_change_event_controller->DidUpdateData();
+  test::RunPendingTasks();
+
+  // Do NOT call FrameDestroyed() — let PageTestBase::TearDown() destroy the
+  // page naturally. During teardown: Page::WillBeDestroyed() -> Frame::Detach()
+  // -> DomWindow()->FrameDestroyed() (context destroyed) ->
+  // FocusController::FrameDetached() -> SetFocusedFrame(nullptr) (because
+  // focused_frame_ == main_frame) -> NotifyFocusChangedObservers() ->
+  // FocusedFrameChanged() -> MaybeDispatchClipboardChangeEvent().
+  // Before the fix: crashes with null dereference.
+}
+
+// Regression test for crbug.com/500385607: addEventListener('clipboardchange')
+// on a prerendering document must not bind blink.mojom.ClipboardHost.
+class ClipboardChangeEventPrerenderTest : public SimTest {};
+
+TEST_F(ClipboardChangeEventPrerenderTest, NoClipboardHostBindWhilePrerendering) {
+  InitializePrerenderPageRoot();
+  SimRequest resource("https://example.test/", "text/html");
+  LoadURL("https://example.test/");
+  resource.Complete("<!DOCTYPE html><html><body></body></html>");
+  ASSERT_TRUE(GetDocument().IsPrerendering());
+
+  int clipboard_host_bind_count = 0;
+  ASSERT_TRUE(
+      GetDocument().GetFrame()->GetBrowserInterfaceBroker().SetBinderForTesting(
+          mojom::blink::ClipboardHost::Name_,
+          base::BindRepeating(
+              [](int* c, mojo::ScopedMessagePipeHandle) { ++*c; },
+              base::Unretained(&clipboard_host_bind_count))));
+
+  Navigator* navigator = GetDocument().GetFrame()->DomWindow()->navigator();
+  Clipboard* clipboard = Clipboard::clipboard(*navigator);
+  auto* listener = MakeGarbageCollected<EventCountingListener>();
+  clipboard->addEventListener(event_type_names::kClipboardchange, listener);
+  test::RunPendingTasks();
+
+  EXPECT_EQ(clipboard_host_bind_count, 0);
+
+  ASSERT_TRUE(
+      GetDocument().GetFrame()->GetBrowserInterfaceBroker().SetBinderForTesting(
+          mojom::blink::ClipboardHost::Name_, {}));
 }
 
 }  // namespace blink

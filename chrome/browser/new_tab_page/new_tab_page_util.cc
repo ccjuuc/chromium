@@ -5,16 +5,18 @@
 #include "chrome/browser/new_tab_page/new_tab_page_util.h"
 
 #include "base/command_line.h"
+#include "base/hash/hash.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/new_tab_page/modules/modules_constants.h"
 #include "chrome/browser/new_tab_page/modules/modules_switches.h"
+#include "chrome/browser/new_tab_page/prefs/ntp_pref_names.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/webui/new_tab_page/ntp_pref_names.h"
 #include "chrome/common/pref_names.h"
 #include "components/ntp_tiles/features.h"
 #include "components/ntp_tiles/pref_names.h"
@@ -32,6 +34,18 @@
 
 namespace {
 
+constexpr char kModulesAutoRemovalReasonManagedPreference[] =
+    "NewTabPage.Modules.AutoRemovalSkipped.ManagedPreference";
+constexpr char kModulesAutoRemovalReasonDisabledAllModules[] =
+    "NewTabPage.Modules.AutoRemovalSkipped.DisabledAllModules";
+constexpr char kModulesAutoRemovalReasonDisabled[] =
+    "NewTabPage.Modules.AutoRemovalSkipped.Disabled";
+constexpr char kModulesAutoRemovalReasonStaleDaysCount[] =
+    "NewTabPage.Modules.AutoRemovalSkipped.StaleDaysCount";
+
+constexpr char kShortcutsAutoRemovalReasonHistogram[] =
+    "NewTabPage.MostVisited.AutoRemovalSkipped";
+
 bool IsOsSupportedForCart() {
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   return true;
@@ -41,10 +55,10 @@ bool IsOsSupportedForCart() {
 }
 
 bool IsOsSupportedForDrive() {
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
-  return true;
-#else
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   return false;
+#else
+  return true;
 #endif
 }
 
@@ -80,6 +94,16 @@ bool IsDriveModuleEnabled() {
 bool IsDriveModuleEnabledForProfile(bool is_managed_profile, Profile* profile) {
   if (!IsDriveModuleEnabled()) {
     return false;
+  }
+
+  // Allow loading fake data in test environments.
+  if (!base::GetFieldTrialParamValueByFeature(
+           ntp_features::kNtpDriveModule,
+           ntp_features::kNtpDriveModuleDataParam)
+           .empty() &&
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kSignedOutNtpModulesSwitch)) {
+    return true;
   }
 
   if (!IsProfileSignedIn(profile)) {
@@ -266,47 +290,44 @@ bool IsTopSitesEnabled(Profile* profile) {
 }
 
 bool IsCustomLinksEnabled(Profile* profile) {
-  // If the enterprise shortcuts feature is disabled, but the preference is set
-  // to enterprise shortcuts visible, treat MostVisitedSites as if enterpise
-  // shortcuts is disabled and custom links is enabled. This may occur if the
-  // user is moved in and out of the experiment.
-  return profile->GetPrefs()->GetBoolean(ntp_prefs::kNtpCustomLinksVisible) ||
-         (!base::FeatureList::IsEnabled(ntp_tiles::kNtpEnterpriseShortcuts) &&
-          profile->GetPrefs()->GetBoolean(
-              ntp_prefs::kNtpEnterpriseShortcutsVisible));
+  return profile->GetPrefs()->GetBoolean(ntp_prefs::kNtpCustomLinksVisible);
 }
 
+// TODO(b/502297163): Implement for Android.
+#if !BUILDFLAG(IS_ANDROID)
 bool IsEnterpriseShortcutsEmpty(Profile* profile) {
   return profile->GetPrefs()
       ->GetList(ntp_tiles::prefs::kEnterpriseShortcutsPolicyList)
       .empty();
 }
+#endif
 
 bool IsEnterpriseShortcutsEnabled(Profile* profile) {
-  // Enable enterprise shortcuts if the feature is enabled, enterprise shortcuts
-  // policy is set, and user has enabled visibility.
-  return base::FeatureList::IsEnabled(ntp_tiles::kNtpEnterpriseShortcuts) &&
-         !IsEnterpriseShortcutsEmpty(profile) &&
+  // Enable enterprise shortcuts if the enterprise shortcuts policy is set, and
+  // user has enabled visibility.
+// TODO(b/502297163): Implement for Android.
+#if !BUILDFLAG(IS_ANDROID)
+  return !IsEnterpriseShortcutsEmpty(profile) &&
          profile->GetPrefs()->GetBoolean(
              ntp_prefs::kNtpEnterpriseShortcutsVisible);
+#else
+  return false;
+#endif
 }
 
 bool IsPersonalShortcutsVisible(Profile* profile) {
-  // Always return true if enterprise shortcuts feature is disabled or no
-  // enterprise shortcuts are set by policy. Rely on `IsTopSitesEnabled()` and
-  // `IsCustomLinksEnabled()` only.
-  if (!base::FeatureList::IsEnabled(ntp_tiles::kNtpEnterpriseShortcuts) ||
-      IsEnterpriseShortcutsEmpty(profile)) {
+  // Always return true if no enterprise shortcuts are set by policy. Rely on
+  // `IsTopSitesEnabled()` and `IsCustomLinksEnabled()` only.
+// TODO(b/502297163): Implement for Android.
+#if !BUILDFLAG(IS_ANDROID)
+  if (IsEnterpriseShortcutsEmpty(profile)) {
     return true;
-  }
-  // If enterprise shortcuts mixing is disabled, return the opposite of
-  // `IsEnterpriseShortcutsEnabled()` since only enterprise OR personal
-  // shortcuts should be visible.
-  if (!ntp_tiles::kNtpEnterpriseShortcutsAllowMixingParam.Get()) {
-    return !IsEnterpriseShortcutsEnabled(profile);
   }
   return profile->GetPrefs()->GetBoolean(
       ntp_prefs::kNtpPersonalShortcutsVisible);
+#else
+  return true;
+#endif
 }
 
 std::set<ntp_tiles::TileType> GetEnabledTileTypes(Profile* profile) {
@@ -328,11 +349,13 @@ void UpdateShortcutsStaleness(Profile* profile) {
   // Do not update staleness if shortcuts auto removal is disabled.
   if (profile->GetPrefs()->GetBoolean(
           ntp_prefs::kNtpShortcutsAutoRemovalDisabled)) {
+    RecordShortcutsAutoRemovalMetrics(profile, /*prev_count=*/0);
     return;
   }
 
   // Do not update staleness if shortcuts are not visible.
   if (!profile->GetPrefs()->GetBoolean(ntp_prefs::kNtpShortcutsVisible)) {
+    RecordShortcutsAutoRemovalMetrics(profile, /*prev_count=*/0);
     return;
   }
 
@@ -361,6 +384,8 @@ void UpdateShortcutsStaleness(Profile* profile) {
                                shortcuts_load_time);
   profile->GetPrefs()->SetInteger(ntp_prefs::kNtpShortcutsStalenessCount,
                                   staleness_count + 1);
+
+  RecordShortcutsAutoRemovalMetrics(profile, staleness_count);
 }
 
 void UpdateModulesStaleness(Profile* profile,
@@ -384,14 +409,19 @@ void UpdateModulesStaleness(Profile* profile,
     return;
   }
 
-  // (3) Do not update staleness if feature is disabled for all modules.
-  const base::Value::Dict& auto_removal_disabled_dict =
+  // (3) Do not update staleness if feature is disabled for all modules,
+  // and log the reason for why the auto-removal was skipped for all modules.
+  const base::DictValue& auto_removal_disabled_dict =
       profile->GetPrefs()->GetDict(
           ntp_prefs::kNtpModulesAutoRemovalDisabledDict);
   const bool is_disabled_for_all_modules =
       auto_removal_disabled_dict.FindBool(ntp_modules::kAllModulesId)
           .value_or(false);
   if (is_disabled_for_all_modules) {
+    for (const std::string& module_id : module_ids) {
+      RecordModuleAutoRemovalMetrics(profile, auto_removal_disabled_dict,
+                                     module_id, /*prev_count=*/0);
+    }
     return;
   }
 
@@ -401,17 +431,19 @@ void UpdateModulesStaleness(Profile* profile,
                                module_load_time);
 
   // (4) Do not update staleness if feature is disabled for the module.
-  const base::Value::Dict& staleness_counts_dict =
+  const base::DictValue& staleness_counts_dict =
       profile->GetPrefs()->GetDict(ntp_prefs::kNtpModuleStalenessCountDict);
   ScopedDictPrefUpdate update(profile->GetPrefs(),
                               ntp_prefs::kNtpModuleStalenessCountDict);
   for (const std::string& module_id : module_ids) {
     const bool is_disabled_for_module =
         auto_removal_disabled_dict.FindBool(module_id).value_or(false);
+    const int prev_count = staleness_counts_dict.FindInt(module_id).value_or(0);
     if (!is_disabled_for_module) {
-      std::optional<int> prev_count = staleness_counts_dict.FindInt(module_id);
-      update->Set(module_id, prev_count.value_or(0) + 1);
+      update->Set(module_id, prev_count + 1);
     }
+    RecordModuleAutoRemovalMetrics(profile, auto_removal_disabled_dict,
+                                   module_id, prev_count);
   }
 }
 
@@ -424,4 +456,103 @@ void DisableModuleAutoRemoval(Profile* profile, const std::string& module_id) {
   ScopedDictPrefUpdate update(profile->GetPrefs(),
                               ntp_prefs::kNtpModulesAutoRemovalDisabledDict);
   update->Set(module_id, true);
+}
+
+void DisableModuleListAutoRemoval(Profile* profile,
+                                  const std::vector<std::string>& module_ids) {
+  ScopedDictPrefUpdate update(profile->GetPrefs(),
+                              ntp_prefs::kNtpModulesAutoRemovalDisabledDict);
+  for (const auto& module_id : module_ids) {
+    update->Set(module_id, true);
+  }
+}
+
+void RecordShortcutsAutoRemovalMetrics(Profile* profile, int prev_count) {
+  // Auto-removal skipped due to managed preference.
+  if (IsEnterpriseShortcutsEnabled(profile)) {
+    base::UmaHistogramEnumeration(
+        kShortcutsAutoRemovalReasonHistogram,
+        NtpShortcutsAutoRemovalReason::kManagedPreference);
+    return;
+  }
+
+  // Auto-removal skipped due to shortcuts being hidden.
+  if (!profile->GetPrefs()->GetBoolean(ntp_prefs::kNtpShortcutsVisible)) {
+    base::UmaHistogramEnumeration(kShortcutsAutoRemovalReasonHistogram,
+                                  NtpShortcutsAutoRemovalReason::kNotVisible);
+    return;
+  }
+
+  // Auto-removal skipped due to it being disabled.
+  if (profile->GetPrefs()->GetBoolean(
+          ntp_prefs::kNtpShortcutsAutoRemovalDisabled)) {
+    base::UmaHistogramEnumeration(kShortcutsAutoRemovalReasonHistogram,
+                                  NtpShortcutsAutoRemovalReason::kDisabled);
+    return;
+  }
+
+  // Log the new staleness count for shortcuts. We're only logging it here
+  // because the auto-removal will be skipped anyway due to conditions above.
+  // NOTE: An exclusive max of 101 days was picked as the max threshold.
+  base::UmaHistogramExactLinear("NewTabPage.MostVisited.AutoRemovalStaleDays",
+                                prev_count, 101);
+
+  // Auto-removal skipped due to the staleness threshold.
+  if (prev_count < ntp_features::kStaleShortcutsCountThreshold.Get()) {
+    base::UmaHistogramEnumeration(
+        kShortcutsAutoRemovalReasonHistogram,
+        NtpShortcutsAutoRemovalReason::kStaleDaysCount);
+    return;
+  }
+}
+
+void RecordModuleAutoRemovalMetrics(
+    Profile* profile,
+    const base::DictValue& auto_removal_disabled_dict,
+    const std::string& module_id,
+    const int prev_count) {
+  // Auto-removal skipped due to managed preference.
+  if (profile->GetPrefs()->IsManagedPreference(prefs::kNtpModulesVisible)) {
+    base::UmaHistogramSparse(kModulesAutoRemovalReasonManagedPreference,
+                             base::PersistentHash(module_id));
+    return;
+  }
+
+  // Auto-removal skipped due to it being disabled for all modules.
+  const bool is_disabled_for_all_modules =
+      auto_removal_disabled_dict.FindBool(ntp_modules::kAllModulesId)
+          .value_or(false);
+  if (is_disabled_for_all_modules) {
+    base::UmaHistogramSparse(kModulesAutoRemovalReasonDisabledAllModules,
+                             base::PersistentHash(module_id));
+    return;
+  }
+
+  // Auto-removal skipped due to it being disabled for the module.
+  const bool is_disabled_for_module =
+      auto_removal_disabled_dict.FindBool(module_id).value_or(false);
+  if (is_disabled_for_module) {
+    base::UmaHistogramSparse(kModulesAutoRemovalReasonDisabled,
+                             base::PersistentHash(module_id));
+    return;
+  }
+
+  // Log the new staleness count for this module. We're only logging it here
+  // because the auto-removal will be skipped anyway due to conditions above.
+  // If for whatever reason the logged count is above the threshold, we'll
+  // need to investigate why the auto-removal was not performed.
+  // NOTE: An exclusive max of 101 days was picked as the max staleness
+  // threshold; if the auto-removal threshold is changed to above that, then
+  // the logging should be changed to using COUNT instead.
+  // See: UmaHistogramExactLinear documentation for more details.
+  base::UmaHistogramExactLinear(
+      "NewTabPage.Modules.AutoRemovalStaleDays." + module_id, prev_count, 101);
+
+  // Auto-removal skipped due to the staleness threshold.
+  const int staleness_threshold =
+      ntp_features::kStaleModulesCountThreshold.Get();
+  if (prev_count < staleness_threshold) {
+    base::UmaHistogramSparse(kModulesAutoRemovalReasonStaleDaysCount,
+                             base::PersistentHash(module_id));
+  }
 }

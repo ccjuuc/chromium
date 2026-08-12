@@ -196,9 +196,11 @@ class _CheckUIGraphicsBeginImageContextWithOptions(unittest.TestCase):
     def testFindUsesOfDeprecatedAPIs(self):
         good_lines = [
           '// Update UIGraphicsBeginImageContextWithOptions',
+          '// Update UIGraphicsBeginImageContext',
           ]
         bad_lines = [
           'UIGraphicsBeginImageContextWithOptions(',
+          'UIGraphicsBeginImageContext(',
         ]
 
         mock_input = PRESUBMIT_test_mocks.MockInputApi()
@@ -212,7 +214,9 @@ class _CheckUIGraphicsBeginImageContextWithOptions(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertEqual('error', errors[0].type)
         self.assertFalse('ios/path/deprecated.mm:1' in errors[0].message)
-        self.assertTrue('ios/path/deprecated.mm:2' in errors[0].message)
+        self.assertFalse('ios/path/deprecated.mm:2' in errors[0].message)
+        self.assertTrue('ios/path/deprecated.mm:3' in errors[0].message)
+        self.assertTrue('ios/path/deprecated.mm:4' in errors[0].message)
 
 
 class CheckNewColorIntroductionTest(unittest.TestCase):
@@ -346,6 +350,206 @@ class CheckNewColorIntroductionTest(unittest.TestCase):
         results = PRESUBMIT._CheckNewColorIntroduction(self.mock_input,
                                                        self.mock_output)
         self.assertEqual(len(results), 0)
+
+def testUmbrellaHeaderUsage(self):
+        good_lines = [
+            '#import <Foundation/Foundation.h>',
+            '#import <memory>',
+            '#import "MyLocalFile.h"',
+            '#import <CustomFramework/CustomFramework.h>',
+        ]
+        bad_lines = [
+            '#import <Foundation/NSString.h>',
+            '#import <UIKit/UIView.h>',
+            '#import <CoreLocation/CLLocationManager.h>',
+        ]
+
+        mock_input = PRESUBMIT_test_mocks.MockInputApi()
+        mock_input.files = [
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/path/foo.mm',
+                good_lines + bad_lines
+            ),
+        ]
+
+        mock_output = PRESUBMIT_test_mocks.MockOutputApi()
+        errors = PRESUBMIT._CheckUmbrellaHeaderUsage(mock_input, mock_output)
+
+        self.assertEqual(len(errors), 1)
+        self.assertEqual('warning', errors[0].type)
+
+        for i in range(1, 5):
+            self.assertFalse(f'ios/path/foo.mm:{i}' in errors[0].items)
+
+        self.assertTrue(any('ios/path/foo.mm:5' in e for e in errors[0].items))
+        self.assertTrue(any('ios/path/foo.mm:6' in e for e in errors[0].items))
+        self.assertTrue(any('ios/path/foo.mm:7' in e for e in errors[0].items))
+
+class CheckNoFlakyUnitTest(unittest.TestCase):
+    """Test the _CheckNoFlakyUnitTest presubmit check."""
+
+    def testFindsFlakyTests(self):
+        bad_lines = [
+            'TEST_F(MyTest, FLAKY_MyFlakyTest) {',
+            'TEST(MyTestSuite, FLAKY_AnotherFlakyTest)',
+            '#define MAYBE_Test FLAKY_Test',
+        ]
+        good_lines = [
+            'TEST_F(MyTest, MyGoodTest) {',
+            'TEST(MyTestSuite, DISABLED_MyDisabledTest)',
+            '// This is a comment about FLAKY_ tests',
+        ]
+        mock_input = PRESUBMIT_test_mocks.MockInputApi()
+        mock_input.files = [
+            PRESUBMIT_test_mocks.MockFile('ios/path/foo_unittests.mm',
+                                          bad_lines + good_lines),
+            PRESUBMIT_test_mocks.MockFile('ios/path/foo_unittests.cc',
+                                          bad_lines),
+            PRESUBMIT_test_mocks.MockFile('ios/path/foo_unittest.mm',
+                                          bad_lines),
+            PRESUBMIT_test_mocks.MockFile('ios/path/foo_unittest.cc',
+                                          bad_lines),
+            PRESUBMIT_test_mocks.MockFile('ios/path/foo_egtest.mm',
+                                          bad_lines),
+        ]
+        mock_output = PRESUBMIT_test_mocks.MockOutputApi()
+        errors = PRESUBMIT._CheckNoFlakyUnitTest(mock_input, mock_output)
+        self.assertEqual(len(errors), 1)
+        self.assertEqual('error', errors[0].type)
+        self.assertTrue('ios/path/foo_unittests.mm:1' in errors[0].message)
+        self.assertTrue('ios/path/foo_unittests.mm:2' in errors[0].message)
+        self.assertTrue('ios/path/foo_unittests.mm:3' in errors[0].message)
+        self.assertTrue('ios/path/foo_unittests.cc:1' in errors[0].message)
+        self.assertTrue('ios/path/foo_unittest.mm:1' in errors[0].message)
+        self.assertTrue('ios/path/foo_unittest.cc:1' in errors[0].message)
+        self.assertFalse('ios/path/foo_unittests.mm:4' in errors[0].message)
+        self.assertFalse('ios/path/foo_unittests.mm:5' in errors[0].message)
+        self.assertFalse('ios/path/foo_unittests.mm:6' in errors[0].message)
+        # Should not find errors in _egtest.mm
+        self.assertFalse('ios/path/foo_egtest.mm' in errors[0].message)
+
+
+class CheckSystemColorUsageTest(unittest.TestCase):
+    """Test the _CheckUsageOfSystemColors presubmit check."""
+
+    def testForbiddenUseOfSystemColors(self):
+        bad_lines = [
+            '[UIColor redColor]',
+            '[UIColor blueColor]',
+            'UIColor.blueColor;',
+            'auto myArray = @[[UIColor blueColor], [UIColor redColor]];',
+            '  [[UIColor tertiaryLabelColor]',
+            '                          [UIColor tertiarySystemFillColor];'
+            'Foo(UIColor.yellowColor)',
+            'Foo(UIColor.yellowColor)',
+            'Bar([UIColor yellowColor])',
+            '    return UIColor.quaternarySystemFillColor;',
+            'NSForegroundColorAttributeName : UIColor.systemIndigoColor,'
+        ]
+
+        mock_input = PRESUBMIT_test_mocks.MockInputApi()
+        mock_input.files = [
+            PRESUBMIT_test_mocks.MockFile('ios/path/foo.mm', bad_lines),
+        ]
+
+        mock_output = PRESUBMIT_test_mocks.MockOutputApi()
+        errors = PRESUBMIT._CheckUsageOfSystemColors(mock_input, mock_output)
+
+        self.assertEqual(len(errors), 1)
+        self.assertEqual('warning', errors[0].type)
+
+        for i in range(1, len(bad_lines)):
+            self.assertTrue(f'ios/path/foo.mm:{i}' in errors[0].items)
+
+    def testExemptedUsagesOfSystemColors(self):
+        allowed_usage_lines = [
+            '[UIColor whiteColor]',
+            '[UIColor blackColor]',
+            'UIColor* testColor = [UIColor clearColor]',
+            'UIColor.whiteColor',
+            'UIColor.blackColor',
+            'UIColor.clearColor',
+            'Foo(UIColor.whiteColor)',
+            '#import <UIKit/UIKit.h>',
+            '#import "ios/chrome/uicolors/MyColor.h"',
+            'UIColor* GetBackgroundColor() {',
+            'void prepareBackground(UIColor* backgroundColor) {',
+            'auto color = (UIColor*)previousColor',
+            'self.backgroundDimmerView.backgroundColor = UIColor.clearColor;'
+        ]
+
+        mock_input = PRESUBMIT_test_mocks.MockInputApi()
+        mock_input.files = [
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/path/foo.mm',allowed_usage_lines),
+        ]
+
+        mock_output = PRESUBMIT_test_mocks.MockOutputApi()
+        errors = PRESUBMIT._CheckUsageOfSystemColors(mock_input, mock_output)
+
+        self.assertEqual(len(errors), 0)
+
+    def testSkipsNonObjectiveCFiles(self):
+        bad_lines = [
+            '[UIColor redColor]',
+            'UIColor.blueColor;',
+        ]
+
+        mock_input = PRESUBMIT_test_mocks.MockInputApi()
+        mock_input.files = [
+            PRESUBMIT_test_mocks.MockFile('ios/path/bar.py', bad_lines),
+        ]
+
+        mock_output = PRESUBMIT_test_mocks.MockOutputApi()
+        errors = PRESUBMIT._CheckUsageOfSystemColors(mock_input, mock_output)
+
+        self.assertEqual(len(errors), 0)
+
+
+class CheckLargeImagesetsTest(unittest.TestCase):
+    """Test the _CheckLargeImagesets presubmit check."""
+
+    def testValidImagesets(self):
+        mock_input = PRESUBMIT_test_mocks.MockInputApi()
+        mock_input.files = [
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/path/icon.imageset/test.svg',
+                ['<svg viewBox="0 0 50 50"></svg>']
+            ),
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/path/icon.imageset/test.pdf',
+                ['%PDF-1.4', '/MediaBox [0 0 100 100]']
+            ),
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/path/icon.imageset/test.png',
+                ['not-a-vector-file']
+            ),
+        ]
+
+        mock_output = PRESUBMIT_test_mocks.MockOutputApi()
+        errors = PRESUBMIT._CheckLargeImagesets(mock_input, mock_output)
+        self.assertEqual(len(errors), 0)
+
+    def testInvalidImagesets(self):
+        mock_input = PRESUBMIT_test_mocks.MockInputApi()
+        mock_input.files = [
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/path/icon.imageset/test1.svg',
+                ['<svg viewBox="0 0 150 50"></svg>']
+            ),
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/path/icon.imageset/test2.pdf',
+                ['%PDF-1.4', '/MediaBox [0 0 101 101]']
+            ),
+        ]
+
+        mock_output = PRESUBMIT_test_mocks.MockOutputApi()
+        errors = PRESUBMIT._CheckLargeImagesets(mock_input, mock_output)
+        self.assertEqual(len(errors), 1)
+        self.assertEqual('error', errors[0].type)
+        self.assertTrue('test1.svg' in str(errors[0].items))
+        self.assertTrue('test2.pdf' in str(errors[0].items))
+
 
 if __name__ == '__main__':
     unittest.main()

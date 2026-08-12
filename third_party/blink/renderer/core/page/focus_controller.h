@@ -69,6 +69,9 @@ class CORE_EXPORT FocusController final
   void SetFocusedFrame(Frame*, bool notify_embedder = true);
   void FocusDocumentView(Frame*, bool notify_embedder = true);
   LocalFrame* FocusedFrame() const;
+  // Returns the focused frame even when it is a RemoteFrame (unlike
+  // `FocusedFrame()` which returns nullptr for remote frames).
+  Frame* FocusedFrameIncludingRemote() const { return focused_frame_.Get(); }
   Frame* FocusedOrMainFrame() const;
 
   // Clears |focused_frame_| if it's been detached.
@@ -105,8 +108,7 @@ class CORE_EXPORT FocusController final
   // Autofill to infer whether the enclosing <form> is ready for auto-submission
   // after filling the given element or focus should be firstly moved to the
   // next focusable element.
-  Element* NextFocusableElementForImeAndAutofill(Element*,
-                                                 mojom::blink::FocusType);
+  Element* NextFocusableElementForIme(Element*, mojom::blink::FocusType);
   Element* FindFocusableElementForImeAutofillAndTesting(mojom::blink::FocusType,
                                                         Element&,
                                                         OwnerMap&);

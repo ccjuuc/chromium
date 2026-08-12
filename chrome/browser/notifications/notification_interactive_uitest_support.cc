@@ -97,8 +97,8 @@ const std::string& TestMessageCenterObserver::last_displayed_id() const {
 }
 
 NotificationsTest::NotificationsTest() {
-// Temporary change while the whole support class is changed to deal
-// with system notifications. crbug.com/714679
+  // Temporary change while the whole support class is changed to deal
+  // with system notifications. crbug.com/40517059
   feature_list_.InitWithFeatures(
       {}, {features::kNativeNotifications, features::kSystemNotifications});
 }
@@ -116,24 +116,24 @@ void NotificationsTest::CrashTab(Browser* browser, int index) {
 }
 
 void NotificationsTest::DenyOrigin(const GURL& origin) {
-  NotificationPermissionContext::UpdatePermission(browser()->profile(), origin,
-                                                  CONTENT_SETTING_BLOCK);
+  NotificationPermissionContext::UpdatePermission(
+      browser()->GetProfile(), origin, CONTENT_SETTING_BLOCK);
 }
 
 void NotificationsTest::AllowOrigin(const GURL& origin) {
-  NotificationPermissionContext::UpdatePermission(browser()->profile(), origin,
-                                                  CONTENT_SETTING_ALLOW);
+  NotificationPermissionContext::UpdatePermission(
+      browser()->GetProfile(), origin, CONTENT_SETTING_ALLOW);
 }
 
 void NotificationsTest::AllowAllOrigins() {
   // Reset all origins
-  HostContentSettingsMapFactory::GetForProfile(browser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile())
       ->ClearSettingsForOneType(ContentSettingsType::NOTIFICATIONS);
   SetDefaultContentSetting(CONTENT_SETTING_ALLOW);
 }
 
 void NotificationsTest::SetDefaultContentSetting(ContentSetting setting) {
-  HostContentSettingsMapFactory::GetForProfile(browser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile())
       ->SetDefaultContentSetting(ContentSettingsType::NOTIFICATIONS, setting);
 }
 
@@ -224,8 +224,9 @@ bool NotificationsTest::CancelNotification(const char* notification_id,
 
 void NotificationsTest::GetDisabledContentSettings(
     ContentSettingsForOneType* settings) {
-  *settings = HostContentSettingsMapFactory::GetForProfile(browser()->profile())
-                  ->GetSettingsForOneType(ContentSettingsType::NOTIFICATIONS);
+  *settings =
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile())
+          ->GetSettingsForOneType(ContentSettingsType::NOTIFICATIONS);
 
   std::erase_if(*settings, [](const ContentSettingPatternSource& setting) {
     return setting.GetContentSetting() != CONTENT_SETTING_BLOCK ||

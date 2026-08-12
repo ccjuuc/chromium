@@ -35,8 +35,10 @@ class ExtensionURLRewriteBrowserTest : public extensions::ExtensionBrowserTest {
 
  protected:
   std::string GetLocationBarText() const {
-    return base::UTF16ToUTF8(
-        browser()->window()->GetLocationBar()->GetOmniboxView()->GetText());
+    return base::UTF16ToUTF8(BrowserWindow::FromBrowser(browser())
+                                 ->GetLocationBar()
+                                 ->GetOmniboxView()
+                                 ->GetText());
   }
 
   GURL GetLocationBarTextAsURL() const {
@@ -85,7 +87,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionURLRewriteBrowserTest, NewTabPageURL) {
   // updated to the local NTP since we do not have a network connection to
   // reach the remote NTP.
   ASSERT_TRUE(
-      NavigateToURL(GetActiveWebContents(), GURL(chrome::kChromeUINewTabURL)));
+      NavigateToURL(GetActiveWebContents(), chrome::ChromeUINewTabURLAsGURL()));
   EXPECT_EQ("", GetLocationBarText());
   // Check that the actual and virtual URL corresponds to the new tab URL.
   EXPECT_EQ(ntp_test_utils::GetFinalNtpUrl(profile()),
@@ -98,7 +100,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionURLRewriteBrowserTest, NewTabPageURLOverride) {
   // Load an extension to override the NTP and check that the location bar text
   // is blank after navigating to chrome://newtab.
   ASSERT_TRUE(LoadExtension(GetTestExtensionPath("newtab")));
-  TestURLNotShown(GURL(chrome::kChromeUINewTabURL));
+  TestURLNotShown(chrome::ChromeUINewTabURLAsGURL());
   // Check that the internal URL uses the chrome-extension:// scheme.
   EXPECT_TRUE(GetNavigationEntry()->GetURL().SchemeIs(
       extensions::kExtensionScheme));

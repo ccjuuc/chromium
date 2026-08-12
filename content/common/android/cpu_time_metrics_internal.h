@@ -10,37 +10,17 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
+#include "base/process/current_process.h"
 #include "base/process/process_metrics.h"
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_observer.h"
 #include "base/time/time.h"
 #include "content/common/content_export.h"
-#include "content/common/process_visibility_tracker.h"
+#include "content/common/process_priority_tracker.h"
 
 namespace content {
 namespace internal {
-
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-// Histogram macros expect an enum class with kMaxValue. Because
-// content::ProcessType cannot be migrated to this style at the moment, we
-// specify a separate version here. Keep in sync with content::ProcessType.
-// TODO(eseckler): Replace with content::ProcessType after its migration.
-enum class ProcessTypeForUma {
-  kUnknown = 1,
-  kBrowser,
-  kRenderer,
-  kPluginDeprecated,
-  kWorkerDeprecated,
-  kUtility,
-  kZygote,
-  kSandboxHelper,
-  kGpu,
-  kPpapiPlugin,  // deprecated
-  kPpapiBroker,  // deprecated
-  kMaxValue = kPpapiBroker,
-};
 
 // Samples the process's CPU time after a specific number of task were executed
 // on the current thread (process main). The number of tasks is a crude proxy
@@ -51,7 +31,7 @@ enum class ProcessTypeForUma {
 // Also samples some of the breakdowns when the process's visibility changes.
 class CONTENT_EXPORT ProcessCpuTimeMetrics
     : public base::TaskObserver,
-      public ProcessVisibilityTracker::ProcessVisibilityObserver {
+      public ProcessPriorityTracker::ProcessPriorityObserver {
  public:
   static ProcessCpuTimeMetrics* GetInstance();
 
@@ -63,8 +43,8 @@ class CONTENT_EXPORT ProcessCpuTimeMetrics
 
   void DidProcessTask(const base::PendingTask& pending_task) override;
 
-  // ProcessVisibilityTracker::ProcessVisibilityObserver implementation:
-  void OnVisibilityChanged(bool visible) override;
+  // ProcessPriorityTracker::ProcessPriorityObserver implementation:
+  void OnPriorityChanged(base::Process::Priority priority) override;
 
   void WaitForCollectionForTesting() const;
 
@@ -102,8 +82,8 @@ class CONTENT_EXPORT ProcessCpuTimeMetrics
   // Accessed on |task_runner_|.
   SEQUENCE_CHECKER(thread_pool_);
   std::unique_ptr<base::ProcessMetrics> process_metrics_;
-  std::optional<bool> is_visible_;
-  ProcessTypeForUma process_type_;
+  std::optional<bool> is_foregrounded_;
+  base::ShortProcessType process_type_;
   base::TimeDelta reported_cpu_time_;
   base::TimeDelta cpu_time_on_last_load_report_;
   base::TimeTicks cpu_load_report_time_;

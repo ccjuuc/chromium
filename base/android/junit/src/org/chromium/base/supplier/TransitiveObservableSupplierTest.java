@@ -9,6 +9,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.never;
@@ -21,11 +22,11 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.Callback;
 import org.chromium.base.CallbackUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -38,9 +39,10 @@ public class TransitiveObservableSupplierTest {
 
     @Test
     public void testGetWithoutObservers() {
-        ObservableSupplierImpl<ObservableSupplier<String>> parentSupplier =
-                new ObservableSupplierImpl<>();
-        ObservableSupplierImpl<String> targetSupplier1 = new ObservableSupplierImpl<>();
+        SettableNullableObservableSupplier<NullableObservableSupplier<String>> parentSupplier =
+                ObservableSuppliers.createNullable();
+        SettableNullableObservableSupplier<String> targetSupplier1 =
+                ObservableSuppliers.createNullable();
 
         NullableObservableSupplier<String> transitiveSupplier =
                 parentSupplier.createTransitiveNullable(obs -> obs);
@@ -70,16 +72,18 @@ public class TransitiveObservableSupplierTest {
 
     @Test
     public void testGetWithObserver() {
-        ObservableSupplierImpl<ObservableSupplier<String>> parentSupplier =
-                new ObservableSupplierImpl<>();
-        ObservableSupplierImpl<String> targetSupplier1 = new ObservableSupplierImpl<>();
-        ObservableSupplierImpl<String> targetSupplier2 = new ObservableSupplierImpl<>();
+        SettableNullableObservableSupplier<NullableObservableSupplier<String>> parentSupplier =
+                ObservableSuppliers.createNullable();
+        SettableNullableObservableSupplier<String> targetSupplier1 =
+                ObservableSuppliers.createNullable();
+        SettableMonotonicObservableSupplier<String> targetSupplier2 =
+                ObservableSuppliers.createMonotonic();
 
         NullableObservableSupplier<String> transitiveSupplier =
                 parentSupplier.createTransitiveNullable(obs -> obs);
         assertNull(transitiveSupplier.get());
 
-        assertNull(transitiveSupplier.addObserver(mOnChangeCallback));
+        assertNull(transitiveSupplier.addSyncObserverAndPostIfNonNull(mOnChangeCallback));
         verifyNoInteractions(mOnChangeCallback);
 
         parentSupplier.set(targetSupplier1);
@@ -111,14 +115,15 @@ public class TransitiveObservableSupplierTest {
 
     @Test
     public void testSameObserver() {
-        ObservableSupplierImpl<ObservableSupplier<String>> parentSupplier =
-                new ObservableSupplierImpl<>();
-        ObservableSupplierImpl<String> targetSupplier = new ObservableSupplierImpl<>();
+        SettableMonotonicObservableSupplier<MonotonicObservableSupplier<String>> parentSupplier =
+                ObservableSuppliers.createMonotonic();
+        SettableMonotonicObservableSupplier<String> targetSupplier =
+                ObservableSuppliers.createMonotonic();
         parentSupplier.set(targetSupplier);
 
         NullableObservableSupplier<String> transitiveSupplier =
                 parentSupplier.createTransitiveNullable(obs -> obs);
-        assertNull(transitiveSupplier.addObserver(mOnChangeCallback));
+        assertNull(transitiveSupplier.addSyncObserverAndPostIfNonNull(mOnChangeCallback));
         assertTrue(parentSupplier.hasObservers());
         assertTrue(targetSupplier.hasObservers());
 
@@ -126,7 +131,8 @@ public class TransitiveObservableSupplierTest {
         assertEquals("valueA", transitiveSupplier.get());
         verify(mOnChangeCallback).onResult(eq("valueA"));
 
-        assertEquals("valueA", transitiveSupplier.addObserver(mOnChangeCallback));
+        assertEquals(
+                "valueA", transitiveSupplier.addSyncObserverAndPostIfNonNull(mOnChangeCallback));
         transitiveSupplier.removeObserver(mOnChangeCallback);
         assertFalse(parentSupplier.hasObservers());
         assertFalse(targetSupplier.hasObservers());
@@ -134,9 +140,10 @@ public class TransitiveObservableSupplierTest {
 
     @Test
     public void testAlreadyHasValueWhenObserverAdded() {
-        ObservableSupplierImpl<ObservableSupplier<String>> parentSupplier =
-                new ObservableSupplierImpl<>();
-        ObservableSupplierImpl<String> targetSupplier = new ObservableSupplierImpl<>();
+        SettableMonotonicObservableSupplier<MonotonicObservableSupplier<String>> parentSupplier =
+                ObservableSuppliers.createMonotonic();
+        SettableMonotonicObservableSupplier<String> targetSupplier =
+                ObservableSuppliers.createMonotonic();
         parentSupplier.set(targetSupplier);
         targetSupplier.set("valueA");
 
@@ -144,17 +151,19 @@ public class TransitiveObservableSupplierTest {
                 parentSupplier.createTransitiveNullable(obs -> obs);
         assertEquals("valueA", transitiveSupplier.get());
 
-        assertEquals("valueA", transitiveSupplier.addObserver(mOnChangeCallback));
+        assertEquals(
+                "valueA", transitiveSupplier.addSyncObserverAndPostIfNonNull(mOnChangeCallback));
         assertEquals("valueA", transitiveSupplier.get());
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mOnChangeCallback).onResult(eq("valueA"));
     }
 
     @Test
     public void testAddObserver_ShouldNotifyOnAdd() {
-        ObservableSupplierImpl<ObservableSupplier<String>> parentSupplier =
-                new ObservableSupplierImpl<>();
-        ObservableSupplierImpl<String> targetSupplier1 = new ObservableSupplierImpl<>();
+        SettableMonotonicObservableSupplier<MonotonicObservableSupplier<String>> parentSupplier =
+                ObservableSuppliers.createMonotonic();
+        SettableMonotonicObservableSupplier<String> targetSupplier1 =
+                ObservableSuppliers.createMonotonic();
 
         NullableObservableSupplier<String> transitiveSupplier =
                 parentSupplier.createTransitiveNullable(obs -> obs);
@@ -170,15 +179,16 @@ public class TransitiveObservableSupplierTest {
 
         assertEquals(
                 "valueA", transitiveSupplier.addSyncObserverAndCallIfNonNull(mOnChangeCallback));
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mOnChangeCallback).onResult(eq("valueA"));
     }
 
     @Test
     public void testAddObserver_ShouldNotNotifyOnAdd() {
-        ObservableSupplierImpl<ObservableSupplier<String>> parentSupplier =
-                new ObservableSupplierImpl<>();
-        ObservableSupplierImpl<String> targetSupplier1 = new ObservableSupplierImpl<>();
+        SettableMonotonicObservableSupplier<MonotonicObservableSupplier<String>> parentSupplier =
+                ObservableSuppliers.createMonotonic();
+        SettableMonotonicObservableSupplier<String> targetSupplier1 =
+                ObservableSuppliers.createMonotonic();
 
         NullableObservableSupplier<String> transitiveSupplier =
                 parentSupplier.createTransitiveNullable(obs -> obs);
@@ -193,7 +203,7 @@ public class TransitiveObservableSupplierTest {
         verifyNoInteractions(mOnChangeCallback);
 
         assertEquals("valueA", transitiveSupplier.addSyncObserver(mOnChangeCallback));
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         verifyNoInteractions(mOnChangeCallback);
 
         targetSupplier1.set("valueB");
@@ -202,10 +212,11 @@ public class TransitiveObservableSupplierTest {
     }
 
     @Test
+    @SuppressWarnings("AssertThrowsMinimizer")
     public void testNonNull_noObservers() {
         NonNullObservableSupplier<String> nonNullSupplier =
                 ObservableSuppliers.createNonNull("nonNull");
-        SettableObservableSupplier<String> monotonicSupplier =
+        SettableMonotonicObservableSupplier<String> monotonicSupplier =
                 ObservableSuppliers.createMonotonic();
         SettableNullableObservableSupplier<String> nullableSupplier =
                 ObservableSuppliers.createNullable("nullable");
@@ -221,15 +232,15 @@ public class TransitiveObservableSupplierTest {
                 () ->
                         monotonicSupplier
                                 .createTransitiveMonotonic(
-                                        parent -> (ObservableSupplier<?>) nullableSupplier)
+                                        parent -> (MonotonicObservableSupplier<?>) nullableSupplier)
                                 .get());
 
-        SettableObservableSupplier<String> monotonicSupplier2 =
+        SettableMonotonicObservableSupplier<String> monotonicSupplier2 =
                 ObservableSuppliers.createMonotonic();
-        AtomicReference<ObservableSupplier<String>> retValue =
+        AtomicReference<MonotonicObservableSupplier<String>> retValue =
                 new AtomicReference<>(monotonicSupplier2);
-        ObservableSupplier<String> transMonotonic =
-                monotonicSupplier.createTransitiveMonotonic(unused -> retValue.get());
+        MonotonicObservableSupplier<String> transMonotonic =
+                monotonicSupplier.createTransitiveMonotonic(_ -> retValue.get());
         assertNull(transMonotonic.get());
         monotonicSupplier2.set("foo");
         assertEquals("foo", transMonotonic.get());
@@ -240,10 +251,11 @@ public class TransitiveObservableSupplierTest {
     }
 
     @Test
+    @SuppressWarnings({"unchecked", "AssertThrowsMinimizer"})
     public void testNonNull_withObservers() {
         NonNullObservableSupplier<String> nonNullSupplier =
                 ObservableSuppliers.createNonNull("nonNull");
-        SettableObservableSupplier<String> monotonicSupplier =
+        SettableMonotonicObservableSupplier<String> monotonicSupplier =
                 ObservableSuppliers.createMonotonic();
         SettableNullableObservableSupplier<String> nullableSupplier =
                 ObservableSuppliers.createNullable("nullable");
@@ -252,19 +264,20 @@ public class TransitiveObservableSupplierTest {
         monotonicSupplier.set("foo");
         assertThrows(
                 AssertionError.class,
-                () ->
-                        monotonicSupplier
-                                .createTransitiveMonotonic(
-                                        parent -> (ObservableSupplier<?>) nullableSupplier)
-                                .addObserver(CallbackUtils.emptyCallback()));
+                () -> {
+                    monotonicSupplier
+                            .createTransitiveMonotonic(
+                                    parent -> (MonotonicObservableSupplier<?>) nullableSupplier)
+                            .addSyncObserverAndPostIfNonNull(CallbackUtils.emptyCallback());
+                });
 
-        SettableObservableSupplier<String> monotonicSupplier2 =
+        SettableMonotonicObservableSupplier<String> monotonicSupplier2 =
                 ObservableSuppliers.createMonotonic();
-        AtomicReference<ObservableSupplier<String>> retValue =
+        AtomicReference<MonotonicObservableSupplier<String>> retValue =
                 new AtomicReference<>(monotonicSupplier2);
-        ObservableSupplier<String> transMonotonic =
-                monotonicSupplier.createTransitiveMonotonic(unused -> retValue.get());
-        assertNull(transMonotonic.addObserver(mOnChangeCallback));
+        MonotonicObservableSupplier<String> transMonotonic =
+                monotonicSupplier.createTransitiveMonotonic(_ -> retValue.get());
+        assertNull(transMonotonic.addSyncObserverAndPostIfNonNull(mOnChangeCallback));
         monotonicSupplier2.set("foo");
         verify(mOnChangeCallback).onResult("foo");
         clearInvocations(mOnChangeCallback);
@@ -277,14 +290,14 @@ public class TransitiveObservableSupplierTest {
     public void testMonotonicDefaultValue() {
         NonNullObservableSupplier<String> nonNullSupplier =
                 ObservableSuppliers.createNonNull("nonNull");
-        SettableObservableSupplier<String> monotonicSupplier =
+        SettableMonotonicObservableSupplier<String> monotonicSupplier =
                 ObservableSuppliers.createMonotonic();
         SettableNullableObservableSupplier<String> nullableSupplier =
                 ObservableSuppliers.createNullable("nullable");
 
         // Test NonNull due to default value.
         NonNullObservableSupplier<String> transitiveNonNull =
-                monotonicSupplier.createTransitiveNonNull("foo", unused -> nonNullSupplier);
+                monotonicSupplier.createTransitiveNonNull("foo", _ -> nonNullSupplier);
         transitiveNonNull.addSyncObserverAndCallIfNonNull(mOnChangeCallback);
         verify(mOnChangeCallback).onResult(eq("foo"));
         assertEquals("foo", transitiveNonNull.get());
@@ -296,16 +309,17 @@ public class TransitiveObservableSupplierTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     public void testNullableDefaultValue() {
         SettableNullableObservableSupplier<String> nullableSupplier1 =
                 ObservableSuppliers.createNullable();
         SettableNullableObservableSupplier<String> nullableSupplier2 =
                 ObservableSuppliers.createNullable();
-        AtomicReference<NullableObservableSupplier> secondSupplier =
+        AtomicReference<NullableObservableSupplier<String>> secondSupplier =
                 new AtomicReference<>(nullableSupplier2);
 
         NullableObservableSupplier<String> transitive =
-                nullableSupplier1.createTransitiveNullable(unused -> secondSupplier.get());
+                nullableSupplier1.createTransitiveNullable(_ -> secondSupplier.get());
         transitive.addSyncObserverAndCallIfNonNull(mOnChangeCallback);
         verifyNoInteractions(mOnChangeCallback);
         assertNull(transitive.get());
@@ -332,6 +346,99 @@ public class TransitiveObservableSupplierTest {
         // Test back to null because of supplier1.
         nullableSupplier1.set(null);
         verify(mOnChangeCallback).onResult(null);
+        assertNull(transitive.get());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testNonNullDefaultValue_withObservers() {
+        NonNullObservableSupplier<String> nonNullSupplier =
+                ObservableSuppliers.createNonNull("nonNull");
+        SettableNullableObservableSupplier<String> nullableSupplier =
+                ObservableSuppliers.createNullable();
+
+        // Test NonNull due to default value.
+        NonNullObservableSupplier<String> transitiveNonNull =
+                nullableSupplier.createTransitiveNonNull("foo", _ -> nonNullSupplier);
+        transitiveNonNull.addSyncObserverAndCallIfNonNull(mOnChangeCallback);
+        verify(mOnChangeCallback).onResult(eq("foo"));
+        clearInvocations(mOnChangeCallback);
+        assertEquals("foo", transitiveNonNull.get());
+
+        // Test transition away from default value.
+        nullableSupplier.set("bar");
+        verify(mOnChangeCallback).onResult(eq("nonNull"));
+        clearInvocations(mOnChangeCallback);
+        assertEquals("nonNull", transitiveNonNull.get());
+
+        // Back to default value.
+        nullableSupplier.set(null);
+        verify(mOnChangeCallback).onResult(eq("foo"));
+        assertEquals("foo", transitiveNonNull.get());
+    }
+
+    @Test
+    public void testNonNullDefaultValue_withoutObservers() {
+        NonNullObservableSupplier<String> nonNullSupplier =
+                ObservableSuppliers.createNonNull("nonNull");
+        SettableNullableObservableSupplier<String> nullableSupplier =
+                ObservableSuppliers.createNullable();
+
+        // Test NonNull due to default value.
+        NonNullObservableSupplier<String> transitiveNonNull =
+                nullableSupplier.createTransitiveNonNull("foo", _ -> nonNullSupplier);
+        assertEquals("foo", transitiveNonNull.get());
+
+        // Test transition away from default value.
+        nullableSupplier.set("bar");
+        assertEquals("nonNull", transitiveNonNull.get());
+
+        // Back to default value.
+        nullableSupplier.set(null);
+        assertEquals("foo", transitiveNonNull.get());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testGetAfterDestroy() {
+        SettableNullableObservableSupplier<String> nullableSupplier1 =
+                ObservableSuppliers.createNullable();
+        SettableNullableObservableSupplier<String> nullableSupplier2 =
+                ObservableSuppliers.createNullable();
+
+        SettableNullableObservableSupplier<String> transitive =
+                nullableSupplier1.createTransitiveNullable(_ -> nullableSupplier2);
+        transitive.addSyncObserverAndCallIfNonNull(mOnChangeCallback);
+        assertNull(transitive.get());
+
+        // Set a value.
+        nullableSupplier2.set("A");
+        nullableSupplier1.set("B");
+        verify(mOnChangeCallback).onResult("A");
+        clearInvocations(mOnChangeCallback);
+        assertEquals("A", transitive.get());
+
+        // Ensure destroy() causes get() to return null.
+        transitive.destroy();
+        assertNull(transitive.get());
+    }
+
+    @Test
+    public void testDestroyUnregisters() {
+        SettableNullableObservableSupplier<String> nullableSupplier1 =
+                ObservableSuppliers.createNullable();
+        SettableNullableObservableSupplier<String> nullableSupplier2 =
+                ObservableSuppliers.createNullable();
+
+        SettableNullableObservableSupplier<String> transitive =
+                nullableSupplier1.createTransitiveNullable(_ -> nullableSupplier2);
+        transitive.addSyncObserverAndCallIfNonNull(mOnChangeCallback);
+        transitive.destroy();
+
+        // Set a value.
+        nullableSupplier2.set("A");
+        nullableSupplier1.set("B");
+        verify(mOnChangeCallback, never()).onResult(any());
         assertNull(transitive.get());
     }
 }

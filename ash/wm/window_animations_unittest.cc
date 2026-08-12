@@ -75,6 +75,8 @@ class MinimizeAnimationObserver : public ui::LayerAnimationObserver {
   MinimizeAnimationObserver& operator=(const MinimizeAnimationObserver&) =
       delete;
 
+  ~MinimizeAnimationObserver() override { animator_ = nullptr; }
+
   base::TimeDelta duration() { return duration_; }
 
  protected:
@@ -83,12 +85,13 @@ class MinimizeAnimationObserver : public ui::LayerAnimationObserver {
       ui::LayerAnimationSequence* sequence) override {
     duration_ = animator_->GetTransitionDuration();
     animator_->RemoveObserver(this);
+    animator_ = nullptr;
   }
   void OnLayerAnimationEnded(ui::LayerAnimationSequence* sequence) override {}
   void OnLayerAnimationAborted(ui::LayerAnimationSequence* sequence) override {}
 
  private:
-  raw_ptr<ui::LayerAnimator, DanglingUntriaged> animator_;
+  raw_ptr<ui::LayerAnimator> animator_;
   base::TimeDelta duration_;
 };
 
@@ -276,7 +279,7 @@ TEST_F(WindowAnimationsTest, CrossFadeToBoundsFromTransform) {
 // there is no crash.
 // Regression test for https://crbug.com/1088169.
 TEST_F(WindowAnimationsTest, CrossFadeThenRecreate) {
-  auto window = CreateTestWindow(gfx::Rect(100, 100));
+  auto window = CreateWindowWithAppType(chromeos::AppType::NON_APP, {100, 100});
 
   // Use a bit more time than NON_ZERO_DURATION as its possible with non zero we
   // finish the animation instantly.
@@ -332,7 +335,7 @@ class WindowOpacityObserver : public aura::WindowObserver {
 // Regression test for http://b/333095196 where the window's layer tree is
 // recreated while in the middle of a cross fade animation.
 TEST_F(WindowAnimationsTest, RecreateLayersDuringCrossFade) {
-  auto window = CreateTestWindow(gfx::Rect(100, 100));
+  auto window = CreateWindowWithAppType(chromeos::AppType::NON_APP, {100, 100});
 
   gfx::ScopedAnimationDurationScaleMode test_duration_mode(
       gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
@@ -346,7 +349,7 @@ TEST_F(WindowAnimationsTest, RecreateLayersDuringCrossFade) {
 // animation (e.g., by `FrameHeader::FrameAnimatorView::StartAnimation`). There
 // should be no crash. Regression test for https://crbug.com/1313977.
 TEST_F(WindowAnimationsTest, RecreateWhenSettingCrossFade) {
-  auto window = CreateTestWindow(gfx::Rect(100, 100));
+  auto window = CreateWindowWithAppType(chromeos::AppType::NON_APP, {100, 100});
   gfx::ScopedAnimationDurationScaleMode test_duration_mode(
       gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
 

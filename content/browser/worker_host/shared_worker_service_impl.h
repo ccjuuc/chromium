@@ -19,6 +19,7 @@
 #include "content/common/content_export.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/shared_worker_service.h"
+#include "content/public/common/child_process_id.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/storage_access_api/status.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
@@ -45,6 +46,17 @@ class StoragePartitionImpl;
 // Created per StoragePartition.
 class CONTENT_EXPORT SharedWorkerServiceImpl : public SharedWorkerService {
  public:
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  // LINT.IfChange(SharedWorkerCreationContextTypeMismatch)
+  enum class SharedWorkerCreationContextTypeMismatch {
+    kMatch = 0,
+    kMismatchRendererSecureBrowserNonsecure = 1,
+    kMismatchRendererNonsecureBrowserSecure = 2,
+    kMaxValue = kMismatchRendererNonsecureBrowserSecure,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/content/enums.xml:SharedWorkerCreationContextTypeMismatch)
+
   SharedWorkerServiceImpl(
       StoragePartitionImpl* storage_partition,
       scoped_refptr<ServiceWorkerContextWrapper> service_worker_context);
@@ -91,7 +103,7 @@ class CONTENT_EXPORT SharedWorkerServiceImpl : public SharedWorkerService {
   virtual void DestroyHost(SharedWorkerHost* host);
 
   void NotifyWorkerCreated(const blink::SharedWorkerToken& shared_worker_token,
-                           int worker_process_id,
+                           ChildProcessId worker_process_id,
                            const url::Origin& security_origin,
                            const base::UnguessableToken& dev_tools_token);
   void NotifyBeforeWorkerDestroyed(
@@ -107,6 +119,11 @@ class CONTENT_EXPORT SharedWorkerServiceImpl : public SharedWorkerService {
   // clients and returns true if this frame is the last active client for any of
   // them.
   bool EvictBFCachedClientsIfLastActive(RenderFrameHostImpl* render_frame_host);
+
+  // For all connected workers with `render_frame_host`, calls
+  // SharedWorkerHost::OnClientStateChanged(). The worker will be frozen if no
+  // active clients remain, or resumed if at least one client is active.
+  void OnClientStateChanged(RenderFrameHostImpl* render_frame_host);
 
  private:
   friend class SharedWorkerHostTest;

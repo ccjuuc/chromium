@@ -16,6 +16,7 @@
 #include "content/browser/service_worker/service_worker_main_resource_loader_interceptor.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/common/content_features.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/early_hints.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
@@ -52,15 +53,6 @@ void PrefetchStreamingURLLoader::Start(
   // This is a violation of const correctness which lead to a confusing bug
   // here.
   network::ResourceRequest new_request(request);
-  if (!new_request.trusted_params) {
-    new_request.trusted_params.emplace();
-  }
-
-  // Request cookies will be included with the response.
-  // They must be removed before forwarding to any untrusted client.
-  // This happens in `PrefetchResponseReader::HandleRedirect` and
-  // `PrefetchResponseReader::OnReceiveResponse`.
-  new_request.trusted_params->include_request_cookies_with_response = true;
 
   // `is_outermost_main_frame` is true here because the prefetched result is
   // served only for outermost main frames.
@@ -72,18 +64,12 @@ void PrefetchStreamingURLLoader::Start(
       prefetch_url_loader_client_receiver_.BindNewPipeAndPassRemote(
           base::SingleThreadTaskRunner::GetCurrentDefault()),
       net::MutableNetworkTrafficAnnotationTag(network_traffic_annotation));
-  if (base::FeatureList::IsEnabled(features::kPrefetchGracefulNotification)) {
-    // We call `DisconnectPrefetchURLLoaderMojo()` in `OnComplete()`, so
-    // disconnection reaching this handler is always unexpected disconnection
-    // before `OnComplete()` and should be considered as a failure.
-    prefetch_url_loader_client_receiver_.set_disconnect_handler(base::BindOnce(
-        &PrefetchStreamingURLLoader::OnComplete, weak_ptr_factory_.GetWeakPtr(),
-        network::URLLoaderCompletionStatus(net::ERR_ABORTED)));
-  } else {
-    prefetch_url_loader_client_receiver_.set_disconnect_handler(base::BindOnce(
-        &PrefetchStreamingURLLoader::DisconnectPrefetchURLLoaderMojo,
-        weak_ptr_factory_.GetWeakPtr()));
-  }
+  // We call `DisconnectPrefetchURLLoaderMojo()` in `OnComplete()`, so
+  // disconnection reaching this handler is always unexpected disconnection
+  // before `OnComplete()` and should be considered as a failure.
+  prefetch_url_loader_client_receiver_.set_disconnect_handler(base::BindOnce(
+      &PrefetchStreamingURLLoader::OnComplete, weak_ptr_factory_.GetWeakPtr(),
+      network::URLLoaderCompletionStatus(net::ERR_ABORTED)));
 
   if (!timeout_duration.is_zero()) {
     timeout_timer_.Start(
@@ -110,7 +96,8 @@ PrefetchStreamingURLLoader::CreateAndStart(
     BrowserContext* browser_context_for_service_worker,
     OnServiceWorkerStateDeterminedCallback
         on_service_worker_state_determined_callback,
-    perfetto::Flow flow) {
+    perfetto::Flow flow,
+    bool is_constructed_from_pre_prefetch) {
   TRACE_EVENT("loading", "PrefetchStreamingURLLoader::CreateAndStart", flow);
 
   std::unique_ptr<PrefetchStreamingURLLoader> streaming_loader =
@@ -131,7 +118,8 @@ PrefetchStreamingURLLoader::CreateAndStart(
       weak_streaming_loader->StartServiceWorkerInterceptor(
           browser_context_for_service_worker,
           std::move(network_url_loader_factory), request,
-          network_traffic_annotation, std::move(timeout_duration));
+          network_traffic_annotation, std::move(timeout_duration),
+          is_constructed_from_pre_prefetch);
       break;
     case PrefetchServiceWorkerState::kDisallowed:
       weak_streaming_loader->Start(PrefetchServiceWorkerState::kDisallowed,
@@ -164,7 +152,12 @@ void PrefetchStreamingURLLoader::CancelIfNotServing() {
   if (used_for_serving_) {
     return;
   }
-  DisconnectPrefetchURLLoaderMojo();
+
+  // Cancels the prefetch by pretending an aborted completion.
+  // This is no-op after the prefetch is already completed, as in such cases
+  // `DisconnectPrefetchURLLoaderMojo()` should be already called and
+  // `response_reader_` is cleared.
+  OnComplete(network::URLLoaderCompletionStatus(net::ERR_ABORTED));
 }
 
 void PrefetchStreamingURLLoader::DisconnectPrefetchURLLoaderMojo() {
@@ -183,6 +176,15 @@ void PrefetchStreamingURLLoader::DisconnectPrefetchURLLoaderMojo() {
   prefetch_url_loader_.reset();
   prefetch_url_loader_client_receiver_.reset();
   timeout_timer_.Stop();
+
+  // Avoid notifications to `response_reader_` after scheduled for deletion.
+  // This can happen e.g.
+  // - `CancelIfNotServing()` is called from `PrefetchContainer` dtor (covered
+  //   by unit tests).
+  // - An async task that is not tied to `prefetch_url_loader_client_receiver_`
+  //   and causes state changes (e.g. timeout), after this point before the
+  //   async self deletion is completed (actual cases not confirmed though).
+  response_reader_.reset();
 
   if (!self_pointer_) {
     return;
@@ -223,6 +225,7 @@ void PrefetchStreamingURLLoader::OnReceiveResponse(
     std::optional<mojo_base::BigBuffer> cached_metadata) {
   TRACE_EVENT("loading", "PrefetchStreamingURLLoader::OnReceiveResponse",
               flow_);
+  CHECK(head);
 
   // Cached metadata is not supported for prefetch.
   cached_metadata.reset();
@@ -258,7 +261,8 @@ void PrefetchStreamingURLLoader::OnReceiveRedirect(
 void PrefetchStreamingURLLoader::HandleRedirect(
     PrefetchRedirectStatus redirect_status,
     const net::RedirectInfo& redirect_info,
-    network::mojom::URLResponseHeadPtr redirect_head) {
+    network::mojom::URLResponseHeadPtr redirect_head,
+    network::HttpRequestHeadersUpdateParams headers_update_params) {
   TRACE_EVENT("loading", "PrefetchStreamingURLLoader::HandleRedirect", flow_);
 
   if (!is_waiting_handle_redirect_from_prefetch_service_) {
@@ -275,11 +279,8 @@ void PrefetchStreamingURLLoader::HandleRedirect(
   switch (redirect_status) {
     case PrefetchRedirectStatus::kFollow:
       CHECK(prefetch_url_loader_);
-      prefetch_url_loader_->FollowRedirect(
-          /*removed_headers=*/std::vector<std::string>(),
-          /*modified_headers=*/net::HttpRequestHeaders(),
-          /*modified_cors_exempt_headers=*/net::HttpRequestHeaders(),
-          /*new_url=*/std::nullopt);
+      prefetch_url_loader_->FollowRedirect(std::move(headers_update_params),
+                                           /*new_url=*/std::nullopt);
       break;
     case PrefetchRedirectStatus::kSwitchNetworkContext:
       // The redirect requires a switch in network context, so the redirect will
@@ -343,11 +344,13 @@ void PrefetchStreamingURLLoader::StartServiceWorkerInterceptor(
     scoped_refptr<network::SharedURLLoaderFactory> network_url_loader_factory,
     const network::ResourceRequest& request,
     const net::NetworkTrafficAnnotationTag& network_traffic_annotation,
-    base::TimeDelta timeout_duration) {
+    base::TimeDelta timeout_duration,
+    bool is_constructed_from_pre_prefetch) {
   auto callback = base::BindOnce(
       &PrefetchStreamingURLLoader::ServiceWorkerInterceptorLoaderCallback,
       GetWeakPtr(), network_url_loader_factory, request,
-      network_traffic_annotation, std::move(timeout_duration));
+      network_traffic_annotation, std::move(timeout_duration),
+      is_constructed_from_pre_prefetch);
 
   if (!browser_context) {
     // In tests, `browser_context` can be null. Emulate as if there are no
@@ -355,6 +358,24 @@ void PrefetchStreamingURLLoader::StartServiceWorkerInterceptor(
     CHECK_IS_TEST();
     std::move(callback).Run(std::nullopt);
     return;
+  }
+
+  if (is_constructed_from_pre_prefetch) {
+    CHECK(base::FeatureList::IsEnabled(features::kPrefetchOffTheMainThread));
+
+    // If this is for a `PrefetchContainer` constructed from a PrePrefetch,
+    // the prefetch should fail when it finds a controlling ServiceWorker
+    // (see the comment in `ServiceWorkerInterceptorLoaderCallback()`), and even
+    // `network_url_loader_factory` shouldn't be used via ServiceWorker at all,
+    // so reset it here. `network_url_loader_factory` is plumbed only to
+    // `ServiceWorkerInterceptorLoaderCallback()` above and is used only in the
+    // non-ServiceWorker prefetch path (if no ServiceWorker is found).
+    //
+    // Anyway even when a controlling ServiceWorker is found,
+    // `network_url_loader_factory` shouldn't be used before
+    // `interceptor_result->single_request_factory` is triggered, so resetting
+    // it here shouldn't change the behavior.
+    network_url_loader_factory.reset();
   }
 
   // TODO(https://crbug.com/40947546): Set this FetchEvent's Client ID.
@@ -400,6 +421,7 @@ void PrefetchStreamingURLLoader::ServiceWorkerInterceptorLoaderCallback(
     const network::ResourceRequest& request,
     const net::NetworkTrafficAnnotationTag& network_traffic_annotation,
     base::TimeDelta timeout_duration,
+    bool is_constructed_from_pre_prefetch,
     std::optional<NavigationLoaderInterceptor::Result> interceptor_result) {
   if (!interceptor_result) {
     // Controlling ServiceWorker is not found.
@@ -412,6 +434,26 @@ void PrefetchStreamingURLLoader::ServiceWorkerInterceptorLoaderCallback(
     Start(PrefetchServiceWorkerState::kDisallowed,
           std::move(network_url_loader_factory), request,
           network_traffic_annotation, std::move(timeout_duration));
+    return;
+  }
+
+  if (is_constructed_from_pre_prefetch) {
+    CHECK(base::FeatureList::IsEnabled(features::kPrefetchOffTheMainThread));
+
+    // If this is for a `PrefetchContainer` constructed from a PrePrefetch,
+    // the prefetch should fail when it finds a controlling ServiceWorker,
+    // because:
+    // - The PrePrefetch request didn't go through a ServiceWorker, so using the
+    //   ServiceWorker here can cause inconsistencies.
+    // - `network_url_loader_factory` is actually backed by PrePrefetch, and
+    //   thus can't be used multiple times. Sending the request through a
+    //   ServiceWorker can use `network_url_loader_factory` multiple times e.g.
+    //   via navigation preload.
+    // Note that these requirements are mainly for the initial request (as the
+    // PrePrefetch request is also an initial request), but we don't explicitly
+    // care about redirects, because currently redirects are not allowed for
+    // ServiceWorker-controlled prefetch.
+    OnComplete(network::URLLoaderCompletionStatus(net::ERR_ABORTED));
     return;
   }
 

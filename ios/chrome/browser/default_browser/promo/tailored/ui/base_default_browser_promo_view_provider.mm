@@ -9,7 +9,10 @@
 #import "base/metrics/user_metrics_action.h"
 #import "base/notreached.h"
 #import "ios/chrome/browser/default_browser/model/utils.h"
+#import "ios/chrome/browser/default_browser/promo/public/features.h"
 #import "ios/chrome/browser/promos_manager/model/promo_config.h"
+#import "ios/chrome/browser/shared/public/commands/picture_in_picture_commands.h"
+#import "ios/chrome/browser/shared/public/commands/promos_manager_commands.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/common/ui/button_stack/button_stack_configuration.h"
 #import "ios/chrome/common/ui/confirmation_alert/confirmation_alert_action_handler.h"
@@ -49,7 +52,7 @@ constexpr CGFloat kHelpSymbolSize = 20;
   NOTREACHED();
 }
 
-- (const base::Feature*)featureEngagmentIdentifier {
+- (const base::Feature&)featureEngagmentIdentifier {
   NOTREACHED();
 }
 
@@ -78,9 +81,13 @@ constexpr CGFloat kHelpSymbolSize = 20;
   LogDefaultBrowserPromoHistogramForAction(
       self.defaultBrowserPromoType,
       IOSDefaultBrowserPromoAction::kActionButton);
-  LogUserInteractionWithTailoredFullscreenPromo();
 
-  OpenIOSDefaultBrowserSettingsPage();
+  if (IsDefaultBrowserPictureInPictureEnabled()) {
+    [self.promosManagerHandler dismissCurrentPromo];
+  }
+
+  OpenIOSDefaultBrowserSettingsPage(/*force_default_apps_if_available=*/false,
+                                    self.application, self.PIPHandler);
 }
 
 // The "Secondary Action" was touched.
@@ -90,7 +97,6 @@ constexpr CGFloat kHelpSymbolSize = 20;
       UserMetricsAction("IOS.DefaultBrowserPromo.TailoredFullscreen.Cancel"));
   LogDefaultBrowserPromoHistogramForAction(
       self.defaultBrowserPromoType, IOSDefaultBrowserPromoAction::kCancel);
-  LogUserInteractionWithTailoredFullscreenPromo();
 }
 
 // Gesture-based actions.
@@ -100,7 +106,6 @@ constexpr CGFloat kHelpSymbolSize = 20;
       UserMetricsAction("IOS.DefaultBrowserPromo.TailoredFullscreen.Dismiss"));
   LogDefaultBrowserPromoHistogramForAction(
       self.defaultBrowserPromoType, IOSDefaultBrowserPromoAction::kDismiss);
-  LogUserInteractionWithTailoredFullscreenPromo();
 }
 
 #pragma mark - StandardPromoViewProvider
@@ -115,7 +120,7 @@ constexpr CGFloat kHelpSymbolSize = 20;
       initWithRootViewController:_promoViewController];
 
   _helpButton = [[UIBarButtonItem alloc]
-      initWithImage:DefaultSymbolWithPointSize(kHelpSymbol, kHelpSymbolSize)
+      initWithImage:SymbolWithPointSize(SymbolHelp, kHelpSymbolSize)
               style:UIBarButtonItemStylePlain
              target:self
              action:@selector(showLearnMoreView)];
@@ -135,7 +140,6 @@ constexpr CGFloat kHelpSymbolSize = 20;
 - (void)showLearnMoreView {
   base::RecordAction(base::UserMetricsAction(
       "IOS.DefaultBrowserPromo.TailoredFullscreen.MoreInfoTapped"));
-  LogUserInteractionWithTailoredFullscreenPromo();
 
   NSString* message =
       GetNSString(IDS_IOS_DEFAULT_BROWSER_LEARN_MORE_INSTRUCTIONS_MESSAGE);
@@ -170,15 +174,11 @@ constexpr CGFloat kHelpSymbolSize = 20;
 
 // Records that a default browser promo has been shown.
 - (void)recordDefaultBrowserPromoShown {
-  // Record the current state before updating the local storage.
-  RecordPromoDisplayStatsToUMA();
-
   RecordAction(
       UserMetricsAction("IOS.DefaultBrowserPromo.TailoredFullscreen.Appear"));
   base::UmaHistogramEnumeration(
       "IOS.DefaultBrowserPromo.Shown",
       DefaultPromoTypeForUMA(self.defaultBrowserPromoType));
-  LogFullscreenDefaultBrowserPromoDisplayed();
 }
 
 @end

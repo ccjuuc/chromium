@@ -62,8 +62,10 @@
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
 #include "third_party/blink/renderer/platform/loader/fetch/service_worker_router_info.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/dynamic_annotations.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_position.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "v8/include/v8-profiler.h"
@@ -115,8 +117,7 @@ int GetModifierFromEvent(const UIEventWithKeyState& event) {
 }  //  namespace
 
 String ToHexString(const void* p) {
-  return String::Format("0x%" PRIx64,
-                        static_cast<uint64_t>(reinterpret_cast<uintptr_t>(p)));
+  return Format("0x{:x}", reinterpret_cast<uintptr_t>(p));
 }
 uint64_t InspectorTraceEvents::GetNextSampleTraceId() {
   uint64_t sample_trace_id = base::trace_event::GetNextGlobalTraceId();
@@ -157,9 +158,9 @@ void InspectorTraceEvents::WillSendRequest(
     RenderBlockingBehavior render_blocking_behavior,
     base::TimeTicks timestamp) {
   LocalFrame* frame = loader ? loader->GetFrame() : nullptr;
-  TRACE_EVENT_INSTANT_WITH_TIMESTAMP1(
-      "devtools.timeline", "ResourceSendRequest", TRACE_EVENT_SCOPE_THREAD,
-      timestamp, "data", [&](perfetto::TracedValue ctx) {
+  TRACE_EVENT_INSTANT(
+      "devtools.timeline", "ResourceSendRequest", timestamp, "data",
+      [&](perfetto::TracedValue ctx) {
         inspector_send_request_event::Data(
             std::move(ctx), execution_context, loader, request.InspectorId(),
             frame, request, resource_type, render_blocking_behavior,
@@ -231,34 +232,33 @@ void InspectorTraceEvents::MarkResourceAsCached(DocumentLoader* loader,
 void InspectorTraceEvents::Will(const probe::ExecuteScript&) {}
 
 void InspectorTraceEvents::Did(const probe::ExecuteScript& probe) {
-  TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
-                       "UpdateCounters", TRACE_EVENT_SCOPE_THREAD, "data",
-                       [&](perfetto::TracedValue context) {
-                         inspector_update_counters_event::Data(
-                             std::move(context), probe.context->GetIsolate());
-                       });
+  TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
+                      "UpdateCounters", "data",
+                      [&](perfetto::TracedValue context) {
+                        inspector_update_counters_event::Data(
+                            std::move(context), probe.context->GetIsolate());
+                      });
 }
 
 void InspectorTraceEvents::Will(const probe::ParseHTML& probe) {
   // FIXME: Pass in current input length.
-  TRACE_EVENT_BEGIN1("devtools.timeline", "ParseHTML", "beginData",
-                     [&](perfetto::TracedValue context) {
-                       InspectorParseHtmlBeginData(
-                           std::move(context), probe.parser->GetDocument(),
-                           probe.parser->LineNumber().ZeroBasedInt());
-                     });
+  TRACE_EVENT_BEGIN("devtools.timeline", "ParseHTML", "beginData",
+                    [&](perfetto::TracedValue context) {
+                      InspectorParseHtmlBeginData(
+                          std::move(context), probe.parser->GetDocument(),
+                          probe.parser->LineNumber().ZeroBasedInt());
+                    });
 }
 
 void InspectorTraceEvents::Did(const probe::ParseHTML& probe) {
-  TRACE_EVENT_END1("devtools.timeline", "ParseHTML", "endData",
-                   [&](perfetto::TracedValue context) {
-                     InspectorParseHtmlEndData(
-                         std::move(context),
-                         probe.parser->LineNumber().ZeroBasedInt());
-                   });
-  TRACE_EVENT_INSTANT1(
-      TRACE_DISABLED_BY_DEFAULT("devtools.timeline"), "UpdateCounters",
-      TRACE_EVENT_SCOPE_THREAD, "data", [&](perfetto::TracedValue context) {
+  TRACE_EVENT_END(
+      "devtools.timeline", "endData", [&](perfetto::TracedValue context) {
+        InspectorParseHtmlEndData(std::move(context),
+                                  probe.parser->LineNumber().ZeroBasedInt());
+      });
+  TRACE_EVENT_INSTANT(
+      TRACE_DISABLED_BY_DEFAULT("devtools.timeline"), "UpdateCounters", "data",
+      [&](perfetto::TracedValue context) {
         inspector_update_counters_event::Data(
             std::move(context), probe.document->GetAgent().isolate());
       });
@@ -269,12 +269,12 @@ void InspectorTraceEvents::Will(const probe::CallFunction& probe) {}
 void InspectorTraceEvents::Did(const probe::CallFunction& probe) {
   if (probe.depth)
     return;
-  TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
-                       "UpdateCounters", TRACE_EVENT_SCOPE_THREAD, "data",
-                       [&](perfetto::TracedValue context) {
-                         inspector_update_counters_event::Data(
-                             std::move(context), probe.context->GetIsolate());
-                       });
+  TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
+                      "UpdateCounters", "data",
+                      [&](perfetto::TracedValue context) {
+                        inspector_update_counters_event::Data(
+                            std::move(context), probe.context->GetIsolate());
+                      });
 }
 
 void InspectorTraceEvents::PaintTiming(Document* document,
@@ -291,9 +291,8 @@ void InspectorTraceEvents::PaintTiming(Document* document,
 }
 
 void InspectorTraceEvents::FrameStartedLoading(LocalFrame* frame) {
-  TRACE_EVENT_INSTANT1("devtools.timeline", "FrameStartedLoading",
-                       TRACE_EVENT_SCOPE_THREAD, "frame",
-                       GetFrameIdForTracing(frame));
+  TRACE_EVENT_INSTANT("devtools.timeline", "FrameStartedLoading", "frame",
+                      GetFrameIdForTracing(frame));
 }
 
 namespace {
@@ -502,6 +501,9 @@ const char inspector_style_invalidator_invalidate_event::
 const char inspector_style_invalidator_invalidate_event::
     kInvalidationSetInvalidatesTreeCounting[] =
         "Invalidation set invalidates tree-counting";
+const char inspector_style_invalidator_invalidate_event::
+    kInvalidationSetMatchedCustomPseudoName[] =
+        "Invalidation set matched custom pseudo element name";
 
 namespace inspector_style_invalidator_invalidate_event {
 void FillCommonPart(perfetto::TracedDictionary& dict,
@@ -562,6 +564,9 @@ void inspector_style_invalidator_invalidate_event::SelectorPart(
     feature_type = InvalidationSetToSelectorMap::SelectorFeatureType::kId;
   } else if (reason == kInvalidationSetMatchedTagName) {
     feature_type = InvalidationSetToSelectorMap::SelectorFeatureType::kTagName;
+  } else if (reason == kInvalidationSetMatchedCustomPseudoName) {
+    feature_type =
+        InvalidationSetToSelectorMap::SelectorFeatureType::kCustomPseudoName;
   } else if (reason == kInvalidationSetMatchedAttribute) {
     feature_type =
         InvalidationSetToSelectorMap::SelectorFeatureType::kAttribute;
@@ -1170,8 +1175,10 @@ void inspector_scroll_layer_event::Data(perfetto::TracedValue context,
 namespace {
 void FillLocation(perfetto::TracedDictionary& dict,
                   const String& url,
+                  int script_id,
                   const TextPosition& text_position) {
   dict.Add("url", url);
+  dict.Add("scriptId", script_id);
   dict.Add("lineNumber", text_position.line_.OneBasedInt());
   dict.Add("columnNumber", text_position.column_.OneBasedInt());
 }
@@ -1183,7 +1190,7 @@ void inspector_evaluate_script_event::Data(perfetto::TracedValue context,
                                            const String& url,
                                            const TextPosition& text_position) {
   auto dict = std::move(context).WriteDictionary();
-  FillLocation(dict, url, text_position);
+  FillLocation(dict, url, v8::UnboundScript::kNoScriptId, text_position);
   dict.Add("frame", IdentifiersFactory::FrameId(frame));
   SetCallStack(isolate, dict);
 }
@@ -1265,13 +1272,14 @@ inspector_compile_script_event::V8ConsumeCacheResult::V8ConsumeCacheResult(
 void inspector_compile_script_event::Data(
     perfetto::TracedValue context,
     const String& url,
+    int script_id,
     const TextPosition& text_position,
     std::optional<V8ConsumeCacheResult> consume_cache_result,
     bool eager,
     bool streamed,
     ScriptStreamer::NotStreamingReason not_streaming_reason) {
   auto dict = std::move(context).WriteDictionary();
-  FillLocation(dict, url, text_position);
+  FillLocation(dict, url, script_id, text_position);
 
   if (consume_cache_result) {
     dict.Add("consumedCacheSize", consume_cache_result->cache_size);
@@ -1292,10 +1300,11 @@ void inspector_compile_script_event::Data(
 void inspector_produce_script_cache_event::Data(
     perfetto::TracedValue context,
     const String& url,
+    int script_id,
     const TextPosition& text_position,
     int cache_size) {
   auto dict = std::move(context).WriteDictionary();
-  FillLocation(dict, url, text_position);
+  FillLocation(dict, url, script_id, text_position);
   dict.Add("producedCacheSize", cache_size);
 }
 
@@ -1321,6 +1330,7 @@ void inspector_function_call_event::Data(
     ExecutionContext* context,
     const v8::Local<v8::Function>& function) {
   auto dict = std::move(trace_context).WriteDictionary();
+
   if (LocalFrame* frame = FrameForExecutionContext(context))
     dict.Add("frame", IdentifiersFactory::FrameId(frame));
 
@@ -1348,6 +1358,7 @@ void inspector_function_call_event::Data(
   dict.Add("columnNumber", location->ColumnNumber());
   uint64_t sample_trace_id = InspectorTraceEvents::GetNextSampleTraceId();
   dict.Add("sampleTraceId", sample_trace_id);
+  v8::CpuProfiler::CollectSample(context->GetIsolate(), sample_trace_id);
 }
 
 void inspector_paint_image_event::Data(perfetto::TracedValue context,
@@ -1465,11 +1476,8 @@ void inspector_event_dispatch_event::Data(perfetto::TracedValue context,
                                           v8::Isolate* isolate) {
   auto dict = std::move(context).WriteDictionary();
   dict.Add("type", event.type());
-  bool record_input_enabled;
-  TRACE_EVENT_CATEGORY_GROUP_ENABLED(
-      TRACE_DISABLED_BY_DEFAULT("devtools.timeline.inputs"),
-      &record_input_enabled);
-  if (record_input_enabled) {
+  if (TRACE_EVENT_CATEGORY_ENABLED(
+          TRACE_DISABLED_BY_DEFAULT("devtools.timeline.inputs"))) {
     const auto* keyboard_event = DynamicTo<KeyboardEvent>(event);
     if (keyboard_event) {
       dict.Add("modifier", GetModifierFromEvent(*keyboard_event));
@@ -1705,14 +1713,33 @@ void inspector_animation_state_event::Data(perfetto::TracedValue context,
 void inspector_animation_compositor_event::Data(
     perfetto::TracedValue context,
     CompositorAnimations::FailureReasons failure_reasons,
-    const PropertyHandleSet& unsupported_properties_for_tracing) {
+    const CompositingDecisionDetailsMap& specific_reasons) {
   auto dict = std::move(context).WriteDictionary();
   dict.Add("compositeFailed", failure_reasons);
-  {
+  if (RuntimeEnabledFeatures::NewAnimationDispositionReportingEnabled()) {
+    auto addnl_reasons = dict.AddArray("additionalReasons");
+    for (const auto& bucket : specific_reasons.Map()) {
+      auto type = addnl_reasons.AppendDictionary();
+      type.Add("type", static_cast<uint32_t>(bucket.key));
+      // TODO(crbug.com/521921832): Implement this when V2 reasons are added.
+      type.Add("associatedReason", 0);
+      auto instances = type.AddArray("instances");
+      for (const SpecificCompositingDecisionDetail& entry : bucket.value) {
+        auto inst = instances.AppendDictionary();
+        if (const auto& prop = entry.property) {
+          inst.Add("property", prop->GetCSSPropertyName().ToAtomicString());
+        }
+      }
+    }
+  } else {
     auto unsupported_properties_array = dict.AddArray("unsupportedProperties");
-    for (const PropertyHandle& p : unsupported_properties_for_tracing) {
-      unsupported_properties_array.Append(
-          p.GetCSSPropertyName().ToAtomicString());
+    const auto it = specific_reasons.Map().find(
+        SpecificCompositingDecision::kUnsupportedPropertyName);
+    if (it != specific_reasons.Map().end()) {
+      for (const SpecificCompositingDecisionDetail& entry : it->value) {
+        unsupported_properties_array.Append(
+            entry.property->GetCSSPropertyName().ToAtomicString());
+      }
     }
   }
 }

@@ -19,6 +19,7 @@
 #import "components/password_manager/core/common/password_manager_pref_names.h"
 #import "components/prefs/pref_registry_simple.h"
 #import "components/prefs/testing_pref_service.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_pref_names.h"
 #import "components/signin/public/base/test_signin_client.h"
 #import "components/signin/public/identity_manager/device_accounts_synchronizer.h"
@@ -85,11 +86,10 @@ TEST_F(CWVSyncControllerTest, StartSyncWithIdentity) {
           signin::ConsentLevel::kSignin);
   EXPECT_EQ(primary_account_info, account_info);
 
-  // Ensure opt-ins for transport only sync data is flipped to true.
-  EXPECT_TRUE(autofill::IsUserOptedInWalletSyncTransport(
-      &pref_service_, primary_account_info.account_id));
   EXPECT_TRUE(
-      password_manager::features_util::IsAccountStorageEnabled(&sync_service_));
+      password_manager::features_util::IsAccountStorageActive(&sync_service_));
+
+  [sync_controller shutDown];
 }
 
 TEST_F(CWVSyncControllerTest, StartSyncWithIdentityInAuthError) {
@@ -99,7 +99,7 @@ TEST_F(CWVSyncControllerTest, StartSyncWithIdentityInAuthError) {
   sync_service_.SetSignedIn(signin::ConsentLevel::kSignin, account_info);
   sync_service_.SetPersistentAuthError();
   ASSERT_FALSE(
-      password_manager::features_util::IsAccountStorageEnabled(&sync_service_));
+      password_manager::features_util::IsAccountStorageActive(&sync_service_));
 
   // Should not crash.
   CWVSyncController* sync_controller = [[CWVSyncController alloc]
@@ -110,10 +110,13 @@ TEST_F(CWVSyncControllerTest, StartSyncWithIdentityInAuthError) {
       startSyncWithIdentity:[[CWVIdentity alloc]
                                 initWithEmail:@(kTestEmail)
                                      fullName:base::SysUTF8ToNSString(
-                                                  account_info.full_name)
+                                                  account_info.GetFullName()
+                                                      .value_or(""))
                                        gaiaID:account_info.gaia.ToNSString()]];
 
   CWVWebView.skipAccountStorageCheckEnabled = false;
+
+  [sync_controller shutDown];
 }
 
 TEST_F(CWVSyncControllerTest, StopSyncAndClearIdentity) {
@@ -132,6 +135,8 @@ TEST_F(CWVSyncControllerTest, StopSyncAndClearIdentity) {
 
   [sync_controller stopSyncAndClearIdentity];
   EXPECT_FALSE(sync_controller.currentIdentity);
+
+  [sync_controller shutDown];
 }
 
 TEST_F(CWVSyncControllerTest, PassphraseNeeded) {
@@ -144,6 +149,8 @@ TEST_F(CWVSyncControllerTest, PassphraseNeeded) {
   EXPECT_FALSE(sync_controller.passphraseNeeded);
   sync_service_.SetPassphraseRequired();
   EXPECT_TRUE(sync_controller.passphraseNeeded);
+
+  [sync_controller shutDown];
 }
 
 TEST_F(CWVSyncControllerTest, TrustedVaultKeysRequired) {
@@ -156,6 +163,8 @@ TEST_F(CWVSyncControllerTest, TrustedVaultKeysRequired) {
   EXPECT_FALSE(sync_controller.trustedVaultKeysRequired);
   sync_service_.SetTrustedVaultKeyRequired(true);
   EXPECT_TRUE(sync_controller.trustedVaultKeysRequired);
+
+  [sync_controller shutDown];
 }
 
 TEST_F(CWVSyncControllerTest, TrustedVaultRecoverabilityDegraded) {
@@ -167,6 +176,8 @@ TEST_F(CWVSyncControllerTest, TrustedVaultRecoverabilityDegraded) {
   EXPECT_FALSE(sync_controller.trustedVaultRecoverabilityDegraded);
   sync_service_.SetTrustedVaultRecoverabilityDegraded(true);
   EXPECT_TRUE(sync_controller.trustedVaultRecoverabilityDegraded);
+
+  [sync_controller shutDown];
 }
 
 TEST_F(CWVSyncControllerTest, DelegateDidStartAndStopSync) {
@@ -191,6 +202,8 @@ TEST_F(CWVSyncControllerTest, DelegateDidStartAndStopSync) {
   sync_service_.FireStateChanged();
 
   [delegate verify];
+
+  [sync_controller shutDown];
 }
 
 TEST_F(CWVSyncControllerTest, DelegateDidUpdateState) {
@@ -205,6 +218,8 @@ TEST_F(CWVSyncControllerTest, DelegateDidUpdateState) {
   OCMExpect([delegate syncControllerDidUpdateState:sync_controller]);
   sync_service_.FireStateChanged();
   [delegate verify];
+
+  [sync_controller shutDown];
 }
 
 }  // namespace ios_web_view

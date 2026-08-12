@@ -5,6 +5,7 @@
 #ifndef UI_ANDROID_DELEGATED_FRAME_HOST_ANDROID_H_
 #define UI_ANDROID_DELEGATED_FRAME_HOST_ANDROID_H_
 
+#include <optional>
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
@@ -14,6 +15,7 @@
 #include "cc/layers/deadline_policy.h"
 #include "components/viz/client/frame_evictor.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
+#include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "components/viz/common/frame_timing_details_map.h"
 #include "components/viz/common/resources/release_callback.h"
 #include "components/viz/common/resources/returned_resource.h"
@@ -21,7 +23,7 @@
 #include "components/viz/common/surfaces/surface_info.h"
 #include "components/viz/host/host_frame_sink_client.h"
 #include "third_party/blink/public/common/page/content_to_visible_time_reporter.h"
-#include "third_party/blink/public/mojom/widget/record_content_to_visible_time_request.mojom.h"
+#include "third_party/blink/public/common/page/content_to_visible_time_request.h"
 #include "ui/android/browser_controls_offset_tag_definitions.h"
 #include "ui/android/ui_android_export.h"
 #include "ui/android/window_android_compositor.h"
@@ -120,11 +122,11 @@ class UI_ANDROID_EXPORT DelegatedFrameHostAndroid
   void CopyFromCompositingSurface(
       const gfx::Rect& src_subrect,
       const gfx::Size& output_size,
+      base::TimeDelta timeout,
       base::OnceCallback<
           void(const base::expected<viz::CopyOutputBitmapWithMetadata,
-                                    std::string>&)> callback,
-      bool capture_exact_surface_id,
-      base::TimeDelta ipc_delay);
+                                    viz::CopyOutputResult::Error>&)> callback,
+      bool capture_exact_surface_id);
   bool CanCopyFromCompositingSurface() const;
 
   // Should only be called when the host has a content layer. Use this for one-
@@ -154,7 +156,7 @@ class UI_ANDROID_EXPORT DelegatedFrameHostAndroid
   void WasShown(const viz::LocalSurfaceId& local_surface_id,
                 const gfx::Size& size_in_pixels,
                 bool is_fullscreen,
-                blink::mojom::RecordContentToVisibleTimeRequestPtr
+                std::optional<blink::RecordContentToVisibleTimeRequest>
                     content_to_visible_time_request);
   void EmbedSurface(const viz::LocalSurfaceId& new_local_surface_id,
                     const gfx::Size& new_size_in_pixels,
@@ -165,8 +167,7 @@ class UI_ANDROID_EXPORT DelegatedFrameHostAndroid
   // requests when the RenderWidget's visibility state is not changing. If the
   // visibility state is changing call WasHidden or WasShown instead.
   void RequestSuccessfulPresentationTimeForNextFrame(
-      blink::mojom::RecordContentToVisibleTimeRequestPtr
-          content_to_visible_time_request);
+      blink::RecordContentToVisibleTimeRequest content_to_visible_time_request);
   void CancelSuccessfulPresentationTimeRequest();
 
   // Returns the ID for the current Surface. Returns an invalid ID if no
@@ -237,8 +238,7 @@ class UI_ANDROID_EXPORT DelegatedFrameHostAndroid
   // In such cases we enqueue the request and attempt again to send it once the
   // compositor has been attached.
   void PostRequestSuccessfulPresentationTimeForNextFrame(
-      blink::mojom::RecordContentToVisibleTimeRequestPtr
-          content_to_visible_time_request);
+      blink::RecordContentToVisibleTimeRequest content_to_visible_time_request);
 
   void UpdateCaptureKeepAlive();
   void ReleaseCaptureKeepAlive();
@@ -282,7 +282,7 @@ class UI_ANDROID_EXPORT DelegatedFrameHostAndroid
   // If `registered_parent_compositor_` is not attached when we receive a
   // request, we save it and attempt again to send it once the compositor has
   // been attached.
-  blink::mojom::RecordContentToVisibleTimeRequestPtr
+  std::optional<blink::RecordContentToVisibleTimeRequest>
       content_to_visible_time_request_;
   blink::ContentToVisibleTimeReporter content_to_visible_time_recorder_;
 

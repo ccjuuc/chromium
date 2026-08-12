@@ -7,7 +7,6 @@
 #include <memory>
 
 #include "base/check.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
@@ -22,11 +21,11 @@
 #include "chrome/browser/signin/web_signin_interceptor.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/signin/dice_web_signin_interceptor_delegate.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
-#include "chrome/browser/ui/views/profiles/avatar_toolbar_button.h"
+#include "chrome/browser/ui/views/toolbar/avatar_toolbar_button_interface.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/webui/signin/dice_web_signin_intercept_ui.h"
 #include "chrome/common/webui_url_constants.h"
@@ -35,15 +34,11 @@
 #include "components/input/native_web_keyboard_event.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/base/signin_metrics.h"
-#include "components/signin/public/base/signin_switches.h"
-#include "components/signin/public/identity_manager/identity_manager.h"
-#include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/events/keycodes/dom/dom_key.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/controls/webview/webview.h"
@@ -59,7 +54,8 @@ constexpr int kInterceptionBubbleBaseHeight = 500;
 constexpr int kInterceptionBubbleWidth = 290;
 constexpr int kInterceptionChromeSigninBubbleWidth = 320;
 
-AvatarToolbarButton* GetAvatarToolbarButton(const Browser& browser) {
+AvatarToolbarButtonInterface* GetAvatarToolbarButtonInterface(
+    const BrowserWindowInterface& browser) {
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(&browser);
   // WebUI Browser does not use BrowserView.
   // TODO(webium): make a framework-agnostic way to get the avatar button.
@@ -67,7 +63,8 @@ AvatarToolbarButton* GetAvatarToolbarButton(const Browser& browser) {
     return nullptr;
   }
 
-  return browser_view->toolbar_button_provider()->GetAvatarToolbarButton();
+  return browser_view->toolbar_button_provider()
+      ->GetAvatarToolbarButtonInterface();
 }
 
 std::u16string InterceptionTypeToIdentityPillText(
@@ -217,12 +214,12 @@ DiceWebSigninInterceptionBubbleView::~DiceWebSigninInterceptionBubbleView() {
 std::unique_ptr<ScopedWebSigninInterceptionBubbleHandle>
 DiceWebSigninInterceptionBubbleView::CreateBubble(
     Browser* browser,
-    views::View* anchor_view,
+    views::BubbleAnchor anchor,
     const WebSigninInterceptor::Delegate::BubbleParameters& bubble_parameters,
     base::OnceCallback<void(SigninInterceptionResult)> callback) {
   auto interception_bubble =
       base::WrapUnique(new DiceWebSigninInterceptionBubbleView(
-          browser, anchor_view, bubble_parameters, std::move(callback)));
+          browser, anchor, bubble_parameters, std::move(callback)));
   std::unique_ptr<ScopedWebSigninInterceptionBubbleHandle> handle =
       interception_bubble->GetHandle();
   // The widget is owned by the views system and shown after the view is loaded
@@ -301,16 +298,15 @@ content::WebContents* DiceWebSigninInterceptionBubbleView::AddNewContents(
 
 DiceWebSigninInterceptionBubbleView::DiceWebSigninInterceptionBubbleView(
     Browser* browser,
-    views::View* anchor_view,
+    views::BubbleAnchor anchor,
     const WebSigninInterceptor::Delegate::BubbleParameters& bubble_parameters,
     base::OnceCallback<void(SigninInterceptionResult)> callback)
-    : views::BubbleDialogDelegateView(anchor_view,
-                                      views::BubbleBorder::TOP_RIGHT),
+    : views::BubbleDialogDelegateView(anchor, views::BubbleBorder::TOP_RIGHT),
       profile_keep_alive_(
-          browser->profile(),
+          browser->GetProfile(),
           ProfileKeepAliveOrigin::kDiceWebSigninInterceptionBubble),
       browser_(browser->AsWeakPtr()),
-      profile_(browser->profile()),
+      profile_(browser->GetProfile()),
       bubble_parameters_(bubble_parameters),
       callback_(std::move(callback)) {
   DCHECK(browser_);
@@ -319,7 +315,7 @@ DiceWebSigninInterceptionBubbleView::DiceWebSigninInterceptionBubbleView(
 
   // Create the web view in the native bubble.
   std::unique_ptr<views::WebView> web_view =
-      std::make_unique<views::WebView>(browser->profile());
+      std::make_unique<views::WebView>(browser->GetProfile());
   web_view->LoadInitialURL(GetURLForInterceptionType(IsChromeSignin()));
   web_view->GetWebContents()->SetDelegate(this);
   web_view->SetPreferredSize(
@@ -362,7 +358,8 @@ void DiceWebSigninInterceptionBubbleView::SetHeightAndShowWidget(int height) {
   // This has to be done since we removed the margins of the bubble view,
   // which would create an overlap of the web view on top of the bubble empty
   // corners.
-  web_view_->holder()->SetCornerRadii(gfx::RoundedCornersF(GetCornerRadius()));
+  web_view_->holder()->SetNativeViewCornerRadii(
+      gfx::RoundedCornersF(GetCornerRadius()));
 
   ApplyAvatarButtonEffects();
 
@@ -461,7 +458,8 @@ bool DiceWebSigninInterceptionBubbleView::IsChromeSignin() const {
 }
 
 void DiceWebSigninInterceptionBubbleView::ApplyAvatarButtonEffects() {
-  AvatarToolbarButton* button = GetAvatarToolbarButton(*browser_);
+  AvatarToolbarButtonInterface* adapter =
+      GetAvatarToolbarButtonInterface(*browser_);
 
   std::optional<base::RepeatingCallback<void(bool)>>
       explicit_avatar_button_action = base::IgnoreArgs<
@@ -473,7 +471,7 @@ void DiceWebSigninInterceptionBubbleView::ApplyAvatarButtonEffects() {
   // Adapt the identity pill, show the appropriate intercept text,
   // highlight the button as long as the text is shown and override the
   // button action (if needed).
-  clear_avatar_button_effects_callback_ = button->SetExplicitButtonState(
+  clear_avatar_button_effects_callback_ = adapter->SetExplicitButtonState(
       InterceptionTypeToIdentityPillText(bubble_parameters_.interception_type),
       InteractionTypeToIdentityPillAccessibilityLabel(
           bubble_parameters_.interception_type),
@@ -484,11 +482,11 @@ void DiceWebSigninInterceptionBubbleView::ApplyAvatarButtonEffects() {
 
 // static
 bool DiceWebSigninInterceptorDelegate::IsSigninInterceptionSupportedInternal(
-    const Browser& browser) {
+    const BrowserWindowInterface& browser) {
   // Some browsers, such as web apps, don't have an avatar toolbar button to
   // anchor the bubble. Even if a web app has an avatar toolbar button, we
   // still don't support signin interception.
-  return GetAvatarToolbarButton(browser) != nullptr &&
+  return GetAvatarToolbarButtonInterface(browser) != nullptr &&
          !web_app::AppBrowserController::IsWebApp(&browser);
 }
 
@@ -499,10 +497,12 @@ DiceWebSigninInterceptorDelegate::ShowSigninInterceptionBubbleInternal(
     base::OnceCallback<void(SigninInterceptionResult)> callback) {
   DCHECK(browser);
 
-  views::View* anchor_view = GetAvatarToolbarButton(*browser);
-  DCHECK(anchor_view);
+  views::BubbleAnchor anchor = BrowserView::GetBrowserViewForBrowser(browser)
+                                   ->toolbar_button_provider()
+                                   ->GetAvatarToolbarButtonInterface()
+                                   ->GetBubbleAnchor(*browser);
   return DiceWebSigninInterceptionBubbleView::CreateBubble(
-      browser, anchor_view, bubble_parameters, std::move(callback));
+      browser, anchor, bubble_parameters, std::move(callback));
 }
 
 BEGIN_METADATA(DiceWebSigninInterceptionBubbleView)

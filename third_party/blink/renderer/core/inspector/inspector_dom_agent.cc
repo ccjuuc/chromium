@@ -41,6 +41,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_html_document.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_node.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_observable_array_css_style_sheet.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_css_pseudo_element.h"
 #include "third_party/blink/renderer/core/css/css_computed_style_declaration.h"
 #include "third_party/blink/renderer/core/css/css_container_rule.h"
 #include "third_party/blink/renderer/core/css/css_property_name.h"
@@ -59,7 +60,10 @@
 #include "third_party/blink/renderer/core/dom/focus_params.h"
 #include "third_party/blink/renderer/core/dom/layout_tree_builder_traversal.h"
 #include "third_party/blink/renderer/core/dom/node.h"
+#include "third_party/blink/renderer/core/dom/node_lists_node_data.h"
+#include "third_party/blink/renderer/core/dom/processing_instruction.h"
 #include "third_party/blink/renderer/core/dom/pseudo_element.h"
+#include "third_party/blink/renderer/core/dom/css_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/dom/static_node_list.h"
 #include "third_party/blink/renderer/core/dom/text.h"
@@ -73,7 +77,9 @@
 #include "third_party/blink/renderer/core/html/fenced_frame/document_fenced_frames.h"
 #include "third_party/blink/renderer/core/html/fenced_frame/html_fenced_frame_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_button_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_form_control_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
+#include "third_party/blink/renderer/core/html/html_collection.h"
 #include "third_party/blink/renderer/core/html/html_document.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
@@ -81,6 +87,7 @@
 #include "third_party/blink/renderer/core/html/html_slot_element.h"
 #include "third_party/blink/renderer/core/html/html_template_element.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
+#include "third_party/blink/renderer/core/inspector/ad_tagging_utils.h"
 #include "third_party/blink/renderer/core/inspector/dom_editor.h"
 #include "third_party/blink/renderer/core/inspector/dom_patch_support.h"
 #include "third_party/blink/renderer/core/inspector/identifiers_factory.h"
@@ -108,6 +115,7 @@
 #include "third_party/blink/renderer/core/xml/xpath_result.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
@@ -123,8 +131,8 @@ template <typename Functor>
 void ForEachSupportedPseudo(const Element* element, Functor& func) {
   for (PseudoId pseudo_id :
        {kPseudoIdCheckMark, kPseudoIdBefore, kPseudoIdAfter,
-        kPseudoIdPickerIcon, kPseudoIdInterestHint, kPseudoIdMarker,
-        kPseudoIdBackdrop, kPseudoIdScrollMarker,
+        kPseudoIdExpandIcon, kPseudoIdPickerIcon, kPseudoIdInterestButton,
+        kPseudoIdMarker, kPseudoIdBackdrop, kPseudoIdScrollMarker,
         kPseudoIdScrollMarkerGroupBefore, kPseudoIdScrollMarkerGroupAfter,
         kPseudoIdScrollButtonBlockStart, kPseudoIdScrollButtonInlineStart,
         kPseudoIdScrollButtonInlineEnd, kPseudoIdScrollButtonBlockEnd}) {
@@ -236,10 +244,12 @@ protocol::DOM::PseudoType InspectorDOMAgent::ProtocolPseudoElementType(
       return protocol::DOM::PseudoTypeEnum::Before;
     case kPseudoIdAfter:
       return protocol::DOM::PseudoTypeEnum::After;
+    case kPseudoIdExpandIcon:
+      return protocol::DOM::PseudoTypeEnum::ExpandIcon;
     case kPseudoIdPickerIcon:
       return protocol::DOM::PseudoTypeEnum::PickerIcon;
-    case kPseudoIdInterestHint:
-      return protocol::DOM::PseudoTypeEnum::InterestHint;
+    case kPseudoIdInterestButton:
+      return protocol::DOM::PseudoTypeEnum::InterestButton;
     case kPseudoIdMarker:
       return protocol::DOM::PseudoTypeEnum::Marker;
     case kPseudoIdBackdrop:
@@ -298,6 +308,8 @@ protocol::DOM::PseudoType InspectorDOMAgent::ProtocolPseudoElementType(
       return protocol::DOM::PseudoTypeEnum::PermissionIcon;
     case kPseudoIdPickerSelect:
       return protocol::DOM::PseudoTypeEnum::Picker;
+    case kPseudoIdSelectListbox:
+      return protocol::DOM::PseudoTypeEnum::SelectListbox;
     case kPseudoIdViewTransition:
       return protocol::DOM::PseudoTypeEnum::ViewTransition;
     case kPseudoIdViewTransitionGroup:
@@ -312,6 +324,10 @@ protocol::DOM::PseudoType InspectorDOMAgent::ProtocolPseudoElementType(
       return protocol::DOM::PseudoTypeEnum::ViewTransitionOld;
     case kPseudoIdOverscrollAreaParent:
       return protocol::DOM::PseudoTypeEnum::OverscrollAreaParent;
+    case kPseudoIdOverscrollBackdrop:
+      return protocol::DOM::PseudoTypeEnum::OverscrollBackdrop;
+    case kPseudoIdSkeleton:
+      return protocol::DOM::PseudoTypeEnum::Skeleton;
     case kAfterLastInternalPseudoId:
     case kPseudoIdNone:
     case kPseudoIdInvalid:
@@ -432,16 +448,28 @@ PseudoId InspectorDOMAgent::ProtocolPseudoTypeToPseudoId(
   if (type == protocol::DOM::PseudoTypeEnum::Picker) {
     return kPseudoIdPickerSelect;
   }
+  if (type == protocol::DOM::PseudoTypeEnum::SelectListbox) {
+    return kPseudoIdSelectListbox;
+  }
+  if (type == protocol::DOM::PseudoTypeEnum::ExpandIcon) {
+    return kPseudoIdExpandIcon;
+  }
+  if (type == protocol::DOM::PseudoTypeEnum::PickerIcon) {
+    return kPseudoIdPickerIcon;
+  }
+  if (type == protocol::DOM::PseudoTypeEnum::InterestButton) {
+    return kPseudoIdInterestButton;
+  }
+  if (type == protocol::DOM::PseudoTypeEnum::OverscrollBackdrop) {
+    return kPseudoIdOverscrollBackdrop;
+  }
   NOTREACHED();
 }
 
-InspectorDOMAgent::InspectorDOMAgent(
-    v8::Isolate* isolate,
-    InspectedFrames* inspected_frames,
-    v8_inspector::V8InspectorSession* v8_session)
+InspectorDOMAgent::InspectorDOMAgent(v8::Isolate* isolate,
+                                     InspectedFrames* inspected_frames)
     : isolate_(isolate),
       inspected_frames_(inspected_frames),
-      v8_session_(v8_session),
       document_node_to_id_map_(MakeGarbageCollected<NodeToIdMap>()),
       last_node_id_(1),
       suppress_attribute_modified_event_(false),
@@ -478,18 +506,33 @@ void InspectorDOMAgent::RemoveDOMListener(DOMListener* listener) {
 }
 
 void InspectorDOMAgent::NotifyDidAddDocument(Document* document) {
-  for (DOMListener* listener : dom_listeners_)
+  ForEachDOMListener([document](const Member<DOMListener>& listener) {
     listener->DidAddDocument(document);
+  });
 }
 
 void InspectorDOMAgent::NotifyWillRemoveDOMNode(Node* node) {
-  for (DOMListener* listener : dom_listeners_)
+  ForEachDOMListener([node](const Member<DOMListener>& listener) {
     listener->WillRemoveDOMNode(node);
+  });
 }
 
 void InspectorDOMAgent::NotifyDidModifyDOMAttr(Element* element) {
-  for (DOMListener* listener : dom_listeners_)
+  ForEachDOMListener([element](const Member<DOMListener>& listener) {
     listener->DidModifyDOMAttr(element);
+  });
+}
+
+void InspectorDOMAgent::ForEachDOMListener(
+    base::FunctionRef<void(const Member<DOMListener>&)> callback) {
+  // Notifying listeners may pause in debugger and thus cause all kinds of
+  // side effects, including adding/removing listeners, so make a copy.
+  HeapHashSet<Member<DOMListener>> copy(dom_listeners_);
+  for (const Member<DOMListener>& listener : copy) {
+    if (dom_listeners_.Contains(listener)) {
+      callback(listener);
+    }
+  }
 }
 
 void InspectorDOMAgent::SetDocument(Document* doc) {
@@ -711,6 +754,7 @@ protocol::Response InspectorDOMAgent::disable() {
   if (!enabled_.Get())
     return protocol::Response::ServerError("DOM agent hasn't been enabled");
   ReleaseForcedPopovers();
+  ReleaseForcedInterestInvokers();
   include_whitespace_.Clear();
   enabled_.Clear();
   instrumenting_agents_->RemoveInspectorDOMAgent(this);
@@ -871,6 +915,7 @@ void InspectorDOMAgent::PushChildNodesToFrontend(int node_id,
 
 void InspectorDOMAgent::DiscardFrontendBindings() {
   ReleaseForcedPopovers();
+  ReleaseForcedInterestInvokers();
   if (history_)
     history_->Reset();
   search_results_.clear();
@@ -1091,8 +1136,9 @@ protocol::Response InspectorDOMAgent::setAttributesAsText(
     std::optional<String> name) {
   Element* element = nullptr;
   protocol::Response response = AssertEditableElement(element_id, element);
-  if (!response.IsSuccess())
+  if (!response.IsSuccess()) {
     return response;
+  }
 
   bool is_html_document = IsA<HTMLDocument>(element->GetDocument());
 
@@ -1198,39 +1244,64 @@ protocol::Response InspectorDOMAgent::setNodeName(int node_id,
                                                   int* new_id) {
   *new_id = 0;
 
-  Element* old_element = nullptr;
-  protocol::Response response = AssertElement(node_id, old_element);
+  Node* old_node = nullptr;
+  protocol::Response response = AssertNode(node_id, old_node);
   if (!response.IsSuccess())
     return response;
 
   DummyExceptionStateForTesting exception_state;
-  Element* new_elem = old_element->GetDocument().CreateElementForBinding(
-      AtomicString(tag_name), exception_state);
-  if (exception_state.HadException())
-    return ToResponse(exception_state);
+  Node* new_node;
+  switch (old_node->getNodeType()) {
+    case Node::kElementNode: {
+      Element* old_element = To<Element>(old_node);
+      if (!old_element) {
+        return protocol::Response::ServerError("Not an element");
+      }
+      Element* new_elem = old_element->GetDocument().CreateElementForBinding(
+          AtomicString(tag_name), exception_state);
+      if (exception_state.HadException()) {
+        return ToResponse(exception_state);
+      }
 
-  // Copy over the original node's attributes.
-  new_elem->CloneAttributesFrom(*old_element);
+      // Copy over the original node's attributes.
+      new_elem->CloneAttributesFrom(*old_element);
 
-  // Copy over the original node's children.
-  for (Node* child = old_element->firstChild(); child;
-       child = old_element->firstChild()) {
-    response = dom_editor_->InsertBefore(new_elem, child, nullptr);
-    if (!response.IsSuccess())
-      return response;
+      // Copy over the original node's children.
+      for (Node* child = old_element->firstChild(); child;
+           child = old_element->firstChild()) {
+        response = dom_editor_->InsertBefore(new_elem, child, nullptr);
+        if (!response.IsSuccess()) {
+          return response;
+        }
+      }
+      new_node = new_elem;
+      break;
+    }
+    case Node::kProcessingInstructionNode: {
+      ProcessingInstruction* pi =
+          old_node->ownerDocument()->createProcessingInstruction(
+              AtomicString(tag_name), old_node->nodeValue(), exception_state);
+      if (exception_state.HadException()) {
+        return ToResponse(exception_state);
+      }
+      new_node = pi;
+      break;
+    }
+    default:
+      return protocol::Response::ServerError("Not an element");
   }
 
   // Replace the old node with the new node
-  ContainerNode* parent = old_element->parentNode();
+  ContainerNode* parent = old_node->parentNode();
   response =
-      dom_editor_->InsertBefore(parent, new_elem, old_element->nextSibling());
+      dom_editor_->InsertBefore(parent, new_node, old_node->nextSibling());
   if (!response.IsSuccess())
     return response;
-  response = dom_editor_->RemoveChild(parent, old_element);
+  response = dom_editor_->RemoveChild(parent, old_node);
   if (!response.IsSuccess())
     return response;
 
-  *new_id = PushNodePathToFrontend(new_elem);
+  *new_id = PushNodePathToFrontend(new_node);
   if (children_requested_.Contains(node_id))
     PushChildNodesToFrontend(*new_id);
   return protocol::Response::Success();
@@ -1253,7 +1324,7 @@ protocol::Response InspectorDOMAgent::getOuterHTML(
           ? ShadowRootInclusion::Behavior::kIncludeAllShadowRootsForInspector
           : ShadowRootInclusion::Behavior::kOnlyProvidedShadowRoots};
   *outer_html =
-      CreateMarkup(node, kIncludeNode, kDoNotResolveURLs, shadow_roots);
+      CreateMarkup(node, kIncludeNode, ResolveUrls::kNone, shadow_roots);
   return protocol::Response::Success();
 }
 
@@ -1304,8 +1375,11 @@ protocol::Response InspectorDOMAgent::setNodeValue(int node_id,
   if (!response.IsSuccess())
     return response;
 
-  if (node->getNodeType() != Node::kTextNode)
-    return protocol::Response::ServerError("Can only set value of text nodes");
+  if (node->getNodeType() != Node::kTextNode &&
+      node->getNodeType() != Node::kProcessingInstructionNode) {
+    return protocol::Response::ServerError(
+        "Can only set value of text nodes or processing instructions");
+  }
 
   return dom_editor_->SetNodeValue(node, value);
 }
@@ -1358,28 +1432,67 @@ protocol::Response InspectorDOMAgent::performSearch(
   bool include_user_agent_shadow_dom =
       optional_include_user_agent_shadow_dom.value_or(false);
 
-  unsigned query_length = whitespace_trimmed_query.length();
-  bool start_tag_found = !whitespace_trimmed_query.find('<');
-  bool start_closing_tag_found = !whitespace_trimmed_query.Find("</");
-  bool end_tag_found =
-      whitespace_trimmed_query.ReverseFind('>') + 1 == query_length;
-  bool start_quote_found = !whitespace_trimmed_query.find('"');
-  bool end_quote_found =
-      whitespace_trimmed_query.ReverseFind('"') + 1 == query_length;
-  bool exact_attribute_match = start_quote_found && end_quote_found;
+  StringView tag_name_query = whitespace_trimmed_query;
+  bool start_tag_found = false;
+  if (tag_name_query.starts_with("</")) {
+    tag_name_query.remove_prefix(2);
+    start_tag_found = true;
+  } else if (tag_name_query.starts_with('<')) {
+    tag_name_query.remove_prefix(1);
+    start_tag_found = true;
+  }
+  bool end_tag_found = false;
+  if (tag_name_query.ends_with('>')) {
+    tag_name_query.remove_suffix(1);
+    end_tag_found = true;
+  }
 
-  String tag_name_query = whitespace_trimmed_query;
-  String attribute_query = whitespace_trimmed_query;
-  if (start_closing_tag_found)
-    tag_name_query = tag_name_query.Right(tag_name_query.length() - 2);
-  else if (start_tag_found)
-    tag_name_query = tag_name_query.Right(tag_name_query.length() - 1);
-  if (end_tag_found)
-    tag_name_query = tag_name_query.Left(tag_name_query.length() - 1);
-  if (start_quote_found)
-    attribute_query = attribute_query.Right(attribute_query.length() - 1);
-  if (end_quote_found)
-    attribute_query = attribute_query.Left(attribute_query.length() - 1);
+  // Classify what type of match should be done on element names.
+  enum { kSubstring, kExact, kPrefix, kSuffix } type;
+  if (!start_tag_found && !end_tag_found) {
+    type = kSubstring;
+  } else if (start_tag_found && end_tag_found) {
+    type = kExact;
+  } else if (start_tag_found && !end_tag_found) {
+    type = kPrefix;
+  } else {
+    type = kSuffix;
+  }
+  auto element_name_matcher = [type,
+                               tag_name_query](const String& element_name) {
+    switch (type) {
+      case kSubstring:
+        return element_name.DeprecatedFindIgnoringCase(tag_name_query) !=
+               kNotFound;
+      case kExact:
+        return DeprecatedEqualIgnoringCase(element_name, tag_name_query);
+      case kPrefix:
+        return element_name.DeprecatedStartsWithIgnoringCase(tag_name_query);
+      case kSuffix:
+        return element_name.DeprecatedEndsWithIgnoringCase(tag_name_query);
+    }
+  };
+
+  StringView attribute_query = whitespace_trimmed_query;
+  bool start_quote_found = false;
+  if (attribute_query.starts_with('"')) {
+    attribute_query.remove_prefix(1);
+    start_quote_found = true;
+  }
+  bool end_quote_found = false;
+  if (attribute_query.ends_with('"')) {
+    attribute_query.remove_suffix(1);
+    end_quote_found = true;
+  }
+  const bool exact_attribute_match = start_quote_found && end_quote_found;
+  auto attribute_value_matcher =
+      [exact_attribute_match, attribute_query](const String& attribute_value) {
+        if (exact_attribute_match) {
+          return DeprecatedEqualIgnoringCase(attribute_value, attribute_query);
+        }
+        return attribute_value.DeprecatedFindIgnoringCase(attribute_query) !=
+               kNotFound;
+      };
 
   HeapVector<Member<Document>> docs = Documents();
   HeapLinkedHashSet<Member<Node>> result_collector;
@@ -1439,17 +1552,7 @@ protocol::Response InspectorDOMAgent::performSearch(
           break;
         }
         case Node::kElementNode: {
-          if ((!start_tag_found && !end_tag_found &&
-               (node->nodeName().DeprecatedFindIgnoringCase(tag_name_query) !=
-                kNotFound)) ||
-              (start_tag_found && end_tag_found &&
-               DeprecatedEqualIgnoringCase(node->nodeName(), tag_name_query)) ||
-              (start_tag_found && !end_tag_found &&
-               node->nodeName().DeprecatedStartsWithIgnoringCase(
-                   tag_name_query)) ||
-              (!start_tag_found && end_tag_found &&
-               node->nodeName().DeprecatedEndsWithIgnoringCase(
-                   tag_name_query))) {
+          if (element_name_matcher(node->nodeName())) {
             result_collector.insert(node);
             break;
           }
@@ -1463,15 +1566,9 @@ protocol::Response InspectorDOMAgent::performSearch(
               result_collector.insert(node);
               break;
             }
-            size_t found_position =
-                attribute.Value().DeprecatedFindIgnoringCase(attribute_query);
-            if (found_position != kNotFound) {
-              if (!exact_attribute_match ||
-                  (!found_position &&
-                   attribute.Value().length() == attribute_query.length())) {
-                result_collector.insert(node);
-                break;
-              }
+            if (attribute_value_matcher(attribute.Value())) {
+              result_collector.insert(node);
+              break;
             }
           }
           break;
@@ -1552,15 +1649,21 @@ protocol::Response InspectorDOMAgent::NodeForRemoteObjectId(
   v8::Local<v8::Value> value;
   v8::Local<v8::Context> context;
   std::unique_ptr<v8_inspector::StringBuffer> error;
-  if (!v8_session_) {
+  if (!V8Session()) {
     return protocol::Response::ServerError("The agent has been detached");
   }
-  if (!v8_session_->unwrapObject(&error, ToV8InspectorStringView(object_id),
+  if (!V8Session()->unwrapObject(&error, ToV8InspectorStringView(object_id),
                                  &value, &context, nullptr)) {
     return protocol::Response::ServerError(
         ToCoreString(std::move(error)).Utf8());
   }
   node = V8Node::ToWrappable(isolate_, value);
+  if (!node) {
+    if (CSSPseudoElement* css_pseudo =
+            V8CSSPseudoElement::ToWrappable(isolate_, value)) {
+      node = css_pseudo->GetPseudoElement();
+    }
+  }
   if (!node) {
     return protocol::Response::ServerError(
         "Object id doesn't reference a Node");
@@ -1826,8 +1929,8 @@ protocol::Response InspectorDOMAgent::resolveNode(
   if (!node)
     return protocol::Response::ServerError("No node with given id found");
   // This should only be called via CDP, so agent should not be detached.
-  CHECK(v8_session_);
-  *result = ResolveNode(v8_session_, node, object_group_name,
+  CHECK(V8Session());
+  *result = ResolveNode(V8Session().get(), node, object_group_name,
                         std::move(execution_context_id));
   if (!*result) {
     return protocol::Response::ServerError(
@@ -1991,10 +2094,10 @@ protocol::Response InspectorDOMAgent::getAnchorElement(
         AtomicString(anchor_specifier.value()),
         &querying_object->GetDocument()));
   } else {
-    const StylePositionAnchor& position_anchor =
-        box->StyleRef().PositionAnchor();
+    const DefaultAnchorData default_anchor_data =
+        box->StyleRef().GetDefaultAnchorData();
     using Type = StylePositionAnchor::Type;
-    switch (position_anchor.GetType()) {
+    switch (default_anchor_data.GetType()) {
       case Type::kNone:
         target_object = nullptr;
         break;
@@ -2002,8 +2105,10 @@ protocol::Response InspectorDOMAgent::getAnchorElement(
         target_object = box->AcceptableImplicitAnchor();
         break;
       case Type::kName:
-        target_object = box->FindTargetAnchor(position_anchor.GetName());
+        target_object = box->FindTargetAnchor(default_anchor_data.GetName());
         break;
+      case Type::kNormal:
+        NOTREACHED();
     }
   }
 
@@ -2014,6 +2119,40 @@ protocol::Response InspectorDOMAgent::getAnchorElement(
     }
   }
   return protocol::Response::Success();
+}
+
+static Element* FindEstimatedPopoverInvoker(
+    InspectorDOMAgent* agent,
+    HTMLElement* element,
+    std::optional<int> invoker_node_id) {
+  if (invoker_node_id.has_value()) {
+    Node* invoker_node = nullptr;
+    agent->AssertNode(std::nullopt, invoker_node_id.value(), std::nullopt,
+                      invoker_node);
+    return DynamicTo<Element>(invoker_node);
+  }
+
+  HTMLCollection* invokers =
+      element->GetTreeScope().RootNode().PopoverInvokers();
+  for (unsigned i = 0; i < invokers->length(); ++i) {
+    auto* potential_invoker =
+        DynamicTo<HTMLFormControlElement>(invokers->item(i));
+    if (potential_invoker &&
+        potential_invoker->popoverTargetElement().popover == element) {
+      return potential_invoker;
+    }
+  }
+
+  HTMLCollection* command_invokers =
+      element->GetTreeScope().RootNode().CommandInvokers();
+  for (unsigned i = 0; i < command_invokers->length(); ++i) {
+    auto* potential_invoker = To<HTMLElement>(command_invokers->item(i));
+    if (potential_invoker->commandForElement() == element) {
+      return potential_invoker;
+    }
+  }
+
+  return nullptr;
 }
 
 static void HidePopover(Node* node) {
@@ -2037,11 +2176,8 @@ void InspectorDOMAgent::ReleaseForcedPopovers() {
 protocol::Response InspectorDOMAgent::forceShowPopover(
     int node_id,
     bool enable,
+    std::optional<int> invoker_node_id,
     std::unique_ptr<protocol::Array<int>>* out_node_ids) {
-  if (!base::FeatureList::IsEnabled(features::kDevToolsAllowPopoverForcing)) {
-    return protocol::Response::ServerError("Feature is not enabled");
-  }
-
   Node* node = nullptr;
   protocol::Response response = AssertNode(node_id, node);
   if (!response.IsSuccess()) {
@@ -2064,8 +2200,12 @@ protocol::Response InspectorDOMAgent::forceShowPopover(
 
     bool should_open = forced_popovers_.insert(node).is_new_entry;
     if (should_open && !element->popoverOpen()) {
-      element->ShowPopoverInternal(/*invoker=*/nullptr,
-                                   /*exception_state=*/nullptr);
+      Element* invoker =
+          FindEstimatedPopoverInvoker(this, element, invoker_node_id);
+      if (invoker_node_id.has_value() && !invoker) {
+        return protocol::Response::InvalidParams("invoker id not found");
+      }
+      element->ShowPopoverInternal(invoker, /*exception_state=*/nullptr);
     }
   }
   return protocol::Response::Success();
@@ -2073,9 +2213,64 @@ protocol::Response InspectorDOMAgent::forceShowPopover(
 
 void InspectorDOMAgent::WillHidePopover(HTMLElement* element,
                                         bool* force_open) {
-  if (base::FeatureList::IsEnabled(features::kDevToolsAllowPopoverForcing) &&
-      force_open && forced_popovers_.Contains(element)) {
+  if (force_open && forced_popovers_.Contains(element)) {
     *force_open = true;
+  }
+}
+
+void InspectorDOMAgent::ReleaseForcedInterestInvokers() {
+  HeapHashSet<WeakMember<Node>> forced_interest_invokers;
+  forced_interest_invokers_.swap(forced_interest_invokers);
+  for (auto& node : forced_interest_invokers) {
+    if (auto* element = DynamicTo<Element>(node.Get())) {
+      if (auto* target = element->InterestForElement()) {
+        element->InterestLost(target);
+      }
+    }
+  }
+}
+
+protocol::Response InspectorDOMAgent::forceShowInterest(int node_id,
+                                                        bool enable) {
+  if (!base::FeatureList::IsEnabled(features::kDevToolsAllowInterestForcing)) {
+    return protocol::Response::ServerError("Feature is not enabled");
+  }
+
+  Node* node = nullptr;
+  protocol::Response response = AssertNode(node_id, node);
+  if (!response.IsSuccess()) {
+    return response;
+  }
+
+  auto* element = DynamicTo<Element>(node);
+  if (!element) {
+    return protocol::Response::ServerError("node is not an Element");
+  }
+
+  if (enable) {
+    if (!element->InterestForElement()) {
+      return protocol::Response::ServerError("node is not an interest invoker");
+    }
+    bool is_new = forced_interest_invokers_.insert(element).is_new_entry;
+    if (is_new) {
+      element->ShowInterestNow();
+    }
+  } else {
+    if (forced_interest_invokers_.Contains(element)) {
+      forced_interest_invokers_.erase(element);
+      if (auto* target = element->InterestForElement()) {
+        element->InterestLost(target);
+      }
+    }
+  }
+  return protocol::Response::Success();
+}
+
+void InspectorDOMAgent::WillLoseInterest(Element* element,
+                                         bool* force_interest) {
+  if (base::FeatureList::IsEnabled(features::kDevToolsAllowInterestForcing) &&
+      force_interest && forced_interest_invokers_.Contains(element)) {
+    *force_interest = true;
   }
 }
 
@@ -2118,7 +2313,7 @@ bool InspectorDOMAgent::ContainerQueriedByElement(Element* container,
         // Container rule origin no longer known at this point, match name from
         // all scopes.
         if (container == style_resolver.FindContainerForElement(
-                             element, container_rule->Selector(),
+                             element, container_rule->SelectorForInspector(),
                              nullptr /* selector_tree_scope */)) {
           return true;
         }
@@ -2188,10 +2383,11 @@ std::unique_ptr<protocol::DOM::Node> InspectorDOMAgent::BuildObjectForNode(
     case Node::kTextNode:
     case Node::kCommentNode:
     case Node::kCdataSectionNode:
+    case Node::kProcessingInstructionNode:
       node_value = node->nodeValue();
       if (node_value.length() > kMaxTextSize) {
-        node_value =
-            StrCat({node_value.Left(kMaxTextSize), StringView(kEllipsisUChar)});
+        node_value = StrCat(
+            {node_value.subview(0, kMaxTextSize), StringView(kEllipsisUChar)});
       }
       break;
     case Node::kAttributeNode:
@@ -2260,6 +2456,12 @@ std::unique_ptr<protocol::DOM::Node> InspectorDOMAgent::BuildObjectForNode(
 
     if (IsA<HTMLLinkElement>(*element)) {
       force_push_children = true;
+    }
+
+    if (std::optional<AdProvenance> ad_provenance =
+            element->GetAdProvenance()) {
+      value->setAdProvenance(
+          CreateAdProvenanceProtocolObject(*element, *ad_provenance));
     }
 
     if (auto* template_element = DynamicTo<HTMLTemplateElement>(*element)) {
@@ -2751,11 +2953,12 @@ InspectorRevalidateDOMTask* InspectorDOMAgent::RevalidateTask() {
   return revalidate_task_.Get();
 }
 
-void InspectorDOMAgent::DidInvalidateStyleAttr(Node* node) {
-  // If node is not mapped yet -> ignore the event.
-  if (!BoundNodeId(node))
+void InspectorDOMAgent::DidInvalidateStyleAttr(Element* element) {
+  // If element is not mapped yet -> ignore the event.
+  if (!BoundNodeId(element)) {
     return;
-  RevalidateTask()->ScheduleStyleAttrRevalidationFor(To<Element>(node));
+  }
+  RevalidateTask()->ScheduleStyleAttrRevalidationFor(element);
 }
 
 bool InspectorDOMAgent::isNodeScrollable(Node* node) {
@@ -2804,9 +3007,10 @@ void InspectorDOMAgent::WillPopShadowRoot(Element* host, ShadowRoot* root) {
 void InspectorDOMAgent::DidPerformSlotDistribution(
     HTMLSlotElement* slot_element) {
   int insertion_point_id = BoundNodeId(slot_element);
-  if (insertion_point_id)
+  if (insertion_point_id) {
     GetFrontend()->distributedNodesUpdated(
         insertion_point_id, BuildDistributedNodesForSlot(slot_element));
+  }
 }
 
 void InspectorDOMAgent::FrameDocumentUpdated(LocalFrame* frame) {
@@ -2904,6 +3108,23 @@ void InspectorDOMAgent::UpdateScrollableFlag(
                                                    : isNodeScrollable(node));
 }
 
+void InspectorDOMAgent::UpdateAdRelatedState(
+    Node& node,
+    std::optional<AdProvenance> ad_provenance) {
+  int nodeId = BoundNodeId(&node);
+  // If node is not mapped yet -> ignore the event.
+  if (!nodeId) {
+    return;
+  }
+
+  // Elements are currently never untagged, so `ad_provenance` is guaranteed to
+  // be valid.
+  CHECK(ad_provenance);
+
+  GetFrontend()->adRelatedStateUpdated(
+      nodeId, CreateAdProvenanceProtocolObject(node, *ad_provenance));
+}
+
 void InspectorDOMAgent::UpdateAffectedByStartingStylesFlag(
     Node* node,
     std::optional<bool> override_flag) {
@@ -2922,7 +3143,7 @@ void InspectorDOMAgent::UpdateAffectedByStartingStylesFlag(
 
 namespace {
 
-ShadowRoot* ShadowRootForNode(Node* node, const String& type) {
+ShadowRoot* ShadowRootForNode(Node* node, const StringView& type) {
   auto* element = DynamicTo<Element>(node);
   if (!element)
     return nullptr;
@@ -2952,20 +3173,19 @@ Node* InspectorDOMAgent::NodeForPath(const String& path) {
     return nullptr;
 
   Node* node = document_.Get();
-  Vector<String> path_tokens;
-  path.Split(',', path_tokens);
+  Vector<StringView> path_tokens = StringView(path).SplitSkippingEmpty(',');
   if (!path_tokens.size())
     return nullptr;
 
   InspectorDOMAgent::IncludeWhitespaceEnum include_whitespace =
       IncludeWhitespace();
   for (wtf_size_t i = 0; i < path_tokens.size() - 1; i += 2) {
-    bool success = true;
-    String& index_value = path_tokens[i];
-    wtf_size_t child_number = index_value.ToUInt(&success);
+    const StringView& index_value = path_tokens[i];
+    auto result = StringToUintLoose(index_value);
+    wtf_size_t child_number = result.value_or(0);
     Node* child;
-    String child_name = path_tokens[i + 1];
-    if (!success) {
+    const StringView& child_name = path_tokens[i + 1];
+    if (!result) {
       if (index_value == "d") {
         child = DocumentForFrameOwner(node);
       } else {
@@ -3038,8 +3258,8 @@ protocol::Response InspectorDOMAgent::setInspectedNode(int node_id) {
   if (!response.IsSuccess())
     return response;
   // Method should only be called from CDP, so won't happen after detach.
-  CHECK(v8_session_);
-  v8_session_->addInspectedObject(std::make_unique<InspectableNode>(node));
+  CHECK(V8Session());
+  V8Session()->addInspectedObject(std::make_unique<InspectableNode>(node));
   return protocol::Response::Success();
 }
 
@@ -3093,7 +3313,7 @@ protocol::Response InspectorDOMAgent::scrollIntoViewIfNeeded(
       AssertNode(node_id, backend_node_id, object_id, node);
   if (!response.IsSuccess())
     return response;
-  node->GetDocument().EnsurePaintLocationDataValidForNode(
+  node->GetDocument().UpdateStyleAndLayoutForNode(
       node, DocumentUpdateReason::kInspector);
   if (!node->isConnected())
     return protocol::Response::ServerError("Node is detached from document");
@@ -3174,12 +3394,12 @@ protocol::Response InspectorDOMAgent::getFileInfo(const String& object_id,
                                                   String* path) {
   // Method is only called from CDP, so will not be called after Detach().
   CHECK(isolate_);
-  CHECK(v8_session_);
+  CHECK(V8Session());
   v8::HandleScope handles(isolate_);
   v8::Local<v8::Value> value;
   v8::Local<v8::Context> context;
   std::unique_ptr<v8_inspector::StringBuffer> error;
-  if (!v8_session_->unwrapObject(&error, ToV8InspectorStringView(object_id),
+  if (!V8Session()->unwrapObject(&error, ToV8InspectorStringView(object_id),
                                  &value, &context, nullptr)) {
     return protocol::Response::ServerError(
         ToCoreString(std::move(error)).Utf8());
@@ -3269,13 +3489,13 @@ void InspectorDOMAgent::Trace(Visitor* visitor) const {
   visitor->Trace(dom_editor_);
   visitor->Trace(node_to_creation_source_location_map_);
   visitor->Trace(forced_popovers_);
+  visitor->Trace(forced_interest_invokers_);
   InspectorBaseAgent::Trace(visitor);
 }
 
 void InspectorDOMAgent::Dispose() {
   InspectorBaseAgent<protocol::DOM::Metainfo>::Dispose();
   isolate_ = nullptr;
-  v8_session_ = nullptr;
 }
 
 }  // namespace blink

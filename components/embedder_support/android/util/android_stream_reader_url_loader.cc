@@ -69,18 +69,12 @@ void OpenInputStreamOnWorkerThread(
 
 network::ResourceRequest CopyResourceRequest(
     const network::ResourceRequest& request) {
-  // If the features is disabled, copy the full request to preserve previous
-  // behavior.
-  if (!base::FeatureList::IsEnabled(
-          network::features::kAvoidResourceRequestCopies)) {
-    return request;
-  }
-
   // Copy only the fields we need from the request.
   network::ResourceRequest new_request;
   new_request.url = request.url;
   new_request.mode = request.mode;
   new_request.headers = request.headers;
+  new_request.trusted_params = request.trusted_params;
   return new_request;
 }
 
@@ -184,9 +178,7 @@ AndroidStreamReaderURLLoader::AndroidStreamReaderURLLoader(
 AndroidStreamReaderURLLoader::~AndroidStreamReaderURLLoader() = default;
 
 void AndroidStreamReaderURLLoader::FollowRedirect(
-    const std::vector<std::string>& removed_headers,
-    const net::HttpRequestHeaders& modified_headers,
-    const net::HttpRequestHeaders& modified_cors_exempt_headers,
+    network::HttpRequestHeadersUpdateParams headers_update_params,
     const std::optional<GURL>& new_url) {}
 void AndroidStreamReaderURLLoader::SetPriority(net::RequestPriority priority,
                                                int intra_priority_value) {}

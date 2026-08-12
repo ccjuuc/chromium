@@ -6,13 +6,15 @@ import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
 import 'chrome://resources/cr_elements/cr_icons.css.js';
 import 'chrome://resources/cr_elements/cr_shared_style.css.js';
 import 'chrome://resources/cr_elements/cr_tooltip/cr_tooltip.js';
-import 'chrome://resources/cr_elements/icons.html.js';
 import './site_favicon.js';
 import './searchable_label.js';
 import './shared_style.css.js';
+import './dialogs/move_passwords_dialog.js';
 
 import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {PluralStringProxyImpl} from 'chrome://resources/js/plural_string_proxy.js';
+import {htmlEscape} from 'chrome://resources/js/util.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {getTemplate} from './password_list_item.html.js';
@@ -50,6 +52,8 @@ export class PasswordListItemElement extends PasswordListItemElementBase {
 
       searchTerm: String,
 
+      showMovePasswordDialog_: Boolean,
+
       /**
        * The number of accounts in a group as a formatted string.
        */
@@ -67,6 +71,7 @@ export class PasswordListItemElement extends PasswordListItemElementBase {
   declare private numberOfAccounts_: string;
   declare private tooltipText_: string;
   declare private deviceOnlyCredentialsAccessibilityLabelText_: string;
+  declare private showMovePasswordDialog_: boolean;
 
   private getElementClass_(): string {
     return this.first ? 'flex-centered' : 'flex-centered hr';
@@ -82,6 +87,10 @@ export class PasswordListItemElement extends PasswordListItemElementBase {
   }
 
   private onRowClick_() {
+    if (this.showMovePasswordDialog_) {
+      return;
+    }
+
     const ids = this.item.entries.map(entry => entry.id);
     PasswordManagerImpl.getInstance()
         .requestCredentialsDetails(ids)
@@ -115,16 +124,22 @@ export class PasswordListItemElement extends PasswordListItemElementBase {
           await PluralStringProxyImpl.getInstance().getPluralString(
               'numberOfAccounts', this.item.entries.length);
     }
-    this.tooltipText_ =
-        await PluralStringProxyImpl.getInstance().getPluralString(
-            'deviceOnlyPasswordsIconTooltip',
-            this.getNumberOfCredentialsOnDevice_());
-    if (this.shouldShowDeviceOnlyCredentialsIcon_()) {
+
+    if (this.hasUploadablePasswords_()) {
       this.deviceOnlyCredentialsAccessibilityLabelText_ =
           await PluralStringProxyImpl.getInstance()
               .getPluralString(
                   'deviceOnlyListItemAriaLabel', this.item.entries.length)
               .then(label => label.replace('$1', this.item.name));
+
+      this.tooltipText_ =
+          await PluralStringProxyImpl.getInstance()
+              .getPluralString(
+                  'movePasswordToAccountIconTooltip',
+                  this.getCredentialsOnDevice_().length)
+              .then((label: string) => label.replace('$1', this.item.name));
+    } else {
+      this.showMovePasswordDialog_ = false;
     }
   }
 
@@ -161,24 +176,41 @@ export class PasswordListItemElement extends PasswordListItemElementBase {
     return this.item.name;
   }
 
-  private getNumberOfCredentialsOnDevice_(): number {
-    return this.item.entries
-        .filter(
-            entry => entry.storedIn ===
-                chrome.passwordsPrivate.PasswordStoreSet.DEVICE)
-        .length;
+  private getCredentialsOnDevice_(): chrome.passwordsPrivate.PasswordUiEntry[] {
+    return this.item.entries.filter(
+        entry =>
+            entry.storedIn === chrome.passwordsPrivate.PasswordStoreSet.DEVICE);
   }
 
-  private shouldShowDeviceOnlyCredentialsIcon_(): boolean {
+  private hasOnlyOneDeviceCredential_(): boolean {
+    return this.getCredentialsOnDevice_().length === this.item.entries.length &&
+        this.getCredentialsOnDevice_().length === 1;
+  }
+
+  private hasUploadablePasswords_(): boolean {
     return this.isAccountStoreUser &&
-        (this.getNumberOfCredentialsOnDevice_() > 0);
+        (this.getCredentialsOnDevice_().length > 0);
+  }
+
+  private onMovePasswordDialogClose_(): void {
+    this.showMovePasswordDialog_ = false;
+  }
+
+  private onUploadButtonClick_(): void {
+    this.showMovePasswordDialog_ = true;
   }
 
   private getAriaLabel_(): string {
-    if (this.shouldShowDeviceOnlyCredentialsIcon_()) {
+    if (this.hasUploadablePasswords_()) {
       return this.deviceOnlyCredentialsAccessibilityLabelText_;
     }
-    return this.i18n('viewPasswordAriaDescription', this.item.name);
+    return this.i18n('viewPasswordAriaDescription', htmlEscape(this.item.name));
+  }
+
+  protected getCloudUploadIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'passwords-icon:cloud-upload' :
+        'passwords-icon:password-cloud-upload-old';
   }
 }
 

@@ -83,6 +83,7 @@ Status AesAlgorithm::ImportKey(blink::WebCryptoKeyFormat format,
                                blink::WebCryptoKey* key) const {
   switch (format) {
     case blink::kWebCryptoKeyFormatRaw:
+    case blink::kWebCryptoKeyFormatRawSecret:
       return ImportKeyRaw(key_data, algorithm, extractable, usages, key);
     case blink::kWebCryptoKeyFormatJwk:
       return ImportKeyJwk(key_data, algorithm, extractable, usages, key);
@@ -96,6 +97,7 @@ Status AesAlgorithm::ExportKey(blink::WebCryptoKeyFormat format,
                                std::vector<uint8_t>* buffer) const {
   switch (format) {
     case blink::kWebCryptoKeyFormatRaw:
+    case blink::kWebCryptoKeyFormatRawSecret:
       return ExportKeyRaw(key, buffer);
     case blink::kWebCryptoKeyFormatJwk:
       return ExportKeyJwk(key, buffer);
@@ -186,6 +188,22 @@ Status AesAlgorithm::ExportKeyJwk(const blink::WebCryptoKey& key,
                     key.Extractable(), key.Usages(), buffer);
 
   return Status::Success();
+}
+
+bool AesAlgorithm::Supports(blink::WebCryptoOperation op,
+                            const blink::WebCryptoAlgorithm& algorithm,
+                            std::optional<unsigned int> length_bits) const {
+  if (op == blink::kWebCryptoOperationGenerateKey ||
+      op == blink::kWebCryptoOperationGetKeyLength) {
+    uint16_t keylen_bits;
+    if (op == blink::kWebCryptoOperationGenerateKey) {
+      keylen_bits = algorithm.AesKeyGenParams()->LengthBits();
+    } else {
+      keylen_bits = algorithm.AesDerivedKeyParams()->LengthBits();
+    }
+    return keylen_bits == 128 || keylen_bits == 256;
+  }
+  return true;
 }
 
 Status AesAlgorithm::DeserializeKeyForClone(

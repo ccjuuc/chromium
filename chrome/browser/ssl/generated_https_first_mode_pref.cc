@@ -18,6 +18,8 @@
 #include "chrome/common/extensions/api/settings_private.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
+#include "components/safe_browsing/core/common/features.h"
+#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 
 namespace settings_api = extensions::api::settings_private;
 
@@ -37,6 +39,15 @@ GeneratedHttpsFirstModePref::GeneratedHttpsFirstModePref(Profile* profile)
       base::BindRepeating(
           &GeneratedHttpsFirstModePref::OnSourcePreferencesChanged,
           base::Unretained(this)));
+  user_prefs_registrar_.Add(
+      prefs::kSafeBrowsingEnhanced,
+      base::BindRepeating(
+          &GeneratedHttpsFirstModePref::OnSourcePreferencesChanged,
+          base::Unretained(this)));
+  user_prefs_registrar_.Add(
+      prefs::kSecuritySettingsBundle,
+      base::BindRepeating(&GeneratedHttpsFirstModePref::OnSettingsBundleChanged,
+                          base::Unretained(this)));
 
   // Track Advanced Protection status.
   if (base::FeatureList::IsEnabled(
@@ -75,6 +86,13 @@ GeneratedHttpsFirstModePref::SetPref(const base::Value* value) {
   }
 
   auto selection = static_cast<HttpsFirstModeSetting>(value->GetInt());
+
+  // If the user is under Advanced Protection, they cannot change the setting.
+  if (safe_browsing::AdvancedProtectionStatusManagerFactory::GetForProfile(
+          profile_)
+          ->IsUnderAdvancedProtection()) {
+    return extensions::settings_private::SetPrefResult::PREF_NOT_MODIFIABLE;
+  }
 
   // If the enterprise policy is enforced, then the kHttpsOnlyModeEnabled pref
   // will not be modifiable (for all policy values).
@@ -128,6 +146,9 @@ settings_api::PrefObject GeneratedHttpsFirstModePref::GetPrefObject() const {
   }
 
   pref_object.user_control_disabled = is_advanced_protection_enabled;
+  if (is_advanced_protection_enabled) {
+    pref_object.enforcement = settings_api::Enforcement::kEnforced;
+  }
 
   if (IsBalancedModeAvailable()) {
     ApplyManagementState(*profile_, pref_object);
@@ -212,5 +233,27 @@ void GeneratedHttpsFirstModePref::ApplyManagementState(
       pref_object.recommended_value =
           base::Value(static_cast<int>(HttpsFirstModeSetting::kDisabled));
     }
+  }
+}
+
+void GeneratedHttpsFirstModePref::OnSettingsBundleChanged() {
+  if (!base::FeatureList::IsEnabled(
+          safe_browsing::kBundledSecuritySettingsAskBeforeHttp)) {
+    return;
+  }
+  auto bundle = safe_browsing::GetSecurityBundleSetting(*profile_->GetPrefs());
+  switch (bundle) {
+    case safe_browsing::SecuritySettingsBundleSetting::STANDARD:
+      SetPref(std::make_unique<base::Value>(
+                  static_cast<int>(HttpsFirstModeSetting::kDisabled))
+                  .get());
+      break;
+    case safe_browsing::SecuritySettingsBundleSetting::ENHANCED:
+      SetPref(std::make_unique<base::Value>(
+                  static_cast<int>(IsBalancedModeAvailable()
+                                       ? HttpsFirstModeSetting::kEnabledBalanced
+                                       : HttpsFirstModeSetting::kDisabled))
+                  .get());
+      break;
   }
 }

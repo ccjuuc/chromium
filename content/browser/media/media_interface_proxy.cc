@@ -6,6 +6,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 
@@ -13,16 +14,19 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
 #include "build/build_config.h"
 #include "content/browser/media/cdm_storage_common.h"
+#include "content/browser/media/media_web_contents_observer.h"
 #include "content/browser/renderer_host/render_frame_host_delegate.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/public/browser/media_service.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/service_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -34,6 +38,7 @@
 #include "media/mojo/buildflags.h"
 #include "media/mojo/mojom/frame_interface_factory.mojom.h"
 #include "media/mojo/mojom/media_service.mojom.h"
+#include "media/mojo/mojom/renderer_extensions.mojom.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
 
@@ -61,9 +66,14 @@
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(ENABLE_LIBRARY_CDMS)
 
 #if BUILDFLAG(IS_WIN)
+#include "base/win/windows_handle_util.h"
+#include "content/browser/media/content_protection_window.h"
 #include "content/browser/media/dcomp_surface_registry_broker.h"
+#include "content/public/browser/render_widget_host_view.h"
+#include "media/base/media_switches.h"
 #include "media/base/win/mf_feature_checks.h"
 #include "media/cdm/win/media_foundation_cdm.h"
+#include "ui/display/screen.h"
 #endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(IS_ANDROID)
@@ -203,6 +213,60 @@ class FrameInterfaceFactoryImpl : public media::mojom::FrameInterfaceFactory,
         render_frame_host_->GetLastCommittedOrigin());
   }
 
+#if BUILDFLAG(IS_WIN)
+  // Returns the frame's screen rect in physical pixels.
+  // Used for Media Foundation GPU adapter selection.
+  void GetFrameScreenRect(GetFrameScreenRectCallback callback) override {
+    gfx::Rect frame_rect;
+
+    // Use the outermost main frame's view so that things like cross-origin
+    // iframes resolve to the top-level window, whose view has a native window
+    // suitable for DIP-to-physical-pixel conversion. The outermost main frame's
+    // view should always have a native window; a few scenarios where this could
+    // fail are during shutdown or in headless/test environments.
+    auto* main_rfh = render_frame_host_->GetOutermostMainFrame();
+    if (auto* view = main_rfh->GetView()) {
+      // GetViewBounds() returns DIP (Device Independent Pixels).
+      // Convert to physical screen pixels for Windows APIs like
+      // CreateWindowEx.
+      frame_rect = view->GetViewBounds();
+      if (auto* native_view = view->GetNativeView()) {
+        frame_rect = display::Screen::Get()->DIPToScreenRectInWindow(
+            native_view, frame_rect);
+      }
+    }
+    std::move(callback).Run(frame_rect);
+  }
+
+  // Returns a browser-owned HWND parented to the frame's top-level browser
+  // window, transmitted as `uint32`. The HWND lives in
+  // `content_protection_window_` and is created lazily on the first call
+  // so frames that never use Media Foundation hardware DRM pay no cost.
+  // Returns 0 if the feature flag is disabled or if the HWND
+  // cannot be created (headless mode, frame torn down, etc.).
+  void GetContentProtectionWindow(
+      GetContentProtectionWindowCallback callback) override {
+    if (!base::FeatureList::IsEnabled(
+            media::kMediaFoundationMultiGpuAdapterSelection)) {
+      std::move(callback).Run(0u);
+      return;
+    }
+    if (!content_protection_window_.has_value()) {
+      ContentProtectionWindowOrStatus result =
+          ContentProtectionWindow::Create(render_frame_host_);
+      base::UmaHistogramEnumeration(
+          "Media.EME.ContentProtectionWindow.CreateStatus",
+          result.has_value() ? ContentProtectionWindowStatus::kSuccess
+                             : result.error());
+      content_protection_window_ =
+          result.has_value() ? std::move(result).value() : nullptr;
+    }
+    auto* window = content_protection_window_->get();
+    std::move(callback).Run(
+        base::win::HandleToUint32(window ? window->hwnd() : nullptr));
+  }
+#endif  // BUILDFLAG(IS_WIN)
+
   void BindEmbedderReceiver(mojo::GenericPendingReceiver receiver) override {
     GetContentClient()->browser()->BindMediaServiceReceiver(
         render_frame_host_, std::move(receiver));
@@ -222,8 +286,58 @@ class FrameInterfaceFactoryImpl : public media::mojom::FrameInterfaceFactory,
 
 #if BUILDFLAG(IS_WIN)
   mojo::RemoteSet<media::mojom::MuteStateObserver> site_mute_observers_;
+
+  // `has_value()` indicates `ContentProtectionWindow::Create()` has been
+  // attempted. The inner pointer is null if creation failed. This prevents
+  // retrying creation (and re-recording the UMA) on every call.
+  std::optional<std::unique_ptr<ContentProtectionWindow>>
+      content_protection_window_;
 #endif  // BUILDFLAG(IS_WIN)
 };
+
+#if BUILDFLAG(IS_WIN)
+// Proxies the MediaFoundationRendererExtension to observe the lifetime of the
+// MediaFoundationRenderer in the utility process. When either the renderer
+// or the utility process disconnects, the audibility bypass grant is revoked.
+class MediaFoundationRendererExtensionProxy
+    : public media::mojom::MediaFoundationRendererExtension {
+ public:
+  MediaFoundationRendererExtensionProxy(
+      mojo::PendingRemote<media::mojom::MediaFoundationRendererExtension>
+          target_remote,
+      AudibilityBypassTracker::ScopedGrant grant)
+      : target_remote_(std::move(target_remote)), grant_(std::move(grant)) {
+    target_remote_.set_disconnect_handler(base::BindOnce(
+        &MediaFoundationRendererExtensionProxy::OnTargetDisconnect,
+        base::Unretained(this)));
+  }
+
+  ~MediaFoundationRendererExtensionProxy() override = default;
+
+  // media::mojom::MediaFoundationRendererExtension implementation.
+  void GetDCOMPSurface(GetDCOMPSurfaceCallback callback) override {
+    target_remote_->GetDCOMPSurface(std::move(callback));
+  }
+  void SetVideoStreamEnabled(bool enabled) override {
+    target_remote_->SetVideoStreamEnabled(enabled);
+  }
+  void SetOutputRect(const gfx::Rect& rect,
+                     SetOutputRectCallback callback) override {
+    target_remote_->SetOutputRect(rect, std::move(callback));
+  }
+
+ private:
+  void OnTargetDisconnect() {
+    // The utility process disconnected (MediaFoundationRenderer destroyed).
+    // Revoke the grant by resetting it.
+    grant_.RunAndReset();
+    target_remote_.reset();
+  }
+
+  mojo::Remote<media::mojom::MediaFoundationRendererExtension> target_remote_;
+  AudibilityBypassTracker::ScopedGrant grant_;
+};
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace
 
@@ -370,9 +484,24 @@ void MediaInterfaceProxy::CreateMediaFoundationRenderer(
   // with a CDM path in CreateCdm().
   auto* factory = GetMediaFoundationServiceInterfaceFactory(base::FilePath());
   if (factory) {
+    // `MediaFoundationRenderer` bypasses the browser's audio service.
+    // Authorize the frame for audibility bypass claims.
+    AudibilityBypassTracker::ScopedGrant grant =
+        AudibilityBypassTracker::AddGrant(&render_frame_host());
+
+    mojo::PendingRemote<media::mojom::MediaFoundationRendererExtension>
+        utility_extension_remote;
+    auto utility_extension_receiver =
+        utility_extension_remote.InitWithNewPipeAndPassReceiver();
+
+    mojo::MakeSelfOwnedReceiver(
+        std::make_unique<MediaFoundationRendererExtensionProxy>(
+            std::move(utility_extension_remote), std::move(grant)),
+        std::move(renderer_extension_receiver));
+
     factory->CreateMediaFoundationRenderer(
         std::move(media_log_remote), std::move(receiver),
-        std::move(renderer_extension_receiver));
+        std::move(utility_extension_receiver));
   }
 }
 #endif  // BUILDFLAG(IS_WIN)
@@ -497,7 +626,11 @@ void MediaInterfaceProxy::ConnectToMediaFoundationService(
   // Passing an empty CdmType since it is not needed in this scenario.
   auto& mf_service = GetMediaFoundationService(
       media::CdmType(), render_frame_host().GetBrowserContext(),
-      render_frame_host().GetSiteInstance()->GetSiteURL(), cdm_path);
+      render_frame_host()
+          .GetSiteInstance()
+          ->GetSecurityPrincipal()
+          .GetDeprecatedSiteURL(),
+      cdm_path);
 
   // Passing an empty CdmType as MediaFoundation-based CDMs don't use CdmStorage
   // currently.
@@ -561,7 +694,10 @@ media::mojom::CdmFactory* MediaInterfaceProxy::ConnectToCdmService(
   DCHECK(!cdm_factory_map_.count(cdm_info.type));
 
   auto* browser_context = render_frame_host().GetBrowserContext();
-  auto& site = render_frame_host().GetSiteInstance()->GetSiteURL();
+  auto& site = render_frame_host()
+                   .GetSiteInstance()
+                   ->GetSecurityPrincipal()
+                   .GetDeprecatedSiteURL();
   auto& cdm_service = GetCdmService(browser_context, site, cdm_info);
 
   mojo::Remote<media::mojom::CdmFactory> cdm_factory_remote;

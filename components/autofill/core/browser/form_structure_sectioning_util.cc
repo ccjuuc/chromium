@@ -4,13 +4,20 @@
 
 #include "components/autofill/core/browser/form_structure_sectioning_util.h"
 
-#include <algorithm>
-#include <iterator>
-#include <memory>
-#include <utility>
+#include <stddef.h>
 
+#include <algorithm>
+#include <memory>
+
+#include "base/check.h"
+#include "base/compiler_specific.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/span.h"
 #include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/common/dense_set.h"
+#include "components/autofill/core/common/unique_ids.h"
 
 namespace autofill {
 
@@ -68,7 +75,7 @@ bool ConsecutiveSimilarFieldType(const AutofillType& current_type,
 // common in custom select elements. To confine the impact of hidden <select>
 // elements, this exception only applies if their type is actually autofillable.
 bool IsSectionable(const AutofillField& field) {
-  return field.IsFocusable() ||
+  return field.is_focusable() ||
          (field.IsSelectElement() && field.IsFieldFillable());
 }
 
@@ -83,8 +90,9 @@ void AssignCreditCardSections(
                    FieldTypeGroup::kCreditCard) &&
                !field->section();
       });
-  if (first_cc_field == fields.end())
+  if (first_cc_field == fields.end()) {
     return;
+  }
   Section cc_section =
       Section::FromFieldIdentifier(**first_cc_field, frame_token_ids);
   for (const auto& field : fields) {
@@ -102,8 +110,9 @@ void AssignAutocompleteSections(
       Section autocomplete_section = Section::FromAutocomplete(
           {.section = field->parsed_autocomplete()->section,
            .mode = field->parsed_autocomplete()->mode});
-      if (autocomplete_section)
+      if (autocomplete_section) {
         field->set_section(autocomplete_section);
+      }
     }
   }
 }
@@ -111,8 +120,9 @@ void AssignAutocompleteSections(
 void AssignFieldIdentifierSections(
     base::span<const std::unique_ptr<AutofillField>> section,
     base::flat_map<LocalFrameToken, size_t>& frame_token_ids) {
-  if (section.empty())
+  if (section.empty()) {
     return;
+  }
   Section s = Section::FromFieldIdentifier(**section.begin(), frame_token_ids);
   for (const auto& field : section) {
     if (!field->section() && IsSectionable(*field)) {
@@ -161,7 +171,7 @@ base::span<const std::unique_ptr<AutofillField>>::iterator
 FindBeginOfNextSection(
     base::span<const std::unique_ptr<AutofillField>>::iterator begin,
     base::span<const std::unique_ptr<AutofillField>>::iterator end) {
-  while (begin != end && ((*begin)->section() || !(*begin)->IsFocusable())) {
+  while (begin != end && ((*begin)->section() || !(*begin)->is_focusable())) {
     begin++;
   }
   return begin;
@@ -178,8 +188,9 @@ base::span<const std::unique_ptr<AutofillField>>::iterator FindEndOfNextSection(
   const AutofillField* prev_field = nullptr;
   for (auto it = begin; it != end; it++) {
     const AutofillField& field = **it;
-    if (!IsSectionable(field))
+    if (!IsSectionable(field)) {
       continue;
+    }
     if (prev_field &&
         !BelongsToCurrentSection(seen_types, field, *prev_field)) {
       return it;
@@ -198,8 +209,9 @@ void AssignSections(base::span<const std::unique_ptr<AutofillField>> fields) {
   // It is important to reset the sections before running sectioning again for
   // consistent cache updates (see AutofillManager::UpdateFormCache() for more
   // details).
-  for (const auto& field : fields)
+  for (const auto& field : fields) {
     field->set_section(Section());
+  }
 
   // Create a unique identifier based on the field for the section.
   base::flat_map<LocalFrameToken, size_t> frame_token_ids;
@@ -213,8 +225,11 @@ void AssignSections(base::span<const std::unique_ptr<AutofillField>> fields) {
     auto end = FindEndOfNextSection(begin, fields.end());
     DCHECK(begin != end || end == fields.end());
     // SAFETY: The iterators are from the same container.
-    AssignFieldIdentifierSections(UNSAFE_BUFFERS({begin, end}),
-                                  frame_token_ids);
+    AssignFieldIdentifierSections(
+        fields.subspan(
+            static_cast<size_t>(std::distance(fields.begin(), begin)),
+            static_cast<size_t>(std::distance(begin, end))),
+        frame_token_ids);
     begin = end;
   }
 }

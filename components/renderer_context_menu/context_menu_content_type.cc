@@ -104,6 +104,9 @@ bool ContextMenuContentType::SupportsGroupInternal(int group) {
       // Image menu items imply glic share image item.
       return SupportsGroupInternal(ITEM_GROUP_MEDIA_IMAGE);
 
+    case ITEM_GROUP_GLIC:
+      return true;
+
     case ITEM_GROUP_MEDIA_VIDEO:
       return params_.media_type == ContextMenuDataMediaType::kVideo;
 
@@ -159,7 +162,8 @@ bool ContextMenuContentType::SupportsGroupInternal(int group) {
 #endif
 
     case ITEM_GROUP_AUTOFILL:
-      return params_.form_control_type.has_value();
+      return params_.form_control_type.has_value() ||
+             params_.is_content_editable_for_autofill;
 
     default:
       NOTREACHED();

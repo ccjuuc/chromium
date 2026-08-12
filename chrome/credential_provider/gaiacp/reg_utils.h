@@ -23,6 +23,9 @@ extern const wchar_t kGcpUsersRootKeyName[];
 // providers.
 extern const wchar_t kWinlogonUserListRegKey[];
 
+// Enables security key support for authentication.
+extern const wchar_t kRegEnableSecurityKeySupport[];
+
 // Registry key used to determine a user's default credential provider tile.
 extern const wchar_t kLogonUiUserTileRegKey[];
 
@@ -43,6 +46,13 @@ extern const wchar_t kRegLogFilePath[];
 // If logging to a file, indicates whether the data should be appended to the
 // existing file or not.
 extern const wchar_t kRegLogFileAppend[];
+
+// Enables setting the log file and path to pass to Chrome on the command
+// line.
+extern const wchar_t kRegChromeLogFilePath[];
+
+// Sets chrome logs to verbose mode.
+extern const wchar_t kRegEnableChromeVerboseLogging[];
 
 // Determines if crash reporting is initialized for credential provider DLL.
 extern const wchar_t kRegInitializeCrashReporting[];
@@ -81,6 +91,9 @@ extern const wchar_t kRegDeveloperMode[];
 // Enables updating credentials on login UI when the enforcement of any GCPW
 // associated account changes.
 extern const wchar_t kRegUpdateCredentialsOnChange[];
+
+// Enables modal dialogs for GCPW.
+extern const wchar_t kRegEnableGcpwModalDialog[];
 
 // Registry key that indicates account name for an unassociated Windows account
 // should be in shorter form.
@@ -235,13 +248,13 @@ void GetChildrenAtPath(const wchar_t* path,
 
 // Gets a specific account picture registry key in HKEY_LOCAL_MACHINE
 HRESULT GetAccountPictureRegString(const std::wstring& user_sid,
-                                   int image_size,
+                                   size_t image_size,
                                    wchar_t* value,
                                    ULONG* length);
 
 // Sets a specific account picture registry key in HKEY_LOCAL_MACHINE
 HRESULT SetAccountPictureRegString(const std::wstring& user_sid,
-                                   int image_size,
+                                   size_t image_size,
                                    const std::wstring& value);
 
 // Retrieves an identifier that is stored under

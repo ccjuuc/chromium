@@ -76,10 +76,12 @@ void InputTypeView::DispatchSimulatedClickIfActive(KeyboardEvent& event) const {
   event.SetDefaultHandled();
 }
 
-void InputTypeView::AccessKeyAction(SimulatedClickCreationScope) {
+void InputTypeView::AccessKeyAction(
+    SimulatedClickCreationScope creation_scope) {
   GetElement().Focus(FocusParams(
       SelectionBehaviorOnFocus::kReset, mojom::blink::FocusType::kNone, nullptr,
       FocusOptions::Create(), FocusTrigger::kUserGesture));
+  GetElement().DispatchSimulatedClick(nullptr, creation_scope);
 }
 
 bool InputTypeView::ShouldSubmitImplicitly(const Event& event) {
@@ -95,7 +97,7 @@ HTMLFormElement* InputTypeView::FormForSubmission() const {
 LayoutObject* InputTypeView::CreateLayoutObject(
     const ComputedStyle& style) const {
   // Avoid LayoutInline, which can be split to multiple lines.
-  if (style.IsDisplayInlineType() && !style.IsDisplayReplacedType()) {
+  if (style.IsNonAtomicInlineDisplayType()) {
     return MakeGarbageCollected<LayoutBlockFlow>(&GetElement());
   }
   return LayoutObject::CreateObject(&GetElement(), style);
@@ -198,7 +200,7 @@ void InputTypeView::UpdateView() {}
 
 void InputTypeView::MultipleAttributeChanged() {}
 
-void InputTypeView::DisabledAttributeChanged() {}
+void InputTypeView::DisabledAttributeChanged(DisabledChangedReason) {}
 
 void InputTypeView::ReadonlyAttributeChanged() {}
 

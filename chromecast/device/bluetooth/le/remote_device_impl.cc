@@ -486,6 +486,8 @@ void RemoteDeviceImpl::OnServicesRemoved(uint16_t start_handle,
     if (it->second->handle() >= start_handle &&
         it->second->handle() <= end_handle) {
       for (auto& characteristic : it->second->GetCharacteristics()) {
+        static_cast<RemoteCharacteristicImpl*>(characteristic.get())
+            ->Invalidate();
         handle_to_characteristic_.erase(characteristic->handle());
       }
       it = uuid_to_service_.erase(it);
@@ -499,6 +501,14 @@ void RemoteDeviceImpl::OnServicesAdded(
     const std::vector<bluetooth_v2_shlib::Gatt::Service>& services) {
   DCHECK(io_task_runner_->BelongsToCurrentThread());
   for (const auto& service : services) {
+    auto it = uuid_to_service_.find(service.uuid);
+    if (it != uuid_to_service_.end()) {
+      for (auto& characteristic : it->second->GetCharacteristics()) {
+        static_cast<RemoteCharacteristicImpl*>(characteristic.get())
+            ->Invalidate();
+        handle_to_characteristic_.erase(characteristic->handle());
+      }
+    }
     uuid_to_service_[service.uuid] = new RemoteServiceImpl(
         this, gatt_client_manager_, service, io_task_runner_);
   }

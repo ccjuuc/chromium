@@ -10,6 +10,7 @@
 #include <bitset>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/notreached.h"
@@ -194,7 +195,7 @@ void FillFilmGrainInfo(VAFilmGrainStructAV1& va_film_grain_info,
 }
 
 void FillGlobalMotionInfo(
-    VAWarpedMotionParamsAV1 va_warped_motion[7],
+    base::span<VAWarpedMotionParamsAV1, 7> va_warped_motion,
     const std::array<libgav1::GlobalMotion, libgav1::kNumReferenceFrameTypes>&
         global_motion) {
   // global_motion[0] (for kReferenceFrameIntra) is not used.
@@ -205,30 +206,29 @@ void FillGlobalMotionInfo(
     auto gm = global_motion[i + 1];
     switch (gm.type) {
       case libgav1::kGlobalMotionTransformationTypeIdentity:
-        UNSAFE_TODO(va_warped_motion[i]).wmtype = VAAV1TransformationIdentity;
+        va_warped_motion[i].wmtype = VAAV1TransformationIdentity;
         break;
       case libgav1::kGlobalMotionTransformationTypeTranslation:
-        UNSAFE_TODO(va_warped_motion[i]).wmtype =
-            VAAV1TransformationTranslation;
+        va_warped_motion[i].wmtype = VAAV1TransformationTranslation;
         break;
       case libgav1::kGlobalMotionTransformationTypeRotZoom:
-        UNSAFE_TODO(va_warped_motion[i]).wmtype = VAAV1TransformationRotzoom;
+        va_warped_motion[i].wmtype = VAAV1TransformationRotzoom;
         break;
       case libgav1::kGlobalMotionTransformationTypeAffine:
-        UNSAFE_TODO(va_warped_motion[i]).wmtype = VAAV1TransformationAffine;
+        va_warped_motion[i].wmtype = VAAV1TransformationAffine;
         break;
       default:
         NOTREACHED() << "Invalid global motion transformation type, "
-                     << UNSAFE_TODO(va_warped_motion[i]).wmtype;
+                     << va_warped_motion[i].wmtype;
     }
     static_assert(ARRAY_SIZE(va_warped_motion[i].wmmat) == 8 &&
                       ARRAY_SIZE(gm.params) == 6,
                   "Invalid size of warp motion parameters");
     for (size_t j = 0; j < 6; ++j)
       UNSAFE_TODO(va_warped_motion[i].wmmat[j]) = UNSAFE_TODO(gm.params[j]);
-    UNSAFE_TODO(va_warped_motion[i]).wmmat[6] = 0;
-    UNSAFE_TODO(va_warped_motion[i]).wmmat[7] = 0;
-    UNSAFE_TODO(va_warped_motion[i]).invalid = !libgav1::SetupShear(&gm);
+    va_warped_motion[i].wmmat[6] = 0;
+    va_warped_motion[i].wmmat[7] = 0;
+    va_warped_motion[i].invalid = !libgav1::SetupShear(&gm);
   }
 }
 
@@ -582,8 +582,8 @@ Av1Decoder::~Av1Decoder() {
 Av1Decoder::ParsingResult Av1Decoder::ReadNextFrame(
     libgav1::RefCountedBufferPtr& current_frame) {
   if (!obu_parser_ || !obu_parser_->HasData()) {
-    if (!ivf_parser_->ParseNextFrame(&ivf_frame_header_,
-                                     &ivf_frame_data_.AsEphemeralRawAddr())) {
+    ivf_frame_data_ = ivf_parser_->ParseNextFrame(&ivf_frame_header_);
+    if (ivf_frame_data_.empty()) {
       return ParsingResult::kEOStream;
     }
 
@@ -591,8 +591,8 @@ Av1Decoder::ParsingResult Av1Decoder::ReadNextFrame(
     // has no "replace the current buffer with a new buffer of a different size"
     // method; we must make a new parser.
     obu_parser_ = base::WrapUnique(new (std::nothrow) libgav1::ObuParser(
-        ivf_frame_data_, ivf_frame_header_.frame_size, /*operating_point=*/0,
-        buffer_pool_.get(), state_.get()));
+        ivf_frame_data_.data(), ivf_frame_data_.size(),
+        /*operating_point=*/0, buffer_pool_.get(), state_.get()));
     if (current_sequence_header_) {
       obu_parser_->set_sequence_header(*current_sequence_header_);
     }
@@ -896,10 +896,7 @@ VideoDecoder::Result Av1Decoder::DecodeNextFrame() {
   // of the row and column for a given flattened index.
   const size_t tile_columns = current_frame_header.tile_info.tile_columns;
   const bool slice_parameters_success = FillAV1SliceParameters(
-      obu_parser_->tile_buffers(), tile_columns,
-      UNSAFE_TODO(
-          base::span(ivf_frame_data_.get(), ivf_frame_header_.frame_size)),
-      slice_params);
+      obu_parser_->tile_buffers(), tile_columns, ivf_frame_data_, slice_params);
   LOG_ASSERT(slice_parameters_success)
       << "Failed to fill slice parameters for current frame.";
 
@@ -913,9 +910,10 @@ VideoDecoder::Result Av1Decoder::DecodeNextFrame() {
   }
 
   // Set up the slice data buffer.
-  res = vaCreateBuffer(va_device_->display(), va_context_->id(),
-                       VASliceDataBufferType, ivf_frame_header_.frame_size, 1u,
-                       const_cast<uint8_t*>(ivf_frame_data_.get()), &buffer_id);
+  res =
+      vaCreateBuffer(va_device_->display(), va_context_->id(),
+                     VASliceDataBufferType, ivf_frame_data_.size(), 1u,
+                     const_cast<uint8_t*>(ivf_frame_data_.data()), &buffer_id);
   VA_LOG_ASSERT(res, "vaCreateBuffer");
   buffers.push_back(buffer_id);
 

@@ -14,6 +14,7 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/logging.h"
 #include "base/run_loop.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -232,14 +233,9 @@ void WebTestBrowserMainRunner::Initialize() {
     command_line.AppendSwitch(switches::kEnableBlinkTestFeatures);
   }
 
-  // With display compositor pixel dumps, we ensure that we complete all
-  // stages of compositing before draw. We also can't have checker imaging,
+  // With display compositor pixel dumps, we can't have checker imaging,
   // since it's incompatible with single threaded compositor and display
   // compositor pixel dumps.
-  //
-  // TODO(crbug.com/41420287) Add kRunAllCompositorStagesBeforeDraw back here
-  // once you figure out why it causes so much web test flakiness.
-  // command_line.AppendSwitch(switches::kRunAllCompositorStagesBeforeDraw);
   command_line.AppendSwitch(switches::kDisableCheckerImaging);
 
   command_line.AppendSwitch(switches::kMuteAudio);
@@ -312,9 +308,6 @@ void WebTestBrowserMainRunner::Initialize() {
 
   // Always run with fake FedCM UI.
   command_line.AppendSwitch(switches::kUseFakeUIForFedCM);
-
-  // Always run with fake digital identity credential UI.
-  command_line.AppendSwitch(switches::kUseFakeUIForDigitalIdentity);
 
   // Disable the backgrounding of renderers to make running tests faster.
   command_line.AppendSwitch(switches::kDisableRendererBackgrounding);

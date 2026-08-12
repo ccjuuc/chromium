@@ -16,6 +16,7 @@
 #include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
 
 namespace ash::settings {
 
@@ -81,7 +82,7 @@ void StylusHandler::OnDeviceListsComplete() {
 void StylusHandler::UpdateNoteTakingApps() {
   bool waiting_for_android = false;
   note_taking_app_ids_.clear();
-  base::Value::List apps_list;
+  base::ListValue apps_list;
 
   NoteTakingHelper* helper = NoteTakingHelper::Get();
   if (helper->play_store_enabled() && !helper->android_apps_received()) {
@@ -92,7 +93,7 @@ void StylusHandler::UpdateNoteTakingApps() {
     std::vector<NoteTakingAppInfo> available_apps =
         helper->GetAvailableApps(Profile::FromWebUI(web_ui()));
     for (const NoteTakingAppInfo& info : available_apps) {
-      apps_list.Append(base::Value::Dict()
+      apps_list.Append(base::DictValue()
                            .Set(kAppNameKey, info.name)
                            .Set(kAppIdKey, info.app_id)
                            .Set(kAppPreferredKey, info.preferred));
@@ -105,13 +106,13 @@ void StylusHandler::UpdateNoteTakingApps() {
                     base::Value(waiting_for_android));
 }
 
-void StylusHandler::HandleRequestApps(const base::Value::List& unused_args) {
+void StylusHandler::HandleRequestApps(const base::ListValue& unused_args) {
   AllowJavascript();
   UpdateNoteTakingApps();
 }
 
 void StylusHandler::HandleSetPreferredNoteTakingApp(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   const std::string& app_id = args[0].GetString();
 
   // Sanity check: make sure that the ID we got back from WebUI is in the
@@ -125,7 +126,7 @@ void StylusHandler::HandleSetPreferredNoteTakingApp(
                                            app_id);
 }
 
-void StylusHandler::HandleInitialize(const base::Value::List& args) {
+void StylusHandler::HandleInitialize(const base::ListValue& args) {
   AllowJavascript();
   if (ui::DeviceDataManager::GetInstance()->AreDeviceListsComplete()) {
     SendHasStylus();
@@ -138,7 +139,7 @@ void StylusHandler::SendHasStylus() {
                     base::Value(stylus_utils::HasStylusInput()));
 }
 
-void StylusHandler::HandleShowPlayStoreApps(const base::Value::List& args) {
+void StylusHandler::HandleShowPlayStoreApps(const base::ListValue& args) {
   const std::string& apps_url = !args.empty() ? args[0].GetString() : "";
   Profile* profile = Profile::FromWebUI(web_ui());
   if (!arc::IsArcAllowedForProfile(profile)) {

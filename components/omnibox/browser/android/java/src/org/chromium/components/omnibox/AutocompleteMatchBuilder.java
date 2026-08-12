@@ -4,13 +4,13 @@
 
 package org.chromium.components.omnibox;
 
-import androidx.annotation.NonNull;
 import androidx.collection.ArraySet;
 
 import org.chromium.chrome.browser.omnibox.MatchClassificationStyle;
 import org.chromium.components.omnibox.AnswerTypeProto.AnswerType;
 import org.chromium.components.omnibox.SuggestTemplateInfoProto.SuggestTemplateInfo;
 import org.chromium.components.omnibox.action.OmniboxAction;
+import org.chromium.components.search_engines.StarterPackId;
 import org.chromium.url.GURL;
 import org.chromium.url.JUnitTestGURLs;
 
@@ -27,6 +27,7 @@ public class AutocompleteMatchBuilder {
     private @OmniboxSuggestionType int mType;
     private Set<Integer> mSubtypes;
     private boolean mIsSearchType;
+    private @OmniboxSuggestionKind int mSuggestionKind;
     private int mIconType;
     private String mDisplayText;
     private List<AutocompleteMatch.MatchClassification> mDisplayTextClassifications;
@@ -40,17 +41,21 @@ public class AutocompleteMatchBuilder {
     private String mImageDominantColor;
     private int mTransition;
     private boolean mIsDeletable;
+    private @StarterPackId int mStarterPackId;
     private String mPostContentType;
     private byte[] mPostData;
     private int mGroupId;
     private byte[] mClipboardImageData;
     private boolean mHasTabMatch;
+    private int mAndroidTabId;
     private List<OmniboxAction> mActions;
     private boolean mAllowedToBeDefaultMatch;
     private String mInlineAutocompletion;
     private String mAdditionalText;
     private String mTabGroupUuid;
+    private String mAssociatedKeyword;
     private byte[] mSerializedSuggestTemplate;
+    private @DocumentType int mDocumentType;
 
     /**
      * Create a suggestion builder for a search suggestion.
@@ -80,6 +85,7 @@ public class AutocompleteMatchBuilder {
         mType = AutocompleteMatch.INVALID_TYPE;
         mSubtypes = new ArraySet<>();
         mIsSearchType = false;
+        mSuggestionKind = OmniboxSuggestionKind.SEARCH;
         mDisplayText = null;
         mDisplayTextClassifications = new ArrayList<>();
         mDescription = null;
@@ -92,17 +98,21 @@ public class AutocompleteMatchBuilder {
         mImageDominantColor = null;
         mTransition = 0;
         mIsDeletable = false;
+        mStarterPackId = StarterPackId.NONE;
         mPostContentType = null;
         mPostData = null;
         mGroupId = AutocompleteMatch.INVALID_GROUP;
         mClipboardImageData = null;
         mHasTabMatch = false;
+        mAndroidTabId = 0;
         mActions = null;
         mAllowedToBeDefaultMatch = false;
         mInlineAutocompletion = null;
         mAdditionalText = null;
         mTabGroupUuid = null;
+        mAssociatedKeyword = null;
         mSerializedSuggestTemplate = null;
+        mDocumentType = DocumentType.NONE;
 
         mDisplayTextClassifications.add(
                 new AutocompleteMatch.MatchClassification(0, MatchClassificationStyle.NONE));
@@ -121,6 +131,7 @@ public class AutocompleteMatchBuilder {
                 mType,
                 mSubtypes,
                 mIsSearchType,
+                mSuggestionKind,
                 mIconType,
                 mTransition,
                 mDisplayText,
@@ -134,17 +145,23 @@ public class AutocompleteMatchBuilder {
                 mImageUrl,
                 mImageDominantColor,
                 mIsDeletable,
+                mStarterPackId,
                 mPostContentType,
                 mPostData,
                 mGroupId,
+                /* swapContentsAndDescription= */ false,
                 mClipboardImageData,
                 mHasTabMatch,
+                mAndroidTabId,
                 mActions,
+                /* takeoverAction= */ null,
                 mAllowedToBeDefaultMatch,
                 mInlineAutocompletion,
                 mAdditionalText,
                 mTabGroupUuid,
-                mSerializedSuggestTemplate);
+                mAssociatedKeyword,
+                mSerializedSuggestTemplate,
+                mDocumentType);
     }
 
     /**
@@ -234,6 +251,17 @@ public class AutocompleteMatchBuilder {
      */
     public AutocompleteMatchBuilder setIsSearch(boolean isSearch) {
         mIsSearchType = isSearch;
+        mSuggestionKind =
+                isSearch ? OmniboxSuggestionKind.SEARCH : OmniboxSuggestionKind.NAVIGATION;
+        return this;
+    }
+
+    /**
+     * @param type Accessibility type for TalkBack announcements.
+     * @return Omnibox suggestion builder.
+     */
+    public AutocompleteMatchBuilder setSuggestionKind(@OmniboxSuggestionKind int kind) {
+        mSuggestionKind = kind;
         return this;
     }
 
@@ -274,6 +302,15 @@ public class AutocompleteMatchBuilder {
     }
 
     /**
+     * @param androidTabId Android Tab ID for the matching tab.
+     * @return Omnibox suggestion builder.
+     */
+    public AutocompleteMatchBuilder setAndroidTabId(int androidTabId) {
+        mAndroidTabId = androidTabId;
+        return this;
+    }
+
+    /**
      * @param type Suggestion type.
      * @return Omnibox suggestion builder.
      */
@@ -295,7 +332,7 @@ public class AutocompleteMatchBuilder {
      * @param actions List of actions to add to the AutocompleteMatch.
      * @return Omnibox suggestion builder.
      */
-    public AutocompleteMatchBuilder setActions(@NonNull List<OmniboxAction> actions) {
+    public AutocompleteMatchBuilder setActions(List<OmniboxAction> actions) {
         mActions = actions;
         return this;
     }
@@ -306,6 +343,15 @@ public class AutocompleteMatchBuilder {
      */
     public AutocompleteMatchBuilder setDeletable(boolean isDeletable) {
         mIsDeletable = isDeletable;
+        return this;
+    }
+
+    /**
+     * @param starterPackId The starter pack engine id.
+     * @return Omnibox suggestion builder.
+     */
+    public AutocompleteMatchBuilder setStarterPackId(@StarterPackId int starterPackId) {
+        mStarterPackId = starterPackId;
         return this;
     }
 
@@ -357,11 +403,29 @@ public class AutocompleteMatchBuilder {
     }
 
     /**
+     * @param associatedKeyword Associated keyword.
+     * @return Omnibox suggestion builder.
+     */
+    public AutocompleteMatchBuilder setAssociatedKeyword(String associatedKeyword) {
+        mAssociatedKeyword = associatedKeyword;
+        return this;
+    }
+
+    /**
      * @param serializedSuggestTemplate Serialized SuggestTemplateInfo proto.
      * @return Omnibox suggestion builder.
      */
     public AutocompleteMatchBuilder setSerializedSuggestTemplate(byte[] serializedSuggestTemplate) {
         mSerializedSuggestTemplate = serializedSuggestTemplate;
+        return this;
+    }
+
+    /**
+     * @param documentType DocumentType to set.
+     * @return Omnibox suggestion builder.
+     */
+    public AutocompleteMatchBuilder setDocumentType(@DocumentType int documentType) {
+        mDocumentType = documentType;
         return this;
     }
 }

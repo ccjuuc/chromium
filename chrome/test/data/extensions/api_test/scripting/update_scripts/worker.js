@@ -8,29 +8,29 @@ import {getInjectedElementIds, openTab} from '/_test_resources/test_util/tabs_ut
 async function navigateToRequestedUrl() {
   const config = await chrome.test.getConfig();
   const url = `http://hostperms.com:${config.testServer.port}/simple.html`;
-  let tab = await openTab(url);
+  const tab = await openTab(url);
   return tab;
 }
 
 chrome.test.runTests([
   async function updateScripts() {
-    var scripts = [{
+    let scripts = [{
       id: 'inject_element_1',
       matches: ['*://*/*'],
       excludeMatches: ['*://abc.com/*'],
       js: ['inject_element.js'],
       css: ['nothing.css'],
       runAt: 'document_end',
-      allFrames: true
+      allFrames: true,
     }];
 
-    var updatedScripts = [{
+    const updatedScripts = [{
       id: 'inject_element_1',
       matches: ['*://hostperms.com/*'],
       excludeMatches: ['*://def.com/*'],
       js: ['inject_element_2.js'],
       allFrames: false,
-      persistAcrossSessions: false
+      persistAcrossSessions: false,
     }];
 
     await chrome.scripting.registerContentScripts(scripts);
@@ -58,7 +58,7 @@ chrome.test.runTests([
       allFrames: false,
       matchOriginAsFallback: false,
       persistAcrossSessions: false,
-      world: chrome.scripting.ExecutionWorld.ISOLATED
+      world: chrome.scripting.ExecutionWorld.ISOLATED,
     }];
 
     scripts = await chrome.scripting.getRegisteredContentScripts();
@@ -72,7 +72,7 @@ chrome.test.runTests([
   // the current set of registered scripts.
   async function updateScriptsNonexistentId() {
     await chrome.scripting.unregisterContentScripts();
-    var scripts = [{
+    let scripts = [{
       id: 'inject_element_1',
       matches: ['*://*/*'],
       js: ['inject_element.js'],
@@ -82,7 +82,7 @@ chrome.test.runTests([
     await chrome.scripting.registerContentScripts(scripts);
 
     const nonexistentScriptId = 'NONEXISTENT';
-    var updatedScripts = [{
+    const updatedScripts = [{
       id: nonexistentScriptId,
       matches: ['*://hostperms.com/*'],
       js: ['inject_element_2.js'],
@@ -102,7 +102,7 @@ chrome.test.runTests([
       allFrames: false,
       matchOriginAsFallback: false,
       persistAcrossSessions: true,
-      world: chrome.scripting.ExecutionWorld.ISOLATED
+      world: chrome.scripting.ExecutionWorld.ISOLATED,
     }];
 
     scripts = await chrome.scripting.getRegisteredContentScripts();
@@ -117,7 +117,7 @@ chrome.test.runTests([
   async function updateScriptsDuplicateIdInAPICall() {
     await chrome.scripting.unregisterContentScripts();
     const scriptId = 'inject_element_1';
-    var scripts = [{
+    let scripts = [{
       id: 'inject_element_1',
       matches: ['*://*/*'],
       js: ['inject_element.js'],
@@ -126,7 +126,7 @@ chrome.test.runTests([
 
     await chrome.scripting.registerContentScripts(scripts);
 
-    var updatedScripts = [
+    const updatedScripts = [
       {
         id: scriptId,
         matches: ['*://hostperms.com/*'],
@@ -138,7 +138,7 @@ chrome.test.runTests([
         matches: ['*://abc.com/*'],
         js: ['inject_element_2.js'],
         runAt: 'document_end',
-      }
+      },
     ];
 
     await chrome.test.assertPromiseRejects(
@@ -153,7 +153,7 @@ chrome.test.runTests([
       allFrames: false,
       matchOriginAsFallback: false,
       persistAcrossSessions: true,
-      world: chrome.scripting.ExecutionWorld.ISOLATED
+      world: chrome.scripting.ExecutionWorld.ISOLATED,
     }];
 
     scripts = await chrome.scripting.getRegisteredContentScripts();
@@ -166,7 +166,7 @@ chrome.test.runTests([
   // that cannot be read.
   async function updateScriptsFileError() {
     await chrome.scripting.unregisterContentScripts();
-    var scripts = [{
+    let scripts = [{
       id: 'inject_element_1',
       matches: ['*://*/*'],
       js: ['inject_element.js'],
@@ -176,7 +176,7 @@ chrome.test.runTests([
     await chrome.scripting.registerContentScripts(scripts);
 
     const scriptFile = 'NONEXISTENT.js';
-    var updatedScripts = [{
+    const updatedScripts = [{
       id: 'inject_element_1',
       matches: ['*://hostperms.com/*'],
       js: [scriptFile],
@@ -194,7 +194,7 @@ chrome.test.runTests([
       allFrames: false,
       matchOriginAsFallback: false,
       persistAcrossSessions: true,
-      world: chrome.scripting.ExecutionWorld.ISOLATED
+      world: chrome.scripting.ExecutionWorld.ISOLATED,
     }];
 
     scripts = await chrome.scripting.getRegisteredContentScripts();
@@ -206,24 +206,24 @@ chrome.test.runTests([
   // Test that if two updateContentScripts calls are made in quick succession,
   // then both calls should succeed in updating their scripts and the old
   // version of these scripts are overwritten.
-  // Regression for crbug.com/1454710.
+  // Regression for crbug.com/40917063.
   async function parallelUpdateContentScriptsCalls() {
     await chrome.scripting.unregisterContentScripts();
-    var scripts = [
+    const scripts = [
       {
         id: 'script_1',
         matches: ['*://*/*'],
         js: ['inject_element.js'],
         runAt: 'document_end',
-        allFrames: true
+        allFrames: true,
       },
       {
         id: 'script_2',
         matches: ['*://*/*'],
         js: ['inject_element_2.js'],
         runAt: 'document_end',
-        allFrames: true
-      }
+        allFrames: true,
+      },
     ];
 
     // First, register 2 scripts that each inject a different element into the
@@ -242,7 +242,7 @@ chrome.test.runTests([
       matches: ['*://*/*'],
       js: ['inject_element_3.js'],
       allFrames: false,
-      persistAcrossSessions: false
+      persistAcrossSessions: false,
     }];
 
     const updatedScript2 = [{
@@ -250,12 +250,12 @@ chrome.test.runTests([
       matches: ['*://*/*'],
       js: ['inject_element_4.js'],
       allFrames: true,
-      persistAcrossSessions: false
+      persistAcrossSessions: false,
     }];
 
     await Promise.allSettled([
       chrome.scripting.updateContentScripts(updatedScript1),
-      chrome.scripting.updateContentScripts(updatedScript2)
+      chrome.scripting.updateContentScripts(updatedScript2),
     ]);
 
     tab = await navigateToRequestedUrl();

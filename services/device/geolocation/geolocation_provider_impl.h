@@ -84,6 +84,7 @@ class GeolocationProviderImpl
   base::CallbackListSubscription AddLocationUpdateCallback(
       const LocationUpdateCallback& callback,
       bool enable_high_accuracy) override;
+  mojom::GeopositionResultPtr GetCachedPosition() override;
   void OverrideLocationForTesting(mojom::GeopositionResultPtr result) override;
 
   // Callback from the LocationProviderManager. Public for testing.
@@ -95,6 +96,7 @@ class GeolocationProviderImpl
   // called on the UI thread so that the GeolocationProviderImpl is always
   // instantiated on the same thread. Ownership is NOT returned.
   static GeolocationProviderImpl* GetInstance();
+  static GeolocationProviderImpl* GetInstanceIfExistsForTesting();
 
   GeolocationProviderImpl(const GeolocationProviderImpl&) = delete;
   GeolocationProviderImpl& operator=(const GeolocationProviderImpl&) = delete;
@@ -137,6 +139,12 @@ class GeolocationProviderImpl
     user_did_opt_into_location_services_ = false;
   }
 
+  void clear_cached_positions_for_testing() {
+    result_.reset();
+    high_accuracy_result_.reset();
+    low_accuracy_result_.reset();
+  }
+
   bool is_running_precise_for_testing() const { return is_running_precise_; }
 
   // GeolocationProvider implementation:
@@ -166,6 +174,9 @@ class GeolocationProviderImpl
       "User denied Geolocation";
   static constexpr char kSystemPermissionDeniedErrorTechnical[] =
       "User has not allowed access to system location";
+
+  static constexpr base::TimeDelta kApproximateGeolocationUpdateInterval =
+      base::Minutes(15);
 
  private:
   friend struct base::DefaultSingletonTraits<GeolocationProviderImpl>;
@@ -260,6 +271,8 @@ class GeolocationProviderImpl
   // accuracy level receive the correct location updates.
   mojom::GeopositionResultPtr high_accuracy_result_;
   mojom::GeopositionResultPtr low_accuracy_result_;
+  // The time when the last low accuracy result was notified.
+  base::TimeTicks last_low_accuracy_result_time_;
 
   // True only in testing, where we want to use a custom position.
   bool ignore_location_updates_ = false;

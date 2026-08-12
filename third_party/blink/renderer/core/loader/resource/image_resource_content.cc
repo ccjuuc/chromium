@@ -8,6 +8,7 @@
 
 #include "base/auto_reset.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/time/time.h"
 #include "third_party/blink/public/common/features.h"
@@ -26,6 +27,7 @@
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "ui/gfx/geometry/size.h"
 #include "v8/include/v8.h"
@@ -46,13 +48,14 @@ class NullImageResourceInfo final
 
  private:
   const KURL& Url() const override { return url_; }
+  bool IsAutomaticUpgrade() const override { return false; }
   base::TimeTicks LoadResponseEnd() const override { return base::TimeTicks(); }
   base::TimeTicks LoadStart() const override { return base::TimeTicks(); }
   base::TimeTicks LoadEnd() const override { return base::TimeTicks(); }
   base::TimeTicks DiscoveryTime() const override { return base::TimeTicks(); }
   const ResourceResponse& GetResponse() const override { return response_; }
   bool IsCacheValidator() const override { return false; }
-  bool IsAccessAllowed(
+  bool IsCorsSameOrigin(
       DoesCurrentFrameHaveSingleSecurityOrigin) const override {
     return true;
   }
@@ -69,7 +72,11 @@ class NullImageResourceInfo final
 
   void LoadDeferredImage(ResourceFetcher* fetcher) override {}
 
-  bool IsAdResource() const override { return false; }
+  const std::optional<AdProvenance>& GetAdProvenance() const override {
+    static const base::NoDestructor<std::optional<AdProvenance>>
+        kNullProvenance;
+    return *kNullProvenance;
+  }
 
   const HashSet<String>* GetUnsupportedImageMimeTypes() const override {
     return nullptr;
@@ -167,11 +174,19 @@ void ImageResourceContent::AddObserver(ImageResourceObserver* observer) {
     }
   }
 
-  if (info_->IsCacheValidator())
+  const bool notify_during_revalidation =
+      RuntimeEnabledFeatures::StaleImageNaturalSizeDuringRevalidationEnabled();
+
+  if (!notify_during_revalidation && info_->IsCacheValidator()) {
     return;
+  }
 
   if (image_) {
     observer->ImageChanged(this, CanDeferInvalidation::kNo);
+  }
+
+  if (info_->IsCacheValidator()) {
+    return;
   }
 
   if (IsSufficientContentLoadedForPaint() && observers_.Contains(observer))
@@ -331,8 +346,9 @@ gfx::Size ImageResourceContent::IntrinsicSize(
 
 RespectImageOrientationEnum ImageResourceContent::ForceOrientationIfNecessary(
     RespectImageOrientationEnum default_orientation) const {
-  if (image_ && image_->IsBitmapImage() && !IsAccessAllowed())
+  if (image_ && image_->IsBitmapImage() && !IsCorsSameOrigin()) {
     return kRespectImageOrientation;
+  }
   return default_orientation;
 }
 
@@ -373,21 +389,25 @@ void ImageResourceContent::NotifyObservers(
 }
 
 scoped_refptr<Image> ImageResourceContent::CreateImage(bool is_multipart) {
-  String content_dpr_value =
-      info_->GetResponse().HttpHeaderField(http_names::kContentDPR);
-  wtf_size_t comma = content_dpr_value.ReverseFind(',');
+  const ResourceResponse& response = info_->GetResponse();
+  const AtomicString& content_dpr_header_value =
+      response.HttpHeaderField(http_names::kContentDPR);
+  StringView content_dpr_value = content_dpr_header_value;
+  wtf_size_t comma = content_dpr_value.rfind(',');
   if (comma != kNotFound && comma < content_dpr_value.length() - 1) {
-    content_dpr_value = content_dpr_value.Substring(comma + 1);
+    content_dpr_value = content_dpr_value.substr(comma + 1);
   }
-  device_pixel_ratio_header_value_ =
-      content_dpr_value.ToFloat(&has_device_pixel_ratio_header_value_);
+  auto optional_header_value = StringToFloat(content_dpr_value);
+  has_device_pixel_ratio_header_value_ = optional_header_value.has_value();
+  device_pixel_ratio_header_value_ = optional_header_value.value_or(0);
   if (!has_device_pixel_ratio_header_value_ ||
       device_pixel_ratio_header_value_ <= 0.0) {
     device_pixel_ratio_header_value_ = 1.0;
     has_device_pixel_ratio_header_value_ = false;
   }
-  if (info_->GetResponse().MimeType() == "image/svg+xml")
+  if (response.MimeType() == "image/svg+xml") {
     return SVGImage::Create(this, is_multipart);
+  }
   return BitmapImage::Create(this, is_multipart);
 }
 
@@ -513,15 +533,14 @@ ImageResourceContent::UpdateImageResult ImageResourceContent::UpdateImage(
         return UpdateImageResult::kNoDecodeError;
 
       if (image_) {
-        // Mime type could be null, see https://crbug.com/1485926.
-        if (!image_->MimeType()) {
-          return UpdateImageResult::kShouldDecodeError;
-        }
+        // The MIME type can be null if no decoder was found.
+        const AtomicString& mime_type = image_->MimeType();
         const HashSet<String>* unsupported_mime_types =
             info_->GetUnsupportedImageMimeTypes();
-        if (unsupported_mime_types &&
-            unsupported_mime_types->Contains(image_->MimeType())) {
-          return UpdateImageResult::kShouldDecodeError;
+        if (mime_type && unsupported_mime_types &&
+            unsupported_mime_types->Contains(mime_type)) {
+          // Drop the Image, simulating a missing decoder.
+          image_ = nullptr;
         }
       }
 
@@ -638,8 +657,8 @@ void ImageResourceContent::Changed(const blink::Image* image) {
   NotifyObservers(kDoNotNotifyFinish, CanDeferInvalidation::kYes);
 }
 
-bool ImageResourceContent::IsAccessAllowed() const {
-  return info_->IsAccessAllowed(
+bool ImageResourceContent::IsCorsSameOrigin() const {
+  return info_->IsCorsSameOrigin(
       GetImage()->HasSingleSecurityOrigin()
           ? ImageResourceInfo::kHasSingleSecurityOrigin
           : ImageResourceInfo::kHasMultipleSecurityOrigin);
@@ -692,6 +711,10 @@ bool ImageResourceContent::IsPaintedFirstFrame() const {
 // redirecting to ImageResource.
 const KURL& ImageResourceContent::Url() const {
   return info_->Url();
+}
+
+bool ImageResourceContent::IsAutomaticUpgrade() const {
+  return info_->IsAutomaticUpgrade();
 }
 
 bool ImageResourceContent::IsDataUrl() const {
@@ -748,8 +771,9 @@ void ImageResourceContent::LoadDeferredImage(ResourceFetcher* fetcher) {
   info_->LoadDeferredImage(fetcher);
 }
 
-bool ImageResourceContent::IsAdResource() const {
-  return info_->IsAdResource();
+const std::optional<AdProvenance>& ImageResourceContent::GetAdProvenance()
+    const {
+  return info_->GetAdProvenance();
 }
 
 void ImageResourceContent::RecordDecodedImageType(UseCounter* use_counter) {

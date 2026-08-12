@@ -9,7 +9,6 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_thread.h"
 #include "content/public/renderer/worker_thread.h"
@@ -33,7 +32,7 @@
 #include "extensions/renderer/service_worker_data.h"
 #include "extensions/renderer/trace_util.h"
 #include "extensions/renderer/worker_thread_dispatcher.h"
-#include "ipc/ipc_sync_channel.h"
+#include "ipc/ipc_channel_proxy.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom.h"
@@ -92,7 +91,7 @@ class MainThreadIPCMessageSender : public IPCMessageSender {
     DCHECK_EQ(kMainThreadId, content::WorkerThread::GetCurrentId());
 
     GetEventRouter(context)->AddListenerForMainThread(mojom::EventListener::New(
-        GetEventListenerOwner(context), event_name, nullptr, std::nullopt));
+        GetEventListenerOwner(context), event_name, std::nullopt));
   }
 
   void SendRemoveUnfilteredEventListenerIPC(
@@ -103,7 +102,7 @@ class MainThreadIPCMessageSender : public IPCMessageSender {
 
     GetEventRouter(context)->RemoveListenerForMainThread(
         mojom::EventListener::New(GetEventListenerOwner(context), event_name,
-                                  nullptr, std::nullopt));
+                                  std::nullopt));
   }
 
   void SendAddUnfilteredLazyEventListenerIPC(
@@ -128,7 +127,7 @@ class MainThreadIPCMessageSender : public IPCMessageSender {
 
   void SendAddFilteredEventListenerIPC(ScriptContext* context,
                                        const std::string& event_name,
-                                       const base::Value::Dict& filter,
+                                       const base::DictValue& filter,
                                        bool is_lazy) override {
     DCHECK(!context->IsForServiceWorker());
     DCHECK_EQ(kMainThreadId, content::WorkerThread::GetCurrentId());
@@ -139,7 +138,7 @@ class MainThreadIPCMessageSender : public IPCMessageSender {
 
   void SendRemoveFilteredEventListenerIPC(ScriptContext* context,
                                           const std::string& event_name,
-                                          const base::Value::Dict& filter,
+                                          const base::DictValue& filter,
                                           bool remove_lazy_listener) override {
     DCHECK(!context->IsForServiceWorker());
     DCHECK_EQ(kMainThreadId, content::WorkerThread::GetCurrentId());
@@ -246,7 +245,7 @@ class MainThreadIPCMessageSender : public IPCMessageSender {
                           const ExtensionId& extension_id,
                           ActivityLogCallType call_type,
                           const std::string& call_name,
-                          base::Value::List args,
+                          base::ListValue args,
                           const std::string& extra) override {
     std::optional<ExtensionId> optional_extension_id;
     if (!extension_id.empty()) {
@@ -267,7 +266,7 @@ class MainThreadIPCMessageSender : public IPCMessageSender {
  private:
   void OnResponse(int request_id,
                   bool success,
-                  base::Value::List response,
+                  base::ListValue response,
                   const std::string& error,
                   mojom::ExtraResponseDataPtr response_data) {
     ExtensionsRendererClient::Get()
@@ -333,7 +332,7 @@ class WorkerThreadIPCMessageSender : public IPCMessageSender {
         ->RequestWorker(std::move(params),
                         base::BindOnce(
                             [](int request_id, bool success,
-                               base::Value::List args, const std::string& error,
+                               base::ListValue args, const std::string& error,
                                mojom::ExtraResponseDataPtr extra_data) {
                               WorkerThreadDispatcher::GetServiceWorkerData()
                                   ->bindings_system()
@@ -365,14 +364,14 @@ class WorkerThreadIPCMessageSender : public IPCMessageSender {
 
     auto event_listener = mojom::EventListener::New(
         mojom::EventListenerOwner::NewExtensionId(context->GetExtensionID()),
-        event_name,
-        mojom::ServiceWorkerContext::New(context->service_worker_scope(),
-                                         context->service_worker_version_id(),
-                                         content::WorkerThread::GetCurrentId()),
-        /*event_filter=*/std::nullopt);
+        event_name, /*event_filter=*/std::nullopt);
+    auto service_worker_context = mojom::ServiceWorkerContext::New(
+        context->service_worker_scope(), context->service_worker_version_id(),
+        content::WorkerThread::GetCurrentId());
     WorkerThreadDispatcher::GetServiceWorkerData()
         ->GetEventRouter()
-        ->AddListenerForServiceWorker(std::move(event_listener));
+        ->AddListenerForServiceWorker(std::move(event_listener),
+                                      std::move(service_worker_context));
   }
 
   void SendRemoveUnfilteredEventListenerIPC(
@@ -385,15 +384,15 @@ class WorkerThreadIPCMessageSender : public IPCMessageSender {
 
     auto event_listener = mojom::EventListener::New(
         mojom::EventListenerOwner::NewExtensionId(context->GetExtensionID()),
-        event_name,
-        mojom::ServiceWorkerContext::New(context->service_worker_scope(),
-                                         context->service_worker_version_id(),
-                                         content::WorkerThread::GetCurrentId()),
-        /*event_filter=*/std::nullopt);
+        event_name, /*event_filter=*/std::nullopt);
+    auto service_worker_context = mojom::ServiceWorkerContext::New(
+        context->service_worker_scope(), context->service_worker_version_id(),
+        content::WorkerThread::GetCurrentId());
 
     WorkerThreadDispatcher::GetServiceWorkerData()
         ->GetEventRouter()
-        ->RemoveListenerForServiceWorker(std::move(event_listener));
+        ->RemoveListenerForServiceWorker(std::move(event_listener),
+                                         std::move(service_worker_context));
   }
 
   void SendAddUnfilteredLazyEventListenerIPC(
@@ -424,7 +423,7 @@ class WorkerThreadIPCMessageSender : public IPCMessageSender {
 
   void SendAddFilteredEventListenerIPC(ScriptContext* context,
                                        const std::string& event_name,
-                                       const base::Value::Dict& filter,
+                                       const base::DictValue& filter,
                                        bool is_lazy) override {
     DCHECK(context->IsForServiceWorker());
     DCHECK_NE(kMainThreadId, content::WorkerThread::GetCurrentId());
@@ -444,7 +443,7 @@ class WorkerThreadIPCMessageSender : public IPCMessageSender {
 
   void SendRemoveFilteredEventListenerIPC(ScriptContext* context,
                                           const std::string& event_name,
-                                          const base::Value::Dict& filter,
+                                          const base::DictValue& filter,
                                           bool remove_lazy_listener) override {
     DCHECK(context->IsForServiceWorker());
     DCHECK_NE(kMainThreadId, content::WorkerThread::GetCurrentId());
@@ -534,7 +533,7 @@ class WorkerThreadIPCMessageSender : public IPCMessageSender {
                           const ExtensionId& extension_id,
                           ActivityLogCallType call_type,
                           const std::string& call_name,
-                          base::Value::List args,
+                          base::ListValue args,
                           const std::string& extra) override {
     std::optional<ExtensionId> optional_extension_id;
     if (!extension_id.empty()) {

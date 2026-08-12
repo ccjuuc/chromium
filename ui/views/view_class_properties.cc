@@ -4,6 +4,8 @@
 
 #include "ui/views/view_class_properties.h"
 
+#include <string>
+
 #include "ui/base/hit_test.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
@@ -26,7 +28,9 @@ DEFINE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, views::Widget*)
 
 #if !defined(USE_AURA)
 // aura_constants.cc defines this.
+DEFINE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, gfx::Rect*)
 DEFINE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, gfx::Size*)
+DEFINE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, std::string*)
 #endif
 
 namespace views {
@@ -48,11 +52,14 @@ DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(gfx::Size, kTableColAndRowSpanKey)
 DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(LayoutAlignment, kTableHorizAlignKey)
 DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(LayoutAlignment, kTableVertAlignKey)
 DEFINE_UI_CLASS_PROPERTY_KEY(bool, kViewIgnoredByLayoutKey, false)
+DEFINE_UI_CLASS_PROPERTY_KEY(bool, kViewDoesNotLayOutChildren, false)
 DEFINE_UI_CLASS_PROPERTY_KEY(ui::ElementIdentifier,
                              kElementIdentifierKey,
                              ui::ElementIdentifier())
+DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(std::string, kElementSecondaryIdentifierKey)
 DEFINE_UI_CLASS_PROPERTY_KEY(FocusManager*,
                              kDetachedViewFocusManagerKey,
                              nullptr)
+DEFINE_UI_CLASS_PROPERTY_KEY(bool, kIsBlockedByModalKey, false)
 
 }  // namespace views

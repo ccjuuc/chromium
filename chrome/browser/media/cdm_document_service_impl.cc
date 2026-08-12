@@ -7,9 +7,11 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "build/build_config.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/web_contents.h"
 #include "media/media_buildflags.h"
 
@@ -33,10 +35,17 @@
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
 
+#include <aclapi.h>
+
+#include "base/containers/flat_set.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/no_destructor.h"
+#include "base/synchronization/lock.h"
 #include "base/system/sys_info.h"
+#include "base/task/lazy_thread_pool_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/win/security_util.h"
@@ -80,6 +89,60 @@ base::FilePath GetCdmStorePathRootForProfile(
 }  // namespace
 
 #if BUILDFLAG(IS_WIN)
+bool RevokeAccess(const base::FilePath& path,
+                  const std::vector<base::win::Sid>& sids) {
+  if (sids.empty()) {
+    return true;
+  }
+
+  PACL old_dacl = nullptr;
+  PSECURITY_DESCRIPTOR sd = nullptr;
+
+  if (GetNamedSecurityInfoW(path.value().c_str(), SE_FILE_OBJECT,
+                            DACL_SECURITY_INFORMATION, nullptr, nullptr,
+                            &old_dacl, nullptr, &sd) != ERROR_SUCCESS) {
+    return false;
+  }
+
+  std::vector<EXPLICIT_ACCESS_W> explicit_access(sids.size());
+  for (size_t i = 0; i < sids.size(); ++i) {
+    explicit_access[i].grfAccessPermissions = 0;
+    explicit_access[i].grfAccessMode = REVOKE_ACCESS;
+    explicit_access[i].grfInheritance = NO_INHERITANCE;
+    explicit_access[i].Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    explicit_access[i].Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
+    explicit_access[i].Trustee.ptstrName =
+        reinterpret_cast<LPWSTR>(const_cast<void*>(sids[i].GetPSID()));
+  }
+
+  PACL new_dacl = nullptr;
+  if (SetEntriesInAclW(static_cast<ULONG>(sids.size()), explicit_access.data(),
+                       old_dacl, &new_dacl) != ERROR_SUCCESS) {
+    LocalFree(sd);
+    return false;
+  }
+
+  bool success =
+      SetNamedSecurityInfoW(const_cast<LPWSTR>(path.value().c_str()),
+                            SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr,
+                            nullptr, new_dacl, nullptr) == ERROR_SUCCESS;
+
+  LocalFree(new_dacl);
+  LocalFree(sd);
+  return success;
+}
+
+// Get a dedicated SequencedTaskRunner for CDM directory operations to prevent
+// race conditions when multiple frames or profiles request CDMs concurrently.
+base::LazyThreadPoolSequencedTaskRunner g_cdm_data_task_runner =
+    LAZY_THREAD_POOL_SEQUENCED_TASK_RUNNER_INITIALIZER(
+        base::TaskTraits({base::MayBlock(), base::TaskPriority::USER_VISIBLE,
+                          base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN}));
+
+scoped_refptr<base::SequencedTaskRunner> GetCdmDataTaskRunner() {
+  return g_cdm_data_task_runner.Get();
+}
+
 bool CreateCdmStorePathRootAndGrantAccessIfNeeded(
     const base::FilePath& cdm_store_path_root) {
   if (!media::MediaFoundationCdm::IsAvailable()) {
@@ -87,23 +150,60 @@ bool CreateCdmStorePathRootAndGrantAccessIfNeeded(
                    "Windows 10.";
     return false;
   }
-  // If the path exist, we can assume the right permission are already
-  // set on it.
-  if (base::PathExists(cdm_store_path_root))
-    return true;
 
-  base::File::Error file_error;
-  if (!base::CreateDirectoryAndGetError(cdm_store_path_root, &file_error)) {
-    DLOG(ERROR) << "Create CDM store path failed with " << file_error;
-    return false;
+  // To avoid revoking and regranting ACLs on every CDM request (which locks
+  // out asynchronous utility processes), only perform the ACL fix once per
+  // session per directory.
+  if (CdmDocumentServiceImpl::GetCdmStoreProcessedPaths().contains(
+          cdm_store_path_root)) {
+    return true;
   }
 
   auto sids = base::win::Sid::FromNamedCapabilityVector(
       {sandbox::policy::kMediaFoundationCdmData});
-  return base::win::GrantAccessToPath(
-      cdm_store_path_root, sids,
-      FILE_GENERIC_READ | FILE_GENERIC_WRITE | GENERIC_EXECUTE | DELETE,
-      CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE);
+
+  // Revoke the vulnerable `FILE_LIST_DIRECTORY` ACL on pre-existing folders
+  if (!base::PathExists(cdm_store_path_root)) {
+    base::File::Error file_error;
+    if (!base::CreateDirectoryAndGetError(cdm_store_path_root, &file_error)) {
+      DLOG(ERROR) << "Create CDM store path failed with " << file_error;
+      return false;
+    }
+  } else if (!RevokeAccess(cdm_store_path_root, sids)) {
+    DLOG(ERROR) << "Failed to revoke existing access to the root directory.";
+    return false;
+  }
+
+  // Grant traverse access to the root directory itself to allow processes to
+  // access known subdirectories but prevent directory listing.
+  if (!base::win::GrantAccessToPath(cdm_store_path_root, sids, FILE_TRAVERSE,
+                                    NO_INHERITANCE,
+                                    /*recursive=*/false)) {
+    DLOG(ERROR) << "Failed to grant traverse access to the root directory.";
+    return false;
+  }
+
+  // Grant full access to children via inheritance, so that subdirectories
+  // corresponding to specific origin IDs are accessible. Use recursive=true so
+  // the write goes through SetNamedSecurityInfoW, which triggers NTFS DACL
+  // auto-inheritance propagation. This is required to push the new inheritable
+  // ACE onto existing <origin_id>/ subdirectories whose inherited copy of this
+  // ACE was just stripped by RevokeAccess above. With recursive=false the
+  // write would go through SetSecurityInfo(SE_KERNEL_OBJECT), which does not
+  // propagate to existing children, leaving them inaccessible to the LPAC.
+  // The ACE applied to the root itself is identical in either case; only the
+  // propagation to existing children differs.
+  if (!base::win::GrantAccessToPath(
+          cdm_store_path_root, sids,
+          FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE,
+          CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE | INHERIT_ONLY_ACE,
+          /*recursive=*/true)) {
+    return false;
+  }
+
+  CdmDocumentServiceImpl::GetCdmStoreProcessedPaths().insert(
+      cdm_store_path_root);
+  return true;
 }
 
 std::unique_ptr<media::MediaFoundationCdmData>
@@ -116,7 +216,20 @@ GetMediaFoundationCdmDataInternal(const base::FilePath profile_path,
     return nullptr;
   }
 
-  std::unique_ptr<media::MediaFoundationCdmData> cdm_data;
+  // The root directory is only granted FILE_TRAVERSE access, which doesn't
+  // allow the utility process to create new subdirectories. So we should have
+  // the browser process pre-create the origin-specific subdirectory before
+  // passing the root path to the CDM. This way, the utility process never needs
+  // directory creation permissions at the root; it only accesses the explicit
+  // subdirectory made for it.
+  base::FilePath cdm_store_path =
+      cdm_store_path_root.AppendASCII(pref_data->origin_id().ToString());
+  base::File::Error file_error;
+  if (!base::CreateDirectoryAndGetError(cdm_store_path, &file_error)) {
+    DLOG(ERROR) << "Create CDM store path failed with " << file_error;
+    return nullptr;
+  }
+
   return std::make_unique<media::MediaFoundationCdmData>(
       pref_data->origin_id(), pref_data->client_token(), cdm_store_path_root);
 }
@@ -283,9 +396,10 @@ void CdmDocumentServiceImpl::GetMediaFoundationCdmData(
     return;
   }
 
-  // PostTask because the task is doing IO operation that can block.
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+  // PostTask to the dedicated SequencedTaskRunner to prevent concurrent
+  // directory operations from racing and corrupting the ACLs or failing.
+  GetCdmDataTaskRunner()->PostTaskAndReplyWithResult(
+      FROM_HERE,
       base::BindOnce(&GetMediaFoundationCdmDataInternal, profile->GetPath(),
                      std::move(pref_data)),
       std::move(callback));
@@ -342,7 +456,10 @@ void CdmDocumentServiceImpl::OnCdmEvent(media::CdmEvent event,
     return;
   }
 
-  auto site = render_frame_host().GetSiteInstance()->GetSiteURL();
+  auto site = render_frame_host()
+                  .GetSiteInstance()
+                  ->GetSecurityPrincipal()
+                  .GetDeprecatedSiteURL();
   switch (event) {
     case media::CdmEvent::kSignificantPlayback:
       monitor->OnSignificantPlayback(site);
@@ -389,9 +506,11 @@ void DeleteMediaFoundationCdmData(
       continue;
 
     DVLOG(2) << __func__ << ": Processing: " << file_path;
-    std::optional<url::Origin> origin = std::nullopt;
-    if (origin_id_mapping.count(origin_id_string) != 0)
-      origin = origin_id_mapping.at(origin_id_string);
+    std::optional<url::Origin> origin;
+    if (auto it = origin_id_mapping.find(origin_id_string);
+        it != origin_id_mapping.end()) {
+      origin = it->second;
+    }
 
     // If we couldn't find the origin, this mean the origin was not present in
     // the PrefService and we should also delete the folder.
@@ -449,11 +568,24 @@ void CdmDocumentServiceImpl::ClearCdmData(
   // from the UI thread.
   auto origin_id_mapping = CdmPrefServiceHelper::GetOriginIdMapping(user_prefs);
 
-  // PostTask because is doing IO operation that can block.
-  base::ThreadPool::PostTaskAndReply(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+  // PostTask to the dedicated SequencedTaskRunner because it does IO
+  // operations and to prevent racing with directory creations.
+  GetCdmDataTaskRunner()->PostTaskAndReply(
+      FROM_HERE,
       base::BindOnce(&DeleteMediaFoundationCdmData, profile->GetPath(),
                      std::move(origin_id_mapping), start, end, filter),
       std::move(complete_cb));
+}
+
+// static
+base::flat_set<base::FilePath>&
+CdmDocumentServiceImpl::GetCdmStoreProcessedPaths() {
+  static base::NoDestructor<base::flat_set<base::FilePath>> processed_paths;
+  return *processed_paths;
+}
+
+// static
+void CdmDocumentServiceImpl::ClearCdmStoreProcessedPathsForTesting() {
+  GetCdmStoreProcessedPaths().clear();
 }
 #endif  // BUILDFLAG(IS_WIN)

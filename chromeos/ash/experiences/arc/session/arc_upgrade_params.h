@@ -45,7 +45,7 @@ struct UpgradeParams {
   std::string account_id;
 
   // Whether the account is managed.
-  bool is_account_managed;
+  bool is_account_managed = false;
 
   // Whether adb sideloading is allowed when the account and/or the device is
   // managed.
@@ -54,10 +54,6 @@ struct UpgradeParams {
   // Whether adb sideloading is enabled or not.
   // This parameter is used only for ARCVM.
   bool is_adb_sideloading_enabled = false;
-
-  // Option to disable ACTION_BOOT_COMPLETED broadcast for 3rd party apps.
-  // The constructor automatically populates this from command-line.
-  bool skip_boot_completed_broadcast;
 
   // Optional mode for packages cache tests.
   // The constructor automatically populates this from command-line.

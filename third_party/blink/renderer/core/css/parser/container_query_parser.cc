@@ -5,10 +5,16 @@
 #include "third_party/blink/renderer/core/css/parser/container_query_parser.h"
 
 #include "third_party/blink/renderer/core/css/conditional_exp_node.h"
+#include "third_party/blink/renderer/core/css/container_query.h"
+#include "third_party/blink/renderer/core/css/container_query_set.h"
+#include "third_party/blink/renderer/core/css/container_selector.h"
 #include "third_party/blink/renderer/core/css/media_feature_names.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_context.h"
+#include "third_party/blink/renderer/core/css/parser/css_parser_local_context.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_token_stream.h"
+#include "third_party/blink/renderer/core/css/properties/css_parsing_utils.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -51,7 +57,16 @@ class SizeFeatureSet : public MediaQueryParser::FeatureSet {
   bool IsCaseSensitive(const AtomicString& feature) const override {
     return false;
   }
-  bool SupportsRange() const override { return true; }
+  bool IsRangeTypeFeature(const AtomicString& feature) const override {
+    // All size query features are range type features, but the min/max-prefixed
+    // features can not be matched using range-syntax.
+    return feature == media_feature_names::kWidthMediaFeature ||
+           feature == media_feature_names::kHeightMediaFeature ||
+           feature == media_feature_names::kInlineSizeMediaFeature ||
+           feature == media_feature_names::kBlockSizeMediaFeature ||
+           feature == media_feature_names::kAspectRatioMediaFeature ||
+           feature == media_feature_names::kOrientationMediaFeature;
+  }
   bool SupportsStyleRange() const override { return false; }
   bool SupportsElementDependent() const override { return true; }
 };
@@ -77,7 +92,9 @@ class StateFeatureSet : public MediaQueryParser::FeatureSet {
   bool IsCaseSensitive(const AtomicString& feature) const override {
     return false;
   }
-  bool SupportsRange() const override { return false; }
+  bool IsRangeTypeFeature(const AtomicString& feature) const override {
+    return false;
+  }
   bool SupportsStyleRange() const override { return false; }
   bool SupportsElementDependent() const override { return true; }
 };
@@ -99,7 +116,9 @@ class AnchoredFeatureSet : public MediaQueryParser::FeatureSet {
   bool IsCaseSensitive(const AtomicString& feature) const override {
     return false;
   }
-  bool SupportsRange() const override { return false; }
+  bool IsRangeTypeFeature(const AtomicString& feature) const override {
+    return false;
+  }
   bool SupportsStyleRange() const override { return false; }
   bool SupportsElementDependent() const override { return true; }
 };
@@ -109,7 +128,8 @@ class AnchoredFeatureSet : public MediaQueryParser::FeatureSet {
 ContainerQueryParser::ContainerQueryParser(const CSSParserContext& context)
     : context_(context) {}
 
-const ConditionalExpNode* ContainerQueryParser::ParseCondition(String value) {
+const ConditionalExpNode* ContainerQueryParser::ParseCondition(
+    const String& value) {
   CSSParserTokenStream stream(value);
   const ConditionalExpNode* node = ParseCondition(stream);
   if (!stream.AtEnd()) {
@@ -174,8 +194,7 @@ const ConditionalExpNode* ContainerQueryParser::ConsumeFunction(
       guard.Release();
       return ConditionalExpNode::Function(query, AtomicString("scroll-state"));
     }
-  } else if (RuntimeEnabledFeatures::CSSFallbackContainerQueriesEnabled() &&
-             stream.Peek().FunctionId() == CSSValueID::kAnchored) {
+  } else if (stream.Peek().FunctionId() == CSSValueID::kAnchored) {
     // anchored(fallback: [<dashed-ident> || <try-tactic>] | <'position-area'>)
     CSSParserTokenStream::RestoringBlockGuard guard(stream);
     stream.ConsumeWhitespace();
@@ -235,6 +254,63 @@ const ConditionalExpNode* ContainerQueryParser::ConsumeFeature(
   MediaQueryParser media_query_parser(MediaQueryParser::kMediaQuerySetParser,
                                       context_.GetExecutionContext());
   return media_query_parser.ConsumeFeature(stream, feature_set);
+}
+
+const ContainerQuery* ContainerQueryParser::ConsumeContainerQuery(
+    CSSParserTokenStream& stream) {
+  // <container-name>
+  AtomicString name;
+  if (stream.Peek().GetType() == kIdentToken) {
+    CSSParserLocalContext local_context =
+        CSSParserLocalContext::CreateWithoutPropertyForAtRules();
+    auto* ident = DynamicTo<CSSCustomIdentValue>(
+        css_parsing_utils::ConsumeSingleContainerName(stream, context_,
+                                                      local_context));
+    if (ident) {
+      name = ident->Value();
+    }
+  }
+
+  const ConditionalExpNode* query = ParseCondition(stream);
+  if (query ||
+      (!name.IsNull() && RuntimeEnabledFeatures::ContainerNameOnlyEnabled())) {
+    return MakeGarbageCollected<ContainerQuery>(
+        ContainerSelector(std::move(name), query), query);
+  }
+  return nullptr;
+}
+
+const ContainerQuerySet* ContainerQueryParser::ParseContainerQuerySet(
+    CSSParserTokenStream& stream,
+    const CSSParserContext& context) {
+  ContainerQueryParser query_parser(context);
+
+  HeapVector<Member<const ContainerQuery>> queries;
+
+  do {
+    if (const ContainerQuery* query =
+            query_parser.ConsumeContainerQuery(stream)) {
+      queries.push_back(query);
+    } else {
+      return nullptr;
+    }
+    stream.ConsumeWhitespace();
+  } while (!stream.AtEnd() &&
+           RuntimeEnabledFeatures::CommaSeparatedContainerQueriesEnabled() &&
+           css_parsing_utils::ConsumeCommaIncludingWhitespace(stream));
+
+  return MakeGarbageCollected<ContainerQuerySet>(std::move(queries));
+}
+
+const ContainerQuerySet* ContainerQueryParser::ParseContainerQuerySet(
+    const String& input,
+    const CSSParserContext& context) {
+  CSSParserTokenStream stream(input);
+  const ContainerQuerySet* query_set = ParseContainerQuerySet(stream, context);
+  if (!stream.AtEnd()) {
+    return nullptr;
+  }
+  return query_set;
 }
 
 }  // namespace blink

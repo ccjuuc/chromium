@@ -7,7 +7,27 @@ import * as inferenceUtil from '//components/autofill/ios/form_util/resources/fi
 import {findChildText, hasTagName, isFormControlElement, isSelectElement} from '//components/autofill/ios/form_util/resources/fill_element_inference_util.js';
 import {setUniqueIDIfNeeded} from '//components/autofill/ios/form_util/resources/renderer_id.js';
 import {gCrWeb} from '//ios/web/public/js_messaging/resources/gcrweb.js';
-import {isTextField, removeQueryAndReferenceFromURL, trim} from '//ios/web/public/js_messaging/resources/utils.js';
+import {generateRandomId, isTextField, removeQueryAndReferenceFromURL, trim} from '//ios/web/public/js_messaging/resources/utils.js';
+
+/**
+ * Helper to check if an autofill form feature is enabled.
+ */
+function isFeatureEnabled(featureName: string): boolean {
+  if (!gCrWeb.hasRegisteredApi('autofill_form_features')) {
+    return false;
+  }
+  return gCrWeb.getRegisteredApi('autofill_form_features')
+      .getFunction(featureName)();
+}
+
+/**
+ * Returns true if autofill optimization form search is enabled.
+ */
+// TODO(crbug.com/520101866): Use call arguments to avoid placeholder
+// replacement in java_script_feature.mm.
+export function isAutofillOptimizationFormSearchEnabled(): boolean {
+  return (window as any).gCrWebPlaceholderAutofillOptimizationFormSearch;
+}
 
 /**
  * Base class for objects that are intended to be JSON stringified.
@@ -23,6 +43,9 @@ class JsonSafeObject {
 // TODO(crbug.com/469457516): Update the variables in the classes to follow the
 // naming convention.
 /* eslint-disable @typescript-eslint/naming-convention */
+
+// TODO(crbug.com/493624186): Fix members asserted as non-null .
+/* eslint-disable no-restricted-syntax */
 export class AutofillFormFieldData extends JsonSafeObject {
   name!: string;
   value!: string;
@@ -31,7 +54,9 @@ export class AutofillFormFieldData extends JsonSafeObject {
   autocomplete_attribute!: string;
   max_length!: number;
   is_autofilled!: boolean;
-  is_user_edited!: boolean;
+  // TODO(crbug.com/393114125): Remove after fully launching
+  // `AutofillField::field_modifiers_`.
+  is_user_edited_deprecated!: boolean;
   is_checkable!: boolean;
   is_focusable!: boolean;
   should_autocomplete!: boolean;
@@ -46,6 +71,7 @@ export class AutofillFormFieldData extends JsonSafeObject {
   name_attribute?: string;
   id_attribute?: string;
   pattern_attribute?: string;
+  challenge?: string;
 }
 
 export class AutofillFormData extends JsonSafeObject {
@@ -59,6 +85,7 @@ export class AutofillFormData extends JsonSafeObject {
   name_attribute?: string;
   id_attribute?: string;
 }
+/* eslint-enable no-restricted-syntax */
 /* eslint-enable @typescript-eslint/naming-convention */
 
 export declare interface FrameTokenWithPredecessor {
@@ -70,7 +97,7 @@ export declare interface FrameTokenWithPredecessor {
  Name of the html attribute used for storing the remote frame token assigned to
  the current html document.
  */
-const REMOTE_FRAME_TOKEN_ATTRIBUTE = '__gChrome_remoteFrameToken';
+const REMOTE_FRAME_TOKEN_ATTRIBUTE = '__gCrRemoteFrameToken';
 
 /**
  * Acquires the specified DOM `attribute` from the DOM `element` and returns
@@ -320,35 +347,41 @@ function setInputElementValueInternal(
 
 /**
  * Returns a sanitized value of proposedValue for a given input element type.
- * The logic is based on
- *
- *      String sanitizeValue(const String&) const
- *
- * in chromium/src/third_party/WebKit/Source/core/html/InputType.h
  *
  * @param proposedValue The proposed value.
  * @param element The element for which the proposedValue is to be
  *     sanitized.
  * @return The sanitized value.
  */
-function sanitizeValueForInputElement(
+export function sanitizeValueForInputElement(
     proposedValue: string|null, element: Element): string {
   if (!proposedValue) {
     return '';
   }
 
-  // Method HTMLInputElement::sanitizeValue() calls InputType::sanitizeValue()
-  // (chromium/src/third_party/WebKit/Source/core/html/InputType.cpp) for
-  // non-null proposedValue. InputType::sanitizeValue() returns the original
-  // proposedValue by default and it is overridden in classes
-  // BaseDateAndTimeInputType, ColorInputType, RangeInputType and
-  // TextFieldInputType (all are in
-  // chromium/src/third_party/WebKit/Source/core/html/). Currently only
-  // TextFieldInputType is relevant and sanitizeValue() for other types of
-  // input elements has not been implemented.
   if (isTextField(element)) {
     return sanitizeValueForTextFieldInputType(
         proposedValue, element as HTMLInputElement);
+  }
+  if (inferenceUtil.isDateField(element) &&
+      isFeatureEnabled('isAutofillSupportDateInputEnabled')) {
+    return sanitizeValueForDateInputType(proposedValue);
+  }
+  return proposedValue;
+}
+
+/**
+ * Returns a sanitized value for a date input field.
+ *
+ * @param proposedValue The proposed value.
+ * @return The sanitized value.
+ */
+function sanitizeValueForDateInputType(proposedValue: string): string {
+  // Date picker HTML elements accept only dates in the format YYYY-MM-DD
+  // (ISO 8601) by spec.
+  const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+  if (!dateRegex.test(proposedValue)) {
+    return '';
   }
   return proposedValue;
 }
@@ -605,32 +638,59 @@ export function valueForElement(
  * be "Billing Address".
  */
 function coalesceTextByIdList(
-  element: Element|null, attribute: string): string {
-  if (!element) {
-    return '';
-  }
+    element: Element|null, attribute: string): string {
+  if (isAutofillOptimizationFormSearchEnabled()) {
+    if (!element) {
+      return '';
+    }
 
-  const ids = element.getAttribute(attribute);
-  if (!ids) {
-    return '';
-  }
+    const idsAttr = element.getAttribute(attribute);
+    if (!idsAttr) {
+      return '';
+    }
 
-  return ids.trim()
-      .split(/\s+/)
-      .map(function(i) {
-        return document.getElementById(i);
-      })
-      .filter(function(e) {
-        return e !== null;
-      })
-      .map(function(n) {
-        return findChildText(n!);
-      })
-      .filter(function(s) {
-        return s.length > 0;
-      })
-      .join(' ')
-      .trim();
+    const ids = idsAttr.trim().split(/\s+/);
+    const resultStrings: string[] = [];
+    for (const id of ids) {
+      if (!id) {
+        continue;
+      }
+      const el = document.getElementById(id);
+      if (el) {
+        const text = findChildText(el);
+        if (text.length > 0) {
+          resultStrings.push(text);
+        }
+      }
+    }
+    return resultStrings.join(' ');
+  } else {
+    if (!element) {
+      return '';
+    }
+
+    const ids = element.getAttribute(attribute);
+    if (!ids) {
+      return '';
+    }
+
+    return ids.trim()
+        .split(/\s+/)
+        .map(function(i) {
+          return document.getElementById(i);
+        })
+        .filter(function(e) {
+          return e !== null;
+        })
+        .map(function(n) {
+          return findChildText(n!);
+        })
+        .filter(function(s) {
+          return s.length > 0;
+        })
+        .join(' ')
+        .trim();
+  }
 }
 
 /**
@@ -664,9 +724,7 @@ export function getAriaDescription(element: Element): string {
  * @param element An element to examine.
  * @return Whether the element is inside a <form> or <fieldset>.
  */
-// TODO(crbug.com/454044167): Cleanup autofill TS type casting.
-export function isElementInsideFormOrFieldSet(
-    element: fillConstants.FormControlElement): boolean {
+export function isElementInsideFormOrFieldSet(element: Element): boolean {
   let parentNode = element.parentNode;
   while (parentNode) {
     if ((parentNode.nodeType === Node.ELEMENT_NODE) &&
@@ -744,8 +802,23 @@ export function getRemoteFrameToken(): string|null {
   return document.documentElement.getAttribute(REMOTE_FRAME_TOKEN_ATTRIBUTE);
 }
 
+export function getOrCreateRemoteFrameToken(): string {
+  const remoteFrameToken = getRemoteFrameToken();
+  if (remoteFrameToken) {
+    return remoteFrameToken;
+  }
+
+  const newRemoteFrameToken = generateRandomId();
+  // Store the remote token in the DOM. Page content world scripts will be able
+  // to read it and send it in the payload of their messages to the browser. The
+  // browser layer uses remote tokens to map page content world frames to their
+  // isolated world counter parts, which is where the rest of Autofill lives.
+  setRemoteFrameToken(newRemoteFrameToken);
+  return newRemoteFrameToken;
+}
+
 /**
- * Get all form control elements from |elements| that are not part of a form.
+ * Get all form control elements from document that are not part of a form.
  * Also append the fieldsets encountered that are not part of a form to
  * |fieldsets|.
  *
@@ -759,18 +832,20 @@ export function getRemoteFrameToken(): string|null {
  * In the C++ version, |fieldsets| can be NULL, in which case we do not try to
  * append to it.
  *
- * @param elements elements to look through.
  * @param fieldsets out param for unowned fieldsets.
  * @return The elements that are not part of a form.
  */
 export function getUnownedAutofillableFormFieldElements(
-    elements: fillConstants.FormControlElement[],
     fieldsets: Element[]): fillConstants.FormControlElement[] {
+  const elements = isAutofillOptimizationFormSearchEnabled() ?
+      document.querySelectorAll('input, select, textarea, fieldset') :
+      document.all;
   const unownedFieldsetChildren: fillConstants.FormControlElement[] = [];
   for (const element of elements) {
     if (isFormControlElement(element)) {
-      if (!element.form) {
-        unownedFieldsetChildren.push(element);
+      const formControlElement = element as fillConstants.FormControlElement;
+      if (!formControlElement.form) {
+        unownedFieldsetChildren.push(formControlElement);
       }
     }
 

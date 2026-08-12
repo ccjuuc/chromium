@@ -4,11 +4,11 @@
 
 #include "chrome/browser/component_updater/first_party_sets_component_installer.h"
 
-#include "components/component_updater/installer_policies/first_party_sets_component_installer_policy.h"
-
 #include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/task/thread_pool.h"
+#include "build/branding_buildflags.h"
+#include "components/component_updater/installer_policies/first_party_sets_component_installer_policy.h"
 #include "content/public/browser/first_party_sets_handler.h"
 #include "content/public/common/content_features.h"
 #include "net/base/features.h"
@@ -16,13 +16,16 @@
 namespace {
 
 base::TaskPriority GetTaskPriority() {
-  // We may use USER_BLOCKING here since First-Party Set initialization can
-  // block network requests at startup.
-  return content::FirstPartySetsHandler::GetInstance()->IsEnabled() &&
-                 base::FeatureList::IsEnabled(
-                     net::features::kWaitForFirstPartySetsInit)
-             ? base::TaskPriority::USER_BLOCKING
-             : base::TaskPriority::BEST_EFFORT;
+#if BUILDFLAG(CHROME_FOR_TESTING)
+  // In Chrome for Testing, component updates are either completely disabled or
+  // delay browser startup until all required components are up to date. Since
+  // BEST_EFFORT tasks are not run until after the browser starts, the
+  // 'Related Website Sets' component is not updated along with other required
+  // components unless its priority is elevated.
+  return base::TaskPriority::USER_BLOCKING;
+#else
+  return base::TaskPriority::BEST_EFFORT;
+#endif  // BUILDFLAG(CHROME_FOR_TESTING)
 }
 
 }  // namespace

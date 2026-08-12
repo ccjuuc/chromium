@@ -4,22 +4,21 @@
 
 #include "third_party/blink/renderer/modules/xr/xr_graphics_binding.h"
 
-#include "third_party/blink/renderer/modules/xr/xr_composition_layer.h"
 #include "third_party/blink/renderer/modules/xr/xr_session.h"
 
 namespace blink {
 
-XRGraphicsBinding::XRGraphicsBinding(XRSession* session) : session_(session) {}
+XRGraphicsBinding::XRGraphicsBinding(XRSession* session) : session_(session) {
+  session_->AddGraphicsBinding(this);
+}
+
+void XRGraphicsBinding::PreFinalize() {
+  DLOG(ERROR) << __func__;
+  session_->RemoveGraphicsBinding(this);
+}
 
 double XRGraphicsBinding::nativeProjectionScaleFactor() const {
   return session_->NativeFramebufferScale();
-}
-
-bool XRGraphicsBinding::OwnsLayer(XRCompositionLayer* layer) {
-  if (layer == nullptr) {
-    return false;
-  }
-  return this == layer->binding();
 }
 
 void XRGraphicsBinding::Trace(Visitor* visitor) const {

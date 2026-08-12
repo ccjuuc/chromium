@@ -8,6 +8,7 @@ import static org.mockito.Mockito.doReturn;
 
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
@@ -16,7 +17,6 @@ import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 
-import androidx.appcompat.content.res.AppCompatResources;
 import androidx.test.InstrumentationRegistry;
 import androidx.test.filters.MediumTest;
 
@@ -162,9 +162,10 @@ public class ImprovedBookmarkFolderViewRenderTest {
                                     mActivityTestRule.getActivity()));
                     mModel.set(
                             ImprovedBookmarkRowProperties.FOLDER_START_ICON_TINT,
-                            AppCompatResources.getColorStateList(
-                                    mActivityTestRule.getActivity(),
-                                    R.color.default_icon_color_secondary_tint_list));
+                            mActivityTestRule
+                                    .getActivity()
+                                    .getColorStateList(
+                                            R.color.default_icon_color_secondary_tint_list));
                 });
         mRenderTestRule.render(mFolderView, "no_image");
     }
@@ -300,5 +301,33 @@ public class ImprovedBookmarkFolderViewRenderTest {
                             imageSupplier);
                 });
         mRenderTestRule.render(mFolderView, "two_images_999_children");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    public void testSoftwareCanvasRendering() throws IOException {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    LazyOneshotSupplier<Pair<Drawable, Drawable>> imageSupplier =
+                            LazyOneshotSupplier.fromSupplier(
+                                    () -> new Pair<>(mPrimaryDrawable, mSecondaryDrawable));
+                    mModel.set(
+                            ImprovedBookmarkRowProperties.FOLDER_START_IMAGE_FOLDER_DRAWABLES,
+                            imageSupplier);
+                });
+        Bitmap bitmap =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> {
+                            Bitmap b =
+                                    Bitmap.createBitmap(
+                                            mFolderView.getWidth(),
+                                            mFolderView.getHeight(),
+                                            Bitmap.Config.ARGB_8888);
+                            Canvas c = new Canvas(b);
+                            mFolderView.draw(c);
+                            return b;
+                        });
+        mRenderTestRule.compareForResult(bitmap, "software_canvas");
     }
 }

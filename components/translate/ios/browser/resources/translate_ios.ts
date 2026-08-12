@@ -13,7 +13,7 @@ import {sendWebKitMessage} from '//ios/web/public/js_messaging/resources/utils.j
 
 // The implementation of the cr module is located in
 // //components/translate/core/browser/resources/translate.js
-declare module cr {
+declare namespace cr {
   let googleTranslate: any;
 }
 
@@ -45,6 +45,17 @@ function installCallbacks() {
       'translationTime': cr.googleTranslate.translationTime,
     });
   };
+
+  /**
+   * A custom javascript loader to use native side network request.
+   */
+  cr.googleTranslate.customJavaScriptLoader = function(url: string) {
+    sendWebKitMessage('TranslateMessage', {
+      'command': 'loadJavascript',
+      'url': url,
+      'frameId': gCrWeb.getFrameId(),
+    });
+  };
 }
 
 function startTranslation(sourceLanguage: string, targetLanguage: string) {
@@ -60,10 +71,10 @@ function revertTranslation() {
 }
 
 // Mark: Public API
-const translateApi = new CrWebApi();
+const translateApi = new CrWebApi('translate');
 
 translateApi.addFunction('installCallbacks', installCallbacks);
 translateApi.addFunction('startTranslation', startTranslation);
 translateApi.addFunction('revertTranslation', revertTranslation);
 
-gCrWeb.registerApi('translate', translateApi);
+gCrWeb.registerApi(translateApi);

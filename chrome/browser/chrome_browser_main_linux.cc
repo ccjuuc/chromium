@@ -17,16 +17,17 @@
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/grit/branded_strings.h"
 #include "components/password_manager/core/browser/password_manager_switches.h"
 #include "content/public/browser/browser_thread.h"
 #include "device/bluetooth/dbus/bluez_dbus_manager.h"
 #include "ui/base/l10n/l10n_util.h"
 
 #if BUILDFLAG(IS_LINUX)
-#include "components/dbus/thread_linux/dbus_thread_linux.h"
 #include "ui/ozone/public/ozone_platform.h"
-#endif
+#if BUILDFLAG(USE_DBUS)
+#include "components/dbus/thread_linux/dbus_thread_linux.h"
+#endif  // BUILDFLAG(USE_DBUS)
+#endif  // BUILDFLAG(IS_LINUX)
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/installer/util/google_update_settings.h"
@@ -41,8 +42,6 @@
 #include "base/linux_util.h"
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/common/chrome_switches.h"
-#include "components/os_crypt/sync/key_storage_config_linux.h"
-#include "components/os_crypt/sync/os_crypt.h"
 #endif
 
 ChromeBrowserMainPartsLinux::ChromeBrowserMainPartsLinux(
@@ -53,9 +52,9 @@ ChromeBrowserMainPartsLinux::ChromeBrowserMainPartsLinux(
 ChromeBrowserMainPartsLinux::~ChromeBrowserMainPartsLinux() = default;
 
 void ChromeBrowserMainPartsLinux::PostCreateMainMessageLoop() {
-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
 #if BUILDFLAG(IS_CHROMEOS)
-  if (command_line->HasSwitch(metrics::kRecordStackSamplingDataSwitch)) {
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          metrics::kRecordStackSamplingDataSwitch)) {
     stack_sampling_recorder_ =
         base::MakeRefCounted<metrics::StackSamplingRecorder>();
     stack_sampling_recorder_->Start();
@@ -65,28 +64,10 @@ void ChromeBrowserMainPartsLinux::PostCreateMainMessageLoop() {
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if !BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(USE_DBUS)
   bluez::BluezDBusManager::Initialize(
       dbus_thread_linux::GetSharedSystemBus().get());
-
-  // Set up crypt config. This needs to be done before anything starts the
-  // network service, as the raw encryption key needs to be shared with the
-  // network service for encrypted cookie storage.
-  // Chrome OS does not need a crypt config as its user data directories are
-  // already encrypted and none of the true encryption backends used by desktop
-  // Linux are available on Chrome OS anyway.
-  std::unique_ptr<os_crypt::Config> config =
-      std::make_unique<os_crypt::Config>();
-  // Forward to os_crypt the flag to use a specific password store.
-  config->store =
-      command_line->GetSwitchValueASCII(password_manager::kPasswordStore);
-  // Forward the product name
-  config->product_name = l10n_util::GetStringUTF8(IDS_PRODUCT_NAME);
-  // OSCrypt can be disabled in a special settings file.
-  config->should_use_preference =
-      base::CommandLine::ForCurrentProcess()->HasSwitch(
-          password_manager::kEnableEncryptionSelection);
-  chrome::GetDefaultUserDataDirectory(&config->user_data_path);
-  OSCrypt::SetConfig(std::move(config));
+#endif  // BUILDFLAG(USE_DBUS)
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
   ChromeBrowserMainPartsPosix::PostCreateMainMessageLoop();
@@ -114,11 +95,7 @@ void ChromeBrowserMainPartsLinux::PreProfileInit() {
 
 #if BUILDFLAG(USE_DBUS) && !BUILDFLAG(IS_CHROMEOS)
 void ChromeBrowserMainPartsLinux::PostBrowserStart() {
-  // static_cast is safe because this is the only implementation of
-  // MemoryPressureMonitor.
-  auto* monitor =
-      static_cast<memory_pressure::MultiSourceMemoryPressureMonitor*>(
-          base::MemoryPressureMonitor::Get());
+  auto* monitor = memory_pressure::MultiSourceMemoryPressureMonitor::Get();
   if (monitor &&
       base::FeatureList::IsEnabled(features::kLinuxLowMemoryMonitor)) {
     monitor->SetSystemEvaluator(

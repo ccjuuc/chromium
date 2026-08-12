@@ -19,13 +19,18 @@ export enum ModelExecutionEnterprisePolicyValue {
 }
 // LINT.ThenChange(/components/optimization_guide/core/model_execution/model_execution_prefs.h:ModelExecutionEnterprisePolicyValue)
 
+export enum ChromeSuggestionsSettingsValue {
+  ENABLED = 0,
+  DISABLED = 1,
+}
+
 
 // Exporting pref names so that they can be referenced by tests.
 export enum SettingsAiPageFeaturePrefName {
   HISTORY_SEARCH = 'optimization_guide.history_search_setting_state',
   COMPOSE = 'optimization_guide.compose_setting_state',
-  TAB_ORGANIZATION = 'optimization_guide.tab_organization_setting_state',
-  AUTOFILL_AI = 'autofill.autofill_ai.opt_in_status'
+  AUTOFILL_AI = 'autofill.autofill_ai.opt_in_status',
+  CONTEXTUAL_CUEING = 'optimization_guide.contextual_cueing_setting_state',
 }
 
 // Exporting enterprise pref names so that they can be referenced by tests.
@@ -34,12 +39,9 @@ export enum AiEnterpriseFeaturePrefName {
       'optimization_guide.model_execution.history_search_enterprise_policy_allowed',
   COMPOSE =
       'optimization_guide.model_execution.compose_enterprise_policy_allowed',
-  TAB_ORGANIZATION =
-      'optimization_guide.model_execution.tab_organization_enterprise_policy_allowed',
-  COMPARE =
-      'optimization_guide.model_execution.tab_compare_settings_enterprise_policy',
   AUTOFILL_AI =
       'optimization_guide.model_execution.autofill_prediction_improvements_enterprise_policy_allowed',
+  CONTEXTUAL_CUEING = 'contextual_cueing.chrome_suggestions_settings',
 }
 
 export enum AiPageActions {
@@ -49,15 +51,11 @@ export enum AiPageActions {
       'Settings.AiPage.HistorySearch.FeatureLinkClicked',
   HISTORY_SEARCH_LEARN_MORE_CLICKED =
       'Settings.AiPage.HistorySearch.LearnMoreClicked',
-  COMPARE_FEATURE_LINK_CLICKED = 'Settings.AiPage.Compare.FeatureLinkClicked',
-  COMPARE_LEARN_MORE_CLICKED = 'Settings.AiPage.Compare.LearnMoreClicked',
   COMPOSE_LEARN_MORE_CLICKED = 'Settings.AiPage.Compose.LearnMoreClicked',
   COMPOSE_PROACTIVE_NUDGE_ENABLED =
       'Settings.AiPage.Compose.ProactiveNudgeEnabled',
   COMPOSE_PROACTIVE_NUDGE_DISABLED =
       'Settings.AiPage.Compose.ProactiveNudgeDisabled',
-  TAB_ORGANIZATION_LEARN_MORE_CLICKED =
-      'Settings.AiPage.TabOrganization.LearnMoreClicked',
   GLIC_COLLAPSED_LEARN_MORE_CLICKED =
       'Settings.AiPage.GlicCollapsed.LearnMoreClicked',
   GLIC_SHORTCUTS_LEARN_MORE_CLICKED =
@@ -72,4 +70,10 @@ export enum AiPageActions {
       'Settings.AiPage.GlicShortcuts.DefaultTabAccessToggleLearnMoreClicked',
   GLIC_SHORTCUTS_WEB_ACTUATION_TOGGLE_LEARN_MORE_CLICKED =
       'Settings.AiPage.GlicShortcuts.WebActuationToggleLearnMoreClicked',
+  AI_SUGGESTIONS_ENABLED = 'Settings.AiPage.AiSuggestions.Enabled',
+  AI_SUGGESTIONS_DISABLED = 'Settings.AiPage.AiSuggestions.Disabled',
+  AI_SUGGESTIONS_LEARN_MORE_CLICKED =
+      'Settings.AiPage.AiSuggestions.LearnMoreClicked',
+  AI_SUGGESTIONS_SYNC_SETTINGS_CLICKED =
+      'Settings.AiPage.AiSuggestions.SyncSettingsClicked',
 }

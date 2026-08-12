@@ -10,7 +10,6 @@
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/time/time.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/ash/interactive/cellular/cellular_util.h"
 #include "chrome/test/base/ash/interactive/cellular/esim_interactive_uitest_base.h"
 #include "chrome/test/base/ash/interactive/cellular/wait_for_service_connected_observer.h"
@@ -73,7 +72,7 @@ class SimLockInteractiveUiTest : public EsimInteractiveUiTestBase {
     ASSERT_TRUE(device_test);
     device_test->SetDeviceProperty(
         device_path_, shill::kSIMLockStatusProperty,
-        base::Value(base::Value::Dict()
+        base::Value(base::DictValue()
                         .Set(shill::kSIMLockTypeProperty, base::Value(type))
                         .Set(shill::kSIMLockRetriesLeftProperty,
                              base::Value(retries_left))
@@ -112,12 +111,12 @@ class SimLockInteractiveUiTest : public EsimInteractiveUiTestBase {
   }
 
   void RestrictSimLockFromPolicy(bool allow_sim_lock) {
-    base::Value::Dict global_config;
+    base::DictValue global_config;
     global_config.Set(::onc::global_network_config::kAllowCellularSimLock,
                       allow_sim_lock);
     NetworkHandler::Get()->managed_network_configuration_handler()->SetPolicy(
         ::onc::ONC_SOURCE_DEVICE_POLICY, /*userhash=*/std::string(),
-        base::Value::List(), global_config);
+        base::ListValue(), global_config);
   }
 
   // Navigates to the SIM lock settings on the detailed page of the cellular

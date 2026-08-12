@@ -4,24 +4,107 @@
 
 #include "chrome/browser/glic/test_support/glic_test_environment.h"
 
+#include "base/command_line.h"
 #include "base/no_destructor.h"
-#include "chrome/browser/glic/fre/glic_fre_controller.h"
+#include "base/path_service.h"
 #include "chrome/browser/glic/host/auth_controller.h"
 #include "chrome/browser/glic/host/glic_cookie_synchronizer.h"
+#include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
 #include "chrome/browser/glic/test_support/glic_test_util.h"
-#include "chrome/browser/glic/widget/glic_window_controller.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/common/chrome_features.h"
+#include "chrome/common/chrome_switches.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "components/signin/public/identity_manager/account_info.h"
+#include "components/signin/public/identity_manager/identity_test_utils.h"
+#include "components/skills/features.h"
+#include "net/test/embedded_test_server/embedded_test_server.h"
+#include "url/url_util.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/constants/chromeos_features.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/jni_android.h"
+#include "base/android/jni_array.h"
+#include "base/android/jni_string.h"
+#include "base/android/scoped_java_ref.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/signin/public/identity_manager/identity_test_utils.h"
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-function"
+#include "components/signin/public/android/jni_headers/AccountCapabilities_jni.h"
+#include "components/signin/public/android/jni_headers/AccountInfo_jni.h"
+#pragma clang diagnostic pop
+
+namespace {
+
+// Defined locally to avoid changes to identity_test_utils.h/cc.
+void AddTestAccountToFakeAccountManagerFacade(const std::string& email,
+                                              const std::string& gaia_id) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+
+  // 1. Construct GaiaId
+  GaiaId gaia_id_cpp(gaia_id);
+
+  // 2. Construct CoreAccountId
+  CoreAccountId core_account_id_cpp = CoreAccountId::FromGaiaId(gaia_id_cpp);
+
+  // 3. Construct AccountCapabilities (empty)
+  std::vector<std::string> cap_names;
+  std::vector<bool> cap_values;
+  base::android::ScopedJavaLocalRef<jobjectArray> j_cap_names =
+      base::android::ToJavaArrayOfStrings(env, cap_names);
+  base::android::ScopedJavaLocalRef<jbooleanArray> j_cap_values =
+      base::android::ToJavaBooleanArray(env, cap_values);
+  base::android::ScopedJavaLocalRef<jobject> account_capabilities_obj =
+      signin::Java_AccountCapabilities_Constructor(env, j_cap_names,
+                                                   j_cap_values);
+
+  // 4. Construct AccountInfo
+  base::android::ScopedJavaLocalRef<jobject> account_info_obj =
+      signin::Java_AccountInfo_Constructor(
+          env, core_account_id_cpp, email, gaia_id_cpp, "Test User", "Test",
+          base::android::ScopedJavaLocalRef<jstring>(),  // hostedDomain
+          base::android::ScopedJavaLocalRef<jobject>(),  // accountImage
+          account_capabilities_obj);
+
+  // 5. Get AccountManagerFacadeProvider class and getInstance method
+  base::android::ScopedJavaLocalRef<jclass> provider_class =
+      base::android::GetClass(
+          env, "org/chromium/components/signin/AccountManagerFacadeProvider");
+  jmethodID get_instance_method =
+      base::android::MethodID::Get<base::android::MethodID::TYPE_STATIC>(
+          env, provider_class.obj(), "getInstance",
+          "()Lorg/chromium/components/signin/AccountManagerFacade;");
+
+  // 6. Get AccountManagerFacade instance
+  base::android::ScopedJavaLocalRef<jobject> facade_obj = jni_zero::AdoptRef(
+      env,
+      env->CallStaticObjectMethod(provider_class.obj(), get_instance_method));
+
+  // 7. Get addAccount method (FakeAccountManagerFacade specific)
+  base::android::ScopedJavaLocalRef<jclass> facade_class =
+      jni_zero::AdoptRef(env, env->GetObjectClass(facade_obj.obj()));
+  jmethodID add_account_method =
+      base::android::MethodID::Get<base::android::MethodID::TYPE_INSTANCE>(
+          env, facade_class.obj(), "addAccount",
+          "(Lorg/chromium/components/signin/base/AccountInfo;)V");
+
+  // 8. Call addAccount
+  env->CallVoidMethod(facade_obj.obj(), add_account_method,
+                      account_info_obj.obj());
+}
+
+}  // namespace
+#endif
 
 namespace glic {
 
@@ -34,27 +117,16 @@ GlicTestEnvironmentConfig& GetConfig() {
 // A fake GlicCookieSynchronizer.
 class TestCookieSynchronizer : public glic::GlicCookieSynchronizer {
  public:
-  static std::pair<TestCookieSynchronizer*, TestCookieSynchronizer*>
-  InjectForProfile(Profile* profile) {
+  static TestCookieSynchronizer* InjectForProfile(Profile* profile) {
     GlicKeyedService* service =
         GlicKeyedServiceFactory::GetGlicKeyedService(profile, true);
     auto cookie_synchronizer = std::make_unique<TestCookieSynchronizer>(
-        profile, IdentityManagerFactory::GetForProfile(profile),
-        /*for_fre=*/false);
+        profile, IdentityManagerFactory::GetForProfile(profile));
     TestCookieSynchronizer* ptr = cookie_synchronizer.get();
     service->GetAuthController().SetCookieSynchronizerForTesting(
         std::move(cookie_synchronizer));
 
-    auto fre_cookie_synchronizer = std::make_unique<TestCookieSynchronizer>(
-        profile, IdentityManagerFactory::GetForProfile(profile),
-        /*for_fre=*/true);
-    TestCookieSynchronizer* fre_cookie_synchronizer_ptr =
-        fre_cookie_synchronizer.get();
-    service->fre_controller()
-        .GetAuthControllerForTesting()
-        .SetCookieSynchronizerForTesting(std::move(fre_cookie_synchronizer));
-
-    return std::make_pair(ptr, fre_cookie_synchronizer_ptr);
+    return ptr;
   }
 
   using GlicCookieSynchronizer::GlicCookieSynchronizer;
@@ -102,6 +174,7 @@ class GlicTestEnvironmentServiceFactory : public ProfileKeyedServiceFactory {
       : ProfileKeyedServiceFactory(
             "GlicTestEnvironmentService",
             ProfileSelections::BuildForRegularProfile()) {
+    DependsOn(IdentityManagerFactory::GetInstance());
     // It would be sensible to depend on GlicKeyedServiceFactory, but that ends
     // up creating some service factories too early.
   }
@@ -111,16 +184,23 @@ class GlicTestEnvironmentServiceFactory : public ProfileKeyedServiceFactory {
 }  // namespace internal
 
 std::vector<base::test::FeatureRef> GetDefaultEnabledGlicTestFeatures() {
-  return {features::kGlic, features::kTabstripComboButton,
-          features::kGlicRollout,
+  return {features::kGlic, features::kGlicRollout,
+          // Live mode is disabled by default on Linux, but we still want to
+          // test it.
+          features::kGlicLiveMode,
+          // The anchor entry point is disabled by default globally, but we want
+          // all glic tests to run with the intended future behavior. Explicit
+          // enabling is required here because some tests instantiate their own
+          // ScopedFeatureList which can clobber the field trial testing config.
+          features::kGlicAnchorEntryPointForOnboardedUsers,
 #if BUILDFLAG(IS_CHROMEOS)
           chromeos::features::kFeatureManagementGlic
 #endif  // BUILDFLAG(IS_CHROMEOS)
   };
 }
 std::vector<base::test::FeatureRef> GetDefaultDisabledGlicTestFeatures() {
-  return {features::kGlicWarming, features::kGlicFreWarming,
-          features::kGlicCountryFiltering, features::kGlicLocaleFiltering};
+  return {features::kGlicWarming, features::kGlicCountryFiltering,
+          features::kGlicLocaleFiltering, features::kSkillsServiceApi};
 }
 
 GlicTestEnvironment::GlicTestEnvironment(
@@ -137,6 +217,14 @@ GlicTestEnvironment::GlicTestEnvironment(
           ->RegisterCreateServicesCallbackForTesting(base::BindRepeating(
               &GlicTestEnvironment::OnWillCreateBrowserContextKeyedServices,
               base::Unretained(this)));
+
+#if BUILDFLAG(IS_ANDROID)
+  // On Android, SigninManager validates the account with the OS AccountManager
+  // (mediated by AccountManagerFacade). We must set up the fake facade.
+  // The account seeding is done in OnWillCreateBrowserContextKeyedServices
+  // to run after TestingProfile::Init resets the facade.
+  signin::SetUpFakeAccountManagerFacade();
+#endif
 }
 
 GlicTestEnvironment::~GlicTestEnvironment() = default;
@@ -172,6 +260,8 @@ void GlicTestEnvironment::OnWillCreateBrowserContextKeyedServices(
   if (internal::GetConfig().force_signin_and_glic_capability) {
     IdentityTestEnvironmentProfileAdaptor::
         SetIdentityTestEnvironmentFactoriesOnBrowserContext(context);
+
+    adaptor_ = std::make_unique<IdentityTestEnvironmentProfileAdaptor>(profile);
   }
 
   auto observation =
@@ -190,18 +280,82 @@ void GlicTestEnvironment::OnProfileInitializationComplete(Profile* profile) {
   GetService(profile, true);
 }
 
+bool GlicTestEnvironment::SetupEmbeddedTestServers(
+    net::test_server::EmbeddedTestServer* http_server,
+    net::test_server::EmbeddedTestServer* https_server) {
+  CHECK(guest_url_.is_empty()) << "SetupEmbeddedTestServers called twice";
+
+  http_server->ServeFilesFromDirectory(
+      base::PathService::CheckedGet(base::DIR_ASSETS)
+          .AppendASCII("gen/chrome/test/data/webui/glic/"));
+  http_server->ServeFilesFromSourceDirectory("chrome/test/data/webui/glic/");
+  if (https_server) {
+    https_server->ServeFilesFromDirectory(
+        base::PathService::CheckedGet(base::DIR_ASSETS)
+            .AppendASCII("gen/chrome/test/data/webui/glic/"));
+    https_server->ServeFilesFromSourceDirectory("chrome/test/data/webui/glic/");
+  }
+
+  test_server_handle_ = http_server->StartAndReturnHandle();
+  if (!test_server_handle_) {
+    return false;
+  }
+
+  // Need to set this here rather than in SetUpCommandLine because we need to
+  // use the embedded test server to get the right URL and it's not started
+  // at that time.
+  std::ostringstream path;
+  path << glic_page_path_;
+
+  // Append the query parameters to the URL.
+  bool first_param = true;
+  for (const auto& [key, value] : mock_glic_query_params_) {
+    path << (first_param ? "?" : "&");
+    first_param = false;
+    path << url::EncodeUriComponent(key);
+    if (!value.empty()) {
+      path << "=" << url::EncodeUriComponent(value);
+    }
+  }
+
+  auto* command_line = base::CommandLine::ForCurrentProcess();
+  guest_url_ = http_server->GetURL(path.str());
+  command_line->AppendSwitchASCII(::switches::kGlicGuestURL, guest_url_.spec());
+
+
+  return true;
+}
+
+void GlicTestEnvironment::SetGlicPagePath(const std::string& path) {
+  CHECK(guest_url_.is_empty())
+      << "SetGlicPagePath must be called before SetupEmbeddedTestServers";
+  glic_page_path_ = path;
+}
+
+void GlicTestEnvironment::AddMockGlicQueryParam(const std::string_view& key,
+                                                const std::string_view& value) {
+  CHECK(guest_url_.is_empty())
+      << "AddMockGlicQueryParam must be called before SetupEmbeddedTestServers";
+  mock_glic_query_params_.emplace(key, value);
+}
+
+GURL GlicTestEnvironment::GetGuestURL() const {
+  CHECK(guest_url_.is_valid()) << "Guest URL not yet configured.";
+  return guest_url_;
+}
+
 GlicTestEnvironmentService::GlicTestEnvironmentService(Profile* profile)
     : profile_(profile) {
-  std::pair<internal::TestCookieSynchronizer*,
-            internal::TestCookieSynchronizer*>
-      cookie_synchronizers =
-          internal::TestCookieSynchronizer::InjectForProfile(profile);
+  internal::TestCookieSynchronizer* cookie_synchronizer =
+      internal::TestCookieSynchronizer::InjectForProfile(profile);
 
-  cookie_synchronizer_ = cookie_synchronizers.first->GetWeakPtr();
-  fre_cookie_synchronizer_ = cookie_synchronizers.second->GetWeakPtr();
+  cookie_synchronizer_ = cookie_synchronizer->GetWeakPtr();
   const GlicTestEnvironmentConfig& config = internal::GetConfig();
   if (config.fre_status) {
     SetFRECompletion(*config.fre_status);
+  }
+  if (config.override_cookie_sync_result.has_value()) {
+    SetResultForFutureCookieSync(*config.override_cookie_sync_result);
   }
   if (config.force_signin_and_glic_capability) {
 #if BUILDFLAG(IS_CHROMEOS)
@@ -223,7 +377,25 @@ GlicTestEnvironmentService::GlicTestEnvironmentService(Profile* profile)
     auto disabled = ash::BrowserContextHelper::
         DisableImplicitBrowserContextCreationForTest();
 #endif
-    SigninWithPrimaryAccount(profile);
+#if BUILDFLAG(IS_ANDROID)
+    // Seed the account into the FakeAccountManagerFacade.
+    // This is required on Android because SigninManager checks the facade
+    // directly.
+    AddTestAccountToFakeAccountManagerFacade(
+        "glic-test@example.com",
+        signin::GetTestGaiaIdForEmail("glic-test@example.com").ToString());
+#endif
+    auto* identity_manager = IdentityManagerFactory::GetForProfile(profile);
+    if (!identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin)) {
+      AccountInfo::Builder builder(signin::MakePrimaryAccountAvailable(
+          identity_manager, "glic-test@example.com",
+          signin::ConsentLevel::kSignin));
+      builder.SetFullName("Glic Testing").SetGivenName("Glic");
+      if (!config.default_account_hosted_domain.empty()) {
+        builder.SetHostedDomain(config.default_account_hosted_domain);
+      }
+      signin::UpdateAccountInfoForAccount(identity_manager, builder.Build());
+    }
     SetModelExecutionCapability(true);
   }
 }
@@ -236,11 +408,6 @@ GlicKeyedService* GlicTestEnvironmentService::GetService() {
 
 void GlicTestEnvironmentService::SetResultForFutureCookieSync(bool result) {
   cookie_synchronizer_->set_copy_cookies_result(result);
-}
-
-void GlicTestEnvironmentService::SetResultForFutureCookieSyncInFre(
-    bool result) {
-  fre_cookie_synchronizer_->set_copy_cookies_result(result);
 }
 
 void GlicTestEnvironmentService::SetFRECompletion(prefs::FreStatus fre_status) {

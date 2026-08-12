@@ -6,26 +6,31 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <sstream>
 
+#include "base/check.h"
 #include "base/check_op.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/types/expected.h"
 #include "chrome/browser/ai/ai_context_bound_object.h"
 #include "chrome/browser/ai/ai_manager.h"
-#include "chrome/browser/ai/ai_utils.h"
 #include "chrome/browser/ai/features.h"
+#include "components/on_device_ai/ai_utils.h"
 #include "components/optimization_guide/core/model_execution/multimodal_message.h"
 #include "components/optimization_guide/core/model_execution/on_device_capability.h"
+#include "components/optimization_guide/core/model_execution/on_device_telemetry_logger.h"
 #include "components/optimization_guide/core/model_execution/optimization_guide_model_execution_error.h"
 #include "components/optimization_guide/core/model_execution/substitution.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
@@ -37,16 +42,39 @@
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "services/on_device_model/public/cpp/capabilities.h"
+#include "services/on_device_model/public/cpp/features.h"
 #include "third_party/blink/public/common/features_generated.h"
 #include "third_party/blink/public/mojom/ai/ai_common.mojom-shared.h"
-#include "third_party/blink/public/mojom/ai/ai_language_model.mojom-forward.h"
 #include "third_party/blink/public/mojom/ai/ai_language_model.mojom-shared.h"
 #include "third_party/blink/public/mojom/ai/ai_manager.mojom-shared.h"
 #include "third_party/blink/public/mojom/ai/model_streaming_responder.mojom.h"
 
 namespace {
 
+using ::on_device_model::mojom::InputPiece;
+using ::on_device_model::mojom::InputPiecePtr;
+using ::on_device_model::mojom::ToolDeclaration;
+using ::on_device_model::mojom::ToolResponse;
+using ::on_device_model::mojom::ToolResponsePtr;
 using ::optimization_guide::proto::PromptApiMetadata;
+
+ToolResponsePtr GetToolResponseFromDict(const base::DictValue& dict) {
+  const std::string* call_id = dict.FindString("callID");
+  const std::string* name = dict.FindString("name");
+  const base::Value* result = dict.Find("result");
+  const std::string* error_message = dict.FindString("errorMessage");
+
+  // Validate: callID and name required; exactly one of result or errorMessage.
+  if (!call_id || !name || (result && error_message) ||
+      (!result && !error_message)) {
+    return nullptr;
+  }
+
+  return ToolResponse::New(
+      *call_id, *name,
+      result ? std::make_optional(result->Clone()) : std::nullopt,
+      error_message ? std::make_optional(*error_message) : std::nullopt);
+}
 
 ml::Token ConvertToToken(blink::mojom::AILanguageModelPromptRole role) {
   switch (role) {
@@ -56,50 +84,76 @@ ml::Token ConvertToToken(blink::mojom::AILanguageModelPromptRole role) {
       return ml::Token::kUser;
     case blink::mojom::AILanguageModelPromptRole::kAssistant:
       return ml::Token::kModel;
-    case blink::mojom::AILanguageModelPromptRole::kToolCall:
-      return ml::Token::kToolCall;
-    case blink::mojom::AILanguageModelPromptRole::kToolResponse:
-      return ml::Token::kToolResponse;
+  }
+}
+
+void AppendToolDeclarations(
+    const std::vector<blink::mojom::AILanguageModelToolDeclarationPtr>& tools,
+    std::vector<InputPiecePtr>& pieces) {
+  for (const auto& tool : tools) {
+    pieces.push_back(InputPiece::NewToolDeclaration(ToolDeclaration::New(
+        tool->name, tool->description, tool->input_schema.Clone())));
   }
 }
 
 on_device_model::mojom::InputPtr ConvertToInput(
     const std::vector<blink::mojom::AILanguageModelPromptPtr>& prompts,
-    const on_device_model::Capabilities& capabilities) {
+    const on_device_model::Capabilities& capabilities,
+    const std::vector<blink::mojom::AILanguageModelToolDeclarationPtr>& tools) {
   auto input = on_device_model::mojom::Input::New();
+  bool tools_embedded = false;
   for (const auto& prompt : prompts) {
-    input->pieces.push_back(ConvertToToken(prompt->role));
+    input->pieces.push_back(InputPiece::NewToken(ConvertToToken(prompt->role)));
+
+    // Embed tool declarations in the first system prompt.
+    if (!tools_embedded &&
+        prompt->role == blink::mojom::AILanguageModelPromptRole::kSystem &&
+        !tools.empty()) {
+      tools_embedded = true;
+      AppendToolDeclarations(tools, input->pieces);
+    }
+
     for (const auto& content : prompt->content) {
       switch (content->which()) {
         case blink::mojom::AILanguageModelPromptContent::Tag::kText:
-          input->pieces.push_back(content->get_text());
+          input->pieces.push_back(InputPiece::NewText(content->get_text()));
           break;
         case blink::mojom::AILanguageModelPromptContent::Tag::kBitmap:
           if (!capabilities.Has(
                   on_device_model::CapabilityFlags::kImageInput)) {
             return nullptr;
           }
-          input->pieces.push_back(content->get_bitmap());
+          input->pieces.push_back(InputPiece::NewBitmap(content->get_bitmap()));
           break;
-        case blink::mojom::AILanguageModelPromptContent::Tag::kAudio:
+        case blink::mojom::AILanguageModelPromptContent::Tag::kAudio: {
           if (!capabilities.Has(
                   on_device_model::CapabilityFlags::kAudioInput)) {
             return nullptr;
           }
-          // TODO: Export services/on_device_model/ml/chrome_ml_types_traits.cc.
-          const on_device_model::mojom::AudioDataPtr& audio_data =
-              content->get_audio();
-          ml::AudioBuffer audio_buffer;
-          audio_buffer.sample_rate_hz = audio_data->sample_rate;
-          audio_buffer.num_channels = audio_data->channel_count;
-          audio_buffer.num_frames = audio_data->frame_count;
-          audio_buffer.data = audio_data->data;
-          input->pieces.push_back(std::move(audio_buffer));
+          input->pieces.push_back(
+              InputPiece::NewAudio(content->get_audio().Clone()));
           break;
+        }
+        case blink::mojom::AILanguageModelPromptContent::Tag::kToolCall:
+          // TODO(crbug.com/422803232): Support on_device_model tool use.
+          return nullptr;
+        case blink::mojom::AILanguageModelPromptContent::Tag::kToolResponse: {
+          if (!capabilities.Has(on_device_model::CapabilityFlags::kToolUse)) {
+            return nullptr;
+          }
+          // TODO(crbug.com/422803232): Support image/audio result types.
+          auto response = GetToolResponseFromDict(content->get_tool_response());
+          if (!response) {
+            return nullptr;
+          }
+          input->pieces.push_back(
+              InputPiece::NewToolResponse(std::move(response)));
+          break;
+        }
       }
     }
     if (!prompt->is_prefix) {
-      input->pieces.push_back(ml::Token::kEnd);
+      input->pieces.push_back(InputPiece::NewToken(ml::Token::kEnd));
     }
   }
   return input;
@@ -108,20 +162,22 @@ on_device_model::mojom::InputPtr ConvertToInput(
 on_device_model::mojom::InputPtr ConvertToInputForExecute(
     const std::vector<blink::mojom::AILanguageModelPromptPtr>& prompts,
     const on_device_model::Capabilities& capabilities) {
-  auto input = ConvertToInput(prompts, capabilities);
+  auto input = ConvertToInput(prompts, capabilities, /*tools=*/{});
   if (!input) {
     return nullptr;
   }
   if (prompts.empty() || !prompts.back()->is_prefix) {
-    input->pieces.push_back(ml::Token::kModel);
+    input->pieces.push_back(InputPiece::NewToken(ml::Token::kModel));
   }
   return input;
 }
 
 on_device_model::mojom::AppendOptionsPtr MakeAppendOptions(
-    on_device_model::mojom::InputPtr input) {
+    on_device_model::mojom::InputPtr input,
+    on_device_model::mojom::InputSource input_source) {
   auto append_options = on_device_model::mojom::AppendOptions::New();
   append_options->input = std::move(input);
+  append_options->input_source = input_source;
   return append_options;
 }
 
@@ -162,11 +218,14 @@ class AILanguageModel::PromptState
         safety_checker_(safety_checker),
         logger_(std::move(logger)),
         mode_(mode) {
-    responder_.set_disconnect_handler(
+    responder_.set_disconnect_with_reason_handler(
         base::BindOnce(&PromptState::OnDisconnect, base::Unretained(this)));
   }
 
   ~PromptState() override {
+    if (!completed_ && telemetry_logger_.has_value()) {
+      telemetry_logger_->RecordDestroyedWhileWaiting();
+    }
     OnError(blink::mojom::ModelStreamingResponseStatus::kErrorCancelled);
   }
 
@@ -175,14 +234,23 @@ class AILanguageModel::PromptState
   // input+output tokens. `callback` may delete this object.
   void AppendAndGenerate(
       mojo::PendingRemote<on_device_model::mojom::Session> session,
-      uint32_t max_output_tokens,
+      uint32_t available_context_tokens,
+      std::optional<uint32_t> configured_max_output_tokens,
       base::OnceClosure callback) {
-    start_ = base::TimeTicks::Now();
+    telemetry_logger_.emplace(
+        optimization_guide::mojom::OnDeviceFeature::kPromptApi);
     callback_ = std::move(callback);
     // Subtract 1 to make sure the model's max tokens is never actually reached.
     max_output_tokens_ =
-        max_output_tokens - 1 +
+        available_context_tokens - 1 +
         features::kAILanguageModelOverrideConfigurationOutputBuffer.Get();
+    // Clamp max_output_tokens_ to the remaining available context and any
+    // config-specific maximum per-response limit.
+    if (configured_max_output_tokens.has_value()) {
+      DCHECK_GT(configured_max_output_tokens.value(), 0u);
+      max_output_tokens_ =
+          std::min(max_output_tokens_, configured_max_output_tokens.value());
+    }
     safety_checker_->RunRequestChecks(
         CreateStringMessage(*input_),
         base::BindOnce(&PromptState::RequestSafetyChecksComplete,
@@ -191,23 +259,21 @@ class AILanguageModel::PromptState
 
   void OnError(blink::mojom::ModelStreamingResponseStatus error,
                blink::mojom::QuotaErrorInfoPtr quota_error_info = nullptr) {
+    completed_ = true;
     if (responder_) {
-      AIUtils::SendStreamingStatus(responder_, error,
-                                   std::move(quota_error_info));
+      on_device_ai::SendStreamingStatus(responder_, error,
+                                        std::move(quota_error_info));
     }
     session_.reset();
     responder_.reset();
     context_receiver_.reset();
     response_receiver_.reset();
-    if (callback_) {
-      std::move(callback_).Run();
-      // `this` may be deleted.
-    }
+    RunCallback();
   }
 
-  void OnQuotaOverflow() {
+  void OnContextOverflow() {
     if (responder_) {
-      responder_->OnQuotaOverflow();
+      responder_->OnContextOverflow();
     }
   }
 
@@ -238,16 +304,32 @@ class AILanguageModel::PromptState
   Mode mode() const { return mode_; }
 
  private:
-  void OnDisconnect() {
-    OnError(blink::mojom::ModelStreamingResponseStatus::kErrorGenericFailure);
+  bool completed_ = false;
+
+  void OnDisconnect(uint32_t custom_reason, const std::string& description) {
+    VLOG(1) << "LanguageModel ModelStreamingResponder disconnect; reason: "
+            << custom_reason << ", description: " << description;
+    auto error = blink::mojom::ModelStreamingResponseStatus::kErrorUnknown;
+    switch (static_cast<on_device_model::mojom::GenerateError>(custom_reason)) {
+      case on_device_model::mojom::GenerateError::kUnknown:
+        break;
+      case on_device_model::mojom::GenerateError::kInvalidConstraint:
+        error =
+            blink::mojom::ModelStreamingResponseStatus::kErrorInvalidRequest;
+        break;
+    }
+    OnError(error);
   }
 
   // on_device_model::mojom::ContextClient:
   void OnComplete(uint32_t tokens_processed) override {
     base::UmaHistogramCounts10000("AI.Session.LanguageModel.ContextTokens",
                                   tokens_processed);
-    base::UmaHistogramMediumTimes("AI.Session.LanguageModel.ContextTime",
-                                  base::TimeTicks::Now() - start_);
+    CHECK(telemetry_logger_.has_value());
+    telemetry_logger_->RecordContextTime();
+    base::UmaHistogramMediumTimes(
+        "AI.Session.LanguageModel.ContextTime",
+        telemetry_logger_->GetTimeToContextProcessing());
     if (logger_ && logger_->ShouldEnableDebugLogs()) {
       OPTIMIZATION_GUIDE_LOGGER(
           optimization_guide_common::mojom::LogSource::MODEL_EXECUTION,
@@ -260,17 +342,19 @@ class AILanguageModel::PromptState
     context_receiver_.reset();
     token_count_ = tokens_processed;
     if (mode_ == Mode::kAppendOnly) {
-      std::move(callback_).Run();
-      // `this` may be deleted.
+      completed_ = true;
+      RunCallback();
     }
   }
 
   // on_device_model::mojom::StreamingResponder:
   void OnResponse(on_device_model::mojom::ResponseChunkPtr chunk) override {
-    if (full_response_.empty()) {
+    if (output_tokens_ == 0) {
+      CHECK(telemetry_logger_.has_value());
+      telemetry_logger_->RecordFirstResponse();
       base::UmaHistogramMediumTimes(
           "AI.Session.LanguageModel.FirstResponseTime",
-          base::TimeTicks::Now() - start_);
+          telemetry_logger_->GetTimeToFirstResponse());
     }
     output_tokens_++;
     full_response_ += chunk->text;
@@ -282,16 +366,28 @@ class AILanguageModel::PromptState
             output_tokens_, unchecked_output_tokens_)) {
       return;
     }
+
+    std::string unchecked_response_copy = unchecked_response_;
+    unchecked_output_tokens_ = 0;
+    unchecked_response_ = "";
     safety_checker_->RunRawOutputCheck(
         full_response_, optimization_guide::ResponseCompleteness::kPartial,
         base::BindOnce(&PromptState::OnPartialResponseCheckComplete,
-                       weak_factory_.GetWeakPtr(),
-                       std::move(unchecked_response_)));
-    unchecked_output_tokens_ = 0;
-    unchecked_response_ = "";
+                       weak_factory_.GetWeakPtr(), unchecked_response_copy));
   }
 
   void OnComplete(on_device_model::mojom::ResponseSummaryPtr summary) override {
+    completed_ = true;
+    token_count_ += summary->output_token_count;
+
+    CHECK(telemetry_logger_.has_value());
+    telemetry_logger_->RecordCompletion(summary->output_token_count);
+    base::UmaHistogramMediumTimes(
+        "AI.Session.LanguageModel.ResponseCompleteTime",
+        base::TimeTicks::Now() - generate_start_);
+    base::UmaHistogramCounts10000("AI.Session.LanguageModel.ResponseTokens",
+                                  summary->output_token_count);
+
     // The `OnComplete()` method on `responder_` will be called in
     // `AILanguageModel::OnPromptOutputComplete()` after adding the response to
     // the session and handling overflow.
@@ -302,6 +398,26 @@ class AILanguageModel::PromptState
                        weak_factory_.GetWeakPtr(), std::move(summary)));
   }
 
+  void OnToolCalls(
+      std::vector<on_device_model::mojom::ToolCallPtr> tool_calls) override {
+    // Forward tool calls from the model.
+    if (!responder_) {
+      return;
+    }
+
+    // Convert on_device_model::mojom::ToolCall to blink::mojom::ToolCall.
+    std::vector<blink::mojom::ToolCallPtr> blink_tool_calls;
+    blink_tool_calls.reserve(tool_calls.size());
+    for (auto& tc : tool_calls) {
+      auto blink_tc = blink::mojom::ToolCall::New();
+      blink_tc->call_id = std::move(tc->call_id);
+      blink_tc->name = std::move(tc->name);
+      blink_tc->arguments = std::move(tc->arguments);
+      blink_tool_calls.push_back(std::move(blink_tc));
+    }
+    responder_->OnToolCalls(std::move(blink_tool_calls));
+  }
+
   void RequestSafetyChecksComplete(
       mojo::PendingRemote<on_device_model::mojom::Session> session,
       optimization_guide::SafetyChecker::Result safety_result) {
@@ -309,23 +425,32 @@ class AILanguageModel::PromptState
       return;
     }
     session_.Bind(std::move(session));
-    session_.set_disconnect_handler(
+    session_.set_disconnect_with_reason_handler(
         base::BindOnce(&PromptState::OnDisconnect, base::Unretained(this)));
+
+    if (!constraint_.is_null()) {
+      auto hint_options = on_device_model::mojom::HintOptions::New();
+      hint_options->constrained_decoding_hint = true;
+      session_->Hint(std::move(hint_options));
+    }
 
     // Append() will call the on_device_model::mojom::ContextClient::OnComplete
     // override when finished.
-    session_->Append(MakeAppendOptions(input_.Clone()),
-                     context_receiver_.BindNewPipeAndPassRemote());
-    context_receiver_.set_disconnect_handler(
+    session_->Append(
+        MakeAppendOptions(input_.Clone(),
+                          on_device_model::mojom::InputSource::kUserInput),
+        context_receiver_.BindNewPipeAndPassRemote());
+    context_receiver_.set_disconnect_with_reason_handler(
         base::BindOnce(&PromptState::OnDisconnect, base::Unretained(this)));
 
     if (mode_ == Mode::kAppendAndGenerate) {
       auto generate_options = on_device_model::mojom::GenerateOptions::New();
       generate_options->constraint = std::move(constraint_);
       generate_options->max_output_tokens = max_output_tokens_;
+      generate_options->add_output_tokens_to_context = true;
       session_->Generate(std::move(generate_options),
                          response_receiver_.BindNewPipeAndPassRemote());
-      response_receiver_.set_disconnect_handler(
+      response_receiver_.set_disconnect_with_reason_handler(
           base::BindOnce(&PromptState::OnDisconnect, base::Unretained(this)));
     }
   }
@@ -344,19 +469,13 @@ class AILanguageModel::PromptState
       optimization_guide::SafetyChecker::Result safety_result) {
     // If output hit the token limit, it was truncated, so send an error.
     if (summary->output_token_count >= max_output_tokens_) {
-      // TODO(crbug.com/421983874): Use a more specific error in this case?
-      OnError(blink::mojom::ModelStreamingResponseStatus::kErrorGenericFailure);
+      OnError(blink::mojom::ModelStreamingResponseStatus::
+                  kErrorResponseExceedsMaxTokens);
       return;
     }
     if (HandleSafetyError(std::move(safety_result))) {
       return;
     }
-    token_count_ += summary->output_token_count;
-    base::UmaHistogramMediumTimes(
-        "AI.Session.LanguageModel.ResponseCompleteTime",
-        base::TimeTicks::Now() - generate_start_);
-    base::UmaHistogramCounts10000("AI.Session.LanguageModel.ResponseTokens",
-                                  summary->output_token_count);
 
     if (logger_ && logger_->ShouldEnableDebugLogs()) {
       OPTIMIZATION_GUIDE_LOGGER(
@@ -365,15 +484,15 @@ class AILanguageModel::PromptState
           << "Model generates raw response with PromptApi:\n"
           << full_response_;
     }
-    std::move(callback_).Run();
-    // `this` may be deleted.
+    RunCallback();
   }
 
   // Returns true if there was a safety error and the response was stopped.
   bool HandleSafetyError(
       optimization_guide::SafetyChecker::Result safety_result) {
     if (safety_result.failed_to_run) {
-      OnError(blink::mojom::ModelStreamingResponseStatus::kErrorGenericFailure);
+      OnError(
+          blink::mojom::ModelStreamingResponseStatus::kErrorFailedToRunSafety);
       return true;
     }
     if (safety_result.is_unsafe) {
@@ -386,6 +505,16 @@ class AILanguageModel::PromptState
       return true;
     }
     return false;
+  }
+
+  void RunCallback() {
+    if (!callback_) {
+      return;
+    }
+    // `this` may be deleted by the callback, so delay running it to ensure
+    // any synchronous uses of `this` complete.
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, std::move(callback_));
   }
 
   mojo::Remote<blink::mojom::ModelStreamingResponder> responder_;
@@ -417,7 +546,8 @@ class AILanguageModel::PromptState
   uint32_t max_output_tokens_ = 0;
   Mode mode_;
 
-  base::TimeTicks start_;
+  std::optional<optimization_guide::OnDeviceRequestTelemetryLogger>
+      telemetry_logger_;
   base::TimeTicks generate_start_;
 
   base::WeakPtrFactory<PromptState> weak_factory_{this};
@@ -434,8 +564,8 @@ AILanguageModel::Context::ContextItem::~ContextItem() = default;
 using ModelExecutionError = optimization_guide::
     OptimizationGuideModelExecutionError::ModelExecutionError;
 
-AILanguageModel::Context::Context(uint32_t max_tokens)
-    : max_tokens_(max_tokens) {}
+AILanguageModel::Context::Context(uint32_t total_model_tokens)
+    : total_model_tokens_(total_model_tokens) {}
 
 AILanguageModel::Context::Context(const Context& context) = default;
 
@@ -443,21 +573,22 @@ AILanguageModel::Context::~Context() = default;
 
 AILanguageModel::Context::SpaceReservationResult
 AILanguageModel::Context::ReserveSpace(uint32_t num_tokens) {
+  const uint32_t capacity = GetEvictableTokensCapacity();
   // If there is not enough space to hold the newly requested `num_tokens`,
   // return `kInsufficientSpace`.
-  if (num_tokens > max_tokens_) {
+  if (num_tokens > capacity) {
     return AILanguageModel::Context::SpaceReservationResult::kInsufficientSpace;
   }
 
-  if (current_tokens_ + num_tokens <= max_tokens_) {
+  if (evictable_tokens_ + num_tokens <= capacity) {
     return AILanguageModel::Context::SpaceReservationResult::kSufficientSpace;
   }
 
   CHECK(!context_items_.empty());
   do {
-    current_tokens_ -= context_items_.begin()->tokens;
+    evictable_tokens_ -= context_items_.begin()->tokens;
     context_items_.pop_front();
-  } while (current_tokens_ + num_tokens > max_tokens_);
+  } while (evictable_tokens_ + num_tokens > capacity);
 
   return AILanguageModel::Context::SpaceReservationResult::kSpaceMadeAvailable;
 }
@@ -467,7 +598,7 @@ AILanguageModel::Context::AddContextItem(ContextItem context_item) {
   auto result = ReserveSpace(context_item.tokens);
   if (result != SpaceReservationResult::kInsufficientSpace) {
     context_items_.emplace_back(context_item);
-    current_tokens_ += context_item.tokens;
+    evictable_tokens_ += context_item.tokens;
   }
 
   return result;
@@ -477,8 +608,9 @@ on_device_model::mojom::InputPtr
 AILanguageModel::Context::GetNonInitialPrompts() {
   auto input = on_device_model::mojom::Input::New();
   for (const auto& item : context_items_) {
-    input->pieces.insert(input->pieces.end(), item.input->pieces.begin(),
-                         item.input->pieces.end());
+    for (const auto& piece : item.input->pieces) {
+      input->pieces.push_back(piece->Clone());
+    }
   }
   return input;
 }
@@ -491,10 +623,10 @@ uint32_t GetMaxTokens(optimization_guide::ModelClient* model_client) {
   }
   // Max should allow for the output buffer.
   uint32_t result = std::min(
-      model_client->feature_adapter().GetTokenLimits().max_context_tokens,
-      model_client->max_tokens() -
+      model_client->token_limits().max_context_tokens,
+      model_client->token_limits().max_tokens -
           std::min(
-              model_client->max_tokens(),
+              model_client->token_limits().max_tokens,
               static_cast<uint32_t>(
                   features::kAILanguageModelOverrideConfigurationOutputBuffer
                       .Get())));
@@ -504,18 +636,29 @@ uint32_t GetMaxTokens(optimization_guide::ModelClient* model_client) {
   return result;
 }
 
+uint32_t AILanguageModel::GetTotalModelTokens() const {
+  return ::GetMaxTokens(model_client_.get());
+}
+
 // static
-base::flat_set<std::string_view>
-AILanguageModel::GetSupportedLanguageBaseCodes() {
+std::optional<base::flat_set<std::string>>
+AILanguageModel::GetEnabledLanguageBaseCodes() {
   // Comma-separated language codes to enable; or "*" enables all supported.
   const base::FeatureParam<std::string> kAIPromptAPILanguagesEnabled{
-      &blink::features::kAIPromptAPI, "langs", /*default=*/"en,es,ja"};
+      &blink::features::kAIPromptAPI, "langs",
+      /*default_value=*/"en,es,ja,de,fr"};
+  return on_device_ai::GetEnabledLanguagesForFeature(
+      GetDefaultSupportedLanguageBaseCodes(), kAIPromptAPILanguagesEnabled);
+}
+
+// static
+base::flat_set<std::string>
+AILanguageModel::GetDefaultSupportedLanguageBaseCodes() {
   // TODO(crbug.com/394841624): Get supported languages from the model config.
   auto kSupportedBaseLanguages =
-      base::MakeFixedFlatSet<std::string_view>({"en", "ja", "es"});
-  return AIUtils::RestrictSupportedLanguagesForFeature(
-      base::MakeFlatSet<std::string_view>(kSupportedBaseLanguages),
-      kAIPromptAPILanguagesEnabled);
+      base::MakeFixedFlatSet<std::string_view>({"en", "ja", "es", "de", "fr"});
+  return base::flat_set<std::string>(kSupportedBaseLanguages.begin(),
+                                     kSupportedBaseLanguages.end());
 }
 
 AILanguageModel::AILanguageModel(
@@ -530,7 +673,7 @@ AILanguageModel::AILanguageModel(
       context_bound_object_set_(context_bound_object_set),
       model_client_(std::move(model_client)),
       logger_(std::move(logger)) {
-  context_ = std::make_unique<Context>(GetMaxTokens(model_client_.get()));
+  context_ = std::make_unique<Context>(GetTotalModelTokens());
   // TODO(crbug.com/415808003): Should we handle crashes?
   initial_session_.reset_on_disconnect();
 
@@ -542,14 +685,31 @@ AILanguageModel::AILanguageModel(
     OPTIMIZATION_GUIDE_LOGGER(
         optimization_guide_common::mojom::LogSource::MODEL_EXECUTION,
         logger_.get())
-        << "Starting on-device session for PromptApi";
+        << "Starting on-device session for LanguageModel with params: "
+        << base::StringPrintf(
+               "{max_tokens=%u, top_k=%u, temperature=%.2f, image_input=%d, "
+               "audio_input=%d}",
+               session_params_->max_tokens, session_params_->top_k,
+               session_params_->temperature,
+               session_params_->capabilities.Has(
+                   on_device_model::CapabilityFlags::kImageInput),
+               session_params_->capabilities.Has(
+                   on_device_model::CapabilityFlags::kAudioInput));
   }
 }
 
 AILanguageModel::~AILanguageModel() {
+  const bool crashed = !initial_session_;
   // If the initial session has been reset, the session crashed.
-  base::UmaHistogramBoolean("AI.Session.LanguageModel.Crashed",
-                            !initial_session_);
+  base::UmaHistogramBoolean("AI.Session.LanguageModel.Crashed", crashed);
+
+  if (logger_ && logger_->ShouldEnableDebugLogs()) {
+    OPTIMIZATION_GUIDE_LOGGER(
+        optimization_guide_common::mojom::LogSource::MODEL_EXECUTION,
+        logger_.get())
+        << "Terminated on-device session for LanguageModel. Reason: "
+        << (crashed ? "Session crashed" : "Session destroyed");
+  }
 }
 
 // static
@@ -565,16 +725,31 @@ PromptApiMetadata AILanguageModel::ParseMetadata(
 
 void AILanguageModel::Initialize(
     std::vector<blink::mojom::AILanguageModelPromptPtr> initial_prompts,
+    std::vector<blink::mojom::AILanguageModelToolDeclarationPtr> tools,
     mojo::PendingRemote<blink::mojom::AIManagerCreateLanguageModelClient>
         create_client) {
+  tools_ = std::move(tools);
+
+  // If tools are provided but no system prompt exists, prepend a synthetic
+  // system prompt so tool declarations have a place to be embedded.
+  if (!tools_.empty() &&
+      !std::ranges::any_of(initial_prompts, [](const auto& prompt) {
+        return prompt->role == blink::mojom::AILanguageModelPromptRole::kSystem;
+      })) {
+    auto prompt = blink::mojom::AILanguageModelPrompt::New();
+    prompt->role = blink::mojom::AILanguageModelPromptRole::kSystem;
+    initial_prompts.insert(initial_prompts.begin(), std::move(prompt));
+  }
+
   if (initial_prompts.empty()) {
     InitializeGetInputSizeComplete(nullptr, std::move(create_client), 0);
   } else {
-    auto input = ConvertToInput(initial_prompts, session_params_->capabilities);
+    auto input =
+        ConvertToInput(initial_prompts, session_params_->capabilities, tools_);
     if (!input) {
       mojo::Remote<blink::mojom::AIManagerCreateLanguageModelClient>
           client_remote(std::move(create_client));
-      AIUtils::SendClientRemoteError(
+      on_device_ai::SendClientRemoteError(
           client_remote,
           blink::mojom::AIManagerCreateClientError::kUnableToCreateSession);
       return;
@@ -627,8 +802,8 @@ void AILanguageModel::MeasureInputUsage(
     std::vector<blink::mojom::AILanguageModelPromptPtr> prompts,
     MeasureInputUsageCallback callback) {
   EnsureSessionConnected();
-  auto input = ConvertToInputForExecute(std::move(prompts),
-                                        session_params_->capabilities);
+  auto input = ConvertToInput(std::move(prompts), session_params_->capabilities,
+                              /*tools=*/{});
   if (!input) {
     std::move(callback).Run(std::nullopt);
     return;
@@ -668,17 +843,32 @@ AILanguageModel::GetLanguageModelInstanceInfo() {
       case on_device_model::CapabilityFlags::kAudioInput:
         input_types.insert(blink::mojom::AILanguageModelPromptType::kAudio);
         break;
+      case on_device_model::CapabilityFlags::kToolUse:
+        // TODO(crbug.com/422803232): Expose tool support as a dedicated
+        // bool field on AILanguageModelInstanceInfo instead of an input type.
+        input_types.insert(
+            blink::mojom::AILanguageModelPromptType::kToolResponse);
+        break;
     }
   }
 
+  // TODO(crbug.com/462283904): Obtain canonical model input format parameters.
+  std::optional<int> audio_sample_rate_hz;
+  std::optional<int> audio_channel_count;
+  if (base::FeatureList::IsEnabled(
+          on_device_model::features::kOnDeviceModelLitertLmBackend)) {
+    audio_sample_rate_hz = 16000;
+    audio_channel_count = 1;
+  }
   uint32_t max_tokens = GetMaxTokens(model_client_.get());
   uint32_t total_tokens =
-      context_->initial_tokens() + context_->current_tokens();
+      context_->non_evictable_tokens() + context_->evictable_tokens();
   return blink::mojom::AILanguageModelInstanceInfo::New(
       max_tokens, total_tokens,
       blink::mojom::AILanguageModelSamplingParams::New(
           session_params_->top_k, session_params_->temperature),
-      std::move(input_types).extract());
+      std::move(input_types).extract(), audio_sample_rate_hz,
+      audio_channel_count, /*sampling_mode=*/std::nullopt);
 }
 
 mojo::PendingRemote<blink::mojom::AILanguageModel>
@@ -697,29 +887,29 @@ void AILanguageModel::InitializeGetInputSizeComplete(
   if (!initial_session_ || !token_count) {
     mojo::Remote<blink::mojom::AIManagerCreateLanguageModelClient>
         client_remote(std::move(create_client));
-    AIUtils::SendClientRemoteError(
+    on_device_ai::SendClientRemoteError(
         client_remote,
         blink::mojom::AIManagerCreateClientError::kUnableToCreateSession);
     return;
   }
 
-  uint32_t max_tokens = context_->max_tokens();
-  if (*token_count > max_tokens) {
-    auto quota = context_->max_tokens() - context_->current_tokens();
+  uint32_t total_model_tokens = GetTotalModelTokens();
+  if (*token_count > total_model_tokens) {
     mojo::Remote<blink::mojom::AIManagerCreateLanguageModelClient>
         client_remote(std::move(create_client));
-    AIUtils::SendClientRemoteError(
+    on_device_ai::SendClientRemoteError(
         client_remote,
         blink::mojom::AIManagerCreateClientError::kInitialInputTooLarge,
-        blink::mojom::QuotaErrorInfo::New(token_count.value(), quota));
+        blink::mojom::QuotaErrorInfo::New(token_count.value(),
+                                          total_model_tokens));
     return;
   }
 
   // `context_` will track how many tokens are remaining after the initial
   // prompts. The initial prompts cannot be evicted.
-  auto initial_tokens = *token_count;
-  context_ = std::make_unique<Context>(max_tokens - initial_tokens);
-  context_->set_initial_tokens(initial_tokens);
+  auto non_evictable_tokens = *token_count;
+  context_ = std::make_unique<Context>(total_model_tokens);
+  context_->set_non_evictable_tokens(non_evictable_tokens);
 
   if (input) {
     if (logger_ && logger_->ShouldEnableDebugLogs()) {
@@ -727,7 +917,7 @@ void AILanguageModel::InitializeGetInputSizeComplete(
           optimization_guide_common::mojom::LogSource::MODEL_EXECUTION,
           logger_.get())
           << "Adding initial context to the model of "
-          << base::NumberToString(initial_tokens) << " tokens:\n"
+          << base::NumberToString(non_evictable_tokens) << " tokens:\n"
           << optimization_guide::OnDeviceInputToString(*input);
     }
     auto safety_input = CreateStringMessage(*input);
@@ -747,26 +937,62 @@ void AILanguageModel::InitializeSafetyChecksComplete(
     mojo::PendingRemote<blink::mojom::AIManagerCreateLanguageModelClient>
         create_client,
     optimization_guide::SafetyChecker::Result safety_result) {
-  mojo::Remote<blink::mojom::AIManagerCreateLanguageModelClient> client(
-      std::move(create_client));
   // TODO(crbug.com/415808003): Add more fine grained errors on safety check
   // failure.
   if (safety_result.failed_to_run || safety_result.is_unsafe ||
       safety_result.is_unsupported_language) {
-    AIUtils::SendClientRemoteError(
+    mojo::Remote<blink::mojom::AIManagerCreateLanguageModelClient> client(
+        std::move(create_client));
+    on_device_ai::SendClientRemoteError(
         client,
         blink::mojom::AIManagerCreateClientError::kUnableToCreateSession);
     return;
   }
-  if (input) {
-    initial_input_ = input.Clone();
-    // No ContextClient is passed here since this operation should never be
-    // cancelled unless the session is destroyed.
-    initial_session_->Append(MakeAppendOptions(std::move(input)), {});
-  }
-  initial_session_->Clone(current_session_.BindNewPipeAndPassReceiver());
 
-  client->OnResult(BindRemote(), GetLanguageModelInstanceInfo());
+  create_client_.Bind(std::move(create_client));
+  create_client_.set_disconnect_handler(
+      base::BindOnce(&AILanguageModel::OnCreateClientDisconnected,
+                     weak_ptr_factory_.GetWeakPtr()));
+  if (!input) {
+    // The empty Append serves purely as an initialization barrier signal to
+    // ensure the ML backend session engine and weights are ready before
+    // resolving the create promise, with zero overhead on token count or
+    // inference compute.
+    input = on_device_model::mojom::Input::New();
+  } else {
+    initial_input_ = input.Clone();
+  }
+
+  initial_session_->Append(
+      MakeAppendOptions(std::move(input),
+                        on_device_model::mojom::InputSource::kUserInput),
+      initial_append_receiver_.BindNewPipeAndPassRemote());
+  initial_append_receiver_.set_disconnect_handler(
+      base::BindOnce(&AILanguageModel::OnInitialAppendDisconnected,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
+void AILanguageModel::OnComplete(uint32_t tokens_processed) {
+  initial_session_->Clone(current_session_.BindNewPipeAndPassReceiver());
+  if (create_client_) {
+    create_client_->OnResult(BindRemote(), GetLanguageModelInstanceInfo());
+    create_client_.reset();
+  }
+  initial_append_receiver_.reset();
+}
+
+void AILanguageModel::OnCreateClientDisconnected() {
+  RemoveFromSet();
+}
+
+void AILanguageModel::OnInitialAppendDisconnected() {
+  if (create_client_) {
+    on_device_ai::SendClientRemoteError(
+        create_client_,
+        blink::mojom::AIManagerCreateClientError::kUnableToCreateSession);
+    create_client_.reset();
+  }
+  RemoveFromSet();
 }
 
 void AILanguageModel::ForkInternal(
@@ -776,7 +1002,7 @@ void AILanguageModel::ForkInternal(
   mojo::Remote<blink::mojom::AIManagerCreateLanguageModelClient> remote(
       std::move(client));
   if (!initial_session_ || !model_client_) {
-    AIUtils::SendClientRemoteError(
+    on_device_ai::SendClientRemoteError(
         remote,
         blink::mojom::AIManagerCreateClientError::kUnableToCreateSession);
     return;
@@ -788,6 +1014,9 @@ void AILanguageModel::ForkInternal(
       *context_bound_object_set_, session_params_.Clone(), model_client_,
       std::move(session), logger_);
   clone->context_ = std::make_unique<Context>(*context_);
+
+  clone->tools_ = mojo::Clone(tools_);
+
   current_session_->Clone(clone->current_session_.BindNewPipeAndPassReceiver());
 
   remote->OnResult(clone->BindRemote(), clone->GetLanguageModelInstanceInfo());
@@ -804,7 +1033,7 @@ void AILanguageModel::PromptInternal(
   if (!initial_session_) {
     mojo::Remote<blink::mojom::ModelStreamingResponder> responder(
         std::move(pending_responder));
-    AIUtils::SendStreamingStatus(
+    on_device_ai::SendStreamingStatus(
         responder,
         blink::mojom::ModelStreamingResponseStatus::kErrorSessionDestroyed);
     return;
@@ -814,7 +1043,7 @@ void AILanguageModel::PromptInternal(
   if (!input) {
     mojo::Remote<blink::mojom::ModelStreamingResponder> responder(
         std::move(pending_responder));
-    AIUtils::SendStreamingStatus(
+    on_device_ai::SendStreamingStatus(
         responder,
         blink::mojom::ModelStreamingResponseStatus::kErrorInvalidRequest);
     return;
@@ -837,34 +1066,43 @@ void AILanguageModel::PromptGetInputSizeComplete(
   if (!prompt_state_ || !prompt_state_->IsValid()) {
     return;
   }
-
+  if (!initial_session_ || !current_session_) {
+    prompt_state_->OnError(
+        blink::mojom::ModelStreamingResponseStatus::kErrorSessionDestroyed);
+    return;
+  }
   if (!token_count) {
     prompt_state_->OnError(
-        blink::mojom::ModelStreamingResponseStatus::kErrorGenericFailure);
+        blink::mojom::ModelStreamingResponseStatus::kErrorFailedToCountTokens);
     return;
   }
 
   auto space_reserved = context_->ReserveSpace(*token_count);
   if (space_reserved == Context::SpaceReservationResult::kInsufficientSpace) {
-    auto quota = context_->max_tokens() - context_->current_tokens();
+    auto available_tokens = context_->GetAvailableTokens();
     prompt_state_->OnError(
         blink::mojom::ModelStreamingResponseStatus::kErrorInputTooLarge,
-        blink::mojom::QuotaErrorInfo::New(token_count.value(), quota));
+        blink::mojom::QuotaErrorInfo::New(token_count.value(),
+                                          available_tokens));
     return;
   }
 
   if (space_reserved == Context::SpaceReservationResult::kSpaceMadeAvailable) {
     HandleOverflow();
-    prompt_state_->OnQuotaOverflow();
+    prompt_state_->OnContextOverflow();
   }
 
   // Use a cloned version of the current session so it is easy to restore to
   // the previous state if a prompt is cancelled.
   mojo::PendingRemote<on_device_model::mojom::Session> session;
   current_session_->Clone(session.InitWithNewPipeAndPassReceiver());
-  prompt_state_->AppendAndGenerate(std::move(session),
-                                   context_->available_tokens() - *token_count,
-                                   std::move(on_complete));
+  std::optional<uint32_t> configured_max_output_tokens =
+      model_client_
+          ? std::make_optional(model_client_->token_limits().max_output_tokens)
+          : std::nullopt;
+  prompt_state_->AppendAndGenerate(
+      std::move(session), context_->GetAvailableTokens() - *token_count,
+      configured_max_output_tokens, std::move(on_complete));
 }
 
 void AILanguageModel::OnPromptOutputComplete() {
@@ -882,13 +1120,10 @@ void AILanguageModel::OnPromptOutputComplete() {
   item.tokens = prompt_state_->token_count();
   item.input = prompt_state_->TakeInput();
 
-  on_device_model::mojom::InputPtr model_output;
   if (prompt_state_->mode() == PromptState::Mode::kAppendAndGenerate) {
-    model_output = on_device_model::mojom::Input::New();
-    model_output->pieces = {prompt_state_->response(), ml::Token::kEnd};
-    item.input->pieces.insert(item.input->pieces.end(),
-                              model_output->pieces.begin(),
-                              model_output->pieces.end());
+    item.input->pieces.push_back(
+        InputPiece::NewText(prompt_state_->response()));
+    item.input->pieces.push_back(InputPiece::NewToken(ml::Token::kEnd));
     // One extra token for the end token on the model output.
     item.tokens++;
   }
@@ -896,10 +1131,9 @@ void AILanguageModel::OnPromptOutputComplete() {
   auto responder = prompt_state_->TakeResponder();
   auto result = context_->AddContextItem(std::move(item));
   if (result == Context::SpaceReservationResult::kInsufficientSpace) {
-    // TODO(crbug.com/421983874): Use a more specific error in this case?
-    AIUtils::SendStreamingStatus(
-        responder,
-        blink::mojom::ModelStreamingResponseStatus::kErrorGenericFailure);
+    on_device_ai::SendStreamingStatus(
+        responder, blink::mojom::ModelStreamingResponseStatus::
+                       kErrorResponseExceedsRemainingContext);
     return;
   }
 
@@ -914,15 +1148,10 @@ void AILanguageModel::OnPromptOutputComplete() {
     // will process the context including `model_output`, so it can be ignored
     // here.
     HandleOverflow();
-    responder->OnQuotaOverflow();
-  } else if (model_output) {
-    // Add the output to the session since this is not added automatically from
-    // the Generate() call. The previous token will be a kModel token from
-    // ConvertToInputForExecute().
-    current_session_->Append(MakeAppendOptions(std::move(model_output)), {});
+    responder->OnContextOverflow();
   }
   uint32_t total_tokens =
-      context_->initial_tokens() + context_->current_tokens();
+      context_->non_evictable_tokens() + context_->evictable_tokens();
   responder->OnCompletion(
       blink::mojom::ModelExecutionContextInfo::New(total_tokens));
   if (model_client_) {
@@ -938,17 +1167,18 @@ void AILanguageModel::AppendInternal(
   if (!initial_session_) {
     mojo::Remote<blink::mojom::ModelStreamingResponder> responder(
         std::move(pending_responder));
-    AIUtils::SendStreamingStatus(
+    on_device_ai::SendStreamingStatus(
         responder,
         blink::mojom::ModelStreamingResponseStatus::kErrorSessionDestroyed);
     return;
   }
 
-  auto input = ConvertToInput(prompts, session_params_->capabilities);
+  auto input =
+      ConvertToInput(prompts, session_params_->capabilities, /*tools=*/{});
   if (!input) {
     mojo::Remote<blink::mojom::ModelStreamingResponder> responder(
         std::move(pending_responder));
-    AIUtils::SendStreamingStatus(
+    on_device_ai::SendStreamingStatus(
         responder,
         blink::mojom::ModelStreamingResponseStatus::kErrorInvalidRequest);
     return;
@@ -978,7 +1208,10 @@ void AILanguageModel::HandleOverflow() {
   if (!input->pieces.empty()) {
     // No ContextClient is passed here since this operation should never be
     // cancelled unless the session is destroyed.
-    current_session_->Append(MakeAppendOptions(std::move(input)), {});
+    current_session_->Append(
+        MakeAppendOptions(std::move(input),
+                          on_device_model::mojom::InputSource::kUserInput),
+        {});
   }
 }
 
@@ -1007,7 +1240,10 @@ void AILanguageModel::EnsureSessionConnected() {
   initial_session_.reset_on_disconnect();
   initial_session_->SetPriority(context_bound_object_set_->priority());
   if (initial_input_) {
-    initial_session_->Append(MakeAppendOptions(initial_input_.Clone()), {});
+    initial_session_->Append(
+        MakeAppendOptions(initial_input_.Clone(),
+                          on_device_model::mojom::InputSource::kUserInput),
+        {});
   }
   HandleOverflow();
 }

@@ -499,7 +499,8 @@ public final class CronetUrlRequest extends ExperimentalUrlRequest {
             boolean wasCached,
             String negotiatedProtocol,
             String proxyServer,
-            long receivedByteCount) {
+            long receivedByteCount,
+            boolean isProxied) {
         ArrayList<Map.Entry<String, String>> headersList = new ArrayList<>();
         for (int i = 0; i < headers.length; i += 2) {
             headersList.add(new AbstractMap.SimpleImmutableEntry<>(headers[i], headers[i + 1]));
@@ -512,7 +513,8 @@ public final class CronetUrlRequest extends ExperimentalUrlRequest {
                 wasCached,
                 negotiatedProtocol,
                 proxyServer,
-                receivedByteCount);
+                receivedByteCount,
+                isProxied);
     }
 
     private void checkNotStarted() {
@@ -621,11 +623,15 @@ public final class CronetUrlRequest extends ExperimentalUrlRequest {
                         wasCached,
                         negotiatedProtocol,
                         proxyServer,
-                        receivedByteCount);
+                        receivedByteCount,
+                        // It's okay not to populate this value correctly because this is used only
+                        // by Cronet's telemetry. Cronet's telemetry does not depend on the instance
+                        // of UrlResponseInfoImpl created here, but the one created in
+                        // onResponseStarted (where we correctly populate this value).
+                        /* isProxied= */ false);
 
         // Have to do this after creating responseInfo.
         mUrlChain.add(newLocation);
-
         Runnable task =
                 new Runnable() {
                     @Override
@@ -662,7 +668,8 @@ public final class CronetUrlRequest extends ExperimentalUrlRequest {
             boolean wasCached,
             String negotiatedProtocol,
             String proxyServer,
-            long receivedByteCount) {
+            long receivedByteCount,
+            boolean isProxied) {
         mResponseInfo =
                 prepareResponseInfoOnNetworkThread(
                         httpStatusCode,
@@ -671,7 +678,8 @@ public final class CronetUrlRequest extends ExperimentalUrlRequest {
                         wasCached,
                         negotiatedProtocol,
                         proxyServer,
-                        receivedByteCount);
+                        receivedByteCount,
+                        isProxied);
         Runnable task =
                 new Runnable() {
                     @Override
@@ -1007,6 +1015,7 @@ public final class CronetUrlRequest extends ExperimentalUrlRequest {
         final String negotiatedProtocol;
         final int httpStatusCode;
         final boolean wasCached;
+        final Boolean isProxied = mResponseInfo != null ? mResponseInfo.isProxied() : null;
         if (mResponseInfo != null) {
             responseHeaders = mResponseInfo.getAllHeaders();
             negotiatedProtocol = mResponseInfo.getNegotiatedProtocol();
@@ -1116,7 +1125,10 @@ public final class CronetUrlRequest extends ExperimentalUrlRequest {
                 mMetrics.getSSLDurationInMicroseconds(),
                 mMetrics.getConnectDurationInMicroseconds(),
                 mMetrics.getTimeToWriteFirstByteInMicroseconds(),
-                mMetrics.getTimeToReceiveHeaderLastByteMicroseconds());
+                mMetrics.getTimeToReceiveHeaderLastByteMicroseconds(),
+                isProxied,
+                // go/cronet-cans currently only supports bidirectional streams.
+                /* isAdaptiveNetworkStream= */ false);
     }
 
     // Maybe report metrics. This method should only be called on Callback's executor thread and

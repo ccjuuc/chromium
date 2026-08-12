@@ -39,6 +39,7 @@ import org.chromium.chrome.browser.profiles.ProfileManagerUtils;
 import org.chromium.chrome.browser.profiles.ProfileProvider;
 import org.chromium.chrome.browser.safety_hub.SafetyHubFetchServiceFactory;
 import org.chromium.chrome.browser.translate.TranslateBridge;
+import org.chromium.chrome.browser.util.DefaultBrowserInfo;
 import org.chromium.components.browser_ui.accessibility.DeviceAccessibilitySettingsHandler;
 import org.chromium.components.browser_ui.accessibility.FontSizePrefs;
 import org.chromium.components.browser_ui.share.ShareImageFileUtils;
@@ -61,7 +62,7 @@ public class ChromeActivitySessionTracker {
     private final ProfileKeyedMap<Boolean> mStartupProfileTasksCompleted =
             new ProfileKeyedMap<>(
                     ProfileKeyedMap.ProfileSelection.REDIRECTED_TO_ORIGINAL,
-                    ProfileKeyedMap.NO_REQUIRED_CLEANUP_ACTION);
+                    ProfileKeyedMap.noRequiredCleanupAction());
 
     private boolean mIsInitialized;
     private boolean mIsStarted;
@@ -206,6 +207,7 @@ public class ChromeActivitySessionTracker {
 
         IntentHandler.clearPendingReferrer();
         IntentHandler.clearPendingIncognitoUrl();
+        DefaultBrowserInfo.resetDefaultInfoTask();
 
         for (Profile profile : mStartupProfileTasksCompleted.getTrackedProfiles()) {
             Tracker tracker = TrackerFactory.getTrackerForProfile(profile);

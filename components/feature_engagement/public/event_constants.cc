@@ -46,13 +46,18 @@ const char kFocusHelpBubbleAcceleratorPromoRead[] =
 const char kExtensionsRequestAccessButtonClicked[] =
     "extensions_request_access_button_clicked";
 
-const char kCookieControlsBubbleShown[] = "cookie_controls_bubble_shown";
+const char kGlicOnboardingCompleted[] = "glic_onboarding_completed";
 
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
         // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
 
+#if BUILDFLAG(IS_WIN)
+const char kSearchPromotionAccepted[] = "search_promotion_accepted";
+#endif  // BUILDFLAG(IS_WIN)
+
 #if BUILDFLAG(IS_IOS)
 const char kChromeOpened[] = "chrome_opened";
+const char kChromeActiveSessionDay[] = "chrome_active_session_day";
 const char kIncognitoTabOpened[] = "incognito_tab_opened";
 const char kClearedBrowsingData[] = "cleared_browsing_data";
 const char kViewedReadingList[] = "viewed_reading_list";
@@ -100,7 +105,6 @@ const char kBlueDotPromoOverflowMenuDismissed[] =
 
 const char kCredentialProviderExtensionPromoSnoozed[] =
     "credential_provider_extension_promo_snoozed";
-const char kDockingPromoRemindMeLater[] = "docking_promo_remind_me_later";
 const char kOpenUrlFromOmnibox[] = "open_url_from_omnibox";
 const char kHistoryOnOverflowMenuUsed[] = "history_on_overflow_menu_used";
 const char kSettingsOnOverflowMenuUsed[] = "settings_on_overflow_menu_used";
@@ -145,6 +149,8 @@ const char kGenericDefaultBrowserPromoTrigger[] =
 const char kAllTabsPromoTrigger[] = "all_tabs_promo_trigger";
 const char kMadeForIOSPromoTrigger[] = "made_for_ios_promo_trigger";
 const char kStaySafePromoTrigger[] = "stay_safe_promo_trigger";
+const char kDefaultBrowserPromosGroupTrigger[] =
+    "default_browser_promos_group_trigger";
 const char kTailoredDefaultBrowserPromosGroupTrigger[] =
     "tailored_default_browser_promos_group_trigger";
 const char kIOSContextualPanelSampleModelEntrypointUsed[] =
@@ -154,6 +160,11 @@ const char kIOSContextualPanelPriceInsightsEntrypointUsed[] =
 const char kIOSContextualPanelPriceInsightsEntrypointExplicitlyDismissed[] =
     "ios_contextual_panel_price_insights_entrypoint_explicitly_dismissed";
 const char kHomeCustomizationMenuUsed[] = "home_customization_menu_used";
+const char kHomeBackgroundCustomizationMenuUsed[] =
+    "home_customization_background_menu_used";
+const char kHomeCustomizationPromoTriggered[] =
+    "home_customization_menu_iph_triggered";
+const char kNTPCustomBackgroundLoaded[] = "ntp_custom_background_loaded";
 const char kLensOverlayEntrypointUsed[] = "lens_overlay_entrypoint_used";
 const char kIOSLensButtonUsed[] = "ios_lens_button_used";
 const char kIOSTabReminderScheduled[] = "tab_reminder_scheduled";
@@ -201,11 +212,29 @@ const char kIOSGeminiFullscreenPromoTriggered[] =
 const char kIOSGeminiFlowStartedNonPromo[] =
     "ios_gemini_flow_started_non_promo";
 const char kIOSGeminiConsentGiven[] = "ios_gemini_consent_given";
+const char kIOSGeminiLiveUsed[] = "ios_gemini_live_used";
+const char kIOSGeminiLiveNewBadgeTriggered[] =
+    "ios_gemini_live_new_badge_triggered";
+const char kIOSGeminiLiveIPHTriggered[] = "ios_gemini_live_iph_triggered";
+const char kIOSGeminiImageRemixIPHTrigger[] =
+    "ios_gemini_image_remix_iph_trigger";
+const char kIOSGeminiWhatCanGeminiDoTapped[] =
+    "ios_gemini_what_can_gemini_do_tapped";
+const char kIOSGeminiWhatCanGeminiDoTriggered[] =
+    "ios_gemini_what_can_gemini_do_triggered";
+const char kIOSPinMVTSiteUsed[] = "ios_pin_mvt_site_used";
+const char kIOSChromeOpenedFromIcon[] = "ios_chrome_opened_from_icon";
+const char kDefaultBrowserSettingsCardPromoUsed[] =
+    "default_browser_settings_card_promo_used";
+const char kDefaultBrowserSettingsCellPromoUsed[] =
+    "default_browser_settings_cell_promo_used";
 #endif  // BUILDFLAG(IS_IOS)
 
 #if BUILDFLAG(IS_ANDROID)
 const char kPwaInstallMenuSelected[] = "pwa_install_menu_clicked";
 #endif  // BUILDFLAG(IS_ANDROID)
+
+const char kTabSearchComboButtonUsed[] = "tab_search_combo_button_used";
 
 }  // namespace events
 

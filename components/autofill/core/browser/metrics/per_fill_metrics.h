@@ -5,6 +5,8 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_METRICS_PER_FILL_METRICS_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_METRICS_PER_FILL_METRICS_H_
 
+#include <stddef.h>
+
 #include "components/autofill/core/browser/filling/form_filler.h"
 
 namespace autofill::autofill_metrics {
@@ -19,6 +21,9 @@ void LogNumberOfFieldsModifiedByAutofill(size_t modified_fields_count,
                                          const FillingPayload& filling_payload);
 
 void LogRefillTriggerReason(RefillTriggerReason refill_trigger_reason);
+
+void LogFieldTypeOfFillingTriggerField(FieldType field_type,
+                                       FillingProduct filling_product);
 
 void LogNumberOfFieldsModifiedByRefill(
     RefillTriggerReason refill_trigger_reason,

@@ -11,7 +11,6 @@ import android.content.Context;
 import android.content.res.Resources;
 import android.view.LayoutInflater;
 import android.view.View;
-import android.widget.ListView;
 
 import androidx.annotation.StringRes;
 import androidx.recyclerview.widget.LinearLayoutManager;
@@ -28,11 +27,9 @@ import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
-import org.chromium.ui.modelutil.ModelListAdapter;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.SimpleRecyclerViewAdapter;
 
-import java.util.Iterator;
 import java.util.List;
 
 /** Coordinator to construct the move target selector dialog. */
@@ -49,7 +46,7 @@ public class TargetSelectorCoordinator {
     private final Callback<InstanceInfo> mMoveCallback;
 
     private final ModelList mModelList = new ModelList();
-    private final UiUtils mUiUtils;
+    private final InstanceSwitcherFaviconHelper mFaviconHelper;
     private final View mDialogView;
     private final ModalDialogManager mModalDialogManager;
 
@@ -85,45 +82,28 @@ public class TargetSelectorCoordinator {
         mContext = context;
         mModalDialogManager = modalDialogManager;
         mMoveCallback = moveCallback;
-        mUiUtils = new UiUtils(mContext, iconBridge);
+        mFaviconHelper = new InstanceSwitcherFaviconHelper(mContext, iconBridge);
 
-        if (UiUtils.isInstanceSwitcherV2Enabled()) {
+        var adapter = new SimpleRecyclerViewAdapter(mModelList);
+        adapter.registerType(
+                TYPE_ENTRY,
+                parentView ->
+                        LayoutInflater.from(mContext)
+                                .inflate(R.layout.instance_switcher_item, null),
+                TargetSelectorItemViewBinder::bind);
 
-            var adapter = new SimpleRecyclerViewAdapter(mModelList);
+        mDialogView = LayoutInflater.from(context).inflate(R.layout.target_selector_dialog, null);
 
-            adapter.registerType(
-                    TYPE_ENTRY,
-                    parentView ->
-                            LayoutInflater.from(mContext)
-                                    .inflate(R.layout.instance_switcher_item_v2, null),
-                    TargetSelectorItemViewBinder::bind);
+        int itemVerticalSpacing =
+                mContext.getResources()
+                        .getDimensionPixelSize(R.dimen.instance_switcher_dialog_list_item_padding);
+        var itemDecoration = new DialogListItemDecoration(itemVerticalSpacing);
 
-            mDialogView =
-                    LayoutInflater.from(context).inflate(R.layout.target_selector_dialog_v2, null);
-
-            int itemVerticalSpacing =
-                    mContext.getResources()
-                            .getDimensionPixelSize(
-                                    R.dimen.instance_switcher_dialog_list_item_padding);
-            var itemDecoration = new DialogListItemDecoration(itemVerticalSpacing);
-
-            RecyclerView availableTargetsList = mDialogView.findViewById(R.id.targets_list);
-            availableTargetsList.setLayoutManager(
-                    new LinearLayoutManager(mContext, LinearLayoutManager.VERTICAL, false));
-            availableTargetsList.setAdapter(adapter);
-            availableTargetsList.addItemDecoration(itemDecoration);
-        } else {
-            ModelListAdapter adapter = new ModelListAdapter(mModelList);
-            adapter.registerType(
-                    TYPE_ENTRY,
-                    parentView ->
-                            LayoutInflater.from(mContext)
-                                    .inflate(R.layout.instance_switcher_item, null),
-                    TargetSelectorItemViewBinder::bind);
-            mDialogView =
-                    LayoutInflater.from(context).inflate(R.layout.target_selector_dialog, null);
-            ((ListView) mDialogView.findViewById(R.id.list_view)).setAdapter(adapter);
-        }
+        RecyclerView availableTargetsList = mDialogView.findViewById(R.id.targets_list);
+        availableTargetsList.setLayoutManager(
+                new LinearLayoutManager(mContext, LinearLayoutManager.VERTICAL, false));
+        availableTargetsList.setAdapter(adapter);
+        availableTargetsList.addItemDecoration(itemDecoration);
     }
 
     private void showDialog(List<InstanceInfo> items, @StringRes int titleId) {
@@ -134,13 +114,12 @@ public class TargetSelectorCoordinator {
     }
 
     private PropertyModel createDialog(List<InstanceInfo> items, @StringRes int titleId) {
+        items.sort((info1, info2) -> Long.compare(info2.lastAccessedTime, info1.lastAccessedTime));
         for (InstanceInfo info : items) {
             if (info.type == InstanceInfo.Type.CURRENT) {
-                mSelectedItem = info;
                 mCurrentId = info.instanceId;
             }
-            if ((UiUtils.isInstanceSwitcherV2Enabled() && info.type != InstanceInfo.Type.CURRENT)
-                    || !UiUtils.isInstanceSwitcherV2Enabled()) {
+            if (info.type != InstanceInfo.Type.CURRENT) {
                 PropertyModel itemModel = generateListItem(info);
                 mModelList.add(new ListItem(0, itemModel));
             }
@@ -179,12 +158,7 @@ public class TargetSelectorCoordinator {
                 .with(
                         ModalDialogProperties.BUTTON_STYLES,
                         ModalDialogProperties.ButtonStyles.PRIMARY_FILLED_NEGATIVE_OUTLINE)
-                .with(
-                        ModalDialogProperties.POSITIVE_BUTTON_TEXT,
-                        resources,
-                        UiUtils.isInstanceSwitcherV2Enabled()
-                                ? R.string.move
-                                : R.string.target_selector_move)
+                .with(ModalDialogProperties.POSITIVE_BUTTON_TEXT, resources, R.string.move)
                 .with(ModalDialogProperties.NEGATIVE_BUTTON_TEXT, resources, R.string.cancel)
                 .with(
                         ModalDialogProperties.DIALOG_STYLES,
@@ -197,8 +171,8 @@ public class TargetSelectorCoordinator {
     }
 
     private PropertyModel generateListItem(InstanceInfo item) {
-        String title = mUiUtils.getItemTitle(item);
-        String desc = mUiUtils.getItemDesc(item);
+        String title = UiUtils.getItemTitle(mContext, item);
+        String desc = UiUtils.getItemDesc(mContext, item);
         PropertyModel.Builder builder =
                 new PropertyModel.Builder(TargetSelectorItemProperties.ALL_KEYS)
                         .with(TargetSelectorItemProperties.TITLE, title)
@@ -208,43 +182,26 @@ public class TargetSelectorCoordinator {
                                 TargetSelectorItemProperties.CLICK_LISTENER,
                                 (view) -> selectInstance(item));
 
-        if (UiUtils.isInstanceSwitcherV2Enabled()) {
-            String lastAccessedString =
-                    TimeTextResolver.resolveTimeAgoText(
-                            mContext.getResources(), item.lastAccessedTime);
-            builder.with(TargetSelectorItemProperties.LAST_ACCESSED, lastAccessedString);
-            builder.with(TargetSelectorItemProperties.IS_SELECTED, false);
-        } else {
-            builder.with(
-                    TargetSelectorItemProperties.CHECK_TARGET,
-                    item.type == InstanceInfo.Type.CURRENT);
-        }
+        String lastAccessedString =
+                TimeTextResolver.resolveTimeAgoText(mContext.getResources(), item.lastAccessedTime);
+        builder.with(TargetSelectorItemProperties.LAST_ACCESSED, lastAccessedString);
+        builder.with(TargetSelectorItemProperties.IS_SELECTED, false);
+
         PropertyModel model = builder.build();
-        mUiUtils.setFavicon(model, TargetSelectorItemProperties.FAVICON, item);
+        mFaviconHelper.setFavicon(model, TargetSelectorItemProperties.FAVICON, item);
         return model;
     }
 
     private void selectInstance(InstanceInfo clickedItem) {
         int instanceId = clickedItem.instanceId;
-        assumeNonNull(mSelectedItem);
-        if (mSelectedItem.instanceId == instanceId) return;
+        if (mSelectedItem != null && mSelectedItem.instanceId == instanceId) return;
         // Do not allow the target to be the current one.
         assumeNonNull(mDialog);
         mDialog.set(ModalDialogProperties.POSITIVE_BUTTON_DISABLED, mCurrentId == instanceId);
-        Iterator<ListItem> it = mModelList.iterator();
-        while (it.hasNext()) {
-            ListItem li = it.next();
+        for (ListItem li : mModelList) {
             int id = li.model.get(TargetSelectorItemProperties.INSTANCE_ID);
-            if (UiUtils.isInstanceSwitcherV2Enabled()) {
-                li.model.set(TargetSelectorItemProperties.IS_SELECTED, id == instanceId);
-                mDialog.set(ModalDialogProperties.POSITIVE_BUTTON_DISABLED, false);
-            } else {
-                if (id == mSelectedItem.instanceId) {
-                    li.model.set(TargetSelectorItemProperties.CHECK_TARGET, false);
-                } else if (id == instanceId) {
-                    li.model.set(TargetSelectorItemProperties.CHECK_TARGET, true);
-                }
-            }
+            li.model.set(TargetSelectorItemProperties.IS_SELECTED, id == instanceId);
+            mDialog.set(ModalDialogProperties.POSITIVE_BUTTON_DISABLED, false);
         }
         mSelectedItem = clickedItem;
     }

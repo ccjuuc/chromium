@@ -242,6 +242,7 @@
 <translation id="2497706219848005458">Жасыл сары</translation>
 <translation id="2512979179176933762">терезелерді көрсету</translation>
 <translation id="2523609930580546572">ChromeVox оқулығы</translation>
+<translation id="2523760288355306549">Брайль қарпімен енгізу әзірге қолжетімді емес.</translation>
 <translation id="2525706221823668172">Chromebook пернелер тіркесімдері</translation>
 <translation id="2553108862507765288">grammatical mistake</translation>
 <translation id="2556326187583116255">Қазір оқылып жатқан кез келген сөзді тоқтату үшін 2 саусақпен түртіңіз.</translation>
@@ -540,7 +541,7 @@
 <translation id="4352022650330571548">"<ph name="PHRASE" />" деп тер</translation>
 <translation id="4360738659108163902">Тінтуірдің оң жақ түймесін басу</translation>
 <translation id="4372435075475052704">мин:<ph name="X" /></translation>
-<translation id="4372705107434148843">Сөйлеуді тоқтату</translation>
+<translation id="4372705107434148843">Дыбыстауды тоқтату</translation>
 <translation id="4376316291247992553">Графикалық элементтерді Брайль шрифті ретінде көру</translation>
 <translation id="437809255587011096">Мәтін стилін мәлімдеу</translation>
 <translation id="4378308539633073595">Алға айналдыру</translation>

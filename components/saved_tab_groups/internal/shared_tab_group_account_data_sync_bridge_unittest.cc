@@ -12,6 +12,7 @@
 #include "base/time/time.h"
 #include "base/uuid.h"
 #include "components/data_sharing/test_support/extended_shared_tab_group_account_data_specifics.pb.h"
+#include "components/saved_tab_groups/public/features.h"
 #include "components/saved_tab_groups/test_support/mock_tab_group_sync_service.h"
 #include "components/saved_tab_groups/test_support/saved_tab_group_test_utils.h"
 #include "components/sync/base/features.h"
@@ -337,6 +338,8 @@ class SharedTabGroupAccountDataSyncBridgeTest : public testing::Test {
   SavedTabGroupModel& model() { return *model_; }
 
  protected:
+  base::test::ScopedFeatureList feature_list_;
+
   // In memory data type store needs to be able to post tasks.
   base::test::TaskEnvironment task_environment_;
 
@@ -344,7 +347,6 @@ class SharedTabGroupAccountDataSyncBridgeTest : public testing::Test {
   testing::NiceMock<syncer::MockDataTypeLocalChangeProcessor> processor_;
   std::unique_ptr<syncer::DataTypeStore> store_;
   std::unique_ptr<SharedTabGroupAccountDataSyncBridge> bridge_;
-  base::test::ScopedFeatureList feature_list_;
 };
 
 TEST_F(SharedTabGroupAccountDataSyncBridgeTest, ShouldReturnClientTag) {
@@ -998,6 +1000,8 @@ TEST_F(SharedTabGroupAccountDataSyncBridgeTest,
   account_data_specifics2->set_update_time_windows_epoch_micros(1234567890);
   account_data_specifics2->mutable_shared_tab_group_details()
       ->set_pinned_position(11);
+  account_data_specifics2->mutable_shared_tab_group_details()
+      ->set_projects_position(12);
   account_data_specifics2->set_version(999);
 
   EXPECT_THAT(bridge().TrimAllSupportedFieldsFromRemoteSpecifics(

@@ -12,16 +12,16 @@
 #import "base/strings/sys_string_conversions.h"
 #import "components/lens/lens_url_utils.h"
 #import "ios/chrome/browser/context_menu/ui_bundled/context_menu_configuration_provider.h"
-#import "ios/chrome/browser/lens_overlay/coordinator/lens_overlay_availability.h"
 #import "ios/chrome/browser/lens_overlay/coordinator/lens_overlay_tab_change_audience.h"
 #import "ios/chrome/browser/lens_overlay/coordinator/lens_result_page_mediator_delegate.h"
 #import "ios/chrome/browser/lens_overlay/model/lens_overlay_url_utils.h"
+#import "ios/chrome/browser/lens_overlay/public/lens_overlay_availability.h"
 #import "ios/chrome/browser/lens_overlay/ui/lens_overlay_error_handler.h"
 #import "ios/chrome/browser/lens_overlay/ui/lens_result_page_consumer.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/public/snackbar/snackbar_message.h"
@@ -124,6 +124,15 @@ BOOL IsMaximizeBottomSheetURL(const GURL& URL) {
   return base::EqualsCaseInsensitiveASCII(host, "resultpanel-header-hide");
 }
 
+// Detect if the AIM overlay is displayed based on the fragment.
+BOOL IsAIMOverlayShownUrl(const GURL& URL) {
+  if (!(lens::IsGoogleHostURL(URL) && URLHasLensRequestQueryParam(URL))) {
+    return NO;
+  }
+
+  return URL.ref().find("aimos=1") != std::string::npos;
+}
+
 // Maps `value` of the closed interval [`in_min`, `in_max`] to
 // [`out_min`, `out_max`].
 float IntervalMap(float value,
@@ -188,6 +197,8 @@ inline constexpr char kDarkModeParameterDarkValue[] = "1";
   float _lastCommitedProgress;
   /// Most recent loaded HTTP headers.
   NSDictionary<NSString*, NSString*>* _latestHttpHeaders;
+  /// Whether the AIM overlay is currently displayed.
+  BOOL _isAIMOverlayShown;
 }
 
 - (instancetype)
@@ -213,7 +224,7 @@ inline constexpr char kDarkModeParameterDarkValue[] = "1";
 
 - (void)setConsumer:(id<LensResultPageConsumer>)consumer {
   _consumer = consumer;
-  CHECK(_webState, kLensOverlayNotFatalUntil);
+  CHECK(_webState);
   _webState->SetWebUsageEnabled(true);
   // Mark hidden until the first page has finished loading, preventing a
   // momentary display of the web view's white background.
@@ -261,7 +272,7 @@ inline constexpr char kDarkModeParameterDarkValue[] = "1";
 
 - (void)loadResultsURL:(GURL)URL
            httpHeaders:(NSDictionary<NSString*, NSString*>*)httpHeaders {
-  CHECK(_webState, kLensOverlayNotFatalUntil);
+  CHECK(_webState);
 
   // Add light/dark mode query parameter.
   URL = net::AppendOrReplaceQueryParameter(
@@ -279,10 +290,12 @@ inline constexpr char kDarkModeParameterDarkValue[] = "1";
     _latestHttpHeaders = [httpHeaders copy];
   }
   NSMutableDictionary<NSString*, NSString*>* headers =
-      [_latestHttpHeaders mutableCopy] ?: [NSMutableDictionary dictionary];
-  // Add variation headers last, because they have precedence.
-  [headers addEntriesFromDictionary:web_navigation_util::VariationHeadersForURL(
-                                        URL, _isIncognito)];
+      [web_navigation_util::VariationHeadersForURL(URL, _isIncognito)
+          mutableCopy];
+  if (_latestHttpHeaders) {
+    // Add latest HTTP headers last, because they have precedence.
+    [headers addEntriesFromDictionary:_latestHttpHeaders];
+  }
   webParams.extra_headers = headers;
 
   _webState->GetNavigationManager()->LoadURLWithParams(webParams);
@@ -408,9 +421,20 @@ inline constexpr char kDarkModeParameterDarkValue[] = "1";
 - (void)webState:(web::WebState*)webState
     didStartNavigation:(web::NavigationContext*)navigationContext {
   BOOL isSameDocument = navigationContext->IsSameDocument();
-  // Disregard same document navigation from initiating progress loading.
   if (!isSameDocument) {
+    // Reset progress for new page.
     _lastCommitedProgress = 0;
+  }
+
+  // Check for overlay status.
+  GURL URL = navigationContext->GetUrl();
+  if (IsAIMOverlayShownUrl(URL)) {
+    _isAIMOverlayShown = YES;
+    [self.bottomSheetCommands requestMaximizeBottomSheet];
+    [self.bottomSheetCommands hideSearchBar];
+  } else if (_isAIMOverlayShown) {
+    _isAIMOverlayShown = NO;
+    [self.bottomSheetCommands showSearchBar];
   }
 }
 
@@ -486,7 +510,7 @@ inline constexpr char kDarkModeParameterDarkValue[] = "1";
             initiatedByUser:(BOOL)initiatedByUser {
   // Check if requested web state is a popup and block it if necessary.
   if (!initiatedByUser) {
-    auto* helper = BlockedPopupTabHelper::GetOrCreateForWebState(webState);
+    auto* helper = BlockedPopupTabHelper::FromWebState(webState);
     if (helper->ShouldBlockPopup(openerURL)) {
       // It's possible for a page to inject a popup into a window created via
       // window.open before its initial load is committed.  Rather than relying
@@ -537,6 +561,15 @@ inline constexpr char kDarkModeParameterDarkValue[] = "1";
       webState, protectionSpace, proposedCredential, base::BindOnce(handler));
 }
 
+- (void)webState:(web::WebState*)webState
+    didRequestClientCertAuthForProtectionSpace:
+        (NSURLProtectionSpace*)protectionSpace
+                             completionHandler:
+                                 (void (^)(SecIdentityRef))handler {
+  _browserWebStateDelegate->OnAuthRequired(webState, protectionSpace,
+                                           base::BindOnce(handler));
+}
+
 // This API can be used to show custom input views in the web view.
 - (id<CRWResponderInputView>)webStateInputViewProvider:
     (web::WebState*)webState {
@@ -579,7 +612,7 @@ inline constexpr char kDarkModeParameterDarkValue[] = "1";
 
 /// Detaches and returns the current web state.
 - (std::unique_ptr<web::WebState>)detachWebState {
-  CHECK(_webState, kLensOverlayNotFatalUntil);
+  CHECK(_webState);
   _policyDeciderBridge.reset();
   _webState->RemoveObserver(_webStateObserverBridge.get());
   _webState->SetDelegate(nullptr);
@@ -589,8 +622,8 @@ inline constexpr char kDarkModeParameterDarkValue[] = "1";
 /// Attaches `webState` to the mediator.
 - (void)attachWebState:(std::unique_ptr<web::WebState>)webState {
   /// Detach the current web state before attaching a new one.
-  CHECK(!_webState, kLensOverlayNotFatalUntil);
-  CHECK(!_policyDeciderBridge, kLensOverlayNotFatalUntil);
+  CHECK(!_webState);
+  CHECK(!_policyDeciderBridge);
   _webState = std::move(webState);
   _webState->SetDelegate(_webStateDelegateBridge.get());
   _webState->AddObserver(_webStateObserverBridge.get());

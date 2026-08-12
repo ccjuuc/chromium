@@ -235,13 +235,6 @@ struct StructTraits<blink::mojom::ShadowRealmTokenDataView,
 // keep the following list in alphabetic order.
 
 template <>
-struct StructTraits<blink::mojom::AttributionSrcTokenDataView,
-                    blink::AttributionSrcToken>
-    : public blink::TokenMojomTraitsHelper<
-          blink::mojom::AttributionSrcTokenDataView,
-          blink::AttributionSrcToken> {};
-
-template <>
 struct BLINK_COMMON_EXPORT
     UnionTraits<blink::mojom::ExecutionContextTokenDataView,
                 blink::ExecutionContextToken> {
@@ -407,6 +400,13 @@ struct StructTraits<blink::mojom::WebNNTensorTokenDataView,
     : public blink::TokenMojomTraitsHelper<
           blink::mojom::WebNNTensorTokenDataView,
           blink::WebNNTensorToken> {};
+
+template <>
+struct StructTraits<blink::mojom::WebNNGraphTokenDataView,
+                    blink::WebNNGraphToken>
+    : public blink::TokenMojomTraitsHelper<
+          blink::mojom::WebNNGraphTokenDataView,
+          blink::WebNNGraphToken> {};
 
 }  // namespace mojo
 

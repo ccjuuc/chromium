@@ -27,7 +27,7 @@ export async function createPaymentsSection(
     creditCards: chrome.autofillPrivate.CreditCardEntry[],
     ibans: chrome.autofillPrivate.IbanEntry[],
     payOverTimeIssuers: chrome.autofillPrivate.PayOverTimeIssuerEntry[],
-    prefValues: any): Promise<SettingsPaymentsSectionElement> {
+    prefValues: unknown): Promise<SettingsPaymentsSectionElement> {
   // Override the PaymentsManagerImpl for testing.
   const paymentsManager = new TestPaymentsManager();
   paymentsManager.data.creditCards = creditCards;
@@ -40,7 +40,15 @@ export async function createPaymentsSection(
   PaymentsManagerImpl.setInstance(paymentsManager);
 
   const section = document.createElement('settings-payments-section');
-  section.prefs = {autofill: prefValues};
+  section.prefs = {
+    autofill: {
+      credit_card_enabled: {
+        type: chrome.settingsPrivate.PrefType.BOOLEAN,
+        value: true,
+      },
+      ...(prefValues as Record<string, unknown>),
+    },
+  };
   document.body.appendChild(section);
   await flushTasks();
 

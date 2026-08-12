@@ -7,6 +7,7 @@
 #include "ash/app_list/views/app_list_item_view.h"
 #include "ash/app_list/views/apps_grid_view.h"
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/drag_drop/drag_drop_controller.h"
 #include "ash/public/cpp/accelerators.h"
 #include "ash/public/cpp/app_list/app_list_model_delegate.h"
@@ -16,6 +17,7 @@
 #include "ash/shell.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/functional/callback.h"
@@ -34,7 +36,6 @@
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/login/user_adding_screen.h"
-#include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/services/app_service/public/cpp/icon_loader.h"
 #include "content/public/test/browser_test.h"
@@ -166,7 +167,7 @@ class AppListSortBrowserTest : public extensions::ExtensionBrowserTest {
   // switching to the clamshell mode. The tablet mode changes synchronously on
   // animation start to avoid the race condition between the fade out animation
   // completion and the task to change the tablet mode state.
-  // See https://crbug.com/1302924
+  // See https://crbug.com/40217187
   void RegisterModeSwitchClosureOnFadeOutStarted(bool tablet_mode_enabled) {
     auto switch_mode_closure = base::BindOnce(
         [](bool tablet_mode_enabled) {
@@ -220,7 +221,7 @@ class AppListSortBrowserTest : public extensions::ExtensionBrowserTest {
 
   ash::AppListSortOrder GetPermanentSortingOrder() {
     return static_cast<ash::AppListSortOrder>(
-        profile()->GetPrefs()->GetInteger(prefs::kAppListPreferredOrder));
+        profile()->GetPrefs()->GetInteger(ash::prefs::kAppListPreferredOrder));
   }
 
   // extensions::ExtensionBrowserTest:
@@ -372,7 +373,7 @@ IN_PROC_BROWSER_TEST_F(AppListSortBrowserTest, ClearPrefOrderByItemMove) {
 // or sorted by the apps' icon colors using the context menu in apps grid view.
 // TODO(crbug.com/1267369): Also add a test that verifies the behavior in tablet
 // mode.
-// Flaky. See https://crbug.com/1423200
+// Flaky. See https://crbug.com/40897358
 IN_PROC_BROWSER_TEST_F(AppListSortBrowserTest,
                        DISABLED_ContextMenuSortItemsInFolder) {
   ash::ShellTestApi().SetTabletModeEnabledForTest(false);
@@ -761,8 +762,8 @@ IN_PROC_BROWSER_TEST_F(AppListSortBrowserTest, UndoTemporarySortingClamshell) {
   // Wait for one additional frame so that the metric data is collected.
   ui::Compositor* compositor =
       app_list_test_api_.GetTopLevelAppsGridView()->layer()->GetCompositor();
-  base::IgnoreResult(
-      ui::WaitForNextFrameToBePresented(compositor, base::Milliseconds(300)));
+  std::ignore =
+      ui::WaitForNextFrameToBePresented(compositor, base::Milliseconds(300));
 
   histograms.ExpectTotalCount(
       ash::kClamshellReorderAnimationSmoothnessHistogram, 1);
@@ -778,8 +779,8 @@ IN_PROC_BROWSER_TEST_F(AppListSortBrowserTest, UndoTemporarySortingClamshell) {
       event_generator_.get());
 
   // Wait for the metric data to be collected.
-  base::IgnoreResult(
-      ui::WaitForNextFrameToBePresented(compositor, base::Milliseconds(300)));
+  std::ignore =
+      ui::WaitForNextFrameToBePresented(compositor, base::Milliseconds(300));
 
   // Smoothness of the reorder animation triggered by undo button is recorded.
   histograms.ExpectTotalCount(
@@ -822,8 +823,8 @@ IN_PROC_BROWSER_TEST_F(AppListSortBrowserTest, UndoTemporarySortingTablet) {
   // Wait for one additional frame so that the metric data is collected.
   ui::Compositor* compositor =
       app_list_test_api_.GetTopLevelAppsGridView()->layer()->GetCompositor();
-  base::IgnoreResult(
-      ui::WaitForNextFrameToBePresented(compositor, base::Milliseconds(300)));
+  std::ignore =
+      ui::WaitForNextFrameToBePresented(compositor, base::Milliseconds(300));
 
   histograms.ExpectTotalCount(ash::kTabletReorderAnimationSmoothnessHistogram,
                               1);
@@ -839,8 +840,8 @@ IN_PROC_BROWSER_TEST_F(AppListSortBrowserTest, UndoTemporarySortingTablet) {
   EXPECT_EQ(ash::AppListToastType::kNone, app_list_test_api_.GetToastType());
 
   // Wait for the metric data to be collected.
-  base::IgnoreResult(
-      ui::WaitForNextFrameToBePresented(compositor, base::Milliseconds(300)));
+  std::ignore =
+      ui::WaitForNextFrameToBePresented(compositor, base::Milliseconds(300));
 
   // Smoothness of the reorder animation triggered by undo button is recorded.
   histograms.ExpectTotalCount(ash::kTabletReorderAnimationSmoothnessHistogram,
@@ -1463,8 +1464,9 @@ class AppListSortColorOrderBrowserTest : public AppListSortBrowserTest {
     const sk_sp<SkImage> image = SkImages::RasterFromBitmap(*icon.bitmap());
     const sk_sp<SkData> png_data =
         skia::EncodePngAsSkData(nullptr, image.get());
-    UNSAFE_TODO(
-        icon_file.Write(0, (const char*)png_data->data(), png_data->size()));
+    // SAFETY: png_data->bytes() points to a buffer of size png_data->size().
+    icon_file.Write(0, base::as_bytes(UNSAFE_BUFFERS(
+                           base::span(png_data->bytes(), png_data->size()))));
     icon_file.Close();
 
     // Prepare the app manifest file.
@@ -1479,10 +1481,10 @@ class AppListSortColorOrderBrowserTest : public AppListSortBrowserTest {
     base::strings::SafeSPrintf(json_buffer, icon_json, icon_size,
                                icon_file_name);
     char manifest_buffer[300];
-    int count = base::strings::SafeSPrintf(manifest_buffer, kManifestData,
-                                           app_name.c_str(), json_buffer);
-    UNSAFE_TODO(
-        EXPECT_EQ(count, manifest_file.Write(0, manifest_buffer, count)));
+    size_t count = base::strings::SafeSPrintf(manifest_buffer, kManifestData,
+                                              app_name.c_str(), json_buffer);
+    EXPECT_TRUE(manifest_file.WriteAndCheck(
+        0, base::as_byte_span(manifest_buffer).first(count)));
     manifest_file.Close();
 
     return extension_path;

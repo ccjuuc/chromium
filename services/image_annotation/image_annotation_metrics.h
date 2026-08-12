@@ -13,8 +13,6 @@ namespace image_annotation {
 // Implementation details exposed only for testing. May change without warning.
 namespace metrics_internal {
 
-// TODO(crbug.com/41432508): separate out client / annotation types when we have
-//                         more use cases for the service.
 constexpr char kCacheHit[] = "ImageAnnotationService.AccessibilityV1.CacheHit";
 constexpr char kClientResult[] =
     "ImageAnnotationService.AccessibilityV1.ClientResult";
@@ -46,11 +44,11 @@ constexpr char kServerResponseSize[] =
 constexpr char kSourcePixelCount[] =
     "ImageAnnotationService.AccessibilityV1.SourcePixelCount";
 constexpr char kAnnotationConfidence[] =
-    "ImageAnnotationService.%sAccessibilityV1.Confidence";
+    "ImageAnnotationService.%s.AccessibilityV1.Confidence";
 constexpr char kAnnotationEmpty[] =
-    "ImageAnnotationService.%sAccessibilityV1.Empty";
+    "ImageAnnotationService.%s.AccessibilityV1.Empty";
 constexpr char kAnnotationStatus[] =
-    "ImageAnnotationService.%sAccessibilityV1.Status";
+    "ImageAnnotationService.%s.AccessibilityV1.Status";
 
 }  // namespace metrics_internal
 

@@ -10,14 +10,21 @@ import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
 
 import org.chromium.base.UserDataHost;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.content.browser.framehost.PageImpl;
+import org.chromium.content_public.common.Referrer;
 import org.chromium.net.NetError;
+import org.chromium.network.mojom.ReferrerPolicy;
 import org.chromium.ui.base.PageTransition;
 import org.chromium.url.GURL;
 import org.chromium.url.Origin;
+
+import java.util.HashMap;
+import java.util.Map;
 
 /** JNI bridge with content::NavigationHandle */
 @JNINamespace("content")
@@ -30,6 +37,7 @@ public class NavigationHandle {
     private @PageTransition int mPageTransition;
     private GURL mUrl;
     private @Nullable GURL mReferrerUrl;
+    private int mReferrerPolicy;
     private @Nullable GURL mBaseUrlForDataUrl;
     private boolean mHasCommitted;
     private boolean mIsDownload;
@@ -37,6 +45,7 @@ public class NavigationHandle {
     private boolean mIsPrimaryMainFrameFragmentNavigation;
     private boolean mIsValidSearchFormUrl;
     private @NetError int mErrorCode;
+    private @Nullable String mErrorDescription;
     private int mHttpStatusCode;
     private @Nullable Origin mInitiatorOrigin;
     private boolean mIsPost;
@@ -55,7 +64,11 @@ public class NavigationHandle {
     private @Nullable String mMimeType;
     private @Nullable WebContents mWebContents;
     private @Nullable Page mCommittedPage;
+    private boolean mIsSameOrigin;
+    private @Nullable Map<String, String> mResponseHeaders;
+    private int mIgnoredDuplicateNavigationCount;
 
+    private long mNavigationStartMs;
     private boolean mStarted;
 
     public static NavigationHandle createForTesting(
@@ -93,6 +106,7 @@ public class NavigationHandle {
                         /* isRestore= */ false);
         handle.didStart(
                 /* referrerUrl= */ GURL.emptyGURL(),
+                /* referrerPolicy= */ ReferrerPolicy.DEFAULT,
                 /* baseUrlForDataUrl= */ GURL.emptyGURL(),
                 isInPrimaryMainFrame,
                 isSameDocument,
@@ -106,6 +120,7 @@ public class NavigationHandle {
                 /* isPageActivation= */ false,
                 /* isPdf= */ false,
                 /* mimeType= */ "",
+                /* navigationStartMs= */ 0,
                 /* webContents= */ null);
         return handle;
     }
@@ -128,11 +143,13 @@ public class NavigationHandle {
         mIsBack = isBack;
         mIsForward = isForward;
         mIsRestore = isRestore;
+        mResponseHeaders = null;
     }
 
     @CalledByNative
     private void didStart(
             GURL referrerUrl,
+            int referrerPolicy,
             GURL baseUrlForDataUrl,
             boolean isInPrimaryMainFrame,
             boolean isSameDocument,
@@ -146,8 +163,10 @@ public class NavigationHandle {
             boolean isPageActivation,
             boolean isPdf,
             String mimeType,
+            long navigationStartMs,
             @Nullable WebContents webContents) {
         mReferrerUrl = referrerUrl;
+        mReferrerPolicy = referrerPolicy;
         mBaseUrlForDataUrl = baseUrlForDataUrl;
         mIsInPrimaryMainFrame = isInPrimaryMainFrame;
         mIsSameDocument = isSameDocument;
@@ -161,9 +180,16 @@ public class NavigationHandle {
         mIsPdf = isPdf;
         mIsPageActivation = isPageActivation;
         mMimeType = mimeType;
+        mNavigationStartMs = navigationStartMs;
         mWebContents = webContents;
 
         mStarted = true;
+    }
+
+    /** Returns the navigation start time in milliseconds. */
+    public long getNavigationStartMs() {
+        assert mStarted;
+        return mNavigationStartMs;
     }
 
     /**
@@ -183,7 +209,7 @@ public class NavigationHandle {
     @CalledByNative
     @VisibleForTesting
     public void didFinish(
-            GURL url,
+            @JniType("GURL") GURL url,
             boolean isErrorPage,
             boolean hasCommitted,
             boolean isPrimaryMainFrameFragmentNavigation,
@@ -191,11 +217,16 @@ public class NavigationHandle {
             boolean isValidSearchFormUrl,
             @PageTransition int transition,
             @NetError int errorCode,
+            @JniType("std::string") String errorDescription,
             int httpStatuscode,
             boolean isExternalProtocol,
             boolean isPdf,
-            String mimeType,
-            Page currentPage) {
+            @JniType("std::string") String mimeType,
+            Page currentPage,
+            boolean isSameOrigin,
+            @JniType("base::flat_map<std::string, std::string>")
+                    Map<String, String> responseHeaders,
+            int ignoredDuplicateNavigationCount) {
         mUrl = url;
         mIsErrorPage = isErrorPage;
         mHasCommitted = hasCommitted;
@@ -204,6 +235,7 @@ public class NavigationHandle {
         mIsValidSearchFormUrl = isValidSearchFormUrl;
         mPageTransition = transition;
         mErrorCode = errorCode;
+        mErrorDescription = errorDescription;
         mHttpStatusCode = httpStatuscode;
         mIsExternalProtocol = isExternalProtocol;
         mIsPdf = isPdf;
@@ -211,6 +243,34 @@ public class NavigationHandle {
         if (mHasCommitted && mIsInPrimaryMainFrame) {
             mCommittedPage = currentPage;
         }
+        mIsSameOrigin = isSameOrigin;
+        mResponseHeaders = responseHeaders;
+        mIgnoredDuplicateNavigationCount = ignoredDuplicateNavigationCount;
+    }
+
+    public void callDidFinishForTesting(GURL url) {
+        callDidFinishForTesting(url, true);
+    }
+
+    public void callDidFinishForTesting(GURL url, boolean hasCommitted) {
+        didFinish(
+                url,
+                /* isErrorPage= */ false,
+                hasCommitted,
+                /* isPrimaryMainFrameFragmentNavigation= */ false,
+                /* isDownload= */ false,
+                /* isValidSearchFormUrl= */ false,
+                /* transition= */ PageTransition.LINK,
+                /* errorCode= */ NetError.OK,
+                /* errorDescription= */ "",
+                /* httpStatuscode= */ 200,
+                /* isExternalProtocol= */ false,
+                /* isPdf= */ false,
+                /* mimeType= */ "",
+                new PageImpl(/* nativePage= */ 0, /* isPrerendering= */ false),
+                /* isSameOrigin= */ true,
+                /* responseHeaders= */ new HashMap<>(),
+                /* ignoredDuplicateNavigationCount= */ 0);
     }
 
     /** Release the C++ pointer. */
@@ -235,6 +295,20 @@ public class NavigationHandle {
     public GURL getReferrerUrl() {
         assert mStarted;
         return assumeNonNull(mReferrerUrl);
+    }
+
+    /** The referrer policy for the navigation. */
+    public int getReferrerPolicy() {
+        assert mStarted;
+        return mReferrerPolicy;
+    }
+
+    /** The referrer for the navigation. */
+    public @Nullable Referrer getReferrer() {
+        assert mStarted;
+        GURL referrerUrl = getReferrerUrl();
+        if (GURL.isEmptyOrInvalid(referrerUrl)) return null;
+        return new Referrer(referrerUrl.getSpec(), getReferrerPolicy());
     }
 
     /** Used for specifying a base URL for pages loaded via data URLs. */
@@ -269,6 +343,22 @@ public class NavigationHandle {
     }
 
     /**
+     * Whether the previous document in this frame was same-origin with the new one created by this
+     * navigation.
+     */
+    public boolean isSameOrigin() {
+        assert mHasCommitted;
+        return mIsSameOrigin;
+    }
+
+    /**
+     * @return The response headers.
+     */
+    public @Nullable Map<String, String> getResponseHeaders() {
+        return mResponseHeaders;
+    }
+
+    /**
      * Whether the navigation happened without changing document. Examples of same document
      * navigations are: - reference fragment navigations - pushState/replaceState - same page
      * history navigation
@@ -278,15 +368,14 @@ public class NavigationHandle {
         return mIsSameDocument;
     }
 
-    public String errorDescription() {
-        assert mStarted;
-        // TODO(shaktisahu): Provide appropriate error description (crbug/690784).
-        return "";
-    }
-
     public @NetError int errorCode() {
         assert mStarted;
         return mErrorCode;
+    }
+
+    public @Nullable String errorDescription() {
+        assert mStarted;
+        return mErrorDescription;
     }
 
     /**
@@ -458,5 +547,10 @@ public class NavigationHandle {
      */
     public @Nullable Page getCommittedPage() {
         return mCommittedPage;
+    }
+
+    /** Returns the number of duplicate navigations ignored during this navigation. */
+    public int getIgnoredDuplicateNavigationCount() {
+        return mIgnoredDuplicateNavigationCount;
     }
 }

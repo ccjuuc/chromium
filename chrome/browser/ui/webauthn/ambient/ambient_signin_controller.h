@@ -14,7 +14,6 @@
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/webauthn/authenticator_request_dialog_model.h"
 #include "content/public/browser/document_user_data.h"
-#include "ui/views/widget/widget_observer.h"
 
 struct AuthenticatorRequestDialogModel;
 
@@ -26,10 +25,9 @@ namespace content {
 class RenderFrameHost;
 }  // namespace content
 
-namespace password_manager {
-class PasskeyCredential;
-struct PasswordForm;
-}  // namespace password_manager
+namespace page_actions {
+class PageActionController;
+}  // namespace page_actions
 
 namespace tabs {
 class TabInterface;
@@ -46,57 +44,45 @@ class AmbientSigninBubbleView;
 // TODO(ambient): Move this class to c/b/ui/ambient and include other types of
 // sign-in methods (e.g. FedCM)
 class AmbientSigninController
-    : public content::DocumentUserData<AmbientSigninController>,
-      public AuthenticatorRequestDialogModel::Observer,
-      public views::WidgetObserver {
+    : public AuthenticatorRequestDialogModel::Observer,
+      public content::DocumentUserData<AmbientSigninController> {
  public:
-  using PasskeyCredentialSelectionCallback =
-      base::OnceCallback<void(const std::vector<uint8_t>)>;
-  using PasswordCredentialSelectionCallback =
-      base::OnceCallback<void(PasswordCredentialPair)>;
 
   ~AmbientSigninController() override;
 
-  // Adds and shows the WebAuthn credentials in the Ambient UI.
-  void AddAndShowWebAuthnMethods(
-      AuthenticatorRequestDialogModel* model,
-      const std::vector<password_manager::PasskeyCredential>& credentials,
-      int expected_credential_type_flags,
-      PasskeyCredentialSelectionCallback callback);
+  // Shows the Ambient UI with the provided credentials.
+  void Show(AuthenticatorRequestDialogModel* model);
 
-  void AddAndShowPasswordMethods(
-      std::vector<std::unique_ptr<password_manager::PasswordForm>> forms,
-      int expected_credential_type_flags,
-      PasswordCredentialSelectionCallback callback);
+  void TriggerPageActionSignIn();
 
-  // Called when the user selects a passkey shown in the bubble.
-  void OnPasskeySelected(const std::vector<uint8_t>& account_id);
-
-  // Called when the user selects a password shown in the bubble.
-  void OnPasswordSelected(const password_manager::PasswordForm* form);
+  // Called when a mechanism is selected.
+  void OnMechanismSelected(size_t index);
 
   std::u16string GetRpIdForDisplay() const;
   base::OnceClosure GetSignInCallback();
+  void OnBubbleViewDestroyed();
+
+  void SetPageActionControllerForTesting(
+      page_actions::PageActionController* controller);
 
   base::WeakPtr<AmbientSigninController> GetWeakPtr();
 
  private:
+  enum class UiType {
+    kNone,
+    kBubble,
+    kPageAction,
+  };
+
   // content::DocumentUserData<AmbientSigninController>:
   explicit AmbientSigninController(content::RenderFrameHost* render_frame_host);
   friend class content::DocumentUserData<AmbientSigninController>;
   DOCUMENT_USER_DATA_KEY_DECL();
 
-  enum class CredentialsReceived {
-    kNone,
-    kPasskeys,
-    kPasswords,
-    kPasswordsAndPasskeys,
-  };
+  void ShowBubbleView();
+  void ShowPageAction();
 
-  void ShowBubble();
-
-  // views::WidgetObserver:
-  void OnWidgetDestroying(views::Widget* widget) override;
+  void Close();
 
   // AuthenticatorRequestDialogModel::Observer
   void OnRequestComplete() override;
@@ -106,15 +92,20 @@ class AmbientSigninController
   void TabWillEnterBackground(tabs::TabInterface* tab_interface);
   void TabDidEnterForeground(tabs::TabInterface* tab_interface);
 
+  page_actions::PageActionController* GetPageActionController();
+
   std::vector<base::CallbackListSubscription> tab_subscriptions_;
   raw_ptr<AmbientSigninBubbleView> ambient_signin_bubble_view_;
-  PasskeyCredentialSelectionCallback passkey_selection_callback_;
-  PasswordCredentialSelectionCallback password_selection_callback_;
-  CredentialsReceived credentials_received_state_ = CredentialsReceived::kNone;
-  std::vector<std::unique_ptr<password_manager::PasswordForm>> password_forms_;
-  std::vector<password_manager::PasskeyCredential> passkey_credentials_;
 
   raw_ptr<AuthenticatorRequestDialogModel> model_;
+  std::vector<size_t> credential_indices_;
+
+  // Set when `Show()` is called. Retains the UI type until `Show()` is called
+  // again.
+  UiType ui_type_ = UiType::kNone;
+
+  raw_ptr<page_actions::PageActionController>
+      page_action_controller_test_override_ = nullptr;
 
   base::WeakPtrFactory<AmbientSigninController> weak_ptr_factory_{this};
 };

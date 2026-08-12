@@ -51,23 +51,29 @@ base::Value* ScopedUserPrefUpdateBase::GetValueOfType(base::Value::Type type) {
     SCOPED_CRASH_KEY_NUMBER("ScopedUserPrefUpdate", "Type",
                             pref ? std::to_underlying(pref->GetType()) : -1);
     base::debug::DumpWithoutCrashing();
+    if (!fallback_value_) {
+      fallback_value_ = type == base::Value::Type::DICT
+                            ? base::Value(base::DictValue())
+                            : base::Value(base::ListValue());
+    }
+    return &*fallback_value_;
   }
   return value_;
 }
 
 void ScopedUserPrefUpdateBase::Notify() {
   if (value_) {
-    service_->ReportUserPrefChanged(path_);
     value_ = nullptr;
+    service_->ReportUserPrefChanged(path_);
   }
 }
 
 }  // namespace subtle
 
-base::Value::Dict& ScopedDictPrefUpdate::Get() {
+base::DictValue& ScopedDictPrefUpdate::Get() {
   return GetValueOfType(base::Value::Type::DICT)->GetDict();
 }
 
-base::Value::List& ScopedListPrefUpdate::Get() {
+base::ListValue& ScopedListPrefUpdate::Get() {
   return GetValueOfType(base::Value::Type::LIST)->GetList();
 }

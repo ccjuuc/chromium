@@ -16,6 +16,7 @@
 #include "third_party/blink/renderer/core/css/css_inherited_value.h"
 #include "third_party/blink/renderer/core/css/css_initial_value.h"
 #include "third_party/blink/renderer/core/css/css_revert_layer_value.h"
+#include "third_party/blink/renderer/core/css/css_revert_rule_value.h"
 #include "third_party/blink/renderer/core/css/css_revert_value.h"
 #include "third_party/blink/renderer/core/css/css_unparsed_declaration_value.h"
 #include "third_party/blink/renderer/core/css/css_unset_value.h"
@@ -180,8 +181,10 @@ class RevertChecker : public CSSInterpolationType::ConversionChecker {
  public:
   static_assert(
       std::is_same<RevertValueType, cssvalue::CSSRevertValue>::value ||
-          std::is_same<RevertValueType, cssvalue::CSSRevertLayerValue>::value,
-      "RevertCheck only accepts CSSRevertValue and CSSRevertLayerValue");
+          std::is_same<RevertValueType, cssvalue::CSSRevertLayerValue>::value ||
+          std::is_same<RevertValueType, cssvalue::CSSRevertRuleValue>::value,
+      "RevertCheck only accepts CSSRevertValue, CSSRevertLayerValue,"
+      "and CSSRevertRuleValue");
 
   RevertChecker(const PropertyHandle& property_handle,
                 const CSSValue* resolved_value,
@@ -292,6 +295,14 @@ InterpolationValue CSSInterpolationType::MaybeConvertSingleInternal(
             GetProperty(), value, keyframe_tree_scope));
   }
 
+  if (value->IsRevertRuleValue()) {
+    value = environment.Resolve(GetProperty(), value, keyframe_tree_scope);
+    DCHECK(value);
+    conversion_checkers.push_back(
+        MakeGarbageCollected<RevertChecker<cssvalue::CSSRevertRuleValue>>(
+            GetProperty(), value, keyframe_tree_scope));
+  }
+
   bool is_inherited = CssProperty().IsInherited();
   if (value->IsInitialValue() || (value->IsUnsetValue() && !is_inherited)) {
     return MaybeConvertInitial(state, conversion_checkers);
@@ -335,6 +346,11 @@ InterpolationValue CSSInterpolationType::MaybeConvertCustomPropertyDeclaration(
         MakeGarbageCollected<RevertChecker<cssvalue::CSSRevertLayerValue>>(
             GetProperty(), value, keyframe_tree_scope));
   }
+  if (declaration.IsRevertRuleValue()) {
+    conversion_checkers.push_back(
+        MakeGarbageCollected<RevertChecker<cssvalue::CSSRevertRuleValue>>(
+            GetProperty(), value, keyframe_tree_scope));
+  }
   if (const auto* resolved_declaration =
           DynamicTo<CSSUnparsedDeclarationValue>(value)) {
     // If Resolve returned a different CSSUnparsedDeclarationValue, var()
@@ -375,9 +391,13 @@ InterpolationValue CSSInterpolationType::MaybeConvertCustomPropertyDeclaration(
           DynamicTo<CSSUnparsedDeclarationValue>(value)) {
     DCHECK(
         !resolved_declaration->VariableDataValue()->NeedsVariableResolution());
+    CSSParserLocalContext local_context(GetProperty().GetCSSPropertyName(),
+                                        CSSPropertyID::kInvalid,
+                                        /*custom_function_name=*/g_null_atom);
     value = resolved_declaration->VariableDataValue()->ParseForSyntax(
         registration_->Syntax(),
-        state.GetDocument().GetExecutionContext()->GetSecureContextMode());
+        state.GetDocument().GetExecutionContext()->GetSecureContextMode(),
+        local_context);
     if (!value)
       return nullptr;
   }
@@ -414,7 +434,8 @@ void CSSInterpolationType::Apply(
   StyleResolverState& state = environment.GetState();
 
   if (GetProperty().IsCSSCustomProperty()) {
-    ApplyCustomPropertyValue(interpolable_value, non_interpolable_value, state);
+    ApplyCustomPropertyValue(interpolable_value, non_interpolable_value,
+                             environment);
     return;
   }
 
@@ -431,14 +452,22 @@ void CSSInterpolationType::Apply(
 void CSSInterpolationType::ApplyCustomPropertyValue(
     const InterpolableValue& interpolable_value,
     const NonInterpolableValue* non_interpolable_value,
-    StyleResolverState& state) const {
+    CSSInterpolationEnvironment& environment) const {
   DCHECK(GetProperty().IsCSSCustomProperty());
 
+  StyleResolverState& state = environment.GetState();
   const CSSValue* css_value =
       CreateCSSValue(interpolable_value, non_interpolable_value, state);
   DCHECK(!css_value->IsUnparsedDeclaration());
+  CSSProperty::ValueModeFlags value_mode_flags =
+      static_cast<CSSProperty::ValueModeFlags>(
+          StyleBuilder::ValueMode::kAnimated);
+  if (environment.IsAttrTainted()) {
+    value_mode_flags |= static_cast<CSSProperty::ValueModeFlags>(
+        StyleBuilder::ValueMode::kAttrTainted);
+  }
   StyleBuilder::ApplyProperty(GetProperty().GetCSSPropertyName(), state,
-                              *css_value, StyleBuilder::ValueMode::kAnimated);
+                              *css_value, value_mode_flags);
 }
 
 }  // namespace blink

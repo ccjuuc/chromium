@@ -4,7 +4,6 @@
 
 #include "content/common/android/gin_java_bridge_value.h"
 
-#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/pickle.h"
 
@@ -71,7 +70,7 @@ bool GinJavaBridgeValue::ContainsGinJavaBridgeValue(const base::Value* value) {
     return false;
   if (value->GetBlob().size() < sizeof(Header))
     return false;
-  base::Pickle pickle = base::Pickle::WithUnownedBuffer(value->GetBlob());
+  base::Pickle pickle = base::Pickle::WithData(value->GetBlob());
   // Broken binary value: payload or header size is wrong
   if (!pickle.data() || pickle.size() - pickle.payload_size() != sizeof(Header))
     return false;
@@ -132,14 +131,12 @@ GinJavaBridgeValue::GinJavaBridgeValue(Type type) :
 }
 
 GinJavaBridgeValue::GinJavaBridgeValue(const base::Value* value)
-    : pickle_(base::Pickle::WithUnownedBuffer(value->GetBlob())) {
+    : pickle_(base::Pickle::WithData(value->GetBlob())) {
   DCHECK(ContainsGinJavaBridgeValue(value));
 }
 
 std::unique_ptr<base::Value> GinJavaBridgeValue::SerializeToBinaryValue() {
-  const auto* data = static_cast<const uint8_t*>(pickle_.data());
-  return base::Value::ToUniquePtrValue(
-      base::Value(UNSAFE_TODO(base::span(data, pickle_.size()))));
+  return base::Value::ToUniquePtrValue(base::Value(pickle_.AsBytes()));
 }
 
 }  // namespace content

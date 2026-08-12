@@ -11,13 +11,12 @@
 #include "base/test/values_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace {
-using base::MockCallback;
-using Dict = base::Value::Dict;
-using testing::Field;
-}  // namespace
-
 namespace autofill::payments {
+namespace {
+
+using ::base::MockCallback;
+using ::testing::Field;
+using Dict = ::base::DictValue;
 
 class GetBnplPaymentInstrumentForFetchingVcnRequestTest : public testing::Test {
  public:
@@ -74,7 +73,7 @@ TEST_F(GetBnplPaymentInstrumentForFetchingVcnRequestTest, GetRequestContent) {
           .Set("context",
                Dict()
                    .Set("billable_service",
-                        payments::kUnmaskPaymentMethodBillableServiceNumber)
+                        kUnmaskPaymentMethodBillableServiceNumber)
                    .Set("customer_context",
                         PaymentsRequest::BuildCustomerContextDictionary(
                             request_details_.billing_customer_number)))
@@ -95,8 +94,7 @@ TEST_F(GetBnplPaymentInstrumentForFetchingVcnRequestTest, GetRequestContent) {
             base::StringPrintf(
                 "requestContentType=application/json; charset=utf-8&request=%s",
                 base::EscapeUrlEncodedData(
-                    base::WriteJson(request_dict).value(), /*use_plus=*/true)
-                    .c_str()));
+                    base::WriteJson(request_dict).value(), /*use_plus=*/true)));
 }
 
 TEST_F(GetBnplPaymentInstrumentForFetchingVcnRequestTest,
@@ -182,4 +180,5 @@ TEST_F(GetBnplPaymentInstrumentForFetchingVcnRequestTest, RespondToDelegate) {
       PaymentsAutofillClient::PaymentsRpcResult::kSuccess);
 }
 
+}  // namespace
 }  // namespace autofill::payments

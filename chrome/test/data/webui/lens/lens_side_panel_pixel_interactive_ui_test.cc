@@ -6,6 +6,8 @@
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/data/webui/webui_composebox_pixel_test.h"
 #include "components/lens/lens_features.h"
+#include "components/omnibox/browser/aim_eligibility_service_features.h"
+#include "components/omnibox/common/omnibox_features.h"
 
 // Test fixture for ComposeBox pixel tests.
 class LensSidePanelComposeBoxPixelTest
@@ -18,8 +20,9 @@ class LensSidePanelComposeBoxPixelTest
          {lens::features::kLensSearchAimM3,
           {{"use-aim-eligibility-service", "false"},
            {"enable-client-side-header", "true"},
-          {"contextualize-on-focus", "false"}}}},
-        /*disabled_features=*/{});
+           {"contextualize-on-focus", "false"}}},
+         {omnibox::kAimEnabled, {}}},
+        /*disabled_features=*/{omnibox::kAimServerEligibilityEnabled});
     WebUIComposeBoxPixelTest::SetUp();
   }
 
@@ -63,7 +66,7 @@ IN_PROC_BROWSER_TEST_P(LensSidePanelComposeBoxPixelTest, Screenshots) {
   // DeepQuery needed to target elements with injected JS.
   const DeepQuery kComposebox = {"lens-side-panel-app", "#composebox"};
   const DeepQuery kComposeBoxInput = {"lens-side-panel-app", "#composebox",
-                                      "textarea"};
+                                      "cr-composebox-input", "textarea"};
 
   RunTestSequence(
       SetupWebUIEnvironment(kActiveTab,

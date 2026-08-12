@@ -6,11 +6,13 @@
 
 #include <utility>
 
+#include "base/allocator/partition_alloc_support.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
-#include "base/features.h"
 #include "base/functional/bind.h"
 #include "base/message_loop/message_pump_type.h"
+#include "base/message_loop/message_pump_wakeup_counter.h"
+#include "base/synchronization/lock_metrics_recorder.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
@@ -20,7 +22,6 @@
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "components/performance_manager/scenario_api/performance_scenarios.h"
 #include "components/viz/common/features.h"
 #include "components/viz/common/switches.h"
 #include "components/viz/service/display_embedder/output_surface_provider_impl.h"
@@ -59,6 +60,8 @@ class VizCompositorThread : public base::Thread {
  private:
   void Init() override {
     ParentType::Init();
+    base::allocator::ReconfigureSchedulerLoopQuarantineBranch(
+        base::allocator::SchedulerLoopQuarantineBranchType::kVizCompositor);
     if (base::HangWatcher::IsCompositorThreadHangWatchingEnabled()) {
       unregister_thread_closure_ = base::HangWatcher::RegisterThread(
           base::HangWatcher::ThreadType::kCompositorThread);
@@ -72,18 +75,23 @@ class VizCompositorThread : public base::Thread {
   base::ScopedClosureRunner unregister_thread_closure_;
 };
 
-std::unique_ptr<VizCompositorThreadType> CreateAndStartCompositorThread(
-    base::TaskObserver* task_observer) {
-  const base::ThreadType thread_type = base::ThreadType::kDisplayCritical;
+constexpr char kVizCompositorSuffix[] = "VizCompositor";
+
+std::unique_ptr<VizCompositorThreadType> CreateAndStartCompositorThread() {
+  const base::ThreadType thread_type = base::ThreadType::kPresentation;
 #if BUILDFLAG(IS_ANDROID)
   auto thread = std::make_unique<VizCompositorThread>(thread_type);
   thread->Start();
   thread->task_runner()->PostTask(
       FROM_HERE, base::BindOnce([]() {
         mojo::InterfaceEndpointClient::SetThreadNameSuffixForMetrics(
-            "VizCompositor");
+            kVizCompositorSuffix);
+        base::MessagePumpWakeupCounter::InitializeForCurrentThread(
+            kVizCompositorSuffix);
         base::PlatformThreadPriorityMonitor::Get().RegisterCurrentThread(
-            "VizCompositor");
+            kVizCompositorSuffix);
+        base::LockMetricsRecorder::EnableRecordingOnCurrentThread(
+            kVizCompositorSuffix);
       }));
   return thread;
 #else  // !BUILDFLAG(IS_ANDROID)
@@ -93,9 +101,10 @@ std::unique_ptr<VizCompositorThreadType> CreateAndStartCompositorThread(
   // DirectReceiver requires an I/O MessagePump, or the pump to expose an
   // IOWatcher like MessagePumpAndroid.
   const bool should_use_io_pump =
-      mojo::IsDirectReceiverSupported() &&
-      (features::IsVizDirectCompositorThreadIpcNonRootEnabled() ||
-       features::IsVizDirectCompositorThreadIpcFrameSinkManagerEnabled());
+      features::IsVizWithIoMessagePumpEnabled() ||
+      (mojo::IsDirectReceiverSupported() &&
+       (features::IsVizDirectCompositorThreadIpcNonRootEnabled() ||
+        features::IsVizDirectCompositorThreadIpcFrameSinkManagerEnabled()));
   if (should_use_io_pump) {
     thread_options.message_pump_type = base::MessagePumpType::IO;
   }
@@ -119,14 +128,17 @@ std::unique_ptr<VizCompositorThreadType> CreateAndStartCompositorThread(
 #endif
 
   thread_options.thread_type = thread_type;
-  thread_options.task_observer = task_observer;
 
   CHECK(thread->StartWithOptions(std::move(thread_options)));
 
   thread->task_runner()->PostTask(
       FROM_HERE, base::BindOnce([]() {
         mojo::InterfaceEndpointClient::SetThreadNameSuffixForMetrics(
-            "VizCompositor");
+            kVizCompositorSuffix);
+        base::MessagePumpWakeupCounter::InitializeForCurrentThread(
+            kVizCompositorSuffix);
+        base::LockMetricsRecorder::EnableRecordingOnCurrentThread(
+            kVizCompositorSuffix);
       }));
 
   return thread;
@@ -134,20 +146,9 @@ std::unique_ptr<VizCompositorThreadType> CreateAndStartCompositorThread(
 }
 }  // namespace
 
-VizCompositorThreadRunnerImpl::VizCompositorThreadRunnerImpl() {
-  if (base::FeatureList::IsEnabled(
-          base::features::kBoostCompositorThreadsPriorityWhenIdle)) {
-    scenario_priority_boost_.emplace(
-        base::ThreadType::kInteractive, base::BindRepeating([]() {
-          return performance_scenarios::CurrentScenariosMatch(
-              performance_scenarios::ScenarioScope::kGlobal,
-              performance_scenarios::kDefaultIdleScenarios);
-        }));
-  }
-  thread_ = CreateAndStartCompositorThread(
-      scenario_priority_boost_.has_value() ? &scenario_priority_boost_.value()
-                                           : nullptr);
-  task_runner_ = thread_->task_runner();
+VizCompositorThreadRunnerImpl::VizCompositorThreadRunnerImpl()
+    : thread_(CreateAndStartCompositorThread()),
+      task_runner_(thread_->task_runner()) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(gpu_sequence_checker_);
 }
 
@@ -279,6 +280,8 @@ void VizCompositorThreadRunnerImpl::CreateFrameSinkManagerOnCompositorThread(
     init_params.host_process_id = gpu_service->host_process_id();
   }
   init_params.hint_session_factory = hint_session_factory_.get();
+  init_params.use_direct_receiver =
+      features::IsVizDirectCompositorThreadIpcFrameSinkManagerEnabled();
 
   frame_sink_manager_ = std::make_unique<FrameSinkManagerImpl>(init_params);
   frame_sink_manager_->BindAndSetClient(

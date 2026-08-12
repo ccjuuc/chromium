@@ -14,6 +14,7 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
+#include "base/metrics/metrics_hashes.h"
 #include "base/metrics/sparse_histogram.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/task/sequenced_task_runner.h"
@@ -35,13 +36,17 @@ bool CheckValues(const std::string& name,
                  int minimum,
                  int maximum,
                  size_t bucket_count) {
-  if (!base::Histogram::InspectConstructionArguments(
-          name, &minimum, &maximum, &bucket_count))
+  uint64_t name_hash = base::HashMetricName(name);
+  if (base::Histogram::InspectConstructionArguments(name, name_hash, &minimum,
+                                                    &maximum, &bucket_count) !=
+      base::Histogram::kOK) {
     return false;
+  }
   base::HistogramBase* histogram =
-      base::StatisticsRecorder::FindHistogram(name);
-  if (!histogram)
+      base::StatisticsRecorder::FindHistogram(name_hash, name);
+  if (!histogram) {
     return true;
+  }
   return histogram->HasConstructionArguments(minimum, maximum, bucket_count);
 }
 

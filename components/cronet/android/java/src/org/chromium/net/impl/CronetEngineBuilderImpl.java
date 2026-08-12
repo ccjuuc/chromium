@@ -9,18 +9,20 @@ import android.os.SystemClock;
 import android.util.Base64;
 
 import androidx.annotation.IntDef;
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.net.CronetEngine;
 import org.chromium.net.ICronetEngineBuilder;
 import org.chromium.net.ProxyOptions;
+import org.chromium.net.VersionSafeProxyOptions;
 import org.chromium.net.impl.CronetLogger.CronetSource;
+import org.chromium.url.IDNStringUtil;
 
 import java.io.File;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
-import java.net.IDN;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
@@ -243,21 +245,10 @@ public abstract class CronetEngineBuilderImpl extends ICronetEngineBuilder {
     }
 
     @Override
+    @Deprecated
     public CronetEngineBuilderImpl setLibraryLoader(CronetEngine.Builder.LibraryLoader loader) {
-        // |CronetEngineBuilderImpl| is an abstract class that is used by concrete builder
-        // implementations, including the Java Cronet engine builder; therefore, the implementation
-        // of this method should be "no-op". Subclasses that care about the library loader
-        // should override this method.
+        // Deprecated. No-op.
         return this;
-    }
-
-    /**
-     * Default implementation of the method that returns {@code null}.
-     *
-     * @return {@code null}.
-     */
-    VersionSafeCallbacks.LibraryLoader libraryLoader() {
-        return null;
     }
 
     @Override
@@ -438,7 +429,10 @@ public abstract class CronetEngineBuilderImpl extends ICronetEngineBuilder {
                             + " A hostname should not consist of digits and/or dots only.");
         }
         // Workaround for crash, see crbug.com/634914
-        if (hostName.length() > 255) {
+        // Hostnames cannot be longer than 253 characters. References:
+        //   https://superuser.com/a/1843870
+        //   https://devblogs.microsoft.com/oldnewthing/20120412-00/?p=7873
+        if (hostName.length() > 253) {
             throw new IllegalArgumentException(
                     "Hostname "
                             + hostName
@@ -446,13 +440,14 @@ public abstract class CronetEngineBuilderImpl extends ICronetEngineBuilder {
                             + " The name of the host does not comply with RFC 1122 and RFC 1123.");
         }
         try {
-            return IDN.toASCII(hostName, IDN.USE_STD3_ASCII_RULES);
+            return IDNStringUtil.idnToASCII(hostName);
         } catch (IllegalArgumentException ex) {
             throw new IllegalArgumentException(
                     "Hostname "
                             + hostName
                             + " is illegal."
-                            + " The name of the host does not comply with RFC 1122 and RFC 1123.");
+                            + " The name of the host does not comply with RFC 1122 and RFC 1123.",
+                    ex);
         }
     }
 
@@ -504,10 +499,8 @@ public abstract class CronetEngineBuilderImpl extends ICronetEngineBuilder {
     }
 
     @Override
-    public CronetEngineBuilderImpl setProxyOptions(@Nullable ProxyOptions proxyOptions) {
-        if (proxyOptions != null) {
-            mProxyOptions = new VersionSafeProxyOptions(proxyOptions);
-        }
+    public CronetEngineBuilderImpl setProxyOptionsV2(@NonNull ProxyOptions proxyOptions) {
+        mProxyOptions = new VersionSafeProxyOptions(proxyOptions);
         return this;
     }
 

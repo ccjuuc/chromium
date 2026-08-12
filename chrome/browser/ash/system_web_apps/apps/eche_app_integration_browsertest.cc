@@ -4,6 +4,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/shell.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "ash/webui/eche_app_ui/url_constants.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
@@ -13,7 +14,6 @@
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
-#include "chrome/grit/generated_resources.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -62,7 +62,7 @@ IN_PROC_BROWSER_TEST_P(EcheAppIntegrationTest,
   int expected_height = work_area.height() * aspect_ratio / 2;
   int x = (work_area.width() - expected_width) / 2;
   int y = (work_area.height() - expected_height) / 2;
-  EXPECT_EQ(browser->window()->GetBounds(),
+  EXPECT_EQ(browser->GetWindow()->GetBounds(),
             gfx::Rect(x, y, expected_width, expected_height));
 }
 
@@ -83,7 +83,7 @@ IN_PROC_BROWSER_TEST_P(EcheAppIntegrationTest,
   int expected_height = work_area.width() * aspect_ratio / 2;
   int x = (work_area.width() - expected_width) / 2;
   int y = (work_area.height() - expected_height) / 2;
-  EXPECT_EQ(browser->window()->GetBounds(),
+  EXPECT_EQ(browser->GetWindow()->GetBounds(),
             gfx::Rect(x, y, expected_width, expected_height));
 }
 
@@ -98,8 +98,8 @@ IN_PROC_BROWSER_TEST_P(EcheAppIntegrationTest,
   Browser* browser;
   LaunchApp(ash::SystemWebAppType::ECHE, &browser);
 
-  EXPECT_GE(browser->window()->GetBounds().width(), min_size.width());
-  EXPECT_GE(browser->window()->GetBounds().height(), min_size.height());
+  EXPECT_GE(browser->GetWindow()->GetBounds().width(), min_size.width());
+  EXPECT_GE(browser->GetWindow()->GetBounds().height(), min_size.height());
 }
 
 IN_PROC_BROWSER_TEST_P(EcheAppIntegrationTest, HiddenInLauncherAndSearch) {
@@ -137,7 +137,7 @@ IN_PROC_BROWSER_TEST_P(EcheAppIntegrationTest, ShouldAllowCloseWindow) {
   WaitForTestSystemAppInstall();
   Browser* browser;
   LaunchApp(ash::SystemWebAppType::ECHE, &browser);
-  EXPECT_TRUE(browser->app_controller()
+  EXPECT_TRUE(web_app::AppBrowserController::From(browser)
                   ->system_app()
                   ->ShouldAllowScriptsToCloseWindows());
 }

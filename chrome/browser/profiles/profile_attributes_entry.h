@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
@@ -45,8 +46,8 @@ enum class NameForm {
 // TODO(381117479): Currently we support two different OIDC enrollment flows:
 // 1. by sending both Auth and ID token through URL param and
 // 2. by sending encrypted user information in the auth header
-// Method 1 is completed but it will be deprecated once we completely implement,
-// test and rollout method 2.
+// Usage for method 1 has been removed and we will deprecate related support
+// code in a follow up.
 struct ProfileManagementOidcTokens {
   ProfileManagementOidcTokens();
   ProfileManagementOidcTokens(const std::string& auth_token,
@@ -135,6 +136,12 @@ class ProfileAttributesEntry {
       int size_for_placeholder_avatar = kDefaultSizeForPlaceholderAvatar,
       bool use_high_res_file = true,
       const profiles::PlaceholderAvatarIconParams& icon_params = {}) const;
+  // Same as GetAvatarIcon(), but also returns an AvatarIconType indicating
+  // whether the returned image is a placeholder silhouette.
+  std::pair<gfx::Image, AvatarIconType> GetAvatarIconWithType(
+      int size_for_placeholder_avatar = kDefaultSizeForPlaceholderAvatar,
+      bool use_high_res_file = true,
+      const profiles::PlaceholderAvatarIconParams& icon_params = {}) const;
   // Returns true if the profile is currently running any background apps. Note
   // that a return value of false could mean an error in collection or that
   // there are currently no background apps running. However, the action which
@@ -203,16 +210,12 @@ class ProfileAttributesEntry {
   // Note: The bucket index is assigned once and remains the same all time. 0 is
   // reserved for the guest profile.
   size_t GetMetricsBucketIndex();
-  // Returns the hosted domain for the current signed-in account. Returns empty
-  // string if there is no signed-in account and returns
-  // |signin::constants::kNoHostedDomainFound| if the signed-in account has no
-  // hosted domain (such as when it is a standard gmail.com account). Unlike
-  // for other string getters, the returned value is UTF8 encoded.
-  //
-  // TODO(crbug.com/458409080): convert the return value to
-  // std::optional<std::string> for parity with
-  // `AccountInfo::GetHostedDomain()`.
-  std::string GetHostedDomain() const;
+  // Returns the hosted domain for the current signed-in account. Returns
+  // std::nullopt if there is no signed-in account and returns an empty string
+  // if the signed-in account has no hosted domain (such as when it is a
+  // standard gmail.com account). Unlike for other string getters, the returned
+  // value is UTF8 encoded.
+  std::optional<std::string> GetHostedDomain() const;
 
   // Returns management status of the current signed-in account.
   signin::Tribool GetIsManaged() const;
@@ -237,10 +240,8 @@ class ProfileAttributesEntry {
   // the signed in account. Signed out profiles are ineligible.
   bool IsGlicEligible() const;
 
-  // Gets/Sets the gaia IDs of the accounts signed into the profile (accounts
-  // known by the `IdentityManager`).
-  base::flat_set<GaiaId> GetGaiaIds() const;
-  void SetGaiaIds(const base::flat_set<GaiaId>& gaia_ids);
+  // Returns the cached AI subscription tier of this profile.
+  int GetAiSubscriptionTier() const;
 
   // |is_using_default| should be set to false for non default profile names.
   void SetLocalProfileName(const std::u16string& name, bool is_default_name);
@@ -272,7 +273,8 @@ class ProfileAttributesEntry {
 
   // Unlike for other string setters, the argument is expected to be UTF8
   // encoded.
-  void SetHostedDomain(std::string hosted_domain);
+  // Clears the hosted_domain value when std::nullopt is passed.
+  void SetHostedDomain(std::optional<std::string_view> hosted_domain);
   void SetIsManaged(signin::Tribool value);
 
   void SetProfileManagementEnrollmentToken(const std::string& enrollment_token);
@@ -286,19 +288,10 @@ class ProfileAttributesEntry {
 
   void SetIsGlicEligible(bool value);
 
-  // Update info about accounts. These functions are idempotent, only the first
-  // call for a given input matters.
-  void AddAccountName(const std::string& name);
-
-  // Clears info about all accounts that have been added in the past via
-  // AddAccountName().
-  void ClearAccountNames();
+  void SetAiSubscriptionTier(int tier);
 
   // Lock/Unlock the profile, should be called only if force-sign-in is enabled.
   void LockForceSigninProfile(bool is_lock);
-
-  // Records aggregate metrics about all accounts used in this profile.
-  void RecordAccountNamesMetric() const;
 
   static const char kSupervisedUserId[];
   static const char kAvatarIconKey[];
@@ -314,6 +307,7 @@ class ProfileAttributesEntry {
   static const char kUseGAIAPictureKey[];
   static const char kAccountIdKey[];
   static const char kIsGlicEligible[];
+  static const char kAiSubscriptionKey[];
 
  private:
   friend class ProfileAttributesStorage;
@@ -359,13 +353,8 @@ class ProfileAttributesEntry {
       int size,
       const profiles::PlaceholderAvatarIconParams& icon_params) const;
 
-  // Returns if this profile has accounts (signed-in or signed-out) with
-  // different account names. This is approximate as only a short hash of an
-  // account name is stored so there can be false negatives.
-  bool HasMultipleAccountNames() const;
-
   // Loads and saves the data to the local state.
-  const base::Value::Dict* GetEntryData() const;
+  const base::DictValue* GetEntryData() const;
 
   // Internal getter that returns a base::Value*, or nullptr if the key is not
   // present.

@@ -4,8 +4,6 @@
 
 #include "content/browser/indexed_db/instance/database.h"
 
-#include <math.h>
-
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -16,32 +14,30 @@
 #include <utility>
 #include <vector>
 
+#include "base/auto_reset.h"
 #include "base/check.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
-#include "base/containers/flat_set.h"
-#include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/trace_event.h"
 #include "base/types/expected_macros.h"
 #include "base/unguessable_token.h"
+#include "build/build_config.h"
 #include "components/services/storage/indexed_db/locks/partitioned_lock_id.h"
 #include "components/services/storage/indexed_db/locks/partitioned_lock_manager.h"
 #include "components/services/storage/privileged/mojom/indexed_db_client_state_checker.mojom.h"
 #include "components/services/storage/privileged/mojom/indexed_db_internals_types.mojom.h"
+#include "content/browser/indexed_db/file_path_util.h"
 #include "content/browser/indexed_db/indexed_db_external_object.h"
 #include "content/browser/indexed_db/indexed_db_reporting.h"
 #include "content/browser/indexed_db/indexed_db_value.h"
 #include "content/browser/indexed_db/instance/backing_store.h"
 #include "content/browser/indexed_db/instance/bucket_context.h"
-#include "content/browser/indexed_db/instance/bucket_context_handle.h"
 #include "content/browser/indexed_db/instance/callback_helpers.h"
 #include "content/browser/indexed_db/instance/connection.h"
 #include "content/browser/indexed_db/instance/cursor.h"
@@ -51,16 +47,17 @@
 #include "content/browser/indexed_db/instance/transaction.h"
 #include "content/browser/indexed_db/status.h"
 #include "ipc/constants.mojom.h"
+#include "mojo/buildflags.h"
+#include "mojo/public/cpp/base/big_buffer.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "third_party/blink/public/common/indexeddb/indexeddb_key_path.h"
 #include "third_party/blink/public/common/indexeddb/indexeddb_key_range.h"
 #include "third_party/blink/public/common/indexeddb/indexeddb_metadata.h"
-#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/indexeddb/indexeddb.mojom.h"
-#include "third_party/leveldatabase/env_chromium.h"
 
 using blink::IndexedDBDatabaseMetadata;
 using blink::IndexedDBIndexKeys;
@@ -81,7 +78,7 @@ BuildLockRequestsForLevelDb(const std::u16string& database_name,
                             const std::set<int64_t>& scope) {
   // NB: LevelDB lock IDs are potentially persisted to disk - see
   // `LevelDBPartitionedLock`.
-  const constexpr int kDatabaseLockPartition = 0;
+  constexpr int kDatabaseLockPartition = 0;
   PartitionedLockId database_lock_id{kDatabaseLockPartition,
                                      base::UTF16ToUTF8(database_name)};
   if (mode == blink::mojom::IDBTransactionMode::VersionChange) {
@@ -93,7 +90,7 @@ BuildLockRequestsForLevelDb(const std::u16string& database_name,
   lock_requests.reserve(1 + scope.size());
   lock_requests.emplace_back(std::move(database_lock_id),
                              PartitionedLockManager::LockType::kShared);
-  const constexpr int kObjectStoreLockPartition = 1;
+  constexpr int kObjectStoreLockPartition = 1;
   const auto object_store_lock_type =
       mode == blink::mojom::IDBTransactionMode::ReadOnly
           ? PartitionedLockManager::LockType::kShared
@@ -109,14 +106,14 @@ BuildLockRequestsForLevelDb(const std::u16string& database_name,
 }
 
 std::vector<PartitionedLockManager::PartitionedLockRequest>
-BuildLockRequestsForSqlite(uint32_t database_id,
+BuildLockRequestsForSqlite(const std::u16string& database_name,
                            blink::mojom::IDBTransactionMode mode,
                            const std::set<int64_t>& scope) {
-  // TODO(crbug.com/427608926): Refactor `PartitionedLockId` to not need `key`
-  // to be a string.
-  const constexpr int kMetadataLockPartition = 0;
-  PartitionedLockId metadata_lock_id{kMetadataLockPartition,
-                                     base::StringPrintf("%u", database_id)};
+  // Using the file name of the database reduces the number of comparisons
+  // when computing whether locks can be granted since it is a hash.
+  std::string key = DatabaseNameToFileName(database_name).MaybeAsASCII();
+  constexpr int kMetadataLockPartition = 0;
+  PartitionedLockId metadata_lock_id{kMetadataLockPartition, key};
   if (mode == blink::mojom::IDBTransactionMode::VersionChange) {
     return {{std::move(metadata_lock_id),
              PartitionedLockManager::LockType::kExclusive}};
@@ -124,23 +121,21 @@ BuildLockRequestsForSqlite(uint32_t database_id,
   std::vector<PartitionedLockManager::PartitionedLockRequest> lock_requests{
       {std::move(metadata_lock_id), PartitionedLockManager::LockType::kShared}};
   if (mode == blink::mojom::IDBTransactionMode::ReadWrite) {
-    const constexpr int kWriteOperationsLockPartition = 1;
+    constexpr int kWriteOperationsLockPartition = 1;
     lock_requests.emplace_back(
-        PartitionedLockId{kWriteOperationsLockPartition,
-                          base::StringPrintf("%u", database_id)},
+        PartitionedLockId{kWriteOperationsLockPartition, key},
         PartitionedLockManager::LockType::kExclusive);
   }
   lock_requests.reserve(lock_requests.size() + scope.size());
-  const constexpr int kObjectStoreLockPartition = 2;
+  constexpr int kObjectStoreLockPartition = 2;
   const auto object_store_lock_type =
       mode == blink::mojom::IDBTransactionMode::ReadOnly
           ? PartitionedLockManager::LockType::kShared
           : PartitionedLockManager::LockType::kExclusive;
   for (int64_t object_store_id : scope) {
     lock_requests.emplace_back(
-        PartitionedLockId{
-            kObjectStoreLockPartition,
-            base::StringPrintf("%u|%lld", database_id, object_store_id)},
+        PartitionedLockId{kObjectStoreLockPartition,
+                          absl::StrFormat("%lld|%s", object_store_id, key)},
         object_store_lock_type);
   }
   return lock_requests;
@@ -154,8 +149,8 @@ BuildLockRequestsForSqlite(uint32_t database_id,
 blink::mojom::IDBReturnValuePtr ConvertValueToReturnValue(
     Transaction& transaction,
     IndexedDBValue value,
-    blink::IndexedDBKey primary_key,
-    blink::IndexedDBKeyPath key_path) {
+    IndexedDBKey primary_key,
+    IndexedDBKeyPath key_path) {
   auto mojo_value = blink::mojom::IDBReturnValue::New();
   if (primary_key.IsValid()) {
     mojo_value->primary_key = std::move(primary_key);
@@ -175,8 +170,8 @@ blink::mojom::IDBReturnValuePtr ExtractReturnValueFromCursorValue(
   const bool is_generated_key = !value.empty() &&
                                 object_store_metadata.auto_increment &&
                                 !object_store_metadata.key_path.IsNull();
-  blink::IndexedDBKey primary_key;
-  blink::IndexedDBKeyPath key_path;
+  IndexedDBKey primary_key;
+  IndexedDBKeyPath key_path;
 
   if (is_generated_key) {
     primary_key = cursor.GetPrimaryKey().Clone();
@@ -199,11 +194,8 @@ blink::mojom::IDBErrorPtr CreateIDBErrorPtr(blink::mojom::IDBException code,
 Database::OpenCursorOperationParams::OpenCursorOperationParams() = default;
 Database::OpenCursorOperationParams::~OpenCursorOperationParams() = default;
 
-Database::Database(uint32_t id_for_locks,
-                   const std::u16string& name,
-                   BucketContext& bucket_context)
-    : id_for_locks_(id_for_locks),
-      name_(name),
+Database::Database(const std::u16string& name, BucketContext& bucket_context)
+    : name_(name),
       bucket_context_(bucket_context),
       connection_coordinator_(this, bucket_context) {}
 
@@ -219,7 +211,7 @@ PartitionedLockManager& Database::lock_manager() {
 
 int64_t Database::version() const {
   return backing_store_db_ ? metadata().version
-                           : blink::IndexedDBDatabaseMetadata::NO_VERSION;
+                           : IndexedDBDatabaseMetadata::NO_VERSION;
 }
 
 bool Database::IsInitialized() const {
@@ -229,14 +221,14 @@ bool Database::IsInitialized() const {
 StatusOr<int64_t> Database::DeleteDatabase(std::vector<PartitionedLock> locks,
                                            base::OnceClosure on_complete) {
   if (!backing_store_db_) {
-    return blink::IndexedDBDatabaseMetadata::DEFAULT_VERSION;
+    return IndexedDBDatabaseMetadata::DEFAULT_VERSION;
   }
 
   const int64_t old_version = version();
   Status s = LogStatus(backing_store_db_->DeleteDatabase(
                            std::move(locks), std::move(on_complete)),
                        "IndexedDB.BackingStore.DeleteDatabase",
-                       bucket_context_->in_memory());
+                       bucket_context_->GetHistogramSuffix());
   backing_store_db_.reset();
   if (!s.ok()) {
     return base::unexpected(s);
@@ -248,8 +240,8 @@ std::vector<PartitionedLockManager::PartitionedLockRequest>
 Database::BuildLockRequestsForTransaction(
     blink::mojom::IDBTransactionMode mode,
     const std::set<int64_t>& scope) const {
-  return bucket_context_->ShouldUseSqlite()
-             ? BuildLockRequestsForSqlite(id_for_locks_, mode, scope)
+  return bucket_context_->IsUsingSqlite()
+             ? BuildLockRequestsForSqlite(name_, mode, scope)
              : BuildLockRequestsForLevelDb(name_, backing_store_db_.get(), mode,
                                            scope);
 }
@@ -283,7 +275,7 @@ void Database::RequireBlockingTransactionClientsToBeActive(
 
   for (Connection* connection : connections_) {
     if (connection->client_token() ==
-        current_transaction->connection()->client_token()) {
+        current_transaction->connection().client_token()) {
       continue;
     }
 
@@ -317,16 +309,15 @@ void Database::RegisterAndScheduleTransaction(Transaction* transaction) {
 
 Status Database::RunTasks() {
   // First execute any pending tasks in the connection coordinator.
-  ConnectionCoordinator::ExecuteTaskResult task_state;
-  Status status;
-  do {
-    std::tie(task_state, status) =
+  while (true) {
+    StatusOr<ConnectionCoordinator::ExecuteTaskResult> task_state =
         connection_coordinator_.ExecuteTask(!connections_.empty());
-  } while (task_state == ConnectionCoordinator::ExecuteTaskResult::kMoreTasks);
-
-  if (task_state == ConnectionCoordinator::ExecuteTaskResult::kError) {
-    CHECK(!status.ok());
-    return status;
+    if (!task_state.has_value()) {
+      return task_state.error();
+    }
+    if (task_state != ConnectionCoordinator::ExecuteTaskResult::kMoreTasks) {
+      break;
+    }
   }
 
   bool transactions_removed = true;
@@ -383,35 +374,19 @@ size_t Database::GetNumTransactionsAcrossAllConnections() const {
   return num_transactions;
 }
 
-Status Database::ForceClose(const std::string& message) && {
-  CHECK(!force_closing_);
-  force_closing_ = true;
+void Database::ForceCloseConnectionsAndCancelRequests(
+    const std::string& message) {
+  base::AutoReset closing(&closing_all_connections_, true);
   for (Connection* connection : connections_) {
     connection->CloseAndReportForceClose(message);
   }
   connections_.clear();
-  IDB_RETURN_IF_ERROR(connection_coordinator_.PruneTasksForForceClose(message));
-  connection_coordinator_.OnNoConnections();
-
-  // Execute any pending tasks in the connection coordinator.
-  ConnectionCoordinator::ExecuteTaskResult task_state;
-  Status status;
-  do {
-    std::tie(task_state, status) = connection_coordinator_.ExecuteTask(false);
-    CHECK(task_state !=
-          ConnectionCoordinator::ExecuteTaskResult::kPendingAsyncWork)
-        << "There are no more connections, so all tasks should be able to "
-           "complete synchronously.";
-  } while (task_state != ConnectionCoordinator::ExecuteTaskResult::kDone &&
-           task_state != ConnectionCoordinator::ExecuteTaskResult::kError);
-  CHECK(connections_.empty());
-  return status;
+  connection_coordinator_.CancelPendingRequests(message);
 }
 
 void Database::ScheduleOpenConnection(
     std::unique_ptr<PendingConnection> connection,
     base::TimeDelta synchronous_duration) {
-  CHECK(!force_closing_);
   connection_coordinator_.ScheduleOpenConnection(std::move(connection),
                                                  synchronous_duration);
 }
@@ -527,8 +502,8 @@ Status Database::GetOperation(int64_t object_store_id,
       return Status::OK();
     }
 
-    blink::IndexedDBKey primary_key;
-    blink::IndexedDBKeyPath key_path;
+    IndexedDBKey primary_key;
+    IndexedDBKeyPath key_path;
 
     if (object_store_metadata.auto_increment &&
         !object_store_metadata.key_path.IsNull()) {
@@ -586,8 +561,8 @@ Status Database::GetOperation(int64_t object_store_id,
     return Status::OK();
   }
 
-  blink::IndexedDBKey primary_key_return;
-  blink::IndexedDBKeyPath key_path_return;
+  IndexedDBKey primary_key_return;
+  IndexedDBKeyPath key_path_return;
 
   if (object_store_metadata.auto_increment &&
       !object_store_metadata.key_path.IsNull()) {
@@ -606,7 +581,7 @@ Status Database::GetOperation(int64_t object_store_id,
 Transaction::Operation Database::CreateGetAllOperation(
     int64_t object_store_id,
     int64_t index_id,
-    blink::IndexedDBKeyRange key_range,
+    IndexedDBKeyRange key_range,
     blink::mojom::IDBGetAllResultType result_type,
     uint32_t max_count,
     blink::mojom::IDBCursorDirection direction,
@@ -642,32 +617,52 @@ Database::GetAllResultSinkWrapper::~GetAllResultSinkWrapper() {
     // See crbug.com/346955148.
     // TODO(crbug.com/347047640): remove this workaround when 347047640 is
     // fixed.
-    if (!transaction_->connection()->is_shutting_down()) {
-      DatabaseError error(blink::mojom::IDBException::kIgnorableAbortError,
-                          "Backend aborted error");
-      Get()->OnError(
-          blink::mojom::IDBError::New(error.code(), error.message()));
+    if (!transaction_->connection().is_shutting_down()) {
+      SendError(blink::mojom::IDBError::New(
+          blink::mojom::IDBException::kIgnorableAbortError,
+          u"Backend aborted error"));
     }
   } else {
-    // Make sure `callback_` is invoked because the Mojo client is waiting for a
-    // response.
-    Get();
+    // Make sure `callback_` is invoked because the Mojo client is waiting for
+    // a response.
+    std::move(callback_).Run(std::vector<blink::mojom::IDBRecordPtr>(),
+                             mojo::NullAssociatedReceiver());
   }
 }
 
-mojo::AssociatedRemote<blink::mojom::IDBDatabaseGetAllResultSink>&
-Database::GetAllResultSinkWrapper::Get() {
-  if (!result_sink_) {
-    mojo::PendingAssociatedReceiver<blink::mojom::IDBDatabaseGetAllResultSink>
-        pending_receiver;
-    if (use_dedicated_receiver_for_testing_) {
-      pending_receiver = result_sink_.BindNewEndpointAndPassDedicatedReceiver();
-    } else {
-      pending_receiver = result_sink_.BindNewEndpointAndPassReceiver();
-    }
-    std::move(callback_).Run(std::move(pending_receiver));
+void Database::GetAllResultSinkWrapper::SetUpSink(
+    std::vector<blink::mojom::IDBRecordPtr> initial_records) {
+  mojo::PendingAssociatedReceiver<blink::mojom::IDBDatabaseGetAllResultSink>
+      pending_receiver;
+  if (use_dedicated_receiver_for_testing_) {
+    pending_receiver = result_sink_.BindNewEndpointAndPassDedicatedReceiver();
+  } else {
+    pending_receiver = result_sink_.BindNewEndpointAndPassReceiver();
   }
-  return result_sink_;
+  std::move(callback_).Run(std::move(initial_records),
+                           std::move(pending_receiver));
+}
+
+void Database::GetAllResultSinkWrapper::SendResults(
+    std::vector<blink::mojom::IDBRecordPtr> records,
+    bool done) {
+  if (result_sink_) {
+    result_sink_->ReceiveResults(std::move(records), done);
+  } else if (done) {
+    std::move(callback_).Run(std::move(records),
+                             mojo::NullAssociatedReceiver());
+  } else {
+    SetUpSink(std::move(records));
+  }
+}
+
+void Database::GetAllResultSinkWrapper::SendError(
+    blink::mojom::IDBErrorPtr error) {
+  if (!result_sink_) {
+    SetUpSink(/*initial_records=*/{});
+  }
+
+  result_sink_->OnError(std::move(error));
 }
 
 Status Database::GetAllOperation(
@@ -714,9 +709,7 @@ Status Database::GetAllOperation(
   }
 
   if (!cursor.has_value()) {
-    DLOG(ERROR) << "Unable to open cursor operation: "
-                << cursor.error().ToString();
-    result_sink->Get()->OnError(CreateIDBErrorPtr(
+    result_sink->SendError(CreateIDBErrorPtr(
         blink::mojom::IDBException::kUnknownError,
         "Corruption detected, unable to continue", transaction));
     return cursor.error();
@@ -724,14 +717,9 @@ Status Database::GetAllOperation(
 
   std::vector<blink::mojom::IDBRecordPtr> found_records;
 
-  auto send_records = [&](bool done) {
-    result_sink->Get()->ReceiveResults(std::move(found_records), done);
-    found_records.clear();
-  };
-
   // No records found.
   if (!*cursor) {
-    send_records(/*done=*/true);
+    result_sink->SendResults(std::move(found_records), /*done=*/true);
     return Status::OK();
   }
 
@@ -753,14 +741,53 @@ Status Database::GetAllOperation(
       "Value wrapping threshold is higher than BigBuffer inline size; "
       "BigBuffer may use shared memory with LevelDB backing store");
 
-  const size_t max_values_before_sending = blink::mojom::kIDBGetAllChunkSize;
+  const size_t kMaxValuesBeforeSending = blink::mojom::kIDBGetAllChunkSize;
+
+  // Mojo limits the number of handles/file descriptors in a single message on
+  // certain platforms. Since SQLite does not wrap large values in blobs, the
+  // `mojo_base::BigBuffer` holding the value may be backed by shared memory
+  // (which uses handles/file descriptors - see
+  // `mojo::core::ipcz_driver::SharedBuffer::Serialize()`), and hence need a
+  // separate cap.
+  std::optional<uint32_t> max_shared_memory_values_in_chunk;
+  uint32_t shared_memory_values_in_chunk = 0;
+
+  if (bucket_context_->IsUsingSqlite()) {
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(MOJO_USE_APPLE_CHANNEL)
+    // channel_posix limits the number of file descriptors per message to 128:
+    // crbug.com/439305148.
+#if BUILDFLAG(IS_ANDROID)
+    // 1 file descriptor is used per shared memory buffer.
+    max_shared_memory_values_in_chunk = 128;
+#else
+    // 2 file descriptors are used per shared memory buffer.
+    max_shared_memory_values_in_chunk = 64;
+#endif
+#elif BUILDFLAG(IS_FUCHSIA)
+    // channel_fuchsia.cc limits the number of handles per message to 64
+    // (ZX_CHANNEL_MAX_MSG_HANDLES): crbug.com/508116627.
+    // 1 platform handle is used per shared memory buffer.
+    max_shared_memory_values_in_chunk = 64;
+#endif
+  }
+
   for (uint32_t i = 0; i < max_count; ++i) {
+    // Periodically stream records if we have too many.
+    if (found_records.size() >= kMaxValuesBeforeSending ||
+        (max_shared_memory_values_in_chunk.has_value() &&
+         shared_memory_values_in_chunk >=
+             max_shared_memory_values_in_chunk.value())) {
+      result_sink->SendResults(std::move(found_records), /*done=*/false);
+      found_records.clear();
+      shared_memory_values_in_chunk = 0;
+    }
+
     // Cursor creation performs the first seek, returning a nullptr cursor when
     // invalid.
     if (i != 0) {
       StatusOr<bool> cursor_valid = (*cursor)->Continue();
       if (!cursor_valid.has_value()) {
-        result_sink->Get()->OnError(
+        result_sink->SendError(
             CreateIDBErrorPtr(blink::mojom::IDBException::kUnknownError,
                               "Seek failure, unable to continue", transaction));
         return cursor_valid.error();
@@ -803,14 +830,16 @@ Status Database::GetAllOperation(
       NOTREACHED();
     }
 
-    found_records.emplace_back(std::move(return_record));
-
-    // Periodically stream records if we have too many.
-    if (found_records.size() >= max_values_before_sending) {
-      send_records(/*done=*/false);
+    if (return_record->return_value &&
+        return_record->return_value->value->bits.storage_type() ==
+            mojo_base::BigBuffer::StorageType::kSharedMemory) {
+      ++shared_memory_values_in_chunk;
     }
+
+    found_records.emplace_back(std::move(return_record));
   }
-  send_records(/*done=*/true);
+
+  result_sink->SendResults(std::move(found_records), /*done=*/true);
   return Status::OK();
 }
 
@@ -855,8 +884,6 @@ Status Database::OpenCursorOperation(
   }
 
   if (!backing_store_cursor.has_value()) {
-    DLOG(ERROR) << "Unable to open cursor operation: "
-                << backing_store_cursor.error().ToString();
     return backing_store_cursor.error();
   }
 
@@ -974,7 +1001,7 @@ Status Database::ClearOperation(
 }
 
 bool Database::IsObjectStoreIdInMetadata(int64_t object_store_id) const {
-  return base::Contains(metadata().object_stores, object_store_id);
+  return metadata().object_stores.contains(object_store_id);
 }
 
 bool Database::IsObjectStoreIdAndMaybeIndexIdInMetadata(
@@ -986,7 +1013,7 @@ bool Database::IsObjectStoreIdAndMaybeIndexIdInMetadata(
   const IndexedDBObjectStoreMetadata& object_store_metadata =
       GetObjectStoreMetadata(object_store_id);
   return index_id == IndexedDBIndexMetadata::kInvalidId ||
-         base::Contains(object_store_metadata.indexes, index_id);
+         object_store_metadata.indexes.contains(index_id);
 }
 
 storage::mojom::IdbDatabaseMetadataPtr Database::GetIdbInternalsMetadata()
@@ -1027,7 +1054,7 @@ void Database::CallUpgradeTransactionStartedForTesting(int64_t old_version) {
 Status Database::OpenInternal() {
   auto result = LOG_RESULT(backing_store()->CreateOrOpenDatabase(name_),
                            "IndexedDB.BackingStore.CreateOrOpenDatabase",
-                           bucket_context_->in_memory());
+                           bucket_context_->GetHistogramSuffix());
   if (result.has_value()) {
     backing_store_db_ = std::move(result.value());
     return Status::OK();
@@ -1063,15 +1090,12 @@ void Database::VersionChangeIgnored() {
 }
 
 bool Database::HasNoConnections() const {
-  return force_closing_ || connections().empty();
+  return connections().empty();
 }
 
 void Database::SendVersionChangeToAllConnections(int64_t old_version,
                                                  int64_t new_version) {
-  if (force_closing_) {
-    return;
-  }
-  for (auto* connection : connections()) {
+  for (content::indexed_db::Connection* connection : connections()) {
     // Before invoking this method, the `ConnectionCoordinator` had
     // set the request state to `kPendingNoConnections`. Now the request will
     // be blocked until all the existing connections to this database is
@@ -1110,8 +1134,7 @@ void Database::SendVersionChangeToAllConnections(int64_t old_version,
 void Database::ConnectionClosed(base::OnceClosure forward_on_close,
                                 Connection& connection) {
   TRACE_EVENT0("IndexedDB", "Database::ConnectionClosed");
-  // Ignore connection closes during force close to prevent re-entry.
-  if (force_closing_) {
+  if (closing_all_connections_) {
     return;
   }
   CHECK(connections_.remove(&connection));

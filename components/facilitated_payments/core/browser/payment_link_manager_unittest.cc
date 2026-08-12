@@ -19,6 +19,7 @@
 #include "components/autofill/core/browser/strike_databases/payments/test_strike_database.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
 #include "components/autofill/core/common/autofill_prefs.h"
+#include "components/facilitated_payments/core/browser/ewallet_account_linking_manager.h"
 #include "components/facilitated_payments/core/browser/facilitated_payments_client.h"
 #include "components/facilitated_payments/core/browser/mock_device_delegate.h"
 #include "components/facilitated_payments/core/browser/mock_facilitated_payments_api_client.h"
@@ -155,6 +156,10 @@ TEST_F(PaymentLinkManagerTest, LogPaymentLinkDetected) {
   histogram_tester.ExpectUniqueSample("FacilitatedPayments.PaymentLinkDetected",
                                       /*sample=*/true,
                                       /*expected_bucket_count=*/1);
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.PaymentLinkDetected.ShopeePay",
+      /*sample=*/true,
+      /*expected_bucket_count=*/1);
   auto ukm_entries = ukm_recorder_.GetEntries(
       ukm::builders::FacilitatedPayments_PaymentLinkDetected::kEntryName,
       {ukm::builders::FacilitatedPayments_PaymentLinkDetected::
@@ -166,9 +171,10 @@ TEST_F(PaymentLinkManagerTest, LogPaymentLinkDetected) {
 // Ewallet payment prompt is shown.
 TEST_F(PaymentLinkManagerTest, EwalletPaymentPromptShown) {
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -189,9 +195,10 @@ TEST_F(PaymentLinkManagerTest, EwalletPaymentPromptShown) {
 TEST_F(PaymentLinkManagerTest,
        UnsupportedPaymentLink_EwalletPaymentPromptNotShown) {
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
                         /*is_fido_enrolled=*/true));
@@ -211,9 +218,10 @@ TEST_F(PaymentLinkManagerTest,
        InvalidPaymentLink_EwalletPaymentPromptNotShown) {
   base::HistogramTester histogram_tester;
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -263,9 +271,10 @@ TEST_F(PaymentLinkManagerTest, NoEwalletAccount_EwalletPaymentPromptNotShown) {
 TEST_F(PaymentLinkManagerTest, InLandscapeMode_EwalletPaymentPromptNotShown) {
   base::HistogramTester histogram_tester;
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -298,9 +307,10 @@ TEST_F(PaymentLinkManagerTest, InLandscapeMode_EwalletPaymentPromptNotShown) {
 TEST_F(PaymentLinkManagerTest,
        PaymentsDataManagerUnavailable_EwalletPaymentPromptNotShown) {
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -323,9 +333,10 @@ TEST_F(PaymentLinkManagerTest,
 TEST_F(PaymentLinkManagerTest, UserOptedOut_EwalletPaymentPromptNotShown) {
   base::HistogramTester histogram_tester;
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -356,9 +367,10 @@ TEST_F(PaymentLinkManagerTest, UserOptedOut_EwalletPaymentPromptNotShown) {
 TEST_F(PaymentLinkManagerTest, IsFoldable_EwalletPaymentPromptNotShown) {
   base::HistogramTester histogram_tester;
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -388,9 +400,10 @@ TEST_F(PaymentLinkManagerTest,
        ApiClientAvailable_ApiClientAvailabilityCheckLatencyLogged) {
   base::HistogramTester histogram_tester;
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -418,9 +431,10 @@ TEST_F(PaymentLinkManagerTest,
        ApiClientNotAvailable_ApiClientAvailabilityCheckLatencyLogged) {
   base::HistogramTester histogram_tester;
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -450,9 +464,10 @@ TEST_F(PaymentLinkManagerTest,
        ApiClientNotAvailable_EwalletPaymentPromptNotShown) {
   base::HistogramTester histogram_tester;
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -485,9 +500,10 @@ TEST_F(PaymentLinkManagerTest,
 TEST_F(PaymentLinkManagerTest,
        EwalletPaymentPromptAccepted_LoadRiskDataTriggered_ProgressScreenShown) {
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -508,9 +524,10 @@ TEST_F(PaymentLinkManagerTest,
 
 TEST_F(PaymentLinkManagerTest, DeviceIsBound) {
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -530,9 +547,10 @@ TEST_F(PaymentLinkManagerTest, DeviceIsBound) {
 
 TEST_F(PaymentLinkManagerTest, DeviceIsNotBound) {
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -859,12 +877,39 @@ TEST_F(PaymentLinkManagerTest,
       /*expected_bucket_count=*/1);
 }
 
+// Test that multiple calls to TriggerPaymentLinkPushPayment are ignored.
+TEST_F(PaymentLinkManagerTest,
+       TriggerPaymentLinkPushPayment_MultipleCalls_Ignored) {
+  GURL page_url("https://example.com/");
+  payments_data_manager_.AddEwalletForTest(autofill::Ewallet(
+      /*instrument_id=*/100, /*nickname=*/u"nickname",
+      /*display_icon_url=*/page_url, u"ewallet_name", u"account_display_name",
+      /*supported_payment_link_uris=*/
+      {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
+       u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
+      /*is_fido_enrolled=*/true));
+  GURL supported_payment_link(
+      "shopeepay://shopeepay.com.my?code=https://shopeepay.com.my/"
+      "281011051692389958586862838?merchant=Walmart&amount=101&currency=usd");
+
+  // ShowPaymentLinkPrompt should be called exactly once.
+  EXPECT_CALL(client_, ShowPaymentLinkPrompt).Times(1);
+
+  // First call should trigger the payment flow.
+  payment_link_manager_->TriggerPaymentLinkPushPayment(
+      supported_payment_link, page_url, ukm::UkmRecorder::GetNewSourceID());
+
+  // Second call should be ignored because the UI state is no longer hidden.
+  payment_link_manager_->TriggerPaymentLinkPushPayment(
+      supported_payment_link, page_url, ukm::UkmRecorder::GetNewSourceID());
+}
+
 // Test that eWalet payment prompt is shown for websites in the allowlist.
 TEST_F(PaymentLinkManagerTest,
        TriggerPaymentLinkPushPayment_UrlInAllowlist_EwalletPaymentPromptShown) {
   GURL page_url("https://example.com/");
   payments_data_manager_.AddEwalletForTest(autofill::Ewallet(
-      /*instrument_id=*/100, u"nickname",
+      /*instrument_id=*/100, /*nickname=*/u"nickname",
       /*display_icon_url=*/page_url, u"ewallet_name", u"account_display_name",
       /*supported_payment_link_uris=*/
       {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
@@ -897,9 +942,10 @@ TEST_F(
   base::HistogramTester histogram_tester;
   GURL page_url("https://example.com/");
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -939,9 +985,10 @@ TEST_F(
     TriggerPaymentLinkPushPayment_AllowlistNotAvailable_ApiAvailabilityNotInvoked) {
   GURL page_url("https://example.com/");
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -971,7 +1018,7 @@ TEST_F(PaymentLinkManagerTest,
        FopSelectorShown_LatencyHistogramAndShownUkmLogged) {
   base::HistogramTester histogram_tester;
   autofill::Ewallet supported_ewallet(
-      /*instrument_id=*/100, u"nickname",
+      /*instrument_id=*/100, /*nickname=*/u"nickname",
       /*display_icon_url=*/GURL("http://www.example.com"), u"ewallet_name",
       u"account_display_name",
       /*supported_payment_link_uris=*/
@@ -1268,9 +1315,10 @@ TEST_F(PaymentLinkManagerTest,
        OnEwalletAccountSelected_HistogramLogged_SingleBound) {
   base::HistogramTester histogram_tester;
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -1297,9 +1345,10 @@ TEST_F(PaymentLinkManagerTest,
        OnEwalletAccountSelected_HistogramLogged_SingleUnboundEwallet) {
   base::HistogramTester histogram_tester;
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -1326,7 +1375,7 @@ TEST_F(PaymentLinkManagerTest,
        OnEwalletAccountSelected_HistogramLogged_MultipleEwallets) {
   base::HistogramTester histogram_tester;
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname1",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname1",
                         /*display_icon_url=*/GURL("http://www.example.com"),
                         u"ewallet_name1", u"account_display_name1",
                         /*supported_payment_link_uris=*/
@@ -1334,7 +1383,7 @@ TEST_F(PaymentLinkManagerTest,
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
                         /*is_fido_enrolled=*/false));
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/101, u"nickname2",
+      autofill::Ewallet(/*instrument_id=*/101, /*nickname=*/u"nickname2",
                         /*display_icon_url=*/GURL("http://www.example.com"),
                         u"ewallet_name2", u"account_display_name2",
                         /*supported_payment_link_uris=*/
@@ -1361,9 +1410,10 @@ TEST_F(PaymentLinkManagerTest,
 
 TEST_F(PaymentLinkManagerTest, OnPaymentPromptResult_FopSelectorAccepted) {
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -1478,7 +1528,7 @@ TEST_F(
     TriggerPaymentLinkPushPayment_NotEnoughStrike_EwalletPaymentPromptShown) {
   GURL page_url("https://example.com/");
   payments_data_manager_.AddEwalletForTest(autofill::Ewallet(
-      /*instrument_id=*/100, u"nickname",
+      /*instrument_id=*/100, /*nickname=*/u"nickname",
       /*display_icon_url=*/page_url, u"ewallet_name", u"account_display_name",
       /*supported_payment_link_uris=*/
       {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
@@ -1504,9 +1554,10 @@ TEST_F(PaymentLinkManagerTest,
   base::HistogramTester histogram_tester;
   GURL page_url("https://example.com/");
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -1532,9 +1583,10 @@ TEST_F(PaymentLinkManagerTest,
 TEST_F(PaymentLinkManagerTest,
        OnPaymentPromptResult_FopSelectorAccepted_ClearsStrikes) {
   payments_data_manager_.AddEwalletForTest(
-      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
                         /*display_icon_url=*/GURL("http://www.example.com"),
-                        u"ewallet_name", u"account_display_name",
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
                         /*supported_payment_link_uris=*/
                         {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
                          u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
@@ -1642,7 +1694,7 @@ TEST_F(PaymentLinkManagerTestForA2AFlow, A2APaymentPromptShown) {
   GURL supported_payment_link(
       "https://www.itmx.co.th/facilitated-payment/prompt-pay?path=fake_path");
   EXPECT_CALL(*mock_facilitated_payments_app_info_list_, Size())
-      .Times(2)
+      .Times(3)
       .WillRepeatedly(testing::Return(2));
   EXPECT_CALL(client_, ShowPaymentLinkPrompt);
 
@@ -1679,7 +1731,7 @@ TEST_F(PaymentLinkManagerTestForA2AFlow, PaymentPromptShown_A2AAndEwallet) {
   feature_list_.InitAndEnableFeature(
       payments::facilitated::kFacilitatedPaymentsEnableA2APayment);
   autofill::Ewallet supported_ewallet(
-      /*instrument_id=*/100, u"nickname",
+      /*instrument_id=*/100, /*nickname=*/u"nickname",
       /*display_icon_url=*/GURL("http://www.example.com"), u"ewallet_name",
       u"account_display_name",
       /*supported_payment_link_uris=*/
@@ -1785,7 +1837,7 @@ TEST_F(PaymentLinkManagerTestForA2AFlow,
   GURL supported_payment_link(
       "https://www.itmx.co.th/facilitated-payment/prompt-pay?path=fake_path");
   EXPECT_CALL(*mock_facilitated_payments_app_info_list_, Size())
-      .Times(2)
+      .Times(3)
       .WillRepeatedly(testing::Return(2));
   EXPECT_CALL(client_, ShowPaymentLinkPrompt);
 
@@ -1806,17 +1858,6 @@ TEST_F(PaymentLinkManagerTestForA2AFlow,
       "https://www.itmx.co.th/facilitated-payment/prompt-pay?path=fake_path");
   ON_CALL(*mock_facilitated_payments_app_info_list_, Size)
       .WillByDefault(testing::Return(2));
-
-  // Test that when `kFacilitatedPaymentsA2AEnabled` pref is true,
-  // `ShowPaymentLinkPrompt` is invoked.
-  pref_service_.get()->SetBoolean(
-      autofill::prefs::kFacilitatedPaymentsA2AEnabled, true);
-
-  EXPECT_CALL(client_, ShowPaymentLinkPrompt).Times(1);
-
-  payment_link_manager_->TriggerPaymentLinkPushPayment(
-      supported_payment_link, GURL("https://www.example.com"),
-      ukm::UkmRecorder::GetNewSourceID());
 
   // Test that when `kFacilitatedPaymentsA2AEnabled` pref is false,
   // `ShowPaymentLinkPrompt` is not invoked.
@@ -1990,7 +2031,7 @@ TEST_F(PaymentLinkManagerTestForA2AFlow,
 
   // Setup eWallet.
   payments_data_manager_.AddEwalletForTest(autofill::Ewallet(
-      /*instrument_id=*/100, u"nickname",
+      /*instrument_id=*/100, /*nickname=*/u"nickname",
       /*display_icon_url=*/GURL("http://www.example.com"), u"ewallet_name",
       u"account_display_name",
       /*supported_payment_link_uris=*/
@@ -2046,7 +2087,7 @@ TEST_F(PaymentLinkManagerTestForA2AFlow, OnEwalletSelected_RecordHistogram) {
 
   // Setup eWallet.
   payments_data_manager_.AddEwalletForTest(autofill::Ewallet(
-      /*instrument_id=*/100, u"nickname",
+      /*instrument_id=*/100, /*nickname=*/u"nickname",
       /*display_icon_url=*/GURL("http://www.example.com"), u"ewallet_name",
       u"account_display_name",
       /*supported_payment_link_uris=*/
@@ -2086,7 +2127,7 @@ TEST_F(PaymentLinkManagerTestForA2AFlow,
 
   // Setup eWallet.
   payments_data_manager_.AddEwalletForTest(autofill::Ewallet(
-      /*instrument_id=*/100, u"nickname",
+      /*instrument_id=*/100, /*nickname=*/u"nickname",
       /*display_icon_url=*/GURL("http://www.example.com"), u"ewallet_name",
       u"account_display_name",
       /*supported_payment_link_uris=*/
@@ -2187,6 +2228,345 @@ TEST_F(PaymentLinkManagerTestForA2AFlow,
       "FacilitatedPayments.A2A.PayflowExitedReason.PromptPay",
       A2AFlowExitedReason::kFopSelectorClosedByUser,
       /*expected_bucket_count=*/1);
+}
+
+// Ewallet payment prompt is not exited early when a supported creation option
+// exists
+TEST_F(PaymentLinkManagerTest,
+       FlagEnabled_SupportedCreationOption_RetrieveCreationOptions) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      payments::facilitated::kEnableEwalletNewAccountLinking);
+
+  // Add ewallet creation option (instrument_id = 0)
+  payments_data_manager_.AddEwalletCreationOptionForTest(
+      autofill::Ewallet(/*instrument_id=*/0, u"nickname",
+                        /*display_icon_url=*/GURL("http://www.example.com"),
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
+                        /*supported_payment_link_uris=*/
+                        {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$"},
+                        /*is_fido_enrolled=*/false));
+
+  GURL supported_payment_link(
+      "shopeepay://shopeepay.com.my?code=https://shopeepay.com.my/"
+      "281011?merchant=Walmart");
+
+  base::HistogramTester histogram_tester;
+  payment_link_manager_->TriggerPaymentLinkPushPayment(
+      supported_payment_link, GURL("https://www.example.com"),
+      ukm::UkmRecorder::GetNewSourceID());
+
+  // Assert that matched eWallet creation options were cached directly
+  auto creation_options =
+      test_api(*payment_link_manager_).supported_ewallet_creation_options();
+  ASSERT_EQ(creation_options.size(), 1u);
+  EXPECT_EQ(creation_options[0].ewallet_name(), u"ewallet_name");
+
+  // Expect kNoSupportedEwallet to be logged since ewallets are empty.
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.Ewallet.PayflowExitedReason",
+      /*sample=*/EwalletFlowExitedReason::kNoSupportedEwallet,
+      /*expected_bucket_count=*/1);
+
+  // Expect new account linking eligibility top-of-funnel metric to be logged.
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.PaymentLinkDetected.EligibleForAccountLinking",
+      /*sample=*/true,
+      /*expected_bucket_count=*/1);
+}
+
+// Verify that creation options are completely ignored and the flow exits early
+// if the feature flag is disabled.
+TEST_F(PaymentLinkManagerTest, FlagDisabled_SupportedCreationOption_Ignored) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      payments::facilitated::kEnableEwalletNewAccountLinking);
+
+  // Add ewallet creation option (instrument_id = 0)
+  payments_data_manager_.AddEwalletCreationOptionForTest(
+      autofill::Ewallet(/*instrument_id=*/0, u"nickname",
+                        /*display_icon_url=*/GURL("http://www.example.com"),
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
+                        /*supported_payment_link_uris=*/
+                        {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$"},
+                        /*is_fido_enrolled=*/false));
+
+  GURL supported_payment_link(
+      "shopeepay://shopeepay.com.my?code=https://shopeepay.com.my/"
+      "281011?merchant=Walmart");
+
+  base::HistogramTester histogram_tester;
+  payment_link_manager_->TriggerPaymentLinkPushPayment(
+      supported_payment_link, GURL("https://www.example.com"),
+      ukm::UkmRecorder::GetNewSourceID());
+
+  // Assert that creation options were ignored
+  EXPECT_TRUE(test_api(*payment_link_manager_)
+                  .supported_ewallet_creation_options()
+                  .empty());
+
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.Ewallet.PayflowExitedReason",
+      /*sample=*/EwalletFlowExitedReason::kNoSupportedEwallet,
+      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectTotalCount(
+      "FacilitatedPayments.PaymentLinkDetected.EligibleForAccountLinking", 0);
+}
+
+// Verify that a creation option is ignored if it does not match the triggered
+// payment link regex pattern.
+TEST_F(PaymentLinkManagerTest, FlagEnabled_UnsupportedCreationOption_NoMatch) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      payments::facilitated::kEnableEwalletNewAccountLinking);
+
+  // Add mismatched creation option supporting ONLY Touch'n Go (tngd://)
+  payments_data_manager_.AddEwalletCreationOptionForTest(
+      autofill::Ewallet(/*instrument_id=*/0, u"nickname",
+                        /*display_icon_url=*/GURL("http://www.example.com"),
+                        /*ewallet_name=*/u"ewallet_name",
+                        /*account_display_name=*/u"account_display_name",
+                        /*supported_payment_link_uris=*/
+                        {u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
+                        /*is_fido_enrolled=*/false));
+
+  // Trigger ShopeePay paylink
+  GURL unsupported_payment_link(
+      "shopeepay://shopeepay.com.my?code=https://shopeepay.com.my/"
+      "281011?merchant=Walmart");
+
+  base::HistogramTester histogram_tester;
+  payment_link_manager_->TriggerPaymentLinkPushPayment(
+      unsupported_payment_link, GURL("https://www.example.com"),
+      ukm::UkmRecorder::GetNewSourceID());
+
+  // Assert that mismatched option was filtered out
+  EXPECT_TRUE(test_api(*payment_link_manager_)
+                  .supported_ewallet_creation_options()
+                  .empty());
+
+  histogram_tester.ExpectBucketCount(
+      "FacilitatedPayments.Ewallet.PayflowExitedReason",
+      EwalletFlowExitedReason::kNoSupportedEwallet, 1);
+  histogram_tester.ExpectBucketCount(
+      "FacilitatedPayments.Ewallet.NewAccountLinkingFlowExitedReason",
+      EwalletNewAccountLinkingFlowExitedReason::kNoSupportedCreationOption, 1);
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.PaymentLinkDetected.EligibleForAccountLinking",
+      /*sample=*/true, 1);
+}
+
+// Verify that both standard linked accounts and unlinked creation options
+// can coexist and be cached without interference.
+TEST_F(PaymentLinkManagerTest,
+       FlagEnabled_BothLinkedAndUnlinkedExist_BothCached) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      payments::facilitated::kEnableEwalletNewAccountLinking);
+
+  // 1. Add standard linked ewallet (instrument_id = 100L)
+  payments_data_manager_.AddEwalletForTest(
+      autofill::Ewallet(/*instrument_id=*/100, /*nickname=*/u"nickname",
+                        /*display_icon_url=*/GURL("http://www.example.com"),
+                        u"linked_name", u"account_display_name",
+                        /*supported_payment_link_uris=*/
+                        {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$"},
+                        /*is_fido_enrolled=*/true));
+
+  // 2. Add unlinked creation option (instrument_id = 0)
+  payments_data_manager_.AddEwalletCreationOptionForTest(
+      autofill::Ewallet(/*instrument_id=*/0, u"nickname",
+                        /*display_icon_url=*/GURL("http://www.example.com"),
+                        u"unlinked_name", u"account_display_name",
+                        /*supported_payment_link_uris=*/
+                        {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$"},
+                        /*is_fido_enrolled=*/false));
+
+  GURL supported_payment_link(
+      "shopeepay://shopeepay.com.my?code=https://shopeepay.com.my/"
+      "281011?merchant=Walmart");
+
+  base::HistogramTester histogram_tester;
+  payment_link_manager_->TriggerPaymentLinkPushPayment(
+      supported_payment_link, GURL("https://www.example.com"),
+      ukm::UkmRecorder::GetNewSourceID());
+
+  // Assert both standard and creation options are cached
+  EXPECT_EQ(test_api(*payment_link_manager_).supported_ewallets().size(), 1u);
+  EXPECT_EQ(
+      test_api(*payment_link_manager_).supported_ewallets()[0].ewallet_name(),
+      u"linked_name");
+
+  EXPECT_EQ(test_api(*payment_link_manager_)
+                .supported_ewallet_creation_options()
+                .size(),
+            1u);
+  EXPECT_EQ(test_api(*payment_link_manager_)
+                .supported_ewallet_creation_options()[0]
+                .ewallet_name(),
+            u"unlinked_name");
+
+  // Ensure no exit metrics are logged
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.Ewallet.PayflowExitedReason",
+      /*sample=*/EwalletFlowExitedReason::kNoSupportedEwallet,
+      /*expected_bucket_count=*/0);
+
+  histogram_tester.ExpectTotalCount(
+      "FacilitatedPayments.PaymentLinkDetected.EligibleForAccountLinking", 0);
+}
+
+// Verify that EwalletFlowExitedReason::kNoSupportedCreationOption is logged
+// when the new account linking feature is enabled but no creation options are
+// available in the database.
+TEST_F(PaymentLinkManagerTest,
+       FlagEnabled_NoCreationOptions_NoSupportedCreationOptionLogged) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      payments::facilitated::kEnableEwalletNewAccountLinking);
+
+  GURL supported_payment_link(
+      "shopeepay://shopeepay.com.my?code=https://shopeepay.com.my/"
+      "281011?merchant=Walmart");
+
+  base::HistogramTester histogram_tester;
+  payment_link_manager_->TriggerPaymentLinkPushPayment(
+      supported_payment_link, GURL("https://www.example.com"),
+      ukm::UkmRecorder::GetNewSourceID());
+
+  // Expect both standard empty and creation options empty to be logged.
+  histogram_tester.ExpectBucketCount(
+      "FacilitatedPayments.Ewallet.PayflowExitedReason",
+      EwalletFlowExitedReason::kNoSupportedEwallet, 1);
+  histogram_tester.ExpectBucketCount(
+      "FacilitatedPayments.Ewallet.NewAccountLinkingFlowExitedReason",
+      EwalletNewAccountLinkingFlowExitedReason::kNoSupportedCreationOption, 1);
+
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.PaymentLinkDetected.EligibleForAccountLinking",
+      /*sample=*/true, 1);
+}
+
+// Test that if the standard eWallet flow exits due to no linked eWallets, but
+// there are multiple valid creation options, account linking is skipped and
+// logged.
+TEST_F(
+    PaymentLinkManagerTest,
+    TriggerPaymentLinkPushPayment_AccountLinking_LogsMultipleCreationOptions) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kEnableEwalletNewAccountLinking);
+
+  autofill::Ewallet creation_option_1(
+      /*instrument_id=*/100, /*nickname=*/u"nickname",
+      /*display_icon_url=*/GURL("http://www.example.com"), u"ewallet_name",
+      u"account_display_name",
+      /*supported_payment_link_uris=*/
+      {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$"},
+      /*is_fido_enrolled=*/true);
+  autofill::Ewallet creation_option_2(
+      /*instrument_id=*/200, /*nickname=*/u"nickname",
+      /*display_icon_url=*/GURL("http://www.example.com"), u"ewallet_name",
+      u"account_display_name",
+      /*supported_payment_link_uris=*/
+      {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$"},
+      /*is_fido_enrolled=*/true);
+  payments_data_manager_.AddEwalletCreationOptionForTest(creation_option_1);
+  payments_data_manager_.AddEwalletCreationOptionForTest(creation_option_2);
+
+  GURL supported_payment_link(
+      "shopeepay://shopeepay.com.my?code=https://shopeepay.com.my/"
+      "281011051692389958586862838?merchant=Walmart&amount=101&currency=usd");
+
+  base::HistogramTester histogram_tester;
+  payment_link_manager_->TriggerPaymentLinkPushPayment(
+      supported_payment_link, GURL("https://www.example.com"),
+      ukm::UkmRecorder::GetNewSourceID());
+
+  histogram_tester.ExpectBucketCount(
+      "FacilitatedPayments.Ewallet.NewAccountLinkingFlowExitedReason",
+      EwalletNewAccountLinkingFlowExitedReason::
+          kMultipleSupportedCreationOptions,
+      1);
+}
+
+// Test that if standard eWallet flow exits due to no linked eWallets, but there
+// is a valid creation option, account linking is triggered by fetching the
+// client token.
+TEST_F(PaymentLinkManagerTest,
+       TriggerPaymentLinkPushPayment_AccountLinking_StartsClientTokenFetch) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kEnableEwalletNewAccountLinking);
+
+  autofill::Ewallet creation_option(
+      /*instrument_id=*/100, /*nickname=*/u"nickname",
+      /*display_icon_url=*/GURL("http://www.example.com"), u"ewallet_name",
+      u"account_display_name",
+      /*supported_payment_link_uris=*/
+      {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
+       u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
+      /*is_fido_enrolled=*/true);
+  payments_data_manager_.AddEwalletCreationOptionForTest(creation_option);
+
+  test_api(*payment_link_manager_)
+      .set_api_client_creator(base::BindRepeating(
+          []() -> std::unique_ptr<FacilitatedPaymentsApiClient> {
+            auto mock_api_client =
+                std::make_unique<MockFacilitatedPaymentsApiClient>();
+            ON_CALL(*mock_api_client, IsAvailableSync())
+                .WillByDefault(testing::Return(true));
+            EXPECT_CALL(*mock_api_client, GetClientToken(testing::_)).Times(1);
+            return mock_api_client;
+          }));
+
+  GURL supported_payment_link(
+      "shopeepay://shopeepay.com.my?code=https://shopeepay.com.my/"
+      "281011051692389958586862838?merchant=Walmart&amount=101&currency=usd");
+
+  payment_link_manager_->TriggerPaymentLinkPushPayment(
+      supported_payment_link, GURL("https://www.example.com"),
+      ukm::UkmRecorder::GetNewSourceID());
+}
+
+// Test that triggering the flow again overwrites the previously instantiated
+// manager, issuing another call to fetch the client token.
+TEST_F(PaymentLinkManagerTest,
+       TriggerPaymentLinkPushPayment_AccountLinking_DismissesExistingManager) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kEnableEwalletNewAccountLinking);
+
+  autofill::Ewallet creation_option(
+      /*instrument_id=*/100, /*nickname=*/u"nickname",
+      /*display_icon_url=*/GURL("http://www.example.com"), u"ewallet_name",
+      u"account_display_name",
+      /*supported_payment_link_uris=*/
+      {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
+       u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
+      /*is_fido_enrolled=*/true);
+  payments_data_manager_.AddEwalletCreationOptionForTest(creation_option);
+
+  test_api(*payment_link_manager_)
+      .set_api_client_creator(base::BindRepeating(
+          []() -> std::unique_ptr<FacilitatedPaymentsApiClient> {
+            auto mock_api_client =
+                std::make_unique<MockFacilitatedPaymentsApiClient>();
+            ON_CALL(*mock_api_client, IsAvailableSync())
+                .WillByDefault(testing::Return(true));
+            EXPECT_CALL(*mock_api_client, GetClientToken(testing::_)).Times(1);
+            return mock_api_client;
+          }));
+
+  GURL supported_payment_link(
+      "shopeepay://shopeepay.com.my?code=https://shopeepay.com.my/"
+      "281011051692389958586862838?merchant=Walmart&amount=101&currency=usd");
+
+  payment_link_manager_->TriggerPaymentLinkPushPayment(
+      supported_payment_link, GURL("https://www.example.com"),
+      ukm::UkmRecorder::GetNewSourceID());
+  payment_link_manager_->TriggerPaymentLinkPushPayment(
+      supported_payment_link, GURL("https://www.example.com"),
+      ukm::UkmRecorder::GetNewSourceID());
 }
 
 }  // namespace payments::facilitated

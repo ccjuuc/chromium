@@ -658,6 +658,14 @@ TEST(CStringViewTest, Find) {
 #endif
 }
 
+TEST(CStringViewTest, Contains) {
+  static_assert(cstring_view("hello").contains("he"));
+  static_assert(cstring_view("hello").contains("ll"));
+  static_assert(cstring_view("hello").contains("lo"));
+  static_assert(!cstring_view("hello").contains("a"));
+  static_assert(!cstring_view("hello").contains("hl"));
+}
+
 TEST(CStringViewTest, Rfind) {
   // OOB `pos` will clamp to the end of the view. The NUL is never searched.
   static_assert(cstring_view("hello").rfind('h', 0u) == 0u);
@@ -899,12 +907,12 @@ TEST(CStringViewTest, ToString) {
   // Streaming support like std::string_view.
   std::ostringstream s;
   s << cstring_view("hello");
-  EXPECT_EQ(s.str(), "hello");
+  EXPECT_EQ(s.view(), "hello");
 
 #if BUILDFLAG(IS_WIN)
   std::wostringstream sw;
   sw << wcstring_view(L"hello");
-  EXPECT_EQ(sw.str(), L"hello");
+  EXPECT_EQ(sw.view(), L"hello");
 #endif
 
   // Gtest printing support.

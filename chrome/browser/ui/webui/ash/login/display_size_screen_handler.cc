@@ -4,11 +4,11 @@
 
 #include "chrome/browser/ui/webui/ash/login/display_size_screen_handler.h"
 
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "base/logging.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ui/webui/ash/login/base_screen_handler.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/login/localized_values_builder.h"
 
 namespace ash {
@@ -49,7 +49,7 @@ void DisplaySizeScreenHandler::DeclareLocalizedValues(
                IDS_OOBE_CHOOBE_DISPLAY_SIZE_TILE_SUBTITLE);
 }
 
-void DisplaySizeScreenHandler::Show(base::Value::Dict data) {
+void DisplaySizeScreenHandler::Show(base::DictValue data) {
   ShowInWebUI(std::move(data));
 }
 

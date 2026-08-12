@@ -6,7 +6,7 @@ import {getInjectedElementIds, openTab} from '/_test_resources/test_util/tabs_ut
 
 // For the first session, register one persistent script and one session script.
 async function runFirstSession() {
-  let scripts = [
+  const scripts = [
     {
       // A set of the minimal required properties, verifying defaults are
       // properly set and retrieved.
@@ -34,8 +34,8 @@ async function runFirstSession() {
       matches: ['*://*/*'],
       js: ['inject_element_3.js'],
       runAt: 'document_end',
-      persistAcrossSessions: false
-    }
+      persistAcrossSessions: false,
+    },
   ];
 
   await chrome.scripting.registerContentScripts(scripts);
@@ -43,7 +43,7 @@ async function runFirstSession() {
   const config = await chrome.test.getConfig();
   const url = `http://hostperms.com:${config.testServer.port}/simple.html`;
 
-  let tab = await openTab(url);
+  const tab = await openTab(url);
   chrome.test.assertEq(
       ['injected', 'injected_2', 'injected_3'],
       await getInjectedElementIds(tab.id));
@@ -87,7 +87,7 @@ async function runSecondSession() {
   const config = await chrome.test.getConfig();
   const url = `http://hostperms.com:${config.testServer.port}/simple.html`;
 
-  let tab = await openTab(url);
+  const tab = await openTab(url);
   chrome.test.assertEq(
       ['injected', 'injected_2'], await getInjectedElementIds(tab.id));
 
@@ -101,12 +101,12 @@ async function runSecondSession() {
       matches: ['*://*/*'],
       js: ['inject_element_3.js'],
       runAt: 'document_end',
-      persistAcrossSessions: false
+      persistAcrossSessions: false,
     },
     {
       id: 'new_script_not_persistent',
       matches: ['*://*/*'],
-      js: ['inject_element_4.js']
+      js: ['inject_element_4.js'],
     },
   ];
 
@@ -114,7 +114,7 @@ async function runSecondSession() {
 
   const updates = [
     {id: 'new_script_persistent', persistAcrossSessions: true},
-    {id: 'new_script_not_persistent', persistAcrossSessions: false}
+    {id: 'new_script_not_persistent', persistAcrossSessions: false},
   ];
 
   await chrome.scripting.updateContentScripts(updates);
@@ -125,7 +125,7 @@ async function runSecondSession() {
 // session is applied into this session, and that updating a script's
 // persistAcrossSessions flag to false will not persist it into this session.
 async function runThirdSession() {
-  let scripts = await chrome.scripting.getRegisteredContentScripts();
+  const scripts = await chrome.scripting.getRegisteredContentScripts();
 
   const expectedScripts = [
     {
@@ -144,7 +144,7 @@ async function runThirdSession() {
 
   const config = await chrome.test.getConfig();
   const url = `http://hostperms.com:${config.testServer.port}/simple.html`;
-  let tab = await openTab(url);
+  const tab = await openTab(url);
   chrome.test.assertEq(['injected_3'], await getInjectedElementIds(tab.id));
 
   chrome.test.succeed();
@@ -154,13 +154,14 @@ async function runThirdSession() {
 // every browser start, so we call chrome.test.sendMessage
 chrome.runtime.onStartup.addListener(async () => {});
 
-chrome.test.sendMessage('ready',testName => {
-  if (testName === 'PRE_PRE_PersistentDynamicContentScripts')
+chrome.test.sendMessage('ready', testName => {
+  if (testName === 'PRE_PRE_PersistentDynamicContentScripts') {
     runFirstSession();
-  else if (testName === 'PRE_PersistentDynamicContentScripts')
+  } else if (testName === 'PRE_PersistentDynamicContentScripts') {
     runSecondSession();
-  else if (testName === 'PersistentDynamicContentScripts')
+  } else if (testName === 'PersistentDynamicContentScripts') {
     runThirdSession();
-  else
+  } else {
     chrome.test.fail();
+  }
 });

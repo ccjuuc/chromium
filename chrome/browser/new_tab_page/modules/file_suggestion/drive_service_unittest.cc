@@ -21,7 +21,6 @@
 #include "content/public/test/browser_task_environment.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "net/base/load_flags.h"
-#include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 
@@ -64,7 +63,6 @@ class DriveServiceTest : public testing::Test {
   content::BrowserTaskEnvironment task_environment_;
   network::TestURLLoaderFactory test_url_loader_factory_;
   std::unique_ptr<DriveService> service_;
-  data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
   signin::IdentityTestEnvironment identity_test_env;
   segmentation_platform::MockSegmentationPlatformService
       mock_segmentation_platform_service_;
@@ -529,7 +527,7 @@ TEST_F(DriveServiceTest, PassesNoDataOnAuthError) {
   service_->GetDriveFiles(callback.Get());
 
   identity_test_env.WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-      GoogleServiceAuthError(GoogleServiceAuthError::State::CONNECTION_FAILED));
+      GoogleServiceAuthError::FromConnectionError(net::ERR_FAILED));
 
   EXPECT_FALSE(token_is_valid);
   ASSERT_EQ(0, histogram_tester_.GetBucketCount(

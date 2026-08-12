@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <sstream>
+#include <string>
 
 #include "base/base64.h"
 #include "base/feature_list.h"
@@ -64,6 +65,12 @@ bool ProtosAreEqual(const google::protobuf::MessageLite& actual,
          (actual.SerializeAsString() == expected.SerializeAsString());
 }
 
+testing::Matcher<SearchSuggestionParser::SuggestResult> SuggestionIs(
+    const std::u16string& expected) {
+  return testing::Property(&SearchSuggestionParser::SuggestResult::suggestion,
+                           testing::Eq(expected));
+}
+
 }  // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -71,14 +78,14 @@ bool ProtosAreEqual(const google::protobuf::MessageLite& actual,
 
 TEST(SearchSuggestionParserTest, DeserializeNonListJsonIsInvalid) {
   std::string json_data = "{}";
-  std::optional<base::Value::List> result =
+  std::optional<base::ListValue> result =
       SearchSuggestionParser::DeserializeJsonData(json_data);
   ASSERT_FALSE(result);
 }
 
 TEST(SearchSuggestionParserTest, DeserializeMalformedJsonIsInvalid) {
   std::string json_data = "} malformed json {";
-  std::optional<base::Value::List> result =
+  std::optional<base::ListValue> result =
       SearchSuggestionParser::DeserializeJsonData(json_data);
   ASSERT_FALSE(result);
 }
@@ -88,7 +95,7 @@ TEST(SearchSuggestionParserTest, DeserializeJsonData) {
   std::optional<base::Value> manifest_value =
       base::JSONReader::Read(json_data, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(manifest_value);
-  std::optional<base::Value::List> result =
+  std::optional<base::ListValue> result =
       SearchSuggestionParser::DeserializeJsonData(json_data);
   ASSERT_TRUE(result);
   ASSERT_EQ(*manifest_value, *result);
@@ -100,7 +107,7 @@ TEST(SearchSuggestionParserTest, DeserializeWithXssiGuard) {
   std::string json_data = R"([non-json [prefix [{"one": 1}])";
   // Parsing succeeds at:                      ^
 
-  std::optional<base::Value::List> result =
+  std::optional<base::ListValue> result =
       SearchSuggestionParser::DeserializeJsonData(json_data);
   ASSERT_TRUE(result);
 
@@ -114,7 +121,7 @@ TEST(SearchSuggestionParserTest, DeserializeWithTrailingComma) {
   // The comma in this string makes this badly formed JSON, but we explicitly
   // allow for this error in the JSON data.
   std::string json_data = R"([{"one": 1},])";
-  std::optional<base::Value::List> result =
+  std::optional<base::ListValue> result =
       SearchSuggestionParser::DeserializeJsonData(json_data);
   ASSERT_TRUE(result);
 }
@@ -128,7 +135,7 @@ TEST(SearchSuggestionParserTest, DeserializeWithTrailingComma) {
 // ParseSuggestResults:
 
 TEST(SearchSuggestionParserTest, ParseEmptyValueIsInvalid) {
-  base::Value::List root_val;
+  base::ListValue root_val;
   AutocompleteInput input;
   TestSchemeClassifier scheme_classifier;
   int default_result_relevance = 0;
@@ -268,6 +275,37 @@ TEST(SearchSuggestionParserTest, ParseSuggestResults) {
   ASSERT_EQ(1U, results.gws_event_id_hashes.size());
   int64_t expected = -223372036854775808;
   ASSERT_EQ(expected, results.gws_event_id_hashes[0]);
+}
+
+TEST(SearchSuggestionParserTest, ParseSuggestResultsRejectsInvalidSchemes) {
+  std::string json_data =
+      R"json([
+      "query",
+      ["javascript:alert(1)", "https://example.com"],
+      ["Sign in to continue", "Valid description"],
+      [],
+      {
+        "google:suggesttype": ["NAVIGATION", "NAVIGATION"]
+      }])json";
+  std::optional<base::ListValue> root_val = base::JSONReader::ReadList(
+      json_data, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  ASSERT_TRUE(root_val);
+
+  TestSchemeClassifier scheme_classifier;
+  AutocompleteInput input(u"query", metrics::OmniboxEventProto::NTP,
+                          scheme_classifier);
+  SearchSuggestionParser::Results results;
+  ASSERT_TRUE(SearchSuggestionParser::ParseSuggestResults(
+      *root_val, input, scheme_classifier,
+      /*default_result_relevance=*/400,
+      /*is_keyword_result=*/false, &results));
+
+  // The javascript URL should be rejected, and only the valid HTTPS URL
+  // accepted.
+  EXPECT_THAT(results.navigation_results,
+              testing::ElementsAre(testing::Property(
+                  &SearchSuggestionParser::NavigationResult::url,
+                  testing::Eq(GURL("https://example.com/")))));
 }
 
 // Tests that prerender hints can be parsed correctly.
@@ -1149,8 +1187,6 @@ TEST(SearchSuggestionParserTest, ParseSuggestionTemplateInfo) {
   }
 }
 
-
-
 TEST(SearchSuggestionParserTest, ParseValidTypes) {
   std::string json_data = R"([
       "",
@@ -1644,8 +1680,16 @@ TEST(SearchSuggestionParserTest, ParseSuggestTemplateFromSuggestResults) {
     suggest_template_info.set_style(omnibox::SuggestTemplateInfo::DEFAULT);
     suggest_template_info.set_type_icon(
         omnibox::SuggestTemplateInfo_IconType_SEARCH_LOOP_WITH_SPARKLE);
-    suggest_template_info.mutable_primary_text()->set_text(
-        "Washington Wizards");
+    auto* primary_text = suggest_template_info.mutable_primary_text();
+    primary_text->set_text("Washington Wizards");
+    auto* frag1 = primary_text->add_fragments();
+    frag1->set_start_index(0);
+    frag1->set_text("Washington ");
+    frag1->set_is_bolded(true);
+    auto* frag2 = primary_text->add_fragments();
+    frag2->set_start_index(11);
+    frag2->set_text("Wizards");
+    frag2->set_is_bolded(false);
     suggest_template_info.mutable_secondary_text()->set_text("MIA");
     omnibox::SuggestTemplateInfo::Image* image =
         suggest_template_info.mutable_image();
@@ -1721,6 +1765,15 @@ TEST(SearchSuggestionParserTest, ParseSuggestTemplateFromSuggestResults) {
     ASSERT_EQ(u"Washington Wizards",
               results.suggest_results[1].match_contents());
     ASSERT_EQ(u"MIA", results.suggest_results[1].annotation());
+
+    // Verify classifications derived from suggest template fragments.
+    const auto& classifications =
+        results.suggest_results[1].match_contents_class();
+    ASSERT_EQ(2U, classifications.size());
+    EXPECT_EQ(0U, classifications[0].offset);
+    EXPECT_EQ(ACMatchClassification::MATCH, classifications[0].style);
+    EXPECT_EQ(11U, classifications[1].offset);
+    EXPECT_EQ(ACMatchClassification::NONE, classifications[1].style);
   }
   // Parse EntityInfo data from garbled proto field.
   {
@@ -1774,5 +1827,66 @@ TEST(SearchSuggestionParserTest, ParseSuggestTemplateFromSuggestResults) {
     ASSERT_EQ(u"the menu", results.suggest_results[1].suggestion());
     ASSERT_FALSE(
         results.suggest_results[0].suggest_template_info().has_value());
+  }
+}
+
+TEST(SearchSuggestionParserTest,
+     ParseSuggestResultsWithEmptySuggestionAndSuggestTemplateInfo) {
+  // suggesttemplate values come from go/chrome-ntp-action-chips-protocol.
+  std::string json_data = R"([
+      "chris",
+      ["christmas", "", "christopher doe"],
+      ["", "", ""],
+      [],
+      {
+        "google:suggestdetail": [
+          {
+            "google:suggesttemplate": "CAIaGAoWQXNrIGFib3V0IHByZXZpb3VzIHRhYiIaChgiU29sdmUgbGluZWFyIGVxdWF0aW9ucyI="
+          },
+          {
+            "google:suggesttemplate": "CAIaKgooIlN1bW1hcml6ZSBpbnZlcnNlIG9wZXJhdGlvbiBzdHJhdGVnaWVzIg=="
+          },
+          {
+            "google:suggesttemplate": "CAIaLAoqIkhvdyBkb2VzIHRoaXMgcmVsYXRlIHRvIG90aGVyIGVxdWF0aW9ucz8i"
+          }
+        ],
+        "google:suggestrelevance": [607, 606, 605],
+        "google:suggesttype": ["QUERY", "QUERY", "QUERY"]
+      }])";
+  std::optional<base::Value> root_val =
+      base::JSONReader::Read(json_data, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  CHECK(root_val.has_value());
+  CHECK(root_val.value().is_list());
+  TestSchemeClassifier scheme_classifier;
+  AutocompleteInput input(u"chris", metrics::OmniboxEventProto::NTP,
+                          scheme_classifier);
+
+  // Test with allow_empty_suggestion = false (default).
+  {
+    SearchSuggestionParser::Results results;
+    ASSERT_TRUE(SearchSuggestionParser::ParseSuggestResults(
+        root_val->GetList(), input, scheme_classifier,
+        /*default_result_relevance=*/400,
+        /*is_keyword_result=*/false, {.allow_empty_suggestion = false},
+        &results));
+    // The empty suggestion should be dropped.
+    EXPECT_THAT(results.suggest_results,
+                ElementsAre(SuggestionIs(u"christmas"),
+                            SuggestionIs(u"christopher doe")));
+  }
+
+  // Test with allow_empty_suggestion = true.
+  {
+    SearchSuggestionParser::Results results;
+    ASSERT_TRUE(SearchSuggestionParser::ParseSuggestResults(
+        root_val->GetList(), input, scheme_classifier,
+        /*default_result_relevance=*/400,
+        /*is_keyword_result=*/false, {.allow_empty_suggestion = true},
+        &results));
+    // The empty suggestion should NOT be dropped.
+    EXPECT_THAT(
+        results.suggest_results,
+        testing::ElementsAre(SuggestionIs(u"christmas"), SuggestionIs(u""),
+                             SuggestionIs(u"christopher doe")));
   }
 }

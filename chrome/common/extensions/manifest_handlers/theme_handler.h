@@ -18,6 +18,8 @@ namespace extensions {
 
 // A structure to hold the parsed theme data.
 struct ThemeInfo : public Extension::ManifestData {
+  static const char* kManifestDataKey;
+
   // Define out of line constructor/destructor to please Clang.
   ThemeInfo();
   ~ThemeInfo() override;
@@ -30,34 +32,23 @@ struct ThemeInfo : public Extension::ManifestData {
   using ThemeImages = base::flat_map<std::string, std::vector<ThemeResource>>;
 
   static const ThemeImages* GetImages(const Extension* extension);
-  static const base::Value::Dict* GetColors(const Extension* extension);
-  static const base::Value::Dict* GetTints(const Extension* extension);
-  static const base::Value::Dict* GetDisplayProperties(
-      const Extension* extension);
-  static const base::Value::Dict* GetTabGroupColorPalette(
+  static const base::DictValue* GetColors(const Extension* extension);
+  static const base::DictValue* GetTints(const Extension* extension);
+  static const base::DictValue* GetDisplayProperties(
       const Extension* extension);
 
   // A map of resource ids to ExtensionResource entries.
   ThemeImages theme_images_;
 
   // A map of color names to colors.
-  base::Value::Dict theme_colors_;
+  base::DictValue theme_colors_;
 
   // A map of color names to colors.
-  base::Value::Dict theme_tints_;
+  base::DictValue theme_tints_;
 
   // A map of display properties.
-  base::Value::Dict theme_display_properties_;
+  base::DictValue theme_display_properties_;
 
-  // Maps a palette color key to a hue value (range: -1 to 360).
-  // Example:
-  // {
-  //   "grey_override": 230,
-  //   "blue_override": 12,
-  //   "green_override": 300,
-  //   "cyan_override": -1   // -1 indicates a grey/black color.
-  // }
-  base::Value::Dict theme_tab_group_color_palette_;
 };
 
 // Parses the "theme" manifest key.

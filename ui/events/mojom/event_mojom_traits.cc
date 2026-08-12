@@ -4,6 +4,9 @@
 
 #include "ui/events/mojom/event_mojom_traits.h"
 
+#include <cmath>
+
+#include "base/numerics/safe_conversions.h"
 #include "base/time/time.h"
 #include "mojo/public/cpp/base/time_mojom_traits.h"
 #include "ui/events/event.h"
@@ -13,16 +16,29 @@
 #include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
 #include "ui/events/mojom/event_constants.mojom.h"
+#include "ui/gfx/geometry/clamp_float_geometry.h"
 #include "ui/latency/mojom/latency_info_mojom_traits.h"
 
 namespace mojo {
 
 namespace {
 
+// Coordinates containing infinite or NaN values will cause Mojo deserialization
+// failures, closing the underlying connection. To prevent this, we sanitize and
+// clamp the coordinate values using gfx::ClampFloatGeometry (which leverages
+// base::saturated_cast with a custom handler to map NaN to 0.0f and clamp
+// infinities within valid limits). TODO(b:539466414)
+gfx::PointF sanitize_point(const gfx::PointF pt) {
+  return gfx::PointF(gfx::ClampFloatGeometry(pt.x()),
+                     gfx::ClampFloatGeometry(pt.y()));
+}
+
 ui::mojom::LocationDataPtr CreateLocationData(const ui::LocatedEvent* event) {
   ui::mojom::LocationDataPtr location_data(ui::mojom::LocationData::New());
-  location_data->relative_location = event->location_f();
-  location_data->root_location = event->root_location_f();
+
+  location_data->relative_location = sanitize_point(event->location_f());
+  location_data->root_location = sanitize_point(event->root_location_f());
+
   return location_data;
 }
 
@@ -394,10 +410,10 @@ bool StructTraits<ui::mojom::EventDataView, EventUniquePtr>::Read(
       if (!event.ReadKeyData<ui::mojom::KeyDataPtr>(&key_data))
         return false;
 
-      std::optional<ui::DomKey> dom_key =
-          ui::DomKey::FromBase(key_data->dom_key);
-      if (!dom_key)
+      const ui::DomKey dom_key(key_data->dom_key);
+      if (dom_key != ui::DomKey::NONE && !dom_key.IsValid()) {
         return false;
+      }
 
       if (!key_data->is_char &&
           (key_data->key_code < 0 || key_data->key_code > 255)) {
@@ -418,7 +434,7 @@ bool StructTraits<ui::mojom::EventDataView, EventUniquePtr>::Read(
               ? ui::EventType::kKeyPressed
               : ui::EventType::kKeyReleased;
       *out = std::make_unique<ui::KeyEvent>(event_type, key_code, dom_code,
-                                            event.flags(), *dom_key, time_stamp,
+                                            event.flags(), dom_key, time_stamp,
                                             key_data->is_char);
       break;
     }

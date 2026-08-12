@@ -21,19 +21,19 @@ import androidx.core.graphics.Insets;
 import org.chromium.base.Callback;
 import org.chromium.base.MathUtils;
 import org.chromium.base.metrics.RecordUserAction;
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplier;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browser_controls.BrowserStateBrowserControlsVisibilityDelegate;
-import org.chromium.chrome.browser.omnibox.OmniboxFocusReason;
 import org.chromium.chrome.browser.theme.ThemeColorProvider;
 import org.chromium.chrome.browser.toolbar.R;
 import org.chromium.chrome.browser.toolbar.ToolbarResourceUtils;
-import org.chromium.chrome.browser.toolbar.menu_button.MenuButtonCoordinator.SetFocusFunction;
 import org.chromium.chrome.browser.toolbar.menu_button.MenuButtonProperties.ShowBadgeProperty;
 import org.chromium.chrome.browser.toolbar.menu_button.MenuButtonProperties.ThemeProperty;
+import org.chromium.chrome.browser.ui.actions.appmenu.MenuButtonState;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuButtonHelper;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuCoordinator;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuHandler;
@@ -57,10 +57,11 @@ class MenuButtonMediator implements AppMenuObserver {
     private final Callback<AppMenuCoordinator> mAppMenuCoordinatorSupplierObserver;
     private @Nullable AppMenuPropertiesDelegate mAppMenuPropertiesDelegate;
     private @Nullable AppMenuButtonHelper mAppMenuButtonHelper;
-    private final ObservableSupplierImpl<AppMenuButtonHelper> mAppMenuButtonHelperSupplier;
+    private final SettableMonotonicObservableSupplier<AppMenuButtonHelper>
+            mAppMenuButtonHelperSupplier;
     private @Nullable AppMenuHandler mAppMenuHandler;
     private final BrowserStateBrowserControlsVisibilityDelegate mControlsVisibilityDelegate;
-    private final SetFocusFunction mSetUrlBarFocusFunction;
+    private final Runnable mClearOmniboxFocus;
     private final PropertyModel mPropertyModel;
     private final Runnable mRequestRenderRunnable;
     private final Activity mActivity;
@@ -92,7 +93,7 @@ class MenuButtonMediator implements AppMenuObserver {
      * @param isInOverviewModeSupplier Supplier of overview mode state.
      * @param controlsVisibilityDelegate Delegate for forcing persistent display of browser
      *     controls.
-     * @param setUrlBarFocusFunction Function that allows setting focus on the url bar.
+     * @param clearOmniboxFocus Runnable to clear focus on the url bar.
      * @param appMenuCoordinatorSupplier Supplier for the AppMenuCoordinator, which owns all other
      *     app menu MVC components.
      * @param windowAndroid The WindowAndroid instance.
@@ -109,7 +110,7 @@ class MenuButtonMediator implements AppMenuObserver {
             Runnable requestRenderRunnable,
             Supplier<Boolean> isInOverviewModeSupplier,
             BrowserStateBrowserControlsVisibilityDelegate controlsVisibilityDelegate,
-            SetFocusFunction setUrlBarFocusFunction,
+            Runnable clearOmniboxFocus,
             OneshotSupplier<AppMenuCoordinator> appMenuCoordinatorSupplier,
             WindowAndroid windowAndroid,
             Supplier<@Nullable MenuButtonState> menuButtonStateSupplier,
@@ -123,13 +124,13 @@ class MenuButtonMediator implements AppMenuObserver {
         mRequestRenderRunnable = requestRenderRunnable;
         mIsInOverviewModeSupplier = isInOverviewModeSupplier;
         mControlsVisibilityDelegate = controlsVisibilityDelegate;
-        mSetUrlBarFocusFunction = setUrlBarFocusFunction;
+        mClearOmniboxFocus = clearOmniboxFocus;
         mAppMenuCoordinatorSupplierObserver = this::onAppMenuInitialized;
         mAppMenuCoordinatorSupplier = appMenuCoordinatorSupplier;
         mAppMenuCoordinatorSupplier.onAvailable(mAppMenuCoordinatorSupplierObserver);
         mActivity = assertNonNull(windowAndroid.getActivity().get());
         mResources = mActivity.getResources();
-        mAppMenuButtonHelperSupplier = new ObservableSupplierImpl<>();
+        mAppMenuButtonHelperSupplier = ObservableSuppliers.createMonotonic();
         mKeyboardDelegate = windowAndroid.getKeyboardDelegate();
         mMenuButtonStateSupplier = menuButtonStateSupplier;
         mOnMenuButtonClicked = onMenuButtonClicked;
@@ -156,8 +157,8 @@ class MenuButtonMediator implements AppMenuObserver {
     public void onMenuVisibilityChanged(boolean isVisible) {
         if (isVisible) {
             // Defocus here to avoid handling focus in multiple places, e.g., when the
-            // forward button is pressed. (see crbug.com/414219)
-            mSetUrlBarFocusFunction.setFocus(false, OmniboxFocusReason.UNFOCUS);
+            // forward button is pressed. (see crbug.com/41132127)
+            mClearOmniboxFocus.run();
 
             View view = mActivity.getCurrentFocus();
             if (view != null) {
@@ -212,6 +213,11 @@ class MenuButtonMediator implements AppMenuObserver {
         }
     }
 
+    /** Returns whether there is enough space for the button to be shown. */
+    boolean hasSpaceToShow() {
+        return mPropertyModel.get(MenuButtonProperties.HAS_SPACE_TO_SHOW);
+    }
+
     /**
      * Informs the button on whether there is enough space for it to be shown.
      *
@@ -250,7 +256,7 @@ class MenuButtonMediator implements AppMenuObserver {
         mAppMenuPropertiesDelegate.loadingStateChanged(isLoading);
     }
 
-    ObservableSupplier<AppMenuButtonHelper> getMenuButtonHelperSupplier() {
+    MonotonicObservableSupplier<AppMenuButtonHelper> getMenuButtonHelperSupplier() {
         return mAppMenuButtonHelperSupplier;
     }
 

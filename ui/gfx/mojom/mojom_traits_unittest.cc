@@ -13,16 +13,22 @@
 #include "mojo/public/cpp/test_support/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
+#include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/rrect_f.h"
 #include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/hdr_metadata.h"
 #include "ui/gfx/mojom/accelerated_widget_mojom_traits.h"
 #include "ui/gfx/mojom/buffer_types_mojom_traits.h"
+#include "ui/gfx/mojom/color_space.mojom.h"
+#include "ui/gfx/mojom/color_space_mojom_traits.h"
 #include "ui/gfx/mojom/hdr_metadata.mojom.h"
 #include "ui/gfx/mojom/hdr_metadata_mojom_traits.h"
+#include "ui/gfx/mojom/native_handle_types_mojom_traits.h"
 #include "ui/gfx/mojom/presentation_feedback.mojom.h"
 #include "ui/gfx/mojom/presentation_feedback_mojom_traits.h"
 #include "ui/gfx/mojom/traits_test_service.mojom.h"
+#include "ui/gfx/mojom/transform_mojom_traits.h"
+#include "ui/gfx/native_pixmap_handle.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/selection_bound.h"
 
@@ -99,6 +105,41 @@ class StructTraitsTest : public testing::Test, public mojom::TraitsTestService {
   base::test::TaskEnvironment task_environment_;
   mojo::ReceiverSet<TraitsTestService> traits_test_receivers_;
 };
+
+skhdr::AdaptiveGlobalToneMap GetTestAgtm() {
+  skhdr::AdaptiveGlobalToneMap::HeadroomAdaptiveToneMap hatm;
+  hatm.fBaselineHdrHeadroom = 0.1f,
+  hatm.fGainApplicationSpacePrimaries = SkNamedPrimaries::kRec2020;
+  hatm.fAlternateImages = {
+      {
+          .fHdrHeadroom = 0.2,
+          .fColorGainFunction =
+              {
+                  .fComponentMixing =
+                      {
+                          .fRed = 0.01f,
+                          .fGreen = 0.02f,
+                          .fBlue = 0.03f,
+                          .fMax = 0.04f,
+                          .fMin = 0.05f,
+                          .fComponent = 0.85f,
+                      },
+                  .fGainCurve =
+                      {
+                          .fControlPoints =
+                              {
+                                  {.fX = 0.7f, .fY = 0.8f, .fM = 0.9f},
+                              },
+                      },
+              },
+      },
+  };
+  skhdr::AdaptiveGlobalToneMap agtm = {
+      .fHdrReferenceWhite = 100.0f,
+      .fHeadroomAdaptiveToneMap = {hatm},
+  };
+  return agtm;
+}
 
 }  // namespace
 
@@ -234,6 +275,28 @@ TEST_F(StructTraitsTest, AcceleratedWidget) {
   EXPECT_EQ(input, output);
 }
 
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+TEST_F(StructTraitsTest, NativePixmapHandle) {
+  // Test with a large offset that would trigger sign-extension if treated as
+  // int.
+  gfx::NativePixmapHandle native_pixmap_handle;
+  const uint32_t kStride = 1024;
+  const uint64_t kOffset = 0x80000000;
+  const uint64_t kSize = 4096;
+  native_pixmap_handle.planes.emplace_back(kStride, kOffset, kSize,
+                                           CreateValidLookingBufferHandle());
+
+  gfx::NativePixmapHandle output;
+  ASSERT_TRUE(
+      mojo::test::SerializeAndDeserialize<gfx::mojom::NativePixmapHandle>(
+          native_pixmap_handle, output));
+  ASSERT_FALSE(output.planes.empty());
+  EXPECT_EQ(kStride, output.planes[0].stride);
+  EXPECT_EQ(kOffset, output.planes[0].offset);
+  EXPECT_EQ(kSize, output.planes[0].size);
+}
+#endif
+
 TEST_F(StructTraitsTest, GpuMemoryBufferHandle) {
   const uint32_t kOffset = 126;
   const uint32_t kStride = 256;
@@ -302,18 +365,6 @@ TEST_F(StructTraitsTest, NullGpuMemoryBufferHandle) {
   EXPECT_TRUE(output.is_null());
 }
 
-TEST_F(StructTraitsTest, BufferFormat) {
-  using BufferFormatTraits =
-      mojo::EnumTraits<gfx::mojom::BufferFormat, gfx::BufferFormat>;
-  BufferFormat output;
-  mojo::Remote<mojom::TraitsTestService> remote = GetTraitsTestRemote();
-  for (int i = 0; i <= static_cast<int>(BufferFormat::LAST); ++i) {
-    BufferFormat input = static_cast<BufferFormat>(i);
-    BufferFormatTraits::FromMojom(BufferFormatTraits::ToMojom(input), &output);
-    EXPECT_EQ(output, input);
-  }
-}
-
 TEST_F(StructTraitsTest, BufferUsage) {
   using BufferUsageTraits =
       mojo::EnumTraits<gfx::mojom::BufferUsage, gfx::BufferUsage>;
@@ -321,7 +372,7 @@ TEST_F(StructTraitsTest, BufferUsage) {
   mojo::Remote<mojom::TraitsTestService> remote = GetTraitsTestRemote();
   for (int i = 0; i <= static_cast<int>(BufferUsage::LAST); ++i) {
     BufferUsage input = static_cast<BufferUsage>(i);
-    BufferUsageTraits::FromMojom(BufferUsageTraits::ToMojom(input), &output);
+    output = BufferUsageTraits::FromMojom(BufferUsageTraits::ToMojom(input));
     EXPECT_EQ(output, input);
   }
 }
@@ -399,19 +450,22 @@ TEST_F(StructTraitsTest, HDRMetadata) {
   EXPECT_EQ(input, output);
 
   // Include CTA 861.3.
-  input.cta_861_3.emplace(123, 456);
+  input.SetCLLI(skhdr::ContentLightLevelInformation{123, 456});
   EXPECT_NE(input, output);
   mojo::test::SerializeAndDeserialize<gfx::mojom::HDRMetadata>(input, output);
   EXPECT_EQ(input, output);
 
   // Include SMPTE ST 2086.
-  input.smpte_st_2086.emplace(SkNamedPrimaries::kRec2020, 789, 123);
+  input.SetMDCV(skhdr::MasteringDisplayColorVolume{
+      .fDisplayPrimaries = SkNamedPrimaries::kRec2020,
+      .fMaximumDisplayMasteringLuminance = 789,
+      .fMinimumDisplayMasteringLuminance = 123});
   EXPECT_NE(input, output);
   mojo::test::SerializeAndDeserialize<gfx::mojom::HDRMetadata>(input, output);
   EXPECT_EQ(input, output);
 
   // Include SDR white level.
-  input.ndwl.emplace(123.f);
+  input.SetNDWL(123.f);
   EXPECT_NE(input, output);
   mojo::test::SerializeAndDeserialize<gfx::mojom::HDRMetadata>(input, output);
   EXPECT_EQ(input, output);
@@ -423,12 +477,74 @@ TEST_F(StructTraitsTest, HDRMetadata) {
   EXPECT_EQ(input, output);
 
   // Include agtm.
-  const size_t agtm_size = 4;
-  const uint8_t agtm_data[agtm_size] = {0xde, 0xad, 0xbe, 0xef};
-  input.setSerializedAgtm(SkData::MakeWithCopy(agtm_data, agtm_size));
+  input.SetAgtm(GetTestAgtm());
   EXPECT_NE(input, output);
   mojo::test::SerializeAndDeserialize<gfx::mojom::HDRMetadata>(input, output);
   EXPECT_EQ(input, output);
+}
+
+TEST_F(StructTraitsTest, Transform_InvalidFloats) {
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+
+  gfx::Transform output;
+
+  // We can construct a transform with NaN matrix.
+  std::array<double, 16> bad_matrix;
+  bad_matrix.fill(0.0);
+  bad_matrix[0] = nan;
+  gfx::Transform input_nan = gfx::Transform::ColMajor(bad_matrix);
+  EXPECT_FALSE(mojo::test::SerializeAndDeserialize<gfx::mojom::Transform>(
+      input_nan, output));
+
+  // Test infinity.
+  bad_matrix[0] = inf;
+  gfx::Transform input_inf = gfx::Transform::ColMajor(bad_matrix);
+  EXPECT_FALSE(mojo::test::SerializeAndDeserialize<gfx::mojom::Transform>(
+      input_inf, output));
+}
+
+TEST_F(StructTraitsTest, ColorSpace_InvalidFloats) {
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float inf = std::numeric_limits<float>::infinity();
+
+  gfx::ColorSpace output;
+
+  skcms_Matrix3x3 bad_primaries = {
+      {{1.0f, 1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}};
+
+  // Test NaN custom primaries
+  bad_primaries.vals[0][0] = nan;
+  gfx::ColorSpace input_nan_prim = gfx::ColorSpace::CreateCustom(
+      bad_primaries, gfx::ColorSpace::TransferID::SRGB);
+  EXPECT_FALSE(mojo::test::SerializeAndDeserialize<gfx::mojom::ColorSpace>(
+      input_nan_prim, output));
+
+  // Test Inf custom primaries
+  bad_primaries.vals[0][0] = inf;
+  gfx::ColorSpace input_inf_prim = gfx::ColorSpace::CreateCustom(
+      bad_primaries, gfx::ColorSpace::TransferID::SRGB);
+  EXPECT_FALSE(mojo::test::SerializeAndDeserialize<gfx::mojom::ColorSpace>(
+      input_inf_prim, output));
+
+  // Test custom transfer function params
+  skcms_Matrix3x3 good_primaries = {
+      {{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}}};
+  skcms_TransferFunction bad_fn = {2.2f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+
+  // Test NaN transfer param
+  bad_fn.g = nan;
+  gfx::ColorSpace input_nan_fn =
+      gfx::ColorSpace::CreateCustom(good_primaries, bad_fn);
+  EXPECT_FALSE(mojo::test::SerializeAndDeserialize<gfx::mojom::ColorSpace>(
+      input_nan_fn, output));
+
+  // Test Inf transfer param
+  bad_fn.g = inf;
+  gfx::ColorSpace input_inf_fn =
+      gfx::ColorSpace::CreateCustom(good_primaries, bad_fn);
+  EXPECT_FALSE(mojo::test::SerializeAndDeserialize<gfx::mojom::ColorSpace>(
+      input_inf_fn, output));
 }
 
 }  // namespace gfx

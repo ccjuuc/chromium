@@ -23,6 +23,9 @@
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/ui_base_types.h"
 
+class SettingsOverriddenDialogDelegate;
+class BubbleDialogModelHostTestPassKey;
+
 namespace ui {
 
 class ComboboxModel;
@@ -207,6 +210,11 @@ class COMPONENT_EXPORT(UI_BASE) DialogModel final {
       return *this;
     }
 
+    Builder& SetElementIdentifier(ElementIdentifier element_identifier) {
+      model_->element_identifier_ = element_identifier;
+      return *this;
+    }
+
     Builder& SetTitle(std::u16string title) {
       model_->title_ = std::move(title);
       return *this;
@@ -251,6 +259,23 @@ class COMPONENT_EXPORT(UI_BASE) DialogModel final {
     // Disables the default behavior that the dialog closes when deactivated.
     Builder& DisableCloseOnDeactivate() {
       model_->close_on_deactivate_ = false;
+      return *this;
+    }
+
+    Builder& SetEnableInputProtection(bool enable) {
+      model_->enable_input_protection_ = enable;
+      return *this;
+    }
+
+    // Disables the default behavior that the dialog closes when Escape is
+    // pressed.
+    // Only certain dialogs are allowed to change this properly, as it has
+    // significant accessibility and usability implications.
+    template <typename T>
+      requires std::same_as<T, SettingsOverriddenDialogDelegate> ||
+               std::same_as<T, BubbleDialogModelHostTestPassKey>
+    Builder& DisableCloseOnEscape(base::PassKey<T>) {
+      model_->close_on_escape_ = false;
       return *this;
     }
 
@@ -599,6 +624,10 @@ class COMPONENT_EXPORT(UI_BASE) DialogModel final {
     return is_alert_dialog_;
   }
 
+  ElementIdentifier element_identifier(base::PassKey<DialogModelHost>) const {
+    return element_identifier_;
+  }
+
   Button* ok_button(base::PassKey<DialogModelHost>) {
     return ok_button_.has_value() ? &ok_button_.value() : nullptr;
   }
@@ -624,7 +653,16 @@ class COMPONENT_EXPORT(UI_BASE) DialogModel final {
     return close_on_deactivate_;
   }
 
+  bool close_on_escape(base::PassKey<DialogModelHost>) const {
+    return close_on_escape_;
+  }
+
+  bool enable_input_protection(base::PassKey<DialogModelHost>) const {
+    return enable_input_protection_;
+  }
+
   DialogModelSection* contents() { return &contents_; }
+
 
   // TODO(pbos): Replace this with a section() or something.
   const std::vector<std::unique_ptr<DialogModelField>>& fields(
@@ -644,6 +682,8 @@ class COMPONENT_EXPORT(UI_BASE) DialogModel final {
 
   std::optional<bool> override_show_close_button_;
   bool close_on_deactivate_ = true;
+  bool close_on_escape_ = true;
+  bool enable_input_protection_ = false;
   std::string internal_name_;
   std::u16string title_;
   std::u16string accessible_title_;
@@ -659,6 +699,7 @@ class COMPONENT_EXPORT(UI_BASE) DialogModel final {
   std::optional<mojom::DialogButton> override_default_button_;
   DialogModelSection contents_;
   ElementIdentifier initially_focused_field_;
+  ElementIdentifier element_identifier_;
   bool is_alert_dialog_ = false;
 
   std::optional<Button> ok_button_;

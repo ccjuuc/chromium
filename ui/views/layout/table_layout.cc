@@ -16,6 +16,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/views/layout/layout_types.h"
 #include "ui/views/view.h"
@@ -786,7 +787,7 @@ void TableLayout::CalculateSize(
 void TableLayout::Resize(int delta) const {
   if (delta < 0) {
     // DistributeDelta() assumes resizable columns can equally be shrunk. That
-    // isn't desired when given a size smaller than the prefered. Instead the
+    // isn't desired when given a size smaller than the preferred. Instead the
     // columns need to be resized but bounded by the minimum. ResizeUsingMin()
     // does this.
     ResizeUsingMin(delta);
@@ -899,5 +900,8 @@ bool TableLayout::CanUseMinimum(const ViewState& view_state) const {
                               col.size_type() != ColumnSize::kFixed;
                      });
 }
+
+BEGIN_METADATA(TableLayout)
+END_METADATA
 
 }  // namespace views

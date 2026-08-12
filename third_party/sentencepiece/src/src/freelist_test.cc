@@ -13,6 +13,7 @@
 // limitations under the License.!
 
 #include "freelist.h"
+
 #include "testharness.h"
 
 namespace sentencepiece {
@@ -43,7 +44,7 @@ TEST(FreeListTest, BasicTest) {
 
   // Zero-initialized after `Free`.
   for (size_t i = 0; i < kSize; ++i) {
-    int* n = l2.Allocate();
+    int *n = l2.Allocate();
     EXPECT_EQ(0, *n);
   }
 }

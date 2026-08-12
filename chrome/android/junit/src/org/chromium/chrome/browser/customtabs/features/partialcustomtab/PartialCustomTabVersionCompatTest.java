@@ -13,7 +13,6 @@ import static org.chromium.chrome.browser.customtabs.features.partialcustomtab.P
 import android.app.Activity;
 import android.graphics.Point;
 import android.graphics.Rect;
-import android.os.Build;
 import android.view.Display;
 import android.view.DisplayCutout;
 import android.view.Surface;
@@ -22,8 +21,6 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
-import org.robolectric.annotation.LooperMode.Mode;
 
 import org.chromium.base.CallbackUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -31,11 +28,10 @@ import org.chromium.base.test.BaseRobolectricTestRunner;
 /** Tests for {@link PartialCustomTabVersionCompat}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
-@LooperMode(Mode.PAUSED)
 public class PartialCustomTabVersionCompatTest {
     @Rule public final PartialCustomTabTestRule mPCCTTestRule = new PartialCustomTabTestRule();
 
-    @Config(sdk = Build.VERSION_CODES.Q)
+    @Config(sdk = BaseRobolectricTestRunner.MIN_SDK)
     @Test
     public void getXOffset_cutoutWidthIsExcluded() {
         final int cutoutWidth = 200;

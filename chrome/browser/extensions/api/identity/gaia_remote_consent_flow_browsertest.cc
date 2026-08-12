@@ -6,10 +6,12 @@
 
 #include <optional>
 
+#include "base/scoped_observation.h"
 #include "base/strings/strcat.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_observer.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -65,7 +67,8 @@ class MockGaiaRemoteConsentFlowDelegate
                void(const std::string& consent_result, const GaiaId& gaia_id));
 };
 
-class GaiaRemoteConsentFlowParamBrowserTest : public InProcessBrowserTest {
+class GaiaRemoteConsentFlowParamBrowserTest : public InProcessBrowserTest,
+                                              public ProfileObserver {
  public:
   GaiaRemoteConsentFlowParamBrowserTest()
       : fake_gaia_test_server_(net::EmbeddedTestServer::TYPE_HTTPS) {
@@ -84,6 +87,7 @@ class GaiaRemoteConsentFlowParamBrowserTest : public InProcessBrowserTest {
     fake_gaia_test_server_.StartAcceptingConnections();
     fake_gaia_.SetConfigurationHelper(kTestEmail, kTestAuthSIDCookie,
                                       kTestAuthLSIDCookie);
+    source_profile_observation_.Observe(browser()->GetProfile());
   }
 
   void TearDownOnMainThread() override {
@@ -116,11 +120,20 @@ class GaiaRemoteConsentFlowParamBrowserTest : public InProcessBrowserTest {
     fake_gaia_.IssueOAuthToken(kFakeRefreshToken, token_info);
   }
 
+  // ProfileObserver:
+  void OnProfileWillBeDestroyed(Profile* profile) override {
+    // GaiaRemoteConsentFlow holds profile refs, ensure we clear `flow_` in the
+    // case profile destruction occurs before test teardown runs to avoid
+    // dangling refs.
+    flow_.reset();
+    source_profile_observation_.Reset();
+  }
+
   CoreAccountInfo CreateFakeAccountInfoAndSetAsPrimary() {
     signin::IdentityManager* identity_manager =
         IdentityManagerFactory::GetForProfile(GetProfile());
     CoreAccountInfo account_info = SetPrimaryAccount(
-        identity_manager, kTestEmail, signin::ConsentLevel::kSync);
+        identity_manager, kTestEmail, signin::ConsentLevel::kSignin);
     SetRefreshTokenForPrimaryAccount(identity_manager, kFakeRefreshToken);
 
     AccountInfo primary_account_info =
@@ -191,6 +204,9 @@ class GaiaRemoteConsentFlowParamBrowserTest : public InProcessBrowserTest {
 
   net::EmbeddedTestServer fake_gaia_test_server_;
   FakeGaia fake_gaia_;
+
+  base::ScopedObservation<Profile, ProfileObserver> source_profile_observation_{
+      this};
 
   base::test::ScopedFeatureList scoped_feature_list_;
 };

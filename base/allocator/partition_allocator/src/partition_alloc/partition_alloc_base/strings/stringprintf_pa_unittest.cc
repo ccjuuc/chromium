@@ -6,12 +6,13 @@
 #include <cstddef>
 
 #include "partition_alloc/build_config.h"
+#include "partition_alloc/buildflags.h"
 #include "partition_alloc/partition_alloc_base/strings/stringprintf.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace partition_alloc::internal::base {
 
-#if PA_BUILDFLAG(IS_WIN) && defined(COMPONENT_BUILD) && \
+#if PA_BUILDFLAG(IS_WIN) && PA_BUILDFLAG(IS_COMPONENT_BUILD) && \
     PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 // TODO(crbug.com/1429450): TruncatingStringPrintf() defined in
 // allocator_base.dll allocates string from system allocator, but
@@ -37,11 +38,8 @@ TEST(MAYBE_PartitionAllocStringPrintfTest, TruncatingStringPrintfMisc) {
 // memory and returns an entire result.
 TEST(MAYBE_PartitionAllocStringPrintfTest,
      TruncatingStringPrintfTruncatesResult) {
-  std::vector<char> buffer;
-  buffer.resize(kMaxLengthOfTruncatingStringPrintfResult + 1);
-  std::fill(buffer.begin(), buffer.end(), 'a');
-  buffer.push_back('\0');
-  std::string result = TruncatingStringPrintf("%s", buffer.data());
+  std::string too_long(kMaxLengthOfTruncatingStringPrintfResult + 1, 'a');
+  std::string result = TruncatingStringPrintf("%s", too_long.c_str());
   EXPECT_EQ(kMaxLengthOfTruncatingStringPrintfResult, result.length());
   EXPECT_EQ(std::string::npos, result.find_first_not_of('a'));
 }

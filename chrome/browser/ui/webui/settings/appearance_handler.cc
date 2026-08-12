@@ -13,10 +13,15 @@
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/side_panel/side_panel_action_callback.h"
+#include "chrome/browser/ui/side_panel/side_panel_enums.h"
+#include "chrome/browser/ui/tabs/vertical_tab_strip_metrics.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/web_ui.h"
+#include "ui/actions/actions.h"
 
 namespace settings {
 
@@ -60,16 +65,22 @@ void AppearanceHandler::RegisterMessages() {
       "pinnedToolbarActionsAreDefault",
       base::BindRepeating(&AppearanceHandler::PinnedToolbarActionsAreDefault,
                           base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "recordVerticalTabStripModeChanged",
+      base::BindRepeating(
+          &AppearanceHandler::HandleRecordVerticalTabStripModeChanged,
+          base::Unretained(this)));
 }
 
 void AppearanceHandler::HandleUseTheme(ui::SystemTheme system_theme,
-                                       const base::Value::List& args) {
+                                       const base::ListValue& args) {
   DCHECK(system_theme != ui::SystemTheme::kDefault || !profile_->IsChild());
   ThemeServiceFactory::GetForProfile(profile_)->UseTheme(system_theme);
 }
 
-void AppearanceHandler::OpenCustomizeChrome(const base::Value::List& args) {
-  auto* browser = chrome::FindLastActive();
+void AppearanceHandler::OpenCustomizeChrome(const base::ListValue& args) {
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
   if (!browser) {
     return;
   }
@@ -77,19 +88,19 @@ void AppearanceHandler::OpenCustomizeChrome(const base::Value::List& args) {
 }
 
 void AppearanceHandler::OpenCustomizeChromeToolbarSection(
-    const base::Value::List& args) {
-  auto* browser = chrome::FindLastActive();
+    const base::ListValue& args) {
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
   CHECK(browser);
   chrome::ExecuteCommand(browser, IDC_SHOW_CUSTOMIZE_CHROME_TOOLBAR);
 }
 
-void AppearanceHandler::ResetPinnedToolbarActions(
-    const base::Value::List& args) {
+void AppearanceHandler::ResetPinnedToolbarActions(const base::ListValue& args) {
   PinnedToolbarActionsModel::Get(profile_)->ResetToDefault();
 }
 
 void AppearanceHandler::PinnedToolbarActionsAreDefault(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   CHECK_EQ(1U, args.size());
   const base::Value& callback_id = args[0];
   const bool are_default =
@@ -97,6 +108,14 @@ void AppearanceHandler::PinnedToolbarActionsAreDefault(
 
   AllowJavascript();
   ResolveJavascriptCallback(callback_id, base::Value(are_default));
+}
+
+void AppearanceHandler::HandleRecordVerticalTabStripModeChanged(
+    const base::ListValue& args) {
+  CHECK_EQ(1U, args.size());
+  const bool is_vertical = args[0].GetBool();
+  tabs::RecordVerticalTabStripModeChanged(
+      is_vertical, tabs::VerticalTabStripEntryPoint::kSettings);
 }
 
 }  // namespace settings

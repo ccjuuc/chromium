@@ -13,7 +13,6 @@
 #include <utility>
 
 #include "base/auto_reset.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/i18n/rtl.h"
@@ -31,6 +30,7 @@
 #include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
+#include "ui/compositor/layer_type.h"
 #include "ui/display/screen.h"
 #include "ui/events/event.h"
 #include "ui/gfx/canvas.h"
@@ -233,6 +233,7 @@ TableView::TableView(ui::TableModel* model,
 }
 
 TableView::~TableView() {
+  hover_view_ = nullptr;
   if (model_) {
     model_->SetObserver(nullptr);
   }
@@ -280,11 +281,16 @@ void TableView::Init(ui::TableModel* model,
                      const std::vector<ui::TableColumn>& columns,
                      TableType table_type,
                      bool single_selection) {
-  hover_layer_.SetBounds(gfx::Rect(0, 0, 1, 1));
+  InitializeHoverView();
+
   SetColumns(columns);
   SetTableType(table_type);
   SetSingleSelection(single_selection);
   SetModel(model);
+
+  // TODO(crbug.com/517186137): Move mouse hover_layer_ to a separate child view
+  // which will disable the paint clipping optimization, and revert back to
+  // layer clipping.
 }
 
 // TODO(sky): this doesn't support arbitrarily changing the model, rename this
@@ -362,6 +368,17 @@ void TableView::SetGrouperVisibility(bool visible) {
 
   grouper_visible_ = visible;
   SchedulePaint();
+}
+
+void TableView::InitializeHoverView() {
+  auto hover_view = std::make_unique<View>();
+  hover_view->SetCanProcessEventsWithinSubtree(false);
+  hover_view->SetPaintToLayer(ui::LayerType::LAYER_SOLID_COLOR);
+  hover_view->SetBackground(
+      views::CreateLayerBasedSolidBackground(ui::kColorTableRowHighlight));
+  hover_view->GetBackground()->SetInternalName("TableView/Hover");
+  hover_view->SetBoundsRect(gfx::Rect(0, 0, 1, 1));
+  hover_view_ = AddChildView(std::move(hover_view));
 }
 
 size_t TableView::GetRowCount() const {
@@ -496,13 +513,13 @@ void TableView::SetSortDescriptors(const SortDescriptors& sort_descriptors) {
 }
 
 bool TableView::IsColumnVisible(int id) const {
-  return base::Contains(visible_columns_, id, [](const VisibleColumn& column) {
-    return column.column.id;
-  });
+  return std::ranges::contains(
+      visible_columns_, id,
+      [](const VisibleColumn& column) { return column.column.id; });
 }
 
 bool TableView::HasColumn(int id) const {
-  return base::Contains(columns_, id, &ui::TableColumn::id);
+  return std::ranges::contains(columns_, id, &ui::TableColumn::id);
 }
 
 bool TableView::GetHasFocusIndicator() const {
@@ -601,6 +618,19 @@ void TableView::SetSelectOnRemove(bool select_on_remove) {
 
   select_on_remove_ = select_on_remove;
   OnPropertyChanged(&select_on_remove_, PropertyEffects::kNone);
+}
+
+bool TableView::GetSelectOnFocus() const {
+  return select_on_focus_;
+}
+
+void TableView::SetSelectOnFocus(bool select_on_focus) {
+  if (select_on_focus_ == select_on_focus) {
+    return;
+  }
+
+  select_on_focus_ = select_on_focus;
+  OnPropertyChanged(&select_on_focus_, PropertyEffects::kNone);
 }
 
 bool TableView::GetSortOnPaint() const {
@@ -866,12 +896,6 @@ void TableView::SyncHoverToScroll() {
   if (!IsHoverEffectEnabled()) {
     return;
   }
-  if (ScrollView* scroll_view = ScrollView::GetScrollViewForContents(this)) {
-    gfx::PointF current_offset = scroll_view->CurrentOffset();
-    scroll_offset_.set_x(static_cast<int>(current_offset.x()));
-    scroll_offset_.set_y(static_cast<int>(current_offset.y()));
-  }
-
   ForceHoverUpdate();
 }
 
@@ -938,17 +962,9 @@ void TableView::UpdateHoverLayer() {
     return;
   }
 
-  // Parent it to ScrollView's Viewport if we haven't already.
-  if (hover_layer_.parent() != parent()->layer()) {
-    CHECK(parent()->parent() == ScrollView::GetScrollViewForContents(this))
-        << "Not parented to a ScrollView. Mouse hovering is only supported for "
-           "TableViews who are parented to a ScrollView.";
-    parent()->layer()->Add(&hover_layer_);
-  }
-
   if (!hovered_rows_.has_value() ||
       !view_index_of_row_under_cursor_.has_value()) {
-    hover_layer_.SetTransform(gfx::Transform());
+    hover_view_->layer()->SetTransform(gfx::Transform());
     return;
   }
 
@@ -963,13 +979,12 @@ void TableView::UpdateHoverLayer() {
   if (end <= GetRowCount()) {
     gfx::Rect row_start_bounds = GetRowBounds(start);
 
-    hover_layer_.SetTransform(
+    hover_view_->layer()->SetTransform(
         gfx::Transform(gfx::AxisTransform2d::FromScaleAndTranslation(
             gfx::Vector2dF(
                 row_start_bounds.width(),
                 row_start_bounds.height() * static_cast<int>(range.length)),
-            gfx::Vector2dF(row_start_bounds.x() - scroll_offset_.x(),
-                           row_start_bounds.y() - scroll_offset_.y()))));
+            gfx::Vector2dF(row_start_bounds.x(), row_start_bounds.y()))));
   }
 }
 
@@ -1144,14 +1159,6 @@ void TableView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
   ForceHoverUpdate();
 }
 
-void TableView::OnThemeChanged() {
-  View::OnThemeChanged();
-
-  // Update the color by resolving the the color token.
-  hover_layer_.SetColor(
-      GetColorProvider()->GetColor(ui::kColorTableRowHighlight));
-}
-
 void TableView::OnModelChanged() {
   selection_model_.Clear();
   GetViewAccessibility().SetTableRowCount(static_cast<int32_t>(GetRowCount()));
@@ -1288,6 +1295,7 @@ gfx::Point TableView::GetKeyboardContextMenuLocation() {
 }
 
 void TableView::OnFocus() {
+  MaybeSelectFirstRowWhenFocused();
   SchedulePaintForSelection();
   UpdateFocusRings();
   ScheduleUpdateAccessibilityFocusIfNeeded();
@@ -1333,7 +1341,9 @@ void TableView::DrawString(gfx::Canvas* canvas,
     render_text->SetFontList(font_list_);
   }
 
-  UpdateRenderText(gfx::Rect(text_bounds), text, flags, color,
+  gfx::ElideBehavior elide_behavior =
+      visible_columns_[col].column.elide_behavior;
+  UpdateRenderText(gfx::Rect(text_bounds), text, flags, color, elide_behavior,
                    render_text.get());
   render_text->Draw(canvas);
 }
@@ -1343,10 +1353,12 @@ void TableView::UpdateRenderText(const gfx::Rect& rect,
                                  const std::u16string& text,
                                  int flags,
                                  SkColor color,
+                                 gfx::ElideBehavior elide_behavior,
                                  gfx::RenderText* render_text) {
   render_text->SetText(text);
   render_text->SetCursorEnabled(false);
   render_text->SetDisplayRect(rect);
+  render_text->SetElideBehavior(elide_behavior);
 
   // Set the text alignment explicitly based on the directionality of the UI,
   // if not specified.
@@ -1576,6 +1588,12 @@ void TableView::SortItemsAndUpdateMapping(bool schedule_paint) {
 
   GetViewAccessibility().SetTableRowCount(static_cast<int32_t>(GetRowCount()));
   UpdateVirtualAccessibilityChildrenBounds();
+
+  // Clear the selection if the active row is out of bounds.
+  if (selection_model_.active().has_value() &&
+      selection_model_.active().value() >= row_count) {
+    selection_model_.Clear();
+  }
 
   if (schedule_paint) {
     SchedulePaint();
@@ -1818,6 +1836,25 @@ void TableView::AdvanceActiveVisibleColumn(AdvanceDirection direction) {
     SetActiveVisibleColumnIndex(std::min(
         visible_columns_.size() - 1, active_visible_column_index_.value() + 1));
   }
+}
+
+void TableView::MaybeSelectFirstRowWhenFocused() {
+  // If the auto select on focus property is not enabled, do nothing.
+  if (!select_on_focus_) {
+    return;
+  }
+
+  // If there is already a selected value(s), do nothing.
+  if (selection_model_.active().has_value()) {
+    return;
+  }
+
+  // If there are no rows to select, do nothing.
+  if (GetRowCount() == 0) {
+    return;
+  }
+
+  SelectByViewIndex(size_t{0});
 }
 
 std::optional<size_t> TableView::GetActiveVisibleColumnIndex() const {
@@ -2271,7 +2308,13 @@ void TableView::InstallFocusRing() {
 }
 
 void TableView::UpdateFocusRings() {
-  views::FocusRing::Get(this)->SchedulePaint();
+  views::FocusRing* focus_ring = views::FocusRing::Get(this);
+  focus_ring->Refresh();
+
+  // Schedule a paint to ensure the focus ring is repainted if the output of the
+  // highlight path generator changes.
+  focus_ring->SchedulePaint();
+
   if (header_) {
     header_->UpdateFocusState();
   }
@@ -2539,15 +2582,13 @@ void TableView::UpdateAccessibilityFocus(
     if (!PlatformStyle::kTableViewSupportsKeyboardNavigationByCell ||
         !active_visible_column_index_.has_value()) {
       if (ax_header_row) {
-        ax_header_row->NotifyEvent(ax::mojom::Event::kSelection, true);
-        GetViewAccessibility().OverrideFocus(ax_header_row);
+        GetViewAccessibility().SetActiveDescendant(*ax_header_row);
       }
     } else {
       AXVirtualView* ax_header_cell = GetVirtualAccessibilityCellImpl(
           ax_header_row, active_visible_column_index_.value());
       if (ax_header_cell) {
-        ax_header_cell->NotifyEvent(ax::mojom::Event::kSelection, true);
-        GetViewAccessibility().OverrideFocus(ax_header_cell);
+        GetViewAccessibility().SetActiveDescendant(*ax_header_cell);
       }
     }
     return;
@@ -2555,7 +2596,7 @@ void TableView::UpdateAccessibilityFocus(
 
   if (!selection_model_.active().has_value() ||
       !active_visible_column_index_.has_value()) {
-    GetViewAccessibility().OverrideFocus(nullptr);
+    GetViewAccessibility().ClearActiveDescendant();
     return;
   }
 
@@ -2563,15 +2604,13 @@ void TableView::UpdateAccessibilityFocus(
   AXVirtualView* ax_row = GetVirtualAccessibilityBodyRow(active_row);
   if constexpr (!PlatformStyle::kTableViewSupportsKeyboardNavigationByCell) {
     if (ax_row) {
-      ax_row->NotifyEvent(ax::mojom::Event::kSelection, true);
-      GetViewAccessibility().OverrideFocus(ax_row);
+      GetViewAccessibility().SetActiveDescendant(*ax_row);
     }
   } else {
     AXVirtualView* ax_cell = GetVirtualAccessibilityCellImpl(
         ax_row, active_visible_column_index_.value());
     if (ax_cell) {
-      ax_cell->NotifyEvent(ax::mojom::Event::kSelection, true);
-      GetViewAccessibility().OverrideFocus(ax_cell);
+      GetViewAccessibility().SetActiveDescendant(*ax_cell);
     }
   }
 }
@@ -2677,6 +2716,7 @@ ADD_PROPERTY_METADATA(TableViewObserver*, Observer)
 ADD_READONLY_PROPERTY_METADATA(int, RowHeight)
 ADD_PROPERTY_METADATA(bool, SingleSelection)
 ADD_PROPERTY_METADATA(bool, SelectOnRemove)
+ADD_PROPERTY_METADATA(bool, SelectOnFocus)
 ADD_PROPERTY_METADATA(TableType, TableType)
 ADD_PROPERTY_METADATA(bool, SortOnPaint)
 END_METADATA

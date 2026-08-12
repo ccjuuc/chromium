@@ -5,12 +5,12 @@
 #include "chrome/browser/ui/webui/ash/settings/pages/power/device_power_handler.h"
 
 #include <memory>
+#include <ranges>
 #include <set>
 #include <utility>
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
-#include "base/containers/adapters.h"
 #include "base/json/json_writer.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
@@ -145,7 +145,7 @@ class PowerHandlerTest : public InProcessBrowserTest {
   // WebUI about settings being changed.
   [[nodiscard]] std::string GetLastSettingsChangedMessage() {
     for (const std::unique_ptr<content::TestWebUI::CallData>& data :
-         base::Reversed(web_ui_.call_data())) {
+         std::views::reverse(web_ui_.call_data())) {
       const std::string* name = data->arg1()->GetIfString();
       if (data->function_name() != "cr.webUIListenerCallback" || !name ||
           *name != PowerHandler::kPowerManagementSettingsChangedName) {
@@ -155,7 +155,7 @@ class PowerHandlerTest : public InProcessBrowserTest {
         ADD_FAILURE() << "Failed to get dict from " << *name << " message";
         continue;
       }
-      const base::Value::Dict& dict = data->arg2()->GetDict();
+      const base::DictValue& dict = data->arg2()->GetDict();
       std::string out;
       EXPECT_TRUE(base::JSONWriter::Write(dict, &out));
       return out;
@@ -170,7 +170,7 @@ class PowerHandlerTest : public InProcessBrowserTest {
   // settings are sent to the UI.
   std::string ToString(const DevicePowerSettings& settings) {
     auto dict =
-        base::Value::Dict()
+        base::DictValue()
             .Set(PowerHandler::kCurrentAcIdleBehaviorKey,
                  static_cast<int>(settings.current_ac_behavior))
             .Set(PowerHandler::kCurrentBatteryIdleBehaviorKey,
@@ -192,7 +192,7 @@ class PowerHandlerTest : public InProcessBrowserTest {
             .Set(PowerHandler::kBatterySaverFeatureEnabledKey,
                  settings.battery_saver_feature_enabled);
 
-    base::Value::List* list =
+    base::ListValue* list =
         dict.EnsureList(PowerHandler::kPossibleAcIdleBehaviorsKey);
     for (auto idle_behavior : settings.possible_ac_behaviors) {
       list->Append(static_cast<int>(idle_behavior));

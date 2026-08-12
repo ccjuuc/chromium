@@ -5,8 +5,6 @@
 #ifndef COMPONENTS_VIZ_COMMON_VIZ_UTILS_H_
 #define COMPONENTS_VIZ_COMMON_VIZ_UTILS_H_
 
-#include <string>
-
 #include "base/timer/elapsed_timer.h"
 #include "build/build_config.h"
 #include "cc/paint/filter_operations.h"
@@ -19,12 +17,9 @@ class Rect;
 
 namespace viz {
 
-#if BUILDFLAG(IS_ANDROID)
-VIZ_COMMON_EXPORT bool AlwaysUseWideColorGamut();
-#endif
-
+class CompositorRenderPassDrawQuad;
 class CopyOutputRequest;
-class RenderPassDrawQuadInternal;
+class AggregatedRenderPassDrawQuad;
 
 // Returns File Descriptor (FD) stats for current process.
 // Rendering resources can consume FDs. This this function can be used to
@@ -38,19 +33,41 @@ VIZ_COMMON_EXPORT bool GatherFDStats(base::TimeDelta* delta_time_taken,
 VIZ_COMMON_EXPORT gfx::Rect ClippedQuadRectangle(const DrawQuad* quad);
 VIZ_COMMON_EXPORT gfx::RectF ClippedQuadRectangleF(const DrawQuad* quad);
 
+// TODO(crbug.com/444264038): Remove this overload after
+// CompositorRenderPassDrawQuad is updated to contain filters. We should
+// consolidate the two overloads into one that accepts
+// `RenderPassDrawQuadInternal`.
+VIZ_COMMON_EXPORT gfx::Rect GetTargetExpandedRectForPixelMovingFilters(
+    const CompositorRenderPassDrawQuad& rpdq,
+    const cc::FilterOperations& filters);
+
+// TODO(crbug.com/444264038): Remove this overload after
+// CompositorRenderPassDrawQuad is updated to contain filters. We should
+// consolidate the two overloads into one that accepts
+// `RenderPassDrawQuadInternal`.
+VIZ_COMMON_EXPORT gfx::Rect GetExpandedRectForPixelMovingFilters(
+    const CompositorRenderPassDrawQuad& rpdq,
+    const cc::FilterOperations& filters);
+
 // The expanded area that will be changed by a render pass draw quad with a
 // pixel-moving foreground filter. The returned bounds are in the quad's target
 // coordinate space.
+// TODO(crbug.com/444264038): Remove this overload after
+// CompositorRenderPassDrawQuad is updated to contain filters. We should
+// consolidate the two overloads into one that accepts
+// `RenderPassDrawQuadInternal`.
 VIZ_COMMON_EXPORT gfx::Rect GetTargetExpandedRectForPixelMovingFilters(
-    const RenderPassDrawQuadInternal& rpdq,
-    const cc::FilterOperations& filters);
+    const AggregatedRenderPassDrawQuad& rpdq);
 
 // The expanded area that will be changed by a render pass draw quad with a
 // pixel-moving foreground filter. The returned bounds are in the quad's
 // original coordinate space.
+// TODO(crbug.com/444264038): Remove this overload after
+// CompositorRenderPassDrawQuad is updated to contain filters. We should
+// consolidate the two overloads into one that accepts
+// `RenderPassDrawQuadInternal`.
 VIZ_COMMON_EXPORT gfx::Rect GetExpandedRectForPixelMovingFilters(
-    const RenderPassDrawQuadInternal& rpdq,
-    const cc::FilterOperations& filters);
+    const AggregatedRenderPassDrawQuad& rpdq);
 
 // This transforms a rect from the view transition content surface/render_pass
 // space to the shared element quad space.
@@ -72,16 +89,5 @@ VIZ_COMMON_EXPORT void SetCopyOutputRequestResultSize(
     const gfx::Size& surface_size_in_pixels);
 
 }  // namespace viz
-
-#define VIZ_HIT_PATH(path_name)                                         \
-  do {                                                                  \
-    static bool init = false;                                           \
-    if (!init) {                                                        \
-      std::string name =                                                \
-          "Compositing.Display.VizCodePath." + std::string(#path_name); \
-      UMA_HISTOGRAM_BOOLEAN(name, true);                                \
-      init = true;                                                      \
-    }                                                                   \
-  } while (0)
 
 #endif  // COMPONENTS_VIZ_COMMON_VIZ_UTILS_H_

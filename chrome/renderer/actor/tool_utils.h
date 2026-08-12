@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "chrome/common/actor.mojom-forward.h"
@@ -28,6 +29,9 @@ class PointF;
 }  // namespace gfx
 
 namespace actor {
+
+std::string_view WebElementInteractionDisallowedReasonToString(
+    blink::WebElementInteractionDisallowedReason reason);
 
 // Class to help with iteratively refining interaction points. When created,
 // it grabs the client rects for the provided web node. Then if you perform a
@@ -89,6 +93,9 @@ std::string ToDebugString(const mojom::ToolTargetPtr& target);
 
 // Converts Node to a debug string of tag name, id and class.
 std::string NodeToDebugString(const blink::WebNode& node);
+
+// Finds the focused element from a render frame.
+blink::WebElement FindFocusedElement(const content::RenderFrame& frame);
 
 }  // namespace actor
 

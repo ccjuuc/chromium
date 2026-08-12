@@ -5,15 +5,15 @@
 #include "chrome/browser/ui/views/data_sharing/data_sharing_bubble_controller.h"
 
 #include "base/check_deref.h"
+#include "base/memory/ptr_util.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/views/data_sharing/data_sharing_utils.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
-#include "chrome/browser/ui/views/frame/top_container_view.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/saved_tab_groups/public/types.h"
@@ -136,32 +136,54 @@ void DataSharingBubbleController::Show(data_sharing::RequestInfo request_info) {
       std::move(contents_wrapper));
   bubble_view->SetProperty(views::kElementIdentifierKey,
                            kDataSharingBubbleElementId);
+  bubble_view->SetOwnershipOfNewWidget(
+      views::Widget::InitParams::CLIENT_OWNS_WIDGET);
   bubble_view_ = bubble_view->GetWeakPtr();
 
+  std::unique_ptr<views::Widget> widget;
   if (flow_value == data_sharing::kFlowShare) {
     // Sharing flow uses a normal bubble.
-    views::BubbleDialogDelegateView::CreateBubble(std::move(bubble_view));
+    widget = views::BubbleDialogDelegate::CreateBubble(
+        std::move(bubble_view).release());
   } else {
     // Manage and Join flow use modals. In this case the `anchor_view_for_share`
     // doesn't take effect.
     bubble_view->SetModalType(ui::mojom::ModalType::kWindow);
-    constrained_window::CreateBrowserModalDialogViews(
-        std::move(bubble_view), browser_view->GetNativeWindow());
+    widget = base::WrapUnique(constrained_window::CreateBrowserModalDialogViews(
+        std::move(bubble_view), browser_view->GetNativeWindow()));
   }
 
-  views::Widget* widget = bubble_view_->GetWidget();
   CHECK(widget);
-  bubble_widget_observation_.Observe(widget);
+  bubble_widget_ = std::move(widget);
+  bubble_widget_->MakeCloseSynchronous(base::BindOnce(
+      &DataSharingBubbleController::OnWidgetClosing, base::Unretained(this)));
 }
 
 void DataSharingBubbleController::Close() {
-  if (!bubble_view_) {
+  if (!bubble_widget_) {
     return;
   }
-  CHECK(bubble_view_->GetWidget());
-  bubble_view_->GetWidget()->CloseWithReason(
-      views::Widget::ClosedReason::kUnspecified);
+
+  if (on_share_link_requested_callback_) {
+    std::move(on_share_link_requested_callback_)
+        .Run(collaboration::CollaborationControllerDelegate::Outcome::kCancel,
+             std::nullopt);
+  }
+
+  MaybeRunJoinCallback(/*on_close=*/true);
+
+  if (on_close_callback_) {
+    std::move(on_close_callback_).Run(group_action_, group_action_progress_);
+  }
+
+  // Reset progress on dialog close.
+  group_action_ = std::nullopt;
+  group_action_progress_ = std::nullopt;
+
   bubble_view_ = nullptr;
+
+  base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(
+      FROM_HERE, bubble_widget_.release());
 }
 
 void DataSharingBubbleController::SetOnCloseCallback(OnCloseCallback callback) {
@@ -190,23 +212,11 @@ void DataSharingBubbleController::OnUrlReadyToShare(GURL url) {
   }
 }
 
-void DataSharingBubbleController::OnWidgetClosing(views::Widget* widget) {
-  bubble_widget_observation_.Reset();
-  if (on_share_link_requested_callback_) {
-    std::move(on_share_link_requested_callback_)
-        .Run(collaboration::CollaborationControllerDelegate::Outcome::kCancel,
-             std::nullopt);
-  }
-
-  MaybeRunJoinCallback(/*on_close=*/true);
-
-  if (on_close_callback_) {
-    std::move(on_close_callback_).Run(group_action_, group_action_progress_);
-  }
-
-  // Reset progress on dialog close.
-  group_action_ = std::nullopt;
-  group_action_progress_ = std::nullopt;
+void DataSharingBubbleController::OnWidgetClosing(
+    views::Widget::ClosedReason closed_reason) {
+  // Because MakeCloseSynchronous intercepted the original close request, we
+  // must explicitly tell it to proceed with destroying the widget.
+  Close();
 }
 
 void DataSharingBubbleController::ApiInitComplete() {

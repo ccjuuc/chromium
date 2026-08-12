@@ -7,6 +7,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -23,11 +24,17 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/webui/resources/cr_components/help_bubble/help_bubble.mojom.h"
+#include "ui/webui/resources/js/tracked_element/tracked_element.mojom-forward.h"
 #include "ui/webui/resources/js/tracked_element/tracked_element.mojom.h"
 
 namespace content {
 class WebContents;
 }  // namespace content
+
+namespace ui {
+class TrackedElementHandler;
+class TrackedElementWebUI;
+}  // namespace ui
 
 namespace user_education {
 
@@ -35,10 +42,7 @@ class HelpBubbleWebUI;
 
 // Base class abstracting away IPC so that handler functionality can be tested
 // entirely with mocks.
-// TODO(crbug.com/40243115): remove inheritance from TrackedElementHandler.
-class HelpBubbleHandlerBase
-    : public help_bubble::mojom::HelpBubbleHandler,
-      public tracked_element::mojom::TrackedElementHandler {
+class HelpBubbleHandlerBase : public help_bubble::mojom::HelpBubbleHandler {
  public:
   // Returns the WebContents associated with the HelpBubbleHandle. The return
   // value must never be null.
@@ -56,13 +60,17 @@ class HelpBubbleHandlerBase
   // contents) the owning browser can change during the handler's lifespan.
   // For special cases without a WebUIController, the HelpBubbleHandle creator
   // must provide a unique context of their own choosing.
-  ui::ElementContext context() const { return context_; }
+  ui::ElementContext context() const;
 
   // See `GetWebContentsCallback` above.
   content::WebContents* GetWebContents();
 
   // Returns whether a help bubble is showing for a given element.
   bool IsHelpBubbleShowingForTesting(ui::ElementIdentifier id) const;
+
+  base::WeakPtr<HelpBubbleHandlerBase> GetWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
 
  protected:
   // Provides reliable access to a HelpBubbleClient. Derived classes should
@@ -81,38 +89,9 @@ class HelpBubbleHandlerBase
     virtual help_bubble::mojom::HelpBubbleClient* GetClient() = 0;
   };
 
-  // Provides runtime visibility of the WebContents via the RenderWidgetHost.
-  // Stubbed here for testing.
-  class VisibilityProvider {
-   public:
-    VisibilityProvider() = default;
-    VisibilityProvider(const VisibilityProvider& other) = delete;
-    VisibilityProvider& operator=(const VisibilityProvider&) = delete;
-    virtual ~VisibilityProvider() = default;
-
-    void set_handler(HelpBubbleHandlerBase* handler) { handler_ = handler; }
-
-    // Does the check if visibility is currently unknown.
-    //
-    // This method may lazily instantiate some visibility-tracking logic.
-    virtual bool CheckIsVisible() = 0;
-
-   protected:
-    HelpBubbleHandlerBase* handler() const { return handler_; }
-
-    // Sets a new visibility state when visibility changes via an external
-    // event.
-    void SetLastKnownVisibility(std::optional<bool> visible);
-
-   private:
-    raw_ptr<HelpBubbleHandlerBase> handler_ = nullptr;
-  };
-
-  HelpBubbleHandlerBase(std::unique_ptr<ClientProvider> client_provider,
-                        std::unique_ptr<VisibilityProvider> visibility_provider,
-                        GetWebContentsCallback get_web_contents_callback,
-                        const std::vector<ui::ElementIdentifier>& identifiers,
-                        ui::ElementContext context);
+  HelpBubbleHandlerBase(
+      std::unique_ptr<ClientProvider> client_provider,
+      base::WeakPtr<ui::TrackedElementHandler> tracked_element_handler);
 
   help_bubble::mojom::HelpBubbleClient* GetClient();
   ClientProvider* client_provider() { return client_provider_.get(); }
@@ -121,7 +100,6 @@ class HelpBubbleHandlerBase
   virtual void ReportBadMessage(std::string_view error);
 
  private:
-  friend class VisibilityProvider;
   friend class FloatingWebUIHelpBubbleFactory;
   friend class HelpBubbleFactoryWebUI;
   friend class HelpBubbleWebUI;
@@ -129,62 +107,44 @@ class HelpBubbleHandlerBase
 
   struct ElementData;
 
-  bool is_web_contents_visible() const {
-    return web_contents_visibility_.value_or(false);
-  }
-
   std::unique_ptr<HelpBubbleWebUI> CreateHelpBubble(
-      ui::ElementIdentifier target,
+      ui::TrackedElementWebUI* element,
       HelpBubbleParams params);
-  void OnHelpBubbleClosing(ui::ElementIdentifier anchor_id);
-  bool ToggleHelpBubbleFocusForAccessibility(ui::ElementIdentifier anchor_id);
-  gfx::Rect GetHelpBubbleBoundsInScreen(ui::ElementIdentifier anchor_id) const;
-  void OnFloatingHelpBubbleCreated(ui::ElementIdentifier anchor_id,
+  void OnHelpBubbleClosing(ui::ElementIdentifier anchor_id,
+                           const std::string& secondary_id);
+  bool ToggleHelpBubbleFocusForAccessibility(ui::ElementIdentifier anchor_id,
+                                             const std::string& secondary_id);
+  gfx::Rect GetHelpBubbleBoundsInScreen(ui::ElementIdentifier anchor_id,
+                                        const std::string& secondary_id) const;
+  void OnFloatingHelpBubbleCreated(ui::TrackedElementWebUI* anchor_id,
                                    HelpBubble* help_bubble);
   void OnFloatingHelpBubbleClosed(ui::ElementIdentifier anchor_id,
-                                  HelpBubble* help_bubble,
+                                  const std::string& secondary_id,
+                                  const HelpBubble* help_bubble,
                                   HelpBubble::CloseReason);
-  void OnWebContentsVisibilityChanged(std::optional<bool> visibility);
 
   // mojom::HelpBubbleHandler:
-  void HelpBubbleButtonPressed(const std::string& identifier_name,
-                               uint8_t button) final;
+  void HelpBubbleButtonPressed(
+      tracked_element::mojom::TrackedElementIdentifierPtr id,
+      uint8_t button) final;
   void HelpBubbleClosed(
-      const std::string& identifier_name,
+      tracked_element::mojom::TrackedElementIdentifierPtr id,
       help_bubble::mojom::HelpBubbleClosedReason reason) final;
-  void BindTrackedElementHandler(
-      mojo::PendingReceiver<tracked_element::mojom::TrackedElementHandler>
-          handler) final;
 
-  // tracked_element::mojom::TrackedElementHandler:
-  void TrackedElementVisibilityChanged(const std::string& identifier_name,
-                                       bool visible,
-                                       const gfx::RectF& rect) final;
-  void TrackedElementActivated(const std::string& identifier_name) final;
-  void TrackedElementCustomEvent(const std::string& identifier_name,
-                                 const std::string& event_name) final;
+  ElementData* GetDataByName(
+      const tracked_element::mojom::TrackedElementIdentifierPtr& id,
+      std::string_view error_prefix,
+      ui::ElementIdentifier* found_identifier = nullptr);
 
-  ElementData* GetDataByName(const std::string& identifier_name,
-                             ui::ElementIdentifier* found_identifier = nullptr);
-
-  // The visibility of the corresponding WebContents in the browser; will be:
-  //  - true if the WebContents is visible on the screen
-  //  - false if the WebContents is rendered, but currently hidden (e.g. a
-  //    background tab or hidden side panel)
-  //  - nullopt if the visibility is not yet known, or there is no render host
-  //    to query for visibility
-  std::optional<bool> web_contents_visibility_;
+  ElementData* GetDataById(ui::ElementIdentifier id,
+                           const std::string& secondary_id);
+  const ElementData* GetDataById(ui::ElementIdentifier id,
+                                 const std::string& secondary_id) const;
 
   const std::unique_ptr<ClientProvider> client_provider_;
-  const std::unique_ptr<VisibilityProvider> visibility_provider_;
-  const GetWebContentsCallback get_web_contents_callback_;
-  const ui::ElementContext context_;
-  std::map<ui::ElementIdentifier, ElementData> element_data_;
-
-  // TODO(crbug.com/40243115): create a TrackedElementHandler, pass the pending
-  // receiver to it, and remove this receiver.
-  mojo::Receiver<tracked_element::mojom::TrackedElementHandler>
-      tracked_element_handler_receiver_{this};
+  base::WeakPtr<ui::TrackedElementHandler> tracked_element_handler_;
+  std::map<ui::ElementIdentifier, std::map<std::string, ElementData>>
+      element_data_;
 
   base::WeakPtrFactory<HelpBubbleHandlerBase> weak_ptr_factory_{this};
 };
@@ -203,8 +163,8 @@ class HelpBubbleHandlerBase
 // triggering a recreate). If a class has a raw_ptr to a
 // HelpBubbleHandler[Base], then a test MUST be added to ensure that the class
 // releases the reference when the HelpBubbleHandler is destroyed. Tests are
-// already provided for `HelpBubbleWebUI` and
-// `TrackedElementHelpBubbleWebUIAnchor` in help_bubble_handler_unittest.cc.
+// already provided for `HelpBubbleWebUI` and `TrackedElementWebUI` in
+// help_bubble_handler_unittest.cc.
 class HelpBubbleHandler : public HelpBubbleHandlerBase {
  public:
   // Create a help bubble handler (called from the HelpBubbleHandlerFactory
@@ -220,25 +180,12 @@ class HelpBubbleHandler : public HelpBubbleHandlerBase {
       mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandler>
           pending_handler,
       mojo::PendingRemote<help_bubble::mojom::HelpBubbleClient> pending_client,
-      content::WebUIController* controller,
-      const std::vector<ui::ElementIdentifier>& identifiers);
+      base::WeakPtr<ui::TrackedElementHandler> tracked_element_handler);
 
-  // Alternative constructor for when the factory wants to use something other
-  // than content::WebUIController. In which case, the factory specifies a
-  // custom GetWebContentsCallback and a `context` for use with
-  // ui::ElementContext.
-  HelpBubbleHandler(
-      mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandler>
-          pending_handler,
-      mojo::PendingRemote<help_bubble::mojom::HelpBubbleClient> pending_client,
-      GetWebContentsCallback get_web_contents_callback,
-      void* context,
-      const std::vector<ui::ElementIdentifier>& identifiers);
   ~HelpBubbleHandler() override;
 
  private:
   class ClientProvider;
-  class VisibilityProvider;
 
   void ReportBadMessage(std::string_view error) override;
 

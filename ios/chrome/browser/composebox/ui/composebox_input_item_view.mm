@@ -4,6 +4,8 @@
 
 #import "ios/chrome/browser/composebox/ui/composebox_input_item_view.h"
 
+#import "components/lens/lens_features.h"
+#import "ios/chrome/browser/composebox/public/composebox_constants.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
@@ -25,7 +27,7 @@ const CGFloat kLabelFontSize = 13.0;
 // The fade view width.
 const CGFloat kFadeViewWidth = 20.0f;
 /// The close button trailing.
-const CGFloat kTrailingMargin = 8.0;
+const CGFloat kTrailingMargin = 28.0;
 }  // namespace
 
 @implementation ComposeboxInputItemView {
@@ -50,9 +52,8 @@ const CGFloat kTrailingMargin = 8.0;
     [self setupConstraints];
   }
 
-  NSArray<UITrait>* traits =
-      TraitCollectionSetForTraits(@[ UITraitUserInterfaceStyle.class ]);
-  [self registerForTraitChanges:traits withAction:@selector(updateGradient)];
+  [self registerForTraitChanges:@[ UITraitUserInterfaceStyle.class ]
+                     withAction:@selector(updateGradient)];
 
   return self;
 }
@@ -80,13 +81,18 @@ const CGFloat kTrailingMargin = 8.0;
     case ComposeboxInputItemType::kComposeboxInputItemTypeImage:
       _previewImageView.image = item.previewImage;
       break;
-    case ComposeboxInputItemType::kComposeboxInputItemTypeFile: {
+    case ComposeboxInputItemType::kComposeboxInputItemTypeRawFile: {
+      _leadingIconImageView.image =
+          SymbolWithPointSize(SymbolPaperclip, kLeadingIconSize);
+      _titleLabel.text = item.title;
+    } break;
+    case ComposeboxInputItemType::kComposeboxInputItemTypePDF: {
       UIImageSymbolConfiguration* configuration = [UIImageSymbolConfiguration
           configurationWithPointSize:kLeadingIconSize
                               weight:UIImageSymbolWeightMedium
                                scale:UIImageSymbolScaleLarge];
       UIImage* pdfSymbol = SymbolWithPalette(
-          CustomSymbolWithConfiguration(kPDFFillSymbol, configuration),
+          SymbolWithConfiguration(SymbolPDFFill, configuration),
           @[ theme.pdfSymbolColor ]);
       _leadingIconImageView.image = pdfSymbol;
       // The PDF symbol has a 2 points intrinsice padding. To normalize it to
@@ -101,10 +107,19 @@ const CGFloat kTrailingMargin = 8.0;
     case ComposeboxInputItemType::kComposeboxInputItemTypeTab:
       _leadingIconImageView.image =
           item.leadingIconImage
-              ?: DefaultSymbolWithPointSize(kGlobeAmericasSymbol,
-                                            kLeadingIconSize);
+              ?: SymbolWithPointSize(SymbolGlobeAmericas, kLeadingIconSize);
       _titleLabel.text = item.title;
       break;
+    case ComposeboxInputItemType::kComposeboxInputItemTypeDrive: {
+      UIImageSymbolConfiguration* configuration = [UIImageSymbolConfiguration
+          configurationWithPointSize:kLeadingIconSize
+                              weight:UIImageSymbolWeightMedium
+                               scale:UIImageSymbolScaleLarge];
+      _leadingIconImageView.image =
+          item.leadingIconImage
+              ?: SymbolWithConfiguration(SymbolMyDrive, configuration);
+      _titleLabel.text = item.title;
+    } break;
   }
   [self updateFadeViewVisibility];
 }

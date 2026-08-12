@@ -6,7 +6,6 @@
 #include <variant>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
@@ -18,6 +17,7 @@
 #include "base/test/test_timeouts.h"
 #include "build/build_config.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_browsertest_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -59,7 +59,7 @@
 
 #if BUILDFLAG(ENABLE_PDF)
 #include "base/test/with_feature_override.h"
-#include "chrome/browser/pdf/test_pdf_viewer_stream_manager.h"
+#include "chrome/browser/pdf/test_mime_handler_stream_manager.h"
 #include "components/guest_view/browser/guest_view_base.h"
 #include "components/guest_view/browser/guest_view_manager_delegate.h"
 #include "components/guest_view/browser/test_guest_view_manager.h"
@@ -263,16 +263,14 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessInteractiveBrowserTest,
   // Generate a few keyboard events and route them to currently focused frame.
   // We wait for replies to be sent back from the page, since keystrokes may
   // take time to propagate to the renderer's main thread.
-  SimulateKeyPress(web_contents, ui::DomKey::FromCharacter('F'),
-                   ui::DomCode::US_F, ui::VKEY_F, false, false, false, false);
+  content::SimulateCharTyped(web_contents, 'F');
+
   EXPECT_EQ("F", EvalJs(child, "waitForInput();"));
 
-  SimulateKeyPress(web_contents, ui::DomKey::FromCharacter('O'),
-                   ui::DomCode::US_O, ui::VKEY_O, false, false, false, false);
+  content::SimulateCharTyped(web_contents, 'O');
   EXPECT_EQ("FO", EvalJs(child, "waitForInput();"));
 
-  SimulateKeyPress(web_contents, ui::DomKey::FromCharacter('O'),
-                   ui::DomCode::US_O, ui::VKEY_O, false, false, false, false);
+  content::SimulateCharTyped(web_contents, 'O');
   EXPECT_EQ("FOO", EvalJs(child, "waitForInput();"));
 }
 
@@ -754,7 +752,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessInteractiveFencedFrameBrowserTest,
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 // Ensures that renderers know to advance focus to sibling frames and parent
 // frames in the presence of mouse click initiated focus changes.
-// Verifies against regression of https://crbug.com/702330
+// Verifies against regression of https://crbug.com/40511146
 IN_PROC_BROWSER_TEST_F(SitePerProcessInteractiveBrowserTest,
                        TabAndMouseFocusNavigation) {
   GURL main_url(embedded_test_server()->GetURL(
@@ -897,8 +895,15 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessInteractiveBrowserTest,
       [web_contents](content::RenderFrameHost* receiver,
                      const gfx::Point& point) {
         auto content_bounds = web_contents->GetContainerBounds();
-        ui_controls::SendMouseMove(point.x() + content_bounds.x(),
-                                   point.y() + content_bounds.y());
+        // Wait for the mouse move to be processed before sending the click.
+        // On Wayland, SendMouseClick uses last_mouse_location() to find the
+        // target window; if the move hasn't been processed yet,
+        // last_mouse_location() is stale and the test clicks wrong point.
+        base::RunLoop move_loop;
+        ui_controls::SendMouseMoveNotifyWhenDone(point.x() + content_bounds.x(),
+                                                 point.y() + content_bounds.y(),
+                                                 move_loop.QuitClosure());
+        move_loop.Run();
         ui_controls::SendMouseClick(ui_controls::LEFT);
 
         LOG(INFO) << "Click element";
@@ -1132,7 +1137,7 @@ void WaitForMultipleFullscreenEvents(
     std::vector<std::string> response_params = base::SplitString(
         response, " ", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
     if (response_params[0] == "fullscreenchange") {
-      EXPECT_TRUE(base::Contains(remaining_events, response_params[1]));
+      EXPECT_TRUE(remaining_events.contains(response_params[1]));
       remaining_events.erase(response_params[1]);
     } else if (response_params[0] == "resize") {
       resize_validated = true;
@@ -1154,7 +1159,7 @@ void WaitForMultipleFullscreenEvents(
 // - fullscreen CSS is applied correctly in both frames.
 //
 #if BUILDFLAG(IS_MAC)
-// https://crbug.com/850594
+// https://crbug.com/41393319
 #define MAYBE_FullscreenElementInSubframe DISABLED_FullscreenElementInSubframe
 #else
 #define MAYBE_FullscreenElementInSubframe FullscreenElementInSubframe
@@ -1195,7 +1200,7 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessInteractiveBrowserTest,
   }
 
   // Verify that the browser has entered fullscreen for the current tab.
-  EXPECT_TRUE(browser()->window()->IsFullscreen());
+  EXPECT_TRUE(browser()->GetWindow()->IsFullscreen());
   EXPECT_TRUE(web_contents->IsFullscreen());
 
   // Verify that the <div> has fullscreen style (:-webkit-full-screen) in the
@@ -1227,7 +1232,7 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessInteractiveBrowserTest,
     waiter.Wait();
   }
 
-  EXPECT_FALSE(browser()->window()->IsFullscreen());
+  EXPECT_FALSE(browser()->GetWindow()->IsFullscreen());
 
   // Verify that the fullscreen styles were removed from the <div> and its
   // container <iframe>.
@@ -1291,7 +1296,7 @@ void SitePerProcessInteractiveBrowserTest::FullscreenElementInABA(
   }
 
   // Verify that the browser has entered fullscreen for the current tab.
-  EXPECT_TRUE(browser()->window()->IsFullscreen());
+  EXPECT_TRUE(browser()->GetWindow()->IsFullscreen());
   EXPECT_TRUE(web_contents->IsFullscreen());
 
   // Verify that the <div> has fullscreen style in the bottom frame, and that
@@ -1328,7 +1333,7 @@ void SitePerProcessInteractiveBrowserTest::FullscreenElementInABA(
     waiter.Wait();
   }
 
-  EXPECT_FALSE(browser()->window()->IsFullscreen());
+  EXPECT_FALSE(browser()->GetWindow()->IsFullscreen());
 
   // Verify that the fullscreen styles were removed from the <div> and its
   // container <iframe>'s.
@@ -1345,7 +1350,7 @@ void SitePerProcessInteractiveBrowserTest::FullscreenElementInABA(
   EXPECT_EQ("none", GetFullscreenElementId(grandchild));
 }
 
-// https://crbug.com/1087392: Flaky for ASAN and TSAN
+// https://crbug.com/40694840: Flaky for ASAN and TSAN
 #if BUILDFLAG(IS_MAC) || defined(ADDRESS_SANITIZER) || defined(THREAD_SANITIZER)
 #define MAYBE_FullscreenElementInABAAndExitViaEscapeKey \
   DISABLED_FullscreenElementInABAAndExitViaEscapeKey
@@ -1358,8 +1363,8 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessInteractiveBrowserTest,
   FullscreenElementInABA(FullscreenExitMethod::ESC_PRESS);
 }
 
-// This test is flaky on Linux (crbug.com/851236) and also not working
-// on Mac (crbug.com/850594).
+// This test is flaky on Linux (crbug.com/41393671) and also not working
+// on Mac (crbug.com/41393319).
 IN_PROC_BROWSER_TEST_F(SitePerProcessInteractiveBrowserTest,
                        DISABLED_FullscreenElementInABAAndExitViaJS) {
   FullscreenElementInABA(FullscreenExitMethod::JS_CALL);
@@ -1449,7 +1454,7 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessInteractiveBrowserTest,
   }
 
   // Verify that the browser has entered fullscreen for the current tab.
-  EXPECT_TRUE(browser()->window()->IsFullscreen());
+  EXPECT_TRUE(browser()->GetWindow()->IsFullscreen());
   EXPECT_TRUE(web_contents->IsFullscreen());
 
   // Check document.webkitFullscreenElement.  It should point to corresponding
@@ -1487,7 +1492,7 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessInteractiveBrowserTest,
     waiter.Wait();
   }
 
-  EXPECT_FALSE(browser()->window()->IsFullscreen());
+  EXPECT_FALSE(browser()->GetWindow()->IsFullscreen());
 
   // Check that document.webkitFullscreenElement has been cleared in all
   // frames.
@@ -1510,9 +1515,9 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessInteractiveBrowserTest,
 }
 
 // Test that deleting a RenderWidgetHost that holds the mouse lock won't cause a
-// crash. https://crbug.com/619571.
+// crash. https://crbug.com/40472780.
 
-// Flaky on multiple builders. https://crbug.com/1059632
+// Flaky on multiple builders. https://crbug.com/40678582
 IN_PROC_BROWSER_TEST_F(SitePerProcessInteractiveBrowserTest,
                        DISABLED_RenderWidgetHostDeletedWhileMouseLocked) {
   GURL main_url(embedded_test_server()->GetURL(
@@ -1556,13 +1561,13 @@ class SitePerProcessInteractivePDFTest
   void SetUpOnMainThread() override {
     SitePerProcessInteractiveBrowserTest::SetUpOnMainThread();
     if (UseOopif()) {
-      factory_ = std::make_unique<pdf::TestPdfViewerStreamManagerFactory>();
+      factory_ = std::make_unique<pdf::TestMimeHandlerStreamManagerFactory>();
     } else {
       auto factory =
           std::make_unique<guest_view::TestGuestViewManagerFactory>();
       test_guest_view_manager_ = factory->GetOrCreateTestGuestViewManager(
-          browser()->profile(), extensions::ExtensionsAPIClient::Get()
-                                    ->CreateGuestViewManagerDelegate());
+          browser()->GetProfile(), extensions::ExtensionsAPIClient::Get()
+                                       ->CreateGuestViewManagerDelegate());
       factory_ = std::move(factory);
     }
   }
@@ -1580,23 +1585,24 @@ class SitePerProcessInteractivePDFTest
     return test_guest_view_manager_;
   }
 
-  pdf::TestPdfViewerStreamManager* GetTestPdfViewerStreamManager() const {
-    return std::get<std::unique_ptr<pdf::TestPdfViewerStreamManagerFactory>>(
+  pdf::TestMimeHandlerStreamManager* GetTestMimeHandlerStreamManager() const {
+    return std::get<std::unique_ptr<pdf::TestMimeHandlerStreamManagerFactory>>(
                factory_)
-        ->GetTestPdfViewerStreamManager(
+        ->GetTestMimeHandlerStreamManager(
             browser()->tab_strip_model()->GetActiveWebContents());
   }
 
-  void CreateTestPdfViewerStreamManager() const {
-    std::get<std::unique_ptr<pdf::TestPdfViewerStreamManagerFactory>>(factory_)
-        ->CreatePdfViewerStreamManager(
+  void CreateTestMimeHandlerStreamManager() const {
+    std::get<std::unique_ptr<pdf::TestMimeHandlerStreamManagerFactory>>(
+        factory_)
+        ->CreateMimeHandlerStreamManager(
             browser()->tab_strip_model()->GetActiveWebContents());
   }
 
   void WaitUntilPdfLoaded(content::RenderFrameHost* embedder_host) {
     if (UseOopif()) {
       ASSERT_TRUE(
-          GetTestPdfViewerStreamManager()->WaitUntilPdfLoaded(embedder_host));
+          GetTestMimeHandlerStreamManager()->WaitUntilPdfLoaded(embedder_host));
     } else {
       auto* guest_view =
           GetTestGuestViewManager()->WaitForSingleGuestViewCreated();
@@ -1614,14 +1620,14 @@ class SitePerProcessInteractivePDFTest
  private:
   std::variant<std::monostate,
                std::unique_ptr<guest_view::TestGuestViewManagerFactory>,
-               std::unique_ptr<pdf::TestPdfViewerStreamManagerFactory>>
+               std::unique_ptr<pdf::TestMimeHandlerStreamManagerFactory>>
       factory_;
   raw_ptr<guest_view::TestGuestViewManager> test_guest_view_manager_;
 };
 
 // This test loads a PDF inside an OOPIF and then verifies that context menu
 // shows up at the correct position.
-// TODO(crbug.com/1423184, crbug.com/327338993): Fix flaky test.
+// TODO(crbug.com/40897346, crbug.com/327338993): Fix flaky test.
 #if BUILDFLAG(IS_WIN) || (BUILDFLAG(IS_LINUX) && defined(ADDRESS_SANITIZER))
 #define MAYBE_ContextMenuPositionForEmbeddedPDFInCrossOriginFrame \
   DISABLED_ContextMenuPositionForEmbeddedPDFInCrossOriginFrame
@@ -1751,7 +1757,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessInteractivePDFTest,
   if (UseOopif()) {
     // Create the manager first, since the following script doesn't block until
     // navigation is complete.
-    CreateTestPdfViewerStreamManager();
+    CreateTestMimeHandlerStreamManager();
   }
 
   GURL pdf_url(embedded_test_server()->GetURL("/pdf/test.pdf"));
@@ -1840,7 +1846,7 @@ void WaitForFramePositionUpdated(content::RenderFrameHost* render_frame_host,
 // This test verifies that when clicking outside the bounds of a date picker
 // associated with an <input> inside an OOPIF, the RenderWidgetHostImpl
 // corresponding to the WebPagePopup is destroyed (see
-// https://crbug.com/671732).
+// https://crbug.com/41289866).
 IN_PROC_BROWSER_TEST_F(SitePerProcessInteractiveBrowserTest,
                        ShowAndHideDatePopupInOOPIFMultipleTimes) {
   GURL main_url(embedded_test_server()->GetURL(
@@ -1925,7 +1931,7 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessInteractiveBrowserTest,
 // There is a problem of missing keyup events with the command key after
 // the NSEvent is sent to NSApplication in ui/base/test/ui_controls_mac.mm .
 // This test is disabled on only the Mac until the problem is resolved.
-// See http://crbug.com/425859 for more information.
+// See http://crbug.com/40390352 for more information.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_SubframeAnchorOpenedInBackgroundTab \
   DISABLED_SubframeAnchorOpenedInBackgroundTab
@@ -1934,7 +1940,7 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessInteractiveBrowserTest,
   SubframeAnchorOpenedInBackgroundTab
 #endif
 // Tests that ctrl-click in a subframe results in a background, not a foreground
-// tab - see https://crbug.com/804838.  This test is somewhat similar to
+// tab - see https://crbug.com/40559397.  This test is somewhat similar to
 // CtrlClickShouldEndUpIn*ProcessTest tests, but this test has to simulate an
 // actual mouse click.
 IN_PROC_BROWSER_TEST_F(SitePerProcessInteractiveBrowserTest,
@@ -1985,9 +1991,9 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessInteractiveBrowserTest,
 }
 
 // Check that window.focus works for cross-process popups.
-// Flaky on ChromeOS debug and ASAN builds. https://crbug.com/1326293
-// Flaky on Linux https://crbug.com/1336109.
-// Flaky on Win https://crbug.com/1337725.
+// Flaky on ChromeOS debug and ASAN builds. https://crbug.com/40840456
+// Flaky on Linux https://crbug.com/40847510.
+// Flaky on Win https://crbug.com/40848559.
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || \
     (BUILDFLAG(IS_CHROMEOS) &&                  \
      (!defined(NDEBUG) || defined(ADDRESS_SANITIZER)))

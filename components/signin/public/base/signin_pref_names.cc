@@ -4,6 +4,8 @@
 
 #include "components/signin/public/base/signin_pref_names.h"
 
+#include "build/build_config.h"
+
 namespace prefs {
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -17,18 +19,22 @@ const char kAccountIdMigrationState[] = "account_id_migration_state";
 // tracked by this signin.
 const char kAccountInfo[] = "account_info";
 
-// Whether the "clear on exit" migration is complete.
-// If this preference is not true, then the user needs to be migrated.
-// If a user has set clear cookies on exit prior to the activation of explicit
-// signin which changes the behavior of signed in users, they will need to do a
-// migration. The user can be migrated in various ways:
-// - the first time they launch Chrome, if they don't use the cookie setting
-// - by changing the value of the setting when it has the new behavior
-// - by seeing a notice dialog if they close the browser while being in a state
-//   where the new cookie setting behavior makes a difference (signed in with
-//   explicit signin and non-syncing).
-const char kCookieClearOnExitMigrationNoticeComplete[] =
-    "signin.cookie_clear_on_exit_migration_notice_complete";
+// Dictionary pref that contains the AccountPreviewPreference result.
+const char kAccountPreviewPreference[] = "signin.account_preview_preference";
+
+// Time pref that tracks the last time account preview data was refreshed.
+const char kAccountPreviewDataLastUpdatePref[] =
+    "signin.account_preview_data_last_update";
+
+// List pref that tracks the GAIA IDs of accounts present during the last data
+// fetch.
+const char kAccountPreviewDataLastFetchAccounts[] =
+    "signin.account_preview_data_last_fetch_accounts";
+
+// Integer pref that tracks the number of non-periodic full fetches until the
+// next periodic fetch.
+const char kAccountPreviewNonPeriodicFetchCountPref[] =
+    "signin.account_preview_non_periodic_fetch_count";
 
 // A hash of the GAIA accounts present in the content area. Order does not
 // affect the hash, but signed in/out status will. Stored as the Base64 string.
@@ -52,6 +58,7 @@ const char kGoogleServicesAccountId[] = "google.services.account_id";
 const char kGoogleServicesConsentedToSync[] =
     "google.services.consented_to_sync";
 
+#if !BUILDFLAG(IS_IOS)
 // Similar to `kGoogleServicesLastSyncingUsername` that is not cleared on
 // signout. Note this is always a Gaia ID, as opposed to
 // `kGoogleServicesAccountId` which may be an email.
@@ -64,6 +71,7 @@ const char kGoogleServicesLastSyncingGaiaId[] = "google.services.last_gaia_id";
 // last account should use `kGoogleServicesLastSyncingGaiaId` instead.
 const char kGoogleServicesLastSyncingUsername[] =
     "google.services.last_username";
+#endif  // !BUILDFLAG(IS_IOS)
 
 // Similar to kGoogleServicesLastSyncingUsername above but written for all
 // signed-in users, no matter whether they were syncing or not.
@@ -87,6 +95,11 @@ const char kGoogleServicesSyncingGaiaIdMigratedToSignedIn[] =
 // instead of the account ID.
 const char kGoogleServicesSyncingUsernameMigratedToSignedIn[] =
     "google.services.syncing_username_migrated_to_signed_in";
+
+// An integer indicating the sync-to-signin migration type of the user.
+// Possible values are defined in SyncToSigninMigrationType enum.
+const char kGoogleServicesSyncingUserMigrationType[] =
+    "google.services.syncing_user_migration_type";
 
 // Local state pref containing a string regex that restricts which accounts
 // can be used to log in to chrome (e.g. "*@google.com"). If missing or blank,

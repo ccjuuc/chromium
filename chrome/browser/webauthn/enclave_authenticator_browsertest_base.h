@@ -16,7 +16,6 @@
 #include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/process/process.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/scoped_logging_settings.h"
 #include "base/test/test_mock_time_task_runner.h"
 #include "build/build_config.h"
@@ -30,7 +29,6 @@
 #include "crypto/scoped_fake_user_verifying_key_provider.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "device/fido/enclave/constants.h"
-#include "device/fido/public/features.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "services/network/test/test_url_loader_factory.h"
 
@@ -92,7 +90,15 @@ class EnclaveAuthenticatorTestBase : public SyncTest {
   webauthn::PasskeyModel& passkey_model();
   EnclaveManager& enclave_manager();
 
+  // This makes it so that a UV key provider is returned (i.e. non-null),
+  // simulating that the platform supports user-verifying keys. By default, UV
+  // key availability is true.
   void EnableUVKeySupport(bool fake_hardware_backing = false);
+
+  // This lets clients override UV key availability after UV key support is
+  // enabled with `EnableUVKeySupport`. On some platforms (e.g. Windows), UV
+  // keys may be supported but not available.
+  void OverrideUVKeyAvailability(bool available);
   bool IsUVPAA();
   void SetBiometricsEnabled(bool enabled);
   void AddTestPasskeyToModel();
@@ -143,6 +149,8 @@ class EnclaveAuthenticatorTestBase : public SyncTest {
 #endif
   std::unique_ptr<FakeRecoveryKeyStore> recovery_key_store_;
   std::unique_ptr<WebAuthnScopedFakeUnexportableKeyProvider> fake_hw_provider_;
+  std::unique_ptr<crypto::ScopedUserVerifyingKeysSupportedOverride>
+      uvkey_override_;
   network::TestURLLoaderFactory url_loader_factory_;
   std::unique_ptr<device::BluetoothAdapterFactory::GlobalOverrideValues>
       bluetooth_values_for_testing_;
@@ -153,8 +161,6 @@ class EnclaveAuthenticatorTestBase : public SyncTest {
   logging::ScopedVmoduleSwitches scoped_vmodule_;
   bool sync_feature_enabled_ = true;
   base::OnceCallback<void(AuthenticationFactorsResult)> cached_connection_cb_;
-  base::test::ScopedFeatureList scoped_feature_list_{
-      device::kWebAuthnSignalApiHidePasskeys};
 };
 
 #endif  // CHROME_BROWSER_WEBAUTHN_ENCLAVE_AUTHENTICATOR_BROWSERTEST_BASE_H_

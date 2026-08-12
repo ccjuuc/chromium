@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <optional>
+
 #include "base/check.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -17,7 +19,7 @@
 #include "chrome/browser/autofill/autocomplete_history_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -119,7 +121,8 @@ class AutocompleteTest : public InProcessBrowserTest {
         web_contents()->GetPrimaryMainFrame())
         ->GetAutofillManager()
         .client()
-        .HideAutofillSuggestions(SuggestionHidingReason::kTabGone);
+        .HideSuggestions(SuggestionHidingReason::kTabGone,
+                         /*product=*/std::nullopt);
     active_browser_ = nullptr;
   }
 
@@ -154,11 +157,7 @@ class AutocompleteTest : public InProcessBrowserTest {
     content::SimulateEndOfPaintHoldingOnPrimaryMainFrame(web_contents());
 
     for (const char c : value) {
-      ui::DomKey key = ui::DomKey::FromCharacter(c);
-      ui::DomCode code = UsLayoutDomKeyToDomCode(key);
-      ui::KeyboardCode key_code = DomCodeToUsLayoutKeyboardCode(code);
-      content::SimulateKeyPress(web_contents(), key, code, key_code, false,
-                                false, false, false);
+      content::SimulateCharTyped(web_contents(), c);
       ASSERT_TRUE(autofill_manager()->text_field_change_waiter().Wait(1));
     }
 
@@ -174,15 +173,15 @@ class AutocompleteTest : public InProcessBrowserTest {
   }
 
   // The retention policy clean-up is run once per major version during
-  // initialization. This function triggers it by reinitializing the
-  // `autocomplete_history_manager()` and waiting for the cleanup to complete.
+  // initialization. This function triggers it by instantiating an
+  // `AutocompleteHistoryManager` and waiting for the cleanup to complete.
   void TriggerRetentionPolicyCleanup() {
     pref_service()->SetInteger(prefs::kAutocompleteLastVersionRetentionPolicy,
                                version_info::GetMajorVersionNumberAsInt() - 1);
-    autocomplete_history_manager()->Init(
+    AutocompleteHistoryManager manager(
         WebDataServiceFactory::GetAutofillWebDataForProfile(
             current_profile(), ServiceAccessType::EXPLICIT_ACCESS),
-        pref_service(), current_profile()->IsOffTheRecord());
+        pref_service());
     WaitForPendingDBTasks(*GetWebDataService());
   }
 
@@ -192,7 +191,9 @@ class AutocompleteTest : public InProcessBrowserTest {
     return AutocompleteHistoryManagerFactory::GetForProfile(current_profile());
   }
 
-  PrefService* pref_service() { return active_browser_->profile()->GetPrefs(); }
+  PrefService* pref_service() {
+    return active_browser_->GetProfile()->GetPrefs();
+  }
 
   std::vector<Suggestion> GetAutocompleteSuggestions(
       const std::string& input_name,
@@ -233,7 +234,7 @@ class AutocompleteTest : public InProcessBrowserTest {
     return active_browser_->tab_strip_model()->GetActiveWebContents();
   }
 
-  Profile* current_profile() { return active_browser_->profile(); }
+  Profile* current_profile() { return active_browser_->GetProfile(); }
 
   test::AutofillBrowserTestEnvironment autofill_test_environment_;
   TestAutofillManagerInjector<TestAutofillManager> autofill_manager_injector_;

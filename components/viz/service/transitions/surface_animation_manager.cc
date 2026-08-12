@@ -79,7 +79,6 @@ void ReplaceSharedElementWithRenderPass(
   auto* render_pass_quad =
       target_render_pass
           ->CreateAndAppendDrawQuad<CompositorRenderPassDrawQuad>();
-  gfx::RectF tex_coord_rect(gfx::Rect(shared_pass_output_rect.size()));
   render_pass_quad->SetNew(
       /*shared_quad_state=*/copied_quad_state,
       /*rect=*/shared_pass_output_rect,
@@ -88,7 +87,6 @@ void ReplaceSharedElementWithRenderPass(
       /*mask_resource_id=*/kInvalidResourceId,
       /*mask_uv_rect=*/gfx::RectF(),
       /*mask_texture_size=*/gfx::Size(),
-      /*tex_coord_rect=*/tex_coord_rect,
       /*force_anti_aliasing_off=*/false);
 }
 
@@ -102,7 +100,8 @@ void ReplaceSharedElementWithRenderPass(
 void ReplaceSharedElementWithTexture(
     CompositorRenderPass* target_render_pass,
     const SharedElementDrawQuad& shared_element_quad,
-    ResourceId resource_id) {
+    ResourceId resource_id,
+    const gfx::Size& resource_size) {
   auto* copied_quad_state =
       target_render_pass->CreateAndAppendSharedQuadState();
   *copied_quad_state = *shared_element_quad.shared_quad_state;
@@ -115,12 +114,14 @@ void ReplaceSharedElementWithTexture(
       /*visible_rect=*/shared_element_quad.visible_rect,
       /*needs_blending=*/shared_element_quad.needs_blending,
       /*resource_id=*/resource_id,
-      /*uv_top_left=*/gfx::PointF(0, 0),
-      /*uv_bottom_right=*/gfx::PointF(1, 1),
-      /*background_color=*/SkColors::kTransparent,
-      /*nearest_neighbor=*/false,
-      /*secure_output_only=*/false,
-      /*protected_video_type=*/gfx::ProtectedVideoType::kClear);
+      /*top_left=*/gfx::PointF(0, 0),
+      /*bottom_right=*/
+      gfx::PointF(resource_size.width(), resource_size.height()),
+      /*background=*/SkColors::kTransparent,
+      /*nearest=*/false,
+      /*secure_output=*/false,
+      /*video_type=*/gfx::ProtectedVideoType::kClear,
+      /*is_tex_coords_normalized=*/false);
 }
 
 }  // namespace
@@ -263,6 +264,11 @@ bool SurfaceAnimationManager::FilterSharedElementsWithRenderPassOrResource(
   }
 
   const auto& shared_element_quad = *SharedElementDrawQuad::MaterialCast(&quad);
+  if (!shared_element_quad.element_resource_id.IsValid()) {
+    LOG(ERROR)
+        << "Invalid ViewTransitionElementResourceId in SharedElementDrawQuad";
+    return true;
+  }
 
   // Look up the shared element in textures first. This ordering is important
   // since there can be situations where we created a texture _and_ we have a
@@ -296,7 +302,8 @@ bool SurfaceAnimationManager::FilterSharedElementsWithRenderPassOrResource(
       manager_it->second->RefResources({transferable_resource});
 
       ReplaceSharedElementWithTexture(&copy_pass, shared_element_quad,
-                                      resource_list->back().id);
+                                      resource_list->back().id,
+                                      resource_list->back().GetSize());
       return true;
     }
   }
@@ -387,16 +394,14 @@ void SurfaceAnimationManager::ReplaceSharedElementResources(
     resolved_frame.render_pass_list.push_back(std::move(pass_copy));
   }
 
-  if (features::ShouldAckCOREarlyForViewTransition()) {
-    // Add back the surface for old frame as reference surfaces to new
-    // `resolved_frame` metadata.
-    for (auto original_surface : original_surfaces) {
-      // For same document transitions, we can copy elements from same surface,
-      // but don't need to add itself to `referenced_surfaces`.
-      if (original_surface != surface->surface_id()) {
-        resolved_frame.metadata.referenced_surfaces.push_back(
-            SurfaceRange(original_surface));
-      }
+  // Add back the surface for old frame as reference surfaces to new
+  // `resolved_frame` metadata.
+  for (auto original_surface : original_surfaces) {
+    // For same document transitions, we can copy elements from same surface,
+    // but don't need to add itself to `referenced_surfaces`.
+    if (original_surface != surface->surface_id()) {
+      resolved_frame.metadata.referenced_surfaces.push_back(
+          SurfaceRange(original_surface));
     }
   }
 

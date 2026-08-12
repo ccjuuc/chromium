@@ -6,24 +6,38 @@
 
 #include <string>
 #include <utility>
+#include <variant>
 
 #include "base/check.h"
+#include "base/feature_list.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "build/build_config.h"
+#include "components/content_settings/core/common/features.h"
 #include "components/permissions/permission_decision.h"
+#include "components/permissions/permission_prompt_decision.h"
 #include "components/permissions/permission_util.h"
 #include "components/permissions/request_type.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/url_formatter/elide_url.h"
 #include "content/public/browser/permission_controller.h"
 #include "content/public/browser/render_frame_host.h"
+#include "services/device/public/cpp/device_features.h"
+#include "third_party/blink/public/mojom/permissions/permission.mojom.h"
 #include "ui/base/device_form_factor.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/text_elider.h"
 #include "ui/strings/grit/ui_strings.h"
 
 namespace permissions {
+
+namespace {
+
+bool AreGenericSensorExtraClassesEnabled() {
+  return base::FeatureList::IsEnabled(::features::kGenericSensorExtraClasses);
+}
+
+}  // namespace
 
 PermissionRequest::PermissionRequest(
     std::unique_ptr<PermissionRequestData> request_data,
@@ -49,8 +63,8 @@ bool PermissionRequest::IsDuplicateOf(PermissionRequest* other_request) const {
          requesting_origin() == other_request->requesting_origin();
 }
 
-base::WeakPtr<PermissionRequest> PermissionRequest::GetWeakPtr() {
-  return weak_factory_.GetWeakPtr();
+base::SafeRef<PermissionRequest> PermissionRequest::GetSafeRef() {
+  return weak_factory_.GetSafeRef();
 }
 
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
@@ -91,14 +105,30 @@ PermissionRequest::GetDialogAnnotatedMessageText(
     case RequestType::kHandTracking:
       message_id = IDS_HAND_TRACKING_INFOBAR_TEXT;
       break;
-    case RequestType::kGeolocation:
+    case RequestType::kGeolocation: {
       message_id = IDS_GEOLOCATION_INFOBAR_TEXT;
+      if (base::FeatureList::IsEnabled(
+              content_settings::features::kApproximateGeolocationPermission)) {
+        std::optional<GeolocationPromptType> type = GetGeolocationPromptType();
+        CHECK(type.has_value());
+        switch (*type) {
+          case GeolocationPromptType::kApproximateOrPrecise:
+            message_id = IDS_GEOLOCATION_INFOBAR_TEXT;
+            break;
+          case GeolocationPromptType::kApproximateOnly:
+            message_id = IDS_GEOLOCATION_APPROXIMATE_INFOBAR_TEXT;
+            break;
+          case GeolocationPromptType::kUpgradeToPrecise:
+            message_id = IDS_GEOLOCATION_UPGRADE_INFOBAR_TEXT;
+            break;
+          default:
+            NOTREACHED();
+        }
+      }
       break;
+    }
     case RequestType::kIdleDetection:
       message_id = IDS_IDLE_DETECTION_INFOBAR_TEXT;
-      break;
-    case RequestType::kLocalNetworkAccess:
-      message_id = IDS_LOCAL_NETWORK_ACCESS_INFOBAR_TEXT;
       break;
     case RequestType::kLocalNetwork:
       message_id = IDS_LOCAL_NETWORK_INFOBAR_TEXT;
@@ -120,6 +150,11 @@ PermissionRequest::GetDialogAnnotatedMessageText(
       break;
     case RequestType::kNotifications:
       message_id = IDS_NOTIFICATIONS_INFOBAR_TEXT;
+      break;
+    case RequestType::kSensors:
+      message_id = AreGenericSensorExtraClassesEnabled()
+                       ? IDS_MOTION_AND_LIGHT_SENSORS_INFOBAR_TEXT
+                       : IDS_MOTION_SENSORS_INFOBAR_TEXT;
       break;
 #if BUILDFLAG(IS_ANDROID)
     case RequestType::kProtectedMediaIdentifier:
@@ -299,6 +334,23 @@ std::optional<std::u16string> PermissionRequest::GetRequestChipText(
          IDS_PERMISSIONS_POINTER_LOCK_ALLOWED_CONFIRMATION_SCREENREADER_ANNOUNCEMENT,
          IDS_PERMISSIONS_PERMISSION_ALLOWED_ONCE_CONFIRMATION,
          IDS_PERMISSIONS_POINTER_LOCK_NOT_ALLOWED_CONFIRMATION_SCREENREADER_ANNOUNCEMENT}},
+       {RequestType::kSensors,
+        {AreGenericSensorExtraClassesEnabled()
+             ? IDS_MOTION_AND_LIGHT_SENSORS_PERMISSION_CHIP
+             : IDS_MOTION_SENSORS_PERMISSION_CHIP,
+         -1 /* QUIET_REQUEST not supported */,
+         IDS_PERMISSIONS_PERMISSION_ALLOWED_CONFIRMATION,
+         IDS_PERMISSIONS_PERMISSION_ALLOWED_ONCE_CONFIRMATION,
+         IDS_PERMISSIONS_PERMISSION_NOT_ALLOWED_CONFIRMATION,
+         AreGenericSensorExtraClassesEnabled()
+             ? IDS_PERMISSIONS_MOTION_AND_LIGHT_SENSORS_ALLOWED_CONFIRMATION_SCREENREADER_ANNOUNCEMENT
+             : IDS_PERMISSIONS_MOTION_SENSORS_ALLOWED_CONFIRMATION_SCREENREADER_ANNOUNCEMENT,
+         AreGenericSensorExtraClassesEnabled()
+             ? IDS_PERMISSIONS_MOTION_AND_LIGHT_SENSORS_ALLOWED_ONCE_CONFIRMATION_SCREENREADER_ANNOUNCEMENT
+             : IDS_PERMISSIONS_MOTION_SENSORS_ALLOWED_ONCE_CONFIRMATION_SCREENREADER_ANNOUNCEMENT,
+         AreGenericSensorExtraClassesEnabled()
+             ? IDS_PERMISSIONS_MOTION_AND_LIGHT_SENSORS_NOT_ALLOWED_CONFIRMATION_SCREENREADER_ANNOUNCEMENT
+             : IDS_PERMISSIONS_MOTION_SENSORS_NOT_ALLOWED_CONFIRMATION_SCREENREADER_ANNOUNCEMENT}},
        {RequestType::kStorageAccess,
         {IDS_SAA_PERMISSION_CHIP, -1,
          IDS_PERMISSIONS_PERMISSION_ALLOWED_CONFIRMATION, -1,
@@ -369,9 +421,6 @@ std::u16string PermissionRequest::GetMessageTextFragment() const {
     case RequestType::kLocalFonts:
       message_id = IDS_FONT_ACCESS_PERMISSION_FRAGMENT;
       break;
-    case RequestType::kLocalNetworkAccess:
-      message_id = IDS_LOCAL_NETWORK_ACCESS_PERMISSION_FRAGMENT;
-      break;
     case RequestType::kLocalNetwork:
       message_id = IDS_LOCAL_NETWORK_PERMISSION_FRAGMENT;
       break;
@@ -389,6 +438,11 @@ std::u16string PermissionRequest::GetMessageTextFragment() const {
       break;
     case RequestType::kNotifications:
       message_id = IDS_NOTIFICATION_PERMISSIONS_FRAGMENT;
+      break;
+    case RequestType::kSensors:
+      message_id = AreGenericSensorExtraClassesEnabled()
+                       ? IDS_MOTION_AND_LIGHT_SENSORS_PERMISSION_FRAGMENT
+                       : IDS_MOTION_SENSORS_PERMISSION_FRAGMENT;
       break;
     case RequestType::kPointerLock:
       message_id = IDS_POINTER_LOCK_PERMISSIONS_FRAGMENT;
@@ -445,33 +499,44 @@ bool PermissionRequest::ShouldUseTwoOriginPrompt() const {
   return request_type() == RequestType::kStorageAccess;
 }
 
-void PermissionRequest::PermissionGranted(bool is_one_time) {
+std::optional<GeolocationPromptType>
+PermissionRequest::GetGeolocationPromptType() const {
+  return data_->geolocation_prompt_type;
+}
+
+void PermissionRequest::PermissionGranted(const PromptOptions& prompt_options,
+                                          bool is_one_time) {
   std::move(permission_decided_callback_)
-      .Run(is_one_time ? PermissionDecision::kAllowThisTime
-                       : PermissionDecision::kAllow,
-           /*is_final_decision=*/true, /*request_data=*/*data_);
+      .Run(PermissionPromptDecision{.overall_decision =
+                                        is_one_time
+                                            ? PermissionDecision::kAllowThisTime
+                                            : PermissionDecision::kAllow,
+                                    .prompt_options = prompt_options,
+                                    .is_final = true},
+           /*request_data=*/*data_);
 }
 
 void PermissionRequest::PermissionDenied() {
   std::move(permission_decided_callback_)
-      .Run(PermissionDecision::kDeny,
-           /*is_final_decision=*/true, /*request_data=*/*data_);
+      .Run(PermissionPromptDecision{.overall_decision =
+                                        PermissionDecision::kDeny,
+                                    .prompt_options = std::monostate(),
+                                    .is_final = true},
+           /*request_data=*/*data_);
 }
 
 void PermissionRequest::Cancelled(bool is_final_decision) {
   if (permission_decided_callback_) {
-    permission_decided_callback_.Run(PermissionDecision::kNone,
-                                     is_final_decision,
-                                     /*request_data=*/*data_);
+    permission_decided_callback_.Run(
+        PermissionPromptDecision{.overall_decision = PermissionDecision::kNone,
+                                 .prompt_options = std::monostate(),
+                                 .is_final = is_final_decision},
+        /*request_data=*/*data_);
   }
 }
 
 PermissionRequestGestureType PermissionRequest::GetGestureType() const {
   return PermissionUtil::GetGestureType(data_->user_gesture);
-}
-
-void PermissionRequest::SetPromptOptions(PromptOptions prompt_options) {
-  data_->prompt_options = std::move(prompt_options);
 }
 
 const std::vector<std::string>&

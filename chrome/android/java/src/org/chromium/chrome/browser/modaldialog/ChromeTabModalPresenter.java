@@ -12,7 +12,8 @@ import android.view.ViewGroup;
 import android.view.ViewGroup.MarginLayoutParams;
 import android.view.ViewStub;
 
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.cc.input.BrowserControlsState;
@@ -21,7 +22,6 @@ import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider
 import org.chromium.chrome.browser.browser_controls.BrowserControlsUtils;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsVisibilityManager;
 import org.chromium.chrome.browser.fullscreen.FullscreenManager;
-import org.chromium.chrome.browser.omnibox.OmniboxFocusReason;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabAttributeKeys;
 import org.chromium.chrome.browser.tab.TabAttributes;
@@ -54,15 +54,15 @@ public class ChromeTabModalPresenter extends TabModalPresenter
     private final Activity mActivity;
 
     private final Supplier<TabObscuringHandler> mTabObscuringHandlerSupplier;
-    private final Supplier<ToolbarManager> mToolbarManagerSupplier;
+    private final OneshotSupplier<ToolbarManager> mToolbarManagerSupplier;
     private final Runnable mHideContextualSearch;
     private final FullscreenManager mFullscreenManager;
     private final BrowserControlsVisibilityManager mBrowserControlsVisibilityManager;
     private final BrowserControlsVisibilityDelegate mVisibilityDelegate =
             new BrowserControlsVisibilityDelegate();
     private final TabModelSelector mTabModelSelector;
-    private final ObservableSupplier<ScrimManager> mScrimManagerSupplier;
-    private final ObservableSupplier<EdgeToEdgeController> mEdgeToEdgeControllerSupplier;
+    private final MonotonicObservableSupplier<ScrimManager> mScrimManagerSupplier;
+    private final MonotonicObservableSupplier<EdgeToEdgeController> mEdgeToEdgeControllerSupplier;
 
     /** The active tab of which the dialog will be shown on top. */
     private @Nullable Tab mActiveTab;
@@ -113,13 +113,13 @@ public class ChromeTabModalPresenter extends TabModalPresenter
     public ChromeTabModalPresenter(
             Activity activity,
             Supplier<TabObscuringHandler> tabObscuringHandlerSupplier,
-            Supplier<ToolbarManager> toolbarManagerSupplier,
+            OneshotSupplier<ToolbarManager> toolbarManagerSupplier,
             Runnable hideContextualSearch,
             FullscreenManager fullscreenManager,
             BrowserControlsVisibilityManager browserControlsVisibilityManager,
             TabModelSelector tabModelSelector,
-            ObservableSupplier<ScrimManager> scrimManagerSupplier,
-            ObservableSupplier<EdgeToEdgeController> edgeToEdgeControllerSupplier) {
+            MonotonicObservableSupplier<ScrimManager> scrimManagerSupplier,
+            MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeControllerSupplier) {
         super(activity);
         mActivity = activity;
         mTabObscuringHandlerSupplier = tabObscuringHandlerSupplier;
@@ -230,11 +230,6 @@ public class ChromeTabModalPresenter extends TabModalPresenter
 
     @Override
     protected void setBrowserControlsAccess(boolean restricted) {
-        var toolbarManager = mToolbarManagerSupplier.get();
-        if (toolbarManager == null) return;
-
-        View menuButton = mToolbarManagerSupplier.get().getMenuButtonView();
-
         if (restricted) {
             mActiveTab = mTabModelSelector.getCurrentTab();
             assert mActiveTab != null
@@ -253,11 +248,14 @@ public class ChromeTabModalPresenter extends TabModalPresenter
             // Force toolbar to show and disable overflow menu.
             onTabModalDialogStateChanged(true);
 
-            mToolbarManagerSupplier.get().setUrlBarFocus(false, OmniboxFocusReason.UNFOCUS);
+            ToolbarManager toolbarManager = getToolbarManager();
+            if (toolbarManager != null) {
+                toolbarManager.endFuseboxInput();
+            }
 
-            if (menuButton != null) menuButton.setEnabled(false);
+            setMenuButtonEnabled(false);
         } else {
-            assumeNonNull(mActiveTab);
+            if (mActiveTab == null) return;
 
             // Show the action bar back if it was dismissed when the dialogs were showing.
             WebContents webContents = mActiveTab.getWebContents();
@@ -266,9 +264,29 @@ public class ChromeTabModalPresenter extends TabModalPresenter
             }
 
             onTabModalDialogStateChanged(false);
-            if (menuButton != null) menuButton.setEnabled(true);
+            setMenuButtonEnabled(true);
             mActiveTab = null;
         }
+    }
+
+    /**
+     * @param enabled Whether the menu button should be enabled.
+     */
+    private void setMenuButtonEnabled(boolean enabled) {
+        ToolbarManager toolbarManager = getToolbarManager();
+        if (toolbarManager == null) return;
+
+        View menuButton = toolbarManager.getMenuButtonView();
+        if (menuButton != null) menuButton.setEnabled(enabled);
+    }
+
+    /** Returns the {@link ToolbarManager} or null if it has been destroyed. */
+    private @Nullable ToolbarManager getToolbarManager() {
+        return mToolbarManagerSupplier.get();
+    }
+
+    void setActiveTabForTesting(Tab tab) {
+        mActiveTab = tab;
     }
 
     @Override
@@ -282,6 +300,14 @@ public class ChromeTabModalPresenter extends TabModalPresenter
         if (mScrimManager != null && mScrimModel != null) {
             mScrimManager.hideScrim(mScrimModel, /* animate= */ false);
             mScrimModel = null;
+        }
+
+        if (mContainerParent != null
+                && mContainerParent.getId() != R.id.coordinator
+                && mContainerParent.getParent() instanceof ViewGroup coordinator) {
+            View nextSibling = coordinator.findViewById(R.id.constrained_views_container);
+            UiUtils.removeViewFromParent(mContainerParent);
+            UiUtils.insertBefore(coordinator, mContainerParent, assumeNonNull(nextSibling));
         }
 
         super.removeDialogView(model);
@@ -338,6 +364,19 @@ public class ChromeTabModalPresenter extends TabModalPresenter
             UiUtils.removeViewFromParent(dialogContainer);
             UiUtils.insertBefore(mContainerParent, dialogContainer, mDefaultNextSiblingView);
         }
+
+        if (mContainerParent != null
+                && mContainerParent.getId() != R.id.coordinator
+                && mContainerParent.getParent() instanceof ViewGroup coordinator) {
+            if (toFront) {
+                mContainerParent.bringToFront();
+            } else {
+                View controlContainer = coordinator.findViewById(R.id.control_container);
+                UiUtils.removeViewFromParent(mContainerParent);
+                UiUtils.insertBefore(
+                        coordinator, mContainerParent, assumeNonNull(controlContainer));
+            }
+        }
     }
 
     /**
@@ -368,6 +407,15 @@ public class ChromeTabModalPresenter extends TabModalPresenter
 
     private void onTabModalDialogStateChanged(boolean isShowing) {
         assumeNonNull(mActiveTab);
+
+        if (mActiveTab.isDestroyed()) {
+            // If the tab is destroyed, we still need to update the visibility delegate
+            // to avoid locking browser controls.
+            mVisibilityDelegate.set(
+                    isShowing ? BrowserControlsState.SHOWN : BrowserControlsState.BOTH);
+            return;
+        }
+
         TabAttributes.from(mActiveTab).set(TabAttributeKeys.MODAL_DIALOG_SHOWING, isShowing);
         mVisibilityDelegate.set(
                 isDialogShowing(mActiveTab)

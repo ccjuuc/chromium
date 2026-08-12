@@ -91,7 +91,7 @@ api::developer_private::ViewType ConvertViewType(const mojom::ViewType type) {
 InspectableViewsFinder::View InspectableViewsFinder::ConstructView(
     const GURL& url,
     int render_process_id,
-    int render_frame_id,
+    int render_view_id,
     bool incognito,
     bool is_iframe,
     api::developer_private::ViewType type) {
@@ -100,7 +100,7 @@ InspectableViewsFinder::View InspectableViewsFinder::ConstructView(
   view.render_process_id = render_process_id;
   // NOTE(devlin): This is called "render_view_id" in the api for legacy
   // reasons, but it's not a high priority to change.
-  view.render_view_id = render_frame_id;
+  view.render_view_id = render_view_id;
   view.incognito = incognito;
   view.is_iframe = is_iframe;
   view.type = type;
@@ -138,8 +138,9 @@ void InspectableViewsFinder::GetViewsForExtensionForProfile(
                               is_incognito,
                               result);
   // Get app window views, if not incognito.
-  if (!is_incognito)
+  if (!is_incognito) {
     GetAppWindowViewsForExtension(extension, result);
+  }
   // Include a link to start the lazy background page, if applicable.
   bool include_lazy_background = true;
   // Don't include the lazy background page for incognito if the extension isn't
@@ -151,8 +152,9 @@ void InspectableViewsFinder::GetViewsForExtensionForProfile(
   }
 
   // Get inactive backgrounds.
-  if (!include_lazy_background || !is_enabled)
+  if (!include_lazy_background || !is_enabled) {
     return;
+  }
   if (BackgroundInfo::HasLazyBackgroundPage(&extension) &&
       !process_manager->GetBackgroundHostForExtension(extension.id())) {
     result->push_back(ConstructView(
@@ -191,8 +193,9 @@ void InspectableViewsFinder::GetViewsForExtensionProcess(
     if (url.is_empty()) {
       ExtensionHost* extension_host =
           process_manager->GetBackgroundHostForRenderFrameHost(host);
-      if (extension_host)
+      if (extension_host) {
         url = extension_host->initial_url();
+      }
     }
 
     content::RenderProcessHost* process = host->GetProcess();
@@ -206,7 +209,9 @@ void InspectableViewsFinder::GetViewsForExtensionProcess(
   for (const WorkerId& service_worker_id : service_worker_ids) {
     result->push_back(ConstructView(
         BackgroundInfo::GetBackgroundServiceWorkerScriptURL(&extension),
-        service_worker_id.render_process_id, -1, is_incognito, false,
+        service_worker_id.render_process_id.GetUnsafeValue(),
+        /*render_view_id=*/-1, is_incognito,
+        /*is_iframe=*/false,
         api::developer_private::ViewType::kExtensionServiceWorkerBackground));
   }
 }
@@ -216,8 +221,9 @@ void InspectableViewsFinder::GetAppWindowViewsForExtension(
     ViewList* result) {
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   AppWindowRegistry* registry = AppWindowRegistry::Get(profile_);
-  if (!registry)
+  if (!registry) {
     return;
+  }
 
   AppWindowRegistry::AppWindowList windows =
       registry->GetAppWindowsForApp(extension.id());
@@ -228,8 +234,9 @@ void InspectableViewsFinder::GetAppWindowViewsForExtension(
     // If the window just opened, there might not be a committed (or visible)
     // url yet. In this case, use the initial url.
     GURL url = web_contents->GetLastCommittedURL();
-    if (url.is_empty())
+    if (url.is_empty()) {
       url = window->initial_url();
+    }
 
     content::RenderFrameHost* main_frame = web_contents->GetPrimaryMainFrame();
     result->push_back(

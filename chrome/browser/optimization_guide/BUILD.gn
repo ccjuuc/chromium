@@ -2,17 +2,18 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//components/optimization_guide/features.gni")
-
 assert(is_win || is_mac || is_linux || is_chromeos || is_android)
 
 source_set("optimization_guide") {
   sources = [
+    "chrome_browser_main_extra_parts_optimization_guide.h",
     "chrome_hints_manager.h",
     "chrome_model_quality_logs_uploader_service.h",
     "model_execution/optimization_guide_global_state.h",
     "model_validator_keyed_service.h",
     "model_validator_keyed_service_factory.h",
+    "optimization_guide_global_state_holder_keyed_service.h",
+    "optimization_guide_global_state_holder_keyed_service_factory.h",
     "optimization_guide_internals_ui.h",
     "optimization_guide_keyed_service.h",
     "optimization_guide_keyed_service_factory.h",
@@ -27,10 +28,12 @@ source_set("optimization_guide") {
     "//chrome/browser/navigation_predictor",
     "//chrome/browser/profiles:profile",
     "//components/keyed_service/core",
+    "//components/optimization_guide:optimization_guide_buildflags",
     "//components/optimization_guide/core",
     "//components/optimization_guide/core:prediction",
     "//components/optimization_guide/optimization_guide_internals/webui",
     "//components/optimization_guide/public/mojom",
+    "//components/private_ai",
     "//components/services/unzip/content",
     "//components/signin/public/identity_manager",
     "//content/public/browser",
@@ -40,20 +43,23 @@ source_set("optimization_guide") {
     "//ui/webui",
   ]
   if (is_android) {
-    public_deps += [ "//chrome/browser/bookmarks/android" ]
-  } else {
-    sources += [ "legion_model_execution_fetcher.h" ]
-    public_deps += [ "//components/legion" ]
+    public_deps += [
+      "//chrome/browser/bookmarks/android",
+      "//chrome/browser/optimization_guide/android:jni_headers",
+    ]
   }
 }
 
 source_set("impl") {
   sources = [
+    "chrome_browser_main_extra_parts_optimization_guide.cc",
     "chrome_hints_manager.cc",
     "chrome_model_quality_logs_uploader_service.cc",
     "model_execution/optimization_guide_global_state.cc",
     "model_validator_keyed_service.cc",
     "model_validator_keyed_service_factory.cc",
+    "optimization_guide_global_state_holder_keyed_service.cc",
+    "optimization_guide_global_state_holder_keyed_service_factory.cc",
     "optimization_guide_internals_ui.cc",
     "optimization_guide_keyed_service.cc",
     "optimization_guide_keyed_service_factory.cc",
@@ -67,13 +73,20 @@ source_set("impl") {
     ":optimization_guide",
     "//chrome/browser:browser_process",
     "//chrome/browser:global_features",
+    "//chrome/browser/download",
+    "//chrome/browser/metrics",
+    "//chrome/browser/preloading/prefetch/no_state_prefetch",
+    "//chrome/browser/private_ai",
     "//chrome/browser/profiles",
+    "//chrome/browser/profiles:profile_manager",
     "//chrome/browser/signin",
     "//chrome/browser/sync",
-    "//chrome/browser/ui",
+    "//components/component_updater/installer_policies:installer_policies_with_content_deps",
     "//components/metrics_services_manager",
     "//components/no_state_prefetch/browser",
+    "//components/private_ai",
     "//components/user_prefs",
+    "//components/variations",
     "//components/variations/service",
     "//components/version_info",
     "//ui/webui",
@@ -81,15 +94,14 @@ source_set("impl") {
   if (is_android) {
     deps += [
       "//base",
+      "//chrome/browser/commerce/price_tracking/android:price_tracking_notification_bridge",
       "//chrome/browser/optimization_guide/android:jni_headers",
+      "//chrome/browser/optimization_guide/android:native",
     ]
   } else {
-    sources += [ "legion_model_execution_fetcher.cc" ]
     deps += [
       "//chrome/browser/ui/browser_window",
       "//chrome/browser/ui/tabs:tab_strip",
-      "//components/legion",
-      "//components/legion:proto",
     ]
   }
 }
@@ -102,6 +114,7 @@ source_set("optimization_guide_on_device_model_installer") {
 
   deps = [
     "//base",
+    "//build:branding_buildflags",
     "//chrome/browser:browser_process",
     "//components/component_updater",
     "//components/crx_file",
@@ -132,11 +145,6 @@ source_set("test_support") {
     "//components/prefs",
     "//components/signin/public/identity_manager",
   ]
-
-  # chrome/browser/ui/passwords/manage_passwords_test.h
-  # -> mock_optimization_guide_keyed_service.h
-  # -> chrome/test/base/testing_browser_process.h
-  allow_circular_includes_from = [ "//chrome/test:test_support" ]
 }
 
 if (!is_android) {
@@ -148,15 +156,12 @@ if (!is_android) {
       "model_execution/model_execution_browsertest.cc",
       "model_execution/model_execution_live_test.cc",
       "model_execution/model_execution_validation_browsertest.cc",
+      "model_execution/on_device_model_browsertest.cc",
       "optimization_guide_keyed_service_browsertest.cc",
+      "optimization_guide_tab_url_provider_browsertest.cc",
+      "prediction/prediction_manager_browsertest.cc",
+      "prediction/prediction_model_store_browsertest.cc",
     ]
-
-    if (build_with_tflite_lib) {
-      sources += [
-        "prediction/prediction_manager_browsertest.cc",
-        "prediction/prediction_model_store_browsertest.cc",
-      ]
-    }
 
     deps = [
       ":optimization_guide",
@@ -164,6 +169,7 @@ if (!is_android) {
       "//base/test:test_proto",
       "//base/test:test_support",
       "//chrome/browser/preloading/prefetch:test_support",
+      "//chrome/browser/preloading/prefetch/no_state_prefetch",
       "//chrome/browser/signin/e2e_tests:test_support",
       "//chrome/browser/ui/webauthn",
       "//chrome/test:test_support",
@@ -182,24 +188,34 @@ source_set("unit_tests") {
   sources = [
     "chrome_hints_manager_unittest.cc",
     "chrome_model_quality_logs_uploader_service_unittest.cc",
+    "model_execution/optimization_guide_global_state_unittest.cc",
     "prediction/chrome_profile_download_service_tracker_unittest.cc",
   ]
   deps = [
     ":optimization_guide",
     ":test_support",
     "//chrome/test:test_support",
+    "//components/component_updater:test_support",
     "//components/optimization_guide/core:test_support",
     "//components/prefs:test_support",
     "//components/unified_consent",
     "//components/variations:test_support",
   ]
-  if (!is_android) {
-    sources += [
-      "legion_model_execution_fetcher_unittest.cc",
 
-      # Android uses a different way of showing browser windows.
-      "optimization_guide_tab_url_provider_unittest.cc",
+  if (is_android) {
+    sources += [
+      "android/optimization_guide_bridge_unittest.cc",
+      "android/optimization_guide_tab_url_provider_android_unittest.cc",
     ]
-    deps += [ "//components/legion" ]
+    deps += [
+      "//chrome/browser/android:tabs_public",
+      "//chrome/browser/optimization_guide/android:native",
+      "//chrome/browser/optimization_guide/android:native_j_unittests_jni_headers",
+      "//chrome/browser/profiles:profile",
+      "//chrome/browser/ui/android/tab_model",
+      "//chrome/browser/ui/android/tab_model:test_support",
+      "//chrome/common:constants",
+      "//components/optimization_guide/proto:optimization_guide_proto",
+    ]
   }
 }

@@ -34,11 +34,14 @@
 
 // Android does not support symbol interposition. The way malloc symbols are
 // intercepted on Android is by using link-time -wrap flags.
+#if PA_BUILDFLAG(SHIM_SUPPORTS_ALLOC_TOKEN)
+#include "partition_alloc/shim/allocator_shim_alloc_token_symbols.h"
+#endif
 #include "partition_alloc/shim/allocator_shim_override_linker_wrapped_symbols.h"
 
 // Cross-checks.
 
-#if defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+#if PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)
 #error The allocator shim should not be compiled when building for memory tools.
 #endif
 

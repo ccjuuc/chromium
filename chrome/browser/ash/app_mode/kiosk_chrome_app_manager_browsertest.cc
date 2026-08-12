@@ -42,7 +42,6 @@
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/extensions/webstore_data_fetcher.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -54,8 +53,9 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/sandboxed_unpacker.h"
+#include "extensions/browser/webstore_data_fetcher.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/mojom/manifest.mojom-data-view.h"
+#include "extensions/common/mojom/manifest.mojom-shared.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -86,11 +86,11 @@ scoped_refptr<extensions::Extension> MakeKioskApp(
     const std::string& version,
     const std::string& id,
     const std::string& required_platform_version) {
-  auto value = base::Value::Dict()
+  auto value = base::DictValue()
                    .Set("name", name)
                    .Set("version", version)
                    .SetByDottedPath("app.background.scripts",
-                                    base::Value::List().Append("main.js"))
+                                    base::ListValue().Append("main.js"))
                    .Set("kiosk_enabled", true);
   if (!required_platform_version.empty()) {
     value.SetByDottedPath("kiosk.required_platform_version",
@@ -184,7 +184,7 @@ class ChromeAppKioskAppManagerTest : public InProcessBrowserTest {
     extensions::WebstoreDataFetcher::SetLogResponseCodeForTesting(true);
 
     // Don't spin up the IO thread yet since no threads are allowed while
-    // spawning sandbox host process. See crbug.com/322732.
+    // spawning sandbox host process. See crbug.com/41076404.
     ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
 
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
@@ -206,7 +206,7 @@ class ChromeAppKioskAppManagerTest : public InProcessBrowserTest {
 
     settings_helper_.ReplaceDeviceSettingsProviderWithStub();
     owner_settings_service_ =
-        settings_helper_.CreateOwnerSettingsService(browser()->profile());
+        settings_helper_.CreateOwnerSettingsService(browser()->GetProfile());
   }
 
   void TearDownOnMainThread() override {
@@ -258,15 +258,15 @@ class ChromeAppKioskAppManagerTest : public InProcessBrowserTest {
         local_state, KioskChromeAppManager::kKioskDictionaryName);
     dict_update->Set(
         KioskAppDataBase::kKeyApps,
-        base::Value::Dict()
+        base::DictValue()
             .SetByDottedPath(app_id + ".name", app_name)
             .SetByDottedPath(app_id + ".icon", icon_path.MaybeAsASCII())
             .SetByDottedPath(app_id + ".required_platform_version",
                              required_platform_version));
 
     // Make the app appear in device settings.
-    auto device_local_accounts = base::Value::List().Append(
-        base::Value::Dict()
+    auto device_local_accounts = base::ListValue().Append(
+        base::DictValue()
             // Fake an account id. Note this needs to match
             // GenerateKioskAppAccountId in kiosk_chrome_app_manager.cc to make
             // SetAutoLaunchApp work with the existing app entry created here.
@@ -304,7 +304,7 @@ class ChromeAppKioskAppManagerTest : public InProcessBrowserTest {
 
     // Check data is cached in local state correctly.
     PrefService* local_state = g_browser_process->local_state();
-    const base::Value::Dict& dict =
+    const base::DictValue& dict =
         local_state->GetDict(KioskChromeAppManager::kKioskDictionaryName);
 
     const std::string name_key = "apps." + app_id + ".name";
@@ -485,10 +485,9 @@ IN_PROC_BROWSER_TEST_F(ChromeAppKioskAppManagerTest, ClearAppData) {
   SetExistingApp("app_1", "Cached App1 Name", "red16x16.png", "");
 
   PrefService* local_state = g_browser_process->local_state();
-  const base::Value::Dict& dict =
+  const base::DictValue& dict =
       local_state->GetDict(KioskChromeAppManager::kKioskDictionaryName);
-  const base::Value::Dict* apps_dict =
-      dict.FindDict(KioskAppDataBase::kKeyApps);
+  const base::DictValue* apps_dict = dict.FindDict(KioskAppDataBase::kKeyApps);
   EXPECT_TRUE(apps_dict);
   EXPECT_TRUE(apps_dict->contains("app_1"));
 
@@ -510,7 +509,7 @@ IN_PROC_BROWSER_TEST_F(ChromeAppKioskAppManagerTest, UpdateAppDataFromProfile) {
 
   scoped_refptr<extensions::Extension> updated_app =
       MakeKioskApp("Updated App1 Name", "2.0", "app_1", "1234");
-  manager()->UpdateAppDataFromProfile("app_1", browser()->profile(),
+  manager()->UpdateAppDataFromProfile("app_1", browser()->GetProfile(),
                                       updated_app.get());
 
   waiter.Reset();
@@ -521,7 +520,7 @@ IN_PROC_BROWSER_TEST_F(ChromeAppKioskAppManagerTest, UpdateAppDataFromProfile) {
   CheckAppData("app_1", "Updated App1 Name", "1234");
 }
 
-// Flaky; https://crbug.com/783450
+// Flaky; https://crbug.com/41354525
 IN_PROC_BROWSER_TEST_F(ChromeAppKioskAppManagerTest, UpdateAppDataFromCrx) {
   const char kAppId[] = "iiigpodgfihagabpagjehoocpakbnclp";
   const char kAppName[] = "Test Kiosk App";
@@ -683,7 +682,7 @@ IN_PROC_BROWSER_TEST_F(ChromeAppKioskAppManagerTest, DownloadNewApp) {
   RunAddNewAppTest(kTestLocalFsKioskApp, "1.0.0", kTestLocalFsKioskAppName, "");
 }
 
-// Flaky https://crbug.com/1090937
+// Flaky https://crbug.com/40133955
 IN_PROC_BROWSER_TEST_F(ChromeAppKioskAppManagerTest, RemoveApp) {
   // Add a new app.
   RunAddNewAppTest(kTestLocalFsKioskApp, "1.0.0", kTestLocalFsKioskAppName, "");

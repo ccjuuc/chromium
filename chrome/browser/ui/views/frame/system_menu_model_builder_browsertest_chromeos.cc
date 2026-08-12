@@ -3,12 +3,12 @@
 // found in the LICENSE file.
 
 #include "ash/public/cpp/autotest_desks_api.h"
-#include "base/containers/contains.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/ash/boca/on_task/on_task_locked_controller.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/login/user_adding_screen.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
@@ -17,6 +17,7 @@
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ui/frame/desks/move_to_desks_menu_model.h"
 #include "components/account_id/account_id.h"
 #include "components/user_manager/user_manager.h"
@@ -25,7 +26,6 @@
 #include "ui/base/models/menu_model.h"
 #include "url/gurl.h"
 
-using ::ash::ProfileHelper;
 using chrome::SettingsWindowManager;
 using user_manager::UserManager;
 
@@ -50,7 +50,7 @@ class SystemMenuModelBuilderWithOnTaskTest : public InProcessBrowserTest {
  protected:
   webapps::AppId InstallMockApp() {
     return web_app::test::InstallDummyWebApp(
-        browser()->profile(), /*app_name=*/"Mock app",
+        browser()->GetProfile(), /*app_name=*/"Mock app",
         /*app_url=*/GURL("https://www.example.com/"));
   }
 };
@@ -60,8 +60,9 @@ IN_PROC_BROWSER_TEST_F(SystemMenuModelBuilderWithOnTaskTest,
   // Install and launch app.
   webapps::AppId app_id = InstallMockApp();
   Browser* const app_browser =
-      web_app::LaunchWebAppBrowser(browser()->profile(), app_id);
-  app_browser->SetLockedForOnTask(false);
+      web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
+  ash::boca::OnTaskLockedController::From(app_browser)
+      ->set_locked_for_on_task(false);
 
   // Create a new desk so we can verify desk menu options visibility.
   ASSERT_TRUE(ash::AutotestDesksApi().CreateNewDesk());
@@ -86,8 +87,9 @@ IN_PROC_BROWSER_TEST_F(SystemMenuModelBuilderWithOnTaskTest,
   // Install and launch app.
   webapps::AppId app_id = InstallMockApp();
   Browser* const app_browser =
-      web_app::LaunchWebAppBrowser(browser()->profile(), app_id);
-  app_browser->SetLockedForOnTask(true);
+      web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
+  ash::boca::OnTaskLockedController::From(app_browser)
+      ->set_locked_for_on_task(true);
 
   // Create a new desk so we can verify desk menu options visibility.
   ASSERT_TRUE(ash::AutotestDesksApi().CreateNewDesk());
@@ -122,7 +124,7 @@ class SystemMenuModelBuilderMultiUserTest : public ash::LoginManagerTest {
   ash::LoginManagerMixin login_mixin_{&mixin_host_};
 };
 
-// Regression test for https://crbug.com/1023043
+// Regression test for https://crbug.com/40657933
 IN_PROC_BROWSER_TEST_F(SystemMenuModelBuilderMultiUserTest,
                        MultiUserSettingsWindowFrameMenu) {
   // Log in 2 users.
@@ -133,8 +135,9 @@ IN_PROC_BROWSER_TEST_F(SystemMenuModelBuilderMultiUserTest,
   base::RunLoop().RunUntilIdle();
 
   // Install the Settings App.
-  Profile* profile = ProfileHelper::Get()->GetProfileByUser(
-      UserManager::Get()->FindUser(account_id1_));
+  Profile* profile = Profile::FromBrowserContext(
+      ash::BrowserContextHelper::Get()->GetBrowserContextByUser(
+          UserManager::Get()->FindUser(account_id1_)));
   ash::SystemWebAppManager::GetForTest(profile)->InstallSystemAppsForTesting();
 
   // Open the settings window and record the |settings_browser|.

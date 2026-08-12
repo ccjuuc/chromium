@@ -19,7 +19,6 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/experiences/arc/mojom/app.mojom.h"
 #include "chromeos/ash/experiences/arc/test/fake_app_instance.h"
-#include "components/services/app_service/public/cpp/features.h"
 #include "content/public/test/browser_task_environment.h"
 #include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -185,7 +184,7 @@ class AppServiceArcAppIconTest : public ArcAppsIconFactoryTest,
   // ArcAppListPrefs::Observer:
   void OnAppIconUpdated(const std::string& app_id,
                         const ArcAppIconDescriptor& descriptor) override {
-    if (base::Contains(waiting_icon_updates_, app_id)) {
+    if (waiting_icon_updates_.contains(app_id)) {
       std::move(waiting_icon_updates_[app_id]).Run();
       waiting_icon_updates_.erase(app_id);
     }

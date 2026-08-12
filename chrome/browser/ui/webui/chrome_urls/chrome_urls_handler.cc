@@ -34,6 +34,7 @@ base::span<const base::cstring_view> WebUIHostsWithoutConfigs() {
           content::kChromeUIBlobInternalsHost,
           content::kChromeUIDinoHost,
           chrome::kChromeUIExtensionsInternalsHost,
+          chrome::kChromeUIPrefsInternalsHost,
       });
   return base::span(kHostsWithoutConfigs);
 }
@@ -47,20 +48,18 @@ bool CompareWebuiUrlInfos(const chrome_urls::mojom::WebuiUrlInfoPtr& info1,
         info2->url.SchemeIs(content::kChromeUIUntrustedScheme));
   // Sort chrome:// before chrome-untrusted://. If the schemes are not equal,
   // given the check above one must be chrome:// and one chrome-untrusted://.
-  if (info1->url.GetScheme() != info2->url.GetScheme()) {
+  if (info1->url.scheme() != info2->url.scheme()) {
     return info1->url.SchemeIs(content::kChromeUIScheme);
   }
-  return info1->url.GetHost() < info2->url.GetHost();
+  return info1->url.host() < info2->url.host();
 }
 
 }  // namespace
 
 ChromeUrlsHandler::ChromeUrlsHandler(
     mojo::PendingReceiver<chrome_urls::mojom::PageHandler> receiver,
-    mojo::PendingRemote<chrome_urls::mojom::Page> page,
     content::BrowserContext* browser_context)
     : receiver_(this, std::move(receiver)),
-      page_(std::move(page)),
       browser_context_(browser_context) {
 }
 

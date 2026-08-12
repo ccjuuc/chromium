@@ -200,20 +200,20 @@ export class EnterpriseEnrollmentElement extends
     };
   }
 
-  private domainManager: string;
-  private deviceName: string;
-  private licenseType: OobeTypes.LicenseType;
-  private gaiaDialogButtonsType: string;
-  private errorText: string;
-  private canRetryAfterError: boolean;
-  private assetId: string;
-  private deviceLocation: string;
-  private hasAccountCheck: boolean;
-  private isAutoEnroll: boolean;
-  private isForced: boolean;
-  private authFlow: number;
-  private email: string;
-  private readonly isMeet: boolean;
+  declare private domainManager: string;
+  declare private deviceName: string;
+  declare private licenseType: OobeTypes.LicenseType;
+  declare private gaiaDialogButtonsType: string;
+  declare private errorText: string;
+  declare private canRetryAfterError: boolean;
+  declare private assetId: string;
+  declare private deviceLocation: string;
+  declare private hasAccountCheck: boolean;
+  declare private isAutoEnroll: boolean;
+  declare private isForced: boolean;
+  declare private authFlow: number;
+  declare private email: string;
+  declare private readonly isMeet: boolean;
   private isCancelDisabled: boolean;
   private isManualEnrollment: boolean|undefined;
 
@@ -297,7 +297,7 @@ export class EnterpriseEnrollmentElement extends
     };
 
     this.authenticator.addEventListener('getDeviceId', () => {
-      sendWithPromise('getDeviceIdForEnrollment').then(deviceId => {
+      sendWithPromise<string>('getDeviceIdForEnrollment').then(deviceId => {
         assert(this.authenticator);
         this.authenticator.getDeviceIdResponse(deviceId);
       });
@@ -322,7 +322,7 @@ export class EnterpriseEnrollmentElement extends
       // We run the tab remapping logic inside of the webview so that the
       // simulated tab events will use the webview tab-stops. Simulated tab
       // events created from the webui treat the entire webview as one tab
-      // stop. Real tab events do not do this. See crbug.com/543865.
+      // stop. Real tab events do not do this. See crbug.com/41209667.
       this.authView.addContentScripts([{
         name: 'injectedTabHandler',
         matches: ['http://*/*', 'https://*/*'],

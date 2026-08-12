@@ -5,16 +5,25 @@
 #ifndef IOS_CHROME_BROWSER_COMPOSEBOX_COORDINATOR_COMPOSEBOX_OMNIBOX_CLIENT_DELEGATE_H_
 #define IOS_CHROME_BROWSER_COMPOSEBOX_COORDINATOR_COMPOSEBOX_OMNIBOX_CLIENT_DELEGATE_H_
 
+#import "components/contextual_search/input_state_model.h"
 #import "ios/chrome/browser/composebox/coordinator/composebox_constants.h"
-#import "third_party/omnibox_proto/aim_tools_and_models.pb.h"
+#import "third_party/omnibox_proto/tool_mode.pb.h"
 
 struct UrlLoadParams;
 enum class WindowOpenDisposition;
 
+namespace web {
+class WebState;
+}  // namespace web
+
 /// Delegate for ComposeboxOmniboxClient.
 @protocol ComposeboxOmniboxClientDelegate
 
-- (omnibox::ChromeAimToolsAndModels)composeboxToolMode;
+/// Returns the current web state.
+- (web::WebState*)webState;
+
+/// Returns the current input state of the composebox.
+- (std::optional<contextual_search::InputState>)inputState;
 
 /// Returns the current attached suggest input in the composebox.
 - (std::optional<lens::proto::LensOverlaySuggestInputs>)suggestInputs;
@@ -33,6 +42,9 @@ enum class WindowOpenDisposition;
 - (void)omniboxDidChangeText:(const std::u16string&)text
                isSearchQuery:(BOOL)isSearchQuery
          userInputInProgress:(BOOL)userInputInProgress;
+
+/// Returns whether the composebox is awaiting attachment signals to fully load.
+- (BOOL)awaitingAttachmentSignals;
 
 @end
 

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
 
@@ -15,10 +16,11 @@
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/notimplemented.h"
-#include "base/types/zip.h"
+#include "base/notreached.h"
 #include "base/values.h"
 #include "components/guest_view/buildflags/buildflags.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/websocket_handshake_request_info.h"
 #include "extensions/browser/api/web_request/upload_data_presenter.h"
 #include "extensions/browser/api/web_request/web_request_api_constants.h"
@@ -33,6 +35,7 @@
 #include "net/base/upload_data_stream.h"
 #include "net/base/upload_file_element_reader.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "services/network/url_loader.h"
@@ -127,7 +130,7 @@ bool CreateUploadDataSourcesFromResourceRequest(
   return true;
 }
 
-std::optional<base::Value::Dict> CreateRequestBodyData(
+std::optional<base::DictValue> CreateRequestBodyData(
     const std::string& method,
     const net::HttpRequestHeaders& request_headers,
     const std::vector<std::unique_ptr<UploadDataSource>>& data_sources) {
@@ -135,7 +138,7 @@ std::optional<base::Value::Dict> CreateRequestBodyData(
     return std::nullopt;
   }
 
-  base::Value::Dict request_body_data;
+  base::DictValue request_body_data;
 
   // Get the data presenters, ordered by how specific they are.
   ParsedDataPresenter parsed_data_presenter(request_headers);
@@ -151,7 +154,7 @@ std::optional<base::Value::Dict> CreateRequestBodyData(
   });
   bool some_succeeded = false;
   if (!data_sources.empty()) {
-    for (auto [presenter, key] : base::zip(presenters, kKeys)) {
+    for (auto [presenter, key] : std::views::zip(presenters, kKeys)) {
       for (auto& source : data_sources) {
         source->FeedToPresenter(presenter);
       }
@@ -170,14 +173,84 @@ std::optional<base::Value::Dict> CreateRequestBodyData(
   return request_body_data;
 }
 
+WebRequestResourceType ToWebRequestResourceType(
+    const network::ResourceRequest& request,
+    bool is_download) {
+  if (request.url.SchemeIsWSOrWSS()) {
+    return WebRequestResourceType::WEB_SOCKET;
+  }
+  if (is_download) {
+    return WebRequestResourceType::OTHER;
+  }
+  if (request.is_fetch_like_api) {
+    // This must be checked before `request.keepalive` check below, because
+    // currently Fetch keepAlive is not reported as ping.
+    // See https://crbug.com/41253689 for more details.
+    return WebRequestResourceType::XHR;
+  }
+
+  switch (request.destination) {
+    case network::mojom::RequestDestination::kDocument:
+      return WebRequestResourceType::MAIN_FRAME;
+    case network::mojom::RequestDestination::kIframe:
+    case network::mojom::RequestDestination::kFrame:
+    case network::mojom::RequestDestination::kFencedframe:
+      return WebRequestResourceType::SUB_FRAME;
+    case network::mojom::RequestDestination::kStyle:
+    case network::mojom::RequestDestination::kXslt:
+      return WebRequestResourceType::STYLESHEET;
+    // TODO(crbug.com/41484304): Consider adding a new
+    // webRequest.ResourceType for JSON requests modules.
+    case network::mojom::RequestDestination::kJson:
+    case network::mojom::RequestDestination::kScript:
+    case network::mojom::RequestDestination::kText:
+      return WebRequestResourceType::SCRIPT;
+    case network::mojom::RequestDestination::kImage:
+      return WebRequestResourceType::IMAGE;
+    case network::mojom::RequestDestination::kFont:
+      return WebRequestResourceType::FONT;
+    case network::mojom::RequestDestination::kObject:
+    case network::mojom::RequestDestination::kEmbed:
+      return WebRequestResourceType::OBJECT;
+    case network::mojom::RequestDestination::kAudio:
+    case network::mojom::RequestDestination::kTrack:
+    case network::mojom::RequestDestination::kVideo:
+      return WebRequestResourceType::MEDIA;
+    case network::mojom::RequestDestination::kWorker:
+    case network::mojom::RequestDestination::kSharedWorker:
+    case network::mojom::RequestDestination::kServiceWorker:
+      return WebRequestResourceType::SCRIPT;
+    case network::mojom::RequestDestination::kReport:
+      return WebRequestResourceType::CSP_REPORT;
+    case network::mojom::RequestDestination::kEmpty:
+      // https://fetch.spec.whatwg.org/#concept-request-destination
+      if (request.keepalive) {
+        return WebRequestResourceType::PING;
+      }
+      return WebRequestResourceType::OTHER;
+    case network::mojom::RequestDestination::kWebBundle:
+      return WebRequestResourceType::WEBBUNDLE;
+    case network::mojom::RequestDestination::kAudioWorklet:
+    case network::mojom::RequestDestination::kManifest:
+    case network::mojom::RequestDestination::kPaintWorklet:
+    case network::mojom::RequestDestination::kWebIdentity:
+    case network::mojom::RequestDestination::kEmailVerification:
+    // The compression dictionary has not been exposed to extensions yet.
+    // We could do so if the need arises.
+    case network::mojom::RequestDestination::kCompressionDictionary:
+    case network::mojom::RequestDestination::kSpeculationRules:
+      return WebRequestResourceType::OTHER;
+  }
+  NOTREACHED();
+}
+
 }  // namespace
 
 WebRequestInfoInitParams::WebRequestInfoInitParams() = default;
 
 WebRequestInfoInitParams::WebRequestInfoInitParams(
     uint64_t request_id,
-    int render_process_id,
-    int frame_routing_id,
+    content::GlobalRenderFrameHostId global_id,
     std::unique_ptr<ExtensionNavigationUIData> navigation_ui_data,
     const network::ResourceRequest& request,
     bool is_download,
@@ -186,8 +259,7 @@ WebRequestInfoInitParams::WebRequestInfoInitParams(
     std::optional<int64_t> navigation_id)
     : id(request_id),
       url(request.url),
-      render_process_id(render_process_id),
-      frame_routing_id(frame_routing_id),
+      global_id(global_id),
       method(request.method),
       is_navigation_request(!!navigation_ui_data),
       initiator(request.request_initiator),
@@ -200,6 +272,21 @@ WebRequestInfoInitParams::WebRequestInfoInitParams(
   DCHECK_EQ(is_navigation_request, this->navigation_id.has_value());
 
   InitializeWebViewAndFrameData(navigation_ui_data.get());
+
+  // Determine whether this request is for privileged content (see //chrome's
+  // PrivilegedWebContents), so that it can be hidden from the webRequest and
+  // Declarative Net Request APIs. For a navigation there may be no renderer
+  // process to consult yet -- e.g. the initial main-frame navigation of a
+  // newly-created, still-empty WebContents is evaluated before a process is
+  // chosen -- so the destination WebContents' privileged state is carried on
+  // the navigation UI data. For other requests, the initiating process is live
+  // and is consulted directly.
+  if (navigation_ui_data) {
+    is_privileged = navigation_ui_data->is_privileged();
+  } else if (content::RenderProcessHost* process =
+                 content::RenderProcessHost::FromID(global_id.child_id)) {
+    is_privileged = process->IsPrivileged();
+  }
 
   std::vector<std::unique_ptr<UploadDataSource>> data_sources;
   if (CreateUploadDataSourcesFromResourceRequest(request, &data_sources)) {
@@ -229,12 +316,14 @@ void WebRequestInfoInitParams::InitializeWebViewAndFrameData(
     }
     frame_data = navigation_ui_data->frame_data();
     parent_routing_id = navigation_ui_data->parent_routing_id();
-  } else if (frame_routing_id != IPC::mojom::kRoutingIdNone) {
+  } else if (global_id.frame_routing_id != IPC::mojom::kRoutingIdNone) {
 #if BUILDFLAG(ENABLE_GUEST_VIEW)
     // Grab any WebView-related information if relevant.
     WebViewRendererState::WebViewInfo web_view_info;
+    // TODO(crbug.com/379869738): Remove GetUnsafeValue.
     if (WebViewRendererState::GetInstance()->GetInfo(
-            render_process_id, frame_routing_id, &web_view_info)) {
+            global_id.child_id.GetUnsafeValue(), global_id.frame_routing_id,
+            &web_view_info)) {
       is_web_view = true;
       web_view_instance_id = web_view_info.instance_id;
       web_view_rules_registry_id = web_view_info.rules_registry_id;
@@ -242,8 +331,7 @@ void WebRequestInfoInitParams::InitializeWebViewAndFrameData(
     }
 #endif
 
-    parent_routing_id =
-        content::GlobalRenderFrameHostId(render_process_id, frame_routing_id);
+    parent_routing_id = global_id;
 
     // For subresource loads we attempt to resolve the FrameData immediately.
     frame_data = ExtensionApiFrameIdMap::Get()->GetFrameData(parent_routing_id);
@@ -253,8 +341,7 @@ void WebRequestInfoInitParams::InitializeWebViewAndFrameData(
 WebRequestInfo::WebRequestInfo(WebRequestInfoInitParams params)
     : id(params.id),
       url(std::move(params.url)),
-      render_process_id(params.render_process_id),
-      frame_routing_id(params.frame_routing_id),
+      global_id(params.global_id),
       method(std::move(params.method)),
       is_navigation_request(params.is_navigation_request),
       initiator(std::move(params.initiator)),
@@ -269,7 +356,8 @@ WebRequestInfo::WebRequestInfo(WebRequestInfoInitParams params)
       web_view_embedder_process_id(params.web_view_embedder_process_id),
       is_service_worker_script(params.is_service_worker_script),
       navigation_id(std::move(params.navigation_id)),
-      parent_routing_id(params.parent_routing_id) {}
+      parent_routing_id(params.parent_routing_id),
+      is_privileged(params.is_privileged) {}
 
 WebRequestInfo::~WebRequestInfo() = default;
 
@@ -307,8 +395,7 @@ void WebRequestInfo::EraseOutprioritizedDNRActions() {
           // Check that the cache contains the action's extension ID
           // to make sure that rule matching was performed for that
           // extension.
-          DCHECK(
-              base::Contains(max_priority_allow_action, action.extension_id));
+          DCHECK(max_priority_allow_action.contains(action.extension_id));
 
           uint64_t allow_rule_priority_for_extension = 0u;
           if (auto& allow_action =

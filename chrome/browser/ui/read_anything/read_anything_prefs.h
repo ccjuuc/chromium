@@ -53,14 +53,15 @@ inline constexpr char kAccessibilityReadAnythingSpeechRate[] =
 inline constexpr char kAccessibilityReadAnythingHighlightGranularity[] =
     "settings.a11y.read_anything.highlight_granularity";
 
-// Int value to represent the user's preferred color for highlighting as text
-// is read.
-inline constexpr char kAccessibilityReadAnythingHighlightColor[] =
-    "settings.a11y.read_anything.highlight_color";
-
-// Int value to represent the user's preferred line focus mode.
+// Int value to represent the user's last chosen line focus mode.
 inline constexpr char kAccessibilityReadAnythingLineFocus[] =
     "settings.a11y.read_anything.line_focus";
+
+// Int value to represent the user's preferred line focus mode when it is
+// enabled. This is different from the above preference as the above pref can be
+// the line focus off value, where this cannot be.
+inline constexpr char kAccessibilityReadAnythingLastNonDisabledLineFocus[] =
+    "settings.a11y.read_anything.last_non_disabled_line_focus";
 
 inline constexpr char kAccessibilityReadAnythingLinksEnabled[] =
     "settings.a11y.read_anything.links_enabled";
@@ -87,6 +88,22 @@ inline constexpr char kAccessibilityReadAnythingTTSEngineReinstalled[] =
 // when / how to continue showing the entry point.
 inline constexpr char kAccessibilityReadAnythingOmniboxChipIgnoredCount[] =
     "settings.a11y.read_anything.omnibox_chip_ignored_count";
+
+// The last opened presentation state of reading mode. This is used to
+// determine whether to reopen reading mode in full-screen or side panel
+// view.
+inline constexpr char kAccessibilityReadAnythingLastOpenedPresentationState[] =
+    "settings.a11y.read_anything.last_opened_presentation_state";
+
+// A list of timestamps of when the user last started a
+// Reading Mode session. This is used to determine when to show the HaTS survey
+// to the user.
+inline constexpr char kAccessibilityReadAnythingRecentUsagesStartTimes[] =
+    "settings.a11y.read_anything.recent_usages_start_times";
+
+// String list with the 3 most recently used font names.
+inline constexpr char kAccessibilityReadAnythingRecentlyUsedFonts[] =
+    "settings.a11y.read_anything.recently_used_fonts";
 
 }  // namespace prefs
 

@@ -4,7 +4,6 @@
 
 #include "base/files/file_util.h"
 #include "base/path_service.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/android_buildflags.h"
 #include "build/build_config.h"
@@ -20,7 +19,6 @@
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/buildflags/buildflags.h"
-#include "extensions/common/extension_features.h"
 #include "extensions/common/permissions/permission_set.h"
 #include "extensions/common/switches.h"
 #include "net/dns/mock_host_resolver.h"
@@ -42,8 +40,6 @@ static void AddPattern(URLPatternSet* extent, const std::string& pattern) {
 
 }  // namespace
 
-using ContextType = extensions::browser_test_util::ContextType;
-
 class ExperimentalApiTest : public ExtensionApiTest {
  public:
   ExperimentalApiTest() = default;
@@ -60,8 +56,7 @@ class ExperimentalApiTest : public ExtensionApiTest {
 class PermissionsApiTest : public ExtensionApiTest {
  public:
  public:
-  explicit PermissionsApiTest(ContextType context_type = ContextType::kNone)
-      : ExtensionApiTest(context_type) {}
+  PermissionsApiTest() = default;
   ~PermissionsApiTest() override = default;
   PermissionsApiTest(const PermissionsApiTest&) = delete;
   PermissionsApiTest& operator=(const PermissionsApiTest&) = delete;
@@ -72,19 +67,7 @@ class PermissionsApiTest : public ExtensionApiTest {
   }
 };
 
-class PermissionsApiTestWithContextType
-    : public PermissionsApiTest,
-      public testing::WithParamInterface<ContextType> {
- public:
-  PermissionsApiTestWithContextType() : PermissionsApiTest(GetParam()) {}
-  ~PermissionsApiTestWithContextType() override = default;
-  PermissionsApiTestWithContextType(const PermissionsApiTestWithContextType&) =
-      delete;
-  PermissionsApiTestWithContextType& operator=(
-      const PermissionsApiTestWithContextType&) = delete;
-};
-
-IN_PROC_BROWSER_TEST_P(PermissionsApiTestWithContextType, PermissionsFail) {
+IN_PROC_BROWSER_TEST_F(PermissionsApiTest, PermissionsFail) {
   ASSERT_TRUE(RunExtensionTest("permissions/disabled")) << message_;
 
   // Since the experimental APIs require a flag, this will fail even though
@@ -100,8 +83,7 @@ IN_PROC_BROWSER_TEST_F(ExperimentalApiTest, PermissionsSucceed) {
   ASSERT_TRUE(RunExtensionTest("permissions/enabled")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(PermissionsApiTestWithContextType,
-                       ExperimentalPermissionsFail) {
+IN_PROC_BROWSER_TEST_F(PermissionsApiTest, ExperimentalPermissionsFail) {
   // At the time this test is being created, there is no experimental
   // function that will not be graduating soon, and does not require a
   // tab id as an argument.  So, we need the tab permission to get
@@ -121,19 +103,14 @@ IN_PROC_BROWSER_TEST_F(PermissionsApiTest, MAYBE_FaviconPermission) {
   ASSERT_TRUE(RunExtensionTest("permissions/favicon")) << message_;
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 // Test functions and APIs that are always allowed (even if you ask for no
 // permissions).
-// TODO(crbug.com/371432155): Port to desktop Android when chrome.tabs API
-// is available.
 IN_PROC_BROWSER_TEST_F(PermissionsApiTest, AlwaysAllowed) {
   ASSERT_TRUE(RunExtensionTest("permissions/always_allowed")) << message_;
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // Tests that the optional permissions API works correctly.
-IN_PROC_BROWSER_TEST_P(PermissionsApiTestWithContextType,
-                       OptionalPermissionsGranted) {
+IN_PROC_BROWSER_TEST_F(PermissionsApiTest, OptionalPermissionsGranted) {
   // Mark all the tested APIs as granted to bypass the confirmation UI.
   APIPermissionSet apis;
   apis.insert(extensions::mojom::APIPermissionID::kBookmark);
@@ -152,8 +129,7 @@ IN_PROC_BROWSER_TEST_P(PermissionsApiTestWithContextType,
 }
 
 // Tests that the optional permissions API works correctly.
-IN_PROC_BROWSER_TEST_P(PermissionsApiTestWithContextType,
-                       OptionalPermissionsAutoConfirm) {
+IN_PROC_BROWSER_TEST_F(PermissionsApiTest, OptionalPermissionsAutoConfirm) {
   // Rather than setting the granted permissions, set the UI autoconfirm flag
   // and run the same tests.
   auto dialog_action_reset =
@@ -187,8 +163,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsApiTest, OptionalPermissionsDeny) {
 
 // Tests that the permissions.request function must be called from within a
 // user gesture.
-IN_PROC_BROWSER_TEST_P(PermissionsApiTestWithContextType,
-                       OptionalPermissionsGesture) {
+IN_PROC_BROWSER_TEST_F(PermissionsApiTest, OptionalPermissionsGesture) {
   PermissionsRequestFunction::SetIgnoreUserGestureForTests(false);
   ASSERT_TRUE(StartEmbeddedTestServer());
   EXPECT_TRUE(RunExtensionTest("permissions/optional_gesture")) << message_;
@@ -196,6 +171,10 @@ IN_PROC_BROWSER_TEST_P(PermissionsApiTestWithContextType,
 
 // Tests that the user gesture is retained in the permissions.request function
 // callback.
+// TODO(https://crbug.com/491516661): This explicitly uses an MV2 extension
+// because it "consumes" a user gesture from the background page via a
+// window.open() call; this doesn't have an analogous version in service
+// workers.
 IN_PROC_BROWSER_TEST_F(PermissionsApiTest, OptionalPermissionsRetainGesture) {
   auto dialog_action_reset =
       PermissionsRequestFunction::SetDialogActionForTests(
@@ -278,7 +257,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsApiTest, FileLoad) {
 
 // Test requesting, querying, and removing host permissions for host
 // permissions that are a subset of the optional permissions.
-IN_PROC_BROWSER_TEST_P(PermissionsApiTestWithContextType, HostSubsets) {
+IN_PROC_BROWSER_TEST_F(PermissionsApiTest, HostSubsets) {
   auto dialog_action_reset =
       PermissionsRequestFunction::SetDialogActionForTests(
           PermissionsRequestFunction::DialogAction::kAutoConfirm);
@@ -286,55 +265,30 @@ IN_PROC_BROWSER_TEST_P(PermissionsApiTestWithContextType, HostSubsets) {
   EXPECT_TRUE(RunExtensionTest("permissions/host_subsets")) << message_;
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if !BUILDFLAG(IS_ANDROID)
 // Tests that requesting an optional permission from a background page, with
 // another window open, grants the permission and updates the bindings
 // (chrome.whatever, in this case chrome.alarms). Regression test for
-// crbug.com/435141, see details there for trickiness.
-// TODO(crbug.com/371432155): Port to desktop Android when chrome.tabs API
-// is available.
+// crbug.com/40394805, see details there for trickiness.
+// NOTE: Not tested on desktop Android because it requires a background page,
+// which is a MV2 feature. Android only supports MV3 / service worker.
+// TODO(https://crbug.com/491516661): This uses an MV2 extension because it
+// involves a different page reaching into the background page to call a
+// function, which isn't directly supported in SWs.
 IN_PROC_BROWSER_TEST_F(PermissionsApiTest, OptionalPermissionsUpdatesBindings) {
   ASSERT_TRUE(RunExtensionTest("permissions/optional_updates_bindings"))
       << message_;
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // !BUILDFLAG(IS_ANDROID)
 
-// Desktop Android only supports manifest V3 / service worker.
-#if !BUILDFLAG(IS_ANDROID)
-INSTANTIATE_TEST_SUITE_P(PersistentBackground,
-                         PermissionsApiTestWithContextType,
-                         testing::Values(ContextType::kPersistentBackground));
-#endif
-INSTANTIATE_TEST_SUITE_P(ServiceWorker,
-                         PermissionsApiTestWithContextType,
-                         testing::Values(ContextType::kServiceWorker));
-
-class PermissionsApiHostAccessRequestsTest : public PermissionsApiTest {
- public:
-  PermissionsApiHostAccessRequestsTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        extensions_features::kApiPermissionsHostAccessRequests);
-  }
-  ~PermissionsApiHostAccessRequestsTest() override = default;
-  PermissionsApiHostAccessRequestsTest(
-      const PermissionsApiHostAccessRequestsTest&) = delete;
-  PermissionsApiHostAccessRequestsTest& operator=(
-      const PermissionsApiHostAccessRequestsTest&) = delete;
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(PermissionsApiHostAccessRequestsTest,
-                       InvalidAddHostAccessRequests) {
+IN_PROC_BROWSER_TEST_F(PermissionsApiTest, InvalidAddHostAccessRequests) {
   ASSERT_TRUE(StartEmbeddedTestServer());
 
   ASSERT_TRUE(RunExtensionTest("permissions/add_host_access_request"))
       << message_;
 }
 
-IN_PROC_BROWSER_TEST_F(PermissionsApiHostAccessRequestsTest,
-                       InvalidRemoveHostAccessRequests) {
+IN_PROC_BROWSER_TEST_F(PermissionsApiTest, InvalidRemoveHostAccessRequests) {
   ASSERT_TRUE(StartEmbeddedTestServer());
 
   ASSERT_TRUE(RunExtensionTest("permissions/remove_host_access_request"))

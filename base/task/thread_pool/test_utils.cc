@@ -109,8 +109,8 @@ scoped_refptr<Sequence> CreateSequenceWithTask(
     const TaskTraits& traits,
     scoped_refptr<SequencedTaskRunner> task_runner,
     TaskSourceExecutionMode execution_mode) {
-  scoped_refptr<Sequence> sequence =
-      MakeRefCounted<Sequence>(traits, task_runner.get(), execution_mode);
+  scoped_refptr<Sequence> sequence = MakeRefCounted<Sequence>(
+      traits, task_runner.get(), execution_mode, ThreadType::kDefault);
   auto transaction = sequence->BeginTransaction();
   transaction.WillPushImmediateTask();
   transaction.PushImmediateTask(std::move(task));
@@ -139,16 +139,20 @@ scoped_refptr<TaskRunner> CreatePooledTaskRunnerWithExecutionMode(
 
 scoped_refptr<TaskRunner> CreatePooledTaskRunner(
     const TaskTraits& traits,
-    MockPooledTaskRunnerDelegate* mock_pooled_task_runner_delegate) {
+    MockPooledTaskRunnerDelegate* mock_pooled_task_runner_delegate,
+    bool inherit_task_importance_by_default) {
   return MakeRefCounted<PooledParallelTaskRunner>(
-      traits, mock_pooled_task_runner_delegate);
+      traits, mock_pooled_task_runner_delegate,
+      inherit_task_importance_by_default);
 }
 
 scoped_refptr<SequencedTaskRunner> CreatePooledSequencedTaskRunner(
     const TaskTraits& traits,
-    MockPooledTaskRunnerDelegate* mock_pooled_task_runner_delegate) {
+    MockPooledTaskRunnerDelegate* mock_pooled_task_runner_delegate,
+    bool inherit_task_importance_by_default) {
   return MakeRefCounted<PooledSequencedTaskRunner>(
-      traits, mock_pooled_task_runner_delegate);
+      traits, mock_pooled_task_runner_delegate,
+      inherit_task_importance_by_default);
 }
 
 MockPooledTaskRunnerDelegate::MockPooledTaskRunnerDelegate(
@@ -316,7 +320,8 @@ scoped_refptr<JobTaskSource> MockJobTask::GetJobTaskSource(
     const TaskTraits& traits,
     PooledTaskRunnerDelegate* delegate) {
   return MakeRefCounted<JobTaskSource>(
-      from_here, traits, base::BindRepeating(&test::MockJobTask::Run, this),
+      from_here, traits, ThreadType::kDefault,
+      base::BindRepeating(&test::MockJobTask::Run, this),
       base::BindRepeating(&test::MockJobTask::GetMaxConcurrency, this),
       delegate);
 }

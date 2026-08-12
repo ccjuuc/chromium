@@ -11,6 +11,7 @@
 
 namespace blink {
 
+struct GridItemData;
 class GridItems;
 class GridSizingSubtree;
 
@@ -44,13 +45,19 @@ class CORE_EXPORT GridNode final : public BlockNode {
         ->ShouldInvalidateSubgridMinMaxSizesCacheFor(layout_data);
   }
 
-  // If `oof_children` is provided, aggregate any out of flow children.
-  GridItems ConstructGridItems(const GridLineResolver& line_resolver,
-                               bool* must_invalidate_placement_cache,
-                               HeapVector<Member<LayoutBox>>* opt_oof_children,
-                               bool* opt_has_nested_subgrid = nullptr) const;
-
-  void AppendSubgriddedItems(GridItems* grid_items) const;
+  // If `opt_oof_children` is provided, aggregate any out of flow children.
+  //
+  // `parent_is_auto_placed` is true when this grid is itself an auto-placed
+  // subgrid inside a grid-lanes ancestor — i.e. the ancestor resolves its own
+  // track positions after track sizing, so this subgrid's position in the
+  // ancestor's tracks is unknown at sizing time. As such, any items within this
+  // subgrid should also be considered auto-placed if true.
+  GridItems* ConstructGridItems(
+      const GridLineResolver& line_resolver,
+      bool* must_invalidate_placement_cache,
+      bool parent_is_auto_placed = false,
+      HeapVector<Member<LayoutBox>>* opt_oof_children = nullptr,
+      bool* opt_has_nested_subgrid = nullptr) const;
 
   MinMaxSizesResult ComputeSubgridMinMaxSizes(
       const GridSizingSubtree& sizing_subtree,
@@ -60,14 +67,25 @@ class CORE_EXPORT GridNode final : public BlockNode {
       const GridSizingSubtree& sizing_subtree,
       const ConstraintSpace& space) const;
 
- private:
-  GridItems ConstructGridItems(
+  // Adjusts a subgridded item's span to be relative to the parent grid's
+  // coordinate system.
+  void AdjustSubgriddedItemSpan(const GridItemData& subgrid_item,
+                                GridItemData& subgridded_item) const;
+
+  // Computes the set indices for the `subgrid_item` in both the column and row
+  // axes.
+  void ComputeSetIndicesForSubgrid(GridItemData& subgrid_item,
+                                   GridLayoutData& layout_data) const;
+
+  // Constructs grid items with explicit subgrid parameters.
+  GridItems* ConstructGridItems(
       const GridLineResolver& line_resolver,
       const ComputedStyle& root_grid_style,
       const ComputedStyle& parent_grid_style,
       bool must_consider_grid_items_for_column_sizing,
       bool must_consider_grid_items_for_row_sizing,
       bool* must_invalidate_placement_cache,
+      bool parent_is_auto_placed = false,
       HeapVector<Member<LayoutBox>>* opt_oof_children = nullptr,
       bool* opt_has_nested_subgrid = nullptr) const;
 };

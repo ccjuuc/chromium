@@ -11,20 +11,26 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
+#include "base/barrier_callback.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/span.h"
+#include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
+#include "base/process/process.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/types/expected.h"
 #include "base/types/expected_macros.h"
+#include "components/signin/internal/identity_manager/oauth2_upgrade_token_flow.h"
+#include "components/signin/public/base/binding_key_registration_token_helper.h"
+#include "components/signin/public/base/binding_key_registration_token_result.h"
 #include "components/signin/public/base/session_binding_utils.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/unexportable_keys/background_task_priority.h"
 #include "components/unexportable_keys/service_error.h"
 #include "components/unexportable_keys/unexportable_key_id.h"
@@ -32,6 +38,7 @@
 #include "components/unexportable_keys/unexportable_key_service.h"
 #include "crypto/signature_verifier.h"
 #include "google_apis/gaia/core_account_id.h"
+#include "google_apis/gaia/gaia_constants.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "url/gurl.h"
@@ -40,10 +47,12 @@ namespace {
 
 constexpr std::string_view kTokenBindingNamespace = "TokenBinding";
 
+// We do not want to delay token binding key operations by having them
+// run at the same background priority as the spare key pool generation
+// tasks. Therefore, when the spare key pool is enabled, we elevate new
+// key generation to `kUserVisible`.
 constexpr unexportable_keys::BackgroundTaskPriority kTokenBindingPriority =
-    unexportable_keys::BackgroundTaskPriority::kBestEffort;
-
-constexpr base::TimeDelta kGarbageCollectionDelay = base::Seconds(10);
+    unexportable_keys::BackgroundTaskPriority::kUserVisible;
 
 base::expected<std::string, TokenBindingHelper::Error> CreateAssertionToken(
     const std::string& header_and_payload,
@@ -89,7 +98,17 @@ void TokenBindingHelper::SetBindingKey(
     base::span<const uint8_t> wrapped_binding_key) {
   if (wrapped_binding_key.empty()) {
     // No need in storing an empty key, just remove the entry if any.
-    binding_keys_.erase(account_id);
+    auto it = binding_keys_.find(account_id);
+    if (it == binding_keys_.end()) {
+      return;
+    }
+
+    binding_keys_.erase(it);
+    if (binding_keys_.empty()) {
+      // Make sure that any new binding key registration starts using a new key
+      // after the latest binding key is removed.
+      registration_token_helper_.reset();
+    }
     return;
   }
 
@@ -99,11 +118,73 @@ void TokenBindingHelper::SetBindingKey(
 }
 
 bool TokenBindingHelper::HasBindingKey(const CoreAccountId& account_id) const {
-  return base::Contains(binding_keys_, account_id);
+  return binding_keys_.contains(account_id);
 }
 
 void TokenBindingHelper::ClearAllKeys() {
   binding_keys_.clear();
+  registration_token_helper_.reset();
+}
+
+void TokenBindingHelper::MaybeInitializeRegistrationTokenHelper(
+    base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
+        supported_algorithms) {
+  if (registration_token_helper_) {
+    return;
+  }
+  std::vector<uint8_t> wrapped_binding_key_to_reuse;
+  if (!binding_keys_.empty()) {
+    // All bound tokens are supposed to use the same key, so we're taking an
+    // arbitrary key.
+    wrapped_binding_key_to_reuse = binding_keys_.begin()->second.wrapped_key;
+  }
+  if (!wrapped_binding_key_to_reuse.empty()) {
+    // Ignore the value of `supported_algorithms` in favor of an existing
+    // binding key.
+    registration_token_helper_ =
+        std::make_unique<signin::BindingKeyRegistrationTokenHelper>(
+            *unexportable_key_service_, std::move(wrapped_binding_key_to_reuse),
+            kTokenBindingPriority);
+  } else {
+    registration_token_helper_ =
+        std::make_unique<signin::BindingKeyRegistrationTokenHelper>(
+            *unexportable_key_service_, base::ToVector(supported_algorithms),
+            kTokenBindingPriority);
+  }
+}
+
+void TokenBindingHelper::OnAllCredentialsLoaded(bool has_refresh_tokens) {
+  if (!has_refresh_tokens) {
+    return;
+  }
+
+  MaybeInitializeRegistrationTokenHelper({
+      crypto::SignatureVerifier::ECDSA_SHA256,
+      crypto::SignatureVerifier::RSA_PKCS1_SHA256,
+  });
+  CHECK(registration_token_helper_);
+  registration_token_helper_->CreateKeyLoaderIfNeeded();
+}
+
+bool TokenBindingHelper::IsRegistrationKeyReady() const {
+  return registration_token_helper_ &&
+         registration_token_helper_->IsRegistrationKeyReady();
+}
+
+void TokenBindingHelper::GenerateBindingKeyRegistrationToken(
+    base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
+        supported_algorithms,
+    const std::variant<signin::TokenBindingAuthCode,
+                       signin::TokenBindingChallenge>& auth_code_or_challenge,
+    base::OnceCallback<void(
+        std::optional<signin::BindingKeyRegistrationTokenResult>)> callback) {
+  MaybeInitializeRegistrationTokenHelper(supported_algorithms);
+  CHECK(registration_token_helper_);
+
+  registration_token_helper_->GenerateForTokenBinding(
+      GaiaUrls::GetInstance()->oauth2_chrome_client_id(),
+      auth_code_or_challenge,
+      GURL("https://accounts.google.com/accountmanager"), std::move(callback));
 }
 
 void TokenBindingHelper::GenerateBindingKeyAssertion(
@@ -138,7 +219,7 @@ void TokenBindingHelper::GenerateBindingKeyAssertion(
 
 void TokenBindingHelper::StartGarbageCollection(
     absl::flat_hash_set<std::vector<uint8_t>> known_wrapped_keys_in_db) {
-  unexportable_key_service_->GetAllSigningKeysForGarbageCollectionSlowlyAsync(
+  unexportable_key_service_->GetAllKeysForGarbageCollectionSlowlyAsync(
       unexportable_keys::BackgroundTaskPriority::kBestEffort,
       base::BindOnce(&TokenBindingHelper::OnGetAllKeysForGarbageCollection,
                      weak_ptr_factory_.GetWeakPtr(),
@@ -168,6 +249,7 @@ bool TokenBindingHelper::AreAllBindingKeysSame() const {
 
 void TokenBindingHelper::CopyBindingKeyFromAnotherTokenService(
     base::span<const uint8_t> wrapped_binding_key) {
+  CHECK(!wrapped_binding_key.empty());
   // This will force a load of the `wrapped_binding_key` into the
   // `unexportable_key_service_`. In stateful implementations like on macOS,
   // this will furthermore ensure that the key representation on disk will be
@@ -178,6 +260,93 @@ void TokenBindingHelper::CopyBindingKeyFromAnotherTokenService(
   unexportable_key_service_->FromWrappedSigningKeySlowlyAsync(
       // TODO(crbug.com/455538352): Implement metrics.
       wrapped_binding_key, kTokenBindingPriority, base::DoNothing());
+}
+
+void TokenBindingHelper::PerformTokenBindingUpgrade(
+    const CoreAccountId& account_id,
+    std::string_view refresh_token,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    std::string_view device_id,
+    std::string_view challenge,
+    base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
+        supported_algorithms) {
+  CHECK(base::FeatureList::IsEnabled(
+      switches::kEnableChromeRefreshTokenBindingUpgrade));
+  CHECK_NE(refresh_token, GaiaConstants::kInvalidRefreshToken);
+  std::unique_ptr<signin::OAuth2UpgradeTokenFlow>& upgrade_flow =
+      upgrade_flows_[account_id];
+  if (upgrade_flow != nullptr) {
+    // Do nothing if an upgrade is already in progress for this account.
+    return;
+  }
+
+  // `base::Unretained()` is safe because `this` owns `upgrade_flow`.
+  upgrade_flow = std::make_unique<signin::OAuth2UpgradeTokenFlow>(
+      std::string(refresh_token),
+      switches::kRefreshTokenBindingUpgradeType.Get(), std::string(device_id),
+      std::move(url_loader_factory),
+      base::BindOnce(&TokenBindingHelper::OnUpgradeTokenFinished,
+                     base::Unretained(this), account_id));
+
+  // `base::Unretained()` is safe because `this` owns
+  // `registration_token_helper_`.
+  GenerateBindingKeyRegistrationToken(
+      supported_algorithms,
+      signin::TokenBindingChallenge(std::string(challenge)),
+      base::BindOnce(&TokenBindingHelper::OnUpgradeRegistrationTokenGenerated,
+                     base::Unretained(this), account_id));
+}
+
+void TokenBindingHelper::SetSaveBindingKeyCallback(
+    SaveBindingKeyCallback callback) {
+  CHECK(!save_binding_key_callback_);
+  CHECK(callback);
+  save_binding_key_callback_ = std::move(callback);
+}
+
+void TokenBindingHelper::OnUpgradeRegistrationTokenGenerated(
+    const CoreAccountId& account_id,
+    std::optional<signin::BindingKeyRegistrationTokenResult> result) {
+  CHECK(base::FeatureList::IsEnabled(
+      switches::kEnableChromeRefreshTokenBindingUpgrade));
+
+  auto it = upgrade_flows_.find(account_id);
+  CHECK(it != upgrade_flows_.end());
+  std::unique_ptr<signin::OAuth2UpgradeTokenFlow>& upgrade_flow = it->second;
+
+  if (!result.has_value()) {
+    upgrade_flow->AbortWithError(
+        signin::OAuth2UpgradeTokenFlowResult::kTokenGenerationFailure);
+    return;
+  }
+
+  CHECK(save_binding_key_callback_);
+  SaveBindingKeyResult save_key_result =
+      save_binding_key_callback_.Run(account_id, upgrade_flow->refresh_token(),
+                                     std::move(result->wrapped_binding_key));
+  base::UmaHistogramEnumeration(
+      "Signin.TokenBinding.UpgradeSaveBindingKeyResult", save_key_result);
+  if (save_key_result != SaveBindingKeyResult::kSuccess) {
+    upgrade_flow->AbortWithError(
+        signin::OAuth2UpgradeTokenFlowResult::kFailedToSaveBindingKey);
+    return;
+  }
+
+  upgrade_flow->StartWithRegistrationToken(
+      std::move(result->registration_token));
+}
+
+void TokenBindingHelper::OnUpgradeTokenFinished(
+    const CoreAccountId& account_id) {
+  CHECK(base::FeatureList::IsEnabled(
+      switches::kEnableChromeRefreshTokenBindingUpgrade));
+
+  size_t removed_count = upgrade_flows_.erase(account_id);
+  CHECK_EQ(removed_count, 1U);
+}
+
+base::WeakPtr<TokenBindingHelper> TokenBindingHelper::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 TokenBindingHelper::BindingKeyData::BindingKeyData(
@@ -194,8 +363,8 @@ void TokenBindingHelper::SignAssertionToken(
     std::string_view ephemeral_public_key,
     const GURL& destination_url,
     GenerateAssertionCallback callback,
-    unexportable_keys::ServiceErrorOr<unexportable_keys::UnexportableKeyId>
-        binding_key) {
+    unexportable_keys::ServiceErrorOr<
+        unexportable_keys::UnexportableSigningKeyId> binding_key) {
   if (!binding_key.has_value()) {
     RunCallbackAndRecordMetrics(std::move(callback),
                                 base::unexpected(Error::kLoadKeyFailure));
@@ -230,30 +399,23 @@ void TokenBindingHelper::SignAssertionToken(
 void TokenBindingHelper::OnGetAllKeysForGarbageCollection(
     absl::flat_hash_set<std::vector<uint8_t>> known_wrapped_keys_in_db,
     unexportable_keys::ServiceErrorOr<
-        std::vector<unexportable_keys::UnexportableKeyId>>
+        std::vector<unexportable_keys::UnexportableSigningKeyId>>
         all_key_ids_or_error) {
   if (!all_key_ids_or_error.has_value() || all_key_ids_or_error->empty()) {
     return;
   }
 
-  // Delay the actual garbage collection to give a chance for pending key
-  // generation tasks to complete.
-  //
-  // TODO(crbug.com/455538313): Instead of adding an arbitrary delay, simply
-  // don't delete keys that were modified after the beginning of the current
-  // Chrome session once we expose that timestamp in the keys.
-  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE,
-      base::BindOnce(&TokenBindingHelper::DoGarbageCollection,
-                     weak_ptr_factory_.GetWeakPtr(),
-                     std::move(known_wrapped_keys_in_db),
-                     *std::move(all_key_ids_or_error)),
-      kGarbageCollectionDelay);
-}
+  std::vector<unexportable_keys::UnexportableSigningKeyId>& all_key_ids =
+      *all_key_ids_or_error;
 
-void TokenBindingHelper::DoGarbageCollection(
-    absl::flat_hash_set<std::vector<uint8_t>> known_wrapped_keys_in_db,
-    std::vector<unexportable_keys::UnexportableKeyId> all_key_ids) {
+  static constexpr std::string_view kGarbageCollectionHistogramPrefix =
+      "Crypto.UnexportableKeys.GarbageCollection.RefreshTokenBinding.";
+
+  const size_t key_count = all_key_ids.size();
+  base::UmaHistogramCounts100(
+      base::StrCat({kGarbageCollectionHistogramPrefix, "TotalKeyCount"}),
+      key_count);
+
   // Construct a set of all wrapped keys that are still used.
   absl::flat_hash_set<std::vector<uint8_t>> known_wrapped_keys =
       std::move(known_wrapped_keys_in_db);
@@ -262,20 +424,33 @@ void TokenBindingHelper::DoGarbageCollection(
     known_wrapped_keys.insert(binding_key_data.wrapped_key);
   }
 
-  // Filter out keys from the response that are still used.
-  std::erase_if(all_key_ids, [&](unexportable_keys::UnexportableKeyId key_id) {
-    unexportable_keys::ServiceErrorOr<std::vector<uint8_t>> wrapped_key =
-        unexportable_key_service_->GetWrappedKey(key_id);
-    return !wrapped_key.has_value() ||
-           known_wrapped_keys.contains(*wrapped_key);
-  });
-
-  // TODO(crbug.com/455538313): Add metrics for the number of keys
-  // deleted.
-  std::ranges::for_each(
-      all_key_ids, [&](unexportable_keys::UnexportableKeyId key_id) {
-        unexportable_key_service_->DeleteKeySlowlyAsync(
-            key_id, unexportable_keys::BackgroundTaskPriority::kBestEffort,
-            base::DoNothing());
+  // Filter out keys from the response that are still used or were generated
+  // after the current Chrome session started.
+  std::erase_if(
+      all_key_ids, [&](unexportable_keys::UnexportableSigningKeyId key_id) {
+        unexportable_keys::ServiceErrorOr<std::vector<uint8_t>> wrapped_key =
+            unexportable_key_service_->GetWrappedKey(key_id);
+        return !wrapped_key.has_value() ||
+               known_wrapped_keys.contains(*wrapped_key) ||
+               unexportable_key_service_->GetCreationTime(key_id).value_or(
+                   base::Time::Now()) >=
+                   base::Process::Current().CreationTime();
       });
+
+  base::UmaHistogramCounts100(
+      base::StrCat({kGarbageCollectionHistogramPrefix, "UsedKeyCount"}),
+      key_count - all_key_ids.size());
+
+  base::UmaHistogramCounts100(
+      base::StrCat({kGarbageCollectionHistogramPrefix, "ObsoleteKeyCount"}),
+      all_key_ids.size());
+
+  unexportable_key_service_->DeleteKeysSlowlyAsync(
+      all_key_ids, unexportable_keys::BackgroundTaskPriority::kBestEffort,
+      base::BindOnce([](unexportable_keys::ServiceErrorOr<size_t> result) {
+        base::UmaHistogramCounts100(
+            base::StrCat({kGarbageCollectionHistogramPrefix,
+                          "ObsoleteKeyDeletionCount"}),
+            result.value_or(0));
+      }));
 }

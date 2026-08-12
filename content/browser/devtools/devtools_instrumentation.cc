@@ -4,6 +4,7 @@
 
 #include "content/browser/devtools/devtools_instrumentation.h"
 
+#include "base/byte_size.h"
 #include "base/containers/adapters.h"
 #include "base/feature_list.h"
 #include "base/notreached.h"
@@ -11,6 +12,7 @@
 #include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/traced_value.h"
+#include "base/unguessable_token.h"
 #include "components/download/public/common/download_create_info.h"
 #include "components/download/public/common/download_item.h"
 #include "components/download/public/common/download_url_parameters.h"
@@ -41,6 +43,7 @@
 #include "content/browser/devtools/web_contents_devtools_agent_host.h"
 #include "content/browser/devtools/worker_devtools_manager.h"
 #include "content/browser/preloading/prerender/prerender_final_status.h"
+#include "content/browser/preloading/prerender/prerender_host.h"
 #include "content/browser/preloading/prerender/prerender_metrics.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/renderer_host/navigation_request.h"
@@ -49,8 +52,6 @@
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/browser/web_package/signed_exchange_envelope.h"
 #include "content/public/browser/browser_context.h"
-#include "content/public/browser/cookie_insight_list_data.h"
-#include "content/public/browser/cookie_insight_list_handler.h"
 #include "devtools_agent_host_impl.h"
 #include "devtools_instrumentation.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -63,6 +64,7 @@
 #include "net/quic/web_transport_error.h"
 #include "net/ssl/ssl_info.h"
 #include "services/network/public/cpp/devtools_observer_util.h"
+#include "services/network/public/cpp/headers_matcher.h"
 #include "services/network/public/cpp/url_loader_factory_builder.h"
 #include "services/network/public/mojom/devtools_observer.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
@@ -73,9 +75,6 @@ namespace content {
 namespace devtools_instrumentation {
 
 namespace {
-
-namespace AttributionReportingIssueTypeEnum =
-    protocol::Audits::AttributionReportingIssueTypeEnum;
 
 const char kExampleBrowserProcessDeprecation[] =
     "ExampleBrowserProcessDeprecation";
@@ -169,247 +168,148 @@ std::unique_ptr<protocol::Audits::InspectorIssue> BuildHeavyAdIssue(
   return issue;
 }
 
-protocol::Audits::AttributionReportingIssueType
-BuildAttributionReportingIssueViolationType(
-    blink::mojom::AttributionReportingIssueType type) {
-  switch (type) {
-    case blink::mojom::AttributionReportingIssueType::kPermissionPolicyDisabled:
-      return AttributionReportingIssueTypeEnum::PermissionPolicyDisabled;
-    case blink::mojom::AttributionReportingIssueType::
-        kUntrustworthyReportingOrigin:
-      return AttributionReportingIssueTypeEnum::UntrustworthyReportingOrigin;
-    case blink::mojom::AttributionReportingIssueType::kInsecureContext:
-      return AttributionReportingIssueTypeEnum::InsecureContext;
-    case blink::mojom::AttributionReportingIssueType::
-        kInvalidRegisterSourceHeader:
-      return AttributionReportingIssueTypeEnum::InvalidHeader;
-    case blink::mojom::AttributionReportingIssueType::
-        kInvalidRegisterTriggerHeader:
-      return AttributionReportingIssueTypeEnum::InvalidRegisterTriggerHeader;
-    case blink::mojom::AttributionReportingIssueType::kSourceAndTriggerHeaders:
-      return AttributionReportingIssueTypeEnum::SourceAndTriggerHeaders;
-    case blink::mojom::AttributionReportingIssueType::kSourceIgnored:
-      return AttributionReportingIssueTypeEnum::SourceIgnored;
-    case blink::mojom::AttributionReportingIssueType::kTriggerIgnored:
-      return AttributionReportingIssueTypeEnum::TriggerIgnored;
-    case blink::mojom::AttributionReportingIssueType::kOsSourceIgnored:
-      return AttributionReportingIssueTypeEnum::OsSourceIgnored;
-    case blink::mojom::AttributionReportingIssueType::kOsTriggerIgnored:
-      return AttributionReportingIssueTypeEnum::OsTriggerIgnored;
-    case blink::mojom::AttributionReportingIssueType::
-        kInvalidRegisterOsSourceHeader:
-      return AttributionReportingIssueTypeEnum::InvalidRegisterOsSourceHeader;
-    case blink::mojom::AttributionReportingIssueType::
-        kInvalidRegisterOsTriggerHeader:
-      return AttributionReportingIssueTypeEnum::InvalidRegisterOsTriggerHeader;
-    case blink::mojom::AttributionReportingIssueType::kWebAndOsHeaders:
-      return AttributionReportingIssueTypeEnum::WebAndOsHeaders;
-    case blink::mojom::AttributionReportingIssueType::kNoWebOrOsSupport:
-      return AttributionReportingIssueTypeEnum::NoWebOrOsSupport;
-    case blink::mojom::AttributionReportingIssueType::
-        kNavigationRegistrationWithoutTransientUserActivation:
-      // This issue is not reported from the browser.
-      NOTREACHED();
-    case blink::mojom::AttributionReportingIssueType::kInvalidInfoHeader:
-      return AttributionReportingIssueTypeEnum::InvalidInfoHeader;
-    case blink::mojom::AttributionReportingIssueType::kNoRegisterSourceHeader:
-      return AttributionReportingIssueTypeEnum::NoRegisterSourceHeader;
-    case blink::mojom::AttributionReportingIssueType::kNoRegisterTriggerHeader:
-      return AttributionReportingIssueTypeEnum::NoRegisterTriggerHeader;
-    case blink::mojom::AttributionReportingIssueType::kNoRegisterOsSourceHeader:
-      return AttributionReportingIssueTypeEnum::NoRegisterOsSourceHeader;
-    case blink::mojom::AttributionReportingIssueType::
-        kNoRegisterOsTriggerHeader:
-      return AttributionReportingIssueTypeEnum::NoRegisterOsTriggerHeader;
-    case blink::mojom::AttributionReportingIssueType::
-        kNavigationRegistrationUniqueScopeAlreadySet:
-      return AttributionReportingIssueTypeEnum::
-          NavigationRegistrationUniqueScopeAlreadySet;
-  }
-}
-
-std::unique_ptr<protocol::Audits::InspectorIssue>
-BuildAttributionReportingIssue(
-    const blink::mojom::AttributionReportingIssueDetailsPtr& issue_details) {
-  protocol::String violation_type = BuildAttributionReportingIssueViolationType(
-      issue_details->violation_type);
-
-  auto request = protocol::Audits::AffectedRequest::Create()
-                     .SetUrl(issue_details->request->url)
-                     .Build();
-  if (issue_details->request->request_id.has_value()) {
-    request->SetRequestId(issue_details->request->request_id.value());
-  }
-  auto attribution_reporting_issue_details =
-      protocol::Audits::AttributionReportingIssueDetails::Create()
-          .SetViolationType(violation_type)
-          .SetRequest(std::move(request))
-          .Build();
-  if (issue_details->invalid_parameter.has_value()) {
-    attribution_reporting_issue_details->SetInvalidParameter(
-        issue_details->invalid_parameter.value());
-  }
-
-  auto protocol_issue_details =
-      protocol::Audits::InspectorIssueDetails::Create()
-          .SetAttributionReportingIssueDetails(
-              std::move(attribution_reporting_issue_details))
-          .Build();
-
-  auto issue = protocol::Audits::InspectorIssue::Create()
-                   .SetCode(protocol::Audits::InspectorIssueCodeEnum::
-                                AttributionReportingIssue)
-                   .SetDetails(std::move(protocol_issue_details))
-                   .Build();
-  return issue;
-}
-
 protocol::Audits::FederatedAuthRequestIssueReason
-FederatedAuthRequestResultToProtocol(
-    blink::mojom::FederatedAuthRequestResult result) {
-  using blink::mojom::FederatedAuthRequestResult;
+FederatedRequestResultToProtocol(blink::mojom::FederatedRequestResult result) {
+  using blink::mojom::FederatedRequestResult;
   namespace FederatedAuthRequestIssueReasonEnum =
       protocol::Audits::FederatedAuthRequestIssueReasonEnum;
   switch (result) {
-    case FederatedAuthRequestResult::kShouldEmbargo: {
+    case FederatedRequestResult::kShouldEmbargo: {
       return FederatedAuthRequestIssueReasonEnum::ShouldEmbargo;
     }
-    case FederatedAuthRequestResult::kDisabledInSettings: {
+    case FederatedRequestResult::kDisabledInSettings: {
       return FederatedAuthRequestIssueReasonEnum::DisabledInSettings;
     }
-    case FederatedAuthRequestResult::kDisabledInFlags: {
+    case FederatedRequestResult::kDisabledInFlags: {
       return FederatedAuthRequestIssueReasonEnum::DisabledInFlags;
     }
-    case FederatedAuthRequestResult::kIdpNotPotentiallyTrustworthy: {
+    case FederatedRequestResult::kIdpNotPotentiallyTrustworthy: {
       return FederatedAuthRequestIssueReasonEnum::IdpNotPotentiallyTrustworthy;
     }
-    case FederatedAuthRequestResult::kTooManyRequests: {
+    case FederatedRequestResult::kTooManyRequests: {
       return FederatedAuthRequestIssueReasonEnum::TooManyRequests;
     }
-    case FederatedAuthRequestResult::kWellKnownHttpNotFound: {
+    case FederatedRequestResult::kWellKnownHttpNotFound: {
       return FederatedAuthRequestIssueReasonEnum::WellKnownHttpNotFound;
     }
-    case FederatedAuthRequestResult::kWellKnownNoResponse: {
+    case FederatedRequestResult::kWellKnownBlockedByConnectionAllowlist: {
+      return FederatedAuthRequestIssueReasonEnum::
+          WellKnownBlockedByConnectionAllowlist;
+    }
+    case FederatedRequestResult::kWellKnownNoResponse: {
       return FederatedAuthRequestIssueReasonEnum::WellKnownNoResponse;
     }
-    case FederatedAuthRequestResult::kWellKnownInvalidResponse: {
+    case FederatedRequestResult::kWellKnownInvalidResponse: {
       return FederatedAuthRequestIssueReasonEnum::WellKnownInvalidResponse;
     }
-    case FederatedAuthRequestResult::kWellKnownListEmpty: {
+    case FederatedRequestResult::kWellKnownListEmpty: {
       return FederatedAuthRequestIssueReasonEnum::WellKnownListEmpty;
     }
-    case FederatedAuthRequestResult::kWellKnownInvalidContentType: {
+    case FederatedRequestResult::kWellKnownInvalidContentType: {
       return FederatedAuthRequestIssueReasonEnum::WellKnownInvalidContentType;
     }
-    case FederatedAuthRequestResult::kConfigNotInWellKnown: {
+    case FederatedRequestResult::kConfigNotInWellKnown: {
       return FederatedAuthRequestIssueReasonEnum::ConfigNotInWellKnown;
     }
-    case FederatedAuthRequestResult::kWellKnownTooBig: {
+    case FederatedRequestResult::kWellKnownTooBig: {
       return FederatedAuthRequestIssueReasonEnum::WellKnownTooBig;
     }
-    case FederatedAuthRequestResult::kConfigHttpNotFound: {
+    case FederatedRequestResult::kConfigHttpNotFound: {
       return FederatedAuthRequestIssueReasonEnum::ConfigHttpNotFound;
     }
-    case FederatedAuthRequestResult::kConfigNoResponse: {
+    case FederatedRequestResult::kConfigBlockedByConnectionAllowlist: {
+      return FederatedAuthRequestIssueReasonEnum::
+          ConfigBlockedByConnectionAllowlist;
+    }
+    case FederatedRequestResult::kConfigNoResponse: {
       return FederatedAuthRequestIssueReasonEnum::ConfigNoResponse;
     }
-    case FederatedAuthRequestResult::kConfigInvalidResponse: {
+    case FederatedRequestResult::kConfigInvalidResponse: {
       return FederatedAuthRequestIssueReasonEnum::ConfigInvalidResponse;
     }
-    case FederatedAuthRequestResult::kConfigInvalidContentType: {
+    case FederatedRequestResult::kConfigInvalidContentType: {
       return FederatedAuthRequestIssueReasonEnum::ConfigInvalidContentType;
     }
-    case FederatedAuthRequestResult::kClientMetadataHttpNotFound: {
-      return FederatedAuthRequestIssueReasonEnum::ClientMetadataHttpNotFound;
-    }
-    case FederatedAuthRequestResult::kClientMetadataNoResponse: {
-      return FederatedAuthRequestIssueReasonEnum::ClientMetadataNoResponse;
-    }
-    case FederatedAuthRequestResult::kClientMetadataInvalidResponse: {
-      return FederatedAuthRequestIssueReasonEnum::ClientMetadataInvalidResponse;
-    }
-    case FederatedAuthRequestResult::kClientMetadataInvalidContentType: {
-      return FederatedAuthRequestIssueReasonEnum::
-          ClientMetadataInvalidContentType;
-    }
-    case FederatedAuthRequestResult::kAccountsHttpNotFound: {
+    case FederatedRequestResult::kAccountsHttpNotFound: {
       return FederatedAuthRequestIssueReasonEnum::AccountsHttpNotFound;
     }
-    case FederatedAuthRequestResult::kAccountsNoResponse: {
+    case FederatedRequestResult::kAccountsBlockedByConnectionAllowlist: {
+      return FederatedAuthRequestIssueReasonEnum::
+          AccountsBlockedByConnectionAllowlist;
+    }
+    case FederatedRequestResult::kAccountsNoResponse: {
       return FederatedAuthRequestIssueReasonEnum::AccountsNoResponse;
     }
-    case FederatedAuthRequestResult::kAccountsInvalidResponse: {
+    case FederatedRequestResult::kAccountsInvalidResponse: {
       return FederatedAuthRequestIssueReasonEnum::AccountsInvalidResponse;
     }
-    case FederatedAuthRequestResult::kAccountsListEmpty: {
+    case FederatedRequestResult::kAccountsListEmpty: {
       return FederatedAuthRequestIssueReasonEnum::AccountsListEmpty;
     }
-    case FederatedAuthRequestResult::kAccountsInvalidContentType: {
+    case FederatedRequestResult::kAccountsInvalidContentType: {
       return FederatedAuthRequestIssueReasonEnum::AccountsInvalidContentType;
     }
-    case FederatedAuthRequestResult::kIdTokenHttpNotFound: {
+    case FederatedRequestResult::kIdTokenHttpNotFound: {
       return FederatedAuthRequestIssueReasonEnum::IdTokenHttpNotFound;
     }
-    case FederatedAuthRequestResult::kIdTokenNoResponse: {
+    case FederatedRequestResult::kIdTokenBlockedByConnectionAllowlist: {
+      return FederatedAuthRequestIssueReasonEnum::
+          IdTokenBlockedByConnectionAllowlist;
+    }
+    case FederatedRequestResult::kIdTokenNoResponse: {
       return FederatedAuthRequestIssueReasonEnum::IdTokenNoResponse;
     }
-    case FederatedAuthRequestResult::kIdTokenInvalidResponse: {
+    case FederatedRequestResult::kIdTokenInvalidResponse: {
       return FederatedAuthRequestIssueReasonEnum::IdTokenInvalidResponse;
     }
-    case FederatedAuthRequestResult::kIdTokenIdpErrorResponse: {
+    case FederatedRequestResult::kIdTokenIdpErrorResponse: {
       return FederatedAuthRequestIssueReasonEnum::IdTokenIdpErrorResponse;
     }
-    case FederatedAuthRequestResult::kIdTokenCrossSiteIdpErrorResponse: {
+    case FederatedRequestResult::kIdTokenCrossSiteIdpErrorResponse: {
       return FederatedAuthRequestIssueReasonEnum::
           IdTokenCrossSiteIdpErrorResponse;
     }
-    case FederatedAuthRequestResult::kIdTokenInvalidContentType: {
+    case FederatedRequestResult::kIdTokenInvalidContentType: {
       return FederatedAuthRequestIssueReasonEnum::IdTokenInvalidContentType;
     }
-    case FederatedAuthRequestResult::kCanceled: {
+    case FederatedRequestResult::kCanceled: {
       return FederatedAuthRequestIssueReasonEnum::Canceled;
     }
-    case FederatedAuthRequestResult::kRpPageNotVisible:
+    case FederatedRequestResult::kRpPageNotVisible:
       return FederatedAuthRequestIssueReasonEnum::RpPageNotVisible;
-    case FederatedAuthRequestResult::kError: {
+    case FederatedRequestResult::kError: {
       return FederatedAuthRequestIssueReasonEnum::ErrorIdToken;
     }
-    case FederatedAuthRequestResult::kSilentMediationFailure: {
+    case FederatedRequestResult::kSilentMediationFailure: {
       return FederatedAuthRequestIssueReasonEnum::SilentMediationFailure;
     }
-    case FederatedAuthRequestResult::kThirdPartyCookiesBlocked: {
-      return FederatedAuthRequestIssueReasonEnum::ThirdPartyCookiesBlocked;
-    }
-    case FederatedAuthRequestResult::kNotSignedInWithIdp: {
+    case FederatedRequestResult::kNotSignedInWithIdp: {
       return FederatedAuthRequestIssueReasonEnum::NotSignedInWithIdp;
     }
-    case FederatedAuthRequestResult::kMissingTransientUserActivation: {
+    case FederatedRequestResult::kMissingTransientUserActivation: {
       return FederatedAuthRequestIssueReasonEnum::
           MissingTransientUserActivation;
     }
-    case FederatedAuthRequestResult::kReplacedByActiveMode: {
+    case FederatedRequestResult::kReplacedByActiveMode: {
       return FederatedAuthRequestIssueReasonEnum::ReplacedByActiveMode;
     }
-    case FederatedAuthRequestResult::kInvalidFieldsSpecified: {
-      return FederatedAuthRequestIssueReasonEnum::InvalidFieldsSpecified;
-    }
-    case FederatedAuthRequestResult::kRelyingPartyOriginIsOpaque: {
+    case FederatedRequestResult::kRelyingPartyOriginIsOpaque: {
       return FederatedAuthRequestIssueReasonEnum::RelyingPartyOriginIsOpaque;
     }
-    case FederatedAuthRequestResult::kTypeNotMatching: {
+    case FederatedRequestResult::kTypeNotMatching: {
       return FederatedAuthRequestIssueReasonEnum::TypeNotMatching;
     }
-    case FederatedAuthRequestResult::kUiDismissedNoEmbargo: {
+    case FederatedRequestResult::kUiDismissedNoEmbargo: {
       return FederatedAuthRequestIssueReasonEnum::UiDismissedNoEmbargo;
     }
-    case FederatedAuthRequestResult::kCorsError: {
+    case FederatedRequestResult::kCorsError: {
       return FederatedAuthRequestIssueReasonEnum::CorsError;
     }
-    case FederatedAuthRequestResult::kSuppressedBySegmentationPlatform: {
+    case FederatedRequestResult::kSuppressedBySegmentationPlatform: {
       return FederatedAuthRequestIssueReasonEnum::
           SuppressedBySegmentationPlatform;
     }
-    case FederatedAuthRequestResult::kSuccess: {
+    case FederatedRequestResult::kSuccess: {
       NOTREACHED();
     }
   }
@@ -417,17 +317,17 @@ FederatedAuthRequestResultToProtocol(
 
 std::unique_ptr<protocol::Audits::InspectorIssue>
 BuildFederatedAuthRequestIssue(
-    const blink::mojom::FederatedAuthRequestIssueDetailsPtr& issue_details) {
-  auto federated_auth_request_details =
+    const blink::mojom::FederatedRequestIssueDetailsPtr& issue_details) {
+  auto federated_request_details =
       protocol::Audits::FederatedAuthRequestIssueDetails::Create()
           .SetFederatedAuthRequestIssueReason(
-              FederatedAuthRequestResultToProtocol(issue_details->status))
+              FederatedRequestResultToProtocol(issue_details->status))
           .Build();
 
   auto protocol_issue_details =
       protocol::Audits::InspectorIssueDetails::Create()
           .SetFederatedAuthRequestIssueDetails(
-              std::move(federated_auth_request_details))
+              std::move(federated_request_details))
           .Build();
 
   auto issue = protocol::Audits::InspectorIssue::Create()
@@ -505,6 +405,197 @@ BuildFederatedAuthUserInfoRequestIssue(
   auto issue = protocol::Audits::InspectorIssue::Create()
                    .SetCode(protocol::Audits::InspectorIssueCodeEnum::
                                 FederatedAuthUserInfoRequestIssue)
+                   .SetDetails(std::move(protocol_issue_details))
+                   .Build();
+  return issue;
+}
+
+protocol::Audits::EmailVerificationRequestIssueReason
+EmailVerificationRequestResultToProtocol(
+    blink::mojom::EmailVerificationRequestResult result) {
+  using blink::mojom::EmailVerificationRequestResult;
+  namespace EmailVerificationRequestIssueReasonEnum =
+      protocol::Audits::EmailVerificationRequestIssueReasonEnum;
+  switch (result) {
+    case EmailVerificationRequestResult::kInvalidEmail:
+      return EmailVerificationRequestIssueReasonEnum::InvalidEmail;
+    case EmailVerificationRequestResult::kDnsFetchFailed:
+      return EmailVerificationRequestIssueReasonEnum::DnsFetchFailed;
+    case EmailVerificationRequestResult::kDnsInvalidRecord:
+      return EmailVerificationRequestIssueReasonEnum::DnsInvalidRecord;
+    case EmailVerificationRequestResult::kWellKnownHttpNotFound:
+      return EmailVerificationRequestIssueReasonEnum::WellKnownHttpNotFound;
+    case EmailVerificationRequestResult::kWellKnownNoResponse:
+      return EmailVerificationRequestIssueReasonEnum::WellKnownNoResponse;
+    case EmailVerificationRequestResult::kWellKnownInvalidResponse:
+      return EmailVerificationRequestIssueReasonEnum::WellKnownInvalidResponse;
+    case EmailVerificationRequestResult::kWellKnownListEmpty:
+      return EmailVerificationRequestIssueReasonEnum::WellKnownListEmpty;
+    case EmailVerificationRequestResult::kWellKnownInvalidContentType:
+      return EmailVerificationRequestIssueReasonEnum::
+          WellKnownInvalidContentType;
+    case EmailVerificationRequestResult::kWellKnownMissingIssuanceEndpoint:
+      return EmailVerificationRequestIssueReasonEnum::
+          WellKnownMissingIssuanceEndpoint;
+    case EmailVerificationRequestResult::kWellKnownIssuanceEndpointCrossOrigin:
+      return EmailVerificationRequestIssueReasonEnum::
+          WellKnownIssuanceEndpointCrossOrigin;
+    case EmailVerificationRequestResult::kWellKnownUnsupportedSigningAlgorithm:
+      return EmailVerificationRequestIssueReasonEnum::
+          WellKnownUnsupportedSigningAlgorithm;
+    case EmailVerificationRequestResult::kTokenHttpNotFound:
+      return EmailVerificationRequestIssueReasonEnum::TokenHttpNotFound;
+    case EmailVerificationRequestResult::kTokenNoResponse:
+      return EmailVerificationRequestIssueReasonEnum::TokenNoResponse;
+    case EmailVerificationRequestResult::kTokenInvalidResponse:
+      return EmailVerificationRequestIssueReasonEnum::TokenInvalidResponse;
+    case EmailVerificationRequestResult::kTokenInvalidContentType:
+      return EmailVerificationRequestIssueReasonEnum::TokenInvalidContentType;
+    case EmailVerificationRequestResult::kTokenMalformedSdJwt:
+      return EmailVerificationRequestIssueReasonEnum::TokenMalformedSdJwt;
+    case EmailVerificationRequestResult::kTokenInvalidSdJwt:
+      return EmailVerificationRequestIssueReasonEnum::TokenInvalidSdJwt;
+    case EmailVerificationRequestResult::kKeyBindingSigningFailed:
+      return EmailVerificationRequestIssueReasonEnum::KeyBindingSigningFailed;
+    case EmailVerificationRequestResult::kRpOriginIsOpaque:
+      return EmailVerificationRequestIssueReasonEnum::RpOriginIsOpaque;
+    case EmailVerificationRequestResult::kWellKnownMissingAccountsEndpoint:
+      return EmailVerificationRequestIssueReasonEnum::
+          WellKnownMissingAccountsEndpoint;
+    case EmailVerificationRequestResult::kUserLoggedOut:
+      return EmailVerificationRequestIssueReasonEnum::UserLoggedOut;
+    case EmailVerificationRequestResult::kWellKnownAccountsEndpointCrossOrigin:
+      return EmailVerificationRequestIssueReasonEnum::
+          WellKnownAccountsEndpointCrossOrigin;
+    case EmailVerificationRequestResult::kAccountsHttpNotFound:
+      return EmailVerificationRequestIssueReasonEnum::AccountsHttpNotFound;
+    case EmailVerificationRequestResult::kAccountsNoResponse:
+      return EmailVerificationRequestIssueReasonEnum::AccountsNoResponse;
+    case EmailVerificationRequestResult::kAccountsInvalidResponse:
+      return EmailVerificationRequestIssueReasonEnum::AccountsInvalidResponse;
+    case EmailVerificationRequestResult::kAccountsInvalidContentType:
+      return EmailVerificationRequestIssueReasonEnum::
+          AccountsInvalidContentType;
+    case EmailVerificationRequestResult::kAccountsEmptyList:
+      return EmailVerificationRequestIssueReasonEnum::AccountsEmptyList;
+    case EmailVerificationRequestResult::
+        kEmailVerificationWellKnownHttpNotFound:
+      return EmailVerificationRequestIssueReasonEnum::
+          EmailVerificationWellKnownHttpNotFound;
+    case EmailVerificationRequestResult::kEmailVerificationWellKnownNoResponse:
+      return EmailVerificationRequestIssueReasonEnum::
+          EmailVerificationWellKnownNoResponse;
+    case EmailVerificationRequestResult::
+        kEmailVerificationWellKnownInvalidResponse:
+      return EmailVerificationRequestIssueReasonEnum::
+          EmailVerificationWellKnownInvalidResponse;
+    case EmailVerificationRequestResult::
+        kEmailVerificationWellKnownInvalidContentType:
+      return EmailVerificationRequestIssueReasonEnum::
+          EmailVerificationWellKnownInvalidContentType;
+    case EmailVerificationRequestResult::kJwksHttpNotFound:
+      return EmailVerificationRequestIssueReasonEnum::JwksHttpNotFound;
+    case EmailVerificationRequestResult::kJwksInvalidResponse:
+      return EmailVerificationRequestIssueReasonEnum::JwksInvalidResponse;
+    case EmailVerificationRequestResult::
+        kTokenVerificationSdJwtUnsupportedHeaderAlg:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationSdJwtUnsupportedHeaderAlg;
+    case EmailVerificationRequestResult::kTokenVerificationSdJwtInvalidTyp:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationSdJwtInvalidTyp;
+    case EmailVerificationRequestResult::kTokenVerificationSdJwtMissingIss:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationSdJwtMissingIss;
+    case EmailVerificationRequestResult::kTokenVerificationSdJwtMissingIat:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationSdJwtMissingIat;
+    case EmailVerificationRequestResult::kTokenVerificationSdJwtMissingCnf:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationSdJwtMissingCnf;
+    case EmailVerificationRequestResult::kTokenVerificationSdJwtMissingEmail:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationSdJwtMissingEmail;
+    case EmailVerificationRequestResult::kTokenVerificationSdJwtInvalidIssuedAt:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationSdJwtInvalidIssuedAt;
+    case EmailVerificationRequestResult::kTokenVerificationSdJwtInvalidIssuer:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationSdJwtInvalidIssuer;
+    case EmailVerificationRequestResult::kTokenVerificationSdJwtJwksMissingKeys:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationSdJwtJwksMissingKeys;
+    case EmailVerificationRequestResult::kTokenVerificationSdJwtSignatureFailed:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationSdJwtSignatureFailed;
+    case EmailVerificationRequestResult::
+        kTokenVerificationSdJwtInvalidEmailVerified:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationSdJwtInvalidEmailVerified;
+    case EmailVerificationRequestResult::kTokenVerificationSdJwtInvalidEmail:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationSdJwtInvalidEmail;
+    case EmailVerificationRequestResult::
+        kTokenVerificationSdJwtInvalidHolderKey:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationSdJwtInvalidHolderKey;
+    case EmailVerificationRequestResult::kTokenVerificationKbInvalidTyp:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationKbInvalidTyp;
+    case EmailVerificationRequestResult::kTokenVerificationKbMissingAud:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationKbMissingAud;
+    case EmailVerificationRequestResult::kTokenVerificationKbMissingNonce:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationKbMissingNonce;
+    case EmailVerificationRequestResult::kTokenVerificationKbMissingIat:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationKbMissingIat;
+    case EmailVerificationRequestResult::kTokenVerificationKbMissingSdHash:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationKbMissingSdHash;
+    case EmailVerificationRequestResult::kTokenVerificationKbInvalidIssuedAt:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationKbInvalidIssuedAt;
+    case EmailVerificationRequestResult::kTokenVerificationKbInvalidAudience:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationKbInvalidAudience;
+    case EmailVerificationRequestResult::kTokenVerificationKbInvalidNonce:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationKbInvalidNonce;
+    case EmailVerificationRequestResult::kTokenVerificationKbInvalidSdHash:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationKbInvalidSdHash;
+    case EmailVerificationRequestResult::kTokenVerificationKbMissingCnf:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationKbMissingCnf;
+    case EmailVerificationRequestResult::kTokenVerificationKbSignatureFailed:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationKbSignatureFailed;
+    case EmailVerificationRequestResult::kSuccess:
+      NOTREACHED();
+  }
+}
+
+std::unique_ptr<protocol::Audits::InspectorIssue>
+BuildEmailVerificationRequestIssue(
+    const blink::mojom::EmailVerificationRequestIssueDetailsPtr&
+        issue_details) {
+  auto email_verification_request_details =
+      protocol::Audits::EmailVerificationRequestIssueDetails::Create()
+          .SetEmailVerificationRequestIssueReason(
+              EmailVerificationRequestResultToProtocol(issue_details->status))
+          .Build();
+
+  auto protocol_issue_details =
+      protocol::Audits::InspectorIssueDetails::Create()
+          .SetEmailVerificationRequestIssueDetails(
+              std::move(email_verification_request_details))
+          .Build();
+
+  auto issue = protocol::Audits::InspectorIssue::Create()
+                   .SetCode(protocol::Audits::InspectorIssueCodeEnum::
+                                EmailVerificationRequestIssue)
                    .SetDetails(std::move(protocol_issue_details))
                    .Build();
   return issue;
@@ -706,6 +797,60 @@ void OnFetchKeepAliveRequestComplete(
                    status);
 }
 
+void OnPrefetchActivationBeaconWillBeSent(
+    FrameTreeNodeId frame_tree_node_id,
+    const std::string& request_id,
+    const network::ResourceRequest& request,
+    std::optional<std::pair<const GURL&,
+                            const network::mojom::URLResponseHeadDevToolsInfo&>>
+        redirect_info) {
+  auto timestamp = base::TimeTicks::Now();
+  FrameTreeNode* ftn = FrameTreeNode::GloballyFindByID(frame_tree_node_id);
+  if (!ftn) {
+    return;
+  }
+  std::string frame_token =
+      ftn->current_frame_host()->devtools_frame_token().ToString();
+  GURL initiator_url;
+  if (request.request_initiator.has_value()) {
+    initiator_url = request.request_initiator->GetURL();
+  }
+  DispatchToAgents(
+      ftn, &protocol::NetworkHandler::PrefetchActivationBeaconWillBeSent,
+      request_id, request, initiator_url, frame_token, timestamp,
+      redirect_info);
+}
+
+void OnPrefetchActivationBeaconResponseReceived(
+    FrameTreeNodeId frame_tree_node_id,
+    const std::string& request_id,
+    const GURL& url,
+    const network::mojom::URLResponseHead& head) {
+  FrameTreeNode* ftn = FrameTreeNode::GloballyFindByID(frame_tree_node_id);
+  if (!ftn) {
+    return;
+  }
+  std::string frame_token =
+      ftn->current_frame_host()->devtools_frame_token().ToString();
+  network::mojom::URLResponseHeadDevToolsInfoPtr head_info =
+      network::ExtractDevToolsInfo(head);
+  DispatchToAgents(ftn, &protocol::NetworkHandler::ResponseReceived, request_id,
+                   request_id, url, protocol::Network::ResourceTypeEnum::Ping,
+                   *head_info, frame_token);
+}
+
+void OnPrefetchActivationBeaconRequestComplete(
+    FrameTreeNodeId frame_tree_node_id,
+    const std::string& request_id,
+    const network::URLLoaderCompletionStatus& status) {
+  FrameTreeNode* ftn = FrameTreeNode::GloballyFindByID(frame_tree_node_id);
+  if (!ftn) {
+    return;
+  }
+  DispatchToAgents(ftn, &protocol::NetworkHandler::LoadingComplete, request_id,
+                   protocol::Network::ResourceTypeEnum::Ping, status);
+}
+
 void BackForwardCacheNotUsed(
     const NavigationRequest* nav_request,
     const BackForwardCacheCanStoreDocumentResult* result,
@@ -728,7 +873,9 @@ void WillSwapFrameTreeNode(FrameTreeNode& old_node, FrameTreeNode& new_node) {
           RenderFrameDevToolsAgentHost::GetFor(&new_node));
   // Disconnect old host entirely, so it detaches from renderer and does not
   // cause problem if renderer comes back from the BFCache.
-  previous_host->DisconnectWebContents();
+  if (previous_host) {
+    previous_host->DisconnectWebContents();
+  }
   host->SetFrameTreeNode(&new_node);
 }
 
@@ -867,6 +1014,22 @@ void WillInitiatePrerender(FrameTree& frame_tree) {
   if (auto* host = WebContentsDevToolsAgentHost::GetFor(wc)) {
     host->WillInitiatePrerender(frame_tree.root());
   }
+
+  // For new-tab prerenders (target_hint="_blank"), the prerender lives in a
+  // different WebContents from the initiator. Also notify the initiator's
+  // DevTools agent host so the prerender target appears in the initiator's
+  // DevTools session.
+  PrerenderHost* prerender_host =
+      PrerenderHost::GetFromFrameTreeNodeIfPrerendering(*frame_tree.root());
+  if (prerender_host) {
+    WebContents* initiator_wc = prerender_host->initiator_web_contents().get();
+    if (initiator_wc && initiator_wc != wc) {
+      if (auto* initiator_host =
+              WebContentsDevToolsAgentHost::GetFor(initiator_wc)) {
+        initiator_host->WillInitiatePrerender(frame_tree.root());
+      }
+    }
+  }
 }
 
 void DidActivatePrerender(const NavigationRequest& nav_request,
@@ -881,12 +1044,14 @@ void DidUpdatePrerenderStatus(
     const base::UnguessableToken& initiator_devtools_navigation_token,
     blink::mojom::SpeculationAction action,
     const GURL& prerender_url,
+    bool form_submission,
     std::optional<blink::mojom::SpeculationTargetHint> target_hint,
     const base::UnguessableToken& preload_pipeline_id,
     PreloadingTriggeringOutcome status,
     std::optional<PrerenderFinalStatus> prerender_status,
     std::optional<std::string> disallowed_mojo_interface,
-    const std::vector<PrerenderMismatchedHeaders>* mismatched_headers) {
+    const std::vector<network::MismatchedHttpRequestHeader>*
+        mismatched_headers) {
   auto* ftn = FrameTreeNode::GloballyFindByID(initiator_frame_tree_node_id);
   // ftn will be null if this is browser-initiated, which has no initiator.
   if (!ftn) {
@@ -903,13 +1068,14 @@ void DidUpdatePrerenderStatus(
   // We update DevToolsPreloadStorage, even if there are no active DevTools
   // sessions, to persist the latest status update.
   devtools_preload_storage->UpdatePrerenderStatus(
-      action, prerender_url, target_hint, preload_pipeline_id, status,
-      prerender_status, disallowed_mojo_interface, mismatched_headers);
+      action, prerender_url, form_submission, target_hint, preload_pipeline_id,
+      status, prerender_status, disallowed_mojo_interface, mismatched_headers);
 
   DispatchToAgents(ftn, &protocol::PreloadHandler::DidUpdatePrerenderStatus,
                    initiator_devtools_navigation_token, action, prerender_url,
-                   target_hint, preload_pipeline_id, status, prerender_status,
-                   disallowed_mojo_interface, mismatched_headers);
+                   form_submission, target_hint, preload_pipeline_id, status,
+                   prerender_status, disallowed_mojo_interface,
+                   mismatched_headers);
 }
 
 namespace {
@@ -1034,6 +1200,28 @@ void OnNavigationEntryMarkedSkippable(const GURL& url,
           .SetErrorType(protocol::Audits::GenericIssueErrorTypeEnum::
                             NavigationEntryMarkedSkippable)
           .SetRequest(std::move(request))
+          .Build();
+
+  auto details = protocol::Audits::InspectorIssueDetails::Create()
+                     .SetGenericIssueDetails(std::move(generic_details))
+                     .Build();
+
+  auto issue =
+      protocol::Audits::InspectorIssue::Create()
+          .SetCode(protocol::Audits::InspectorIssueCodeEnum::GenericIssue)
+          .SetDetails(std::move(details))
+          .Build();
+
+  ReportBrowserInitiatedIssue(rfh, std::move(issue));
+}
+
+void OnBackUINavigationWouldSkipAd(RenderFrameHostImpl* rfh) {
+  CHECK(rfh);
+
+  auto generic_details =
+      protocol::Audits::GenericIssueDetails::Create()
+          .SetErrorType(protocol::Audits::GenericIssueErrorTypeEnum::
+                            BackUINavigationWouldSkipAd)
           .Build();
 
   auto details = protocol::Audits::InspectorIssueDetails::Create()
@@ -1230,6 +1418,23 @@ void CreateAndAddNavigationThrottles(NavigationThrottleRegistry& registry) {
         agent_host->auto_attacher()->CreateAndAddNavigationThrottles(registry);
         return;
       }
+      // For new-tab prerenders (target_hint="_blank"), also create throttles
+      // via the initiator's DevTools agent host.
+      PrerenderHost* prerender_host =
+          PrerenderHost::GetFromFrameTreeNodeIfPrerendering(*frame_tree_node);
+      if (prerender_host) {
+        WebContents* initiator_wc =
+            prerender_host->initiator_web_contents().get();
+        if (initiator_wc && initiator_wc != WebContentsImpl::FromFrameTreeNode(
+                                                frame_tree_node)) {
+          if (auto* initiator_agent_host =
+                  WebContentsDevToolsAgentHost::GetFor(initiator_wc)) {
+            initiator_agent_host->auto_attacher()
+                ->CreateAndAddNavigationThrottles(registry);
+            return;
+          }
+        }
+      }
     }
   }
 
@@ -1281,6 +1486,16 @@ void ThrottleServiceWorkerMainScriptFetch(
 
   ThrottleForServiceWorkerAgentHost(agent_host, requesting_agent_host,
                                     throttle_handle);
+
+  // When the service worker is throttled for DevTools, there is no
+  // renderer for the service worker yet and that means that the NetworkHandler
+  // does not have a reference to the network content and DevTools protocol
+  // commands that depend on it will not work. To fix this, we need to set the
+  // storage partition for the service worker on the Network handler.
+  for (auto* network_handler :
+       protocol::NetworkHandler::ForAgentHost(agent_host)) {
+    network_handler->SetStoragePartition(wrapper->storage_partition());
+  }
 }
 
 void ThrottleWorkerMainScriptFetch(
@@ -1302,7 +1517,17 @@ void ThrottleWorkerMainScriptFetch(
 
   FrameTreeNode* ftn = rfh->frame_tree_node();
   DispatchToAgents(ftn, &protocol::TargetHandler::AddWorkerThrottle, agent_host,
-                   std::move(throttle_handle));
+                   throttle_handle);
+
+  if (agent_host->GetParentId() !=
+      ftn->current_frame_host()->GetDevToolsFrameToken().ToString()) {
+    if (auto parent_host =
+            DevToolsAgentHostImpl::GetForId(agent_host->GetParentId())) {
+      DispatchToAgents(parent_host.get(),
+                       &protocol::TargetHandler::AddWorkerThrottle, agent_host,
+                       throttle_handle);
+    }
+  }
 }
 
 bool ShouldWaitForDebuggerInWindowOpen() {
@@ -1388,6 +1613,32 @@ void ApplyNetworkRequestOverrides(
 }
 
 }  // namespace
+
+void ApplyExtraHeadersForWebSocket(
+    const GlobalRenderFrameHostId& frame_id,
+    const std::optional<base::UnguessableToken>& devtools_worker_token,
+    net::HttpRequestHeaders* headers) {
+  auto apply_overrides = [headers](DevToolsAgentHostImpl* agent_host) {
+    if (!agent_host) {
+      return;
+    }
+    bool disable_cache = false;
+    bool skip_service_worker = false;
+    ApplyNetworkRequestOverrides(agent_host, headers, &disable_cache, nullptr,
+                                 &skip_service_worker, nullptr, nullptr,
+                                 nullptr, nullptr);
+  };
+  if (RenderFrameHostImpl* frame = RenderFrameHostImpl::FromID(frame_id)) {
+    if (FrameTreeNode* ftn = frame->frame_tree_node()) {
+      apply_overrides(GetDevToolsAgentHostForNetworkOverrides(ftn));
+    }
+  }
+  if (devtools_worker_token && !devtools_worker_token->is_empty()) {
+    scoped_refptr<DevToolsAgentHostImpl> worker_agent_host =
+        DevToolsAgentHostImpl::GetForId(devtools_worker_token->ToString());
+    apply_overrides(worker_agent_host.get());
+  }
+}
 
 void ApplyAuctionNetworkRequestOverrides(
     FrameTreeNode* frame_tree_node,
@@ -1530,18 +1781,14 @@ bool WillCreateURLLoaderFactoryParams::Run(
       factory_override && *factory_override ? factory_override->get()
                                             : &devtools_override;
 
-  // Order of targets and sessions matters -- the latter proxy is created,
-  // the closer it is to the network. So start with frame's NetworkHandler,
-  // then process frame's FetchHandler and then browser's FetchHandler.
+  // Order of targets and sessions matters -- the later proxy is created,
+  // the closer it is to the network. So process frame's FetchHandler
+  // and then browser's FetchHandler.
   // Within the target, the agents added earlier are closer to network.
   bool had_interceptors =
-      MaybeCreateProxyForInterception<protocol::NetworkHandler>(
+      MaybeCreateProxyForInterception<protocol::FetchHandler>(
           agent_host_, process_id_, storage_partition_, devtools_token_,
           is_navigation, is_download, handler_override, header_client);
-
-  had_interceptors |= MaybeCreateProxyForInterception<protocol::FetchHandler>(
-      agent_host_, process_id_, storage_partition_, devtools_token_,
-      is_navigation, is_download, handler_override, header_client);
 
   // TODO(caseq): assure deterministic order of browser agents (or sessions).
   for (auto* browser_agent_host : BrowserDevToolsAgentHost::Instances()) {
@@ -1599,7 +1846,7 @@ WillCreateURLLoaderFactoryParams::ForServiceWorker(RenderProcessHost& rph,
                                                    int routing_id) {
   ServiceWorkerDevToolsAgentHost* agent_host =
       ServiceWorkerDevToolsManager::GetInstance()
-          ->GetDevToolsAgentHostForWorker(rph.GetDeprecatedID(), routing_id);
+          ->GetDevToolsAgentHostForWorker(rph.GetID(), routing_id);
   CHECK(agent_host);
   return WillCreateURLLoaderFactoryParams(
       agent_host, agent_host->devtools_worker_token(), rph.GetDeprecatedID(),
@@ -1645,6 +1892,17 @@ WillCreateURLLoaderFactoryParams::ForWorkerMainScript(
     DevToolsAgentHostImpl* agent_host,
     const base::UnguessableToken& worker_token,
     RenderFrameHostImpl& ancestor_render_frame_host) {
+  if (agent_host &&
+      agent_host->GetParentId() !=
+          ancestor_render_frame_host.GetDevToolsFrameToken().ToString()) {
+    if (auto parent_host =
+            DevToolsAgentHostImpl::GetForId(agent_host->GetParentId())) {
+      return WillCreateURLLoaderFactoryParams(
+          parent_host.get(), worker_token,
+          ancestor_render_frame_host.GetProcess()->GetDeprecatedID(),
+          ancestor_render_frame_host.GetProcess()->GetStoragePartition());
+    }
+  }
   // Use the ancestor frame's interceptor to align with the interception
   // behavior in the renderer that reuses the same url loader factory from
   // the ancestor frame for the worker.
@@ -1716,47 +1974,6 @@ void OnAuctionWorkletNetworkRequestComplete(
                    &protocol::NetworkHandler::LoadingComplete, request_id,
                    /*resource_type=*/protocol::Network::ResourceTypeEnum::Other,
                    status);
-}
-
-bool NeedInterestGroupAuctionEvents(FrameTreeNodeId frame_tree_node_id) {
-  FrameTreeNode* ftn = FrameTreeNode::GloballyFindByID(frame_tree_node_id);
-  if (!ftn) {
-    return false;
-  }
-  DevToolsAgentHostImpl* agent_host = RenderFrameDevToolsAgentHost::GetFor(ftn);
-  if (!agent_host) {
-    return false;
-  }
-  for (auto* storage : protocol::StorageHandler::ForAgentHost(agent_host)) {
-    if (storage->interest_group_auction_tracking_enabled()) {
-      return true;
-    }
-  }
-  return false;
-}
-
-void OnInterestGroupAuctionEventOccurred(
-    FrameTreeNodeId frame_tree_node_id,
-    base::Time event_time,
-    InterestGroupAuctionEventType type,
-    const std::string& unique_auction_id,
-    base::optional_ref<const std::string> parent_auction_id,
-    const base::Value::Dict& auction_config) {
-  DispatchToAgents(
-      frame_tree_node_id,
-      &protocol::StorageHandler::NotifyInterestGroupAuctionEventOccurred,
-      event_time, type, unique_auction_id, parent_auction_id, auction_config);
-}
-
-void OnInterestGroupAuctionNetworkRequestCreated(
-    FrameTreeNodeId frame_tree_node_id,
-    InterestGroupAuctionFetchType type,
-    const std::string& request_id,
-    const std::vector<std::string>& devtools_auction_ids) {
-  DispatchToAgents(frame_tree_node_id,
-                   &protocol::StorageHandler::
-                       NotifyInterestGroupAuctionNetworkRequestCreated,
-                   type, request_id, devtools_auction_ids);
 }
 
 void OnNavigationRequestWillBeSent(
@@ -1955,33 +2172,6 @@ std::unique_ptr<protocol::Array<protocol::String>> BuildWarningReasons(
                                    WarnSameSiteUnspecifiedLaxAllowUnsafe);
   }
 
-  // There can only be one of the following warnings.
-  if (status.HasWarningReason(net::CookieInclusionStatus::WarningReason::
-                                  WARN_STRICT_LAX_DOWNGRADE_STRICT_SAMESITE)) {
-    warning_reasons->push_back(protocol::Audits::CookieWarningReasonEnum::
-                                   WarnSameSiteStrictLaxDowngradeStrict);
-  } else if (status.HasWarningReason(
-                 net::CookieInclusionStatus::WarningReason::
-                     WARN_STRICT_CROSS_DOWNGRADE_STRICT_SAMESITE)) {
-    warning_reasons->push_back(protocol::Audits::CookieWarningReasonEnum::
-                                   WarnSameSiteStrictCrossDowngradeStrict);
-  } else if (status.HasWarningReason(
-                 net::CookieInclusionStatus::WarningReason::
-                     WARN_STRICT_CROSS_DOWNGRADE_LAX_SAMESITE)) {
-    warning_reasons->push_back(protocol::Audits::CookieWarningReasonEnum::
-                                   WarnSameSiteStrictCrossDowngradeLax);
-  } else if (status.HasWarningReason(
-                 net::CookieInclusionStatus::WarningReason::
-                     WARN_LAX_CROSS_DOWNGRADE_STRICT_SAMESITE)) {
-    warning_reasons->push_back(protocol::Audits::CookieWarningReasonEnum::
-                                   WarnSameSiteLaxCrossDowngradeStrict);
-  } else if (status.HasWarningReason(
-                 net::CookieInclusionStatus::WarningReason::
-                     WARN_LAX_CROSS_DOWNGRADE_LAX_SAMESITE)) {
-    warning_reasons->push_back(protocol::Audits::CookieWarningReasonEnum::
-                                   WarnSameSiteLaxCrossDowngradeLax);
-  }
-
   if (status.HasWarningReason(
           net::CookieInclusionStatus::WarningReason::WARN_DOMAIN_NON_ASCII)) {
     warning_reasons->push_back(
@@ -1992,16 +2182,6 @@ std::unique_ptr<protocol::Array<protocol::String>> BuildWarningReasons(
                                   WARN_THIRD_PARTY_PHASEOUT)) {
     warning_reasons->push_back(
         protocol::Audits::CookieWarningReasonEnum::WarnThirdPartyPhaseout);
-  }
-
-  if (status.exemption_reason() ==
-      net::CookieInclusionStatus::ExemptionReason::k3PCDMetadata) {
-    warning_reasons->push_back(protocol::Audits::CookieWarningReasonEnum::
-                                   WarnDeprecationTrialMetadata);
-  } else if (status.exemption_reason() ==
-             net::CookieInclusionStatus::ExemptionReason::k3PCDHeuristics) {
-    warning_reasons->push_back(protocol::Audits::CookieWarningReasonEnum::
-                                   WarnThirdPartyCookieHeuristic);
   }
 
   // This warning only affects cookies when the corresponding feature is
@@ -2056,34 +2236,6 @@ BuildCookieDeprecationMetadataIssue(
   return issue;
 }
 
-std::unique_ptr<protocol::Audits::CookieIssueInsight> BuildCookieIssueInsight(
-    std::string_view cookie_domain,
-    const net::CookieInclusionStatus& status) {
-  std::optional<CookieIssueInsight> insight =
-      CookieInsightListHandler::GetInstance().GetInsight(cookie_domain, status);
-  if (!insight.has_value()) {
-    return nullptr;
-  }
-
-  switch (insight->type) {
-    case InsightType::kGitHubResource:
-      return protocol::Audits::CookieIssueInsight::Create()
-          .SetType(protocol::Audits::InsightTypeEnum::GitHubResource)
-          .SetTableEntryUrl(insight->domain_info.entry_url)
-          .Build();
-    case InsightType::kGracePeriod:
-      return protocol::Audits::CookieIssueInsight::Create()
-          .SetType(protocol::Audits::InsightTypeEnum::GracePeriod)
-          .Build();
-    case InsightType::kHeuristics:
-      return protocol::Audits::CookieIssueInsight::Create()
-          .SetType(protocol::Audits::InsightTypeEnum::Heuristics)
-          .Build();
-    default:
-      NOTREACHED();
-  }
-}
-
 }  // namespace
 
 void ReportCookieIssue(
@@ -2130,9 +2282,6 @@ void ReportCookieIssue(
                                .SetDomain(cookie.Domain())
                                .Build();
     cookie_issue_details->SetCookie(std::move(affected_cookie));
-
-    cookie_issue_details->SetInsight(BuildCookieIssueInsight(
-        cookie.DomainWithoutDot(), excluded_cookie->access_result.status));
   } else {
     CHECK(excluded_cookie->cookie_or_line->is_cookie_string());
     cookie_issue_details->SetRawCookieLine(
@@ -2255,7 +2404,7 @@ void BuildAndReportBrowserInitiatedIssue(
   } else if (info->code ==
              blink::mojom::InspectorIssueCode::kFederatedAuthRequestIssue) {
     issue = BuildFederatedAuthRequestIssue(
-        info->details->federated_auth_request_details);
+        info->details->federated_request_details);
   } else if (info->code ==
              blink::mojom::InspectorIssueCode::kDeprecationIssue) {
     issue = BuildDeprecationIssue(info->details->deprecation_issue_details);
@@ -2276,13 +2425,13 @@ void BuildAndReportBrowserInitiatedIssue(
     issue = BuildFederatedAuthUserInfoRequestIssue(
         info->details->federated_auth_user_info_request_details);
   } else if (info->code ==
-             blink::mojom::InspectorIssueCode::kAttributionReportingIssue) {
-    issue = BuildAttributionReportingIssue(
-        info->details->attribution_reporting_issue_details);
-  } else if (info->code ==
              blink::mojom::InspectorIssueCode::kUserReidentificationIssue) {
     issue = BuildUserReidentificationIssue(
         info->details->user_reidentification_issue_details);
+  } else if (info->code ==
+             blink::mojom::InspectorIssueCode::kEmailVerificationRequestIssue) {
+    issue = BuildEmailVerificationRequestIssue(
+        info->details->email_verification_request_details);
   } else {
     NOTREACHED() << "Unsupported type of browser-initiated issue";
   }
@@ -2372,7 +2521,7 @@ void OnServiceWorkerMainScriptFetchingFailed(
           worker_token,
           status.completion_time.ToInternalValue() /
               static_cast<double>(base::Time::kMicrosecondsPerSecond),
-          status.encoded_data_length);
+          status.encoded_data_length.InBytes());
     }
   } else if (agent_host) {
     for (auto* network_handler :
@@ -2423,6 +2572,13 @@ void OnServiceWorkerMainScriptRequestWillBeSent(
     const ServiceWorkerContextWrapper* context_wrapper,
     int64_t version_id,
     network::ResourceRequest& request) {
+  ServiceWorkerDevToolsAgentHost* agent_host =
+      ServiceWorkerDevToolsManager::GetInstance()
+          ->GetDevToolsAgentHostForNewInstallingWorker(context_wrapper,
+                                                       version_id);
+  CHECK(agent_host);
+  request.throttling_profile_id = agent_host->devtools_worker_token();
+
   // Currently, `requesting_frame_id` is invalid when payment apps and
   // extensions register a service worker. See the callers of
   // ServiceWorkerContextWrapper::RegisterServiceWorker().
@@ -2440,11 +2596,6 @@ void OnServiceWorkerMainScriptRequestWillBeSent(
   network::mojom::URLRequestDevToolsInfoPtr request_info =
       network::ExtractDevToolsInfo(request);
 
-  ServiceWorkerDevToolsAgentHost* agent_host =
-      ServiceWorkerDevToolsManager::GetInstance()
-          ->GetDevToolsAgentHostForNewInstallingWorker(context_wrapper,
-                                                       version_id);
-  DCHECK(agent_host);
   const std::string request_id = agent_host->devtools_worker_token().ToString();
   MaybeAssignResourceRequestId(agent_host, request_id, request);
   for (auto* network_handler :
@@ -2479,24 +2630,31 @@ void OnWorkerMainScriptLoadingFailed(
 
 void OnWorkerMainScriptRequestWillBeSent(
     RenderFrameHostImpl& ancestor_frame_host,
+    DedicatedWorkerHost* creator_worker,
     const base::UnguessableToken& worker_token,
     network::ResourceRequest& request) {
   FrameTreeNode* ftn = ancestor_frame_host.frame_tree_node();
 
   auto timestamp = base::TimeTicks::Now();
+
+  DevToolsAgentHostImpl* effective_host =
+      creator_worker ? DedicatedWorkerDevToolsAgentHost::GetFor(creator_worker)
+                     : RenderFrameDevToolsAgentHost::GetFor(ftn);
+
+  if (!effective_host) {
+    return;
+  }
+
   network::mojom::URLRequestDevToolsInfoPtr request_info =
       network::ExtractDevToolsInfo(request);
 
-  auto* owner_host = RenderFrameDevToolsAgentHost::GetFor(ftn);
-  if (!owner_host) {
-    return;
-  }
-  MaybeAssignResourceRequestId(owner_host, worker_token.ToString(), request);
+  MaybeAssignResourceRequestId(effective_host, worker_token.ToString(),
+                               request);
 
   // Note: we apply overrides from the owner frame to match the behavior in the
   // renderer.
   bool disable_cache = false;
-  ApplyNetworkRequestOverrides(owner_host, &request.headers, &disable_cache,
+  ApplyNetworkRequestOverrides(effective_host, &request.headers, &disable_cache,
                                nullptr, &request.skip_service_worker,
                                &request.devtools_accepted_stream_types, nullptr,
                                nullptr, nullptr);
@@ -2507,12 +2665,13 @@ void OnWorkerMainScriptRequestWillBeSent(
     request.load_flags |= net::LOAD_BYPASS_CACHE;
   }
 
-  DispatchToAgents(
-      ftn, &protocol::NetworkHandler::RequestSent, worker_token.ToString(),
-      /*loader_id=*/"", request.headers, *request_info,
-      protocol::Network::Initiator::TypeEnum::Other, ftn->current_url(),
-      /*initiator_devtools_request_id*/ "",
-      ancestor_frame_host.devtools_frame_token(), timestamp);
+  DispatchToAgents(effective_host, &protocol::NetworkHandler::RequestSent,
+                   worker_token.ToString(),
+                   /*loader_id=*/"", request.headers, *request_info,
+                   protocol::Network::Initiator::TypeEnum::Other,
+                   ftn->current_url(),
+                   /*initiator_devtools_request_id*/ "",
+                   ancestor_frame_host.devtools_frame_token(), timestamp);
 }
 
 void LogWorkletMessage(RenderFrameHostImpl& frame_host,
@@ -2615,6 +2774,9 @@ protocol::Audits::GenericIssueErrorType GenericIssueErrorTypeToProtocol(
     case blink::mojom::GenericIssueErrorType::kNavigationEntryMarkedSkippable:
       return protocol::Audits::GenericIssueErrorTypeEnum::
           NavigationEntryMarkedSkippable;
+    case blink::mojom::GenericIssueErrorType::kBackUINavigationWouldSkipAd:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          BackUINavigationWouldSkipAd;
     case blink::mojom::GenericIssueErrorType::
         kAutofillAndManualTextPolicyControlledFeaturesInfo:
       return protocol::Audits::GenericIssueErrorTypeEnum::
@@ -2627,6 +2789,25 @@ protocol::Audits::GenericIssueErrorType GenericIssueErrorTypeToProtocol(
         kManualTextPolicyControlledFeatureInfo:
       return protocol::Audits::GenericIssueErrorTypeEnum::
           ManualTextPolicyControlledFeatureInfo;
+    case blink::mojom::GenericIssueErrorType::
+        kFormModelContextParameterMissingTitleAndDescription:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          FormModelContextParameterMissingTitleAndDescription;
+    case blink::mojom::GenericIssueErrorType::kFormModelContextMissingToolName:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          FormModelContextMissingToolName;
+    case blink::mojom::GenericIssueErrorType::
+        kFormModelContextMissingToolDescription:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          FormModelContextMissingToolDescription;
+    case blink::mojom::GenericIssueErrorType::
+        kFormModelContextRequiredParameterMissingName:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          FormModelContextRequiredParameterMissingName;
+    case blink::mojom::GenericIssueErrorType::
+        kFormModelContextParameterMissingName:
+      return protocol::Audits::GenericIssueErrorTypeEnum::
+          FormModelContextParameterMissingName;
   }
 }
 

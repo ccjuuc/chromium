@@ -1,7 +1,6 @@
 <?xml version="1.0" ?>
 <!DOCTYPE translationbundle>
 <translationbundle lang="or">
-<translation id="1028699632127661925"><ph name="DEVICE_NAME" />କୁ ପଠାଉଛି...</translation>
 <translation id="111910763555783249">ବିଜ୍ଞପ୍ତି ସେଟିଂସ୍‍</translation>
 <translation id="1127811143501539442">{DAYS,plural, =1{1 ଦିନ ପୂର୍ବେ}other{# ଦିନ ପୂର୍ବେ}}</translation>
 <translation id="1156623771253174079">{SECONDS,plural, =1{1 ମିନିଟ୍ ପୂର୍ବେ}other{# ମିନିଟ୍ ପୂର୍ବେ}}</translation>
@@ -12,7 +11,6 @@
 <translation id="1253734725326687145">ଟଚ ଟାର୍ଗେଟ ଉପର ଡାହାଣପଟକୁ ମୁଭ କରାଯାଇଛି। ଏଠାରେ ଟାପ କରନ୍ତୁ।</translation>
 <translation id="1266864766717917324"><ph name="CONTENT_TYPE" />ସେୟାର୍ କରିହେଲା ନାହିଁ</translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">ଛୋଟ ଛୋଟ ଭାଗରେ ଟେକ୍ସଟ୍ ସେୟାର୍ କରିବାକୁ ଚେଷ୍ଟା କରନ୍ତୁ।</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">ବାମରୁ ଡାହାଣ</translation>
 <translation id="1383876407941801731">ସର୍ଚ୍ଚ</translation>
@@ -20,6 +18,7 @@
 <translation id="1432724887402139994">{SECONDS,plural, =1{1 ମିନିଟ ପୂର୍ବେ}other{# ମିନିଟ ପୂର୍ବେ}}</translation>
 <translation id="1450753235335490080"><ph name="CONTENT_TYPE" /> ସେୟାର୍ କରାଯାଇ ପାରିବ ନାହିଁ</translation>
 <translation id="1523230076022876491">{MONTHS,plural, =1{1 ମାସ ପୂର୍ବେ}other{# ମାସ ପୂର୍ବେ}}</translation>
+<translation id="1591017414891297549">ପ୍ରିଭ୍ୟୁ</translation>
 <translation id="1591184457164800433">{MINUTES,plural, =1{1 ମିନିଟ୍‍ ଏବଂ }other{# ମିନିଟ୍‍ ଏବଂ }}</translation>
 <translation id="1643823602425662293">ବିଜ୍ଞପ୍ତି</translation>
 <translation id="169515659049020177">Shift</translation>
@@ -44,7 +43,6 @@
 <translation id="2148716181193084225">ଆଜି</translation>
 <translation id="2168039046890040389">ଉପର ପୃଷ୍ଠା</translation>
 <translation id="2190355936436201913">(ଖାଲି)</translation>
-<translation id="2192232475740621500">କମ୍‌ ସାନ୍ଧ୍ରତା ବ୍ୟବହାର କରନ୍ତୁ</translation>
 <translation id="2267918077332197517">ଏହି ସାଇଟ୍‍ର ସମସ୍ତ ବିଜ୍ଞପ୍ତିକୁ ବ୍ଲକ୍ କରନ୍ତୁ</translation>
 <translation id="2283117145434822734">F6</translation>
 <translation id="2289052229480071835">ଆପଣଙ୍କ ସ୍କ୍ରିନ୍‌ରେ ସ୍ପର୍ଶ ଲକ୍ଷ୍ୟଗୁଡ଼ିକ ଟାପ୍ କରନ୍ତୁ।</translation>
@@ -56,7 +54,6 @@
 <translation id="2388990488038464401">ଆପଣଙ୍କ ଫୋନ୍‌ରୁ ଏହି ନମ୍ବର୍‍କୁ କଲ୍ କରିବେ?</translation>
 <translation id="2435457462613246316">ପାସୱାର୍ଡ ଦେଖାନ୍ତୁ</translation>
 <translation id="24452542372838207">ବିଜ୍ଞପ୍ତି ସଂପ୍ରସାରଣ କରନ୍ତୁ</translation>
-<translation id="2445449901874883781">ଉଚ୍ଚ ସାନ୍ଧ୍ରତା ବ୍ୟବହାର କରନ୍ତୁ</translation>
 <translation id="2448407890032181691">ଟଚ ଟାର୍ଗେଟ ତଳ ଡାହାଣପଟକୁ ମୁଭ କରାଯାଇଛି। ଏଠାରେ ଟାପ କରନ୍ତୁ।</translation>
 <translation id="2482878487686419369">ବିଜ୍ଞପ୍ତି</translation>
 <translation id="2497284189126895209">ସମସ୍ତ ଫାଇଲଗୁଡିକ</translation>
@@ -69,7 +66,6 @@
 <translation id="2586657967955657006">କ୍ଲିପ୍‌ବୋର୍ଡ</translation>
 <translation id="2653844658857826081">ନୂଆ</translation>
 <translation id="2666092431469916601">ଶୀର୍ଷ</translation>
-<translation id="2701330563083355633"><ph name="DEVICE_NAME" />ରୁ ସେୟାର୍ କରାଯାଇଛି</translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{1 ବର୍ଷ ପୂର୍ବେ}other{# ବର୍ଷ ପୂର୍ବେ}}</translation>
 <translation id="2878511608894704031">ସବୁ ଡିଲିଟ୍ କରନ୍ତୁ</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{1 ଦିନରେ}other{# ଦିନରେ}}</translation>
@@ -88,7 +84,6 @@
 <translation id="3306688585798492231">ବିଲ୍ଟ-ଇନ୍ ଡିସପ୍ଲେ</translation>
 <translation id="335581015389089642">ସ୍ପୀଚ୍‌</translation>
 <translation id="3372635229069101468"><ph name="BEGIN_BOLD" />ବିବରଣୀ<ph name="END_BOLD" />ରେ କ୍ଲିକ କରନ୍ତୁ</translation>
-<translation id="3389286852084373014">ଟେକ୍ସଟ୍ ବହୁତ ଲମ୍ବା ଅଟେ</translation>
 <translation id="3406306243914553062">HTML ବିଷୟବସ୍ତୁ</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{1 ଦିନ ବାକି ଅଛି}other{# ଦିନ ବାକି ଅଛି}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" /> ଫାଇଲ୍‍</translation>
@@ -109,6 +104,7 @@
 <translation id="4031910098617850788">F5</translation>
 <translation id="40579289237549812">{UNREAD_NOTIFICATIONS,plural, =1{1ଟି ପଢ଼ାଯାଇନଥିବା ବିଜ୍ଞପ୍ତି}other{#ଟି ପଢ଼ାଯାଇନଥିବା ବିଜ୍ଞପ୍ତି}}</translation>
 <translation id="41501027364808384">{COUNT,plural, =1{ଇନକଗ୍ନିଟୋରେ ନିମ୍ନୋକ୍ତ ଏକ୍ସଟେନସନକୁ ଚାଲୁ କରନ୍ତୁ:}other{ଇନକଗ୍ନିଟୋରେ ନିମ୍ନୋକ୍ତ ଏକ୍ସଟେନସନଗୁଡ଼ିକୁ ଚାଲୁ କରନ୍ତୁ:}}</translation>
+<translation id="4230098358142093034">ହୋମ</translation>
 <translation id="4266252015790371705">{MONTHS,plural, =1{1 ମାସ ପୂର୍ବେ}other{# ମାସ ପୂର୍ବେ}}</translation>
 <translation id="4277033906326892359">ସ୍ତମ୍ଭ <ph name="COLUMN_NAME" />କୁ ସାନରୁ ବଡ଼ କ୍ରମରେ ସର୍ଟ କରାଯାଇଛି</translation>
 <translation id="4289300219472526559">କହିବା ଆରମ୍ଭ କରନ୍ତୁ</translation>
@@ -190,7 +186,6 @@
 <translation id="6965382102122355670">ଓକେ ବଟନ୍</translation>
 <translation id="6974053822202609517">ଡାହାଣରୁ ବାମକୁ</translation>
 <translation id="7052633198403197513">F1</translation>
-<translation id="7170202025028120564">ପରବର୍ତ୍ତୀ ସମୟରେ ଆପଣଙ୍କ ଆପ୍ଲିକେସନର ଡିସପ୍ଲେ ସେଟିଂସ୍ ରିଷ୍ଟାର୍ଟ ହେଲେ ଏଥିରେ ପରିବର୍ତ୍ତନଗୁଡ଼ିକ କାର୍ଯ୍ୟକାରୀ ହେବ।</translation>
 <translation id="7222373446505536781">F11</translation>
 <translation id="7238427729722629793">{MINUTES,plural, =1{1 ମିନିଟ୍ ବାକି ଅଛି}other{# ମିନିଟ୍ ବାକି ଅଛି}}</translation>
 <translation id="7252604552361840748">ଉପରେ ଏକ୍ସଟେନସନ ଖୋଜନ୍ତୁ</translation>
@@ -200,6 +195,7 @@
 <translation id="7410957453383678442">{MINUTES,plural, =1{1 ମିନିଟ୍‍ ବାକି ଅଛି}other{# ମିନିଟ୍‍ ବାକି ଅଛି}}</translation>
 <translation id="7437971918971306061">ସ୍ତମ୍ଭ <ph name="COLUMN_NAME" /> ସର୍ଟ୍ କରାଯାଇନାହିଁ।</translation>
 <translation id="7460907917090416791"><ph name="QUANTITY" /> TB</translation>
+<translation id="7485236722522518129">F4</translation>
 <translation id="7507604095951736240">ଇମୋଜି</translation>
 <translation id="7620655452534002301">କାଢ଼ି ଦିଆଯାଇଛି।</translation>
 <translation id="7658239707568436148">ବାତିଲ</translation>
@@ -232,6 +228,7 @@
 <translation id="8677655579646609597"><ph name="QUANTITY" /> KB/s</translation>
 <translation id="8725488761726303204">+<ph name="NUMBER" /> ଅଧିକ</translation>
 <translation id="8730621377337864115">ସମାପ୍ତ ହୋଇଛି</translation>
+<translation id="8741385002816058621">ଏହା ପ୍ରିଭ୍ୟୁରେ ଥିବା ଏକ ଫିଚର ଅଟେ</translation>
 <translation id="8772073294905169192">{HOURS,plural, =1{1ଘ}other{#ଘ}}</translation>
 <translation id="8798099450830957504">ଡିଫଲ୍ଟ</translation>
 <translation id="8841375032071747811">ପଛକୁ ଫେରନ୍ତୁ ବଟନ୍</translation>
@@ -245,7 +242,6 @@
 <translation id="9170848237812810038">&amp;ପୂର୍ବବତ୍</translation>
 <translation id="9195990613383871904">ଆସନ୍ତାକାଲି</translation>
 <translation id="928628199082367701">Super</translation>
-<translation id="932327136139879170">Home</translation>
 <translation id="944069440740578670">ପଢ଼ାଯାଇନଥିବା ବିଜ୍ଞପ୍ତିଗୁଡ଼ିକ</translation>
 <translation id="966963601246348639">{SECONDS,plural, =1{1 ସେକେଣ୍ଡ ପୂର୍ବେ}other{# ସେକେଣ୍ଡ ପୂର୍ବେ}}</translation>
 </translationbundle>

@@ -19,7 +19,6 @@
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/metrics/field_trial.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/pattern.h"
 #include "base/strings/string_number_conversions.h"
@@ -34,6 +33,7 @@
 #include "base/time/time.h"
 #include "base/time/time_delta_from_string.h"
 #include "build/build_config.h"
+#include "cc/base/features.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/input/features.h"
 #include "components/input/input_constants.h"
@@ -54,7 +54,7 @@
 #include "content/renderer/media/inspector_media_event_handler.h"
 #include "content/renderer/media/render_media_event_handler.h"
 #include "content/renderer/media/renderer_webaudiodevice_impl.h"
-#include "content/renderer/memory_coordinator/renderer_memory_coordinator_policy.h"
+#include "content/renderer/memory_coordinator/last_resort_gc_policy.h"
 #include "content/renderer/render_frame_impl.h"
 #include "content/renderer/render_thread_impl.h"
 #include "content/renderer/renderer_navigation_metrics_manager.h"
@@ -119,12 +119,11 @@
 
 #if BUILDFLAG(IS_WIN)
 #include "content/child/child_process_sandbox_support_impl_win.h"
+#include "third_party/blink/public/web/win/web_font_rendering.h"
 #endif
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "content/child/font_data/font_data_manager.h"
-#include "skia/ext/font_utils.h"
-#include "third_party/blink/public/web/win/web_font_rendering.h"
 #endif
 
 #if BUILDFLAG(IS_MAC)
@@ -197,11 +196,9 @@ viz::command_buffer_metrics::ContextType ToVizContextType(
 //------------------------------------------------------------------------------
 
 RendererBlinkPlatformImpl::RendererBlinkPlatformImpl(
-    blink::scheduler::WebThreadScheduler* main_thread_scheduler)
-    : BlinkPlatformImpl(RenderThreadImpl::current()
-                            ? RenderThreadImpl::current()->GetIOTaskRunner()
-                            : nullptr),
-      sudden_termination_disables_(0),
+    blink::scheduler::WebThreadScheduler* main_thread_scheduler,
+    scoped_refptr<base::SingleThreadTaskRunner> io_thread_task_runner)
+    : BlinkPlatformImpl(std::move(io_thread_task_runner)),
       is_locked_to_site_(false),
       main_thread_scheduler_(main_thread_scheduler),
       next_frame_sink_id_(uint32_t{std::numeric_limits<int32_t>::max()} + 1) {
@@ -219,15 +216,12 @@ RendererBlinkPlatformImpl::RendererBlinkPlatformImpl(
     SkFontConfigInterface::SetGlobal(font_loader);
 #endif
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     // Create a FontDataManager if it's enabled, and if we're not in a
     // single-process environment. In single process, the SkFontMgr is already
     // installed by browser process code at this point.
     if (features::IsFontDataServiceEnabled() && sandboxEnabled()) {
-      sk_sp<font_data_service::FontDataManager> font_data_manager =
-          sk_make_sp<font_data_service::FontDataManager>();
-
-      skia::OverrideDefaultSkFontMgr(font_data_manager);
+      font_data_service::FontDataManager::CreateAndInitialize();
     }
 #endif
   }
@@ -414,7 +408,7 @@ bool RendererBlinkPlatformImpl::IsolateStartsInBackground() {
 }
 
 WebString RendererBlinkPlatformImpl::DefaultLocale() {
-  return WebString::FromASCII(RenderThread::Get()->GetLocale());
+  return WebString::FromAscii(RenderThread::Get()->GetLocale());
 }
 
 void RendererBlinkPlatformImpl::SetSuddenTerminationAllowed(bool allowed) {
@@ -497,6 +491,12 @@ bool RendererBlinkPlatformImpl::IsElasticOverscrollSupported() {
   return thread ? thread->IsElasticOverscrollSupported() : false;
 }
 
+bool RendererBlinkPlatformImpl::IsElasticOverscrollEnabledForSubscroll() {
+  return base::FeatureList::IsEnabled(
+             ::features::kOverscrollEffectOnNonRootScrollers) &&
+         IsElasticOverscrollSupported();
+}
+
 bool RendererBlinkPlatformImpl::IsScrollAnimatorEnabled() {
   RenderThreadImpl* thread = RenderThreadImpl::current();
   return thread ? thread->IsScrollAnimatorEnabled() : false;
@@ -560,6 +560,12 @@ RendererBlinkPlatformImpl::SharedCompositorWorkerContextProvider(
     cc::RasterDarkModeFilter* dark_mode_filter) {
   return RenderThreadImpl::current()->SharedCompositorWorkerContextProvider(
       dark_mode_filter);
+}
+
+void RendererBlinkPlatformImpl::SharedMediaContextProvider(
+    base::OnceCallback<void(scoped_refptr<viz::RasterContextProvider>)>
+        callback) {
+  RenderThreadImpl::current()->SharedMediaContextProvider(std::move(callback));
 }
 
 bool RendererBlinkPlatformImpl::IsGpuRemoteDisconnected() {
@@ -711,9 +717,9 @@ void RendererBlinkPlatformImpl::CollectWebGLContextInfo(
   const gpu::GPUInfo::GPUDevice& active_gpu = gpu_info.active_gpu();
   gl_info->vendor_id = active_gpu.vendor_id;
   gl_info->device_id = active_gpu.device_id;
-  gl_info->renderer_info = WebString::FromUTF8(gpu_info.gl_renderer);
-  gl_info->vendor_info = WebString::FromUTF8(gpu_info.gl_vendor);
-  gl_info->driver_version = WebString::FromUTF8(active_gpu.driver_version);
+  gl_info->renderer_info = WebString::FromUtf8(gpu_info.gl_renderer);
+  gl_info->vendor_info = WebString::FromUtf8(gpu_info.gl_vendor);
+  gl_info->driver_version = WebString::FromUtf8(active_gpu.driver_version);
   gl_info->reset_notification_strategy =
       gpu_info.gl_reset_notification_strategy;
   gl_info->sandboxed = gpu_info.sandboxed;
@@ -734,7 +740,7 @@ RendererBlinkPlatformImpl::CreateWebGLGraphicsContextProvider(
   DCHECK(gl_info);
   if (!RenderThreadImpl::current()) {
     std::string error_message("Failed to run in Current RenderThreadImpl");
-    gl_info->error_message = WebString::FromUTF8(error_message);
+    gl_info->error_message = WebString::FromUtf8(error_message);
     return nullptr;
   }
 
@@ -743,7 +749,7 @@ RendererBlinkPlatformImpl::CreateWebGLGraphicsContextProvider(
   if (!gpu_channel_host) {
     std::string error_message(
         "OffscreenContext Creation failed, GpuChannelHost creation failed");
-    gl_info->error_message = WebString::FromUTF8(error_message);
+    gl_info->error_message = WebString::FromUtf8(error_message);
     return nullptr;
   }
 
@@ -776,14 +782,20 @@ RendererBlinkPlatformImpl::CreateRasterGraphicsContextProvider(
 
   constexpr bool automatic_flushes = true;
   constexpr bool support_locking = false;
-  constexpr bool lose_context_when_out_of_memory = false;
+
+  gpu::SchedulingPriority stream_priority =
+      (base::FeatureList::IsEnabled(features::kInitialWebUI) &&
+       features::kInitialWebUIHighStreamPriority.Get() &&
+       base::CommandLine::ForCurrentProcess()->HasSwitch(
+           switches::kTopChromeWebUI))
+          ? kGpuStreamPriorityUI
+          : kGpuStreamPriorityDefault;
 
   return std::make_unique<WebGraphicsContext3DProviderImpl>(
       viz::ContextProviderCommandBuffer::CreateForRaster(
-          std::move(gpu_channel_host), kGpuStreamIdDefault,
-          kGpuStreamPriorityDefault, GURL(document_url), automatic_flushes,
-          support_locking, gpu::SharedMemoryLimits(),
-          ToVizContextType(context_type), lose_context_when_out_of_memory));
+          std::move(gpu_channel_host), kGpuStreamIdDefault, stream_priority,
+          GURL(document_url), automatic_flushes, support_locking,
+          gpu::SharedMemoryLimits(), ToVizContextType(context_type)));
 }
 
 //------------------------------------------------------------------------------
@@ -901,7 +913,7 @@ void RendererBlinkPlatformImpl::OnGpuChannelEstablished(
 
 blink::WebString RendererBlinkPlatformImpl::ConvertIDNToUnicode(
     const blink::WebString& host) {
-  return WebString::FromUTF16(url_formatter::IDNToUnicode(host.Ascii()));
+  return WebString::FromUtf16(url_formatter::IDNToUnicode(host.Ascii()));
 }
 
 //------------------------------------------------------------------------------
@@ -926,12 +938,6 @@ void RendererBlinkPlatformImpl::WorkerContextCreated(
     const v8::Local<v8::Context>& worker) {
   GetContentClient()->renderer()->DidInitializeWorkerContextOnWorkerThread(
       worker);
-}
-
-bool RendererBlinkPlatformImpl::AllowScriptExtensionForServiceWorker(
-    const blink::WebSecurityOrigin& script_origin) {
-  return GetContentClient()->renderer()->AllowScriptExtensionForServiceWorker(
-      script_origin);
 }
 
 blink::ProtocolHandlerSecurityLevel
@@ -986,7 +992,11 @@ void RendererBlinkPlatformImpl::CreateServiceWorkerSubresourceLoaderFactory(
           /*remote_controller=*/mojo::NullRemote(),
           /*remote_cache_storage=*/mojo::NullRemote(), client_id.Utf8(),
           blink::mojom::ServiceWorkerFetchHandlerBypassOption::kDefault,
-          /*router_rules=*/std::nullopt, blink::EmbeddedWorkerStatus::kStopped,
+          /*router_rules=*/std::nullopt, network::CrossOriginEmbedderPolicy(),
+          mojo::NullRemote() /*coep_reporter*/,
+          network::DocumentIsolationPolicy(),
+          mojo::NullRemote() /*dip_reporter*/,
+          blink::EmbeddedWorkerStatus::kStopped,
           /*running_status_receiver=*/mojo::NullReceiver()),
       network::SharedURLLoaderFactory::Create(std::move(fallback_factory)),
       std::move(receiver), std::move(task_runner));
@@ -1140,22 +1150,18 @@ base::PlatformThreadId RendererBlinkPlatformImpl::GetIOThreadId() const {
 
 scoped_refptr<base::SingleThreadTaskRunner>
 RendererBlinkPlatformImpl::VideoFrameCompositorTaskRunner() {
-  auto compositor_task_runner = CompositorThreadTaskRunner();
-  if (::features::UseSurfaceLayerForVideo() || !compositor_task_runner) {
-    if (!video_frame_compositor_thread_) {
-      // All of Chromium's GPU code must know which thread it's running on, and
-      // be the same thread on which the rendering context was initialized. This
-      // is why this must be a SingleThreadTaskRunner instead of a
-      // SequencedTaskRunner.
-      video_frame_compositor_thread_ =
-          std::make_unique<base::Thread>("VideoFrameCompositor");
-      video_frame_compositor_thread_->StartWithOptions(
-          base::Thread::Options(base::ThreadType::kDisplayCritical));
-    }
-
-    return video_frame_compositor_thread_->task_runner();
+  if (!video_frame_compositor_thread_) {
+    // All of Chromium's GPU code must know which thread it's running on, and
+    // be the same thread on which the rendering context was initialized. This
+    // is why this must be a SingleThreadTaskRunner instead of a
+    // SequencedTaskRunner.
+    video_frame_compositor_thread_ =
+        std::make_unique<base::Thread>("VideoFrameCompositor");
+    video_frame_compositor_thread_->StartWithOptions(
+        base::Thread::Options(base::ThreadType::kPresentation));
   }
-  return compositor_task_runner;
+
+  return video_frame_compositor_thread_->task_runner();
 }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -1173,12 +1179,9 @@ bool RendererBlinkPlatformImpl::IsUserLevelMemoryPressureSignalEnabled() {
 #endif  // BUILDFLAG(IS_ANDROID)
 
 void RendererBlinkPlatformImpl::OnV8HeapLastResortGC() {
-  // In --single-process mode, the RendererMemoryCoordinatorPolicy does not run.
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kSingleProcess)) {
-    return;
+  if (auto* policy = LastResortGCPolicy::Get()) {
+    policy->OnV8HeapLastResortGC();
   }
-  RendererMemoryCoordinatorPolicy::Get().OnV8HeapLastResortGC();
 }
 
 }  // namespace content

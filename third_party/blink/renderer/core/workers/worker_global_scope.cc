@@ -32,10 +32,12 @@
 #include "base/trace_event/typed_macros.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/metrics/public/cpp/mojo_ukm_recorder.h"
+#include "third_party/blink/public/common/loader/javascript_framework_detection.h"
 #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
 #include "third_party/blink/public/mojom/browser_interface_broker.mojom-blink.h"
 #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-blink.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
+#include "third_party/blink/public/mojom/loader/code_cache.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_url_request.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_trustedscripturl_usvstring.h"
@@ -61,7 +63,13 @@
 #include "third_party/blink/renderer/core/messaging/blink_transferable_message.h"
 #include "third_party/blink/renderer/core/messaging/message_port.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
+#include "third_party/blink/renderer/core/scheduler/task_attribution_util.h"
 #include "third_party/blink/renderer/core/script/classic_script.h"
+#include "third_party/blink/renderer/core/script/detect_javascript_frameworks.h"
+#include "third_party/blink/renderer/core/timing/animation_frame_timing_info.h"
+#include "third_party/blink/renderer/core/timing/resource_timing_context.h"
+#include "third_party/blink/renderer/core/timing/worker_global_scope_performance.h"
+#include "third_party/blink/renderer/core/timing/worker_performance.h"
 #include "third_party/blink/renderer/core/trustedtypes/trusted_script_url.h"
 #include "third_party/blink/renderer/core/trustedtypes/trusted_type_policy_factory.h"
 #include "third_party/blink/renderer/core/url/dom_origin.h"
@@ -130,10 +138,10 @@ scoped_refptr<SecurityOrigin> CreateSecurityOrigin(
   // Step 3: If scriptURL’s scheme is not one of "http" and "https", reject
   // promise with a TypeError and abort these steps. [spec text]
   DCHECK(!is_service_worker_global_scope ||
-         !KURL(creation_params->script_url).ProtocolIsData());
+         !creation_params->script_url.ProtocolIsData());
 
   scoped_refptr<SecurityOrigin> security_origin;
-  if (KURL(creation_params->script_url).ProtocolIsData()) {
+  if (creation_params->script_url.ProtocolIsData()) {
     // Workers with data: URL should use a new, unique opaque origin per spec:
     // https://html.spec.whatwg.org/multipage/workers.html#script-settings-for-workers:concept-settings-object-origin-2
     // We use the `origin_to_use`, which is pre-calculated and passed down from
@@ -210,9 +218,33 @@ scheduler::WorkerScheduler* WorkerGlobalScope::GetScheduler() {
 
 void WorkerGlobalScope::Dispose() {
   DCHECK(IsContextThread());
+  if (animation_frame_timing_monitor_) {
+    CHECK(RuntimeEnabledFeatures::LongAnimationFrameWorkerEnabled());
+    animation_frame_timing_monitor_->Shutdown();
+    animation_frame_timing_monitor_.Clear();
+  }
   loading_virtual_time_pauser_ = WebScopedVirtualTimePauser();
   closing_ = true;
   WorkerOrWorkletGlobalScope::Dispose();
+}
+
+void WorkerGlobalScope::ReportCongestedMoment(AnimationFrameTimingInfo* info) {
+  WorkerGlobalScopePerformance::performance(*this)
+      ->QueueLongAnimationFrameTiming(info);
+}
+
+void WorkerGlobalScope::CreateAnimationFrameTimingMonitor() {
+  // TODO(crbug.com/534893134): support shared and service workers.
+  if (!RuntimeEnabledFeatures::LongAnimationFrameWorkerEnabled() ||
+      !IsDedicatedWorkerGlobalScope()) {
+    return;
+  }
+  CoreProbeSink* sink = GetProbeSink();
+  if (!sink) {
+    return;
+  }
+  animation_frame_timing_monitor_ =
+      MakeGarbageCollected<AnimationFrameTimingMonitor>(*this, sink);
 }
 
 const base::UnguessableToken& WorkerGlobalScope::GetDevToolsToken() const {
@@ -542,6 +574,16 @@ void WorkerGlobalScope::RunWorkerScript() {
   bool is_success = false;
   if (ScriptState* script_state = ScriptController()->GetScriptState()) {
     v8::HandleScope handle_scope(script_state->GetIsolate());
+
+    std::optional<scheduler::TaskAttributionTracker::TaskScope>
+        task_attribution_resource_timing_scope;
+    if (RuntimeEnabledFeatures::ResourceTimingInitiatorEnabled()) {
+      ResourceTimingContext* resource_timing_context =
+          MakeGarbageCollected<ResourceTimingContext>(
+              worker_script_->SourceUrl());
+      task_attribution_resource_timing_scope =
+          SetTaskStateVariable(resource_timing_context, GetExecutionContext());
+    }
     ScriptEvaluationResult result =
         std::move(worker_script_)
             ->RunScriptOnScriptStateAndReturnValue(script_state);
@@ -581,7 +623,11 @@ void WorkerGlobalScope::RunWorkerScript() {
         break;
     }
   }
-  ReportingProxy().DidEvaluateTopLevelScript(is_success);
+  JavaScriptFrameworkDetectionResult result;
+  if (is_success) {
+    DetectJavascriptFrameworksOnWorkerLoad(*this, result);
+  }
+  ReportingProxy().DidEvaluateTopLevelScript(is_success, result);
 
   if (debugger && stack_id_)
     debugger->ExternalAsyncTaskFinished(*stack_id_);
@@ -590,7 +636,8 @@ void WorkerGlobalScope::RunWorkerScript() {
   if (auto* controller = GetThread()->GetWorkerInspectorController()) {
     controller->WorkerScriptLoaded();
   }
-  TRACE_EVENT_END("blink.worker", perfetto::Track::FromPointer(this));
+  TRACE_EVENT_END("blink.worker", perfetto::NamedTrack::FromPointer(
+                                      "blink::WorkerGlobalScope", this));
 }
 
 void WorkerGlobalScope::ReceiveMessage(BlinkTransferableMessage message) {
@@ -681,6 +728,9 @@ WorkerGlobalScope::WorkerGlobalScope(
               (creation_params->agent_cluster_id.is_empty()
                    ? base::UnguessableToken::Create()
                    : creation_params->agent_cluster_id),
+              creation_params->cross_origin_isolated_capability
+                  ? blink::Agent::AgentType::kCrossOriginIsolatedWorker
+                  : blink::Agent::AgentType::kNonCrossOriginIsolatedWorker,
               v8::MicrotaskQueue::New(thread->GetIsolate(),
                                       v8::MicrotasksPolicy::kScoped)),
           creation_params->global_scope_name,
@@ -693,7 +743,6 @@ WorkerGlobalScope::WorkerGlobalScope(
           creation_params->script_url.ProtocolIsData(),
           /*is_default_world_of_isolate=*/
           creation_params->is_default_world_of_isolate),
-      ActiveScriptWrappable<WorkerGlobalScope>({}),
       script_type_(creation_params->script_type),
       user_agent_(creation_params->user_agent),
       ua_metadata_(creation_params->ua_metadata),
@@ -710,8 +759,9 @@ WorkerGlobalScope::WorkerGlobalScope(
   // Workers should always maintain the default world of an isolate.
   CHECK(creation_params->is_default_world_of_isolate);
   TRACE_EVENT("blink.worker", "WorkerGlobalScope::WorkerGlobalScope");
-  TRACE_EVENT_BEGIN("blink.worker", "WorkerGlobalScope setup",
-                    perfetto::Track::FromPointer(this));
+  TRACE_EVENT_BEGIN(
+      "blink.worker", "WorkerGlobalScope setup",
+      perfetto::NamedTrack::FromPointer("blink::WorkerGlobalScope", this));
 
   InstanceCounters::IncrementCounter(
       InstanceCounters::kWorkerGlobalScopeCounter);
@@ -834,13 +884,10 @@ void WorkerGlobalScope::Trace(Visitor* visitor) const {
   visitor->Trace(trusted_types_);
   visitor->Trace(worker_script_);
   visitor->Trace(browser_interface_broker_proxy_);
+  visitor->Trace(animation_frame_timing_monitor_);
   UniversalGlobalScope::Trace(visitor);
   WorkerOrWorkletGlobalScope::Trace(visitor);
   Supplementable<WorkerGlobalScope>::Trace(visitor);
-}
-
-bool WorkerGlobalScope::HasPendingActivity() const {
-  return !ExecutionContext::IsContextDestroyed();
 }
 
 CodeCacheHost* WorkerGlobalScope::GetCodeCacheHost() {

@@ -5,9 +5,11 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_FORM_TYPES_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_FORM_TYPES_H_
 
+#include <ostream>
 #include <string_view>
 
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/common/dense_set.h"
 
 namespace autofill {
 
@@ -64,6 +66,8 @@ std::string_view FormTypeNameForLoggingToStringView(
 bool FormHasAllCreditCardFields(const FormStructure& form_structure);
 
 FormType FieldTypeGroupToFormType(FieldTypeGroup field_type_group);
+
+std::ostream& operator<<(std::ostream& o, DenseSet<FormType> form_type_set);
 
 std::string_view FormTypeToStringView(FormType form_type);
 

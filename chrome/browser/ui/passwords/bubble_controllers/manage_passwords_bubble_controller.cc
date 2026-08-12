@@ -12,9 +12,9 @@
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
-#include "chrome/browser/password_manager/account_password_store_factory.h"
-#include "chrome/browser/password_manager/password_store_utils.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/password_store_utils.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/passwords/passwords_model_delegate.h"
@@ -25,6 +25,7 @@
 #include "components/password_manager/core/browser/password_feature_manager.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_form_metrics_recorder.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/password_manager/core/browser/password_sync_util.h"
 #include "components/password_manager/core/browser/ui/credential_ui_entry.h"
@@ -165,8 +166,7 @@ ManagePasswordsBubbleController::GetPasswordSyncState() const {
       return SyncState::kNotActive;
     case password_manager::sync_util::SyncState::kActiveWithNormalEncryption:
     case password_manager::sync_util::SyncState::kActiveWithCustomPassphrase:
-      if (base::FeatureList::IsEnabled(
-              syncer::kReplaceSyncPromosWithSignInPromos)) {
+      if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
         return SyncState::kActiveWithAccountPasswords;
       }
       return sync_service->IsSyncFeatureEnabled()
@@ -239,7 +239,8 @@ void ManagePasswordsBubbleController::
 
   if (details_bubble_credential_.value().username_value ==
       updated_form.username_value) {
-    password_store->UpdateLogin(updated_form);
+    password_store->UpdateLogin(
+        password_manager::FromPasswordForm(updated_form));
     details_bubble_credential_ = updated_form;
     return;
   }
@@ -255,8 +256,9 @@ void ManagePasswordsBubbleController::
   // Weak and reused issues are still relevant.
   updated_form.password_issues.erase(password_manager::InsecureType::kPhished);
   updated_form.password_issues.erase(password_manager::InsecureType::kLeaked);
-  password_store->UpdateLoginWithPrimaryKey(updated_form,
-                                            details_bubble_credential_.value());
+  password_store->UpdateLoginWithPrimaryKey(
+      password_manager::FromPasswordForm(updated_form),
+      password_manager::FromPasswordForm(details_bubble_credential_.value()));
   details_bubble_credential_ = updated_form;
 
   metrics_util::LogUserInteractionsInPasswordManagementBubble(
@@ -304,11 +306,11 @@ bool ManagePasswordsBubbleController::UsernameExists(
       });
 }
 
-bool ManagePasswordsBubbleController::IsAccountStorageEnabled() const {
+bool ManagePasswordsBubbleController::IsAccountStorageActive() const {
   if (!delegate_) {
     return false;
   }
-  return delegate_->GetPasswordFeatureManager()->IsAccountStorageEnabled();
+  return delegate_->GetPasswordFeatureManager()->IsAccountStorageActive();
 }
 
 void ManagePasswordsBubbleController::OnFaviconReady(

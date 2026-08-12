@@ -8,15 +8,12 @@ static_library("about") {
   sources = [
     "about_section.cc",
     "about_section.h",
-    "device_name_handler.cc",
-    "device_name_handler.h",
   ]
 
   public_deps = [
     "//base",
     "//build:branding_buildflags",
     "//chrome/browser:browser_public_dependencies",
-    "//chrome/browser/ash/device_name",
     "//chrome/browser/ui/webui/ash/settings/pages/crostini",
     "//chrome/browser/ui/webui/settings",
     "//components/prefs",
@@ -25,15 +22,20 @@ static_library("about") {
 
   deps = [
     "//ash/constants",
+    "//ash/strings",
     "//base:i18n",
     "//chrome/app:branded_strings",
     "//chrome/app:generated_resources",
     "//chrome/browser:browser_process",
+    "//chrome/browser:browser_process_platform_part",
     "//chrome/browser/ash/arc",
     "//chrome/browser/ash/arc:arc_util",
     "//chrome/browser/ash/policy/core",
+    "//chrome/browser/obsolete_system",
     "//chrome/browser/signin",
     "//chrome/browser/ui/webui/ash/settings/search",
+    "//chrome/browser/ui/webui/management",
+    "//chrome/browser/ui/webui/version",
     "//chrome/common",
     "//chrome/common:constants",
     "//chromeos/dbus/constants",
@@ -46,20 +48,5 @@ static_library("about") {
     "//ui/base",
     "//ui/chromeos",
     "//ui/webui",
-  ]
-}
-
-source_set("unit_tests") {
-  testonly = true
-
-  sources = [ "device_name_handler_unittest.cc" ]
-
-  deps = [
-    ":about",
-    "//ash/constants",
-    "//base/test:test_support",
-    "//chrome/browser/ash/device_name:test_support",
-    "//content/test:test_support",
-    "//testing/gtest",
   ]
 }

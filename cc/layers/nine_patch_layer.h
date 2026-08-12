@@ -28,6 +28,7 @@ class CC_EXPORT NinePatchLayer : public UIResourceLayer {
   // |border.width()-border.x()| and |border.height()-border.y()| are the size
   // of the right and bottom boundary, respectively.
   void SetBorder(const gfx::Rect& border);
+  const gfx::Rect& border() const { return border_.Read(*this); }
 
   // aperture is in the pixel space of the bitmap resource and refers to
   // the center patch of the ninepatch (which is unused in this
@@ -36,12 +37,15 @@ class CC_EXPORT NinePatchLayer : public UIResourceLayer {
   // rects are x-stretched to fit, and the left and right rects are
   // y-stretched to fit.
   void SetAperture(const gfx::Rect& aperture);
+  const gfx::Rect& aperture() const { return image_aperture_.Read(*this); }
+
   void SetFillCenter(bool fill_center);
 
   // |rect| is the space completely occluded by another layer in layer
   // space. This can be used for example to occlude the entire window's
   // content when drawing the shadow with a 9 patches layer.
   void SetLayerOcclusion(const gfx::Rect& occlusion);
+  const gfx::Rect& occlusion() const { return layer_occlusion_.Read(*this); }
 
  private:
   NinePatchLayer();
@@ -49,11 +53,9 @@ class CC_EXPORT NinePatchLayer : public UIResourceLayer {
   std::unique_ptr<LayerImpl> CreateLayerImpl(
       LayerTreeImpl* tree_impl) const override;
 
-  void PushDirtyPropertiesTo(
-      LayerImpl* layer,
-      uint8_t dirty_flag,
-      const CommitState& commit_state,
-      const ThreadUnsafeCommitState& unsafe_state) override;
+  void PushDirtyPropertiesTo(LayerImpl* layer,
+                             uint8_t dirty_flag,
+                             CommitState& commit_state) override;
 
   ProtectedSequenceReadable<gfx::Rect> border_;
   ProtectedSequenceReadable<bool> fill_center_;

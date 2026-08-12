@@ -4,8 +4,6 @@
 
 package org.chromium.chrome.browser.tasks.tab_management.pinned_tabs_strip;
 
-import static org.chromium.build.NullUtil.assumeNonNull;
-
 import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Canvas;
@@ -14,17 +12,17 @@ import android.view.ViewConfiguration;
 import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.tab.TabId;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tasks.tab_management.TabGridItemLongPressOrchestrator;
 import org.chromium.chrome.browser.tasks.tab_management.TabGridItemLongPressOrchestrator.OnLongPressTabItemEventListener;
 import org.chromium.chrome.browser.tasks.tab_management.TabListModel;
 import org.chromium.chrome.browser.tasks.tab_management.TabProperties;
+import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.SimpleRecyclerViewAdapter;
 import org.chromium.ui.recyclerview.widget.ItemTouchHelper2;
 
@@ -40,8 +38,7 @@ public class PinnedTabStripItemTouchHelperCallback extends ItemTouchHelper2.Simp
     private static final long LONGPRESS_DURATION_MS = ViewConfiguration.getLongPressTimeout();
     private final TabGridItemLongPressOrchestrator mTabGridItemLongPressOrchestrator;
     private final TabListModel mModel;
-    private final ObservableSupplier<@Nullable TabGroupModelFilter>
-            mCurrentTabGroupModelFilterSupplier;
+    private final MonotonicObservableSupplier<TabModel> mCurrentTabModelSupplier;
     private final int mFixedScrollAmount;
     private int mSelectedTabIndex = TabModel.INVALID_TAB_INDEX;
 
@@ -53,9 +50,9 @@ public class PinnedTabStripItemTouchHelperCallback extends ItemTouchHelper2.Simp
      */
     public PinnedTabStripItemTouchHelperCallback(
             Context context,
-            ObservableSupplier<@Nullable TabGroupModelFilter> tabGroupModelFilter,
+            MonotonicObservableSupplier<TabModel> tabModel,
             TabListModel model,
-            Supplier<RecyclerView> recyclerViewSupplier,
+            Supplier<@Nullable RecyclerView> recyclerViewSupplier,
             OnLongPressTabItemEventListener onLongPress) {
         super(/* dragDirs= */ 0, /* swipeDirs= */ 0);
         Resources res = context.getResources();
@@ -64,7 +61,7 @@ public class PinnedTabStripItemTouchHelperCallback extends ItemTouchHelper2.Simp
         mFixedScrollAmount =
                 res.getDimensionPixelSize(R.dimen.pinned_tab_strip_out_of_bounds_scroll_amount);
 
-        mCurrentTabGroupModelFilterSupplier = tabGroupModelFilter;
+        mCurrentTabModelSupplier = tabModel;
         mModel = model;
         mTabGridItemLongPressOrchestrator =
                 new TabGridItemLongPressOrchestrator(
@@ -110,18 +107,29 @@ public class PinnedTabStripItemTouchHelperCallback extends ItemTouchHelper2.Simp
             RecyclerView recyclerView,
             RecyclerView.ViewHolder fromViewHolder,
             RecyclerView.ViewHolder toViewHolder) {
-        mSelectedTabIndex = toViewHolder.getBindingAdapterPosition();
-        @TabId
-        int currentTabId =
-                assumeNonNull(((SimpleRecyclerViewAdapter.ViewHolder) fromViewHolder).model)
-                        .get(TabProperties.TAB_ID);
-
+        int fromPosition = fromViewHolder.getBindingAdapterPosition();
         int destinationIndex = toViewHolder.getBindingAdapterPosition();
-        TabGroupModelFilter filter = mCurrentTabGroupModelFilterSupplier.get();
-        if (filter == null) return false;
+        if (fromPosition == RecyclerView.NO_POSITION
+                || destinationIndex == RecyclerView.NO_POSITION
+                || fromPosition < 0
+                || destinationIndex < 0
+                || fromPosition == destinationIndex) {
+            return false;
+        }
 
-        filter.moveRelatedTabs(currentTabId, destinationIndex);
-        mModel.move(fromViewHolder.getBindingAdapterPosition(), destinationIndex);
+        PropertyModel model =
+                fromViewHolder instanceof SimpleRecyclerViewAdapter.ViewHolder holder
+                        ? holder.model
+                        : null;
+        if (model == null) return false;
+
+        TabModel tabModel = mCurrentTabModelSupplier.get();
+        if (tabModel == null) return false;
+
+        mSelectedTabIndex = destinationIndex;
+        @TabId int currentTabId = model.get(TabProperties.TAB_ID);
+        tabModel.moveRelatedTabs(currentTabId, destinationIndex);
+        mModel.move(fromPosition, destinationIndex);
         return true;
     }
 
@@ -132,18 +140,25 @@ public class PinnedTabStripItemTouchHelperCallback extends ItemTouchHelper2.Simp
     public void onSelectedChanged(RecyclerView.@Nullable ViewHolder viewHolder, int actionState) {
         super.onSelectedChanged(viewHolder, actionState);
 
-        if (viewHolder != null) {
-            mTabGridItemLongPressOrchestrator.onSelectedChanged(
-                    viewHolder.getBindingAdapterPosition(), actionState);
+        int position =
+                viewHolder != null
+                        ? viewHolder.getBindingAdapterPosition()
+                        : RecyclerView.NO_POSITION;
+
+        if (position != RecyclerView.NO_POSITION) {
+            mTabGridItemLongPressOrchestrator.onSelectedChanged(position, actionState);
         }
 
         if (actionState == ItemTouchHelper.ACTION_STATE_DRAG) {
-            assumeNonNull(viewHolder);
-            mSelectedTabIndex = viewHolder.getBindingAdapterPosition();
-            mModel.updateSelectedCardForSelection(mSelectedTabIndex, true);
+            if (position != RecyclerView.NO_POSITION) {
+                mSelectedTabIndex = position;
+                mModel.updateSelectedCardForSelection(mSelectedTabIndex, true);
+            }
         } else if (actionState == ItemTouchHelper.ACTION_STATE_IDLE) {
-            mModel.updateSelectedCardForSelection(mSelectedTabIndex, false);
-            mSelectedTabIndex = TabModel.INVALID_TAB_INDEX;
+            if (mSelectedTabIndex != TabModel.INVALID_TAB_INDEX) {
+                mModel.updateSelectedCardForSelection(mSelectedTabIndex, false);
+                mSelectedTabIndex = TabModel.INVALID_TAB_INDEX;
+            }
         }
     }
 

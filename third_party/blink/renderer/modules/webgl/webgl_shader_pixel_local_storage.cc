@@ -24,17 +24,15 @@ const char* WebGLShaderPixelLocalStorage::ExtensionName() {
 WebGLShaderPixelLocalStorage::WebGLShaderPixelLocalStorage(
     WebGLRenderingContextBase* context,
     ExecutionContext* execution_context)
-    : WebGLExtension(context),
-      coherent_(context->ExtensionsUtil()->SupportsExtension(
-          "GL_ANGLE_shader_pixel_local_storage_coherent")) {
+    : WebGLExtension(context) {
   context->EnableExtensionIfSupported("OES_draw_buffers_indexed",
-                                      execution_context);
-  context->EnableExtensionIfSupported("EXT_color_buffer_float",
-                                      execution_context);
-  context->EnableExtensionIfSupported("EXT_color_buffer_half_float",
                                       execution_context);
   context->ExtensionsUtil()->EnsureExtensionEnabled(
       "GL_ANGLE_shader_pixel_local_storage");
+  context->EnableExtensionIfSupported(
+      "GL_ANGLE_shader_pixel_local_storage_coherent", execution_context);
+  coherent_ = context->ExtensionsUtil()->SupportsExtension(
+      "GL_ANGLE_shader_pixel_local_storage_coherent");
   context->ContextGL()->GetIntegerv(GL_MAX_PIXEL_LOCAL_STORAGE_PLANES_ANGLE,
                                     &max_pls_planes_);
 }
@@ -107,14 +105,16 @@ void WebGLShaderPixelLocalStorage::framebufferTexturePixelLocalStorageWEBGL(
     GLint plane,
     WebGLTexture* texture,
     GLint level,
-    GLint layer) {
+    GLint layer,
+    GLbitfield usage) {
   WebGLExtensionScopedContext scoped(this);
   if (scoped.IsLost()) {
     return;
   }
+  WebGLRenderingContextBase* context = scoped.Context();
+  context->MaybeEndPixelLocalStorageImplicit();
   constexpr static char function_name[] =
       "framebufferTexturePixelLocalStorageWEBGL";
-  WebGLRenderingContextBase* context = scoped.Context();
   WebGLFramebuffer* framebuffer =
       ValidatePLSFramebuffer(context, function_name);
   if (!framebuffer) {
@@ -125,7 +125,7 @@ void WebGLShaderPixelLocalStorage::framebufferTexturePixelLocalStorageWEBGL(
     return;
   }
   context->ContextGL()->FramebufferTexturePixelLocalStorageANGLE(
-      plane, ObjectOrZero(texture), level, layer);
+      plane, ObjectOrZero(texture), level, layer, usage);
   framebuffer->SetPLSTexture(plane, texture);
 }
 
@@ -256,34 +256,43 @@ WebGLShaderPixelLocalStorage::getFramebufferPixelLocalStorageParameterWEBGL(
   }
   gpu::gles2::GLES2Interface* gl = context->ContextGL();
   switch (pname) {
-    case GL_PIXEL_LOCAL_FORMAT_ANGLE: {
-      GLint value{};
-      gl->GetFramebufferPixelLocalStorageParameterivANGLE(plane, pname, &value);
-      return WebGLAny(script_state, static_cast<GLenum>(value));
+    // Unsigned integer queries
+    case GL_PIXEL_LOCAL_INTERNAL_FORMAT_ANGLE: {
+      GLenum value{};
+      gl->GetFramebufferPixelLocalStorageParameteruivANGLE(plane, pname,
+                                                           &value);
+      return WebGLAny(script_state, value);
     }
     case GL_PIXEL_LOCAL_TEXTURE_NAME_ANGLE: {
       DCHECK(framebuffer);
       WebGLTexture* tex = framebuffer->GetPLSTexture(plane);
-      GLint attachedTextureID{};
-      gl->GetFramebufferPixelLocalStorageParameterivANGLE(plane, pname,
-                                                          &attachedTextureID);
-      if (static_cast<GLuint>(attachedTextureID) != ObjectOrZero(tex)) {
+      GLuint attachedTextureID{};
+      gl->GetFramebufferPixelLocalStorageParameteruivANGLE(plane, pname,
+                                                           &attachedTextureID);
+      if (attachedTextureID != ObjectOrZero(tex)) {
         // Implementation gap! Tracked PLS texture is out of sync with actual.
         return ScriptValue::CreateNull(script_state->GetIsolate());
       }
       return WebGLAny(script_state, tex);
     }
     case GL_PIXEL_LOCAL_TEXTURE_LEVEL_ANGLE:
+    case GL_PIXEL_LOCAL_USAGE_ANGLE: {
+      GLuint value{};
+      gl->GetFramebufferPixelLocalStorageParameteruivANGLE(plane, pname,
+                                                           &value);
+      return WebGLAny(script_state, value);
+    }
+    case GL_PIXEL_LOCAL_CLEAR_VALUE_UNSIGNED_INT_ANGLE: {
+      DOMUint32Array* values = DOMUint32Array::Create(4);
+      gl->GetFramebufferPixelLocalStorageParameteruivANGLE(plane, pname,
+                                                           values->Data());
+      return WebGLAny(script_state, values);
+    }
+    // Signed integer queries
     case GL_PIXEL_LOCAL_TEXTURE_LAYER_ANGLE: {
       GLint value{};
       gl->GetFramebufferPixelLocalStorageParameterivANGLE(plane, pname, &value);
       return WebGLAny(script_state, value);
-    }
-    case GL_PIXEL_LOCAL_CLEAR_VALUE_FLOAT_ANGLE: {
-      DOMFloat32Array* values = DOMFloat32Array::Create(4);
-      gl->GetFramebufferPixelLocalStorageParameterfvANGLE(plane, pname,
-                                                          values->Data());
-      return WebGLAny(script_state, values);
     }
     case GL_PIXEL_LOCAL_CLEAR_VALUE_INT_ANGLE: {
       DOMInt32Array* values = DOMInt32Array::Create(4);
@@ -291,14 +300,20 @@ WebGLShaderPixelLocalStorage::getFramebufferPixelLocalStorageParameterWEBGL(
                                                           values->Data());
       return WebGLAny(script_state, values);
     }
-    case GL_PIXEL_LOCAL_CLEAR_VALUE_UNSIGNED_INT_ANGLE: {
-      DOMUint32Array* values = DOMUint32Array::Create(4);
-      gl->GetFramebufferPixelLocalStorageParameterivANGLE(
-          plane, pname, reinterpret_cast<GLint*>(values->Data()));
+    // Floating-point queries
+    case GL_PIXEL_LOCAL_CLEAR_VALUE_FLOAT_ANGLE: {
+      DOMFloat32Array* values = DOMFloat32Array::Create(4);
+      gl->GetFramebufferPixelLocalStorageParameterfvANGLE(plane, pname,
+                                                          values->Data());
       return WebGLAny(script_state, values);
     }
+    default: {
+      scoped.Context()->SynthesizeGLError(
+          GL_INVALID_ENUM, "getFramebufferPixelLocalStorageParameterWEBGL",
+          "invalid parameter name");
+      return ScriptValue::CreateNull(script_state->GetIsolate());
+    }
   }
-  return ScriptValue::CreateNull(script_state->GetIsolate());
 }
 
 }  // namespace blink

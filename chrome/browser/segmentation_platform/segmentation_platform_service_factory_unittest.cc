@@ -19,7 +19,9 @@
 #include "components/commerce/core/mock_shopping_service.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
+#include "components/prefs/testing_pref_service.h"
 #include "components/segmentation_platform/embedder/default_model/chrome_user_engagement.h"
 #include "components/segmentation_platform/embedder/default_model/contextual_page_actions_model.h"
 #include "components/segmentation_platform/embedder/default_model/metrics_clustering.h"
@@ -123,7 +125,8 @@ class SegmentationPlatformServiceFactoryTest : public testing::Test {
          {features::kSegmentationPlatformEphemeralCardRanker, {}},
          {features::kSegmentationSurveyPage, {}},
          {features::kSegmentationPlatformFedCmUser, {}},
-         {features::kAndroidTipsNotifications, {}}},
+         {features::kAndroidTipsNotifications, {}},
+         {features::kNewTabPageCustomizationV2, {{"show_promo", "true"}}}},
         {});
 
     // Creating profile and initialising segmentation service.
@@ -631,23 +634,29 @@ TEST_F(SegmentationPlatformServiceFactoryTest, EphemeralHomeModuleBackend) {
   home_modules::HomeModulesCardRegistry* registry =
       SegmentationPlatformServiceFactory::GetHomeModulesCardRegistry(
           profile_->profile.get());
+
+#if BUILDFLAG(IS_ANDROID)
   ASSERT_TRUE(registry);
   // Update this test when adding new cards with inputs.
   // Each card's feature flag should be enabled by test framework for this
   // integration test.
-#if BUILDFLAG(IS_ANDROID)
   ASSERT_EQ(7u, registry->get_all_cards_by_priority().size());
-#else
-  EXPECT_TRUE(registry->get_all_cards_by_priority().empty());
-#endif  // BUILDFLAG(IS_ANDROID)
 
   PredictionOptions prediction_options;
   prediction_options.on_demand_execution = true;
 
   auto input_context = base::MakeRefCounted<InputContext>();
-#if BUILDFLAG(IS_ANDROID)
   input_context->metadata_args.emplace(
       "auxiliary_search_available", processing::ProcessedValue::FromFloat(0));
+  input_context->metadata_args.emplace(
+      "support_customized_ntp_theme",
+      processing::ProcessedValue::FromFloat(1.0));
+  input_context->metadata_args.emplace(
+      "has_customized_ntp_background",
+      processing::ProcessedValue::FromFloat(0));
+  input_context->metadata_args.emplace(
+      "has_theme_tip_bottom_sheet_been_shown",
+      processing::ProcessedValue::FromFloat(0));
   input_context->metadata_args.emplace(
       "is_user_signed_in", processing::ProcessedValue::FromFloat(0));
   input_context->metadata_args.emplace(
@@ -665,14 +674,15 @@ TEST_F(SegmentationPlatformServiceFactoryTest, EphemeralHomeModuleBackend) {
   input_context->metadata_args.emplace(
       "is_eligible_to_history_opt_in",
       processing::ProcessedValue::FromFloat(0));
-  input_context->metadata_args.emplace(
-      "is_eligible_to_tips_opt_in", processing::ProcessedValue::FromFloat(0));
-#endif  // BUILDFLAG(IS_ANDROID)
 
   // No cards are added, the model fetches no results and fails.
   ExpectGetAnnotatedNumericResult(
       kEphemeralHomeModuleBackendKey, prediction_options, input_context,
       /*expected_status=*/segmentation_platform::PredictionStatus::kSucceeded);
+#else
+  // Desktop platforms do not support HomeModulesCardRegistry.
+  EXPECT_FALSE(registry);
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 TEST_F(SegmentationPlatformServiceFactoryTest, TestFedCmUserModel) {
@@ -709,6 +719,18 @@ TEST_F(SegmentationPlatformServiceFactoryTest, TestTipsNotificationsRanker) {
       kGoogleLensTipShown, processing::ProcessedValue::FromFloat(1));
   input_context->metadata_args.emplace(
       kBottomOmniboxTipShown, processing::ProcessedValue::FromFloat(1));
+  input_context->metadata_args.emplace(
+      kTipsIsUserSignedIn, processing::ProcessedValue::FromFloat(1));
+  input_context->metadata_args.emplace(
+      kPasswordAutofillTipShown, processing::ProcessedValue::FromFloat(1));
+  input_context->metadata_args.emplace(
+      kSigninTipShown, processing::ProcessedValue::FromFloat(1));
+  input_context->metadata_args.emplace(
+      kCreateTabGroupsTipShown, processing::ProcessedValue::FromFloat(1));
+  input_context->metadata_args.emplace(
+      kCustomizeMVTTipShown, processing::ProcessedValue::FromFloat(1));
+  input_context->metadata_args.emplace(
+      kRecentTabsTipShown, processing::ProcessedValue::FromFloat(1));
 
   ExpectGetClassificationResult(
       segmentation_platform::kTipsNotificationsRankerKey, prediction_options,

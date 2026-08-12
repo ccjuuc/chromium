@@ -133,6 +133,7 @@ class AwMetricsServiceClient
   static AwMetricsServiceClient* GetInstance();
   static void SetInstance(
       std::unique_ptr<AwMetricsServiceClient> aw_metrics_service_client);
+  static void ClearInstanceForTesting();
 
   static void RegisterMetricsPrefs(PrefRegistrySimple* registry);
   static base::FilePath GetNoBackupFilesDir();
@@ -159,6 +160,8 @@ class AwMetricsServiceClient
   // was given).
   metrics::MetricsService* GetMetricsServiceIfStarted();
 
+  // This should only be called after Initialize().
+  PrefService* GetLocalState() const;
   // MetricsServiceClient:
   variations::SyntheticTrialRegistry* GetSyntheticTrialRegistry() override;
   metrics::MetricsService* GetMetricsService() override;
@@ -180,8 +183,10 @@ class AwMetricsServiceClient
       metrics::MetricsLogUploader::MetricServiceType service_type,
       const metrics::MetricsLogUploader::UploadCallback& on_upload_complete)
       override;
+  bool IsJobSchedulerSupported() const override;
   base::TimeDelta GetStandardUploadInterval() override;
   bool ShouldStartUpFast() const override;
+  metrics::MetricsLogStore::StorageLimits GetStorageLimits() const override;
 
   // Gets the embedding app's package name if it's OK to log. Otherwise, this
   // returns the empty string.
@@ -288,7 +293,7 @@ class AwMetricsServiceClient
   base::ScopedMultiSourceObservation<content::RenderProcessHost,
                                      content::RenderProcessHostObserver>
       host_observation_{this};
-  raw_ptr<PrefService> pref_service_ = nullptr;
+  raw_ptr<PrefService> local_state_ = nullptr;
   bool init_finished_ = false;
   bool set_consent_finished_ = false;
   bool user_consent_ = false;

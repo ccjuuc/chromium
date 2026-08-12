@@ -20,7 +20,7 @@ suite('ExtensionSidebarTest', function() {
     document.body.appendChild(sidebar);
   });
 
-  test('SetSelected', function() {
+  test('SetSelected', async function() {
     const selector = '.cr-nav-menu-item.selected';
     assertFalse(!!sidebar.shadowRoot.querySelector(selector));
 
@@ -28,26 +28,19 @@ suite('ExtensionSidebarTest', function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     sidebar = document.createElement('extensions-sidebar');
     document.body.appendChild(sidebar);
-    const whenSelected = eventToPromise('iron-select', sidebar.$.sectionMenu);
-    return whenSelected
-        .then(function() {
-          assertEquals(
-              sidebar.shadowRoot.querySelector(selector)!.id,
-              'sectionsShortcuts');
+    let whenSelected = eventToPromise('iron-select', sidebar.$.sectionMenu);
+    await whenSelected;
+    assertEquals(
+        sidebar.shadowRoot.querySelector(selector)!.id, 'sectionsShortcuts');
 
-          window.history.replaceState(undefined, '', '/');
-          document.body.innerHTML = window.trustedTypes!.emptyHTML;
-          sidebar = document.createElement('extensions-sidebar');
-          document.body.appendChild(sidebar);
-          const whenSelected =
-              eventToPromise('iron-select', sidebar.$.sectionMenu);
-          return whenSelected;
-        })
-        .then(function() {
-          assertEquals(
-              sidebar.shadowRoot.querySelector(selector)!.id,
-              'sectionsExtensions');
-        });
+    window.history.replaceState(undefined, '', '/');
+    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+    sidebar = document.createElement('extensions-sidebar');
+    document.body.appendChild(sidebar);
+    whenSelected = eventToPromise('iron-select', sidebar.$.sectionMenu);
+    await whenSelected;
+    assertEquals(
+        sidebar.shadowRoot.querySelector(selector)!.id, 'sectionsExtensions');
   });
 
   test(
@@ -70,21 +63,21 @@ suite('ExtensionSidebarTest', function() {
           currentPage = newPage;
         });
 
-        sidebar.$.sectionsShortcuts.click();
+        sidebar.$.sectionsShortcuts.querySelector('cr-icon')!.click();
         await microtasksFinished();
         assertDeepEquals(currentPage, {page: Page.SHORTCUTS});
 
-        sidebar.$.sectionsExtensions.click();
+        sidebar.$.sectionsExtensions.querySelector('cr-icon')!.click();
         await microtasksFinished();
         assertDeepEquals(currentPage, {page: Page.LIST});
 
-        sidebar.$.sectionsSitePermissions.click();
+        sidebar.$.sectionsSitePermissions.querySelector('cr-icon')!.click();
         await microtasksFinished();
         assertDeepEquals(currentPage, {page: Page.SITE_PERMISSIONS});
 
         // Clicking on the link for the current page should close the dialog.
         const drawerClosed = eventToPromise('close-drawer', sidebar);
-        sidebar.$.sectionsExtensions.click();
+        sidebar.$.sectionsExtensions.querySelector('cr-icon')!.click();
         await drawerClosed;
       });
 

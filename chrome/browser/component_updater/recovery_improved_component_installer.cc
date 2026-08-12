@@ -92,16 +92,17 @@ void RecoveryComponentActionHandler::Unpack() {
   update_client::Unpacker::Unpack(
       kRecoveryImprovedComponentId, "RecoveryComponentActionHandler", key_hash_,
       crx_path_, std::move(unzipper), verifier_format_,
+      /*is_foreground=*/true,
       base::BindOnce(&RecoveryComponentActionHandler::UnpackComplete, this));
 }
 
 void RecoveryComponentActionHandler::UnpackComplete(
     const update_client::Unpacker::Result& result) {
   if (result.error != update_client::UnpackerError::kNone) {
-    main_task_runner_->PostTask(
-        FROM_HERE,
-        base::BindOnce(std::move(callback_), false,
-                       static_cast<int>(result.error), result.extended_error));
+    main_task_runner_->PostTask(FROM_HERE,
+                                base::BindOnce(std::move(callback_), false,
+                                               std::to_underlying(result.error),
+                                               result.extended_error));
     return;
   }
 
@@ -149,7 +150,7 @@ void RecoveryComponentActionHandler::WaitForCommand(
         process_or_error->WaitForExitWithTimeout(kMaxWaitTime, &exit_code);
   } else {
     exit_code =
-        static_cast<int>(update_client::InstallError::LAUNCH_PROCESS_FAILED);
+        std::to_underlying(update_client::InstallError::LAUNCH_PROCESS_FAILED);
     extra_code1 = process_or_error.error();
   }
   base::DeletePathRecursively(unpack_path_);
@@ -169,7 +170,7 @@ bool RecoveryImprovedInstallerPolicy::RequiresNetworkEncryption() const {
 
 update_client::CrxInstaller::Result
 RecoveryImprovedInstallerPolicy::OnCustomInstall(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(0);
 }
@@ -179,13 +180,13 @@ void RecoveryImprovedInstallerPolicy::OnCustomUninstall() {}
 void RecoveryImprovedInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    base::Value::Dict manifest) {
+    base::DictValue manifest) {
   DVLOG(1) << "RecoveryImproved component is ready.";
 }
 
 // Called during startup and installation before ComponentReady().
 bool RecoveryImprovedInstallerPolicy::VerifyInstallation(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
   return true;
 }

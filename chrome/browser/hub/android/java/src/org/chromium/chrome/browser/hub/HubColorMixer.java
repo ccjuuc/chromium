@@ -11,12 +11,13 @@ import static org.chromium.chrome.browser.hub.HubColorMixer.StateChange.TRANSLAT
 
 import androidx.annotation.IntDef;
 
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.modelutil.PropertyModel;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.util.Objects;
 import java.util.function.DoubleConsumer;
 
 /**
@@ -86,9 +87,10 @@ public interface HubColorMixer {
     void destroy();
 
     /**
-     * Supplies the current overview mode color. This will be null if overview mode is not enabled.
+     * Supplies the current overview mode color. This will be Color.TRANSPARENT if overview mode is
+     * not enabled.
      */
-    ObservableSupplier<Integer> getOverviewColorSupplier();
+    NonNullObservableSupplier<Integer> getOverviewColorSupplier();
 
     /**
      * Updates overview mode based on the provided reason for the state change.
@@ -100,6 +102,39 @@ public interface HubColorMixer {
     /** Registers a {@link HubViewColorBlend} to receive color scheme updates. */
     void registerBlend(HubViewColorBlend colorBlend);
 
+    /** Unregisters a {@link HubViewColorBlend} to cease receiving color scheme updates. */
+    void unregisterBlend(HubViewColorBlend colorBlend);
+
     /** Gets the observer for overview mode alpha changes. */
     OverviewModeAlphaObserver getOverviewModeAlphaObserver();
+
+    /** Data object representing an active color scheme blend transition. */
+    class ColorBlendProgress {
+        public final @HubColorScheme int startScheme;
+        public final @HubColorScheme int endScheme;
+        public final float fraction;
+
+        public ColorBlendProgress(
+                @HubColorScheme int startScheme, @HubColorScheme int endScheme, float fraction) {
+            this.startScheme = startScheme;
+            this.endScheme = endScheme;
+            this.fraction = fraction;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o instanceof ColorBlendProgress that) {
+                return startScheme == that.startScheme
+                        && endScheme == that.endScheme
+                        && Float.compare(fraction, that.fraction) == 0;
+            }
+            return false;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(startScheme, endScheme, fraction);
+        }
+    }
 }

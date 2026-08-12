@@ -10,6 +10,7 @@ import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
 
+import androidx.annotation.StringDef;
 import androidx.test.annotation.UiThreadTest;
 import androidx.test.filters.MediumTest;
 import androidx.test.filters.SmallTest;
@@ -35,6 +36,7 @@ import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.WarmupManager.SpareTabFinalStatus;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
@@ -45,10 +47,9 @@ import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tabmodel.TabCreator;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
+import org.chromium.chrome.browser.tabmodel.TabGroupMergeNotificationType;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.util.ChromeTabUtils;
@@ -61,6 +62,8 @@ import org.chromium.net.test.util.TestWebServer;
 import org.chromium.ui.display.DisplayUtil;
 import org.chromium.ui.test.util.DeviceRestriction;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -78,10 +81,16 @@ public class WarmupManagerTest {
     public AutoResetCtaTransitTestRule mActivityTestRule =
             ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
-    public enum ProfileType {
-        REGULAR_PROFILE,
-        PRIMARY_OTR_PROFILE,
-        NON_PRIMARY_OTR_PROFILE
+    @StringDef({
+        ProfileType.REGULAR_PROFILE,
+        ProfileType.PRIMARY_OTR_PROFILE,
+        ProfileType.NON_PRIMARY_OTR_PROFILE
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface ProfileType {
+        String REGULAR_PROFILE = "REGULAR_PROFILE";
+        String PRIMARY_OTR_PROFILE = "PRIMARY_OTR_PROFILE";
+        String NON_PRIMARY_OTR_PROFILE = "NON_PRIMARY_OTR_PROFILE";
     }
 
     private static final String HISTOGRAM_SPARE_TAB_FINAL_STATUS = "Android.SpareTab.FinalStatus";
@@ -93,14 +102,12 @@ public class WarmupManagerTest {
         public Iterable<ParameterSet> getParameters() {
             return Arrays.asList(
                     new ParameterSet()
-                            .value(ProfileType.PRIMARY_OTR_PROFILE.toString())
+                            .value(ProfileType.PRIMARY_OTR_PROFILE)
                             .name("PrimaryIncognitoProfile"),
                     new ParameterSet()
-                            .value(ProfileType.NON_PRIMARY_OTR_PROFILE.toString())
+                            .value(ProfileType.NON_PRIMARY_OTR_PROFILE)
                             .name("NonPrimaryIncognitoProfile"),
-                    new ParameterSet()
-                            .value(ProfileType.REGULAR_PROFILE.toString())
-                            .name("RegularProfile"));
+                    new ParameterSet().value(ProfileType.REGULAR_PROFILE).name("RegularProfile"));
         }
     }
 
@@ -112,19 +119,16 @@ public class WarmupManagerTest {
 
     private TestWebServer mWebServer;
     private TabModel mTabModel;
-    private TabGroupModelFilter mTabGroupModelFilter;
 
     @Before
     public void setUp() throws Exception {
         mTabModel = mActivityTestRule.getActivity().getTabModelSelector().getModel(false);
 
-        mTabGroupModelFilter =
-                mActivityTestRule.getActivity().getTabModelSelector().getTabGroupModelFilter(false);
-
         // Unlike most of Chrome, the WarmupManager inflates layouts with the application context.
         // This is because the inflation happens before an activity exists. If you're trying to fix
         // a failing test, it's important to not add extra theme/style information to this context
-        // in this test because it could hide a real production issue. See https://crbug.com/1246329
+        // in this test because it could hide a real production issue. See
+        // https://crbug.com/40196491
         // for an example.
         mContext =
                 InstrumentationRegistry.getInstrumentation()
@@ -165,10 +169,8 @@ public class WarmupManagerTest {
             }
             ThreadUtils.runOnUiThreadBlocking(
                     () -> {
-                        mTabGroupModelFilter.mergeListOfTabsToGroup(
-                                tabs,
-                                tabs.get(0),
-                                TabGroupModelFilter.MergeNotificationType.DONT_NOTIFY);
+                        mTabModel.mergeListOfTabsToGroup(
+                                tabs, tabs.get(0), TabGroupMergeNotificationType.DONT_NOTIFY);
                     });
         }
     }
@@ -231,11 +233,11 @@ public class WarmupManagerTest {
                 (Callable<Profile>) () -> ProfileManager.getLastUsedRegularProfile());
     }
 
-    private static Profile getProfile(ProfileType profileType) {
+    private static Profile getProfile(@ProfileType String profileType) {
         switch (profileType) {
-            case NON_PRIMARY_OTR_PROFILE:
+            case ProfileType.NON_PRIMARY_OTR_PROFILE:
                 return getNonPrimaryOtrProfile();
-            case PRIMARY_OTR_PROFILE:
+            case ProfileType.PRIMARY_OTR_PROFILE:
                 return getPrimaryOtrProfile();
             default:
                 return getRegularProfile();
@@ -248,10 +250,7 @@ public class WarmupManagerTest {
     @UiThreadTest
     public void testInflateLayout() {
         int layoutId = R.layout.custom_tabs_control_container;
-        int toolbarId =
-                ChromeFeatureList.sCctToolbarRefactor.isEnabled()
-                        ? R.layout.new_custom_tab_toolbar
-                        : R.layout.custom_tabs_toolbar;
+        int toolbarId = R.layout.new_custom_tab_toolbar;
         mWarmupManager.initializeViewHierarchy(mContext, layoutId, toolbarId);
         Assert.assertTrue(mWarmupManager.hasViewHierarchyWithToolbar(layoutId, mContext));
     }
@@ -267,7 +266,7 @@ public class WarmupManagerTest {
     @SmallTest
     @UseMethodParameter(ProfileParams.class)
     public void testPreconnect(String profileParameter) throws InterruptedException {
-        ProfileType profileType = ProfileType.valueOf(profileParameter);
+        @ProfileType String profileType = profileParameter;
         Profile profile = getProfile(profileType);
         EmbeddedTestServer server = new EmbeddedTestServer();
         // The predictor prepares 1 or 2 connections when asked to preconnect. Initializes the
@@ -297,7 +296,7 @@ public class WarmupManagerTest {
                     mWarmupManager.maybePreconnectUrlAndSubResources(profile, url);
                 });
         boolean isAcquired = connectionsSemaphore.tryAcquire(5, TimeUnit.SECONDS);
-        if (profileType == ProfileType.REGULAR_PROFILE && !isAcquired) {
+        if (ProfileType.REGULAR_PROFILE.equals(profileType) && !isAcquired) {
             // Starts at -1.
             int actualConnections = connectionsSemaphore.availablePermits() + 1;
             Assert.fail(
@@ -305,7 +304,7 @@ public class WarmupManagerTest {
                             "Pre-connect failed for regular profile: Expected %d connections, got"
                                     + " %d",
                             expectedConnections, actualConnections));
-        } else if (profileType != ProfileType.REGULAR_PROFILE && isAcquired) {
+        } else if (!ProfileType.REGULAR_PROFILE.equals(profileType) && isAcquired) {
             Assert.fail("Pre-connect should fail for incognito profiles.");
         }
     }

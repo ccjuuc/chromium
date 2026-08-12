@@ -2,21 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/gpu/vaapi/vp8_vaapi_video_encoder_delegate.h"
 
 #include <va/va.h>
 #include <va/va_enc_vp8.h>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 
 #include "base/bits.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
@@ -47,6 +43,10 @@ constexpr uint8_t kMaxQP = 117;
 // which is triggered when qp values are consecutively less than or equal to 15.
 constexpr uint8_t kScreenMinQP = 12;
 constexpr uint8_t kScreenMaxQP = 106;
+
+constexpr uint8_t kMinSupportedVP8TemporalLayers = 2;
+constexpr uint8_t kMaxSupportedVP8TemporalLayers = 3;
+constexpr size_t kTemporalLayerCycle = 4;
 
 // Convert Qindex, whose range is 0-127, to the quantizer parameter used in
 // libvpx vp8 rate control, whose range is 0-63.
@@ -92,6 +92,8 @@ libvpx::VP8RateControlRtcConfig CreateRateControlConfig(
     const VP8VaapiVideoEncoderDelegate::EncodeParams& encode_params,
     const VideoBitrateAllocation& bitrate_allocation,
     size_t num_temporal_layers) {
+  // This function can be called with |num_temporal_layers| = 1.
+  CHECK_LE(num_temporal_layers, kMaxSupportedVP8TemporalLayers);
   libvpx::VP8RateControlRtcConfig rc_cfg{};
   rc_cfg.width = encode_size.width();
   rc_cfg.height = encode_size.height();
@@ -117,8 +119,9 @@ libvpx::VP8RateControlRtcConfig CreateRateControlConfig(
   int bitrate_sum = 0;
   for (size_t tid = 0; tid < num_temporal_layers; ++tid) {
     bitrate_sum += bitrate_allocation.GetBitrateBps(0u, tid) / 1000;
-    rc_cfg.layer_target_bitrate[tid] = bitrate_sum;
-    rc_cfg.ts_rate_decimator[tid] = 1u << (num_temporal_layers - tid - 1);
+    UNSAFE_TODO(rc_cfg.layer_target_bitrate[tid]) = bitrate_sum;
+    UNSAFE_TODO(rc_cfg.ts_rate_decimator[tid]) =
+        1u << (num_temporal_layers - tid - 1);
   }
 
   rc_cfg.frame_drop_thresh = encode_params.drop_frame_thresh;
@@ -154,18 +157,14 @@ Vp8FrameHeader GetDefaultVp8FrameHeader(bool keyframe,
   return hdr;
 }
 
-constexpr uint8_t kMinSupportedVP8TemporalLayers = 2;
-constexpr uint8_t kMaxSupportedVP8TemporalLayers = 3;
-constexpr size_t kTemporalLayerCycle = 4;
-
 bool UpdateFrameHeaderForTemporalLayerEncoding(
     const size_t num_layers,
     const size_t frame_num,
     Vp8FrameHeader& frame_hdr,
     Vp8Metadata& metadata,
     std::array<bool, kNumVp8ReferenceBuffers>& ref_frames_used) {
-  DCHECK_GE(num_layers, kMinSupportedVP8TemporalLayers);
-  DCHECK_LE(num_layers, kMaxSupportedVP8TemporalLayers);
+  CHECK_GE(num_layers, kMinSupportedVP8TemporalLayers);
+  CHECK_LE(num_layers, kMaxSupportedVP8TemporalLayers);
   enum BufferFlags : uint8_t {
     kNone = 0,
     kReference = 1,
@@ -219,8 +218,8 @@ bool UpdateFrameHeaderForTemporalLayerEncoding(
         };
 
     std::tie(metadata, buffer_flags) =
-        kFrameConfigs[num_layers - kMinSupportedVP8TemporalLayers]
-                     [frame_num % kTemporalLayerCycle];
+        UNSAFE_TODO(kFrameConfigs[num_layers - kMinSupportedVP8TemporalLayers]
+                                 [frame_num % kTemporalLayerCycle]);
   }
 
   frame_hdr.frame_type =
@@ -391,7 +390,7 @@ VP8VaapiVideoEncoderDelegate::PrepareEncodeJob(EncodeJob& encode_job) {
   }
 
   DCHECK(!picture->frame_hdr->IsKeyframe() ||
-         !base::Contains(ref_frames_used, true));
+         !std::ranges::contains(ref_frames_used, true));
 
   if (!SubmitFrameParameters(encode_job, current_params_, picture,
                              reference_frames_, ref_frames_used)) {
@@ -455,15 +454,17 @@ bool VP8VaapiVideoEncoderDelegate::UpdateRates(
       current_params_.framerate == framerate) {
     return true;
   }
-  DVLOGF(2) << "New bitrate: " << bitrate_allocation.ToString()
-            << ", new framerate: " << framerate;
-
-  current_params_.bitrate_allocation = bitrate_allocation;
-  current_params_.framerate = framerate;
 
   if (VP8TLEncodingIsEnabled()) {
     const size_t new_num_temporal_layers =
         GetActiveTemporalLayers(bitrate_allocation);
+    if (new_num_temporal_layers > kMaxSupportedVP8TemporalLayers ||
+        new_num_temporal_layers == 0) {
+      VLOGF(1) << "Unsupported number of temporal layers: "
+               << new_num_temporal_layers
+               << ", bitrate_allocation:" << bitrate_allocation.ToString();
+      return false;
+    }
     if (new_num_temporal_layers != num_temporal_layers_) {
       VLOGF(2) << "The number of temporal layers is changed, from "
                << base::strict_cast<int>(num_temporal_layers_) << " to "
@@ -478,6 +479,12 @@ bool VP8VaapiVideoEncoderDelegate::UpdateRates(
       frame_num_ = base::bits::AlignUp(frame_num_, kTemporalLayerCycle);
     }
   }
+
+  DVLOGF(2) << "New bitrate: " << bitrate_allocation.ToString()
+            << ", new framerate: " << framerate;
+
+  current_params_.bitrate_allocation = bitrate_allocation;
+  current_params_.framerate = framerate;
 
   rate_ctrl_->UpdateRateControl(
       CreateRateControlConfig(visible_size_, current_params_,
@@ -647,23 +654,26 @@ bool VP8VaapiVideoEncoderDelegate::SubmitFrameParameters(
   pic_param.pic_flags.bits.mb_no_coeff_skip = frame_header->mb_no_skip_coeff;
   if (frame_header->IsKeyframe())
     pic_param.pic_flags.bits.forced_lf_adjustment = true;
-
-  static_assert(std::extent<decltype(pic_param.loop_filter_level)>() ==
-                        std::extent<decltype(pic_param.ref_lf_delta)>() &&
-                    std::extent<decltype(pic_param.ref_lf_delta)>() ==
-                        std::extent<decltype(pic_param.mode_lf_delta)>() &&
-                    std::extent<decltype(pic_param.ref_lf_delta)>() ==
-                        std::extent<decltype(
-                            frame_header->loopfilter_hdr.ref_frame_delta)>() &&
-                    std::extent<decltype(pic_param.mode_lf_delta)>() ==
-                        std::extent<decltype(
-                            frame_header->loopfilter_hdr.mb_mode_delta)>(),
-                "Invalid loop filter array sizes");
+  static_assert(
+      std::extent<decltype(pic_param.loop_filter_level)>() ==
+              std::extent<decltype(pic_param.ref_lf_delta)>() &&
+          std::extent<decltype(pic_param.ref_lf_delta)>() ==
+              std::extent<decltype(pic_param.mode_lf_delta)>() &&
+          std::extent<decltype(pic_param.ref_lf_delta)>() ==
+              std::tuple_size_v<
+                  decltype(frame_header->loopfilter_hdr.ref_frame_delta)> &&
+          std::extent<decltype(pic_param.mode_lf_delta)>() ==
+              std::tuple_size_v<
+                  decltype(frame_header->loopfilter_hdr.mb_mode_delta)>,
+      "Invalid loop filter array sizes");
 
   for (size_t i = 0; i < std::size(pic_param.loop_filter_level); ++i) {
-    pic_param.loop_filter_level[i] = frame_header->loopfilter_hdr.level;
-    pic_param.ref_lf_delta[i] = frame_header->loopfilter_hdr.ref_frame_delta[i];
-    pic_param.mode_lf_delta[i] = frame_header->loopfilter_hdr.mb_mode_delta[i];
+    UNSAFE_TODO(pic_param.loop_filter_level[i]) =
+        frame_header->loopfilter_hdr.level;
+    UNSAFE_TODO(pic_param.ref_lf_delta[i]) =
+        UNSAFE_TODO(frame_header->loopfilter_hdr.ref_frame_delta[i]);
+    UNSAFE_TODO(pic_param.mode_lf_delta[i]) =
+        UNSAFE_TODO(frame_header->loopfilter_hdr.mb_mode_delta[i]);
   }
 
   pic_param.sharpness_level = frame_header->loopfilter_hdr.sharpness_level;

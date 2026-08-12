@@ -36,6 +36,7 @@ struct LayerContextSettings {
   bool enable_backface_visibility_interop;
   bool enable_fluent_scrollbar;
   bool enable_fluent_overlay_scrollbar;
+  bool enable_unbounded_element;
 };
 
 struct CompositorFrameSinkParams {
@@ -57,7 +58,6 @@ struct CompositorFrameSinkParams {
 // Each time a client has a graphical update, and receives an OnBeginFrame, it
 // is responsible for creating a CompositorFrame to update its portion of the
 // screen.
-[DirectReceiver]
 interface CompositorFrameSink {
   // Sets parameters for the CompositorFrameSink.
   SetParams(CompositorFrameSinkParams params);
@@ -115,7 +115,6 @@ interface CompositorFrameSink {
   SetThreads(array<Thread> threads);
 };
 
-[DirectReceiver]
 interface CompositorFrameSinkClient {
   // Notification that the previous CompositorFrame given to
   // SubmitCompositorFrame() has been processed and that another frame

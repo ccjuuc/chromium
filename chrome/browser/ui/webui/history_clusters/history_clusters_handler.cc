@@ -10,7 +10,6 @@
 #include <variant>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
@@ -26,7 +25,6 @@
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/browser_actions.h"
-#include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/profiles/profile_view_utils.h"
@@ -74,11 +72,13 @@ void InvokeAction(actions::ActionId id, actions::ActionItem* scope) {
 // Returns the current browser window, regardless of whether this instance is
 // tab-scoped or window-scoped.
 BrowserWindowInterface* GetBrowserWindowInterface(
-    std::variant<BrowserWindowInterface*, tabs::TabInterface*> interface) {
-  if (std::holds_alternative<BrowserWindowInterface*>(interface)) {
-    return std::get<BrowserWindowInterface*>(interface);
+    std::variant<raw_ptr<BrowserWindowInterface>, raw_ptr<tabs::TabInterface>>
+        interface) {
+  if (std::holds_alternative<raw_ptr<BrowserWindowInterface>>(interface)) {
+    return std::get<raw_ptr<BrowserWindowInterface>>(interface);
   }
-  return std::get<tabs::TabInterface*>(interface)->GetBrowserWindowInterface();
+  return std::get<raw_ptr<tabs::TabInterface>>(interface)
+      ->GetBrowserWindowInterface();
 }
 
 class HistoryClustersSidePanelContextMenu
@@ -86,7 +86,8 @@ class HistoryClustersSidePanelContextMenu
       public ui::SimpleMenuModel::Delegate {
  public:
   HistoryClustersSidePanelContextMenu(
-      std::variant<BrowserWindowInterface*, tabs::TabInterface*> interface,
+      std::variant<raw_ptr<BrowserWindowInterface>, raw_ptr<tabs::TabInterface>>
+          interface,
       GURL url)
       : ui::SimpleMenuModel(this), interface_(interface), url_(std::move(url)) {
     AddItemWithStringId(IDC_CONTENT_CONTEXT_OPENLINKNEWTAB,
@@ -101,7 +102,8 @@ class HistoryClustersSidePanelContextMenu
                         IDS_HISTORY_CLUSTERS_COPY_LINK);
   }
   HistoryClustersSidePanelContextMenu(
-      std::variant<BrowserWindowInterface*, tabs::TabInterface*> interface,
+      std::variant<raw_ptr<BrowserWindowInterface>, raw_ptr<tabs::TabInterface>>
+          interface,
       std::string query)
       : ui::SimpleMenuModel(this), interface_(interface), query_(query) {
     AddItemWithStringId(IDC_CUT, IDS_HISTORY_CLUSTERS_CUT);
@@ -155,19 +157,18 @@ class HistoryClustersSidePanelContextMenu
         break;
       }
       case IDC_CUT:
-        InvokeAction(actions::kActionCut, GetBrowserWindowInterface(interface_)
-                                              ->GetActions()
-                                              ->root_action_item());
+        InvokeAction(actions::kActionCut,
+                     BrowserActions::From(GetBrowserWindowInterface(interface_))
+                         ->root_action_item());
         break;
       case IDC_COPY:
-        InvokeAction(actions::kActionCopy, GetBrowserWindowInterface(interface_)
-                                               ->GetActions()
-                                               ->root_action_item());
+        InvokeAction(actions::kActionCopy,
+                     BrowserActions::From(GetBrowserWindowInterface(interface_))
+                         ->root_action_item());
         break;
       case IDC_PASTE:
         InvokeAction(actions::kActionPaste,
-                     GetBrowserWindowInterface(interface_)
-                         ->GetActions()
+                     BrowserActions::From(GetBrowserWindowInterface(interface_))
                          ->root_action_item());
         break;
       default:
@@ -178,7 +179,8 @@ class HistoryClustersSidePanelContextMenu
  private:
   // Exactly one of `browser_window_interface_` and `tab_interface_` will be
   // non-nullptr.
-  std::variant<BrowserWindowInterface*, tabs::TabInterface*> interface_;
+  std::variant<raw_ptr<BrowserWindowInterface>, raw_ptr<tabs::TabInterface>>
+      interface_;
   std::string query_;
   GURL url_;
 };
@@ -211,24 +213,28 @@ mojom::QueryResultPtr QueryClustersResultToMojom(
 
 HistoryClustersHandler::HistoryClustersHandler(
     mojo::PendingReceiver<mojom::PageHandler> pending_page_handler,
+    mojo::PendingRemote<mojom::Page> pending_page,
     Profile* profile,
     content::WebContents* web_contents,
     BrowserWindowInterface* browser_window_interface)
     : profile_(profile),
       web_contents_(web_contents),
       interface_(browser_window_interface),
+      page_(std::move(pending_page)),
       page_handler_(this, std::move(pending_page_handler)) {
   CommonInit();
 }
 
 HistoryClustersHandler::HistoryClustersHandler(
     mojo::PendingReceiver<mojom::PageHandler> pending_page_handler,
+    mojo::PendingRemote<mojom::Page> pending_page,
     Profile* profile,
     content::WebContents* web_contents,
     tabs::TabInterface* tab_interface)
     : profile_(profile),
       web_contents_(web_contents),
       interface_(tab_interface),
+      page_(std::move(pending_page)),
       page_handler_(this, std::move(pending_page_handler)) {
   CommonInit();
 }
@@ -287,11 +293,6 @@ void HistoryClustersHandler::OpenHistoryUrl(
   GetBrowserWindowInterface(interface_)
       ->OpenURL(params,
                 /*navigation_handle_callback=*/{});
-}
-
-void HistoryClustersHandler::SetPage(
-    mojo::PendingRemote<mojom::Page> pending_page) {
-  page_.Bind(std::move(pending_page));
 }
 
 void HistoryClustersHandler::ShowSidePanelUI() {
@@ -390,13 +391,14 @@ void HistoryClustersHandler::RemoveVisits(
     {
       history::BrowsingHistoryService::HistoryEntry entry;
       entry.url = visit->raw_visit_data->url;
-      entry.all_timestamps.insert(visit->raw_visit_data->visit_time);
+      entry.all_timestamps[visit->raw_visit_data->url].insert(
+          visit->raw_visit_data->visit_time);
       items_to_remove.push_back(std::move(entry));
     }
     for (const auto& duplicate : visit->duplicates) {
       history::BrowsingHistoryService::HistoryEntry entry;
       entry.url = duplicate->url;
-      entry.all_timestamps.insert(duplicate->visit_time);
+      entry.all_timestamps[duplicate->url].insert(duplicate->visit_time);
       items_to_remove.push_back(std::move(entry));
     }
   }
@@ -431,7 +433,7 @@ void HistoryClustersHandler::RemoveVisitByUrlAndTime(
   history::BrowsingHistoryService::HistoryEntry entry;
   entry.url = url;
   base::Time visit_time = base::Time::FromMillisecondsSinceUnixEpoch(timestamp);
-  entry.all_timestamps.insert(visit_time);
+  entry.all_timestamps[url].insert(visit_time);
   browsing_history_service_->RemoveVisits({entry});
 }
 
@@ -466,7 +468,7 @@ void HistoryClustersHandler::OpenVisitUrlsInTabGroup(
     }
   }
   // Sometimes tab_indices is empty, and TabStripModel::AddToNewGroup
-  // requires a non-empty vector (Fixes https://crbug.com/1339140)
+  // requires a non-empty vector (Fixes https://crbug.com/40060062)
   if (tab_indices.empty()) {
     return;
   }

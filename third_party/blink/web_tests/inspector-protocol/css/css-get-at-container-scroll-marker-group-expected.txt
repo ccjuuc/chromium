@@ -7,6 +7,7 @@ Dumping styles for ::scroll-marker-group: [
         rule : {
             containerQueries : [
                 [0] : {
+                    conditionText : (width = 400px)
                     physicalAxes : Horizontal
                     range : {
                         endColumn : 26
@@ -21,6 +22,8 @@ Dumping styles for ::scroll-marker-group: [
             layers : [
             ]
             media : [
+            ]
+            navigations : [
             ]
             origin : regular
             originTreeScopeNodeId : 5
@@ -42,6 +45,20 @@ Dumping styles for ::scroll-marker-group: [
                             a : 1
                             b : 0
                             c : 1
+                            components : [
+                                [0] : {
+                                    a : 1
+                                    b : 0
+                                    c : 0
+                                    text : #scroller
+                                }
+                                [1] : {
+                                    a : 0
+                                    b : 0
+                                    c : 1
+                                    text : ::scroll-marker-group
+                                }
+                            ]
                         }
                         text : #scroller::scroll-marker-group
                     }

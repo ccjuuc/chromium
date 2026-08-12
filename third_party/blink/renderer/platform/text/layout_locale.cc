@@ -20,43 +20,42 @@
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string_hash.h"
-#include "third_party/blink/renderer/platform/wtf/text/case_folding_hash.h"
+#include "third_party/blink/renderer/platform/wtf/text/ignoring_ascii_case_hash.h"
 #include "third_party/blink/renderer/platform/wtf/thread_specific.h"
 
 namespace blink {
 
 namespace {
 
-using CaseFoldingHashSet = HashSet<String, CaseFoldingHashTraits<String>>;
+using IgnoringCaseHashSet =
+    HashSet<String, IgnoringAsciiCaseHashTraits<String>>;
 
-CaseFoldingHashSet CreateMacrolanguageChineseLanguageTags() {
+IgnoringCaseHashSet CreateMacrolanguageChineseLanguageTags() {
   // This list is from the IANA language-subtag-registry:
   // https://www.iana.org/assignments/language-subtag-registry/language-subtag-registry
   // where "Type: language" and "Macrolanguage: zh".
-  return CaseFoldingHashSet{"cdo", "cjy", "cmn", "cnp", "cpx", "csp", "czh",
-                            "czo", "gan", "hak", "hnm", "hsn", "luh", "lzh",
-                            "mnp", "nan", "sjc", "wuu", "yue", "zh"};
+  return IgnoringCaseHashSet{"cdo", "cjy", "cmn", "cnp", "cpx", "csp", "czh",
+                             "czo", "gan", "hak", "hnm", "hsn", "luh", "lzh",
+                             "mnp", "nan", "sjc", "wuu", "yue", "zh"};
 }
 
-CaseFoldingHashSet MacrolanguageChineseLanguageTags() {
-  DEFINE_THREAD_SAFE_STATIC_LOCAL(CaseFoldingHashSet, tags,
+const IgnoringCaseHashSet& MacrolanguageChineseLanguageTags() {
+  DEFINE_THREAD_SAFE_STATIC_LOCAL(IgnoringCaseHashSet, tags,
                                   (CreateMacrolanguageChineseLanguageTags()));
   return tags;
 }
 
 bool ComputeIsMacrolanguageChinese(const String& value) {
-  const wtf_size_t separater = value.find('-');
-  if (separater == kNotFound) {
-    return MacrolanguageChineseLanguageTags().Contains(value);
-  }
-  const StringView language{value, 0, separater};
-  return MacrolanguageChineseLanguageTags().Contains(language.ToString());
+  StringView language_tag{value};
+  language_tag = language_tag.substr(0, value.find('-'));
+  return MacrolanguageChineseLanguageTags()
+      .Contains<IgnoringAsciiCaseHashTranslator>(language_tag);
 }
 
 struct PerThreadData {
   HashMap<AtomicString,
           scoped_refptr<LayoutLocale>,
-          CaseFoldingHashTraits<AtomicString>>
+          IgnoringAsciiCaseHashTraits<AtomicString>>
       locale_map;
   raw_ptr<const LayoutLocale> default_locale = nullptr;
   raw_ptr<const LayoutLocale> system_locale = nullptr;
@@ -70,42 +69,68 @@ PerThreadData& GetPerThreadData() {
   return *data;
 }
 
+// Expect returned buffer size is 1 to match QuotesData type
+constexpr int kUcharDelimMaxLength = 1;
+
 struct DelimiterConfig {
   ULocaleDataDelimiterType type;
-  raw_ptr<UChar> result;
+  std::array<UChar, kUcharDelimMaxLength> data;
 };
-// Use  ICU ulocdata to find quote delimiters for an ICU locale
-// https://unicode-org.github.io/icu-docs/apidoc/dev/icu4c/ulocdata_8h.html#a0bf1fdd1a86918871ae2c84b5ce8421f
-scoped_refptr<QuotesData> GetQuotesDataForLanguage(const char* locale) {
-  UErrorCode status = U_ZERO_ERROR;
-  // Expect returned buffer size is 1 to match QuotesData type
-  constexpr int ucharDelimMaxLength = 1;
 
-  ULocaleData* uld = ulocdata_open(locale, &status);
+// Use ICU ulocdata to find quote delimiters for an ICU locale
+// https://unicode-org.github.io/icu-docs/apidoc/dev/icu4c/ulocdata_8h.html#a0bf1fdd1a86918871ae2c84b5ce8421f
+scoped_refptr<QuotesData> GetQuotesDataForIcuLocale(const char* locale) {
+  UErrorCode status = U_ZERO_ERROR;
+
+  auto ulocdata_cleanup = [](ULocaleData* uld) { ulocdata_close(uld); };
+  std::unique_ptr<ULocaleData, decltype(ulocdata_cleanup)> uld(
+      ulocdata_open(locale, &status), ulocdata_cleanup);
   if (U_FAILURE(status)) {
-    ulocdata_close(uld);
     return nullptr;
   }
-  std::array<UChar, ucharDelimMaxLength> open1, close1, open2, close2;
 
-  int32_t delimResultLength;
   struct DelimiterConfig delimiters[] = {
-      {ULOCDATA_QUOTATION_START, open1.data()},
-      {ULOCDATA_QUOTATION_END, close1.data()},
-      {ULOCDATA_ALT_QUOTATION_START, open2.data()},
-      {ULOCDATA_ALT_QUOTATION_END, close2.data()},
+      {ULOCDATA_QUOTATION_START},
+      {ULOCDATA_QUOTATION_END},
+      {ULOCDATA_ALT_QUOTATION_START},
+      {ULOCDATA_ALT_QUOTATION_END},
   };
-  for (DelimiterConfig delim : delimiters) {
-    delimResultLength = ulocdata_getDelimiter(uld, delim.type, delim.result,
-                                              ucharDelimMaxLength, &status);
-    if (U_FAILURE(status) || delimResultLength != 1) {
-      ulocdata_close(uld);
+  for (DelimiterConfig& delim : delimiters) {
+    const int32_t delim_result_length = ulocdata_getDelimiter(
+        uld.get(), delim.type, delim.data.data(), delim.data.size(), &status);
+    if (U_FAILURE(status) || delim_result_length != 1) {
       return nullptr;
     }
   }
-  ulocdata_close(uld);
-
+  const auto& open1 = delimiters[0].data;
+  const auto& close1 = delimiters[1].data;
+  const auto& open2 = delimiters[2].data;
+  const auto& close2 = delimiters[3].data;
   return QuotesData::Create(open1[0], close1[0], open2[0], close2[0]);
+}
+
+scoped_refptr<QuotesData> GetQuotesDataForLanguage(const StringView& lang) {
+  UErrorCode status = U_ZERO_ERROR;
+  // Use uloc_openAvailableByType() to find all CLDR recognized locales
+  // https://unicode-org.github.io/icu-docs/apidoc/dev/icu4c/uloc_8h.html#aa0332857185774f3e0520a0823c14d16
+  auto uenum_cleanup = [](UEnumeration* enumerator) {
+    uenum_close(enumerator);
+  };
+  std::unique_ptr<UEnumeration, decltype(uenum_cleanup)> ulocales(
+      uloc_openAvailableByType(ULOC_AVAILABLE_DEFAULT, &status), uenum_cleanup);
+  if (U_FAILURE(status)) {
+    return nullptr;
+  }
+
+  while (const char* loc = uenum_next(ulocales.get(), nullptr, &status)) {
+    if (U_FAILURE(status)) {
+      return nullptr;
+    }
+    if (EqualIgnoringAsciiCase(loc, lang)) {
+      return GetQuotesDataForIcuLocale(loc);
+    }
+  }
+  return nullptr;
 }
 
 // Returns the Unicode Line Break Style Identifier (key "lb") value.
@@ -126,7 +151,7 @@ inline const char* LbValueFromStrictness(LineBreakStrictness strictness) {
 
 }  // namespace
 
-static hb_language_t ToHarfbuzLanguage(const AtomicString& locale) {
+static hb_language_t ToHarfbuzzLanguage(const AtomicString& locale) {
   std::string locale_as_latin1 = locale.Latin1();
   return hb_language_from_string(locale_as_latin1.data(),
                                  static_cast<int>(locale_as_latin1.length()));
@@ -206,11 +231,11 @@ const LayoutLocale* LayoutLocale::LocaleForHan(
   PerThreadData& data = GetPerThreadData();
   if (!data.default_locale_for_han_computed) [[unlikely]] {
     // Use the first acceptLanguages that can disambiguate.
-    Vector<String> languages;
-    data.current_accept_languages.Split(',', languages);
-    for (String token : languages) {
-      token = token.StripWhiteSpace();
-      const LayoutLocale* locale = LayoutLocale::Get(AtomicString(token));
+    Vector<StringView> languages =
+        StringView(data.current_accept_languages).SplitSkippingEmpty(',');
+    for (const StringView& token : languages) {
+      const LayoutLocale* locale =
+          LayoutLocale::Get(token.StripWhiteSpace().ToAtomicString());
       if (locale->HasScriptForHan()) {
         data.default_locale_for_han = locale;
         break;
@@ -251,7 +276,7 @@ void LayoutLocale::ComputeCaseMapLocale() const {
 
 LayoutLocale::LayoutLocale(const AtomicString& locale)
     : string_(locale),
-      harfbuzz_language_(ToHarfbuzLanguage(locale)),
+      harfbuzz_language_(ToHarfbuzzLanguage(locale)),
       script_(LocaleToScriptCodeForFontSelection(locale)) {}
 
 // static
@@ -321,53 +346,23 @@ scoped_refptr<QuotesData> LayoutLocale::GetQuotesData() const {
   String normalized_lang = LocaleString();
   normalized_lang.Replace('-', '_');
 
-  UErrorCode status = U_ZERO_ERROR;
-  // Use uloc_openAvailableByType() to find all CLDR recognized locales
-  // https://unicode-org.github.io/icu-docs/apidoc/dev/icu4c/uloc_8h.html#aa0332857185774f3e0520a0823c14d16
-  UEnumeration* ulocales =
-      uloc_openAvailableByType(ULOC_AVAILABLE_DEFAULT, &status);
-  if (U_FAILURE(status)) {
-    uenum_close(ulocales);
-    return nullptr;
-  }
+  // Try the exact locale first, then remove subtags one at a time.
+  wtf_size_t locale_length = normalized_lang.length();
+  while (locale_length) {
+    quotes_data_ =
+        GetQuotesDataForLanguage(StringView(normalized_lang, 0, locale_length));
+    if (quotes_data_) {
+      break;
+    }
 
-  // Try to find exact match
-  while (const char* loc = uenum_next(ulocales, nullptr, &status)) {
-    if (U_FAILURE(status)) {
-      uenum_close(ulocales);
-      return nullptr;
+    // No exact match, try again without the last subtag.
+    wtf_size_t separator_offset = normalized_lang.rfind('_', locale_length - 1);
+    if (separator_offset == kNotFound) {
+      break;
     }
-    if (EqualIgnoringASCIICase(loc, normalized_lang)) {
-      quotes_data_ = GetQuotesDataForLanguage(loc);
-      uenum_close(ulocales);
-      return quotes_data_;
-    }
+    locale_length = separator_offset;
   }
-  uenum_close(ulocales);
-
-  // No exact match, try to find without subtags.
-  wtf_size_t hyphen_offset = normalized_lang.ReverseFind('_');
-  if (hyphen_offset == kNotFound)
-    return nullptr;
-  normalized_lang = normalized_lang.Substring(0, hyphen_offset);
-  ulocales = uloc_openAvailableByType(ULOC_AVAILABLE_DEFAULT, &status);
-  if (U_FAILURE(status)) {
-    uenum_close(ulocales);
-    return nullptr;
-  }
-  while (const char* loc = uenum_next(ulocales, nullptr, &status)) {
-    if (U_FAILURE(status)) {
-      uenum_close(ulocales);
-      return nullptr;
-    }
-    if (EqualIgnoringASCIICase(loc, normalized_lang)) {
-      quotes_data_ = GetQuotesDataForLanguage(loc);
-      uenum_close(ulocales);
-      return quotes_data_;
-    }
-  }
-  uenum_close(ulocales);
-  return nullptr;
+  return quotes_data_;
 }
 
 AtomicString LayoutLocale::LocaleWithBreakKeyword(
@@ -378,8 +373,9 @@ AtomicString LayoutLocale::LocaleWithBreakKeyword(
 
   // uloc_setKeywordValue_58 has a problem to handle "@" in the original
   // string. crbug.com/697859
-  if (string_.Contains('@'))
+  if (string_.contains('@')) {
     return string_;
+  }
 
   constexpr wtf_size_t kMaxLbValueLen = 6;
   constexpr wtf_size_t kMaxKeywordsLen =
@@ -397,7 +393,7 @@ AtomicString LayoutLocale::LocaleWithBreakKeyword(
         : ULocaleKeywordBuilder(locale.Utf8()) {}
 
     AtomicString ToAtomicString() const {
-      return AtomicString::FromUTF8(base::as_byte_span(buffer_).first(length_));
+      return AtomicString::FromUtf8(base::as_byte_span(buffer_).first(length_));
     }
 
     bool SetStrictness(LineBreakStrictness strictness) {
@@ -407,7 +403,7 @@ AtomicString LayoutLocale::LocaleWithBreakKeyword(
     }
 
     bool SetKeywordValue(const char* keyword_name, const char* value) {
-      ICUError status;
+      IcuError status;
       int32_t length_needed = uloc_setKeywordValue(
           keyword_name, value, buffer_.data(), buffer_.size(), &status);
       if (U_SUCCESS(status)) {

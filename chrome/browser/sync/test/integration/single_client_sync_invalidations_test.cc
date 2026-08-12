@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #include "base/memory/raw_ptr.h"
+#include "base/metrics/statistics_recorder.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/sync/device_info_sync_service_factory.h"
@@ -14,6 +16,7 @@
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "components/bookmarks/browser/bookmark_model.h"
+#include "components/browser_sync/browser_sync_switches.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/features.h"
 #include "components/sync/base/time.h"
@@ -267,6 +270,11 @@ class SingleClientSyncInvalidationsTest
     if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
       scoped_feature_list_.InitAndEnableFeature(
           syncer::kReplaceSyncPromosWithSignInPromos);
+    } else {
+      // Skip sync-to-signin migration for sync-the-feature tests. This is to
+      // avoid the sync state changing between the PRE_ tests.
+      scoped_feature_list_.InitAndDisableFeature(
+          switches::kMigrateSyncingUserToSignedIn);
     }
   }
 
@@ -421,11 +429,12 @@ IN_PROC_BROWSER_TEST_P(
   const std::string kRemoteFCMRegistrationToken = "other_fcm_token";
 
   // Simulate the case when the server already knows another device which is
-  // not subscribed to BOOKMARKS.
-  InjectDeviceInfoEntityToServer(
-      kRemoteDeviceCacheGuid,
-      Difference(DefaultInterestedDataTypes(), {syncer::BOOKMARKS}),
-      kRemoteFCMRegistrationToken);
+  // subscribed only to NIGORI. This ensures that other data types (e.g.
+  // PREFERENCES) that may be committed alongside BOOKMARKS do not cause the
+  // remote token to be included in
+  // fcm_registration_tokens_for_interested_clients.
+  InjectDeviceInfoEntityToServer(kRemoteDeviceCacheGuid, {syncer::NIGORI},
+                                 kRemoteFCMRegistrationToken);
   ASSERT_TRUE(SetupSync());
 
   // Commit a new bookmark to check if the next commit message has FCM
@@ -581,10 +590,13 @@ IN_PROC_BROWSER_TEST_P(SingleClientSyncInvalidationsTest,
 
 IN_PROC_BROWSER_TEST_P(SingleClientSyncInvalidationsTest,
                        PersistBookmarkInvalidation) {
+  // The fake server carried over HTTP errors across PRE_ tests.
+  GetFakeServer()->ClearHttpError();
+
   ASSERT_TRUE(SetupClients());
   ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
 
-  // TODO(crbug.com/40239360): Persisted invaldiations are loaded in
+  // TODO(crbug.com/40239360): Persisted invalidations are loaded in
   // DataTypeWorker::ctor(), but sync cycle is not scheduled. New sync cycle
   // has to be triggered right after we loaded persisted invalidations.
   GetSyncService(0)->TriggerRefresh(
@@ -619,10 +631,13 @@ IN_PROC_BROWSER_TEST_P(SingleClientSyncInvalidationsTest,
 
 IN_PROC_BROWSER_TEST_P(SingleClientSyncInvalidationsTest,
                        PersistDeviceInfoInvalidation) {
+  // The fake server carried over HTTP errors across PRE_ tests.
+  GetFakeServer()->ClearHttpError();
+
   ASSERT_TRUE(SetupClients());
   ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
 
-  // TODO(crbug.com/40239360): Persisted invaldiations are loaded in
+  // TODO(crbug.com/40239360): Persisted invalidations are loaded in
   // DataTypeWorker::ctor(), but sync cycle is not scheduled. New sync cycle
   // has to be triggered right after we loaded persisted invalidations.
   GetSyncService(0)->TriggerRefresh(
@@ -697,8 +712,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientSyncInvalidationsTest,
                    ->GetFCMRegistrationToken());
 
   // Sign in again.
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+  ASSERT_TRUE(SignIn());
   ASSERT_TRUE(GetClient(0)->AwaitInvalidationsStatus(/*expected_status=*/true));
   ASSERT_TRUE(SyncInvalidationsServiceFactory::GetForProfile(GetProfile(0))
                   ->GetFCMRegistrationToken());
@@ -714,5 +728,44 @@ IN_PROC_BROWSER_TEST_P(SingleClientSyncInvalidationsTest,
           .Wait());
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS)
+
+IN_PROC_BROWSER_TEST_P(SingleClientSyncInvalidationsTest,
+                       RecordTransitLatencyHistograms) {
+  ASSERT_TRUE(SetupSync());
+
+  // Wait until the client is fully registered for bookmark invalidations on the
+  // server.
+  ASSERT_TRUE(
+      ServerDeviceInfoMatchChecker(
+          ElementsAre(AllOf(InterestedDataTypesContain(syncer::BOOKMARKS),
+                            HasInstanceIdToken())))
+          .Wait());
+
+  base::HistogramTester histogram_tester;
+  base::StatisticsRecorder::HistogramWaiter waiter(
+      "Sync.InvalidationTransitLatency.ClientBased");
+
+  // A commit of a bookmark should trigger an invalidation, which in turn
+  // records transit latency metrics on the client.
+  InjectSyncedBookmark(GetFakeServer());
+
+  // Wait until the metric is recorded.
+  waiter.Wait();
+
+  // Wait until the bookmark is synced to guarantee that the invalidation was
+  // received and processed.
+  ASSERT_TRUE(
+      bookmarks_helper::BookmarksUrlChecker(0, GURL(kSyncedBookmarkURL), 1)
+          .Wait());
+
+  // Client-based transit latency should be recorded.
+  histogram_tester.ExpectTotalCount(
+      "Sync.InvalidationTransitLatency.ClientBased", 1);
+  histogram_tester.ExpectTotalCount(
+      "Sync.InvalidationTransitLatency.ClientBased.BOOKMARK", 1);
+  histogram_tester.ExpectUniqueSample(
+      "Sync.InvalidationTransitLatency.ClockSkewDetected.ClientBased", false,
+      1);
+}
 
 }  // namespace

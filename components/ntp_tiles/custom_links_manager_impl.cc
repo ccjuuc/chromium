@@ -20,16 +20,20 @@
 #include "components/ntp_tiles/tile_type.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
+#include "components/search/ntp_features.h"
 
 namespace ntp_tiles {
 
-CustomLinksManagerImpl::CustomLinksManagerImpl(
-    PrefService* prefs,
-    history::HistoryService* history_service)
-    : prefs_(prefs), store_(prefs) {
-  DCHECK(prefs);
-  if (history_service) {
-    history_service_observation_.Observe(history_service);
+CustomLinksManagerImpl::CustomLinksManagerImpl(const Options& options)
+    : prefs_(options.prefs),
+      max_links_(
+          base::FeatureList::IsEnabled(ntp_features::kNtpShortcutsRedesign)
+              ? ntp_features::GetMaxShortcutsInExpandedState()
+              : options.max_links),
+      store_(options.prefs) {
+  DCHECK(prefs_);
+  if (options.history_service) {
+    history_service_observation_.Observe(options.history_service.get());
   }
   if (IsInitialized()) {
     current_links_ = store_.RetrieveLinks();
@@ -80,11 +84,15 @@ const std::vector<CustomLinksManager::Link>& CustomLinksManagerImpl::GetLinks()
   return current_links_;
 }
 
+size_t CustomLinksManagerImpl::GetMaxLinks() const {
+  return max_links_;
+}
+
 bool CustomLinksManagerImpl::AddLinkTo(const GURL& url,
                                        const std::u16string& title,
                                        size_t pos) {
   if (!IsInitialized() || !url.is_valid() ||
-      current_links_.size() == ntp_tiles::kMaxNumCustomLinks) {
+      current_links_.size() == max_links_) {
     return false;
   }
 

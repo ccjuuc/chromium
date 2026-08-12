@@ -6,10 +6,11 @@
 #define CHROME_BROWSER_CHROMEOS_VIDEO_CONFERENCE_VIDEO_CONFERENCE_MEDIA_LISTENER_H_
 
 #include <string>
+
+#include "ash/system/video_conference/video_conference_common.h"
 #include "base/functional/callback_forward.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
-#include "chromeos/crosapi/mojom/video_conference.mojom-forward.h"
 #include "content/public/browser/web_contents.h"
 
 namespace video_conference {
@@ -28,7 +29,7 @@ class VideoConferenceMediaListener
       base::RepeatingCallback<void()> media_usage_update_callback,
       base::RepeatingCallback<VideoConferenceWebApp*(content::WebContents*)>
           create_vc_web_app_callback,
-      base::RepeatingCallback<void(crosapi::mojom::VideoConferenceMediaDevice,
+      base::RepeatingCallback<void(ash::VideoConferenceMediaDevice,
                                    const std::u16string&)>
           device_used_while_disabled_callback);
 
@@ -38,9 +39,8 @@ class VideoConferenceMediaListener
 
   ~VideoConferenceMediaListener() override;
 
-  void SetSystemMediaDeviceStatus(
-      crosapi::mojom::VideoConferenceMediaDevice device,
-      bool enabled);
+  void SetSystemMediaDeviceStatus(ash::VideoConferenceMediaDevice device,
+                                  bool enabled);
 
   // MediaStreamCaptureIndicator::Observer overrides
   void OnIsCapturingVideoChanged(content::WebContents* contents,
@@ -77,7 +77,7 @@ class VideoConferenceMediaListener
   base::RepeatingCallback<void()> media_usage_update_callback_;
   base::RepeatingCallback<VideoConferenceWebApp*(content::WebContents*)>
       create_vc_web_app_callback_;
-  base::RepeatingCallback<void(crosapi::mojom::VideoConferenceMediaDevice,
+  base::RepeatingCallback<void(ash::VideoConferenceMediaDevice,
                                const std::u16string&)>
       device_used_while_disabled_callback_;
 

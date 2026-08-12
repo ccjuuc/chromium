@@ -25,7 +25,7 @@ constexpr int64_t kInvalidDisplayId = -1;
 
 // Display ID that represents a valid display to be used when there's no actual
 // display connected.
-constexpr int64_t kDefaultDisplayId = 0xFF;
+constexpr int64_t kDefaultDisplayId = -2;
 
 // Display ID for a virtual display assigned to a unified desktop.
 constexpr int64_t kUnifiedDisplayId = -10;
@@ -154,8 +154,7 @@ enum class ModesetFlag {
 };
 
 // A bitmask of flags as defined in display::ModesetFlag.
-using ModesetFlags =
-    base::EnumSet<ModesetFlag, ModesetFlag::kMinValue, ModesetFlag::kMaxValue>;
+using ModesetFlags = base::EnumSet<ModesetFlag>;
 
 // Enum of possible states for variable refresh rates pertaining to a display.
 enum class VariableRefreshRateState {

@@ -29,12 +29,13 @@ template("system_webview_apk_or_module_tmpl") {
          "If trichrome library is used, static_library_provider must be set " +
              "so that a dep can be added on the library APK.")
 
+  _mergeable_android_manifests = []
   if (!_is_trichrome) {
-    if (!defined(mergeable_android_manifests)) {
-      mergeable_android_manifests = []
-    }
-    mergeable_android_manifests +=
+    _mergeable_android_manifests +=
         [ "//android_webview/AndroidManifest_standalone_webview.xml" ]
+  }
+  if (defined(invoker.mergeable_android_manifests)) {
+    _mergeable_android_manifests += invoker.mergeable_android_manifests
   }
 
   _include_64_bit_webview =
@@ -132,6 +133,7 @@ template("system_webview_apk_or_module_tmpl") {
                                  "webview_product_config_java_package",
                                  "webview_devui_show_icon",
                                  "use_stable_package_name_for_trichrome",
+                                 "mergeable_android_manifests",
                                ])
 
     _is_bundle_module = _target_type == "android_app_bundle_module"
@@ -150,6 +152,9 @@ template("system_webview_apk_or_module_tmpl") {
     android_manifest = _android_manifest
     android_manifest_dep = ":$_android_manifest_target_name"
     manifest_package = _manifest_package
+    if (_mergeable_android_manifests != []) {
+      mergeable_android_manifests = _mergeable_android_manifests
+    }
     deps += [
       "//android_webview:locale_pak_assets",
       "//android_webview:pak_file_assets",
@@ -191,7 +196,19 @@ template("system_webview_apk_or_module_tmpl") {
     if (!_is_trichrome) {
       if ((!android_64bit_target_cpu && _include_32_bit_webview) ||
           (android_64bit_target_cpu && _include_64_bit_webview)) {
-        shared_libraries = [ "//android_webview:libwebviewchromium" ]
+        if (use_webview_pgo_profile) {
+          shared_libraries =
+              [ "//android_webview:libwebviewchromium($webview_toolchain)" ]
+          if (!defined(data_deps)) {
+            data_deps = []
+          }
+
+          # This needs to be a swarming runtime dep for the orderfile bot to
+          # work.
+          data_deps += [ "//android_webview:copy_webview_lib_unstripped" ]
+        } else {
+          shared_libraries = [ "//android_webview:libwebviewchromium" ]
+        }
         _include_primary_support = true
       }
       if (android_64bit_target_cpu && _include_32_bit_webview) {
@@ -270,28 +287,6 @@ template("system_webview_apk_or_module_tmpl") {
 
     resource_exclusion_regex = common_resource_exclusion_regex
     resource_exclusion_exceptions = common_resource_exclusion_exceptions
-
-    # We only optimize resources for bundles since APKs are not shipped.
-    # Resources only live in the base module atm as such we only need to set
-    # these on the base module
-    if (_is_bundle_module) {
-      # Removes metadata needed for Resources.getIdentifier("resource_name").
-      strip_resource_names = !is_java_debug
-
-      # Shortens resource file names in apk eg: res/drawable/button.xml -> res/a.xml
-      short_resource_paths = !is_java_debug
-
-      # Removes unused resources from the apk. Only enabled on official builds
-      # since it adds a slow step and serializes the build graph causing fewer
-      # expensive tasks (eg: proguarding, resource optimization) to be run in
-      # parallel by adding dependencies between them (adds around 10-20
-      # seconds on my machine).
-      strip_unused_resources = is_official_build
-
-      # An aapt2 config file to exempt some webview resources from resource
-      # optimizations.
-      resources_config_paths = [ "//android_webview/aapt2.config" ]
-    }
 
     if (!_is_bundle_module) {
       # Used as an additional apk in test scripts.

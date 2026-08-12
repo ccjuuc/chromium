@@ -22,6 +22,42 @@
     "dependencies": ["permission:accessibilityPrivate"],
     "contexts": ["privileged_extension"]
   },
+  "accessibilityPrivate.onTwoFingerTouchStart": {
+    "channel": "stable",
+    "contexts": ["privileged_extension"],
+    "dependencies": [],
+    "extension_types": ["platform_app"],
+    "session_types": ["kiosk"],
+    "allowlist": [
+       "E703483CEF33DEC18B4B6DD84B5C776FB9182BDB",  // http://crbug.com/717501
+       "A3BC37E2148AC4E99BE4B16AF9D42DD1E592BBBE",  // http://crbug.com/717501
+       "1C93BD3CF875F4A73C0B2A163BB8FBDA8B8B3D80",  // http://crbug.com/717501
+       "307E96539209F95A1A8740C713E6998A73657D96",  // http://crbug.com/717501
+       "4F25792AF1AA7483936DE29C07806F203C7170A0",  // http://crbug.com/717501
+       "BD8781D757D830FC2E85470A1B6E8A718B7EE0D9",  // http://crbug.com/717501
+       "4AC2B6C63C6480D150DFDA13E4A5956EB1D0DDBB",  // http://crbug.com/717501
+       "81986D4F846CEDDDB962643FA501D1780DD441BB",  // http://crbug.com/717501
+       "A9A9FC0228ADF541F0334F22BEFB8F9C245B21D7"   // http://crbug.com/839189
+    ]
+  },
+  "accessibilityPrivate.onTwoFingerTouchStop": {
+    "channel": "stable",
+    "contexts": ["privileged_extension"],
+    "dependencies": [],
+    "extension_types": ["platform_app"],
+    "session_types": ["kiosk"],
+    "allowlist": [
+       "E703483CEF33DEC18B4B6DD84B5C776FB9182BDB",  // http://crbug.com/717501
+       "A3BC37E2148AC4E99BE4B16AF9D42DD1E592BBBE",  // http://crbug.com/717501
+       "1C93BD3CF875F4A73C0B2A163BB8FBDA8B8B3D80",  // http://crbug.com/717501
+       "307E96539209F95A1A8740C713E6998A73657D96",  // http://crbug.com/717501
+       "4F25792AF1AA7483936DE29C07806F203C7170A0",  // http://crbug.com/717501
+       "BD8781D757D830FC2E85470A1B6E8A718B7EE0D9",  // http://crbug.com/717501
+       "4AC2B6C63C6480D150DFDA13E4A5956EB1D0DDBB",  // http://crbug.com/717501
+       "81986D4F846CEDDDB962643FA501D1780DD441BB",  // http://crbug.com/717501
+       "A9A9FC0228ADF541F0334F22BEFB8F9C245B21D7"   // http://crbug.com/839189
+    ]
+  },
   "accessibilityServicePrivate": {
     "dependencies": ["permission:accessibilityServicePrivate"],
     "contexts": ["privileged_extension"],
@@ -31,24 +67,6 @@
   "action": {
     "dependencies": ["manifest:action"],
     "contexts": ["privileged_extension"]
-  },
-  "action.openPopup": [{
-    "channel": "stable",
-    // TODO(https://crbug.com/40057101): Remove this guard after the feature
-    // has been in stable for a milestone or two.
-    "feature_flag": "ApiActionOpenPopup"
-  }, {
-    "channel": "stable",
-    "location": "policy"
-  }],
-  "action.isEnabled": {
-    "channel": "stable"
-  },
-  "action.getBadgeTextColor": {
-    "channel": "stable"
-  },
-  "action.setBadgeTextColor": {
-    "channel": "stable"
   },
   "activityLogPrivate": [{
     "dependencies": ["permission:activityLogPrivate"],
@@ -60,6 +78,11 @@
       "chrome://extensions/*"
     ]
   }],
+  "contextualTasksPrivate": {
+    "contexts": ["privileged_extension"],
+    "dependencies": ["permission:contextualTasksPrivate"],
+    "feature_flag": "ApiContextualTasksPrivate"
+  },
   "experimentalActor": {
     "contexts": ["privileged_extension"],
     "dependencies": ["permission:experimentalActor"]
@@ -67,6 +90,14 @@
   "experimentalAiData": {
     "contexts": ["privileged_extension"],
     "dependencies": ["permission:experimentalAiData"]
+  },
+  "glicPrivate": {
+    "contexts": ["privileged_extension"],
+    "dependencies": ["permission:glicPrivate"],
+    "feature_flag": "ApiGlicPrivate"
+  },
+  "glicPrivate.invoke": {
+    "dependencies": ["permission:glicPrivate.invoke"]
   },
   "app": {
     "blocklist": [
@@ -174,10 +205,10 @@
     "allowlist": [
       // The extensions below here only use openPopup on a user action,
       // so are safe, and can be removed when the allowlist on that
-      // capability is lifted. See crbug.com/436489 for context.
-      "A4577D8C2AF4CF26F40CBCA83FFA4251D6F6C8F8",  // http://crbug.com/497301
-      "A8208CCC87F8261AFAEB6B85D5E8D47372DDEA6B",  // http://crbug.com/497301
-      "EFCF5358672FEE04789FD2EC3638A67ADEDB6C8C"   // http://crbug.com/514696
+      // capability is lifted. See crbug.com/40395524 for context.
+      "A4577D8C2AF4CF26F40CBCA83FFA4251D6F6C8F8",  // http://crbug.com/40421443
+      "A8208CCC87F8261AFAEB6B85D5E8D47372DDEA6B",  // http://crbug.com/40421443
+      "EFCF5358672FEE04789FD2EC3638A67ADEDB6C8C"   // http://crbug.com/41191144
     ],
     "contexts": ["privileged_extension"]
   }],
@@ -228,13 +259,15 @@
       "chrome://contextual-tasks/*",
       "chrome://glic/*",
       "chrome://glic-fre/*",
+      "chrome://glic-experimental-opt-in/*",
       "chrome://graduation/*",
       "chrome://mobilesetup/*",
       "chrome://oobe/*",
       "chrome://os-settings/*",
       "chrome://parent-access/*",
       "chrome://password-change/*",
-      "chrome://lock-reauth/*"
+      "chrome://lock-reauth/*",
+      "chrome://skills/*"
     ]
   }, {
     "internal": true,
@@ -243,7 +276,6 @@
       "webui_untrusted"
     ],
     "matches": [
-      "chrome-untrusted://boca-app/*",
       "chrome-untrusted://lens/*"
     ]
   }],
@@ -266,7 +298,6 @@
       "webui_untrusted"
     ],
     "matches": [
-      "chrome-untrusted://boca-app/*",
       "chrome-untrusted://lens/*"
     ]
   }, {
@@ -383,13 +414,13 @@
     "dependencies": ["manifest:devtools_page"],
     "contexts": ["privileged_extension"]
   },
+  "dictationPrivate": {
+    "dependencies": ["permission:dictationPrivate"],
+    "contexts": ["privileged_extension"]
+  },
   "documentScan": {
     "dependencies": ["permission:documentScan"],
     "contexts": ["privileged_extension"]
-  },
-  "dom": {
-    "channel": "stable",
-    "contexts": ["privileged_extension", "content_script"]
   },
   "downloads": {
     "dependencies": ["permission:downloads"],
@@ -455,6 +486,11 @@
   },
   "enterprise.reportingPrivate.onDataMaskingRulesTriggered": {
     "feature_flag": "ApiEnterpriseReportingPrivateOnDataMaskingRulesTriggered"
+  },
+  "proxyOverrideRulesPrivate": {
+    "dependencies": ["permission:proxyOverrideRulesPrivate"],
+    "contexts": ["privileged_extension"],
+    "feature_flag": "ApiProxyOverrideRulesPrivate"
   },
   "experimental.devtools.audits": {
     "nocompile": true,
@@ -535,7 +571,7 @@
     "matches": ["chrome://extensions/*"]
   },
   // This is not a real API, only here for documentation purposes.
-  // See http://crbug.com/275944 for background.
+  // See http://crbug.com/41038651 for background.
   "extensionsManifestTypes": {
     "internal": true,
     "channel": "stable",
@@ -621,9 +657,12 @@
     "dependencies": ["permission:identity"],
     "contexts": ["privileged_extension"]
   },
-  "idltest": {
-    "dependencies": ["permission:idltest"],
-    "contexts": ["privileged_extension"]
+  "indigoPrivate": {
+    "dependencies": ["permission:indigoPrivate"],
+    "contexts": [
+      "privileged_extension"
+    ],
+    "disallow_for_service_workers": true
   },
   "imageLoaderPrivate": {
     "dependencies": ["permission:imageLoaderPrivate"],
@@ -685,7 +724,9 @@
       "7FE4A999359A456C4B0FB7B7AD85CEA29CA50519", // Login screen APIs test extension
       "3F5995FE79A861F019C6F093BEF98D73FA9D3A5F", // Login screen APIs in-session test extension
       // https://crbug.com/433867146
-      "4B7E9789426EBD1BB3F99D72690DAE303FC042DF"  // AuthX Secure for ChromeOS
+      "4B7E9789426EBD1BB3F99D72690DAE303FC042DF", // AuthX Secure for ChromeOS
+      // https://crbug.com/485245112
+      "36F5326E7683E204CE9CE1532093D8BB9CD5D280"  // AuthX in-session extension
     ]
   }],
   "login.exitCurrentSession": [{
@@ -699,6 +740,8 @@
       "3F5995FE79A861F019C6F093BEF98D73FA9D3A5F", // Login screen APIs in-session test extension
       // https://crbug.com/433867146
       "4B7E9789426EBD1BB3F99D72690DAE303FC042DF", // AuthX Secure for ChromeOS
+      // https://crbug.com/485245112
+      "36F5326E7683E204CE9CE1532093D8BB9CD5D280", // AuthX in-session extension
       // Only has access to login.exitCurrentSession
       "8ECFC754A70BE499325FA4BB705E62EFEEC1BC80", // b/314208017
       "ECD28F2B60BDB3B4E566D6C60BD88BE0774044C1",  // b/314208017
@@ -729,7 +772,7 @@
     "contexts": ["privileged_extension"]
   },
   // This is not a real API, only here for documentation purposes.
-  // See http://crbug.com/275944 for background.
+  // See http://crbug.com/41038651 for background.
   "manifestTypes": {
     "internal": true,
     "channel": "stable",
@@ -742,12 +785,6 @@
   "mdns": {
     "dependencies": ["permission:mdns"],
     "contexts": ["privileged_extension"]
-  },
-  "mimeHandlerViewGuestInternal": {
-    "internal": true,
-    "contexts": "all",
-    "channel": "stable",
-    "matches": ["<all_urls>"]
   },
   "notifications": {
     "dependencies": ["permission:notifications"],
@@ -787,12 +824,10 @@
     "contexts": ["privileged_extension"]
   },
   "permissions.addHostAccessRequest": {
-    "min_manifest_version": 3,
-    "feature_flag": "ApiPermissionsHostAccessRequests"
+    "min_manifest_version": 3
   },
   "permissions.removeHostAccessRequest": {
-    "min_manifest_version": 3,
-    "feature_flag": "ApiPermissionsHostAccessRequests"
+    "min_manifest_version": 3
   },
   "platformKeys": {
     "dependencies": ["permission:platformKeys"],
@@ -829,10 +864,6 @@
     "dependencies": ["permission:processes"],
     "contexts": ["privileged_extension"]
   },
-  "proxy": {
-    "dependencies": ["permission:proxy"],
-    "contexts": ["privileged_extension"]
-  },
   "imageWriterPrivate": {
     "dependencies": ["permission:imageWriterPrivate"],
     "contexts": ["privileged_extension"]
@@ -865,15 +896,6 @@
   "safeBrowsingPrivate": {
     "dependencies": ["permission:safeBrowsingPrivate"],
     "contexts": ["privileged_extension"]
-  },
-  "scripting": {
-    "dependencies": ["permission:scripting"],
-    "contexts": ["privileged_extension"]
-  },
-  "scripting.globalParams": {
-    "channel": "trunk",
-    "dependencies": ["permission:scripting"],
-    "contexts": ["content_script"]
   },
   "search": {
     "dependencies": ["permission:search"],
@@ -1056,10 +1078,6 @@
     "dependencies": ["permission:webNavigation"],
     "contexts": ["privileged_extension"]
   },
-  "webrtcAudioPrivate": {
-    "dependencies": ["permission:webrtcAudioPrivate"],
-    "contexts": ["privileged_extension"]
-  },
   "webrtcDesktopCapturePrivate": {
     "dependencies": ["permission:webrtcDesktopCapturePrivate"],
     "contexts": ["privileged_extension"]
@@ -1073,30 +1091,12 @@
     "allowlist": [
       // Extension used for API test.
       "ADFA45434ABA2F1A4647E673F53FF37F8F6047A3",
-      "4F25792AF1AA7483936DE29C07806F203C7170A0",  // http://crbug.com/775961
-      "BD8781D757D830FC2E85470A1B6E8A718B7EE0D9",  // http://crbug.com/775961
-      "4AC2B6C63C6480D150DFDA13E4A5956EB1D0DDBB",  // http://crbug.com/775961
-      "81986D4F846CEDDDB962643FA501D1780DD441BB"   // http://crbug.com/775961
+      "4F25792AF1AA7483936DE29C07806F203C7170A0",  // http://crbug.com/40545416
+      "BD8781D757D830FC2E85470A1B6E8A718B7EE0D9",  // http://crbug.com/40545416
+      "4AC2B6C63C6480D150DFDA13E4A5956EB1D0DDBB",  // http://crbug.com/40545416
+      "81986D4F846CEDDDB962643FA501D1780DD441BB"   // http://crbug.com/40545416
     ]
   },
-  "webstorePrivate": [{
-    "dependencies": ["permission:webstorePrivate"],
-    // NOTE: even though this is only used by the webstore hosted app, which
-    // normally would mean privileged_web_page, component hosted apps are
-    // actually given the privileged_extension denomination. Confusing.
-    "contexts": ["privileged_extension"]
-  }, {
-    "channel": "stable",
-    "contexts": ["web_page"],
-    "matches": ["https://chromewebstore.google.com/*"]
-  }, {
-    // Used for webstore testing. See comment in
-    // chrome/common/extensions/webstore_override.cc
-    "channel": "stable",
-    "contexts": ["web_page"],
-    "requires_delegated_availability_check": true,
-    "matches": ["<all_urls>"]
-  }],
   "webviewTag": {
     "internal": true,
     "dependencies": ["permission:webview"],

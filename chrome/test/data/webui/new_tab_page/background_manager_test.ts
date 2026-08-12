@@ -2,8 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {BackgroundManager} from 'chrome://new-tab-page/new_tab_page.js';
-import {NtpBackgroundImageSource} from 'chrome://new-tab-page/new_tab_page.mojom-webui.js';
+import {BackgroundManager, NtpBackgroundImageSource} from 'chrome://new-tab-page/new_tab_page.js';
 import {assertEquals, assertFalse, assertNotReached, assertTrue} from 'chrome://webui-test/chai_assert.js';
 
 import {createBackgroundImage} from './test_support.js';
@@ -83,8 +82,8 @@ suite('NewTabPageBackgroundManagerTest', () => {
     // Act.
     backgroundManager.setBackgroundImage({
       attributionUrl: null,
-      url: {url: 'https://example.com'},
-      url2x: {url: 'https://example2x.com'},
+      url: 'https://example.com',
+      url2x: 'https://example2x.com',
       size: 'cover',
       repeatX: 'no-repeat',
       repeatY: 'repeat',

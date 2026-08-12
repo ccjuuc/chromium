@@ -8,8 +8,10 @@
 #include "base/functional/callback_forward.h"
 #include "base/observer_list.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/trusted_vault/trusted_vault_connection.h"
 
 class EnclaveManager;
+class GaiaId;
 
 class EnclaveManagerInterface : public KeyedService {
  public:
@@ -51,16 +53,15 @@ class EnclaveManagerInterface : public KeyedService {
     // The key has been ignored because the device has been already registered
     // with the enclave.
     kStoreKeysFromOpportunisticFlowIgnoredRedundant,
-    // The key has been ignored because neither system UV nor GPM PIN is
-    // available.
-    kStoreKeysFromOpportunisticFlowIgnoredNoUV,
   };
 
   class Observer : public base::CheckedObserver {
    public:
-    // OnKeyStores is called when MagicArch provides keys to the EnclaveManager
-    // by calling `StoreKeys`.
-    virtual void OnKeysStored() {}
+    // `OnKeysStored` is called when MagicArch provides keys to the
+    // EnclaveManager by calling `StoreKeys`. `gaia_id` is the account
+    // identifier for the keys that were stored. Clients should verify this
+    // matches the account they expect.
+    virtual void OnKeysStored(const GaiaId& gaia_id) {}
 
     // `OnStateUpdated` is called from `EnclaveManager::Stopped()` - indicating
     // that the state machine reached its final state (so the state of the
@@ -100,7 +101,12 @@ class EnclaveManagerInterface : public KeyedService {
   // any state and is a no-op if no registration exists.
   virtual void Unenroll(Callback callback) = 0;
 
-  virtual void CheckGpmPinAvailability(GpmPinAvailabilityCallback callback) = 0;
+  // Asynchronously checks if the current user has a GPM PIN. The caller must
+  // keep the returned Request object alive until the callback is run.
+  // Destroying the Request object will cancel the operation.
+  [[nodiscard]] virtual std::unique_ptr<
+      trusted_vault::TrustedVaultConnection::Request>
+  CheckGpmPinAvailability(GpmPinAvailabilityCallback callback) = 0;
 
   virtual void LoadAfterDelay(base::TimeDelta delay,
                               base::OnceClosure closure) = 0;

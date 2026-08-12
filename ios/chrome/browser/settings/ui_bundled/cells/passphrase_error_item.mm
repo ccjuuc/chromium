@@ -20,9 +20,8 @@
   return self;
 }
 
-- (void)configureCell:(LegacyTableViewCell*)cell
-           withStyler:(ChromeTableViewStyler*)styler {
-  [super configureCell:cell withStyler:styler];
+- (void)configureCell:(LegacyTableViewCell*)cell {
+  [super configureCell:cell];
   cell.textLabel.text = self.text;
   cell.selectionStyle = UITableViewCellSelectionStyleNone;
 }
@@ -53,8 +52,8 @@
 
     _errorImageView = [[UIImageView alloc] init];
     _errorImageView.translatesAutoresizingMaskIntoConstraints = NO;
-    _errorImageView.image = DefaultSymbolWithPointSize(
-        kErrorCircleSymbol, kSymbolAccessoryPointSize);
+    _errorImageView.image =
+        SymbolWithPointSize(SymbolErrorCircle, kSymbolAccessoryPointSize);
     _errorImageView.tintColor = [UIColor colorNamed:kRed600Color];
     [contentView addSubview:_errorImageView];
 

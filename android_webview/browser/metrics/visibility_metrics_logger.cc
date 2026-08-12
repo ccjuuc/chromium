@@ -5,7 +5,6 @@
 #include "android_webview/browser/metrics/visibility_metrics_logger.h"
 
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/histogram_base.h"
 #include "base/time/time.h"
@@ -13,6 +12,7 @@
 #include "base/trace_event/typed_macros.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/url_constants.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 using content::BrowserThread;
 
@@ -163,7 +163,7 @@ VisibilityMetricsLogger::~VisibilityMetricsLogger() = default;
 
 void VisibilityMetricsLogger::AddClient(Client* client) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(!base::Contains(client_visibility_, client));
+  DCHECK(!client_visibility_.contains(client));
 
   UpdateDurations();
 
@@ -174,7 +174,7 @@ void VisibilityMetricsLogger::AddClient(Client* client) {
 
 void VisibilityMetricsLogger::RemoveClient(Client* client) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(base::Contains(client_visibility_, client));
+  DCHECK(client_visibility_.contains(client));
 
   UpdateDurations();
 
@@ -184,7 +184,7 @@ void VisibilityMetricsLogger::RemoveClient(Client* client) {
 
 void VisibilityMetricsLogger::ClientVisibilityChanged(Client* client) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(base::Contains(client_visibility_, client));
+  DCHECK(client_visibility_.contains(client));
 
   UpdateDurations();
 
@@ -257,6 +257,7 @@ bool VisibilityMetricsLogger::VisibilityInfo::IsVisible() const {
 void VisibilityMetricsLogger::ProcessClientUpdate(Client* client,
                                                   const VisibilityInfo& info,
                                                   ClientAction action) {
+  auto track = perfetto::NamedTrack::FromPointer("WebViewVisibility", client);
   VisibilityInfo curr_info = client_visibility_[client];
   bool was_visible = curr_info.IsVisible();
   bool is_visible = info.IsVisible();
@@ -273,28 +274,24 @@ void VisibilityMetricsLogger::ProcessClientUpdate(Client* client,
     // TODO(b/280334022): set the track name explicitly after the Perfetto SDK
     // migration is finished (crbug/1006541).
     if (is_visible) {
-      TRACE_EVENT_BEGIN("android_webview.timeline", "WebViewVisible",
-                        perfetto::Track::FromPointer(client));
+      TRACE_EVENT_BEGIN("android_webview.timeline", "WebViewVisible", track);
     }
   }
 
   // If visibility changes or the client is removed, close the event
   // corresponding to the previous visibility state.
   if (action == ClientAction::kRemoved || was_visible != is_visible) {
-    TRACE_EVENT_END("android_webview.timeline",
-                    perfetto::Track::FromPointer(client));
+    TRACE_EVENT_END("android_webview.timeline", track);
   }
 
   if (!was_visible && is_visible) {
     if (action != ClientAction::kRemoved) {
-      TRACE_EVENT_BEGIN("android_webview.timeline", "WebViewVisible",
-                        perfetto::Track::FromPointer(client));
+      TRACE_EVENT_BEGIN("android_webview.timeline", "WebViewVisible", track);
     }
     ++all_clients_visible_count_;
   } else if (was_visible && !is_visible) {
     if (action != ClientAction::kRemoved) {
-      TRACE_EVENT_BEGIN("android_webview.timeline", "WebViewInvisible",
-                        perfetto::Track::FromPointer(client));
+      TRACE_EVENT_BEGIN("android_webview.timeline", "WebViewInvisible", track);
     }
     --all_clients_visible_count_;
   }

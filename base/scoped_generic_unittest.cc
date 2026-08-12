@@ -6,14 +6,14 @@
 
 #include <memory>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace base {
 
@@ -156,13 +156,69 @@ TEST(ScopedGenericTest, Receive) {
   }
 }
 
+TEST(ScopedGenericTest, Swap) {
+  std::vector<int> values_freed;
+  IntTraits traits(&values_freed);
+
+  constexpr int kFirst = 0;
+  constexpr int kSecond = 1;
+  {
+    ScopedInt a(kFirst, traits);
+    ScopedInt b(kSecond, traits);
+
+    swap(a, b);
+    EXPECT_TRUE(values_freed.empty());
+
+    EXPECT_EQ(kSecond, a.get());
+    EXPECT_EQ(kFirst, b.get());
+  }
+
+  EXPECT_THAT(values_freed, testing::ElementsAre(kFirst, kSecond));
+}
+
+TEST(ScopedGenericTest, ReceiverMoveConstruct) {
+  std::vector<int> values_freed;
+  IntTraits traits(&values_freed);
+  ScopedInt a(0, traits);
+
+  {
+    ScopedInt::Receiver r1(a);
+    ScopedInt::Receiver r2(std::move(r1));
+    EXPECT_TRUE(values_freed.empty());
+    EXPECT_EQ(0, a.get());
+  }
+
+  EXPECT_THAT(values_freed, testing::ElementsAre(0));
+}
+
+TEST(ScopedGenericTest, ReceiverMoveAssign) {
+  std::vector<int> values_freed;
+  IntTraits traits(&values_freed);
+
+  constexpr int kFirst = 0;
+  constexpr int kSecond = 1;
+
+  ScopedInt a(kFirst, traits);
+  ScopedInt b(kSecond, traits);
+
+  {
+    ScopedInt::Receiver r1(a);
+    ScopedInt::Receiver r2(b);
+    r2 = std::move(r1);
+    ASSERT_EQ(kSecond, values_freed[0]);
+    EXPECT_EQ(kFirst, a.get());
+  }
+
+  EXPECT_THAT(values_freed, testing::ElementsAre(kSecond, kFirst));
+}
+
 namespace {
 
 struct TrackedIntTraits : public ScopedGenericOwnershipTracking {
   using OwnerMap = std::unordered_map<
       int,
       raw_ptr<const ScopedGeneric<int, TrackedIntTraits>, CtnExperimental>>;
-  TrackedIntTraits(std::unordered_set<int>* freed, OwnerMap* owners)
+  TrackedIntTraits(absl::flat_hash_set<int>* freed, OwnerMap* owners)
       : freed(freed), owners(owners) {}
 
   static int InvalidValue() { return -1; }
@@ -187,7 +243,7 @@ struct TrackedIntTraits : public ScopedGenericOwnershipTracking {
     owners->erase(it);
   }
 
-  raw_ptr<std::unordered_set<int>> freed;
+  raw_ptr<absl::flat_hash_set<int>> freed;
   raw_ptr<OwnerMap> owners;
 };
 
@@ -197,21 +253,21 @@ using ScopedTrackedInt = ScopedGeneric<int, TrackedIntTraits>;
 
 TEST(ScopedGenericTest, OwnershipTracking) {
   TrackedIntTraits::OwnerMap owners;
-  std::unordered_set<int> freed;
+  absl::flat_hash_set<int> freed;
   TrackedIntTraits traits(&freed, &owners);
 
-#define ASSERT_OWNED(value, owner)            \
-  ASSERT_TRUE(base::Contains(owners, value)); \
-  ASSERT_EQ(&owner, owners[value]);           \
-  ASSERT_FALSE(base::Contains(freed, value))
+#define ASSERT_OWNED(value, owner)     \
+  ASSERT_TRUE(owners.contains(value)); \
+  ASSERT_EQ(&owner, owners[value]);    \
+  ASSERT_FALSE(freed.contains(value))
 
-#define ASSERT_UNOWNED(value)                  \
-  ASSERT_FALSE(base::Contains(owners, value)); \
-  ASSERT_FALSE(base::Contains(freed, value))
+#define ASSERT_UNOWNED(value)           \
+  ASSERT_FALSE(owners.contains(value)); \
+  ASSERT_FALSE(freed.contains(value))
 
-#define ASSERT_FREED(value)                    \
-  ASSERT_FALSE(base::Contains(owners, value)); \
-  ASSERT_TRUE(base::Contains(freed, value))
+#define ASSERT_FREED(value)             \
+  ASSERT_FALSE(owners.contains(value)); \
+  ASSERT_TRUE(freed.contains(value))
 
   // Constructor.
   {

@@ -58,14 +58,14 @@ void FlatTreeTraversalTest::SetupSampleHTML(std::string_view main_html,
                                             std::string_view shadow_html,
                                             unsigned index) {
   Element* body = GetDocument().body();
-  body->SetInnerHTMLWithoutTrustedTypes(String::FromUTF8(main_html));
+  body->SetInnerHTMLWithoutTrustedTypes(String::FromUtf8(main_html));
   auto* shadow_host = To<Element>(NodeTraversal::ChildAt(*body, index));
   AttachOpenShadowRoot(*shadow_host, shadow_html);
 }
 
 void FlatTreeTraversalTest::SetupDocumentTree(std::string_view main_html) {
   Element* body = GetDocument().body();
-  body->SetInnerHTMLWithoutTrustedTypes(String::FromUTF8(main_html));
+  body->SetInnerHTMLWithoutTrustedTypes(String::FromUtf8(main_html));
 }
 
 void FlatTreeTraversalTest::AttachOpenShadowRoot(
@@ -74,7 +74,7 @@ void FlatTreeTraversalTest::AttachOpenShadowRoot(
   ShadowRoot& shadow_root =
       shadow_host.AttachShadowRootForTesting(ShadowRootMode::kOpen);
   shadow_root.SetInnerHTMLWithoutTrustedTypes(
-      String::FromUTF8(shadow_inner_html));
+      String::FromUtf8(shadow_inner_html));
 }
 
 namespace {
@@ -214,6 +214,35 @@ TEST_F(FlatTreeTraversalTest, DescendantsOf) {
               GatherFromTraversalRange(
                   FlatTreeTraversal::InclusiveDescendantsOf(*s03)));
   }
+}
+
+TEST_F(FlatTreeTraversalTest, IsInclusiveDescendantOf) {
+  const char* main_html =
+      "<div id='m0'>"
+      "<span slot='#m00' id='m00'>m00</span>"
+      "</div>";
+  const char* shadow_html =
+      "<a id='s00'>s00</a>"
+      "<slot name='#m00'></slot>";
+  SetupSampleHTML(main_html, shadow_html, 0);
+
+  Element* body = GetDocument().body();
+  Element* m0 = body->QuerySelector(AtomicString("#m0"));
+  ShadowRoot* shadow_root = m0->OpenShadowRoot();
+  Element* s00 = shadow_root->QuerySelector(AtomicString("#s00"));
+
+  // Inclusive: node == other.
+  EXPECT_TRUE(FlatTreeTraversal::IsInclusiveDescendantOf(*m0, *m0));
+
+  // Descendant: child is a descendant of ancestor.
+  EXPECT_TRUE(FlatTreeTraversal::IsInclusiveDescendantOf(*s00, *m0));
+
+  // Non-descendant: ancestor is not a descendant of child.
+  EXPECT_FALSE(FlatTreeTraversal::IsInclusiveDescendantOf(*m0, *s00));
+
+  // Different siblings are not inclusive descendants of each other.
+  Element* m00 = m0->QuerySelector(AtomicString("#m00"));
+  EXPECT_FALSE(FlatTreeTraversal::IsInclusiveDescendantOf(*s00, *m00));
 }
 
 TEST_F(FlatTreeTraversalTest, StartsAtOrAfter) {

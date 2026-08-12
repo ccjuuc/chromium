@@ -14,11 +14,11 @@
 #include "chrome/browser/enterprise/client_certificates/cert_utils.h"
 #include "chrome/browser/enterprise/reporting/reporting_delegate_factory_android.h"
 #include "chrome/browser/net/system_network_context_manager.h"
-#include "chrome/browser/policy/android/cloud_management_shared_preferences.h"
 #include "chrome/browser/policy/browser_dm_token_storage_android.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/policy/client_data_delegate_android.h"
 #include "chrome/common/chrome_paths.h"
+#include "components/enterprise/browser/reporting/saas_usage/saas_usage_reporting_delegate_factory.h"
 #include "components/enterprise/client_certificates/core/browser_cloud_management_delegate.h"
 #include "components/enterprise/client_certificates/core/certificate_provisioning_service.h"
 #include "components/enterprise/client_certificates/core/dm_server_client.h"
@@ -200,6 +200,20 @@ ChromeBrowserCloudManagementControllerAndroid::GetReportingDelegateFactory() {
       enterprise_reporting::ReportingDelegateFactoryAndroid>();
 }
 
+std::unique_ptr<enterprise_reporting::SaasUsageReportingDelegateFactory>
+ChromeBrowserCloudManagementControllerAndroid::
+    GetSaasUsageReportingDelegateFactory() {
+  // SaaS usage reporting is not supported on Android.
+  return nullptr;
+}
+
+std::unique_ptr<enterprise_reporting::BrowserLaunchEventController>
+ChromeBrowserCloudManagementControllerAndroid::
+    CreateBrowserLaunchEventController() {
+  // Browser launch reporting is not supported on Android.
+  return nullptr;
+}
+
 void ChromeBrowserCloudManagementControllerAndroid::SetGaiaURLLoaderFactory(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
   // Policy invalidations aren't currently supported on Android.
@@ -208,7 +222,7 @@ void ChromeBrowserCloudManagementControllerAndroid::SetGaiaURLLoaderFactory(
 bool ChromeBrowserCloudManagementControllerAndroid::
     ReadyToCreatePolicyManager() {
   // On Android, policy manager creation can happen if either:
-  //  - a DM token was cached in Shared Preferences by a previous browser run;
+  //  - a DM token is already available;
   //  - an enrollment token is available via platform policies.
   //
   // If a DM token is available, then the policy manager can be created right
@@ -220,14 +234,14 @@ bool ChromeBrowserCloudManagementControllerAndroid::
   // needed. When postponed, policy manager creation will happen during
   // controller initialization, when it's guaranteed that the PolicyService
   // exists and is initialized.
-  return !android::ReadDmTokenFromSharedPreferences().empty() ||
+  return !BrowserDMTokenStorage::Get()->RetrieveDMToken().is_empty() ||
          (g_browser_process && g_browser_process->browser_policy_connector() &&
           g_browser_process->browser_policy_connector()->HasPolicyService() &&
           CloudManagementEnrollmentTokenPolicyAvailable());
 }
 
 bool ChromeBrowserCloudManagementControllerAndroid::ReadyToInit() {
-  return !android::ReadDmTokenFromSharedPreferences().empty() ||
+  return !BrowserDMTokenStorage::Get()->RetrieveDMToken().is_empty() ||
          CloudManagementEnrollmentTokenPolicyAvailable();
 }
 

@@ -17,6 +17,7 @@
 #import "components/saved_tab_groups/public/tab_group_sync_service.h"
 #import "ios/chrome/browser/collaboration/model/features.h"
 #import "ios/chrome/browser/data_sharing/model/data_sharing_service_observer_bridge.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.h"
 #import "ios/chrome/browser/saved_tab_groups/model/ios_tab_group_sync_util.h"
 #import "ios/chrome/browser/saved_tab_groups/ui/tab_group_utils.h"
 #import "ios/chrome/browser/share_kit/model/share_kit_manage_configuration.h"
@@ -28,6 +29,7 @@
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list_observer_bridge.h"
 #import "ios/chrome/browser/shared/public/commands/tab_groups_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/shared/ui/util/color_palette/tab_group_color_palette.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_groups/tab_group_sync_service_observer_bridge.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_group_action_type.h"
 #import "ios/chrome/browser/toolbar/tab_group/coordinator/tab_group_indicator_mediator_delegate.h"
@@ -48,6 +50,8 @@ using tab_groups::SharingState;
 @interface TabGroupIndicatorMediator () <DataSharingServiceObserverDelegate,
                                          TabGroupSyncServiceObserverDelegate,
                                          WebStateListObserving>
+// Tracks if the current tab belongs to a group.
+@property(nonatomic, assign) BOOL inGroup;
 @end
 
 @implementation TabGroupIndicatorMediator {
@@ -72,6 +76,8 @@ using tab_groups::SharingState;
   base::WeakPtr<WebStateList> _webStateList;
   std::unique_ptr<WebStateListObserverBridge> _webStateListObserver;
   BOOL _incognito;
+  // The fullscreen browser agent.
+  raw_ptr<FullscreenBrowserAgent> _fullscreenBrowserAgent;
 }
 
 - (instancetype)
@@ -82,6 +88,7 @@ using tab_groups::SharingState;
                (collaboration::CollaborationService*)collaborationService
              dataSharingService:
                  (data_sharing::DataSharingService*)dataSharingService
+         fullscreenBrowserAgent:(FullscreenBrowserAgent*)fullscreenBrowserAgent
                        consumer:(id<TabGroupIndicatorConsumer>)consumer
                    webStateList:(WebStateList*)webStateList
                       URLLoader:(UrlLoadingBrowserAgent*)URLLoader
@@ -97,6 +104,10 @@ using tab_groups::SharingState;
     _collaborationService = collaborationService;
     _tabGroupSyncService = tabGroupSyncService;
     _dataSharingService = dataSharingService;
+    if (IsFullscreenRefactoringEnabled()) {
+      CHECK(fullscreenBrowserAgent);
+      _fullscreenBrowserAgent = fullscreenBrowserAgent;
+    }
 
     if (tabGroupSyncService) {
       _tabGroupSyncServiceObserver =
@@ -143,6 +154,19 @@ using tab_groups::SharingState;
   _collaborationService = nullptr;
   _shareKitService = nullptr;
   _dataSharingService = nullptr;
+  _fullscreenBrowserAgent = nullptr;
+}
+
+#pragma mark - Properties
+
+- (void)setInGroup:(BOOL)inGroup {
+  if (_inGroup == inGroup) {
+    return;
+  }
+  _inGroup = inGroup;
+  if (_fullscreenBrowserAgent) {
+    _fullscreenBrowserAgent->InvalidateInsetRange();
+  }
 }
 
 #pragma mark - WebStateListObserving
@@ -165,15 +189,21 @@ using tab_groups::SharingState;
   if ((status.active_web_state_change() || groupUpdate) && webState) {
     const TabGroup* tabGroup = [self currentTabGroup];
     if (tabGroup) {
+      tab_groups::TabGroupColorId tabGroupColorId = tabGroup->GetColor();
+
+      TabGroupColorPalette* tabGroupColorPalette =
+          [[TabGroupColorPalette alloc] initWithColorId:tabGroupColorId];
+
       [_consumer setTabGroupTitle:tabGroup->GetTitle()
-                       groupColor:tab_groups::ColorForTabGroupColorId(
-                                      tabGroup->GetColor())];
+             tabGroupColorPalette:tabGroupColorPalette];
+
       [self updateTabGroupSharingState:tabGroup];
     } else {
-      [_consumer setTabGroupTitle:nil groupColor:nil];
+      [_consumer setTabGroupTitle:nil tabGroupColorPalette:nil];
       [_consumer setSharingState:SharingState::kNotShared];
     }
     [self updateFacePileUI];
+    self.inGroup = (tabGroup != nullptr);
   }
 }
 

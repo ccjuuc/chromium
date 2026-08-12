@@ -22,7 +22,7 @@
 #include "chrome/browser/shortcuts/create_shortcut_for_current_web_contents_task.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -112,7 +112,7 @@ IN_PROC_BROWSER_TEST_F(CreateDesktopShortcutDialogViewBrowserTest,
 
   views::test::WidgetDestroyedWaiter destroy_waiter(widget);
   // Navigate to a new tab.
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
 
   destroy_waiter.Wait();
   EXPECT_EQ(
@@ -222,7 +222,7 @@ IN_PROC_BROWSER_TEST_F(CreateDesktopShortcutDialogViewBrowserTest,
                                         new_profile);
   EXPECT_TRUE(browser_future.Wait());
   Browser* new_browser = browser_future.Get();
-  EXPECT_EQ(new_browser->profile(), new_profile);
+  EXPECT_EQ(new_browser->GetProfile(), new_profile);
 
   base::UserActionTester action_tester;
   views::NamedWidgetShownWaiter widget_waiter(

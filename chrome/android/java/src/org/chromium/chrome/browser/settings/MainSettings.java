@@ -14,6 +14,7 @@ import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Parcelable;
 import android.provider.Settings;
 import android.text.style.ForegroundColorSpan;
 import android.text.style.RelativeSizeSpan;
@@ -23,30 +24,32 @@ import android.view.View;
 import androidx.annotation.VisibleForTesting;
 import androidx.lifecycle.Lifecycle;
 import androidx.preference.Preference;
+import androidx.recyclerview.widget.RecyclerView.LayoutManager;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.DeviceInfo;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.OneshotSupplierImpl;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
-import org.chromium.build.annotations.EnsuresNonNull;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.appearance.settings.AppearanceSettingsFragment;
-import org.chromium.chrome.browser.autofill.options.AutofillOptionsFragment;
-import org.chromium.chrome.browser.autofill.options.AutofillOptionsFragment.AutofillOptionsReferrer;
 import org.chromium.chrome.browser.autofill.settings.SettingsNavigationHelper;
-import org.chromium.chrome.browser.customtabs.CustomTabActivity;
+import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsFragment;
+import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsMediator;
+import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsReferrer;
+import org.chromium.chrome.browser.device_lock.DeviceLockActivityLauncherImpl;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.glic.GlicEnabling;
 import org.chromium.chrome.browser.homepage.HomepageManager;
-import org.chromium.chrome.browser.magic_stack.HomeModulesConfigManager;
-import org.chromium.chrome.browser.night_mode.NightModeMetrics.ThemeSettingsEntry;
-import org.chromium.chrome.browser.night_mode.settings.ThemeSettingsFragment;
 import org.chromium.chrome.browser.password_manager.ManagePasswordsReferrer;
 import org.chromium.chrome.browser.password_manager.PasswordExportLauncher;
 import org.chromium.chrome.browser.password_manager.PasswordManagerHelper;
@@ -59,20 +62,22 @@ import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.safety_hub.SafetyHubMetricUtils;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
+import org.chromium.chrome.browser.signin.SigninAndHistorySyncActivityLauncherImpl;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.signin.services.ProfileDataCache;
 import org.chromium.chrome.browser.signin.services.SigninManager;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.chrome.browser.sync.settings.ManageSyncSettings;
 import org.chromium.chrome.browser.sync.settings.SignInPreference;
-import org.chromium.chrome.browser.sync.settings.SyncSettingsUtils;
-import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarStatePredictor;
 import org.chromium.chrome.browser.toolbar.settings.AddressBarPreference;
 import org.chromium.chrome.browser.toolbar.settings.AddressBarSettingsFragment;
 import org.chromium.chrome.browser.tracing.settings.DeveloperSettings;
+import org.chromium.chrome.browser.ui.default_browser_promo.DefaultBrowserPromoUtils;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.settings_promo_card.SettingsPromoCardPreference;
+import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncCoordinator;
 import org.chromium.chrome.browser.ui.signin.SignOutCoordinator;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.settings.ChromeBasePreference;
 import org.chromium.components.browser_ui.settings.ManagedPreferenceDelegate;
 import org.chromium.components.browser_ui.settings.SettingsCustomTabLauncher;
@@ -83,11 +88,14 @@ import org.chromium.components.search_engines.TemplateUrl;
 import org.chromium.components.search_engines.TemplateUrlService;
 import org.chromium.components.signin.AccountManagerFacade;
 import org.chromium.components.signin.AccountManagerFacadeProvider;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
+import org.chromium.components.signin.SigninFeatureMap;
 import org.chromium.components.signin.identitymanager.IdentityManager;
+import org.chromium.components.signin.metrics.SigninAccessPoint;
 import org.chromium.components.sync.SyncService;
 import org.chromium.components.user_prefs.UserPrefs;
+import org.chromium.ui.base.ActivityResultTracker;
 import org.chromium.ui.base.DeviceFormFactor;
+import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.text.SpanApplier;
 import org.chromium.ui.text.SpanApplier.SpanInfo;
@@ -96,6 +104,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /** The main settings screen, shown when the user first opens Settings. */
 @NullMarked
@@ -111,16 +120,13 @@ public class MainSettings extends ChromeBaseSettingsFragment
     public static final String PREF_ACCOUNT_AND_GOOGLE_SERVICES_SECTION =
             "account_and_google_services_section";
     public static final String PREF_SIGN_IN = "sign_in";
-    public static final String PREF_MANAGE_SYNC = "manage_sync";
     public static final String PREF_GOOGLE_SERVICES = "google_services";
     public static final String PREF_BASICS_SECTION = "basics_section";
     public static final String PREF_SEARCH_ENGINE = "search_engine";
     public static final String PREF_PASSWORDS = "passwords";
     public static final String PREF_TABS = "tabs";
     public static final String PREF_HOMEPAGE = "homepage";
-    public static final String PREF_HOME_MODULES_CONFIG = "home_modules_config";
-    public static final String PREF_TOOLBAR_SHORTCUT = "toolbar_shortcut";
-    public static final String PREF_UI_THEME = "ui_theme";
+    public static final String PREF_AUTOFILL_AND_PASSWORDS = "autofill_and_passwords";
     public static final String PREF_AUTOFILL_SECTION = "autofill_section";
     public static final String PREF_PRIVACY = "privacy";
     public static final String PREF_NOTIFICATIONS = "notifications";
@@ -129,15 +135,17 @@ public class MainSettings extends ChromeBaseSettingsFragment
     public static final String PREF_AUTOFILL_OPTIONS = "autofill_options";
     public static final String PREF_AUTOFILL_ADDRESSES = "autofill_addresses";
     public static final String PREF_AUTOFILL_PAYMENTS = "autofill_payment_methods";
-    public static final String PREF_PLUS_ADDRESSES = "plus_addresses";
     public static final String PREF_SAFETY_HUB = "safety_hub";
     public static final String PREF_ADDRESS_BAR = "address_bar";
     public static final String PREF_APPEARANCE = "appearance";
+    public static final String PREF_DEFAULT_BROWSER = "default_browser";
+    public static final String PREF_GLIC = "glic";
+
     @VisibleForTesting static final int NEW_LABEL_MAX_VIEW_COUNT = 6;
 
     // Tag for Fragment backstack entry loading the search results into the display fragment.
     // Popping the entry means we are transitioning from result -> search state.
-    public static final String FRAGMENT_TAG_RESULT = "enter_result_settings";
+    public static final String RESULT_BACKSTACK = "enter_result_settings";
 
     public interface Observer {
         /** Called when a preference item is selected. */
@@ -147,22 +155,53 @@ public class MainSettings extends ChromeBaseSettingsFragment
     private final Map<String, Preference> mAllPreferences = new HashMap<>();
 
     private ManagedPreferenceDelegate mManagedPreferenceDelegate;
-    private ChromeBasePreference mManageSync;
-    private ObservableSupplier<ModalDialogManager> mModalDialogManagerSupplier;
+    private MonotonicObservableSupplier<ModalDialogManager> mModalDialogManagerSupplier;
     // TODO(crbug.com/354927682): This should be removed when the snackbar issue is addressed.
     // Will be true if `onSignedOut()` was called when the current activity state is not
     // `Lifecycle.State.STARTED`.
     private boolean mShouldShowSnackbar;
-    private final ObservableSupplierImpl<String> mPageTitle = new ObservableSupplierImpl<>();
+    private final SettableMonotonicObservableSupplier<String> mPageTitle =
+            ObservableSuppliers.createMonotonic();
     private SettingsCustomTabLauncher mSettingsCustomTabLauncher;
 
     private @Nullable MultiColumnSettings mMultiColumnSettings;
     private @Nullable SelectionDecoration mSelectionDecoration;
+    private Supplier<@Nullable WindowAndroid> mWindowAndroidSupplier;
+    private ActivityResultTracker mActivityResultTracker;
+    private Supplier<@Nullable BottomSheetController> mBottomSheetControllerSupplier;
+    private Supplier<@Nullable SnackbarManager> mSnackbarManagerSupplier;
+    private @Nullable BottomSheetSigninAndHistorySyncCoordinator mSigninCoordinator;
 
     private final List<Observer> mObserverList = new ArrayList<>();
 
+    // Saved state of the ListView to restore the scroll offset.
+    private @Nullable Parcelable mSavedListState;
+
+    // Avoids using large numbers of dependencies to simplify testing / mocking.
+    private boolean mSkipUpdatePreferencesForTesting;
+
     public MainSettings() {
         setHasOptionsMenu(true);
+    }
+
+    /** Sets dependencies required for the activityless sign-in flow. */
+    @Initializer
+    public void setDependencies(
+            MonotonicObservableSupplier<ModalDialogManager> modalDialogManagerSupplier,
+            Supplier<@Nullable WindowAndroid> windowAndroidSupplier,
+            ActivityResultTracker activityResultTracker,
+            Supplier<@Nullable BottomSheetController> bottomSheetControllerSupplier,
+            Supplier<@Nullable SnackbarManager> snackbarManagerSupplier) {
+        mModalDialogManagerSupplier = modalDialogManagerSupplier;
+        mWindowAndroidSupplier = windowAndroidSupplier;
+        mActivityResultTracker = activityResultTracker;
+        mBottomSheetControllerSupplier = bottomSheetControllerSupplier;
+        mSnackbarManagerSupplier = snackbarManagerSupplier;
+    }
+
+    public MonotonicObservableSupplier<ModalDialogManager>
+            getModalDialogManagerSupplierForTesting() {
+        return mModalDialogManagerSupplier;
     }
 
     @Override
@@ -182,8 +221,35 @@ public class MainSettings extends ChromeBaseSettingsFragment
     }
 
     @Override
-    public ObservableSupplier<String> getPageTitle() {
+    public MonotonicObservableSupplier<String> getPageTitle() {
         return mPageTitle;
+    }
+
+    /** Saves the preference list view state. */
+    public void saveListState() {
+        var layoutManager = getLayoutManager();
+        if (layoutManager != null) mSavedListState = layoutManager.onSaveInstanceState();
+    }
+
+    /** Restores the preference list view state. */
+    public void restoreListState() {
+        if (mSavedListState == null) return;
+
+        var layoutManager = getLayoutManager();
+        if (layoutManager != null) layoutManager.onRestoreInstanceState(mSavedListState);
+        mSavedListState = null;
+    }
+
+    private @Nullable LayoutManager getLayoutManager() {
+        if (!isAdded() || getView() == null) return null;
+        if (!getViewLifecycleOwner()
+                .getLifecycle()
+                .getCurrentState()
+                .isAtLeast(Lifecycle.State.CREATED)) {
+            return null;
+        }
+        var listView = getListView();
+        return listView != null ? listView.getLayoutManager() : null;
     }
 
     @Override
@@ -206,8 +272,13 @@ public class MainSettings extends ChromeBaseSettingsFragment
         if (signinManager.isSigninSupported(/* requireUpdatedPlayServices= */ false)) {
             signinManager.removeSignInStateObserver(this);
         }
+        if (mSigninCoordinator != null) {
+            mSigninCoordinator.destroy();
+            mSigninCoordinator = null;
+        }
     }
 
+    @SuppressWarnings("UseSharedPreferencesManagerFromChromeCheck")
     @Override
     public void onStart() {
         super.onStart();
@@ -233,6 +304,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
         updatePreferences();
     }
 
+    @SuppressWarnings("UseSharedPreferencesManagerFromChromeCheck")
     @Override
     public void onStop() {
         super.onStop();
@@ -302,15 +374,43 @@ public class MainSettings extends ChromeBaseSettingsFragment
                     TrackerFactory.getTrackerForProfile(getProfile()));
         }
 
+        OneshotSupplierImpl<BottomSheetSigninAndHistorySyncCoordinator> signinCoordinatorSupplier =
+                new OneshotSupplierImpl<>();
         SignInPreference signInPreference = findPreference(PREF_SIGN_IN);
-        signInPreference.initialize(getProfile(), profileDataCache, accountManagerFacade);
-
+        if (SigninFeatureMap.getInstance().isActivitylessSigninAllEntryPointEnabled()) {
+            // TODO(crbug.com/495349057): update this to use the new sign-in coordinator API with
+            // suppliers.
+            SupplierUtils.waitForAll(
+                    () -> {
+                        OneshotSupplierImpl<Profile> profileSupplier = new OneshotSupplierImpl<>();
+                        profileSupplier.set(getProfile());
+                        var l = SigninAndHistorySyncActivityLauncherImpl.get();
+                        mSigninCoordinator =
+                                l.createBottomSheetSigninCoordinatorAndObserveAddAccountResult(
+                                        SupplierUtils.asNonNull(mWindowAndroidSupplier).get(),
+                                        getActivity(),
+                                        mActivityResultTracker,
+                                        signInPreference,
+                                        DeviceLockActivityLauncherImpl.get(),
+                                        profileSupplier,
+                                        SupplierUtils.asNonNull(mBottomSheetControllerSupplier),
+                                        mModalDialogManagerSupplier.asNonNull().get(),
+                                        SupplierUtils.asNonNull(mSnackbarManagerSupplier).get(),
+                                        SigninAccessPoint.SETTINGS);
+                        signinCoordinatorSupplier.set(mSigninCoordinator);
+                    },
+                    mWindowAndroidSupplier,
+                    mModalDialogManagerSupplier,
+                    mSnackbarManagerSupplier);
+        }
+        signInPreference.initialize(
+                getProfile(), profileDataCache, accountManagerFacade, signinCoordinatorSupplier);
         ChromeBasePreference googleServicePreference = findPreference(PREF_GOOGLE_SERVICES);
         googleServicePreference.setViewId(R.id.account_management_google_services_row);
 
         cachePreferences();
         updateAutofillPreferences();
-        updatePlusAddressesPreference();
+        updateGlicPreference();
 
         // TODO(crbug.com/40242060): Remove the passwords managed subtitle for local and UPM
         // unenrolled users who can see it directly in the context of the setting.
@@ -340,37 +440,6 @@ public class MainSettings extends ChromeBaseSettingsFragment
             templateUrlService.load();
         }
 
-        if (!shouldShowAppearancePref()) {
-            removePreferenceIfPresent(PREF_APPEARANCE);
-
-            // LINT.IfChange(InitPrefToolbarShortcut)
-            new AdaptiveToolbarStatePredictor(
-                            getContext(),
-                            getProfile(),
-                            /* androidPermissionDelegate= */ null,
-                            /* behavior= */ null)
-                    .recomputeUiState(
-                            uiState -> {
-                                // Don't show toolbar shortcut settings if disabled from finch.
-                                if (!uiState.canShowUi) {
-                                    removePreferenceIfPresent(PREF_TOOLBAR_SHORTCUT);
-                                }
-                            });
-            // LINT.ThenChange(//chrome/android/java/src/org/chromium/chrome/browser/appearance/settings/AppearanceSettingsFragment.java:InitPrefToolbarShortcut)
-
-            // LINT.IfChange(InitPrefUiTheme)
-            findPreference(PREF_UI_THEME)
-                    .getExtras()
-                    .putInt(
-                            ThemeSettingsFragment.KEY_THEME_SETTINGS_ENTRY,
-                            ThemeSettingsEntry.SETTINGS);
-            // LINT.ThenChange(//chrome/android/java/src/org/chromium/chrome/browser/appearance/settings/AppearanceSettingsFragment.java:InitPrefUiTheme)
-        } else {
-            // NOTE: "Theme" and "Toolbar shortcut" move to "Appearance" settings when enabled.
-            removePreferenceIfPresent(PREF_TOOLBAR_SHORTCUT);
-            removePreferenceIfPresent(PREF_UI_THEME);
-        }
-
         if (!shouldShowSafetyHubPref()) {
             getPreferenceScreen().removePreference(findPreference(PREF_SAFETY_HUB));
         } else {
@@ -385,10 +454,6 @@ public class MainSettings extends ChromeBaseSettingsFragment
         }
     }
 
-    private static boolean shouldShowAppearancePref() {
-        return ChromeFeatureList.sAndroidAppearanceSettings.isEnabled();
-    }
-
     private static boolean shouldShowSafetyHubPref() {
         return !DeviceInfo.isAutomotive();
     }
@@ -397,7 +462,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
         intent.setAction(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
         intent.putExtra(
                 Settings.EXTRA_APP_PACKAGE, ContextUtils.getApplicationContext().getPackageName());
-        PackageManager pm = ((Activity) context).getPackageManager();
+        PackageManager pm = context.getPackageManager();
         return intent.resolveActivity(pm) != null;
     }
 
@@ -405,14 +470,12 @@ public class MainSettings extends ChromeBaseSettingsFragment
      * Stores all preferences in memory so that, if they needed to be added/removed from the
      * PreferenceScreen, there would be no need to reload them from 'main_preferences.xml'.
      */
-    @EnsuresNonNull("mManageSync")
     private void cachePreferences() {
         int preferenceCount = getPreferenceScreen().getPreferenceCount();
         for (int index = 0; index < preferenceCount; index++) {
             Preference preference = getPreferenceScreen().getPreference(index);
             mAllPreferences.put(preference.getKey(), preference);
         }
-        mManageSync = (ChromeBasePreference) findPreference(PREF_MANAGE_SYNC);
     }
 
     @Override
@@ -445,21 +508,26 @@ public class MainSettings extends ChromeBaseSettingsFragment
         assert (multiColumnSettings == null) == (selectionDecoration == null);
         var view = getListView();
 
-        if (mMultiColumnSettings != null) {
-            mMultiColumnSettings.removeObserver(this);
-        }
-        if (mSelectionDecoration != null && view != null) {
-            view.removeItemDecoration(mSelectionDecoration);
+        // Only update the observer list if there was a change.
+        if (mMultiColumnSettings != multiColumnSettings) {
+            if (mMultiColumnSettings != null) {
+                mMultiColumnSettings.removeObserver(this);
+            }
+            mMultiColumnSettings = multiColumnSettings;
+            if (mMultiColumnSettings != null) {
+                mMultiColumnSettings.addObserver(this);
+            }
         }
 
-        mMultiColumnSettings = multiColumnSettings;
-        mSelectionDecoration = selectionDecoration;
-
-        if (mMultiColumnSettings != null) {
-            mMultiColumnSettings.addObserver(this);
-        }
-        if (mSelectionDecoration != null && view != null) {
-            view.addItemDecoration(mSelectionDecoration);
+        // Only update item decorations if there was a change.
+        if (mSelectionDecoration != selectionDecoration) {
+            if (mSelectionDecoration != null && view != null) {
+                view.removeItemDecoration(mSelectionDecoration);
+            }
+            mSelectionDecoration = selectionDecoration;
+            if (mSelectionDecoration != null && view != null) {
+                view.addItemDecoration(mSelectionDecoration);
+            }
         }
 
         // Reflect the title update immediately.
@@ -483,6 +551,11 @@ public class MainSettings extends ChromeBaseSettingsFragment
     }
 
     private void updatePreferences() {
+        // Avoids using large numbers of dependencies to simplify testing / mocking.
+        if (mSkipUpdatePreferencesForTesting) {
+            return;
+        }
+
         if (ChromeFeatureList.isEnabled(ChromeFeatureList.DEFAULT_BROWSER_PROMO_ANDROID2)) {
             SettingsPromoCardPreference promoCardPreference =
                     (SettingsPromoCardPreference) addPreferenceIfAbsent(PREF_SETTINGS_PROMO_CARD);
@@ -495,21 +568,17 @@ public class MainSettings extends ChromeBaseSettingsFragment
             removePreferenceIfPresent(PREF_SIGN_IN);
         }
 
-        updateManageSyncPreference();
         updateSearchEnginePreference();
         updateAutofillPreferences();
-        updatePlusAddressesPreference();
         updateAddressBarPreference();
         updateAppearancePreference();
         addPreferenceIfAbsent(PREF_TABS);
 
-        Preference homepagePref = addPreferenceIfAbsent(PREF_HOMEPAGE);
-        setOnOffSummary(homepagePref, HomepageManager.getInstance().isHomepageEnabled());
-
-        if (shouldShowHomeModulePref()) {
-            addPreferenceIfAbsent(PREF_HOME_MODULES_CONFIG);
+        if (!HomepageManager.shouldShowHomepageSettings()) {
+            removePreferenceIfPresent(PREF_HOMEPAGE);
         } else {
-            removePreferenceIfPresent(PREF_HOME_MODULES_CONFIG);
+            Preference homepagePref = addPreferenceIfAbsent(PREF_HOMEPAGE);
+            setOnOffSummary(homepagePref, HomepageManager.getInstance().isHomepageEnabled());
         }
 
         if (shouldShowDeveloperSettings()) {
@@ -517,12 +586,26 @@ public class MainSettings extends ChromeBaseSettingsFragment
         } else {
             removePreferenceIfPresent(PREF_DEVELOPER);
         }
-        if (ChromeFeatureList.sAndroidSettingsContainment.isEnabled()) {
-            // TODO(crbug.com/439911511): Remove old resources once the feature is launched.
-            findPreference(PREF_GOOGLE_SERVICES)
-                    .setIcon(R.drawable.ic_google_services_48dp_with_bg_containment);
+
+        if (shouldShowDefaultBrowserSetting()) {
+            Preference pref = addPreferenceIfAbsent(PREF_DEFAULT_BROWSER);
+            pref.setOnPreferenceClickListener((p) -> showDefaultBrowserSettings(getActivity()));
+        } else {
+            removePreferenceIfPresent(PREF_DEFAULT_BROWSER);
         }
+
         notifyPreferencesUpdated();
+    }
+
+    private static boolean showDefaultBrowserSettings(Activity activity) {
+        // We decided not to show the Role Model Dialog at all when the menu item in
+        // Settings is clicked.
+        DefaultBrowserPromoUtils.getInstance()
+                .onMenuItemClick(
+                        activity,
+                        /* windowAndroid= */ null,
+                        DefaultBrowserPromoUtils.DefaultBrowserPromoEntryPoint.SETTINGS);
+        return true;
     }
 
     private static boolean shouldShowSignInPref(Profile profile) {
@@ -531,9 +614,8 @@ public class MainSettings extends ChromeBaseSettingsFragment
         return signinManager.isSigninSupported(/* requireUpdatedPlayServices= */ false);
     }
 
-    private static boolean shouldShowHomeModulePref() {
-        return !ChromeFeatureList.isEnabled(ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION)
-                && HomeModulesConfigManager.getInstance().hasModuleShownInSettings();
+    private static boolean shouldShowDefaultBrowserSetting() {
+        return ChromeFeatureList.sDefaultBrowserPromoEntryPoint.isEnabled();
     }
 
     private static boolean shouldShowDeveloperSettings() {
@@ -551,52 +633,6 @@ public class MainSettings extends ChromeBaseSettingsFragment
     private void removePreferenceIfPresent(String key) {
         Preference preference = getPreferenceScreen().findPreference(key);
         if (preference != null) getPreferenceScreen().removePreference(preference);
-    }
-
-    private void updateManageSyncPreference() {
-        // TODO(crbug.com/40067770): Remove usage of ConsentLevel.SYNC after kSync users are
-        // migrated to kSignin in phase 3. See ConsentLevel::kSync documentation for details.
-        boolean shouldManageSyncPref = shouldShowManageSyncPref(getProfile());
-        mManageSync.setVisible(shouldManageSyncPref);
-        if (!shouldManageSyncPref) return;
-
-        mManageSync.setIcon(SyncSettingsUtils.getSyncStatusIcon(getActivity(), getProfile()));
-        mManageSync.setSummary(SyncSettingsUtils.getSyncStatusSummary(getActivity(), getProfile()));
-
-        mManageSync.setOnPreferenceClickListener(
-                pref -> {
-                    onPreferenceSelected(pref);
-                    Context context = getContext();
-                    Profile profile = getProfile();
-                    openManageSyncPref(context, profile, false, null);
-                    return true;
-                });
-    }
-
-    private static boolean shouldShowManageSyncPref(Profile profile) {
-        IdentityManager identityManager =
-                IdentityServicesProvider.get().getIdentityManager(profile);
-        assumeNonNull(identityManager);
-        return identityManager.getPrimaryAccountInfo(ConsentLevel.SYNC) != null;
-    }
-
-    public static boolean openManageSyncPref(
-            Context context, Profile profile, boolean addToBackStack, @Nullable String tag) {
-        SyncService syncService = SyncServiceFactory.getForProfile(profile);
-        assumeNonNull(syncService);
-        if (syncService.isSyncDisabledByEnterprisePolicy()) {
-            SyncSettingsUtils.showSyncDisabledByAdministratorToast(context);
-            return false;
-        } else {
-            var settingsNavigation = SettingsNavigationFactory.createSettingsNavigation();
-            settingsNavigation.startSettings(
-                    context,
-                    ManageSyncSettings.class,
-                    /* fragmentArgs= */ null,
-                    addToBackStack,
-                    tag);
-            return true;
-        }
     }
 
     private void updateSearchEnginePreference() {
@@ -619,9 +655,38 @@ public class MainSettings extends ChromeBaseSettingsFragment
     }
 
     private void updateAutofillPreferences() {
+        if (ChromeFeatureList.isEnabled(ChromeFeatureList.YOUR_SAVED_INFO_SETTINGS_PAGE_ANDROID)) {
+            updateAutofillAndPasswords();
+        } else {
+            removePreferenceIfPresent(PREF_AUTOFILL_AND_PASSWORDS);
+            updateAutofillPreferencesPreAutofillAndPasswords();
+        }
+
+        maybeStartPasswordsExportFlow();
+    }
+
+    private void updateAutofillAndPasswords() {
+        removePreferenceIfPresent(PREF_AUTOFILL_SECTION);
+        removePreferenceIfPresent(PREF_PASSWORDS);
+        removePreferenceIfPresent(PREF_AUTOFILL_PAYMENTS);
+        removePreferenceIfPresent(PREF_AUTOFILL_ADDRESSES);
+        removePreferenceIfPresent(PREF_AUTOFILL_OPTIONS);
+
+        Preference autofillAndPasswordsEntry = addPreferenceIfAbsent(PREF_AUTOFILL_AND_PASSWORDS);
+        autofillAndPasswordsEntry.setOnPreferenceClickListener(
+                preference -> {
+                    onPreferenceSelected(preference);
+                    return SettingsNavigationHelper.showAutofillAndPasswordsSettings(getContext());
+                });
+    }
+
+    // TODO(crbug.com/482988366): Remove this method once the Autofill and passwords feature is
+    // launched.
+    private void updateAutofillPreferencesPreAutofillAndPasswords() {
         addPreferenceIfAbsent(PREF_AUTOFILL_SECTION);
         addPreferenceIfAbsent(PREF_AUTOFILL_OPTIONS);
         Preference autofillOptionsPreference = findPreference(PREF_AUTOFILL_OPTIONS);
+        autofillOptionsPreference.setTitle(AutofillOptionsMediator.getFragmentTitle(getContext()));
         autofillOptionsPreference.setFragment(null);
         autofillOptionsPreference.setOnPreferenceClickListener(
                 preference -> {
@@ -654,10 +719,14 @@ public class MainSettings extends ChromeBaseSettingsFragment
                 preference -> {
                     onPreferenceSelected(preference);
                     showPasswordSettings(
-                            getActivity(), getProfile(), mModalDialogManagerSupplier.asNonNull());
+                            getActivity(),
+                            getProfile(),
+                            mModalDialogManagerSupplier.asNonNull().get());
                     return true;
                 });
+    }
 
+    private void maybeStartPasswordsExportFlow() {
         // This is temporary code needed for migrating people to UPM. With UPM there is no
         // longer passwords setting page in Chrome, so we need to ask users to export their
         // passwords here, in main settings.
@@ -687,17 +756,19 @@ public class MainSettings extends ChromeBaseSettingsFragment
             Profile profile,
             String key,
             Bundle extras,
-            ObservableSupplier<ModalDialogManager> modalDialogManagerSupplier) {
+            ModalDialogManager modalDialogManager) {
         if (key.equals(PREF_PASSWORDS)) {
-            MainSettings.showPasswordSettings(context, profile, modalDialogManagerSupplier);
+            MainSettings.showPasswordSettings(context, profile, modalDialogManager);
             // Open an external activity. Keep the state as is.
             return false;
-        } else if (key.equals(PREF_MANAGE_SYNC)) {
-            openManageSyncPref(context, profile, true, FRAGMENT_TAG_RESULT);
-            return true;
         } else if (key.equals(PREF_NOTIFICATIONS)) {
             Intent intent = new Intent();
             if (shouldShowNotificationPref(context, intent)) context.startActivity(intent);
+            return false;
+        } else if (key.equals(PREF_DEFAULT_BROWSER)) {
+            Activity activity = ActivityUtil.getActivityFromContext(context);
+            assumeNonNull(activity);
+            showDefaultBrowserSettings(activity);
             return false;
         }
         // TODO(crbug.com/469676538): Handle the rest of preferences.
@@ -705,46 +776,25 @@ public class MainSettings extends ChromeBaseSettingsFragment
     }
 
     private static void showPasswordSettings(
-            Context context,
-            Profile profile,
-            ObservableSupplier<ModalDialogManager> modalDialogManagerSupplier) {
+            Context context, Profile profile, ModalDialogManager modalDialogManager) {
         PasswordManagerLauncher.showPasswordSettings(
                 context,
                 profile,
                 ManagePasswordsReferrer.CHROME_SETTINGS,
-                modalDialogManagerSupplier.asNonNull(),
+                modalDialogManager,
                 /* managePasskeys= */ false);
     }
 
-    private void updatePlusAddressesPreference() {
-        if (shouldAddPlusAddressesPref()) {
-            addPreferenceIfAbsent(PREF_PLUS_ADDRESSES);
-            Preference addressesPreference = findPreference(PREF_PLUS_ADDRESSES);
-            String title =
-                    ChromeFeatureList.getFieldTrialParamByFeature(
-                            ChromeFeatureList.PLUS_ADDRESSES_ENABLED, "settings-label");
-            addressesPreference.setTitle(title);
-            addressesPreference.setOnPreferenceClickListener(
-                    preference -> {
-                        onPreferenceSelected(preference);
-                        String url =
-                                ChromeFeatureList.getFieldTrialParamByFeature(
-                                        ChromeFeatureList.PLUS_ADDRESSES_ENABLED, "manage-url");
-                        CustomTabActivity.showInfoPage(getContext(), url);
-                        return true;
-                    });
-        } else {
-            removePreferenceIfPresent(PREF_PLUS_ADDRESSES);
-        }
+    private static boolean shouldShowGlicPreference(Profile profile) {
+        return GlicEnabling.shouldShowSettingsPage(profile);
     }
 
-    private static boolean shouldAddPlusAddressesPref() {
-        // TODO(crbug.com/40276862): Replace with a static string once name is finalized.
-        String title =
-                ChromeFeatureList.getFieldTrialParamByFeature(
-                        ChromeFeatureList.PLUS_ADDRESSES_ENABLED, "settings-label");
-        return ChromeFeatureList.isEnabled(ChromeFeatureList.PLUS_ADDRESSES_ENABLED)
-                && !title.isEmpty();
+    private void updateGlicPreference() {
+        if (shouldShowGlicPreference(getProfile())) {
+            addPreferenceIfAbsent(PREF_GLIC);
+        } else {
+            removePreferenceIfPresent(PREF_GLIC);
+        }
     }
 
     private void updateAddressBarPreference() {
@@ -774,13 +824,11 @@ public class MainSettings extends ChromeBaseSettingsFragment
     }
 
     private void updateAppearancePreference() {
-        if (ChromeFeatureList.sAndroidAppearanceSettings.isEnabled()) {
-            updateNewPreferenceAndIncrementViewCount(
-                    findPreference(PREF_APPEARANCE),
-                    AppearanceSettingsFragment.getTitle(getContext()),
-                    ChromePreferenceKeys.APPEARANCE_SETTINGS_CLICKED,
-                    ChromePreferenceKeys.APPEARANCE_SETTINGS_VIEW_COUNT);
-        }
+        updateNewPreferenceAndIncrementViewCount(
+                findPreference(PREF_APPEARANCE),
+                AppearanceSettingsFragment.getTitle(getContext()),
+                ChromePreferenceKeys.APPEARANCE_SETTINGS_CLICKED,
+                ChromePreferenceKeys.APPEARANCE_SETTINGS_VIEW_COUNT);
     }
 
     private void updateNewPreferenceAndIncrementViewCount(
@@ -838,9 +886,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
         SyncService syncService = SyncServiceFactory.getForProfile(profile);
         assumeNonNull(syncService);
         SignOutCoordinator.showSnackbar(
-                getContext(),
-                ((SnackbarManager.SnackbarManageable) getActivity()).getSnackbarManager(),
-                syncService);
+                getContext(), SupplierUtils.asNonNull(mSnackbarManagerSupplier).get(), syncService);
     }
 
     // SigninManager.SignInStateObserver implementation.
@@ -861,7 +907,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
         IdentityManager identityManager =
                 IdentityServicesProvider.get().getIdentityManager(profile);
         assumeNonNull(identityManager);
-        if (identityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN) == null) {
+        if (identityManager.getPrimaryAccountInfo() == null) {
             // Show the signout snackbar, or wait until `onStart()` if the fragment is not in the
             // `STARTED` state.
             if (getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) {
@@ -906,7 +952,6 @@ public class MainSettings extends ChromeBaseSettingsFragment
 
     @Override
     public void syncStateChanged() {
-        updateManageSyncPreference();
         updateAutofillPreferences();
     }
 
@@ -944,15 +989,13 @@ public class MainSettings extends ChromeBaseSettingsFragment
         };
     }
 
-    @Initializer
-    public void setModalDialogManagerSupplier(
-            ObservableSupplier<ModalDialogManager> modalDialogManagerSupplier) {
-        mModalDialogManagerSupplier = modalDialogManagerSupplier;
-    }
-
     @Override
     public @AnimationType int getAnimationType() {
         return AnimationType.PROPERTY;
+    }
+
+    public void setSkipUpdatePreferencesForTesting(boolean skip) {
+        mSkipUpdatePreferencesForTesting = skip;
     }
 
     public static final ChromeBaseSearchIndexProvider SEARCH_INDEX_DATA_PROVIDER =
@@ -962,36 +1005,45 @@ public class MainSettings extends ChromeBaseSettingsFragment
                 @Override
                 public void updateDynamicPreferences(
                         Context context, SettingsIndexData indexData, Profile profile) {
-                    if (!shouldShowManageSyncPref(profile)) {
-                        indexData.removeEntry(getUniqueId(PREF_MANAGE_SYNC));
-                    }
                     indexData.removeEntry(getUniqueId(PREF_SETTINGS_PROMO_CARD));
-                    if (!shouldAddPlusAddressesPref()) {
-                        indexData.removeEntry(getUniqueId(PREF_PLUS_ADDRESSES));
-                    }
                     if (!shouldShowAddressBarPref(context)) {
                         indexData.removeEntry(getUniqueId(PREF_ADDRESS_BAR));
                     }
                     if (!shouldShowNotificationPref(context, new Intent())) {
                         indexData.removeEntry(getUniqueId(PREF_NOTIFICATIONS));
                     }
-                    if (!shouldShowAppearancePref()) {
-                        indexData.removeEntry(getUniqueId(PREF_APPEARANCE));
-                    } else {
-                        indexData.removeEntry(getUniqueId(PREF_TOOLBAR_SHORTCUT));
-                        indexData.removeEntry(getUniqueId(PREF_UI_THEME));
-                    }
+
                     if (!shouldShowSafetyHubPref()) {
                         indexData.removeEntry(getUniqueId(PREF_SAFETY_HUB));
                     }
-                    if (!shouldShowSignInPref(profile)) {
+                    if (!shouldShowSignInPref(profile) || !SignInPreference.isSignedIn(profile)) {
                         indexData.removeEntry(getUniqueId(PREF_SIGN_IN));
-                    }
-                    if (!shouldShowHomeModulePref()) {
-                        indexData.removeEntry(getUniqueId(PREF_HOME_MODULES_CONFIG));
+                    } else {
+                        indexData.addChildParentLink(
+                                ManageSyncSettings.class.getName(), getUniqueId(PREF_SIGN_IN));
                     }
                     if (!shouldShowDeveloperSettings()) {
                         indexData.removeEntry(getUniqueId(PREF_DEVELOPER));
+                    }
+                    if (!shouldShowDefaultBrowserSetting()) {
+                        indexData.removeEntry(getUniqueId(PREF_DEFAULT_BROWSER));
+                    }
+                    if (!shouldShowGlicPreference(profile)) {
+                        indexData.removeEntry(getUniqueId(PREF_GLIC));
+                    }
+                    if (!HomepageManager.shouldShowHomepageSettings()) {
+                        indexData.removeEntry(getUniqueId(PREF_HOMEPAGE));
+                    }
+
+                    if (ChromeFeatureList.isEnabled(
+                            ChromeFeatureList.YOUR_SAVED_INFO_SETTINGS_PAGE_ANDROID)) {
+                        indexData.removeEntry(getUniqueId(PREF_AUTOFILL_SECTION));
+                        indexData.removeEntry(getUniqueId(PREF_PASSWORDS));
+                        indexData.removeEntry(getUniqueId(PREF_AUTOFILL_PAYMENTS));
+                        indexData.removeEntry(getUniqueId(PREF_AUTOFILL_ADDRESSES));
+                        indexData.removeEntry(getUniqueId(PREF_AUTOFILL_OPTIONS));
+                    } else {
+                        indexData.removeEntry(getUniqueId(PREF_AUTOFILL_AND_PASSWORDS));
                     }
                 }
             };

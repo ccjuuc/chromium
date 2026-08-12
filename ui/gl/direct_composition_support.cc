@@ -17,6 +17,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/synchronization/lock.h"
 #include "base/win/windows_version.h"
+#include "third_party/microsoft_dxheaders/src/include/experimental-composition/experimental-dcomp.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/win/d3d_shared_fence.h"
 #include "ui/gl/gl_features.h"
@@ -112,18 +113,18 @@ void SetOverlayCapsValid(bool valid) {
 }
 
 // A wrapper of IDXGIOutput4::CheckOverlayColorSpaceSupport()
-bool CheckOverlayColorSpaceSupport(
-    DXGI_FORMAT dxgi_format,
-    DXGI_COLOR_SPACE_TYPE dxgi_color_space,
-    Microsoft::WRL::ComPtr<IDXGIOutput> output,
-    Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device) {
+bool CheckOverlayColorSpaceSupport(DXGI_FORMAT dxgi_format,
+                                   DXGI_COLOR_SPACE_TYPE dxgi_color_space,
+                                   IDXGIOutput* output,
+                                   ID3D11Device* d3d11_device) {
   UINT color_space_support_flags = 0;
   Microsoft::WRL::ComPtr<IDXGIOutput4> output4;
-  if (FAILED(output.As(&output4)) ||
+  if (FAILED(output->QueryInterface(IID_PPV_ARGS(&output4))) ||
       FAILED(output4->CheckOverlayColorSpaceSupport(
-          dxgi_format, dxgi_color_space, d3d11_device.Get(),
-          &color_space_support_flags)))
+          dxgi_format, dxgi_color_space, d3d11_device,
+          &color_space_support_flags))) {
     return false;
+  }
   return (color_space_support_flags &
           DXGI_OVERLAY_COLOR_SPACE_SUPPORT_FLAG_PRESENT);
 }
@@ -147,6 +148,16 @@ std::set<HMONITOR>* GetHDRMonitors() {
 IDCompositionDevice3* g_dcomp_device = nullptr;
 // Global d3d11 device used by direct composition.
 ID3D11Device* g_d3d11_device = nullptr;
+// Global d3d12 command queue created by Chromium's Dawn instance and used by
+// SharedImage code to queue work when it runs in D3D12 mode.
+ID3D12CommandQueue* g_d3d12_command_queue = nullptr;
+
+// Factory that produces a `SolidColorPoolBase` matching the active
+// GPU backend.
+SolidColorPoolFactory& GetSolidColorPoolFactoryRef() {
+  static base::NoDestructor<SolidColorPoolFactory> factory;
+  return *factory;
+}
 
 // Preferred overlay format set when detecting overlay support during
 // initialization.  Set to NV12 by default so that it's used when enabling
@@ -237,8 +248,9 @@ void GetGpuDriverOverlayInfo(bool* supports_overlays,
   Microsoft::WRL::ComPtr<IDXGIAdapter> dxgi_adapter;
   CHECK_EQ(dxgi_device->GetAdapter(&dxgi_adapter), S_OK);
 
-  // This will fail if the D3D device is "Microsoft Basic Display Adapter".
-  Microsoft::WRL::ComPtr<ID3D11VideoDevice> video_device;
+  // This will fail for software devices such as WARP or Microsoft Basic
+  // Display Adapter.
+  Microsoft::WRL::ComPtr<ID3D11VideoDevice1> video_device;
   if (FAILED(d3d11_device.As(&video_device))) {
     LOG(ERROR) << __func__ << ": Failed to retrieve video device";
     return;
@@ -275,7 +287,7 @@ void GetGpuDriverOverlayInfo(bool* supports_overlays,
       if (g_check_ycbcr_studio_g22_left_p709_for_nv12_support &&
           !CheckOverlayColorSpaceSupport(
               DXGI_FORMAT_NV12, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709,
-              output, d3d11_device)) {
+              output.Get(), d3d11_device.Get())) {
         // Some new Intel drivers only claim to support unscaled overlays, but
         // scaled overlays still work. It's possible DWM works around it by
         // performing an extra scaling Blt before calling the driver. Even when
@@ -303,8 +315,10 @@ void GetGpuDriverOverlayInfo(bool* supports_overlays,
     if (FlagsSupportsOverlays(*rgb10a2_overlay_support_flags)) {
       if (!CheckOverlayColorSpaceSupport(
               DXGI_FORMAT_R10G10B10A2_UNORM,
-              DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, output, d3d11_device))
+              DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, output.Get(),
+              d3d11_device.Get())) {
         *rgb10a2_overlay_support_flags = 0;
+      }
     }
     if (g_force_rgb10a2_overlay_support) {
       *rgb10a2_overlay_support_flags = DXGI_OVERLAY_SUPPORT_FLAG_SCALING;
@@ -519,10 +533,8 @@ void QueryVideoProcessorCustomExtForHDR() {
   CHECK_EQ(hr, S_OK);
 
   Microsoft::WRL::ComPtr<IDXGIAdapter> dxgi_adapter;
-  if (FAILED(dxgi_device->GetAdapter(&dxgi_adapter))) {
-    DLOG(ERROR) << "Failed to retrieve DXGI adapter";
-    return;
-  }
+  hr = dxgi_device->GetAdapter(&dxgi_adapter);
+  CHECK_EQ(hr, S_OK);
 
   DXGI_ADAPTER_DESC adapter_desc;
   if (FAILED(dxgi_adapter->GetDesc(&adapter_desc))) {
@@ -545,17 +557,16 @@ void QueryVideoProcessorCustomExtForHDR() {
     return;
   }
 
-  Microsoft::WRL::ComPtr<ID3D11VideoContext> d3d11_video_context;
-  if (FAILED(d3d11_context.As(&d3d11_video_context))) {
-    LOG(ERROR) << __func__ << ": Failed to retrieve video context";
-    return;
-  }
-
-  Microsoft::WRL::ComPtr<ID3D11VideoDevice> d3d11_video_device;
+  Microsoft::WRL::ComPtr<ID3D11VideoDevice1> d3d11_video_device;
   if (FAILED(d3d11_device.As(&d3d11_video_device))) {
     LOG(ERROR) << __func__ << ": Failed to retrieve video device";
     return;
   }
+
+  // QueryInterface for ID3D11VideoContext1 always succeeds on all Windows
+  // versions supported by Chrome if ID3D11VideoDevice1 QueryInterface succeeds.
+  Microsoft::WRL::ComPtr<ID3D11VideoContext1> d3d11_video_context;
+  CHECK_EQ(d3d11_context.As(&d3d11_video_context), S_OK);
 
   D3D11_VIDEO_PROCESSOR_CONTENT_DESC desc = {};
   desc.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
@@ -697,8 +708,12 @@ HRESULT DCompositionGetStatistics(COMPOSITION_FRAME_ID frameId,
 }
 
 void InitializeDirectComposition(
-    Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device) {
+    Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device,
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> d3d12_command_queue,
+    SolidColorPoolFactory solid_color_content_provider_factory) {
   CHECK(!g_dcomp_device);
+  CHECK(!GetSolidColorPoolFactoryRef());
+
   if (!d3d11_device) {
     return;
   }
@@ -716,7 +731,13 @@ void InitializeDirectComposition(
     return;
   }
 
-  // Load DLL at runtime since older Windows versions don't have dcomp.
+  // Load DLL at runtime since older Windows versions don't have dcomp and dxgi.
+  HMODULE dxgi_module = ::GetModuleHandle(L"dxgi.dll");
+  if (!dxgi_module) {
+    LOG(ERROR) << "Failed to load dxgi.dll";
+    return;
+  }
+
   HMODULE dcomp_module = ::GetModuleHandle(L"dcomp.dll");
   if (!dcomp_module) {
     LOG(ERROR) << "Failed to load dcomp.dll";
@@ -737,6 +758,8 @@ void InitializeDirectComposition(
   HRESULT hr = d3d11_device.As(&dxgi_device);
   CHECK_EQ(hr, S_OK);
 
+  // TODO(crbug.com/487755329) Create the DComp device without DXGI device when
+  // the Graphite Dawn backend is D3D12 since DComp surface will not be used.
   Microsoft::WRL::ComPtr<IDCompositionDesktopDevice> desktop_device;
   hr =
       create_device3_function(dxgi_device.Get(), IID_PPV_ARGS(&desktop_device));
@@ -759,7 +782,28 @@ void InitializeDirectComposition(
 
   g_d3d11_device = d3d11_device.Detach();
 
+  GetSolidColorPoolFactoryRef() =
+      std::move(solid_color_content_provider_factory);
+
+  Microsoft::WRL::ComPtr<EXPERIMENTAL_IDCompositionDevice6> dcomp_device6;
+  hr = g_dcomp_device->QueryInterface(IID_PPV_ARGS(&dcomp_device6));
+  if (SUCCEEDED(hr)) {
+    g_d3d12_command_queue = d3d12_command_queue.Detach();
+  }
+
   if (features::UseCompositorClockVSyncInterval()) {
+    using PFN_DXGI_DISABLE_VBLANK_VIRTUALIZATION = HRESULT(WINAPI*)();
+    PFN_DXGI_DISABLE_VBLANK_VIRTUALIZATION dxgi_disable_vblank_virtualization =
+        reinterpret_cast<PFN_DXGI_DISABLE_VBLANK_VIRTUALIZATION>(
+            ::GetProcAddress(dxgi_module, "DXGIDisableVBlankVirtualization"));
+    CHECK(dxgi_disable_vblank_virtualization);
+
+    hr = dxgi_disable_vblank_virtualization();
+    if (FAILED(hr)) {
+      LOG(WARNING) << "Failed to disable VBlank virtualization: "
+                   << logging::SystemErrorCodeToString(hr);
+    }
+
     g_get_frame_id_function = reinterpret_cast<PFN_DCOMPOSITION_GET_FRAME_ID>(
         ::GetProcAddress(dcomp_module, "DCompositionGetFrameId"));
     CHECK(g_get_frame_id_function);
@@ -784,7 +828,16 @@ void ShutdownDirectComposition() {
     g_dcomp_device = nullptr;
     g_d3d11_device->Release();
     g_d3d11_device = nullptr;
+    if (g_d3d12_command_queue) {
+      g_d3d12_command_queue->Release();
+      g_d3d12_command_queue = nullptr;
+    }
+    GetSolidColorPoolFactoryRef().Reset();
   }
+}
+
+SolidColorPoolFactory GetDirectCompositionSolidColorPoolFactory() {
+  return GetSolidColorPoolFactoryRef();
 }
 
 IDCompositionDevice3* GetDirectCompositionDevice() {
@@ -793,6 +846,10 @@ IDCompositionDevice3* GetDirectCompositionDevice() {
 
 ID3D11Device* GetDirectCompositionD3D11Device() {
   return g_d3d11_device;
+}
+
+ID3D12CommandQueue* GetDirectCompositionD3D12CommandQueue() {
+  return g_d3d12_command_queue;
 }
 
 bool DirectCompositionSupported() {
@@ -831,6 +888,20 @@ bool DirectCompositionDecodeSwapChainSupported() {
   return false;
 }
 
+// Returns true if |color_space| is supported by the IHV overlay hardware for
+// |format| on |output|. The caller (DCLayerTree) is responsible for finding
+// the correct IDXGIOutput by enumerating all adapters, so this works even when
+// the window is on a monitor driven by a different adapter than the rendering
+// device.
+bool DirectCompositionColorSpaceOverlaySupported(
+    DXGI_FORMAT format,
+    DXGI_COLOR_SPACE_TYPE color_space,
+    IDXGIOutput* output) {
+  DCHECK(output);
+  return CheckOverlayColorSpaceSupport(format, color_space, output,
+                                       GetDirectCompositionD3D11Device());
+}
+
 void DisableDirectCompositionOverlays() {
   SetSupportsOverlays(false);
   DirectCompositionOverlayCapsMonitor::GetInstance()
@@ -864,7 +935,7 @@ bool CheckVideoProcessorFormatSupport(DXGI_FORMAT dxgi_format) {
     return false;
   }
 
-  Microsoft::WRL::ComPtr<ID3D11VideoDevice> video_device;
+  Microsoft::WRL::ComPtr<ID3D11VideoDevice1> video_device;
   if (FAILED(d3d11_device.As(&video_device))) {
     LOG(ERROR) << __func__ << ": Failed to retrieve video device";
     return false;
@@ -1069,11 +1140,11 @@ bool DXGISwapChainTearingSupported() {
       return false;
     }
     Microsoft::WRL::ComPtr<IDXGIDevice> dxgi_device;
-    const HRESULT hr = d3d11_device.As(&dxgi_device);
+    HRESULT hr = d3d11_device.As(&dxgi_device);
     CHECK_EQ(hr, S_OK);
     Microsoft::WRL::ComPtr<IDXGIAdapter> dxgi_adapter;
-    dxgi_device->GetAdapter(&dxgi_adapter);
-    DCHECK(dxgi_adapter);
+    hr = dxgi_device->GetAdapter(&dxgi_adapter);
+    CHECK_EQ(hr, S_OK);
     Microsoft::WRL::ComPtr<IDXGIFactory5> dxgi_factory;
     if (FAILED(dxgi_adapter->GetParent(IID_PPV_ARGS(&dxgi_factory)))) {
       LOG(ERROR) << "Not using swap chain tearing because failed to retrieve "
@@ -1191,9 +1262,14 @@ bool DirectCompositionTextureSupported() {
   }
 
   Microsoft::WRL::ComPtr<ID3D11On12Device> d3d11on12_device;
-  if (SUCCEEDED(d3d11_device.As(&d3d11on12_device))) {
+  if (SUCCEEDED(d3d11_device.As(&d3d11on12_device)) &&
+      !base::FeatureList::IsEnabled(features::kDCompOnD3D12)) {
     // IDCompositionTexture is not implemented on an 11on12, even though the
-    // device will claim support for it.
+    // device will claim support for it. It is however implemented on D3D12,
+    // and if the feature is enabled,
+    // IDCompositionDevice6::PresentCompositionTextures will be used for D3D12
+    // backed composition textures. D3D11On12 is needed in that case for all
+    // SharedImage features to work correctly.
     LOG(WARNING) << "IDCompositionTexture is not supported on 11on12 devices.";
     return false;
   }

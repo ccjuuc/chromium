@@ -15,8 +15,6 @@ import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
 import android.widget.FrameLayout;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Callback;
@@ -25,12 +23,13 @@ import org.chromium.base.metrics.TimingMetric;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omnibox.OmniboxMetrics;
 import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.omnibox.suggestions.OmniboxSuggestionsDropdownEmbedder.OmniboxAlignment;
 import org.chromium.chrome.browser.omnibox.suggestions.base.BaseSuggestionViewBinder;
 import org.chromium.components.browser_ui.widget.RoundedCornerOutlineProvider;
-import org.chromium.components.omnibox.OmniboxFeatures;
+import org.chromium.components.omnibox.OmniboxCapabilities;
 import org.chromium.ui.KeyboardVisibilityDelegate;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.ViewUtils;
@@ -48,10 +47,11 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
 
     private int mListViewMaxHeight;
     private int mLastBroadcastedListViewMaxHeight;
+    private boolean mShouldRoundTopCorners = true;
     private final Callback<OmniboxAlignment> mOmniboxAlignmentObserver =
             this::onOmniboxAlignmentChanged;
 
-    public OmniboxSuggestionsContainer(@NonNull Context context, @Nullable AttributeSet attrs) {
+    public OmniboxSuggestionsContainer(Context context, @Nullable AttributeSet attrs) {
         super(context, attrs);
     }
 
@@ -63,7 +63,7 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
 
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        boolean isTablet = mEmbedder != null && mEmbedder.isTablet();
+        boolean shouldWrapDropdownHeight = mEmbedder != null && !mEmbedder.isPhoneStyleWindow();
 
         try (TraceEvent tracing = TraceEvent.scoped("OmniboxSuggestionsList.Measure");
                 TimingMetric metric = OmniboxMetrics.recordSuggestionListMeasureTime();
@@ -78,13 +78,10 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
             heightMeasureSpec =
                     MeasureSpec.makeMeasureSpec(
                             availableViewportHeight,
-                            isTablet ? MeasureSpec.AT_MOST : MeasureSpec.EXACTLY);
+                            shouldWrapDropdownHeight ? MeasureSpec.AT_MOST : MeasureSpec.EXACTLY);
             super.onMeasure(widthMeasureSpec, heightMeasureSpec);
-            if (isTablet) {
-                setRoundBottomCorners(
-                        getMeasuredHeight() < availableViewportHeight
-                                || !KeyboardVisibilityDelegate.getInstance()
-                                        .isKeyboardShowing(this));
+            if (shouldWrapDropdownHeight) {
+                setRoundingCorners(mShouldRoundTopCorners, shouldRoundBottomCorners());
             }
         }
     }
@@ -97,15 +94,6 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
     @Override
     @SuppressLint("ClickableViewAccessibility")
     public boolean onTouchEvent(MotionEvent event) {
-        // Propagate touch events, to make possible touch elements behind this container. Omnibox
-        // autofocus feature prevents the Scrim to be shown as a result tab content is covered by
-        // this transparent container.
-        boolean shouldPassThroughUnhandledTouchEvents =
-                mEmbedder != null && mEmbedder.shouldPassThroughUnhandledTouchEvents();
-        if (shouldPassThroughUnhandledTouchEvents) {
-            return false;
-        }
-
         // Swallow all touch events, especially if these were not consumed by the Dropdown.
         // This ensures that touching the blank areas of the container does not dismiss the
         // Omnibox.
@@ -113,6 +101,36 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
         // activators, including keyboard <Enter> key.
         super.onTouchEvent(event);
         return true;
+    }
+
+    /**
+     * Set whether the dropdown should be clipped to its outline.
+     *
+     * @param clip whether to clip the outline
+     */
+    public void setShouldClipToOutline(boolean clip) {
+        if (clip) {
+            var radius =
+                    getResources()
+                            .getDimensionPixelSize(
+                                    R.dimen.omnibox_suggestion_dropdown_round_corner_radius);
+            var outlineProvider = new RoundedCornerOutlineProvider(radius);
+            setOutlineProvider(outlineProvider);
+            setClipToOutline(true);
+        } else {
+            setOutlineProvider(null);
+            setClipToOutline(false);
+        }
+    }
+
+    public void setShouldRoundTopCorners(boolean shouldRoundTopCorners) {
+        mShouldRoundTopCorners = shouldRoundTopCorners;
+        setRoundingCorners(mShouldRoundTopCorners, shouldRoundBottomCorners());
+    }
+
+    private boolean shouldRoundBottomCorners() {
+        return getMeasuredHeight() < mOmniboxAlignment.height
+                || !KeyboardVisibilityDelegate.getInstance().isKeyboardShowing(this);
     }
 
     private void maybeUpdateLayoutParams(int topMargin) {
@@ -154,10 +172,11 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
         setTranslationX(mOmniboxAlignment.left);
     }
 
-    private void setRoundBottomCorners(boolean roundBottomCorners) {
+    private void setRoundingCorners(boolean roundTopCorners, boolean roundBottomCorners) {
         ViewOutlineProvider outlineProvider = getOutlineProvider();
         if (outlineProvider instanceof RoundedCornerOutlineProvider roundedCornerOutlineProvider) {
-            roundedCornerOutlineProvider.setRoundingEdges(true, true, true, roundBottomCorners);
+            roundedCornerOutlineProvider.setRoundingEdges(
+                    true, roundTopCorners, true, roundBottomCorners);
         }
     }
 
@@ -200,7 +219,7 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
             mEmbedder.removeAlignmentObserver(mOmniboxAlignmentObserver);
         }
 
-        if (!OmniboxFeatures.shouldPreWarmRecyclerViewPool()) {
+        if (!OmniboxCapabilities.shouldPreWarmRecyclerViewPool()) {
             mDropdown.getRecycledViewPool().clear();
         }
     }
@@ -212,7 +231,7 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
         mOmniboxAlignment = omniboxAlignment;
         mDropdown.setPaddingRelative(
                 mDropdown.getPaddingStart(),
-                mDropdown.getPaddingTop(),
+                mDropdown.getBaseTopPadding() + mOmniboxAlignment.paddingTop,
                 mDropdown.getPaddingEnd(),
                 mDropdown.getBaseBottomPadding() + mOmniboxAlignment.paddingBottom);
 
@@ -266,5 +285,10 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
     @VisibleForTesting
     void setSuggestionsDropdownForTest(OmniboxSuggestionsDropdown dropdown) {
         mDropdown = dropdown;
+    }
+
+    public OmniboxSuggestionsDropdown takeDropdownView() {
+        removeView(mDropdown);
+        return mDropdown;
     }
 }

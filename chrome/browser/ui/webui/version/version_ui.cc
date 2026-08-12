@@ -6,12 +6,14 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/command_line.h"
 #include "base/debug/debugging_buildflags.h"
 #include "base/i18n/message_formatter.h"
+#include "base/memory/ref_counted_memory.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -24,6 +26,7 @@
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/grit/theme_resources.h"
 #include "components/embedder_support/user_agent_utils.h"
 #include "components/grit/components_scaled_resources.h"
 #include "components/grit/version_ui_resources.h"
@@ -38,6 +41,7 @@
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/resource/resource_bundle.h"
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/webui/webui_util.h"
 #include "v8/include/v8-version-string.h"
@@ -90,6 +94,8 @@ void CreateAndAddVersionUIDataSource(Profile* profile) {
       {version_ui::kCopyVariationsLabel, IDS_VERSION_UI_COPY_VARIATIONS_LABEL},
       {version_ui::kCopyVariationsNotice,
        IDS_VERSION_UI_COPY_VARIATIONS_NOTICE},
+      {version_ui::kVariationsSourceName,
+       IDS_VERSION_UI_VARIATIONS_SOURCE_NAME},
       {version_ui::kVariationsSeedName, IDS_VERSION_UI_VARIATIONS_SEED_NAME},
 #if BUILDFLAG(IS_CHROMEOS)
       {version_ui::kARC, IDS_ARC_LABEL},
@@ -108,7 +114,7 @@ void CreateAndAddVersionUIDataSource(Profile* profile) {
   VersionUI::AddVersionDetailStrings(html_source);
 
   html_source->AddResourcePaths(kVersionUiResources);
-  html_source->AddResourcePath("", IDR_VERSION_UI_ABOUT_VERSION_HTML);
+  html_source->SetDefaultResource(IDR_VERSION_UI_ABOUT_VERSION_HTML);
   html_source->UseStringsJs();
 
 #if BUILDFLAG(IS_ANDROID)
@@ -131,7 +137,7 @@ std::string GetProductModifier() {
   return base::JoinString(modifier_parts, "-");
 }
 
-std::string GetVersionInformationalSuffix() {
+std::string_view GetVersionInformationalSuffix() {
 #if BUILDFLAG(IS_CHROMEOS) && CHROMIUM_COMMIT_POSITION_IS_MAIN
   // Adds the revision number as a suffix to the version number if the chrome
   // is built from the main branch.
@@ -173,7 +179,7 @@ int VersionUI::VersionProcessorVariation() {
   // bitness. Search the code for "generate_resource_allowlist" for more
   // information. Therefore, make sure both the IDS_VERSION_UI_32BIT and
   // IDS_VERSION_UI_64BIT strings are marked as always used so that they’re
-  // never stripped. https://crbug.com/1119479
+  // never stripped. https://crbug.com/40145503
   IDS_VERSION_UI_32BIT;
   IDS_VERSION_UI_64BIT;
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -203,6 +209,11 @@ int VersionUI::VersionProcessorVariation() {
   return IDS_VERSION_UI_64BIT;
 #endif  // defined(ARCH_CPU_X86)
 #endif  // defined(ARCH_CPU_ARM64)
+#elif BUILDFLAG(IS_LINUX)
+#if defined(ARCH_CPU_X86_64)
+  return IDS_VERSION_UI_64BIT_INTEL;
+#elif defined(ARCH_CPU_ARM64)
+  return IDS_VERSION_UI_64BIT_ARM;
 #elif defined(ARCH_CPU_64_BITS)
   return IDS_VERSION_UI_64BIT;
 #elif defined(ARCH_CPU_32_BITS)
@@ -210,6 +221,20 @@ int VersionUI::VersionProcessorVariation() {
 #else
 #error Update for a processor that is neither 32-bit nor 64-bit.
 #endif
+#elif defined(ARCH_CPU_64_BITS)
+  return IDS_VERSION_UI_64BIT;
+#elif defined(ARCH_CPU_32_BITS)
+  return IDS_VERSION_UI_32BIT;
+#else
+#error Update for a processor that is neither 32-bit nor 64-bit.
+#endif
+}
+
+// static
+scoped_refptr<base::RefCountedMemory> VersionUI::GetFaviconResourceBytes(
+    ui::ResourceScaleFactor scale_factor) {
+  return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
+      IDR_PRODUCT_FAVICON, scale_factor);
 }
 
 // static
@@ -293,11 +318,17 @@ void VersionUI::AddVersionDetailStrings(content::WebUIDataSource* html_source) {
                          version_utils::win::GetCohortVersionInfo());
 #endif  // BUILDFLAG(IS_WIN)
 
+  auto* variations_service = g_browser_process->variations_service();
+  html_source->AddString(version_ui::kVariationsSource,
+                         variations_service
+                             ? version_ui::VariationsSourceToUiString(
+                                   variations_service->GetVariationsSource())
+                             : std::string());
+
   html_source->AddString(
       version_ui::kVariationsSeed,
-      g_browser_process->variations_service()
-          ? version_ui::SeedTypeToUiString(
-                g_browser_process->variations_service()->GetSeedType())
+      variations_service
+          ? version_ui::SeedTypeToUiString(variations_service->GetSeedType())
           : std::string());
 
   html_source->AddString(version_ui::kSanitizer,

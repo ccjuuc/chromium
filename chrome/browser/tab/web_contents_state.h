@@ -31,14 +31,10 @@ class WebContents;
 //   0: Chrome <= 18 (Deprecated)
 //   1: Chrome 18 - 25 (Deprecated)
 //   2: Chrome 26+
-struct WebContentsStateByteBuffer {
+class WebContentsStateByteBuffer {
+ public:
   WebContentsStateByteBuffer(base::android::ScopedJavaLocalRef<jobject>
                                  web_contents_byte_buffer_result,
-                             int saved_state_version);
-
-  // Initialize from a raw span that needs to be owned elsewhere.
-  // `backing_buffer` is never used. Useful for tests.
-  WebContentsStateByteBuffer(base::raw_span<const uint8_t> raw_data,
                              int saved_state_version);
 
   WebContentsStateByteBuffer(const WebContentsStateByteBuffer&) = delete;
@@ -51,20 +47,19 @@ struct WebContentsStateByteBuffer {
 
   ~WebContentsStateByteBuffer();
 
-  // This struct and its parameters are only meant for use in storing web
+  int state_version() const { return state_version_; }
+  base::span<const uint8_t> GetBuffer() const;
+
+  // This class and its parameters are only meant for use in storing web
   // contents parsed from the JNI createHistoricalTab and syncedTabDelegate
   // family of function calls, and transferring the data to the
   // RestoreContentsFromByteBuffer function as needed. Outside of this scope,
-  // this struct is not meant to be used for any other purposes. Please do not
-  // attempt to use this struct anywhere else except for in the provided
+  // this class is not meant to be used for any other purposes. Please do not
+  // attempt to use this class anywhere else except for in the provided
   // callstack/use case.
-  //
-  // TODO(ellyjones): is it necessary to cache this view of the buffer? It is
-  // very cheap to recompute on the fly as needed, as long as we have the
-  // JNIEnv* ready to hand.
-  base::raw_span<const uint8_t> backing_buffer;
-  int state_version;
-  base::android::ScopedJavaGlobalRef<jobject> java_buffer;
+ private:
+  int state_version_;
+  base::android::ScopedJavaGlobalRef<jobject> java_buffer_;
 };
 
 // Stores state for a WebContents, including its navigation history.
@@ -84,17 +79,7 @@ class WebContentsState {
                                         int saved_state_version,
                                         const DeletionPredicate& predicate);
 
-  // Extracts display title from serialized tab data on restore.
-  static std::optional<std::u16string> GetDisplayTitleFromByteBuffer(
-      JNIEnv* env,
-      base::span<const uint8_t> buffer,
-      int saved_state_version);
 
-  // Extracts virtual url from serialized tab data on restore.
-  static std::optional<std::string> GetVirtualUrlFromByteBuffer(
-      JNIEnv* env,
-      base::span<const uint8_t> buffer,
-      int saved_state_version);
 
   // Restores a WebContents from the passed in state using JNI parameters.
   static base::android::ScopedJavaLocalRef<jobject>
@@ -102,8 +87,8 @@ class WebContentsState {
                                 const base::android::JavaRef<jobject>& state,
                                 content::BrowserContext* browser_context,
                                 int saved_state_version,
-                                jboolean initially_hidden,
-                                jboolean no_renderer);
+                                bool initially_hidden,
+                                bool no_renderer);
 
   // Restores a WebContents from the passed in state using native parameters.
   static std::unique_ptr<content::WebContents> RestoreContentsFromByteBuffer(
@@ -120,6 +105,14 @@ class WebContentsState {
       bool* is_off_the_record,
       int* current_entry_index,
       std::vector<sessions::SerializedNavigationEntry>* navigations);
+
+  // Extracts only the metadata (title, virtual URL, and incognito status)
+  // of the active navigation entry, avoiding full deserialization.
+  static bool ExtractMetadata(base::span<const uint8_t> buffer,
+                              int saved_state_version,
+                              bool* is_off_the_record,
+                              std::u16string* title,
+                              std::string* virtual_url);
 
   // Synthesizes a stub, single-navigation state for a tab that will be loaded
   // lazily.

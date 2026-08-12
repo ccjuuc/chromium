@@ -147,9 +147,7 @@ class URLLoader;
 class WebURLRequest;
 class WebURLResponse;
 class WebView;
-class WebLinkPreviewTriggerer;
 struct FramePolicy;
-struct Impression;
 struct JavaScriptFrameworkDetectionResult;
 struct WebConsoleMessage;
 struct ContextMenuData;
@@ -267,8 +265,8 @@ class BLINK_EXPORT WebLocalFrameClient {
   // `complete_creation()`, and return the created frame.
   //
   // `complete_creation` takes the newly-created `WebLocalFrame` as well as the
-  // `DocumentToken` and `BrowserInterfaceBroker` to use for the initial empty
-  // document.
+  // `DocumentToken`, `BrowserInterfaceBroker` and `sandbox_origin_token` to use
+  // for the initial empty document.
   //
   // `document_ukm_source_id` is the UKM source id to be used for the new
   // document in the frame. If `ukm::kInvalidSourceId` is passed, a new UKM
@@ -276,7 +274,8 @@ class BLINK_EXPORT WebLocalFrameClient {
   using FinishChildFrameCreationFn = base::FunctionRef<void(
       WebLocalFrame*,
       const DocumentToken&,
-      CrossVariantMojoRemote<mojom::BrowserInterfaceBrokerInterfaceBase>)>;
+      CrossVariantMojoRemote<mojom::BrowserInterfaceBrokerInterfaceBase>,
+      std::unique_ptr<base::UnguessableToken> sandbox_origin_token)>;
   virtual WebLocalFrame* CreateChildFrame(
       mojom::TreeScopeType,
       const WebString& name,
@@ -458,6 +457,8 @@ class BLINK_EXPORT WebLocalFrameClient {
   // navigation stack.
   // `screenshot_destination`, if non-empty, tags the destination of the
   // viewport screenshot.
+  // `caused_by_ad` is true if the navigation was was triggered by an ad iframe,
+  // or if an ad script was on the v8 stack at the time of the navigation.
   virtual void DidFinishSameDocumentNavigation(
       WebHistoryCommitType,
       bool is_synchronously_committed,
@@ -465,7 +466,8 @@ class BLINK_EXPORT WebLocalFrameClient {
       bool is_client_redirect,
       const std::optional<blink::SameDocNavigationScreenshotDestinationToken>&
           screenshot_destination,
-      base::UnguessableToken same_document_metrics_token) {}
+      base::UnguessableToken same_document_metrics_token,
+      bool caused_by_ad) {}
 
   // Called when an async same-document navigation fails before commit. This is
   // used in the case where a same-document navigation was instructed to commit
@@ -543,26 +545,22 @@ class BLINK_EXPORT WebLocalFrameClient {
   // focused element, |to_element| is the newly focused one. Either can be null.
   virtual void FocusedElementChanged(const WebElement& element) {}
 
-  // For the main frame, called when the main frame's dimensions have changed,
-  // e.g. resizing a tab causes the document width to change; loading additional
-  // content causes the document height to increase; explicitly changing the
-  // height of the body element.
-  //
-  // For a subframe, called when the intersection rect between the main frame
-  // and the subframe has changed, e.g. the subframe is initially added; the
-  // subframe's position is updated explicitly or inherently (e.g. sticky
-  // position while the page is being scrolled).
-  virtual void OnMainFrameIntersectionChanged(
-      const gfx::Rect& main_frame_intersection_rect) {}
+  // Called when the main frame's document rectangle changed, e.g. resizing a
+  // tab causes the document width to change, or loading additional content
+  // causes the document height to increase. Only invoked on the outermost main
+  // frame.
+  virtual void OnMainFrameRectangleChanged(const gfx::Rect& main_frame_rect) {}
 
   // Called when the main frame's viewport rectangle (the viewport dimensions
   // and the scroll position) changed, e.g. the user scrolled the main frame or
-  // the viewport dimensions themselves changed. Only invoked on the main frame.
+  // the viewport dimensions themselves changed. Only invoked on the outermost
+  // main frame.
   virtual void OnMainFrameViewportRectangleChanged(
       const gfx::Rect& main_frame_viewport_rect) {}
 
   // Called when an ad element's geometry changed. An empty `ad_rect` is used to
-  // signal the removal of the element. Only invoked on the main frame.
+  // signal the removal of the element. Only invoked on the outermost main
+  // frame.
   virtual void OnMainFrameAdRectangleChanged(int element_id,
                                              const gfx::Rect& ad_rect) {}
 
@@ -614,6 +612,7 @@ class BLINK_EXPORT WebLocalFrameClient {
   virtual void DidObserveUserInteraction(
       base::TimeTicks max_event_start,
       base::TimeTicks max_event_queued_main_thread,
+      base::TimeTicks max_event_processing_start,
       base::TimeTicks max_event_commit_finish,
       base::TimeTicks max_event_end,
       uint64_t interaction_offset) {}
@@ -882,16 +881,11 @@ class BLINK_EXPORT WebLocalFrameClient {
       network::mojom::WebSandboxFlags,
       const SessionStorageNamespaceId& session_storage_namespace_id,
       bool& consumed_user_gesture,
-      const std::optional<Impression>&,
       const std::optional<WebPictureInPictureWindowOptions>& pip_options,
       const WebURL& base_url) {
     return nullptr;
   }
 
-  virtual std::unique_ptr<WebLinkPreviewTriggerer> CreateLinkPreviewTriggerer();
-
-  virtual void SetLinkPreviewTriggererForTesting(
-      std::unique_ptr<WebLinkPreviewTriggerer> trigger);
 
   virtual base::ScopedClosureRunner CreateScopedClientNavigationThrottler() {
     return {};

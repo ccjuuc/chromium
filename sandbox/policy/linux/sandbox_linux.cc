@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/files/scoped_file.h"
@@ -25,7 +26,6 @@
 #include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/singleton.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/process/set_process_title.h"
 #include "base/strings/string_number_conversions.h"
@@ -485,7 +485,7 @@ rlim_t GetProcessDataSizeLimit(sandbox::mojom::Sandbox sandbox_type) {
     // up to 64 GB.
     constexpr rlim_t GB = 1024 * 1024 * 1024;
     const rlim_t physical_memory =
-        base::SysInfo::AmountOfPhysicalMemory().InBytes();
+        base::SysInfo::AmountOfTotalPhysicalMemory().InBytes();
     rlim_t limit;
     if ((sandbox_type == sandbox::mojom::Sandbox::kGpu ||
          sandbox_type == sandbox::mojom::Sandbox::kOnDeviceModelExecution) &&

@@ -29,7 +29,6 @@
 #include "components/optimization_guide/core/hints/optimization_guide_store.h"
 #include "components/optimization_guide/core/hints/tab_url_provider.h"
 #include "components/optimization_guide/core/hints/top_host_provider.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_logger.h"
@@ -564,7 +563,7 @@ TEST_F(HintsManagerTest, ProcessHintsWithValidCommandLineOverride) {
   encoded_config = base::Base64Encode(encoded_config);
 
   base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-      switches::kHintsProtoOverride, encoded_config);
+      kHintsProtoOverrideSwitch, encoded_config);
   CreateHintsManager(/*top_host_provider=*/nullptr);
   hints_manager()->RegisterOptimizationTypes({proto::LITE_PAGE_REDIRECT});
 
@@ -586,7 +585,7 @@ TEST_F(HintsManagerTest, ProcessHintsWithValidCommandLineOverride) {
       proto::LITE_PAGE_REDIRECT));
   EXPECT_FALSE(hints_manager()->HasLoadedOptimizationAllowlist(
       proto::PERFORMANCE_HINTS));
-  const base::Value::Dict& previous_opt_types_with_filter =
+  const base::DictValue& previous_opt_types_with_filter =
       pref_service()->GetDict(prefs::kPreviousOptimizationTypesWithFilter);
   EXPECT_EQ(2u, previous_opt_types_with_filter.size());
   EXPECT_TRUE(previous_opt_types_with_filter.contains(
@@ -608,7 +607,7 @@ TEST_F(HintsManagerTest, ProcessHintsWithInvalidCommandLineOverride) {
   base::HistogramTester histogram_tester;
 
   base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-      switches::kHintsProtoOverride, "this-is-not-a-proto");
+      kHintsProtoOverrideSwitch, "this-is-not-a-proto");
   CreateHintsManager(/*top_host_provider=*/nullptr);
 
   // The below histogram should not be recorded since hints weren't coming
@@ -638,7 +637,7 @@ TEST_F(HintsManagerTest,
   {
     base::HistogramTester histogram_tester;
     base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-        switches::kHintsProtoOverride, encoded_config);
+        kHintsProtoOverrideSwitch, encoded_config);
     CreateHintsManager(/*top_host_provider=*/nullptr);
     histogram_tester.ExpectUniqueSample("OptimizationGuide.ProcessHintsResult",
                                         ProcessHintsComponentResult::kSuccess,
@@ -829,7 +828,7 @@ TEST_F(HintsManagerTest, ProcessHintsUpdatePreviousOptTypesWithFilter) {
                          /*is_allowlist=*/true, &config_one);
   ProcessHints(config_one, "1.0.0.0");
 
-  const base::Value::Dict& dic_one =
+  const base::DictValue& dic_one =
       pref_service()->GetDict(prefs::kPreviousOptimizationTypesWithFilter);
   EXPECT_EQ(2u, dic_one.size());
   EXPECT_TRUE(dic_one.contains(optimization_guide::proto::OptimizationType_Name(
@@ -847,7 +846,7 @@ TEST_F(HintsManagerTest, ProcessHintsUpdatePreviousOptTypesWithFilter) {
                          /*is_allowlist=*/false, &config_two);
   ProcessHints(config_two, "2.0.0.0");
 
-  const base::Value::Dict& dic_two =
+  const base::DictValue& dic_two =
       pref_service()->GetDict(prefs::kPreviousOptimizationTypesWithFilter);
   EXPECT_EQ(1u, dic_two.size());
   EXPECT_TRUE(dic_two.contains(optimization_guide::proto::OptimizationType_Name(
@@ -1148,7 +1147,7 @@ TEST_F(HintsManagerTest,
   // Append the switch for processing hints to force the filter to not get
   // loaded.
   base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kHintsProtoOverride);
+      kHintsProtoOverrideSwitch);
 
   hints_manager()->RegisterOptimizationTypes({proto::LITE_PAGE_REDIRECT});
   OptimizationTypeDecision optimization_type_decision =
@@ -1725,27 +1724,19 @@ class HintsManagerFetchingTest : public HintsManagerTest {
              {
                  {kHintsMaxConcurrentNavigationFetches.name, "2"},
              }},
-            {*kHintsMaxConcurrentBatchUpdateFetches.feature,
-             {
-                 {kHintsMaxConcurrentBatchUpdateFetches.name,
-                  base::NumberToString(batch_concurrency_limit_)},
-             }},
         },
         {});
   }
 
-  size_t batch_concurrency_limit() const { return batch_concurrency_limit_; }
-
  private:
-  size_t batch_concurrency_limit_ = 2;
   variations::test::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
       variations::VariationsIdsProvider::Mode::kUseSignedInState};
   base::test::ScopedFeatureList scoped_list_;
 };
 
 TEST_F(HintsManagerFetchingTest, BatchUpdateFetcherCleanup) {
-  EXPECT_GT(batch_concurrency_limit(), 1u);
-  for (size_t i = 0; i < batch_concurrency_limit() * 2; ++i) {
+  EXPECT_GT(kMaxConcurrentBatchUpdateFetches, 1u);
+  for (size_t i = 0; i < kMaxConcurrentBatchUpdateFetches * 2; ++i) {
     auto request_id_and_fetcher =
         hints_manager_->CreateAndTrackBatchUpdateHintsFetcher();
     // Now run clean up on this id and expect LRU size to be 0.
@@ -1754,7 +1745,7 @@ TEST_F(HintsManagerFetchingTest, BatchUpdateFetcherCleanup) {
     EXPECT_EQ(0u, hints_manager_->batch_update_hints_fetchers_.size());
   }
   EXPECT_EQ(hints_manager()->num_batch_update_hints_fetches_initiated(),
-            int(batch_concurrency_limit() * 2));
+            int(kMaxConcurrentBatchUpdateFetches * 2));
 }
 
 TEST_F(HintsManagerFetchingTest,
@@ -2121,7 +2112,7 @@ TEST_F(HintsManagerFetchingTest,
   config.SerializeToString(&encoded_config);
   encoded_config = base::Base64Encode(encoded_config);
   base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-      switches::kHintsProtoOverride, encoded_config);
+      kHintsProtoOverrideSwitch, encoded_config);
 
   // Re-create hints manager with override.
   CreateHintsManager(/*top_host_provider=*/nullptr);
@@ -3167,38 +3158,28 @@ TEST_F(HintsManagerFetchingTest, BatchUpdateCalledMoreThanMaxConcurrent) {
           {HintsFetcherEndState::kFetchSuccessWithURLHints}));
 
   // Call this over the max count.
-  hints_manager()->CanApplyOptimizationOnDemand(
-      {url_with_url_keyed_hint()}, {proto::COMPRESS_PUBLIC_IMAGES},
-      proto::RequestContext::CONTEXT_BOOKMARKS,
-      base::DoNothingAs<void(
-          const GURL&,
-          const base::flat_map<proto::OptimizationType,
-                               OptimizationGuideDecisionWithMetadata>&)>(),
-      std::nullopt);
-  hints_manager()->CanApplyOptimizationOnDemand(
-      {url_with_url_keyed_hint()}, {proto::COMPRESS_PUBLIC_IMAGES},
-      proto::RequestContext::CONTEXT_BOOKMARKS,
-      base::DoNothingAs<void(
-          const GURL&,
-          const base::flat_map<proto::OptimizationType,
-                               OptimizationGuideDecisionWithMetadata>&)>(),
-      std::nullopt);
-  hints_manager()->CanApplyOptimizationOnDemand(
-      {url_with_url_keyed_hint()}, {proto::COMPRESS_PUBLIC_IMAGES},
-      proto::RequestContext::CONTEXT_BOOKMARKS,
-      base::DoNothingAs<void(
-          const GURL&,
-          const base::flat_map<proto::OptimizationType,
-                               OptimizationGuideDecisionWithMetadata>&)>(),
-      std::nullopt);
+  for (size_t i = 0; i < kMaxConcurrentBatchUpdateFetches + 1; ++i) {
+    hints_manager()->CanApplyOptimizationOnDemand(
+        {url_with_url_keyed_hint()}, {proto::COMPRESS_PUBLIC_IMAGES},
+        proto::RequestContext::CONTEXT_BOOKMARKS,
+        base::DoNothingAs<void(
+            const GURL&,
+            const base::flat_map<proto::OptimizationType,
+                                 OptimizationGuideDecisionWithMetadata>&)>(),
+        std::nullopt);
+  }
 
-  // The third one is over the max and should evict another one.
+  // The last one is over the max and should evict another one.
   histogram_tester.ExpectTotalCount(
-      "OptimizationGuide.HintsManager.ConcurrentBatchUpdateFetches", 3);
+      "OptimizationGuide.HintsManager.ConcurrentBatchUpdateFetches",
+      kMaxConcurrentBatchUpdateFetches + 1);
+  for (size_t i = 1; i < kMaxConcurrentBatchUpdateFetches; ++i) {
+    histogram_tester.ExpectBucketCount(
+        "OptimizationGuide.HintsManager.ConcurrentBatchUpdateFetches", i, 1);
+  }
   histogram_tester.ExpectBucketCount(
-      "OptimizationGuide.HintsManager.ConcurrentBatchUpdateFetches", 1, 1);
-  histogram_tester.ExpectBucketCount(
-      "OptimizationGuide.HintsManager.ConcurrentBatchUpdateFetches", 2, 2);
+      "OptimizationGuide.HintsManager.ConcurrentBatchUpdateFetches",
+      kMaxConcurrentBatchUpdateFetches, 2);
 }
 
 TEST_F(HintsManagerFetchingTest,
@@ -3704,7 +3685,7 @@ TEST_F(HintsManagerPersonalizedFetchingTest, TokenFailure) {
           run_loop.get()),
       std::nullopt);
   identity_test_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-      GoogleServiceAuthError(GoogleServiceAuthError::CONNECTION_FAILED));
+      GoogleServiceAuthError::FromConnectionError(net::ERR_FAILED));
   run_loop->Run();
 
   histogram_tester.ExpectUniqueSample(
@@ -3761,10 +3742,6 @@ class HintsManagerProactivePersonalizationFetchingTest
             {*kHintsMaxConcurrentNavigationFetches.feature,
              {
                  {kHintsMaxConcurrentNavigationFetches.name, "2"},
-             }},
-            {*kHintsMaxConcurrentBatchUpdateFetches.feature,
-             {
-                 {kHintsMaxConcurrentBatchUpdateFetches.name, "2"},
              }},
             {
                 features::kOptimizationGuideProactivePersonalizedHintsFetching,
@@ -3862,7 +3839,7 @@ TEST_F(HintsManagerProactivePersonalizationFetchingTest, TokenFailure) {
   base::HistogramTester histogram_tester;
   CallOnNavigationStartOrRedirect(navigation_data.get(), base::DoNothing());
   identity_test_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-      GoogleServiceAuthError(GoogleServiceAuthError::CONNECTION_FAILED));
+      GoogleServiceAuthError::FromConnectionError(net::ERR_FAILED));
   RunUntilIdle();
 
   histogram_tester.ExpectUniqueSample(
@@ -3997,7 +3974,7 @@ TEST_F(HintsManagerProactivePersonalizationFetchingTest,
   RunUntilIdle();
   // An access token request is expected with personalized types.
   identity_test_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-      GoogleServiceAuthError(GoogleServiceAuthError::CONNECTION_FAILED));
+      GoogleServiceAuthError::FromConnectionError(net::ERR_FAILED));
   histogram_tester.ExpectUniqueSample(
       "OptimizationGuide.AccessTokenHelper.Result",
       OptimizationGuideAccessTokenResult::kTransientError, 1);
@@ -4006,6 +3983,61 @@ TEST_F(HintsManagerProactivePersonalizationFetchingTest,
   EXPECT_EQ(
       proto::RequestContext::CONTEXT_BATCH_UPDATE_ACTIVE_TABS,
       active_tabs_batch_update_hints_fetcher()->request_context_requested());
+}
+
+TEST(HintsManagerSwitchesTest, ParseComponentConfigFromCommandLine) {
+  optimization_guide::proto::Configuration config;
+  optimization_guide::proto::Hint* hint = config.add_hints();
+  hint->set_key("somedomain.org");
+  hint->set_key_representation(optimization_guide::proto::HOST);
+
+  std::string encoded_config;
+  config.SerializeToString(&encoded_config);
+  encoded_config = base::Base64Encode(encoded_config);
+
+  base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
+      kHintsProtoOverrideSwitch, encoded_config);
+
+  std::unique_ptr<optimization_guide::proto::Configuration> parsed_config =
+      ParseComponentConfigFromCommandLine();
+
+  EXPECT_EQ(1, parsed_config->hints_size());
+  EXPECT_EQ("somedomain.org", parsed_config->hints(0).key());
+}
+
+TEST(HintsManagerSwitchesTest, ParseComponentConfigFromCommandLineNotAProto) {
+  base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
+      kHintsProtoOverrideSwitch, "not-a-proto");
+
+  std::unique_ptr<optimization_guide::proto::Configuration> parsed_config =
+      ParseComponentConfigFromCommandLine();
+
+  EXPECT_EQ(nullptr, parsed_config);
+}
+
+TEST(HintsManagerSwitchesTest,
+     ParseComponentConfigFromCommandLineSwitchNotSet) {
+  std::unique_ptr<optimization_guide::proto::Configuration> parsed_config =
+      ParseComponentConfigFromCommandLine();
+
+  EXPECT_EQ(nullptr, parsed_config);
+}
+
+TEST(HintsManagerSwitchesTest,
+     ParseComponentConfigFromCommandLineNotAConfiguration) {
+  optimization_guide::proto::HostInfo host_info;
+  host_info.set_host("whatever.com");
+  std::string encoded_proto;
+  host_info.SerializeToString(&encoded_proto);
+  encoded_proto = base::Base64Encode(encoded_proto);
+
+  base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
+      kHintsProtoOverrideSwitch, encoded_proto);
+
+  std::unique_ptr<optimization_guide::proto::Configuration> parsed_config =
+      ParseComponentConfigFromCommandLine();
+
+  EXPECT_EQ(nullptr, parsed_config);
 }
 
 }  // namespace optimization_guide

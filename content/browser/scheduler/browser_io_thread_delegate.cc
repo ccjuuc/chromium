@@ -40,10 +40,6 @@ void BrowserIOThreadDelegate::Init() {
   task_queues_ =
       std::make_unique<BrowserTaskQueues>(BrowserThread::IO, sequence_manager_);
   default_task_runner_ = task_queues_->GetHandle()->GetDefaultTaskRunner();
-  scenario_priority_boost_ =
-      std::make_unique<base::TaskMonitoringScopedBoostPriority>(
-          base::ThreadType::kInteractive,
-          base::BindRepeating(&internal::ShouldBoostThreadsPriority));
 }
 
 scoped_refptr<base::SingleThreadTaskRunner>
@@ -57,13 +53,8 @@ void BrowserIOThreadDelegate::BindToCurrentThread() {
   DCHECK(sequence_manager_);
   sequence_manager_->BindToMessagePump(
       base::MessagePump::Create(base::MessagePumpType::IO));
-  sequence_manager_->SetDefaultTaskRunner(GetDefaultTaskRunner());
+  sequence_manager_->SetDefaultTaskQueue(task_queues_->GetDefaultTaskQueue());
   sequence_manager_->EnableCrashKeys("io_scheduler_async_stack");
-}
-
-void BrowserIOThreadDelegate::AddTaskObserver(base::TaskObserver* observer) {
-  DCHECK(sequence_manager_);
-  sequence_manager_->AddTaskObserver(observer);
 }
 
 }  // namespace content

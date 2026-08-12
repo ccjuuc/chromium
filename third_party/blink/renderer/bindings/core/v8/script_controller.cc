@@ -33,6 +33,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
 
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "base/compiler_specific.h"
@@ -198,35 +199,6 @@ void ScriptController::SetWasmEvalErrorMessageForWorld(
       V8String(GetIsolate(), error_message));
 }
 
-namespace {
-
-Vector<const char*>& RegisteredExtensionNames() {
-  DEFINE_STATIC_LOCAL(Vector<const char*>, extension_names, ());
-  return extension_names;
-}
-
-}  // namespace
-
-void ScriptController::RegisterExtensionIfNeeded(
-    std::unique_ptr<v8::Extension> extension) {
-  for (const auto* extension_name : RegisteredExtensionNames()) {
-    if (!UNSAFE_TODO(strcmp(extension_name, extension->name()))) {
-      return;
-    }
-  }
-  RegisteredExtensionNames().push_back(extension->name());
-  v8::RegisterExtension(std::move(extension));
-}
-
-v8::ExtensionConfiguration ScriptController::ExtensionsFor(
-    const ExecutionContext* context) {
-  if (context->ShouldInstallV8Extensions()) {
-    return v8::ExtensionConfiguration(RegisteredExtensionNames().size(),
-                                      RegisteredExtensionNames().data());
-  }
-  return v8::ExtensionConfiguration();
-}
-
 void ScriptController::UpdateDocument() {
   window_proxy_manager_->UpdateDocument();
 }
@@ -271,7 +243,7 @@ void ScriptController::ExecuteJavaScriptURL(
   // We pass |SanitizeScriptErrors::kDoNotSanitize| because |muted errors| is
   // false by default.
   ClassicScript* script = ClassicScript::Create(
-      script_source, KURL(), base_url, ScriptFetchOptions(),
+      script_source, NullUrl(), base_url, ScriptFetchOptions(),
       ScriptSourceLocationType::kJavascriptUrl,
       SanitizeScriptErrors::kDoNotSanitize);
 
@@ -377,22 +349,6 @@ bool ScriptController::CanExecuteScript(ExecuteScriptPolicy policy) {
 
 v8::Isolate* ScriptController::GetIsolate() const {
   return window_proxy_manager_->GetIsolate();
-}
-
-DOMWrapperWorld* ScriptController::CreateNewInspectorIsolatedWorld(
-    const String& world_name) {
-  DOMWrapperWorld* world = DOMWrapperWorld::Create(
-      GetIsolate(), DOMWrapperWorld::WorldType::kInspectorIsolated);
-  // Bail out if we could not create an isolated world.
-  if (!world)
-    return nullptr;
-  if (!world_name.empty()) {
-    DOMWrapperWorld::SetNonMainWorldHumanReadableName(world->GetWorldId(),
-                                                      world_name);
-  }
-  // Make sure the execution context exists.
-  WindowProxy(*world);
-  return world;
 }
 
 }  // namespace blink

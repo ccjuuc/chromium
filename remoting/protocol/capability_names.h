@@ -52,6 +52,15 @@ inline constexpr char kDefaultResizeCapability[] = "defaultResize";
 inline constexpr char kClientRenderedHostCursorCapability[] =
     "clientRenderedHostCursor";
 
+// Host supports remoting of microphone audio.
+inline constexpr char kMicrophoneRemotingCapability[] = "microphoneRemoting";
+
+// Host supports remoting of terminal control.
+inline constexpr char kTerminalModeCapability[] = "terminalMode_alpha";
+
+// Host supports security key forwarding via a WebRTC data channel.
+inline constexpr char kSecurityKeyV2Capability[] = "securityKeyV2";
+
 }  // namespace remoting::protocol
 
 #endif  // REMOTING_PROTOCOL_CAPABILITY_NAMES_H_

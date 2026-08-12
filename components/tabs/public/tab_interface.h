@@ -6,14 +6,16 @@
 #define COMPONENTS_TABS_PUBLIC_TAB_INTERFACE_H_
 
 #include <memory>
+#include <string>
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "base/types/pass_key.h"
-#include "build/build_config.h"
-#include "build/buildflag.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/tab_handle_factory.h"
+#include "content/public/browser/web_contents_user_data.h"
+#include "url/gurl.h"
 
 namespace ui {
 class UnownedUserDataHost;
@@ -27,9 +29,8 @@ namespace content {
 class WebContents;
 }  // namespace content
 
-#if !BUILDFLAG(IS_ANDROID)
 class BrowserWindowInterface;
-#endif  // !BUILDFLAG(IS_ANDROID)
+class Profile;
 
 namespace split_tabs {
 class SplitTabId;
@@ -49,10 +50,26 @@ class ScopedTabModalUI {
   virtual ~ScopedTabModalUI() = default;
 };
 
-// TODO(crbug.com/404889112): This interface will be reused for Android as part
-// of the effort to share tab collections between desktop and Android. Some
-// features of TabInterface are unsupported on Android. A buildflag is used to
-// turn off this functionality.
+// This class exists to allow consumers to look up a TabInterface from an
+// instance of WebContents. This is necessary while transitioning features to
+// use TabInterface instead of WebContents.
+class TabLookupFromWebContents
+    : public content::WebContentsUserData<TabLookupFromWebContents> {
+ public:
+  ~TabLookupFromWebContents() override = default;
+
+  tabs::TabInterface* model() { return tab_interface_; }
+  const tabs::TabInterface* model() const { return tab_interface_; }
+
+ private:
+  friend WebContentsUserData;
+  TabLookupFromWebContents(content::WebContents* contents,
+                           tabs::TabInterface* tab_interface);
+
+  // Semantically owns this class.
+  raw_ptr<tabs::TabInterface> tab_interface_;
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
+};
 
 // This is the public interface for tabs in a desktop browser. Most features in
 // //chrome/browser depend on this interface, and thus to prevent circular
@@ -77,6 +94,8 @@ class TabInterface : public SupportsTabHandles {
   // unavoidable, this method may be used. Features that live entirely above the
   // //content layer should not use this method.
   static TabInterface* MaybeGetFromContents(content::WebContents* web_contents);
+  static const TabInterface* MaybeGetFromContents(
+      const content::WebContents* web_contents);
 
   // Returns a weak pointer to `this`.
   //
@@ -102,15 +121,48 @@ class TabInterface : public SupportsTabHandles {
 
   // Returns the WebContents that is currently associated with this tab.
   //
-  // The returned pointer is guaranteed to be non-null.
+  // Windows/Mac/Linux:
+  // * The returned pointer is guaranteed to be non-null.
+  // * The WebContents object *itself* can be replaced, most notably when a
+  //   background tab's contents are discarded to save memory. Callers who need
+  //   to observe the tab for its entire lifetime should not cache the
+  //   WebContents pointer directly. Instead, they should hold a reference to
+  //   the TabInterface and call GetContents() when needed, or use
+  //   RegisterWillDiscardContents() to be notified of swaps.
   //
-  // However, the WebContents object *itself* can be replaced, most notably
-  // when a background tab's contents are discarded to save memory.
-  // Callers who need to observe the tab for its entire lifetime should not
-  // cache the WebContents pointer directly. Instead, they should hold a
-  // reference to the TabInterface and call GetContents() when needed, or use
-  // RegisterWillDiscardContents() to be notified of swaps.
+  // Android:
+  // * This may return nullptr for tabs that have not loaded in the current
+  //   session. If kLoadAllTabsOnStartup is enabled, this will be non-null for
+  //   all tabs in models with TabModelType::kStandard.
+  // * The WebContents object will never change after being populated.
+  //   Discarding WebContents does not change the WebContents pointer and
+  //   swapping WebContents is not supported. That said, for portability with
+  //   Windows/Mac/Linux, the recommendation is to hold a pointer to the
+  //   TabInterface and call GetContents() when needed as described above.
   virtual content::WebContents* GetContents() const = 0;
+
+  // Loads the WebContents of the tab if it needs to be loaded/reloaded. On
+  // Android calling this will guarantee subsequent calls to `GetContents` will
+  // return a non-nullptr value. However, the cost of invoking this is high.
+  // Invoke this only in response to a user request that should load the tab.
+  virtual void LoadIfNeeded() = 0;
+
+  // Return the tab title. On Android, prefer this to getting the title from
+  // WebContents as it can return the title even if there is no WebContents or
+  // there is a pending navigation.
+  virtual std::u16string GetTitle() const = 0;
+
+  // Return the tab url. On Android, prefer this to getting the URL from
+  // WebContents as it can return the URL even if there is no WebContents or
+  // there is a pending navigation.
+  virtual GURL GetURL() const = 0;
+
+  // Returns the time at which the tab was last active (or shown, on Android if
+  // the tab is not loaded).
+  virtual base::Time GetLastActiveTime() const = 0;
+
+  // Returns the Profile associated with this tab.
+  virtual Profile* GetProfile() const = 0;
 
   // Closes the tab.
   virtual void Close() = 0;
@@ -164,6 +216,7 @@ class TabInterface : public SupportsTabHandles {
 
   // Register for this callback to detect when a tab will be detached from a
   // window.
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.tabs
   enum class DetachReason {
     // The tab is about to be deleted.
     kDelete,
@@ -196,6 +249,12 @@ class TabInterface : public SupportsTabHandles {
   virtual base::CallbackListSubscription RegisterGroupChanged(
       GroupChangedCallback callback) = 0;
 
+  // Register for this callback to detect when the blocked state changes.
+  using BlockedStateChangedCallback =
+      base::RepeatingCallback<void(TabInterface*, bool new_blocked_state)>;
+  virtual base::CallbackListSubscription RegisterBlockedStateChanged(
+      BlockedStateChangedCallback callback) = 0;
+
   // Features that want to show tab-modal UI are mutually exclusive. Before
   // showing a modal UI first check `CanShowModal`. Then call ShowModal() and
   // keep `ScopedTabModal` alive to prevent other features from showing
@@ -212,7 +271,6 @@ class TabInterface : public SupportsTabHandles {
   // never changes.
   virtual bool IsInNormalWindow() const = 0;
 
-#if !BUILDFLAG(IS_ANDROID)
   // Always valid in production code. Exceptions are:
   //  (1) Tabs briefly do not have a BrowserWindowInterface when they are
   //  detached from one window and moved to another. That is an implementation
@@ -228,9 +286,16 @@ class TabInterface : public SupportsTabHandles {
   // This is a long winded way of saying: if you are using this code from
   // TabFeatures or BrowserWindowFeatures, you can safely assume that this is
   // always non-nullptr.
+  //
+  // Android specific notes:
+  // * Tabs that are reparenting, closing or in undoable closure state will
+  //   return nullptr.
+  // * Prior to associating the tab with a browser window (i.e. early in
+  //   startup), this will be nullptr.
+  // * After dissociation from a browser window (i.e. during activity/profile
+  //   destruction), this will be nullptr.
   virtual BrowserWindowInterface* GetBrowserWindowInterface() = 0;
   virtual const BrowserWindowInterface* GetBrowserWindowInterface() const = 0;
-#endif  // !BUILDFLAG(IS_ANDROID)
 
   // Returns the feature controllers scoped to this tab.
   // TabFeatures that depend on other TabFeatures should not use this method.

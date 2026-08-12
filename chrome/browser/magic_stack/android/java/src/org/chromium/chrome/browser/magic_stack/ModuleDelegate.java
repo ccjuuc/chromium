@@ -23,7 +23,7 @@ public interface ModuleDelegate {
      * Module types that are shown in the magic stack on the home surfaces.
      *
      * <p>These values are persisted to logs. Entries should not be renumbered and numeric values
-     * should never be reused. See tools/metrics/histograms/enums.xml.
+     * should never be reused. See tools/metrics/histograms/metadata/magic_stack/enums.xml.
      */
     @IntDef({
         ModuleType.SINGLE_TAB,
@@ -37,9 +37,15 @@ public interface ModuleDelegate {
         ModuleType.TAB_GROUP_SYNC_PROMO,
         ModuleType.QUICK_DELETE_PROMO,
         ModuleType.HISTORY_SYNC_PROMO,
-        ModuleType.TIPS_NOTIFICATIONS_PROMO,
+        ModuleType.DEPRECATED_TIPS_NOTIFICATIONS_PROMO,
         ModuleType.ENHANCED_SAFE_BROWSING_PROMO,
         ModuleType.ADDRESS_BAR_PLACEMENT_PROMO,
+        ModuleType.SETUP_LIST_TWO_CELL_CONTAINER,
+        ModuleType.SIGN_IN_PROMO,
+        ModuleType.SAVE_PASSWORDS_PROMO,
+        ModuleType.PASSWORD_CHECKUP_PROMO,
+        ModuleType.SETUP_LIST_CELEBRATORY_PROMO,
+        ModuleType.NTP_THEME_PROMO,
         ModuleType.NUM_ENTRIES
     })
     @Retention(RetentionPolicy.SOURCE)
@@ -55,13 +61,19 @@ public interface ModuleDelegate {
         int TAB_GROUP_SYNC_PROMO = 8;
         int QUICK_DELETE_PROMO = 9;
         int HISTORY_SYNC_PROMO = 10;
-        int TIPS_NOTIFICATIONS_PROMO = 11;
+        int DEPRECATED_TIPS_NOTIFICATIONS_PROMO = 11;
         int ENHANCED_SAFE_BROWSING_PROMO = 12;
         int ADDRESS_BAR_PLACEMENT_PROMO = 13;
-        int NUM_ENTRIES = 14;
+        int SETUP_LIST_TWO_CELL_CONTAINER = 14;
+        int SIGN_IN_PROMO = 15;
+        int SAVE_PASSWORDS_PROMO = 16;
+        int PASSWORD_CHECKUP_PROMO = 17;
+        int SETUP_LIST_CELEBRATORY_PROMO = 18;
+        int NTP_THEME_PROMO = 19;
+        int NUM_ENTRIES = 20;
     }
 
-    // LINT.ThenChange(//chrome/browser/ntp_customization/java/src/org/chromium/chrome/browser/ntp_customization/ntp_cards/NtpCardsMediator.java:HomeModuleTypes)
+    // LINT.ThenChange(//chrome/browser/ntp_customization/java/src/org/chromium/chrome/browser/ntp_customization/ntp_cards/NtpCardsMediator.java:HomeModuleTypes, //tools/metrics/histograms/metadata/magic_stack/enums.xml:ModuleType, //tools/metrics/histograms/metadata/magic_stack/histograms.xml:ModuleType)
 
     /**
      * Called when a module has a PropertyModel ready. This could be called multiple times from the
@@ -109,6 +121,9 @@ public interface ModuleDelegate {
 
     /** Gets the local Tab that is showing on the magic stack. */
     @Nullable Tab getTrackingTab();
+
+    /** Re-evaluates eligibility and re-renders the magic stack. */
+    void refreshModules();
 
     /** Called before build and show modules. */
     void prepareBuildAndShow();

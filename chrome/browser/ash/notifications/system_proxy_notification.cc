@@ -8,10 +8,10 @@
 
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/notification_utils.h"
+#include "ash/resources/vector_icons/vector_icons.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/check_is_test.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
@@ -64,7 +64,7 @@ void SystemProxyNotification::Show() {
       base::MakeRefCounted<message_center::HandleNotificationClickDelegate>(
           base::BindRepeating(&SystemProxyNotification::OnClick,
                               weak_ptr_factory_.GetWeakPtr())),
-      kNotificationWifiIcon,
+      ash::kNotificationWifiIcon,
       message_center::SystemNotificationWarningLevel::WARNING);
 
   notification->set_pinned(true);
@@ -72,7 +72,7 @@ void SystemProxyNotification::Show() {
       std::move(notification));
 }
 
-void SystemProxyNotification::SystemProxyNotification::OnClick() {
+void SystemProxyNotification::OnClick() {
   DCHECK(!on_click_callback_.is_null());
   std::move(on_click_callback_).Run(protection_space_, show_error_);
 }

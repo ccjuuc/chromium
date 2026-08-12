@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
@@ -43,6 +43,7 @@
 #include "ipc/constants.mojom.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/input/synthetic_web_input_event_builders.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
@@ -198,8 +199,7 @@ class RenderWidgetHostTouchEmulatorBrowserTest : public ContentBrowserTest {
   }
 
   base::TimeTicks GetNextSimulatedEventTime() {
-    last_simulated_event_time_ += simulated_event_time_delta_;
-    return last_simulated_event_time_;
+    return last_simulated_event_time_ + simulated_event_time_delta_;
   }
 
   void SimulateRoutedMouseEvent(blink::WebInputEvent::Type type,
@@ -212,12 +212,37 @@ class RenderWidgetHostTouchEmulatorBrowserTest : public ContentBrowserTest {
     if (pressed) {
       event.button = blink::WebMouseEvent::Button::kLeft;
     }
-    event.SetTimeStamp(GetNextSimulatedEventTime());
+    base::TimeTicks event_time = GetNextSimulatedEventTime();
+    event.SetTimeStamp(event_time);
+    last_simulated_event_time_ = event_time;
     input::RenderWidgetHostInputEventRouter* router =
         static_cast<WebContentsImpl*>(shell()->web_contents())
             ->GetInputEventRouter();
     ASSERT_TRUE(router);
     router->RouteMouseEvent(view(), &event, ui::LatencyInfo());
+  }
+
+  void SimulateRoutedMouseDrag(TestInputEventObserver& observer, int x, int y) {
+    // Override the reference timestamp for testing to avoid flakiness which
+    // results in GSU and the corresponding touch scroll started event not being
+    // sent.
+    auto timestamp_override =
+        ui::TouchDispositionGestureFilter::OverrideReferenceTimestampForTesting(
+            GetNextSimulatedEventTime());
+
+    SimulateRoutedMouseEvent(blink::WebInputEvent::Type::kMouseMove, x, y, 0,
+                             true);
+    auto dispatched_events = observer.GetAndResetDispatchedEventTypes();
+    ASSERT_THAT(
+        dispatched_events,
+        testing::ElementsAre(blink::WebInputEvent::Type::kTouchMove,
+                             blink::WebInputEvent::Type::kGestureTapCancel,
+                             blink::WebInputEvent::Type::kGestureScrollBegin,
+                             blink::WebInputEvent::Type::kTouchScrollStarted,
+                             blink::WebInputEvent::Type::kGestureScrollUpdate));
+    EXPECT_EQ(blink::WebInputEvent::Type::kTouchMove,
+              observer.acked_touch_event_type());
+    EXPECT_EQ(0u, observer.GetAndResetDispatchedEventTypes().size());
   }
 
   void WaitForAckWith(blink::WebInputEvent::Type type) {
@@ -295,8 +320,8 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostTouchEmulatorBrowserTest,
     // that we generated a GestureScrollEnd and routed it without crashing.
     TestInputEventObserver::EventTypeVector dispatched_events =
         observer.GetAndResetDispatchedEventTypes();
-    EXPECT_TRUE(base::Contains(dispatched_events,
-                               blink::WebInputEvent::Type::kGestureScrollEnd));
+    EXPECT_TRUE(std::ranges::contains(
+        dispatched_events, blink::WebInputEvent::Type::kGestureScrollEnd));
   } while (!touch_emulator->suppress_next_fling_cancel_for_testing());
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
@@ -333,27 +358,13 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostTouchEmulatorBrowserTest,
   EXPECT_EQ(blink::WebInputEvent::Type::kTouchStart,
             observer.acked_touch_event_type());
   dispatched_events = observer.GetAndResetDispatchedEventTypes();
-  ASSERT_EQ(2u, dispatched_events.size());
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchStart, dispatched_events[0]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGestureTapDown, dispatched_events[1]);
+  ASSERT_THAT(
+      dispatched_events,
+      testing::ElementsAre(blink::WebInputEvent::Type::kTouchStart,
+                           blink::WebInputEvent::Type::kGestureTapDown));
 
   // Mouse drag generates touch move, cancels tap and starts scroll.
-  SimulateRoutedMouseEvent(blink::WebInputEvent::Type::kMouseMove, 10, 100, 0,
-                           true);
-  dispatched_events = observer.GetAndResetDispatchedEventTypes();
-  ASSERT_EQ(5u, dispatched_events.size());
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchMove, dispatched_events[0]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGestureTapCancel,
-            dispatched_events[1]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGestureScrollBegin,
-            dispatched_events[2]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchScrollStarted,
-            dispatched_events[3]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGestureScrollUpdate,
-            dispatched_events[4]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchMove,
-            observer.acked_touch_event_type());
-  EXPECT_EQ(0u, observer.GetAndResetDispatchedEventTypes().size());
+  SimulateRoutedMouseDrag(observer, 10, 100);
 
   // Mouse drag with shift becomes pinch.
   SimulateRoutedMouseEvent(blink::WebInputEvent::Type::kMouseMove, 10, 95,
@@ -362,10 +373,10 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostTouchEmulatorBrowserTest,
             observer.acked_touch_event_type());
 
   dispatched_events = observer.GetAndResetDispatchedEventTypes();
-  ASSERT_EQ(2u, dispatched_events.size());
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchMove, dispatched_events[0]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGesturePinchBegin,
-            dispatched_events[1]);
+  ASSERT_THAT(
+      dispatched_events,
+      testing::ElementsAre(blink::WebInputEvent::Type::kTouchMove,
+                           blink::WebInputEvent::Type::kGesturePinchBegin));
 
   SimulateRoutedMouseEvent(blink::WebInputEvent::Type::kMouseMove, 10, 80,
                            blink::WebInputEvent::kShiftKey, true);
@@ -373,10 +384,10 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostTouchEmulatorBrowserTest,
             observer.acked_touch_event_type());
 
   dispatched_events = observer.GetAndResetDispatchedEventTypes();
-  ASSERT_EQ(2u, dispatched_events.size());
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchMove, dispatched_events[0]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGesturePinchUpdate,
-            dispatched_events[1]);
+  ASSERT_THAT(
+      dispatched_events,
+      testing::ElementsAre(blink::WebInputEvent::Type::kTouchMove,
+                           blink::WebInputEvent::Type::kGesturePinchUpdate));
 
   // Mouse drag without shift becomes scroll again.
   SimulateRoutedMouseEvent(blink::WebInputEvent::Type::kMouseMove, 10, 70, 0,
@@ -385,21 +396,21 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostTouchEmulatorBrowserTest,
             observer.acked_touch_event_type());
 
   dispatched_events = observer.GetAndResetDispatchedEventTypes();
-  ASSERT_EQ(3u, dispatched_events.size());
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchMove, dispatched_events[0]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGesturePinchEnd, dispatched_events[1]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGestureScrollUpdate,
-            dispatched_events[2]);
+  EXPECT_THAT(
+      dispatched_events,
+      testing::ElementsAre(blink::WebInputEvent::Type::kTouchMove,
+                           blink::WebInputEvent::Type::kGesturePinchEnd,
+                           blink::WebInputEvent::Type::kGestureScrollUpdate));
 
   SimulateRoutedMouseEvent(blink::WebInputEvent::Type::kMouseMove, 10, 60, 0,
                            true);
   EXPECT_EQ(blink::WebInputEvent::Type::kTouchMove,
             observer.acked_touch_event_type());
   dispatched_events = observer.GetAndResetDispatchedEventTypes();
-  ASSERT_EQ(2u, dispatched_events.size());
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchMove, dispatched_events[0]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGestureScrollUpdate,
-            dispatched_events[1]);
+  ASSERT_THAT(
+      dispatched_events,
+      testing::ElementsAre(blink::WebInputEvent::Type::kTouchMove,
+                           blink::WebInputEvent::Type::kGestureScrollUpdate));
 
   SimulateRoutedMouseEvent(blink::WebInputEvent::Type::kMouseUp, 10, 60, 0,
                            true);
@@ -410,10 +421,10 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostTouchEmulatorBrowserTest,
   EXPECT_EQ(blink::WebInputEvent::Type::kTouchEnd,
             observer.acked_touch_event_type());
   dispatched_events = observer.GetAndResetDispatchedEventTypes();
-  ASSERT_EQ(2u, dispatched_events.size());
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchEnd, dispatched_events[0]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGestureScrollEnd,
-            dispatched_events[1]);
+  ASSERT_THAT(
+      dispatched_events,
+      testing::ElementsAre(blink::WebInputEvent::Type::kTouchEnd,
+                           blink::WebInputEvent::Type::kGestureScrollEnd));
 
   // Mouse move does nothing.
   SimulateRoutedMouseEvent(blink::WebInputEvent::Type::kMouseMove, 10, 50, 0,
@@ -428,25 +439,12 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostTouchEmulatorBrowserTest,
   EXPECT_EQ(blink::WebInputEvent::Type::kTouchStart,
             observer.acked_touch_event_type());
   dispatched_events = observer.GetAndResetDispatchedEventTypes();
-  ASSERT_EQ(2u, dispatched_events.size());
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchStart, dispatched_events[0]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGestureTapDown, dispatched_events[1]);
-  SimulateRoutedMouseEvent(blink::WebInputEvent::Type::kMouseMove, 10, 30, 0,
-                           true);
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchMove,
-            observer.acked_touch_event_type());
-  dispatched_events = observer.GetAndResetDispatchedEventTypes();
-  ASSERT_EQ(5u, dispatched_events.size());
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchMove, dispatched_events[0]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGestureTapCancel,
-            dispatched_events[1]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGestureScrollBegin,
-            dispatched_events[2]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchScrollStarted,
-            dispatched_events[3]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGestureScrollUpdate,
-            dispatched_events[4]);
-  EXPECT_EQ(0u, observer.GetAndResetDispatchedEventTypes().size());
+  ASSERT_THAT(
+      dispatched_events,
+      testing::ElementsAre(blink::WebInputEvent::Type::kTouchStart,
+                           blink::WebInputEvent::Type::kGestureTapDown));
+
+  SimulateRoutedMouseDrag(observer, 10, 30);
 
   // Another pinch.
   SimulateRoutedMouseEvent(blink::WebInputEvent::Type::kMouseMove, 10, 20,
@@ -454,37 +452,37 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostTouchEmulatorBrowserTest,
   EXPECT_EQ(blink::WebInputEvent::Type::kTouchMove,
             observer.acked_touch_event_type());
   dispatched_events = observer.GetAndResetDispatchedEventTypes();
-  EXPECT_EQ(2u, dispatched_events.size());
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchMove, dispatched_events[0]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGesturePinchBegin,
-            dispatched_events[1]);
+  ASSERT_THAT(
+      dispatched_events,
+      testing::ElementsAre(blink::WebInputEvent::Type::kTouchMove,
+                           blink::WebInputEvent::Type::kGesturePinchBegin));
   SimulateRoutedMouseEvent(blink::WebInputEvent::Type::kMouseMove, 10, 10,
                            blink::WebInputEvent::kShiftKey, true);
   EXPECT_EQ(blink::WebInputEvent::Type::kTouchMove,
             observer.acked_touch_event_type());
   dispatched_events = observer.GetAndResetDispatchedEventTypes();
-  EXPECT_EQ(2u, dispatched_events.size());
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchMove, dispatched_events[0]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGesturePinchUpdate,
-            dispatched_events[1]);
+  ASSERT_THAT(
+      dispatched_events,
+      testing::ElementsAre(blink::WebInputEvent::Type::kTouchMove,
+                           blink::WebInputEvent::Type::kGesturePinchUpdate));
 
   // Turn off emulation during a pinch.
   host()->GetTouchEmulator(/*create_if_necessary=*/true)->Disable();
   EXPECT_EQ(blink::WebInputEvent::Type::kTouchCancel,
             observer.acked_touch_event_type());
   dispatched_events = observer.GetAndResetDispatchedEventTypes();
-  ASSERT_EQ(3u, dispatched_events.size());
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchCancel, dispatched_events[0]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGesturePinchEnd, dispatched_events[1]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGestureScrollEnd,
-            dispatched_events[2]);
+  EXPECT_THAT(
+      dispatched_events,
+      testing::ElementsAre(blink::WebInputEvent::Type::kTouchCancel,
+                           blink::WebInputEvent::Type::kGesturePinchEnd,
+                           blink::WebInputEvent::Type::kGestureScrollEnd));
 
   // Mouse event should pass untouched.
   SimulateRoutedMouseEvent(blink::WebInputEvent::Type::kMouseMove, 10, 120,
                            blink::WebInputEvent::kShiftKey, true);
   dispatched_events = observer.GetAndResetDispatchedEventTypes();
-  ASSERT_EQ(1u, dispatched_events.size());
-  EXPECT_EQ(blink::WebInputEvent::Type::kMouseMove, dispatched_events[0]);
+  ASSERT_THAT(dispatched_events,
+              testing::ElementsAre(blink::WebInputEvent::Type::kMouseMove));
 
   // Turn on emulation.
   host()
@@ -499,27 +497,13 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostTouchEmulatorBrowserTest,
   EXPECT_EQ(blink::WebInputEvent::Type::kTouchStart,
             observer.acked_touch_event_type());
   dispatched_events = observer.GetAndResetDispatchedEventTypes();
-  ASSERT_EQ(2u, dispatched_events.size());
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchStart, dispatched_events[0]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGestureTapDown, dispatched_events[1]);
+  ASSERT_THAT(
+      dispatched_events,
+      testing::ElementsAre(blink::WebInputEvent::Type::kTouchStart,
+                           blink::WebInputEvent::Type::kGestureTapDown));
 
   // Scroll.
-  SimulateRoutedMouseEvent(blink::WebInputEvent::Type::kMouseMove, 10, 100, 0,
-                           true);
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchMove,
-            observer.acked_touch_event_type());
-  dispatched_events = observer.GetAndResetDispatchedEventTypes();
-  ASSERT_EQ(5u, dispatched_events.size());
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchMove, dispatched_events[0]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGestureTapCancel,
-            dispatched_events[1]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGestureScrollBegin,
-            dispatched_events[2]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchScrollStarted,
-            dispatched_events[3]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGestureScrollUpdate,
-            dispatched_events[4]);
-  EXPECT_EQ(0u, observer.GetAndResetDispatchedEventTypes().size());
+  SimulateRoutedMouseDrag(observer, 10, 100);
 
   // Turn off emulation during a scroll.
   host()->GetTouchEmulator(/*create_if_necessary=*/true)->Disable();
@@ -527,10 +511,10 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostTouchEmulatorBrowserTest,
             observer.acked_touch_event_type());
 
   dispatched_events = observer.GetAndResetDispatchedEventTypes();
-  ASSERT_EQ(2u, dispatched_events.size());
-  EXPECT_EQ(blink::WebInputEvent::Type::kTouchCancel, dispatched_events[0]);
-  EXPECT_EQ(blink::WebInputEvent::Type::kGestureScrollEnd,
-            dispatched_events[1]);
+  ASSERT_THAT(
+      dispatched_events,
+      testing::ElementsAre(blink::WebInputEvent::Type::kTouchCancel,
+                           blink::WebInputEvent::Type::kGestureScrollEnd));
 
   host()->RemoveInputEventObserver(&observer);
 }
@@ -679,6 +663,42 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostSitePerProcessTest,
   }
 }
 
+IN_PROC_BROWSER_TEST_F(RenderWidgetHostSitePerProcessTest,
+                       VerifyPopupCreatorFrameIdPlumbing) {
+  // Navigate to a page with a <select> element.
+  GURL main_url(embedded_test_server()->GetURL(
+      "a.com", "/site_isolation/page-with-select.html"));
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+  SimulateEndOfPaintHoldingOnPrimaryMainFrame(shell()->web_contents());
+
+  auto* contents = static_cast<WebContentsImpl*>(shell()->web_contents());
+  FrameTreeNode* root = contents->GetPrimaryFrameTree().root();
+  RenderFrameHostImpl* root_frame_host = root->current_frame_host();
+  RenderProcessHost* process = root_frame_host->GetProcess();
+
+  // Focus and open select box to create popup widget.
+  input::NativeWebKeyboardEvent event(
+      blink::WebKeyboardEvent::Type::kChar, blink::WebInputEvent::kNoModifiers,
+      blink::WebInputEvent::GetStaticTimeStampForTests());
+  event.text[0] = ' ';
+
+  auto filter =
+      std::make_unique<ShowPopupWidgetWaiter>(contents, root_frame_host);
+  EXPECT_TRUE(ExecJs(root_frame_host, "focusSelectMenu();"));
+  root_frame_host->GetRenderWidgetHost()->ForwardKeyboardEvent(event);
+  filter->Wait();
+
+  int popup_routing_id = filter->last_routing_id();
+  EXPECT_NE(popup_routing_id, IPC::mojom::kRoutingIdNone);
+  RenderWidgetHost* popup_widget_host =
+      RenderWidgetHost::FromID(process->GetDeprecatedID(), popup_routing_id);
+  ASSERT_TRUE(popup_widget_host);
+
+  // Verify that GetPopupCreatorFrameId returns the correct Creator Frame ID.
+  EXPECT_EQ(popup_widget_host->GetPopupCreatorFrameId(),
+            root_frame_host->GetGlobalId());
+}
+
 #endif
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
@@ -752,8 +772,10 @@ class ShowPopupMenuInterceptor
       public blink::mojom::PopupMenuClient {
  public:
   explicit ShowPopupMenuInterceptor(RenderFrameHostImpl* render_frame_host,
-                                    const gfx::Rect& overriden_bounds)
+                                    const gfx::Rect& overriden_bounds,
+                                    base::OnceClosure task_in_nested_loop = {})
       : overriden_bounds_(overriden_bounds),
+        task_in_nested_loop_(std::move(task_in_nested_loop)),
         swapped_impl_(
             render_frame_host->local_frame_host_receiver_for_testing(),
             this) {}
@@ -775,10 +797,18 @@ class ShowPopupMenuInterceptor
       bool right_aligned,
       bool allow_multiple_selection) override {
     CHECK(GetForwardingInterface());
+    // If supplied, post a task that will run inside the menu's nested event
+    // loop after the menu is opened by the synchronous call below.
+    if (task_in_nested_loop_) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, std::move(task_in_nested_loop_));
+    }
     GetForwardingInterface()->ShowPopupMenu(
         receiver_.BindNewPipeAndPassRemote(), overriden_bounds_, font_size,
         selected_item, std::move(menu_items), right_aligned,
         allow_multiple_selection);
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, run_loop_.QuitClosure());
   }
 
   void DidAcceptIndices(const std::vector<int32_t>& indices) override {
@@ -788,7 +818,6 @@ class ShowPopupMenuInterceptor
   void DidCancel() override {
     is_cancelled_ = true;
     receiver_.reset();
-    run_loop_.Quit();
   }
 
   bool is_cancelled() const { return is_cancelled_; }
@@ -797,6 +826,7 @@ class ShowPopupMenuInterceptor
   base::RunLoop run_loop_;
   bool is_cancelled_{false};
   gfx::Rect overriden_bounds_;
+  base::OnceClosure task_in_nested_loop_;
   mojo::test::ScopedSwapImplForTesting<blink::mojom::LocalFrameHost>
       swapped_impl_;
   mojo::Receiver<blink::mojom::PopupMenuClient> receiver_{this};
@@ -850,6 +880,50 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostSitePerProcessTest,
                                show_popup_interceptor.last_routing_id()));
 #endif  // BUILDFLAG(IS_MAC)
 }
+
+#if BUILDFLAG(IS_MAC)
+// Variant of the above where no permission prompt is showing when the popup
+// opens, but one appears while the native menu's nested run loop is active.
+// The browser should detect the new prompt and dismiss the open popup.
+IN_PROC_BROWSER_TEST_F(RenderWidgetHostSitePerProcessTest,
+                       BrowserClosesOpenPopupWhenPermissionPromptAppears) {
+  GURL main_url(embedded_test_server()->GetURL(
+      "a.com", "/site_isolation/page-with-select.html"));
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+  SimulateEndOfPaintHoldingOnPrimaryMainFrame(shell()->web_contents());
+
+  auto* contents = static_cast<WebContentsImpl*>(web_contents());
+  FrameTreeNode* root = contents->GetPrimaryFrameTree().root();
+  RenderFrameHostImpl* root_frame_host = root->current_frame_host();
+
+  auto* permission_controller = static_cast<PermissionControllerImpl*>(
+      root_frame_host->GetBrowserContext()->GetPermissionController());
+
+  gfx::Rect permission_exclusion_area_bounds(100, 100, 100, 100);
+  // Simulate a permission prompt being shown only after the popup has opened
+  // and entered its nested run loop.
+  ShowPopupMenuInterceptor show_popup_menu_interceptor(
+      root_frame_host,
+      permission_exclusion_area_bounds -
+          contents->GetContainerBounds().OffsetFromOrigin(),
+      base::BindLambdaForTesting([&]() {
+        permission_controller->set_exclusion_area_bounds_for_tests(
+            permission_exclusion_area_bounds);
+      }));
+
+  input::NativeWebKeyboardEvent event(
+      blink::WebKeyboardEvent::Type::kChar, blink::WebInputEvent::kNoModifiers,
+      blink::WebInputEvent::GetStaticTimeStampForTests());
+  event.text[0] = ' ';
+  EXPECT_TRUE(ExecJs(root_frame_host, "focusSelectMenu();"));
+  root_frame_host->GetRenderWidgetHost()->ForwardKeyboardEvent(event);
+
+  show_popup_menu_interceptor.Wait();
+  EXPECT_TRUE(show_popup_menu_interceptor.is_cancelled());
+
+  permission_controller->set_exclusion_area_bounds_for_tests(std::nullopt);
+}
+#endif  // BUILDFLAG(IS_MAC)
 
 #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 

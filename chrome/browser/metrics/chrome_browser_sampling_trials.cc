@@ -4,6 +4,8 @@
 
 #include "chrome/browser/metrics/chrome_browser_sampling_trials.h"
 
+#include <utility>
+
 #include "base/feature_list.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
@@ -42,7 +44,8 @@ void AppendSamplingTrialGroup(const std::string& group_name,
     params.insert({"disable_crashes", "true"});
   }
 
-  base::AssociateFieldTrialParams(trial->trial_name(), group_name, params);
+  base::AssociateFieldTrialParams(trial->trial_name(), group_name,
+                                  std::move(params));
   trial->AppendGroup(group_name, rate);
 }
 
@@ -140,7 +143,8 @@ void CreateFallbackUkmSamplingTrial(
   // Everybody (100%) should have a sampling configuration.
   std::map<std::string, std::string> params = {
       {"_default_sampling", base::NumberToString(default_sampling)}};
-  base::AssociateFieldTrialParams(trial->trial_name(), sampled_group, params);
+  base::AssociateFieldTrialParams(trial->trial_name(), sampled_group,
+                                  std::move(params));
   trial->AppendGroup(sampled_group, 100);
 
   // Setup the feature.
@@ -181,7 +185,7 @@ void CreateFallbackSamplingTrialsIfNeeded(
     // This leaves 0.5% for OutOfReportingSample.
 
     // We use 5.3% for this set of users to work around an old bug
-    // (crbug.com/1306481). This should be ~10% in practice.
+    // (crbug.com/40218371). This should be ~10% in practice.
     const int kStableSampledInRatePerMille = 53;     // 5.3%
     const int kStableReportingFullRatePerMille = 0;  // 0%
 

@@ -9,13 +9,12 @@
 #include "base/notreached.h"
 #include "components/viz/common/resources/shared_image_format_utils.h"
 #include "gpu/command_buffer/client/client_shared_image.h"
-#include "gpu/command_buffer/common/mailbox_holder.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_high_entropy_op_type.h"
 #include "third_party/blink/renderer/platform/graphics/image.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 #include "third_party/khronos/GLES2/gl2.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
+#include "ui/gfx/hdr_metadata.h"
 
 namespace gpu {
 namespace gles2 {
@@ -24,7 +23,6 @@ class GLES2Interface;
 }  // namespace gpu
 
 namespace blink {
-class CanvasResourceProviderSharedImage;
 
 class PLATFORM_EXPORT StaticBitmapImage : public Image {
  public:
@@ -35,6 +33,7 @@ class PLATFORM_EXPORT StaticBitmapImage : public Image {
   static scoped_refptr<StaticBitmapImage> Create(
       sk_sp<SkData> data,
       const SkImageInfo&,
+      const gfx::HDRMetadata&,
       ImageOrientation = ImageOrientationEnum::kDefault);
 
   StaticBitmapImage(ImageOrientation orientation) : orientation_(orientation) {}
@@ -73,12 +72,7 @@ class PLATFORM_EXPORT StaticBitmapImage : public Image {
     NOTREACHED();
   }
 
-  virtual bool CopyToResourceProvider(
-      CanvasResourceProviderSharedImage* resource_provider,
-      const gfx::Rect& copy_rect) = 0;
-
   virtual void EnsureSyncTokenVerified() { NOTREACHED(); }
-  virtual gpu::MailboxHolder GetMailboxHolder() const { NOTREACHED(); }
   virtual scoped_refptr<gpu::ClientSharedImage> GetSharedImage() const {
     NOTREACHED();
   }
@@ -86,6 +80,9 @@ class PLATFORM_EXPORT StaticBitmapImage : public Image {
     NOTREACHED();
   }
   virtual void UpdateSyncToken(const gpu::SyncToken&) { NOTREACHED(); }
+  virtual void UpdateSyncTokenFromExportResult(gpu::SharedImageExportResult) {
+    NOTREACHED();
+  }
 
   bool IsPremultiplied() const {
     return GetAlphaType() == SkAlphaType::kPremul_SkAlphaType;
@@ -94,13 +91,6 @@ class PLATFORM_EXPORT StaticBitmapImage : public Image {
   // Methods have exactly the same implementation for all sub-classes
   bool OriginClean() const { return is_origin_clean_; }
   void SetOriginClean(bool flag) { is_origin_clean_ = flag; }
-
-  HighEntropyCanvasOpType HighEntropyCanvasOpTypes() const {
-    return high_entropy_canvas_op_types_;
-  }
-  void SetHighEntropyCanvasOpTypes(HighEntropyCanvasOpType types) {
-    high_entropy_canvas_op_types_ = types;
-  }
 
   // StaticBitmapImage needs to store the orientation of the image itself,
   // because the underlying representations do not. If the bitmap represents
@@ -123,6 +113,8 @@ class PLATFORM_EXPORT StaticBitmapImage : public Image {
   virtual SkAlphaType GetAlphaType() const = 0;
   virtual gfx::ColorSpace GetColorSpace() const = 0;
   virtual viz::SharedImageFormat GetSharedImageFormat() const = 0;
+  virtual const gfx::HDRMetadata& GetHdrMetadata() const = 0;
+
   base::ByteSize EstimatedSizeInBytes() const {
     return base::ByteSize(
         GetSharedImageFormat().EstimatedSizeInBytes(GetSize()));
@@ -148,9 +140,6 @@ class PLATFORM_EXPORT StaticBitmapImage : public Image {
   // AcceleratedStaticBitmapImage. To change this property, the call site would
   // have to call SetOriginClean().
   bool is_origin_clean_ = true;
-
-  HighEntropyCanvasOpType high_entropy_canvas_op_types_ =
-      HighEntropyCanvasOpType::kNone;
 };
 
 template <>

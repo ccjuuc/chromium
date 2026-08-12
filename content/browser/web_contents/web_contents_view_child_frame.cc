@@ -10,6 +10,7 @@
 #include "build/build_config.h"
 #include "content/browser/renderer_host/render_frame_proxy_host.h"
 #include "content/browser/renderer_host/render_widget_host_view_child_frame.h"
+#include "content/browser/surface_embed/surface_embed_connector_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "content/public/common/buildflags.h"
@@ -49,27 +50,48 @@ WebContentsViewChildFrame::WebContentsViewChildFrame(
 
 WebContentsViewChildFrame::~WebContentsViewChildFrame() = default;
 
+WebContentsViewChildFrame::Type WebContentsViewChildFrame::GetType() const {
+  if (web_contents_->IsGuest()) {
+    CHECK(!web_contents_->GetSurfaceEmbedConnector());
+    return Type::kGuestView;
+  }
+  CHECK(web_contents_->GetSurfaceEmbedConnector());
+  return Type::kSurfaceEmbed;
+}
+
 WebContentsView* WebContentsViewChildFrame::GetOuterView() {
   if (auto* outer_web_contents = web_contents_->GetOuterWebContents()) {
     return outer_web_contents->GetView();
+  }
+
+  if (auto* surface_embed_connector =
+          web_contents_->GetSurfaceEmbedConnector()) {
+    return static_cast<SurfaceEmbedConnectorImpl*>(surface_embed_connector)
+        ->GetParentWebContentsView();
   }
 
   return nullptr;
 }
 
 const WebContentsView* WebContentsViewChildFrame::GetOuterView() const {
-  if (auto* outer_web_contents = web_contents_->GetOuterWebContents()) {
-    return outer_web_contents->GetView();
-  }
-
-  return nullptr;
+  return const_cast<WebContentsViewChildFrame*>(this)->GetOuterView();
 }
 
 RenderViewHostDelegateView* WebContentsViewChildFrame::GetOuterDelegateView() {
-  RenderViewHostImpl* outer_rvh = static_cast<RenderViewHostImpl*>(
-      web_contents_->GetOuterWebContents()->GetRenderViewHost());
-  CHECK(outer_rvh);
-  return outer_rvh->GetDelegate()->GetDelegateView();
+  if (auto* outer_web_contents = web_contents_->GetOuterWebContents()) {
+    RenderViewHostImpl* outer_rvh = static_cast<RenderViewHostImpl*>(
+        outer_web_contents->GetRenderViewHost());
+    CHECK(outer_rvh);
+    return outer_rvh->GetDelegate()->GetDelegateView();
+  }
+
+  if (auto* surface_embed_connector =
+          web_contents_->GetSurfaceEmbedConnector()) {
+    return static_cast<SurfaceEmbedConnectorImpl*>(surface_embed_connector)
+        ->GetParentRenderViewHostDelegateView();
+  }
+
+  NOTREACHED();
 }
 
 gfx::NativeView WebContentsViewChildFrame::GetNativeView() const {
@@ -104,8 +126,10 @@ gfx::Rect WebContentsViewChildFrame::GetContainerBounds() const {
 }
 
 void WebContentsViewChildFrame::SetInitialFocus() {
-  // This should only be reachable in Webium, not other uses.
-  CHECK(base::FeatureList::IsEnabled(features::kAttachUnownedInnerWebContents));
+  // Ignore focus requests for GuestView WebContents.
+  if (web_contents_->IsGuest()) {
+    return;
+  }
 
   if (web_contents_->FocusLocationBarByDefault()) {
     web_contents_->SetFocusToLocationBar();
@@ -187,7 +211,8 @@ void WebContentsViewChildFrame::RestoreFocus() {
 }
 
 void WebContentsViewChildFrame::Focus() {
-  if (!base::FeatureList::IsEnabled(features::kAttachUnownedInnerWebContents)) {
+  // Ignore focus requests for GuestView WebContents.
+  if (web_contents_->IsGuest()) {
     return;
   }
 
@@ -208,7 +233,15 @@ void WebContentsViewChildFrame::StoreFocus() {
 }
 
 void WebContentsViewChildFrame::FocusThroughTabTraversal(bool reverse) {
-  NOTREACHED();
+  if (GetType() == Type::kGuestView) {
+    NOTREACHED();
+  }
+
+  if (delegate_) {
+    delegate_->ResetStoredFocus();
+  }
+
+  web_contents_->GetRenderViewHost()->SetInitialFocus(reverse);
 }
 
 DropData* WebContentsViewChildFrame::GetDropData() const {
@@ -229,18 +262,28 @@ void WebContentsViewChildFrame::GotFocus(
 }
 
 void WebContentsViewChildFrame::TakeFocus(bool reverse) {
-  // This is handled in RenderFrameHostImpl::TakeFocus we shouldn't
-  // end up here.
-  NOTREACHED();
+  if (GetType() == Type::kGuestView) {
+    // This is handled in RenderFrameHostImpl::TakeFocus we shouldn't
+    // end up here.
+    NOTREACHED();
+  }
+
+  // TODO(crbug.com/508638062): this is reached when pressing Tab to traverse
+  // from an embedded frame to the parent frame.
+  NOTIMPLEMENTED();
 }
 
 void WebContentsViewChildFrame::ShowContextMenu(
     RenderFrameHost& render_frame_host,
     const ContextMenuParams& params) {
+#if BUILDFLAG(IS_ANDROID)
+  return GetOuterDelegateView()->ShowContextMenu(render_frame_host, params);
+#else
   if (delegate_) {
     delegate_->ShowContextMenu(render_frame_host, params);
     // WARNING: we may have been deleted during the call to ShowContextMenu().
   }
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 #if BUILDFLAG(USE_EXTERNAL_POPUP_MENU)
@@ -264,19 +307,19 @@ void WebContentsViewChildFrame::ShowPopupMenu(
 #endif  // BUILDFLAG(USE_EXTERNAL_POPUP_MENU)
 
 void WebContentsViewChildFrame::StartDragging(
+    RenderFrameHost& source_rfh,
     const DropData& drop_data,
-    const url::Origin& source_origin,
     DragOperationsMask ops,
     const gfx::ImageSkia& image,
     const gfx::Vector2d& cursor_offset,
     const gfx::Rect& drag_obj_rect,
-    const blink::mojom::DragEventSourceInfo& event_info,
-    RenderWidgetHostImpl* source_rwh) {
+    const blink::mojom::DragEventSourceInfo& event_info) {
   if (auto* view = GetOuterDelegateView()) {
-    view->StartDragging(drop_data, source_origin, ops, image, cursor_offset,
-                        drag_obj_rect, event_info, source_rwh);
+    view->StartDragging(source_rfh, drop_data, ops, image, cursor_offset,
+                        drag_obj_rect, event_info);
   } else {
-    web_contents_->GetOuterWebContents()->SystemDragEnded(source_rwh);
+    web_contents_->GetOuterWebContents()->SystemDragEnded(
+        source_rfh.GetRenderWidgetHost());
   }
 }
 

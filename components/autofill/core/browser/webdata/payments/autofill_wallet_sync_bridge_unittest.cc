@@ -14,6 +14,7 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -41,6 +42,7 @@
 #include "components/autofill/core/common/autofill_constants.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/os_crypt/async/browser/test_utils.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #include "components/sync/base/client_tag_hash.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/engine/data_type_activation_response.h"
@@ -328,7 +330,7 @@ class AutofillWalletSyncBridgeTestBase {
     db_.AddTable(&sync_metadata_table_);
     db_.AddTable(&table_);
     db_.Init(temp_dir_.GetPath().AppendASCII("SyncTestWebDatabase"),
-             &encryptor_);
+             encryptor_);
     ON_CALL(*backend(), GetDatabase()).WillByDefault(Return(&db_));
     ResetProcessor();
     // Fake that initial sync has been done (so that the bridge immediately
@@ -472,7 +474,7 @@ class AutofillWalletSyncBridgeTestBase {
   ScopedTempDir temp_dir_;
   base::test::SingleThreadTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  const os_crypt_async::Encryptor encryptor_;
+  scoped_refptr<const os_crypt_async::Encryptor> encryptor_;
   NiceMock<MockAutofillWebDataBackend> backend_;
   AutofillSyncMetadataTable sync_metadata_table_;
   PaymentsAutofillTable table_;
@@ -625,9 +627,6 @@ TEST_F(AutofillWalletSyncBridgeTest,
 
 TEST_F(AutofillWalletSyncBridgeTest,
        GetAllDataForDebugging_ShouldReturnAllData) {
-  base::test::ScopedFeatureList feature;
-  feature.InitAndEnableFeature(
-      features::kAutofillEnableCardInfoRuntimeRetrieval);
   // Create Wallet Data and store them in the table.
   CreditCard card1 = test::GetMaskedServerCard();
   // Set the card issuer to Google.
@@ -684,8 +683,8 @@ TEST_F(AutofillWalletSyncBridgeTest,
             card_specifics2.masked_card().virtual_card_enrollment_state());
   EXPECT_EQ(sync_pb::WalletMaskedCreditCard::NETWORK,
             card_specifics2.masked_card().virtual_card_enrollment_type());
-  EXPECT_EQ("https://www.example.com/card.png",
-            card_specifics1.masked_card().card_art_url());
+  EXPECT_EQ(card_specifics1.masked_card().card_art_url(),
+            "https://www.example.com/card.png");
   EXPECT_TRUE(card_specifics2.masked_card().card_art_url().empty());
   EXPECT_EQ(
       sync_pb::WalletMaskedCreditCard::RETRIEVAL_UNENROLLED_AND_NOT_ELIGIBLE,
@@ -812,9 +811,6 @@ TEST_F(AutofillWalletSyncBridgeTest, MergeFullSyncData_NewWalletCard) {
 // CardInfoRetrievalEnrollment, the client only keeps the new data.
 TEST_F(AutofillWalletSyncBridgeTest,
        MergeFullSyncData_NewWalletCard_CardInfoRetrievalEnrollment) {
-  base::test::ScopedFeatureList feature;
-  feature.InitAndEnableFeature(
-      features::kAutofillEnableCardInfoRuntimeRetrieval);
   // Create one card on the client.
   CreditCard card1 = test::GetMaskedServerCard();
   card1.set_card_info_retrieval_enrollment_state(
@@ -874,7 +870,7 @@ TEST_F(AutofillWalletSyncBridgeTest,
 
   std::vector<PaymentsMetadata> cards_metadata;
   ASSERT_TRUE(table()->GetServerCardsMetadata(cards_metadata));
-  EXPECT_EQ(0u, cards_metadata.size());
+  EXPECT_EQ(cards_metadata.size(), 0u);
 
   // Billing address IDs are deprecated and no longer stored.
   card_specifics.mutable_masked_card()->set_billing_address_id(std::string());
@@ -905,7 +901,7 @@ TEST_F(AutofillWalletSyncBridgeTest,
 
   std::vector<PaymentsMetadata> ibans_metadata;
   ASSERT_TRUE(table()->GetServerIbansMetadata(ibans_metadata));
-  EXPECT_EQ(0u, ibans_metadata.size());
+  EXPECT_EQ(ibans_metadata.size(), 0u);
 
   EXPECT_THAT(GetAllLocalData(),
               UnorderedElementsAre(EqualsSpecifics(iban_specifics)));
@@ -1005,7 +1001,7 @@ TEST_F(AutofillWalletSyncBridgeTest,
   // sent by the server.
   AutofillWalletSpecifics creation_option_specifics;
   std::string new_id = "5678";
-  ASSERT_NE(kPaymentInstrumentCreationOptionId, new_id);
+  ASSERT_NE(new_id, kPaymentInstrumentCreationOptionId);
   SetAutofillWalletSpecificsFromPaymentInstrumentCreationOption(
       test::CreatePaymentInstrumentCreationOptionWithBnplIssuer(new_id),
       creation_option_specifics);
@@ -1041,7 +1037,7 @@ TEST_F(AutofillWalletSyncBridgeTest, MergeFullSyncData_NoWalletCard) {
   // metadata bridge.
   std::vector<PaymentsMetadata> cards_metadata;
   ASSERT_TRUE(table()->GetServerCardsMetadata(cards_metadata));
-  EXPECT_EQ(1u, cards_metadata.size());
+  EXPECT_EQ(cards_metadata.size(), 1u);
 
   EXPECT_TRUE(GetAllLocalData().empty());
 }
@@ -1106,9 +1102,6 @@ TEST_F(AutofillWalletSyncBridgeTest,
 // changes on the client.
 TEST_F(AutofillWalletSyncBridgeTest,
        MergeFullSyncData_SameWalletCardAndCustomerDataAndCloudTokenData) {
-  base::test::ScopedFeatureList feature;
-  feature.InitAndEnableFeature(
-      features::kAutofillEnableCardInfoRuntimeRetrieval);
   // Create one card on the client.
   CreditCard card = test::GetMaskedServerCard();
   card.set_virtual_card_enrollment_state(
@@ -1190,9 +1183,6 @@ TEST_F(AutofillWalletSyncBridgeTest,
 // Test that all field values for a card sent from the server are copied on the
 // card on the client.
 TEST_F(AutofillWalletSyncBridgeTest, MergeFullSyncData_SetsAllWalletCardData) {
-  base::test::ScopedFeatureList feature;
-  feature.InitAndEnableFeature(
-      features::kAutofillEnableCardInfoRuntimeRetrieval);
   // Create a card to be synced from the server.
   CreditCard card = test::GetMaskedServerCard();
   card.SetNickname(u"Grocery card");
@@ -1218,7 +1208,7 @@ TEST_F(AutofillWalletSyncBridgeTest, MergeFullSyncData_SetsAllWalletCardData) {
 
   std::vector<std::unique_ptr<CreditCard>> cards;
   table()->GetServerCreditCards(cards);
-  ASSERT_EQ(1U, cards.size());
+  ASSERT_EQ(cards.size(), 1U);
 
   // Make sure that all the data was set properly.
   EXPECT_EQ(card.network(), cards[0]->network());
@@ -1239,10 +1229,10 @@ TEST_F(AutofillWalletSyncBridgeTest, MergeFullSyncData_SetsAllWalletCardData) {
   // paths.
   EXPECT_FALSE(card.network().empty());
   EXPECT_FALSE(card.LastFourDigits().empty());
-  EXPECT_NE(0, card.expiration_month());
-  EXPECT_NE(0, card.expiration_year());
+  EXPECT_NE(card.expiration_month(), 0);
+  EXPECT_NE(card.expiration_year(), 0);
   EXPECT_FALSE(card.nickname().empty());
-  EXPECT_NE(0, card.instrument_id());
+  EXPECT_NE(card.instrument_id(), 0);
 }
 
 // Test that all field values for a cloud token data sent from the server are
@@ -1262,7 +1252,7 @@ TEST_F(AutofillWalletSyncBridgeTest, MergeFullSyncData_SetsAllCloudTokenData) {
   std::vector<std::unique_ptr<CreditCardCloudTokenData>>
       cloud_token_data_vector;
   table()->GetCreditCardCloudTokenData(cloud_token_data_vector);
-  ASSERT_EQ(1U, cloud_token_data_vector.size());
+  ASSERT_EQ(cloud_token_data_vector.size(), 1U);
 
   EXPECT_EQ(cloud_token_data.masked_card_id,
             cloud_token_data_vector[0]->masked_card_id);
@@ -1410,7 +1400,7 @@ TEST_F(AutofillWalletSyncBridgeTest, ApplyDisableSyncChanges_Cards) {
   // metadata bridge.
   std::vector<PaymentsMetadata> cards_metadata;
   ASSERT_TRUE(table()->GetServerCardsMetadata(cards_metadata));
-  EXPECT_EQ(1u, cards_metadata.size());
+  EXPECT_EQ(cards_metadata.size(), 1u);
 
   EXPECT_TRUE(GetAllLocalData().empty());
 }
@@ -1456,7 +1446,7 @@ TEST_F(AutofillWalletSyncBridgeTest,
       payment_instrument_creation_options;
   ASSERT_TRUE(table()->GetPaymentInstrumentCreationOptions(
       payment_instrument_creation_options));
-  EXPECT_EQ(0u, payment_instrument_creation_options.size());
+  EXPECT_EQ(payment_instrument_creation_options.size(), 0u);
 
   EXPECT_TRUE(GetAllLocalData().empty());
 }
@@ -1478,7 +1468,7 @@ TEST_F(AutofillWalletSyncBridgeTest,
 
   std::vector<std::unique_ptr<CreditCard>> cards;
   table()->GetServerCreditCards(cards);
-  ASSERT_EQ(1U, cards.size());
+  ASSERT_EQ(cards.size(), 1U);
 
   // Make sure that the correct instrument_id was set.
   EXPECT_EQ(card.instrument_id(), cards[0]->instrument_id());
@@ -1576,7 +1566,7 @@ TEST_F(AutofillWalletSyncBridgeTest,
   std::vector<CreditCardBenefit> database_benefits;
   ASSERT_TRUE(table()->GetServerCreditCards(database_cards));
   ASSERT_TRUE(table()->GetAllCreditCardBenefits(database_benefits));
-  ASSERT_EQ(1U, database_cards.size());
+  ASSERT_EQ(database_cards.size(), 1U);
   EXPECT_THAT(database_cards[0]->product_terms_url(), card.product_terms_url());
   EXPECT_THAT(database_benefits, UnorderedElementsAre(card_benefit));
 }
@@ -1607,7 +1597,7 @@ TEST_F(AutofillWalletSyncBridgeTest,
   std::vector<CreditCardBenefit> database_benefits;
   ASSERT_TRUE(table()->GetServerCreditCards(database_cards));
   ASSERT_TRUE(table()->GetAllCreditCardBenefits(database_benefits));
-  ASSERT_EQ(1U, database_cards.size());
+  ASSERT_EQ(database_cards.size(), 1U);
   EXPECT_TRUE(database_cards[0]->product_terms_url().is_empty());
   EXPECT_TRUE(database_benefits.empty());
 }
@@ -1771,7 +1761,7 @@ TEST_F(AutofillWalletSyncBridgeTestWithBenefitSyncDisabled,
   std::vector<CreditCardBenefit> database_benefits;
   ASSERT_TRUE(table()->GetServerCreditCards(database_cards));
   ASSERT_TRUE(table()->GetAllCreditCardBenefits(database_benefits));
-  ASSERT_EQ(1U, database_cards.size());
+  ASSERT_EQ(database_cards.size(), 1U);
   EXPECT_TRUE(database_cards[0]->product_terms_url().is_empty());
   EXPECT_TRUE(database_benefits.empty());
 }
@@ -1911,7 +1901,7 @@ TEST_F(AutofillWalletSyncBridgeTest, MergeFullSyncData_SameBankAccountData) {
   EXPECT_TRUE(table()->SetMaskedBankAccounts({existing_bank_account}));
   std::vector<BankAccount> bank_accounts;
   table()->GetMaskedBankAccounts(bank_accounts);
-  ASSERT_EQ(1U, bank_accounts.size());
+  ASSERT_EQ(bank_accounts.size(), 1U);
 
   // Create the bank account on the server.
   AutofillWalletSpecifics bank_account_specifics;
@@ -1921,7 +1911,7 @@ TEST_F(AutofillWalletSyncBridgeTest, MergeFullSyncData_SameBankAccountData) {
   StartSyncing({bank_account_specifics});
 
   table()->GetMaskedBankAccounts(bank_accounts);
-  EXPECT_EQ(1U, bank_accounts.size());
+  EXPECT_EQ(bank_accounts.size(), 1U);
   EXPECT_THAT(GetAllLocalData(),
               UnorderedElementsAre(EqualsSpecifics(bank_account_specifics)));
 }
@@ -1935,7 +1925,7 @@ TEST_F(AutofillWalletSyncBridgeTest, MergeFullSyncData_NewBankAccount) {
   EXPECT_TRUE(table()->SetMaskedBankAccounts({existing_bank_account}));
   std::vector<BankAccount> bank_accounts;
   table()->GetMaskedBankAccounts(bank_accounts);
-  ASSERT_EQ(1U, bank_accounts.size());
+  ASSERT_EQ(bank_accounts.size(), 1U);
   AutofillWalletSpecifics existing_bank_account_specifics;
   SetAutofillWalletSpecificsFromBankAccount(existing_bank_account,
                                             &existing_bank_account_specifics);
@@ -1950,7 +1940,7 @@ TEST_F(AutofillWalletSyncBridgeTest, MergeFullSyncData_NewBankAccount) {
   StartSyncing({new_bank_account_specifics, existing_bank_account_specifics});
 
   table()->GetMaskedBankAccounts(bank_accounts);
-  EXPECT_EQ(2U, bank_accounts.size());
+  EXPECT_EQ(bank_accounts.size(), 2U);
   EXPECT_THAT(
       GetAllLocalData(),
       UnorderedElementsAre(EqualsSpecifics(existing_bank_account_specifics),
@@ -1966,7 +1956,7 @@ TEST_F(AutofillWalletSyncBridgeTest, MergeFullSyncData_UpdatedBankAccount) {
   EXPECT_TRUE(table()->SetMaskedBankAccounts({existing_bank_account}));
   std::vector<BankAccount> bank_accounts;
   table()->GetMaskedBankAccounts(bank_accounts);
-  ASSERT_EQ(1U, bank_accounts.size());
+  ASSERT_EQ(bank_accounts.size(), 1U);
 
   // Update the bank account on the server. Only the instrument id is the same
   // as the existing bank account.
@@ -1983,7 +1973,7 @@ TEST_F(AutofillWalletSyncBridgeTest, MergeFullSyncData_UpdatedBankAccount) {
   StartSyncing({updated_bank_account_specifics});
 
   table()->GetMaskedBankAccounts(bank_accounts);
-  EXPECT_EQ(1U, bank_accounts.size());
+  EXPECT_EQ(bank_accounts.size(), 1U);
   EXPECT_THAT(
       GetAllLocalData(),
       UnorderedElementsAre(EqualsSpecifics(updated_bank_account_specifics)));
@@ -2000,7 +1990,7 @@ TEST_F(AutofillWalletSyncBridgeTest, MergeFullSyncData_RemoveBankAccount) {
   EXPECT_TRUE(table()->SetMaskedBankAccounts({bank_account_1, bank_account_2}));
   std::vector<BankAccount> bank_accounts;
   table()->GetMaskedBankAccounts(bank_accounts);
-  ASSERT_EQ(2U, bank_accounts.size());
+  ASSERT_EQ(bank_accounts.size(), 2U);
   AutofillWalletSpecifics bank_account_1_specifics;
   SetAutofillWalletSpecificsFromBankAccount(bank_account_1,
                                             &bank_account_1_specifics);
@@ -2009,7 +1999,7 @@ TEST_F(AutofillWalletSyncBridgeTest, MergeFullSyncData_RemoveBankAccount) {
   StartSyncing({bank_account_1_specifics});
 
   table()->GetMaskedBankAccounts(bank_accounts);
-  EXPECT_EQ(1U, bank_accounts.size());
+  EXPECT_EQ(bank_accounts.size(), 1U);
   EXPECT_THAT(GetAllLocalData(),
               UnorderedElementsAre(EqualsSpecifics(bank_account_1_specifics)));
 }
@@ -2027,7 +2017,7 @@ TEST_F(AutofillWalletSyncBridgeTest,
       table()->SetPaymentInstruments({existing_ewallet_payment_instrument}));
   std::vector<sync_pb::PaymentInstrument> payment_instruments;
   table()->GetPaymentInstruments(payment_instruments);
-  ASSERT_EQ(1U, payment_instruments.size());
+  ASSERT_EQ(payment_instruments.size(), 1U);
 
   // Create the eWallet payment instrument on the server.
   AutofillWalletSpecifics ewallet_account_specifics;
@@ -2037,7 +2027,7 @@ TEST_F(AutofillWalletSyncBridgeTest,
   StartSyncing({ewallet_account_specifics});
 
   table()->GetPaymentInstruments(payment_instruments);
-  EXPECT_EQ(1U, payment_instruments.size());
+  EXPECT_EQ(payment_instruments.size(), 1U);
   EXPECT_THAT(GetAllLocalData(),
               UnorderedElementsAre(EqualsSpecifics(ewallet_account_specifics)));
 }
@@ -2055,7 +2045,7 @@ TEST_F(AutofillWalletSyncBridgeTest,
       table()->SetPaymentInstruments({existing_ewallet_payment_instrument}));
   std::vector<sync_pb::PaymentInstrument> payment_instruments;
   table()->GetPaymentInstruments(payment_instruments);
-  ASSERT_EQ(1U, payment_instruments.size());
+  ASSERT_EQ(payment_instruments.size(), 1U);
   AutofillWalletSpecifics existing_ewallet_account_specifics;
   SetAutofillWalletSpecificsFromPaymentInstrument(
       existing_ewallet_payment_instrument, existing_ewallet_account_specifics);
@@ -2071,7 +2061,7 @@ TEST_F(AutofillWalletSyncBridgeTest,
       {new_ewallet_account_specifics, existing_ewallet_account_specifics});
 
   table()->GetPaymentInstruments(payment_instruments);
-  EXPECT_EQ(2U, payment_instruments.size());
+  EXPECT_EQ(payment_instruments.size(), 2U);
   EXPECT_THAT(
       GetAllLocalData(),
       UnorderedElementsAre(EqualsSpecifics(existing_ewallet_account_specifics),
@@ -2091,7 +2081,7 @@ TEST_F(AutofillWalletSyncBridgeTest,
       table()->SetPaymentInstruments({existing_ewallet_payment_instrument}));
   std::vector<sync_pb::PaymentInstrument> payment_instruments;
   table()->GetPaymentInstruments(payment_instruments);
-  ASSERT_EQ(1U, payment_instruments.size());
+  ASSERT_EQ(payment_instruments.size(), 1U);
 
   // Update the ewallet payment instrument on the server. Only the instrument id
   // is the same as the existing ewallet payment instrument.
@@ -2109,7 +2099,7 @@ TEST_F(AutofillWalletSyncBridgeTest,
   StartSyncing({updated_ewallet_account_specifics});
 
   table()->GetPaymentInstruments(payment_instruments);
-  EXPECT_EQ(1U, payment_instruments.size());
+  EXPECT_EQ(payment_instruments.size(), 1U);
   EXPECT_THAT(
       GetAllLocalData(),
       UnorderedElementsAre(EqualsSpecifics(updated_ewallet_account_specifics)));
@@ -2130,7 +2120,7 @@ TEST_F(AutofillWalletSyncBridgeTest,
       {ewallet_payment_instrument_1, ewallet_payment_instrument_2}));
   std::vector<sync_pb::PaymentInstrument> payment_instruments;
   table()->GetPaymentInstruments(payment_instruments);
-  ASSERT_EQ(2U, payment_instruments.size());
+  ASSERT_EQ(payment_instruments.size(), 2U);
 
   AutofillWalletSpecifics ewallet_payment_instrument_1_specifics;
   SetAutofillWalletSpecificsFromPaymentInstrument(
@@ -2140,7 +2130,7 @@ TEST_F(AutofillWalletSyncBridgeTest,
   StartSyncing({ewallet_payment_instrument_1_specifics});
 
   table()->GetPaymentInstruments(payment_instruments);
-  EXPECT_EQ(1U, payment_instruments.size());
+  EXPECT_EQ(payment_instruments.size(), 1U);
   EXPECT_THAT(GetAllLocalData(), UnorderedElementsAre(EqualsSpecifics(
                                      ewallet_payment_instrument_1_specifics)));
 }

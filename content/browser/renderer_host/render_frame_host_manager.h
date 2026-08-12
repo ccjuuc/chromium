@@ -212,6 +212,7 @@ class CONTENT_EXPORT RenderFrameHostManager {
         bool proceed,
         bool* proceed_to_fire_unload) = 0;
     virtual void CancelModalDialogsForRenderManager() = 0;
+    virtual void NotifyPrimaryPageWillBeDeactivated(PageImpl& page) = 0;
     virtual void NotifySwappedFromRenderManager(
         RenderFrameHostImpl* old_frame,
         RenderFrameHostImpl* new_frame) = 0;
@@ -242,6 +243,16 @@ class CONTENT_EXPORT RenderFrameHostManager {
     // Called when a FrameTreeNode is destroyed.
     virtual void OnFrameTreeNodeDestroyed(FrameTreeNode* node) = 0;
 
+    // Called when the RenderWidgetHostViewChildFrame associated with
+    // `new_view` is swapped in.
+    virtual void NotifySwappedRWHVChildFrameFromRenderManager(
+        RenderWidgetHostViewChildFrame* new_view,
+        bool allow_paint_holding) = 0;
+
+    // Called when the frame swap from a commit is complete and the new frame is
+    // ready to be shown.
+    virtual void PrimaryMainFrameCommitted(RenderFrameHostImpl* new_frame) = 0;
+
    protected:
     virtual ~Delegate() = default;
   };
@@ -266,8 +277,8 @@ class CONTENT_EXPORT RenderFrameHostManager {
 
     // Returns the (possibly cached) value of
     // render_frame_host->IsNavigationSameSite(url_info). (For cached results,
-    // this includes DCHECKs that the value hasn't changed, so the optimization
-    // only reduces the number of calls in release builds without DCHECKs.)
+    // this includes CHECKs that the value hasn't changed, so the optimization
+    // only reduces the number of calls in release builds without CHECKs.)
     bool Get(const RenderFrameHostImpl& render_frame_host,
              const UrlInfo& url_info);
 
@@ -408,7 +419,8 @@ class CONTENT_EXPORT RenderFrameHostManager {
       const blink::FramePolicy& frame_policy,
       bool allow_paint_holding,
       const ViewTransitionCommitInfo& view_transition_commit_info,
-      const base::optional_ref<const GURL> navigation_request_url);
+      const base::optional_ref<const GURL> navigation_request_url,
+      bool is_backward_navigation);
 
   // Called when this frame's opener is changed to the frame specified by
   // |opener_frame_token| in |source_site_instance_group|'s process.  This
@@ -456,6 +468,10 @@ class CONTENT_EXPORT RenderFrameHostManager {
       const scoped_refptr<BrowsingContextState>& browsing_context_state,
       const std::optional<base::UnguessableToken>& navigation_metrics_token,
       BatchedProxyIPCSender* batched_proxy_ipc_sender = nullptr);
+
+  // Similar to `CreateRenderFrameProxy` but also creates the minimal ancestor
+  // chain of proxies in `group` to support a subframe.
+  void CreateRenderFrameProxyAndAncestorChainIfNeeded(SiteInstanceGroup* group);
 
   // Creates proxies for a new child frame at FrameTreeNode |child| in all
   // SiteInstances for which the current frame has proxies.  This method is
@@ -716,6 +732,12 @@ class CONTENT_EXPORT RenderFrameHostManager {
   // inner Delegate. During this phase new navigation requests are ignored.
   bool is_attaching_inner_delegate() const {
     return attach_to_inner_delegate_state_ != AttachToInnerDelegateState::NONE;
+  }
+
+  // Returns true if an inner delegate has been fully attached.
+  bool is_inner_delegate_attached() const {
+    return attach_to_inner_delegate_state_ ==
+           AttachToInnerDelegateState::ATTACHED;
   }
 
   // Called by the delegate at the end of the attaching process.
@@ -1118,13 +1140,16 @@ class CONTENT_EXPORT RenderFrameHostManager {
   // for the navigation commit.
   // `navigation_request_url` is a URL for the next new page's
   // NavigationRequest's url.
+  // `is_backward_navigation` Indicates whether the navigation is a backward
+  // navigation.
   void CommitPending(
       std::unique_ptr<RenderFrameHostImpl> pending_rfh,
       std::unique_ptr<StoredPage> pending_stored_page,
       bool clear_proxies_on_commit,
       bool allow_paint_holding,
       const ViewTransitionCommitInfo& view_transition_commit_info,
-      const base::optional_ref<const GURL> navigation_request_url);
+      const base::optional_ref<const GURL> navigation_request_url,
+      bool is_backward_navigation);
 
   // Helper to call CommitPending() in all necessary cases.
   void CommitPendingIfNecessary(
@@ -1134,7 +1159,12 @@ class CONTENT_EXPORT RenderFrameHostManager {
       bool clear_proxies_on_commit,
       bool allow_paint_holding,
       const ViewTransitionCommitInfo& view_transition_commit_info,
-      const base::optional_ref<const GURL> navigation_request_url);
+      const base::optional_ref<const GURL> navigation_request_url,
+      bool is_backward_navigation);
+
+  // Called when either a same-RenderFrameHost or pending RenderFrameHost
+  // navigation commits.
+  void UpdateViewVisibilityAfterCommit(bool was_same_render_frame_host);
 
   // Runs the unload handler in the old RenderFrameHost, after the new
   // RenderFrameHost has committed.  |old_render_frame_host| will either be
@@ -1142,7 +1172,9 @@ class CONTENT_EXPORT RenderFrameHostManager {
   void UnloadOldFrame(
       std::unique_ptr<RenderFrameHostImpl> old_render_frame_host,
       const ViewTransitionCommitInfo& view_transition_commit_info,
-      const base::optional_ref<const GURL> navigation_request_url);
+      const base::optional_ref<const GURL> navigation_request_url,
+      bool is_backward_navigation,
+      FrameTreeNodeId focused_frame_tree_node_id);
 
   // Discards a RenderFrameHost that was never made active (for active ones
   // UnloadOldFrame is used instead).
@@ -1187,7 +1219,8 @@ class CONTENT_EXPORT RenderFrameHostManager {
   // RenderFrameProxyHosts) into a StoredPage object to be
   // stored in back-forward cache or to activate the prerenderer.
   std::unique_ptr<StoredPage> CollectPage(
-      std::unique_ptr<RenderFrameHostImpl> main_render_frame_host);
+      std::unique_ptr<RenderFrameHostImpl> main_render_frame_host,
+      FrameTreeNodeId focused_frame_tree_node_id);
 
   // Update `render_frame_host`'s opener in the renderer process in response to
   // the opener being modified (e.g., with window.open or being set to null) in

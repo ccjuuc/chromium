@@ -15,8 +15,6 @@
 #include "chrome/browser/glic/host/context/glic_focused_tab_manager_interface.h"
 #include "chrome/browser/glic/host/context/glic_tab_data.h"
 #include "chrome/browser/glic/host/glic.mojom.h"
-#include "chrome/browser/glic/widget/glic_window_controller.h"
-#include "chrome/browser/ui/browser_list_observer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "ui/views/widget/widget_observer.h"
@@ -31,11 +29,10 @@ class BrowserWindowInterface;
 namespace glic {
 
 class GlicFocusedBrowserManager;
+class GlicSharingManagerInternal;
 
 // Responsible for managing which tab is considered "focused" and for accessing
-// its WebContents. This is an implementation detail of GlicKeyedService and
-// others should rely on the interface that GlicKeyedService exposes for
-// observing state changes.
+// its WebContents.
 class GlicFocusedTabManager : public GlicFocusedTabManagerInterface,
                               public content::WebContentsObserver,
                               public TabStripModelObserver {
@@ -64,7 +61,6 @@ class GlicFocusedTabManager : public GlicFocusedTabManagerInterface,
 
   // TabStripModelObserver
   void OnSplitTabChanged(const SplitTabChange& change) override;
-
 
   // Callback for changes to the `WebContents` comprising the focused tab. Only
   // fired when the `WebContents` for the focused tab changes to/from nullptr or
@@ -252,7 +248,7 @@ class GlicPinAwareDetachedFocusedTabManager
     : public GlicFocusedTabManagerInterface {
  public:
   explicit GlicPinAwareDetachedFocusedTabManager(
-      GlicSharingManager* sharing_manager,
+      GlicSharingManagerInternal* sharing_manager,
       GlicFocusedBrowserManager* focused_browser_manager);
   ~GlicPinAwareDetachedFocusedTabManager() override;
 
@@ -313,7 +309,7 @@ class GlicPinAwareDetachedFocusedTabManager
   // Source of truth for pinned tabs.
   // TODO(crbug.com/452150693): Split up the sharing manager interface so we can
   // specify just the pinning portion here.
-  raw_ptr<GlicSharingManager> sharing_manager_;
+  raw_ptr<GlicSharingManagerInternal> sharing_manager_;
 
   // Proxied focused tab manager.
   GlicFocusedTabManager focused_tab_manager_;

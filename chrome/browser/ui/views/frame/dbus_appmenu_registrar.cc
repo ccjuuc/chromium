@@ -5,11 +5,9 @@
 #include "chrome/browser/ui/views/frame/dbus_appmenu_registrar.h"
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/no_destructor.h"
-#include "base/notreached.h"
 #include "chrome/browser/ui/views/frame/dbus_appmenu.h"
 #include "components/dbus/thread_linux/dbus_thread_linux.h"
 #include "components/dbus/utils/call_method.h"
@@ -42,7 +40,7 @@ void DbusAppmenuRegistrar::OnMenuBarCreated(DbusAppmenu* menu) {
 }
 
 void DbusAppmenuRegistrar::OnMenuBarDestroyed(DbusAppmenu* menu) {
-  DCHECK(base::Contains(menus_, menu));
+  DCHECK(menus_.contains(menu));
   if (menus_[menu] == kRegistered) {
     if (auto* toplevel_extension =
             ui::GetWaylandToplevelExtension(*menu->platform_window())) {
@@ -69,7 +67,7 @@ DbusAppmenuRegistrar::DbusAppmenuRegistrar()
 }
 
 void DbusAppmenuRegistrar::InitializeMenu(DbusAppmenu* menu) {
-  DCHECK(base::Contains(menus_, menu));
+  DCHECK(menus_.contains(menu));
   DCHECK_EQ(menus_[menu], kUninitialized);
   menus_[menu] = kInitializing;
   menu->Initialize(base::BindOnce(&DbusAppmenuRegistrar::OnMenuInitialized,
@@ -77,7 +75,7 @@ void DbusAppmenuRegistrar::InitializeMenu(DbusAppmenu* menu) {
 }
 
 void DbusAppmenuRegistrar::RegisterMenu(DbusAppmenu* menu) {
-  DCHECK(base::Contains(menus_, menu));
+  DCHECK(menus_.contains(menu));
   DCHECK(menus_[menu] == kInitializeSucceeded || menus_[menu] == kRegistered);
   menus_[menu] = kRegistered;
 
@@ -93,7 +91,7 @@ void DbusAppmenuRegistrar::RegisterMenu(DbusAppmenu* menu) {
 }
 
 void DbusAppmenuRegistrar::OnMenuInitialized(DbusAppmenu* menu, bool success) {
-  DCHECK(base::Contains(menus_, menu));
+  DCHECK(menus_.contains(menu));
   DCHECK(menus_[menu] == kInitializing);
   menus_[menu] = success ? kInitializeSucceeded : kInitializeFailed;
   if (success && service_has_owner_) {
